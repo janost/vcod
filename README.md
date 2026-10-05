@@ -73,9 +73,13 @@ built from the bytes up, this might be your kind of thing.
   the same movement step the server runs, against the map and the other
   players. A correction eases out over 100 ms.
 - Draws your weapon in first person with the hands your team gets, zooms the
-  sight to the weapon's own FOV, and plays your own fire, reload and footstep
+  sight to the weapon's own FOV, puts a sniper scope's overlay up where the
+  swaying gun points, and plays your own fire, reload and footstep
   sounds off the prediction. The snapshot that confirms them later stays
   quiet.
+- Draws mounted MG42s turned by the barrel angles the server sends, with
+  their fire anim and muzzle flash. On the gun, the view rides the gun's
+  `tag_player` and the HUD swaps the crosshair for the gun's reticle.
 - Draws the HUD that the stock `hud.menu` lays out: crosshair that opens with
   spread, health, ammo, stance, compass with objectives, use hints and hit
   direction. It also draws the gametype script's own HUD elements, such as
@@ -98,7 +102,8 @@ either: the people on it signed up for Call of Duty.
   from the stock scripts, not from Rust. `dm`, `tdm` and `sd` are the
   gametypes I have checked against retail.
 - Movement on the shared pmove, with players as capsules that block and push
-  each other the way retail's do.
+  each other the way retail's do. Falls stun and hurt, scaled by the
+  `bg_fallDamageMinHeight` and `bg_fallDamageMaxHeight` cvars.
 - Combat: bullets trace the world, players and static props. Hits go through
   the stock damage callback with per-bone hit locations. Rifle rounds pass
   through players and every round passes through glass. Melee works, and
@@ -156,14 +161,14 @@ console, no key rebinding. You get command-line flags and the binds below.
 
 **Client**
 
-- Mounted MGs work on the server, but the vcod client doesn't draw the gun.
+- A gunner's body stands where the server puts it, but the client doesn't
+  blend its mounted anim by the barrel's yaw the way retail's does, so the
+  body doesn't turn with the gun.
 - The HUD skips a few retail pieces: the followed player's health, ammo and
   compass while following, friendly players on the compass, the weapon mode
-  icon, the stance-change flash, the mounted gun's reticle and the
-  fixed-width fonts
+  icon, the stance-change flash and the fixed-width fonts
   ([docs/research/cod11-hud-protocol.md](docs/research/cod11-hud-protocol.md),
   section 9).
-- No sniper scope overlay, online or in walk mode.
 - Only protocol 1 (patch 1.1). 1.5 and United Offensive servers won't talk to
   it.
 - Prediction clips against the map and other players, but not against moving
@@ -171,8 +176,6 @@ console, no key rebinding. You get command-line flags and the binds below.
 
 **Server**
 
-- No fall damage. You get the landing stun, and the ground forgives you
-  everything else.
 - `re` (Retrieval) and `bel` (Behind Enemy Lines) run through the same
   script path, but I haven't checked either against retail.
 - Item respawn, an item's launch arc and `CONTENTS_NODROP` aren't modelled.
@@ -396,7 +399,7 @@ D still move.
 | LMB | Fire |
 | RMB | Aim down sights (held) |
 | R | Reload |
-| 1-6 | Weapon: colt, thompson, mp40, mp44, enfield, kar98k |
+| 1-7 | Weapon: colt, thompson, mp40, mp44, enfield, kar98k, scoped kar98k |
 
 ### Everywhere
 

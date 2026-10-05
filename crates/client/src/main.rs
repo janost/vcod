@@ -10,6 +10,7 @@ mod probe;
 mod quick_chat;
 mod renderer;
 mod sky;
+mod turret;
 mod viewmodel;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -475,6 +476,8 @@ enum Mode {
         fire_held: bool,
         reload_edge: bool,
         ads_held: bool,
+        /// The gun's sway, which a scope overlay is centred on.
+        gun_aim: hud::scope::GunAim,
     },
 }
 
@@ -489,14 +492,16 @@ struct WalkKeys {
 
 /// The walk-mode arsenal on number keys 1..=N: every retail archetype (semi
 /// pistol, full-auto SMGs, auto rifle, big-clip bolt rifle) plus kar98k as
-/// the baseline. Files carry `semiAuto`, `startAmmo`, `adsBobFactor`.
-const WALK_LOADOUT: [&str; 6] = [
+/// the baseline and its scoped twin. Files carry `semiAuto`, `startAmmo`,
+/// `adsBobFactor`.
+const WALK_LOADOUT: [&str; 7] = [
     "colt_mp",
     "thompson_mp",
     "mp40_mp",
     "mp44_mp",
     "enfield_mp",
     "kar98k_mp",
+    "kar98k_sniper_mp",
 ];
 
 fn digit_slot(code: KeyCode) -> Option<usize> {
@@ -507,6 +512,7 @@ fn digit_slot(code: KeyCode) -> Option<usize> {
         KeyCode::Digit4 => 3,
         KeyCode::Digit5 => 4,
         KeyCode::Digit6 => 5,
+        KeyCode::Digit7 => 6,
         _ => return None,
     })
 }
@@ -1155,6 +1161,7 @@ fn loading_frame(
             eye: [0.0; 3],
             fov: camera::DEFAULT_FOV_DEG,
             entity_origin: &|_| None,
+            turret_weapon: None,
         };
         let quads = hud.build(&f);
         r.set_hud_quads(fs, quads);
@@ -1253,6 +1260,7 @@ fn walk_mode(
         fire_held: false,
         reload_edge: false,
         ads_held: false,
+        gun_aim: hud::scope::GunAim::default(),
     })
 }
 
@@ -1726,6 +1734,12 @@ impl ApplicationHandler for App {
                                 net::NetEvent::GamestateReady => {
                                     join.on_gamestate();
                                     gamestate_ready = true;
+                                    predictor.fall_heights =
+                                        pmove::FallHeights::from_systeminfo(net.configstring(1));
+                                }
+                                net::NetEvent::ConfigstringChanged(1) => {
+                                    predictor.fall_heights =
+                                        pmove::FallHeights::from_systeminfo(net.configstring(1));
                                 }
                                 _ => {}
                             }
@@ -1965,6 +1979,7 @@ impl ApplicationHandler for App {
                                     let mut muzzles: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
                                     let mut weapon_flash: HashMap<i32, String> = HashMap::new();
                                     let mut entity_pos: HashMap<u32, Vec3> = HashMap::new();
+                                    let mut turret_eye = None;
 
                                     let render_time = net
                                         .snapshots()
@@ -2000,6 +2015,7 @@ impl ApplicationHandler for App {
                                         muzzles = built.muzzles;
                                         weapon_flash = built.weapon_flash;
                                         entity_pos = built.entity_pos;
+                                        turret_eye = built.turret_eye;
                                         // Over 512 u is a teleport, not motion.
                                         let pos = if oa.distance(ob) > 512.0 {
                                             ob
@@ -2070,6 +2086,13 @@ impl ApplicationHandler for App {
                                         };
                                         (cam.yaw, cam.pitch) = own_view(input.raw_angles(), delta);
                                     }
+                                    // On a mounted gun the view rides the gun's
+                                    // `tag_player` and barrel, not the cmd's angles
+                                    // (docs/research/cod11-turrets.md section 14).
+                                    if let Some(eye) = &turret_eye {
+                                        cam.pos = eye.pos;
+                                        (cam.yaw, cam.pitch) = eye.view();
+                                    }
 
                                     let (cam_forward, cam_right, cam_up) =
                                         camera::basis(cam.yaw, cam.pitch);
@@ -2088,7 +2111,11 @@ impl ApplicationHandler for App {
                                         .unwrap_or_else(|| {
                                             view_muzzle(cam.pos, cam_forward, cam_right, cam_up)
                                         });
-                                    muzzles.insert(u32::MAX, (muzzle_pos, muzzle_dir));
+                                    // Under a scope our own shots draw no flash: with
+                                    // no muzzle the fire event resolves to nothing.
+                                    if !view.scoped() {
+                                        muzzles.insert(u32::MAX, (muzzle_pos, muzzle_dir));
+                                    }
                                     // Bullet hits carry the shooter's number in
                                     // `other_entity_num`, and the body the camera rides
                                     // (ours, or the followed player's) is excluded from
@@ -2116,6 +2143,18 @@ impl ApplicationHandler for App {
                                         let num = u32::try_from(num).ok()?;
                                         entity_pos.get(&num).map(|v| v.to_array())
                                     };
+                                    // Retail reads `cg_entities[n].currentState`;
+                                    // the newest snapshot stands in.
+                                    let turret_weapon = newest.and_then(|s| {
+                                        let int = |n: &str| s.ps.field_i32(p, n);
+                                        let num = turret::ridden(
+                                            int("eFlags"),
+                                            int("viewlocked"),
+                                            int("viewlocked_entNum"),
+                                        )?;
+                                        let w = s.entities.get(&num)?.field_i32(p, "weapon");
+                                        usize::try_from(w).ok()
+                                    });
                                     let hud_frame = hud::HudFrame {
                                         now: time,
                                         screen_w,
@@ -2143,6 +2182,7 @@ impl ApplicationHandler for App {
                                         eye: cam.pos.to_array(),
                                         fov,
                                         entity_origin: &entity_origin,
+                                        turret_weapon,
                                     };
 
                                     // Events use the newest snapshot, not the interpolation
@@ -2320,6 +2360,7 @@ impl ApplicationHandler for App {
                         fire_held,
                         reload_edge,
                         ads_held,
+                        gun_aim,
                     } => {
                         // Before this frame's fire event spawns, or the
                         // [now-dt, now] integration would move the new tracer
@@ -2383,6 +2424,8 @@ impl ApplicationHandler for App {
                         let mut bone_sets = Vec::new();
                         let mut fov = camera::DEFAULT_FOV_DEG;
                         let mut damp = 1.0;
+                        let mut scope_quads = Vec::new();
+                        let mut scoped = false;
                         if let Some(w) = view_weapon {
                             let out = w.state.update(
                                 dt,
@@ -2415,6 +2458,20 @@ impl ApplicationHandler for App {
                             );
                             damp = 1.0 + (w.def.ads_view_bob_mult - 1.0) * out.ads_frac;
                             damp *= 1.0 + (w.def.ads_bob_factor - 1.0) * out.ads_frac;
+                            // The walk sight runs outside pmove, so the gun's
+                            // sway reads its fraction off a copy.
+                            let mut sighted = **ps;
+                            sighted.weapon_pos_frac = out.ads_frac;
+                            let gun = gun_aim.step(Some(&w.def), &sighted, (time * 1000.0) as i32);
+                            if hud::scope::overlay_frac(&w.def, out.ads_frac, *ads_held).is_some() {
+                                let screen = r.screen_size();
+                                let fovs = (fov, camera::fov_y(fov, aspect));
+                                let at =
+                                    hud::scope::gun_point(gun.unwrap_or_default(), fovs, screen);
+                                hud::scope::build(&w.def, at, screen, &mut scope_quads);
+                                // The gun hides under it, as online.
+                                scoped = true;
+                            }
                             if let Some(cue) = out.cue {
                                 if matches!(
                                     cue,
@@ -2524,6 +2581,7 @@ impl ApplicationHandler for App {
                             damp,
                         );
                         *mouse_delta = (0.0, 0.0);
+                        r.set_hud_quads(&self.fs, scope_quads);
                         self.audio.step(&HashMap::new(), None);
                         r.set_fx_quads(
                             &self.fs,
@@ -2557,7 +2615,7 @@ impl ApplicationHandler for App {
                                     reserve
                                 )],
                             },
-                            Some(renderer::VmDraw {
+                            (!scoped).then(|| renderer::VmDraw {
                                 transform: motion.transform(),
                                 fov_x: fov,
                                 bone_sets,

@@ -488,14 +488,44 @@ zeroed that field before the only call, so the arm never arms
 
 ### 8.8 The game half
 
-VERIFIED: `ClientEvents` (0x3fd24) takes events 0x74 to 0x8a (`cmp eax,0x16`
-at 0x3fec0 on `event - 0x74`) on an entity with `eType` 1 (0x3fec9), turns
-the parm into 1.1 (0x72c7c) above 99 and `parm * 0.01` (0x72c80) otherwise,
-multiplies by `ps.stats[2]` (`cl+0xfc`, `cod11-items.md`), truncates,
-stores `level.time + 200` at `ent+0x224`, and calls `G_Damage` with means
-0x15 (`MOD_FALLING`) at 0x3fe0d. INFERRED: `stats[2]` is the max health, so
-the fall damage is that percentage of it and a 100-percent fall does 110
-percent. Not modelled (section 12).
+Read out of `game.mp.i386.so` on 2026-10-05 with `tools/re/annotate_func.py`.
+
+VERIFIED, `ClientEvents` (0x3fd24): the loop takes events 0x74 to 0x8a
+(`cmp eax,0x16` at 0x3fec0 on `event - 0x74`) into the fall arm. The arm
+compares the entity's `eType` (`ent+0x4`) with 1 at 0x3fec9 and on any other
+value jumps to the function's exit at 0x3fed3, not to the next event.
+
+VERIFIED, the arm (0x3fd82-0x3fe15):
+
+- a parm above 99 (`cmp esi,0x63`, 0x3fd82) loads 1.1 (rodata 0x72c7c,
+  `0x3f8ccccd`); otherwise `fild parm` times 0.01 (rodata 0x72c80,
+  `0x3c23d70a`, which is 0.00999999977648 as a float);
+- a share of exactly 0 (`fldz; fucomp; je` at 0x3fd9c-0x3fda8) skips the
+  event;
+- `fild ps.stats[2]` (`cl+0xfc`, `cod11-items.md`) times the share, and
+  `level.time + 200` (0xc8) stored at `ent+0x224` (0x3fddb);
+- the product through `fistp` under control word 0xc00 (0x3fdee-0x3fdfa);
+- `G_Damage(ent, 0, 0, 0, 0, damage, 0, 0x15, 0)` (pushes at 0x3fde1-0x3fe0c,
+  call at 0x3fe0d). The 0x15 is `MOD_FALLING` (`cod11-combat.md` 4.1).
+
+VERIFIED: `ent+0x224` is the field `P_DamageFeedback` reads at 0x3f6d3 and
+compares with `level.time` before it raises `EV_PAIN`
+(`cod11-combat.md` 6, step 9). The arm also writes `(0, 0, 1)` into a local
+at 0x3fdba-0x3fdc8 that nothing pushes.
+
+INFERRED, from the operations: the damage is the parm's percentage of the
+max health, truncated toward zero, and a parm of 100 does 110 percent. Every
+step runs on the x87 stack, so the only rounding is the float 0.01 itself:
+`parm * 0.01f` lands just under each whole share and the truncation takes
+one off, as 8.9 measured. The `pain_debounce_time` store holds off the end
+frame's `EV_PAIN` for 200 ms, so a fall raises only its landing pain. A
+landing in a cmd whose ring already holds four newer events is dropped with
+them, as any event is (`cod11-combat.md` 16).
+
+INFERRED, from 4.2 and 4.4 of `cod11-combat.md`: the four null pointers
+reach `CodeCallback_PlayerDamage` as undefined `eInflictor`, `eAttacker`,
+`vPoint` and `vDir`, weapon 0 as `"none"` and hit location 0 as `"none"`, at
+the shipped table's `none` multiplier of 1. 8.10 measured all of it.
 
 ### 8.9 What retail measured
 
@@ -533,6 +563,55 @@ so a probe's mixed 16 and 17 ms cmds cannot be matched to the unit without
 replaying its cmds. The velocity multiplier is not visible in this run: each
 landing was vertical, and the next walk frame's ground clip zeroes a
 vertical velocity whatever it was scaled to.
+
+### 8.10 What retail measured of the damage
+
+Two runs on 2026-10-05 against the retail 1.1d server, with the probe
+extended: a sixth drop at `maxhealth` 200 ahead of the fatal one, and the
+damage and killed callbacks wrapped to log their arguments (recipe in
+`client-probes/README.md`, `probe_fall`). The first ran at the stock bounds,
+the second under `+set bg_fallDamageMinHeight 200 +set bg_fallDamageMaxHeight
+1000`. Both halves' lines are
+`crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall-damage.txt` and
+`mp_carentan-dm-fall-damage-cvars.txt`, which `crates/server/tests/fall_ab.rs`
+gates.
+
+VERIFIED, the damage callback's arguments on every landing of both runs:
+`inflictor undefined attacker undefined ... dflags 0 mod MOD_FALLING weapon
+none point undefined dir undefined hitloc none`. VERIFIED, the fatal fall's
+killed callback: `inflictor ent1022 attacker ent1022 damage 110 mod
+MOD_FALLING weapon none dir (0.00, 0.00, 0.00) hitloc none`. INFERRED: the
+world entity there is `finishPlayerDamage`'s, which starts both pointers at
+`g_entities + 0xc49d8` (0x43778-0x43782) and replaces them only through
+`Scr_GetEntity`, and the zero direction is its own normalised copy of an
+undefined `vDir`.
+
+VERIFIED, each landing pain's parm (the `FALL` line's ring) against the
+damage the callback was handed:
+
+| bounds | parm | maxhealth | damage |
+|---|---|---|---|
+| 256..480 | 25 | 100 | 24 |
+| 256..480 | 40 | 100 | 39 |
+| 256..480 | 77 | 100 | 76 |
+| 256..480 | 43 | 200 | 85 |
+| 256..480 | 100 | 100 | 110, killed |
+| 200..1000 | 13 | 100 | 12 |
+| 200..1000 | 18 | 100 | 17 |
+| 200..1000 | 28 | 100 | 27 |
+| 200..1000 | 18 | 200 | 35 |
+| 200..1000 | 41 | 100 | 40 |
+
+INFERRED: 85 of 200 at parm 43, against the 42 a fixed 100 would give, is
+`stats[2]` scaling the share; 85 rather than 86 is 8.8's float 0.01.
+
+VERIFIED: no snapshot of either run carries `EV_PAIN` (187) after a
+surviving landing; each carries the landing pain alone. The fatal frame's
+ring adds 133 (parm 100), 189 and 155. VERIFIED: the second run's
+systeminfo read `\bg_fallDamageMaxHeight\1000\bg_fallDamageMinHeight\200`,
+and its parms fell with the wider bounds: 300 units of drop gave 25 at the
+stock bounds and 13 under them. INFERRED: a `+set` reaches both cvars
+despite flag 0x200, and `PM_CrashLand` reads them live.
 
 ## 9. What the bump capture measured
 
@@ -726,11 +805,13 @@ keeps the plain slide when its down pass meets an entity below
 with `PMF_TIME_KNOCKBACK`, section 7's two scales and its drop on every path;
 it travels as `pm_time` with `pm_flags` 0x100 both ways. `crash_land` is
 section 8: the height off `move_start` and the move's starting vertical
-speed, `fall_damage` with the two cvars at their stock values, the stun and
-its multiplier, the 0.67 arms and both events with their parms. It runs
-straight after the final ground trace, ahead of the water level and the
-footsteps. `check_ladder_move` returns last frame's ladder while the timer
-runs, and runs ahead of the timer's drop.
+speed, `fall_damage` with the bounds the caller puts in
+`PlayerState.fall_heights` and their bad-values arm, the stun and its
+multiplier, the 0.67 arms and both events with their parms. It runs straight
+after the final ground trace, ahead of the water level and the footsteps,
+and `dead_move` runs it too with damage 0 and returns the land event.
+`check_ladder_move` returns last frame's ladder while the timer runs, and
+runs ahead of the timer's drop.
 
 The server (`crates/server/src/spectate.rs`, `server.rs`,
 `game/stuck.rs`):
@@ -747,6 +828,14 @@ The server (`crates/server/src/spectate.rs`, `server.rs`,
   mover's own entry after each step, so a later slot moves against an
   earlier slot's new position within the tick. The list is carried into the
   use key's second round.
+- `replay_moves` turns each landing pain into `Attack::Fall` in the cmd's
+  event order beside the shots, and `Server::fall` runs 8.8's arm:
+  `debounce_pain` to the cmd's `level.time + 200`, the share of the sim's
+  `max_health` through the `none` multiplier, and `deliver_fall`'s
+  callback with undefined entities and vectors. A dead sim's landing event
+  goes on its ring. `refresh_fall_heights` reads the two cvars (registered
+  at their table defaults in `cvars.rs`) at each level load and each tick,
+  writes them into systeminfo, and every cmd lands with them.
 - The end-frame loop walks the slots in order. Per slot it runs
   `update_contents` and then, for a live sim, `stuck_in_client` over views
   rebuilt at that slot, so a partner marked CORPSE earlier in the loop is
@@ -754,7 +843,9 @@ The server (`crates/server/src/spectate.rs`, `server.rs`,
   and marks self CORPSE; nothing relinks there. The jitter's `rand()` is the
   top 31 bits of the server's xorshift.
 
-The client (`crates/client/src/play/predict.rs`, `main.rs`): `solid_bodies`
+The client (`crates/client/src/play/predict.rs`, `main.rs`): the predictor
+lands with `FallHeights::from_systeminfo` of configstring 1, reread at each
+gamestate and each change. `solid_bodies`
 builds the body list from the newest snapshot, skipping the own client,
 `solid` 0, `solid` 0xffffff (a brush model, already in the map) and `eType`
 3, and logging and skipping a solid entity without `eFlags` 0x10. Contents
@@ -785,7 +876,12 @@ The gates:
   first frames of each overlap;
 - `crates/server/tests/predict_ab.rs`'s
   `server_and_predictor_agree_beside_a_body` steps the server's sim and the
-  predictor side by side beside a standing body.
+  predictor side by side beside a standing body;
+- `crates/server/tests/fall_ab.rs` runs `probe_fall` on ours at both bounds
+  with 16 and 17 ms cmds and holds it to section 8.10: the probe's lines
+  with times, damage and health masked, each damage against the share of
+  its own parm on both sides, no `EV_PAIN`, and the systeminfo bounds.
+  `FALL_REPORT=1` prints both sides' parms.
 
 ## 12. Divergences and not modelled
 
@@ -842,15 +938,19 @@ The gates:
     `playerstate_motion_ab`, `predict_ab`, `player_clip`, `combat` and
     `playerstate_combat_ab` all stay green, so no committed capture reaches
     a clip under a timer. Left to whoever next touches the step-slide move.
-  - **Fall damage** (8.8): vcod raises `EV_LANDING_PAIN_*` with the damage
-    in its parm, and the server applies none.
-  - **The two cvars** are constants at their stock 256 and 480; a server
-    that changes them is not followed.
-  - **A dead player's landing**. INFERRED: `pm_type` 6 takes `PmoveSingle`'s
-    default arm (`dead_move`'s own comment), whose ground traces (0x342ce,
-    0x34327) reach `PM_CrashLand`, and 8.3's `pm_type > 5` test exists for
-    it: a corpse lands with damage 0, the 0.67 damp and a land event.
-    vcod's `dead_move` does neither.
+  - **Fall damage, the two cvars and a dead player's landing**, closed
+    2026-10-05 (8.8, 8.10). VERIFIED: `PmoveSingle`'s jump table (rodata
+    0x70ce8) sends `pm_type` 6 to 0x34274 and on to the default arm, whose
+    ground traces at 0x342ce and 0x34327 reach `PM_CrashLand`; `dead_move`
+    now lands through it. What is left:
+    - **The landing parm runs high.** VERIFIED, `FALL_REPORT=1` on
+      2026-10-05: at the same drops and cmd cadence ours lands parms 25, 44,
+      80, 44 where retail landed 25, 40, 77, 43, and 14, 19, 29, 19, 42
+      against 13, 18, 28, 18, 41. The damage follows each side's own parm
+      exactly; the impact speed behind the parm is 8.9's open question.
+    - **`eType` other than 1** ends `ClientEvents` (0x3fec9) with the
+      events behind it unprocessed; vcod fires every event a cmd raised.
+      No stock path lands a player whose entity is not a player.
 - **A client that sends no cmds** keeps the `solid` of its last link. That
   is retail's rule too (section 4.2), not a divergence; the same holds for
   a client at intermission, whose contents go 0 without a relink.

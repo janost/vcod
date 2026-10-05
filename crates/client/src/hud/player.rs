@@ -6,7 +6,9 @@
 use super::HudQuad;
 use super::font::{self, Font};
 use super::hudelem::{self, CS_SHADERS, Virtual};
+use super::scope::{self, GunAim};
 use crate::play::input::{EF_CROUCH, EF_PRONE};
+use crate::turret::EF_MOUNTED;
 use vcod_common::localize::Localized;
 use vcod_common::net::msg::Objective;
 use vcod_common::pmove::weapon::{SpreadStance, hip_spread_min};
@@ -39,6 +41,8 @@ pub struct PlayerView<'a> {
     pub max_health: i32,
     pub eflags: i32,
     pub weapon: Option<&'a WeaponDef>,
+    /// The mounted gun's def, while riding one.
+    pub turret: Option<&'a WeaponDef>,
     pub ammo: &'a [i16; 64],
     pub ammoclip: &'a [i16; 64],
     /// 0..255.
@@ -52,6 +56,9 @@ pub struct PlayerView<'a> {
     pub eye: [f32; 3],
     /// Horizontal and vertical, degrees.
     pub fov: (f32, f32),
+    /// The gun's angles off the view, which the scope overlay is centred
+    /// on; `None` centres it.
+    pub gun_angles: Option<[f32; 3]>,
     pub objectives: &'a [Objective],
     pub cursor_hint: i32,
     /// Signed; below 0 is none.
@@ -70,15 +77,13 @@ pub struct Context<'a> {
     pub entity_origin: &'a dyn Fn(i32) -> Option<[f32; 3]>,
 }
 
-/// `eFlags` 0x4000 and 0x8000: riding a mounted gun.
-const EF_MOUNTED: i32 = 0xC000;
-
 /// The state the native HUD keeps across frames.
 #[derive(Default)]
 pub struct PlayerHud {
     pub damage: DamageIndicators,
     health_lag: HealthLag,
     sight: SightDirection,
+    pub gun: GunAim,
 }
 
 impl PlayerHud {
@@ -94,6 +99,16 @@ impl PlayerHud {
     ) {
         let v = Virtual::new(screen);
         self.damage.feed(p.damage, now);
+        let raising = self.sight.step(p.weapon, p.ads_frac);
+        // Drawn first, so the menu HUD sits on top of it.
+        let scoped = p
+            .weapon
+            .filter(|_| p.eflags & EF_MOUNTED == 0)
+            .filter(|def| scope::overlay_frac(def, p.ads_frac, raising).is_some());
+        if let Some(def) = scoped {
+            let at = scope::gun_point(p.gun_angles.unwrap_or_default(), p.fov, screen);
+            scope::build(def, at, screen, out);
+        }
 
         let north = cx
             .configstrings
@@ -105,16 +120,23 @@ impl PlayerHud {
         let frac = health_fraction(p.health, p.max_health);
         let lag = self.health_lag.step(p.client_num, frac, now);
         health(frac, lag, &v, out);
-        let raising = self.sight.step(p.weapon, p.ads_frac);
         if let Some(def) = p.weapon {
             weapon_info(def, p, cx, &v, out);
-            // Retail draws the turret's own reticle there, which vcod does not.
             if p.eflags & EF_MOUNTED == 0 {
                 crosshair(def, p, raising, &v, out);
             }
         }
+        // Mounted, the gun's reticle replaces the weapon's, carried weapon or not.
+        if p.eflags & EF_MOUNTED != 0
+            && let Some(def) = p.turret
+        {
+            turret_reticle(def, &v, out);
+        }
         cursor_hint(p, cx, now, &v, out);
-        self.damage.build(p.view_yaw, now, &v, out);
+        // `cg_hudDamageIconInScope` 0.
+        if scoped.is_none() {
+            self.damage.build(p.view_yaw, now, &v, out);
+        }
     }
 }
 
@@ -313,7 +335,8 @@ pub fn arm_offset(
 
 /// The crosshair's quads, none at full sight or with no reticle. Its images
 /// are sized in window pixels; only the arms' travel scales with the screen.
-/// `raising` picks `adsCrosshairInFrac` over `adsCrosshairOutFrac`.
+/// `raising` picks `adsCrosshairInFrac` over `adsCrosshairOutFrac`. Under a
+/// scope overlay it fades by what is left of the zoom tail.
 pub fn crosshair(
     def: &WeaponDef,
     p: &PlayerView,
@@ -321,7 +344,8 @@ pub fn crosshair(
     v: &Virtual,
     out: &mut Vec<HudQuad>,
 ) {
-    if p.ads_frac >= 1.0 {
+    let fade = 1.0 - scope::overlay_frac(def, p.ads_frac, raising).unwrap_or(0.0);
+    if fade * CROSSHAIR_ALPHA < 0.01 || p.ads_frac >= 1.0 {
         return;
     }
     let mut shrink = 1.0;
@@ -347,14 +371,14 @@ pub fn crosshair(
     if let Some(center) = &def.reticle_center {
         let s = def.reticle_center_size * shrink;
         let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-        let rgba = [1.0, 1.0, 1.0, CROSSHAIR_ALPHA];
+        let rgba = [1.0, 1.0, 1.0, CROSSHAIR_ALPHA * fade];
         out.push(px_quad(cx - s / 2.0, cy - s / 2.0, s, uvs, rgba, center));
     }
     let Some(side) = &def.reticle_side else {
         return;
     };
     let (ox, oy) = arm_offset(def, &p.spread_stance, p.aim_spread_scale, shrink, p.fov);
-    let arm_rgba = [1.0, 1.0, 1.0, arm_alpha(p.aim_spread_scale)];
+    let arm_rgba = [1.0, 1.0, 1.0, arm_alpha(p.aim_spread_scale, fade)];
     let s = def.reticle_side_size * shrink;
     // Top, right, bottom, left: direction, the arm's corner in sizes, and a
     // one-pixel nudge on the top and left arms.
@@ -377,9 +401,22 @@ pub fn crosshair(
     }
 }
 
-/// The arms fade as the spread opens, down to `cg_crosshairAlphaMin`.
-pub fn arm_alpha(aim_spread_scale: f32) -> f32 {
-    ((1.0 - aim_spread_scale / 255.0) * CROSSHAIR_ALPHA).max(CROSSHAIR_ALPHA_MIN)
+/// 0x30016610: the mounted gun's `reticleCenter`, `reticleCenterSize`
+/// virtual units square on the screen's centre, at `cg_crosshairAlpha`.
+/// Unlike the weapon reticle's, the size takes the screen scale.
+pub fn turret_reticle(def: &WeaponDef, v: &Virtual, out: &mut Vec<HudQuad>) {
+    let Some(center) = &def.reticle_center else {
+        return;
+    };
+    let s = def.reticle_center_size;
+    let rgba = [1.0, 1.0, 1.0, CROSSHAIR_ALPHA];
+    out.push(v.quad(320.0 - s / 2.0, 240.0 - s / 2.0, s, s, rgba, center));
+}
+
+/// The arms fade as the spread opens and as a scope comes up, down to
+/// `cg_crosshairAlphaMin`.
+pub fn arm_alpha(aim_spread_scale: f32, fade: f32) -> f32 {
+    ((1.0 - aim_spread_scale / 255.0) * fade * CROSSHAIR_ALPHA).max(CROSSHAIR_ALPHA_MIN)
 }
 
 /// The compass rect's centre, where objective bearings are measured from.
@@ -608,6 +645,7 @@ mod tests {
             max_health: 100,
             eflags: 0,
             weapon: None,
+            turret: None,
             ammo,
             ammoclip: ammo,
             aim_spread_scale: 0.0,
@@ -616,6 +654,7 @@ mod tests {
             view_yaw: 0.0,
             eye: [0.0; 3],
             fov: (80.0, 64.0),
+            gun_angles: None,
             objectives,
             cursor_hint: 0,
             cursor_hint_string: -1,
@@ -765,11 +804,99 @@ mod tests {
         assert_eq!(arms(0xC000), 0);
     }
 
+    /// Down a settled scope the overlay is drawn first, under the menu HUD,
+    /// and neither the crosshair nor a fresh hit's icon is drawn over it.
+    #[test]
+    fn a_raised_scope_draws_the_overlay_under_the_hud() {
+        let font = test_font();
+        let ammo = [0i16; 64];
+        let cs = vec![String::new(); 2048];
+        let origin = |_: i32| None;
+        let cx = Context {
+            weapons: &[],
+            configstrings: &cs,
+            loc: &Localized::default(),
+            font: &font,
+            entity_origin: &origin,
+        };
+        let def = WeaponDef {
+            aim_down_sight: true,
+            ads_zoom_in_frac: 0.05,
+            ads_zoom_out_frac: 0.05,
+            ads_overlay_shader: Some("ui/assets/reticle_circle_quarter".into()),
+            ads_overlay_reticle: vcod_common::weapon::OverlayReticle::Springfield,
+            ads_overlay_width: 220.0,
+            ads_overlay_height: 220.0,
+            ..carbine()
+        };
+        let p = PlayerView {
+            weapon: Some(&def),
+            ads_frac: 1.0,
+            damage: DamageFeedback {
+                event: 1,
+                count: 10,
+                ..Default::default()
+            },
+            ..view(&ammo, &[])
+        };
+        let mut hud = PlayerHud::default();
+        let mut out = Vec::new();
+        hud.build(&p, &cx, 0, (640.0, 480.0), &mut out);
+        assert_eq!(out[0].texture, "ui/assets/reticle_circle_quarter");
+        let has = |t: &str| out.iter().any(|q| q.texture == t);
+        assert!(has("hudSoftLineH"));
+        assert!(has("gfx/hud/hud@health_back.tga"));
+        assert!(!has("gfx/reticle/side_skinny.tga"), "no crosshair");
+        assert!(!has("hudHitDirection"), "no damage icon in the scope");
+    }
+
+    #[test]
+    fn a_mounted_gun_draws_its_own_reticle_on_the_centre() {
+        let font = test_font();
+        let ammo = [0i16; 64];
+        let cs = vec![String::new(); 2048];
+        let origin = |_: i32| None;
+        let cx = Context {
+            weapons: &[],
+            configstrings: &cs,
+            loc: &Localized::default(),
+            font: &font,
+            entity_origin: &origin,
+        };
+        let mg = WeaponDef {
+            reticle_center: Some("gfx/reticle/mg42_cross.tga".into()),
+            reticle_center_size: 32.0,
+            ..Default::default()
+        };
+        let reticles = |eflags: i32, turret: Option<&WeaponDef>| {
+            let p = PlayerView {
+                eflags,
+                turret,
+                ..view(&ammo, &[])
+            };
+            let mut out = Vec::new();
+            PlayerHud::default().build(&p, &cx, 0, (1920.0, 1080.0), &mut out);
+            out.into_iter()
+                .filter(|q| Some(&q.texture) == mg.reticle_center.as_ref())
+                .collect::<Vec<_>>()
+        };
+        let drawn = reticles(0xC000, Some(&mg));
+        let [q] = drawn.as_slice() else {
+            panic!("{} reticles", drawn.len());
+        };
+        // 32 virtual units at 1080/480, centred on 960x540.
+        assert_eq!(q.verts[0], [924.0, 504.0]);
+        assert_eq!(q.verts[2], [996.0, 576.0]);
+        assert!(reticles(0, Some(&mg)).is_empty(), "not mounted");
+        assert!(reticles(0xC000, None).is_empty(), "no gun def");
+    }
+
     #[test]
     fn crosshair_arms_fade_with_the_spread_down_to_the_floor() {
-        assert_eq!(arm_alpha(0.0), 1.0);
-        assert!(close(arm_alpha(51.0), 0.8));
-        assert_eq!(arm_alpha(255.0), CROSSHAIR_ALPHA_MIN);
+        assert_eq!(arm_alpha(0.0, 1.0), 1.0);
+        assert!(close(arm_alpha(51.0, 1.0), 0.8));
+        assert_eq!(arm_alpha(255.0, 1.0), CROSSHAIR_ALPHA_MIN);
+        assert_eq!(arm_alpha(0.0, 0.5), CROSSHAIR_ALPHA_MIN, "a scope's fade");
         let ammo = [0i16; 64];
         let p = PlayerView {
             aim_spread_scale: 255.0,

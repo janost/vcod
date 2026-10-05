@@ -1,7 +1,7 @@
 //! Weapon state machine: picks the viewmodel clip (idle, fire, rechamber,
 //! reload, ADS) from LMB/RMB/R input and weapon-file times. Pure logic.
 //!
-//! Checked against the six WALK_LOADOUT files. Not modelled here: segmented
+//! Checked against the first six WALK_LOADOUT files. Not modelled here: segmented
 //! reloads, altWeapon. The sway, idle and kick keys are parsed into
 //! `AimDef` for the server's aim block (`crate::pmove::aim`); this file's
 //! own viewmodel machine still ignores them. `adsBobFactor` scales the walk
@@ -308,6 +308,42 @@ fn capitalize(key: &str) -> String {
     }
 }
 
+/// `adsOverlayReticle`, the lines the cgame draws over the scope image, in
+/// the order of the cgame's name table (`0x300754f0`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OverlayReticle {
+    #[default]
+    None,
+    /// The weapon's own `reticleCenter`.
+    Crosshair,
+    /// A post from the centre down and a split bar.
+    Fg42,
+    /// A full cross.
+    Springfield,
+    /// Drawn as `Fg42`.
+    Gewehr43,
+}
+
+impl OverlayReticle {
+    /// An unknown name reads as `None`, with the warning retail prints.
+    fn parse(v: Option<&String>) -> OverlayReticle {
+        let Some(v) = v.map(|v| v.trim()) else {
+            return OverlayReticle::None;
+        };
+        match v.to_ascii_lowercase().as_str() {
+            "" | "none" => OverlayReticle::None,
+            "crosshair" => OverlayReticle::Crosshair,
+            "fg42" => OverlayReticle::Fg42,
+            "springfield" => OverlayReticle::Springfield,
+            "gewehr43" => OverlayReticle::Gewehr43,
+            _ => {
+                log::warn!("weapon: unknown adsOverlayReticle {v:?}");
+                OverlayReticle::None
+            }
+        }
+    }
+}
+
 /// Times in seconds.
 #[derive(Clone)]
 pub struct WeaponDef {
@@ -358,6 +394,13 @@ pub struct WeaponDef {
     pub ads_zoom_in_frac: f32,
     pub ads_zoom_out_frac: f32,
     pub ads_view_bob_mult: f32,
+    /// `adsOverlayShader`: the scope image the cgame draws four times
+    /// mirrored, each copy `adsOverlayWidth` by `adsOverlayHeight` virtual
+    /// pixels (docs/research/cod11-hud-protocol.md, "Scope overlay").
+    pub ads_overlay_shader: Option<String>,
+    pub ads_overlay_reticle: OverlayReticle,
+    pub ads_overlay_width: f32,
+    pub ads_overlay_height: f32,
     /// Second ADS bob multiplier the files carry separately; 1.0 changes
     /// nothing, thompson/springfield ship 0 (bob frozen when fully aimed).
     /// Semantics INFERRED from the values; no decompilation evidence yet.
@@ -492,6 +535,11 @@ pub struct WeaponDef {
     /// `view_anim` and `resolve` fall back to idle rather than pick a clip
     /// that was never loaded.
     pub anim_keys: std::collections::HashSet<WeaponAnim>,
+    /// `idleAnim` and `fireAnim` by name: what a turret's own model plays
+    /// (docs/research/cod11-turrets.md section 14). The viewmodel reads the
+    /// raw map instead.
+    pub idle_anim: Option<String>,
+    pub fire_anim: Option<String>,
 }
 
 /// Absence is normal (a spread key on a turret file, an ammo key on a
@@ -675,6 +723,10 @@ impl WeaponDef {
             ads_zoom_in_frac: parse_num(map, "adsZoomInFrac", 0.0),
             ads_zoom_out_frac: parse_num(map, "adsZoomOutFrac", 0.0),
             ads_view_bob_mult: parse_num(map, "adsViewBobMult", 1.0),
+            ads_overlay_shader: opt_str(map, "adsOverlayShader"),
+            ads_overlay_reticle: OverlayReticle::parse(map.get("adsOverlayReticle")),
+            ads_overlay_width: parse_num(map, "adsOverlayWidth", 0.0),
+            ads_overlay_height: parse_num(map, "adsOverlayHeight", 0.0),
             ads_bob_factor: parse_num(map, "adsBobFactor", 1.0),
             semi_auto: parse_bool(map, "semiAuto", false),
             start_ammo: parse_num(map, "startAmmo", 0),
@@ -756,6 +808,8 @@ impl WeaponDef {
                 .into_iter()
                 .filter(|a| opt_str(map, a.key()).is_some())
                 .collect(),
+            idle_anim: opt_str(map, "idleAnim"),
+            fire_anim: opt_str(map, "fireAnim"),
         }
     }
 }

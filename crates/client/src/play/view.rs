@@ -1,6 +1,7 @@
 //! The playing client's own first-person weapon: the rig for `ps.weapon`
 //! with the hands `ps.viewmodelIndex` names, posed from `ps.weapAnim`.
 
+use crate::hud::scope;
 use crate::renderer::VmDraw;
 use crate::viewmodel::{self, ViewWeapon, ViewmodelMotion};
 use glam::Vec3;
@@ -134,6 +135,8 @@ pub struct OnlineView {
     /// `tag_flash` as last drawn, view space (X right, Y up, -Z forward):
     /// position and the tag's forward.
     flash: Option<(Vec3, Vec3)>,
+    /// A scope overlay is up, which hides the gun and its flash.
+    scoped: bool,
 }
 
 impl OnlineView {
@@ -178,10 +181,15 @@ impl OnlineView {
         self.rig.is_some().then_some(models)
     }
 
+    /// Whether last frame's sight put a scope overlay up.
+    pub fn scoped(&self) -> bool {
+        self.scoped
+    }
+
     /// The viewmodel to draw and the horizontal fov both it and the world
     /// are drawn with, for `ps` when the view is the client's own and alive;
-    /// `None` draws no viewmodel. `weapons` is the configstring 7 table, for
-    /// the clip index and the zoom.
+    /// `None` draws no viewmodel, as under a scope overlay. `weapons` is the
+    /// configstring 7 table, for the clip index and the zoom.
     pub fn frame(
         &mut self,
         weapons: &[Option<WeaponDef>],
@@ -192,8 +200,9 @@ impl OnlineView {
         let mouse = std::mem::take(&mut self.mouse);
         self.flash = None;
         let held = ps.and_then(|ps| weapons.get(usize::from(ps.weapon))?.as_ref());
+        let mut zooming_in = false;
         let fov = ps.map_or(CG_FOV, |ps| {
-            let zooming_in = self.sight.step(held, ps.ads_frac);
+            zooming_in = self.sight.step(held, ps.ads_frac);
             weapon::view_fov_x(
                 held,
                 ps.ads_frac,
@@ -202,6 +211,14 @@ impl OnlineView {
                 ps.mounted,
             )
         });
+        self.scoped = ps.zip(held).is_some_and(|(ps, def)| {
+            !ps.mounted && scope::overlay_frac(def, ps.ads_frac, zooming_in).is_some()
+        });
+        // No view weapon on a mounted gun (`0x300371f0`'s `eFlags & 0xc000`
+        // test); the gun itself is the turret entity.
+        if ps.is_some_and(|ps| ps.mounted) {
+            return (None, fov);
+        }
         let (Some(ps), Some(w)) = (ps, self.rig.as_deref_mut()) else {
             // A respawn whose `weapAnim` matches the pre-death one bit for bit
             // still restarts the raise.
@@ -252,6 +269,11 @@ impl OnlineView {
                 transform.transform_vector3(rot * Vec3::X),
             )
         });
+        // Posed all the same, so the clips run on under the scope.
+        if self.scoped {
+            self.flash = None;
+            return (None, fov);
+        }
         (
             Some(VmDraw {
                 transform,
@@ -475,6 +497,21 @@ mod tests {
             let now = 1000.0 + f64::from(i) * 16.0;
             assert_eq!(pose(&mut view, &sighted, now).0, up, "a raised sight holds");
         }
+
+        // The scoped kar98k hides the gun once its overlay is up, and the
+        // clips keep running under it.
+        cs[7] = "kar98k_sniper_mp".to_string();
+        let weapons = vcod_common::weapon_table::from_configstring(&fs, &cs[7]);
+        let mut scoped = OnlineView::default();
+        assert!(scoped.sync_rig(&fs, &cs, &ps(1, 82)).is_some());
+        let mut up = ps(1, 82);
+        for (i, frac) in [0.0, 0.3, 0.9, 1.0].into_iter().enumerate() {
+            up.ads_frac = frac;
+            let (draw, _) = scoped.frame(&weapons, Some(&up), 0.016, i as f64 * 16.0);
+            assert_eq!(draw.is_none(), frac >= 0.9, "at {frac}");
+            assert_eq!(scoped.scoped(), frac >= 0.9);
+        }
+        cs[7] = "m1carbine_mp colt_mp mosin_nagant_mp".to_string();
 
         // A team change swaps the hands and rebuilds.
         cs[CS_MODELS_V1 + 82] = "xmodel/viewmodel_hands_russian".to_string();

@@ -217,6 +217,11 @@ impl PoseBuffer {
         }
     }
 
+    /// The bone's current local rotation.
+    pub fn local_rot(&self, bone: usize) -> Quat {
+        self.locals[bone].1
+    }
+
     /// Replaces the rotation outright. The aim layer's control bones are
     /// keyed by no clip, so composing onto the previous frame would accumulate.
     pub fn set_local_rot(&mut self, bone: usize, rot: Quat) {

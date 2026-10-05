@@ -1347,12 +1347,25 @@ mod tests {
                     cx.spawn_then(f, recv, vec![], 2);
                     Ok(Value::Undefined)
                 }
+                "spawnchain" => {
+                    let f = cx.func_ref("test/script", "step");
+                    cx.spawn_then(f, recv, vec![Value::Int(1)], 10);
+                    let f = cx.func_ref("test/script", "step");
+                    cx.spawn(f, recv, vec![Value::Int(9)]);
+                    Ok(Value::Undefined)
+                }
                 _ => Err(ErrorKind::MissingBuiltin(name)),
             }
         }
 
-        /// Appends `<token>:<level.state>` to `level.returned`.
+        /// Appends `<token>:<level.state>` to `level.returned`. A token of
+        /// 10 or 11 chains one more `step` with the next token, up to 12.
         fn spawn_returned(&mut self, cx: &mut Cx, token: u32) {
+            if (10..12).contains(&token) {
+                let f = cx.func_ref("test/script", "step");
+                let (n, level) = (token as i32 - 8, cx.level());
+                cx.spawn_then(f, Some(level), vec![Value::Int(n)], token + 1);
+            }
             let Target::Struct(level) = cx.level() else {
                 unreachable!()
             };
@@ -1431,6 +1444,21 @@ mod tests {
         vm.start_thread(&mut host, 0, main, None, vec![]);
         assert_eq!(level_string(&mut vm, "seen"), "1:dead 2:dead ");
         assert_eq!(vm.aborts().len(), 1, "the missing function is recorded");
+    }
+
+    /// A thread the hook queues starts next, ahead of the builtin's other
+    /// queued threads and before its caller continues: the loop shape of
+    /// `G_RadiusDamage`, one damage callback per pass.
+    #[test]
+    fn a_spawn_from_the_hook_runs_before_the_rest_of_the_queue() {
+        let mut vm = vm_with(
+            r#"main() { level.state = ""; level spawnchain(); level.seen = level.state; }
+               step(n) { self.state = self.state + n; wait 1; }"#,
+        );
+        let mut host = SpawnHost::default();
+        let main = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, 0, main, None, vec![]);
+        assert_eq!(level_string(&mut vm, "seen"), "1239");
     }
 
     /// A builtin that spawns a thread whose first act is the same builtin is

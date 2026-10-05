@@ -524,6 +524,43 @@ pub struct PlayerState {
     /// turret, the gun's own stance. `None` off a gun. The caller owns the
     /// mount and sets it (docs/research/cod11-turrets.md, section 5).
     pub mounted: Option<Stance>,
+    /// The two fall damage cvars. Not playerstate on retail but systeminfo
+    /// cvars both ends read; the caller copies them in.
+    pub fall_heights: FallHeights,
+}
+
+/// `bg_fallDamageMinHeight` and `bg_fallDamageMaxHeight`, the systeminfo
+/// cvars `PM_CrashLand` reads (docs/research/cod11-player-clip.md 8.3).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FallHeights {
+    pub min: f32,
+    pub max: f32,
+}
+
+impl Default for FallHeights {
+    /// The `gameCvarTable` defaults (rows 0x7e368 and 0x7e380).
+    fn default() -> Self {
+        FallHeights {
+            min: 256.0,
+            max: 480.0,
+        }
+    }
+}
+
+impl FallHeights {
+    /// The two bounds out of a systeminfo string (configstring 1), the way a
+    /// client's cvars take them: a missing key keeps its default.
+    pub fn from_systeminfo(info: &str) -> Self {
+        let d = FallHeights::default();
+        let get = |key, default: f32| {
+            crate::net::info_value_for_key(info, key)
+                .map_or(default, |v| v.trim().parse().unwrap_or(0.0))
+        };
+        FallHeights {
+            min: get("bg_fallDamageMinHeight", d.min),
+            max: get("bg_fallDamageMaxHeight", d.max),
+        }
+    }
 }
 
 impl PlayerState {
@@ -590,6 +627,7 @@ impl PlayerState {
             walking: false,
             linked: false,
             mounted: None,
+            fall_heights: FallHeights::default(),
         }
     }
 
@@ -806,7 +844,7 @@ pub fn pmove(
     // `PM_CrashLand` runs inside the ground trace (0x30721), so it reads the
     // water level the frame began with and the footsteps read its damping.
     if !was_on_ground && ps.on_ground {
-        crash_land(ps, start_vz, &mut events);
+        crash_land(ps, start_vz, false, &mut events);
         ps.land_anim = start_vz < LAND_ANIM_SPEED;
     }
     set_water_level(ps, world);
@@ -906,12 +944,17 @@ fn snap_velocity(ps: &mut PlayerState) {
 /// A dead player's frame: gravity and ground friction with no input, no
 /// stance, lean or weapon step, and the eye easing to `VIEW_DEAD`. Q3's
 /// `PM_DEAD` arm of `PmoveSingle` with the movement input zeroed; the eye
-/// rate is the retail capture's (`DEAD_VIEW_LERP_SPEED`).
-pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) {
+/// rate is the retail capture's (`DEAD_VIEW_LERP_SPEED`). A corpse landing
+/// runs `PM_CrashLand` too, which takes no damage at `pm_type > 5`; its
+/// events are the return.
+pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) -> Vec<PmEvent> {
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
     let idle = PmInput::default();
+    let mut events = Vec::new();
     ps.jumped = false;
+    let was_on_ground = ps.on_ground;
     ps.move_start = ps.origin;
+    let start_vz = ps.velocity.z;
     drop_knockback(ps, dt);
     // `PM_ClearAimDownSightFlag` (`game.mp.i386.so` 0x3abd4), which
     // `PmoveSingle` calls in the dead arm. The fraction is left where the
@@ -929,6 +972,11 @@ pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) {
         air_move(ps, &idle, world, dt, MASK_DEADSOLID, None);
     }
     ground_trace(ps, world, MASK_DEADSOLID);
+    // `PmoveSingle`'s dead arm takes the default path's two ground traces
+    // (0x342ce, 0x34327), and the landing one calls `PM_CrashLand`.
+    if !was_on_ground && ps.on_ground {
+        crash_land(ps, start_vz, true, &mut events);
+    }
     // A target no stance has drops any leg and moves at a flat rate (0x30a84).
     ps.view_lerp_ms = None;
     let step = DEAD_VIEW_LERP_SPEED * dt;
@@ -937,6 +985,7 @@ pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) {
     // `pm_type` 6 takes the default arm, tail and snap included.
     clamp_velocity_to_move(ps, dt);
     snap_velocity(ps);
+    events
 }
 
 /// Retail footstep cadence (`PM_Footsteps` @0x322c8). The bob cycle ticks by
@@ -1090,7 +1139,8 @@ fn ladder_step_event(
 /// `PM_CrashLand` (0x2fd68): the fall height off the move's start, the fall
 /// damage, and either the landing stun or the damage-free ladder
 /// (docs/research/cod11-player-clip.md 8, cod11-sound-system.md "Landing").
-fn crash_land(ps: &mut PlayerState, start_vz: f32, events: &mut Vec<PmEvent>) {
+/// `dead` is `pm_type > 5`, which lands with no damage.
+fn crash_land(ps: &mut PlayerState, start_vz: f32, dead: bool, events: &mut Vec<PmEvent>) {
     if ps.water_level >= 3 {
         return;
     }
@@ -1102,7 +1152,11 @@ fn crash_land(ps: &mut PlayerState, start_vz: f32, events: &mut Vec<PmEvent>) {
     }
     let height = den / (2.0 * GRAVITY);
     let sf = ps.ground_surface_flags;
-    let damage = fall_damage(height, sf, ps.water_level);
+    let damage = if dead {
+        0
+    } else {
+        fall_damage(height, sf, ps.water_level, ps.fall_heights)
+    };
     if damage == 0 {
         if height >= LANDING_DAMP_HEIGHT {
             ps.velocity *= LANDING_DAMP;
@@ -1125,25 +1179,24 @@ fn crash_land(ps: &mut PlayerState, start_vz: f32, events: &mut Vec<PmEvent>) {
     });
 }
 
-/// `bg_fallDamageMinHeight` and `bg_fallDamageMaxHeight` at their stock
-/// defaults (gameCvarTable 0x7e368 and 0x7e380). Both are systeminfo cvars a
-/// server could change; vcod does not let it.
-const FALL_DAMAGE_MIN_HEIGHT: f32 = 256.0;
-const FALL_DAMAGE_MAX_HEIGHT: f32 = 480.0;
 /// The ground surface flag that takes no fall damage (0x2feaa).
 const SURF_NODAMAGE: u32 = 0x1;
-const EV_LANDING_PAIN_BASE: i32 = 116;
+/// `EV_LANDING_PAIN_*`, one per surface material up to 138; the server's
+/// `ClientEvents` turns each into fall damage.
+pub const EV_LANDING_PAIN_BASE: i32 = 116;
+pub const EV_LANDING_PAIN_LAST: i32 = 138;
 
 /// The fall damage percent: linear from 0 at the min height to 100 at the
-/// max, truncated, halved (truncated again) at water level 2.
-fn fall_damage(height: f32, sf: u32, water_level: u32) -> i32 {
-    let damage = if height <= FALL_DAMAGE_MIN_HEIGHT || sf & SURF_NODAMAGE != 0 {
+/// max, truncated, halved (truncated again) at water level 2. Bounds out of
+/// order or a negative min take none (0x2fe6c).
+fn fall_damage(height: f32, sf: u32, water_level: u32, h: FallHeights) -> i32 {
+    let bad_bounds = h.max <= h.min || h.min < 0.0;
+    let damage = if bad_bounds || height <= h.min || sf & SURF_NODAMAGE != 0 {
         0
-    } else if height >= FALL_DAMAGE_MAX_HEIGHT {
+    } else if height >= h.max {
         100
     } else {
-        let frac =
-            (height - FALL_DAMAGE_MIN_HEIGHT) / (FALL_DAMAGE_MAX_HEIGHT - FALL_DAMAGE_MIN_HEIGHT);
+        let frac = (height - h.min) / (h.max - h.min);
         ((frac * 100.0) as i32).clamp(0, 100)
     };
     if water_level == 2 {
@@ -3342,6 +3395,57 @@ mod tests {
                 ps.velocity.x
             );
         }
+    }
+
+    /// The two bounds are the cvars' values, and bounds out of order or a
+    /// negative min take no damage at all (0x2fe6c).
+    #[test]
+    fn the_fall_damage_bounds_are_the_cvars() {
+        let at = |min, max| FallHeights { min, max };
+        assert_eq!(fall_damage(300.0, 0, 0, FallHeights::default()), 19);
+        assert_eq!(fall_damage(300.0, 0, 0, at(200.0, 1000.0)), 12);
+        assert_eq!(fall_damage(300.0, 0, 0, at(100.0, 300.0)), 100);
+        assert_eq!(fall_damage(250.0, 0, 2, at(200.0, 300.0)), 25);
+        assert_eq!(fall_damage(900.0, 0, 0, at(480.0, 256.0)), 0);
+        assert_eq!(fall_damage(900.0, 0, 0, at(-1.0, 256.0)), 0);
+
+        // The retail run's systeminfo under `+set`s (player-clip doc 8.10).
+        let info = r"\bg_fallDamageMaxHeight\1000\bg_fallDamageMinHeight\200\sv_cheats\0";
+        assert_eq!(FallHeights::from_systeminfo(info), at(200.0, 1000.0));
+        assert_eq!(
+            FallHeights::from_systeminfo(r"\sv_cheats\0"),
+            FallHeights::default()
+        );
+    }
+
+    /// A corpse dropped onto the floor lands like a live player on a soft
+    /// fall, whatever the height: the damp and the land event, no pain and
+    /// no stun (`pm_type > 5` at 0x2feba).
+    #[test]
+    fn a_corpse_lands_with_no_damage() {
+        let w = crate::collision::synthetic_world(
+            &[(
+                "textures/test/floor",
+                crate::collision::CONTENTS_SOLID,
+                6 << 20,
+            )],
+            &[(0, [-2048.0, -2048.0, -16.0], [2048.0, 2048.0, 0.0])],
+        );
+        let w = MoveWorld::bare(&w);
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 600.0), 0.0);
+        ps.on_ground = false;
+        let mut landed = None;
+        for _ in 0..1000 {
+            let events = dead_move(&mut ps, &w, 0.016);
+            if ps.on_ground {
+                landed = Some(events);
+                break;
+            }
+        }
+        let events = landed.expect("never landed");
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].event, EV_LANDING_BASE + 6);
+        assert_eq!((ps.knockback_ms, ps.knockback_flags), (0.0, 0));
     }
 
     /// Water level 1-2 replaces the ground material with the fixed water ids

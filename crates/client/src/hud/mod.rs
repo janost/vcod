@@ -7,6 +7,7 @@ pub mod hudelem;
 pub mod killfeed;
 pub mod menu;
 pub mod player;
+pub mod scope;
 pub mod scoreboard;
 pub mod status;
 
@@ -102,6 +103,9 @@ pub struct HudFrame<'a> {
     pub fov: f32,
     /// An entity's current origin, for objectives placed on one.
     pub entity_origin: &'a dyn Fn(i32) -> Option<[f32; 3]>,
+    /// The `weapon` of the gun `ps` rides, the entity `viewlocked_entNum`
+    /// names, which picks the mounted reticle.
+    pub turret_weapon: Option<usize>,
 }
 
 impl Hud {
@@ -213,7 +217,13 @@ impl Hud {
         let screen = (f.screen_w, f.screen_h);
         match f.ps.filter(|_| f.local_player) {
             Some(ps) => {
-                let view = player_view(ps, f);
+                let mut view = player_view(ps, f);
+                // Off the replay only: a snapshot does not carry the sway.
+                view.gun_angles = f.predicted.and_then(|pred| {
+                    self.player
+                        .gun
+                        .step(view.weapon, &pred.ps, pred.command_time)
+                });
                 let cx = player::Context {
                     weapons: f.weapons,
                     configstrings: f.configstrings,
@@ -341,6 +351,7 @@ fn player_view<'a>(ps: &'a PlayerState, f: &HudFrame<'a>) -> PlayerView<'a> {
         max_health: ps.max_health(),
         eflags,
         weapon: f.weapons.get(weapon).and_then(Option::as_ref),
+        turret: f.turret_weapon.and_then(|w| f.weapons.get(w)?.as_ref()),
         ammo,
         ammoclip,
         aim_spread_scale,
@@ -352,6 +363,7 @@ fn player_view<'a>(ps: &'a PlayerState, f: &HudFrame<'a>) -> PlayerView<'a> {
             f.fov,
             crate::camera::fov_y(f.fov, f.screen_w / f.screen_h.max(1.0)),
         ),
+        gun_angles: None,
         objectives: &ps.arrays.objectives,
         cursor_hint: int("serverCursorHint"),
         // Playerstate fields arrive unsigned; retail's -1 is 255.
@@ -398,6 +410,7 @@ mod tests {
             eye: [0.0; 3],
             fov: 80.0,
             entity_origin: &|_| None,
+            turret_weapon: None,
         }
     }
 
