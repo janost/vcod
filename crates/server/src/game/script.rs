@@ -1091,8 +1091,14 @@ impl ScriptRuntime {
         std::mem::take(&mut self.host.client_weapon_ops)
     }
 
+    /// Whether [`Self::take_ops_of`] would hand anything back for `slot`.
+    pub fn has_ops_of(&self, slot: usize) -> bool {
+        self.host.client_weapon_ops.iter().any(|(s, _)| *s == slot)
+            || self.host.client_sim_ops.iter().any(|(s, _)| *s == slot)
+    }
+
     /// `slot`'s share of [`Self::take_weapon_ops`] and
-    /// [`Self::take_sim_ops`], for a death the move pass lands before the
+    /// [`Self::take_sim_ops`], for what the move pass lands before the
     /// client's next cmd; every other client's stay queued.
     pub fn take_ops_of(
         &mut self,

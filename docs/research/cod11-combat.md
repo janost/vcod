@@ -4567,8 +4567,11 @@ pass, the item pass and the use key. A shot is traced against
 every client as its own packets so far left it; each impact goes out and
 each hit runs `CodeCallback_PlayerDamage` there and then, and what the
 callback queued for the victim (the damage, the death, the drop) is applied
-to its sim before any later cmd runs. A `trigger_hurt` that kills the mover
-inside its touch pass is applied the same way. `finishPlayerDamage`'s timer
+to its sim before any later cmd runs. What the mover's own touch pass, item
+pass and use key queued for it, a `trigger_hurt`'s damage or death and a
+pickup's ammo and event, is applied the same way at the end of that cmd, so
+a hit takes only its own callback's ops off the victim's queue
+(`cod11-items.md` 13.2). `finishPlayerDamage`'s timer
 is `ClientSim::take_damage`, carried as `knockback_flags` beside
 `knockback_ms` (`vcod_common::pmove`), and the wire's `pm_flags` and
 `pm_time` carry it.
