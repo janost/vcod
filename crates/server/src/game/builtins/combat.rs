@@ -482,12 +482,14 @@ pub fn radius_damage(
 
 /// A client as a blast candidate, standing: the box and the eye height
 /// `CanDamage` needs (combat doc, 14.3), which is all a script-side victim
-/// has, its stance living on the sim rather than on the host.
+/// has, its stance living on the sim rather than on the host. The link is
+/// taken to be its last cmd's, at the snapped origin.
 fn standing_victim(slot: usize, origin: Vec3) -> crate::game::combat::BlastVictim {
     use vcod_common::pmove::{HALF_WIDTH, Stance};
     crate::game::combat::BlastVictim {
         slot,
         origin,
+        link_origin: origin.trunc(),
         mins: Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0),
         maxs: Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height()),
         eye: origin + Vec3::Z * Stance::Stand.view_height(),

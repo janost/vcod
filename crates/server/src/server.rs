@@ -273,6 +273,7 @@ fn standing_blast_victim(feet: [f32; 3]) -> crate::game::combat::BlastVictim {
     crate::game::combat::BlastVictim {
         slot: 0,
         origin: feet,
+        link_origin: feet.trunc(),
         mins: glam::Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0),
         maxs: glam::Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height()),
         eye: feet + glam::Vec3::Z * Stance::Stand.view_height(),
@@ -3096,6 +3097,7 @@ impl Server {
                     .map(|(slot, s)| crate::game::combat::BlastVictim {
                         slot: *slot,
                         origin: s.ps.origin,
+                        link_origin: s.link_origin(),
                         mins: s.ps.mins(),
                         maxs: s.ps.maxs(),
                         eye: s.ps.view().eye,

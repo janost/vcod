@@ -1322,6 +1322,19 @@ impl ClientSim {
         self.ps.origin.into()
     }
 
+    /// `r.currentOrigin` at the last link, which `r.absmin` and `r.absmax`
+    /// are built off: `ClientThink_real` links at the snapped origin, and a
+    /// linked client's `G_RunClient` relinks at the anchored one (combat doc,
+    /// 14.1). A `setOrigin` with no cmd since, which links unsnapped, is not
+    /// modelled.
+    pub fn link_origin(&self) -> Vec3 {
+        if self.link_to.is_some() {
+            self.ps.origin
+        } else {
+            self.ps.origin.trunc()
+        }
+    }
+
     /// The wire `legsAnim`, restart bit included.
     pub fn legs_anim(&self) -> i32 {
         self.anim.legs()

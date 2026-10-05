@@ -3986,7 +3986,13 @@ list below. INFERRED: the ordering and every condition in it.
   (`.rodata 0x74440`). The damage on that arm is `(int)(points * 0.1)`
   (`.rodata 0x74444`) with the same `dir` and the same `dflags` 1.
   INFERRED: that is a token amount for a victim hugging the far side of the
-  wall the blast went off against.
+  wall the blast went off against. VERIFIED: the midpoint is
+  `0.5 * (absmin + absmax)` (`+0x11C` and `+0x128`, read at
+  `0x4A687..0x4A6B5`), and those two are written only by `SV_LinkEntity`
+  (`cod_lnxded` `0x8090b60..0x8090c13`), as `r.currentOrigin + mins` and
+  `r.currentOrigin + maxs`, each widened by one unit on every axis. INFERRED:
+  the widening is symmetric, so the midpoint is the origin of the last link
+  plus the box centre, and for a client that is the snapped origin of 14.3.
 - The return value is 1 when any `LogAccuracyHit` returned non-zero and 0
   otherwise.
 
@@ -4054,6 +4060,49 @@ rectangle held broadside to the blast. UNVERIFIED: which of the four corners
 gets which sign pair, which the register shuffling did not make legible and
 which does not matter to a symmetric set.
 
+**Which origin a client is read at.** The muzzle starts from the snapped
+origin because `FireWeapon` runs inside the window where
+`ClientThink_real` holds the truncated `s.pos.trBase` in `r.currentOrigin`
+(2.1). A blast does not run inside it:
+
+- VERIFIED: `ClientThink_real` writes the snapped origin into
+  `r.currentOrigin` at `0x4051E..0x40533`, links at `0x40595` and writes
+  `ps.origin` (`client+0x14`) back at `0x405C7..0x405DC`. VERIFIED:
+  `G_RadiusDamage` has three call sites, `G_MissileImpact` (`0x53D50`),
+  `G_ExplodeMissile` (`0x53F5B`) and the `radiusDamage` builtin
+  (`0x5EF55`), none of them in `ClientThink_real`.
+- VERIFIED: the only relocations naming `G_ExplodeMissile` are the three
+  `think` stores of 13.2. VERIFIED: `G_MissileImpact`'s one caller is
+  `G_RunMissile` (`0x5434C`), which also calls `G_RunThink` (`0x54050`, `0x54398`), and
+  `G_RunMissile` is called at `0x50375` from `G_RunEntity` (`0x502BC`, 11.4),
+  which also calls `ent->think` itself (`0x503E1`, `0x5046F`) and which
+  `G_RunFrame` calls at `0x50949` and `0x50955`. INFERRED: a fuse or an
+  impact explodes inside `G_RunFrame`'s entity loop. VERIFIED:
+  `ClientThink_real` is called from `ClientThink` (`0x415B4`), which `vmMain`
+  calls at `0x50E38`, apart from its `G_RunFrame` call at `0x50EA4`; from
+  `G_RunClient` (`0x40695`), on `g_synchronousClients` only; and from
+  `ClientSpawn` (`0x42A82`). INFERRED: every grenade blast and every script
+  `radiusDamage` runs inside `G_RunFrame`, after each client's last
+  `ClientThink_real` has written the unsnapped origin back.
+- VERIFIED: `ClientEndFrame` (`0x40E98`) has no store to `r.currentOrigin`.
+  VERIFIED: `TeleportPlayer` copies `ps.origin` into `r.currentOrigin` at
+  `0x51454`, and so does the `setorigin` player method (object-model doc
+  23.2). VERIFIED: `G_RunClient`'s arm for a client with a tag parent
+  (`ent+0x2E4`) calls `G_SetFixedLink`, `G_SetOrigin(ent,
+  &ent->r.currentOrigin)` (`0x406E9`) and `trap_LinkEntity` (`0x40713`), and
+  that arm holds its only link. INFERRED: no client reaches a blast with a
+  snapped `r.currentOrigin`, so the distance, the `dir`, the eye and the
+  five probes of this section are all built off the unsnapped `ps.origin`.
+- INFERRED, off the link at `0x40595` sitting inside the window: an
+  unlinked client's `absmin` and `absmax` are those of its last cmd's link,
+  at the snapped origin, while a linked client's are relinked every frame at
+  the anchored, unsnapped one. So the second chance (14.1) is the one place
+  a blast reads a client's snapped origin. INFERRED: a `setOrigin` links
+  unsnapped, and that box holds until the client's next cmd relinks it.
+- INFERRED, unmeasured: a `CodeCallback_PlayerDamage` that called
+  `radiusDamage` before its first `wait`, from a hit inside a cmd, would read
+  the client running that cmd at its snapped origin. No stock script does.
+
 VERIFIED: the count of traces returning `fraction == 1.0` maps to the return
 value as 0 for none, `1.0` for four or five, and `count / 3.0`
 (`.rodata 0x7442C`) otherwise. INFERRED: so a client behind partial cover
@@ -4066,7 +4115,12 @@ with `Server::tick` charging each of the frame's explosions before
 `deliver_hits` so a grenade damages on the frame it goes off, and the
 `radiusDamage` builtin (`builtins/combat.rs`) wrapping the same two functions
 for a script's own blast. The divergences left are listed in
-`cod11-gsc-language.md`'s `radiusDamage` entry. The falloff is computed at
+`cod11-gsc-language.md`'s `radiusDamage` entry. Every victim is measured
+and probed at its unsnapped origin, and the second chance's midpoint is
+taken at `BlastVictim::link_origin`: `ClientSim::link_origin` for a
+grenade's blast, the truncated origin unless the client is linked, and the
+truncated `origin` field for the builtin's. A `setOrigin` since the last cmd
+is not modelled. The falloff is computed at
 double precision because f32 loses a point of damage at the round ratios a
 script picks -- `50 + (1 - 100/300) * 1950` truncates to 1349 in f32 and 1350
 in f64 -- and retail's own x87 arithmetic is not reproducible in either
