@@ -479,6 +479,11 @@ engineering setup works.
   the `probe_passthru` gametype with `probe_teleport=1` and the victim on
   axis puts the two in each other's sight. It writes no fixture; what it
   measured is `docs/research/cod11-spectator-follow.md` section 12.
+  `--probe-fall` joins with `--probe-team`, stands still and prints a `FALL`
+  line per snapshot whose ground entity, `pm_flags`, `pm_time`, event ring
+  or health moved, and every airborne one; `client-probes/probe_fall` under
+  `tools/run_probe.sh` drops it from five heights. It writes no fixture;
+  what it measured is `docs/research/cod11-player-clip.md` 8.9.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with

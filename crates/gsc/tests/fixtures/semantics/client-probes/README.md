@@ -308,6 +308,27 @@ The mound run is the same with `probe_spot mound`, `--probe-prone 270` and
 `crates/server/tests/fixtures/playerstate/mp_carentan-dm-slope-8ms-prone-<spot>.txt`,
 named `dm` because retail runs the probe as gametype `probe_prone`.
 
+## probe_fall
+
+The landing stun measurement's server half. Under `probe_teleport 1` it drops
+each spawned allied player onto the mp_carentan street at (900 1930) from 100,
+300, 340, 420 and 520 units above it, 8 s apart, with `self.health` reset to
+100 before each, and logs `PROBE drop <time> <height> <origin>` and, 4 s on,
+`PROBE after <time> <height> health <health> <origin>`. The client half
+prints a `FALL` line per snapshot whose ground entity, `pm_flags`,
+`pm_time`, event ring or health moved, and every airborne snapshot. Neither
+half writes a file; the 2026-10-05 run's lines were pasted by hand into
+`crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall.txt`, the
+server's as comments, and `docs/research/cod11-player-clip.md` 8.9 reads
+them.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=75 \
+    tools/run_probe.sh client-probes/probe_fall mp_carentan +set probe_teleport 1
+# second shell, about 6 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-fall --probe-secs 65
+```
+
 ## probe_bump
 
 Player-vs-player clipping's server half. Under `probe_teleport 1` it puts
