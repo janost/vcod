@@ -1088,8 +1088,14 @@ impl ScriptRuntime {
         std::mem::take(&mut self.host.client_weapon_ops)
     }
 
+    /// Whether [`Self::take_ops_of`] would hand anything back for `slot`.
+    pub fn has_ops_of(&self, slot: usize) -> bool {
+        self.host.client_weapon_ops.iter().any(|(s, _)| *s == slot)
+            || self.host.client_sim_ops.iter().any(|(s, _)| *s == slot)
+    }
+
     /// `slot`'s share of [`Self::take_weapon_ops`] and
-    /// [`Self::take_sim_ops`], for a death the move pass lands before the
+    /// [`Self::take_sim_ops`], for what the move pass lands before the
     /// client's next cmd; every other client's stay queued.
     pub fn take_ops_of(
         &mut self,
@@ -2707,13 +2713,7 @@ mod tests {
             yaw: 0.0,
             mins: glam::Vec3::new(-15.0, -15.0, 0.0),
             maxs: glam::Vec3::new(15.0, 15.0, 72.0),
-            assembly: Default::default(),
-            legs: 0,
-            torso: 0,
-            legs_start_ms: 0,
-            torso_start_ms: 0,
-            torso_pitch: 0.0,
-            lean: 0.0,
+            pose: Default::default(),
         };
         rt.set_client_body(0, Some(body(0, 0.0, 0.0)));
         rt.set_client_body(1, Some(body(1, 150.0, 0.0)));

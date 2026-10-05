@@ -628,7 +628,10 @@ engineering setup works.
   (`docs/research/cod11-combat.md` 16); a throw spawns its missile there
   too, off the muzzle that cmd left and stamped with the frame before, so a
   thrower a later cmd kills has thrown already (11.4); then the touch pass,
-  and a `trigger_hurt` death in it lands on the sim the same way. Every death is `GameHost::die`, whichever
+  and whatever it and the item pass queued for the mover (a `trigger_hurt`'s
+  damage or death, a pickup's ammo and event) lands on the sim the same way,
+  before its next cmd, so a later hit finds only its own callback's ops
+  queued for it (`docs/research/cod11-items.md` 13.2). Every death is `GameHost::die`, whichever
   path ran it, and the moment its `CodeCallback_PlayerKilled` first suspends
   `player_die`'s walk queues the scoreboard to each spectator following the
   victim, inside the VM (`Cx::spawn_then`), so the `b` lands behind what the
@@ -637,7 +640,8 @@ engineering setup works.
   ahead of every script entry that can kill
   (`docs/research/cod11-spectator-follow.md` 4). The anim update runs per client off its last
   cmd, at the end and wherever a kill, a hit, a use press or a
-  `trigger_hurt` death breaks into its cmds. The host mirror after each move
+  `trigger_hurt` death breaks into its cmds; it feeds the wire, while a
+  posed body's bones stay what the last end frame committed (below). The host mirror after each move
   is its origin, `pm_type`, `on_ground`, view yaw, the `ps.weapon` a move
   switched to and the `clipOnly` weapon a last round spent, the take
   included, its entity state, cook, height and ammo and clip arrays
@@ -654,7 +658,8 @@ engineering setup works.
   pass is not measured), while a `trigger_hurt` starts the
   damage callback there and then. The item pass writes weapons and health onto
   the host at once and queues its ammo as weapon ops and its event as a sim
-  op, both applied after the script frame; the ammo it reads is the host's
+  op, both applied to the mover's sim, with its weapons and vitals mirrored,
+  at the end of that cmd's passes; the ammo it reads is the host's
   mirror, copied from the mover's sim before each cmd's pass and moved by every weapon
   op after, so a `dropItem` in the script frame sees what the pass took. The
   entity states `cloneplayer` reads and the posed bodies a scripted blast
@@ -687,6 +692,10 @@ engineering setup works.
   trace per playing client, off the frame's final eye and aim with `pm_type` and `on_ground` mirrored again
   beside it and every client's posed body mirrored again ahead of the first, whose fire wakes its waiters at the next tick's script frame,
   and beside it the cursor hint for the item the use key would pick now,
+  and after it that slot's `commit_pose` (`BG_PlayerAnimation`'s place:
+  models, anim channels, pitch and lean), the pose every later round, blast
+  probe and aim trace meets until the next end frame, at wherever the body's
+  cmds have moved it since (`docs/research/cod11-combat.md` 16.1),
   then each gunner's `turret_think_client` (the gunner half of a release
   a deleted gun queued, then aim, fire, loop sound, or the release itself on
   a use press or a death), whose rounds are traced and their impacts and hits applied in order right there, with the

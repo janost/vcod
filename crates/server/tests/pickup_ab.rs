@@ -52,11 +52,7 @@ const ORIGIN_EPS: f32 = 0.5;
 
 /// Rows of either diff that are known divergences, each a substring of the
 /// row it excuses and a ruling in the research doc's section 13.
-const GAPS: &[&str] = &[
-    // Every cmd's pmove runs before the deferred touch pass, so the swap's
-    // disarm reaches the ring on the next tick's first cmd (13.2).
-    "swap disarm one frame late",
-];
+const GAPS: &[&str] = &[];
 
 fn report() -> bool {
     std::env::var("PICKUP_REPORT").is_ok_and(|v| v == "1")
@@ -443,8 +439,8 @@ fn items_near(s: &Snapshot, me: [f32; 3]) -> (BTreeSet<ItemKey>, BTreeSet<(i32, 
 /// words that asked for it. A cmd's `st` is the client's clock, not the
 /// server frame that ran it: the aim's first cmd, stamped 27983, is on
 /// retail's 28050 snapshot, not its 28000 one. So the view goes by the
-/// snapshot; the buttons and the weapon byte, which no such case moves, go
-/// by `st`.
+/// snapshot; the buttons go by `st`, and so does the weapon byte but for
+/// the one case [`replay`] holds back.
 fn retail_views(cap: &Capture) -> BTreeMap<i32, [i32; 3]> {
     let deg = |s: i32| s as f32 * 360.0 / 65536.0;
     let near = |a: f32, b: f32| ((a - b + 180.0).rem_euclid(360.0) - 180.0).abs() < 0.1;
@@ -468,11 +464,26 @@ fn retail_views(cap: &Capture) -> BTreeMap<i32, [i32; 3]> {
 /// cmds stamped in `(t, t + 50]`, each held until the next, and the view
 /// retail's snapshot at `t + 50` reports. A slot takes the last cmd stamped
 /// inside it with the buttons of every one ORed in, so a use tap two retail
-/// cmds long survives the coarser grid. Returns one sample per frame, tagged
-/// with the retail snapshot it pairs with, and every log line with that same
-/// time.
+/// cmds long survives the coarser grid. A weapon byte answering an `a N`
+/// that retail's snapshot at `t + 50` carried waits a frame: the client built
+/// that cmd after the snapshot, so retail ran it in the next frame, and a
+/// pickup's weapon is held by the cmd behind the grab. Returns one sample per
+/// frame, tagged with the retail snapshot it pairs with, and every log line
+/// with that same time.
 fn replay(rig: &mut Rig, cap: &Capture) -> (Vec<Sample>, Vec<(i32, String)>) {
     rig.new_log();
+    let answers: BTreeMap<i32, Vec<u8>> = cap
+        .retail
+        .iter()
+        .map(|s| {
+            let asked = s
+                .commands
+                .iter()
+                .filter_map(|c| c.strip_prefix("a ")?.parse().ok())
+                .collect();
+            (s.t, asked)
+        })
+        .collect();
     let cmds = &cap.cmds;
     let first = cmds.first().expect("cmds past wait").0;
     let end = cap.phases.last().unwrap().2;
@@ -482,6 +493,8 @@ fn replay(rig: &mut Rig, cap: &Capture) -> (Vec<Sample>, Vec<(i32, String)>) {
     let views = retail_views(cap);
     let (mut samples, mut log) = (Vec::new(), Vec::new());
     while t + FRAME_MS as i32 <= end {
+        let at = t + FRAME_MS as i32;
+        let held = current.weapon;
         let mut pair = [current; 2];
         for (half, slot) in pair.iter_mut().enumerate() {
             let slot_end = t + (half as i32 + 1) * CMD_MS as i32;
@@ -495,8 +508,10 @@ fn replay(rig: &mut Rig, cap: &Capture) -> (Vec<Sample>, Vec<(i32, String)>) {
                 buttons: current.buttons | buttons,
                 ..current
             };
+            if slot.weapon != held && answers.get(&at).is_some_and(|a| a.contains(&slot.weapon)) {
+                slot.weapon = held;
+            }
         }
-        let at = t + FRAME_MS as i32;
         if let Some(view) = views.get(&at) {
             for c in &mut pair {
                 c.angles = *view;
@@ -591,50 +606,6 @@ fn diff_phase(name: &str, retail: &Summary, ours: &Summary, rows: &mut Vec<Strin
     );
 }
 
-/// The ruled swap lag, taken out before the snapshot diff. Retail's swap
-/// snapshot `T` reads `weapon` 0 with a 155 beside the 146, and `T + 50`
-/// the new weapon. Ours runs that disarm on the next tick's first cmd, whose
-/// later cmd already raises the new weapon, so ours reads the old weapon
-/// with the 146 alone at `T` and the new weapon with the 155 at `T + 50`.
-/// Exactly that shape is shifted back onto retail's and stands as one
-/// `swap disarm one frame late` row; any other leaves ours as it was and
-/// fails on the fields themselves.
-fn unlag_swaps(retail: &[Sample], ours: &mut BTreeMap<i32, Sample>, rows: &mut Vec<String>) {
-    let raise = |s: &Sample| s.events.iter().any(|(e, _)| *e == EV_RAISE_WEAPON);
-    let step = FRAME_MS as i32;
-    for k in 1..retail.len().saturating_sub(1) {
-        let (before, r, after) = (&retail[k - 1], &retail[k], &retail[k + 1]);
-        let swap = r.weapon == 0 && raise(r) && r.events.iter().any(|(e, _)| *e == 146);
-        if !swap || after.t != r.t + step || raise(after) {
-            continue;
-        }
-        let (Some(o), Some(next)) = (ours.get(&r.t), ours.get(&after.t)) else {
-            continue;
-        };
-        let late =
-            o.weapon == before.weapon && !raise(o) && next.weapon == after.weapon && raise(next);
-        if !late {
-            continue;
-        }
-        rows.push(format!(
-            "[t={}] swap disarm one frame late: ours reads weapon {} there, the 155 a frame on",
-            r.t, o.weapon
-        ));
-        let mut next = next.clone();
-        let moved: Vec<(i32, i32)> = next
-            .events
-            .iter()
-            .filter(|(e, _)| *e == EV_RAISE_WEAPON)
-            .copied()
-            .collect();
-        next.events.retain(|(e, _)| *e != EV_RAISE_WEAPON);
-        let o = ours.get_mut(&r.t).unwrap();
-        o.weapon = 0;
-        o.events.extend(moved);
-        ours.insert(after.t, next);
-    }
-}
-
 /// The ring's item and weapon events, `EV_ITEM_PICKUP` (146) up, with the
 /// parm on the three pickup events and `EV_RAISE_WEAPON`. The movement
 /// events below 146 and the other weapon events' parms are the motion and
@@ -654,8 +625,7 @@ fn ring(events: &[(i32, i32)]) -> String {
 /// Weapon, hint, the ring, the items in reach and the origin, snapshot by
 /// snapshot.
 fn diff_snapshots(cap: &Capture, ours: &[Sample], rows: &mut Vec<String>) {
-    let mut ours: BTreeMap<i32, Sample> = ours.iter().map(|s| (s.t, s.clone())).collect();
-    unlag_swaps(&cap.retail, &mut ours, rows);
+    let ours: BTreeMap<i32, Sample> = ours.iter().map(|s| (s.t, s.clone())).collect();
     for r in &cap.retail {
         let phase = cap.phase_of(r.t).unwrap_or("?");
         let Some(o) = ours.get(&r.t) else {

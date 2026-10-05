@@ -988,7 +988,11 @@ retail's dead entity (`probe_stale_handle` in §9).
     probe points come off the entity's own bounds and its `client+0xD0` eye
     height (14.3). The host carries no stance, so a crouched or prone player
     is measured as if he stood. That moves the five probe points, not the
-    distance, which is origin to origin either way.
+    distance, which is origin to origin either way. The second chance's box
+    midpoint is taken at the truncated `origin` field, the box a client's
+    last cmd linked. INFERRED, off 14.3: retail's box after a `setOrigin`
+    earlier in the frame, or on a linked client, sits at the unsnapped
+    origin instead.
   - **Not a divergence: a fifth argument is ignored.** VERIFIED: retail
     reads its four arguments by index, `Scr_GetVector(0)` and `Scr_GetFloat(1)` to `(3)`
     (14.2). INFERRED, from the absence of any arity check in that body: a
