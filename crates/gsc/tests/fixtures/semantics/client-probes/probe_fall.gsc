@@ -1,7 +1,10 @@
-//	Landing stun capture's server half. Under probe_teleport 1 it drops every
-//	allied player onto the mp_carentan street at (900 1930) from each height
-//	in turn, 8 s apart, with health reset to 100 before each drop, and logs
-//	the health 4 s after. Run by tools/run_probe.sh with a --probe-fall
+//	Landing stun and fall damage capture's server half. Under probe_teleport 1
+//	it drops every allied player onto the mp_carentan street at (900 1930)
+//	from each height in turn, 8 s apart, with health reset before each drop,
+//	and logs the health 4 s after. The second 340 drop runs at maxhealth 200,
+//	which shows what the damage is a percentage of; the fatal 520 stays last.
+//	The damage and killed callbacks are wrapped to log the arguments the
+//	engine hands them. Run by tools/run_probe.sh with a --probe-fall
 //	--probe-team allies client.
 
 main()
@@ -23,8 +26,13 @@ watch_drops()
 	heights[1] = 300;
 	heights[2] = 340;
 	heights[3] = 420;
-	heights[4] = 520;
+	heights[4] = 340;
+	heights[5] = 520;
 	wait 1;
+	level.probe_damage = level.callbackPlayerDamage;
+	level.callbackPlayerDamage = ::probe_damage;
+	level.probe_killed = level.callbackPlayerKilled;
+	level.callbackPlayerKilled = ::probe_killed;
 	for (;;)
 	{
 		players = getentarray("player", "classname");
@@ -55,14 +63,45 @@ drops(heights)
 	wait 3;
 	for (i = 0; i < heights.size; i++)
 	{
-		self.health = 100;
+		if (i == 4)
+			self.maxhealth = 200;
+		else
+			self.maxhealth = 100;
+		self.health = self.maxhealth;
 		spot = (900, 1930, -38 + heights[i]);
 		self setorigin(spot);
 		self setplayerangles((0, 90, 0));
-		logPrint("PROBE drop " + getTime() + " " + heights[i] + " " + spot + "\n");
+		logPrint("PROBE drop " + getTime() + " " + heights[i] + " " + spot + " maxhealth " + self.maxhealth + "\n");
 		wait 4;
 		logPrint("PROBE after " + getTime() + " " + heights[i] + " health " + self.health + " " + self.origin + "\n");
 		wait 4;
 	}
 	logPrint("PROBE done " + getTime() + "\n");
+}
+
+show(v)
+{
+	if (!isdefined(v))
+		return "undefined";
+	return "" + v;
+}
+
+show_ent(e)
+{
+	if (!isdefined(e))
+		return "undefined";
+	return "ent" + e getEntityNumber();
+}
+
+probe_damage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc)
+{
+	logPrint("PROBE damage " + getTime() + " inflictor " + show_ent(eInflictor) + " attacker " + show_ent(eAttacker) + " damage " + iDamage + " dflags " + iDFlags + " mod " + sMeansOfDeath + " weapon " + sWeapon + " point " + show(vPoint) + " dir " + show(vDir) + " hitloc " + sHitLoc + " health " + self.health + " maxhealth " + self.maxhealth + "\n");
+	[[level.probe_damage]](eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc);
+	logPrint("PROBE damaged " + getTime() + " health " + self.health + " " + self.sessionstate + "\n");
+}
+
+probe_killed(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc)
+{
+	logPrint("PROBE killed " + getTime() + " inflictor " + show_ent(eInflictor) + " attacker " + show_ent(eAttacker) + " damage " + iDamage + " mod " + sMeansOfDeath + " weapon " + sWeapon + " dir " + show(vDir) + " hitloc " + sHitLoc + "\n");
+	[[level.probe_killed]](eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc);
 }

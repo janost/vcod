@@ -39,7 +39,7 @@ fn atoi(s: &str) -> i32 {
 }
 
 /// C `atof`, same prefix rule with a decimal point and an exponent.
-fn atof(s: &str) -> f32 {
+pub(crate) fn atof(s: &str) -> f32 {
     let s = s.trim_start();
     let mut end = 0;
     for (i, c) in s.char_indices() {

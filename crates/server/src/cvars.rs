@@ -44,17 +44,23 @@ const ENGINE_MIRRORED: &[(&str, &str)] = &[
     ("g_TeamName_Axis", "GAME_AXIS"),
 ];
 
-/// Rows of the same table that are not mirrored but that a stock script's
-/// outcome depends on. One so far: `character\_utility::useOptionalModels`
-/// gates every character script's gear model precaches on `g_useGear`, so
-/// without it the model configstring block loses every gear model
-/// (docs/research/cod11-gsc-object-model.md section 18).
+/// Rows of the same table that are not mirrored but that something here
+/// reads. `character\_utility::useOptionalModels` gates every character
+/// script's gear model precaches on `g_useGear`, so without it the model
+/// configstring block loses every gear model
+/// (docs/research/cod11-gsc-object-model.md section 18). The two fall damage
+/// bounds are the server's own `PM_CrashLand` input and ride systeminfo
+/// (docs/research/cod11-player-clip.md 8.3).
 ///
 /// The other 70 rows are deliberately not transcribed, and a script that
 /// reads one of them gets `""` with no warning. `tools/re/dump_cvars.py`
 /// prints the table, so adding a row is a lookup: pass the cvar's name and
 /// take its default.
-const ENGINE_DEFAULTS: &[(&str, &str)] = &[("g_useGear", "1")];
+const ENGINE_DEFAULTS: &[(&str, &str)] = &[
+    ("g_useGear", "1"),
+    ("bg_fallDamageMinHeight", "256"),
+    ("bg_fallDamageMaxHeight", "480"),
+];
 
 #[derive(Clone)]
 struct Cvar {
