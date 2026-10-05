@@ -189,6 +189,9 @@ pub struct ClientSim {
     /// mirrored the same way: the locational trace poses the grafted rig they
     /// make (`crate::game::hitrig`).
     pub assembly: crate::game::hitrig::Assembly,
+    /// The pose [`Self::commit_pose`] took at the last end frame, which every
+    /// locational trace until the next one meets.
+    pose: crate::game::combat::BodyPose,
     /// The client's per-axis view offset, added back onto each cmd's angle
     /// by both `step` and the connected client itself.
     /// docs/protocol-1.1.md, "View angles".
@@ -414,6 +417,7 @@ impl ClientSim {
             ring: EventRing::default(),
             viewmodel_index: 0,
             assembly: Default::default(),
+            pose: Default::default(),
             delta_angles: spawn_delta_angles(yaw_deg, cmd_angles),
             view_angles: view,
             aim_state: Default::default(),
@@ -1341,14 +1345,8 @@ impl ClientSim {
     }
 
     /// This client's body as a locational trace meets it, `None` unless it
-    /// is alive and playing. The pose is the two live anim indices with the
-    /// phase each is at, and the aim the spine layer bends by.
-    ///
-    /// The waist pitch is 0 and the torso pitch is the client's own view
-    /// pitch. Retail splits the two across `fWaistPitch` and `fTorsoPitch`
-    /// with constants that are not decoded
-    /// (`docs/research/player-model-anim-system.md`), and this server sends
-    /// neither field, so there is nothing better to read.
+    /// is alive and playing: the link where its last cmd left it, posed the
+    /// way its last end frame did (`docs/research/cod11-combat.md` 16.1).
     pub fn hit_body(&self, slot: usize) -> Option<crate::game::combat::HitBody> {
         if self.pm_type != PmType::Normal || self.dead {
             return None;
@@ -1359,6 +1357,21 @@ impl ClientSim {
             yaw: self.ps.yaw,
             mins: self.ps.mins(),
             maxs: self.ps.maxs(),
+            pose: self.pose.clone(),
+        })
+    }
+
+    /// `ClientEndFrame`'s `BG_UpdatePlayerDObj` and `BG_PlayerAnimation`:
+    /// the models, the two anim indices with the phase each started at, and
+    /// the aim the spine layer bends by, as the frame ends them.
+    ///
+    /// The waist pitch is 0 and the torso pitch is the client's own view
+    /// pitch. Retail splits the two across `fWaistPitch` and `fTorsoPitch`
+    /// with constants that are not decoded
+    /// (`docs/research/player-model-anim-system.md`), and this server sends
+    /// neither field, so there is nothing better to read.
+    pub fn commit_pose(&mut self) {
+        self.pose = crate::game::combat::BodyPose {
             assembly: self.assembly.clone(),
             legs: self.anim.legs(),
             torso: self.anim.torso(),
@@ -1366,7 +1379,7 @@ impl ClientSim {
             torso_start_ms: self.anim.torso_start_ms(),
             torso_pitch: self.ps.pitch.to_degrees(),
             lean: self.ps.lean / vcod_common::pmove::LEAN_MAX,
-        })
+        };
     }
 
     /// `ps.delta_angles`, what a bot's absolute cmd angles must subtract to
