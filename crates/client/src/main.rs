@@ -468,6 +468,8 @@ enum Mode {
         fire_held: bool,
         reload_edge: bool,
         ads_held: bool,
+        /// The gun's sway, which a scope overlay is centred on.
+        gun_aim: hud::scope::GunAim,
     },
 }
 
@@ -482,14 +484,16 @@ struct WalkKeys {
 
 /// The walk-mode arsenal on number keys 1..=N: every retail archetype (semi
 /// pistol, full-auto SMGs, auto rifle, big-clip bolt rifle) plus kar98k as
-/// the baseline. Files carry `semiAuto`, `startAmmo`, `adsBobFactor`.
-const WALK_LOADOUT: [&str; 6] = [
+/// the baseline and its scoped twin. Files carry `semiAuto`, `startAmmo`,
+/// `adsBobFactor`.
+const WALK_LOADOUT: [&str; 7] = [
     "colt_mp",
     "thompson_mp",
     "mp40_mp",
     "mp44_mp",
     "enfield_mp",
     "kar98k_mp",
+    "kar98k_sniper_mp",
 ];
 
 fn digit_slot(code: KeyCode) -> Option<usize> {
@@ -500,6 +504,7 @@ fn digit_slot(code: KeyCode) -> Option<usize> {
         KeyCode::Digit4 => 3,
         KeyCode::Digit5 => 4,
         KeyCode::Digit6 => 5,
+        KeyCode::Digit7 => 6,
         _ => return None,
     })
 }
@@ -1245,6 +1250,7 @@ fn walk_mode(
         fire_held: false,
         reload_edge: false,
         ads_held: false,
+        gun_aim: hud::scope::GunAim::default(),
     })
 }
 
@@ -2080,7 +2086,11 @@ impl ApplicationHandler for App {
                                         .unwrap_or_else(|| {
                                             view_muzzle(cam.pos, cam_forward, cam_right, cam_up)
                                         });
-                                    muzzles.insert(u32::MAX, (muzzle_pos, muzzle_dir));
+                                    // Under a scope our own shots draw no flash: with
+                                    // no muzzle the fire event resolves to nothing.
+                                    if !view.scoped() {
+                                        muzzles.insert(u32::MAX, (muzzle_pos, muzzle_dir));
+                                    }
                                     // Bullet hits carry the shooter's number in
                                     // `other_entity_num`, and the body the camera rides
                                     // (ours, or the followed player's) is excluded from
@@ -2312,6 +2322,7 @@ impl ApplicationHandler for App {
                         fire_held,
                         reload_edge,
                         ads_held,
+                        gun_aim,
                     } => {
                         // Before this frame's fire event spawns, or the
                         // [now-dt, now] integration would move the new tracer
@@ -2375,6 +2386,8 @@ impl ApplicationHandler for App {
                         let mut bone_sets = Vec::new();
                         let mut fov = camera::DEFAULT_FOV_DEG;
                         let mut damp = 1.0;
+                        let mut scope_quads = Vec::new();
+                        let mut scoped = false;
                         if let Some(w) = view_weapon {
                             let out = w.state.update(
                                 dt,
@@ -2407,6 +2420,20 @@ impl ApplicationHandler for App {
                             );
                             damp = 1.0 + (w.def.ads_view_bob_mult - 1.0) * out.ads_frac;
                             damp *= 1.0 + (w.def.ads_bob_factor - 1.0) * out.ads_frac;
+                            // The walk sight runs outside pmove, so the gun's
+                            // sway reads its fraction off a copy.
+                            let mut sighted = **ps;
+                            sighted.weapon_pos_frac = out.ads_frac;
+                            let gun = gun_aim.step(Some(&w.def), &sighted, (time * 1000.0) as i32);
+                            if hud::scope::overlay_frac(&w.def, out.ads_frac, *ads_held).is_some() {
+                                let screen = r.screen_size();
+                                let fovs = (fov, camera::fov_y(fov, aspect));
+                                let at =
+                                    hud::scope::gun_point(gun.unwrap_or_default(), fovs, screen);
+                                hud::scope::build(&w.def, at, screen, &mut scope_quads);
+                                // The gun hides under it, as online.
+                                scoped = true;
+                            }
                             if let Some(cue) = out.cue {
                                 if matches!(
                                     cue,
@@ -2516,6 +2543,7 @@ impl ApplicationHandler for App {
                             damp,
                         );
                         *mouse_delta = (0.0, 0.0);
+                        r.set_hud_quads(&self.fs, scope_quads);
                         self.audio.step(&HashMap::new(), None);
                         r.set_fx_quads(
                             &self.fs,
@@ -2549,7 +2577,7 @@ impl ApplicationHandler for App {
                                     reserve
                                 )],
                             },
-                            Some(renderer::VmDraw {
+                            (!scoped).then(|| renderer::VmDraw {
                                 transform: motion.transform(),
                                 fov_x: fov,
                                 bone_sets,
