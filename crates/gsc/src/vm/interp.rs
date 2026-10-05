@@ -727,10 +727,11 @@ impl Vm {
                     // each queued thread runs to its first suspend here,
                     // before the calling thread's next instruction (see
                     // `Cx::spawn`).
-                    for (target, recv, args) in std::mem::take(&mut pending_spawns) {
+                    for queued in std::mem::take(&mut pending_spawns) {
+                        let target = queued.func;
                         match self.functions.get(&target).cloned() {
                             Some(f) => {
-                                self.spawn(host, target, f, recv, args, errors);
+                                self.spawn(host, target, f, queued.recv, queued.args, errors);
                             }
                             None => {
                                 let e = err(ErrorKind::Custom(format!(
@@ -741,6 +742,22 @@ impl Vm {
                                 self.record_abort(&e);
                                 errors.push(e);
                             }
+                        }
+                        if let Some(token) = queued.then {
+                            let mut cx = Cx {
+                                interner: &mut self.interner,
+                                heap: &mut self.heap,
+                                level: self.level,
+                                game: self.game,
+                                notifies,
+                                spawns: &mut field_spawns,
+                            };
+                            host.spawn_returned(&mut cx, token);
+                            debug_assert!(
+                                field_spawns.is_empty(),
+                                "Cx::spawn is only honoured from a builtin"
+                            );
+                            field_spawns.clear();
                         }
                     }
                     push!(v);

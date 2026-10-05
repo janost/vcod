@@ -37,7 +37,8 @@ const EV_OBITUARY: i32 = 201;
 /// live, and the callback into
 /// `CodeCallback_PlayerKilled` is spawned so it runs before this builtin's
 /// caller continues, which is what lets the stock damage callback read
-/// `self.sessionstate` on its next line and find it `"dead"`.
+/// `self.sessionstate` on its next line and find it `"dead"`. The follower
+/// walk runs when that callback returns ([`GameHost::player_die_walk`]).
 ///
 /// A bullet weapon's hit raises its two flesh impacts here and nowhere else,
 /// so a hit the script refuses (friendly fire off) shows none. The 250 clamp
@@ -136,7 +137,7 @@ pub fn finish_player_damage(
         drop_cooking_grenade(host, cx, slot);
         let weapon = gun_credit(host, cx, attacker_slot, *weapon).unwrap_or(*weapon);
         let killed = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerKilled");
-        cx.spawn(
+        cx.spawn_then(
             killed,
             recv,
             vec![
@@ -148,6 +149,7 @@ pub fn finish_player_damage(
                 Value::Vector(dir),
                 *hitloc,
             ],
+            slot as u32,
         );
     }
     Ok(Value::Undefined)
@@ -342,7 +344,7 @@ pub fn suicide_effects(host: &mut GameHost, cx: &mut Cx, slot: usize) -> Option<
 /// routes it through the same `player_die` every other death takes; here the
 /// health comes off the vitals directly and the death callback is spawned
 /// with `MOD_SUICIDE`, the same shape `finish_player_damage` uses for a
-/// killing hit.
+/// killing hit, follower walk included.
 pub fn suicide(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -354,7 +356,7 @@ pub fn suicide(
         return Ok(Value::Undefined);
     };
     let killed = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerKilled");
-    cx.spawn(killed, recv, args);
+    cx.spawn_then(killed, recv, args, slot as u32);
     Ok(Value::Undefined)
 }
 

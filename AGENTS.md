@@ -629,12 +629,13 @@ engineering setup works.
   too, off the muzzle that cmd left and stamped with the frame before, so a
   thrower a later cmd kills has thrown already (11.4); then the touch pass,
   and a `trigger_hurt` death in it lands on the sim the same way. Every death is `GameHost::die`, whichever
-  path ran it, and right after each callback that can kill returns (a hit's,
-  the `kill`'s, the touch pass's, and later the blasts', the script frame's
-  and a turret round's) `player_die`'s walk queues the scoreboard to each
-  spectator following the victim, behind what the killed callback queued, so
-  it rides the death frame's packet (`docs/research/cod11-spectator-follow.md`
-  4). The anim update runs per client off its last
+  path ran it, and the moment its `CodeCallback_PlayerKilled` first suspends
+  `player_die`'s walk queues the scoreboard to each spectator following the
+  victim, inside the VM (`Cx::spawn_then`), so the `b` lands behind what the
+  killed callback queued and ahead of anything script queues after it, and
+  rides the death frame's packet; the walk reads a roster `Server` mirrors
+  ahead of every script entry that can kill
+  (`docs/research/cod11-spectator-follow.md` 4). The anim update runs per client off its last
   cmd, at the end and wherever a kill, a hit, a use press or a
   `trigger_hurt` death breaks into its cmds. The host mirror after each move
   is its origin, `pm_type`, `on_ground`, view yaw, the `ps.weapon` a move
@@ -717,7 +718,10 @@ engineering setup works.
   next instruction: the queued thread starts the moment the builtin returns,
   which is how `finishPlayerDamage`'s killing hit gets
   `CodeCallback_PlayerKilled` to have written `self.sessionstate` before the
-  line after it reads the field. Only the `Cx` a builtin is handed honours it.
+  line after it reads the field. `Cx::spawn_then` adds the engine code that
+  follows the `Scr_ExecEntThread`: `Host::spawn_returned` runs with its token
+  once that thread first suspends, which is where `player_die`'s follower
+  walk sits. Only the `Cx` a builtin is handed honours either.
   A `Cx` from `get_field`, `set_field` or `Vm::with_cx` has no defined point
   at which a thread could run, so a spawn queued through one of those is
   dropped and `debug_assert`ed against; test such a builtin through

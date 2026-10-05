@@ -777,6 +777,8 @@ impl ScriptRuntime {
         ) {
             log::error!("gsc: {e:#}");
         }
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| host.player_die_walk(cx, slot));
         true
     }
 
@@ -1035,15 +1037,10 @@ impl ScriptRuntime {
         std::mem::take(&mut self.host.client_commands)
     }
 
-    /// A server command `Server` sends on the script's behalf, queued behind
-    /// the ones the script queued so far so the two keep retail's order.
-    pub fn queue_client_command(&mut self, slot: usize, text: String) {
-        self.host.client_commands.push((slot, text));
-    }
-
-    /// The clients `player_die` ran on since the last call, in that order.
-    pub fn take_deaths(&mut self) -> Vec<usize> {
-        std::mem::take(&mut self.host.deaths)
+    /// `GameHost::scoreboard` over the roster last mirrored in.
+    pub fn scoreboard(&mut self) -> String {
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| host.scoreboard(cx))
     }
 
     /// The spawns the script performed this frame, in call order. `Server`

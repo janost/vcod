@@ -110,6 +110,23 @@ against 2 on `cl+0x20d0` ahead of the call.
   (0x42753) and `finishPlayerDamage` calls (`cod11-combat.md` 4.5). INFERRED:
   so the walk runs inside whatever did the killing: the `kill` command's
   packet, the shooter's cmd, the touch pass, the blast, the script frame.
+- VERIFIED: `Scr_PlayerKilled` (0x5cb30) calls `Scr_ExecEntThread` at
+  0x5cc04 and `Scr_FreeThread` at 0x5cc10, and has a `ret` at 0x5cc1e.
+  INFERRED, off that order and the walk's place after the call at 0x49bb6:
+  the walk runs once `CodeCallback_PlayerKilled` has run to its first
+  `wait`, before anything else the engine call that killed does.
+- VERIFIED: the `suicide` builtin calls `player_die` at 0x453e5 and has a
+  `ret` at 0x453f0. INFERRED: no call or branch lies between the two, so the
+  `b` is queued before the script line after `suicide()` runs.
+- VERIFIED: the `radiusDamage` builtin (0x5eef4) calls `G_RadiusDamage` at
+  0x5ef55; `G_RadiusDamage` calls `G_Damage` at 0x4a87c and has a `jmp` to
+  0x4a888 at 0x4a884; `G_Damage` calls `Scr_PlayerDamage` at 0x49e62, and
+  `Scr_PlayerDamage` calls `Scr_ExecEntThread` at 0x5cb15. INFERRED: the
+  `G_Damage` call sits inside the candidate loop and the `jmp` goes to its
+  step, so each victim's damage callback, the `finishPlayerDamage` in it and
+  that death's walk all run before the next candidate is damaged; with two
+  victims the order is the first's callback commands, its `b`, then the
+  second's.
 - VERIFIED live, the scoreboard run of section 9: the follower was pushed
   the `b` in the packet of the death frame for a `kill` and for a head shot,
   the frame on which its copy first read `health` 0, and none after it had
@@ -288,12 +305,14 @@ patch; `ClientSim::spectator_think` and `stop_following` are sections 2 and
 7; `Server::replay_moves` runs the think per cmd for a client whose
 `sessionstate` is spectator and skips its pmove while the follow is on;
 `follow_end_frame` is section 5 in the end-frame slot loop;
-`pass_followers_on` is section 8 from `drop_client`; `GameHost::die`, the
-one place a client dies, queues the death, and `queue_death_scoreboards` is
-section 4's walk, run right after each callback that can kill (a hit's, the
-`kill` command's, the touch pass's, the blasts' and a turret round's) and
-after the script frame, with the `b` queued behind the commands the
-callback queued; `send_snapshots` builds a follower's frame from the followed client's
+`pass_followers_on` is section 8 from `drop_client`; `GameHost::die` is
+the one place a client dies, and `GameHost::player_die_walk` is section 4's
+walk: `finishPlayerDamage` and `suicide` start `CodeCallback_PlayerKilled`
+with `Cx::spawn_then`, so the VM hands back to the host the moment that
+thread first suspends, and `kill_client` walks right after the thread it
+starts; the follow targets and connection states it reads are mirrored in
+by `Server` ahead of every script entry that can kill;
+`send_snapshots` builds a follower's frame from the followed client's
 wire playerstate, eye and number. `spectatorclient` starts at -1 and is written back to -1 where
 retail writes it.
 
@@ -350,14 +369,30 @@ was pushed `b 2 0 0 1 -1 0 1 1 0 0 0 0 0` at 23850 after the `kill` and
 each on the frame whose copy first read `health` 0 at `pm_type` 0, as
 retail's run read.
 
+A death inside the script frame walks when its killed callback returns,
+the way every other death does: the `suicide` builtin, which every stock
+gametype's team menu calls on a live player changing teams, a scripted
+`radiusDamage`, and a script's own `finishPlayerDamage`. Until 2026-10-05
+ours walked those at the frame's end, so a command another thread of that
+frame queued after the death went out ahead of the `b`, and the rows read
+the frame's end. VERIFIED, ours:
+`a_script_death_sends_its_followers_the_scoreboard_when_the_callback_returns`
+in `crates/server/src/server.rs` has a script `suicide()` a followed player
+whose callback queues a line and writes its score, then start a thread that
+writes the score again and queues another: the follower reads the
+callback's line, the `b` with the callback's score, then the thread's line.
+INFERRED, from section 4's addresses: that is retail's order. No run has
+measured a script-frame death's `b` on retail.
+
+The follow targets and connection states ours' walk reads are a copy
+`Server` takes ahead of each script entry that can kill; the session state
+it reads live, as retail does. INFERRED, from ours' tick: nothing inside
+one entry moves a follow, since the follow cycle runs in a spectator's own
+cmd and the end frame after the script frame, so the copy reads what
+retail's live compares would.
+
 Where it is not retail's:
 
-- A death inside the script frame walks when the frame ends rather than
-  when its callback returns: the `suicide` builtin, which every stock
-  gametype's team menu calls on a live player changing teams, and a scripted
-  `radiusDamage`. A command another thread of that frame queues after the
-  death then goes out ahead of the `b`, and the rows read the frame's end.
-  INFERRED, from ours' order; no run has measured it on either server.
 - The rest of a stopped copy is kept whole except the owned fields; whatever
   the spectator's `Pmove` writes into `pm_flags` after the stop is not
   measured, and ours writes nothing there.
