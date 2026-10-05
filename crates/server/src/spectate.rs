@@ -774,12 +774,11 @@ impl ClientSim {
         } else {
             return;
         };
-        if forced < 0 {
-            if let Some(t) = crate::follow::cycle(self.follow.target, dir, max_clients, followable)
+        if forced < 0
+            && let Some(t) = crate::follow::cycle(self.follow.target, dir, max_clients, followable)
             {
                 self.follow.target = Some(t);
             }
-        }
     }
 
     /// `StopFollowing` (0x46a28): the follow is dropped, and a spectator

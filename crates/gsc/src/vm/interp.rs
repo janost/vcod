@@ -709,11 +709,10 @@ impl Vm {
                     }
                     args.reverse();
                     let recv = if has_recv { as_target(pop!()) } else { None };
-                    if let Some(Target::Entity(id)) = recv {
-                        if !host.is_live(id) {
+                    if let Some(Target::Entity(id)) = recv
+                        && !host.is_live(id) {
                             return Err(err(DEAD_ENTITY));
                         }
-                    }
                     let mut cx = Cx {
                         interner: &mut self.interner,
                         heap: &mut self.heap,
@@ -996,11 +995,10 @@ impl Vm {
                     // No thread to register against under `call_now`
                     // (`thread_id` is `None` there); the registration is
                     // simply dropped.
-                    if let Some(id) = thread_id {
-                        if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
+                    if let Some(id) = thread_id
+                        && let Some(idx) = self.threads.iter().position(|t| t.id == id) {
                             self.threads[idx].endons.push((target, event));
                         }
-                    }
                 }
             }
 

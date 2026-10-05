@@ -1075,8 +1075,8 @@ impl CollisionWorld {
             }
             let first = node.first as usize;
             for (prim, lo, hi) in &self.prims[first..first + node.count as usize] {
-                if let Prim::Brush(b) = prim {
-                    if p.cmple(*hi).all() && p.cmpge(*lo).all() {
+                if let Prim::Brush(b) = prim
+                    && p.cmple(*hi).all() && p.cmpge(*lo).all() {
                         let brush = &self.brushes[*b as usize];
                         if self.brush_linked(brush)
                             && brush.planes.iter().all(|&(n, d)| n.dot(p) <= d)
@@ -1084,7 +1084,6 @@ impl CollisionWorld {
                             out |= brush.content_flags;
                         }
                     }
-                }
             }
         }
         out

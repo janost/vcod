@@ -218,7 +218,7 @@ fn parse_packet_entities(
         }
 
         // Base-frame entities below newnum carry forward.
-        while old.peek().is_some_and(|(&oldnum, _)| oldnum < newnum) {
+        while old.peek().is_some_and(|&(&oldnum, _)| oldnum < newnum) {
             let (&oldnum, oldstate) = old.next().unwrap();
             new.insert(oldnum, oldstate.clone());
         }

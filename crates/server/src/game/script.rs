@@ -44,11 +44,10 @@ impl PakScripts {
 
 impl ScriptSource for PakScripts {
     fn read(&self, canonical: &str) -> Option<String> {
-        if let Some((path, text)) = self.overlay.as_ref() {
-            if path == canonical {
+        if let Some((path, text)) = self.overlay.as_ref()
+            && path == canonical {
                 return Some(text.clone());
             }
-        }
         let bytes = self.fs.read(&format!("{canonical}.gsc"))?;
         Some(String::from_utf8_lossy(&bytes).into_owned())
     }
@@ -495,8 +494,8 @@ impl ScriptRuntime {
         // gate: a gunner's press asks for the release and does nothing else
         // (turrets doc 4.1).
         let mut release_asked = false;
-        if pressed {
-            if let Some(rec) = self
+        if pressed
+            && let Some(rec) = self
                 .host
                 .turrets
                 .values_mut()
@@ -505,7 +504,6 @@ impl ScriptRuntime {
                 rec.busy = 2;
                 release_asked = true;
             }
-        }
         if self.host.client_pm_type.get(slot).copied().unwrap_or(0) > TOUCH_MAX_PM_TYPE {
             return;
         }
@@ -884,11 +882,10 @@ impl ScriptRuntime {
             .vm
             .with_cx(|cx| crate::game::trigger::aim_trace(host, cx, slot, eye, aim, rifle, now_ms));
         self.host.client_lookat[slot] = hit;
-        if let Some(id) = hit {
-            if self.host.triggers.fire(id, now_ms, &mut |_| 0) {
+        if let Some(id) = hit
+            && self.host.triggers.fire(id, now_ms, &mut |_| 0) {
                 self.host.trigger_fires.push((id, client));
             }
-        }
     }
 
     /// `G_CheckForCursorHints` (0x4f59c) as `ClientEndFrame` runs it every

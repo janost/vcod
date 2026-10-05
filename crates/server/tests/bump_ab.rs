@@ -189,8 +189,7 @@ fn run_cmd(
     if let Some(at) = std::env::var("BUMP_TRACE")
         .ok()
         .and_then(|v| v.parse::<i32>().ok())
-    {
-        if (at - 60..=at).contains(&cmd.server_time) {
+        && (at - 60..=at).contains(&cmd.server_time) {
             println!(
                 "  cmd st={} up={} fwd={} origin=[{:.3},{:.3},{:.3}] vel=[{:.2},{:.2},{:.2}] ground={} kb={}",
                 cmd.server_time,
@@ -206,7 +205,6 @@ fn run_cmd(
                 ps.knockback_ms,
             );
         }
-    }
 }
 
 /// Retail's playerstate at a snapshot: origin, velocity, ground, the held

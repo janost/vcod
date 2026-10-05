@@ -41,11 +41,10 @@ impl Localized {
             let line = line.trim();
             if let Some(name) = line.strip_prefix("REFERENCE") {
                 reference = Some(name.trim().to_ascii_uppercase());
-            } else if let Some(rest) = line.strip_prefix("LANG_ENGLISH") {
-                if let (Some(name), Some(value)) = (reference.take(), quoted(rest)) {
+            } else if let Some(rest) = line.strip_prefix("LANG_ENGLISH")
+                && let (Some(name), Some(value)) = (reference.take(), quoted(rest)) {
                     self.strings.insert(format!("{prefix}_{name}"), value);
                 }
-            }
         }
     }
 

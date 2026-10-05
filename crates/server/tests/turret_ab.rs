@@ -614,7 +614,7 @@ fn a_death_releases_the_turret() {
         .unwrap()
         .entities
         .iter()
-        .filter(|(&n, _)| (64..72).contains(&n))
+        .filter(|&(&n, _)| (64..72).contains(&n))
         .map(|(_, e)| e.field_i32(p, "eFlags"))
         .collect();
     assert!(!corpses.is_empty(), "the corpse is in the target's view");
@@ -792,7 +792,7 @@ fn a_gunner_killed_by_a_turret_round_lets_go_that_frame() {
         .unwrap()
         .entities
         .iter()
-        .find(|(&n, e)| (64..72).contains(&n) && e.field_i32(p, "clientNum") == 1)
+        .find(|&(&n, e)| (64..72).contains(&n) && e.field_i32(p, "clientNum") == 1)
         .map(|(_, e)| e.clone())
         .expect("the target's corpse in the gunner's view");
     assert_eq!(corpse.field_i32(p, "eFlags") & 0xC000, 0);

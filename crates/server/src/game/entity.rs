@@ -536,11 +536,11 @@ impl ObjectTable {
     /// Whether `id` carries its slot's current generation. The world's stays
     /// 0: `free` refuses it.
     fn current(&self, id: EntId) -> bool {
-        let gen = match id.0.checked_sub(FIRST_HUD_ELEM) {
+        let slot_gen = match id.0.checked_sub(FIRST_HUD_ELEM) {
             Some(i) => self.hud_gens.get(i as usize),
             None => self.ent_gens.get(id.0 as usize),
         };
-        gen == Some(&id.1)
+        slot_gen == Some(&id.1)
     }
 
     /// The object `id` was handed out for, or `None` once it has been freed,

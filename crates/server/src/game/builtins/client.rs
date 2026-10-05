@@ -210,11 +210,10 @@ pub fn drop_item(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
-    if let Some(Value::String(name)) = args.first() {
-        if cx.resolve(*name) == "none" {
+    if let Some(Value::String(name)) = args.first()
+        && cx.resolve(*name) == "none" {
             return Ok(Value::Undefined);
         }
-    }
     let (_, index) = weapon_argument(cx, args)?;
     let before = crate::game::item::inventory(host, slot);
     let mut inv = before;

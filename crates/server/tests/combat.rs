@@ -374,11 +374,10 @@ fn a_shot_takes_health_and_a_second_one_kills() {
         cb.send_frame(&facing_a);
         let (ea, _) = step(&mut sv, &mut ca, &mut cb);
         for e in ea {
-            if let NetEvent::ServerCommand(t) = e {
-                if t.first().map(String::as_str) == Some("b") {
+            if let NetEvent::ServerCommand(t) = e
+                && t.first().map(String::as_str) == Some("b") {
                     row = Some(t);
                 }
-            }
         }
     }
     let row = row.expect("no scoreboard reply");
@@ -660,11 +659,10 @@ fn the_kill_command_suicides_a_player() {
         cb.send_frame(&NULL_USERCMD);
         let (ea, _) = step(&mut sv, &mut ca, &mut cb);
         for e in ea {
-            if let NetEvent::ServerCommand(t) = e {
-                if t.first().map(String::as_str) == Some("b") {
+            if let NetEvent::ServerCommand(t) = e
+                && t.first().map(String::as_str) == Some("b") {
                     row = Some(t);
                 }
-            }
         }
     }
     let row = row.expect("no scoreboard reply");
@@ -1921,11 +1919,10 @@ impl Followed {
             let events = self.step(&vcod_common::net::msg::NULL_USERCMD, &a, &b);
             for (client, events) in events.into_iter().enumerate() {
                 for e in events {
-                    if let NetEvent::ServerCommand(t) = e {
-                        if t.first().map(String::as_str) == Some("b") {
+                    if let NetEvent::ServerCommand(t) = e
+                        && t.first().map(String::as_str) == Some("b") {
                             pushed.push((frame, client, t));
                         }
-                    }
                 }
             }
             if self.cs.snapshots().newest().unwrap().ps.health() == 0 {

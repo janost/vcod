@@ -723,8 +723,8 @@ impl GameHost {
     pub fn free_entity(&mut self, id: EntId) {
         // `G_FreeTurret` (turrets doc 8): a manned gun lets its gunner go
         // before the record goes; the sim half waits for `ClientEndFrame`.
-        if let Some(mut rec) = self.turrets.remove(&id) {
-            if let Some((slot, origin, stance)) = crate::game::turret::release(&mut rec) {
+        if let Some(mut rec) = self.turrets.remove(&id)
+            && let Some((slot, origin, stance)) = crate::game::turret::release(&mut rec) {
                 self.turret_ops
                     .push(crate::game::turret::TurretOp::Release {
                         slot,
@@ -732,7 +732,6 @@ impl GameHost {
                         stance,
                     });
             }
-        }
         self.triggers.remove(id);
         // A mover's row goes with the entity rather than a frame later: the
         // number is on the free list from here, and the next entity to take
@@ -1017,11 +1016,10 @@ impl Host for GameHost {
         field: Atom,
         value: Value,
     ) -> Result<(), ErrorKind> {
-        if ent.0 >= FIRST_HUD_ELEM {
-            if let Some(r) = self.set_hud_field(cx, ent, field, value) {
+        if ent.0 >= FIRST_HUD_ELEM
+            && let Some(r) = self.set_hud_field(cx, ent, field, value) {
                 return r;
             }
-        }
         let route = if ent.0 >= FIRST_HUD_ELEM {
             fields::route_hud(cx.resolve_folded(field))
         } else {

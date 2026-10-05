@@ -236,11 +236,10 @@ fn a_player_entity_carries_the_fields_retail_sets() {
             continue;
         }
         for line in body.lines() {
-            if let Some((name, _)) = line.split_once(' ') {
-                if EntityState::field_index(p, name).is_some() {
+            if let Some((name, _)) = line.split_once(' ')
+                && EntityState::field_index(p, name).is_some() {
                     retail_sets.insert(name);
                 }
-            }
         }
     }
     assert!(

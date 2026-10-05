@@ -535,11 +535,10 @@ pub fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
         } else if !line.starts_with('!') {
             // The settled field lines: `<name> <i32>`, the playerstate the
             // step ended at.
-            if let Some((k, v)) = line.split_once(' ') {
-                if let Ok(v) = v.trim().parse::<i32>() {
+            if let Some((k, v)) = line.split_once(' ')
+                && let Ok(v) = v.trim().parse::<i32>() {
                     step.settled.insert(k.to_string(), v);
                 }
-            }
         }
         // `!observed` is not compared here.
     }

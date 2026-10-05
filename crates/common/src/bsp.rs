@@ -373,11 +373,10 @@ impl Visibility {
             return;
         }
         if i < 0 {
-            if let Some(l) = self.leafs.get((-(i + 1)) as usize) {
-                if l.cluster >= 0 {
+            if let Some(l) = self.leafs.get((-(i + 1)) as usize)
+                && l.cluster >= 0 {
                     out.push(l.cluster);
                 }
-            }
             return;
         }
         let Some(n) = self.nodes.get(i as usize) else {

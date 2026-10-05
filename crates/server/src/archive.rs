@@ -214,11 +214,10 @@ fn share_unchanged(
     old: &BTreeMap<u32, Rc<msg::EntityState>>,
 ) {
     for (n, e) in new.iter_mut() {
-        if let Some(o) = old.get(n) {
-            if o == e {
+        if let Some(o) = old.get(n)
+            && o == e {
                 *e = o.clone();
             }
-        }
     }
 }
 

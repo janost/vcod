@@ -158,11 +158,10 @@ impl OnlineView {
         ps: &ViewPs,
     ) -> Option<Vec<XModel>> {
         let names = rig_names(configstrings, ps.weapon, ps.viewmodel_index);
-        if let Some(built) = &self.built_for {
-            if built.as_ref().map(RigKey::names) == names {
+        if let Some(built) = &self.built_for
+            && built.as_ref().map(RigKey::names) == names {
                 return None;
             }
-        }
         self.built_for = Some(names.map(|(weapon, hands)| RigKey {
             weapon: weapon.to_string(),
             hands: hands.map(str::to_string),

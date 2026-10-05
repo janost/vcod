@@ -48,11 +48,10 @@ fn scoreboards(
         *now += Duration::from_millis(FRAME_MS);
         cl.send_frame(&NULL_USERCMD);
         for e in step(sv, q, cl, *now) {
-            if let NetEvent::ServerCommand(t) = e {
-                if t.first().map(String::as_str) == Some("b") {
+            if let NetEvent::ServerCommand(t) = e
+                && t.first().map(String::as_str) == Some("b") {
                     n += 1;
                 }
-            }
         }
     }
     n

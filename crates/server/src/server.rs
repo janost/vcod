@@ -239,11 +239,10 @@ fn mirror_weapons_of(sim: &mut ClientSim, rt: &mut script::ScriptRuntime, slot: 
     sim.viewmodel_index = rt.client_viewmodel(slot);
     // The body, head and helmet the character script dressed the
     // client in: what a shot at it is traced against.
-    if let Some(a) = rt.client_assembly(slot) {
-        if a != sim.assembly {
+    if let Some(a) = rt.client_assembly(slot)
+        && a != sim.assembly {
             sim.assembly = a;
         }
-    }
     // And back the other way: the sim owns where a player is, so the
     // script's copy is written from it every frame.
     rt.set_client_origin(slot, sim.origin());
@@ -446,11 +445,10 @@ fn follow_end_frame(
             target = None;
         }
     }
-    if source == Source::None {
-        if let Some(t) = target {
+    if source == Source::None
+        && let Some(t) = target {
             source = archive.player_state(t, &mut age, followable(clients, t));
         }
-    }
     if age != session.archive_ms {
         rt.set_client_archive_ms(slot, age);
     }
@@ -2528,11 +2526,10 @@ impl Server {
         if let Some(slot) = self.configstrings.get_mut(0) {
             *slot = info.clone();
         }
-        if let Some(rt) = self.script.as_mut() {
-            if let Some(slot) = rt.host.configstrings.get_mut(0) {
+        if let Some(rt) = self.script.as_mut()
+            && let Some(slot) = rt.host.configstrings.get_mut(0) {
                 *slot = info;
             }
-        }
     }
 
     /// What the next level load would stamp for `name`, given the config's
@@ -3466,13 +3463,12 @@ impl Server {
                 // above ran while it was alive, and its death snapshot and
                 // corpse must not carry the gun.
                 for (slot, c) in self.clients.iter_mut().enumerate() {
-                    if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
-                        if !sim.linked() {
+                    if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut())
+                        && !sim.linked() {
                             for te in rt.release_turret(slot, sim) {
                                 rt.push_temp_entity(te);
                             }
                         }
-                    }
                 }
             }
             console_lines = rt.take_console();
@@ -3594,11 +3590,10 @@ impl Server {
                     .first()
                     .filter(|_| !capped[slot])
                     .map(|q| (q.packet, true));
-                if let Some(item) = kill.into_iter().chain(cmd).min() {
-                    if next.is_none_or(|(p, is_cmd, _)| item < (p, is_cmd)) {
+                if let Some(item) = kill.into_iter().chain(cmd).min()
+                    && next.is_none_or(|(p, is_cmd, _)| item < (p, is_cmd)) {
                         next = Some((item.0, item.1, slot));
                     }
-                }
             }
             let Some((_, is_cmd, slot)) = next else {
                 break;
@@ -3716,13 +3711,11 @@ impl Server {
                 // `ps.weapon` to 0 on its own. Hung off the last shot, not
                 // off `EV_NOAMMO`, which a dry trigger raises too and keeps
                 // the weapon.
-                if e.event == EV_FIRE_WEAPON_LASTSHOT {
-                    if let Some(def) = weapons.get(weapon as usize) {
-                        if def.clip_only && sim.ps.ammo[def.ammo_index] == 0 {
+                if e.event == EV_FIRE_WEAPON_LASTSHOT
+                    && let Some(def) = weapons.get(weapon as usize)
+                        && def.clip_only && sim.ps.ammo[def.ammo_index] == 0 {
                             take = Some(weapon);
                         }
-                    }
-                }
             }
             round.events.extend(raised);
             round.switched |= sim.ps.weapon != held;
@@ -3862,11 +3855,10 @@ impl Server {
     /// events they left imply, and the weapon the machine switched to.
     fn close_round(&mut self, slot: usize, round: &mut Round) {
         self.flush_anims(slot, round);
-        if let Some(sim) = self.clients[slot].as_ref().and_then(|c| c.sim.as_ref()) {
-            if round.held.is_some_and(|h| h != sim.ps.weapon) {
+        if let Some(sim) = self.clients[slot].as_ref().and_then(|c| c.sim.as_ref())
+            && round.held.is_some_and(|h| h != sim.ps.weapon) {
                 self.weapon_changes.push((slot, sim.ps.weapon));
             }
-        }
         *round = Round::default();
     }
 

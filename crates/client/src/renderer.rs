@@ -2785,15 +2785,14 @@ impl Renderer {
         camera[32..36].copy_from_slice(&[frame.fwd.x, frame.fwd.y, frame.fwd.z, 0.0]);
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::cast_slice(&camera));
-        if let Some(sky) = &self.sky {
-            if let Some(farbox) = &sky.farbox {
+        if let Some(sky) = &self.sky
+            && let Some(farbox) = &sky.farbox {
                 self.queue.write_buffer(
                     &farbox.eye_buf,
                     0,
                     bytemuck::bytes_of(&[frame.eye.x, frame.eye.y, frame.eye.z, 0.0f32]),
                 );
             }
-        }
         let t0 = std::time::Instant::now();
         let frustum = Frustum::from_view_proj(frame.view_proj);
         if let Some(world) = &mut self.world {

@@ -467,11 +467,10 @@ pub fn aim_trace(
                 crate::game::combat::ray_box(start, end, lo.into(), hi.into())
             }
         };
-        if let Some(f) = f {
-            if f < world_f && best.is_none_or(|(b, _)| f < b) {
+        if let Some(f) = f
+            && f < world_f && best.is_none_or(|(b, _)| f < b) {
                 best = Some((f, id));
             }
-        }
     }
     let (lookat_f, id) = best?;
     let bodies: Vec<_> = host.client_bodies.iter().flatten().cloned().collect();

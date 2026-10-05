@@ -577,15 +577,14 @@ pub fn probe(
             // while the fixture's `!input` recorded the untouched yaw: the
             // ads capture's `ads_walk` ran 45 degrees off the line it says
             // it ran, which its `viewangles` column now shows.
-            if combat.step_walks() {
-                if let Some(o) = client
+            if combat.step_walks()
+                && let Some(o) = client
                     .snapshots()
                     .newest()
                     .map(|s| s.ps.origin(&net::protocol::PROTOCOL_V1))
                 {
                     combat.stall.apply(&mut cmd, now, o);
                 }
-            }
             match combat.aim_yaw {
                 Some(yaw) => cmd.angles[1] = yaw,
                 None => hold_view_yaw(&mut cmd, &client, &mut combat.spawn_delta_yaw),
@@ -657,11 +656,10 @@ pub fn probe(
                 bump.record(now, c);
             }
         }
-        if save_slope && slope_capture.recording() {
-            if let Some(c) = sent {
+        if save_slope && slope_capture.recording()
+            && let Some(c) = sent {
                 slope_capture.cmds.push(c);
             }
-        }
 
         // Retail sends the `b` scoreboard only in answer to `score`, so the
         // one a map end produces is in the capture only if it is asked for.
@@ -881,20 +879,18 @@ pub fn probe(
             }
         }
 
-        if probe_bump_target && join.settled(now) {
-            if let Some(s) = client.snapshots().newest() {
-                if s.ps.field_i32(&net::protocol::PROTOCOL_V1, "pm_type") == PM_NORMAL {
+        if probe_bump_target && join.settled(now)
+            && let Some(s) = client.snapshots().newest()
+                && s.ps.field_i32(&net::protocol::PROTOCOL_V1, "pm_type") == PM_NORMAL {
                     bump_target.step(now, s);
                 }
-            }
-        }
 
         // A refused weapon reopens the same menu, which the probe answers
         // once and then ignores, so a sent answer is not an accepted one; the
         // playerstate is what tells a spawn from a still-spectating client.
-        if join.settled(now) {
-            if let Some(s) = client.snapshots().newest() {
-                if s.ps.field_i32(&net::protocol::PROTOCOL_V1, "pm_type") == PM_NORMAL {
+        if join.settled(now)
+            && let Some(s) = client.snapshots().newest()
+                && s.ps.field_i32(&net::protocol::PROTOCOL_V1, "pm_type") == PM_NORMAL {
                     if save_motion {
                         if motion.step(now, s) {
                             write_motion_fixture(s, client.configstrings(), &join, &motion)?;
@@ -905,15 +901,14 @@ pub fn probe(
                         // The join names the weapon; the reload step is sized
                         // off its `reloadTime` rather than one rifle's number.
                         combat.use_weapon(fs, &join.weapon, client.configstrings());
-                        if probe_sway && combat.aim_yaw.is_none() {
-                            if let Some(w) = hit.world.as_deref() {
+                        if probe_sway && combat.aim_yaw.is_none()
+                            && let Some(w) = hit.world.as_deref() {
                                 let p = &net::protocol::PROTOCOL_V1;
                                 let o = s.ps.origin(p);
                                 let eye =
                                     [o[0], o[1], o[2] + s.ps.field_f32(p, "viewHeightCurrent")];
                                 combat.aim_yaw = Some(longest_sightline(w, eye));
                             }
-                        }
                         if combat.step(now, s) {
                             // The sway run is a measurement: its impact lines
                             // went to stdout and there is no fixture for it.
@@ -980,13 +975,10 @@ pub fn probe(
                     // and reports the roster, which is what a second probe on
                     // the other team needs to be seen by.
                 }
-            }
-        }
-        if let Some(count) = client.capture_count() {
-            if count >= SNAP_CAPTURE_TARGET {
+        if let Some(count) = client.capture_count()
+            && count >= SNAP_CAPTURE_TARGET {
                 break;
             }
-        }
         if now.duration_since(start) >= Duration::from_secs(secs) {
             break;
         }
@@ -1159,8 +1151,8 @@ impl ProbeWatch {
         }
         for (&num, cl) in &s.clients {
             let mi = cl.field_i32(p, "modelindex");
-            if let Some(old) = self.client_models.insert(num, mi) {
-                if old != mi {
+            if let Some(old) = self.client_models.insert(num, mi)
+                && old != mi {
                     let name = |i: i32| {
                         configstrings
                             .get(268 + i as usize)
@@ -1173,7 +1165,6 @@ impl ProbeWatch {
                         name(mi)
                     );
                 }
-            }
         }
         // Corpse lifecycle (1 Hz, so times are +-1 s): a corpse resolves
         // through the dead client's roster entry, so log appear/vanish with
@@ -3471,7 +3462,7 @@ struct HitSample {
 fn nonzero_pairs(a: &[i16]) -> Vec<(usize, i16)> {
     a.iter()
         .enumerate()
-        .filter(|(_, &v)| v != 0)
+        .filter(|&(_, &v)| v != 0)
         .map(|(i, &v)| (i, v))
         .collect()
 }
@@ -4565,7 +4556,7 @@ impl HitProbe {
         let seen = snap
             .entities
             .iter()
-            .filter(|(&n, e)| n != me && e.field_i32(p, "eType") == crate::entities::ET_PLAYER)
+            .filter(|&(&n, e)| n != me && e.field_i32(p, "eType") == crate::entities::ET_PLAYER)
             .map(|(&n, e)| (n, e.field_i32(p, "eType"), e.origin(p)))
             .min_by(|a, b| {
                 dist(a.2, eye)
@@ -6315,11 +6306,10 @@ impl TriggerProbe {
         // the scan below picks a different clear heading every frame as the
         // walker moves, and the walk oscillates on the spot instead of
         // getting round the building in front of it.
-        if let Some(prev) = self.yaw {
-            if ahead(prev) >= 1.0 {
+        if let Some(prev) = self.yaw
+            && ahead(prev) >= 1.0 {
                 return prev;
             }
-        }
         let mut best = (0.0f32, bearing);
         for k in (15..=TRIGGER_STEER_ARC).step_by(15) {
             for sign in [1, -1] {
@@ -8344,7 +8334,7 @@ impl TurretProbe {
         self.target_aim = snap
             .entities
             .iter()
-            .filter(|(&n, e)| n != me && e.field_i32(p, "eType") == crate::entities::ET_PLAYER)
+            .filter(|&(&n, e)| n != me && e.field_i32(p, "eType") == crate::entities::ET_PLAYER)
             .map(|(_, e)| e.origin(p))
             .min_by(|a, b| dist(*a, eye).total_cmp(&dist(*b, eye)))
             .map(|o| wrap(aim_at(eye, [o[0], o[1], o[2] + EYE_HEIGHT])));
@@ -9458,7 +9448,7 @@ impl BumpProbe {
         let p = &net::protocol::PROTOCOL_V1;
         snap.entities
             .iter()
-            .filter(|(&n, e)| n != me && e.field_i32(p, "eType") == crate::entities::ET_PLAYER)
+            .filter(|&(&n, e)| n != me && e.field_i32(p, "eType") == crate::entities::ET_PLAYER)
             .map(|(&n, e)| (e.origin(p), n, e.field_i32(p, "solid")))
             .min_by(|a, b| horiz_dist(a.0, BUMP_SPOT).total_cmp(&horiz_dist(b.0, BUMP_SPOT)))
     }

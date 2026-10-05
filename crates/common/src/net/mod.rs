@@ -640,8 +640,8 @@ impl<T: Transport> NetClient<T> {
             self.last_send = self.now;
         }
 
-        if has_snapshot {
-            if let Some(cap) = self.capture.as_mut() {
+        if has_snapshot
+            && let Some(cap) = self.capture.as_mut() {
                 cap.triples.extend_from_slice(&message_num.to_le_bytes());
                 cap.triples
                     .extend_from_slice(&(msg.len() as u32).to_le_bytes());
@@ -651,7 +651,6 @@ impl<T: Transport> NetClient<T> {
                     cap.times.push(s.server_time);
                 }
             }
-        }
     }
 
     /// One `svc_download` op (docs/protocol-1.1.md, svc_download). Returns
@@ -790,8 +789,8 @@ impl<T: Transport> NetClient<T> {
             // The text is unquoted and runs to end of line, so read it off the raw
             // command, not the tokens.
             Some("d") => {
-                if let Some((i, val)) = parse_configstring_update(&cmd) {
-                    if i < self.configstrings.len() {
+                if let Some((i, val)) = parse_configstring_update(&cmd)
+                    && i < self.configstrings.len() {
                         self.configstrings[i] = val;
                         if i == 1 {
                             // map_restart bumps sv_serverid and the server drops
@@ -801,7 +800,6 @@ impl<T: Transport> NetClient<T> {
                         }
                         self.events.push(NetEvent::ConfigstringChanged(i));
                     }
-                }
             }
             _ => {
                 log::debug!("serverCommand {seq}: {cmd}");

@@ -218,8 +218,8 @@ impl Bot {
         // A frag goes at a close enemy, occasionally, once the cooldown is
         // spent; the switch itself is the stage machine below.
         self.grenade_cooldown = self.grenade_cooldown.saturating_sub(1);
-        if self.shoot && self.grenade_cooldown == 0 {
-            if let (Some(g), Some(e)) = (view.grenade, view.enemy) {
+        if self.shoot && self.grenade_cooldown == 0
+            && let (Some(g), Some(e)) = (view.grenade, view.enemy) {
                 let close = dist_sq(view.origin, e.origin) < GRENADE_RANGE * GRENADE_RANGE;
                 if close && self.rand() % 4 == 0 {
                     self.grenade_cooldown = GRENADE_COOLDOWN_TICKS;
@@ -229,7 +229,6 @@ impl Bot {
                     return cmd;
                 }
             }
-        }
 
         self.stall_ticks += 1;
         if self.heading_ticks == 0
@@ -242,8 +241,8 @@ impl Bot {
 
         let mut yaw = self.heading;
         let mut pitch = 0.0;
-        if self.shoot {
-            if let Some(e) = view.enemy {
+        if self.shoot
+            && let Some(e) = view.enemy {
                 (pitch, yaw) = aim_angles(view, e.origin);
                 if self.fire_cooldown == 0
                     && view.busy_ms == 0
@@ -259,7 +258,6 @@ impl Bot {
                     self.fire_cooldown = (fire / TICK_MS).max(2) as u32;
                 }
             }
-        }
         // A dry clip reloads; the tap is suppressed while the machine is
         // busy so a held bit cannot restart the reload it started.
         if view.clip == 0 && view.busy_ms == 0 {

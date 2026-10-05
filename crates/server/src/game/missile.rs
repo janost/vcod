@@ -241,15 +241,14 @@ impl Missile {
         // retail's would be the bone's.
         let mut tr = world.missile_trace(self.origin, to);
         let mut hit_player = false;
-        if let Some((_, f)) = nearest_player(self.origin, to, self.owner, sims) {
-            if f < tr.fraction {
+        if let Some((_, f)) = nearest_player(self.origin, to, self.owner, sims)
+            && f < tr.fraction {
                 tr.fraction = f;
                 tr.endpos = self.origin + travel * f;
                 tr.normal = (self.origin - to).normalize_or_zero();
                 tr.surface_flags = 0;
                 hit_player = true;
             }
-        }
         self.origin = tr.endpos;
         // 12.2's ground snap, into the same trace struct: 12.3 then reads
         // the downward trace and not the move, which is what makes a rolling
@@ -472,11 +471,9 @@ impl Missiles {
         // from being sent twice.
         if let crate::game::fields::Route::Engine { slot, .. } =
             crate::game::fields::route_entity("classname")
-        {
-            if let Some(e) = ents.get_mut(id) {
+            && let Some(e) = ents.get_mut(id) {
                 e.engine[slot] = Value::String(cx.intern_exact("grenade"));
             }
-        }
         let mut angles = vectoangles(velocity);
         angles.x = normalize_360(angles.x - LAUNCH_PITCH_LEAD);
         let tumble = Vec3::new(

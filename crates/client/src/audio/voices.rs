@@ -285,11 +285,10 @@ impl VoiceTable {
         for v in &mut self.voices {
             // Unconditional so a 2D voice's tracked position stays current
             // too.
-            if let Source::Entity { num, pos } = &mut v.source {
-                if let Some(p) = entity_pos.get(num) {
+            if let Source::Entity { num, pos } = &mut v.source
+                && let Some(p) = entity_pos.get(num) {
                     *pos = *p;
                 }
-            }
             let (spatial_scale, pan_v) = if v.spatial {
                 let p = match v.source {
                     Source::Point(p) => p,

@@ -167,8 +167,7 @@ fn run_cmd(
     if let Some(at) = std::env::var("SLOPE_TRACE")
         .ok()
         .and_then(|v| v.parse::<i32>().ok())
-    {
-        if (at - 60..=at).contains(&cmd.server_time) {
+        && (at - 60..=at).contains(&cmd.server_time) {
             println!(
                 "  cmd st={} dt={dt_ms} origin=[{:.3},{:.3},{:.3}] vel=[{:.2},{:.2},{:.2}] ground={} n=[{:.3},{:.3},{:.3}] walking={}",
                 cmd.server_time,
@@ -185,7 +184,6 @@ fn run_cmd(
                 ps.walking,
             );
         }
-    }
 }
 
 /// The eye's running leg, which retail sends (`viewHeightLerpTime`,

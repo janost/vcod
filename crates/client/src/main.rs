@@ -695,14 +695,13 @@ fn hud_lines(
                 "interp miss/s {:4.1}  anim restarts/s {:4.1}",
                 stats.misses_per_s, stats.restarts_per_s
             ));
-            if let Some(scene) = scene {
-                if scene.stats.pending_assemblies > 0 {
+            if let Some(scene) = scene
+                && scene.stats.pending_assemblies > 0 {
                     lines.push(format!(
                         "loading: {} assemblies pending",
                         scene.stats.pending_assemblies
                     ));
                 }
-            }
             if let Some((got, size)) = net.download_progress() {
                 lines.push(format!("download: {got}/{size} bytes"));
             }
@@ -1418,11 +1417,10 @@ impl ApplicationHandler for App {
         };
         match Renderer::new(window.clone(), &self.fs) {
             Ok(mut r) => {
-                if let Some(w) = &self.world {
-                    if let Err(e) = r.load_world(&w.bsp, &self.fs) {
+                if let Some(w) = &self.world
+                    && let Err(e) = r.load_world(&w.bsp, &self.fs) {
                         return self.fail(event_loop, e);
                     }
-                }
                 if !self.viewmodel.is_empty() {
                     r.set_viewmodel(&self.fs, &self.viewmodel);
                 }
@@ -1497,11 +1495,10 @@ impl ApplicationHandler for App {
                         // A press counts only while the mouse is captured; a
                         // release always passes so nothing stays held.
                         _ => {
-                            if let Some(action) = play_action(code) {
-                                if grabbed || !pressed {
+                            if let Some(action) = play_action(code)
+                                && (grabbed || !pressed) {
                                     input.key(action, pressed);
                                 }
-                            }
                         }
                     },
                     Mode::Walk {
@@ -1524,11 +1521,10 @@ impl ApplicationHandler for App {
                         KeyCode::KeyE => input.lean_right = pressed,
                         KeyCode::ShiftLeft => input.walk_slow = pressed,
                         _ => {
-                            if pressed && grabbed {
-                                if let Some(slot) = digit_slot(code) {
+                            if pressed && grabbed
+                                && let Some(slot) = digit_slot(code) {
                                     *switch_to = Some(slot);
                                 }
-                            }
                         }
                     },
                 }
@@ -1677,7 +1673,7 @@ impl ApplicationHandler for App {
                                     }
                                 }
                                 // `j/k/l` is quick chat; `s <idx>` is the announcer.
-                                net::NetEvent::ServerCommand(ref tokens) => {
+                                net::NetEvent::ServerCommand(tokens) => {
                                     if tokens.first().is_some_and(|t| t == "n") {
                                         join.on_restart();
                                     }
@@ -1743,12 +1739,11 @@ impl ApplicationHandler for App {
 
                         // Re-send `score` every 2 s while Tab is held, as the
                         // stock client does (cod11-hud-protocol.md, section 4).
-                        if let Some(hud) = &mut self.hud {
-                            if hud.scoreboard.due(time) {
+                        if let Some(hud) = &mut self.hud
+                            && hud.scoreboard.due(time) {
                                 net.send_reliable("score");
                                 hud.scoreboard.mark_requested(time);
                             }
-                        }
 
                         if gamestate_ready {
                             cmd_clock.reset();
@@ -1954,8 +1949,8 @@ impl ApplicationHandler for App {
                                         .snapshots()
                                         .newest()
                                         .map(|s| clock.render_time(local_ms, s.server_time));
-                                    if let Some(render_time) = render_time {
-                                        if let Some((a, b)) =
+                                    if let Some(render_time) = render_time
+                                        && let Some((a, b)) =
                                             net.snapshots().two_for_time(render_time)
                                         {
                                             // No straddling pair: one frame, held.
@@ -2005,7 +2000,6 @@ impl ApplicationHandler for App {
                                                         .to_radians();
                                             }
                                         }
-                                    }
                                     let predicted = if ps_client == client_num {
                                         net.snapshots().newest().and_then(|s| {
                                             let bodies = play::predict::solid_bodies(
@@ -2037,14 +2031,13 @@ impl ApplicationHandler for App {
                                             },
                                         )
                                     });
-                                    if let Some(ps) = &view_ps {
-                                        if let Some(models) =
+                                    if let Some(ps) = &view_ps
+                                        && let Some(models) =
                                             view.sync_rig(&self.fs, net.configstrings(), ps)
                                         {
                                             r.set_viewmodel(&self.fs, &models);
                                             self.viewmodel = models;
                                         }
-                                    }
                                     let (vm_draw, fov) =
                                         view.frame(weapons, view_ps.as_ref(), dt, local_ms);
                                     vm = vm_draw;
@@ -2234,8 +2227,8 @@ impl ApplicationHandler for App {
                                     // section 9), reconciled once per snapshot. An entity
                                     // that left the snapshot is absent from the map, which
                                     // is what stops its loop.
-                                    if let Some(newest) = newest {
-                                        if *last_loop_snap != Some(newest.message_num) {
+                                    if let Some(newest) = newest
+                                        && *last_loop_snap != Some(newest.message_num) {
                                             *last_loop_snap = Some(newest.message_num);
                                             let loops: HashMap<u32, (i32, Vec3)> = newest
                                                 .entities
@@ -2253,7 +2246,6 @@ impl ApplicationHandler for App {
                                                 &loops,
                                             );
                                         }
-                                    }
 
                                     // After the drain, so new voices get this frame's positions.
                                     self.audio.step(&entity_pos, Some(&*world));
@@ -2316,8 +2308,8 @@ impl ApplicationHandler for App {
                         let fx_t0 = Instant::now();
                         self.fx.step(dt, time, Some(&*world));
 
-                        if let Some(slot) = switch_to.take() {
-                            if slot != *weapon_slot && slot < WALK_LOADOUT.len() {
+                        if let Some(slot) = switch_to.take()
+                            && slot != *weapon_slot && slot < WALK_LOADOUT.len() {
                                 let name = WALK_LOADOUT[slot];
                                 match viewmodel::load_view_weapon(&self.fs, name) {
                                     Some((models, vw)) => {
@@ -2333,7 +2325,6 @@ impl ApplicationHandler for App {
                                     ),
                                 }
                             }
-                        }
 
                         (input.forward, input.right) = keys.axes();
                         let mw = MoveWorld::bare(world);
