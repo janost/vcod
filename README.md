@@ -73,7 +73,8 @@ built from the bytes up, this might be your kind of thing.
   the same movement step the server runs, against the map and the other
   players. A correction eases out over 100 ms.
 - Draws your weapon in first person with the hands your team gets, zooms the
-  sight to the weapon's own FOV, and plays your own fire, reload and footstep
+  sight to the weapon's own FOV, puts a sniper scope's overlay up where the
+  swaying gun points, and plays your own fire, reload and footstep
   sounds off the prediction. The snapshot that confirms them later stays
   quiet.
 - Draws the HUD that the stock `hud.menu` lays out: crosshair that opens with
@@ -161,7 +162,6 @@ console, no key rebinding. You get command-line flags and the binds below.
   fixed-width fonts
   ([docs/research/cod11-hud-protocol.md](docs/research/cod11-hud-protocol.md),
   section 9).
-- No sniper scope overlay, online or in walk mode.
 - Only protocol 1 (patch 1.1). 1.5 and United Offensive servers won't talk to
   it.
 - Prediction clips against the map and other players, but not against moving
@@ -394,7 +394,7 @@ D still move.
 | LMB | Fire |
 | RMB | Aim down sights (held) |
 | R | Reload |
-| 1-6 | Weapon: colt, thompson, mp40, mp44, enfield, kar98k |
+| 1-7 | Weapon: colt, thompson, mp40, mp44, enfield, kar98k, scoped kar98k |
 
 ### Everywhere
 
