@@ -893,7 +893,12 @@ impl PlacedModel {
 pub struct BlastVictim {
     pub slot: usize,
     /// `r.currentOrigin`, at the feet: what the distance is measured to.
+    /// Unsnapped, since a blast runs outside every client's cmd (14.3).
     pub origin: Vec3,
+    /// `r.currentOrigin` at the client's last link, which `r.absmin` and
+    /// `r.absmax`, and so the second chance's box midpoint, are built off:
+    /// the snapped origin after a cmd (14.1).
+    pub link_origin: Vec3,
     pub mins: Vec3,
     pub maxs: Vec3,
     /// The eye, lean included, that `CanDamage` builds its probes around.
@@ -956,9 +961,10 @@ pub fn can_damage(
 /// the falloff is linear from `inner` at the blast to `outer` at the radius,
 /// scaled by `CanDamage`'s fraction and truncated the way `G_Damage`
 /// truncates. A victim with no line of sight at all still takes the second
-/// chance's tenth when the trace to its box midpoint was blocked and that
-/// midpoint is inside `radius * 0.2`. Distance is origin to origin, which is
-/// what retail measures for anything that is not a brush model. `attacker`
+/// chance's tenth when the trace to its box midpoint, taken at
+/// `link_origin`, was blocked and that midpoint is inside `radius * 0.2`.
+/// Distance is origin to origin, which is what retail measures for anything
+/// that is not a brush model. `attacker`
 /// is `None` for a blast the world set off. `models` and `bodies` stop
 /// `CanDamage`'s traces and not the second chance's. Without a `world` nothing is
 /// traced and every candidate inside the radius takes the falloff whole,
@@ -997,7 +1003,7 @@ pub fn radius_damage(
         let damage = if fraction > 0.0 {
             (fraction as f64 * points) as i32
         } else {
-            let mid = v.origin + (v.mins + v.maxs) * 0.5;
+            let mid = v.link_origin + (v.mins + v.maxs) * 0.5;
             let blocked = world
                 .is_some_and(|w| w.point_trace(at, mid, SECOND_CHANCE_MASK, false).fraction < 1.0);
             if !blocked || (mid - at).length() >= radius * SECOND_CHANCE_RANGE {
@@ -1648,6 +1654,7 @@ mod tests {
         BlastVictim {
             slot,
             origin: Vec3::new(x, 0.0, 0.0),
+            link_origin: Vec3::new(x.trunc(), 0.0, 0.0),
             mins: Vec3::new(-15.0, -15.0, 0.0),
             maxs: Vec3::new(15.0, 15.0, 72.0),
             eye: Vec3::new(x, 0.0, 60.0),
@@ -1755,6 +1762,21 @@ mod tests {
         assert_eq!(second[0].damage, 10);
         // Behind the same wall but past `radius * 0.2`: nothing at all.
         assert!(blast(&far, &wall).is_empty());
+
+        // The second chance's midpoint comes off the box the last link
+        // built, at the snapped origin: at x 64.5 the midpoint is 69.86 from
+        // the blast at the link's x 64 and 70.31 at the feet, so only the
+        // link puts it inside the 70 units `radius * 0.2` reaches.
+        let edge = blast_victim(3, 64.5);
+        let snapped = blast(&edge, &wall);
+        assert_eq!(snapped.len(), 1);
+        // A tenth of 98.81, the falloff at the feet's own 64.5.
+        assert_eq!(snapped[0].damage, 9);
+        let unsnapped = BlastVictim {
+            link_origin: edge.origin,
+            ..edge
+        };
+        assert!(blast(&unsnapped, &wall).is_empty());
     }
 
     /// A script model shields a blast the way the world does, since
@@ -1906,6 +1928,7 @@ mod tests {
             let victim = BlastVictim {
                 slot: 1,
                 origin: back_feet,
+                link_origin: back_feet.trunc(),
                 mins: Vec3::new(-15.0, -15.0, 0.0),
                 maxs: Vec3::new(15.0, 15.0, 72.0),
                 eye: back_feet + Vec3::Z * 60.0,
