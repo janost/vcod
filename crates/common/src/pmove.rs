@@ -1639,6 +1639,11 @@ fn set_water_level(ps: &mut PlayerState, world: &MoveWorld) {
     }
 }
 
+/// The ground trace hit a `surfaceparm slick` material (pml+0x50 bit 0x2).
+fn on_slick(ps: &PlayerState) -> bool {
+    ps.ground_surface_flags & crate::collision::SURF_SLICK != 0
+}
+
 /// RTCW `bg_pmove.c` `PM_Friction`: ground friction only while walking in
 /// water level <= 1, plus a water term that already applies while wading, and
 /// the ladder term whenever on a ladder.
@@ -1655,8 +1660,13 @@ fn friction(ps: &mut PlayerState, on_ladder: bool, dt: f32) {
         return;
     }
     let mut drop = 0.0;
-    // A hit's knockback slides free of the ground term (0x2e4fb).
-    if ps.on_ground && ps.water_level <= 1 && ps.knockback_flags & PMF_TIME_DAMAGE == 0 {
+    // Slick ground and a hit's knockback slide free of the ground term
+    // (0x2e4ed, 0x2e4fb).
+    if ps.on_ground
+        && ps.water_level <= 1
+        && !on_slick(ps)
+        && ps.knockback_flags & PMF_TIME_DAMAGE == 0
+    {
         let mut control = speed.max(PM_STOPSPEED);
         if ps.knockback_flags & PMF_TIME_KNOCKBACK != 0 {
             control *= KNOCKBACK_FRICTION_SCALE;
@@ -1829,10 +1839,10 @@ fn walk_move(
         return;
     }
     let (dir, wishspeed) = wish(ps, input, weapon);
-    let knocked = ps.knockback_flags & PMF_TIME_DAMAGE != 0;
+    // Slick ground or a hit's knockback (0x2f492, 0x2f58c).
+    let sliding = on_slick(ps) || ps.knockback_flags & PMF_TIME_DAMAGE != 0;
     let mut accel = match move_stance(ps) {
-        // 0x2f4a2
-        _ if knocked => 1.0,
+        _ if sliding => 1.0,
         Stance::Stand => PM_ACCELERATE,
         Stance::Crouch => PM_DUCKED_ACCELERATE,
         Stance::Prone => PM_PRONE_ACCELERATE,
@@ -1850,9 +1860,9 @@ fn walk_move(
     if add > 0.0 {
         ps.velocity += dir * (accel * dt * wishspeed.max(WALK_ACCEL_FLOOR)).min(add);
     }
-    // Q3's knockback gravity (0x2f59c), which the clip below turns into
+    // Q3's slick-or-knockback gravity, which the clip below turns into
     // ground speed.
-    if knocked {
+    if sliding {
         ps.velocity.z -= GRAVITY * dt;
     }
     // The clip onto the ground keeps the speed whenever it leaves the
@@ -2595,6 +2605,56 @@ mod tests {
         pmove(&mut ps, &PmInput::default(), &mw, 0.008, &[]);
         assert_eq!((ps.knockback_ms, ps.knockback_flags), (0.0, 0));
         assert!(ps.velocity.x < 80.0, "friction is back, {}", ps.velocity.x);
+    }
+
+    /// Slick ground takes the ground friction away, walks at an accel of 1
+    /// where standing on dirt takes 9, and adds the gravity the clip folds
+    /// back into speed, so a slide keeps going where dirt stops it.
+    #[test]
+    fn slick_ground_has_no_friction_and_an_accel_of_one() {
+        let floor = |flags| {
+            crate::collision::synthetic_world(
+                &[(
+                    "textures/test/floor",
+                    crate::collision::CONTENTS_SOLID,
+                    flags,
+                )],
+                &[(0, [-2048.0, -2048.0, -16.0], [2048.0, 2048.0, 0.0])],
+            )
+        };
+        let (ice, dirt) = (floor(crate::collision::SURF_SLICK), floor(0));
+        let (ice, dirt) = (MoveWorld::bare(&ice), MoveWorld::bare(&dirt));
+        let mut on_ice = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.1), 0.0);
+        pmove(&mut on_ice, &PmInput::default(), &ice, 0.008, &[]);
+        assert!(on_slick(&on_ice));
+        let mut on_dirt = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.1), 0.0);
+        pmove(&mut on_dirt, &PmInput::default(), &dirt, 0.008, &[]);
+        assert!(!on_slick(&on_dirt));
+
+        let (mut slide_ice, mut slide_dirt) = (on_ice, on_dirt);
+        slide_ice.velocity = Vec3::new(80.0, 0.0, 0.0);
+        slide_dirt.velocity = slide_ice.velocity;
+        for _ in 0..6 {
+            pmove(&mut slide_ice, &PmInput::default(), &ice, 0.008, &[]);
+            pmove(&mut slide_dirt, &PmInput::default(), &dirt, 0.008, &[]);
+        }
+        assert!(slide_ice.velocity.x >= 80.0, "{}", slide_ice.velocity.x);
+        assert!(slide_dirt.velocity.x < 70.0, "{}", slide_dirt.velocity.x);
+        assert!(slide_ice.on_ground);
+
+        let run = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        let (mut run_ice, mut run_dirt) = (on_ice, on_dirt);
+        pmove(&mut run_ice, &run, &ice, 0.016, &[]);
+        pmove(&mut run_dirt, &run, &dirt, 0.016, &[]);
+        // Ice: the accel's 1 * 0.016 * 190 = 3.04 plus the gravity's 12.8
+        // down, which the clip's rescale turns into |(3.04, 12.8)| = 13.16
+        // of ground speed. An accel of 9 would read 30, no gravity 3.
+        assert_eq!(run_ice.velocity, Vec3::new(13.0, 0.0, 0.0));
+        // Dirt: 9 * 0.016 * 190 = 27.36.
+        assert_eq!(run_dirt.velocity, Vec3::new(27.0, 0.0, 0.0));
     }
 
     /// `PM_DropTimers` zeroes the timer once the frame's ms reach it, and
