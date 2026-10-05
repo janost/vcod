@@ -568,7 +568,9 @@ one, is taken and nothing drops.
 VERIFIED: the launch velocity is `forward(yaw) * 150` (0x74d4c) with
 `z = 200 + crandom() * 50` (0x74d58, 0x74d54); the origin is `currentOrigin`
 with z raised by half the entity's height (0x74d5c = 0.5); the call is
-`LaunchItem(item, origin, velocity, ent->s.number)` (0x4deb4).
+`LaunchItem(item, origin, velocity, ent->s.number)` (0x4deb4). On a death
+that `currentOrigin` is snapped or not depending on where the death ran:
+`cod11-combat.md` 5.5.
 
 VERIFIED, the player's ammo (0x4dec1..0x4df18): `ps.ammo[a]` is read into the
 item's reserve and stored 0 (0x4ded7, 0x4deda), `ps.ammoclip[c]` is read into

@@ -7,7 +7,7 @@ use crate::game::host::{GameHost, SimOp};
 use crate::game::script::CALLBACK_SETUP;
 use crate::game::temp_entity::{Scope, TempEntity};
 use glam::Vec3;
-use vcod_common::net::protocol::{ENTITYNUM_WORLD, PROTOCOL_V1};
+use vcod_common::net::protocol::ENTITYNUM_WORLD;
 use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
@@ -184,18 +184,23 @@ const DEATH_DROP_SPEED: f32 = 160.0;
 /// constant puts x and y in (-480, -160] and z in (-160, 0]; the skew is
 /// retail's and is not a random direction.
 ///
-/// The origin is the state the tick's moves left, the same one the corpse is
-/// cloned from, and the fuse the mirror `Server::replay_moves` wrote with it.
+/// The origin is the player's `origin` field, `r.currentOrigin`: snapped
+/// inside the dying player's own cmd, the unsnapped `ps.origin` everywhere
+/// else (5.5). The fuse is the one `Server::replay_moves` mirrored.
 fn drop_cooking_grenade(host: &mut GameHost, cx: &mut Cx, slot: usize) {
     let fuse = host.client_grenade_ms.get(slot).copied().unwrap_or(0);
     if fuse == 0 {
         return;
     }
     host.client_grenade_ms[slot] = 0;
-    let Some(state) = host.client_entity_states[slot].as_ref() else {
+    let Some(player) = host.ents.handle(slot as u32) else {
         return;
     };
-    let origin = Vec3::from(state.origin(&PROTOCOL_V1)) + Vec3::Z * DEATH_DROP_LIFT;
+    let field = cx.intern_folded("origin");
+    let Value::Vector(at) = host.get_field(cx, player, field) else {
+        return;
+    };
+    let origin = Vec3::from(at) + Vec3::Z * DEATH_DROP_LIFT;
     // `self->s.weapon`: the grenade still in hand, since the drop runs ahead
     // of everything the death callback takes away.
     let weapon = host.client_weapons[slot].current;
