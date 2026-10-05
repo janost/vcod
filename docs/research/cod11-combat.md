@@ -3895,6 +3895,26 @@ death-drop capture pins it twice over, `trTime` 1405500 against a death frame
 at `serverTime` 1405550. vcod stamps both the thrown and the dropped grenade
 that way.
 
+VERIFIED, off the same capture's `!trace` lines: from the first snapshot
+whose `grenadeTimeLeft` reads the pullback to the first that carries the
+missile is 1000 ms on `cook_release`, 5000 on `pin_out` and 600 on
+`throw_down`. VERIFIED, `missile_ab.rs`: the replay reads the same three.
+Measured from each step's first snapshot instead, `pin_out` reads 50 ms
+longer on ours, which is the capture's step clock and not the throw.
+VERIFIED: `pin_out`'s first trace (`serverTime` 226200) already reads
+`grenadeTimeLeft` 4000 and `weaponDelay` 600, where `cook_release` and
+`throw_down` open on a `weaponstate` 0 sample from before their first pressed
+cmd; the replay opens every step on such a sample. VERIFIED:
+`cook_release`'s last trace is `serverTime` 226150 at `weaponstate` 0, so no
+snapshot is missing between the two steps. INFERRED, off `CombatProbe::step`
+in `crates/client/src/probe.rs`: a step's clock starts on the probe's first
+iteration after the step before it ended, and a snapshot already traced is
+not traced again, so a step's first trace is whichever snapshot arrives next,
+before or after its first cmd reached the server. `missile_ab.rs` therefore
+times both flights from the pullback frame, and `playerstate_combat_ab.rs`
+drops our opening sample for a step whose first retail trace is a cmd or more
+in, for the same reason.
+
 VERIFIED, off the same capture's `!missile` lines: a bounce's `trTime` is a
 whole millisecond, so vcod truncates the impact time rather than carrying the
 trace fraction into it, and the fraction it snaps the origin back with is the
