@@ -1,1169 +1,334 @@
 # vcod agent notes
 
-Rust map viewer, spectator client and dedicated server for Call of Duty 1
-(2003), patch 1.1. Usage, controls and known limitations are in README.md; this
-file holds what the code and configs do not confess: where the evidence lives,
-how to verify visually, how to debug the netcode, and how the reverse
-engineering setup works.
+Rust map viewer, client and dedicated server for Call of Duty 1 (2003), patch
+1.1. README.md says what it does and doesn't do; update its feature and
+limitation lists when a change moves either. This file holds what the code and
+configs don't tell you: where the evidence lives, how to measure against
+retail, and the gotchas already paid for.
 
-## Layout and where facts live
+## Layout
 
-- Cargo workspace. `crates/common` (`vcod-common`): formats (`bsp.rs`, `xmodel.rs`,
-  `xanim.rs`, `animtree.rs`, `pk3.rs`, `assets.rs`), `collision.rs`, `props.rs`, `pmove.rs`,
-  `weapon.rs`, `skeleton.rs`, `game_dir.rs`, `testing.rs` and `net/` (the CoD
-  1.1 protocol,
-  both directions). `crates/client` (`vcod`): window, renderer, entities, hud,
-  fx, audio, `probe.rs`. `crates/server` (`vcod-server`): the dedicated server.
-  `crates/gsc` (`vcod-gsc`): a virtual machine for CoD's script language
-  (`.gsc`) — lexer, parser, bytecode compiler, instruction loop, thread
-  scheduler and cross-file loader. At map load the dedicated server loads the
-  gametype and map scripts and runs Activision's stock bootstrap to
-  completion, which is what fills the configstring table; the rest of the
-  shipped gameplay scripts wait on clients existing and on the builtins those
-  paths call. `vcod-gsc` must not depend on
-  `vcod-common` either, same rule as `common` itself: `cargo tree -p vcod-gsc
-  -e normal` shows only `anyhow` and `log`. Nothing in `common` may import
-  wgpu, winit or kira; `cargo tree -p vcod-common -i wgpu` proves it. `cargo
-  build -p vcod` / `-p vcod-server` build one; plain `cargo build` both.
-- `docs/protocol-1.1.md` is the wire-protocol reference. `docs/research/*.md`
-  hold verified format and engine facts with binary addresses as evidence. Read
-  the research doc before touching the subsystem it covers; extend it when you
-  learn something new instead of leaving the fact in a commit message.
-- `private/`, `docs/design/`, `docs/superpowers/` and `tmp/` are gitignored.
-  `docs/design/` holds the per-project design documents, `docs/superpowers/`
-  the specs and implementation plans. `private/` is for material that must
-  not ship: the GPL sources read as lineage (Quake III Arena, RTCW-MP, ioq3,
-  CoDExtended), the retail 1.1d Linux dedicated server and its homepath,
-  Ghidra decompilations, and old task plans. `tmp/` is scratch: probe captures
-  land there. `private/`, `docs/design/` and `docs/superpowers/` exist only on my machine, so a
-  public clone does not have them.
-- Feature work happens on a branch in a worktree; master is merge-only.
-  Conventional commit prefixes (`feat:`, `fix:`, `docs:`, `test:`, `perf:`,
-  `style:`, `chore:`).
+- Four crates. `crates/common` (`vcod-common`): formats, collision, pmove,
+  weapons, animscript, `net/` (the 1.1 protocol, both directions).
+  `crates/client` (`vcod`): window, renderer, HUD, fx, audio, prediction,
+  `probe.rs`. `crates/server` (`vcod-server`). `crates/gsc` (`vcod-gsc`): the
+  `.gsc` VM, which runs Activision's stock gametype and map scripts.
+- Dependency rules: `common` imports no wgpu, winit or kira
+  (`cargo tree -p vcod-common -i wgpu` is empty); `gsc` depends on neither
+  `common` nor the client (`cargo tree -p vcod-gsc -e normal` shows only
+  `anyhow` and `log`).
+- `docs/protocol-1.1.md` is the wire reference; its last section lists every
+  divergence from RTCW/Q3, so check it before assuming Q3 semantics.
+  `docs/research/*.md` hold verified engine facts with binary addresses. Read
+  the research doc before touching its subsystem, and extend it with what you
+  learn instead of leaving the fact in a commit message.
+- Gitignored and local to one machine: `private/` (GPL lineage sources, the
+  retail 1.1d Linux server, Ghidra output, old plans), `docs/design/`,
+  `docs/superpowers/`, `tmp/` (scratch; probe captures land there).
+- Feature work happens on a branch in a worktree. Master is merge-only: `git
+  fetch`, merge `origin/master` into the branch, then `git merge --no-ff` with
+  `merge <branch>: <summary>`. Other sessions push to master too.
+  Conventional prefixes (`feat:`, `fix:`, `docs:`, `test:`, `perf:`,
+  `refactor:`, `style:`, `chore:`).
 
 ## Game data
 
-- Both binaries expect to sit inside the CoD 1.1 install, next to `CoDMP.exe`,
-  and read the paks from `main/` (or `uo/` with `--mod-dir uo`). `COD_DIR`
-  overrides the install directory, `--game-dir` overrides both
-  (`crates/common/src/game_dir.rs`).
-- Game assets in `pak0-4` are identical between 1.1 and 1.5, so a 1.5 install
-  serves as asset source. The 1.1 binaries are what the netcode and the
-  reverse-engineering notes are about.
+- Both binaries expect to sit next to `CoDMP.exe` and read `main/` (`uo/` with
+  `--mod-dir uo`). `COD_DIR` overrides the install, `--game-dir` overrides
+  both (`crates/common/src/game_dir.rs`).
+- `pak0-4` are identical between 1.1 and 1.5, so a 1.5 install works as the
+  asset source. The netcode and RE notes are about the 1.1 binaries.
 
 ## Build, test, lint
 
-- `cargo build`, `cargo test`, `cargo fmt`, `cargo clippy` clean before a commit.
-- Tests that need game data go through `vcod_common::testing::game_fs()`, which
-  reads `COD_DIR` and returns `None` when `$COD_DIR/main` is missing, so a green
-  run on a machine without the game proves nothing about parsers. Set `COD_DIR`
-  when running the suite. Net parser tests read the committed captures in
-  `crates/common/tests/fixtures/net/` and run anywhere.
-- CI is two workflows in `.github/workflows/`. `ci.yml` runs fmt, clippy
-  (`-D warnings`) and the suite on every PR and master push, on ubuntu with
-  no `COD_DIR`, so anything that hard-requires game data breaks it; a test
-  that needs the paks goes through `game_fs()` and returns early, or uses
-  `Pk3Fs::empty()`. `nightly.yml` builds release binaries for linux amd64,
-  windows amd64 and macos arm64 and replaces the rolling `nightly` release
-  with them. It skips master pushes that only touch docs or `tools/`
-  (`paths-ignore`); `workflow_dispatch` forces a build when you want one
-  anyway.
-- The all-maps material and parser census tests scope to stock `pak[0-9].pk3`
-  because live-server map downloads drop third-party `zzz_*.pk3` files into
-  `main/`; a failing census on a custom pak is not a regression.
+- `cargo fmt`, `cargo clippy -D warnings` and `cargo test` clean before a
+  commit. Set `COD_DIR` for the suite: tests that need paks go through
+  `vcod_common::testing::game_fs()` and pass vacuously without it.
+- `ci.yml` runs on ubuntu with no game data, so a new test needing paks returns
+  early through `game_fs()` or uses `Pk3Fs::empty()`. `nightly.yml` rebuilds
+  the rolling `nightly` release on master pushes that touch code;
+  `workflow_dispatch` forces one.
+- The all-maps census tests scope to stock `pak[0-9].pk3`. Map downloads drop
+  third-party `zzz_*.pk3` into `main/`, and a census failure on one of those
+  is not a regression.
 
 ## Code comments
 
-- A comment earns its place only where the code alone does not explain
-  itself: a non-obvious invariant, a unit or sign convention, a workaround
-  and what it works around. Code that reads plainly gets none.
-- Keep each one as short as it can be, typically one line.
-- Facts that live in `docs/research/*.md`, `docs/protocol-1.1.md` or another
-  doc stay there; the comment, if any, is the pointer, not a copy.
+- A comment earns its place where the code doesn't explain itself: a
+  non-obvious invariant, a unit or sign convention, a workaround and what it
+  works around. Usually one line.
+- Facts that live in a doc stay there; the comment is the pointer.
 
-## Running and visual verification
+## Running and visual checks
 
-- `RUST_LOG` drives env_logger (default `info`). wgpu picks the backend;
-  `WGPU_BACKEND=vulkan|gl|dx12|metal` narrows it.
-- `--debug-overlay` or F3 at runtime: frame time, worst frame, draw stats, net
-  interp misses and anim restarts per second, `ev seen/unk` and the `audio`
-  line (format under Gotchas).
-- F4 cycles culling `on -> locked -> off`. `locked` freezes the visible set
-  so you can fly out and see what the camera was drawing; `off` is the
-  unculled A/B. The F3 `vis` line reads `vis: <mode> cells n/m soups a/b
-  tris c/d props p/q occ o h  X.XXms`, where `occ o` counts occluder volumes
-  built for the visited cells and `h` the portals they hid (On mode only).
-- A handful of `vkAcquireNextImageKHR` fence validation errors per run are
-  pre-existing noise on the Vulkan backend.
-- Screenshots: capture the active window only; whichever tool the desktop
-  offers. Key injection for F3 and the like needs a tool that works under the
-  session's display server.
-- To reproduce a spot from a screenshot in fly mode, a temporary `VCOD_POS="x y z yaw"`
-  override in `main.rs` spawn is the fastest path; remove it before committing.
-- Pixel-level checks (aim sign, lean direction, prop shading) are for the human
-  to eyeball; flag them as pending rather than declaring them verified from
-  code reading.
+- `RUST_LOG` drives env_logger (default `info`); `WGPU_BACKEND` narrows the
+  backend.
+- F3 (`--debug-overlay`) shows frame, draw, net, vis and audio counters. The
+  `audio` line reads `v N plays N miss N cull N drop N steal N N.NNms`: live
+  voices, cues started, aliases not found, cues past `dist_max`, cues refused
+  by a full pool, voices stolen. The `vis` line reads `vis: <mode> cells n/m
+  soups a/b tris c/d props p/q occ o h X.XXms` (occluders built, portals they
+  hid).
+- F4 cycles culling `on -> locked -> off`; `locked` freezes the visible set so
+  you can fly out and inspect it.
+- Pre-existing noise: a few `vkAcquireNextImageKHR` fence validation errors
+  per run on Vulkan, and 360-415 unique ShaderLib warnings per map load
+  (tokens vcod skips by design).
+- To reproduce a screenshot spot in fly mode, add a temporary
+  `VCOD_POS="x y z yaw"` override to the spawn in `main.rs` and remove it
+  before committing.
+- Pixel and by-ear checks (aim sign, lean direction, shading, sound) belong to
+  the human. Report them as pending.
 
-## Netcode debugging
+## Measuring against retail
 
-- `--net-probe <ip:port>` (`crates/client/src/probe.rs`) is the headless
-  client: connects, prints a one-line snapshot summary each second (serverId,
-  delta base, ps.origin, entity count), nudges forward for 2 s every 30 s so
-  the log shows whether the server still applies moves, dumps captures to
-  `tmp/`, exits on drop. It also prints the model list at gamestate and flags
-  per second any player/corpse whose body is not a `playerbody_*`, any client
-  body `modelindex` change, each corpse's appear/vanish with its lifetime and
-  the dead client's `modelindex`, and any moving map prop, so a "wrong model"
-  report can be chased without the GUI. For audio it prints the ambient configstring
-  3, the `CS_SOUNDS` (524+) alias block at gamestate and every later update
-  inside it, each `EV_SOUND_ALIAS` with its resolved alias name and origin,
-  every `loopSound` transition, and every server command the client does not
-  consume (`s <idx>` carries the announcer alias). It also resolves every
-  drained event into sound cues against the map's alias table and prints
-  `audio: <n> cues, <n> alias misses` per second; weapon-file cues (fire,
-  reload) are not resolved headlessly, since the probe loads no weapon files.
-  At debug level it also dumps every non-empty configstring as `cs[i] = …`,
-  which is how the retail configstring tables in the research docs were taken.
-  `--probe-pvs` joins the same way and walks a route, printing the entity list
-  at each station and every entity that appeared or vanished in between with
-  the position it happened at; that is what established that the entity list
-  is position-dependent (`docs/protocol-1.1.md`, "Which entities a client is
-  sent"). Two probes on one server see each other's entities, so a
-  two-client entity question does not need two retail clients.
-  `--save-combat` joins the same way and runs a scripted weapon sequence
-  (single shot, sustained fire, reload, fire crouched, fire prone), writing
-  `crates/server/tests/fixtures/playerstate/<map>-<gametype>-combat.txt`. The
-  fire bit is tapped, not held: the stock `m1carbine_mp` is semi-automatic and
-  a held bit fires one shot and then nothing. A shot is a transient the event
-  ring overwrites within four slots, so that fixture carries a `!trace` line
-  per snapshot instead of a settled sample. It is also the one mode with the
-  stall response on -- a walk that stops against geometry turns 45 degrees and
-  tries again -- since every other scripted mode holds an exact input and must
-  not wander. What the two committed captures measured is in
-  `docs/research/player-model-anim-system.md`, "The weapon channel: what writes
-  `torsoAnim`"; run it on two maps, because the map picks the weapon and the
-  bolt-action mosin on mp_pavlov is what exposed the rechamber the carbine
-  never reaches.
-  `--save-ads` is the same machine on a sight script: sight held, released,
-  held through a reload (after a shot, since a full clip refuses one), held
-  through a shot and while walking, plus a hip shot and a walk for the
-  spread counter; it writes `<map>-<gametype>-ads.txt` with `fWeaponPosFrac`
-  and `aimSpreadScale` on every `!trace` line, and the same gate replays it.
-  It is the capture that found the usercmd delta base (Gotchas).
-  `--save-grenade` is the same machine on a grenade script: one melee swing
-  with the rifle the join chose, a switch to the frag, a cooked throw, a cook
-  held past the pin, a cook cancelled by switching back mid-hold, and a throw
-  aimed at the ground. It writes `<map>-<gametype>-grenade.txt` with
-  `grenadeTimeLeft` and `weaponDelay` on every `!trace` line and a `!missile`
-  line after each trace that had a grenade on the wire. Two step shapes are
-  new and both are on the `!input` line so a gate replays them: a held input
-  rather than a tapped one (`press_buttons`, `press_ms`), since a grenade is
-  cooked by holding the trigger and thrown by the release, and a weapon
-  switch (`switch_weapon`, `switch_ms`). The switch is not one cmd: retail's
-  pickup half reads `cmd.weapon` again on the frame the putaway ends
-  (`docs/research/cod11-combat.md`, 1.8), so a byte reverted before then
-  leaves the old weapon in hand, and the probe holds the index on every cmd
-  until `ps.weapon` carries it. A first retail capture measured the one-cmd
-  version doing nothing: the frag never arrived and the cook fired the rifle.
-  The `!missile` line records every entity that
-  reads `eType` 4 or read it earlier in the run and has not left the wire yet:
-  the explode flips the missile's own `eType` to 0 and adds its event there,
-  so an `eType`-4 filter drops the explode frame
-  (`docs/research/cod11-combat.md`, section 13). The header's `# grenade` line
-  carries the frag's configstring 7 index and the origin and view the script
-  started from, which is the spot a replay has to throw from.
-  Every capture cmd carries the weapon the playerstate says the client holds.
-  A cmd with `weapon` 0 is not neutral: retail reads a `cmd.weapon` differing
-  from `ps.weapon` as a request to holster, and the byte travels only in the
-  full usercmd branch, which a `wbuttons`, `upmove` or `weapon` change forces.
-  Captures taken before 2026-09-02 therefore carry a putaway at the reload
-  key, at a stance change and at a jump that no input asked for, and their
-  reload key never reloaded, which two research docs wrote up as retail
-  behaviour. A new probe mode must set the byte.
-  `--probe-target` and `--save-hit` are the two halves of the hit capture, one
-  probe each, writing
-  `crates/server/tests/fixtures/playerstate/<map>-<gametype>-hit-target.txt`
-  and `-hit-shooter.txt`. The target stands still, sends the `kill` client
-  command every 45 s and presses use 3 s after each death, which is what puts a
-  death, a corpse, an obituary and a respawn in the capture without needing the
-  shooter to land a shot; the shooter walks toward it and fires once it has a
-  clear eye-to-eye trace through the map's collision. Start the target first
-  and give it a longer `--probe-secs` than the shooter. Under `dm` the shooter
-  never gets a shot at a player: the deathmatch spawn picker puts a respawning
-  client at the point farthest from the other one, and the walk does not cross
-  a town in the 150 s it is given, so the committed `dm` shooter fixture opens
-  with `# BROKEN no line of sight after 150 s` and holds the death half only.
-  The hits come from `tdm` with friendly fire on
-  (`tools/run_server.sh mp_carentan +set g_gametype tdm +set scr_friendlyfire 1`,
-  both probes `--probe-team allies`): team deathmatch spawns a player next to
-  its team, so the two start a few hundred units apart, and `scr_friendlyfire 1`
-  is what lets a teammate's bullet do full damage. Anything after the map name
-  is passed to the engine verbatim, which takes its `+set` arguments in any
-  order. Each fixture is named for the gametype it was taken under, and both
-  pairs are committed. What they measured is in
-  `docs/research/cod11-combat.md`, section 8.
-  Both modes point at any server, ours included, and both write into the same
-  committed fixture names, so a run against `vcod-server` overwrites the
-  retail evidence: move the two files out to `tmp/` afterwards and
-  `git checkout` the directory. What such a run measured about vcod is in
-  `cod11-combat.md` section 9. The death half needs only `--probe-target`,
-  since the target's own `kill` command does the killing; the hit half needs a
-  map small enough for the walk to cross, which mp_carentan is not in `dm`,
-  for ours and for retail alike.
-  `--probe-sweep` turns `--save-hit` into a measurement instead of a capture:
-  the shooter taps once per entry of a static table of pitch offsets around
-  the aim at the target's eye, echoes the offset as `pitchOffset` on each
-  `!trace` line, and writes no fixture, so a sweep cannot clobber the
-  committed evidence. Pair those lines with the `sHitLoc` the server's own
-  `games_mp.log` `D;` records carry and every vertical hit-location boundary
-  falls out of the two; run it against retail and against ours and the
-  answers are directly comparable. An offset is spent only on a tap that had
-  a live target to hit, so give both probes a long `--probe-secs`. The sweep
-  walks to within 120 units before its first tap (`SWEEP_RANGE`), because at
-  350 the hip cone blurs a tap over nine units and labels nothing; the
-  target probe still writes its own fixture, so `git checkout` the fixture
-  directory after a run against ours. `tools/pair_sweep.py` pairs the two
-  probe logs with the server's `D;`/`K;` lines and prints the height each
-  hit crossed the victim at; both runs and what they settled are in
-  `docs/research/cod11-combat.md`, section 3.4.
-  `--probe-sway` is the sight-sway measurement: the combat machine on a
-  script of eight scoped shots standing still, the view turned down the
-  longest clear sightline from the spawn, printing every bullet-impact temp
-  entity's origin beside the eye and view it left from. With
-  `--probe-weapon kar98k_sniper_mp` (`--probe-team axis` on carentan) the
-  shot has no spread, so the angle between the raw view and the eye-to-impact
-  ray is the sway retail put on it, and `docs/research/cod11-combat.md`
-  section 15 is what the same run against retail and against ours read.
-  It writes no fixture.
-  `--probe-melee`, `--probe-grenade` and `--probe-grenade-death` swap the hit
-  pair's bullet script for another one. Melee walks to within `MELEE_RANGE`
-  (40 units; retail's swing reaches 64) and taps the melee bit through the
-  same three firing phases. Grenade walks to within `GRENADE_RANGE` (300),
-  switches to the frag, holds the trigger a second, releases at the target's
-  feet, watches the missile out for 8 s and then throws a second one, barely
-  cooked, at the ground beside it. `--probe-grenade-death` is that with a
-  `kill` sent 500 ms into the cook, which is what puts the grenade a death
-  drops on the wire. Each names both halves after itself --
-  `<map>-<gametype>-melee-shooter.txt`, `-grenade-target.txt` and so on -- so
-  the flag goes to the `--probe-target` half too, or that half writes over the
-  committed bullet capture. The shooter's fixture gains `grenadeTimeLeft` and
-  `weaponDelay` on every trace, the same `!missile` lines the lone capture
-  carries, and an `!event` line per pullback, melee swipe, hit, miss, bounce
-  and explode with the entity that carried it, which is what says whether
-  retail put one on a temp entity or on the missile's own ring. All seven of
-  these fixtures are committed retail evidence and a run against ours
-  overwrites them: move them to `tmp/` and `git checkout` the directory after.
-  `--save-mapchange` and `--save-roundrestart` are the map-cycle captures.
-  They record the wire rather than one playerstate: every gamestate with its
-  `serverId`, every serverCommand with its reliable sequence, every
-  out-of-band packet and one `!trace` per snapshot whose watched fields
-  moved, all interleaved by `ms` into
-  `crates/server/tests/fixtures/netchan/<map>-<gametype>-<role>.txt`, named
-  for the map the run started on. `--save-mapchange` stands still through a
-  map end and the rotation that follows; `--save-roundrestart` is a pair,
-  the `--probe-target` half killing itself 20 s in to end the round and the
-  other half walking up and only watching. The recipe and the cvars each
-  needs are in its own fixture's header. Retail never pushes the `b`
-  scoreboard, it only answers `score`, so `--save-mapchange` asks every 2 s
-  and every `b` in that fixture is an answer; the round-restart shooter asks
-  for none and its fixture carries none. Both are retail evidence and a run
-  against ours overwrites them: move the files to `tmp/` and `git checkout`
-  the directory after.
-  A probe that crosses a gamestate or a map restart has to re-answer the
-  stock menus: retail reruns `ClientConnect` on both and reopens the team
-  menu under the indices the last one used, so `JoinProbe` clears them on
-  every gamestate past the first and on every `n`. Without that the probe
-  sits on the menu for the whole rest of the run. The dm capture shows the
-  restart case; sd, whose `pers[]` survives, reopens no menu and the clear
-  is inert there.
-  `--probe-slope` walks the `--probe-pvs` route with the sight held and
-  counts, per second and for the run, the snapshots off the ground, the
-  sight-ramp reversals, the `EV_STEP_VIEW` (143) events with their parms and
-  the mean speed; it writes no fixture, and the same run against retail and
-  against ours is the comparison. `--probe-cmd-ms N` sets the interval the
-  probe sends usercmds at (default 16; a 125 fps retail client sends every
-  8 ms), for every mode. Retail's deathmatch spawn for a lone client is
-  random and often indoors, so a run that covers ground takes a few tries;
-  read `moved` off the per-second summary before trusting a total.
-  `--save-slope` is that walk written down: every usercmd as it went on the
-  wire and every snapshot's origin, velocity, ground entity, view angles and
-  sight fraction, interleaved, to
-  `crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt`
-  (`--capture-tag` for a second run). `playerstate_slope_ab.rs` replays the
-  cmds on our mover twice, once free-running from the first snapshot and
-  once rebased on retail's state at every snapshot, and diffs the origin at
-  each snapshot's `commandTime`; `SLOPE_REPORT=1` prints every row and the
-  worst spots with the normal under them, `SLOPE_FIXTURE=<path>` with the
-  ignored test replays a run kept in `tmp/`, and `SLOPE_TRACE=<ct>` prints
-  ours cmd by cmd into that clock. The rebased error is what a retail client
-  predicting on our snapshots sees as a correction, so it is the number a
-  view twitch report turns into. Both committed fixtures are retail
-  evidence and a run against ours overwrites them.
-  `--probe-prone <uphill yaw>` swaps the walk for a prone crawl and a set of
-  prone presses on a moving player (the dive), from where
-  `client-probes/probe_prone` under `tools/run_probe.sh` puts the player
-  (`+set probe_teleport 1 +set probe_spot street|mound`, yaw 90 and 270),
-  and `--capture-tag prone-<spot>` names the fixture; each snapshot line then
-  carries the stance and prone fields as well. The same gate replays both
-  committed crawls and also holds the prone view to retail's: the body's
-  yaw, both prone pitches, the view angles and the `delta_angles` the caps
-  push (`docs/research/cod11-mantle.md`, "Prone").
-  `--probe-triggers` is the touch pass's walk: it joins, reads the map's
-  trigger brushes out of the BSP entity and model lumps, and walks at them one
-  at a time, nearest unvisited first, steering round buildings with a
-  look-ahead box trace against the map's own collision. It presses use after
-  every death so a minefield does not end the run, and kills itself when it
-  wedges somewhere the steer cannot get it out of. A blind route does not
-  work: a wander on mp_pavlov crossed one trigger in 190 s. The client writes
-  no fixture at all -- the evidence is the *server's* `games_mp.log`, logged by
-  `crates/gsc/tests/fixtures/semantics/client-probes/probe_trigger.gsc`, which
-  runs as the gametype and threads a `waittill("trigger", other)` onto every
-  trigger entity the map spawned. `tools/run_probe.sh client-probes/probe_trigger
-  mp_pavlov` in one shell and the client in another; what it printed goes to
-  `crates/server/tests/fixtures/triggers/<map>-<gametype>-triggers.txt`, which
-  `crates/server/tests/triggers_ab.rs` replays against ours by running the
-  same probe script as our gametype and standing a client at every origin
-  retail recorded a fire from. The walk is not the measurement and does not
-  have to reproduce: only the origins and the trigger entity numbers do. What
-  the committed mp_pavlov capture does not cover is the hurt half: the map's
-  one `trigger_hurt` is the kill volume under the floor, a walking player
-  never reaches it, and every fire line in that fixture is a
-  `trigger_multiple`.
-  `--probe-plant` and `--probe-defuse` are the S&D pair, one probe each, and
-  they need a third shell: `client-probes/probe_lookat.gsc` runs as the
-  gametype under `tools/run_probe.sh` so the server's own `games_mp.log`
-  carries every `trigger_lookat` fire and every frame `isLookingAt` answered
-  true, which is the half no client can see. The attacker joins allies, walks
-  into `bombzone_A` (read out of the BSP by `targetname`), holds use two
-  seconds and releases it -- the abort -- then holds use through a full plant
-  with a forward cmd sent from 2 s to 3.5 s, which is what says whether a
-  linked player still moves. The defender joins axis, waits the plant out on
-  the objective slots, walks to the bomb, sweeps its view across it through 15
-  stations without pressing use (a held use lets `bomb_think` finish the
-  defuse mid-sweep), which is the lookat trigger's shape in degrees, and
-  then aims true and holds use through the defuse. Each `!trace` carries the
-  movement fields, the sweep's offset, block 4 and both HUD arrays (archived
-  then current, `|` between),
-  so the progress bar's tween fields and the plant icon are in the file beside
-  the `pm_type` the link put the player at. Start the gsc probe first, then
-  the defender, then the attacker, and give each a long `--probe-secs`; the
-  recipe is in `probe_lookat`'s README section and in each fixture's header.
-  That recipe passes `+set probe_teleport 1`, which is what puts both probes on
-  a teamdeathmatch spawn in the zone's courtyard: mp_carentan's allied S&D
-  spawns are a town away from `bombzone_A` and a first run spent all 380 s of
-  its walk never arriving, and which then moves the defender to 20 units
-  from the charge once it is down, since the props ringing the zone cost a
-  second run its whole 60 s fuse, and the planter back to its spawn, unlinked
-  first since stock sd.gsc's success branch never unlinks it: the attacker's
-  `pm_type` 1 -> 0 on that frame is the probe's doing.
-  The three fixtures are
-  `crates/server/tests/fixtures/triggers/<map>-sd-lookat.txt` and
-  `crates/server/tests/fixtures/playerstate/<map>-sd-plant-attacker.txt` and
-  `-sd-defuse-defender.txt`, all retail evidence: a run against ours
-  overwrites the two client ones, so move them to `tmp/` and `git checkout`
-  the directory after.
-  `--save-pickup` is the item pickup capture. It joins allies and needs
-  `client-probes/probe_pickup` as the gametype under `tools/run_probe.sh` with
-  `+set probe_teleport 1 +set scr_allow_fg42 1`: mp_carentan's two fg42s are
-  a town apart and the gsc puts the player on each in turn, and stock
-  `default_mp.cfg`'s `scr_allow_fg42 0` would have
-  `_teams::restrictPlacedWeapons` delete both at map load. The first teleport lands before the
-  join settles, so the probe reads "on the first fg42" off its position, not
-  off a jump. It stands on the first, aims at it, takes it with use, takes
-  the second's ammo by touch, then swaps the carbine for a panzerfaust with
-  one tap on the dropped carbine inside the dropper's lockout and one past
-  it. It answers every `a <index>` the way a retail client does, holding the
-  byte until `ps.weapon` reads it. It writes
-  `crates/server/tests/fixtures/items/<map>-dm-pickup.txt`, named `dm`
-  because retail runs the probe as gametype `probe_pickup`; the server
-  half's `PROBE` and `Weapon:` lines are copied into `-pickup-script.txt` by
-  hand. Both are retail evidence, and a run against ours overwrites the
-  client one: move it to `tmp/` and `git checkout` the fixture directory
-  after.
-  `--save-turret` is the mounted MG capture. It joins allies and needs
-  `client-probes/probe_turret` as the gametype under `tools/run_probe.sh`
-  with `+set probe_teleport 1`, plus a second `--probe-team axis` client
-  started before it: the gsc puts the gunner 40 units behind mp_carentan's
-  gun at (1712 1830 8) and the axis client 300 units in front, and the probe
-  waits until it stands within 60 units of the gun. It reads the gun out of
-  the entity lump and its wire number off the snapshot (the `eType` 11
-  nearest the lump origin), then aims at it, taps use to mount, sweeps yaw
-  -90..90 and pitch -60..60 off the gun's yaw two degrees a cmd, turns 60 in
-  one cmd, holds attack a second at the gun's yaw +30 and 10 degrees down
-  (off the target's line, so the target lives and the rounds hit the world)
-  and a second at the axis client, waits for the cooldown alias, taps use to
-  dismount, remounts from a crouch and dismounts, then strafes right until
-  its bearing off the gun's
-  back passes 50 degrees while still inside 100 units, so the last use tap
-  fails the arc test and not the 128-unit use range, and taps use once more,
-  which must not mount. The fire bit is held, not tapped, because the mounted frame
-  reads the held bit (`docs/research/cod11-turrets.md` 6.3). It writes
-  `crates/server/tests/fixtures/turret/<map>-dm-turret.txt`: per phase a
-  `!station`, every `!cmd`, a `!trace` per snapshot with the view lock fields,
-  a `!turret` line whenever the gun's entity changed, every drained event as
-  `!event`, every bullet-impact temp entity as `!impact`, and every server
-  command as `!server`. The gunner's own entity is never in its own snapshot,
-  so the axis probe's log is the only other view of it.
-  `crates/server/tests/turret_ab.rs` replays its cmds on ours and diffs every
-  snapshot (`TURRET_REPORT=1` prints every row); how it pairs the two and
-  what its `GAPS` let through is `docs/research/cod11-turrets.md` 13.1. The
-  fixture is retail evidence and a run against ours overwrites it: move it to
-  `tmp/` and `git checkout` the fixture directory after.
-  `--save-bump` and `--probe-bump-target` are the player-clip pair, one probe
-  each, and they need a third shell: `client-probes/probe_bump` runs as the
-  gametype under `tools/run_probe.sh` with `+set probe_teleport 1`, which puts
-  the axis `--probe-bump-target` client on a flat brush floor on mp_carentan
-  and the allied `--save-bump` walker 200 units behind it, both facing +x.
-  Start the gsc probe first, the target about 12 s later and the walker about
-  10 s after that, with `--probe-secs` 185 on the target and 170 on the
-  walker. Once it sees the walker on
-  its mark the target stands 35 s, crouches 25 s, stands 1.5 s (a prone
-  straight out of a crouch is sometimes refused) and lies prone 25 s; the
-  walker waits for the target's `solid` top byte to read each stance, then
-  walks into it head-on, glances past 20 units off the line and jumps at it
-  from rest 40 units out. It writes
-  `crates/server/tests/fixtures/playerstate/<map>-dm-bump-walker.txt`: every
-  `!cmd`, and a `!snap` per snapshot with the walker's movement fields and the
-  target entity's origin, velocity and `solid`. The overlap capture is the same
-  three shells with `+set probe_overlap 1` on the server, whose gsc
-  `setorigin`s the target onto the walker 12 s and 30 s after both are placed,
-  and `--capture-tag overlap` on the walker, which stands through the first
-  and walks through the second. The spectator-slot capture adds a plain
-  `--net-probe` started before the target, so it holds slot 0 and never
-  joins, and tags the walker `overlap-spectator`. Each run's `PROBE` lines go
-  to `-bump-script.txt`, `-bump-overlap-script.txt` and
-  `-bump-overlap-spectator-script.txt` beside the walker fixtures, with the
-  target's `BUMPT` lines, its own side of each push, appended as comments.
-  `crates/server/tests/bump_ab.rs` replays the walker's cmds on our pmove with
-  the target as a body, free-running per phase and rebased on retail's state
-  at every snapshot; `BUMP_REPORT=1` prints every row, `BUMP_TRACE=<ct>` prints
-  ours cmd by cmd into that clock, and any row it lets through is named in
-  `GAPS`, empty since the jump port. `crates/server/tests/stuck_ab.rs` holds both overlap captures
-  and our server to the same push properties (`STUCK_REPORT=1`). What they
-  measured is `docs/research/cod11-player-clip.md` 9 and 10. All six files are
-  retail evidence: a walker run against ours overwrites the untagged fixture
-  and refuses the tagged ones without `--overwrite-fixture`, so move them to
-  `tmp/` and `git checkout` the fixture directory after.
-  A plain `--net-probe` also prints every change to an entity's `pos`/`apos`
-  trajectory group, which is the mover half of the same arrangement:
-  `client-probes/probe_mover.gsc` under `run_probe.sh` in one shell calls each
-  of the ten scriptent verbs and logs `getorigin()` per frame, a `--net-probe`
-  in the other reads what those verbs put on the wire, and the two committed
-  halves are `crates/server/tests/fixtures/movers/`. What they measured is
-  `docs/research/cod11-movers.md`: seconds, deltas on the axis verbs, a
-  trapezoidal velocity profile with accel and decel in seconds of ramp, and a
-  trajectory the client extrapolates rather than per-frame origins.
-  `--probe-follow` stays a spectator and presses attack, attack, melee, the
-  sight for 2 s and attack, 6 s apart from 8 s after going active, printing
-  every snapshot whose `clientNum`, `pm_type`, `pm_flags`, `eFlags`,
-  `health` or `weapon` moved, and the six after it, with the server time,
-  origin, velocity, view, eye heights and player entities it carried, and
-  every `b` scoreboard it is pushed as a `FOLLOW b` line beside the snapshot
-  of the packet that carried it; it never asks for one.
-  Beside a `--probe-team allies` and a `--probe-target --probe-team axis`
-  started first it is the follow measurement
-  (`docs/research/cod11-spectator-follow.md` section 9, a dm and an sd run);
-  started first itself, with the target second and another follower third,
-  it puts a follower on each side of the target's slot, which is what
-  measured the end-frame slot order (section 5). It writes no fixture, but
-  the target half writes its own: move it to `tmp/` and `git checkout` the
-  fixture directory after.
-  `--probe-killcam` is the killcam's victim: it joins `--probe-team`, stands
-  still, never sends `kill` (a suicide gets no killcam), presses use 20 s
-  after each death so the replay runs out on its own, or
-  `--probe-killcam-skip-ms N` into the replay to skip it, and prints a
-  `KILLCAM` line per snapshot from the death to 3 s after the respawn:
-  `clientNum`, `pm_flags`, `deltaTime`, the player and body entities, the
-  roster and both HUD arrays. A `--save-hit --probe-sweep` shooter on the same
-  team under tdm with `scr_friendlyfire 1` does the killing; against ours,
-  the `probe_passthru` gametype with `probe_teleport=1` and the victim on
-  axis puts the two in each other's sight. It writes no fixture; what it
-  measured is `docs/research/cod11-spectator-follow.md` section 12.
-  `--probe-fall` joins with `--probe-team`, stands still and prints a `FALL`
-  line per snapshot whose ground entity, `pm_flags`, `pm_time`, event ring
-  or health moved, and every airborne one; `client-probes/probe_fall` under
-  `tools/run_probe.sh` drops it from five heights. It writes no fixture;
-  what it measured is `docs/research/cod11-player-clip.md` 8.9.
-  `--probe-team <allies|axis>` picks which team the stock menu is answered
-  with, and on its own makes the probe join and then report the roster
-  (`num:team=N "name"`) once a second, writing no fixture; two probes with
-  it on opposite teams is how `clientState.team`'s four values were measured
-  (`docs/research/clientstate-wire-format.md`).
-  `--probe-secs N` extends the default 65 s; a few minutes spans an SD round
-  restart. Add `--save-fixture` or `--save-snapshots` only when the capture is
-  meant to replace the committed evidence; the flag docs in
-  `crates/client/src/main.rs` say why the two are separate. `--save-snapshots`
-  stops at `SNAP_CAPTURE_TARGET` (24) messages, which is enough to pin the
-  uncompressed connect-time frames but not a single delta. The
-  `gamestate-delta.bin` / `snapshots-delta.bin` pair
-  (`writer_reproduces_the_captured_snapshots_byte_for_byte`, snapshot.rs) came
-  from raising that cap locally and running `--net-probe` with
-  `--save-fixture --save-snapshots` for ~400 messages against
-  `tools/run_server.sh mp_carentan`, as a lone spectator that never joins a
-  team. Each snapshot fixture is a run of `[u32 message_num][u32 len][len
-  bytes]` triples (`SnapshotCapture`, `crates/common/src/net/mod.rs`); each
-  payload is `[u32 reliableAcknowledge][huffman block]`. The gate pins the
-  frame counts exactly (400 steady, 399+ of them deltas), so a refresh has to
-  hit the same count or the assertions need updating alongside it.
-- A map change is a re-sent gamestate on the live netchan; the net client
-  applies it while `Active` and clears its snapshot ring. The client's per-map
-  state lives in `App.world`, the renderer's `WorldGpu` and `Phase::Live`;
-  `loading.rs` is the pure download/load state machine the redraw loop steps.
-- Two local servers, don't confuse them. `tools/run_server.sh [map]` runs the
-  **retail** 1.1d Linux dedicated binary (not in the repo; see the script
-  header for where it goes and what it needs). It is the oracle for every wire
-  question: when ours and retail disagree, retail is right, and the answer
-  goes in a research doc with the bytes. It answers the handshake, the
-  gamestate, and sends snapshots to a lone spectator too, with no need to
-  join a team (`crates/common/tests/fixtures/net/snapshots-delta.bin` is
-  exactly that capture). It is also what retakes the configstring gate's
-  fixtures: `tools/run_server.sh <map>` in one shell, `--net-probe
-  127.0.0.1:28960 --save-configstrings` in another, which writes
-  `crates/server/tests/fixtures/configstrings/<map>-<gametype>.txt` for
-  `crates/server/tests/configstrings_ab.rs`. `cargo run -p vcod-server -- <map>` runs **ours**:
-  the handshake, the gamestate, client commands and moves, and snapshots
-  delta-compressed against the client's acked frame, with pmove-driven
-  spectator flight, `--test-entities` for scripted packet entities,
-  `--gametype-script <file>`, which runs a gametype script from disk and is
-  how a client probe runs against ours, and `--set NAME=VALUE` (retail's
-  `+set`, e.g. `--set scr_friendlyfire=1` for a teammate kill). A snapshot's entity list is the map's own: placed weapons,
-  script models and mounted MGs, culled per client against the BSP's PVS the
-  way retail culls, so what a client is sent depends on where it stands. Other
-  clients are in it too, each animated by the animscript machine
-  (`crates/common/src/animscript.rs`, and
-  `docs/research/player-model-anim-system.md` for what the retail captures
-  measured): stance, direction, strafing, the jump and the landing all pick an
-  index out of `mp/playeranim.script`, and a swing draws among the
-  `meleeattack` clause's lines. What the machine does not cover yet is the two
-  turn movetypes. A shot is a trace against the world
-  and every live player's box, a rifle round goes on through each player it
-  hits at half damage, any round goes on through glass at full damage (a
-  pane passes rounds and never breaks), a hit runs the stock
-  `CodeCallback_PlayerDamage`, and `finishPlayerDamage` is where health,
-  knockback, the pain and death events and `CodeCallback_PlayerKilled`
-  happen (`crates/server/src/game/combat.rs`, `docs/research/cod11-combat.md`).
-  A kill puts a corpse in the eight-slot body queue at entities 64..71, sends
-  the obituary on both wires, scores it, drops the dead player's weapon as an
-  item, and the victim respawns on the use key. A melee swing is the same
-  trace over 64 units, with `MOD_MELEE` damage and its own hit or miss event.
-  A grenade is a real missile entity (`crates/server/src/game/missile.rs`,
-  `docs/research/cod11-combat.md` 11 to 14): the pullback arms it, the release
-  spawns an `eType` 4 that flies on a gravity trajectory, bounces off world
-  and props, comes to rest, and explodes on its own ring at the end of its
-  fuse, with the blast walking live clients through retail's linear falloff
-  and `CanDamage`'s five-trace fraction, whose probes the world, script
-  models and every other live player's posed bones stop. A player killed
-  mid-cook drops the live one. A level ends the way retail's does, in script: `exitLevel` and
-  `map_restart` queue a console line, and the console
-  (`crates/server/src/console.rs`) runs `map`, `map_restart` and `map_rotate`
-  off `sv_mapRotation`, so a `dm` time limit reaches the intermission, the
-  intermission holds every client at `pm_type` 5 for the script's own wait,
-  and the next map's gamestate goes out on the live netchan
-  (`docs/research/cod11-map-cycle.md`). The S&D plant and defuse run end to
-  end (`docs/research/cod11-gsc-object-model.md` 23): an aim trace per client
-  per frame fires the `trigger_lookat` it meets and answers `isLookingAt`,
-  `linkTo` pins a planter at `pm_type` 1 with its origin and velocity held,
-  the objectives travel in playerstate block 4, the progress bar rides the
-  three HUD tweens, and `bulletTrace` clips script models, which is where
-  `getPlant` puts the charge. Items are picked up the way retail's
-  `Touch_Item` does it: walking over a weapon the player carries takes its
-  ammo, the use key's rising edge takes the best-scored grabbable item within
-  128 units of the muzzle (a weapon not carried swaps out the one in its
-  slot, dropped where the item lay), a health pack heals, a drop names its
-  dropper in `clientNum` for 1000 ms, and 32 drops at most stay on the ground
-  (`docs/research/cod11-items.md`); the launch flight, respawn,
-  `CONTENTS_NODROP` and `cg_predictItems`'s event choice are not modelled,
-  and `trigger_use` stays on the touch pass rather than joining the use key's
-  scan. A live body between the eye and a lookat
-  stops the aim trace's second pass the way its posed bones stop a bullet.
-  A spectator follows a client the way retail's does
-  (`crates/server/src/follow.rs`, `docs/research/cod11-spectator-follow.md`):
-  attack cycles forward, melee back, either sight edge lets go behind the
-  followed eye, a script's `spectatorclient` forces it, a dead client is still
-  followed and a spectating or leaving one is not, and the follower is sent
-  the followed client's playerstate with `pm_flags` 0x10000, culled from its
-  eye and scoped by its number. The killcam rides the same follow: while
-  script has `setarchive(true)` on, every frame's playerstates, entities and
-  roster go into a ring of 1200 frames (`crates/server/src/archive.rs`); a
-  forced follow with `archivetime` above 0 copies the followed client as that
-  ring had it that long ago, retried 50 ms younger until a frame answers, with
-  the trim written back into `archivetime`; a client whose `archivetime`
-  names a frame is sent that frame's entities and roster, every time shifted
-  by the age; and the stock script's return to `dead` with the replay still
-  in the playerstate spawns the client where the replay left it
-  (`docs/research/cod11-spectator-follow.md` section 12). Not modelled:
-  `enableLinkTo`, a linked player on a moving
-  parent, and script models in weapon, missile and lookat traces. A mounted MG (`crates/server/src/game/turret.rs`,
-  `docs/research/cod11-turrets.md`) mounts inside the use cmd that presses it,
-  locks the gunner's pmove and view to the gun's arc, and aims, fires and
-  loops its sound in `turret_think_client`'s own pass after `ClientEndFrame`'s
-  aim trace, releasing back to the gunner's own stance on a second use, a
-  kill, or the gun's own deletion. The scriptent mover verbs move things and their trajectories reach the wire
-  (`docs/research/cod11-movers.md`). A probe run against it reproduces the
-  retail `kill` death capture field for field, death and respawn frames
-  included, and a bullet death's frame carries the `EV_RAISE_WEAPON`
-  retail's victim raises in the cmds that arrive behind the shot
-  (`docs/research/cod11-combat.md` sections 9 and 16). What the
-  map-cycle probes measured of it is `docs/research/cod11-map-cycle.md`
-  section 8.
-- The tick, in order: the console drains first (a `map`, `map_restart` or
-  `map_rotate` line an earlier frame's script queued reloads the level before
-  anything else runs), then expired clients, then the bots queue their cmds,
-  then the clock advances, then every packet queued since the last tick in
-  the order the server executed it (`replay_moves`: `handle_packet` numbers
-  each client packet, a bot's cmd is a packet of its own numbered after them,
-  and the replay takes the lowest number across all clients each time, a
-  packet's `kill` ahead of its cmds, retail running a packet's client
-  commands ahead of its usercmds; the `kill` applies the callback's drop and
-  death op to the sim there and then, so the cmds behind it move alive at the
-  `pm_type` the last end frame wrote). Each cmd is one `ClientThink_real`: a
-  spectator's cmd runs `SpectatorThink`'s buttons first, the follow cycle
-  and let-go, and no pmove while its follow is on; otherwise one pmove step
-  per cmd against every other client's capsule, the mover's own entry in
-  that body list rewritten after each of its steps so a later packet moves
-  against an earlier one's new position; then what the move left is mirrored
-  onto the host; then the shots and swings the cmd raised are fired, each
-  traced against every client as its own packets so far left it, each wall
-  impact out and each hit's damage callback run there and then in the order
-  the round met them (its `finishPlayerDamage` raises a bullet weapon's flesh
-  impacts, so they number between the legs' own the way retail's do), and
-  what the callback queued for the victim applied to its sim before any
-  later cmd runs, so a player one round kills is out of every later round's
-  way and its own later cmds still move alive and disarm
-  (`docs/research/cod11-combat.md` 16); a throw spawns its missile there
-  too, off the muzzle that cmd left and stamped with the frame before, so a
-  thrower a later cmd kills has thrown already (11.4); then the touch pass,
-  and whatever it and the item pass queued for the mover (a `trigger_hurt`'s
-  damage or death, a pickup's ammo and event) lands on the sim the same way,
-  before its next cmd, so a later hit finds only its own callback's ops
-  queued for it (`docs/research/cod11-items.md` 13.2). Every death is `GameHost::die`, whichever
-  path ran it, and the moment its `CodeCallback_PlayerKilled` first suspends
-  `player_die`'s walk queues the scoreboard to each spectator following the
-  victim, inside the VM (`Cx::spawn_then`), so the `b` lands behind what the
-  killed callback queued and ahead of anything script queues after it, and
-  rides the death frame's packet; the walk reads a roster `Server` mirrors
-  ahead of every script entry that can kill
-  (`docs/research/cod11-spectator-follow.md` 4). The anim update runs per client off its last
-  cmd, at the end and wherever a kill, a hit, a use press or a
-  `trigger_hurt` death breaks into its cmds; it feeds the wire, while a
-  posed body's bones stay what the last end frame committed (below). The host mirror after each move
-  is its origin, `pm_type`, `on_ground`, view yaw, the `ps.weapon` a move
-  switched to and the `clipOnly` weapon a last round spent, the take
-  included, its entity state, cook, height and ammo and clip arrays
-  (`client_ammo`, which every `GameHost::weapon_op` then moves in place, and
-  ops still queued are re-applied on top), and the touch pass reads it. The
-  origin goes in truncated, the snapped `r.currentOrigin` the cmd's shots, the
-  trigger half and anything they kill read (a `trigger_hurt` death drops from
-  it), while the trigger half itself touches at `ps.origin`, and goes back
-  to `ps.origin` ahead of the item half (`docs/research/cod11-combat.md` 5.5):
-  the item half after the trigger half and the use key after both -- the same use key whose rising
-  edge arms a turret mount there, once the gun's arc allows it -- the way retail updates
-  `r.currentOrigin` and calls `G_TouchTriggers` inside `ClientThink`; a
-  trigger the pass fires is queued, not woken, and its `waittill` threads are
-  notified at this tick's script frame on the frame's clock (the item pass's
-  `touch` and `trigger` notifies too, whose waiters run first, ahead of the
-  frame's thinks and `wait`s, together with any other thread already
-  runnable; where retail drains a trigger's notifies against the `wait`
-  pass is not measured), while a `trigger_hurt` starts the
-  damage callback there and then. The item pass writes weapons and health onto
-  the host at once and queues its ammo as weapon ops and its event as a sim
-  op, both applied to the mover's sim, with its weapons and vitals mirrored,
-  at the end of that cmd's passes; the ammo it reads is the host's
-  mirror, copied from the mover's sim before each cmd's pass and moved by every weapon
-  op after, so a `dropItem` in the script frame sees what the pass took. The
-  entity states `cloneplayer` reads and the posed bodies a scripted blast
-  traces are mirrored again last in that pass. Then each client's last cmd
-  buttons for `useButtonPressed`, then the missiles fly, a throw from this
-  tick's first flight included, and any due fuse explodes, then the
-  blasts become hits, then the `mr` menu responses, which the packet pass
-  only queues because it runs before the clock advances, then `deliver_hits` for the blasts so their damage
-  callback has run before script, then the script frame, then the script's spawns (each with the spawn's own
-  end frame and think: the own view, `PMF_RESPAWNED` and `commandTime` at
-  the frame's clock, and for a player or spectator the think's 100 ms of
-  null-cmd pmove, with a player's anim pick after it; the intermission camera's `commandTime` stays 100 ms
-  behind the spawn's frame), then the switches the weapon
-  machine made (its takes already landed at their cmd's touch, and only
-  there), then the weapon mirrors (held, current, viewmodel, the
-  body a shot is traced against, and the origin back to script), then the
-  weapon ops, then the link ops (`linkTo`, `unlink`), then the re-anchor that
-  pins every linked client to its parent plus the offset and releases a link
-  whose parent is gone, then the sim ops the script left (events, `setOrigin`,
-  `setPlayerAngles`, the damage the callback did), then the vitals mirror (health, and the damage
-  feedback `P_DamageFeedback` computes from the health the hit left), then
-  slot by slot the follow half of `ClientEndFrame` (a playing or dead client
-  takes the own-view bit a follow copies, and is first spawned where a copy
-  still in its playerstate stood; a spectator lands its follow, out of the
-  archive when `archivetime` asks for a replay, or lets go, reading a lower
-  slot's bit from this frame), the contents write, `StuckInClient`'s scan for a live player
-  (the push and its CORPSE mark, which reach the wire `solid` only at the
-  pushed player's next cmd) and `end_frame` (the dead `pm_type` the cmds
-  read is written here, off the death), then `ClientEndFrame`'s aim
-  trace per playing client, off the frame's final eye and aim with `pm_type` and `on_ground` mirrored again
-  beside it and every client's posed body mirrored again ahead of the first, whose fire wakes its waiters at the next tick's script frame,
-  and beside it the cursor hint for the item the use key would pick now,
-  and after it that slot's `commit_pose` (`BG_PlayerAnimation`'s place:
-  models, anim channels, pitch and lean), the pose every later round, blast
-  probe and aim trace meets until the next end frame, at wherever the body's
-  cmds have moved it since (`docs/research/cod11-combat.md` 16.1),
-  then each gunner's `turret_think_client` (the gunner half of a release
-  a deleted gun queued, then aim, fire, loop sound, or the release itself on
-  a use press or a death), whose rounds are traced and their impacts and hits applied in order right there, with the
-  weapons mirrored again and the sim ops, weapon ops and health that callback
-  leaves applied a second time, closing with a second `end_frame` for a
-  victim numbered above its gunner,
-  then the console lines, configstring changes, server commands and
-  intermission scoreboard the script queued go out, and last the entities are
-  built once and culled and written per client, a follower's frame being its
-  target's playerstate, eye and number (a replay's out of the archived
-  frame; a live one below its target's slot takes the fields the target's
-  end frame writes from its last frame, and its event ring without the
-  `EV_PAIN` that end frame added), a spectator whose follow stopped
-  being that last copy under its own fields, and a client whose
-  `archivetime` names an archived frame being sent that frame's entities and
-  roster instead of this one's; after the snapshots each follower's copy and
-  each playing or dead client's own frame are kept for the next frame, and
-  the frame itself is archived, while `setarchive` is on. A dropped
-  client's followers are passed on at the drop, outside the tick. Origin, `pm_type`,
-  `on_ground`, yaw, the ammo arrays, the entity state, the last-round take and
-  the current weapon, but only the one a move switched to, are the mirrors
-  that no longer wait for the post-script pass: the touch pass and the damage
-  callbacks need this cmd's values, not last tick's, so anything reading them on the host between the move pass and
-  the script frame sees the post-move values. The re-anchor writes a linked
-  client's origin again after the script frame, so this tick's touch passes
-  ran at the un-anchored spot. Move anything else across that order and a
-  snapshot reads a frame-old field.
-- `Cx::spawn` is for a builtin that needs script to run before its caller's
-  next instruction: the queued thread starts the moment the builtin returns,
-  which is how `finishPlayerDamage`'s killing hit gets
-  `CodeCallback_PlayerKilled` to have written `self.sessionstate` before the
-  line after it reads the field. `Cx::spawn_then` adds the engine code that
-  follows the `Scr_ExecEntThread`: `Host::spawn_returned` runs with its token
-  once that thread first suspends, which is where `player_die`'s follower
-  walk sits. Only the `Cx` a builtin is handed honours either.
-  A `Cx` from `get_field`, `set_field` or `Vm::with_cx` has no defined point
-  at which a thread could run, so a spawn queued through one of those is
-  dropped and `debug_assert`ed against; test such a builtin through
-  `ScriptRuntime`, never through `with_cx`.
-- `tools/run_probe.sh <probe> [map]` drives the same retail binary as the
-  gsc oracle: it drops one `crates/gsc/tests/fixtures/semantics/probe_*.gsc`
-  in as a gametype script, boots the server, and prints the `PROBE` lines
-  the script logged. Anything after the map goes to the engine verbatim,
-  which is how the three `probe_persist_*` probes get the `sv_mapRotation`
-  they need to have a map to load after ending their own; `PROBE_SECS` is
-  `SECS` under the name those recipes use. A probe name may carry a
-  subdirectory (`client-probes/probe_trigger`); the gametype is installed
-  under the basename, so a probe that needs a connected client is driven by
-  the same script as the rest.
-  `tools/capture_probes.sh` runs every probe that way and
-  writes the combined `retail-captures.txt` the A/B test in
-  `crates/gsc/tests/semantics_ab.rs` compares vcod's VM against. It passes no
-  engine arguments, so those three sections are taken one at a time and
-  pasted in at their sorted position. Both need
-  the same setup `run_server.sh` documents; a full capture takes a couple of
-  minutes because every probe boots the server. Read that directory's
-  `README.md` before writing a new probe: six engine behaviours dictate its
-  shape, and each costs a wasted run to rediscover.
-- Live captures so far came from populated public servers (a TDM server on
-  2026-08-24, an S&D server on 2026-08-25); a 60-100 s capture during a round
-  is enough to see every combat event. The master at
-  `codmaster.activision.com:20510` still answers `getservers 1 full empty`,
-  which is the quick way to find a populated server of the right gametype.
-- Every protocol divergence from RTCW/Q3 is listed in one section at the end of
-  `docs/protocol-1.1.md`. Check it before assuming Q3 semantics for any field.
-- `tools/re/net-notes.md` is the disassembly log for the Linux server binary
-  (`objdump -d`, addresses virtual); `tools/re/dump_field_table.py` prints a
-  netfield table from a VA. Known table addresses are in its docstring.
-  `tools/re/dump_script_fields.py` and `tools/re/dump_builtins.py` dump the
-  gsc script field tables, the `spawns` classnames and the five builtin
-  tables out of `game.mp.i386.so`; the findings and record layouts are in
-  `docs/research/cod11-gsc-object-model.md`. Both resolve `.rel.data`,
-  which is mandatory: a pointer stored in `.data` reads as 0 in the file
-  because the relocation supplies it, and reading the raw dwords makes every
-  function pointer in every one of these tables look null.
+Retail is the oracle. When ours and retail disagree, retail is right, and the
+answer goes into a research doc with the bytes.
 
-## Reverse engineering the client
+### Servers
 
-Binaries from the installs and what each is good for:
+- `tools/run_server.sh [map] [+set ...]` runs the **retail** 1.1d Linux
+  dedicated server (setup in the script header). Anything after the map goes
+  to the engine verbatim.
+- `tools/run_probe.sh <probe> [map]` boots retail with a
+  `crates/gsc/tests/fixtures/semantics/probe_*.gsc` (or
+  `client-probes/probe_*`) installed as the gametype and prints its `PROBE`
+  lines. `tools/capture_probes.sh` reruns every probe into the
+  `retail-captures.txt` that `crates/gsc/tests/semantics_ab.rs` compares the
+  VM against. Read that directory's `README.md` before writing a probe: six
+  engine behaviours dictate a probe's shape.
+- `cargo run -p vcod-server -- <map>` runs **ours**. `--gametype-script
+  <file>` runs a gametype from disk (how a client probe runs against ours),
+  `--set NAME=VALUE` is retail's `+set`, `--bots N [--bots-shoot]` adds
+  clients, `--trace` logs per-snapshot timing.
+- Public servers: `codmaster.activision.com:20510` still answers
+  `getservers 1 full empty`. A 60-100 s spectator capture during a round
+  shows every combat event.
+
+### The probe client
+
+`vcod --net-probe <ip:port>` is a headless client that joins, prints a
+per-second snapshot summary, and dumps captures to `tmp/`. Plain, it also logs
+model lists, configstring and sound alias updates, unconsumed server commands,
+trajectory changes and (at debug level) every configstring.
+
+Each scripted mode (`--save-*`, `--probe-*`) is documented on its flag in
+`crates/client/src/main.rs` (`vcod --help`): what it does, which fixture it
+writes, which gsc probe it pairs with. A multi-shell recipe (gsc probe, target
+client, shooter client, `+set` cvars, start order, `--probe-secs`) is in the
+header of the fixture it produced. Rules that hold for every mode:
+
+- **Committed fixtures are retail evidence.** Most modes write into
+  `crates/server/tests/fixtures/` under a fixed name, so a run against ours
+  overwrites the evidence. After one, move the files to `tmp/` and `git
+  checkout` the directory. `--capture-tag` names a second run; tagged
+  fixtures refuse to overwrite without `--overwrite-fixture`.
+- **Every cmd carries the weapon `ps.weapon` says is held.** Retail reads a
+  `cmd.weapon` that differs from `ps.weapon` as a holster request, and the
+  byte rides only the full usercmd branch (forced by a `wbuttons`, `upmove` or
+  `weapon` change). A switch holds the new index on every cmd until
+  `ps.weapon` reads it, because the pickup half re-reads the byte on the frame
+  the putaway ends. Captures from before 2026-09-02 carry fake putaways at
+  reload, stance changes and jumps.
+- **Fire is tapped, at least `fireTime` apart.** Stock rifles and pistols are
+  semi-automatic; a held bit fires once. A grenade is held to arm and released
+  to throw; a mounted MG reads the held bit.
+- **Re-answer the team menu** after every gamestate past the first and every
+  `n` under `dm`, because retail reruns `ClientConnect` and reopens the menu.
+  `JoinProbe` does this; a new mode should go through it.
+- **Space client commands past 800 ms.** Non-exempt commands (including bare
+  `score`) inside the flood window are silently dropped; `team `, `score `
+  and `mr ` (with the space) are exempt.
+- An event lives four slots in the ring, so a transient needs a `!trace` per
+  snapshot, not a settled sample. Two probes on one server see each other's
+  entities, so a two-client question doesn't need two retail clients. The
+  entity list is position-dependent (`--probe-pvs`).
+- `--save-fixture` / `--save-snapshots` rewrite the parser's byte-exact
+  captures in `crates/common/tests/fixtures/net/`. The `*-delta.bin` pair came
+  from a lone spectator on `run_server.sh mp_carentan` with
+  `SNAP_CAPTURE_TARGET` raised to ~400; the gate pins the frame counts, so a
+  refresh hits the same count or updates the assertions.
+
+### The A/B gates
+
+`crates/server/tests/*_ab.rs` replay a retail fixture's inputs on ours and
+diff the result. Where a gate tolerates rows, it names them in a `GAPS`
+constant with the research section that explains each. Debug env vars
+(`*_REPORT=1`, `*_TRACE=<ct>`, `*_FIXTURE=<path>`) are documented at the top
+of the gate that has them.
+
+## The server tick
+
+`Server::tick` and `replay_moves` (`crates/server/src/server.rs`) follow
+retail's `SV_Frame` / `ClientThink_real` / `ClientEndFrame` order, and the
+comments cite the section that measured each step. In outline:
+
+1. Console lines queued last frame run first (a `map` or `map_restart`
+   reloads before anything else), then timeouts, bots, the clock.
+2. Every packet since the last tick, in arrival order across clients; a
+   packet's client commands before its usercmds. Each cmd is one
+   `ClientThink_real`: pmove against the other capsules, host mirror, the
+   cmd's shots, swings and throws traced and their damage callbacks run right
+   there, then the touch and item passes.
+3. Missiles, blasts, menu responses, `deliver_hits`, the script frame.
+4. Script spawns, weapon / link / sim ops, then per slot the end frame, the
+   aim trace and `commit_pose`, then turrets.
+5. Outgoing commands, snapshots, archive.
+
+Moving work across this order makes a snapshot or a later round read a
+frame-old field. `docs/research/cod11-combat.md` 16 is the measurement behind
+the per-cmd half.
+
+`Cx::spawn` runs a script thread before the calling builtin's next
+instruction; `Cx::spawn_then` adds `Host::spawn_returned` once that thread
+first suspends. Only the `Cx` handed to a builtin honours either: a spawn
+through `get_field`, `set_field` or `Vm::with_cx` is dropped and
+`debug_assert`ed, so test such a builtin through `ScriptRuntime`.
+
+## Reverse engineering
 
 | File | Role |
 |---|---|
-| `main/cgame_mp_x86.dll` (1.1) | MP client game: event dispatch, effect/tracer/muzzle selection. The authority for vcod. |
-| `main/game_mp_x86.dll` (1.1) | MP server game: who writes which state field |
-| `CoDMP.exe` (1.1) | client-side netfield tables, sound system, efx renderer |
-| `game.mp.i386.so` (1.1d Linux dedicated) | same as game_mp but with full symbols |
-| `cgamex86.dll` (1.1) | single-player cgame. Wrong module: `EV_*` ids diverge from 173 up, exactly where impacts live. |
-| `main/cgame_mp_x86.dll` (1.5) | for diffing; the `EV_*` table is byte-identical to 1.1 |
+| `main/cgame_mp_x86.dll` (1.1) | MP client game: event dispatch, effects. The authority for the client. |
+| `main/game_mp_x86.dll` (1.1) | MP server game |
+| `game.mp.i386.so` (1.1d Linux) | same as game_mp, with full symbols |
+| `CoDMP.exe` (1.1) | client netfield tables, sound system, efx renderer |
+| `cgamex86.dll` (1.1) | single-player; its `EV_*` ids diverge from 173 up. Wrong module for MP. |
 
-Image bases: `0x30000000` cgame DLLs, `0x20000000` game DLLs, `0x00400000` CoDMP.exe.
-md5s of every module are in `docs/research/cod11-events-and-fx.md`.
+Image bases: `0x30000000` cgame, `0x20000000` game DLLs, `0x00400000`
+CoDMP.exe. md5s are in `docs/research/cod11-events-and-fx.md`.
 
-Ghidra does the decompiling; keep projects and exports under `private/ghidra/`:
+- Ghidra exports live under `private/ghidra/`. Grep the existing `.c` export
+  before re-running; a full decompile takes ~15 minutes.
+  `tools/re/ExportDecomp.java` makes one: `analyzeHeadless <dir> <proj>
+  -import <dll>`, then `-process <dll> -noanalysis -scriptPath tools/re
+  -postScript ExportDecomp.java`.
+- `tools/re/`: `evtab.py` (`EV_*` table), `netfields.py`,
+  `dump_field_table.py`, `xref.py`, `dump_script_fields.py`,
+  `dump_builtins.py`, `dump_cvars.py`, `dump_itemlist.py`, and
+  `annotate_func.py`, which resolves the PIC relocations that hide every call
+  and cvar in a plain `objdump` of `game.mp.i386.so`. The dumpers resolve
+  `.rel.data`: a pointer stored in `.data` reads as 0 in the file.
+  `net-notes.md` is the server disassembly log.
+- Find dispatch code by string: `CG_EntityEvent:%s`, `CG_EntityPreEvent:%s`
+  (bullet impacts live in the pre-event), `fx/impacts/`. Sound-system entry
+  points are catalogued in `docs/research/cod11-sound-system.md`.
 
-- `tools/re/ExportDecomp.java` dumps every function with `// --- name @ addr`
-  markers into one `.c` file. Grep that before re-running Ghidra, a full
-  decompile takes ~15 minutes. Pattern:
-  `analyzeHeadless <projdir> <proj> -import <dll>` once, then
-  `analyzeHeadless <projdir> <proj> -process <dll> -noanalysis -scriptPath tools/re -postScript ExportDecomp.java`.
-- `tools/re/evtab.py <dll>` prints the `EV_*` pointer table in index order
-  straight from the PE; `tools/re/netfields.py` finds `{name, offset, bits}`
-  tables; `tools/re/xref.py <pe> <va>` finds raw immediates equal to a VA.
-  These run in seconds and give the enumeration order with an address to cite.
-- Find dispatch code by string: `CG_EntityEvent:%s` and `CG_EntityPreEvent:%s` in
-  cgame, `fx/impacts/` for effect paths. Bullet-impact handling is in
-  `CG_EntityPreEvent`, not `CG_EntityEvent`.
-- Sound-system entry points in CoDMP.exe (alias csv loader, falloff, panning,
-  channel pools, stream slots) are catalogued with their VAs in
-  `docs/research/cod11-sound-system.md`; start there rather than
-  grepping the decompilation.
+### Evidence labels
 
-Evidence discipline: every claim in a research doc names the module, the virtual
-address, and the string or table it rests on, and carries its own label.
-VERIFIED is what was read out of a binary, an asset or a live capture. INFERRED
-is anything read off control flow, and **instruction sequencing and branch
-conditions are control flow**: "followed by", "then", "when that field is
-non-null" all belong under INFERRED however plainly the instructions read. A
-label covers one claim, never a section, because a section is a mix and the
-blanket then covers claims it should not. One exception, and only one: a
-document may open with a document-level default ("everything here is VERIFIED
-unless labelled otherwise") when its provenance really is uniform and every
-exception in it carries its own label; the four format and handshake docs
-that do are accurate. A blanket over a section, including one
-appended to its heading, stays forbidden whether or not the document carries
-such a default.
-`crates/common/tests/evidence_labels.rs`
-catches the two mechanical shapes of this and its doc comment says what it
-cannot catch, which is most of it; a reader is still the enforcement. Research
-docs carry facts derived from the binaries (offsets, tables, enum orders),
-never pasted decompiler output or disassembly listings.
+Every claim in a research doc names the module, the virtual address and the
+string or table it rests on, and carries its own label. VERIFIED: read out of
+a binary, an asset or a live capture. INFERRED: read off control flow, which
+includes instruction order and branch conditions ("then", "followed by",
+"when that field is non-null"). One label per claim. A document may open with
+a document-level VERIFIED default only when its provenance is uniform and
+every exception is labelled; a section-level blanket is never allowed. Docs
+carry derived facts (offsets, tables, enum orders), never pasted decompiler
+output. `crates/common/tests/evidence_labels.rs` catches the mechanical cases.
 
 ## Gotchas already paid for
 
-- xanim translation keys are offsets from the bind pose; viewmodel rigs have all-zero
-  binds, which is why absolute treatment ever looked right.
-- Foliage `@`/`_` masked skins carry inverted alpha except `treeshdw_*`; the fix
-  inverts DDS blocks in place (`assets.rs`).
-- `entityState.weapon` is a 1-based index into configstring 7.
-- Root `tag_origin` sits at the feet; the Q3 waist offset does not apply.
-- Shader scripts for effects live in `fxshaders/` inside `pak5.pk3`, not `scripts/`;
-  most of them are additive (`blendfunc GL_ONE GL_ONE`), most `scripts/` shaders are
-  alpha. Some map paths carry a leading slash.
-- Sound alias csv columns bind by header name, not by position:
-  `dialog_generic.csv` shuffles them. A blank or `0` `dist_max` means
-  `5 * dist_min`, not "no cutoff" as the csv legend claims.
-- The alias-side surface suffix for asphalt is `asphault`. The engine spells it
-  `asphalt`, so retail asks for a name no csv row has and asphalt is silent in
-  game; vcod maps to the csv spelling on purpose and is audible there.
-- `[profile.dev.package."*"] opt-level = 3` in `Cargo.toml` is for kira:
-  symphonia and cpal crackle and take seconds per decode unoptimized. It costs
-  one cold build and applies to wgpu/winit too.
-- gsc folds case for identifiers, field names, file paths and event names
-  (`intern_folded`) but not for string values or array keys (`intern_exact`);
-  both halves are measured against retail. A misrouted event name fails
-  silently: the `waittill` never sees its `notify` and the thread hangs with
-  nothing logged. The two tests in `vm/sched.rs` are written to fail when
-  either `fold_atom` call is removed; re-run that mutation if you touch the
-  fold sites.
-- `MAX_RELIABLE_COMMANDS` is 64 on CoD 1.1, not RTCW's 256: CoDExtended's
-  `shared.h:135` and the `& 63` masks in `SV_UserMove` (cod_lnxded 0x8086fa4)
-  agree. Both rings, and the scramble key that indexes them, are sized off it.
-- The server's per-client drop notice is the reliable command `w "<reason>"`
-  (`SV_DropClient` 0x8085cf4). Bare `disconnect` only travels client to server.
-- 66 ms is a pmove chop, not a dt clamp. `Pmove` walks `ps.commandTime` up to
-  the cmd's `serverTime` in steps of at most 66, each its own `PmoveSingle`,
-  and drops only the arrears past 1000 ms, so a client that hitches for half a
-  second gets the whole gap simulated. The `msec = min(msec, 200)` in
-  `ClientThink_real` looks like the clamp and is not: it never reaches the
-  mover. `docs/protocol-1.1.md`, "How long a cmd is simulated for".
-- The retail client omits unchanged usercmd fields (change-bit 0, angles
-  included), and a compact cmd carries no upper button, stance, `up` or
-  weapon bits at all. What "unchanged" is relative to is not the previous
-  cmd: `SV_UserMove` builds the base for each message's first cmd out of the
-  client's playerstate (`docs/protocol-1.1.md`, "The base cmd is built from
-  the playerstate"), whose sight bit is `fWeaponPosFrac != 0` and whose
-  stance bits come from `eFlags`. So a client that chains from its own last
-  sent cmd hands a released sight back to the server for as long as the
-  fraction is non-zero; vcod's writer sends the full branch every cmd for
-  that reason. vcod's server still decodes against its stored last received
-  cmd, which agrees with retail's base in every case measured so far (the
-  divergence list at the end of the protocol doc says where it would not),
-  and decoding against `NULL_USERCMD` instead was the retail client's
-  "spectator flash" (one-frame view snaps, invisible until yaw first went
-  nonzero).
-- A portal's plane faces out of its owning cell; the walk skips a portal when
-  the eye is past it (`n·eye - dist > 1`). Two vcod additions to the walk:
-  clipped portal polygons narrower than `SLIVER_EPS` are skipped (slivers at
-  shared edges made cones flicker), and cells whose top is below the eye are
-  marked with the camera frustum (the graph treats portal-less walls as full
-  height, which fails once the eye looks over them). A third, from the same
-  mp_ship deck that motivated the second: sightlines over low geometry
-  (bulwarks, rails) still under-mark, so after the walk every cell sharing a
-  portal with a visited cell is frustum-tested to a fixpoint (`visible`).
-  The soup lump is laid out
-  `[cull-group soups][cell-tree soups][submodel soups]`, and leaf surfaces
-  (lump 23) index the terrain collision partitions, not draw soups.
-- The F3 `audio` line reads `v N plays N miss N cull N drop N steal N N.NNms`: live
-  voices, cues started, aliases not in the table, cues already past `dist_max`
-  when they fired, cues refused because every pool slot was held by
-  higher-priority voices (or kira's own cap hit), and voices evicted by the
-  steal rule.
-- A stock map load logs roughly 360-415 unique ShaderLib warnings, each once;
-  the corpus is full of tokens vcod skips by design (hw-path stages, fog
-  keywords), so the count is noise. The F3 `shader:` line shows it as
-  `warns`; shader-script facts live in `docs/research/cod11-shader-scripts.md`.
-- `--connect` opens the window before the gamestate arrives; the
-  connecting/loading phases draw HUD text only.
-- Movement constants come from retail rodata, not community lore: the table
-  is in docs/research/cod11-mantle.md and bsp-ibsp59-format.md ("Movement
-  constants"). Mantling does not exist in retail 1.1 MP; cod11-mantle.md is
-  the negative result.
-- A configstring range's first slot comes from its indexer, never from a
-  doc's summary. The status icon, head icon and script menu indexers scan
-  from `i = 0`; the localized-string and shader ones scan from `i = 1`.
-  Reading one convention onto all five puts three ranges a slot high, which
-  is what the table in `docs/research/clientstate-wire-format.md` used to do.
-- Unary `!` takes a string where an `if` condition refuses every string:
-  `!"0"` is `1` and `!"1"` is `0`, while `if ("a")` is a fatal
-  `cannot cast "a" to bool`. That asymmetry is measured, and it is what lets
-  `_teams::restrictPlacedWeapons` run on a stock server rather than killing
-  it at map load (`docs/research/cod11-gsc-language.md` §9).
-- A BSP entity key reaches script only if it is in the entity field table or
-  in `radiant/keys.txt`; anything else is dropped at load, silently, exactly
-  as retail drops it. So a script reading a Radiant key nobody registered
-  gets `undefined` and no warning. The three-way split and both tables are
-  in `docs/research/cod11-gsc-object-model.md`.
-- The attack bit is pulsed, not held. Every stock rifle and pistol is
-  semi-automatic, and a held bit fires one round and then nothing: the
-  semi-auto latch pins `weaponTime` at 1 until the trigger is released
-  (`cod11-combat.md` 1.4). Anything scripted that means to fire twice taps
-  twice, with the tap at least `fireTime` apart.
-- A capture cmd must carry the weapon the playerstate says the client holds.
-  A `weapon` byte of 0 is not neutral: retail reads a `cmd.weapon` that
-  differs from `ps.weapon` as a request to holster, so a probe sending 0 fakes
-  a putaway at every input that forces the full usercmd branch (the reload
-  key, a jump, a stance change). Three research paragraphs were written off
-  that artifact before it was found.
-- `eventSequence` is written *after* the event slot it counts, and the drain
-  is `(prev..cur)`, not `(prev+1..=cur)`: retail writes `events[seq & 3]` and
-  then increments, so the new slots are the ones below the sequence.
-  `crates/common/src/net/events.rs` had the off-by-one and the client read
-  every event one slot late.
-- `health`, `ammo[]` and `ammoclip[]` are in the playerstate's array blocks,
-  not among its scalar fields, and a retail client predicts its ammo counter
-  from the clip it is sent: get the clip wrong and the HUD counts wrong on the
-  client before any server frame disagrees. The block layout is in
-  `docs/protocol-1.1.md`.
-- The ammo and clip index tables start at **1**, not 0. The retail spawn
-  loadout reads `clip=3:7,6:3,10:15 ammo=3:56,10:400`, which is colt at clip
-  index 3, frag at 6 and carbine at 10; numbering from 0 puts every count one
-  slot low and the client shows another weapon's ammo.
-- The body queue is eight entities at 64..71 and has no lifetime timer. A
-  corpse lives until its slot is reused, which the retail capture shows
-  directly: the first corpse is still on the wire 190 s later.
-- `eFlags` bit `0x8` is the teleport bit and it flips on every *spawn*, not
-  every life: the connect's own `spawnSpectator`, the respawn's spectator
-  frame and the intermission camera each consume a flip, and a level boundary
-  clears the bit with the rest of the playerstate. A client breaks
-  interpolation on the changed word, so leave it pinned and a retail client
-  smears a respawning player from its corpse to its new spawn. The respawn
-  clears the event ring with it (retail's first frame of a new life reads
-  `eventSequence` 0). The spawn-for-spawn reading of the two committed
-  captures is in `docs/research/cod11-map-cycle.md`, 8.2.
-- A `clipOnly` weapon has no reserve at all. The frag's file reads
-  `clipOnly 1` with `maxAmmo 3`, and retail's spawn line carries `clip=6:3`
-  with no `ammo` entry for that index; writing the reserve anyway puts a
-  count on the wire retail never sends.
-- The four damage-feedback fields (`damageEvent`, `damageCount`, `damageYaw`,
-  `damagePitch`) never clear. `damageEvent` increments and the other three
-  hold the last hit's values until the next one, so a client cannot tell "no
-  damage this frame" from "the same damage as last frame" by reading them; the
-  increment is the edge.
-- There is no cook in 1.1 MP. `grenadeTimeLeft` takes the held weapon's
-  `fuseTime` at the pullback and 0 at the throw and nothing between: no
-  countdown, no pin, no auto-throw, and the fuse from release to explode is
-  the full `fuseTime` however long the trigger was held. The two committed
-  grenade captures show no third value in 700-odd traces. A design that reads
-  the field as a timer is reading RTCW's.
-- A grenade's fuse rides the `EV_FIRE_WEAPON` / `EV_FIRE_WEAPON_LASTSHOT`
-  parm, and only inside vcod: the pmove step clears `grenadeTimeLeft` on the
-  same frame it raises the event, so the server would read 0 back if it went
-  looking. `Attack::Throw` therefore has to be taken off the raised event
-  during `replay_moves`, before the sim moves on. It must not travel:
-  `eventParms[i]` is an 8-bit netfield and a 4000 ms fuse arrives as 160,
-  where retail's throw frame reads `eventParms=0,0,0,0`, so
-  `pmove::cmd::player_step` writes 0 to the ring for those two events and
-  keeps the fuse in the returned `PmEvent`.
-- The explode rides the missile's own entity, not a temp entity. It flips its
-  `eType` to 0, sets `eFlags` 256 and writes `EV_GRENADE_EXPLODE` on its own
-  ring, so anything filtering entities on `eType == 4` drops exactly the frame
-  the explosion is on.
-- Static props are clipped by the bare segment of a `trap_LocationalTrace`
-  and by nothing else: bullets, blasts and a flying frag meet a `misc_model`'s
-  collision mesh, a moving player never does (`SV_Trace` walks the static
-  models only on the flag that one syscall passes), so a prop stops a player
-  only where the mapper wrapped it in clip brushes. `World::from_bsp` takes
-  the paks for the props, `shot_trace` and `missile_trace` see them,
-  `box_trace` does not, and each surface keeps its `surf_flags`, which is
-  the bounce parm (`docs/research/cod11-mantle.md`, "Static models are
-  clipped as a segment").
-- Terrain is a swept sphere and a patch is a facet. Retail's terrain clip
-  (lumps 24-26) sweeps the capsule's nearer sphere against a triangle's
-  face, its edges as cylinders and its vertices as spheres, with no bevel
-  anywhere; a patch goes through Q3's facet walk, every border and bevel
-  pushed out by the radius, which is the box-like reach that holds a player
-  at full kerb height 13 units past a kerb wall's edge. The facet polyhedron
-  on terrain lifted the mover a unit at every ramp-to-flat seam; the sphere
-  on a patch would sag it 7 at every kerb. `collision.rs` splits the two off
-  lump 24's record kind (the mantle doc, "Terrain is a swept sphere, a
-  patch is a facet").
-- A submodel's brushes are in the clip only while its entity is linked.
-  `_gameobjects::main` `delete()`s every entity whose `script_gameobjectname`
-  the gametype did not list, which takes carentan's two bombzone
-  `script_brushmodel`s out of every gametype but `sd`; the `delete` builtin
-  unlinks the model, and a world no script runs on (the predictor, the
-  gates) applies the script's rule through
-  `CollisionWorld::unlink_script_brushes`.
-  `solid()`/`notSolid()` are the other half of the same thing: retail's
-  `SP_script_brushmodel` gives an exploder brush model no spawn state of its
-  own, and `_load.gsc` is what `notsolid()`s the four on mp_depot, mp_powcamp
-  and mp_rocket, so a builtin that writes the flag without touching the clip
-  leaves three stock maps carrying collision retail does not.
-- A playing client's cmd step has one implementation, `pmove/cmd.rs` in
-  `vcod-common`: `chop` is `Pmove`'s 66 ms walk with the arrears bound and
-  `player_step` is one `PmoveSingle` with the view, the prone caps' push on
-  `delta_angles` and the event ring. The server's `replay_moves` and
-  `ClientSim::step` wrap it with what only the server does (the aim block,
-  the flood resync, dead, spectator and intermission arms, anims, the
-  link); the client's predictor (`pmove/predict.rs`) runs it on a sim
-  rebuilt by `from_wire`. The weapon index walk is `weapon_table.rs`'s
-  `assign_indices` for both ends, and `CollisionWorld::unlink_script_brushes`
-  is the map-load scripts' clip rule for every world no script runs on.
-  `crates/server/tests/predict_ab.rs` holds the wire round trip, and it needs
-  the paks, so CI skips it.
-- A stock frag bounces off a live player rather than detonating on it.
-  `fraggrenade_mp` spells `damage` 0, and retail's direct-hit `MOD_GRENADE`
-  arm is gated on that field, so the contact applies the soft damping and the
-  fuse keeps running.
-- `setPlayerIgnoreRadiusDamage` is a flag on `level`, not on a client. Only
-  the `radiusDamage` builtin reads it, and it then skips every client for that
-  one call; a grenade's own blast never consults it. One bool on the host is
-  the whole of it.
-- A weapon switch holds `cmd.weapon` at the new index until `ps.weapon` reads
-  it. Retail's pickup half takes the byte off the cmd of the frame the putaway
-  ends on, so a byte sent once is reverted before the swap lands and the old
-  weapon stays in hand. A first retail capture of the one-cmd version measured
-  the frag never arriving and the cook firing the rifle instead.
-- A map change is pull-shaped. `SV_SpawnServer` sends no gamestate at all: the
-  only thing that leaves the server is the out-of-band `loadingnewmap` line to
-  every client at `CS_PRIMED` or above, and the gamestate goes out when that
-  client's next message arrives still carrying the old serverId and
-  `SV_ExecuteClientMessage` resends it. So a map change that pushes anything
-  on the reliable stream is wrong by construction
-  (`docs/research/cod11-map-cycle.md` 3.1).
-- `sv_serverid` is two nibbles and the high one skips zero. A map load bumps
-  the high nibble and keeps the low one, a restart bumps only the low one, and
-  a high nibble that wraps to 0 is bumped again, so 16 goes to 17 across a
-  restart and to 33 across a map change. `crates/server/src/console.rs` owns
-  the arithmetic and both paths share it; the client reads the value back out
-  of the systeminfo configstring, not out of the gamestate header.
-- A probe has to re-answer the stock team menu after every gamestate and,
-  under `dm`, after every restart. Retail reruns `ClientConnect` on both and
-  reopens the menu under the indices the last one used, so `JoinProbe` clears
-  them on every gamestate past the first and on every `n`. Under `sd`, whose
-  `pers[]` survives, no menu reopens and the clear is inert.
-- `game[]` survives a level boundary only when the caller passed `savePersist`,
-  and an entity handle stored in it never survives at all. `map_restart(1)`
-  and `exitLevel(1)` keep `game[]` and every client's `pers[]`, `map_restart(0)`
-  and `exitLevel(0)` free both, `level` is always new, and every entity handle
-  inside `game[]` is dropped whichever way the flag went. `dm.gsc` passes 0 and
-  `sd.gsc` passes 1, which is the whole reason a `dm` client is put back
-  through the team menu after a restart and an `sd` client is not.
-- Time limits and score limits are script, never engine. Neither binary
-  contains the string `timelimit`, `scorelimit` or `fraglimit`, and the game
-  module exports no `CheckExitRules`: every "the round is over" decision in
-  CoD 1.1 MP is a gametype script calling `exitLevel()` or `map_restart()`. A
-  server that hard-codes either in Rust is adding a rule retail does not have.
-  `g_intermissionDelay` is dead the same way: it is registered in
-  `gameCvarTable` and has no other reference in the module, so nothing reads
-  it, and `nextmap` is registered, set once inside the map load, and read by
-  nothing: the Q3 convention of the gametype writing it and the engine
-  executing it does not exist here, and `map_rotate` is the whole rotation.
-- `map <the map already serving>` is a restart, not a spawn. The engine
-  compares the requested name against the current one and takes
-  `SV_MapRestart_f`, so the low nibble moves and no gamestate goes out. A
-  rotation whose first entry names the map it is already on therefore restarts
-  before it ever changes map, which is what the retail capture shows
-  (`docs/research/cod11-map-cycle.md` 4.2).
-- The player is a capsule, not a box. `ClientThink_real` hands pmove
-  `trap_TraceCapsule` (the three trace slots at pm+0xe8/0xec/0xf0), and
-  the retail captures sit at the point height on every grade where a box
-  sits `15 tan` higher: one unit on a 4-degree street, which a predicting
-  retail client corrected on every snapshot as a view twitch. Along a
-  diagonal wall retail slides at 15 where a box's corner is 5 units inside.
-  `collision.rs` sweeps every brush as Q3's capsule shape
-  (`docs/research/cod11-mantle.md`, "The player is a capsule").
-  `--save-slope` plus `crates/server/tests/playerstate_slope_ab.rs` is the
-  measurement: retail's own cmd stream replayed on our mover from retail's
-  own state at every snapshot.
-- The wish speed is not `g_speed`. The walk cmd scale multiplies by the
-  weapon's `moveSpeedScale` (1.18 on the carbine), by `walkSpeedScale` 0.4
-  while the sight is held (`pm_flags` 0x80), by `backSpeedScale` 0.7 and
-  `strafeSpeedScale` 0.8 on those axes and by `leanSpeedScale` 0.4 on a
-  lean, so a sighted carbine walk is 89.7 and a plain run 224 (the mantle
-  doc, "The wish speed"). The motion gate never compared velocity, which is
-  how 190 flat survived for a month.
-- Threads due in the same frame resume newest-queued first, and a `wait 0`
-  resumes at once, ahead of everything else due that frame; a notify's
-  waiters resume after the notifier's step, in start order. Retail printed
-  all three (`probe_wait0_yield`, `probe_wait0_loop`, `probe_notify_frame`;
-  `docs/research/cod11-gsc-language.md`, the thread pick paragraph), and the
-  killcam's exact length and its skip's missing dead frame depend on them.
-  An unbounded `wait 0` loop stalls a retail server for good; ours ends the
-  pass at `MAX_THREADS_PER_FRAME`.
-- A thread's own `notify` does not fire its own `endon`. A thread that
-  `endon`s an event and then notifies that event itself survives and runs on;
-  every *other* thread's `endon` on it still kills. Measured with
-  `probe_endon_self`, and it is what lets `dm.gsc`'s `endMap` reach its
-  `exitLevel` at all: ours used to kill the thread there and the map never
-  ended.
-- Client commands are flood-protected, and a bare `score` is not exempt. A
-  non-exempt command opens an 800 ms window in which every further
-  non-exempt one from an active client is dropped before the game sees it;
-  the exemptions are the prefixes `team `, `score ` and `mr `, space
-  included (`docs/protocol-1.1.md`, "Client commands are flood-protected").
-  The round-restart target probe sends `score` every 2 s and `kill` every
-  45 s, and retail silently refused every other `kill` for landing inside
-  that window, which read as a sessionstate rule for a whole afternoon. A
-  probe that pairs commands spaces them past the window, and ours drops
-  them the same way now.
-- A `map_restart` keeps the engine's configstring table and the item
-  registry; only a map load clears them. `sd.gsc` precaches its weapons
-  only while `game["gamestarted"]` is unset, so a restart that carries
-  `game[]` registers none of them itself, and a table rebuilt from that
-  run re-allocated the dropped weapon's model, configstring 8 and the
-  elimination string at fresh slots on the first kill after it
-  (`docs/research/cod11-map-cycle.md`, 4.6).
-- A `trigger_lookat` is never touched. `G_TouchTriggers`' broad phase masks
-  it out, so walking into one does nothing; it fires off `ClientEndFrame`'s
-  aim trace, once every frame an eye rests on it, and the thread it wakes runs
-  on the next frame's clock, as every trigger-woken thread does. A plant or
-  defuse clocked off the frame of the touch lands a frame early, which is
-  what the S&D gate caught (`docs/research/cod11-gsc-object-model.md`, 22.1
-  and 23.1).
-- The tick loop runs on an absolute schedule and catches up after an
-  overrun, the way `SV_Frame` does. Sleeping the remainder of each tick let
-  every sleep overshoot accumulate, and under load `serverTime` ran 5-10%
-  slow against a probe's wall clock: a map-change capture that expected the
-  rotation at 120 s ran out of its 150 s before it came.
-- A player is solid only while `r.contents` says so, and the wire `solid` is
-  written at link time. The end frame writes the contents (BODY while
-  playing, 0 dead, spectating or at intermission, CORPSE on a player
-  `StuckInClient` pushed), but `SV_LinkEntity` packs `solid` only at the link
-  after each cmd's move and at spawn, never at end frame, so a stuck player's
-  `solid` reads 0 one cmd late and a client that sends no cmds keeps its last
-  one. The link also clamps `-mins.z` to at least 1, so a client decodes a
-  player's box one unit below its feet (`docs/research/cod11-player-clip.md`,
-  1.2 and 4).
-- An item's `count` field is its reserve and 0 means "not set", not "empty":
-  a placed weapon with no `count` draws `dropAmmoMin..Max`, and a drop writes
-  -1 for an empty reserve or clip so the pickup does not draw one
-  (`docs/research/cod11-items.md`, sections 4 and 8).
+### Wire
+
+- `entityState.weapon` is 1-based into configstring 7. The ammo and clip
+  index tables also start at 1.
+- `health`, `ammo[]`, `ammoclip[]` sit in the playerstate array blocks, and a
+  retail client predicts its ammo counter from the clip it is sent.
+- `eventSequence` counts after the write: the new events are `(prev..cur)`.
+- `MAX_RELIABLE_COMMANDS` is 64, not 256. The server's drop notice is the
+  reliable command `w "<reason>"`.
+- The first usercmd of a message decodes against a base built from the
+  playerstate (sight bit = `fWeaponPosFrac != 0`, stance from `eFlags`), not
+  the last cmd sent. vcod's writer sends the full branch every cmd for that
+  reason (`docs/protocol-1.1.md`).
+- `eFlags` 0x8 flips on every spawn; leave it pinned and a client smears a
+  respawn from the corpse. A respawn clears the event ring.
+- The damage feedback fields never clear; `damageEvent`'s increment is the
+  edge.
+- A configstring range's first slot comes from its indexer: status icon, head
+  icon and script menu scan from 0, localized strings and shaders from 1.
+- A player's wire `solid` is packed at link time (after each cmd's move, at
+  spawn), never at end frame, and the link clamps `-mins.z` to at least 1.
+
+### Map cycle
+
+- A map change is pull-shaped: the server sends only the OOB
+  `loadingnewmap`, and resends the gamestate when a client's next message
+  carries the old serverId. Nothing goes on the reliable stream.
+- `sv_serverid` is two nibbles: a map load bumps the high one (skipping 0), a
+  restart the low one. `console.rs` owns it.
+- `map <current map>` is a restart, not a spawn.
+- `map_restart` keeps the configstring table and the item registry; only a
+  map load clears them.
+- `game[]` and `pers[]` survive only `map_restart(1)` / `exitLevel(1)`, and
+  entity handles inside `game[]` never survive. `dm` passes 0, `sd` passes 1.
+- Time and score limits are script. The engine has no `CheckExitRules`;
+  `g_intermissionDelay` and `nextmap` are read by nothing.
+- The tick loop runs on an absolute schedule and catches up after an overrun;
+  sleeping the remainder drifted `serverTime` 5-10% slow.
+
+### Movement and collision
+
+- Movement constants come from retail rodata (tables in
+  `cod11-mantle.md` and `bsp-ibsp59-format.md`). Retail 1.1 MP has no
+  mantling.
+- 66 ms is a pmove chop, not a dt clamp; arrears past 1000 ms are dropped.
+- One cmd step for every caller: `crates/common/src/pmove/cmd.rs` (`chop`,
+  `player_step`). The server and the client predictor wrap it.
+- The player is a capsule. A box sits `15 tan` higher on every grade.
+- Terrain clips as a swept sphere, a patch as a Q3 facet; `collision.rs` picks
+  by lump 24's record kind.
+- Static props clip bullets, blasts and missiles, never a moving player.
+  `shot_trace` and `missile_trace` see them, `box_trace` does not.
+- A submodel's brushes clip only while its entity is linked. Script `delete`,
+  `notSolid` and `_gameobjects` unlink them; a world no script runs on
+  applies the rule through `CollisionWorld::unlink_script_brushes`.
+- Wish speed multiplies the weapon's `moveSpeedScale` and the sight, back,
+  strafe and lean scales: a plain carbine run is 224, sighted 89.7.
+
+### Combat and items
+
+- There is no grenade cook in 1.1 MP. `grenadeTimeLeft` is `fuseTime` at the
+  pullback and 0 at the throw, and the fuse always runs in full from release.
+- The fuse rides the fire event's parm inside vcod only; `player_step` writes
+  0 to the wire ring, which is what retail sends.
+- The explode rides the missile's own entity (`eType` flips to 0), so an
+  `eType == 4` filter drops the explode frame.
+- A stock frag bounces off a live player: `fraggrenade_mp` has `damage 0`.
+- `setPlayerIgnoreRadiusDamage` is a level flag read only by the
+  `radiusDamage` builtin.
+- The body queue is eight entities at 64..71 with no timer; a corpse lives
+  until its slot is reused.
+- A `clipOnly` weapon (the frag) has no reserve entry on the wire.
+- An item's `count` of 0 means unset; a drop writes -1 for empty.
+- A `trigger_lookat` is never touched. It fires off `ClientEndFrame`'s aim
+  trace, and a trigger-woken thread runs on the next frame's clock.
+
+### Script
+
+- gsc folds case for identifiers, fields, paths and event names but not for
+  string values or array keys. A misrouted event name hangs its `waittill`
+  silently. The two tests in `vm/sched.rs` catch a removed `fold_atom`.
+- Unary `!` takes a string (`!"0"` is 1); an `if` on a string is fatal.
+- A BSP key reaches script only if it is in the entity field table or
+  `radiant/keys.txt`; anything else is dropped silently.
+- Threads due in one frame resume newest-queued first; `wait 0` resumes at
+  once; a notify's waiters run after the notifier's step, in start order.
+- A thread's own `notify` doesn't fire its own `endon`.
+
+### Assets, rendering, sound
+
+- xanim translation keys are offsets from the bind pose. Root `tag_origin`
+  sits at the feet.
+- Foliage `@`/`_` skins carry inverted alpha, except `treeshdw_*`.
+- Effect shaders live in `fxshaders/` in `pak5.pk3`, mostly additive. Some
+  map paths have a leading slash.
+- Sound alias csv columns bind by header name; a blank or 0 `dist_max` means
+  `5 * dist_min`. The asphalt alias suffix is `asphault`, and vcod uses that
+  spelling on purpose.
+- Portal walk: a portal's plane faces out of its owning cell. vcod adds three
+  over-marking rules (sliver skip, frustum-marked low cells, neighbour
+  fixpoint) for the mp_ship decks. Leaf surfaces index terrain collision, not
+  draw soups.
+- `[profile.dev.package."*"] opt-level = 3` is for kira; unoptimized audio
+  crackles.
