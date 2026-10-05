@@ -276,10 +276,9 @@ pub struct GameHost {
     /// `maxhealth` accessors on a client entity read and write it, and
     /// `Server` mirrors it into the sim every frame.
     pub client_vitals: Vec<Vitals>,
-    /// Each `player_die` since `Server` last drained them, by victim slot:
-    /// its follower walk (combat doc 5.1 step 9) needs the sims, which no
-    /// builtin reaches.
-    pub deaths: Vec<usize>,
+    /// Each connected client slot as `Server` last mirrored it, for the
+    /// scoreboard and `player_die`'s follower walk, which run inside the VM.
+    pub client_roster: Vec<Option<crate::game::scoreboard::RosterSlot>>,
     /// Each client's last usercmd buttons, mirrored in by `Server` before
     /// the frame, for `useButtonPressed`.
     pub client_buttons: Vec<u8>,
@@ -473,12 +472,12 @@ pub(crate) const RNG_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 
 impl GameHost {
     /// The vitals half of `player_die`, the one place a client dies: health
-    /// 0, dead until the next spawn, and the death queued for its walk.
+    /// 0, dead until the next spawn. The follower walk runs once the killed
+    /// callback returns ([`GameHost::player_die_walk`]).
     pub fn die(&mut self, slot: usize) {
         let v = &mut self.client_vitals[slot];
         v.health = 0;
         v.dead = true;
-        self.deaths.push(slot);
     }
 
     /// Every client slot that holds a client entity, which is every client
@@ -580,7 +579,7 @@ impl GameHost {
             client_weapon_ops: Vec::new(),
             client_ammo: vec![AmmoArrays::default(); MAX_CLIENTS],
             client_vitals: vec![Vitals::default(); MAX_CLIENTS],
-            deaths: Vec::new(),
+            client_roster: vec![None; MAX_CLIENTS],
             client_buttons: vec![0; MAX_CLIENTS],
             client_pm_type: vec![0; MAX_CLIENTS],
             client_on_ground: vec![false; MAX_CLIENTS],
@@ -941,6 +940,12 @@ impl Host for GameHost {
 
     fn is_live(&self, ent: EntId) -> bool {
         self.ents.get(ent).is_some()
+    }
+
+    /// Every `spawn_then` is a `CodeCallback_PlayerKilled` whose token is the
+    /// victim's slot.
+    fn spawn_returned(&mut self, cx: &mut Cx, token: u32) {
+        self.player_die_walk(cx, token as usize);
     }
 
     fn get_field(&mut self, cx: &mut Cx, ent: EntId, field: Atom) -> Value {
