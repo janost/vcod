@@ -163,6 +163,9 @@ pub struct Predictor {
     /// held within two cmds behind the newest. With the local ms it was
     /// last advanced at.
     drawn: Option<(f64, f64)>,
+    /// The systeminfo fall bounds every replay lands with; the caller keeps
+    /// them current.
+    pub fall_heights: vcod_common::pmove::FallHeights,
     #[cfg(test)]
     cmds_run: usize,
 }
@@ -261,7 +264,9 @@ impl Predictor {
             .since(command_time.wrapping_sub(1))
             .next()
             .filter(|c| c.server_time == command_time);
-        let mut r = Replay::new(ps, world.bodies, predict::from_wire(p, ps, last_cmd));
+        let mut pred = predict::from_wire(p, ps, last_cmd);
+        pred.ps.fall_heights = self.fall_heights;
+        let mut r = Replay::new(ps, world.bodies, pred);
         if let Some(old) = &self.replay {
             r.carry_older(old);
         }

@@ -411,6 +411,39 @@ impl ScriptRuntime {
         }
     }
 
+    /// `ClientEvents`' fall damage (player-clip doc 8.8): `G_Damage` with no
+    /// inflictor, attacker, direction or point, means `MOD_FALLING` and hit
+    /// location 0, which the damage callback reads as four undefined
+    /// arguments, weapon `"none"` and hit location `"none"` (8.10).
+    pub fn deliver_fall(&mut self, victim_slot: usize, damage: i32, now_ms: i32) {
+        let Some(victim) = self.client_entity(victim_slot) else {
+            return;
+        };
+        let (mod_, none) = self
+            .vm
+            .with_cx(|cx| (cx.intern_exact("MOD_FALLING"), cx.intern_exact("none")));
+        let args = vec![
+            Value::Undefined,
+            Value::Undefined,
+            Value::Int(damage),
+            Value::Int(0),
+            Value::String(mod_),
+            Value::String(none),
+            Value::Undefined,
+            Value::Undefined,
+            Value::String(none),
+        ];
+        if let Err(e) = self.start_with_args(
+            CALLBACK_SETUP,
+            "CodeCallback_PlayerDamage",
+            Some(Target::Entity(victim)),
+            args,
+            now_ms,
+        ) {
+            log::error!("gsc: {e:#}");
+        }
+    }
+
     /// `G_TouchTriggers` for one client, which retail runs once per usercmd
     /// from `ClientThink_real` (0x405b3). The notify only marks the threads
     /// parked in `waittill("trigger", other)` runnable; they run in this

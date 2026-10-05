@@ -431,7 +431,7 @@ struct Round<'a> {
 /// `(int)(damage * multiplier)`: `G_Damage` multiplies on the x87 stack and
 /// truncates with an explicit `fldcw` (combat doc 4.2), so the product is
 /// taken wider than a float before the cut.
-fn located_damage(damage: i32, multiplier: f32) -> i32 {
+pub(crate) fn located_damage(damage: i32, multiplier: f32) -> i32 {
     (damage as f64 * multiplier as f64) as i32
 }
 

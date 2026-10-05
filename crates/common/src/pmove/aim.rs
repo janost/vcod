@@ -453,6 +453,16 @@ fn forward_to_angles(f: [f32; 3]) -> [f32; 2] {
     [pitch, yaw]
 }
 
+/// The turn sway stepped, then `BG_CalculateWeaponAngles`: the gun's
+/// angles off the view, wire convention. The client centres its scope
+/// overlay on them. `None`, with the state untouched, for a weapon index
+/// with no file behind it.
+pub fn gun_angles(ps: &PlayerState, st: &mut AimState, input: &AimInput) -> Option<[f32; 3]> {
+    let def = input.def?;
+    sway(ps, &def.aim, def.aim_down_sight, st, input.view, input.msec);
+    Some(weapon_angles(ps, def, st, input, speed(ps)))
+}
+
 /// The block (`ClientThink_real` `0x40169`-`0x40456`). Returns the pitch
 /// and yaw `FireWeapon` and `FireWeaponMelee` read off `client+0x220c` and
 /// `+0x2210`: the view plus its kick, and down the sight of an
@@ -463,14 +473,12 @@ pub fn aim_angles(ps: &PlayerState, st: &mut AimState, input: &AimInput) -> [f32
     let Some(def) = input.def else {
         return [input.view[0], input.view[1]];
     };
-    let spd = speed(ps);
-    let vk = view_angles(ps, def, input, spd);
+    let vk = view_angles(ps, def, input, speed(ps));
     let mut aim = input.view;
     for (a, v) in aim.iter_mut().zip(&vk) {
         *a += v;
     }
-    sway(ps, &def.aim, def.aim_down_sight, st, input.view, input.msec);
-    let wa = weapon_angles(ps, def, st, input, spd);
+    let wa = gun_angles(ps, st, input).unwrap_or_default();
     if def.aim_down_sight && ps.weapon_pos_frac != 0.0 {
         // `MatrixMultiply(weaponAxis, viewAxis)`: the gun's forward
         // expressed in the view's basis.

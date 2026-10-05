@@ -30,6 +30,7 @@ use vcod_common::net::msg::{
 use vcod_common::net::netchan::{ClientMessage, MAX_RELIABLE_COMMANDS, ServerNetchan};
 use vcod_common::net::protocol::{PROTOCOL_V1, Protocol};
 use vcod_common::net::{com_hash_key, info_value_for_key, snapshot};
+use vcod_common::pmove::FallHeights;
 
 /// `MAX_CHALLENGES`, server.h:198.
 const MAX_CHALLENGES: usize = 1024;
@@ -218,6 +219,29 @@ pub(crate) enum Attack {
         fuse_left_ms: i32,
         aim: [f32; 2],
     },
+    /// `EV_LANDING_PAIN_*`: the fall damage percent rides the event parm
+    /// (player-clip doc, 8.8).
+    Fall {
+        slot: usize,
+        percent: i32,
+    },
+}
+
+/// How long a fall holds off `P_DamageFeedback`'s `EV_PAIN`: `ClientEvents`
+/// stores `level.time + 200` into `pain_debounce_time` (player-clip doc 8.8).
+const FALL_PAIN_DEBOUNCE_MS: i32 = 200;
+
+/// `ClientEvents`' fall damage before `G_Damage`'s location multiplier: the
+/// landing pain's percent of `max_health` (`ps.stats[2]`), 1.1 past 99,
+/// truncated (player-clip doc 8.8). The x87 product is exact in `f64`, which
+/// is what keeps 25 percent of 100 at 24.
+fn fall_damage(percent: i32, max_health: i32) -> i32 {
+    let share = if percent > 99 {
+        f64::from(1.1f32)
+    } else {
+        f64::from(percent) * f64::from(0.01f32)
+    };
+    (f64::from(max_health) * share) as i32
 }
 
 /// What each client holds, from the host onto its sim, and the sim's origin
@@ -816,6 +840,10 @@ pub struct Server {
     /// `default_mp.cfg` and the config's own, so a run can turn a script
     /// cvar such as `scr_friendlyfire` on without a code change.
     cvar_overrides: Vec<(String, String)>,
+    /// `bg_fallDamageMinHeight` and `bg_fallDamageMaxHeight` as the script's
+    /// cvar table last read, what every move lands with and systeminfo
+    /// carries.
+    fall_heights: FallHeights,
     /// The client commands that start a script thread, in arrival order.
     /// `client_command` runs during `handle_packet`, a frame before `tick`
     /// advances `sv_time_ms`, so a thread started there would run on the
@@ -977,9 +1005,10 @@ impl Server {
             .map_or(0x9e37_79b9_7f4a_7c15, |d| d.as_nanos() as u64)
             | 1;
         let server_id = 0x10;
+        let fall = FallHeights::default();
         let mut sv = Server {
-            configstrings: configstrings::static_configstrings(&cfg, server_id),
-            sent_configstrings: configstrings::static_configstrings(&cfg, server_id),
+            configstrings: configstrings::static_configstrings(&cfg, server_id, fall),
+            sent_configstrings: configstrings::static_configstrings(&cfg, server_id, fall),
             clients: (0..cfg.max_clients).map(|_| None).collect(),
             cfg,
             huff: Huffman::new(),
@@ -1002,6 +1031,7 @@ impl Server {
             packet_seq: 0,
             pending_explosions: Vec::new(),
             cvar_overrides: Vec::new(),
+            fall_heights: fall,
             pending_script_commands: Vec::new(),
             hitlocs: crate::game::combat::HitLocTable::default(),
             fs: None,
@@ -2424,8 +2454,9 @@ impl Server {
             .write_mirror(&mut configstrings)
             .map_err(|e| anyhow::anyhow!("writing the cvar mirror: {e:?}"))?;
         self.configstrings = configstrings;
-        self.sync_sent_configstrings();
         self.script = Some(rt);
+        self.refresh_fall_heights();
+        self.sync_sent_configstrings();
         // `SV_SpawnServer` and `SV_MapRestart` both clear it, the flag
         // included, and the new level's `main` turns it back on.
         self.archive.clear();
@@ -2505,6 +2536,29 @@ impl Server {
         }
     }
 
+    /// `G_UpdateCvars` for the two fall bounds and `SV_Frame`'s systeminfo
+    /// flush behind them: the moves read the values the script's table holds
+    /// now, and slot 1 carries them to the clients that predict with them.
+    /// Both tables, as [`Self::refresh_serverinfo`] writes both.
+    fn refresh_fall_heights(&mut self) {
+        use crate::game::builtins::cvar::atof;
+        let Some(rt) = self.script.as_mut() else {
+            return;
+        };
+        let cvars = rt.cvars();
+        self.fall_heights = FallHeights {
+            min: atof(cvars.get("bg_fallDamageMinHeight")),
+            max: atof(cvars.get("bg_fallDamageMaxHeight")),
+        };
+        let info = configstrings::systeminfo(self.server_id, self.fall_heights).to_string();
+        if let Some(slot) = rt.host.configstrings.get_mut(1) {
+            slot.clone_from(&info);
+        }
+        if let Some(slot) = self.configstrings.get_mut(1) {
+            *slot = info;
+        }
+    }
+
     /// What the next level load would stamp for `name`, given the config's
     /// own value: a `+set` override if one names it, since [`Self::cvars`]
     /// replays the override list last.
@@ -2576,7 +2630,8 @@ impl Server {
         // rebuilt empty around the serverinfo and systeminfo the new id
         // belongs in, which is where the client reads the id back from.
         self.server_id = console::next_map_id(self.server_id);
-        self.configstrings = configstrings::static_configstrings(&self.cfg, self.server_id);
+        self.configstrings =
+            configstrings::static_configstrings(&self.cfg, self.server_id, self.fall_heights);
         // Step 19. Past the teardown: a failure here leaves no level.
         self.load_scripts_with(fs, false, carry, save_persist)
             .map_err(LoadFailure::Fatal)?;
@@ -2597,6 +2652,7 @@ impl Server {
                 log::warn!("rebuilding the cvar mirror: {e:?}");
             }
         }
+        self.refresh_fall_heights();
         self.sync_sent_configstrings();
         // Step 21.
         self.rebuild_baselines();
@@ -2695,9 +2751,10 @@ impl Server {
         // (map-cycle doc, 4.6). The static slots are rebuilt around the new
         // id on top; 4.3 is what carries slot 1 to a client that already
         // has a gamestate.
-        for (i, s) in configstrings::static_configstrings(&self.cfg, self.server_id)
-            .into_iter()
-            .enumerate()
+        for (i, s) in
+            configstrings::static_configstrings(&self.cfg, self.server_id, self.fall_heights)
+                .into_iter()
+                .enumerate()
         {
             if !s.is_empty() {
                 self.configstrings[i] = s;
@@ -2721,6 +2778,7 @@ impl Server {
                 log::warn!("rebuilding the cvar mirror: {e:?}");
             }
         }
+        self.refresh_fall_heights();
         // The incoming level's whole table, in one go: what a client keeps of
         // it is what the burst below re-sends, and the diff has no business
         // replaying a level boundary slot by slot (doc 4.5).
@@ -3483,6 +3541,7 @@ impl Server {
                 log::warn!("rebuilding the cvar mirror: {e:?}");
             }
         }
+        self.refresh_fall_heights();
         // `trap_SendConsoleCommand`'s `EXEC_APPEND`: what a builtin queued
         // this frame runs at the top of the next tick, never mid-frame.
         self.console.extend(console_lines);
@@ -3535,6 +3594,7 @@ impl Server {
     fn replay_moves(&mut self) -> Vec<MoveSummary> {
         use vcod_common::movetrace::{Body, MoveWorld};
         use vcod_common::pmove::weapon::{EV_FIRE_MELEE, EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT};
+        use vcod_common::pmove::{EV_LANDING_PAIN_BASE, EV_LANDING_PAIN_LAST};
         // Every client's body, the mover's own rewritten after each of its
         // steps: retail relinks after each `Pmove`.
         let mut bodies: Vec<Body> = self
@@ -3545,6 +3605,7 @@ impl Server {
             .collect();
         let weapons = self.weapon_table.clone();
         let now_ms = self.sv_time_ms;
+        let fall_heights = self.fall_heights;
         let max_clients = self.clients.len();
         let mut moved = vec![MoveSummary::default(); max_clients];
         let mut rounds: Vec<Round> = (0..max_clients).map(|_| Round::default()).collect();
@@ -3629,6 +3690,7 @@ impl Server {
                 continue;
             }
             let sim = c.sim.as_mut().unwrap();
+            sim.ps.fall_heights = fall_heights;
             let round = &mut rounds[slot];
             // What the client held going in, so a switch the machine made is
             // told apart from a playerstate reset between ticks.
@@ -3667,8 +3729,9 @@ impl Server {
                     bodies.extend(sim.body(slot as u32));
                 }
             }
-            // `ClientEvents` (0x3fd24): this cmd's shots, swings and throws,
-            // fired below before its touch pass.
+            // `ClientEvents` (0x3fd24): this cmd's shots, swings, throws and
+            // falls, in the order it raised them, fired below before its
+            // touch pass.
             let mut attacks = Vec::new();
             for e in &raised {
                 let weapon = sim.ps.weapon;
@@ -3702,6 +3765,11 @@ impl Server {
                         weapon,
                         aim: sim.aim_angles(),
                     }),
+                    ev if (EV_LANDING_PAIN_BASE..=EV_LANDING_PAIN_LAST).contains(&ev) => attacks
+                        .push(Attack::Fall {
+                            slot,
+                            percent: e.parm,
+                        }),
                     _ => {}
                 }
                 // A `clipOnly` weapon with nothing left is taken away (combat
@@ -3972,6 +4040,55 @@ impl Server {
         }
     }
 
+    /// `ClientEvents`' landing-pain arm (player-clip doc, 8.8), inside the cmd
+    /// that landed: `pain_debounce_time` to `level.time + 200`, which keeps
+    /// the end frame's `EV_PAIN` off a fall, then `G_Damage` with the percent
+    /// taken of `ps.stats[2]` and no inflictor, attacker, point or direction.
+    fn fall(
+        &mut self,
+        slot: usize,
+        percent: i32,
+        rounds: &mut [Round],
+        bodies: &mut Vec<vcod_common::movetrace::Body>,
+        weapons: &crate::weapons::WeaponTable,
+    ) {
+        // A zero share is the one `ClientEvents` skips (0x3fda8).
+        if percent == 0 {
+            return;
+        }
+        let proto = self.proto;
+        let now_ms = self.sv_time_ms;
+        self.close_round(slot, &mut rounds[slot]);
+        let Some(rt) = self.script.as_mut() else {
+            return;
+        };
+        mirror_roster(&self.clients, rt);
+        let Some(c) = self.clients[slot].as_mut() else {
+            return;
+        };
+        let st = c.last_processed_st;
+        let Some(sim) = c.sim.as_mut() else { return };
+        // A cmd runs on the last frame's `level.time`.
+        let level_ms = now_ms.wrapping_sub(FRAME_MS);
+        sim.debounce_pain(level_ms.wrapping_add(FALL_PAIN_DEBOUNCE_MS));
+        let damage = crate::game::combat::located_damage(
+            fall_damage(percent, sim.max_health),
+            self.hitlocs.multiplier("none"),
+        );
+        mirror_for_callback(rt, sim, proto, slot, st);
+        rt.deliver_fall(slot, damage, now_ms);
+        apply_callback_ops(
+            rt,
+            sim,
+            slot,
+            self.anims.as_deref(),
+            weapons,
+            &mut self.rng,
+            now_ms,
+        );
+        relink(bodies, &self.clients, slot);
+    }
+
     /// `FireWeapon` inside the cmd that raised it: the trace against the
     /// world and every client as it stands now, and each impact and damage
     /// callback in the order the round met them, so a player one round kills
@@ -3994,6 +4111,10 @@ impl Server {
                 aim,
             } => {
                 self.throw(slot, weapon, fuse_left_ms, aim, weapons);
+                return;
+            }
+            Attack::Fall { slot, percent } => {
+                self.fall(slot, percent, rounds, bodies, weapons);
                 return;
             }
         };
@@ -4047,7 +4168,7 @@ impl Server {
                     bones.as_mut(),
                     &mut self.rng,
                 ),
-                Attack::Throw { .. } => unreachable!(),
+                Attack::Throw { .. } | Attack::Fall { .. } => unreachable!(),
             }
             .effects
         };
@@ -4533,6 +4654,25 @@ mod tests {
     use vcod_common::net::snapshot::{SVC_SNAPSHOT, SnapshotRing};
 
     const QPORT: u16 = 0x2001;
+
+    /// Every landing of the two 2026-10-05 retail runs, parm and maxhealth
+    /// to damage (player-clip doc 8.10): the float `0.01` keeps each whole
+    /// share just under, and past 99 the fall does 110 percent.
+    #[test]
+    fn fall_damage_is_retails_share_of_max_health() {
+        for (percent, max, damage) in [
+            (25, 100, 24),
+            (40, 100, 39),
+            (77, 100, 76),
+            (43, 200, 85),
+            (100, 100, 110),
+            (13, 100, 12),
+            (18, 200, 35),
+            (41, 100, 40),
+        ] {
+            assert_eq!(fall_damage(percent, max), damage, "{percent}% of {max}");
+        }
+    }
 
     fn cfg() -> ServerConfig {
         ServerConfig {
