@@ -18,7 +18,8 @@ All binaries are from the 1.1 install unless stated otherwise.
 | `CoDMP.exe` | `753fbcabd0fdda7f7dad3dbb29c3c008` | font `.dat` loader, text renderer, `^N` colour table |
 | `game.mp.i386.so` (the 1.1d Linux dedicated server's game module) | `de8947beb6f86fbfb46f5adfaab3d3ed` | who writes each configstring, obituary event builder, scoreboard message builder. It has a symbol table, so function names below are the module's own |
 | `pak5.pk3` | `0cb20baa66ddecc72ccb7f17b3062bb3` | `fonts/fontImage_*.dat`, `gfx/hud/*death*` art |
-| `pak0.pk3` | | `weapons/mp/*` weapon defs |
+| `pak0.pk3` | | `weapons/mp/*` weapon defs, `ui/assets/reticle_q.tga` |
+| `pak4.pk3` | | `scripts/ui_hud.shader`, `scripts/hud.shader` |
 | `cgame_mp_x86.dll` from the 1.5 install | `075e2af18aeaf2aeaf2a75ce22db683a` | 1.5 diff (icon names unchanged) |
 | live: `51.195.89.86:28960`, mp_carentan TDM, 2026-08-24 | | `serverCommand` stream, gamestate |
 
@@ -969,7 +970,8 @@ table (`{name, offset, type}` records around `0x30075558`): `displayName`
 `hipSpreadStandMin` `+0x23c`, `hipSpreadDuckedMin` `+0x240`,
 `hipSpreadProneMin` `+0x244`, `hipSpreadMax` `+0x248`, `hipReticleSidePos`
 `+0x264`, `clipOnly` `+0x2d4`, `wideListIcon` `+0x2d8`, `adsAimPitch`
-`+0x344`, `adsCrosshairInFrac` `+0x348`, `adsCrosshairOutFrac` `+0x34c`.
+`+0x344`, `adsCrosshairInFrac` `+0x348`, `adsCrosshairOutFrac` `+0x34c`,
+and the scope's keys listed under "Scope overlay".
 
 ### Crosshair
 
@@ -1038,9 +1040,106 @@ snapshots it lerps between. INFERRED: that is the playerstate's
 so at the defaults they fade from 1 to 0.7, reached at `aimSpreadScale` 76.5;
 the centre image takes `cg_crosshairAlpha` times the same return, unfloored.
 INFERRED: `0x30015fe0` returns 1 whenever its first call (`0x30015f20`)
-returns 0, and its other branch draws the sight overlay; vcod takes the
-return as 1 and does not draw the overlay. vcod reads `aimSpreadScale` off
-the prediction or the newest snapshot, not lerped.
+returns 0; its other branch draws the scope overlay and returns `1 - frac`
+(next section), so both alphas fade out over the zoom tail, the centre to
+nothing and the arms to `cg_crosshairAlphaMin`. vcod reads `aimSpreadScale`
+off the prediction or the newest snapshot, not lerped.
+
+### Scope overlay
+
+VERIFIED, the cgame's weapon field table (`{name, offset, type}` records
+`0x30075dc8`..`0x30075e10`): `adsZoomFov` `+0x218`, `adsZoomInFrac`
+`+0x21c`, `adsZoomOutFrac` `+0x220`, `adsOverlayShader` `+0x224` (type 0),
+`adsOverlayReticle` `+0x228` (type 10), `adsOverlayWidth` `+0x22c`,
+`adsOverlayHeight` `+0x230`. VERIFIED: the name table at `0x300754f0`
+reads `none`, `crosshair`, `FG42`, `Springfield`, `Gewehr43`. INFERRED:
+type 10 stores the index of the name, 0 to 4.
+
+VERIFIED, pak0's `weapons/mp/*`: five files set the keys, all with
+`adsOverlayShader ui/assets/reticle_circle_quarter` at 220 by 220:
+`springfield_mp` with reticle `Springfield`, and `kar98k_sniper_mp`,
+`mosin_nagant_sniper_mp`, `fg42_mp` and `fg42_semi_mp` with `FG42`.
+VERIFIED: pak4's `scripts/ui_hud.shader` maps that material to `map clamp
+ui/assets/reticle_q.tga` with `blendFunc blend`. VERIFIED: pak0's 64x64
+`reticle_q.tga` is opaque black except for a quarter disc about its
+bottom-right corner, radius about 32 texels, at alpha 25 of 255.
+
+INFERRED, off `0x30015f20`: the overlay is up when the held weapon names a
+shader or a reticle, `fWeaponPosFrac` (`0x30207214`) is not 0, and
+`frac = (f - (1 - X)) / X` is above 0.01, `X` being `adsZoomInFrac` with
+the direction flag at `0x30209458` set and `adsZoomOutFrac` without it; the
+division is skipped while `f - (1 - X)` is not above 0. VERIFIED:
+`0x300693f4` reads 0.01. INFERRED, off `0x30015fe0`: the colour it sets
+before the image is `(1, 1, 1, 1)`, so the overlay does not fade in; it
+snaps on, at `f` 0.584 on the rise for `kar98k_sniper_mp`'s 0.42.
+
+INFERRED, off `0x30016760`: the crosshair draw calls `0x30015fe0` ahead of
+its test of `cg_drawCrosshair` (`0x301d902c`), so only its earlier returns
+(`0x30207158` set, a mounted gun, no weapon) skip the overlay.
+
+INFERRED, off `0x30015fe0` and `0x30015d70`: the overlay's centre is the
+refdef's middle plus an offset. With `v` the forward of the pitch at
+`0x3020cb80` and the yaw at `0x3020cb84`, and `d` its dot with the refdef
+axis at `0x302095a0`, the offset is `-320 * (v . axis[1]) / (tan(fov_x / 2)
+* d)` across and `-240 * (v . axis[2]) / (tan(fov_y / 2) * d)` down, times
+`screenXScale` and `screenYScale` (`0x301d1fc4`, `0x301d1fc8`), and 0 unless
+`d` and both refdef fovs (`0x3020958c`, `0x30209590`) are above 0.
+VERIFIED: `0x300694f8` reads -320.0, `0x300694f4` -240.0 and `0x3006946c`
+0.0087266 (`pi / 360`). INFERRED, off `0x300371f0`: for an `aimDownSight`
+weapon with `fWeaponPosFrac` not 0 those two angles come from
+`0x3003c810`, otherwise from the refdef's view angles (`0x302095cc`,
+`0x302095d0`), which leaves the overlay centred. INFERRED: `0x3003c810` is
+the gun's angles composed onto the view, the cgame's copy of the server's
+aim block (`cod11-combat.md` 15), so the overlay sits where the shot goes
+and drifts with the idle sway. vcod runs `pmove::aim::gun_angles` on the
+replay's playerstate and projects its forward through the drawn fovs. It
+leaves out the damage kick, whose angles the client is not sent, and
+centres the overlay when there is no replay.
+
+INFERRED, off `0x30015fe0`'s calls to `0x300310f0` (a plain wrapper of the
+stretch-pic trap `0x49`: x, y, w, h, s1, t1, s2, t2, material): with `w`
+and `h` the overlay size times the screen scales and `(cx, cy)` the centre,
+the image is drawn four times, `w` by `h`, at `(cx - w, cy - h)` with
+corners `(0,0)-(1,1)`, at `(cx, cy - h)` mirrored in `s`, at `(cx - w, cy)`
+mirrored in `t`, and at `(cx, cy)` mirrored in both. Black bands follow, in
+the same material: left `(0, 0, cx - w, H)` when `cx - w > 0` and right
+`(cx + w, 0, W - cx - w, H)` when `cx + w < W`, both at `s` 0 and `t` 0 to
+1; top `(cx - w, 0, 2w, cy - h)` and bottom `(cx - w, cy + h, 2w, H - cy -
+h)` under the same tests, at `t` 0 and `s` 0 to 1. `W` and `H` are the
+refdef's size (`0x30209584`, `0x30209588`). INFERRED, off the weapon setup
+that falls through to `0x300358f5`: the material at `0x301a6aa4 + 0x198 * weapon`
+is `adsOverlayShader` registered with trap `0x58`.
+
+INFERRED, same function, the reticle, drawn over the image whether or not
+the shader is set: `crosshair` draws the weapon's `reticleCenter` material,
+`reticleCenterSize` times the screen scales, centred. `FG42` and `Gewehr43`
+draw in `(0, 0, 0, 1)` a `hudSoftLine` post `(cx - 1, cy, 3, 0.9h)` and two
+`hudSoftLineH` bars `(cx - 0.9w, cy - 1, 0.75w, 3)` and `(cx + 0.15w, cy -
+1, 0.75w, 3)`. `Springfield` draws a cross, `(cx - 1, cy - 0.9h, 3, 1.8h)`
+and `(cx - 0.9w, cy - 1, 1.8w, 3)`. The 1 and the 3 are window pixels.
+VERIFIED: `0x300695ec` reads 0.9, `0x300693d0` 0.75, `0x300695e8` 1.8 and
+`0x300695c0` 0.15, and `0x301d5a88` and `0x301d5a8c` are stored at
+`0x3002303d` and `0x30023047` from the registrations of `hudSoftLine` and
+`hudSoftLineH`. VERIFIED: pak4's `scripts/hud.shader` gives both `rgbGen
+vertex` and `alphaGen vertex`.
+
+INFERRED, off `0x300371f0` and `0x30036cf0`: the gun's add flag is cleared
+when `cg_drawGun` (`0x301dbaec`) is 0, or is not 2 and `0x30015f20` returns
+1, and with it clear `0x30036cf0` adds neither the gun's refEntity (trap
+`0x3d`) nor its `tag_flash` effect. So under the overlay the viewmodel and
+the first-person muzzle flash vanish. VERIFIED: the cvar table names
+`cg_drawGun` for the `vmCvar_t` at `0x301dbae0`, whose integer is `+0xc`.
+
+INFERRED, off `0x300172f0`: while `0x30015f20` returns 1, the hit-direction
+icons are skipped unless `cg_hudDamageIconInScope` (`0x301e0acc`, default 0)
+is set, and are then centred on the overlay's offset. INFERRED, off
+`0x30018810`: they draw before the crosshair and its overlay. Where the
+`hud.menu` items paint relative to the overlay was not traced; vcod draws
+the overlay first, under them.
+
+vcod scales the overlay by the window height on both axes, as the rest of
+its HUD, where retail scales x by `width / 640`: on a window wider than 4:3
+the circle stays round and the side bands widen.
 
 ### Health
 
@@ -1155,7 +1254,6 @@ behind. VERIFIED: the centre is `0x300695e4` (320.0) and `0x300695e0`
 | Weapon mode icon | ownerdraw 83, `modeIcon` (`+0x190`) | not drawn |
 | Stance flash | `hudStanceFlash`, `0x30023f50` | not drawn |
 | Turret reticle | `0x30016610` | no crosshair on a mounted gun |
-| Sight overlay | `0x30015fe0` | not drawn; its alpha factor taken as 1 |
 | Compass spring, damage-icon jitter, `adsAimPitch`, shared ammo caps | above | left out, each noted above |
 | Fixed-width fonts | section 8, "Font slots" | drawn and measured with a loaded proportional font |
 

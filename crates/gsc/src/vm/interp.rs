@@ -727,7 +727,9 @@ impl Vm {
                     // each queued thread runs to its first suspend here,
                     // before the calling thread's next instruction (see
                     // `Cx::spawn`).
-                    for queued in std::mem::take(&mut pending_spawns) {
+                    let mut queue =
+                        std::collections::VecDeque::from(std::mem::take(&mut pending_spawns));
+                    while let Some(queued) = queue.pop_front() {
                         let target = queued.func;
                         match self.functions.get(&target).cloned() {
                             Some(f) => {
@@ -753,11 +755,12 @@ impl Vm {
                                 spawns: &mut field_spawns,
                             };
                             host.spawn_returned(&mut cx, token);
-                            debug_assert!(
-                                field_spawns.is_empty(),
-                                "Cx::spawn is only honoured from a builtin"
-                            );
-                            field_spawns.clear();
+                            // The engine code after one `Scr_ExecEntThread`
+                            // may start the next: those threads go ahead of
+                            // the rest of the builtin's queue.
+                            for next in field_spawns.drain(..).rev() {
+                                queue.push_front(next);
+                            }
                         }
                     }
                     push!(v);

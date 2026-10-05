@@ -310,23 +310,30 @@ named `dm` because retail runs the probe as gametype `probe_prone`.
 
 ## probe_fall
 
-The landing stun measurement's server half. Under `probe_teleport 1` it drops
-each spawned allied player onto the mp_carentan street at (900 1930) from 100,
-300, 340, 420 and 520 units above it, 8 s apart, with `self.health` reset to
-100 before each, and logs `PROBE drop <time> <height> <origin>` and, 4 s on,
-`PROBE after <time> <height> health <health> <origin>`. The client half
-prints a `FALL` line per snapshot whose ground entity, `pm_flags`,
-`pm_time`, event ring or health moved, and every airborne snapshot. Neither
-half writes a file; the 2026-10-05 run's lines were pasted by hand into
-`crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall.txt`, the
-server's as comments, and `docs/research/cod11-player-clip.md` 8.9 reads
-them.
+The landing stun and fall damage measurement's server half. Under
+`probe_teleport 1` it drops each spawned allied player onto the mp_carentan
+street at (900 1930) from 100, 300, 340, 420, 340 again at `maxhealth` 200,
+and 520 units above it, 8 s apart, with `self.health` reset to the max
+before each, and logs `PROBE drop <time> <height> <origin> maxhealth <n>`
+and, 4 s on, `PROBE after <time> <height> health <health> <origin>`. It
+wraps `level.callbackPlayerDamage` and `level.callbackPlayerKilled` to log
+`PROBE damage`, `PROBE damaged` and `PROBE killed` lines with every argument
+the engine handed them. The client half prints a `FALL` line per snapshot
+whose ground entity, `pm_flags`, `pm_time`, event ring or health moved, and
+every airborne snapshot. Neither half writes a file; each run's lines were
+pasted by hand into a fixture in `crates/server/tests/fixtures/playerstate/`,
+the server's as comments: `mp_carentan-dm-fall.txt` (the first run, five
+drops and no callback lines), `mp_carentan-dm-fall-damage.txt` and
+`mp_carentan-dm-fall-damage-cvars.txt` (the second with `+set
+bg_fallDamageMinHeight 200 +set bg_fallDamageMaxHeight 1000` after the
+`probe_teleport` set). `docs/research/cod11-player-clip.md` 8.9 and 8.10 read
+them, and `crates/server/tests/fall_ab.rs` gates the last two.
 
 ```
-COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=75 \
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=90 \
     tools/run_probe.sh client-probes/probe_fall mp_carentan +set probe_teleport 1
-# second shell, about 6 s later:
-cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-fall --probe-secs 65
+# second shell, about 7 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-fall --probe-secs 78
 ```
 
 ## probe_bump
@@ -593,3 +600,70 @@ first hits:
 1:48 PROBE damage 108850 0 180 0 MOD_PISTOL_BULLET head (-840.68, -3655.10, 24.69) (-848.00, -3656.00, -39.88)
 2:18 PROBE damage 138350 0 107 0 MOD_PISTOL_BULLET torso_upper (-839.14, -3656.68, 18.99) (-848.00, -3656.00, -38.99)
 ```
+
+## probe_blastloop
+
+What one `radiusDamage` does between its victims, for
+`docs/research/cod11-combat.md` 14.5. It wraps `level.callbackPlayerDamage`
+so every victim logs `PROBE cb <slot> <iDamage> <sessionstate> <health>` as
+the engine calls it and `PROBE cbafter <slot> <sessionstate> <health>` once
+sd's own callback returns. `probe_blastbody`'s recipe, 75 s on the server
+and `--probe-secs 65` on the clients. Against ours the server half is
+`vcod-server mp_carentan --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_blastloop.gsc`.
+Nothing here writes a fixture.
+
+Rows: three flat-20 blasts across `setPlayerIgnoreRadiusDamage(true)`, a
+second blast with the flag still set, and `(false)`; then a lethal flat 200
+down `probe_blastbody`'s line with 100-health slot 0 in front and
+1000-health slot 1 behind, a flat 20 in the same frame and one a frame
+later; then the same three on a second line with slot 3 in front and slot 2
+behind. Retail, 2026-10-05, from the first blast on (sd's `D;` and `K;`
+records dropped):
+
+```
+PROBE blast ignore_on
+PROBE blast ignore_still
+PROBE blast ignore_off
+PROBE cb 0 20 playing 100
+PROBE cbafter 0 playing 80
+PROBE cb 1 13 playing 100
+PROBE cbafter 1 playing 87
+PROBE before_low 0 playing 100 (-226.00, 2424.00, -31.87)
+PROBE before_low 1 playing 1000 (-269.00, 2381.00, -31.87)
+PROBE blast lethal_low
+PROBE cb 0 200 playing 100
+PROBE cbafter 0 dead 0
+PROBE cb 1 200 playing 1000
+PROBE cbafter 1 playing 800
+PROBE blast same_frame_low
+PROBE cb 0 20 dead 0
+PROBE cbafter 0 dead -20
+PROBE cb 1 20 playing 800
+PROBE cbafter 1 playing 780
+PROBE blast next_frame_low
+PROBE cb 1 20 playing 780
+PROBE cbafter 1 playing 760
+PROBE before_high 0 spectator -20 (-245.37, 2404.63, 28.01)
+PROBE before_high 1 playing 760 (224.43, -1280.81, 1.97)
+PROBE before_high 2 playing 1000 (-306.80, 2473.10, -31.87)
+PROBE before_high 3 playing 100 (-246.80, 2473.10, -31.00)
+PROBE blast lethal_high
+PROBE cb 3 200 playing 100
+PROBE cbafter 3 dead 0
+PROBE blast same_frame_high
+PROBE cb 3 20 dead 0
+PROBE cbafter 3 dead -20
+PROBE cb 2 20 playing 1000
+PROBE cbafter 2 playing 980
+PROBE blast next_frame_high
+PROBE cb 2 20 playing 980
+PROBE cbafter 2 playing 960
+```
+
+Ours, the same day, after the walk was made retail's: every row reads the
+same down to `next_frame_low`. On the second line slot 3 stands at z -21.88
+where retail's stands at -31.00, its body leaves two of slot 2's five
+probes clear where retail's left none, and slot 2 takes 133 on
+`lethal_high`; the
+`same_frame_high` callbacks run 2 then 3 where retail's ran 3 then 2.

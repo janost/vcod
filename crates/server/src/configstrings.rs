@@ -5,6 +5,7 @@
 use crate::server::ServerConfig;
 use vcod_common::net::connectionless::Info;
 use vcod_common::net::protocol::PROTOCOL_V1;
+use vcod_common::pmove::FallHeights;
 use vcod_gsc::ErrorKind;
 
 /// `BG_SetupWeaponInfo`'s list, configstring 7, 1-based on the wire.
@@ -62,10 +63,12 @@ pub fn serverinfo(cfg: &ServerConfig) -> Info {
 /// `Cvar_InfoString_Big(CVAR_SYSTEMINFO)`, capture cs 1, minus the pak lists.
 /// Must stay under `MAX_INFO_STRING` with `sv_serverid` intact; the overflow
 /// is in docs/research/cod11-server-handshake.md, "Configstring 1, systeminfo".
-pub fn systeminfo(server_id: u8) -> Info {
+/// The fall bounds are the cvars' current values, which a client predicts
+/// its landings with.
+pub fn systeminfo(server_id: u8, fall: FallHeights) -> Info {
     let mut i = Info::new();
-    i.set("bg_fallDamageMaxHeight", 480)
-        .set("bg_fallDamageMinHeight", 256)
+    i.set("bg_fallDamageMaxHeight", fall.max)
+        .set("bg_fallDamageMinHeight", fall.min)
         .set("g_synchronousClients", 0)
         .set("pmove_fixed", 0)
         .set("pmove_msec", 8)
@@ -77,12 +80,12 @@ pub fn systeminfo(server_id: u8) -> Info {
 }
 
 /// The full 2048-slot table for a fresh map.
-pub fn static_configstrings(cfg: &ServerConfig, server_id: u8) -> Vec<String> {
+pub fn static_configstrings(cfg: &ServerConfig, server_id: u8, fall: FallHeights) -> Vec<String> {
     let mut cs = vec![String::new(); PROTOCOL_V1.max_configstrings];
     // Names an out-of-range literal instead of a bare index panic.
     debug_assert!(STATIC.iter().all(|&(i, _)| i < cs.len()));
     cs[0] = serverinfo(cfg).to_string();
-    cs[1] = systeminfo(server_id).to_string();
+    cs[1] = systeminfo(server_id, fall).to_string();
     for &(i, s) in STATIC {
         cs[i] = s.to_string();
     }

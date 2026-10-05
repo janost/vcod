@@ -7,6 +7,7 @@ pub mod hudelem;
 pub mod killfeed;
 pub mod menu;
 pub mod player;
+pub mod scope;
 pub mod scoreboard;
 pub mod status;
 
@@ -216,7 +217,13 @@ impl Hud {
         let screen = (f.screen_w, f.screen_h);
         match f.ps.filter(|_| f.local_player) {
             Some(ps) => {
-                let view = player_view(ps, f);
+                let mut view = player_view(ps, f);
+                // Off the replay only: a snapshot does not carry the sway.
+                view.gun_angles = f.predicted.and_then(|pred| {
+                    self.player
+                        .gun
+                        .step(view.weapon, &pred.ps, pred.command_time)
+                });
                 let cx = player::Context {
                     weapons: f.weapons,
                     configstrings: f.configstrings,
@@ -356,6 +363,7 @@ fn player_view<'a>(ps: &'a PlayerState, f: &HudFrame<'a>) -> PlayerView<'a> {
             f.fov,
             crate::camera::fov_y(f.fov, f.screen_w / f.screen_h.max(1.0)),
         ),
+        gun_angles: None,
         objectives: &ps.arrays.objectives,
         cursor_hint: int("serverCursorHint"),
         // Playerstate fields arrive unsigned; retail's -1 is 255.

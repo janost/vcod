@@ -1237,6 +1237,7 @@ mod tests {
             health: 10,
             max_health: 100,
             dead: false,
+            takedamage: true,
         };
         rt.deliver_hits(
             vec![Hit {
