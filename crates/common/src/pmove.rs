@@ -2237,6 +2237,10 @@ fn air_move(
     ps.air_speed_peak = ps.air_speed_peak.max(-ps.velocity.z);
     let (dir, wishspeed) = wish_air(ps, input);
     accelerate(ps, dir, wishspeed, PM_AIRACCELERATE, dt);
+    // A plane too steep to stand on still steers the fall (0x2f1d3).
+    if let Some(n) = ps.ground_plane {
+        ps.velocity = clip_velocity(ps.velocity, n);
+    }
     step_slide_move(ps, world, dt, true, mask, events);
     set_movement_dir(ps, input, dt);
 }
@@ -2254,20 +2258,23 @@ fn slide_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32, gravity: bool, m
     const NUM_BUMPS: usize = 4;
     let (mins, maxs) = (ps.mins(), ps.maxs());
 
+    // `pml.groundPlane`, which a steep plane sets too (0x3483b reads it, not
+    // `pml.walking`); `on_ground` covers a state no ground trace has run on.
+    let ground = ps.ground_plane.or(ps.on_ground.then_some(ps.ground_normal));
     // average of start and end velocity, matching the analytic parabola
     let mut end_velocity = ps.velocity;
     if gravity {
         end_velocity.z -= GRAVITY * dt;
         ps.velocity.z = (ps.velocity.z + end_velocity.z) * 0.5;
-        if ps.on_ground {
-            ps.velocity = clip_velocity(ps.velocity, ps.ground_normal);
+        if let Some(n) = ground {
+            ps.velocity = clip_velocity(ps.velocity, n);
         }
     }
 
     let mut planes: Vec<Vec3> = Vec::with_capacity(MAX_CLIP_PLANES);
     // never turn against the ground plane or back against the original move
-    if ps.on_ground {
-        planes.push(ps.ground_normal);
+    if let Some(n) = ground {
+        planes.push(n);
     }
     planes.push(ps.velocity.normalize_or_zero());
 
@@ -2405,8 +2412,9 @@ fn step_slide_move(
     let ground_plane = ps.on_ground && !ps.on_ladder && ps.waterjump_ms <= 0.0;
 
     // The step-up runs on a blocked slide only (0x35166): the up trace over
-    // `stepSize + 1`, the slide again from up there, and `stepUp` the height
-    // gained (0x352d8).
+    // `stepSize + 1`, `stepUp` a unit under what it reached and nothing under
+    // 1 (0x351ca-0x351e8), the slide again from up there
+    // (docs/research/cod11-mantle.md, "The step-up stops a unit short").
     let mut step = 0.0;
     if blocked {
         let up = world.box_trace(
@@ -2416,9 +2424,10 @@ fn step_slide_move(
             maxs,
             mask,
         );
-        if !up.allsolid && up.endpos.z > start_o.z {
-            step = up.endpos.z - start_o.z;
-            ps.origin = up.endpos;
+        let room = (step_size + 1.0) * up.fraction - 1.0;
+        if !up.allsolid && room >= 1.0 {
+            step = room;
+            ps.origin = start_o + Vec3::Z * room;
             ps.velocity = start_v;
             slide_move(ps, world, dt, gravity, mask);
         }
