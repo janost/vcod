@@ -1340,8 +1340,33 @@ mod tests {
                     cx.spawn(f, recv, vec![]);
                     Ok(Value::Undefined)
                 }
+                "spawnkillerthen" => {
+                    let f = cx.func_ref("test/script", "killed");
+                    cx.spawn_then(f, recv, vec![], 1);
+                    let f = cx.func_ref("test/script", "nosuchthing");
+                    cx.spawn_then(f, recv, vec![], 2);
+                    Ok(Value::Undefined)
+                }
                 _ => Err(ErrorKind::MissingBuiltin(name)),
             }
+        }
+
+        /// Appends `<token>:<level.state>` to `level.returned`.
+        fn spawn_returned(&mut self, cx: &mut Cx, token: u32) {
+            let Target::Struct(level) = cx.level() else {
+                unreachable!()
+            };
+            let (state, returned) = (cx.intern_folded("state"), cx.intern_folded("returned"));
+            let render = |cx: &mut Cx, v| match v {
+                Value::String(a) => cx.resolve(a).to_string(),
+                _ => String::new(),
+            };
+            let now = cx.get_field(level, state);
+            let now = render(cx, now);
+            let so_far = cx.get_field(level, returned);
+            let so_far = render(cx, so_far);
+            let text = cx.intern_exact(&format!("{so_far}{token}:{now} "));
+            cx.set_field(level, returned, Value::String(text));
         }
 
         fn get_field(&mut self, cx: &mut Cx, ent: EntId, field: Atom) -> Value {
@@ -1390,6 +1415,22 @@ mod tests {
         assert_eq!(level_string(&mut vm, "state"), "dead");
         vm.run_frame(&mut host, 1000);
         assert_eq!(level_string(&mut vm, "state"), "buried");
+    }
+
+    /// `spawn_then`'s hook runs once its thread has run to its first
+    /// suspend, before the next queued thread and before the builtin's caller
+    /// continues; a function nothing installed still gets its hook.
+    #[test]
+    fn spawn_then_returns_to_the_host_after_its_thread_and_before_the_caller() {
+        let mut vm = vm_with(
+            r#"main() { level spawnkillerthen(); level.seen = level.returned; }
+               killed() { self.state = "dead"; wait 1; self.state = "buried"; }"#,
+        );
+        let mut host = SpawnHost::default();
+        let main = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, 0, main, None, vec![]);
+        assert_eq!(level_string(&mut vm, "seen"), "1:dead 2:dead ");
+        assert_eq!(vm.aborts().len(), 1, "the missing function is recorded");
     }
 
     /// A builtin that spawns a thread whose first act is the same builtin is

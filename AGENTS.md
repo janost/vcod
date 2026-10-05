@@ -637,12 +637,13 @@ engineering setup works.
   damage or death, a pickup's ammo and event) lands on the sim the same way,
   before its next cmd, so a later hit finds only its own callback's ops
   queued for it (`docs/research/cod11-items.md` 13.2). Every death is `GameHost::die`, whichever
-  path ran it, and right after each callback that can kill returns (a hit's,
-  the `kill`'s, the touch pass's, and later the blasts', the script frame's
-  and a turret round's) `player_die`'s walk queues the scoreboard to each
-  spectator following the victim, behind what the killed callback queued, so
-  it rides the death frame's packet (`docs/research/cod11-spectator-follow.md`
-  4). The anim update runs per client off its last
+  path ran it, and the moment its `CodeCallback_PlayerKilled` first suspends
+  `player_die`'s walk queues the scoreboard to each spectator following the
+  victim, inside the VM (`Cx::spawn_then`), so the `b` lands behind what the
+  killed callback queued and ahead of anything script queues after it, and
+  rides the death frame's packet; the walk reads a roster `Server` mirrors
+  ahead of every script entry that can kill
+  (`docs/research/cod11-spectator-follow.md` 4). The anim update runs per client off its last
   cmd, at the end and wherever a kill, a hit, a use press or a
   `trigger_hurt` death breaks into its cmds; it feeds the wire, while a
   posed body's bones stay what the last end frame committed (below). The host mirror after each move
@@ -650,8 +651,12 @@ engineering setup works.
   switched to and the `clipOnly` weapon a last round spent, the take
   included, its entity state, cook, height and ammo and clip arrays
   (`client_ammo`, which every `GameHost::weapon_op` then moves in place, and
-  ops still queued are re-applied on top), and the touch pass reads it: the
-  item half after the trigger half and the use key after both -- the same use key whose rising
+  ops still queued are re-applied on top), and the touch pass reads it. The
+  origin goes in truncated, the snapped `r.currentOrigin` the cmd's shots, the
+  trigger half and anything they kill read (a `trigger_hurt` death drops from
+  it), while the trigger half itself touches at `ps.origin`, and goes back
+  to `ps.origin` ahead of the item half (`docs/research/cod11-combat.md` 5.5):
+  the item half after the trigger half and the use key after both -- the same use key whose rising
   edge arms a turret mount there, once the gun's arc allows it -- the way retail updates
   `r.currentOrigin` and calls `G_TouchTriggers` inside `ClientThink`; a
   trigger the pass fires is queued, not woken, and its `waittill` threads are
@@ -731,7 +736,10 @@ engineering setup works.
   next instruction: the queued thread starts the moment the builtin returns,
   which is how `finishPlayerDamage`'s killing hit gets
   `CodeCallback_PlayerKilled` to have written `self.sessionstate` before the
-  line after it reads the field. Only the `Cx` a builtin is handed honours it.
+  line after it reads the field. `Cx::spawn_then` adds the engine code that
+  follows the `Scr_ExecEntThread`: `Host::spawn_returned` runs with its token
+  once that thread first suspends, which is where `player_die`'s follower
+  walk sits. Only the `Cx` a builtin is handed honours either.
   A `Cx` from `get_field`, `set_field` or `Vm::with_cx` has no defined point
   at which a thread could run, so a spawn queued through one of those is
   dropped and `debug_assert`ed against; test such a builtin through

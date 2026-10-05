@@ -307,25 +307,28 @@ fn box_contacts_hulls(centre: Vec3, half: Vec3, origin: Vec3, hulls: &[BrushHull
     })
 }
 
-/// Every trigger this client touches, ascending entity number: the
-/// `trap_EntitiesInBox` broad phase around the origin, then the exact
-/// `trap_EntityContact` test of the client's own clip box against the
+/// Every trigger a client standing at `origin` touches, ascending entity
+/// number: the `trap_EntitiesInBox` broad phase around the origin, then the
+/// exact `trap_EntityContact` test of the client's own clip box against the
 /// trigger's *brushes* (docs/research/cod11-gsc-object-model.md section 22).
 /// Neither box contains the other -- the candidate reaches 52 below the feet
 /// and the clip box 72 above them -- so both have to hold, and the box
 /// overlap is only the cheap reject in front of the plane loop.
 ///
+/// `origin` is `ps.origin`, which both of `G_TouchTriggers`' boxes are built
+/// on, not the client's `origin` field, which holds the snapped
+/// `r.currentOrigin` while the pass runs (combat doc 5.5).
+///
 /// A trigger whose model has no brushes decoded (script-registered, or a map
 /// loaded without a BSP) keeps the box as its exact test.
-pub fn touched(host: &mut GameHost, cx: &mut Cx, client: EntId) -> Vec<EntId> {
+pub fn touched(host: &mut GameHost, cx: &mut Cx, origin: [f32; 3]) -> Vec<EntId> {
     let origin_atom = cx.intern_folded("origin");
-    let origin = entity_origin(host, cx, client, origin_atom);
     let candidate = offset_bounds(
         origin,
         [-TOUCH_BOX[0], -TOUCH_BOX[1], -TOUCH_BOX[2]],
         TOUCH_BOX,
     );
-    let exact = abs_bounds_with_atom(host, cx, client, origin_atom);
+    let exact = offset_bounds(origin, PLAYER_MINS, PLAYER_MAXS);
     let lo = Vec3::from_array(exact.0);
     let hi = Vec3::from_array(exact.1);
     let centre = (lo + hi) * 0.5;
@@ -582,7 +585,6 @@ mod tests {
     fn a_touch_needs_both_the_candidate_box_and_the_clip_box() {
         let (mut vm, mut host) = crate::game::testing::fixture();
         vm.with_cx(|cx| {
-            let player = host.ents.spawn_client(cx, 0, None).unwrap();
             let origin = cx.intern_folded("origin");
             let place = |host: &mut GameHost, cx: &mut Cx, z: f32| {
                 let id = host.ents.spawn(cx).unwrap();
@@ -600,7 +602,7 @@ mod tests {
             let at_feet = place(&mut host, cx, 4.0);
             place(&mut host, cx, 65.0);
             place(&mut host, cx, -30.0);
-            assert_eq!(touched(&mut host, cx, player), vec![at_feet]);
+            assert_eq!(touched(&mut host, cx, [0.0; 3]), vec![at_feet]);
         });
     }
 
@@ -611,7 +613,6 @@ mod tests {
     fn a_lookat_trigger_is_not_touched_where_a_multiple_is() {
         let (mut vm, mut host) = crate::game::testing::fixture();
         vm.with_cx(|cx| {
-            let player = host.ents.spawn_client(cx, 0, None).unwrap();
             let origin = cx.intern_folded("origin");
             let place = |host: &mut GameHost, cx: &mut Cx, kind| {
                 let id = host.ents.spawn(cx).unwrap();
@@ -623,7 +624,7 @@ mod tests {
             };
             let multiple = place(&mut host, cx, TriggerKind::Multiple);
             place(&mut host, cx, TriggerKind::LookAt);
-            assert_eq!(touched(&mut host, cx, player), vec![multiple]);
+            assert_eq!(touched(&mut host, cx, [0.0; 3]), vec![multiple]);
         });
     }
 
@@ -761,13 +762,7 @@ mod tests {
         let (mut vm, mut host) = crate::game::testing::fixture();
         vm.with_cx(|cx| {
             let zone = place_wedge(&mut host, cx);
-            let player = host.ents.spawn_client(cx, 0, None).unwrap();
-            let origin = cx.intern_folded("origin");
-            let at = |host: &mut GameHost, cx: &mut Cx, p: [f32; 3]| {
-                host.set_field(cx, player, origin, Value::Vector(p))
-                    .unwrap();
-                touched(host, cx, player)
-            };
+            let at = |host: &mut GameHost, cx: &mut Cx, p: [f32; 3]| touched(host, cx, p);
             assert_eq!(
                 at(&mut host, cx, [60.0, 60.0, 4.0]),
                 vec![zone],
@@ -849,12 +844,7 @@ mod tests {
                 0,
                 0,
             );
-            let player = host.ents.spawn_client(cx, 0, None).unwrap();
-            let at = |host: &mut GameHost, cx: &mut Cx, p: [f32; 3]| {
-                host.set_field(cx, player, origin, Value::Vector(p))
-                    .unwrap();
-                touched(host, cx, player)
-            };
+            let at = |host: &mut GameHost, cx: &mut Cx, p: [f32; 3]| touched(host, cx, p);
             assert_eq!(at(&mut host, cx, inside), vec![zone], "at {inside:?}");
             assert!(
                 at(&mut host, cx, bulge).is_empty(),

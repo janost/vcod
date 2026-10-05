@@ -534,86 +534,50 @@ fn pass_followers_on(
     }
 }
 
-/// `DeathmatchScoreboardMessage` (`.so` 0x459c0): `b <numRows> <axis>
-/// <allies>{ <client> <score> <ping> <time> <icon>}*`, one row per online
-/// client (`docs/research/cod11-hud-protocol.md` section 3).
-///
-/// The score, the deaths and the status icon come from the script's own
-/// client fields, which is where every gametype writes them. `ping` is 0:
-/// the netchan keeps no round-trip estimate, and 0 renders as a number
-/// where retail's `-1` renders as "-" for a client still connecting.
-fn scoreboard(clients: &[Option<Client>], mut rt: Option<&mut script::ScriptRuntime>) -> String {
-    let mut field = |slot: usize, name: &str| rt.as_deref_mut()?.client_field(slot, name);
-    let mut online: Vec<usize> = clients
-        .iter()
-        .enumerate()
-        .filter_map(|(slot, c)| c.as_ref().map(|_| slot))
-        .collect();
-    let mut rows = BTreeMap::new();
-    for &slot in &online {
-        let num = |v: Option<String>| v.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-        let score = num(field(slot, "score"));
-        let deaths = num(field(slot, "deaths"));
-        let spectator = field(slot, "sessionteam").is_some_and(|t| t == "spectator");
-        let icon = field(slot, "statusicon").filter(|n| !n.is_empty());
-        rows.insert(slot, (score, deaths, spectator, icon));
-    }
-    // `level.sortedClients[]`'s order, `SortRanks` (.so 0x50090): a
-    // connecting client last, then spectators last among themselves by
-    // slot, then score descending, then deaths ascending; ties keep the
-    // slot order (hud protocol doc, section 3).
-    online.sort_by_key(|&slot| {
-        let connecting = clients[slot]
-            .as_ref()
-            .is_some_and(|c| c.state == ClientState::Connected);
-        let (score, deaths, spectator, _) = &rows[&slot];
-        (connecting, *spectator, -score, *deaths, slot)
-    });
-    // Tokens 2 and 3 are the two team scores, axis before allies, the
-    // order `DeathmatchScoreboardMessage` pushes them in (map-cycle doc,
-    // 6.3). Both retail captures read 0 in each: `dm` writes neither.
-    let [axis, allies] = rt.as_deref().map_or([0, 0], |rt| rt.host.team_scores);
-    let configstrings = rt.as_deref().map_or(&[][..], |rt| rt.configstrings());
-    let mut text = format!("b {} {axis} {allies}", online.len());
-    for slot in online {
-        let (score, deaths, _, icon) = &rows[&slot];
-        let icon = status_icon_index(configstrings, icon.as_deref());
-        text.push_str(&format!(" {slot} {score} 0 {deaths} {icon}"));
-    }
-    text
-}
-
-/// A client's `.statusicon` as the 1-based index into `CsRange::StatusIcon`
-/// the scoreboard row carries, or 0 when there is none or it names an
-/// icon nothing precached. The client resolves `20 + n` for an `n` in
-/// `1..8` (hud protocol doc, section 3).
-fn status_icon_index(configstrings: &[String], name: Option<&str>) -> usize {
-    let Some(name) = name else { return 0 };
-    let (first, last) = crate::configstrings::CsRange::StatusIcon.bounds();
-    configstrings
-        .get(first..=last)
-        .and_then(|range| range.iter().position(|cs| cs == name))
-        .map_or(0, |i| i + 1)
-}
-
-/// `player_die`'s walk (combat doc 5.1 step 9) for each death since the last
-/// drain: every spectator following the victim is sent the scoreboard,
-/// queued behind what the killed callback queued. Run after each script entry
-/// that can kill, before anything else queues a command.
-fn queue_death_scoreboards(clients: &[Option<Client>], rt: &mut script::ScriptRuntime) {
-    for victim in rt.take_deaths() {
-        for (slot, c) in clients.iter().enumerate() {
-            let Some(sim) = c.as_ref().and_then(|c| c.sim.as_ref()) else {
-                continue;
-            };
-            if sim.follow.target == Some(victim)
-                && session_of(Some(&mut *rt), slot, sim).state == follow::SessionState::Spectator
-            {
-                let text = scoreboard(clients, Some(&mut *rt));
-                rt.queue_client_command(slot, text);
-            }
+/// `DeathmatchScoreboardMessage` (`.so` 0x459c0) for these clients: the
+/// script's own, or every row zero without one.
+fn scoreboard(clients: &[Option<Client>], rt: Option<&mut script::ScriptRuntime>) -> String {
+    match rt {
+        Some(rt) => {
+            mirror_roster(clients, rt);
+            rt.scoreboard()
+        }
+        None => {
+            let rows = roster(clients)
+                .enumerate()
+                .filter_map(|(slot, r)| {
+                    r.map(|r| crate::game::scoreboard::Row {
+                        slot,
+                        connecting: r.connecting,
+                        spectator: false,
+                        score: 0,
+                        deaths: 0,
+                        icon: 0,
+                    })
+                })
+                .collect();
+            crate::game::scoreboard::text(rows, [0, 0])
         }
     }
+}
+
+/// Each slot's connection and follow target, as the scoreboard and
+/// `player_die`'s walk read them.
+fn roster(
+    clients: &[Option<Client>],
+) -> impl Iterator<Item = Option<crate::game::scoreboard::RosterSlot>> + '_ {
+    clients.iter().map(|c| {
+        c.as_ref().map(|c| crate::game::scoreboard::RosterSlot {
+            connecting: c.state == ClientState::Connected,
+            following: c.sim.as_ref().and_then(|s| s.follow.target),
+        })
+    })
+}
+
+/// [`roster`] onto the host, ahead of every script entry that can kill: the
+/// walk runs inside the VM, the moment the killed callback returns.
+fn mirror_roster(clients: &[Option<Client>], rt: &mut script::ScriptRuntime) {
+    rt.host.client_roster = roster(clients).collect();
 }
 
 /// The host's vitals onto every sim.
@@ -3129,10 +3093,9 @@ impl Server {
                     }
                 }
             }
+            mirror_roster(&self.clients, rt);
             rt.deliver_hits(hits, self.sv_time_ms);
-            queue_death_scoreboards(&self.clients, rt);
             rt.run_frame(self.sv_time_ms);
-            queue_death_scoreboards(&self.clients, rt);
             // `self spawn(origin, angles)` moves the sim, which no builtin
             // can reach; this is where the queue lands. Before the weapons,
             // because a spawn resets the whole playerstate and would wipe the
@@ -3451,8 +3414,8 @@ impl Server {
                         _ => None,
                     })
                     .collect();
+                mirror_roster(&self.clients, rt);
                 apply_effects(rt, turret_effects, self.sv_time_ms);
-                queue_death_scoreboards(&self.clients, rt);
                 mirror_weapons(&mut self.clients, rt);
                 apply_weapon_ops(&mut self.clients, rt, &weapons);
                 apply_sim_ops(
@@ -3770,7 +3733,10 @@ impl Server {
                 // The ammo among it is what the item pass reads; the pass
                 // itself moves the host's copy as it grabs.
                 mirror_for_callback(rt, sim, proto, slot, c.last_processed_st);
-                rt.set_client_origin(t.slot, t.origin);
+                // `r.currentOrigin` is the snapped `s.pos.trBase` through
+                // `ClientEvents` and `G_TouchTriggers` (combat doc 2.1, 5.5):
+                // what a callback or a death drop in them reads of the mover.
+                rt.set_client_origin(t.slot, glam::Vec3::from(t.origin).trunc().into());
                 if let Some(yaw) = t.yaw {
                     rt.set_client_yaw(t.slot, yaw);
                 }
@@ -3793,8 +3759,12 @@ impl Server {
             // (0x405b3), right after the link. The item half follows the
             // trigger half, and the use key after both.
             if let Some(rt) = self.script.as_mut() {
-                rt.touch_triggers_with_buttons(t.slot, now_ms, t.buttons);
-                queue_death_scoreboards(&self.clients, rt);
+                mirror_roster(&self.clients, rt);
+                rt.touch_triggers_at(t.slot, now_ms, t.buttons, t.origin);
+                // `ps.origin` back into `r.currentOrigin` past the touch
+                // (0x405c7), ahead of the use key's `Cmd_Activate_f`. The
+                // item half reads `ps.origin` either way.
+                rt.set_client_origin(t.slot, t.origin);
                 rt.item_pass(t.slot, t.buttons, t.eye, t.view);
                 // The mount lands inside the use cmd (turrets doc 12.1), so
                 // it reaches the sim before the next cmd's pass runs.
@@ -3917,6 +3887,7 @@ impl Server {
         let Some(rt) = self.script.as_mut() else {
             return;
         };
+        mirror_roster(&self.clients, rt);
         let Some(c) = self.clients[slot].as_mut() else {
             return;
         };
@@ -3935,7 +3906,6 @@ impl Server {
             &mut self.rng,
             now_ms,
         );
-        queue_death_scoreboards(&self.clients, rt);
     }
 
     /// `FireWeapon`'s grenade arm: `fire_grenade` from the muzzle this cmd
@@ -4077,6 +4047,7 @@ impl Server {
             let Some(rt) = self.script.as_mut() else {
                 continue;
             };
+            mirror_roster(&self.clients, rt);
             let Some(c) = self.clients[victim].as_mut() else {
                 continue;
             };
@@ -4093,7 +4064,6 @@ impl Server {
                 &mut self.rng,
                 now_ms,
             );
-            queue_death_scoreboards(&self.clients, rt);
             relink(bodies, &self.clients, victim);
         }
     }
@@ -6015,6 +5985,13 @@ mod tests {
     /// A client holding its last frag and nothing else, in a server running
     /// `script`, with the `serverTime` its next cmd builds on.
     fn last_frag_in_hand(script: &str) -> Option<(Server, i32, usize)> {
+        last_frag_in_hand_under(crate::game::script::ScriptRuntime::for_test(script))
+    }
+
+    /// `last_frag_in_hand` under a runtime the caller built.
+    fn last_frag_in_hand_under(
+        rt: crate::game::script::ScriptRuntime,
+    ) -> Option<(Server, i32, usize)> {
         let fs = vcod_common::testing::game_fs()?;
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
@@ -6023,10 +6000,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        install_script(
-            &mut sv,
-            crate::game::script::ScriptRuntime::for_test(script),
-        );
+        install_script(&mut sv, rt);
         sv.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs));
         let _nc = begun(&mut sv, now);
         sv.tick(now);
@@ -6145,6 +6119,85 @@ mod tests {
             "the grenade left from {:?}, not the release's {stood:?}",
             traj.base
         );
+    }
+
+    /// A `trigger_hurt` death runs `player_die` inside the victim's own
+    /// `G_TouchTriggers`, where `r.currentOrigin` is the snapped
+    /// `s.pos.trBase` (combat doc 5.5): the live grenade and the weapon the
+    /// killed callback drops both leave from whole units, truncated toward
+    /// zero.
+    #[test]
+    fn a_trigger_hurt_death_drops_from_the_snapped_origin() {
+        use vcod_common::net::msg::BUTTON_ATTACK;
+        let rt = crate::game::script::ScriptRuntime::for_test_at(
+            crate::game::script::CALLBACK_SETUP,
+            "main() {}\n\
+             CodeCallback_PlayerDamage(inflictor, attacker, damage, flags, mod, weapon, point, \
+             dir, hitloc) { self finishPlayerDamage(inflictor, attacker, damage, flags, mod, \
+             weapon, point, dir, hitloc); }\n\
+             CodeCallback_PlayerKilled(inflictor, attacker, damage, mod, weapon, dir, hitloc) \
+             { self dropItem(self getcurrentweapon()); }\n",
+        );
+        let Some((mut sv, st, frag)) = last_frag_in_hand_under(rt) else {
+            return;
+        };
+        sv.test_set_client_origin(0, [10.6, -20.3, 1.0]);
+        let cook = |i: i32| UserCmd {
+            server_time: st + 50 * (i + 1),
+            weapon: frag as u8,
+            buttons: BUTTON_ATTACK,
+            ..NULL_USERCMD
+        };
+        fn sim(sv: &Server) -> &ClientSim {
+            sv.clients[0].as_ref().unwrap().sim.as_ref().unwrap()
+        }
+        let mut i = 0;
+        while sim(&sv).ps.grenade_time_left_ms == 0 {
+            assert!(i < 60, "the pin never came out");
+            sv.clients[0].as_mut().unwrap().pending.push(cook(i).into());
+            sv.replay_moves();
+            i += 1;
+        }
+        let stood = sim(&sv).origin();
+        assert!(
+            stood[0].fract() != 0.0 && stood[1].fract() != 0.0,
+            "the cook settled on the unit grid at {stood:?}"
+        );
+        let rt = sv.script.as_mut().unwrap();
+        let hurt = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
+        rt.triggers_mut().register_hurt(
+            hurt,
+            crate::game::trigger::TriggerShape::boxed([-64.0, -64.0, -8.0], [64.0, 64.0, 64.0]),
+            1000,
+            0,
+        );
+        sv.clients[0].as_mut().unwrap().pending.push(cook(i).into());
+        sv.replay_moves();
+
+        let snapped = glam::Vec3::from(stood).trunc();
+        assert_eq!(snapped.truncate(), glam::Vec2::new(10.0, -20.0));
+        let rt = sv.script.as_mut().unwrap();
+        let (_, e) = rt
+            .missiles()
+            .entities(sv.proto)
+            .next()
+            .expect("the death dropped no grenade");
+        let traj = vcod_common::net::trajectory::Trajectory::read(&e, sv.proto, "pos");
+        assert_eq!(
+            traj.base,
+            snapped + glam::Vec3::Z * 40.0,
+            "the grenade left from {:?}, standing at {stood:?}",
+            traj.base
+        );
+        let item = rt
+            .host
+            .ents
+            .iter_inuse()
+            .find(|(_, e)| e.item.is_some_and(|i| i.dropped))
+            .map(|(id, _)| id)
+            .expect("the killed callback dropped no weapon");
+        let at = rt.entity_origin_of(item).unwrap();
+        assert_eq!([at[0], at[1]], [snapped.x, snapped.y]);
     }
 
     /// The take happens once, at the cmd's touch: a frag the script gives
@@ -7043,6 +7096,10 @@ mod tests {
 
     impl FollowRig {
         fn new() -> Self {
+            Self::with_script(crate::game::script::ScriptRuntime::for_test("main() {}"))
+        }
+
+        fn with_script(rt: crate::game::script::ScriptRuntime) -> Self {
             let now = Instant::now();
             let mut sv = Server::new(cfg(), now);
             sv.load_world(World {
@@ -7050,10 +7107,7 @@ mod tests {
                 vis: vcod_common::bsp::Visibility::single_cluster(),
                 spawn: ([0.0, 0.0, 64.0], 0.0),
             });
-            install_script(
-                &mut sv,
-                crate::game::script::ScriptRuntime::for_test("main() {}"),
-            );
+            install_script(&mut sv, rt);
             let nc = begun(&mut sv, now);
             let chain = MoveChain::new(sv.checksum_feed);
             let mut rig = FollowRig {
@@ -7285,21 +7339,65 @@ mod tests {
         );
     }
 
-    /// `player_die`'s walk (combat doc, 5.1 step 9): a spectator following
-    /// the victim is sent the scoreboard on the death, and nobody else is. A
-    /// health mirror that reads the client dead is not a death.
+    /// `player_die`'s walk (combat doc, 5.1 step 9) off a `suicide` inside
+    /// the script frame: the spectator following the victim is sent the
+    /// scoreboard the moment the killed callback returns, behind what that
+    /// callback queued and ahead of what a thread started after the kill
+    /// queues, with the rows as the callback left them. A death of a client
+    /// it does not follow sends it nothing.
     #[test]
-    fn a_death_sends_its_followers_the_scoreboard() {
-        let mut rig = FollowRig::new();
+    fn a_script_death_sends_its_followers_the_scoreboard_when_the_callback_returns() {
+        let rt = crate::game::script::ScriptRuntime::for_test_at(
+            crate::game::script::CALLBACK_SETUP,
+            r#"main() { thread killer(2); thread killer(1); }
+               killer(n) {
+                   while (!isdefined(level.kill) || level.kill != n) wait 0.05;
+                   players = getentarray("player", "classname");
+                   for (i = 0; i < players.size; i++)
+                       if (players[i] getentitynumber() == n)
+                           victim = players[i];
+                   victim suicide();
+                   thread talker(victim, n);
+               }
+               talker(victim, n) { victim.score = 8; iprintln("talker" + n); }
+               CodeCallback_PlayerKilled(a, b, c, d, e, f, g) {
+                   self.score = 7;
+                   iprintln("killed");
+                   wait 0.05;
+               }"#,
+        );
+        let mut rig = FollowRig::with_script(rt);
         rig.press(msg::BUTTON_ATTACK);
-        let scoreboards = |cmds: Vec<String>| cmds.iter().filter(|c| c.contains(":b ")).count();
-        assert_eq!(scoreboards(rig.commands()), 0);
-        rig.script().host.die(2);
-        assert_eq!(scoreboards(rig.commands()), 0);
-        rig.script().host.client_vitals[1].dead = true;
-        assert_eq!(scoreboards(rig.commands()), 0);
-        rig.script().host.die(1);
-        assert_eq!(scoreboards(rig.commands()), 1);
+        let frame = |rig: &mut FollowRig, slot: i32| -> Vec<String> {
+            rig.script()
+                .set_level_field_for_test("kill", vcod_gsc::Value::Int(slot));
+            let mut cmds: Vec<(u32, String)> = rig
+                .commands()
+                .into_iter()
+                .map(|c| {
+                    let (seq, text) = c.split_once(':').unwrap();
+                    (seq.parse().unwrap(), text.to_string())
+                })
+                .collect();
+            cmds.sort();
+            cmds.into_iter().map(|(_, t)| t).collect()
+        };
+        let other = frame(&mut rig, 2);
+        assert!(other.iter().any(|t| t.contains("talker2")), "{other:?}");
+        assert!(other.iter().all(|t| !t.starts_with("b ")), "{other:?}");
+        let texts = frame(&mut rig, 1);
+        let at = |needle: &str| texts.iter().position(|t| t.contains(needle));
+        let b = at("b ").expect("no scoreboard");
+        assert_eq!(texts.iter().filter(|t| t.starts_with("b ")).count(), 1);
+        assert!(at("killed").unwrap() < b, "{texts:?}");
+        assert!(b < at("talker1").unwrap(), "{texts:?}");
+        let cells: Vec<i64> = texts[b]
+            .split(' ')
+            .skip(4)
+            .map(|n| n.parse().unwrap())
+            .collect();
+        let row = cells.chunks(5).find(|r| r[0] == 1).unwrap();
+        assert_eq!(row[1], 7, "the row reads the callback's score: {texts:?}");
     }
 
     /// `ClientDisconnect` moves every follower of the leaving client on to

@@ -225,6 +225,16 @@ impl std::fmt::Display for InstallError {
     }
 }
 
+/// A thread a builtin queued through `Cx`, and the token
+/// `Host::spawn_returned` is called with once it ran, if it was queued with
+/// one.
+pub(crate) struct QueuedSpawn {
+    pub func: FuncRef,
+    pub recv: Option<Target>,
+    pub args: Vec<Value>,
+    pub then: Option<u32>,
+}
+
 /// Everything a `Host` callback may reach inside the VM. Borrows disjoint
 /// fields of `Vm`, which is what makes a builtin able to allocate: a single
 /// `&mut Vm` cannot be handed out while `run_frame` holds one.
@@ -241,7 +251,7 @@ pub struct Cx<'a> {
     level: StructId,
     game: ArrayId,
     notifies: &'a mut Vec<(Target, Atom, Vec<Value>)>,
-    spawns: &'a mut Vec<(FuncRef, Option<Target>, Vec<Value>)>,
+    spawns: &'a mut Vec<QueuedSpawn>,
 }
 
 impl Cx<'_> {
@@ -348,7 +358,31 @@ impl Cx<'_> {
     /// defined, so a spawn queued through one of those is dropped (and
     /// `debug_assert`ed against).
     pub fn spawn(&mut self, func: FuncRef, recv: Option<Target>, args: Vec<Value>) {
-        self.spawns.push((func, recv, args));
+        self.spawns.push(QueuedSpawn {
+            func,
+            recv,
+            args,
+            then: None,
+        });
+    }
+
+    /// `spawn`, and then `Host::spawn_returned(token)` once the thread has
+    /// run to its first suspend, or failed to start, before the next queued
+    /// thread starts: the engine code a builtin runs after its own
+    /// `Scr_ExecEntThread` returns.
+    pub fn spawn_then(
+        &mut self,
+        func: FuncRef,
+        recv: Option<Target>,
+        args: Vec<Value>,
+        token: u32,
+    ) {
+        self.spawns.push(QueuedSpawn {
+            func,
+            recv,
+            args,
+            then: Some(token),
+        });
     }
 
     /// `Vm::func_ref`, for a builtin naming a script function to `spawn`.
@@ -390,6 +424,10 @@ pub trait Host {
     fn is_live(&self, _ent: EntId) -> bool {
         true
     }
+
+    /// The other half of a `Cx::spawn_then`, with its token. A spawn queued
+    /// here is dropped, as from `Vm::with_cx`.
+    fn spawn_returned(&mut self, _cx: &mut Cx, _token: u32) {}
 }
 
 impl From<EntId> for Target {

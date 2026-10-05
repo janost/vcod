@@ -7,7 +7,7 @@ use crate::game::host::{GameHost, SimOp};
 use crate::game::script::CALLBACK_SETUP;
 use crate::game::temp_entity::{Scope, TempEntity};
 use glam::Vec3;
-use vcod_common::net::protocol::{ENTITYNUM_WORLD, PROTOCOL_V1};
+use vcod_common::net::protocol::ENTITYNUM_WORLD;
 use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
@@ -37,7 +37,8 @@ const EV_OBITUARY: i32 = 201;
 /// live, and the callback into
 /// `CodeCallback_PlayerKilled` is spawned so it runs before this builtin's
 /// caller continues, which is what lets the stock damage callback read
-/// `self.sessionstate` on its next line and find it `"dead"`.
+/// `self.sessionstate` on its next line and find it `"dead"`. The follower
+/// walk runs when that callback returns ([`GameHost::player_die_walk`]).
 ///
 /// A bullet weapon's hit raises its two flesh impacts here and nowhere else,
 /// so a hit the script refuses (friendly fire off) shows none. The 250 clamp
@@ -136,7 +137,7 @@ pub fn finish_player_damage(
         drop_cooking_grenade(host, cx, slot);
         let weapon = gun_credit(host, cx, attacker_slot, *weapon).unwrap_or(*weapon);
         let killed = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerKilled");
-        cx.spawn(
+        cx.spawn_then(
             killed,
             recv,
             vec![
@@ -148,6 +149,7 @@ pub fn finish_player_damage(
                 Value::Vector(dir),
                 *hitloc,
             ],
+            slot as u32,
         );
     }
     Ok(Value::Undefined)
@@ -182,18 +184,23 @@ const DEATH_DROP_SPEED: f32 = 160.0;
 /// constant puts x and y in (-480, -160] and z in (-160, 0]; the skew is
 /// retail's and is not a random direction.
 ///
-/// The origin is the state the tick's moves left, the same one the corpse is
-/// cloned from, and the fuse the mirror `Server::replay_moves` wrote with it.
+/// The origin is the player's `origin` field, `r.currentOrigin`: snapped
+/// inside the dying player's own cmd, the unsnapped `ps.origin` everywhere
+/// else (5.5). The fuse is the one `Server::replay_moves` mirrored.
 fn drop_cooking_grenade(host: &mut GameHost, cx: &mut Cx, slot: usize) {
     let fuse = host.client_grenade_ms.get(slot).copied().unwrap_or(0);
     if fuse == 0 {
         return;
     }
     host.client_grenade_ms[slot] = 0;
-    let Some(state) = host.client_entity_states[slot].as_ref() else {
+    let Some(player) = host.ents.handle(slot as u32) else {
         return;
     };
-    let origin = Vec3::from(state.origin(&PROTOCOL_V1)) + Vec3::Z * DEATH_DROP_LIFT;
+    let field = cx.intern_folded("origin");
+    let Value::Vector(at) = host.get_field(cx, player, field) else {
+        return;
+    };
+    let origin = Vec3::from(at) + Vec3::Z * DEATH_DROP_LIFT;
     // `self->s.weapon`: the grenade still in hand, since the drop runs ahead
     // of everything the death callback takes away.
     let weapon = host.client_weapons[slot].current;
@@ -342,7 +349,7 @@ pub fn suicide_effects(host: &mut GameHost, cx: &mut Cx, slot: usize) -> Option<
 /// routes it through the same `player_die` every other death takes; here the
 /// health comes off the vitals directly and the death callback is spawned
 /// with `MOD_SUICIDE`, the same shape `finish_player_damage` uses for a
-/// killing hit.
+/// killing hit, follower walk included.
 pub fn suicide(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -354,7 +361,7 @@ pub fn suicide(
         return Ok(Value::Undefined);
     };
     let killed = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerKilled");
-    cx.spawn(killed, recv, args);
+    cx.spawn_then(killed, recv, args, slot as u32);
     Ok(Value::Undefined)
 }
 
