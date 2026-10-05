@@ -1,6 +1,6 @@
-//! `vcod-server`, a CoD 1.1 dedicated server in progress. Answers browsers,
-//! accepts connections, sends the gamestate and uncompressed snapshots with
-//! spectator flight.
+//! `vcod-server`, a CoD 1.1 dedicated server. Answers browsers, accepts retail
+//! clients, runs the stock gametype scripts on the gsc VM and sends
+//! delta-compressed snapshots.
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
