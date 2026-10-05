@@ -7,6 +7,7 @@ use super::HudQuad;
 use super::font::{self, Font};
 use super::hudelem::{self, CS_SHADERS, Virtual};
 use crate::play::input::{EF_CROUCH, EF_PRONE};
+use crate::turret::EF_MOUNTED;
 use vcod_common::localize::Localized;
 use vcod_common::net::msg::Objective;
 use vcod_common::pmove::weapon::{SpreadStance, hip_spread_min};
@@ -39,6 +40,8 @@ pub struct PlayerView<'a> {
     pub max_health: i32,
     pub eflags: i32,
     pub weapon: Option<&'a WeaponDef>,
+    /// The mounted gun's def, while riding one.
+    pub turret: Option<&'a WeaponDef>,
     pub ammo: &'a [i16; 64],
     pub ammoclip: &'a [i16; 64],
     /// 0..255.
@@ -69,9 +72,6 @@ pub struct Context<'a> {
     /// An entity's current origin, for objectives placed on one.
     pub entity_origin: &'a dyn Fn(i32) -> Option<[f32; 3]>,
 }
-
-/// `eFlags` 0x4000 and 0x8000: riding a mounted gun.
-const EF_MOUNTED: i32 = 0xC000;
 
 /// The state the native HUD keeps across frames.
 #[derive(Default)]
@@ -108,10 +108,15 @@ impl PlayerHud {
         let raising = self.sight.step(p.weapon, p.ads_frac);
         if let Some(def) = p.weapon {
             weapon_info(def, p, cx, &v, out);
-            // Retail draws the turret's own reticle there, which vcod does not.
             if p.eflags & EF_MOUNTED == 0 {
                 crosshair(def, p, raising, &v, out);
             }
+        }
+        // Mounted, the gun's reticle replaces the weapon's, carried weapon or not.
+        if p.eflags & EF_MOUNTED != 0
+            && let Some(def) = p.turret
+        {
+            turret_reticle(def, &v, out);
         }
         cursor_hint(p, cx, now, &v, out);
         self.damage.build(p.view_yaw, now, &v, out);
@@ -377,6 +382,18 @@ pub fn crosshair(
     }
 }
 
+/// 0x30016610: the mounted gun's `reticleCenter`, `reticleCenterSize`
+/// virtual units square on the screen's centre, at `cg_crosshairAlpha`.
+/// Unlike the weapon reticle's, the size takes the screen scale.
+pub fn turret_reticle(def: &WeaponDef, v: &Virtual, out: &mut Vec<HudQuad>) {
+    let Some(center) = &def.reticle_center else {
+        return;
+    };
+    let s = def.reticle_center_size;
+    let rgba = [1.0, 1.0, 1.0, CROSSHAIR_ALPHA];
+    out.push(v.quad(320.0 - s / 2.0, 240.0 - s / 2.0, s, s, rgba, center));
+}
+
 /// The arms fade as the spread opens, down to `cg_crosshairAlphaMin`.
 pub fn arm_alpha(aim_spread_scale: f32) -> f32 {
     ((1.0 - aim_spread_scale / 255.0) * CROSSHAIR_ALPHA).max(CROSSHAIR_ALPHA_MIN)
@@ -608,6 +625,7 @@ mod tests {
             max_health: 100,
             eflags: 0,
             weapon: None,
+            turret: None,
             ammo,
             ammoclip: ammo,
             aim_spread_scale: 0.0,
@@ -763,6 +781,47 @@ mod tests {
         };
         assert_eq!(arms(0), 4);
         assert_eq!(arms(0xC000), 0);
+    }
+
+    #[test]
+    fn a_mounted_gun_draws_its_own_reticle_on_the_centre() {
+        let font = test_font();
+        let ammo = [0i16; 64];
+        let cs = vec![String::new(); 2048];
+        let origin = |_: i32| None;
+        let cx = Context {
+            weapons: &[],
+            configstrings: &cs,
+            loc: &Localized::default(),
+            font: &font,
+            entity_origin: &origin,
+        };
+        let mg = WeaponDef {
+            reticle_center: Some("gfx/reticle/mg42_cross.tga".into()),
+            reticle_center_size: 32.0,
+            ..Default::default()
+        };
+        let reticles = |eflags: i32, turret: Option<&WeaponDef>| {
+            let p = PlayerView {
+                eflags,
+                turret,
+                ..view(&ammo, &[])
+            };
+            let mut out = Vec::new();
+            PlayerHud::default().build(&p, &cx, 0, (1920.0, 1080.0), &mut out);
+            out.into_iter()
+                .filter(|q| Some(&q.texture) == mg.reticle_center.as_ref())
+                .collect::<Vec<_>>()
+        };
+        let drawn = reticles(0xC000, Some(&mg));
+        let [q] = drawn.as_slice() else {
+            panic!("{} reticles", drawn.len());
+        };
+        // 32 virtual units at 1080/480, centred on 960x540.
+        assert_eq!(q.verts[0], [924.0, 504.0]);
+        assert_eq!(q.verts[2], [996.0, 576.0]);
+        assert!(reticles(0, Some(&mg)).is_empty(), "not mounted");
+        assert!(reticles(0xC000, None).is_empty(), "no gun def");
     }
 
     #[test]

@@ -202,6 +202,11 @@ impl OnlineView {
                 ps.mounted,
             )
         });
+        // No view weapon on a mounted gun (`0x300371f0`'s `eFlags & 0xc000`
+        // test); the gun itself is the turret entity.
+        if ps.is_some_and(|ps| ps.mounted) {
+            return (None, fov);
+        }
         let (Some(ps), Some(w)) = (ps, self.rig.as_deref_mut()) else {
             // A respawn whose `weapAnim` matches the pre-death one bit for bit
             // still restarts the raise.

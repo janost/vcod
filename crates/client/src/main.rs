@@ -10,6 +10,7 @@ mod probe;
 mod quick_chat;
 mod renderer;
 mod sky;
+mod turret;
 mod viewmodel;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -1147,6 +1148,7 @@ fn loading_frame(
             eye: [0.0; 3],
             fov: camera::DEFAULT_FOV_DEG,
             entity_origin: &|_| None,
+            turret_weapon: None,
         };
         let quads = hud.build(&f);
         r.set_hud_quads(fs, quads);
@@ -1957,6 +1959,7 @@ impl ApplicationHandler for App {
                                     let mut muzzles: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
                                     let mut weapon_flash: HashMap<i32, String> = HashMap::new();
                                     let mut entity_pos: HashMap<u32, Vec3> = HashMap::new();
+                                    let mut turret_eye = None;
 
                                     let render_time = net
                                         .snapshots()
@@ -1992,6 +1995,7 @@ impl ApplicationHandler for App {
                                         muzzles = built.muzzles;
                                         weapon_flash = built.weapon_flash;
                                         entity_pos = built.entity_pos;
+                                        turret_eye = built.turret_eye;
                                         // Over 512 u is a teleport, not motion.
                                         let pos = if oa.distance(ob) > 512.0 {
                                             ob
@@ -2062,6 +2066,13 @@ impl ApplicationHandler for App {
                                         };
                                         (cam.yaw, cam.pitch) = own_view(input.raw_angles(), delta);
                                     }
+                                    // On a mounted gun the view rides the gun's
+                                    // `tag_player` and barrel, not the cmd's angles
+                                    // (docs/research/cod11-turrets.md section 14).
+                                    if let Some(eye) = &turret_eye {
+                                        cam.pos = eye.pos;
+                                        (cam.yaw, cam.pitch) = eye.view();
+                                    }
 
                                     let (cam_forward, cam_right, cam_up) =
                                         camera::basis(cam.yaw, cam.pitch);
@@ -2108,6 +2119,18 @@ impl ApplicationHandler for App {
                                         let num = u32::try_from(num).ok()?;
                                         entity_pos.get(&num).map(|v| v.to_array())
                                     };
+                                    // Retail reads `cg_entities[n].currentState`;
+                                    // the newest snapshot stands in.
+                                    let turret_weapon = newest.and_then(|s| {
+                                        let int = |n: &str| s.ps.field_i32(p, n);
+                                        let num = turret::ridden(
+                                            int("eFlags"),
+                                            int("viewlocked"),
+                                            int("viewlocked_entNum"),
+                                        )?;
+                                        let w = s.entities.get(&num)?.field_i32(p, "weapon");
+                                        usize::try_from(w).ok()
+                                    });
                                     let hud_frame = hud::HudFrame {
                                         now: time,
                                         screen_w,
@@ -2135,6 +2158,7 @@ impl ApplicationHandler for App {
                                         eye: cam.pos.to_array(),
                                         fov,
                                         entity_origin: &entity_origin,
+                                        turret_weapon,
                                     };
 
                                     // Events use the newest snapshot, not the interpolation
