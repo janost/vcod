@@ -95,6 +95,8 @@ pub struct Save {
     pub killcam: bool,
     /// `--probe-killcam-skip-ms`: press use this long into the killcam.
     pub killcam_skip_ms: Option<u64>,
+    /// `--probe-fall`: print every snapshot a landing moved, no fixture.
+    pub fall: bool,
 }
 
 /// Which script the two halves of the hit capture run. The target's own
@@ -199,6 +201,7 @@ pub fn probe(
         follow: probe_follow,
         killcam: probe_killcam,
         killcam_skip_ms,
+        fall: probe_fall,
     } = save;
     // The two map-cycle captures record the same lines; the flag picks the
     // role and, for the round restart, which half of the pair this probe is.
@@ -242,6 +245,7 @@ pub fn probe(
         || save_bump
         || probe_bump_target
         || probe_killcam
+        || probe_fall
         || team.is_some();
     // A sweep is a measurement, not a fixture: it walks a table of pitch
     // offsets instead of aiming at the eye, so the numbers it produces are not
@@ -313,6 +317,7 @@ pub fn probe(
     let mut bump_target = BumpTarget::default();
     let mut follow = FollowProbe::default();
     let mut killcam = KillcamProbe::new(killcam_skip_ms);
+    let mut fall = FallProbe::default();
     // The fixture is named for the map the run started on, which is not the
     // map cs 0 holds once the rotation has moved on.
     let mut first_map = String::new();
@@ -694,6 +699,9 @@ pub fn probe(
             if probe_killcam && join.settled(now) {
                 let me = client.gamestate().map_or(-1, |g| g.client_num);
                 killcam.observe(now, me, s);
+            }
+            if probe_fall {
+                fall.observe(s);
             }
             watch.check_sounds(s, client.configstrings());
             watch.check_movers(s);
@@ -8850,6 +8858,62 @@ const KILLCAM_USE_AFTER_DEATH: Duration = Duration::from_secs(20);
 const KILLCAM_PRESS: Duration = Duration::from_millis(80);
 /// How long the probe keeps tracing once it is alive again.
 const KILLCAM_TAIL: Duration = Duration::from_secs(3);
+
+/// `--probe-fall`: joins and stands, and prints a `FALL` line per snapshot
+/// whose ground entity, `pm_flags`, `pm_time`, event ring or health moved,
+/// which is a landing's whole footprint. `client-probes/probe_fall` drops
+/// the player from a height. Writes no fixture.
+#[derive(Default)]
+struct FallProbe {
+    last: Option<Vec<i32>>,
+}
+
+impl FallProbe {
+    fn observe(&mut self, snap: &net::snapshot::Snapshot) {
+        let p = &net::protocol::PROTOCOL_V1;
+        let i = |n: &str| snap.ps.field_i32(p, n);
+        let f = |n: &str| f32::from_bits(snap.ps.field_i32(p, n) as u32);
+        let mut key = vec![
+            i("groundEntityNum"),
+            i("pm_flags"),
+            i("pm_time"),
+            i("eventSequence"),
+            snap.ps.health(),
+        ];
+        // a fall moves only the origin, so print the first airborne frames too
+        key.push(i("commandTime") * (key[0] == net::protocol::ENTITYNUM_NONE as i32) as i32);
+        if self.last.as_ref() == Some(&key) {
+            return;
+        }
+        self.last = Some(key);
+        println!(
+            "FALL t={} ct={} origin={:.3},{:.3},{:.3} vel={},{},{} ground={} pm_type={} pm_flags=0x{:x} pm_time={} \
+health={} seq={} events=[{},{},{},{}] parms=[{},{},{},{}]",
+            snap.server_time,
+            i("commandTime"),
+            f("origin[0]"),
+            f("origin[1]"),
+            f("origin[2]"),
+            f("velocity[0]"),
+            f("velocity[1]"),
+            f("velocity[2]"),
+            i("groundEntityNum"),
+            i("pm_type"),
+            i("pm_flags"),
+            i("pm_time"),
+            snap.ps.health(),
+            i("eventSequence"),
+            i("events[0]"),
+            i("events[1]"),
+            i("events[2]"),
+            i("events[3]"),
+            i("eventParms[0]"),
+            i("eventParms[1]"),
+            i("eventParms[2]"),
+            i("eventParms[3]"),
+        );
+    }
+}
 
 /// `--probe-killcam`: stands still, never sends `kill`, and prints a
 /// `KILLCAM` line per snapshot from each death until [`KILLCAM_TAIL`] after

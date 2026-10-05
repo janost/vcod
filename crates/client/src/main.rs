@@ -276,6 +276,12 @@ struct Args {
     /// (the first frame following another client) instead, to skip it.
     #[arg(long, requires = "probe_killcam")]
     probe_killcam_skip_ms: Option<u64>,
+    /// With `--net-probe` and `--probe-team`: stand still and print a `FALL`
+    /// line per snapshot whose ground entity, `pm_flags`, `pm_time`, events
+    /// or health moved; `client-probes/probe_fall` does the dropping. Writes
+    /// no fixture.
+    #[arg(long)]
+    probe_fall: bool,
     /// Walk the --probe-slope route and write every usercmd sent and every
     /// snapshot's movement fields to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt,
@@ -768,6 +774,7 @@ fn main() -> Result<()> {
                 follow: args.probe_follow,
                 killcam: args.probe_killcam,
                 killcam_skip_ms: args.probe_killcam_skip_ms,
+                fall: args.probe_fall,
             },
             args.capture_tag.clone(),
             args.overwrite_fixture,

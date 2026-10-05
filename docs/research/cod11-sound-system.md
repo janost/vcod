@@ -900,7 +900,8 @@ emits none; it was reading the prone dive at 0x31CC0.
 air -> ground transition): water level 3 skips; damage-free impact ladder on
 the fall height: <= 4 silent, < 8 a walk-step id (24 + mat), < 12 a run-step
 id (1 + mat), >= 12 an `EV_LANDING_*` (93 + mat) plus a x0.67 velocity damp;
-`sf & 0x2000`/material 0 degrade to silence. Damage routes to
+`sf & 0x2000`/material 0 silence the two step ids but play the land event on
+material 0 (`cod11-player-clip.md` 8.6). Damage routes to
 `EV_LANDING_PAIN_*` (116 + mat, parm = damage percent) instead - sound-wise
 that alias pair resolves through section 7b like the rest.
 
@@ -947,15 +948,15 @@ trace @0x328cc), water enter/leave 144/145, forced stance 140/141/142.
   base are audible and mid-wall push-offs are not (the downward trace of a
   climb hits nothing). The 299 ms quiet
   window after a push-off gates the climb steps.
-- The fall height comes from the fastest downward speed sampled while
-  airborne (within one frame of gravity of retail's kinematic value), squared
-  over `2 * GRAVITY`. The land anim is gated in `ClientSim::update_anims` on
-  `PlayerState::land_anim` (the move's starting vertical speed below -220)
-  and on no event anim holding the legs.
-- Fall damage does not exist locally, so only the damage-free landing ladder
-  applies. Its x0.67 velocity damp on a landing of 12 units or more is ported
-  (`pmove::crash_land`); the prone dive is what measured it
-  (`cod11-mantle.md`, "The landing damp").
+- The fall height is retail's kinematic value off the move's start
+  (`cod11-player-clip.md` 8.2). The land anim is gated in
+  `ClientSim::update_anims` on `PlayerState::land_anim` (the move's starting
+  vertical speed below -220) and on no event anim holding the legs.
+- `pmove::crash_land` is all of `PM_CrashLand`'s pmove half: the damage
+  percent, the landing stun, the x0.67 damp (the prone dive measured it,
+  `cod11-mantle.md`, "The landing damp"), the land event's view-bob parm and
+  `EV_LANDING_PAIN_*` with the damage as its parm (`cod11-player-clip.md`
+  8). The server applies no fall damage.
 - Foliage rustle (139) is not ported.
 
 ### Ambient without a server
