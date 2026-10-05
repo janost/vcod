@@ -426,8 +426,8 @@ pub fn radius_damage(
         };
         let slot = id.0 as usize;
         victims.push(standing_victim(slot, Vec3::from(stands)));
-        // The pose the tick's moves left, at the origin a `setOrigin` earlier
-        // this frame may have moved it to.
+        // The pose the last end frame committed, at the origin a `setOrigin`
+        // earlier this frame may have moved it to.
         if let Some(mut body) = host.client_bodies.get(slot).cloned().flatten() {
             body.origin = Vec3::from(stands);
             bodies.push(body);
@@ -487,12 +487,14 @@ pub fn radius_damage(
 
 /// A client as a blast candidate, standing: the box and the eye height
 /// `CanDamage` needs (combat doc, 14.3), which is all a script-side victim
-/// has, its stance living on the sim rather than on the host.
+/// has, its stance living on the sim rather than on the host. The link is
+/// taken to be its last cmd's, at the snapped origin.
 fn standing_victim(slot: usize, origin: Vec3) -> crate::game::combat::BlastVictim {
     use vcod_common::pmove::{HALF_WIDTH, Stance};
     crate::game::combat::BlastVictim {
         slot,
         origin,
+        link_origin: origin.trunc(),
         mins: Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0),
         maxs: Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height()),
         eye: origin + Vec3::Z * Stance::Stand.view_height(),
@@ -1002,13 +1004,7 @@ mod tests {
                     yaw: 0.0,
                     mins: Vec3::new(-15.0, -15.0, 0.0),
                     maxs: Vec3::new(15.0, 15.0, 72.0),
-                    assembly: Default::default(),
-                    legs: 0,
-                    torso: 0,
-                    legs_start_ms: 0,
-                    torso_start_ms: 0,
-                    torso_pitch: 0.0,
-                    lean: 0.0,
+                    pose: Default::default(),
                 }),
             );
         }

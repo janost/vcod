@@ -273,6 +273,7 @@ fn standing_blast_victim(feet: [f32; 3]) -> crate::game::combat::BlastVictim {
     crate::game::combat::BlastVictim {
         slot: 0,
         origin: feet,
+        link_origin: feet.trunc(),
         mins: glam::Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0),
         maxs: glam::Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height()),
         eye: feet + glam::Vec3::Z * Stance::Stand.view_height(),
@@ -3096,6 +3097,7 @@ impl Server {
                     .map(|(slot, s)| crate::game::combat::BlastVictim {
                         slot: *slot,
                         origin: s.ps.origin,
+                        link_origin: s.link_origin(),
                         mins: s.ps.mins(),
                         maxs: s.ps.maxs(),
                         eye: s.ps.view().eye,
@@ -3372,6 +3374,11 @@ impl Server {
                     if let Some(string) = string {
                         sim.cursor_hint_string = string;
                     }
+                    // `BG_PlayerAnimation` (0x41486) runs after this slot's
+                    // aim trace: a higher slot's trace meets this frame's
+                    // pose, a lower one's met the last (combat doc 16.1).
+                    sim.commit_pose();
+                    rt.set_client_body(slot, sim.hit_body(slot));
                 }
             }
             // `turret_think_client`, last in `ClientEndFrame` (turrets doc
@@ -3818,20 +3825,26 @@ impl Server {
                     .is_some_and(|s| !s.dead && s.pm_type == crate::spectate::PmType::Normal);
             if died {
                 self.close_round(slot, &mut rounds[slot]);
-                if let (Some(rt), Some(sim)) = (
-                    self.script.as_mut(),
-                    self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()),
-                ) {
-                    apply_callback_ops(
-                        rt,
-                        sim,
-                        slot,
-                        self.anims.as_deref(),
-                        &weapons,
-                        &mut self.rng,
-                        now_ms,
-                    );
-                }
+            }
+            // What the passes queued for the mover reaches its sim before its
+            // next cmd, as `Touch_Item` and `G_Damage` write the playerstate
+            // inside this one (items doc, 13.2).
+            if let (Some(rt), Some(sim)) = (
+                self.script.as_mut(),
+                self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()),
+            ) && (died || rt.has_ops_of(slot))
+            {
+                apply_callback_ops(
+                    rt,
+                    sim,
+                    slot,
+                    self.anims.as_deref(),
+                    &weapons,
+                    &mut self.rng,
+                    now_ms,
+                );
+            }
+            if died {
                 relink(&mut bodies, &self.clients, slot);
             }
         }
@@ -4001,8 +4014,7 @@ impl Server {
         let Some(def) = weapons.get(weapon as usize) else {
             return;
         };
-        // The bodies are posed off the anims their last round left, where
-        // retail's pose reads the last end frame's (combat doc, 16.1).
+        // The bodies are posed off the last end frame (combat doc, 16.1).
         let effects = {
             let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
                 .clients
@@ -6336,6 +6348,77 @@ mod tests {
             .filter_map(|(_, e)| e.item.filter(|i| i.dropped).map(|i| i.index as usize))
             .collect();
         assert_eq!(dropped, vec![thompson]);
+    }
+
+    /// `Touch_Item` writes the playerstate inside the toucher's cmd (items
+    /// doc, 13.2): a walk-over ammo grab is in the sim, and its 148 on the ring,
+    /// before the cmd behind it fires, with no hit needed to land it there.
+    /// Read straight after `replay_moves`, ahead of the script frame.
+    #[test]
+    fn a_walk_over_pickup_lands_before_the_next_cmd() {
+        use vcod_common::net::msg::BUTTON_ATTACK;
+        use vcod_common::pmove::weapon::EV_FIRE_WEAPON;
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_world(World {
+            collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
+            spawn: ([0.0, 0.0, 1.0], 0.0),
+        });
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test("main() {}"),
+        );
+        sv.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs));
+        let _nc = begun(&mut sv, now);
+        sv.tick(now);
+        sv.place_client(0, [0.0, 0.0, 1.0], 0.0);
+        let carbine = crate::configstrings::weapon_index("m1carbine_mp").unwrap();
+        let def = sv.weapon_table.get(carbine).unwrap().clone();
+        let mut held = crate::weapons::PlayerWeapons::default();
+        held.give(carbine, sv.weapon_table.slot(carbine));
+        held.current = carbine as u8;
+        let rt = sv.script.as_mut().unwrap();
+        rt.host.weapons = sv.weapon_table.clone();
+        rt.host.client_weapons[0] = held;
+        rt.host.client_vitals[0] = crate::game::host::Vitals {
+            health: 100,
+            max_health: 100,
+            dead: false,
+        };
+        rt.place_item("mpweapon_m1carbine", [0.0, 0.0, 1.0], 20);
+        let c = sv.clients[0].as_mut().unwrap();
+        let sim = c.sim.as_mut().unwrap();
+        sim.ps.weapons_held = held.held;
+        sim.ps.weapon_slots = held.slots;
+        sim.ps.weapon = carbine as u8;
+        sim.ps.ammoclip[def.clip_index] = def.clip_size as _;
+        sim.ps.ammo[def.ammo_index] = 10;
+        let st = c.last_processed_st;
+        for (i, buttons) in [0, BUTTON_ATTACK].into_iter().enumerate() {
+            let cmd = UserCmd {
+                server_time: st + 50 * (i as i32 + 1),
+                weapon: carbine as u8,
+                buttons,
+                ..NULL_USERCMD
+            };
+            c.pending.push(cmd.into());
+        }
+        sv.replay_moves();
+        let sim = sv.clients[0].as_ref().unwrap().sim.as_ref().unwrap();
+        assert_eq!(sim.ps.ammo[def.ammo_index], 30, "the grab's ammo");
+        let ring = sim.ring;
+        let drained: Vec<i32> = (0..ring.seq)
+            .map(|i| ring.events[(i & 3) as usize])
+            .collect();
+        assert_eq!(
+            drained,
+            vec![crate::game::pickup::EV_AMMO_PICKUP, EV_FIRE_WEAPON],
+            "the grab's event ahead of the shot behind it"
+        );
     }
 
     /// `getPlant` reads a planter's `self.angles` for the direction of its
