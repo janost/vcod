@@ -142,13 +142,8 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
         }
     }
 
-    // `pml.previous_origin` and the landing's sampled fall speed.
+    // `pml.previous_origin`.
     ps.move_start = ps.origin;
-    ps.air_speed_peak = if ps.on_ground {
-        0.0
-    } else {
-        (-ps.velocity.z).max(0.0)
-    };
 
     Predicted {
         ps,

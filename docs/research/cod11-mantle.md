@@ -495,7 +495,9 @@ does not.
 (`cod11-sound-system.md`, "Landing"). VERIFIED live: every dive lands with
 it, the street's forward dive going from 224 to 125 within the landing
 snapshot, and a mover without it read 2.2 to 2.7 units ahead of retail on
-the snapshot after each dive landed.
+the snapshot after each dive landed. A damaging landing takes the stun's
+multiplier instead, and a slick or fatal one the same 0.67
+(`cod11-player-clip.md` 8.4).
 
 ### The eye through a stance change
 
@@ -736,10 +738,13 @@ only place those values are ever produced - there is no non-ladder route to
   part of the step decision ("The jump's step", under "Jumps").
 - The ground-trace function (0x30474) classifies the ground contact: impact
   velocity along the normal > 10 leaves the ground and fires the JUMP/JUMPBK
-  anim events; normal.z >= 0.7 marks walking; anything flatter sets the pml
-  steep-slope flag (pml+0x2C), which routes the next move through the
-  steep-slope mover fn 0x2F258 (clip velocity to the slope plane with 1.001
-  overclip, then accelerate) and shortens the ladder probe to 8 units.
+  anim events; normal.z >= 0.7 marks walking; anything flatter keeps
+  `groundPlane` and clears `walking` ("A steep plane still steers the
+  fall", below). An earlier read of this file called pml+0x2C a steep-slope
+  flag and 0x2F258 a steep-slope mover; pml+0x2C is `walking` and 0x2F258 is
+  `PM_WalkMove` ("The walk's accel floor"). VERIFIED: the ladder probe's
+  30/8 choice (0x33700-0x33711) tests pml+0x2C at 0x33706. INFERRED: the
+  "steep-slope flag" under "Ladders" is `walking`.
 - Stance changes trace headroom with the new bbox at the current origin
   (probes at 0x319ED/0x31A65/0x31AC3/0x31B47) and fire EV_STANCE_FORCE_*
   (140/141/142) when forced; viewheight lerps run through
@@ -761,7 +766,8 @@ something therefore takes the down pass whether or not its move was blocked,
 and an airborne one takes it only on a ladder going up.
 
 VERIFIED: the push-down point is built at 0x352D8 as `origin[2] - stepUp`,
-where `stepUp` is the up-trace's fraction times `stepSize + 1`, and at 0x352E8
+where `stepUp` is the up-trace's fraction times `stepSize + 1`, less one
+("The step-up stops a unit short", below), and at 0x352E8
 a further `stepSize * 0.5` (0x70EF8 holds 0.5) is subtracted from it when the
 flag at pml+0x30 is set and `pm_flags & 0x10` is clear (0x34FDF-0x34FF1).
 INFERRED: pml+0x30 is `groundPlane`, from its position in the Q3 `pml_t`
@@ -833,6 +839,78 @@ the plain one is reverted too. vcod's `step_slide_move` runs the same
 test on every frame now, with `STEP_REVERT_EPS` the 0.001; until 2026-09-07
 it compared squared horizontal lengths, only after a step-up, and let an
 unobstructed frame keep its down pass.
+
+### The step-up stops a unit short
+
+The turret capture's strafe (`crates/server/tests/fixtures/turret/mp_carentan-dm-turret.txt`,
+`[phase strafe]`) slides along the `clip_nosight_dirt` brush beside the
+mp_carentan MG nest and steps onto its sloped top, whose normal reads
+(0, 0.789, 0.614) in vcod's clip, 52 degrees.
+
+VERIFIED, `PM_StepSlideMove`: the up trace runs from the start to `stepSize
++ 1` above it (0x35173-0x3518c); at 0x351ca-0x351cf the fraction it returns
+is multiplied by `stepSize + 1` and 1.0 subtracted, and the result is stored
+at 0x351d8 into the slot 0x352d8 reads as `stepUp` and compared with 1.0 at
+0x351de; the string at 0x70d88, `%i:not enough step room`, is pushed at
+0x351fe, and 0x3520b stores 0 into that slot. The other arm writes the
+origin as the start's x and y and the start's z plus the slot
+(0x35226-0x35241). INFERRED: the step lifts the player a unit less than the
+room the up trace found, and not at all when that is under a unit; with
+nothing overhead an 18-unit step lifts 18, not 19. No allsolid test is read
+in between; a trace that starts in solid returns fraction 0, which reads as
+-1 and so as no room.
+
+VERIFIED by capture, fixture lines 1512-1513: retail raises `EV_STEP_VIEW`
+parm 139 (11 units) on the step at 39800 and reads origin (1704.5, 1917.9,
+-14.1). VERIFIED, vcod measurement (`turret_ab.rs` with `TURRET_REPORT=1`):
+lifting the full `fraction * (stepSize + 1)` raised parm 142 and put ours
+at z -10.8 there; with the unit taken off, ours raises 139 and its origin
+is within the gate's 0.25 of retail's. The extra unit mattered because the
+second slide ran up a face too steep to stand on, where every unit of
+height is more ground covered; on a step with a flat top the down pass
+lands both heights on the same floor, which is why no slope capture caught
+it.
+
+### A steep plane still steers the fall
+
+After that step the strafe falls back down the 52-degree face to the
+floor.
+
+VERIFIED: the ground trace (0x30474) loads 0.7 from 0x70bb4 at 0x30687 and
+has two stores past it: `pml+0x30` 1 and `pml+0x2c` 0 at 0x306c3-0x306cd,
+both 1 at 0x306e6-0x306f0. INFERRED: those are Q3's `groundPlane` and
+`walking`, and a plane too steep to walk on keeps `groundPlane` with its
+normal in `groundTrace` (the normal at pml+0x44) while clearing
+`walking`, as Q3's `PM_GroundTrace` does. VERIFIED: the move dispatch tests
+`pml+0x2c` (0x34312) to pick `PM_WalkMove`, so a player on a steep plane
+takes `PM_AirMove` (0x2f03c). VERIFIED: `PM_AirMove` tests `pml+0x30` at
+0x2f1d3, and the loop at 0x2f225-0x2f238 subtracts the plane's normal (from
+pml+0x44) times the velocity's dot with it, scaled by the 1.001 at 0x708f0,
+from the velocity, just before calling `PM_StepSlideMove` (0x2f241).
+VERIFIED: `PM_SlideMove` (0x347c0) tests `pml+0x30` at 0x3483b before
+calling `PM_ClipVelocity` with `pml+0x44` and the 1.001 at 0x70d78, and
+again at 0x34875 before loading `pml+0x44`..`pml+0x4c` into the first slot
+of its plane list. INFERRED: on a steep plane the fall is clipped onto the
+plane before the move and the plane is one of the slide's planes from the
+start, Q3's "slide along the steep plane"; neither depends on `walking`.
+
+vcod read `walking` (`on_ground`) for both and clipped nothing in the air.
+VERIFIED, vcod measurement (`turret_ab.rs` with `TURRET_REPORT=1`, the step
+above already ported): the slide down the face and the snapshots up to the
+landing at 39950 matched to print precision either way, and from the
+landing on ours ran ahead of retail along the face's own direction, y, by
+0.29 at 39950 growing to 1.1 where the refused phase came to rest
+(retail (1678.6, 1952.4), ours (1678.61, 1953.50)), with x within 0.04
+throughout; and ours' landing raised event 29 where retail's raised 6
+(fixture line 1526). With `PM_AirMove`'s clip and `PM_SlideMove` reading
+`groundPlane`, every strafe and refused row of the gate matches, the
+landing event included. VERIFIED, vcod measurement (the gates' printed
+summaries, both changes against neither): the `bump_ab.rs` phases read the
+same; of
+the four `playerstate_slope_ab.rs` captures the 25 ms route's rebased p95
+dxy went from 0.004 to 0.001 with the step, and the prone mound's free run
+from median dxy 0.176, max 19.79 to 0.163, 19.49; every other statistic
+of the four is unchanged.
 
 ### What the collider does to a walker on a terrain seam
 
@@ -1197,7 +1275,7 @@ so the smoothing is the predicting client's own view and nothing else's.
 
 VERIFIED, in `PM_WalkMove` (0x2f258): the accelerate is inline, not a call.
 0x2f4b0-0x2f4ca pick 19.0 (0x708f8), 9.0 (0x70900) or 12.0 (0x708fc);
-0x2f492-0x2f4a8 take 1.0 in their place on bit 2 of pml+0x50 or `pm_flags`
+0x2f492-0x2f4a8 take 1.0 in their place on bit 0x2 of pml+0x50 or `pm_flags`
 0x200; 0x2f4d8-0x2f4de multiply by 0.25 (0x70904) on `pm_flags` 0x100.
 0x2f4e4-0x2f502 form the wish speed less the velocity along the wish
 direction; 0x2f50f-0x2f52c load 100.0 (rodata 0x70908) and multiply the
@@ -1257,7 +1335,8 @@ VERIFIED, 0x2f58c-0x2f5b5: gravity is applied to `velocity[2]` ahead of all
 this when the ground's surface flags (pml+0x50) carry 0x2 or `pm_flags`
 0x200 is set. INFERRED: Q3's slick-or-knockback gravity with CoD's own
 bits. 0x200 is the timer a hit starts (`cod11-combat.md` 16.1), which vcod
-carries beside the player-clip push's 0x100; the slick arm is not modelled.
+carries beside the player-clip push's 0x100; 0x2 is `surfaceparm slick`
+("Slick ground" below).
 
 VERIFIED, off the bump walker (`mp_carentan-dm-bump-walker.txt`): after
 the push at crouch/jump 70633 the walker lands under the knockback timer at
@@ -1269,6 +1348,68 @@ row, and prone/land's likewise, match to 0.000. VERIFIED, vcod measurement
 takes the 8 ms route's free-run median dxy from 0.024 to 0.021 and its rows
 past a unit from 2 to 1, the prone street's free-run median from 0.021 to
 0.010, and moves nothing on the 25 ms route.
+
+### Slick ground
+
+VERIFIED: CoDMP.exe's surfaceparm table holds `{"slick", 0, 0x2, 0}` at
+0x571a40 (name string 0x558ba0), in the record shape of Q3's `infoParms`
+(name, clearSolid, surface flags, contents); the same table reads `ladder`
+0x8 and `nosteps` 0x2000, the two surface bits vcod already reads.
+
+VERIFIED: 0x30302, 0x30514 and 0x30596 each start a 12-dword `rep movs`
+of a trace into pml+0x34, the first two right after a call through
+`pm->trace` (pm+0xe8, 0x30300 and 0x30512). With the trace layout of
+`cod11-combat.md` (surface flags at +28), pml+0x50 is the ground trace's
+surface flags.
+
+VERIFIED, by a scan of `.rel.text` for `pml` relocations whose addend is
+0x50: the module reads pml+0x50 at eleven places. Four test 0x2: 0x2e4ed
+(`PM_Friction`), 0x2f492 and 0x2f58c (`PM_WalkMove`) and 0x30013
+(`PM_CrashLand`, 0x2fd68). 0x2feaa tests 0x1 (`nodamage`). The other six,
+0x2ed90, 0x30109, 0x30153, 0x30180, 0x301df and 0x32161
+(`PM_FootstepEvent`), read 0x2000 and the material field 0x1f00000.
+INFERRED: no footstep, jump or ground-trace path reads the slick bit.
+
+What each of the four does:
+
+- `PM_Friction`. VERIFIED: 0x2e4ed tests the bit with a `jne` to 0x2e54b;
+  0x2e500-0x2e549 are the ground term (the 100-floored control times 5.5
+  times the frame time) and 0x2e54b starts the water term. INFERRED, off
+  that `jne`: slick ground takes no ground friction; wading friction still
+  applies.
+- `PM_WalkMove` accel. VERIFIED: 0x2f492 tests the bit with a `jne` to the
+  `fld1` at 0x2f4a8; 0x2f4b0-0x2f4ca load the stance's 19, 9 or 12. The 1.0
+  is an `fld1`, equal to `pm_airaccelerate` (0x70848, 1.0) but not a load of
+  it. INFERRED, off that `jne`: the walk on slick ground accelerates at 1.0,
+  still multiplied by the 0.25 of `pm_flags` 0x100 (0x2f4d8) and by
+  `max(wishspeed, 100)` (0x2f50f).
+- `PM_WalkMove` gravity. VERIFIED: 0x2f58c tests the bit with a `jne` to
+  0x2f5a2; 0x2f5a9-0x2f5b5 subtract `ps.gravity` (ps+0x3c, `fild`) times
+  the frame time (pml+0x24) from `velocity[2]`. INFERRED, off that `jne`
+  and the clip of "The ground clip keeps the speed" after it: on flat slick
+  ground the rescale turns that gravity into ground speed,
+  `sqrt(v^2 + (g dt)^2) - v` a frame, so from rest a 16 ms frame gains 13.2
+  where the accel alone gives 3.0, and at 80 units/s an 8 ms frame gains
+  0.26.
+- `PM_CrashLand`. VERIFIED: 0x30013 tests the bit with a `jne` to 0x300d5,
+  and 0x3000a holds a `cmp esi, 0x63`; 0x30020-0x300d3 store
+  `35 * esi + 500`, capped at 2000, into `pm_time` (ps+0x10, 0x300af), OR
+  0x100 into `pm_flags` (0x300b4) and scale the velocity (0x300ba-0x300d1).
+  INFERRED, off that `jne`: slick ground takes no landing stun.
+
+vcod models the friction, accel and gravity arms in `pmove.rs` (`on_slick`,
+reading `SURF_SLICK` off the ground trace's `surface_flags`). The landing
+arm belongs to the stun, which this change does not port.
+
+VERIFIED, read out of lump 0 of each map: no material of the fourteen
+`maps/mp` maps in 1.5's `pak[0-9].pk3` (the twelve of 1.1's plus mp_bocage
+and mp_neuville), of mp_stalingrad or mp_tigertown, or of any single-player
+map in 1.1's `pak[0-9].pk3` carries 0x2, and no `.shader` file in any pak
+declares `surfaceparm slick`. INFERRED: the arm never fires on stock
+content, so it was ported from the binary alone and is unmeasured against
+retail. Open: a brush hit in vcod takes the brush's lump-4 material flags,
+where the impact evidence in `cod11-combat.md` points at the hit side's
+(INFERRED there); a custom map slicking one face of a brush would differ.
 
 ## The wish speed
 

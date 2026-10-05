@@ -1488,14 +1488,20 @@ What it lets through, each a `GAPS` line in the gate:
 - The strafe's first footstep falls on 39500 on ours and, VERIFIED (fixture
   lines 1495-1496, event 6 on the playerstate ring), 39600 on retail.
   INFERRED: `bobCycle` is not in the capture and the join leaves each side
-  its own, which is where the phase comes from.
-- The strafe slides along the nest wall into the sandbags' 52-degree face
-  at 39800 (brush normal z 0.614 in vcod's clip of mp_carentan). VERIFIED,
-  fixture lines 1512-1513: retail steps up it with `EV_STEP_VIEW` parm 139,
-  11 units; ours raises parm 142, 14 units, 2.5 units short. That is
-  unmounted pmove on a steep face, not the turret, and every origin after it,
-  the refused phase's included, carries the difference; the refused mount
-  itself (`viewlocked` 0 throughout) matches.
+  its own, which is where the phase comes from. Ours raises a second
+  footstep at 40000, where VERIFIED (fixture line 1530 and every `!trace`
+  after it, `eventSequence` 6) retail raises none before the strafe ends;
+  INFERRED, the same phase. The `eventSequence` rows past it are that one
+  event.
+
+The strafe also slid along the nest wall into the sandbags at 39800, where
+VERIFIED (fixture lines 1512-1513) retail steps up with `EV_STEP_VIEW` parm
+139, 11 units, and ours raised 142, 14 units, with every origin after it off
+by up to 5 units. That was unmounted pmove, not the turret, and two ports
+closed it; what they are is in `cod11-mantle.md`, "The step-up stops a unit
+short" and "A steep plane still steers the fall". The step, the slide down
+the 52-degree face, the landing and every origin of the strafe and refused
+phases now match.
 
 The kill credit matches as well: after the replay, ours logs the same `D;`
 and `K;` records as script lines 33-34 once the client numbers and names are
