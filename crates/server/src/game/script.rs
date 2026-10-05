@@ -415,8 +415,18 @@ impl ScriptRuntime {
     /// (docs/research/cod11-gsc-object-model.md 8.2).
     ///
     /// `buttons` are the cmd's own rather than the host's mirrored copy, which
-    /// is only written after the move pass this runs inside.
+    /// is only written after the move pass this runs inside. The touch is
+    /// taken at the client's `origin` field; `touch_triggers_at` takes it at
+    /// an explicit `ps.origin` instead.
     pub fn touch_triggers_with_buttons(&mut self, slot: usize, now_ms: i32, buttons: u8) {
+        let origin = self.client_origin(slot);
+        self.touch_triggers_at(slot, now_ms, buttons, origin);
+    }
+
+    /// `G_TouchTriggers` with its boxes on `origin`, `ps.origin`, while the
+    /// client's `origin` field holds the snapped `r.currentOrigin` a hurt's
+    /// callbacks read (`docs/research/cod11-combat.md` 5.5).
+    pub fn touch_triggers_at(&mut self, slot: usize, now_ms: i32, buttons: u8, origin: [f32; 3]) {
         let Some(client) = self.client_entity(slot) else {
             return;
         };
@@ -426,7 +436,7 @@ impl ScriptRuntime {
         let host = &mut self.host;
         let hits = self
             .vm
-            .with_cx(|cx| crate::game::trigger::touched(host, cx, client));
+            .with_cx(|cx| crate::game::trigger::touched(host, cx, origin));
         let triggers = &mut self.host.triggers;
         let rng = &mut self.rng;
         // Drawn under the `rng` borrow and acted on after it: each entry is a

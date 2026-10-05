@@ -641,8 +641,12 @@ engineering setup works.
   switched to and the `clipOnly` weapon a last round spent, the take
   included, its entity state, cook, height and ammo and clip arrays
   (`client_ammo`, which every `GameHost::weapon_op` then moves in place, and
-  ops still queued are re-applied on top), and the touch pass reads it: the
-  item half after the trigger half and the use key after both -- the same use key whose rising
+  ops still queued are re-applied on top), and the touch pass reads it. The
+  origin goes in truncated, the snapped `r.currentOrigin` the cmd's shots, the
+  trigger half and anything they kill read (a `trigger_hurt` death drops from
+  it), while the trigger half itself touches at `ps.origin`, and goes back
+  to `ps.origin` ahead of the item half (`docs/research/cod11-combat.md` 5.5):
+  the item half after the trigger half and the use key after both -- the same use key whose rising
   edge arms a turret mount there, once the gun's arc allows it -- the way retail updates
   `r.currentOrigin` and calls `G_TouchTriggers` inside `ClientThink`; a
   trigger the pass fires is queued, not woken, and its `waittill` threads are

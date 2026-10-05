@@ -2172,7 +2172,8 @@ list below. INFERRED: the numbering and every condition in it.
    `self->r.currentOrigin` with z raised by 40.0 (`.rodata 0x743ec`), with a
    velocity built from three `rand()` calls and 160.0 (`.rodata 0x743e8`).
    Section 11.3 reads that arithmetic out in full; it is not the isotropic
-   direction this step used to call it.
+   direction this step used to call it. Whether that origin is snapped is
+   5.5.
 6. `BG_AnimScriptEvent(client, 1, 0, 1)`.
 7. `G_AddEvent(self, 0xBD, 0)`. VERIFIED: `0xBD` is 189, `EV_DEATH`, and its
    event parm is the literal 0.
@@ -2531,6 +2532,97 @@ client has no entity in that list any more. Before this, a retail client was
 sent a dead player standing in its death pose under the corpse until the
 respawn, and `--probe-sweep`'s live-target gate saw a target to shoot for the
 whole dead wait.
+
+### 5.5 The origin a death drops from
+
+Both things a death drops leave from `r.currentOrigin` (`ent+0x134`), and
+whether that origin is snapped depends on where the death runs.
+
+VERIFIED, `player_die` (`0x49a48`): the live grenade's origin loads
+`ent+0x134`, `+0x138` and `+0x13c` (`0x49b3e`, `0x49b47`, `0x49b50`) and adds
+40.0 (`.rodata 0x743ec`) to z (`0x49b56`) before the `fire_grenade` call
+(`0x49b6f`).
+
+VERIFIED, `Drop_Weapon` (`0x4dd40`): the `LaunchItem` origin is `ent+0x134`
+and `+0x138` (`0x4de7b`, `0x4de84`) and `ent+0x13c` plus
+`(ent+0x114 - ent+0x108) * 0.5` (`0x4de8d..0x4de9f`, `.rodata 0x74d5c`). The
+tag block's trace starts at `ent+0x134..0x13c` plus the box centre
+`(mins + maxs) * 0.5` (`0x4e0ce..0x4e11a`). VERIFIED,
+`G_DObjGetWorldTagMatrix` (`0x6746c`): it builds the tag's world matrix on
+`AnglesToAxis(ent+0x140)` (`0x67502`) and `ent+0x134..0x13c`
+(`0x67507..0x6751f`). INFERRED: every point the weapon drop is launched from
+hangs off `r.currentOrigin`, the hand tag included.
+
+VERIFIED, `maps/MP/gametypes/tdm.gsc` (`pak5.pk3`): `Callback_PlayerKilled`
+runs from line 549 to its `self dropItem(self getcurrentweapon());` at 626
+with no `wait` between. INFERRED: the weapon drop runs inside `player_die`'s
+`Scr_PlayerKilled` call (5.1 step 8), so both drops read `r.currentOrigin` at
+the same moment.
+
+VERIFIED, `ClientThink_real` (`0x3fee0`): the snapped `s.pos.trBase` goes
+into `r.currentOrigin` at `0x4051e..0x40533` (2.1), `ClientEvents` is called
+at `0x40589`, `G_TouchTriggers` at `0x405b3`, `ps.origin` is written back at
+`0x405c7..0x405dc`, and `Cmd_Activate_f` is called at `0x4064e`. VERIFIED:
+`ClientEvents` (`0x3fd24`) calls `G_Damage` at `0x3fe0d` with 0x15 among the
+pushed arguments (`0x3fde3`). INFERRED: 0x15 is the means of death, 21,
+`MOD_FALLING` (4.1), and that call is the fall damage. VERIFIED:
+`G_RunClient` (`0x40660`) writes `ent+0x134` only through `G_SetOrigin` on its
+linked arm (`0x406e9`), and `ClientEndFrame` (`0x40e98`) has no store of its
+own to `ent+0x134..0x13c`. INFERRED: between cmds a player's
+`r.currentOrigin` is the unsnapped `ps.origin` its last cmd left, short of a
+spawn, a script `setOrigin` or a link moving it, and only a death inside the
+victim's own `ClientThink_real`, between `0x40533` and `0x405c7`, sees the
+snapped one.
+
+The death paths that follow from that:
+
+- INFERRED, unsnapped: the `kill` command (`Cmd_Kill_f`, a client command,
+  outside `ClientThink_real`); a bullet or melee hit, which runs in the
+  shooter's cmd (16.1); a grenade blast, run from `G_RunFrame`'s missile pass
+  (11.4); a turret round; a script's `suicide()` or `radiusDamage`.
+- INFERRED, snapped: a `trigger_hurt`, whose touch runs from the victim's own
+  `G_TouchTriggers`; a fall, `ClientEvents`' `MOD_FALLING` damage.
+
+VERIFIED, `G_TouchTriggers` (`0x3f88c`): the `trap_EntitiesInBox` box is
+`client+0x14..0x1c`, `ps.origin`, plus and minus the range at `.rodata
+0x7dcdc` (`0x3f8b3..0x3f912`), and the box handed to the contact test is
+`ps.origin` plus `ent+0x100..0x114`, the entity's mins and maxs
+(`0x3f939..0x3f98e`). INFERRED: the touch is taken at the unsnapped origin
+even while `r.currentOrigin` is snapped.
+
+VERIFIED, `mp_carentan-tdm-grenade-death-shooter.txt` (a `kill` 500 ms into
+the cook): the dying player's traces read `origin=1216.9,1296.0,-7.9`, and
+the missile on the death frame reads `trBase` (1216.9, 1296.0, 32.1), where
+a snapped origin would put it at (1216, 1296, 33). No capture holds a
+`trigger_hurt` or falling death with a drop, or the origin of any death's
+weapon drop.
+
+**As implemented.** A client's `origin` field on the host is the
+`r.currentOrigin` mirror. `Server::replay_moves` writes the mover's
+truncated origin into it before the cmd's shots and its trigger pass, and
+writes `ps.origin` back after the trigger pass, ahead of the item pass and
+the use key; `ScriptRuntime::touch_triggers_at` and `trigger::touched` take
+`ps.origin` for the touch. The same write is what a killing shot's dead yaw
+now reads of the shooter: VERIFIED, `player_die`'s two `vectoyaw` arms
+subtract `self+0x134..0x13c` from `ent+0x134..0x13c` of the inflictor or
+attacker (`0x49c40..0x49c5e`, `0x49c74..0x49c98`). INFERRED: 5.1 step 11
+takes the attacker's snapped origin when the attacker is inside its own cmd.
+Both
+drops read the `origin` field:
+`drop_cooking_grenade` (`crates/server/src/game/builtins/combat.rs`) used to
+read the mirrored entity state's `trBase`, which is `ps.origin` and was
+unsnapped on the `trigger_hurt` path too, and `item::launch_weapon` already
+read the field. Pinned by `a_player_killed_mid_cook_drops_a_live_grenade`
+(`crates/server/tests/combat.rs`), which stands the player off the unit grid
+and holds the `kill` drop to the unsnapped origin plus 40, and
+`a_trigger_hurt_death_drops_from_the_snapped_origin`
+(`crates/server/src/server.rs`), which holds a `trigger_hurt` death's grenade
+and weapon to the truncated one. Not modelled: fall damage, so the second
+snapped path does not exist here; the weapon drop's tag trace and flight
+(`cod11-items.md` 11), so the snap moves the weapon's start and not much
+else; and `cloneplayer`, which still copies the mirrored entity state, so a
+corpse born of a `trigger_hurt` stands on the unsnapped origin where retail's
+`G_SetOrigin(body, self->r.currentOrigin)` (5.2) would truncate it.
 
 ---
 
