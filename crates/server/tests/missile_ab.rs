@@ -2,12 +2,15 @@
 //! snapshot in `mp_carentan-tdm-grenade.txt`, replayed through our server
 //! from the spot the capture's own header says the probe threw from.
 //!
-//! What is compared is the flight, not the release: how many bounces the
-//! contact loop produced, where the arc had reached at each of retail's
-//! samples, when the fuse went off and where and how it came to rest. When
-//! the throw itself happened is `playerstate_combat_ab`'s business, and the
-//! two flights are aligned on the frame the missile first reached the wire
-//! so a release a frame out does not read as a flight 48 units out.
+//! What is compared is the flight from the pullback on: the frame the
+//! missile first reached the wire, how many bounces the contact loop
+//! produced, where the arc had reached at each of retail's samples, when the
+//! fuse went off and where and how it came to rest. A flight that runs on into
+//! the steps after its throw is followed there, so a long cook's explode is
+//! compared too. Both sides are timed from the first snapshot whose
+//! playerstate reads the pullback, not from the step's first snapshot, which
+//! on retail is wherever the probe's next snapshot landed
+//! (`docs/research/cod11-combat.md` 13.4).
 //!
 //! The event parms are compared too: a bounce off a prop carries the
 //! surface type its xmodel collision surface names (21 on the two throws
@@ -19,7 +22,7 @@
 
 mod common;
 
-use common::{Sample, parse_fixture, replay};
+use common::{FRAME_MS, Sample, parse_fixture, replay};
 use std::collections::{BTreeMap, BTreeSet};
 use vcod_common::net::msg::EntityState;
 use vcod_common::net::protocol::PROTOCOL_V1;
@@ -30,8 +33,6 @@ use vcod_common::net::trajectory::{TR_STATIONARY, Trajectory};
 /// about this much, and the impact time retail interpolates is whole
 /// milliseconds (`docs/research/cod11-combat.md` 12.4).
 const POS_TOL: f32 = 8.0;
-/// How far our explode may sit from retail's, in ms: one server frame.
-const EXPLODE_TOL_MS: i32 = 50;
 /// How far our resting height may sit from retail's.
 const REST_TOL: f32 = 1.0;
 
@@ -70,18 +71,30 @@ fn four(raw: &str) -> [i32; 4] {
     out
 }
 
-/// The `!missile` lines of each step, keyed by the step label and then by the
-/// entity number, with each line's snapshot `serverTime` taken from the
-/// `!trace` line it follows.
-fn retail_missiles(text: &str) -> Vec<(String, BTreeMap<u32, Vec<MissileSample>>)> {
-    let mut out: Vec<(String, BTreeMap<u32, Vec<MissileSample>>)> = Vec::new();
+/// One step of the capture: its `!missile` lines keyed by entity number, and
+/// the `serverTime` of its first snapshot whose `grenadeTimeLeft` reads the
+/// pullback.
+struct RetailStep {
+    label: String,
+    pullback: Option<i32>,
+    missiles: BTreeMap<u32, Vec<MissileSample>>,
+}
+
+/// The `!missile` lines of each step, with each line's snapshot `serverTime`
+/// taken from the `!trace` line it follows.
+fn retail_missiles(text: &str) -> Vec<RetailStep> {
+    let mut out: Vec<RetailStep> = Vec::new();
     let (mut server_time, mut first) = (0, None);
     for line in text.lines() {
         if let Some(label) = line
             .strip_prefix("[step ")
             .and_then(|l| l.strip_suffix(']'))
         {
-            out.push((label.to_string(), BTreeMap::new()));
+            out.push(RetailStep {
+                label: label.to_string(),
+                pullback: None,
+                missiles: BTreeMap::new(),
+            });
             first = None;
             continue;
         }
@@ -92,8 +105,13 @@ fn retail_missiles(text: &str) -> Vec<(String, BTreeMap<u32, Vec<MissileSample>>
                 .collect()
         };
         if let Some(rest) = line.strip_prefix("!trace ") {
-            server_time = kv(rest)["serverTime"].parse().unwrap();
+            let m = kv(rest);
+            server_time = m["serverTime"].parse().unwrap();
             first.get_or_insert(server_time);
+            let step = out.last_mut().expect("a !trace line before any [step]");
+            if step.pullback.is_none() && m["grenadeTimeLeft"] != "0" {
+                step.pullback = Some(server_time);
+            }
             continue;
         }
         let Some(rest) = line.strip_prefix("!missile ") else {
@@ -123,7 +141,7 @@ fn retail_missiles(text: &str) -> Vec<(String, BTreeMap<u32, Vec<MissileSample>>
         };
         out.last_mut()
             .expect("a !missile line before any [step]")
-            .1
+            .missiles
             .entry(i("num") as u32)
             .or_default()
             .push(sample);
@@ -210,15 +228,45 @@ fn ring_events(samples: &[MissileSample], event: i32) -> usize {
             .sum::<usize>()
 }
 
-/// When the explode event reached the ring, in ms from the step's first
-/// snapshot, and the sample that carried it.
+/// The `serverTime` of the snapshot whose ring the explode event reached.
 fn explode_at(samples: &[MissileSample]) -> Option<i32> {
     samples
         .iter()
         .find(|s| {
             s.e_type == 0 && s.events[((s.event_sequence - 1) & 3) as usize] == EV_GRENADE_EXPLODE
         })
-        .map(|s| s.rel_ms)
+        .map(|s| s.server_time)
+}
+
+/// Entity `num`'s samples from step `from` on, for as long as it stays on the
+/// wire: a cook held into the next step explodes there. A snapshot both steps
+/// recorded is taken once, and a gap ends the flight, since a later throw
+/// may reuse the number.
+fn flight(
+    steps: &[&BTreeMap<u32, Vec<MissileSample>>],
+    from: usize,
+    num: u32,
+) -> Vec<MissileSample> {
+    let mut out: Vec<MissileSample> = Vec::new();
+    for step in &steps[from..] {
+        let Some(samples) = step.get(&num) else { break };
+        for s in samples {
+            match out.last() {
+                Some(last) if s.server_time <= last.server_time => continue,
+                Some(last) if s.server_time - last.server_time > 2 * FRAME_MS as i32 => return out,
+                _ => out.push(s.clone()),
+            }
+        }
+    }
+    out
+}
+
+/// The `serverTime` of our first snapshot in a step whose playerstate reads
+/// the pullback.
+fn our_pullback(step: &[Sample]) -> Option<i32> {
+    step.iter()
+        .find(|s| s.ps.field_i32(&PROTOCOL_V1, "grenadeTimeLeft") != 0)
+        .map(|s| s.server_time)
 }
 
 #[test]
@@ -251,13 +299,17 @@ fn a_thrown_grenade_flies_bounces_and_explodes_like_retail() {
     );
     let ours = our_missiles(&mine);
     let retail = retail_missiles(&text);
+    let ours_by_step: Vec<&BTreeMap<u32, Vec<MissileSample>>> = ours.iter().collect();
+    let retail_by_step: Vec<&BTreeMap<u32, Vec<MissileSample>>> =
+        retail.iter().map(|s| &s.missiles).collect();
 
     let mut bad = Vec::new();
-    // A missile is compared in the step it first appeared in; the two later
+    // A missile is compared from the step it first appeared in; the later
     // steps that carry the tail of an earlier throw are the same flight.
     let mut done: BTreeSet<usize> = BTreeSet::new();
-    for (i, (label, per_num)) in retail.iter().enumerate() {
-        let Some((_, r)) = per_num.iter().next() else {
+    for (i, step) in retail.iter().enumerate() {
+        let label = &step.label;
+        let Some((&rn, r)) = step.missiles.iter().next() else {
             continue;
         };
         // Only the step the throw happened in. A flight that started in an
@@ -266,45 +318,62 @@ fn a_thrown_grenade_flies_bounces_and_explodes_like_retail() {
         if r.first().map(|s| s.rel_ms) == Some(0) {
             continue;
         }
-        let Some(o) = ours[i].values().find(|o| o[0].rel_ms > 0) else {
+        let Some((&on, _)) = ours[i].iter().find(|(_, o)| o[0].rel_ms > 0) else {
             bad.push(format!(
                 "{label}: retail put a grenade on the wire, ours none"
             ));
             continue;
         };
         done.insert(i);
-        // The flights are aligned on the frame each first reached the wire.
-        let shift = o[0].rel_ms - r[0].rel_ms;
+        let (r, o) = (flight(&retail_by_step, i, rn), flight(&ours_by_step, i, on));
+        // Both sides are timed from the pullback frame: retail's step clock
+        // starts wherever the probe's next snapshot landed (combat doc 13.4).
+        let (Some(ra), Some(oa)) = (step.pullback, our_pullback(&mine[i])) else {
+            bad.push(format!(
+                "{label}: no pullback in the playerstate (retail {:?}, ours {:?})",
+                step.pullback,
+                our_pullback(&mine[i])
+            ));
+            continue;
+        };
+        let (rw, ow) = (r[0].server_time - ra, o[0].server_time - oa);
+        if rw != ow {
+            bad.push(format!(
+                "{label}: the grenade reached the wire {rw} ms after the pullback on retail, \
+                 {ow} on ours"
+            ));
+        }
         let (rb, ob) = (
-            ring_events(r, EV_GRENADE_BOUNCE),
-            ring_events(o, EV_GRENADE_BOUNCE),
+            ring_events(&r, EV_GRENADE_BOUNCE),
+            ring_events(&o, EV_GRENADE_BOUNCE),
         );
         if rb != ob {
             bad.push(format!("{label}: retail bounced {rb} times, ours {ob}"));
         }
-        match (explode_at(r), explode_at(o)) {
-            (Some(re), Some(oe)) if (re + shift - oe).abs() > EXPLODE_TOL_MS => bad.push(format!(
-                "{label}: retail exploded {re} ms into the step, ours {oe} (shift {shift})"
-            )),
-            (Some(_), None) => bad.push(format!("{label}: ours never exploded")),
-            (None, Some(_)) => bad.push(format!("{label}: ours exploded and retail did not")),
-            _ => {}
+        let (re, oe) = (
+            explode_at(&r).map(|t| t - ra),
+            explode_at(&o).map(|t| t - oa),
+        );
+        if re != oe {
+            bad.push(format!(
+                "{label}: exploded {re:?} ms after the pullback on retail, {oe:?} on ours"
+            ));
         }
-        // Per shared sample, where the arc had reached.
+        // Per retail sample, where our arc had reached at the same time.
         let mut worst = (0.0f32, String::new());
-        for rs in r {
+        for rs in &r {
+            let t = rs.server_time - ra;
             let want = rs.at(rs.server_time);
-            let Some(os) = o.iter().rev().find(|os| os.rel_ms <= rs.rel_ms + shift) else {
+            let Some(os) = o.iter().rev().find(|os| os.server_time - oa <= t) else {
                 continue;
             };
-            let got = os.at(os.server_time + (rs.rel_ms + shift - os.rel_ms));
+            let got = os.at(oa + t);
             let d = (want - got).length();
             if d > worst.0 {
                 worst = (
                     d,
                     format!(
-                        "{label}: at {} ms retail {want:?} ours {got:?} ({d:.1} apart)",
-                        rs.rel_ms
+                        "{label}: {t} ms after the pullback retail {want:?} ours {got:?} ({d:.1} apart)"
                     ),
                 );
             }
@@ -315,25 +384,22 @@ fn a_thrown_grenade_flies_bounces_and_explodes_like_retail() {
                 .map(|s| (s.events, s.event_sequence, s.event_parms))
                 .unwrap_or_default()
         };
-        let parms = |ss: &[MissileSample]| ss.last().map(|s| s.event_parms).unwrap_or_default();
-        if ring(r) != ring(o) {
+        if ring(&r) != ring(&o) {
             bad.push(format!(
                 "{label}: retail's ring ended {:?} ours {:?}",
-                ring(r),
-                ring(o)
+                ring(&r),
+                ring(&o)
             ));
         }
         eprintln!(
             "{label}: ring {:?} parms retail {:?} ours {:?}",
-            ring(r).0,
-            parms(r),
-            parms(o)
+            ring(&r).0,
+            ring(&r).2,
+            ring(&o).2
         );
         eprintln!(
-            "{label}: bounces retail {rb} ours {ob}, explode retail {:?} ours {:?} \
-             (shift {shift} ms), worst position {:.1} units",
-            explode_at(r),
-            explode_at(o),
+            "{label}: on the wire retail +{rw} ours +{ow}, bounces retail {rb} ours {ob}, \
+             explode retail {re:?} ours {oe:?} (ms after the pullback), worst position {:.1} units",
             worst.0
         );
         if worst.0 > POS_TOL {
@@ -341,12 +407,12 @@ fn a_thrown_grenade_flies_bounces_and_explodes_like_retail() {
         }
         // The blast the explode left for the radius damage pass, on the
         // frame the event reached the wire.
-        if let Some(oe) = explode_at(o) {
-            let blasts: usize = mine[i]
+        if let Some(oe) = explode_at(&o) {
+            let blasts = mine
                 .iter()
-                .filter(|s| s.server_time - mine[i][0].server_time == oe)
-                .map(|s| s.explosions)
-                .sum();
+                .flatten()
+                .find(|s| s.server_time == oe)
+                .map_or(0, |s| s.explosions);
             if blasts != 1 {
                 bad.push(format!(
                     "{label}: the explode frame offered {blasts} blasts to the damage pass, not 1"
