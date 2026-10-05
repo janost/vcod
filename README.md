@@ -361,9 +361,6 @@ These work in every mode:
 - Audio fidelity is matched to the retail engine on paper (falloff, panning,
   channel replacement, ducking) but not yet confirmed by ear against the real
   game.
-- Other players' footsteps are silent. They are not playerstate events, so
-  they travel by the entity path that does not exist yet. Your own
-  footsteps play off the prediction.
 - A prone body's pitch on sloped ground (`proneDirectionPitch`,
   `proneTorsoPitch`) is not modelled. Both are animation inputs, so they
   change how a prone body is drawn rather than how it moves, and no client
