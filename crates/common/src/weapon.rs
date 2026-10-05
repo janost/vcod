@@ -8,7 +8,7 @@
 //! bob on the gun down the sight (combat doc, 15.2).
 
 use crate::pk3::Pk3Fs;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 
 /// Retail's `cg_fov` default: horizontal degrees across the whole view
@@ -933,11 +933,7 @@ impl WeaponState {
             self.def.ads_trans_out
         };
         let next = if dur <= 0.0 {
-            if target_up {
-                1.0
-            } else {
-                0.0
-            }
+            if target_up { 1.0 } else { 0.0 }
         } else if target_up {
             self.ads_frac + dt / dur
         } else {

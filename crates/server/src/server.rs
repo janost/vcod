@@ -5,14 +5,14 @@
 //! tests own a queue. Ported from RTCW-MP sv_main.c / sv_client.c; reply
 //! strings come from docs/research/cod11-server-handshake.md.
 
-use crate::client::{sanitize_name, Client, ClientState, QueuedCmd};
+use crate::client::{Client, ClientState, QueuedCmd, sanitize_name};
 use crate::configstrings;
 use crate::console;
 use crate::follow;
 use crate::game::combat::Effect;
 use crate::game::host::{ClientEvent, SpawnMode};
 use crate::game::script;
-use crate::game::stuck::{stuck_in_client, StuckView};
+use crate::game::stuck::{StuckView, stuck_in_client};
 use crate::game::temp_entity;
 use crate::spectate::{ClientSim, PmType};
 use crate::world::{TestEntities, World};
@@ -21,14 +21,14 @@ use std::net::{IpAddr, SocketAddr};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::movetrace::CONTENTS_CORPSE;
-use vcod_common::net::connectionless::{build_oob, parse_connect, parse_oob, Info};
+use vcod_common::net::connectionless::{Info, build_oob, parse_connect, parse_oob};
 use vcod_common::net::gamestate::{self, Gamestate};
 use vcod_common::net::huffman::Huffman;
 use vcod_common::net::msg::{
-    self, read_delta_usercmd, MsgReader, MsgWriter, UserCmd, NULL_USERCMD,
+    self, MsgReader, MsgWriter, NULL_USERCMD, UserCmd, read_delta_usercmd,
 };
-use vcod_common::net::netchan::{ClientMessage, ServerNetchan, MAX_RELIABLE_COMMANDS};
-use vcod_common::net::protocol::{Protocol, PROTOCOL_V1};
+use vcod_common::net::netchan::{ClientMessage, MAX_RELIABLE_COMMANDS, ServerNetchan};
+use vcod_common::net::protocol::{PROTOCOL_V1, Protocol};
 use vcod_common::net::{com_hash_key, info_value_for_key, snapshot};
 
 /// `MAX_CHALLENGES`, server.h:198.
@@ -240,9 +240,10 @@ fn mirror_weapons_of(sim: &mut ClientSim, rt: &mut script::ScriptRuntime, slot: 
     // The body, head and helmet the character script dressed the
     // client in: what a shot at it is traced against.
     if let Some(a) = rt.client_assembly(slot)
-        && a != sim.assembly {
-            sim.assembly = a;
-        }
+        && a != sim.assembly
+    {
+        sim.assembly = a;
+    }
     // And back the other way: the sim owns where a player is, so the
     // script's copy is written from it every frame.
     rt.set_client_origin(slot, sim.origin());
@@ -267,7 +268,7 @@ fn apply_weapon_ops(
 
 /// A standing player with its feet at `feet`, as a blast candidate in slot 0.
 fn standing_blast_victim(feet: [f32; 3]) -> crate::game::combat::BlastVictim {
-    use vcod_common::pmove::{Stance, HALF_WIDTH};
+    use vcod_common::pmove::{HALF_WIDTH, Stance};
     let feet = glam::Vec3::from(feet);
     crate::game::combat::BlastVictim {
         slot: 0,
@@ -446,9 +447,10 @@ fn follow_end_frame(
         }
     }
     if source == Source::None
-        && let Some(t) = target {
-            source = archive.player_state(t, &mut age, followable(clients, t));
-        }
+        && let Some(t) = target
+    {
+        source = archive.player_state(t, &mut age, followable(clients, t));
+    }
     if age != session.archive_ms {
         rt.set_client_archive_ms(slot, age);
     }
@@ -1842,7 +1844,7 @@ impl Server {
     /// actually holds one.
     pub fn test_ground_under(&self, p: [f32; 3]) -> Option<[f32; 3]> {
         let world = self.world.as_ref()?;
-        use vcod_common::pmove::{Stance, HALF_WIDTH};
+        use vcod_common::pmove::{HALF_WIDTH, Stance};
         let mins = glam::Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0);
         let maxs = glam::Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height());
         let start = glam::Vec3::from(p);
@@ -2527,9 +2529,10 @@ impl Server {
             *slot = info.clone();
         }
         if let Some(rt) = self.script.as_mut()
-            && let Some(slot) = rt.host.configstrings.get_mut(0) {
-                *slot = info;
-            }
+            && let Some(slot) = rt.host.configstrings.get_mut(0)
+        {
+            *slot = info;
+        }
     }
 
     /// What the next level load would stamp for `name`, given the config's
@@ -3464,11 +3467,12 @@ impl Server {
                 // corpse must not carry the gun.
                 for (slot, c) in self.clients.iter_mut().enumerate() {
                     if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut())
-                        && !sim.linked() {
-                            for te in rt.release_turret(slot, sim) {
-                                rt.push_temp_entity(te);
-                            }
+                        && !sim.linked()
+                    {
+                        for te in rt.release_turret(slot, sim) {
+                            rt.push_temp_entity(te);
                         }
+                    }
                 }
             }
             console_lines = rt.take_console();
@@ -3591,9 +3595,10 @@ impl Server {
                     .filter(|_| !capped[slot])
                     .map(|q| (q.packet, true));
                 if let Some(item) = kill.into_iter().chain(cmd).min()
-                    && next.is_none_or(|(p, is_cmd, _)| item < (p, is_cmd)) {
-                        next = Some((item.0, item.1, slot));
-                    }
+                    && next.is_none_or(|(p, is_cmd, _)| item < (p, is_cmd))
+                {
+                    next = Some((item.0, item.1, slot));
+                }
             }
             let Some((_, is_cmd, slot)) = next else {
                 break;
@@ -3713,9 +3718,11 @@ impl Server {
                 // the weapon.
                 if e.event == EV_FIRE_WEAPON_LASTSHOT
                     && let Some(def) = weapons.get(weapon as usize)
-                        && def.clip_only && sim.ps.ammo[def.ammo_index] == 0 {
-                            take = Some(weapon);
-                        }
+                    && def.clip_only
+                    && sim.ps.ammo[def.ammo_index] == 0
+                {
+                    take = Some(weapon);
+                }
             }
             round.events.extend(raised);
             round.switched |= sim.ps.weapon != held;
@@ -3856,9 +3863,10 @@ impl Server {
     fn close_round(&mut self, slot: usize, round: &mut Round) {
         self.flush_anims(slot, round);
         if let Some(sim) = self.clients[slot].as_ref().and_then(|c| c.sim.as_ref())
-            && round.held.is_some_and(|h| h != sim.ps.weapon) {
-                self.weapon_changes.push((slot, sim.ps.weapon));
-            }
+            && round.held.is_some_and(|h| h != sim.ps.weapon)
+        {
+            self.weapon_changes.push((slot, sim.ps.weapon));
+        }
         *round = Round::default();
     }
 
@@ -4517,7 +4525,7 @@ mod tests {
     };
     use vcod_common::net::msg::write_delta_usercmd;
     use vcod_common::net::netchan::Netchan;
-    use vcod_common::net::snapshot::{SnapshotRing, SVC_SNAPSHOT};
+    use vcod_common::net::snapshot::{SVC_SNAPSHOT, SnapshotRing};
 
     const QPORT: u16 = 0x2001;
 
@@ -5178,7 +5186,7 @@ mod tests {
     /// down and it leaks for the life of the map.
     #[test]
     fn a_reconnect_disconnects_the_client_it_replaces() {
-        use crate::game::script::{ScriptRuntime, CALLBACK_SETUP};
+        use crate::game::script::{CALLBACK_SETUP, ScriptRuntime};
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
         install_script(
@@ -5523,10 +5531,11 @@ mod tests {
         }
         assert_eq!(sv.limiter.addrs.len(), MAX_BUCKETS);
         // The least recently seen address went first.
-        assert!(!sv
-            .limiter
-            .addrs
-            .contains_key(&std::net::IpAddr::from([10, 0, 0, 0])));
+        assert!(
+            !sv.limiter
+                .addrs
+                .contains_key(&std::net::IpAddr::from([10, 0, 0, 0]))
+        );
     }
 
     #[test]

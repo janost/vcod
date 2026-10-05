@@ -19,12 +19,12 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use common::{holding, ClientEnd, Queues, CMD_MS, FRAME_MS};
+use common::{CMD_MS, ClientEnd, FRAME_MS, Queues, holding};
 use vcod_common::animtree::PlayerAnims;
-use vcod_common::net::events::EventTracker;
-use vcod_common::net::msg::{UserCmd, BUTTON_ATTACK, BUTTON_USE, NULL_USERCMD};
-use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::NetClient;
+use vcod_common::net::events::EventTracker;
+use vcod_common::net::msg::{BUTTON_ATTACK, BUTTON_USE, NULL_USERCMD, UserCmd};
+use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::pmove::aim::angle_subtract;
 use vcod_server::Server;
 
@@ -620,8 +620,8 @@ fn a_death_releases_the_turret() {
     assert!(!corpses.is_empty(), "the corpse is in the target's view");
     assert!(corpses.iter().all(|f| f & 0xC000 == 0), "{corpses:?}");
     rig.hold(50); // the death anim and the callback's 2 s wait
-                  // `waitRespawnButton` polls `useButtonPressed`, the frame's last cmd,
-                  // which a tap has already released.
+    // `waitRespawnButton` polls `useButtonPressed`, the frame's last cmd,
+    // which a tap has already released.
     let h = rig.still();
     let held = UserCmd {
         buttons: h.buttons | BUTTON_USE,

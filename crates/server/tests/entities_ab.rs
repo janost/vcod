@@ -19,13 +19,13 @@
 
 mod common;
 
-use common::{header_value, Queues};
+use common::{Queues, header_value};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::time::Instant;
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::{Protocol, PROTOCOL_V1};
+use vcod_common::net::protocol::{PROTOCOL_V1, Protocol};
 
 /// Entities stage 5 knowingly does not reproduce, each with the reason. Empty
 /// is the goal, and a listed gap that starts matching fails the guard below,

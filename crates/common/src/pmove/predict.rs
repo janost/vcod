@@ -3,10 +3,10 @@
 //! ([`super::cmd`]) run on it.
 
 use super::cmd::{self, EventRing};
-use super::{weapon, PlayerState, Stance};
+use super::{PlayerState, Stance, weapon};
 use crate::movetrace::MoveWorld;
 use crate::net::msg::{self, UserCmd};
-use crate::net::protocol::{Protocol, ENTITYNUM_NONE};
+use crate::net::protocol::{ENTITYNUM_NONE, Protocol};
 use crate::weapon::WeaponDef;
 use glam::Vec3;
 

@@ -13,17 +13,17 @@ use std::io::Cursor;
 use std::time::{Duration, Instant};
 
 use glam::Vec3;
-use kira::sound::streaming::StreamingSoundData;
 use kira::sound::PlaybackState;
+use kira::sound::streaming::StreamingSoundData;
 use kira::track::MainTrackBuilder;
 use kira::{AudioManager, AudioManagerSettings, DefaultBackend, StartTime};
 
 use crate::audio::alias::{AliasRow, AliasTable, Pick};
 use crate::audio::bank::SoundBank;
 use crate::audio::cues::{Cue, CueCtx, Source};
-use crate::audio::handle::{start_sound, Handle};
-use crate::audio::spatial::{amplitude_db, Listener};
-use crate::audio::voices::{Admitted, NewVoice, VoiceId, VoiceTable, ENDLESS_MS};
+use crate::audio::handle::{Handle, start_sound};
+use crate::audio::spatial::{Listener, amplitude_db};
+use crate::audio::voices::{Admitted, ENDLESS_MS, NewVoice, VoiceId, VoiceTable};
 use crate::fx::registry::{EV_AMMO_PICKUP, EV_ITEM_PICKUP};
 use crate::fx::sim::{FxSound, Rng};
 use vcod_common::collision::CollisionWorld;

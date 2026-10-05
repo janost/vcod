@@ -305,9 +305,10 @@ fn spawn_emitter(
         // evenDistribution is not implemented.
         let mut origin_offset = sample_r3(rng, em.origin);
         if let Some((x, y, z)) = frame
-            && !em.spawn_flags.iter().any(|f| f == "cheapOrgCalc") {
-                origin_offset = origin_offset.x * x + origin_offset.y * y + origin_offset.z * z;
-            }
+            && !em.spawn_flags.iter().any(|f| f == "cheapOrgCalc")
+        {
+            origin_offset = origin_offset.x * x + origin_offset.y * y + origin_offset.z * z;
+        }
         let base = spawn_pos(at) + origin_offset;
         let center = base;
         let base = distribute_origin(rng, em, base);
@@ -420,16 +421,17 @@ fn step_pool(pool: &mut VecDeque<Particle>, dt: f32, now: f32, world: Option<&Co
         let mut new_pos = p.pos + p.vel * dt + 0.5 * a * dt * dt;
         let mut new_vel = p.vel + a * dt;
         if p.physics
-            && let Some(world) = world {
-                let trace = world.box_trace(p.pos, new_pos, Vec3::ZERO, Vec3::ZERO);
-                if trace.fraction < 1.0 {
-                    if p.impact_kills {
-                        return false;
-                    }
-                    new_pos = trace.endpos + trace.normal * 0.25;
-                    new_vel = bounce(new_vel, trace.normal);
+            && let Some(world) = world
+        {
+            let trace = world.box_trace(p.pos, new_pos, Vec3::ZERO, Vec3::ZERO);
+            if trace.fraction < 1.0 {
+                if p.impact_kills {
+                    return false;
                 }
+                new_pos = trace.endpos + trace.normal * 0.25;
+                new_vel = bounce(new_vel, trace.normal);
             }
+        }
         p.pos = new_pos;
         p.vel = new_vel;
         p.rot += p.rot_delta * dt;

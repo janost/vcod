@@ -5,10 +5,10 @@
 //! and entity baselines the server hands over right after `connectResponse`.
 
 use super::msg::{
-    read_delta_entity, write_delta_entity, EntityState, MsgReader, MsgWriter, SVC_BASELINE,
-    SVC_CONFIGSTRING, SVC_EOF, SVC_GAMESTATE, SVC_SERVER_COMMAND,
+    EntityState, MsgReader, MsgWriter, SVC_BASELINE, SVC_CONFIGSTRING, SVC_EOF, SVC_GAMESTATE,
+    SVC_SERVER_COMMAND, read_delta_entity, write_delta_entity,
 };
-use super::protocol::{Protocol, GENTITYNUM_BITS, MAX_GENTITIES};
+use super::protocol::{GENTITYNUM_BITS, MAX_GENTITIES, Protocol};
 use std::collections::HashMap;
 
 #[derive(Debug, Default)]

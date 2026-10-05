@@ -27,7 +27,7 @@ pub const FIRST_HUD_ELEM: u32 = MAX_GENTITIES;
 pub const MAX_HUDELEMS: u32 = 1024;
 
 use crate::game::fields::{
-    engine_slot_count, hud_slot_count, pers_index, route_hud, Route, CLIENT_FIELDS, HUD_WHITE,
+    CLIENT_FIELDS, HUD_WHITE, Route, engine_slot_count, hud_slot_count, pers_index, route_hud,
 };
 use crate::server::MAX_CLIENTS;
 use vcod_common::pmove::cmd::EventRing;

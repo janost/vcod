@@ -3,8 +3,8 @@
 //! ms is a pmove chop").
 
 use std::collections::VecDeque;
-use vcod_common::net::msg::UserCmd;
 use vcod_common::net::MAX_MOVE_CMDS;
+use vcod_common::net::msg::UserCmd;
 
 /// The cmd interval a 125 fps retail client produces, one cmd per frame.
 /// Retail has no fixed sim step; this client picks that rate.

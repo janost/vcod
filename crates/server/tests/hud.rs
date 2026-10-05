@@ -9,7 +9,7 @@ use common::Queues;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use vcod_common::net::msg::{hud_field as f, NULL_USERCMD};
+use vcod_common::net::msg::{NULL_USERCMD, hud_field as f};
 use vcod_common::net::protocol::PROTOCOL_V1;
 
 const MAP: &str = "mp_carentan";
@@ -101,7 +101,7 @@ fn the_round_clock_reaches_a_fresh_client() {
 /// `setText` puts a localized-string index on the wire, not a string.
 #[test]
 fn only_the_killed_client_is_sent_the_respawn_text() {
-    use vcod_common::net::msg::{UserCmd, BUTTON_ADS, BUTTON_ATTACK};
+    use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, UserCmd};
 
     let mut now = Instant::now();
     let Some(mut sv) = server(now) else {
@@ -204,14 +204,15 @@ fn only_the_killed_client_is_sent_the_respawn_text() {
         let sb = cb.snapshots().newest().unwrap();
         if sb.ps.field_i32(p, "pm_flags") & 0x10000 != 0 {
             killcam_seen |= sb.ps.arrays.hud_current.len() == 5;
-            assert!(ca
-                .snapshots()
-                .newest()
-                .unwrap()
-                .ps
-                .arrays
-                .hud_current
-                .is_empty());
+            assert!(
+                ca.snapshots()
+                    .newest()
+                    .unwrap()
+                    .ps
+                    .arrays
+                    .hud_current
+                    .is_empty()
+            );
         } else if killcam_seen {
             break;
         }

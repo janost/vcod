@@ -2,7 +2,7 @@
 //! svc_download). Pak bookkeeping and the file spool; the wire handling is on
 //! `NetClient`.
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -291,10 +291,12 @@ mod tests {
         let err = dl.finish().unwrap_err();
         assert!(err.to_string().contains("not a valid pk3"), "{err:#}");
         assert!(!dest.exists());
-        assert!(std::fs::read_dir(dir.join("main"))
-            .unwrap()
-            .next()
-            .is_none());
+        assert!(
+            std::fs::read_dir(dir.join("main"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -308,10 +310,12 @@ mod tests {
         let mut dl = Download::create("main/bar.pk3", &dest).unwrap();
         dl.accept_block(b"partial").unwrap();
         dl.abort();
-        assert!(std::fs::read_dir(dir.join("main"))
-            .unwrap()
-            .next()
-            .is_none());
+        assert!(
+            std::fs::read_dir(dir.join("main"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

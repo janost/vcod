@@ -212,9 +212,10 @@ mod tests {
         let mut e = tracking(0);
         e.take_predicted(3, [FIRE, FIRE, FIRE, 0], [0; 4]);
         assert!(e.filter_snapshot(3, PAIN), "above the mark");
-        assert!(e
-            .take_predicted(4, [FIRE, FIRE, FIRE, PAIN], [0; 4])
-            .is_empty());
+        assert!(
+            e.take_predicted(4, [FIRE, FIRE, FIRE, PAIN], [0; 4])
+                .is_empty()
+        );
         assert_eq!(
             e.take_predicted(5, [FIRE, FIRE, FIRE, PAIN], [0; 4]),
             [(4, FIRE, 0)]

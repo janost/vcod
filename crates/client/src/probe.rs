@@ -582,9 +582,9 @@ pub fn probe(
                     .snapshots()
                     .newest()
                     .map(|s| s.ps.origin(&net::protocol::PROTOCOL_V1))
-                {
-                    combat.stall.apply(&mut cmd, now, o);
-                }
+            {
+                combat.stall.apply(&mut cmd, now, o);
+            }
             match combat.aim_yaw {
                 Some(yaw) => cmd.angles[1] = yaw,
                 None => hold_view_yaw(&mut cmd, &client, &mut combat.spawn_delta_yaw),
@@ -656,10 +656,12 @@ pub fn probe(
                 bump.record(now, c);
             }
         }
-        if save_slope && slope_capture.recording()
-            && let Some(c) = sent {
-                slope_capture.cmds.push(c);
-            }
+        if save_slope
+            && slope_capture.recording()
+            && let Some(c) = sent
+        {
+            slope_capture.cmds.push(c);
+        }
 
         // Retail sends the `b` scoreboard only in answer to `score`, so the
         // one a map end produces is in the capture only if it is asked for.
@@ -879,106 +881,111 @@ pub fn probe(
             }
         }
 
-        if probe_bump_target && join.settled(now)
+        if probe_bump_target
+            && join.settled(now)
             && let Some(s) = client.snapshots().newest()
-                && s.ps.field_i32(&net::protocol::PROTOCOL_V1, "pm_type") == PM_NORMAL {
-                    bump_target.step(now, s);
-                }
+            && s.ps.field_i32(&net::protocol::PROTOCOL_V1, "pm_type") == PM_NORMAL
+        {
+            bump_target.step(now, s);
+        }
 
         // A refused weapon reopens the same menu, which the probe answers
         // once and then ignores, so a sent answer is not an accepted one; the
         // playerstate is what tells a spawn from a still-spectating client.
         if join.settled(now)
             && let Some(s) = client.snapshots().newest()
-                && s.ps.field_i32(&net::protocol::PROTOCOL_V1, "pm_type") == PM_NORMAL {
-                    if save_motion {
-                        if motion.step(now, s) {
-                            write_motion_fixture(s, client.configstrings(), &join, &motion)?;
-                            wrote_playerstate = true;
-                            break;
-                        }
-                    } else if save_combat {
-                        // The join names the weapon; the reload step is sized
-                        // off its `reloadTime` rather than one rifle's number.
-                        combat.use_weapon(fs, &join.weapon, client.configstrings());
-                        if probe_sway && combat.aim_yaw.is_none()
-                            && let Some(w) = hit.world.as_deref() {
-                                let p = &net::protocol::PROTOCOL_V1;
-                                let o = s.ps.origin(p);
-                                let eye =
-                                    [o[0], o[1], o[2] + s.ps.field_f32(p, "viewHeightCurrent")];
-                                combat.aim_yaw = Some(longest_sightline(w, eye));
-                            }
-                        if combat.step(now, s) {
-                            // The sway run is a measurement: its impact lines
-                            // went to stdout and there is no fixture for it.
-                            if !probe_sway {
-                                write_combat_fixture(
-                                    client.configstrings(),
-                                    &join,
-                                    &combat,
-                                    tag.as_deref(),
-                                    overwrite,
-                                )?;
-                            }
-                            wrote_playerstate = true;
-                            break;
-                        }
-                    } else if prone_crawl {
-                        if prone.step(now, s) {
-                            if save_slope {
-                                write_slope_fixture(
-                                    client.configstrings(),
-                                    &join,
-                                    &slope_capture,
-                                    cmd_ms,
-                                    prone_crawl,
-                                    tag.as_deref(),
-                                    overwrite,
-                                )?;
-                                wrote_playerstate = true;
-                            }
-                            break;
-                        }
-                    } else if pvs {
-                        if pvs_probe.step(now, s) {
-                            pvs_probe.report();
-                            if save_slope {
-                                write_slope_fixture(
-                                    client.configstrings(),
-                                    &join,
-                                    &slope_capture,
-                                    cmd_ms,
-                                    false,
-                                    tag.as_deref(),
-                                    overwrite,
-                                )?;
-                                wrote_playerstate = true;
-                            }
-                            if save_entities {
-                                write_entities_fixture(
-                                    &pvs_probe,
-                                    client.configstrings(),
-                                    &join,
-                                    tag.as_deref(),
-                                    overwrite,
-                                )?;
-                            }
-                            break;
-                        }
-                    } else if save_playerstate {
-                        write_playerstate_fixture(s, client.configstrings(), &join)?;
-                        wrote_playerstate = true;
-                        break;
-                    }
-                    // `--probe-team` on its own writes nothing: it stays on
-                    // and reports the roster, which is what a second probe on
-                    // the other team needs to be seen by.
+            && s.ps.field_i32(&net::protocol::PROTOCOL_V1, "pm_type") == PM_NORMAL
+        {
+            if save_motion {
+                if motion.step(now, s) {
+                    write_motion_fixture(s, client.configstrings(), &join, &motion)?;
+                    wrote_playerstate = true;
+                    break;
                 }
-        if let Some(count) = client.capture_count()
-            && count >= SNAP_CAPTURE_TARGET {
+            } else if save_combat {
+                // The join names the weapon; the reload step is sized
+                // off its `reloadTime` rather than one rifle's number.
+                combat.use_weapon(fs, &join.weapon, client.configstrings());
+                if probe_sway
+                    && combat.aim_yaw.is_none()
+                    && let Some(w) = hit.world.as_deref()
+                {
+                    let p = &net::protocol::PROTOCOL_V1;
+                    let o = s.ps.origin(p);
+                    let eye = [o[0], o[1], o[2] + s.ps.field_f32(p, "viewHeightCurrent")];
+                    combat.aim_yaw = Some(longest_sightline(w, eye));
+                }
+                if combat.step(now, s) {
+                    // The sway run is a measurement: its impact lines
+                    // went to stdout and there is no fixture for it.
+                    if !probe_sway {
+                        write_combat_fixture(
+                            client.configstrings(),
+                            &join,
+                            &combat,
+                            tag.as_deref(),
+                            overwrite,
+                        )?;
+                    }
+                    wrote_playerstate = true;
+                    break;
+                }
+            } else if prone_crawl {
+                if prone.step(now, s) {
+                    if save_slope {
+                        write_slope_fixture(
+                            client.configstrings(),
+                            &join,
+                            &slope_capture,
+                            cmd_ms,
+                            prone_crawl,
+                            tag.as_deref(),
+                            overwrite,
+                        )?;
+                        wrote_playerstate = true;
+                    }
+                    break;
+                }
+            } else if pvs {
+                if pvs_probe.step(now, s) {
+                    pvs_probe.report();
+                    if save_slope {
+                        write_slope_fixture(
+                            client.configstrings(),
+                            &join,
+                            &slope_capture,
+                            cmd_ms,
+                            false,
+                            tag.as_deref(),
+                            overwrite,
+                        )?;
+                        wrote_playerstate = true;
+                    }
+                    if save_entities {
+                        write_entities_fixture(
+                            &pvs_probe,
+                            client.configstrings(),
+                            &join,
+                            tag.as_deref(),
+                            overwrite,
+                        )?;
+                    }
+                    break;
+                }
+            } else if save_playerstate {
+                write_playerstate_fixture(s, client.configstrings(), &join)?;
+                wrote_playerstate = true;
                 break;
             }
+            // `--probe-team` on its own writes nothing: it stays on
+            // and reports the roster, which is what a second probe on
+            // the other team needs to be seen by.
+        }
+        if let Some(count) = client.capture_count()
+            && count >= SNAP_CAPTURE_TARGET
+        {
+            break;
+        }
         if now.duration_since(start) >= Duration::from_secs(secs) {
             break;
         }
@@ -1134,7 +1141,7 @@ struct ProbeWatch {
 
 impl ProbeWatch {
     fn check(&mut self, s: &net::snapshot::Snapshot, configstrings: &[String]) {
-        use crate::entities::{resolve_visual, EntityVisual, ET_GENERAL};
+        use crate::entities::{ET_GENERAL, EntityVisual, resolve_visual};
         let p = &net::protocol::PROTOCOL_V1;
         if !self.aliases.is_empty() {
             println!(
@@ -1152,19 +1159,20 @@ impl ProbeWatch {
         for (&num, cl) in &s.clients {
             let mi = cl.field_i32(p, "modelindex");
             if let Some(old) = self.client_models.insert(num, mi)
-                && old != mi {
-                    let name = |i: i32| {
-                        configstrings
-                            .get(268 + i as usize)
-                            .cloned()
-                            .unwrap_or_default()
-                    };
-                    println!(
-                        "client {num}: modelindex {old} ({}) -> {mi} ({})",
-                        name(old),
-                        name(mi)
-                    );
-                }
+                && old != mi
+            {
+                let name = |i: i32| {
+                    configstrings
+                        .get(268 + i as usize)
+                        .cloned()
+                        .unwrap_or_default()
+                };
+                println!(
+                    "client {num}: modelindex {old} ({}) -> {mi} ({})",
+                    name(old),
+                    name(mi)
+                );
+            }
         }
         // Corpse lifecycle (1 Hz, so times are +-1 s): a corpse resolves
         // through the dead client's roster entry, so log appear/vanish with
@@ -1238,7 +1246,13 @@ impl ProbeWatch {
                         if old_m != m || d > 8.0 {
                             println!(
                                 "entity {num} ET_GENERAL index {}: {old_m} @[{:.0},{:.0},{:.0}] -> {m} @[{:.0},{:.0},{:.0}]",
-                                ent.field_i32(p, "index"), old_o[0], old_o[1], old_o[2], o[0], o[1], o[2]
+                                ent.field_i32(p, "index"),
+                                old_o[0],
+                                old_o[1],
+                                old_o[2],
+                                o[0],
+                                o[1],
+                                o[2]
                             );
                         }
                     }
@@ -3855,7 +3869,13 @@ fn print_bullet_hit(ms: u128, ev: &vcod_common::net::events::GameEvent) {
     if (EV_BULLET_HIT_SMALL..=EV_BULLET_HIT_CLIENT_LARGE).contains(&ev.event) {
         println!(
             "  bullethit +{ms}ms ev {} parm {} surfType {} other {} clientNum {} entity {} pos {:?}",
-            ev.event, ev.parm, ev.surf_type, ev.other_entity_num, ev.client_num, ev.entity_num, ev.pos
+            ev.event,
+            ev.parm,
+            ev.surf_type,
+            ev.other_entity_num,
+            ev.client_num,
+            ev.entity_num,
+            ev.pos
         );
     }
 }
@@ -6307,9 +6327,10 @@ impl TriggerProbe {
         // walker moves, and the walk oscillates on the spot instead of
         // getting round the building in front of it.
         if let Some(prev) = self.yaw
-            && ahead(prev) >= 1.0 {
-                return prev;
-            }
+            && ahead(prev) >= 1.0
+        {
+            return prev;
+        }
         let mut best = (0.0f32, bearing);
         for k in (15..=TRIGGER_STEER_ARC).step_by(15) {
             for sign in [1, -1] {
@@ -6543,11 +6564,7 @@ pitchApplied={:.1} icon={} bar={} hud={} objectives={}\n",
 fn sd_hud_str(archived: &[net::msg::HudElem], current: &[net::msg::HudElem]) -> String {
     let half = |elems: &[net::msg::HudElem]| {
         let s = sd_hud_elems_str(elems);
-        if s.is_empty() {
-            "-".to_string()
-        } else {
-            s
-        }
+        if s.is_empty() { "-".to_string() } else { s }
     };
     format!("{}|{}", half(archived), half(current))
 }
@@ -9233,11 +9250,7 @@ fn bump_axis_far(d: f32, v: f32) -> i8 {
     if d.abs() - carry <= BUMP_NAV_NEAR {
         return 0;
     }
-    if d > 0.0 {
-        127
-    } else {
-        -127
-    }
+    if d > 0.0 { 127 } else { -127 }
 }
 
 /// The walker: waits for the gsc's placement, then either walks into the
@@ -10167,9 +10180,13 @@ impl PvsProbe {
             .iter()
             .all(|st| Some(st.ents.keys().copied().collect::<Vec<_>>()) == first);
         if same {
-            println!("PVS verdict: every station saw the same entity slots; this route found no position culling");
+            println!(
+                "PVS verdict: every station saw the same entity slots; this route found no position culling"
+            );
         } else {
-            println!("PVS verdict: the entity list differs between stations; it depends on where the client stands");
+            println!(
+                "PVS verdict: the entity list differs between stations; it depends on where the client stands"
+            );
         }
     }
 }
@@ -10453,12 +10470,16 @@ mod tests {
         assert_eq!(exploding[0].events[0], EV_GRENADE_EXPLODE);
 
         // Freed: the slot is forgotten, so its reuse does not read as a missile.
-        assert!(watch
-            .sample(&snap(vec![ent(2, crate::entities::ET_PLAYER, 0)]))
-            .is_empty());
-        assert!(watch
-            .sample(&snap(vec![ent(5, crate::entities::ET_ITEM, 0)]))
-            .is_empty());
+        assert!(
+            watch
+                .sample(&snap(vec![ent(2, crate::entities::ET_PLAYER, 0)]))
+                .is_empty()
+        );
+        assert!(
+            watch
+                .sample(&snap(vec![ent(5, crate::entities::ET_ITEM, 0)]))
+                .is_empty()
+        );
     }
 
     /// `dm` spawns and the gsc teleports before the join settles, so the

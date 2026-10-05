@@ -5,11 +5,11 @@ use crate::renderer::VmDraw;
 use crate::viewmodel::{self, ViewWeapon, ViewmodelMotion};
 use glam::Vec3;
 use vcod_common::net::msg;
-use vcod_common::net::protocol::{Protocol, CS_MODELS_V1, ENTITYNUM_NONE};
+use vcod_common::net::protocol::{CS_MODELS_V1, ENTITYNUM_NONE, Protocol};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::predict::Predicted;
 use vcod_common::pmove::weapon::NUM_AMMO;
-use vcod_common::weapon::{self, SightDirection, ViewAnimClock, WeaponAnim, WeaponDef, CG_FOV};
+use vcod_common::weapon::{self, CG_FOV, SightDirection, ViewAnimClock, WeaponAnim, WeaponDef};
 use vcod_common::xmodel::XModel;
 
 /// The playerstate fields the viewmodel reads, from the prediction when there
@@ -159,9 +159,10 @@ impl OnlineView {
     ) -> Option<Vec<XModel>> {
         let names = rig_names(configstrings, ps.weapon, ps.viewmodel_index);
         if let Some(built) = &self.built_for
-            && built.as_ref().map(RigKey::names) == names {
-                return None;
-            }
+            && built.as_ref().map(RigKey::names) == names
+        {
+            return None;
+        }
         self.built_for = Some(names.map(|(weapon, hands)| RigKey {
             weapon: weapon.to_string(),
             hands: hands.map(str::to_string),

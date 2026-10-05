@@ -26,10 +26,10 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use common::{holding, step_pair, ClientEnd, Queues, SdFixture, SdTrace, CMD_MS, FRAME_MS};
-use vcod_common::net::msg::{hud_field as h, HudElem, PlayerState, UserCmd};
-use vcod_common::net::protocol::PROTOCOL_V1;
+use common::{CMD_MS, ClientEnd, FRAME_MS, Queues, SdFixture, SdTrace, holding, step_pair};
 use vcod_common::net::NetClient;
+use vcod_common::net::msg::{HudElem, PlayerState, UserCmd, hud_field as h};
+use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_server::Server;
 
 const MAP: &str = "mp_carentan";

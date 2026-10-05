@@ -193,8 +193,8 @@ impl Loader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vm::tests::TestHost;
     use crate::vm::Vm;
+    use crate::vm::tests::TestHost;
     use std::collections::HashMap;
 
     struct MapSource(HashMap<String, String>);
@@ -339,9 +339,10 @@ mod tests {
         assert!(l.load(&mut vm, "c").is_err());
         // "a" must still be marked loaded and still installed/callable.
         let f = vm.func_ref("a", "main");
-        assert!(vm
-            .call_now(&mut TestHost::default(), 0, f, None, vec![])
-            .is_ok());
+        assert!(
+            vm.call_now(&mut TestHost::default(), 0, f, None, vec![])
+                .is_ok()
+        );
     }
 
     /// In a 799-file corpus a broken reference is hard to trace from the

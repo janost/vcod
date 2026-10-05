@@ -24,7 +24,7 @@
 //! A/B gates read `packet_entities` for the map's own static set.
 
 use super::host::GameHost;
-use crate::game::entity::{HudState, HUD_OWNER_ALL};
+use crate::game::entity::{HUD_OWNER_ALL, HudState};
 use std::collections::BTreeMap;
 use vcod_common::net::msg::{EntityState, HudElem, MAX_HUD_ELEMS};
 use vcod_common::net::protocol::Protocol;

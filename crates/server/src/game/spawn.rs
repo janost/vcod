@@ -928,12 +928,14 @@ mod tests {
     fn a_missing_worldspawn_is_an_error() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            assert!(super::spawn_entities_from_string(
-                &mut host,
-                cx,
-                "{\n\"classname\" \"script_origin\"\n}\n",
-            )
-            .is_err());
+            assert!(
+                super::spawn_entities_from_string(
+                    &mut host,
+                    cx,
+                    "{\n\"classname\" \"script_origin\"\n}\n",
+                )
+                .is_err()
+            );
         });
     }
 

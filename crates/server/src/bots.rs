@@ -8,7 +8,7 @@
 //! [`BotView`] the server fills. Everything wire- and VM-shaped stays in
 //! `server.rs`.
 
-use vcod_common::net::msg::{self, UserCmd, NULL_USERCMD};
+use vcod_common::net::msg::{self, NULL_USERCMD, UserCmd};
 
 /// Hip-shot range; beyond it a tap is noise anyway.
 pub(crate) const SHOOT_RANGE: f32 = 1500.0;
@@ -218,17 +218,19 @@ impl Bot {
         // A frag goes at a close enemy, occasionally, once the cooldown is
         // spent; the switch itself is the stage machine below.
         self.grenade_cooldown = self.grenade_cooldown.saturating_sub(1);
-        if self.shoot && self.grenade_cooldown == 0
-            && let (Some(g), Some(e)) = (view.grenade, view.enemy) {
-                let close = dist_sq(view.origin, e.origin) < GRENADE_RANGE * GRENADE_RANGE;
-                if close && self.rand() % 4 == 0 {
-                    self.grenade_cooldown = GRENADE_COOLDOWN_TICKS;
-                    self.rifle = view.weapon;
-                    self.stage = Stage::ToGrenade;
-                    cmd.weapon = g;
-                    return cmd;
-                }
+        if self.shoot
+            && self.grenade_cooldown == 0
+            && let (Some(g), Some(e)) = (view.grenade, view.enemy)
+        {
+            let close = dist_sq(view.origin, e.origin) < GRENADE_RANGE * GRENADE_RANGE;
+            if close && self.rand() % 4 == 0 {
+                self.grenade_cooldown = GRENADE_COOLDOWN_TICKS;
+                self.rifle = view.weapon;
+                self.stage = Stage::ToGrenade;
+                cmd.weapon = g;
+                return cmd;
             }
+        }
 
         self.stall_ticks += 1;
         if self.heading_ticks == 0
@@ -242,22 +244,23 @@ impl Bot {
         let mut yaw = self.heading;
         let mut pitch = 0.0;
         if self.shoot
-            && let Some(e) = view.enemy {
-                (pitch, yaw) = aim_angles(view, e.origin);
-                if self.fire_cooldown == 0
-                    && view.busy_ms == 0
-                    && view.clip != 0
-                    && yaw_diff(yaw, view.view[1]).abs() < 6.0
-                {
-                    cmd.buttons |= msg::BUTTON_ATTACK;
-                    let fire = if view.fire_time_ms > 0 {
-                        view.fire_time_ms
-                    } else {
-                        200
-                    };
-                    self.fire_cooldown = (fire / TICK_MS).max(2) as u32;
-                }
+            && let Some(e) = view.enemy
+        {
+            (pitch, yaw) = aim_angles(view, e.origin);
+            if self.fire_cooldown == 0
+                && view.busy_ms == 0
+                && view.clip != 0
+                && yaw_diff(yaw, view.view[1]).abs() < 6.0
+            {
+                cmd.buttons |= msg::BUTTON_ATTACK;
+                let fire = if view.fire_time_ms > 0 {
+                    view.fire_time_ms
+                } else {
+                    200
+                };
+                self.fire_cooldown = (fire / TICK_MS).max(2) as u32;
             }
+        }
         // A dry clip reloads; the tap is suppressed while the machine is
         // busy so a held bit cannot restart the reload it started.
         if view.clip == 0 && view.busy_ms == 0 {

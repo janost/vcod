@@ -27,7 +27,7 @@
 use crate::game::host::GameHost;
 use glam::Vec3;
 use vcod_common::net::trajectory::{
-    Trajectory, TR_ACCELERATE, TR_DECCELERATE, TR_GRAVITY, TR_LINEAR_STOP, TR_STATIONARY,
+    TR_ACCELERATE, TR_DECCELERATE, TR_GRAVITY, TR_LINEAR_STOP, TR_STATIONARY, Trajectory,
 };
 use vcod_gsc::EntId;
 use vcod_gsc::Host;

@@ -19,11 +19,11 @@
 
 mod common;
 
-use common::{parse_fixture, replay, Sample};
+use common::{Sample, parse_fixture, replay};
 use std::collections::{BTreeMap, BTreeSet};
 use vcod_common::net::msg::EntityState;
 use vcod_common::net::protocol::PROTOCOL_V1;
-use vcod_common::net::trajectory::{Trajectory, TR_STATIONARY};
+use vcod_common::net::trajectory::{TR_STATIONARY, Trajectory};
 
 /// How far our arc may sit from retail's at one of its samples. A bounce
 /// resolved a millisecond earlier or later moves the rest of the flight by

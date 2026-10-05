@@ -8,8 +8,8 @@ use vcod_common::localize::Localized;
 use vcod_common::menu::Menu;
 use vcod_common::pk3::Pk3Fs;
 
-use super::font::{self, Font};
 use super::HudQuad;
+use super::font::{self, Font};
 use crate::play::join::Join;
 
 /// One selectable row: the localized label, the response it sends, and the

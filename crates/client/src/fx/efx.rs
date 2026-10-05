@@ -235,7 +235,7 @@ impl<'a> Cursor<'a> {
                     return Err(format!(
                         "line {}: unexpected end of input, expected '{close}'",
                         self.eof_line()
-                    ))
+                    ));
                 }
             }
         }
@@ -501,13 +501,13 @@ pub fn parse(text: &str) -> Result<Effect, String> {
                 return Err(format!(
                     "line {}: expected '{{' after block '{kind}', found '{}'",
                     t.line, t.text
-                ))
+                ));
             }
             None => {
                 return Err(format!(
                     "line {}: expected '{{' after block '{kind}', found end of input",
                     p.eof_line()
-                ))
+                ));
             }
         }
         let mut emitter = Emitter {
@@ -618,9 +618,11 @@ Tail
     fn unknown_key_is_recorded_not_fatal() {
         let s = TRACER.replace("radius\t\t\t\t45 55", "frobnicate 1 2 3");
         let e = parse(&s).unwrap();
-        assert!(e.emitters[0]
-            .unknown_keys
-            .contains(&"frobnicate".to_string()));
+        assert!(
+            e.emitters[0]
+                .unknown_keys
+                .contains(&"frobnicate".to_string())
+        );
     }
 
     #[test]

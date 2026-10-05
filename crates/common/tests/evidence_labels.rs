@@ -182,9 +182,11 @@ fn the_check_fires_on_the_shapes_it_claims_to_catch() {
     let split = "INFERRED FROM DECOMPILATION that offset 0x2fc carries the alt-fire \
                  link (not single-stepped); VERIFIED that every `*_semi_mp` bit in \
                  both captures sits beside its base weapon's.";
-    assert!(clauses(split)
-        .iter()
-        .all(|(_, c)| !(has_verified(c) && c.contains("INFERRED"))));
+    assert!(
+        clauses(split)
+            .iter()
+            .all(|(_, c)| !(has_verified(c) && c.contains("INFERRED")))
+    );
 
     // A file name's dot is not a clause boundary, or the split above would
     // hide a real double label rather than pass it through.

@@ -211,8 +211,8 @@ fn set_startsolid(t: &mut Trace, entity: u32, rel: Vec3, end_inside: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collision::test_world;
     use crate::collision::MASK_PLAYERSOLID as LIVE;
+    use crate::collision::test_world;
 
     const STAND: (Vec3, Vec3) = (Vec3::new(-15.0, -15.0, 0.0), Vec3::new(15.0, 15.0, 70.0));
 

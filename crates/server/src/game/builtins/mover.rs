@@ -388,13 +388,15 @@ mod tests {
             let class = cx.intern_folded("classname");
             let w = Value::String(cx.intern_exact("mpweapon_panzerfaust"));
             host.set_field(cx, item, class, w).unwrap();
-            assert!(move_z(
-                &mut host,
-                cx,
-                Some(Target::Entity(item)),
-                &[Value::Int(96), Value::Int(2)]
-            )
-            .is_err());
+            assert!(
+                move_z(
+                    &mut host,
+                    cx,
+                    Some(Target::Entity(item)),
+                    &[Value::Int(96), Value::Int(2)]
+                )
+                .is_err()
+            );
         });
     }
 }

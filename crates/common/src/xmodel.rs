@@ -2,7 +2,7 @@
 //! the weapon file parser. Layouts: `docs/research/xmodel-v14-format.md`.
 
 use crate::pk3::Pk3Fs;
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{Result, anyhow, ensure};
 use glam::{DMat3, DVec3, Quat, Vec3};
 use std::collections::HashMap;
 
@@ -676,10 +676,11 @@ mod tests {
         let m = load(&fs, "crate_misc1a").unwrap();
         let counts: Vec<usize> = m.collision.iter().map(|s| s.tris.len()).collect();
         assert_eq!(counts, [16, 12]);
-        assert!(m
-            .collision
-            .iter()
-            .all(|s| s.contents == crate::collision::CONTENTS_SOLID));
+        assert!(
+            m.collision
+                .iter()
+                .all(|s| s.contents == crate::collision::CONTENTS_SOLID)
+        );
         // first floor triangle: half of the 24x48 base at z = 1.33
         let t = m.collision[0].tris[0];
         let close = |v: Vec3, x: f32, y: f32| v.abs_diff_eq(Vec3::new(x, y, 1.331), 0.01);
@@ -889,7 +890,7 @@ mod tests {
             "{maxs}"
         );
         assert_eq!(hl, 13); // left_leg_upper
-                            // The body's own head and neck boxes are zero; the head model carries them.
+        // The body's own head and neck boxes are zero; the head model carries them.
         assert_eq!(by_name(&body, "bip01 head").1, Vec3::ZERO);
         assert_eq!(by_name(&body, "bip01 neck").1, Vec3::ZERO);
 
@@ -1017,11 +1018,13 @@ mod tests {
                 }
             }
         }
-        assert!(hands
-            .surfaces
-            .iter()
-            .flat_map(|s| &s.verts)
-            .any(|v| v.bone_weights[1] > 0.0));
+        assert!(
+            hands
+                .surfaces
+                .iter()
+                .flat_map(|s| &s.verts)
+                .any(|v| v.bone_weights[1] > 0.0)
+        );
     }
 
     #[test]
@@ -1047,7 +1050,7 @@ mod tests {
             ]
         );
 
-        use crate::assets::{load_skin_image, ImageData};
+        use crate::assets::{ImageData, load_skin_image};
         let hand = load_skin_image(&fs, "viewhands@hand.dds");
         assert!(
             matches!(hand.data, ImageData::Bc { .. }),

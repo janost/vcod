@@ -215,9 +215,10 @@ fn share_unchanged(
 ) {
     for (n, e) in new.iter_mut() {
         if let Some(o) = old.get(n)
-            && o == e {
-                *e = o.clone();
-            }
+            && o == e
+        {
+            *e = o.clone();
+        }
     }
 }
 

@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use vcod_common::net::msg::{UserCmd, BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD};
+use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::{NetClient, NetEvent};
 
@@ -225,9 +225,11 @@ fn ours_trims_and_ends_the_killcam_as_retail_does() {
             }
         }
         if let Some(s) = ca.snapshots().newest()
-            && shooter_view.is_none() && s.ps.field_i32(p, "pm_flags") & 0x40000 != 0 {
-                shooter_view = Some(s.server_time);
-            }
+            && shooter_view.is_none()
+            && s.ps.field_i32(p, "pm_flags") & 0x40000 != 0
+        {
+            shooter_view = Some(s.server_time);
+        }
         if ja.settled(now) && jb.settled(now) {
             break;
         }

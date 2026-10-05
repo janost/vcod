@@ -7,8 +7,8 @@
 
 use crate::spectate::ClientSim;
 use glam::Vec3;
-use vcod_common::pmove::aim::{angle_normalize_180, angle_subtract};
 use vcod_common::pmove::Stance;
+use vcod_common::pmove::aim::{angle_normalize_180, angle_subtract};
 use vcod_gsc::EntId;
 
 /// The turret keys of a weapon file (`weapons/mp/<name>`), weapon-def

@@ -301,9 +301,10 @@ pub fn resolve(ev: &GameEvent, ctx: &CueCtx) -> Vec<Cue> {
                 Source::Point(impact),
             ));
             if let Some(&(start, _)) = ctx.muzzles.get(&ev.other_entity_num)
-                && let Some(at) = whizby_point(start, impact, ctx.listener_pos) {
-                    out.push(cue("whizby", Source::Point(at)));
-                }
+                && let Some(at) = whizby_point(start, impact, ctx.listener_pos)
+            {
+                out.push(cue("whizby", Source::Point(at)));
+            }
         }
         EV_GRENADE_BOUNCE => out.push(cue(
             with_surface("grenade_bounce", ev.surf_type),

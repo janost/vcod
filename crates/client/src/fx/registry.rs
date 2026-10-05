@@ -5,7 +5,7 @@ use crate::fx::sim::SpawnAt;
 use glam::Vec3;
 use std::collections::HashMap;
 use std::sync::{LazyLock, PoisonError, RwLock};
-use vcod_common::net::events::{byte_to_dir, GameEvent};
+use vcod_common::net::events::{GameEvent, byte_to_dir};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::weapon::WeaponDef;
 
@@ -643,11 +643,13 @@ mod tests {
             let mut e = ev(id, 0, 7, [300.0, 0.0, 50.0]);
             e.other_entity_num = 7;
             match resolve_with(&e, &table, &ctx).as_slice() {
-                [Resolved::Tracer {
-                    muzzle,
-                    impact,
-                    flesh: true,
-                }] => {
+                [
+                    Resolved::Tracer {
+                        muzzle,
+                        impact,
+                        flesh: true,
+                    },
+                ] => {
                     assert_eq!(*muzzle, Vec3::new(0.0, 0.0, 60.0));
                     assert_eq!(*impact, Vec3::new(300.0, 0.0, 50.0));
                 }

@@ -29,9 +29,10 @@ fn suffix_angle(tok: &str) -> Option<(Axis, f32)> {
         ("right", Axis::Yaw, 1.0),
     ] {
         if let Some(num) = tok.strip_suffix(word)
-            && let Ok(deg) = num.parse::<f32>() {
-                return Some((axis, sign * deg));
-            }
+            && let Ok(deg) = num.parse::<f32>()
+        {
+            return Some((axis, sign * deg));
+        }
     }
     None
 }

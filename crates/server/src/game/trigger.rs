@@ -468,9 +468,11 @@ pub fn aim_trace(
             }
         };
         if let Some(f) = f
-            && f < world_f && best.is_none_or(|(b, _)| f < b) {
-                best = Some((f, id));
-            }
+            && f < world_f
+            && best.is_none_or(|(b, _)| f < b)
+        {
+            best = Some((f, id));
+        }
     }
     let (lookat_f, id) = best?;
     let bodies: Vec<_> = host.client_bodies.iter().flatten().cloned().collect();
@@ -884,13 +886,15 @@ mod tests {
         )
         .unwrap();
         assert!((f - 184.0 / 400.0).abs() < 1e-4);
-        assert!(segment_enters_hulls(
-            Vec3::ZERO,
-            Vec3::new(400.0, 40.0, 0.0),
-            o,
-            std::slice::from_ref(&hull)
-        )
-        .is_none());
+        assert!(
+            segment_enters_hulls(
+                Vec3::ZERO,
+                Vec3::new(400.0, 40.0, 0.0),
+                o,
+                std::slice::from_ref(&hull)
+            )
+            .is_none()
+        );
         // A start inside the hull enters it at 0.
         let inside = segment_enters_hulls(
             Vec3::new(200.0, 0.0, 0.0),
@@ -901,13 +905,15 @@ mod tests {
         assert_eq!(inside, Some(0.0));
         // A hull with no planes is nothing, not everything.
         let empty = BrushHull { planes: Vec::new() };
-        assert!(segment_enters_hulls(
-            Vec3::ZERO,
-            Vec3::new(400.0, 40.0, 0.0),
-            o,
-            std::slice::from_ref(&empty)
-        )
-        .is_none());
+        assert!(
+            segment_enters_hulls(
+                Vec3::ZERO,
+                Vec3::new(400.0, 40.0, 0.0),
+                o,
+                std::slice::from_ref(&empty)
+            )
+            .is_none()
+        );
     }
 
     /// The aim trace answers the nearest `trigger_lookat` on the ray and

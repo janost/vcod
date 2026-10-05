@@ -5,7 +5,7 @@
 //! docs/research/player-model-anim-system.md, "Animation indices: the animtree".
 
 use crate::pk3::Pk3Fs;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use std::collections::{HashMap, HashSet};
 
 pub struct Node {

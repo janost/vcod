@@ -6,7 +6,7 @@
 //! docs/research/player-model-anim-system.md.
 
 use crate::animtree::strip_comments;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::collections::{HashMap, HashSet};
 
 /// Which condition a clause tests. `leaning`, `position`, `underwater` and
@@ -970,18 +970,21 @@ land
     #[test]
     fn a_block_or_state_that_does_not_exist_selects_nothing() {
         let s = AnimScript::parse(SAMPLE).unwrap();
-        assert!(s
-            .select("relaxed", &rifleman(Movetype::Idle))
-            .legs
-            .is_none());
-        assert!(s
-            .select("combat", &rifleman(Movetype::ClimbUp))
-            .legs
-            .is_none());
-        assert!(s
-            .select_event("fireweapon", &rifleman(Movetype::Idle))
-            .legs
-            .is_none());
+        assert!(
+            s.select("relaxed", &rifleman(Movetype::Idle))
+                .legs
+                .is_none()
+        );
+        assert!(
+            s.select("combat", &rifleman(Movetype::ClimbUp))
+                .legs
+                .is_none()
+        );
+        assert!(
+            s.select_event("fireweapon", &rifleman(Movetype::Idle))
+                .legs
+                .is_none()
+        );
     }
 
     /// The two values the retail capture pins, read out of the shipped file.
@@ -1085,11 +1088,13 @@ land
             );
         }
         // The file answers a moving shot with an empty clause: nothing plays.
-        assert!(anims
-            .script
-            .select_event("fireweapon", &rifleman(Movetype::Run))
-            .torso
-            .is_none());
+        assert!(
+            anims
+                .script
+                .select_event("fireweapon", &rifleman(Movetype::Run))
+                .torso
+                .is_none()
+        );
     }
 
     /// The shipped `death` clauses list several anims each; retail draws one

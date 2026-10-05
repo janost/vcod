@@ -3,13 +3,13 @@
 //! pak0 `ui_mp/hud.menu` gives. How the cgame draws each:
 //! docs/research/cod11-hud-protocol.md, section 9.
 
-use super::font::{self, Font};
-use super::hudelem::{self, Virtual, CS_SHADERS};
 use super::HudQuad;
+use super::font::{self, Font};
+use super::hudelem::{self, CS_SHADERS, Virtual};
 use crate::play::input::{EF_CROUCH, EF_PRONE};
 use vcod_common::localize::Localized;
 use vcod_common::net::msg::Objective;
-use vcod_common::pmove::weapon::{hip_spread_min, SpreadStance};
+use vcod_common::pmove::weapon::{SpreadStance, hip_spread_min};
 use vcod_common::weapon::{SightDirection, WeaponDef};
 
 /// Hint strings (`serverCursorHintString`) index configstrings from here.

@@ -11,8 +11,8 @@ use common::Queues;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::NetEvent;
+use vcod_common::net::protocol::PROTOCOL_V1;
 
 const MAP: &str = "mp_carentan";
 /// `ET_ITEM`, a placed or dropped weapon (`crate::game::wire`).
@@ -48,7 +48,7 @@ fn cfg() -> vcod_server::ServerConfig {
 /// button.
 #[test]
 fn a_shot_takes_health_and_a_second_one_kills() {
-    use vcod_common::net::msg::{UserCmd, BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD};
+    use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD, UserCmd};
 
     let Some(fs) = vcod_common::testing::game_fs() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
@@ -375,9 +375,10 @@ fn a_shot_takes_health_and_a_second_one_kills() {
         let (ea, _) = step(&mut sv, &mut ca, &mut cb);
         for e in ea {
             if let NetEvent::ServerCommand(t) = e
-                && t.first().map(String::as_str) == Some("b") {
-                    row = Some(t);
-                }
+                && t.first().map(String::as_str) == Some("b")
+            {
+                row = Some(t);
+            }
         }
     }
     let row = row.expect("no scoreboard reply");
@@ -660,9 +661,10 @@ fn the_kill_command_suicides_a_player() {
         let (ea, _) = step(&mut sv, &mut ca, &mut cb);
         for e in ea {
             if let NetEvent::ServerCommand(t) = e
-                && t.first().map(String::as_str) == Some("b") {
-                    row = Some(t);
-                }
+                && t.first().map(String::as_str) == Some("b")
+            {
+                row = Some(t);
+            }
         }
     }
     let row = row.expect("no scoreboard reply");
@@ -822,7 +824,7 @@ fn retail_bullet_death() -> std::collections::BTreeMap<String, String> {
 /// `EV_RAISE_WEAPON` (combat doc, 8.4 and 16).
 #[test]
 fn a_bullet_deaths_frame_is_retails() {
-    use vcod_common::net::msg::{UserCmd, BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD};
+    use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD, UserCmd};
 
     let Some(fs) = vcod_common::testing::game_fs() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
@@ -926,7 +928,7 @@ fn a_bullet_deaths_frame_is_retails() {
 /// shot traced after every move, B still stood in it and took the round.
 #[test]
 fn a_player_killed_earlier_in_the_frame_stops_no_later_round() {
-    use vcod_common::net::msg::{UserCmd, BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD};
+    use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD, UserCmd};
 
     let Some(fs) = vcod_common::testing::game_fs() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
@@ -1028,7 +1030,7 @@ fn a_player_killed_earlier_in_the_frame_stops_no_later_round() {
 /// (`mp_carentan-tdm-melee-shooter.txt`).
 #[test]
 fn a_melee_swing_hits_and_the_kill_shows_the_melee_icon() {
-    use vcod_common::net::msg::{UserCmd, BUTTON_MELEE, NULL_USERCMD};
+    use vcod_common::net::msg::{BUTTON_MELEE, NULL_USERCMD, UserCmd};
 
     let Some(fs) = vcod_common::testing::game_fs() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
@@ -1232,7 +1234,7 @@ fn cook_and_throw_down(
     frag: u8,
     aim: (f32, f32),
 ) -> [f32; 3] {
-    use vcod_common::net::msg::{UserCmd, BUTTON_ATTACK, NULL_USERCMD};
+    use vcod_common::net::msg::{BUTTON_ATTACK, NULL_USERCMD, UserCmd};
     let aimed = UserCmd {
         angles: [angle_short(aim.1), angle_short(aim.0), 0],
         weapon: frag,
@@ -1326,7 +1328,7 @@ fn frag_index() -> u8 {
 /// off a distance of 137, and the thrower 151 units out on 30.
 #[test]
 fn a_thrown_grenade_damages_a_player_in_its_blast() {
-    use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
+    use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 
     let Some(pair) = two_placed(|sv, spot| {
         assert!(
@@ -1406,7 +1408,7 @@ fn a_thrown_grenade_damages_a_player_in_its_blast() {
 /// on, and `trDelta` is whole because the thrower stood still.
 #[test]
 fn a_throw_s_first_frame_matches_retail_s_capture() {
-    use vcod_common::net::msg::{UserCmd, BUTTON_ATTACK, NULL_USERCMD};
+    use vcod_common::net::msg::{BUTTON_ATTACK, NULL_USERCMD, UserCmd};
 
     // (feet, view pitch and yaw, retail's trBase, retail's trDelta), the two
     // `!missile` lines that follow each throw's release.
@@ -1535,7 +1537,7 @@ fn a_throw_s_first_frame_matches_retail_s_capture() {
 /// delta inside those ranges, and an explode 3950 ms later.
 #[test]
 fn a_player_killed_mid_cook_drops_a_live_grenade() {
-    use vcod_common::net::msg::{UserCmd, BUTTON_ATTACK, NULL_USERCMD};
+    use vcod_common::net::msg::{BUTTON_ATTACK, NULL_USERCMD, UserCmd};
 
     let Some(pair) = two_placed(|sv, spot| {
         assert!(
@@ -1695,7 +1697,7 @@ fn shielded_spot(sv: &vcod_server::Server, from: [f32; 3]) -> Option<[f32; 3]> {
 /// wall, who is inside the radius and outside the second chance's reach.
 #[test]
 fn a_wall_shields_a_player_from_a_blast() {
-    use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
+    use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 
     let Some(pair) = two_placed(|sv, spot| {
         shielded_spot(sv, spot).expect("no shielded spot within 330 units of the spawn")
@@ -1920,9 +1922,10 @@ impl Followed {
             for (client, events) in events.into_iter().enumerate() {
                 for e in events {
                     if let NetEvent::ServerCommand(t) = e
-                        && t.first().map(String::as_str) == Some("b") {
-                            pushed.push((frame, client, t));
-                        }
+                        && t.first().map(String::as_str) == Some("b")
+                    {
+                        pushed.push((frame, client, t));
+                    }
                 }
             }
             if self.cs.snapshots().newest().unwrap().ps.health() == 0 {

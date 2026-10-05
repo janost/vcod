@@ -24,10 +24,10 @@ use std::collections::BTreeMap;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::movetrace::MoveWorld;
 use vcod_common::net::msg;
-use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
+use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD, PROTOCOL_V1};
 use vcod_common::pmove::cmd::{self, EventRing};
-use vcod_common::pmove::{predict, PlayerState};
+use vcod_common::pmove::{PlayerState, predict};
 use vcod_common::weapon::WeaponDef;
 
 /// What the retail server said the player was after some cmd.
@@ -167,23 +167,24 @@ fn run_cmd(
     if let Some(at) = std::env::var("SLOPE_TRACE")
         .ok()
         .and_then(|v| v.parse::<i32>().ok())
-        && (at - 60..=at).contains(&cmd.server_time) {
-            println!(
-                "  cmd st={} dt={dt_ms} origin=[{:.3},{:.3},{:.3}] vel=[{:.2},{:.2},{:.2}] ground={} n=[{:.3},{:.3},{:.3}] walking={}",
-                cmd.server_time,
-                ps.origin.x,
-                ps.origin.y,
-                ps.origin.z,
-                ps.velocity.x,
-                ps.velocity.y,
-                ps.velocity.z,
-                ps.on_ground,
-                ps.ground_normal.x,
-                ps.ground_normal.y,
-                ps.ground_normal.z,
-                ps.walking,
-            );
-        }
+        && (at - 60..=at).contains(&cmd.server_time)
+    {
+        println!(
+            "  cmd st={} dt={dt_ms} origin=[{:.3},{:.3},{:.3}] vel=[{:.2},{:.2},{:.2}] ground={} n=[{:.3},{:.3},{:.3}] walking={}",
+            cmd.server_time,
+            ps.origin.x,
+            ps.origin.y,
+            ps.origin.z,
+            ps.velocity.x,
+            ps.velocity.y,
+            ps.velocity.z,
+            ps.on_ground,
+            ps.ground_normal.x,
+            ps.ground_normal.y,
+            ps.ground_normal.z,
+            ps.walking,
+        );
+    }
 }
 
 /// The eye's running leg, which retail sends (`viewHeightLerpTime`,

@@ -45,9 +45,10 @@ impl PakScripts {
 impl ScriptSource for PakScripts {
     fn read(&self, canonical: &str) -> Option<String> {
         if let Some((path, text)) = self.overlay.as_ref()
-            && path == canonical {
-                return Some(text.clone());
-            }
+            && path == canonical
+        {
+            return Some(text.clone());
+        }
         let bytes = self.fs.read(&format!("{canonical}.gsc"))?;
         Some(String::from_utf8_lossy(&bytes).into_owned())
     }
@@ -500,10 +501,10 @@ impl ScriptRuntime {
                 .turrets
                 .values_mut()
                 .find(|r| r.owner == Some(slot))
-            {
-                rec.busy = 2;
-                release_asked = true;
-            }
+        {
+            rec.busy = 2;
+            release_asked = true;
+        }
         if self.host.client_pm_type.get(slot).copied().unwrap_or(0) > TOUCH_MAX_PM_TYPE {
             return;
         }
@@ -883,9 +884,10 @@ impl ScriptRuntime {
             .with_cx(|cx| crate::game::trigger::aim_trace(host, cx, slot, eye, aim, rifle, now_ms));
         self.host.client_lookat[slot] = hit;
         if let Some(id) = hit
-            && self.host.triggers.fire(id, now_ms, &mut |_| 0) {
-                self.host.trigger_fires.push((id, client));
-            }
+            && self.host.triggers.fire(id, now_ms, &mut |_| 0)
+        {
+            self.host.trigger_fires.push((id, client));
+        }
     }
 
     /// `G_CheckForCursorHints` (0x4f59c) as `ClientEndFrame` runs it every
@@ -1385,7 +1387,7 @@ impl ScriptRuntime {
     /// helmet are attachments, the same pair `client_model_index` and
     /// `client_attachments` put on the roster.
     pub fn client_assembly(&mut self, slot: usize) -> Option<crate::game::hitrig::Assembly> {
-        use crate::game::hitrig::{model_name, Assembly};
+        use crate::game::hitrig::{Assembly, model_name};
         let body = model_name(&self.client_field(slot, "model")?);
         if body.is_empty() {
             return None;
@@ -3198,15 +3200,17 @@ mod tests {
             && *ev == "trigger"
             && args == &vec![Value::Entity(client), Value::Entity(drop)]));
         // `Cmd_Activate_f` notifies the item alone, never the player.
-        assert!(!rt
-            .host
-            .item_notifies
-            .iter()
-            .any(|(id, ev, _)| *id == client && *ev == "touch"));
+        assert!(
+            !rt.host
+                .item_notifies
+                .iter()
+                .any(|(id, ev, _)| *id == client && *ev == "touch")
+        );
         let panzerfaust = crate::configstrings::weapon_index("panzerfaust_mp").unwrap();
-        assert!(rt
-            .take_client_commands()
-            .contains(&(0, format!("a {panzerfaust}"))));
+        assert!(
+            rt.take_client_commands()
+                .contains(&(0, format!("a {panzerfaust}")))
+        );
     }
 
     /// A stock stand turret at (40, 0, 0) facing +x, and `pickup_rig`'s

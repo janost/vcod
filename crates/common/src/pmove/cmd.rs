@@ -4,7 +4,7 @@
 //! a playing client's cmds through here, so a prediction replays the
 //! server's own code.
 
-use super::{weapon, PlayerState, PmEvent, PmInput, MAX_FRAME_MS};
+use super::{MAX_FRAME_MS, PlayerState, PmEvent, PmInput, weapon};
 use crate::movetrace::MoveWorld;
 use crate::net::msg::{self, UserCmd};
 use crate::weapon::WeaponDef;

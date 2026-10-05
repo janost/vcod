@@ -1076,14 +1076,15 @@ impl CollisionWorld {
             let first = node.first as usize;
             for (prim, lo, hi) in &self.prims[first..first + node.count as usize] {
                 if let Prim::Brush(b) = prim
-                    && p.cmple(*hi).all() && p.cmpge(*lo).all() {
-                        let brush = &self.brushes[*b as usize];
-                        if self.brush_linked(brush)
-                            && brush.planes.iter().all(|&(n, d)| n.dot(p) <= d)
-                        {
-                            out |= brush.content_flags;
-                        }
+                    && p.cmple(*hi).all()
+                    && p.cmpge(*lo).all()
+                {
+                    let brush = &self.brushes[*b as usize];
+                    if self.brush_linked(brush) && brush.planes.iter().all(|&(n, d)| n.dot(p) <= d)
+                    {
+                        out |= brush.content_flags;
                     }
+                }
             }
         }
         out
@@ -1804,13 +1805,17 @@ mod tests {
         let planes = &world.brushes[0].planes;
         assert_eq!(planes.len(), 6);
         // zmax face: normal +Z, dist 0
-        assert!(planes
-            .iter()
-            .any(|(n, d)| n.abs_diff_eq(Vec3::Z, 1e-6) && *d == 0.0));
+        assert!(
+            planes
+                .iter()
+                .any(|(n, d)| n.abs_diff_eq(Vec3::Z, 1e-6) && *d == 0.0)
+        );
         // xmin face: normal -X, dist 64 (inside test: -x <= 64  =>  x >= -64)
-        assert!(planes
-            .iter()
-            .any(|(n, d)| n.abs_diff_eq(-Vec3::X, 1e-6) && *d == 64.0));
+        assert!(
+            planes
+                .iter()
+                .any(|(n, d)| n.abs_diff_eq(-Vec3::X, 1e-6) && *d == 64.0)
+        );
     }
 
     #[test]

@@ -171,10 +171,11 @@ pub fn parse(text: &str) -> Result<VoiceChat, String> {
             // A "}" in the icon slot is pushed back by retail's UngetToken
             // and ends the category on the next pass.
             if let Some((_, icon)) = t.same_line(alias_line)
-                && !icon.eq_ignore_ascii_case("}") {
-                    variant.head_icon = Some(icon.to_string());
-                    t.i += 1;
-                }
+                && !icon.eq_ignore_ascii_case("}")
+            {
+                variant.head_icon = Some(icon.to_string());
+                t.i += 1;
+            }
             if cat.variants.len() < MAX_VARIANTS {
                 cat.variants.push(variant);
             }

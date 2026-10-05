@@ -3,7 +3,7 @@
 use crate::spectate::ClientSim;
 use std::net::SocketAddr;
 use std::time::Instant;
-use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
+use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 use vcod_common::net::netchan::{ClientMessage, ServerNetchan};
 use vcod_common::net::snapshot::Snapshot;
 

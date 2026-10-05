@@ -71,11 +71,7 @@ pub fn rotation(angles: Vec3) -> Mat3 {
 /// q3map2 reads `modelscale` with `FloatForKey` and applies it only when
 /// non-zero. Also guards `bake`'s normal division.
 fn scale_or_one(v: f32) -> f32 {
-    if v.is_finite() && v != 0.0 {
-        v
-    } else {
-        1.0
-    }
+    if v.is_finite() && v != 0.0 { v } else { 1.0 }
 }
 
 /// Every `misc_model`. Other classnames with a `model` key (spawn points name
@@ -434,8 +430,7 @@ mod tests {
         let ents = "{\n\"model\" \"xmodel/a\"\n\"angle\" \"45\"\n\"classname\" \"misc_model\"\n}";
         assert_eq!(placements(ents)[0].angles, Vec3::new(0.0, 45.0, 0.0));
         // a full "angles" triple wins over the shorthand
-        let both =
-            "{\n\"model\" \"xmodel/a\"\n\"angle\" \"45\"\n\"angles\" \"1 2 3\"\n\"classname\" \"misc_model\"\n}";
+        let both = "{\n\"model\" \"xmodel/a\"\n\"angle\" \"45\"\n\"angles\" \"1 2 3\"\n\"classname\" \"misc_model\"\n}";
         assert_eq!(placements(both)[0].angles, Vec3::new(1.0, 2.0, 3.0));
     }
 
@@ -548,7 +543,7 @@ mod tests {
     /// Size alone doesn't say: a real skin could be 16x16 too, so the pixels
     /// must match.
     fn is_default_image(img: &crate::assets::Image) -> bool {
-        use crate::assets::{default_image, ImageData};
+        use crate::assets::{ImageData, default_image};
         let (ImageData::Rgba8(px), ImageData::Rgba8(d)) = (&img.data, default_image().data) else {
             return false;
         };
@@ -591,10 +586,12 @@ mod tests {
         );
         let total: u32 = props.ranges.iter().map(|(_, r)| r.count).sum();
         assert_eq!(total as usize, props.indices.len());
-        assert!(props
-            .ranges
-            .iter()
-            .all(|(p, r)| *p == 0 && (r.batch as usize) < props.batches.len()));
+        assert!(
+            props
+                .ranges
+                .iter()
+                .all(|(p, r)| *p == 0 && (r.batch as usize) < props.batches.len())
+        );
         for (_, r) in &props.ranges {
             let b = &props.batches[r.batch as usize];
             assert!(r.first >= b.first_index && r.first + r.count <= b.first_index + b.index_count);
@@ -617,10 +614,12 @@ mod tests {
         assert!(!props.batches.is_empty());
         let total: u32 = props.batches.iter().map(|b| b.index_count).sum();
         assert_eq!(total as usize, props.indices.len());
-        assert!(props
-            .indices
-            .iter()
-            .all(|&i| (i as usize) < props.verts.len()));
+        assert!(
+            props
+                .indices
+                .iter()
+                .all(|&i| (i as usize) < props.verts.len())
+        );
         for b in &props.batches {
             assert!(
                 !is_default_image(&load_skin_image(&fs, &b.skin)),

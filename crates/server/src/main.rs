@@ -2,7 +2,7 @@
 //! accepts connections, sends the gamestate and uncompressed snapshots with
 //! spectator flight.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};

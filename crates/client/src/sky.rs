@@ -259,7 +259,7 @@ mod tests {
             assert_eq!(side.verts.len(), 81);
             assert_eq!(side.indices.len(), 64 * 6);
             let dom = axis / 2; // axes come in +/- pairs: x,x,y,y,z,z
-                                // even axes (+x,+y,top) face positive, odd ones negative
+            // even axes (+x,+y,top) face positive, odd ones negative
             let want = if axis % 2 == 0 { size } else { -size };
             for v in &side.verts {
                 assert!(close(v.pos[dom], want), "axis {axis} vert {:?}", v.pos);

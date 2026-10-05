@@ -19,13 +19,13 @@
 use glam::Vec3;
 use std::collections::{BTreeMap, HashMap};
 use vcod_common::collision::CollisionWorld;
-use vcod_common::movetrace::{Body, MoveWorld, CONTENTS_BODY};
+use vcod_common::movetrace::{Body, CONTENTS_BODY, MoveWorld};
 use vcod_common::net::huffman::Huffman;
 use vcod_common::net::msg::{
-    self, UserCmd, BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD, WBUTTON_CROUCH, WBUTTON_PRONE,
+    self, BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD, UserCmd, WBUTTON_CROUCH, WBUTTON_PRONE,
     WBUTTON_RELOAD,
 };
-use vcod_common::net::protocol::{Protocol, ENTITYNUM_WORLD, PROTOCOL_V1};
+use vcod_common::net::protocol::{ENTITYNUM_WORLD, PROTOCOL_V1, Protocol};
 use vcod_common::pmove::predict::{self, Predicted};
 use vcod_common::pmove::{self as pm, weapon::WEAPON_READY};
 use vcod_common::weapon::WeaponDef;

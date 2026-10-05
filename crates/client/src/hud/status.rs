@@ -2,8 +2,8 @@
 //! start. Configstrings per docs/research/cod11-hud-protocol.md, section 5.
 //! There is no round-timer configstring, so the clock is not a countdown.
 
-use super::font::{self, Font};
 use super::HudQuad;
+use super::font::{self, Font};
 use vcod_common::net::info_value_for_key;
 
 /// Serverinfo; `g_gametype` is one of its keys.

@@ -35,11 +35,11 @@
 use glam::Vec3;
 use std::collections::BTreeMap;
 use vcod_common::collision::CollisionWorld;
-use vcod_common::movetrace::{Body, MoveWorld, CONTENTS_BODY};
-use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
+use vcod_common::movetrace::{Body, CONTENTS_BODY, MoveWorld};
+use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::ENTITYNUM_NONE;
 use vcod_common::pmove::cmd::{self, ANGLE2SHORT};
-use vcod_common::pmove::{pmove, PlayerState, PMF_TIME_KNOCKBACK};
+use vcod_common::pmove::{PMF_TIME_KNOCKBACK, PlayerState, pmove};
 use vcod_common::weapon::WeaponDef;
 
 const FIXTURE: &str = "mp_carentan-dm-bump-walker.txt";
@@ -189,22 +189,23 @@ fn run_cmd(
     if let Some(at) = std::env::var("BUMP_TRACE")
         .ok()
         .and_then(|v| v.parse::<i32>().ok())
-        && (at - 60..=at).contains(&cmd.server_time) {
-            println!(
-                "  cmd st={} up={} fwd={} origin=[{:.3},{:.3},{:.3}] vel=[{:.2},{:.2},{:.2}] ground={} kb={}",
-                cmd.server_time,
-                cmd.up,
-                cmd.forward,
-                ps.origin.x,
-                ps.origin.y,
-                ps.origin.z,
-                ps.velocity.x,
-                ps.velocity.y,
-                ps.velocity.z,
-                ps.ground_entity_num(),
-                ps.knockback_ms,
-            );
-        }
+        && (at - 60..=at).contains(&cmd.server_time)
+    {
+        println!(
+            "  cmd st={} up={} fwd={} origin=[{:.3},{:.3},{:.3}] vel=[{:.2},{:.2},{:.2}] ground={} kb={}",
+            cmd.server_time,
+            cmd.up,
+            cmd.forward,
+            ps.origin.x,
+            ps.origin.y,
+            ps.origin.z,
+            ps.velocity.x,
+            ps.velocity.y,
+            ps.velocity.z,
+            ps.ground_entity_num(),
+            ps.knockback_ms,
+        );
+    }
 }
 
 /// Retail's playerstate at a snapshot: origin, velocity, ground, the held

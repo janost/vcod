@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::{Queues, ADDR, ADDR_B};
+use common::{ADDR, ADDR_B, Queues};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -237,9 +237,10 @@ fn a_player_entity_carries_the_fields_retail_sets() {
         }
         for line in body.lines() {
             if let Some((name, _)) = line.split_once(' ')
-                && EntityState::field_index(p, name).is_some() {
-                    retail_sets.insert(name);
-                }
+                && EntityState::field_index(p, name).is_some()
+            {
+                retail_sets.insert(name);
+            }
         }
     }
     assert!(
@@ -779,7 +780,7 @@ fn a_weapon_switch_off_the_usercmd_byte_happens_once() {
 /// def instead, and the player was left holding nothing until it respawned.
 #[test]
 fn a_client_out_of_grenades_gets_its_rifle_back() {
-    use vcod_common::net::msg::{UserCmd, BUTTON_ATTACK, NULL_USERCMD};
+    use vcod_common::net::msg::{BUTTON_ATTACK, NULL_USERCMD, UserCmd};
     const EV_FIRE_WEAPON: i32 = 159;
 
     let Some(fs) = vcod_common::testing::game_fs() else {
@@ -1413,8 +1414,8 @@ fn map_restart_re_inits_the_level_without_a_gamestate() {
 /// `sv_mapRotation` on the live netchan.
 #[test]
 fn the_score_limit_sends_both_clients_to_intermission_and_then_rotates() {
-    use vcod_common::net::msg::{UserCmd, BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD};
     use vcod_common::net::NetEvent;
+    use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD, UserCmd};
 
     const NEXT: &str = "mp_brecourt";
     let Some(fs) = vcod_common::testing::game_fs() else {

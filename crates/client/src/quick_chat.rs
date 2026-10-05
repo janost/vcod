@@ -240,11 +240,7 @@ mod tests {
             Some(vc(vec![cat("praise", &["axis_snd"])])),
         );
         assert!(qc.on_server_command(&fs(), &cmd("j", 3, "praise"), |n| {
-            if n == 3 {
-                Some(1)
-            } else {
-                None
-            }
+            if n == 3 { Some(1) } else { None }
         }));
         assert_eq!(qc.drain(0.0).unwrap().cue.alias, "axis_snd");
 
@@ -253,11 +249,7 @@ mod tests {
             Some(vc(vec![cat("praise", &["axis_snd"])])),
         );
         assert!(qc.on_server_command(&fs(), &cmd("j", 3, "praise"), |n| {
-            if n == 3 {
-                Some(2)
-            } else {
-                None
-            }
+            if n == 3 { Some(2) } else { None }
         }));
         assert_eq!(qc.drain(0.0).unwrap().cue.alias, "allies_snd");
     }

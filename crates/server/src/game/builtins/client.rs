@@ -11,7 +11,7 @@
 //! `docs/research/cod11-hud-protocol.md` section 0.1 carries the live
 //! capture of a stock dm join that produced them.
 
-use crate::configstrings::{script_menu_index, weapon_index, CsRange};
+use crate::configstrings::{CsRange, script_menu_index, weapon_index};
 use crate::game::builtins::entity::entity_receiver;
 use crate::game::host::{GameHost, SimOp, WeaponOp};
 use vcod_common::pmove;
@@ -211,9 +211,10 @@ pub fn drop_item(
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
     if let Some(Value::String(name)) = args.first()
-        && cx.resolve(*name) == "none" {
-            return Ok(Value::Undefined);
-        }
+        && cx.resolve(*name) == "none"
+    {
+        return Ok(Value::Undefined);
+    }
     let (_, index) = weapon_argument(cx, args)?;
     let before = crate::game::item::inventory(host, slot);
     let mut inv = before;
@@ -1211,7 +1212,7 @@ mod tests {
     fn a_killed_callback_that_drops_none_runs_past_it() {
         use crate::game::combat::Hit;
         use crate::game::host::{ClientEvent, Vitals};
-        use crate::game::script::{ScriptRuntime, CALLBACK_SETUP};
+        use crate::game::script::{CALLBACK_SETUP, ScriptRuntime};
 
         const CALLBACKS: &str = r#"
             main() {}

@@ -194,39 +194,41 @@ impl SunFile {
 fn tokens(text: &str) -> impl Iterator<Item = &str> {
     let bytes = text.as_bytes();
     let mut i = 0usize;
-    std::iter::from_fn(move || loop {
-        match bytes.get(i) {
-            None => return None,
-            Some(b'/') if bytes.get(i + 1) == Some(&b'/') => {
-                i = bytes[i + 2..]
-                    .iter()
-                    .position(|&c| c == b'\n')
-                    .map_or(bytes.len(), |p| i + 2 + p);
-            }
-            Some(b'/') if bytes.get(i + 1) == Some(&b'*') => {
-                i = text[i + 2..]
-                    .find("*/")
-                    .map_or(bytes.len(), |p| i + 2 + p + 2);
-            }
-            Some(c) if c.is_ascii_whitespace() => i += 1,
-            Some(b'{') | Some(b'}') => {
-                let tok = &text[i..i + 1];
-                i += 1;
-                return Some(tok);
-            }
-            Some(_) => {
-                let start = i;
-                while let Some(&c) = bytes.get(i) {
-                    // a comment opener ends the word even without whitespace
-                    if c.is_ascii_whitespace() || c == b'{' || c == b'}' {
-                        break;
-                    }
-                    if c == b'/' && matches!(bytes.get(i + 1), Some(b'/' | b'*')) {
-                        break;
-                    }
-                    i += 1;
+    std::iter::from_fn(move || {
+        loop {
+            match bytes.get(i) {
+                None => return None,
+                Some(b'/') if bytes.get(i + 1) == Some(&b'/') => {
+                    i = bytes[i + 2..]
+                        .iter()
+                        .position(|&c| c == b'\n')
+                        .map_or(bytes.len(), |p| i + 2 + p);
                 }
-                return Some(&text[start..i]);
+                Some(b'/') if bytes.get(i + 1) == Some(&b'*') => {
+                    i = text[i + 2..]
+                        .find("*/")
+                        .map_or(bytes.len(), |p| i + 2 + p + 2);
+                }
+                Some(c) if c.is_ascii_whitespace() => i += 1,
+                Some(b'{') | Some(b'}') => {
+                    let tok = &text[i..i + 1];
+                    i += 1;
+                    return Some(tok);
+                }
+                Some(_) => {
+                    let start = i;
+                    while let Some(&c) = bytes.get(i) {
+                        // a comment opener ends the word even without whitespace
+                        if c.is_ascii_whitespace() || c == b'{' || c == b'}' {
+                            break;
+                        }
+                        if c == b'/' && matches!(bytes.get(i + 1), Some(b'/' | b'*')) {
+                            break;
+                        }
+                        i += 1;
+                    }
+                    return Some(&text[start..i]);
+                }
             }
         }
     })
@@ -2564,8 +2566,9 @@ textures/sfx/test_water
             sh.stages[0].bundles[0].image,
             ImageRef::Path("textures/x/b.tga".to_string())
         );
-        assert!(lib
-            .image("textures/x/dupe")
-            .is_some_and(|p| p.ends_with("b")));
+        assert!(
+            lib.image("textures/x/dupe")
+                .is_some_and(|p| p.ends_with("b"))
+        );
     }
 }

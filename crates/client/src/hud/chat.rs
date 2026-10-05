@@ -2,8 +2,8 @@
 
 use std::collections::VecDeque;
 
-use super::font::{self, Font};
 use super::HudQuad;
+use super::font::{self, Font};
 
 pub const CHAT_LINES: usize = 6;
 pub const CHAT_LIFE: f32 = 8.0;
