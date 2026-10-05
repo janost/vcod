@@ -1110,8 +1110,8 @@ fn crash_land(ps: &mut PlayerState, start_vz: f32, events: &mut Vec<PmEvent>) {
         events.extend(landing_event(height, ps));
         return;
     }
-    // surface flag 0x2 is slick (0x30013)
-    if damage < 100 && sf & 0x2 == 0 {
+    // slick ground skips the stun (0x30013)
+    if damage < 100 && !on_slick(ps) {
         let stun = (35 * damage + 500).min(2000);
         ps.knockback_ms = stun as f32;
         ps.knockback_flags |= PMF_TIME_KNOCKBACK;
@@ -3329,8 +3329,10 @@ mod tests {
         assert_eq!((ps.knockback_ms, ps.knockback_flags), (0.0, 0));
         assert_eq!(events[0].event, EV_LANDING_BASE + 6);
 
-        // 0x2 is slick
-        for (sf, height, what) in [(dirt | 0x2, 300.0, "slick"), (dirt, 600.0, "fatal")] {
+        for (sf, height, what) in [
+            (dirt | crate::collision::SURF_SLICK, 300.0, "slick"),
+            (dirt, 600.0, "fatal"),
+        ] {
             let (ps, events) = land_from(height, sf);
             assert_eq!((ps.knockback_ms, ps.knockback_flags), (0.0, 0), "{what}");
             assert_eq!(events[0].event, EV_LANDING_PAIN_BASE + 6, "{what}");
