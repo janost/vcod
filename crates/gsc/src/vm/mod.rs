@@ -353,7 +353,8 @@ impl Cx<'_> {
     /// call order. A `func` no installed function answers is an abort
     /// recorded against the calling thread, which itself carries on.
     ///
-    /// Only a `Cx` from a builtin honours this. `get_field`/`set_field` and
+    /// Only a `Cx` from a builtin or from `Host::spawn_returned` honours
+    /// this. `get_field`/`set_field` and
     /// `Vm::with_cx` have no point at which running a thread would be
     /// defined, so a spawn queued through one of those is dropped (and
     /// `debug_assert`ed against).
@@ -369,7 +370,10 @@ impl Cx<'_> {
     /// `spawn`, and then `Host::spawn_returned(token)` once the thread has
     /// run to its first suspend, or failed to start, before the next queued
     /// thread starts: the engine code a builtin runs after its own
-    /// `Scr_ExecEntThread` returns.
+    /// `Scr_ExecEntThread` returns. A spawn queued from that hook starts
+    /// next, ahead of the rest of the builtin's queue, which is how a builtin
+    /// whose engine loop starts one thread per pass (`G_RadiusDamage`) runs
+    /// each pass after the previous thread.
     pub fn spawn_then(
         &mut self,
         func: FuncRef,
@@ -426,7 +430,7 @@ pub trait Host {
     }
 
     /// The other half of a `Cx::spawn_then`, with its token. A spawn queued
-    /// here is dropped, as from `Vm::with_cx`.
+    /// here starts before the builtin's remaining queued threads.
     fn spawn_returned(&mut self, _cx: &mut Cx, _token: u32) {}
 }
 

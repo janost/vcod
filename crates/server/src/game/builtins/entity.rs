@@ -214,6 +214,9 @@ fn client_spawn(
     let v = &mut host.client_vitals[slot];
     v.health = v.max_health;
     v.dead = false;
+    // `ClientSpawn` clears `takedamage` (0x4273c) and its own
+    // `ClientEndFrame` call sets it again for a playing client.
+    v.takedamage = mode == SpawnMode::Player;
     host.client_spawns.push(SpawnRequest {
         slot,
         origin,

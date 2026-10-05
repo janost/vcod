@@ -1163,7 +1163,7 @@ fn angle_short(deg: f32) -> i32 {
 /// against this rather than a constant: where a grenade comes to rest is the
 /// bounce's business, so the distance is only known once it has.
 /// The stock frag's falloff at a distance, times `CanDamage`'s share, in
-/// the server's own f64 arithmetic (`radius_damage`).
+/// the server's own f64 arithmetic (`Blast::hit`).
 fn frag_damage(at: [f32; 3], feet: [f32; 3], fraction: f32) -> i32 {
     let d = dist(at, feet) as f64;
     if d >= 350.0 {

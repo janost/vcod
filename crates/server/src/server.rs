@@ -1636,6 +1636,11 @@ impl Server {
             sim.ps.ammo = ammo;
             sim.ps.ammoclip = clip;
         }
+        // What a spawn into play leaves; the next end frame rewrites it off
+        // the script's `sessionstate`.
+        if let Some(rt) = self.script.as_mut() {
+            rt.set_client_takedamage(slot, true);
+        }
     }
 
     /// Mounts `slot` on the turret numbered `gun` as a use press would, from
@@ -2988,7 +2993,6 @@ impl Server {
         let moved = self.replay_moves();
         let weapons = self.weapon_table.clone();
 
-        let mut hits = Vec::new();
         let mut client_commands = Vec::new();
         let mut console_lines: Vec<String> = Vec::new();
         let mut ranks_dirty = false;
@@ -3027,62 +3031,6 @@ impl Server {
             }
             // What the radius damage pass charges, on this same frame.
             self.pending_explosions = frame.exploded;
-            // Each blast becomes hits before `deliver_hits` runs, so a
-            // grenade damages on the frame it goes off (combat doc, 14.1).
-            let collision = self.world.as_ref().map(|w| &w.collision);
-            let models = if self.pending_explosions.is_empty() {
-                Vec::new()
-            } else {
-                rt.placed_script_models()
-            };
-            let bodies: Vec<crate::game::combat::HitBody> = if self.pending_explosions.is_empty() {
-                Vec::new()
-            } else {
-                sims.iter()
-                    .filter_map(|(slot, s)| s.hit_body(*slot))
-                    .collect()
-            };
-            let mut bones = match (self.fs.as_deref(), self.anims.as_deref()) {
-                (Some(fs), Some(anims)) => Some(crate::game::combat::BoneTraceCtx {
-                    fs,
-                    anims,
-                    rigs: &mut self.hit_rigs,
-                    now_ms: self.sv_time_ms,
-                }),
-                _ => None,
-            };
-            for x in &self.pending_explosions {
-                let Some(def) = weapons.get(x.weapon as usize) else {
-                    continue;
-                };
-                let victims: Vec<crate::game::combat::BlastVictim> = sims
-                    .iter()
-                    .filter(|(_, s)| s.pm_type == crate::spectate::PmType::Normal && !s.dead)
-                    .map(|(slot, s)| crate::game::combat::BlastVictim {
-                        slot: *slot,
-                        origin: s.ps.origin,
-                        link_origin: s.link_origin(),
-                        mins: s.ps.mins(),
-                        maxs: s.ps.maxs(),
-                        eye: s.ps.view().eye,
-                    })
-                    .collect();
-                hits.extend(crate::game::combat::radius_damage(
-                    x.at,
-                    def.explosion_radius,
-                    def.explosion_inner_damage as f32,
-                    def.explosion_outer_damage as f32,
-                    Some(x.owner),
-                    Some(x.inflictor),
-                    crate::items::item_name(x.weapon as usize).unwrap_or_default(),
-                    "MOD_GRENADE_SPLASH",
-                    &victims,
-                    collision,
-                    &models,
-                    &bodies,
-                    bones.as_mut(),
-                ));
-            }
             // The client commands the packet pass queued, on this frame's
             // clock: a thread started here sees `level.time` already
             // advanced, which is what a `cloneplayer` in it needs.
@@ -3094,7 +3042,76 @@ impl Server {
                 }
             }
             mirror_roster(&self.clients, rt);
-            rt.deliver_hits(hits, self.sv_time_ms);
+            // Each blast's walk, so a grenade damages on the frame it goes
+            // off (combat doc, 14.1), one victim's callback before the next
+            // victim is measured (14.5).
+            let collision = self.world.as_ref().map(|w| &w.collision);
+            let mut bones = match (self.fs.as_deref(), self.anims.as_deref()) {
+                (Some(fs), Some(anims)) => Some(crate::game::combat::BoneTraceCtx {
+                    fs,
+                    anims,
+                    rigs: &mut self.hit_rigs,
+                    now_ms: self.sv_time_ms,
+                }),
+                _ => None,
+            };
+            let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
+                .clients
+                .iter()
+                .enumerate()
+                .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
+                .collect();
+            let victim =
+                |slot: usize, s: &crate::spectate::ClientSim| crate::game::combat::BlastVictim {
+                    slot,
+                    origin: s.ps.origin,
+                    link_origin: s.link_origin(),
+                    mins: s.ps.mins(),
+                    maxs: s.ps.maxs(),
+                    eye: s.ps.view().eye,
+                };
+            for x in &self.pending_explosions {
+                let Some(def) = weapons.get(x.weapon as usize) else {
+                    continue;
+                };
+                let blast = crate::game::combat::Blast::new(
+                    x.at,
+                    def.explosion_radius,
+                    def.explosion_inner_damage as f32,
+                    def.explosion_outer_damage as f32,
+                    Some(x.owner),
+                    Some(x.inflictor),
+                    crate::items::item_name(x.weapon as usize).unwrap_or_default(),
+                    "MOD_GRENADE_SPLASH",
+                );
+                let candidates: Vec<(usize, &crate::spectate::ClientSim)> = sims
+                    .iter()
+                    .copied()
+                    .filter(|&(slot, s)| blast.reaches(&victim(slot, s)))
+                    .collect();
+                for (slot, s) in candidates {
+                    if !rt.client_vitals(slot).takedamage {
+                        continue;
+                    }
+                    // A client a callback of this walk killed is a corpse
+                    // and stops nothing.
+                    let bodies: Vec<crate::game::combat::HitBody> = sims
+                        .iter()
+                        .filter(|(other, _)| !rt.client_vitals(*other).dead)
+                        .filter_map(|(other, s)| s.hit_body(*other))
+                        .collect();
+                    let models = rt.placed_script_models();
+                    if let Some(hit) = blast.hit(
+                        &victim(slot, s),
+                        collision,
+                        &models,
+                        &bodies,
+                        bones.as_mut(),
+                    ) {
+                        rt.deliver_hits(vec![hit], self.sv_time_ms);
+                    }
+                }
+            }
             rt.run_frame(self.sv_time_ms);
             // `self spawn(origin, angles)` moves the sim, which no builtin
             // can reach; this is where the queue lands. Before the weapons,
@@ -3269,6 +3286,12 @@ impl Server {
                     collision,
                     self.sv_time_ms,
                 );
+                // `takedamage` off the session state (0x40ed9, 0x40f93,
+                // 0x4107c, and `SpectatorClientEndFrame` 0x40788).
+                if let Some(session) = rt.client_session(slot) {
+                    let playing = session.state == follow::SessionState::Playing;
+                    rt.set_client_takedamage(slot, playing);
+                }
                 let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) else {
                     continue;
                 };
@@ -6279,6 +6302,7 @@ mod tests {
             health: 100,
             max_health: 100,
             dead: false,
+            takedamage: true,
         };
         let pf = rt.place_item("mpweapon_panzerfaust", [40.0, 0.0, 50.0], 0);
         let c = sv.clients[0].as_mut().unwrap();
@@ -6351,6 +6375,7 @@ mod tests {
             health: 100,
             max_health: 100,
             dead: false,
+            takedamage: true,
         };
         rt.place_item("mpweapon_m1carbine", [0.0, 0.0, 1.0], 20);
         let c = sv.clients[0].as_mut().unwrap();
