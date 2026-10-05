@@ -660,7 +660,9 @@ impl ClientSim {
             (PmType::Normal, true) => {
                 if let Some(w) = world {
                     for dt in [pmove::MAX_FRAME_MS, SPAWN_THINK_MS - pmove::MAX_FRAME_MS] {
-                        pmove::dead_move(&mut self.ps, &w, dt / 1000.0);
+                        for e in pmove::dead_move(&mut self.ps, &w, dt / 1000.0) {
+                            self.ring.add(e.event, e.parm);
+                        }
                     }
                     self.dead_eye = true;
                 }
@@ -867,6 +869,12 @@ impl ClientSim {
         self.ring.add(event, parm);
     }
 
+    /// `pain_debounce_time` set outright, as `ClientEvents` sets it for a
+    /// fall: no `EV_PAIN` from an end frame at or before `until_ms`.
+    pub fn debounce_pain(&mut self, until_ms: i32) {
+        self.pain_after_ms = until_ms;
+    }
+
     /// Advance one frame, returning the events the move raised, already in the
     /// ring. The axes arrive quantized to ±127/0 and dt comes off the cmd
     /// clocks. `weapons` is the map's weapon table, which only a player reads.
@@ -884,7 +892,10 @@ impl ClientSim {
         // 1.12 and 6, the `pm_type > 5` returns).
         if self.pm_dead {
             if let Some(w) = world {
-                pmove::dead_move(&mut self.ps, &w, dt);
+                // A corpse's landing event; nothing in it is `ClientEvents`'.
+                for e in pmove::dead_move(&mut self.ps, &w, dt) {
+                    self.ring.add(e.event, e.parm);
+                }
                 self.dead_eye = true;
             }
             // `PM_Weapon`'s `pm_type > 5` arm, behind its `PMF_RESPAWNED`

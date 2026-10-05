@@ -136,13 +136,21 @@ pub fn finish_player_damage(
     if fatal {
         drop_cooking_grenade(host, cx, slot);
         let weapon = gun_credit(host, cx, attacker_slot, *weapon).unwrap_or(*weapon);
+        // Both start as `g_entities[ENTITYNUM_WORLD]` (0x43778) and only an
+        // entity argument replaces them, so a fall's death names the world
+        // twice (player-clip doc 8.10).
+        let world = Value::Entity(host.ents.world(cx));
+        let or_world = |v: &Value| match v {
+            Value::Entity(_) => *v,
+            _ => world,
+        };
         let killed = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerKilled");
         cx.spawn_then(
             killed,
             recv,
             vec![
-                *inflictor,
-                *attacker,
+                or_world(inflictor),
+                or_world(attacker),
                 Value::Int(damage),
                 *mod_,
                 weapon,

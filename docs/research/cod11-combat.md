@@ -2012,6 +2012,16 @@ nothing on this path turns it into `g_entities[ENTITYNUM_WORLD]`. The
 itself (14.2), so a mine or a bomb reaches the callbacks with the world as
 `eAttacker` and only `eInflictor` undefined.
 
+That holds for `Scr_PlayerDamage` only. A death goes through
+`finishPlayerDamage`, which starts both its inflictor and attacker at
+`g_entities + 0xc49d8` (`0x43778`-`0x43782`, VERIFIED) and replaces each only
+on an entity argument. VERIFIED, `cod11-player-clip.md` 8.10: a fall, whose
+damage callback reads both undefined, reaches the killed callback with
+`ent1022` for both. VERIFIED: the inflictor's replacement at `0x43827` is
+`Scr_GetEntity(1)`, the attacker's argument, behind a type test of argument
+0. INFERRED: an entity inflictor, a grenade's, reaches the killed callback as
+the attacker; vcod passes the inflictor through.
+
 What makes that safe for the stock scripts is `isPlayer`, `functions[81]` at
 `0x5efd4`. VERIFIED: it calls `Scr_GetType(0)` and branches to `Scr_AddInt(0)`
 for anything but type 7, then `Scr_GetPointerType(0)` and branches the same
@@ -2568,7 +2578,8 @@ at `0x40589`, `G_TouchTriggers` at `0x405b3`, `ps.origin` is written back at
 `0x405c7..0x405dc`, and `Cmd_Activate_f` is called at `0x4064e`. VERIFIED:
 `ClientEvents` (`0x3fd24`) calls `G_Damage` at `0x3fe0d` with 0x15 among the
 pushed arguments (`0x3fde3`). INFERRED: 0x15 is the means of death, 21,
-`MOD_FALLING` (4.1), and that call is the fall damage. VERIFIED:
+`MOD_FALLING` (4.1), and that call is the fall damage
+(`cod11-player-clip.md` 8.8, measured in 8.10). VERIFIED:
 `G_RunClient` (`0x40660`) writes `ent+0x134` only through `G_SetOrigin` on its
 linked arm (`0x406e9`), and `ClientEndFrame` (`0x40e98`) has no store of its
 own to `ent+0x134..0x13c`. INFERRED: between cmds a player's

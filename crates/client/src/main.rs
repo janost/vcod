@@ -1724,6 +1724,12 @@ impl ApplicationHandler for App {
                                 net::NetEvent::GamestateReady => {
                                     join.on_gamestate();
                                     gamestate_ready = true;
+                                    predictor.fall_heights =
+                                        pmove::FallHeights::from_systeminfo(net.configstring(1));
+                                }
+                                net::NetEvent::ConfigstringChanged(1) => {
+                                    predictor.fall_heights =
+                                        pmove::FallHeights::from_systeminfo(net.configstring(1));
                                 }
                                 _ => {}
                             }

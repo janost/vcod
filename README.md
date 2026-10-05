@@ -99,7 +99,8 @@ either: the people on it signed up for Call of Duty.
   from the stock scripts, not from Rust. `dm`, `tdm` and `sd` are the
   gametypes I have checked against retail.
 - Movement on the shared pmove, with players as capsules that block and push
-  each other the way retail's do.
+  each other the way retail's do. Falls stun and hurt, scaled by the
+  `bg_fallDamageMinHeight` and `bg_fallDamageMaxHeight` cvars.
 - Combat: bullets trace the world, players and static props. Hits go through
   the stock damage callback with per-bone hit locations. Rifle rounds pass
   through players and every round passes through glass. Melee works, and
@@ -169,8 +170,6 @@ console, no key rebinding. You get command-line flags and the binds below.
 
 **Server**
 
-- No fall damage. You get the landing stun, and the ground forgives you
-  everything else.
 - `re` (Retrieval) and `bel` (Behind Enemy Lines) run through the same
   script path, but I haven't checked either against retail.
 - Item respawn, an item's launch arc and `CONTENTS_NODROP` aren't modelled.

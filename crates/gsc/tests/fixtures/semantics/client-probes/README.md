@@ -310,23 +310,30 @@ named `dm` because retail runs the probe as gametype `probe_prone`.
 
 ## probe_fall
 
-The landing stun measurement's server half. Under `probe_teleport 1` it drops
-each spawned allied player onto the mp_carentan street at (900 1930) from 100,
-300, 340, 420 and 520 units above it, 8 s apart, with `self.health` reset to
-100 before each, and logs `PROBE drop <time> <height> <origin>` and, 4 s on,
-`PROBE after <time> <height> health <health> <origin>`. The client half
-prints a `FALL` line per snapshot whose ground entity, `pm_flags`,
-`pm_time`, event ring or health moved, and every airborne snapshot. Neither
-half writes a file; the 2026-10-05 run's lines were pasted by hand into
-`crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall.txt`, the
-server's as comments, and `docs/research/cod11-player-clip.md` 8.9 reads
-them.
+The landing stun and fall damage measurement's server half. Under
+`probe_teleport 1` it drops each spawned allied player onto the mp_carentan
+street at (900 1930) from 100, 300, 340, 420, 340 again at `maxhealth` 200,
+and 520 units above it, 8 s apart, with `self.health` reset to the max
+before each, and logs `PROBE drop <time> <height> <origin> maxhealth <n>`
+and, 4 s on, `PROBE after <time> <height> health <health> <origin>`. It
+wraps `level.callbackPlayerDamage` and `level.callbackPlayerKilled` to log
+`PROBE damage`, `PROBE damaged` and `PROBE killed` lines with every argument
+the engine handed them. The client half prints a `FALL` line per snapshot
+whose ground entity, `pm_flags`, `pm_time`, event ring or health moved, and
+every airborne snapshot. Neither half writes a file; each run's lines were
+pasted by hand into a fixture in `crates/server/tests/fixtures/playerstate/`,
+the server's as comments: `mp_carentan-dm-fall.txt` (the first run, five
+drops and no callback lines), `mp_carentan-dm-fall-damage.txt` and
+`mp_carentan-dm-fall-damage-cvars.txt` (the second with `+set
+bg_fallDamageMinHeight 200 +set bg_fallDamageMaxHeight 1000` after the
+`probe_teleport` set). `docs/research/cod11-player-clip.md` 8.9 and 8.10 read
+them, and `crates/server/tests/fall_ab.rs` gates the last two.
 
 ```
-COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=75 \
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=90 \
     tools/run_probe.sh client-probes/probe_fall mp_carentan +set probe_teleport 1
-# second shell, about 6 s later:
-cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-fall --probe-secs 65
+# second shell, about 7 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-fall --probe-secs 78
 ```
 
 ## probe_bump
