@@ -24,6 +24,9 @@ const CONTENTS_SKY: u32 = 0x800;
 pub const CONTENTS_WATER: u32 = 0x20;
 /// Ladder-climb flag on brush materials; pmove grabs ladders from trace hits carrying it.
 pub const SURF_LADDER: u32 = 0x8;
+/// `surfaceparm slick` (CoDMP.exe surfaceparm table, 0x571a40); no stock map
+/// carries it (docs/research/cod11-mantle.md, "Slick ground").
+pub const SURF_SLICK: u32 = 0x2;
 /// Brushless terrain is the one collidable material word without SOLID or
 /// PLAYERCLIP (bsp-ibsp59-format.md, "Content flags").
 const CONTENTS_TERRAIN: u32 = 0x4;

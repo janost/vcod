@@ -1197,7 +1197,7 @@ so the smoothing is the predicting client's own view and nothing else's.
 
 VERIFIED, in `PM_WalkMove` (0x2f258): the accelerate is inline, not a call.
 0x2f4b0-0x2f4ca pick 19.0 (0x708f8), 9.0 (0x70900) or 12.0 (0x708fc);
-0x2f492-0x2f4a8 take 1.0 in their place on bit 2 of pml+0x50 or `pm_flags`
+0x2f492-0x2f4a8 take 1.0 in their place on bit 0x2 of pml+0x50 or `pm_flags`
 0x200; 0x2f4d8-0x2f4de multiply by 0.25 (0x70904) on `pm_flags` 0x100.
 0x2f4e4-0x2f502 form the wish speed less the velocity along the wish
 direction; 0x2f50f-0x2f52c load 100.0 (rodata 0x70908) and multiply the
@@ -1257,7 +1257,8 @@ VERIFIED, 0x2f58c-0x2f5b5: gravity is applied to `velocity[2]` ahead of all
 this when the ground's surface flags (pml+0x50) carry 0x2 or `pm_flags`
 0x200 is set. INFERRED: Q3's slick-or-knockback gravity with CoD's own
 bits. 0x200 is the timer a hit starts (`cod11-combat.md` 16.1), which vcod
-carries beside the player-clip push's 0x100; the slick arm is not modelled.
+carries beside the player-clip push's 0x100; 0x2 is `surfaceparm slick`
+("Slick ground" below).
 
 VERIFIED, off the bump walker (`mp_carentan-dm-bump-walker.txt`): after
 the push at crouch/jump 70633 the walker lands under the knockback timer at
@@ -1269,6 +1270,68 @@ row, and prone/land's likewise, match to 0.000. VERIFIED, vcod measurement
 takes the 8 ms route's free-run median dxy from 0.024 to 0.021 and its rows
 past a unit from 2 to 1, the prone street's free-run median from 0.021 to
 0.010, and moves nothing on the 25 ms route.
+
+### Slick ground
+
+VERIFIED: CoDMP.exe's surfaceparm table holds `{"slick", 0, 0x2, 0}` at
+0x571a40 (name string 0x558ba0), in the record shape of Q3's `infoParms`
+(name, clearSolid, surface flags, contents); the same table reads `ladder`
+0x8 and `nosteps` 0x2000, the two surface bits vcod already reads.
+
+VERIFIED: 0x30302, 0x30514 and 0x30596 each start a 12-dword `rep movs`
+of a trace into pml+0x34, the first two right after a call through
+`pm->trace` (pm+0xe8, 0x30300 and 0x30512). With the trace layout of
+`cod11-combat.md` (surface flags at +28), pml+0x50 is the ground trace's
+surface flags.
+
+VERIFIED, by a scan of `.rel.text` for `pml` relocations whose addend is
+0x50: the module reads pml+0x50 at eleven places. Four test 0x2: 0x2e4ed
+(`PM_Friction`), 0x2f492 and 0x2f58c (`PM_WalkMove`) and 0x30013
+(`PM_CrashLand`, 0x2fd68). 0x2feaa tests 0x1 (`nodamage`). The other six,
+0x2ed90, 0x30109, 0x30153, 0x30180, 0x301df and 0x32161
+(`PM_FootstepEvent`), read 0x2000 and the material field 0x1f00000.
+INFERRED: no footstep, jump or ground-trace path reads the slick bit.
+
+What each of the four does:
+
+- `PM_Friction`. VERIFIED: 0x2e4ed tests the bit with a `jne` to 0x2e54b;
+  0x2e500-0x2e549 are the ground term (the 100-floored control times 5.5
+  times the frame time) and 0x2e54b starts the water term. INFERRED, off
+  that `jne`: slick ground takes no ground friction; wading friction still
+  applies.
+- `PM_WalkMove` accel. VERIFIED: 0x2f492 tests the bit with a `jne` to the
+  `fld1` at 0x2f4a8; 0x2f4b0-0x2f4ca load the stance's 19, 9 or 12. The 1.0
+  is an `fld1`, equal to `pm_airaccelerate` (0x70848, 1.0) but not a load of
+  it. INFERRED, off that `jne`: the walk on slick ground accelerates at 1.0,
+  still multiplied by the 0.25 of `pm_flags` 0x100 (0x2f4d8) and by
+  `max(wishspeed, 100)` (0x2f50f).
+- `PM_WalkMove` gravity. VERIFIED: 0x2f58c tests the bit with a `jne` to
+  0x2f5a2; 0x2f5a9-0x2f5b5 subtract `ps.gravity` (ps+0x3c, `fild`) times
+  the frame time (pml+0x24) from `velocity[2]`. INFERRED, off that `jne`
+  and the clip of "The ground clip keeps the speed" after it: on flat slick
+  ground the rescale turns that gravity into ground speed,
+  `sqrt(v^2 + (g dt)^2) - v` a frame, so from rest a 16 ms frame gains 13.2
+  where the accel alone gives 3.0, and at 80 units/s an 8 ms frame gains
+  0.26.
+- `PM_CrashLand`. VERIFIED: 0x30013 tests the bit with a `jne` to 0x300d5,
+  and 0x3000a holds a `cmp esi, 0x63`; 0x30020-0x300d3 store
+  `35 * esi + 500`, capped at 2000, into `pm_time` (ps+0x10, 0x300af), OR
+  0x100 into `pm_flags` (0x300b4) and scale the velocity (0x300ba-0x300d1).
+  INFERRED, off that `jne`: slick ground takes no landing stun.
+
+vcod models the friction, accel and gravity arms in `pmove.rs` (`on_slick`,
+reading `SURF_SLICK` off the ground trace's `surface_flags`). The landing
+arm belongs to the stun, which this change does not port.
+
+VERIFIED, read out of lump 0 of each map: no material of the fourteen
+`maps/mp` maps in 1.5's `pak[0-9].pk3` (the twelve of 1.1's plus mp_bocage
+and mp_neuville), of mp_stalingrad or mp_tigertown, or of any single-player
+map in 1.1's `pak[0-9].pk3` carries 0x2, and no `.shader` file in any pak
+declares `surfaceparm slick`. INFERRED: the arm never fires on stock
+content, so it was ported from the binary alone and is unmeasured against
+retail. Open: a brush hit in vcod takes the brush's lump-4 material flags,
+where the impact evidence in `cod11-combat.md` points at the hit side's
+(INFERRED there); a custom map slicking one face of a brush would differ.
 
 ## The wish speed
 
