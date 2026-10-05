@@ -887,9 +887,10 @@ impl PlacedModel {
     }
 }
 
-/// One candidate for a blast. Every one of them is a client here: nothing
-/// else on this server has `takedamage` set, so the brush-model arms of
-/// `G_RadiusDamage` and `CanDamage` have no caller.
+/// One candidate for a blast. Every one of them is a client here: retail's
+/// turret, door, `func_static` and `trigger_damage` spawns store
+/// `takedamage` too (14.5), which this server does not model, so the
+/// brush-model arms of `G_RadiusDamage` and `CanDamage` have no caller.
 pub struct BlastVictim {
     pub slot: usize,
     /// `r.currentOrigin`, at the feet: what the distance is measured to.
@@ -957,49 +958,91 @@ pub fn can_damage(
     }
 }
 
-/// `G_RadiusDamage` (combat doc, 14.1) over the clients a blast can reach:
-/// the falloff is linear from `inner` at the blast to `outer` at the radius,
-/// scaled by `CanDamage`'s fraction and truncated the way `G_Damage`
-/// truncates. A victim with no line of sight at all still takes the second
-/// chance's tenth when the trace to its box midpoint, taken at
-/// `link_origin`, was blocked and that midpoint is inside `radius * 0.2`.
-/// Distance is origin to origin, which is what retail measures for anything
-/// that is not a brush model. `attacker`
-/// is `None` for a blast the world set off. `models` and `bodies` stop
-/// `CanDamage`'s traces and not the second chance's. Without a `world` nothing is
-/// traced and every candidate inside the radius takes the falloff whole,
-/// which is what a unit test wants and what a host with no map has.
-#[allow(clippy::too_many_arguments)]
-pub fn radius_damage(
-    at: Vec3,
-    radius: f32,
-    inner: f32,
-    outer: f32,
-    attacker: Option<usize>,
-    inflictor: Option<EntId>,
-    weapon: &str,
-    mod_: &'static str,
-    victims: &[BlastVictim],
-    world: Option<&CollisionWorld>,
-    models: &[PlacedModel],
-    bodies: &[HitBody],
-    mut bones: Option<&mut BoneTraceCtx>,
-) -> Vec<Hit> {
-    let radius = radius.max(1.0);
-    let mut hits = Vec::new();
-    for v in victims {
+/// One `G_RadiusDamage` call (combat doc, 14.1). Retail collects its
+/// candidates once, then runs each victim's damage callback inside the walk,
+/// so whatever a callback does (a kill above all, whose corpse stops
+/// shielding) is what the next candidate is measured against (14.5). The
+/// caller owns that loop: it asks [`Blast::reaches`] once per candidate at
+/// the start, then [`Blast::hit`] per candidate with the bodies and the
+/// victim as they stand now, and delivers each hit before the next.
+pub struct Blast {
+    pub at: Vec3,
+    /// Raised to 1 the way retail raises it.
+    pub radius: f32,
+    pub inner: f32,
+    pub outer: f32,
+    /// `None` for a blast the world set off.
+    pub attacker: Option<usize>,
+    pub inflictor: Option<EntId>,
+    pub weapon: String,
+    pub mod_: &'static str,
+}
+
+impl Blast {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        at: Vec3,
+        radius: f32,
+        inner: f32,
+        outer: f32,
+        attacker: Option<usize>,
+        inflictor: Option<EntId>,
+        weapon: &str,
+        mod_: &'static str,
+    ) -> Self {
+        Blast {
+            at,
+            radius: radius.max(1.0),
+            inner,
+            outer,
+            attacker,
+            inflictor,
+            weapon: weapon.to_string(),
+            mod_,
+        }
+    }
+
+    /// Whether `trap_EntitiesInBox` puts `v` on the candidate list: its
+    /// linked box, `r.absmin` and `r.absmax` with their one-unit widening
+    /// (14.1), against `at` plus and minus `radius * sqrt(2)`.
+    pub fn reaches(&self, v: &BlastVictim) -> bool {
+        let half = Vec3::splat(self.radius * std::f32::consts::SQRT_2);
+        let (lo, hi) = (self.at - half, self.at + half);
+        let min = v.link_origin + v.mins - Vec3::ONE;
+        let max = v.link_origin + v.maxs + Vec3::ONE;
+        min.cmple(hi).all() && max.cmpge(lo).all()
+    }
+
+    /// The falloff from `inner` at the blast to `outer` at the radius,
+    /// scaled by `CanDamage`'s fraction and truncated the way `G_Damage`
+    /// truncates. A victim with no line of sight at all still takes the
+    /// second chance's tenth when the trace to its box midpoint, taken at
+    /// `link_origin`, was blocked and that midpoint is inside
+    /// `radius * 0.2`. Distance is origin to origin, which is what retail
+    /// measures for anything that is not a brush model. `models` and
+    /// `bodies` stop `CanDamage`'s traces and not the second chance's.
+    /// Without a `world` nothing is traced and every victim inside the
+    /// radius takes the falloff whole, which is what a unit test wants and
+    /// what a host with no map has.
+    pub fn hit(
+        &self,
+        v: &BlastVictim,
+        world: Option<&CollisionWorld>,
+        models: &[PlacedModel],
+        bodies: &[HitBody],
+        bones: Option<&mut BoneTraceCtx>,
+    ) -> Option<Hit> {
+        let (at, radius) = (self.at, self.radius);
         let dist = (v.origin - at).length();
         if dist >= radius {
-            continue;
+            return None;
         }
         // At double precision: retail keeps the whole expression on the x87
         // stack, and an f32 round trip loses a point of damage at the round
         // ratios a script picks.
-        let points =
-            outer as f64 + (1.0 - dist as f64 / radius as f64) * (inner as f64 - outer as f64);
-        let fraction = world.map_or(1.0, |w| {
-            can_damage(at, v, w, models, bodies, bones.as_deref_mut())
-        });
+        let points = self.outer as f64
+            + (1.0 - dist as f64 / radius as f64) * (self.inner as f64 - self.outer as f64);
+        let fraction = world.map_or(1.0, |w| can_damage(at, v, w, models, bodies, bones));
         let damage = if fraction > 0.0 {
             (fraction as f64 * points) as i32
         } else {
@@ -1007,32 +1050,55 @@ pub fn radius_damage(
             let blocked = world
                 .is_some_and(|w| w.point_trace(at, mid, SECOND_CHANCE_MASK, false).fraction < 1.0);
             if !blocked || (mid - at).length() >= radius * SECOND_CHANCE_RANGE {
-                continue;
+                return None;
             }
             (points * SECOND_CHANCE_SHARE as f64) as i32
         };
-        hits.push(Hit {
+        Some(Hit {
             victim: v.slot,
-            attacker: attacker.unwrap_or(ENTITYNUM_WORLD as usize),
-            inflictor,
+            attacker: self.attacker.unwrap_or(ENTITYNUM_WORLD as usize),
+            inflictor: self.inflictor,
             damage,
             dflags: DFLAG_RADIUS,
-            mod_,
-            weapon: weapon.to_string(),
+            mod_: self.mod_,
+            weapon: self.weapon.clone(),
             point: at.into(),
             // Unnormalized, and raised, exactly as retail hands it over: its
             // length is what carries the distance.
             dir: (v.origin - at + Vec3::Z * RADIUS_DIR_RISE).into(),
             hitloc: "none",
-        });
+        })
     }
-    hits
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    /// Every victim of one blast with nothing changing between them.
+    #[allow(clippy::too_many_arguments)]
+    fn radius_damage(
+        at: Vec3,
+        radius: f32,
+        inner: f32,
+        outer: f32,
+        attacker: Option<usize>,
+        inflictor: Option<EntId>,
+        weapon: &str,
+        mod_: &'static str,
+        victims: &[BlastVictim],
+        world: Option<&CollisionWorld>,
+        models: &[PlacedModel],
+        bodies: &[HitBody],
+        mut bones: Option<&mut BoneTraceCtx>,
+    ) -> Vec<Hit> {
+        let blast = Blast::new(at, radius, inner, outer, attacker, inflictor, weapon, mod_);
+        victims
+            .iter()
+            .filter_map(|v| blast.hit(v, world, models, bodies, bones.as_deref_mut()))
+            .collect()
+    }
 
     fn effect_kind(e: &Effect) -> &'static str {
         match e {

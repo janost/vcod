@@ -955,13 +955,13 @@ retail's dead entity (`probe_stale_handle` in §9).
   on one event is killed rather than woken, regardless of which it
   registered first. The wake order *within* each pass is measured (start
   order, `# probe_notify`); the ordering *between* the two passes is not.
-- **`radiusDamage` walks live clients and nothing else.** The falloff, the
+- **`radiusDamage` walks clients and nothing else.** The falloff, the
   line of sight, the direction and the callback timing are all settled and no
   longer divergences. VERIFIED: the builtin at `.so` 0x5eef4 and
   `G_RadiusDamage` (`.so` 0x4a3f4) have been read out, and both the linear
   curve from `maxDamage` at the blast to `minDamage` at the range and
   `CanDamage`'s five-trace fraction are what `crate::game::combat`'s
-  `radius_damage` and `can_damage` compute, second-chance arm included
+  `Blast::hit` and `can_damage` compute, second-chance arm included
   (`docs/research/cod11-combat.md` section 14). VERIFIED: each of those five
   probes is a `trap_LocationalTrace(&tr, point, origin, targ->s.number,
   0x02802091, bulletPriorityMap)` (14.3). INFERRED, off that mask and pass
@@ -969,21 +969,24 @@ retail's dead entity (`probe_stale_handle` in §9).
   corpse do not, which the retail runs of `client-probes/probe_blastbody`
   measure (14.4: 13 of a flat 20 behind a standing player, 6 or none at other
   yaws, 20 behind its corpse); vcod's `can_damage` traces every other live
-  player's posed body and reads the same numbers. The callback half was
-  settled earlier: `radius_damage` hands `CodeCallback_PlayerDamage` to
-  `Cx::spawn`, which the interpreter starts as soon as the builtin returns and
-  before the calling thread's next instruction, so a script that damages and
-  then reads `self.health` sees what the callback left, the way retail's
-  synchronous call does. Two things around it are still divergences, and
-  every retail half below is `docs/research/cod11-combat.md` section 14's,
-  read out of the two functions there:
+  player's posed body and reads the same numbers. The callback half is
+  retail's walk (combat doc 14.5): each victim's
+  `CodeCallback_PlayerDamage` runs to its first `wait` before the next
+  victim is measured, as a `Cx::spawn_then` whose `Host::spawn_returned`
+  takes the next turn, and the whole walk ends before the calling thread's
+  next instruction, so a script that damages and then reads `self.health`
+  sees what the callbacks left. Two things around it are still divergences,
+  and every retail half below is `docs/research/cod11-combat.md` section
+  14's, read out of the two functions there:
   - **The victim walk.** VERIFIED: retail walks `trap_EntitiesInBox` over a
     `radius * sqrt(2)` box, and the loop body reads `takedamage` and the
     entity's own bounds (14.1). INFERRED, since the skip is a branch: it takes
     anything with `takedamage` set and measures a brush model to the nearest
-    point of those bounds. vcod walks live clients only and measures the
-    script `origin` field, so nothing else this server ever damages is
-    reachable by a blast.
+    point of those bounds. vcod walks the client entities in the box, each
+    tested for `takedamage` on its turn, and measures the script `origin`
+    field, so nothing else this server ever damages is reachable by a blast.
+    It walks them in entity order, where retail's order is the box query's
+    and is not entity order (14.5).
   - **The victim's box and eye are the standing ones.** VERIFIED: retail's
     probe points come off the entity's own bounds and its `client+0xD0` eye
     height (14.3). The host carries no stance, so a crouched or prone player

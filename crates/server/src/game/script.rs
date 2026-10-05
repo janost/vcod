@@ -318,9 +318,13 @@ impl ScriptRuntime {
     /// unless the hit names one, which a blast does: there the missile that
     /// went off is handed over, still alive for as long as its explode event
     /// rides the wire. A hit on a slot with no entity, or from one, is
-    /// dropped: there is nobody to call and nobody to name.
+    /// dropped: there is nobody to call and nobody to name. So is one on a
+    /// victim without `takedamage`, `G_Damage`'s first test (4.2 step 1).
     pub fn deliver_hits(&mut self, hits: Vec<crate::game::combat::Hit>, now_ms: i32) {
         for hit in hits {
+            if !self.client_vitals(hit.victim).takedamage {
+                continue;
+            }
             let (Some(victim), Some(attacker)) = (
                 self.client_entity(hit.victim),
                 self.client_entity(hit.attacker),
@@ -372,6 +376,9 @@ impl ScriptRuntime {
         mod_: &str,
         now_ms: i32,
     ) {
+        if !self.client_vitals(victim_slot).takedamage {
+            return;
+        }
         let Some(victim) = self.client_entity(victim_slot) else {
             return;
         };
@@ -859,6 +866,13 @@ impl ScriptRuntime {
 
     /// One client's health as the script left it, read every frame the way
     /// `client_weapons` is.
+    /// `ClientEndFrame`'s `takedamage` write.
+    pub fn set_client_takedamage(&mut self, slot: usize, on: bool) {
+        if let Some(v) = self.host.client_vitals.get_mut(slot) {
+            v.takedamage = on;
+        }
+    }
+
     pub fn client_vitals(&self, slot: usize) -> crate::game::host::Vitals {
         self.host
             .client_vitals
@@ -1981,9 +1995,11 @@ impl ScriptRuntime {
 
     /// A client's `sessionstate`, which `spawn_client` leaves at
     /// `"spectator"`; the four legal strings are in
-    /// docs/research/cod11-map-cycle.md 6.1.
+    /// docs/research/cod11-map-cycle.md 6.1. Also the `takedamage` the
+    /// client's next end frame would write for it.
     pub fn set_client_state_for_test(&mut self, slot: usize, state: &str) {
         use vcod_gsc::Host;
+        self.set_client_takedamage(slot, state == "playing");
         let Some(ent) = self.client_entity(slot) else {
             return;
         };
@@ -2026,6 +2042,13 @@ impl ScriptRuntime {
             let atom = cx.intern_folded(name);
             cx.get_field(level, atom)
         })
+    }
+
+    /// [`ScriptRuntime::level_field`] rendered the way `client_field`
+    /// renders.
+    pub fn level_field_str(&mut self, name: &str) -> String {
+        let v = self.level_field(name);
+        self.vm.with_cx(|cx| render(cx, v))
     }
 }
 
@@ -3063,6 +3086,7 @@ mod tests {
             health: 100,
             max_health: 100,
             dead: false,
+            takedamage: true,
         };
         for (name, s) in [("m1carbine_mp", 1), ("colt_mp", 3), ("fraggrenade_mp", 4)] {
             let w = crate::configstrings::weapon_index(name).unwrap();
@@ -3155,6 +3179,7 @@ mod tests {
             health: 0,
             max_health: 100,
             dead: true,
+            takedamage: true,
         };
         rt.item_pass(0, 0, [0.0, 0.0, 60.0], DOWN);
         assert!(!rt.host.ents.get(id).unwrap().item.unwrap().taken);
@@ -3361,6 +3386,7 @@ mod tests {
             health: 0,
             max_health: 100,
             dead: true,
+            takedamage: true,
         };
         assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM).0, 0);
     }

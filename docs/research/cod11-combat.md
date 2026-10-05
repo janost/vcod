@@ -2117,8 +2117,8 @@ at all, since `Bullet_Fire_Extended` raises none on a client (2.4 step 2).
 
 **As implemented.** `finish_player_damage`
 (`crates/server/src/game/builtins/combat.rs`) raises the pair through
-`combat::flesh_impacts` on a `weaponType bullet` weapon, before its own
-guard against a dead victim, and `bullet_fire` raises no impact on a player.
+`combat::flesh_impacts` on a `weaponType bullet` weapon, and `bullet_fire`
+raises no impact on a player.
 `self->flags & 1` is not modelled.
 
 **Health, and the order**, `0x43b7e` onward. VERIFIED: the offsets,
@@ -4146,10 +4146,16 @@ suppresses player damage only for the duration of a scripted `radiusDamage`
 call and has no effect at all on a grenade's own blast, whose two callers
 never touch `level+0x29F4`.
 
+VERIFIED, `probe_blastloop` on retail (14.5): a blast after
+`setPlayerIgnoreRadiusDamage(true)` reached nobody, a second one with no call
+in between reached nobody either, and one after `(false)` reached both
+players in range. INFERRED: the builtin's write of 0 lands on its own copy,
+and the flag stays set until script clears it.
+
 What is left of the `radiusDamage` divergence entry in
-`cod11-gsc-language.md` after this: the victim walk, the standing box the
-builtin measures a victim with. The flag is not among them, and neither is
-the attacker: vcod hands the callbacks the world entity too.
+`cod11-gsc-language.md` after this: the victim walk's order and reach, the
+standing box the builtin measures a victim with. The flag is not among them,
+and neither is the attacker: vcod hands the callbacks the world entity too.
 
 ### 14.3 `CanDamage`
 
@@ -4236,11 +4242,11 @@ takes a third or two thirds of the falloff damage, and three of five clear
 points is already full damage. INFERRED: nothing on the bullet path consults
 any of this, which 4.6 already said.
 
-**As implemented.** `crate::game::combat`'s `radius_damage` and `can_damage`,
-with `Server::tick` charging each of the frame's explosions before
-`deliver_hits` so a grenade damages on the frame it goes off, and the
-`radiusDamage` builtin (`builtins/combat.rs`) wrapping the same two functions
-for a script's own blast. The divergences left are listed in
+**As implemented.** `crate::game::combat`'s `Blast` and `can_damage`, with
+`Server::tick` walking each of the frame's explosions where it delivers
+damage, so a grenade damages on the frame it goes off, and the
+`radiusDamage` builtin (`builtins/combat.rs`) walking the same `Blast` for a
+script's own; both walks are 14.5's. The divergences left are listed in
 `cod11-gsc-language.md`'s `radiusDamage` entry. Every victim is measured
 and probed at its unsnapped origin, and the second chance's midpoint is
 taken at `BlastVictim::link_origin`: `ClientSim::link_origin` for a
@@ -4358,6 +4364,91 @@ since the body's yaw and its pose decide which probes the bones cross.
 VERIFIED, the same probe against `vcod-server` on 2026-09-27: client 1 took
 13 shielded, 20 unshielded, 13 on each of the eight yaw rows, whose `angles`
 all read 0 there too, and 20 behind the corpse.
+
+### 14.5 One victim at a time, and who is still a victim
+
+`G_RadiusDamage` collects its candidates once and damages each inside the
+walk. VERIFIED, `game.mp.i386.so`: the one `trap_EntitiesInBox` call
+(`0x4A492`) sits ahead of the loop, whose back edge is `0x4A894`, and the
+`G_Damage` call (`0x4A87C`) sits inside it. VERIFIED: the `takedamage` byte
+(`0x4A4D3`), `r.currentOrigin` (`0x4A4E9`) and `level+0x29F4` (`0x4A5D3`) are
+read inside the loop, once per candidate. INFERRED: since `G_Damage` runs
+`CodeCallback_PlayerDamage` to its first `wait` (4.2, 4.4), each victim's
+callback has run before the next candidate is tested or measured, and a
+candidate a callback moved or killed is measured as it now stands.
+
+`takedamage` on a client. VERIFIED, the stores to `gentity+0x171` in the
+module, by the function holding each: `ClientEndFrame` stores 0 on the
+intermission arm (`0x40ED9`), 1 on the arm for `sessionState` 0 or 1
+(`0x40F93`) and 0 again for `sessionState` 1 (`0x4107C`);
+`SpectatorClientEndFrame` stores 0 (`0x40788`); `ClientSpawn` stores 0
+(`0x4273C`) and calls `ClientEndFrame` at `0x42A75`; `player_die` stores 1
+(`0x49C21`, 5.1 step 10). The other stores are `G_SpawnTurret` (`0x5301A`),
+`G_MissileDie` (`0x548A7`, 0), `Blocked_DoorRotate`, `SP_func_door`,
+`SP_func_door_rotating`, `SP_func_static` (two) and `SP_trigger_damage`.
+INFERRED: a client takes damage while playing; a death leaves it a
+candidate until its own `ClientEndFrame`, which clears it when the script
+has set `sessionstate` to `"dead"`; a spectator or a player at intermission
+never is one.
+
+`finishPlayerDamage` on a dead client. VERIFIED (`0x43C18..0x43CE4`): health
+is decremented with no test of the session or of health beforehand, health
+at or below 0 is raised to -999 when below it (`0x43C5C`), and the `die`
+pointer is called only when non-null (`0x43C76`). INFERRED: a client hit
+again after `player_die` cleared `die` (5.1 step 14) loses health below 0 and
+does not die again.
+
+Measured. VERIFIED, `client-probes/probe_blastloop` on retail, 2026-10-05,
+four clients under sd on mp_carentan, the damage callback wrapped to log
+each victim (rows in that directory's README):
+
+| blast | victims, in call order, `iDamage` and health before |
+|---|---|
+| flat 20, line 1, both alive | 0: 20 (100), 1: 13 (100) |
+| flat 200, line 1, slot 0 in front at 100 health, slot 1 behind at 1000 | 0: 200, killed; 1: 200 |
+| flat 20, same frame | 0: 20 (`dead`, 0, left at -20); 1: 20 |
+| flat 20, next frame | 1: 20 |
+| flat 200, line 2, slot 3 in front at 100, slot 2 behind at 1000 | 3: 200, killed |
+| flat 20, same frame | 3: 20 (`dead`, 0, left at -20); 2: 20 |
+| flat 20, next frame | 2: 20 |
+
+INFERRED, from the rows:
+
+- Line 1's back player took the full 200 where a live player in front takes
+  13 of a flat 20 (14.4): the front one was killed first, and its corpse
+  contents (5.1 step 10) stopped no probe of the back one.
+- Line 2's back player took nothing from the lethal blast and 20 from the
+  next: it was walked before slot 3 was killed, behind a live body that
+  stopped all five probes. The walk is not entity order: slot 2 came before
+  slot 3 there and after it in the same-frame blast, once `player_die` had
+  relinked slot 3. Retail's list is `SV_AreaEntities`', whose order is not
+  read out here.
+- A player killed in a frame is still a candidate for a second blast in the
+  same frame, takes its callback with `sessionstate` `"dead"` and loses
+  health below 0, and is no longer one a frame later.
+
+The same probe checked 14.2: see there.
+
+**As implemented.** `Vitals::takedamage` on the host, written by the end
+frame from `sessionstate`, by the `spawn` builtin and by `GameHost::die`;
+`ScriptRuntime::deliver_hits` and `deliver_world_hit` drop a hit on a victim
+without it, `G_Damage`'s first test. `finish_player_damage` takes health off
+a dead client and clamps it at -999 without a second death. Both walks take
+the client entities whose link box meets the blast's box, test each for
+`takedamage` on its turn, measure it, and run its callback before the next:
+the builtin through a `Cx::spawn_then` per victim whose
+`Host::spawn_returned` takes the next turn (`builtins::combat::blast_step`),
+the grenade pass by delivering each hit as it is computed. A client killed
+earlier in the walk, or anywhere earlier in the frame, is left out of the
+bodies that stop a probe. `a_blast_walks_its_victims_one_callback_at_a_time`
+(`crates/server/src/game/builtins/combat.rs`) replays the rows above in
+both slot orders; the same probe against `vcod-server` read every line-1 row
+as retail did. Not modelled: retail's walk order (vcod walks entity order,
+which matches both lethal rows above and not the line-2 same-frame row's
+callback order), and a candidate other than a client. A grenade blast reads
+victims and bodies off the sims, so a `setOrigin` from an earlier callback
+of the same walk does not move them; the builtin reads the script `origin`
+and does.
 
 ---
 

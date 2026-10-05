@@ -113,11 +113,11 @@ pub fn finish_player_damage(
         _ => None,
     };
     let v = &mut host.client_vitals[slot];
-    if v.dead {
-        return Ok(Value::Undefined);
-    }
-    v.health -= damage;
-    let fatal = v.health <= 0;
+    // A client `player_die` already ran on (a blast that reaches it before
+    // its end frame, 14.5) loses health as any other, clamped at -999
+    // (0x43c5c), and dies no second time: `player_die` cleared `die`.
+    let fatal = !v.dead && v.health - damage <= 0;
+    v.health = (v.health - damage).max(-999);
     if fatal {
         host.die(slot);
     }
@@ -388,15 +388,19 @@ fn as_f32(v: &Value) -> Result<f32, ErrorKind> {
 /// `radiusDamage(origin, range, maxDamage, minDamage)` (`functions[72]`,
 /// `.so` 0x5eef4): the blast a script sets off, with the world as the
 /// attacker and `MOD_EXPLOSIVE` as the means of death.
-/// `CodeCallback_PlayerDamage` runs on every live player the falloff and the
-/// line of sight reach, spawned so each runs before the calling thread's
-/// next line, the way `finishPlayerDamage` starts the killed callback.
 ///
-/// The damage itself is `crate::game::combat::radius_damage`, the same
-/// `G_RadiusDamage` a grenade's blast goes through (combat doc, 14.1). What
-/// this call adds is `setPlayerIgnoreRadiusDamage`'s level flag (14.2),
-/// which skips every candidate with a client and so, here, every candidate
-/// there is.
+/// The damage itself is [`crate::game::combat::Blast`], the same
+/// `G_RadiusDamage` a grenade's blast goes through (combat doc, 14.1). The
+/// builtin copies `setPlayerIgnoreRadiusDamage`'s flag into the word the
+/// walk tests and zeroes that word when the walk ends (14.2); the flag
+/// itself stays set.
+///
+/// The walk is retail's (14.5): the candidates are the client entities in
+/// the blast's box when it goes off, each is tested for `takedamage` and
+/// measured when its turn comes, and its `CodeCallback_PlayerDamage` runs to
+/// its first `wait` before the next candidate is measured. Each callback is
+/// a `spawn_then` whose return ([`blast_step`]) takes the next turn, so the
+/// whole walk still ends before the calling thread's next line.
 ///
 /// The position each victim is measured at is its `origin` field, the copy
 /// `Server` mirrors from the sim every frame; its box and eye are the
@@ -415,67 +419,120 @@ pub fn radius_damage(
             "radiusDamage takes an origin, a range, a max damage and a min damage",
         ));
     };
-    let at = Vec3::from(*origin);
-    let radius = as_f32(radius)?;
-    let (max_damage, min_damage) = (as_f32(max_damage)?, as_f32(min_damage)?);
-    if host.ignore_radius_damage {
-        return Ok(Value::Undefined);
-    }
-    let candidates: Vec<EntId> = host
-        .ents
-        .iter_inuse()
-        .filter(|(id, e)| e.client.is_some() && !host.client_vitals[id.0 as usize].dead)
-        .map(|(id, _)| id)
-        .collect();
-    let origin_field = cx.intern_folded("origin");
-    let mut victims = Vec::new();
-    let mut bodies = Vec::new();
-    for id in candidates {
-        let Value::Vector(stands) = host.get_field(cx, id, origin_field) else {
-            continue;
-        };
-        let slot = id.0 as usize;
-        victims.push(standing_victim(slot, Vec3::from(stands)));
-        // The pose the last end frame committed, at the origin a `setOrigin`
-        // earlier this frame may have moved it to.
-        if let Some(mut body) = host.client_bodies.get(slot).cloned().flatten() {
-            body.origin = Vec3::from(stands);
-            bodies.push(body);
-        }
-    }
-    let world = host.world.clone();
-    let models = host.placed_script_models(cx);
-    let (fs, anims) = (host.fs.clone(), host.anims.clone());
-    let mut bones = match (fs.as_deref(), anims.as_deref()) {
-        (Some(fs), Some(anims)) => Some(crate::game::combat::BoneTraceCtx {
-            fs,
-            anims,
-            rigs: &mut host.hit_rigs,
-            now_ms: host.level_time_ms,
-        }),
-        _ => None,
-    };
-    let hits = crate::game::combat::radius_damage(
-        at,
-        radius,
-        max_damage,
-        min_damage,
+    let blast = crate::game::combat::Blast::new(
+        Vec3::from(*origin),
+        as_f32(radius)?,
+        as_f32(max_damage)?,
+        as_f32(min_damage)?,
         None,
         None,
         "none",
         "MOD_EXPLOSIVE",
-        &victims,
-        world.as_deref().map(|w| &w.collision),
-        &models,
-        &bodies,
-        bones.as_mut(),
     );
-    let (mod_, none) = (cx.intern_exact("MOD_EXPLOSIVE"), cx.intern_exact("none"));
-    let callback = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerDamage");
-    // The inflictor is NULL and the attacker `g_entities[ENTITYNUM_WORLD]`
-    // (combat doc, 14.2), so the callbacks get `undefined` and the world.
-    let world_ent = host.ents.world(cx);
-    for hit in hits {
+    let origin_field = cx.intern_folded("origin");
+    let ids: Vec<EntId> = host
+        .ents
+        .iter_inuse()
+        .filter(|(_, e)| e.client.is_some())
+        .map(|(id, _)| id)
+        .collect();
+    let mut candidates = Vec::new();
+    for id in ids {
+        if let Value::Vector(stands) = host.get_field(cx, id, origin_field)
+            && blast.reaches(&standing_victim(id.0 as usize, Vec3::from(stands)))
+        {
+            candidates.push(id);
+        }
+    }
+    host.radius_ignore_active = host.ignore_radius_damage;
+    host.blasts.push(ScriptBlast { blast, candidates });
+    blast_step(host, cx);
+    Ok(Value::Undefined)
+}
+
+/// One `radiusDamage` walk: the blast and the candidates whose turn has not
+/// come yet, in walk order.
+pub struct ScriptBlast {
+    blast: crate::game::combat::Blast,
+    candidates: Vec<EntId>,
+}
+
+/// The `spawn_then` token of a blast victim's damage callback. Every other
+/// token is a slot (`GameHost::spawn_returned`).
+pub const BLAST_TOKEN: u32 = u32::MAX;
+
+/// The innermost walk's next turns, up to the first victim the blast
+/// reaches, whose damage callback is queued to run before the walk goes on;
+/// or, with no candidate left, the walk's end.
+pub fn blast_step(host: &mut GameHost, cx: &mut Cx) {
+    let origin_field = cx.intern_folded("origin");
+    loop {
+        let Some(walk) = host.blasts.last_mut() else {
+            return;
+        };
+        if walk.candidates.is_empty() {
+            host.blasts.pop();
+            host.radius_ignore_active = false;
+            return;
+        }
+        let id = walk.candidates.remove(0);
+        let slot = id.0 as usize;
+        if host.ents.get(id).is_none_or(|e| e.client.is_none())
+            || !host.client_vitals[slot].takedamage
+            || host.radius_ignore_active
+        {
+            continue;
+        }
+        let Value::Vector(stands) = host.get_field(cx, id, origin_field) else {
+            continue;
+        };
+        let victim = standing_victim(slot, Vec3::from(stands));
+        // Every other playing body, posed as the last end frame left it, at
+        // the origin a `setOrigin` this frame may have moved it to. A
+        // client killed since then is a corpse (`player_die`'s contents)
+        // and stops nothing.
+        let mut bodies = Vec::new();
+        for (other, body) in host.client_bodies.clone().into_iter().enumerate() {
+            let Some(body) = body else { continue };
+            if host.client_vitals[other].dead {
+                continue;
+            }
+            let Some(handle) = host.ents.handle(other as u32) else {
+                continue;
+            };
+            let Value::Vector(at) = host.get_field(cx, handle, origin_field) else {
+                continue;
+            };
+            let mut body = body;
+            body.origin = Vec3::from(at);
+            bodies.push(body);
+        }
+        let world = host.world.clone();
+        let models = host.placed_script_models(cx);
+        let (fs, anims) = (host.fs.clone(), host.anims.clone());
+        let mut bones = match (fs.as_deref(), anims.as_deref()) {
+            (Some(fs), Some(anims)) => Some(crate::game::combat::BoneTraceCtx {
+                fs,
+                anims,
+                rigs: &mut host.hit_rigs,
+                now_ms: host.level_time_ms,
+            }),
+            _ => None,
+        };
+        let walk = host.blasts.last().expect("the walk this turn came from");
+        let Some(hit) = walk.blast.hit(
+            &victim,
+            world.as_deref().map(|w| &w.collision),
+            &models,
+            &bodies,
+            bones.as_mut(),
+        ) else {
+            continue;
+        };
+        let (mod_, none) = (cx.intern_exact("MOD_EXPLOSIVE"), cx.intern_exact("none"));
+        // The inflictor is NULL and the attacker `g_entities[ENTITYNUM_WORLD]`
+        // (combat doc, 14.2), so the callbacks get `undefined` and the world.
+        let world_ent = host.ents.world(cx);
         let args = vec![
             Value::Undefined,
             Value::Entity(world_ent),
@@ -483,16 +540,14 @@ pub fn radius_damage(
             Value::Int(DFLAG_RADIUS),
             Value::String(mod_),
             Value::String(none),
-            Value::Vector(*origin),
+            Value::Vector(hit.point),
             Value::Vector(hit.dir),
             Value::String(none),
         ];
-        let Some(victim) = host.ents.handle(hit.victim as u32) else {
-            continue;
-        };
-        cx.spawn(callback, Some(Target::Entity(victim)), args);
+        let callback = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerDamage");
+        cx.spawn_then(callback, Some(Target::Entity(id)), args, BLAST_TOKEN);
+        return;
     }
-    Ok(Value::Undefined)
 }
 
 /// A client as a blast candidate, standing: the box and the eye height
@@ -726,6 +781,7 @@ mod tests {
             health: 100,
             max_health: 100,
             dead: false,
+            takedamage: true,
         };
         rt.set_client_origin(0, [0.0, 0.0, 0.0]);
         let victim = rt.client_entity(0).expect("the client has an entity");
@@ -785,6 +841,7 @@ mod tests {
                 health,
                 max_health: 100,
                 dead: false,
+                takedamage: true,
             };
             rt.deliver_hits(vec![hit(53)], 50);
         }
@@ -810,6 +867,7 @@ mod tests {
             health: 10,
             max_health: 100,
             dead: false,
+            takedamage: true,
         };
         rt.deliver_hits(vec![hit(45)], 50);
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
@@ -842,14 +900,17 @@ mod tests {
     }
 
     /// A surviving hit takes the health off, queues its op and starts no
-    /// killed callback; a second hit on a dead player does nothing at all.
+    /// killed callback. A hit on a player already dead, before its end frame
+    /// clears `takedamage`, takes health below zero and kills no second
+    /// time (combat doc, 14.5); after it, nothing reaches the player.
     #[test]
-    fn a_surviving_hit_takes_health_and_a_dead_player_takes_nothing() {
+    fn a_surviving_hit_takes_health_and_a_dead_player_only_until_its_end_frame() {
         let mut rt = two_clients();
         rt.host.client_vitals[0] = Vitals {
             health: 100,
             max_health: 100,
             dead: false,
+            takedamage: true,
         };
         rt.deliver_hits(vec![hit(67)], 50);
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
@@ -866,12 +927,25 @@ mod tests {
 
         rt.deliver_hits(vec![hit(67)], 100);
         assert!(rt.client_vitals(0).dead);
+        assert_eq!(rt.client_vitals(0).health, 0);
+        rt.deliver_hits(vec![hit(67)], 100);
+        assert_eq!(rt.client_vitals(0).health, -67);
+        let ops = rt.take_sim_ops();
+        assert!(matches!(
+            ops[..],
+            [
+                (_, SimOp::Damaged { fatal: true, .. }),
+                (_, SimOp::Damaged { fatal: false, .. })
+            ]
+        ));
+        rt.deliver_hits(vec![hit(2000)], 100);
+        assert_eq!(rt.client_vitals(0).health, -999, "clamped");
+        rt.take_sim_ops();
+        // The dead arm of its end frame.
+        rt.set_client_takedamage(0, false);
         rt.deliver_hits(vec![hit(67)], 150);
-        assert_eq!(
-            rt.take_sim_ops().len(),
-            1,
-            "the dead player took no second op"
-        );
+        assert!(rt.take_sim_ops().is_empty(), "nothing reached it");
+        assert_eq!(rt.client_vitals(0).health, -999);
     }
 
     /// `radiusDamage` runs `CodeCallback_PlayerDamage` on every live client
@@ -880,8 +954,8 @@ mod tests {
     /// 1000 units out takes nothing, and the flags the script is handed
     /// carry `DFLAG_RADIUS`. The attacker is the world entity.
     ///
-    /// The second blast is the dead check: a corpse is not damaged again,
-    /// so the near client's callback ran once.
+    /// The second blast is the dead check: a second later the dead client's
+    /// end frame has cleared `takedamage`, so its callback ran once.
     #[test]
     fn radiusdamage_damages_every_live_client_inside_the_radius() {
         const SCRIPT: &str = r#"
@@ -919,11 +993,14 @@ mod tests {
                 health: 100,
                 max_health: 100,
                 dead: false,
+                takedamage: true,
             };
         }
         rt.set_client_origin(0, [100.0, 0.0, 0.0]);
         rt.set_client_origin(1, [1000.0, 0.0, 0.0]);
         rt.run_frame(1100);
+        // The dead arm of the victim's end frame.
+        rt.set_client_takedamage(0, false);
         rt.run_frame(2200);
 
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
@@ -1004,6 +1081,7 @@ mod tests {
                 health: 100,
                 max_health: 100,
                 dead: false,
+                takedamage: true,
             };
             rt.set_client_origin(slot, feet[slot]);
             rt.set_client_body(
@@ -1030,6 +1108,89 @@ mod tests {
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
         assert_eq!(rt.client_field(0, "took").as_deref(), Some("20"));
         assert_eq!(rt.client_field(0, "hits").as_deref(), Some("1"));
+    }
+
+    /// `probe_blastloop`'s rows on retail (combat doc, 14.5), the walk in
+    /// entity order. A 100-health player in front of a 1000-health one, a
+    /// lethal flat 200: with the front one walked first it dies before the
+    /// back one is measured and its corpse shields nothing, so the back one
+    /// takes 200; with the back one walked first the live front body stops
+    /// every probe and it takes nothing. A second blast in the same frame
+    /// still reaches the dead one, whose health goes below zero; after its
+    /// end frame nothing does.
+    #[test]
+    fn a_blast_walks_its_victims_one_callback_at_a_time() {
+        const SCRIPT: &str = r#"
+            main() {
+                level.log = "";
+                wait 1;
+                radiusDamage((0, 0, 8), 300, 200, 200);
+                level.log = level.log + "|";
+                radiusDamage((0, 0, 8), 300, 20, 20);
+                wait 1;
+                radiusDamage((0, 0, 8), 300, 20, 20);
+            }
+            CodeCallback_PlayerConnect() {}
+            CodeCallback_PlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc) {
+                level.log = level.log + " " + self getEntityNumber() + ":" + iDamage;
+                self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc);
+            }
+            CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {}
+        "#;
+        // `front` is the slot standing 50 units out, the other stands at 100.
+        for front in [0, 1] {
+            let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
+            rt.host.world = Some(Rc::new(World {
+                collision: vcod_common::collision::test_world(&[]),
+                vis: vcod_common::bsp::Visibility::none(),
+                spawn: ([0.0, 0.0, 64.0], 0.0),
+            }));
+            for (slot, name) in [(0, "a"), (1, "b")] {
+                rt.push_client_event(ClientEvent::Connect {
+                    slot,
+                    name: name.into(),
+                });
+            }
+            rt.run_frame(50);
+            for slot in [0, 1] {
+                let x = if slot == front { 50.0 } else { 100.0 };
+                let health = if slot == front { 100 } else { 1000 };
+                rt.host.client_vitals[slot] = Vitals {
+                    health,
+                    max_health: 100,
+                    dead: false,
+                    takedamage: true,
+                };
+                rt.set_client_origin(slot, [x, 0.0, 0.0]);
+                rt.set_client_body(
+                    slot,
+                    Some(crate::game::combat::HitBody {
+                        slot,
+                        origin: Vec3::new(x, 0.0, 0.0),
+                        yaw: 0.0,
+                        mins: Vec3::new(-15.0, -15.0, 0.0),
+                        maxs: Vec3::new(15.0, 15.0, 72.0),
+                        pose: Default::default(),
+                    }),
+                );
+            }
+            rt.run_frame(1100);
+            assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+            let back = 1 - front;
+            assert_eq!(rt.client_vitals(front).health, -20);
+            assert!(rt.client_vitals(front).dead);
+            // The dead arm of its end frame.
+            rt.set_client_takedamage(front, false);
+            rt.run_frame(2200);
+            let want = if front == 0 {
+                " 0:200 1:200| 0:20 1:20 1:20"
+            } else {
+                " 1:200| 0:20 1:20 0:20"
+            };
+            assert_eq!(rt.level_field_str("log"), want, "front {front}");
+            let back_left = if front == 0 { 1000 - 240 } else { 1000 - 40 };
+            assert_eq!(rt.client_vitals(back).health, back_left);
+        }
     }
 
     /// `setPlayerIgnoreRadiusDamage` (combat doc, 14.2) is a level flag the
@@ -1064,6 +1225,7 @@ mod tests {
             health: 100,
             max_health: 100,
             dead: false,
+            takedamage: true,
         };
         rt.set_client_origin(0, [100.0, 0.0, 0.0]);
 
@@ -1303,6 +1465,7 @@ mod tests {
             health: 100,
             max_health: 100,
             dead: false,
+            takedamage: true,
         };
         rt.push_client_event(ClientEvent::Connect {
             slot: 0,

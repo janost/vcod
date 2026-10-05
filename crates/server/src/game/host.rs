@@ -177,6 +177,12 @@ pub struct Vitals {
     pub health: i32,
     pub max_health: i32,
     pub dead: bool,
+    /// `ent->takedamage` (`+0x171`), what a blast's victim walk tests
+    /// (combat doc, 14.5): `ClientEndFrame` rewrites it from `sessionstate`
+    /// every frame, set while playing and clear otherwise, and `player_die`
+    /// sets it, so a death leaves the client a candidate until its own end
+    /// frame.
+    pub takedamage: bool,
 }
 
 impl Default for Vitals {
@@ -188,6 +194,7 @@ impl Default for Vitals {
             health: 0,
             max_health: 0,
             dead: false,
+            takedamage: false,
         }
     }
 }
@@ -426,6 +433,13 @@ pub struct GameHost {
     /// on a client (combat doc, 14.2): the `radiusDamage` builtin is the one
     /// reader, and a grenade's own blast never looks at it.
     pub ignore_radius_damage: bool,
+    /// `level+0x29F4`, the copy of that flag the builtin takes for the
+    /// length of its walk and zeroes when the walk ends (14.2), which is the
+    /// word the walk tests per victim.
+    pub radius_ignore_active: bool,
+    /// The `radiusDamage` walks under way, innermost last: a damage callback
+    /// can call the builtin again before its first `wait`.
+    pub blasts: Vec<crate::game::builtins::combat::ScriptBlast>,
     /// The value retail's `vmMain` case 16 returns
     /// (docs/research/cod11-map-cycle.md section 1): whether the outgoing
     /// level asked to keep its script `pers` and `game` variable across the
@@ -472,12 +486,14 @@ pub(crate) const RNG_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 
 impl GameHost {
     /// The vitals half of `player_die`, the one place a client dies: health
-    /// 0, dead until the next spawn. The follower walk runs once the killed
-    /// callback returns ([`GameHost::player_die_walk`]).
+    /// 0, dead until the next spawn, `takedamage` set (5.1 step 10). The
+    /// follower walk runs once the killed callback returns
+    /// ([`GameHost::player_die_walk`]).
     pub fn die(&mut self, slot: usize) {
         let v = &mut self.client_vitals[slot];
         v.health = 0;
         v.dead = true;
+        v.takedamage = true;
     }
 
     /// Every client slot that holds a client entity, which is every client
@@ -618,6 +634,8 @@ impl GameHost {
             model_bounds: Vec::new(),
             model_brushes: Vec::new(),
             ignore_radius_damage: false,
+            radius_ignore_active: false,
+            blasts: Vec::new(),
             save_persist: false,
             team_scores: [0, 0],
             ranks_dirty: false,
@@ -942,10 +960,15 @@ impl Host for GameHost {
         self.ents.get(ent).is_some()
     }
 
-    /// Every `spawn_then` is a `CodeCallback_PlayerKilled` whose token is the
-    /// victim's slot.
+    /// A `spawn_then` is either a `radiusDamage` victim's
+    /// `CodeCallback_PlayerDamage`, whose walk goes on to the next victim, or
+    /// a `CodeCallback_PlayerKilled` whose token is the victim's slot.
     fn spawn_returned(&mut self, cx: &mut Cx, token: u32) {
-        self.player_die_walk(cx, token as usize);
+        if token == crate::game::builtins::combat::BLAST_TOKEN {
+            crate::game::builtins::combat::blast_step(self, cx);
+        } else {
+            self.player_die_walk(cx, token as usize);
+        }
     }
 
     fn get_field(&mut self, cx: &mut Cx, ent: EntId, field: Atom) -> Value {
