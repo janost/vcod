@@ -5,7 +5,8 @@ see a player, what contents a player carries in each state, how the server's
 trace clips one capsule against another, when the entity's box is linked and
 how it is packed into the wire `solid`, how the client's prediction clips the
 same players, and `StuckInClient`, the end-frame push that separates two
-players found inside each other. Sections 9 and 10 read the retail captures;
+players found inside each other, and the landing stun that shares the push's
+timer (section 8). Sections 8.9, 9 and 10 read the retail captures;
 section 11 is what vcod does and section 12 where it differs.
 
 Evidence rules as everywhere in this directory. This document carries no
@@ -356,13 +357,182 @@ VERIFIED, the still overlap (`mp_carentan-dm-bump-overlap-script.txt` lines
 99, 49 and 0 on consecutive snapshots, with `pm_flags` 262400 (0x40100)
 until the 0.
 
-## 8. The landing stun, open
+## 8. The landing stun
 
-VERIFIED: 0x300af stores into `ps+0x10` (`pm_time`) and 0x300b4 sets bit 0x1
-of byte `ps+0xd` (`pm_flags` 0x100), and the string
-`landing stun time: %i speed mult: %.2f` sits at 0x709e0. INFERRED: a hard
-landing starts the same knockback timer as the push. Not read further and
-not modelled (section 12).
+Read out of `game.mp.i386.so` on 2026-10-05 with `tools/re/annotate_func.py`.
+`PM_CrashLand` (0x2fd68) has no symbol. Offsets beyond the table at the top:
+`pm+0xd9` is `pm->waterlevel` (`cod11-mantle.md`, "The wish speed"),
+`pm+0x38` the debug level, `ps+0x3c` `gravity`, `ps+0x1c` `origin[2]`,
+`ps+0x20..0x28` `velocity`, `pml+0x70` and `pml+0x7c` `previous_origin[2]`
+and `previous_velocity[2]` (`cod11-sound-system.md` 9a), `pml+0x50` the
+ground trace's surface flags.
+
+### 8.1 Where it runs
+
+VERIFIED: the only `call` to 0x2fd68 in `.text` is at 0x30721, inside the
+ground trace (fn 0x30474), behind a compare of `groundEntityNum` with 0x3ff
+at 0x306fc. The ground trace zeroes `fJumpOriginZ` (ps+0x68) at 0x305c8,
+ahead of that call. INFERRED: it runs on the trace that turns an airborne
+player into a grounded one, before `PmoveSingle`'s closing
+`PM_SetWaterLevel` (0x3432c) and footsteps (0x34336), so it reads the water
+level the frame began with and the footsteps read the velocity it scaled.
+
+### 8.2 The fall height
+
+VERIFIED: `waterlevel` 3 returns at once (0x2fd75). The function loads
+`-gravity` (0x2fdb4), 0.5 (rodata 0x70a0c), 4.0 (0x70a10), `previous_origin[2]`
+minus `origin[2]` (0x2fdc3, 0x2fddb) and `previous_velocity[2]` (0x2fdd1),
+takes an `fsqrt` at 0x2fdfb behind a test of the discriminant against 0 that
+returns (0x2fdec-0x2fdf3), and squares the result over twice `gravity`
+(0x2fe1b-0x2fe2e) into the height the debug print
+`landing vel: %.1f fall height: %.1f` (0x70940) shows. INFERRED: Q3's
+quadratic for the impact speed. In closed form the height is
+`v0^2 / 2g + (z0 - z)` off the move's start, and a negative discriminant is
+no landing at all: no event, no damping.
+
+### 8.3 The damage
+
+VERIFIED: the two bounds are the cvars `bg_fallDamageMinHeight` and
+`bg_fallDamageMaxHeight`, read through `R_386_32` relocations at 0x2fe68 and
+0x2fe62 (the `vmCvar_t` value at +8). Their `gameCvarTable` rows (0x7e368,
+0x7e380) carry the defaults `"256"` and `"480"` and flags 0x208; retail's
+systeminfo configstring carries 480 and 256
+(`crates/server/tests/fixtures/configstrings/mp_carentan-dm.txt`).
+
+The compares and stores below are VERIFIED at the addresses given. The
+branch each one is read as is INFERRED:
+
+- max <= min or min < 0 prints `bg_fallDamageMaxHeight and
+  bg_fallDamageMinHeight have bad values` (0x70980) and takes damage 0
+  (0x2fe6c-0x2fe94);
+- height <= min, ground surface flag 0x1 (`pml+0x50`, 0x2feaa) or
+  `pm_type > 5` (0x2feba) take 0;
+- height >= max takes 100 (0x2fed7);
+- otherwise `(height - min) / (max - min) * 100` (100.0 at 0x70a14),
+  through a `fistp` under control word 0xc00 (0x2fefb), which truncates,
+  clamped to 0..100 (0x2ff0f-0x2ff23);
+- `waterlevel` 2 multiplies that by 0.5 and truncates again (0x2ff2a-0x2ff57).
+
+### 8.4 The stun
+
+VERIFIED: a non-zero damage branches at 0x2ffe6. Damage above 99
+(`cmp esi,0x63; jg`, 0x3000a) or ground surface flag 0x2 (0x30013) goes to
+0x300d5, which scales all three velocity components by 0.67 (0x70a38) and
+sets no timer. Otherwise:
+
+- the stun is `35 * damage + 500` (`lea`/`shl`/`sub` at 0x30020-0x30028,
+  0x1f4 at 0x30028), at most 2000 (0x3002e);
+- the multiplier is 0.5 (0x70a0c) at a stun of 500 or less (0x3003b), 0.2
+  (0x70a28) above 1499 (0x30050), and between them
+  `0.5 - (stun - 500) / 1000 * 0.3` (0x70a2c, 0x70a30, 0x70a34 at
+  0x30060-0x3007e);
+- the debug print `landing stun time: %i speed mult: %.2f` (0x709e0) at
+  `pm+0x38 > 1` (0x30085);
+- `pm_time = stun` (0x300af), `pm_flags |= 0x100` (0x300b4), and all three
+  velocity components times the multiplier (0x300b8-0x300d1, stored at
+  0x300fa).
+
+Both arms then call `BG_AddPredictableEventToPlayerstate(0x74 + material,
+damage, ps)` (0x30102-0x30123), the material being bits 20-24 of the ground
+surface flags or 0 under flag 0x2000 (0x30109-0x3011c). 0x74 is 116,
+`EV_LANDING_PAIN_*` (`cod11-events-and-fx.md`).
+
+INFERRED, from the arithmetic: damage 1 stuns 535 ms at 0.4895; the
+multiplier reaches 0.2 at damage 29 (1515 ms) and the timer pins at 2000
+from damage 43. A fatal fall (100) and a slick floor never stun. The flag is
+OR'd in, so a hit's 0x200 survives a landing, while `pm_time` is
+overwritten.
+
+### 8.5 What the timer does
+
+VERIFIED, the readers in the pmove range (0x2c000-0x3b000): of `pm_flags`
+0x100, `PM_WalkMove` (0x2f4d8) and `PM_Friction` (0x2e51c), section 7; of
+`pm_time`, `PM_CheckLadderMove` (0x336f6, returning at 0x3393f), the end of
+`PM_SlideMove` (0x34f83) and `PM_DropTimers` (0x32a50). `PM_CheckJump`
+(0x2ebbb-0x2ebca) tests `pm_flags` 0x800, 0x2000 and 0x1 and not 0x100.
+`PmoveSingle` calls `PM_CheckLadderMove` at 0x342f4, before `PM_DropTimers`
+at 0x342f9.
+
+INFERRED, what a stunned player gets: a quarter of the walk acceleration and
+0.3 of the ground friction's control term, for as long as the timer runs; no
+ladder check at all, which leaves last frame's `PMF_LADDER` (0x10) as it
+was, since the early return comes before step 4 of `cod11-mantle.md`'s
+"Ladders" clears it; and the jump stays available.
+
+VERIFIED: `PM_SlideMove` copies the velocity into a local at 0x347d4-0x347e7,
+replaces its z with the gravity-applied end velocity at 0x34838, and at
+0x34f83-0x34f9c, when `pm_time` is non-zero, stores that local back into the
+velocity. INFERRED: Q3's "don't change velocity if in a timer": under any
+running timer the slide's clips do not reach the velocity. Not modelled
+(section 12).
+
+### 8.6 The damage-free ladder's parm
+
+VERIFIED: ahead of the 0x2000 arm, 0x2ff5a-0x2ffa6 compute
+`(height - 12) / 26 * 4 + 4` (12.0 at 0x70a18, 26.0 at 0x70a1c, 4.0 at
+0x70a10), truncated and capped at 24, or 0 at a height of 12 or less, into
+`ecx`, and the land arm pushes `ecx` as the parm of `0x5d + material`
+(0x301db-0x301fc), the material 0 under flag 0x2000 (0x301e4). The walk- and
+run-step arms push event 0 on material 0 (0x30194), which
+`BG_AddPredictableEventToPlayerstate` drops (`test eax,eax; je` at
+0x2e31e). INFERRED: a land event always plays, on the default surface if no
+other, with the view-bob amount (`cod11-sound-system.md` 7b, "own client
+only: view bob") as its parm; only the two step arms fall silent.
+
+### 8.7 The 0x2000 arm
+
+VERIFIED, 0x2ffb3-0x2ffe0: when `|fJumpOriginZ| > 0.001`, `pm_time` 200 and
+`pm_flags |= 0x2000`, ahead of the damage branch. 8.1's store at 0x305c8 has
+zeroed that field before the only call, so the arm never arms
+(`cod11-mantle.md`, "Jumps").
+
+### 8.8 The game half
+
+VERIFIED: `ClientEvents` (0x3fd24) takes events 0x74 to 0x8a (`cmp eax,0x16`
+at 0x3fec0 on `event - 0x74`) on an entity with `eType` 1 (0x3fec9), turns
+the parm into 1.1 (0x72c7c) above 99 and `parm * 0.01` (0x72c80) otherwise,
+multiplies by `ps.stats[2]` (`cl+0xfc`, `cod11-items.md`), truncates,
+stores `level.time + 200` at `ent+0x224`, and calls `G_Damage` with means
+0x15 (`MOD_FALLING`) at 0x3fe0d. INFERRED: `stats[2]` is the max health, so
+the fall damage is that percentage of it and a 100-percent fall does 110
+percent. Not modelled (section 12).
+
+### 8.9 What retail measured
+
+One run on 2026-10-05 against the retail 1.1d server: `probe_fall` dropped a
+`--probe-fall` client (16 ms cmds) onto the mp_carentan street, a 4-degree
+grade at (900 1930), from five heights (recipe in
+`crates/gsc/tests/fixtures/semantics/client-probes/README.md`). Both halves'
+lines are `crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall.txt`,
+which no gate reads. VERIFIED, each the first grounded snapshot after the
+drop (fixture line in the first column):
+
+| line | drop | fall | event, parm | `pm_flags`, `pm_time` | health after |
+|---|---|---|---|---|---|
+| 29 | 100 | 105.15 | 110 (93 + 17), 18 | 0x40000, 0 | 100 |
+| 48 | 300 | 305.24 | 133 (116 + 17), 24 | 0x40100, 1290 at ct 25750 | 77 |
+| 95 | 340 | 345.17 | 133, 41 | 0x40100, 1918 at ct 33734 | 60 |
+| 156 | 420 | 425.19 | 133, 79 | 0x40100, 1983 at ct 41834 | 22 |
+| 220 | 520 | 525.13 | 133, 100 | 0x40000, 0, `pm_type` 6 | 0 |
+
+VERIFIED: after the 300 drop `pm_time` falls by each snapshot's
+`commandTime` step, to 2 at ct 27038 (line 74), and reads 0 with 0x100 gone
+at 27066 (line 75).
+INFERRED: `35 * 41 + 500` is 1935 and 1918 is that less one 17 ms cmd; 1983
+is 2000 less one; 1290 is 1340 less 50 ms, so the 300 drop landed 50 ms
+before its first grounded snapshot. The fatal fall carries no timer, as 8.4
+reads. Health drops by 23, 40 and 78 where the parm says 24, 41 and 79: 8.8's
+`parm * 0.01` in single precision lands just under the whole number, which
+the truncation then loses.
+
+VERIFIED, vcod measurement the same day: our pmove dropping the same falls
+onto flat ground reads parms 18, 24, 42 and 78 at 16 ms frames and 18, 25,
+44 and 81 at 17 ms. INFERRED: the velocity snap moves a fall's impact speed
+by a fraction of a unit a second per frame, a frame length dependent amount,
+so a probe's mixed 16 and 17 ms cmds cannot be matched to the unit without
+replaying its cmds. The velocity multiplier is not visible in this run: each
+landing was vertical, and the next walk frame's ground clip zeroes a
+vertical velocity whatever it was scaled to.
 
 ## 9. What the bump capture measured
 
@@ -554,7 +724,13 @@ pmove (`crates/common/src/pmove.rs`) takes the mask at each call site:
 keeps the plain slide when its down pass meets an entity below
 `MAX_CLIENTS`, section 2.3. The knockback timer is `PlayerState.knockback_ms`
 with `PMF_TIME_KNOCKBACK`, section 7's two scales and its drop on every path;
-it travels as `pm_time` with `pm_flags` 0x100 both ways.
+it travels as `pm_time` with `pm_flags` 0x100 both ways. `crash_land` is
+section 8: the height off `move_start` and the move's starting vertical
+speed, `fall_damage` with the two cvars at their stock values, the stun and
+its multiplier, the 0.67 arms and both events with their parms. It runs
+straight after the final ground trace, ahead of the water level and the
+footsteps. `check_ladder_move` returns last frame's ladder while the timer
+runs, and runs ahead of the timer's drop.
 
 The server (`crates/server/src/spectate.rs`, `server.rs`,
 `game/stuck.rs`):
@@ -658,8 +834,23 @@ The gates:
   does so at the kill, so a retail victim stops blocking within the frame.
   The callback's ops now reach the sim straight after that touch pass. A
   stock map's only `trigger_hurt` is the kill volume under the floor.
-- **The landing stun** (section 8) is not modelled. A follow-up with the
-  jump port.
+- **The landing stun**, closed 2026-10-05 (section 8). What it left open:
+  - **The slide's timer restore** (8.5) is not ported: under any running
+    timer, the push's included, retail's `PM_SlideMove` hands back the
+    velocity it started with. VERIFIED, vcod measurement 2026-10-05: with
+    the restore added, `bump_ab`, `stuck_ab`, `playerstate_slope_ab`,
+    `playerstate_motion_ab`, `predict_ab`, `player_clip`, `combat` and
+    `playerstate_combat_ab` all stay green, so no committed capture reaches
+    a clip under a timer. Left to whoever next touches the step-slide move.
+  - **Fall damage** (8.8): vcod raises `EV_LANDING_PAIN_*` with the damage
+    in its parm, and the server applies none.
+  - **The two cvars** are constants at their stock 256 and 480; a server
+    that changes them is not followed.
+  - **A dead player's landing**. INFERRED: `pm_type` 6 takes `PmoveSingle`'s
+    default arm (`dead_move`'s own comment), whose ground traces (0x342ce,
+    0x34327) reach `PM_CrashLand`, and 8.3's `pm_type > 5` test exists for
+    it: a corpse lands with damage 0, the 0.67 damp and a land event.
+    vcod's `dead_move` does neither.
 - **A client that sends no cmds** keeps the `solid` of its last link. That
   is retail's rule too (section 4.2), not a divergence; the same holds for
   a client at intermission, whose contents go 0 without a relink.

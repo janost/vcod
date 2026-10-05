@@ -66,8 +66,9 @@ const STEP_REVERT_EPS: f32 = 0.001;
 /// Step height while prone (PM_StepSlideMove @0x35045 tests pm_flags bit 0x1).
 pub const STEPSIZE_PRONE: f32 = 10.0;
 pub const OVERCLIP: f32 = 1.001;
-/// `pm_flags` bit 0x100, the player-clip knockback timer
-/// (`docs/research/cod11-player-clip.md`, `PM_DropTimers` 0x32a44).
+/// `pm_flags` bit 0x100, the timer `StuckInClient`'s push and the landing
+/// stun start (`docs/research/cod11-player-clip.md` 7 and 8,
+/// `PM_DropTimers` 0x32a44).
 pub const PMF_TIME_KNOCKBACK: i32 = 0x100;
 /// `pm_flags` bit 0x200, the timer a damage knockback starts
 /// (`docs/research/cod11-combat.md` 4.5): no ground friction, a walk accel of
@@ -387,7 +388,8 @@ pub struct PlayerState {
     pub knockback_ms: f32,
     /// The `pm_flags` bits riding `knockback_ms`, cleared with it.
     /// [`PMF_TIME_KNOCKBACK`], `StuckInClient`'s push
-    /// (`crates/server/src/game/stuck.rs`), quarters `walk_move`'s accel and
+    /// (`crates/server/src/game/stuck.rs`) and a damaging landing's stun
+    /// (`crash_land`), quarters `walk_move`'s accel and
     /// softens ground friction to 0.3 of its control term
     /// (`docs/research/cod11-player-clip.md`); [`PMF_TIME_DAMAGE`] is a hit's.
     pub knockback_flags: i32,
@@ -418,11 +420,8 @@ pub struct PlayerState {
     /// Lump-0 `surface_flags` of the ground we stand on; 0 while airborne.
     pub ground_surface_flags: u32,
     /// Origin at the top of this move, retail's `pml.previous_origin`. The
-    /// legs' heading is measured off the displacement it gives.
+    /// legs' heading and the landing's fall height are measured off it.
     move_start: Vec3,
-    /// Fastest downward speed sampled while airborne; feeds the landing
-    /// sound thresholds (PM_CrashLand's kinematic impact, approximated).
-    air_speed_peak: f32,
     /// Eased eye height; trails `stance.view_height()` after a stance change
     /// (retail lerps the view while the bbox snaps).
     view_height_cur: f32,
@@ -559,7 +558,6 @@ impl PlayerState {
             movement_dir: 0,
             move_start: origin,
             ground_surface_flags: 0,
-            air_speed_peak: 0.0,
             view_height_cur: Stance::Stand.view_height(),
             view_lerp_ms: None,
             ducked: false,
@@ -748,9 +746,6 @@ pub fn pmove(
         linked_move(ps, input, world, dt, weapons, &mut events);
         return events;
     }
-    if ps.on_ground {
-        ps.air_speed_peak = 0.0;
-    }
     // `PM_UpdateViewAngles` runs ahead of the stance (`PmoveSingle` 0x340fc),
     // so the prone clamps read last frame's stance and pitches.
     update_prone_view(ps, input, world, dt);
@@ -773,10 +768,11 @@ pub fn pmove(
             ps.waterjump_ms = 0.0;
         }
     }
-    drop_knockback(ps, dt);
     // retail checks ladders right after the first ground trace and dispatches
-    // them before waterjump/water
+    // them before waterjump/water; the check reads `pm_time` before
+    // `PM_DropTimers` (0x342f4, 0x342f9)
     let ladder = check_ladder_move(ps, input, world);
+    drop_knockback(ps, dt);
     if let Some((normal, ladderforward)) = ladder {
         ladder_move(ps, input, normal, ladderforward, world, dt, &mut events);
     } else if ps.waterjump_ms > 0.0 {
@@ -807,14 +803,16 @@ pub fn pmove(
         }
     }
     ground_trace(ps, world, MASK_PLAYERSOLID);
+    // `PM_CrashLand` runs inside the ground trace (0x30721), so it reads the
+    // water level the frame began with and the footsteps read its damping.
+    if !was_on_ground && ps.on_ground {
+        crash_land(ps, start_vz, &mut events);
+        ps.land_anim = start_vz < LAND_ANIM_SPEED;
+    }
     set_water_level(ps, world);
 
     // PM_Footsteps @0x322c8 runs once per move, after the final ground trace.
     footsteps(ps, input, world, dt, &mut events);
-    if !was_on_ground && ps.on_ground {
-        crash_land(ps, &mut events);
-        ps.land_anim = start_vz < LAND_ANIM_SPEED;
-    }
     weapon::pm_weapon(
         ps,
         input,
@@ -1089,21 +1087,75 @@ fn ladder_step_event(
     });
 }
 
-/// `PM_CrashLand`'s damage-free ladder (@0x30130) on the fall height
-/// `v^2 / 2g` of the landing speed: nothing at or under 4 units, a walk-step
-/// to 8, a run-step to 12, and past that a land event and the velocity damped
-/// to 0.67 (rodata 0x70a38, applied at 0x300dd; docs/research/cod11-sound-system.md,
-/// "Landing"). A fall past `bg_fallDamageMinHeight` damps by its damage
-/// instead, which is not modelled.
-fn crash_land(ps: &mut PlayerState, events: &mut Vec<PmEvent>) {
-    let speed = std::mem::take(&mut ps.air_speed_peak);
-    let height = speed * speed / (2.0 * GRAVITY);
-    if height >= LANDING_DAMP_HEIGHT && ps.water_level < 3 {
+/// `PM_CrashLand` (0x2fd68): the fall height off the move's start, the fall
+/// damage, and either the landing stun or the damage-free ladder
+/// (docs/research/cod11-player-clip.md 8, cod11-sound-system.md "Landing").
+fn crash_land(ps: &mut PlayerState, start_vz: f32, events: &mut Vec<PmEvent>) {
+    if ps.water_level >= 3 {
+        return;
+    }
+    // Retail solves the impact speed and squares it back over 2g; this is the
+    // same height in closed form, and no landing at all when it has no root.
+    let den = start_vz * start_vz + 2.0 * GRAVITY * (ps.move_start.z - ps.origin.z);
+    if den < 0.0 {
+        return;
+    }
+    let height = den / (2.0 * GRAVITY);
+    let sf = ps.ground_surface_flags;
+    let damage = fall_damage(height, sf, ps.water_level);
+    if damage == 0 {
+        if height >= LANDING_DAMP_HEIGHT {
+            ps.velocity *= LANDING_DAMP;
+        }
+        events.extend(landing_event(height, ps));
+        return;
+    }
+    // surface flag 0x2 is slick (0x30013)
+    if damage < 100 && sf & 0x2 == 0 {
+        let stun = (35 * damage + 500).min(2000);
+        ps.knockback_ms = stun as f32;
+        ps.knockback_flags |= PMF_TIME_KNOCKBACK;
+        ps.velocity *= landing_stun_scale(stun);
+    } else {
         ps.velocity *= LANDING_DAMP;
     }
-    if let Some(ev) = landing_event(height, ps) {
-        events.push(ev);
+    events.push(PmEvent {
+        event: EV_LANDING_PAIN_BASE + landing_material(sf),
+        parm: damage,
+    });
+}
+
+/// `bg_fallDamageMinHeight` and `bg_fallDamageMaxHeight` at their stock
+/// defaults (gameCvarTable 0x7e368 and 0x7e380). Both are systeminfo cvars a
+/// server could change; vcod does not let it.
+const FALL_DAMAGE_MIN_HEIGHT: f32 = 256.0;
+const FALL_DAMAGE_MAX_HEIGHT: f32 = 480.0;
+/// The ground surface flag that takes no fall damage (0x2feaa).
+const SURF_NODAMAGE: u32 = 0x1;
+const EV_LANDING_PAIN_BASE: i32 = 116;
+
+/// The fall damage percent: linear from 0 at the min height to 100 at the
+/// max, truncated, halved (truncated again) at water level 2.
+fn fall_damage(height: f32, sf: u32, water_level: u32) -> i32 {
+    let damage = if height <= FALL_DAMAGE_MIN_HEIGHT || sf & SURF_NODAMAGE != 0 {
+        0
+    } else if height >= FALL_DAMAGE_MAX_HEIGHT {
+        100
+    } else {
+        let frac =
+            (height - FALL_DAMAGE_MIN_HEIGHT) / (FALL_DAMAGE_MAX_HEIGHT - FALL_DAMAGE_MIN_HEIGHT);
+        ((frac * 100.0) as i32).clamp(0, 100)
+    };
+    if water_level == 2 {
+        (damage as f32 * 0.5) as i32
+    } else {
+        damage
     }
+}
+
+/// The stun's velocity scale: 0.5 at 500 ms down to 0.2 at 1500 and past.
+fn landing_stun_scale(stun_ms: i32) -> f32 {
+    0.5 - (stun_ms - 500).clamp(0, 1000) as f32 / 1000.0 * 0.3
 }
 
 /// The fall height from which a landing plays the land event and damps the
@@ -1111,28 +1163,43 @@ fn crash_land(ps: &mut PlayerState, events: &mut Vec<PmEvent>) {
 const LANDING_DAMP_HEIGHT: f32 = 12.0;
 const LANDING_DAMP: f32 = 0.67;
 
-fn landing_event(height: f32, ps: &PlayerState) -> Option<PmEvent> {
-    if ps.water_level >= 3 {
-        return None;
-    }
-    let sf = ps.ground_surface_flags;
+/// The landing's surface index: 0, the default, on a no-sound surface.
+fn landing_material(sf: u32) -> i32 {
     if sf & SURF_NO_SOUND != 0 {
-        return None;
+        0
+    } else {
+        crate::collision::sound_material(sf)
     }
-    let mat = crate::collision::sound_material(sf);
-    if mat == 0 {
-        return None;
+}
+
+/// The damage-free ladder (0x30130): nothing at or under 4 units, a walk-step
+/// to 8 and a run-step to 12, both silent on material 0, and from 12 the land
+/// event, which plays the default on material 0 and carries the view bob.
+fn landing_event(height: f32, ps: &PlayerState) -> Option<PmEvent> {
+    let mat = landing_material(ps.ground_surface_flags);
+    if height >= LANDING_DAMP_HEIGHT {
+        // (h - 12) / 26 * 4 + 4, truncated, at most 24; 0 at exactly 12
+        let bob = if height > LANDING_DAMP_HEIGHT {
+            (((height - LANDING_DAMP_HEIGHT) / 26.0 * 4.0 + 4.0) as i32).min(24)
+        } else {
+            0
+        };
+        return Some(PmEvent {
+            event: EV_LANDING_BASE + mat,
+            parm: bob,
+        });
     }
-    let id = if height >= LANDING_DAMP_HEIGHT {
-        EV_LANDING_BASE + mat
-    } else if height >= 8.0 {
-        EV_FOOTSTEP_RUN_BASE + mat
+    let base = if height >= 8.0 {
+        EV_FOOTSTEP_RUN_BASE
     } else if height > 4.0 {
-        EV_FOOTSTEP_WALK_BASE + mat
+        EV_FOOTSTEP_WALK_BASE
     } else {
         return None;
     };
-    Some(PmEvent { event: id, parm: 0 })
+    (mat != 0).then_some(PmEvent {
+        event: base + mat,
+        parm: 0,
+    })
 }
 
 /// A CoD 1.1 spectator: fly accelerate, friction always, and no collision at
@@ -1988,10 +2055,14 @@ fn check_ladder_move(
     input: &PmInput,
     world: &MoveWorld,
 ) -> Option<(Vec3, bool)> {
-    // retail's pm_time gate covers exactly this lock in vcod
     if ps.waterjump_ms > 0.0 {
         ps.on_ladder = false;
         return None;
+    }
+    // A running knockback or landing-stun timer skips the check and keeps
+    // last frame's ladder flag (`pm_time` test at 0x336f6).
+    if ps.knockback_ms > 0.0 {
+        return ps.on_ladder.then_some((ps.ladder_normal, false));
     }
     // skip detection within pm_ladderJumpTime of a jump (@0x33822): this
     // is what makes a push-off actually leave the wall
@@ -2224,7 +2295,6 @@ fn air_move(
     mask: u32,
     events: Option<&mut Vec<PmEvent>>,
 ) {
-    ps.air_speed_peak = ps.air_speed_peak.max(-ps.velocity.z);
     let (dir, wishspeed) = wish_air(ps, input);
     accelerate(ps, dir, wishspeed, PM_AIRACCELERATE, dt);
     step_slide_move(ps, world, dt, true, mask, events);
@@ -3103,13 +3173,104 @@ mod tests {
 
     #[test]
     fn landing_sound_bands_follow_fall_height() {
-        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
-        ps.ground_surface_flags = 6 << 20;
-        let band = |height: f32| landing_event(height, &ps).map(|e| e.event);
-        assert_eq!(band(4.0), None);
-        assert_eq!(band(4.5), Some(EV_FOOTSTEP_WALK_BASE + 6));
-        assert_eq!(band(11.5), Some(EV_FOOTSTEP_RUN_BASE + 6));
-        assert_eq!(band(12.0), Some(EV_LANDING_BASE + 6));
+        let band = |sf: u32, height: f32| {
+            let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+            ps.ground_surface_flags = sf;
+            landing_event(height, &ps).map(|e| (e.event, e.parm))
+        };
+        let dirt = 6 << 20;
+        assert_eq!(band(dirt, 4.0), None);
+        assert_eq!(band(dirt, 4.5), Some((EV_FOOTSTEP_WALK_BASE + 6, 0)));
+        assert_eq!(band(dirt, 11.5), Some((EV_FOOTSTEP_RUN_BASE + 6, 0)));
+        assert_eq!(band(dirt, 12.0), Some((EV_LANDING_BASE + 6, 0)));
+        // the land event's parm is the view bob, 4 at 12 up to 24
+        assert_eq!(band(dirt, 38.0), Some((EV_LANDING_BASE + 6, 8)));
+        assert_eq!(band(dirt, 200.0), Some((EV_LANDING_BASE + 6, 24)));
+        // material 0 silences the steps but lands on the default surface
+        let quiet = SURF_NO_SOUND | dirt;
+        assert_eq!(band(quiet, 11.5), None);
+        assert_eq!(band(quiet, 38.0), Some((EV_LANDING_BASE, 8)));
+    }
+
+    /// Drop a player from `height` onto flat dirt at 8 ms frames and return
+    /// the landing frame's state and events.
+    fn land_from(height: f32, sf: u32) -> (PlayerState, Vec<PmEvent>) {
+        let w = crate::collision::synthetic_world(
+            &[("textures/test/floor", crate::collision::CONTENTS_SOLID, sf)],
+            &[(0, [-2048.0, -2048.0, -16.0], [2048.0, 2048.0, 0.0])],
+        );
+        let w = MoveWorld::bare(&w);
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, height), 0.0);
+        ps.on_ground = false;
+        ps.velocity.x = 100.0;
+        for _ in 0..1000 {
+            let events = pmove(&mut ps, &PmInput::default(), &w, 8.0 / 1000.0, &[]);
+            if ps.on_ground {
+                return (ps, events);
+            }
+        }
+        panic!("never landed");
+    }
+
+    /// A fall past `bg_fallDamageMinHeight` (256) lands with the damage in
+    /// the pain event's parm, `pm_time` 35 * damage + 500 under 0x100 and
+    /// the velocity scaled by the stun's multiplier.
+    #[test]
+    fn a_damaging_landing_starts_the_stun() {
+        let dirt = 6 << 20;
+        let (ps, events) = land_from(300.0, dirt);
+        let damage = events
+            .iter()
+            .find(|e| e.event == EV_LANDING_PAIN_BASE + 6)
+            .map(|e| e.parm)
+            .expect("pain event");
+        // The velocity snap drops 0.4 a frame off gravity's 6.4, so the 300
+        // units read as 281 by the impact speed: 11 percent.
+        assert_eq!(damage, 11);
+        let stun = 35 * damage + 500;
+        assert_eq!(ps.knockback_ms, stun as f32);
+        assert_eq!(ps.knockback_flags, PMF_TIME_KNOCKBACK);
+        let scale = 0.5 - (stun - 500) as f32 / 1000.0 * 0.3;
+        // 38.45, snapped
+        assert_eq!(ps.velocity.x, (100.0 * scale).round(), "scale {scale}");
+
+        // past 28 percent the scale pins at 0.2, past 42 the timer at 2000
+        let (ps, events) = land_from(420.0, dirt);
+        let damage = events
+            .iter()
+            .find(|e| e.event >= EV_LANDING_PAIN_BASE)
+            .unwrap()
+            .parm;
+        assert!(damage > 42, "damage {damage}");
+        assert_eq!(ps.knockback_ms, 2000.0);
+        assert!((ps.velocity.x - 20.0).abs() < 0.01, "{}", ps.velocity.x);
+    }
+
+    /// Under the min height, on a no-damage or slick surface, and at 100
+    /// percent there is no stun; the last three damp by 0.67.
+    #[test]
+    fn a_soft_landing_starts_no_stun() {
+        let dirt = 6 << 20;
+        let (ps, events) = land_from(200.0, dirt);
+        assert_eq!((ps.knockback_ms, ps.knockback_flags), (0.0, 0));
+        assert_eq!(events[0].event, EV_LANDING_BASE + 6);
+        assert!((ps.velocity.x - 67.0).abs() < 0.01);
+
+        let (ps, events) = land_from(300.0, dirt | SURF_NODAMAGE);
+        assert_eq!((ps.knockback_ms, ps.knockback_flags), (0.0, 0));
+        assert_eq!(events[0].event, EV_LANDING_BASE + 6);
+
+        // 0x2 is slick
+        for (sf, height, what) in [(dirt | 0x2, 300.0, "slick"), (dirt, 600.0, "fatal")] {
+            let (ps, events) = land_from(height, sf);
+            assert_eq!((ps.knockback_ms, ps.knockback_flags), (0.0, 0), "{what}");
+            assert_eq!(events[0].event, EV_LANDING_PAIN_BASE + 6, "{what}");
+            assert!(
+                (ps.velocity.x - 67.0).abs() < 0.01,
+                "{what} {}",
+                ps.velocity.x
+            );
+        }
     }
 
     /// Water level 1-2 replaces the ground material with the fixed water ids

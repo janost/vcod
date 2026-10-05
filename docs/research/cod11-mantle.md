@@ -495,7 +495,9 @@ does not.
 (`cod11-sound-system.md`, "Landing"). VERIFIED live: every dive lands with
 it, the street's forward dive going from 224 to 125 within the landing
 snapshot, and a mover without it read 2.2 to 2.7 units ahead of retail on
-the snapshot after each dive landed.
+the snapshot after each dive landed. A damaging landing takes the stun's
+multiplier instead, and a slick or fatal one the same 0.67
+(`cod11-player-clip.md` 8.4).
 
 ### The eye through a stance change
 
