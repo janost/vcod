@@ -332,12 +332,12 @@ fn overlapping_pair_pushes_apart() {
     for _ in 0..20 {
         let (a, b) = (common::holding(&r.ca), common::holding(&r.cb));
         r.step(&a, &b);
-        if push_speed.is_none() {
-            if let Some([vx, vy]) = r.vel_of_a_seen_by_b() {
-                let speed = (vx * vx + vy * vy).sqrt();
-                if speed > 100.0 {
-                    push_speed = Some(speed);
-                }
+        if push_speed.is_none()
+            && let Some([vx, vy]) = r.vel_of_a_seen_by_b()
+        {
+            let speed = (vx * vx + vy * vy).sqrt();
+            if speed > 100.0 {
+                push_speed = Some(speed);
             }
         }
     }

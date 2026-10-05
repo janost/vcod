@@ -8,7 +8,7 @@ use glam::Vec3;
 
 use crate::audio::alias::{Channel, MasterSlave};
 use crate::audio::cues::Source;
-use crate::audio::spatial::{falloff, pan, Listener};
+use crate::audio::spatial::{Listener, falloff, pan};
 
 pub type VoiceId = u64;
 
@@ -285,10 +285,10 @@ impl VoiceTable {
         for v in &mut self.voices {
             // Unconditional so a 2D voice's tracked position stays current
             // too.
-            if let Source::Entity { num, pos } = &mut v.source {
-                if let Some(p) = entity_pos.get(num) {
-                    *pos = *p;
-                }
+            if let Source::Entity { num, pos } = &mut v.source
+                && let Some(p) = entity_pos.get(num)
+            {
+                *pos = *p;
             }
             let (spatial_scale, pan_v) = if v.spatial {
                 let p = match v.source {
@@ -680,9 +680,10 @@ mod tests {
             );
         }
         // An auto sound may not touch them.
-        assert!(t2
-            .add(nv(Source::Point(Vec3::ZERO), Channel::Auto), |_| false)
-            .is_err());
+        assert!(
+            t2.add(nv(Source::Point(Vec3::ZERO), Channel::Auto), |_| false)
+                .is_err()
+        );
         assert_eq!(t2.len(), SPATIAL_POOL);
         let _ = v;
     }

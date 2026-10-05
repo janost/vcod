@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use vcod_common::net::msg::{PlayerState, UserCmd, NULL_USERCMD};
+use vcod_common::net::msg::{NULL_USERCMD, PlayerState, UserCmd};
 use vcod_common::net::protocol::{ENTITYNUM_WORLD, PROTOCOL_V1};
 
 /// What this gate claims the server reproduces. The animation indices are

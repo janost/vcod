@@ -6,7 +6,7 @@
 //! constants and their provenance".
 
 use crate::collision::MASK_PLAYERSOLID;
-use crate::movetrace::{MoveWorld, MASK_DEADSOLID};
+use crate::movetrace::{MASK_DEADSOLID, MoveWorld};
 use crate::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use crate::weapon::WeaponDef;
 use glam::Vec3;
@@ -1462,11 +1462,7 @@ fn pitch_for_yaw_on_normal(yaw_deg: f32, normal: Vec3) -> f32 {
         return if p.z > 0.0 { 270.0 } else { 90.0 };
     }
     let pitch = -p.z.atan2(p.truncate().length()).to_degrees();
-    if pitch < 0.0 {
-        pitch + 360.0
-    } else {
-        pitch
-    }
+    if pitch < 0.0 { pitch + 360.0 } else { pitch }
 }
 
 /// The prone half of `PM_UpdateViewAngles` (0x32d7c): the body swinging to
@@ -2529,7 +2525,7 @@ fn step_view(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collision::{test_world, CollisionWorld};
+    use crate::collision::{CollisionWorld, test_world};
     use crate::movetrace::{Body, CONTENTS_BODY};
 
     fn flat() -> CollisionWorld {
@@ -2825,7 +2821,7 @@ mod tests {
     /// from one end's minimum to the other's (combat doc 2.1).
     #[test]
     fn a_prone_press_blends_the_hip_spread_minimum_across_both_legs() {
-        use weapon::{hip_spread_min, SpreadStance};
+        use weapon::{SpreadStance, hip_spread_min};
         let def = WeaponDef {
             hip_spread_stand_min: 3.0,
             hip_spread_ducked_min: 2.0,
@@ -3167,9 +3163,11 @@ mod tests {
             );
         }
         assert!(!events.is_empty(), "climbing at vz=80 must step");
-        assert!(events
-            .iter()
-            .all(|e| e.event == EV_FOOTSTEP_RUN_BASE + DEFAULT_MATERIAL));
+        assert!(
+            events
+                .iter()
+                .all(|e| e.event == EV_FOOTSTEP_RUN_BASE + DEFAULT_MATERIAL)
+        );
 
         // same climb against a wooden wall: the probe reports wood
         let wall = crate::collision::synthetic_world(
@@ -4920,11 +4918,7 @@ mod tests {
                 };
                 for sign in [-1.0f32, 1.0] {
                     let yaw = if dir == Vec3::X {
-                        if sign > 0.0 {
-                            180.0f32
-                        } else {
-                            0.0
-                        }
+                        if sign > 0.0 { 180.0f32 } else { 0.0 }
                     } else if sign > 0.0 {
                         90.0
                     } else {

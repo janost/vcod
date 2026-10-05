@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::{Protocol, ENTITYNUM_WORLD};
+use vcod_common::net::protocol::{ENTITYNUM_WORLD, Protocol};
 use vcod_common::net::trajectory::TR_LINEAR;
 use vcod_common::{bsp, collision::CollisionWorld};
 

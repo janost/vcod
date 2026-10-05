@@ -6,7 +6,7 @@ use std::rc::Rc;
 use crate::atom::{Atom, Interner};
 use crate::bytecode::{Function, Op};
 use crate::heap::ArrayKey;
-use crate::value::{format_number, FuncRef, Value};
+use crate::value::{FuncRef, Value, format_number};
 
 use super::sched::ThreadId;
 use super::{Cx, ErrorKind, Host, ScriptError, Target, Vm};
@@ -466,7 +466,7 @@ impl Vm {
                         _ => {
                             return Err(err(ErrorKind::BadType(
                                 "field access needs a struct or entity",
-                            )))
+                            )));
                         }
                     };
                     push!(v);
@@ -497,7 +497,7 @@ impl Vm {
                         _ => {
                             return Err(err(ErrorKind::BadType(
                                 "field assignment needs a struct or entity",
-                            )))
+                            )));
                         }
                     }
                 }
@@ -602,14 +602,14 @@ impl Vm {
                                     id
                                 }
                                 _ => {
-                                    return Err(err(ErrorKind::BadType("indexing needs an array")))
+                                    return Err(err(ErrorKind::BadType("indexing needs an array")));
                                 }
                             }
                         }
                         _ => {
                             return Err(err(ErrorKind::BadType(
                                 "field assignment needs a struct or entity",
-                            )))
+                            )));
                         }
                     };
                     push!(Value::Array(id));
@@ -709,10 +709,10 @@ impl Vm {
                     }
                     args.reverse();
                     let recv = if has_recv { as_target(pop!()) } else { None };
-                    if let Some(Target::Entity(id)) = recv {
-                        if !host.is_live(id) {
-                            return Err(err(DEAD_ENTITY));
-                        }
+                    if let Some(Target::Entity(id)) = recv
+                        && !host.is_live(id)
+                    {
+                        return Err(err(DEAD_ENTITY));
                     }
                     let mut cx = Cx {
                         interner: &mut self.interner,
@@ -996,10 +996,10 @@ impl Vm {
                     // No thread to register against under `call_now`
                     // (`thread_id` is `None` there); the registration is
                     // simply dropped.
-                    if let Some(id) = thread_id {
-                        if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
-                            self.threads[idx].endons.push((target, event));
-                        }
+                    if let Some(id) = thread_id
+                        && let Some(idx) = self.threads.iter().position(|t| t.id == id)
+                    {
+                        self.threads[idx].endons.push((target, event));
                     }
                 }
             }

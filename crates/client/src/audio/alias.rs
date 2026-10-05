@@ -458,7 +458,9 @@ mod tests {
 
     #[test]
     fn skips_rows_without_name_or_file_and_unknown_channels() {
-        let text = format!("{HEADER}\n,,a.wav,,,,,,,,,,,,,\nnofile,,,,,,,,,,,,,,,\nbadchan,,a.wav,,,,,,,bogus,,,,,,\nok,,a.wav,,,,,,,,,,,,,\n");
+        let text = format!(
+            "{HEADER}\n,,a.wav,,,,,,,,,,,,,\nnofile,,,,,,,,,,,,,,,\nbadchan,,a.wav,,,,,,,bogus,,,,,,\nok,,a.wav,,,,,,,,,,,,,\n"
+        );
         let t = AliasTable::parse_csv(&text, "test");
         assert_eq!(t.len(), 2); // badchan keeps the row with Channel::Auto, ok too
         assert_eq!(t.get("badchan").unwrap()[0].channel, Channel::Auto);
@@ -554,7 +556,9 @@ mod tests {
 
     #[test]
     fn pick_weights_variants_and_reports_silence() {
-        let text = format!("{HEADER}\nw,1,a.wav,,,,,,,,,1,,,,\nw,2,b.wav,,,,,,,,,1,,,,\nw,3,null.wav,,,,,,,,,2,,,,\n");
+        let text = format!(
+            "{HEADER}\nw,1,a.wav,,,,,,,,,1,,,,\nw,2,b.wav,,,,,,,,,1,,,,\nw,3,null.wav,,,,,,,,,2,,,,\n"
+        );
         let t = AliasTable::parse_csv(&text, "test");
 
         let (p, idx) = t.pick("w", 0.0, None);
@@ -607,9 +611,10 @@ mod tests {
         let th = &t.get("weap_thompson_fire").unwrap()[0];
         assert_eq!((th.dist, th.channel), ((7.0, 7800.0), Channel::Weapon));
         let wb = t.get("whizby").unwrap();
-        assert!(wb
-            .iter()
-            .any(|r| r.file == "null.wav" && r.probability == 5));
+        assert!(
+            wb.iter()
+                .any(|r| r.file == "null.wav" && r.probability == 5)
+        );
         let amb = &t.get("ambient_mp_carentan").unwrap()[0];
         assert!(amb.streamed && amb.looping && amb.channel == Channel::Local);
         // pak1 has a `local` row on every install; the Deluxe paks add an

@@ -3,11 +3,11 @@
 //! (`vcod_common::pmove::predict`), and retail's `cg_errordecay` easing out
 //! what a new snapshot corrects.
 
-use super::cmds::{CmdRing, CMD_MS};
+use super::cmds::{CMD_MS, CmdRing};
 use glam::Vec3;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use vcod_common::collision::CollisionWorld;
-use vcod_common::movetrace::{Body, MoveWorld, CONTENTS_BODY};
+use vcod_common::movetrace::{Body, CONTENTS_BODY, MoveWorld};
 use vcod_common::net::msg;
 use vcod_common::net::protocol::Protocol;
 use vcod_common::pmove::predict::{self, Predicted};
@@ -421,9 +421,10 @@ mod tests {
         assert_eq!(misses, 1);
 
         let mut pr = Predictor::default();
-        assert!(pr
-            .predict(P, &snap, &CmdRing::default(), &world, &[], &[], 0.0)
-            .is_none());
+        assert!(
+            pr.predict(P, &snap, &CmdRing::default(), &world, &[], &[], 0.0)
+                .is_none()
+        );
         assert_eq!(pr.misses, 1);
     }
 
@@ -558,9 +559,11 @@ mod tests {
         let mut snap = standing(5000, 0.0);
         set(&mut snap, "pm_type", 6);
         let r = ring((5008..=5040).step_by(8), false);
-        assert!(Predictor::default()
-            .predict(P, &snap, &r, &world, &[], &[], 0.0)
-            .is_none());
+        assert!(
+            Predictor::default()
+                .predict(P, &snap, &r, &world, &[], &[], 0.0)
+                .is_none()
+        );
     }
 
     /// Two frames on idle cmds: the first on a snapshot at x 0, the second

@@ -1,5 +1,5 @@
 use crate::pk3::Pk3Fs;
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 use std::collections::HashMap;
 
 /// Block-compressed layouts from `parse_dds`. Variant names mirror

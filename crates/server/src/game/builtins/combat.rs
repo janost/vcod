@@ -2,7 +2,7 @@
 //! real collision trace.
 
 use crate::game::builtins::client::client_receiver;
-use crate::game::combat::{mod_index, DFLAG_NO_KNOCKBACK, DFLAG_RADIUS, MOD_FLAGGED};
+use crate::game::combat::{DFLAG_NO_KNOCKBACK, DFLAG_RADIUS, MOD_FLAGGED, mod_index};
 use crate::game::host::{GameHost, SimOp};
 use crate::game::script::CALLBACK_SETUP;
 use crate::game::temp_entity::{Scope, TempEntity};
@@ -49,7 +49,18 @@ pub fn finish_player_damage(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
-    let [inflictor, attacker, damage, dflags, mod_, weapon, point, dir, hitloc] = args else {
+    let [
+        inflictor,
+        attacker,
+        damage,
+        dflags,
+        mod_,
+        weapon,
+        point,
+        dir,
+        hitloc,
+    ] = args
+    else {
         return Err(ErrorKind::BadType(
             "finishPlayerDamage takes nine arguments",
         ));
@@ -473,7 +484,7 @@ pub fn radius_damage(
 /// `CanDamage` needs (combat doc, 14.3), which is all a script-side victim
 /// has, its stance living on the sim rather than on the host.
 fn standing_victim(slot: usize, origin: Vec3) -> crate::game::combat::BlastVictim {
-    use vcod_common::pmove::{Stance, HALF_WIDTH};
+    use vcod_common::pmove::{HALF_WIDTH, Stance};
     crate::game::combat::BlastVictim {
         slot,
         origin,

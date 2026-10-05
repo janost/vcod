@@ -10,7 +10,7 @@
 //! does. A raw byte read in the middle of a run of bit fields lands after the
 //! byte those bits are still filling.
 
-use super::huffman::{add_bit, get_bit, Huffman};
+use super::huffman::{Huffman, add_bit, get_bit};
 use super::protocol::Protocol;
 
 const MAX_STRING_CHARS: usize = 1024;

@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
+use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 use vcod_common::net::{NetClient, NetEvent, Transport};
 use vcod_server::Server;
 
@@ -535,10 +535,10 @@ pub fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
         } else if !line.starts_with('!') {
             // The settled field lines: `<name> <i32>`, the playerstate the
             // step ended at.
-            if let Some((k, v)) = line.split_once(' ') {
-                if let Ok(v) = v.trim().parse::<i32>() {
-                    step.settled.insert(k.to_string(), v);
-                }
+            if let Some((k, v)) = line.split_once(' ')
+                && let Ok(v) = v.trim().parse::<i32>()
+            {
+                step.settled.insert(k.to_string(), v);
             }
         }
         // `!observed` is not compared here.

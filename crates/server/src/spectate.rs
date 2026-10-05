@@ -2,11 +2,11 @@
 
 use crate::game::host::SimOp;
 use glam::Vec3;
-use vcod_common::movetrace::{Body, MoveWorld, CONTENTS_BODY, CONTENTS_CORPSE};
+use vcod_common::movetrace::{Body, CONTENTS_BODY, CONTENTS_CORPSE, MoveWorld};
 use vcod_common::net::msg::{self, UserCmd};
 use vcod_common::net::protocol::Protocol;
 use vcod_common::net::trajectory;
-use vcod_common::pmove::cmd::{self, view_angles, EventRing, ANGLE2SHORT};
+use vcod_common::pmove::cmd::{self, ANGLE2SHORT, EventRing, view_angles};
 use vcod_common::pmove::{self, PmEvent};
 use vcod_common::weapon::WeaponDef;
 
@@ -774,11 +774,10 @@ impl ClientSim {
         } else {
             return;
         };
-        if forced < 0 {
-            if let Some(t) = crate::follow::cycle(self.follow.target, dir, max_clients, followable)
-            {
-                self.follow.target = Some(t);
-            }
+        if forced < 0
+            && let Some(t) = crate::follow::cycle(self.follow.target, dir, max_clients, followable)
+        {
+            self.follow.target = Some(t);
         }
     }
 
@@ -1775,11 +1774,7 @@ fn vec_to_yaw(v: Vec3) -> f32 {
         return 0.0;
     }
     let yaw = v.y.atan2(v.x).to_degrees();
-    if yaw < 0.0 {
-        yaw + 360.0
-    } else {
-        yaw
-    }
+    if yaw < 0.0 { yaw + 360.0 } else { yaw }
 }
 
 /// `vectoangles` as `(pitch, yaw)`, both 0..360, the reading the gsc
@@ -1788,11 +1783,7 @@ fn vec_to_yaw(v: Vec3) -> f32 {
 fn vec_to_angles(v: Vec3) -> (f32, f32) {
     let yaw = vec_to_yaw(v);
     let mut pitch = if v.x == 0.0 && v.y == 0.0 {
-        if v.z > 0.0 {
-            90.0
-        } else {
-            270.0
-        }
+        if v.z > 0.0 { 90.0 } else { 270.0 }
     } else {
         v.z.atan2(v.truncate().length()).to_degrees()
     };

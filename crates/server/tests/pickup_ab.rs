@@ -27,8 +27,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use common::{holding, ClientEnd, Queues, CMD_MS, FRAME_MS};
-use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
+use common::{CMD_MS, ClientEnd, FRAME_MS, Queues, holding};
+use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::snapshot::Snapshot;
 use vcod_common::net::trajectory::Trajectory;

@@ -7,14 +7,14 @@ use crate::game::temp_entity::{Scope, TempEntity};
 use crate::spectate::ClientSim;
 use glam::{Quat, Vec3};
 use vcod_common::animtree::PlayerAnims;
-use vcod_common::bonetrace::{bone_trace, PriorityMap};
-use vcod_common::collision::{sound_material, CollisionWorld, CONTENTS_GLASS};
+use vcod_common::bonetrace::{PriorityMap, bone_trace};
+use vcod_common::collision::{CONTENTS_GLASS, CollisionWorld, sound_material};
 use vcod_common::net::events::dir_to_byte;
 use vcod_common::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::playerpose::pose_player;
-use vcod_common::pmove::weapon::{hip_spread_min, SpreadStance};
 use vcod_common::pmove::PlayerState;
+use vcod_common::pmove::weapon::{SpreadStance, hip_spread_min};
 use vcod_common::weapon::WeaponDef;
 use vcod_gsc::EntId;
 
@@ -1445,9 +1445,10 @@ mod tests {
         );
         assert!(r.hits().next().is_none());
         assert_eq!(r.impacts().count(), 13, "one per leg, all on the pane");
-        assert!(r
-            .impacts()
-            .all(|t| t.surf_type == 9 && (t.origin[0] - 40.0).abs() < 0.2));
+        assert!(
+            r.impacts()
+                .all(|t| t.surf_type == 9 && (t.origin[0] - 40.0).abs() < 0.2)
+        );
     }
 
     /// Combat doc 4.5: the plain copy carries the direction twice and goes
@@ -1616,9 +1617,10 @@ mod tests {
         assert_eq!(by[&3], 62, "62.5 truncated");
         assert_eq!(by[&4], 5, "5.33 truncated");
         assert!(!by.contains_key(&5), "past the radius");
-        assert!(hits
-            .iter()
-            .all(|h| h.dflags == DFLAG_RADIUS && h.mod_ == "MOD_GRENADE_SPLASH"));
+        assert!(
+            hits.iter()
+                .all(|h| h.dflags == DFLAG_RADIUS && h.mod_ == "MOD_GRENADE_SPLASH")
+        );
         assert!(hits.iter().all(|h| h.hitloc == "none" && h.attacker == 0));
         // The direction is the blast to the victim with 24 added to z, and
         // not a unit vector: its length is what carries the distance.

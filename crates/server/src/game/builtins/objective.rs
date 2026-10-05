@@ -6,7 +6,7 @@
 //! on detach; no entity here carries `eFlags`, so only the record's `entNum`
 //! moves.
 
-use crate::game::host::{empty_objective, GameHost, ENTITYNUM_NONE};
+use crate::game::host::{ENTITYNUM_NONE, GameHost, empty_objective};
 use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
 use vcod_common::net::msg::MAX_OBJECTIVES;
 use vcod_gsc::{Cx, ErrorKind, Target, Value};

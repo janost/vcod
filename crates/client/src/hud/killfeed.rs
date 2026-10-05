@@ -3,8 +3,8 @@
 
 use std::collections::VecDeque;
 
-use super::font::{self, Font};
 use super::HudQuad;
+use super::font::{self, Font};
 use vcod_common::net::events::GameEvent;
 
 pub const FEED_LINES: usize = 5;

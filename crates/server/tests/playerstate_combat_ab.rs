@@ -11,7 +11,7 @@
 
 mod common;
 
-use common::{parse_fixture, replay, Sample, Trace, CMD_MS, FRAME_MS};
+use common::{CMD_MS, FRAME_MS, Sample, Trace, parse_fixture, replay};
 use std::collections::BTreeSet;
 use vcod_common::net::protocol::PROTOCOL_V1;
 

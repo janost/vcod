@@ -122,21 +122,22 @@ pub(crate) fn alt_weapon_index(index: usize) -> Option<usize> {
     let name = weapons[index - 1];
 
     // `index` is the base weapon: its alt mode is the next slot.
-    if let Some(base) = name.strip_suffix("_mp") {
-        if index < weapons.len() {
-            let next = weapons[index];
-            if next == format!("{base}_semi_mp") || next == format!("{base}_slow_mp") {
-                return Some(index + 1);
-            }
+    if let Some(base) = name.strip_suffix("_mp")
+        && index < weapons.len()
+    {
+        let next = weapons[index];
+        if next == format!("{base}_semi_mp") || next == format!("{base}_slow_mp") {
+            return Some(index + 1);
         }
     }
 
     // `index` is the alt mode: the base weapon is the previous slot.
     for suffix in ["_semi_mp", "_slow_mp"] {
-        if let Some(root) = name.strip_suffix(suffix) {
-            if index > 1 && weapons[index - 2] == format!("{root}_mp") {
-                return Some(index - 1);
-            }
+        if let Some(root) = name.strip_suffix(suffix)
+            && index > 1
+            && weapons[index - 2] == format!("{root}_mp")
+        {
+            return Some(index - 1);
         }
     }
 

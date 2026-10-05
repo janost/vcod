@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{connect, step, step_dropping_reply, ClientEnd, Queues};
+use common::{ClientEnd, Queues, connect, step, step_dropping_reply};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};

@@ -9,11 +9,11 @@
 
 mod common;
 
-use common::{step_pair, ClientEnd, Join, Queues, FRAME_MS};
+use common::{ClientEnd, FRAME_MS, Join, Queues, step_pair};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use vcod_common::net::msg::{UserCmd, BUTTON_USE, NULL_USERCMD};
+use vcod_common::net::msg::{BUTTON_USE, NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::{NetClient, NetEvent};
 

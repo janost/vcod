@@ -15,14 +15,14 @@ use std::collections::{BTreeMap, HashMap};
 use crate::fx::registry::EV_OBITUARY;
 use crate::play::input::{EF_CROUCH, EF_PRONE};
 use vcod_common::localize::Localized;
+use vcod_common::net::NetEvent;
 use vcod_common::net::events::GameEvent;
 use vcod_common::net::msg::{ClientState, HudElem, PlayerState};
 use vcod_common::net::protocol::Protocol;
-use vcod_common::net::NetEvent;
 use vcod_common::pk3::Pk3Fs;
+use vcod_common::pmove::Stance;
 use vcod_common::pmove::predict::Predicted;
 use vcod_common::pmove::weapon::SpreadStance;
-use vcod_common::pmove::Stance;
 use vcod_common::weapon::WeaponDef;
 
 use chat::Chat;

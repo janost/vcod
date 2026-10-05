@@ -15,7 +15,7 @@
 
 mod common;
 
-use common::{header_value, Queues};
+use common::{Queues, header_value};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;

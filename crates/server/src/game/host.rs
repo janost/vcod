@@ -7,13 +7,13 @@
 
 use crate::configstrings::{Allocators, CsRange};
 use crate::game::builtins;
-use crate::game::entity::{ObjectTable, ThinkFn, FIRST_HUD_ELEM};
+use crate::game::entity::{FIRST_HUD_ELEM, ObjectTable, ThinkFn};
 use crate::game::fields::{self, FieldType, Route};
 use crate::server::MAX_CLIENTS;
 use std::collections::HashMap;
 use std::rc::Rc;
 use vcod_common::collision::ModelTri;
-use vcod_common::net::msg::{Objective, MAX_OBJECTIVES};
+use vcod_common::net::msg::{MAX_OBJECTIVES, Objective};
 use vcod_common::pmove::weapon::NUM_AMMO;
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, Host, Target, Value};
 
@@ -723,15 +723,15 @@ impl GameHost {
     pub fn free_entity(&mut self, id: EntId) {
         // `G_FreeTurret` (turrets doc 8): a manned gun lets its gunner go
         // before the record goes; the sim half waits for `ClientEndFrame`.
-        if let Some(mut rec) = self.turrets.remove(&id) {
-            if let Some((slot, origin, stance)) = crate::game::turret::release(&mut rec) {
-                self.turret_ops
-                    .push(crate::game::turret::TurretOp::Release {
-                        slot,
-                        origin,
-                        stance,
-                    });
-            }
+        if let Some(mut rec) = self.turrets.remove(&id)
+            && let Some((slot, origin, stance)) = crate::game::turret::release(&mut rec)
+        {
+            self.turret_ops
+                .push(crate::game::turret::TurretOp::Release {
+                    slot,
+                    origin,
+                    stance,
+                });
         }
         self.triggers.remove(id);
         // A mover's row goes with the entity rather than a frame later: the
@@ -1017,10 +1017,10 @@ impl Host for GameHost {
         field: Atom,
         value: Value,
     ) -> Result<(), ErrorKind> {
-        if ent.0 >= FIRST_HUD_ELEM {
-            if let Some(r) = self.set_hud_field(cx, ent, field, value) {
-                return r;
-            }
+        if ent.0 >= FIRST_HUD_ELEM
+            && let Some(r) = self.set_hud_field(cx, ent, field, value)
+        {
+            return r;
         }
         let route = if ent.0 >= FIRST_HUD_ELEM {
             fields::route_hud(cx.resolve_folded(field))
@@ -1525,9 +1525,10 @@ mod tests {
         vm.with_cx(|cx| {
             let origin = cx.intern_folded("origin");
             assert!(host.set_field(cx, e, origin, Value::Int(1)).is_err());
-            assert!(host
-                .set_field(cx, e, origin, Value::Vector([1.0, 2.0, 3.0]))
-                .is_ok());
+            assert!(
+                host.set_field(cx, e, origin, Value::Vector([1.0, 2.0, 3.0]))
+                    .is_ok()
+            );
         });
     }
 

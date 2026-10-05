@@ -3,7 +3,7 @@
 
 use crate::pk3::Pk3Fs;
 use crate::xmodel::Reader;
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{Result, anyhow, ensure};
 use glam::{Quat, Vec3};
 
 #[derive(Debug)]
@@ -324,10 +324,12 @@ mod tests {
 
     #[test]
     fn rejects_wrong_version_and_unknown_flags() {
-        assert!(parse("v", &20u16.to_le_bytes())
-            .unwrap_err()
-            .to_string()
-            .contains("14"));
+        assert!(
+            parse("v", &20u16.to_le_bytes())
+                .unwrap_err()
+                .to_string()
+                .contains("14")
+        );
         let mut d = fixture();
         d[6] = 4; // no flag above 0x3 occurs in the shipped corpus
         assert!(parse("f", &d).unwrap_err().to_string().contains("flags"));
@@ -457,9 +459,10 @@ mod tests {
         let (_, q0) = t.sample(0.0);
         assert!(q0.unwrap().abs_diff_eq(Quat::IDENTITY, 1e-3));
         let (_, q2) = t.sample(2.0);
-        assert!(q2
-            .unwrap()
-            .abs_diff_eq(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2), 1e-3));
+        assert!(
+            q2.unwrap()
+                .abs_diff_eq(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2), 1e-3)
+        );
     }
 
     #[test]

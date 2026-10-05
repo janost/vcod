@@ -101,12 +101,13 @@ impl Skeleton {
             let base_len = if mi == 0 { 0 } else { maps[0].len() };
             let mut map = Vec::with_capacity(model.bones.len());
             for (bi, b) in model.bones.iter().enumerate() {
-                if mi > 0 && bi > 0 {
-                    if let Some(si) = bones[..base_len].iter().position(|s| s.name == b.name) {
-                        adopt_hit_box(&mut bones[si], b);
-                        map.push(si);
-                        continue;
-                    }
+                if mi > 0
+                    && bi > 0
+                    && let Some(si) = bones[..base_len].iter().position(|s| s.name == b.name)
+                {
+                    adopt_hit_box(&mut bones[si], b);
+                    map.push(si);
+                    continue;
                 }
                 // The graft point: a later model's root aliases an existing bone.
                 if mi > 0 && bi == 0 {

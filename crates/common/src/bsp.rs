@@ -1,6 +1,6 @@
 //! IBSP 59 parser. Layouts: docs/research/bsp-ibsp59-format.md.
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{Result, anyhow, ensure};
 
 pub const LIGHTMAP_SIZE: usize = 512;
 pub const NO_LIGHTMAP: u16 = 65535;
@@ -373,10 +373,10 @@ impl Visibility {
             return;
         }
         if i < 0 {
-            if let Some(l) = self.leafs.get((-(i + 1)) as usize) {
-                if l.cluster >= 0 {
-                    out.push(l.cluster);
-                }
+            if let Some(l) = self.leafs.get((-(i + 1)) as usize)
+                && l.cluster >= 0
+            {
+                out.push(l.cluster);
             }
             return;
         }
@@ -1235,9 +1235,11 @@ mod tests {
             assert!(s.first_vertex as usize + s.vertex_count as usize <= bsp.verts.len());
             let fi = s.first_index as usize;
             let chunk = &bsp.indices[fi..fi + s.index_count as usize];
-            assert!(chunk
-                .iter()
-                .all(|&i| (i as usize) < s.vertex_count as usize));
+            assert!(
+                chunk
+                    .iter()
+                    .all(|&i| (i as usize) < s.vertex_count as usize)
+            );
         }
         assert!(bsp.entities.contains("classname"));
         // winding the back-face culling relies on: cross(p1-p0, p2-p0)
@@ -1439,10 +1441,11 @@ mod tests {
         // and the remaining 568-72 slots belong to the portals
         let last_occ = bsp.occluders.last().unwrap();
         assert_eq!(last_occ.first_vert + last_occ.vert_count as u32, 72);
-        assert!(bsp
-            .portals
-            .iter()
-            .all(|p| p.first_vert >= last_occ.first_vert + last_occ.vert_count as u32));
+        assert!(
+            bsp.portals
+                .iter()
+                .all(|p| p.first_vert >= last_occ.first_vert + last_occ.vert_count as u32)
+        );
         // cells 0/3/12 carry the 11 occluder references (all of them no. 0)
         let refering: Vec<(u32, u32)> = bsp
             .cells

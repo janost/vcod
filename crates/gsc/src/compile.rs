@@ -935,10 +935,11 @@ mod tests {
     fn an_unknown_bare_name_compiles_to_a_builtin_call() {
         let (i, f) = compile(r#"m() { iprintln("hi"); }"#);
         let name = i.get_folded("iprintln").unwrap();
-        assert!(f[0]
-            .code
-            .iter()
-            .any(|o| matches!(o, Op::CallBuiltin { name: n, argc: 1, .. } if *n == name)));
+        assert!(
+            f[0].code
+                .iter()
+                .any(|o| matches!(o, Op::CallBuiltin { name: n, argc: 1, .. } if *n == name))
+        );
     }
 
     #[test]

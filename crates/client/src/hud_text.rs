@@ -369,9 +369,10 @@ mod tests {
             2.0 * GLYPH_W as f32 / ATLAS_W as f32,
         );
         let v1 = GLYPH_H as f32 / ATLAS_H as f32;
-        assert!(us
-            .iter()
-            .all(|&u| (u - u0).abs() < 1e-6 || (u - u1).abs() < 1e-6));
+        assert!(
+            us.iter()
+                .all(|&u| (u - u0).abs() < 1e-6 || (u - u1).abs() < 1e-6)
+        );
         assert!(vs.iter().all(|&v| v.abs() < 1e-6 || (v - v1).abs() < 1e-6));
     }
 }

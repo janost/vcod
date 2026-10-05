@@ -5,9 +5,9 @@
 //! ground snap" and "What the collider does to a walker on a terrain seam".
 
 use glam::Vec3;
-use vcod_common::collision::{synthetic_world_tris, CollisionWorld, CONTENTS_SOLID};
+use vcod_common::collision::{CONTENTS_SOLID, CollisionWorld, synthetic_world_tris};
 use vcod_common::movetrace::MoveWorld;
-use vcod_common::pmove::{pmove, PlayerState, PmInput};
+use vcod_common::pmove::{PlayerState, PmInput, pmove};
 
 const MINS: Vec3 = Vec3::new(-15.0, -15.0, 0.0);
 const MAXS: Vec3 = Vec3::new(15.0, 15.0, 70.0);

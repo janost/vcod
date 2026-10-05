@@ -16,12 +16,12 @@
 
 mod common;
 
-use common::{header_value, Join, Queues};
+use common::{Join, Queues, header_value};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
 use vcod_common::net::msg::PlayerState;
-use vcod_common::net::protocol::{Protocol, PROTOCOL_V1};
+use vcod_common::net::protocol::{PROTOCOL_V1, Protocol};
 
 /// Fields the server knowingly does not reproduce, each with the reason.
 /// Empty is the goal and it is empty: `legsAnim` was the last entry and the

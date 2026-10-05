@@ -79,14 +79,13 @@ impl Join {
                     log::warn!("t {idx}: no script menu at that configstring index");
                     return Vec::new();
                 };
-                if !self.auto_answered.contains(&idx) {
-                    if let Some(reply) =
+                if !self.auto_answered.contains(&idx)
+                    && let Some(reply) =
                         auto_reply(name, self.team.as_deref(), self.weapon.as_deref())
-                    {
-                        self.auto_answered.push(idx);
-                        self.open = None;
-                        return vec![format!("mr {server_id} {idx} {reply}")];
-                    }
+                {
+                    self.auto_answered.push(idx);
+                    self.open = None;
+                    return vec![format!("mr {server_id} {idx} {reply}")];
                 }
                 self.open = Some(OpenMenu {
                     index: idx,
@@ -172,9 +171,10 @@ mod tests {
     #[test]
     fn t_opens_the_menu_its_configstring_names() {
         let mut j = Join::new(None, None);
-        assert!(j
-            .on_server_command(&toks("v g_scriptMainMenu team_russiangerman"), &cs(), 7)
-            .is_empty());
+        assert!(
+            j.on_server_command(&toks("v g_scriptMainMenu team_russiangerman"), &cs(), 7)
+                .is_empty()
+        );
         assert!(j.on_server_command(&toks("t 0"), &cs(), 7).is_empty());
         let open = j.open().unwrap();
         assert_eq!((open.index, open.name.as_str()), (0, "team_russiangerman"));

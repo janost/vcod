@@ -5,10 +5,10 @@
 use std::collections::BTreeSet;
 use std::sync::Mutex;
 
-use super::font::{self, Font};
 use super::HudQuad;
+use super::font::{self, Font};
 use vcod_common::localize::Localized;
-use vcod_common::net::msg::{hud_field as f, HudElem};
+use vcod_common::net::msg::{HudElem, hud_field as f};
 
 /// `text`, `label` and the hint strings index configstrings from here.
 pub const CS_LOCALIZED: usize = 1244;

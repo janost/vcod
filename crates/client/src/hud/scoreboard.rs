@@ -3,8 +3,8 @@
 
 use std::collections::HashMap;
 
-use super::font::{self, Font};
 use super::HudQuad;
+use super::font::{self, Font};
 
 /// The stock client's re-request cadence while the board is up (doc section 4).
 pub const REQUEST_INTERVAL: f32 = 2.0;

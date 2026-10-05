@@ -3,7 +3,7 @@
 //! arithmetic (`crate::game::pickup`) runs on. Addresses are in
 //! docs/research/cod11-items.md.
 
-use crate::game::entity::{ThinkFn, ENTITYNUM_WORLD};
+use crate::game::entity::{ENTITYNUM_WORLD, ThinkFn};
 use crate::game::host::{GameHost, WeaponOp};
 use crate::game::pickup::{Dropped, Inventory};
 use vcod_common::pmove::weapon::NUM_AMMO;

@@ -14,15 +14,15 @@
 use crate::game::entity::ObjectTable;
 use crate::spectate::{ClientSim, PmType};
 use glam::Vec3;
-use vcod_common::collision::{sound_material, CollisionWorld, CONTENTS_WATER};
+use vcod_common::collision::{CONTENTS_WATER, CollisionWorld, sound_material};
 use vcod_common::net::events::dir_to_byte;
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::{Protocol, ENTITYNUM_NONE, ENTITYNUM_WORLD};
+use vcod_common::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD, Protocol};
 use vcod_common::net::trajectory::{
-    Trajectory, DEFAULT_GRAVITY, TR_GRAVITY, TR_LINEAR, TR_STATIONARY,
+    DEFAULT_GRAVITY, TR_GRAVITY, TR_LINEAR, TR_STATIONARY, Trajectory,
 };
-use vcod_common::pmove::cmd::EventRing;
 use vcod_common::pmove::PlayerState;
+use vcod_common::pmove::cmd::EventRing;
 use vcod_common::weapon::WeaponDef;
 use vcod_gsc::{Cx, EntId, ErrorKind, Value};
 
@@ -241,14 +241,14 @@ impl Missile {
         // retail's would be the bone's.
         let mut tr = world.missile_trace(self.origin, to);
         let mut hit_player = false;
-        if let Some((_, f)) = nearest_player(self.origin, to, self.owner, sims) {
-            if f < tr.fraction {
-                tr.fraction = f;
-                tr.endpos = self.origin + travel * f;
-                tr.normal = (self.origin - to).normalize_or_zero();
-                tr.surface_flags = 0;
-                hit_player = true;
-            }
+        if let Some((_, f)) = nearest_player(self.origin, to, self.owner, sims)
+            && f < tr.fraction
+        {
+            tr.fraction = f;
+            tr.endpos = self.origin + travel * f;
+            tr.normal = (self.origin - to).normalize_or_zero();
+            tr.surface_flags = 0;
+            hit_player = true;
         }
         self.origin = tr.endpos;
         // 12.2's ground snap, into the same trace struct: 12.3 then reads
@@ -472,10 +472,9 @@ impl Missiles {
         // from being sent twice.
         if let crate::game::fields::Route::Engine { slot, .. } =
             crate::game::fields::route_entity("classname")
+            && let Some(e) = ents.get_mut(id)
         {
-            if let Some(e) = ents.get_mut(id) {
-                e.engine[slot] = Value::String(cx.intern_exact("grenade"));
-            }
+            e.engine[slot] = Value::String(cx.intern_exact("grenade"));
         }
         let mut angles = vectoangles(velocity);
         angles.x = normalize_360(angles.x - LAUNCH_PITCH_LEAD);

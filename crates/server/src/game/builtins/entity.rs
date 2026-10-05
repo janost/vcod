@@ -5,7 +5,7 @@
 //! Task 9 adds more families beside this one.
 
 use crate::configstrings::CsRange;
-use crate::game::entity::{ThinkFn, FIRST_HUD_ELEM};
+use crate::game::entity::{FIRST_HUD_ELEM, ThinkFn};
 use crate::game::host::{GameHost, LinkOp, SpawnMode, SpawnRequest};
 use crate::game::trigger::{PLAYER_MAXS, PLAYER_MINS};
 use crate::server::MAX_CLIENTS;
@@ -1302,13 +1302,15 @@ mod tests {
             );
             // Only a client links: retail gates on the receiver's svFlags
             // 0x20, which `ClientSpawn` is what sets in stock MP (23.2).
-            assert!(link_to(
-                &mut host,
-                cx,
-                Some(Target::Entity(zone)),
-                &[Value::Entity(zone)]
-            )
-            .is_err());
+            assert!(
+                link_to(
+                    &mut host,
+                    cx,
+                    Some(Target::Entity(zone)),
+                    &[Value::Entity(zone)]
+                )
+                .is_err()
+            );
             // `unlink()` on an unlinked player is a no-op, not an error.
             assert!(unlink(&mut host, cx, Some(Target::Entity(player)), &[]).is_ok());
         });

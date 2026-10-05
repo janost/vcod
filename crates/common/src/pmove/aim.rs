@@ -11,7 +11,7 @@
 //! extended precision: at a few million milliseconds an f32 argument has
 //! lost the fractional part that decides the phase.
 
-use super::{PlayerState, Stance, LEAN_MAX, SPEED_RUN};
+use super::{LEAN_MAX, PlayerState, SPEED_RUN, Stance};
 use crate::weapon::{AimDef, WeaponDef};
 
 /// `client+0x2278..0x22a8`: what the block keeps between cmds. The gun-kick
@@ -71,11 +71,7 @@ fn angle_normalize_360(a: f32) -> f32 {
 /// `AngleNormalize180` (`0x3eb70`).
 pub fn angle_normalize_180(a: f32) -> f32 {
     let a = angle_normalize_360(a);
-    if a > 180.0 {
-        a - 360.0
-    } else {
-        a
-    }
+    if a > 180.0 { a - 360.0 } else { a }
 }
 
 /// `AngleSubtract` (`0x3e968`): the difference wrapped into -180..180 by

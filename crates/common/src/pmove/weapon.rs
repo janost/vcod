@@ -181,11 +181,7 @@ const AIR_SPREAD_ADD: f32 = 1.28 + 1.28;
 /// spells none.
 fn trans_ms(seconds: f32, fallback: f32) -> f32 {
     let ms = ms(seconds) as f32;
-    if ms > 0.0 {
-        ms
-    } else {
-        fallback
-    }
+    if ms > 0.0 { ms } else { fallback }
 }
 
 /// `PM_UpdateAimDownSightFlag` (`game.mp.i386.so` 0x37230), combat doc 1.13.

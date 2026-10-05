@@ -5,10 +5,10 @@
 //! ring of recent snapshots a delta frame resolves its base from.
 
 use super::msg::{
-    read_delta_client, read_delta_entity, read_delta_playerstate, write_delta_entity, ClientState,
-    EntityState, MsgReader, MsgWriter, PlayerState,
+    ClientState, EntityState, MsgReader, MsgWriter, PlayerState, read_delta_client,
+    read_delta_entity, read_delta_playerstate, write_delta_entity,
 };
-use super::protocol::{Protocol, ENTITYNUM_NONE, ENTITYNUM_WORLD, GENTITYNUM_BITS};
+use super::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD, GENTITYNUM_BITS, Protocol};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// `svc_ops_e` (confirmed against cod_lnxded 1.1d).
@@ -218,7 +218,7 @@ fn parse_packet_entities(
         }
 
         // Base-frame entities below newnum carry forward.
-        while old.peek().is_some_and(|(&oldnum, _)| oldnum < newnum) {
+        while old.peek().is_some_and(|&(&oldnum, _)| oldnum < newnum) {
             let (&oldnum, oldstate) = old.next().unwrap();
             new.insert(oldnum, oldstate.clone());
         }
@@ -1088,9 +1088,9 @@ mod tests {
             ..Default::default()
         };
         base.entities.insert(4, ent(400)); // unchanged
-                                           // Changed, with a second field (o1: 42 -> 0) that only the correct
-                                           // base (the base-frame entity, not the unrelated baseline/null) makes
-                                           // `lc` reach far enough to write.
+        // Changed, with a second field (o1: 42 -> 0) that only the correct
+        // base (the base-frame entity, not the unrelated baseline/null) makes
+        // `lc` reach far enough to write.
         let mut e5 = ent(500);
         e5.fields[o1] = 42;
         base.entities.insert(5, e5);

@@ -13,7 +13,7 @@
 //! No stock gametype's bootstrap calls one.
 
 use crate::game::builtins::entity::entity_receiver;
-use crate::game::entity::{HudState, FIRST_HUD_ELEM};
+use crate::game::entity::{FIRST_HUD_ELEM, HudState};
 use crate::game::host::GameHost;
 use crate::game::script::{TEAM_ALLIES, TEAM_AXIS, TEAM_SPECTATOR};
 use vcod_gsc::{Cx, EntId, ErrorKind, Target, Value};
@@ -588,13 +588,15 @@ mod tests {
             assert_eq!((s.width, s.height), (288, 8));
             assert_eq!((s.from_width, s.from_height), (0, 8));
             assert_eq!((s.scale_start, s.scale_ms), (7_000, 5_000));
-            assert!(scale_over_time(
-                &mut host,
-                cx,
-                recv,
-                &[Value::Int(0), Value::Int(1), Value::Int(1)]
-            )
-            .is_err());
+            assert!(
+                scale_over_time(
+                    &mut host,
+                    cx,
+                    recv,
+                    &[Value::Int(0), Value::Int(1), Value::Int(1)]
+                )
+                .is_err()
+            );
         });
     }
 

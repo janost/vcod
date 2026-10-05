@@ -9,7 +9,7 @@
 
 mod common;
 
-use common::{connect, step, Queues};
+use common::{Queues, connect, step};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};

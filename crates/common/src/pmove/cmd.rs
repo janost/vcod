@@ -4,7 +4,7 @@
 //! a playing client's cmds through here, so a prediction replays the
 //! server's own code.
 
-use super::{weapon, PlayerState, PmEvent, PmInput, MAX_FRAME_MS};
+use super::{MAX_FRAME_MS, PlayerState, PmEvent, PmInput, weapon};
 use crate::movetrace::MoveWorld;
 use crate::net::msg::{self, UserCmd};
 use crate::weapon::WeaponDef;
@@ -113,7 +113,7 @@ impl EventRing {
 /// arrears past `MAX_PMOVE_ARREARS_MS` dropped. Yields each step's cmd and
 /// its length in seconds; nothing for a cmd already run (docs/protocol-1.1.md,
 /// "How long a cmd is simulated for").
-pub fn chop(command_time: i32, cmd: &UserCmd) -> impl Iterator<Item = (UserCmd, f32)> {
+pub fn chop(command_time: i32, cmd: &UserCmd) -> impl Iterator<Item = (UserCmd, f32)> + use<> {
     let cmd = *cmd;
     let dt_ms = cmd.server_time.wrapping_sub(command_time);
     let mut base = if dt_ms <= 0 {

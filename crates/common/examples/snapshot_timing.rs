@@ -11,9 +11,9 @@ use std::collections::HashMap;
 use vcod_common::net::gamestate;
 use vcod_common::net::huffman::Huffman;
 use vcod_common::net::msg::MsgReader;
-use vcod_common::net::protocol::{Protocol, PROTOCOL_V1};
+use vcod_common::net::protocol::{PROTOCOL_V1, Protocol};
 use vcod_common::net::snapshot::{
-    SnapshotRing, SVC_EOF, SVC_NOP, SVC_SERVER_COMMAND, SVC_SNAPSHOT,
+    SVC_EOF, SVC_NOP, SVC_SERVER_COMMAND, SVC_SNAPSHOT, SnapshotRing,
 };
 
 fn main() {

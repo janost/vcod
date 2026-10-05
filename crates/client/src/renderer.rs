@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -15,8 +15,8 @@ use vcod_common::net::FogParams;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::props;
 use vcod_common::shader::{
-    bundle_affine, bundle_turb, has_animated_tcmods, wave_value, AlphaFunc, AlphaGen, BlendFactor,
-    DrawClass, ImageRef, RgbGen, Shader, ShaderLib, SunFile, SORT_BLEND0, SORT_DECAL,
+    AlphaFunc, AlphaGen, BlendFactor, DrawClass, ImageRef, RgbGen, SORT_BLEND0, SORT_DECAL, Shader,
+    ShaderLib, SunFile, bundle_affine, bundle_turb, has_animated_tcmods, wave_value,
 };
 use vcod_common::vis::{Frustum, Visible, WorldVis};
 use vcod_common::xmodel::{self, VmVert};
@@ -348,11 +348,7 @@ impl FogLive {
     /// 1 = GL_EXP, 2 = GL_LINEAR — the WGSL Camera mode encoding; the off
     /// state is carried by [`FogState::set`], not here.
     fn mode(&self) -> f32 {
-        if self.linear {
-            2.0
-        } else {
-            1.0
-        }
+        if self.linear { 2.0 } else { 1.0 }
     }
 }
 
@@ -2785,14 +2781,14 @@ impl Renderer {
         camera[32..36].copy_from_slice(&[frame.fwd.x, frame.fwd.y, frame.fwd.z, 0.0]);
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::cast_slice(&camera));
-        if let Some(sky) = &self.sky {
-            if let Some(farbox) = &sky.farbox {
-                self.queue.write_buffer(
-                    &farbox.eye_buf,
-                    0,
-                    bytemuck::bytes_of(&[frame.eye.x, frame.eye.y, frame.eye.z, 0.0f32]),
-                );
-            }
+        if let Some(sky) = &self.sky
+            && let Some(farbox) = &sky.farbox
+        {
+            self.queue.write_buffer(
+                &farbox.eye_buf,
+                0,
+                bytemuck::bytes_of(&[frame.eye.x, frame.eye.y, frame.eye.z, 0.0f32]),
+            );
         }
         let t0 = std::time::Instant::now();
         let frustum = Frustum::from_view_proj(frame.view_proj);

@@ -6,7 +6,7 @@
 use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::{Protocol, ENTITYNUM_NONE, ENTITYNUM_WORLD};
+use vcod_common::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD, Protocol};
 use vcod_common::net::trajectory::{TR_GRAVITY, TR_STATIONARY};
 
 /// `ET_CORPSE`. The client resolves the body model through `clientNum` on

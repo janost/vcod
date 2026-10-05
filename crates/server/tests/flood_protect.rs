@@ -7,12 +7,12 @@
 
 mod common;
 
-use common::{connect, step, Queues};
+use common::{Queues, connect, step};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use vcod_common::net::msg::NULL_USERCMD;
 use vcod_common::net::NetEvent;
+use vcod_common::net::msg::NULL_USERCMD;
 use vcod_server::{Server, ServerConfig};
 
 const FRAME_MS: u64 = 50;
@@ -48,10 +48,10 @@ fn scoreboards(
         *now += Duration::from_millis(FRAME_MS);
         cl.send_frame(&NULL_USERCMD);
         for e in step(sv, q, cl, *now) {
-            if let NetEvent::ServerCommand(t) = e {
-                if t.first().map(String::as_str) == Some("b") {
-                    n += 1;
-                }
+            if let NetEvent::ServerCommand(t) = e
+                && t.first().map(String::as_str) == Some("b")
+            {
+                n += 1;
             }
         }
     }

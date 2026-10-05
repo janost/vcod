@@ -11,18 +11,18 @@ pub mod huffman;
 pub mod msg;
 pub mod netchan;
 pub mod protocol;
-pub use protocol::{FogParams, CS_FOG_V1};
+pub use protocol::{CS_FOG_V1, FogParams};
 pub mod snapshot;
 pub mod trajectory;
 
 use gamestate::Gamestate;
 use huffman::Huffman;
 use msg::{
-    write_delta_usercmd, MsgReader, MsgWriter, UserCmd, NULL_USERCMD, SVC_DOWNLOAD, SVC_EOF,
-    SVC_GAMESTATE, SVC_NOP, SVC_SERVER_COMMAND, SVC_SNAPSHOT,
+    MsgReader, MsgWriter, NULL_USERCMD, SVC_DOWNLOAD, SVC_EOF, SVC_GAMESTATE, SVC_NOP,
+    SVC_SERVER_COMMAND, SVC_SNAPSHOT, UserCmd, write_delta_usercmd,
 };
 use netchan::Netchan;
-use protocol::{Protocol, PROTOCOL_V1};
+use protocol::{PROTOCOL_V1, Protocol};
 use snapshot::SnapshotRing;
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
@@ -640,16 +640,14 @@ impl<T: Transport> NetClient<T> {
             self.last_send = self.now;
         }
 
-        if has_snapshot {
-            if let Some(cap) = self.capture.as_mut() {
-                cap.triples.extend_from_slice(&message_num.to_le_bytes());
-                cap.triples
-                    .extend_from_slice(&(msg.len() as u32).to_le_bytes());
-                cap.triples.extend_from_slice(msg);
-                cap.count += 1;
-                if let Some(s) = self.snapshots.newest() {
-                    cap.times.push(s.server_time);
-                }
+        if has_snapshot && let Some(cap) = self.capture.as_mut() {
+            cap.triples.extend_from_slice(&message_num.to_le_bytes());
+            cap.triples
+                .extend_from_slice(&(msg.len() as u32).to_le_bytes());
+            cap.triples.extend_from_slice(msg);
+            cap.count += 1;
+            if let Some(s) = self.snapshots.newest() {
+                cap.times.push(s.server_time);
             }
         }
     }
@@ -790,17 +788,17 @@ impl<T: Transport> NetClient<T> {
             // The text is unquoted and runs to end of line, so read it off the raw
             // command, not the tokens.
             Some("d") => {
-                if let Some((i, val)) = parse_configstring_update(&cmd) {
-                    if i < self.configstrings.len() {
-                        self.configstrings[i] = val;
-                        if i == 1 {
-                            // map_restart bumps sv_serverid and the server drops
-                            // messages carrying the old one (docs/protocol-1.1.md,
-                            // "map_restart and sv_serverid").
-                            self.server_id = server_id_from_systeminfo(&self.configstrings[1]);
-                        }
-                        self.events.push(NetEvent::ConfigstringChanged(i));
+                if let Some((i, val)) = parse_configstring_update(&cmd)
+                    && i < self.configstrings.len()
+                {
+                    self.configstrings[i] = val;
+                    if i == 1 {
+                        // map_restart bumps sv_serverid and the server drops
+                        // messages carrying the old one (docs/protocol-1.1.md,
+                        // "map_restart and sv_serverid").
+                        self.server_id = server_id_from_systeminfo(&self.configstrings[1]);
                     }
+                    self.events.push(NetEvent::ConfigstringChanged(i));
                 }
             }
             _ => {
@@ -1264,9 +1262,10 @@ mod tests {
         for ack in ["nextdl 0", "nextdl 1", "nextdl 2"] {
             assert_eq!(reliable_count(&c, ack), 1, "{ack} missing");
         }
-        assert!(c
-            .events
-            .contains(&NetEvent::DownloadComplete("main/foo.pk3".to_string())));
+        assert!(
+            c.events
+                .contains(&NetEvent::DownloadComplete("main/foo.pk3".to_string()))
+        );
         assert_eq!(c.download_progress(), None);
 
         c.finish_downloads();
@@ -1295,15 +1294,18 @@ mod tests {
         }));
 
         assert_eq!(c.state(), NetState::Disconnected);
-        assert!(c
-            .events
-            .iter()
-            .any(|e| matches!(e, NetEvent::Dropped(r) if r.contains("not found on server"))));
+        assert!(
+            c.events
+                .iter()
+                .any(|e| matches!(e, NetEvent::Dropped(r) if r.contains("not found on server")))
+        );
         assert!(!dest.exists());
-        assert!(std::fs::read_dir(dir.join("main"))
-            .unwrap()
-            .next()
-            .is_none());
+        assert!(
+            std::fs::read_dir(dir.join("main"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1363,15 +1365,18 @@ mod tests {
         }));
 
         assert_eq!(c.state(), NetState::Disconnected);
-        assert!(c
-            .events
-            .iter()
-            .any(|e| matches!(e, NetEvent::Dropped(r) if r.contains("not a valid pk3"))));
+        assert!(
+            c.events
+                .iter()
+                .any(|e| matches!(e, NetEvent::Dropped(r) if r.contains("not a valid pk3")))
+        );
         assert!(!dest.exists());
-        assert!(std::fs::read_dir(dir.join("main"))
-            .unwrap()
-            .next()
-            .is_none());
+        assert!(
+            std::fs::read_dir(dir.join("main"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1402,10 +1407,12 @@ mod tests {
             .iter()
             .any(|e| matches!(e, NetEvent::Dropped(r) if r.contains("6 bytes") && r.contains("4 announced"))));
         assert!(!dest.exists());
-        assert!(std::fs::read_dir(dir.join("main"))
-            .unwrap()
-            .next()
-            .is_none());
+        assert!(
+            std::fs::read_dir(dir.join("main"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1427,15 +1434,18 @@ mod tests {
         }));
 
         assert_eq!(c.state(), NetState::Disconnected);
-        assert!(c
-            .events
-            .iter()
-            .any(|e| matches!(e, NetEvent::Dropped(r) if r.contains("too large"))));
+        assert!(
+            c.events
+                .iter()
+                .any(|e| matches!(e, NetEvent::Dropped(r) if r.contains("too large")))
+        );
         assert!(!dest.exists());
-        assert!(std::fs::read_dir(dir.join("main"))
-            .unwrap()
-            .next()
-            .is_none());
+        assert!(
+            std::fs::read_dir(dir.join("main"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1474,9 +1484,10 @@ mod tests {
         }));
         assert_eq!(c.state(), NetState::Active);
         assert_eq!(reliable_count(&c, "stopdl"), 1);
-        assert!(c
-            .events
-            .contains(&NetEvent::Print("still here".to_string())));
+        assert!(
+            c.events
+                .contains(&NetEvent::Print("still here".to_string()))
+        );
     }
 
     #[test]

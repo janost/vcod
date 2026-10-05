@@ -404,23 +404,27 @@ mod tests {
         let h = Huffman::new();
         let mut nc = Netchan::new(1234, 0);
         // 2-byte payloads sit entirely inside the unscrambled prefix.
-        assert!(nc
-            .process_in(&server_packet(1, b"aa"), &h)
-            .unwrap()
-            .is_some());
-        assert!(nc
-            .process_in(&server_packet(1, b"bb"), &h)
-            .unwrap()
-            .is_none()); // dup
-        assert!(nc
-            .process_in(&server_packet(3, b"cc"), &h)
-            .unwrap()
-            .is_some()); // gap ok
+        assert!(
+            nc.process_in(&server_packet(1, b"aa"), &h)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            nc.process_in(&server_packet(1, b"bb"), &h)
+                .unwrap()
+                .is_none()
+        ); // dup
+        assert!(
+            nc.process_in(&server_packet(3, b"cc"), &h)
+                .unwrap()
+                .is_some()
+        ); // gap ok
         assert_eq!(nc.dropped, 1);
-        assert!(nc
-            .process_in(&server_packet(2, b"dd"), &h)
-            .unwrap()
-            .is_none()); // stale
+        assert!(
+            nc.process_in(&server_packet(2, b"dd"), &h)
+                .unwrap()
+                .is_none()
+        ); // stale
         assert_eq!(nc.incoming_sequence, 3);
     }
 

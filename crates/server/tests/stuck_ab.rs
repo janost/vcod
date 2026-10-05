@@ -29,11 +29,11 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::movetrace::{Body, CONTENTS_BODY};
-use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
+use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::{NetClient, NetEvent};
-use vcod_server::game::stuck::{stuck_in_client, StuckView};
 use vcod_server::Server;
+use vcod_server::game::stuck::{StuckView, stuck_in_client};
 
 const PMF_TIME_KNOCKBACK: i32 = 0x100;
 const PUSH_SPEED: f32 = 190.0;

@@ -225,12 +225,12 @@ pub fn stack_depth(f: &Function) -> Result<(), String> {
             Op::Return if depth_in != 1 => {
                 return Err(format!(
                     "instruction {ip} (Return) exits with stack depth {depth_in}, expected 1"
-                ))
+                ));
             }
             Op::ReturnUndef if depth_in != 0 => {
                 return Err(format!(
                     "instruction {ip} (ReturnUndef) exits with stack depth {depth_in}, expected 0"
-                ))
+                ));
             }
             Op::Return | Op::ReturnUndef => {}
             Op::Jump(t) => visit(
