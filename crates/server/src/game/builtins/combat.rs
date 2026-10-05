@@ -421,8 +421,8 @@ pub fn radius_damage(
         };
         let slot = id.0 as usize;
         victims.push(standing_victim(slot, Vec3::from(stands)));
-        // The pose the tick's moves left, at the origin a `setOrigin` earlier
-        // this frame may have moved it to.
+        // The pose the last end frame committed, at the origin a `setOrigin`
+        // earlier this frame may have moved it to.
         if let Some(mut body) = host.client_bodies.get(slot).cloned().flatten() {
             body.origin = Vec3::from(stands);
             bodies.push(body);
@@ -997,13 +997,7 @@ mod tests {
                     yaw: 0.0,
                     mins: Vec3::new(-15.0, -15.0, 0.0),
                     maxs: Vec3::new(15.0, 15.0, 72.0),
-                    assembly: Default::default(),
-                    legs: 0,
-                    torso: 0,
-                    legs_start_ms: 0,
-                    torso_start_ms: 0,
-                    torso_pitch: 0.0,
-                    lean: 0.0,
+                    pose: Default::default(),
                 }),
             );
         }

@@ -1719,7 +1719,10 @@ The victim is posed per shot, not per frame, out of the same grafted
 body-plus-head-plus-helmet skeleton the client draws
 (`crates/server/src/game/hitrig.rs`): the legs and torso clips the animscript
 picked, each at the phase its channel started at, then the spine aim layer.
-Three deliberate gaps, none of them measured against retail:
+The models, the clips, their start times, the pitch and the lean are the ones
+the victim's last end frame committed (`ClientSim::commit_pose`), the origin,
+yaw and box the ones its last cmd left, which is the split 16.1 reads off
+retail. Three deliberate gaps, none of them measured against retail:
 
 - No cross-fade between an outgoing and an incoming clip. The client's draw
   path blends over 200 ms; a shot poses one instant with the incoming clip at
@@ -4561,6 +4564,42 @@ INFERRED: the pose is computed at the trace, off the anim state
 `ClientEndFrame`'s `BG_PlayerAnimation` (0x41486) last set, which is the
 previous frame's, at wherever the body is linked now.
 
+What that anim state is made of, read out of `game.mp.i386.so`:
+
+- VERIFIED: `ClientEndFrame` (0x40e98) calls `BG_PlayerStateToEntityState`
+  at 0x41180 and 0x41191 (one per `g_smoothClients` arm),
+  `BG_UpdatePlayerDObj` at 0x41475 and `BG_PlayerAnimation` at 0x41486, and
+  its aim trace, `G_CheckForPreventFriendlyFire`, at 0x4110d. INFERRED, off
+  the addresses: the entity state is rewritten from the playerstate first
+  and the DObj is fed from it after, and a client's own aim trace runs
+  before its own anim update, so in `G_RunFrame`'s slot loop (0x50ab0) a
+  lower slot's aim trace meets a higher slot's last-frame pose and a higher
+  slot's meets a lower slot's new one.
+- VERIFIED: `BG_PlayerAnimation` (0x2c1f4) hands the entity's `legsAnim`
+  (`ent+0xcc`, read at 0x2c300) and `torsoAnim` (`ent+0xd0`, 0x2c318) to the
+  per-channel updater 0x2aba0 (calls at 0x2c30f and 0x2c327), after the two
+  condition and swing updaters at 0x2af78 and 0x2b328.
+- VERIFIED: `ClientEndFrame` writes the DObj's controller hook
+  `ent+0x220` as 0 at 0x40eaa and as 0x416c0 at 0x41261 on the arm that
+  tests `ent+0x4` against 1, and 0x416c0 calls `BG_Player_DoControllers` at
+  0x416e8. It copies `ent+0x6c` and `ent+0xd4` (`leanf`) and
+  `ps.viewangles` (`ps+0xc0..0xc8`) into the client's record at
+  `bgs+0x9b6ec + clientNum * 0x448` (0x41257..0x4126b), at `+0x3dc`,
+  `+0x3e0` and `+0x3e4..0x3ec` (0x41273..0x412a6).
+- VERIFIED: `BG_Player_DoControllers` (0x2b7f8) reads that record's
+  `+0x3e4`, `+0x3e8`, `+0x3ec` (0x2b82d..0x2b83f), the swing angles at
+  `+0x37c`, `+0x3ac`, `+0x3b4` (0x2b848..0x2b863) and `+0x3e0` through
+  `GetLeanFraction` (0x2b8f2). INFERRED: the spine and lean controllers a
+  trace's `G_DObjCalcPose` runs bend the bones by the view and lean the last
+  end frame copied, not by the victim's later cmds.
+- VERIFIED: `ClientThink_real` writes `ent+0x134..0x13c` from `ps.origin`
+  (0x405c7..0x405dc) and `ent+0x140..0x148` as `(0, ps.viewangles[1], 0)`
+  (0x405e2..0x40606), and `cod_lnxded`'s entity clip builds the rotation it
+  takes the segment into entity space with off `gentity+0x140` (0x8091263,
+  call 0x809126a). INFERRED: the frame a body is posed in follows its cmds,
+  its yaw and origin included, while what is posed in it waits for the end
+  frame.
+
 **The knockback timer a hit starts.** VERIFIED: `finishPlayerDamage` stores
 `clamp(knockback * 2, 50, 200)` into `pm_time` (`ps+0x10`) only when it
 reads 0, and ORs 0x200 into `pm_flags` (0x43a22..0x43a4a), both on the arm
@@ -4593,16 +4632,24 @@ is `ClientSim::take_damage`, carried as `knockback_flags` beside
 `knockback_ms` (`vcod_common::pmove`), and the wire's `pm_flags` and
 `pm_time` carry it.
 
+A body's pose is `ClientSim::commit_pose`'s: its models, both anim channels
+with their start times, its view pitch and its lean, taken in the aim-trace
+pass right after that slot's own aim trace, the place `BG_PlayerAnimation`
+holds in retail's `ClientEndFrame`. `hit_body` pairs it with the origin, yaw
+and box the last cmd left, so every round, blast probe and aim trace until
+the next end frame meets that pose wherever the body has moved since.
+`a_body_stood_up_since_its_end_frame_is_still_posed_crouched`
+(`crates/server/src/game/combat.rs`) pins the split.
+
 What still differs, each INFERRED from 16.1 and not measured:
 
 - The packets of a tick run at the tick, after the clock has advanced;
   retail runs them as they arrive, on the previous frame's `level.time`
   (15.6's 50 ms). Their relative order is the same.
-- A body is posed off the anims its own last round left, which is this
-  tick's for a player the frame's hits or `kill` interrupted and the last
-  tick's otherwise.
-- `turret_think_client` still fires in `ClientEndFrame`'s pass, which is
-  where retail's runs (`cod11-turrets.md` 6.1).
+- `turret_think_client` fires in a pass of its own after every slot's aim
+  trace, so a gunner's rounds meet every slot's new pose, where retail's,
+  inside the gunner's own `ClientEndFrame` (`cod11-turrets.md` 6.1), meet a
+  higher slot's last-frame one.
 
 VERIFIED, two runs against ours on 2026-09-27, the `probe_passthru` recipe
 of `client-probes/README.md` with one `--probe-target --probe-team axis` and

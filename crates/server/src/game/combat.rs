@@ -596,6 +596,8 @@ enum Traced {
 /// playing client has one: its contents are BODY, the bit the bullet and the
 /// blast masks both carry, where a corpse's CORPSE and a dead or spectating
 /// client's 0 meet neither.
+/// The link half (origin, yaw, box) is what the body's last cmd left, the pose
+/// half what its last end frame did (section 16.1).
 #[derive(Clone, Debug)]
 pub struct HitBody {
     pub slot: usize,
@@ -605,6 +607,13 @@ pub struct HitBody {
     pub yaw: f32,
     pub mins: Vec3,
     pub maxs: Vec3,
+    pub pose: BodyPose,
+}
+
+/// What `ClientEndFrame`'s `BG_PlayerAnimation` hands the DObj: its models,
+/// both anim channels and the controllers' inputs.
+#[derive(Clone, Default, Debug)]
+pub struct BodyPose {
     pub assembly: crate::game::hitrig::Assembly,
     /// Wire `legsAnim` / `torsoAnim` and the serverTime each last started.
     pub legs: i32,
@@ -617,7 +626,7 @@ pub struct HitBody {
     pub lean: f32,
 }
 
-impl HitBody {
+impl BodyPose {
     pub fn pose_inputs<'a>(
         &self,
         anims: &'a PlayerAnims,
@@ -711,10 +720,10 @@ pub fn trace_bodies(
             rigs,
             now_ms,
         } = &mut **ctx;
-        let Some(skel) = rigs.rig(fs, &body.assembly) else {
+        let Some(skel) = rigs.rig(fs, &body.pose.assembly) else {
             return Some((body.slot, box_t, "none"));
         };
-        let inputs = body.pose_inputs(anims, *now_ms);
+        let inputs = body.pose.pose_inputs(anims, *now_ms);
         let pose = pose_player(&skel, &inputs, |name| rigs.clip(fs, name));
         // Into the body's own frame: its `tag_origin` sits at the feet.
         let inv = Quat::from_rotation_z(-body.yaw);
@@ -1192,6 +1201,7 @@ mod tests {
             &[],
             &mut 1u64,
         );
+        b.commit_pose();
         let mut rigs = HitRigs::default();
         let mut ctx = BoneTraceCtx {
             fs: &fs,
@@ -1216,6 +1226,69 @@ mod tests {
         let hit = only(r.hits(), "the shot reached B");
         assert_eq!(hit.hitloc, "head");
         assert_eq!(hit.damage, 67, "45 through the head multiplier");
+    }
+
+    /// A body is posed off its last end frame, not off the cmds since (combat
+    /// doc, 16.1): one that ended the frame crouched and has stood up since
+    /// has the standing link box and still the crouched bones, so a level
+    /// round at standing head height crosses the box and scores nothing.
+    #[test]
+    fn a_body_stood_up_since_its_end_frame_is_still_posed_crouched() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
+        let inputs = crate::spectate::AnimInputs {
+            anims: &anims,
+            weapon: "m1carbine_mp",
+            weapon_class: "rifle",
+        };
+        let mut b = new_for_test([0.0, 0.0, 0.0], 180.0);
+        b.assembly = stock_assembly();
+        b.ps.on_ground = true;
+        b.ps.stance = vcod_common::pmove::Stance::Crouch;
+        let idle = vcod_common::net::msg::NULL_USERCMD;
+        b.update_anims(&inputs, &idle, 0, &[], &mut 1u64);
+        b.commit_pose();
+        b.ps.stance = vcod_common::pmove::Stance::Stand;
+        b.update_anims(&inputs, &idle, 50, &[], &mut 1u64);
+        let body = b.hit_body(1).expect("a live body");
+        assert_eq!(
+            body.maxs.z,
+            vcod_common::pmove::Stance::Stand.height(),
+            "the link box is the cmd's"
+        );
+        let mut rigs = HitRigs::default();
+        let mut trace_at = |z: f32, body: &HitBody| {
+            let mut ctx = BoneTraceCtx {
+                fs: &fs,
+                anims: &anims,
+                rigs: &mut rigs,
+                now_ms: 50,
+            };
+            trace_bodies(
+                Vec3::new(-100.0, 0.0, z),
+                Vec3::new(100.0, 0.0, z),
+                0,
+                std::slice::from_ref(body),
+                1.0,
+                &RIFLE_PRIORITY,
+                Some(&mut ctx),
+            )
+            .map(|(_, _, loc)| loc)
+        };
+        assert_eq!(trace_at(64.0, &body), None, "the crouched bones end lower");
+        assert!(
+            trace_at(30.0, &body).is_some(),
+            "the crouched body is there"
+        );
+        b.commit_pose();
+        let stood = b.hit_body(1).expect("a live body");
+        assert_eq!(
+            trace_at(64.0, &stood),
+            Some("head"),
+            "the next end frame stands it up"
+        );
     }
 
     #[test]
@@ -1748,13 +1821,7 @@ mod tests {
             yaw: 0.0,
             mins: Vec3::new(-15.0, -15.0, 0.0),
             maxs: Vec3::new(15.0, 15.0, 72.0),
-            assembly: Default::default(),
-            legs: 0,
-            torso: 0,
-            legs_start_ms: 0,
-            torso_start_ms: 0,
-            torso_pitch: 0.0,
-            lean: 0.0,
+            pose: Default::default(),
         }
     }
 
@@ -1815,6 +1882,7 @@ mod tests {
             let back_feet = Vec3::new(bx, by, -31.99) + shift;
             let mut back = new_for_test(back_feet.into(), 225.0);
             back.assembly = stock_assembly();
+            back.commit_pose();
             let mut bodies = vec![back.hit_body(1).expect("a live body")];
             if let Some(yaw) = yaw {
                 let mut front = new_for_test(front_feet.into(), yaw);
@@ -1832,6 +1900,7 @@ mod tests {
                     &[],
                     &mut 1u64,
                 );
+                front.commit_pose();
                 bodies.push(front.hit_body(0).expect("a live body"));
             }
             let victim = BlastVictim {
