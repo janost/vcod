@@ -322,6 +322,7 @@ pub fn probe(
     let mut follow = FollowProbe::default();
     let mut killcam = KillcamProbe::new(killcam_skip_ms);
     let mut fall = FallProbe::default();
+    let mut ride = RideProbe::default();
     // The fixture is named for the map the run started on, which is not the
     // map cs 0 holds once the rotation has moved on.
     let mut first_map = String::new();
@@ -708,7 +709,7 @@ pub fn probe(
                 fall.observe(s);
             }
             if probe_ride {
-                ride_probe(s);
+                ride.observe(s);
             }
             watch.check_sounds(s, client.configstrings());
             watch.check_movers(s);
@@ -8924,30 +8925,54 @@ health={} seq={} events=[{},{},{},{}] parms=[{},{},{},{}]",
 
 /// `--probe-ride`: one `RIDE` line per snapshot, the movement fields a mover
 /// push or ride writes: origin, velocity, ground entity, `pm_type` and the
-/// view yaw with the `delta_angles` yaw a rotating pusher adds to.
-/// `client-probes/probe_ride` moves the mover; the trajectory lines
+/// view yaw with the `delta_angles` yaw a rotating pusher adds to; and a
+/// `RIDE_ENT` line whenever a script mover's `solid`, `index` or `eFlags`
+/// changes. `client-probes/probe_ride` moves the mover; the trajectory lines
 /// `check_movers` prints are the mover's own half. Writes no fixture.
-fn ride_probe(snap: &net::snapshot::Snapshot) {
-    let p = &net::protocol::PROTOCOL_V1;
-    let i = |n: &str| snap.ps.field_i32(p, n);
-    let f = |n: &str| f32::from_bits(snap.ps.field_i32(p, n) as u32);
-    println!(
-        "RIDE t={} ct={} origin={:.3},{:.3},{:.3} vel={},{},{} ground={} pm_type={} pm_flags=0x{:x} \
+#[derive(Default)]
+struct RideProbe {
+    movers: std::collections::HashMap<u32, [i32; 3]>,
+}
+
+impl RideProbe {
+    fn observe(&mut self, snap: &net::snapshot::Snapshot) {
+        let p = &net::protocol::PROTOCOL_V1;
+        for (&num, ent) in &snap.entities {
+            if ent.field_i32(p, "eType") != 8 {
+                continue;
+            }
+            let key = [
+                ent.field_i32(p, "solid"),
+                ent.field_i32(p, "index"),
+                ent.field_i32(p, "eFlags"),
+            ];
+            if self.movers.insert(num, key) != Some(key) {
+                println!(
+                    "RIDE_ENT t={} num={num} solid=0x{:x} index={} eFlags=0x{:x}",
+                    snap.server_time, key[0], key[1], key[2]
+                );
+            }
+        }
+        let i = |n: &str| snap.ps.field_i32(p, n);
+        let f = |n: &str| f32::from_bits(snap.ps.field_i32(p, n) as u32);
+        println!(
+            "RIDE t={} ct={} origin={:.3},{:.3},{:.3} vel={},{},{} ground={} pm_type={} pm_flags=0x{:x} \
 viewyaw={:.3} delta_yaw={}",
-        snap.server_time,
-        i("commandTime"),
-        f("origin[0]"),
-        f("origin[1]"),
-        f("origin[2]"),
-        f("velocity[0]"),
-        f("velocity[1]"),
-        f("velocity[2]"),
-        i("groundEntityNum"),
-        i("pm_type"),
-        i("pm_flags"),
-        f("viewangles[1]"),
-        i("delta_angles[1]"),
-    );
+            snap.server_time,
+            i("commandTime"),
+            f("origin[0]"),
+            f("origin[1]"),
+            f("origin[2]"),
+            f("velocity[0]"),
+            f("velocity[1]"),
+            f("velocity[2]"),
+            i("groundEntityNum"),
+            i("pm_type"),
+            i("pm_flags"),
+            f("viewangles[1]"),
+            i("delta_angles[1]"),
+        );
+    }
 }
 
 /// `--probe-killcam`: stands still, never sends `kill`, and prints a

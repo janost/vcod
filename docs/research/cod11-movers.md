@@ -367,6 +367,12 @@ four times and writes `in + (a - b)` and an angle delta;
 Q3's `CG_AdjustPositionForMover`, carrying the predicted origin with the
 ground entity's motion between the snapshot time and the render time.
 
-vcod's server does not put a `script_brushmodel` on the wire yet
-(`crate::game::wire`, `kind_of`), so its `modelindex` and `solid` there are
-unread; the retail capture carries the entity as `eType` 8.
+VERIFIED, off a second `--probe-ride` run against the same probe
+(`RIDE_ENT` lines, 2026-10-05, not kept): retail sends both bombzone brush
+models to a client in range as `eType` 8 with `solid` `0xffffff` and `index`
+5 and 6, their inline model numbers, and `eFlags` 0. Model configstring 5 on
+that load is `xmodel/barrel_black1`. INFERRED: a `0xffffff` entity's `index`
+names an inline model, not a configstring slot. vcod's server does not put a
+`script_brushmodel` on the wire yet (`crate::game::wire`, `kind_of`), and
+vcod's client resolves every mover's `index` through the model configstrings
+(`crates/client/src/entities.rs`), so it would draw the barrel.
