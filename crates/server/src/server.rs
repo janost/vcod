@@ -3770,7 +3770,10 @@ impl Server {
                 // The ammo among it is what the item pass reads; the pass
                 // itself moves the host's copy as it grabs.
                 mirror_for_callback(rt, sim, proto, slot, c.last_processed_st);
-                rt.set_client_origin(t.slot, t.origin);
+                // `r.currentOrigin` is the snapped `s.pos.trBase` through
+                // `ClientEvents` and `G_TouchTriggers` (combat doc 2.1, 5.5):
+                // what a callback or a death drop in them reads of the mover.
+                rt.set_client_origin(t.slot, glam::Vec3::from(t.origin).trunc().into());
                 if let Some(yaw) = t.yaw {
                     rt.set_client_yaw(t.slot, yaw);
                 }
@@ -3793,8 +3796,12 @@ impl Server {
             // (0x405b3), right after the link. The item half follows the
             // trigger half, and the use key after both.
             if let Some(rt) = self.script.as_mut() {
-                rt.touch_triggers_with_buttons(t.slot, now_ms, t.buttons);
+                rt.touch_triggers_at(t.slot, now_ms, t.buttons, t.origin);
                 queue_death_scoreboards(&self.clients, rt);
+                // `ps.origin` back into `r.currentOrigin` past the touch
+                // (0x405c7), ahead of the use key's `Cmd_Activate_f`. The
+                // item half reads `ps.origin` either way.
+                rt.set_client_origin(t.slot, t.origin);
                 rt.item_pass(t.slot, t.buttons, t.eye, t.view);
                 // The mount lands inside the use cmd (turrets doc 12.1), so
                 // it reaches the sim before the next cmd's pass runs.
@@ -6015,6 +6022,13 @@ mod tests {
     /// A client holding its last frag and nothing else, in a server running
     /// `script`, with the `serverTime` its next cmd builds on.
     fn last_frag_in_hand(script: &str) -> Option<(Server, i32, usize)> {
+        last_frag_in_hand_under(crate::game::script::ScriptRuntime::for_test(script))
+    }
+
+    /// `last_frag_in_hand` under a runtime the caller built.
+    fn last_frag_in_hand_under(
+        rt: crate::game::script::ScriptRuntime,
+    ) -> Option<(Server, i32, usize)> {
         let fs = vcod_common::testing::game_fs()?;
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
@@ -6023,10 +6037,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        install_script(
-            &mut sv,
-            crate::game::script::ScriptRuntime::for_test(script),
-        );
+        install_script(&mut sv, rt);
         sv.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs));
         let _nc = begun(&mut sv, now);
         sv.tick(now);
@@ -6145,6 +6156,85 @@ mod tests {
             "the grenade left from {:?}, not the release's {stood:?}",
             traj.base
         );
+    }
+
+    /// A `trigger_hurt` death runs `player_die` inside the victim's own
+    /// `G_TouchTriggers`, where `r.currentOrigin` is the snapped
+    /// `s.pos.trBase` (combat doc 5.5): the live grenade and the weapon the
+    /// killed callback drops both leave from whole units, truncated toward
+    /// zero.
+    #[test]
+    fn a_trigger_hurt_death_drops_from_the_snapped_origin() {
+        use vcod_common::net::msg::BUTTON_ATTACK;
+        let rt = crate::game::script::ScriptRuntime::for_test_at(
+            crate::game::script::CALLBACK_SETUP,
+            "main() {}\n\
+             CodeCallback_PlayerDamage(inflictor, attacker, damage, flags, mod, weapon, point, \
+             dir, hitloc) { self finishPlayerDamage(inflictor, attacker, damage, flags, mod, \
+             weapon, point, dir, hitloc); }\n\
+             CodeCallback_PlayerKilled(inflictor, attacker, damage, mod, weapon, dir, hitloc) \
+             { self dropItem(self getcurrentweapon()); }\n",
+        );
+        let Some((mut sv, st, frag)) = last_frag_in_hand_under(rt) else {
+            return;
+        };
+        sv.test_set_client_origin(0, [10.6, -20.3, 1.0]);
+        let cook = |i: i32| UserCmd {
+            server_time: st + 50 * (i + 1),
+            weapon: frag as u8,
+            buttons: BUTTON_ATTACK,
+            ..NULL_USERCMD
+        };
+        fn sim(sv: &Server) -> &ClientSim {
+            sv.clients[0].as_ref().unwrap().sim.as_ref().unwrap()
+        }
+        let mut i = 0;
+        while sim(&sv).ps.grenade_time_left_ms == 0 {
+            assert!(i < 60, "the pin never came out");
+            sv.clients[0].as_mut().unwrap().pending.push(cook(i).into());
+            sv.replay_moves();
+            i += 1;
+        }
+        let stood = sim(&sv).origin();
+        assert!(
+            stood[0].fract() != 0.0 && stood[1].fract() != 0.0,
+            "the cook settled on the unit grid at {stood:?}"
+        );
+        let rt = sv.script.as_mut().unwrap();
+        let hurt = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
+        rt.triggers_mut().register_hurt(
+            hurt,
+            crate::game::trigger::TriggerShape::boxed([-64.0, -64.0, -8.0], [64.0, 64.0, 64.0]),
+            1000,
+            0,
+        );
+        sv.clients[0].as_mut().unwrap().pending.push(cook(i).into());
+        sv.replay_moves();
+
+        let snapped = glam::Vec3::from(stood).trunc();
+        assert_eq!(snapped.truncate(), glam::Vec2::new(10.0, -20.0));
+        let rt = sv.script.as_mut().unwrap();
+        let (_, e) = rt
+            .missiles()
+            .entities(sv.proto)
+            .next()
+            .expect("the death dropped no grenade");
+        let traj = vcod_common::net::trajectory::Trajectory::read(&e, sv.proto, "pos");
+        assert_eq!(
+            traj.base,
+            snapped + glam::Vec3::Z * 40.0,
+            "the grenade left from {:?}, standing at {stood:?}",
+            traj.base
+        );
+        let item = rt
+            .host
+            .ents
+            .iter_inuse()
+            .find(|(_, e)| e.item.is_some_and(|i| i.dropped))
+            .map(|(id, _)| id)
+            .expect("the killed callback dropped no weapon");
+        let at = rt.entity_origin_of(item).unwrap();
+        assert_eq!([at[0], at[1]], [snapped.x, snapped.y]);
     }
 
     /// The take happens once, at the cmd's touch: a frag the script gives

@@ -1534,7 +1534,9 @@ fn a_throw_s_first_frame_matches_retail_s_capture() {
 /// player's trace reads `origin=1216.9,1296.0,-7.9 grenadeTimeLeft=4000`, and
 /// the missile on the death frame reads
 /// `pos=5,1405500,1216.9,1296.0,32.1,-423.0,-214.0,-99.0` -- the +40 on z, a
-/// delta inside those ranges, and an explode 3950 ms later.
+/// delta inside those ranges, and an explode 3950 ms later. The `kill` runs
+/// outside every cmd, so `r.currentOrigin` is the unsnapped `ps.origin`:
+/// 1216.9 and 32.1 where a snap would read 1216 and 33 (5.5).
 #[test]
 fn a_player_killed_mid_cook_drops_a_live_grenade() {
     use vcod_common::net::msg::{BUTTON_ATTACK, NULL_USERCMD, UserCmd};
@@ -1558,6 +1560,15 @@ fn a_player_killed_mid_cook_drops_a_live_grenade() {
         mut now,
     } = pair;
     let p = &PROTOCOL_V1;
+    // Off the unit grid on both horizontal axes, so the drop's origin tells
+    // the unsnapped `ps.origin` from the snapped one (combat doc 5.5).
+    let a_now = &ca.snapshots().newest().unwrap().ps;
+    let a_spot = a_now.origin(p);
+    sv.place_client(
+        a_now.field_i32(p, "clientNum") as usize,
+        [a_spot[0].trunc() + 0.6, a_spot[1].trunc() + 0.3, a_spot[2]],
+        0.0,
+    );
     let watching = UserCmd {
         angles: [0, angle_short(180.0), 0],
         ..NULL_USERCMD
@@ -1633,10 +1644,14 @@ fn a_player_killed_mid_cook_drops_a_live_grenade() {
         (drop_frame - death_frame).abs() <= 2,
         "the drop is the death's own frame, not {drop_frame} against {death_frame}"
     );
+    assert!(
+        death_spot[0].fract() != 0.0 && death_spot[1].fract() != 0.0,
+        "A settled on the unit grid at {death_spot:?}, where a snap is invisible"
+    );
     let want = [death_spot[0], death_spot[1], death_spot[2] + 40.0];
     assert!(
-        dist(base, want) < 48.0,
-        "the grenade left A's hand at {base:?}, not near {want:?}"
+        dist(base, want) < 0.01,
+        "the grenade left A's hand at {base:?}, not at the unsnapped {want:?}"
     );
     for axis in [0, 1] {
         assert!(
