@@ -952,32 +952,9 @@ const GAPS: &[(&str, &str)] = &[
     ("[strafe] eventSequence t=395", FOOTSTEP),
     ("[strafe] event t=39500: ours only (6, 0, ", FOOTSTEP),
     ("[strafe] event t=39600: retail only (6, 0, ", FOOTSTEP),
-    ("[strafe] event t=39800: retail only (143, 139, ", SANDBAG),
-    ("[strafe] event t=39800: ours only (143, 142, ", SANDBAG),
-    ("[strafe] origin t=398", SANDBAG),
-    ("[strafe] origin t=399", SANDBAG),
-    ("[strafe] origin t=40000", SANDBAG),
-    ("[refused] origin t=40050", SANDBAG),
-    ("[refused] origin t=40100", SANDBAG),
-    ("[refused] origin t=40150", SANDBAG),
-    ("[refused] origin t=40200", SANDBAG),
-    ("[refused] origin t=40250", SANDBAG),
-    ("[refused] origin t=40300", SANDBAG),
-    ("[refused] origin t=40350", SANDBAG),
-    ("[refused] origin t=40400", SANDBAG),
-    ("[refused] origin t=40450", SANDBAG),
-    ("[refused] origin t=40500", SANDBAG),
-    ("[refused] origin t=40550", SANDBAG),
-    ("[refused] origin t=40600", SANDBAG),
-    ("[refused] origin t=40650", SANDBAG),
-    ("[refused] origin t=40700", SANDBAG),
-    ("[refused] origin t=40750", SANDBAG),
-    ("[refused] origin t=40800", SANDBAG),
-    ("[refused] origin t=40850", SANDBAG),
-    ("[refused] origin t=40900", SANDBAG),
-    ("[refused] origin t=40950", SANDBAG),
-    ("[refused] origin t=41000", SANDBAG),
-    ("[refused] legs_anim t=40250", SANDBAG),
+    ("[strafe] event t=40000: ours only (6, 0, ", FOOTSTEP),
+    ("[strafe] eventSequence t=40000", FOOTSTEP),
+    ("[refused] eventSequence t=4", FOOTSTEP),
 ];
 
 const END_FRAME: &str = "entity states are built at snapshot time, and a client dead by then \
@@ -994,10 +971,9 @@ const CROUCH_DROP: &str = "the crouch release's one-unit drop reads grounded 0.2
     floor on ours and airborne at the same height on retail, which lands a frame later; the \
     stand release lands on the same frame on both, and the capture holds one of each";
 const FOOTSTEP: &str = "footstep phase: bobCycle is not in the capture and the join leaves \
-    each side its own, so the strafe's first footstep falls two frames apart";
-const SANDBAG: &str = "the strafe slides along the nest wall into the sandbags' 52-degree \
-    face at 39800, where retail steps 11 units up it and ours 14, 2.5 units short; unmounted \
-    pmove on a steep face, and every origin after it carries the difference";
+    each side its own, so the strafe's first footstep falls two frames apart, and ours raises a \
+    second one at 40000 where retail raises none before the strafe ends; the eventSequence rows \
+    past it are that one event";
 
 const ORIGIN_EPS: f32 = 0.25;
 /// Retail's fixture prints angles to 0.1.
