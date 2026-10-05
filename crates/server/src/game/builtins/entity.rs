@@ -586,8 +586,9 @@ pub fn is_touching(
 }
 
 /// `self linkTo(parent [, tag, originOffset, anglesOffset])` (0x59cc4). The
-/// offset is the gap the receiver already stands at, which is what retail's
-/// fixed-link arm re-applies off the parent every frame; the sim owns the
+/// offset is the gap the receiver already stands at, in the parent's frame,
+/// which is what retail's fixed-link arm re-applies off the parent every
+/// frame; the sim owns the
 /// playerstate, so this only queues the edge
 /// (docs/research/cod11-gsc-object-model.md, 23.2).
 ///
@@ -613,11 +614,16 @@ pub fn link_to(
     };
     let child = at(host, cx, entity_receiver(recv)?);
     let anchor = at(host, cx, parent);
-    let offset = [
-        child[0] - anchor[0],
-        child[1] - anchor[1],
-        child[2] - anchor[2],
-    ];
+    let angles = cx.intern_folded("angles");
+    let parent_angles = match host.get_field(cx, parent, angles) {
+        Value::Vector(v) => v,
+        _ => [0.0; 3],
+    };
+    // In the parent's own frame, so a turning parent swings the child round
+    // with it (docs/research/cod11-movers.md, section 13).
+    let d = glam::Vec3::from(child) - glam::Vec3::from(anchor);
+    let axis = vcod_common::pmove::aim::angles_to_axis(parent_angles).map(glam::Vec3::from);
+    let offset = [d.dot(axis[0]), d.dot(axis[1]), d.dot(axis[2])];
     host.client_link_ops
         .push((slot, LinkOp::Link { parent, offset }));
     Ok(Value::Undefined)

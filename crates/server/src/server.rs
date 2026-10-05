@@ -3289,8 +3289,10 @@ impl Server {
                 };
             }
             // `G_RunClient`'s re-anchor: a linked client's origin is the
-            // parent's plus the offset it linked at, and a held walk input
-            // moves it not at all. Its velocity is whatever it linked with:
+            // parent's plus the offset it linked at, turned by the parent's
+            // angles (`G_SetFixedLink`'s mode 2), and a held walk input
+            // moves it not at all. The parent is read where it is this
+            // frame, since retail runs it first (movers doc, section 13). Its velocity is whatever it linked with:
             // retail's plant capture holds 184,27 across the abort's two
             // linked seconds and 0 under 92 forward cmds (23.2). A parent
             // that is gone releases the link: `sd.gsc`'s plant success never
@@ -3300,9 +3302,12 @@ impl Server {
                     continue;
                 };
                 let Some(link) = sim.link_to else { continue };
-                match rt.entity_origin_of(link.parent) {
-                    Some(p) => {
-                        sim.ps.origin = glam::Vec3::from(p) + glam::Vec3::from(link.offset);
+                match rt.link_anchor(link.parent) {
+                    Some((p, angles)) => {
+                        let [f, l, u] =
+                            vcod_common::pmove::aim::angles_to_axis(angles).map(glam::Vec3::from);
+                        let [x, y, z] = link.offset;
+                        sim.ps.origin = glam::Vec3::from(p) + f * x + l * y + u * z;
                         sim.ps.velocity = link.velocity.into();
                         // The mirror loop above ran before the re-anchor, so
                         // script's copy is written again here. The anchor is
@@ -3327,6 +3332,30 @@ impl Server {
                 &mut self.rng,
                 self.sv_time_ms,
             );
+            // The movers' half of the entity pass: each brush model that
+            // moved this frame carries its riders and shoves the bodies in
+            // its way, or holds a frame when one fits nowhere
+            // (`G_MoverTeam`; movers doc, section 12). After the script's
+            // own `setOrigin`s, which retail's threads run before the pass.
+            if let Some(world) = self.world.as_ref() {
+                for step in rt.take_mover_steps() {
+                    let mut sims: Vec<(usize, &mut crate::spectate::ClientSim)> = self
+                        .clients
+                        .iter_mut()
+                        .enumerate()
+                        .filter_map(|(i, c)| Some((i, c.as_mut()?.sim.as_mut()?)))
+                        .collect();
+                    let before: Vec<glam::Vec3> = sims.iter().map(|(_, s)| s.ps.origin).collect();
+                    if !crate::push::push(&step, &mut sims, &world.collision) {
+                        rt.stall_mover(&step);
+                    }
+                    for ((slot, sim), was) in sims.iter().zip(before) {
+                        if sim.ps.origin != was {
+                            rt.set_client_origin(*slot, sim.origin());
+                        }
+                    }
+                }
+            }
             mirror_vitals(&mut self.clients, rt);
             self.archive.set_on(rt.archive_on());
             // `G_RunFrame`'s own slot order (0x50ab0-0x50ad7), not arrival

@@ -9,6 +9,7 @@ use crate::bsp::Bsp;
 use crate::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use glam::Vec3;
 use std::collections::HashMap;
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// Shared with the xmodel collision surfaces, which use the same bits.
@@ -366,6 +367,29 @@ pub fn clip_model_tris(
         .map(|_| (trace.fraction, trace.normal, trace.surface_flags))
 }
 
+/// What a brush clip sweeps: the capsule every movement trace is, or the
+/// plain box of retail's `trap_Trace`, which `G_MoverPush` tests bodies with.
+#[derive(Clone, Copy)]
+enum Shape {
+    Capsule(Capsule),
+    Box(Vec3, Vec3),
+}
+
+/// A brush's planes pushed out by an axial box, Q3's `CM_TraceThroughBrush`
+/// non-sphere arm: `dist - offset·normal` with each offset component the
+/// box corner the normal points away from.
+fn expand_brush_box(planes: &[(Vec3, f32)], mins: Vec3, maxs: Vec3, out: &mut Vec<(Vec3, f32)>) {
+    out.clear();
+    for &(n, d) in planes {
+        let corner = Vec3::new(
+            if n.x < 0.0 { maxs.x } else { mins.x },
+            if n.y < 0.0 { maxs.y } else { mins.y },
+            if n.z < 0.0 { maxs.z } else { mins.z },
+        );
+        out.push((n, d - corner.dot(n)));
+    }
+}
+
 /// A brush's planes pushed out by the capsule's radius, Q3's
 /// `dist = plane->dist + tw->sphere.radius`.
 fn expand_brush(planes: &[(Vec3, f32)], radius: f32, out: &mut Vec<(Vec3, f32)>) {
@@ -626,6 +650,53 @@ pub struct CollisionWorld {
     /// reports: the world's for model 0 and for any submodel the server has
     /// not named an entity for.
     model_entity: Vec<AtomicU32>,
+    /// Per lump-27 model, its brushes' run in `brushes`, the entity origin
+    /// the stored planes are offset by, and the run's bounds about that
+    /// origin: what a [`ModelPose`] moves.
+    model_span: Vec<ModelSpan>,
+    /// Per lump-27 model, whether a pose has taken its brushes off their
+    /// spawn placement: the BVH, built at spawn, then skips them and the
+    /// posed pass clips them where the pose puts them.
+    model_posed: Vec<AtomicBool>,
+    /// The posed models, few and short-lived: a script mover's, while its
+    /// entity is anywhere but where the map placed it.
+    poses: RwLock<Vec<(usize, ModelPose)>>,
+}
+
+/// One model's brushes as built: their run in `CollisionWorld::brushes`, the
+/// spawn origin their planes carry, and their bounds relative to it.
+#[derive(Clone, Copy, Debug, Default)]
+struct ModelSpan {
+    brushes: (u32, u32),
+    origin: Vec3,
+    lo: Vec3,
+    hi: Vec3,
+}
+
+/// Where a submodel's brushes are now: its entity's origin and the rotation
+/// its angles make, retail's `SV_ClipMoveToEntities` transform of an inline
+/// model by `r.currentOrigin` and `r.currentAngles`, and the world bounds
+/// that leaves them in.
+#[derive(Clone, Copy, Debug)]
+struct ModelPose {
+    origin: Vec3,
+    /// `AnglesToAxis`: forward, left, up, the columns of local to world.
+    axis: [Vec3; 3],
+    lo: Vec3,
+    hi: Vec3,
+}
+
+impl ModelPose {
+    fn rotate(&self, v: Vec3) -> Vec3 {
+        self.axis[0] * v.x + self.axis[1] * v.y + self.axis[2] * v.z
+    }
+
+    /// A plane of the brush as built, `n·p <= d` at the spawn `origin`, moved
+    /// to this pose: `(R n)·q <= d - n·origin + (R n)·self.origin`.
+    fn plane(&self, (n, d): (Vec3, f32), spawn: Vec3) -> (Vec3, f32) {
+        let rn = self.rotate(n);
+        (rn, d - n.dot(spawn) + rn.dot(self.origin))
+    }
 }
 
 /// A brush as clip planes plus its axial bounds for the cheap reject: a
@@ -769,8 +840,13 @@ impl CollisionWorld {
             }
         }
 
+        let mut model_span = vec![ModelSpan::default(); bsp.models.len()];
         for (mi, model) in bsp.models.iter().enumerate() {
             let placement = &placements[mi];
+            let span = &mut model_span[mi];
+            span.origin = placement.origin;
+            span.brushes = (brushes.len() as u32, brushes.len() as u32);
+            let (mut span_lo, mut span_hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
             let brush_range =
                 model.first_brush as usize..(model.first_brush + model.num_brushes) as usize;
             for (bi, b) in bsp
@@ -813,7 +889,14 @@ impl CollisionWorld {
                         model: mi as u32,
                     });
                     t.prims.push((Prim::Brush(idx), lo, hi));
+                    span_lo = span_lo.min(lo);
+                    span_hi = span_hi.max(hi);
                 }
+            }
+            span.brushes.1 = brushes.len() as u32;
+            if span.brushes.1 > span.brushes.0 {
+                span.lo = span_lo - placement.origin;
+                span.hi = span_hi - placement.origin;
             }
         }
 
@@ -949,6 +1032,197 @@ impl CollisionWorld {
                 .iter()
                 .map(|_| AtomicU32::new(ENTITYNUM_WORLD))
                 .collect(),
+            model_posed: bsp.models.iter().map(|_| AtomicBool::new(false)).collect(),
+            model_span,
+            poses: RwLock::new(Vec::new()),
+        }
+    }
+
+    /// Puts model `model`'s brushes where an entity at `origin` with
+    /// `angles` holds them: a script mover's brush model follows its entity
+    /// (docs/research/cod11-movers.md, section 11). The spawn placement, the
+    /// entity lump's origin and no rotation, takes the pose off again. Model
+    /// 0 and an index past the model count are ignored.
+    pub fn set_model_pose(&self, model: usize, origin: Vec3, angles: Vec3) {
+        let Some(span) = self.model_span.get(model).copied() else {
+            return;
+        };
+        if model == 0 {
+            return;
+        }
+        let mut poses = self.poses.write().unwrap_or_else(|e| e.into_inner());
+        poses.retain(|(m, _)| *m != model);
+        let spawn = origin == span.origin && angles == Vec3::ZERO;
+        self.model_posed[model].store(!spawn, Ordering::Relaxed);
+        if spawn {
+            return;
+        }
+        let [f, l, u] = crate::pmove::aim::angles_to_axis(angles.to_array());
+        let mut pose = ModelPose {
+            origin,
+            axis: [Vec3::from(f), Vec3::from(l), Vec3::from(u)],
+            lo: Vec3::splat(f32::MAX),
+            hi: Vec3::splat(f32::MIN),
+        };
+        for i in 0..8 {
+            let corner = Vec3::new(
+                if i & 1 == 0 { span.lo.x } else { span.hi.x },
+                if i & 2 == 0 { span.lo.y } else { span.hi.y },
+                if i & 4 == 0 { span.lo.z } else { span.hi.z },
+            );
+            let w = pose.rotate(corner) + origin;
+            pose.lo = pose.lo.min(w);
+            pose.hi = pose.hi.max(w);
+        }
+        poses.push((model, pose));
+    }
+
+    /// Back to the spawn placement, as a map load or restart has it.
+    pub fn reset_model_pose(&self, model: usize) {
+        if let Some(span) = self.model_span.get(model) {
+            self.set_model_pose(model, span.origin, Vec3::ZERO);
+        }
+    }
+
+    /// A box sweep against model `model`'s brushes alone, wherever its pose
+    /// has them: the pusher test of `G_MoverPush`, which asks with a plain
+    /// `trap_Trace` box (game.mp 0x554ed) whether a body is in the mover's
+    /// way rather than in anything's.
+    pub fn model_box_trace(
+        &self,
+        model: usize,
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+    ) -> Trace {
+        let mut trace = Trace {
+            fraction: 1.0,
+            endpos: end,
+            normal: Vec3::ZERO,
+            surface_flags: 0,
+            startsolid: false,
+            allsolid: false,
+            hit: None,
+            enter: -1.0,
+        };
+        if model < self.model_span.len() && model != 0 && self.model_linked(model) {
+            let pose = self
+                .poses
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .find(|(m, _)| *m == model)
+                .map(|(_, p)| *p);
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            self.clip_model(
+                model,
+                pose.as_ref(),
+                start,
+                end,
+                Shape::Box(mins, maxs),
+                TRACE_MASK_MOVE,
+                &mut trace,
+                &mut a,
+                &mut b,
+            );
+        }
+        trace.endpos = start + (end - start) * trace.fraction;
+        trace
+    }
+
+    /// Clips a sweep against one model's brushes, moved by `pose` when there
+    /// is one and where the build left them otherwise.
+    #[allow(clippy::too_many_arguments)]
+    fn clip_model(
+        &self,
+        model: usize,
+        pose: Option<&ModelPose>,
+        start: Vec3,
+        end: Vec3,
+        shape: Shape,
+        mask: u32,
+        trace: &mut Trace,
+        moved: &mut Vec<(Vec3, f32)>,
+        scratch: &mut Vec<(Vec3, f32)>,
+    ) {
+        let span = self.model_span[model];
+        for b in span.brushes.0..span.brushes.1 {
+            let brush = &self.brushes[b as usize];
+            if brush.content_flags & mask == 0 {
+                continue;
+            }
+            let planes = match pose {
+                Some(pose) => {
+                    moved.clear();
+                    moved.extend(brush.planes.iter().map(|&pl| pose.plane(pl, span.origin)));
+                    &moved[..]
+                }
+                None => &brush.planes[..],
+            };
+            let (centre, sphere) = match shape {
+                Shape::Capsule(c) => {
+                    expand_brush(planes, c.radius, scratch);
+                    (c.center, c.offset)
+                }
+                Shape::Box(mins, maxs) => {
+                    expand_brush_box(planes, mins, maxs, scratch);
+                    (Vec3::ZERO, Vec3::ZERO)
+                }
+            };
+            clip_segment(
+                trace,
+                start + centre,
+                end + centre,
+                scratch,
+                brush.surface_flags,
+                sphere,
+                false,
+                Prim::Brush(b),
+            );
+        }
+    }
+
+    /// The posed models' half of a trace: the BVH skipped their brushes.
+    #[allow(clippy::too_many_arguments)]
+    fn trace_posed(
+        &self,
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+        capsule: Capsule,
+        mask: u32,
+        skip: Option<usize>,
+        trace: &mut Trace,
+        scratch: &mut Vec<(Vec3, f32)>,
+    ) {
+        let poses = self.poses.read().unwrap_or_else(|e| e.into_inner());
+        if poses.is_empty() {
+            return;
+        }
+        let mut moved = Vec::new();
+        for (model, pose) in poses.iter() {
+            let cur_end = start + (end - start) * trace.fraction;
+            let lo = start.min(cur_end) + mins - Vec3::ONE;
+            let hi = start.max(cur_end) + maxs + Vec3::ONE;
+            if !(lo.cmple(pose.hi).all() && hi.cmpge(pose.lo).all())
+                || !self.model_linked(*model)
+                || skip == Some(*model)
+            {
+                continue;
+            }
+            self.clip_model(
+                *model,
+                Some(pose),
+                start,
+                end,
+                Shape::Capsule(capsule),
+                mask,
+                trace,
+                &mut moved,
+                scratch,
+            );
         }
     }
 
@@ -1047,6 +1321,12 @@ impl CollisionWorld {
         self.model_linked(brush.model as usize)
     }
 
+    /// Whether the BVH's copy of this brush is where the brush is: false for
+    /// a posed model's, which [`Self::trace_posed`] clips instead.
+    fn brush_at_spawn(&self, brush: &BrushPlanes) -> bool {
+        !self.model_posed[brush.model as usize].load(Ordering::Relaxed)
+    }
+
     /// Contents at a point: `CONTENTS_WATER` inside any water brush, plus the
     /// content flags of any solid brush containing it (Q3 `CM_PointContents`
     /// over the brushes that made it into the world).
@@ -1083,10 +1363,27 @@ impl CollisionWorld {
                     && p.cmpge(*lo).all()
                 {
                     let brush = &self.brushes[*b as usize];
-                    if self.brush_linked(brush) && brush.planes.iter().all(|&(n, d)| n.dot(p) <= d)
+                    if self.brush_linked(brush)
+                        && self.brush_at_spawn(brush)
+                        && brush.planes.iter().all(|&(n, d)| n.dot(p) <= d)
                     {
                         out |= brush.content_flags;
                     }
+                }
+            }
+        }
+        let poses = self.poses.read().unwrap_or_else(|e| e.into_inner());
+        for (model, pose) in poses.iter() {
+            if !(p.cmple(pose.hi).all() && p.cmpge(pose.lo).all()) || !self.model_linked(*model) {
+                continue;
+            }
+            let span = self.model_span[*model];
+            for brush in &self.brushes[span.brushes.0 as usize..span.brushes.1 as usize] {
+                if brush.planes.iter().all(|&pl| {
+                    let (n, d) = pose.plane(pl, span.origin);
+                    n.dot(p) <= d
+                }) {
+                    out |= brush.content_flags;
                 }
             }
         }
@@ -1098,19 +1395,41 @@ impl CollisionWorld {
     /// static model (`cod_lnxded` 0x80916f4 traces them only on the flag the
     /// locational syscall passes).
     pub fn box_trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3) -> Trace {
-        self.trace_with_mask(start, end, mins, maxs, TRACE_MASK_MOVE, false)
+        self.trace_with_mask(start, end, mins, maxs, TRACE_MASK_MOVE, false, None)
+    }
+
+    /// [`Self::box_trace`] that passes through model `model`'s brushes: a
+    /// pushed body's sweep from where it stood to where the push puts it,
+    /// which must not stop on the pusher it starts inside.
+    pub fn box_trace_except(
+        &self,
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+        model: usize,
+    ) -> Trace {
+        self.trace_with_mask(start, end, mins, maxs, TRACE_MASK_MOVE, false, Some(model))
     }
 
     /// Bullet segment, retail's `trap_LocationalTrace`: [`MASK_SHOT`] and the
     /// static models.
     pub fn shot_trace(&self, start: Vec3, end: Vec3) -> Trace {
-        self.trace_with_mask(start, end, Vec3::ZERO, Vec3::ZERO, TRACE_MASK_SHOT, true)
+        self.trace_with_mask(
+            start,
+            end,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            TRACE_MASK_SHOT,
+            true,
+            None,
+        )
     }
 
     /// A point segment with any mask, with or without the static models:
     /// retail's `trap_Trace` on a zero box is one without them.
     pub fn point_trace(&self, start: Vec3, end: Vec3, mask: u32, statics: bool) -> Trace {
-        self.trace_with_mask(start, end, Vec3::ZERO, Vec3::ZERO, mask, statics)
+        self.trace_with_mask(start, end, Vec3::ZERO, Vec3::ZERO, mask, statics, None)
     }
 
     /// A missile's segment: [`MASK_MISSILE`] and the static models. The
@@ -1122,9 +1441,10 @@ impl CollisionWorld {
     /// 0x11). The capture wins; how retail gets there is open
     /// (docs/research/cod11-combat.md, section 12).
     pub fn missile_trace(&self, start: Vec3, end: Vec3) -> Trace {
-        self.trace_with_mask(start, end, Vec3::ZERO, Vec3::ZERO, MASK_MISSILE, true)
+        self.trace_with_mask(start, end, Vec3::ZERO, Vec3::ZERO, MASK_MISSILE, true, None)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn trace_with_mask(
         &self,
         start: Vec3,
@@ -1133,6 +1453,7 @@ impl CollisionWorld {
         maxs: Vec3,
         mask: u32,
         statics: bool,
+        skip: Option<usize>,
     ) -> Trace {
         let mut trace = Trace {
             fraction: 1.0,
@@ -1145,9 +1466,9 @@ impl CollisionWorld {
             enter: -1.0,
         };
 
+        let mut scratch = Vec::new();
+        let capsule = Capsule::of(mins, maxs);
         if !self.nodes.is_empty() {
-            let mut scratch = Vec::new();
-            let capsule = Capsule::of(mins, maxs);
             self.trace_node(
                 0,
                 start,
@@ -1157,10 +1478,22 @@ impl CollisionWorld {
                 capsule,
                 mask,
                 statics,
+                skip,
                 &mut trace,
                 &mut scratch,
             );
         }
+        self.trace_posed(
+            start,
+            end,
+            mins,
+            maxs,
+            capsule,
+            mask,
+            skip,
+            &mut trace,
+            &mut scratch,
+        );
         trace.endpos = start + (end - start) * trace.fraction;
         trace
     }
@@ -1178,6 +1511,7 @@ impl CollisionWorld {
         capsule: Capsule,
         mask: u32,
         statics: bool,
+        skip: Option<usize>,
         trace: &mut Trace,
         scratch: &mut Vec<(Vec3, f32)>,
     ) {
@@ -1194,7 +1528,11 @@ impl CollisionWorld {
                 match *prim {
                     Prim::Brush(b) => {
                         let brush = &self.brushes[b as usize];
-                        if brush.content_flags & mask == 0 || !self.brush_linked(brush) {
+                        if brush.content_flags & mask == 0
+                            || !self.brush_linked(brush)
+                            || !self.brush_at_spawn(brush)
+                            || skip == Some(brush.model as usize)
+                        {
                             continue;
                         }
                         expand_brush(&brush.planes, capsule.radius, scratch);
@@ -1261,10 +1599,10 @@ impl CollisionWorld {
             (node.second, node.first)
         };
         self.trace_node(
-            near, start, end, mins, maxs, capsule, mask, statics, trace, scratch,
+            near, start, end, mins, maxs, capsule, mask, statics, skip, trace, scratch,
         );
         self.trace_node(
-            far, start, end, mins, maxs, capsule, mask, statics, trace, scratch,
+            far, start, end, mins, maxs, capsule, mask, statics, skip, trace, scratch,
         );
     }
 
@@ -2324,6 +2662,54 @@ mod tests {
         assert!(
             (t.endpos.x - 192.0).abs() < 1.0,
             "should stop at the door face, got {t:?}"
+        );
+    }
+
+    /// A pose moves a submodel's brushes with its entity: the door that
+    /// stood at x 192 stops the ray at 292 once its entity sits at 300, a
+    /// 45-degree yaw stands it on a corner, and the spawn pose puts it back.
+    #[test]
+    fn a_posed_submodel_clips_where_its_entity_is() {
+        let world = CollisionWorld::build(&two_model_world("script_brushmodel"), &[]);
+        let ray = |w: &CollisionWorld| {
+            w.box_trace(
+                Vec3::new(150.0, 0.0, 32.0),
+                Vec3::new(350.0, 0.0, 32.0),
+                Vec3::ZERO,
+                Vec3::ZERO,
+            )
+            .endpos
+            .x
+        };
+        world.set_model_pose(1, Vec3::new(300.0, 0.0, 0.0), Vec3::ZERO);
+        assert!((ray(&world) - 292.0).abs() < 0.5, "{}", ray(&world));
+        assert_ne!(world.point_contents(Vec3::new(300.0, 0.0, 32.0)), 0);
+        assert_eq!(world.point_contents(Vec3::new(200.0, 0.0, 32.0)), 0);
+
+        world.set_model_pose(1, Vec3::new(200.0, 0.0, 0.0), Vec3::new(0.0, 45.0, 0.0));
+        let corner = 200.0 - 8.0 * std::f32::consts::SQRT_2;
+        assert!((ray(&world) - corner).abs() < 0.5, "{}", ray(&world));
+
+        world.set_model_pose(1, Vec3::new(200.0, 0.0, 0.0), Vec3::ZERO);
+        assert!((ray(&world) - 192.0).abs() < 0.5, "{}", ray(&world));
+    }
+
+    /// `model_box_trace` sees one model: the floor under the door is not in
+    /// it, the door is.
+    #[test]
+    fn a_model_trace_sees_only_that_model() {
+        let world = CollisionWorld::build(&two_model_world("script_brushmodel"), &[]);
+        let floor = Vec3::new(0.0, 0.0, -8.0);
+        assert!(
+            !world
+                .model_box_trace(1, floor, floor, Vec3::ZERO, Vec3::ZERO)
+                .startsolid
+        );
+        let door = Vec3::new(200.0, 0.0, 32.0);
+        assert!(
+            world
+                .model_box_trace(1, door, door, Vec3::ZERO, Vec3::ZERO)
+                .startsolid
         );
     }
 

@@ -129,6 +129,8 @@ pub fn spawn_entities_from_string(
             // A trace that ends on the model's brushes names this entity,
             // which is what a player standing on it reads as its ground.
             world.collision.set_model_entity(n, id.0);
+            // A restart puts a mover's brushes back where the map has them.
+            world.collision.reset_model_pose(n);
         }
     }
     Ok(())
