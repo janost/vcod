@@ -77,6 +77,9 @@ built from the bytes up, this might be your kind of thing.
   swaying gun points, and plays your own fire, reload and footstep
   sounds off the prediction. The snapshot that confirms them later stays
   quiet.
+- Draws mounted MG42s turned by the barrel angles the server sends, with
+  their fire anim and muzzle flash. On the gun, the view rides the gun's
+  `tag_player` and the HUD swaps the crosshair for the gun's reticle.
 - Draws the HUD that the stock `hud.menu` lays out: crosshair that opens with
   spread, health, ammo, stance, compass with objectives, use hints and hit
   direction. It also draws the gametype script's own HUD elements, such as
@@ -156,11 +159,12 @@ console, no key rebinding. You get command-line flags and the binds below.
 
 **Client**
 
-- Mounted MGs work on the server, but the vcod client doesn't draw the gun.
+- A gunner's body stands where the server puts it, but the client doesn't
+  blend its mounted anim by the barrel's yaw the way retail's does, so the
+  body doesn't turn with the gun.
 - The HUD skips a few retail pieces: the followed player's health, ammo and
   compass while following, friendly players on the compass, the weapon mode
-  icon, the stance-change flash, the mounted gun's reticle and the
-  fixed-width fonts
+  icon, the stance-change flash and the fixed-width fonts
   ([docs/research/cod11-hud-protocol.md](docs/research/cod11-hud-protocol.md),
   section 9).
 - Only protocol 1 (patch 1.1). 1.5 and United Offensive servers won't talk to

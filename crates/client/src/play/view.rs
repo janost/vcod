@@ -214,6 +214,11 @@ impl OnlineView {
         self.scoped = ps.zip(held).is_some_and(|(ps, def)| {
             !ps.mounted && scope::overlay_frac(def, ps.ads_frac, zooming_in).is_some()
         });
+        // No view weapon on a mounted gun (`0x300371f0`'s `eFlags & 0xc000`
+        // test); the gun itself is the turret entity.
+        if ps.is_some_and(|ps| ps.mounted) {
+            return (None, fov);
+        }
         let (Some(ps), Some(w)) = (ps, self.rig.as_deref_mut()) else {
             // A respawn whose `weapAnim` matches the pre-death one bit for bit
             // still restarts the raise.

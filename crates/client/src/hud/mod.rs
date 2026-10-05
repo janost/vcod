@@ -103,6 +103,9 @@ pub struct HudFrame<'a> {
     pub fov: f32,
     /// An entity's current origin, for objectives placed on one.
     pub entity_origin: &'a dyn Fn(i32) -> Option<[f32; 3]>,
+    /// The `weapon` of the gun `ps` rides, the entity `viewlocked_entNum`
+    /// names, which picks the mounted reticle.
+    pub turret_weapon: Option<usize>,
 }
 
 impl Hud {
@@ -348,6 +351,7 @@ fn player_view<'a>(ps: &'a PlayerState, f: &HudFrame<'a>) -> PlayerView<'a> {
         max_health: ps.max_health(),
         eflags,
         weapon: f.weapons.get(weapon).and_then(Option::as_ref),
+        turret: f.turret_weapon.and_then(|w| f.weapons.get(w)?.as_ref()),
         ammo,
         ammoclip,
         aim_spread_scale,
@@ -406,6 +410,7 @@ mod tests {
             eye: [0.0; 3],
             fov: 80.0,
             entity_origin: &|_| None,
+            turret_weapon: None,
         }
     }
 

@@ -1015,8 +1015,9 @@ VERIFIED: `0x30016760` tests the dword at `0x302071dc` against `0xc000` at
 into the playerstate copy whose `+0xb8` is `0x30207214`, and `0xc000` its
 mounted-gun bits. INFERRED, off those branches: on a mounted gun
 the weapon reticle is not drawn; `0x30016610` draws the turret's reticle, or
-nothing when `0x302074d4` is `0x3ff`. vcod draws no crosshair on a mounted
-gun.
+nothing when `0x302074d4` is `0x3ff`. What `0x30016610` draws is in
+`cod11-turrets.md` section 14.4; vcod draws that in place of the weapon
+reticle.
 
 INFERRED, off the four-arm loop: the arm table is top, right, bottom, left,
 direction `(0,-1) (1,0) (0,1) (-1,0)`, corner offset in arm sizes

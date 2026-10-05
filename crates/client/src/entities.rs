@@ -3,6 +3,7 @@
 
 use crate::camera;
 use crate::renderer::{DynamicModelInstance, ModelHandle, Renderer};
+use crate::turret::{self, ET_TURRET, GunAnim, MsvcRand, TurretEye};
 use glam::{Mat4, Quat, Vec3};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
@@ -15,6 +16,7 @@ use vcod_common::net::trajectory::{TR_INTERPOLATE, TR_STATIONARY, Trajectory};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::playerpose::{apply_aim, clip_name};
 use vcod_common::skeleton::{AnimBinding, PoseBuffer, Skeleton};
+use vcod_common::turretpose::angles_quat;
 use vcod_common::xanim::{self, XAnim};
 use vcod_common::xmodel::{self, XModel};
 
@@ -45,6 +47,8 @@ pub const ET_PORTAL: i32 = 6;
 #[cfg_attr(not(test), allow(dead_code))] // only tests name it
 pub const ET_INVISIBLE: i32 = 7;
 pub const ET_SCRIPTMOVER: i32 = 8;
+/// `eFlags` bit that hides an entity's model.
+const EF_NODRAW: i32 = 0x100;
 /// 12, not Q3's 13 (CoDExtended shared.h:445).
 #[cfg_attr(not(test), allow(dead_code))] // only tests name it
 pub const ET_EVENTS: i32 = 12;
@@ -68,6 +72,12 @@ pub enum EntityVisual {
     Missile(usize),
     /// Inline BSP submodel (`"*N"` configstring).
     Submodel(usize),
+    /// A mounted gun: its xmodel, and its `weapon` (1-based into
+    /// configstring 7) for the anims and the flash.
+    Turret {
+        model: String,
+        weapon: usize,
+    },
     None,
 }
 
@@ -155,7 +165,20 @@ pub fn resolve_visual(
             }
             EntityVisual::Item(mi as usize)
         }
-        _ => EntityVisual::None, // portal, invisible, turret base, events
+        ET_TURRET => {
+            let mi = ent.field_i32(p, "index");
+            if mi <= 0 || ent.field_i32(p, "eFlags") & EF_NODRAW != 0 {
+                return EntityVisual::None;
+            }
+            match model_name(cs(CS_MODELS_V1 + mi as usize)) {
+                Some(model) => EntityVisual::Turret {
+                    model,
+                    weapon: ent.field_i32(p, "weapon").max(0) as usize,
+                },
+                None => EntityVisual::None,
+            }
+        }
+        _ => EntityVisual::None, // portal, invisible, events
     }
 }
 
@@ -441,7 +464,25 @@ pub struct EntityScene {
     /// anims their pk3s lack).
     clips: HashMap<String, Option<Rc<XAnim>>>,
     states: HashMap<u32, EntityAnim>,
+    /// Turret models by xmodel name. `None` is a failed load, warned once.
+    turret_rigs: HashMap<String, Option<TurretRig>>,
+    /// Per turret entity: which of its two anims plays, and since when.
+    turret_anims: HashMap<u32, TurretAnim>,
+    /// The firing view's shake.
+    shake: MsvcRand,
     pub stats: SceneStats,
+}
+
+/// One uploaded turret model and its skeleton.
+struct TurretRig {
+    handle: ModelHandle,
+    skeleton: Skeleton,
+    bindings: HashMap<String, AnimBinding>,
+}
+
+struct TurretAnim {
+    channel: Channel,
+    last_seen_ms: i32,
 }
 
 /// Debug-overlay counters. `anim_restarts` is cumulative; `pending_assemblies`
@@ -465,6 +506,9 @@ impl EntityScene {
             anims: None,
             clips: HashMap::new(),
             states: HashMap::new(),
+            turret_rigs: HashMap::new(),
+            turret_anims: HashMap::new(),
+            shake: MsvcRand::default(),
             stats: SceneStats::default(),
         }
     }
@@ -526,6 +570,32 @@ fn resolve_model(
     };
     cache.insert(name.to_string(), handle);
     handle
+}
+
+/// Loads and uploads a turret's xmodel with its skeleton, caching failures as `None`.
+fn resolve_turret_rig<'a>(
+    cache: &'a mut HashMap<String, Option<TurretRig>>,
+    renderer: &mut Renderer,
+    fs: &Pk3Fs,
+    name: &str,
+) -> Option<&'a mut TurretRig> {
+    if !cache.contains_key(name) {
+        let rig = match xmodel::load(fs, name) {
+            Ok(m) => renderer
+                .upload_dynamic_model(fs, &m)
+                .map(|handle| TurretRig {
+                    handle,
+                    skeleton: Skeleton::build(&[&m]),
+                    bindings: HashMap::new(),
+                }),
+            Err(e) => {
+                log::warn!("turret model '{name}': {e:#}, drawing nothing for it");
+                None
+            }
+        };
+        cache.insert(name.to_string(), rig);
+    }
+    cache.get_mut(name).unwrap().as_mut()
 }
 
 /// Uploads inline BSP submodel `n`, caching the result. Nothing on stock 1.1 MP
@@ -657,6 +727,8 @@ pub struct BuiltScene {
     /// Per drawn entity number: interpolated world position, for
     /// entity-attached sound voices. Every drawn entity, not only players.
     pub entity_pos: HashMap<u32, Vec3>,
+    /// The gun `b.ps` rides, when it was drawn: the first-person eye.
+    pub turret_eye: Option<TurretEye>,
 }
 
 /// Builds this frame's live-entity draw list from the interpolation pair
@@ -690,6 +762,9 @@ pub fn build_instances(
         anims,
         clips,
         states,
+        turret_rigs,
+        turret_anims,
+        shake,
         stats,
     } = scene;
     let anims = anims
@@ -712,6 +787,13 @@ pub fn build_instances(
     let mut muzzles: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
     let mut weapon_flash: HashMap<i32, String> = HashMap::new();
     let mut entity_pos: HashMap<u32, Vec3> = HashMap::new();
+    let mut turret_eye = None;
+    let ps_int = |name: &str| b.ps.field_i32(p, name);
+    let ridden = turret::ridden(
+        ps_int("eFlags"),
+        ps_int("viewlocked"),
+        ps_int("viewlocked_entNum"),
+    );
     for (&num, ent) in &b.entities {
         if num as i32 == skip_num {
             continue; // the body the camera is inside, if the server sends it
@@ -804,7 +886,12 @@ pub fn build_instances(
                 };
                 // The held weapon is one more attachment on tag_weapon_right,
                 // so a weapon switch changes the assembly key like a gear change.
-                let weapon_index = ent.field_i32(p, "weapon");
+                // A gunner's is not drawn (0x30004eb0 zeroes it on `eFlags & 0xc000`).
+                let weapon_index = if ent.field_i32(p, "eFlags") & turret::EF_MOUNTED != 0 {
+                    0
+                } else {
+                    ent.field_i32(p, "weapon")
+                };
                 let held_weapon = resolve_held_weapon(
                     weapon_cache,
                     warned_items,
@@ -1040,6 +1127,112 @@ pub fn build_instances(
                     bones: None,
                 });
             }
+            EntityVisual::Turret { model, weapon } => {
+                let Some(rig) = resolve_turret_rig(turret_rigs, renderer, fs, &model) else {
+                    continue;
+                };
+                let def = weapon_name_for_index(&weapon_names, weapon as i32)
+                    .and_then(|name| resolve_weapon_def(weapon_cache, fs, name));
+                let (idle, fire, flash) = def.map_or((None, None, None), |d| {
+                    (
+                        d.idle_anim.clone(),
+                        d.fire_anim.clone(),
+                        d.world_flash_effect.clone(),
+                    )
+                });
+                let rides = ridden == Some(num);
+                let st = turret_anims.entry(num).or_insert_with(|| TurretAnim {
+                    channel: Channel::new(),
+                    last_seen_ms: render_time,
+                });
+                st.last_seen_ms = render_time;
+                let slot = turret::gun_anim(rides, ent.field_i32(p, "eFlags"));
+                st.channel.update(slot as i32, render_time);
+                let clip_of = |raw: i32| {
+                    if raw & ANIM_INDEX_MASK == GunAnim::Fire as i32 {
+                        fire.as_deref()
+                    } else {
+                        idle.as_deref()
+                    }
+                };
+
+                // The previous anim at full weight, then the goal blended over it.
+                let mut pose = PoseBuffer::new(&rig.skeleton);
+                let ch = &mut st.channel;
+                let fade = (render_time - ch.start_ms) as f32 / turret::ANIM_BLEND_MS as f32;
+                if fade >= 1.0 {
+                    ch.prev = None;
+                }
+                let layers = ch
+                    .prev
+                    .map(|(raw, start)| (raw, start, 1.0))
+                    .into_iter()
+                    .chain([(
+                        ch.raw,
+                        ch.start_ms,
+                        if ch.prev.is_some() {
+                            fade.max(0.0)
+                        } else {
+                            1.0
+                        },
+                    )]);
+                for (raw, start, w) in layers {
+                    let Some(name) = clip_of(raw) else { continue };
+                    let Some(clip) = load_clip(clips, fs, name) else {
+                        continue;
+                    };
+                    let binding = rig
+                        .bindings
+                        .entry(name.to_string())
+                        .or_insert_with(|| rig.skeleton.bind(&clip));
+                    let t = (render_time - start).max(0) as f32 / 1000.0;
+                    pose.apply_weighted(&clip, binding, clip.frame_pos(t, clip.looping), w);
+                }
+
+                let a2 = |e: &EntityState| {
+                    ["angles2[0]", "angles2[1]", "angles2[2]"].map(|n| e.field_f32(p, n))
+                };
+                let eflags = |e: &EntityState| e.field_i32(p, "eFlags");
+                let from = prev.filter(|ea| turret::interpolates(eflags(ea), eflags(ent)));
+                let barrel = turret::barrel(from.map(a2), a2(ent), f);
+                turret::apply_controller(&mut pose, &rig.skeleton, barrel);
+
+                // AnglesToAxis, unlike the generic transform above.
+                let rot = angles_quat(angles.to_array());
+                let transform = Mat4::from_rotation_translation(rot, pos);
+                let worlds = pose.bone_worlds(&rig.skeleton);
+                let tag = |name: &str| {
+                    let (lp, lr) = worlds[rig.skeleton.bone_index(name)?];
+                    Some((pos + rot * lp, rot * lr))
+                };
+                // The flash plays on the gun's own `tag_flash`, world effect
+                // even for the gunner (`CG_FireWeapon` 0x30038bdd).
+                if let Some((at, r)) = tag("tag_flash") {
+                    muzzles.insert(num, (at, r * Vec3::X));
+                }
+                if let Some(path) = flash {
+                    weapon_flash.entry(weapon as i32).or_insert(path);
+                }
+                if rides && let Some((eye, _)) = tag("tag_player") {
+                    let [mut pitch, mut yaw, roll] = angles.to_array();
+                    pitch += barrel[0];
+                    yaw += barrel[1];
+                    // `viewlocked` 2 is a frame that fired.
+                    if ps_int("viewlocked") == 2 {
+                        pitch += shake.shake();
+                        yaw += shake.shake();
+                    }
+                    turret_eye = Some(TurretEye {
+                        pos: eye,
+                        angles: [pitch, yaw, roll],
+                    });
+                }
+                out.push(DynamicModelInstance {
+                    model: rig.handle,
+                    transform,
+                    bones: Some(pose.skin_matrices(&rig.skeleton, 0)),
+                });
+            }
             EntityVisual::None => unreachable!("skipped above"),
         }
     }
@@ -1053,6 +1246,7 @@ pub fn build_instances(
     }
     // `abs` so a render clock that jumps backwards prunes instead of keeping everything.
     states.retain(|_, s| (render_time - s.last_seen_ms).abs() < STATE_TTL_MS);
+    turret_anims.retain(|_, s| (render_time - s.last_seen_ms).abs() < STATE_TTL_MS);
     assemblies.prune_stale(render_time);
     stats.pending_assemblies = assemblies.pending.len();
     BuiltScene {
@@ -1060,6 +1254,7 @@ pub fn build_instances(
         muzzles,
         weapon_flash,
         entity_pos,
+        turret_eye,
     }
 }
 
@@ -1182,6 +1377,24 @@ mod tests {
             resolve_visual(&ent(ET_GENERAL, 0, 0), &none, &cs, p),
             EntityVisual::None
         );
+    }
+
+    #[test]
+    fn turret_resolves_its_model_and_weapon_unless_nodraw() {
+        let p = &PROTOCOL_V1;
+        let cs = cs_table();
+        let none = BTreeMap::new();
+        let mut gun = ent(ET_TURRET, 0, 9);
+        gun.fields[EntityState::field_index(p, "weapon").unwrap()] = 16;
+        assert_eq!(
+            resolve_visual(&gun, &none, &cs, p),
+            EntityVisual::Turret {
+                model: "crate_misc1".into(),
+                weapon: 16
+            }
+        );
+        gun.fields[EntityState::field_index(p, "eFlags").unwrap()] = EF_NODRAW;
+        assert_eq!(resolve_visual(&gun, &none, &cs, p), EntityVisual::None);
     }
 
     #[test]

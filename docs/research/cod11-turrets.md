@@ -1629,3 +1629,206 @@ one-tick lock-to-placement gap is not a seventh: 13.1 already named its
 cause (a tick with no cmd to run) as the half of the old two-tick gap the
 round split does not touch, and this run is that half on its own, not a
 regression from it.
+
+## 14. The client
+
+How `cgame_mp_x86.dll` (1.1, image base 0x30000000) draws a turret, puts a
+gunner's view on it and draws its reticle. Addresses are the module's VAs;
+`private/ghidra/cgmp11.c` and `cgmp11.asm` are the Ghidra export they were
+read from. `cent` is a `centity_t` (stride 0x228, array at 0x3020db80) whose
+first 0xf0 bytes are its current `entityState_t`; the predicted playerstate
+copy starts at 0x3020715c.
+
+### 14.1 The draw
+
+VERIFIED: the entity-type switch at 0x3001d5f0 sends case 0xb to 0x3001b2e0,
+and its default prints `"Bad entity type: %i\n"`. INFERRED: 0x3001b2e0 is the
+turret's draw, called once per frame per turret in the snapshot.
+
+VERIFIED, 0x3001b2e0: a `test ah,0x1` on `es.eFlags` (0x3001b2ff), a load of
+`es.index` (`+0x8c`, 0x3001b309) as an index into the table at 0x301d24fc
+(0x3001b30f), a call to 0x3001d320 with `es.eType` and that entry, a store
+of 0x80 into the ref entity's second dword, origin loads from `cent+0x1f8..+0x200`, an add of
+32.0 (0x30069408) to the z of a second copy of the origin, and a call through
+syscall 0x3d. INFERRED: `EF_NODRAW` (0x100) hides the gun; the model is the
+entity's own `index` (`xmodel/mg42_bipod`, section 3), not the weapon file's,
+which has no `worldModel` (section 2); 0x3d adds a ref entity at the
+interpolated origin with `RF_LIGHTING_ORIGIN` 32 units up.
+
+VERIFIED: 0x3001d320 calls 0x3001b080 only when its type argument is 0xb,
+and 0x3001b080 creates a three-slot anim tree (syscall 0x81) and fills slot
+1 from weapon def `+0x1c` and slot 2 from `+0x24` of
+`weapons[es.weapon]` (`cent+200`). VERIFIED, the cgame's weapon field
+table: `idleAnim` is `+0x1c` (record 0x30075594) and `fireAnim` `+0x24`
+(record 0x300755ac), both strings. INFERRED: a turret's model plays the
+`idleAnim` and `fireAnim` its weapon file names
+(`standMG42gun_aim_foward` and `standMG42gun_fire_foward` on the stock gun).
+
+VERIFIED, `xmodel/mg42_bipod`: the two gun surfaces (`metal@mg42`,
+`viewmodel@mg42view`) skin only to bone 8, `tag_aim_animated`; the bipod
+skins to `bi_base`, `bi_l` and `bi_r`. VERIFIED, the hierarchy: `tag_aim`
+hangs off `tag_dummy` with `tag_player`, `tag_weapon` and `tag_butt` under
+it; `tag_aim_animated` hangs off `mg01`, under `bi_base`, under `tag_pivot`,
+with `tag_flash` under it. VERIFIED: `standMG42gun_aim_foward` is one frame
+whose `tag_pivot`, `bi_base` and `mg01` rotations equal the bind locals, plus
+a `tag_flash` translation; `standMG42gun_fire_foward` is seven frames at 30
+fps, looping, keying the same bones.
+
+### 14.2 The controller and the anim pick
+
+VERIFIED: 0x3001d460 calls 0x3001b110 for an `eType` of 0xb (call at
+0x3001d46f). VERIFIED, 0x3001b110: three calls to 0x3003c2a0, each on
+`cent+0x68`/`+0x158`, `+0x6c`/`+0x15c` and `+0x70`/`+0x160` with the float at
+0x30207140; tag lookups (syscall 0xae) on `tag_aim` (0x30064db8),
+`tag_aim_animated` (0x30064da4) and `tag_flash` (0x30062088), each followed
+by a call to 0x3001c0a0; the first two get the vector (first result,
+second result, 0), the third (third result, 0, 0). VERIFIED: 0x3003c2a0
+compares `b - a` against 180.0 and -180.0 (0x30069370, 0x30069378), adds or
+subtracts 360.0 (0x30069374) and returns `(b - a) * f + a`. VERIFIED:
+0x3001c0a0 takes the cosine and sine of each angle times 0x3006946c, which
+reads pi/360, calls 0x3003bc80 twice, and stores the vector `vec3_origin`
+(0x300608e8) and a 0 beside the result in a 0x20-byte slot per bone.
+
+INFERRED: 0x3003c2a0 is `LerpAngle`; `cent+0x68..0x70` is the current
+state's `angles2` and `+0x158..0x160` the next state's, lerped by
+`cg.frameInterpolation`; 0x3001c0a0 builds a quaternion from half angles
+and sets it as the bone's control rotation with no translation. So the
+barrel's pitch and yaw turn `tag_aim` and `tag_aim_animated`, and
+`angles2[2]` (always 0 in stock play, section 9) pitches `tag_flash`. The
+order of the two quaternion products is not read.
+
+VERIFIED, 0x3002fc80, per entity of the incoming snapshot: a copy of 0x3c
+dwords into `cent+0xf0`, then a test of `cent+0x1e0` against 0 and of
+`(new.eFlags ^ cent.eFlags) & 8`, either of which calls 0x3002f840; and
+0x3002f840 opens with a copy of 0x3c dwords from `cent+0xf0` to `cent+0`.
+INFERRED: an entity that is new or whose teleport bit flipped takes its next
+state as its current one, so the controller lerps one `angles2` against
+itself and the barrel snaps. The flip on a turret's first mounted frame
+(6.2) is what keeps a gunner's view from sweeping down from the rest pitch
+(-72 on carentan's gun, section 1) across the mount.
+
+VERIFIED, the anim pick at 0x3001b25d..0x3001b295: a `test ch,0xc0` on the
+dword at 0x302071dc, a compare of 0x302074d4 against `es.number`, a test of
+0x30207158, `mov cx,1` when all three pass, and otherwise `es.eFlags & 0x400`
+`setne` plus one; then syscall 0x8a with that slot, 1.0, 0.1 (0x3dcccccd) and
+1.0. VERIFIED: 0x302071dc and 0x302074d4 sit 0x80 and 0x378 into the
+playerstate copy at 0x3020715c, `ps.eFlags` and `ps.viewlocked_entNum` by
+the netfield offsets. VERIFIED: 0x30033d3d and 0x30033d49 store 0 and 1 into
+0x30207158 after a cvar test and a `pm_type` compare against 6. INFERRED:
+0x30207158 is `cg.renderingThirdPerson`, and the gun the view rides in first
+person always plays `idleAnim`; every other gun plays `fireAnim` while the
+server's 0x400 is set (the frame it fired, section 6.3), and the switch
+blends over 0.1 s.
+
+### 14.3 The gunner's view
+
+VERIFIED: 0x300333b0 copies the playerstate copy's `+0x14..0x1c`
+(`ps.origin`) into 0x30209594..0x3020959c and its `+0xc0..0xc8`
+(`ps.viewangles`) into 0x302095cc..0x302095d4, and has calls to 0x30033220
+(0x300335c9), 0x30032540 and 0x30032ae0 at higher addresses, the last two
+on the two sides of a test of 0x30207158. INFERRED: 0x300333b0 is
+`CG_CalcViewValues`, 0x30209594 `refdef.vieworg` and 0x302095cc
+`cg.refdefViewAngles`, and the turret step runs after the playerstate copy
+and before the first- or third-person offset.
+
+VERIFIED, 0x30033220: a test of `ps.eFlags` against 0xc000, a compare of
+`ps.viewlocked_entNum` against 0x3ff and a test of 0x302074d0
+(`ps.viewlocked`, offset 0x374); `ecx = 0x302095cc`, `ebx` = the gun's
+`cent+0x30` (`apos`) and a call to 0x30005470 with the dword at 0x30207148
+(0x3003325e..0x30033269);
+a call to 0x3001c2c0 for `tag_player` (0x300622a0) and, on a zero return, a
+call to 0x30020830 with 1 and `"Turret has no bone: tag_player"`
+(0x3006227c); the two `LerpAngle`s of `angles2[0]` and `angles2[1]` added
+into `refdefViewAngles[0]` and `[1]`; a test of 0x30207158 and a compare of
+`ps.viewlocked` against 2, then two calls to 0x3004b189, each result times
+2^-15 (0x300693b4), doubled, minus 1.0, added to pitch and to yaw; and
+`vieworg` = the tag's x and y and its z minus the float at 0x3020722c
+(`ps.viewHeightCurrent`, offset 0xd0).
+
+INFERRED: 0x30005470 is `BG_EvaluateTrajectory`, so the view angles are the
+gun's own base angles plus its interpolated barrel, not the player's;
+0x3004b189 is the C runtime's `rand`, so a first-person frame whose
+snapshot fired shakes each axis by up to a degree either way, once per
+rendered frame; a gun model without `tag_player` is a fatal error.
+
+VERIFIED, 0x30032ae0: `vieworg.z += ps.viewHeightCurrent` (0x3020722c), then
+a test of `ps.eFlags & 0xc000` and a return before the bob. INFERRED: the
+height 0x30033220 took off comes back here, so the eye is `tag_player`
+itself, and a gunner's view has no bob.
+
+### 14.4 The reticle
+
+VERIFIED: 0x30016760 (the weapon reticle) returns on 0x30207158, and on
+`ps.eFlags & 0xc000` calls 0x30016610 unless `ps.viewlocked_entNum` is 0x3ff
+(`cod11-hud-protocol.md` section 9).
+
+VERIFIED, 0x30016610: tests of 0x301d902c against 0, 0x3029944c against 0
+and 0x30207158 against 0; a load of the dword at 0x3020dc48 plus
+`viewlocked_entNum * 0x228` (that is `cent+0xc8`, `es.weapon`) and a test of
+it against 0; the weapon def's `+0xe8` first byte against 0; and a compare of
+`cg_crosshairAlpha` (0x301db788) against 0.01 (0x300693f4); then syscall 0x48
+with (1, 1, 1, `cg_crosshairAlpha`), and a call to 0x300310f0 with width and
+height `reticleCenterSize` (`+0xf0`) times 0x301d1fc4 and 0x301d1fc8, x and
+y `(0x30209584 - w) * 0.5 + 0x3020957c` and `(0x30209588 - h) * 0.5 +
+0x30209580`, texture coordinates 0..1 and the handle at `0x301a6a9c +
+weapon * 0x198`. VERIFIED: the cvar record holding 0x301d9020 (whose
+`integer` is 0x301d902c) is `cg_drawCrosshair`, default `"1"`; the cgame
+weapon field table puts `reticleCenter` at `+0xe8` (record 0x300757ec) and
+`reticleCenterSize` at `+0xf0` (record 0x30075804, an int).
+
+INFERRED: on a mounted gun the HUD draws the gun's `reticleCenter`
+(`gfx/reticle/mg42_cross.tga` on the stock gun) and nothing else, white at
+`cg_crosshairAlpha`, `reticleCenterSize` virtual units square (32 on the
+stock gun) scaled by the screen, centred on the 3D view; the gun's weapon is
+read off its entity, not off the playerstate, whose `weapon` is still the
+carried one (section 4.4).
+
+### 14.5 What the client drops on a mounted gun
+
+- VERIFIED: 0x300371f0 guards the view weapon's draw with
+  `ps.eFlags & 0xc000 == 0`. INFERRED: no view weapon while mounted; the gun
+  the gunner sees is the turret entity.
+- VERIFIED: 0x30004eb0 replaces `es.weapon` with 0 when `es.eFlags & 0xc000`
+  before it attaches the weapon model to `tag_weapon_right` or
+  `tag_weapon_left`. INFERRED: a gunner's carried weapon is not drawn.
+- VERIFIED: `CG_FireWeapon` (0x30038b70) calls `CG_MuzzleFlash` (0x30036c90)
+  for an `eType` of 0xb with `edx` 0 (0x30038bfe), the gun's `lerpOrigin`
+  and the tag name from 0x3007486c (`tag_flash`); 0x30036c90 picks the
+  handle at `0x301a69f8` for a zero `edx` and `0x301a69f4` otherwise.
+  INFERRED: a turret's shot plays the weapon file's `worldFlashEffect` on the
+  gun's own `tag_flash`, the gunner's included.
+- VERIFIED: the player draw (0x30028210) calls 0x300279b0 when
+  `es.eFlags & 0xc000` (0x300282bf). INFERRED: that is the client's copy of
+  section 7's placement (7.3), which blends the mounted anim by the gun and
+  moves the drawn body.
+
+### 14.6 As implemented
+
+`crates/client/src/turret.rs` holds the controller, the anim pick, the
+`tag_player` eye and the shake; `entities::build_instances` draws each
+`eType` 11 entity through them, and `hud::player::turret_reticle` draws the
+reticle. Where vcod differs:
+
+- The control rotation is composed onto the bone's local after the anim, in
+  the bone's own frame. The order of 0x3001c0a0's two products is not read.
+  VERIFIED (14.1): neither gun anim keys `tag_aim` or `tag_aim_animated`,
+  and both bind locals are identity. INFERRED: with `angles2[2]` 0 (section
+  9) `tag_flash`'s control is identity too, so either order poses the stock
+  gun the same. `turret.rs`'s test checks the
+  swing about `tag_aim` against the server's `tag_weapon_local` geometry.
+- The anim switch cross-fades linearly over the 0.1 s, and `fireAnim`
+  restarts each time it becomes the goal. How the engine's goal weights ramp
+  and where a re-entered loop resumes are not read.
+- No lighting origin: vcod's dynamic models are not lit per entity.
+- The shake draws from msvcrt's `rand` sequence seeded 1. Retail's draws come
+  from a stream every other cgame caller shares, so only the distribution
+  carries over.
+- The gunner tests (`eFlags`, `viewlocked`, `viewlocked_entNum`) read the
+  newer snapshot of the interpolated pair rather than the predicted
+  playerstate, and the HUD reads the gun's `weapon` off the newest snapshot
+  rather than a persistent entity table.
+- The reticle scales by vcod's aspect-preserving virtual screen, where
+  retail stretches 640x480 by separate x and y scales.
+- 0x300279b0, the client's body placement, is not ported: a gunner's body
+  draws at the server's origin and view yaw, with the mounted anim's middle
+  column.

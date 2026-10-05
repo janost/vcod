@@ -535,6 +535,11 @@ pub struct WeaponDef {
     /// `view_anim` and `resolve` fall back to idle rather than pick a clip
     /// that was never loaded.
     pub anim_keys: std::collections::HashSet<WeaponAnim>,
+    /// `idleAnim` and `fireAnim` by name: what a turret's own model plays
+    /// (docs/research/cod11-turrets.md section 14). The viewmodel reads the
+    /// raw map instead.
+    pub idle_anim: Option<String>,
+    pub fire_anim: Option<String>,
 }
 
 /// Absence is normal (a spread key on a turret file, an ammo key on a
@@ -803,6 +808,8 @@ impl WeaponDef {
                 .into_iter()
                 .filter(|a| opt_str(map, a.key()).is_some())
                 .collect(),
+            idle_anim: opt_str(map, "idleAnim"),
+            fire_anim: opt_str(map, "fireAnim"),
         }
     }
 }
