@@ -3372,6 +3372,11 @@ impl Server {
                     if let Some(string) = string {
                         sim.cursor_hint_string = string;
                     }
+                    // `BG_PlayerAnimation` (0x41486) runs after this slot's
+                    // aim trace: a higher slot's trace meets this frame's
+                    // pose, a lower one's met the last (combat doc 16.1).
+                    sim.commit_pose();
+                    rt.set_client_body(slot, sim.hit_body(slot));
                 }
             }
             // `turret_think_client`, last in `ClientEndFrame` (turrets doc
@@ -3994,8 +3999,7 @@ impl Server {
         let Some(def) = weapons.get(weapon as usize) else {
             return;
         };
-        // The bodies are posed off the anims their last round left, where
-        // retail's pose reads the last end frame's (combat doc, 16.1).
+        // The bodies are posed off the last end frame (combat doc, 16.1).
         let effects = {
             let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
                 .clients

@@ -2710,13 +2710,7 @@ mod tests {
             yaw: 0.0,
             mins: glam::Vec3::new(-15.0, -15.0, 0.0),
             maxs: glam::Vec3::new(15.0, 15.0, 72.0),
-            assembly: Default::default(),
-            legs: 0,
-            torso: 0,
-            legs_start_ms: 0,
-            torso_start_ms: 0,
-            torso_pitch: 0.0,
-            lean: 0.0,
+            pose: Default::default(),
         };
         rt.set_client_body(0, Some(body(0, 0.0, 0.0)));
         rt.set_client_body(1, Some(body(1, 150.0, 0.0)));
