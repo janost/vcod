@@ -948,6 +948,7 @@ mod tests {
                 collision: vcod_common::collision::test_world(extra),
                 vis: vcod_common::bsp::Visibility::none(),
                 spawn: ([0.0; 3], 0.0),
+                spawn_points: Vec::new(),
             }))
         };
         vm.with_cx(|cx| {

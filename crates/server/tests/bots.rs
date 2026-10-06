@@ -225,3 +225,35 @@ fn bots_spawn_again_after_a_dm_map_restart() {
         );
     }
 }
+
+/// Roaming follows the navigation graph to destinations at least 1000 units
+/// off, so in 20 s each bot gets far from where it spawned; a random
+/// heading that turns at every wall mostly does not.
+#[test]
+fn bots_roam_far_along_the_graph() {
+    let Some((mut sv, mut now)) = server_with(2, false) else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    run(&mut sv, &mut now, 60);
+    let slots = sv.bot_slots();
+    let start: Vec<[f32; 3]> = slots
+        .iter()
+        .map(|s| sv.bot_body(*s).unwrap().origin)
+        .collect();
+    let mut far = vec![0.0f32; slots.len()];
+    for _ in 0..400 {
+        run(&mut sv, &mut now, 1);
+        for (i, s) in slots.iter().enumerate() {
+            let o = sv.bot_body(*s).unwrap().origin;
+            let d = ((o[0] - start[i][0]).powi(2) + (o[1] - start[i][1]).powi(2)).sqrt();
+            far[i] = far[i].max(d);
+        }
+    }
+    for (s, d) in slots.iter().zip(&far) {
+        assert!(
+            *d > 800.0,
+            "bot {s} got no further than {d:.0} from its spawn"
+        );
+    }
+}

@@ -43,7 +43,7 @@ struct Args {
     /// Debug bots in play. Each takes a real client slot; 0 is off.
     #[arg(long, default_value_t = 0)]
     bots: usize,
-    /// Whether the bots fight. Without it they only wander.
+    /// Whether the bots fight. Without it they only roam.
     #[arg(long)]
     bots_shoot: bool,
     /// A cvar to set before the scripts load, retail's `+set name value`;

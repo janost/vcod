@@ -103,6 +103,22 @@ pub struct BotView {
     pub enemy: Option<EnemyView>,
     /// A held grenade's configstring index, when one is in the kit.
     pub grenade: Option<u8>,
+    /// The next point on the server's path toward [`Bot::goal`]; `None`
+    /// while there is no path, and the bot wanders.
+    pub waypoint: Option<[f32; 3]>,
+}
+
+/// Where a bot wants to go. The brain names it from its view; the server
+/// plans the way there over the map's navigation graph (`crate::nav`) and
+/// hands back the next [`BotView::waypoint`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Goal {
+    /// Nowhere: dead, spectating or mid-throw.
+    Hold,
+    /// Anywhere far: the server picks a spot and keeps it until reached.
+    Roam,
+    /// A point, feet or chest high.
+    To([f32; 3]),
 }
 
 #[derive(Clone, Copy)]
@@ -145,6 +161,8 @@ pub struct Bot {
     /// moves the origin is swapped for a new one.
     stall_origin: [f32; 3],
     stall_ticks: u32,
+    /// Ticks left on a wander heading taken to get unstuck, waypoint or not.
+    unstick_ticks: u32,
     /// Ticks until the trigger may go down again: a semi-auto's tap spacing,
     /// an automatic's pause between bursts.
     fire_cooldown: u32,
@@ -206,6 +224,7 @@ impl Bot {
             heading_ticks: 0,
             stall_origin: [0.0; 3],
             stall_ticks: 0,
+            unstick_ticks: 0,
             fire_cooldown: 0,
             burst_ticks: 0,
             target: None,
@@ -299,6 +318,19 @@ impl Bot {
         self.answered.clear();
     }
 
+    /// Where the bot wants to be this tick: the enemy it sees, else
+    /// anywhere far. Asked before [`Bot::think`], which then follows the
+    /// waypoint the server planned toward it.
+    pub fn goal(&self, view: &BotView) -> Goal {
+        if view.dead || !view.playing || !matches!(self.stage, Stage::Wander) {
+            return Goal::Hold;
+        }
+        match view.enemy {
+            Some(e) => Goal::To(e.origin),
+            None => Goal::Roam,
+        }
+    }
+
     /// The tick's usercmd. The driver stamps `server_time` and pushes the
     /// cmd into the client's queue.
     pub(crate) fn think(&mut self, view: &BotView) -> UserCmd {
@@ -354,18 +386,33 @@ impl Bot {
             }
         }
 
+        // A body that has not left a 15-unit circle in ten ticks is stuck,
+        // path or not, and takes a random heading for a spell.
         self.stall_ticks += 1;
-        if self.heading_ticks == 0
-            || (self.stall_ticks >= 10 && dist_sq(view.origin, self.stall_origin) < 15.0 * 15.0)
-        {
-            self.pick_heading(view);
-        } else {
-            self.heading_ticks -= 1;
+        if self.stall_ticks >= 10 {
+            if dist_sq(view.origin, self.stall_origin) < 15.0 * 15.0 {
+                self.pick_heading(view);
+                self.unstick_ticks = UNSTICK_TICKS;
+            } else {
+                self.stall_origin = view.origin;
+                self.stall_ticks = 0;
+            }
         }
-
-        let mut yaw = self.heading;
-        let mut pitch = 0.0;
-        cmd.forward = 127;
+        let (mut pitch, mut yaw, forward) = match view.waypoint {
+            Some(w) if self.unstick_ticks == 0 => steer(view.origin, w),
+            _ => {
+                self.unstick_ticks = self.unstick_ticks.saturating_sub(1);
+                if self.heading_ticks == 0 {
+                    self.pick_heading(view);
+                } else {
+                    self.heading_ticks -= 1;
+                }
+                (0.0, self.heading, 127)
+            }
+        };
+        // Engaging overrides all of this: `footwork` owns the move keys and
+        // the aim owns the view.
+        cmd.forward = forward;
         if self.shoot {
             self.track(view.enemy);
             if let Some(e) = view.enemy
@@ -610,6 +657,29 @@ impl Bot {
     }
 }
 
+/// Ticks a stuck bot spends on a random heading before its waypoint again.
+const UNSTICK_TICKS: u32 = 15;
+/// A waypoint this far above the feet is up a ladder: look up, where
+/// `ladder_move` climbs at full rate.
+const CLIMB_HEIGHT: f32 = 48.0;
+/// A waypoint this far below is down a ladder or off a ledge: back onto it
+/// facing the way it came, which is the side a ladder's grab traces toward
+/// (the graph proved the edge the same way, `crate::nav`).
+const BACK_DOWN_HEIGHT: f32 = 64.0;
+
+/// (pitch, yaw, forward) that take a body at `from` toward `to`.
+fn steer(from: [f32; 3], to: [f32; 3]) -> (f32, f32, i8) {
+    let yaw = (to[1] - from[1]).atan2(to[0] - from[0]).to_degrees();
+    let dz = to[2] - from[2];
+    if dz < -BACK_DOWN_HEIGHT {
+        (-crate::nav::LADDER_PITCH, yaw_diff(yaw + 180.0, 0.0), -127)
+    } else if dz > CLIMB_HEIGHT {
+        (-crate::nav::LADDER_PITCH, yaw, 127)
+    } else {
+        (0.0, yaw, 127)
+    }
+}
+
 /// Grenade reuses are minutes apart, not seconds.
 const GRENADE_COOLDOWN_TICKS: u32 = 400;
 const BOT_EYE_HEIGHT: f32 = 60.0;
@@ -728,6 +798,7 @@ mod tests {
             playing: true,
             enemy: None,
             grenade: Some(6),
+            waypoint: None,
         }
     }
 
@@ -771,6 +842,69 @@ mod tests {
             bot.think(&v);
         }
         assert_ne!(after, bot.think(&v).angles[1], "the stall swap is not once");
+    }
+
+    #[test]
+    fn the_goal_is_the_seen_enemy_else_anywhere() {
+        let bot = Bot::new("allies", true, 1);
+        let mut v = view();
+        assert_eq!(bot.goal(&v), Goal::Roam);
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [500.0, 0.0, 40.0],
+        });
+        assert_eq!(bot.goal(&v), Goal::To([500.0, 0.0, 40.0]));
+        v.dead = true;
+        assert_eq!(bot.goal(&v), Goal::Hold);
+    }
+
+    #[test]
+    fn a_bot_runs_at_its_waypoint() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.forward, 127);
+        assert_eq!(cmd.angles, [0, deg_short(90.0), 0], "level, facing +y");
+    }
+
+    #[test]
+    fn a_waypoint_up_a_ladder_looks_up_and_one_below_is_backed_onto() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([32.0, 0.0, 200.0]);
+        let up = bot.think(&v);
+        assert_eq!(
+            (up.forward, up.angles[0]),
+            (127, deg_short(-crate::nav::LADDER_PITCH))
+        );
+        v.waypoint = Some([32.0, 0.0, -100.0]);
+        let down = bot.think(&v);
+        assert_eq!(down.forward, -127, "backs off the ledge");
+        assert_eq!(
+            down.angles[1],
+            deg_short(-180.0),
+            "facing away from the waypoint"
+        );
+    }
+
+    #[test]
+    fn a_stuck_bot_leaves_its_waypoint_for_a_spell() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        let toward = bot.think(&v).angles[1];
+        // Pinned: the origin never moves, and the stall reads within two
+        // ten-tick windows.
+        let turned = (0..25).any(|_| bot.think(&v).angles[1] != toward);
+        assert!(turned, "a pinned bot kept pushing at its waypoint");
+        // The random heading gets it moving again.
+        for _ in 0..UNSTICK_TICKS {
+            v.origin[0] += 5.0;
+            v.waypoint = Some([v.origin[0], 100.0, 64.0]);
+            bot.think(&v);
+        }
+        assert_eq!(bot.think(&v).angles[1], toward, "and goes back to it after");
     }
 
     #[test]

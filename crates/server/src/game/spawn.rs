@@ -968,6 +968,7 @@ mod tests {
             collision,
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
+            spawn_points: Vec::new(),
         }));
         vm.with_cx(|cx| super::spawn_entities_from_string(&mut host, cx, lump))
             .unwrap();
