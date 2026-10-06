@@ -960,6 +960,7 @@ pub fn can_damage(
 /// `trigger_damage` spawns store it too, but no stock MP map places one
 /// (combat doc, 14.6), so the brush-model arms of `G_RadiusDamage` have no
 /// caller here.
+#[derive(Clone)]
 pub struct EntityVictim {
     pub id: EntId,
     /// `r.currentOrigin`, the distance's other end: not a brush model.
@@ -1070,9 +1071,16 @@ impl Blast {
         self.box_reaches(v.origin, v.mins, v.maxs)
     }
 
-    fn box_reaches(&self, origin: Vec3, mins: Vec3, maxs: Vec3) -> bool {
+    /// `trap_EntitiesInBox`' box: the blast plus and minus `radius * sqrt 2`
+    /// on each axis (14.1).
+    pub fn search_box(&self) -> ([f32; 3], [f32; 3]) {
         let half = Vec3::splat(self.radius * std::f32::consts::SQRT_2);
-        let (lo, hi) = (self.at - half, self.at + half);
+        ((self.at - half).into(), (self.at + half).into())
+    }
+
+    fn box_reaches(&self, origin: Vec3, mins: Vec3, maxs: Vec3) -> bool {
+        let (lo, hi) = self.search_box();
+        let (lo, hi) = (Vec3::from(lo), Vec3::from(hi));
         let min = origin + mins - Vec3::ONE;
         let max = origin + maxs + Vec3::ONE;
         min.cmple(hi).all() && max.cmpge(lo).all()

@@ -25,6 +25,9 @@ pub struct CollSurf {
     pub contents: u32,
     pub flags: u32,
     pub tris: Vec<[Vec3; 3]>,
+    /// The stored `mins`/`maxs`, in the bone's space and unbaked: what the
+    /// engine's static-model bounds are built from (combat doc 14.7).
+    pub bounds: (Vec3, Vec3),
 }
 
 pub struct Surface {
@@ -148,6 +151,7 @@ struct Descriptor {
 /// A collision surface before the bone bake; triangles in bone space.
 #[derive(Debug)]
 struct RawCollSurf {
+    bounds: (Vec3, Vec3),
     bone: i32,
     contents: u32,
     flags: u32,
@@ -202,11 +206,16 @@ fn parse_descriptor(data: &[u8]) -> Result<Descriptor> {
                 None => degenerate += 1,
             }
         }
-        r.skip(24)?; // mins[3], maxs[3], bone space
+        let mut b = [0f32; 6];
+        for v in &mut b {
+            *v = r.f32()?;
+        }
+        let bounds = (Vec3::new(b[0], b[1], b[2]), Vec3::new(b[3], b[4], b[5]));
         let bone = r.i32()?;
         let contents = r.u32()?;
         let flags = r.u32()?;
         collision.push(RawCollSurf {
+            bounds,
             bone,
             contents,
             flags,
@@ -550,6 +559,7 @@ fn parse_model(name: &str, desc: &[u8], parts: &[u8], surfs: &[u8]) -> Result<XM
             contents: s.contents,
             flags: s.flags,
             tris,
+            bounds: s.bounds,
         });
     }
     Ok(XModel {

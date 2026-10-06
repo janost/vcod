@@ -108,7 +108,9 @@ either: the people on it signed up for Call of Duty.
   the stock damage callback with per-bone hit locations. Rifle rounds pass
   through players and every round passes through glass. Melee works, and
   grenades fly as real missiles that bounce, rest and explode with retail's
-  falloff.
+  falloff. A blast walks its victims (players and MG42s) in the order of
+  retail's entity area tree, so players in a line shield each other the way
+  they do there. Bullets pass through mounted MG42s, as on retail.
 - Deaths leave corpses in the eight-slot body queue and drop the dead player's
   weapon. Players pick up weapons, ammo and health packs by touch or the use
   key. Dropped and spawned items fly retail's arc and land on what they hit,
@@ -189,9 +191,6 @@ console, no key rebinding. You get command-line flags and the binds below.
 - `re` (Retrieval) and `bel` (Behind Enemy Lines) run through the same
   script path, but I haven't checked either against retail.
 - A moving brush model pushes players only, not items, grenades or corpses.
-- A blast walks its victims (players and MG42s) in entity order, not
-  retail's area-tree order, so who shields whom can differ when several
-  stand in a line. Bullets don't damage MG42s.
 - No rcon, no anti-cheat, no PunkBuster, no master server heartbeat.
 
 **Rendering and sound**

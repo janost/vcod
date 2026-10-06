@@ -4516,12 +4516,11 @@ earlier in the walk, or anywhere earlier in the frame, is left out of the
 bodies that stop a probe. `a_blast_walks_its_victims_one_callback_at_a_time`
 (`crates/server/src/game/builtins/combat.rs`) replays the rows above in
 both slot orders; the same probe against `vcod-server` read every line-1 row
-as retail did. Not modelled: retail's walk order (14.7; vcod walks entity
-order, which matches both lethal rows above and not the line-2 same-frame
-row's callback order). A grenade blast reads victims and bodies off the
-sims, so a `setOrigin` from an earlier callback of the same walk does not
-move them; the builtin reads the script `origin` and does. The turrets
-follow the clients in both walks (14.6).
+as retail did, and since the walk took the area tree's order (14.7) the
+line-2 same-frame row's callback order too. A grenade blast reads victims
+and bodies off the sims, so a `setOrigin` from an earlier callback of the
+same walk does not move them; the builtin reads the script `origin` and
+does.
 
 ### 14.6 Turrets, and the other entities with `takedamage`
 
@@ -4587,16 +4586,26 @@ relative to slot 1 is not visible here, since its notifies are deferred.
 `G_SpawnTurret`'s box, `Blast::entity_damage` measures one
 (`crates/server/src/game/combat.rs`), and `GameHost::damage_entity` is the
 entity arm of `G_Damage`: health, `"damage"`, and `"death"` at or below 0.
-Both walks take the turrets in the blast's box after the clients: the
-`radiusDamage` builtin with the world as the attacker and its notifies
-raised through the builtin's `Cx`, a grenade with its thrower. The map load
+Both walks take the turrets where the area tree lists them among the
+clients (14.7): the `radiusDamage` builtin with the world as the attacker
+and its notifies raised through the builtin's `Cx`, a grenade with its
+thrower. The map load
 gives a turret 100 `health` when its key left 0. The same probe against
 `vcod-server` read the table above row for row, and
 `a_blast_damages_a_turret_and_notifies_it`
-(`crates/server/src/game/builtins/combat.rs`) replays it. Not modelled: a
-bullet on a turret, which retail's `G_Damage` takes through the same arm;
+(`crates/server/src/game/builtins/combat.rs`) replays it. Not modelled:
 doors, `func_static` and `trigger_damage`, whose spawns vcod does not run;
 and brush-model distance (`r.bmodel`), which only they would use.
+
+A bullet never reaches a turret. VERIFIED: `G_SpawnTurret` writes
+`r.contents` `0x200004` and is the only writer of that value in the module;
+the bullet's trace mask is `0x2802031` (2.3), as is the melee trace's (2.5);
+the engine's per-entity clip (`cod_lnxded` `0x809105c`) begins with a test
+of the trace's mask against the entity's `r.contents`. INFERRED: the two
+share no bit, the clip returns at that test, and a round passes through a
+mounted MG42 as through air, so `G_Damage` never sees a turret from a gun.
+vcod's shot trace has no turret in it and does the same. Not measured on a
+live server.
 
 ### 14.7 The walk's order: the area tree
 
@@ -4610,53 +4619,172 @@ to `0x8091f94` and 0x34 to `0x805a540`. INFERRED: those are
 `"CM_AreaEntities: MAXCOUNT\n"` string inside the walk `0x805a540` calls and
 by `0x80908b0` building `r.absmin`/`r.absmax` as 14.1 reads them.
 
-VERIFIED: the addresses, sizes, offsets and constants named in this list.
-INFERRED: what each function does with them, read off the decompiled control
-flow, and every condition.
+**The tree.** VERIFIED: the addresses, sizes, offsets and constants in this
+list. INFERRED: what each function does with them, read off the decompiled
+control flow, and every condition and ordering.
 
-- Nodes are 0x28 bytes from a pool of 0x3ff at `0x831b2fc`, the root at
-  `0x831b2a8`, a sentinel at `0x831b2d4` for a missing child.
-  `0x8058dd0` builds the root from inline model 0's bounds (x and y only):
-  axis 1 when the x extent is not larger than the y extent, 0 otherwise,
-  `dist` the midpoint (`* 0.5`, `.rodata 0x80cd474`).
-- A node holds its axis (`+0`), `dist` (`+0x10`), an entity list head
-  (`+0x14`), its parent (`+0x1C`) and two children (`+0x20`, `+0x24`).
-- `0x8059590`, the box query, walks a node's own list from its head, then
-  recurses into `+0x20` and then `+0x24`, each only when the query box
-  crosses to that side of `dist`.
-- `0x8059344`, the link, walks down from the root: to `+0x20` when the
-  entity's `absmin` on the node's axis is above `dist` (`fcom` at
-  `0x80593fc`), to `+0x24` when its `absmax` is below it (`0x805941d`),
-  stopping at a node the box touches or straddles or whose child is
-  missing. When the
-  node it stops at is the one the entity already sits in and the new
-  contents keep every bit the old ones had (`(old & ~new) == 0`), it only
-  refreshes the stored bounds and returns. Otherwise it unlinks
-  (`0x8058e9c`) and prepends the entity to the node's list.
-- After a prepend `0x8058f80` runs on that node: it walks the node's list
-  from the head and moves each entity that lies wholly on one side into
-  that child, prepending it there, creating the child from the pool when
-  its extent on its own axis is above 512 (`.rodata 0x80cd478`). It goes
-  down one level per call.
-- Contents 0 unlink (`0x80908b0`'s `r.contents` test, then `0x8058e9c`).
+- `0x8058dd0`, called once, from `CM_LoadMap` (`0x804b3c0`), builds the root
+  at `0x831b2a8` over inline model 0's x and y bounds, and threads a pool of
+  0x400 nodes of 0x28 bytes from `0x831b2fc` into a free list at
+  `0x831b2d0`, linked through `+0x1C`; a sentinel at `0x831b2d4` stands for a
+  missing child. The root splits on axis 1 when the x extent is not larger
+  than the y extent, 0 otherwise, at the midpoint (`* 0.5`,
+  `.rodata 0x80cd474`). The model bounds are the BSP lump's grown by one unit
+  each way, by the submodel loader `0x804a81c` (the `- 1.0`/`+ 1.0` pair).
+- A node holds its axis (`+0`), a static-model mask (`+4`, `+8`), an entity
+  contents mask (`+0xC`), `dist` (`+0x10`), an entity list head (`+0x14`), a
+  static-model list head (`+0x18`), its parent (`+0x1C`) and two children
+  (`+0x20`, `+0x24`).
+- `0x8059344`, the entity link, walks down from the root, OR-ing the entity's
+  contents into each node's `+0xC`: to `+0x20` when its `absmin` on the
+  node's axis is above `dist` (`fcom` at `0x80593fc`), to `+0x24` when its
+  `absmax` is below it (`0x805941d`), and it stops at a node the box touches
+  or straddles, or whose child on that side is missing. Each step down
+  narrows a copy of the world's xy bounds to that side before the child is
+  looked at, so a walk that stops for a missing child holds the half it was
+  heading for; one that stops on a straddle holds the node's own region.
+- When the node it stops at is the one the entity sits in and the new
+  contents keep every bit the stored ones had (`(old & ~new) == 0`, stored
+  at svEntity `+0x168`), it refreshes the stored contents and xy box
+  (`+0x16C..+0x178`) and keeps its place: on a straddle it returns there,
+  and for a missing child it runs the push-down below first. Otherwise it
+  unlinks (`0x8058e9c`) and walks again from the root, and an entity with no
+  node is prepended to the node's list, its contents and box stored, and the
+  push-down run.
+- `0x8058f80`, the push-down, walks the node's entity list from the head,
+  then its static list, and moves each entry that lies wholly on one side of
+  `dist` by its stored box into that child, prepended. A missing child is
+  taken from the pool, cut on the region the walk handed in (the longer of x
+  and y, y on a tie, at its midpoint, `.rodata 0x80cd47c`), not on the
+  child's own half of it. The pool is tested first, then the region's extent
+  on the chosen axis against 512 (`.rodata 0x80cd478`); an empty pool or an
+  extent of 512 or less returns from the whole pass, the static list
+  included. It goes down one level per call.
+- `0x8058e9c`, the unlink, takes the entity out of its list, then frees every
+  node on the way up that has no entities, no static models and no children
+  back to the pool (pushed on the free list's head, the parent's child slot
+  set to the sentinel), and recomputes `+0xC` on every node above as its
+  children's masks OR its own entities' current `r.contents`.
+- `0x8059590`, the box query, does nothing at a node whose `+0xC` misses the
+  query's mask; otherwise it walks the node's own list from its head, takes
+  each entity whose current `r.contents` meets the mask and whose
+  `r.absmin`/`r.absmax` touch the box, then recurses into `+0x20` when
+  `dist` is below the box's max on the axis and into `+0x24` when the box's
+  min is below `dist`.
+- `SV_LinkEntity` (`0x80908b0`) unlinks an entity whose `r.contents` is 0.
+  Otherwise the xy box it files the entity under is `r.absmin`/`r.absmax`,
+  except for an entity with a server DObj (`0x806e498`, the table at
+  `0x812a600`) and `r.svFlags & 6`: with bit 2, the origin's x and y plus
+  (-64, -64) and (64, 64) (`.data 0x80e30d0`, `0x80e30d4`, `0x80e30dc`,
+  `0x80e30e0`); with bit 4 alone, the model's bounds (`0x80c4f6c`) about the
+  origin.
+- The static models: `CM_LoadMap` calls `0x80515d4` after `0x8058dd0`, which
+  reads every `misc_model` of the entity string (the `classname`, `model`,
+  `origin`, `angles`, `modelscale_vec` and `modelscale` keys) and hands each
+  to `0x8051420`. That one builds the scaled axis, and `0x80c241c` takes the
+  eight corners of every collision surface's stored bounds (surface `+0x8`
+  and `+0x14`) through it; the origin is added and the model is linked by
+  `0x80594c4` when its masked collision contents (`0x80c2b48`, the word at
+  model `+0x48`) are non-zero. `0x80594c4` walks as the entity link does,
+  stops on a straddle or a missing child, prepends to `+0x18` and runs the
+  push-down.
 
-INFERRED, from the above: the list order is most recently prepended first,
-an entity that stays in its node through a cmd's relink keeps its place,
-and `player_die`'s unlink and relink with `CONTENTS_CORPSE` puts the dying
-player at its node's head, which is 14.5's line-2 reversal. On mp_carentan
-(model 0 bounds x -8512..10816, y -6720..11648) the second split is y 2464,
-which line 2's boxes at y 2473.1 plus and minus 16 straddle, so slots 2 and
-3 share that node, and the setOrigin order (3, then 2) put 2 at the head.
-Line 1, two boxes on the same side of every split down to the 512 limit,
-was walked 0 before 1 although 1 was set down after 0; the one-level
-push-down reverses the order of what it moves, which is one way to get
-there, but which nodes existed at that moment depends on every link since
-the map load.
+INFERRED, from the above: a list holds the most recently prepended entry
+first; an entity relinked in the node it sits in with no contents bit
+dropped keeps its place; a static model, never unlinked, keeps every node on
+its path alive, so the tree under a map's props is built at the load and
+the entities share it; and a push-down that moves several entries into one
+child reverses them.
 
-Not modelled: vcod has no area tree, and the order depends on the link
-history of every linked entity, not only the candidates. Modelling it means
-routing every link and unlink of every entity through one place; until
-then both walks run in entity order.
+**Who links, and with what.** VERIFIED, `game.mp.i386.so`, the call sites:
+`ClientThink_real` links once per usercmd at `0x40595`, after `ClientEvents`
+(`0x40589`, the cmd's shots) and before `G_TouchTriggers` (`0x405b3`);
+`SpectatorThink` unlinks at `0x3fc2f`; `ClientSpawn` unlinks at `0x42708`
+and calls `ClientEndFrame` (`0x42a75`) and `ClientThink_real` (`0x42a82`),
+and has no link of its own; the player `setOrigin` method (`0x43480`)
+unlinks at `0x434ee` and links at `0x4356c`; `player_die` writes contents
+`0x4000000` (`0x49c28`), unlinks at `0x49d68`, links at `0x49d7d` and again
+at `0x49d9d`; `G_SpawnTurret` links at `0x53025` with contents `0x200004`;
+`cloneplayer` (`0x4450c`) links its corpse at `0x446ae` and never writes its
+contents; `G_TempEntity` links at `0x67a18`; `G_FreeEntity` unlinks at
+`0x66aab`; `ClientEndFrame` has no link outside the gunner's turret think.
+VERIFIED: `r.svFlags` bit 2 is set only by `ClientEndFrame` (`0x40fa0`, on
+the playing arm) and bit 4 only by `SP_script_model` (`0x61020`); the
+server DObjs are made by `G_DObjUpdate` and `BG_UpdatePlayerDObj`, and no
+corpse has one. INFERRED: a playing client is filed under the 128-unit
+square about its origin, from its spawn on, since `ClientSpawn` reaches its
+link through `ClientEndFrame`; a client's cmd relinks keep its place while
+it stays in one node; a `setOrigin`, a spawn and a death each put it at the
+head of the node it lands in; a corpse and a temp entity link with contents
+0, so neither is ever in the tree; a dead client leaves the tree at its
+first cmd after the end frame that zeroed its contents.
+
+**map_restart.** VERIFIED: `0x8058dd0` has the one caller in `CM_LoadMap`,
+and the restart path (`0x8083de4`, `0x8089350`) does not reach it.
+VERIFIED: `G_ShutdownGame`'s loop (`0x4ff06..0x4ff4a`) calls `G_FreeEntity`
+on every entity in use, and the restart runs it. INFERRED: a restart keeps
+the nodes and the static models where the previous level's push-downs left
+them, and starts with no entity in the tree.
+
+**Measured.** VERIFIED, `client-probes/probe_blastorder` on retail,
+2026-10-06, four clients under sd on mp_carentan at 1000 health, flat-20
+blasts from `(-176.8, 2473.1, 7)`, the `cb` order of each:
+
+| step | `setOrigin` before the blast | walk |
+|---|---|---|
+| placed | 0 to (-290, 2430), 1 to (-260, 2480), 2 to (-230, 2380), 3 to (-230, 2540) | 1 0 3 2 |
+| moved_within | 0 to (-290, 2440) | 0 1 3 2 |
+| moved_into | 2 to (-200, 2430) | 2 0 1 3 |
+| moved_out | 1 to (-290, 2380) | 2 0 3 1 |
+
+INFERRED, from the rows and the model above: carentan's root splits x at
+1152 and its child below at y 2464; slots 0 and 1, whose 128-unit squares
+straddle y 2464, sit in that child's list in reverse `setOrigin` order; 3,
+wholly above, is walked before 2, wholly below; slot 0's move of ten units
+within the node still puts it first, the `setOrigin` unlink; a move into
+the node lands at its head and a move out of it to the far side lands
+last. 14.5's rows follow the same way: line 1's slot 0 straddles the split
+and slot 1 is wholly below it, so 0 is walked first whatever the
+`setOrigin` order; line 2's two straddle it and were set down 3 then 2, so 2
+comes first until `player_die` puts 3 at the head.
+
+**Other callers.** VERIFIED: `trap_EntitiesInBox` is also called by
+`G_TouchTriggers` (`0x3f925`, mask `0x405c0008`), `G_GetActivateEnt`
+(`0x4f237`, `0x200000`), `positionWouldTelefrag` and `G_KillBox`
+(`0x2000000`), `G_MoverPush` (`0x2000180`), and
+`G_CheckHitTriggerDamage` and `G_GrenadeTouchTriggerDamage` (`0x400000`).
+INFERRED: `G_GetActivateEnt` sorts its candidates by score, so the list
+order reaches it only through ties; `G_TouchTriggers` touches every hit in
+list order, so the order shows only where two touches' side effects meet
+(two weapons on one spot); the rest walk the whole list.
+
+**As implemented.** `crate::area::AreaTree` is the tree above, port for
+port: the lazy split on the region handed in, the one-level push-down, the
+512 floor, the 0x400 pool, the freeing unlink, the keep-your-place relink
+and the walk. `GameHost::area` holds it; `AreaTree::for_map` builds it at a
+map load from inline model 0 and `vcod_common::props::area_bounds` (the
+static models' boxes, as `0x80c241c` takes them), and a `map_restart`
+carries it with every entity unlinked. Every link goes through
+`AreaTree::link`: a client's after each cmd's shots and before its touch
+pass (`Server::replay_moves`, contents as the sim's end frame left them, 0
+for a spectator, none at intermission), `self spawn` and `setOrigin` as an
+unlink and a link, `GameHost::die` as `player_die`'s unlink and corpse
+link, a turret at its spawn, an unlink at a disconnect. Both walks take
+their candidates from `entities_in_box` over the blast's box: the
+`radiusDamage` builtin (`builtins::combat::blast_candidates`) and the
+grenade pass in `Server::tick`, clients and turrets interleaved as the tree
+lists them. `probe_blastorder` against `vcod-server` read every `cb` row
+above in retail's order, and `probe_blastloop`'s `same_frame_high` now runs
+3 then 2. `the_tree_replays_probe_blastorder_on_mp_carentan`
+(`crates/server/src/area.rs`) and
+`radiusdamage_walks_its_victims_in_the_area_trees_order`
+(`crates/server/src/game/builtins/combat.rs`) replay the table, the second
+through the builtins. Not routed through the tree: items, script models and
+brush models, triggers, movers and missiles, a linked client's per-frame
+relink in `G_RunClient`, and a gunner's relink in the turret think. None of
+them takes damage from a blast, so they change the walk only where their
+push-downs split a node the victims share. vcod's touch pass keeps its own
+order.
 
 ---
 

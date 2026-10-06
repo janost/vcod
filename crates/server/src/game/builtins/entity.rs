@@ -217,6 +217,17 @@ fn client_spawn(
     // `ClientSpawn` clears `takedamage` (0x4273c) and its own
     // `ClientEndFrame` call sets it again for a playing client.
     v.takedamage = mode == SpawnMode::Player;
+    // `ClientSpawn` unlinks (0x42708) and its own `ClientThink_real` links
+    // at the spawn point: a body in play, nothing for a spectator or an
+    // intermission camera.
+    host.area.unlink(slot as u32);
+    let contents = if mode == SpawnMode::Player {
+        vcod_common::movetrace::CONTENTS_BODY as i32
+    } else {
+        0
+    };
+    let playing = mode == SpawnMode::Player;
+    host.link_client(slot, origin, host.client_box(slot), contents, playing);
     host.client_spawns.push(SpawnRequest {
         slot,
         origin,

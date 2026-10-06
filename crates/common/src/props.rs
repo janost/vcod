@@ -299,6 +299,45 @@ pub fn collision_tris(fs: &Pk3Fs, entities: &str) -> Vec<ModelTri> {
     out
 }
 
+/// The world box the engine files each collidable `misc_model` under in its
+/// entity area tree, in entity-string order. VERIFIED, `cod_lnxded`: the
+/// loader (0x8051420) takes the eight corners of every collision surface's
+/// stored bounds through the scaled axis (0x80c241c), adds the origin, and
+/// links the model (0x80594c4) only when the OR of its surfaces' contents,
+/// masked `& 0xdfff7ffb`, is non-zero. INFERRED: the stored bounds are read
+/// unbaked, in the bone's space, which is model space for a rigid prop.
+pub fn area_bounds(fs: &Pk3Fs, entities: &str) -> Vec<(Vec3, Vec3)> {
+    let mut cache: HashMap<String, Option<xmodel::XModel>> = HashMap::new();
+    let mut out = Vec::new();
+    for p in placements(entities) {
+        let model = cache
+            .entry(p.model.clone())
+            .or_insert_with(|| load_model(fs, &p.model));
+        let Some(model) = model else { continue };
+        let contents = model.collision.iter().fold(0, |c, s| c | s.contents) & 0xdfff_7ffb;
+        if model.collision.is_empty() || contents == 0 {
+            continue;
+        }
+        let rot = rotation(p.angles);
+        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for surf in &model.collision {
+            let (a, b) = surf.bounds;
+            for corner in 0..8 {
+                let c = Vec3::new(
+                    if corner & 1 == 0 { b.x } else { a.x },
+                    if corner & 2 == 0 { b.y } else { a.y },
+                    if corner & 4 == 0 { b.z } else { a.z },
+                );
+                let w = rot * (p.scale * c);
+                lo = lo.min(w);
+                hi = hi.max(w);
+            }
+        }
+        out.push((lo + p.origin, hi + p.origin));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,11 +355,13 @@ mod tests {
                     contents: crate::collision::CONTENTS_SOLID,
                     flags: 21 << 20,
                     tris: vec![tri],
+                    bounds: (Vec3::ZERO, Vec3::ONE),
                 },
                 xmodel::CollSurf {
                     contents: 0,
                     flags: 0,
                     tris: vec![tri],
+                    bounds: (Vec3::ZERO, Vec3::ONE),
                 },
             ],
         };

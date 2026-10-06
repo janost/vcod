@@ -250,6 +250,9 @@ const TURRET_MAX_STEP: f32 = 15.0;
 /// The `r.mins`/`r.maxs` `G_SpawnTurret` links with (0x52f75; the same pair
 /// `crate::game::wire::link_box` gives `ET_TURRET`).
 pub const TURRET_BOX: ([f32; 3], [f32; 3]) = ([-32.0, -32.0, 0.0], [32.0, 32.0, 56.0]);
+/// `G_SpawnTurret`'s `r.contents` (0x52f39..0x52f65), which shares no bit
+/// with the shot mask `0x2802031` (combat doc 14.6).
+pub const TURRET_CONTENTS: i32 = 0x0020_0004;
 /// `G_SpawnTurret`'s `health` for a turret whose map key left it 0
 /// (0x52ee7, 0x52ef0).
 pub const TURRET_HEALTH: i32 = 100;

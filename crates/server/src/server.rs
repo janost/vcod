@@ -751,6 +751,29 @@ fn apply_callback_ops(
     mirror_vitals_of(sim, rt, slot);
 }
 
+/// `ClientThink_real`'s link after a cmd's move and its shots, at the
+/// snapped origin with the contents the last end frame wrote (combat doc
+/// 14.1, 14.7).
+fn link_client(rt: &mut script::ScriptRuntime, slot: usize, sim: &ClientSim) {
+    // The intermission arm returns ahead of the link; a spectator's think
+    // unlinks, which its contents 0 does here.
+    if sim.pm_type == crate::spectate::PmType::Intermission {
+        return;
+    }
+    let playing = sim.pm_type == crate::spectate::PmType::Normal && !sim.dead;
+    let bounds = (sim.ps.mins().into(), sim.ps.maxs().into());
+    // A death earlier this tick linked `player_die`'s corpse contents, which
+    // `r.contents` holds until the end frame and the sim takes only at the
+    // next mirror.
+    let contents = if rt.client_vitals(slot).dead && !sim.dead {
+        rt.host.area.contents(slot as u32)
+    } else {
+        sim.contents as i32
+    };
+    rt.host
+        .link_client(slot, sim.link_origin().into(), bounds, contents, playing);
+}
+
 /// `slot`'s entry in the movers' body list, off its sim: a death's
 /// `CONTENTS_CORPSE` is outside every mover's mask.
 fn relink(bodies: &mut Vec<vcod_common::movetrace::Body>, clients: &[Option<Client>], slot: usize) {
@@ -758,6 +781,12 @@ fn relink(bodies: &mut Vec<vcod_common::movetrace::Body>, clients: &[Option<Clie
     if let Some(sim) = clients[slot].as_ref().and_then(|c| c.sim.as_ref()) {
         bodies.extend(sim.body(slot as u32));
     }
+}
+
+/// One victim of a grenade's walk: a client, or an entity with no client.
+enum BlastCandidate<'a> {
+    Client(usize, &'a ClientSim),
+    Entity(crate::game::combat::EntityVictim),
 }
 
 /// What one client's usercmd replay did this tick, for the trace line.
@@ -2596,6 +2625,7 @@ impl Server {
             game: carry.game.filter(|_| save_persist),
             pers: if save_persist { carry.pers } else { Vec::new() },
             items: carry.items.filter(|_| restart),
+            area: carry.area.filter(|_| restart),
         };
         let source = crate::game::script::PakScripts::new(fs.clone(), self.script_overlay.clone());
         let rng_seed = vcod_common::rng::xorshift(&mut self.rng);
@@ -3314,16 +3344,27 @@ impl Server {
                     crate::items::item_name(x.weapon as usize).unwrap_or_default(),
                     "MOD_GRENADE_SPLASH",
                 );
-                let candidates: Vec<(usize, &crate::spectate::ClientSim)> = sims
-                    .iter()
-                    .copied()
-                    .filter(|&(slot, s)| blast.reaches(&victim(slot, s)))
-                    .collect();
-                // The turrets follow the clients, entity order.
-                let entities: Vec<_> = rt
-                    .blast_entities()
+                // `trap_EntitiesInBox`' order (combat doc 14.7): the
+                // clients and the turrets as the area tree lists them.
+                let entities = rt.blast_entities();
+                let (mins, maxs) = blast.search_box();
+                let candidates: Vec<BlastCandidate> = rt
+                    .host
+                    .area
+                    .entities_in_box(mins, maxs, -1)
                     .into_iter()
-                    .filter(|v| blast.reaches_entity(v))
+                    .filter_map(|n| {
+                        if let Some(&(slot, s)) = sims.iter().find(|(slot, _)| *slot == n as usize)
+                        {
+                            return blast
+                                .reaches(&victim(slot, s))
+                                .then_some(BlastCandidate::Client(slot, s));
+                        }
+                        let v = entities.iter().find(|v| v.id.0 == n)?;
+                        blast
+                            .reaches_entity(v)
+                            .then(|| BlastCandidate::Entity(v.clone()))
+                    })
                     .collect();
                 // A client a callback of this walk killed is a corpse and
                 // stops nothing.
@@ -3334,29 +3375,31 @@ impl Server {
                             .filter_map(|(other, s)| s.hit_body(*other))
                             .collect()
                     };
-                for (slot, s) in candidates {
-                    if !rt.client_vitals(slot).takedamage {
-                        continue;
-                    }
+                for candidate in candidates {
                     let bodies = live_bodies(rt);
                     let models = rt.placed_script_models();
-                    if let Some(hit) = blast.hit(
-                        &victim(slot, s),
-                        collision,
-                        &models,
-                        &bodies,
-                        bones.as_mut(),
-                    ) {
-                        rt.deliver_hits(vec![hit], self.sv_time_ms);
-                    }
-                }
-                for v in entities {
-                    let bodies = live_bodies(rt);
-                    let models = rt.placed_script_models();
-                    if let Some(damage) =
-                        blast.entity_damage(&v, collision, &models, &bodies, bones.as_mut())
-                    {
-                        rt.damage_entity(v.id, damage, x.owner);
+                    match candidate {
+                        BlastCandidate::Client(slot, s) => {
+                            if !rt.client_vitals(slot).takedamage {
+                                continue;
+                            }
+                            if let Some(hit) = blast.hit(
+                                &victim(slot, s),
+                                collision,
+                                &models,
+                                &bodies,
+                                bones.as_mut(),
+                            ) {
+                                rt.deliver_hits(vec![hit], self.sv_time_ms);
+                            }
+                        }
+                        BlastCandidate::Entity(v) => {
+                            if let Some(damage) =
+                                blast.entity_damage(&v, collision, &models, &bodies, bones.as_mut())
+                            {
+                                rt.damage_entity(v.id, damage, x.owner);
+                            }
+                        }
                     }
                 }
             }
@@ -4080,6 +4123,11 @@ impl Server {
             // (0x405b3), right after the link. The item half follows the
             // trigger half, and the use key after both.
             if let Some(rt) = self.script.as_mut() {
+                // The link sits between `ClientEvents`, whose shots traced
+                // against the last links, and `G_TouchTriggers` (0x40595).
+                if let Some(sim) = self.clients[t.slot].as_ref().and_then(|c| c.sim.as_ref()) {
+                    link_client(rt, t.slot, sim);
+                }
                 mirror_roster(&self.clients, rt);
                 rt.touch_triggers_at(t.slot, now_ms, t.buttons, t.origin);
                 // `ps.origin` back into `r.currentOrigin` past the touch

@@ -2,6 +2,7 @@
 //! `Server` drives the UDP loop and the tests.
 
 pub mod archive;
+pub mod area;
 pub mod bots;
 pub mod client;
 pub mod configstrings;

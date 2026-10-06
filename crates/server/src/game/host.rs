@@ -359,6 +359,10 @@ pub struct GameHost {
     /// on a fresh `GameHost`; `bulletTrace` traces against it when present
     /// and reports a clean miss when it is not. Stage 10 is what sets it.
     pub world: Option<std::rc::Rc<crate::world::World>>,
+    /// The engine's entity area tree, which every link and unlink of an
+    /// entity goes through and a blast's victim walk reads
+    /// (`crate::area`, combat doc 14.7).
+    pub area: crate::area::AreaTree,
     /// `randomFloat`'s generator state: xorshift64*, so a draw is a real
     /// uniform value and reproducible from a seed. Retail seeds from the
     /// level clock; nothing here needs to match its sequence, only to be a
@@ -500,6 +504,54 @@ impl GameHost {
         v.health = 0;
         v.dead = true;
         v.takedamage = true;
+        // `player_die` unlinks and links again with `CONTENTS_CORPSE`, so the
+        // dying player goes to its node's head (combat doc 14.7).
+        if let Some(link) = self.area.last_link(slot as u32) {
+            let contents = vcod_common::movetrace::CONTENTS_CORPSE as i32;
+            self.area.unlink(slot as u32);
+            self.area.link(slot as u32, &link.with_contents(contents));
+        }
+    }
+
+    /// `G_SpawnTurret`'s closing `trap_LinkEntity` (0x53025): the turret's
+    /// box at its origin.
+    pub fn link_turret(&mut self, cx: &mut Cx, id: EntId) {
+        let origin = cx.intern_folded("origin");
+        if let Value::Vector(at) = self.get_field(cx, id, origin) {
+            let (mins, maxs) = crate::game::turret::TURRET_BOX;
+            let link =
+                crate::area::Link::boxed(at, mins, maxs, crate::game::turret::TURRET_CONTENTS);
+            self.area.link(id.0, &link);
+        }
+    }
+
+    /// A client's link as the tree files it: its box at `origin` and
+    /// `contents`, under the playing client's fixed square while `playing`
+    /// (combat doc 14.7). Contents 0 unlinks.
+    pub fn link_client(
+        &mut self,
+        slot: usize,
+        origin: [f32; 3],
+        (mins, maxs): ([f32; 3], [f32; 3]),
+        contents: i32,
+        playing: bool,
+    ) {
+        let link = if playing {
+            crate::area::Link::player(origin, mins, maxs, contents)
+        } else {
+            crate::area::Link::boxed(origin, mins, maxs, contents)
+        };
+        self.area.link(slot as u32, &link);
+    }
+
+    /// A client's standing box, for a link the host makes without the sim:
+    /// the stance lives on the sim, the height the last cmd left here.
+    pub fn client_box(&self, slot: usize) -> ([f32; 3], [f32; 3]) {
+        use vcod_common::pmove::HALF_WIDTH;
+        (
+            [-HALF_WIDTH, -HALF_WIDTH, 0.0],
+            [HALF_WIDTH, HALF_WIDTH, self.client_height[slot]],
+        )
     }
 
     /// Every live entity with no client that a blast can damage, in entity
@@ -676,6 +728,7 @@ impl GameHost {
             allocators,
             cvars: crate::cvars::Cvars::new(),
             world: None,
+            area: crate::area::AreaTree::unbounded(),
             rng: RNG_SEED,
             script_log: Vec::new(),
             level_time_ms: 0,
