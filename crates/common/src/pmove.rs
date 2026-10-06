@@ -13,6 +13,7 @@ use glam::Vec3;
 
 pub mod aim;
 pub mod cmd;
+pub mod movers;
 pub mod predict;
 pub mod weapon;
 

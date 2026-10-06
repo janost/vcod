@@ -412,8 +412,11 @@ struct LivePhase {
 
 fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp, net: &net::NetClient<net::UdpTransport>) -> Phase {
     let world = collision::CollisionWorld::build(bsp, &props::collision_tris(fs, &bsp.entities));
-    let gametype = net::info_value_for_key(net.configstring(0), "g_gametype").unwrap_or("");
-    world.unlink_script_brushes(&bsp.entities, gametype);
+    // A brush model clips only through its snapshot entity
+    // (`pmove::movers::SnapshotMovers::place`), as retail's cgame meets it.
+    for model in 1..world.model_count() {
+        world.set_model_linked(model, false);
+    }
     Phase::Live(Box::new(LivePhase {
         world,
         weapons: vcod_common::weapon_table::from_configstring(fs, net.configstring(7)),
@@ -2051,8 +2054,16 @@ impl ApplicationHandler for App {
                                                 client_num as u32,
                                                 drawn_pos,
                                             );
+                                            let movers = (
+                                                pmove::movers::SnapshotMovers::from_entities(
+                                                    p,
+                                                    &s.entities,
+                                                ),
+                                                s.server_time,
+                                            );
                                             predictor.predict(
-                                                p, &s.ps, ring, world, &bodies, weapons, local_ms,
+                                                p, &s.ps, ring, world, &bodies, &movers, weapons,
+                                                local_ms,
                                             )
                                         })
                                     } else {

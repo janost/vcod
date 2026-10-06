@@ -172,8 +172,9 @@ console, no key rebinding. You get command-line flags and the binds below.
   section 9).
 - Only protocol 1 (patch 1.1). 1.5 and United Offensive servers won't talk to
   it.
-- Prediction clips against the map and other players, but not against moving
-  script entities.
+- Prediction carries you with a moving brush model you stand on but not
+  with its rotation, which retail's client doesn't either; a turning mover's
+  rider is corrected at each snapshot.
 
 **Server**
 

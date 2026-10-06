@@ -440,3 +440,39 @@ four times and writes `in + (a - b)` and an angle delta;
 `CG_PredictPlayerState` (`0x300294f0`) calls it at two sites. INFERRED: it is
 Q3's `CG_AdjustPositionForMover`, carrying the predicted origin with the
 ground entity's motion between the snapshot time and the render time.
+
+VERIFIED, cgame: `CG_BuildSolidList` (`0x30028d50`) walks the snapshot's
+entities and skips one whose next state has `solid` `0xffffff`
+(`0x30028d93`) and `eFlags` bit `0x2` (`test byte [eax+0xf8],0x2` at
+`0x30028d9b`); `SP_trigger_multiple`, `SP_trigger_damage` and
+`SP_trigger_once` (game.mp `0x74c50`, `0x75278`, `0x75c0c`) are the writers
+of that bit read so far. VERIFIED: the brush model arm of
+`CG_ClipMoveToEntities` evaluates `apos` and `pos` (`0x30028e67`,
+`0x30028e78`) at the time held in `0x30207150`, which `CG_PredictPlayerState`
+loads from the snapshot's `serverTime` (`snap+8`). VERIFIED: the carry after
+the cmd loop (`0x30029a2e`) passes the dword at `0x302071b0` as the entity
+number, that time, the dword at `0x30207148` as the target time and the
+predicted origin at `0x30207170` as both in and out; the angle delta it
+writes to `[esp+0x34]` is not read again before the function returns. The
+second call site is `0x3002972d`, inside the cmd loop. INFERRED: the entity
+is the predicted `groundEntityNum` and the target time `cg.time`; retail
+clips a brush model where it stood at the snapshot, not per cmd, carries the
+predicted origin by the ground mover's translation only, so a rider of a
+turning mover is predicted standing still between snapshots; and the second
+site is Q3's miss test, which carries the new replay's origin at the old
+prediction's `commandTime` before comparing, so a ride is no correction.
+INFERRED, off the `eFlags` test and section 14's wire: a `notSolid()`ed
+brush model still in the snapshot is clipped by retail's prediction, as the
+four exploder brush models `_load.gsc` hides and `notSolid()`s are (mp_depot
+`*1`, mp_powcamp `*3` and `*9`, mp_rocket `*3`; cod11-mantle.md).
+
+vcod: `vcod_common::pmove::movers::SnapshotMovers` is that solid list and
+that carry. The client unlinks every submodel at map load, and each
+prediction links and poses the snapshot's brush models at its `serverTime`,
+naming each by its entity so a ground trace reads it; the replay's newest
+origin and the drawn origin are carried by the ground mover, and the
+correction compares both sides carried to the old `commandTime`.
+`predict_ab.rs`'s `predictor_rides_retail_movers` predicts the ride capture's
+rider from each snapshot to the next against retail's next playerstate:
+exact to 0.05 through every carried phase, 4.3 units out through the two yaw
+phases, as retail's own prediction is.
