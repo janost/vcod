@@ -453,6 +453,9 @@ pub struct GameHost {
     /// The `radiusDamage` walks under way, innermost last: a damage callback
     /// can call the builtin again before its first `wait`.
     pub blasts: Vec<crate::game::builtins::combat::ScriptBlast>,
+    /// Where each `radiusDamage` since the server last asked went off, for
+    /// the bots' hearing.
+    pub blast_noises: Vec<[f32; 3]>,
     /// The value retail's `vmMain` case 16 returns
     /// (docs/research/cod11-map-cycle.md section 1): whether the outgoing
     /// level asked to keep its script `pers` and `game` variable across the
@@ -754,6 +757,7 @@ impl GameHost {
             ignore_radius_damage: false,
             radius_ignore_active: false,
             blasts: Vec::new(),
+            blast_noises: Vec::new(),
             save_persist: false,
             team_scores: [0, 0],
             ranks_dirty: false,

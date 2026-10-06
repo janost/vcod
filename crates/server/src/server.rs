@@ -2020,7 +2020,19 @@ impl Server {
     /// queue when the sim reads it. Four passes, because the brains need the
     /// whole of `self` to think and their writes land after.
     fn step_bots(&mut self) {
-        let noises = std::mem::take(&mut self.bot_noises);
+        let mut noises = std::mem::take(&mut self.bot_noises);
+        // A script's `radiusDamage` (the S&D bomb, an exploder) is nobody's.
+        if let Some(rt) = self.script.as_mut() {
+            noises.extend(
+                rt.take_blast_noises()
+                    .into_iter()
+                    .map(|at| crate::bots::Noise {
+                        at: [at[0], at[1], at[2] + 40.0],
+                        source: usize::MAX,
+                        radius: crate::bots::HEAR_BLAST,
+                    }),
+            );
+        }
         if self.cfg.bots == 0 {
             return;
         }
@@ -2086,7 +2098,7 @@ impl Server {
         // Pass 2: what each bot's body sees, for the brains. The enemy
         // lookup refreshes at ~10 Hz per bot and is cached in between.
         let sd = self.bot_sd();
-        let views: Vec<(usize, crate::bots::BotView)> = slots
+        let mut views: Vec<(usize, crate::bots::BotView)> = slots
             .iter()
             .filter_map(|slot| {
                 let fresh = self
@@ -2102,20 +2114,45 @@ impl Server {
                 };
                 let mut view = self.bot_view(*slot, enemy)?;
                 view.noise = crate::bots::loudest(&noises, *slot, view.origin);
-                view.sd = sd.as_ref().and_then(|(attackers, defenders, sd)| {
-                    let team = teams.get(*slot).copied().unwrap_or(0);
-                    let role = if team == *attackers {
-                        crate::bots::ObjRole::Attack
-                    } else if team == *defenders {
-                        crate::bots::ObjRole::Defend
-                    } else {
-                        return None;
-                    };
-                    Some(crate::bots::SdView { role, ..sd.clone() })
-                });
                 Some((*slot, view))
             })
             .collect();
+        if let Some((attackers, defenders, sd)) = &sd {
+            let team = |slot: usize| teams.get(slot).copied().unwrap_or(0);
+            // The team's bots that play, by slot, and each one's distance
+            // to the bomb.
+            let bomb_dist = |v: &crate::bots::BotView| {
+                sd.bomb
+                    .map_or(0.0, |b| crate::bots::dist_sq(v.origin, b.origin))
+            };
+            let side: Vec<(usize, i32, f32, bool)> = views
+                .iter()
+                .map(|(slot, v)| (*slot, team(*slot), bomb_dist(v), v.playing))
+                .collect();
+            for (slot, view) in views.iter_mut() {
+                let mine = team(*slot);
+                let role = if mine == *attackers {
+                    crate::bots::ObjRole::Attack
+                } else if mine == *defenders {
+                    crate::bots::ObjRole::Defend
+                } else {
+                    continue;
+                };
+                let rank = side.iter().filter(|s| s.1 == mine && s.0 < *slot).count();
+                // Nearest first, the lower slot on a tie.
+                let lead = side
+                    .iter()
+                    .filter(|s| s.1 == mine && s.3)
+                    .min_by(|a, b| a.2.total_cmp(&b.2).then(a.0.cmp(&b.0)))
+                    .is_some_and(|s| s.0 == *slot);
+                view.sd = Some(crate::bots::SdView {
+                    role,
+                    rank,
+                    lead,
+                    ..sd.clone()
+                });
+            }
+        }
 
         // Pass 3: the tick's waypoint toward each brain's goal, then its
         // cmd. A* runs are capped per tick across all bots; one that misses
@@ -2268,12 +2305,13 @@ impl Server {
         let sim = self.clients[slot].as_ref()?.sim.as_ref()?;
         let weapons = self.weapon_table.clone();
         let def = weapons.get(sim.ps.weapon as usize);
-        let grenade = (1u8..64).find(|i| {
-            sim.ps.weapons_held >> i & 1 == 1
-                && weapons
-                    .get(*i as usize)
-                    .is_some_and(|d| d.weapon_type == "grenade")
-        });
+        let held = |pick: &dyn Fn(&vcod_common::weapon::WeaponDef) -> bool| {
+            (1u8..64).find(|i| {
+                sim.ps.weapons_held >> i & 1 == 1 && weapons.get(*i as usize).is_some_and(pick)
+            })
+        };
+        let grenade = held(&|d| d.weapon_type == "grenade");
+        let pistol = held(&|d| d.weapon_slot == "pistol");
         Some(crate::bots::BotView {
             origin: sim.ps.origin.into(),
             delta_angles: sim.delta_angles(),
@@ -2294,6 +2332,8 @@ impl Server {
             grenade,
             waypoint: None,
             linked: sim.link_to.is_some(),
+            on_ladder: sim.ps.on_ladder,
+            pistol,
             sd: None,
             noise: None,
         })
@@ -2333,6 +2373,8 @@ impl Server {
                 role: crate::bots::ObjRole::Attack,
                 sites,
                 bomb,
+                rank: 0,
+                lead: false,
             },
         ))
     }
@@ -2452,6 +2494,11 @@ impl Server {
             }
         }
         None
+    }
+
+    /// Test-facing: the shots and blasts the bots hear next tick.
+    pub fn bot_noises(&self) -> &[crate::bots::Noise] {
+        &self.bot_noises
     }
 
     /// Test-facing, for the bot gates: the slots the bots hold.
@@ -3283,14 +3330,12 @@ impl Server {
             }
             // What the radius damage pass charges, on this same frame.
             self.pending_explosions = frame.exploded;
-            if self.cfg.bots > 0 {
-                self.bot_noises
-                    .extend(self.pending_explosions.iter().map(|x| crate::bots::Noise {
-                        at: (x.at + glam::Vec3::Z * 40.0).into(),
-                        source: x.owner,
-                        radius: crate::bots::HEAR_BLAST,
-                    }));
-            }
+            self.bot_noises
+                .extend(self.pending_explosions.iter().map(|x| crate::bots::Noise {
+                    at: (x.at + glam::Vec3::Z * 40.0).into(),
+                    source: x.owner,
+                    radius: crate::bots::HEAR_BLAST,
+                }));
             // The client commands the packet pass queued, on this frame's
             // clock: a thread started here sees `level.time` already
             // advanced, which is what a `cloneplayer` in it needs.
@@ -3709,6 +3754,12 @@ impl Server {
                 }
             }
             rt.drop_turret_releases();
+            self.bot_noises
+                .extend(shots.iter().map(|s| crate::bots::Noise {
+                    at: s.muzzle.into(),
+                    source: s.slot,
+                    radius: crate::bots::HEAR_GUNFIRE,
+                }));
             if !shots.is_empty() {
                 let mut turret_effects = Vec::new();
                 {
@@ -4016,13 +4067,11 @@ impl Server {
                         })
                     }
                     EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT => {
-                        if self.cfg.bots > 0 {
-                            self.bot_noises.push(crate::bots::Noise {
-                                at: (sim.ps.origin + glam::Vec3::Z * 40.0).into(),
-                                source: slot,
-                                radius: crate::bots::HEAR_GUNFIRE,
-                            });
-                        }
+                        self.bot_noises.push(crate::bots::Noise {
+                            at: (sim.ps.origin + glam::Vec3::Z * 40.0).into(),
+                            source: slot,
+                            radius: crate::bots::HEAR_GUNFIRE,
+                        });
                         attacks.push(Attack::Shot(Shot {
                             slot,
                             weapon,

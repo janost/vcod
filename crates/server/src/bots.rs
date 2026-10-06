@@ -132,6 +132,10 @@ pub struct BotView {
     /// `linkTo` holds the body (a plant or defuse in progress); it cannot
     /// move, so it is not stuck.
     pub linked: bool,
+    /// `ps.on_ladder`: the climb looks up, as the graph's walks did.
+    pub on_ladder: bool,
+    /// A held pistol's configstring index, when one is in the kit.
+    pub pistol: Option<u8>,
     /// The S&D objectives, on an `sd` level only.
     pub sd: Option<SdView>,
 }
@@ -152,6 +156,12 @@ pub struct SdView {
     pub sites: Vec<SiteView>,
     /// The planted bomb, until it is defused or explodes.
     pub bomb: Option<BombView>,
+    /// The bot's place among its team's bots, by slot: sites are dealt out
+    /// by it, so a team spreads over both.
+    pub rank: usize,
+    /// The bot is its team's bot nearest the bomb: the one defender that
+    /// goes for the defuse while the rest keep off its line of sight.
+    pub lead: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -270,6 +280,18 @@ pub struct Bot {
     stage: Stage,
     /// The weapon a grenade throw hands back to.
     rifle: u8,
+    /// A weapon switch under way: the byte every cmd carries until
+    /// `ps.weapon` reads it (AGENTS.md, "Every cmd carries the weapon").
+    switch_to: Option<u8>,
+    /// The weapon a pistol draw put away, and the ticks since the bot last
+    /// saw an enemy with the pistol out.
+    primary: u8,
+    calm_ticks: u32,
+    /// The weapon menu answered last and the weapon it was answered with;
+    /// a reopened menu gets the same one while the cvars allow it.
+    loadout: Option<(String, &'static str)>,
+    /// The heading a back down onto a ladder holds (`crate::nav::Creep`).
+    creep: crate::nav::Creep,
     obj: Objective,
     /// The last reliable server command the bot consumed.
     pub(crate) last_seen_seq: i32,
@@ -296,7 +318,7 @@ struct Target {
 /// starts it over (docs/research/bot-objectives.md).
 #[derive(Default)]
 struct Objective {
-    /// Which site this life goes to: `pick % sites.len()`.
+    /// Sites given up on this life; the site is `(rank + pick) % sites`.
     pick: u32,
     /// Ticks the use key has been held at the objective; nonzero means the
     /// plant or defuse is in progress and nothing else may break it off.
@@ -343,6 +365,10 @@ const RETRY_TICKS: u32 = 10;
 /// rests on the bomb this many ticks before the press.
 const SETTLE_TICKS: u32 = 2;
 const SETTLE_DEG: f32 = 1.0;
+/// The planter's view pitch, wire convention (up). An item on the floor
+/// inside 128 units sits more than 30 degrees below level, and
+/// `G_GetActivateEnt`'s cone is 40 either side of the view.
+const PLANT_PITCH: f32 = -60.0;
 /// Inset from a bombzone's edges before the bot counts as inside it.
 const SITE_MARGIN: f32 = 8.0;
 /// The standing player's box height, for the zone's z overlap.
@@ -394,12 +420,12 @@ impl Bot {
             respawn_ticks: 0,
             stage: Stage::Wander,
             rifle: 0,
-            // Off the seed rather than the generator, so the stream every
-            // other draw reads is the one it was before objectives.
-            obj: Objective {
-                pick: (seed >> 32) as u32,
-                ..Objective::default()
-            },
+            switch_to: None,
+            primary: 0,
+            calm_ticks: 0,
+            loadout: None,
+            creep: crate::nav::Creep::default(),
+            obj: Objective::default(),
             last_seen_seq: 0,
             next_command_seq: 1,
             team: team.to_string(),
@@ -459,8 +485,8 @@ impl Bot {
         if self.main_menu.starts_with("team_") {
             return Some(self.team.clone());
         }
-        let menu = self.main_menu.strip_prefix("weapon_")?;
-        let open: Vec<&str> = WEAPON_MENUS
+        let menu = self.main_menu.strip_prefix("weapon_")?.to_string();
+        let open: Vec<&'static str> = WEAPON_MENUS
             .iter()
             .find(|(n, _)| *n == menu)?
             .1
@@ -468,11 +494,18 @@ impl Bot {
             .filter(|(_, cvar)| allowed(cvar))
             .map(|(w, _)| *w)
             .collect();
+        if let Some((m, w)) = &self.loadout
+            && *m == menu
+            && open.contains(w)
+        {
+            return Some(w.to_string());
+        }
         if open.is_empty() {
             return None;
         }
-        let pick = self.rand() as usize % open.len();
-        Some(open[pick].to_string())
+        let pick = open[self.rand() as usize % open.len()];
+        self.loadout = Some((menu, pick));
+        Some(pick.to_string())
     }
 
     /// A new gamestate reruns `ClientConnect` and reopens the menus under the
@@ -518,7 +551,7 @@ impl Bot {
         let sd = view.sd.as_ref()?;
         let site = || {
             let n = sd.sites.len();
-            (n > 0).then(|| sd.sites[self.obj.pick as usize % n])
+            (n > 0).then(|| sd.sites[(sd.rank + self.obj.pick as usize) % n])
         };
         match (sd.role, sd.bomb) {
             (ObjRole::Attack, Some(b)) => Some(ObjTarget::Guard {
@@ -526,7 +559,12 @@ impl Bot {
                 inner: BOMB_GUARD_INNER,
             }),
             (ObjRole::Attack, None) => site().map(ObjTarget::Plant),
-            (ObjRole::Defend, Some(b)) => Some(ObjTarget::Defuse(b)),
+            (ObjRole::Defend, Some(b)) if sd.lead => Some(ObjTarget::Defuse(b)),
+            // Everyone else keeps off the defuser's line to the bomb.
+            (ObjRole::Defend, Some(b)) => Some(ObjTarget::Guard {
+                at: b.origin,
+                inner: BOMB_GUARD_INNER,
+            }),
             (ObjRole::Defend, None) => site().map(|s| ObjTarget::Guard {
                 at: s.stand,
                 inner: 0.0,
@@ -601,7 +639,10 @@ impl Bot {
                     return None;
                 }
                 self.obj.held += 1;
-                Some(self.hold_use(view, cmd, cur))
+                // Looking up: the press's rising edge also takes the item
+                // or turret the view picks (`Cmd_Activate_f`), and a dropped
+                // weapon in the zone sits on the floor.
+                Some(self.hold_use(view, cmd, [PLANT_PITCH, cur[1]]))
             }
             Some(ObjTarget::Defuse(b)) if ready => {
                 if self.obj.held >= DEFUSE_TICKS || (self.obj.held >= START_TICKS && !view.linked) {
@@ -656,14 +697,14 @@ impl Bot {
         cmd
     }
 
-    /// One life over: the next is a new round, with a new site to go to.
+    /// One life over: the next is a new round, from the first site again,
+    /// and no switch carries over.
     fn end_life(&mut self) {
         if self.obj.live {
-            self.obj = Objective {
-                pick: self.rand() as u32,
-                ..Objective::default()
-            };
+            self.obj = Objective::default();
         }
+        self.switch_to = None;
+        self.calm_ticks = 0;
     }
 
     /// The remembered spot not yet reached, else this tick's noise. The same
@@ -760,6 +801,7 @@ impl Bot {
         self.grenade_cooldown = self.grenade_cooldown.saturating_sub(1);
         if self.shoot
             && self.grenade_cooldown == 0
+            && self.switch_to.is_none()
             && let (Some(g), Some(e)) = (view.grenade, view.enemy)
         {
             let close = dist_sq(view.origin, e.origin) < GRENADE_RANGE * GRENADE_RANGE;
@@ -800,7 +842,7 @@ impl Bot {
                 }
                 (0.0, self.heading, 0)
             }
-            Some(w) if self.unstick_ticks == 0 => steer(view.origin, w),
+            Some(w) if self.unstick_ticks == 0 => self.steer(view, w),
             _ => {
                 self.unstick_ticks = self.unstick_ticks.saturating_sub(1);
                 if self.heading_ticks == 0 {
@@ -841,13 +883,79 @@ impl Bot {
                 [pitch, yaw] = aim;
             }
         }
-        // A dry clip reloads; the tap is suppressed while the machine is
-        // busy so a held bit cannot restart the reload it started.
-        if view.clip == 0 && view.busy_ms == 0 {
+        if self.shoot {
+            self.sidearm(view);
+        }
+        if let Some(w) = self.switch_to {
+            if view.weapon == w {
+                self.switch_to = None;
+            } else {
+                cmd.weapon = w;
+            }
+        }
+        // A dry clip reloads, unless a switch is putting it away; the tap is
+        // suppressed while the machine is busy so a held bit cannot restart
+        // the reload it started.
+        if view.clip == 0 && view.busy_ms == 0 && self.switch_to.is_none() {
             cmd.wbuttons |= msg::WBUTTON_RELOAD;
         }
         cmd.angles = cmd_angles(view, [pitch, yaw]);
         cmd
+    }
+
+    /// The pistol comes out when the held weapon runs dry with an enemy
+    /// close, quicker than a reload; it goes back once no enemy has been in
+    /// sight for [`HOLSTER_TICKS`].
+    fn sidearm(&mut self, view: &BotView) {
+        let Some(pistol) = view.pistol else {
+            return;
+        };
+        if self.switch_to.is_some() {
+            return;
+        }
+        if view.weapon != pistol {
+            let close = view
+                .enemy
+                .is_some_and(|e| dist_sq(view.origin, e.origin) < PISTOL_RANGE * PISTOL_RANGE);
+            if close && view.clip == 0 && view.grenade != Some(view.weapon) {
+                self.primary = view.weapon;
+                self.calm_ticks = 0;
+                self.switch_to = Some(pistol);
+            }
+            return;
+        }
+        self.calm_ticks = if view.enemy.is_some() {
+            0
+        } else {
+            self.calm_ticks + 1
+        };
+        let held = self.primary != 0 && view.weapons_held >> self.primary & 1 == 1;
+        if self.calm_ticks >= HOLSTER_TICKS && held {
+            self.switch_to = Some(self.primary);
+        }
+    }
+
+    /// (pitch, yaw, forward) that take the body toward waypoint `to`. A
+    /// waypoint well above, or the body on a ladder with the waypoint above,
+    /// is climbed looking up; one well below, or below while on a ladder, is
+    /// backed toward facing away, creeping at the lip. That is how the
+    /// graph's walks proved the edge (`crate::nav`).
+    fn steer(&mut self, view: &BotView, to: [f32; 3]) -> (f32, f32, i8) {
+        let from = view.origin;
+        let yaw = (to[1] - from[1]).atan2(to[0] - from[0]).to_degrees();
+        let dz = to[2] - from[2];
+        if dz < -BACK_DOWN_HEIGHT || (view.on_ladder && dz < 0.0) {
+            let flat = (to[0] - from[0]).hypot(to[1] - from[1]);
+            let forward = crate::nav::back_move(flat, view.on_ladder);
+            let yaw = self.creep.hold(forward, yaw_diff(yaw + 180.0, 0.0));
+            return (-crate::nav::LADDER_PITCH, yaw, forward);
+        }
+        self.creep.hold(127, yaw);
+        if dz > CLIMB_HEIGHT || view.on_ladder {
+            (-crate::nav::LADDER_PITCH, yaw, 127)
+        } else {
+            (0.0, yaw, 127)
+        }
     }
 
     /// Keeps [`Bot::target`] in step with the server's enemy: a new slot is
@@ -919,7 +1027,12 @@ impl Bot {
         let off = yaw_diff(aim[0], tp).hypot(yaw_diff(aim[1], ty));
         let cone = (HIT_RADIUS / dist).atan().to_degrees();
 
-        let ads = view.has_ads && (view.sniper || dist > self.skill.ads_range);
+        let ads = view.has_ads
+            && if view.sniper {
+                dist > SCOPE_MIN_RANGE
+            } else {
+                dist > self.skill.ads_range
+            };
         if ads {
             cmd.buttons |= msg::BUTTON_ADS;
         }
@@ -1088,18 +1201,13 @@ const CLIMB_HEIGHT: f32 = 48.0;
 /// (the graph proved the edge the same way, `crate::nav`).
 const BACK_DOWN_HEIGHT: f32 = 64.0;
 
-/// (pitch, yaw, forward) that take a body at `from` toward `to`.
-fn steer(from: [f32; 3], to: [f32; 3]) -> (f32, f32, i8) {
-    let yaw = (to[1] - from[1]).atan2(to[0] - from[0]).to_degrees();
-    let dz = to[2] - from[2];
-    if dz < -BACK_DOWN_HEIGHT {
-        (-crate::nav::LADDER_PITCH, yaw_diff(yaw + 180.0, 0.0), -127)
-    } else if dz > CLIMB_HEIGHT {
-        (-crate::nav::LADDER_PITCH, yaw, 127)
-    } else {
-        (0.0, yaw, 127)
-    }
-}
+/// The pistol comes out against an enemy this close with the primary dry.
+const PISTOL_RANGE: f32 = 500.0;
+/// Ticks with no enemy in sight before the pistol goes back.
+const HOLSTER_TICKS: u32 = 40;
+/// A scope inside this is a liability: the zoomed view cannot track a
+/// target this close, so the shot goes from the hip.
+const SCOPE_MIN_RANGE: f32 = 200.0;
 
 /// Grenade reuses are minutes apart, not seconds.
 const GRENADE_COOLDOWN_TICKS: u32 = 400;
@@ -1238,6 +1346,8 @@ mod tests {
             waypoint: None,
             noise: None,
             linked: false,
+            on_ladder: false,
+            pistol: None,
             sd: None,
         }
     }
@@ -1260,6 +1370,8 @@ mod tests {
                 },
             ],
             bomb: None,
+            rank: 0,
+            lead: true,
         });
         v
     }
@@ -1370,6 +1482,59 @@ mod tests {
     }
 
     #[test]
+    fn a_planter_looks_up_off_the_floor() {
+        let mut bot = attacker();
+        let v = sd_view(ObjRole::Attack);
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.buttons, BUTTON_USE);
+        assert_eq!(
+            cmd.angles[0],
+            deg_short(PLANT_PITCH),
+            "pressed looking down"
+        );
+    }
+
+    #[test]
+    fn a_team_deals_its_bots_out_over_both_sites() {
+        for role in [ObjRole::Attack, ObjRole::Defend] {
+            let mut v = sd_view(role);
+            v.origin = [1000.0, 0.0, 64.0];
+            let goals: Vec<Goal> = (0..4)
+                .map(|rank| {
+                    v.sd.as_mut().unwrap().rank = rank;
+                    Bot::new("allies", true, rank as u64).goal(&v)
+                })
+                .collect();
+            let (a, b) = (Goal::To([0.0, 0.0, 64.0]), Goal::To([2000.0, 0.0, 64.0]));
+            assert_eq!(goals, [a, b, a, b], "{role:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_lead_defender_goes_for_the_bomb() {
+        let bomb = [30.0, 0.0, 64.0];
+        let mut v = sd_view(ObjRole::Defend);
+        plant_bomb(&mut v, bomb);
+        v.sd.as_mut().unwrap().lead = false;
+        v.view = [0.0, 0.0, 0.0];
+        let mut bot = Bot::new("axis", true, 1);
+        // On the bomb: it steps off, the defuser's line clear.
+        assert_eq!(bot.goal(&v), Goal::Roam);
+        for _ in 0..60 {
+            assert_eq!(bot.think(&v).buttons & BUTTON_USE, 0);
+        }
+        // Off to the side, inside the guard ring, it holds.
+        v.origin = [200.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Hold);
+        // Far off, it closes on the ring, not the bomb's reach.
+        v.origin = [1000.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::To(bomb));
+        bot.think(&v);
+        v.origin = [150.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Hold);
+    }
+
+    #[test]
     fn use_is_pressed_only_at_the_objective() {
         for role in [ObjRole::Attack, ObjRole::Defend] {
             let mut bot = attacker();
@@ -1399,6 +1564,33 @@ mod tests {
         plant_bomb(&mut v, [500.0, 0.0, 64.0]);
         assert_eq!(bot.goal(&v), Goal::To([500.0, 0.0, 64.0]));
         assert_eq!(bot.think(&v).buttons & BUTTON_USE, 0);
+    }
+
+    #[test]
+    fn a_reopened_weapon_menu_gets_the_same_weapon() {
+        for seed in 1..16 {
+            let mut bot = Bot::new("axis", false, seed);
+            bot.observe(SID, &[(1, "v g_scriptMainMenu weapon_german")], &all);
+            let first = bot.observe(SID, &[(2, "t 1")], &all);
+            for idx in 2..6 {
+                let t = format!("t {idx}");
+                let again = bot.observe(SID, &[(idx, t.as_str())], &all);
+                assert_eq!(
+                    again[0].rsplit(' ').next(),
+                    first[0].rsplit(' ').next(),
+                    "seed {seed}"
+                );
+            }
+        }
+        // Restricted since: a new pick among what is left.
+        let mut bot = Bot::new("axis", false, 3);
+        bot.observe(SID, &[(1, "v g_scriptMainMenu weapon_german")], &all);
+        let first = bot.observe(SID, &[(2, "t 1")], &all).remove(0);
+        let w = first.rsplit(' ').next().unwrap().to_string();
+        let cvar = WEAPON_MENUS[3].1.iter().find(|(n, _)| *n == w).unwrap().1;
+        let not_it = |c: &str| c != cvar;
+        let again = bot.observe(SID, &[(3, "t 2")], &not_it).remove(0);
+        assert_ne!(again.rsplit(' ').next().unwrap(), w);
     }
 
     #[test]
@@ -1583,6 +1775,41 @@ mod tests {
     }
 
     #[test]
+    fn a_climb_looks_up_to_the_top_and_a_descent_backs_all_the_way_down() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.on_ladder = true;
+        // Near the top: the head is only 20 above, still looking up.
+        v.waypoint = Some([16.0, 0.0, 84.0]);
+        let up = bot.think(&v);
+        assert_eq!(
+            (up.forward, up.angles[0]),
+            (127, deg_short(-crate::nav::LADDER_PITCH))
+        );
+        // Near the bottom of a descent: the foot is 20 below, still backing.
+        v.waypoint = Some([16.0, 0.0, 44.0]);
+        assert_eq!(bot.think(&v).forward, -127);
+    }
+
+    #[test]
+    fn a_bot_creeps_backward_over_a_lip_and_keeps_facing_the_ladder() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        // The foot is 300 below, 20 ahead in +x: back toward it facing -x.
+        v.waypoint = Some([20.0, 0.0, -236.0]);
+        let first = bot.think(&v);
+        assert_eq!(first.forward, -crate::nav::CREEP_KEY);
+        assert_eq!(first.angles[1], deg_short(-180.0));
+        // Over the lip and past the foot's column: same heading.
+        v.origin[0] = 21.0;
+        let past = bot.think(&v);
+        assert_eq!(
+            (past.forward, past.angles[1]),
+            (first.forward, first.angles[1])
+        );
+    }
+
+    #[test]
     fn a_stuck_bot_leaves_its_waypoint_for_a_spell() {
         let mut bot = Bot::new("allies", false, 1);
         let mut v = view();
@@ -1753,6 +1980,56 @@ mod tests {
             rights.contains(&127) && rights.contains(&-127),
             "{rights:?}"
         );
+    }
+
+    #[test]
+    fn a_dry_primary_draws_the_pistol_against_a_close_enemy() {
+        let (mut bot, mut v) = engaged(21);
+        v.pistol = Some(2);
+        v.weapons_held |= 1 << 2;
+        v.clip = 0;
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.weapon, 2, "kept the dry rifle up");
+        assert_eq!(cmd.wbuttons & WBUTTON_RELOAD, 0, "reloaded instead");
+        // The byte rides every cmd until `ps.weapon` reads it.
+        assert_eq!(bot.think(&v).weapon, 2);
+        v.weapon = 2;
+        v.clip = 7;
+        assert_eq!(bot.think(&v).weapon, 2);
+        // Nobody in sight for a while: the rifle goes back up.
+        v.enemy = None;
+        let back = (0..HOLSTER_TICKS + 1).any(|_| bot.think(&v).weapon == 10);
+        assert!(back, "the pistol stayed out");
+    }
+
+    #[test]
+    fn a_dry_primary_at_range_reloads_instead() {
+        let (mut bot, mut v) = engaged(21);
+        v.pistol = Some(2);
+        v.clip = 0;
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [900.0, 0.0, 124.0],
+            velocity: [0.0; 3],
+        });
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.weapon, 10);
+        assert!(cmd.wbuttons & WBUTTON_RELOAD != 0);
+    }
+
+    #[test]
+    fn a_scope_stays_down_at_point_blank() {
+        let (mut bot, mut v) = engaged(23);
+        v.sniper = true;
+        for _ in 0..20 {
+            assert_eq!(bot.think(&v).buttons & BUTTON_ADS, 0, "scoped at 100");
+        }
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [900.0, 0.0, 124.0],
+            velocity: [0.0; 3],
+        });
+        assert!(bot.think(&v).buttons & BUTTON_ADS != 0, "no scope at 900");
     }
 
     #[test]

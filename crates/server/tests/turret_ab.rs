@@ -481,6 +481,25 @@ fn holding_attack_fires_and_the_loop_sound_follows() {
     assert_eq!(s.turret_loop, 0);
 }
 
+/// A manned gun's round is gunfire the bots hear, the gunner's own.
+#[test]
+fn a_turret_round_is_heard() {
+    let Some(mut rig) = rig_with(&[]) else {
+        return;
+    };
+    rig.tap(BUTTON_USE);
+    let h = rig.still();
+    assert!(rig.sv.bot_noises().is_empty(), "noise before the trigger");
+    let fire = UserCmd {
+        buttons: h.buttons | BUTTON_ATTACK,
+        ..h
+    };
+    rig.frame([fire, fire]);
+    let heard = rig.sv.bot_noises();
+    assert_eq!(heard.len(), 1, "{heard:?}");
+    assert_eq!(heard[0].source, 0, "not the gunner's");
+}
+
 /// A round on the target takes its health on the snapshot of the frame it
 /// was fired on, not the next one (turrets doc 12.5).
 #[test]
