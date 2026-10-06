@@ -915,6 +915,32 @@ crates/gsc/tests/fixtures/semantics/client-probes/probe_hud_disconnect.gsc`.
 Plain `--net-probe` writes no fixture. Retail and ours, 2026-10-06, print
 the same three lines; the doc section quotes them.
 
+## probe_say
+
+What `sayAll`, `sayTeam` and `pingPlayer` send and who `G_Say` lets hear
+it, for `docs/research/cod11-chat.md` 2.1. Two plain probes: the first to
+begin is slot 0, the allied speaker, the second the axis listener. Each
+`--probe-say` line prints the command it sent as `SAY`; every `h`/`i` line
+that arrives prints as `CHAT`, control bytes escaped.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=60 tools/run_probe.sh client-probes/probe_say mp_carentan
+# second shell, once the map is up:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-secs 45 --probe-say "0.5:say first hello"
+# third shell, two seconds later:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-secs 43 --probe-say "0.5:say second hello"
+```
+
+Against ours: `vcod-server mp_carentan --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_say.gsc`; a debug
+build's `wait 2` runs long, so give its probes 90 s. Retail and ours,
+2026-10-06, print the same `CHAT` lines in both probes; the doc's table
+quotes them. The client-command half of that table needs no probe script:
+`tools/run_server.sh mp_carentan +set g_gametype tdm` and three probes,
+`--probe-team axis`, `--probe-team spectator` and `--probe-team allies`
+with the `--probe-say` list (`say`, `say_team`, `kill`, `say`, `tell 0 ...`).
+
+
 ## probe_touchorder
 
 The order one touch pass meets what it touches, for

@@ -11,6 +11,7 @@ use crate::console;
 use crate::follow;
 use crate::game::combat::Effect;
 use crate::game::host::{ClientEvent, SpawnMode};
+use crate::game::say::SayMode;
 use crate::game::script;
 use crate::game::stuck::{StuckView, stuck_in_client};
 use crate::game::temp_entity;
@@ -591,6 +592,7 @@ fn roster(
     clients.iter().map(|c| {
         c.as_ref().map(|c| crate::game::scoreboard::RosterSlot {
             connecting: c.state == ClientState::Connected,
+            active: c.state == ClientState::Active,
             following: c.sim.as_ref().and_then(|s| s.follow.target),
         })
     })
@@ -600,6 +602,12 @@ fn roster(
 /// walk runs inside the VM, the moment the killed callback returns.
 fn mirror_roster(clients: &[Option<Client>], rt: &mut script::ScriptRuntime) {
     rt.host.client_roster = roster(clients).collect();
+    for (name, c) in rt.host.client_names.iter_mut().zip(clients) {
+        name.clear();
+        if let Some(c) = c {
+            name.push_str(&c.name);
+        }
+    }
 }
 
 /// The host's vitals onto every sim.
@@ -1464,7 +1472,7 @@ impl Server {
             match op {
                 CLC_CLIENT_COMMAND => {
                     let seq = r.read_long();
-                    let text = r.read_string();
+                    let text = r.read_server_string();
                     if r.is_overflowed() {
                         return None;
                     }
@@ -1569,6 +1577,32 @@ impl Server {
                         c.name = sanitize_name(name);
                     }
                     c.userinfo = ui;
+                }
+            }
+            // `Cmd_Say_f` (0x47050): nothing without an argument.
+            "say" | "say_team" => {
+                let mode = if word == "say" {
+                    SayMode::All
+                } else {
+                    SayMode::Team
+                };
+                if let Some(text) = crate::game::say::concat_args(args) {
+                    self.say(slot, None, mode, &text);
+                }
+            }
+            // `Cmd_Tell_f` (0x47210): to a client in use, then the speaker's
+            // own copy.
+            "tell" => {
+                let (to, text) = args
+                    .trim_start()
+                    .split_once(char::is_whitespace)
+                    .unwrap_or((args.trim(), ""));
+                if let Ok(to) = to.parse::<usize>()
+                    && self.clients.get(to).is_some_and(Option::is_some)
+                {
+                    let text = crate::game::say::concat_args(text).unwrap_or_default();
+                    self.say(slot, Some(to), SayMode::Tell, &text);
+                    self.say(slot, Some(slot), SayMode::Tell, &text);
                 }
             }
             // DeathmatchScoreboardMessage (.so 0x459c0); grammar in
@@ -1809,6 +1843,19 @@ impl Server {
     /// [`scoreboard`] for this server's clients.
     fn scoreboard(&mut self) -> String {
         scoreboard(&self.clients, self.script.as_mut())
+    }
+
+    /// `G_Say`, sent at once: retail's `trap_SendServerCommand` queues the
+    /// line from inside `ClientCommand`. Nothing without a script, which is
+    /// where the teams and session states live.
+    fn say(&mut self, slot: usize, target: Option<usize>, mode: SayMode, text: &str) {
+        let Some(rt) = self.script.as_mut() else {
+            return;
+        };
+        mirror_roster(&self.clients, rt);
+        for (to, cmd) in rt.say(slot, target, mode, text) {
+            self.send_server_command(to, &cmd);
+        }
     }
 
     /// Test-facing: the seed the spread and the melee rolls draw from, so a
@@ -3791,6 +3838,13 @@ impl Server {
                     self.sv_time_ms,
                 );
                 mirror_vitals(&mut self.clients, rt);
+                // `ClientEndFrame` clears `pingPlayer`'s bit once its stamp is
+                // reached (0x41024).
+                for (slot, c) in self.clients.iter_mut().enumerate() {
+                    if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
+                        sim.ping = rt.host.client_ping_until[slot] > rt.host.level_time_ms;
+                    }
+                }
                 for slot in feedback_now {
                     if let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) {
                         sim.end_frame(self.sv_time_ms);

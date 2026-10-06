@@ -600,6 +600,20 @@ impl AudioSystem {
         }
     }
 
+    /// `alias` on the viewer, the way `CG_LocalSound` and the chat and game
+    /// message beeps play.
+    pub fn play_local(&mut self, fs: &Pk3Fs, alias: &str) {
+        let cue = Cue {
+            alias: alias.to_string(),
+            source: Source::Entity {
+                num: self.ps_entity,
+                pos: self.listener.pos,
+            },
+            delay_s: 0.0,
+        };
+        self.play(fs, cue);
+    }
+
     /// A server command the net layer did not consume; returns whether it was
     /// a sound command. `s <idx>` is `playLocalSound` (research doc, section
     /// 9). The alias is resolved at receive time since the `CS_SOUNDS` slot
@@ -626,15 +640,7 @@ impl AudioSystem {
                 match configstrings.get(cues::CS_SOUND_ALIASES + idx) {
                     Some(a) if !a.is_empty() => {
                         log::debug!("audio: playLocalSound {idx} = {a:?}");
-                        let cue = Cue {
-                            alias: a.clone(),
-                            source: Source::Entity {
-                                num: self.ps_entity,
-                                pos: self.listener.pos,
-                            },
-                            delay_s: 0.0,
-                        };
-                        self.play(fs, cue);
+                        self.play_local(fs, a);
                     }
                     _ => log::debug!("audio: playLocalSound {idx}: no alias in that configstring"),
                 }

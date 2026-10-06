@@ -12,6 +12,7 @@ pub mod item;
 pub mod missile;
 pub mod mover;
 pub mod pickup;
+pub mod say;
 pub mod scoreboard;
 pub mod script;
 pub mod spawn;
