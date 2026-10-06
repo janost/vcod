@@ -10,8 +10,7 @@ use vcod_common::net::protocol::Protocol;
 /// `eFlags` bits the server writes for a crouched/prone player
 /// (`crates/server/src/spectate.rs`, `to_wire`), the inverse the caller reads
 /// to build [`Held::stance`] from a playerstate.
-pub const EF_CROUCH: i32 = 0x20;
-pub const EF_PRONE: i32 = 0x40;
+pub use vcod_common::net::flags::{EF_CROUCH, EF_PRONE};
 
 /// Mouse look rate, matching `FlyCamera::mouse_delta` (`camera.rs`).
 const MOUSE_SENS: f32 = 0.003;

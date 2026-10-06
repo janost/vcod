@@ -135,6 +135,7 @@ fn main() -> Result<()> {
         Instant::now(),
         seed,
     );
+    server.build_nav_in_background(true);
     server.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     if let Some((stem, text)) = &overlay {
         server.overlay_script(&format!("maps/mp/gametypes/{stem}"), text);

@@ -3,6 +3,13 @@
 use crate::game::host::SimOp;
 use glam::Vec3;
 use vcod_common::movetrace::{Body, CONTENTS_BODY, CONTENTS_CORPSE, MoveWorld};
+use vcod_common::net::flags::{
+    EF_CROUCH, EF_MOUNTED_DUCK, EF_MOUNTED_PRONE, EF_MOUNTED_STAND, EF_PRONE, PMF_BACKWARDS_RUN,
+    PMF_DUCKED, PMF_JUMP_HELD, PMF_OWN_VIEW, PMF_PRONE, PMF_PRONE_DIVE, PMF_RESPAWNED,
+};
+pub use vcod_common::net::flags::{
+    EF_TELEPORT_BIT, PM_DEAD, PM_DEAD_LINKED, PM_INTERMISSION, PM_NORMAL_LINKED, PM_SPECTATOR,
+};
 use vcod_common::net::msg::{self, UserCmd};
 use vcod_common::net::protocol::Protocol;
 use vcod_common::net::trajectory;
@@ -10,9 +17,6 @@ use vcod_common::pmove::cmd::{self, ANGLE2SHORT, EventRing, view_angles};
 use vcod_common::pmove::{self, PmEvent};
 use vcod_common::weapon::WeaponDef;
 
-/// `pm_flags`' own-body bit, third of the view-source group: a live client
-/// looking out of its own body carries it and neither spectator view does
-/// (docs/research/cod11-gsc-object-model.md, section 20).
 /// `ET_PLAYER`, what another client sees a player as
 /// (`crates/client/src/entities.rs` carries the table).
 const ET_PLAYER: i32 = 1;
@@ -22,70 +26,14 @@ const ET_PLAYER: i32 = 1;
 const PLAYER_EFLAGS: i32 = 16;
 const PLAYER_TR_DURATION: i32 = 50;
 
-const PMF_OWN_VIEW: i32 = 0x40000;
-/// `PMF_RESPAWNED`: set by every spawn, cleared by the first `PmoveSingle`
-/// at `pm_type` 5 or below without attack held
-/// (docs/research/cod11-spectator-follow.md, 13).
-const PMF_RESPAWNED: i32 = 0x800;
 /// How far behind the frame `ClientSpawn` puts `commandTime` before its own
 /// think runs the client up to it (0x42a48).
 const SPAWN_THINK_MS: f32 = 100.0;
 
-/// Stance bits in `eFlags` and `pm_flags`, measured off the retail server
-/// under each input (`crates/server/tests/fixtures/playerstate/*-motion.txt`):
-/// standing reads `eFlags` 16 / `pm_flags` 0x40000 and crouched 48 / 0x40002.
-/// The two `eFlags` bits are exclusive. `pm_flags` 0x1 marks prone and 0x2 is
-/// a crouch latch rather than a stance bit: prone entered from a crouch reads
-/// 0x40003 and prone entered from standing 0x40001, which is why
-/// `PlayerState::ducked` carries it.
-const EF_CROUCH: i32 = 0x20;
-const EF_PRONE: i32 = 0x40;
-/// The per-spawn toggle: every spawn flips it, a spectator's and the
-/// intermission camera's included, and a level boundary clears it
-/// (docs/research/cod11-map-cycle.md, 8.2). Not per life --
-/// `mp_carentan-sd-roundrestart-target.txt` reads 24 on two consecutive
-/// lives (`!trace ms=28607` and `ms=118532`) because the spectator frame
-/// between them took the intervening flip. The `dm` hit capture's near-even
-/// split (115 samples at 16 against 101 at 24) is that same alternation seen
-/// from a run whose spawns happened to pair off.
-/// INFERRED: a client breaks interpolation on the
-/// changed word, so without it a respawn smears from the corpse to the spawn.
-/// The same bit `bodies::EFLAGS_ANIM_TOGGLE` inverts per body-queue push, for
-/// the same reason: a changed `eFlags` is what makes a client stop carrying
-/// the previous occupant of that entity number forward.
-pub(crate) const EF_TELEPORT_BIT: i32 = 0x8;
-/// The mounted-gun bits by the gun's stance (turrets doc, 4.4 and 12.1).
-const EF_MOUNTED_STAND: i32 = 0xC000;
-const EF_MOUNTED_DUCK: i32 = 0x8000;
-const EF_MOUNTED_PRONE: i32 = 0x4000;
 const EF_FIRING: i32 = 0x400;
 /// `docs/research/cod11-events-and-fx.md`.
 const EV_PLAYER_TELEPORT_IN: i32 = 199;
 const EV_PLAYER_TELEPORT_OUT: i32 = 200;
-const PMF_DUCKED: i32 = 0x2;
-const PMF_PRONE: i32 = 0x1;
-/// The prone dive (`pmove::PlayerState::prone_dive`).
-const PMF_PRONE_DIVE: i32 = 0x4;
-/// Held jump, retail's 0x8 (set @0x2ec34, cleared @0x34135); the capture reads
-/// `pm_flags` 0x40008 on the first airborne frame.
-const PMF_JUMP_HELD: i32 = 0x8;
-/// Backpedalling, retail's 0x40. The anim selection reads this bit rather than
-/// the usercmd, and both captures carry it at `run_back` and nowhere else.
-const PMF_BACKWARDS_RUN: i32 = 0x40;
-
-/// The dead `pm_type`, read off both retail deaths (combat doc, section 8).
-pub const PM_DEAD: i32 = 6;
-/// The spectator `pm_type`, what `SpectatorThink` writes.
-pub const PM_SPECTATOR: i32 = 4;
-/// The intermission `pm_type` `ClientEndFrame`'s third arm writes
-/// (map-cycle doc, 6.2); the dm map-change capture's post-end traces read it.
-pub const PM_INTERMISSION: i32 = 5;
-/// A linked live player and a linked dead one, CoDExtended's
-/// `PM_NORMAL_LINKED` and `PM_DEAD_LINKED`. The two values and the
-/// decrement `G_RunClient` applies without a link record are read out of the
-/// module (docs/research/cod11-gsc-object-model.md, 23.2).
-pub const PM_NORMAL_LINKED: i32 = 1;
-pub const PM_DEAD_LINKED: i32 = 7;
 
 /// What `linkTo` left on a client: the parent it follows, the gap it stood
 /// at when it linked and the velocity it had then. `Server` re-applies all
@@ -247,6 +195,9 @@ pub struct ClientSim {
     /// `linkTo`'s record, `gentity_t+0x2e4`. Not `linked()`, which is about
     /// whether the other clients are sent an entity for this one.
     pub link_to: Option<Link>,
+    /// The last link was a `setOrigin`'s or `TeleportPlayer`'s, at the
+    /// unsnapped `ps.origin`; the next cmd's link clears it.
+    linked_unsnapped: bool,
     /// `ps.serverCursorHint`, written every frame by the end-of-frame pass
     /// (`ScriptRuntime::cursor_hint_pass`).
     pub cursor_hint: i32,
@@ -431,6 +382,7 @@ impl ClientSim {
             jump_time: 0,
             land_anim: false,
             link_to: None,
+            linked_unsnapped: false,
             cursor_hint: 0,
             cursor_hint_string: -1,
             health: 0,
@@ -715,6 +667,7 @@ impl ClientSim {
 
     /// `SV_LinkEntity`'s `solid`, off the box and contents at the link.
     fn relink(&mut self) {
+        self.linked_unsnapped = false;
         self.linked_solid = if self.contents & (CONTENTS_BODY | 1) != 0 {
             Body::pack_solid(self.ps.mins(), self.ps.maxs())
         } else {
@@ -813,6 +766,7 @@ impl ClientSim {
     pub fn teleport(&mut self, origin: [f32; 3]) {
         self.ps.origin = origin.into();
         self.teleport_bit = !self.teleport_bit;
+        self.linked_unsnapped = true;
     }
 
     /// `SetClientViewAngle` (0x41e30): the view becomes `angles` (degrees,
@@ -861,6 +815,7 @@ impl ClientSim {
         };
         self.ps.origin = Vec3::from(origin) + Vec3::Z;
         self.teleport_bit = !self.teleport_bit;
+        self.linked_unsnapped = true;
         self.set_view_angle(angles);
         temps
     }
@@ -1339,11 +1294,11 @@ impl ClientSim {
 
     /// `r.currentOrigin` at the last link, which `r.absmin` and `r.absmax`
     /// are built off: `ClientThink_real` links at the snapped origin, and a
-    /// linked client's `G_RunClient` relinks at the anchored one (combat doc,
-    /// 14.1). A `setOrigin` with no cmd since, which links unsnapped, is not
-    /// modelled.
+    /// linked client's `G_RunClient` relinks at the anchored one, and a
+    /// `setOrigin` or `TeleportPlayer` with no cmd since links unsnapped
+    /// (combat doc, 14.3).
     pub fn link_origin(&self) -> Vec3 {
-        if self.link_to.is_some() {
+        if self.link_to.is_some() || self.linked_unsnapped {
             self.ps.origin
         } else {
             self.ps.origin.trunc()
@@ -3082,6 +3037,19 @@ mod tests {
     /// origin and 199 at the destination on temp entities naming the
     /// client, the origin a unit above the destination, the bit flipped and
     /// the view set.
+    /// `setOrigin` links at the unsnapped origin, and that link holds until
+    /// the next cmd relinks at the snapped one (combat doc 14.3).
+    #[test]
+    fn a_set_origin_links_unsnapped_until_the_next_cmd() {
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.become_player([5.7, -3.2, 8.9], 0.0, [0; 3]);
+        assert_eq!(sim.link_origin(), Vec3::new(5.0, -3.0, 8.0));
+        sim.teleport([10.5, 0.25, -22.9]);
+        assert_eq!(sim.link_origin(), Vec3::new(10.5, 0.25, -22.9));
+        sim.step(&NULL_USERCMD, 0.05, None, &[]);
+        assert_eq!(sim.link_origin(), sim.ps.origin.trunc());
+    }
+
     #[test]
     fn teleport_player_raises_out_and_in_and_flips_the_bit() {
         use crate::game::temp_entity::Scope;

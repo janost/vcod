@@ -8,13 +8,15 @@ use glam::{Mat4, Quat, Vec3};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use vcod_common::animtree::PlayerAnims;
-use vcod_common::bsp::Bsp;
+use vcod_common::collision::MASK_PLAYERSOLID;
+use vcod_common::movetrace::MoveWorld;
 use vcod_common::net::msg::{ClientState, EntityState};
 use vcod_common::net::protocol::{CS_MODELS_V1, CS_TAGS_V1, Protocol};
 use vcod_common::net::snapshot::Snapshot;
-use vcod_common::net::trajectory::{TR_INTERPOLATE, TR_STATIONARY, Trajectory};
+use vcod_common::net::trajectory::{TR_INTERPOLATE, TR_LINEAR_STOP, Trajectory};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::playerpose::{apply_aim, clip_name};
+use vcod_common::pmove::movers::SnapshotMovers;
 use vcod_common::skeleton::{AnimBinding, PoseBuffer, Skeleton};
 use vcod_common::turretpose::{GunnerPlacement, angles_quat, place_gunner, tag_weapon_local};
 use vcod_common::xanim::{self, XAnim};
@@ -53,9 +55,7 @@ const EF_NODRAW: i32 = 0x100;
 /// number rather than a model configstring slot
 /// (docs/research/cod11-movers.md, section 14).
 pub const SOLID_BMODEL: i32 = 0xff_ffff;
-/// 12, not Q3's 13 (CoDExtended shared.h:445).
-#[cfg_attr(not(test), allow(dead_code))] // only tests name it
-pub const ET_EVENTS: i32 = 12;
+pub use vcod_common::net::events::ET_EVENTS;
 
 /// What one snapshot entity draws as.
 #[derive(Debug, Clone, PartialEq)]
@@ -458,9 +458,6 @@ pub struct EntityScene {
     model_cache: HashMap<String, Option<ModelHandle>>,
     /// Weapon defs by CS 7 name. `None` is a failed load, warned once.
     weapon_cache: HashMap<String, Option<vcod_common::weapon::WeaponDef>>,
-    /// Uploaded inline BSP submodels by index. `None` is a collision-only
-    /// submodel, the common case; it must not be re-extracted every frame.
-    submodel_cache: HashMap<usize, Option<ModelHandle>>,
     /// `ET_ITEM`/held-weapon failure reasons already logged, keyed by kind
     /// and index or name.
     warned_items: HashSet<String>,
@@ -523,7 +520,6 @@ impl EntityScene {
             parts: HashMap::new(),
             model_cache: HashMap::new(),
             weapon_cache: HashMap::new(),
-            submodel_cache: HashMap::new(),
             warned_items: HashSet::new(),
             anims: None,
             clips: HashMap::new(),
@@ -623,28 +619,6 @@ fn resolve_turret_rig<'a>(
         cache.insert(name.to_string(), rig);
     }
     cache.get_mut(name).unwrap().as_mut()
-}
-
-/// Uploads inline BSP submodel `n`, caching the result: a brush model that
-/// has moved off its spawn pose. At rest it draws with the world instead,
-/// lightmapped; this path has the dynamic models' fixed key light.
-fn resolve_submodel(
-    cache: &mut HashMap<usize, Option<ModelHandle>>,
-    renderer: &mut Renderer,
-    fs: &Pk3Fs,
-    bsp: &Bsp,
-    n: usize,
-) -> Option<ModelHandle> {
-    if let Some(h) = cache.get(&n) {
-        return *h;
-    }
-    // submodel 0 is the whole world: wrong here and expensive to flatten
-    let handle = (n > 0)
-        .then(|| bsp.submodel_mesh(n))
-        .flatten()
-        .and_then(|(surfaces, materials)| renderer.upload_dynamic_mesh(fs, &surfaces, &materials));
-    cache.insert(n, handle);
-    handle
 }
 
 /// Loads the weapon file for a CS 7 name, caching failures as `None`.
@@ -755,56 +729,69 @@ pub struct BuiltScene {
     pub entity_pos: HashMap<u32, Vec3>,
     /// The gun `b.ps` rides, when it was drawn: the first-person eye.
     pub turret_eye: Option<TurretEye>,
-    /// Inline models whose entity stands where the map put them, drawn with
-    /// the world ([`Renderer::set_static_submodels`]).
-    pub static_submodels: Vec<usize>,
+    /// Inline models drawn this frame with their entity's pose, the identity
+    /// for one where the map put it ([`Renderer::set_submodels`]).
+    pub submodels: Vec<(usize, Mat4)>,
 }
 
-/// An entity's origin and `[pitch, yaw, roll]` at `render_time`. STATIONARY
-/// and INTERPOLATE aren't parametric, so the `prev`->`ent` lerp is the
-/// evaluation (snapping on a teleport over 512 units); every other trType is
-/// closed-form.
+/// Entity numbers below this are clients (`MAX_CLIENTS`).
+const MAX_CLIENTS: u32 = 64;
+
+/// The older snapshot of the pair an entity is drawn between, with its
+/// movers, which is what retail's `cg.snap` holds.
+struct LerpFrom<'a> {
+    snap: &'a Snapshot,
+    movers: SnapshotMovers,
+}
+
+/// An entity's origin and `[pitch, yaw, roll]` at `render_time`, after
+/// `CG_CalcEntityLerpPositions` (cgame 0x3001d210). A `pos` of
+/// `TR_INTERPOLATE`, or a player's `TR_LINEAR_STOP`, lerps both from the
+/// older snapshot's state to `ent` (snapping on a teleport over 512 units).
+/// Anything else evaluates the older state's `pos` and `apos` at
+/// `render_time` and is carried by what its ground mover does between the
+/// older snapshot and `render_time` (`CG_AdjustPositionForMover` at
+/// 0x3001d2ee, translation only), so an item resting on a moving brush model
+/// rides it between snapshots.
 fn lerp_pos_angles(
+    num: u32,
     ent: &EntityState,
-    prev: Option<&EntityState>,
+    from: &LerpFrom,
     f: f32,
     render_time: i32,
     p: &Protocol,
 ) -> (Vec3, Vec3) {
-    let pos_tr = Trajectory::read(ent, p, "pos");
-    let pos = if matches!(pos_tr.tr_type, TR_STATIONARY | TR_INTERPOLATE) {
-        let ob = Vec3::from(ent.origin(p));
-        match prev {
-            Some(ea) => {
-                let oa = Vec3::from(ea.origin(p));
-                if oa.distance(ob) > 512.0 {
-                    ob
-                } else {
-                    oa.lerp(ob, f)
-                }
-            }
-            None => ob,
-        }
-    } else {
-        pos_tr.evaluate(render_time)
+    let prev = from.snap.entities.get(&num);
+    let cur = prev.unwrap_or(ent);
+    let pos_tr = Trajectory::read(cur, p, "pos");
+    let interpolates =
+        pos_tr.tr_type == TR_INTERPOLATE || (pos_tr.tr_type == TR_LINEAR_STOP && num < MAX_CLIENTS);
+    if !interpolates {
+        let pos = from.movers.carry(
+            pos_tr.evaluate(render_time),
+            cur.field_i32(p, "groundEntityNum"),
+            from.snap.server_time,
+            render_time,
+        );
+        return (pos, Trajectory::read(cur, p, "apos").evaluate(render_time));
+    }
+    let ob = Vec3::from(ent.origin(p));
+    let ab = ent.angles(p);
+    let Some(ea) = prev else {
+        return (ob, Vec3::from(ab));
     };
-    let apos_tr = Trajectory::read(ent, p, "apos");
-    let angles = if matches!(apos_tr.tr_type, TR_STATIONARY | TR_INTERPOLATE) {
-        let ab = ent.angles(p);
-        match prev {
-            Some(ea) => {
-                let aa = ea.angles(p);
-                Vec3::new(
-                    camera::lerp_angle(aa[0], ab[0], f),
-                    camera::lerp_angle(aa[1], ab[1], f),
-                    camera::lerp_angle(aa[2], ab[2], f),
-                )
-            }
-            None => Vec3::from(ab),
-        }
+    let oa = Vec3::from(ea.origin(p));
+    let pos = if oa.distance(ob) > 512.0 {
+        ob
     } else {
-        apos_tr.evaluate(render_time)
+        oa.lerp(ob, f)
     };
+    let aa = ea.angles(p);
+    let angles = Vec3::new(
+        camera::lerp_angle(aa[0], ab[0], f),
+        camera::lerp_angle(aa[1], ab[1], f),
+        camera::lerp_angle(aa[2], ab[2], f),
+    );
     (pos, angles)
 }
 
@@ -822,8 +809,8 @@ fn model_rotation(visual: &EntityVisual, angles: Vec3) -> Quat {
 
 /// 0x300279b0 (turrets doc 14.5): a mounted player's origin, body rotation
 /// and leaf blend for the wire anim `anim`, off the gun its `otherEntityNum`
-/// names. `None` leaves the body where the snapshot put it, as the routine's
-/// early returns do.
+/// names, and the gun's z for the trace down. `None` leaves the body where
+/// the snapshot put it, as the routine's early returns do.
 #[allow(clippy::too_many_arguments)]
 fn place_body(
     anims: &PlayerAnims,
@@ -834,7 +821,7 @@ fn place_body(
     pos: Vec3,
     clips: &mut HashMap<String, Option<Rc<XAnim>>>,
     fs: &Pk3Fs,
-) -> Option<GunnerPlacement> {
+) -> Option<(GunnerPlacement, f32)> {
     if ent.field_i32(p, "eFlags") & turret::EF_MOUNTED == 0 {
         return None;
     }
@@ -855,6 +842,23 @@ fn place_body(
         pos,
         gun.rotate_inc,
     )
+    .map(|g| (g, gun.pos.z))
+}
+
+/// 0x300279b0's trace (turrets doc 14.7): from the gun's height straight
+/// down to the placed spot under `MASK_PLAYERSOLID`, every solid but the
+/// gunner's own clipping it; the z moves onto whatever it meets.
+fn trace_down(world: MoveWorld, gunner: u32, mut at: Vec3, gun_z: f32) -> Vec3 {
+    let start = Vec3::new(at.x, at.y, gun_z);
+    let world = MoveWorld {
+        pass: gunner,
+        ..world
+    };
+    let tr = world.box_trace(start, at, Vec3::ZERO, Vec3::ZERO, MASK_PLAYERSOLID);
+    if tr.fraction < 1.0 {
+        at.z = tr.endpos.z;
+    }
+    at
 }
 
 /// Poses `set`, clips and their blend weights, onto `pose` at `t` seconds,
@@ -909,7 +913,7 @@ pub fn build_instances(
     skip_num: i32,
     configstrings: &[String],
     fs: &Pk3Fs,
-    bsp: &Bsp,
+    trace: Option<MoveWorld>,
     renderer: &mut Renderer,
     p: &Protocol,
 ) -> BuiltScene {
@@ -919,7 +923,6 @@ pub fn build_instances(
         parts,
         model_cache,
         weapon_cache,
-        submodel_cache,
         warned_items,
         anims,
         clips,
@@ -950,13 +953,17 @@ pub fn build_instances(
     let mut weapon_flash: HashMap<i32, String> = HashMap::new();
     let mut entity_pos: HashMap<u32, Vec3> = HashMap::new();
     let mut turret_eye = None;
-    let mut static_submodels = Vec::new();
+    let mut submodels = Vec::new();
     let ps_int = |name: &str| b.ps.field_i32(p, name);
     let ridden = turret::ridden(
         ps_int("eFlags"),
         ps_int("viewlocked"),
         ps_int("viewlocked_entNum"),
     );
+    let from = LerpFrom {
+        snap: a,
+        movers: SnapshotMovers::from_entities(p, &a.entities),
+    };
     // The guns first: a gunner's body is placed off its gun, whose number is
     // always above the gunner's.
     let mut guns: HashMap<u32, GunFrame> = HashMap::new();
@@ -970,7 +977,7 @@ pub fn build_instances(
             continue;
         };
         let prev = a.entities.get(&num);
-        let (pos, angles) = lerp_pos_angles(ent, prev, f, render_time, p);
+        let (pos, angles) = lerp_pos_angles(num, ent, &from, f, render_time, p);
         let a2 =
             |e: &EntityState| ["angles2[0]", "angles2[1]", "angles2[2]"].map(|n| e.field_f32(p, n));
         let eflags = |e: &EntityState| e.field_i32(p, "eFlags");
@@ -1013,14 +1020,13 @@ pub fn build_instances(
         }
 
         let prev = a.entities.get(&num);
-        let (mut pos, angles) = lerp_pos_angles(ent, prev, f, render_time, p);
+        let (mut pos, angles) = lerp_pos_angles(num, ent, &from, f, render_time, p);
         if !pos.is_finite() || !angles.is_finite() {
             continue; // never feed a NaN transform to the GPU
         }
         let mut rot = model_rotation(&visual, angles);
         let mut yaw = angles.y;
-        // A gunner stands and turns where its gun puts it. Retail traces the
-        // spot down too; the snapshot's z is already the server's traced one.
+        // A gunner stands and turns where its gun puts it, traced down.
         let snap_pos = pos;
         let placed = match (&visual, anims) {
             (EntityVisual::Player { .. }, Some(anims)) if etype == ET_PLAYER => place_body(
@@ -1035,6 +1041,16 @@ pub fn build_instances(
             ),
             _ => None,
         };
+        let placed = placed.map(|(g, gun_z)| {
+            let traced = match trace {
+                Some(world) if g.origin.is_finite() => trace_down(world, num, g.origin, gun_z),
+                _ => g.origin,
+            };
+            GunnerPlacement {
+                origin: traced,
+                ..g
+            }
+        });
         if let Some(g) = placed.as_ref().filter(|g| g.origin.is_finite()) {
             // Yaw only, as every player draws; a stock gun stands level.
             pos = g.origin;
@@ -1153,7 +1169,7 @@ pub fn build_instances(
                     // pitch with no yaw, which the wire does not carry.
                     let clip_set = |raw: i32, clips: &mut _| -> Vec<(&str, f32)> {
                         if placed.is_some()
-                            && let Some(g) =
+                            && let Some((g, _)) =
                                 place_body(anims, raw, ent, p, &guns, snap_pos, clips, fs)
                         {
                             return g
@@ -1313,18 +1329,8 @@ pub fn build_instances(
                 // At rest where the map put it, which is the zero pose: no
                 // stock `script_brushmodel` carries an `origin` key, so its
                 // brushes and surfaces are in world space.
-                if pos.abs().max_element() < 0.01 && angles.abs().max_element() < 0.01 {
-                    static_submodels.push(n);
-                    continue;
-                }
-                let Some(handle) = resolve_submodel(submodel_cache, renderer, fs, bsp, n) else {
-                    continue; // collision-only submodel: nothing to draw
-                };
-                out.push(DynamicModelInstance {
-                    model: handle,
-                    transform,
-                    bones: None,
-                });
+                let at_rest = pos.abs().max_element() < 0.01 && angles.abs().max_element() < 0.01;
+                submodels.push((n, if at_rest { Mat4::IDENTITY } else { transform }));
             }
             EntityVisual::Turret { model, weapon } => {
                 let (Some(rig), Some(gun)) = (
@@ -1448,7 +1454,7 @@ pub fn build_instances(
         weapon_flash,
         entity_pos,
         turret_eye,
-        static_submodels,
+        submodels,
     }
 }
 
@@ -1458,6 +1464,66 @@ mod tests {
     use std::collections::BTreeMap;
     use vcod_common::net::msg::{ClientState, EntityState};
     use vcod_common::net::protocol::{CS_MODELS_V1, CS_TAGS_V1, PROTOCOL_V1};
+
+    /// An item resting on a moving brush model is drawn at its own
+    /// stationary `trBase` from the older snapshot, carried by what the mover
+    /// does from that snapshot's time to the drawn time; one on no mover
+    /// holds that `trBase` rather than lerping toward the newer snapshot.
+    #[test]
+    fn a_stationary_entity_rides_its_ground_mover_between_snapshots() {
+        let p = &PROTOCOL_V1;
+        let ent = |fields: &[(&str, i32)]| {
+            let mut e = EntityState::null(p);
+            for &(name, v) in fields {
+                e.fields[EntityState::field_index(p, name).unwrap()] = v;
+            }
+            e
+        };
+        let bits = |v: f32| v.to_bits() as i32;
+        // Rising 40 u/s from z 0 since 1000.
+        let mover = ent(&[
+            ("eType", 8),
+            ("pos.trType", TR_LINEAR_STOP),
+            ("pos.trTime", 1000),
+            ("pos.trDuration", 10_000),
+            ("pos.trDelta[2]", bits(40.0)),
+        ]);
+        let item = |z: f32, ground: i32| {
+            ent(&[
+                ("eType", 3),
+                ("pos.trBase[2]", bits(z)),
+                ("groundEntityNum", ground),
+            ])
+        };
+        let snap = |t: i32, ents: Vec<(u32, EntityState)>| Snapshot {
+            server_time: t,
+            entities: ents.into_iter().collect(),
+            ..Snapshot::default()
+        };
+        let a = snap(
+            2000,
+            vec![
+                (100, mover.clone()),
+                (101, item(40.0, 100)),
+                (102, item(40.0, 1022)),
+            ],
+        );
+        let b = snap(
+            2050,
+            vec![
+                (100, mover),
+                (101, item(42.0, 100)),
+                (102, item(42.0, 1022)),
+            ],
+        );
+        let from = LerpFrom {
+            snap: &a,
+            movers: SnapshotMovers::from_entities(p, &a.entities),
+        };
+        let at = |n: u32| lerp_pos_angles(n, &b.entities[&n], &from, 0.5, 2025, p).0.z;
+        assert_eq!(at(101), 41.0, "40 plus the mover's 1 unit since 2000");
+        assert_eq!(at(102), 40.0, "no mover under it: the older trBase");
+    }
 
     /// A model's axis is `AnglesToAxis` of its angles: pitch positive puts
     /// the nose down, and the left axis is `-right`. A player only yaws.

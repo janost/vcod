@@ -91,6 +91,37 @@ pub struct GEntity {
     /// `.model` reads, so `.model` reads "" (docs/research/cod11-movers.md,
     /// section 11).
     pub brush_model: Option<u32>,
+    /// What a link of this entity hands the area tree, `None` for one whose
+    /// `r.contents` is 0 (a missile, a corpse, a `script_origin`), which a
+    /// link takes out of the tree. A client's link goes through
+    /// `GameHost::link_client` instead.
+    pub link: Option<LinkShape>,
+}
+
+/// The `gentity` fields `SV_LinkEntity` reads off an entity with no client
+/// (`crate::area`, combat doc 14.7).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LinkShape {
+    pub kind: LinkKind,
+    /// `r.contents`.
+    pub contents: i32,
+    /// `r.mins`/`r.maxs`, about the origin.
+    pub mins: [f32; 3],
+    pub maxs: [f32; 3],
+}
+
+/// Which spawn function built the entity, which is what decides the box it
+/// links with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkKind {
+    Item,
+    Turret,
+    /// A trigger's submodel (`r.bmodel`).
+    Brush,
+    /// A `script_brushmodel`'s, whose contents `solid`/`notSolid` write.
+    ScriptBrush,
+    /// Filed under its model's bounds once it has a model.
+    ScriptModel,
 }
 
 /// `hudelem_t`'s owner field (`+0x70`) for an element every client is drawn:
@@ -303,6 +334,7 @@ impl ObjectTable {
             loop_sound: 0,
             item: None,
             brush_model: None,
+            link: None,
         });
         Ok(id)
     }
@@ -326,6 +358,7 @@ impl ObjectTable {
                 loop_sound: 0,
                 item: None,
                 brush_model: None,
+                link: None,
             });
         }
         EntId(ENTITYNUM_WORLD, 0)
@@ -418,6 +451,7 @@ impl ObjectTable {
             loop_sound: 0,
             item: None,
             brush_model: None,
+            link: None,
         });
         Ok(EntId(slot as u32, self.ent_gens[slot]))
     }
@@ -477,6 +511,7 @@ impl ObjectTable {
             loop_sound: 0,
             item: None,
             brush_model: None,
+            link: None,
         });
         Ok(EntId(FIRST_HUD_ELEM + i as u32, self.hud_gens[i]))
     }

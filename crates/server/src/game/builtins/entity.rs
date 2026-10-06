@@ -302,6 +302,8 @@ fn spawn_entity(host: &mut GameHost, cx: &mut Cx, args: &[Value]) -> Result<Valu
         let item = crate::items::item_name(index).unwrap_or(&name).to_string();
         host.register_item(&item);
         crate::game::item::spawn_in_place(host, cx, id, index, flags);
+    } else if name == "script_model" {
+        crate::game::spawn::link_script_model(host, cx, id);
     }
     Ok(Value::Entity(id))
 }
@@ -333,6 +335,10 @@ pub fn delete(
 ) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
     link_submodel(host, id, false);
+    // `G_FreeEntity`'s unlink (0x66aab) is now; the slot's reuse waits.
+    if host.ents.get(id).is_some_and(|e| e.client.is_none()) {
+        host.area.unlink(id.0);
+    }
     host.ents
         .schedule(id, ThinkFn::Free, host.level_time_ms + DELETE_DEFER_MS);
     Ok(Value::Undefined)
@@ -379,6 +385,19 @@ fn set_solid(host: &mut GameHost, recv: Option<Target>, solid: bool) -> Result<V
         .get_mut(id)
         .ok_or(ErrorKind::BadType("no such entity"))?;
     e.solid = solid;
+    // The `script_brushmodel` arm writes `r.contents` and links nothing
+    // (0x61378, 0x612b8; combat doc 2.7).
+    let brush = e
+        .link
+        .is_some_and(|l| l.kind == crate::game::entity::LinkKind::ScriptBrush);
+    if brush {
+        let contents = if solid {
+            crate::game::spawn::CONTENTS_SCRIPT_BRUSHMODEL
+        } else {
+            0
+        };
+        host.set_link_contents(id, contents);
+    }
     link_submodel(host, id, solid);
     Ok(Value::Undefined)
 }
@@ -1290,6 +1309,7 @@ mod tests {
                 0,
                 0,
             );
+            host.link_trigger(cx, zone);
 
             let player = host.ents.spawn_client(cx, 0, None).unwrap();
             let inside = Some(Target::Entity(player));

@@ -329,6 +329,10 @@ pub struct GameHost {
     /// Each client's box height (`maxs.z - mins.z`, by stance), mirrored in
     /// with the entity states, for the height `Drop_Weapon` launches from.
     pub client_height: Vec<f32>,
+    /// Each client's `r.currentOrigin` at its last link, mirrored with the
+    /// heights and moved by `setOrigin`: where the `radiusDamage` walk finds
+    /// its box (combat doc 14.3).
+    pub client_link_origin: Vec<[f32; 3]>,
     /// Each client's entity state as the tick's moves left it, mirrored in by
     /// `Server::replay_moves` before the script frame. `cloneplayer` copies
     /// the slot's entry into the body queue; nothing else reads it.
@@ -484,6 +488,10 @@ pub struct GameHost {
     /// loaded through `fs` the first time a trace meets an entity carrying
     /// it; `None` for a name that did not load or has no collision.
     pub xmodel_collision: HashMap<String, Option<Rc<[ModelTri]>>>,
+    /// Each xmodel's descriptor bounds by `.model` name, for the box a
+    /// `script_model` is filed in the area tree under; `None` for a name
+    /// that did not load.
+    pub xmodel_bounds: HashMap<String, Option<Bounds>>,
     /// `level+0x1d5c`, the 32 most recent drops (`crate::game::item`).
     pub drop_ring: crate::game::item::DropRing,
     /// The player animtree and the rig cache a locational trace poses a body
@@ -492,6 +500,9 @@ pub struct GameHost {
     pub anims: Option<Rc<vcod_common::animtree::PlayerAnims>>,
     pub hit_rigs: crate::game::hitrig::HitRigs,
 }
+
+/// A `mins`, `maxs` pair.
+pub type Bounds = ([f32; 3], [f32; 3]);
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
 /// state is the one xorshift degenerates on.
@@ -519,13 +530,115 @@ impl GameHost {
     /// `G_SpawnTurret`'s closing `trap_LinkEntity` (0x53025): the turret's
     /// box at its origin.
     pub fn link_turret(&mut self, cx: &mut Cx, id: EntId) {
-        let origin = cx.intern_folded("origin");
-        if let Value::Vector(at) = self.get_field(cx, id, origin) {
-            let (mins, maxs) = crate::game::turret::TURRET_BOX;
-            let link =
-                crate::area::Link::boxed(at, mins, maxs, crate::game::turret::TURRET_CONTENTS);
-            self.area.link(id.0, &link);
+        let (mins, maxs) = crate::game::turret::TURRET_BOX;
+        let shape = crate::game::entity::LinkShape {
+            kind: crate::game::entity::LinkKind::Turret,
+            contents: crate::game::turret::TURRET_CONTENTS,
+            mins,
+            maxs,
+        };
+        self.link_shaped(cx, id, shape);
+    }
+
+    /// Sets what `id` links with, then links it: a spawn function's
+    /// `r.contents` write followed by its `trap_LinkEntity`.
+    pub fn link_shaped(&mut self, cx: &mut Cx, id: EntId, shape: crate::game::entity::LinkShape) {
+        if let Some(e) = self.ents.get_mut(id) {
+            e.link = Some(shape);
         }
+        self.link_entity(cx, id);
+    }
+
+    /// A registered trigger's spawn links (`trigger::link`), spawnflags 0.
+    pub fn link_trigger(&mut self, cx: &mut Cx, id: EntId) {
+        crate::game::trigger::link(self, cx, id, 0);
+    }
+
+    /// A write of `r.contents` with no link after it: the tree keeps the
+    /// entity where it is and its walk tests the new contents.
+    pub fn set_link_contents(&mut self, id: EntId, contents: i32) {
+        if let Some(shape) = self.ents.get_mut(id).and_then(|e| e.link.as_mut()) {
+            shape.contents = contents;
+            self.area.set_contents(id.0, contents);
+        }
+    }
+
+    /// `SV_LinkEntity` for an entity with no client, at its `origin` and
+    /// `angles` as they stand (combat doc 14.7). One with no shape, or
+    /// contents 0, leaves the tree.
+    pub fn link_entity(&mut self, cx: &mut Cx, id: EntId) {
+        self.link_entity_at(cx, id, None);
+    }
+
+    /// [`Self::link_entity`] at `pose` (origin, angles) rather than the
+    /// fields: a mover's `r.currentOrigin`, which runs a frame ahead of what
+    /// script reads (movers doc, section 8).
+    pub fn link_entity_at(&mut self, cx: &mut Cx, id: EntId, pose: Option<([f32; 3], [f32; 3])>) {
+        use crate::game::entity::LinkKind;
+        let Some(e) = self.ents.get(id) else {
+            return;
+        };
+        if e.client.is_some() {
+            return;
+        }
+        let Some(shape) = e.link else {
+            self.area.unlink(id.0);
+            return;
+        };
+        let vector = |host: &mut Self, cx: &mut Cx, name: &str| {
+            let atom = cx.intern_folded(name);
+            match host.get_field(cx, id, atom) {
+                Value::Vector(v) => v,
+                _ => [0.0; 3],
+            }
+        };
+        let (origin, angles) = match pose {
+            Some(p) => p,
+            None => (vector(self, cx, "origin"), vector(self, cx, "angles")),
+        };
+        let link = match shape.kind {
+            LinkKind::Brush | LinkKind::ScriptBrush => {
+                crate::area::Link::brush(origin, angles, shape.mins, shape.maxs, shape.contents)
+            }
+            LinkKind::ScriptModel => {
+                let boxed =
+                    crate::area::Link::boxed(origin, shape.mins, shape.maxs, shape.contents);
+                let model = cx.intern_folded("model");
+                let name = match self.get_field(cx, id, model) {
+                    Value::String(s) => cx.resolve(s).to_string(),
+                    _ => String::new(),
+                };
+                match self.model_bounds_of(&name) {
+                    Some((lo, hi)) => boxed.filed_under(
+                        [origin[0] + lo[0], origin[1] + lo[1]],
+                        [origin[0] + hi[0], origin[1] + hi[1]],
+                    ),
+                    None => boxed,
+                }
+            }
+            LinkKind::Item | LinkKind::Turret => {
+                crate::area::Link::boxed(origin, shape.mins, shape.maxs, shape.contents)
+            }
+        };
+        self.area.link(id.0, &link);
+    }
+
+    /// `xmodel_bounds`' entry for a `.model` value, loading it on first use.
+    /// `None` for no model, which is a `script_model` with no DObj yet.
+    fn model_bounds_of(&mut self, name: &str) -> Option<Bounds> {
+        if name.is_empty() {
+            return None;
+        }
+        if let Some(b) = self.xmodel_bounds.get(name) {
+            return *b;
+        }
+        let b = self.fs.as_ref().and_then(|fs| {
+            let bytes = fs.read(&format!("xmodel/{}", name.strip_prefix("xmodel/")?))?;
+            let (lo, hi) = vcod_common::xmodel::descriptor_bounds(&bytes)?;
+            Some((lo.to_array(), hi.to_array()))
+        });
+        self.xmodel_bounds.insert(name.to_string(), b);
+        b
     }
 
     /// A client's link as the tree files it: its box at `origin` and
@@ -722,6 +835,7 @@ impl GameHost {
             item_notifies: Vec::new(),
             client_grenade_ms: vec![0; MAX_CLIENTS],
             client_height: vec![vcod_common::pmove::HEIGHT_STAND; MAX_CLIENTS],
+            client_link_origin: vec![[0.0; 3]; MAX_CLIENTS],
             client_entity_states: vec![None; MAX_CLIENTS],
             client_bodies: vec![None; MAX_CLIENTS],
             client_dobjs: vec![None; MAX_CLIENTS],
@@ -760,6 +874,7 @@ impl GameHost {
             objectives: [empty_objective(); MAX_OBJECTIVES],
             client_objectives: vec![[Objective::default(); MAX_OBJECTIVES]; MAX_CLIENTS],
             xmodel_collision: HashMap::new(),
+            xmodel_bounds: HashMap::new(),
             drop_ring: Default::default(),
             anims: None,
             hit_rigs: Default::default(),
@@ -869,6 +984,10 @@ impl GameHost {
                 });
         }
         self.triggers.remove(id);
+        // `G_FreeEntity` unlinks (0x66aab).
+        if self.ents.get(id).is_some_and(|e| e.client.is_none()) {
+            self.area.unlink(id.0);
+        }
         // A mover's row goes with the entity rather than a frame later: the
         // number is on the free list from here, and the next entity to take
         // it would start out on the dead one's trajectory.
@@ -1170,7 +1289,29 @@ impl Host for GameHost {
         }
     }
 
+    /// The field write, then `Scr_SetOrigin`'s link (0x5c64f) for an
+    /// `origin` on an entity with no client: the setter script reaches and
+    /// the one every engine move here (an item's flight, a drop, a placement)
+    /// stands in for. `angles` has no link behind it (`Scr_SetAngles`).
     fn set_field(
+        &mut self,
+        cx: &mut Cx,
+        ent: EntId,
+        field: Atom,
+        value: Value,
+    ) -> Result<(), ErrorKind> {
+        self.write_field(cx, ent, field, value)?;
+        if ent.0 < FIRST_HUD_ELEM && cx.resolve_folded(field) == "origin" {
+            self.link_entity(cx, ent);
+        }
+        Ok(())
+    }
+}
+
+impl GameHost {
+    /// The field write alone, with no link: what a caller that links the
+    /// entity itself (a mover at its clip pose) writes through.
+    pub fn write_field(
         &mut self,
         cx: &mut Cx,
         ent: EntId,
