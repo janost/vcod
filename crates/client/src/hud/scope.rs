@@ -3,6 +3,7 @@
 //! (docs/research/cod11-hud-protocol.md, "Scope overlay").
 
 use super::HudQuad;
+use super::player::DamageFeedback;
 use vcod_common::pmove::PlayerState;
 use vcod_common::pmove::aim::{self, AimInput, AimState, DamageKick};
 use vcod_common::weapon::{OverlayReticle, WeaponDef};
@@ -31,15 +32,32 @@ pub fn overlay_frac(def: &WeaponDef, ads_frac: f32, raising: bool) -> Option<f32
 }
 
 /// The aim block's gun half run on the client, so the scope sits where the
-/// server's bullet leaves. The damage kick is left out: the client is not
-/// told the kick angles.
+/// server's bullet leaves, with the damage kick the cgame works out from
+/// the playerstate's feedback bytes.
 #[derive(Default)]
 pub struct GunAim {
     state: AimState,
     last_ms: Option<i32>,
+    kick: DamageKick,
+    /// `(clientNum, damageEvent)` last seen; a new client is a new baseline.
+    last_hit: Option<(i32, i32)>,
 }
 
 impl GunAim {
+    /// `CG_DamageFeedback`'s kick half (`0x300287f0`, hud doc "Scope
+    /// overlay"): a changed `damageEvent` with a non-zero `damageCount` on
+    /// the same client kicks the gun from `now_ms`, along `ps`'s view.
+    pub fn feed(&mut self, client: i32, fb: DamageFeedback, ps: &PlayerState, now_ms: i32) {
+        let Some((last_client, last_event)) = self.last_hit.replace((client, fb.event)) else {
+            return;
+        };
+        if last_client != client || last_event == fb.event || fb.count == 0 || now_ms == 0 {
+            return;
+        }
+        let view = [-ps.pitch.to_degrees(), ps.yaw.to_degrees(), 0.0];
+        self.kick = damage_kick(fb, view, now_ms);
+    }
+
     /// The gun's angles off the view for `ps` (whose yaw and pitch are the
     /// view), stepped to `now_ms`, wire convention.
     pub fn step(
@@ -55,9 +73,35 @@ impl GunAim {
             view: [-ps.pitch.to_degrees(), ps.yaw.to_degrees(), 0.0],
             msec,
             now_ms,
-            kick: DamageKick::default(),
+            kick: self.kick,
         };
         aim::gun_angles(ps, &mut self.state, &input)
+    }
+}
+
+/// `0x300287f0`'s kick off the feedback bytes: `damageCount * 0.2` clamped
+/// to 5..90, straight up the view for yaw and pitch both 255, otherwise
+/// split along and across `view` (wire degrees) by the direction the bytes
+/// name, each read as `byte / 255 * 360`.
+pub fn damage_kick(fb: DamageFeedback, view: [f32; 3], time_ms: i32) -> DamageKick {
+    let kick = (fb.count as f32 * 0.2).clamp(5.0, 90.0);
+    if fb.yaw == 255 && fb.pitch == 255 {
+        return DamageKick {
+            time_ms,
+            pitch: -kick,
+            side: 0.0,
+        };
+    }
+    let byte = |b: i32| (b as f32 / 255.0 * 360.0).to_radians();
+    let (sy, cy) = byte(fb.yaw).sin_cos();
+    let (sp, cp) = byte(fb.pitch).sin_cos();
+    let dir = [cp * cy, cp * sy, -sp];
+    let axis = aim::angles_to_axis(view);
+    let dot = |a: [f32; 3]| a[0] * dir[0] + a[1] * dir[1] + a[2] * dir[2];
+    DamageKick {
+        time_ms,
+        pitch: kick * dot(axis[0]),
+        side: -kick * dot(axis[1]),
     }
 }
 
@@ -262,6 +306,58 @@ mod tests {
         assert_eq!(images[5].verts[0], [960.0 + w, 0.0], "right band");
         let lines = out.iter().filter(|q| q.texture.starts_with("hudSoftLine"));
         assert_eq!(lines.count(), 3, "the FG42 post and two bars");
+    }
+
+    /// `0x300287f0`'s kick: 0.2 per point of `damageCount` inside 5..90,
+    /// straight up for an undirected hit, and split by the bytes' direction
+    /// against the view otherwise.
+    #[test]
+    fn the_damage_kick_reads_the_feedback_bytes() {
+        let fb = |yaw, pitch, count| DamageFeedback {
+            event: 1,
+            yaw,
+            pitch,
+            count,
+        };
+        let k = damage_kick(fb(255, 255, 10), [0.0; 3], 7);
+        assert_eq!((k.time_ms, k.pitch, k.side), (7, -5.0, 0.0));
+        let k = damage_kick(fb(255, 255, 127), [0.0; 3], 7);
+        assert_eq!(k.pitch, -25.4);
+        // Along a level view at yaw 0: all pitch.
+        let k = damage_kick(fb(0, 0, 200), [0.0; 3], 7);
+        assert!(
+            (k.pitch - 40.0).abs() < 1e-4 && k.side.abs() < 1e-4,
+            "{k:?}"
+        );
+        // The same direction seen from yaw 90 runs across the view.
+        let k = damage_kick(fb(0, 0, 200), [0.0, 90.0, 0.0], 7);
+        assert!(
+            k.pitch.abs() < 1e-4 && (k.side - 40.0).abs() < 1e-4,
+            "{k:?}"
+        );
+    }
+
+    /// The first playerstate is a baseline, a changed `damageEvent` kicks,
+    /// and a different client (a follow switch) is a new baseline.
+    #[test]
+    fn a_changed_damage_event_kicks_the_gun() {
+        let ps = PlayerState::spawn(glam::Vec3::ZERO, 0.0);
+        let fb = |event| DamageFeedback {
+            event,
+            yaw: 255,
+            pitch: 255,
+            count: 50,
+        };
+        let mut gun = GunAim::default();
+        gun.feed(3, fb(4), &ps, 1000);
+        assert_eq!(gun.kick, DamageKick::default());
+        gun.feed(3, fb(4), &ps, 1100);
+        assert_eq!(gun.kick, DamageKick::default());
+        gun.feed(5, fb(6), &ps, 1200);
+        assert_eq!(gun.kick, DamageKick::default(), "new client");
+        gun.feed(5, fb(7), &ps, 1300);
+        assert_eq!(gun.kick.time_ms, 1300);
+        assert_eq!(gun.kick.pitch, -10.0);
     }
 
     /// The four stock MP files with a scope, and the lines each draws.

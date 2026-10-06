@@ -4,6 +4,10 @@
 //! section 14.
 
 use glam::Vec3;
+/// On a playerstate: riding a mounted gun, one bit pair per gun stance.
+pub use vcod_common::net::flags::EF_MOUNTED;
+/// Flipped on a teleport, and on a turret's first mounted frame (turrets doc 6.2).
+use vcod_common::net::flags::EF_TELEPORT_BIT;
 use vcod_common::skeleton::{PoseBuffer, Skeleton};
 use vcod_common::turretpose::angles_quat;
 
@@ -11,8 +15,6 @@ use vcod_common::turretpose::angles_quat;
 pub const ET_TURRET: i32 = 11;
 /// On a turret entity: the server fired it this frame (turrets doc 6.3).
 const EF_FIRING: i32 = 0x400;
-/// On a playerstate: riding a mounted gun, one bit pair per gun stance.
-pub const EF_MOUNTED: i32 = 0xC000;
 const ENTITYNUM_NONE: i32 = 1023;
 /// The 0.1 s the controller hands its goal-weight call.
 pub const ANIM_BLEND_MS: i32 = 100;
@@ -41,10 +43,6 @@ pub fn ridden(eflags: i32, viewlocked: i32, viewlocked_ent: i32) -> Option<u32> 
     }
     u32::try_from(viewlocked_ent).ok()
 }
-
-/// `eFlags` bit the server flips on a teleport, and on a turret's first
-/// mounted frame (turrets doc 6.2).
-const EF_TELEPORT_BIT: i32 = 0x8;
 
 /// Whether an entity lerps from its older state: a flipped teleport bit makes
 /// the newer state the current one at the snapshot transition (0x3002fc80),
