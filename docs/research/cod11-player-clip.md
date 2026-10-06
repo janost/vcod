@@ -508,6 +508,33 @@ VERIFIED, 0x2ffb3-0x2ffe0: when `|fJumpOriginZ| > 0.001`, `pm_time` 200 and
 zeroed that field before the only call, so the arm never arms
 (`cod11-mantle.md`, "Jumps").
 
+Re-read on 2026-10-06 with `tools/re/annotate_func.py`. VERIFIED, the
+setters: in a full `objdump -d` of `game.mp.i386.so` the only instruction
+that ORs the bit in as an immediate is `or BYTE PTR [eax+0xd],0x20` at
+0x2ffe0; no other `or` or `mov` takes the immediate 0x2000 into a register
+or a `pm_flags`-shaped operand (the one `mov` of 0x2000, at 0x4276b, writes
+`[esi+0x17c]`), and `PM_DropTimers` clears it (0x32a44). VERIFIED, the path: the branches into
+0x30687, 0x30685 and 0x306e0, the blocks that lead to the call at 0x30721,
+are at 0x305d5, 0x305e9, 0x30615 and 0x30695, all after the store at
+0x305c8, and the store sits on the fall-through from 0x305b4, the trace
+that hit something. INFERRED: no frame reaches `PM_CrashLand` with
+`fJumpOriginZ` set, so retail never carries 0x2000.
+
+VERIFIED, the readers of the bit in the pmove range (0x2c000-0x3b000):
+`PM_CheckJump` at 0x2ebc3 (`cod11-mantle.md`, "The gates") and
+`PM_Friction` (0x2e460) at 0x2e530; the other `test ah,0x20` and
+`test dh,0x20` there read the ground trace's surface flags (`pml+0x50`,
+loaded at 0x2ed90, 0x30109, 0x30153, 0x30180, 0x301df and 0x32161).
+VERIFIED, `PM_Friction`'s ground term: taken at `waterlevel` 1 or less
+(0x2e4db), on `pml.walking` (0x2e4e4), off a slick surface (0x2e4ed) and
+without `pm_flags` 0x200 (0x2e4fb); the control is the speed, at least 100
+(rodata 0x70868); `pm_flags` 0x100 multiplies it by 0.3 (0x2e51c-0x2e523),
+and only when 0x100 is clear does 0x2000 double it (`fadd st,st` at
+0x2e537); then 5.5 (0x70870) and `frametime`. INFERRED: a landing lockout
+would have stopped a player twice as fast and refused a jump for 200 ms;
+with the arm dead neither happens. vcod models neither the flag nor its two
+readers.
+
 ### 8.8 The game half
 
 Read out of `game.mp.i386.so` on 2026-10-05 with `tools/re/annotate_func.py`.
