@@ -1728,6 +1728,12 @@ brush is meters wide. A touch pass that tests the bounding box kills a player
 that far clear of the mines, which is exactly the death reported against vcod
 on 2026-09-08 and what `trigger::box_contacts_hulls` now settles.
 
+The pass walks its candidates in the area tree's order and touches items
+and triggers in that one walk, each with a `"touch"` notify on the entity
+and on the player ahead of its touch function; a `trigger_damage` sets no
+touch function and is never touched. The measurement and the addresses are
+`docs/research/cod11-combat.md` 14.7, "The touch pass".
+
 ### 22.1 The broad phase's contents mask excludes a `trigger_lookat`
 
 VERIFIED: the call at 0x3f925 pushes five arguments, the last of them the

@@ -1192,9 +1192,48 @@ weapon with `fWeaponPosFrac` not 0 those two angles come from
 the gun's angles composed onto the view, the cgame's copy of the server's
 aim block (`cod11-combat.md` 15), so the overlay sits where the shot goes
 and drifts with the idle sway. vcod runs `pmove::aim::gun_angles` on the
-replay's playerstate and projects its forward through the drawn fovs. It
-leaves out the damage kick, whose angles the client is not sent, and
-centres the overlay when there is no replay.
+replay's playerstate, or on a followed player's snapshot playerstate at the
+render clock, and projects its forward through the drawn fovs.
+
+VERIFIED, `0x300371f0` at `0x300373a3`..`0x30037480`: the block
+`0x30012bf0` (the cgame's `BG_CalculateWeaponAngles`) reads is built on the
+stack as `{ps, [0x3020c9f0], [0x30207144] * 0.001, ..., [0x30207148] -
+ps[+0x20cc], [0x3020c9a8] - ps[+0x20cc] or 0 when [0x3020c9a8] is 0,
+[0x3020c9e4], [0x3020c9e8], ...}`; `0x300127e0` reads words 7 to 10 of it,
+and its constants are `0x30069524` 100.0, `0x30069528` 400.0, `0x3006930c`
+0.5 and `0x300693d0` 0.75. INFERRED, off its branches: `0x300127e0` is the
+gun's damage kick, a no-op on a zero word 8, which plays out `word 7 - word
+8` ms through the same envelope and factors as the server's `0x39ce8`
+(`cod11-combat.md` 15). VERIFIED: the
+writes to `0x3020c9a8`, `0x3020c9e4` and `0x3020c9e8` other than the zeroing
+in `0x30028a70` (`0x30028b2e`..`0x30028b39`) are all in `0x300287f0`.
+INFERRED: words 7
+and 8 are `cg.time` and the hit's time on one base, so the offset cancels,
+and `0x3020c9e4`/`0x3020c9e8` are the kick along and across the view.
+
+VERIFIED, `0x300287f0`, called with `(damageYaw, damagePitch,
+damageCount)` off a playerstate's `+0xe8`, `+0xec`, `+0xf0` at
+`0x30028d2c` and `0x3002fc5e`, each behind a compare of `+0xe4`
+(`damageEvent`) across two playerstates and a test of `+0xf0` against 0.
+INFERRED: those are the new and the previous snapshot's, so a hit is a
+changed `damageEvent` with a non-zero count. VERIFIED, `0x300287f0`: the kick is
+`damageCount * 0x300693d4` (0.2), replaced by `0x30069414` (5.0) below it
+and by 90.0 (`0x3006947c`) above that. INFERRED, off the branch at
+`0x30028854`: yaw and pitch both 255 store 0 at `0x3020c9e8` and `-kick`
+at `0x3020c9e4`. VERIFIED, the other arm: each byte is divided by
+`0x30069384` (255.0) and multiplied by `0x30069374` (360.0), the pair goes
+through two `fsincos` into `(cp*cy, cp*sy, -sp)`, `0x3020c9e8` gets `-kick`
+times its dot with the refdef's `viewaxis[1]` (`0x302095ac`) and
+`0x3020c9e4` `kick` times its dot with `viewaxis[0]` (`0x302095a0`).
+VERIFIED: `0x30028a58`
+stores `cg.snap`'s `serverTime` (`[0x301e2160] + 8`) into `0x3020c9a8`.
+INFERRED: the client rebuilds the kick from the feedback bytes; it scales
+by `damageCount` where the server's own kick scales by `aimSpreadScale`
+(`cod11-combat.md` 6), and reads a byte as `/ 255` where the server wrote
+it as `* 256 / 360`. vcod does the same off the playerstate it draws,
+stamping the kick with the clock the sway runs on at the frame the new
+`damageEvent` is first seen, where retail stamps the snapshot's
+`serverTime`; a change of `clientNum` is a new baseline.
 
 INFERRED, off `0x30015fe0`'s calls to `0x300310f0` (a plain wrapper of the
 stretch-pic trap `0x49`: x, y, w, h, s1, t1, s2, t2, material): with `w`
@@ -1233,9 +1272,18 @@ the first-person muzzle flash vanish. VERIFIED: the cvar table names
 INFERRED, off `0x300172f0`: while `0x30015f20` returns 1, the hit-direction
 icons are skipped unless `cg_hudDamageIconInScope` (`0x301e0acc`, default 0)
 is set, and are then centred on the overlay's offset. INFERRED, off
-`0x30018810`: they draw before the crosshair and its overlay. Where the
-`hud.menu` items paint relative to the overlay was not traced; vcod draws
-the overlay first, under them.
+`0x30018810`'s call order: the hit icons (`0x300172f0`) draw before the
+pm_type branch, then the crosshair with its overlay (`0x30016760`),
+`0x30016f70`, `0x30037790` and `0x300150b0`, then with `cg_drawStatus` the
+`hud.menu` items (`0x3004a6f0`), `0x30017470` and the hudelems
+(`0x3001f980`). So the menu HUD and the script's hudelems paint over the
+overlay's black bands. vcod draws the overlay first, under them, as retail.
+
+INFERRED, the same order with section "Which views draw it": a follower's
+playerstate carries its target's `pm_type` and `fWeaponPosFrac`, so a
+spectator following a scoped player gets the overlay, and the zoom with
+it. vcod draws a followed player's view weapon, zoom and overlay off the
+snapshot's playerstate.
 
 vcod scales the overlay by the window height on both axes, as the rest of
 its HUD, where retail scales x by `width / 640`: on a window wider than 4:3

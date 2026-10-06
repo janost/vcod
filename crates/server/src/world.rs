@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 use vcod_common::net::msg::EntityState;
 use vcod_common::net::protocol::{ENTITYNUM_WORLD, Protocol};
-use vcod_common::net::trajectory::TR_LINEAR;
+use vcod_common::net::trajectory::{TR_LINEAR, Trajectory};
 use vcod_common::{bsp, collision::CollisionWorld};
 
 pub struct World {
@@ -38,20 +38,28 @@ pub fn visible_entities(
     vis: &bsp::Visibility,
     eye: [f32; 3],
     entities: &BTreeMap<u32, EntityState>,
+    time: i32,
     p: &Protocol,
 ) -> BTreeMap<u32, EntityState> {
     let from = vis.cluster_at(eye);
     entities
         .iter()
-        .filter(|(_, e)| entity_visible(vis, from, e, p))
+        .filter(|(_, e)| entity_visible(vis, from, e, time, p))
         .map(|(n, e)| (*n, e.clone()))
         .collect()
 }
 
-/// [`visible_entities`]' test for one entity, from the cluster `from`.
-pub fn entity_visible(vis: &bsp::Visibility, from: i32, e: &EntityState, p: &Protocol) -> bool {
-    let o = e.origin(p);
-    let (mins, maxs) = link_bounds(vis, e, p);
+/// [`visible_entities`]' test for one entity, from the cluster `from`, in
+/// the frame whose level time is `time`.
+pub fn entity_visible(
+    vis: &bsp::Visibility,
+    from: i32,
+    e: &EntityState,
+    time: i32,
+    p: &Protocol,
+) -> bool {
+    let (o, angles) = link_pose(e, time, p);
+    let (mins, maxs) = link_bounds(vis, e, angles, p);
     let at = |b: [f32; 3], pad: f32| [o[0] + b[0] + pad, o[1] + b[1] + pad, o[2] + b[2] + pad];
     let clusters = vis.clusters_in_box(at(mins, -LINK_EPSILON), at(maxs, LINK_EPSILON));
     // An entity whose box touches no cluster at all is skipped, the way the
@@ -59,20 +67,35 @@ pub fn entity_visible(vis: &bsp::Visibility, from: i32, e: &EntityState, p: &Pro
     clusters.iter().any(|&c| vis.visible(from, c))
 }
 
+/// Where an entity was last linked, origin and angles. A mover is relinked
+/// each frame it moves at its trajectories evaluated at the level time
+/// (`G_MoverTeam` and the push, docs/research/cod11-movers.md sections 11
+/// and 14); anything else at its `trBase`.
+fn link_pose(e: &EntityState, time: i32, p: &Protocol) -> ([f32; 3], [f32; 3]) {
+    if e.field_i32(p, "eType") == crate::game::wire::ET_SCRIPTMOVER {
+        let at = |group| Trajectory::read(e, p, group).evaluate(time).to_array();
+        return (at("pos"), at("apos"));
+    }
+    (e.origin(p), e.angles(p))
+}
+
 /// The box about the origin an entity links with. A brush model's is its
 /// inline model's bounds, or with any angle set a cube of the radius of those
 /// bounds: VERIFIED, `SV_LinkEntity`'s `r.bmodel` arm (cod_lnxded 0x80908b0)
-/// takes `RadiusFromBounds` when `r.currentAngles` is not zero. The origin is
-/// `pos.trBase`, where retail links at the evaluated `r.currentOrigin`; the
-/// two differ only while a trajectory runs.
-fn link_bounds(vis: &bsp::Visibility, e: &EntityState, p: &Protocol) -> ([f32; 3], [f32; 3]) {
+/// takes `RadiusFromBounds` when `r.currentAngles` is not zero.
+fn link_bounds(
+    vis: &bsp::Visibility,
+    e: &EntityState,
+    angles: [f32; 3],
+    p: &Protocol,
+) -> ([f32; 3], [f32; 3]) {
     let model = (e.field_i32(p, "solid") == crate::game::wire::SOLID_BMODEL)
         .then(|| vis.model_bounds(e.field_i32(p, "index") as usize))
         .flatten();
     let Some((mins, maxs)) = model else {
         return crate::game::wire::link_box(e.field_i32(p, "eType"));
     };
-    if e.angles(p) == [0.0; 3] {
+    if angles == [0.0; 3] {
         return (mins, maxs);
     }
     let r = (0..3)
@@ -192,6 +215,75 @@ mod tests {
         let w = World::from_bsp(&parsed, None);
         // find_spawn picked a real spot, not bedrock.
         assert!(w.spawn.0[2] > -500.0, "spawn {:?}", w.spawn);
+    }
+
+    /// A moving brush model is culled where its trajectory has it at the
+    /// frame's time, not at its `trBase`: one sliding from a spot the eye
+    /// cannot see to one it can is sent once it gets there.
+    #[test]
+    fn a_moving_brush_model_is_culled_where_it_is_now() {
+        let Some(data) = vcod_common::testing::real_bsp() else {
+            return;
+        };
+        let parsed = bsp::parse(&data).unwrap();
+        let w = World::from_bsp(&parsed, None);
+        let p = &vcod_common::net::protocol::PROTOCOL_V1;
+        // The smallest submodel, so a translation can take it out of view.
+        let extent = |n: usize| {
+            w.vis
+                .model_bounds(n)
+                .map(|(lo, hi)| (0..3).map(|i| hi[i] - lo[i]).sum::<f32>())
+        };
+        let model = (1..parsed.models.len())
+            .filter_map(|n| Some((n, extent(n)?)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .expect("a submodel")
+            .0;
+        let mut e = EntityState::null(p);
+        let put = |e: &mut EntityState, name: &str, v: i32| {
+            e.fields[EntityState::field_index(p, name).unwrap()] = v;
+        };
+        put(&mut e, "eType", crate::game::wire::ET_SCRIPTMOVER);
+        put(&mut e, "solid", crate::game::wire::SOLID_BMODEL);
+        put(&mut e, "index", model as i32);
+        let seen_at = |from: i32, off: [f32; 3]| {
+            let mut e = e.clone();
+            for (axis, v) in off.iter().enumerate() {
+                put(&mut e, &format!("pos.trBase[{axis}]"), v.to_bits() as i32);
+            }
+            entity_visible(&w.vis, from, &e, 0, p)
+        };
+        // An eye and two translations of the model, one it sees and one not.
+        let grid: Vec<[f32; 3]> = (-8..=8)
+            .flat_map(|x| (-8..=8).map(move |y| [x as f32 * 256.0, y as f32 * 256.0, 0.0]))
+            .collect();
+        let (from, seen, unseen) = w
+            .spawn_points
+            .iter()
+            .find_map(|&eye| {
+                let from = w.vis.cluster_at(eye);
+                let seen = grid.iter().find(|&&o| seen_at(from, o))?;
+                let unseen = grid.iter().find(|&&o| !seen_at(from, o))?;
+                Some((from, *seen, *unseen))
+            })
+            .expect("a spawn that sees the model from one spot and not another");
+        for (axis, v) in unseen.iter().enumerate() {
+            put(&mut e, &format!("pos.trBase[{axis}]"), v.to_bits() as i32);
+            put(
+                &mut e,
+                &format!("pos.trDelta[{axis}]"),
+                (seen[axis] - v).to_bits() as i32,
+            );
+        }
+        put(
+            &mut e,
+            "pos.trType",
+            vcod_common::net::trajectory::TR_LINEAR_STOP,
+        );
+        put(&mut e, "pos.trTime", 1000);
+        put(&mut e, "pos.trDuration", 1000);
+        assert!(!entity_visible(&w.vis, from, &e, 1000, p), "at the start");
+        assert!(entity_visible(&w.vis, from, &e, 2000, p), "at the end");
     }
 
     #[test]

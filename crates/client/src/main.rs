@@ -1534,7 +1534,11 @@ impl ApplicationHandler for App {
                 if let Some(w) = &self.world
                     && !matches!(self.mode, Mode::Online { .. })
                 {
-                    r.set_static_submodels(&(1..w.bsp.models.len()).collect::<Vec<_>>());
+                    r.set_submodels(
+                        &(1..w.bsp.models.len())
+                            .map(|m| (m, glam::Mat4::IDENTITY))
+                            .collect::<Vec<_>>(),
+                    );
                 }
                 if !self.viewmodel.is_empty() {
                     r.set_viewmodel(&self.fs, &self.viewmodel);
@@ -2061,8 +2065,6 @@ impl ApplicationHandler for App {
                                         last_loop_snap,
                                         drawn_pos,
                                     } = &mut **live;
-                                    let bsp =
-                                        &self.world.as_ref().expect("live phase has a map").bsp;
                                     let p = &net::protocol::PROTOCOL_V1;
                                     let client_num = net.gamestate().map_or(-1, |g| g.client_num);
                                     // While following, ps.clientNum is the followed
@@ -2109,6 +2111,14 @@ impl ApplicationHandler for App {
                                             / (b.server_time - a.server_time).max(1) as f32)
                                             .clamp(0.0, 1.0);
                                         let t0 = Instant::now();
+                                        // Last frame's drawn bodies, for the gunner's
+                                        // trace down.
+                                        let bodies = play::predict::solid_bodies(
+                                            p,
+                                            &b.entities,
+                                            client_num as u32,
+                                            drawn_pos,
+                                        );
                                         let built = entities::build_instances(
                                             scene,
                                             (a, b, f),
@@ -2116,7 +2126,7 @@ impl ApplicationHandler for App {
                                             skip_num,
                                             net.configstrings(),
                                             &self.fs,
-                                            bsp,
+                                            Some(MoveWorld::new(world, &bodies, u32::MAX)),
                                             r,
                                             p,
                                         );
@@ -2126,7 +2136,7 @@ impl ApplicationHandler for App {
                                         weapon_flash = built.weapon_flash;
                                         entity_pos = built.entity_pos;
                                         turret_eye = built.turret_eye;
-                                        r.set_static_submodels(&built.static_submodels);
+                                        r.set_submodels(&built.submodels);
                                         // Over 512 u is a teleport, not motion.
                                         let pos = if oa.distance(ob) > 512.0 {
                                             ob
@@ -2174,16 +2184,18 @@ impl ApplicationHandler for App {
                                     if let Some(v) = &predicted {
                                         cam.pos = v.origin + Vec3::Z * v.view_height;
                                     }
+                                    // A followed player's view weapon, zoom and scope
+                                    // come off the snapshot, as retail draws them.
                                     let view_ps = net.snapshots().newest().and_then(|s| {
-                                        (!following && pmove::predict::predictable(pm_type)).then(
-                                            || match &predicted {
+                                        pmove::predict::predictable(pm_type).then(|| {
+                                            match &predicted {
                                                 Some(v) => play::view::ViewPs::from_predicted(
                                                     &v.pred,
                                                     s.ps.field_i32(p, "viewmodelIndex"),
                                                 ),
                                                 None => play::view::ViewPs::from_snapshot(p, &s.ps),
-                                            },
-                                        )
+                                            }
+                                        })
                                     });
                                     if let Some(ps) = &view_ps
                                         && let Some(models) =

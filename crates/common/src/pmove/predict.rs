@@ -5,23 +5,15 @@
 use super::cmd::{self, EventRing};
 use super::{PlayerState, Stance, weapon};
 use crate::movetrace::MoveWorld;
+use crate::net::flags::{
+    EF_CROUCH, EF_MOUNTED, EF_MOUNTED_DUCK, EF_MOUNTED_PRONE, EF_MOUNTED_STAND, EF_PRONE,
+    PM_DEAD_LINKED, PM_NORMAL, PM_NORMAL_LINKED, PMF_BACKWARDS_RUN, PMF_DUCKED, PMF_JUMP_HELD,
+    PMF_PRONE_DIVE,
+};
 use crate::net::msg::{self, UserCmd};
 use crate::net::protocol::{ENTITYNUM_NONE, Protocol};
 use crate::weapon::WeaponDef;
 use glam::Vec3;
-
-const PM_NORMAL: i32 = 0;
-const PM_NORMAL_LINKED: i32 = 1;
-const PM_DEAD_LINKED: i32 = 7;
-
-const EF_CROUCH: i32 = 0x20;
-const EF_PRONE: i32 = 0x40;
-/// The mounted-gun bits, one value per gun stance (docs/research/cod11-turrets.md 4.4).
-const EF_MOUNTED: i32 = 0xC000;
-const PMF_DUCKED: i32 = 0x2;
-const PMF_PRONE_DIVE: i32 = 0x4;
-const PMF_JUMP_HELD: i32 = 0x8;
-const PMF_BACKWARDS_RUN: i32 = 0x40;
 
 /// The sim playerstate plus the wire fields the step reads and writes that
 /// `PlayerState` does not carry.
@@ -78,9 +70,9 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
         Stance::Stand
     };
     ps.mounted = match eflags & EF_MOUNTED {
-        0xC000 => Some(Stance::Stand),
-        0x8000 => Some(Stance::Crouch),
-        0x4000 => Some(Stance::Prone),
+        EF_MOUNTED_STAND => Some(Stance::Stand),
+        EF_MOUNTED_DUCK => Some(Stance::Crouch),
+        EF_MOUNTED_PRONE => Some(Stance::Prone),
         _ => None,
     };
     let ground = int("groundEntityNum") as u32;
@@ -375,7 +367,11 @@ mod tests {
     fn lerp_continues(first: &[u8], second: u8, rebuild_after_ms: i32) {
         let world = test_world(&[]);
         let world = MoveWorld::bare(&world);
-        let mut pred = from_wire(&PROTOCOL_V1, &standing(1000), None);
+        // Set down the 0.125 a retail spawn sits above the floor: a box
+        // resting on the face starts every trace but the ground trace solid.
+        let mut w = standing(1000);
+        setf(&mut w, "origin[2]", 0.125);
+        let mut pred = from_wire(&PROTOCOL_V1, &w, None);
         let mut t = 1000;
         let run = |pred: &mut Predicted, t: &mut i32, wbuttons: u8, ms: i32| {
             for _ in 0..ms / 8 {

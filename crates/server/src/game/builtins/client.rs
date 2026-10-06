@@ -96,6 +96,7 @@ pub fn set_player_origin(
     host.area.unlink(slot as u32);
     let playing = !host.client_vitals[slot].dead;
     host.link_client(slot, origin, host.client_box(slot), contents, playing);
+    host.client_link_origin[slot] = origin;
     host.client_sim_ops
         .push((slot, SimOp::SetOrigin { origin }));
     Ok(Value::Undefined)
@@ -175,21 +176,34 @@ pub fn get_current_weapon(
 /// mirror `Server::replay_moves` wrote for this client before the script
 /// frame, and the queue re-reads it from the sim once more at the snapshot
 /// build, so a death animation raised after this call still reaches the wire.
+/// The body stands on the player's `origin` field, `r.currentOrigin`, which
+/// is snapped when the death runs inside the victim's own cmd (5.5).
 ///
 /// Returns `Value::Undefined` rather than the body entity: the body queue is
 /// not in the object table, so there is no `EntId` to hand out, and every
 /// stock gametype assigns the result without ever reading it back.
 pub fn clone_player(
     host: &mut GameHost,
-    _cx: &mut Cx,
+    cx: &mut Cx,
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
-    let Some(state) = host.client_entity_states[slot].clone() else {
+    let Some(mut state) = host.client_entity_states[slot].clone() else {
         // A client with no sim: connected, never entered the world.
         return Ok(Value::Undefined);
     };
+    let p = &vcod_common::net::protocol::PROTOCOL_V1;
+    let field = cx.intern_folded("origin");
+    if let Value::Vector(at) = host.get_field(cx, entity_receiver(recv)?, field) {
+        for (axis, v) in at.into_iter().enumerate() {
+            if let Some(i) =
+                vcod_common::net::msg::EntityState::field_index(p, &format!("pos.trBase[{axis}]"))
+            {
+                state.fields[i] = v.to_bits() as i32;
+            }
+        }
+    }
     let now = host.level_time_ms;
     let world = host.world.clone();
     host.bodies.push(
@@ -197,7 +211,7 @@ pub fn clone_player(
         Some(slot),
         now,
         world.as_ref().map(|w| &w.collision),
-        &vcod_common::net::protocol::PROTOCOL_V1,
+        p,
     );
     Ok(Value::Undefined)
 }

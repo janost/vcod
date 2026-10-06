@@ -1793,8 +1793,10 @@ fn correct_all_solid(
 
 /// Q3 `bg_pmove.c` `PM_GroundTrace`.
 fn ground_trace(ps: &mut PlayerState, world: &MoveWorld, mask: u32) {
+    // From a quarter unit above the origin to a quarter below (0x304c0..
+    // 0x304d3, `.rodata 0x70ba8`): a box resting on a face starts clear.
     let mut t = world.box_trace(
-        ps.origin,
+        ps.origin + Vec3::Z * 0.25,
         ps.origin - Vec3::Z * 0.25,
         ps.mins(),
         ps.maxs(),

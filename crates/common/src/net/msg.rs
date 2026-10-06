@@ -19,7 +19,8 @@ const BIG_INFO_STRING: usize = 8192;
 const FLOAT_INT_BITS: i32 = 13;
 const FLOAT_INT_BIAS: i32 = 1 << (FLOAT_INT_BITS - 1);
 
-/// `svc_ops_e`, the server->client op bytes.
+/// `svc_ops_e`, the server->client op bytes (confirmed against cod_lnxded 1.1d).
+pub const SVC_BAD: u8 = 0;
 pub const SVC_NOP: u8 = 1;
 pub const SVC_GAMESTATE: u8 = 2;
 pub const SVC_CONFIGSTRING: u8 = 3;
@@ -28,6 +29,13 @@ pub const SVC_SERVER_COMMAND: u8 = 5;
 pub const SVC_DOWNLOAD: u8 = 6;
 pub const SVC_SNAPSHOT: u8 = 7;
 pub const SVC_EOF: u8 = 8;
+
+/// `clc_ops_e`, the client->server ops, [`CLC_BITS`] wide (cod_lnxded 0x8087454).
+pub const CLC_MOVE: i32 = 0;
+pub const CLC_MOVE_NO_DELTA: i32 = 1;
+pub const CLC_CLIENT_COMMAND: i32 = 2;
+pub const CLC_EOF: i32 = 3;
+pub const CLC_BITS: i32 = 2;
 
 /// Reader over a message body; `new` block-decompresses the input.
 pub struct MsgReader {
@@ -631,7 +639,7 @@ pub struct PsArrays {
     /// Block 1, `ps.stats[6]`; index 0 health, 2 max health. The widths are
     /// per element: `stats[3]` is 6 unsigned bits and `stats[5]` a byte, so a
     /// retail `-1` in `stats[3]` arrives as 63.
-    pub stats: [i32; 6],
+    pub stats: [i32; STAT_WIDTHS.len()],
     /// Block 2, `ps.ammo[64]`, the reserve, indexed by the weapon def's ammo
     /// index and not by weapon.
     pub ammo: [i16; 64],
@@ -651,7 +659,7 @@ pub struct PsArrays {
 impl Default for PsArrays {
     fn default() -> Self {
         PsArrays {
-            stats: [0; 6],
+            stats: [0; STAT_WIDTHS.len()],
             ammo: [0; 64],
             ammoclip: [0; 64],
             objectives: [Objective::default(); MAX_OBJECTIVES],
@@ -840,9 +848,9 @@ pub fn write_delta_playerstate(
 /// Mirror of [`read_ps_arrays`]. Every block carries only what differs from
 /// the base.
 fn write_ps_arrays(w: &mut MsgWriter, from: &PsArrays, to: &PsArrays) {
-    // Block 1: the gate, then six raw bits selecting the changed scalars.
+    // Block 1: the gate, then a raw mask selecting the changed scalars.
     let mut mask = 0i32;
-    for i in 0..6 {
+    for i in 0..STAT_WIDTHS.len() {
         if from.stats[i] != to.stats[i] {
             mask |= 1 << i;
         }
@@ -851,24 +859,15 @@ fn write_ps_arrays(w: &mut MsgWriter, from: &PsArrays, to: &PsArrays) {
         w.write_bits(0, 1);
     } else {
         w.write_bits(1, 1);
-        w.write_bits(mask, 6);
-        if mask & 0x01 != 0 {
-            w.write_short(to.stats[0] as i16);
-        }
-        if mask & 0x02 != 0 {
-            w.write_short(to.stats[1] as i16);
-        }
-        if mask & 0x04 != 0 {
-            w.write_short(to.stats[2] as i16);
-        }
-        if mask & 0x08 != 0 {
-            w.write_bits(to.stats[3], 6);
-        }
-        if mask & 0x10 != 0 {
-            w.write_short(to.stats[4] as i16);
-        }
-        if mask & 0x20 != 0 {
-            w.write_byte(to.stats[5] as u8);
+        w.write_bits(mask, STAT_WIDTHS.len() as i32);
+        for (i, width) in STAT_WIDTHS.iter().enumerate() {
+            if mask & (1 << i) != 0 {
+                match width {
+                    StatWidth::Short => w.write_short(to.stats[i] as i16),
+                    StatWidth::Bits(bits) => w.write_bits(to.stats[i], *bits),
+                    StatWidth::Byte => w.write_byte(to.stats[i] as u8),
+                }
+            }
         }
     }
     // Block 2 behind its group gate, block 3 without one.
@@ -888,7 +887,7 @@ fn write_ps_arrays(w: &mut MsgWriter, from: &PsArrays, to: &PsArrays) {
         for i in 0..MAX_OBJECTIVES {
             let from_o = from.objectives[i];
             let o = to.objectives[i];
-            w.write_bits(o.state, 3);
+            w.write_bits(o.state, OBJECTIVE_STATE_BITS);
             if o == (Objective {
                 state: o.state,
                 ..from_o
@@ -919,10 +918,10 @@ fn write_ps_arrays(w: &mut MsgWriter, from: &PsArrays, to: &PsArrays) {
 /// Mirror of [`read_short_array_group`]: four sub-blocks of 16, each a gate,
 /// a byte-aligned 16-bit changed mask and the changed elements.
 fn write_short_array_group(w: &mut MsgWriter, from: &[i16; 64], to: &[i16; 64]) {
-    for s in 0..4 {
-        let base = s * 16;
+    for s in 0..to.len() / SHORT_SUB_BLOCK {
+        let base = s * SHORT_SUB_BLOCK;
         let mut mask = 0u16;
-        for i in 0..16 {
+        for i in 0..SHORT_SUB_BLOCK {
             if from[base + i] != to[base + i] {
                 mask |= 1 << i;
             }
@@ -933,7 +932,7 @@ fn write_short_array_group(w: &mut MsgWriter, from: &[i16; 64], to: &[i16; 64]) 
         }
         w.write_bits(1, 1);
         w.write_short(mask as i16);
-        for i in 0..16 {
+        for i in 0..SHORT_SUB_BLOCK {
             if mask & (1 << i) != 0 {
                 w.write_short(to[base + i]);
             }
@@ -941,11 +940,41 @@ fn write_short_array_group(w: &mut MsgWriter, from: &[i16; 64], to: &[i16; 64]) 
     }
 }
 
+/// Block 1's six scalars by width, in mask-bit order: `stats[3]` is 6
+/// unsigned bits and `stats[5]` a byte.
+enum StatWidth {
+    Short,
+    Bits(i32),
+    Byte,
+}
+
+const STAT_WIDTHS: [StatWidth; 6] = [
+    StatWidth::Short,
+    StatWidth::Short,
+    StatWidth::Short,
+    StatWidth::Bits(6),
+    StatWidth::Short,
+    StatWidth::Byte,
+];
+
+/// Elements per gated sub-block of blocks 2 and 3; the mask is one short.
+const SHORT_SUB_BLOCK: usize = 16;
+
+/// Block 4's per-objective state, sent ahead of the delta gate.
+const OBJECTIVE_STATE_BITS: i32 = 3;
+
+/// Block 5's element count and per-element last-changed field index.
+const HUD_INDEX_BITS: i32 = 5;
+
+/// Where the HUD-element fields start in [`HUD_FIELD_BITS`], past the
+/// objective's six.
+const HUD_ELEM_FIELD_BASE: usize = 6;
+
 /// Widths of the 34-entry field table at cod_lnxded 0x80de384. 0..6 back the
 /// objective block, 6..34 the two HUD-element arrays.
 /// docs/protocol-1.1.md, "The five array blocks".
 #[rustfmt::skip]
-const HUD_FIELD_BITS: [i32; 34] = [
+const HUD_FIELD_BITS: [i32; HUD_ELEM_FIELD_BASE + HUD_ELEM_FIELDS] = [
     0, 0, 0, 12, 10, 4,   // origin[0..2], icon, entNum, teamNum
     32, 4, 0, 10, 10, 2,  // color.rgba, type, fontScale, y, x, alignY
     2, 32, 4, 8, 8, 10, 10, 0, 32, 32, 16, 32, 16, 10, 0, 8, 10, 32, 16, 10, 10, 32,
@@ -961,26 +990,17 @@ fn read_ps_arrays(r: &mut MsgReader, from: &PsArrays) -> PsArrays {
         objectives: from.objectives,
         ..PsArrays::default()
     };
-    // Block 1: a 6-bit mask selecting up to six scalars, each its own width.
+    // Block 1: a mask selecting up to six scalars, each its own width.
     if r.read_bits(1) == 1 {
-        let m = r.read_bits(6);
-        if m & 0x01 != 0 {
-            out.stats[0] = i32::from(r.read_short());
-        }
-        if m & 0x02 != 0 {
-            out.stats[1] = i32::from(r.read_short());
-        }
-        if m & 0x04 != 0 {
-            out.stats[2] = i32::from(r.read_short());
-        }
-        if m & 0x08 != 0 {
-            out.stats[3] = r.read_bits(6);
-        }
-        if m & 0x10 != 0 {
-            out.stats[4] = i32::from(r.read_short());
-        }
-        if m & 0x20 != 0 {
-            out.stats[5] = i32::from(r.read_byte());
+        let m = r.read_bits(STAT_WIDTHS.len() as i32);
+        for (i, width) in STAT_WIDTHS.iter().enumerate() {
+            if m & (1 << i) != 0 {
+                out.stats[i] = match width {
+                    StatWidth::Short => i32::from(r.read_short()),
+                    StatWidth::Bits(bits) => r.read_bits(*bits),
+                    StatWidth::Byte => i32::from(r.read_byte()),
+                };
+            }
         }
     }
     // Block 2: ps.ammo[64] behind a group gate.
@@ -996,7 +1016,7 @@ fn read_ps_arrays(r: &mut MsgReader, from: &PsArrays) -> PsArrays {
         for i in 0..MAX_OBJECTIVES {
             let from_o = from.objectives[i];
             let o = &mut out.objectives[i];
-            o.state = r.read_bits(3);
+            o.state = r.read_bits(OBJECTIVE_STATE_BITS);
             if r.read_bits(1) == 1 {
                 o.origin[0] = read_delta_field(r, from_o.origin[0], HUD_FIELD_BITS[0]);
                 o.origin[1] = read_delta_field(r, from_o.origin[1], HUD_FIELD_BITS[1]);
@@ -1027,14 +1047,14 @@ fn read_ps_arrays(r: &mut MsgReader, from: &PsArrays) -> PsArrays {
 /// Four gated 16-entry sub-blocks (cod_lnxded 0x807ea4b / 0x807eb49): a gate,
 /// a byte-aligned 16-bit changed mask, then the changed elements low to high.
 fn read_short_array_group(r: &mut MsgReader, out: &mut [i16; 64]) {
-    for s in 0..4 {
+    for s in 0..out.len() / SHORT_SUB_BLOCK {
         if r.read_bits(1) == 0 {
             continue;
         }
         let mask = r.read_short() as u16;
-        for i in 0..16 {
+        for i in 0..SHORT_SUB_BLOCK {
             if mask & (1 << i) != 0 {
-                out[s * 16 + i] = r.read_short();
+                out[s * SHORT_SUB_BLOCK + i] = r.read_short();
             }
         }
     }
@@ -1046,16 +1066,19 @@ fn read_short_array_group(r: &mut MsgReader, out: &mut [i16; 64]) {
 /// reader's closing `bzero`, 0x807d0e9), which is how a destroyed element
 /// leaves a client's screen.
 fn read_hud_array(r: &mut MsgReader, from: &[HudElem]) -> Vec<HudElem> {
-    let count = (r.read_bits(5) as usize).min(MAX_HUD_ELEMS);
+    let count = (r.read_bits(HUD_INDEX_BITS) as usize).min(MAX_HUD_ELEMS);
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
         let base = from.get(i).copied().unwrap_or_default();
         let mut e = base;
-        let last = r.read_bits(5);
+        let last = r.read_bits(HUD_INDEX_BITS);
         for k in 0..=last as usize {
             // A `last` above 27 walks the field table past its end, as
             // retail's own loop does; the value goes nowhere.
-            let bits = HUD_FIELD_BITS.get(6 + k).copied().unwrap_or(0);
+            let bits = HUD_FIELD_BITS
+                .get(HUD_ELEM_FIELD_BASE + k)
+                .copied()
+                .unwrap_or(0);
             let v = read_delta_field(r, base.fields.get(k).copied().unwrap_or(0), bits);
             if k < HUD_ELEM_FIELDS {
                 e.fields[k] = v;
@@ -1075,7 +1098,7 @@ fn read_hud_array(r: &mut MsgReader, from: &[HudElem]) -> Vec<HudElem> {
 /// stops at the first record with a zero `type`).
 fn write_hud_array(w: &mut MsgWriter, from: &[HudElem], to: &[HudElem]) {
     let count = to.len().min(MAX_HUD_ELEMS);
-    w.write_bits(count as i32, 5);
+    w.write_bits(count as i32, HUD_INDEX_BITS);
     for (i, e) in to.iter().take(count).enumerate() {
         let base = from.get(i).copied().unwrap_or_default();
         // Retail's index of the last differing field, 0 when none differs
@@ -1086,9 +1109,14 @@ fn write_hud_array(w: &mut MsgWriter, from: &[HudElem], to: &[HudElem]) {
             .zip(&e.fields)
             .rposition(|(a, b)| a != b)
             .unwrap_or(0);
-        w.write_bits(last as i32, 5);
+        w.write_bits(last as i32, HUD_INDEX_BITS);
         for k in 0..=last {
-            write_delta_field(w, base.fields[k], e.fields[k], HUD_FIELD_BITS[6 + k]);
+            write_delta_field(
+                w,
+                base.fields[k],
+                e.fields[k],
+                HUD_FIELD_BITS[HUD_ELEM_FIELD_BASE + k],
+            );
         }
     }
 }
@@ -1140,21 +1168,34 @@ pub const NULL_USERCMD: UserCmd = UserCmd {
     up: 0,
 };
 
+/// Keyed usercmd field widths, in the full branch's order.
+const UCMD_FR_BITS: i32 = 4;
+const UCMD_BUTTONS_HI_BITS: i32 = 6;
+const UCMD_UP_BITS: i32 = 2;
+const UCMD_WEAPON_BITS: i32 = 6;
+
+/// Bucket bits of the forward/right nibble; `up` uses the forward pair.
+const MOVE_FORWARD: i32 = 1;
+const MOVE_BACK: i32 = 2;
+const MOVE_RIGHT: i32 = 4;
+const MOVE_LEFT: i32 = 8;
+/// An axis inside +/-this sends no bucket bit.
+const MOVE_DEADZONE: i32 = 10;
+
 /// Forward/right as the wire nibble (cod_lnxded 0x807ba8e): forward in bits
-/// 0/1, right in bits 2/3, +/-10 deadzone.
+/// 0/1, right in bits 2/3.
 fn fr_bucket(forward: i8, right: i8) -> i32 {
-    let mut f = 0;
-    if forward as i32 > 10 {
-        f |= 1;
-    } else if (forward as i32) < -10 {
-        f |= 2;
+    axis_bucket(forward, MOVE_FORWARD, MOVE_BACK) | axis_bucket(right, MOVE_RIGHT, MOVE_LEFT)
+}
+
+fn axis_bucket(v: i8, pos: i32, neg: i32) -> i32 {
+    if v as i32 > MOVE_DEADZONE {
+        pos
+    } else if (v as i32) < -MOVE_DEADZONE {
+        neg
+    } else {
+        0
     }
-    if right as i32 > 10 {
-        f |= 4;
-    } else if (right as i32) < -10 {
-        f |= 8;
-    }
-    f
 }
 
 /// `MSG_WriteDeltaUsercmdKey`, reconstructed from the reader at cod_lnxded
@@ -1193,20 +1234,21 @@ fn write_full_usercmd(w: &mut MsgWriter, key: i32, server_time: i32, to: &UserCm
     w.write_bits(((to.buttons as i32) & 1) ^ (key & 1), 1);
     write_keyed_angle(w, key, to.angles[0]);
     write_keyed_angle(w, key, to.angles[1]);
-    let flag = fr_bucket(to.forward, to.right);
-    w.write_bits(1, 1);
-    w.write_bits(flag ^ (key & 0xf), 4);
+    write_keyed_bits(w, key, fr_bucket(to.forward, to.right), UCMD_FR_BITS);
 
     let key = key ^ server_time;
     write_keyed_angle(w, key, to.angles[2]);
-    w.write_bits(1, 1);
-    w.write_bits((i32::from(to.buttons >> 1) & 0x3f) ^ (key & 0x3f), 6);
+    write_keyed_bits(w, key, i32::from(to.buttons >> 1), UCMD_BUTTONS_HI_BITS);
     w.write_bits(1, 1);
     w.write_byte(to.wbuttons ^ (key as u8));
+    write_keyed_bits(w, key, up_bucket(to.up), UCMD_UP_BITS);
+    write_keyed_bits(w, key, i32::from(to.weapon), UCMD_WEAPON_BITS);
+}
+
+/// Change bit set, then `value ^ key` in `bits`; inverse of [`read_keyed_bits`].
+fn write_keyed_bits(w: &mut MsgWriter, key: i32, value: i32, bits: i32) {
     w.write_bits(1, 1);
-    w.write_bits(up_bucket(to.up) ^ (key & 0x3), 2);
-    w.write_bits(1, 1);
-    w.write_bits(i32::from(to.weapon) ^ (key & 0x3f), 6);
+    w.write_bits((value ^ key) & ((1 << bits) - 1), bits);
 }
 
 /// Change bit set, then `value ^ key` as a short (cod_lnxded 0x807b9bd).
@@ -1217,13 +1259,7 @@ fn write_keyed_angle(w: &mut MsgWriter, key: i32, to: i32) {
 
 /// Two-bit twin of [`fr_bucket`] (cod_lnxded 0x807bf58).
 fn up_bucket(up: i8) -> i32 {
-    if up as i32 > 10 {
-        1
-    } else if (up as i32) < -10 {
-        2
-    } else {
-        0
-    }
+    axis_bucket(up, MOVE_FORWARD, MOVE_BACK)
 }
 
 /// Axes are never analog on the wire (0x807bb52, 0x807c013).
@@ -1281,9 +1317,9 @@ pub fn read_delta_usercmd(r: &mut MsgReader, key: i32, from: &UserCmd) -> anyhow
         to.angles[0] = read_keyed_angle(r, key, to.angles[0]);
         to.angles[1] = read_keyed_angle(r, key, to.angles[1]);
         if r.read_bits(1) == 1 {
-            let n = r.read_bits(4) ^ (key & 0xf);
-            to.forward = move_axis(n, 1, 2);
-            to.right = move_axis(n, 4, 8);
+            let n = r.read_bits(UCMD_FR_BITS) ^ (key & ((1 << UCMD_FR_BITS) - 1));
+            to.forward = move_axis(n, MOVE_FORWARD, MOVE_BACK);
+            to.right = move_axis(n, MOVE_RIGHT, MOVE_LEFT);
         }
         return finish_usercmd(r, to, "compact");
     }
@@ -1306,21 +1342,22 @@ fn read_full_usercmd(r: &mut MsgReader, key: i32, from: &UserCmd, to: &mut UserC
     to.buttons = (r.read_bits(1) ^ (key & 1)) as u8 & 1;
     to.angles[0] = read_keyed_angle(r, key, from.angles[0]);
     to.angles[1] = read_keyed_angle(r, key, from.angles[1]);
-    let fr = read_keyed_bits(r, key, fr_bucket(from.forward, from.right), 4);
-    to.forward = move_axis(fr, 1, 2);
-    to.right = move_axis(fr, 4, 8);
+    let fr = read_keyed_bits(r, key, fr_bucket(from.forward, from.right), UCMD_FR_BITS);
+    to.forward = move_axis(fr, MOVE_FORWARD, MOVE_BACK);
+    to.right = move_axis(fr, MOVE_RIGHT, MOVE_LEFT);
 
     let key = key ^ to.server_time;
     to.angles[2] = read_keyed_angle(r, key, from.angles[2]);
-    let hi = read_keyed_bits(r, key, i32::from(from.buttons >> 1), 6);
+    let hi = read_keyed_bits(r, key, i32::from(from.buttons >> 1), UCMD_BUTTONS_HI_BITS);
     to.buttons |= (hi as u8) << 1;
     to.wbuttons = if r.read_bits(1) == 1 {
         r.read_byte() ^ (key as u8)
     } else {
         from.wbuttons
     };
-    to.up = move_axis(read_keyed_bits(r, key, up_bucket(from.up), 2), 1, 2);
-    to.weapon = read_keyed_bits(r, key, i32::from(from.weapon), 6) as u8;
+    let up = read_keyed_bits(r, key, up_bucket(from.up), UCMD_UP_BITS);
+    to.up = move_axis(up, MOVE_FORWARD, MOVE_BACK);
+    to.weapon = read_keyed_bits(r, key, i32::from(from.weapon), UCMD_WEAPON_BITS) as u8;
 }
 
 /// Mirror of [`MsgReader`]: assembled plain, block-compressed by

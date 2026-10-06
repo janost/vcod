@@ -74,7 +74,7 @@ built from the bytes up, this might be your kind of thing.
   players. A correction eases out over 100 ms.
 - Draws your weapon in first person with the hands your team gets, zooms the
   sight to the weapon's own FOV, puts a sniper scope's overlay up where the
-  swaying gun points, and plays your own fire, reload and footstep
+  swaying, hit-kicked gun points, and plays your own fire, reload and footstep
   sounds off the prediction. The snapshot that confirms them later stays
   quiet.
 - Draws mounted MG42s turned by the barrel angles the server sends, with
@@ -84,8 +84,9 @@ built from the bytes up, this might be your kind of thing.
   spread, health, ammo, fire-mode icon, stance with its change flash, compass
   with objectives and teammates, use hints and hit direction, chat top left,
   game messages over the compass and announcements over the crosshair. A
-  spectator following a player sees that player's HUD. It also draws the gametype
-  script's own HUD elements, such as the S&D clock, the bomb icons and the
+  spectator following a player sees that player's HUD, weapon, zoom and
+  scope. It also draws the gametype script's own HUD elements, such as the
+  S&D clock, the bomb icons and the
   progress bar, in retail's fonts, fixed-width slots included.
 - Follows the server through a map change: loading screen, downloads, new
   map.
@@ -129,7 +130,8 @@ either: the people on it signed up for Call of Duty.
   `trigger_lookat`), and script movers whose trajectories reach the wire.
   A moving brush model carries the players and items on it and shoves the
   players in its way, and a player linked to a moving entity rides it. The client draws a
-  brush model where its entity is, so a hidden or deleted one is gone.
+  brush model where its entity is, with its baked lightmap, so a hidden or
+  deleted one is gone, and draws an item resting on a mover riding it.
 - Intermission, `map_restart`, and `sv_mapRotation` the way retail runs them,
   with the next map's gamestate sent on the live connection.
 - Spectator follow mode and the killcam, replayed out of a ring of archived
@@ -194,6 +196,8 @@ console, no key rebinding. You get command-line flags and the binds below.
 - `re` and `bel` play past the round start, but I haven't checked a
   Retrieval pickup and capture or the Behind Enemy Lines team swap against
   retail. The bots don't play either gametype.
+- `linkTo` takes only a player. A script calling it on any other entity
+  stops with an error; no stock MP script does.
 - A brush model that has turned and turned back keeps a sliver of yaw on
   retail, which drifts what it carries by about 0.02 units a frame; vcod's
   comes back to exactly zero.
@@ -344,12 +348,13 @@ vcod-server mp_carentan --port 28960 --hostname "my server" --gametype tdm
   Repeatable, e.g. `--set scr_friendlyfire=1`. Set `sv_mapRotation` this way
   to get a rotation.
 - `--bots <n>` adds `n` debug bots, each in a real client slot, alternating
-  allies and axis. The first tick with bots builds the map's navigation
-  graph (0.6 to 2.7 s on 16 threads for the stock maps). `--bots-shoot` lets
-  them engage the nearest visible enemy: semi-autos tap, automatics fire in
-  bursts, sights go up at range, and they strafe and crouch while fighting.
-  They also reload and throw frags, and go looking where a lost enemy was
-  last seen.
+  allies and axis. The first tick with bots starts building the map's
+  navigation graph on a thread of its own (a second or two on the big stock
+  maps); the server keeps ticking and the bots wander until it is ready.
+  `--bots-shoot` lets them engage the nearest visible enemy: semi-autos tap,
+  automatics fire in bursts, sights go up at range, and they strafe and
+  crouch while fighting. They also reload and throw frags, and go looking
+  where a lost enemy was last seen.
 - `--gametype-script <file>` runs a gametype script from disk instead of the
   paks. The probe recipes use it.
 - `--test-entities <n>` adds entities that move on the wire, to exercise the

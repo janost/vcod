@@ -9,6 +9,8 @@ struct Camera {
     fog_range: vec4<f32>,
     // xyz unit view forward; fog depth rides along it
     view_fwd: vec4<f32>,
+    // A moved brush model's pose; identity for the world's own draw.
+    model: mat4x4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 
@@ -79,7 +81,7 @@ struct VsOut {
     @location(0) uv: vec2<f32>,
     @location(1) lm_uv: vec2<f32>,
     @location(2) color: vec4<f32>,
-    // BSP vertices are already world space.
+    // BSP vertices are world space at the brush model's spawn pose.
     @location(3) world_pos: vec3<f32>,
     @location(4) uv1: vec2<f32>,
 };
@@ -87,11 +89,12 @@ struct VsOut {
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
     var out: VsOut;
-    out.clip = camera.view_proj * vec4<f32>(in.pos, 1.0);
+    let world = camera.model * vec4<f32>(in.pos, 1.0);
+    out.clip = camera.view_proj * world;
     out.uv = in.uv;
     out.lm_uv = in.lm_uv;
     out.color = in.color;
-    out.world_pos = in.pos;
+    out.world_pos = world.xyz;
     // legacy draws have no second bundle
     out.uv1 = vec2<f32>(0.0);
     return out;
@@ -142,9 +145,10 @@ fn vs_stage(in: VsIn) -> VsOut {
     if ((stage.flags & F_EYE_OFFSET) != 0u) {
         pos = pos + stage.eye_off.xyz;
     }
-    out.clip = camera.view_proj * vec4<f32>(pos, 1.0);
+    let world = camera.model * vec4<f32>(pos, 1.0);
+    out.clip = camera.view_proj * world;
     out.color = in.color;
-    out.world_pos = pos;
+    out.world_pos = world.xyz;
     out.lm_uv = in.lm_uv;
     out.uv = bundle_uv(
         in.uv,

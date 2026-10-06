@@ -3,10 +3,9 @@
 //! deduped per sequence and event the way Q3's
 //! `CG_CheckChangedPredictableEvents` does.
 
-use vcod_common::net::events::GameEvent;
+use vcod_common::net::events::{EVENT_RING, GameEvent};
 use vcod_common::pmove::predict::Predicted;
 
-const EVENT_RING: i32 = 4;
 /// How many sequences back a played event is remembered: Q3's
 /// `MAX_PREDICTED_EVENTS`. Divides 256, so `seq % REMEMBERED` survives the wrap.
 const REMEMBERED: usize = 16;
