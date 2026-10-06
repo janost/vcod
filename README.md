@@ -126,8 +126,11 @@ either: the people on it signed up for Call of Duty.
   with the next map's gamestate sent on the live connection.
 - Spectator follow mode and the killcam, replayed out of a ring of archived
   frames.
-- `--bots` adds debug bots that join through the stock menus and wander.
-  `--bots-shoot` makes them fight. They are bad at it.
+- `--bots` adds debug bots that join through the stock menus, pick a random
+  weapon the menu and the `scr_allow_*` cvars allow, and wander.
+  `--bots-shoot` makes them fight with a reaction delay, a capped turn rate
+  and aim error that settles while they hold a target. They are still bad at
+  it.
 
 ### The research
 
@@ -333,8 +336,9 @@ vcod-server mp_carentan --port 28960 --hostname "my server" --gametype tdm
   Repeatable, e.g. `--set scr_friendlyfire=1`. Set `sv_mapRotation` this way
   to get a rotation.
 - `--bots <n>` adds `n` debug bots, each in a real client slot, alternating
-  allies and axis. `--bots-shoot` lets them engage the nearest visible enemy,
-  reload and throw frags.
+  allies and axis. `--bots-shoot` lets them engage the nearest visible enemy:
+  semi-autos tap, automatics fire in bursts, sights go up at range, and they
+  strafe and crouch while fighting. They also reload and throw frags.
 - `--gametype-script <file>` runs a gametype script from disk instead of the
   paks. The probe recipes use it.
 - `--test-entities <n>` adds entities that move on the wire, to exercise the

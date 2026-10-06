@@ -21,6 +21,53 @@ const RESPAWN_DELAY: u32 = 30;
 const RESPAWN_RETRY: u32 = 20;
 /// The bot sends one cmd per tick; `sv_fps 20`.
 const TICK_MS: i32 = 50;
+/// Half the width of what a shot has to land in (chest or head), units; the
+/// fire cone is the angle it subtends at the target's range.
+const HIT_RADIUS: f32 = 10.0;
+/// A bot moving faster than this aims with [`Skill::error_moving`].
+const MOVING_SPEED: f32 = 20.0;
+
+/// How well a bot fights. Ticks are 50 ms; the aim error is a miss distance
+/// at the target, in units, so its angle shrinks with range on its own.
+#[derive(Clone, Copy, Debug)]
+pub struct Skill {
+    /// Ticks from first sight of a target to the first turn toward it:
+    /// `reaction_min + rand(reaction_spread)`.
+    pub reaction_min: u32,
+    pub reaction_spread: u32,
+    /// Ticks out of sight after which a returning target counts as new.
+    pub forget_ticks: u32,
+    /// The most the view turns in one tick, degrees.
+    pub turn_deg: f32,
+    /// Aim error on acquisition; each tick on the target multiplies it by
+    /// `error_decay`, down to `error_floor`.
+    pub error_start: f32,
+    pub error_floor: f32,
+    pub error_decay: f32,
+    /// The range at which the error doubles.
+    pub error_range: f32,
+    /// Error multiplier while the bot itself moves.
+    pub error_moving: f32,
+    /// Past this range a weapon with sights aims down them.
+    pub ads_range: f32,
+}
+
+impl Default for Skill {
+    fn default() -> Self {
+        Skill {
+            reaction_min: 5,
+            reaction_spread: 6,
+            forget_ticks: 20,
+            turn_deg: 15.0,
+            error_start: 48.0,
+            error_floor: 4.0,
+            error_decay: 0.88,
+            error_range: 1000.0,
+            error_moving: 1.75,
+            ads_range: 400.0,
+        }
+    }
+}
 
 /// What the brain needs to know about its own body this tick. The server
 /// fills it from the sim, the weapon table and the script's team table.
@@ -39,6 +86,16 @@ pub struct BotView {
     pub fire_time_ms: i32,
     /// `ps.weaponTime`: the machine is busy and a tap would be latched away.
     pub busy_ms: i32,
+    /// The held weapon fires while the trigger is held (`semiAuto 0`).
+    pub automatic: bool,
+    /// The held weapon has sights (`aimDownSight`).
+    pub has_ads: bool,
+    /// The held weapon's sights are a scope (`adsOverlayShader`).
+    pub sniper: bool,
+    /// `ps.fWeaponPosFrac`: 1 once the sights are fully up.
+    pub ads_frac: f32,
+    /// Horizontal speed, units/s.
+    pub speed: f32,
     pub dead: bool,
     /// `pm_type` 0, a spawned player rather than a spectator or camera.
     pub playing: bool,
@@ -50,6 +107,9 @@ pub struct BotView {
 
 #[derive(Clone, Copy)]
 pub struct EnemyView {
+    /// The enemy's client slot, so a switch of target reads as one.
+    pub slot: usize,
+    /// The chest, the point the bot aims at.
     pub origin: [f32; 3],
 }
 
@@ -65,6 +125,7 @@ pub struct BotBody {
 pub struct Bot {
     pub name: String,
     shoot: bool,
+    pub skill: Skill,
     /// The team the team menu is answered with.
     team: String,
     /// The menu retail last named in `v g_scriptMainMenu`; the `t` that
@@ -84,7 +145,17 @@ pub struct Bot {
     /// moves the origin is swapped for a new one.
     stall_origin: [f32; 3],
     stall_ticks: u32,
+    /// Ticks until the trigger may go down again: a semi-auto's tap spacing,
+    /// an automatic's pause between bursts.
     fire_cooldown: u32,
+    /// Ticks an automatic's trigger stays held.
+    burst_ticks: u32,
+    target: Option<Target>,
+    /// Engagement footwork: the strafe direction (`right`), the ticks left
+    /// on it, and the ticks left on a crouch.
+    strafe: i8,
+    strafe_ticks: u32,
+    crouch_ticks: u32,
     grenade_cooldown: u32,
     respawn_ticks: u32,
     stage: Stage,
@@ -94,6 +165,21 @@ pub struct Bot {
     pub(crate) last_seen_seq: i32,
     /// The client-command sequence the bot's own replies use.
     pub(crate) next_command_seq: i32,
+}
+
+/// The enemy the bot is engaging and how settled its aim on it is.
+struct Target {
+    slot: usize,
+    /// Ticks before the bot turns toward it at all.
+    react: u32,
+    /// Aim error, units at the target.
+    error: f32,
+    /// The error's direction, (pitch, yaw), unit length; resampled every
+    /// `wobble` ticks so the aim drifts rather than sitting off by a constant.
+    dir: [f32; 2],
+    wobble: u32,
+    /// Ticks out of sight.
+    lost: u32,
 }
 
 enum Stage {
@@ -113,6 +199,7 @@ impl Bot {
         Bot {
             name: String::new(),
             shoot,
+            skill: Skill::default(),
             main_menu: String::new(),
             answered: Vec::new(),
             heading: 0.0,
@@ -120,6 +207,11 @@ impl Bot {
             stall_origin: [0.0; 3],
             stall_ticks: 0,
             fire_cooldown: 0,
+            burst_ticks: 0,
+            target: None,
+            strafe: 0,
+            strafe_ticks: 0,
+            crouch_ticks: 0,
             grenade_cooldown: 200,
             respawn_ticks: 0,
             stage: Stage::Wander,
@@ -138,8 +230,14 @@ impl Bot {
 
     /// The reliable server commands the bot received this tick, as
     /// `(seq, text)`; returns the `mr` replies to send, in order. `server_id`
-    /// is what the reply must name.
-    pub(crate) fn observe(&mut self, server_id: i32, cmds: &[(i32, &str)]) -> Vec<String> {
+    /// is what the reply must name; `allowed` answers whether a `scr_allow_*`
+    /// cvar lets its weapon through.
+    pub(crate) fn observe(
+        &mut self,
+        server_id: i32,
+        cmds: &[(i32, &str)],
+        allowed: &dyn Fn(&str) -> bool,
+    ) -> Vec<String> {
         let mut replies = Vec::new();
         for (_, text) in cmds {
             let tokens: Vec<&str> = text.split_whitespace().collect();
@@ -159,7 +257,7 @@ impl Bot {
                     if self.answered.contains(&idx) {
                         continue;
                     }
-                    let Some(reply) = menu_reply(&self.main_menu, &self.team) else {
+                    let Some(reply) = self.menu_reply(allowed) else {
                         continue;
                     };
                     self.answered.push(idx);
@@ -169,6 +267,28 @@ impl Bot {
             }
         }
         replies
+    }
+
+    /// The team menu takes the bot's team; the weapon menu takes a weapon
+    /// its nationality offers and the cvars allow, picked at random.
+    fn menu_reply(&mut self, allowed: &dyn Fn(&str) -> bool) -> Option<String> {
+        if self.main_menu.starts_with("team_") {
+            return Some(self.team.clone());
+        }
+        let menu = self.main_menu.strip_prefix("weapon_")?;
+        let open: Vec<&str> = WEAPON_MENUS
+            .iter()
+            .find(|(n, _)| *n == menu)?
+            .1
+            .iter()
+            .filter(|(_, cvar)| allowed(cvar))
+            .map(|(w, _)| *w)
+            .collect();
+        if open.is_empty() {
+            return None;
+        }
+        let pick = self.rand() as usize % open.len();
+        Some(open[pick].to_string())
     }
 
     /// A new gamestate reruns `ClientConnect` and reopens the menus under the
@@ -193,6 +313,7 @@ impl Bot {
             // Whatever the death interrupted, the new life starts clean: no
             // throw resumes on respawn.
             self.stage = Stage::Wander;
+            self.disengage();
             // The stock death flow polls the use key only after its own
             // `wait 2` (dm.gsc, `waitRespawnButton`), so a one-shot press
             // lands before any poll reads it; retry every second, the way
@@ -206,6 +327,7 @@ impl Bot {
         if !view.playing {
             // Spectator or intermission camera: nothing to press.
             self.respawn_ticks = 0;
+            self.disengage();
             return cmd;
         }
         self.respawn_ticks = 0;
@@ -243,22 +365,13 @@ impl Bot {
 
         let mut yaw = self.heading;
         let mut pitch = 0.0;
-        if self.shoot
-            && let Some(e) = view.enemy
-        {
-            (pitch, yaw) = aim_angles(view, e.origin);
-            if self.fire_cooldown == 0
-                && view.busy_ms == 0
-                && view.clip != 0
-                && yaw_diff(yaw, view.view[1]).abs() < 6.0
+        cmd.forward = 127;
+        if self.shoot {
+            self.track(view.enemy);
+            if let Some(e) = view.enemy
+                && let Some(aim) = self.engage(view, e, &mut cmd)
             {
-                cmd.buttons |= msg::BUTTON_ATTACK;
-                let fire = if view.fire_time_ms > 0 {
-                    view.fire_time_ms
-                } else {
-                    200
-                };
-                self.fire_cooldown = (fire / TICK_MS).max(2) as u32;
+                [pitch, yaw] = aim;
             }
         }
         // A dry clip reloads; the tap is suppressed while the machine is
@@ -266,13 +379,185 @@ impl Bot {
         if view.clip == 0 && view.busy_ms == 0 {
             cmd.wbuttons |= msg::WBUTTON_RELOAD;
         }
-        cmd.forward = 127;
         cmd.angles = [
             deg_short(pitch) - view.delta_angles[0],
             deg_short(yaw) - view.delta_angles[1],
             -view.delta_angles[2],
         ];
         cmd
+    }
+
+    /// Keeps [`Bot::target`] in step with the server's enemy: a new slot is
+    /// a new target with a fresh reaction and full error; one out of sight
+    /// for `forget_ticks` is dropped.
+    fn track(&mut self, enemy: Option<EnemyView>) {
+        let Some(e) = enemy else {
+            if let Some(t) = self.target.as_mut() {
+                t.lost += 1;
+                if t.lost > self.skill.forget_ticks {
+                    self.disengage();
+                }
+            }
+            return;
+        };
+        if let Some(t) = self.target.as_mut().filter(|t| t.slot == e.slot) {
+            t.lost = 0;
+            return;
+        }
+        let react = self.skill.reaction_min + self.rand_below(self.skill.reaction_spread);
+        self.burst_ticks = 0;
+        self.target = Some(Target {
+            slot: e.slot,
+            react,
+            error: self.skill.error_start,
+            dir: [0.0, 1.0],
+            wobble: 0,
+            lost: 0,
+        });
+    }
+
+    fn disengage(&mut self) {
+        self.target = None;
+        self.burst_ticks = 0;
+        self.crouch_ticks = 0;
+    }
+
+    /// One tick against the tracked target: turn toward it at a bounded
+    /// rate, sights, trigger and footwork into `cmd`. Returns the commanded
+    /// (pitch, yaw), or `None` while the reaction delay still runs.
+    fn engage(&mut self, view: &BotView, e: EnemyView, cmd: &mut UserCmd) -> Option<[f32; 2]> {
+        let mut t = self.target.take()?;
+        if t.react > 0 {
+            t.react -= 1;
+            self.target = Some(t);
+            return None;
+        }
+        t.error = (t.error * self.skill.error_decay).max(self.skill.error_floor);
+        if t.wobble == 0 {
+            let a = (self.rand() % 360) as f32;
+            t.dir = [a.to_radians().sin(), a.to_radians().cos()];
+            t.wobble = 4 + self.rand_below(5);
+        }
+        t.wobble -= 1;
+        let dist = dist_sq(view.origin, e.origin).sqrt().max(1.0);
+        let moving = if view.speed > MOVING_SPEED {
+            self.skill.error_moving
+        } else {
+            1.0
+        };
+        let miss = t.error * (1.0 + dist / self.skill.error_range) * moving;
+        let err_deg = (miss / dist).atan().to_degrees();
+        let dir = t.dir;
+        self.target = Some(t);
+
+        let (tp, ty) = aim_angles(view, e.origin);
+        let want = [tp + dir[0] * err_deg, ty + dir[1] * err_deg];
+        let cur = [yaw_diff(view.view[0], 0.0), view.view[1]];
+        let d = [yaw_diff(want[0], cur[0]), yaw_diff(want[1], cur[1])];
+        let len = d[0].hypot(d[1]);
+        let k = if len > self.skill.turn_deg {
+            self.skill.turn_deg / len
+        } else {
+            1.0
+        };
+        let aim = [(cur[0] + d[0] * k).clamp(-80.0, 80.0), cur[1] + d[1] * k];
+        // The view's miss of the true chest point after this cmd's turn.
+        let off = yaw_diff(aim[0], tp).hypot(yaw_diff(aim[1], ty));
+        let cone = (HIT_RADIUS / dist).atan().to_degrees();
+
+        let ads = view.has_ads && (view.sniper || dist > self.skill.ads_range);
+        if ads {
+            cmd.buttons |= msg::BUTTON_ADS;
+        }
+        // A scope or sights still coming up would waste the shot on hip spread.
+        let ready = !ads || view.ads_frac >= 1.0;
+        self.trigger(view, dist, off, cone, ready, cmd);
+        self.footwork(view, dist, ads, cmd);
+        Some(aim)
+    }
+
+    /// Semi-autos tap, at least `fireTime` apart (AGENTS.md, "Fire is
+    /// tapped"); automatics hold the bit for a burst, shorter at range.
+    fn trigger(
+        &mut self,
+        view: &BotView,
+        dist: f32,
+        off: f32,
+        cone: f32,
+        ready: bool,
+        cmd: &mut UserCmd,
+    ) {
+        if view.clip == 0 {
+            self.burst_ticks = 0;
+            return;
+        }
+        if view.automatic && self.burst_ticks > 0 {
+            // A burst rides out recoil and wobble, but not a lost line.
+            if off <= cone * 2.0 {
+                cmd.buttons |= msg::BUTTON_ATTACK;
+                self.burst_ticks -= 1;
+            } else {
+                self.burst_ticks = 0;
+            }
+            if self.burst_ticks == 0 {
+                self.fire_cooldown = 3 + self.rand_below(4);
+            }
+            return;
+        }
+        if self.fire_cooldown > 0 || view.busy_ms != 0 || !ready || off > cone {
+            return;
+        }
+        cmd.buttons |= msg::BUTTON_ATTACK;
+        if view.automatic {
+            let long = dist > 800.0;
+            self.burst_ticks = if long { 1 } else { 2 } + self.rand_below(if long { 3 } else { 6 });
+        } else {
+            let fire = if view.fire_time_ms > 0 {
+                view.fire_time_ms
+            } else {
+                200
+            };
+            // Rounded up, and never under two ticks: the bit has to come up
+            // between taps for the next to read as a press.
+            let ticks = ((fire + TICK_MS - 1) / TICK_MS).max(2) as u32;
+            self.fire_cooldown = ticks + self.rand_below(3);
+        }
+    }
+
+    /// Strafe in spells and crouch now and then while engaging; close in
+    /// only past the weapon's working range. Scoped and sighted shots at
+    /// range stand still, since moving widens the error.
+    fn footwork(&mut self, view: &BotView, dist: f32, ads: bool, cmd: &mut UserCmd) {
+        if self.strafe_ticks == 0 {
+            self.strafe = if self.rand() % 2 == 0 { 127 } else { -127 };
+            self.strafe_ticks = 8 + self.rand_below(16);
+            if self.crouch_ticks == 0 && self.rand_below(if view.sniper { 2 } else { 4 }) == 0 {
+                self.crouch_ticks = 20 + self.rand_below(30);
+            }
+        } else {
+            self.strafe_ticks -= 1;
+        }
+        let range = if view.sniper {
+            f32::INFINITY
+        } else if view.automatic {
+            350.0
+        } else {
+            700.0
+        };
+        cmd.forward = if dist > range { 127 } else { 0 };
+        cmd.right = if ads { 0 } else { self.strafe };
+        if self.crouch_ticks > 0 {
+            self.crouch_ticks -= 1;
+            // The stance is a held level; retail sends `upmove` -127 with it
+            // (protocol doc, "Usercmd input bits").
+            cmd.wbuttons |= msg::WBUTTON_CROUCH;
+            cmd.up = -127;
+        }
+    }
+
+    /// `0..n`, 0 when `n` is 0.
+    fn rand_below(&mut self, n: u32) -> u32 {
+        if n == 0 { 0 } else { self.rand() as u32 % n }
     }
 
     /// A fresh wander heading, and a new stall baseline to measure it by.
@@ -356,27 +641,73 @@ fn deg_short(deg: f32) -> i32 {
     (deg * ANGLE2SHORT) as i32
 }
 
-/// The team menu takes a team; the weapon menu takes a weapon the menu's
-/// nationality allows, and the stock defaults allow exactly one rifle each.
-fn menu_reply<'a>(menu: &str, team: &'a str) -> Option<&'a str> {
-    if menu.starts_with("team_") {
-        return Some(team);
-    }
-    match menu.strip_prefix("weapon_")? {
-        "american" => Some("m1carbine_mp"),
-        "british" => Some("enfield_mp"),
-        "russian" => Some("mosin_nagant_mp"),
-        "german" => Some("kar98k_mp"),
-        _ => None,
-    }
-}
+/// The stock weapon menus (`ui_mp/scriptmenus/weapon_<nationality>.menu`),
+/// each weapon with the cvar `_teams::restrict` checks it against. Any other
+/// response is "restricted" and reopens the menu.
+const WEAPON_MENUS: [(&str, &[(&str, &str)]); 4] = [
+    (
+        "american",
+        &[
+            ("m1carbine_mp", "scr_allow_m1carbine"),
+            ("m1garand_mp", "scr_allow_m1garand"),
+            ("thompson_mp", "scr_allow_thompson"),
+            ("bar_mp", "scr_allow_bar"),
+            ("springfield_mp", "scr_allow_springfield"),
+        ],
+    ),
+    (
+        "british",
+        &[
+            ("enfield_mp", "scr_allow_enfield"),
+            ("sten_mp", "scr_allow_sten"),
+            ("bren_mp", "scr_allow_bren"),
+            ("springfield_mp", "scr_allow_springfield"),
+        ],
+    ),
+    (
+        "russian",
+        &[
+            ("mosin_nagant_mp", "scr_allow_nagant"),
+            ("ppsh_mp", "scr_allow_ppsh"),
+            ("mosin_nagant_sniper_mp", "scr_allow_nagantsniper"),
+        ],
+    ),
+    (
+        "german",
+        &[
+            ("kar98k_mp", "scr_allow_kar98k"),
+            ("mp40_mp", "scr_allow_mp40"),
+            ("mp44_mp", "scr_allow_mp44"),
+            ("kar98k_sniper_mp", "scr_allow_kar98ksniper"),
+        ],
+    ),
+];
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vcod_common::net::msg::{BUTTON_ATTACK, BUTTON_USE, WBUTTON_RELOAD};
+    use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, BUTTON_USE, WBUTTON_RELOAD};
 
     const SID: i32 = 0x10;
+
+    fn all(_: &str) -> bool {
+        true
+    }
+
+    /// A shooting bot with no reaction delay, already looking at an enemy
+    /// 100 units down +x.
+    fn engaged(seed: u64) -> (Bot, BotView) {
+        let mut bot = Bot::new("allies", true, seed);
+        bot.skill.reaction_min = 0;
+        bot.skill.reaction_spread = 0;
+        let mut v = view();
+        v.view = [0.0, 0.0, 0.0];
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [100.0, 0.0, 124.0],
+        });
+        (bot, v)
+    }
 
     fn view() -> BotView {
         BotView {
@@ -388,6 +719,11 @@ mod tests {
             clip: 8,
             fire_time_ms: 300,
             busy_ms: 0,
+            automatic: false,
+            has_ads: true,
+            sniper: false,
+            ads_frac: 0.0,
+            speed: 0.0,
             dead: false,
             playing: true,
             enemy: None,
@@ -399,27 +735,14 @@ mod tests {
     fn an_open_team_menu_is_answered_with_the_bots_team_once() {
         let mut bot = Bot::new("allies", false, 1);
         assert_eq!(
-            bot.observe(SID, &[(1, "v g_scriptMainMenu \"team_allies\"")]),
+            bot.observe(SID, &[(1, "v g_scriptMainMenu \"team_allies\"")], &all),
             Vec::<String>::new()
         );
         assert_eq!(
-            bot.observe(SID, &[(2, "t 0")]),
+            bot.observe(SID, &[(2, "t 0")], &all),
             vec![format!("mr {SID} 0 allies")]
         );
-        assert_eq!(bot.observe(SID, &[(3, "t 0")]), Vec::<String>::new());
-    }
-
-    #[test]
-    fn an_open_weapon_menu_is_answered_with_the_nationalitys_rifle() {
-        let mut bot = Bot::new("axis", false, 1);
-        assert_eq!(
-            bot.observe(SID, &[(1, "v g_scriptMainMenu weapon_german")]),
-            Vec::<String>::new()
-        );
-        assert_eq!(
-            bot.observe(SID, &[(2, "t 1")]),
-            vec![format!("mr {SID} 1 kar98k_mp")]
-        );
+        assert_eq!(bot.observe(SID, &[(3, "t 0")], &all), Vec::<String>::new());
     }
 
     #[test]
@@ -451,38 +774,155 @@ mod tests {
     }
 
     #[test]
-    fn a_shooting_bot_aims_at_the_enemy_and_taps_fire() {
-        let mut bot = Bot::new("allies", true, 1);
-        let mut v = view();
-        // The view already points at the enemy (yaw 0 deg is +x).
-        v.view = [0.0, 0.0, 0.0];
-        v.enemy = Some(EnemyView {
-            origin: [100.0, 0.0, 40.0],
-        });
-        let cmd = bot.think(&v);
-        assert!(
-            cmd.buttons & BUTTON_ATTACK != 0,
-            "the first aimed tick fires"
-        );
-        assert_eq!(cmd.weapon, 10);
-        // The tap is one tick long, then the fireTime paces the next one.
-        let next = bot.think(&view());
-        assert_eq!(
-            next.buttons & BUTTON_ATTACK,
-            0,
-            "a semi-auto tap is not held"
-        );
+    fn a_weapon_menu_reply_is_one_the_nationality_offers_and_the_cvars_allow() {
+        for (nation, weapons) in WEAPON_MENUS {
+            let mut seen = Vec::new();
+            for seed in 1..64 {
+                let mut bot = Bot::new("axis", false, seed);
+                let menu = format!("v g_scriptMainMenu weapon_{nation}");
+                bot.observe(SID, &[(1, menu.as_str())], &all);
+                let reply = bot.observe(SID, &[(2, "t 1")], &all);
+                let w = reply[0]
+                    .strip_prefix(&format!("mr {SID} 1 "))
+                    .unwrap()
+                    .to_string();
+                assert!(weapons.iter().any(|(n, _)| *n == w), "{nation}: {w}");
+                seen.push(w);
+            }
+            for (w, _) in weapons {
+                assert!(seen.iter().any(|s| s == w), "{nation}: {w} never picked");
+            }
+        }
+        // A restricted weapon is never picked; nothing left means no reply.
+        let only_kar = |c: &str| c == "scr_allow_kar98k";
+        for seed in 1..32 {
+            let mut bot = Bot::new("axis", false, seed);
+            bot.observe(SID, &[(1, "v g_scriptMainMenu weapon_german")], &all);
+            assert_eq!(
+                bot.observe(SID, &[(2, "t 1")], &only_kar),
+                vec![format!("mr {SID} 1 kar98k_mp")]
+            );
+        }
+        let mut bot = Bot::new("allies", false, 1);
+        bot.observe(SID, &[(1, "v g_scriptMainMenu weapon_russian")], &all);
+        assert!(bot.observe(SID, &[(2, "t 1")], &|_: &str| false).is_empty());
     }
 
     #[test]
-    fn an_aimed_bot_keeps_walking() {
-        let mut bot = Bot::new("allies", true, 1);
-        let mut v = view();
+    fn a_new_target_holds_fire_through_the_reaction_delay() {
+        let (_, v) = engaged(7);
+        let mut bot = Bot::new("allies", true, 7);
+        // Settled aim from the start: without the delay the first tick fires.
+        bot.skill.error_start = bot.skill.error_floor;
+        let react = bot.skill.reaction_min as usize;
+        for tick in 0..react {
+            let cmd = bot.think(&v);
+            assert_eq!(cmd.buttons & BUTTON_ATTACK, 0, "fired on tick {tick}");
+        }
+        let fired = (0..40).any(|_| bot.think(&v).buttons & BUTTON_ATTACK != 0);
+        assert!(fired, "never fired once the delay ran out");
+        // A switch to another enemy restarts the delay.
+        let e = v.enemy.unwrap();
+        let mut other = v;
+        other.enemy = Some(EnemyView { slot: 4, ..e });
+        bot.fire_cooldown = 0;
+        bot.burst_ticks = 0;
+        for tick in 0..react {
+            let cmd = bot.think(&other);
+            assert_eq!(cmd.buttons & BUTTON_ATTACK, 0, "fired on tick {tick}");
+        }
+    }
+
+    #[test]
+    fn the_view_turns_a_bounded_step_per_tick() {
+        let (mut bot, mut v) = engaged(3);
+        // The enemy is behind: yaw 180 from a view at 0.
         v.enemy = Some(EnemyView {
-            origin: [100.0, 0.0, 40.0],
+            slot: 3,
+            origin: [-500.0, 0.0, 124.0],
         });
-        let cmd = bot.think(&v);
-        assert_eq!(cmd.forward, 127, "the bot walks while it aims");
+        let step = bot.skill.turn_deg;
+        let mut yaw = 0.0f32;
+        for _ in 0..30 {
+            v.view = [0.0, yaw, 0.0];
+            let cmd = bot.think(&v);
+            let next = cmd.angles[1] as f32 / ANGLE2SHORT;
+            assert!(
+                yaw_diff(next, yaw).abs() <= step + 0.01,
+                "turned {} in one tick",
+                yaw_diff(next, yaw)
+            );
+            yaw = next;
+        }
+        assert!(yaw_diff(180.0, yaw).abs() < 5.0, "never came round: {yaw}");
+    }
+
+    #[test]
+    fn the_aim_error_shrinks_on_a_held_target() {
+        let (mut bot, v) = engaged(5);
+        bot.think(&v);
+        let first = bot.target.as_ref().unwrap().error;
+        for _ in 0..40 {
+            bot.think(&v);
+        }
+        let later = bot.target.as_ref().unwrap().error;
+        assert!(later < first / 4.0, "{first} -> {later}");
+        assert_eq!(later, bot.skill.error_floor);
+    }
+
+    #[test]
+    fn an_automatic_holds_the_trigger_and_a_semi_auto_taps() {
+        let (mut bot, mut v) = engaged(9);
+        v.automatic = true;
+        let held: Vec<bool> = (0..40)
+            .map(|_| bot.think(&v).buttons & BUTTON_ATTACK != 0)
+            .collect();
+        assert!(
+            held.windows(2).any(|w| w[0] && w[1]),
+            "an automatic never held across two ticks"
+        );
+
+        let (mut bot, v) = engaged(9);
+        let mut last = None;
+        let mut count = 0;
+        let gap = (v.fire_time_ms / TICK_MS).max(2);
+        for tick in 0..60 {
+            if bot.think(&v).buttons & BUTTON_ATTACK != 0 {
+                if let Some(l) = last {
+                    assert!(tick - l >= gap, "taps {l} and {tick} too close");
+                }
+                last = Some(tick);
+                count += 1;
+            }
+        }
+        assert!(count >= 3, "a semi-auto tapped {count} times in 3 s");
+    }
+
+    #[test]
+    fn sights_go_up_at_range_and_hold_fire_until_they_are() {
+        let (mut bot, mut v) = engaged(11);
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [900.0, 0.0, 124.0],
+        });
+        for _ in 0..40 {
+            let cmd = bot.think(&v);
+            assert!(cmd.buttons & BUTTON_ADS != 0, "no sights at 900 units");
+            assert_eq!(cmd.buttons & BUTTON_ATTACK, 0, "fired from the hip");
+            assert_eq!(cmd.right, 0, "strafed while sighted");
+        }
+        v.ads_frac = 1.0;
+        assert!((0..40).any(|_| bot.think(&v).buttons & BUTTON_ATTACK != 0));
+    }
+
+    #[test]
+    fn an_engaging_bot_strafes() {
+        let (mut bot, v) = engaged(13);
+        let rights: Vec<i8> = (0..80).map(|_| bot.think(&v).right).collect();
+        assert!(
+            rights.contains(&127) && rights.contains(&-127),
+            "{rights:?}"
+        );
     }
 
     #[test]
@@ -514,6 +954,7 @@ mod tests {
         let mut bot = Bot::new("allies", true, 0x1234_5678);
         let mut v = view();
         v.enemy = Some(EnemyView {
+            slot: 3,
             origin: [300.0, 0.0, 40.0],
         });
         // Grind until the grenade machine starts; the cooldown is short with
