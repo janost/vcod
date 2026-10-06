@@ -943,6 +943,10 @@ pub struct Server {
     bot_enemies: BTreeMap<usize, (i32, Option<crate::bots::EnemyView>)>,
     /// The level's navigation graph, built on the first tick with bots.
     nav: Option<std::sync::Arc<crate::nav::NavGraph>>,
+    /// The build of `nav` under way, and whether the tick waits for it or
+    /// ticks on with the bots off the graph until it lands.
+    nav_job: Option<crate::nav::NavJob>,
+    nav_background: bool,
     /// Per bot, its walk along `nav`.
     bot_paths: BTreeMap<usize, crate::nav::Follower>,
     /// Each bombzone's `(mins, maxs)` and the stand `site_stand` picked in
@@ -1092,6 +1096,8 @@ impl Server {
             bots_spawned: false,
             bot_enemies: BTreeMap::new(),
             nav: None,
+            nav_job: None,
+            nav_background: false,
             bot_paths: BTreeMap::new(),
             bot_sites: Vec::new(),
             bot_noises: Vec::new(),
@@ -2031,7 +2037,10 @@ impl Server {
         if self.nav.is_none()
             && let Some(w) = self.world.as_ref()
         {
-            self.nav = Some(crate::nav::graph_for(&self.cfg.map, w));
+            let job = self
+                .nav_job
+                .get_or_insert_with(|| crate::nav::NavJob::start(&self.cfg.map, w));
+            self.nav = job.poll(!self.nav_background);
         }
         let sid = i32::from(self.server_id);
         // The team table once per frame; `client_team` needs the script's
@@ -2479,10 +2488,18 @@ impl Server {
         self.script.as_mut().map_or(0, |rt| rt.client_team(slot))
     }
 
+    /// Builds the bots' navigation graph off the tick thread: the server
+    /// keeps real time through the build and the bots wander until it lands.
+    /// Off by default, so a test's bots find the graph on their first tick.
+    pub fn build_nav_in_background(&mut self, on: bool) {
+        self.nav_background = on;
+    }
+
     /// Swap in the map built by the binary; tests run without one.
     pub fn load_world(&mut self, world: World) {
         self.world = Some(Rc::new(world));
         self.nav = None;
+        self.nav_job = None;
         self.bot_paths.clear();
         self.bot_sites.clear();
         self.bot_noises.clear();

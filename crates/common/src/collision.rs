@@ -64,6 +64,7 @@ const TRACE_MASK_MOVE: u32 = MASK_PLAYERSOLID;
 const TRACE_MASK_SHOT: u32 = MASK_SHOT;
 
 /// A brush as clip planes: point p is inside iff n·p <= d for every plane.
+#[derive(Clone)]
 pub struct BrushPlanes {
     pub planes: Vec<(Vec3, f32)>,
     /// Lump-0 surface flags of the brush's material (SURF_LADDER and friends).
@@ -622,6 +623,7 @@ fn clip_sphere_triangle(
     }
 }
 
+#[derive(Clone)]
 struct BvhNode {
     lo: Vec3,
     hi: Vec3,
@@ -678,6 +680,40 @@ pub struct CollisionWorld {
     poses: RwLock<Vec<(usize, ModelPose)>>,
 }
 
+/// A snapshot: the links, poses and entity numbers as they stand now, which
+/// the copy then keeps whatever the original does.
+impl Clone for CollisionWorld {
+    fn clone(&self) -> Self {
+        let bools = |v: &[AtomicBool]| {
+            v.iter()
+                .map(|b| AtomicBool::new(b.load(Ordering::Relaxed)))
+                .collect()
+        };
+        CollisionWorld {
+            brushes: self.brushes.clone(),
+            tris: self.tris.clone(),
+            model_tris: self.model_tris.clone(),
+            tris_surf: self.tris_surf.clone(),
+            tris_contents: self.tris_contents.clone(),
+            tris_terrain: self.tris_terrain.clone(),
+            nodes: self.nodes.clone(),
+            models_root: self.models_root,
+            prims: self.prims.clone(),
+            water: self.water.clone(),
+            nodrop: self.nodrop.clone(),
+            model_linked: bools(&self.model_linked),
+            model_entity: self
+                .model_entity
+                .iter()
+                .map(|e| AtomicU32::new(e.load(Ordering::Relaxed)))
+                .collect(),
+            model_span: self.model_span.clone(),
+            model_posed: bools(&self.model_posed),
+            poses: RwLock::new(self.poses.read().unwrap_or_else(|e| e.into_inner()).clone()),
+        }
+    }
+}
+
 /// One model's brushes as built: their run in `CollisionWorld::brushes`, the
 /// spawn origin their planes carry, and their bounds relative to it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -716,6 +752,7 @@ impl ModelPose {
 
 /// A brush as clip planes plus its axial bounds for the cheap reject: a
 /// water volume, or a pane at build time.
+#[derive(Clone)]
 struct Volume {
     planes: Vec<(Vec3, f32)>,
     lo: Vec3,

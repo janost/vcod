@@ -99,10 +99,30 @@ strongly connected component holding the most of them.
   the build in `CollisionWorld::trace_node`.
 - VERIFIED (measured): a debug build (the test profile) of `mp_carentan` takes
   about 7 s.
+- VERIFIED (measured, same example, the table's builds against the ones
+  after the collision BVH moved to a binned surface-area split with the
+  static models in a subtree of their own; the two binaries interleaved,
+  twice, on the same laptop under a load average of 70-80 from other
+  builds): the builds of all twelve maps took 184 s of CPU against 288 s,
+  map loads included, and each map's best wall time came down 1.2x
+  (`mp_ship`) to 2.0x (`mp_railyard`). `perf` had put 77% of the old build in
+  `trace_node`'s own box tests: a build's trace entered 111 BVH nodes on
+  average on `mp_rocket` and 284 on `mp_depot`, against 58 and 85 after. Spawn
+  connectivity is unchanged on every map; edge counts move by at most 14.
+  INFERRED: the moved edges are walks whose trace contacts tie, which the
+  new walk order resolves differently.
 - The server builds the graph on the first tick with bots, not at map load,
   and keeps every graph for the life of the process (`nav::graph_for`), so a
   map cycle that comes back to a map, and the test gates that start one server
   per test, build it once.
+- The binary builds it on a thread of its own (`nav::NavJob`) over a copy
+  of the collision taken on that tick, 5-40 ms on the tick thread (VERIFIED,
+  measured under the same load), so the server keeps its 20 Hz through a
+  build of seconds and the bots wander until the graph lands. A
+  `vcod --net-probe` on a `mp_rocket` server with two bots read 20 snapshots
+  a second through the whole build (VERIFIED, measured). Tests leave
+  `Server::build_nav_in_background` off and wait for the graph on that tick,
+  so a run does not depend on how fast the build was.
 - VERIFIED (the off-component spawns' heights against the map's
   `SURF_LADDER` brushes): `mp_ship`'s gap is its upper decks, which connect by
   ladders. INFERRED: the lattice meets few of them square on. The other maps'

@@ -345,12 +345,13 @@ vcod-server mp_carentan --port 28960 --hostname "my server" --gametype tdm
   Repeatable, e.g. `--set scr_friendlyfire=1`. Set `sv_mapRotation` this way
   to get a rotation.
 - `--bots <n>` adds `n` debug bots, each in a real client slot, alternating
-  allies and axis. The first tick with bots builds the map's navigation
-  graph (0.6 to 2.7 s on 16 threads for the stock maps). `--bots-shoot` lets
-  them engage the nearest visible enemy: semi-autos tap, automatics fire in
-  bursts, sights go up at range, and they strafe and crouch while fighting.
-  They also reload and throw frags, and go looking where a lost enemy was
-  last seen.
+  allies and axis. The first tick with bots starts building the map's
+  navigation graph on a thread of its own (a second or two on the big stock
+  maps); the server keeps ticking and the bots wander until it is ready.
+  `--bots-shoot` lets them engage the nearest visible enemy: semi-autos tap,
+  automatics fire in bursts, sights go up at range, and they strafe and
+  crouch while fighting. They also reload and throw frags, and go looking
+  where a lost enemy was last seen.
 - `--gametype-script <file>` runs a gametype script from disk instead of the
   paks. The probe recipes use it.
 - `--test-entities <n>` adds entities that move on the wire, to exercise the

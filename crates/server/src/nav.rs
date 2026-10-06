@@ -398,12 +398,12 @@ impl NavGraph {
 type CacheKey = (String, usize, usize, usize, Vec<[u32; 3]>);
 static CACHE: std::sync::Mutex<Vec<(CacheKey, Arc<NavGraph>)>> = std::sync::Mutex::new(Vec::new());
 
-/// `map`'s graph, built on first use. The key carries the collision's
-/// counts and the spawn points too, so a test world built without the
-/// static props is a different graph from the real one.
-pub fn graph_for(map: &str, world: &crate::world::World) -> Arc<NavGraph> {
+/// The key carries the collision's counts and the spawn points too, so a
+/// test world built without the static props is a different graph from the
+/// real one.
+fn cache_key(map: &str, world: &crate::world::World) -> CacheKey {
     let c = &world.collision;
-    let key: CacheKey = (
+    (
         map.to_ascii_lowercase(),
         c.brushes.len(),
         c.tris.len(),
@@ -413,16 +413,21 @@ pub fn graph_for(map: &str, world: &crate::world::World) -> Arc<NavGraph> {
             .iter()
             .map(|p| p.map(f32::to_bits))
             .collect(),
-    );
-    // Held across the build, so two servers asking at once build it once.
+    )
+}
+
+/// The cached graph under `key`, else `build`'s, cached. The lock is held
+/// across the build, so two servers asking at once build it once.
+fn cached(key: CacheKey, build: impl FnOnce() -> NavGraph) -> Arc<NavGraph> {
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((_, g)) = cache.iter().find(|(k, _)| *k == key) {
         return g.clone();
     }
     let t = std::time::Instant::now();
-    let g = Arc::new(NavGraph::build(c, &world.spawn_points));
+    let g = Arc::new(build());
     log::info!(
-        "nav graph for {map}: {} nodes, {} edges, spacing {}, built in {} ms",
+        "nav graph for {}: {} nodes, {} edges, spacing {}, built in {} ms",
+        key.0,
         g.len(),
         g.edge_count(),
         g.spacing,
@@ -430,6 +435,55 @@ pub fn graph_for(map: &str, world: &crate::world::World) -> Arc<NavGraph> {
     );
     cache.push((key, g.clone()));
     g
+}
+
+/// `map`'s graph, built on first use on the calling thread.
+pub fn graph_for(map: &str, world: &crate::world::World) -> Arc<NavGraph> {
+    cached(cache_key(map, world), || {
+        NavGraph::build(&world.collision, &world.spawn_points)
+    })
+}
+
+/// A graph on its way: built on a thread of its own over a snapshot of the
+/// collision, so the server keeps ticking through a build of a second or
+/// more (bot-navigation.md, "Build times").
+pub struct NavJob {
+    ready: Option<Arc<NavGraph>>,
+    building: Option<std::thread::JoinHandle<Arc<NavGraph>>>,
+}
+
+impl NavJob {
+    /// The cached graph when there is one, else a build started over a copy
+    /// of `world`'s collision as it stands now: the links and poses scripts
+    /// change later never reach the build.
+    pub fn start(map: &str, world: &crate::world::World) -> NavJob {
+        let key = cache_key(map, world);
+        // A lock held elsewhere is a build in progress; the thread waits on
+        // it, never the tick.
+        if let Ok(cache) = CACHE.try_lock()
+            && let Some((_, g)) = cache.iter().find(|(k, _)| *k == key)
+        {
+            return NavJob {
+                ready: Some(g.clone()),
+                building: None,
+            };
+        }
+        let collision = world.collision.clone();
+        let seeds = world.spawn_points.clone();
+        let build = move || cached(key, || NavGraph::build(&collision, &seeds));
+        NavJob {
+            ready: None,
+            building: Some(std::thread::spawn(build)),
+        }
+    }
+
+    /// The graph once it is built; `wait` blocks until it is.
+    pub fn poll(&mut self, wait: bool) -> Option<Arc<NavGraph>> {
+        if let Some(h) = self.building.take_if(|h| wait || h.is_finished()) {
+            self.ready = Some(h.join().expect("the nav build panicked"));
+        }
+        self.ready.clone()
+    }
 }
 
 /// Horizontal distance at which a waypoint counts as reached.
