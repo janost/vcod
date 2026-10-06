@@ -2643,14 +2643,15 @@ unsnapped on the `trigger_hurt` path too, and `item::launch_weapon` already
 read the field. Pinned by `a_player_killed_mid_cook_drops_a_live_grenade`
 (`crates/server/tests/combat.rs`), which stands the player off the unit grid
 and holds the `kill` drop to the unsnapped origin plus 40, and
-`a_trigger_hurt_death_drops_from_the_snapped_origin`
-(`crates/server/src/server.rs`), which holds a `trigger_hurt` death's grenade
-and weapon to the truncated one. Not modelled: fall damage, so the second
-snapped path does not exist here; the weapon drop's tag trace and flight
+`a_trigger_hurt_death_drops_and_clones_at_the_snapped_origin`
+(`crates/server/src/server.rs`), which holds a `trigger_hurt` death's grenade,
+weapon and corpse to the truncated one. `cloneplayer` places the body at the
+`origin` field, as retail's `G_SetOrigin(body, self->r.currentOrigin)` (5.2)
+does, so a `trigger_hurt` corpse lies at the truncated origin and a bullet's
+at the unsnapped one. Not modelled: fall damage, so the second snapped path
+does not exist here; the weapon drop's tag trace and flight
 (`cod11-items.md` 11), so the snap moves the weapon's start and not much
-else; and `cloneplayer`, which still copies the mirrored entity state, so a
-corpse born of a `trigger_hurt` stands on the unsnapped origin where retail's
-`G_SetOrigin(body, self->r.currentOrigin)` (5.2) would truncate it.
+else.
 
 ### 5.6 A spawn leaves `health` alone
 
@@ -4323,9 +4324,14 @@ script's own; both walks are 14.5's. The divergences left are listed in
 `cod11-gsc-language.md`'s `radiusDamage` entry. Every victim is measured
 and probed at its unsnapped origin, and the second chance's midpoint is
 taken at `BlastVictim::link_origin`: `ClientSim::link_origin` for a
-grenade's blast, the truncated origin unless the client is linked, and the
-truncated `origin` field for the builtin's. A `setOrigin` since the last cmd
-is not modelled. The falloff is computed at
+grenade's blast, the truncated origin unless the client is linked or its last
+link was a `setOrigin` or `TeleportPlayer` with no cmd since, and for the
+builtin's the same value mirrored onto `GameHost::client_link_origin`, which
+the `setOrigin` builtin moves to its own unsnapped origin at once. Pinned by
+`a_set_origin_links_unsnapped_until_the_next_cmd`
+(`crates/server/src/spectate.rs`). INFERRED, off `TeleportPlayer`'s
+`r.currentOrigin` store ahead of its link (turrets doc 8): a release links
+unsnapped the same way. The falloff is computed at
 double precision because f32 loses a point of damage at the round ratios a
 script picks -- `50 + (1 - 100/300) * 1950` truncates to 1349 in f32 and 1350
 in f64 -- and retail's own x87 arithmetic is not reproducible in either
@@ -5234,10 +5240,16 @@ What still differs, each INFERRED from 16.1 and not measured:
 - The packets of a tick run at the tick, after the clock has advanced;
   retail runs them as they arrive, on the previous frame's `level.time`
   (15.6's 50 ms). Their relative order is the same.
-- `turret_think_client` fires in a pass of its own after every slot's aim
-  trace, so a gunner's rounds meet every slot's new pose, where retail's,
-  inside the gunner's own `ClientEndFrame` (`cod11-turrets.md` 6.1), meet a
-  higher slot's last-frame one.
+- A gunner's rounds are traced inside its own slot's turn of the end-frame
+  loop, right after its `commit_pose`, so they meet a lower slot's new pose
+  and a higher slot's last-frame one, as retail's inside `ClientEndFrame`
+  (`cod11-turrets.md` 6.1) do; pinned by
+  `a_round_meets_a_higher_slots_last_pose_and_a_lower_slots_new_one`
+  (`crates/server/tests/turret_ab.rs`). Their hits are delivered after the
+  whole loop, where retail runs each callback inside the gunner's
+  `ClientEndFrame`, before any higher slot's aim trace and anim update; a
+  callback that moves or kills a higher slot is therefore seen one pass late
+  by that slot's aim trace and pose.
 
 VERIFIED, two runs against ours on 2026-09-27, the `probe_passthru` recipe
 of `client-probes/README.md` with one `--probe-target --probe-team axis` and

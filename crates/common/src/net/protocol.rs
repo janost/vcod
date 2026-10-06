@@ -90,6 +90,8 @@ pub const MAX_GENTITIES: usize = 1 << GENTITYNUM_BITS;
 pub const ENTITYNUM_NONE: u32 = (MAX_GENTITIES - 1) as u32;
 /// Reserved slot for the world entity (`worldspawn`); never a dynamic entity number.
 pub const ENTITYNUM_WORLD: u32 = (MAX_GENTITIES - 2) as u32;
+/// The client index in the snapshot's clientState stream (cod_lnxded 0x808e1fd).
+pub const CLIENTNUM_BITS: u32 = 6;
 
 #[cfg(test)]
 mod tests {

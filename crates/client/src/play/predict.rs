@@ -10,6 +10,7 @@ use glam::Vec3;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use vcod_common::collision::CollisionWorld;
 use vcod_common::movetrace::{Body, CONTENTS_BODY, MoveWorld};
+use vcod_common::net::flags::EF_TELEPORT_BIT;
 use vcod_common::net::msg;
 use vcod_common::net::protocol::Protocol;
 use vcod_common::pmove::movers::SnapshotMovers;
@@ -20,8 +21,6 @@ use vcod_common::weapon::WeaponDef;
 const ERROR_DECAY_MS: f64 = 100.0;
 /// A correction longer than this is drawn at once.
 const SNAP_DISTANCE: f32 = 256.0;
-/// `eFlags` teleport bit; it flips on every spawn (AGENTS.md, Gotchas).
-const EF_TELEPORT: i32 = 0x8;
 /// `eFlags` capsule bit; the client clips only capsule entities.
 const EF_CAPSULE: i32 = 0x10;
 const ET_PLAYER: i32 = 1;
@@ -274,7 +273,7 @@ impl Predictor {
         now_ms: f64,
     ) -> bool {
         let command_time = ps.field_i32(p, "commandTime");
-        let teleport = ps.field_i32(p, "eFlags") & EF_TELEPORT != 0;
+        let teleport = ps.field_i32(p, "eFlags") & EF_TELEPORT_BIT != 0;
         if self.teleport.is_some_and(|t| t != teleport) {
             self.snap();
         }

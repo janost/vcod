@@ -8,9 +8,7 @@
 use vcod_common::net::msg::EntityState;
 use vcod_common::net::protocol::{ENTITYNUM_WORLD, Protocol};
 
-/// `ET_EVENTS`, the base an event entity's `eType` is offset from. 12 on
-/// CoD 1.1 MP, not Q3's 13 (`docs/research/cod11-events-and-fx.md` section 1).
-pub const ET_EVENTS: i32 = 12;
+pub use vcod_common::net::events::ET_EVENTS;
 
 /// The first entity number a temp entity takes. The 64 numbers below
 /// `ENTITYNUM_WORLD` are reused every frame; the split of the whole range is

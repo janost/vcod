@@ -28,6 +28,9 @@ const _: () = assert!(std::mem::size_of::<VmVert>() == 52);
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const MSAA_SAMPLES: u32 = 4;
+/// `Camera` in shader.wgsl: proj, time, eye/fog tail, view forward, model.
+const CAMERA_FLOATS: usize = 52;
+const CAMERA_BYTES: u64 = (CAMERA_FLOATS * 4) as u64;
 
 /// The viewmodel shares the world's fov but has its own near plane, retail's
 /// `r_znear_depthhack` default (docs/research/xmodel-v14-format.md, "The
@@ -130,6 +133,60 @@ struct FrameDraw {
     kind: DrawRef,
     /// Index into `WorldGpu::draws`, the gathered visible range.
     src: u32,
+}
+
+/// The emission order of `draws`, into `out` as indices into it: opaque
+/// (legacy then staged cutouts), props, the legacy biased passes, the staged
+/// decal slot, see-through blends, back-to-front blends from `eye`,
+/// additives. Sky soups are never in `draws`.
+fn order_draws(w: &WorldGpu, draws: &[DrawRange], eye: glam::Vec3, out: &mut Vec<FrameDraw>) {
+    let mut legacy: [Vec<u32>; 5] = Default::default();
+    let mut bands: [Vec<(u32, u32)>; 5] = Default::default();
+    for (di, d) in draws.iter().enumerate() {
+        match w.batch_draws[d.batch as usize].pass {
+            Pass::Stage => {
+                for &sb in &w.stages_of_batch[d.batch as usize] {
+                    let band = w.stage_batches[sb as usize].band;
+                    bands[band as usize].push((sb, di as u32));
+                }
+            }
+            p => legacy[p as usize].push(di as u32),
+        }
+    }
+    bands[BAND_BLEND as usize].sort_by(|(a, _), (b, _)| {
+        let da = (w.centroids[w.stage_batches[*a as usize].batch as usize] - eye).length_squared();
+        let db = (w.centroids[w.stage_batches[*b as usize].batch as usize] - eye).length_squared();
+        db.partial_cmp(&da).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out.clear();
+    for &di in &legacy[Pass::Opaque as usize] {
+        out.push(FrameDraw {
+            kind: DrawRef::Legacy(Pass::Opaque),
+            src: di,
+        });
+    }
+    for &(sb, di) in &bands[BAND_OPAQUE as usize] {
+        out.push(FrameDraw {
+            kind: DrawRef::Stage(sb),
+            src: di,
+        });
+    }
+    for pass in [Pass::Prop, Pass::PropDecal, Pass::Layer, Pass::Overlay] {
+        for &di in &legacy[pass as usize] {
+            out.push(FrameDraw {
+                kind: DrawRef::Legacy(pass),
+                src: di,
+            });
+        }
+    }
+    for band in [BAND_DECAL, BAND_SEETHROUGH, BAND_BLEND, BAND_ADDITIVE] {
+        for &(sb, di) in &bands[band as usize] {
+            out.push(FrameDraw {
+                kind: DrawRef::Stage(sb),
+                src: di,
+            });
+        }
+    }
 }
 
 /// Copies the visible `ranges` out of `src` batch by batch into `out`, one
@@ -935,10 +992,17 @@ struct WorldGpu {
     soup_model: Vec<u32>,
     /// Per model, whether its soups draw with the world this frame. A
     /// submodel draws only through the entity that carries it
-    /// ([`Renderer::set_static_submodels`]); model 0 always draws.
+    /// ([`Renderer::set_submodels`]); model 0 always draws.
     static_models: Vec<bool>,
     /// `static_models` changed since the index buffer was last gathered.
     static_dirty: bool,
+    /// Per model, its soups, `bsp.models[m]`'s `first_soup..+num_soups`.
+    model_soups: Vec<std::ops::Range<usize>>,
+    /// The brush models drawn off their spawn pose this frame, with that
+    /// pose: their soups gathered after the world's, under their own camera.
+    moved: Vec<(usize, glam::Mat4)>,
+    /// Per entry of `moved`, its gathered draws and their emission order.
+    moved_draws: Vec<(Vec<DrawRange>, Vec<FrameDraw>)>,
 }
 
 /// One cloud-dome draw: a stage of the active sky block over the whole dome
@@ -1353,6 +1417,9 @@ pub struct Renderer {
     camera_layout: wgpu::BindGroupLayout,
     camera_buf: wgpu::Buffer,
     camera_bg: wgpu::BindGroup,
+    /// One camera per moved brush model drawn this frame, the shared camera
+    /// with that model's pose in `model`; grown on demand, never shrunk.
+    moved_cams: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     fx_lights_buf: wgpu::Buffer,
     /// Device-stage state `load_world` builds map bind groups from.
     material_layout: wgpu::BindGroupLayout,
@@ -1527,9 +1594,9 @@ impl Renderer {
 
         let camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camera uniform"),
-            // proj + time + eye/fog tail + view forward, matching Camera in
-            // the WGSL modules
-            size: 144,
+            // proj + time + eye/fog tail + view forward + model, matching
+            // Camera in shader.wgsl; the other modules read a prefix
+            size: CAMERA_BYTES,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1829,6 +1896,7 @@ impl Renderer {
             camera_layout,
             camera_buf,
             camera_bg,
+            moved_cams: Vec::new(),
             fx_lights_buf,
             material_layout,
             stage_layout,
@@ -2420,24 +2488,37 @@ impl Renderer {
             soup_model,
             static_models: (0..bsp.models.len()).map(|m| m == 0).collect(),
             static_dirty: false,
+            model_soups: bsp
+                .models
+                .iter()
+                .map(|m| m.first_soup as usize..(m.first_soup + m.num_soups) as usize)
+                .collect(),
+            moved: Vec::new(),
+            moved_draws: Vec::new(),
         });
         Ok(())
     }
 
-    /// The submodels whose entity this frame stands where the map put it:
-    /// their soups draw with the world, lightmapped, and every other
-    /// submodel's do not. A brush model that has moved draws as a dynamic
-    /// instance instead (`entities::build_instances`), and one whose entity
-    /// is not in the snapshot draws nowhere, as retail's world draw holds
-    /// model 0's surfaces only.
-    pub fn set_static_submodels(&mut self, models: &[usize]) {
+    /// The submodels drawn this frame, each with its entity's pose. One at
+    /// the identity stands where the map put it and draws with the world;
+    /// any other draws its own soups through a camera carrying its pose, so
+    /// both keep the baked lightmap, as retail's brush model ref entity
+    /// does. A submodel not listed, one whose entity is not in the snapshot,
+    /// draws nowhere: retail's world draw holds model 0's surfaces only.
+    pub fn set_submodels(&mut self, models: &[(usize, glam::Mat4)]) {
         let Some(world) = &mut self.world else {
             return;
         };
         let mut want: Vec<bool> = (0..world.static_models.len()).map(|m| m == 0).collect();
-        for &m in models {
-            if let Some(w) = want.get_mut(m) {
-                *w = true;
+        world.moved.clear();
+        for &(m, pose) in models {
+            if m == 0 || m >= want.len() {
+                continue;
+            }
+            if pose == glam::Mat4::IDENTITY {
+                want[m] = true;
+            } else {
+                world.moved.push((m, pose));
             }
         }
         if want != world.static_models {
@@ -2645,28 +2726,6 @@ impl Renderer {
         Some(ModelHandle(self.dynamic.models.len() - 1))
     }
 
-    /// For inline BSP submodels ([`vcod_common::bsp::Bsp::submodel_mesh`]).
-    /// Materials are `textures/...` names, resolved through the shader
-    /// scripts rather than as skin filenames.
-    pub fn upload_dynamic_mesh(
-        &mut self,
-        fs: &Pk3Fs,
-        surfaces: &[xmodel::Surface],
-        materials: &[String],
-    ) -> Option<ModelHandle> {
-        let vm = &self.vm_pass;
-        let uploaded = upload_vm_model(
-            &self.device,
-            &self.queue,
-            vm,
-            surfaces,
-            materials,
-            &|name| assets::load_material_image(fs, &self.shaders, name),
-        )?;
-        self.dynamic.models.push(uploaded);
-        Some(ModelHandle(self.dynamic.models.len() - 1))
-    }
-
     /// Instances past `MAX_DYNAMIC_INSTANCES` are dropped (warned once); a
     /// stale handle is skipped. Written to the GPU in [`Self::render`].
     pub fn set_dynamic_models(&mut self, instances: &[DynamicModelInstance]) {
@@ -2807,7 +2866,7 @@ impl Renderer {
         // `proj` (64) + `time_pad` (16) + eye/fog tail (48) + view forward
         // (16), matching Camera in the WGSL modules.
         self.fog.advance(frame.time);
-        let mut camera = [0.0f32; 36];
+        let mut camera = [0.0f32; CAMERA_FLOATS];
         camera[..16].copy_from_slice(&frame.view_proj.to_cols_array());
         camera[16] = frame.time;
         if self.fog.set {
@@ -2819,8 +2878,40 @@ impl Renderer {
             camera[20..24].copy_from_slice(&[frame.eye.x, frame.eye.y, frame.eye.z, 0.0]);
         }
         camera[32..36].copy_from_slice(&[frame.fwd.x, frame.fwd.y, frame.fwd.z, 0.0]);
+        camera[36..52].copy_from_slice(&glam::Mat4::IDENTITY.to_cols_array());
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::cast_slice(&camera));
+        let moved: Vec<glam::Mat4> = self.world.as_ref().map_or_else(Vec::new, |w| {
+            w.moved.iter().map(|&(_, pose)| pose).collect()
+        });
+        while self.moved_cams.len() < moved.len() {
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("moved brush model camera"),
+                size: CAMERA_BYTES,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("moved brush model camera bind group"),
+                layout: &self.camera_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.fx_lights_buf.as_entire_binding(),
+                    },
+                ],
+            });
+            self.moved_cams.push((buf, bg));
+        }
+        for (pose, (buf, _)) in moved.iter().zip(&self.moved_cams) {
+            camera[36..52].copy_from_slice(&pose.to_cols_array());
+            self.queue
+                .write_buffer(buf, 0, bytemuck::cast_slice(&camera));
+        }
         if let Some(sky) = &self.sky
             && let Some(farbox) = &sky.farbox
         {
@@ -2903,59 +2994,37 @@ impl Renderer {
                     );
                 }
             }
-            // Emission order: opaque (legacy then staged cutouts), props, the
-            // legacy biased passes, the staged decal slot, see-through blends,
-            // back-to-front blends, additives. Sky soups are not in `draws`.
-            let mut legacy: [Vec<u32>; 5] = Default::default();
-            let mut bands: [Vec<(u32, u32)>; 5] = Default::default();
-            for (di, d) in world.draws.iter().enumerate() {
-                match world.batch_draws[d.batch as usize].pass {
-                    Pass::Stage => {
-                        for &sb in &world.stages_of_batch[d.batch as usize] {
-                            let band = world.stage_batches[sb as usize].band;
-                            bands[band as usize].push((sb, di as u32));
-                        }
-                    }
-                    p => legacy[p as usize].push(di as u32),
+            let mut frame_draws = std::mem::take(&mut world.frame_draws);
+            order_draws(world, &world.draws, frame.eye, &mut frame_draws);
+            world.frame_draws = frame_draws;
+            // A moved brush model's soups follow the world's in the index
+            // buffer, each set ordered on its own and drawn under its own
+            // camera.
+            let mut moved_draws = std::mem::take(&mut world.moved_draws);
+            moved_draws.clear();
+            for &(m, _) in &world.moved {
+                let ranges: Vec<IndexRange> = world.model_soups[m]
+                    .clone()
+                    .filter_map(|si| world.soup_ranges.get(si).copied().flatten())
+                    .collect();
+                let mut out = Vec::new();
+                let mut draws = gather(
+                    &world.cpu_indices,
+                    ranges,
+                    world.batch_draws.len(),
+                    &mut out,
+                    &mut world.gather_scratch,
+                );
+                let base = world.gathered.len() as u32;
+                for d in &mut draws {
+                    d.first += base;
                 }
+                world.gathered.extend(out);
+                let mut order = Vec::new();
+                order_draws(world, &draws, frame.eye, &mut order);
+                moved_draws.push((draws, order));
             }
-            let eye = frame.eye;
-            bands[BAND_BLEND as usize].sort_by(|(a, _), (b, _)| {
-                let da = (world.centroids[world.stage_batches[*a as usize].batch as usize] - eye)
-                    .length_squared();
-                let db = (world.centroids[world.stage_batches[*b as usize].batch as usize] - eye)
-                    .length_squared();
-                db.partial_cmp(&da).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            world.frame_draws.clear();
-            for &di in &legacy[Pass::Opaque as usize] {
-                world.frame_draws.push(FrameDraw {
-                    kind: DrawRef::Legacy(Pass::Opaque),
-                    src: di,
-                });
-            }
-            for &(sb, di) in &bands[BAND_OPAQUE as usize] {
-                world.frame_draws.push(FrameDraw {
-                    kind: DrawRef::Stage(sb),
-                    src: di,
-                });
-            }
-            for pass in [Pass::Prop, Pass::PropDecal, Pass::Layer, Pass::Overlay] {
-                for &di in &legacy[pass as usize] {
-                    world.frame_draws.push(FrameDraw {
-                        kind: DrawRef::Legacy(pass),
-                        src: di,
-                    });
-                }
-            }
-            for band in [BAND_DECAL, BAND_SEETHROUGH, BAND_BLEND, BAND_ADDITIVE] {
-                for &(sb, di) in &bands[band as usize] {
-                    world.frame_draws.push(FrameDraw {
-                        kind: DrawRef::Stage(sb),
-                        src: di,
-                    });
-                }
-            }
+            world.moved_draws = moved_draws;
             world.stage_draws_last = world
                 .frame_draws
                 .iter()
@@ -2964,7 +3033,8 @@ impl Renderer {
             // in Locked and Off the gathered set is the same every frame
             let unchanged = frame.cull != CullMode::On
                 && world.last_cull == Some(frame.cull)
-                && !world.static_dirty;
+                && !world.static_dirty
+                && world.moved.is_empty();
             world.static_dirty = false;
             if !unchanged {
                 self.queue
@@ -3195,49 +3265,62 @@ impl Renderer {
                     Stage(StageVariant, bool, bool),
                 }
                 let mut bound: Option<Bound> = None;
-                for fd in &world.frame_draws {
-                    let draw = &world.draws[fd.src as usize];
-                    match fd.kind {
-                        DrawRef::Legacy(want) => {
-                            if bound != Some(Bound::Legacy(want)) {
-                                pass.set_pipeline(match want {
-                                    Pass::Opaque => &self.pipeline,
-                                    Pass::Prop => &self.prop_pipeline,
-                                    Pass::PropDecal => &self.prop_decal_pipeline,
-                                    Pass::Layer => &self.layer_pipeline,
-                                    Pass::Overlay => &self.overlay_pipeline,
-                                    Pass::Stage => continue,
-                                });
-                                bound = Some(Bound::Legacy(want));
+                // The world, then each moved brush model under its own camera.
+                let sets = std::iter::once((&world.draws, &world.frame_draws, &self.camera_bg))
+                    .chain(
+                        world
+                            .moved_draws
+                            .iter()
+                            .zip(&self.moved_cams)
+                            .map(|((d, o), (_, bg))| (d, o, bg)),
+                    );
+                for (draws, frame_draws, cam) in sets {
+                    pass.set_bind_group(0, cam, &[]);
+                    for fd in frame_draws {
+                        let draw = &draws[fd.src as usize];
+                        match fd.kind {
+                            DrawRef::Legacy(want) => {
+                                if bound != Some(Bound::Legacy(want)) {
+                                    pass.set_pipeline(match want {
+                                        Pass::Opaque => &self.pipeline,
+                                        Pass::Prop => &self.prop_pipeline,
+                                        Pass::PropDecal => &self.prop_decal_pipeline,
+                                        Pass::Layer => &self.layer_pipeline,
+                                        Pass::Overlay => &self.overlay_pipeline,
+                                        Pass::Stage => continue,
+                                    });
+                                    bound = Some(Bound::Legacy(want));
+                                }
+                                let call = &world.batch_draws[draw.batch as usize];
+                                pass.set_bind_group(1, &world.bind_groups[call.bind_group], &[]);
                             }
-                            let call = &world.batch_draws[draw.batch as usize];
-                            pass.set_bind_group(1, &world.bind_groups[call.bind_group], &[]);
-                        }
-                        DrawRef::Stage(sb_idx) => {
-                            let sb = &world.stage_batches[sb_idx as usize];
-                            let key = Bound::Stage(sb.variant, sb.two_sided, sb.bias);
-                            if bound != Some(key) {
-                                pass.set_pipeline(self.stage_pipeline(
-                                    sb.variant,
-                                    sb.two_sided,
-                                    sb.bias,
-                                ));
-                                bound = Some(key);
+                            DrawRef::Stage(sb_idx) => {
+                                let sb = &world.stage_batches[sb_idx as usize];
+                                let key = Bound::Stage(sb.variant, sb.two_sided, sb.bias);
+                                if bound != Some(key) {
+                                    pass.set_pipeline(self.stage_pipeline(
+                                        sb.variant,
+                                        sb.two_sided,
+                                        sb.bias,
+                                    ));
+                                    bound = Some(key);
+                                }
+                                // animMap stages pick their frame per draw
+                                pass.set_bind_group(1, sb.mat.bind_group(frame.time), &[]);
+                                pass.set_bind_group(
+                                    2,
+                                    sb.stage.bind_group(frame.time),
+                                    &[u32::try_from(
+                                        u64::from(sb.slot) * world.stage_params_stride,
+                                    )
+                                    .expect("stage params slot offset fits a dynamic offset")],
+                                );
                             }
-                            // animMap stages pick their frame per draw
-                            pass.set_bind_group(1, sb.mat.bind_group(frame.time), &[]);
-                            pass.set_bind_group(
-                                2,
-                                sb.stage.bind_group(frame.time),
-                                &[
-                                    u32::try_from(u64::from(sb.slot) * world.stage_params_stride)
-                                        .expect("stage params slot offset fits a dynamic offset"),
-                                ],
-                            );
                         }
+                        pass.draw_indexed(draw.first..draw.first + draw.count, 0, 0..1);
                     }
-                    pass.draw_indexed(draw.first..draw.first + draw.count, 0, 0..1);
                 }
+                pass.set_bind_group(0, &self.camera_bg, &[]);
             }
 
             // Live entities draw after the world so they depth-test against it.

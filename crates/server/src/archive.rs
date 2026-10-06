@@ -30,6 +30,8 @@ pub struct WorldFrame {
     /// with no cull.
     pub broadcast: BTreeMap<u32, Rc<msg::EntityState>>,
     pub roster: Rc<BTreeMap<u32, msg::ClientState>>,
+    /// The frame's level time, where the cull places a moving entity.
+    pub time: i32,
 }
 
 impl WorldFrame {
@@ -48,7 +50,7 @@ impl WorldFrame {
     ) -> BTreeMap<u32, msg::EntityState> {
         let from = vis.map(|v| v.cluster_at(eye));
         let seen = |e: &msg::EntityState| match (vis, from) {
-            (Some(v), Some(from)) => crate::world::entity_visible(v, from, e, p),
+            (Some(v), Some(from)) => crate::world::entity_visible(v, from, e, self.time, p),
             _ => true,
         };
         let times = (shift != 0).then(|| entity_time_fields(p));

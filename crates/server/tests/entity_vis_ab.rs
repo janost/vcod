@@ -145,7 +145,8 @@ fn check(map: &str) {
     let mut findings: Vec<String> = Vec::new();
     let mut gaps_hit: BTreeSet<&str> = BTreeSet::new();
     for s in &samples {
-        let got: BTreeSet<u32> = vcod_server::world::visible_entities(&vis, s.origin, &all, p)
+        // Nothing in the gate's entity list moves, so any time evaluates it.
+        let got: BTreeSet<u32> = vcod_server::world::visible_entities(&vis, s.origin, &all, 0, p)
             .keys()
             .copied()
             .collect();

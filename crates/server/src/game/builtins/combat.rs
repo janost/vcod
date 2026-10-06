@@ -502,7 +502,8 @@ pub fn blast_step(host: &mut GameHost, cx: &mut Cx) {
         let Value::Vector(stands) = host.get_field(cx, id, origin_field) else {
             continue;
         };
-        let victim = standing_victim(slot, Vec3::from(stands));
+        let link = Vec3::from(host.client_link_origin[slot]);
+        let victim = standing_victim(slot, Vec3::from(stands), link);
         let bodies = blast_bodies(host, cx);
         let world = host.world.clone();
         let models = host.placed_script_models(cx);
@@ -611,14 +612,18 @@ fn blast_entity(host: &mut GameHost, cx: &mut Cx, id: EntId) {
 
 /// A client as a blast candidate, standing: the box and the eye height
 /// `CanDamage` needs (combat doc, 14.3), which is all a script-side victim
-/// has, its stance living on the sim rather than on the host. The link is
-/// taken to be its last cmd's, at the snapped origin.
-fn standing_victim(slot: usize, origin: Vec3) -> crate::game::combat::BlastVictim {
+/// has, its stance living on the sim rather than on the host. `link_origin`
+/// is where its last link put it: a cmd's snapped origin, or a `setOrigin`'s.
+fn standing_victim(
+    slot: usize,
+    origin: Vec3,
+    link_origin: Vec3,
+) -> crate::game::combat::BlastVictim {
     use vcod_common::pmove::{HALF_WIDTH, Stance};
     crate::game::combat::BlastVictim {
         slot,
         origin,
-        link_origin: origin.trunc(),
+        link_origin,
         mins: Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0),
         maxs: Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height()),
         eye: origin + Vec3::Z * Stance::Stand.view_height(),

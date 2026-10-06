@@ -740,9 +740,9 @@ Not determined:
   built before the store, so the yaw never reaches the wire and no capture
   can check it. vcod blends the leaves' yaw rotations by weight. The client
   works the same yaw out for itself and draws it (14.7).
-- The blend times, and whether the goal weights pose anything besides this
-  routine's own deltas (the gunner's server-side body for a locational hit,
-  for one). vcod does not keep them.
+- Whether the goal weights pose anything besides this routine's own deltas
+  (the gunner's server-side body for a locational hit, for one). vcod does
+  not keep them.
 
 ### 7.3 The tags and the client's copy
 
@@ -1832,13 +1832,14 @@ reticle. Where vcod differs:
   retail stretches 640x480 by separate x and y scales.
 - 0x300279b0 runs through `vcod_common::turretpose::place_gunner`, the
   server's port of 0x515a8, off `tag_weapon`'s bind position turned by the
-  lerped barrel. The goal weights apply at once rather than over the blend
-  times (14.7). The leaf set is posed by sequential lerps, each leaf by its
+  lerped barrel. The goal weights apply at once, which is retail's
+  one-frame ramp (14.7). The leaf set is posed by sequential lerps, each leaf by its
   share of the running total; that is the exact weighted mean at full
   weight and close to it inside the 0.2 s anim-switch cross-fade.
-- No trace on the client's placement: the body keeps the snapshot's z,
-  which the server's own trace already set. The drawn body is yaw-only like
-  every vcod player, where retail's player draw takes `AnglesToAxis` of the
+- The client's trace down runs against the world and last frame's drawn
+  player capsules (`play::predict::solid_bodies`), `MASK_PLAYERSOLID`,
+  the gunner skipped; `cg_debuganim` 5 is not honoured. The drawn body is
+  yaw-only like every vcod player, where retail's player draw takes `AnglesToAxis` of the
   whole result (14.7); a gun spawned with pitch or roll would tilt retail's
   gunner and not ours.
 
@@ -1878,9 +1879,29 @@ entity state starts at offset 0, `lerpOrigin` at `+0x1f8` and `lerpAngles` at
 - VERIFIED: every goal weight is passed with a time of `1 / ((1000.0 / g) *
   |w - goal|)`, or 0 when that product is not above 0, where `1000.0` is
   `0x30069478`, `w` is `0x300319a0`'s read of the node's current weight and
-  `g` the int at `0x30207144`. INFERRED: the client blends toward the new
-  weights over a time that shrinks as the change grows; what `g` holds is not
-  read.
+  `g` the int at `0x30207144`.
+- VERIFIED, `CG_DrawActiveFrame`'s clock block: `0x300339c4` stores the new
+  time into `0x30207148`, `0x300339e6` stores it minus `0x3020714c` into
+  `0x30207144`, and on a negative difference `0x300339f0` stores 0 there and
+  `0x300339f6` the new time into `0x3020714c`. INFERRED: `0x30207148` is
+  `cg.time`, `0x3020714c` `cg.oldTime` and `g` `cg.frametime` in ms; the
+  aim block's time step (`0x300373a3`, `g * 0.001`) reads it the same way.
+- VERIFIED, `CoDMP.exe`: cgame trap `0x8c` (the wrapper `0x30031840` the
+  placement calls) runs `0x004895c0`, which zeroes a time under 0.001
+  (`0x00568e6c`) and passes it to `0x00488e80`. That stores the goal weight
+  and, as the node's remaining blend time, `|goal - weight| * time`;
+  under 0.001 it stores 0 and the weight is set to the goal outright.
+  VERIFIED, `0x00485ba0`: with `dt` the global `0x00a9cc5c`, a node whose
+  remaining time is at least `dt + 0.001` moves `(goal - weight) / remaining
+  * dt` and loses `dt` of it; any other node takes the goal weight.
+  VERIFIED: cgame trap `0x95` (`0x00487e10`) stores its argument into
+  `0x00a9cc5c` before the update, and the cgame passes it `g * 0.001`
+  (`0x3001bd4a`..`0x3001bd6d`).
+  INFERRED: the remaining time the placement leaves is `|goal - w| / ((1000
+  / g) * |goal - w|) = g / 1000`, one frame, so the next update with that
+  frame's step reaches the goal (the step fails the `dt + 0.001` test);
+  a frame of 0 ms sets it outright. The ramp is a one-frame snap, whatever
+  the size of the change.
 - VERIFIED, 0x300280b1..0x30028153: trap 0x9a on the whole anim, `0x3003bc10`
   (a 2D rotation of the translation by the tag's yaw), the tag's `+0x30` and
   `+0x34` added to x and y with the gunner's height above the gun as z,
