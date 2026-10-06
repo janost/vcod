@@ -128,7 +128,8 @@ either: the people on it signed up for Call of Duty.
   `trigger_lookat`), and script movers whose trajectories reach the wire.
   A moving brush model carries the players and items on it and shoves the
   players in its way, and a player linked to a moving entity rides it. The client draws a
-  brush model where its entity is, so a hidden or deleted one is gone.
+  brush model where its entity is, with its baked lightmap, so a hidden or
+  deleted one is gone, and draws an item resting on a mover riding it.
 - Intermission, `map_restart`, and `sv_mapRotation` the way retail runs them,
   with the next map's gamestate sent on the live connection.
 - Spectator follow mode and the killcam, replayed out of a ring of archived
@@ -195,6 +196,8 @@ console, no key rebinding. You get command-line flags and the binds below.
   retail. The bots don't play either gametype.
 - No chat relay: the server answers no `say` command, and the scripts'
   `sayAll`, `sayTeam` (the quick-chat menu) and `pingPlayer` are missing.
+- `linkTo` takes only a player. A script calling it on any other entity
+  stops with an error; no stock MP script does.
 - A brush model that has turned and turned back keeps a sliver of yaw on
   retail, which drifts what it carries by about 0.02 units a frame; vcod's
   comes back to exactly zero.

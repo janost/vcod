@@ -1040,50 +1040,6 @@ pub fn parse(data: &[u8]) -> Result<Bsp> {
     })
 }
 
-impl Bsp {
-    /// Submodel `n`'s drawable soups as dynamic-pass surfaces plus their
-    /// material names. `None` when out of range or collision-only (most stock
-    /// maps have no drawable submodels). Vertices are submodel-local; the
-    /// entity's origin places them (doc, "Lump 27, models"). Bone data is
-    /// inert (index 0, weight 1) so the skinned pipeline draws the mesh
-    /// against its identity bone block.
-    pub fn submodel_mesh(&self, n: usize) -> Option<(Vec<crate::xmodel::Surface>, Vec<String>)> {
-        let model = self.models.get(n)?;
-        let mut surfaces = Vec::new();
-        let mut materials = Vec::new();
-        for soup in &self.soups[model.first_soup as usize..][..model.num_soups as usize] {
-            let material = &self.materials[soup.material as usize];
-            if crate::mesh::implicit_kind(&material.name) != crate::mesh::MaterialKind::Draw {
-                continue;
-            }
-            let fv = soup.first_vertex as usize;
-            let verts: Vec<crate::xmodel::VmVert> = self.verts[fv..fv + soup.vertex_count as usize]
-                .iter()
-                .map(|v| crate::xmodel::VmVert {
-                    pos: v.pos,
-                    normal: v.normal,
-                    uv: v.uv,
-                    bone_indices: [0; 4],
-                    bone_weights: [1.0, 0.0, 0.0, 0.0],
-                })
-                .collect();
-            // soup indices are relative to `first_vertex`
-            let fi = soup.first_index as usize;
-            let indices = self.indices[fi..fi + soup.index_count as usize].to_vec();
-            if verts.is_empty() || indices.is_empty() {
-                continue;
-            }
-            surfaces.push(crate::xmodel::Surface {
-                verts,
-                indices,
-                material: materials.len(),
-            });
-            materials.push(material.name.clone());
-        }
-        (!surfaces.is_empty()).then_some((surfaces, materials))
-    }
-}
-
 fn parse_entity_block(block: &str) -> std::collections::HashMap<String, String> {
     block
         .lines()
@@ -1268,40 +1224,6 @@ mod tests {
         }
     }
 
-    /// mp_harbor is the smallest stock map with drawable submodels.
-    #[test]
-    fn extracts_submodel_meshes_in_mp_harbor() {
-        let Some(fs) = crate::testing::game_fs() else {
-            return;
-        };
-        let bsp = parse(&fs.read("maps/mp/mp_harbor.bsp").unwrap()).unwrap();
-        assert_eq!(bsp.models[0].first_soup, 0);
-        assert_eq!(bsp.models[0].num_soups, 1492);
-        // submodel 1 is the map-wide trigger_hurt volume: brushes, no surfaces
-        assert!(bsp.submodel_mesh(1).is_none());
-
-        let (surfaces, materials) = bsp.submodel_mesh(2).expect("submodel 2");
-        assert_eq!(
-            materials,
-            [
-                "textures/industrial/metal@armoreddoor1",
-                "textures/industrial/metal@baseboard1lit"
-            ]
-        );
-        assert_eq!(surfaces.len(), 2);
-        for (i, s) in surfaces.iter().enumerate() {
-            assert_eq!(s.material, i);
-            assert!(!s.verts.is_empty());
-            assert!(!s.indices.is_empty() && s.indices.len() % 3 == 0);
-            assert!(s.indices.iter().all(|&i| (i as usize) < s.verts.len()));
-            for v in &s.verts {
-                assert_eq!(v.bone_indices, [0; 4]);
-                assert_eq!(v.bone_weights, [1.0, 0.0, 0.0, 0.0]);
-            }
-        }
-        assert!(bsp.models[1..].iter().all(|m| m.first_soup >= 1492));
-    }
-
     #[test]
     fn submodel_vertices_are_local_to_the_entity_origin() {
         let Some(fs) = crate::testing::game_fs() else {
@@ -1319,9 +1241,12 @@ mod tests {
         let origin = parse_vec3(block.get("origin").expect("origin")).unwrap();
         assert_eq!(origin, [-1704.0, 472.0, 873.0]);
 
-        let (surfaces, _) = bsp.submodel_mesh(58).expect("submodel 58");
-        for s in &surfaces {
-            for v in &s.verts {
+        let m = &bsp.models[58];
+        let soups = &bsp.soups[m.first_soup as usize..][..m.num_soups as usize];
+        assert!(!soups.is_empty(), "submodel 58 draws");
+        for s in soups {
+            let fv = s.first_vertex as usize;
+            for v in &bsp.verts[fv..fv + s.vertex_count as usize] {
                 for a in 0..3 {
                     assert!(
                         v.pos[a] >= bsp.models[58].mins[a] && v.pos[a] <= bsp.models[58].maxs[a],
