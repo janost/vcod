@@ -144,21 +144,23 @@ With the ladder pass (VERIFIED, measured with the same example, each map's
 build paired with one of the code before it). The timings came off a machine
 other builds were loading, so only their ratio means anything: new over old
 ran 0.7 to 1.5 on ten maps, 1.6 on `mp_depot` and 1.7 to 2.0 on `mp_ship`.
+The counts below were taken again (2026-10-07) after the BVH rework and
+the move of world collision to brushes and patches only.
 
 | map | nodes | edges | spawns in one component |
 |---|---|---|---|
-| mp_brecourt | 19099 | 146428 | 159 / 161 |
-| mp_carentan | 9657 | 67838 | 185 / 185 |
-| mp_chateau | 6507 | 43435 | 110 / 113 |
-| mp_dawnville | 7247 | 49978 | 174 / 185 |
-| mp_depot | 12199 | 83719 | 153 / 161 |
-| mp_harbor | 7515 | 53129 | 156 / 161 |
-| mp_hurtgen | 20600 | 153432 | 178 / 193 |
-| mp_pavlov | 25999 | 191881 | 161 / 161 |
-| mp_powcamp | 5963 | 41032 | 149 / 161 |
-| mp_railyard | 11333 | 80454 | 158 / 161 |
-| mp_rocket | 18341 | 136939 | 136 / 153 |
-| mp_ship | 11088 | 74386 | 105 / 112 |
+| mp_brecourt | 19102 | 146458 | 159 / 161 |
+| mp_carentan | 9668 | 68037 | 185 / 185 |
+| mp_chateau | 6502 | 43454 | 110 / 113 |
+| mp_dawnville | 7275 | 50200 | 174 / 185 |
+| mp_depot | 12144 | 83515 | 153 / 161 |
+| mp_harbor | 7520 | 53249 | 156 / 161 |
+| mp_hurtgen | 20416 | 152075 | 178 / 193 |
+| mp_pavlov | 25994 | 191832 | 161 / 161 |
+| mp_powcamp | 5977 | 41182 | 149 / 161 |
+| mp_railyard | 11348 | 80710 | 159 / 161 |
+| mp_rocket | 15759 | 116401 | 136 / 153 |
+| mp_ship | 11076 | 74180 | 105 / 112 |
 
 - VERIFIED (measured): an early single-threaded build of `mp_carentan`, before
   the diagonal shortcut and the stall cutoff, took 10.6 s. `perf` puts 80% of

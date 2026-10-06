@@ -269,13 +269,18 @@ fn a_bot_walks_toward_gunfire_it_cannot_see() {
     run(&mut sv, &mut now, 100);
     let slots = sv.bot_slots();
     let (fighters, listener) = ([slots[0], slots[1]], slots[2]);
-    let a = sv.bot_body(fighters[0]).unwrap().origin;
-    // The fighters go eye to eye 100 units apart along +x; a spawn with a
-    // wall or pillar there leaves them blind and the fight silent.
-    assert!(
-        sv.test_clear_line(a, 0.0, 100.0),
-        "no sightline between the fighters at {a:?}"
-    );
+    // The fighters go eye to eye 100 units apart along +x; a spot with a
+    // wall or pillar there leaves them blind and the fight silent. Where
+    // the first one stands after the warm-up depends on its roam, so the
+    // fight goes on the first floor round it with a clear line.
+    let at = sv.bot_body(fighters[0]).unwrap().origin;
+    let a = (0..25)
+        .filter_map(|i| {
+            let (dx, dy) = ((i % 5 - 2) as f32 * 96.0, (i / 5 - 2) as f32 * 96.0);
+            sv.test_ground_under([at[0] + dx, at[1] + dy, at[2] + 64.0])
+        })
+        .find(|p| sv.test_clear_line(*p, 0.0, 100.0))
+        .unwrap_or_else(|| panic!("no sightline for a fight round {at:?}"));
     // A floor in a ring round the fight with the eye line to it blocked.
     let spot = (0..48)
         .filter_map(|i| {
