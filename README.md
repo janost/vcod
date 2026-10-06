@@ -170,9 +170,6 @@ console, no key rebinding. You get command-line flags and the binds below.
 
 **Client**
 
-- A gunner's body stands where the server puts it, but the client doesn't
-  blend its mounted anim by the barrel's yaw the way retail's does, so the
-  body doesn't turn with the gun.
 - The HUD skips a few retail pieces: the followed player's health, ammo and
   compass while following, friendly players on the compass, the weapon mode
   icon, the stance-change flash and the fixed-width fonts

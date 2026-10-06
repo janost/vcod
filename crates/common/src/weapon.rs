@@ -540,6 +540,9 @@ pub struct WeaponDef {
     /// raw map instead.
     pub idle_anim: Option<String>,
     pub fire_anim: Option<String>,
+    /// A turret's yaw step between its gunner anim's columns, degrees
+    /// (turrets doc 7.2); 0 on anything else.
+    pub anim_hor_rotate_inc: f32,
 }
 
 /// Absence is normal (a spread key on a turret file, an ammo key on a
@@ -810,6 +813,7 @@ impl WeaponDef {
                 .collect(),
             idle_anim: opt_str(map, "idleAnim"),
             fire_anim: opt_str(map, "fireAnim"),
+            anim_hor_rotate_inc: parse_num(map, "animHorRotateInc", 0.0),
         }
     }
 }
