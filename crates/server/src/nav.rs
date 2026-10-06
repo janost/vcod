@@ -270,6 +270,11 @@ impl NavGraph {
     /// heuristic. The node list runs from `from` to `to` inclusive; `None`
     /// when `to` is unreachable or the search runs past its budget.
     pub fn path(&self, from: u32, to: u32) -> Option<Vec<u32>> {
+        self.path_avoiding(from, to, &[])
+    }
+
+    /// [`Self::path`] without the directed edges in `avoid`.
+    pub fn path_avoiding(&self, from: u32, to: u32, avoid: &[(u32, u32)]) -> Option<Vec<u32>> {
         let n = self.nodes.len();
         if from as usize >= n || to as usize >= n {
             return None;
@@ -306,6 +311,9 @@ impl NavGraph {
             }
             let here = self.nodes[node as usize];
             for &next in &self.edges[node as usize] {
+                if avoid.contains(&(node, next)) {
+                    continue;
+                }
                 let c = cost[node as usize] + here.distance(self.nodes[next as usize]);
                 if c < cost[next as usize] {
                     cost[next as usize] = c;
@@ -495,6 +503,10 @@ const OFF_PATH_STEPS: f32 = 4.0;
 /// it, and the ticks it then leaves the bot to its own unstick.
 const STUCK_TICKS: u32 = 40;
 const REST_TICKS: u32 = 20;
+/// How long the edge a follower got stuck on stays out of its plans. What
+/// blocks a proven edge is mostly a body: a bot guarding the bomb at the
+/// foot of mp_rocket's stairs held another there for 11 s.
+const AVOID_TICKS: u32 = 200;
 /// A roam goal is picked at least this far away when it can be.
 const ROAM_MIN: f32 = 1000.0;
 /// A seen enemy has to move this far off the planned destination before the
@@ -517,6 +529,10 @@ pub struct Follower {
     rest: u32,
     /// A point goal's path is walked out; the bot heads at the point itself.
     arrived: bool,
+    /// Calls to [`Self::waypoint`], one per tick: the clock `avoid` runs on.
+    clock: u32,
+    /// Edges it got stuck on, left out of its plans until the tick given.
+    avoid: Vec<(u32, u32, u32)>,
 }
 
 impl Follower {
@@ -532,6 +548,9 @@ impl Follower {
         rand: &mut dyn FnMut() -> i32,
     ) -> Option<[f32; 3]> {
         use crate::bots::Goal;
+        self.clock += 1;
+        let clock = self.clock;
+        self.avoid.retain(|e| e.2 > clock);
         if self.rest > 0 {
             self.rest -= 1;
             return None;
@@ -564,7 +583,14 @@ impl Follower {
             if goal == Goal::Roam && self.dest.is_none() {
                 self.dest = g.roam_from(here, rand);
             }
-            let Some(path) = self.dest.and_then(|d| g.path(start, d)) else {
+            // Round the edges it got stuck on when there is a way round, else
+            // through them again: whatever blocked one may have moved.
+            let avoid: Vec<(u32, u32)> = self.avoid.iter().map(|e| (e.0, e.1)).collect();
+            let plan = |d| {
+                g.path_avoiding(start, d, &avoid)
+                    .or_else(|| g.path(start, d))
+            };
+            let Some(path) = self.dest.and_then(plan) else {
                 // Unreachable from here: a roam picks again next time.
                 self.reset();
                 self.rest = REST_TICKS;
@@ -619,8 +645,16 @@ impl Follower {
         } else {
             self.idle += 1;
             if self.idle > STUCK_TICKS {
+                // Stuck on the way from the last node: plan round that edge
+                // next tick. Before the first node, leave the bot to its own
+                // unstick for a spell.
+                if let Some(from) = self.next.checked_sub(1).map(|i| self.path[i]) {
+                    let to = self.path[self.next];
+                    self.avoid.push((from, to, self.clock + AVOID_TICKS));
+                } else {
+                    self.rest = REST_TICKS;
+                }
                 self.reset();
-                self.rest = REST_TICKS;
                 return None;
             }
         }
@@ -990,18 +1024,34 @@ mod tests {
         assert_eq!(f.dest, Some(5));
     }
 
+    /// A bot pinned on its way from node 1 to node 2 (by a body guarding the
+    /// stairs, say) plans round that edge, through node 3, once it gives up.
     #[test]
-    fn a_follower_that_stops_closing_in_gives_up_and_rests() {
-        let g = row();
+    fn a_follower_stuck_on_an_edge_plans_round_it() {
+        let g = NavGraph::from_parts(
+            vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(32.0, 0.0, 0.0),
+                Vec3::new(64.0, 0.0, 0.0),
+                Vec3::new(60.0, 30.0, 0.0),
+            ],
+            vec![vec![1], vec![0, 2, 3], vec![1, 3], vec![1, 2]],
+        );
         let mut f = Follower::default();
-        let goal = crate::bots::Goal::To([160.0, 0.0, 0.0]);
-        let mut plans = 1;
+        let goal = crate::bots::Goal::To([64.0, 0.0, 0.0]);
+        let mut plans = 2;
+        let at = [32.0, 0.0, 0.0];
         let mut last = None;
         for _ in 0..=STUCK_TICKS + 1 {
-            last = f.waypoint(&g, goal, [0.0; 3], &mut plans, &mut || 0);
+            last = f.waypoint(&g, goal, at, &mut plans, &mut || 0);
         }
         assert_eq!(last, None, "still steering at a waypoint it never nears");
-        assert_eq!(f.rest, REST_TICKS);
+        let w = f.waypoint(&g, goal, at, &mut plans, &mut || 0);
+        assert_eq!(
+            w,
+            Some([60.0, 30.0, 0.0]),
+            "planned through the blocked edge"
+        );
     }
 
     /// mp_carentan's graph from the real collision: every spawn point sits on
