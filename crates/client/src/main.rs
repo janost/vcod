@@ -279,10 +279,16 @@ struct Args {
     probe_killcam_skip_ms: Option<u64>,
     /// With `--net-probe` and `--probe-team`: stand still and print a `FALL`
     /// line per snapshot whose ground entity, `pm_flags`, `pm_time`, events
-    /// or health moved; `client-probes/probe_fall` does the dropping. Writes
-    /// no fixture.
+    /// or health moved, and a `CMDS` line of the `serverTime`s it sent every
+    /// 60 cmds; `client-probes/probe_fall` does the dropping. Writes no
+    /// fixture.
     #[arg(long)]
     probe_fall: bool,
+    /// With `--probe-fall`: hold forward on every cmd at this world yaw, so
+    /// each landing's stun walks the player into whatever is in the way.
+    /// The stun-slide capture walks 315 into the street's south wall.
+    #[arg(long, value_name = "YAW", requires = "probe_fall")]
+    probe_fall_walk: Option<f32>,
     /// With `--net-probe` and `--probe-team`: stand still and print a `RIDE`
     /// line per snapshot with the origin, velocity, ground entity and view
     /// yaw, the mover push and ride capture's wire half;
@@ -419,8 +425,11 @@ struct LivePhase {
 
 fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp, net: &net::NetClient<net::UdpTransport>) -> Phase {
     let world = collision::CollisionWorld::build(bsp, &props::collision_tris(fs, &bsp.entities));
-    let gametype = net::info_value_for_key(net.configstring(0), "g_gametype").unwrap_or("");
-    world.unlink_script_brushes(&bsp.entities, gametype);
+    // A brush model clips only through its snapshot entity
+    // (`pmove::movers::SnapshotMovers::place`), as retail's cgame meets it.
+    for model in 1..world.model_count() {
+        world.set_model_linked(model, false);
+    }
     Phase::Live(Box::new(LivePhase {
         world,
         weapons: vcod_common::weapon_table::from_configstring(fs, net.configstring(7)),
@@ -795,6 +804,7 @@ fn main() -> Result<()> {
                 killcam: args.probe_killcam,
                 killcam_skip_ms: args.probe_killcam_skip_ms,
                 fall: args.probe_fall,
+                fall_walk: args.probe_fall_walk,
                 ride: args.probe_ride,
                 items: args.probe_items,
             },
@@ -990,6 +1000,11 @@ fn main() -> Result<()> {
         error: None,
     };
     event_loop.run_app(&mut app)?;
+    // Retail's quit goes through `CL_Disconnect`. Without the `disconnect`
+    // the server holds the slot, and anything it owns, until `sv_timeout`.
+    if let Mode::Online { net, .. } = &mut app.mode {
+        net.disconnect();
+    }
     match app.error.take() {
         Some(e) => Err(e),
         None => Ok(()),
@@ -1453,6 +1468,13 @@ impl ApplicationHandler for App {
                     && let Err(e) = r.load_world(&w.bsp, &self.fs)
                 {
                     return self.fail(event_loop, e);
+                }
+                // Offline there is no snapshot to place the brush models, so
+                // every one stands where the map put it.
+                if let Some(w) = &self.world
+                    && !matches!(self.mode, Mode::Online { .. })
+                {
+                    r.set_static_submodels(&(1..w.bsp.models.len()).collect::<Vec<_>>());
                 }
                 if !self.viewmodel.is_empty() {
                     r.set_viewmodel(&self.fs, &self.viewmodel);
@@ -2024,6 +2046,7 @@ impl ApplicationHandler for App {
                                         weapon_flash = built.weapon_flash;
                                         entity_pos = built.entity_pos;
                                         turret_eye = built.turret_eye;
+                                        r.set_static_submodels(&built.static_submodels);
                                         // Over 512 u is a teleport, not motion.
                                         let pos = if oa.distance(ob) > 512.0 {
                                             ob
@@ -2051,8 +2074,16 @@ impl ApplicationHandler for App {
                                                 client_num as u32,
                                                 drawn_pos,
                                             );
+                                            let movers = (
+                                                pmove::movers::SnapshotMovers::from_entities(
+                                                    p,
+                                                    &s.entities,
+                                                ),
+                                                s.server_time,
+                                            );
                                             predictor.predict(
-                                                p, &s.ps, ring, world, &bodies, weapons, local_ms,
+                                                p, &s.ps, ring, world, &bodies, &movers, weapons,
+                                                local_ms,
                                             )
                                         })
                                     } else {

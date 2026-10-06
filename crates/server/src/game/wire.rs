@@ -34,8 +34,17 @@ use vcod_gsc::{Cx, Host, Value};
 /// `ET_ITEM`: an item, `index` its `bg_itemlist` row (a weapon's is its
 /// configstring 7 index).
 const ET_ITEM: i32 = 3;
-/// `ET_SCRIPTMOVER`: a script model, `index` a model configstring index.
+/// `ET_SCRIPTMOVER`: a script model, `index` a model configstring index, or
+/// a `script_brushmodel`, `index` its inline model number.
 const ET_SCRIPTMOVER: i32 = 8;
+/// `s.solid` of an entity linked as a brush model: `SV_LinkEntity` stores it
+/// for `r.bmodel` (cod_lnxded 0x80908da) whatever the entity's contents, so a
+/// `notSolid()`ed brush model keeps it (docs/research/cod11-movers.md 14).
+pub const SOLID_BMODEL: i32 = 0xff_ffff;
+/// `s.eFlags` 0x100 (`EF_NODRAW`): the per-entity runner (game.mp 0x602bc)
+/// mirrors `hide()`'s `flags & 0x1000` into it every frame for an entity
+/// with no client (movers doc, section 14).
+const EF_NODRAW: i32 = 0x100;
 /// `ET_PLAYER`: another client.
 const ET_PLAYER: i32 = 1;
 /// A mounted MG. Not in CoDExtended's `entityType_t`, read off the traces:
@@ -71,8 +80,8 @@ pub fn link_box(etype: i32) -> ([f32; 3], [f32; 3]) {
         // A script model is spawned with a zero box and nothing on the
         // `SP_script_model` path ever writes one, so its clusters come from
         // the engine's link epsilon alone. A `script_brushmodel` shares this
-        // `eType` but takes real bounds from `trap_SetBrushModel`; no trace
-        // we hold carries one (docs/protocol-1.1.md).
+        // `eType` but links with its inline model's bounds, which
+        // `crate::world` reads off the entity's `solid` and `index`.
         ET_SCRIPTMOVER => ([0.0; 3], [0.0; 3]),
         // A player links with its own movement box, the one pmove collides
         // with (`vcod_common::pmove`). A corpse keeps the player's box: the
@@ -239,7 +248,7 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
     // extrapolates between the two updates a move produces
     // (`crate::game::mover`, docs/research/cod11-movers.md section 9). An
     // entity no verb has touched is stationary at its `origin`/`angles`.
-    match host.movers.wire(id) {
+    match host.movers.wire(id, host.level_time_ms) {
         Some((pos, apos)) => {
             for (group, tr) in [("pos", pos), ("apos", apos)] {
                 seti(&mut e, &format!("{group}.trType"), tr.tr_type);
@@ -307,6 +316,13 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
         Kind::ScriptMover(model) => {
             seti(&mut e, "eType", ET_SCRIPTMOVER);
             seti(&mut e, "index", model);
+            seti(&mut e, "eFlags", eflags_hidden(host, id));
+        }
+        Kind::BrushModel(model) => {
+            seti(&mut e, "eType", ET_SCRIPTMOVER);
+            seti(&mut e, "index", model);
+            seti(&mut e, "solid", SOLID_BMODEL);
+            seti(&mut e, "eFlags", eflags_hidden(host, id));
         }
         Kind::Turret(model, weapon) => {
             seti(&mut e, "eType", ET_TURRET);
@@ -345,6 +361,8 @@ enum Kind {
     Item(crate::game::item::ItemState),
     /// A script model, by its model configstring index.
     ScriptMover(i32),
+    /// A `script_brushmodel`, by its inline model number.
+    BrushModel(i32),
     /// A mounted MG: its model configstring index and its weapon index.
     Turret(i32, i32),
 }
@@ -365,11 +383,38 @@ fn kind_of(host: &mut GameHost, cx: &mut Cx, id: EntId, classname: &str) -> Opti
     if classname == "script_model" {
         return Some(Kind::ScriptMover(model_index(host, cx, id)?));
     }
-    // `script_brushmodel` is linked in retail too, but neither gate map has
-    // one, and its `.model` is a `*N` submodel rather than a name in the
-    // model configstring range, so what its `index` carries is unmeasured.
-    // Left out until a map with one says.
+    if classname == "script_brushmodel" {
+        return brush_model(host, cx, id).map(Kind::BrushModel);
+    }
     None
+}
+
+/// `EF_NODRAW` when script has hidden the entity, else 0.
+fn eflags_hidden(host: &GameHost, id: EntId) -> i32 {
+    if host.ents.get(id).is_some_and(|e| e.hidden) {
+        EF_NODRAW
+    } else {
+        0
+    }
+}
+
+/// The `N` of a brush model's `*N`, which retail sends as its `index`
+/// (movers doc, section 14). `None` once `delete()` has unlinked it: the
+/// entity leaves the snapshot on the frame of the call, a tenth of a second
+/// before the free.
+fn brush_model(host: &mut GameHost, cx: &mut Cx, id: EntId) -> Option<i32> {
+    if host
+        .ents
+        .get(id)
+        .is_some_and(|e| e.think == Some(crate::game::entity::ThinkFn::Free))
+    {
+        return None;
+    }
+    field_string(host, cx, id, "model")?
+        .strip_prefix('*')?
+        .parse::<i32>()
+        .ok()
+        .filter(|&n| n > 0)
 }
 
 /// The entity's `.model` as a model configstring index, 1-based the way the

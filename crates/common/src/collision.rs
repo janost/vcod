@@ -1095,6 +1095,11 @@ impl CollisionWorld {
         poses.push((model, pose));
     }
 
+    /// Lump 27's model count, the world's model 0 included.
+    pub fn model_count(&self) -> usize {
+        self.model_span.len()
+    }
+
     /// Back to the spawn placement, as a map load or restart has it.
     pub fn reset_model_pose(&self, model: usize) {
         if let Some(span) = self.model_span.get(model) {
@@ -1300,8 +1305,9 @@ impl CollisionWorld {
     }
 
     /// Unlinks the brush models the stock map-load scripts take out of the
-    /// clip, for a world no script runs on (the client's predictor, the
-    /// gates): `_gameobjects::main` `delete()`s every entity whose
+    /// clip, for a world no script and no snapshot drives (the gates; the
+    /// client takes them from the snapshot, `pmove::movers`):
+    /// `_gameobjects::main` `delete()`s every entity whose
     /// `script_gameobjectname` the gametype does not list (`dm.gsc:78`,
     /// `tdm.gsc:78`: their own name; `sd.gsc:123`: `sd`, `bombzone`,
     /// `blocker`), and `_load.gsc` `notsolid()`s every exploder brush model.

@@ -14,7 +14,12 @@
 //! `predictor_replays_retail_slope_runs` is `playerstate_slope_ab.rs`'s
 //! rebased replay with the predictor in place of the bare mover: retail's
 //! snapshot rebuilt through `from_wire`, retail's cmds run through `run_cmd`.
-//! Both need `COD_DIR`; without the paks they return early.
+//!
+//! `predictor_rides_retail_movers` predicts the ride capture's player from
+//! one snapshot to the next while the slab under him moves: the slab clipped
+//! where the snapshot's trajectory has it, the idle cmds run, the carry to
+//! the next snapshot's time (docs/research/cod11-movers.md, section 14).
+//! All three need `COD_DIR`; without the paks they return early.
 
 use glam::Vec3;
 use std::collections::{BTreeMap, HashMap};
@@ -26,6 +31,8 @@ use vcod_common::net::msg::{
     WBUTTON_RELOAD,
 };
 use vcod_common::net::protocol::{ENTITYNUM_WORLD, PROTOCOL_V1, Protocol};
+use vcod_common::net::trajectory::Trajectory;
+use vcod_common::pmove::movers::SnapshotMovers;
 use vcod_common::pmove::predict::{self, Predicted};
 use vcod_common::pmove::{self as pm, weapon::WEAPON_READY};
 use vcod_common::weapon::WeaponDef;
@@ -846,4 +853,190 @@ fn predictor_replays_retail_slope_runs() {
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+// ---------------------------------------------------------------------------
+// Riding a retail mover.
+
+const RIDE_SERVER: &str = "tests/fixtures/movers/mp_carentan-dm-ride.txt";
+const RIDE_WIRE: &str = "tests/fixtures/movers/mp_carentan-dm-ride-wire.txt";
+/// The slab's entity in the ride capture, and its inline model.
+const SLAB: u32 = 177;
+const SLAB_MODEL: i32 = 5;
+
+/// Phases whose rider retail's own client cannot predict, with the reason.
+/// The carry is the ground mover's `pos` alone, and the slab of the two yaw
+/// phases turns in place about the world origin, so the prediction holds the
+/// rider still while the server swings him round (movers doc, section 14):
+/// 2 degrees a second at 2473 units is 4.3 units a snapshot.
+const RIDE_GAPS: &[(&str, f32)] = &[("ride_yaw", 4.4), ("ride_yaw_back", 4.4)];
+
+/// A `RIDE` line: the snapshot's time and the playerstate fields it logs.
+struct Ride {
+    t: i32,
+    snap: Snap,
+}
+
+/// `RIDE` lines, the first of each serverTime, and the slab's trajectories
+/// as the change lines put them, `(serverTime, pos, apos)`.
+fn parse_ride(text: &str) -> (Vec<Ride>, Vec<(i32, Trajectory, Trajectory)>) {
+    let mut rides: Vec<Ride> = Vec::new();
+    let mut slab = Vec::new();
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("RIDE ") {
+            let kv: BTreeMap<&str, &str> = rest
+                .split_whitespace()
+                .filter_map(|kv| kv.split_once('='))
+                .collect();
+            let int = |k: &str| -> i32 {
+                let v = kv[k];
+                match v.strip_prefix("0x") {
+                    Some(h) => i32::from_str_radix(h, 16).unwrap(),
+                    None => v.parse().unwrap(),
+                }
+            };
+            let t = int("t");
+            if rides.last().is_some_and(|r| r.t == t) {
+                continue;
+            }
+            rides.push(Ride {
+                t,
+                snap: Snap {
+                    ct: int("ct"),
+                    origin: parse_vec3(kv["origin"]),
+                    velocity: parse_vec3(kv["vel"]),
+                    ground: int("ground"),
+                    view: [0.0; 3],
+                    delta_angles: [0, int("delta_yaw"), 0],
+                    frac: 0.0,
+                    pm_flags: int("pm_flags"),
+                },
+            });
+        } else if let Some(rest) = line.strip_prefix(&format!("entity {SLAB} serverTime ")) {
+            let tokens: Vec<&str> = rest.split_whitespace().collect();
+            let v = |t: &str| parse_vec3(t.trim_matches(|c| c == '[' || c == ']'));
+            let tr = |at: usize| Trajectory {
+                tr_type: tokens[at + 1].parse().unwrap(),
+                tr_time: tokens[at + 3].parse().unwrap(),
+                tr_duration: tokens[at + 5].parse().unwrap(),
+                base: v(tokens[at + 7]),
+                delta: v(tokens[at + 9]),
+            };
+            // `<t> eType 8 pos trType .. delta [..] apos trType ..`
+            slab.push((tokens[0].parse().unwrap(), tr(4), tr(15)));
+        }
+    }
+    (rides, slab)
+}
+
+/// The slab as a snapshot entity, with the trajectories it had at `t`.
+fn slab_entity(changes: &[(i32, Trajectory, Trajectory)], t: i32) -> msg::EntityState {
+    let (pos, apos) = changes
+        .iter()
+        .take_while(|c| c.0 <= t)
+        .last()
+        .map_or((Trajectory::default(), Trajectory::default()), |c| {
+            (c.1, c.2)
+        });
+    let mut e = msg::EntityState::null(P);
+    e.number = SLAB;
+    let mut set = |name: &str, v: i32| {
+        e.fields[msg::EntityState::field_index(P, name).expect(name)] = v;
+    };
+    set("eType", 8);
+    set("solid", 0xff_ffff);
+    set("index", SLAB_MODEL);
+    for (group, tr) in [("pos", pos), ("apos", apos)] {
+        set(&format!("{group}.trType"), tr.tr_type);
+        set(&format!("{group}.trTime"), tr.tr_time);
+        set(&format!("{group}.trDuration"), tr.tr_duration);
+        for i in 0..3 {
+            set(&format!("{group}.trBase[{i}]"), tr.base[i].to_bits() as i32);
+            set(
+                &format!("{group}.trDelta[{i}]"),
+                tr.delta[i].to_bits() as i32,
+            );
+        }
+    }
+    e
+}
+
+#[test]
+fn predictor_rides_retail_movers() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    let cs7 = retail_cs7();
+    let weapons = vcod_common::weapon_table::from_configstring(&fs, cs7);
+    let weapon = weapon_index(cs7, "m1carbine_mp");
+    let (world, _) = load_world(&fs, "mp_carentan");
+    let mw = MoveWorld::bare(&world);
+    let (rides, slab) = parse_ride(&std::fs::read_to_string(RIDE_WIRE).unwrap());
+    let starts: Vec<(String, i32)> = std::fs::read_to_string(RIDE_SERVER)
+        .unwrap()
+        .lines()
+        .filter_map(|l| {
+            let rest = &l[l.find("PROBE at ")? + 9..];
+            let (phase, t) = rest.split_once(' ')?;
+            Some((phase.to_owned(), t.trim().parse().ok()?))
+        })
+        .collect();
+    let phase_at = |t: i32| {
+        starts
+            .iter()
+            .rfind(|(_, s)| *s <= t)
+            .map_or("", |(p, _)| p.as_str())
+    };
+
+    let mut bad = Vec::new();
+    let mut compared = 0;
+    // A jump past this between two snapshots is the probe's `setorigin`.
+    let teleport = |a: &Ride, b: &Ride| (a.snap.origin - b.snap.origin).length() > 16.0;
+    for w in rides.windows(3) {
+        let (prev, s, n) = (&w[0], &w[1], &w[2]);
+        if n.t != s.t + 50
+            || s.snap.ground != SLAB as i32
+            || n.snap.ct <= s.snap.ct
+            || teleport(prev, s)
+            || teleport(s, n)
+        {
+            continue;
+        }
+        let phase = phase_at(s.t);
+        let ents = BTreeMap::from([(SLAB, slab_entity(&slab, s.t))]);
+        let movers = SnapshotMovers::from_entities(P, &ents);
+        movers.place(&world, s.t);
+        let mut pred = predict::from_wire(P, &wire_from(&s.snap, weapon), None);
+        let mut st = s.snap.ct;
+        while st < n.snap.ct {
+            st = (st + 8).min(n.snap.ct);
+            let cmd = UserCmd {
+                server_time: st,
+                weapon,
+                ..NULL_USERCMD
+            };
+            predict::run_cmd(&mut pred, &cmd, &mw, &weapons);
+        }
+        let ground = pred.ps.ground_entity_num();
+        let at = movers.carry(pred.ps.origin, ground as i32, s.t, n.t);
+        let d = (at - n.snap.origin).abs().max_element();
+        compared += 1;
+        let tol = RIDE_GAPS
+            .iter()
+            .find(|g| g.0 == phase)
+            .map_or(0.05, |g| g.1);
+        if ground != SLAB || d > tol {
+            bad.push(format!(
+                "{phase} t={}: ground {ground}, predicted {at} retail {} ({d:.3})",
+                n.t, n.snap.origin
+            ));
+        }
+    }
+    assert!(compared > 200, "only {compared} riding snapshots");
+    assert!(
+        bad.is_empty(),
+        "{} of {compared} differ:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
 }

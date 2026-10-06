@@ -502,6 +502,60 @@ impl GameHost {
         v.takedamage = true;
     }
 
+    /// Every live entity with no client that a blast can damage, in entity
+    /// order: the turrets, `takedamage` from `G_SpawnTurret` on (0x5301a),
+    /// with the box it links (combat doc, 14.6).
+    pub fn blast_entities(&mut self, cx: &mut Cx) -> Vec<crate::game::combat::EntityVictim> {
+        let origin = cx.intern_folded("origin");
+        let mut ids: Vec<EntId> = self.turrets.keys().copied().collect();
+        ids.sort_by_key(|id| id.0);
+        let (mins, maxs) = crate::game::turret::TURRET_BOX;
+        ids.into_iter()
+            .filter_map(|id| {
+                let Value::Vector(at) = self.get_field(cx, id, origin) else {
+                    return None;
+                };
+                Some(crate::game::combat::EntityVictim {
+                    id,
+                    origin: glam::Vec3::from(at),
+                    mins: glam::Vec3::from(mins),
+                    maxs: glam::Vec3::from(maxs),
+                })
+            })
+            .collect()
+    }
+
+    /// `G_Damage`'s arm for an entity with no client (combat doc, 4.2):
+    /// a charge of 0 is raised to 1 and comes off `health`, and the entity
+    /// is notified `"damage"` with the damage and the attacker; at or below
+    /// 0 health is clamped at -999 and `"death"` follows with the attacker,
+    /// on every such hit, since nothing clears `takedamage`. A turret has no
+    /// `pain` or `die` to call. The notifies are returned for the caller to
+    /// raise, in order.
+    pub fn damage_entity(
+        &mut self,
+        cx: &mut Cx,
+        id: EntId,
+        damage: i32,
+        attacker: EntId,
+    ) -> Vec<(&'static str, Vec<Value>)> {
+        let field = cx.intern_folded("health");
+        let health = match self.get_field(cx, id, field) {
+            Value::Int(h) => h,
+            _ => 0,
+        };
+        let damage = damage.max(1);
+        let left = health - damage;
+        let mut notifies = vec![("damage", vec![Value::Int(damage), Value::Entity(attacker)])];
+        if left <= 0 {
+            notifies.push(("death", vec![Value::Entity(attacker)]));
+        }
+        if let Err(e) = self.set_field(cx, id, field, Value::Int(left.max(-999))) {
+            log::warn!("blast on entity {}: {e:?}", id.0);
+        }
+        notifies
+    }
+
     /// Every client slot that holds a client entity, which is every client
     /// from its `ClientConnect` to its disconnect. What a broadcast reliable
     /// command (`iPrintLn`) goes to.

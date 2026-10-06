@@ -320,13 +320,18 @@ wraps `level.callbackPlayerDamage` and `level.callbackPlayerKilled` to log
 `PROBE damage`, `PROBE damaged` and `PROBE killed` lines with every argument
 the engine handed them. The client half prints a `FALL` line per snapshot
 whose ground entity, `pm_flags`, `pm_time`, event ring or health moved, and
-every airborne snapshot. Neither half writes a file; each run's lines were
-pasted by hand into a fixture in `crates/server/tests/fixtures/playerstate/`,
-the server's as comments: `mp_carentan-dm-fall.txt` (the first run, five
-drops and no callback lines), `mp_carentan-dm-fall-damage.txt` and
-`mp_carentan-dm-fall-damage-cvars.txt` (the second with `+set
+every airborne snapshot, and a `CMDS` line per 60 cmds with the `serverTime`
+of each. Neither half writes a file; each run's lines were pasted by hand
+into a fixture in `crates/server/tests/fixtures/playerstate/`, the server's
+as comments: `mp_carentan-dm-fall.txt` (the first run, five drops, no
+callback or `CMDS` lines), `mp_carentan-dm-fall-damage.txt` and
+`mp_carentan-dm-fall-damage-cvars.txt` (2026-10-06, the second with `+set
 bg_fallDamageMinHeight 200 +set bg_fallDamageMaxHeight 1000` after the
-`probe_teleport` set). `docs/research/cod11-player-clip.md` 8.9 and 8.10 read
+`probe_teleport` set). `fall_ab` replays the `CMDS` timeline, so a new
+capture of either needs those lines. `mp_carentan-dm-fall-walk.txt`
+(2026-10-06) is the stock-bounds run with `--probe-fall-walk 315` on the
+client, which holds forward at that world yaw, so each stun walks the player
+into the street's south wall; its `CMDS` lines carry each cmd's yaw word. `docs/research/cod11-player-clip.md` 8.9 and 8.10 read
 them, and `crates/server/tests/fall_ab.rs` gates the last two.
 
 ```
@@ -691,6 +696,13 @@ probes clear where retail's left none, and slot 2 takes 133 on
 `lethal_high`; the
 `same_frame_high` callbacks run 2 then 3 where retail's ran 3 then 2.
 
+The `after_low` and `before_high` rows this section's block drops, retail
+then ours on 2026-10-06 after the `PM_DeadMove` and spawn-health fixes
+(combat doc 5.6 and 5.7): dead slot 0 came to rest at (-245.37, 2404.63)
+and (-244.78, 2405.35), and read `spectator -20` after sd's
+`spawnSpectator` on both. Before the fixes ours slid it to (-273.20,
+2376.80) and its spectator read 100.
+
 ## probe_itemdrop
 
 The item flight, landing and respawn capture's server half, on mp_carentan
@@ -740,3 +752,92 @@ COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=30 \
 Ours takes the same pak through a scratch `--game-dir` whose `main/` links
 the stock paks beside it: `vcod-server mp_itemtest --game-dir <dir>
 --gametype-script .../probe_nodrop.gsc`.
+
+## probe_victims
+
+Four leftovers of the damage path, for `docs/research/cod11-combat.md` 4.4,
+5.6, 5.7 and 14.6. `probe_blastbody`'s recipe, 75 s on the server and
+`--probe-secs 65` on the clients; against ours the server half is
+`vcod-server mp_carentan --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_victims.gsc`.
+Nothing here writes a fixture.
+
+Rows: three lethal `finishPlayerDamage` calls whose killed callback logs
+the inflictor and attacker it was handed; a `spawnSpectator` and a bare
+`self spawn` on a client whose health the probe set first; a flat 200 down
+`probe_blastbody`'s line, killing slot 0 in front and not 1000-health slot 1
+behind, with both origins logged every frame for 1.5 s; three flat-60 blasts
+beside carentan's `misc_mg42` at (1712, 1830, 8) with slot 1 in range too,
+the turret's `"damage"` and `"death"` waiters logging. Retail, 2026-10-06
+(sd's `D;` and `K;` records and slide frames 10 to 29, all equal to 9,
+dropped):
+
+```
+PROBE org 179
+PROBE fpd ent_player
+PROBE killed 0 inflictor 1 attacker 1 MOD_GRENADE_SPLASH
+PROBE fpd player_ent
+PROBE killed 3 inflictor 179 attacker 179 MOD_RIFLE_BULLET
+PROBE fpd undefined_player
+PROBE killed 0 inflictor 1022 attacker 1 MOD_RIFLE_BULLET
+PROBE spec health 37 spectator
+PROBE spec_later health 37
+PROBE play health 41 maxhealth 100
+PROBE play_later health 41
+PROBE slide_before 0 (-226.00, 2424.00, -31.79) 1 (-269.00, 2381.00, -31.99)
+PROBE cb 0 200 playing 100
+PROBE killed 0 inflictor 1022 attacker 1022 MOD_EXPLOSIVE
+PROBE cb 1 200 playing 1000
+PROBE slide 0 0 dead (-226.00, 2424.00, -31.79) 1 (-269.00, 2381.00, -31.99)
+PROBE slide 1 0 dead (-231.11, 2418.92, -31.87) 1 (-274.65, 2375.35, -31.99)
+PROBE slide 2 0 dead (-238.91, 2411.17, -31.87) 1 (-286.18, 2363.82, -31.99)
+PROBE slide 3 0 dead (-242.41, 2407.71, -31.99) 1 (-293.87, 2356.14, -31.99)
+PROBE slide 4 0 dead (-243.68, 2406.47, -31.99) 1 (-299.84, 2350.16, -31.99)
+PROBE slide 5 0 dead (-243.68, 2406.47, -31.99) 1 (-304.31, 2345.70, -31.99)
+PROBE slide 6 0 dead (-243.68, 2406.47, -31.99) 1 (-307.60, 2342.40, -31.99)
+PROBE slide 7 0 dead (-243.68, 2406.47, -31.99) 1 (-309.86, 2340.14, -31.99)
+PROBE slide 8 0 dead (-243.68, 2406.47, -31.99) 1 (-310.80, 2339.21, -31.99)
+PROBE slide 9 0 dead (-243.68, 2406.47, -31.99) 1 (-311.49, 2338.51, -31.99)
+PROBE turret 297 (-500.00, 1896.00, 175.00) health 100
+PROBE turret 298 (1712.00, 1830.00, 8.00) health 100
+PROBE tplace 1 (1712.00, 1990.00, -23.87)
+PROBE tblast 0
+PROBE cb 1 60 playing 1000
+PROBE tblast_after 0 health 40
+PROBE tdamage 60 1022 health 40
+PROBE tblast 1
+PROBE cb 1 60 playing 940
+PROBE tblast_after 1 health -20
+PROBE tdeath 1022 health -20
+PROBE tdamage 60 1022 health -20
+PROBE tblast 2
+PROBE cb 1 60 playing 880
+PROBE tblast_after 2 health -80
+PROBE tdeath 1022 health -80
+PROBE tdamage 60 1022 health -80
+PROBE done
+```
+
+Ours, the same day, after the fixes: every row the same but the slide. Ours
+stands both clients at z -31.87, and the frames move in bursts, since a
+debug build's tick overruns and catches up; slot 0 came to rest at
+(-241.43, 2408.58), 21.8 units out where retail's slid 24.9, and slot 1 at
+(-307.67, 2342.33). Before the `PM_DeadMove` fix slot 0 slid 56.4.
+
+## probe_hud_disconnect
+
+Whether a client's `newClientHudElem` record outlives it, for
+`docs/research/cod11-hud-protocol.md`, "A client's elements die with it".
+One client is enough: it connects, `begin` makes one owned and one shared
+element, and leaving runs the disconnect callback. Two shells:
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> tools/run_probe.sh client-probes/probe_hud_disconnect mp_pavlov
+# second shell, once the map is up:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-secs 8
+```
+
+Against ours: `vcod-server mp_pavlov --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_hud_disconnect.gsc`.
+Plain `--net-probe` writes no fixture. Retail and ours, 2026-10-06, print
+the same three lines; the doc section quotes them.

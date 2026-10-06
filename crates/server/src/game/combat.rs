@@ -887,10 +887,7 @@ impl PlacedModel {
     }
 }
 
-/// One candidate for a blast. Every one of them is a client here: retail's
-/// turret, door, `func_static` and `trigger_damage` spawns store
-/// `takedamage` too (14.5), which this server does not model, so the
-/// brush-model arms of `G_RadiusDamage` and `CanDamage` have no caller.
+/// A client as a blast candidate. The other kind is [`EntityVictim`].
 pub struct BlastVictim {
     pub slot: usize,
     /// `r.currentOrigin`, at the feet: what the distance is measured to.
@@ -958,6 +955,65 @@ pub fn can_damage(
     }
 }
 
+/// A blast candidate with no client: a turret, the one entity with
+/// `takedamage` this server spawns. Retail's door, `func_static` and
+/// `trigger_damage` spawns store it too, but no stock MP map places one
+/// (combat doc, 14.6), so the brush-model arms of `G_RadiusDamage` have no
+/// caller here.
+pub struct EntityVictim {
+    pub id: EntId,
+    /// `r.currentOrigin`, the distance's other end: not a brush model.
+    pub origin: Vec3,
+    pub mins: Vec3,
+    pub maxs: Vec3,
+}
+
+impl EntityVictim {
+    /// The middle of `r.absmin`/`r.absmax`, whose one-unit widening cancels.
+    fn mid(&self) -> Vec3 {
+        self.origin + (self.mins + self.maxs) * 0.5
+    }
+}
+
+/// `CanDamage`'s arm for an entity with no client (combat doc, 14.3): the
+/// box midpoint and four points 15 units off it on x and y, all or nothing.
+/// Nothing is skipped as the pass entity: a turret's contents share no bit
+/// with the mask, and it is no body.
+fn can_damage_entity(
+    at: Vec3,
+    v: &EntityVictim,
+    world: &CollisionWorld,
+    models: &[PlacedModel],
+    bodies: &[HitBody],
+    mut bones: Option<&mut BoneTraceCtx>,
+) -> f32 {
+    let mid = v.mid();
+    let h = CAN_DAMAGE_HALF_WIDTH;
+    let probes = [
+        mid,
+        mid + Vec3::new(h, h, 0.0),
+        mid + Vec3::new(h, -h, 0.0),
+        mid + Vec3::new(-h, h, 0.0),
+        mid + Vec3::new(-h, -h, 0.0),
+    ];
+    let mask = vcod_common::collision::MASK_BLAST;
+    let clear = probes.iter().any(|&p| {
+        world.point_trace(p, at, mask, true).fraction >= 1.0
+            && models.iter().all(|m| m.clip(p, at, mask, 1.0).is_none())
+            && trace_bodies(
+                p,
+                at,
+                usize::MAX,
+                bodies,
+                1.0,
+                &BULLET_PRIORITY,
+                bones.as_deref_mut(),
+            )
+            .is_none()
+    });
+    if clear { 1.0 } else { 0.0 }
+}
+
 /// One `G_RadiusDamage` call (combat doc, 14.1). Retail collects its
 /// candidates once, then runs each victim's damage callback inside the walk,
 /// so whatever a callback does (a kill above all, whose corpse stops
@@ -1006,11 +1062,73 @@ impl Blast {
     /// linked box, `r.absmin` and `r.absmax` with their one-unit widening
     /// (14.1), against `at` plus and minus `radius * sqrt(2)`.
     pub fn reaches(&self, v: &BlastVictim) -> bool {
+        self.box_reaches(v.link_origin, v.mins, v.maxs)
+    }
+
+    /// [`Blast::reaches`] for an entity with no client.
+    pub fn reaches_entity(&self, v: &EntityVictim) -> bool {
+        self.box_reaches(v.origin, v.mins, v.maxs)
+    }
+
+    fn box_reaches(&self, origin: Vec3, mins: Vec3, maxs: Vec3) -> bool {
         let half = Vec3::splat(self.radius * std::f32::consts::SQRT_2);
         let (lo, hi) = (self.at - half, self.at + half);
-        let min = v.link_origin + v.mins - Vec3::ONE;
-        let max = v.link_origin + v.maxs + Vec3::ONE;
+        let min = origin + mins - Vec3::ONE;
+        let max = origin + maxs + Vec3::ONE;
         min.cmple(hi).all() && max.cmpge(lo).all()
+    }
+
+    /// The falloff before line of sight at `dist`, `None` at or past the
+    /// radius. At double precision: retail keeps the whole expression on the
+    /// x87 stack, and an f32 round trip loses a point of damage at the round
+    /// ratios a script picks.
+    fn points(&self, dist: f32) -> Option<f64> {
+        (dist < self.radius).then(|| {
+            self.outer as f64
+                + (1.0 - dist as f64 / self.radius as f64) * (self.inner as f64 - self.outer as f64)
+        })
+    }
+
+    /// The damage `CanDamage`'s `fraction` leaves, or with none the second
+    /// chance's tenth when the trace to the box midpoint `mid` was blocked
+    /// and `mid` is inside `radius * 0.2` (14.1).
+    fn charge(
+        &self,
+        points: f64,
+        fraction: f32,
+        mid: Vec3,
+        world: Option<&CollisionWorld>,
+    ) -> Option<i32> {
+        if fraction > 0.0 {
+            return Some((fraction as f64 * points) as i32);
+        }
+        let blocked = world.is_some_and(|w| {
+            w.point_trace(self.at, mid, SECOND_CHANCE_MASK, false)
+                .fraction
+                < 1.0
+        });
+        if !blocked || (mid - self.at).length() >= self.radius * SECOND_CHANCE_RANGE {
+            return None;
+        }
+        Some((points * SECOND_CHANCE_SHARE as f64) as i32)
+    }
+
+    /// What the blast charges an entity with no client, before `G_Damage`
+    /// raises a charge of 0 to 1 (4.2). As [`Blast::hit`] otherwise:
+    /// measured origin to origin, every live body stops a probe.
+    pub fn entity_damage(
+        &self,
+        v: &EntityVictim,
+        world: Option<&CollisionWorld>,
+        models: &[PlacedModel],
+        bodies: &[HitBody],
+        bones: Option<&mut BoneTraceCtx>,
+    ) -> Option<i32> {
+        let points = self.points((v.origin - self.at).length())?;
+        let fraction = world.map_or(1.0, |w| {
+            can_damage_entity(self.at, v, w, models, bodies, bones)
+        });
+        self.charge(points, fraction, v.mid(), world)
     }
 
     /// The falloff from `inner` at the blast to `outer` at the radius,
@@ -1032,28 +1150,11 @@ impl Blast {
         bodies: &[HitBody],
         bones: Option<&mut BoneTraceCtx>,
     ) -> Option<Hit> {
-        let (at, radius) = (self.at, self.radius);
-        let dist = (v.origin - at).length();
-        if dist >= radius {
-            return None;
-        }
-        // At double precision: retail keeps the whole expression on the x87
-        // stack, and an f32 round trip loses a point of damage at the round
-        // ratios a script picks.
-        let points = self.outer as f64
-            + (1.0 - dist as f64 / radius as f64) * (self.inner as f64 - self.outer as f64);
+        let at = self.at;
+        let points = self.points((v.origin - at).length())?;
         let fraction = world.map_or(1.0, |w| can_damage(at, v, w, models, bodies, bones));
-        let damage = if fraction > 0.0 {
-            (fraction as f64 * points) as i32
-        } else {
-            let mid = v.link_origin + (v.mins + v.maxs) * 0.5;
-            let blocked = world
-                .is_some_and(|w| w.point_trace(at, mid, SECOND_CHANCE_MASK, false).fraction < 1.0);
-            if !blocked || (mid - at).length() >= radius * SECOND_CHANCE_RANGE {
-                return None;
-            }
-            (points * SECOND_CHANCE_SHARE as f64) as i32
-        };
+        let mid = v.link_origin + (v.mins + v.maxs) * 0.5;
+        let damage = self.charge(points, fraction, mid, world)?;
         Some(Hit {
             victim: v.slot,
             attacker: self.attacker.unwrap_or(ENTITYNUM_WORLD as usize),

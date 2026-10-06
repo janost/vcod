@@ -246,6 +246,13 @@ pub fn mount_sim(sim: &mut ClientSim, turret: u32, stance: TurretStance, view: [
 /// The most either barrel axis turns in one frame (turrets doc 6.2, double
 /// 0x758f8).
 const TURRET_MAX_STEP: f32 = 15.0;
+
+/// The `r.mins`/`r.maxs` `G_SpawnTurret` links with (0x52f75; the same pair
+/// `crate::game::wire::link_box` gives `ET_TURRET`).
+pub const TURRET_BOX: ([f32; 3], [f32; 3]) = ([-32.0, -32.0, 0.0], [32.0, 32.0, 56.0]);
+/// `G_SpawnTurret`'s `health` for a turret whose map key left it 0
+/// (0x52ee7, 0x52ef0).
+pub const TURRET_HEALTH: i32 = 100;
 /// What the cooldown and the loop timer drop by per server frame, whatever
 /// the frame's length (turrets doc 6.3 and 6.4).
 const FRAME_MS: i32 = 50;

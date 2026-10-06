@@ -97,6 +97,8 @@ pub struct Save {
     pub killcam_skip_ms: Option<u64>,
     /// `--probe-fall`: print every snapshot a landing moved, no fixture.
     pub fall: bool,
+    /// `--probe-fall-walk`: the world yaw `--probe-fall` walks at.
+    pub fall_walk: Option<f32>,
     /// `--probe-ride`: print every snapshot's movement fields, no fixture.
     pub ride: bool,
     /// `--probe-items`: print every snapshot an item changed, no fixture.
@@ -206,6 +208,7 @@ pub fn probe(
         killcam: probe_killcam,
         killcam_skip_ms,
         fall: probe_fall,
+        fall_walk,
         ride: probe_ride,
         items: probe_items,
     } = save;
@@ -641,6 +644,10 @@ pub fn probe(
             // No `hold_view_yaw`: the script's angles are world angles, which
             // `send_frame` rebases on each snapshot's `delta_angles`.
             cmd = prone.cmd(now);
+        } else if let Some(yaw) = fall_walk.filter(|_| client.state() == NetState::Active) {
+            // Absolute: `send_frame` takes `delta_angles` off.
+            cmd.forward = 127;
+            cmd.angles[1] = deg_to_short(yaw);
         } else if pvs && pvs_probe.running() {
             cmd = pvs_probe.cmd();
             if slope {
@@ -658,6 +665,9 @@ pub fn probe(
         cmd.weapon = weapon_switch.unwrap_or(ps_weapon);
         let sent = client.send_frame(&cmd);
         if let Some(c) = sent {
+            if probe_fall {
+                fall.record_cmd(c.server_time, fall_walk.map(|_| c.angles[1]));
+            }
             if save_plant || save_defuse {
                 sd.record(c);
             }
@@ -8877,14 +8887,44 @@ const KILLCAM_TAIL: Duration = Duration::from_secs(3);
 
 /// `--probe-fall`: joins and stands, and prints a `FALL` line per snapshot
 /// whose ground entity, `pm_flags`, `pm_time`, event ring or health moved,
-/// which is a landing's whole footprint. `client-probes/probe_fall` drops
-/// the player from a height. Writes no fixture.
+/// which is a landing's whole footprint, and a `CMDS` line per
+/// [`FALL_CMDS_PER_LINE`] cmds sent, their `serverTime`s as a first stamp
+/// and the steps after it, and under `--probe-fall-walk` the yaw word each
+/// went out with, so a gate can replay the fall on the cmds retail ran.
+/// `client-probes/probe_fall` drops the player from a height. Writes no
+/// fixture.
 #[derive(Default)]
 struct FallProbe {
     last: Option<Vec<i32>>,
+    cmds: Vec<(i32, Option<i32>)>,
 }
 
+const FALL_CMDS_PER_LINE: usize = 60;
+
 impl FallProbe {
+    fn record_cmd(&mut self, server_time: i32, yaw: Option<i32>) {
+        self.cmds.push((server_time, yaw));
+        if self.cmds.len() >= FALL_CMDS_PER_LINE {
+            let steps: Vec<String> = self
+                .cmds
+                .windows(2)
+                .map(|w| (w[1].0 - w[0].0).to_string())
+                .collect();
+            let yaws: Vec<String> = self
+                .cmds
+                .iter()
+                .filter_map(|c| c.1.map(|y| y.to_string()))
+                .collect();
+            let yaws = if yaws.is_empty() {
+                String::new()
+            } else {
+                format!(" yaw={}", yaws.join(","))
+            };
+            println!("CMDS st={} d={}{yaws}", self.cmds[0].0, steps.join(","));
+            self.cmds.clear();
+        }
+    }
+
     fn observe(&mut self, snap: &net::snapshot::Snapshot) {
         let p = &net::protocol::PROTOCOL_V1;
         let i = |n: &str| snap.ps.field_i32(p, n);
@@ -9006,7 +9046,8 @@ impl ItemsProbe {
 /// push or ride writes: origin, velocity, ground entity, `pm_type` and the
 /// view yaw with the `delta_angles` yaw a rotating pusher adds to; and a
 /// `RIDE_ENT` line whenever a script mover's `solid`, `index` or `eFlags`
-/// changes. `client-probes/probe_ride` moves the mover; the trajectory lines
+/// changes, and a `RIDE_GONE` line when one leaves the snapshot.
+/// `client-probes/probe_ride` moves the mover; the trajectory lines
 /// `check_movers` prints are the mover's own half. Writes no fixture.
 #[derive(Default)]
 struct RideProbe {
@@ -9032,6 +9073,13 @@ impl RideProbe {
                 );
             }
         }
+        self.movers.retain(|num, _| {
+            let kept = snap.entities.contains_key(num);
+            if !kept {
+                println!("RIDE_GONE t={} num={num}", snap.server_time);
+            }
+            kept
+        });
         let i = |n: &str| snap.ps.field_i32(p, n);
         let f = |n: &str| f32::from_bits(snap.ps.field_i32(p, n) as u32);
         println!(

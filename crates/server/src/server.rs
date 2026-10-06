@@ -3148,17 +3148,26 @@ impl Server {
                     .copied()
                     .filter(|&(slot, s)| blast.reaches(&victim(slot, s)))
                     .collect();
+                // The turrets follow the clients, entity order.
+                let entities: Vec<_> = rt
+                    .blast_entities()
+                    .into_iter()
+                    .filter(|v| blast.reaches_entity(v))
+                    .collect();
+                // A client a callback of this walk killed is a corpse and
+                // stops nothing.
+                let live_bodies =
+                    |rt: &script::ScriptRuntime| -> Vec<crate::game::combat::HitBody> {
+                        sims.iter()
+                            .filter(|(other, _)| !rt.client_vitals(*other).dead)
+                            .filter_map(|(other, s)| s.hit_body(*other))
+                            .collect()
+                    };
                 for (slot, s) in candidates {
                     if !rt.client_vitals(slot).takedamage {
                         continue;
                     }
-                    // A client a callback of this walk killed is a corpse
-                    // and stops nothing.
-                    let bodies: Vec<crate::game::combat::HitBody> = sims
-                        .iter()
-                        .filter(|(other, _)| !rt.client_vitals(*other).dead)
-                        .filter_map(|(other, s)| s.hit_body(*other))
-                        .collect();
+                    let bodies = live_bodies(rt);
                     let models = rt.placed_script_models();
                     if let Some(hit) = blast.hit(
                         &victim(slot, s),
@@ -3168,6 +3177,15 @@ impl Server {
                         bones.as_mut(),
                     ) {
                         rt.deliver_hits(vec![hit], self.sv_time_ms);
+                    }
+                }
+                for v in entities {
+                    let bodies = live_bodies(rt);
+                    let models = rt.placed_script_models();
+                    if let Some(damage) =
+                        blast.entity_damage(&v, collision, &models, &bodies, bones.as_mut())
+                    {
+                        rt.damage_entity(v.id, damage, x.owner);
                     }
                 }
             }

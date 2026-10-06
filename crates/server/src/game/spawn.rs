@@ -118,6 +118,14 @@ pub fn spawn_entities_from_string(
                                 .as_deref()
                                 .and_then(crate::game::turret::TurretTags::from_bones);
                             host.turrets.insert(id, rec);
+                            let health = cx.intern_folded("health");
+                            if matches!(
+                                host.get_field(cx, id, health),
+                                Value::Int(0) | Value::Undefined
+                            ) {
+                                let full = Value::Int(crate::game::turret::TURRET_HEALTH);
+                                host.set_field(cx, id, health, full)?;
+                            }
                         }
                     }
                 }

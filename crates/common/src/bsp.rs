@@ -268,6 +268,7 @@ impl Bsp {
             nodes: self.nodes.clone(),
             leafs: self.leafs.clone(),
             pvs: self.pvs.as_ref().map(Pvs::clone_rows),
+            models: self.models.iter().map(|m| (m.mins, m.maxs)).collect(),
         }
     }
 }
@@ -281,6 +282,9 @@ pub struct Visibility {
     nodes: Vec<Node>,
     leafs: Vec<Leaf>,
     pvs: Option<Pvs>,
+    /// Lump 27's bounds per inline model, what a brush model entity links
+    /// with.
+    models: Vec<([f32; 3], [f32; 3])>,
 }
 
 impl Visibility {
@@ -293,6 +297,7 @@ impl Visibility {
             nodes: Vec::new(),
             leafs: Vec::new(),
             pvs: None,
+            models: Vec::new(),
         }
     }
 
@@ -316,7 +321,13 @@ impl Visibility {
                 cell: 0,
             }],
             pvs: None,
+            models: Vec::new(),
         }
+    }
+
+    /// Inline model `n`'s bounds, `None` past the model count.
+    pub fn model_bounds(&self, n: usize) -> Option<([f32; 3], [f32; 3])> {
+        self.models.get(n).copied()
     }
 
     /// The leaf a point falls in, by walking the tree from node 0. The engine
