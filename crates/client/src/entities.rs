@@ -740,6 +740,18 @@ pub struct BuiltScene {
     pub static_submodels: Vec<usize>,
 }
 
+/// The model rotation an entity draws with. Players are yaw-only; their
+/// pitch comes from `apply_aim`. Everything else goes through `AnglesToAxis`
+/// (`cgame_mp_x86.dll` 0x3003c770, called by every model draw off
+/// `CG_AddCEntity`), so pitch positive tips the nose down and a grenade
+/// tumbles forward.
+fn model_rotation(visual: &EntityVisual, angles: Vec3) -> Quat {
+    match visual {
+        EntityVisual::Player { .. } => Quat::from_rotation_z(angles.y.to_radians()),
+        _ => angles_quat(angles.to_array()),
+    }
+}
+
 /// Builds this frame's live-entity draw list from the interpolation pair
 /// `(a, b, f)` the camera uses. `skip_num` is the entity the camera is inside
 /// (our own, or the followed player's; docs/research/cod11-events-and-fx.md,
@@ -868,20 +880,9 @@ pub fn build_instances(
             continue; // never feed a NaN transform to the GPU
         }
         entity_pos.insert(num, pos);
-        let [pitch, yaw, roll] = angles.to_array();
-        // Players are yaw-only; their pitch comes from `apply_aim`. Everything
-        // else gets the full `AnglesToAxis` order so a grenade spins.
-        let transform = match &visual {
-            EntityVisual::Player { .. } => {
-                Mat4::from_rotation_translation(Quat::from_rotation_z(yaw.to_radians()), pos)
-            }
-            _ => {
-                let rot = Quat::from_rotation_z(yaw.to_radians())
-                    * Quat::from_rotation_y(-pitch.to_radians())
-                    * Quat::from_rotation_x(roll.to_radians());
-                Mat4::from_rotation_translation(rot, pos)
-            }
-        };
+        let yaw = angles.y;
+        let rot = model_rotation(&visual, angles);
+        let transform = Mat4::from_rotation_translation(rot, pos);
 
         match visual {
             EntityVisual::Player {
@@ -1214,9 +1215,6 @@ pub fn build_instances(
                 let barrel = turret::barrel(from.map(a2), a2(ent), f);
                 turret::apply_controller(&mut pose, &rig.skeleton, barrel);
 
-                // AnglesToAxis, unlike the generic transform above.
-                let rot = angles_quat(angles.to_array());
-                let transform = Mat4::from_rotation_translation(rot, pos);
                 let worlds = pose.bone_worlds(&rig.skeleton);
                 let tag = |name: &str| {
                     let (lp, lr) = worlds[rig.skeleton.bone_index(name)?];
@@ -1282,6 +1280,32 @@ mod tests {
     use std::collections::BTreeMap;
     use vcod_common::net::msg::{ClientState, EntityState};
     use vcod_common::net::protocol::{CS_MODELS_V1, CS_TAGS_V1, PROTOCOL_V1};
+
+    /// A model's axis is `AnglesToAxis` of its angles: pitch positive puts
+    /// the nose down, and the left axis is `-right`. A player only yaws.
+    #[test]
+    fn model_rotation_is_angles_to_axis() {
+        let model = EntityVisual::Model("xmodel/prop".into());
+        for a in [[30.0, 0.0, 0.0], [-20.0, 135.0, 0.0], [715.0, 40.0, 370.0]] {
+            let q = model_rotation(&model, Vec3::from(a));
+            let axis = vcod_common::pmove::aim::angles_to_axis(a);
+            for (v, want) in [Vec3::X, Vec3::Y, Vec3::Z].into_iter().zip(axis) {
+                assert!(
+                    (q * v).abs_diff_eq(Vec3::from(want), 1e-4),
+                    "{a:?}: {:?}",
+                    q * v
+                );
+            }
+        }
+        assert!((model_rotation(&model, Vec3::new(30.0, 0.0, 0.0)) * Vec3::X).z < 0.0);
+        let player = EntityVisual::Player {
+            body: Default::default(),
+            attachments: Vec::new(),
+        };
+        let q = model_rotation(&player, Vec3::new(30.0, 90.0, 10.0));
+        assert!((q * Vec3::X).abs_diff_eq(Vec3::Y, 1e-5));
+        assert!((q * Vec3::Z).abs_diff_eq(Vec3::Z, 1e-5));
+    }
 
     #[test]
     fn weapon_list_splits_from_captured_gamestate() {
