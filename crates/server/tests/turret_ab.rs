@@ -23,7 +23,7 @@ use common::{CMD_MS, ClientEnd, FRAME_MS, Queues, holding};
 use vcod_common::animtree::PlayerAnims;
 use vcod_common::net::NetClient;
 use vcod_common::net::events::EventTracker;
-use vcod_common::net::msg::{BUTTON_ATTACK, BUTTON_USE, NULL_USERCMD, UserCmd};
+use vcod_common::net::msg::{BUTTON_ATTACK, BUTTON_USE, NULL_USERCMD, UserCmd, WBUTTON_CROUCH};
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::pmove::aim::angle_subtract;
 use vcod_server::Server;
@@ -86,6 +86,8 @@ struct Rig {
     /// The turret's own entity number, read off the gunner's snapshot once
     /// the placement has settled.
     gun: u32,
+    /// The target's `wbuttons` on every frame's cmd.
+    target_wbuttons: u8,
 }
 
 /// One drained event: the id, its parm and whose it was (see [`who`]).
@@ -184,6 +186,7 @@ fn build(cvars: &[(&str, &str)], weapon: &str, gunner_second: bool) -> Option<Ri
         gunner_second,
         events: EventTracker::new(),
         gun: 0,
+        target_wbuttons: 0,
     };
     for _ in 0..40 {
         let h = rig.still();
@@ -238,7 +241,11 @@ impl Rig {
         }
         self.now = start + Duration::from_millis(FRAME_MS as u64);
         self.target.pump_at(self.now);
-        self.target.send_frame(&holding(&self.target));
+        let held = UserCmd {
+            wbuttons: self.target_wbuttons,
+            ..holding(&self.target)
+        };
+        self.target.send_frame(&held);
         if self.gunner_second {
             common::step_pair(
                 &mut self.sv,
@@ -538,6 +545,52 @@ fn a_round_on_the_target_lands_in_the_frame_it_was_fired() {
     assert_eq!(s.viewlocked, 2);
     let after = rig.target.snapshots().newest().unwrap().ps.health();
     assert!(after < before, "health {after} on the shot's own snapshot");
+}
+
+/// A round fired from `ClientEndFrame` meets the target posed as its own
+/// end frame last left it when the target's slot is higher, and as this
+/// frame's when it is lower (combat doc 16.1, turrets doc 6.1). The target
+/// stands up from a crouch on the frame the gun fires at its standing head.
+fn round_at_a_target_standing_up(gunner_second: bool) -> Option<i32> {
+    let mut rig = build(&[], "m1carbine_mp", gunner_second)?;
+    rig.tap(BUTTON_USE);
+    rig.target_wbuttons = WBUTTON_CROUCH;
+    rig.hold(10);
+    let p = &PROTOCOL_V1;
+    let gun = rig.gun_origin();
+    let target = rig.target.snapshots().newest()?.ps.origin(p);
+    // At a standing head; the crouched bones end below it.
+    let (dx, dy, dz) = (
+        target[0] - gun[0],
+        target[1] - gun[1],
+        target[2] + 62.0 - (gun[2] + 21.0),
+    );
+    let yaw = dy.atan2(dx).to_degrees();
+    let pitch = -dz.atan2(dx.hypot(dy)).to_degrees();
+    for _ in 0..4 {
+        rig.look([pitch, yaw]);
+    }
+    let before = rig.target.snapshots().newest()?.ps.health();
+    assert_eq!(before, 100);
+    rig.target_wbuttons = 0;
+    let h = rig.still();
+    let fire = UserCmd {
+        buttons: h.buttons | BUTTON_ATTACK,
+        ..h
+    };
+    let s = rig.frame_at(&[(CMD_MS, fire)]);
+    assert_eq!(s.viewlocked, 2);
+    Some(before - rig.target.snapshots().newest()?.ps.health())
+}
+
+#[test]
+fn a_round_meets_a_higher_slots_last_pose_and_a_lower_slots_new_one() {
+    let Some(higher) = round_at_a_target_standing_up(false) else {
+        return;
+    };
+    assert_eq!(higher, 0, "the target in slot 1 is still posed crouched");
+    let lower = round_at_a_target_standing_up(true).unwrap();
+    assert!(lower > 0, "the target in slot 0 has stood up");
 }
 
 /// The gun's `angles2` as the target's newest snapshot carries it: the

@@ -2643,14 +2643,15 @@ unsnapped on the `trigger_hurt` path too, and `item::launch_weapon` already
 read the field. Pinned by `a_player_killed_mid_cook_drops_a_live_grenade`
 (`crates/server/tests/combat.rs`), which stands the player off the unit grid
 and holds the `kill` drop to the unsnapped origin plus 40, and
-`a_trigger_hurt_death_drops_from_the_snapped_origin`
-(`crates/server/src/server.rs`), which holds a `trigger_hurt` death's grenade
-and weapon to the truncated one. Not modelled: fall damage, so the second
-snapped path does not exist here; the weapon drop's tag trace and flight
+`a_trigger_hurt_death_drops_and_clones_at_the_snapped_origin`
+(`crates/server/src/server.rs`), which holds a `trigger_hurt` death's grenade,
+weapon and corpse to the truncated one. `cloneplayer` places the body at the
+`origin` field, as retail's `G_SetOrigin(body, self->r.currentOrigin)` (5.2)
+does, so a `trigger_hurt` corpse lies at the truncated origin and a bullet's
+at the unsnapped one. Not modelled: fall damage, so the second snapped path
+does not exist here; the weapon drop's tag trace and flight
 (`cod11-items.md` 11), so the snap moves the weapon's start and not much
-else; and `cloneplayer`, which still copies the mirrored entity state, so a
-corpse born of a `trigger_hurt` stands on the unsnapped origin where retail's
-`G_SetOrigin(body, self->r.currentOrigin)` (5.2) would truncate it.
+else.
 
 ### 5.6 A spawn leaves `health` alone
 
@@ -4323,9 +4324,14 @@ script's own; both walks are 14.5's. The divergences left are listed in
 `cod11-gsc-language.md`'s `radiusDamage` entry. Every victim is measured
 and probed at its unsnapped origin, and the second chance's midpoint is
 taken at `BlastVictim::link_origin`: `ClientSim::link_origin` for a
-grenade's blast, the truncated origin unless the client is linked, and the
-truncated `origin` field for the builtin's. A `setOrigin` since the last cmd
-is not modelled. The falloff is computed at
+grenade's blast, the truncated origin unless the client is linked or its last
+link was a `setOrigin` or `TeleportPlayer` with no cmd since, and for the
+builtin's the same value mirrored onto `GameHost::client_link_origin`, which
+the `setOrigin` builtin moves to its own unsnapped origin at once. Pinned by
+`a_set_origin_links_unsnapped_until_the_next_cmd`
+(`crates/server/src/spectate.rs`). INFERRED, off `TeleportPlayer`'s
+`r.currentOrigin` store ahead of its link (turrets doc 8): a release links
+unsnapped the same way. The falloff is computed at
 double precision because f32 loses a point of damage at the round ratios a
 script picks -- `50 + (1 - 100/300) * 1950` truncates to 1349 in f32 and 1350
 in f64 -- and retail's own x87 arithmetic is not reproducible in either
@@ -4759,6 +4765,98 @@ order reaches it only through ties; `G_TouchTriggers` touches every hit in
 list order, so the order shows only where two touches' side effects meet
 (two weapons on one spot); the rest walk the whole list.
 
+**Every other link.** VERIFIED, `game.mp.i386.so`, the stores to
+`r.contents` (`ent+0x118`) and the link calls beside them: `G_SpawnItem`
+writes 0x407c0108 (0x4e778) and links (0x4e847), and `FinishSpawningItem`
+links again after its drop (0x4e4f2); `LaunchItem` writes 0x407c0108
+(0x4dc97) and links (0x4dd2f); `G_RunItem` links (0x4ec19); `Touch_Item`
+writes 0 (0x4d90c, 0x4d9ce) and links (0x4da33); `RespawnItem` writes
+0x407c0008 (0x4ece9) and links (0x4ed05). `SP_trigger_multiple` and
+`SP_trigger_once` write 0 with `spawnflags & 8`, else 0x40000000 (0x64d66,
+0x64d79; 0x65cb1, 0x65cc4), OR 0x40000, 0x80000 and 0x100000 into it for
+`spawnflags` 1, 2 and 4 (the byte at `+0x11a`, 0x64d83..0x64dac,
+0x65cce..0x65cf7), and link (0x64db7, 0x65d02); `SP_trigger_damage`
+writes 0x405c0008 (0x653cd) and links (0x653ec); `SP_trigger_lookat` writes
+0x20000000 and links (0x65e03, 0x65e1f); `SP_trigger_hurt` writes 0x405c0008
+(0x64f6c) and has no link of its own; `trigger_use` links (0x5744b) and then
+writes 0x200000 (0x5745a). Each of them calls `trap_SetBrushModel` first,
+and `cod_lnxded`'s `0x8089544` behind it sets the submodel's bounds into
+`r.mins`/`r.maxs`, `r.bmodel` 1, `r.contents` -1, and calls `SV_LinkEntity`.
+`SP_script_brushmodel` sets the brush model, writes 1 (0x60fd4) and links
+(0x60fe5); `SP_script_model` writes 0x2080 (0x61010), ORs 4 into
+`r.svFlags` and links (0x61028); `SP_script_origin` writes 0 (0x61047) and
+links (0x61055). `Scr_SetOrigin`, the `origin` field's setter (0x5c61c),
+links (0x5c64f); `Scr_SetAngles` (0x5c660) does not. `G_RunMover` reaches
+`G_MoverTeam` only when `s.pos.trType` or `s.apos.trType` is non-zero
+(0x57666..0x57670), and `G_MoverPush` links the pusher at its new
+`r.currentOrigin` (0x553ae). `fire_grenade` and `fire_rocket` write no
+contents (cod11-movers.md 12). VERIFIED, `cod_lnxded` `SV_LinkEntity`: a
+brush model whose `r.currentAngles` are all zero takes `r.absmin`/`r.absmax`
+as origin plus `r.mins`/`r.maxs`, and one with any angle set a cube of
+`RadiusFromBounds` (0x8066e54, called at 0x8090b20) about the origin;
+either is then grown one unit. INFERRED: `0x80c4f6c`, the bounds a
+`script_model` is filed under, reads its model's `+0x4c..+0x60`, which the
+descriptor loader (0x80c1164) fills from the six floats after the version;
+that they are the same words is not traced.
+
+VERIFIED, the entity lumps of every `maps/mp/*.bsp` in the stock paks: no
+`trigger_multiple` or `trigger_once` carries `spawnflags & 8`; the values
+seen are 0, 2 and 7.
+
+INFERRED, from the above: items lying in the world, triggers but a
+`spawnflags & 8` one with no 1, 2 or 4, `script_brushmodel`s and `script_model`s are in the
+tree from their spawn; missiles, temp entities, corpses, `script_origin`s
+and taken items never are. A `trigger_hurt` stays where its contents -1
+link filed it and the walk tests its 0x405c0008; a `trigger_use` the same
+with 0x200000. A `notSolid` brush model stays linked with contents 0.
+
+**The touch pass.** VERIFIED, `G_TouchTriggers` (0x3f88c): the walk at
+0x3f925 with mask 0x405c0008, then one loop over the list in its order
+(0x3f9aa..0x3faa2). Per entity: it skips one whose `touch` (`+0x20c`) is
+null when the player's is null too (0x3f9cd..0x3f9e0); tests `eType` 3
+(0x3f9e6) and calls `BG_PlayerTouchesItem` for it (0x3fa03) or
+`trap_EntityContact` for anything else (0x3fa16); on a hit, with the script
+system up, notifies the entity `"touch"` with the player (0x3fa4d) and the
+player `"touch"` with the entity (0x3fa6f); then calls the touch function
+(0x3fa8b). VERIFIED: `SP_trigger_multiple` and `SP_trigger_once` set
+`Touch_Multi` (0x64cdd, 0x65c22), `SP_trigger_hurt` `hurt_touch`
+(0x64fe2), and `SP_trigger_damage` sets a `use` and no touch (0x65348).
+INFERRED: items and triggers are touched in one walk, in the tree's order,
+and a `trigger_damage` is never touched.
+
+VERIFIED, `client-probes/probe_touchorder` on retail, 2026-10-06, one
+client under dm on mp_pavlov, standing at (-10936.5, 12051.0, -29.7), where
+the minefield triggers 101 and 102 overlap; three `item_health` spawned
+there 8 units apart in the order a, b, c (77, 78, 79), the player at full
+health so none is taken. Per phase, the lines of the first cmd of a frame:
+
+| phase | before it | lines |
+|---|---|---|
+| spawned | | `f 101`, `f 102`, `t c`, `t a`, `t b`, `mt 101`, `pt 102`, `mt 102` |
+| kept | a's `origin` one unit along x | the same |
+| moved | a's `origin` 4000 units along -y, then back | `f 101`, `f 102`, `t c`, `t b`, `t a`, `mt 101`, `pt 102`, `mt 102` |
+
+`f` is a trigger's `"trigger"`, `t` an item's `"touch"`, `mt` a mine's
+`"touch"` and `pt` the player's `"touch"` with the entity it names. VERIFIED,
+the same log: the `f` pair repeats once per further cmd of the frame, and
+no `t`, `mt` or `pt` line does.
+
+VERIFIED, the same probe with `probe_mode ammo`: three `mosin_nagant_mp`
+items spawned the same way as d, e, f, `count` 5 each, the player's mosin
+reserve set to 149 of 150; `PROBE take e` and no other take.
+
+INFERRED, from the ammo run: the walk meets e first, since only the first
+grab finds room in the reserve. vcod's tree replaying the same link history
+lists the five as 102, 101, b, a, c after the spawn and after `kept`, and
+102, 101, a, b, c after `moved` (`touch_pass` trace on `vcod-server`, below),
+and lists e first in the ammo run. INFERRED: those lists are retail's too:
+running each phase's woken threads in the reverse of the order they were
+woken, the first notify of a frame waking each waiter, gives every `t`,
+`mt` and `pt` line in the table from them, and the `f` pair in the same
+reverse. The rule for when woken threads run, and why the `"touch"`
+waiters wake once a frame where the `"trigger"` ones wake once a cmd, is
+not settled here.
+
 **As implemented.** `crate::area::AreaTree` is the tree above, port for
 port: the lazy split on the region handed in, the one-level push-down, the
 512 floor, the 0x400 pool, the freeing unlink, the keep-your-place relink
@@ -4766,26 +4864,49 @@ and the walk. `GameHost::area` holds it; `AreaTree::for_map` builds it at a
 map load from inline model 0 and `vcod_common::props::area_bounds` (the
 static models' boxes, as `0x80c241c` takes them), and a `map_restart`
 carries it with every entity unlinked. Every link goes through
-`AreaTree::link`: a client's after each cmd's shots and before its touch
+`AreaTree::link`. A client's: after each cmd's shots and before its touch
 pass (`Server::replay_moves`, contents as the sim's end frame left them, 0
 for a spectator, none at intermission), `self spawn` and `setOrigin` as an
 unlink and a link, `GameHost::die` as `player_die`'s unlink and corpse
-link, a turret at its spawn, an unlink at a disconnect. Both walks take
-their candidates from `entities_in_box` over the blast's box: the
-`radiusDamage` builtin (`builtins::combat::blast_candidates`) and the
-grenade pass in `Server::tick`, clients and turrets interleaved as the tree
-lists them. `probe_blastorder` against `vcod-server` read every `cb` row
+link, an unlink at a disconnect. Every other entity's through
+`GameHost::link_entity`, off the `LinkShape` (`r.contents`, `r.mins`,
+`r.maxs` and the box rule) its spawn function set: a turret at its spawn;
+a trigger's two links at the map load (`trigger::link`); a
+`script_brushmodel`'s two and a `script_model`'s one at the map load or a
+script `spawn`; an item at `G_SpawnItem`, `LaunchItem`, its taking and its
+respawn; any `origin` write on an entity with no client
+(`Host::set_field`, which is how `Scr_SetOrigin`, an item's flight and its
+drop to the floor link); a mover once a frame while it moves, at its clip
+pose. `notSolid`/`solid` on a `script_brushmodel` write the contents
+without a link (`AreaTree::set_contents`), as `trigger_hurt` and
+`trigger_use` do at their spawn; a delete and a free unlink. The walks:
+both blast walks take their candidates from `entities_in_box` over the
+blast's box and keep the clients and turrets, in the tree's order (the
+`radiusDamage` builtin's `builtins::combat::blast_candidates` and the
+grenade pass in `Server::tick`); the touch pass (`trigger::touched`, run by
+`ScriptRuntime::touch_triggers_at` per cmd) walks it with mask 0x405c0008
+and touches items and triggers in that one order, each with the two
+`"touch"` notifies first. `probe_blastorder` against `vcod-server` read every `cb` row
 above in retail's order, and `probe_blastloop`'s `same_frame_high` now runs
-3 then 2. `the_tree_replays_probe_blastorder_on_mp_carentan`
+3 then 2. `probe_touchorder` against `vcod-server` takes e in the ammo run,
+as retail does, where the entity-number order took d.
+`the_tree_replays_probe_blastorder_on_mp_carentan`
 (`crates/server/src/area.rs`) and
 `radiusdamage_walks_its_victims_in_the_area_trees_order`
-(`crates/server/src/game/builtins/combat.rs`) replay the table, the second
-through the builtins. Not routed through the tree: items, script models and
-brush models, triggers, movers and missiles, a linked client's per-frame
-relink in `G_RunClient`, and a gunner's relink in the turret think. None of
-them takes damage from a blast, so they change the walk only where their
-push-downs split a node the victims share. vcod's touch pass keeps its own
-order.
+(`crates/server/src/game/builtins/combat.rs`) replay the blast table.
+
+Not routed through the tree: a linked client's per-frame relink in
+`G_RunClient`, a gunner's relink in the turret think, `func_*` entities
+(vcod spawns none of them), the link `ScriptEntCmd_MoveTo` and
+`Reached_ScriptMover` make at a move's ends, `linkTo`'s `G_GeneralLink`, and
+an entity whose box touches no BSP leaf, which `SV_LinkEntity` unlinks
+(the leaf count at 0x8090c68, the unlink at 0x8090c84). Not walking it yet: `G_GetActivateEnt` (the use key; sorted
+by score, so the order reaches it only through ties), `G_TryPushingEntity`
+(a mover's push, mask 0x2000180), `G_KillBox`, `positionWouldTelefrag` and
+the two trigger-damage walks. vcod delivers the `"touch"` and `"trigger"`
+notifies at the top of the next script frame in the order they were
+raised, and runs their waiters in thread age, so the log lines above come
+out in a different order on ours.
 
 ---
 
@@ -5234,10 +5355,16 @@ What still differs, each INFERRED from 16.1 and not measured:
 - The packets of a tick run at the tick, after the clock has advanced;
   retail runs them as they arrive, on the previous frame's `level.time`
   (15.6's 50 ms). Their relative order is the same.
-- `turret_think_client` fires in a pass of its own after every slot's aim
-  trace, so a gunner's rounds meet every slot's new pose, where retail's,
-  inside the gunner's own `ClientEndFrame` (`cod11-turrets.md` 6.1), meet a
-  higher slot's last-frame one.
+- A gunner's rounds are traced inside its own slot's turn of the end-frame
+  loop, right after its `commit_pose`, so they meet a lower slot's new pose
+  and a higher slot's last-frame one, as retail's inside `ClientEndFrame`
+  (`cod11-turrets.md` 6.1) do; pinned by
+  `a_round_meets_a_higher_slots_last_pose_and_a_lower_slots_new_one`
+  (`crates/server/tests/turret_ab.rs`). Their hits are delivered after the
+  whole loop, where retail runs each callback inside the gunner's
+  `ClientEndFrame`, before any higher slot's aim trace and anim update; a
+  callback that moves or kills a higher slot is therefore seen one pass late
+  by that slot's aim trace and pose.
 
 VERIFIED, two runs against ours on 2026-09-27, the `probe_passthru` recipe
 of `client-probes/README.md` with one `--probe-target --probe-team axis` and

@@ -165,10 +165,30 @@ ran 0.7 to 1.5 on ten maps, 1.6 on `mp_depot` and 1.7 to 2.0 on `mp_ship`.
   the build in `CollisionWorld::trace_node`.
 - VERIFIED (measured): a debug build (the test profile) of `mp_carentan` takes
   about 7 s.
+- VERIFIED (measured, same example, the table's builds against the ones
+  after the collision BVH moved to a binned surface-area split with the
+  static models in a subtree of their own; the two binaries interleaved,
+  twice, on the same laptop under a load average of 70-80 from other
+  builds): the builds of all twelve maps took 184 s of CPU against 288 s,
+  map loads included, and each map's best wall time came down 1.2x
+  (`mp_ship`) to 2.0x (`mp_railyard`). `perf` had put 77% of the old build in
+  `trace_node`'s own box tests: a build's trace entered 111 BVH nodes on
+  average on `mp_rocket` and 284 on `mp_depot`, against 58 and 85 after. Spawn
+  connectivity is unchanged on every map; edge counts move by at most 14.
+  INFERRED: the moved edges are walks whose trace contacts tie, which the
+  new walk order resolves differently.
 - The server builds the graph on the first tick with bots, not at map load,
   and keeps every graph for the life of the process (`nav::graph_for`), so a
   map cycle that comes back to a map, and the test gates that start one server
   per test, build it once.
+- The binary builds it on a thread of its own (`nav::NavJob`) over a copy
+  of the collision taken on that tick, 5-40 ms on the tick thread (VERIFIED,
+  measured under the same load), so the server keeps its 20 Hz through a
+  build of seconds and the bots wander until the graph lands. A
+  `vcod --net-probe` on a `mp_rocket` server with two bots read 20 snapshots
+  a second through the whole build (VERIFIED, measured). Tests leave
+  `Server::build_nav_in_background` off and wait for the graph on that tick,
+  so a run does not depend on how fast the build was.
 - VERIFIED (the off-component spawns' heights against the map's
   `SURF_LADDER` brushes): `mp_ship`'s gap was its upper decks, which connect
   by ladders, and the ladder pass closed most of it (section 2, "Ladders").
@@ -194,7 +214,16 @@ else a spot it remembers or heard, section 4) or `Roam`. A per-bot `nav::Followe
   height: a ladder's head stands right above its foot. A waypoint four grid
   steps away means the bot left the path: plan again. Forty ticks without
   closing on a waypoint, height counted with the flat distance so a climb
-  closes in, drops the path and leaves the bot 20 ticks to its own unstick.
+  closes in, drop the path, and the edge the bot was on stays out of its
+  plans for 200 ticks (10 s); when no path goes round it, the plan takes it
+  anyway. Stuck before the first node, the bot is left 20 ticks to its own
+  unstick.
+- VERIFIED (measured, `mp_rocket` `sd`, 2 bots, shoot off, seed 1): an
+  attacker guarding the planted bomb stood at the foot of the stairs down to
+  it, on the graph's edge, and the defender behind him gave up and planned
+  the same edge again for about 11 s; the defuse came 1110 ticks after the
+  plant. Planning round the edge takes the diagonal past him after one 2 s
+  stall, and the defuse comes 886 ticks after the plant.
 
 The brain runs at the waypoint, looks 45 degrees up when it is more than 48
 units above or the body is on a ladder (`BotView::on_ladder`, `ps.on_ladder`),

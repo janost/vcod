@@ -462,6 +462,26 @@ vcod: `crate::game::wire` sends a `script_brushmodel` as `eType` 8, `solid`
 their radius once its angles are not zero, `SV_LinkEntity`'s `r.bmodel`
 arm). `ride_ab.rs` diffs the slab's entity per snapshot against the capture.
 
+VERIFIED, off a fourth capture, 2026-10-06:
+`crates/server/tests/fixtures/movers/mp_carentan-dm-cull.txt`, from
+`client-probes/probe_cull.gsc` and a `--probe-ride` client standing on the
+attackers' spawn. `movez(20000, 8)` on the slab at 12350 took entity 177 out
+of the 13300 snapshot, the first frame its trajectory stood 2375 units up
+(2250 on the frame before), and `movez(-20000, 8)` at 21350 brought it back
+on the 28450 snapshot, the first frame the trajectory was down to 2250. A
+cull at `trBase` would have kept it for the whole lift (`trBase` is the
+segment's start) and dropped it for the whole descent. INFERRED, off that and
+`G_MoverPush` relinking the pusher at its moved `r.currentOrigin` and
+`r.currentAngles` every frame it moves (section 12, `0x553ae`): the snapshot
+cull reads the clusters of the box the mover was last linked with, at its
+trajectory at the level time.
+
+vcod evaluates an `eType` 8 entity's `pos` and `apos` at the frame's level
+time for the cull (`crate::world::entity_visible`). VERIFIED, vcod
+measurement with the same probe and client against ours: the slab left the
+snapshot 950 ms into the lift and came back 7100 ms into the descent, as on
+retail.
+
 ### The client
 
 VERIFIED, `cgame_mp_x86.dll`: case 8 of the entity-type switch at
@@ -481,13 +501,18 @@ surfaces are in world space; the only submodels with draw surfaces belong to
 none. INFERRED: the ride capture's slab is clip only, drawn by nothing on
 retail either.
 
+INFERRED, off the ref entity at `0x3001b76d` naming the inline model rather
+than an xmodel: the renderer draws a moved brush model's own BSP surfaces,
+lightmap indices and all, so it keeps the lighting baked where it was
+compiled. Not read in `CoDMP.exe`.
+
 vcod: `entities::resolve_visual` takes a `0xffffff` entity's `index` as its
 inline model and skips one with `eFlags` `0x100`. A brush model whose entity
-stands at the zero pose draws with the world, lightmapped; one that has moved
-draws as a dynamic instance at its interpolated pose, under the dynamic
-models' fixed key light; one with no entity in the snapshot draws nowhere
-(`Renderer::set_static_submodels`). With no server, every one draws at
-spawn.
+stands at the zero pose draws with the world; one that has moved draws its
+own soups through the world's pipelines and lightmaps under a camera whose
+`model` matrix is its interpolated pose; one with no entity in the snapshot
+draws nowhere (`Renderer::set_submodels`). With no server, every one draws
+at spawn.
 
 VERIFIED, `cgame_mp_x86.dll`: `CG_ClipMoveToEntities` (`0x30028df0`) takes
 an entity whose `solid` is `0xffffff` down a separate arm that calls syscall
@@ -529,6 +554,38 @@ INFERRED, off the `eFlags` test and section 14's wire: a `notSolid()`ed
 brush model still in the snapshot is clipped by retail's prediction, as the
 four exploder brush models `_load.gsc` hides and `notSolid()`s are (mp_depot
 `*1`, mp_powcamp `*3` and `*9`, mp_rocket `*3`; cod11-mantle.md).
+
+VERIFIED, cgame `0x3001d210` (`CG_CalcEntityLerpPositions` by its shape):
+it reads `currentState.pos.trType` (`cent+0xc`, `0x3001d216`) and calls the
+snapshot lerp `0x3001d090` when it is 1, `TR_INTERPOLATE` (`0x3001d219`), or
+when it is 3, `TR_LINEAR_STOP`, and the entity number is below `0x40`
+(`0x3001d22d`, `0x3001d232`). Otherwise it calls `BG_EvaluateTrajectory`
+twice at `cg.time` (`0x30207148`, `0x3001d246`, `0x3001d25b`) into
+`cent+0x1f8` and `cent+0x204`, and, unless `cent` is `0x3020922c`, calls
+`0x3001baa0` at `0x3001d2ee` with `currentState.groundEntityNum`
+(`cent+0x7c`), `cg.snap->serverTime` (`[0x301e2160]+8`), `cg.time` and a
+null angle out (`ecx` 0 from `0x3001d263`, pushed at `0x3001d2dd`), the
+origin `cent+0x1f8` as both in and out. VERIFIED: `0x3001baa0` copies in to
+out unchanged unless the number is above 0 and below `0x3fe` (`0x3001bab5`,
+`0x3001babd`) and that entity's `eType` is 5 or 8 (`0x3001bad6`,
+`0x3001badf`). INFERRED: `0x3020922c` is `cg.predictedPlayerEntity`; any
+entity whose position is not lerped is drawn off the older snapshot's
+trajectories at the drawn time and carried by its ground mover's translation
+since that snapshot, so an item resting on a moving brush model (section 12:
+`trType` 0, ground the mover) rides it smoothly between snapshots, and one
+with no mover under it holds its older `trBase` until the next snapshot.
+
+VERIFIED, game.mp `G_GeneralLink` (`0x68530`), which `G_RunMover` calls for
+a linked entity (section 11): `G_SetFixedLink(ent, 0)`, `G_SetOrigin` and
+`G_SetAngle` at the re-anchored `r.currentOrigin` and `r.currentAngles`,
+then 1 to `pos.trType` and `apos.trType` (`0x68568`, `0x6856f`) and
+`trap_LinkEntity`. INFERRED: a script model linked to a mover goes out
+`TR_INTERPOLATE` at its re-anchored pose every frame, and the client lerps
+it between snapshots; the ground carry above never reaches it.
+
+vcod: `entities::lerp_pos_angles` makes the same choice on the older
+snapshot's state and carries through `SnapshotMovers::carry`. `linkTo` on
+a receiver that is not a player errors on ours.
 
 vcod: `vcod_common::pmove::movers::SnapshotMovers` is that solid list and
 that carry. The client unlinks every submodel at map load, and each

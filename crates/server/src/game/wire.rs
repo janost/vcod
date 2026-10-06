@@ -36,7 +36,7 @@ use vcod_gsc::{Cx, Host, Value};
 const ET_ITEM: i32 = 3;
 /// `ET_SCRIPTMOVER`: a script model, `index` a model configstring index, or
 /// a `script_brushmodel`, `index` its inline model number.
-const ET_SCRIPTMOVER: i32 = 8;
+pub(crate) const ET_SCRIPTMOVER: i32 = 8;
 /// `s.solid` of an entity linked as a brush model: `SV_LinkEntity` stores it
 /// for `r.bmodel` (cod_lnxded 0x80908da) whatever the entity's contents, so a
 /// `notSolid()`ed brush model keeps it (docs/research/cod11-movers.md 14).

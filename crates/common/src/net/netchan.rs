@@ -23,6 +23,8 @@ pub const MAX_RELIABLE_COMMANDS: usize = 64;
 /// `SV_ENCODE_START` (qcommon.h:1152): past the plain `reliableAcknowledge`.
 const SV_ENCODE_START: usize = 4;
 
+/// A client packet's u32 sequence and u16 qport, ahead of the message.
+const CLIENT_PACKET_PREFIX: usize = 4 + 2;
 /// Plain client header: u8 `serverId`, i32 `messageAcknowledge`, i32
 /// `reliableAcknowledge`.
 const CLIENT_HEADER_LEN: usize = 1 + 4 + 4;
@@ -167,7 +169,7 @@ impl Netchan {
         );
         encode(self, server_id, message_ack, reliable_ack, &mut comp);
 
-        let mut pkt = Vec::with_capacity(6 + CLIENT_HEADER_LEN + comp.len());
+        let mut pkt = Vec::with_capacity(CLIENT_PACKET_PREFIX + CLIENT_HEADER_LEN + comp.len());
         pkt.extend_from_slice(&self.outgoing_sequence.to_le_bytes());
         self.outgoing_sequence += 1;
         pkt.extend_from_slice(&self.qport.to_le_bytes());
@@ -230,7 +232,7 @@ impl ServerNetchan {
     /// A packet forged with the client's address and qport otherwise stalls
     /// the real client behind a huge sequence until it times out.
     pub fn process_in(&self, packet: &[u8]) -> Option<ClientMessage> {
-        if packet.len() < 6 + CLIENT_HEADER_LEN {
+        if packet.len() < CLIENT_PACKET_PREFIX + CLIENT_HEADER_LEN {
             return None;
         }
         let raw = u32::from_le_bytes(packet[..4].try_into().unwrap());
@@ -240,25 +242,14 @@ impl ServerNetchan {
         if raw <= self.incoming_sequence {
             return None;
         }
-        let body = &packet[6..];
+        let body = &packet[CLIENT_PACKET_PREFIX..];
         let server_id = body[0];
         let message_ack = i32::from_le_bytes(body[1..5].try_into().unwrap());
         let reliable_ack = i32::from_le_bytes(body[5..9].try_into().unwrap());
-        let mut ops = body[9..].to_vec();
-        // `SV_Netchan_Decode`: bare NUL wrap, no substitution, parity from the
-        // block's first byte. Same walk as `encode`.
+        let mut ops = body[CLIENT_HEADER_LEN..].to_vec();
         let string = self.reliable[reliable_ack as usize & (MAX_RELIABLE_COMMANDS - 1)].as_bytes();
-        let mut key = (self.challenge as u32 ^ u32::from(server_id) ^ message_ack as u32) as u8;
-        let mut index = 0usize;
-        for (i, byte) in ops.iter_mut().enumerate() {
-            if index >= string.len() {
-                index = 0;
-            }
-            let c = string.get(index).copied().unwrap_or(0);
-            key ^= c << (i & 1);
-            index += 1;
-            *byte ^= key;
-        }
+        let seed = self.challenge as u32 ^ u32::from(server_id) ^ message_ack as u32;
+        scramble_client_ops(seed as u8, string, &mut ops);
         Some(ClientMessage {
             sequence: raw,
             server_id,
@@ -365,9 +356,16 @@ fn decode(nc: &Netchan, buf: &mut [u8]) {
 /// substitution: the server walks its stored bytes raw (0x808dea9).
 fn encode(nc: &Netchan, server_id: i32, message_ack: i32, reliable_ack: i32, comp: &mut [u8]) {
     let string = nc.server_commands[reliable_ack as usize & (MAX_RELIABLE_COMMANDS - 1)].as_bytes();
-    let mut key = (nc.challenge as u32 ^ server_id as u32 ^ message_ack as u32) as u8;
+    let seed = nc.challenge as u32 ^ server_id as u32 ^ message_ack as u32;
+    scramble_client_ops(seed as u8, string, comp);
+}
+
+/// The client op block's XOR walk, its own inverse, so [`encode`] and
+/// [`ServerNetchan::process_in`] share it: bare NUL wrap, no substitution,
+/// parity from the block's first byte.
+fn scramble_client_ops(mut key: u8, string: &[u8], ops: &mut [u8]) {
     let mut index = 0usize;
-    for (i, byte) in comp.iter_mut().enumerate() {
+    for (i, byte) in ops.iter_mut().enumerate() {
         if index >= string.len() {
             index = 0;
         }

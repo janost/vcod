@@ -91,8 +91,8 @@ objective, since its rising edge also picks up weapons and mounts turrets.
   ticks with no link and tries again.
 
 VERIFIED (measured, `crates/server/tests/bot_objectives.rs`, 2 bots, shoot
-off, seed 7, `mp_carentan`): the attacker plants at tick 730 of the run,
-counting the match-start restart; the defender defuses 225 ticks later.
+off, seed 7, `mp_carentan`): the attacker plants at tick 729 of the run,
+counting the match-start restart; the defender defuses 226 ticks later.
 Sweeps over seeds 1, 2 and 7 with shoot off, 4 bots on `mp_carentan` and
 `mp_rocket` and 6 on `mp_harbor` and `mp_dawnville`, all planted and
 defused, the defuse 221 to 234 ticks after the plant. With 6 shooting bots
@@ -152,8 +152,8 @@ distance at which a body is clear of the goal trigger, and who carries it.
   units of its trigger.
 
 VERIFIED (measured, `crates/server/tests/bot_objectives.rs`, 2 bots, shoot
-off, seed 7, `mp_carentan`): the attacker picks up at tick 628 and delivers
-448 ticks later. The same run on each stock map for 150 s: 10 of 12 pick
+off, seed 7, `mp_carentan`): the attacker picks up at tick 554 and delivers
+486 ticks later. The same run on each stock map for 150 s: 10 of 12 pick
 up and deliver. On `mp_depot` the attacker never reaches the objective,
 which lies on an upper floor at z 148; on `mp_hurtgen` every round ends in
 an allied win within 18 s and nothing is picked up. Neither was looked into

@@ -270,6 +270,12 @@ fn a_bot_walks_toward_gunfire_it_cannot_see() {
     let slots = sv.bot_slots();
     let (fighters, listener) = ([slots[0], slots[1]], slots[2]);
     let a = sv.bot_body(fighters[0]).unwrap().origin;
+    // The fighters go eye to eye 100 units apart along +x; a spawn with a
+    // wall or pillar there leaves them blind and the fight silent.
+    assert!(
+        sv.test_clear_line(a, 0.0, 100.0),
+        "no sightline between the fighters at {a:?}"
+    );
     // A floor in a ring round the fight with the eye line to it blocked.
     let spot = (0..48)
         .filter_map(|i| {

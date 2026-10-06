@@ -70,11 +70,11 @@ fn an_attacker_bot_plants_and_a_defender_bot_defuses() {
     };
     // The match-start restart comes once both teams have a player; the
     // round after it is the one the bomb can be planted in.
-    // Seed 7 plants at tick 730 (37 s, about 10 s of it the walk).
+    // Seed 7 plants at tick 729 (36 s, about 10 s of it the walk).
     let planted = wait_for(&mut sv, &mut now, "bomb_plant", 1200);
     eprintln!("planted at tick {planted:?}");
     assert!(planted.is_some(), "no bomb planted in 60 s");
-    // The fuse is 60 s; seed 7 defuses 225 ticks after the plant.
+    // The fuse is 60 s; seed 7 defuses 226 ticks after the plant.
     let defused = wait_for(&mut sv, &mut now, "bomb_defuse", 1200);
     eprintln!("defused {defused:?} ticks after the plant");
     assert!(
@@ -90,7 +90,7 @@ fn an_attacker_bot_carries_a_retrieval_objective_home() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    // Seed 7 picks the documents up at tick 628 and delivers them 448
+    // Seed 7 picks the documents up at tick 554 and delivers them 486
     // ticks later; the lone defender guards and never shoots.
     let picked = wait_for(&mut sv, &mut now, "re_pickup", 1200);
     eprintln!("picked up at tick {picked:?}");
