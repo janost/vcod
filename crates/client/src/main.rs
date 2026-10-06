@@ -383,6 +383,14 @@ struct Args {
     /// Seconds --net-probe stays connected; an SD round boundary needs a few minutes
     #[arg(long, default_value_t = 65)]
     probe_secs: u64,
+    /// With --net-probe: `SECS:COMMAND`, a client command sent SECS seconds
+    /// after the gamestate, e.g. `5:say_team hello`. Repeatable; keep them
+    /// 800 ms apart or retail's flood window drops the later one. With
+    /// --probe-team the probe joins first, so `kill` between two says
+    /// measures a dead speaker. Every `h`/`i` chat line that comes back is
+    /// printed with its control bytes escaped. Writes no fixture.
+    #[arg(long, value_name = "SECS:COMMAND", value_parser = parse_probe_say)]
+    probe_say: Vec<(f32, String)>,
     /// Run without sound (also what happens when no output device opens).
     #[arg(long)]
     no_audio: bool,
@@ -820,6 +828,7 @@ fn main() -> Result<()> {
             args.probe_team.as_deref(),
             args.probe_weapon.as_deref(),
             args.probe_secs,
+            &args.probe_say,
             fs.as_ref(),
         );
     }
@@ -1386,6 +1395,54 @@ impl App {
         }
     }
 
+    /// The chat field's keys while it is open, and T (`messagemode`, say)
+    /// or Y (`messagemode2`, say_team) to open it, online only. Enter sends
+    /// `say "<line>"` the way the console's field does (CoDMP.exe 0x40d40b);
+    /// Escape drops the line. False when the key is not the field's.
+    fn chat_key(&mut self, code: KeyCode, text: Option<&str>) -> bool {
+        let Mode::Online { net, input, .. } = &mut self.mode else {
+            return false;
+        };
+        let Some(hud) = &mut self.hud else {
+            return false;
+        };
+        let Some(field) = &mut hud.chat_field else {
+            let team = match code {
+                KeyCode::KeyT => false,
+                KeyCode::KeyY => true,
+                _ => return false,
+            };
+            input.release_all();
+            hud.chat_field = Some(hud::ChatField {
+                team,
+                text: String::new(),
+            });
+            return true;
+        };
+        match code {
+            KeyCode::Escape => hud.chat_field = None,
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                if !field.text.is_empty() {
+                    let word = if field.team { "say_team" } else { "say" };
+                    net.send_reliable(&format!("{word} \"{}\"", field.text));
+                }
+                hud.chat_field = None;
+            }
+            KeyCode::Backspace => {
+                field.text.pop();
+            }
+            _ => {
+                // The field is 256 bytes; a quote would end the argument.
+                for c in text.unwrap_or("").chars() {
+                    if (' '..='~').contains(&c) && c != '"' && field.text.len() < 255 {
+                        field.text.push(c);
+                    }
+                }
+            }
+        }
+        true
+    }
+
     /// The open script menu's keys, ahead of every other binding, and M to
     /// open the main menu when none is. False when the key is not the menu's.
     fn menu_key(&mut self, code: KeyCode) -> bool {
@@ -1511,6 +1568,9 @@ impl ApplicationHandler for App {
                 let PhysicalKey::Code(code) = event.physical_key else {
                     return;
                 };
+                if pressed && self.chat_key(code, event.text.as_deref()) {
+                    return;
+                }
                 // auto-repeat would retrigger the jump and walk's prone toggle
                 if event.repeat {
                     return;
@@ -1714,11 +1774,17 @@ impl ApplicationHandler for App {
                         let mut gamestate_ready = false;
                         for ev in &events {
                             if let Some(hud) = &mut self.hud {
-                                hud.on_net_event(ev, time);
+                                hud.on_net_event(ev, time, &self.localized);
                             }
                             match ev {
+                                // `player_talk` with every chat line, as
+                                // `CG_ServerCommand`'s `h`/`i` play it.
                                 net::NetEvent::Chat { text, .. } => {
-                                    println!("{}", net::strip_colors(text))
+                                    println!(
+                                        "{}",
+                                        net::strip_colors(&self.localized.message(text))
+                                    );
+                                    self.audio.play_local(&self.fs, "player_talk");
                                 }
                                 net::NetEvent::Print(s) => println!("{s}"),
                                 net::NetEvent::Dropped(why) => {
@@ -1744,6 +1810,10 @@ impl ApplicationHandler for App {
                                 net::NetEvent::ServerCommand(tokens) => {
                                     if tokens.first().is_some_and(|t| t == "n") {
                                         join.on_restart();
+                                    }
+                                    // `g`, the bold game message, beeps.
+                                    if tokens.first().is_some_and(|t| t == "g") {
+                                        self.audio.play_local(&self.fs, "game_message");
                                     }
                                     for cmd in join.on_server_command(
                                         tokens,
@@ -1805,8 +1875,8 @@ impl ApplicationHandler for App {
                                 .unwrap_or_else(|| format!("player {}", line.client_num));
                             println!("{}", net::strip_colors(&format!("{name}: {}", line.text)));
                             if let Some(hud) = &mut self.hud {
-                                hud.chat
-                                    .push(&format!("{name}: {}", line.text), false, time);
+                                let now_ms = (time * 1000.0) as i32;
+                                hud.chat.push(&format!("{name}: {}", line.text), now_ms);
                             }
                             self.audio.play(&self.fs, line.cue);
                         }
@@ -2747,6 +2817,13 @@ impl ApplicationHandler for App {
             }
         }
     }
+}
+
+/// `--probe-say`'s `SECS:COMMAND`.
+fn parse_probe_say(s: &str) -> Result<(f32, String), String> {
+    let (secs, cmd) = s.split_once(':').ok_or("expected SECS:COMMAND")?;
+    let secs = secs.trim().parse().map_err(|e| format!("{secs}: {e}"))?;
+    Ok((secs, cmd.to_string()))
 }
 
 #[cfg(test)]

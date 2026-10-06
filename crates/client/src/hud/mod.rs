@@ -7,6 +7,7 @@ pub mod friends;
 pub mod hudelem;
 pub mod killfeed;
 pub mod menu;
+pub mod messages;
 pub mod player;
 pub mod scope;
 pub mod scoreboard;
@@ -54,6 +55,12 @@ pub struct Hud {
     /// scoreboard's headings.
     fonts: UiFonts,
     pub chat: Chat,
+    /// `e`/`f` and `c`/`g` lines.
+    game_messages: messages::Window,
+    bold_messages: messages::Window,
+    /// The `messagemode` line being typed: `main.rs` edits it, the HUD
+    /// draws it.
+    pub chat_field: Option<ChatField>,
     pub killfeed: Killfeed,
     /// `main.rs`'s Tab handler owns `visible` and the `score` request.
     pub scoreboard: Scoreboard,
@@ -114,6 +121,9 @@ impl Hud {
         Ok(Hud {
             fonts: UiFonts::load(fs)?,
             chat: Chat::new(),
+            game_messages: messages::Window::new(messages::Kind::Game),
+            bold_messages: messages::Window::new(messages::Kind::Bold),
+            chat_field: None,
             killfeed: Killfeed::new(),
             scoreboard: Scoreboard::new(),
             kill_icons: HashMap::new(),
@@ -132,11 +142,21 @@ impl Hud {
     }
 
     /// Net does not filter `ServerCommand`; `Scoreboard::on_server_command`
-    /// ignores anything but `b`.
-    pub fn on_net_event(&mut self, ev: &NetEvent, now: f32) {
+    /// ignores anything but `b`. `CG_ServerCommand` (0x3002e0d0) localizes
+    /// a chat line or a message through `loc` before it is kept.
+    pub fn on_net_event(&mut self, ev: &NetEvent, now: f32, loc: &Localized) {
+        let now_ms = (now * 1000.0) as i32;
         match ev {
-            NetEvent::Chat { text, team } => self.chat.push(text, *team, now),
-            NetEvent::ServerCommand(tokens) => self.scoreboard.on_server_command(tokens),
+            NetEvent::Chat { text, .. } => self.chat.push(&loc.message(text), now_ms),
+            NetEvent::ServerCommand(tokens) => {
+                self.scoreboard.on_server_command(tokens);
+                let text = || bind_keys(&loc.message(tokens.get(1).map_or("", String::as_str)));
+                match tokens.first().map(String::as_str) {
+                    Some("e" | "f") => self.game_messages.push(&text(), now_ms),
+                    Some("c" | "g") => self.bold_messages.push(&text(), now_ms),
+                    _ => {}
+                }
+            }
             _ => {}
         }
     }
@@ -253,8 +273,23 @@ impl Hud {
                 &mut out,
             );
         }
+        let v = hudelem::Virtual::new(screen);
+        let now_ms = (f.now * 1000.0) as i32;
+        // The viewer's own team colours the chat strip and names.
+        let team = f.ps.map_or(0, |ps| {
+            let own = ps.field_i32(f.protocol, "clientNum") as u32;
+            f.clients
+                .get(&own)
+                .map_or(0, |c| c.field_i32(f.protocol, "team"))
+        });
+        let [r, g, b, _] = killfeed::team_color(team);
         self.chat
-            .build(&self.fonts.normal, HUD_SCALE, f.screen_h, f.now, &mut out);
+            .build(&self.fonts, [r, g, b], now_ms, &v, &mut out);
+        self.game_messages.build(&self.fonts, now_ms, &v, &mut out);
+        self.bold_messages.build(&self.fonts, now_ms, &v, &mut out);
+        if let Some(field) = &self.chat_field {
+            chat::field(field, &self.fonts, f.localized, &v, &mut out);
+        }
         self.killfeed
             .build(&self.fonts.normal, HUD_SCALE, f.now, &mut out);
         // The scoreboard reuses the parsed gametype; its last `b` reply
@@ -292,6 +327,22 @@ impl Hud {
         }
         out
     }
+}
+
+/// A line being typed after `messagemode` (`say`) or `messagemode2`
+/// (`say_team`).
+#[derive(Default)]
+pub struct ChatField {
+    pub team: bool,
+    pub text: String,
+}
+
+/// The cgame's `[{command}]` pass over a localized message (0x300229b0):
+/// the key bound to the command, in its brackets. Only the use key is
+/// filled; any other command is left as written, which is what retail shows
+/// for an unbound one.
+pub fn bind_keys(text: &str) -> String {
+    text.replace("[{+activate}]", "[F]")
 }
 
 /// `pm_type` 4 is a free-flying spectator and 5 the intermission; any other,
@@ -650,7 +701,7 @@ mod tests {
             "3".into(),
             "0".into(),
         ]);
-        hud.chat.push("hello", false, 0.0);
+        hud.chat.push("hello", 0);
 
         hud.on_gamestate();
 
