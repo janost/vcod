@@ -827,7 +827,7 @@ fn rung(world: &CollisionWorld, lo: Vec3, hi: Vec3, n: Vec3) -> Option<(Vec3, Ve
         )
     };
     let up = arrives(foot, head, Gait::Forward);
-    let down = arrives(head, foot, Gait::Backward);
+    let down = arrives(head, foot, Gait::Creep);
     (up || down).then_some((foot, head, up, down))
 }
 
@@ -904,11 +904,13 @@ impl Creep {
 
 /// How a walk is driven: facing its way, or backing along it facing the
 /// other way, which is how a body gets onto a ladder below a ledge (the grab
-/// traces along the view, `ladder_move`).
+/// traces along the view, `ladder_move`), at a run or creeping at the lip
+/// ([`back_move`]).
 #[derive(Clone, Copy, PartialEq)]
 enum Gait {
     Forward,
     Backward,
+    Creep,
 }
 
 /// What a walk came to.
@@ -919,16 +921,19 @@ enum Walked {
     Fell,
 }
 
-/// [`walk_as`] forward, and backward when the forward run fell.
+/// [`walk_as`] forward, backward when the forward run fell, and creeping
+/// when that fell too. The creep is last because it is slow: a back down
+/// off every ledge on a map is most of a build, and only a ladder below
+/// needs it.
 fn walk(world: &CollisionWorld, from: Vec3, target: glam::Vec2) -> Option<Vec3> {
-    match walk_as(world, from, target, None, Gait::Forward) {
-        Walked::Arrived(p) => Some(p),
-        Walked::Blocked => None,
-        Walked::Fell => match walk_as(world, from, target, None, Gait::Backward) {
-            Walked::Arrived(p) => Some(p),
-            _ => None,
-        },
+    for gait in [Gait::Forward, Gait::Backward, Gait::Creep] {
+        match walk_as(world, from, target, None, gait) {
+            Walked::Arrived(p) => return Some(p),
+            Walked::Blocked => return None,
+            Walked::Fell => {}
+        }
     }
+    None
 }
 
 /// Runs a body from `from` toward `target`, re-aiming every tick, and
@@ -954,11 +959,11 @@ fn walk_as(
     ps.velocity = (dir * vcod_common::pmove::SPEED_RUN).extend(0.0);
     let mut sim = Sim::default();
     let mut budget = run_ticks(dist);
-    // A floor-bound walk is a ladder's: room to reach it, and the creep.
+    // A floor-bound walk is a ladder's (`link_ladders`): room to reach it.
     if floor.is_some() {
         budget = budget.max(60);
     }
-    if gait == Gait::Backward {
+    if gait == Gait::Creep {
         budget += CREEP_TICKS;
     }
     let mut stalled = 0;
@@ -974,7 +979,8 @@ fn walk_as(
         let to = target - ps.origin.truncate();
         let (yaw, forward) = match gait {
             Gait::Forward => (to.y.atan2(to.x).to_degrees(), 127),
-            Gait::Backward => {
+            Gait::Backward => ((-to.y).atan2(-to.x).to_degrees(), -127),
+            Gait::Creep => {
                 let forward = back_move(to.length(), ps.on_ladder);
                 let yaw = (-to.y).atan2(-to.x).to_degrees();
                 (creep.hold(forward, yaw), forward)

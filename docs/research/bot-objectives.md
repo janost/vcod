@@ -1,6 +1,7 @@
-# Bot objectives (S&D)
+# Bot objectives (S&D, retrieval)
 
-How vcod's debug bots (`--bots`) play stock Search & Destroy. The brain is
+How vcod's debug bots (`--bots`) play stock Search & Destroy and Retrieval
+(section 4). The brain is
 `crates/server/src/bots.rs` (`ObjTarget`, `think_objective`); the server fills
 `BotView::sd` and `BotView::linked` in `crates/server/src/server.rs`
 (`bot_sd`, `site_stand`) from `ScriptRuntime::sd_objectives`
@@ -61,28 +62,100 @@ Goal order: a plant or defuse in progress (use held, or linked), a visible
 enemy, objective travel, then the rest. Use is pressed only at the
 objective, since its rising edge also picks up weapons and mounts turrets.
 
-- Attacker before the plant: one site per life (`pick % sites`, the pick
-  redrawn from the seeded generator at each death). Inside the zone (8
-  units in) it stops and holds use. Held 20 ticks with no link, or 6 s in
-  all, counts as failed: it lets go for 10 ticks and goes to the other site.
+- Sites are dealt out by rank: a bot's place among its team's bots by slot
+  (`SdView::rank`), so a team's bots go A, B, A, ... on both sides.
+- Attacker before the plant: its site, moved on by one for every failed
+  try in a life. Inside the zone (8 units in) it stops, looks 60 degrees up
+  and holds use. Held 20 ticks with no link, or 6 s in all, counts as
+  failed: it lets go for 10 ticks and goes to the other site.
+- The upward look is for the press's rising edge, which also takes the item
+  or turret `G_GetActivateEnt` picks (`cod11-items.md` 2.1). INFERRED (from
+  `activate_score`'s 128-unit reach and 0.76 cone, about 40 degrees): an
+  item lying on the floor within reach sits more than 30 degrees below
+  level, so a view 60 up leaves it outside the cone, and a weapon dropped in
+  the zone is no longer swapped for the planter's.
 - Attacker after the plant: stands 96 to 250 units from the bomb. A body on
   the bomb would block a defender's `isLookingAt`, and the planter starts
   on it.
 - Defender before the plant: goes to its site's standing point and holds
   within 250 units of it, looking about.
-- Defender after the plant: walks to the bomb, stops within 48 units, turns
-  onto the aim point at the normal turn rate, and presses use once the view
-  has sat within 1 degree for two ticks (the aim trace is read a frame late,
+- Defender after the plant: only the lead, its team's playing bot nearest
+  the bomb (lower slot on a tie, `SdView::lead`), goes for the defuse. The
+  rest stand 96 to 250 units off the bomb like the attackers: defenders
+  crowding the bomb stood in each other's line from eye to trigger. A dead
+  lead hands the defuse to the next nearest on the next frame.
+- The lead walks to the bomb, stops within 48 units, turns onto the aim
+  point at the normal turn rate, and presses use once the view has sat
+  within 1 degree for two ticks (the aim trace is read a frame late,
   `cod11-gsc-object-model.md` 23.1). It holds 10.5 s, or lets go after 20
   ticks with no link and tries again.
 
 VERIFIED (measured, `crates/server/tests/bot_objectives.rs`, 2 bots, shoot
-off, seed 7, `mp_carentan`): the attacker plants at tick 654 of the run,
-counting the match-start restart; the defender defuses 222 ticks later.
-Sweeps over seeds 1-6 on `mp_carentan`, `mp_harbor`, `mp_dawnville` and
-`mp_rocket`, with 4 bots on `mp_carentan` and 6 on `mp_harbor`, and with 6
-shooting bots on `mp_carentan` (seed 7: plant at tick 729, defuse 496 ticks
-later), all planted and defused; the slowest defuse (1109 ticks, `mp_rocket`) was the nav follower
-stalled at a drop on the way. `mp_chateau` and `mp_ship` carry no
-`bombzone`, `bombtrigger` or S&D spawn entity (VERIFIED, ents lump strings),
-so stock S&D does not run there.
+off, seed 7, `mp_carentan`): the attacker plants at tick 730 of the run,
+counting the match-start restart; the defender defuses 225 ticks later.
+Sweeps over seeds 1, 2 and 7 with shoot off, 4 bots on `mp_carentan` and
+`mp_rocket` and 6 on `mp_harbor` and `mp_dawnville`, all planted and
+defused, the defuse 221 to 234 ticks after the plant. With 6 shooting bots
+on `mp_carentan`, seed 1 planted and defused; seeds 2 and 7 planted and
+the round ended with every defender dead. `mp_chateau` and `mp_ship` carry
+no `bombzone`, `bombtrigger` or S&D spawn entity (VERIFIED, ents lump
+strings), so stock S&D does not run there.
+
+## 4. Retrieval (`re`)
+
+### 4.1 What stock `re.gsc` asks of a player
+
+Line numbers are `maps/MP/gametypes/re.gsc` in `pak5.pk3`.
+
+- VERIFIED (`retrieval`, 1878-1886, and `retrieval_spawn_objective`,
+  1922-1979): the objectives are the `script_model` entities with
+  targetname `retrieval_objective`, gathered into
+  `level.retrieval_objective`. Each one's `trigger` field is the
+  `trigger_use` it targets, moved onto one of its `mp_retrieval_objective`
+  spots, and its `goal` field the `trigger_multiple` it targets.
+- VERIFIED (`retrieval_think`, 1981-2042): the pickup is the `trigger_use`'s
+  `trigger` notify, which the use key raises through the aim pick
+  (`cod11-gametypes-re-bel.md` 4.2). A player of `game["re_attackers"]`
+  takes it, and `other.hasobj[self.objnum]` is set to the objective.
+- VERIFIED (`hold_objective`, 2044-2073): a taken objective's trigger goes
+  10000 units down (`triggerOff`, 2573-2576) and `re_pickup` is logged.
+- INFERRED (`objective_carrier_atgoal_wait`, 2075, branch conditions): the
+  delivery is the goal's `trigger` notify with the carrier as `other`; any
+  other player's touch is let through and ignored.
+- INFERRED (`holduse`, 2434-2534, branch conditions): a carrier holding use
+  0.3 s is linked in place, and 2 s drops the objective.
+- VERIFIED (measured on ours, `mp_dawnville`): the two goal triggers there
+  are 500 by 368 units. A defender standing in one fired it every frame it
+  was armed, before the carrier's touch (slot order) could, and the carrier
+  stood in the goal for 85 s without delivering. INFERRED (Q3 lineage
+  `multi_trigger`): a `trigger_multiple` waiting out its `wait` ignores
+  every touch, so the same holds on retail.
+
+### 4.2 The brain
+
+`BotView::re`, filled on an `re` level from `ScriptRuntime::re_objectives`:
+the bot's role, each objective's pickup trigger middle while it lies there,
+its goal's standing point (`site_stand`, as for a bombzone) with the
+distance at which a body is clear of the goal trigger, and who carries it.
+
+- Attacker carrying an objective: walks to its goal and never presses use.
+- Attacker otherwise: walks to the nearest objective lying there, stops
+  within 48 units, turns onto the trigger's middle, and once the view has
+  sat within 1 degree for two ticks taps use for two ticks (under
+  `holduse`'s 0.3 s). VERIFIED (measured, `mp_dawnville`): from the side
+  the graph led to, the eye's trace to the trigger's middle met the world,
+  so each tap that took nothing moves the next try 40 units round the
+  objective, eight sides in turn.
+- Attacker with every objective carried, and defender with one carried:
+  a ring round its goal from just clear of the trigger to 150 units past.
+- Defender with nothing carried: guards an objective by rank, within 250
+  units of its trigger.
+
+VERIFIED (measured, `crates/server/tests/bot_objectives.rs`, 2 bots, shoot
+off, seed 7, `mp_carentan`): the attacker picks up at tick 628 and delivers
+448 ticks later. The same run on each stock map for 150 s: 10 of 12 pick
+up and deliver. On `mp_depot` the attacker never reaches the objective,
+which lies on an upper floor at z 148; on `mp_hurtgen` every round ends in
+an allied win within 18 s and nothing is picked up. Neither was looked into
+further. With 6 shooting bots, `mp_carentan` delivered and `mp_harbor` picked
+up twice in 150 s and delivered neither.

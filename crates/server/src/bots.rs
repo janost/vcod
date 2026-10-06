@@ -138,6 +138,35 @@ pub struct BotView {
     pub pistol: Option<u8>,
     /// The S&D objectives, on an `sd` level only.
     pub sd: Option<SdView>,
+    /// The retrieval objectives, on an `re` level only.
+    pub re: Option<ReView>,
+}
+
+/// The stock `re.gsc` objectives as the server read them this frame
+/// (docs/research/bot-objectives.md, "Retrieval").
+#[derive(Clone, Debug)]
+pub struct ReView {
+    pub role: ObjRole,
+    /// Each objective still standing.
+    pub objectives: Vec<ReObjView>,
+    /// As [`SdView::rank`]: defenders spread over the objectives by it.
+    pub rank: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ReObjView {
+    /// The middle of its pickup trigger while it lies there to be taken.
+    pub pickup: Option<[f32; 3]>,
+    /// A feet origin inside its goal trigger the navigation graph reaches.
+    pub goal: [f32; 3],
+    /// How far from `goal` a body is clear of the goal trigger. Anyone
+    /// standing in it takes the trigger's fire (`trigger_multiple`'s wait),
+    /// lower slots first, so a guard inside it keeps the carrier from ever
+    /// delivering.
+    pub goal_clear: f32,
+    /// Someone carries it; `mine` when that is this bot.
+    pub carried: bool,
+    pub mine: bool,
 }
 
 /// Which side of the S&D objective the bot's team plays this map.
@@ -342,6 +371,14 @@ enum ObjTarget {
         inner: f32,
     },
     Defuse(BombView),
+    /// Aim at a retrieval objective's pickup trigger, `aim`, and tap use,
+    /// standing within reach of `from`.
+    Pickup {
+        aim: [f32; 3],
+        from: [f32; 3],
+    },
+    /// Carry a retrieval objective into its goal; touching it delivers.
+    Deliver([f32; 3]),
 }
 
 /// `level.planttime` is 5 s (`sd.gsc` `bombzones`); a hold this long that
@@ -352,10 +389,17 @@ const DEFUSE_TICKS: u32 = 210;
 /// The defuse wants `distance(origin, trigger.origin) < 64`.
 const DEFUSE_REACH: f32 = 48.0;
 const GUARD_RADIUS: f32 = 250.0;
+/// A guard ring is at least this wide.
+const GUARD_BAND: f32 = 150.0;
 /// An attacker steps off the bomb it planted: a body on the line from a
 /// defender's eye to the trigger blocks the defuse's `isLookingAt`, which
 /// is the defender's problem, not the bot's to make.
 const BOMB_GUARD_INNER: f32 = 96.0;
+/// A pickup trigger is aimed at and used from within this, horizontally:
+/// `G_GetActivateEnt` reaches 128 units from the eye.
+const PICKUP_REACH: f32 = 48.0;
+/// How far round the pickup a bot steps for another try.
+const PICKUP_RING: f32 = 40.0;
 /// Use held this long with no link means the plant or defuse never
 /// started (not touching, not on the ground, the aim off the trigger).
 const START_TICKS: u32 = 20;
@@ -548,6 +592,9 @@ impl Bot {
 
     /// The objective this tick, from the bot's role and the round's state.
     fn objective_target(&self, view: &BotView) -> Option<ObjTarget> {
+        if let Some(re) = view.re.as_ref() {
+            return self.retrieval_target(view, re);
+        }
         let sd = view.sd.as_ref()?;
         let site = || {
             let n = sd.sites.len();
@@ -572,6 +619,66 @@ impl Bot {
         }
     }
 
+    /// Attackers: deliver what they carry, else go for the nearest objective
+    /// lying there, else stand by the goal a teammate is carrying one to.
+    /// Defenders: each guards an objective by rank, or the goal of one
+    /// being carried.
+    fn retrieval_target(&self, view: &BotView, re: &ReView) -> Option<ObjTarget> {
+        let o = &re.objectives;
+        let nearest = |at: fn(&ReObjView) -> Option<[f32; 3]>| {
+            o.iter()
+                .filter_map(at)
+                .min_by(|a, b| dist_sq(view.origin, *a).total_cmp(&dist_sq(view.origin, *b)))
+        };
+        match re.role {
+            ObjRole::Attack => {
+                if let Some(m) = o.iter().find(|m| m.mine) {
+                    return Some(ObjTarget::Deliver(m.goal));
+                }
+                if let Some(aim) = nearest(|m| m.pickup) {
+                    // Each tap that took nothing tries the next side: the
+                    // use key's pick traces from the eye to the trigger's
+                    // middle, and a table or crate can stand in the way.
+                    let from = match self.obj.pick % 9 {
+                        0 => aim,
+                        k => {
+                            let a = (k as f32 - 1.0) * 45f32.to_radians();
+                            [
+                                aim[0] + PICKUP_RING * a.cos(),
+                                aim[1] + PICKUP_RING * a.sin(),
+                                aim[2],
+                            ]
+                        }
+                    };
+                    return Some(ObjTarget::Pickup { aim, from });
+                }
+                Self::goal_guard(view, o)
+            }
+            ObjRole::Defend => {
+                if let Some(g) = Self::goal_guard(view, o) {
+                    return Some(g);
+                }
+                let lying: Vec<[f32; 3]> = o.iter().filter_map(|m| m.pickup).collect();
+                (!lying.is_empty()).then(|| ObjTarget::Guard {
+                    at: lying[re.rank % lying.len()],
+                    inner: 0.0,
+                })
+            }
+        }
+    }
+
+    /// A ring round the nearest goal an objective is being carried to, just
+    /// outside its trigger.
+    fn goal_guard(view: &BotView, o: &[ReObjView]) -> Option<ObjTarget> {
+        o.iter()
+            .filter(|m| m.carried)
+            .min_by(|a, b| dist_sq(view.origin, a.goal).total_cmp(&dist_sq(view.origin, b.goal)))
+            .map(|m| ObjTarget::Guard {
+                at: m.goal,
+                inner: m.goal_clear,
+            })
+    }
+
     fn at_objective(view: &BotView, t: &ObjTarget) -> bool {
         let o = view.origin;
         match t {
@@ -586,9 +693,17 @@ impl Bot {
             }
             ObjTarget::Guard { at, inner } => {
                 let d = dist_sq(o, *at);
-                d < GUARD_RADIUS * GUARD_RADIUS && d >= inner * inner
+                let outer = GUARD_RADIUS.max(inner + GUARD_BAND);
+                d < outer * outer && d >= inner * inner
             }
             ObjTarget::Defuse(b) => dist_sq(o, b.origin) < DEFUSE_REACH * DEFUSE_REACH,
+            ObjTarget::Pickup { aim, from } => {
+                let reach = if from == aim { PICKUP_REACH } else { 16.0 };
+                (from[0] - o[0]).hypot(from[1] - o[1]) < reach && (aim[2] - o[2]).abs() < 64.0
+            }
+            // The goal trigger's touch delivers; there is nothing to stand
+            // at.
+            ObjTarget::Deliver(_) => false,
         }
     }
 
@@ -608,6 +723,7 @@ impl Bot {
             }
             ObjTarget::Guard { at, .. } => Goal::To(at),
             ObjTarget::Defuse(b) => Goal::To(b.origin),
+            ObjTarget::Pickup { from: at, .. } | ObjTarget::Deliver(at) => Goal::To(at),
         })
     }
 
@@ -675,6 +791,38 @@ impl Bot {
                     self.obj.held = 1;
                 } else {
                     cmd.buttons = 0;
+                }
+                Some(cmd)
+            }
+            Some(ObjTarget::Pickup { aim: spot, .. }) if ready => {
+                // Not with an enemy in sight: the pickup is a tap, and can
+                // wait.
+                if self.shoot && view.enemy.is_some() {
+                    self.obj.settled = 0;
+                    return None;
+                }
+                let (tp, ty) = aim_angles(view, spot);
+                let aim = self.turn_toward(view, [tp, ty]);
+                let off = yaw_diff(tp, cur[0]).hypot(yaw_diff(ty, cur[1]));
+                self.obj.settled = if off < SETTLE_DEG {
+                    self.obj.settled + 1
+                } else {
+                    0
+                };
+                let mut cmd = self.hold_use(view, cmd, aim);
+                if self.obj.settled < SETTLE_TICKS {
+                    cmd.buttons = 0;
+                } else {
+                    // A tap: two ticks down, then up for a while. Held, the
+                    // use key drops what the carrier holds (`re.gsc`
+                    // `holduse`).
+                    self.obj.held += 1;
+                    if self.obj.held >= 2 {
+                        self.obj.held = 0;
+                        self.obj.settled = 0;
+                        self.obj.rest = RETRY_TICKS;
+                        self.obj.pick = self.obj.pick.wrapping_add(1);
+                    }
                 }
                 Some(cmd)
             }
@@ -1349,6 +1497,7 @@ mod tests {
             on_ladder: false,
             pistol: None,
             sd: None,
+            re: None,
         }
     }
 
@@ -1532,6 +1681,82 @@ mod tests {
         bot.think(&v);
         v.origin = [150.0, 0.0, 64.0];
         assert_eq!(bot.goal(&v), Goal::Hold);
+    }
+
+    /// A view on an `re` level: one objective lying 30 units ahead (its
+    /// pickup trigger's middle on the floor), its goal far off.
+    fn re_view(role: ObjRole) -> BotView {
+        let mut v = view();
+        v.view = [0.0, 0.0, 0.0];
+        v.re = Some(ReView {
+            role,
+            rank: 0,
+            objectives: vec![ReObjView {
+                pickup: Some([30.0, 0.0, 72.0]),
+                goal: [3000.0, 0.0, 64.0],
+                goal_clear: 300.0,
+                carried: false,
+                mine: false,
+            }],
+        });
+        v
+    }
+
+    #[test]
+    fn an_attacker_taps_use_on_the_objective_then_carries_it_home() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = re_view(ObjRole::Attack);
+        assert_eq!(bot.goal(&v), Goal::Hold, "within reach already");
+        let mut presses = Vec::new();
+        while presses.len() < 40 && !presses.ends_with(&[true, true, false]) {
+            let cmd = bot.think(&v);
+            if !presses.ends_with(&[true, true]) {
+                assert_eq!((cmd.forward, cmd.right), (0, 0), "moved before the tap");
+            }
+            // The sim takes the view where the cmd points it.
+            let a = cmd.angles.map(|a| a as f32 / ANGLE2SHORT);
+            v.view = [a[0], a[1], 0.0];
+            presses.push(cmd.buttons & BUTTON_USE != 0);
+        }
+        // Two ticks down, then up: held, the use key drops what a carrier
+        // holds.
+        assert!(
+            presses.ends_with(&[false, true, true, false]),
+            "{presses:?}"
+        );
+        // A tap that took nothing tries from beside the objective next.
+        assert_ne!(bot.goal(&v), Goal::Hold);
+        // Taken: the trigger is gone and the bot carries it to the goal,
+        // use up all the way.
+        let o = &mut v.re.as_mut().unwrap().objectives[0];
+        (o.pickup, o.carried, o.mine) = (None, true, true);
+        assert_eq!(bot.goal(&v), Goal::To([3000.0, 0.0, 64.0]));
+        for _ in 0..100 {
+            assert_eq!(bot.think(&v).buttons & BUTTON_USE, 0);
+        }
+    }
+
+    #[test]
+    fn a_defender_guards_the_objective_then_the_goal_it_is_carried_to() {
+        let bot = Bot::new("axis", true, 1);
+        let mut v = re_view(ObjRole::Defend);
+        v.origin = [1000.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::To([30.0, 0.0, 72.0]));
+        let o = &mut v.re.as_mut().unwrap().objectives[0];
+        (o.pickup, o.carried) = (None, true);
+        assert_eq!(bot.goal(&v), Goal::To([3000.0, 0.0, 64.0]));
+        // It holds outside the goal trigger, and walks out of it.
+        v.origin = [2650.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Hold);
+        v.origin = [2900.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Roam);
+        // A teammate carries it: an attacker escorts it the same way.
+        let mut v = re_view(ObjRole::Attack);
+        let o = &mut v.re.as_mut().unwrap().objectives[0];
+        (o.pickup, o.carried) = (None, true);
+        assert_eq!(bot.goal(&v), Goal::To([3000.0, 0.0, 64.0]));
+        v.origin = [2900.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Roam);
     }
 
     #[test]

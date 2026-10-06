@@ -72,6 +72,8 @@ const FLOOD_WINDOW_MS: i32 = 800;
 const ENEMY_REFRESH_MS: i32 = 100;
 /// A* runs a tick may spend across all bots.
 const BOT_PLANS_PER_TICK: u32 = 2;
+/// A retrieval objective as the bots see it, with its carrier's slot.
+type ReObjCarried = (crate::bots::ReObjView, Option<usize>);
 /// The tick pace (`1000 / sv_fps`), also the dt floor a fresh sim starts from.
 pub(crate) const FRAME_MS: i32 = 50;
 /// Retail's `MAX_CLIENTS`. Client slots index a 6-bit wire field
@@ -2098,6 +2100,7 @@ impl Server {
         // Pass 2: what each bot's body sees, for the brains. The enemy
         // lookup refreshes at ~10 Hz per bot and is cached in between.
         let sd = self.bot_sd();
+        let re = self.bot_re();
         let mut views: Vec<(usize, crate::bots::BotView)> = slots
             .iter()
             .filter_map(|slot| {
@@ -2117,6 +2120,34 @@ impl Server {
                 Some((*slot, view))
             })
             .collect();
+        if let Some((attackers, defenders, objectives)) = &re {
+            let team = |slot: usize| teams.get(slot).copied().unwrap_or(0);
+            let slots: Vec<usize> = views.iter().map(|(s, _)| *s).collect();
+            for (slot, view) in views.iter_mut() {
+                let mine = team(*slot);
+                let role = if mine == *attackers {
+                    crate::bots::ObjRole::Attack
+                } else if mine == *defenders {
+                    crate::bots::ObjRole::Defend
+                } else {
+                    continue;
+                };
+                view.re = Some(crate::bots::ReView {
+                    role,
+                    rank: slots
+                        .iter()
+                        .filter(|s| team(**s) == mine && *s < slot)
+                        .count(),
+                    objectives: objectives
+                        .iter()
+                        .map(|(o, carrier)| crate::bots::ReObjView {
+                            mine: *carrier == Some(*slot),
+                            ..*o
+                        })
+                        .collect(),
+                });
+            }
+        }
         if let Some((attackers, defenders, sd)) = &sd {
             let team = |slot: usize| teams.get(slot).copied().unwrap_or(0);
             // The team's bots that play, by slot, and each one's distance
@@ -2335,6 +2366,7 @@ impl Server {
             on_ladder: sim.ps.on_ladder,
             pistol,
             sd: None,
+            re: None,
             noise: None,
         })
     }
@@ -2379,11 +2411,53 @@ impl Server {
         ))
     }
 
-    /// Where a bot stands to plant in a zone: the graph node inside the
-    /// bounds nearest their middle, from the component holding the most
-    /// nodes so a bot anywhere can reach it, else the nearest such node to
-    /// the middle. Cached per zone; the zones keep their bounds across
-    /// rounds.
+    /// The retrieval objectives for this frame's bot views, on an `re` level
+    /// only: the attacking and defending team values and each objective,
+    /// with `mine` left for the caller and its carrier's slot beside it.
+    fn bot_re(&mut self) -> Option<(i32, i32, Vec<ReObjCarried>)> {
+        if self.level_cvars.as_ref().is_none_or(|(g, _)| g != "re") {
+            return None;
+        }
+        let clients = self.clients.len();
+        let o = self.script.as_mut()?.re_objectives(clients);
+        let team = |t: &str| match t {
+            "axis" => script::TEAM_AXIS,
+            "allies" => script::TEAM_ALLIES,
+            _ => -1,
+        };
+        let objectives = o
+            .objectives
+            .iter()
+            .map(|r| {
+                let mid = |(lo, hi): ([f32; 3], [f32; 3])| -> [f32; 3] {
+                    std::array::from_fn(|i| (lo[i] + hi[i]) * 0.5)
+                };
+                let (lo, hi) = r.goal;
+                let goal = self.site_stand(lo, hi);
+                // The farthest corner, flat, and a body's half width past it.
+                let goal_clear = [lo[0], hi[0]]
+                    .iter()
+                    .flat_map(|&x| [lo[1], hi[1]].map(|y| (x - goal[0]).hypot(y - goal[1])))
+                    .fold(0.0, f32::max)
+                    + 16.0;
+                let view = crate::bots::ReObjView {
+                    pickup: r.pickup.map(mid),
+                    goal,
+                    goal_clear,
+                    carried: r.carrier.is_some(),
+                    mine: false,
+                };
+                (view, r.carrier)
+            })
+            .collect();
+        Some((team(&o.attackers), team(&o.defenders), objectives))
+    }
+
+    /// Where a bot stands in a zone (a bombzone, a retrieval goal): the
+    /// graph node inside the bounds nearest their middle, from the
+    /// component holding the most nodes so a bot anywhere can reach it,
+    /// else the nearest such node to the middle. Cached per zone; the zones
+    /// keep their bounds across rounds.
     fn site_stand(&mut self, mins: [f32; 3], maxs: [f32; 3]) -> [f32; 3] {
         let mid = [
             (mins[0] + maxs[0]) * 0.5,

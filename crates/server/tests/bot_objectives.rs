@@ -1,5 +1,6 @@
 //! Bots playing stock `sd.gsc`: an attacker walks to a bombzone and plants,
-//! a defender walks to the bomb and defuses it
+//! a defender walks to the bomb and defuses it; and stock `re.gsc`: an
+//! attacker picks an objective up and carries it to its goal
 //! (docs/research/bot-objectives.md).
 //!
 //! Needs `COD_DIR`; without the paks it returns early.
@@ -11,6 +12,10 @@ const MAP: &str = "mp_carentan";
 const FRAME: Duration = Duration::from_millis(50);
 
 fn server(bots: usize) -> Option<(vcod_server::Server, Instant)> {
+    server_on("sd", bots)
+}
+
+fn server_on(gametype: &str, bots: usize) -> Option<(vcod_server::Server, Instant)> {
     let fs = vcod_common::testing::game_fs()?;
     let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
@@ -19,7 +24,7 @@ fn server(bots: usize) -> Option<(vcod_server::Server, Instant)> {
         map: MAP.into(),
         hostname: "vcod test".into(),
         max_clients: 8,
-        gametype: "sd".into(),
+        gametype: gametype.into(),
         test_entities: 0,
         trace: false,
         bots,
@@ -65,16 +70,33 @@ fn an_attacker_bot_plants_and_a_defender_bot_defuses() {
     };
     // The match-start restart comes once both teams have a player; the
     // round after it is the one the bomb can be planted in.
-    // Seed 7 plants at tick 654 (33 s, about 10 s of it the walk).
+    // Seed 7 plants at tick 730 (37 s, about 10 s of it the walk).
     let planted = wait_for(&mut sv, &mut now, "bomb_plant", 1200);
     eprintln!("planted at tick {planted:?}");
     assert!(planted.is_some(), "no bomb planted in 60 s");
-    // The fuse is 60 s; seed 7 defuses 222 ticks after the plant.
+    // The fuse is 60 s; seed 7 defuses 225 ticks after the plant.
     let defused = wait_for(&mut sv, &mut now, "bomb_defuse", 1200);
     eprintln!("defused {defused:?} ticks after the plant");
     assert!(
         defused.is_some(),
         "the bomb was not defused before its fuse"
     );
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+}
+
+#[test]
+fn an_attacker_bot_carries_a_retrieval_objective_home() {
+    let Some((mut sv, mut now)) = server_on("re", 2) else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    // Seed 7 picks the documents up at tick 628 and delivers them 448
+    // ticks later; the lone defender guards and never shoots.
+    let picked = wait_for(&mut sv, &mut now, "re_pickup", 1200);
+    eprintln!("picked up at tick {picked:?}");
+    assert!(picked.is_some(), "nothing picked up in 60 s");
+    let captured = wait_for(&mut sv, &mut now, "re_capture", 1200);
+    eprintln!("captured {captured:?} ticks after the pickup");
+    assert!(captured.is_some(), "the objective never reached its goal");
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
 }
