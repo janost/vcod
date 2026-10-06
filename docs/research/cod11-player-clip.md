@@ -557,12 +557,57 @@ the truncation then loses.
 
 VERIFIED, vcod measurement the same day: our pmove dropping the same falls
 onto flat ground reads parms 18, 24, 42 and 78 at 16 ms frames and 18, 25,
-44 and 81 at 17 ms. INFERRED: the velocity snap moves a fall's impact speed
-by a fraction of a unit a second per frame, a frame length dependent amount,
-so a probe's mixed 16 and 17 ms cmds cannot be matched to the unit without
-replaying its cmds. The velocity multiplier is not visible in this run: each
+44 and 81 at 17 ms. The velocity multiplier is not visible in this run: each
 landing was vertical, and the next walk frame's ground clip zeroes a
 vertical velocity whatever it was scaled to.
+
+The parm is a function of the cmd lengths, and retail's fall is ours given
+the same lengths. VERIFIED, the two 2026-10-06 runs of 8.10, whose client
+logged the `serverTime` of every cmd it sent (the fixtures' `CMDS` lines):
+stepping each airborne snapshot's `origin[2]` and `velocity[2]` through the
+cmds between it and the next one, with gravity 800, the averaged-velocity
+move and the round-to-nearest velocity snap, reproduces every later airborne
+snapshot's velocity exactly and its height to the third printed decimal.
+VERIFIED: the same 340 unit drop landed parm 40 in the first 2026-10-05
+run, 43 in the second (the fixtures' previous revision) and 43 and 42 on
+2026-10-06; the stock-bounds parms of the two 2026-10-05 runs, 25, 40, 77,
+43, against ours at a fixed 16, 17, 17 ms cadence, 25, 44, 80, 44, were
+cadence, not physics. INFERRED: the snap keeps 13 of a 16 ms cmd's 12.8 of
+gravity and 14 of a 17 ms cmd's 13.6, but 14 of an 18 ms cmd's 14.4 and 26
+of a 33 ms cmd's 26.4, so a client whose cmds run 16 and 17 ms gains impact
+speed over the fall and one with odd lengths in between gains less or loses.
+
+VERIFIED, the roundings the move takes, all on the x87 with a float store at
+the end of each expression:
+
+- `pml.frametime` is `pml.msec` through `fild`, times the float 0.001 at
+  rodata 0x70ce0 (`0x3a83126f`), stored (`PmoveSingle` 0x340b8-0x340c4). It
+  is one ulp above `msec / 1000` at 18 ms and differs at 32 of the 66
+  lengths a step can have;
+- `PM_SlideMove`'s gravity: `gravity` through `fild` times `frametime`,
+  subtracted from `velocity[2]` (0x34811-0x3481c), stored as the end
+  velocity with `fst` (0x3481e) and, still unrounded, added to
+  `velocity[2]` and halved (0.5 at 0x70d74) into `velocity[2]`
+  (0x34826-0x3482f);
+- the move's end point, `time_left * velocity + origin` per axis, stored
+  once (0x3491c-0x34928).
+
+INFERRED: each is a single rounding of the exact value, which `pmove.rs`
+gets by computing in `f64` and storing to `f32`. VERIFIED, vcod measurement
+2026-10-06: with `msec / 1000` in place of the float thousandth, one row of
+the wider-bounds run (`ct` 22135) read a height 0.001 above retail's; with
+it, two rows in 630 (`ct` 21789 and 21985) still read 0.001 above, from
+the first frame of that drop on (a one-ulp lower height on any early frame
+of the replay puts both on retail's figure). Not found.
+
+VERIFIED: the first frame of a drop from rest takes the tail of
+`PmoveSingle` (0x34398-0x3443d): it moves `400 * t^2` while its end
+velocity is `800 * t`, exactly twice the move over the frame time, and on
+both sides the velocity comes out as the move over the frame time, -6 after
+a 15 ms or 16 ms first cmd.
+
+VERIFIED: `setorigin` on a player puts it one unit above the vector it is
+given: each drop's first snapshot reads 263.000 for `(900, 1930, 262)`.
 
 ### 8.10 What retail measured of the damage
 
@@ -571,10 +616,12 @@ extended: a sixth drop at `maxhealth` 200 ahead of the fatal one, and the
 damage and killed callbacks wrapped to log their arguments (recipe in
 `client-probes/README.md`, `probe_fall`). The first ran at the stock bounds,
 the second under `+set bg_fallDamageMinHeight 200 +set bg_fallDamageMaxHeight
-1000`. Both halves' lines are
+1000`. Both were taken again on 2026-10-06 with the client logging every
+cmd's `serverTime` (8.9), and the second pair replaced the first in
 `crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall-damage.txt` and
 `mp_carentan-dm-fall-damage-cvars.txt`, which `crates/server/tests/fall_ab.rs`
-gates.
+gates. The figures below are the 2026-10-06 pair's; the callback lines read
+the same in all four runs.
 
 VERIFIED, the damage callback's arguments on every landing of both runs:
 `inflictor undefined attacker undefined ... dflags 0 mod MOD_FALLING weapon
@@ -591,25 +638,25 @@ damage the callback was handed:
 
 | bounds | parm | maxhealth | damage |
 |---|---|---|---|
-| 256..480 | 25 | 100 | 24 |
-| 256..480 | 40 | 100 | 39 |
-| 256..480 | 77 | 100 | 76 |
-| 256..480 | 43 | 200 | 85 |
+| 256..480 | 24 | 100 | 23 |
+| 256..480 | 43 | 100 | 42 |
+| 256..480 | 79 | 100 | 78 |
+| 256..480 | 42 | 200 | 83 |
 | 256..480 | 100 | 100 | 110, killed |
 | 200..1000 | 13 | 100 | 12 |
 | 200..1000 | 18 | 100 | 17 |
-| 200..1000 | 28 | 100 | 27 |
-| 200..1000 | 18 | 200 | 35 |
+| 200..1000 | 29 | 100 | 28 |
+| 200..1000 | 19 | 200 | 37 |
 | 200..1000 | 41 | 100 | 40 |
 
-INFERRED: 85 of 200 at parm 43, against the 42 a fixed 100 would give, is
-`stats[2]` scaling the share; 85 rather than 86 is 8.8's float 0.01.
+INFERRED: 83 of 200 at parm 42, against the 41 a fixed 100 would give, is
+`stats[2]` scaling the share; 83 rather than 84 is 8.8's float 0.01.
 
 VERIFIED: no snapshot of either run carries `EV_PAIN` (187) after a
 surviving landing; each carries the landing pain alone. The fatal frame's
 ring adds 133 (parm 100), 189 and 155. VERIFIED: the second run's
 systeminfo read `\bg_fallDamageMaxHeight\1000\bg_fallDamageMinHeight\200`,
-and its parms fell with the wider bounds: 300 units of drop gave 25 at the
+and its parms fell with the wider bounds: 300 units of drop gave 24 at the
 stock bounds and 13 under them. INFERRED: a `+set` reaches both cvars
 despite flag 0x200, and `PM_CrashLand` reads them live.
 
@@ -878,10 +925,15 @@ The gates:
   `server_and_predictor_agree_beside_a_body` steps the server's sim and the
   predictor side by side beside a standing body;
 - `crates/server/tests/fall_ab.rs` runs `probe_fall` on ours at both bounds
-  with 16 and 17 ms cmds and holds it to section 8.10: the probe's lines
-  with times, damage and health masked, each damage against the share of
-  its own parm on both sides, no `EV_PAIN`, and the systeminfo bounds.
-  `FALL_REPORT=1` prints both sides' parms.
+  and, from the first drop on, sends retail's own cmds (the fixture's `CMDS`
+  timeline, shifted onto our clock), each ahead of the frame whose retail
+  snapshot first counted it. It holds ours to every retail `FALL` line from
+  the second drop on (origin to one unit in the last printed decimal, 8.9,
+  the rest exactly: velocity, ground, `pm_flags`, `pm_time`, health, event
+  ring), to the probe's lines with only their times masked (and the resting
+  origin of the first drop and of the corpse), to the same landing parms,
+  to each damage against the share of its own parm, no `EV_PAIN`, and the
+  systeminfo bounds. `FALL_REPORT=1` prints both sides' parms.
 
 ## 12. Divergences and not modelled
 
@@ -943,11 +995,17 @@ The gates:
     0x70ce8) sends `pm_type` 6 to 0x34274 and on to the default arm, whose
     ground traces at 0x342ce and 0x34327 reach `PM_CrashLand`; `dead_move`
     now lands through it. What is left:
-    - **The landing parm runs high.** VERIFIED, `FALL_REPORT=1` on
-      2026-10-05: at the same drops and cmd cadence ours lands parms 25, 44,
-      80, 44 where retail landed 25, 40, 77, 43, and 14, 19, 29, 19, 42
-      against 13, 18, 28, 18, 41. The damage follows each side's own parm
-      exactly; the impact speed behind the parm is 8.9's open question.
+    - **The landing parm ran high**, closed 2026-10-06 (8.9). Ours ran a
+      fixed 16, 17, 17 ms cadence against a capture whose cmds were not
+      that; on retail's own cmd timeline ours lands every parm of both runs.
+      `pmove.rs` now takes the frametime, the gravity average and the move's
+      end point with retail's roundings.
+    - **A corpse's rest after the fatal fall.** VERIFIED: retail's `after`
+      line reads y 1925.36 on 2026-10-06 and 1926.60 on 2026-10-05.
+      VERIFIED, vcod measurement 2026-10-06: ours comes to rest at 1928.23
+      with `commandTime` frozen 100 ms after the death, where the live
+      drops' rests agree with retail's to the hundredth. Not looked
+      into; `fall_ab` masks that origin.
     - **`eType` other than 1** ends `ClientEvents` (0x3fec9) with the
       events behind it unprocessed; vcod fires every event a cmd raised.
       No stock path lands a player whose entity is not a player.

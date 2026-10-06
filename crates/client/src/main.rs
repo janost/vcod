@@ -279,8 +279,9 @@ struct Args {
     probe_killcam_skip_ms: Option<u64>,
     /// With `--net-probe` and `--probe-team`: stand still and print a `FALL`
     /// line per snapshot whose ground entity, `pm_flags`, `pm_time`, events
-    /// or health moved; `client-probes/probe_fall` does the dropping. Writes
-    /// no fixture.
+    /// or health moved, and a `CMDS` line of the `serverTime`s it sent every
+    /// 60 cmds; `client-probes/probe_fall` does the dropping. Writes no
+    /// fixture.
     #[arg(long)]
     probe_fall: bool,
     /// With `--net-probe` and `--probe-team`: stand still and print a `RIDE`

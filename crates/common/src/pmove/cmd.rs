@@ -107,6 +107,13 @@ impl EventRing {
     }
 }
 
+/// `pml.frametime`: `msec` times the float 0.001, rounded once into the float
+/// store (`PmoveSingle` 0x340b8). It is not `msec / 1000` for 32 of the 66
+/// lengths a step can have, 18 ms among them.
+pub fn frametime(msec: i32) -> f32 {
+    (f64::from(msec) * f64::from(0.001f32)) as f32
+}
+
 /// `Pmove`'s walk from `command_time` up to the cmd's clock: steps of at most
 /// `MAX_FRAME_MS`, each its own `PmoveSingle` on a cmd stamped at the step's
 /// end (0x344e4, and 0x34074 for what lands in `commandTime`), with the
@@ -131,7 +138,7 @@ pub fn chop(command_time: i32, cmd: &UserCmd) -> impl Iterator<Item = (UserCmd, 
                 server_time: base,
                 ..cmd
             };
-            (step, msec as f32 / 1000.0)
+            (step, frametime(msec))
         })
     })
 }
@@ -272,8 +279,18 @@ mod tests {
     fn a_long_cmd_is_chopped_at_66_and_stamped_at_each_end() {
         assert_eq!(
             steps(5000, 5150),
-            [(5066, 0.066), (5132, 0.066), (5150, 0.018)]
+            [
+                (5066, frametime(66)),
+                (5132, frametime(66)),
+                (5150, frametime(18))
+            ]
         );
+    }
+
+    #[test]
+    fn the_frametime_is_msec_times_the_float_thousandth() {
+        assert_eq!(frametime(17), 0.017);
+        assert_eq!(frametime(18).to_bits(), 0.018f32.to_bits() + 1);
     }
 
     #[test]

@@ -653,6 +653,9 @@ pub fn probe(
         cmd.weapon = weapon_switch.unwrap_or(ps_weapon);
         let sent = client.send_frame(&cmd);
         if let Some(c) = sent {
+            if probe_fall {
+                fall.record_cmd(c.server_time);
+            }
             if save_plant || save_defuse {
                 sd.record(c);
             }
@@ -8869,14 +8872,33 @@ const KILLCAM_TAIL: Duration = Duration::from_secs(3);
 
 /// `--probe-fall`: joins and stands, and prints a `FALL` line per snapshot
 /// whose ground entity, `pm_flags`, `pm_time`, event ring or health moved,
-/// which is a landing's whole footprint. `client-probes/probe_fall` drops
-/// the player from a height. Writes no fixture.
+/// which is a landing's whole footprint, and a `CMDS` line per
+/// [`FALL_CMDS_PER_LINE`] cmds sent, their `serverTime`s as a first stamp
+/// and the steps after it, so a gate can replay the fall on the cmds retail
+/// ran. `client-probes/probe_fall` drops the player from a height. Writes no
+/// fixture.
 #[derive(Default)]
 struct FallProbe {
     last: Option<Vec<i32>>,
+    cmds: Vec<i32>,
 }
 
+const FALL_CMDS_PER_LINE: usize = 60;
+
 impl FallProbe {
+    fn record_cmd(&mut self, server_time: i32) {
+        self.cmds.push(server_time);
+        if self.cmds.len() >= FALL_CMDS_PER_LINE {
+            let steps: Vec<String> = self
+                .cmds
+                .windows(2)
+                .map(|w| (w[1] - w[0]).to_string())
+                .collect();
+            println!("CMDS st={} d={}", self.cmds[0], steps.join(","));
+            self.cmds.clear();
+        }
+    }
+
     fn observe(&mut self, snap: &net::snapshot::Snapshot) {
         let p = &net::protocol::PROTOCOL_V1;
         let i = |n: &str| snap.ps.field_i32(p, n);
