@@ -768,3 +768,21 @@ stands both clients at z -31.87, and the frames move in bursts, since a
 debug build's tick overruns and catches up; slot 0 came to rest at
 (-241.43, 2408.58), 21.8 units out where retail's slid 24.9, and slot 1 at
 (-307.67, 2342.33). Before the `PM_DeadMove` fix slot 0 slid 56.4.
+
+## probe_hud_disconnect
+
+Whether a client's `newClientHudElem` record outlives it, for
+`docs/research/cod11-hud-protocol.md`, "A client's elements die with it".
+One client is enough: it connects, `begin` makes one owned and one shared
+element, and leaving runs the disconnect callback. Two shells:
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> tools/run_probe.sh client-probes/probe_hud_disconnect mp_pavlov
+# second shell, once the map is up:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-secs 8
+```
+
+Against ours: `vcod-server mp_pavlov --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_hud_disconnect.gsc`.
+Plain `--net-probe` writes no fixture. Retail and ours, 2026-10-06, print
+the same three lines; the doc section quotes them.
