@@ -129,6 +129,47 @@ pub struct BotView {
     /// The loudest gunfire or blast another player made last tick within
     /// earshot ([`loudest`]), chest high.
     pub noise: Option<[f32; 3]>,
+    /// `linkTo` holds the body (a plant or defuse in progress); it cannot
+    /// move, so it is not stuck.
+    pub linked: bool,
+    /// The S&D objectives, on an `sd` level only.
+    pub sd: Option<SdView>,
+}
+
+/// Which side of the S&D objective the bot's team plays this map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjRole {
+    Attack,
+    Defend,
+}
+
+/// The stock `sd.gsc` objectives as the server read them this frame
+/// (docs/research/bot-objectives.md).
+#[derive(Clone, Debug)]
+pub struct SdView {
+    pub role: ObjRole,
+    /// The bombzones still standing, A before B; empty once a bomb is down.
+    pub sites: Vec<SiteView>,
+    /// The planted bomb, until it is defused or explodes.
+    pub bomb: Option<BombView>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SiteView {
+    /// The zone's absolute bounds.
+    pub mins: [f32; 3],
+    pub maxs: [f32; 3],
+    /// A feet origin inside the bounds the navigation graph reaches.
+    pub stand: [f32; 3],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BombView {
+    /// The defuse trigger's origin, which the script's 64-unit range reads.
+    pub origin: [f32; 3],
+    /// The point the view has to rest on for `isLookingAt`: the middle of
+    /// the trigger's bounds.
+    pub aim: [f32; 3],
 }
 
 /// Where a bot wants to go. The brain names it from its view; the server
@@ -229,6 +270,7 @@ pub struct Bot {
     stage: Stage,
     /// The weapon a grenade throw hands back to.
     rifle: u8,
+    obj: Objective,
     /// The last reliable server command the bot consumed.
     pub(crate) last_seen_seq: i32,
     /// The client-command sequence the bot's own replies use.
@@ -249,6 +291,62 @@ struct Target {
     /// Ticks out of sight.
     lost: u32,
 }
+
+/// The S&D objective bookkeeping; one life is one round, so a death
+/// starts it over (docs/research/bot-objectives.md).
+#[derive(Default)]
+struct Objective {
+    /// Which site this life goes to: `pick % sites.len()`.
+    pick: u32,
+    /// Ticks the use key has been held at the objective; nonzero means the
+    /// plant or defuse is in progress and nothing else may break it off.
+    held: u32,
+    /// Ticks the view has rested on the bomb.
+    settled: u32,
+    /// Ticks before another try after one that ran out.
+    rest: u32,
+    /// Set while the bot plays, so the end of a life redraws `pick` once.
+    live: bool,
+}
+
+/// What the objective wants of the bot right now.
+#[derive(Clone, Copy, Debug)]
+enum ObjTarget {
+    Plant(SiteView),
+    /// Stand within [`GUARD_RADIUS`] of a point and fight from there, but
+    /// no nearer than `inner`.
+    Guard {
+        at: [f32; 3],
+        inner: f32,
+    },
+    Defuse(BombView),
+}
+
+/// `level.planttime` is 5 s (`sd.gsc` `bombzones`); a hold this long that
+/// planted nothing has failed.
+const PLANT_TICKS: u32 = 120;
+/// `level.defusetime` is 10 s.
+const DEFUSE_TICKS: u32 = 210;
+/// The defuse wants `distance(origin, trigger.origin) < 64`.
+const DEFUSE_REACH: f32 = 48.0;
+const GUARD_RADIUS: f32 = 250.0;
+/// An attacker steps off the bomb it planted: a body on the line from a
+/// defender's eye to the trigger blocks the defuse's `isLookingAt`, which
+/// is the defender's problem, not the bot's to make.
+const BOMB_GUARD_INNER: f32 = 96.0;
+/// Use held this long with no link means the plant or defuse never
+/// started (not touching, not on the ground, the aim off the trigger).
+const START_TICKS: u32 = 20;
+/// Release after a failed try, so the next press is a fresh one.
+const RETRY_TICKS: u32 = 10;
+/// The aim trace is read a frame late (object-model doc 23.1): the view
+/// rests on the bomb this many ticks before the press.
+const SETTLE_TICKS: u32 = 2;
+const SETTLE_DEG: f32 = 1.0;
+/// Inset from a bombzone's edges before the bot counts as inside it.
+const SITE_MARGIN: f32 = 8.0;
+/// The standing player's box height, for the zone's z overlap.
+const PLAYER_HEIGHT: f32 = 70.0;
 
 /// A spot worth a look: where a seen enemy was lost, or a noise.
 #[derive(Clone, Copy, Debug)]
@@ -296,6 +394,12 @@ impl Bot {
             respawn_ticks: 0,
             stage: Stage::Wander,
             rifle: 0,
+            // Off the seed rather than the generator, so the stream every
+            // other draw reads is the one it was before objectives.
+            obj: Objective {
+                pick: (seed >> 32) as u32,
+                ..Objective::default()
+            },
             last_seen_seq: 0,
             next_command_seq: 1,
             team: team.to_string(),
@@ -387,13 +491,179 @@ impl Bot {
         if view.dead || !view.playing || !matches!(self.stage, Stage::Wander) {
             return Goal::Hold;
         }
+        // A plant or defuse aborts on release, so it outranks a fight.
+        if self.objective_busy(view) {
+            return Goal::Hold;
+        }
         if let Some(e) = view.enemy {
             return Goal::To(e.origin);
+        }
+        if let Some(g) = self.objective_goal(view) {
+            return g;
         }
         if let Some(p) = self.recall_goal(view) {
             return Goal::To(p);
         }
         Goal::Roam
+    }
+
+    /// A plant or defuse is under way: use is held, or the script holds
+    /// the body.
+    fn objective_busy(&self, view: &BotView) -> bool {
+        self.obj.held > 0 || view.linked
+    }
+
+    /// The objective this tick, from the bot's role and the round's state.
+    fn objective_target(&self, view: &BotView) -> Option<ObjTarget> {
+        let sd = view.sd.as_ref()?;
+        let site = || {
+            let n = sd.sites.len();
+            (n > 0).then(|| sd.sites[self.obj.pick as usize % n])
+        };
+        match (sd.role, sd.bomb) {
+            (ObjRole::Attack, Some(b)) => Some(ObjTarget::Guard {
+                at: b.origin,
+                inner: BOMB_GUARD_INNER,
+            }),
+            (ObjRole::Attack, None) => site().map(ObjTarget::Plant),
+            (ObjRole::Defend, Some(b)) => Some(ObjTarget::Defuse(b)),
+            (ObjRole::Defend, None) => site().map(|s| ObjTarget::Guard {
+                at: s.stand,
+                inner: 0.0,
+            }),
+        }
+    }
+
+    fn at_objective(view: &BotView, t: &ObjTarget) -> bool {
+        let o = view.origin;
+        match t {
+            ObjTarget::Plant(s) => {
+                let inside = (0..2)
+                    .all(|i| o[i] >= s.mins[i] + SITE_MARGIN && o[i] <= s.maxs[i] - SITE_MARGIN)
+                    && o[2] <= s.maxs[2]
+                    && o[2] + PLAYER_HEIGHT >= s.mins[2];
+                // A zone narrower than the margin still has its stand.
+                let flat = (o[0] - s.stand[0]).hypot(o[1] - s.stand[1]);
+                inside || (flat < 16.0 && (o[2] - s.stand[2]).abs() < 32.0)
+            }
+            ObjTarget::Guard { at, inner } => {
+                let d = dist_sq(o, *at);
+                d < GUARD_RADIUS * GUARD_RADIUS && d >= inner * inner
+            }
+            ObjTarget::Defuse(b) => dist_sq(o, b.origin) < DEFUSE_REACH * DEFUSE_REACH,
+        }
+    }
+
+    /// Where the objective sends a bot that is not there yet; `Hold` once
+    /// it is, and `None` when the round has no objective for it.
+    fn objective_goal(&self, view: &BotView) -> Option<Goal> {
+        let t = self.objective_target(view)?;
+        if Self::at_objective(view, &t) {
+            return Some(Goal::Hold);
+        }
+        Some(match t {
+            ObjTarget::Plant(s) => Goal::To(s.stand),
+            // Too close: any way out will do, and the roam leaves the ring
+            // well before it gets anywhere.
+            ObjTarget::Guard { at, inner } if dist_sq(view.origin, at) < inner * inner => {
+                Goal::Roam
+            }
+            ObjTarget::Guard { at, .. } => Goal::To(at),
+            ObjTarget::Defuse(b) => Goal::To(b.origin),
+        })
+    }
+
+    /// The bot stands at its objective without acting on it: it holds its
+    /// ground instead of following a waypoint, and is not stuck.
+    fn objective_standing(&self, view: &BotView) -> bool {
+        view.linked
+            || self
+                .objective_target(view)
+                .is_some_and(|t| Self::at_objective(view, &t))
+    }
+
+    /// The plant or defuse itself: the cmd for this tick while one is under
+    /// way or starting, `None` to play on as usual.
+    fn think_objective(&mut self, view: &BotView, cmd: UserCmd) -> Option<UserCmd> {
+        self.obj.rest = self.obj.rest.saturating_sub(1);
+        let t = self.objective_target(view);
+        let at = t.is_some_and(|t| Self::at_objective(view, &t));
+        let ready = self.obj.rest == 0 && (at || (view.linked && self.obj.held > 0));
+        let cur = [yaw_diff(view.view[0], 0.0), view.view[1]];
+        match t {
+            Some(ObjTarget::Plant(_)) if ready => {
+                if self.obj.held >= PLANT_TICKS || (self.obj.held >= START_TICKS && !view.linked) {
+                    // Nothing planted: another zone's plant blocks this one,
+                    // or the body never touched. Try the other site.
+                    self.obj.held = 0;
+                    self.obj.rest = RETRY_TICKS;
+                    self.obj.pick = self.obj.pick.wrapping_add(1);
+                    return None;
+                }
+                self.obj.held += 1;
+                Some(self.hold_use(view, cmd, cur))
+            }
+            Some(ObjTarget::Defuse(b)) if ready => {
+                if self.obj.held >= DEFUSE_TICKS || (self.obj.held >= START_TICKS && !view.linked) {
+                    // The aim trace never reached the trigger (a body in
+                    // the way); release and settle again.
+                    self.obj.held = 0;
+                    self.obj.settled = 0;
+                    self.obj.rest = RETRY_TICKS;
+                    return None;
+                }
+                let (tp, ty) = aim_angles(view, b.aim);
+                let aim = self.turn_toward(view, [tp, ty]);
+                if self.obj.held > 0 {
+                    self.obj.held += 1;
+                    return Some(self.hold_use(view, cmd, aim));
+                }
+                // Not started yet: a visible enemy comes first.
+                if self.shoot && view.enemy.is_some() {
+                    self.obj.settled = 0;
+                    return None;
+                }
+                let off = yaw_diff(tp, cur[0]).hypot(yaw_diff(ty, cur[1]));
+                self.obj.settled = if off < SETTLE_DEG {
+                    self.obj.settled + 1
+                } else {
+                    0
+                };
+                let mut cmd = self.hold_use(view, cmd, aim);
+                if self.obj.settled >= SETTLE_TICKS {
+                    self.obj.held = 1;
+                } else {
+                    cmd.buttons = 0;
+                }
+                Some(cmd)
+            }
+            _ => {
+                self.obj.held = 0;
+                self.obj.settled = 0;
+                None
+            }
+        }
+    }
+
+    /// Use down, no move keys, the view at `aim`. Nothing else runs: the
+    /// stall watch restarts from here and the fight is dropped.
+    fn hold_use(&mut self, view: &BotView, mut cmd: UserCmd, aim: [f32; 2]) -> UserCmd {
+        self.disengage();
+        self.stall_origin = view.origin;
+        self.stall_ticks = 0;
+        cmd.buttons = msg::BUTTON_USE;
+        cmd.angles = cmd_angles(view, aim);
+        cmd
+    }
+
+    /// One life over: the next is a new round, with a new site to go to.
+    fn end_life(&mut self) {
+        if self.obj.live {
+            self.obj = Objective {
+                pick: self.rand() as u32,
+                ..Objective::default()
+            };
+        }
     }
 
     /// The remembered spot not yet reached, else this tick's noise. The same
@@ -454,6 +724,7 @@ impl Bot {
             self.stage = Stage::Wander;
             self.disengage();
             self.recall = None;
+            self.end_life();
             // The stock death flow polls the use key only after its own
             // `wait 2` (dm.gsc, `waitRespawnButton`), so a one-shot press
             // lands before any poll reads it; retry every second, the way
@@ -469,15 +740,20 @@ impl Bot {
             self.respawn_ticks = 0;
             self.disengage();
             self.recall = None;
+            self.end_life();
             return cmd;
         }
         self.respawn_ticks = 0;
+        self.obj.live = true;
         self.remember(view);
         match self.stage {
             Stage::ToGrenade => return self.think_grenade(view, cmd),
             Stage::Cook { left } => return self.think_cook(view, cmd, left),
             Stage::BackToRifle { weapon } => return self.think_back(view, cmd, weapon),
             Stage::Wander => {}
+        }
+        if let Some(cmd) = self.think_objective(view, cmd) {
+            return cmd;
         }
         // A frag goes at a close enemy, occasionally, once the cooldown is
         // spent; the switch itself is the stage machine below.
@@ -497,9 +773,15 @@ impl Bot {
         }
 
         // A body that has not left a 15-unit circle in ten ticks is stuck,
-        // path or not, and takes a random heading for a spell.
+        // path or not, and takes a random heading for a spell. One standing
+        // at its objective, or held by a link, means to stay put.
+        let standing = self.objective_standing(view);
         self.stall_ticks += 1;
-        if self.stall_ticks >= 10 {
+        if standing {
+            self.stall_origin = view.origin;
+            self.stall_ticks = 0;
+            self.unstick_ticks = 0;
+        } else if self.stall_ticks >= 10 {
             if dist_sq(view.origin, self.stall_origin) < 15.0 * 15.0 {
                 self.pick_heading(view);
                 self.unstick_ticks = UNSTICK_TICKS;
@@ -509,6 +791,15 @@ impl Bot {
             }
         }
         let (mut pitch, mut yaw, mut forward) = match view.waypoint {
+            // On guard: look about, feet still.
+            _ if standing => {
+                if self.heading_ticks == 0 {
+                    self.pick_heading(view);
+                } else {
+                    self.heading_ticks -= 1;
+                }
+                (0.0, self.heading, 0)
+            }
             Some(w) if self.unstick_ticks == 0 => steer(view.origin, w),
             _ => {
                 self.unstick_ticks = self.unstick_ticks.saturating_sub(1);
@@ -555,11 +846,7 @@ impl Bot {
         if view.clip == 0 && view.busy_ms == 0 {
             cmd.wbuttons |= msg::WBUTTON_RELOAD;
         }
-        cmd.angles = [
-            deg_short(pitch) - view.delta_angles[0],
-            deg_short(yaw) - view.delta_angles[1],
-            -view.delta_angles[2],
-        ];
+        cmd.angles = cmd_angles(view, [pitch, yaw]);
         cmd
     }
 
@@ -842,6 +1129,15 @@ fn aim_angles(view: &BotView, at: [f32; 3]) -> (f32, f32) {
     (pitch, yaw)
 }
 
+/// An absolute (pitch, yaw) as the cmd carries it, net of `delta_angles`.
+fn cmd_angles(view: &BotView, aim: [f32; 2]) -> [i32; 3] {
+    [
+        deg_short(aim[0]) - view.delta_angles[0],
+        deg_short(aim[1]) - view.delta_angles[1],
+        -view.delta_angles[2],
+    ]
+}
+
 /// The shorter signed way round, degrees.
 fn yaw_diff(to: f32, from: f32) -> f32 {
     (to - from + 180.0).rem_euclid(360.0) - 180.0
@@ -941,7 +1237,168 @@ mod tests {
             grenade: Some(6),
             waypoint: None,
             noise: None,
+            linked: false,
+            sd: None,
         }
+    }
+
+    /// A view standing in the middle of one bombzone, with a second far off.
+    fn sd_view(role: ObjRole) -> BotView {
+        let mut v = view();
+        v.sd = Some(SdView {
+            role,
+            sites: vec![
+                SiteView {
+                    mins: [-100.0, -100.0, 0.0],
+                    maxs: [100.0, 100.0, 128.0],
+                    stand: [0.0, 0.0, 64.0],
+                },
+                SiteView {
+                    mins: [1900.0, -100.0, 0.0],
+                    maxs: [2100.0, 100.0, 128.0],
+                    stand: [2000.0, 0.0, 64.0],
+                },
+            ],
+            bomb: None,
+        });
+        v
+    }
+
+    /// An attacker that always goes to the first site.
+    fn attacker() -> Bot {
+        let mut bot = Bot::new("allies", true, 1);
+        bot.obj.pick = 0;
+        bot
+    }
+
+    fn plant_bomb(v: &mut BotView, at: [f32; 3]) {
+        let sd = v.sd.as_mut().unwrap();
+        sd.sites.clear();
+        sd.bomb = Some(BombView {
+            origin: at,
+            aim: [at[0], at[1], at[2] + 8.0],
+        });
+    }
+
+    #[test]
+    fn an_attacker_at_a_site_holds_use_still_until_the_zones_go() {
+        let mut bot = attacker();
+        let mut v = sd_view(ObjRole::Attack);
+        for tick in 0..100 {
+            let cmd = bot.think(&v);
+            assert_eq!(cmd.buttons, BUTTON_USE, "tick {tick}");
+            assert_eq!((cmd.forward, cmd.right, cmd.up), (0, 0, 0), "tick {tick}");
+            assert_eq!(cmd.weapon, 10, "the cmd carries the held weapon byte");
+            assert_eq!(bot.goal(&v), Goal::Hold);
+            // The script links the planter once its loop reads the press.
+            v.linked = tick >= 2;
+        }
+        // Planted: the zones are gone and the bomb sits at the feet.
+        plant_bomb(&mut v, [0.0, 0.0, 64.0]);
+        v.linked = false;
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.buttons & BUTTON_USE, 0, "use held past the plant");
+        assert_eq!(bot.goal(&v), Goal::Roam, "the planter stays on its bomb");
+    }
+
+    #[test]
+    fn a_planting_bot_holds_use_through_an_enemy_and_a_stall() {
+        let mut bot = attacker();
+        let mut v = sd_view(ObjRole::Attack);
+        bot.think(&v);
+        v.linked = true;
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [300.0, 0.0, 104.0],
+            velocity: [0.0; 3],
+        });
+        for tick in 0..90 {
+            let cmd = bot.think(&v);
+            assert_eq!(cmd.buttons, BUTTON_USE, "tick {tick}: let go to fight");
+            assert_eq!((cmd.forward, cmd.right), (0, 0), "tick {tick}");
+            assert_eq!(bot.goal(&v), Goal::Hold);
+        }
+    }
+
+    #[test]
+    fn a_plant_that_never_links_is_let_go_for_the_other_site() {
+        let mut bot = attacker();
+        let v = sd_view(ObjRole::Attack);
+        let held = (0..60)
+            .take_while(|_| bot.think(&v).buttons == BUTTON_USE)
+            .count();
+        assert_eq!(held as u32, START_TICKS);
+        assert_eq!(bot.goal(&v), Goal::To([2000.0, 0.0, 64.0]));
+    }
+
+    #[test]
+    fn a_defender_turns_onto_the_bomb_then_holds_use() {
+        let mut bot = Bot::new("axis", true, 1);
+        let mut v = sd_view(ObjRole::Defend);
+        let bomb = [30.0, 0.0, 64.0];
+        plant_bomb(&mut v, bomb);
+        // Facing away from it, down +y.
+        v.view = [0.0, 90.0, 0.0];
+        assert_eq!(bot.goal(&v), Goal::Hold, "within reach already");
+        let (tp, ty) = aim_angles(&v, [30.0, 0.0, 72.0]);
+        let mut pressed = None;
+        for tick in 0..40 {
+            let cmd = bot.think(&v);
+            let aim = [
+                cmd.angles[0] as f32 / ANGLE2SHORT,
+                cmd.angles[1] as f32 / ANGLE2SHORT,
+            ];
+            assert_eq!((cmd.forward, cmd.right), (0, 0));
+            if cmd.buttons & BUTTON_USE != 0 {
+                // Pressed only with the view, not just the cmd, on the bomb.
+                assert!(yaw_diff(v.view[0], tp).hypot(yaw_diff(v.view[1], ty)) < SETTLE_DEG);
+                pressed = Some(tick);
+                break;
+            }
+            v.view = [aim[0], aim[1], 0.0];
+        }
+        let pressed = pressed.expect("never pressed use on the bomb");
+        assert!(pressed >= 6, "90 degrees at 15 a tick takes six ticks");
+        v.linked = true;
+        for _ in 0..180 {
+            assert_eq!(bot.think(&v).buttons, BUTTON_USE);
+        }
+        // Defused: the trigger is gone, so is the press.
+        v.sd.as_mut().unwrap().bomb = None;
+        v.linked = false;
+        assert_eq!(bot.think(&v).buttons & BUTTON_USE, 0);
+    }
+
+    #[test]
+    fn use_is_pressed_only_at_the_objective() {
+        for role in [ObjRole::Attack, ObjRole::Defend] {
+            let mut bot = attacker();
+            let mut v = sd_view(role);
+            v.origin = [800.0, 0.0, 64.0];
+            v.waypoint = Some([700.0, 0.0, 64.0]);
+            assert_eq!(bot.goal(&v), Goal::To([0.0, 0.0, 64.0]), "{role:?}");
+            for _ in 0..100 {
+                let cmd = bot.think(&v);
+                assert_eq!(cmd.buttons & BUTTON_USE, 0, "{role:?}");
+                assert_eq!(cmd.forward, 127, "{role:?}");
+                v.origin[0] -= 1.0;
+            }
+            // A guarding defender stands in its zone and presses nothing.
+            if role == ObjRole::Defend {
+                v.origin = [0.0, 0.0, 64.0];
+                assert_eq!(bot.goal(&v), Goal::Hold);
+                for _ in 0..100 {
+                    let cmd = bot.think(&v);
+                    assert_eq!((cmd.buttons, cmd.forward), (0, 0));
+                }
+            }
+        }
+        // A defender short of the bomb walks to it without a press.
+        let mut bot = Bot::new("axis", true, 1);
+        let mut v = sd_view(ObjRole::Defend);
+        plant_bomb(&mut v, [500.0, 0.0, 64.0]);
+        assert_eq!(bot.goal(&v), Goal::To([500.0, 0.0, 64.0]));
+        assert_eq!(bot.think(&v).buttons & BUTTON_USE, 0);
     }
 
     #[test]

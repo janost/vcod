@@ -916,6 +916,9 @@ pub struct Server {
     nav: Option<std::sync::Arc<crate::nav::NavGraph>>,
     /// Per bot, its walk along `nav`.
     bot_paths: BTreeMap<usize, crate::nav::Follower>,
+    /// Each bombzone's `(mins, maxs)` and the stand `site_stand` picked in
+    /// it, for the life of the nav graph.
+    bot_sites: Vec<([f32; 3], [f32; 3], [f32; 3])>,
     /// The shots and blasts since the bots last listened, in sim order;
     /// `step_bots` takes them at the top of the next tick.
     bot_noises: Vec<crate::bots::Noise>,
@@ -1061,6 +1064,7 @@ impl Server {
             bot_enemies: BTreeMap::new(),
             nav: None,
             bot_paths: BTreeMap::new(),
+            bot_sites: Vec::new(),
             bot_noises: Vec::new(),
             archive: Default::default(),
         };
@@ -2052,6 +2056,7 @@ impl Server {
 
         // Pass 2: what each bot's body sees, for the brains. The enemy
         // lookup refreshes at ~10 Hz per bot and is cached in between.
+        let sd = self.bot_sd();
         let views: Vec<(usize, crate::bots::BotView)> = slots
             .iter()
             .filter_map(|slot| {
@@ -2068,6 +2073,17 @@ impl Server {
                 };
                 let mut view = self.bot_view(*slot, enemy)?;
                 view.noise = crate::bots::loudest(&noises, *slot, view.origin);
+                view.sd = sd.as_ref().and_then(|(attackers, defenders, sd)| {
+                    let team = teams.get(*slot).copied().unwrap_or(0);
+                    let role = if team == *attackers {
+                        crate::bots::ObjRole::Attack
+                    } else if team == *defenders {
+                        crate::bots::ObjRole::Defend
+                    } else {
+                        return None;
+                    };
+                    Some(crate::bots::SdView { role, ..sd.clone() })
+                });
                 Some((*slot, view))
             })
             .collect();
@@ -2248,8 +2264,99 @@ impl Server {
             enemy,
             grenade,
             waypoint: None,
+            linked: sim.link_to.is_some(),
+            sd: None,
             noise: None,
         })
+    }
+
+    /// The S&D objectives for this frame's bot views, on an `sd` level only:
+    /// the attacking and defending team values and the view with a
+    /// placeholder role. Read fresh every frame, since a `map_restart`
+    /// respawns the zones under new handles.
+    fn bot_sd(&mut self) -> Option<(i32, i32, crate::bots::SdView)> {
+        if self.level_cvars.as_ref().is_none_or(|(g, _)| g != "sd") {
+            return None;
+        }
+        let o = self.script.as_mut()?.sd_objectives();
+        let team = |t: &str| match t {
+            "axis" => script::TEAM_AXIS,
+            "allies" => script::TEAM_ALLIES,
+            _ => -1,
+        };
+        let sites = o
+            .sites
+            .iter()
+            .map(|&(mins, maxs)| crate::bots::SiteView {
+                mins,
+                maxs,
+                stand: self.site_stand(mins, maxs),
+            })
+            .collect();
+        let bomb = o.bomb.map(|(origin, (lo, hi))| crate::bots::BombView {
+            origin,
+            aim: std::array::from_fn(|i| (lo[i] + hi[i]) * 0.5),
+        });
+        Some((
+            team(&o.attackers),
+            team(&o.defenders),
+            crate::bots::SdView {
+                role: crate::bots::ObjRole::Attack,
+                sites,
+                bomb,
+            },
+        ))
+    }
+
+    /// Where a bot stands to plant in a zone: the graph node inside the
+    /// bounds nearest their middle, from the component holding the most
+    /// nodes so a bot anywhere can reach it, else the nearest such node to
+    /// the middle. Cached per zone; the zones keep their bounds across
+    /// rounds.
+    fn site_stand(&mut self, mins: [f32; 3], maxs: [f32; 3]) -> [f32; 3] {
+        let mid = [
+            (mins[0] + maxs[0]) * 0.5,
+            (mins[1] + maxs[1]) * 0.5,
+            mins[2],
+        ];
+        if let Some(&(_, _, p)) = self
+            .bot_sites
+            .iter()
+            .find(|(lo, hi, _)| *lo == mins && *hi == maxs)
+        {
+            return p;
+        }
+        let Some(g) = self.nav.clone() else {
+            return mid;
+        };
+        let comp = g.components();
+        let mut sizes: BTreeMap<u32, usize> = BTreeMap::new();
+        for c in &comp {
+            *sizes.entry(*c).or_default() += 1;
+        }
+        // Largest first, lower number on a tie, for a pick that does not
+        // depend on map iteration.
+        let main = sizes
+            .iter()
+            .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
+            .map(|(c, _)| *c);
+        let mid_v = glam::Vec3::from(mid);
+        let inside = |n: &glam::Vec3| {
+            (0..2).all(|i| n[i] >= mins[i] + 16.0 && n[i] <= maxs[i] - 16.0)
+                && n.z <= maxs[2]
+                && n.z + 70.0 >= mins[2]
+        };
+        let best = |want_inside: bool| {
+            g.nodes
+                .iter()
+                .enumerate()
+                .filter(|(i, n)| Some(comp[*i]) == main && (!want_inside || inside(n)))
+                .min_by(|a, b| a.1.distance(mid_v).total_cmp(&b.1.distance(mid_v)))
+                .map(|(_, n)| (*n).into())
+        };
+        let p = best(true).or_else(|| best(false)).unwrap_or(mid);
+        self.bot_sites.push((mins, maxs, p));
+        p
     }
 
     /// The nearest live, playing client on another team with a clear eye
@@ -2348,6 +2455,7 @@ impl Server {
         self.world = Some(Rc::new(world));
         self.nav = None;
         self.bot_paths.clear();
+        self.bot_sites.clear();
         self.bot_noises.clear();
     }
 

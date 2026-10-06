@@ -129,7 +129,8 @@ either: the people on it signed up for Call of Duty.
 - `--bots` adds debug bots that join through the stock menus, pick a random
   weapon the menu and the `scr_allow_*` cvars allow, and roam the map along
   a navigation graph built from pmove runs, heading for an enemy they see
-  and toward gunfire and grenade blasts they hear. `--bots-shoot` makes them
+  and toward gunfire and grenade blasts they hear. In S&D attackers plant at
+  a bombzone and defenders guard one, then defuse. `--bots-shoot` makes them
   fight with a reaction delay, a capped turn rate and aim error that settles
   while they hold a target, and chase a lost enemy to where it was last
   seen. They are still bad at it.

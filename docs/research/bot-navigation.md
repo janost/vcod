@@ -131,6 +131,9 @@ units above (a ladder), and backs toward it facing away when it is more than
 64 below (a ladder or ledge below, the way the graph proved it). A bot that
 has not left a 15-unit circle in ten ticks takes a random heading for 15 ticks
 whether it has a waypoint or not. Engaging an enemy overrides all of it.
+In S&D the objective names the point and can hold the bot still
+(`bot-objectives.md`); a bot standing at its objective or linked by the
+script is never counted as stuck.
 
 ## 4. Memory and hearing
 
