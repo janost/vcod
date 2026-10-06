@@ -1650,6 +1650,12 @@ impl ScriptRuntime {
                 if let Some(c) = self.host.pers_carry.get_mut(slot) {
                     *c = None;
                 }
+                // The client's own HUD elements go before the callback, as
+                // in retail's `ClientDisconnect` (cod11-hud-protocol.md, "A
+                // client's elements die with it"): the thread that would
+                // `destroy` them is killed below, and the next client into
+                // the slot has the owner's number.
+                self.host.ents.free_client_hud_elems(slot);
                 // The callback runs first: it reads `self`, and freeing the
                 // slot ahead of it would hand it a dead entity.
                 if let Some(id) = self.client_entity(slot) {
