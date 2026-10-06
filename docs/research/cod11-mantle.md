@@ -920,9 +920,14 @@ vcod: `correct_all_solid` in `crates/common/src/pmove.rs` is
 `step_slide_move` keeps retail's gate and revert for a start in solid,
 where it used to step out of one. `a_player_set_down_inside_a_brush_stays_there`
 pins both arms, and `probe_blastloop` against `vcod-server` reads -31.00 for
-that player. vcod's ground trace still starts at the origin rather than
-0.25 above it, so a box resting exactly on a face reads allsolid and takes
-the (0, 0, 1) nudge and the drop back: not measured to differ.
+that player. `ground_trace` runs from 0.25 above the origin to 0.25 below
+it, as the first bullet has it. It used to start at the origin, where a
+box resting exactly on a face started solid and took the (0, 0, 1) nudge
+and the drop back, 0.125 above the face. INFERRED: no retail player rests
+exactly on a face, since a spawn sits 0.125 up and a slide stops 0.125
+short, so the change shows only in vcod's tests that set a box down on a
+face; one of them (`a_rebuild_mid_stand_up_from_prone_keeps_the_eye_lerp`)
+now sets its player 0.125 up, the way a spawn does.
 
 ### A steep plane still steers the fall
 

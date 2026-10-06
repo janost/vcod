@@ -375,7 +375,11 @@ mod tests {
     fn lerp_continues(first: &[u8], second: u8, rebuild_after_ms: i32) {
         let world = test_world(&[]);
         let world = MoveWorld::bare(&world);
-        let mut pred = from_wire(&PROTOCOL_V1, &standing(1000), None);
+        // Set down the 0.125 a retail spawn sits above the floor: a box
+        // resting on the face starts every trace but the ground trace solid.
+        let mut w = standing(1000);
+        setf(&mut w, "origin[2]", 0.125);
+        let mut pred = from_wire(&PROTOCOL_V1, &w, None);
         let mut t = 1000;
         let run = |pred: &mut Predicted, t: &mut i32, wbuttons: u8, ms: i32| {
             for _ in 0..ms / 8 {
