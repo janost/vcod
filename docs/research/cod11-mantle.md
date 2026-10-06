@@ -65,7 +65,8 @@ the waterjump/ladder dispatch - is correct about *location* and wrong about
 - **Trace sites.** Every indirect call through the four trace hooks in
   `pmove_t` (`pm+0xE8` trace, `+0xEC`, `+0xF0`, `+0xF4`, read via
   `PM_SlideMove` at 0x34988) inside the pmove region 0x2E400-0x35000 was
-  inspected. They implement: ground stick/snap (fn at 0x30214), ground trace +
+  inspected. They implement: `PM_CorrectAllSolid` (fn at 0x30214, see "A start
+  inside a solid"), ground trace +
   slope/water categorisation (fn at 0x30474), three sight-trace checks (fn at
   0x30778), stance-change headroom probes plus jump plus ground snap (fn at
   0x316F4), the prone debug visualiser gated on `g_debugProneCheck` (code at
@@ -871,6 +872,57 @@ second slide ran up a face too steep to stand on, where every unit of
 height is more ground covered; on a step with a flat top the down pass
 lands both heights on the same floor, which is why no slope capture caught
 it.
+
+### A start inside a solid
+
+VERIFIED, `client-probes/probe_blastloop` on retail, 2026-10-05: a player
+the `setOrigin` method set down at (-246.8, 2473.1, -32) read
+(-246.80, 2473.10, -31.00) a second later, its client sending cmds with no
+movement, where the others set down at z -32 nearby settled at -31.87. Its
+box starts nine units inside a `clip_metal` brush of mp_carentan's
+bombzone_A `script_brushmodel` (`*5`, top at -21.875).
+
+VERIFIED, `game.mp.i386.so`, the offsets, immediates and call targets in
+this list. INFERRED: the ordering and every condition in it.
+
+- The ground trace (0x30474) runs from the origin plus 0.25 to the origin
+  less 0.25 (`.rodata 0x70ba8`, 0x304c0-0x304d3), and with the trace's
+  allsolid byte (`+0x2e`) set it calls 0x30214 (0x30526-0x3053a), a zero
+  return skipping the rest of the categorisation.
+- 0x30214 is `PM_CorrectAllSolid`. It loops 26 times (0x30336-0x3033d) over
+  the unit offsets at `.rodata 0x70a40`, every (i, j, k) in {-1, 0, 1}³ but
+  the origin, in the order (0,0,1), (-1,0,1), (0,-1,1), (1,0,1), (0,1,1),
+  (-1,0,0), (0,-1,0), (1,0,0), (0,1,0), (0,0,-1), then the four `k = -1`
+  edges and the eight corners. Each is a box trace with start and end equal
+  (0x30230-0x3028a), passed over while its startsolid byte (`+0x2f`) is set
+  (0x3028f). The first clear one becomes the origin, a one-unit trace down
+  from it the ground trace, and that trace's end the origin again, and it
+  returns 1 (0x30299-0x30334). With none clear it writes
+  `groundEntityNum = 0x3ff` (`ps+0x54`), clears `pml.groundPlane` and
+  `pml.walking` (`pml+0x30`, `+0x2c`) and `ps+0x68`, the jump's origin z,
+  and returns 0 (0x30343-0x3036e).
+- `PM_SlideMove` (0x347c0) tests its first trace's allsolid byte
+  (0x34993-0x3499a) and on that arm writes 0 to `velocity.z` and returns 1
+  (0x348a5-0x348b8); the origin's one store (0x349b2) is past the test.
+- `PM_StepSlideMove`'s gate (0x35057-0x3510c) returns for a blocked move
+  with the jump's origin z inside +-0.001 and no ground entity unless
+  `pm_flags & 0x10` is set with `velocity.z` above 0, ahead of the up trace
+  (0x35173).
+
+INFERRED, from the above: a box one unit from free is nudged out and set
+down; one deeper is in the air with no jump origin, its slide returns
+unmoved with `velocity.z` zeroed, and the step's gate returns, so it holds
+its origin frame after frame, which is the capture. The up trace that
+would have found room above the brush never runs.
+
+vcod: `correct_all_solid` in `crates/common/src/pmove.rs` is
+`PM_CorrectAllSolid`, called from `ground_trace` on an allsolid trace, and
+`step_slide_move` keeps retail's gate and revert for a start in solid,
+where it used to step out of one. `a_player_set_down_inside_a_brush_stays_there`
+pins both arms, and `probe_blastloop` against `vcod-server` reads -31.00 for
+that player. vcod's ground trace still starts at the origin rather than
+0.25 above it, so a box resting exactly on a face reads allsolid and takes
+the (0, 0, 1) nudge and the drop back: not measured to differ.
 
 ### A steep plane still steers the fall
 

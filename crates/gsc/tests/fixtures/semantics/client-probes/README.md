@@ -697,8 +697,11 @@ probes clear where retail's left none, and slot 2 takes 133 on
 `same_frame_high` callbacks run 2 then 3 where retail's ran 3 then 2.
 
 Ours on 2026-10-06, after the walk took the area tree's order (combat doc
-14.7): `same_frame_high` runs 3 then 2 as retail's did. Slot 3 still stands
-at -21.88 and slot 2 still takes 133 on `lethal_high`.
+14.7): `same_frame_high` runs 3 then 2 as retail's did. Then, with
+`PM_CorrectAllSolid` and the step gate for a start in solid ported (mantle
+doc, "A start inside a solid"), slot 3 stands at -31.00 inside the flak88
+clip as retail's does, and every row from the first blast on reads as
+retail's.
 
 The `after_low` and `before_high` rows this section's block drops, retail
 then ours on 2026-10-06 after the `PM_DeadMove` and spawn-health fixes

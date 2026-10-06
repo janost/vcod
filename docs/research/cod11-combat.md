@@ -4516,8 +4516,9 @@ earlier in the walk, or anywhere earlier in the frame, is left out of the
 bodies that stop a probe. `a_blast_walks_its_victims_one_callback_at_a_time`
 (`crates/server/src/game/builtins/combat.rs`) replays the rows above in
 both slot orders; the same probe against `vcod-server` read every line-1 row
-as retail did, and since the walk took the area tree's order (14.7) the
-line-2 same-frame row's callback order too. A grenade blast reads victims
+as retail did, and since the walk took the area tree's order (14.7) and
+the player set down inside the flak88 clip stays there (mantle doc, "A
+start inside a solid") every line-2 row too. A grenade blast reads victims
 and bodies off the sims, so a `setOrigin` from an earlier callback of the
 same walk does not move them; the builtin reads the script `origin` and
 does.
