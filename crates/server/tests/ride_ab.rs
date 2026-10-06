@@ -10,6 +10,10 @@
 //! same offset from its phase's start. `docs/research/cod11-movers.md`,
 //! sections 11 to 13, is what the run measured.
 //!
+//! A third, `-ride-ents.txt`, is a later run of the same probe with the
+//! `bm_*` phases added: the brush model's own entity as the client was sent
+//! it, diffed per snapshot against the entity ours sends (section 14).
+//!
 //! `RIDE_REPORT=1` prints every compared row.
 //!
 //! Needs `COD_DIR`; without the paks the test returns early.
@@ -22,11 +26,15 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::protocol::PROTOCOL_V1;
+use vcod_common::net::trajectory::Trajectory;
 use vcod_common::net::{NetClient, NetEvent};
 
 const MAP: &str = "mp_carentan";
 const SERVER: &str = "tests/fixtures/movers/mp_carentan-dm-ride.txt";
 const WIRE: &str = "tests/fixtures/movers/mp_carentan-dm-ride-wire.txt";
+const ENTS: &str = "tests/fixtures/movers/mp_carentan-dm-ride-ents.txt";
+/// The slab's brush model, `*5`; retail numbers its entity 177.
+const SLAB_MODEL: i32 = 5;
 
 /// What both halves agree to: float formatting and the resting height.
 /// Ours rests on the courtyard terrain at z -31.87 where retail rests at
@@ -127,9 +135,36 @@ fn diff(a: [f32; 3], b: [f32; 3]) -> f32 {
     (0..3).map(|i| (a[i] - b[i]).abs()).fold(0.0, f32::max)
 }
 
+/// The slab's entity as one snapshot carried it, `None` when it was not in
+/// the snapshot.
+type SlabEnt = Option<SlabState>;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct SlabState {
+    solid: i32,
+    index: i32,
+    eflags: i32,
+    pos: Trajectory,
+    apos: Trajectory,
+}
+
+/// One run of ours: the script log, the client's origin per snapshot and the
+/// slab's entity per snapshot, both by serverTime.
+struct Ours {
+    log: Vec<String>,
+    wire: Wire,
+    slab: BTreeMap<i32, SlabEnt>,
+}
+
+/// Both tests read the one run; it takes most of the gate's time.
+fn ours() -> Option<&'static Ours> {
+    static RUN: std::sync::OnceLock<Option<Ours>> = std::sync::OnceLock::new();
+    RUN.get_or_init(run_ours).as_ref()
+}
+
 /// The probe on ours with one allied client standing still, run to its
-/// `PROBE done`: the script log and the client's origin per snapshot.
-fn run_ours() -> Option<(Vec<String>, Wire)> {
+/// `PROBE done`.
+fn run_ours() -> Option<Ours> {
     let fs = vcod_common::testing::game_fs()?;
     let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
@@ -146,6 +181,7 @@ fn run_ours() -> Option<(Vec<String>, Wire)> {
     let mut cl = NetClient::start_with_qport(ClientEnd(q.clone()), now, 0x2001);
     let mut join = Join::new("allies", "m1carbine_mp");
     let mut seen = BTreeMap::new();
+    let mut slab = BTreeMap::new();
     for _ in 0..3000 {
         now += Duration::from_millis(FRAME_MS as u64);
         cl.send_frame(&holding(&cl));
@@ -157,19 +193,43 @@ fn run_ours() -> Option<(Vec<String>, Wire)> {
             }
         }
         if let Some(s) = cl.snapshots().newest() {
-            seen.insert(s.server_time, s.ps.origin(&PROTOCOL_V1));
+            let p = &PROTOCOL_V1;
+            seen.insert(s.server_time, s.ps.origin(p));
+            let ent = s
+                .entities
+                .values()
+                .find(|e| e.field_i32(p, "eType") == 8 && e.field_i32(p, "index") == SLAB_MODEL);
+            slab.insert(
+                s.server_time,
+                ent.map(|e| SlabState {
+                    solid: e.field_i32(p, "solid"),
+                    index: e.field_i32(p, "index"),
+                    eflags: e.field_i32(p, "eFlags"),
+                    pos: Trajectory::read(e, p, "pos"),
+                    apos: Trajectory::read(e, p, "apos"),
+                }),
+            );
         }
         if sv.script_log().iter().any(|l| l.contains("PROBE done")) {
             break;
         }
     }
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
-    Some((sv.script_log().to_vec(), seen))
+    Some(Ours {
+        log: sv.script_log().to_vec(),
+        wire: seen,
+        slab,
+    })
 }
 
 #[test]
 fn a_brush_model_mover_carries_and_pushes_players_like_retail() {
-    let Some((log, ours_wire)) = run_ours() else {
+    let Some(Ours {
+        log,
+        wire: ours_wire,
+        ..
+    }) = ours()
+    else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -180,6 +240,7 @@ fn a_brush_model_mover_carries_and_pushes_players_like_retail() {
     let retail_text = std::fs::read_to_string(SERVER).unwrap();
     let retail = phases(retail_text.lines());
     let ours = phases(log.iter().map(String::as_str));
+    let ours_wire = ours_wire.clone();
     let retail_wire = wire(&std::fs::read_to_string(WIRE).unwrap());
     let tol = |phase: &str, what: &str| {
         GAPS.iter()
@@ -238,6 +299,237 @@ fn a_brush_model_mover_carries_and_pushes_players_like_retail() {
     assert!(
         bad.is_empty(),
         "{} rows differ:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
+
+/// A `[x,y,z]` the probe prints.
+fn bracket(t: &str) -> glam::Vec3 {
+    let v: Vec<f32> = t
+        .trim_matches(|c| c == '[' || c == ']')
+        .split(',')
+        .map(|v| v.parse().unwrap())
+        .collect();
+    glam::Vec3::new(v[0], v[1], v[2])
+}
+
+/// `trType a trTime b trDuration c base [..] delta [..]`, from `tokens[0]`.
+fn trajectory(tokens: &[&str]) -> Trajectory {
+    Trajectory {
+        tr_type: tokens[1].parse().unwrap(),
+        tr_time: tokens[3].parse().unwrap(),
+        tr_duration: tokens[5].parse().unwrap(),
+        base: bracket(tokens[7]),
+        delta: bracket(tokens[9]),
+    }
+}
+
+/// The ents fixture: each phase's start, and the slab's entity at `t` as the
+/// latest change line at or before it reads.
+struct RetailSlab {
+    starts: BTreeMap<String, i32>,
+    done: i32,
+    /// `(serverTime, state)` per change, in order.
+    changes: Vec<(i32, SlabEnt)>,
+}
+
+impl RetailSlab {
+    fn parse(text: &str) -> Self {
+        let mut starts = BTreeMap::new();
+        let mut done = 0;
+        let mut changes: Vec<(i32, SlabEnt)> = Vec::new();
+        let mut cur: SlabEnt = None;
+        let kv = |l: &str, k: &str| -> i64 {
+            let v = l
+                .split_whitespace()
+                .find_map(|t| t.strip_prefix(k))
+                .unwrap();
+            match v.strip_prefix("0x") {
+                Some(h) => i64::from_str_radix(h, 16).unwrap(),
+                None => v.parse().unwrap(),
+            }
+        };
+        for l in text.lines().filter(|l| !l.starts_with('#')) {
+            let tokens: Vec<&str> = l.split_whitespace().collect();
+            match tokens.as_slice() {
+                ["PROBE", "at", phase, t] => {
+                    starts.insert(phase.to_string(), t.parse().unwrap());
+                }
+                ["PROBE", "done", t] => done = t.parse().unwrap(),
+                ["RIDE_ENT", ..] if kv(l, "num=") == 177 => {
+                    let mut s = cur.unwrap_or_default();
+                    s.solid = kv(l, "solid=") as i32;
+                    s.index = kv(l, "index=") as i32;
+                    s.eflags = kv(l, "eFlags=") as i32;
+                    cur = Some(s);
+                    changes.push((kv(l, "t=") as i32, cur));
+                }
+                ["RIDE_GONE", ..] if kv(l, "num=") == 177 => {
+                    cur = None;
+                    changes.push((kv(l, "t=") as i32, cur));
+                }
+                [
+                    "entity",
+                    "177",
+                    "serverTime",
+                    t,
+                    "eType",
+                    _,
+                    "pos",
+                    rest @ ..,
+                ] => {
+                    let mut s = cur.expect("a trajectory line before RIDE_ENT");
+                    s.pos = trajectory(&rest[..10]);
+                    s.apos = trajectory(&rest[11..21]);
+                    cur = Some(s);
+                    changes.push((t.parse().unwrap(), cur));
+                }
+                _ => {}
+            }
+        }
+        RetailSlab {
+            starts,
+            done,
+            changes,
+        }
+    }
+
+    fn at(&self, t: i32) -> SlabEnt {
+        self.changes
+            .iter()
+            .take_while(|(ct, _)| *ct <= t)
+            .last()
+            .and_then(|(_, s)| *s)
+    }
+}
+
+/// `t` moved by `shift`, unless it is the 0 of a group no verb has touched.
+fn shifted(t: i32, shift: i32) -> i32 {
+    if t == 0 { 0 } else { t + shift }
+}
+
+/// How far ours may sit from retail: a trajectory's `trTime` in ms, its
+/// `trBase` and `trDelta` in units.
+#[derive(Clone, Copy)]
+struct SlabTol {
+    time: i32,
+    base: f32,
+    delta: f32,
+}
+
+fn slab_diff(retail: &SlabState, ours: &SlabState, shift: i32, tol: SlabTol) -> Option<String> {
+    let mut out = Vec::new();
+    for (name, r, o) in [
+        ("solid", retail.solid, ours.solid),
+        ("index", retail.index, ours.index),
+        ("eFlags", retail.eflags, ours.eflags),
+    ] {
+        if r != o {
+            out.push(format!("{name} retail {r:#x} ours {o:#x}"));
+        }
+    }
+    for (group, r, o) in [
+        ("pos", retail.pos, ours.pos),
+        ("apos", retail.apos, ours.apos),
+    ] {
+        let same = r.tr_type == o.tr_type
+            && (shifted(r.tr_time, shift) - o.tr_time).abs() <= tol.time
+            && r.tr_duration == o.tr_duration
+            && (r.base - o.base).abs().max_element() < TOL.max(tol.base)
+            && (r.delta - o.delta).abs().max_element() < TOL.max(tol.delta);
+        if !same {
+            out.push(format!("{group} retail {r:?} (time +{shift}) ours {o:?}"));
+        }
+    }
+    (!out.is_empty()).then(|| out.join("; "))
+}
+
+/// Known divergences of the slab's entity, `(phase, tolerance)`, each from
+/// that phase to the end of the run: a stationary trajectory keeps its
+/// `trTime` and `trDelta` until the next verb, so a difference outlives the
+/// phase that made it.
+const SLAB_GAPS: &[(&str, SlabTol)] = &[
+    // Retail's lowered slab moves 2 units once more after it first stalls
+    // (the frame its push's keep-in-place fallback clears the player and
+    // writes ground 1023), ours holds: from there every `trTime` the stall
+    // shifts is a frame apart, and the `moveto` that resets it starts 2
+    // units higher, in its `trBase` and its `trDelta` (section 12; the
+    // `reset` row of `GAPS`).
+    (
+        "crush",
+        SlabTol {
+            time: 50,
+            base: 2.05,
+            delta: 2.05,
+        },
+    ),
+];
+
+#[test]
+fn a_brush_model_mover_goes_on_the_wire_like_retail() {
+    let Some(Ours { log, slab, .. }) = ours() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let retail = RetailSlab::parse(&std::fs::read_to_string(ENTS).unwrap());
+    let mut ours_starts = BTreeMap::new();
+    for l in log {
+        if let Some(rest) = l.split("PROBE at ").nth(1) {
+            let mut t = rest.split_whitespace();
+            let (phase, at) = (t.next().unwrap(), t.next().unwrap());
+            ours_starts.insert(phase.to_string(), at.parse::<i32>().unwrap());
+        }
+    }
+    let shift = ours_starts["ride_up"] - retail.starts["ride_up"];
+    for (phase, rs) in &retail.starts {
+        assert_eq!(
+            ours_starts.get(phase).map(|o| o - shift),
+            Some(*rs),
+            "{phase} starts at another offset on ours"
+        );
+    }
+    let mut bad = Vec::new();
+    let mut compared = 0;
+    for t in (retail.starts["ride_up"]..=retail.done).step_by(FRAME_MS as usize) {
+        let Some(o) = slab.get(&(t + shift)) else {
+            continue;
+        };
+        let phase = retail
+            .starts
+            .iter()
+            .filter(|(_, s)| **s <= t)
+            .max_by_key(|(_, s)| **s)
+            .map_or("", |(p, _)| p.as_str());
+        let r = retail.at(t);
+        if report() {
+            println!("slab {phase} {t} retail {r:?} ours {o:?}");
+        }
+        compared += 1;
+        let tol = SLAB_GAPS
+            .iter()
+            .filter(|(from, _)| retail.starts[*from] <= t)
+            .map(|(_, tol)| *tol)
+            .next_back()
+            .unwrap_or(SlabTol {
+                time: 0,
+                base: 0.0,
+                delta: 0.0,
+            });
+        let row = match (r, o) {
+            (None, None) => None,
+            (Some(_), None) => Some("retail sends it, ours does not".to_string()),
+            (None, Some(_)) => Some("ours sends it, retail does not".to_string()),
+            (Some(r), Some(o)) => slab_diff(&r, o, shift, tol),
+        };
+        if let Some(row) = row {
+            bad.push(format!("{phase} t={t}: {row}"));
+        }
+    }
+    assert!(compared > 900, "only {compared} snapshots compared");
+    assert!(
+        bad.is_empty(),
+        "{} snapshots differ:\n{}",
         bad.len(),
         bad.join("\n")
     );

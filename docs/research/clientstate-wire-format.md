@@ -229,11 +229,12 @@ live populated servers: zero hits every time. Cross-checked from the other
 direction on the two busy live servers with a per-entity `eType` histogram:
 zero `ET_MOVER` (5) ever appeared, and all `ET_SCRIPTMOVER` (8) entities
 (26 seen) resolved through ordinary xmodel names, never `*N`. The retail MP
-game module never registers an inline brushmodel in `CS_MODELS`. The draw
-path stays in `entities.rs` and `bsp.rs` because the lump carries usable
-data, but only unit tests exercise it; no real server traffic seen so far
-does. A mod or singleplayer map that does register `*N` would be the first
-real test of it.
+game module never registers an inline brushmodel in `CS_MODELS`. It does
+not need to: a `script_brushmodel` arrives as `eType` 8 with `solid`
+`0xffffff` and its inline model number in `index`
+(`docs/research/cod11-movers.md` section 14), and that is what `entities.rs`
+draws as `EntityVisual::Submodel`. The `*N` configstring arm stays for a mod
+that registers one.
 
 ## Where each fact came from
 

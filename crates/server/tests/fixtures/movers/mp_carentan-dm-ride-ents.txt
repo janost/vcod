@@ -1,0 +1,141 @@
+# Retail CoD 1.1d dedicated server: the wire entity of a moving script_brushmodel.
+# map mp_carentan, gametype dm (served as probe_ride), one client joined allies, 2026-10-06.
+# Two shells, the gsc probe first, then the client:
+#   COD_LNXDED_HOME=<absolute, no '+'> PORT=29151 SECS=132 \
+#       tools/run_probe.sh client-probes/probe_ride mp_carentan +set probe_teleport 1
+#   cargo run -p vcod -- --net-probe 127.0.0.1:29151 --probe-ride --probe-team allies --probe-secs 120
+# A second run of the probe behind mp_carentan-dm-ride.txt, with the bm_* phases
+# (hide, show, notsolid, solid, delete on the slab's brush model) added at its end.
+# The PROBE lines are the server half: each phase's start, by level time. The rest
+# is the client half, from the same run's --probe-ride client: a RIDE_ENT line when
+# an eType 8 entity's solid, index or eFlags changes, a RIDE_GONE line when it
+# leaves the snapshot, and one line per pos/apos trajectory change of any entity.
+# docs/research/cod11-movers.md, section 14, is what it measured.
+PROBE bm 177  (0.00, 0.00, 0.00) (0.00, 0.00, 0.00)
+PROBE bm 178  (0.00, 0.00, 0.00) (0.00, 0.00, 0.00)
+PROBE player 0
+PROBE at ride_up 10450
+PROBE at ride_down 13450
+PROBE at ride_x 16450
+PROBE at ride_x_back 19450
+PROBE at ride_yaw 22450
+PROBE at ride_yaw_back 24450
+PROBE at push_y 27450
+PROBE at push_y_back 30450
+PROBE at lift 34450
+PROBE at crush 36450
+PROBE at link_up 43450
+PROBE at link_yaw 46450
+PROBE at link_x 49450
+PROBE at bm_hide 53450
+PROBE at bm_show 54450
+PROBE at bm_notsolid 55450
+PROBE at bm_solid 56450
+PROBE at bm_delete 57450
+PROBE done 58450
+RIDE_ENT t=6350 num=177 solid=0xffffff index=5 eFlags=0x0
+RIDE_ENT t=6350 num=178 solid=0xffffff index=6 eFlags=0x0
+RIDE_ENT t=6350 num=251 solid=0x0 index=56 eFlags=0x0
+RIDE_ENT t=6350 num=257 solid=0x0 index=56 eFlags=0x0
+entity 297 serverTime 6350 eType 11 pos trType 0 trTime 0 trDuration 0 base [-500.0,1896.0,175.0] delta [0.0,0.0,0.0] apos trType 3 trTime 0 trDuration 0 base [0.0,295.0,0.0] delta [0.0,0.0,0.0]
+entity 298 serverTime 6350 eType 11 pos trType 0 trTime 0 trDuration 0 base [1712.0,1830.0,8.0] delta [0.0,0.0,0.0] apos trType 3 trTime 0 trDuration 0 base [0.0,229.0,0.0] delta [0.0,0.0,0.0]
+entity 177 serverTime 10450 eType 8 pos trType 3 trTime 10450 trDuration 2000 base [0.0,0.0,0.0] delta [0.0,0.0,24.0] apos trType 0 trTime 0 trDuration 0 base [0.0,0.0,0.0] delta [0.0,0.0,0.0]
+entity 177 serverTime 12450 eType 8 pos trType 0 trTime 12450 trDuration 2000 base [0.0,0.0,48.0] delta [0.0,0.0,24.0] apos trType 0 trTime 0 trDuration 0 base [0.0,0.0,0.0] delta [0.0,0.0,0.0]
+entity 177 serverTime 13450 eType 8 pos trType 3 trTime 13450 trDuration 2000 base [0.0,0.0,48.0] delta [0.0,0.0,-24.0] apos trType 0 trTime 0 trDuration 0 base [0.0,0.0,0.0] delta [0.0,0.0,0.0]
+entity 177 serverTime 15450 eType 8 pos trType 0 trTime 15450 trDuration 2000 base [0.0,0.0,0.0] delta [0.0,0.0,-24.0] apos trType 0 trTime 0 trDuration 0 base [0.0,0.0,0.0] delta [0.0,0.0,0.0]
+entity 177 serverTime 16450 eType 8 pos trType 3 trTime 16450 trDuration 2000 base [0.0,0.0,0.0] delta [24.0,0.0,0.0] apos trType 0 trTime 0 trDuration 0 base [0.0,0.0,0.0] delta [0.0,0.0,0.0]
+entity 177 serverTime 18450 eType 8 pos trType 0 trTime 18450 trDuration 2000 base [48.0,0.0,0.0] delta [24.0,0.0,0.0] apos trType 0 trTime 0 trDuration 0 base [0.0,0.0,0.0] delta [0.0,0.0,0.0]
+entity 177 serverTime 19450 eType 8 pos trType 3 trTime 19450 trDuration 2000 base [48.0,0.0,0.0] delta [-24.0,0.0,0.0] apos trType 0 trTime 0 trDuration 0 base [0.0,0.0,0.0] delta [0.0,0.0,0.0]
+entity 177 serverTime 21450 eType 8 pos trType 0 trTime 21450 trDuration 2000 base [0.0,0.0,0.0] delta [-24.0,0.0,0.0] apos trType 0 trTime 0 trDuration 0 base [0.0,0.0,0.0] delta [0.0,0.0,0.0]
+entity 177 serverTime 22450 eType 8 pos trType 0 trTime 21450 trDuration 2000 base [0.0,0.0,0.0] delta [-24.0,0.0,0.0] apos trType 3 trTime 22450 trDuration 1000 base [0.0,0.0,0.0] delta [0.0,2.0,0.0]
+entity 177 serverTime 23450 eType 8 pos trType 0 trTime 21450 trDuration 2000 base [0.0,0.0,0.0] delta [-24.0,0.0,0.0] apos trType 0 trTime 23450 trDuration 1000 base [0.0,2.0,0.0] delta [0.0,2.0,0.0]
+entity 177 serverTime 24450 eType 8 pos trType 0 trTime 21450 trDuration 2000 base [0.0,0.0,0.0] delta [-24.0,0.0,0.0] apos trType 3 trTime 24450 trDuration 1000 base [0.0,2.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 25450 eType 8 pos trType 0 trTime 21450 trDuration 2000 base [0.0,0.0,0.0] delta [-24.0,0.0,0.0] apos trType 0 trTime 25450 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 27450 eType 8 pos trType 3 trTime 27450 trDuration 2000 base [0.0,0.0,0.0] delta [0.0,-24.0,0.0] apos trType 0 trTime 25450 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 29450 eType 8 pos trType 0 trTime 29450 trDuration 2000 base [0.0,-48.0,0.0] delta [0.0,-24.0,0.0] apos trType 0 trTime 25450 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 30450 eType 8 pos trType 3 trTime 30450 trDuration 2000 base [0.0,-48.0,0.0] delta [0.0,24.0,0.0] apos trType 0 trTime 25450 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 32450 eType 8 pos trType 0 trTime 32450 trDuration 2000 base [0.0,0.0,0.0] delta [0.0,24.0,0.0] apos trType 0 trTime 25450 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 34450 eType 8 pos trType 3 trTime 34450 trDuration 500 base [0.0,0.0,0.0] delta [0.0,0.0,160.0] apos trType 0 trTime 25450 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 34950 eType 8 pos trType 0 trTime 34950 trDuration 500 base [0.0,0.0,80.0] delta [0.0,0.0,160.0] apos trType 0 trTime 25450 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 35450 eType 8 pos trType 3 trTime 35450 trDuration 500 base [0.0,0.0,80.0] delta [0.0,-96.0,0.0] apos trType 0 trTime 25450 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 35950 eType 8 pos trType 0 trTime 35950 trDuration 500 base [0.0,-48.0,80.0] delta [0.0,-96.0,0.0] apos trType 0 trTime 25450 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 36450 eType 8 pos trType 3 trTime 36450 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 25450 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 36700 eType 8 pos trType 3 trTime 36500 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 25500 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 36750 eType 8 pos trType 3 trTime 36550 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 25550 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 36800 eType 8 pos trType 3 trTime 36600 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 25600 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 36850 eType 8 pos trType 3 trTime 36650 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 25650 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 36900 eType 8 pos trType 3 trTime 36700 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 25700 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37000 eType 8 pos trType 3 trTime 36750 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 25750 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37050 eType 8 pos trType 3 trTime 36800 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 25800 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37100 eType 8 pos trType 3 trTime 36850 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 25850 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37150 eType 8 pos trType 3 trTime 36900 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 25900 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37200 eType 8 pos trType 3 trTime 36950 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 25950 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37250 eType 8 pos trType 3 trTime 37000 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26000 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37300 eType 8 pos trType 3 trTime 37050 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26050 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37350 eType 8 pos trType 3 trTime 37100 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26100 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37400 eType 8 pos trType 3 trTime 37150 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26150 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37450 eType 8 pos trType 3 trTime 37200 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26200 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37500 eType 8 pos trType 3 trTime 37250 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26250 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37550 eType 8 pos trType 3 trTime 37300 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26300 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37600 eType 8 pos trType 3 trTime 37350 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26350 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37650 eType 8 pos trType 3 trTime 37400 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26400 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37700 eType 8 pos trType 3 trTime 37450 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26450 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37750 eType 8 pos trType 3 trTime 37500 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26500 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37800 eType 8 pos trType 3 trTime 37550 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26550 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37850 eType 8 pos trType 3 trTime 37600 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26600 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37900 eType 8 pos trType 3 trTime 37650 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26650 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 37950 eType 8 pos trType 3 trTime 37700 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26700 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38000 eType 8 pos trType 3 trTime 37750 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26750 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38050 eType 8 pos trType 3 trTime 37800 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26800 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38100 eType 8 pos trType 3 trTime 37850 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26850 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38150 eType 8 pos trType 3 trTime 37900 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26900 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38200 eType 8 pos trType 3 trTime 37950 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 26950 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38250 eType 8 pos trType 3 trTime 38000 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27000 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38300 eType 8 pos trType 3 trTime 38050 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27050 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38350 eType 8 pos trType 3 trTime 38100 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27100 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38400 eType 8 pos trType 3 trTime 38150 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27150 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38450 eType 8 pos trType 3 trTime 38200 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27200 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38500 eType 8 pos trType 3 trTime 38250 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27250 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38550 eType 8 pos trType 3 trTime 38300 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27300 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38600 eType 8 pos trType 3 trTime 38350 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27350 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38650 eType 8 pos trType 3 trTime 38400 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27400 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38700 eType 8 pos trType 3 trTime 38450 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27450 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38750 eType 8 pos trType 3 trTime 38500 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27500 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38800 eType 8 pos trType 3 trTime 38550 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27550 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38850 eType 8 pos trType 3 trTime 38600 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27600 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38900 eType 8 pos trType 3 trTime 38650 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27650 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 38950 eType 8 pos trType 3 trTime 38700 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27700 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39000 eType 8 pos trType 3 trTime 38750 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27750 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39050 eType 8 pos trType 3 trTime 38800 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27800 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39100 eType 8 pos trType 3 trTime 38850 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27850 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39150 eType 8 pos trType 3 trTime 38900 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27900 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39200 eType 8 pos trType 3 trTime 38950 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 27950 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39250 eType 8 pos trType 3 trTime 39000 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28000 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39300 eType 8 pos trType 3 trTime 39050 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28050 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39350 eType 8 pos trType 3 trTime 39100 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28100 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39400 eType 8 pos trType 3 trTime 39150 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28150 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39450 eType 8 pos trType 3 trTime 39200 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28200 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39500 eType 8 pos trType 3 trTime 39250 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28250 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39550 eType 8 pos trType 3 trTime 39300 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28300 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39600 eType 8 pos trType 3 trTime 39350 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28350 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39650 eType 8 pos trType 3 trTime 39400 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28400 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39700 eType 8 pos trType 3 trTime 39450 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28450 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39750 eType 8 pos trType 3 trTime 39500 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28500 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39800 eType 8 pos trType 3 trTime 39550 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28550 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39850 eType 8 pos trType 3 trTime 39600 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28600 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39900 eType 8 pos trType 3 trTime 39650 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28650 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 39950 eType 8 pos trType 3 trTime 39700 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28700 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 40000 eType 8 pos trType 3 trTime 39750 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28750 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 40050 eType 8 pos trType 3 trTime 39800 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28800 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 40100 eType 8 pos trType 3 trTime 39850 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28850 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 40150 eType 8 pos trType 3 trTime 39900 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28900 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 40200 eType 8 pos trType 3 trTime 39950 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 28950 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 40250 eType 8 pos trType 3 trTime 40000 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 29000 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 40300 eType 8 pos trType 3 trTime 40050 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 29050 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 40350 eType 8 pos trType 3 trTime 40100 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 29100 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 40400 eType 8 pos trType 3 trTime 40150 trDuration 2000 base [0.0,-48.0,80.0] delta [0.0,0.0,-40.0] apos trType 0 trTime 29150 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 41450 eType 8 pos trType 3 trTime 41450 trDuration 1000 base [0.0,-48.0,28.0] delta [0.0,48.0,-30.0] apos trType 0 trTime 29150 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+entity 177 serverTime 42450 eType 8 pos trType 0 trTime 42450 trDuration 1000 base [0.0,0.0,0.0] delta [0.0,48.0,-30.0] apos trType 0 trTime 29150 trDuration 1000 base [0.0,-0.0,0.0] delta [0.0,-2.0,0.0]
+RIDE_ENT t=53450 num=177 solid=0xffffff index=5 eFlags=0x100
+RIDE_ENT t=54450 num=177 solid=0xffffff index=5 eFlags=0x0
+RIDE_GONE t=57450 num=177

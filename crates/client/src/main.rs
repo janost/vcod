@@ -412,8 +412,11 @@ struct LivePhase {
 
 fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp, net: &net::NetClient<net::UdpTransport>) -> Phase {
     let world = collision::CollisionWorld::build(bsp, &props::collision_tris(fs, &bsp.entities));
-    let gametype = net::info_value_for_key(net.configstring(0), "g_gametype").unwrap_or("");
-    world.unlink_script_brushes(&bsp.entities, gametype);
+    // A brush model clips only through its snapshot entity
+    // (`pmove::movers::SnapshotMovers::place`), as retail's cgame meets it.
+    for model in 1..world.model_count() {
+        world.set_model_linked(model, false);
+    }
     Phase::Live(Box::new(LivePhase {
         world,
         weapons: vcod_common::weapon_table::from_configstring(fs, net.configstring(7)),
@@ -1451,6 +1454,13 @@ impl ApplicationHandler for App {
                 {
                     return self.fail(event_loop, e);
                 }
+                // Offline there is no snapshot to place the brush models, so
+                // every one stands where the map put it.
+                if let Some(w) = &self.world
+                    && !matches!(self.mode, Mode::Online { .. })
+                {
+                    r.set_static_submodels(&(1..w.bsp.models.len()).collect::<Vec<_>>());
+                }
                 if !self.viewmodel.is_empty() {
                     r.set_viewmodel(&self.fs, &self.viewmodel);
                 }
@@ -2021,6 +2031,7 @@ impl ApplicationHandler for App {
                                         weapon_flash = built.weapon_flash;
                                         entity_pos = built.entity_pos;
                                         turret_eye = built.turret_eye;
+                                        r.set_static_submodels(&built.static_submodels);
                                         // Over 512 u is a teleport, not motion.
                                         let pos = if oa.distance(ob) > 512.0 {
                                             ob
@@ -2048,8 +2059,16 @@ impl ApplicationHandler for App {
                                                 client_num as u32,
                                                 drawn_pos,
                                             );
+                                            let movers = (
+                                                pmove::movers::SnapshotMovers::from_entities(
+                                                    p,
+                                                    &s.entities,
+                                                ),
+                                                s.server_time,
+                                            );
                                             predictor.predict(
-                                                p, &s.ps, ring, world, &bodies, weapons, local_ms,
+                                                p, &s.ps, ring, world, &bodies, &movers, weapons,
+                                                local_ms,
                                             )
                                         })
                                     } else {

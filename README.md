@@ -118,7 +118,8 @@ either: the people on it signed up for Call of Duty.
 - Map triggers (`trigger_multiple`, `trigger_hurt`, `trigger_use`,
   `trigger_lookat`), and script movers whose trajectories reach the wire.
   A moving brush model carries the players on it and shoves the ones in its
-  way, and a player linked to a moving entity rides it.
+  way, and a player linked to a moving entity rides it. The client draws a
+  brush model where its entity is, so a hidden or deleted one is gone.
 - Intermission, `map_restart`, and `sv_mapRotation` the way retail runs them,
   with the next map's gamestate sent on the live connection.
 - Spectator follow mode and the killcam, replayed out of a ring of archived
@@ -171,8 +172,9 @@ console, no key rebinding. You get command-line flags and the binds below.
   section 9).
 - Only protocol 1 (patch 1.1). 1.5 and United Offensive servers won't talk to
   it.
-- Prediction clips against the map and other players, but not against moving
-  script entities.
+- Prediction carries you with a moving brush model you stand on but not
+  with its rotation, which retail's client doesn't either; a turning mover's
+  rider is corrected at each snapshot.
 
 **Server**
 
