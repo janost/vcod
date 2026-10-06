@@ -462,13 +462,25 @@ vcod: `crate::game::wire` sends a `script_brushmodel` as `eType` 8, `solid`
 their radius once its angles are not zero, `SV_LinkEntity`'s `r.bmodel`
 arm). `ride_ab.rs` diffs the slab's entity per snapshot against the capture.
 
-INFERRED, off `G_MoverPush` relinking the pusher at its moved
-`r.currentOrigin` and `r.currentAngles` every frame it moves (section 12,
-`0x553ae`) and `SV_LinkEntity` taking the entity's clusters from the box it
-links: a moving brush model is culled where its trajectory has it at the
-level time, not at its `trBase`, which stays at the start of the segment for
-the whole move. vcod evaluates an `eType` 8 entity's `pos` and `apos` at the
-frame's level time for the cull (`crate::world::entity_visible`).
+VERIFIED, off a fourth capture, 2026-10-06:
+`crates/server/tests/fixtures/movers/mp_carentan-dm-cull.txt`, from
+`client-probes/probe_cull.gsc` and a `--probe-ride` client standing on the
+attackers' spawn. `movez(20000, 8)` on the slab at 12350 took entity 177 out
+of the 13300 snapshot, the first frame its trajectory stood 2375 units up
+(2250 on the frame before), and `movez(-20000, 8)` at 21350 brought it back
+on the 28450 snapshot, the first frame the trajectory was down to 2250. A
+cull at `trBase` would have kept it for the whole lift (`trBase` is the
+segment's start) and dropped it for the whole descent. INFERRED, off that and
+`G_MoverPush` relinking the pusher at its moved `r.currentOrigin` and
+`r.currentAngles` every frame it moves (section 12, `0x553ae`): the snapshot
+cull reads the clusters of the box the mover was last linked with, at its
+trajectory at the level time.
+
+vcod evaluates an `eType` 8 entity's `pos` and `apos` at the frame's level
+time for the cull (`crate::world::entity_visible`). VERIFIED, vcod
+measurement with the same probe and client against ours: the slab left the
+snapshot 950 ms into the lift and came back 7100 ms into the descent, as on
+retail.
 
 ### The client
 
