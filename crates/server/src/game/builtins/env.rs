@@ -2,28 +2,67 @@
 
 use vcod_gsc::{Cx, ErrorKind, Value};
 
-/// `setCullFog(near, far, r, g, b, startDist)` -> configstring 12, which
+/// `setCullFog(near, far, r, g, b, transitionTime)` -> configstring 12, which
 /// carries seven fields for those six arguments: the slot after the far
 /// distance is the density, and a density >= 1 selects linear fog, which is
 /// what `setCullFog` means. Retail writes `1` there on both captured maps
 /// (docs/research/cod11-server-handshake.md, "Map-dependent"); the field's
-/// meaning is in docs/protocol-1.1.md, "Configstring indices". `setExpFog`
-/// will write its own density in the same slot, not this constant.
+/// meaning is in docs/protocol-1.1.md, "Configstring indices".
 pub fn set_cull_fog(cs: &mut [String], cx: &Cx, args: &[Value]) -> Result<Value, ErrorKind> {
-    debug_assert!(cs.len() > 12, "configstring table shorter than slot 12");
     if args.len() != 6 {
         return Err(ErrorKind::BadType("setCullFog takes six arguments"));
     }
-    let mut parts = Vec::with_capacity(7);
-    for (i, a) in args.iter().enumerate() {
-        parts.push(
-            cx.format_number(*a)
-                .ok_or(ErrorKind::BadType("setCullFog needs numbers"))?,
-        );
-        if i == 1 {
-            parts.push("1".to_string());
-        }
+    let a = floats(args, "setCullFog needs numbers")?;
+    write_fog(cs, cx, [a[0], a[1], 1.0, a[2], a[3], a[4]], a[5])
+}
+
+/// `setExpFog(density, r, g, b, transitionTime)` (0x5b774) -> configstring 12
+/// as `0 1 <density> <r> <g> <b> <ms>`: near 0 and far 1 are constants, and
+/// the density below 1 is what selects exponential fog. Retail refuses a
+/// density outside (0, 1), a colour outside [0, 1] and a negative time
+/// (docs/research/cod11-gametypes-re-bel.md, section 2).
+pub fn set_exp_fog(cs: &mut [String], cx: &Cx, args: &[Value]) -> Result<Value, ErrorKind> {
+    if args.len() != 5 {
+        return Err(ErrorKind::BadType("setExpFog takes five arguments"));
     }
+    let a = floats(args, "setExpFog needs numbers")?;
+    if !(a[0] > 0.0 && a[0] < 1.0) {
+        return Err(ErrorKind::BadType(
+            "setExpFog: distance must be greater than 0 and less than 1",
+        ));
+    }
+    write_fog(cs, cx, [0.0, 1.0, a[0], a[1], a[2], a[3]], a[4])
+}
+
+fn floats(args: &[Value], err: &'static str) -> Result<Vec<f32>, ErrorKind> {
+    args.iter()
+        .map(|a| match a {
+            Value::Int(i) => Ok(*i as f32),
+            Value::Float(f) => Ok(*f),
+            _ => Err(ErrorKind::BadType(err)),
+        })
+        .collect()
+}
+
+/// The two fog builtins' shared tail: retail's `"%g %g %g %g %g %g %.0f"`
+/// with the transition time in milliseconds, through `G_setfog` (0x48fa4),
+/// which is `trap_SetConfigstring(12, ...)`. Both builtins reject a colour
+/// outside [0, 1] and a negative time.
+fn write_fog(cs: &mut [String], cx: &Cx, head: [f32; 6], seconds: f32) -> Result<Value, ErrorKind> {
+    debug_assert!(cs.len() > 12, "configstring table shorter than slot 12");
+    if head[3..].iter().any(|c| !(0.0..=1.0).contains(c)) {
+        return Err(ErrorKind::BadType(
+            "red/green/blue color components must be in the range [0, 1]",
+        ));
+    }
+    if seconds < 0.0 {
+        return Err(ErrorKind::BadType("transition time must be >= 0 seconds"));
+    }
+    let mut parts: Vec<String> = head
+        .iter()
+        .map(|f| cx.format_number(Value::Float(*f)).expect("a float formats"))
+        .collect();
+    parts.push(format!("{:.0}", seconds * 1000.0));
     cs[12] = parts.join(" ");
     Ok(Value::Undefined)
 }

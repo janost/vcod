@@ -741,8 +741,6 @@ What vcod leaves out, each with the retail reading it skips:
   write `wait` (it is a keyword), and no stock BSP item carries one.
 - `cg_predictItems`: the choice between `G_AddPredictableEvent` and
   `G_AddEvent` (section 7); both write the same ring.
-- `trigger_use` competing with items for the use key inside
-  `G_GetActivateEnt`: vcod keeps `trigger_use` on the touch pass.
 - The unreachable refusal lines: `GAME_PICKUP_CANTCARRYMOREAMMO` and the
   per-slot `CANT_GET` lines for pistol, grenade and smoke grenade (section 7).
 - The ammo items 65 and 66 (giType 2).
@@ -1012,9 +1010,9 @@ matching `G_GetActivateEnt`'s list once the ungrabbable entries it scores
 
 Two divergences with retail that are not test failures: an item notify
 fires at the top of the next script frame rather than inline with the touch
-that raised it (13.1); and `trigger_use` stays on the touch pass rather than
-joining the use key's scan inside `G_GetActivateEnt` (section 11), along with
-the rest of that section's list. The retail-capture gate has no `GAPS`
+that raised it (13.1); and the rest of section 11's list. A `trigger_use`
+joins the use key's scan beside items and turrets since 2026-10-06
+(`docs/research/cod11-gametypes-re-bel.md` 4). The retail-capture gate has no `GAPS`
 ruling since 13.2; section 13.4 is a further live run against ours rather
 than the gate.
 

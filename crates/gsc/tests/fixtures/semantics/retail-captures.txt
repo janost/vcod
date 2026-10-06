@@ -96,6 +96,16 @@ PROBE concat_big 1000000
 PROBE at concat_undefined
 PROBE_FATAL pair has unmatching types 'string' and 'undefined'
 
+# probe_concat_exp
+PROBE exp_small 1e-05
+PROBE exp_small_neg -2e-05
+PROBE exp_small_digits 1.23457e-05
+PROBE exp_edge_low 0.0001
+PROBE exp_edge_high 999999
+PROBE exp_million 1e+06
+PROBE exp_big_digits 1.23457e+06
+PROBE exp_huge 1e+28
+
 # probe_concat_vec
 PROBE at concat_vector
 PROBE concat_vector (1.00, 2.00, 3.00)

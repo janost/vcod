@@ -59,7 +59,7 @@ pub struct FogParams {
 impl FogParams {
     /// RTCW-MP's client adds .1 to this slot before R_SetFog so its >1 test
     /// fires; CoD's wire carries the un-offset value ("1" in both live
-    /// captures), and setExpFog densities are script-enforced below 1.
+    /// captures), and `setExpFog` refuses a density outside (0, 1).
     pub fn is_linear(&self) -> bool {
         self.density >= 1.0
     }
