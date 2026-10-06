@@ -1113,6 +1113,13 @@ impl ScriptRuntime {
         }
     }
 
+    /// A client's origin at its last link, for the `radiusDamage` walk.
+    pub fn set_client_link_origin(&mut self, slot: usize, origin: [f32; 3]) {
+        if let Some(o) = self.host.client_link_origin.get_mut(slot) {
+            *o = origin;
+        }
+    }
+
     /// A client's ammo arrays as the tick's moves left them, for the item
     /// pass and `dropItem`. Ops still queued for that client's sim are
     /// re-applied on top, since the sim has not seen them yet.

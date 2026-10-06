@@ -364,6 +364,24 @@ COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=115 \
 cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-ride --probe-secs 104
 ```
 
+## probe_cull
+
+When a moving brush model leaves and re-enters the snapshot. It keeps
+mp_carentan's bombzone brush models as probe_ride does, stands each spawned
+allied player on the attackers' spawn beside model `*5`, lifts the slab 20000
+units over 8 s and lowers it back over 8 s, logging `PROBE f <phase> <time>
+<mover origin>` every frame. The client half's `RIDE_GONE` and `RIDE_ENT`
+lines say which snapshot dropped it and which brought it back. The
+2026-10-06 run is `crates/server/tests/fixtures/movers/mp_carentan-dm-cull.txt`;
+`docs/research/cod11-movers.md` 14 reads it.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=75 \
+    tools/run_probe.sh client-probes/probe_cull mp_carentan
+# second shell, about 12 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-ride --probe-secs 55
+```
+
 ## probe_bump
 
 Player-vs-player clipping's server half. Under `probe_teleport 1` it puts

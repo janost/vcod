@@ -6,6 +6,7 @@ pub use connectionless::info_value_for_key;
 pub mod download;
 pub mod events;
 pub mod fields_v1;
+pub mod flags;
 pub mod gamestate;
 pub mod huffman;
 pub mod msg;
@@ -18,8 +19,9 @@ pub mod trajectory;
 use gamestate::Gamestate;
 use huffman::Huffman;
 use msg::{
-    MsgReader, MsgWriter, NULL_USERCMD, SVC_DOWNLOAD, SVC_EOF, SVC_GAMESTATE, SVC_NOP,
-    SVC_SERVER_COMMAND, SVC_SNAPSHOT, UserCmd, write_delta_usercmd,
+    CLC_BITS, CLC_CLIENT_COMMAND, CLC_EOF, CLC_MOVE, CLC_MOVE_NO_DELTA, MsgReader, MsgWriter,
+    NULL_USERCMD, SVC_DOWNLOAD, SVC_EOF, SVC_GAMESTATE, SVC_NOP, SVC_SERVER_COMMAND, SVC_SNAPSHOT,
+    UserCmd, write_delta_usercmd,
 };
 use netchan::Netchan;
 use protocol::{PROTOCOL_V1, Protocol};
@@ -37,12 +39,6 @@ const MAX_DOWNLOAD_SIZE: u32 = 512 << 20;
 /// Packets read per `pump`, matching the server's `MAX_PACKETS_PER_FRAME`, so a
 /// flood cannot stall the caller's frame.
 const MAX_PACKETS_PER_PUMP: usize = 256;
-
-/// `clc_ops_e`, 2 bits on the wire (cod_lnxded 0x8087454).
-const CLC_MOVE: i32 = 0;
-const CLC_MOVE_NO_DELTA: i32 = 1;
-const CLC_CLIENT_COMMAND: i32 = 2;
-const CLC_EOF: i32 = 3;
 
 const CONNECT_RESEND: Duration = Duration::from_secs(2);
 const CONNECT_TRIES: u32 = 5;
@@ -829,7 +825,7 @@ impl<T: Transport> NetClient<T> {
             if s.is_empty() {
                 continue;
             }
-            w.write_bits(CLC_CLIENT_COMMAND, 2);
+            w.write_bits(CLC_CLIENT_COMMAND, CLC_BITS);
             w.write_long(seq as i32);
             w.write_string(&s);
         }
@@ -843,7 +839,7 @@ impl<T: Transport> NetClient<T> {
             } else {
                 CLC_MOVE_NO_DELTA
             };
-            w.write_bits(clc, 2);
+            w.write_bits(clc, CLC_BITS);
             w.write_byte(cmds.len() as u8);
             let mut from = self.last_sent_cmd;
             for to in cmds {
@@ -851,7 +847,7 @@ impl<T: Transport> NetClient<T> {
                 from = *to;
             }
         }
-        w.write_bits(CLC_EOF, 2);
+        w.write_bits(CLC_EOF, CLC_BITS);
         let ops = w.into_ops();
 
         if let Ok(pkt) =
@@ -880,9 +876,9 @@ impl<T: Transport> NetClient<T> {
     }
 }
 
-/// `send_cmds` caps a single `clc_move` here, same as the server's
-/// `MAX_PACKET_USERCMDS` (`crates/server/src/server.rs`); more cmds than
-/// this keeps only the most recent ones.
+/// Cmds in one `clc_move`, the cap on both ends: `send_cmds` keeps the most
+/// recent this many, and the server's `SV_UserMove` parse refuses a count
+/// above it.
 pub const MAX_MOVE_CMDS: usize = 32;
 
 /// `ps.delta_angles`, in usercmd angle order [pitch, yaw, roll].
@@ -1535,7 +1531,7 @@ mod tests {
         let key = c.usercmd_key(message_ack, reliable_ack);
         let mut r = MsgReader::new(&comp, h);
         loop {
-            match r.read_bits(2) {
+            match r.read_bits(CLC_BITS) {
                 CLC_MOVE | CLC_MOVE_NO_DELTA => {
                     let count = r.read_byte();
                     return Some((key, r, count));

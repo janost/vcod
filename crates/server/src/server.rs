@@ -25,7 +25,8 @@ use vcod_common::net::connectionless::{Info, build_oob, parse_connect, parse_oob
 use vcod_common::net::gamestate::{self, Gamestate};
 use vcod_common::net::huffman::Huffman;
 use vcod_common::net::msg::{
-    self, MsgReader, MsgWriter, NULL_USERCMD, UserCmd, read_delta_usercmd,
+    self, CLC_BITS, CLC_CLIENT_COMMAND, CLC_EOF, CLC_MOVE, CLC_MOVE_NO_DELTA, MsgReader, MsgWriter,
+    NULL_USERCMD, UserCmd, read_delta_usercmd,
 };
 use vcod_common::net::netchan::{ClientMessage, MAX_RELIABLE_COMMANDS, ServerNetchan};
 use vcod_common::net::protocol::{PROTOCOL_V1, Protocol};
@@ -51,12 +52,7 @@ const GLOBAL_BURST: u32 = 10;
 const GLOBAL_PERIOD: Duration = Duration::from_millis(100);
 /// Source ips tracked at once; the least recently seen is evicted.
 const MAX_BUCKETS: usize = 1024;
-/// clc ops, 2 bits on the wire.
-const CLC_MOVE: i32 = 0;
-const CLC_MOVE_NO_DELTA: i32 = 1;
-const CLC_CLIENT_COMMAND: i32 = 2;
-const CLC_EOF: i32 = 3;
-const MAX_PACKET_USERCMDS: u8 = 32;
+const MAX_PACKET_USERCMDS: u8 = vcod_common::net::MAX_MOVE_CMDS as u8;
 /// Queued-but-unreplayed usercmds per client; past this a flood drops the
 /// oldest rather than building latency.
 const MAX_PENDING_CMDS: usize = 64;
@@ -943,6 +939,10 @@ pub struct Server {
     bot_enemies: BTreeMap<usize, (i32, Option<crate::bots::EnemyView>)>,
     /// The level's navigation graph, built on the first tick with bots.
     nav: Option<std::sync::Arc<crate::nav::NavGraph>>,
+    /// The build of `nav` under way, and whether the tick waits for it or
+    /// ticks on with the bots off the graph until it lands.
+    nav_job: Option<crate::nav::NavJob>,
+    nav_background: bool,
     /// Per bot, its walk along `nav`.
     bot_paths: BTreeMap<usize, crate::nav::Follower>,
     /// Each bombzone's `(mins, maxs)` and the stand `site_stand` picked in
@@ -1092,6 +1092,8 @@ impl Server {
             bots_spawned: false,
             bot_enemies: BTreeMap::new(),
             nav: None,
+            nav_job: None,
+            nav_background: false,
             bot_paths: BTreeMap::new(),
             bot_sites: Vec::new(),
             bot_noises: Vec::new(),
@@ -1450,7 +1452,7 @@ impl Server {
         let mut ops = Vec::new();
         let mut prev = base;
         loop {
-            let op = r.read_bits(2);
+            let op = r.read_bits(CLC_BITS);
             if r.is_overflowed() {
                 return None;
             }
@@ -1469,7 +1471,7 @@ impl Server {
                     ops.push(ClientOp::Move(cmds));
                     return Some((ops, prev));
                 }
-                // `read_bits(2)` yields 0..=3; unreachable.
+                // `read_bits(CLC_BITS)` yields 0..=3; unreachable.
                 _ => return None,
             }
         }
@@ -2031,7 +2033,10 @@ impl Server {
         if self.nav.is_none()
             && let Some(w) = self.world.as_ref()
         {
-            self.nav = Some(crate::nav::graph_for(&self.cfg.map, w));
+            let job = self
+                .nav_job
+                .get_or_insert_with(|| crate::nav::NavJob::start(&self.cfg.map, w));
+            self.nav = job.poll(!self.nav_background);
         }
         let sid = i32::from(self.server_id);
         // The team table once per frame; `client_team` needs the script's
@@ -2479,10 +2484,18 @@ impl Server {
         self.script.as_mut().map_or(0, |rt| rt.client_team(slot))
     }
 
+    /// Builds the bots' navigation graph off the tick thread: the server
+    /// keeps real time through the build and the bots wander until it lands.
+    /// Off by default, so a test's bots find the graph on their first tick.
+    pub fn build_nav_in_background(&mut self, on: bool) {
+        self.nav_background = on;
+    }
+
     /// Swap in the map built by the binary; tests run without one.
     pub fn load_world(&mut self, world: World) {
         self.world = Some(Rc::new(world));
         self.nav = None;
+        self.nav_job = None;
         self.bot_paths.clear();
         self.bot_sites.clear();
         self.bot_noises.clear();
@@ -3664,92 +3677,91 @@ impl Server {
                 rt.set_client_body(slot, sim.and_then(|s| s.hit_body(slot)));
                 rt.set_client_dobj(slot, sim.and_then(|s| s.dobj(slot)));
             }
-            for (slot, c) in self.clients.iter_mut().enumerate() {
-                if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
-                    rt.set_client_pm_type(slot, sim.wire_pm_type());
-                    // The link the script frame made is only on the sim from
-                    // here, so the ground reading script sees next frame is
-                    // taken again after it.
-                    rt.set_client_on_ground(slot, sim.on_ground());
-                    let rifle = self
-                        .weapon_table
-                        .get(sim.ps.weapon as usize)
-                        .is_some_and(|d| d.sounds.rifle_bullet);
-                    rt.set_client_aim(slot, sim.ps.view().eye.into(), sim.aim_angles(), rifle);
-                    rt.aim_lookat(slot, self.sv_time_ms);
-                    let (hint, string) =
-                        rt.cursor_hint_pass(slot, sim.ps.view().eye.into(), sim.view_angles());
-                    sim.cursor_hint = hint;
-                    if let Some(string) = string {
-                        sim.cursor_hint_string = string;
-                    }
-                    // `BG_PlayerAnimation` (0x41486) runs after this slot's
-                    // aim trace: a higher slot's trace meets this frame's
-                    // pose, a lower one's met the last (combat doc 16.1).
-                    sim.commit_pose();
-                    rt.set_client_body(slot, sim.hit_body(slot));
-                    rt.set_client_dobj(slot, sim.dobj(slot));
+            // Per slot, `ClientEndFrame`'s tail: the aim trace and cursor
+            // hint, `BG_PlayerAnimation`, then `turret_think_client`
+            // (turrets doc 6.1). A gunner's rounds are traced right there, so
+            // they meet a lower slot's new pose and a higher slot's last-frame
+            // one (combat doc 16.1); their hits are delivered after the loop.
+            let mut turret_effects = Vec::new();
+            for slot in 0..self.clients.len() {
+                let Some(c) = self.clients[slot].as_mut() else {
+                    continue;
+                };
+                let buttons = moved
+                    .get(slot)
+                    .and_then(|m| m.last_buttons)
+                    .unwrap_or(c.last_cmd.buttons);
+                let Some(sim) = c.sim.as_mut() else { continue };
+                rt.set_client_pm_type(slot, sim.wire_pm_type());
+                // The link the script frame made is only on the sim from
+                // here, so the ground reading script sees next frame is
+                // taken again after it.
+                rt.set_client_on_ground(slot, sim.on_ground());
+                let rifle = self
+                    .weapon_table
+                    .get(sim.ps.weapon as usize)
+                    .is_some_and(|d| d.sounds.rifle_bullet);
+                rt.set_client_aim(slot, sim.ps.view().eye.into(), sim.aim_angles(), rifle);
+                rt.aim_lookat(slot, self.sv_time_ms);
+                let (hint, string) =
+                    rt.cursor_hint_pass(slot, sim.ps.view().eye.into(), sim.view_angles());
+                sim.cursor_hint = hint;
+                if let Some(string) = string {
+                    sim.cursor_hint_string = string;
                 }
-            }
-            // `turret_think_client`, last in `ClientEndFrame` (turrets doc
-            // 6.1): each gunner's aim, fire and loop sound, and the rounds
-            // traced and delivered on this same frame (12.5).
-            let mut shots = Vec::new();
-            for (slot, c) in self.clients.iter_mut().enumerate() {
-                let Some(c) = c.as_mut() else { continue };
-                let buttons = moved[slot].last_buttons.unwrap_or(c.last_cmd.buttons);
-                if let Some(sim) = c.sim.as_mut() {
-                    rt.apply_turret_releases(slot, sim);
-                    shots.extend(rt.turret_think_client(
-                        slot,
-                        sim,
-                        buttons & vcod_common::net::msg::BUTTON_ATTACK != 0,
-                        self.anims.as_deref().map(|a| (a, &mut self.hit_rigs)),
-                    ));
-                }
+                // `BG_PlayerAnimation` (0x41486) runs after this slot's
+                // aim trace: a higher slot's trace meets this frame's
+                // pose, a lower one's met the last (combat doc 16.1).
+                sim.commit_pose();
+                rt.set_client_body(slot, sim.hit_body(slot));
+                rt.set_client_dobj(slot, sim.dobj(slot));
+                rt.apply_turret_releases(slot, sim);
+                let Some(shot) = rt.turret_think_client(
+                    slot,
+                    sim,
+                    buttons & vcod_common::net::msg::BUTTON_ATTACK != 0,
+                    self.anims.as_deref().map(|a| (a, &mut self.hit_rigs)),
+                ) else {
+                    continue;
+                };
+                let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
+                    .clients
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
+                    .collect();
+                let collision = self.world.as_ref().map(|w| &w.collision);
+                let mut bones = match (self.fs.as_deref(), self.anims.as_deref()) {
+                    (Some(fs), Some(anims)) => Some(crate::game::combat::BoneTraceCtx {
+                        fs,
+                        anims,
+                        rigs: &mut self.hit_rigs,
+                        now_ms: self.sv_time_ms,
+                    }),
+                    _ => None,
+                };
+                // The callback is told the gunner's own weapon (turrets doc
+                // 12.6); `player_die` credits the gun.
+                let carried = sims
+                    .iter()
+                    .find(|(s, _)| *s == shot.slot)
+                    .map_or(0, |(_, sim)| sim.ps.weapon as usize);
+                let r = crate::game::combat::bullet_fire_from(
+                    shot.slot,
+                    shot.muzzle,
+                    shot.dir,
+                    shot.damage,
+                    shot.rifle_bullet,
+                    crate::items::item_name(carried).unwrap_or_default(),
+                    &sims,
+                    collision,
+                    &self.hitlocs,
+                    bones.as_mut(),
+                );
+                turret_effects.extend(r.effects);
             }
             rt.drop_turret_releases();
-            if !shots.is_empty() {
-                let mut turret_effects = Vec::new();
-                {
-                    let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
-                        .clients
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
-                        .collect();
-                    let collision = self.world.as_ref().map(|w| &w.collision);
-                    let mut bones = match (self.fs.as_deref(), self.anims.as_deref()) {
-                        (Some(fs), Some(anims)) => Some(crate::game::combat::BoneTraceCtx {
-                            fs,
-                            anims,
-                            rigs: &mut self.hit_rigs,
-                            now_ms: self.sv_time_ms,
-                        }),
-                        _ => None,
-                    };
-                    for shot in shots {
-                        // The callback is told the gunner's own weapon
-                        // (turrets doc 12.6); `player_die` credits the gun.
-                        let carried = sims
-                            .iter()
-                            .find(|(s, _)| *s == shot.slot)
-                            .map_or(0, |(_, sim)| sim.ps.weapon as usize);
-                        let r = crate::game::combat::bullet_fire_from(
-                            shot.slot,
-                            shot.muzzle,
-                            shot.dir,
-                            shot.damage,
-                            shot.rifle_bullet,
-                            crate::items::item_name(carried).unwrap_or_default(),
-                            &sims,
-                            collision,
-                            &self.hitlocs,
-                            bones.as_mut(),
-                        );
-                        turret_effects.extend(r.effects);
-                    }
-                }
+            if !turret_effects.is_empty() {
                 // The damage callback runs here, after the script frame, so
                 // what it leaves is applied again. A victim numbered above its
                 // gunner takes its feedback this frame; one below had its
@@ -4207,6 +4219,7 @@ impl Server {
                 rt.set_client_dobj(slot, sim.and_then(|(s, _)| s.dobj(slot)));
                 if let Some((s, _)) = sim {
                     rt.set_client_height(slot, (s.ps.maxs() - s.ps.mins()).z);
+                    rt.set_client_link_origin(slot, s.link_origin().into());
                 }
             }
         }
@@ -4645,6 +4658,7 @@ impl Server {
                     .collect()
             }),
             roster: Rc::new(roster),
+            time: self.sv_time_ms,
         };
 
         // A follower's frame is the followed client's: its playerstate with
@@ -6574,7 +6588,7 @@ mod tests {
     /// killed callback drops both leave from whole units, truncated toward
     /// zero.
     #[test]
-    fn a_trigger_hurt_death_drops_from_the_snapped_origin() {
+    fn a_trigger_hurt_death_drops_and_clones_at_the_snapped_origin() {
         use vcod_common::net::msg::BUTTON_ATTACK;
         let rt = crate::game::script::ScriptRuntime::for_test_at(
             crate::game::script::CALLBACK_SETUP,
@@ -6583,7 +6597,7 @@ mod tests {
              dir, hitloc) { self finishPlayerDamage(inflictor, attacker, damage, flags, mod, \
              weapon, point, dir, hitloc); }\n\
              CodeCallback_PlayerKilled(inflictor, attacker, damage, mod, weapon, dir, hitloc) \
-             { self dropItem(self getcurrentweapon()); }\n",
+             { self dropItem(self getcurrentweapon()); body = self cloneplayer(); }\n",
         );
         let Some((mut sv, st, frag)) = last_frag_in_hand_under(rt) else {
             return;
@@ -6645,6 +6659,10 @@ mod tests {
             .map(|(id, _)| id)
             .expect("the killed callback dropped no weapon");
         let at = rt.entity_origin_of(item).unwrap();
+        assert_eq!([at[0], at[1]], [snapped.x, snapped.y]);
+        // `G_SetOrigin(body, self->r.currentOrigin)` (5.2): the corpse too.
+        let (_, body) = rt.host.bodies.entities().next().expect("no corpse");
+        let at = body.origin(sv.proto);
         assert_eq!([at[0], at[1]], [snapped.x, snapped.y]);
     }
 
