@@ -454,19 +454,17 @@ impl ScriptRuntime {
     /// intermission camera out before the pass runs
     /// (docs/research/cod11-gsc-object-model.md 8.2).
     ///
-    /// `buttons` are the cmd's own rather than the host's mirrored copy, which
-    /// is only written after the move pass this runs inside. The touch is
-    /// taken at the client's `origin` field; `touch_triggers_at` takes it at
-    /// an explicit `ps.origin` instead.
-    pub fn touch_triggers_with_buttons(&mut self, slot: usize, now_ms: i32, buttons: u8) {
+    /// The touch is taken at the client's `origin` field;
+    /// `touch_triggers_at` takes it at an explicit `ps.origin` instead.
+    pub fn touch_triggers(&mut self, slot: usize, now_ms: i32) {
         let origin = self.client_origin(slot);
-        self.touch_triggers_at(slot, now_ms, buttons, origin);
+        self.touch_triggers_at(slot, now_ms, origin);
     }
 
     /// `G_TouchTriggers` with its boxes on `origin`, `ps.origin`, while the
     /// client's `origin` field holds the snapped `r.currentOrigin` a hurt's
     /// callbacks read (`docs/research/cod11-combat.md` 5.5).
-    pub fn touch_triggers_at(&mut self, slot: usize, now_ms: i32, buttons: u8, origin: [f32; 3]) {
+    pub fn touch_triggers_at(&mut self, slot: usize, now_ms: i32, origin: [f32; 3]) {
         let Some(client) = self.client_entity(slot) else {
             return;
         };
@@ -484,15 +482,6 @@ impl ScriptRuntime {
         let fired: Vec<(EntId, Option<(i32, i32)>)> = hits
             .into_iter()
             .filter_map(|id| {
-                // A `trigger_use` answers the use key rather than contact
-                // (docs/superpowers/specs/2026-09-08-movers-triggers-sd-design.md
-                // 3.6). Ahead of `fire`, so a keyless touch leaves the `wait`
-                // window unarmed.
-                if triggers.get(id).map(|t| t.kind) == Some(crate::game::trigger::TriggerKind::Use)
-                    && buttons & vcod_common::net::msg::BUTTON_USE == 0
-                {
-                    return None;
-                }
                 if !triggers.fire(id, now_ms, &mut |n| {
                     if n <= 0 {
                         0
@@ -588,6 +577,10 @@ impl ScriptRuntime {
                 Some(Activate::Turret(turret)) => {
                     host.turret_ops.push(TurretOp::Mount { slot, turret });
                 }
+                // `Cmd_Activate_f` notifies `trigger` on the entity the hint
+                // pass chose, with no `wait` gate
+                // (docs/research/cod11-gametypes-re-bel.md 4).
+                Some(Activate::Trigger(id)) => host.trigger_fires.push((id, client)),
                 None => {}
             }
         });
@@ -1032,6 +1025,12 @@ impl ScriptRuntime {
                         crate::configstrings::hint_string_index(&self.host.configstrings, name)
                     });
                 return (HINT_MG42, Some(string.unwrap_or(-1)));
+            }
+            Some(Activate::Trigger(id)) => {
+                let Some(t) = self.host.triggers.get(id) else {
+                    return (0, Some(-1));
+                };
+                return (t.cursor_hint, Some(t.hint_string));
             }
             Some(Activate::Item(id)) => id,
         };
@@ -2817,14 +2816,14 @@ mod tests {
         assert_eq!(rt.client_entity(0), Some(player));
         rt.set_client_state_for_test(0, "playing");
 
-        rt.touch_triggers_with_buttons(0, 50, 0);
+        rt.touch_triggers(0, 50);
         rt.run_frame(50);
         assert_eq!(rt.level_field("hits"), Value::Int(1), "one notify");
         assert_eq!(rt.level_field("who"), Value::Entity(player));
 
         // Out of the box: no second notify.
         rt.set_client_origin(0, [500.0, 0.0, 0.0]);
-        rt.touch_triggers_with_buttons(0, 100, 0);
+        rt.touch_triggers(0, 100);
         rt.run_frame(100);
         assert_eq!(rt.level_field("hits"), Value::Int(1));
     }
@@ -2850,7 +2849,7 @@ mod tests {
         rt.run_frame(0);
         rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
         rt.set_client_state_for_test(0, "playing");
-        rt.touch_triggers_with_buttons(0, 0, 0);
+        rt.touch_triggers(0, 0);
         rt.run_frame(50);
         assert_eq!(rt.level_field("at"), Value::Int(50));
     }
@@ -3015,7 +3014,7 @@ mod tests {
         rt.start_thread_for_test(zone, "trigger_think", 0);
         rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
         rt.set_client_state_for_test(0, "playing");
-        rt.touch_triggers_with_buttons(0, 0, 0);
+        rt.touch_triggers(0, 0);
         rt.run_frame(0);
         assert_eq!(rt.level_field("hits"), Value::Int(1), "the row fires first");
 
@@ -3040,7 +3039,7 @@ mod tests {
 
         // And standing back in the old box notifies nobody.
         rt.set_client_origin(0, [10.0, 0.0, 0.0]);
-        rt.touch_triggers_with_buttons(0, 250, 0);
+        rt.touch_triggers(0, 250);
         rt.run_frame(250);
         assert_eq!(rt.level_field("hits"), Value::Int(1), "no further notify");
     }
@@ -3075,13 +3074,13 @@ mod tests {
         // the behaviour is unchanged.
         rt.set_client_state_for_test(0, "spectator");
         rt.set_client_pm_type(0, crate::spectate::PM_SPECTATOR);
-        rt.touch_triggers_with_buttons(0, 50, 0);
+        rt.touch_triggers(0, 50);
         rt.run_frame(50);
         assert_eq!(rt.level_field("hits"), Value::Int(0), "a spectator touched");
 
         rt.set_client_state_for_test(0, "intermission");
         rt.set_client_pm_type(0, crate::spectate::PM_INTERMISSION);
-        rt.touch_triggers_with_buttons(0, 75, 0);
+        rt.touch_triggers(0, 75);
         rt.run_frame(75);
         assert_eq!(
             rt.level_field("hits"),
@@ -3091,14 +3090,14 @@ mod tests {
 
         rt.set_client_state_for_test(0, "dead");
         rt.set_client_pm_type(0, crate::spectate::PM_DEAD);
-        rt.touch_triggers_with_buttons(0, 100, 0);
+        rt.touch_triggers(0, 100);
         rt.run_frame(100);
         assert_eq!(rt.level_field("hits"), Value::Int(0), "a corpse touched");
 
         // And the living player the gate is there to let through.
         rt.set_client_state_for_test(0, "playing");
         rt.set_client_pm_type(0, 0);
-        rt.touch_triggers_with_buttons(0, 125, 0);
+        rt.touch_triggers(0, 125);
         rt.run_frame(125);
         assert_eq!(
             rt.level_field("hits"),
@@ -3132,7 +3131,7 @@ mod tests {
             0,
         );
 
-        rt.touch_triggers_with_buttons(0, 100, 0);
+        rt.touch_triggers(0, 100);
         rt.run_frame(100);
         let expected_mod = rt
             .vm
@@ -3141,54 +3140,66 @@ mod tests {
         assert_eq!(rt.level_field("mod"), Value::String(expected_mod));
         assert_eq!(rt.client_vitals(0).health, 95);
 
-        rt.touch_triggers_with_buttons(0, 150, 0);
+        rt.touch_triggers(0, 150);
         rt.run_frame(150);
         assert_eq!(rt.client_vitals(0).health, 95, "inside the 100 ms window");
 
-        rt.touch_triggers_with_buttons(0, 200, 0);
+        rt.touch_triggers(0, 200);
         rt.run_frame(200);
         assert_eq!(rt.client_vitals(0).health, 90);
     }
 
-    /// A `trigger_use` answers the use key: standing in one raises nothing
-    /// until the bit is down. The `auto1`/`auto2` MG42 mount pairs on the
-    /// stock maps are what this serves. The keyless touch also leaves the
-    /// `wait` window unarmed, so the next keyed touch still fires.
+    /// A `trigger_use` answers the use key through the aim pick, the way
+    /// `Cmd_Activate_f` reaches it, and never through contact
+    /// (docs/research/cod11-gametypes-re-bel.md 4): standing in one with the
+    /// key down raises nothing, a press while aimed at it from outside fires
+    /// it, and the hint pass shows `HINT_ACTIVATE` with the string
+    /// `setHintString` stored.
     #[test]
-    fn a_trigger_use_needs_the_use_key() {
-        let mut rt = ScriptRuntime::for_test("main() { level.hits = 0; }");
+    fn a_trigger_use_fires_off_the_aim_and_never_off_contact() {
+        let mut rt = pickup_rig();
         rt.install_for_test(
-            "trigger_think() { for(;;) { self waittill(\"trigger\", other); \
-             level.hits = level.hits + 1; } }",
+            "trigger_think() { level.hits = 0; for(;;) { self waittill(\"trigger\", other); \
+             level.hits = level.hits + 1; } } \
+             hint() { self setHintString(&\"RE_PRESS_TO_PICKUP_GENERIC\"); } \
+             unhint() { self setHintString(\"\"); }",
         );
-        let mount = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
+        let pickup = rt.spawn_map_entity_for_test([40.0, 0.0, 30.0]);
         rt.triggers_mut().register(
-            mount,
+            pickup,
             crate::game::trigger::TriggerKind::Use,
-            crate::game::trigger::TriggerShape::boxed([-64.0, -64.0, 0.0], [64.0, 64.0, 64.0]),
-            1000,
+            crate::game::trigger::TriggerShape::boxed([-8.0, -8.0, -8.0], [8.0, 8.0, 8.0]),
+            0,
             0,
         );
-        rt.start_thread_for_test(mount, "trigger_think", 0);
-        rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
-        rt.set_client_state_for_test(0, "playing");
+        rt.start_thread_for_test(pickup, "trigger_think", 0);
         rt.run_frame(0);
+        let use_key = vcod_common::net::msg::BUTTON_USE;
 
-        rt.touch_triggers_with_buttons(0, 50, 0);
+        rt.set_client_origin(0, [40.0, 0.0, 0.0]);
+        rt.item_pass(0, 0, EYE, [-36.0, 0.0, 0.0]);
+        rt.touch_triggers(0, 50);
+        rt.item_pass(0, use_key, EYE, [-36.0, 0.0, 0.0]);
         rt.run_frame(50);
-        assert_eq!(rt.level_field("hits"), Value::Int(0), "no use key");
+        assert_eq!(rt.level_field("hits"), Value::Int(0), "inside, aimed away");
 
-        rt.touch_triggers_with_buttons(0, 100, vcod_common::net::msg::BUTTON_USE);
+        rt.item_pass(0, 0, EYE, AT_ITEM);
+        rt.item_pass(0, use_key, EYE, AT_ITEM);
         rt.run_frame(100);
-        assert_eq!(
-            rt.level_field("hits"),
-            Value::Int(1),
-            "the window was armed"
-        );
+        assert_eq!(rt.level_field("hits"), Value::Int(1), "aimed at it");
 
-        rt.touch_triggers_with_buttons(0, 150, vcod_common::net::msg::BUTTON_USE);
-        rt.run_frame(150);
-        assert_eq!(rt.level_field("hits"), Value::Int(1), "inside the window");
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), (2, Some(-1)));
+        rt.start_thread_for_test(pickup, "hint", 100);
+        let slot = rt
+            .cursor_hint_pass(0, EYE, AT_ITEM)
+            .1
+            .expect("a hint string");
+        assert_eq!(
+            rt.host.configstrings[1212 + slot as usize],
+            "RE_PRESS_TO_PICKUP_GENERIC\u{15}"
+        );
+        rt.start_thread_for_test(pickup, "unhint", 100);
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), (2, Some(-1)));
     }
 
     /// The link re-anchor reads the parent through its handle, so a parent

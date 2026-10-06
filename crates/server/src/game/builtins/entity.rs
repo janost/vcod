@@ -43,6 +43,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("placespawnpoint", place_spawnpoint),
     ("linkto", link_to),
     ("unlink", unlink),
+    ("sethintstring", set_hint_string),
 ];
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
@@ -69,6 +70,40 @@ pub(crate) fn entity_receiver(recv: Option<Target>) -> Result<EntId, ErrorKind> 
         Some(Target::Entity(id)) => Ok(id),
         _ => Err(ErrorKind::BadType("needs an entity receiver")),
     }
+}
+
+/// `trigger setHintString(message [, args...])` (0x5dd58): the string the
+/// cursor hint shows over a `trigger_use`, packed by `Scr_ConstructMessageString`
+/// and stored as a hint-string configstring slot. A plain `""` clears it
+/// (retail's 0xff). Only a `trigger_use` takes one
+/// (docs/research/cod11-gametypes-re-bel.md 4).
+fn set_hint_string(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = entity_receiver(recv)?;
+    if host.triggers.get(id).map(|t| t.kind) != Some(crate::game::trigger::TriggerKind::Use) {
+        return Err(ErrorKind::BadType(
+            "The setHintString command only works on trigger_use entities.",
+        ));
+    }
+    let index = match args.first() {
+        Some(Value::String(a)) if cx.resolve(*a).is_empty() => -1,
+        _ => {
+            let text = super::message::construct(host, cx, args);
+            crate::configstrings::hint_string_alloc(&mut host.configstrings, &text).ok_or(
+                ErrorKind::BadType(
+                    "Too many different hintstring values. Max allowed is 32 different strings",
+                ),
+            )?
+        }
+    };
+    if let Some(t) = host.triggers.get_mut(id) {
+        t.hint_string = index;
+    }
+    Ok(Value::Undefined)
 }
 
 /// `getEntArray(value, key)`. `Scr_GetEntArray` (0x61980) walks slots

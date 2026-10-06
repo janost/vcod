@@ -59,6 +59,12 @@ pub struct Trigger {
     /// with. Both 0 on every kind but `Hurt`.
     pub damage: i32,
     pub dflags: i32,
+    /// A `trigger_use`'s cursor hint (`ent+0xdc`): `SP_trigger_use` stores 2,
+    /// `HINT_ACTIVATE`. 0 on every other kind.
+    pub cursor_hint: i32,
+    /// Its hint-string slot (`ent+0xd8`) as `serverCursorHintString` carries
+    /// it, -1 for none (retail's 0xff). Written by `setHintString`.
+    pub hint_string: i32,
 }
 
 // `EntId` orders by entity number first, and entity numbers are handed out
@@ -76,6 +82,12 @@ const HURT_NO_PROTECTION: i32 = 0x8;
 const HURT_SLOW: i32 = 0x10;
 const HURT_INTERVAL_MS: i32 = 100;
 const HURT_SLOW_INTERVAL_MS: i32 = 1000;
+
+/// `HINT_ACTIVATE`, slot 2 of `hintStrings`: what `SP_trigger_use` (0x5742c)
+/// stores as a `trigger_use`'s cursor hint when the map gives no
+/// `cursorhint` key, and no stock map does
+/// (docs/research/cod11-gsc-object-model.md, the `serverCursorHint` section).
+pub const HINT_ACTIVATE: i32 = 2;
 
 /// The mod `hurt_touch` damages with (the same doc section).
 pub const MOD_TRIGGER_HURT: &str = "MOD_TRIGGER_HURT";
@@ -99,6 +111,12 @@ impl Triggers {
                 next_fire_ms: 0,
                 damage: 0,
                 dflags: 0,
+                cursor_hint: if kind == TriggerKind::Use {
+                    HINT_ACTIVATE
+                } else {
+                    0
+                },
+                hint_string: -1,
             },
         );
     }
@@ -135,6 +153,10 @@ impl Triggers {
 
     pub fn get(&self, id: EntId) -> Option<&Trigger> {
         self.rows.get(&id)
+    }
+
+    pub fn get_mut(&mut self, id: EntId) -> Option<&mut Trigger> {
+        self.rows.get_mut(&id)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (EntId, &Trigger)> {
@@ -345,6 +367,13 @@ pub fn touched(host: &mut GameHost, cx: &mut Cx, origin: [f32; 3]) -> Vec<EntId>
             if t.kind == TriggerKind::LookAt {
                 return false;
             }
+            // Nor a `trigger_use`'s: `SP_trigger_use` gives it contents
+            // 0x200000, outside the same mask, and the use key reaches it
+            // through `G_GetActivateEnt` instead (`item::activate_ent`;
+            // docs/research/cod11-gametypes-re-bel.md 4).
+            if t.kind == TriggerKind::Use {
+                return false;
+            }
             let t_origin = entity_origin(host, cx, *id, origin_atom);
             let b = abs_bounds(t_origin, &t);
             if !(boxes_overlap(candidate, b) && boxes_overlap(exact, b)) {
@@ -550,6 +579,8 @@ mod tests {
             next_fire_ms: 0,
             damage: 0,
             dflags: 0,
+            cursor_hint: 0,
+            hint_string: -1,
         };
         assert_eq!(
             abs_bounds([100.0, -50.0, 8.0], &t),

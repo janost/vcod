@@ -318,6 +318,26 @@ pub fn hint_string_index(cs: &[String], name: &str) -> Option<i32> {
         .map(|i| i as i32)
 }
 
+/// `G_GetHintStringIndex` (0x5a238) for `setHintString`: the slot already
+/// holding `name`, else the first empty one, claimed. `None` when all 32 are
+/// taken by other strings, retail's "Too many different hintstring values".
+/// The scan order is VERIFIED by the mp_chateau `re` capture, whose two
+/// objectives' strings land in 1214 and 1215 behind the engine's 1212/1213
+/// (docs/research/cod11-gametypes-re-bel.md 4).
+pub fn hint_string_alloc(cs: &mut [String], name: &str) -> Option<i32> {
+    for i in 0..MAX_HINT_STRINGS {
+        let slot = &mut cs[HINT_STRINGS + i];
+        if slot == name {
+            return Some(i as i32);
+        }
+        if slot.is_empty() {
+            *slot = name.to_string();
+            return Some(i as i32);
+        }
+    }
+    None
+}
+
 /// The inverse: what `Cmd_MenuResponse_f` (0x486d8) reads back out of
 /// configstring `CsRange::Menu.start + index` to name the menu in its
 /// `menuresponse` notify. Empty when nothing precached that slot, which is

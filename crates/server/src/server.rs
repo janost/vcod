@@ -4081,7 +4081,7 @@ impl Server {
             // trigger half, and the use key after both.
             if let Some(rt) = self.script.as_mut() {
                 mirror_roster(&self.clients, rt);
-                rt.touch_triggers_at(t.slot, now_ms, t.buttons, t.origin);
+                rt.touch_triggers_at(t.slot, now_ms, t.origin);
                 // `ps.origin` back into `r.currentOrigin` past the touch
                 // (0x405c7), ahead of the use key's `Cmd_Activate_f`. The
                 // item half reads `ps.origin` either way.

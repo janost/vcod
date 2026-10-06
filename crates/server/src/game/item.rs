@@ -595,12 +595,15 @@ pub fn touching(host: &mut GameHost, cx: &mut Cx, player: [f32; 3]) -> Vec<EntId
         .collect()
 }
 
-/// What the use key and the cursor hint found: an item to take or a turret
-/// to man.
+/// What the use key and the cursor hint found: an item to take, a turret to
+/// man or a `trigger_use` to fire.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Activate {
     Item(EntId),
     Turret(EntId),
+    /// A `trigger_use`: contents 0x200000 puts it on the same list
+    /// (docs/research/cod11-gametypes-re-bel.md 4).
+    Trigger(EntId),
 }
 
 /// A turret's bounds centre above its origin: `G_SpawnTurret`'s box is
@@ -608,7 +611,7 @@ pub enum Activate {
 const TURRET_CENTRE_Z: f32 = 28.0;
 
 /// `G_GetActivateEnt`'s choice (section 2.1): the best-scoring grabbable
-/// item or usable turret in reach whose centre the muzzle can see past the
+/// item, usable turret or `trigger_use` in reach whose centre the muzzle can see past the
 /// world. Retail scores an ungrabbable item 10000 behind and cuts it off the
 /// list; an unusable turret is scored the same way here, but retail traces
 /// first and only then steps its use/hint loop past a turret
@@ -667,6 +670,23 @@ pub fn activate_ent(
         let centre = [origin[0], origin[1], origin[2] + TURRET_CENTRE_Z];
         if let Some(s) = activate_score(muzzle, forward, centre) {
             scored.push((Activate::Turret(id), s, centre));
+        }
+    }
+    let uses: Vec<EntId> = host
+        .triggers
+        .iter()
+        .filter(|(_, t)| t.kind == crate::game::trigger::TriggerKind::Use)
+        .map(|(id, _)| id)
+        .collect();
+    for id in uses {
+        let (lo, hi) = crate::game::trigger::entity_abs_bounds(host, cx, id);
+        let centre = [
+            (lo[0] + hi[0]) * 0.5,
+            (lo[1] + hi[1]) * 0.5,
+            (lo[2] + hi[2]) * 0.5,
+        ];
+        if let Some(s) = activate_score(muzzle, forward, centre) {
+            scored.push((Activate::Trigger(id), s, centre));
         }
     }
     scored.sort_by(|a, b| a.1.total_cmp(&b.1));
