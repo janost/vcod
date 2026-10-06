@@ -304,6 +304,13 @@ struct Args {
     /// Writes no fixture.
     #[arg(long)]
     probe_items: bool,
+    /// With `--net-probe` and `--probe-team`: stand still and print a
+    /// `COMPASS` line per snapshot whose `iCompassFriendInfo`, eye or player
+    /// list changed, the field decoded as the cgame reads it. Two on one team
+    /// measure the out-of-view teammate the server packs there. Writes no
+    /// fixture.
+    #[arg(long)]
+    probe_compass: bool,
     /// Walk the --probe-slope route and write every usercmd sent and every
     /// snapshot's movement fields to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt,
@@ -817,6 +824,7 @@ fn main() -> Result<()> {
                 fall_walk: args.probe_fall_walk,
                 ride: args.probe_ride,
                 items: args.probe_items,
+                compass: args.probe_compass,
             },
             args.capture_tag.clone(),
             args.overwrite_fixture,
