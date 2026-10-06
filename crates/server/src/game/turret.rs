@@ -357,8 +357,7 @@ pub fn muzzle(
 /// doc 7): the tag in the gun's model space, turned with the barrel about
 /// `tag_aim` the way the controller turns it.
 pub fn tag_weapon_local(tags: &TurretTags, angles2: [f32; 3]) -> (Vec3, glam::Quat) {
-    let barrel = vcod_common::turretpose::angles_quat([angles2[0], angles2[1], 0.0]);
-    (tags.aim + barrel * (tags.weapon - tags.aim), barrel)
+    vcod_common::turretpose::tag_weapon_local(tags.aim, tags.weapon, angles2)
 }
 
 /// 0x515a8's trace (turrets doc 7.1): from the gun's height down to the
@@ -866,7 +865,7 @@ mod tests {
         let (mut max, mut sum) = (0.0f32, 0.0);
         for (line, legs, a2, want) in frames {
             let place = |from: Vec3| {
-                let (at, _) = vcod_common::turretpose::place_gunner(
+                let at = vcod_common::turretpose::place_gunner(
                     &anims,
                     |n| vcod_common::xanim::load(&fs, n).ok().map(std::rc::Rc::new),
                     legs,
@@ -875,7 +874,8 @@ mod tests {
                     from,
                     15.0,
                 )
-                .unwrap_or_else(|| panic!("line {line}: no placement"));
+                .unwrap_or_else(|| panic!("line {line}: no placement"))
+                .origin;
                 lift_onto_floor(&world.collision, at, gun.z)
             };
             let at = place(want);

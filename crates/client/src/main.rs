@@ -1178,6 +1178,7 @@ fn loading_frame(
             fs,
             menu: None,
             ps: None,
+            entities: &BTreeMap::new(),
             predicted: None,
             local_player: false,
             weapons: &[],
@@ -2184,6 +2185,7 @@ impl ApplicationHandler for App {
                                     let (screen_w, screen_h) = r.screen_size();
 
                                     let no_clients = BTreeMap::new();
+                                    let no_entities = BTreeMap::new();
                                     let newest = net.snapshots().newest();
                                     let local_player = ps_client == client_num
                                         && pmove::predict::predictable(pm_type);
@@ -2219,6 +2221,7 @@ impl ApplicationHandler for App {
                                         fs: &self.fs,
                                         menu: menu_view.as_ref().map(|(_, v)| v),
                                         ps: newest.map(|s| &s.ps),
+                                        entities: newest.map_or(&no_entities, |s| &s.entities),
                                         predicted: predicted
                                             .as_ref()
                                             .filter(|_| local_player)
@@ -2866,8 +2869,12 @@ mod tests {
             dir.path(),
             "zzz_mod.pk3",
             &[
+                ("fonts/fontImage_12.dat", &font),
                 ("fonts/fontImage_16.dat", &font),
+                ("fonts/fontImage_18.dat", &font),
                 ("fonts/fontImage_24.dat", &font),
+                ("fonts/fontImage_30.dat", &font),
+                ("fonts/fontImage_32.dat", &font),
                 (
                     "soundaliases/mod.csv",
                     b"name,file\nmod_shout,mod/shout.wav\n",

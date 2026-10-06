@@ -495,9 +495,16 @@ onto a string gives `5` -> `5`, `-5` -> `-5`, `0.5` -> `0.5`, `2.0` -> `2`,
 `0.8` -> `0.8`, `1.0 / 3` -> `0.333333`. Six significant digits, trailing
 zeros dropped. The probe's `1000000` case (`probe_concat.gsc:22`) is *not*
 evidence for `%g`: it concatenates an int, which never reaches the float
-formatter. So the exponent boundary is untested — vcod's `format_g` switches
-to Rust's `1e6` there, and it is the formatter `set_cull_fog` uses, so a fog
-distance past six digits would go out in that spelling unchecked. A vector
+formatter. The exponent form is C's too, VERIFIED (`probe_concat_exp`):
+`0.00001` -> `1e-05`, `-0.00002` -> `-2e-05`, `0.000012345678` ->
+`1.23457e-05`, `0.0001` -> `0.0001`, `999999.0` -> `999999`, `1000000.0` ->
+`1e+06`, `1234567.0` -> `1.23457e+06`, `1e28` -> `1e+28`. INFERRED from those
+eight values, which match C's `%g` rule: the switch is
+at a decimal exponent below -4 or at 6 and above, the exponent carries a sign
+and at least two digits, and the mantissa drops trailing zeros. `setExpFog`
+goes through the same formatter: mp_chateau's `setExpFog(0.00001, ...)`
+reaches configstring 12 as `0 1 1e-05 0 0 0 0`
+(`docs/research/cod11-gametypes-re-bel.md`). A vector
 renders by a different
 rule: `(1, 2, 3)` -> `(1.00, 2.00, 3.00)`, two decimals per component.
 `"str" + undefined` is a fatal `pair has unmatching types 'string' and
@@ -819,12 +826,6 @@ such wait between its `openMenu` and its loop.
   gamestate as `MPSCRIPT_AMERICAN\x15`
   (`crates/server/tests/fixtures/configstrings/mp_carentan-sd.txt`, slots
   223 and 224). Plain concatenation is still unmeasured.
-- **`format_g`'s exponent form.** No probe has driven a float outside
-  roughly `1e-4 .. 1e6`, so whether retail's `%g` prints `1e+06` or
-  something else is unmeasured; `format_g` (`crates/gsc/src/value.rs`)
-  spells it Rust's way (`1e6`) and, being unmeasured either way,
-  `format_g(999999.5)` currently rounds to `"1000000"` rather than
-  switching to exponent form.
 - **Equality outside the pairs above.** `values_equal`'s catch-all
   (`crates/gsc/src/vm/interp.rs`) is `a == b` on `Value`'s derived
   `PartialEq`, so a genuinely mixed pair (`vector == "a"`, `entity == "a"`)

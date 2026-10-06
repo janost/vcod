@@ -263,17 +263,21 @@ pub fn set_timer(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    set_any_timer(host, recv, args, elem_type::TIMER_DOWN)
+    set_any_timer(host, recv, args, elem_type::TIMER_DOWN, true)
 }
 
-/// `setTimerUp` (0x4ba04, method 3): the same clock counting up.
+/// `setTimerUp` (0x4ba04, method 3): the same clock counting up. The one
+/// timer with no `> 0` check: its listing runs from the round-up straight to
+/// the stores, so `bel.gsc`'s `setTimerUp(0)` starts a clock at zero where
+/// the other three would raise `time %g should be > 0`
+/// (docs/research/cod11-gametypes-re-bel.md 5).
 pub fn set_timer_up(
     host: &mut GameHost,
     _cx: &mut Cx,
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    set_any_timer(host, recv, args, elem_type::TIMER_UP)
+    set_any_timer(host, recv, args, elem_type::TIMER_UP, false)
 }
 
 /// `setTenthsTimer` (0x4baf4, method 4): tenths of a second, counting down.
@@ -284,7 +288,7 @@ pub fn set_tenths_timer(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    set_any_timer(host, recv, args, elem_type::TENTHS_DOWN)
+    set_any_timer(host, recv, args, elem_type::TENTHS_DOWN, true)
 }
 
 /// `setTenthsTimerUp` (0x4bc14, method 5).
@@ -294,16 +298,18 @@ pub fn set_tenths_timer_up(
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    set_any_timer(host, recv, args, elem_type::TENTHS_UP)
+    set_any_timer(host, recv, args, elem_type::TENTHS_UP, true)
 }
 
-/// What the four timer methods share; only the type code differs, and the
-/// client is what reads it as seconds or tenths, up or down.
+/// What the four timer methods share; the type code differs, which the
+/// client reads as seconds or tenths, up or down, and so does whether a time
+/// not above zero is refused.
 fn set_any_timer(
     host: &mut GameHost,
     recv: Option<Target>,
     args: &[Value],
     ty: i32,
+    positive: bool,
 ) -> Result<Value, ErrorKind> {
     let id = hud_receiver(host, recv)?;
     let seconds = match args {
@@ -312,7 +318,7 @@ fn set_any_timer(
         _ => return Err(ErrorKind::BadType("a timer takes a time in seconds")),
     };
     let ms = (seconds * 1000.0).ceil() as i32;
-    if ms <= 0 {
+    if positive && ms <= 0 {
         return Err(ErrorKind::BadType("a timer's time must be above zero"));
     }
     let end = host.level_time_ms.wrapping_add(ms);
@@ -487,6 +493,31 @@ mod tests {
             assert!(set_timer(&mut host, cx, Some(Target::Entity(hud)), &arg).is_ok());
             assert!(set_timer(&mut host, cx, Some(Target::Entity(hud)), &[Value::Int(0)]).is_err());
         });
+    }
+
+    /// `setTimerUp` alone takes a zero: `bel.gsc`'s alive clock starts with
+    /// `setTimerUp(0)`, which retail runs without an error.
+    #[test]
+    fn settimerup_takes_a_zero_and_the_tenths_timers_do_not() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let hud = match new_hud_elem(&mut host, cx, None, &[]).unwrap() {
+                Value::Entity(id) => Some(Target::Entity(id)),
+                _ => panic!("newHudElem returns an object"),
+            };
+            let zero = [Value::Int(0)];
+            assert!(set_timer_up(&mut host, cx, hud, &zero).is_ok());
+            assert_eq!(host.ents.get(hud_id(hud)).unwrap().hud.unwrap().time, 0);
+            assert!(set_tenths_timer(&mut host, cx, hud, &zero).is_err());
+            assert!(set_tenths_timer_up(&mut host, cx, hud, &zero).is_err());
+        });
+    }
+
+    fn hud_id(t: Option<Target>) -> vcod_gsc::EntId {
+        match t {
+            Some(Target::Entity(id)) => id,
+            _ => unreachable!(),
+        }
     }
 
     /// The three allocators differ in exactly two record fields, and those

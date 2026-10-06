@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::sync::Mutex;
 
 use super::HudQuad;
-use super::font::{self, Font};
+use super::font::{self, Font, Slot, UiFonts};
 use vcod_common::localize::Localized;
 use vcod_common::net::msg::{HudElem, hud_field as f};
 
@@ -89,22 +89,75 @@ impl Virtual {
     }
 }
 
-/// Retail's text scale for a font slot: `0.25 * fontScale` for `default`,
-/// `fontScale / 3` for the two fixed fonts, and the height alignment uses.
+/// Retail's text scale for a font slot (`0.25 * fontScale` for `default`,
+/// `fontScale / 3` for the two fixed ones), the height alignment uses, and the
+/// fixed slots' cell width in virtual units.
 struct TextFont<'a> {
     font: &'a Font,
     retail_scale: f32,
     height: f32,
+    cell: Option<f32>,
 }
 
-impl TextFont<'_> {
+impl<'a> TextFont<'a> {
+    fn of(fonts: &'a UiFonts, slot: i32, font_scale: f32, v: &Virtual) -> TextFont<'a> {
+        let screen_h = 480.0 * v.scale;
+        let fixed = |slot, cell| {
+            let retail_scale = font_scale / 3.0;
+            TextFont {
+                font: fonts.pick(slot, retail_scale, screen_h),
+                retail_scale,
+                height: 16.0,
+                cell: Some(cell),
+            }
+        };
+        match slot {
+            1 => fixed(Slot::BigFixed, 16.0),
+            2 => fixed(Slot::SmallFixed, 8.0),
+            _ => {
+                let retail_scale = font_scale * 0.25;
+                let font = fonts.pick(Slot::Default, retail_scale, screen_h);
+                TextFont {
+                    font,
+                    retail_scale,
+                    height: font.max_height as f32 * font.glyph_scale * retail_scale,
+                    cell: None,
+                }
+            }
+        }
+    }
+
     /// The `scale` [`font::layout`] and [`font::measure`] take for window px.
     fn px_scale(&self, v: &Virtual) -> f32 {
         self.retail_scale * v.scale / self.font.unit_scale()
     }
 
     fn width(&self, text: &str) -> f32 {
-        font::measure(self.font, text, self.retail_scale / self.font.unit_scale())
+        match self.cell {
+            Some(cell) => font::char_count(text) as f32 * cell,
+            None => font::measure(self.font, text, self.retail_scale / self.font.unit_scale()),
+        }
+    }
+
+    fn draw(&self, s: &str, at: (f32, f32), color: [f32; 4], v: &Virtual, out: &mut Vec<HudQuad>) {
+        let start = out.len();
+        match self.cell {
+            Some(cell) => {
+                let [px, py] = v.point(at.0, at.1);
+                font::layout_fixed(
+                    self.font,
+                    s,
+                    px,
+                    py,
+                    self.px_scale(v),
+                    cell * v.scale,
+                    color,
+                    out,
+                );
+                shadow_alpha(&mut out[start..], color[3]);
+            }
+            None => text(self.font, s, at, self.px_scale(v), color, v, out),
+        }
     }
 }
 
@@ -122,20 +175,23 @@ pub fn text(
     let start = out.len();
     let [px, py] = v.point(x, y);
     font::layout(fnt, s, px, py, px_scale, color, out);
-    for (i, q) in out[start..].iter_mut().enumerate() {
-        q.rgba[3] = if i % 2 == 0 { 0.8 * color[3] } else { color[3] };
+    shadow_alpha(&mut out[start..], color[3]);
+}
+
+/// Alternating shadow and glyph quads: the shadow at 0.8 of `alpha`.
+fn shadow_alpha(quads: &mut [HudQuad], alpha: f32) {
+    for (i, q) in quads.iter_mut().enumerate() {
+        q.rgba[3] = if i % 2 == 0 { 0.8 * alpha } else { alpha };
     }
 }
 
 /// Draws `elems` in retail's order: sorted by `sort`, stably, so pass the
-/// archived array first and the current one after it. `fonts` are the
-/// `default`, `bigfixed` and `smallfixed` slots; no fixed-font atlas ships,
-/// so the caller passes loaded proportional fonts for those.
+/// archived array first and the current one after it.
 pub fn build(
     elems: &[HudElem],
     configstrings: &[String],
     loc: &Localized,
-    fonts: (&Font, &Font, &Font),
+    fonts: &UiFonts,
     server_time: i32,
     screen: (f32, f32),
     out: &mut Vec<HudQuad>,
@@ -156,7 +212,7 @@ fn draw(
     e: &HudElem,
     cs: &[String],
     loc: &Localized,
-    fonts: (&Font, &Font, &Font),
+    fonts: &UiFonts,
     now: i32,
     v: &Virtual,
     out: &mut Vec<HudQuad>,
@@ -166,19 +222,7 @@ fn draw(
         return;
     }
     let color = fade_color(e, now);
-    let font_scale = e.get_f32(f::FONT_SCALE);
-    let tf = match e.get(f::FONT) {
-        slot @ (1 | 2) => TextFont {
-            font: if slot == 1 { fonts.1 } else { fonts.2 },
-            retail_scale: font_scale / 3.0,
-            height: 16.0,
-        },
-        _ => TextFont {
-            font: fonts.0,
-            retail_scale: font_scale * 0.25,
-            height: fonts.0.max_height as f32 * fonts.0.glyph_scale * font_scale * 0.25,
-        },
-    };
+    let tf = TextFont::of(fonts, e.get(f::FONT), e.get_f32(f::FONT_SCALE), v);
 
     let body = match ty {
         1 => Some(match e.get(f::TEXT) {
@@ -200,7 +244,7 @@ fn draw(
             return;
         }
         let pos = place(e, now, tf.width(&s), tf.height);
-        text(tf.font, &s, pos, tf.px_scale(v), color, v, out);
+        tf.draw(&s, pos, color, v, out);
         return;
     }
 
@@ -225,7 +269,7 @@ fn draw(
     let (x, y) = place(e, now, label_w + w, h);
     if label_w > 0.0 {
         let (_, label_y) = place(e, now, label_w + w, tf.height);
-        text(tf.font, &label, (x, label_y), tf.px_scale(v), color, v, out);
+        tf.draw(&label, (x, label_y), color, v, out);
     }
     let Some(material) = shader(cs, e.get(f::SHADER)) else {
         return;
@@ -430,6 +474,18 @@ pub(crate) mod tests {
         }
     }
 
+    /// [`test_font`] in all six places.
+    pub(crate) fn test_fonts() -> UiFonts {
+        UiFonts {
+            small: test_font(),
+            normal: test_font(),
+            console: test_font(),
+            big: test_font(),
+            bold: test_font(),
+            extra_big: test_font(),
+        }
+    }
+
     fn elem(fields: &[(usize, i32)]) -> HudElem {
         let mut e = HudElem::default();
         e.set(f::COLOR, -1);
@@ -449,13 +505,13 @@ pub(crate) mod tests {
     }
 
     fn run(elems: &[HudElem], cs: &[String], now: i32, screen: (f32, f32)) -> Vec<HudQuad> {
-        let font = test_font();
+        let fonts = test_fonts();
         let mut out = Vec::new();
         build(
             elems,
             cs,
             &Localized::default(),
-            (&font, &font, &font),
+            &fonts,
             now,
             screen,
             &mut out,
@@ -498,6 +554,65 @@ pub(crate) mod tests {
         let b = glyph_bounds(&run(&[e], &cs, 0, (1706.0, 960.0)));
         let x0 = (1706.0 - 1280.0) / 2.0;
         assert!(close(b[0], x0 + 610.0) && close(b[2], x0 + 670.0), "{b:?}");
+    }
+
+    #[test]
+    fn a_fixed_slot_centres_each_glyph_in_its_cell() {
+        let cs = cs_with(&[(CS_LOCALIZED + 1, "^1AB")]);
+        let fixed = |font: i32| {
+            elem(&[
+                (f::TYPE, 1),
+                (f::TEXT, 1),
+                (f::FONT, font),
+                (f::X, 320),
+                (f::ALIGN_X, 1),
+            ])
+        };
+        // bigfixed: two 16-wide cells from 304. A glyph advances 8
+        // design units at 1/3 x 3, so 8 virtual, centred in its cell.
+        let out = run(&[fixed(1)], &cs, 0, (640.0, 480.0));
+        let glyphs: Vec<f32> = out
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .map(|q| q.verts[0][0])
+            .collect();
+        assert_eq!(glyphs, [308.0, 324.0]);
+        // smallfixed: 8-wide cells, the glyph filling each.
+        let out = run(&[fixed(2)], &cs, 0, (640.0, 480.0));
+        let glyphs: Vec<f32> = out
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .map(|q| q.verts[0][0])
+            .collect();
+        assert_eq!(glyphs, [312.0, 320.0]);
+    }
+
+    #[test]
+    fn the_ui_picks_a_font_by_slot_and_drawn_size() {
+        let mut fonts = test_fonts();
+        for (font, size) in [
+            (&mut fonts.small, 12),
+            (&mut fonts.normal, 16),
+            (&mut fonts.console, 18),
+            (&mut fonts.big, 24),
+            (&mut fonts.bold, 30),
+            (&mut fonts.extra_big, 32),
+        ] {
+            font.size = size;
+        }
+        let size = |slot, scale, h| fonts.pick(slot, scale, h).size;
+        // The default slot at fontScale 1 is 0.25: small at 480 lines.
+        assert_eq!(size(Slot::Default, 0.25, 480.0), 12);
+        assert_eq!(size(Slot::Default, 0.25, 720.0), 16);
+        assert_eq!(size(Slot::Default, 0.25, 768.0), 24);
+        assert_eq!(size(Slot::Default, 0.25, 1080.0), 32);
+        // bigfixed tops out at the bold font; smallfixed is always the console's.
+        assert_eq!(size(Slot::BigFixed, 1.0 / 3.0, 480.0), 16);
+        assert_eq!(size(Slot::BigFixed, 1.0 / 3.0, 1080.0), 30);
+        assert_eq!(size(Slot::BigFixed, 0.2, 480.0), 12);
+        assert_eq!(size(Slot::SmallFixed, 1.0 / 3.0, 1080.0), 18);
     }
 
     #[test]

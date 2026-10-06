@@ -1622,9 +1622,10 @@ version of this paragraph named `trap_LocationalTrace` and `CalcMuzzlePoints`
 here, which the listings do not show. No touch path writes any of the three
 hint fields: `SP_trigger_lookat` installs no touch function and the trigger
 touch path stores nothing at `ps+0x384`, `+0x388` or `+0x38c`. INFERRED, from
-the absence rather than from a store. vcod writes `serverCursorHint` from
-`ScriptRuntime::cursor_hint_pass`, the item arm only, and
-`serverCursorHintString` as a constant 255. VERIFIED, read out of
+the absence rather than from a store. vcod writes `serverCursorHint` and
+`serverCursorHintString` from `ScriptRuntime::cursor_hint_pass`: the item,
+turret and `trigger_use` arms, the last since 2026-10-06
+(`docs/research/cod11-gametypes-re-bel.md` 4). VERIFIED, read out of
 `crates/server/src/game/script.rs` and `crates/server/src/spectate.rs`. The
 item arm's hint values are in `docs/research/cod11-items.md` section 2.3, and
 the turret arm's hint 6 with the weapon's hint-string slot, together with

@@ -3566,8 +3566,8 @@ impl Server {
                 self.sv_time_ms,
             );
             // The movers' half of the entity pass: each brush model that
-            // moved this frame carries its riders and shoves the bodies in
-            // its way, or holds a frame when one fits nowhere
+            // moved this frame carries its riders and shoves the bodies and
+            // items in its way, or holds a frame when a body fits nowhere
             // (`G_MoverTeam`; movers doc, section 12). After the script's
             // own `setOrigin`s, which retail's threads run before the pass.
             if let Some(world) = self.world.as_ref() {
@@ -3579,7 +3579,9 @@ impl Server {
                         .filter_map(|(i, c)| Some((i, c.as_mut()?.sim.as_mut()?)))
                         .collect();
                     let before: Vec<glam::Vec3> = sims.iter().map(|(_, s)| s.ps.origin).collect();
-                    if !crate::push::push(&step, &mut sims, &world.collision) {
+                    if crate::push::push(&step, &mut sims, &world.collision) {
+                        rt.push_items(&step);
+                    } else {
                         rt.stall_mover(&step);
                     }
                     for ((slot, sim), was) in sims.iter().zip(before) {
@@ -4129,7 +4131,7 @@ impl Server {
                     link_client(rt, t.slot, sim);
                 }
                 mirror_roster(&self.clients, rt);
-                rt.touch_triggers_at(t.slot, now_ms, t.buttons, t.origin);
+                rt.touch_triggers_at(t.slot, now_ms, t.origin);
                 // `ps.origin` back into `r.currentOrigin` past the touch
                 // (0x405c7), ahead of the use key's `Cmd_Activate_f`. The
                 // item half reads `ps.origin` either way.

@@ -359,7 +359,7 @@ pub fn run(host: &mut GameHost, cx: &mut vcod_gsc::Cx) -> Vec<Done> {
 /// the clip is a frame ahead of the `getorigin()` above (movers doc,
 /// sections 8 and 11).
 fn clip_step(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId, m: &mut Mover, level_ms: i32) {
-    let Some(model) = submodel(host, cx, id) else {
+    let Some(model) = submodel(host, id) else {
         return;
     };
     let Some(world) = host.world.clone() else {
@@ -401,16 +401,12 @@ fn clip_step(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId, m: &mut Move
     });
 }
 
-/// The `N` of an entity whose `.model` is `"*N"`, N > 0.
-fn submodel(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> Option<usize> {
-    let atom = cx.intern_folded("model");
-    let vcod_gsc::Value::String(m) = host.get_field(cx, id, atom) else {
-        return None;
-    };
-    cx.resolve(m)
-        .strip_prefix('*')?
-        .parse::<usize>()
-        .ok()
+/// The `N` of an entity whose BSP `model` key is `"*N"`, N > 0.
+fn submodel(host: &GameHost, id: EntId) -> Option<usize> {
+    host.ents
+        .get(id)?
+        .brush_model
+        .map(|n| n as usize)
         .filter(|&n| n > 0)
 }
 

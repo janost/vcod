@@ -315,6 +315,59 @@ pub fn run_items(host: &mut GameHost, cx: &mut Cx, now_ms: i32) {
     }
 }
 
+/// A mover's push over the items (`crate::push::push_item`), in entity
+/// order. Runs after the players' push and only when that did not stall the
+/// mover; an item never stalls one. A pushed item gets the spot as its
+/// `origin` and its `s.pos.trBase` (0x54b84), and its ground, unless it
+/// stood on the mover, is `ENTITYNUM_NONE`, which the next `run_items`
+/// drops it from (docs/research/cod11-movers.md, section 12).
+pub fn push_items(host: &mut GameHost, cx: &mut Cx, step: &crate::game::mover::Step) {
+    let Some(world) = host.world.clone() else {
+        return;
+    };
+    let ids: Vec<EntId> = host
+        .ents
+        .iter_inuse()
+        .filter(|(_, e)| e.item.is_some_and(|i| !i.taken))
+        .map(|(id, _)| id)
+        .collect();
+    let origin_atom = cx.intern_folded("origin");
+    for id in ids {
+        let Some(mut st) = host.ents.get(id).and_then(|e| e.item) else {
+            continue;
+        };
+        let (mins, maxs) = bounds(crate::game::spawn::is_weapon_row(st.index as usize));
+        let body = crate::push::ItemBody {
+            origin: Vec3::from(origin_of(host, cx, id)),
+            mins,
+            maxs,
+            mask: if st.clipmask != 0 {
+                st.clipmask
+            } else {
+                crate::push::PUSH_DEFAULT_MASK
+            },
+            ground: st.ground,
+        };
+        let Some(fit) = crate::push::push_item(step, &body, &world.collision) else {
+            continue;
+        };
+        if st.ground != step.number as i32 {
+            st.ground = ENTITYNUM_NONE as i32;
+        }
+        if let crate::push::ItemPush::At(at) = fit {
+            if let Some(pos) = st.pos.as_mut() {
+                pos.base = at;
+            }
+            let _ = host.set_field(cx, id, origin_atom, Value::Vector(at.into()));
+        } else {
+            st.ground = ENTITYNUM_NONE as i32;
+        }
+        if let Some(e) = host.ents.get_mut(id) {
+            e.item = Some(st);
+        }
+    }
+}
+
 /// The player as the pickup arithmetic sees it, off the host's mirrors.
 pub fn inventory(host: &GameHost, slot: usize) -> Inventory {
     let v = host.client_vitals[slot];
@@ -595,12 +648,15 @@ pub fn touching(host: &mut GameHost, cx: &mut Cx, player: [f32; 3]) -> Vec<EntId
         .collect()
 }
 
-/// What the use key and the cursor hint found: an item to take or a turret
-/// to man.
+/// What the use key and the cursor hint found: an item to take, a turret to
+/// man or a `trigger_use` to fire.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Activate {
     Item(EntId),
     Turret(EntId),
+    /// A `trigger_use`: contents 0x200000 puts it on the same list
+    /// (docs/research/cod11-gametypes-re-bel.md 4).
+    Trigger(EntId),
 }
 
 /// A turret's bounds centre above its origin: `G_SpawnTurret`'s box is
@@ -608,7 +664,7 @@ pub enum Activate {
 const TURRET_CENTRE_Z: f32 = 28.0;
 
 /// `G_GetActivateEnt`'s choice (section 2.1): the best-scoring grabbable
-/// item or usable turret in reach whose centre the muzzle can see past the
+/// item, usable turret or `trigger_use` in reach whose centre the muzzle can see past the
 /// world. Retail scores an ungrabbable item 10000 behind and cuts it off the
 /// list; an unusable turret is scored the same way here, but retail traces
 /// first and only then steps its use/hint loop past a turret
@@ -667,6 +723,23 @@ pub fn activate_ent(
         let centre = [origin[0], origin[1], origin[2] + TURRET_CENTRE_Z];
         if let Some(s) = activate_score(muzzle, forward, centre) {
             scored.push((Activate::Turret(id), s, centre));
+        }
+    }
+    let uses: Vec<EntId> = host
+        .triggers
+        .iter()
+        .filter(|(_, t)| t.kind == crate::game::trigger::TriggerKind::Use)
+        .map(|(id, _)| id)
+        .collect();
+    for id in uses {
+        let (lo, hi) = crate::game::trigger::entity_abs_bounds(host, cx, id);
+        let centre = [
+            (lo[0] + hi[0]) * 0.5,
+            (lo[1] + hi[1]) * 0.5,
+            (lo[2] + hi[2]) * 0.5,
+        ];
+        if let Some(s) = activate_score(muzzle, forward, centre) {
+            scored.push((Activate::Trigger(id), s, centre));
         }
     }
     scored.sort_by(|a, b| a.1.total_cmp(&b.1));

@@ -1,5 +1,5 @@
-//! `G_MoverPush` and `G_TryPushingEntity` over the players: what a moving
-//! brush model does to the bodies on it and in its way
+//! `G_MoverPush` and `G_TryPushingEntity`: what a moving brush model does to
+//! the players and items on it and in its way
 //! (docs/research/cod11-movers.md, section 12).
 
 use crate::game::mover::Step;
@@ -26,10 +26,7 @@ struct Pushed {
 /// one fits nowhere; every body pushed before it is back where it was, and
 /// the caller stalls the mover.
 pub fn push(step: &Step, sims: &mut [(usize, &mut ClientSim)], world: &CollisionWorld) -> bool {
-    let mv = step.to.0 - step.from.0;
     let amove = step.to.1 - step.from.1;
-    let axis = vcod_common::pmove::aim::angles_to_axis(amove.to_array()).map(Vec3::from);
-    let rotate = |v: Vec3| axis[0] * v.x + axis[1] * v.y + axis[2] * v.z;
     let yaw_short = (amove.y * ANGLE2SHORT) as i32 & 0xffff;
 
     // The list is taken once, against the mover where it now is: a body
@@ -43,7 +40,14 @@ pub fn push(step: &Step, sims: &mut [(usize, &mut ClientSim)], world: &Collision
             let o = sim.ps.origin;
             sim.ps.ground_entity_num() == step.number
                 || world
-                    .model_box_trace(step.model, o, o, sim.ps.mins(), sim.ps.maxs())
+                    .model_box_trace(
+                        step.model,
+                        o,
+                        o,
+                        sim.ps.mins(),
+                        sim.ps.maxs(),
+                        MASK_PLAYERSOLID,
+                    )
                     .startsolid
         })
         .collect();
@@ -51,12 +55,7 @@ pub fn push(step: &Step, sims: &mut [(usize, &mut ClientSim)], world: &Collision
     let mut pushed: Vec<Pushed> = Vec::new();
     for i in list {
         let old = sims[i].1.ps.origin;
-        let moved = old + mv;
-        let target = if amove == Vec3::ZERO {
-            moved
-        } else {
-            step.to.0 + rotate(moved - step.to.0)
-        };
+        let target = carried(step, old);
         match try_push(i, sims, world, step.model, target) {
             Some(Fit::Stays) => sims[i].1.ps.on_ground = false,
             Some(Fit::At(at)) => {
@@ -85,6 +84,81 @@ pub fn push(step: &Step, sims: &mut [(usize, &mut ClientSim)], world: &Collision
         }
     }
     true
+}
+
+/// Where the mover's move and turn take a point: moved, then turned about the
+/// mover's moved origin (`G_TryPushingEntity`, 0x54956-0x54aae).
+fn carried(step: &Step, at: Vec3) -> Vec3 {
+    let moved = at + (step.to.0 - step.from.0);
+    let amove = step.to.1 - step.from.1;
+    if amove == Vec3::ZERO {
+        return moved;
+    }
+    let axis = vcod_common::pmove::aim::angles_to_axis(amove.to_array()).map(Vec3::from);
+    let v = moved - step.to.0;
+    step.to.0 + axis[0] * v.x + axis[1] * v.y + axis[2] * v.z
+}
+
+/// An item as `G_MoverPush` sees it. Only a placed or dropped item still on
+/// the ground is listed: a taken one has contents 0, and the box query's
+/// mask 0x2000180 takes an item by its contents' 0x100.
+pub struct ItemBody {
+    pub origin: Vec3,
+    pub mins: Vec3,
+    pub maxs: Vec3,
+    /// `clipmask`, or 0x11 when it is 0 (0x554b3).
+    pub mask: u32,
+    /// `s.groundEntityNum`.
+    pub ground: i32,
+}
+
+/// The `G_TryPushingEntity` mask of an entity whose `clipmask` is 0.
+pub const PUSH_DEFAULT_MASK: u32 = 0x11;
+
+/// What a push does to an item. A mover never stalls on one: `G_MoverPush`
+/// relinks an `eType` 3 entity that fits nowhere and goes on (0x555d4).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ItemPush {
+    /// Moved to the spot. Its ground is `ENTITYNUM_NONE` unless it stood on
+    /// the mover.
+    At(Vec3),
+    /// Left where it is with its ground `ENTITYNUM_NONE`, so `G_RunItem`
+    /// drops it.
+    Dropped,
+}
+
+/// `G_MoverPush`'s test and `G_TryPushingEntity` for one item: `None` when
+/// the item is not in the mover's way, or is and fits nowhere, and stays put.
+/// An item is 2 units wide, under the jitter's reach, so the only fallback is
+/// its own spot.
+pub fn push_item(step: &Step, item: &ItemBody, world: &CollisionWorld) -> Option<ItemPush> {
+    let here = item.origin;
+    let on = item.ground == step.number as i32;
+    if !on
+        && !world
+            .model_box_trace(step.model, here, here, item.mins, item.maxs, item.mask)
+            .startsolid
+    {
+        return None;
+    }
+    // The sweep is the players' (see `try_push`): a zero-length box is
+    // never inside terrain.
+    let clear = |p: Vec3| {
+        let t = world.item_trace(p, p, item.mins, item.maxs, item.mask);
+        if t.startsolid || t.allsolid {
+            return false;
+        }
+        let sweep = world.box_trace_except(here, p, item.mins, item.maxs, item.mask, step.model);
+        !sweep.startsolid && sweep.fraction >= 1.0
+    };
+    let target = carried(step, here);
+    if clear(target) {
+        Some(ItemPush::At(target))
+    } else if clear(here) {
+        Some(ItemPush::Dropped)
+    } else {
+        None
+    }
 }
 
 /// Where a push leaves a body.
@@ -124,7 +198,7 @@ fn try_push(
         if t.startsolid || t.allsolid {
             return false;
         }
-        let sweep = world.box_trace_except(here, p, mins, maxs, pusher);
+        let sweep = world.box_trace_except(here, p, mins, maxs, MASK_PLAYERSOLID, pusher);
         !sweep.startsolid && sweep.fraction >= 1.0
     };
     if clear(target) {

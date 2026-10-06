@@ -37,10 +37,13 @@ pub fn empty_objective() -> Objective {
 /// `every_listed_builtin_dispatches` keeps this list in step with the match.
 pub const BUILTINS: &[&str] = &[
     "setcullfog",
+    "setexpfog",
     "ambientplay",
     "println",
     "iprintln",
     "logprint",
+    "announcement",
+    "clientannouncement",
 ];
 
 /// Every builtin family's `NAMES`, walked in the same order `builtin`
@@ -1057,9 +1060,20 @@ impl Host for GameHost {
         }
         match folded.as_str() {
             "setcullfog" => builtins::env::set_cull_fog(&mut self.configstrings, cx, args),
+            "setexpfog" => builtins::env::set_exp_fog(&mut self.configstrings, cx, args),
             "ambientplay" => builtins::env::ambient_play(&mut self.configstrings, cx, args),
             "iprintln" => builtins::io::iprint_line(self, cx, recv, args),
             "println" | "logprint" => builtins::io::print_line(self, cx, args),
+            "announcement" => builtins::io::announcement(self, cx, None, args),
+            "clientannouncement" => {
+                let (who, rest) = args.split_first().ok_or(ErrorKind::BadType(
+                    "clientAnnouncement needs a player and a message",
+                ))?;
+                let Value::Entity(id) = *who else {
+                    return Err(ErrorKind::BadType("not an entity"));
+                };
+                builtins::io::announcement(self, cx, Some(Target::Entity(id)), rest)
+            }
             _ => Err(ErrorKind::MissingBuiltin(name)),
         }
     }
@@ -1127,6 +1141,16 @@ impl Host for GameHost {
                     Some(n) => Value::String(cx.intern_exact(n)),
                     None => Value::Undefined,
                 },
+                other => other,
+            },
+            // `Scr_GetGenericField`'s type-8 arm (0x6248c) reads the model
+            // byte through `G_ModelName`, so a model never set reads model
+            // configstring 0, "".
+            Route::Engine {
+                slot,
+                ty: FieldType::ModelIndex,
+            } => match e.engine[slot] {
+                Value::Undefined => Value::String(cx.intern_exact("")),
                 other => other,
             },
             Route::Engine { slot, .. } => e.engine[slot],
@@ -1345,6 +1369,40 @@ mod tests {
 
         assert_eq!(host.configstrings[12], "0 6000 1 0.8 0.8 0.8 0");
         assert_eq!(host.configstrings[3], "n\\ambient_mp_pavlov\\t\\0");
+    }
+
+    /// Runs `src`'s `main()` on a bare host and hands the host back, or the
+    /// error kind the call died on.
+    fn run_main(src: &str) -> Result<GameHost, vcod_gsc::ErrorKind> {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut host = GameHost::new(vec![String::new(); 2048]);
+        let ast = vcod_gsc::parse::parse_file(src).unwrap();
+        let fns = vcod_gsc::compile::compile_file(&ast, "test", vm.interner_mut()).unwrap();
+        vm.install(fns).unwrap();
+        let f = vm.func_ref("test", "main");
+        vm.call_now(&mut host, 0, f, None, Vec::new())
+            .map(|_| host)
+            .map_err(|e| e.kind)
+    }
+
+    /// mp_chateau's own call, against the retail capture's slot 12
+    /// (`tests/fixtures/configstrings/mp_chateau-re.txt`): near 0 and far 1
+    /// fixed, the density in `%g`'s exponent form, the time in ms. A
+    /// transition time goes out as milliseconds on `setCullFog` too.
+    #[test]
+    fn setexpfog_writes_slot_12_in_retails_format() {
+        let host = run_main("main() { setExpFog(0.00001, 0, 0, 0, 0); }").unwrap();
+        assert_eq!(host.configstrings[12], "0 1 1e-05 0 0 0 0");
+        let host = run_main("main() { setCullFog(0, 6000, 0.8, 0.8, 0.8, 2.5); }").unwrap();
+        assert_eq!(host.configstrings[12], "0 6000 1 0.8 0.8 0.8 2500");
+        for bad in [
+            "setExpFog(1, 0, 0, 0, 0)",
+            "setExpFog(0, 0, 0, 0, 0)",
+            "setExpFog(0.5, 2, 0, 0, 0)",
+            "setExpFog(0.5, 0, 0, 0, -1)",
+        ] {
+            assert!(run_main(&format!("main() {{ {bad}; }}")).is_err(), "{bad}");
+        }
     }
 
     /// `BUILTINS` plus every family's `NAMES` drives the load-time pre-scan

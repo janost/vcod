@@ -738,7 +738,8 @@ Not determined:
 - The body's yaw. VERIFIED, 7.1: `BG_PlayerStateToEntityState` is called at a
   lower address than the `AxisToAngles` store. INFERRED: the entity state is
   built before the store, so the yaw never reaches the wire and no capture
-  can check it. vcod blends the leaves' yaw rotations by weight.
+  can check it. vcod blends the leaves' yaw rotations by weight. The client
+  works the same yaw out for itself and draws it (14.7).
 - The blend times, and whether the goal weights pose anything besides this
   routine's own deltas (the gunner's server-side body for a locational hit,
   for one). vcod does not keep them.
@@ -1800,7 +1801,7 @@ carried one (section 4.4).
 - VERIFIED: the player draw (0x30028210) calls 0x300279b0 when
   `es.eFlags & 0xc000` (0x300282bf). INFERRED: that is the client's copy of
   section 7's placement (7.3), which blends the mounted anim by the gun and
-  moves the drawn body.
+  moves the drawn body (14.7).
 
 ### 14.6 As implemented
 
@@ -1829,6 +1830,88 @@ reticle. Where vcod differs:
   rather than a persistent entity table.
 - The reticle scales by vcod's aspect-preserving virtual screen, where
   retail stretches 640x480 by separate x and y scales.
-- 0x300279b0, the client's body placement, is not ported: a gunner's body
-  draws at the server's origin and view yaw, with the mounted anim's middle
-  column.
+- 0x300279b0 runs through `vcod_common::turretpose::place_gunner`, the
+  server's port of 0x515a8, off `tag_weapon`'s bind position turned by the
+  lerped barrel. The goal weights apply at once rather than over the blend
+  times (14.7). The leaf set is posed by sequential lerps, each leaf by its
+  share of the running total; that is the exact weighted mean at full
+  weight and close to it inside the 0.2 s anim-switch cross-fade.
+- No trace on the client's placement: the body keeps the snapshot's z,
+  which the server's own trace already set. The drawn body is yaw-only like
+  every vcod player, where retail's player draw takes `AnglesToAxis` of the
+  whole result (14.7); a gun spawned with pitch or roll would tilt retail's
+  gunner and not ours.
+
+### 14.7 The client's placement (0x300279b0)
+
+Read from the Ghidra export and the disassembly of `cgame_mp_x86.dll` (1.1)
+over 0x300279b0..0x30028209. `cent` is the gunner's `centity_t`, whose
+entity state starts at offset 0, `lerpOrigin` at `+0x1f8` and `lerpAngles` at
+`+0x204` (both read by the player draw's refEntity setup at 0x30028210).
+
+- VERIFIED: loads of `es+0x74` (0x300279bb) and `es+0x90` (0x300279d6),
+  compares of the first against 0x40 and 0x3ff, and returns on both.
+  VERIFIED, `fields_v1.rs`: offset 116 is `otherEntityNum`, 144 `clientNum`.
+  INFERRED: the gun is the entity `otherEntityNum` names (section 10), and a
+  number under 64 or of 1023 skips the placement.
+- VERIFIED: returns on a zero word at `0x3018bc0c + ci * 0x448`, a zero legs
+  anim word at `0x3018bf98 + ci * 0x448`, a null legs anim record at
+  `0x3018bf9c + ci * 0x448` and a clear `+0x50 & 4` on that record; a return
+  on a zero dword at `0x3020dd60 + gun * 0x228`; a return on a null DObj
+  (trap 0xa2). INFERRED: the same `turretanim` gate as 0x515a8's (7.1), on
+  the client's own clientinfo, plus a valid-entity test on the gun.
+- VERIFIED: `0x3001c270` on the gun's `centity_t` with the warning `"WARNING:
+  aborting player positioning on turret since 'tag_weapon' does not exist"`,
+  `0x3003a3f0` (`vectosignedyaw`: 0 for a zero x and y, `atan2` scaled
+  otherwise) on its result, and `0x3003c770` on the gun's angles
+  (0x30027ad5). VERIFIED: `0x3003c770` calls `0x3003a790`, which stores
+  forward as `(cp*cy, cp*sy, -sp)`, then writes `vec3_origin - right` into the
+  second row. INFERRED: `0x3003c770` is `AnglesToAxis` and `0x3003a790`
+  `AngleVectors`.
+- VERIFIED: the column split loads the child count, multiplies by 0.5
+  (0x30027c15, `0x3006930c` reads 0.5) and subtracts the tag's yaw divided by
+  the weapon def's `+0x400` (0x30027c1f). INFERRED: the same `n / 2 - yaw /
+  animHorRotateInc` as 7.2, and the same row search by height follows it:
+  trap 0x9a (`XAnimCalcAbsDelta`) per row, `fVar5 <= delta.z` breaking, the
+  `tag_aim` warning on the end-row arm, the `(target - z_prev) / (z - z_prev)`
+  split otherwise.
+- VERIFIED: every goal weight is passed with a time of `1 / ((1000.0 / g) *
+  |w - goal|)`, or 0 when that product is not above 0, where `1000.0` is
+  `0x30069478`, `w` is `0x300319a0`'s read of the node's current weight and
+  `g` the int at `0x30207144`. INFERRED: the client blends toward the new
+  weights over a time that shrinks as the change grows; what `g` holds is not
+  read.
+- VERIFIED, 0x300280b1..0x30028153: trap 0x9a on the whole anim, `0x3003bc10`
+  (a 2D rotation of the translation by the tag's yaw), the tag's `+0x30` and
+  `+0x34` added to x and y with the gunner's height above the gun as z,
+  `0x3003bff0` (`RotationToYaw`) plus the tag's yaw into `0x3003c7c0`
+  (`YawToAxis`: z row `(0, 0, 1)`), `0x3003ae70` (`MatrixMultiply43`) with
+  the gun's axis, and `0x3003c810` with `cent+0x204` as its out pointer.
+  INFERRED: `0x3003c810` is `AxisToAngles`, so the body's yaw (7.2) lands in
+  `lerpAngles` on every call.
+- VERIFIED: a compare of `0x3029848c` against 5 (0x30028158) skips the rest,
+  and the cgame's cvar table entry whose `vmCvar_t` is 0x30298480 names
+  `cg_debuganim` (default "0", flags 0x200). INFERRED: `0x3029848c` is that
+  cvar's `integer` at `+0xc`. VERIFIED: stores of the placed origin into
+  `cent+0x1f8..+0x200`, a `0x30029030` call with mask 0x2810011 (0x300281c7),
+  start `(x, y, gun z)` and end the placed origin, the gunner's number as the
+  skip, and a store of the result's `+0xc` into `cent+0x200` when the fraction
+  is under 1.0 (0x300281f8). INFERRED: unless `cg_debuganim` is 5 the drawn
+  origin moves to the placement and its z onto whatever the trace meets, as
+  0x515a8's does.
+- VERIFIED: the player draw calls `0x3003c770` on `cent+0x204` (0x300282cd,
+  0x300282d7) after the 0x300279b0 call. INFERRED: the refEntity axis is the
+  placement's angles, so retail turns a gunner's whole body to the yaw 7.2
+  works out.
+
+VERIFIED, vcod's port over the stock `mg42_bipod` and `standMG42_aim`
+(`the_barrel_yaw_picks_the_columns_and_the_body_holds_still` in
+`crates/common/src/turretpose.rs`): with the barrel at yaw 0, +45 and -40 the
+blend picks `forward`/`15left`, `45right`/`30right` and `45left`, and the
+body's yaw stays 0 to 7.5 degrees off the gun's base. VERIFIED, the leaves
+posed on `playerbody_american_airborne`: `tag_weapon_right` at y 7.7 on
+`45right_level`, -6.1 on `forward_level` and -14.4 on `45left_level`.
+INFERRED: the leaves' root yaw cancels the barrel's, so the body stays
+square to the gun and the column blend swings the arms after the barrel;
+the server's view yaw, which follows the barrel, would turn the whole body
+instead.

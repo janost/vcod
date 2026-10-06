@@ -48,6 +48,34 @@ pub fn iprint_line(
     Ok(Value::Undefined)
 }
 
+/// `announcement(message [, args...])` (0x5f0f0) and
+/// `clientAnnouncement(player, message [, args...])` (0x5f134): the reliable
+/// command `c "<message>" 2`, to every client or to `player` alone. The
+/// message is packed by [`super::message::construct`], the same packer
+/// `iPrintLn` uses (docs/research/cod11-gametypes-re-bel.md, section 3).
+pub fn announcement(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    to: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let text = super::message::construct(host, cx, args);
+    log::info!("script: announcement {text}");
+    let cmd = format!("c \"{}\" 2", text.replace('"', "'"));
+    match to {
+        Some(_) => {
+            let slot = super::client::client_receiver(host, to)?;
+            host.client_commands.push((slot, cmd));
+        }
+        None => {
+            for slot in host.client_slots() {
+                host.client_commands.push((slot, cmd.clone()));
+            }
+        }
+    }
+    Ok(Value::Undefined)
+}
+
 /// The rendered log line, split out from `print_line` so a test can pin it
 /// without a log-capturing harness.
 fn render(cx: &Cx, args: &[Value]) -> String {
@@ -113,6 +141,36 @@ mod iprintln_tests {
                 (1, "f \"MPSCRIPT_CONNECTED\u{15}vcod^7\"".to_string()),
                 (1, "f \"MPSCRIPT_CONNECTED\u{15}\"".to_string()),
             ]
+        );
+    }
+
+    /// `announcement` reaches every client as `c "<message>" 2`, the form
+    /// retail sent for `re`'s `RE_MATCHSTARTING`, and `clientAnnouncement`'s
+    /// receiver form reaches one (docs/research/cod11-gametypes-re-bel.md 3).
+    #[test]
+    fn announcement_goes_out_as_the_c_reliable_command() {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut host = GameHost::new(vec![String::new(); 2048]);
+        let ents = &mut host.ents;
+        let (b, key) = vm.with_cx(|cx| {
+            ents.spawn_client(cx, 0, None).expect("a client");
+            let b = ents.spawn_client(cx, 1, None).expect("a client");
+            (b, cx.intern_exact("RE_MATCHSTARTING"))
+        });
+        vm.with_cx(|cx| {
+            announcement(&mut host, cx, None, &[Value::Localized(key)]).unwrap();
+            announcement(
+                &mut host,
+                cx,
+                Some(Target::Entity(b)),
+                &[Value::Localized(key)],
+            )
+            .unwrap();
+        });
+        let cmd = "c \"RE_MATCHSTARTING\u{15}\" 2".to_string();
+        assert_eq!(
+            host.client_commands,
+            vec![(0, cmd.clone()), (1, cmd.clone()), (1, cmd)]
         );
     }
 }

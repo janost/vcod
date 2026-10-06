@@ -48,7 +48,7 @@ grepping a capture for `scores` or `cs` finds nothing.
 |---|---|---|
 | `a` | `0x30037f20` | takes one int arg |
 | `b` | `0x3002b920` | scoreboard (section 3) |
-| `c` | | "announcement message" (big centre print) |
+| `c` | | "announcement message" (big centre print): `c "<message>" 2` from `announcement` / `clientAnnouncement` (docs/research/cod11-gametypes-re-bel.md 3) |
 | `d` | `0x3002c6b0` | configstring update: `d <index> <string>` |
 | `e`, `f` | | "game message" (print queue) |
 | `g` | | "bold game message" |
@@ -861,11 +861,48 @@ fixed cell's width, and the two fixed slots are 16x16 and 8x16 cells whose
 width does not take `fontScale`. INFERRED: slots 0, 1 and 2 are the
 `default`, `bigfixed` and `smallfixed` names the script's `font` field takes
 (`cod11-gsc-object-model.md`, "HUD element fields"). VERIFIED from the pak listing: `pak5.pk3`
-ships only `fonts/fontImage_{12,16,18,24,30,32}`, no fixed-width atlas. vcod
-draws the two fixed slots with a loaded font at retail's `fontScale / 3` and
-measures them with that font, not per cell, so a fixed-slot string aligned
-centre or right sits off retail's by the difference; it reads the default
-slot's height as its tallest glyph at the element's scale.
+ships only `fonts/fontImage_{12,16,18,24,30,32}`, no fixed-width atlas.
+
+VERIFIED: `0x3001f120` stores a font handle at the record's `+0x20`: 0 for
+slot 0, 4 for slot 1 and 5 for slot 2, and `0x3001f490` passes `+0x20`,
+`+0x24` and `+0x2c` to text trap `0x36` as its third, fourth and seventh
+arguments. VERIFIED, `CoDMP.exe`: the cgame's trap `0x36` goes to the
+refexport's `0x004df570`, which calls `0x004dfc10` with its seventh argument
+ninth; `0x004dfc10` stores that at word 6 of render command 6, and the
+command loop passes word 6 to the text renderer `0x004d7d60` as its eighth
+argument. INFERRED, off `0x004d7d60`'s glyph loop: when that argument is
+not 0 (`0x00568e64`, 0.0) every glyph advances by it and is shifted right
+by `(cell - scale * advance) * 0.5` (`0x00568e70`, 0.5) on top of its
+bearing, so a fixed slot is a proportional font laid out one glyph per
+cell, centred in it. VERIFIED: the renderer takes its font from the
+refimport hook `0x004118f0` with the handle and the scale; that hook
+truncates the scale times 100 (`0x00568eb0`, the CRT `_ftol2` at
+`0x00538be0`) and calls the UI module's `vmMain` with command `0x10`.
+
+VERIFIED, `ui_mp_x86.dll` (1.1, image base `0x40000000`): `vmMain`
+(`0x400076a0`) case `0x10` (`0x40007782`) multiplies the integer it is
+passed by 0.01 (`0x40030020`) and calls `0x400079e0`. The asset parser
+(`0x40007d30`..`0x40007f2b`) stores `font`, `smallFont`, `bigFont`,
+`extraBigFont`, `boldFont` and `consoleFont` at `0x401c3dec`, `0x401c8e34`,
+`0x401cde7c`, `0x401d2ec4`, `0x401d7f0c` and `0x401dcf54`, and pak0's
+`ui_mp/main.menu` registers them at 16, 12, 24, 32, 30 and 18. VERIFIED,
+the UI's cvar records: `ui_smallFont` 0.25 (value at `0x401eee28`),
+`ui_bigFont` 0.4 (`0x401c1e88`), `ui_extraBigFont` 0.55 (`0x401c2428`).
+INFERRED, off `0x400079e0`'s compares, with `s` the scale times the float
+at `0x401c3dc0`: handle 2 is `bigFont`, 3 `smallFont`, 5 `consoleFont`;
+handle 4 is `smallFont` for `s <= 0.25`, `font` below 0.4 and `boldFont`
+from there; any other handle is `smallFont` for `s <= 0.25`,
+`extraBigFont` from 0.55, `bigFont` from 0.4 and `font` between. INFERRED:
+`0x401c3dc0` is the display context's `yscale`, the screen height over 480,
+from its place ahead of the asset block as in Q3's `displayContextDef_t`.
+
+So `smallfixed` draws `fontImage_18` in 8-unit cells and `bigfixed` picks
+by the drawn size in 16-unit cells, and the default slot too picks its
+atlas by the drawn size. vcod does all three, with the height of the
+screen in place of `yscale`; it reads the default slot's height as its
+tallest glyph at the element's scale. INFERRED: trap `0x3a` counts the
+characters the renderer draws, colour codes excluded, which is how vcod
+measures a fixed-slot string.
 
 ### What each type prints
 
@@ -969,6 +1006,7 @@ menu origin plus item offset.
 | stance | 100, 434.375, 40x40 | `hudStance{Stand,Crouch,Prone}` | `CG_PLAYER_STANCE` 20 |
 | weapon name back | 242.5, 431, 320x20 | `gfx/hud/hud@weaponnameback.tga` | 82 |
 | ammo back | 557.5, 421.625, 80x40 | `gfx/hud/hud@ammocounterback.tga` | 6 |
+| weapon mode | 537.5, 430.375, 20x20 | the weapon's `modeIcon` | `CG_PLAYER_WEAPON_MODE_ICON` 83 |
 | weapon name | 242.5, 446, 320x30, textscale .3 | | 81 |
 | ammo text | 570, 444.625, 55x40, textscale .21 | | `CG_PLAYER_AMMO_VALUE` 5 |
 | health back | 501, 460, 130x12 | `gfx/hud/hud@health_back.tga` | `CG_DRAW_SHADER` |
@@ -977,6 +1015,7 @@ menu origin plus item offset.
 | compass back, face | -25, 345, 160x160 | `hud@compassback`, `hud@compassface` | 84 |
 | compass highlight | -25, 345, 160x160 | `hud@compasshighlight` | 85 |
 | compass needle | 35, 395, 40x40 | `hud@compass_arrow` | 85 |
+| compass friendlies | -25, 345, 160x160 | `hud@objective_friendly`, `hud@objective_friendly_chat` | `CG_PLAYER_COMPASS_FRIENDS` 88 |
 | objective pointers | -25, 345, 160x160 | | 86 |
 
 VERIFIED, the dispatch tables: the ownerdraw switch subtracts 4 from the id at
@@ -985,7 +1024,9 @@ table at `0x3002706c`; for ids 5, 20, 72, 81, 82, 84, 85, 86 and 89 those
 tables land on `0x30026c1e`, `0x30026d2a`, `0x30026c36`, `0x30026edb`,
 `0x30026f00`, `0x30026f3e`, `0x30026f5b`, `0x30026f78` and `0x30026f95`,
 whose calls are `0x30025ab0`, `0x30023f50`, `0x300251f0`, `0x30023c30`,
-`0x30023d50`, `0x30024800`, `0x30025120`, `0x30024d20` and `0x300248c0`.
+`0x30023d50`, `0x30024800`, `0x30025120`, `0x30024d20` and `0x300248c0`;
+ids 83 and 88 land on `0x30026f26` and `0x30026fd8`, which call
+`0x30023e90` and `0x30013540`.
 INFERRED: those are each id's handler, which is how the claims below are
 attributed.
 
@@ -1012,6 +1053,25 @@ table (`{name, offset, type}` records around `0x30075558`): `displayName`
 `+0x264`, `clipOnly` `+0x2d4`, `wideListIcon` `+0x2d8`, `adsAimPitch`
 `+0x344`, `adsCrosshairInFrac` `+0x348`, `adsCrosshairOutFrac` `+0x34c`,
 and the scope's keys listed under "Scope overlay".
+
+### Which views draw it
+
+VERIFIED, `0x30018810`, the 2D pass: it returns early on `cg_draw2D` 0
+(`0x301db42c`), and otherwise branches on the snapshot playerstate's
+`pm_type` (`cg.snap + 0x10`): 5 calls `0x30018530` and returns; 4 calls
+`0x30018070`, `0x30016f70` and `0x300150b0`, then the hudelem pass
+`0x3001f980` when `cg_drawStatus` (`0x301d9ecc`) is set; any other value calls
+`0x30016760` (the crosshair, which calls the turret reticle `0x30016610`),
+`0x30016f70` and `0x30037790` when it is below 6, then `0x300150b0`, and with
+`cg_drawStatus` set `0x3004a6f0`, `0x30017470` and `0x3001f980`. INFERRED:
+`0x3004a6f0` paints the cgame's visible menus, which are `hud.menu`'s, so a
+free-flying spectator (4) and the intermission (5) draw no menu HUD, a dead
+player (6, 7) draws it without a crosshair, and a follower, whose
+playerstate is its target's copy with the target's `pm_type`
+(`cod11-spectator-follow.md`), draws the target's health, ammo, stance and
+compass. vcod draws it on those terms, off the snapshot's playerstate
+without prediction while following, and rebases the hit-direction
+feedback when the playerstate's `clientNum` changes.
 
 ### Crosshair
 
@@ -1208,12 +1268,57 @@ strings: `0x3006526c`, `0x30063148` and `0x3006567c`. INFERRED, off
 `0x3000f920`: a weapon with a shared ammo cap sums the cap's weapons the
 player holds instead. vcod prints the weapon's own.
 
+INFERRED, off the guard both `0x30023c30` and `0x30023d50` open with: the
+name and its backdrop draw only while `0x30019a30` returns a colour, which
+it does for 1800 ms (`0x708`) from the stamp at `0x3020c920` and fades
+over the last 100. vcod draws them always.
+
+### Weapon mode icon
+
+VERIFIED: the weapon setup registers the def's `modeIcon` (`+0x190`) at
+`0x30035cab` and stores it at `+0x11c` of the weapon's `0x198`-byte record
+from `0x301a6940` (`0x30035cb3`); `0x30023e90` reads that slot for the
+weapon at `0x30209484` and draws it over the item's rect in its forecolor
+when it is not 0. VERIFIED: it skips the fade test `0x30019a30` when the
+playerstate's weapon (`0x3020720c`) is not 0 (`0x30023e90`..`0x30023eab`).
+INFERRED: the icon draws whenever a weapon with a `modeIcon` is held.
+VERIFIED, pak0's `weapons/mp/*`: the select-fire pairs name one,
+`hud@weaponmode_full.tga` on `bar_mp`, `fg42_mp`, `mp44_mp`, `ppsh_mp` and
+`thompson_mp`, `hud@weaponmode_semi.tga` on their `_semi` and `bar_slow_mp`
+variants; every other weapon leaves it blank.
+
 ### Stance
 
-INFERRED, off `0x30023f50`: prone on bit 1 and crouch on bit 2 of a stance
-word, standing otherwise, and `hudStanceFlash` drawn over it for a second
-after a change. vcod reads the stance from `eFlags` (`0x40` prone, `0x20`
-crouch) and leaves the flash out.
+VERIFIED: `0x30023f50` reads the dword at `0x30207168` and keeps its low two
+bits at `0x30074988`. VERIFIED: `0x30028a70` copies `0x834` dwords from
+`cg.snap + 0xc` (`0x301e2160`), the snapshot's playerstate, to `0x3020715c`.
+INFERRED: that dword is the playerstate's `+0xc`, `pm_flags`, in the copy
+the cgame predicts from. VERIFIED: `hudStanceStand`, `hudStanceCrouch` and
+`hudStanceProne` are registered to `0x301d5cf8`, `0x301d5cfc` and
+`0x301d5d00` (`0x30020faa`, `0x30020fbb`, `0x30020fcf`). INFERRED, off the
+branch ahead of the draw: the icon is the prone one on bit 1, the crouch
+one on bit 2, the standing one otherwise.
+
+VERIFIED: `0x30023f50` stores the time at `0x30074984` when those bits
+differ from the kept ones or the time is earlier than the stored one, and
+-1 instead whenever `cg_hudStanceHintPrints` (integer at `0x301dac4c`,
+default 0) is 0 (`0x30023f50`..`0x30023fa2`); both statics start at -1.
+VERIFIED, the constants: 0.001 (`0x300693c0`), 0.8 (`0x30069458`), and the
+cvars `cg_hudStanceFlash_r`, `_g`, `_b` at 1.0, 1.0, 0.3 (values at
+`0x301dbd28`, `0x30298008`, `0x301df0e8`). INFERRED, off the tail: for
+1000 ms from the stored time `hudStanceFlash` (`0x301d5d04`) is drawn over
+the icon in that colour, each lane clamped to 0..1, at alpha
+`(stored + 1000 - now) * 0.001 * 0.8`. VERIFIED: pak0's
+`configure_mp.cfg` and `safemode_mp.cfg` set `cg_hudStanceHintPrints` 1.
+INFERRED: a stock install runs with it on, which vcod assumes. The same
+function prints the `CGAME_STANCEHINT_*` key hints for 3 s from the stored
+time and a prone-blocked notice off `pm_flags` `0x8000`; vcod draws
+neither. VERIFIED: the icon's x adds `(cg_hudCompassSize - 1) * 112`
+(`0x30069738`), 0 at the default.
+
+vcod reads the icon and the flash off `pm_flags`' two bits, the replay's
+while predicting. Its first frame counts as a change, as the -1 start
+makes it in retail.
 
 ### Compass
 
@@ -1236,6 +1341,73 @@ more than 70 units above or below the view. VERIFIED: `0x30024c40` holds the
 three suffix strings `""`, `"_up"` and `"_down"`. Which suffix goes with which
 side, and that `a` grows to the left, are INFERRED from the geometry, not
 measured.
+
+### Compass friendlies
+
+VERIFIED, `0x30013540`: it returns unless the client info of
+`cg.nextSnap`'s playerstate `clientNum` (`0x301e2164`, `+0xb8`) is valid
+and its team (`0x3018bc38`, stride `0x448`) is neither 0 nor 3. It then
+walks the snapshot's entities (count `+0x20dc`, numbers from `+0x20e4`,
+stride `0xf0`) and, for each whose `0x228`-byte `cg_entities` record
+reads 1 at `0x3020dc74` (`0x300135a4`) and has bit 1 clear at `0x3020dc78`
+(`0x300135b3`), with a valid client info on the same team, stamps a
+64-entry, 20-byte table at `0x3020d0b0` with `cg.time` and the record's
+`0x3020dd78`, `0x3020dd7c` and `0x3020dd88`, and, when `0x3020dc78` has
+`0x80000` (`0x300135e1`) and the slot's flash time (`+0x10`) is not ahead
+of `cg.time`, sets that to `cg.time + 3000` (`0x30013620`). INFERRED: the
+two reads are `eType` (1, `ET_PLAYER`) and `eFlags` (bit 1, dead), and the
+stamp is the interpolated origin's x and y and the interpolated yaw.
+
+VERIFIED, `game.mp.i386.so`: `PlayerCmd_pingPlayer` (`0x550a4`) ORs 8
+into the playerstate's `eFlags` byte `+0x82`, the `0x80000` bit, and stamps
+`level.time + 3000` at client `+0x2268`; `ClientEndFrame` clears the bit
+once that time has passed. VERIFIED, pak5's `_teams.gsc`: the quick-chat
+commands call `self pingPlayer()` after `sayTeam`.
+
+VERIFIED, `G_GetNonPVSFriendlyInfo` (`0x52c30`): for a viewer on a team it
+returns the next live teammate after the previous answer that
+`trap_InSnapshot` says the viewer's snapshot lacks, packed as the client
+number in bits 0..5, the x and y offsets from the viewer's leaned eye in
+bits 6..14 and 15..23 (each `offset / 4 + 255` after rounding, the pair
+scaled down together to fit 1024 and -1022 and then clamped), and the yaw
+times 256/360 in the top byte. `ClientEndFrame` stores it at
+`iCompassFriendInfo` (playerstate `+0x3c0`) and sets the playerstate's
+`eFlags` `0x100000` from that teammate's `0x80000`.
+VERIFIED, the cgame's read of it (`0x30013646`..`0x300137a5`): a non-zero
+`+0x3c0` stamps slot `info & 0x3f`, decodes each offset as
+`field * 4 - 0x3fc`, tests both against 1024.0 (`0x44800000`) and -1020.0
+(`0xc47f0000`), takes the yaw as the signed top byte times 1.40625
+(`0x30069600`), and arms the 3 s flash on the playerstate's `eFlags`
+`0x100000` (`0x3001378c`). INFERRED, off the two arms: an offset at either
+clamp stores the pair normalised (`0x30039d50`) as a bare direction;
+otherwise it stores the playerstate's origin plus the offsets plus a lean
+offset (`0x3003f4e0`, with 16.0 and 20.0), which vcod leaves out.
+
+VERIFIED, the draw loop (`0x30013830`..`0x30013b9f`), at the defaults
+(`cg_hudCompassSize` 1, `cg_hudCompassMinRange` 0, `cg_hudCompassMaxRange`
+1024, `cg_hudCompassMinRadius` 0, `cg_hudObjectiveMinAlpha` 1): it resets
+a slot whose time is ahead of `cg.time` to 0, skips a slot older than 800
+ms and the viewer's own `clientNum`, and tests the stored x and y against
+1.0 (`0x30069328`, a double). INFERRED, off its arithmetic: a stored point
+sits as an objective does, `43.75 * clamp(distance / 1024)` from the
+compass centre along its bearing off the sprung compass yaw (`0x3020d0a8`,
+`0x30019f00`); a stored direction sits at the full 43.75; the icon is
+`10 * cg_hudCompassSize` (`0x300693e4`) square; the alpha is 1. VERIFIED:
+`gfx/hud/hud@objective_friendly.tga` and
+`gfx/hud/hud@objective_friendly_chat.tga` are registered to `0x301d5d14`
+and `0x301d5d18` (`0x30021024`, `0x30021035`). VERIFIED: while the flash
+time is ahead, `(flash - cg.time) % 500 >= 250` (`0x30013b20`..`0x30013b32`)
+picks the chat icon through the plain pic call `0x300192d0`; otherwise the
+friendly icon goes through the turned pic call `0x30019330` with the angle
+`ANGLE2SHORT(viewangles[YAW] (0x302095d0) - yaw)` in degrees. INFERRED: the
+icon turns the way the compass face does, by the viewer's yaw less the
+teammate's.
+
+vcod draws the snapshot's teammates off their interpolated origins with
+the snapshot's yaw, and the packed one, with the compass turned by the view
+yaw (no spring). vcod's server writes neither `iCompassFriendInfo` nor
+`pingPlayer`'s bit, so the packed teammate and the chat flash show only
+against a retail server.
 
 ### Cursor hint
 
@@ -1289,13 +1461,10 @@ behind. VERIFIED: the centre is `0x300695e4` (320.0) and `0x300695e0`
 
 | Retail piece | Where | vcod |
 |---|---|---|
-| The followed player's native HUD | the playerstate a follower is sent is the followed player's | hidden while following; hudelems still drawn |
-| Compass friendlies | `hud.menu` item `compassfrieldlies`, `CG_PLAYER_COMPASS_FRIENDS` | not drawn |
-| Weapon mode icon | ownerdraw 83, `modeIcon` (`+0x190`) | not drawn |
-| Stance flash | `hudStanceFlash`, `0x30023f50` | not drawn |
-| Turret reticle | `0x30016610` | no crosshair on a mounted gun |
+| Stance hint prints, prone-blocked notice | `0x30023f50` | not drawn |
+| Weapon name timing out 1.8 s after its stamp | `0x30023c30`, `0x30019a30` | always drawn |
+| The packed out-of-view teammate's lean offset | `0x3003f4e0` | left out |
 | Compass spring, damage-icon jitter, `adsAimPitch`, shared ammo caps | above | left out, each noted above |
-| Fixed-width fonts | section 8, "Font slots" | drawn and measured with a loaded proportional font |
 
 ---
 
