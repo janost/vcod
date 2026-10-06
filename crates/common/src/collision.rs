@@ -1112,9 +1112,10 @@ impl CollisionWorld {
     }
 
     /// A box sweep against model `model`'s brushes alone, wherever its pose
-    /// has them: the pusher test of `G_MoverPush`, which asks with a plain
-    /// `trap_Trace` box (game.mp 0x554ed) whether a body is in the mover's
-    /// way rather than in anything's.
+    /// has them, under `mask`: the pusher test of `G_MoverPush`, which asks
+    /// with a plain `trap_Trace` box under the entity's own clipmask
+    /// (game.mp 0x554ed) whether it is in the mover's way rather than in
+    /// anything's.
     pub fn model_box_trace(
         &self,
         model: usize,
@@ -1122,6 +1123,7 @@ impl CollisionWorld {
         end: Vec3,
         mins: Vec3,
         maxs: Vec3,
+        mask: u32,
     ) -> Trace {
         let mut trace = Trace {
             fraction: 1.0,
@@ -1148,7 +1150,7 @@ impl CollisionWorld {
                 start,
                 end,
                 Shape::Box(mins, maxs),
-                TRACE_MASK_MOVE,
+                mask,
                 &mut trace,
                 &mut a,
                 &mut b,
@@ -1429,8 +1431,8 @@ impl CollisionWorld {
         self.trace_with_mask(start, end, mins, maxs, TRACE_MASK_MOVE, false, None)
     }
 
-    /// [`Self::box_trace`] that passes through model `model`'s brushes: a
-    /// pushed body's sweep from where it stood to where the push puts it,
+    /// A box sweep under `mask` that passes through model `model`'s brushes:
+    /// a pushed body's sweep from where it stood to where the push puts it,
     /// which must not stop on the pusher it starts inside.
     pub fn box_trace_except(
         &self,
@@ -1438,9 +1440,10 @@ impl CollisionWorld {
         end: Vec3,
         mins: Vec3,
         maxs: Vec3,
+        mask: u32,
         model: usize,
     ) -> Trace {
-        self.trace_with_mask(start, end, mins, maxs, TRACE_MASK_MOVE, false, Some(model))
+        self.trace_with_mask(start, end, mins, maxs, mask, false, Some(model))
     }
 
     /// Bullet segment, retail's `trap_LocationalTrace`: [`MASK_SHOT`] and the
@@ -2770,13 +2773,13 @@ mod tests {
         let floor = Vec3::new(0.0, 0.0, -8.0);
         assert!(
             !world
-                .model_box_trace(1, floor, floor, Vec3::ZERO, Vec3::ZERO)
+                .model_box_trace(1, floor, floor, Vec3::ZERO, Vec3::ZERO, MASK_PLAYERSOLID)
                 .startsolid
         );
         let door = Vec3::new(200.0, 0.0, 32.0);
         assert!(
             world
-                .model_box_trace(1, door, door, Vec3::ZERO, Vec3::ZERO)
+                .model_box_trace(1, door, door, Vec3::ZERO, Vec3::ZERO, MASK_PLAYERSOLID)
                 .startsolid
         );
     }
