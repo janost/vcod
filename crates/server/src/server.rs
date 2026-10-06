@@ -1940,6 +1940,27 @@ impl Server {
         )
     }
 
+    /// Test-facing: the length of the bots' planned route from the graph
+    /// node nearest `from` to the one nearest `to`, or `None` when either
+    /// point is off the graph, no route exists, or the graph is not built
+    /// yet. What a bot scenario needs to put a walker where it can reach its
+    /// goal. On the graph means within a pitch of a node on the same floor:
+    /// `nearest` alone answers from a bank for a point down in a ditch.
+    pub fn test_nav_route(&self, from: [f32; 3], to: [f32; 3]) -> Option<f32> {
+        let g = self.nav.as_ref()?;
+        let on = |p: [f32; 3]| {
+            let n = g.nearest(p)?;
+            let d = g.nodes[n as usize] - glam::Vec3::from(p);
+            (d.truncate().length() <= g.spacing && d.z.abs() < 18.0).then_some(n)
+        };
+        let path = g.path(on(from)?, on(to)?)?;
+        Some(
+            path.windows(2)
+                .map(|w| g.nodes[w[0] as usize].distance(g.nodes[w[1] as usize]))
+                .sum(),
+        )
+    }
+
     /// Test-facing: where a standing player dropped at `p` comes to rest,
     /// or `None` when it starts inside geometry or finds no floor within
     /// 256 units. What a test needs to put a second client somewhere the map
