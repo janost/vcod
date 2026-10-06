@@ -437,32 +437,29 @@ pub fn radius_damage(
         "none",
         "MOD_EXPLOSIVE",
     );
-    let origin_field = cx.intern_folded("origin");
-    let ids: Vec<EntId> = host
-        .ents
-        .iter_inuse()
-        .filter(|(_, e)| e.client.is_some())
-        .map(|(id, _)| id)
-        .collect();
-    let mut candidates = Vec::new();
-    for id in ids {
-        if let Value::Vector(stands) = host.get_field(cx, id, origin_field)
-            && blast.reaches(&standing_victim(id.0 as usize, Vec3::from(stands)))
-        {
-            candidates.push(id);
-        }
-    }
-    // Clients hold the low numbers, so entity order puts these after them.
-    candidates.extend(
-        host.blast_entities(cx)
-            .into_iter()
-            .filter(|v| blast.reaches_entity(v))
-            .map(|v| v.id),
-    );
+    let candidates = blast_candidates(host, cx, &blast);
     host.radius_ignore_active = host.ignore_radius_damage;
     host.blasts.push(ScriptBlast { blast, candidates });
     blast_step(host, cx);
     Ok(Value::Undefined)
+}
+
+/// `trap_EntitiesInBox` over the blast's box, in the area tree's order
+/// (combat doc 14.7), kept to what the walk can damage: the clients and the
+/// turrets.
+fn blast_candidates(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    blast: &crate::game::combat::Blast,
+) -> Vec<EntId> {
+    let (mins, maxs) = blast.search_box();
+    let turrets: Vec<EntId> = host.blast_entities(cx).into_iter().map(|v| v.id).collect();
+    host.area
+        .entities_in_box(mins, maxs, -1)
+        .into_iter()
+        .filter_map(|n| host.ents.handle(n))
+        .filter(|id| host.ents.get(*id).is_some_and(|e| e.client.is_some()) || turrets.contains(id))
+        .collect()
 }
 
 /// One `radiusDamage` walk: the blast and the candidates whose turn has not
@@ -845,7 +842,7 @@ mod tests {
             dead: false,
             takedamage: true,
         };
-        rt.set_client_origin(0, [0.0, 0.0, 0.0]);
+        rt.place_client(0, [0.0, 0.0, 0.0]);
         let victim = rt.client_entity(0).expect("the client has an entity");
         rt.start_thread_for_test(victim, "mine", 0);
         rt.run_frame(0);
@@ -1058,8 +1055,8 @@ mod tests {
                 takedamage: true,
             };
         }
-        rt.set_client_origin(0, [100.0, 0.0, 0.0]);
-        rt.set_client_origin(1, [1000.0, 0.0, 0.0]);
+        rt.place_client(0, [100.0, 0.0, 0.0]);
+        rt.place_client(1, [1000.0, 0.0, 0.0]);
         rt.run_frame(1100);
         // The dead arm of the victim's end frame.
         rt.set_client_takedamage(0, false);
@@ -1146,7 +1143,7 @@ mod tests {
                 dead: false,
                 takedamage: true,
             };
-            rt.set_client_origin(slot, feet[slot]);
+            rt.place_client(slot, feet[slot]);
             rt.set_client_body(
                 slot,
                 Some(crate::game::combat::HitBody {
@@ -1173,13 +1170,15 @@ mod tests {
         assert_eq!(rt.client_field(0, "hits").as_deref(), Some("1"));
     }
 
-    /// `probe_blastloop`'s rows on retail (combat doc, 14.5), the walk in
-    /// entity order. A 100-health player in front of a 1000-health one, a
+    /// `probe_blastloop`'s rows on retail (combat doc, 14.5, 14.7). Both
+    /// stand across one split and link in slot order, so the walk takes
+    /// slot 1 first. A 100-health player in front of a 1000-health one, a
     /// lethal flat 200: with the front one walked first it dies before the
     /// back one is measured and its corpse shields nothing, so the back one
     /// takes 200; with the back one walked first the live front body stops
-    /// every probe and it takes nothing. A second blast in the same frame
-    /// still reaches the dead one, whose health goes below zero; after its
+    /// every probe and it takes nothing. The death relinks the dead one to
+    /// the head of the list, so a second blast in the same frame takes it
+    /// first, and still reaches it, its health going below zero; after its
     /// end frame nothing does.
     #[test]
     fn a_blast_walks_its_victims_one_callback_at_a_time() {
@@ -1225,7 +1224,7 @@ mod tests {
                     dead: false,
                     takedamage: true,
                 };
-                rt.set_client_origin(slot, [x, 0.0, 0.0]);
+                rt.place_client(slot, [x, 0.0, 0.0]);
                 rt.set_client_body(
                     slot,
                     Some(crate::game::combat::HitBody {
@@ -1247,14 +1246,84 @@ mod tests {
             rt.set_client_takedamage(front, false);
             rt.run_frame(2200);
             let want = if front == 0 {
-                " 0:200 1:200| 0:20 1:20 1:20"
+                " 0:200| 0:20 1:20 1:20"
             } else {
-                " 1:200| 0:20 1:20 0:20"
+                " 1:200 0:200| 1:20 0:20 0:20"
             };
             assert_eq!(rt.level_field_str("log"), want, "front {front}");
-            let back_left = if front == 0 { 1000 - 240 } else { 1000 - 40 };
+            let back_left = if front == 0 { 1000 - 40 } else { 1000 - 240 };
             assert_eq!(rt.client_vitals(back).health, back_left);
         }
+    }
+
+    /// `probe_blastorder` on retail (combat doc 14.7): four players set down
+    /// round mp_carentan's second split by `setOrigin`, then moved one at a
+    /// time, a flat blast after each. The walk is the area tree's, each
+    /// `setOrigin` putting its player at the head of the node it lands in.
+    #[test]
+    fn radiusdamage_walks_its_victims_in_the_area_trees_order() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let bytes = fs.read("maps/mp/mp_carentan.bsp").unwrap();
+        let bsp = vcod_common::bsp::parse(&bytes).unwrap();
+        const SCRIPT: &str = r#"
+            main() {
+                level.log = "";
+                wait 1;
+                players = getentarray("player", "classname");
+                for (i = 0; i < players.size; i++)
+                    level.p[players[i] getEntityNumber()] = players[i];
+                level.p[0] setorigin((-290, 2430, -32));
+                level.p[1] setorigin((-260, 2480, -32));
+                level.p[2] setorigin((-230, 2380, -32));
+                level.p[3] setorigin((-230, 2540, -32));
+                blast();
+                level.p[0] setorigin((-290, 2440, -32));
+                blast();
+                level.p[2] setorigin((-200, 2430, -32));
+                blast();
+                level.p[1] setorigin((-290, 2380, -32));
+                blast();
+            }
+            blast() {
+                level.log = level.log + "|";
+                radiusDamage((-176.8, 2473.1, 7), 500, 20, 20);
+            }
+            CodeCallback_PlayerConnect() {}
+            CodeCallback_PlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc) {
+                level.log = level.log + self getEntityNumber();
+            }
+            CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {}
+        "#;
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
+        rt.host.area = crate::area::AreaTree::for_map(&bsp, &fs);
+        rt.host.world = Some(Rc::new(World {
+            collision: vcod_common::collision::test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+            spawn_points: Vec::new(),
+        }));
+        for slot in 0..4 {
+            rt.push_client_event(ClientEvent::Connect {
+                slot,
+                name: format!("p{slot}"),
+            });
+        }
+        rt.run_frame(50);
+        // In play at the far end of the map, as sd's spawns left them.
+        for slot in 0..4 {
+            rt.host.client_vitals[slot] = Vitals {
+                health: 1000,
+                max_health: 100,
+                dead: false,
+                takedamage: true,
+            };
+            rt.place_client(slot, [2000.0 + 100.0 * slot as f32, -1000.0, 0.0]);
+        }
+        rt.run_frame(1100);
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(rt.level_field_str("log"), "|1032|0132|2013|2031");
     }
 
     /// `probe_victims`' `fpd` rows (combat doc, 4.4): an entity inflictor
@@ -1383,7 +1452,7 @@ mod tests {
             dead: false,
             takedamage: true,
         };
-        rt.set_client_origin(0, [100.0, 0.0, 0.0]);
+        rt.place_client(0, [100.0, 0.0, 0.0]);
 
         rt.run_frame(1100);
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());

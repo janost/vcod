@@ -69,7 +69,7 @@ pub fn use_button_pressed(
 }
 
 /// `self setOrigin(origin)`, a player method only (0x43480): the origin one
-/// unit above the argument, the teleport bit flipped, velocity kept
+/// unit above the argument, relinked, the teleport bit flipped, velocity kept
 /// (docs/research/cod11-gsc-object-model.md, 23.2). The script's copy moves
 /// now so a read later this frame sees it; the sim's is queued.
 pub fn set_player_origin(
@@ -85,6 +85,13 @@ pub fn set_player_origin(
     let origin = [x, y, z + 1.0];
     let field = cx.intern_folded("origin");
     host.set_field(cx, entity_receiver(recv)?, field, Value::Vector(origin))?;
+    // An unlink, then a link with the contents the entity holds (0x53480):
+    // the player goes to the head of its node's list even when it lands in
+    // the node it left (combat doc 14.7).
+    let contents = host.area.contents(slot as u32);
+    host.area.unlink(slot as u32);
+    let playing = !host.client_vitals[slot].dead;
+    host.link_client(slot, origin, host.client_box(slot), contents, playing);
     host.client_sim_ops
         .push((slot, SimOp::SetOrigin { origin }));
     Ok(Value::Undefined)

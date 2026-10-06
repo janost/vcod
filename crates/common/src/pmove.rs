@@ -1740,15 +1740,79 @@ fn thrown_off_ground(ps: &PlayerState, normal: Vec3) -> bool {
     ps.velocity.z > 0.0 && ps.velocity.dot(normal) > 10.0
 }
 
+/// `PM_CorrectAllSolid`'s nudges (`.rodata 0x70a40`), tried in this order.
+const ALL_SOLID_NUDGES: [[f32; 3]; 26] = [
+    [0.0, 0.0, 1.0],
+    [-1.0, 0.0, 1.0],
+    [0.0, -1.0, 1.0],
+    [1.0, 0.0, 1.0],
+    [0.0, 1.0, 1.0],
+    [-1.0, 0.0, 0.0],
+    [0.0, -1.0, 0.0],
+    [1.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 0.0, -1.0],
+    [-1.0, 0.0, -1.0],
+    [0.0, -1.0, -1.0],
+    [1.0, 0.0, -1.0],
+    [0.0, 1.0, -1.0],
+    [-1.0, -1.0, 1.0],
+    [1.0, -1.0, 1.0],
+    [1.0, 1.0, 1.0],
+    [-1.0, 1.0, 1.0],
+    [-1.0, -1.0, 0.0],
+    [1.0, -1.0, 0.0],
+    [1.0, 1.0, 0.0],
+    [-1.0, 1.0, 0.0],
+    [-1.0, -1.0, -1.0],
+    [1.0, -1.0, -1.0],
+    [1.0, 1.0, -1.0],
+    [-1.0, 1.0, -1.0],
+];
+
+/// `PM_CorrectAllSolid` (`game.mp.i386.so` 0x30214): the first one-unit
+/// nudge whose box is clear, the origin moved there and dropped up to a
+/// unit, and that drop's trace as the ground trace. `None` when every nudge
+/// is in solid, which leaves the player in the air with no jump origin, so
+/// the slide's allsolid return and the step's gate hold it where it is
+/// (docs/research/cod11-mantle.md, "A start inside a solid").
+fn correct_all_solid(
+    ps: &mut PlayerState,
+    world: &MoveWorld,
+    mask: u32,
+) -> Option<crate::collision::Trace> {
+    let (mins, maxs) = (ps.mins(), ps.maxs());
+    let free = ALL_SOLID_NUDGES
+        .iter()
+        .map(|n| ps.origin + Vec3::from_array(*n))
+        .find(|p| !world.box_trace(*p, *p, mins, maxs, mask).startsolid)?;
+    let t = world.box_trace(free, free - Vec3::Z, mins, maxs, mask);
+    ps.origin = t.endpos;
+    Some(t)
+}
+
 /// Q3 `bg_pmove.c` `PM_GroundTrace`.
 fn ground_trace(ps: &mut PlayerState, world: &MoveWorld, mask: u32) {
-    let t = world.box_trace(
+    let mut t = world.box_trace(
         ps.origin,
         ps.origin - Vec3::Z * 0.25,
         ps.mins(),
         ps.maxs(),
         mask,
     );
+    if t.allsolid {
+        match correct_all_solid(ps, world, mask) {
+            Some(drop) => t = drop,
+            None => {
+                ps.jump_origin_z = 0.0;
+                ps.ground_plane = None;
+                ps.on_ground = false;
+                ps.ground_normal = Vec3::Z;
+                ps.ground_surface_flags = 0;
+                return;
+            }
+        }
+    }
     // Any hit ends the jump's step allowance, thrown off or not (0x305c8).
     if t.fraction < 1.0 {
         ps.jump_origin_z = 0.0;
@@ -2402,8 +2466,6 @@ fn air_move(
 #[derive(Clone, Copy)]
 struct Slide {
     blocked: bool,
-    /// The start was inside something: the trace could not move at all.
-    stuck: bool,
 }
 
 /// Q3 `bg_slidemove.c` `PM_SlideMove`.
@@ -2446,10 +2508,7 @@ fn slide_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32, gravity: bool, m
         if t.allsolid {
             // trapped in solid: keep the horizontal control, kill the fall
             ps.velocity.z = 0.0;
-            return Slide {
-                blocked: true,
-                stuck: true,
-            };
+            return Slide { blocked: true };
         }
         if t.fraction > 0.0 {
             ps.origin = t.endpos;
@@ -2462,10 +2521,7 @@ fn slide_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32, gravity: bool, m
 
         if planes.len() >= MAX_CLIP_PLANES {
             ps.velocity = Vec3::ZERO;
-            return Slide {
-                blocked: true,
-                stuck: false,
-            };
+            return Slide { blocked: true };
         }
         // same plane again: nudge out along it (epsilon on non-axial planes)
         if planes.iter().any(|p| t.normal.dot(*p) > 0.99) {
@@ -2502,10 +2558,7 @@ fn slide_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32, gravity: bool, m
                     .any(|(k, &p)| k != i && k != j && clipped.dot(p) < 0.1)
                 {
                     ps.velocity = Vec3::ZERO;
-                    return Slide {
-                        blocked: true,
-                        stuck: false,
-                    };
+                    return Slide { blocked: true };
                 }
             }
 
@@ -2525,7 +2578,6 @@ fn slide_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32, gravity: bool, m
     }
     Slide {
         blocked: bumps != 0,
-        stuck: false,
     }
 }
 
@@ -2564,9 +2616,7 @@ fn step_slide_move(
         jump_step = true;
     }
     let through = ps.on_ground || jump_step || blocked && ps.on_ladder && ps.velocity.z > 0.0;
-    // A start inside a solid steps out of it as before: retail never has a
-    // player there (the revert below), and vcod's tests do.
-    if !through && !slide.stuck {
+    if !through {
         return;
     }
     let (mins, maxs) = (ps.mins(), ps.maxs());
@@ -2627,17 +2677,12 @@ fn step_slide_move(
     // and the plain slide's state comes back whenever it got as far, so a
     // step that cleared nothing is undone together with its down pass
     // (docs/research/cod11-mantle.md, "The ground snap").
-    // A start inside a solid keeps its step out of it: retail's test would
-    // put it back, but retail never has a player there, since its spawns sit
-    // 0.125 up, and vcod's tests and its fallback spawn do.
     // A jump's step that ends at or above the jump's origin is reverted too
     // (0x35450-0x35468).
     let v = ps.velocity.truncate();
     let flat = v.dot((down_o - start_o).truncate());
     let stepped = v.dot((ps.origin - start_o).truncate());
-    if !slide.stuck && flat + STEP_REVERT_EPS > stepped
-        || jump_step && ps.origin.z >= ps.jump_origin_z
-    {
+    if flat + STEP_REVERT_EPS > stepped || jump_step && ps.origin.z >= ps.jump_origin_z {
         ps.origin = down_o;
         ps.velocity = down_v;
         // The ground snap proper (0x354cc-0x3557b): a reverted move on a
@@ -2714,6 +2759,27 @@ mod tests {
 
     fn flat() -> CollisionWorld {
         test_world(&[])
+    }
+
+    /// `probe_blastloop`'s slot 3 on retail (mantle doc, "A start inside a
+    /// solid"): set down nine units inside a clip brush it stays exactly
+    /// where it was put, a second and more of cmds with no input later. A
+    /// box one unit deep is nudged out by `PM_CorrectAllSolid` instead.
+    #[test]
+    fn a_player_set_down_inside_a_brush_stays_there() {
+        let w = test_world(&[(Vec3::new(-64.0, -64.0, -16.0), Vec3::new(64.0, 64.0, 9.125))]);
+        let mw = MoveWorld::bare(&w);
+        let mut deep = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.0), 0.0);
+        tick(&mut deep, &PmInput::default(), &mw, 150);
+        assert_eq!(deep.origin, Vec3::ZERO);
+        assert!(!deep.on_ground);
+
+        let w = test_world(&[(Vec3::new(-64.0, -64.0, -16.0), Vec3::new(64.0, 64.0, 0.5))]);
+        let mw = MoveWorld::bare(&w);
+        let mut shallow = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.0), 0.0);
+        tick(&mut shallow, &PmInput::default(), &mw, 10);
+        assert!((shallow.origin.z - 0.5).abs() < 0.2, "{:?}", shallow.origin);
+        assert!(shallow.on_ground);
     }
 
     /// `PM_WalkMove`'s accel and `PM_Friction`'s ground control both scale

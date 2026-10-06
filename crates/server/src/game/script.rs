@@ -66,6 +66,9 @@ pub struct Carry {
     /// a `map_restart` keeps it whether or not the level asked to persist,
     /// the way it keeps the configstring table (map-cycle doc, 4.6).
     pub items: Option<crate::items::Items>,
+    /// The entity area tree, also the engine's: a `map_restart` keeps its
+    /// nodes and drops its entities (combat doc 14.7).
+    pub area: Option<crate::area::AreaTree>,
 }
 
 /// A script value as text, through the same `%g` rendering string
@@ -221,6 +224,13 @@ impl ScriptRuntime {
         let bsp = vcod_common::bsp::parse(&bsp_bytes)?;
         host.model_bounds = bsp.models.iter().map(|m| (m.mins, m.maxs)).collect();
         host.model_brushes = crate::game::trigger::model_brush_hulls(&bsp);
+        host.area = match carry.area {
+            Some(mut area) => {
+                area.unlink_all();
+                area
+            }
+            None => crate::area::AreaTree::for_map(&bsp, &fs),
+        };
         vm.with_cx(|cx| spawn_entities_from_string(&mut host, cx, &bsp.entities))
             .map_err(|e| anyhow::anyhow!("spawning {map}'s entities: {e:?}"))?;
 
@@ -1572,6 +1582,7 @@ impl ScriptRuntime {
             game: Some(self.vm.take_game()),
             pers,
             items: Some(self.host.items.clone()),
+            area: Some(self.host.area.clone()),
         }
     }
 
@@ -1687,6 +1698,8 @@ impl ScriptRuntime {
                         rec.busy = 0;
                     }
                 }
+                // `G_FreeEntity`'s unlink.
+                self.host.area.unlink(slot as u32);
                 self.host.ents.free_client(slot);
             }
         }
@@ -2064,6 +2077,15 @@ pub type Bounds = ([f32; 3], [f32; 3]);
 
 #[cfg(test)]
 impl ScriptRuntime {
+    /// A playing client standing at `at`, linked there the way its cmd's
+    /// link would: what a blast's walk finds it by.
+    pub fn place_client(&mut self, slot: usize, at: [f32; 3]) {
+        self.set_client_origin(slot, at);
+        let bounds = self.host.client_box(slot);
+        let body = vcod_common::movetrace::CONTENTS_BODY as i32;
+        self.host.link_client(slot, at, bounds, body, true);
+    }
+
     /// A `misc_mg42` at `at` with `G_SpawnTurret`'s health and a record
     /// off a bare weapon file.
     pub fn place_turret(&mut self, at: [f32; 3]) -> EntId {
@@ -2089,6 +2111,8 @@ impl ScriptRuntime {
             0.0,
         );
         self.host.turrets.insert(id, rec);
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| host.link_turret(cx, id));
         id
     }
 

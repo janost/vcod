@@ -21,8 +21,10 @@ const MAP: &str = "mp_carentan";
 /// `ENTITYNUM_NONE` as the wire carries it.
 const ENTITYNUM_NONE: i32 = 1023;
 /// Where the retail attacker planted from, the plant fixture's `# station`
-/// line: inside `bombzone_A`'s brush and on its floor.
-const STATION: [f32; 3] = [-225.0, 2452.0, -22.0];
+/// line (`-225.1, 2452.3, -21.9`): inside `bombzone_A`'s trigger and on the
+/// flak88 clip's top at -21.875. A box set down below that top is stuck in
+/// the clip, as on retail (mantle doc, "A start inside a solid").
+const STATION: [f32; 3] = [-225.0, 2452.0, -21.875];
 /// `EF_TELEPORT_BIT`.
 const EF_TELEPORT: i32 = 0x8;
 
@@ -170,7 +172,9 @@ fn a_client_linked_on_the_move_keeps_its_velocity() {
         cb.send_frame(&NULL_USERCMD);
         step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
     }
-    sv.place_client(0, STATION, 0.0);
+    // Facing along the flak88 rather than into its clip, so the walk keeps
+    // its speed up to the link.
+    sv.place_client(0, STATION, 270.0);
     let weapon = ca
         .snapshots()
         .newest()

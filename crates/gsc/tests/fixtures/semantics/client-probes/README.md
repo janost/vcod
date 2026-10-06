@@ -696,12 +696,67 @@ probes clear where retail's left none, and slot 2 takes 133 on
 `lethal_high`; the
 `same_frame_high` callbacks run 2 then 3 where retail's ran 3 then 2.
 
+Ours on 2026-10-06, after the walk took the area tree's order (combat doc
+14.7): `same_frame_high` runs 3 then 2 as retail's did. Then, with
+`PM_CorrectAllSolid` and the step gate for a start in solid ported (mantle
+doc, "A start inside a solid"), slot 3 stands at -31.00 inside the flak88
+clip as retail's does, and every row from the first blast on reads as
+retail's.
+
 The `after_low` and `before_high` rows this section's block drops, retail
 then ours on 2026-10-06 after the `PM_DeadMove` and spawn-health fixes
 (combat doc 5.6 and 5.7): dead slot 0 came to rest at (-245.37, 2404.63)
 and (-244.78, 2405.35), and read `spectator -20` after sd's
 `spawnSpectator` on both. Before the fixes ours slid it to (-273.20,
 2376.80) and its spectator read 100.
+
+## probe_blastorder
+
+The order one `radiusDamage` walks its victims in, for
+`docs/research/cod11-combat.md` 14.7. Four players at 1000 health are set
+down round mp_carentan's second area-tree split (y 2464), then moved one at
+a time, a flat-20 blast from `(-176.8, 2473.1, 7)` after each; the wrapped
+damage callback logs `PROBE cb <entity> <iDamage>` and puts the health back.
+`probe_blastbody`'s recipe, 100 s on the server and `--probe-secs 85` on the
+clients. Against ours the server half is `vcod-server mp_carentan
+--gametype-script crates/gsc/tests/fixtures/semantics/client-probes/probe_blastorder.gsc`.
+Nothing here writes a fixture.
+
+Retail, 2026-10-06 (the per-blast `state` lines cut to the moved player):
+
+```
+PROBE placed 0 playing (-290.00, 2430.00, -31.94)
+PROBE placed 1 playing (-260.00, 2480.00, -31.83)
+PROBE placed 2 playing (-230.00, 2380.00, -31.87)
+PROBE placed 3 playing (-230.00, 2540.00, -31.97)
+PROBE blast placed
+PROBE cb 1 20
+PROBE cb 0 20
+PROBE cb 3 20
+PROBE cb 2 20
+PROBE moved_within 0 playing (-290.00, 2440.00, -31.87)
+PROBE blast moved_within
+PROBE cb 0 20
+PROBE cb 1 20
+PROBE cb 3 20
+PROBE cb 2 20
+PROBE moved_into 2 playing (-200.00, 2430.00, -31.77)
+PROBE blast moved_into
+PROBE cb 2 20
+PROBE cb 0 20
+PROBE cb 1 20
+PROBE cb 3 20
+PROBE moved_out 1 playing (-290.00, 2380.00, -31.87)
+PROBE blast moved_out
+PROBE cb 2 20
+PROBE cb 0 20
+PROBE cb 3 20
+PROBE cb 1 20
+```
+
+Ours, the same day, after the walk took the area tree's order: every `cb`
+line the same and in the same order. The rest heights differ by up to 0.12
+(-31.87 on all four, -31.75 for slot 1's last move).
 
 ## probe_itemdrop
 
