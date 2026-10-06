@@ -1040,12 +1040,17 @@ fn write_pending_commands(w: &mut MsgWriter, nc: &ServerNetchan, from_ack: i32) 
 }
 
 impl Server {
-    pub fn new(mut cfg: ServerConfig, now: Instant) -> Self {
+    /// A server whose generator starts from a fixed seed, so a test run
+    /// replays the same bot picks, script `randomInt`s and spawn choices.
+    pub fn new(cfg: ServerConfig, now: Instant) -> Self {
+        Self::with_seed(cfg, now, 0x9e37_79b9_7f4a_7c15)
+    }
+
+    /// `new` with the generator seeded from `seed`; the binary passes the
+    /// wall clock.
+    pub fn with_seed(mut cfg: ServerConfig, now: Instant, seed: u64) -> Self {
         cfg.max_clients = cfg.max_clients.min(MAX_CLIENTS);
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0x9e37_79b9_7f4a_7c15, |d| d.as_nanos() as u64)
-            | 1;
+        let seed = seed | 1;
         let server_id = 0x10;
         let fall = FallHeights::default();
         let mut sv = Server {

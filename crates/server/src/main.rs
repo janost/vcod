@@ -118,7 +118,10 @@ fn main() -> Result<()> {
         .with_context(|| format!("binding udp/{}", args.port))?;
     sock.set_nonblocking(true)?;
     log::info!("vcod-server: {} on udp/{}", args.map, args.port);
-    let mut server = Server::new(
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64);
+    let mut server = Server::with_seed(
         ServerConfig {
             map: args.map,
             hostname: args.hostname,
@@ -130,6 +133,7 @@ fn main() -> Result<()> {
             trace: args.trace,
         },
         Instant::now(),
+        seed,
     );
     server.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     if let Some((stem, text)) = &overlay {
