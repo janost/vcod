@@ -48,12 +48,12 @@ grepping a capture for `scores` or `cs` finds nothing.
 |---|---|---|
 | `a` | `0x30037f20` | takes one int arg |
 | `b` | `0x3002b920` | scoreboard (section 3) |
-| `c` | | "announcement message" (big centre print): `c "<message>" 2` from `announcement` / `clientAnnouncement` (docs/research/cod11-gametypes-re-bel.md 3) |
+| `c` | | "announcement message", the bold message window: `c "<message>" 2` from `announcement` / `clientAnnouncement` (docs/research/cod11-gametypes-re-bel.md 3, cod11-chat.md 3) |
 | `d` | `0x3002c6b0` | configstring update: `d <index> <string>` |
-| `e`, `f` | | "game message" (print queue) |
-| `g` | | "bold game message" |
-| `h` | | "chat message" |
-| `i` | | "team chat message" |
+| `e`, `f` | | "game message", the game message window (cod11-chat.md 3.3) |
+| `g` | | "bold game message": `game_message` sound, then as `c` |
+| `h` | | "chat message", from `G_Say` (cod11-chat.md) |
+| `i` | | "team chat message", from `G_Say` |
 | `j`/`k`/`l` | `0x3002d940(0/1/2)` | three variants of one handler |
 | `m` | | int arg, arms a 20 s (or 10 s if negative) timer |
 | `n` | `0x3002ca60` | |
@@ -1453,9 +1453,9 @@ teammate's.
 
 vcod draws the snapshot's teammates off their interpolated origins with
 the snapshot's yaw, and the packed one, with the compass turned by the view
-yaw (no spring). vcod's server writes neither `iCompassFriendInfo` nor
-`pingPlayer`'s bit, so the packed teammate and the chat flash show only
-against a retail server.
+yaw (no spring). vcod's server sets `pingPlayer`'s bit but does not write
+`iCompassFriendInfo`, so the packed teammate shows only against a retail
+server.
 
 ### Cursor hint
 

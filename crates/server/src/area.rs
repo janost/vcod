@@ -104,6 +104,37 @@ impl Link {
         }
     }
 
+    /// A brush model's link: its box at `origin` while it is unrotated, a
+    /// cube of the bounds' radius about `origin` once any angle is set
+    /// (`SV_LinkEntity`'s `RadiusFromBounds` call at 0x8090b20), grown a
+    /// unit each way either way.
+    pub fn brush(
+        origin: [f32; 3],
+        angles: [f32; 3],
+        mins: [f32; 3],
+        maxs: [f32; 3],
+        contents: i32,
+    ) -> Self {
+        if angles == [0.0; 3] {
+            return Self::boxed(origin, mins, maxs, contents);
+        }
+        let r = (0..3)
+            .map(|i| mins[i].abs().max(maxs[i].abs()).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        Self::boxed(origin, [-r; 3], [r; 3], contents)
+    }
+
+    /// The same link filed in the tree under `mins`..`maxs` (x and y): a
+    /// `script_model`'s model bounds about its origin (`svFlags & 4`,
+    /// `0x80c4f6c`), where its world box stays the origin's.
+    pub fn filed_under(self, mins: [f32; 2], maxs: [f32; 2]) -> Self {
+        Link {
+            tree: Some((mins, maxs)),
+            ..self
+        }
+    }
+
     /// The same link with other contents.
     pub fn with_contents(self, contents: i32) -> Self {
         Link { contents, ..self }
@@ -205,6 +236,15 @@ impl AreaTree {
             .get(ent as usize)
             .filter(|e| e.node.is_some())
             .map_or(0, |e| e.contents)
+    }
+
+    /// A write of `r.contents` with no link behind it (`SP_trigger_hurt`,
+    /// `trigger_use`, `notSolid` on a brush model): the entity keeps its
+    /// place and the masks above it, and the walk tests the new contents.
+    pub fn set_contents(&mut self, ent: u32, contents: i32) {
+        if let Some(e) = self.ents.get_mut(ent as usize) {
+            e.contents = contents;
+        }
     }
 
     /// `0x80594c4`: a static model, filed once at map load in the order the

@@ -87,8 +87,8 @@ comment in `spawnPlayer` and from the friendly-fire warning; `announcement`
 carries every round message.
 
 vcod: `builtins::io::announcement`, the message packed by
-`message::construct` the way `iPrintLn`'s is. The vcod client does not
-render the `c` command yet; that is a client HUD item.
+`message::construct` the way `iPrintLn`'s is. The client draws `c` in the
+bold message window (`docs/research/cod11-chat.md` 3.3).
 
 ## 4. `trigger_use`, `setHintString` and the use key
 
@@ -194,9 +194,6 @@ Differences that remain, none specific to these gametypes:
   `t=11100`), so on ours the probes were already in when it ran.
 - The restart rebroadcasts configstrings 3, 12 and 13 on retail and only 3
   on ours, with `t\0` in 3: `docs/research/cod11-map-cycle.md` 4.5.
-- `sayAll`, `sayTeam` and `pingPlayer` (`_teams.gsc`'s quick chat, in every
-  gametype) are still unimplemented: retail routes the first two through
-  `G_Say` (0x4590c, 0x459a8), and vcod's server has no chat.
 - `addTestClient` is unimplemented; the stock scripts reach it only from
   their `scr_numbots` debug thread.
 

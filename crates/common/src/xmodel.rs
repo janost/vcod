@@ -571,6 +571,21 @@ fn parse_model(name: &str, desc: &[u8], parts: &[u8], surfs: &[u8]) -> Result<XM
     })
 }
 
+/// The descriptor's own `mins`/`maxs` (`xmodel/<name>`, after the version),
+/// which a `script_model` is filed in the area tree under
+/// (docs/research/cod11-combat.md 14.7). `None` for a short or foreign file.
+pub fn descriptor_bounds(data: &[u8]) -> Option<(Vec3, Vec3)> {
+    let mut r = Reader::new(data);
+    if r.u16().ok()? != 14 {
+        return None;
+    }
+    let mut v = [0f32; 6];
+    for x in &mut v {
+        *x = r.f32().ok()?;
+    }
+    Some((Vec3::new(v[0], v[1], v[2]), Vec3::new(v[3], v[4], v[5])))
+}
+
 /// `name` is the `xmodel/` entry, e.g. `viewmodel_kar98k`.
 pub fn load(fs: &Pk3Fs, name: &str) -> Result<XModel> {
     let read = |path: String| -> Result<Vec<u8>> {

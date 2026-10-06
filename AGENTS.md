@@ -300,10 +300,12 @@ output. `crates/common/tests/evidence_labels.rs` catches the mechanical cases.
 - A stock frag bounces off a live player: `fraggrenade_mp` has `damage 0`.
 - `setPlayerIgnoreRadiusDamage` is a level flag read only by the
   `radiusDamage` builtin.
-- A blast walks `crate::area::AreaTree`, retail's entity area tree, so its
-  victim order is link history: a client or turret link or unlink goes
-  through `GameHost::area`, and a player `setOrigin`, spawn or death is an
-  unlink then a link (combat doc 14.7).
+- A blast and the touch pass walk `crate::area::AreaTree`, retail's entity
+  area tree, so victim and touch order is link history, not entity order. A
+  client links through `GameHost::link_client`, everything else through
+  `GameHost::link_entity` off the `LinkShape` its spawn set; an `origin`
+  write on a non-client relinks it (`Scr_SetOrigin`), a player `setOrigin`,
+  spawn or death is an unlink then a link (combat doc 14.7).
 - The body queue is eight entities at 64..71 with no timer; a corpse lives
   until its slot is reused.
 - A `clipOnly` weapon (the frag) has no reserve entry on the wire.

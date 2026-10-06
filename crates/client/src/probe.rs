@@ -179,6 +179,7 @@ pub fn probe(
     team: Option<&str>,
     weapon: Option<&str>,
     secs: u64,
+    say: &[(f32, String)],
     fs: Option<&vcod_common::pk3::Pk3Fs>,
 ) -> anyhow::Result<()> {
     let Save {
@@ -267,6 +268,9 @@ pub fn probe(
         client.enable_capture();
     }
     let mut quick_chat = crate::quick_chat::QuickChat::new(0x51ee);
+    // `--probe-say`: the first gamestate and how many commands went out.
+    let mut say_from: Option<Instant> = None;
+    let mut say_sent = 0;
 
     let start = Instant::now();
     let mut last_summary = start;
@@ -459,11 +463,18 @@ pub fn probe(
                     // The join is entered by the first usercmd of the loop
                     // below, the way a retail client enters; nothing is sent
                     // here to start it.
-                    if !joining {
+                    if !joining && say.is_empty() {
                         client.send_reliable("say hello from vcod");
                     }
+                    say_from.get_or_insert(now);
                 }
-                NetEvent::Chat { text, .. } => println!("chat: {}", net::strip_colors(&text)),
+                NetEvent::Chat { text, team } => {
+                    println!(
+                        "CHAT {} \"{}\"",
+                        if team { 'i' } else { 'h' },
+                        escape_ctl(&text)
+                    )
+                }
                 NetEvent::Print(t) => print!("print: {t}"),
                 NetEvent::Dropped(r) => {
                     println!("dropped: {r}");
@@ -581,6 +592,15 @@ pub fn probe(
         // from `ps.weapon`, which is what retail reads as the request. It
         // overrides the follow below until the switch lands.
         let mut weapon_switch: Option<u8> = None;
+        if let Some(from) = say_from {
+            while let Some((secs, cmd)) = say.get(say_sent)
+                && now.duration_since(from).as_secs_f32() >= *secs
+            {
+                println!("SAY {:.1} {cmd}", now.duration_since(from).as_secs_f32());
+                client.send_reliable(cmd);
+                say_sent += 1;
+            }
+        }
         if client.state() == NetState::Active && !joining && !probe_follow {
             let active_at = *reached_active.get_or_insert(now);
             let dt = now.duration_since(active_at).as_secs() % 30;

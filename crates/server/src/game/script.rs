@@ -455,8 +455,9 @@ impl ScriptRuntime {
     }
 
     /// `G_TouchTriggers` for one client, which retail runs once per usercmd
-    /// from `ClientThink_real` (0x405b3). The notify only marks the threads
-    /// parked in `waittill("trigger", other)` runnable; they run in this
+    /// from `ClientThink_real` (0x405b3): the triggers and the items it
+    /// touches, in the area tree's order (`trigger::touched`). The notifies
+    /// only mark the threads parked on them runnable; they run in this
     /// tick's script frame.
     ///
     /// Only a client at `ps.pm_type <= 1` touches anything: the function's
@@ -485,30 +486,44 @@ impl ScriptRuntime {
         let hits = self
             .vm
             .with_cx(|cx| crate::game::trigger::touched(host, cx, origin));
-        let triggers = &mut self.host.triggers;
-        let rng = &mut self.rng;
-        // Drawn under the `rng` borrow and acted on after it: each entry is a
-        // trigger that fired, carrying its damage and flags if it hurts.
-        let fired: Vec<(EntId, Option<(i32, i32)>)> = hits
-            .into_iter()
-            .filter_map(|id| {
-                if !triggers.fire(id, now_ms, &mut |n| {
-                    if n <= 0 {
-                        0
-                    } else {
-                        crate::game::host::rand_int(rng) % n
-                    }
-                }) {
-                    return None;
+        log::trace!(target: "touch_pass", "slot {slot} at {origin:?}: {hits:?}");
+        // One walk, in the tree's order: each entity's two `"touch"`
+        // notifies (0x3fa42, 0x3fa61), then its touch function, an item's
+        // `Touch_Item` or a trigger's fire.
+        for id in hits {
+            let Some(e) = self.host.ents.get(id) else {
+                continue;
+            };
+            let item = e.item.is_some();
+            self.host
+                .item_notifies
+                .push((id, "touch", vec![Value::Entity(client)]));
+            self.host
+                .item_notifies
+                .push((client, "touch", vec![Value::Entity(id)]));
+            if item {
+                let host = &mut self.host;
+                self.vm
+                    .with_cx(|cx| crate::game::item::touch(host, cx, id, slot, true));
+                continue;
+            }
+            let rng = &mut self.rng;
+            let fired = self.host.triggers.fire(id, now_ms, &mut |n| {
+                if n <= 0 {
+                    0
+                } else {
+                    crate::game::host::rand_int(rng) % n
                 }
-                let hurt = triggers
-                    .get(id)
-                    .filter(|t| t.kind == crate::game::trigger::TriggerKind::Hurt)
-                    .map(|t| (t.damage, t.dflags));
-                Some((id, hurt))
-            })
-            .collect();
-        for (id, hurt) in fired {
+            });
+            if !fired {
+                continue;
+            }
+            let hurt = self
+                .host
+                .triggers
+                .get(id)
+                .filter(|t| t.kind == crate::game::trigger::TriggerKind::Hurt)
+                .map(|t| (t.damage, t.dflags));
             self.host.trigger_fires.push((id, client));
             if let Some((damage, dflags)) = hurt {
                 self.deliver_world_hit(
@@ -529,11 +544,12 @@ impl ScriptRuntime {
         self.host.client_old_buttons.get(slot).copied().unwrap_or(0)
     }
 
-    /// The item half of `G_TouchTriggers` and then `Cmd_Activate_f`, for one
-    /// cmd (docs/research/cod11-items.md, sections 1 and 2): every item in
-    /// the touch box, then, on the use key's rising edge, the one the aim
-    /// picks. Both gated as the trigger half is; the use half also needs the
-    /// player alive, `G_CheckForCursorHints`' own gate.
+    /// `Cmd_Activate_f` for one cmd (docs/research/cod11-items.md, section
+    /// 2): on the use key's rising edge, the item, turret or `trigger_use`
+    /// the aim picks. Gated as the touch pass is, and on the player being
+    /// alive, `G_CheckForCursorHints`' own gate. The items the player walks
+    /// onto are touched in `touch_triggers_at`, in the area tree's order
+    /// among the triggers.
     pub fn item_pass(&mut self, slot: usize, buttons: u8, eye: [f32; 3], view: [f32; 3]) {
         let Some(client) = self.client_entity(slot) else {
             return;
@@ -559,18 +575,6 @@ impl ScriptRuntime {
         }
         let host = &mut self.host;
         self.vm.with_cx(|cx| {
-            use vcod_gsc::Host;
-            let origin_atom = cx.intern_folded("origin");
-            let Value::Vector(origin) = host.get_field(cx, client, origin_atom) else {
-                return;
-            };
-            for id in crate::game::item::touching(host, cx, origin) {
-                host.item_notifies
-                    .push((id, "touch", vec![Value::Entity(client)]));
-                host.item_notifies
-                    .push((client, "touch", vec![Value::Entity(id)]));
-                crate::game::item::touch(host, cx, id, slot, true);
-            }
             if !pressed || release_asked {
                 return;
             }
@@ -1173,6 +1177,21 @@ impl ScriptRuntime {
         self.vm.with_cx(|cx| host.scoreboard(cx))
     }
 
+    /// `G_Say` for a client's own `say`, `say_team` or `tell`; the lines it
+    /// queued, in order.
+    pub fn say(
+        &mut self,
+        slot: usize,
+        target: Option<usize>,
+        mode: crate::game::say::SayMode,
+        text: &str,
+    ) -> Vec<(usize, String)> {
+        let from = self.host.client_commands.len();
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| host.say(cx, slot, target, mode, text));
+        self.host.client_commands.split_off(from)
+    }
+
     /// The spawns the script performed this frame, in call order. `Server`
     /// applies them to the client sims; nothing here can reach one.
     pub fn take_client_spawns(&mut self) -> Vec<SpawnRequest> {
@@ -1636,6 +1655,9 @@ impl ScriptRuntime {
                 }
                 if let Some(b) = self.host.client_old_buttons.get_mut(slot) {
                     *b = 0;
+                }
+                if let Some(p) = self.host.client_ping_until.get_mut(slot) {
+                    *p = 0;
                 }
                 self.host.reset_client_objectives(slot);
                 // The carried `pers`, if the boundary this client crossed
@@ -2144,7 +2166,16 @@ impl ScriptRuntime {
             id,
             crate::items::classname_index(classname).unwrap(),
         );
+        let host = &mut self.host;
+        self.vm
+            .with_cx(|cx| crate::game::item::link(host, cx, id, crate::game::item::CONTENTS_ITEM));
         id
+    }
+
+    /// A trigger the test registered, linked as its spawn would link it.
+    pub fn link_trigger_for_test(&mut self, id: EntId) {
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| host.link_trigger(cx, id));
     }
 
     /// Compiles `src` as `maps/mp/test`, builds a host with an empty object
@@ -2848,6 +2879,7 @@ mod tests {
             0,
             0,
         );
+        rt.link_trigger_for_test(zone);
         rt.start_thread_for_test(zone, "trigger_think", 0);
         rt.run_frame(0);
 
@@ -2884,6 +2916,7 @@ mod tests {
             0,
             0,
         );
+        rt.link_trigger_for_test(zone);
         rt.start_thread_for_test(zone, "trigger_think", 0);
         rt.run_frame(0);
         rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
@@ -2911,6 +2944,7 @@ mod tests {
             0,
             0,
         );
+        rt.link_trigger_for_test(zone);
         rt.start_thread_for_test(zone, "trigger_think", 0);
         rt.run_frame(0);
         rt.spawn_client_for_test(0, [0.9, 0.0, 0.0]);
@@ -2941,6 +2975,7 @@ mod tests {
             0,
             0,
         );
+        rt.link_trigger_for_test(zone);
         rt.set_level_field_for_test("zone", Value::Entity(zone));
         rt.start_thread_for_test(zone, "trigger_think", 0);
         rt.run_frame(0);
@@ -2996,6 +3031,7 @@ mod tests {
             0,
             0,
         );
+        rt.link_trigger_for_test(zone);
         rt.set_level_field_for_test("zone", Value::Entity(zone));
         rt.start_thread_for_test(zone, "trigger_think", 0);
         rt.run_frame(0);
@@ -3050,6 +3086,7 @@ mod tests {
             0,
             0,
         );
+        rt.link_trigger_for_test(zone);
         rt.start_thread_for_test(zone, "trigger_think", 0);
         rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
         rt.set_client_state_for_test(0, "playing");
@@ -3104,6 +3141,7 @@ mod tests {
             0,
             0,
         );
+        rt.link_trigger_for_test(zone);
         rt.start_thread_for_test(zone, "trigger_think", 0);
         rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
         rt.run_frame(0);
@@ -3169,6 +3207,7 @@ mod tests {
             5,
             0,
         );
+        rt.link_trigger_for_test(hurt);
 
         rt.touch_triggers(0, 100);
         rt.run_frame(100);
@@ -3211,6 +3250,7 @@ mod tests {
             0,
             0,
         );
+        rt.link_trigger_for_test(pickup);
         rt.start_thread_for_test(pickup, "trigger_think", 0);
         rt.run_frame(0);
         let use_key = vcod_common::net::msg::BUTTON_USE;
@@ -3346,12 +3386,19 @@ mod tests {
 
     const DOWN: [f32; 3] = [87.9, 0.0, 0.0];
 
+    /// One cmd's touch pass and use key, in `ClientThink_real`'s order.
+    fn cmd(rt: &mut ScriptRuntime, slot: usize, buttons: u8, eye: [f32; 3], view: [f32; 3]) {
+        let now = rt.host.level_time_ms;
+        rt.touch_triggers(slot, now);
+        rt.item_pass(slot, buttons, eye, view);
+    }
+
     #[test]
     fn a_health_pack_underfoot_heals_and_leaves_the_wire() {
         let mut rt = pickup_rig();
         rt.host.client_vitals[0].health = 50;
         let id = rt.place_item("item_health", [0.0, 0.0, 1.0], 0);
-        rt.item_pass(0, 0, [0.0, 0.0, 60.0], DOWN);
+        cmd(&mut rt, 0, 0, [0.0, 0.0, 60.0], DOWN);
         assert_eq!(rt.host.client_vitals[0].health, 75);
         assert!(rt.host.ents.get(id).unwrap().item.unwrap().taken);
         assert_eq!(
@@ -3387,7 +3434,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .dropped = true;
-        rt.item_pass(0, 0, [0.0, 0.0, 60.0], DOWN);
+        cmd(&mut rt, 0, 0, [0.0, 0.0, 60.0], DOWN);
         rt.run_frame(50);
         assert!(rt.host.ents.get(drop).is_some(), "freed before 100 ms");
         rt.run_frame(100);
@@ -3402,7 +3449,7 @@ mod tests {
     fn a_health_pack_at_full_health_stays() {
         let mut rt = pickup_rig();
         let id = rt.place_item("item_health", [0.0, 0.0, 1.0], 0);
-        rt.item_pass(0, 0, [0.0, 0.0, 60.0], DOWN);
+        cmd(&mut rt, 0, 0, [0.0, 0.0, 60.0], DOWN);
         assert!(!rt.host.ents.get(id).unwrap().item.unwrap().taken);
         assert!(rt.take_sim_ops().is_empty());
     }
@@ -3414,7 +3461,13 @@ mod tests {
         rt.host.client_vitals[0].health = 50;
         let id = rt.place_item("item_health", [0.0, 0.0, 1.0], 0);
         rt.set_client_pm_type(0, 4);
-        rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, [0.0, 0.0, 60.0], DOWN);
+        cmd(
+            &mut rt,
+            0,
+            vcod_common::net::msg::BUTTON_USE,
+            [0.0, 0.0, 60.0],
+            DOWN,
+        );
         rt.set_client_pm_type(0, 0);
         rt.host.client_vitals[0] = Vitals {
             health: 0,
@@ -3422,7 +3475,7 @@ mod tests {
             dead: true,
             takedamage: true,
         };
-        rt.item_pass(0, 0, [0.0, 0.0, 60.0], DOWN);
+        cmd(&mut rt, 0, 0, [0.0, 0.0, 60.0], DOWN);
         assert!(!rt.host.ents.get(id).unwrap().item.unwrap().taken);
     }
 
@@ -3436,7 +3489,8 @@ mod tests {
         let a = rt.place_item("item_health", [40.0, 0.0, 30.0], 0);
         let b = rt.place_item("item_health", [40.0, 4.0, 30.0], 0);
         for _ in 0..10 {
-            rt.item_pass(
+            cmd(
+                &mut rt,
                 0,
                 vcod_common::net::msg::BUTTON_USE,
                 [0.0, 0.0, 60.0],
@@ -3452,8 +3506,8 @@ mod tests {
     }
 
     /// Two fg42s underfoot on one cmd, the player holding one short of full:
-    /// the first grab fills the reserve and the second, reading the mirror
-    /// the first moved, finds nothing to take.
+    /// the first grab, in the area tree's order, fills the reserve and the
+    /// second, reading the mirror the first moved, finds nothing to take.
     #[test]
     fn two_items_in_reach_on_one_cmd_see_each_others_ammo() {
         let mut rt = pickup_rig();
@@ -3464,9 +3518,12 @@ mod tests {
         rt.host.client_ammo[0].ammo[d.ammo_index] = 300;
         let a = rt.place_item("mpweapon_fg42", [0.0, 0.0, 1.0], 90);
         let b = rt.place_item("mpweapon_fg42", [4.0, 0.0, 1.0], 90);
-        rt.item_pass(0, 0, [0.0, 0.0, 60.0], DOWN);
-        assert!(rt.host.ents.get(a).unwrap().item.unwrap().taken);
-        assert!(!rt.host.ents.get(b).unwrap().item.unwrap().taken);
+        // The later link heads the list, so b is met first, not a.
+        let walk = rt.host.area.entities_in_box([-50.0; 3], [50.0; 3], -1);
+        assert_eq!(walk, [b.0, a.0]);
+        cmd(&mut rt, 0, 0, [0.0, 0.0, 60.0], DOWN);
+        assert!(rt.host.ents.get(b).unwrap().item.unwrap().taken);
+        assert!(!rt.host.ents.get(a).unwrap().item.unwrap().taken);
         assert_eq!(rt.host.client_ammo[0].ammo[d.ammo_index], 320);
     }
 
@@ -3479,8 +3536,9 @@ mod tests {
         let fg = crate::configstrings::weapon_index("fg42_mp").unwrap();
         rt.host.client_weapons[0].give(fg, 2);
         let pf = rt.place_item("mpweapon_panzerfaust", [40.0, 0.0, 30.0], 0);
-        rt.item_pass(0, 0, [0.0, 0.0, 60.0], [36.0, 0.0, 0.0]);
-        rt.item_pass(
+        cmd(&mut rt, 0, 0, [0.0, 0.0, 60.0], [36.0, 0.0, 0.0]);
+        cmd(
+            &mut rt,
             0,
             vcod_common::net::msg::BUTTON_USE,
             [0.0, 0.0, 60.0],
@@ -3577,9 +3635,9 @@ mod tests {
     #[test]
     fn two_presses_on_one_gun_mount_only_the_first() {
         let (mut rt, gun) = turret_rig();
-        rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
+        cmd(&mut rt, 0, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
         assert_eq!(mount_queued(&mut rt, 0), 1);
-        rt.item_pass(1, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
+        cmd(&mut rt, 1, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
         assert_eq!(mount_queued(&mut rt, 1), 0);
         assert_eq!(rt.host.turrets[&gun].owner, Some(0));
     }
@@ -3589,12 +3647,12 @@ mod tests {
     #[test]
     fn a_gunners_use_press_asks_for_the_release_and_mounts_nothing() {
         let (mut rt, gun) = turret_rig();
-        rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
+        cmd(&mut rt, 0, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
         mount_queued(&mut rt, 0);
         assert_eq!(rt.cursor_hint_pass(0, EYE, AT_GUN), (0, None));
         let fg42 = rt.place_item("mpweapon_fg42", [40.0, 0.0, 40.0], 90);
-        rt.item_pass(0, 0, EYE, AT_GUN);
-        rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
+        cmd(&mut rt, 0, 0, EYE, AT_GUN);
+        cmd(&mut rt, 0, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
         assert!(rt.host.turret_ops.is_empty());
         assert_eq!(rt.host.turrets[&gun].busy, 2);
         assert!(!rt.host.ents.get(fg42).unwrap().item.unwrap().taken);
@@ -3605,11 +3663,11 @@ mod tests {
     #[test]
     fn a_gunners_press_asks_for_the_release_whatever_its_pm_type() {
         let (mut rt, gun) = turret_rig();
-        rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
+        cmd(&mut rt, 0, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
         mount_queued(&mut rt, 0);
-        rt.item_pass(0, 0, EYE, AT_GUN);
+        cmd(&mut rt, 0, 0, EYE, AT_GUN);
         rt.set_client_pm_type(0, 6);
-        rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
+        cmd(&mut rt, 0, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
         assert_eq!(rt.host.turrets[&gun].busy, 2);
     }
 
@@ -3643,7 +3701,7 @@ mod tests {
         rt.host.client_ammo[0].ammo[d.ammo_index] = 100;
         rt.place_item("mpweapon_fg42", [40.0, 0.0, 30.0], 90);
         assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM).0, 79);
-        rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_ITEM);
+        cmd(&mut rt, 0, vcod_common::net::msg::BUTTON_USE, EYE, AT_ITEM);
         assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM).0, 0);
     }
 
@@ -3656,7 +3714,7 @@ mod tests {
         rt.host.client_weapons[0].give(fg, 2);
         rt.place_item("mpweapon_panzerfaust", [40.0, 0.0, 30.0], 0);
         assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM).0, 32);
-        rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_ITEM);
+        cmd(&mut rt, 0, vcod_common::net::msg::BUTTON_USE, EYE, AT_ITEM);
         let carbine = crate::configstrings::weapon_index("m1carbine_mp").unwrap();
         let drop = rt
             .host
@@ -3684,7 +3742,7 @@ mod tests {
             "main() {}\nCodeCallback_PlayerConnect() { self waittill(\"touch\", item); logPrint(\"touched \" + item.classname); }\n",
         );
         let id = rt.place_item("item_health", [0.0, 0.0, 1.0], 0);
-        rt.item_pass(0, 0, [0.0, 0.0, 60.0], DOWN);
+        cmd(&mut rt, 0, 0, [0.0, 0.0, 60.0], DOWN);
         assert!(!rt.host.ents.get(id).unwrap().item.unwrap().taken);
         rt.run_frame(50);
         assert!(rt.script_log().iter().any(|l| l == "touched item_health"));
@@ -3706,7 +3764,7 @@ mod tests {
         rt.host.client_vitals[0].health = 50;
         let id = rt.place_item("item_health", [0.0, 0.0, 1.0], 0);
         rt.start_thread_for_test(id, "watch", 0);
-        rt.item_pass(0, 0, [0.0, 0.0, 60.0], DOWN);
+        cmd(&mut rt, 0, 0, [0.0, 0.0, 60.0], DOWN);
         rt.run_frame(50);
         rt.run_frame(100);
         let seen: Vec<&String> = rt

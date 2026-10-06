@@ -142,6 +142,26 @@ impl MsgReader {
         self.read_string_capped(BIG_INFO_STRING)
     }
 
+    /// The dedicated server's `MSG_ReadString` (cod_lnxded 0x807f320), what
+    /// a client command is read with: the client's byte map less the `%`
+    /// one (0x8083394). The netchan keys server-to-client traffic on this
+    /// copy, so a `%` mapped here desyncs a retail client that typed one.
+    pub fn read_server_string(&mut self) -> String {
+        let mut s = String::new();
+        while s.len() < MAX_STRING_CHARS - 1 {
+            let c = self.read_byte();
+            if c == 0 || self.overflowed {
+                break;
+            }
+            s.push(match c {
+                0x92 => '\'',
+                c if c > 127 => '.',
+                c => c as char,
+            });
+        }
+        s
+    }
+
     /// CoD 1.1 maps `%` -> `.`, 0x92 -> `'` and every other byte over 127 ->
     /// `.` in BOTH readers, unlike Q3/RTCW where the big reader keeps high
     /// bytes. Faithfulness matters beyond display: the usercmd delta key
