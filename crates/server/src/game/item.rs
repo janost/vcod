@@ -98,6 +98,27 @@ impl DropRing {
     }
 }
 
+/// `r.contents` of an item lying in the world: `G_SpawnItem` (0x4e778) and
+/// `LaunchItem` (0x4dc97).
+pub const CONTENTS_ITEM: i32 = 0x407c_0108;
+/// `RespawnItem`'s (0x4ece9), without the 0x100.
+pub const CONTENTS_RESPAWNED: i32 = 0x407c_0008;
+
+/// An item's contents and its link, with the box its row takes.
+pub fn link(host: &mut GameHost, cx: &mut Cx, id: EntId, contents: i32) {
+    let Some(index) = host.ents.get(id).and_then(|e| e.item).map(|i| i.index) else {
+        return;
+    };
+    let (mins, maxs) = bounds(crate::game::spawn::is_weapon_row(index as usize));
+    let shape = crate::game::entity::LinkShape {
+        kind: crate::game::entity::LinkKind::Item,
+        contents,
+        mins: mins.into(),
+        maxs: maxs.into(),
+    };
+    host.link_shaped(cx, id, shape);
+}
+
 /// Makes `id` an item of row `index`: placed, owned by nobody, not taken.
 pub fn attach(host: &mut GameHost, id: EntId, index: usize) {
     if let Some(e) = host.ents.get_mut(id) {
@@ -133,6 +154,7 @@ pub fn spawn_in_place(host: &mut GameHost, cx: &mut Cx, id: EntId, index: usize,
     if let Some(i) = host.ents.get_mut(id).and_then(|e| e.item.as_mut()) {
         i.ground = if suspended { 0 } else { ENTITYNUM_NONE as i32 };
     }
+    link(host, cx, id, CONTENTS_ITEM);
 }
 
 /// The item's box: `G_SpawnItem` (0x4e6e1) and `LaunchItem` give a weapon
@@ -312,6 +334,9 @@ pub fn run_items(host: &mut GameHost, cx: &mut Cx, now_ms: i32) {
             }
             e.item = Some(st);
         }
+        if respawn {
+            link(host, cx, id, CONTENTS_RESPAWNED);
+        }
     }
 }
 
@@ -465,6 +490,7 @@ fn launch(
             nodraw: false,
         });
     }
+    link(host, cx, id, CONTENTS_ITEM);
     host.ents
         .schedule(id, ThinkFn::ClearOwner, now + OWNER_LOCKOUT_MS);
     let ents = &host.ents;
@@ -635,16 +661,6 @@ fn live_items(host: &GameHost) -> Vec<(EntId, ItemState)> {
     host.ents
         .iter_inuse()
         .filter_map(|(id, e)| e.item.filter(|i| !i.taken).map(|i| (id, i)))
-        .collect()
-}
-
-/// The items `G_TouchTriggers` would hand `Touch_Item` for a player at
-/// `player`, ascending entity number.
-pub fn touching(host: &mut GameHost, cx: &mut Cx, player: [f32; 3]) -> Vec<EntId> {
-    live_items(host)
-        .into_iter()
-        .map(|(id, _)| id)
-        .filter(|&id| crate::game::pickup::touches(player, origin_of(host, cx, id)))
         .collect()
 }
 
@@ -858,6 +874,8 @@ pub fn touch(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, touched: 
         e.think = None;
         e.nextthink = 0;
     }
+    // Contents 0 and a link (0x4d90c, 0x4da33): out of the tree.
+    link(host, cx, id, 0);
     let now = host.level_time_ms;
     if state.dropped {
         host.ents

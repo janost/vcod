@@ -6618,6 +6618,7 @@ mod tests {
             1000,
             0,
         );
+        rt.link_trigger_for_test(hurt);
         sv.clients[0].as_mut().unwrap().pending.push(cook(i).into());
         sv.replay_moves();
 

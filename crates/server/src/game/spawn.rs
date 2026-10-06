@@ -88,12 +88,19 @@ pub fn spawn_entities_from_string(
         }
         if let Some(kind) = crate::game::trigger::kind_of(&classname) {
             register_trigger(host, &block, id, kind);
+            let spawnflags = block
+                .get("spawnflags")
+                .and_then(|v| v.trim().parse::<i32>().ok())
+                .unwrap_or(0);
+            crate::game::trigger::link(host, cx, id, spawnflags);
         }
+        link_script_entity(host, cx, &block, id, &classname);
         if let Some(item) = spawn_item_name(host, cx, id, &classname) {
             host.register_item(&item.name);
             match item.row {
                 Some(row) => {
                     crate::game::item::attach(host, id, row);
+                    crate::game::item::link(host, cx, id, crate::game::item::CONTENTS_ITEM);
                     drop_item_to_floor(host, cx, id, is_weapon_row(row));
                 }
                 None => {
@@ -143,6 +150,70 @@ pub fn spawn_entities_from_string(
         }
     }
     Ok(())
+}
+
+/// `trap_SetBrushModel`'s contents, which its link files a brush entity
+/// with before the spawn function writes its own (`cod_lnxded` 0x8089544).
+const CONTENTS_BRUSH_SET: i32 = -1;
+
+/// The submodel's box as `trap_SetBrushModel` sets `r.mins`/`r.maxs`, zero
+/// for a block with none.
+fn brush_shape(
+    host: &GameHost,
+    block: &std::collections::HashMap<String, String>,
+) -> ([f32; 3], [f32; 3]) {
+    block
+        .get("model")
+        .and_then(|m| m.strip_prefix('*'))
+        .and_then(|n| n.parse::<usize>().ok())
+        .and_then(|n| host.model_bounds.get(n).copied())
+        .unwrap_or(([0.0; 3], [0.0; 3]))
+}
+
+/// `SP_script_brushmodel` (0x60fb8): the brush-model setter's link, then
+/// contents 1 and a link; `SP_script_model` (0x60ff4): contents 0x2080 and a
+/// link, filed under its model's bounds. A `script_origin` writes contents 0
+/// (0x61047) and so never enters the tree.
+fn link_script_entity(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    block: &std::collections::HashMap<String, String>,
+    id: EntId,
+    classname: &str,
+) {
+    use crate::game::entity::{LinkKind, LinkShape};
+    match classname {
+        "script_brushmodel" => {
+            let (mins, maxs) = brush_shape(host, block);
+            for contents in [CONTENTS_BRUSH_SET, CONTENTS_SCRIPT_BRUSHMODEL] {
+                let shape = LinkShape {
+                    kind: LinkKind::ScriptBrush,
+                    contents,
+                    mins,
+                    maxs,
+                };
+                host.link_shaped(cx, id, shape);
+            }
+        }
+        "script_model" => link_script_model(host, cx, id),
+        _ => {}
+    }
+}
+
+/// `r.contents` of a `script_brushmodel` (0x60fd4), which `notSolid` zeroes
+/// and `solid` puts back.
+pub const CONTENTS_SCRIPT_BRUSHMODEL: i32 = 1;
+
+/// `SP_script_model`'s contents and link, from the map or a script `spawn`.
+pub fn link_script_model(host: &mut GameHost, cx: &mut Cx, id: EntId) {
+    use crate::game::entity::{LinkKind, LinkShape};
+    let shape = LinkShape {
+        kind: LinkKind::ScriptModel,
+        contents: 0x2080,
+        mins: [0.0; 3],
+        maxs: [0.0; 3],
+    };
+    host.link_shaped(cx, id, shape);
 }
 
 /// The `N` of a block's `"model" "*N"`, for a submodel (N > 0).

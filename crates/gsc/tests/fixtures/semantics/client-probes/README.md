@@ -896,3 +896,77 @@ Against ours: `vcod-server mp_pavlov --gametype-script
 crates/gsc/tests/fixtures/semantics/client-probes/probe_hud_disconnect.gsc`.
 Plain `--net-probe` writes no fixture. Retail and ours, 2026-10-06, print
 the same three lines; the doc section quotes them.
+
+## probe_touchorder
+
+The order one touch pass meets what it touches, for
+`docs/research/cod11-combat.md` 14.7, "The touch pass". One client under dm
+on mp_pavlov, set down where the minefield triggers 101 and 102 overlap,
+with three `item_health` spawned on the spot; damage is swallowed, so the
+mines kill nobody and no health is taken. Each phase logs every `"trigger"`
+(`f`), item `"touch"` (`t`), mine `"touch"` (`mt`) and player `"touch"`
+(`pt`) for a fifth of a second. `+set probe_mode ammo` runs the other half:
+three mosin items on the spot and a reserve one round short, so only the
+first item the walk meets is taken. Two shells:
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=60 \
+    tools/run_probe.sh client-probes/probe_touchorder mp_pavlov [+set probe_mode ammo]
+# second shell, once the map is up:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-secs 45
+```
+
+Against ours the server half is `vcod-server mp_pavlov --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_touchorder.gsc
+[--set probe_mode=ammo]`; `RUST_LOG=info,touch_pass=trace` prints each
+pass's walk. Nothing here writes a fixture.
+
+Retail, 2026-10-06, the first frame of each phase (each later cmd of a frame
+adds one more `f 101`, `f 102` pair and nothing else):
+
+```
+PROBE phase spawned
+PROBE f 101 11250
+PROBE f 102 11250
+PROBE t c 11250
+PROBE t a 11250
+PROBE t b 11250
+PROBE mt 101 11250
+PROBE pt 102 11250
+PROBE mt 102 11250
+PROBE phase kept
+PROBE f 101 12550
+PROBE f 102 12550
+PROBE t c 12550
+PROBE t a 12550
+PROBE t b 12550
+PROBE mt 101 12550
+PROBE pt 102 12550
+PROBE mt 102 12550
+PROBE phase moved
+PROBE f 101 13950
+PROBE f 102 13950
+PROBE t c 13950
+PROBE t b 13950
+PROBE t a 13950
+PROBE mt 101 13950
+PROBE pt 102 13950
+PROBE mt 102 13950
+```
+
+and with `probe_mode ammo`:
+
+```
+PROBE weapon mosin_nagant_mp
+PROBE phase ammo
+PROBE take e 9650
+PROBE done
+```
+
+An earlier run without the `mt` and `pt` watchers printed the same `f` and
+`t` lines. Ours, the same day: the
+`touch_pass` trace walks 102, 101, b, a, c after the spawn and after `kept`,
+102, 101, a, b, c after `moved`, and the ammo run takes e. Its log lines
+come out in another order (`mt 101`, `mt 102`, `pt 102`, `t a`, `t b`,
+`t c`, `f 101`, `f 102`, once a frame), since vcod delivers the notifies at
+the next script frame and runs the waiters in thread age.
