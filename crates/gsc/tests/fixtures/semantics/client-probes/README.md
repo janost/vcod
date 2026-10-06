@@ -720,3 +720,23 @@ COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=115 \
 cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-items --probe-secs 90
 ```
 
+## probe_nodrop
+
+`CONTENTS_NODROP` (0x80000000) on four spawned carbines. No stock material
+carries the bit, so it runs on `mp_itemtest`: mp_carentan's BSP with 0x80000000
+ORed into material 0's contents (`textures/common/clipmonster`, the
+`u32` at lump 0's offset + 68), saved as `maps/mp/mp_itemtest.bsp` beside a
+copy of `maps/MP/mp_carentan.gsc` renamed to `maps/mp/mp_itemtest.gsc`, in a
+`zzz_` pak in the homepath's `main/`. The pak is built from game data and is
+never committed. It needs no client, so `tools/run_probe.sh` alone prints
+everything; run it on stock mp_carentan too for the control.
+`docs/research/cod11-items.md` 14.5 reads both.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=30 \
+    tools/run_probe.sh client-probes/probe_nodrop mp_itemtest
+```
+
+Ours takes the same pak through a scratch `--game-dir` whose `main/` links
+the stock paks beside it: `vcod-server mp_itemtest --game-dir <dir>
+--gametype-script .../probe_nodrop.gsc`.

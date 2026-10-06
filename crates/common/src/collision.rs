@@ -23,6 +23,10 @@ const CONTENTS_PLAYERCLIP: u32 = 0x10000;
 const CONTENTS_SKY: u32 = 0x800;
 /// Census-proven water bit: docs/research/bsp-ibsp59-format.md, "Content flags".
 pub const CONTENTS_WATER: u32 = 0x20;
+/// The mask `G_RunItem` (game.mp 0x4ec47) hands `trap_PointContents` before
+/// it frees a landing item (docs/research/cod11-items.md, section 8). No
+/// stock material carries the bit.
+pub const CONTENTS_NODROP: u32 = 0x8000_0000;
 /// Ladder-climb flag on brush materials; pmove grabs ladders from trace hits carrying it.
 pub const SURF_LADDER: u32 = 0x8;
 /// `surfaceparm slick` (CoDMP.exe surfaceparm table, 0x571a40); no stock map
@@ -641,6 +645,9 @@ pub struct CollisionWorld {
     nodes: Vec<BvhNode>,
     prims: Vec<(Prim, Vec3, Vec3)>,
     water: Vec<Volume>,
+    /// Brushes whose material carries [`CONTENTS_NODROP`], for
+    /// [`Self::point_contents`] only: nothing clips against them.
+    nodrop: Vec<Volume>,
     /// Per lump-27 model, whether its brushes are in the clip. Retail holds
     /// a submodel's brushes only through the entity that links them, so a
     /// deleted `script_brushmodel` takes its brushes out; `set_model_linked`
@@ -796,6 +803,7 @@ impl CollisionWorld {
     pub fn build(bsp: &Bsp, model_tris: &[ModelTri]) -> Self {
         let mut brushes = Vec::new();
         let mut water = Vec::new();
+        let mut nodrop = Vec::new();
         let mut panes: Vec<Volume> = Vec::new();
         let mut t = Tris {
             tris: Vec::new(),
@@ -857,11 +865,20 @@ impl CollisionWorld {
                 .skip(brush_range.start)
             {
                 let mat = &bsp.materials[b.material as usize];
-                if placement.trigger || mat.content_flags & (CLIP_BRUSH | CONTENTS_WATER) == 0 {
+                if placement.trigger
+                    || mat.content_flags & (CLIP_BRUSH | CONTENTS_WATER | CONTENTS_NODROP) == 0
+                {
                     continue;
                 }
                 let mut planes = Vec::new();
                 let (lo, hi) = brush_side_planes(bsp, b, placement.origin, &mut planes);
+                if mi == 0 && mat.content_flags & CONTENTS_NODROP != 0 {
+                    nodrop.push(Volume {
+                        planes: planes.clone(),
+                        lo,
+                        hi,
+                    });
+                }
                 if mat.content_flags & CONTENTS_WATER != 0 {
                     water.push(Volume {
                         planes: planes.clone(),
@@ -1026,6 +1043,7 @@ impl CollisionWorld {
             nodes,
             prims: t.prims,
             water,
+            nodrop,
             model_linked: bsp.models.iter().map(|_| AtomicBool::new(true)).collect(),
             model_entity: bsp
                 .models
@@ -1075,11 +1093,6 @@ impl CollisionWorld {
             pose.hi = pose.hi.max(w);
         }
         poses.push((model, pose));
-    }
-
-    /// Lump 27's model count, the world's model 0 included.
-    pub fn model_count(&self) -> usize {
-        self.model_span.len()
     }
 
     /// Back to the spawn placement, as a map load or restart has it.
@@ -1287,9 +1300,8 @@ impl CollisionWorld {
     }
 
     /// Unlinks the brush models the stock map-load scripts take out of the
-    /// clip, for a world no script and no snapshot drives (the gates; the
-    /// client takes them from the snapshot, `pmove::movers`):
-    /// `_gameobjects::main` `delete()`s every entity whose
+    /// clip, for a world no script runs on (the client's predictor, the
+    /// gates): `_gameobjects::main` `delete()`s every entity whose
     /// `script_gameobjectname` the gametype does not list (`dm.gsc:78`,
     /// `tdm.gsc:78`: their own name; `sd.gsc:123`: `sd`, `bombzone`,
     /// `blocker`), and `_load.gsc` `notsolid()`s every exploder brush model.
@@ -1333,19 +1345,22 @@ impl CollisionWorld {
         !self.model_posed[brush.model as usize].load(Ordering::Relaxed)
     }
 
-    /// Contents at a point: `CONTENTS_WATER` inside any water brush, plus the
-    /// content flags of any solid brush containing it (Q3 `CM_PointContents`
-    /// over the brushes that made it into the world).
+    /// Contents at a point: `CONTENTS_WATER` inside any water brush,
+    /// [`CONTENTS_NODROP`] inside any world nodrop brush, plus the content
+    /// flags of any solid brush containing it (Q3 `CM_PointContents` over the
+    /// brushes that made it into the world).
     pub fn point_contents(&self, p: Vec3) -> u32 {
-        let mut out = 0;
-        for v in &self.water {
-            if p.cmple(v.hi).all()
+        let inside = |v: &Volume| {
+            p.cmple(v.hi).all()
                 && p.cmpge(v.lo).all()
                 && v.planes.iter().all(|&(n, d)| n.dot(p) <= d)
-            {
-                out |= CONTENTS_WATER;
-                break;
-            }
+        };
+        let mut out = 0;
+        if self.water.iter().any(inside) {
+            out |= CONTENTS_WATER;
+        }
+        if self.nodrop.iter().any(inside) {
+            out |= CONTENTS_NODROP;
         }
         if self.nodes.is_empty() {
             return out;

@@ -638,8 +638,9 @@ evicted every time. INFERRED: the new drop then takes slot 0, so once the ring
 is full, each further drop evicts the one before it.
 
 VERIFIED, `G_RunItem` (0x4eb18): a `trap_PointContents` with mask 0x80000000
-(0x4ec47..0x4ec4f) and a `G_FreeEntity` (0x4ec5f). INFERRED: an item whose
-origin lands in `CONTENTS_NODROP` is freed. INFERRED, from the absence of any
+(0x4ec47..0x4ec4f) and a `G_FreeEntity` (0x4ec5f). VERIFIED, on a patched
+map (section 14.5): an item whose origin is in a brush carrying that bit when
+its sweep meets something is freed. INFERRED, from the absence of any
 other free: a drop lives until it is picked up, until it holds slot 0 when a
 drop is made with all 32 slots held (slot 0 is evicted every time, as
 above), or until it lands in `CONTENTS_NODROP`. VERIFIED: the two `0x7530`
@@ -733,7 +734,6 @@ What vcod leaves out, each with the retail reading it skips:
 
 - Respawn: `spawnflags & 8`, `wait`, `random`, `RespawnItem` and
   `EV_ITEM_RESPAWN` (section 7); no stock BSP sets any of them.
-- The `CONTENTS_NODROP` free in `G_RunItem` (section 8).
 - Brushes whose contents carry 0x80 or 0x400 but no SOLID, PLAYERCLIP or
   GLASS bit (the 0x2080 kerb and floor words): they are in both item masks
   (0x81, 0x491) and not in vcod's clip, so an item falls through them
@@ -1187,7 +1187,8 @@ mp_carentan, `client-probes/probe_itemdrop` as the gametype and a
 `--net-probe --probe-team allies --probe-items` client, wrote
 `crates/server/tests/fixtures/items/mp_carentan-dm-itemdrop.txt` ("the
 drop fixture" below): the probe's `PROBE` lines and the client's `ITEM` and
-`ITEM_GONE` lines. Times are server times. The probe client holds its view
+`ITEM_GONE` lines. A second probe, `client-probes/probe_nodrop`, ran on a
+patched map (14.5). Times are server times. The probe client holds its view
 at world yaw 0, so the probe's `setplayerangles` calls do not stick, and
 VERIFIED, the drop fixture: every `PROBE drop` line logs the player's
 `angles` as (0, 0, 0).
@@ -1272,7 +1273,7 @@ a trace with `clipmask` or 0x491 when that is 0 (0x4eb76..0x4eb88), a
 capsule when `eFlags & 0x10` (0x4eb8a), from `currentOrigin` with the item's
 bounds; `currentOrigin` takes the end, a start-solid trace has its fraction
 zeroed (0x4ec08), then the link and the think, a return when the entity is
-gone or the fraction is 1, the nodrop test (section 8), and `G_BounceItem`.
+gone or the fraction is 1, the nodrop test (14.5), and `G_BounceItem`.
 
 VERIFIED, `G_BounceItem` (0x4e858): the velocity at the contact time
 reflected (-2, 0x74e44) and scaled by `ent+0x18c`; on a start-solid trace the
@@ -1327,6 +1328,30 @@ spawned with spawnflags 8 and no script angles, reads `apos` (0, 0, 90).
 INFERRED, as section 9 read: the roll and `ENTITYNUM_NONE` come with every
 spawn but `spawnflags & 1`.
 
+### 14.5 `CONTENTS_NODROP`
+
+VERIFIED, lump 0 of every BSP in `pak0`..`pak6` (45 maps, the 12 MP ones
+among them): no material's contents carry 0x80000000. The measurement
+therefore ran on `mp_itemtest`, a copy of mp_carentan's BSP whose material 0
+(`textures/common/clipmonster`, 0x28020000) has the bit added, packed with a
+copy of `mp_carentan.gsc` into a pak in the retail homepath; nothing of it
+is committed. Brush 895 of that
+material is the box (493..547, 1859..1887, -144..-93), and two
+`clip_nosight` brushes (0x28031640, 0x400 in the item mask) fill it.
+
+VERIFIED, `client-probes/probe_nodrop` on `mp_itemtest`, four carbines
+spawned at 2050: `inside`, at (520, 1873, -110) within the box, is undefined
+by the 2100 read; `above`, from z 20, comes to rest at 9.39 on a shack wall
+top over the box; `beside`, at y 1840 outside it, rests at -111.50; `hang`,
+spawnflags 1, stays at -120 inside it for the 4 s. VERIFIED, the same probe
+on stock mp_carentan: `inside` rests at -114.46 from the 2100 read on, and
+the other three as on the patched map. INFERRED: the test runs on the item's
+origin only after a sweep that meets something, and a start-solid sweep
+counts; an item never swept, or resting outside the volume, is kept.
+
+VERIFIED, the same probe against ours on the same patched map, run live: the
+same four outcomes, `inside` gone by the first read.
+
 ### 14.6 As implemented
 
 `crate::game::item::run_items` is `G_RunEntity`'s item pass:
@@ -1335,7 +1360,8 @@ spawn but `spawnflags & 1`.
 the thread pass (14.2). `ItemState` carries `pos` and
 `apos` while they are not stationary, which `crate::game::wire` sends in place
 of the `origin` and `angles` fields. `CollisionWorld::item_trace` is the
-capsule sweep with the static models.
+capsule sweep with the static models, and the loader keeps world brushes
+carrying 0x80000000 as volumes for `point_contents`.
 
 `dropItem`'s weapon arm poses the dropper's rig off the `client_dobjs`
 mirror, which `Server` refreshes beside `client_bodies` and before every

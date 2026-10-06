@@ -276,6 +276,7 @@ fn the_flights_land_where_retail_lands() {
                 Ran::Flew => {}
                 Ran::Nudged => nudges.push((now, pos)),
                 Ran::Landed { ground, normal } => break Some((now, ground, normal)),
+                Ran::NoDrop => break None,
             }
             now += FRAME_MS;
             if now > launch.t + 20_000 {

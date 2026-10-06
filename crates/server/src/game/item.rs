@@ -8,7 +8,7 @@ use crate::game::entity::{ENTITYNUM_WORLD, ThinkFn};
 use crate::game::host::{GameHost, WeaponOp};
 use crate::game::pickup::{Dropped, Inventory};
 use glam::Vec3;
-use vcod_common::collision::CollisionWorld;
+use vcod_common::collision::{CONTENTS_NODROP, CollisionWorld};
 use vcod_common::net::protocol::ENTITYNUM_NONE;
 use vcod_common::net::trajectory::{TR_GRAVITY, TR_LINEAR, TR_STATIONARY, Trajectory};
 use vcod_common::pmove::weapon::NUM_AMMO;
@@ -159,11 +159,13 @@ pub enum Ran {
     Nudged,
     /// Came to rest on `ground`, aligned to `normal`.
     Landed { ground: u32, normal: Vec3 },
+    /// Met something with its origin in `CONTENTS_NODROP`, and is freed.
+    NoDrop,
 }
 
 /// `G_RunItem` (0x4eb18) and `G_BounceItem` (0x4e858) for an item whose
 /// `pos` is flying: sweep from `origin` to where the arc is at `now_ms`,
-/// then nudge or land. Every item's `physicsBounce` is 0 (stored by
+/// then free, nudge or land. Every item's `physicsBounce` is 0 (stored by
 /// `G_SpawnItem` at 0x4e6d7, never by `LaunchItem`), so a contact keeps no
 /// velocity: a floor stops it and a wall drops it straight down. `lift` is
 /// drawn only on a landing, `0.5 + 0.5 * neg_unit()` above the sweep's end.
@@ -184,6 +186,9 @@ pub fn run_flight(
     }
     if tr.fraction >= 1.0 {
         return Ran::Flew;
+    }
+    if world.point_contents(*origin) & CONTENTS_NODROP != 0 {
+        return Ran::NoDrop;
     }
     if tr.startsolid {
         let down = *origin - Vec3::Z * START_SOLID_DROP;
@@ -276,6 +281,10 @@ pub fn run_items(host: &mut GameHost, cx: &mut Cx, now_ms: i32) {
                     let aligned =
                         crate::game::spawn::align_to_surface(current, normal.into(), weapon);
                     let _ = host.set_field(cx, id, angles_atom, Value::Vector(aligned));
+                }
+                Ran::NoDrop => {
+                    host.free_entity(id);
+                    continue;
                 }
             }
         }
@@ -1027,5 +1036,55 @@ mod tests {
         };
         assert!(matches!(ran, Ran::Landed { .. }));
         assert_eq!(origin.x, x);
+    }
+
+    /// An item whose contact point is inside a nodrop brush is freed there;
+    /// one that only flies through one is not, since the test runs only on
+    /// a contact.
+    #[test]
+    fn a_landing_inside_nodrop_frees_the_item() {
+        use vcod_common::collision::{CONTENTS_NODROP, CONTENTS_SOLID, synthetic_world};
+        let world = synthetic_world(
+            &[
+                ("textures/test/solid", CONTENTS_SOLID, 0),
+                ("textures/test/nodrop", CONTENTS_NODROP, 0),
+            ],
+            &[
+                (0, [-1024.0, -1024.0, -16.0], [1024.0, 1024.0, 0.0]),
+                (1, [100.0, -64.0, 0.0], [300.0, 64.0, 64.0]),
+                (1, [-64.0, -64.0, 40.0], [64.0, 64.0, 80.0]),
+            ],
+        );
+        let run = |base: Vec3, delta: Vec3| {
+            let mut pos = Trajectory {
+                tr_type: TR_GRAVITY,
+                tr_time: 0,
+                tr_duration: 0,
+                base,
+                delta,
+            };
+            let mut origin = base;
+            let mut now = 0;
+            loop {
+                now += 50;
+                let ran = run_flight(
+                    &world,
+                    &mut pos,
+                    &mut origin,
+                    bounds(true),
+                    0x81,
+                    now,
+                    &mut || 0.25,
+                );
+                if ran != Ran::Flew {
+                    return ran;
+                }
+            }
+        };
+        assert_eq!(run(Vec3::new(200.0, 0.0, 48.0), Vec3::ZERO), Ran::NoDrop);
+        assert!(matches!(
+            run(Vec3::new(0.0, 0.0, 60.0), Vec3::ZERO),
+            Ran::Landed { .. }
+        ));
     }
 }
