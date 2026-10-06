@@ -1559,7 +1559,13 @@ impl CollisionWorld {
         }
         if node.count > 0 {
             let first = node.first as usize;
-            for (prim, _, _) in &self.prims[first..first + node.count as usize] {
+            for (prim, plo, phi) in &self.prims[first..first + node.count as usize] {
+                // The node test once more per prim: a leaf's box is the union
+                // of up to four, and setting up a brush's planes costs far
+                // more than this.
+                if !(lo.cmple(*phi).all() && hi.cmpge(*plo).all()) {
+                    continue;
+                }
                 match *prim {
                     Prim::Brush(b) => {
                         let brush = &self.brushes[b as usize];
