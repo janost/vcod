@@ -530,6 +530,9 @@ pub struct WeaponDef {
     pub wide_list_icon: bool,
     /// Localized key the HUD's weapon name appends after a `/`; blank on most.
     pub mode_name: String,
+    /// The fire-mode icon beside the ammo counter; only the select-fire guns
+    /// name one.
+    pub mode_icon: Option<String>,
     /// Which `WeaponAnim` keys this file names a non-blank clip for (kar98k's
     /// `reloadStartAnim` and `reloadEndAnim` are blank, for instance):
     /// `view_anim` and `resolve` fall back to idle rather than pick a clip
@@ -804,6 +807,7 @@ impl WeaponDef {
             ammo_icon: opt_str(map, "ammoIcon"),
             wide_list_icon: parse_bool(map, "wideListIcon", false),
             mode_name: map.get("modeName").cloned().unwrap_or_default(),
+            mode_icon: opt_str(map, "modeIcon"),
             anim_keys: WeaponAnim::ALL
                 .into_iter()
                 .filter(|a| opt_str(map, a.key()).is_some())
@@ -1176,6 +1180,11 @@ mod tests {
         );
         let thompson = load(&fs, "thompson_mp").unwrap();
         assert_eq!(thompson.mode_name, "WEAPON_FULLAUTO");
+        assert_eq!(
+            thompson.mode_icon.as_deref(),
+            Some("gfx/hud/hud@weaponmode_full.tga")
+        );
+        assert_eq!(carbine.mode_icon, None);
     }
 
     #[test]
