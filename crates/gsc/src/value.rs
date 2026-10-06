@@ -75,8 +75,9 @@ pub fn format_number(v: Value, interner: &Interner) -> Option<String> {
     }
 }
 
-/// C's `%g` with the default precision of 6. No probe reached the exponent
-/// form, so it is spelled Rust's way (`1e6`) rather than C's (`1e+06`).
+/// C's `%g` with the default precision of 6, the exponent form included:
+/// `1e-05`, `1.23457e+06` (`probe_concat_exp`). The mantissa rounds to six
+/// significant digits before the exponent is chosen, so 999999.5 is `1e+06`.
 fn format_g(f: f32) -> String {
     if !f.is_finite() {
         return format!("{f}");
@@ -84,16 +85,25 @@ fn format_g(f: f32) -> String {
     if f == 0.0 {
         return "0".to_string();
     }
-    let exp = f.abs().log10().floor() as i32;
-    let mut s = if !(-4..6).contains(&exp) {
-        format!("{f:e}")
-    } else {
-        format!("{:.*}", (5 - exp).max(0) as usize, f)
+    // Retail formats the float widened to a double; `{:e}` at precision 5
+    // gives `%e`'s rounding, and its exponent is the one `%g` tests.
+    let d = f as f64;
+    let e = format!("{d:.5e}");
+    let (mantissa, exp) = e.split_once('e').expect("{:e} always has an exponent");
+    let exp: i32 = exp.parse().expect("{:e} exponent is an integer");
+    let trim = |s: &str| {
+        if s.contains('.') {
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
+        } else {
+            s.to_string()
+        }
     };
-    if s.contains('.') && !s.contains('e') {
-        s = s.trim_end_matches('0').trim_end_matches('.').to_string();
+    if !(-4..6).contains(&exp) {
+        let sign = if exp < 0 { '-' } else { '+' };
+        format!("{}e{sign}{:02}", trim(mantissa), exp.abs())
+    } else {
+        trim(&format!("{:.*}", (5 - exp) as usize, d))
     }
-    s
 }
 
 #[cfg(test)]
@@ -152,5 +162,9 @@ mod tests {
         assert_eq!(g(Value::Float(-0.5)), "-0.5");
         assert_eq!(g(Value::Float(123456.7)), "123457");
         assert_eq!(g(Value::Float(1.5)), "1.5");
+        assert_eq!(g(Value::Float(0.00001)), "1e-05");
+        assert_eq!(g(Value::Float(1234567.0)), "1.23457e+06");
+        assert_eq!(g(Value::Float(999999.0)), "999999");
+        assert_eq!(g(Value::Float(0.0001)), "0.0001");
     }
 }
