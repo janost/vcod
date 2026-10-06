@@ -329,6 +329,10 @@ pub struct GameHost {
     /// Each client's box height (`maxs.z - mins.z`, by stance), mirrored in
     /// with the entity states, for the height `Drop_Weapon` launches from.
     pub client_height: Vec<f32>,
+    /// Each client's `r.currentOrigin` at its last link, mirrored with the
+    /// heights and moved by `setOrigin`: where the `radiusDamage` walk finds
+    /// its box (combat doc 14.3).
+    pub client_link_origin: Vec<[f32; 3]>,
     /// Each client's entity state as the tick's moves left it, mirrored in by
     /// `Server::replay_moves` before the script frame. `cloneplayer` copies
     /// the slot's entry into the body queue; nothing else reads it.
@@ -722,6 +726,7 @@ impl GameHost {
             item_notifies: Vec::new(),
             client_grenade_ms: vec![0; MAX_CLIENTS],
             client_height: vec![vcod_common::pmove::HEIGHT_STAND; MAX_CLIENTS],
+            client_link_origin: vec![[0.0; 3]; MAX_CLIENTS],
             client_entity_states: vec![None; MAX_CLIENTS],
             client_bodies: vec![None; MAX_CLIENTS],
             client_dobjs: vec![None; MAX_CLIENTS],
