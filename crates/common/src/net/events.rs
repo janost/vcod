@@ -7,9 +7,11 @@ use crate::net::msg::EntityState;
 use crate::net::protocol::Protocol;
 use crate::net::snapshot::Snapshot;
 
-/// Same as `entities::ET_EVENTS`; duplicated so net stays free of the client crate.
-const ET_EVENTS: i32 = 12;
-const EVENT_RING: i32 = 4;
+/// `ET_EVENTS`, the base an event entity's `eType` is offset from. 12 on
+/// CoD 1.1 MP, not Q3's 13 (CoDExtended shared.h:445; section 1).
+pub const ET_EVENTS: i32 = 12;
+/// Slots in an entity's or the playerstate's event ring.
+pub const EVENT_RING: i32 = 4;
 
 pub struct GameEvent {
     /// EV_* id (doc section 1).

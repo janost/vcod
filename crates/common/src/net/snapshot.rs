@@ -8,19 +8,13 @@ use super::msg::{
     ClientState, EntityState, MsgReader, MsgWriter, PlayerState, read_delta_client,
     read_delta_entity, read_delta_playerstate, write_delta_entity,
 };
-use super::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD, GENTITYNUM_BITS, Protocol};
+use super::protocol::{CLIENTNUM_BITS, ENTITYNUM_NONE, ENTITYNUM_WORLD, GENTITYNUM_BITS, Protocol};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-/// `svc_ops_e` (confirmed against cod_lnxded 1.1d).
-pub const SVC_BAD: u8 = 0;
-pub const SVC_NOP: u8 = 1;
-pub const SVC_GAMESTATE: u8 = 2;
-pub const SVC_CONFIGSTRING: u8 = 3;
-pub const SVC_BASELINE: u8 = 4;
-pub const SVC_SERVER_COMMAND: u8 = 5;
-pub const SVC_DOWNLOAD: u8 = 6;
-pub const SVC_SNAPSHOT: u8 = 7;
-pub const SVC_EOF: u8 = 8;
+pub use super::msg::{
+    SVC_BAD, SVC_BASELINE, SVC_CONFIGSTRING, SVC_DOWNLOAD, SVC_EOF, SVC_GAMESTATE, SVC_NOP,
+    SVC_SERVER_COMMAND, SVC_SNAPSHOT,
+};
 
 /// `PACKET_BACKUP`.
 const RING_CAP: usize = 32;
@@ -244,7 +238,7 @@ fn parse_packet_entities(
     new
 }
 
-/// The clientState stream: repeated `[1 bit][6-bit index][delta]`, a 0 bit
+/// The clientState stream: repeated `[1 bit][CLIENTNUM_BITS index][delta]`, a 0 bit
 /// terminates (`SV_WriteSnapshotToClient` 0x808e1fd;
 /// docs/research/clientstate-wire-format.md). Unmentioned clients carry
 /// forward; a removed delta drops the client. On an uncompressed frame the
@@ -260,7 +254,7 @@ fn parse_clients(
         if r.is_overflowed() {
             break;
         }
-        let num = r.read_bits(6) as u32;
+        let num = r.read_bits(CLIENTNUM_BITS as i32) as u32;
         let base = new.get(&num).unwrap_or(&null).clone();
         match read_delta_client(r, p, &base, num) {
             Some(cs) => {
@@ -320,7 +314,7 @@ pub fn write(
         None => {
             for (&num, cs) in &to.clients {
                 w.write_bits(1, 1);
-                w.write_bits(num as i32, 6);
+                w.write_bits(num as i32, CLIENTNUM_BITS as i32);
                 write_delta_client(w, p, &null_cs, Some(cs));
             }
         }
@@ -338,7 +332,7 @@ pub fn write(
                     continue;
                 }
                 w.write_bits(1, 1);
-                w.write_bits(num as i32, 6);
+                w.write_bits(num as i32, CLIENTNUM_BITS as i32);
                 write_delta_client(w, p, old.unwrap_or(&null_cs), new);
             }
         }
@@ -488,7 +482,7 @@ mod tests {
         let p = &PROTOCOL_V1;
         for &(num, change) in clients {
             w.write_bits(1, 1); // another client follows
-            w.write_bits(num as i32, 6);
+            w.write_bits(num as i32, CLIENTNUM_BITS as i32);
             w.write_bits(0, 1); // not removed
             match change {
                 Some(mi) => {

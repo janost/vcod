@@ -55,9 +55,7 @@ const EF_NODRAW: i32 = 0x100;
 /// number rather than a model configstring slot
 /// (docs/research/cod11-movers.md, section 14).
 pub const SOLID_BMODEL: i32 = 0xff_ffff;
-/// 12, not Q3's 13 (CoDExtended shared.h:445).
-#[cfg_attr(not(test), allow(dead_code))] // only tests name it
-pub const ET_EVENTS: i32 = 12;
+pub use vcod_common::net::events::ET_EVENTS;
 
 /// What one snapshot entity draws as.
 #[derive(Debug, Clone, PartialEq)]
