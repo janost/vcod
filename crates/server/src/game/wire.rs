@@ -384,7 +384,7 @@ fn kind_of(host: &mut GameHost, cx: &mut Cx, id: EntId, classname: &str) -> Opti
         return Some(Kind::ScriptMover(model_index(host, cx, id)?));
     }
     if classname == "script_brushmodel" {
-        return brush_model(host, cx, id).map(Kind::BrushModel);
+        return brush_model(host, id).map(Kind::BrushModel);
     }
     None
 }
@@ -402,7 +402,7 @@ fn eflags_hidden(host: &GameHost, id: EntId) -> i32 {
 /// (movers doc, section 14). `None` once `delete()` has unlinked it: the
 /// entity leaves the snapshot on the frame of the call, a tenth of a second
 /// before the free.
-fn brush_model(host: &mut GameHost, cx: &mut Cx, id: EntId) -> Option<i32> {
+fn brush_model(host: &GameHost, id: EntId) -> Option<i32> {
     if host
         .ents
         .get(id)
@@ -410,10 +410,10 @@ fn brush_model(host: &mut GameHost, cx: &mut Cx, id: EntId) -> Option<i32> {
     {
         return None;
     }
-    field_string(host, cx, id, "model")?
-        .strip_prefix('*')?
-        .parse::<i32>()
-        .ok()
+    host.ents
+        .get(id)?
+        .brush_model
+        .map(|n| n as i32)
         .filter(|&n| n > 0)
 }
 

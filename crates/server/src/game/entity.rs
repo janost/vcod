@@ -86,6 +86,11 @@ pub struct GEntity {
     /// The `bg_itemlist` half of an item entity (`crate::game::item`);
     /// `None` for everything else.
     pub item: Option<crate::game::item::ItemState>,
+    /// `s.index` of an entity whose BSP `model` key is a `*N` submodel:
+    /// `G_ParseField` writes the number there instead of the model byte
+    /// `.model` reads, so `.model` reads "" (docs/research/cod11-movers.md,
+    /// section 11).
+    pub brush_model: Option<u32>,
 }
 
 /// `hudelem_t`'s owner field (`+0x70`) for an element every client is drawn:
@@ -297,6 +302,7 @@ impl ObjectTable {
             events: EventRing::default(),
             loop_sound: 0,
             item: None,
+            brush_model: None,
         });
         Ok(id)
     }
@@ -319,6 +325,7 @@ impl ObjectTable {
                 events: EventRing::default(),
                 loop_sound: 0,
                 item: None,
+                brush_model: None,
             });
         }
         EntId(ENTITYNUM_WORLD, 0)
@@ -410,6 +417,7 @@ impl ObjectTable {
             events: EventRing::default(),
             loop_sound: 0,
             item: None,
+            brush_model: None,
         });
         Ok(EntId(slot as u32, self.ent_gens[slot]))
     }
@@ -468,6 +476,7 @@ impl ObjectTable {
             events: EventRing::default(),
             loop_sound: 0,
             item: None,
+            brush_model: None,
         });
         Ok(EntId(FIRST_HUD_ELEM + i as u32, self.hud_gens[i]))
     }

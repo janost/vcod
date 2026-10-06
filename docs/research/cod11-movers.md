@@ -188,6 +188,15 @@ VERIFIED, off the capture: a script_brushmodel with no `origin`, `angles` or
 (`PROBE bm 177`). Its brushes are in model space, so the entity's origin is
 the pivot of a rotate, here the world origin.
 
+VERIFIED, `Scr_GetGenericField` (game.mp `0x6248c`): its type-8 arm, the
+`model` field's, reads the model byte at `ent+0x175` through `G_ModelName`
+(`0x66f8c`), which returns configstring `0x10c` plus that index, the model
+block's slot 0 for a byte of 0. INFERRED, off the `.model` `""` above and
+`G_ParseField` sending a `*N` value to `ent+0x8c` instead
+(`docs/research/cod11-gsc-object-model.md`): any entity whose model byte was
+never set reads `""`, a brush model included. vcod keeps a BSP `*N` on the
+entity apart from the field, and an unset `model` reads `""`.
+
 VERIFIED, off the capture: the brushes move with the entity. A player
 standing on the slab rides `movez(48, 2)` up and back down, `movex(48, 2)`
 across and back, and is pushed out of its way when it moves sideways into
