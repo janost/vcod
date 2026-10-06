@@ -817,8 +817,8 @@ climbing a slope, whose slide keeps the climb's upward component and loses
 the forward one, failed that test every frame: the snap was refused, the
 ground trace after the move read the same test and dropped the player, and
 the sight ramp reversed with it. That gate is gone with the unconditional
-pass; what is left of it is the waterjump exclusion (its launch is set
-inside the move and the down pass's clip would take it away).
+pass, and so is the waterjump exclusion that outlived it: 1.1 MP has no
+water jump ("Water").
 
 VERIFIED: at 0x3533a a 16-bit word at +0x28 of the down trace is compared
 against 0x3f, and the at-or-below arm (0x35341-0x35377) writes the origin
@@ -1188,7 +1188,10 @@ model 0 stay facets under the polyhedron clip (`triangle_planes`), minus
 the ones that draw terrain, matched as a soup whose centroid lies inside a
 coplanar terrain triangle sharing one of its vertices (an edge match is
 not enough: the render mesh triangulates the grid the other way, and a
-flat patch abutting terrain shares an edge with it). A patch's bezier
+flat patch abutting terrain shares an edge with it), and minus every
+triangle outside all of lump 24's patch control-point boxes: a brush
+face's or a decal's soup is no collision on retail
+(`cod11-player-clip.md` 12, the walk capture's corner). A patch's bezier
 tessellation is not built; its render soup stands in, which is exact for
 the flat patches every kerb wall on carentan is. The `startsolid` a
 terrain touch reads is kept, since retail's stance and prone checks read
@@ -1557,6 +1560,34 @@ vcod: `pmove::wish` and `pmove::wish_air` port the two, with
 weapon factor, and `stance_speed_scale` as the stance block. Not ported:
 the `wbuttons` 0x4 factor.
 
+## Water
+
+VERIFIED: `PmoveSingle`'s default arm dispatches the move to three
+functions only (0x342fe-0x34322): `PM_LadderMove` (0x33944) on
+`PMF_LADDER`, `PM_WalkMove` (0x2f258) on `pml.walking`, `PM_AirMove`
+(0x2f03c) otherwise. Neither mover calls anything water-shaped:
+`PM_WalkMove` calls `PM_CheckJump` (0x2eb98), `PM_AirMove`,
+`PM_Friction` (0x2e460), `PM_CmdScale` (0x2e690), `VectorNormalize`,
+`PM_StepSlideMove` and the movement-dir update (0x2e970); `PM_AirMove`
+calls `PM_Friction` at 0x2f045, the air cmd scale (0x2e5bc),
+`VectorNormalize` and `PM_StepSlideMove`. VERIFIED: the only `pm_time`
+stores in the pmove range are the landing's and `PM_DropTimers`'
+(`cod11-player-clip.md` 8.5), and the rodata float 350 (0x70c60) is read
+only by the lean (0x32bf8, 0x32c26). INFERRED: 1.1 MP has neither Q3's
+`PM_WaterMove` nor its water jump (`PM_CheckWaterJump`,
+`PM_WaterJumpMove`, `PMF_TIME_WATERJUMP`); a player in deep water walks
+on the bottom and falls through it at full gravity.
+
+VERIFIED, where the water level (pm+0xd9, written by 0x30778) reaches the
+move: the wade scale in the cmd scale ("The wish speed"); `PM_Friction`,
+which skips the ground term above level 1 (0x2e4db) and adds `speed *
+waterlevel * frametime` (0x2e54b-0x2e56b); the fall damage, halved at
+level 2 (`cod11-player-clip.md` 8.3); and `PM_CrashLand`, which returns at
+level 3.
+
+vcod: `pmove.rs` dropped its RTCW port of the swim and the water jump on
+2026-10-06, and `air_move` runs `friction` first, as `PM_AirMove` does.
+
 ## State reference (observed pm_flags bits, internal ps+0xC)
 
 | bit | meaning | evidence |
@@ -1634,11 +1665,10 @@ Status after the pmove work landed on this branch:
    event and the velocity scale". NOT ported from that tail: the
    `PM_VerifyPronePosition` revert that gates it (vcod runs no prone fit check
    inside the move) and the third block past 0x3579c. The snap's gate is
-   retail's, the ground state taken before the move, with one exclusion: a
-   waterjump in progress, whose launch is set inside the move and which the
-   snap's clip would take away. The velocity re-test that used to stand in
-   for that exclusion refused the snap to every walker rubbing a wall on a
-   slope ("The ground snap"). The airborne arm's one exception
+   retail's, the ground state taken before the move. A velocity re-test
+   that once stood in for a waterjump exclusion refused the snap to every
+   walker rubbing a wall on a slope ("The ground snap"); 1.1 MP has no
+   water jump ("Water"). The airborne arm's one exception
    (`pm_flags & 0x10` with `velocity[2] > 0`, 0x350F5-0x35112) is not taken
    either: vcod returns for every airborne player. That is a no-op today,
    since the snap is 0 on a ladder anyway, and it would only matter if the

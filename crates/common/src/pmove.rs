@@ -179,16 +179,11 @@ pub const PRONE_PITCH_DEG_PER_SEC: f32 = 70.0;
 pub const PRONE_BODY_LENGTH: f32 = 54.0;
 const PRONE_BODY_HALF_BOX: f32 = 6.0;
 
-// Water: RTCW-MP bg_pmove.c multipliers against CoD's absolute speeds.
-// Swim cap is SCALE_SWIM * SPEED_RUN; no lava/slime exists in CoD maps.
-pub const SCALE_SWIM: f32 = 0.5;
-pub const WATER_ACCELERATE: f32 = 4.0;
+// Water. Retail 1.1 MP has no swim and no water jump: `PmoveSingle`
+// dispatches to the ladder, walk and air moves only (0x34305-0x34322), and
+// the water level reaches the move through the wade scale, the friction and
+// the fall damage (docs/research/cod11-mantle.md, "Water").
 pub const WATER_FRICTION: f32 = 1.0;
-/// Idle wish toward the bottom while swimming.
-pub const WATER_SINK_SPEED: f32 = 60.0;
-pub const WATERJUMP_FORWARD: f32 = 200.0;
-pub const WATERJUMP_UP: f32 = 350.0;
-pub const WATERJUMP_TIME_MS: f32 = 2000.0;
 
 // Ladders: structure from RTCW-MP bg_pmove.c PM_CheckLadderMove/PM_LadderMove;
 // numbers from retail CoD 1.1 (game.mp.i386.so: PM_CheckLadderMove @0x336e8,
@@ -383,8 +378,6 @@ pub struct PlayerState {
     ground_plane: Option<Vec3>,
     /// 0 dry, 1 feet, 2 waist, 3 eyes under (RTCW waterlevel).
     pub water_level: u32,
-    /// Remaining control lock while flying out of water; 0 when free.
-    pub waterjump_ms: f32,
     /// `pm_time`: what is left of the knockback timer, 0 when free.
     pub knockback_ms: f32,
     /// The `pm_flags` bits riding `knockback_ms`, cleared with it.
@@ -584,7 +577,6 @@ impl PlayerState {
             prone_dive: false,
             ground_plane: None,
             water_level: 0,
-            waterjump_ms: 0.0,
             knockback_ms: 0.0,
             knockback_flags: 0,
             on_ladder: false,
@@ -807,23 +799,12 @@ pub fn pmove(
     ps.walking = walking_flag(ps, input);
     // Then `PM_UpdatePronePitch` (0x342dd), off this frame's ground plane.
     update_prone_pitch(ps, dt);
-    if ps.waterjump_ms > 0.0 {
-        ps.waterjump_ms -= msec(dt);
-        if ps.waterjump_ms < 0.0 {
-            ps.waterjump_ms = 0.0;
-        }
-    }
-    // retail checks ladders right after the first ground trace and dispatches
-    // them before waterjump/water; the check reads `pm_time` before
-    // `PM_DropTimers` (0x342f4, 0x342f9)
+    // retail checks ladders right after the first ground trace; the check
+    // reads `pm_time` before `PM_DropTimers` (0x342f4, 0x342f9)
     let ladder = check_ladder_move(ps, input, world);
     drop_knockback(ps, dt);
     if let Some((normal, ladderforward)) = ladder {
         ladder_move(ps, input, normal, ladderforward, world, dt, &mut events);
-    } else if ps.waterjump_ms > 0.0 {
-        water_jump_move(ps, world, dt, MASK_PLAYERSOLID, Some(&mut events));
-    } else if ps.water_level > 1 {
-        water_move(ps, input, world, dt, MASK_PLAYERSOLID, Some(&mut events));
     } else {
         // `PM_WalkMove` opens with `PM_CheckJump` (0x2f261); a jump runs the
         // air mover instead and stamps `jumpTime` after it (0x2f279).
@@ -903,9 +884,6 @@ fn linked_move(
     );
     ps.walking = walking_flag(ps, input);
     update_stance(ps, input, world, dt);
-    if ps.waterjump_ms > 0.0 {
-        ps.waterjump_ms = (ps.waterjump_ms - msec(dt)).max(0.0);
-    }
     drop_knockback(ps, dt);
     weapon::pm_weapon(ps, input, weapons, (dt * 1000.0).round() as i32, events);
     ps.last_cmd_angles = input.angles;
@@ -948,21 +926,21 @@ fn snap_velocity(ps: &mut PlayerState) {
     );
 }
 
-/// A dead player's frame: gravity and ground friction with no input, no
-/// stance, lean or weapon step, and the eye easing to `VIEW_DEAD`. Q3's
-/// `PM_DEAD` arm of `PmoveSingle` with the movement input zeroed; the eye
-/// rate is the retail capture's (`DEAD_VIEW_LERP_SPEED`). A corpse landing
-/// runs `PM_CrashLand` too, which takes no damage at `pm_type > 5`; its
-/// events are the return.
+/// A dead player's frame: no input, no stance, lean or weapon step, and the
+/// eye easing to `VIEW_DEAD` at the retail capture's rate
+/// (`DEAD_VIEW_LERP_SPEED`). `PmoveSingle` zeroes a dead cmd's moves
+/// (0x3416a) and runs the default arm, whose ladder check drops a corpse off
+/// the ground before every move, so a corpse falls on every frame and the
+/// closing ground trace lands it again (docs/research/cod11-player-clip.md
+/// 8.11). The landing runs `PM_CrashLand`, which takes no damage at
+/// `pm_type > 5`; its events are the return.
 pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) -> Vec<PmEvent> {
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
     let idle = PmInput::default();
     let mut events = Vec::new();
     ps.jumped = false;
-    let was_on_ground = ps.on_ground;
     ps.move_start = ps.origin;
     let start_vz = ps.velocity.z;
-    drop_knockback(ps, dt);
     // `PM_ClearAimDownSightFlag` (`game.mp.i386.so` 0x3abd4), which
     // `PmoveSingle` calls in the dead arm. The fraction is left where the
     // death froze it: the weapon step that would ramp it down does not run
@@ -970,19 +948,31 @@ pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) -> Vec<PmEven
     ps.ads_active = false;
     ground_trace(ps, world, MASK_DEADSOLID);
     dead_friction(ps);
+    // `PM_CheckLadderMove` past its `pm_time` return: a dead player loses the
+    // ladder flag, the ground entity, `pml.groundPlane` and `pml.walking`
+    // (0x33782-0x337a5).
+    if ps.knockback_ms <= 0.0 {
+        ps.on_ladder = false;
+        ps.on_ground = false;
+        ps.ground_plane = None;
+        ps.ground_normal = Vec3::Z;
+        ps.ground_surface_flags = 0;
+    }
+    drop_knockback(ps, dt);
     // No events and no post-step velocity scale for a corpse: retail's step
     // block sits behind `ps->pm_type > 5` (@0x35660).
     ps.walking = false;
-    if ps.on_ground {
+    let grounded = ps.on_ground;
+    if grounded {
         friction(ps, false, dt);
         walk_move(ps, &idle, None, world, dt, MASK_DEADSOLID, None);
     } else {
         air_move(ps, &idle, world, dt, MASK_DEADSOLID, None);
     }
+    // The closing ground trace (0x34327) calls `PM_CrashLand` when it finds
+    // ground under a `groundEntityNum` of `ENTITYNUM_NONE`.
     ground_trace(ps, world, MASK_DEADSOLID);
-    // `PmoveSingle`'s dead arm takes the default path's two ground traces
-    // (0x342ce, 0x34327), and the landing one calls `PM_CrashLand`.
-    if !was_on_ground && ps.on_ground {
+    if !grounded && ps.on_ground {
         crash_land(ps, start_vz, true, &mut events);
     }
     // A target no stance has drops any leg and moves at a flat rate (0x30a84).
@@ -1827,8 +1817,6 @@ fn ground_trace(ps: &mut PlayerState, world: &MoveWorld, mask: u32) {
         ps.ground_entity = world.entity_num(&t);
         ps.ground_normal = t.normal;
         ps.ground_surface_flags = t.surface_flags;
-        // RTCW clears the waterjump lock on touching walkable ground
-        ps.waterjump_ms = 0.0;
     } else {
         ps.on_ground = false;
         ps.ground_normal = Vec3::Z;
@@ -1836,7 +1824,7 @@ fn ground_trace(ps: &mut PlayerState, world: &MoveWorld, mask: u32) {
     }
 }
 
-/// Feet, waist and eye point-contents samples; swimming starts at waist-deep.
+/// Feet, waist and eye point-contents samples.
 fn set_water_level(ps: &mut PlayerState, world: &MoveWorld) {
     use crate::collision::CONTENTS_WATER;
     ps.water_level = 0;
@@ -2049,11 +2037,6 @@ fn walk_move(
     mask: u32,
     events: Option<&mut Vec<PmEvent>>,
 ) {
-    // eye-deep and looking up an upward slope: swim instead of trudging
-    if ps.water_level > 2 && forward3(ps).dot(ps.ground_normal) > 0.0 {
-        water_move(ps, input, world, dt, mask, events);
-        return;
-    }
     let (dir, wishspeed) = wish(ps, input, weapon);
     // Slick ground or a hit's knockback (0x2f492, 0x2f58c).
     let sliding = on_slick(ps) || ps.knockback_flags & PMF_TIME_DAMAGE != 0;
@@ -2107,102 +2090,6 @@ fn forward3(ps: &PlayerState) -> Vec3 {
     )
 }
 
-/// Q3 `bg_pmove.c` `PM_CmdScale`: input magnitude in command units. Q3 only
-/// reads forward/right here, so a lone up key would scale to zero and the
-/// sink wish would win; CoD-style play expects jump alone to swim up, so up
-/// joins the magnitude.
-fn cmd_scale(input: &PmInput) -> f32 {
-    let up = if input.jump { 1.0 } else { 0.0 };
-    let max = input.forward.abs().max(input.right.abs()).max(up);
-    if max <= 0.0 {
-        return 0.0;
-    }
-    let total = (input.forward * input.forward + input.right * input.right + up * up).sqrt();
-    total / max * (127.0 / 128.0)
-}
-
-/// RTCW `bg_pmove.c` `PM_WaterMove`. No gravity: buoyancy is implicit, the
-/// idle sink is a wish toward the bottom, jump is the up command.
-fn water_move(
-    ps: &mut PlayerState,
-    input: &PmInput,
-    world: &MoveWorld,
-    dt: f32,
-    mask: u32,
-    events: Option<&mut Vec<PmEvent>>,
-) {
-    if try_start_water_jump(ps, world) {
-        water_jump_move(ps, world, dt, mask, events);
-        return;
-    }
-    friction(ps, ps.on_ladder, dt);
-    let m = cmd_scale(input) * 127.0;
-    let right = Vec3::new(ps.yaw.sin(), -ps.yaw.cos(), 0.0);
-    let wishvel = if m == 0.0 {
-        Vec3::new(0.0, 0.0, -WATER_SINK_SPEED)
-    } else {
-        let mut w = forward3(ps) * (input.forward * m) + right * (input.right * m);
-        w.z += if input.jump { m } else { 0.0 };
-        w
-    };
-    let wishspeed = wishvel.length();
-    let wishdir = if wishspeed > 0.0 {
-        wishvel / wishspeed
-    } else {
-        Vec3::ZERO
-    };
-    let cap = SPEED_RUN * SCALE_SWIM;
-    let wishspeed = if wishspeed > cap { cap } else { wishspeed };
-    accelerate(ps, wishdir, wishspeed, WATER_ACCELERATE, dt);
-
-    // crawl up underwater slopes without losing speed. RTCW also re-scales
-    // the clipped velocity to its old length here, which mirrors a full sink
-    // into the floor into a full-power launch the frame grounding starts
-    // (their "FIXME: still have z friction underwater?" marks this spot);
-    // dropping the re-scale keeps bottom contact settled.
-    if ps.on_ground && ps.velocity.dot(ps.ground_normal) < 0.0 {
-        ps.velocity = clip_velocity(ps.velocity, ps.ground_normal);
-    }
-    slide_move(ps, world, dt, false, mask);
-}
-
-/// RTCW `bg_pmove.c` `PM_CheckWaterJump`: chest-deep against a low lip, the
-/// probe 4 units up must hit solid and 20 units up must be clear.
-fn try_start_water_jump(ps: &mut PlayerState, world: &MoveWorld) -> bool {
-    use crate::collision::CONTENTS_SOLID;
-    if ps.waterjump_ms > 0.0 || ps.water_level != 2 {
-        return false;
-    }
-    let flat = Vec3::new(ps.yaw.cos(), ps.yaw.sin(), 0.0);
-    let spot = ps.origin + flat * 30.0 + Vec3::Z * 4.0;
-    if world.point_contents(spot) & CONTENTS_SOLID == 0 {
-        return false;
-    }
-    if world.point_contents(spot + Vec3::Z * 16.0) != 0 {
-        return false;
-    }
-    ps.velocity = forward3(ps) * WATERJUMP_FORWARD;
-    ps.velocity.z = WATERJUMP_UP;
-    ps.waterjump_ms = WATERJUMP_TIME_MS;
-    true
-}
-
-/// RTCW `bg_pmove.c` `PM_WaterJumpMove`: no control, extra gravity, cancels
-/// once falling again (landing clears via ground_trace).
-fn water_jump_move(
-    ps: &mut PlayerState,
-    world: &MoveWorld,
-    dt: f32,
-    mask: u32,
-    events: Option<&mut Vec<PmEvent>>,
-) {
-    step_slide_move(ps, world, dt, true, mask, events);
-    ps.velocity.z -= GRAVITY * dt;
-    if ps.velocity.z < 0.0 {
-        ps.waterjump_ms = 0.0;
-    }
-}
-
 /// Retail `PM_CheckLadderMove` (game.mp.i386.so @0x336e8): reach 30/8,
 /// forwardmove gate while walking, probe bbox shrunk 6 per horizontal side
 /// with the top lowered by the probe distance (@0x70cb0), direction
@@ -2214,10 +2101,6 @@ fn check_ladder_move(
     input: &PmInput,
     world: &MoveWorld,
 ) -> Option<(Vec3, bool)> {
-    if ps.waterjump_ms > 0.0 {
-        ps.on_ladder = false;
-        return None;
-    }
     // A running knockback or landing-stun timer skips the check and keeps
     // last frame's ladder flag (`pm_time` test at 0x336f6).
     if ps.knockback_ms > 0.0 {
@@ -2454,6 +2337,9 @@ fn air_move(
     mask: u32,
     events: Option<&mut Vec<PmEvent>>,
 ) {
+    // `PM_AirMove` opens with `PM_Friction` (0x2f045): off the ground only
+    // its sub-unit stop and the water term can bite.
+    friction(ps, false, dt);
     let (dir, wishspeed) = wish_air(ps, input);
     accelerate(ps, dir, wishspeed, PM_AIRACCELERATE, dt);
     // A plane too steep to stand on still steers the fall (0x2f1d3).
@@ -2624,9 +2510,8 @@ fn step_slide_move(
     let (mins, maxs) = (ps.mins(), ps.maxs());
     let (down_o, down_v) = (ps.origin, ps.velocity);
     // Retail's `ebx` (0x34fdf-0x34ff1): on a ground plane and not on a
-    // ladder. A waterjump sets its launch inside the move and the down
-    // pass's clip would take it away, so it is kept out of this.
-    let ground_plane = ps.on_ground && !ps.on_ladder && ps.waterjump_ms <= 0.0;
+    // ladder.
+    let ground_plane = ps.on_ground && !ps.on_ladder;
 
     // The step-up runs on a blocked slide only (0x35166): the up trace over
     // `stepSize + 1`, `stepUp` a unit under what it reached and nothing under
@@ -4711,94 +4596,20 @@ mod tests {
     }
 
     #[test]
-    fn swimming_caps_at_the_swim_speed() {
+    fn deep_water_has_no_swim() {
+        // Retail 1.1 MP walks and falls through water: no swim, no sink
+        // wish, no water jump (cod11-mantle.md, "Water").
         let w = pool_world();
         let w = MoveWorld::bare(&w);
-        let mut ps = PlayerState::spawn(Vec3::new(0.0, -200.0, -20.0), 0.0);
-        tick(
-            &mut ps,
-            &PmInput {
-                forward: 1.0,
-                ..Default::default()
-            },
-            &w,
-            100,
-        );
-        let h = ps.velocity.truncate().length();
-        assert!(
-            (h - SPEED_RUN * SCALE_SWIM).abs() < 6.0,
-            "swim speed {h}, expected ~{}",
-            SPEED_RUN * SCALE_SWIM
-        );
-    }
-
-    #[test]
-    fn idle_player_sinks_without_freefall() {
-        let w = pool_world();
-        let w = MoveWorld::bare(&w);
-        let mut ps = PlayerState::spawn(Vec3::new(0.0, -200.0, -20.0), 0.0);
-        let start = ps.origin.z;
-        let input = PmInput::default();
-        // the sink wish is an acceleration target, not a velocity cap: speed
-        // builds over ~half a second, so watch the whole descent
-        let mut worst_fall = 0.0f32;
-        for _ in 0..150 {
-            pmove(&mut ps, &input, &w, 1.0 / 125.0, &[]);
-            worst_fall = worst_fall.max(-ps.velocity.z);
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, -200.0, 20.0), 0.0);
+        let mut fastest = 0.0f32;
+        for _ in 0..60 {
+            pmove(&mut ps, &PmInput::default(), &w, 0.016, &[]);
+            fastest = fastest.max(-ps.velocity.z);
         }
-        assert!(
-            ps.origin.z < start - 40.0,
-            "should reach the bottom, at {}",
-            ps.origin
-        );
-        assert!(ps.on_ground, "settled on the pool floor at {}", ps.origin);
-        assert!(worst_fall < 130.0, "sink must not freefall: {worst_fall}");
-    }
-
-    #[test]
-    fn jump_key_swims_up() {
-        let w = pool_world();
-        let w = MoveWorld::bare(&w);
-        let mut ps = PlayerState::spawn(Vec3::new(0.0, -200.0, -30.0), 0.0);
-        tick(
-            &mut ps,
-            &PmInput {
-                jump: true,
-                ..Default::default()
-            },
-            &w,
-            150,
-        );
-        // hovers chest-deep: above that line the waist sample dries, swim
-        // gives way to air, and he sinks back into it
-        assert!(
-            (-6.0..15.0).contains(&ps.origin.z),
-            "should bob at the chest line, at {}",
-            ps.origin
-        );
-    }
-
-    #[test]
-    fn looking_up_while_submerged_walk_turns_into_swim() {
-        let w = pool_world();
-        let w = MoveWorld::bare(&w);
-        let mut ps = PlayerState::spawn(Vec3::new(0.0, -200.0, -73.0), 0.0);
-        ps.pitch = 20.0f32.to_radians();
-        tick(
-            &mut ps,
-            &PmInput {
-                forward: 1.0,
-                ..Default::default()
-            },
-            &w,
-            30,
-        );
-        assert!(
-            ps.velocity.z > 5.0 || ps.origin.z > -60.0,
-            "should swim up off the bottom: vz {} z {}",
-            ps.velocity.z,
-            ps.origin.z
-        );
+        assert!(fastest > 200.0, "a free fall through the water: {fastest}");
+        assert!(ps.on_ground, "on the pool floor at {}", ps.origin);
+        assert_eq!(ps.water_level, 3);
     }
 
     // --- ladders ---
@@ -5458,33 +5269,6 @@ mod tests {
         panic!("powcamp/harbor not found under $COD_DIR");
     }
 
-    #[test]
-    fn water_jump_leaps_out_of_the_pool() {
-        let w = pool_world();
-        let w = MoveWorld::bare(&w);
-        // far enough from the lip that the bbox clears it only after rising
-        let mut ps = PlayerState::spawn(Vec3::new(172.0, 0.0, 0.2), 0.0);
-        let input = PmInput {
-            forward: 1.0,
-            jump: true,
-            ..Default::default()
-        };
-        pmove(&mut ps, &input, &w, 1.0 / 125.0, &[]);
-        assert!(
-            ps.waterjump_ms > 0.0,
-            "waterjump should trigger from the shelf"
-        );
-        assert!(ps.velocity.z > 300.0, "boost vz {}", ps.velocity.z);
-        // hands off for the flight: holding jump would bunny-hop after landing
-        tick(&mut ps, &PmInput::default(), &w, 120);
-        assert!(
-            ps.origin.x > 255.0 && ps.origin.z < 20.0,
-            "should land east of the wall, at {}",
-            ps.origin
-        );
-        assert!(ps.on_ground && ps.waterjump_ms == 0.0, "{:?}", ps.origin);
-    }
-
     const FULL: f32 = 127.0;
 
     #[test]
@@ -5596,7 +5380,7 @@ mod tests {
         let w = flat();
         let bodies = [body(20.0, 0.0, 0.0)];
         let mw = MoveWorld::new(&w, &bodies, 0);
-        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.125), 0.0);
         ps.velocity = Vec3::new(200.0, 0.0, 0.0);
         for _ in 0..10 {
             dead_move(&mut ps, &mw, 0.05);

@@ -8963,6 +8963,10 @@ impl FallProbe {
         ];
         // a fall moves only the origin, so print the first airborne frames too
         key.push(i("commandTime") * (key[0] == net::protocol::ENTITYNUM_NONE as i32) as i32);
+        // and a corpse's slide, which moves nothing else either
+        if i("pm_type") == 6 {
+            key.extend([i("origin[0]"), i("origin[1]"), i("origin[2]")]);
+        }
         if self.last.as_ref() == Some(&key) {
             return;
         }
