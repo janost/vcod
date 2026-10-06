@@ -247,6 +247,9 @@ pub struct ClientSim {
     /// `linkTo`'s record, `gentity_t+0x2e4`. Not `linked()`, which is about
     /// whether the other clients are sent an entity for this one.
     pub link_to: Option<Link>,
+    /// The last link was a `setOrigin`'s or `TeleportPlayer`'s, at the
+    /// unsnapped `ps.origin`; the next cmd's link clears it.
+    linked_unsnapped: bool,
     /// `ps.serverCursorHint`, written every frame by the end-of-frame pass
     /// (`ScriptRuntime::cursor_hint_pass`).
     pub cursor_hint: i32,
@@ -431,6 +434,7 @@ impl ClientSim {
             jump_time: 0,
             land_anim: false,
             link_to: None,
+            linked_unsnapped: false,
             cursor_hint: 0,
             cursor_hint_string: -1,
             health: 0,
@@ -715,6 +719,7 @@ impl ClientSim {
 
     /// `SV_LinkEntity`'s `solid`, off the box and contents at the link.
     fn relink(&mut self) {
+        self.linked_unsnapped = false;
         self.linked_solid = if self.contents & (CONTENTS_BODY | 1) != 0 {
             Body::pack_solid(self.ps.mins(), self.ps.maxs())
         } else {
@@ -813,6 +818,7 @@ impl ClientSim {
     pub fn teleport(&mut self, origin: [f32; 3]) {
         self.ps.origin = origin.into();
         self.teleport_bit = !self.teleport_bit;
+        self.linked_unsnapped = true;
     }
 
     /// `SetClientViewAngle` (0x41e30): the view becomes `angles` (degrees,
@@ -861,6 +867,7 @@ impl ClientSim {
         };
         self.ps.origin = Vec3::from(origin) + Vec3::Z;
         self.teleport_bit = !self.teleport_bit;
+        self.linked_unsnapped = true;
         self.set_view_angle(angles);
         temps
     }
@@ -1339,11 +1346,11 @@ impl ClientSim {
 
     /// `r.currentOrigin` at the last link, which `r.absmin` and `r.absmax`
     /// are built off: `ClientThink_real` links at the snapped origin, and a
-    /// linked client's `G_RunClient` relinks at the anchored one (combat doc,
-    /// 14.1). A `setOrigin` with no cmd since, which links unsnapped, is not
-    /// modelled.
+    /// linked client's `G_RunClient` relinks at the anchored one, and a
+    /// `setOrigin` or `TeleportPlayer` with no cmd since links unsnapped
+    /// (combat doc, 14.3).
     pub fn link_origin(&self) -> Vec3 {
-        if self.link_to.is_some() {
+        if self.link_to.is_some() || self.linked_unsnapped {
             self.ps.origin
         } else {
             self.ps.origin.trunc()
@@ -3082,6 +3089,19 @@ mod tests {
     /// origin and 199 at the destination on temp entities naming the
     /// client, the origin a unit above the destination, the bit flipped and
     /// the view set.
+    /// `setOrigin` links at the unsnapped origin, and that link holds until
+    /// the next cmd relinks at the snapped one (combat doc 14.3).
+    #[test]
+    fn a_set_origin_links_unsnapped_until_the_next_cmd() {
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.become_player([5.7, -3.2, 8.9], 0.0, [0; 3]);
+        assert_eq!(sim.link_origin(), Vec3::new(5.0, -3.0, 8.0));
+        sim.teleport([10.5, 0.25, -22.9]);
+        assert_eq!(sim.link_origin(), Vec3::new(10.5, 0.25, -22.9));
+        sim.step(&NULL_USERCMD, 0.05, None, &[]);
+        assert_eq!(sim.link_origin(), sim.ps.origin.trunc());
+    }
+
     #[test]
     fn teleport_player_raises_out_and_in_and_flips_the_bit() {
         use crate::game::temp_entity::Scope;
