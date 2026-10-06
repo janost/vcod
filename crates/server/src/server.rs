@@ -1995,6 +1995,12 @@ impl Server {
         let mut joined: Vec<usize> = Vec::new();
         let mut entering: Vec<usize> = Vec::new();
         let slots: Vec<usize> = self.bots.keys().copied().collect();
+        // `_teams::restrict` reads `!getcvar(...)`, a numeric coercion; with
+        // no script nothing restricts.
+        let cvars = self.script.as_ref().map(|rt| rt.cvars());
+        let allowed = |name: &str| {
+            cvars.is_none_or(|c| crate::game::builtins::cvar::atof(c.get(name)) != 0.0)
+        };
         for &slot in &slots {
             let Some(c) = self.clients[slot].as_ref() else {
                 continue;
@@ -2012,7 +2018,11 @@ impl Server {
                 })
                 .collect();
             bot.last_seen_seq = c.netchan.reliable_sequence as i32;
-            replies.extend(bot.observe(sid, &fresh).into_iter().map(|r| (slot, r)));
+            replies.extend(
+                bot.observe(sid, &fresh, &allowed)
+                    .into_iter()
+                    .map(|r| (slot, r)),
+            );
             match c.state {
                 ClientState::Connected => joined.push(slot),
                 // Primed and no sim yet: the entering cmd, which is not
@@ -2195,6 +2205,11 @@ impl Server {
             clip: def.map_or(-1, |d| sim.ps.ammoclip[d.clip_index]),
             fire_time_ms: def.map_or(0, |d| (d.fire_time * 1000.0) as i32),
             busy_ms: sim.ps.weapon_time_ms,
+            automatic: def.is_some_and(|d| !d.semi_auto),
+            has_ads: def.is_some_and(|d| d.aim_down_sight),
+            sniper: def.is_some_and(|d| d.ads_overlay_shader.is_some()),
+            ads_frac: sim.ps.weapon_pos_frac,
+            speed: sim.ps.velocity.truncate().length(),
             dead: sim.dead,
             playing: sim.pm_type == crate::spectate::PmType::Normal && !sim.dead,
             enemy,
@@ -2246,6 +2261,7 @@ impl Server {
                 d,
                 s.ps.view().eye,
                 crate::bots::EnemyView {
+                    slot: i,
                     origin: (s.ps.origin + glam::Vec3::Z * 40.0).into(),
                 },
             ));
