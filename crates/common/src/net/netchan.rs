@@ -324,14 +324,22 @@ impl ServerNetchan {
     }
 }
 
-/// One scramble key step with the `'%'`/high-ascii substitution. An empty ring
-/// slot is all NULs in the C and contributes nothing.
+/// One scramble key step over the server's copy of the keyed client command.
+/// Retail's `SV_Netchan_Transmit` walks `lastClientCommandString` raw
+/// (cod_lnxded 0x808dc74), and that copy came through `MSG_ReadString`
+/// (0x807f320), which maps 0x92 to `'` and every other byte over 127 to `.`
+/// but keeps `%`. Mapping the client's raw copy the same way here gives both
+/// ends one key stream. An empty ring slot is all NULs in the C and
+/// contributes nothing.
 fn advance_key(key: &mut u8, string: &[u8], index: &mut usize, i: usize) {
     if *index >= string.len() {
         *index = 0;
     }
-    let c = string.get(*index).copied().unwrap_or(0);
-    let c = if c > 127 || c == b'%' { b'.' } else { c };
+    let c = match string.get(*index).copied().unwrap_or(0) {
+        0x92 => b'\'',
+        c if c > 127 => b'.',
+        c => c,
+    };
     *key ^= c << (i & 1);
     *index += 1;
 }
@@ -361,8 +369,8 @@ fn decode(nc: &Netchan, buf: &mut [u8]) {
 /// `SV_Netchan_Decode` (cod_lnxded 0x808de60) run forward over the compressed
 /// op block from its byte 0. Unlike [`decode`], the seed is
 /// `challenge ^ serverId ^ messageAcknowledge`, the key string is
-/// `serverCommands[reliableAcknowledge & 63]`, and there is no `'%'`/high-ascii
-/// substitution: the server walks its stored bytes raw (0x808dea9).
+/// `serverCommands[reliableAcknowledge & 63]`, and there is no high-ascii
+/// mapping: the server walks its stored bytes raw (0x808dea9).
 fn encode(nc: &Netchan, server_id: i32, message_ack: i32, reliable_ack: i32, comp: &mut [u8]) {
     let string = nc.server_commands[reliable_ack as usize & (MAX_RELIABLE_COMMANDS - 1)].as_bytes();
     let mut key = (nc.challenge as u32 ^ server_id as u32 ^ message_ack as u32) as u8;
@@ -499,42 +507,51 @@ mod tests {
         assert!(nc.process_in(&p, &h).unwrap().is_none());
     }
 
-    /// The C encode loop transcribed. `substitute` toggles the `'%'`/high-ascii
-    /// branch so the test can prove it does something.
-    fn reference_encode(
-        challenge: i32,
-        seq: u32,
-        key_string: &[u8],
-        payload: &[u8],
-        substitute: bool,
-    ) -> Vec<u8> {
+    /// Retail's `SV_Netchan_Transmit` scramble (cod_lnxded 0x808dc74)
+    /// transcribed: a raw walk over the server's copy of the command.
+    fn reference_encode(challenge: i32, seq: u32, server_copy: &[u8], payload: &[u8]) -> Vec<u8> {
         let mut pkt = seq.to_le_bytes().to_vec();
         pkt.extend_from_slice(payload);
         let mut key = (challenge as u32 ^ seq) as u8;
         let mut index = 0;
         for (i, b) in pkt.iter_mut().enumerate().skip(4 + CL_DECODE_START) {
-            if index >= key_string.len() {
+            if index >= server_copy.len() {
                 index = 0;
             }
             // An empty ring slot is a bare NUL in the C, so it contributes 0.
-            let c = key_string.get(index).copied().unwrap_or(0);
-            if substitute && (c > 127 || c == b'%') {
-                key ^= b'.' << (i & 1);
-            } else {
-                key ^= c << (i & 1);
-            }
+            let c = server_copy.get(index).copied().unwrap_or(0);
+            key ^= c << (i & 1);
             index += 1;
             *b ^= key;
         }
         pkt
     }
 
+    /// `MSG_ReadString`'s byte map (cod_lnxded 0x8083394), which is what the
+    /// server's copy of a client command went through.
+    fn server_read(raw: &[u8]) -> Vec<u8> {
+        raw.iter()
+            .map(|&c| match c {
+                0x92 => b'\'',
+                c if c > 127 => b'.',
+                c => c,
+            })
+            .collect()
+    }
+
     #[test]
     fn decode_matches_hand_rolled_encode() {
         let h = Huffman::new();
-        // The last two trip the substitution branch: MSG_ReadString turns '%'
-        // and high ascii into '.' on the receiver, so both ends normalise the key.
-        for key_string in ["vstr nextmap", "", "say ^1x", "say ^1x% \u{e9}", "%%%"] {
+        // `%` stays in the server's copy, so it keys as itself: a chat line
+        // with one used to desync every later message. A high byte keys as
+        // the `.` the server read it as.
+        for key_string in [
+            "vstr nextmap",
+            "",
+            "say ^1x",
+            "say 100% sure",
+            "say caf\u{e9}",
+        ] {
             let mut nc = Netchan::new(1234, 0x1234_5678);
             nc.reliable[3] = key_string.to_string();
 
@@ -543,15 +560,10 @@ mod tests {
             payload.extend((0..200u32).map(|i| (i * 7) as u8));
 
             let seq = 42u32;
-            let bytes = key_string.as_bytes();
-            let pkt = reference_encode(nc.challenge, seq, bytes, &payload, true);
+            let copy = server_read(key_string.as_bytes());
+            let pkt = reference_encode(nc.challenge, seq, &copy, &payload);
             let out = nc.process_in(&pkt, &h).unwrap().unwrap();
             assert_eq!(out, payload, "key string {key_string:?}");
-
-            if bytes.iter().any(|&c| c > 127 || c == b'%') {
-                let naive = reference_encode(nc.challenge, seq, bytes, &payload, false);
-                assert_ne!(naive, pkt, "substitution is a no-op for {key_string:?}");
-            }
         }
     }
 
