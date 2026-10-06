@@ -8,6 +8,7 @@ mod loading;
 mod play;
 mod probe;
 mod quick_chat;
+mod quit;
 mod renderer;
 mod sky;
 mod turret;
@@ -751,6 +752,7 @@ fn hud_lines(
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
+    quit::install();
 
     let dir = args.game_dir.join(&args.mod_dir);
 
@@ -1486,6 +1488,13 @@ impl ApplicationHandler for App {
         window.request_redraw();
         self.window = Some(window);
         self.last_frame = Instant::now();
+    }
+
+    // The loop runs `ControlFlow::Poll`, so this sees a signal within a frame.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if quit::requested() {
+            event_loop.exit();
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {

@@ -14,6 +14,7 @@ rust-version = "1.90"
 anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
+ctrlc = { version = "3", features = ["termination"] }
 env_logger = "0.11"
 glam = "0.34"
 image = { version = "0.25", default-features = false, features = ["tga", "jpeg"] }
