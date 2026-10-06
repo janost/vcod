@@ -128,10 +128,11 @@ either: the people on it signed up for Call of Duty.
   frames.
 - `--bots` adds debug bots that join through the stock menus, pick a random
   weapon the menu and the `scr_allow_*` cvars allow, and roam the map along
-  a navigation graph built from pmove runs, heading for an enemy they see.
-  `--bots-shoot` makes them fight with a reaction delay, a capped turn rate
-  and aim error that settles while they hold a target. They are still bad at
-  it.
+  a navigation graph built from pmove runs, heading for an enemy they see
+  and toward gunfire and grenade blasts they hear. `--bots-shoot` makes them
+  fight with a reaction delay, a capped turn rate and aim error that settles
+  while they hold a target, and chase a lost enemy to where it was last
+  seen. They are still bad at it.
 
 ### The research
 
@@ -341,7 +342,8 @@ vcod-server mp_carentan --port 28960 --hostname "my server" --gametype tdm
   graph (0.6 to 2.7 s on 16 threads for the stock maps). `--bots-shoot` lets
   them engage the nearest visible enemy: semi-autos tap, automatics fire in
   bursts, sights go up at range, and they strafe and crouch while fighting.
-  They also reload and throw frags.
+  They also reload and throw frags, and go looking where a lost enemy was
+  last seen.
 - `--gametype-script <file>` runs a gametype script from disk instead of the
   paks. The probe recipes use it.
 - `--test-entities <n>` adds entities that move on the wire, to exercise the
