@@ -100,7 +100,10 @@ either: the people on it signed up for Call of Duty.
   machine for CoD's `.gsc` script language that lives in this repo. Team
   menus, spawn points, scoring, round logic, time and score limits all come
   from the stock scripts, not from Rust. `dm`, `tdm` and `sd` are the
-  gametypes I have checked against retail.
+  gametypes I have checked against retail end to end. `re` (Retrieval) and
+  `bel` (Behind Enemy Lines) match retail through the join, the round start
+  and the round end
+  ([docs/research/cod11-gametypes-re-bel.md](docs/research/cod11-gametypes-re-bel.md)).
 - Movement on the shared pmove, with players as capsules that block and push
   each other the way retail's do. Falls stun and hurt, scaled by the
   `bg_fallDamageMinHeight` and `bg_fallDamageMaxHeight` cvars.
@@ -186,8 +189,11 @@ console, no key rebinding. You get command-line flags and the binds below.
 
 **Server**
 
-- `re` (Retrieval) and `bel` (Behind Enemy Lines) run through the same
-  script path, but I haven't checked either against retail.
+- `re` and `bel` play past the round start, but I haven't checked a
+  Retrieval pickup and capture or the Behind Enemy Lines team swap against
+  retail. The bots don't play either gametype.
+- No chat relay: the server answers no `say` command, and the scripts'
+  `sayAll`, `sayTeam` (the quick-chat menu) and `pingPlayer` are missing.
 - A moving brush model pushes players only, not items, grenades or corpses.
 - A blast walks its victims (players and MG42s) in entity order, not
   retail's area-tree order, so who shields whom can differ when several

@@ -1,9 +1,10 @@
 //! The whole configstring table, diffed against a retail capture slot by
-//! slot on two maps. Retail assigns the precache blocks in call order, so a
+//! slot on four maps. Retail assigns the precache blocks in call order, so a
 //! match proves the script load order, the bootstrap sequence and the
 //! execution order inside each `main()`, none of which a semantic test sees.
 //!
-//! The captures are from `tools/run_server.sh` with `g_gametype dm` (and one under `sd`),
+//! The captures are from `tools/run_server.sh` with `g_gametype dm` (one each
+//! under `sd`, `re` and `bel`),
 //! `sv_maxclients 8`, `sv_pure 0` and stock `scr_*` defaults; the fixture
 //! headers name them. Change any of those and the fixtures need retaking,
 //! because cvar defaults move slots.
@@ -55,16 +56,28 @@ fn retail(map: &str, gametype: &str) -> BTreeMap<usize, String> {
         .collect()
 }
 
-/// Our table at the same instant retail's was read: right after the scripts
-/// have loaded and every thread has reached its first wait.
-fn ours(map: &str, gametype: &str, fs: vcod_common::pk3::Pk3Fs) -> BTreeMap<usize, String> {
+/// Our table right after the scripts have loaded and every thread has
+/// reached its first wait, then `frames` server frames on. Retail's was read
+/// at a client's gamestate, seconds in, so a script that writes past its
+/// first wait (`re`'s `setHintString` sits behind a `wait 0`) needs the
+/// frames to have run.
+fn ours(
+    map: &str,
+    gametype: &str,
+    fs: vcod_common::pk3::Pk3Fs,
+    frames: u32,
+) -> BTreeMap<usize, String> {
     let fs = std::rc::Rc::new(fs);
-    let mut sv = vcod_server::server::Server::new(cfg(map, gametype), std::time::Instant::now());
+    let start = std::time::Instant::now();
+    let mut sv = vcod_server::server::Server::new(cfg(map, gametype), start);
     let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
     let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
     let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(fs).expect("load the scripts");
+    for i in 1..=frames {
+        sv.tick(start + std::time::Duration::from_millis(50 * u64::from(i)));
+    }
     (0..2048)
         .filter(|i| !sv.configstring(*i).is_empty())
         .map(|i| (i, sv.configstring(i).to_string()))
@@ -72,11 +85,15 @@ fn ours(map: &str, gametype: &str, fs: vcod_common::pk3::Pk3Fs) -> BTreeMap<usiz
 }
 
 fn check(map: &str, gametype: &str) {
+    check_after(map, gametype, 0);
+}
+
+fn check_after(map: &str, gametype: &str, frames: u32) {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
     let retail = retail(map, gametype);
-    let ours = ours(map, gametype, fs);
+    let ours = ours(map, gametype, fs, frames);
     let skip = |i: usize| STRUCTURAL_SKIP.contains(&i) || GAPS.iter().any(|(g, _)| *g == i);
 
     let mut diffs = Vec::new();
@@ -132,4 +149,19 @@ fn the_configstring_table_matches_retail_on_mp_carentan() {
 #[test]
 fn the_configstring_table_matches_retail_on_mp_carentan_sd() {
     check("mp_carentan", "sd");
+}
+
+/// `re` on the one map whose script fogs with `setExpFog`: the bootstrap's
+/// string set, configstring 12's exponent-form density and the two
+/// objectives' `setHintString` slots behind the engine's own 1212/1213.
+#[test]
+fn the_configstring_table_matches_retail_on_mp_chateau_re() {
+    check_after("mp_chateau", "re", 2);
+}
+
+/// `bel`, whose bootstrap runs `_teams` against `team_germanonly` and whose
+/// `_gameobjects` pass keeps only the `bel` objects mp_brecourt places.
+#[test]
+fn the_configstring_table_matches_retail_on_mp_brecourt_bel() {
+    check_after("mp_brecourt", "bel", 2);
 }
