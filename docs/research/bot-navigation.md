@@ -111,8 +111,8 @@ strongly connected component holding the most of them.
 ## 3. Following
 
 The brain stays pure. Each tick the server asks `Bot::goal(&BotView)` for a
-`Goal`: `Hold` (dead, spectating, mid-throw), `To(point)` (the enemy it sees)
-or `Roam`. A per-bot `nav::Follower` turns that into `BotView::waypoint`:
+`Goal`: `Hold` (dead, spectating, mid-throw), `To(point)` (the enemy it sees,
+else a spot it remembers or heard, section 4) or `Roam`. A per-bot `nav::Follower` turns that into `BotView::waypoint`:
 
 - A* (Euclidean cost and heuristic) from the node nearest the bot to the node
   nearest the goal, at most two A* runs per server tick across all bots.
@@ -134,3 +134,37 @@ whether it has a waypoint or not. Engaging an enemy overrides all of it.
 In S&D the objective names the point and can hold the bot still
 (`bot-objectives.md`); a bot standing at its objective or linked by the
 script is never counted as stuck.
+
+## 4. Memory and hearing
+
+Two goals sit between a visible enemy and `Roam`, both kept by the brain
+(`Bot::remember`, `Bot::recall_goal`) from what `BotView` carries.
+
+- Memory. Every tick an enemy is visible, its chest point pushed
+  `MEMORY_LEAD_S` (0.5 s) along its velocity (`EnemyView::velocity`) is
+  remembered. Out of sight the spot stays a goal for `Skill::memory_ticks`
+  (100, 5 s) and is dropped once the bot stands within 64 units of it
+  horizontally and 96 vertically. The memory outlives the target's identity
+  (`forget_ticks`, 1 s): an enemy back in sight after that is a new target
+  with a full reaction delay, as before.
+- Pre-aim. While a remembered spot within `SHOOT_RANGE` is a goal and the
+  waypoint is level, the view turns toward the spot at `turn_deg` per tick
+  and the move keys are rotated so the body keeps the path. Ladder and ledge
+  waypoints keep the path's own view.
+- Hearing. The server records a noise for every `EV_FIRE_WEAPON` shot in the
+  per-cmd attack pass (grenade throws and melee excluded) and for every blast
+  the missile pass sets off, chest high at the shooter or the blast, with the
+  client it belongs to. `step_bots` takes the list at the top of the next
+  tick and hands each bot the loudest one it did not make (`bots::loudest`:
+  the smallest distance over range, inside range). No line of sight is
+  needed. Teammates' fire counts: a friend shooting means an enemy near him.
+- A heard noise is a goal for `Skill::noise_ticks` (200, 10 s, about 2200
+  units at run speed) and is replaced by any newer one, but never replaces the
+  spot of a seen enemy.
+
+Ranges: `HEAR_GUNFIRE` 2000 and `HEAR_BLAST` 1500 units. VERIFIED
+(`soundaliases/iw_sound.csv` in `pak1.pk3`): every rifle, pistol and gun
+`weap_*_fire` alias has `dist_max` 7800 (one `airfield` variant of the MP40
+has 3000), the grenade throws 350, and `grenade_explode_*` 6000. 7800 covers
+most of a stock map and would pull every bot to every fight, so the bot
+ranges are a choice that keeps roughly the aliases' 1.3 ratio, not retail data.

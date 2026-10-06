@@ -919,6 +919,9 @@ pub struct Server {
     /// Each bombzone's `(mins, maxs)` and the stand `site_stand` picked in
     /// it, for the life of the nav graph.
     bot_sites: Vec<([f32; 3], [f32; 3], [f32; 3])>,
+    /// The shots and blasts since the bots last listened, in sim order;
+    /// `step_bots` takes them at the top of the next tick.
+    bot_noises: Vec<crate::bots::Noise>,
     /// The frames the killcam replays, kept while script has `setarchive`
     /// on and cleared by every level load (`crate::archive`).
     archive: crate::archive::Archive,
@@ -1062,6 +1065,7 @@ impl Server {
             nav: None,
             bot_paths: BTreeMap::new(),
             bot_sites: Vec::new(),
+            bot_noises: Vec::new(),
             archive: Default::default(),
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
@@ -1987,6 +1991,7 @@ impl Server {
     /// queue when the sim reads it. Four passes, because the brains need the
     /// whole of `self` to think and their writes land after.
     fn step_bots(&mut self) {
+        let noises = std::mem::take(&mut self.bot_noises);
         if self.cfg.bots == 0 {
             return;
         }
@@ -2067,6 +2072,7 @@ impl Server {
                     self.bot_enemies.get(slot)?.1
                 };
                 let mut view = self.bot_view(*slot, enemy)?;
+                view.noise = crate::bots::loudest(&noises, *slot, view.origin);
                 view.sd = sd.as_ref().and_then(|(attackers, defenders, sd)| {
                     let team = teams.get(*slot).copied().unwrap_or(0);
                     let role = if team == *attackers {
@@ -2260,6 +2266,7 @@ impl Server {
             waypoint: None,
             linked: sim.link_to.is_some(),
             sd: None,
+            noise: None,
         })
     }
 
@@ -2398,6 +2405,7 @@ impl Server {
                 crate::bots::EnemyView {
                     slot: i,
                     origin: (s.ps.origin + glam::Vec3::Z * 40.0).into(),
+                    velocity: s.ps.velocity.into(),
                 },
             ));
         }
@@ -2448,6 +2456,7 @@ impl Server {
         self.nav = None;
         self.bot_paths.clear();
         self.bot_sites.clear();
+        self.bot_noises.clear();
     }
 
     /// The cvar table a gametype script starts with: the engine defaults,
@@ -3244,6 +3253,14 @@ impl Server {
             }
             // What the radius damage pass charges, on this same frame.
             self.pending_explosions = frame.exploded;
+            if self.cfg.bots > 0 {
+                self.bot_noises
+                    .extend(self.pending_explosions.iter().map(|x| crate::bots::Noise {
+                        at: (x.at + glam::Vec3::Z * 40.0).into(),
+                        source: x.owner,
+                        radius: crate::bots::HEAR_BLAST,
+                    }));
+            }
             // The client commands the packet pass queued, on this frame's
             // clock: a thread started here sees `level.time` already
             // advanced, which is what a `cloneplayer` in it needs.
@@ -3953,17 +3970,26 @@ impl Server {
                             aim: sim.aim_angles(),
                         })
                     }
-                    EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT => attacks.push(Attack::Shot(Shot {
-                        slot,
-                        weapon,
-                        ads: sim.ps.weapon_pos_frac == 1.0,
-                        aim: sim.aim_angles(),
-                        stance: vcod_common::pmove::weapon::SpreadStance::of(
-                            &sim.ps,
-                            cmd.server_time,
-                            now_ms,
-                        ),
-                    })),
+                    EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT => {
+                        if self.cfg.bots > 0 {
+                            self.bot_noises.push(crate::bots::Noise {
+                                at: (sim.ps.origin + glam::Vec3::Z * 40.0).into(),
+                                source: slot,
+                                radius: crate::bots::HEAR_GUNFIRE,
+                            });
+                        }
+                        attacks.push(Attack::Shot(Shot {
+                            slot,
+                            weapon,
+                            ads: sim.ps.weapon_pos_frac == 1.0,
+                            aim: sim.aim_angles(),
+                            stance: vcod_common::pmove::weapon::SpreadStance::of(
+                                &sim.ps,
+                                cmd.server_time,
+                                now_ms,
+                            ),
+                        }));
+                    }
                     EV_FIRE_MELEE => attacks.push(Attack::Swing {
                         slot,
                         weapon,
