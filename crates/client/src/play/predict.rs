@@ -1,7 +1,9 @@
 //! Client-side prediction: the newest snapshot's playerstate with every cmd
 //! the server has not run yet replayed on top through the server's own step
 //! (`vcod_common::pmove::predict`), and retail's `cg_errordecay` easing out
-//! what a new snapshot corrects.
+//! what a new snapshot corrects. The snapshot's brush models are clipped
+//! where they stood at its time, and a mover the player stands on carries
+//! the drawn origin on from there (`vcod_common::pmove::movers`).
 
 use super::cmds::{CMD_MS, CmdRing};
 use glam::Vec3;
@@ -10,6 +12,7 @@ use vcod_common::collision::CollisionWorld;
 use vcod_common::movetrace::{Body, CONTENTS_BODY, MoveWorld};
 use vcod_common::net::msg;
 use vcod_common::net::protocol::Protocol;
+use vcod_common::pmove::movers::SnapshotMovers;
 use vcod_common::pmove::predict::{self, Predicted};
 use vcod_common::weapon::WeaponDef;
 
@@ -23,7 +26,7 @@ const EF_TELEPORT: i32 = 0x8;
 const EF_CAPSULE: i32 = 0x10;
 const ET_PLAYER: i32 = 1;
 const ET_ITEM: i32 = 3;
-/// A brush submodel's `solid`; its brushes are already in the world.
+/// A brush submodel's `solid`; `SnapshotMovers` clips those.
 const SOLID_BMODEL: i32 = 0xffffff;
 
 /// What the camera draws for a predicted frame.
@@ -39,11 +42,13 @@ pub struct PredictedView {
     pub pred: Predicted,
 }
 
-/// The replay drawn last frame, and the snapshot playerstate and bodies it
-/// started from.
+/// The replay drawn last frame, and the snapshot playerstate, bodies and
+/// brush models it started from.
 struct Replay {
     snap: msg::PlayerState,
     bodies: Vec<Body>,
+    /// The snapshot's brush models and its serverTime, where they are posed.
+    movers: (SnapshotMovers, i32),
     pred: Predicted,
     /// `(commandTime, origin, view height)` after each of the last few cmds
     /// run, oldest first; the camera samples between them.
@@ -55,10 +60,16 @@ struct Replay {
 const RESULTS: usize = 6;
 
 impl Replay {
-    fn new(snap: &msg::PlayerState, bodies: &[Body], pred: Predicted) -> Self {
+    fn new(
+        snap: &msg::PlayerState,
+        bodies: &[Body],
+        movers: &(SnapshotMovers, i32),
+        pred: Predicted,
+    ) -> Self {
         let mut r = Replay {
             snap: snap.clone(),
             bodies: bodies.to_vec(),
+            movers: movers.clone(),
             pred,
             results: VecDeque::with_capacity(RESULTS),
         };
@@ -112,6 +123,13 @@ impl Replay {
         (o0.lerp(o1, f), h0 + (h1 - h0) * f)
     }
 
+    /// `origin` carried by the ground mover from the snapshot's time to `t`,
+    /// retail's `CG_AdjustPositionForMover` (cgame 0x3001baa0).
+    fn carry(&self, origin: Vec3, ground: u32, t: i32) -> Vec3 {
+        let (movers, at) = &self.movers;
+        movers.carry(origin, ground as i32, *at, t)
+    }
+
     /// Runs every cmd past `pred.command_time`, oldest first, calling
     /// `after` after each; returns how many ran.
     fn run(
@@ -140,7 +158,8 @@ pub struct Predictor {
     /// Frames drawn unpredicted because the cmd history did not reach back
     /// to the snapshot's `commandTime`.
     pub misses: u64,
-    /// Last frame's predicted `commandTime` and origin, uncorrected.
+    /// Last frame's predicted `commandTime` and origin, uncorrected and
+    /// carried to that `commandTime` by its ground mover.
     last: Option<(i32, Vec3)>,
     /// The teleport bit of the snapshot last predicted from.
     teleport: Option<bool>,
@@ -171,10 +190,11 @@ pub struct Predictor {
 }
 
 impl Predictor {
-    /// `ps` is the newest snapshot's playerstate, ours, and `bodies` what it
-    /// clips against besides the map ([`solid_bodies`]); `None` when its
-    /// `pm_type` is not one the client predicts, or when the cmd history no
-    /// longer reaches back to its `commandTime` (a miss).
+    /// `ps` is the newest snapshot's playerstate, ours, `bodies` what it
+    /// clips against besides the map ([`solid_bodies`]), and `movers` its
+    /// brush models with its serverTime; `None` when its `pm_type` is not one
+    /// the client predicts, or when the cmd history no longer reaches back
+    /// to its `commandTime` (a miss).
     #[allow(clippy::too_many_arguments)]
     pub fn predict(
         &mut self,
@@ -183,6 +203,7 @@ impl Predictor {
         ring: &CmdRing,
         world: &CollisionWorld,
         bodies: &[Body],
+        movers: &(SnapshotMovers, i32),
         weapons: &[Option<WeaponDef>],
         now_ms: f64,
     ) -> Option<PredictedView> {
@@ -190,6 +211,9 @@ impl Predictor {
             self.reset();
             return None;
         }
+        // Retail clips each brush model at the snapshot's time, not per cmd
+        // (`CG_ClipMoveToEntities`, cgame 0x30028e58).
+        movers.0.place(world, movers.1);
         let world = &MoveWorld::new(world, bodies, ps.field_i32(p, "clientNum") as u32);
         if now_ms - self.log_ms >= 1000.0 {
             log::debug!("predict: max correction {:.2}u", self.max_correction);
@@ -205,13 +229,17 @@ impl Predictor {
         let unchanged = self
             .replay
             .as_ref()
-            .is_some_and(|r| r.snap == *ps && r.bodies == bodies);
-        if !unchanged && !self.replay_snapshot(p, ps, ring, world, weapons, now_ms) {
+            .is_some_and(|r| r.snap == *ps && r.bodies == bodies && r.movers == *movers);
+        if !unchanged && !self.replay_snapshot(p, ps, ring, world, movers, weapons, now_ms) {
             return None;
         }
         let r = self.replay.as_ref().expect("replayed above");
         let pred = r.pred;
-        self.last = Some((pred.command_time, pred.ps.origin));
+        let ground = pred.ps.ground_entity_num();
+        self.last = Some((
+            pred.command_time,
+            r.carry(pred.ps.origin, ground, pred.command_time),
+        ));
         let error = self.error * self.decay(now_ms);
         self.drawn_error = Some(error.length());
         let newest = f64::from(pred.command_time);
@@ -222,6 +250,7 @@ impl Predictor {
         .clamp(newest - f64::from(2 * CMD_MS), newest);
         self.drawn = Some((t, now_ms));
         let (origin, view_height) = r.sample(t);
+        let origin = r.carry(origin, ground, t as i32);
         Some(PredictedView {
             origin: origin - error,
             view_height,
@@ -233,12 +262,14 @@ impl Predictor {
     /// A new snapshot or moved bodies: rebuild from the snapshot, replay every
     /// cmd past its `commandTime`, and ease out what it corrected. False on a
     /// miss.
+    #[allow(clippy::too_many_arguments)]
     fn replay_snapshot(
         &mut self,
         p: &Protocol,
         ps: &msg::PlayerState,
         ring: &CmdRing,
         world: &MoveWorld,
+        movers: &(SnapshotMovers, i32),
         weapons: &[Option<WeaponDef>],
         now_ms: f64,
     ) -> bool {
@@ -266,20 +297,31 @@ impl Predictor {
             .filter(|c| c.server_time == command_time);
         let mut pred = predict::from_wire(p, ps, last_cmd);
         pred.ps.fall_heights = self.fall_heights;
-        let mut r = Replay::new(ps, world.bodies, pred);
+        let mut r = Replay::new(ps, world.bodies, movers, pred);
         if let Some(old) = &self.replay {
             r.carry_older(old);
         }
 
-        // Last frame's prediction against this one's at the same cmd: the
-        // correction the snapshot brought.
+        // Last frame's prediction against this one's at the same cmd, both
+        // carried to that cmd by their own snapshot's mover: the correction
+        // the snapshot brought, and nothing for the ride itself (Q3's miss
+        // test in `CG_PredictPlayerState`, cgame 0x3002972d).
         let last = self.last;
+        let carried = |pred: &Predicted| {
+            let (m, at) = movers;
+            m.carry(
+                pred.ps.origin,
+                pred.ps.ground_entity_num() as i32,
+                *at,
+                pred.command_time,
+            )
+        };
         let mut at_last = last
             .filter(|&(t, _)| t == r.pred.command_time)
-            .map(|_| r.pred.ps.origin);
+            .map(|_| carried(&r.pred));
         let n = r.run(ring, world, weapons, |pred| {
             if last.is_some_and(|(t, _)| t == pred.command_time) {
-                at_last = Some(pred.ps.origin);
+                at_last = Some(carried(pred));
             }
         });
         self.count(n);
@@ -373,6 +415,11 @@ mod tests {
 
     const P: &Protocol = &PROTOCOL_V1;
 
+    /// A snapshot with no brush models.
+    fn still() -> (SnapshotMovers, i32) {
+        Default::default()
+    }
+
     fn set(w: &mut msg::PlayerState, name: &str, v: i32) {
         w.fields[msg::PlayerState::field_index(P, name).unwrap()] = v;
     }
@@ -409,7 +456,10 @@ mod tests {
         let run = |oldest: i32| {
             let mut pr = Predictor::default();
             let r = ring((oldest..=5200).step_by(8), true);
-            (pr.predict(P, &snap, &r, &world, &[], &[], 0.0), pr.misses)
+            (
+                pr.predict(P, &snap, &r, &world, &[], &still(), &[], 0.0),
+                pr.misses,
+            )
         };
 
         let (v, misses) = run(5008);
@@ -427,8 +477,17 @@ mod tests {
 
         let mut pr = Predictor::default();
         assert!(
-            pr.predict(P, &snap, &CmdRing::default(), &world, &[], &[], 0.0)
-                .is_none()
+            pr.predict(
+                P,
+                &snap,
+                &CmdRing::default(),
+                &world,
+                &[],
+                &still(),
+                &[],
+                0.0
+            )
+            .is_none()
         );
         assert_eq!(pr.misses, 1);
     }
@@ -441,17 +500,20 @@ mod tests {
         let snap = standing(5000, 0.0);
         let mut r = ring((5008..=5040).step_by(8), true);
         let mut pr = Predictor::default();
-        pr.predict(P, &snap, &r, &world, &[], &[], 0.0).unwrap();
+        pr.predict(P, &snap, &r, &world, &[], &still(), &[], 0.0)
+            .unwrap();
         assert_eq!(pr.cmds_run, 5);
         r.push(UserCmd {
             server_time: 5048,
             forward: 127,
             ..Default::default()
         });
-        let v = pr.predict(P, &snap, &r, &world, &[], &[], 8.0).unwrap();
+        let v = pr
+            .predict(P, &snap, &r, &world, &[], &still(), &[], 8.0)
+            .unwrap();
         assert_eq!(pr.cmds_run, 6);
         let full = Predictor::default()
-            .predict(P, &snap, &r, &world, &[], &[], 8.0)
+            .predict(P, &snap, &r, &world, &[], &still(), &[], 8.0)
             .unwrap();
         assert_eq!(v.origin, full.origin);
         assert_eq!(v.pred.command_time, 5048);
@@ -515,13 +577,22 @@ mod tests {
         // 16 ms apart so the capped history still reaches the snapshot.
         let r = ring((5008..=6000).step_by(16), true);
         let v = Predictor::default()
-            .predict(P, &standing(5000, 0.0), &r, &world, &[body], &[], 0.0)
+            .predict(
+                P,
+                &standing(5000, 0.0),
+                &r,
+                &world,
+                &[body],
+                &still(),
+                &[],
+                0.0,
+            )
             .unwrap();
         let short = 60.0 - v.pred.ps.origin.x;
         assert!((30.0..31.0).contains(&short), "stopped {short} short");
 
         let open = Predictor::default()
-            .predict(P, &standing(5000, 0.0), &r, &world, &[], &[], 0.0)
+            .predict(P, &standing(5000, 0.0), &r, &world, &[], &still(), &[], 0.0)
             .unwrap();
         assert!(
             open.pred.ps.origin.x > 100.0,
@@ -546,16 +617,81 @@ mod tests {
             )]
         };
         let mut pr = Predictor::default();
-        pr.predict(P, &snap, &r, &world, &at(60.0), &[], 0.0)
+        pr.predict(P, &snap, &r, &world, &at(60.0), &still(), &[], 0.0)
             .unwrap();
         let moved = pr
-            .predict(P, &snap, &r, &world, &at(80.0), &[], 8.0)
+            .predict(P, &snap, &r, &world, &at(80.0), &still(), &[], 8.0)
             .unwrap();
         let fresh = Predictor::default()
-            .predict(P, &snap, &r, &world, &at(80.0), &[], 8.0)
+            .predict(P, &snap, &r, &world, &at(80.0), &still(), &[], 8.0)
             .unwrap();
         assert_eq!(moved.pred.ps.origin, fresh.pred.ps.origin);
         assert!(moved.pred.ps.origin.x > 45.0, "{}", moved.pred.ps.origin.x);
+    }
+
+    /// A player standing on a brush model that `movez(48, 2)` lifts from
+    /// 1000, resting 0.125 over its top as pmove leaves him: the drawn
+    /// origin rises with it between snapshots, and the next snapshot, which
+    /// the server carried 1.2 units up, corrects nothing.
+    #[test]
+    fn a_rider_is_carried_and_the_next_snapshot_corrects_nothing() {
+        let world = vcod_common::collision::submodel_test_world(
+            "{\n\"classname\" \"script_brushmodel\"\n\"model\" \"*1\"\n}\n",
+            &[([-64.0, -64.0, 0.0], [64.0, 64.0, 16.0])],
+        );
+        let slab = entity(
+            177,
+            &[
+                ("eType", 8),
+                ("solid", 0xffffff),
+                ("index", 1),
+                ("pos.trType", 3),
+                ("pos.trTime", 1000),
+                ("pos.trDuration", 2000),
+                ("pos.trDelta[2]", 24.0f32.to_bits() as i32),
+            ],
+            Vec3::ZERO,
+        );
+        let ents = BTreeMap::from([(177, slab)]);
+        let movers = |t| (SnapshotMovers::from_entities(P, &ents), t);
+        let on_slab = |ct: i32, z: f32| {
+            let mut w = standing(ct, 0.0);
+            set(&mut w, "origin[2]", z.to_bits() as i32);
+            set(&mut w, "groundEntityNum", 177);
+            w
+        };
+        let mut pr = Predictor::default();
+        let r = ring((1008..=1048).step_by(8), false);
+        let first = pr
+            .predict(
+                P,
+                &on_slab(1000, 16.125),
+                &r,
+                &world,
+                &[],
+                &movers(1000),
+                &[],
+                0.0,
+            )
+            .unwrap();
+        assert_eq!(first.pred.ps.ground_entity_num(), 177);
+        assert!((first.origin.z - 17.085).abs() < 1e-3, "{}", first.origin.z);
+
+        let r = ring((1008..=1056).step_by(8), false);
+        let next = pr
+            .predict(
+                P,
+                &on_slab(1048, 17.325),
+                &r,
+                &world,
+                &[],
+                &movers(1050),
+                &[],
+                8.0,
+            )
+            .unwrap();
+        assert!(pr.drawn_error().unwrap() < 1e-3, "{:?}", pr.drawn_error());
+        assert!((next.origin.z - 17.277).abs() < 1e-3, "{}", next.origin.z);
     }
 
     #[test]
@@ -566,7 +702,7 @@ mod tests {
         let r = ring((5008..=5040).step_by(8), false);
         assert!(
             Predictor::default()
-                .predict(P, &snap, &r, &world, &[], &[], 0.0)
+                .predict(P, &snap, &r, &world, &[], &still(), &[], 0.0)
                 .is_none()
         );
     }
@@ -578,13 +714,15 @@ mod tests {
         let world = test_world(&[]);
         let r = ring((5008..=5040).step_by(8), false);
         let mut pr = Predictor::default();
-        pr.predict(P, &standing(5000, 0.0), &r, &world, &[], &[], 0.0)
+        pr.predict(P, &standing(5000, 0.0), &r, &world, &[], &still(), &[], 0.0)
             .unwrap();
         let mut snap = standing(5016, x);
         if flip {
             set(&mut snap, "eFlags", 16 | 0x8);
         }
-        let v = pr.predict(P, &snap, &r, &world, &[], &[], 16.0).unwrap();
+        let v = pr
+            .predict(P, &snap, &r, &world, &[], &still(), &[], 16.0)
+            .unwrap();
         (v.origin.x, v.pred.ps.origin.x)
     }
 
@@ -605,12 +743,12 @@ mod tests {
         let r = ring((5008..=5040).step_by(8), false);
         let mut pr = Predictor::default();
         let first = pr
-            .predict(P, &standing(5000, 0.0), &r, &world, &[], &[], 0.0)
+            .predict(P, &standing(5000, 0.0), &r, &world, &[], &still(), &[], 0.0)
             .unwrap();
         assert_eq!(first.origin.x, 0.0);
         let snap = standing(5016, 10.0);
         let at = |pr: &mut Predictor, ms: f64| {
-            pr.predict(P, &snap, &r, &world, &[], &[], ms)
+            pr.predict(P, &snap, &r, &world, &[], &still(), &[], ms)
                 .unwrap()
                 .origin
                 .x
@@ -649,7 +787,7 @@ mod tests {
                     });
                 }
                 let s = if k >= resend_at { &resent } else { &snap };
-                pr.predict(P, s, &r, &world, &[], &[], local)
+                pr.predict(P, s, &r, &world, &[], &still(), &[], local)
                     .unwrap()
                     .origin
                     .x
@@ -748,7 +886,7 @@ mod tests {
                 if k > 0 && (local / 50.0).floor() != (prev_local / 50.0).floor() {
                     snap = wire(&truth[truth.len().saturating_sub(1 + unacked)]);
                 }
-                pr.predict(P, &snap, &r, &world, &[], &[], local)
+                pr.predict(P, &snap, &r, &world, &[], &still(), &[], local)
                     .unwrap()
                     .origin
                     .x

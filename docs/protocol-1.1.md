@@ -243,9 +243,10 @@ from +0x158. VERIFIED. That +0x158 is the `client` pointer, making them
 `SP_script_brushmodel` (0x60fb8) calls `trap_SetBrushModel` ahead of
 `InitScriptMover`. VERIFIED. That this is what gives it real bounds, leaving
 its box the brush's rather than a point, is INFERRED. Every `eType` 8 entity in
-the traces we hold carries a model configstring index (56 on carentan, 26 on
-pavlov), so all of them are `script_model`s. VERIFIED. Nothing we have captured
-pins the brushmodel case.
+the entity traces carries a model configstring index (56 on carentan, 26 on
+pavlov), so all of them are `script_model`s. VERIFIED. A `script_brushmodel`
+arrives as `eType` 8 with `solid` `0xffffff` and `index` its inline model
+number (`docs/research/cod11-movers.md` section 14). VERIFIED.
 
 #### What a map entity looks like
 

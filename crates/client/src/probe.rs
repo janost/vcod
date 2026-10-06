@@ -8967,7 +8967,8 @@ health={} seq={} events=[{},{},{},{}] parms=[{},{},{},{}]",
 /// push or ride writes: origin, velocity, ground entity, `pm_type` and the
 /// view yaw with the `delta_angles` yaw a rotating pusher adds to; and a
 /// `RIDE_ENT` line whenever a script mover's `solid`, `index` or `eFlags`
-/// changes. `client-probes/probe_ride` moves the mover; the trajectory lines
+/// changes, and a `RIDE_GONE` line when one leaves the snapshot.
+/// `client-probes/probe_ride` moves the mover; the trajectory lines
 /// `check_movers` prints are the mover's own half. Writes no fixture.
 #[derive(Default)]
 struct RideProbe {
@@ -8993,6 +8994,13 @@ impl RideProbe {
                 );
             }
         }
+        self.movers.retain(|num, _| {
+            let kept = snap.entities.contains_key(num);
+            if !kept {
+                println!("RIDE_GONE t={} num={num}", snap.server_time);
+            }
+            kept
+        });
         let i = |n: &str| snap.ps.field_i32(p, n);
         let f = |n: &str| f32::from_bits(snap.ps.field_i32(p, n) as u32);
         println!(

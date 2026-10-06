@@ -309,7 +309,9 @@ VERIFIED, off the capture:
   away it went on down.
 - **A verb on a moving entity.** A `moveto((0, 0, 0), 1)` called at 42250
   while the stalled descent was still running replaced it: the wire's new
-  `trBase` z 30 is what `getorigin()` read at the call.
+  `trBase` z 30 is the old trajectory at the call's level time, and its
+  `trDelta` z -32 is the 32 that `getorigin()` read a frame earlier. Section
+  14 has the second run that tells the two apart.
 - **The residual yaw.** After `rotateyaw(2, 1)` and `rotateyaw(-2, 1)` the
   slab's `apos.trBase` reads `-0.0` and the pushed player drifts +x by 0.021
   a frame while it is pushed, the slab's whole push turning about the world
@@ -347,9 +349,81 @@ angles at the link, so it cannot tell a parent-frame offset from a world one.
 vcod: the re-anchor reads `ScriptRuntime::link_anchor`, the mover's plan at
 the level time, and `linkTo` stores the offset in the parent's frame.
 
-## 14. The client's half
+## 14. The brush model on the wire, and the client's half
 
-Not implemented in vcod; read here for the follow-up.
+The evidence for the wire half is a third capture from the same probe with
+five phases added at its end (`hide`, `show`, `notsolid`, `solid`, `delete`
+on the slab), 2026-10-06:
+`crates/server/tests/fixtures/movers/mp_carentan-dm-ride-ents.txt`, the
+server's phase starts and the `--probe-ride` client's `RIDE_ENT` (the slab's
+`solid`, `index` and `eFlags` on change), `RIDE_GONE` and trajectory lines.
+
+VERIFIED, off that capture: both bombzone brush models arrive on the first
+snapshot as `eType` 8, `solid` `0xffffff`, `index` 5 and 6 (their inline
+model numbers) and `eFlags` 0. Model configstring 5 on that load is
+`xmodel/barrel_black1`, so the `index` of a `0xffffff` entity names an inline
+model, not a configstring slot. VERIFIED: `SV_LinkEntity` (cod_lnxded
+`0x80908b0`) stores `0xffffff` into `s.solid` when `r.bmodel` is set
+(`0x80908da`) before it reads `r.contents`.
+
+VERIFIED, off the capture: `hide()` at 53450 put `eFlags` `0x100` on the
+53450 snapshot and `show()` at 54450 took it off on the 54450 one; `notsolid()`
+and `solid()` changed nothing on the wire, the entity staying in every
+snapshot with `solid` `0xffffff`; `delete()` at 57450 took it out of the 57450
+snapshot. VERIFIED, game.mp: the per-entity runner `0x602bc` sets byte
+`ent+9` bit 1 (`s.eFlags` `0x100`) when byte `ent+0x17d` bit `0x10` (the
+`flags` `0x1000` `ScrCmd_Hide` writes) is set and clears it otherwise, for an
+entity with no client (`ent+0x158` zero). INFERRED: a `notSolid()`ed brush
+model is still sent as one, and the entity leaves the snapshot on the frame
+of the `delete()`, a tenth of a second before the free.
+
+VERIFIED, off the capture's trajectory lines: a move reads stationary on the
+snapshot of the frame its last segment ends (`ride_up`, called at 10450 for
+2 s, reads `trType` 0 `trTime` 12450 at 12450), a frame before script's
+`movedone` (section 8). Every frame the lowered slab is blocked, `trTime` of
+`pos` and of the stationary `apos` both advance 50 (section 12).
+
+VERIFIED, off the same: the `moveto((0, 0, 0), 1)` at 41450 on the
+descending slab sent `trBase` z 28 and `trDelta` z -30, where script read z
+30 at the call; the move ended at 42450 on `trBase` `(0, 0, 0)`. INFERRED:
+`trBase` is the old trajectory at the call's level time, the velocity is
+taken from `r.currentOrigin`, a frame behind it, and the stationary end is
+the destination rather than where the segment ran out (z -2). The first run's
+moveto (section 12) is the same rule with the slab 2 units higher.
+
+vcod: `crate::game::wire` sends a `script_brushmodel` as `eType` 8, `solid`
+`0xffffff`, `index` its `*N`, `eFlags` `0x100` while hidden, and drops it on
+`delete()`; `Movers::wire` hands the plans over advanced to the level time;
+`crate::world` culls a brush model by its inline model's bounds (a cube of
+their radius once its angles are not zero, `SV_LinkEntity`'s `r.bmodel`
+arm). `ride_ab.rs` diffs the slab's entity per snapshot against the capture.
+
+### The client
+
+VERIFIED, `cgame_mp_x86.dll`: case 8 of the entity-type switch at
+`0x3001d5f0` is `0x3001b710`, which returns without drawing when `eFlags`
+carries `0x100` (`test ah,0x1` at `0x3001b732`), and when `solid` is
+`0xffffff` (`0x3001b76d`, `0x3001b7de`) adds a ref entity of type 0 whose
+model is the table at `0x301d31c0` indexed by `es.index`, at the entity's
+interpolated origin (`cent+0x1f8`..`+0x200`); any other `eType` 8 entity is a
+type 1 ref entity from the xmodel table at `0x301d24fc`. INFERRED: a brush
+model draws only through its snapshot entity, at its interpolated pose, and
+a hidden one draws nothing.
+
+VERIFIED, a census of the 16 BSPs in the mounted paks: 30
+`script_brushmodel`s, none with an `origin` key, so every one's brushes and
+surfaces are in world space; the only submodels with draw surfaces belong to
+`script_brushmodel`s (18 of them); carentan's bombzones `*5` and `*6` carry
+none. INFERRED: the ride capture's slab is clip only, drawn by nothing on
+retail either.
+
+vcod: `entities::resolve_visual` takes a `0xffffff` entity's `index` as its
+inline model and skips one with `eFlags` `0x100`. A brush model whose entity
+stands at the zero pose draws with the world, lightmapped; one that has moved
+draws as a dynamic instance at its interpolated pose, under the dynamic
+models' fixed key light; one with no entity in the snapshot draws nowhere
+(`Renderer::set_static_submodels`). With no server, every one draws at
+spawn.
 
 VERIFIED, `cgame_mp_x86.dll`: `CG_ClipMoveToEntities` (`0x30028df0`) takes
 an entity whose `solid` is `0xffffff` down a separate arm that calls syscall
@@ -367,12 +441,38 @@ four times and writes `in + (a - b)` and an angle delta;
 Q3's `CG_AdjustPositionForMover`, carrying the predicted origin with the
 ground entity's motion between the snapshot time and the render time.
 
-VERIFIED, off a second `--probe-ride` run against the same probe
-(`RIDE_ENT` lines, 2026-10-05, not kept): retail sends both bombzone brush
-models to a client in range as `eType` 8 with `solid` `0xffffff` and `index`
-5 and 6, their inline model numbers, and `eFlags` 0. Model configstring 5 on
-that load is `xmodel/barrel_black1`. INFERRED: a `0xffffff` entity's `index`
-names an inline model, not a configstring slot. vcod's server does not put a
-`script_brushmodel` on the wire yet (`crate::game::wire`, `kind_of`), and
-vcod's client resolves every mover's `index` through the model configstrings
-(`crates/client/src/entities.rs`), so it would draw the barrel.
+VERIFIED, cgame: `CG_BuildSolidList` (`0x30028d50`) walks the snapshot's
+entities and skips one whose next state has `solid` `0xffffff`
+(`0x30028d93`) and `eFlags` bit `0x2` (`test byte [eax+0xf8],0x2` at
+`0x30028d9b`); `SP_trigger_multiple`, `SP_trigger_damage` and
+`SP_trigger_once` (game.mp `0x74c50`, `0x75278`, `0x75c0c`) are the writers
+of that bit read so far. VERIFIED: the brush model arm of
+`CG_ClipMoveToEntities` evaluates `apos` and `pos` (`0x30028e67`,
+`0x30028e78`) at the time held in `0x30207150`, which `CG_PredictPlayerState`
+loads from the snapshot's `serverTime` (`snap+8`). VERIFIED: the carry after
+the cmd loop (`0x30029a2e`) passes the dword at `0x302071b0` as the entity
+number, that time, the dword at `0x30207148` as the target time and the
+predicted origin at `0x30207170` as both in and out; the angle delta it
+writes to `[esp+0x34]` is not read again before the function returns. The
+second call site is `0x3002972d`, inside the cmd loop. INFERRED: the entity
+is the predicted `groundEntityNum` and the target time `cg.time`; retail
+clips a brush model where it stood at the snapshot, not per cmd, carries the
+predicted origin by the ground mover's translation only, so a rider of a
+turning mover is predicted standing still between snapshots; and the second
+site is Q3's miss test, which carries the new replay's origin at the old
+prediction's `commandTime` before comparing, so a ride is no correction.
+INFERRED, off the `eFlags` test and section 14's wire: a `notSolid()`ed
+brush model still in the snapshot is clipped by retail's prediction, as the
+four exploder brush models `_load.gsc` hides and `notSolid()`s are (mp_depot
+`*1`, mp_powcamp `*3` and `*9`, mp_rocket `*3`; cod11-mantle.md).
+
+vcod: `vcod_common::pmove::movers::SnapshotMovers` is that solid list and
+that carry. The client unlinks every submodel at map load, and each
+prediction links and poses the snapshot's brush models at its `serverTime`,
+naming each by its entity so a ground trace reads it; the replay's newest
+origin and the drawn origin are carried by the ground mover, and the
+correction compares both sides carried to the old `commandTime`.
+`predict_ab.rs`'s `predictor_rides_retail_movers` predicts the ride capture's
+rider from each snapshot to the next against retail's next playerstate:
+exact to 0.05 through every carried phase, 4.3 units out through the two yaw
+phases, as retail's own prediction is.

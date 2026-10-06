@@ -943,13 +943,15 @@ The client (`crates/client/src/play/predict.rs`, `main.rs`): the predictor
 lands with `FallHeights::from_systeminfo` of configstring 1, reread at each
 gamestate and each change. `solid_bodies`
 builds the body list from the newest snapshot, skipping the own client,
-`solid` 0, `solid` 0xffffff (a brush model, already in the map) and `eType`
-3, and logging and skipping a solid entity without `eFlags` 0x10. Contents
-are BODY for `eType` 1 and 0x1 otherwise. The origin is where the renderer
-drew the entity on the previous frame (`LivePhase.drawn_pos`), else its
-`trBase`. The predictor keeps its last replay only while both the snapshot
-playerstate and the body list are unchanged; any body that moved costs a
-full replay that frame.
+`solid` 0, `solid` 0xffffff (a brush model, which
+`vcod_common::pmove::movers` clips instead, `docs/research/cod11-movers.md`
+section 14) and `eType` 3, and logging and skipping a solid entity without
+`eFlags` 0x10. Contents are BODY for `eType` 1 and 0x1 otherwise. The origin
+is where the renderer drew the entity on the previous frame
+(`LivePhase.drawn_pos`), else its `trBase`. The predictor keeps its last
+replay only while the snapshot playerstate, the body list and the snapshot's
+brush models are unchanged; any body that moved costs a full replay that
+frame.
 
 The gates:
 

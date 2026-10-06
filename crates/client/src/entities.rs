@@ -49,6 +49,10 @@ pub const ET_INVISIBLE: i32 = 7;
 pub const ET_SCRIPTMOVER: i32 = 8;
 /// `eFlags` bit that hides an entity's model.
 const EF_NODRAW: i32 = 0x100;
+/// `solid` of a brush model entity, whose `index` is then an inline model
+/// number rather than a model configstring slot
+/// (docs/research/cod11-movers.md, section 14).
+pub const SOLID_BMODEL: i32 = 0xff_ffff;
 /// 12, not Q3's 13 (CoDExtended shared.h:445).
 #[cfg_attr(not(test), allow(dead_code))] // only tests name it
 pub const ET_EVENTS: i32 = 12;
@@ -146,8 +150,11 @@ pub fn resolve_visual(
         }
         ET_GENERAL | ET_SCRIPTMOVER | ET_MOVER => {
             let mi = ent.field_i32(p, "index");
-            if mi <= 0 {
+            if mi <= 0 || (etype == ET_SCRIPTMOVER && ent.field_i32(p, "eFlags") & EF_NODRAW != 0) {
                 return EntityVisual::None;
+            }
+            if ent.field_i32(p, "solid") == SOLID_BMODEL {
+                return EntityVisual::Submodel(mi as usize);
             }
             let s = cs(CS_MODELS_V1 + mi as usize);
             if let Some(sub) = s.strip_prefix('*').and_then(|n| n.parse::<usize>().ok()) {
@@ -598,10 +605,9 @@ fn resolve_turret_rig<'a>(
     cache.get_mut(name).unwrap().as_mut()
 }
 
-/// Uploads inline BSP submodel `n`, caching the result. Nothing on stock 1.1 MP
-/// exercises this (docs/research/clientstate-wire-format.md, "ET_MOVER and
-/// inline BSP submodels"). `mesh::build_batches` already bakes every submodel
-/// into the static world, so a mover that did arrive would draw twice.
+/// Uploads inline BSP submodel `n`, caching the result: a brush model that
+/// has moved off its spawn pose. At rest it draws with the world instead,
+/// lightmapped; this path has the dynamic models' fixed key light.
 fn resolve_submodel(
     cache: &mut HashMap<usize, Option<ModelHandle>>,
     renderer: &mut Renderer,
@@ -729,6 +735,9 @@ pub struct BuiltScene {
     pub entity_pos: HashMap<u32, Vec3>,
     /// The gun `b.ps` rides, when it was drawn: the first-person eye.
     pub turret_eye: Option<TurretEye>,
+    /// Inline models whose entity stands where the map put them, drawn with
+    /// the world ([`Renderer::set_static_submodels`]).
+    pub static_submodels: Vec<usize>,
 }
 
 /// Builds this frame's live-entity draw list from the interpolation pair
@@ -788,6 +797,7 @@ pub fn build_instances(
     let mut weapon_flash: HashMap<i32, String> = HashMap::new();
     let mut entity_pos: HashMap<u32, Vec3> = HashMap::new();
     let mut turret_eye = None;
+    let mut static_submodels = Vec::new();
     let ps_int = |name: &str| b.ps.field_i32(p, name);
     let ridden = turret::ridden(
         ps_int("eFlags"),
@@ -1118,6 +1128,13 @@ pub fn build_instances(
                 });
             }
             EntityVisual::Submodel(n) => {
+                // At rest where the map put it, which is the zero pose: no
+                // stock `script_brushmodel` carries an `origin` key, so its
+                // brushes and surfaces are in world space.
+                if pos.abs().max_element() < 0.01 && angles.abs().max_element() < 0.01 {
+                    static_submodels.push(n);
+                    continue;
+                }
                 let Some(handle) = resolve_submodel(submodel_cache, renderer, fs, bsp, n) else {
                     continue; // collision-only submodel: nothing to draw
                 };
@@ -1255,6 +1272,7 @@ pub fn build_instances(
         weapon_flash,
         entity_pos,
         turret_eye,
+        static_submodels,
     }
 }
 
@@ -1395,6 +1413,28 @@ mod tests {
         );
         gun.fields[EntityState::field_index(p, "eFlags").unwrap()] = EF_NODRAW;
         assert_eq!(resolve_visual(&gun, &none, &cs, p), EntityVisual::None);
+    }
+
+    /// A `0xffffff` script mover's `index` is its inline model, not the
+    /// model configstring slot of the same number, and `EF_NODRAW` hides it
+    /// (docs/research/cod11-movers.md, section 14).
+    #[test]
+    fn a_brush_model_resolves_to_its_inline_model_unless_nodraw() {
+        let p = &PROTOCOL_V1;
+        let cs = cs_table();
+        let none = BTreeMap::new();
+        let mut slab = ent(ET_SCRIPTMOVER, 0, 9);
+        assert_eq!(
+            resolve_visual(&slab, &none, &cs, p),
+            EntityVisual::Model("crate_misc1".into())
+        );
+        slab.fields[EntityState::field_index(p, "solid").unwrap()] = SOLID_BMODEL;
+        assert_eq!(
+            resolve_visual(&slab, &none, &cs, p),
+            EntityVisual::Submodel(9)
+        );
+        slab.fields[EntityState::field_index(p, "eFlags").unwrap()] = EF_NODRAW;
+        assert_eq!(resolve_visual(&slab, &none, &cs, p), EntityVisual::None);
     }
 
     #[test]
