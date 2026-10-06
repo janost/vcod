@@ -690,3 +690,33 @@ where retail's stands at -31.00, its body leaves two of slot 2's five
 probes clear where retail's left none, and slot 2 takes 133 on
 `lethal_high`; the
 `same_frame_high` callbacks run 2 then 3 where retail's ran 3 then 2.
+
+## probe_itemdrop
+
+The item flight, landing and respawn capture's server half, on mp_carentan
+with one allied player. With the full loadout it first spawns an
+`item_health` at the feet of a player at 40 health with `random` 0.5, then a
+colt with spawnflags 8 after emptying the pistol's reserve, each taken by
+walking onto it, and moves the player off each so the return stays on the
+ground. Then four `dropItem` drops (the held carbine onto flat ground, the
+colt into a wall 60 units ahead, the frag down a slope, and `item_health`)
+and three script spawns (a carbine 72 units in the air, a `dropHealth`-style
+pack at the feet, a colt with spawnflags 1). It logs `PROBE spawned`, `PROBE
+drop` (with the player's and the item's origin and angles), `PROBE trigger`,
+one `PROBE at` per frame a tracked item's `origin` or `angles` changed and a
+`PROBE rest` once they have held for 3 s. `wait` is a gsc keyword, so the
+pack's respawn goes through `random`. The client half, `--probe-items`,
+prints an `ITEM` line per snapshot an item entity appeared or changed in and
+an `ITEM_GONE` when it left. Neither half writes a file; the two runs' lines
+were concatenated into
+`crates/server/tests/fixtures/items/mp_carentan-dm-itemdrop.txt`, read in
+`docs/research/cod11-items.md` 14 and gated by
+`crates/server/tests/itemdrop_ab.rs`.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=115 \
+    tools/run_probe.sh client-probes/probe_itemdrop mp_carentan
+# second shell, about 15 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-items --probe-secs 90
+```
+

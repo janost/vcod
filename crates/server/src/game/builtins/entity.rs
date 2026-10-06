@@ -226,32 +226,36 @@ fn client_spawn(
     Ok(Value::Undefined)
 }
 
-/// `spawn(classname, origin)`: a live entity with both fields set, numbered
-/// after everything already in the table. An item classname makes an item
-/// (`dm.gsc`'s `dropHealth` spawns `item_health`).
+/// `spawn(classname, origin [, spawnflags])` (0x5d268): a live entity with
+/// the fields set, numbered after everything already in the table. An item
+/// classname makes an item (`dm.gsc`'s `dropHealth` spawns `item_health`).
 fn spawn_entity(host: &mut GameHost, cx: &mut Cx, args: &[Value]) -> Result<Value, ErrorKind> {
-    let [Value::String(cls), Value::Vector(at)] = args else {
-        return Err(ErrorKind::BadType("spawn takes a classname and an origin"));
+    let (cls, at, flags) = match args {
+        [Value::String(cls), Value::Vector(at)] => (*cls, *at, 0),
+        [Value::String(cls), Value::Vector(at), Value::Int(flags)] => (*cls, *at, *flags),
+        _ => {
+            return Err(ErrorKind::BadType(
+                "spawn takes a classname, an origin and optional spawnflags",
+            ));
+        }
     };
-    let (cls, at) = (*cls, *at);
     let id = host.ents.spawn(cx)?;
     let cn = cx.intern_folded("classname");
     host.set_field(cx, id, cn, Value::String(cls))?;
     let og = cx.intern_folded("origin");
     host.set_field(cx, id, og, Value::Vector(at))?;
+    if flags != 0 {
+        let sf = cx.intern_folded("spawnflags");
+        host.set_field(cx, id, sf, Value::Int(flags))?;
+    }
     // `G_SpawnItem` for a `bg_itemlist` classname: registered and an item
-    // now, landed a frame later the way `G_RunItem` lands it, so the angles
-    // the script writes after `spawn` returns are what the landing aligns.
+    // now, falling from this frame's item pass, so the angles the script
+    // writes after `spawn` returns are what the landing aligns.
     let name = cx.resolve(cls).to_string();
     if let Some(index) = crate::items::classname_index(&name) {
         let item = crate::items::item_name(index).unwrap_or(&name).to_string();
         host.register_item(&item);
-        crate::game::item::attach(host, id, index);
-        // Unset angles are the zero the landing aligns from.
-        let angles = cx.intern_folded("angles");
-        host.set_field(cx, id, angles, Value::Vector([0.0; 3]))?;
-        host.ents
-            .schedule(id, ThinkFn::SettleItem, host.level_time_ms + 1);
+        crate::game::item::spawn_in_place(host, cx, id, index, flags);
     }
     Ok(Value::Entity(id))
 }
@@ -725,13 +729,13 @@ mod tests {
         assert_eq!(e.field_i32(p, "eType"), 3);
         assert_eq!(e.field_i32(p, "index"), 68);
         assert_eq!(e.field_i32(p, "clientNum"), 254);
-        assert_eq!(e.field_i32(p, "groundEntityNum"), 1022);
+        assert_eq!(e.field_i32(p, "groundEntityNum"), 1023, "not landed yet");
     }
 
     /// `dropHealth()`'s shape: `spawn("item_health", ..)`, then a random yaw
-    /// written into `.angles` before the frame ends. The pack lands on the
-    /// next think pass, so the landing aligns the script's yaw to the slope
-    /// rather than the script's write flattening an earlier alignment.
+    /// written into `.angles` before the frame ends. The pack falls from the
+    /// item pass, so the landing aligns the script's yaw to the slope rather
+    /// than the script's write flattening an earlier alignment.
     #[test]
     fn a_script_spawned_item_health_lands_on_the_slope_facing_the_scripts_yaw() {
         let (mut vm, mut host) = fixture();
@@ -752,7 +756,9 @@ mod tests {
                 .unwrap();
             assert_eq!(host.get_field(cx, id, origin), at, "landed inside spawn");
 
-            host.run_entity_thinks(cx, 1_050);
+            for t in (1_000..2_500).step_by(50) {
+                crate::game::item::run_items(&mut host, cx, t);
+            }
             let Value::Vector(o) = host.get_field(cx, id, origin) else {
                 panic!("the item has an origin");
             };

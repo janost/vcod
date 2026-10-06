@@ -201,10 +201,6 @@ pub enum ThinkFn {
     /// `DroppedItemClearOwner` (0x4efb4): the dropper may take its own drop
     /// again (docs/research/cod11-items.md, section 8).
     ClearOwner,
-    /// `G_RunItem`'s landing for a script-spawned item: floored and aligned
-    /// a frame after `spawn`, off whatever angles the script wrote since
-    /// (docs/research/cod11-items.md section 9).
-    SettleItem,
 }
 
 pub struct ObjectTable {
@@ -511,8 +507,7 @@ impl ObjectTable {
     /// Returns the thinks the table cannot run itself: `ThinkFn::Free`, so
     /// the caller can route each through `GameHost::free_entity`, which is
     /// the only place the host's own per-entity tables (the trigger row) are
-    /// dropped, and `ThinkFn::SettleItem`, which needs the world and the
-    /// VM. `Missiles::run` has the same shape for the same reason.
+    /// dropped. `Missiles::run` has the same shape for the same reason.
     #[must_use]
     pub fn run_thinks(&mut self, now_ms: i32) -> Vec<(EntId, ThinkFn)> {
         let due: Vec<(EntId, ThinkFn)> = self
@@ -534,7 +529,7 @@ impl ObjectTable {
                 e.nextthink = 0;
             }
             match think {
-                ThinkFn::Free | ThinkFn::SettleItem => left.push((id, think)),
+                ThinkFn::Free => left.push((id, think)),
                 ThinkFn::ClearOwner => {
                     if let Some(item) = self.get_mut(id).and_then(|e| e.item.as_mut()) {
                         item.owner = None;

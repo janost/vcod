@@ -99,6 +99,8 @@ pub struct Save {
     pub fall: bool,
     /// `--probe-ride`: print every snapshot's movement fields, no fixture.
     pub ride: bool,
+    /// `--probe-items`: print every snapshot an item changed, no fixture.
+    pub items: bool,
 }
 
 /// Which script the two halves of the hit capture run. The target's own
@@ -205,6 +207,7 @@ pub fn probe(
         killcam_skip_ms,
         fall: probe_fall,
         ride: probe_ride,
+        items: probe_items,
     } = save;
     // The two map-cycle captures record the same lines; the flag picks the
     // role and, for the round restart, which half of the pair this probe is.
@@ -250,6 +253,7 @@ pub fn probe(
         || probe_killcam
         || probe_fall
         || probe_ride
+        || probe_items
         || team.is_some();
     // A sweep is a measurement, not a fixture: it walks a table of pitch
     // offsets instead of aiming at the eye, so the numbers it produces are not
@@ -323,6 +327,7 @@ pub fn probe(
     let mut killcam = KillcamProbe::new(killcam_skip_ms);
     let mut fall = FallProbe::default();
     let mut ride = RideProbe::default();
+    let mut items = ItemsProbe::default();
     // The fixture is named for the map the run started on, which is not the
     // map cs 0 holds once the rotation has moved on.
     let mut first_map = String::new();
@@ -710,6 +715,9 @@ pub fn probe(
             }
             if probe_ride {
                 ride.observe(s);
+            }
+            if probe_items {
+                items.observe(s);
             }
             watch.check_sounds(s, client.configstrings());
             watch.check_movers(s);
@@ -8920,6 +8928,77 @@ health={} seq={} events=[{},{},{},{}] parms=[{},{},{},{}]",
             i("eventParms[2]"),
             i("eventParms[3]"),
         );
+    }
+}
+
+/// `--probe-items`: one `ITEM` line per snapshot an item entity (`eType` 3)
+/// first appears in or changes in, and an `ITEM_GONE` line when it leaves:
+/// the flight a `dropItem` launches, the landing, and a respawn's return
+/// with its `EV_ITEM_RESPAWN`. Trajectories are `trType,trTime,base,delta`,
+/// floats to three decimals. `client-probes/probe_itemdrop` makes the items.
+/// Writes no fixture.
+#[derive(Default)]
+struct ItemsProbe {
+    last: std::collections::BTreeMap<u32, String>,
+}
+
+impl ItemsProbe {
+    fn observe(&mut self, snap: &net::snapshot::Snapshot) {
+        let p = &net::protocol::PROTOCOL_V1;
+        let mut seen = std::collections::BTreeSet::new();
+        for (&num, e) in &snap.entities {
+            if e.field_i32(p, "eType") != crate::entities::ET_ITEM {
+                continue;
+            }
+            seen.insert(num);
+            let i = |n: &str| e.field_i32(p, n);
+            let tr = |g: &str| {
+                let t = Trajectory::read(e, p, g);
+                format!(
+                    "{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
+                    t.tr_type,
+                    t.tr_time,
+                    t.base.x,
+                    t.base.y,
+                    t.base.z,
+                    t.delta.x,
+                    t.delta.y,
+                    t.delta.z
+                )
+            };
+            let line = format!(
+                "index={} clientNum={} eFlags={} ground={} pos={} apos={} seq={} events={},{},{},{} parms={},{},{},{}",
+                i("index"),
+                i("clientNum"),
+                i("eFlags"),
+                i("groundEntityNum"),
+                tr("pos"),
+                tr("apos"),
+                i("eventSequence"),
+                i("events[0]"),
+                i("events[1]"),
+                i("events[2]"),
+                i("events[3]"),
+                i("eventParms[0]"),
+                i("eventParms[1]"),
+                i("eventParms[2]"),
+                i("eventParms[3]"),
+            );
+            if self.last.get(&num) != Some(&line) {
+                println!("ITEM t={} num={num} {line}", snap.server_time);
+                self.last.insert(num, line);
+            }
+        }
+        let gone: Vec<u32> = self
+            .last
+            .keys()
+            .copied()
+            .filter(|n| !seen.contains(n))
+            .collect();
+        for num in gone {
+            println!("ITEM_GONE t={} num={num}", snap.server_time);
+            self.last.remove(&num);
+        }
     }
 }
 

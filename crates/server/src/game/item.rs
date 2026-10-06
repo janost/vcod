@@ -1,18 +1,23 @@
 //! Items on the host: the component an item entity carries, the 32-slot
-//! drop ring, `Drop_Weapon`'s launch and the inventory the pickup
-//! arithmetic (`crate::game::pickup`) runs on. Addresses are in
+//! drop ring, `Drop_Weapon`'s and `Drop_Item`'s launch, `G_RunItem`'s
+//! flight, and the inventory the pickup arithmetic
+//! (`crate::game::pickup`) runs on. Addresses are in
 //! docs/research/cod11-items.md.
 
 use crate::game::entity::{ENTITYNUM_WORLD, ThinkFn};
 use crate::game::host::{GameHost, WeaponOp};
 use crate::game::pickup::{Dropped, Inventory};
+use glam::Vec3;
+use vcod_common::collision::CollisionWorld;
+use vcod_common::net::protocol::ENTITYNUM_NONE;
+use vcod_common::net::trajectory::{TR_GRAVITY, TR_LINEAR, TR_STATIONARY, Trajectory};
 use vcod_common::pmove::weapon::NUM_AMMO;
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Value};
 
 /// What the `gentity_t` of a `bg_itemlist` entity carries beyond its fields.
 /// The reserve is the entity's own `count` field (`ent+0x250`), so script
 /// reads the same number.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ItemState {
     /// `s.index`, the `bg_itemlist` row.
     pub index: u8,
@@ -24,15 +29,40 @@ pub struct ItemState {
     pub dropped: bool,
     /// `svFlags & 1` after a pickup: off every snapshot, out of both passes.
     pub taken: bool,
-    /// `s.groundEntityNum`: the world once the item has come to rest on it,
-    /// 0 for a swap's drop, which never lands (docs/research/cod11-items.md
-    /// 12.6).
+    /// `s.groundEntityNum`: what the landing came to rest on, `ENTITYNUM_NONE`
+    /// for a script spawn still to fall, 0 for a drop in the air and for a
+    /// swap's drop, which never lands (docs/research/cod11-items.md 12.6).
     pub ground: i32,
+    /// `s.pos` while it is not stationary, which is what `G_RunItem` flies;
+    /// `None` at rest, where the wire carries the `origin` field.
+    pub pos: Option<Trajectory>,
+    /// `s.apos` while a `dropItem` spin runs; the landing stops it.
+    pub apos: Option<Trajectory>,
+    /// `clipmask`: `LaunchItem`'s 0x81, or 0, which `G_RunItem` reads as
+    /// 0x491.
+    pub clipmask: u32,
 }
 
 pub const DROP_RING: usize = 32;
 pub const OWNER_LOCKOUT_MS: i32 = 1000;
 pub const FREE_AFTER_PICKUP_MS: i32 = 100;
+/// `Drop_Weapon`'s and `Drop_Item`'s horizontal launch speed (0x74d4c,
+/// 0x74e5c); the vertical one is `200 + 50 * crandom()`.
+const LAUNCH_SPEED: f32 = 150.0;
+const LAUNCH_UP: f32 = 200.0;
+const LAUNCH_UP_SPREAD: f32 = 50.0;
+/// The tag drop's spin, degrees a second, times `crandom()` (0x74d54,
+/// 0x74d68, 0x74d6c).
+const SPIN: [f32; 3] = [50.0, 40.0, 60.0];
+/// `LaunchItem`'s `clipmask` (0x4dca1) and the 0x491 `G_RunItem` falls back
+/// to when the item has none (0x4eb7f).
+pub const LAUNCH_CLIPMASK: u32 = 0x81;
+pub const RUN_CLIPMASK: u32 = 0x491;
+/// The mask of `Drop_Weapon`'s tag trace (0x4e126) and `G_BounceItem`'s
+/// start-solid trace (0x4e95f).
+pub const TAG_CLIPMASK: u32 = 0x411;
+/// How far `G_BounceItem` looks down from a start-solid item (0x74e48).
+const START_SOLID_DROP: f32 = 128.0;
 
 /// `level+0x1d5c`, the dropped-item ring `GetFreeCueSpot` (0x4da44) fills.
 pub struct DropRing {
@@ -70,7 +100,188 @@ pub fn attach(host: &mut GameHost, id: EntId, index: usize) {
             dropped: false,
             taken: false,
             ground: ENTITYNUM_WORLD as i32,
+            pos: None,
+            apos: None,
+            clipmask: 0,
         });
+    }
+}
+
+/// `G_SpawnItem` outside the map load (section 9): what a script `spawn` of a
+/// `bg_itemlist` classname makes. Linked in place; unless `spawnflags & 1`
+/// it gets `groundEntityNum` `ENTITYNUM_NONE`, which `G_RunItem` drops under
+/// gravity from the frame's own run, and a weapon takes 90 degrees of roll.
+pub fn spawn_in_place(host: &mut GameHost, cx: &mut Cx, id: EntId, index: usize, spawnflags: i32) {
+    attach(host, id, index);
+    let suspended = spawnflags & 1 != 0;
+    let roll = if !suspended && crate::game::spawn::is_weapon_row(index) {
+        90.0
+    } else {
+        0.0
+    };
+    let angles = cx.intern_folded("angles");
+    let _ = host.set_field(cx, id, angles, Value::Vector([0.0, 0.0, roll]));
+    if let Some(i) = host.ents.get_mut(id).and_then(|e| e.item.as_mut()) {
+        i.ground = if suspended { 0 } else { ENTITYNUM_NONE as i32 };
+    }
+}
+
+/// The item's box: `G_SpawnItem` (0x4e6e1) and `LaunchItem` give a weapon
+/// (-1, -1, -1) to (1, 1, 1) and any other row (-1, -1, 0) to (1, 1, 2).
+pub fn bounds(weapon: bool) -> (Vec3, Vec3) {
+    if weapon {
+        (Vec3::splat(-1.0), Vec3::splat(1.0))
+    } else {
+        (Vec3::new(-1.0, -1.0, 0.0), Vec3::new(1.0, 1.0, 2.0))
+    }
+}
+
+/// `rand() * -2^-31`, the draw every item constant multiplies (0x74d50,
+/// 0x74e50): a uniform in (-1, 0].
+fn neg_unit(host: &mut GameHost) -> f32 {
+    -(host.rand_int() as f32 / 2_147_483_648.0)
+}
+
+/// The module's `crandom()` as compiled, `2 * neg_unit() - 1`: it reads
+/// (-3, -1] rather than Q3's (-1, 1), so a launch climbs at 50 to 150
+/// units a second and every spin runs negative (section 8).
+pub fn crandom(host: &mut GameHost) -> f32 {
+    2.0 * neg_unit(host) - 1.0
+}
+
+/// What one `G_RunItem` did to an item in the air.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Ran {
+    /// Still in the air, at the sweep's end.
+    Flew,
+    /// Met something that is not ground: moved off it along its normal and
+    /// dropped again from rest.
+    Nudged,
+    /// Came to rest on `ground`, aligned to `normal`.
+    Landed { ground: u32, normal: Vec3 },
+}
+
+/// `G_RunItem` (0x4eb18) and `G_BounceItem` (0x4e858) for an item whose
+/// `pos` is flying: sweep from `origin` to where the arc is at `now_ms`,
+/// then nudge or land. Every item's `physicsBounce` is 0 (stored by
+/// `G_SpawnItem` at 0x4e6d7, never by `LaunchItem`), so a contact keeps no
+/// velocity: a floor stops it and a wall drops it straight down. `lift` is
+/// drawn only on a landing, `0.5 + 0.5 * neg_unit()` above the sweep's end.
+pub fn run_flight(
+    world: &CollisionWorld,
+    pos: &mut Trajectory,
+    origin: &mut Vec3,
+    (mins, maxs): (Vec3, Vec3),
+    mask: u32,
+    now_ms: i32,
+    lift: &mut dyn FnMut() -> f32,
+) -> Ran {
+    let to = pos.evaluate(now_ms);
+    let mut tr = world.item_trace(*origin, to, mins, maxs, mask);
+    *origin = tr.endpos;
+    if tr.startsolid {
+        tr.fraction = 0.0;
+    }
+    if tr.fraction >= 1.0 {
+        return Ran::Flew;
+    }
+    if tr.startsolid {
+        let down = *origin - Vec3::Z * START_SOLID_DROP;
+        tr = world.item_trace(*origin, down, mins, maxs, TAG_CLIPMASK);
+    }
+    pos.delta = Vec3::ZERO;
+    if tr.normal.z > 0.0 {
+        let mut end = tr.endpos;
+        end.z += lift();
+        *origin = end;
+        *pos = stationary(end);
+        return Ran::Landed {
+            ground: world.entity_num(&tr),
+            normal: tr.normal,
+        };
+    }
+    *origin += tr.normal;
+    pos.base = *origin;
+    pos.tr_time = now_ms;
+    Ran::Nudged
+}
+
+/// `G_SetOrigin`'s trajectory: stationary at `at`, time and delta cleared.
+fn stationary(at: Vec3) -> Trajectory {
+    Trajectory {
+        tr_type: TR_STATIONARY,
+        tr_time: 0,
+        tr_duration: 0,
+        base: at,
+        delta: Vec3::ZERO,
+    }
+}
+
+/// The `G_RunEntity` pass over every item (0x502bc): `G_RunItem`'s flight.
+/// Runs after the
+/// frame's script threads, as retail's entity loop does: a thread that reads
+/// a flying item's `origin` reads the last frame's, and an item a thread
+/// spawns starts falling on the frame it was spawned in (section 14).
+pub fn run_items(host: &mut GameHost, cx: &mut Cx, now_ms: i32) {
+    let ids: Vec<EntId> = host
+        .ents
+        .iter_inuse()
+        .filter(|(_, e)| e.item.is_some())
+        .map(|(id, _)| id)
+        .collect();
+    let world = host.world.clone();
+    let origin_atom = cx.intern_folded("origin");
+    let angles_atom = cx.intern_folded("angles");
+    for id in ids {
+        let Some(mut st) = host.ents.get(id).and_then(|e| e.item) else {
+            continue;
+        };
+        if st.ground == ENTITYNUM_NONE as i32 && st.pos.is_none_or(|p| p.tr_type != TR_GRAVITY) {
+            let base = st
+                .pos
+                .map_or_else(|| Vec3::from(origin_of(host, cx, id)), |p| p.base);
+            st.pos = Some(Trajectory {
+                tr_type: TR_GRAVITY,
+                tr_time: now_ms,
+                tr_duration: 0,
+                base,
+                delta: st.pos.map_or(Vec3::ZERO, |p| p.delta),
+            });
+        }
+        if let (Some(mut pos), Some(world)) = (st.pos, world.as_deref()) {
+            let weapon = crate::game::spawn::is_weapon_row(st.index as usize);
+            let mask = if st.clipmask != 0 {
+                st.clipmask
+            } else {
+                RUN_CLIPMASK
+            };
+            let mut origin = Vec3::from(origin_of(host, cx, id));
+            let ran = run_flight(
+                &world.collision,
+                &mut pos,
+                &mut origin,
+                bounds(weapon),
+                mask,
+                now_ms,
+                &mut || 0.5 + 0.5 * neg_unit(host),
+            );
+            let _ = host.set_field(cx, id, origin_atom, Value::Vector(origin.into()));
+            match ran {
+                Ran::Flew | Ran::Nudged => st.pos = Some(pos),
+                Ran::Landed { ground, normal } => {
+                    st.pos = None;
+                    st.apos = None;
+                    st.ground = ground as i32;
+                    let current = angles_of(host, cx, id);
+                    let aligned =
+                        crate::game::spawn::align_to_surface(current, normal.into(), weapon);
+                    let _ = host.set_field(cx, id, angles_atom, Value::Vector(aligned));
+                }
+            }
+        }
+        if let Some(e) = host.ents.get_mut(id) {
+            e.item = Some(st);
+        }
     }
 }
 
@@ -115,79 +326,61 @@ pub fn write_back(host: &mut GameHost, slot: usize, before: &Inventory, after: &
     host.client_vitals[slot].health = after.health;
 }
 
-/// Where a launched weapon comes to rest.
+/// Where a dropped weapon starts.
 pub enum DropAt {
-    /// Under the dropper, found by the floor trace that stands in for
-    /// `G_RunItem`'s fall.
-    Feet,
-    /// A swap's drop: exactly where the item it was swapped for lay.
+    /// `dropItem`'s: launched off the dropper, from `tag` on its model.
+    Thrown { tag: String },
+    /// A swap's drop: exactly where the item it was swapped for lay, at
+    /// rest, which `Pickup_Weapon`'s `G_SetOrigin` makes it.
     Exactly { origin: [f32; 3], angles: [f32; 3] },
 }
 
-/// `LaunchItem` (0x4db98) for a weapon `Drop_Weapon` took off `slot`.
-pub fn launch_weapon(
+/// `LaunchItem` (0x4db98): a new item of row `index` at `origin`, flying at
+/// `velocity` under gravity from this frame, locked to `owner` for
+/// [`OWNER_LOCKOUT_MS`], and in the drop ring. Its angles are zero.
+fn launch(
     host: &mut GameHost,
     cx: &mut Cx,
-    slot: usize,
-    d: Dropped,
-    at: DropAt,
+    index: usize,
+    origin: Vec3,
+    velocity: Vec3,
+    owner: usize,
 ) -> Result<EntId, ErrorKind> {
-    let name = crate::items::item_name(d.weapon as usize)
+    let name = crate::items::item_name(index)
         .unwrap_or_default()
         .to_string();
-    let (origin, angles) = match at {
-        // The dropper's yaw seeds the alignment the landing does. The launch
-        // is from the box's mid-height (items.md section 8): a grounded
-        // origin sits within a quarter unit of the floor, so the landing
-        // trace would start inside it.
-        DropAt::Feet => {
-            let player = host
-                .ents
-                .handle(slot as u32)
-                .ok_or(ErrorKind::BadType("no such player"))?;
-            let mut read = |name: &str| {
-                let field = cx.intern_folded(name);
-                match host.get_field(cx, player, field) {
-                    Value::Vector(v) => v,
-                    _ => [0.0; 3],
-                }
-            };
-            let mut origin = read("origin");
-            let yaw = read("angles")[1];
-            origin[2] += host.client_height.get(slot).copied().unwrap_or(0.0) * 0.5;
-            (origin, [0.0, yaw, 0.0])
-        }
-        DropAt::Exactly { origin, angles } => (origin, angles),
-    };
+    let classname = crate::game::spawn::radiant_name(&name).unwrap_or(&name);
+    let classname = cx.intern_exact(classname);
     let id = host.ents.spawn(cx)?;
-    let classname = crate::game::spawn::radiant_name(&name).unwrap_or("mpweapon_dropped");
     for (field, value) in [
-        ("classname", Value::String(cx.intern_exact(classname))),
-        ("origin", Value::Vector(origin)),
-        ("angles", Value::Vector(angles)),
-        ("count", Value::Int(d.count)),
+        ("classname", Value::String(classname)),
+        ("origin", Value::Vector(origin.into())),
+        ("angles", Value::Vector([0.0; 3])),
     ] {
         let atom = cx.intern_folded(field);
         host.set_field(cx, id, atom, value)?;
     }
     host.register_item(&name);
-    if matches!(at, DropAt::Feet) {
-        crate::game::spawn::drop_item_to_floor(host, cx, id, true);
-    }
+    let now = host.level_time_ms;
     if let Some(e) = host.ents.get_mut(id) {
         e.item = Some(ItemState {
-            index: d.weapon,
-            clip: d.clip,
-            owner: Some(slot as u8),
+            index: index as u8,
+            clip: 0,
+            owner: Some(owner as u8),
             dropped: true,
             taken: false,
-            ground: match at {
-                DropAt::Feet => ENTITYNUM_WORLD as i32,
-                DropAt::Exactly { .. } => 0,
-            },
+            ground: 0,
+            pos: Some(Trajectory {
+                tr_type: TR_GRAVITY,
+                tr_time: now,
+                tr_duration: 0,
+                base: origin,
+                delta: velocity,
+            }),
+            apos: None,
+            clipmask: LAUNCH_CLIPMASK,
         });
     }
-    let now = host.level_time_ms;
     host.ents
         .schedule(id, ThinkFn::ClearOwner, now + OWNER_LOCKOUT_MS);
     let ents = &host.ents;
@@ -195,6 +388,146 @@ pub fn launch_weapon(
         host.ents.schedule(old, ThinkFn::Free, now + 1);
     }
     Ok(id)
+}
+
+/// `Drop_Weapon`'s and `Drop_Item`'s launch off player `slot` (section 8):
+/// from the player's `origin` raised by half its box, along its `angles`
+/// yaw at [`LAUNCH_SPEED`], climbing at `200 + 50 * crandom()`.
+fn launch_off(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    slot: usize,
+    index: usize,
+) -> Result<EntId, ErrorKind> {
+    let player = host
+        .ents
+        .handle(slot as u32)
+        .ok_or(ErrorKind::BadType("no such player"))?;
+    let yaw = angles_of(host, cx, player)[1].to_radians();
+    let up = LAUNCH_UP + LAUNCH_UP_SPREAD * crandom(host);
+    let velocity = Vec3::new(yaw.cos() * LAUNCH_SPEED, yaw.sin() * LAUNCH_SPEED, up);
+    let mut origin = Vec3::from(origin_of(host, cx, player));
+    origin.z += host.client_height.get(slot).copied().unwrap_or(0.0) * 0.5;
+    launch(host, cx, index, origin, velocity, slot)
+}
+
+/// `Drop_Item(player, item, 0, 0)` (0x4ed30), `dropItem`'s arm for a
+/// `bg_itemlist` row that is not a weapon: launched off the player with no
+/// tag, no spin and zero angles.
+pub fn drop_item(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    slot: usize,
+    index: usize,
+) -> Result<EntId, ErrorKind> {
+    launch_off(host, cx, slot, index)
+}
+
+/// `Drop_Weapon` (0x4dd40) for a weapon `crate::game::pickup::drop_weapon`
+/// took off `slot`: the item, its counts, and where it starts.
+///
+/// A thrown drop starts at `tag` on the dropper's posed model when the model
+/// has it, swept there from the box's centre (`G_DObjGetWorldTagMatrix`,
+/// 0x4e0bb); otherwise at the launch's mid-height. Either way its angles are
+/// the dropper's own `angles`, not the tag's (`G_SetAngle` at 0x4e1e7 is
+/// handed `ent+0x140`), and it spins at `SPIN * crandom()`.
+pub fn launch_weapon(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    slot: usize,
+    d: Dropped,
+    at: DropAt,
+) -> Result<EntId, ErrorKind> {
+    let id = match &at {
+        DropAt::Thrown { tag } => {
+            let id = launch_off(host, cx, slot, d.weapon as usize)?;
+            let player = host
+                .ents
+                .handle(slot as u32)
+                .ok_or(ErrorKind::BadType("no such player"))?;
+            if let Some(start) = tag_start(host, slot, tag) {
+                let origin = cx.intern_folded("origin");
+                host.set_field(cx, id, origin, Value::Vector(start.into()))?;
+                if let Some(pos) = host
+                    .ents
+                    .get_mut(id)
+                    .and_then(|e| e.item.as_mut())
+                    .and_then(|i| i.pos.as_mut())
+                {
+                    pos.base = start;
+                }
+            }
+            let angles = angles_of(host, cx, player);
+            let atom = cx.intern_folded("angles");
+            host.set_field(cx, id, atom, Value::Vector(angles))?;
+            let spin = Vec3::new(
+                SPIN[0] * crandom(host),
+                SPIN[1] * crandom(host),
+                SPIN[2] * crandom(host),
+            );
+            let now = host.level_time_ms;
+            if let Some(i) = host.ents.get_mut(id).and_then(|e| e.item.as_mut()) {
+                i.apos = Some(Trajectory {
+                    tr_type: TR_LINEAR,
+                    tr_time: now,
+                    tr_duration: 0,
+                    base: angles.into(),
+                    delta: spin,
+                });
+            }
+            id
+        }
+        DropAt::Exactly { origin, angles } => {
+            let id = launch(
+                host,
+                cx,
+                d.weapon as usize,
+                Vec3::from(*origin),
+                Vec3::ZERO,
+                slot,
+            )?;
+            for (field, v) in [("origin", *origin), ("angles", *angles)] {
+                let atom = cx.intern_folded(field);
+                host.set_field(cx, id, atom, Value::Vector(v))?;
+            }
+            if let Some(i) = host.ents.get_mut(id).and_then(|e| e.item.as_mut()) {
+                i.pos = None;
+            }
+            id
+        }
+    };
+    let count = cx.intern_folded("count");
+    host.set_field(cx, id, count, Value::Int(d.count))?;
+    if let Some(i) = host.ents.get_mut(id).and_then(|e| e.item.as_mut()) {
+        i.clip = d.clip;
+    }
+    Ok(id)
+}
+
+/// Where a thrown drop starts: `tag` on the dropper's model, posed as its
+/// last end frame left it at its `angles` yaw, swept from the box's centre
+/// with the item's box so it never starts inside a wall. `None` without the
+/// model, the animtree or the paks.
+fn tag_start(host: &mut GameHost, slot: usize, tag: &str) -> Option<Vec3> {
+    let body = host.client_dobjs.get(slot)?.clone()?;
+    let anims = host.anims.clone()?;
+    let fs = host.fs.clone()?;
+    let world = host.world.clone()?;
+    let skel = host.hit_rigs.rig(&fs, &body.pose.assembly)?;
+    let bone = skel.bone_index(tag)?;
+    let inputs = body.pose.pose_inputs(&anims, host.level_time_ms);
+    let rigs = &mut host.hit_rigs;
+    let pose = vcod_common::playerpose::pose_player(&skel, &inputs, |n| rigs.clip(&fs, n));
+    let (local, _) = pose.bone_world(&skel, bone);
+    let at = body.origin + glam::Quat::from_rotation_z(body.yaw) * local;
+    let centre = body.origin + (body.mins + body.maxs) * 0.5;
+    let (mins, maxs) = bounds(true);
+    Some(
+        world
+            .collision
+            .item_trace(centre, at, mins, maxs, TAG_CLIPMASK)
+            .endpos,
+    )
 }
 
 pub fn origin_of(host: &mut GameHost, cx: &mut Cx, id: EntId) -> [f32; 3] {
@@ -499,12 +832,14 @@ mod tests {
         assert!(!ents.contains_key(&id.0));
     }
 
-    /// A drop carries its dropper in `clientNum` until the lockout clears.
-    /// `groundEntityNum` is how it arrived: a `dropItem` drop has landed on
-    /// the world, a swap's drop never flew and reads 0, as the retail swap
-    /// does (docs/research/cod11-items.md 12.6).
+    /// A thrown drop carries its dropper in `clientNum` until the lockout
+    /// clears and flies on the wire: gravity from the drop's frame at 150
+    /// along the dropper's yaw, climbing at 50 to 150, spinning backwards on
+    /// all three axes, `groundEntityNum` 0. A swap's drop sits where the item
+    /// it replaced lay, stationary, `groundEntityNum` 0 too
+    /// (docs/research/cod11-items.md 12.6, 14).
     #[test]
-    fn a_drop_names_its_dropper_and_its_ground_is_how_it_arrived() {
+    fn a_thrown_drop_flies_and_names_its_dropper_until_the_lockout_clears() {
         let (mut vm, mut host) = fixture();
         let fg = crate::configstrings::weapon_index("fg42_mp").unwrap() as u8;
         let d = Dropped {
@@ -512,9 +847,14 @@ mod tests {
             count: 70,
             clip: 20,
         };
+        host.level_time_ms = 5000;
         let (id, swap) = vm.with_cx(|cx| {
-            host.ents.spawn_client(cx, 3, None).unwrap();
-            let id = launch_weapon(&mut host, cx, 3, d, DropAt::Feet).unwrap();
+            let c = host.ents.spawn_client(cx, 3, None).unwrap();
+            let f = cx.intern_folded("angles");
+            host.set_field(cx, c, f, Value::Vector([0.0, 90.0, 0.0]))
+                .unwrap();
+            let tag = "tag_weapon_right".to_string();
+            let id = launch_weapon(&mut host, cx, 3, d, DropAt::Thrown { tag }).unwrap();
             let at = DropAt::Exactly {
                 origin: [826.0, 2274.0, -22.8],
                 angles: [0.0, 270.0, 90.0],
@@ -523,56 +863,169 @@ mod tests {
         });
         let p = &vcod_common::net::protocol::PROTOCOL_V1;
         let ents = vm.with_cx(|cx| crate::game::wire::packet_entities(&mut host, cx, p));
-        assert_eq!(ents[&id.0].field_i32(p, "clientNum"), 3);
-        assert_eq!(ents[&id.0].field_i32(p, "groundEntityNum"), 1022);
+        let e = &ents[&id.0];
+        assert_eq!(e.field_i32(p, "clientNum"), 3);
+        assert_eq!(e.field_i32(p, "groundEntityNum"), 0);
+        let pos = Trajectory::read(e, p, "pos");
+        assert_eq!((pos.tr_type, pos.tr_time), (TR_GRAVITY, 5000));
+        assert!(pos.delta.x.abs() < 1e-3 && (pos.delta.y - 150.0).abs() < 1e-3);
+        assert!(
+            pos.delta.z > 50.0 && pos.delta.z <= 150.0,
+            "{}",
+            pos.delta.z
+        );
+        let apos = Trajectory::read(e, p, "apos");
+        assert_eq!(apos.tr_type, TR_LINEAR);
+        assert_eq!(apos.base, Vec3::new(0.0, 90.0, 0.0));
+        assert!(apos.delta.cmplt(Vec3::ZERO).all(), "{:?}", apos.delta);
         assert_eq!(ents[&swap.0].field_i32(p, "groundEntityNum"), 0);
-        vm.with_cx(|cx| host.run_entity_thinks(cx, OWNER_LOCKOUT_MS));
+        assert_eq!(
+            Trajectory::read(&ents[&swap.0], p, "pos").tr_type,
+            TR_STATIONARY
+        );
+        vm.with_cx(|cx| host.run_entity_thinks(cx, 5000 + OWNER_LOCKOUT_MS));
         let ents = vm.with_cx(|cx| crate::game::wire::packet_entities(&mut host, cx, p));
         assert_eq!(ents[&id.0].field_i32(p, "clientNum"), 254);
     }
 
-    /// A death drop lands the way retail's `G_BounceItem` lays it: its box
-    /// clear of the floor, facing the dropper's yaw, with a weapon's 90
-    /// degrees of roll. The dropper stands where pmove leaves a grounded
-    /// player, a fraction above the floor, so a trace from its bare origin
-    /// would start inside the floor.
-    #[test]
-    fn a_feet_drop_faces_the_droppers_yaw_and_takes_the_weapon_roll() {
-        let (mut vm, mut host) = fixture();
+    fn floor_host(world: vcod_common::collision::CollisionWorld) -> (vcod_gsc::Vm, GameHost) {
+        let (vm, mut host) = fixture();
         host.world = Some(std::rc::Rc::new(crate::world::World {
-            collision: vcod_common::collision::test_world(&[]),
+            collision: world,
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         }));
+        (vm, host)
+    }
+
+    /// Frames of the item pass until `id` stops flying or is freed; the
+    /// frame it stopped on.
+    fn fly(vm: &mut vcod_gsc::Vm, host: &mut GameHost, id: EntId, from: i32) -> i32 {
+        let mut now = from;
+        for _ in 0..100 {
+            now += 50;
+            host.level_time_ms = now;
+            vm.with_cx(|cx| run_items(host, cx, now));
+            if host
+                .ents
+                .get(id)
+                .and_then(|e| e.item)
+                .is_none_or(|i| i.pos.is_none())
+            {
+                return now;
+            }
+        }
+        panic!("item {id:?} never came down");
+    }
+
+    fn vec_field(vm: &mut vcod_gsc::Vm, host: &mut GameHost, id: EntId, name: &str) -> [f32; 3] {
+        vm.with_cx(|cx| {
+            let f = cx.intern_folded(name);
+            match host.get_field(cx, id, f) {
+                Value::Vector(v) => v,
+                _ => panic!("{name} is not a vector"),
+            }
+        })
+    }
+
+    /// A thrown carbine comes down on the floor ahead of the dropper, its box
+    /// resting on it with up to half a unit of lift, lying along the drop's
+    /// yaw with a weapon's 90 degrees of roll and the world as its ground.
+    #[test]
+    fn a_thrown_drop_lands_ahead_facing_the_droppers_yaw_with_the_weapon_roll() {
+        let (mut vm, mut host) = floor_host(vcod_common::collision::test_world(&[]));
         let carbine = crate::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
         let d = Dropped {
             weapon: carbine,
             count: 400,
             clip: 15,
         };
-        vm.with_cx(|cx| {
+        host.client_height[0] = 70.0;
+        let id = vm.with_cx(|cx| {
             let c = host.ents.spawn_client(cx, 0, None).unwrap();
             for (name, v) in [
                 ("origin", [16.0, -32.0, 0.125]),
-                ("angles", [10.0, 45.0, 0.0]),
+                ("angles", [0.0, 45.0, 0.0]),
             ] {
                 let f = cx.intern_folded(name);
                 host.set_field(cx, c, f, Value::Vector(v)).unwrap();
             }
-            let id = launch_weapon(&mut host, cx, 0, d, DropAt::Feet).unwrap();
-            let origin = cx.intern_folded("origin");
-            let Value::Vector(o) = host.get_field(cx, id, origin) else {
-                panic!("the drop has an origin");
-            };
-            let rest = 1.0 + vcod_common::collision::SURFACE_CLIP_EPSILON;
-            assert!((o[2] - rest).abs() < 1e-3, "z {}", o[2]);
-            let angles = cx.intern_folded("angles");
-            let Value::Vector(a) = host.get_field(cx, id, angles) else {
-                panic!("the drop has angles");
-            };
-            assert!(a[0].abs() < 1e-3, "pitch {}", a[0]);
-            assert!((a[1] - 45.0).abs() < 1e-3, "yaw {}", a[1]);
-            assert!((a[2] - 90.0).abs() < 1e-3, "roll {}", a[2]);
+            let tag = "tag_weapon_right".to_string();
+            launch_weapon(&mut host, cx, 0, d, DropAt::Thrown { tag }).unwrap()
         });
+        fly(&mut vm, &mut host, id, 0);
+        let o = vec_field(&mut vm, &mut host, id, "origin");
+        let rest = 1.0 + vcod_common::collision::SURFACE_CLIP_EPSILON;
+        assert!(o[2] > rest && o[2] <= rest + 0.5, "z {}", o[2]);
+        assert!(
+            (o[0] - 16.0 - (o[1] + 32.0)).abs() < 1e-2,
+            "off the yaw: {o:?}"
+        );
+        assert!(o[0] > 16.0 + 40.0, "landed short: {o:?}");
+        let a = vec_field(&mut vm, &mut host, id, "angles");
+        assert!(a[0].abs() < 1e-3, "pitch {}", a[0]);
+        assert!((a[1] - 45.0).abs() < 1e-3, "yaw {}", a[1]);
+        assert!((a[2] - 90.0).abs() < 1e-3, "roll {}", a[2]);
+        let i = host.ents.get(id).unwrap().item.unwrap();
+        assert_eq!(i.ground, ENTITYNUM_WORLD as i32);
+        assert!(i.apos.is_none());
+    }
+
+    /// A wall in the arc stops the drop dead: it is moved a unit off the wall
+    /// and falls straight down from there, from rest.
+    #[test]
+    fn a_wall_drops_the_item_straight_down() {
+        let wall = (Vec3::new(64.0, -512.0, 0.0), Vec3::new(80.0, 512.0, 512.0));
+        let world = vcod_common::collision::test_world(&[wall]);
+        let mut pos = Trajectory {
+            tr_type: TR_GRAVITY,
+            tr_time: 0,
+            tr_duration: 0,
+            base: Vec3::new(0.0, 0.0, 48.0),
+            delta: Vec3::new(150.0, 0.0, 100.0),
+        };
+        let mut origin = pos.base;
+        let mut now = 0;
+        let ran = loop {
+            now += 50;
+            let ran = run_flight(
+                &world,
+                &mut pos,
+                &mut origin,
+                bounds(true),
+                0x81,
+                now,
+                &mut || 0.25,
+            );
+            if ran != Ran::Flew {
+                break ran;
+            }
+        };
+        assert_eq!(ran, Ran::Nudged);
+        let face = 64.0 - 1.0 - vcod_common::collision::SURFACE_CLIP_EPSILON;
+        assert!((origin.x - (face - 1.0)).abs() < 1e-2, "x {}", origin.x);
+        assert_eq!(
+            (pos.tr_type, pos.tr_time, pos.delta),
+            (TR_GRAVITY, now, Vec3::ZERO)
+        );
+        assert_eq!(pos.base, origin);
+        let x = origin.x;
+        let ran = loop {
+            now += 50;
+            let ran = run_flight(
+                &world,
+                &mut pos,
+                &mut origin,
+                bounds(true),
+                0x81,
+                now,
+                &mut || 0.25,
+            );
+            if ran != Ran::Flew {
+                break ran;
+            }
+        };
+        assert!(matches!(ran, Ran::Landed { .. }));
+        assert_eq!(origin.x, x);
     }
 }

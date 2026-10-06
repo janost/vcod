@@ -397,10 +397,9 @@ const RADIANT_NAMES: &[(&str, &str)] = &[
 /// its box does. A `spawnflags & 1` item is suspended and keeps its origin;
 /// neither gate map has one.
 ///
-/// Skipped for a turret, which goes through `G_SpawnTurret` instead. The
-/// `dropItem` builtin and a script `spawn` of an item run it too: retail
-/// launches or links those in the air and lets `G_RunItem` settle them, which
-/// ends where this trace does. `weapon` adds the 90 degrees of roll a
+/// Skipped for a turret, which goes through `G_SpawnTurret` instead. A drop
+/// and a script `spawn` of an item fall through `G_RunItem` instead
+/// (`crate::game::item::run_items`). `weapon` adds the 90 degrees of roll a
 /// weapon row takes (docs/research/cod11-items.md section 9).
 pub fn drop_item_to_floor(host: &mut GameHost, cx: &mut Cx, id: EntId, weapon: bool) {
     const DROP: f32 = 4096.0;
@@ -560,7 +559,7 @@ pub(crate) fn transform(v: glam::Vec3, axis: &[glam::Vec3; 3]) -> glam::Vec3 {
 /// orthogonalise that forward against the normal, and `AxisToAngles` turns the
 /// axis into angles. Then 90 degrees of roll (rodata `0x74dbc`) for an item
 /// whose `bg_itemlist` type is 1, which every placeable weapon is.
-fn align_to_surface(radiant: [f32; 3], normal: [f32; 3], weapon: bool) -> [f32; 3] {
+pub fn align_to_surface(radiant: [f32; 3], normal: [f32; 3], weapon: bool) -> [f32; 3] {
     const WEAPON_ROLL: f32 = 90.0;
     let up = normal;
     let right = cross(up, angle_forward(radiant));
@@ -620,8 +619,11 @@ fn axis_to_angles(axis: [[f32; 3]; 3]) -> [f32; 3] {
     // negative and keeps `+90` for a weapon inside one turn.
     let (sy, cy) = (-yaw).to_radians().sin_cos();
     let (x, ry) = (right[0] * cy - right[1] * sy, right[0] * sy + right[1] * cy);
+    // Right-handed about +y by -pitch, which is what takes the forward axis
+    // back to the horizon. The opposite turn reads the roll off by up to a
+    // quarter degree on a tilted landing (docs/research/cod11-items.md 14).
     let (sp, cp) = (-pitch).to_radians().sin_cos();
-    let (rx, rz) = (x * cp - right[2] * sp, x * sp + right[2] * cp);
+    let (rx, rz) = (x * cp + right[2] * sp, right[2] * cp - x * sp);
     if ry == 0.0 && rz == 0.0 {
         return [pitch, yaw, -90.0];
     }

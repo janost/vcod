@@ -332,25 +332,24 @@ fn a_shot_takes_health_and_a_second_one_kills() {
         );
     }
 
-    // `dropItem` put B's carbine on the ground where it fell. The map's own
-    // placed weapons are `ET_ITEM` too, so the drop is the one within a stride
-    // of B's origin.
+    // `dropItem` threw B's carbine from where it fell; it flies about 90
+    // units before it lands (docs/research/cod11-items.md 14). The map's own
+    // placed weapons are `ET_ITEM` too, and so is the health pack the death
+    // drops at B's feet, so the drop is the carbine near B's origin.
+    // `m1carbine_mp` is configstring 7's twelfth entry, and a placed weapon's
+    // `index` is that 1-based number.
     let death_spot = cb.snapshots().newest().unwrap().ps.origin(p);
-    let dropped = ca
-        .snapshots()
+    ca.snapshots()
         .newest()
         .unwrap()
         .entities
         .values()
         .find(|e| {
             e.field_i32(p, "eType") == ET_ITEM
-                && (0..3).all(|i| (e.origin(p)[i] - death_spot[i]).abs() < 32.0)
+                && e.field_i32(p, "index") == 12
+                && (0..3).all(|i| (e.origin(p)[i] - death_spot[i]).abs() < 160.0)
         })
-        .cloned()
-        .expect("no dropped weapon at B's death spot");
-    // `m1carbine_mp` is configstring 7's twelfth entry, and a placed weapon's
-    // `index` is that 1-based number.
-    assert_eq!(dropped.field_i32(p, "index"), 12, "B dropped its carbine");
+        .expect("B dropped its carbine near its death spot");
     // The rounds went with it. Retail's death frame reads `clip=3:7,6:3
     // ammo=3:56`: the carbine's index 10 is gone from both arrays, while the
     // pistol's and the frag's entries stand (combat doc, 9.1).

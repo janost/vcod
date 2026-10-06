@@ -1064,6 +1064,13 @@ impl ScriptRuntime {
         }
     }
 
+    /// A client's posed model, live or dead, for `dropItem`'s tag.
+    pub fn set_client_dobj(&mut self, slot: usize, body: Option<crate::game::combat::HitBody>) {
+        if let Some(b) = self.host.client_dobjs.get_mut(slot) {
+            *b = body;
+        }
+    }
+
     /// The animtree a builtin poses a body with.
     pub fn set_player_anims(&mut self, anims: Option<Rc<vcod_common::animtree::PlayerAnims>>) {
         self.host.anims = anims;
@@ -1931,6 +1938,11 @@ impl ScriptRuntime {
         for e in self.vm.run_frame(&mut self.host, now_ms) {
             log::warn!("script error: {e:?}");
         }
+        // The items' own entity pass, after the threads
+        // (docs/research/cod11-items.md 14).
+        let host = &mut self.host;
+        self.vm
+            .with_cx(|cx| crate::game::item::run_items(host, cx, now_ms));
     }
 }
 

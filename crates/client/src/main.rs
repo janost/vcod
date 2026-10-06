@@ -290,6 +290,13 @@ struct Args {
     /// Writes no fixture.
     #[arg(long)]
     probe_ride: bool,
+    /// With `--net-probe` and `--probe-team`: stand still and print an `ITEM`
+    /// line per snapshot an item entity appeared, changed or left, with its
+    /// index, owner, ground, both trajectories and its event ring;
+    /// `client-probes/probe_itemdrop` drops, spawns and respawns the items.
+    /// Writes no fixture.
+    #[arg(long)]
+    probe_items: bool,
     /// Walk the --probe-slope route and write every usercmd sent and every
     /// snapshot's movement fields to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt,
@@ -789,6 +796,7 @@ fn main() -> Result<()> {
                 killcam_skip_ms: args.probe_killcam_skip_ms,
                 fall: args.probe_fall,
                 ride: args.probe_ride,
+                items: args.probe_items,
             },
             args.capture_tag.clone(),
             args.overwrite_fixture,

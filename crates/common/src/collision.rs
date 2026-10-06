@@ -1077,6 +1077,11 @@ impl CollisionWorld {
         poses.push((model, pose));
     }
 
+    /// Lump 27's model count, the world's model 0 included.
+    pub fn model_count(&self) -> usize {
+        self.model_span.len()
+    }
+
     /// Back to the spawn placement, as a map load or restart has it.
     pub fn reset_model_pose(&self, model: usize) {
         if let Some(span) = self.model_span.get(model) {
@@ -1282,8 +1287,9 @@ impl CollisionWorld {
     }
 
     /// Unlinks the brush models the stock map-load scripts take out of the
-    /// clip, for a world no script runs on (the client's predictor, the
-    /// gates): `_gameobjects::main` `delete()`s every entity whose
+    /// clip, for a world no script and no snapshot drives (the gates; the
+    /// client takes them from the snapshot, `pmove::movers`):
+    /// `_gameobjects::main` `delete()`s every entity whose
     /// `script_gameobjectname` the gametype does not list (`dm.gsc:78`,
     /// `tdm.gsc:78`: their own name; `sd.gsc:123`: `sd`, `bombzone`,
     /// `blocker`), and `_load.gsc` `notsolid()`s every exploder brush model.
@@ -1442,6 +1448,14 @@ impl CollisionWorld {
     /// (docs/research/cod11-combat.md, section 12).
     pub fn missile_trace(&self, start: Vec3, end: Vec3) -> Trace {
         self.trace_with_mask(start, end, Vec3::ZERO, Vec3::ZERO, MASK_MISSILE, true, None)
+    }
+
+    /// An item's sweep, `G_RunItem`'s and `G_BounceItem`'s: the item's own
+    /// box as a capsule (every item carries `eFlags` 0x10, which picks
+    /// `trap_TraceCapsule`), the given mask, and the static models, as the
+    /// missile's sweep has them (docs/research/cod11-items.md, section 8).
+    pub fn item_trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> Trace {
+        self.trace_with_mask(start, end, mins, maxs, mask, true, None)
     }
 
     #[allow(clippy::too_many_arguments)]

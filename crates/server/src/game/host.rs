@@ -334,6 +334,10 @@ pub struct GameHost {
     /// in beside `client_entity_states`: what a scripted blast's `CanDamage`
     /// traces meet (combat doc, 14.4). `None` for a client with no body.
     pub client_bodies: Vec<Option<crate::game::combat::HitBody>>,
+    /// Each client's posed model, live or dead, mirrored beside
+    /// `client_bodies` and before every damage callback: what `dropItem`'s
+    /// tag lookup poses (docs/research/cod11-items.md section 8).
+    pub client_dobjs: Vec<Option<crate::game::combat::HitBody>>,
     /// What `finishPlayerDamage` did to a client this frame, drained by
     /// `Server` after `run_frame` and applied to the sim once each.
     pub client_sim_ops: Vec<(usize, SimOp)>,
@@ -611,6 +615,7 @@ impl GameHost {
             client_height: vec![vcod_common::pmove::HEIGHT_STAND; MAX_CLIENTS],
             client_entity_states: vec![None; MAX_CLIENTS],
             client_bodies: vec![None; MAX_CLIENTS],
+            client_dobjs: vec![None; MAX_CLIENTS],
             client_sim_ops: Vec::new(),
             client_link_ops: Vec::new(),
             weapons: std::rc::Rc::new(crate::weapons::WeaponTable::empty()),
@@ -762,19 +767,12 @@ impl GameHost {
     }
 
     /// `G_RunFrame`'s think pass, with every due `ThinkFn::Free` routed
-    /// through `free_entity` and every `ThinkFn::SettleItem` landed. The
-    /// `delete` builtin and an evicted drop both schedule the free, so this
-    /// is the path a deleted trigger's row is dropped on.
-    pub fn run_entity_thinks(&mut self, cx: &mut Cx, now_ms: i32) {
+    /// through `free_entity`. The `delete` builtin and an evicted drop both
+    /// schedule the free, so this is the path a deleted trigger's row is
+    /// dropped on.
+    pub fn run_entity_thinks(&mut self, _cx: &mut Cx, now_ms: i32) {
         for (id, think) in self.ents.run_thinks(now_ms) {
             match think {
-                ThinkFn::SettleItem => {
-                    let row = self.ents.get(id).and_then(|e| e.item).map(|i| i.index);
-                    if let Some(row) = row {
-                        let weapon = crate::game::spawn::is_weapon_row(row as usize);
-                        crate::game::spawn::drop_item_to_floor(self, cx, id, weapon);
-                    }
-                }
                 ThinkFn::Free => self.free_entity(id),
                 ThinkFn::ClearOwner => {}
             }
