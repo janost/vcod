@@ -542,8 +542,9 @@ placed weapon stays hidden for the rest of the level.
 VERIFIED, `RespawnItem` (0x4ec7c): `r.contents = 0x407c0008` (0x4ece9, where
 spawn writes 0x407c0108), `flags &= ~0x1000`, `svFlags &= ~1`, a link,
 `G_AddEvent(ent, EV_ITEM_RESPAWN 197, 0)` (0x4ed0f) and `nextthink = 0`.
-VERIFIED: `Use_Item` (0x4efc8) has the same body. INFERRED: `EV_ITEM_RESPAWN`
-rides the item entity, and stock never reaches it.
+VERIFIED: `Use_Item` (0x4efc8) has the same body. VERIFIED, the capture in
+section 14.3: `EV_ITEM_RESPAWN` rides the item entity. INFERRED: stock never
+reaches it.
 
 The `"trigger"` notify on a weapon. VERIFIED, 0x4d3a1..0x4d3d7: a compare of
 the dropped-entity local against 0, an `Scr_AddEntity` of it, an
@@ -566,7 +567,8 @@ and holds a `BG_TakePlayerWeapon` call and a return of 0 (0x4ddef,
 one, is taken and nothing drops.
 
 VERIFIED: the launch velocity is `forward(yaw) * 150` (0x74d4c) with
-`z = 200 + crandom() * 50` (0x74d58, 0x74d54); the origin is `currentOrigin`
+`z = 200 + crandom() * 50` (0x74d58, 0x74d54), where this module's
+`crandom()` reads (-3, -1] (section 14.1); the origin is `currentOrigin`
 with z raised by half the entity's height (0x74d5c = 0.5); the call is
 `LaunchItem(item, origin, velocity, ent->s.number)` (0x4deb4). On a death
 that `currentOrigin` is snapped or not depending on where the death ran:
@@ -637,8 +639,9 @@ evicted every time. INFERRED: the new drop then takes slot 0, so once the ring
 is full, each further drop evicts the one before it.
 
 VERIFIED, `G_RunItem` (0x4eb18): a `trap_PointContents` with mask 0x80000000
-(0x4ec47..0x4ec4f) and a `G_FreeEntity` (0x4ec5f). INFERRED: an item whose
-origin lands in `CONTENTS_NODROP` is freed. INFERRED, from the absence of any
+(0x4ec47..0x4ec4f) and a `G_FreeEntity` (0x4ec5f). VERIFIED, on a patched
+map (section 14.5): an item whose origin is in a brush carrying that bit when
+its sweep meets something is freed. INFERRED, from the absence of any
 other free: a drop lives until it is picked up, until it holds slot 0 when a
 drop is made with all 32 slots held (slot 0 is evicted every time, as
 above), or until it lands in `CONTENTS_NODROP`. VERIFIED: the two `0x7530`
@@ -683,8 +686,8 @@ VERIFIED: `level.spawning` is written only by `G_SpawnEntitiesFromString`
 place, and unless `spawnflags & 1` it gets `groundEntityNum` 0x3ff and, for a
 weapon, the +90 roll. INFERRED: a script spawn with `spawnflags & 1` skips
 both, since the `jne` at 0x4e7ff passes over the 0x3ff store and the roll
-add. INFERRED: `G_RunItem` then switches an airborne item to `pos.trType` 5
-at `level.time` (0x4eb24..0x4eb3f), so it falls and settles.
+add. VERIFIED, section 14.4: `G_RunItem` then switches an airborne item to
+`pos.trType` 5 at `level.time` (0x4eb24..0x4eb3f), so it falls and settles.
 
 VERIFIED: the bounds (±1), `contents 0x407c0108` and `svFlags 0x200` are
 server-side only; none is an entity netfield. INFERRED: the touch never uses
@@ -730,12 +733,16 @@ drop is script, like the health drop.
 
 What vcod leaves out, each with the retail reading it skips:
 
-- The launch flight and the `G_RunItem` settle: a drop in vcod snaps to the
-  floor (`pos.trType` 0) instead of flying the `LaunchItem` trajectory and
-  settling (section 8), and the tag's `apos` spin goes with it.
-- Respawn: `spawnflags & 8`, `RespawnItem` and `EV_ITEM_RESPAWN` (section 7);
-  no stock BSP sets the flag.
-- The `CONTENTS_NODROP` free in `G_RunItem` (section 8).
+- `RespawnItem`'s team branch (`ent+0x1d8`, a random pick through the
+  teammaster chain at `ent+0x264`, section 14.3); no stock BSP gives an item
+  a `team` key.
+- The `wait == -1` arm of `Touch_Item` (section 7): vcod hides the item for
+  good and does not set `eFlags` 0x100 or `unlinkAfterEvent`. Script cannot
+  write `wait` (it is a keyword), and no stock BSP item carries one.
+- Brushes whose contents carry 0x80 or 0x400 but no SOLID, PLAYERCLIP or
+  GLASS bit (the 0x2080 kerb and floor words): they are in both item masks
+  (0x81, 0x491) and not in vcod's clip, so an item falls through them
+  (section 14.2).
 - `cg_predictItems`: the choice between `G_AddPredictableEvent` and
   `G_AddEvent` (section 7); both write the same ring.
 - `trigger_use` competing with items for the use key inside
@@ -978,27 +985,20 @@ host's mirrors, runs it and writes the result back. `G_GetActivateEnt` is
 (`crates/server/src/game/script.rs`) on the use key's rising edge, in the same
 pass as the walk-over touches; `G_CheckForCursorHints` is
 `ScriptRuntime::cursor_hint_pass`, run beside `ClientEndFrame`'s aim trace.
-`Drop_Weapon` is `crate::game::pickup::drop_weapon` and `LaunchItem` is
-`crate::game::item::launch_weapon`, both reached from a death
-(`crate::game::combat`) and from the `dropItem` builtin
-(`crate::game::builtins::client::drop_item`); the 32-slot ring is
-`crate::game::item::DropRing`. A script-spawned item (the `spawn` builtin on
-a `bg_itemlist` classname, `crate::game::builtins::entity`) settles on its
-first think (`ThinkFn::SettleItem`) rather than inline, so the angles a
-script writes right after `spawn` returns are what the landing aligns; a
-BSP-placed one settles at map load instead, inline in
-`spawn_entities_from_string`. Both call the same floor trace,
-`crate::game::spawn::drop_item_to_floor`, which stands in for `G_RunItem`'s
-fall: it traces straight down and stops there rather than flying a
-trajectory, and a weapon's `align_to_surface` call adds the 90 degrees of
-roll a launched weapon lands with. A death or a script drop instead takes
-the dropper's yaw outright and starts its trace at the dropper's box
-mid-height, the z `Drop_Weapon` launches from (section 8), since a grounded
-origin sits inside the trace box's reach of the floor (`DropAt::Feet`); a
-swap's drop is placed
-exactly where the item it replaced lay (`DropAt::Exactly`), never landing,
-which is why its `groundEntityNum` reads 0 rather than the world's 1022
-(section 9).
+`Drop_Weapon` is `crate::game::pickup::drop_weapon` and
+`crate::game::item::launch_weapon`, `Drop_Item` is
+`crate::game::item::drop_item`, both reached from the `dropItem` builtin
+(`crate::game::builtins::client::drop_item`), which a death's script calls;
+the 32-slot ring is `crate::game::item::DropRing`. `G_RunItem` and
+`G_BounceItem` are `crate::game::item::run_items` and `run_flight`, and a
+script-spawned item (the `spawn` builtin on a `bg_itemlist` classname) goes
+through `crate::game::item::spawn_in_place`, which leaves it to fall the
+way section 14 measures. A BSP-placed item settles at map load instead,
+inline in `spawn_entities_from_string`, through
+`crate::game::spawn::drop_item_to_floor`, `FinishSpawningItem`'s trace. A
+swap's drop is placed exactly where the item it replaced lay
+(`DropAt::Exactly`), never landing, which is why its `groundEntityNum`
+reads 0 rather than the world's 1022 (section 9).
 
 The pickup arithmetic never touches a player entity's fields directly:
 `crate::game::item::inventory` copies the host's `client_weapons`,
@@ -1014,10 +1014,9 @@ every ungrabbable candidate out with `can_grab` before it scores or traces the s
 matching `G_GetActivateEnt`'s list once the ungrabbable entries it scores
 10000 units behind are cut (section 2.1).
 
-Three divergences with retail that are not test failures: an item notify
+Two divergences with retail that are not test failures: an item notify
 fires at the top of the next script frame rather than inline with the touch
-that raised it (13.1); the settle is a floor trace rather than `G_RunItem`'s
-flight (section 11); and `trigger_use` stays on the touch pass rather than
+that raised it (13.1); and `trigger_use` stays on the touch pass rather than
 joining the use key's scan inside `G_GetActivateEnt` (section 11), along with
 the rest of that section's list. The retail-capture gate has no `GAPS`
 ruling since 13.2; section 13.4 is a further live run against ours rather
@@ -1185,3 +1184,239 @@ none of it is fixed here:
   `crates/server/src/game/entity.rs`: ours gives a client `classname`
   "player" from the moment the slot exists. Ruling: open, outside item pickup
   (client entity).
+
+## 14. Flight, landing, nodrop and respawn
+
+One run on 2026-10-06 against the retail 1.1d dedicated server on
+mp_carentan, `client-probes/probe_itemdrop` as the gametype and a
+`--net-probe --probe-team allies --probe-items` client, wrote
+`crates/server/tests/fixtures/items/mp_carentan-dm-itemdrop.txt` ("the
+drop fixture" below): the probe's `PROBE` lines and the client's `ITEM` and
+`ITEM_GONE` lines. A second probe, `client-probes/probe_nodrop`, ran on a
+patched map (14.5). Times are server times. The probe client holds its view
+at world yaw 0, so the probe's `setplayerangles` calls do not stick, and
+VERIFIED, the drop fixture: every `PROBE drop` line logs the player's
+`angles` as (0, 0, 0).
+
+### 14.1 The launch
+
+VERIFIED, `Drop_Weapon` (0x4de00..0x4deb4): a yaw of `0 + ent+0x144`, the
+dropper's `r.currentAngles[1]` (the `angles` field, which
+`cod11-gsc-object-model.md` 23.6 has `ClientThink_real` writing from the view
+yaw), through `AngleVectors`, times 150 (0x74d4c); `fild rand()`, `fmul`
+by 0x74d50, which holds 0xb0000000 (-2^-31), a doubling, `fsubrp` against 1,
+`fmul` 50 and `fadd` 200 (0x4de4d..0x4de6c); the origin is `currentOrigin`
+with `(maxs.z - mins.z) * 0.5` (0x74d5c) added to z. INFERRED: `crandom()`
+compiles to `2 * (rand() * -2^-31) - 1`, which reads (-3, -1] where Q3's
+reads (-1, 1), so the climb is 50 to 150 units a second and never the 200
+the constant suggests. VERIFIED, the drop fixture: the four drops climb at
+87.101, 62.477, 147.160 and 122.900, and all four leave at (150, 0) in x and
+y.
+
+VERIFIED, `LaunchItem` (0x4db98): `G_SetOrigin` (0x4dcdf), then `pos.trType`
+5, `trTime = level.time` and `trDelta = velocity` (0x4dce4..0x4dd07), and
+`clipmask` 0x81 (0x4dca1); no instruction in it stores to `ent+0x18c`
+(`physicsBounce`) or to `s.apos`. VERIFIED, the drop fixture: each drop's
+first line is its launch frame with `pos` type 5 and `trTime` that frame, and
+`groundEntityNum` 0 until it lands.
+
+VERIFIED, the tag block of `Drop_Weapon`: `G_DObjGetWorldTagMatrix(ent,
+tag, matrix)` (0x4e0bb) and, when it succeeds, a capsule trace with mask
+0x411 and the item's bounds from `currentOrigin + (mins + maxs) * 0.5` to
+the matrix's origin, passing the dropper (0x4e0cb..0x4e14b); `trBase` and
+`currentOrigin` take its end and `trTime` the level time (0x4e150..0x4e194);
+`Axis4ToAngles` of the matrix into a local (0x4e1a2), 90 (0x74d64) added to
+that local's roll (0x4e1d4), and then `G_SetAngle(item, ent+0x140)`
+(0x4e1dd..0x4e1e7): the dropper's own `r.currentAngles`. INFERRED: the
+tag's angles are computed and dropped, and a thrown weapon flies at its
+dropper's angles. VERIFIED: `apos.trType` 2, `apos.trTime` the level time and
+`apos.trDelta = (50, 40, 60) * crandom()` (0x4e1ec..0x4e270), on both arms
+of the tag test. VERIFIED, the drop fixture: the three weapon drops carry
+`apos` type 2 with `trBase` (0, 0, 0), the dropper's angles, and rates of
+(-98.958, -98.357, -117.196), (-89.107, -99.938, -162.675) and (-84.077,
+-87.543, -74.542), each inside its (-3k, -k] range.
+
+VERIFIED, the drop fixture, each weapon drop's start against the dropper's
+origin: (+6.24, -4.84, +48.12) holding the carbine, (+4.14, -7.88, +46.28)
+and (+4.08, -4.64, +47.33) for the colt and the frag after it. VERIFIED,
+two live runs of the probe against ours: (+6.22, -4.94, +48.11), (+4.09,
+-7.91, +46.31), (+4.09, -4.78, +47.31) on one, and (+4.07, -4.44, +47.34)
+for the colt on the other, with the same anims and a different legs-anim
+start time. INFERRED: the start is `tag_weapon_right` on the dropper's model
+at its yaw, and it sways with the idle anim, whose phase is wherever each
+server last restarted it; the gate allows 4 units for it.
+
+VERIFIED, `Drop_Item` (0x4ed30): the yaw is `ent+0x144` plus its third
+argument; a non-zero fourth argument zeroes the velocity, else the same 150
+(0x74e5c) and `200 + 50 * crandom()` (0x74e60..0x74e68); z is raised by half
+the box (0x74e6c); then `LaunchItem` with no tag and no `G_SetAngle`.
+VERIFIED, `PlayerCmd_dropItem` (0x43684): weapon index 0 (`"none"` or any
+name that is not a weapon) goes to `BG_FindItem`, whose NULL skips
+`Drop_Item` and hands `GScr_AddEntity` a NULL (0x43741..0x4375b), and a
+found row goes to `Drop_Item(ent, item, 0, 0)` (0x43745..0x4374b).
+VERIFIED, the drop fixture: `dropItem("item_health")` returns entity 175,
+classname `item_health`, started 35.00 above the player's origin, `apos`
+type 0 at (0, 0, 0). INFERRED: a non-weapon drop starts at the box's
+mid-height (35 of a standing player's 70) and does not spin.
+
+### 14.2 The flight and the landing
+
+VERIFIED, `G_RunEntity` (0x502bc, no dynamic symbol; the name is Q3's for
+what the bytes do): `eType` 3 runs `G_RunItem` unless
+`ent+0x2e4` (a link parent) is set (0x50380..0x503f5), and any other `eType`
+with the byte at `ent+0x161` set does too (0x503e8). VERIFIED, the drop
+fixture: the probe's `PROBE at flat 32400` reads (851.74, 2217.16, 27.65),
+the arc at 32350, and the `air` carbine spawned by a thread at 48300 reads
+`trTime` 48300 on the 48300 snapshot. INFERRED: a frame's script threads run
+before its entity pass, so a thread reads a flying item's last-frame origin
+and an item a thread spawns falls from that same frame.
+
+VERIFIED, `G_RunItem` (0x4eb18): `groundEntityNum` 0x3ff with a `trType`
+other than 5 sets `trType` 5 and `trTime` (0x4eb24..0x4eb3f); `trType` 0 or
+8 runs the think alone; otherwise `BG_EvaluateTrajectory` at the level time,
+a trace with `clipmask` or 0x491 when that is 0 (0x4eb76..0x4eb88), a
+capsule when `eFlags & 0x10` (0x4eb8a), from `currentOrigin` with the item's
+bounds; `currentOrigin` takes the end, a start-solid trace has its fraction
+zeroed (0x4ec08), then the link and the think, a return when the entity is
+gone or the fraction is 1, the nodrop test (14.5), and `G_BounceItem`.
+
+VERIFIED, `G_BounceItem` (0x4e858): the velocity at the contact time
+reflected (-2, 0x74e44) and scaled by `ent+0x18c`; on a start-solid trace the
+velocity is zeroed and a trace with mask 0x411 runs from `currentOrigin` 128
+(0x74e48) down into the same trace struct; when the normal's z is above 0
+and the scaled z velocity below 40 (0x74e4c): the end's z raised by `0.5 +
+0.5 * rand() * -2^-31` (0x74e50, 0x74e54), `G_SetOrigin`, `groundEntityNum`
+from the trace (0x4ea1b), the axis built from the normal and `AngleVectors`
+of `r.currentAngles` with two cross products, `AxisToAngles`, 90 (0x74e58)
+on the roll for `giType` 1, `G_SetAngle`; otherwise `currentOrigin` plus the
+normal into `trBase` with `trTime` the level time. VERIFIED: `G_SpawnItem`
+stores 0 into `ent+0x18c` (0x4e6d7). INFERRED: every item keeps no velocity
+past a contact, so a floor (any normal with z above 0) stops it with up to
+half a unit of lift and anything else drops it straight down from a unit
+off the surface.
+
+VERIFIED, `G_SpawnItem` (0x4e6e1..0x4e756): a `giType` 1 row gets bounds
+(-1, -1, -1) to (1, 1, 1), any other (-1, -1, 0) to (1, 1, 0x74e3c).
+
+VERIFIED, the drop fixture: the flat drop lands on the 32800 snapshot at
+(918.585, 2217.158, -30.440) with `apos` (0, 0, 90) and `groundEntityNum`
+1022; the arc's sweep from 32750 meets the floor at fraction 0.9125, z
+-30.877, so the lift was 0.437. The wall drop's `pos` changes on the 36700
+snapshot to type 5, `trTime` 36700, `trBase` (893.875, -653.856, 20.998) and
+no delta: the wall's contact at x 894.875 moved one unit along (-1, 0, 0);
+it lands at 36950. Over the floor the player stood on at -23.875, the
+respawn colt, a weapon, rests at -22.399 and the health pack at -23.686:
+the box's floor plus 0.47 and 0.19 of lift.
+
+VERIFIED, `crates/server/tests/itemdrop_ab.rs` replaying every retail flight
+from its own wire trajectory through ours: before this change ours landed
+the wall drop at roll 87.680 and the slope drop at 98.599, against retail's
+87.612 and 98.861, with pitch and yaw equal to the thousandth. INFERRED:
+`crate::game::spawn::axis_to_angles` turned the right axis about +y by
++pitch where the forward axis is only levelled by -pitch; with the turn
+reversed both land to 0.05 degrees. `FinishSpawningItem`'s placed items go
+through the same function, and the entity gates stay green on it.
+
+### 14.3 Respawn
+
+VERIFIED: `Pickup_Weapon` returns `g_weaponRespawn` for `spawnflags & 8`
+(0x4d3df..0x4d3ed) and -1 otherwise (0x4d3f0); `dump_cvars.py` reads
+`g_weaponrespawn` "5", flags 0. VERIFIED, `Touch_Item` (0x4d8e7..0x4da0e):
+`wait` equal to -1 (0x74d24) takes the hide arm; a non-zero `wait` replaces
+the value with its truncation; a non-zero `random` adds the truncation of
+`crandom() * random` and only then floors the sum at 1 (0x4d9a2..0x4d9a8); a
+dropped item's free at +100 overwrites the think; a value above 0 arms
+`RespawnItem` at `level.time + value * 1000`. VERIFIED, `G_RunEntity`
+(0x502dd..0x502f5): an entity with no client takes `eFlags` 0x100 when
+`flags & 0x1000` is set and loses it otherwise, at the top of each frame.
+
+VERIFIED, the console of a first run of the probe: `h.wait = 3;` is a
+`script compile error`, `bad syntax`, at the `wait`. INFERRED: `wait` is a
+keyword, so of the two fields script can only write `random` (entity field
+0x0b, offset 620).
+
+VERIFIED, the drop fixture, the health pack with `random` 0.5, spawned at the
+player's feet at 18300: gone from the 18350 snapshot, `PROBE trigger
+randomhealth 18350 0`, back on the 19300 snapshot with `eFlags` 272,
+`eventSequence` 1 and `events[0]` 197 (parm 0), and `eFlags` 16 from 19350.
+INFERRED: taken at level time 18300 and back 1000 ms later, the -1 the pack
+returns plus a truncated draw of 0 floored to 1. VERIFIED: the colt spawned
+with spawnflags 8 and taken as ammo at 23300 is back on the 28300 snapshot,
+taken again when the player returns at 31300 and back at 36300 with
+`events` 197, 197 and `eventSequence` 2. INFERRED: 5000 ms each time,
+`g_weaponrespawn`, and the event ring is the entity's own and survives the
+hide.
+
+VERIFIED, the drop fixture: the health pack was taken while it fell, and the
+probe's thread logged its origin moving on at 18400 and 18450, hidden from
+the wire, and the 19300 respawn carries the rest it reached, -23.686.
+INFERRED: `G_RunItem` keeps running a taken item. VERIFIED: the probe's
+watcher threads on 170 and 171 logged every later pickup with no error, and
+no notify accompanies a return. INFERRED: script sees a respawn only through
+the same entity becoming touchable again.
+
+### 14.4 Script spawns
+
+VERIFIED, `spawn` (0x5d268): a third argument, read with `Scr_GetInt` when
+there are more than two, is stored into `spawnflags` (`ent+0x178`, 0x5d2e7)
+before `G_CallSpawnEntity`. VERIFIED, the drop fixture: the `air` carbine
+spawned at (838, 2282, 49) with its `angles` written to (0, 45, 0) is on the
+48300 snapshot with `pos` type 5, `trTime` 48300, `groundEntityNum` 1023 and
+`apos` (0, 45, 0); it falls 1, 3, 5 ... units a frame and lands on the 48750
+snapshot at z -22.491 with (0, 45, 90). The `feet` health pack, spawned one
+unit over the slope, lands on its second frame at (468, -822, 31.916) with
+(359.425, 123.008, -0.789). The `hang` colt, spawnflags 1, reads `pos` type 0,
+`groundEntityNum` 0 and (0, 0, 0) for its whole life. The respawn colt,
+spawned with spawnflags 8 and no script angles, reads `apos` (0, 0, 90).
+INFERRED, as section 9 read: the roll and `ENTITYNUM_NONE` come with every
+spawn but `spawnflags & 1`.
+
+### 14.5 `CONTENTS_NODROP`
+
+VERIFIED, lump 0 of every BSP in `pak0`..`pak6` (45 maps, the 12 MP ones
+among them): no material's contents carry 0x80000000. The measurement
+therefore ran on `mp_itemtest`, a copy of mp_carentan's BSP whose material 0
+(`textures/common/clipmonster`, 0x28020000) has the bit added, packed with a
+copy of `mp_carentan.gsc` into a pak in the retail homepath; nothing of it
+is committed. Brush 895 of that
+material is the box (493..547, 1859..1887, -144..-93), and two
+`clip_nosight` brushes (0x28031640, 0x400 in the item mask) fill it.
+
+VERIFIED, `client-probes/probe_nodrop` on `mp_itemtest`, four carbines
+spawned at 2050: `inside`, at (520, 1873, -110) within the box, is undefined
+by the 2100 read; `above`, from z 20, comes to rest at 9.39 on a shack wall
+top over the box; `beside`, at y 1840 outside it, rests at -111.50; `hang`,
+spawnflags 1, stays at -120 inside it for the 4 s. VERIFIED, the same probe
+on stock mp_carentan: `inside` rests at -114.46 from the 2100 read on, and
+the other three as on the patched map. INFERRED: the test runs on the item's
+origin only after a sweep that meets something, and a start-solid sweep
+counts; an item never swept, or resting outside the volume, is kept.
+
+VERIFIED, the same probe against ours on the same patched map, run live: the
+same four outcomes, `inside` gone by the first read.
+
+### 14.6 As implemented
+
+`crate::game::item::run_items` is `G_RunEntity`'s item pass: the hide
+mirrored into `eFlags` 0x100, `run_flight` (`G_RunItem` and `G_BounceItem`,
+pure over a `CollisionWorld`), and the `RespawnItem` think. It runs at the end
+of `ScriptRuntime::run_frame`, after the thread pass (14.2), and the generic
+think pass leaves `ThinkFn::RespawnItem` to it. `ItemState` carries `pos` and
+`apos` while they are not stationary, which `crate::game::wire` sends in place
+of the `origin` and `angles` fields. `CollisionWorld::item_trace` is the
+capsule sweep with the static models, and the loader keeps world brushes
+carrying 0x80000000 as volumes for `point_contents`.
+
+`dropItem`'s weapon arm poses the dropper's rig off the `client_dobjs`
+mirror, which `Server` refreshes beside `client_bodies` and before every
+damage callback, and unlike that mirror keeps a dead player's pose, so a death
+drop leaves from the hand. Without the rig, the animtree or the paks the drop
+leaves from mid-height, `Drop_Weapon`'s own fallback.
+
+`crates/server/tests/itemdrop_ab.rs` holds both halves: every retail flight
+replayed through `run_flight` from its own wire trajectory (each nudge on the
+same frame to the hundredth, each landing on the same frame and spot, up to
+the half unit of lift, and to 0.05 degrees), and the probe on our server
+with a client that holds the carbine and a zero view, held to retail's lines
+per item: what is sent and when, from `PROBE start`, with the drops' climb,
+spin and tag start held to their ranges.

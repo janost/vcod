@@ -1359,7 +1359,16 @@ impl ClientSim {
     /// is alive and playing: the link where its last cmd left it, posed the
     /// way its last end frame did (`docs/research/cod11-combat.md` 16.1).
     pub fn hit_body(&self, slot: usize) -> Option<crate::game::combat::HitBody> {
-        if self.pm_type != PmType::Normal || self.dead {
+        if self.dead {
+            return None;
+        }
+        self.dobj(slot)
+    }
+
+    /// The posed model a tag lookup reads, which a dead player still has:
+    /// [`Self::hit_body`] without the death gate.
+    pub fn dobj(&self, slot: usize) -> Option<crate::game::combat::HitBody> {
+        if self.pm_type != PmType::Normal {
             return None;
         }
         Some(crate::game::combat::HitBody {

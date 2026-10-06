@@ -111,7 +111,9 @@ either: the people on it signed up for Call of Duty.
   falloff.
 - Deaths leave corpses in the eight-slot body queue and drop the dead player's
   weapon. Players pick up weapons, ammo and health packs by touch or the use
-  key.
+  key. Dropped and spawned items fly retail's arc and land on what they hit,
+  an item that lands in a `CONTENTS_NODROP` brush is freed, and an item
+  flagged to respawn comes back on retail's timer.
 - Search & Destroy end to end: plant, defuse, progress bar, objectives on the
   compass.
 - Mounted MG42s: mount with use, aim inside the gun's arc, fire, dismount.
@@ -180,7 +182,6 @@ console, no key rebinding. You get command-line flags and the binds below.
 
 - `re` (Retrieval) and `bel` (Behind Enemy Lines) run through the same
   script path, but I haven't checked either against retail.
-- Item respawn, an item's launch arc and `CONTENTS_NODROP` aren't modelled.
 - A moving brush model pushes players only, not items, grenades or corpses.
 - A blast walks its victims (players and MG42s) in entity order, not
   retail's area-tree order, so who shields whom can differ when several

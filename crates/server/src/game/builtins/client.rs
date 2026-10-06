@@ -191,18 +191,17 @@ pub fn clone_player(
     Ok(Value::Undefined)
 }
 
-/// `self dropItem(name)` (`.so` 0x43684) -> `Drop_Weapon` -> `LaunchItem`
-/// (docs/research/cod11-items.md section 8): the weapon is taken, its rounds
-/// ride the item, and a `clipOnly` weapon with an empty clip or a weapon
-/// not held leaves nothing. Returns the item, as `GScr_AddEntity` (0x4375b)
-/// hands it back, or undefined when nothing dropped.
-///
-/// A name no weapon file backs raises, the same reading `weapon_argument`
-/// takes for every other weapon builtin. `"none"` is the exception and is a
-/// no-op: `getCurrentWeapon` reports it for `ps.weapon` 0, and stock
-/// `dm.gsc:531` is `self dropItem(self getcurrentweapon());` with no guard,
-/// so raising there would kill the killed callback before its `respawn()`
-/// and leave the player dead for the rest of the map.
+/// `self dropItem(name [, tag])` (`.so` 0x43684): a weapon name goes to
+/// `Drop_Weapon` with `tag`, `"tag_weapon_right"` by default (`.rodata`
+/// 0x731d4); the weapon is taken, its rounds ride the item, and a
+/// `clipOnly` weapon with an empty clip or a weapon not held leaves nothing.
+/// Any other name goes through `BG_FindItem` to `Drop_Item`, which launches
+/// the item with nothing taken off the player
+/// (docs/research/cod11-items.md section 8). Returns the item, as
+/// `GScr_AddEntity` (0x4375b) hands it back, or undefined when nothing
+/// dropped or `BG_FindItem` found nothing, which is how `"none"` (what
+/// `getCurrentWeapon` reports for `ps.weapon` 0, and stock `dm.gsc:531`
+/// passes on every death with no guard) and a misspelt name both end.
 pub fn drop_item(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -210,12 +209,22 @@ pub fn drop_item(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
-    if let Some(Value::String(name)) = args.first()
-        && cx.resolve(*name) == "none"
-    {
-        return Ok(Value::Undefined);
-    }
-    let (_, index) = weapon_argument(cx, args)?;
+    let Some(Value::String(name)) = args.first() else {
+        return Err(ErrorKind::BadType("dropItem takes an item name"));
+    };
+    let name = cx.resolve(*name).to_string();
+    let Some(index) = weapon_index(&name).filter(|&i| i != 0) else {
+        return match crate::items::classname_index(&name) {
+            Some(row) => Ok(Value::Entity(crate::game::item::drop_item(
+                host, cx, slot, row,
+            )?)),
+            None => Ok(Value::Undefined),
+        };
+    };
+    let tag = match args.get(1) {
+        Some(Value::String(t)) => cx.resolve(*t).to_string(),
+        _ => "tag_weapon_right".to_string(),
+    };
     let before = crate::game::item::inventory(host, slot);
     let mut inv = before;
     let weapons = host.weapons.clone();
@@ -224,7 +233,8 @@ pub fn drop_item(
     let Some(d) = dropped else {
         return Ok(Value::Undefined);
     };
-    let id = crate::game::item::launch_weapon(host, cx, slot, d, crate::game::item::DropAt::Feet)?;
+    let at = crate::game::item::DropAt::Thrown { tag };
+    let id = crate::game::item::launch_weapon(host, cx, slot, d, at)?;
     Ok(Value::Entity(id))
 }
 
@@ -1102,9 +1112,9 @@ mod tests {
     }
 
     /// `Drop_Weapon` through `LaunchItem`: the carbine leaves the player's
-    /// hands with its rounds, lands where the player stood, names its dropper
-    /// in `clientNum` for 1000 ms, takes a ring slot, and comes back as the
-    /// builtin's return value.
+    /// hands with its rounds, in the air with no ground yet, names its
+    /// dropper in `clientNum` for 1000 ms, takes a ring slot, and comes back
+    /// as the builtin's return value.
     #[test]
     fn dropitem_drops_the_weapon_with_its_rounds_and_the_owner_lockout() {
         let (mut vm, mut host) = fixture();
@@ -1132,7 +1142,8 @@ mod tests {
             assert_eq!(item.clip, 12);
             assert_eq!(item.owner, Some(0));
             assert!(item.dropped);
-            assert_eq!(item.ground, 1022, "a dropItem drop has landed");
+            assert_eq!(item.ground, 0, "a dropItem drop is in the air");
+            assert!(item.pos.is_some());
             let count = cx.intern_folded("count");
             assert_eq!(host.get_field(cx, id, count), Value::Int(400));
             let e = host.ents.get(id).unwrap();
@@ -1173,17 +1184,47 @@ mod tests {
         assert_eq!(host.client_weapons[0], held);
     }
 
-    /// A name no weapon file backs raises rather than spawning an item with
-    /// no weapon on it, the same reading every other weapon builtin takes.
+    /// A name neither a weapon file nor `bg_itemlist` backs drops nothing
+    /// and returns undefined: `BG_FindItem`'s miss skips `Drop_Item`
+    /// (0x43743).
     #[test]
-    fn dropitem_refuses_a_weapon_nothing_backs() {
+    fn dropitem_of_a_name_nothing_backs_drops_nothing() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
             let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let name = Value::String(cx.intern_exact("blunderbuss_mp"));
-            assert!(drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).is_err());
+            assert_eq!(
+                drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).unwrap(),
+                Value::Undefined
+            );
             assert_eq!(host.ents.iter_inuse().count(), 1, "no item was spawned");
         });
+    }
+
+    /// A `bg_itemlist` row that is no weapon goes to `Drop_Item`: launched
+    /// with nothing taken off the player and no spin.
+    #[test]
+    fn dropitem_of_health_launches_it_without_a_spin() {
+        let (mut vm, mut host) = fixture();
+        let held = host.client_weapons[0];
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
+            let name = Value::String(cx.intern_exact("item_health"));
+            let Value::Entity(id) =
+                drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).unwrap()
+            else {
+                panic!("dropItem returns the item");
+            };
+            let item = host.ents.get(id).unwrap().item.unwrap();
+            assert_eq!(item.index, 68);
+            assert!(item.pos.is_some() && item.apos.is_none());
+            let cn = cx.intern_folded("classname");
+            let Value::String(s) = host.get_field(cx, id, cn) else {
+                panic!("a classname");
+            };
+            assert_eq!(cx.resolve(s), "item_health");
+        });
+        assert_eq!(host.client_weapons[0], held);
     }
 
     /// `"none"` is what `getCurrentWeapon` reports for a holstered player,

@@ -71,8 +71,9 @@ const TURRET_EFLAGS_FIRING: i32 = 0x400;
 /// the caller's business (`crate::world::visible_entities`).
 ///
 /// VERIFIED from the module: `G_SpawnItem` (0x4e6ed) writes (-1, -1, -1) to
-/// (1, 1, 1), and `G_SpawnTurret` (0x52f75) writes (-32, -32, 0) to
-/// (32, 32, 56).
+/// (1, 1, 1) for a weapon row (any other row takes (-1, -1, 0) to (1, 1, 2),
+/// docs/research/cod11-items.md 14, a unit off for the clusters), and
+/// `G_SpawnTurret` (0x52f75) writes (-32, -32, 0) to (32, 32, 56).
 pub fn link_box(etype: i32) -> ([f32; 3], [f32; 3]) {
     match etype {
         ET_TURRET => ([-32.0, -32.0, 0.0], [32.0, 32.0, 56.0]),
@@ -288,16 +289,29 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
     }
 
     match kind {
-        Kind::Item {
-            index,
-            client_num,
-            ground,
-        } => {
+        Kind::Item(item) => {
             seti(&mut e, "eType", ET_ITEM);
-            seti(&mut e, "index", index);
-            seti(&mut e, "eFlags", ITEM_EFLAGS);
-            seti(&mut e, "groundEntityNum", ground);
-            seti(&mut e, "clientNum", client_num);
+            seti(&mut e, "index", i32::from(item.index));
+            let nodraw = if item.nodraw {
+                crate::game::item::EF_NODRAW
+            } else {
+                0
+            };
+            seti(&mut e, "eFlags", ITEM_EFLAGS | nodraw);
+            seti(&mut e, "groundEntityNum", item.ground);
+            seti(
+                &mut e,
+                "clientNum",
+                item.owner.map_or(ITEM_CLIENTNUM, i32::from),
+            );
+            // In the air the item's own trajectories, which `G_RunItem` and
+            // the spin run (docs/research/cod11-items.md 8, 14).
+            if let Some(pos) = item.pos {
+                pos.write(&mut e, p, "pos");
+            }
+            if let Some(apos) = item.apos {
+                apos.write(&mut e, p, "apos");
+            }
         }
         Kind::ScriptMover(model) => {
             seti(&mut e, "eType", ET_SCRIPTMOVER);
@@ -343,12 +357,8 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
 
 /// What one classname puts on the wire, if anything.
 enum Kind {
-    /// An item, by its `bg_itemlist` row, with the `clientNum` it carries.
-    Item {
-        index: i32,
-        client_num: i32,
-        ground: i32,
-    },
+    /// An item.
+    Item(crate::game::item::ItemState),
     /// A script model, by its model configstring index.
     ScriptMover(i32),
     /// A `script_brushmodel`, by its inline model number.
@@ -362,11 +372,7 @@ fn kind_of(host: &mut GameHost, cx: &mut Cx, id: EntId, classname: &str) -> Opti
         if item.taken {
             return None;
         }
-        return Some(Kind::Item {
-            index: i32::from(item.index),
-            client_num: item.owner.map_or(ITEM_CLIENTNUM, i32::from),
-            ground: item.ground,
-        });
+        return Some(Kind::Item(item));
     }
     if classname == "misc_mg42" || classname == "misc_turret" {
         let weapon = field_string(host, cx, id, "weaponinfo")

@@ -722,8 +722,9 @@ fn mirror_for_callback(
     rt.set_client_entity_state(slot, Some(sim.to_entity(proto, slot, st)));
     rt.set_client_grenade_ms(slot, sim.ps.grenade_time_left_ms);
     rt.set_client_height(slot, (sim.ps.maxs() - sim.ps.mins()).z);
-    // What `dropItem` hands the dropped weapon.
+    // What `dropItem` hands the dropped weapon, and where it starts.
     rt.set_client_ammo(slot, sim.ps.ammo, sim.ps.ammoclip);
+    rt.set_client_dobj(slot, sim.dobj(slot));
 }
 
 /// What a callback queued for `slot`, applied to its sim before its next cmd:
@@ -3445,6 +3446,7 @@ impl Server {
             for (slot, c) in self.clients.iter().enumerate() {
                 let sim = c.as_ref().and_then(|c| c.sim.as_ref());
                 rt.set_client_body(slot, sim.and_then(|s| s.hit_body(slot)));
+                rt.set_client_dobj(slot, sim.and_then(|s| s.dobj(slot)));
             }
             for (slot, c) in self.clients.iter_mut().enumerate() {
                 if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
@@ -3470,6 +3472,7 @@ impl Server {
                     // pose, a lower one's met the last (combat doc 16.1).
                     sim.commit_pose();
                     rt.set_client_body(slot, sim.hit_body(slot));
+                    rt.set_client_dobj(slot, sim.dobj(slot));
                 }
             }
             // `turret_think_client`, last in `ClientEndFrame` (turrets doc
@@ -3971,6 +3974,7 @@ impl Server {
                 // and not the last one's.
                 rt.set_client_grenade_ms(slot, sim.map_or(0, |(s, _)| s.ps.grenade_time_left_ms));
                 rt.set_client_body(slot, sim.and_then(|(s, _)| s.hit_body(slot)));
+                rt.set_client_dobj(slot, sim.and_then(|(s, _)| s.dobj(slot)));
                 if let Some((s, _)) = sim {
                     rt.set_client_height(slot, (s.ps.maxs() - s.ps.mins()).z);
                 }

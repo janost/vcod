@@ -703,6 +703,56 @@ and (-244.78, 2405.35), and read `spectator -20` after sd's
 `spawnSpectator` on both. Before the fixes ours slid it to (-273.20,
 2376.80) and its spectator read 100.
 
+## probe_itemdrop
+
+The item flight, landing and respawn capture's server half, on mp_carentan
+with one allied player. With the full loadout it first spawns an
+`item_health` at the feet of a player at 40 health with `random` 0.5, then a
+colt with spawnflags 8 after emptying the pistol's reserve, each taken by
+walking onto it, and moves the player off each so the return stays on the
+ground. Then four `dropItem` drops (the held carbine onto flat ground, the
+colt into a wall 60 units ahead, the frag down a slope, and `item_health`)
+and three script spawns (a carbine 72 units in the air, a `dropHealth`-style
+pack at the feet, a colt with spawnflags 1). It logs `PROBE spawned`, `PROBE
+drop` (with the player's and the item's origin and angles), `PROBE trigger`,
+one `PROBE at` per frame a tracked item's `origin` or `angles` changed and a
+`PROBE rest` once they have held for 3 s. `wait` is a gsc keyword, so the
+pack's respawn goes through `random`. The client half, `--probe-items`,
+prints an `ITEM` line per snapshot an item entity appeared or changed in and
+an `ITEM_GONE` when it left. Neither half writes a file; the two runs' lines
+were concatenated into
+`crates/server/tests/fixtures/items/mp_carentan-dm-itemdrop.txt`, read in
+`docs/research/cod11-items.md` 14 and gated by
+`crates/server/tests/itemdrop_ab.rs`.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=115 \
+    tools/run_probe.sh client-probes/probe_itemdrop mp_carentan
+# second shell, about 15 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-items --probe-secs 90
+```
+
+## probe_nodrop
+
+`CONTENTS_NODROP` (0x80000000) on four spawned carbines. No stock material
+carries the bit, so it runs on `mp_itemtest`: mp_carentan's BSP with 0x80000000
+ORed into material 0's contents (`textures/common/clipmonster`, the
+`u32` at lump 0's offset + 68), saved as `maps/mp/mp_itemtest.bsp` beside a
+copy of `maps/MP/mp_carentan.gsc` renamed to `maps/mp/mp_itemtest.gsc`, in a
+`zzz_` pak in the homepath's `main/`. The pak is built from game data and is
+never committed. It needs no client, so `tools/run_probe.sh` alone prints
+everything; run it on stock mp_carentan too for the control.
+`docs/research/cod11-items.md` 14.5 reads both.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=30 \
+    tools/run_probe.sh client-probes/probe_nodrop mp_itemtest
+```
+
+Ours takes the same pak through a scratch `--game-dir` whose `main/` links
+the stock paks beside it: `vcod-server mp_itemtest --game-dir <dir>
+--gametype-script .../probe_nodrop.gsc`.
+
 ## probe_victims
 
 Four leftovers of the damage path, for `docs/research/cod11-combat.md` 4.4,
