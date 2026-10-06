@@ -56,9 +56,6 @@ const TAG_TOL: f32 = 4.0;
 const ANGLE_TOL: f32 = 0.05;
 /// The drops, whose climb, spin and so landing frame are random draws.
 const DROPS: [&str; 4] = ["flat", "wall", "slope", "health"];
-/// The probe's respawn half, which ours does not model yet: both items stay
-/// taken (items doc 11).
-const GAPS: [&str; 2] = ["randomhealth", "respawncolt"];
 
 fn report() -> bool {
     std::env::var("ITEM_REPORT").is_ok_and(|v| v == "1")
@@ -509,7 +506,6 @@ fn the_probe_runs_as_retail_ran() {
     let keep = |l: &&String| {
         let w: Vec<&str> = l.split_whitespace().collect();
         !(matches!(w[1], "at" | "rest") && DROPS.contains(&w[2]))
-            && !GAPS.contains(&w.get(2).copied().unwrap_or(""))
     };
     let r: Vec<_> = retail
         .probe
@@ -547,7 +543,7 @@ fn the_probe_runs_as_retail_ran() {
         }
     }
 
-    for tag in retail.tags.keys().filter(|t| !GAPS.contains(&t.as_str())) {
+    for tag in retail.tags.keys() {
         let (r, o) = (retail.of(tag), ours.of(tag));
         if report() {
             eprintln!("{tag} retail:");

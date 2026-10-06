@@ -774,7 +774,7 @@ impl GameHost {
         for (id, think) in self.ents.run_thinks(now_ms) {
             match think {
                 ThinkFn::Free => self.free_entity(id),
-                ThinkFn::ClearOwner => {}
+                ThinkFn::ClearOwner | ThinkFn::RespawnItem => {}
             }
         }
     }

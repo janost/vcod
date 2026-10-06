@@ -1,6 +1,6 @@
 //! Items on the host: the component an item entity carries, the 32-slot
 //! drop ring, `Drop_Weapon`'s and `Drop_Item`'s launch, `G_RunItem`'s
-//! flight, and the inventory the pickup arithmetic
+//! flight, the respawn, and the inventory the pickup arithmetic
 //! (`crate::game::pickup`) runs on. Addresses are in
 //! docs/research/cod11-items.md.
 
@@ -41,11 +41,19 @@ pub struct ItemState {
     /// `clipmask`: `LaunchItem`'s 0x81, or 0, which `G_RunItem` reads as
     /// 0x491.
     pub clipmask: u32,
+    /// `s.eFlags & 0x100`. `G_RunEntity` copies the pickup's hide
+    /// (`flags & 0x1000`) into it at the top of every frame (0x502e6), so
+    /// the frame a respawn runs still carries it (section 14).
+    pub nodraw: bool,
 }
 
 pub const DROP_RING: usize = 32;
 pub const OWNER_LOCKOUT_MS: i32 = 1000;
 pub const FREE_AFTER_PICKUP_MS: i32 = 100;
+/// `EV_ITEM_RESPAWN`, which `RespawnItem` puts on the item (0x4ed0f).
+pub const EV_ITEM_RESPAWN: i32 = 197;
+/// `s.eFlags` bit the hide mirrors into (section 14).
+pub const EF_NODRAW: i32 = 0x100;
 /// `Drop_Weapon`'s and `Drop_Item`'s horizontal launch speed (0x74d4c,
 /// 0x74e5c); the vertical one is `200 + 50 * crandom()`.
 const LAUNCH_SPEED: f32 = 150.0;
@@ -103,6 +111,7 @@ pub fn attach(host: &mut GameHost, id: EntId, index: usize) {
             pos: None,
             apos: None,
             clipmask: 0,
+            nodraw: false,
         });
     }
 }
@@ -222,8 +231,8 @@ fn stationary(at: Vec3) -> Trajectory {
     }
 }
 
-/// The `G_RunEntity` pass over every item (0x502bc): `G_RunItem`'s flight.
-/// Runs after the
+/// The `G_RunEntity` pass over every item (0x502bc): the hide mirrored into
+/// `eFlags`, `G_RunItem`'s flight, then the respawn think. Runs after the
 /// frame's script threads, as retail's entity loop does: a thread that reads
 /// a flying item's `origin` reads the last frame's, and an item a thread
 /// spawns starts falling on the frame it was spawned in (section 14).
@@ -241,6 +250,7 @@ pub fn run_items(host: &mut GameHost, cx: &mut Cx, now_ms: i32) {
         let Some(mut st) = host.ents.get(id).and_then(|e| e.item) else {
             continue;
         };
+        st.nodraw = st.taken;
         if st.ground == ENTITYNUM_NONE as i32 && st.pos.is_none_or(|p| p.tr_type != TR_GRAVITY) {
             let base = st
                 .pos
@@ -288,7 +298,18 @@ pub fn run_items(host: &mut GameHost, cx: &mut Cx, now_ms: i32) {
                 }
             }
         }
+        let respawn = host.ents.get(id).is_some_and(|e| {
+            e.think == Some(ThinkFn::RespawnItem) && e.nextthink != 0 && e.nextthink <= now_ms
+        });
         if let Some(e) = host.ents.get_mut(id) {
+            if respawn {
+                // `RespawnItem` (0x4ec7c): unhidden, relinked, the event on
+                // the item itself, and no further think.
+                st.taken = false;
+                e.events.add(EV_ITEM_RESPAWN, 0);
+                e.think = None;
+                e.nextthink = 0;
+            }
             e.item = Some(st);
         }
     }
@@ -388,6 +409,7 @@ fn launch(
             }),
             apos: None,
             clipmask: LAUNCH_CLIPMASK,
+            nodraw: false,
         });
     }
     host.ents
@@ -755,6 +777,7 @@ pub fn touch(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, touched: 
             },
         ));
     }
+    let respawn = respawn_secs(host, cx, id, state.index as usize);
     if let Some(e) = host.ents.get_mut(id) {
         if let Some(i) = e.item.as_mut() {
             i.taken = true;
@@ -762,10 +785,52 @@ pub fn touch(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, touched: 
         e.think = None;
         e.nextthink = 0;
     }
+    let now = host.level_time_ms;
     if state.dropped {
-        let at = host.level_time_ms + FREE_AFTER_PICKUP_MS;
-        host.ents.schedule(id, ThinkFn::Free, at);
+        host.ents
+            .schedule(id, ThinkFn::Free, now + FREE_AFTER_PICKUP_MS);
+    } else if let Some(secs) = respawn {
+        host.ents
+            .schedule(id, ThinkFn::RespawnItem, now + secs * 1000);
     }
+}
+
+/// `Touch_Item`'s respawn (section 7): the pickup function's value, which is
+/// `g_weaponRespawn` for a `spawnflags & 8` weapon and -1 for any other
+/// weapon and for health; a non-zero `wait` replaces it, a non-zero `random`
+/// adds `crandom() * random` with a floor of 1. `None` for no respawn,
+/// which a `wait` of -1 is too.
+fn respawn_secs(host: &mut GameHost, cx: &mut Cx, id: EntId, index: usize) -> Option<i32> {
+    use crate::game::pickup::{ItemKind, item_kind};
+    let mut field = |name: &str| {
+        let atom = cx.intern_folded(name);
+        match host.get_field(cx, id, atom) {
+            Value::Int(i) => i as f32,
+            Value::Float(f) => f,
+            _ => 0.0,
+        }
+    };
+    let spawnflags = field("spawnflags") as i32;
+    let wait = field("wait");
+    let random = field("random");
+    if wait == -1.0 {
+        return None;
+    }
+    let mut secs = match item_kind(index)? {
+        ItemKind::Weapon(_) if spawnflags & 8 != 0 => {
+            host.cvars.get("g_weaponrespawn").parse().unwrap_or(0)
+        }
+        ItemKind::Weapon(_) | ItemKind::Health { .. } => -1,
+        ItemKind::Ammo => 40,
+    };
+    if wait != 0.0 {
+        secs = wait as i32;
+    }
+    if random != 0.0 {
+        secs += (crandom(host) * random) as i32;
+        secs = secs.max(1);
+    }
+    (secs > 0).then_some(secs)
 }
 
 #[cfg(test)]
@@ -1086,5 +1151,79 @@ mod tests {
             run(Vec3::new(0.0, 0.0, 60.0), Vec3::ZERO),
             Ran::Landed { .. }
         ));
+    }
+
+    /// A spawnflags-8 weapon comes back `g_weaponrespawn` seconds after it is
+    /// taken, with `EV_ITEM_RESPAWN` on its own ring and `eFlags` 0x100 on
+    /// the frame it returns; a health pack with `random` 0.5 comes back
+    /// after the one-second floor; a plain one stays taken.
+    #[test]
+    fn a_taken_item_respawns_on_its_flags_and_fields() {
+        let (mut vm, mut host) = fixture();
+        host.weapons = std::rc::Rc::new(crate::game::pickup::tests_table());
+        let colt = crate::configstrings::weapon_index("colt_mp").unwrap();
+        host.client_weapons[0].give(colt, 3);
+        host.client_vitals[0].max_health = 100;
+        host.client_vitals[0].health = 40;
+        host.level_time_ms = 1000;
+        let (weapon, health, plain) = vm.with_cx(|cx| {
+            host.ents.spawn_client(cx, 0, None).unwrap();
+            let mut make = |cls: &str, flags: i32, random: f32| {
+                let id = host.ents.spawn(cx).unwrap();
+                let f = cx.intern_folded("classname");
+                let v = Value::String(cx.intern_exact(cls));
+                host.set_field(cx, id, f, v).unwrap();
+                let f = cx.intern_folded("spawnflags");
+                host.set_field(cx, id, f, Value::Int(flags)).unwrap();
+                let f = cx.intern_folded("random");
+                host.set_field(cx, id, f, Value::Float(random)).unwrap();
+                spawn_in_place(
+                    &mut host,
+                    cx,
+                    id,
+                    crate::items::classname_index(cls).unwrap(),
+                    flags,
+                );
+                id
+            };
+            (
+                make("mpweapon_colt", 8 | 1, 0.0),
+                make("item_health", 1, 0.5),
+                make("item_health", 1, 0.0),
+            )
+        });
+        vm.with_cx(|cx| {
+            touch(&mut host, cx, weapon, 0, true);
+            touch(&mut host, cx, health, 0, true);
+            host.client_vitals[0].health = 40;
+            touch(&mut host, cx, plain, 0, true);
+        });
+        let taken = |host: &GameHost, id: EntId| host.ents.get(id).unwrap().item.unwrap().taken;
+        assert_eq!(
+            (
+                taken(&host, weapon),
+                taken(&host, health),
+                taken(&host, plain)
+            ),
+            (true, true, true)
+        );
+        let p = &vcod_common::net::protocol::PROTOCOL_V1;
+        for now in (1050..=6000).step_by(50) {
+            host.level_time_ms = now;
+            vm.with_cx(|cx| run_items(&mut host, cx, now));
+            let ents = vm.with_cx(|cx| crate::game::wire::packet_entities(&mut host, cx, p));
+            assert_eq!(ents.contains_key(&health.0), now >= 2000, "health at {now}");
+            assert_eq!(ents.contains_key(&weapon.0), now >= 6000, "colt at {now}");
+            if now == 2000 {
+                let e = &ents[&health.0];
+                assert_eq!(e.field_i32(p, "eFlags"), 16 | EF_NODRAW);
+                assert_eq!(e.field_i32(p, "eventSequence"), 1);
+                assert_eq!(e.field_i32(p, "events[0]"), EV_ITEM_RESPAWN);
+            }
+            if now == 2050 {
+                assert_eq!(ents[&health.0].field_i32(p, "eFlags"), 16);
+            }
+        }
+        assert!(taken(&host, plain));
     }
 }

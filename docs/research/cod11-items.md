@@ -542,8 +542,9 @@ placed weapon stays hidden for the rest of the level.
 VERIFIED, `RespawnItem` (0x4ec7c): `r.contents = 0x407c0008` (0x4ece9, where
 spawn writes 0x407c0108), `flags &= ~0x1000`, `svFlags &= ~1`, a link,
 `G_AddEvent(ent, EV_ITEM_RESPAWN 197, 0)` (0x4ed0f) and `nextthink = 0`.
-VERIFIED: `Use_Item` (0x4efc8) has the same body. INFERRED: `EV_ITEM_RESPAWN`
-rides the item entity, and stock never reaches it.
+VERIFIED: `Use_Item` (0x4efc8) has the same body. VERIFIED, the capture in
+section 14.3: `EV_ITEM_RESPAWN` rides the item entity. INFERRED: stock never
+reaches it.
 
 The `"trigger"` notify on a weapon. VERIFIED, 0x4d3a1..0x4d3d7: a compare of
 the dropped-entity local against 0, an `Scr_AddEntity` of it, an
@@ -732,8 +733,12 @@ drop is script, like the health drop.
 
 What vcod leaves out, each with the retail reading it skips:
 
-- Respawn: `spawnflags & 8`, `wait`, `random`, `RespawnItem` and
-  `EV_ITEM_RESPAWN` (section 7); no stock BSP sets any of them.
+- `RespawnItem`'s team branch (`ent+0x1d8`, a random pick through the
+  teammaster chain at `ent+0x264`, section 14.3); no stock BSP gives an item
+  a `team` key.
+- The `wait == -1` arm of `Touch_Item` (section 7): vcod hides the item for
+  good and does not set `eFlags` 0x100 or `unlinkAfterEvent`. Script cannot
+  write `wait` (it is a keyword), and no stock BSP item carries one.
 - Brushes whose contents carry 0x80 or 0x400 but no SOLID, PLAYERCLIP or
   GLASS bit (the 0x2080 kerb and floor words): they are in both item masks
   (0x81, 0x491) and not in vcod's clip, so an item falls through them
@@ -1312,6 +1317,44 @@ the wall drop at roll 87.680 and the slope drop at 98.599, against retail's
 reversed both land to 0.05 degrees. `FinishSpawningItem`'s placed items go
 through the same function, and the entity gates stay green on it.
 
+### 14.3 Respawn
+
+VERIFIED: `Pickup_Weapon` returns `g_weaponRespawn` for `spawnflags & 8`
+(0x4d3df..0x4d3ed) and -1 otherwise (0x4d3f0); `dump_cvars.py` reads
+`g_weaponrespawn` "5", flags 0. VERIFIED, `Touch_Item` (0x4d8e7..0x4da0e):
+`wait` equal to -1 (0x74d24) takes the hide arm; a non-zero `wait` replaces
+the value with its truncation; a non-zero `random` adds the truncation of
+`crandom() * random` and only then floors the sum at 1 (0x4d9a2..0x4d9a8); a
+dropped item's free at +100 overwrites the think; a value above 0 arms
+`RespawnItem` at `level.time + value * 1000`. VERIFIED, `G_RunEntity`
+(0x502dd..0x502f5): an entity with no client takes `eFlags` 0x100 when
+`flags & 0x1000` is set and loses it otherwise, at the top of each frame.
+
+VERIFIED, the console of a first run of the probe: `h.wait = 3;` is a
+`script compile error`, `bad syntax`, at the `wait`. INFERRED: `wait` is a
+keyword, so of the two fields script can only write `random` (entity field
+0x0b, offset 620).
+
+VERIFIED, the drop fixture, the health pack with `random` 0.5, spawned at the
+player's feet at 18300: gone from the 18350 snapshot, `PROBE trigger
+randomhealth 18350 0`, back on the 19300 snapshot with `eFlags` 272,
+`eventSequence` 1 and `events[0]` 197 (parm 0), and `eFlags` 16 from 19350.
+INFERRED: taken at level time 18300 and back 1000 ms later, the -1 the pack
+returns plus a truncated draw of 0 floored to 1. VERIFIED: the colt spawned
+with spawnflags 8 and taken as ammo at 23300 is back on the 28300 snapshot,
+taken again when the player returns at 31300 and back at 36300 with
+`events` 197, 197 and `eventSequence` 2. INFERRED: 5000 ms each time,
+`g_weaponrespawn`, and the event ring is the entity's own and survives the
+hide.
+
+VERIFIED, the drop fixture: the health pack was taken while it fell, and the
+probe's thread logged its origin moving on at 18400 and 18450, hidden from
+the wire, and the 19300 respawn carries the rest it reached, -23.686.
+INFERRED: `G_RunItem` keeps running a taken item. VERIFIED: the probe's
+watcher threads on 170 and 171 logged every later pickup with no error, and
+no notify accompanies a return. INFERRED: script sees a respawn only through
+the same entity becoming touchable again.
+
 ### 14.4 Script spawns
 
 VERIFIED, `spawn` (0x5d268): a third argument, read with `Scr_GetInt` when
@@ -1354,10 +1397,11 @@ same four outcomes, `inside` gone by the first read.
 
 ### 14.6 As implemented
 
-`crate::game::item::run_items` is `G_RunEntity`'s item pass:
-`run_flight` (`G_RunItem` and `G_BounceItem`, pure over a
-`CollisionWorld`). It runs at the end of `ScriptRuntime::run_frame`, after
-the thread pass (14.2). `ItemState` carries `pos` and
+`crate::game::item::run_items` is `G_RunEntity`'s item pass: the hide
+mirrored into `eFlags` 0x100, `run_flight` (`G_RunItem` and `G_BounceItem`,
+pure over a `CollisionWorld`), and the `RespawnItem` think. It runs at the end
+of `ScriptRuntime::run_frame`, after the thread pass (14.2), and the generic
+think pass leaves `ThinkFn::RespawnItem` to it. `ItemState` carries `pos` and
 `apos` while they are not stationary, which `crate::game::wire` sends in place
 of the `origin` and `angles` fields. `CollisionWorld::item_trace` is the
 capsule sweep with the static models, and the loader keeps world brushes
@@ -1375,5 +1419,4 @@ same frame to the hundredth, each landing on the same frame and spot, up to
 the half unit of lift, and to 0.05 degrees), and the probe on our server
 with a client that holds the carbine and a zero view, held to retail's lines
 per item: what is sent and when, from `PROBE start`, with the drops' climb,
-spin and tag start held to their ranges. The probe's two respawns are the
-gate's `GAPS`: ours keeps both items taken.
+spin and tag start held to their ranges.

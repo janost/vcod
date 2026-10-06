@@ -283,7 +283,12 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
         Kind::Item(item) => {
             seti(&mut e, "eType", ET_ITEM);
             seti(&mut e, "index", i32::from(item.index));
-            seti(&mut e, "eFlags", ITEM_EFLAGS);
+            let nodraw = if item.nodraw {
+                crate::game::item::EF_NODRAW
+            } else {
+                0
+            };
+            seti(&mut e, "eFlags", ITEM_EFLAGS | nodraw);
             seti(&mut e, "groundEntityNum", item.ground);
             seti(
                 &mut e,
