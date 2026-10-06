@@ -543,6 +543,38 @@ brush model still in the snapshot is clipped by retail's prediction, as the
 four exploder brush models `_load.gsc` hides and `notSolid()`s are (mp_depot
 `*1`, mp_powcamp `*3` and `*9`, mp_rocket `*3`; cod11-mantle.md).
 
+VERIFIED, cgame `0x3001d210` (`CG_CalcEntityLerpPositions` by its shape):
+it reads `currentState.pos.trType` (`cent+0xc`, `0x3001d216`) and calls the
+snapshot lerp `0x3001d090` when it is 1, `TR_INTERPOLATE` (`0x3001d219`), or
+when it is 3, `TR_LINEAR_STOP`, and the entity number is below `0x40`
+(`0x3001d22d`, `0x3001d232`). Otherwise it calls `BG_EvaluateTrajectory`
+twice at `cg.time` (`0x30207148`, `0x3001d246`, `0x3001d25b`) into
+`cent+0x1f8` and `cent+0x204`, and, unless `cent` is `0x3020922c`, calls
+`0x3001baa0` at `0x3001d2ee` with `currentState.groundEntityNum`
+(`cent+0x7c`), `cg.snap->serverTime` (`[0x301e2160]+8`), `cg.time` and a
+null angle out (`ecx` 0 from `0x3001d263`, pushed at `0x3001d2dd`), the
+origin `cent+0x1f8` as both in and out. VERIFIED: `0x3001baa0` copies in to
+out unchanged unless the number is above 0 and below `0x3fe` (`0x3001bab5`,
+`0x3001babd`) and that entity's `eType` is 5 or 8 (`0x3001bad6`,
+`0x3001badf`). INFERRED: `0x3020922c` is `cg.predictedPlayerEntity`; any
+entity whose position is not lerped is drawn off the older snapshot's
+trajectories at the drawn time and carried by its ground mover's translation
+since that snapshot, so an item resting on a moving brush model (section 12:
+`trType` 0, ground the mover) rides it smoothly between snapshots, and one
+with no mover under it holds its older `trBase` until the next snapshot.
+
+VERIFIED, game.mp `G_GeneralLink` (`0x68530`), which `G_RunMover` calls for
+a linked entity (section 11): `G_SetFixedLink(ent, 0)`, `G_SetOrigin` and
+`G_SetAngle` at the re-anchored `r.currentOrigin` and `r.currentAngles`,
+then 1 to `pos.trType` and `apos.trType` (`0x68568`, `0x6856f`) and
+`trap_LinkEntity`. INFERRED: a script model linked to a mover goes out
+`TR_INTERPOLATE` at its re-anchored pose every frame, and the client lerps
+it between snapshots; the ground carry above never reaches it.
+
+vcod: `entities::lerp_pos_angles` makes the same choice on the older
+snapshot's state and carries through `SnapshotMovers::carry`. `linkTo` on
+a receiver that is not a player errors on ours.
+
 vcod: `vcod_common::pmove::movers::SnapshotMovers` is that solid list and
 that carry. The client unlinks every submodel at map load, and each
 prediction links and poses the snapshot's brush models at its `serverTime`,

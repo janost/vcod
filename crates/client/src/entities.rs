@@ -11,9 +11,10 @@ use vcod_common::animtree::PlayerAnims;
 use vcod_common::net::msg::{ClientState, EntityState};
 use vcod_common::net::protocol::{CS_MODELS_V1, CS_TAGS_V1, Protocol};
 use vcod_common::net::snapshot::Snapshot;
-use vcod_common::net::trajectory::{TR_INTERPOLATE, TR_STATIONARY, Trajectory};
+use vcod_common::net::trajectory::{TR_INTERPOLATE, TR_LINEAR_STOP, Trajectory};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::playerpose::{apply_aim, clip_name};
+use vcod_common::pmove::movers::SnapshotMovers;
 use vcod_common::skeleton::{AnimBinding, PoseBuffer, Skeleton};
 use vcod_common::turretpose::{GunnerPlacement, angles_quat, place_gunner, tag_weapon_local};
 use vcod_common::xanim::{self, XAnim};
@@ -733,51 +734,64 @@ pub struct BuiltScene {
     pub submodels: Vec<(usize, Mat4)>,
 }
 
-/// An entity's origin and `[pitch, yaw, roll]` at `render_time`. STATIONARY
-/// and INTERPOLATE aren't parametric, so the `prev`->`ent` lerp is the
-/// evaluation (snapping on a teleport over 512 units); every other trType is
-/// closed-form.
+/// Entity numbers below this are clients (`MAX_CLIENTS`).
+const MAX_CLIENTS: u32 = 64;
+
+/// The older snapshot of the pair an entity is drawn between, with its
+/// movers, which is what retail's `cg.snap` holds.
+struct LerpFrom<'a> {
+    snap: &'a Snapshot,
+    movers: SnapshotMovers,
+}
+
+/// An entity's origin and `[pitch, yaw, roll]` at `render_time`, after
+/// `CG_CalcEntityLerpPositions` (cgame 0x3001d210). A `pos` of
+/// `TR_INTERPOLATE`, or a player's `TR_LINEAR_STOP`, lerps both from the
+/// older snapshot's state to `ent` (snapping on a teleport over 512 units).
+/// Anything else evaluates the older state's `pos` and `apos` at
+/// `render_time` and is carried by what its ground mover does between the
+/// older snapshot and `render_time` (`CG_AdjustPositionForMover` at
+/// 0x3001d2ee, translation only), so an item resting on a moving brush model
+/// rides it between snapshots.
 fn lerp_pos_angles(
+    num: u32,
     ent: &EntityState,
-    prev: Option<&EntityState>,
+    from: &LerpFrom,
     f: f32,
     render_time: i32,
     p: &Protocol,
 ) -> (Vec3, Vec3) {
-    let pos_tr = Trajectory::read(ent, p, "pos");
-    let pos = if matches!(pos_tr.tr_type, TR_STATIONARY | TR_INTERPOLATE) {
-        let ob = Vec3::from(ent.origin(p));
-        match prev {
-            Some(ea) => {
-                let oa = Vec3::from(ea.origin(p));
-                if oa.distance(ob) > 512.0 {
-                    ob
-                } else {
-                    oa.lerp(ob, f)
-                }
-            }
-            None => ob,
-        }
-    } else {
-        pos_tr.evaluate(render_time)
+    let prev = from.snap.entities.get(&num);
+    let cur = prev.unwrap_or(ent);
+    let pos_tr = Trajectory::read(cur, p, "pos");
+    let interpolates =
+        pos_tr.tr_type == TR_INTERPOLATE || (pos_tr.tr_type == TR_LINEAR_STOP && num < MAX_CLIENTS);
+    if !interpolates {
+        let pos = from.movers.carry(
+            pos_tr.evaluate(render_time),
+            cur.field_i32(p, "groundEntityNum"),
+            from.snap.server_time,
+            render_time,
+        );
+        return (pos, Trajectory::read(cur, p, "apos").evaluate(render_time));
+    }
+    let ob = Vec3::from(ent.origin(p));
+    let ab = ent.angles(p);
+    let Some(ea) = prev else {
+        return (ob, Vec3::from(ab));
     };
-    let apos_tr = Trajectory::read(ent, p, "apos");
-    let angles = if matches!(apos_tr.tr_type, TR_STATIONARY | TR_INTERPOLATE) {
-        let ab = ent.angles(p);
-        match prev {
-            Some(ea) => {
-                let aa = ea.angles(p);
-                Vec3::new(
-                    camera::lerp_angle(aa[0], ab[0], f),
-                    camera::lerp_angle(aa[1], ab[1], f),
-                    camera::lerp_angle(aa[2], ab[2], f),
-                )
-            }
-            None => Vec3::from(ab),
-        }
+    let oa = Vec3::from(ea.origin(p));
+    let pos = if oa.distance(ob) > 512.0 {
+        ob
     } else {
-        apos_tr.evaluate(render_time)
+        oa.lerp(ob, f)
     };
+    let aa = ea.angles(p);
+    let angles = Vec3::new(
+        camera::lerp_angle(aa[0], ab[0], f),
+        camera::lerp_angle(aa[1], ab[1], f),
+        camera::lerp_angle(aa[2], ab[2], f),
+    );
     (pos, angles)
 }
 
@@ -928,6 +942,10 @@ pub fn build_instances(
         ps_int("viewlocked"),
         ps_int("viewlocked_entNum"),
     );
+    let from = LerpFrom {
+        snap: a,
+        movers: SnapshotMovers::from_entities(p, &a.entities),
+    };
     // The guns first: a gunner's body is placed off its gun, whose number is
     // always above the gunner's.
     let mut guns: HashMap<u32, GunFrame> = HashMap::new();
@@ -941,7 +959,7 @@ pub fn build_instances(
             continue;
         };
         let prev = a.entities.get(&num);
-        let (pos, angles) = lerp_pos_angles(ent, prev, f, render_time, p);
+        let (pos, angles) = lerp_pos_angles(num, ent, &from, f, render_time, p);
         let a2 =
             |e: &EntityState| ["angles2[0]", "angles2[1]", "angles2[2]"].map(|n| e.field_f32(p, n));
         let eflags = |e: &EntityState| e.field_i32(p, "eFlags");
@@ -984,7 +1002,7 @@ pub fn build_instances(
         }
 
         let prev = a.entities.get(&num);
-        let (mut pos, angles) = lerp_pos_angles(ent, prev, f, render_time, p);
+        let (mut pos, angles) = lerp_pos_angles(num, ent, &from, f, render_time, p);
         if !pos.is_finite() || !angles.is_finite() {
             continue; // never feed a NaN transform to the GPU
         }
@@ -1419,6 +1437,66 @@ mod tests {
     use std::collections::BTreeMap;
     use vcod_common::net::msg::{ClientState, EntityState};
     use vcod_common::net::protocol::{CS_MODELS_V1, CS_TAGS_V1, PROTOCOL_V1};
+
+    /// An item resting on a moving brush model is drawn at its own
+    /// stationary `trBase` from the older snapshot, carried by what the mover
+    /// does from that snapshot's time to the drawn time; one on no mover
+    /// holds that `trBase` rather than lerping toward the newer snapshot.
+    #[test]
+    fn a_stationary_entity_rides_its_ground_mover_between_snapshots() {
+        let p = &PROTOCOL_V1;
+        let ent = |fields: &[(&str, i32)]| {
+            let mut e = EntityState::null(p);
+            for &(name, v) in fields {
+                e.fields[EntityState::field_index(p, name).unwrap()] = v;
+            }
+            e
+        };
+        let bits = |v: f32| v.to_bits() as i32;
+        // Rising 40 u/s from z 0 since 1000.
+        let mover = ent(&[
+            ("eType", 8),
+            ("pos.trType", TR_LINEAR_STOP),
+            ("pos.trTime", 1000),
+            ("pos.trDuration", 10_000),
+            ("pos.trDelta[2]", bits(40.0)),
+        ]);
+        let item = |z: f32, ground: i32| {
+            ent(&[
+                ("eType", 3),
+                ("pos.trBase[2]", bits(z)),
+                ("groundEntityNum", ground),
+            ])
+        };
+        let snap = |t: i32, ents: Vec<(u32, EntityState)>| Snapshot {
+            server_time: t,
+            entities: ents.into_iter().collect(),
+            ..Snapshot::default()
+        };
+        let a = snap(
+            2000,
+            vec![
+                (100, mover.clone()),
+                (101, item(40.0, 100)),
+                (102, item(40.0, 1022)),
+            ],
+        );
+        let b = snap(
+            2050,
+            vec![
+                (100, mover),
+                (101, item(42.0, 100)),
+                (102, item(42.0, 1022)),
+            ],
+        );
+        let from = LerpFrom {
+            snap: &a,
+            movers: SnapshotMovers::from_entities(p, &a.entities),
+        };
+        let at = |n: u32| lerp_pos_angles(n, &b.entities[&n], &from, 0.5, 2025, p).0.z;
+        assert_eq!(at(101), 41.0, "40 plus the mover's 1 unit since 2000");
+        assert_eq!(at(102), 40.0, "no mover under it: the older trBase");
+    }
 
     /// A model's axis is `AnglesToAxis` of its angles: pitch positive puts
     /// the nose down, and the left axis is `-right`. A player only yaws.
