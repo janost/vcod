@@ -540,7 +540,12 @@ impl NavJob {
         }
         let collision = world.collision.clone();
         let seeds = world.spawn_points.clone();
-        let build = move || cached(key, || NavGraph::build(&collision, &seeds));
+        let build = move || {
+            // One core stays the tick's, so a build doesn't jitter the
+            // schedule it runs beside.
+            SPARE_CORE.set(true);
+            cached(key, || NavGraph::build(&collision, &seeds))
+        };
         NavJob {
             ready: None,
             building: Some(std::thread::spawn(build)),
@@ -779,9 +784,20 @@ impl PartialOrd for Open {
     }
 }
 
-/// `f` over `items` on every core, results in `items` order.
+thread_local! {
+    /// Set on a [`NavJob`]'s thread: its [`par_map`]s leave one core free.
+    static SPARE_CORE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `f` over `items` on every core (all but one under [`SPARE_CORE`]),
+/// results in `items` order.
 fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let threads = if SPARE_CORE.get() {
+        cores.saturating_sub(1).max(1)
+    } else {
+        cores
+    };
     if threads == 1 || items.len() < 16 {
         return items.iter().map(f).collect();
     }
