@@ -5,7 +5,7 @@
 //! tests own a queue. Ported from RTCW-MP sv_main.c / sv_client.c; reply
 //! strings come from docs/research/cod11-server-handshake.md.
 
-use crate::client::{Client, ClientState, QueuedCmd, sanitize_name};
+use crate::client::{Client, ClientState, CmdKind, Queued, QueuedCmd, sanitize_name};
 use crate::configstrings;
 use crate::console;
 use crate::follow;
@@ -1684,6 +1684,7 @@ impl Server {
         c.gamestate_message_num = i64::from(c.netchan.outgoing_sequence);
         let mut w = MsgWriter::new(&self.huff);
         write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
+        c.reliable_sent = c.netchan.reliable_sequence as i32;
         let gs = Gamestate {
             configstrings: self.configstrings.clone(),
             baselines: self.baselines.clone(),
@@ -1703,25 +1704,22 @@ impl Server {
         }
     }
 
-    /// `SV_AddServerCommand` plus an immediate message, so a drop notice
-    /// reaches the client before its slot is freed. A client whose acks fall
-    /// a whole ring behind has stopped consuming reliables; overwriting an
-    /// unsacked slot would desync both ends' scramble keys, so that is fatal
-    /// (`EXE_LOSTRELIABLECOMMANDS`), mirroring the reference client's own
-    /// outbound guard.
+    /// `SV_AddServerCommand` (cod_lnxded 0x808b680): queued, squashed or
+    /// dropped by [`Client::queue_server_command`], and sent with the
+    /// client's next snapshot or gamestate. A client whose acks fall a whole
+    /// ring behind has stopped consuming reliables; overwriting an unacked
+    /// slot would desync both ends' scramble keys, so that is fatal, with
+    /// retail's `EXE_SERVERCOMMANDOVERFLOW` (docs/protocol-1.1.md, "The
+    /// server command queue").
     fn send_server_command(&mut self, slot: usize, cmd: &str) {
-        let overflow = match self.clients[slot].as_ref() {
-            Some(c) => {
-                i64::from(c.netchan.reliable_sequence) - i64::from(c.reliable_ack)
-                    >= MAX_RELIABLE_COMMANDS as i64
-            }
-            None => return,
-        };
-        if overflow {
-            self.drop_client(slot, "EXE_LOSTRELIABLECOMMANDS");
+        let Some(c) = self.clients[slot].as_mut() else {
             return;
+        };
+        match c.queue_server_command(cmd) {
+            Queued::Overflow => self.drop_client(slot, "EXE_SERVERCOMMANDOVERFLOW"),
+            Queued::Dropped => log::debug!("client {slot}: dropped {cmd:?}"),
+            Queued::Added | Queued::Replaced => {}
         }
-        self.write_server_command(slot, cmd);
     }
 
     /// The unconditional tail of [`Self::send_server_command`]. The drop
@@ -1847,8 +1845,8 @@ impl Server {
         scoreboard(&self.clients, self.script.as_mut())
     }
 
-    /// `G_Say`, sent at once: retail's `trap_SendServerCommand` queues the
-    /// line from inside `ClientCommand`. Nothing without a script, which is
+    /// `G_Say`: retail's `trap_SendServerCommand` queues the line from
+    /// inside `ClientCommand`, and so does this. Nothing without a script, which is
     /// where the teams and session states live.
     fn say(&mut self, slot: usize, target: Option<usize>, mode: SayMode, text: &str) {
         let Some(rt) = self.script.as_mut() else {
@@ -2010,19 +2008,25 @@ impl Server {
         out
     }
 
+    /// The drop notice's path: appended with no squash and sent at once in
+    /// a message of its own, since the slot is freed right after and no
+    /// snapshot will carry it. Retail keeps the slot as a zombie for that.
     fn write_server_command(&mut self, slot: usize, cmd: &str) {
         let Some(c) = self.clients[slot].as_mut() else {
             return;
         };
         c.netchan.reliable_sequence += 1;
         let seq = c.netchan.reliable_sequence;
-        c.netchan.reliable[seq as usize & (MAX_RELIABLE_COMMANDS - 1)] = cmd.to_string();
+        let at = seq as usize & (MAX_RELIABLE_COMMANDS - 1);
+        c.netchan.reliable[at] = cmd.to_string();
+        c.reliable_kind[at] = CmdKind::of(cmd);
         // A bot reads the ring in step_bots; nothing leaves for its socket.
         if c.is_bot {
             return;
         }
         let mut w = MsgWriter::new(&self.huff);
         write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
+        c.reliable_sent = seq as i32;
         // The netchan appends the `svc_EOF`.
         for pkt in c
             .netchan
@@ -5023,6 +5027,7 @@ impl Server {
 
             let mut w = MsgWriter::new(&self.huff);
             write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
+            c.reliable_sent = c.netchan.reliable_sequence as i32;
             w.write_byte(snapshot::SVC_SNAPSHOT);
             snapshot::write(&mut w, self.proto, base.as_ref(), &frame, &self.baselines);
             c.record_frame(frame);
@@ -5961,103 +5966,17 @@ mod tests {
         );
     }
 
-    /// Score requests pipelined faster than the client acks their replies
-    /// would wrap the reliable ring and overwrite unsacked slots, corrupting
-    /// the wire and the scramble key. Past 64 unacked commands the client is
-    /// dropped instead, and the slot works for a fresh connect. The whole
-    /// burst rides one message: a later message would fail the incoming
-    /// ack-range check before any op ran.
-    #[test]
-    fn score_spam_past_the_reliable_ring_drops_the_client() {
-        let now = Instant::now();
-        let huff = Huffman::new();
-        let scores = |sv: &mut Server, nc: &mut Netchan, first: i32, last: i32| {
-            let mut w = MsgWriter::new(&huff);
-            for seq in first..=last {
-                w.write_bits(CLC_CLIENT_COMMAND, 2);
-                w.write_long(seq);
-                w.write_string("score");
-            }
-            w.write_bits(CLC_EOF, 2);
-            sv.handle_packet(
-                addr(5),
-                &nc.build_out(
-                    i32::from(sv.server_id),
-                    nc.incoming_sequence as i32,
-                    0,
-                    &w.into_ops(),
-                    &huff,
-                )
-                .unwrap(),
-                now,
-            );
-        };
-
-        // Exactly the ring's worth of unacked commands is not yet fatal.
-        let mut sv = Server::new(cfg(), now);
-        let mut nc = active(&mut sv, now);
-        sv.take_outgoing();
-        // Each reply is scrambled with the last client command string, so the
-        // receiving netchan needs its own sent-command ring filled (reply 1
-        // went out before any command was stored and stays undecodable here).
-        for s in 2..=70 {
-            nc.reliable[(s as usize) & 63] = "score".to_string();
-        }
-        scores(&mut sv, &mut nc, 1, 64);
-        assert_eq!(sv.client_count(), 1, "a full ring is not yet fatal");
-        assert!(
-            !sv.take_outgoing().is_empty(),
-            "the ring-full boundary must still answer"
-        );
-
-        // One pipelined request too many drops the client, notice last.
-        let mut sv = Server::new(cfg(), now);
-        let mut nc = active(&mut sv, now);
-        sv.take_outgoing();
-        for s in 2..=70 {
-            nc.reliable[(s as usize) & 63] = "score".to_string();
-        }
-        scores(&mut sv, &mut nc, 1, 65);
-        assert_eq!(sv.client_count(), 0);
-        let mut notices = Vec::new();
-        for (_, pkt) in sv.take_outgoing() {
-            let res = nc.process_in(&pkt, &huff);
-            if let Ok(Some(msg)) = res {
-                let mut r = MsgReader::new(&msg[4..], &huff);
-                while !r.is_overflowed() {
-                    match r.read_byte() {
-                        msg::SVC_SERVER_COMMAND => {
-                            r.read_long();
-                            notices.push(r.read_big_string());
-                        }
-                        _ => break,
-                    }
-                }
-            }
-        }
-        assert_eq!(
-            notices.last().map(String::as_str),
-            Some("w \"EXE_LOSTRELIABLECOMMANDS\"")
-        );
-
-        // The freed slot takes a fresh client.
-        let t2 = now + RECONNECT_LIMIT + Duration::from_millis(100);
-        connected(&mut sv, addr(5), t2);
-        assert_eq!(sv.client_count(), 1);
-    }
-
-    #[test]
-    fn a_score_request_gets_a_deathmatch_scoreboard() {
-        let now = Instant::now();
-        let mut sv = Server::new(cfg(), now);
-        let mut nc = active(&mut sv, now);
-        sv.take_outgoing();
-
+    /// One client command per sequence, all in one message.
+    fn pipelined(sv: &mut Server, nc: &mut Netchan, cmds: &[&str], now: Instant) {
         let huff = Huffman::new();
         let mut w = MsgWriter::new(&huff);
-        w.write_bits(CLC_CLIENT_COMMAND, 2);
-        w.write_long(1);
-        w.write_string("score");
+        for (i, cmd) in cmds.iter().enumerate() {
+            w.write_bits(CLC_CLIENT_COMMAND, 2);
+            w.write_long(i as i32 + 1);
+            w.write_string(cmd);
+            // The client's own ring, which keys the server's reply.
+            nc.reliable[(i + 1) & 63] = cmd.to_string();
+        }
         w.write_bits(CLC_EOF, 2);
         let pkt = nc
             .build_out(
@@ -6069,18 +5988,79 @@ mod tests {
             )
             .unwrap();
         sv.handle_packet(addr(5), &pkt, now);
+    }
 
+    /// Score requests pipelined faster than a snapshot goes out leave one
+    /// scoreboard queued: each `b` replaces the unsent one before it.
+    #[test]
+    fn pipelined_score_requests_leave_one_scoreboard() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let mut nc = active(&mut sv, now);
+        sv.take_outgoing();
+        let before = sv.clients[0].as_ref().unwrap().netchan.reliable_sequence;
+        pipelined(&mut sv, &mut nc, &["score"; 65], now);
+        let c = sv.clients[0].as_ref().unwrap();
+        assert_eq!(c.netchan.reliable_sequence, before + 1);
+        assert!(
+            sv.take_outgoing().is_empty(),
+            "nothing goes out before a snapshot"
+        );
+    }
+
+    /// A client that stops acking is dropped once one more command would
+    /// overwrite the oldest unacked slot, with retail's reason, the notice
+    /// last; the slot then takes a fresh connect.
+    #[test]
+    fn a_full_ring_of_unacked_commands_drops_the_client() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let mut nc = active(&mut sv, now);
+        sv.take_outgoing();
+        let room = {
+            let c = sv.clients[0].as_ref().unwrap();
+            MAX_RELIABLE_COMMANDS as i32 - (c.netchan.reliable_sequence as i32 - c.reliable_ack)
+        };
+        for i in 0..room {
+            sv.send_server_command(0, &format!("v c{i} 1"));
+        }
+        assert_eq!(sv.client_count(), 1, "a full ring is not yet fatal");
+        sv.send_server_command(0, "v one_more 1");
+        assert_eq!(sv.client_count(), 0);
+        let huff = Huffman::new();
         let out = sv.take_outgoing();
-        assert_eq!(out.len(), 1, "expected one reply frame");
-        assert_eq!(out[0].0, addr(5));
+        assert_eq!(out.len(), 1, "the drop notice alone");
+        let cmds = server_commands(&mut nc, &out[0].1, &huff);
+        assert_eq!(
+            cmds.last().map(String::as_str),
+            Some("w \"EXE_SERVERCOMMANDOVERFLOW\"")
+        );
+        let t2 = now + RECONNECT_LIMIT + Duration::from_millis(100);
+        connected(&mut sv, addr(5), t2);
+        assert_eq!(sv.client_count(), 1);
+    }
+
+    /// The reply rides the next snapshot, not a message of its own.
+    #[test]
+    fn a_score_request_gets_a_deathmatch_scoreboard() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let mut nc = begun(&mut sv, now);
+        sv.tick(now);
+        let huff = Huffman::new();
+        for (_, pkt) in sv.take_outgoing() {
+            let _ = nc.process_in(&pkt, &huff);
+        }
+        pipelined(&mut sv, &mut nc, &["score"], now);
+        assert!(sv.take_outgoing().is_empty());
+        sv.tick(now);
+        let out = sv.take_outgoing();
+        assert_eq!(out.len(), 1, "expected one snapshot");
         let cmds = server_commands(&mut nc, &out[0].1, &huff);
         assert_eq!(cmds.len(), 1);
         assert!(cmds[0].starts_with("b 1 0 0 0 0 0 0 0"), "{:?}", cmds[0]);
     }
 
-    /// The scoreboard's tokens 2 and 3 are the two team scores, axis
-    /// before allies, and `setTeamScore` mirrors each into configstring 5
-    /// and 6 (map-cycle doc, 6.3).
     #[test]
     fn the_scoreboard_carries_the_team_scores_axis_first() {
         let now = Instant::now();
