@@ -138,10 +138,18 @@ pub fn finish_player_damage(
         let weapon = gun_credit(host, cx, attacker_slot, *weapon).unwrap_or(*weapon);
         // Both start as `g_entities[ENTITYNUM_WORLD]` (0x43778) and only an
         // entity argument replaces them, so a fall's death names the world
-        // twice (player-clip doc 8.10).
+        // twice (player-clip doc 8.10). An entity inflictor is replaced by
+        // the attacker argument, `Scr_GetEntity(1)` (0x43827), so a
+        // grenade's kill names the thrower twice (combat doc 4.4). What
+        // retail does with an entity inflictor and no attacker entity is
+        // not read; the world stands in.
         let world = Value::Entity(host.ents.world(cx));
-        let or_world = |v: &Value| match v {
-            Value::Entity(_) => *v,
+        let attacker = match attacker {
+            Value::Entity(_) => *attacker,
+            _ => world,
+        };
+        let inflictor = match inflictor {
+            Value::Entity(_) => attacker,
             _ => world,
         };
         let killed = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerKilled");
@@ -149,8 +157,8 @@ pub fn finish_player_damage(
             killed,
             recv,
             vec![
-                or_world(inflictor),
-                or_world(attacker),
+                inflictor,
+                attacker,
                 Value::Int(damage),
                 *mod_,
                 weapon,
@@ -444,6 +452,13 @@ pub fn radius_damage(
             candidates.push(id);
         }
     }
+    // Clients hold the low numbers, so entity order puts these after them.
+    candidates.extend(
+        host.blast_entities(cx)
+            .into_iter()
+            .filter(|v| blast.reaches_entity(v))
+            .map(|v| v.id),
+    );
     host.radius_ignore_active = host.ignore_radius_damage;
     host.blasts.push(ScriptBlast { blast, candidates });
     blast_step(host, cx);
@@ -477,36 +492,21 @@ pub fn blast_step(host: &mut GameHost, cx: &mut Cx) {
         }
         let id = walk.candidates.remove(0);
         let slot = id.0 as usize;
-        if host.ents.get(id).is_none_or(|e| e.client.is_none())
-            || !host.client_vitals[slot].takedamage
-            || host.radius_ignore_active
-        {
+        let Some(ent) = host.ents.get(id) else {
+            continue;
+        };
+        if ent.client.is_none() {
+            blast_entity(host, cx, id);
+            continue;
+        }
+        if !host.client_vitals[slot].takedamage || host.radius_ignore_active {
             continue;
         }
         let Value::Vector(stands) = host.get_field(cx, id, origin_field) else {
             continue;
         };
         let victim = standing_victim(slot, Vec3::from(stands));
-        // Every other playing body, posed as the last end frame left it, at
-        // the origin a `setOrigin` this frame may have moved it to. A
-        // client killed since then is a corpse (`player_die`'s contents)
-        // and stops nothing.
-        let mut bodies = Vec::new();
-        for (other, body) in host.client_bodies.clone().into_iter().enumerate() {
-            let Some(body) = body else { continue };
-            if host.client_vitals[other].dead {
-                continue;
-            }
-            let Some(handle) = host.ents.handle(other as u32) else {
-                continue;
-            };
-            let Value::Vector(at) = host.get_field(cx, handle, origin_field) else {
-                continue;
-            };
-            let mut body = body;
-            body.origin = Vec3::from(at);
-            bodies.push(body);
-        }
+        let bodies = blast_bodies(host, cx);
         let world = host.world.clone();
         let models = host.placed_script_models(cx);
         let (fs, anims) = (host.fs.clone(), host.anims.clone());
@@ -547,6 +547,68 @@ pub fn blast_step(host: &mut GameHost, cx: &mut Cx) {
         let callback = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerDamage");
         cx.spawn_then(callback, Some(Target::Entity(id)), args, BLAST_TOKEN);
         return;
+    }
+}
+
+/// Every playing body, posed as the last end frame left it, at the origin a
+/// `setOrigin` this frame may have moved it to. A client killed since then
+/// is a corpse (`player_die`'s contents) and stops nothing.
+fn blast_bodies(host: &mut GameHost, cx: &mut Cx) -> Vec<crate::game::combat::HitBody> {
+    let origin_field = cx.intern_folded("origin");
+    let mut bodies = Vec::new();
+    for (other, body) in host.client_bodies.clone().into_iter().enumerate() {
+        let Some(mut body) = body else { continue };
+        if host.client_vitals[other].dead {
+            continue;
+        }
+        let Some(handle) = host.ents.handle(other as u32) else {
+            continue;
+        };
+        let Value::Vector(at) = host.get_field(cx, handle, origin_field) else {
+            continue;
+        };
+        body.origin = Vec3::from(at);
+        bodies.push(body);
+    }
+    bodies
+}
+
+/// A turret's turn in the walk: measured where it now stands, damaged
+/// through `G_Damage`'s entity arm with the world as the attacker, and no
+/// callback to wait for, so the walk goes straight on. The notifies wake
+/// their waiters after the builtin returns, as retail's did
+/// (`probe_victims`, combat doc 14.6).
+fn blast_entity(host: &mut GameHost, cx: &mut Cx, id: EntId) {
+    let Some(victim) = host.blast_entities(cx).into_iter().find(|v| v.id == id) else {
+        return;
+    };
+    let bodies = blast_bodies(host, cx);
+    let world = host.world.clone();
+    let models = host.placed_script_models(cx);
+    let (fs, anims) = (host.fs.clone(), host.anims.clone());
+    let mut bones = match (fs.as_deref(), anims.as_deref()) {
+        (Some(fs), Some(anims)) => Some(crate::game::combat::BoneTraceCtx {
+            fs,
+            anims,
+            rigs: &mut host.hit_rigs,
+            now_ms: host.level_time_ms,
+        }),
+        _ => None,
+    };
+    let walk = host.blasts.last().expect("the walk this turn came from");
+    let Some(damage) = walk.blast.entity_damage(
+        &victim,
+        world.as_deref().map(|w| &w.collision),
+        &models,
+        &bodies,
+        bones.as_mut(),
+    ) else {
+        return;
+    };
+    let attacker = host.ents.world(cx);
+    for (event, args) in host.damage_entity(cx, id, damage, attacker) {
+        let event = cx.intern_folded(event);
+        cx.notify(Target::Entity(id), event, args);
     }
 }
 
@@ -1191,6 +1253,97 @@ mod tests {
             let back_left = if front == 0 { 1000 - 240 } else { 1000 - 40 };
             assert_eq!(rt.client_vitals(back).health, back_left);
         }
+    }
+
+    /// `probe_victims`' `fpd` rows (combat doc, 4.4): an entity inflictor
+    /// reaches the killed callback as the attacker argument, and none at
+    /// all as the world.
+    #[test]
+    fn a_kill_names_the_attacker_as_its_inflictor() {
+        const SCRIPT: &str = r#"
+            main() {
+                level.log = "";
+                wait 0.1;
+                nade = spawn("script_origin", (0, 0, 0));
+                p = getentarray("player", "classname");
+                p[0] finishPlayerDamage(nade, p[1], 500, 0, "MOD_GRENADE_SPLASH", "none", (0, 0, 0), (0, 0, 1), "none");
+                p[1] finishPlayerDamage(undefined, p[0], 500, 0, "MOD_RIFLE_BULLET", "none", (0, 0, 0), (0, 0, 1), "none");
+            }
+            CodeCallback_PlayerConnect() {}
+            CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {
+                level.log = level.log + " " + eInflictor getEntityNumber() + ":" + eAttacker getEntityNumber();
+            }
+        "#;
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
+        for (slot, name) in [(0, "a"), (1, "b")] {
+            rt.push_client_event(ClientEvent::Connect {
+                slot,
+                name: name.into(),
+            });
+        }
+        rt.run_frame(50);
+        for slot in [0, 1] {
+            rt.host.client_vitals[slot] = Vitals {
+                health: 100,
+                max_health: 100,
+                dead: false,
+                takedamage: true,
+            };
+        }
+        rt.run_frame(150);
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(rt.level_field_str("log"), " 1:1 1022:0");
+    }
+
+    /// `probe_victims`' turret rows (combat doc, 14.6): three flat 60s take
+    /// a turret from 100 to 40, -20 and -80, each raising `"damage"` with
+    /// the world as the attacker, and every one at or below 0 `"death"` as
+    /// well. Neither waiter runs before the builtin's caller goes on, and
+    /// `"death"`'s, queued last, runs first.
+    #[test]
+    fn a_blast_damages_a_turret_and_notifies_it() {
+        const SCRIPT: &str = r#"
+            main() {
+                level.log = "";
+                wait 0.1;
+                t = getentarray("misc_mg42", "classname")[0];
+                t thread watch();
+                t thread watchDeath();
+                for (i = 0; i < 3; i++) {
+                    radiusDamage(t.origin + (0, 70, 32), 300, 60, 60);
+                    level.log = level.log + " h" + t.health;
+                    wait 0.05;
+                }
+            }
+            watch() {
+                for (;;) {
+                    self waittill("damage", amount, attacker);
+                    level.log = level.log + " d" + amount + ":" + attacker getEntityNumber();
+                }
+            }
+            watchDeath() {
+                for (;;) {
+                    self waittill("death", attacker);
+                    level.log = level.log + " x" + attacker getEntityNumber();
+                }
+            }
+            CodeCallback_PlayerConnect() {}
+        "#;
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
+        rt.host.world = Some(Rc::new(World {
+            collision: vcod_common::collision::test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        }));
+        rt.place_turret([0.0, 0.0, 8.0]);
+        for t in [50, 100, 150, 200, 250] {
+            rt.run_frame(t);
+        }
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(
+            rt.level_field_str("log"),
+            " h40 d60:1022 h-20 x1022 d60:1022 h-80 x1022 d60:1022"
+        );
     }
 
     /// `setPlayerIgnoreRadiusDamage` (combat doc, 14.2) is a level flag the

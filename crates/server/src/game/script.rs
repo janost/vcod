@@ -1650,6 +1650,12 @@ impl ScriptRuntime {
                 if let Some(c) = self.host.pers_carry.get_mut(slot) {
                     *c = None;
                 }
+                // The client's own HUD elements go before the callback, as
+                // in retail's `ClientDisconnect` (cod11-hud-protocol.md, "A
+                // client's elements die with it"): the thread that would
+                // `destroy` them is killed below, and the next client into
+                // the slot has the owner's number.
+                self.host.ents.free_client_hud_elems(slot);
                 // The callback runs first: it reads `self`, and freeing the
                 // slot ahead of it would hand it a dead entity.
                 if let Some(id) = self.client_entity(slot) {
@@ -1735,6 +1741,31 @@ impl ScriptRuntime {
     pub fn placed_script_models(&mut self) -> Vec<crate::game::combat::PlacedModel> {
         let host = &mut self.host;
         self.vm.with_cx(|cx| host.placed_script_models(cx))
+    }
+
+    /// `GameHost::blast_entities`, for a blast the sim side charges.
+    pub fn blast_entities(&mut self) -> Vec<crate::game::combat::EntityVictim> {
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| host.blast_entities(cx))
+    }
+
+    /// `GameHost::damage_entity` for a grenade's blast, `attacker` the
+    /// thrower's slot; a thrower with no entity left reads as the world,
+    /// `G_Damage`'s stand-in (combat doc, 4.2). The waiters run with the
+    /// frame's threads.
+    pub fn damage_entity(&mut self, id: EntId, damage: i32, attacker: usize) {
+        let attacker = self.client_entity(attacker);
+        let host = &mut self.host;
+        let notifies = self.vm.with_cx(|cx| {
+            let attacker = attacker.unwrap_or_else(|| host.ents.world(cx));
+            host.damage_entity(cx, id, damage, attacker)
+                .into_iter()
+                .map(|(event, args)| (cx.intern_folded(event), args))
+                .collect::<Vec<_>>()
+        });
+        for (event, args) in notifies {
+            self.vm.notify(Target::Entity(id), event, &args);
+        }
     }
 
     /// The same list, drained. A temp entity lives for one frame, so the
@@ -1936,6 +1967,34 @@ impl ScriptRuntime {
 
 #[cfg(test)]
 impl ScriptRuntime {
+    /// A `misc_mg42` at `at` with `G_SpawnTurret`'s health and a record
+    /// off a bare weapon file.
+    pub fn place_turret(&mut self, at: [f32; 3]) -> EntId {
+        use vcod_gsc::Host;
+        let host = &mut self.host;
+        let id = self.vm.with_cx(|cx| {
+            let id = host.ents.spawn(cx).unwrap();
+            for (f, v) in [
+                ("classname", Value::String(cx.intern_exact("misc_mg42"))),
+                ("origin", Value::Vector(at)),
+                ("health", Value::Int(crate::game::turret::TURRET_HEALTH)),
+            ] {
+                let a = cx.intern_folded(f);
+                host.set_field(cx, id, a, v).unwrap();
+            }
+            id
+        });
+        let def = crate::game::turret::TurretDef::parse("WEAPONFILE\\weaponClass\\turret").unwrap();
+        let rec = crate::game::turret::TurretRecord::new(
+            "mg42_bipod_stand_mp",
+            def,
+            Default::default(),
+            0.0,
+        );
+        self.host.turrets.insert(id, rec);
+        id
+    }
+
     /// A placed item at `at`, the way the map load makes one.
     pub fn place_item(&mut self, classname: &str, at: [f32; 3], count: i32) -> EntId {
         use vcod_gsc::Host;

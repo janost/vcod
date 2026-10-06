@@ -985,6 +985,11 @@ fn main() -> Result<()> {
         error: None,
     };
     event_loop.run_app(&mut app)?;
+    // Retail's quit goes through `CL_Disconnect`. Without the `disconnect`
+    // the server holds the slot, and anything it owns, until `sv_timeout`.
+    if let Mode::Online { net, .. } = &mut app.mode {
+        net.disconnect();
+    }
     match app.error.take() {
         Some(e) => Err(e),
         None => Ok(()),

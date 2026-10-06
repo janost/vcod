@@ -208,11 +208,11 @@ fn client_spawn(
     // `ClientSpawn` gives the sim a fresh playerstate, ammo included; the
     // script's gives that follow land on this.
     host.client_ammo[slot] = crate::game::host::AmmoArrays::default();
-    // `ClientSpawn` re-stores `sess.maxHealth` into the fresh playerstate
-    // (docs/protocol-1.1.md, "Block 1"); the gametype writes both fields
-    // again right after, so this is what a spawn without that script does.
+    // `ClientSpawn` never writes `ent->health` (combat doc 5.6): a spawn in
+    // any mode keeps what the entity held, a spectator spawned after a death
+    // its negative health, until the gametype writes it. `player_die` is
+    // the `die` pointer again (0x42753).
     let v = &mut host.client_vitals[slot];
-    v.health = v.max_health;
     v.dead = false;
     // `ClientSpawn` clears `takedamage` (0x4273c) and its own
     // `ClientEndFrame` call sets it again for a playing client.
@@ -683,7 +683,9 @@ mod tests {
 
             // The other two modes go through the same builtin: the
             // `sessionstate` string is the whole of what tells them apart
-            // (map-cycle doc, 6.1).
+            // (map-cycle doc, 6.1). None of the three writes health
+            // (`probe_victims`, combat doc 5.6).
+            host.client_vitals[2].health = -20;
             for (state_name, mode) in [
                 ("spectator", SpawnMode::Spectator),
                 ("intermission", SpawnMode::Intermission),
@@ -692,6 +694,7 @@ mod tests {
                 host.set_field(cx, e, state, v).unwrap();
                 spawn(&mut host, cx, t, &[at, angles]).unwrap();
                 assert_eq!(host.client_spawns.last().unwrap().mode, mode);
+                assert_eq!(host.client_vitals[2].health, -20);
             }
 
             // No receiver is still the free function.

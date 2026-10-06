@@ -963,6 +963,7 @@ pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) -> Vec<PmEven
     // for a dead player (combat doc, 1.12 and 1.13).
     ps.ads_active = false;
     ground_trace(ps, world, MASK_DEADSOLID);
+    dead_friction(ps);
     // No events and no post-step velocity scale for a corpse: retail's step
     // block sits behind `ps->pm_type > 5` (@0x35660).
     ps.walking = false;
@@ -987,6 +988,28 @@ pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) -> Vec<PmEven
     clamp_velocity_to_move(ps, dt);
     snap_velocity(ps);
     events
+}
+
+/// What a dead player on the ground loses every pmove frame on top of the
+/// friction, `.rodata 0x7090c`.
+const DEAD_SPEED_DROP: f32 = 20.0;
+
+/// `PM_DeadMove` (0x2f700), which `PmoveSingle` calls for `pm_type` 6 only
+/// (0x342e9): on walkable ground the speed, z included, drops by 20 every
+/// frame and the velocity stops once that reaches 0. The drop is per frame,
+/// not scaled by its length, so a corpse's slide depends on its client's cmd
+/// rate (docs/research/cod11-combat.md 5.7).
+fn dead_friction(ps: &mut PlayerState) {
+    if !ps.on_ground {
+        return;
+    }
+    let speed = ps.velocity.length();
+    let left = speed - DEAD_SPEED_DROP;
+    ps.velocity = if left <= 0.0 {
+        Vec3::ZERO
+    } else {
+        ps.velocity / speed * left
+    };
 }
 
 /// Retail footstep cadence (`PM_Footsteps` @0x322c8). The bob cycle ticks by
@@ -2856,6 +2879,35 @@ mod tests {
         dead_move(&mut ps, &w, 0.05);
         assert!(!ps.ads_active);
         assert_eq!(ps.weapon_pos_frac, 1.0);
+    }
+
+    /// `PM_DeadMove` takes 20 off a grounded corpse's speed every frame on
+    /// top of the friction, so the same knockback slides it a fraction of
+    /// what it slides a live player: the retail probe measured 25 units
+    /// against 60 for a flat 200 (docs/research/cod11-combat.md 5.7). The
+    /// drop is per frame, so halving the frame length shortens the slide.
+    #[test]
+    fn a_corpse_sheds_twenty_units_a_frame_on_the_ground() {
+        let w = flat();
+        let w = MoveWorld::bare(&w);
+        let slide = |dt: f32| {
+            let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.125), 0.0);
+            ps.velocity = Vec3::new(240.0, 0.0, 0.0);
+            ps.knockback_ms = 120.0;
+            ps.knockback_flags = PMF_TIME_KNOCKBACK;
+            for _ in 0..(2.0 / dt) as usize {
+                dead_move(&mut ps, &w, dt);
+            }
+            assert_eq!(ps.velocity, Vec3::ZERO);
+            ps.origin.x
+        };
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.125), 0.0);
+        ps.velocity = Vec3::new(10.0, 0.0, 0.0);
+        dead_move(&mut ps, &w, 0.016);
+        assert_eq!(ps.velocity, Vec3::ZERO, "10 is under one frame's drop");
+        let (coarse, fine) = (slide(0.033), slide(0.016));
+        assert!((20.0..35.0).contains(&coarse), "{coarse}");
+        assert!(fine < coarse - 5.0, "{fine} against {coarse}");
     }
 
     /// The mounted arm (0x34274) never reaches the move dispatch or
