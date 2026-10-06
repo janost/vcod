@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use vcod_common::animtree::PlayerAnims;
 use vcod_common::bsp::Bsp;
+use vcod_common::collision::MASK_PLAYERSOLID;
+use vcod_common::movetrace::MoveWorld;
 use vcod_common::net::msg::{ClientState, EntityState};
 use vcod_common::net::protocol::{CS_MODELS_V1, CS_TAGS_V1, Protocol};
 use vcod_common::net::snapshot::Snapshot;
@@ -820,8 +822,8 @@ fn model_rotation(visual: &EntityVisual, angles: Vec3) -> Quat {
 
 /// 0x300279b0 (turrets doc 14.5): a mounted player's origin, body rotation
 /// and leaf blend for the wire anim `anim`, off the gun its `otherEntityNum`
-/// names. `None` leaves the body where the snapshot put it, as the routine's
-/// early returns do.
+/// names, and the gun's z for the trace down. `None` leaves the body where
+/// the snapshot put it, as the routine's early returns do.
 #[allow(clippy::too_many_arguments)]
 fn place_body(
     anims: &PlayerAnims,
@@ -832,7 +834,7 @@ fn place_body(
     pos: Vec3,
     clips: &mut HashMap<String, Option<Rc<XAnim>>>,
     fs: &Pk3Fs,
-) -> Option<GunnerPlacement> {
+) -> Option<(GunnerPlacement, f32)> {
     if ent.field_i32(p, "eFlags") & turret::EF_MOUNTED == 0 {
         return None;
     }
@@ -853,6 +855,23 @@ fn place_body(
         pos,
         gun.rotate_inc,
     )
+    .map(|g| (g, gun.pos.z))
+}
+
+/// 0x300279b0's trace (turrets doc 14.7): from the gun's height straight
+/// down to the placed spot under `MASK_PLAYERSOLID`, every solid but the
+/// gunner's own clipping it; the z moves onto whatever it meets.
+fn trace_down(world: MoveWorld, gunner: u32, mut at: Vec3, gun_z: f32) -> Vec3 {
+    let start = Vec3::new(at.x, at.y, gun_z);
+    let world = MoveWorld {
+        pass: gunner,
+        ..world
+    };
+    let tr = world.box_trace(start, at, Vec3::ZERO, Vec3::ZERO, MASK_PLAYERSOLID);
+    if tr.fraction < 1.0 {
+        at.z = tr.endpos.z;
+    }
+    at
 }
 
 /// Poses `set`, clips and their blend weights, onto `pose` at `t` seconds,
@@ -908,6 +927,7 @@ pub fn build_instances(
     configstrings: &[String],
     fs: &Pk3Fs,
     bsp: &Bsp,
+    trace: Option<MoveWorld>,
     renderer: &mut Renderer,
     p: &Protocol,
 ) -> BuiltScene {
@@ -1017,8 +1037,7 @@ pub fn build_instances(
         }
         let mut rot = model_rotation(&visual, angles);
         let mut yaw = angles.y;
-        // A gunner stands and turns where its gun puts it. Retail traces the
-        // spot down too; the snapshot's z is already the server's traced one.
+        // A gunner stands and turns where its gun puts it, traced down.
         let snap_pos = pos;
         let placed = match (&visual, anims) {
             (EntityVisual::Player { .. }, Some(anims)) if etype == ET_PLAYER => place_body(
@@ -1033,6 +1052,16 @@ pub fn build_instances(
             ),
             _ => None,
         };
+        let placed = placed.map(|(g, gun_z)| {
+            let traced = match trace {
+                Some(world) if g.origin.is_finite() => trace_down(world, num, g.origin, gun_z),
+                _ => g.origin,
+            };
+            GunnerPlacement {
+                origin: traced,
+                ..g
+            }
+        });
         if let Some(g) = placed.as_ref().filter(|g| g.origin.is_finite()) {
             // Yaw only, as every player draws; a stock gun stands level.
             pos = g.origin;
@@ -1151,7 +1180,7 @@ pub fn build_instances(
                     // pitch with no yaw, which the wire does not carry.
                     let clip_set = |raw: i32, clips: &mut _| -> Vec<(&str, f32)> {
                         if placed.is_some()
-                            && let Some(g) =
+                            && let Some((g, _)) =
                                 place_body(anims, raw, ent, p, &guns, snap_pos, clips, fs)
                         {
                             return g
