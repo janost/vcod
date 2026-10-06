@@ -739,10 +739,6 @@ What vcod leaves out, each with the retail reading it skips:
 - The `wait == -1` arm of `Touch_Item` (section 7): vcod hides the item for
   good and does not set `eFlags` 0x100 or `unlinkAfterEvent`. Script cannot
   write `wait` (it is a keyword), and no stock BSP item carries one.
-- Brushes whose contents carry 0x80 or 0x400 but no SOLID, PLAYERCLIP or
-  GLASS bit (the 0x2080 kerb and floor words): they are in both item masks
-  (0x81, 0x491) and not in vcod's clip, so an item falls through them
-  (section 14.2).
 - `cg_predictItems`: the choice between `G_AddPredictableEvent` and
   `G_AddEvent` (section 7); both write the same ring.
 - `trigger_use` competing with items for the use key inside

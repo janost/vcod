@@ -6,7 +6,7 @@ use glam::Vec3;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::sync::Arc;
-use vcod_common::collision::{CollisionWorld, Prim};
+use vcod_common::collision::{CollisionWorld, MASK_PLAYERSOLID, Prim};
 use vcod_common::movetrace::MoveWorld;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 use vcod_common::pmove::PlayerState;
@@ -786,17 +786,18 @@ fn walk_as(world: &CollisionWorld, from: Vec3, target: glam::Vec2, gait: Gait) -
 /// walk the map's floor under them (mp_hurtgen's, 48 units below its river
 /// bed). From there the ray up either stops on the underside of a triangle
 /// whose own face, `(b - a) x (c - a)`, points up, or passes through a
-/// one-sided one and the same ray back down hits it.
+/// one-sided one and the same ray back down hits it. Both rays see what a
+/// player clips, not the brushes only a shot meets.
 fn under_ground(world: &CollisionWorld, p: Vec3) -> bool {
     let head = p + Vec3::Z * 72.0;
-    let up = world.point_trace(head, head + Vec3::Z * 8192.0, u32::MAX, false);
+    let up = world.point_trace(head, head + Vec3::Z * 8192.0, MASK_PLAYERSOLID, false);
     if let Some(Prim::Tri(t)) = up.hit {
         let [a, b, c] = world.tris[t as usize];
         if (b - a).cross(c - a).normalize_or_zero().z > 0.7 {
             return true;
         }
     }
-    let down = world.point_trace(up.endpos - Vec3::Z, head, u32::MAX, false);
+    let down = world.point_trace(up.endpos - Vec3::Z, head, MASK_PLAYERSOLID, false);
     down.fraction < 1.0
 }
 

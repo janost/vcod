@@ -53,9 +53,13 @@ pub const MASK_BLAST: u32 = 0x2802091;
 /// with the entity's `clipmask` and falls back to 0x11, SOLID and GLASS,
 /// and no store into `fire_grenade`'s entity (0x643ac) was found.
 pub const MASK_MISSILE: u32 = CONTENTS_SOLID | CONTENTS_GLASS;
-/// The brush contents that enter the clip as brushes. Glass carries no SOLID
-/// bit (mp_depot's panes are 0x8000010) and is in every mask above.
-const CLIP_BRUSH: u32 = CONTENTS_SOLID | CONTENTS_PLAYERCLIP | CONTENTS_GLASS;
+/// The brush contents that enter the clip as brushes: every bit a trace
+/// mask meets, the item masks' 0x80 and 0x400 included (cod11-items.md,
+/// section 14.2), but water, which stays a volume. Glass carries no SOLID
+/// bit (mp_depot's panes are 0x8000010), and the 0x2080 kerb and floor
+/// brushes carry neither SOLID nor PLAYERCLIP, so a player walks through
+/// what stops a bullet, a blast probe and a falling item.
+const CLIP_BRUSH: u32 = (MASK_PLAYERSOLID | MASK_SHOT | MASK_BLAST | 0x491) & !CONTENTS_WATER;
 const TRACE_MASK_MOVE: u32 = MASK_PLAYERSOLID;
 const TRACE_MASK_SHOT: u32 = MASK_SHOT;
 
@@ -2049,6 +2053,29 @@ mod tests {
         let inside = world.shot_trace(Vec3::new(40.125, 0.0, 60.0), end);
         assert_eq!(inside.fraction, 1.0, "{inside:?}");
         assert_eq!(world.hit_contents(&inside), 0);
+    }
+
+    /// A 0x2080 kerb brush stops a shot, a blast probe and a falling item,
+    /// and a player walks through it.
+    #[test]
+    fn a_kerb_brush_clips_every_mask_but_the_players() {
+        let kerb = 0x2080;
+        let world = synthetic_world(
+            &[("textures/test/kerb", kerb, 0)],
+            &[(0, [-64.0, -64.0, -16.0], [64.0, 64.0, 0.0])],
+        );
+        let (above, below) = (Vec3::new(0.0, 0.0, 32.0), Vec3::new(0.0, 0.0, -32.0));
+        let shot = world.shot_trace(above, below);
+        assert!(shot.fraction < 1.0, "{shot:?}");
+        assert_eq!(world.hit_contents(&shot), kerb);
+        assert!(world.point_trace(above, below, MASK_BLAST, true).fraction < 1.0);
+        let item = world.item_trace(above, below, -Vec3::ONE, Vec3::ONE, 0x81);
+        assert!(item.fraction < 1.0, "{item:?}");
+        assert_eq!(world.point_contents(Vec3::new(0.0, 0.0, -8.0)), kerb);
+
+        let (mins, maxs) = (Vec3::new(-15.0, -15.0, 0.0), Vec3::new(15.0, 15.0, 70.0));
+        assert_eq!(world.box_trace(above, below, mins, maxs).fraction, 1.0);
+        assert_eq!(world.missile_trace(above, below).fraction, 1.0);
     }
 
     /// A prop's triangles stop a shot through them, front face only,
