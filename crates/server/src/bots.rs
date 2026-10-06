@@ -26,6 +26,18 @@ const TICK_MS: i32 = 50;
 const HIT_RADIUS: f32 = 10.0;
 /// A bot moving faster than this aims with [`Skill::error_moving`].
 const MOVING_SPEED: f32 = 20.0;
+/// How far a bot hears gunfire and a blast, units. The stock aliases carry
+/// `dist_max` 7800 for every rifle and gun `_fire` and 6000 for
+/// `grenade_explode_*` (`soundaliases/iw_sound.csv`), which covers most of a
+/// map; these keep the same ratio at a range that leaves bots roaming.
+pub(crate) const HEAR_GUNFIRE: f32 = 2000.0;
+pub(crate) const HEAR_BLAST: f32 = 1500.0;
+/// A remembered or heard spot is reached within this, horizontally.
+const ARRIVE_RADIUS: f32 = 64.0;
+/// ...and this vertically, so a spot one floor up is not reached from below.
+const ARRIVE_HEIGHT: f32 = 96.0;
+/// A lost enemy is remembered this far along its last velocity, seconds.
+const MEMORY_LEAD_S: f32 = 0.5;
 
 /// How well a bot fights. Ticks are 50 ms; the aim error is a miss distance
 /// at the target, in units, so its angle shrinks with range on its own.
@@ -50,6 +62,12 @@ pub struct Skill {
     pub error_moving: f32,
     /// Past this range a weapon with sights aims down them.
     pub ads_range: f32,
+    /// Ticks a lost enemy's last spot stays a goal. Longer than
+    /// `forget_ticks`: the spot outlives the target's identity.
+    pub memory_ticks: u32,
+    /// Ticks a heard noise stays a goal; long enough to walk most of
+    /// [`HEAR_GUNFIRE`] at run speed.
+    pub noise_ticks: u32,
 }
 
 impl Default for Skill {
@@ -65,6 +83,8 @@ impl Default for Skill {
             error_range: 1000.0,
             error_moving: 1.75,
             ads_range: 400.0,
+            memory_ticks: 100,
+            noise_ticks: 200,
         }
     }
 }
@@ -106,6 +126,9 @@ pub struct BotView {
     /// The next point on the server's path toward [`Bot::goal`]; `None`
     /// while there is no path, and the bot wanders.
     pub waypoint: Option<[f32; 3]>,
+    /// The loudest gunfire or blast another player made last tick within
+    /// earshot ([`loudest`]), chest high.
+    pub noise: Option<[f32; 3]>,
 }
 
 /// Where a bot wants to go. The brain names it from its view; the server
@@ -127,6 +150,31 @@ pub struct EnemyView {
     pub slot: usize,
     /// The chest, the point the bot aims at.
     pub origin: [f32; 3],
+    /// Units/s; where it was heading is where a lost enemy is looked for.
+    pub velocity: [f32; 3],
+}
+
+/// A shot or blast one tick of the sim made, as the server recorded it.
+#[derive(Clone, Copy, Debug)]
+pub struct Noise {
+    pub at: [f32; 3],
+    /// The client whose shot or grenade it was; it does not hear itself.
+    pub source: usize,
+    /// How far it carries: [`HEAR_GUNFIRE`] or [`HEAR_BLAST`].
+    pub radius: f32,
+}
+
+/// The noise `listener` hears loudest from `at`: the one nearest relative
+/// to its range, first in recorded order on a tie. Teammates' fights count
+/// too: a friend shooting means an enemy close to him.
+pub(crate) fn loudest(noises: &[Noise], listener: usize, at: [f32; 3]) -> Option<[f32; 3]> {
+    noises
+        .iter()
+        .filter(|n| n.source != listener)
+        .map(|n| (dist_sq(at, n.at).sqrt() / n.radius, n.at))
+        .filter(|(f, _)| *f < 1.0)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, p)| p)
 }
 
 /// What a bot's body is doing, as the gates read it.
@@ -169,6 +217,8 @@ pub struct Bot {
     /// Ticks an automatic's trigger stays held.
     burst_ticks: u32,
     target: Option<Target>,
+    /// Where to go looking once nothing is in sight.
+    recall: Option<Recall>,
     /// Engagement footwork: the strafe direction (`right`), the ticks left
     /// on it, and the ticks left on a crouch.
     strafe: i8,
@@ -200,6 +250,16 @@ struct Target {
     lost: u32,
 }
 
+/// A spot worth a look: where a seen enemy was lost, or a noise.
+#[derive(Clone, Copy, Debug)]
+struct Recall {
+    at: [f32; 3],
+    /// Ticks before it is dropped.
+    ticks: u32,
+    /// A seen enemy's spot; a noise does not replace it.
+    seen: bool,
+}
+
 enum Stage {
     Wander,
     ToGrenade,
@@ -228,6 +288,7 @@ impl Bot {
             fire_cooldown: 0,
             burst_ticks: 0,
             target: None,
+            recall: None,
             strafe: 0,
             strafe_ticks: 0,
             crouch_ticks: 0,
@@ -318,16 +379,62 @@ impl Bot {
         self.answered.clear();
     }
 
-    /// Where the bot wants to be this tick: the enemy it sees, else
-    /// anywhere far. Asked before [`Bot::think`], which then follows the
-    /// waypoint the server planned toward it.
+    /// Where the bot wants to be this tick: the enemy it sees, else the
+    /// spot it remembers or heard, else anywhere far. Asked before
+    /// [`Bot::think`], which then follows the waypoint the server planned
+    /// toward it.
     pub fn goal(&self, view: &BotView) -> Goal {
         if view.dead || !view.playing || !matches!(self.stage, Stage::Wander) {
             return Goal::Hold;
         }
-        match view.enemy {
-            Some(e) => Goal::To(e.origin),
-            None => Goal::Roam,
+        if let Some(e) = view.enemy {
+            return Goal::To(e.origin);
+        }
+        if let Some(p) = self.recall_goal(view) {
+            return Goal::To(p);
+        }
+        Goal::Roam
+    }
+
+    /// The remembered spot not yet reached, else this tick's noise. The same
+    /// rule [`Bot::remember`] applies a tick later, so the two agree.
+    fn recall_goal(&self, view: &BotView) -> Option<[f32; 3]> {
+        match self.recall {
+            Some(r) if !arrived(view.origin, r.at) => Some(r.at),
+            _ => view.noise.filter(|n| !arrived(view.origin, *n)),
+        }
+    }
+
+    /// Keeps [`Bot::recall`] current: a visible enemy is remembered where it
+    /// is headed; out of sight the memory runs down and is dropped on
+    /// arrival; a noise replaces anything but a seen enemy's spot.
+    fn remember(&mut self, view: &BotView) {
+        if let Some(e) = view.enemy {
+            let lead = |i: usize| e.origin[i] + e.velocity[i] * MEMORY_LEAD_S;
+            self.recall = Some(Recall {
+                at: [lead(0), lead(1), e.origin[2]],
+                ticks: self.skill.memory_ticks,
+                seen: true,
+            });
+            return;
+        }
+        if let Some(r) = self.recall.as_mut() {
+            r.ticks = r.ticks.saturating_sub(1);
+        }
+        if self
+            .recall
+            .is_some_and(|r| r.ticks == 0 || arrived(view.origin, r.at))
+        {
+            self.recall = None;
+        }
+        if let Some(at) = view.noise
+            && !self.recall.is_some_and(|r| r.seen)
+        {
+            self.recall = Some(Recall {
+                at,
+                ticks: self.skill.noise_ticks,
+                seen: false,
+            });
         }
     }
 
@@ -346,6 +453,7 @@ impl Bot {
             // throw resumes on respawn.
             self.stage = Stage::Wander;
             self.disengage();
+            self.recall = None;
             // The stock death flow polls the use key only after its own
             // `wait 2` (dm.gsc, `waitRespawnButton`), so a one-shot press
             // lands before any poll reads it; retry every second, the way
@@ -360,9 +468,11 @@ impl Bot {
             // Spectator or intermission camera: nothing to press.
             self.respawn_ticks = 0;
             self.disengage();
+            self.recall = None;
             return cmd;
         }
         self.respawn_ticks = 0;
+        self.remember(view);
         match self.stage {
             Stage::ToGrenade => return self.think_grenade(view, cmd),
             Stage::Cook { left } => return self.think_cook(view, cmd, left),
@@ -398,7 +508,7 @@ impl Bot {
                 self.stall_ticks = 0;
             }
         }
-        let (mut pitch, mut yaw, forward) = match view.waypoint {
+        let (mut pitch, mut yaw, mut forward) = match view.waypoint {
             Some(w) if self.unstick_ticks == 0 => steer(view.origin, w),
             _ => {
                 self.unstick_ticks = self.unstick_ticks.saturating_sub(1);
@@ -410,6 +520,25 @@ impl Bot {
                 (0.0, self.heading, 127)
             }
         };
+        // On level ground with a remembered spot in range, the view turns
+        // toward it while the keys keep the path, so a returning enemy is
+        // already near the crosshair. The reaction delay is `track`'s
+        // business either way.
+        if self.shoot
+            && view.enemy.is_none()
+            && pitch == 0.0
+            && forward == 127
+            && let Some(r) = self.recall
+            && dist_sq(view.origin, r.at) < SHOOT_RANGE * SHOOT_RANGE
+        {
+            let (tp, ty) = aim_angles(view, r.at);
+            let look = self.turn_toward(view, [tp, ty]);
+            // The path heading relative to the view, counter-clockwise.
+            let d = yaw_diff(yaw, look[1]).to_radians();
+            forward = (d.cos() * 127.0).round() as i8;
+            cmd.right = (-d.sin() * 127.0).round() as i8;
+            [pitch, yaw] = look;
+        }
         // Engaging overrides all of this: `footwork` owns the move keys and
         // the aim owns the view.
         cmd.forward = forward;
@@ -498,16 +627,7 @@ impl Bot {
         self.target = Some(t);
 
         let (tp, ty) = aim_angles(view, e.origin);
-        let want = [tp + dir[0] * err_deg, ty + dir[1] * err_deg];
-        let cur = [yaw_diff(view.view[0], 0.0), view.view[1]];
-        let d = [yaw_diff(want[0], cur[0]), yaw_diff(want[1], cur[1])];
-        let len = d[0].hypot(d[1]);
-        let k = if len > self.skill.turn_deg {
-            self.skill.turn_deg / len
-        } else {
-            1.0
-        };
-        let aim = [(cur[0] + d[0] * k).clamp(-80.0, 80.0), cur[1] + d[1] * k];
+        let aim = self.turn_toward(view, [tp + dir[0] * err_deg, ty + dir[1] * err_deg]);
         // The view's miss of the true chest point after this cmd's turn.
         let off = yaw_diff(aim[0], tp).hypot(yaw_diff(aim[1], ty));
         let cone = (HIT_RADIUS / dist).atan().to_degrees();
@@ -521,6 +641,20 @@ impl Bot {
         self.trigger(view, dist, off, cone, ready, cmd);
         self.footwork(view, dist, ads, cmd);
         Some(aim)
+    }
+
+    /// The (pitch, yaw) one tick's turn takes the view to on its way to
+    /// `want`, at most `turn_deg` along the straight line between them.
+    fn turn_toward(&self, view: &BotView, want: [f32; 2]) -> [f32; 2] {
+        let cur = [yaw_diff(view.view[0], 0.0), view.view[1]];
+        let d = [yaw_diff(want[0], cur[0]), yaw_diff(want[1], cur[1])];
+        let len = d[0].hypot(d[1]);
+        let k = if len > self.skill.turn_deg {
+            self.skill.turn_deg / len
+        } else {
+            1.0
+        };
+        [(cur[0] + d[0] * k).clamp(-80.0, 80.0), cur[1] + d[1] * k]
     }
 
     /// Semi-autos tap, at least `fireTime` apart (AGENTS.md, "Fire is
@@ -685,6 +819,12 @@ const GRENADE_COOLDOWN_TICKS: u32 = 400;
 const BOT_EYE_HEIGHT: f32 = 60.0;
 const ANGLE2SHORT: f32 = 65536.0 / 360.0;
 
+/// Whether a body at `origin` (feet) has reached the chest-high `spot`.
+fn arrived(origin: [f32; 3], spot: [f32; 3]) -> bool {
+    let h = (spot[0] - origin[0]).hypot(spot[1] - origin[1]);
+    h < ARRIVE_RADIUS && (spot[2] - origin[2]).abs() < ARRIVE_HEIGHT
+}
+
 pub(crate) fn dist_sq(a: [f32; 3], b: [f32; 3]) -> f32 {
     let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
     d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
@@ -775,6 +915,7 @@ mod tests {
         v.enemy = Some(EnemyView {
             slot: 3,
             origin: [100.0, 0.0, 124.0],
+            velocity: [0.0; 3],
         });
         (bot, v)
     }
@@ -799,6 +940,7 @@ mod tests {
             enemy: None,
             grenade: Some(6),
             waypoint: None,
+            noise: None,
         }
     }
 
@@ -852,10 +994,105 @@ mod tests {
         v.enemy = Some(EnemyView {
             slot: 3,
             origin: [500.0, 0.0, 40.0],
+            velocity: [0.0; 3],
         });
         assert_eq!(bot.goal(&v), Goal::To([500.0, 0.0, 40.0]));
         v.dead = true;
         assert_eq!(bot.goal(&v), Goal::Hold);
+    }
+
+    /// A shooting bot that has just seen an enemy at `at`, moving at
+    /// `velocity`, and then lost it.
+    fn lost(at: [f32; 3], velocity: [f32; 3]) -> (Bot, BotView) {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = view();
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: at,
+            velocity,
+        });
+        bot.think(&v);
+        v.enemy = None;
+        (bot, v)
+    }
+
+    #[test]
+    fn a_lost_enemy_is_looked_for_where_it_was_headed_until_memory_runs_out() {
+        let (mut bot, v) = lost([500.0, 0.0, 104.0], [200.0, 0.0, 0.0]);
+        let spot = Goal::To([500.0 + 200.0 * MEMORY_LEAD_S, 0.0, 104.0]);
+        assert_eq!(bot.goal(&v), spot);
+        for _ in 1..bot.skill.memory_ticks {
+            bot.think(&v);
+        }
+        assert_eq!(bot.goal(&v), spot, "forgotten early");
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::Roam, "never forgotten");
+    }
+
+    #[test]
+    fn reaching_the_remembered_spot_with_nothing_there_forgets_it() {
+        let (mut bot, mut v) = lost([500.0, 0.0, 104.0], [0.0; 3]);
+        v.origin = [470.0, 10.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Roam);
+        bot.think(&v);
+        v.origin = [0.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Roam, "the reached spot came back");
+    }
+
+    #[test]
+    fn a_heard_noise_is_a_goal_that_outlasts_the_tick() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.noise = Some([0.0, 900.0, 104.0]);
+        assert_eq!(bot.goal(&v), Goal::To([0.0, 900.0, 104.0]));
+        bot.think(&v);
+        v.noise = None;
+        assert_eq!(bot.goal(&v), Goal::To([0.0, 900.0, 104.0]));
+    }
+
+    #[test]
+    fn a_seen_enemys_spot_beats_a_noise() {
+        let (mut bot, mut v) = lost([500.0, 0.0, 104.0], [0.0; 3]);
+        v.noise = Some([0.0, 900.0, 104.0]);
+        assert_eq!(bot.goal(&v), Goal::To([500.0, 0.0, 104.0]));
+        bot.think(&v);
+        v.noise = None;
+        assert_eq!(bot.goal(&v), Goal::To([500.0, 0.0, 104.0]));
+        // Once the spot is reached, the noise is what is left to check.
+        v.origin = [500.0, 0.0, 64.0];
+        v.noise = Some([0.0, 900.0, 104.0]);
+        bot.think(&v);
+        v.noise = None;
+        assert_eq!(bot.goal(&v), Goal::To([0.0, 900.0, 104.0]));
+    }
+
+    #[test]
+    fn the_view_turns_toward_a_remembered_spot_while_the_keys_keep_the_path() {
+        let (mut bot, mut v) = lost([0.0, 500.0, 124.0], [0.0; 3]);
+        v.view = [0.0, 0.0, 0.0];
+        v.waypoint = Some([500.0, 0.0, 64.0]);
+        let cmd = bot.think(&v);
+        let yaw = cmd.angles[1] as f32 / ANGLE2SHORT;
+        assert!((yaw - bot.skill.turn_deg).abs() < 0.1, "yaw {yaw}");
+        // The path runs along +x, right of a view turned 15 degrees left.
+        assert!(cmd.forward > 120 && cmd.right > 30, "{cmd:?}");
+    }
+
+    #[test]
+    fn the_loudest_noise_is_the_nearest_for_its_range_and_never_ones_own() {
+        let at = [0.0, 0.0, 0.0];
+        let noise = |x: f32, source, radius| Noise {
+            at: [x, 0.0, 0.0],
+            source,
+            radius,
+        };
+        let heard = |n: &[Noise]| loudest(n, 1, at);
+        assert_eq!(heard(&[noise(10.0, 1, HEAR_GUNFIRE)]), None, "own shot");
+        assert_eq!(heard(&[noise(HEAR_BLAST + 1.0, 2, HEAR_BLAST)]), None);
+        // 1800 of 2000 (0.90) is louder than 1400 of 1500 (0.93).
+        let far_shot = noise(1800.0, 2, HEAR_GUNFIRE);
+        let near_blast = noise(1400.0, 3, HEAR_BLAST);
+        assert_eq!(heard(&[near_blast, far_shot]), Some(far_shot.at));
     }
 
     #[test]
@@ -974,6 +1211,7 @@ mod tests {
         v.enemy = Some(EnemyView {
             slot: 3,
             origin: [-500.0, 0.0, 124.0],
+            velocity: [0.0; 3],
         });
         let step = bot.skill.turn_deg;
         let mut yaw = 0.0f32;
@@ -1038,6 +1276,7 @@ mod tests {
         v.enemy = Some(EnemyView {
             slot: 3,
             origin: [900.0, 0.0, 124.0],
+            velocity: [0.0; 3],
         });
         for _ in 0..40 {
             let cmd = bot.think(&v);
@@ -1090,6 +1329,7 @@ mod tests {
         v.enemy = Some(EnemyView {
             slot: 3,
             origin: [300.0, 0.0, 40.0],
+            velocity: [0.0; 3],
         });
         // Grind until the grenade machine starts; the cooldown is short with
         // a live enemy this close.

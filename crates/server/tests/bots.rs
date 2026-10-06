@@ -257,3 +257,53 @@ fn bots_roam_far_along_the_graph() {
         );
     }
 }
+
+/// Gunfire carries through walls: a third bot with no line to a fight
+/// 900-1300 units off walks toward it.
+#[test]
+fn a_bot_walks_toward_gunfire_it_cannot_see() {
+    let Some((mut sv, mut now)) = server_with(3, true) else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    run(&mut sv, &mut now, 100);
+    let slots = sv.bot_slots();
+    let (fighters, listener) = ([slots[0], slots[1]], slots[2]);
+    let a = sv.bot_body(fighters[0]).unwrap().origin;
+    // A floor in a ring round the fight with the eye line to it blocked.
+    let spot = (0..48)
+        .filter_map(|i| {
+            let r = 900.0 + 200.0 * (i / 16) as f32;
+            let yaw = (i % 16) as f32 * 22.5;
+            let (s, c) = yaw.to_radians().sin_cos();
+            let p = sv.test_ground_under([a[0] + c * r, a[1] + s * r, a[2] + 64.0])?;
+            let back = yaw + 180.0;
+            (!sv.test_clear_line(p, back, r)).then_some((p, back))
+        })
+        .next()
+        .expect("no walled-off floor round the fight");
+    let dist = |p: [f32; 3]| (p[0] - a[0]).hypot(p[1] - a[1]);
+    // Facing away, so it does not stumble on the fight by looking.
+    sv.place_client(listener, spot.0, spot.1 + 180.0);
+    let start = dist(spot.0);
+
+    let mut closest = start;
+    for tick in 0..300 {
+        if tick % 50 == 0 {
+            let (ba, bb) = (
+                sv.bot_body(fighters[0]).unwrap(),
+                sv.bot_body(fighters[1]).unwrap(),
+            );
+            if ba.playing && bb.playing {
+                sv.place_client(fighters[0], a, 0.0);
+                sv.place_client(fighters[1], [a[0] + 100.0, a[1], a[2]], 180.0);
+            }
+        }
+        run(&mut sv, &mut now, 1);
+        closest = closest.min(dist(sv.bot_body(listener).unwrap().origin));
+    }
+    assert!(
+        closest < start - 500.0,
+        "the listener got from {start:.0} to {closest:.0} of the fight"
+    );
+}
