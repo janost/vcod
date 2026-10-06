@@ -289,6 +289,13 @@ pub struct GameHost {
     /// Each connected client slot as `Server` last mirrored it, for the
     /// scoreboard and `player_die`'s follower walk, which run inside the VM.
     pub client_roster: Vec<Option<crate::game::scoreboard::RosterSlot>>,
+    /// Each slot's userinfo name, mirrored with `client_roster`: what
+    /// `G_Say` reads (`gclient+0x21b4`), which follows a rename where the
+    /// entity's `.name` does not.
+    pub client_names: Vec<String>,
+    /// `client+0x2268`: the level time `pingPlayer` holds `eFlags` 0x80000
+    /// until, by slot.
+    pub client_ping_until: Vec<i32>,
     /// Each client's last usercmd buttons, mirrored in by `Server` before
     /// the frame, for `useButtonPressed`.
     pub client_buttons: Vec<u8>,
@@ -827,6 +834,8 @@ impl GameHost {
             client_ammo: vec![AmmoArrays::default(); MAX_CLIENTS],
             client_vitals: vec![Vitals::default(); MAX_CLIENTS],
             client_roster: vec![None; MAX_CLIENTS],
+            client_names: vec![String::new(); MAX_CLIENTS],
+            client_ping_until: vec![0; MAX_CLIENTS],
             client_buttons: vec![0; MAX_CLIENTS],
             client_pm_type: vec![0; MAX_CLIENTS],
             client_on_ground: vec![false; MAX_CLIENTS],

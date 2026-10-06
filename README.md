@@ -82,9 +82,11 @@ built from the bytes up, this might be your kind of thing.
   `tag_player` and the HUD swaps the crosshair for the gun's reticle.
 - Draws the HUD that the stock `hud.menu` lays out: crosshair that opens with
   spread, health, ammo, fire-mode icon, stance with its change flash, compass
-  with objectives and teammates, use hints and hit direction. A spectator
-  following a player sees that player's HUD, weapon, zoom and scope. It
-  also draws the gametype script's own HUD elements, such as the S&D clock, the bomb icons and the
+  with objectives and teammates, use hints and hit direction, chat top left,
+  game messages over the compass and announcements over the crosshair. A
+  spectator following a player sees that player's HUD, weapon, zoom and
+  scope. It also draws the gametype script's own HUD elements, such as the
+  S&D clock, the bomb icons and the
   progress bar, in retail's fonts, fixed-width slots included.
 - Follows the server through a map change: loading screen, downloads, new
   map.
@@ -184,8 +186,8 @@ console, no key rebinding. You get command-line flags and the binds below.
 - The HUD skips a few retail touches: the compass's spring, the stance key
   hints, the weapon name timing out after a switch and the hit icon's jitter
   ([docs/research/cod11-hud-protocol.md](docs/research/cod11-hud-protocol.md),
-  section 9). vcod's own server doesn't send the out-of-view teammate or
-  quick-chat pings, so those compass marks show only on a retail server.
+  section 9). vcod's own server doesn't send the out-of-view teammate, so
+  that compass mark shows only on a retail server.
 - Only protocol 1 (patch 1.1). 1.5 and United Offensive servers won't talk to
   it.
 - Prediction carries you with a moving brush model you stand on but not
@@ -197,8 +199,6 @@ console, no key rebinding. You get command-line flags and the binds below.
 - `re` and `bel` play past the round start, but I haven't checked a
   Retrieval pickup and capture or the Behind Enemy Lines team swap against
   retail. The bots don't play `bel`.
-- No chat relay: the server answers no `say` command, and the scripts'
-  `sayAll`, `sayTeam` (the quick-chat menu) and `pingPlayer` are missing.
 - `linkTo` takes only a player. A script calling it on any other entity
   stops with an error; no stock MP script does.
 - A brush model that has turned and turned back keeps a sliver of yaw on
@@ -399,6 +399,7 @@ which retail binds to `toggle cl_run` and vcod uses for the sight.
 | 1 / 2 / 3 / 4 | Weapon slot: primary, second primary, pistol, grenade |
 | Scroll | Next / previous weapon |
 | Tab | Scoreboard (held) |
+| T / Y | Type a chat line to everyone / your team; Enter sends, Escape drops it |
 
 Your position is predicted while you play. While you spectate, are dead,
 follow someone or sit through the intermission, it comes from the server. As a

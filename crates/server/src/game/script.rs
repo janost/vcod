@@ -1182,6 +1182,21 @@ impl ScriptRuntime {
         self.vm.with_cx(|cx| host.scoreboard(cx))
     }
 
+    /// `G_Say` for a client's own `say`, `say_team` or `tell`; the lines it
+    /// queued, in order.
+    pub fn say(
+        &mut self,
+        slot: usize,
+        target: Option<usize>,
+        mode: crate::game::say::SayMode,
+        text: &str,
+    ) -> Vec<(usize, String)> {
+        let from = self.host.client_commands.len();
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| host.say(cx, slot, target, mode, text));
+        self.host.client_commands.split_off(from)
+    }
+
     /// The spawns the script performed this frame, in call order. `Server`
     /// applies them to the client sims; nothing here can reach one.
     pub fn take_client_spawns(&mut self) -> Vec<SpawnRequest> {
@@ -1645,6 +1660,9 @@ impl ScriptRuntime {
                 }
                 if let Some(b) = self.host.client_old_buttons.get_mut(slot) {
                     *b = 0;
+                }
+                if let Some(p) = self.host.client_ping_until.get_mut(slot) {
+                    *p = 0;
                 }
                 self.host.reset_client_objectives(slot);
                 // The carried `pers`, if the boundary this client crossed

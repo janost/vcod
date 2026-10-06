@@ -167,11 +167,24 @@ impl PlayerHud {
 }
 
 /// Text at a virtual baseline, at a menu `textscale`.
-fn menu_text(
+pub(super) fn menu_text(
     font: &Font,
     s: &str,
     (x, baseline): (f32, f32),
     textscale: f32,
+    v: &Virtual,
+    out: &mut Vec<HudQuad>,
+) {
+    menu_text_rgba(font, s, (x, baseline), textscale, WHITE, v, out);
+}
+
+/// [`menu_text`] in `rgba`, which a `^N` code overrides and `^7` restores.
+pub(super) fn menu_text_rgba(
+    font: &Font,
+    s: &str,
+    (x, baseline): (f32, f32),
+    textscale: f32,
+    rgba: [f32; 4],
     v: &Virtual,
     out: &mut Vec<HudQuad>,
 ) {
@@ -181,17 +194,17 @@ fn menu_text(
         s,
         (x, top),
         textscale * v.scale / font.unit_scale(),
-        WHITE,
+        rgba,
         v,
         out,
     );
 }
 
-fn text_width(font: &Font, s: &str, textscale: f32) -> f32 {
+pub(super) fn text_width(font: &Font, s: &str, textscale: f32) -> f32 {
     font::measure(font, s, textscale / font.unit_scale())
 }
 
-fn text_height(font: &Font, textscale: f32) -> f32 {
+pub(super) fn text_height(font: &Font, textscale: f32) -> f32 {
     font.max_height as f32 * font.glyph_scale * textscale
 }
 
@@ -589,7 +602,7 @@ pub fn hint_material(hint: i32, weapons: &[Option<WeaponDef>]) -> Option<String>
 }
 
 /// The hint icon, pulsing, and the hint string above it with its `[%s]`
-/// filled with the use key.
+/// and `[{+activate}]` filled with the use key.
 fn cursor_hint(p: &PlayerView, cx: &Context, now: i32, v: &Virtual, out: &mut Vec<HudQuad>) {
     let Some(material) = hint_material(p.cursor_hint, cx.weapons) else {
         return;
@@ -616,7 +629,9 @@ fn cursor_hint(p: &PlayerView, cx: &Context, now: i32, v: &Virtual, out: &mut Ve
     if key.is_empty() {
         return;
     }
-    let s = cx.loc.get(key).unwrap_or(key).replace("[%s]", "[F]");
+    // The configstring is a packed message (`RE_PRESS_TO_PICKUP\x14...`),
+    // localized and key-bound the way a game message is (0x300229b0).
+    let s = super::bind_keys(&cx.loc.message(key)).replace("[%s]", "[F]");
     let tw = text_width(cx.font, &s, 0.21);
     let baseline = y - text_height(cx.font, 0.21);
     menu_text(cx.font, &s, (x + (w - tw) / 2.0, baseline), 0.21, v, out);

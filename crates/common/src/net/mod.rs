@@ -86,7 +86,8 @@ pub enum NetState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NetEvent {
     GamestateReady,
-    /// Colour codes left in; `team` for `tchat`.
+    /// `h` or `i` (`team`): the message as sent, colour codes and the
+    /// localization markers left in.
     Chat {
         text: String,
         team: bool,
@@ -771,11 +772,12 @@ impl<T: Transport> NetClient<T> {
             }
             // Q3's spelling; no CoD server sends it.
             Some("disconnect") => self.drop("server closed the connection"),
-            Some("chat") | Some("tchat") => {
+            // `h` chat, `i` team chat (G_Say, docs/research/cod11-chat.md).
+            Some("h") | Some("i") => {
                 if let Some(text) = tokens.get(1) {
                     self.events.push(NetEvent::Chat {
                         text: text.clone(),
-                        team: tokens[0] == "tchat",
+                        team: tokens[0] == "i",
                     });
                 }
             }
@@ -1759,7 +1761,7 @@ mod tests {
         let t0 = Instant::now();
         let mut c = NetClient::start(FakeTransport::default(), t0);
 
-        c.handle_server_command(1, "chat \"^1hi ^7there\"".to_string());
+        c.handle_server_command(1, "h \"^1hi ^7there\"".to_string());
         assert_eq!(
             c.events,
             vec![NetEvent::Chat {
@@ -1768,7 +1770,7 @@ mod tests {
             }]
         );
         // Stored verbatim in the XOR key ring at seq & 63.
-        assert_eq!(c.netchan.server_commands[1], "chat \"^1hi ^7there\"");
+        assert_eq!(c.netchan.server_commands[1], "h \"^1hi ^7there\"");
         assert_eq!(c.command_sequence, 1);
         c.events.clear();
 
@@ -1832,11 +1834,14 @@ mod tests {
     fn chat_keeps_color_codes_and_team_flag() {
         let t0 = Instant::now();
         let mut c = NetClient::start(FakeTransport::default(), t0);
-        c.handle_server_command(8, "tchat \"^1Bob^7: go go\"".into());
+        c.handle_server_command(
+            8,
+            "i \"\u{15}(\u{14}GAME_AXIS\u{15})Bob^7: ^7go go\"".into(),
+        );
         assert_eq!(
             c.events.last().unwrap(),
             &NetEvent::Chat {
-                text: "^1Bob^7: go go".into(),
+                text: "\u{15}(\u{14}GAME_AXIS\u{15})Bob^7: ^7go go".into(),
                 team: true
             }
         );

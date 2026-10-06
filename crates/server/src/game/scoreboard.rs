@@ -11,6 +11,9 @@ use vcod_gsc::{Cx, Host, Value};
 pub struct RosterSlot {
     /// `CS_CONNECTED`, no gamestate sent yet.
     pub connecting: bool,
+    /// In the world: the game's `CON_CONNECTED`, which `ClientBegin` sets
+    /// and which a chat line's recipient needs.
+    pub active: bool,
     /// The slot this client's follow is on, the `spectatorClient` the walk
     /// compares.
     pub following: Option<usize>,
@@ -101,7 +104,7 @@ impl GameHost {
 
     /// One field off a client's entity, rendered the way string
     /// concatenation renders it. `None` when the slot holds no client entity.
-    fn client_field(&mut self, cx: &mut Cx, slot: usize, name: &str) -> Option<String> {
+    pub(crate) fn client_field(&mut self, cx: &mut Cx, slot: usize, name: &str) -> Option<String> {
         let ent = self.ents.handle(u32::try_from(slot).ok()?)?;
         self.ents.get(ent)?.client.as_ref()?;
         let atom = cx.intern_folded(name);
