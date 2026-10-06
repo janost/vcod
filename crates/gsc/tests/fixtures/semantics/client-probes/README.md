@@ -690,3 +690,21 @@ where retail's stands at -31.00, its body leaves two of slot 2's five
 probes clear where retail's left none, and slot 2 takes 133 on
 `lethal_high`; the
 `same_frame_high` callbacks run 2 then 3 where retail's ran 3 then 2.
+
+## probe_hud_disconnect
+
+Whether a client's `newClientHudElem` record outlives it, for
+`docs/research/cod11-hud-protocol.md`, "A client's elements die with it".
+One client is enough: it connects, `begin` makes one owned and one shared
+element, and leaving runs the disconnect callback. Two shells:
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> tools/run_probe.sh client-probes/probe_hud_disconnect mp_pavlov
+# second shell, once the map is up:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-secs 8
+```
+
+Against ours: `vcod-server mp_pavlov --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_hud_disconnect.gsc`.
+Plain `--net-probe` writes no fixture. Retail and ours, 2026-10-06, print
+the same three lines; the doc section quotes them.
