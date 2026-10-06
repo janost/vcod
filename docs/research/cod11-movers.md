@@ -400,6 +400,31 @@ arm). `ride_ab.rs` diffs the slab's entity per snapshot against the capture.
 
 ### The client
 
+VERIFIED, `cgame_mp_x86.dll`: case 8 of the entity-type switch at
+`0x3001d5f0` is `0x3001b710`, which returns without drawing when `eFlags`
+carries `0x100` (`test ah,0x1` at `0x3001b732`), and when `solid` is
+`0xffffff` (`0x3001b76d`, `0x3001b7de`) adds a ref entity of type 0 whose
+model is the table at `0x301d31c0` indexed by `es.index`, at the entity's
+interpolated origin (`cent+0x1f8`..`+0x200`); any other `eType` 8 entity is a
+type 1 ref entity from the xmodel table at `0x301d24fc`. INFERRED: a brush
+model draws only through its snapshot entity, at its interpolated pose, and
+a hidden one draws nothing.
+
+VERIFIED, a census of the 16 BSPs in the mounted paks: 30
+`script_brushmodel`s, none with an `origin` key, so every one's brushes and
+surfaces are in world space; the only submodels with draw surfaces belong to
+`script_brushmodel`s (18 of them); carentan's bombzones `*5` and `*6` carry
+none. INFERRED: the ride capture's slab is clip only, drawn by nothing on
+retail either.
+
+vcod: `entities::resolve_visual` takes a `0xffffff` entity's `index` as its
+inline model and skips one with `eFlags` `0x100`. A brush model whose entity
+stands at the zero pose draws with the world, lightmapped; one that has moved
+draws as a dynamic instance at its interpolated pose, under the dynamic
+models' fixed key light; one with no entity in the snapshot draws nowhere
+(`Renderer::set_static_submodels`). With no server, every one draws at
+spawn.
+
 VERIFIED, `cgame_mp_x86.dll`: `CG_ClipMoveToEntities` (`0x30028df0`) takes
 an entity whose `solid` is `0xffffff` down a separate arm that calls syscall
 `0x21` with `s.modelindex` and `BG_EvaluateTrajectory` (`0x30005470`) twice

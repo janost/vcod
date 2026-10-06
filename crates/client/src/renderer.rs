@@ -931,6 +931,14 @@ struct WorldGpu {
     /// Last frame's mode, so `Locked` and `Off` skip re-uploading indices
     /// that cannot have changed.
     last_cull: Option<CullMode>,
+    /// The lump-27 model each soup belongs to, 0 for the world's own.
+    soup_model: Vec<u32>,
+    /// Per model, whether its soups draw with the world this frame. A
+    /// submodel draws only through the entity that carries it
+    /// ([`Renderer::set_static_submodels`]); model 0 always draws.
+    static_models: Vec<bool>,
+    /// `static_models` changed since the index buffer was last gathered.
+    static_dirty: bool,
 }
 
 /// One cloud-dome draw: a stage of the active sky block over the whole dome
@@ -1901,6 +1909,13 @@ impl Renderer {
         // Props (misc_model entities) are baked to world space on the CPU in
         // the same vertex format and extend the map's buffers.
         let (mut indices, batches, soup_ranges) = mesh::build_batches(bsp, &kinds);
+        let mut soup_model = vec![0u32; bsp.soups.len()];
+        for (mi, m) in bsp.models.iter().enumerate().skip(1) {
+            let first = m.first_soup as usize;
+            for s in soup_model.iter_mut().skip(first).take(m.num_soups as usize) {
+                *s = mi as u32;
+            }
+        }
         if batches.is_empty() {
             bail!("map has no drawable surfaces");
         }
@@ -2402,8 +2417,33 @@ impl Renderer {
             gather_scratch: Vec::new(),
             locked: None,
             last_cull: None,
+            soup_model,
+            static_models: (0..bsp.models.len()).map(|m| m == 0).collect(),
+            static_dirty: false,
         });
         Ok(())
+    }
+
+    /// The submodels whose entity this frame stands where the map put it:
+    /// their soups draw with the world, lightmapped, and every other
+    /// submodel's do not. A brush model that has moved draws as a dynamic
+    /// instance instead (`entities::build_instances`), and one whose entity
+    /// is not in the snapshot draws nowhere, as retail's world draw holds
+    /// model 0's surfaces only.
+    pub fn set_static_submodels(&mut self, models: &[usize]) {
+        let Some(world) = &mut self.world else {
+            return;
+        };
+        let mut want: Vec<bool> = (0..world.static_models.len()).map(|m| m == 0).collect();
+        for &m in models {
+            if let Some(w) = want.get_mut(m) {
+                *w = true;
+            }
+        }
+        if want != world.static_models {
+            world.static_models = want;
+            world.static_dirty = true;
+        }
     }
 
     /// A download reopened the search path: reparse the shader scripts the
@@ -2806,12 +2846,13 @@ impl Renderer {
                 CullMode::On => Some(Self::cull(world, frame.eye, &frame.view_proj, &frustum)),
             };
             let mut props_drawn = 0usize;
+            let shown = |si: usize| world.static_models[world.soup_model[si] as usize];
             let ranges: Vec<IndexRange> = match &visible {
                 None => world
                     .soup_ranges
                     .iter()
-                    .flatten()
-                    .copied()
+                    .enumerate()
+                    .filter_map(|(si, r)| if shown(si) { *r } else { None })
                     .chain(world.prop_ranges.iter().map(|&(_, r)| r))
                     .collect(),
                 Some((v, prop_ok)) => {
@@ -2820,7 +2861,8 @@ impl Renderer {
                         .soup_ranges
                         .iter()
                         .zip(&v.soups)
-                        .filter_map(|(r, &vis)| if vis { *r } else { None })
+                        .enumerate()
+                        .filter_map(|(si, (r, &vis))| if vis && shown(si) { *r } else { None })
                         .chain(
                             world
                                 .prop_ranges
@@ -2920,7 +2962,10 @@ impl Renderer {
                 .filter(|fd| matches!(fd.kind, DrawRef::Stage(_)))
                 .count();
             // in Locked and Off the gathered set is the same every frame
-            let unchanged = frame.cull != CullMode::On && world.last_cull == Some(frame.cull);
+            let unchanged = frame.cull != CullMode::On
+                && world.last_cull == Some(frame.cull)
+                && !world.static_dirty;
+            world.static_dirty = false;
             if !unchanged {
                 self.queue
                     .write_buffer(&world.index_buf, 0, bytemuck::cast_slice(&world.gathered));

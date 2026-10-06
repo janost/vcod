@@ -1446,6 +1446,13 @@ impl ApplicationHandler for App {
                 {
                     return self.fail(event_loop, e);
                 }
+                // Offline there is no snapshot to place the brush models, so
+                // every one stands where the map put it.
+                if let Some(w) = &self.world
+                    && !matches!(self.mode, Mode::Online { .. })
+                {
+                    r.set_static_submodels(&(1..w.bsp.models.len()).collect::<Vec<_>>());
+                }
                 if !self.viewmodel.is_empty() {
                     r.set_viewmodel(&self.fs, &self.viewmodel);
                 }
@@ -2016,6 +2023,7 @@ impl ApplicationHandler for App {
                                         weapon_flash = built.weapon_flash;
                                         entity_pos = built.entity_pos;
                                         turret_eye = built.turret_eye;
+                                        r.set_static_submodels(&built.static_submodels);
                                         // Over 512 u is a teleport, not motion.
                                         let pos = if oa.distance(ob) > 512.0 {
                                             ob
