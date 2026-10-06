@@ -340,6 +340,11 @@ pub fn probe(
     let aliases_all = fs.map(crate::audio::alias::AliasTable::load);
 
     loop {
+        // A signal skips `finish_probe`: a cut-short run writes no fixture.
+        if crate::quit::requested() {
+            client.disconnect();
+            anyhow::bail!("interrupted; sent disconnect");
+        }
         let now = Instant::now();
         for e in client.pump_at(now) {
             match e {

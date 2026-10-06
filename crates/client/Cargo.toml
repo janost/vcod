@@ -14,6 +14,7 @@ vcod-common.workspace = true
 anyhow.workspace = true
 bytemuck.workspace = true
 clap.workspace = true
+ctrlc.workspace = true
 env_logger.workspace = true
 glam.workspace = true
 kira.workspace = true
