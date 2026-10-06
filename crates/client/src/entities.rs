@@ -16,7 +16,7 @@ use vcod_common::net::trajectory::{TR_INTERPOLATE, TR_STATIONARY, Trajectory};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::playerpose::{apply_aim, clip_name};
 use vcod_common::skeleton::{AnimBinding, PoseBuffer, Skeleton};
-use vcod_common::turretpose::angles_quat;
+use vcod_common::turretpose::{GunnerPlacement, angles_quat, place_gunner, tag_weapon_local};
 use vcod_common::xanim::{self, XAnim};
 use vcod_common::xmodel::{self, XModel};
 
@@ -485,6 +485,21 @@ struct TurretRig {
     handle: ModelHandle,
     skeleton: Skeleton,
     bindings: HashMap<String, AnimBinding>,
+    /// Bind positions of `tag_aim` and `tag_weapon` in model space, which
+    /// the gunner placement reads.
+    aim_tags: Option<(Vec3, Vec3)>,
+}
+
+/// One gun this frame: its world frame, the barrel's lerped `angles2`, and
+/// what the gunner placement needs off it.
+struct GunFrame {
+    pos: Vec3,
+    rot: Quat,
+    barrel: [f32; 3],
+    /// `tag_weapon` turned by the barrel, in model space.
+    tag_weapon: Option<(Vec3, Quat)>,
+    /// The weapon file's `animHorRotateInc`.
+    rotate_inc: f32,
 }
 
 struct TurretAnim {
@@ -588,13 +603,18 @@ fn resolve_turret_rig<'a>(
 ) -> Option<&'a mut TurretRig> {
     if !cache.contains_key(name) {
         let rig = match xmodel::load(fs, name) {
-            Ok(m) => renderer
-                .upload_dynamic_model(fs, &m)
-                .map(|handle| TurretRig {
+            Ok(m) => renderer.upload_dynamic_model(fs, &m).map(|handle| {
+                let skeleton = Skeleton::build(&[&m]);
+                let bind = PoseBuffer::new(&skeleton);
+                let tag = |n: &str| Some(bind.bone_world(&skeleton, skeleton.bone_index(n)?).0);
+                let aim_tags = tag("tag_aim").zip(tag("tag_weapon"));
+                TurretRig {
                     handle,
-                    skeleton: Skeleton::build(&[&m]),
+                    skeleton,
                     bindings: HashMap::new(),
-                }),
+                    aim_tags,
+                }
+            }),
             Err(e) => {
                 log::warn!("turret model '{name}': {e:#}, drawing nothing for it");
                 None
@@ -740,6 +760,54 @@ pub struct BuiltScene {
     pub static_submodels: Vec<usize>,
 }
 
+/// An entity's origin and `[pitch, yaw, roll]` at `render_time`. STATIONARY
+/// and INTERPOLATE aren't parametric, so the `prev`->`ent` lerp is the
+/// evaluation (snapping on a teleport over 512 units); every other trType is
+/// closed-form.
+fn lerp_pos_angles(
+    ent: &EntityState,
+    prev: Option<&EntityState>,
+    f: f32,
+    render_time: i32,
+    p: &Protocol,
+) -> (Vec3, Vec3) {
+    let pos_tr = Trajectory::read(ent, p, "pos");
+    let pos = if matches!(pos_tr.tr_type, TR_STATIONARY | TR_INTERPOLATE) {
+        let ob = Vec3::from(ent.origin(p));
+        match prev {
+            Some(ea) => {
+                let oa = Vec3::from(ea.origin(p));
+                if oa.distance(ob) > 512.0 {
+                    ob
+                } else {
+                    oa.lerp(ob, f)
+                }
+            }
+            None => ob,
+        }
+    } else {
+        pos_tr.evaluate(render_time)
+    };
+    let apos_tr = Trajectory::read(ent, p, "apos");
+    let angles = if matches!(apos_tr.tr_type, TR_STATIONARY | TR_INTERPOLATE) {
+        let ab = ent.angles(p);
+        match prev {
+            Some(ea) => {
+                let aa = ea.angles(p);
+                Vec3::new(
+                    camera::lerp_angle(aa[0], ab[0], f),
+                    camera::lerp_angle(aa[1], ab[1], f),
+                    camera::lerp_angle(aa[2], ab[2], f),
+                )
+            }
+            None => Vec3::from(ab),
+        }
+    } else {
+        apos_tr.evaluate(render_time)
+    };
+    (pos, angles)
+}
+
 /// The model rotation an entity draws with. Players are yaw-only; their
 /// pitch comes from `apply_aim`. Everything else goes through `AnglesToAxis`
 /// (`cgame_mp_x86.dll` 0x3003c770, called by every model draw off
@@ -749,6 +817,79 @@ fn model_rotation(visual: &EntityVisual, angles: Vec3) -> Quat {
     match visual {
         EntityVisual::Player { .. } => Quat::from_rotation_z(angles.y.to_radians()),
         _ => angles_quat(angles.to_array()),
+    }
+}
+
+/// 0x300279b0 (turrets doc 14.5): a mounted player's origin, body rotation
+/// and leaf blend for the wire anim `anim`, off the gun its `otherEntityNum`
+/// names. `None` leaves the body where the snapshot put it, as the routine's
+/// early returns do.
+#[allow(clippy::too_many_arguments)]
+fn place_body(
+    anims: &PlayerAnims,
+    anim: i32,
+    ent: &EntityState,
+    p: &Protocol,
+    guns: &HashMap<u32, GunFrame>,
+    pos: Vec3,
+    clips: &mut HashMap<String, Option<Rc<XAnim>>>,
+    fs: &Pk3Fs,
+) -> Option<GunnerPlacement> {
+    if ent.field_i32(p, "eFlags") & turret::EF_MOUNTED == 0 {
+        return None;
+    }
+    // Entity numbers under 64 are clients, 1023 is none (0x300279c0).
+    let gun = u32::try_from(ent.field_i32(p, "otherEntityNum"))
+        .ok()
+        .filter(|n| (64..1023).contains(n))?;
+    let gun = guns.get(&gun)?;
+    if gun.rotate_inc <= 0.0 {
+        return None; // not a turret file: the column split would divide by 0
+    }
+    place_gunner(
+        anims,
+        |n| load_clip(clips, fs, n),
+        anim,
+        gun.tag_weapon?,
+        (gun.pos, gun.rot),
+        pos,
+        gun.rotate_inc,
+    )
+}
+
+/// Poses `set`, clips and their blend weights, onto `pose` at `t` seconds,
+/// the whole set at `weight` over what the buffer holds. Each clip after the
+/// first lerps by its share of the running total, which averages the set
+/// exactly at `weight` 1; under it (a 0.2 s switch fade) the mix is close.
+#[allow(clippy::too_many_arguments)]
+fn apply_clip_set(
+    pose: &mut PoseBuffer,
+    skel: &Skeleton,
+    bindings: &mut HashMap<String, AnimBinding>,
+    clips: &mut HashMap<String, Option<Rc<XAnim>>>,
+    fs: &Pk3Fs,
+    set: &[(&str, f32)],
+    t: f32,
+    weight: f32,
+) {
+    let mut total = 0.0;
+    for &(name, w) in set {
+        if w <= 0.0 {
+            continue;
+        }
+        let Some(clip) = load_clip(clips, fs, name) else {
+            continue;
+        };
+        let binding = bindings
+            .entry(name.to_string())
+            .or_insert_with(|| skel.bind(&clip));
+        let k = if total == 0.0 {
+            weight
+        } else {
+            w / (total + w)
+        };
+        total += w;
+        pose.apply_weighted(&clip, binding, clip.frame_pos(t, clip.looping), k);
     }
 }
 
@@ -816,6 +957,41 @@ pub fn build_instances(
         ps_int("viewlocked"),
         ps_int("viewlocked_entNum"),
     );
+    // The guns first: a gunner's body is placed off its gun, whose number is
+    // always above the gunner's.
+    let mut guns: HashMap<u32, GunFrame> = HashMap::new();
+    for (&num, ent) in &b.entities {
+        let EntityVisual::Turret { model, weapon } =
+            resolve_visual(ent, &b.clients, configstrings, p)
+        else {
+            continue;
+        };
+        let Some(rig) = resolve_turret_rig(turret_rigs, renderer, fs, &model) else {
+            continue;
+        };
+        let prev = a.entities.get(&num);
+        let (pos, angles) = lerp_pos_angles(ent, prev, f, render_time, p);
+        let a2 =
+            |e: &EntityState| ["angles2[0]", "angles2[1]", "angles2[2]"].map(|n| e.field_f32(p, n));
+        let eflags = |e: &EntityState| e.field_i32(p, "eFlags");
+        let from = prev.filter(|ea| turret::interpolates(eflags(ea), eflags(ent)));
+        let barrel = turret::barrel(from.map(a2), a2(ent), f);
+        let rotate_inc = weapon_name_for_index(&weapon_names, weapon as i32)
+            .and_then(|name| resolve_weapon_def(weapon_cache, fs, name))
+            .map_or(0.0, |d| d.anim_hor_rotate_inc);
+        guns.insert(
+            num,
+            GunFrame {
+                pos,
+                rot: angles_quat(angles.to_array()),
+                barrel,
+                tag_weapon: rig
+                    .aim_tags
+                    .map(|(aim, weapon)| tag_weapon_local(aim, weapon, barrel)),
+                rotate_inc,
+            },
+        );
+    }
     for (&num, ent) in &b.entities {
         if num as i32 == skip_num {
             continue; // the body the camera is inside, if the server sends it
@@ -837,51 +1013,35 @@ pub fn build_instances(
         }
 
         let prev = a.entities.get(&num);
-
-        // STATIONARY/INTERPOLATE aren't parametric, so a->b interpolation is
-        // the evaluation. Every other trType is closed-form at `render_time`.
-        let pos_tr = Trajectory::read(ent, p, "pos");
-        let pos = if matches!(pos_tr.tr_type, TR_STATIONARY | TR_INTERPOLATE) {
-            let ob = Vec3::from(ent.origin(p));
-            match prev {
-                Some(ea) => {
-                    let oa = Vec3::from(ea.origin(p));
-                    if oa.distance(ob) > 512.0 {
-                        ob
-                    } else {
-                        oa.lerp(ob, f)
-                    }
-                }
-                None => ob,
-            }
-        } else {
-            pos_tr.evaluate(render_time)
-        };
-
-        // Same split. `[pitch, yaw, roll]`, matching `ent.angles` and the trajectory layout.
-        let apos_tr = Trajectory::read(ent, p, "apos");
-        let angles = if matches!(apos_tr.tr_type, TR_STATIONARY | TR_INTERPOLATE) {
-            let ab = ent.angles(p);
-            match prev {
-                Some(ea) => {
-                    let aa = ea.angles(p);
-                    Vec3::new(
-                        camera::lerp_angle(aa[0], ab[0], f),
-                        camera::lerp_angle(aa[1], ab[1], f),
-                        camera::lerp_angle(aa[2], ab[2], f),
-                    )
-                }
-                None => Vec3::from(ab),
-            }
-        } else {
-            apos_tr.evaluate(render_time)
-        };
+        let (mut pos, angles) = lerp_pos_angles(ent, prev, f, render_time, p);
         if !pos.is_finite() || !angles.is_finite() {
             continue; // never feed a NaN transform to the GPU
         }
+        let mut rot = model_rotation(&visual, angles);
+        let mut yaw = angles.y;
+        // A gunner stands and turns where its gun puts it. Retail traces the
+        // spot down too; the snapshot's z is already the server's traced one.
+        let snap_pos = pos;
+        let placed = match (&visual, anims) {
+            (EntityVisual::Player { .. }, Some(anims)) if etype == ET_PLAYER => place_body(
+                anims,
+                ent.field_i32(p, "legsAnim"),
+                ent,
+                p,
+                &guns,
+                pos,
+                clips,
+                fs,
+            ),
+            _ => None,
+        };
+        if let Some(g) = placed.as_ref().filter(|g| g.origin.is_finite()) {
+            // Yaw only, as every player draws; a stock gun stands level.
+            pos = g.origin;
+            yaw = g.yaw();
+            rot = Quat::from_rotation_z(yaw.to_radians());
+        }
         entity_pos.insert(num, pos);
-        let yaw = angles.y;
-        let rot = model_rotation(&visual, angles);
         let transform = Mat4::from_rotation_translation(rot, pos);
 
         match visual {
@@ -972,9 +1132,6 @@ pub fn build_instances(
                     u64::from(st.torso.update(ent.field_i32(p, "torsoAnim"), render_time));
 
                 if let Some(anims) = anims {
-                    // The yaw offset to clip_name is 0: the wire carries torso
-                    // pitch, no torso yaw, so only the MG42 pitch rows ever
-                    // pick a non-middle child.
                     let lerp_field = |name: &str| {
                         let vb = ent.field_f32(p, name);
                         match prev {
@@ -989,47 +1146,71 @@ pub fn build_instances(
                     let waist_pitch = lerp_field("fWaistPitch");
                     let lean = lerp_field("leanf");
 
+                    // The clips a wire anim poses: a gunner's turret anim is
+                    // the placement's leaf blend (0x300279b0 sets the goal
+                    // weights on the gunner's own tree); anything else is
+                    // one clip, an MG42 aim group descending by the torso
+                    // pitch with no yaw, which the wire does not carry.
+                    let clip_set = |raw: i32, clips: &mut _| -> Vec<(&str, f32)> {
+                        if placed.is_some()
+                            && let Some(g) =
+                                place_body(anims, raw, ent, p, &guns, snap_pos, clips, fs)
+                        {
+                            return g
+                                .leaves
+                                .iter()
+                                .map(|&(n, w)| (anims.tree.nodes[n].name.as_str(), w))
+                                .collect();
+                        }
+                        clip_name(anims, raw & ANIM_INDEX_MASK, pitch, 0.0)
+                            .map(|n| vec![(n, 1.0)])
+                            .unwrap_or_default()
+                    };
+
                     // Legs first: `pb_*` keys the whole body, then `pt_*`
                     // overwrites only the bones it keys. A clip switch
                     // cross-fades from the outgoing clip: retail smooths
                     // stance/movement changes by blending animtree nodes,
                     // there are no transition clips in multiplayer.atr.
                     for ch in [&mut st.legs, &mut st.torso] {
-                        let Some(name) = clip_name(anims, ch.index(), pitch, 0.0) else {
+                        let set = clip_set(ch.index(), clips);
+                        if set.is_empty() {
                             continue;
-                        };
-                        let Some(clip) = load_clip(clips, fs, name) else {
-                            continue;
-                        };
+                        }
                         let fade = (render_time - ch.start_ms) as f32 / ANIM_BLEND_MS as f32;
                         if fade >= 1.0 {
                             ch.prev = None;
                         }
+                        let secs = |start: i32| (render_time - start).max(0) as f32 / 1000.0;
+                        let skel = &assembly.skeleton;
                         if let Some((praw, pstart)) = ch.prev {
-                            let pclip = clip_name(anims, praw & ANIM_INDEX_MASK, pitch, 0.0)
-                                .map(|n| (n.to_string(), load_clip(clips, fs, n)));
-                            if let Some((pname, Some(pclip))) = pclip {
-                                let pb = st
-                                    .bindings
-                                    .entry(pname)
-                                    .or_insert_with(|| assembly.skeleton.bind(&pclip));
-                                let pt = (render_time - pstart).max(0) as f32 / 1000.0;
-                                st.pose
-                                    .apply(&pclip, pb, pclip.frame_pos(pt, pclip.looping));
-                            }
+                            let pset = clip_set(praw, clips);
+                            apply_clip_set(
+                                &mut st.pose,
+                                skel,
+                                &mut st.bindings,
+                                clips,
+                                fs,
+                                &pset,
+                                secs(pstart),
+                                1.0,
+                            );
                         }
-                        let binding = st
-                            .bindings
-                            .entry(name.to_string())
-                            .or_insert_with(|| assembly.skeleton.bind(&clip));
-                        let t = (render_time - ch.start_ms).max(0) as f32 / 1000.0;
                         let w = if ch.prev.is_some() {
                             fade.max(0.0)
                         } else {
                             1.0
                         };
-                        st.pose
-                            .apply_weighted(&clip, binding, clip.frame_pos(t, clip.looping), w);
+                        apply_clip_set(
+                            &mut st.pose,
+                            skel,
+                            &mut st.bindings,
+                            clips,
+                            fs,
+                            &set,
+                            secs(ch.start_ms),
+                            w,
+                        );
                     }
 
                     // Corpses keep their death-clip pose; their aim fields are
@@ -1146,7 +1327,10 @@ pub fn build_instances(
                 });
             }
             EntityVisual::Turret { model, weapon } => {
-                let Some(rig) = resolve_turret_rig(turret_rigs, renderer, fs, &model) else {
+                let (Some(rig), Some(gun)) = (
+                    resolve_turret_rig(turret_rigs, renderer, fs, &model),
+                    guns.get(&num),
+                ) else {
                     continue;
                 };
                 let def = weapon_name_for_index(&weapon_names, weapon as i32)
@@ -1207,14 +1391,8 @@ pub fn build_instances(
                     pose.apply_weighted(&clip, binding, clip.frame_pos(t, clip.looping), w);
                 }
 
-                let a2 = |e: &EntityState| {
-                    ["angles2[0]", "angles2[1]", "angles2[2]"].map(|n| e.field_f32(p, n))
-                };
-                let eflags = |e: &EntityState| e.field_i32(p, "eFlags");
-                let from = prev.filter(|ea| turret::interpolates(eflags(ea), eflags(ent)));
-                let barrel = turret::barrel(from.map(a2), a2(ent), f);
+                let barrel = gun.barrel;
                 turret::apply_controller(&mut pose, &rig.skeleton, barrel);
-
                 let worlds = pose.bone_worlds(&rig.skeleton);
                 let tag = |name: &str| {
                     let (lp, lr) = worlds[rig.skeleton.bone_index(name)?];
