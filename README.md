@@ -81,9 +81,11 @@ built from the bytes up, this might be your kind of thing.
   their fire anim and muzzle flash. On the gun, the view rides the gun's
   `tag_player` and the HUD swaps the crosshair for the gun's reticle.
 - Draws the HUD that the stock `hud.menu` lays out: crosshair that opens with
-  spread, health, ammo, stance, compass with objectives, use hints and hit
-  direction. It also draws the gametype script's own HUD elements, such as
-  the S&D clock, the bomb icons and the progress bar.
+  spread, health, ammo, fire-mode icon, stance with its change flash, compass
+  with objectives and teammates, use hints and hit direction. A spectator
+  following a player sees that player's HUD. It also draws the gametype
+  script's own HUD elements, such as the S&D clock, the bomb icons and the
+  progress bar, in retail's fonts, fixed-width slots included.
 - Follows the server through a map change: loading screen, downloads, new
   map.
 
@@ -122,8 +124,8 @@ either: the people on it signed up for Call of Duty.
 - Mounted MG42s: mount with use, aim inside the gun's arc, fire, dismount.
 - Map triggers (`trigger_multiple`, `trigger_hurt`, `trigger_use`,
   `trigger_lookat`), and script movers whose trajectories reach the wire.
-  A moving brush model carries the players on it and shoves the ones in its
-  way, and a player linked to a moving entity rides it. The client draws a
+  A moving brush model carries the players and items on it and shoves the
+  players in its way, and a player linked to a moving entity rides it. The client draws a
   brush model where its entity is, so a hidden or deleted one is gone.
 - Intermission, `map_restart`, and `sv_mapRotation` the way retail runs them,
   with the next map's gamestate sent on the live connection.
@@ -173,14 +175,11 @@ console, no key rebinding. You get command-line flags and the binds below.
 
 **Client**
 
-- A gunner's body stands where the server puts it, but the client doesn't
-  blend its mounted anim by the barrel's yaw the way retail's does, so the
-  body doesn't turn with the gun.
-- The HUD skips a few retail pieces: the followed player's health, ammo and
-  compass while following, friendly players on the compass, the weapon mode
-  icon, the stance-change flash and the fixed-width fonts
+- The HUD skips a few retail touches: the compass's spring, the stance key
+  hints, the weapon name timing out after a switch and the hit icon's jitter
   ([docs/research/cod11-hud-protocol.md](docs/research/cod11-hud-protocol.md),
-  section 9).
+  section 9). vcod's own server doesn't send the out-of-view teammate or
+  quick-chat pings, so those compass marks show only on a retail server.
 - Only protocol 1 (patch 1.1). 1.5 and United Offensive servers won't talk to
   it.
 - Prediction carries you with a moving brush model you stand on but not
@@ -194,7 +193,9 @@ console, no key rebinding. You get command-line flags and the binds below.
   retail. The bots don't play either gametype.
 - No chat relay: the server answers no `say` command, and the scripts'
   `sayAll`, `sayTeam` (the quick-chat menu) and `pingPlayer` are missing.
-- A moving brush model pushes players only, not items, grenades or corpses.
+- A brush model that has turned and turned back keeps a sliver of yaw on
+  retail, which drifts what it carries by about 0.02 units a frame; vcod's
+  comes back to exactly zero.
 - A blast walks its victims (players and MG42s) in entity order, not
   retail's area-tree order, so who shields whom can differ when several
   stand in a line. Bullets don't damage MG42s.

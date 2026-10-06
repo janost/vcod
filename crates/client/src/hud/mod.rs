@@ -3,6 +3,7 @@
 
 pub mod chat;
 pub mod font;
+pub mod friends;
 pub mod hudelem;
 pub mod killfeed;
 pub mod menu;
@@ -18,7 +19,7 @@ use crate::play::input::{EF_CROUCH, EF_PRONE};
 use vcod_common::localize::Localized;
 use vcod_common::net::NetEvent;
 use vcod_common::net::events::GameEvent;
-use vcod_common::net::msg::{ClientState, HudElem, PlayerState};
+use vcod_common::net::msg::{ClientState, EntityState, HudElem, PlayerState};
 use vcod_common::net::protocol::Protocol;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::Stance;
@@ -27,15 +28,11 @@ use vcod_common::pmove::weapon::SpreadStance;
 use vcod_common::weapon::WeaponDef;
 
 use chat::Chat;
-use font::Font;
+use font::UiFonts;
+use friends::Sighting;
 use killfeed::Killfeed;
 use player::{DamageFeedback, PlayerHud, PlayerView};
 use scoreboard::Scoreboard;
-
-/// Body text, e.g. chat.
-pub const SIZE_TEXT: u32 = 16;
-/// Status header and scoreboard section headings.
-pub const SIZE_HEADER: u32 = 24;
 
 /// Resolution knob on top of `Font::unit_scale`; a HUD-scale setting would
 /// change only this.
@@ -53,8 +50,9 @@ pub struct HudQuad {
 /// `unknown` counts inputs a build could not resolve (a killfeed victim with
 /// no `HudFrame.clients` entry); shown on the F3 overlay.
 pub struct Hud {
-    font_text: Font,
-    font_header: Font,
+    /// `normal` is the body text (chat), `big` the status header and the
+    /// scoreboard's headings.
+    fonts: UiFonts,
     pub chat: Chat,
     pub killfeed: Killfeed,
     /// `main.rs`'s Tab handler owns `visible` and the `score` request.
@@ -85,13 +83,15 @@ pub struct HudFrame<'a> {
     /// The server's open script menu, if any; drawn on top of everything else.
     pub menu: Option<&'a menu::MenuView>,
     /// The newest snapshot's playerstate: ours, or the followed player's.
-    /// Its hudelems are drawn whoever it belongs to.
+    /// The native HUD and the hudelems are drawn whoever it belongs to.
     pub ps: Option<&'a PlayerState>,
+    /// The newest snapshot's entities, for teammates on the compass.
+    pub entities: &'a BTreeMap<u32, EntityState>,
     /// Our replay while predicting; its weapon, ammo, spread and stance stand
     /// in for the snapshot's.
     pub predicted: Option<&'a Predicted>,
-    /// `ps` is ours and alive (`pm_type` 0 or 1), which is when the native
-    /// player HUD is drawn.
+    /// `ps` is ours and alive (`pm_type` 0 or 1). vcod's status header is
+    /// drawn otherwise.
     pub local_player: bool,
     /// Configstring 7's defs, index = weapon number.
     pub weapons: &'a [Option<WeaponDef>],
@@ -101,7 +101,8 @@ pub struct HudFrame<'a> {
     pub eye: [f32; 3],
     /// The drawn horizontal fov, degrees.
     pub fov: f32,
-    /// An entity's current origin, for objectives placed on one.
+    /// An entity's current origin, for objectives placed on one and
+    /// teammates on the compass.
     pub entity_origin: &'a dyn Fn(i32) -> Option<[f32; 3]>,
     /// The `weapon` of the gun `ps` rides, the entity `viewlocked_entNum`
     /// names, which picks the mounted reticle.
@@ -111,8 +112,7 @@ pub struct HudFrame<'a> {
 impl Hud {
     pub fn new(fs: &Pk3Fs) -> Result<Hud, String> {
         Ok(Hud {
-            font_text: font::load_font(fs, SIZE_TEXT)?,
-            font_header: font::load_font(fs, SIZE_HEADER)?,
+            fonts: UiFonts::load(fs)?,
             chat: Chat::new(),
             killfeed: Killfeed::new(),
             scoreboard: Scoreboard::new(),
@@ -126,10 +126,7 @@ impl Hud {
     /// kill icons read out of the old weapon files. A font the new paks do
     /// not parse keeps the old one.
     pub fn reopen(&mut self, fs: &Pk3Fs) -> Result<(), String> {
-        let text = font::load_font(fs, SIZE_TEXT)?;
-        let header = font::load_font(fs, SIZE_HEADER)?;
-        self.font_text = text;
-        self.font_header = header;
+        self.fonts = UiFonts::load(fs)?;
         self.kill_icons.clear();
         Ok(())
     }
@@ -215,9 +212,11 @@ impl Hud {
     pub fn build(&mut self, f: &HudFrame) -> Vec<HudQuad> {
         let mut out = Vec::new();
         let screen = (f.screen_w, f.screen_h);
-        match f.ps.filter(|_| f.local_player) {
+        let pm_type = |ps: &PlayerState| ps.field_i32(f.protocol, "pm_type");
+        match f.ps.filter(|ps| draws_native_hud(pm_type(ps))) {
             Some(ps) => {
-                let mut view = player_view(ps, f);
+                let friends = compass_friends(ps, f);
+                let mut view = player_view(ps, &friends, f);
                 // Off the replay only: a snapshot does not carry the sway.
                 view.gun_angles = f.predicted.and_then(|pred| {
                     self.player
@@ -228,15 +227,13 @@ impl Hud {
                     weapons: f.weapons,
                     configstrings: f.configstrings,
                     loc: f.localized,
-                    font: &self.font_text,
+                    font: &self.fonts.normal,
                     entity_origin: f.entity_origin,
                 };
                 self.player
                     .build(&view, &cx, f.server_time, screen, &mut out);
             }
-            // The next life starts from a fresh baseline, so a hit taken
-            // meanwhile does not flash on return.
-            None => self.player = PlayerHud::default(),
+            None => self.player.hidden(),
         }
         if let Some(ps) = f.ps {
             let elems: Vec<HudElem> = ps
@@ -246,28 +243,26 @@ impl Hud {
                 .chain(&ps.arrays.hud_current)
                 .copied()
                 .collect();
-            // No fixed-width atlas ships: bigfixed takes the header font.
-            let fonts = (&self.font_text, &self.font_header, &self.font_text);
             hudelem::build(
                 &elems,
                 f.configstrings,
                 f.localized,
-                fonts,
+                &self.fonts,
                 f.server_time,
                 screen,
                 &mut out,
             );
         }
         self.chat
-            .build(&self.font_text, HUD_SCALE, f.screen_h, f.now, &mut out);
+            .build(&self.fonts.normal, HUD_SCALE, f.screen_h, f.now, &mut out);
         self.killfeed
-            .build(&self.font_text, HUD_SCALE, f.now, &mut out);
+            .build(&self.fonts.normal, HUD_SCALE, f.now, &mut out);
         // The scoreboard reuses the parsed gametype; its last `b` reply
         // overrides CS 5/6 (status.rs).
         let status = status::read_status(f.configstrings, f.server_time, self.scoreboard.totals());
         // vcod's own header, which retail does not draw: spectators only.
         if !f.local_player {
-            status::build(&status, &self.font_header, f.screen_w, &mut out);
+            status::build(&status, &self.fonts.big, f.screen_w, &mut out);
         }
         if self.scoreboard.visible {
             let names = |client: u32| -> Option<(String, i32)> {
@@ -276,8 +271,8 @@ impl Hud {
                 Some((cs.name(f.protocol), team))
             };
             self.scoreboard.build(
-                &self.font_header,
-                &self.font_text,
+                &self.fonts.big,
+                &self.fonts.normal,
                 f.screen_w,
                 &names,
                 &status.gametype,
@@ -288,7 +283,7 @@ impl Hud {
         if let Some(view) = f.menu {
             menu::build(
                 view,
-                &self.font_text,
+                &self.fonts.normal,
                 HUD_SCALE,
                 f.screen_w,
                 f.screen_h,
@@ -299,9 +294,54 @@ impl Hud {
     }
 }
 
+/// `pm_type` 4 is a free-flying spectator and 5 the intermission; any other,
+/// a follower's copy of its target included, draws the menu HUD.
+fn draws_native_hud(pm_type: i32) -> bool {
+    !matches!(pm_type, 4 | 5)
+}
+
+/// The teammates of `ps`'s client the snapshot shows, live `ET_PLAYER`
+/// entities on its team, and the one `iCompassFriendInfo` names. None while
+/// that client is a spectator or on no team.
+fn compass_friends(ps: &PlayerState, f: &HudFrame) -> Vec<Sighting> {
+    let p = f.protocol;
+    let team = |num: u32| f.clients.get(&num).map(|c| c.field_i32(p, "team"));
+    let own = ps.field_i32(p, "clientNum") as u32;
+    let Some(our_team) = team(own).filter(|t| !matches!(t, 0 | 3)) else {
+        return Vec::new();
+    };
+    let mut out: Vec<Sighting> = f
+        .entities
+        .iter()
+        .filter(|&(&num, ent)| {
+            num < 64
+                && ent.field_i32(p, "eType") == crate::entities::ET_PLAYER
+                && ent.field_i32(p, "eFlags") & 1 == 0
+                && team(num) == Some(our_team)
+        })
+        .map(|(&num, ent)| {
+            let origin = (f.entity_origin)(num as i32).unwrap_or_else(|| ent.origin(p));
+            Sighting {
+                client: num,
+                at: friends::Mark::At([origin[0], origin[1]]),
+                yaw: ent.angles(p)[1],
+                pinged: ent.field_i32(p, "eFlags") & friends::EF_PING != 0,
+            }
+        })
+        .collect();
+    let pinged = ps.field_i32(p, "eFlags") & friends::PS_EF_FRIEND_PING != 0;
+    let info = ps.field_i32(p, "iCompassFriendInfo");
+    out.extend(friends::decode_friend_info(info, ps.origin(p), pinged));
+    out
+}
+
 /// The native HUD's inputs off `ps`, with the replay's fields in place of
 /// the snapshot's where `f.predicted` has them.
-fn player_view<'a>(ps: &'a PlayerState, f: &HudFrame<'a>) -> PlayerView<'a> {
+fn player_view<'a>(
+    ps: &'a PlayerState,
+    friends: &'a [Sighting],
+    f: &HudFrame<'a>,
+) -> PlayerView<'a> {
     let int = |name: &str| ps.field_i32(f.protocol, name);
     let mut eflags = int("eFlags");
     let (weapon, ammo, ammoclip, aim_spread_scale, spread_stance, ads_frac) = match f.predicted {
@@ -365,6 +405,8 @@ fn player_view<'a>(ps: &'a PlayerState, f: &HudFrame<'a>) -> PlayerView<'a> {
         ),
         gun_angles: None,
         objectives: &ps.arrays.objectives,
+        friends,
+        alive: int("pm_type") < 4,
         cursor_hint: int("serverCursorHint"),
         // Playerstate fields arrive unsigned; retail's -1 is 255.
         cursor_hint_string: i32::from(int("serverCursorHintString") as u8 as i8),
@@ -382,6 +424,8 @@ mod tests {
     use super::*;
     use vcod_common::net::msg::hud_field as msg_field;
     use vcod_common::net::protocol::PROTOCOL_V1;
+
+    static NO_ENTITIES: BTreeMap<u32, EntityState> = BTreeMap::new();
 
     fn frame<'a>(
         ps: &'a PlayerState,
@@ -402,6 +446,7 @@ mod tests {
             fs,
             menu: None,
             ps: Some(ps),
+            entities: &NO_ENTITIES,
             predicted,
             local_player: true,
             weapons: &[],
@@ -445,6 +490,7 @@ mod tests {
 
         let snap = player_view(
             &ps,
+            &[],
             &HudFrame {
                 snap_time: 1100,
                 ..frame(&ps, None, &fs, &loc, &clients)
@@ -469,7 +515,7 @@ mod tests {
         assert_eq!(snap.cursor_hint_string, -1, "retail's -1 arrives as 255");
         assert_eq!(snap.fov, (80.0, crate::camera::fov_y(80.0, 640.0 / 480.0)));
 
-        let own = player_view(&ps, &frame(&ps, Some(&pred), &fs, &loc, &clients));
+        let own = player_view(&ps, &[], &frame(&ps, Some(&pred), &fs, &loc, &clients));
         assert_eq!(
             (own.ammoclip[10], own.aim_spread_scale, own.eflags),
             (4, 50.0, 0x10 | EF_CROUCH)
@@ -477,7 +523,7 @@ mod tests {
     }
 
     #[test]
-    fn the_native_hud_waits_for_our_own_live_playerstate_and_hudelems_do_not() {
+    fn the_native_hud_draws_for_any_player_view_and_hudelems_always() {
         let Some(fs) = vcod_common::testing::game_fs() else {
             return;
         };
@@ -493,7 +539,9 @@ mod tests {
         let mut cs = vec![String::new(); hudelem::CS_SHADERS + 2];
         cs[hudelem::CS_SHADERS + 1] = "white".into();
         let (loc, clients) = (Localized::default(), BTreeMap::new());
-        let drawn = |hud: &mut Hud, local_player: bool| -> Vec<String> {
+        let pm_type = PlayerState::field_index(&PROTOCOL_V1, "pm_type").expect("pm_type");
+        let mut drawn = |pm: i32, local_player: bool| -> Vec<String> {
+            ps.fields[pm_type] = pm;
             let f = HudFrame {
                 configstrings: &cs,
                 local_player,
@@ -501,19 +549,80 @@ mod tests {
             };
             hud.build(&f).into_iter().map(|q| q.texture).collect()
         };
+        let native = |t: &[String]| t.iter().any(|t| t.contains("health_back"));
+        let header = hud_header_page(&fs);
 
-        let following = drawn(&mut hud, false);
-        assert!(following.iter().any(|t| t == "white"));
-        assert!(!following.iter().any(|t| t.contains("health_back")));
+        // A free-flying spectator, and the intermission: hudelems only.
+        for pm in [4, 5] {
+            let t = drawn(pm, false);
+            assert!(
+                t.iter().any(|t| t == "white") && !native(&t),
+                "pm_type {pm}"
+            );
+        }
+        // Following: the target's HUD, and vcod's header.
+        let following = drawn(0, false);
+        assert!(native(&following) && following.contains(&header));
+        // Our own, alive and dead.
+        let own = drawn(0, true);
+        assert!(native(&own) && !own.contains(&header));
+        assert!(native(&drawn(6, false)), "dead");
+    }
 
-        let own = drawn(&mut hud, true);
-        assert!(own.iter().any(|t| t == "white"));
-        assert!(own.iter().any(|t| t.contains("health_back")));
+    fn hud_header_page(fs: &Pk3Fs) -> String {
+        Hud::new(fs).expect("hud").fonts.big.page.clone()
+    }
 
-        // The status header is the only header-font text in these frames.
-        let header = hud.font_header.page.clone();
-        assert!(following.contains(&header), "header for a spectator");
-        assert!(!own.contains(&header), "no header while playing");
+    #[test]
+    fn compass_friends_are_live_teammates_and_the_packed_one() {
+        let p = &PROTOCOL_V1;
+        let mut ps = PlayerState::null(p);
+        let mut set = |name: &str, v: i32| {
+            ps.fields[PlayerState::field_index(p, name).expect(name)] = v;
+        };
+        set("clientNum", 0);
+        // Slot 9, 64 units east of the origin, pinged.
+        set("iCompassFriendInfo", 9 | (16 + 255) << 6 | 255 << 15);
+        set("eFlags", friends::PS_EF_FRIEND_PING);
+        let client = |team: i32| {
+            let mut c = ClientState::null(p);
+            c.fields[ClientState::field_index(p, "team").expect("team")] = team;
+            c
+        };
+        let mut clients = BTreeMap::new();
+        for (num, team) in [(0, 2), (1, 2), (2, 1), (3, 2), (4, 2)] {
+            clients.insert(num, client(team));
+        }
+        let player = |etype: i32, eflags: i32| {
+            let mut e = EntityState::null(p);
+            e.fields[EntityState::field_index(p, "eType").expect("eType")] = etype;
+            e.fields[EntityState::field_index(p, "eFlags").expect("eFlags")] = eflags;
+            e
+        };
+        let mut entities = BTreeMap::new();
+        entities.insert(1, player(1, friends::EF_PING)); // teammate, pinging
+        entities.insert(2, player(1, 0)); // enemy
+        entities.insert(3, player(1, 1)); // dead teammate
+        entities.insert(4, player(2, 0)); // a teammate's corpse
+        let (fs, loc) = (Pk3Fs::empty(), Localized::default());
+        let f = HudFrame {
+            entities: &entities,
+            ..frame(&ps, None, &fs, &loc, &clients)
+        };
+        let seen = compass_friends(&ps, &f);
+        let who: Vec<(u32, bool)> = seen.iter().map(|s| (s.client, s.pinged)).collect();
+        assert_eq!(who, [(1, true), (9, true)]);
+        assert_eq!(seen[1].at, friends::Mark::At([64.0, 0.0]));
+
+        // A spectator, or a player on no team, sees nobody.
+        for team in [0, 3] {
+            clients.insert(0, client(team));
+            let f = HudFrame {
+                entities: &entities,
+                ..frame(&ps, None, &fs, &loc, &clients)
+            };
+            assert!(compass_friends(&ps, &f).is_empty(), "team {team}");
+        }
     }
 
     #[test]

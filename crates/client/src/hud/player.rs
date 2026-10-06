@@ -1,13 +1,14 @@
-//! The native player HUD: crosshair, health, ammo and weapon name, stance,
-//! compass with objectives, cursor hint and damage direction, at the rects
+//! The native player HUD: crosshair, health, ammo, weapon name and fire-mode
+//! icon, stance, compass with teammates and objectives, cursor hint and
+//! damage direction, at the rects
 //! pak0 `ui_mp/hud.menu` gives. How the cgame draws each:
 //! docs/research/cod11-hud-protocol.md, section 9.
 
 use super::HudQuad;
 use super::font::{self, Font};
+use super::friends::{CompassFriends, Sighting};
 use super::hudelem::{self, CS_SHADERS, Virtual};
 use super::scope::{self, GunAim};
-use crate::play::input::{EF_CROUCH, EF_PRONE};
 use crate::turret::EF_MOUNTED;
 use vcod_common::localize::Localized;
 use vcod_common::net::msg::Objective;
@@ -60,6 +61,10 @@ pub struct PlayerView<'a> {
     /// on; `None` centres it.
     pub gun_angles: Option<[f32; 3]>,
     pub objectives: &'a [Objective],
+    /// Teammates seen this frame, for the compass.
+    pub friends: &'a [Sighting],
+    /// `pm_type` below 4: the crosshair and a mounted gun's reticle draw.
+    pub alive: bool,
     pub cursor_hint: i32,
     /// Signed; below 0 is none.
     pub cursor_hint_string: i32,
@@ -84,9 +89,24 @@ pub struct PlayerHud {
     health_lag: HealthLag,
     sight: SightDirection,
     pub gun: GunAim,
+    friends: CompassFriends,
+    pub stance: StanceFlash,
+    /// The playerstate's `clientNum` last frame; a new one is a new baseline
+    /// for the damage feedback.
+    client: Option<i32>,
 }
 
 impl PlayerHud {
+    /// The HUD is not drawn this frame: start the next from a fresh
+    /// baseline, so a hit taken meanwhile does not flash on return. The
+    /// stance flash keeps its own.
+    pub fn hidden(&mut self) {
+        *self = PlayerHud {
+            stance: std::mem::take(&mut self.stance),
+            ..PlayerHud::default()
+        };
+    }
+
     /// `now` is the client's clock in ms. Whether to draw at all (a
     /// spectator in free flight, the intermission) is the caller's call.
     pub fn build(
@@ -98,6 +118,9 @@ impl PlayerHud {
         out: &mut Vec<HudQuad>,
     ) {
         let v = Virtual::new(screen);
+        if self.client.replace(p.client_num) != Some(p.client_num) {
+            self.damage = DamageIndicators::default();
+        }
         self.damage.feed(p.damage, now);
         let raising = self.sight.step(p.weapon, p.ads_frac);
         // Drawn first, so the menu HUD sits on top of it.
@@ -115,19 +138,22 @@ impl PlayerHud {
             .get(CS_NORTHYAW)
             .and_then(|s| s.trim().parse::<f32>().ok())
             .unwrap_or(0.0);
-        compass(p, cx, north, &v, out);
-        stance(p.eflags, &v, out);
+        self.friends.feed(now, p.friends.iter().copied());
+        compass(p, cx, north, &mut self.friends, now, &v, out);
+        let bits = (p.spread_stance.prone, p.spread_stance.ducked);
+        stance(bits, self.stance.step(bits, now), &v, out);
         let frac = health_fraction(p.health, p.max_health);
         let lag = self.health_lag.step(p.client_num, frac, now);
         health(frac, lag, &v, out);
         if let Some(def) = p.weapon {
             weapon_info(def, p, cx, &v, out);
-            if p.eflags & EF_MOUNTED == 0 {
+            if p.alive && p.eflags & EF_MOUNTED == 0 {
                 crosshair(def, p, raising, &v, out);
             }
         }
         // Mounted, the gun's reticle replaces the weapon's, carried weapon or not.
-        if p.eflags & EF_MOUNTED != 0
+        if p.alive
+            && p.eflags & EF_MOUNTED != 0
             && let Some(def) = p.turret
         {
             turret_reticle(def, &v, out);
@@ -169,15 +195,43 @@ fn text_height(font: &Font, textscale: f32) -> f32 {
     font.max_height as f32 * font.glyph_scale * textscale
 }
 
-fn stance(eflags: i32, v: &Virtual, out: &mut Vec<HudQuad>) {
-    let material = if eflags & EF_PRONE != 0 {
+/// The icon for `pm_flags`' prone and ducked bits, and the flash over it
+/// at `flash` alpha.
+fn stance((prone, ducked): (bool, bool), flash: Option<f32>, v: &Virtual, out: &mut Vec<HudQuad>) {
+    let material = if prone {
         "hudStanceProne"
-    } else if eflags & EF_CROUCH != 0 {
+    } else if ducked {
         "hudStanceCrouch"
     } else {
         "hudStanceStand"
     };
     out.push(v.quad(100.0, 434.375, 40.0, 40.0, WHITE, material));
+    if let Some(alpha) = flash {
+        // `cg_hudStanceFlash_r`, `_g` and `_b`.
+        let rgba = [1.0, 1.0, 0.3, alpha];
+        out.push(v.quad(100.0, 434.375, 40.0, 40.0, rgba, "hudStanceFlash"));
+    }
+}
+
+/// When the stance last changed. Kept across the HUD hiding, as retail's
+/// statics are, so a stance changed meanwhile flashes on return.
+#[derive(Default)]
+pub struct StanceFlash {
+    changed: i32,
+    last: Option<(bool, bool)>,
+}
+
+impl StanceFlash {
+    /// The flash's alpha this frame: 0.8 at the change, gone a second later.
+    /// The first stance seen counts as a change. Assumes
+    /// `cg_hudStanceHintPrints` 1, which pak0's `configure_mp.cfg` sets.
+    pub fn step(&mut self, bits: (bool, bool), now: i32) -> Option<f32> {
+        if now < self.changed || self.last.replace(bits) != Some(bits) {
+            self.changed = now;
+        }
+        let left = self.changed + 1000 - now;
+        (left > 0).then_some(left as f32 * 0.001 * 0.8)
+    }
 }
 
 /// The health bar's filled share, 0..1.
@@ -270,6 +324,7 @@ fn weapon_info(def: &WeaponDef, p: &PlayerView, cx: &Context, v: &Virtual, out: 
         "" => translate(&def.display_name),
         mode => format!("{} / {}", translate(&def.display_name), translate(mode)),
     };
+    // hud.menu's item order: name back, ammo back, mode icon, name, ammo.
     let w = text_width(cx.font, &name, 0.3);
     out.push(v.quad(
         562.5 - (w + 36.0),
@@ -279,8 +334,6 @@ fn weapon_info(def: &WeaponDef, p: &PlayerView, cx: &Context, v: &Virtual, out: 
         WHITE,
         "gfx/hud/hud@weaponnameback.tga",
     ));
-    menu_text(cx.font, &name, (562.5 - w - 28.0, 446.0), 0.3, v, out);
-
     out.push(v.quad(
         557.5,
         421.625,
@@ -289,6 +342,11 @@ fn weapon_info(def: &WeaponDef, p: &PlayerView, cx: &Context, v: &Virtual, out: 
         WHITE,
         "gfx/hud/hud@ammocounterback.tga",
     ));
+    if let Some(icon) = &def.mode_icon {
+        out.push(v.quad(537.5, 430.375, 20.0, 20.0, WHITE, icon));
+    }
+    menu_text(cx.font, &name, (562.5 - w - 28.0, 446.0), 0.3, v, out);
+
     let (x, w, baseline) = (570.0, 55.0, 444.625);
     let clip = p.ammoclip.get(def.clip_index).copied().unwrap_or(0) as i32;
     let reserve = if def.clip_only {
@@ -420,9 +478,19 @@ pub fn arm_alpha(aim_spread_scale: f32, fade: f32) -> f32 {
 }
 
 /// The compass rect's centre, where objective bearings are measured from.
-const COMPASS_CENTRE: (f32, f32) = (55.0, 425.0);
+pub const COMPASS_CENTRE: (f32, f32) = (55.0, 425.0);
+/// How far from the centre a mark at `cg_hudCompassMaxRange` or beyond sits.
+pub const COMPASS_RADIUS: f32 = 43.75;
 
-fn compass(p: &PlayerView, cx: &Context, north_yaw: f32, v: &Virtual, out: &mut Vec<HudQuad>) {
+fn compass(
+    p: &PlayerView,
+    cx: &Context,
+    north_yaw: f32,
+    friends: &mut CompassFriends,
+    now: i32,
+    v: &Virtual,
+    out: &mut Vec<HudQuad>,
+) {
     let (x, y, size) = (-25.0, 345.0, 160.0);
     let half = size / 2.0;
     let corners = [[-half, -half], [half, -half], [half, half], [-half, half]];
@@ -441,6 +509,7 @@ fn compass(p: &PlayerView, cx: &Context, north_yaw: f32, v: &Virtual, out: &mut 
         WHITE,
         "gfx/hud/hud@compass_arrow.tga",
     ));
+    friends.build(now, p.client_num, (p.view_yaw, p.eye), v, out);
 
     for obj in p.objectives.iter().filter(|o| o.state == 4) {
         let target = match obj.ent_num {
@@ -480,13 +549,16 @@ fn objective_icon(cs: &[String], icon: i32, dz: f32) -> Option<String> {
 /// looking along `view_yaw`: bearing off straight up, counter-clockwise for
 /// a bearing to the left, out to 43.75 at 1024 units and beyond.
 pub fn compass_point(view_yaw: f32, eye: [f32; 3], target: [f32; 3]) -> (f32, f32) {
+    let (dx, dy) = compass_offset(view_yaw, eye, target);
+    (COMPASS_CENTRE.0 + dx, COMPASS_CENTRE.1 + dy)
+}
+
+/// [`compass_point`] less the compass centre.
+pub fn compass_offset(view_yaw: f32, eye: [f32; 3], target: [f32; 3]) -> (f32, f32) {
     let (dx, dy) = (target[0] - eye[0], target[1] - eye[1]);
     let bearing = (dy.atan2(dx).to_degrees() - view_yaw).to_radians();
-    let r = 43.75 * ((dx * dx + dy * dy).sqrt() / 1024.0).clamp(0.0, 1.0);
-    (
-        COMPASS_CENTRE.0 - bearing.sin() * r,
-        COMPASS_CENTRE.1 - bearing.cos() * r,
-    )
+    let r = COMPASS_RADIUS * ((dx * dx + dy * dy).sqrt() / 1024.0).clamp(0.0, 1.0);
+    (-bearing.sin() * r, -bearing.cos() * r)
 }
 
 /// The icon a `serverCursorHint` shows, `None` for none.
@@ -617,6 +689,7 @@ struct HealthLag {
 mod tests {
     use super::*;
     use crate::hud::hudelem::tests::test_font;
+    use crate::play::input::EF_PRONE;
 
     fn carbine() -> WeaponDef {
         WeaponDef {
@@ -656,6 +729,8 @@ mod tests {
             fov: (80.0, 64.0),
             gun_angles: None,
             objectives,
+            friends: &[],
+            alive: true,
             cursor_hint: 0,
             cursor_hint_string: -1,
             damage: DamageFeedback::default(),
@@ -928,7 +1003,15 @@ mod tests {
         };
         let mut out = Vec::new();
         let v = Virtual::new((640.0, 480.0));
-        compass(&view(&ammo, &[]), &cx, 0.0, &v, &mut out);
+        compass(
+            &view(&ammo, &[]),
+            &cx,
+            0.0,
+            &mut CompassFriends::default(),
+            0,
+            &v,
+            &mut out,
+        );
         let order: Vec<&str> = out.iter().map(|q| q.texture.as_str()).collect();
         assert_eq!(
             order,
@@ -939,6 +1022,100 @@ mod tests {
                 "gfx/hud/hud@compass_arrow.tga",
             ]
         );
+    }
+
+    #[test]
+    fn the_stance_flash_fades_over_a_second_from_each_change() {
+        let mut f = StanceFlash::default();
+        let close_to = |a: Option<f32>, b: f32| a.is_some_and(|a| close(a, b));
+        // The first stance seen is a change.
+        assert!(close_to(f.step((false, false), 10_000), 0.8));
+        assert!(close_to(f.step((false, false), 10_500), 0.4));
+        assert_eq!(f.step((false, false), 11_000), None);
+        // Crouching restarts it; going prone from there again.
+        assert!(close_to(f.step((false, true), 20_000), 0.8));
+        assert!(close_to(f.step((true, true), 20_250), 0.8));
+        assert!(close_to(f.step((true, true), 20_500), 0.6));
+        // A clock that ran backward restarts it too.
+        assert!(close_to(f.step((true, true), 5_000), 0.8));
+    }
+
+    #[test]
+    fn the_stance_icon_reads_pm_flags_and_the_flash_sits_on_it() {
+        let v = Virtual::new((640.0, 480.0));
+        let mut out = Vec::new();
+        stance((true, true), Some(0.5), &v, &mut out);
+        assert_eq!(out[0].texture, "hudStanceProne");
+        assert_eq!(out[1].texture, "hudStanceFlash");
+        assert_eq!(out[1].rgba, [1.0, 1.0, 0.3, 0.5]);
+        assert_eq!(out[0].verts, out[1].verts);
+        out.clear();
+        stance((false, true), None, &v, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].texture, "hudStanceCrouch");
+    }
+
+    #[test]
+    fn a_select_fire_gun_shows_its_mode_icon_beside_the_ammo() {
+        let font = test_font();
+        let ammo = [0i16; 64];
+        let cs = vec![String::new(); 2048];
+        let origin = |_: i32| None;
+        let cx = Context {
+            weapons: &[],
+            configstrings: &cs,
+            loc: &Localized::default(),
+            font: &font,
+            entity_origin: &origin,
+        };
+        let icons = |def: &WeaponDef| {
+            let p = PlayerView {
+                weapon: Some(def),
+                ..view(&ammo, &[])
+            };
+            let mut out = Vec::new();
+            PlayerHud::default().build(&p, &cx, 0, (640.0, 480.0), &mut out);
+            out.into_iter()
+                .filter(|q| q.texture.contains("weaponmode"))
+                .collect::<Vec<_>>()
+        };
+        let thompson = WeaponDef {
+            mode_icon: Some("gfx/hud/hud@weaponmode_full.tga".into()),
+            ..carbine()
+        };
+        let drawn = icons(&thompson);
+        let [q] = drawn.as_slice() else {
+            panic!("{} icons", drawn.len());
+        };
+        assert_eq!(q.verts[0], [537.5, 430.375]);
+        assert_eq!(q.verts[2], [557.5, 450.375]);
+        assert!(icons(&carbine()).is_empty());
+    }
+
+    #[test]
+    fn a_dead_view_keeps_the_hud_but_not_the_crosshair() {
+        let font = test_font();
+        let ammo = [0i16; 64];
+        let cs = vec![String::new(); 2048];
+        let origin = |_: i32| None;
+        let cx = Context {
+            weapons: &[],
+            configstrings: &cs,
+            loc: &Localized::default(),
+            font: &font,
+            entity_origin: &origin,
+        };
+        let def = carbine();
+        let p = PlayerView {
+            weapon: Some(&def),
+            alive: false,
+            ..view(&ammo, &[])
+        };
+        let mut out = Vec::new();
+        PlayerHud::default().build(&p, &cx, 0, (640.0, 480.0), &mut out);
+        let has = |t: &str| out.iter().any(|q| q.texture == t);
+        assert!(has("gfx/hud/hud@health_back.tga"));
+        assert!(!has("gfx/reticle/side_skinny.tga"));
     }
 
     #[test]

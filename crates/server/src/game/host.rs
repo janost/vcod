@@ -1090,6 +1090,16 @@ impl Host for GameHost {
                 },
                 other => other,
             },
+            // `Scr_GetGenericField`'s type-8 arm (0x6248c) reads the model
+            // byte through `G_ModelName`, so a model never set reads model
+            // configstring 0, "".
+            Route::Engine {
+                slot,
+                ty: FieldType::ModelIndex,
+            } => match e.engine[slot] {
+                Value::Undefined => Value::String(cx.intern_exact("")),
+                other => other,
+            },
             Route::Engine { slot, .. } => e.engine[slot],
             // `e.client` is `Some` only for an entity `spawn_client` made:
             // that is the real test, not a number range that would merely

@@ -755,7 +755,17 @@ fn parse_field(host: &mut GameHost, cx: &mut Cx, id: EntId, key: &str, raw: &str
             None => return,
         },
     };
-    if ty == FieldType::ModelIndex && !raw.starts_with('*') {
+    if ty == FieldType::ModelIndex
+        && let Some(n) = raw.strip_prefix('*')
+    {
+        // A brush model: the number goes to `s.index` and the model byte
+        // stays 0, so `.model` reads "" (movers doc, section 11).
+        if let Some(e) = host.ents.get_mut(id) {
+            e.brush_model = n.parse().ok();
+        }
+        return;
+    }
+    if ty == FieldType::ModelIndex {
         // `G_ParseField`'s type-8 branch (call at 0x61505) indexes the name
         // and stores the byte at `gentity_t+0x175`; we keep the name as the
         // storage, so only the slot allocation is reproduced here.

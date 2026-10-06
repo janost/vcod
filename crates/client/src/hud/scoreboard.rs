@@ -336,7 +336,7 @@ impl Scoreboard {
         }
 
         let color = font::COLORS[7];
-        let icon_size = super::SIZE_HEADER as f32;
+        let icon_size = header.size as f32;
         let mut hx = x0;
         if let Some(icon) = section.icon {
             out.push(HudQuad {

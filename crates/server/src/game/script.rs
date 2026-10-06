@@ -688,7 +688,7 @@ impl ScriptRuntime {
             }
             _ => None,
         };
-        if let Some((mut at, _)) = placed {
+        if let Some(mut at) = placed.as_ref().map(|g| g.origin) {
             if let Some(world) = &self.host.world {
                 at = crate::game::turret::lift_onto_floor(&world.collision, at, origin[2]);
             }
@@ -721,9 +721,9 @@ impl ScriptRuntime {
                 ent.events.add(EV_SOUND_ALIAS, stop_index);
             }
         }
-        if let Some((_, yaw)) = placed {
+        if let Some(g) = &placed {
             self.set_client_origin(slot, sim.origin());
-            self.set_client_yaw(slot, yaw);
+            self.set_client_yaw(slot, g.yaw());
         }
         shot
     }
@@ -849,6 +849,14 @@ impl ScriptRuntime {
                 .collision
                 .set_model_pose(step.model, step.from.0, step.from.1);
         }
+    }
+
+    /// The items' half of the push `step` asked for, once the players'
+    /// half has not stalled it (`crate::game::item::push_items`).
+    pub fn push_items(&mut self, step: &crate::game::mover::Step) {
+        let host = &mut self.host;
+        self.vm
+            .with_cx(|cx| crate::game::item::push_items(host, cx, step));
     }
 
     /// Where a link parent is this frame, origin and angles, `None` once it

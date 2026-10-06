@@ -316,12 +316,12 @@ pub fn spawn_struct(
 /// submodel's brushes are its entity's").
 pub fn delete(
     host: &mut GameHost,
-    cx: &mut Cx,
+    _cx: &mut Cx,
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
-    link_submodel(host, cx, id, false);
+    link_submodel(host, id, false);
     host.ents
         .schedule(id, ThinkFn::Free, host.level_time_ms + DELETE_DEFER_MS);
     Ok(Value::Undefined)
@@ -337,21 +337,14 @@ fn set_hidden(host: &mut GameHost, recv: Option<Target>, hidden: bool) -> Result
     Ok(Value::Undefined)
 }
 
-/// Links or unlinks the brushes of an entity whose `model` is the `*N`
+/// Links or unlinks the brushes of an entity whose BSP `model` key is the `*N`
 /// spelling of a BSP submodel; any other model, and any host with no map
 /// loaded, is a no-op.
-fn link_submodel(host: &mut GameHost, cx: &mut Cx, id: EntId, linked: bool) {
-    let model = cx.intern_folded("model");
-    let Value::String(m) = host.get_field(cx, id, model) else {
+fn link_submodel(host: &mut GameHost, id: EntId, linked: bool) {
+    let Some(n) = host.ents.get(id).and_then(|e| e.brush_model) else {
         return;
     };
-    let Some(n) = cx
-        .resolve(m)
-        .strip_prefix('*')
-        .and_then(|n| n.parse::<usize>().ok())
-    else {
-        return;
-    };
+    let n = n as usize;
     // Model 0 is the world clip itself, not a submodel; unlinking it would
     // take every world brush out of every trace, and a stock `notsolid()` on
     // a `"*0"` entity would do exactly that.
@@ -368,19 +361,14 @@ fn link_submodel(host: &mut GameHost, cx: &mut Cx, id: EntId, linked: bool) {
 /// (docs/research/cod11-mantle.md, "A submodel's brushes are its entity's").
 /// `_load.gsc` `notsolid()`s every `exploder` brush model at map load, which
 /// is the only place three stock maps lose that collision.
-fn set_solid(
-    host: &mut GameHost,
-    cx: &mut Cx,
-    recv: Option<Target>,
-    solid: bool,
-) -> Result<Value, ErrorKind> {
+fn set_solid(host: &mut GameHost, recv: Option<Target>, solid: bool) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
     let e = host
         .ents
         .get_mut(id)
         .ok_or(ErrorKind::BadType("no such entity"))?;
     e.solid = solid;
-    link_submodel(host, cx, id, solid);
+    link_submodel(host, id, solid);
     Ok(Value::Undefined)
 }
 
@@ -407,20 +395,20 @@ pub fn show(
 
 pub fn solid(
     host: &mut GameHost,
-    cx: &mut Cx,
+    _cx: &mut Cx,
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    set_solid(host, cx, recv, true)
+    set_solid(host, recv, true)
 }
 
 pub fn not_solid(
     host: &mut GameHost,
-    cx: &mut Cx,
+    _cx: &mut Cx,
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    set_solid(host, cx, recv, false)
+    set_solid(host, recv, false)
 }
 
 /// `setModel(name)` allocates a model configstring slot and stores the name,
@@ -933,9 +921,7 @@ mod tests {
         let world = host.world.clone().unwrap();
         vm.with_cx(|cx| {
             let e = host.ents.spawn(cx).unwrap();
-            let model = cx.intern_folded("model");
-            let star = Value::String(cx.intern_exact("*1"));
-            host.set_field(cx, e, model, star).unwrap();
+            host.ents.get_mut(e).unwrap().brush_model = Some(1);
             let t = Some(Target::Entity(e));
 
             assert!(brushmodel_clips(&world), "linked at load");
