@@ -217,12 +217,19 @@ impl Hud {
             Some(ps) => {
                 let friends = compass_friends(ps, f);
                 let mut view = player_view(ps, &friends, f);
-                // Off the replay only: a snapshot does not carry the sway.
-                view.gun_angles = f.predicted.and_then(|pred| {
-                    self.player
-                        .gun
-                        .step(view.weapon, &pred.ps, pred.command_time)
-                });
+                // The replay at its own clock, or a followed player's
+                // snapshot at the render clock: retail runs the sway on
+                // whichever playerstate it draws.
+                let (gun_ps, gun_ms) = match f.predicted {
+                    Some(pred) => (pred.ps, pred.command_time),
+                    None => (
+                        vcod_common::pmove::predict::from_wire(f.protocol, ps, None).ps,
+                        f.server_time,
+                    ),
+                };
+                let gun = &mut self.player.gun;
+                gun.feed(view.client_num, view.damage, &gun_ps, gun_ms);
+                view.gun_angles = gun.step(view.weapon, &gun_ps, gun_ms);
                 let cx = player::Context {
                     weapons: f.weapons,
                     configstrings: f.configstrings,

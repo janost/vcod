@@ -74,7 +74,7 @@ built from the bytes up, this might be your kind of thing.
   players. A correction eases out over 100 ms.
 - Draws your weapon in first person with the hands your team gets, zooms the
   sight to the weapon's own FOV, puts a sniper scope's overlay up where the
-  swaying gun points, and plays your own fire, reload and footstep
+  swaying, hit-kicked gun points, and plays your own fire, reload and footstep
   sounds off the prediction. The snapshot that confirms them later stays
   quiet.
 - Draws mounted MG42s turned by the barrel angles the server sends, with
@@ -83,8 +83,8 @@ built from the bytes up, this might be your kind of thing.
 - Draws the HUD that the stock `hud.menu` lays out: crosshair that opens with
   spread, health, ammo, fire-mode icon, stance with its change flash, compass
   with objectives and teammates, use hints and hit direction. A spectator
-  following a player sees that player's HUD. It also draws the gametype
-  script's own HUD elements, such as the S&D clock, the bomb icons and the
+  following a player sees that player's HUD, weapon, zoom and scope. It
+  also draws the gametype script's own HUD elements, such as the S&D clock, the bomb icons and the
   progress bar, in retail's fonts, fixed-width slots included.
 - Follows the server through a map change: loading screen, downloads, new
   map.
@@ -348,12 +348,13 @@ vcod-server mp_carentan --port 28960 --hostname "my server" --gametype tdm
   Repeatable, e.g. `--set scr_friendlyfire=1`. Set `sv_mapRotation` this way
   to get a rotation.
 - `--bots <n>` adds `n` debug bots, each in a real client slot, alternating
-  allies and axis. The first tick with bots builds the map's navigation
-  graph (0.6 to 2.7 s on 16 threads for the stock maps). `--bots-shoot` lets
-  them engage the nearest visible enemy: semi-autos tap, automatics fire in
-  bursts, sights go up at range, and they strafe and crouch while fighting.
-  They also reload and throw frags, and go looking where a lost enemy was
-  last seen.
+  allies and axis. The first tick with bots starts building the map's
+  navigation graph on a thread of its own (a second or two on the big stock
+  maps); the server keeps ticking and the bots wander until it is ready.
+  `--bots-shoot` lets them engage the nearest visible enemy: semi-autos tap,
+  automatics fire in bursts, sights go up at range, and they strafe and
+  crouch while fighting. They also reload and throw frags, and go looking
+  where a lost enemy was last seen.
 - `--gametype-script <file>` runs a gametype script from disk instead of the
   paks. The probe recipes use it.
 - `--test-entities <n>` adds entities that move on the wire, to exercise the
