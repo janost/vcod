@@ -926,21 +926,21 @@ fn snap_velocity(ps: &mut PlayerState) {
     );
 }
 
-/// A dead player's frame: gravity and ground friction with no input, no
-/// stance, lean or weapon step, and the eye easing to `VIEW_DEAD`. Q3's
-/// `PM_DEAD` arm of `PmoveSingle` with the movement input zeroed; the eye
-/// rate is the retail capture's (`DEAD_VIEW_LERP_SPEED`). A corpse landing
-/// runs `PM_CrashLand` too, which takes no damage at `pm_type > 5`; its
-/// events are the return.
+/// A dead player's frame: no input, no stance, lean or weapon step, and the
+/// eye easing to `VIEW_DEAD` at the retail capture's rate
+/// (`DEAD_VIEW_LERP_SPEED`). `PmoveSingle` zeroes a dead cmd's moves
+/// (0x3416a) and runs the default arm, whose ladder check drops a corpse off
+/// the ground before every move, so a corpse falls on every frame and the
+/// closing ground trace lands it again (docs/research/cod11-player-clip.md
+/// 8.11). The landing runs `PM_CrashLand`, which takes no damage at
+/// `pm_type > 5`; its events are the return.
 pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) -> Vec<PmEvent> {
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
     let idle = PmInput::default();
     let mut events = Vec::new();
     ps.jumped = false;
-    let was_on_ground = ps.on_ground;
     ps.move_start = ps.origin;
     let start_vz = ps.velocity.z;
-    drop_knockback(ps, dt);
     // `PM_ClearAimDownSightFlag` (`game.mp.i386.so` 0x3abd4), which
     // `PmoveSingle` calls in the dead arm. The fraction is left where the
     // death froze it: the weapon step that would ramp it down does not run
@@ -948,19 +948,31 @@ pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) -> Vec<PmEven
     ps.ads_active = false;
     ground_trace(ps, world, MASK_DEADSOLID);
     dead_friction(ps);
+    // `PM_CheckLadderMove` past its `pm_time` return: a dead player loses the
+    // ladder flag, the ground entity, `pml.groundPlane` and `pml.walking`
+    // (0x33782-0x337a5).
+    if ps.knockback_ms <= 0.0 {
+        ps.on_ladder = false;
+        ps.on_ground = false;
+        ps.ground_plane = None;
+        ps.ground_normal = Vec3::Z;
+        ps.ground_surface_flags = 0;
+    }
+    drop_knockback(ps, dt);
     // No events and no post-step velocity scale for a corpse: retail's step
     // block sits behind `ps->pm_type > 5` (@0x35660).
     ps.walking = false;
-    if ps.on_ground {
+    let grounded = ps.on_ground;
+    if grounded {
         friction(ps, false, dt);
         walk_move(ps, &idle, None, world, dt, MASK_DEADSOLID, None);
     } else {
         air_move(ps, &idle, world, dt, MASK_DEADSOLID, None);
     }
+    // The closing ground trace (0x34327) calls `PM_CrashLand` when it finds
+    // ground under a `groundEntityNum` of `ENTITYNUM_NONE`.
     ground_trace(ps, world, MASK_DEADSOLID);
-    // `PmoveSingle`'s dead arm takes the default path's two ground traces
-    // (0x342ce, 0x34327), and the landing one calls `PM_CrashLand`.
-    if !was_on_ground && ps.on_ground {
+    if !grounded && ps.on_ground {
         crash_land(ps, start_vz, true, &mut events);
     }
     // A target no stance has drops any leg and moves at a flat rate (0x30a84).
@@ -2323,6 +2335,9 @@ fn air_move(
     mask: u32,
     events: Option<&mut Vec<PmEvent>>,
 ) {
+    // `PM_AirMove` opens with `PM_Friction` (0x2f045): off the ground only
+    // its sub-unit stop and the water term can bite.
+    friction(ps, false, dt);
     let (dir, wishspeed) = wish_air(ps, input);
     accelerate(ps, dir, wishspeed, PM_AIRACCELERATE, dt);
     // A plane too steep to stand on still steers the fall (0x2f1d3).

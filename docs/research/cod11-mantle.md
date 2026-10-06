@@ -1578,7 +1578,7 @@ level 2 (`cod11-player-clip.md` 8.3); and `PM_CrashLand`, which returns at
 level 3.
 
 vcod: `pmove.rs` dropped its RTCW port of the swim and the water jump on
-2026-10-06.
+2026-10-06, and `air_move` runs `friction` first, as `PM_AirMove` does.
 
 ## State reference (observed pm_flags bits, internal ps+0xC)
 
