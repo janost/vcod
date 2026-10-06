@@ -798,11 +798,12 @@ impl CollisionWorld {
     /// brushes carry plain CONTENTS_SOLID in the lump, but retail leaves them
     /// hollow to movement. The terrain partitions of lump 24 enter as the
     /// engine's own triangles, swept as a sphere; the render soups of model
-    /// 0 enter as facets, minus the ones that draw terrain (a soup whose
-    /// centroid lies in a coplanar terrain triangle sharing a vertex with
-    /// it; the render mesh triangulates the same grid the other way, so an
-    /// edge match is not enough, and a flat patch abutting terrain shares
-    /// an edge without drawing it). Submodel meshes are local-space and
+    /// 0 stand in for lump 24's patches as facets, so only a triangle inside
+    /// some patch's control-point box enters, minus the ones that draw
+    /// terrain (a soup whose centroid lies in a coplanar terrain triangle
+    /// sharing a vertex with it; the render mesh triangulates the same grid
+    /// the other way, so an edge match is not enough, and a flat patch
+    /// abutting terrain shares an edge without drawing it). Submodel meshes are local-space and
     /// their brush hulls replace them.
     pub fn build(bsp: &Bsp, model_tris: &[ModelTri]) -> Self {
         let mut brushes = Vec::new();
@@ -992,6 +993,30 @@ impl CollisionWorld {
                 })
             })
         };
+        // Retail collides model 0 through its brushes and lump 24 alone, so a
+        // soup stands in for a patch only inside that patch's control-point
+        // box, which holds the whole bezier surface; a brush face's or a
+        // decal's soup is no collision of its own.
+        let patch_boxes: Vec<(Vec3, Vec3)> = bsp
+            .patches
+            .iter()
+            .map(|pp| {
+                let n = pp.width as usize * pp.height as usize;
+                bsp.collision_verts[pp.first_vert as usize..][..n]
+                    .iter()
+                    .fold(
+                        (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+                        |(lo, hi), v| (lo.min(Vec3::from_array(*v)), hi.max(Vec3::from_array(*v))),
+                    )
+            })
+            .collect();
+        let in_patch = |tri: &[Vec3; 3]| {
+            patch_boxes.iter().any(|&(lo, hi)| {
+                tri.iter().all(|v| {
+                    v.cmpge(lo - Vec3::splat(0.5)).all() && v.cmple(hi + Vec3::splat(0.5)).all()
+                })
+            })
+        };
         let world_model = &bsp.models[0];
         let soup_range = world_model.first_soup as usize
             ..(world_model.first_soup + world_model.num_soups) as usize;
@@ -1012,7 +1037,7 @@ impl CollisionWorld {
                 if !terrain_by_vertex.is_empty() && draws_terrain(&tri) {
                     continue;
                 }
-                if on_pane(&tri) {
+                if on_pane(&tri) || !in_patch(&tri) {
                     continue;
                 }
                 t.push(tri, mat.surface_flags, contents, false);
@@ -1877,6 +1902,31 @@ pub fn submodel_test_world(entities: &str, submodels: &[([f32; 3], [f32; 3])]) -
     )
 }
 
+/// A test map's lump 24: one patch record whose control points box every
+/// soup vertex, so its soups clip as patches do (`CollisionWorld::build`).
+#[doc(hidden)]
+pub fn patch_over_soups(mut bsp: crate::bsp::Bsp) -> crate::bsp::Bsp {
+    let (lo, hi) = bsp.verts.iter().fold(
+        (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+        |(lo, hi), v| {
+            (
+                lo.min(Vec3::from_array(v.pos)),
+                hi.max(Vec3::from_array(v.pos)),
+            )
+        },
+    );
+    if lo.x <= hi.x {
+        bsp.patches.push(crate::bsp::PatchPart {
+            material: 0,
+            width: 1,
+            height: 2,
+            first_vert: bsp.collision_verts.len() as u32,
+        });
+        bsp.collision_verts.extend([lo.to_array(), hi.to_array()]);
+    }
+    bsp
+}
+
 /// [`synthetic_world`] plus world-space triangles as soups of material 0,
 /// the only way this module takes swept geometry that is not axis-aligned.
 #[doc(hidden)]
@@ -1935,7 +1985,7 @@ pub fn synthetic_world_tris(
     }
     let num_soups = soups.len() as u32;
     CollisionWorld::build(
-        &crate::bsp::Bsp {
+        &patch_over_soups(crate::bsp::Bsp {
             materials: materials
                 .iter()
                 .map(|(name, content, surface)| crate::bsp::Material {
@@ -1977,7 +2027,7 @@ pub fn synthetic_world_tris(
             collision_verts: vec![],
             collision_indices: vec![],
             pvs: None,
-        },
+        }),
         &[],
     )
 }
@@ -2136,7 +2186,7 @@ mod tests {
             plane_or_dist: dist(v),
             material: 0,
         };
-        Bsp {
+        patch_over_soups(Bsp {
             materials: vec![bsp::Material {
                 name: "textures/test/solid".into(),
                 surface_flags: 0,
@@ -2197,7 +2247,7 @@ mod tests {
             collision_verts: vec![],
             collision_indices: vec![],
             pvs: None,
-        }
+        })
     }
 
     fn vert(pos: [f32; 3]) -> bsp::DrawVert {
@@ -2267,7 +2317,8 @@ mod tests {
         // model 0's 7575 solid+playerclip brushes plus its two stray
         // non-trigger submodel clips; the 32 trigger brushes stay hollow
         assert_eq!(world.brushes.len(), 7577);
-        assert!(world.tris.len() > 10_000);
+        // terrain and the patches' soups; brush faces' soups are no clip
+        assert!(world.tris.len() > 5_000);
         // a query around a known spawn; only holds if candidates() walks from the root
         let mut out = Vec::new();
         world.candidates(
@@ -2301,7 +2352,7 @@ mod tests {
                 first_index: (i * 3) as u32,
             });
         }
-        Bsp {
+        patch_over_soups(Bsp {
             materials: vec![bsp::Material {
                 name: "textures/test/solid".into(),
                 surface_flags: 0,
@@ -2340,7 +2391,7 @@ mod tests {
             collision_verts: vec![],
             collision_indices: vec![],
             pvs: None,
-        }
+        })
     }
 
     fn world() -> CollisionWorld {
@@ -3155,7 +3206,7 @@ mod tests {
         }
         let soup_count = soup_lump.len() as u32;
         CollisionWorld::build(
-            &crate::bsp::Bsp {
+            &patch_over_soups(crate::bsp::Bsp {
                 materials: materials
                     .iter()
                     .map(|(name, content, surface)| crate::bsp::Material {
@@ -3197,7 +3248,7 @@ mod tests {
                 collision_verts: vec![],
                 collision_indices: vec![],
                 pvs: None,
-            },
+            }),
             &[],
         )
     }

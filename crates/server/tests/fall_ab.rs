@@ -499,17 +499,37 @@ fn tail_field<'a>(rest: &'a str, key: &str) -> &'a str {
 /// The walk capture's rows under a landing stun (`pm_flags` 0x100) from the
 /// second drop on: ours at the same shifted time holds the same `commandTime`,
 /// velocity, ground, `pm_flags`, `pm_time` and health, and an origin within a
-/// unit. Each drop starts from where the last walk came to rest in a corner
-/// whose rest is not this gate's (cod11-player-clip.md 12), which moves the
-/// origin by up to 0.93 and nothing else. Retail must also have pressed into
-/// the wall: rows on its plane with a velocity into it.
+/// unit. Each walk ends jittering against a pillar (cod11-player-clip.md
+/// 12), and `setorigin` keeps the velocity, so a drop starts with whatever
+/// the jitter's phase left: one whose teleport row's velocity differs
+/// between the two sides lands on another cmd and is left out, at most two
+/// of the five from the second on (the last, fatal one has no stun rows).
+/// The rest of the start moves the origin by up to 0.93 and nothing else.
+/// Retail must also have pressed into the wall: rows on its plane with a
+/// velocity into it.
 fn compare_stun_rows(retail: &Retail, ours: &Ours, second: i32) -> Vec<String> {
     const WALL_Y: f32 = 1815.128;
+    let drops: Vec<i32> = (0..).map_while(|n| drop_time(&retail.probe, n)).collect();
+    let skipped: Vec<(i32, i32)> = drops
+        .iter()
+        .enumerate()
+        .filter(|&(_, &d)| {
+            if d < second {
+                return false;
+            }
+            let r = retail.falls.iter().find(|l| l.t >= d);
+            let o = r.and_then(|r| ours.falls.get(&(r.t + ours.shift)));
+            r.zip(o)
+                .is_some_and(|(r, o)| tail_field(&r.rest, "vel=") != tail_field(&o.rest, "vel="))
+        })
+        .map(|(i, &d)| (d, drops.get(i + 1).copied().unwrap_or(i32::MAX)))
+        .collect();
+    assert!(skipped.len() <= 2, "drops off another start: {skipped:?}");
     let mut diffs = Vec::new();
     let (mut lines, mut pressed) = (0, 0);
     for r in retail.falls.iter().filter(|l| l.t > second) {
         let flags = i32::from_str_radix(tail_field(&r.rest, "pm_flags=0x"), 16).unwrap();
-        if flags & 0x100 == 0 {
+        if flags & 0x100 == 0 || skipped.iter().any(|&(a, b)| (a..b).contains(&r.t)) {
             continue;
         }
         lines += 1;

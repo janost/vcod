@@ -1183,7 +1183,10 @@ model 0 stay facets under the polyhedron clip (`triangle_planes`), minus
 the ones that draw terrain, matched as a soup whose centroid lies inside a
 coplanar terrain triangle sharing one of its vertices (an edge match is
 not enough: the render mesh triangulates the grid the other way, and a
-flat patch abutting terrain shares an edge with it). A patch's bezier
+flat patch abutting terrain shares an edge with it), and minus every
+triangle outside all of lump 24's patch control-point boxes: a brush
+face's or a decal's soup is no collision on retail
+(`cod11-player-clip.md` 12, the walk capture's corner). A patch's bezier
 tessellation is not built; its render soup stands in, which is exact for
 the flat patches every kerb wall on carentan is. The `startsolid` a
 terrain touch reads is kept, since retail's stance and prone checks read

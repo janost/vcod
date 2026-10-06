@@ -279,7 +279,8 @@ output. `crates/common/tests/evidence_labels.rs` catches the mechanical cases.
   `player_step`). The server and the client predictor wrap it.
 - The player is a capsule. A box sits `15 tan` higher on every grade.
 - Terrain clips as a swept sphere, a patch as a Q3 facet; `collision.rs` picks
-  by lump 24's record kind.
+  by lump 24's record kind. A render soup stands in for a patch only inside
+  its control-point box; a brush face's soup is no collision.
 - Static props clip bullets, blasts and missiles, never a moving player.
   `shot_trace` and `missile_trace` see them, `box_trace` does not.
 - A submodel's brushes clip only while its entity is linked. Script `delete`,

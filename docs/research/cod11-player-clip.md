@@ -1103,13 +1103,26 @@ The gates:
   - **The slide's timer restore** (8.5), closed 2026-10-06: `slide_move`
     hands back its starting velocity, with the gravity end velocity for z,
     whenever `knockback_ms` runs. `fall_ab`'s walk capture measured it.
-  - **The walk capture's corner.** VERIFIED, 2026-10-06: walking 315 after
-    each stun ends at a corner where retail's player rests at x 1231.15
-    with `groundEntityNum` flipping between 1022 and 1023 and `velocity`
-    reading `0,0,1`, `-1,0,0` or `0,0,3` from snapshot to snapshot; ours
-    rests at 1230.87 on 1022 at `0,0,0`. Not looked into; `fall_ab` masks
-    the walk's rest and allows a unit of origin on the stun rows that
-    follow.
+  - **The walk capture's corner**, explained 2026-10-06. VERIFIED: walking
+    315 after each stun ends against a pillar at x 1240-1260, y 1786-1806:
+    `mp_carentan` patches 70 and 71 up to z 42 and the caulk brush 1656
+    from 42 to 48. Retail's player rests at x 1231.15 with
+    `groundEntityNum` flipping between 1022 and 1023 and `velocity`
+    reading `0,0,1`, `-1,0,0` or `0,0,3`. INFERRED: 1231.15 is where the
+    border plane through patch 71's points `(1246, 1806, -28)` and `(1247,
+    1804, 32)`, grown by the radius, stops a capsule at the sphere's
+    height, and that plane's normal, `(-0.99986, 0, 0.0167)`, has the rise
+    that lifts the player off the ground on each push. VERIFIED, vcod
+    measurement 2026-10-06: ours rested at 1230.875 on 1022 at `0,0,0`
+    because the render soup of brush 1656's faces was clipped as facets
+    as well, and their axial bevel at x 1246, grown by the radius, held
+    the capsule's top 0.28 short; with the capsule's top below z 42 the
+    same trace stopped at 1231.156. Retail collides model 0 through its
+    brushes and lump 24 alone ("Terrain is a swept sphere, a patch is a
+    facet" in `cod11-mantle.md`), so `CollisionWorld::build` now keeps a
+    render soup triangle only inside some patch's control-point box.
+    `fall_ab` still allows a unit of origin on the stun rows and masks the
+    walk's rest; the jitter's air frames are not gated row by row.
   - **Fall damage, the two cvars and a dead player's landing**, closed
     2026-10-05 (8.8, 8.10). VERIFIED: `PmoveSingle`'s jump table (rodata
     0x70ce8) sends `pm_type` 6 to 0x34274 and on to the default arm, whose
