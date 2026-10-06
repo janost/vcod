@@ -2019,8 +2019,22 @@ on an entity argument. VERIFIED, `cod11-player-clip.md` 8.10: a fall, whose
 damage callback reads both undefined, reaches the killed callback with
 `ent1022` for both. VERIFIED: the inflictor's replacement at `0x43827` is
 `Scr_GetEntity(1)`, the attacker's argument, behind a type test of argument
-0. INFERRED: an entity inflictor, a grenade's, reaches the killed callback as
-the attacker; vcod passes the inflictor through.
+0. VERIFIED: the inflictor slot (`ebp-0x3C`) is read at one place after
+that, the push into the `die` call (`0x43c97`). INFERRED: an entity
+inflictor, a grenade's, reaches the killed callback as the attacker, and the
+damage callback, which `G_Damage` calls with its own arguments, is
+untouched.
+
+VERIFIED, `client-probes/probe_victims` on retail, 2026-10-06, calling
+`finishPlayerDamage` directly with a lethal 500: inflictor a `script_origin`
+(179) and attacker slot 1 reached the killed callback as `inflictor 1
+attacker 1`; inflictor slot 2 and attacker the `script_origin` as `179 179`;
+inflictor `undefined` and attacker slot 1 as `1022 1`. vcod hands the killed
+callback the attacker for an entity inflictor and the world for any other
+(`finish_player_damage`, `crates/server/src/game/builtins/combat.rs`), and
+the same probe against `vcod-server` read the same three rows. What retail
+does with an entity inflictor and no attacker entity is not read; vcod hands
+over the world.
 
 What makes that safe for the stock scripts is `isPlayer`, `functions[81]` at
 `0x5efd4`. VERIFIED: it calls `Scr_GetType(0)` and branches to `Scr_AddInt(0)`
@@ -2637,6 +2651,65 @@ snapped path does not exist here; the weapon drop's tag trace and flight
 else; and `cloneplayer`, which still copies the mirrored entity state, so a
 corpse born of a `trigger_hurt` stands on the unsnapped origin where retail's
 `G_SetOrigin(body, self->r.currentOrigin)` (5.2) would truncate it.
+
+### 5.6 A spawn leaves `health` alone
+
+VERIFIED, `game.mp.i386.so` `ClientSpawn` (`0x4268c`, annotated with
+`tools/re/annotate_func.py`): the function holds no store to `gentity+0x230`
+(`health`). Its stores to the entity are `takedamage` 0 (`0x4273c`) and the
+`die` pointer, `player_die` (`0x42753`). It `__bzero`s the whole `gclient_t`
+(`0x42804`, `0x22C4` bytes), copies `sess` back, and stores
+`sess.maxHealth` (`client+0x2150`) into `ps.stats[2]` (`0x42849..0x4284f`).
+INFERRED: a spawn in any of the three modes keeps whatever health the entity
+held, and only the gametype's own `self.health = self.maxhealth` (`sd.gsc`'s
+`spawnPlayer`) refills it; `spawnSpectator` writes none.
+
+VERIFIED, `client-probes/probe_victims` on retail, 2026-10-06: a playing
+client given `health` 37 read 37 after `sd::spawnSpectator()` and 37 again
+half a second later; given 41 and spawned with `sessionstate` `"playing"`
+through a bare `self spawn(origin, angles)`, it read 41 with `maxhealth` 100,
+and 41 half a second later. `probe_blastloop`'s dead slot read -20 as a
+spectator (14.5's rows).
+
+**As implemented.** The `spawn` player method
+(`crates/server/src/game/builtins/entity.rs`) writes no health; it clears
+the host's `dead` mark, `player_die`'s `die` pointer coming back. The same
+probe against `vcod-server` read 37, 37, 41 and 41.
+
+### 5.7 A corpse's slide: `PM_DeadMove`
+
+VERIFIED, `PmoveSingle` (`0x33dfc`): the `pm_type - 1` jump table at
+`.rodata 0x70ce8` sends 6 to `0x34274`, the default arm, and 7 to `0x34220`,
+the arm a linked live player takes. On the default arm `0x342e9` compares
+`pm_type` against 6 and calls `0x2f700` when it is equal, after the first
+ground trace (`0x342ce`) and ahead of the walk or air move. VERIFIED,
+`0x2f700`: it returns at once when `pml+0x2C` is zero; otherwise it takes
+the length of `ps->velocity` (`ps+0x20..0x28`, all three axes), subtracts
+`20.0` (`.rodata 0x7090c`), stores zero to all three components when the
+result is at or below 0 (`0x2f744..0x2f75c`), and otherwise scales the
+normalized velocity by it. INFERRED: this is Quake III Arena's
+`PM_DeadMove`: `pml+0x2C` is `pml.walking`, the same word the move dispatch
+at `0x34312` picks the walk move by, and the drop is per frame, not per
+second, so a corpse slides less the faster its client sends cmds.
+
+VERIFIED, `client-probes/probe_victims` on retail, 2026-10-06: a flat 200
+`radiusDamage` killed 100-health slot 0 at `(-226, 2424, -31.79)` and took
+200 off 1000-health slot 1 at `(-269, 2381, -31.99)` behind it, on the same
+line from the blast at `(-176.8, 2473.1, 7)`; both took the same 60-point
+knockback (4.5). Per server frame after the blast, slot 0 read x -226.00,
+-231.11, -238.91, -242.41, -243.68 and held there, 24.9 units of slide; slot
+1 kept moving to frame 9 and held at `(-311.49, 2338.51)`, 60.1 units.
+INFERRED: the difference between the two is the 20 a frame.
+
+**As implemented.** `vcod_common::pmove::dead_move` calls `dead_friction`
+after its first ground trace. The same probe against `vcod-server`, both
+before the change and after: the corpse slid 56.4 and 21.8 units, the live
+player 58.9 and 54.7. The probe clients send a cmd every 16 ms plus their
+own loop time on either server, so the cmd count is the client's; the
+residual 3 units are within what one run of each measures, which this pair
+of runs does not settle. Not modelled: `pm_type` 7, a dead player still
+linked, which takes `0x34220` and does not move at all; `dead_move` runs
+for it as for 6.
 
 ---
 
@@ -4443,12 +4516,147 @@ earlier in the walk, or anywhere earlier in the frame, is left out of the
 bodies that stop a probe. `a_blast_walks_its_victims_one_callback_at_a_time`
 (`crates/server/src/game/builtins/combat.rs`) replays the rows above in
 both slot orders; the same probe against `vcod-server` read every line-1 row
-as retail did. Not modelled: retail's walk order (vcod walks entity order,
-which matches both lethal rows above and not the line-2 same-frame row's
-callback order), and a candidate other than a client. A grenade blast reads
-victims and bodies off the sims, so a `setOrigin` from an earlier callback
-of the same walk does not move them; the builtin reads the script `origin`
-and does.
+as retail did. Not modelled: retail's walk order (14.7; vcod walks entity
+order, which matches both lethal rows above and not the line-2 same-frame
+row's callback order). A grenade blast reads victims and bodies off the
+sims, so a `setOrigin` from an earlier callback of the same walk does not
+move them; the builtin reads the script `origin` and does. The turrets
+follow the clients in both walks (14.6).
+
+### 14.6 Turrets, and the other entities with `takedamage`
+
+VERIFIED, the stores to `gentity+0x171` listed in 14.5 by function:
+`G_SpawnTurret` 1 (`0x5301a`), `SP_trigger_damage` 1 (`0x65341`, with
+`health` 32000 at `0x65337` and `use`, `pain` and `die` set to
+`Use_trigger_damage`, `Pain_trigger_damage` and `Die_trigger_damage`),
+`SP_func_static` 1 (`0x5828a`, `0x582d0`, with `pain` `Static_Pain` and a
+store of `health` 9999 at `0x582d7`), `SP_func_door` 1 (`0x56fb7`). VERIFIED,
+the entity lumps of every BSP in the 1.1 paks: no `maps/MP/` map places a
+`func_door`, `func_static` or `trigger_damage`; `mp_brecourt`,
+`mp_carentan`, `mp_dawnville`, `mp_hurtgen`, `mp_railyard` and `mp_rocket`
+place `misc_mg42`s, and the single-player maps place all four. INFERRED: on
+a stock MP map the turrets are the only entities with no client a blast
+reaches.
+
+What a blast does to one, read off 4.2's entity arm of `G_Damage`
+(`0x49e70..0x4a08b`). VERIFIED: the offsets, immediates, `scr_const` slots
+and call targets in this list. INFERRED: the ordering and every condition.
+
+- A null inflictor or attacker is replaced by `g_entities + 0xc49d8`, the
+  world (`0x49e83`, `0x49e8e`).
+- `s.eType` 5 takes the `use`-pointer arm (`0x49e93`); a turret is 11.
+- `flags & 1` returns (`0x49efd`), a damage at or below 0 becomes 1
+  (`0x49f10`), and `health` (`+0x230`) takes the damage off (`0x49f3e`).
+- `Scr_Notify(ent, scr_const+0x1A, 2)` with the attacker pushed first and
+  the damage second (`0x49f47..0x49f6a`). `scr_const+0x1A` is `"damage"`
+  (12.2), so a waiter reads `waittill("damage", amount, attacker)`.
+- With health at or below 0: clamped at -999 (`0x49f83`),
+  `Scr_Notify(ent, scr_const+0x1C, 1)` with the attacker (`0x49f8d..0x49fa4`),
+  where `GScr_LoadConsts` allocates `scr_const+0x1C` from `"death"`
+  (`.rodata 0x75f9e`, `0x586b8`), the attacker stored at `+0x258`, and
+  `die` called when non-null. With health above 0, `pain` when non-null.
+- INFERRED, off `cod11-turrets.md` 3: a turret has neither, and nothing
+  on this path clears `takedamage`, so every later hit notifies `"death"`
+  again.
+
+VERIFIED: `G_SpawnTurret` stores 100 to `health` behind a compare of it
+against 0 (`0x52ee7`, `0x52ef0`) and links with `r.mins` (-32, -32, 0) and
+`r.maxs` (32, 32, 56). The `G_RadiusDamage` arms 14.1 and 14.3 give a
+turret: `r.bmodel` 0, so the distance is origin to origin, and `CanDamage`'s
+no-client arm, the box midpoint 28 above the origin and four points 15 off
+it on x and y, any one clear for the whole falloff.
+
+VERIFIED, `client-probes/probe_victims` on retail, 2026-10-06: carentan's
+`misc_mg42`s, entities 297 and 298, read `health` 100. Three flat-60
+`radiusDamage`s 70 units from 298 with 1000-health slot 1 inside the radius
+too logged, per blast, slot 1's callback, the line after the builtin, then
+the turret's waiters:
+
+| blast | slot 1's callback | after the builtin | turret waiters, in run order |
+|---|---|---|---|
+| 1 | 60 | `health` 40 | `damage` 60, attacker 1022 |
+| 2 | 60 | `health` -20 | `death` 1022, then `damage` 60 1022 |
+| 3 | 60 | `health` -80 | `death` 1022, then `damage` 60 1022 |
+
+INFERRED: the notifies wake their waiters after the builtin's caller has
+moved on, and the later notify's waiter runs first, the newest-first resume
+order of AGENTS.md's script notes. Where the turret falls in the walk
+relative to slot 1 is not visible here, since its notifies are deferred.
+
+**As implemented.** `GameHost::blast_entities` lists the turrets with
+`G_SpawnTurret`'s box, `Blast::entity_damage` measures one
+(`crates/server/src/game/combat.rs`), and `GameHost::damage_entity` is the
+entity arm of `G_Damage`: health, `"damage"`, and `"death"` at or below 0.
+Both walks take the turrets in the blast's box after the clients: the
+`radiusDamage` builtin with the world as the attacker and its notifies
+raised through the builtin's `Cx`, a grenade with its thrower. The map load
+gives a turret 100 `health` when its key left 0. The same probe against
+`vcod-server` read the table above row for row, and
+`a_blast_damages_a_turret_and_notifies_it`
+(`crates/server/src/game/builtins/combat.rs`) replays it. Not modelled: a
+bullet on a turret, which retail's `G_Damage` takes through the same arm;
+doors, `func_static` and `trigger_damage`, whose spawns vcod does not run;
+and brush-model distance (`r.bmodel`), which only they would use.
+
+### 14.7 The walk's order: the area tree
+
+`trap_EntitiesInBox` is the engine's, so the order 14.5 measured is read out
+of `cod_lnxded` (1.1d, stripped; Ghidra export
+`private/ghidra/cod_lnxded.c`).
+
+VERIFIED: the game-module syscall dispatch sends 0x32 to `0x80908b0`, 0x33
+to `0x8091f94` and 0x34 to `0x805a540`. INFERRED: those are
+`SV_LinkEntity`, `SV_UnlinkEntity` and `SV_AreaEntities`, by the
+`"CM_AreaEntities: MAXCOUNT\n"` string inside the walk `0x805a540` calls and
+by `0x80908b0` building `r.absmin`/`r.absmax` as 14.1 reads them.
+
+VERIFIED: the addresses, sizes, offsets and constants named in this list.
+INFERRED: what each function does with them, read off the decompiled control
+flow, and every condition.
+
+- Nodes are 0x28 bytes from a pool of 0x3ff at `0x831b2fc`, the root at
+  `0x831b2a8`, a sentinel at `0x831b2d4` for a missing child.
+  `0x8058dd0` builds the root from inline model 0's bounds (x and y only):
+  axis 1 when the x extent is not larger than the y extent, 0 otherwise,
+  `dist` the midpoint (`* 0.5`, `.rodata 0x80cd474`).
+- A node holds its axis (`+0`), `dist` (`+0x10`), an entity list head
+  (`+0x14`), its parent (`+0x1C`) and two children (`+0x20`, `+0x24`).
+- `0x8059590`, the box query, walks a node's own list from its head, then
+  recurses into `+0x20` and then `+0x24`, each only when the query box
+  crosses to that side of `dist`.
+- `0x8059344`, the link, walks down from the root: to `+0x20` when the
+  entity's `absmin` on the node's axis is above `dist` (`fcom` at
+  `0x80593fc`), to `+0x24` when its `absmax` is below it (`0x805941d`),
+  stopping at a node the box touches or straddles or whose child is
+  missing. When the
+  node it stops at is the one the entity already sits in and the new
+  contents keep every bit the old ones had (`(old & ~new) == 0`), it only
+  refreshes the stored bounds and returns. Otherwise it unlinks
+  (`0x8058e9c`) and prepends the entity to the node's list.
+- After a prepend `0x8058f80` runs on that node: it walks the node's list
+  from the head and moves each entity that lies wholly on one side into
+  that child, prepending it there, creating the child from the pool when
+  its extent on its own axis is above 512 (`.rodata 0x80cd478`). It goes
+  down one level per call.
+- Contents 0 unlink (`0x80908b0`'s `r.contents` test, then `0x8058e9c`).
+
+INFERRED, from the above: the list order is most recently prepended first,
+an entity that stays in its node through a cmd's relink keeps its place,
+and `player_die`'s unlink and relink with `CONTENTS_CORPSE` puts the dying
+player at its node's head, which is 14.5's line-2 reversal. On mp_carentan
+(model 0 bounds x -8512..10816, y -6720..11648) the second split is y 2464,
+which line 2's boxes at y 2473.1 plus and minus 16 straddle, so slots 2 and
+3 share that node, and the setOrigin order (3, then 2) put 2 at the head.
+Line 1, two boxes on the same side of every split down to the 512 limit,
+was walked 0 before 1 although 1 was set down after 0; the one-level
+push-down reverses the order of what it moves, which is one way to get
+there, but which nodes existed at that moment depends on every link since
+the map load.
+
+Not modelled: vcod has no area tree, and the order depends on the link
+history of every linked entity, not only the candidates. Modelling it means
+routing every link and unlink of every entity through one place; until
+then both walks run in entity order.
 
 ---
 
