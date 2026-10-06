@@ -276,6 +276,93 @@ fn only_the_killed_client_is_sent_the_respawn_text() {
     );
 }
 
+/// A client that leaves while dead takes its respawn text with it: the
+/// disconnect kills the thread that would `destroy` it, and retail's
+/// `HudElem_ClientDisconnect` frees every element the client owns
+/// (docs/research/cod11-hud-protocol.md, "A client's elements die with it").
+/// The next client into the slot has the same entity number, so a leftover
+/// would be drawn on its screen.
+#[test]
+fn a_disconnect_frees_the_clients_own_elements() {
+    use vcod_common::net::NetClient;
+
+    let mut now = Instant::now();
+    let Some(mut sv) = server(now) else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb) = common::join_pair(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+    let p = &PROTOCOL_V1;
+    let nb = cb
+        .snapshots()
+        .newest()
+        .unwrap()
+        .ps
+        .field_i32(p, "clientNum");
+    let mut step = |sv: &mut vcod_server::Server, ca: &mut _, cb: &mut _| {
+        now += Duration::from_millis(50);
+        common::step_pair(sv, (&qa, ca), (&qb, cb), now);
+        now
+    };
+
+    // `Cmd_Kill_f`, then `Callback_PlayerKilled`'s 2 s and `respawn()`.
+    cb.send_reliable("kill");
+    let mut texted = false;
+    for _ in 0..100 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&NULL_USERCMD);
+        step(&mut sv, &mut ca, &mut cb);
+        let hud = &cb.snapshots().newest().unwrap().ps.arrays.hud_current;
+        if hud.first().is_some_and(|e| e.get(f::TYPE) == TYPE_TEXT) {
+            texted = true;
+            break;
+        }
+    }
+    assert!(texted, "B was never sent its respawn text");
+
+    cb.disconnect();
+    let mut at = None;
+    for _ in 0..5 {
+        ca.send_frame(&NULL_USERCMD);
+        at = Some(step(&mut sv, &mut ca, &mut cb));
+    }
+
+    // C, a new client (its own qport, its own challenge) from B's address,
+    // takes the first free slot, which is B's.
+    qb.borrow_mut().to_client.clear();
+    let mut cc = NetClient::start_with_qport(common::ClientEnd(qb.clone()), at.unwrap(), 0x2003);
+    let mut snaps = 0;
+    for _ in 0..200 {
+        ca.send_frame(&NULL_USERCMD);
+        cc.send_frame(&NULL_USERCMD);
+        step(&mut sv, &mut ca, &mut cc);
+        if cc.snapshots().newest().is_some() {
+            snaps += 1;
+            if snaps == 10 {
+                break;
+            }
+        }
+    }
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+    let sc = cc.snapshots().newest().expect("C was sent no snapshot");
+    assert_eq!(sc.ps.field_i32(p, "clientNum"), nb, "C took B's old slot");
+    assert!(
+        sc.ps.arrays.hud_current.is_empty(),
+        "C inherited B's element: {:?}",
+        sc.ps.arrays.hud_current
+    );
+    assert_eq!(sc.ps.arrays.hud_archived.len(), 1, "C lost the round clock");
+}
+
 /// `_gameobjects::main` turns mp_carentan's two bombzones into objectives:
 /// `objective_add(0, "current", ...)` and `objective_add(1, ...)`, neither
 /// scoped to a team, so both reach a client of either side with its icon

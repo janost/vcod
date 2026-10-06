@@ -495,6 +495,20 @@ impl ObjectTable {
         }
     }
 
+    /// `HudElem_ClientDisconnect` (0x4c0ec): free every element drawn for
+    /// client `slot` alone, the `newClientHudElem` records whose owner is its
+    /// entity number. A team or shared element is left alone.
+    pub fn free_client_hud_elems(&mut self, slot: usize) {
+        let owned: Vec<EntId> = self
+            .iter_hud_elems()
+            .filter(|(_, e)| e.hud.is_some_and(|h| h.owner == slot as u32))
+            .map(|(id, _)| id)
+            .collect();
+        for id in owned {
+            self.free(id);
+        }
+    }
+
     /// Arms `id`'s think. `at_ms` is on the same clock `run_thinks` reads
     /// (`GameHost::level_time_ms`).
     pub fn schedule(&mut self, id: EntId, think: ThinkFn, at_ms: i32) {

@@ -645,6 +645,46 @@ clock. The 2026-08-24 live sweep confirmed the header ticking correctly
 (`219 tdm 214 / 14:34`-style output) against two servers. The check above
 still stands for anyone who later wants the real round countdown.
 
+### A client's elements die with it
+
+VERIFIED, `game.mp.i386.so` with relocations resolved
+(`tools/re/annotate_func.py`): `ClientDisconnect` (0x42aac) calls
+`HudElem_ClientDisconnect` (0x4c0ec) at 0x42be1 with the player's
+`gentity_t`, then `Scr_PlayerDisconnect` (0x5c9ec, which runs
+`CodeCallback_PlayerDisconnect`) at 0x42bed, then `G_FreeEntity` at 0x42bfc.
+
+VERIFIED, `HudElem_ClientDisconnect`: a loop over all 0x400 `g_hudelems`
+records, 0x7c bytes apart, that skips a record whose `type` (`+0x0`) is 0,
+compares its owner (`+0x70`) with the entity's first dword (`s.number`), and on
+a match calls `Scr_FreeHudElem` (0x4c11e) and stores 0 to `type` (0x4c123).
+INFERRED: a `newClientHudElem` record is freed with its client, and a
+`newHudElem` / `newTeamHudElem` one (owner `0x3ff`) never is.
+
+VERIFIED, `HudElem_DestroyAll` (0x4c150): the same walk without the owner
+test, then a `bzero` of the whole 0x1f000-byte pool; its only caller is
+`G_ShutdownGame` (relocation at 0x4ff53). INFERRED: a level boundary empties
+the pool, which vcod gets from building the script runtime afresh.
+
+VERIFIED, live, 2026-10-06, retail 1.1d dedicated server on mp_pavlov with
+`client-probes/probe_hud_disconnect.gsc` as the gametype and one
+`vcod --net-probe` client that connected and left (`games_mp.log`):
+
+```
+  3:06 PROBE connect 0 own 1 shared 1
+  3:13 PROBE disconnect_callback own 0 shared 1
+  3:13 PROBE next_frame own 0 shared 1
+```
+
+The client's own element is already gone when the callback runs; the shared
+one survives. vcod's server printed the same three lines after the fix.
+
+INFERRED: without the free, a stock `dm` client that leaves while dead keeps
+its `respawntext`. The disconnect kills `waitRespawnButton`'s threads, so
+`removeRespawnText` never runs, and the next client into the slot has the
+owner's entity number and is sent the element. That was vcod's bug until
+2026-10-06 (`crates/server/tests/hud.rs`,
+`a_disconnect_frees_the_clients_own_elements`).
+
 ---
 
 ## 6. `fonts/fontImage_<size>.dat` layout

@@ -180,6 +180,9 @@ console, no key rebinding. You get command-line flags and the binds below.
   script path, but I haven't checked either against retail.
 - Item respawn, an item's launch arc and `CONTENTS_NODROP` aren't modelled.
 - A moving brush model pushes players only, not items, grenades or corpses.
+- A blast walks its victims (players and MG42s) in entity order, not
+  retail's area-tree order, so who shields whom can differ when several
+  stand in a line. Bullets don't damage MG42s.
 - No rcon, no anti-cheat, no PunkBuster, no master server heartbeat.
 
 **Rendering and sound**

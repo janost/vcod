@@ -415,10 +415,14 @@ impl<T: Transport> NetClient<T> {
         self.last_send = self.now;
     }
 
+    /// `CL_Disconnect` (CoDMP.exe 0x40ef90): the command rides three packets,
+    /// so one lost datagram does not leave the slot held until `sv_timeout`.
     pub fn disconnect(&mut self) {
         if matches!(self.state, NetState::LoadingGamestate | NetState::Active) {
             self.send_reliable("disconnect");
-            self.send_message(&[]);
+            for _ in 0..3 {
+                self.send_message(&[]);
+            }
         }
         self.state = NetState::Disconnected;
     }
