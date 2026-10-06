@@ -1975,7 +1975,85 @@ impl ScriptRuntime {
         self.vm
             .with_cx(|cx| crate::game::item::run_items(host, cx, now_ms));
     }
+
+    /// What the bots read off stock `sd.gsc` this frame
+    /// (docs/research/bot-objectives.md): `game["attackers"]` and
+    /// `game["defenders"]`, the live `bombzone_A` / `bombzone_B` triggers'
+    /// bounds in that order, and once `level.bombplanted` the defuse
+    /// trigger's origin and bounds. Entity handles do not survive a
+    /// `map_restart`, so the caller asks again every frame.
+    pub fn sd_objectives(&mut self) -> SdObjectives {
+        use crate::game::builtins::entity::get_ent;
+        use crate::game::trigger::entity_abs_bounds;
+        use vcod_gsc::{ArrayKey, Host};
+        let level = self.vm.level_id();
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let game = cx.game();
+            let mut team = |key: &str| {
+                let k = ArrayKey::Str(cx.intern_exact(key));
+                match cx.get_index(game, k) {
+                    Value::String(a) => cx.resolve(a).to_string(),
+                    _ => String::new(),
+                }
+            };
+            let attackers = team("attackers");
+            let defenders = team("defenders");
+            let mut find = |cx: &mut vcod_gsc::Cx, name: &str| {
+                let args = [
+                    Value::String(cx.intern_exact(name)),
+                    Value::String(cx.intern_exact("targetname")),
+                ];
+                match get_ent(host, cx, None, &args) {
+                    Ok(Value::Entity(id)) => Some(id),
+                    _ => None,
+                }
+            };
+            let zones: Vec<EntId> = ["bombzone_A", "bombzone_B"]
+                .iter()
+                .filter_map(|n| find(cx, n))
+                .collect();
+            let trigger = find(cx, "bombtrigger");
+            let planted = cx.intern_folded("bombplanted");
+            let planted = !matches!(
+                cx.get_field(level, planted),
+                Value::Undefined | Value::Int(0)
+            );
+            let sites = zones
+                .into_iter()
+                .map(|id| entity_abs_bounds(host, cx, id))
+                .collect();
+            let bomb = trigger.filter(|_| planted).map(|id| {
+                let origin = cx.intern_folded("origin");
+                let at = match host.get_field(cx, id, origin) {
+                    Value::Vector(v) => v,
+                    _ => [0.0; 3],
+                };
+                (at, entity_abs_bounds(host, cx, id))
+            });
+            SdObjectives {
+                attackers,
+                defenders,
+                sites,
+                bomb,
+            }
+        })
+    }
 }
+
+/// [`ScriptRuntime::sd_objectives`]: the S&D state a bot plays to.
+pub struct SdObjectives {
+    pub attackers: String,
+    pub defenders: String,
+    /// `(mins, maxs)` of each bombzone still standing.
+    pub sites: Vec<Bounds>,
+    /// The planted bomb's defuse trigger: its origin (what `distance` reads)
+    /// and its bounds (what the aim trace enters).
+    pub bomb: Option<([f32; 3], Bounds)>,
+}
+
+/// Absolute `(mins, maxs)`.
+pub type Bounds = ([f32; 3], [f32; 3]);
 
 #[cfg(test)]
 impl ScriptRuntime {
