@@ -16,7 +16,7 @@ use vcod_common::pmove::weapon::{SpreadStance, hip_spread_min};
 use vcod_common::weapon::{SightDirection, WeaponDef};
 
 /// Hint strings (`serverCursorHintString`) index configstrings from here.
-pub const CS_HINT_STRINGS: usize = 1212;
+pub use vcod_common::net::protocol::CS_HINT_STRINGS;
 /// `northyaw`, the compass's north in world yaw degrees.
 pub const CS_NORTHYAW: usize = 11;
 

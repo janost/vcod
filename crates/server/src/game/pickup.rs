@@ -8,8 +8,8 @@ use crate::weapons::{PlayerWeapons, WeaponTable};
 use vcod_common::pmove::weapon::NUM_AMMO;
 use vcod_common::weapon::WeaponDef;
 
-pub const EV_ITEM_PICKUP: i32 = 146;
-pub const EV_AMMO_PICKUP: i32 = 148;
+pub use vcod_common::net::event_ids::EV_AMMO_PICKUP;
+pub use vcod_common::net::event_ids::EV_ITEM_PICKUP;
 
 /// A `bg_itemlist` row's `giType`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
