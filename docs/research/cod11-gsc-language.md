@@ -955,7 +955,7 @@ retail's dead entity (`probe_stale_handle` in §9).
   on one event is killed rather than woken, regardless of which it
   registered first. The wake order *within* each pass is measured (start
   order, `# probe_notify`); the ordering *between* the two passes is not.
-- **`radiusDamage` walks clients and nothing else.** The falloff, the
+- **`radiusDamage` walks clients and turrets and nothing else.** The falloff, the
   line of sight, the direction and the callback timing are all settled and no
   longer divergences. VERIFIED: the builtin at `.so` 0x5eef4 and
   `G_RadiusDamage` (`.so` 0x4a3f4) have been read out, and both the linear
@@ -983,10 +983,12 @@ retail's dead entity (`probe_stale_handle` in §9).
     entity's own bounds (14.1). INFERRED, since the skip is a branch: it takes
     anything with `takedamage` set and measures a brush model to the nearest
     point of those bounds. vcod walks the client entities in the box, each
-    tested for `takedamage` on its turn, and measures the script `origin`
-    field, so nothing else this server ever damages is reachable by a blast.
-    It walks them in entity order, where retail's order is the box query's
-    and is not entity order (14.5).
+    tested for `takedamage` on its turn and measured at the script `origin`
+    field, then the turrets in the box, which take `G_Damage`'s entity arm
+    (14.6). Doors, `func_static` and `trigger_damage` have `takedamage` on
+    retail and no spawn here; no stock MP map places one. It walks in entity
+    order, where retail's order is the area tree's (14.7), which depends on
+    every link since the map load.
   - **The victim's box and eye are the standing ones.** VERIFIED: retail's
     probe points come off the entity's own bounds and its `client+0xD0` eye
     height (14.3). The host carries no stance, so a crouched or prone player
