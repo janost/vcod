@@ -647,7 +647,15 @@ gets by computing in `f64` and storing to `f32`. VERIFIED, vcod measurement
 the wider-bounds run (`ct` 22135) read a height 0.001 above retail's; with
 it, two rows in 630 (`ct` 21789 and 21985) still read 0.001 above, from
 the first frame of that drop on (a one-ulp lower height on any early frame
-of the replay puts both on retail's figure). Not found.
+of the replay puts both on retail's figure). Not found. VERIFIED, vcod
+measurement 2026-10-06, what it is not: the end point taken as two float
+roundings instead of one (both rows stay), and the trace's end point taken
+as `end` on a clear trace instead of `start + 1.0 * (end - start)` (no row
+moves). VERIFIED: `PM_SlideMove` reloads the averaged velocity from the
+playerstate for the end point (`time_left` at 0x3491c times ps+0x20 at
+0x34922), so no unrounded register value carries into it. The corpse run
+(8.11) shows the same last-digit flip on 12 of its rows, 9 of them on the
+corpse's terrain contact, where the creep is a few thousandths a frame.
 
 VERIFIED: the first frame of a drop from rest takes the tail of
 `PmoveSingle` (0x34398-0x3443d): it moves `400 * t^2` while its end
@@ -708,6 +716,61 @@ systeminfo read `\bg_fallDamageMaxHeight\1000\bg_fallDamageMinHeight\200`,
 and its parms fell with the wider bounds: 300 units of drop gave 24 at the
 stock bounds and 13 under them. INFERRED: a `+set` reaches both cvars
 despite flag 0x200, and `PM_CrashLand` reads them live.
+
+### 8.11 A corpse's frame
+
+VERIFIED, one run on 2026-10-06 against the retail 1.1d server:
+`probe_fall` at the stock bounds with a client that prints a `FALL` line
+for every snapshot that moves a corpse
+(`crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall-corpse.txt`).
+The fatal drop lands at y 1927.943 with `vel=0,-25,-2`. From the next
+snapshot on, the body creeps down the street's grade for the rest of the
+run: 1927.851 at 54150, 1926.316 at the probe's `after` (56900), 1924.048
+at 61300. Every row reads `groundEntityNum` 1022 and a velocity of `0,0,0`
+or `0,-1,0`. The creep per snapshot grows with the time its `commandTime`
+advanced: 0.014 over 32 ms, 0.048 over 68 ms.
+
+VERIFIED, the code behind it, all in `game.mp.i386.so`:
+
+- `PmoveSingle` zeroes `forwardmove`, `rightmove` and `upmove` for
+  `pm_type > 5` (0x3416a-0x34182) and sends `pm_type` 6 down the default
+  arm (the jump table at rodata 0x70ce8 holds 0x34274 for it).
+- In that arm `PM_DeadMove` (0x2f700) runs after the first ground trace
+  and returns at once unless `pml.walking` (pml+0x2c) is set (0x2f706).
+- `PM_CheckLadderMove` (0x336e8, called at 0x342f4) runs next. It returns
+  while `pm_time` runs (0x336f6); otherwise it clears `PMF_LADDER`
+  (0x3377c) and, for `pm_type > 5`, writes `groundEntityNum` 1023,
+  `pml.groundPlane` 0 and `pml.walking` 0 and returns (0x33782-0x337a5).
+- The dispatch (0x34312) therefore takes `PM_AirMove` (0x2f03c) on every
+  dead frame: `PM_Friction` (called at 0x2f045), no wish, no plane clip,
+  and `PM_StepSlideMove` with gravity.
+- The closing ground trace finds the street again and, since
+  `groundEntityNum` read 1023, calls `PM_CrashLand` (0x306fc-0x30721).
+
+INFERRED: a corpse on a grade falls half a frame's gravity, the slide
+clips that against the slope, and the closing ground trace lands it, on
+every frame. The body moves `0.5 * g * t^2` along the grade per cmd, about
+0.007 units at 16 ms on the street's 4-degree slope, whatever its
+velocity. The landing's height is a few thousandths of a unit, under the 4
+units any landing event needs. That was the whole of the old "corpse
+rest" gap: ours stopped the body the frame after the death, 3 units up the
+grade.
+
+vcod: `pmove::dead_move` runs the same order: ground trace, the dead
+friction, the ladder check's drop of the ground (skipped under a running
+`pm_time`), the air move, the closing trace and its crash land.
+`pmove::air_move` opens with `friction`, as `PM_AirMove` does; off the
+ground only its sub-unit stop and the water term apply. VERIFIED, vcod
+measurement 2026-10-06: `fall_ab` replays the run's cmd timeline and
+matches every `FALL` row past the second drop to the printed thousandth,
+the slide included. The two older runs' corpse `after` lines, which the
+gate used to mask, match too.
+
+VERIFIED, the run's cmd log: the client's clock stepped back once, sending
+54757 and then 54750, and the server drops the second (`SV_UserMove`'s
+`<=` test, docs/protocol-1.1.md). `fall_ab` used to sort the logged cmds,
+which ran 54750 first and left the corpse 0.006 units up the grade for the
+rest of the run. It replays them in the order they were sent now.
 
 ## 9. What the bump capture measured
 
@@ -1040,13 +1103,26 @@ The gates:
   - **The slide's timer restore** (8.5), closed 2026-10-06: `slide_move`
     hands back its starting velocity, with the gravity end velocity for z,
     whenever `knockback_ms` runs. `fall_ab`'s walk capture measured it.
-  - **The walk capture's corner.** VERIFIED, 2026-10-06: walking 315 after
-    each stun ends at a corner where retail's player rests at x 1231.15
-    with `groundEntityNum` flipping between 1022 and 1023 and `velocity`
-    reading `0,0,1`, `-1,0,0` or `0,0,3` from snapshot to snapshot; ours
-    rests at 1230.87 on 1022 at `0,0,0`. Not looked into; `fall_ab` masks
-    the walk's rest and allows a unit of origin on the stun rows that
-    follow.
+  - **The walk capture's corner**, explained 2026-10-06. VERIFIED: walking
+    315 after each stun ends against a pillar at x 1240-1260, y 1786-1806:
+    `mp_carentan` patches 70 and 71 up to z 42 and the caulk brush 1656
+    from 42 to 48. Retail's player rests at x 1231.15 with
+    `groundEntityNum` flipping between 1022 and 1023 and `velocity`
+    reading `0,0,1`, `-1,0,0` or `0,0,3`. INFERRED: 1231.15 is where the
+    border plane through patch 71's points `(1246, 1806, -28)` and `(1247,
+    1804, 32)`, grown by the radius, stops a capsule at the sphere's
+    height, and that plane's normal, `(-0.99986, 0, 0.0167)`, has the rise
+    that lifts the player off the ground on each push. VERIFIED, vcod
+    measurement 2026-10-06: ours rested at 1230.875 on 1022 at `0,0,0`
+    because the render soup of brush 1656's faces was clipped as facets
+    as well, and their axial bevel at x 1246, grown by the radius, held
+    the capsule's top 0.28 short; with the capsule's top below z 42 the
+    same trace stopped at 1231.156. Retail collides model 0 through its
+    brushes and lump 24 alone ("Terrain is a swept sphere, a patch is a
+    facet" in `cod11-mantle.md`), so `CollisionWorld::build` now keeps a
+    render soup triangle only inside some patch's control-point box.
+    `fall_ab` still allows a unit of origin on the stun rows and masks the
+    walk's rest; the jitter's air frames are not gated row by row.
   - **Fall damage, the two cvars and a dead player's landing**, closed
     2026-10-05 (8.8, 8.10). VERIFIED: `PmoveSingle`'s jump table (rodata
     0x70ce8) sends `pm_type` 6 to 0x34274 and on to the default arm, whose
@@ -1057,12 +1133,8 @@ The gates:
       that; on retail's own cmd timeline ours lands every parm of both runs.
       `pmove.rs` now takes the frametime, the gravity average and the move's
       end point with retail's roundings.
-    - **A corpse's rest after the fatal fall.** VERIFIED: retail's `after`
-      line reads y 1925.36 on 2026-10-06 and 1926.60 on 2026-10-05.
-      VERIFIED, vcod measurement 2026-10-06: ours comes to rest at 1928.23
-      with `commandTime` frozen 100 ms after the death, where the live
-      drops' rests agree with retail's to the hundredth. Not looked
-      into; `fall_ab` masks that origin.
+    - **A corpse's rest after the fatal fall**, closed 2026-10-06 (8.11).
+      A corpse never rests on a grade: it falls and lands every frame.
     - **`eType` other than 1** ends `ClientEvents` (0x3fec9) with the
       events behind it unprocessed; vcod fires every event a cmd raised.
       No stock path lands a player whose entity is not a player.

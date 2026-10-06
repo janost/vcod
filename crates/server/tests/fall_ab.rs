@@ -43,6 +43,7 @@ const MAP: &str = "mp_carentan";
 const STOCK: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-damage.txt";
 const CVARS: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-damage-cvars.txt";
 const WALK: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-walk.txt";
+const CORPSE: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-corpse.txt";
 /// `--probe-fall-walk`'s yaw in the walk fixture.
 const WALK_YAW: f32 = 315.0;
 
@@ -186,7 +187,8 @@ fn same_but_origin_ulp(a: &str, b: &str) -> bool {
 struct Retail {
     probe: Vec<String>,
     falls: Vec<FallLine>,
-    /// Every cmd the probe client sent, ascending: its `serverTime` and,
+    /// Every cmd the probe client sent, in the order it sent them: its
+    /// `serverTime` and,
     /// under `--probe-fall-walk`, the yaw word it carried with forward held.
     cmds: Vec<(i32, Option<i32>)>,
 }
@@ -222,8 +224,6 @@ fn parse_retail(text: &str) -> Retail {
         assert_eq!(yaws.len(), times.len(), "{l}");
         cmds.extend(times.into_iter().zip(yaws));
     }
-    cmds.sort_unstable();
-    cmds.dedup_by_key(|c| c.0);
     Retail { probe, falls, cmds }
 }
 
@@ -238,14 +238,13 @@ fn drop_time(probe: &[String], n: usize) -> Option<i32> {
 
 /// A probe line with its timestamp masked, and, on an `after` line, where
 /// the player came to rest when that is not a pmove question: the first drop
-/// ran on our own cadence, and a corpse's slide down the grade after the
-/// fatal one is the dead think's (8.10).
+/// ran on our own cadence.
 fn shape(line: &str, first_after: bool) -> String {
     let mut out: Vec<&str> = line.split_whitespace().collect();
     if out.len() > 2 {
         out[2] = "<t>";
     }
-    if out[1] == "after" && (first_after || out.get(5) == Some(&"0")) {
+    if out[1] == "after" && first_after {
         out.truncate(6);
     }
     out.join(" ")
@@ -357,9 +356,13 @@ fn run_ours(
     let retail_ct: BTreeMap<i32, i32> = retail.falls.iter().map(|l| (l.t, l.ct)).collect();
     let mut shift = None;
     let mut last_sent = i32::MIN;
+    // The next of retail's cmds to send, in the order the client sent them:
+    // a client whose clock stepped back sent a stale cmd, which the server
+    // drops, between two live ones.
+    let mut next_cmd = 0;
     let mut falls = BTreeMap::new();
-    // 75 s of server time at most; the probe is done in about 60.
-    for _ in 0..1500 {
+    // 100 s of server time at most; the probe is done in about 60.
+    for _ in 0..2000 {
         let Some(t) = cl.snapshots().newest().map(|s| s.server_time) else {
             panic!("no snapshot after the join");
         };
@@ -397,26 +400,24 @@ fn run_ours(
                     .map_or(next - 1, |ct| ct + shift);
                 // Verbatim: the yaw word already had retail's `delta_angles`
                 // taken off, which the server adds back.
-                let cmds: Vec<UserCmd> = retail
-                    .cmds
-                    .iter()
-                    .map(|&(st, yaw)| (st + shift, yaw))
-                    .filter(|&(st, _)| st > last_sent && st <= upto)
-                    .map(|(server_time, yaw)| {
-                        let mut cmd = UserCmd {
-                            server_time,
-                            weapon,
-                            ..NULL_USERCMD
-                        };
-                        if let Some(yaw) = yaw {
-                            cmd.forward = 127;
-                            cmd.angles[1] = yaw;
-                        }
-                        cmd
-                    })
-                    .collect();
-                if let Some(c) = cmds.last() {
-                    last_sent = c.server_time;
+                let mut cmds = Vec::new();
+                while let Some(&(st, yaw)) = retail.cmds.get(next_cmd) {
+                    let server_time = st + shift;
+                    if server_time > upto && server_time > last_sent {
+                        break;
+                    }
+                    next_cmd += 1;
+                    let mut cmd = UserCmd {
+                        server_time,
+                        weapon,
+                        ..NULL_USERCMD
+                    };
+                    if let Some(yaw) = yaw {
+                        cmd.forward = 127;
+                        cmd.angles[1] = yaw;
+                    }
+                    cmds.push(cmd);
+                    last_sent = last_sent.max(server_time);
                 }
                 cl.send_cmds(&cmds);
             }
@@ -428,10 +429,23 @@ fn run_ours(
         if shift.is_none() {
             let log: Vec<String> = sv.script_log().iter().map(|l| l.to_string()).collect();
             if let Some(ours) = drop_time(&log, 0) {
-                shift = Some(ours - retail_first);
+                let s = ours - retail_first;
+                shift = Some(s);
+                next_cmd = retail
+                    .cmds
+                    .iter()
+                    .position(|&(st, _)| st + s > last_sent)
+                    .unwrap_or(retail.cmds.len());
             }
         }
-        if sv.script_log().iter().any(|l| l.starts_with("PROBE done")) {
+        // Past the probe's end too, as far as retail's client logged.
+        let logged = shift.is_some_and(|sh| {
+            retail
+                .falls
+                .last()
+                .is_none_or(|l| cl.snapshots().newest().map(|s| s.server_time) >= Some(l.t + sh))
+        });
+        if logged && sv.script_log().iter().any(|l| l.starts_with("PROBE done")) {
             break;
         }
     }
@@ -485,17 +499,37 @@ fn tail_field<'a>(rest: &'a str, key: &str) -> &'a str {
 /// The walk capture's rows under a landing stun (`pm_flags` 0x100) from the
 /// second drop on: ours at the same shifted time holds the same `commandTime`,
 /// velocity, ground, `pm_flags`, `pm_time` and health, and an origin within a
-/// unit. Each drop starts from where the last walk came to rest in a corner
-/// whose rest is not this gate's (cod11-player-clip.md 12), which moves the
-/// origin by up to 0.93 and nothing else. Retail must also have pressed into
-/// the wall: rows on its plane with a velocity into it.
+/// unit. Each walk ends jittering against a pillar (cod11-player-clip.md
+/// 12), and `setorigin` keeps the velocity, so a drop starts with whatever
+/// the jitter's phase left: one whose teleport row's velocity differs
+/// between the two sides lands on another cmd and is left out, at most two
+/// of the five from the second on (the last, fatal one has no stun rows).
+/// The rest of the start moves the origin by up to 0.93 and nothing else.
+/// Retail must also have pressed into the wall: rows on its plane with a
+/// velocity into it.
 fn compare_stun_rows(retail: &Retail, ours: &Ours, second: i32) -> Vec<String> {
     const WALL_Y: f32 = 1815.128;
+    let drops: Vec<i32> = (0..).map_while(|n| drop_time(&retail.probe, n)).collect();
+    let skipped: Vec<(i32, i32)> = drops
+        .iter()
+        .enumerate()
+        .filter(|&(_, &d)| {
+            if d < second {
+                return false;
+            }
+            let r = retail.falls.iter().find(|l| l.t >= d);
+            let o = r.and_then(|r| ours.falls.get(&(r.t + ours.shift)));
+            r.zip(o)
+                .is_some_and(|(r, o)| tail_field(&r.rest, "vel=") != tail_field(&o.rest, "vel="))
+        })
+        .map(|(i, &d)| (d, drops.get(i + 1).copied().unwrap_or(i32::MAX)))
+        .collect();
+    assert!(skipped.len() <= 2, "drops off another start: {skipped:?}");
     let mut diffs = Vec::new();
     let (mut lines, mut pressed) = (0, 0);
     for r in retail.falls.iter().filter(|l| l.t > second) {
         let flags = i32::from_str_radix(tail_field(&r.rest, "pm_flags=0x"), 16).unwrap();
-        if flags & 0x100 == 0 {
+        if flags & 0x100 == 0 || skipped.iter().any(|&(a, b)| (a..b).contains(&r.t)) {
             continue;
         }
         lines += 1;
@@ -630,6 +664,14 @@ fn fall_damage_follows_the_bound_cvars_as_retail_does() {
         ],
         None,
     );
+}
+
+/// The stock-bounds run again, its client printing every snapshot that moved
+/// the corpse: the fatal drop's body creeps down the street's grade for the
+/// rest of the run, a fall and a landing on every frame (8.11).
+#[test]
+fn a_corpse_slides_down_the_grade_as_retail_does() {
+    gate(CORPSE, &[], None);
 }
 
 /// Each stun walks the player obliquely into the street's south wall, where
