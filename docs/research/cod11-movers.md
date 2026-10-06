@@ -462,6 +462,14 @@ vcod: `crate::game::wire` sends a `script_brushmodel` as `eType` 8, `solid`
 their radius once its angles are not zero, `SV_LinkEntity`'s `r.bmodel`
 arm). `ride_ab.rs` diffs the slab's entity per snapshot against the capture.
 
+INFERRED, off `G_MoverPush` relinking the pusher at its moved
+`r.currentOrigin` and `r.currentAngles` every frame it moves (section 12,
+`0x553ae`) and `SV_LinkEntity` taking the entity's clusters from the box it
+links: a moving brush model is culled where its trajectory has it at the
+level time, not at its `trBase`, which stays at the start of the segment for
+the whole move. vcod evaluates an `eType` 8 entity's `pos` and `apos` at the
+frame's level time for the cull (`crate::world::entity_visible`).
+
 ### The client
 
 VERIFIED, `cgame_mp_x86.dll`: case 8 of the entity-type switch at

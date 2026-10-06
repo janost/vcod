@@ -4645,6 +4645,7 @@ impl Server {
                     .collect()
             }),
             roster: Rc::new(roster),
+            time: self.sv_time_ms,
         };
 
         // A follower's frame is the followed client's: its playerstate with
