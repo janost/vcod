@@ -279,10 +279,16 @@ struct Args {
     probe_killcam_skip_ms: Option<u64>,
     /// With `--net-probe` and `--probe-team`: stand still and print a `FALL`
     /// line per snapshot whose ground entity, `pm_flags`, `pm_time`, events
-    /// or health moved; `client-probes/probe_fall` does the dropping. Writes
-    /// no fixture.
+    /// or health moved, and a `CMDS` line of the `serverTime`s it sent every
+    /// 60 cmds; `client-probes/probe_fall` does the dropping. Writes no
+    /// fixture.
     #[arg(long)]
     probe_fall: bool,
+    /// With `--probe-fall`: hold forward on every cmd at this world yaw, so
+    /// each landing's stun walks the player into whatever is in the way.
+    /// The stun-slide capture walks 315 into the street's south wall.
+    #[arg(long, value_name = "YAW", requires = "probe_fall")]
+    probe_fall_walk: Option<f32>,
     /// With `--net-probe` and `--probe-team`: stand still and print a `RIDE`
     /// line per snapshot with the origin, velocity, ground entity and view
     /// yaw, the mover push and ride capture's wire half;
@@ -791,6 +797,7 @@ fn main() -> Result<()> {
                 killcam: args.probe_killcam,
                 killcam_skip_ms: args.probe_killcam_skip_ms,
                 fall: args.probe_fall,
+                fall_walk: args.probe_fall_walk,
                 ride: args.probe_ride,
             },
             args.capture_tag.clone(),

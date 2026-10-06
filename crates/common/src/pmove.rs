@@ -707,12 +707,18 @@ pub struct PmInput {
     pub angles: [i32; 2],
 }
 
+/// `pml.msec` back out of a step's frametime ([`cmd::frametime`]), which is
+/// not a whole number of milliseconds times 0.001 for most lengths.
+fn msec(dt: f32) -> f32 {
+    (dt * 1000.0).round()
+}
+
 /// `PM_DropTimers` (0x32a44) runs from `PmoveSingle` for every `pm_type`, so
 /// every arm below calls this once a move to keep a pushed player's penalty
 /// ticking down even while linked, mounted or dead.
 fn drop_knockback(ps: &mut PlayerState, dt: f32) {
     if ps.knockback_ms > 0.0 {
-        let ms = dt * 1000.0;
+        let ms = msec(dt);
         if ms >= ps.knockback_ms {
             ps.knockback_ms = 0.0;
             ps.knockback_flags = 0;
@@ -734,7 +740,7 @@ pub fn pmove(
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
     ps.view_yaw_correction = 0.0;
     ps.view_pitch_correction = 0.0;
-    ps.since_jump_ms += dt * 1000.0;
+    ps.since_jump_ms += msec(dt);
     // retail clears the held-jump latch post-move when upmove drops (@0x34135)
     if !input.jump {
         ps.jump_latched = false;
@@ -802,7 +808,7 @@ pub fn pmove(
     // Then `PM_UpdatePronePitch` (0x342dd), off this frame's ground plane.
     update_prone_pitch(ps, dt);
     if ps.waterjump_ms > 0.0 {
-        ps.waterjump_ms -= dt * 1000.0;
+        ps.waterjump_ms -= msec(dt);
         if ps.waterjump_ms < 0.0 {
             ps.waterjump_ms = 0.0;
         }
@@ -898,7 +904,7 @@ fn linked_move(
     ps.walking = walking_flag(ps, input);
     update_stance(ps, input, world, dt);
     if ps.waterjump_ms > 0.0 {
-        ps.waterjump_ms = (ps.waterjump_ms - dt * 1000.0).max(0.0);
+        ps.waterjump_ms = (ps.waterjump_ms - msec(dt)).max(0.0);
     }
     drop_knockback(ps, dt);
     weapon::pm_weapon(ps, input, weapons, (dt * 1000.0).round() as i32, events);
@@ -1023,7 +1029,7 @@ fn footsteps(
     dt: f32,
     events: &mut Vec<PmEvent>,
 ) {
-    let msec = dt * 1000.0;
+    let msec = msec(dt);
     if ps.on_ground {
         let speed = (ps.velocity.x * ps.velocity.x + ps.velocity.y * ps.velocity.y).sqrt();
         if speed >= 10.0 {
@@ -1700,7 +1706,7 @@ fn update_lean(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, dt: f32
 
 /// The lean's ramp without the wall clamp; true when a lean key drove it.
 fn update_lean_unclamped(ps: &mut PlayerState, input: &PmInput, dt: f32) -> bool {
-    let msec = dt * 1000.0;
+    let msec = msec(dt);
     let mut dir = 0.0f32;
     if input.lean_left {
         dir -= 1.0;
@@ -2409,10 +2415,16 @@ fn slide_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32, gravity: bool, m
     // `pml.walking`); `on_ground` covers a state no ground trace has run on.
     let ground = ps.ground_plane.or(ps.on_ground.then_some(ps.ground_normal));
     // average of start and end velocity, matching the analytic parabola
+    // Q3's `primal_velocity`: what a running timer hands back at the end.
+    let mut primal = ps.velocity;
     let mut end_velocity = ps.velocity;
     if gravity {
-        end_velocity.z -= GRAVITY * dt;
-        ps.velocity.z = (ps.velocity.z + end_velocity.z) * 0.5;
+        // The x87 keeps `v - g * frametime` unrounded into the average and
+        // rounds each store once (0x34811-0x34838).
+        let end_z = f64::from(ps.velocity.z) - f64::from(GRAVITY) * f64::from(dt);
+        end_velocity.z = end_z as f32;
+        primal.z = end_velocity.z;
+        ps.velocity.z = ((end_z + f64::from(ps.velocity.z)) * 0.5) as f32;
         if let Some(n) = ground {
             ps.velocity = clip_velocity(ps.velocity, n);
         }
@@ -2428,7 +2440,8 @@ fn slide_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32, gravity: bool, m
     let mut time_left = dt;
     let mut bumps = 0;
     for _ in 0..NUM_BUMPS {
-        let end = ps.origin + ps.velocity * time_left;
+        // `VectorMA` on the x87 rounds once, into the float store.
+        let end = (ps.origin.as_dvec3() + ps.velocity.as_dvec3() * f64::from(time_left)).as_vec3();
         let t = world.box_trace(ps.origin, end, mins, maxs, mask);
         if t.allsolid {
             // trapped in solid: keep the horizontal control, kill the fall
@@ -2504,6 +2517,11 @@ fn slide_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32, gravity: bool, m
 
     if gravity {
         ps.velocity = end_velocity;
+    }
+    // Under a running `pm_time` the clips do not reach the velocity
+    // (0x34f83-0x34f9c; docs/research/cod11-player-clip.md 8.5).
+    if ps.knockback_ms != 0.0 {
+        ps.velocity = primal;
     }
     Slide {
         blocked: bumps != 0,
@@ -4415,6 +4433,28 @@ mod tests {
             "should have slid along the wall, at {}",
             ps.origin
         );
+    }
+
+    #[test]
+    fn a_running_timer_keeps_the_velocity_the_slide_clipped() {
+        let w = test_world(&[(Vec3::new(50.0, -400.0, 0.0), Vec3::new(100.0, 400.0, 100.0))]);
+        let w = MoveWorld::bare(&w);
+        let slide = |timer: f32| {
+            let mut ps = PlayerState::spawn(Vec3::new(30.0, 0.0, 1.0), 0.0);
+            ps.velocity = Vec3::new(300.0, 300.0, 0.0);
+            ps.knockback_ms = timer;
+            slide_move(&mut ps, &w, 0.05, false, MASK_PLAYERSOLID);
+            ps
+        };
+        let free = slide(0.0);
+        assert!(
+            free.velocity.x <= 0.0,
+            "the wall took the x: {}",
+            free.velocity
+        );
+        let held = slide(500.0);
+        assert_eq!(held.origin, free.origin, "the move itself is the same");
+        assert_eq!(held.velocity, Vec3::new(300.0, 300.0, 0.0));
     }
 
     #[test]

@@ -312,7 +312,8 @@ move; `PlayerState::jump_latched` is 0x8, `since_jump_ms` the delta to
 zeroes on every hit. `step_slide_move` takes the entry gate, the revert and
 the speed cap above. The server sends `jumpTime` and `fJumpPeak`, and the
 predictor reads both back. Not modelled: the 0x800 and 0x2000 gates (both
-unreachable) and the chop's `upmove` 20. `crates/server/tests/bump_ab.rs` holds every row of
+unreachable; 0x2000's other reader, `PM_Friction`'s doubled control, is in
+`cod11-player-clip.md` 8.7) and the chop's `upmove` 20. `crates/server/tests/bump_ab.rs` holds every row of
 the walker's three jumps to 0.000, and `playerstate_motion_ab.rs` the
 takeoff's fields and the `land` anim, which needs the probe's 16 ms cmds:
 at one cmd a 50 ms frame the landing frame starts at -210, short of the
