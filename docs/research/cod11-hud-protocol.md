@@ -48,7 +48,7 @@ grepping a capture for `scores` or `cs` finds nothing.
 |---|---|---|
 | `a` | `0x30037f20` | takes one int arg |
 | `b` | `0x3002b920` | scoreboard (section 3) |
-| `c` | | "announcement message" (big centre print) |
+| `c` | | "announcement message" (big centre print): `c "<message>" 2` from `announcement` / `clientAnnouncement` (docs/research/cod11-gametypes-re-bel.md 3) |
 | `d` | `0x3002c6b0` | configstring update: `d <index> <string>` |
 | `e`, `f` | | "game message" (print queue) |
 | `g` | | "bold game message" |

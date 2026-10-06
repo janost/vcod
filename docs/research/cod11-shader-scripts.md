@@ -273,9 +273,11 @@ Each omission with its census justification:
   (`setCullFog` / `setExpFog`, e.g. `mp_ship.gsc`) and reaches the client as
   configstring 12; vcod parses and applies it since 2026-08-26 — wire format
   in docs/protocol-1.1.md, mode rules from RTCW-MP tr_main.c R_SetFog.
-  Open question: whether an exp-fog map's density rides the wire raw or with
-  RTCW's +0.1 client-side offset; settle on the first exp-fog server capture
-  (neuville/bocage would show a black wall if we over-thicken).
+  The exp-fog density rides the wire raw: retail's mp_chateau `re` gamestate
+  carries `0 1 1e-05 0 0 0 0` for `setExpFog(0.00001, 0, 0, 0, 0)`
+  (`crates/server/tests/fixtures/configstrings/mp_chateau-re.txt`, VERIFIED).
+  Whether the client adds RTCW's +0.1 before `R_SetFog` is a client question
+  this capture does not answer.
 - Missing images bind retail's `*default`: 16x16 of RGBA (32, 32, 32, 32)
   inside a one-pixel opaque black border. `R_CreateDefaultImage`, CoDMP.exe
   1.1 @ 0x4f0380 (`mov eax,0x20202020` + `rep stos` over 0x400 bytes, then the
