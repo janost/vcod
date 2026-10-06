@@ -75,6 +75,16 @@ pub struct Triggers {
     rows: BTreeMap<EntId, Trigger>,
 }
 
+/// `r.contents` a `trigger_multiple` or `trigger_once` links with (0x64d79).
+pub const CONTENTS_TRIGGER: i32 = 0x4000_0000;
+/// `trap_EntitiesInBox`' mask in `G_TouchTriggers` (0x3f918), and the
+/// contents `trigger_hurt` and `trigger_damage` take (0x64f6c, 0x653cd).
+pub const CONTENTS_TOUCH_MASK: i32 = 0x405c_0008;
+/// `SP_trigger_lookat` (0x65e03).
+pub const CONTENTS_LOOKAT: i32 = 0x2000_0000;
+/// `trigger_use` (0x5745a).
+pub const CONTENTS_USE: i32 = 0x20_0000;
+
 /// The `dmg` default, the two spawnflags and the two touch intervals, all
 /// from docs/research/cod11-gsc-object-model.md 8.1.
 pub const HURT_DEFAULT_DAMAGE: i32 = 5;
@@ -329,13 +339,19 @@ fn box_contacts_hulls(centre: Vec3, half: Vec3, origin: Vec3, hulls: &[BrushHull
     })
 }
 
-/// Every trigger a client standing at `origin` touches, ascending entity
-/// number: the `trap_EntitiesInBox` broad phase around the origin, then the
-/// exact `trap_EntityContact` test of the client's own clip box against the
-/// trigger's *brushes* (docs/research/cod11-gsc-object-model.md section 22).
-/// Neither box contains the other -- the candidate reaches 52 below the feet
-/// and the clip box 72 above them -- so both have to hold, and the box
-/// overlap is only the cheap reject in front of the plane loop.
+/// Everything a client standing at `origin` touches, in the order
+/// `G_TouchTriggers` (0x3f88c) meets it: the `trap_EntitiesInBox` walk of the
+/// area tree around the origin with mask 0x405c0008 (combat doc 14.7), then
+/// per entity its own test. An item (`eType` 3) is touched by
+/// `BG_PlayerTouchesItem`'s proximity box (`pickup::touches`); anything else
+/// by `trap_EntityContact`, the client's own clip box against the trigger's
+/// *brushes* (docs/research/cod11-gsc-object-model.md section 22). Neither
+/// box contains the other -- the candidate reaches 52 below the feet and the
+/// clip box 72 above them -- so both have to hold.
+///
+/// Only an entity with a touch function is touched (0x3f9cd): a
+/// `trigger_damage` sets none, and a `trigger_lookat` or `trigger_use` has
+/// contents outside the mask (22.1).
 ///
 /// `origin` is `ps.origin`, which both of `G_TouchTriggers`' boxes are built
 /// on, not the client's `origin` field, which holds the snapped
@@ -355,28 +371,30 @@ pub fn touched(host: &mut GameHost, cx: &mut Cx, origin: [f32; 3]) -> Vec<EntId>
     let hi = Vec3::from_array(exact.1);
     let centre = (lo + hi) * 0.5;
     let half = (hi - lo) * 0.5;
-    let ids: Vec<EntId> = host.triggers.iter().map(|(id, _)| id).collect();
+    let ids: Vec<EntId> = host
+        .area
+        .entities_in_box(candidate.0, candidate.1, CONTENTS_TOUCH_MASK)
+        .into_iter()
+        .filter_map(|n| host.ents.handle(n))
+        .collect();
     ids.into_iter()
         .filter(|id| {
+            if host.ents.get(*id).is_some_and(|e| e.item.is_some()) {
+                let at = entity_origin(host, cx, *id, origin_atom);
+                return crate::game::pickup::touches(origin, at);
+            }
             let Some(t) = host.triggers.get(*id).copied() else {
                 return false;
             };
-            // A `trigger_lookat`'s contents bit is not in the mask retail's
-            // broad phase queries with, so no touch ever returns one
-            // (docs/research/cod11-gsc-object-model.md 22.1).
-            if t.kind == TriggerKind::LookAt {
-                return false;
-            }
-            // Nor a `trigger_use`'s: `SP_trigger_use` gives it contents
-            // 0x200000, outside the same mask, and the use key reaches it
-            // through `G_GetActivateEnt` instead (`item::activate_ent`;
-            // docs/research/cod11-gametypes-re-bel.md 4).
-            if t.kind == TriggerKind::Use {
+            if matches!(
+                t.kind,
+                TriggerKind::LookAt | TriggerKind::Use | TriggerKind::Damage
+            ) {
                 return false;
             }
             let t_origin = entity_origin(host, cx, *id, origin_atom);
             let b = abs_bounds(t_origin, &t);
-            if !(boxes_overlap(candidate, b) && boxes_overlap(exact, b)) {
+            if !boxes_overlap(exact, b) {
                 return false;
             }
             match t
@@ -391,6 +409,46 @@ pub fn touched(host: &mut GameHost, cx: &mut Cx, origin: [f32; 3]) -> Vec<EntId>
             }
         })
         .collect()
+}
+
+/// A trigger's links (combat doc 14.7, `game.mp.i386.so`), off its row: the
+/// brush-model setter's with contents -1 (`cod_lnxded` 0x8089544), then the
+/// spawn function's contents, with a link of their own except on
+/// `trigger_hurt` (0x64f6c) and `trigger_use` (0x5745a), which write theirs
+/// after the last link. A `trigger_multiple` or `trigger_once` with
+/// `spawnflags & 8` takes no 0x40000000 (0x64d66), so with no other flag it
+/// leaves the tree.
+pub fn link(host: &mut GameHost, cx: &mut Cx, id: EntId, spawnflags: i32) {
+    use crate::game::entity::{LinkKind, LinkShape};
+    let Some(t) = host.triggers.get(id).copied() else {
+        return;
+    };
+    let shape = |contents| LinkShape {
+        kind: LinkKind::Brush,
+        contents,
+        mins: t.shape.mins,
+        maxs: t.shape.maxs,
+    };
+    host.link_shaped(cx, id, shape(-1));
+    // `spawnflags` 1, 2 and 4 OR 0x40000, 0x80000 and 0x100000 into the
+    // contents (0x64d83..0x64dac, 0x65cce..0x65cf7), whichever base it has.
+    let flagged = [(1, 0x4_0000), (2, 0x8_0000), (4, 0x10_0000)]
+        .iter()
+        .filter(|(f, _)| spawnflags & f != 0)
+        .fold(0, |c, (_, bit)| c | bit);
+    let (contents, links) = match t.kind {
+        TriggerKind::Multiple | TriggerKind::Once if spawnflags & 8 != 0 => (flagged, true),
+        TriggerKind::Multiple | TriggerKind::Once => (CONTENTS_TRIGGER | flagged, true),
+        TriggerKind::Damage => (CONTENTS_TOUCH_MASK, true),
+        TriggerKind::LookAt => (CONTENTS_LOOKAT, true),
+        TriggerKind::Hurt => (CONTENTS_TOUCH_MASK, false),
+        TriggerKind::Use => (CONTENTS_USE, false),
+    };
+    if links {
+        host.link_shaped(cx, id, shape(contents));
+    } else {
+        host.set_link_contents(id, contents);
+    }
 }
 
 /// How far the aim ray reaches: muzzle plus forward times 8192
@@ -628,6 +686,7 @@ mod tests {
                     0,
                     0,
                 );
+                host.link_trigger(cx, id);
                 id
             };
             let at_feet = place(&mut host, cx, 4.0);
@@ -651,6 +710,7 @@ mod tests {
                     .unwrap();
                 host.triggers
                     .register(id, kind, TriggerShape::boxed([-8.0; 3], [8.0; 3]), 0, 0);
+                host.link_trigger(cx, id);
                 id
             };
             let multiple = place(&mut host, cx, TriggerKind::Multiple);
@@ -780,6 +840,7 @@ mod tests {
             0,
             0,
         );
+        host.link_trigger(cx, zone);
         zone
     }
 
@@ -875,6 +936,7 @@ mod tests {
                 0,
                 0,
             );
+            host.link_trigger(cx, zone);
             let at = |host: &mut GameHost, cx: &mut Cx, p: [f32; 3]| touched(host, cx, p);
             assert_eq!(at(&mut host, cx, inside), vec![zone], "at {inside:?}");
             assert!(
@@ -956,6 +1018,7 @@ mod tests {
                     0,
                     0,
                 );
+                host.link_trigger(cx, id);
                 id
             };
             let near = place_at(&mut host, cx, TriggerKind::Multiple, [100.0, 0.0, 0.0]);
@@ -994,6 +1057,7 @@ mod tests {
                 0,
                 0,
             );
+            host.link_trigger(cx, id);
             host.world = world(&[]);
             assert_eq!(
                 aim_trace(&mut host, cx, 0, [0.0, 0.0, 60.0], [0.0, 0.0], false, 0),
@@ -1039,6 +1103,53 @@ mod tests {
         });
     }
 
+    /// What each spawn leaves in the area tree (combat doc 14.7): a
+    /// `trigger_hurt` keeps the place its contents -1 link gave it and is
+    /// walked under its own contents, a `trigger_use` is out of the touch
+    /// mask and in the use key's, a taken item leaves, an origin write moves an entity, and a
+    /// free unlinks it.
+    #[test]
+    fn spawns_and_origin_writes_link_as_retail_does() {
+        let (mut vm, mut host) = crate::game::testing::fixture();
+        vm.with_cx(|cx| {
+            let origin = cx.intern_folded("origin");
+            let place = |host: &mut GameHost, cx: &mut Cx, kind| {
+                let id = host.ents.spawn(cx).unwrap();
+                host.set_field(cx, id, origin, Value::Vector([0.0; 3]))
+                    .unwrap();
+                host.triggers
+                    .register(id, kind, TriggerShape::boxed([-8.0; 3], [8.0; 3]), 0, 0);
+                host.link_trigger(cx, id);
+                id
+            };
+            let hurt = place(&mut host, cx, TriggerKind::Hurt);
+            let use_ = place(&mut host, cx, TriggerKind::Use);
+            let item = host.ents.spawn(cx).unwrap();
+            host.set_field(cx, item, origin, Value::Vector([0.0; 3]))
+                .unwrap();
+            crate::game::item::attach(&mut host, item, 1);
+            crate::game::item::link(&mut host, cx, item, crate::game::item::CONTENTS_ITEM);
+            let walk = |host: &GameHost, at: f32, mask| -> Vec<u32> {
+                host.area
+                    .entities_in_box([at - 50.0; 3], [at + 50.0; 3], mask)
+            };
+            assert_eq!(walk(&host, 0.0, CONTENTS_TOUCH_MASK), [item.0, hurt.0]);
+            // An item's 0x407c0108 carries the use bit too: `G_GetActivateEnt`
+            // finds both.
+            assert_eq!(walk(&host, 0.0, CONTENTS_USE), [item.0, use_.0]);
+
+            host.set_field(cx, item, origin, Value::Vector([500.0; 3]))
+                .unwrap();
+            assert_eq!(walk(&host, 0.0, CONTENTS_TOUCH_MASK), [hurt.0]);
+            assert_eq!(walk(&host, 500.0, CONTENTS_TOUCH_MASK), [item.0]);
+            crate::game::item::link(&mut host, cx, item, 0);
+            assert!(walk(&host, 500.0, -1).is_empty(), "a taken item leaves");
+
+            host.free_entity(hurt);
+            assert!(walk(&host, 0.0, CONTENTS_TOUCH_MASK).is_empty());
+        });
+    }
+
     /// `delete()` takes the row with the entity. `sd.gsc` deletes both
     /// bombzones the instant a plant completes.
     #[test]
@@ -1053,6 +1164,7 @@ mod tests {
                 0,
                 0,
             );
+            host.link_trigger(cx, id);
             host.free_entity(id);
             assert!(host.triggers.get(id).is_none());
             assert!(host.ents.get(id).is_none());

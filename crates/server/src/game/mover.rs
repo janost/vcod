@@ -323,6 +323,11 @@ pub fn run(host: &mut GameHost, cx: &mut vcod_gsc::Cx) -> Vec<Done> {
     ids.sort_by_key(|i| i.0);
     for id in ids {
         let m = movers.rows.get_mut(&id).expect("just listed");
+        // `G_RunMover` reaches `G_MoverTeam` only off a moving trajectory
+        // (0x57666..0x57670).
+        let moving = [&m.pos, &m.apos]
+            .iter()
+            .any(|p| p.started && p.current.tr_type != TR_STATIONARY);
         for plan in [&mut m.pos, &mut m.apos] {
             if let Some(e) = plan.advance(now_ms) {
                 done.push(Done { ent: id, event: e });
@@ -344,9 +349,30 @@ pub fn run(host: &mut GameHost, cx: &mut vcod_gsc::Cx) -> Vec<Done> {
                 continue;
             }
             let atom = cx.intern_folded(name);
-            let _ = host.set_field(cx, id, atom, vcod_gsc::Value::Vector(v));
+            let _ = host.write_field(cx, id, atom, vcod_gsc::Value::Vector(v));
         }
         clip_step(host, cx, id, m, level_ms);
+        // `G_MoverPush`'s relink of the pusher where it now is (0x553ae).
+        if moving {
+            let field = |host: &mut GameHost, cx: &mut vcod_gsc::Cx, name: &str| {
+                let atom = cx.intern_folded(name);
+                match host.get_field(cx, id, atom) {
+                    vcod_gsc::Value::Vector(v) => Vec3::from(v),
+                    _ => Vec3::ZERO,
+                }
+            };
+            let origin = if m.pos.started {
+                m.pos.at(level_ms)
+            } else {
+                field(host, cx, "origin")
+            };
+            let angles = if m.apos.started {
+                m.apos.at(level_ms)
+            } else {
+                field(host, cx, "angles")
+            };
+            host.link_entity_at(cx, id, Some((origin.into(), angles.into())));
+        }
     }
 
     host.movers = movers;

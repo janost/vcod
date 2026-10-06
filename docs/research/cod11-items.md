@@ -88,6 +88,11 @@ relocations to it are in `G_SpawnItem` (0x4e788) and `LaunchItem` (0x4dcd0).
 VERIFIED: `Touch_Item_Auto` writes 1 to `ent+0x172` and calls
 `Touch_Item(ent, other, bTouched)` (0x4eeb3..0x4eec0).
 
+Two items in reach on one cmd are touched in the area tree's order, among
+the triggers of the same walk, not in entity order: `probe_touchorder`'s
+ammo run takes the second of three rifles spawned on one spot
+(`docs/research/cod11-combat.md` 14.7, "The touch pass").
+
 ## 2. Use and the cursor hint
 
 VERIFIED, `Cmd_Activate_f` (0x48468): it calls `G_CheckForCursorHints(player)`
