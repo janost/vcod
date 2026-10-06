@@ -2039,6 +2039,14 @@ impl ApplicationHandler for App {
                                             / (b.server_time - a.server_time).max(1) as f32)
                                             .clamp(0.0, 1.0);
                                         let t0 = Instant::now();
+                                        // Last frame's drawn bodies, for the gunner's
+                                        // trace down.
+                                        let bodies = play::predict::solid_bodies(
+                                            p,
+                                            &b.entities,
+                                            client_num as u32,
+                                            drawn_pos,
+                                        );
                                         let built = entities::build_instances(
                                             scene,
                                             (a, b, f),
@@ -2047,6 +2055,7 @@ impl ApplicationHandler for App {
                                             net.configstrings(),
                                             &self.fs,
                                             bsp,
+                                            Some(MoveWorld::new(world, &bodies, u32::MAX)),
                                             r,
                                             p,
                                         );
