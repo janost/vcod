@@ -271,7 +271,7 @@ output. `crates/common/tests/evidence_labels.rs` catches the mechanical cases.
 
 - Movement constants come from retail rodata (tables in
   `cod11-mantle.md` and `bsp-ibsp59-format.md`). Retail 1.1 MP has no
-  mantling.
+  mantling, no swimming and no water jump.
 - 66 ms is a pmove chop, not a dt clamp; arrears past 1000 ms are dropped.
 - One cmd step for every caller: `crates/common/src/pmove/cmd.rs` (`chop`,
   `player_step`). The server and the client predictor wrap it.
