@@ -118,6 +118,61 @@ pub fn load_font(fs: &Pk3Fs, size: u32) -> Result<Font, String> {
     parse_font_dat(&bytes, size)
 }
 
+/// The six fonts `ui_mp/main.menu`'s `assetGlobalDef` registers, which the
+/// UI module hands the renderer by handle and scale
+/// (docs/research/cod11-hud-protocol.md, section 8, "Font slots").
+pub struct UiFonts {
+    pub small: Font,
+    pub normal: Font,
+    pub console: Font,
+    pub big: Font,
+    pub bold: Font,
+    pub extra_big: Font,
+}
+
+/// `ui_smallFont`, `ui_bigFont` and `ui_extraBigFont` at their defaults.
+const UI_SMALL_FONT: f32 = 0.25;
+const UI_BIG_FONT: f32 = 0.4;
+const UI_EXTRA_BIG_FONT: f32 = 0.55;
+
+/// A hudelem `font` slot: 0 `default`, 1 `bigfixed`, 2 `smallfixed`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slot {
+    Default,
+    BigFixed,
+    SmallFixed,
+}
+
+impl UiFonts {
+    pub fn load(fs: &Pk3Fs) -> Result<UiFonts, String> {
+        Ok(UiFonts {
+            small: load_font(fs, 12)?,
+            normal: load_font(fs, 16)?,
+            console: load_font(fs, 18)?,
+            big: load_font(fs, 24)?,
+            bold: load_font(fs, 30)?,
+            extra_big: load_font(fs, 32)?,
+        })
+    }
+
+    /// The font the UI module picks for `slot` drawn at retail text `scale`
+    /// on a screen `screen_h` pixels tall: the scale is passed as whole
+    /// hundredths and read against the screen's height over 480.
+    pub fn pick(&self, slot: Slot, scale: f32, screen_h: f32) -> &Font {
+        let s = (scale * 100.0) as i32 as f32 * 0.01 * (screen_h / 480.0);
+        match slot {
+            Slot::SmallFixed => &self.console,
+            Slot::BigFixed if s <= UI_SMALL_FONT => &self.small,
+            Slot::BigFixed if s < UI_BIG_FONT => &self.normal,
+            Slot::BigFixed => &self.bold,
+            Slot::Default if s <= UI_SMALL_FONT => &self.small,
+            Slot::Default if s >= UI_EXTRA_BIG_FONT => &self.extra_big,
+            Slot::Default if s >= UI_BIG_FONT => &self.big,
+            Slot::Default => &self.normal,
+        }
+    }
+}
+
 /// The engine's `colorTable` for `^0`..`^7` (doc section 7, CoDMP.exe
 /// `0x004d7f13`). Only these eight codes exist. `^7` restores the caller's
 /// colour rather than reading entry 7; [`split_color_codes`] does the same.
@@ -172,7 +227,6 @@ pub fn split_color_codes(text: &str, default: [f32; 4]) -> Vec<(String, [f32; 4]
 }
 
 /// `text` with its `^N` codes removed.
-#[allow(dead_code)] // only caller outside tests is `measure`, below
 fn strip_color_codes(text: &str) -> String {
     split_color_codes(text, [0.0; 4])
         .into_iter()
@@ -253,6 +307,51 @@ pub fn layout(
             push_quad(out, gx, gy, w, h, g, seg_color, &font.page);
 
             cursor += g.advance * s;
+        }
+    }
+    cursor - x
+}
+
+/// The printable characters in `text`, which a fixed-width slot lays out one
+/// per cell.
+pub fn char_count(text: &str) -> usize {
+    strip_color_codes(text).chars().count()
+}
+
+/// [`layout`] on a fixed pitch: every glyph centred in a `cell`-wide cell,
+/// window px, however wide its own advance. Returns the advance.
+#[allow(clippy::too_many_arguments)]
+pub fn layout_fixed(
+    font: &Font,
+    text: &str,
+    x: f32,
+    y: f32,
+    scale: f32,
+    cell: f32,
+    color: [f32; 4],
+    out: &mut Vec<HudQuad>,
+) -> f32 {
+    let s = font.glyph_scale * font.unit_scale() * scale;
+    let mut cursor = x;
+    for (seg, seg_color) in split_color_codes(text, color) {
+        for c in seg.chars() {
+            let g = &font.glyphs[glyph_index(c)];
+            let w = g.image_width as f32 * s;
+            let h = g.image_height as f32 * s;
+            let gx = cursor + (cell - g.advance * s) * 0.5 + g.bearing * s;
+            let gy = y + (font.max_height - g.height) as f32 * s;
+            push_quad(
+                out,
+                gx + 1.0,
+                gy + 1.0,
+                w,
+                h,
+                g,
+                [0.0, 0.0, 0.0, 0.8],
+                &font.page,
+            );
+            push_quad(out, gx, gy, w, h, g, seg_color, &font.page);
+            cursor += cell;
         }
     }
     cursor - x
