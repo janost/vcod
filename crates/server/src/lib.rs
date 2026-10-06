@@ -10,6 +10,7 @@ pub mod cvars;
 pub mod follow;
 pub mod game;
 pub mod items;
+pub mod nav;
 pub mod push;
 pub mod server;
 pub mod spectate;

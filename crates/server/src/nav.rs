@@ -5,15 +5,25 @@
 use glam::Vec3;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
-use vcod_common::collision::CollisionWorld;
+use std::sync::Arc;
+use vcod_common::collision::{CollisionWorld, Prim};
 use vcod_common::movetrace::MoveWorld;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
-use vcod_common::pmove::cmd::{ANGLE2SHORT, EventRing, chop, player_step};
 use vcod_common::pmove::PlayerState;
+use vcod_common::pmove::cmd::{ANGLE2SHORT, EventRing, chop, player_step};
 
-/// Grid pitch in world units: two capsule widths, the narrowest a doorway
-/// the lattice reliably threads (bot-navigation.md, "Spacing").
-pub const SPACING: f32 = 32.0;
+/// Grid pitch bounds in world units. The finest is about a capsule width
+/// plus the slack a doorway leaves; a large map coarsens toward the other
+/// to keep its node count near [`TARGET_CELLS`] (bot-navigation.md,
+/// "Spacing").
+const SPACING_MIN: f32 = 32.0;
+const SPACING_MAX: f32 = 64.0;
+/// The cells the spawn points' bounding box is cut into.
+const TARGET_CELLS: f32 = 20_000.0;
+/// How far past the spawn points' bounding box the flood goes. Stock maps
+/// put spawns at the edges of play; past this lies the scenery behind the
+/// boundary (mp_hurtgen's forest is ~2000 units of it).
+const MARGIN: f32 = 512.0;
 /// Two nodes in one grid column are one node when their floors are closer
 /// than this; a full storey is ~128.
 const Z_MERGE: f32 = 40.0;
@@ -47,14 +57,20 @@ pub struct NavGraph {
     /// Directed: `edges[a]` holds every `b` a run from `a` reaches. A drop
     /// off a ledge has no edge back.
     pub edges: Vec<Vec<u32>>,
+    /// The grid pitch the graph was built on.
+    pub spacing: f32,
     /// Nodes by grid column, for lookups only; nothing iterates it.
     columns: HashMap<(i32, i32), Vec<u32>>,
 }
 
-fn column_of(p: Vec3) -> (i32, i32) {
-    (
-        (p.x / SPACING).round() as i32,
-        (p.y / SPACING).round() as i32,
+/// The spawn points' horizontal bounding box.
+fn seed_bounds(seeds: &[[f32; 3]]) -> (glam::Vec2, glam::Vec2) {
+    seeds.iter().fold(
+        (glam::Vec2::splat(f32::MAX), glam::Vec2::splat(f32::MIN)),
+        |(lo, hi), s| {
+            let p = glam::Vec2::new(s[0], s[1]);
+            (lo.min(p), hi.max(p))
+        },
     )
 }
 
@@ -63,9 +79,23 @@ impl NavGraph {
     /// point of the map) and keeps an edge only where a standing run, one
     /// usercmd per 50 ms through the shared cmd step, arrives.
     pub fn build(world: &CollisionWorld, seeds: &[[f32; 3]]) -> NavGraph {
+        // The pitch cuts the spawns' box into about TARGET_CELLS, rounded up
+        // to a multiple of 16; the flood stays within MARGIN of the box.
+        let (lo, hi) = seed_bounds(seeds);
+        let area = (hi - lo).max(glam::Vec2::ZERO).element_product();
+        let spacing = ((area / TARGET_CELLS).sqrt() / 16.0).ceil() * 16.0;
+        let (lo, hi) = (
+            lo - glam::Vec2::splat(MARGIN),
+            hi + glam::Vec2::splat(MARGIN),
+        );
+        let inside = |p: Vec3| {
+            let p = p.truncate();
+            p.cmpge(lo).all() && p.cmple(hi).all()
+        };
         let mut g = NavGraph {
             nodes: Vec::new(),
             edges: Vec::new(),
+            spacing: spacing.clamp(SPACING_MIN, SPACING_MAX),
             columns: HashMap::new(),
         };
         let mut queue = Vec::new();
@@ -75,8 +105,8 @@ impl NavGraph {
             };
             // On the lattice when the seed can walk to its own column's
             // centre, so every later walk targets a node's real spot.
-            let c = column_of(p);
-            let p = walk(world, p, c).unwrap_or(p);
+            let c = g.column(p);
+            let p = walk(world, p, g.center(c)).unwrap_or(p);
             if g.find(c, p.z).is_none() {
                 queue.push(g.add(c, p));
             }
@@ -103,12 +133,12 @@ impl NavGraph {
                 .chain(diagonal.iter().map(|&n| (n, &DIAGONALS)))
                 .collect();
             let ends = par_map(&jobs, |&(n, dirs)| {
-                let (cx, cy) = column_of(g.nodes[n as usize]);
+                let (cx, cy) = g.column(g.nodes[n as usize]);
                 dirs.map(|(dx, dy)| g.step(world, n, (cx + dx, cy + dy)))
             });
             let mut next = Vec::new();
             for (&(n, dirs), ends) in jobs.iter().zip(ends) {
-                let (cx, cy) = column_of(g.nodes[n as usize]);
+                let (cx, cy) = g.column(g.nodes[n as usize]);
                 for (&(dx, dy), to) in dirs.iter().zip(ends) {
                     let Some(to) = to else {
                         continue;
@@ -116,7 +146,7 @@ impl NavGraph {
                     let c = (cx + dx, cy + dy);
                     let m = match g.find(c, to.z) {
                         Some(m) => m,
-                        None if g.nodes.len() < MAX_NODES => {
+                        None if g.nodes.len() < MAX_NODES && inside(to) => {
                             let m = g.add(c, to);
                             next.push(m);
                             m
@@ -140,7 +170,7 @@ impl NavGraph {
     /// a level diagonal across a square whose four sides run both ways.
     fn step(&self, world: &CollisionWorld, n: u32, c: (i32, i32)) -> Option<Vec3> {
         let from = self.nodes[n as usize];
-        let (cx, cy) = column_of(from);
+        let (cx, cy) = self.column(from);
         let level = |m: u32| (self.nodes[m as usize].z - from.z).abs() < LEVEL;
         let has = |a: u32, b: u32| self.edges[a as usize].contains(&b);
         if let Some(d) = self.find(c, from.z).filter(|&d| level(d)) {
@@ -162,7 +192,18 @@ impl NavGraph {
                 return Some(self.nodes[d as usize]);
             }
         }
-        walk(world, from, c)
+        walk(world, from, self.center(c))
+    }
+
+    fn column(&self, p: Vec3) -> (i32, i32) {
+        (
+            (p.x / self.spacing).round() as i32,
+            (p.y / self.spacing).round() as i32,
+        )
+    }
+
+    fn center(&self, c: (i32, i32)) -> glam::Vec2 {
+        glam::Vec2::new(c.0 as f32, c.1 as f32) * self.spacing
     }
 
     fn link(&mut self, a: u32, b: u32) {
@@ -204,7 +245,7 @@ impl NavGraph {
     /// up loses to one beside the feet. `None` off the graph.
     pub fn nearest(&self, p: [f32; 3]) -> Option<u32> {
         let p = Vec3::from(p);
-        let (cx, cy) = column_of(p);
+        let (cx, cy) = self.column(p);
         let mut best: Option<(f32, u32)> = None;
         for dy in -2..=2 {
             for dx in -2..=2 {
@@ -333,17 +374,231 @@ impl NavGraph {
         comp
     }
 
-    /// Test-facing: a graph from explicit nodes and directed edges.
+    /// Test-facing: a graph from explicit nodes and directed edges, on the
+    /// finest pitch.
     pub fn from_parts(nodes: Vec<Vec3>, edges: Vec<Vec<u32>>) -> NavGraph {
-        let mut columns: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
-        for (i, p) in nodes.iter().enumerate() {
-            columns.entry(column_of(*p)).or_default().push(i as u32);
-        }
-        NavGraph {
-            nodes,
+        let mut g = NavGraph {
+            nodes: Vec::new(),
             edges,
-            columns,
+            spacing: SPACING_MIN,
+            columns: HashMap::new(),
+        };
+        for p in nodes {
+            let c = g.column(p);
+            g.columns.entry(c).or_default().push(g.nodes.len() as u32);
+            g.nodes.push(p);
         }
+        g
+    }
+}
+
+/// The graphs built so far this process, by map. A map cycle comes back
+/// to a map without a second build, and the test gates that start a server
+/// per test share one.
+type CacheKey = (String, usize, usize, usize, Vec<[u32; 3]>);
+static CACHE: std::sync::Mutex<Vec<(CacheKey, Arc<NavGraph>)>> = std::sync::Mutex::new(Vec::new());
+
+/// `map`'s graph, built on first use. The key carries the collision's
+/// counts and the spawn points too, so a test world built without the
+/// static props is a different graph from the real one.
+pub fn graph_for(map: &str, world: &crate::world::World) -> Arc<NavGraph> {
+    let c = &world.collision;
+    let key: CacheKey = (
+        map.to_ascii_lowercase(),
+        c.brushes.len(),
+        c.tris.len(),
+        c.model_tris.len(),
+        world
+            .spawn_points
+            .iter()
+            .map(|p| p.map(f32::to_bits))
+            .collect(),
+    );
+    // Held across the build, so two servers asking at once build it once.
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, g)) = cache.iter().find(|(k, _)| *k == key) {
+        return g.clone();
+    }
+    let t = std::time::Instant::now();
+    let g = Arc::new(NavGraph::build(c, &world.spawn_points));
+    log::info!(
+        "nav graph for {map}: {} nodes, {} edges, spacing {}, built in {} ms",
+        g.len(),
+        g.edge_count(),
+        g.spacing,
+        t.elapsed().as_millis()
+    );
+    cache.push((key, g.clone()));
+    g
+}
+
+/// Horizontal distance at which a waypoint counts as reached.
+const REACH: f32 = 24.0;
+/// A waypoint further than this many grid steps away means the bot has left
+/// its path (knocked back, fell off a ledge): plan again.
+const OFF_PATH_STEPS: f32 = 4.0;
+/// Ticks without closing on the waypoint before the follower gives up on
+/// it, and the ticks it then leaves the bot to its own unstick.
+const STUCK_TICKS: u32 = 40;
+const REST_TICKS: u32 = 20;
+/// A roam goal is picked at least this far away when it can be.
+const ROAM_MIN: f32 = 1000.0;
+/// A seen enemy has to move this far off the planned destination before the
+/// path is planned again.
+const RETARGET: f32 = 128.0;
+
+/// One bot's walk along the graph: the destination, the planned path and
+/// the bookkeeping that notices when it has gone wrong. The server keeps one
+/// per bot and asks it for the waypoint every tick.
+#[derive(Default)]
+pub struct Follower {
+    dest: Option<u32>,
+    path: Vec<u32>,
+    /// Index into `path` of the current waypoint.
+    next: usize,
+    /// Closest the bot has come to the current waypoint, and the ticks since
+    /// it last closed in.
+    best: f32,
+    idle: u32,
+    rest: u32,
+    /// A point goal's path is walked out; the bot heads at the point itself.
+    arrived: bool,
+}
+
+impl Follower {
+    /// The waypoint toward `goal` for a bot standing at `at`. `plans` is the
+    /// tick's shared A* budget; a bot that needs a plan when it is spent gets
+    /// none this tick. `rand` picks roam destinations.
+    pub fn waypoint(
+        &mut self,
+        g: &NavGraph,
+        goal: crate::bots::Goal,
+        at: [f32; 3],
+        plans: &mut u32,
+        rand: &mut dyn FnMut() -> i32,
+    ) -> Option<[f32; 3]> {
+        use crate::bots::Goal;
+        if self.rest > 0 {
+            self.rest -= 1;
+            return None;
+        }
+        let here = Vec3::from(at);
+        match goal {
+            Goal::Hold => {
+                self.reset();
+                return None;
+            }
+            Goal::Roam => {}
+            Goal::To(p) => {
+                let moved = self
+                    .dest
+                    .is_none_or(|d| g.nodes[d as usize].distance(Vec3::from(p)) > RETARGET);
+                if moved {
+                    self.reset();
+                    self.dest = g.nearest(p);
+                } else if self.arrived {
+                    return Some(p);
+                }
+            }
+        }
+        if self.path.is_empty() {
+            if *plans == 0 {
+                return None;
+            }
+            *plans -= 1;
+            let start = g.nearest(at)?;
+            if goal == Goal::Roam && self.dest.is_none() {
+                self.dest = g.roam_from(here, rand);
+            }
+            let Some(path) = self.dest.and_then(|d| g.path(start, d)) else {
+                // Unreachable from here: a roam picks again next time.
+                self.reset();
+                self.rest = REST_TICKS;
+                return None;
+            };
+            self.path = path;
+            self.next = 0;
+            self.best = f32::INFINITY;
+            self.idle = 0;
+        }
+        let flat = |p: Vec3| (p - here).truncate().length();
+        // Past a waypoint once inside its reach, or once nearer the next one
+        // than the waypoint itself is: that keeps a bot from doubling back
+        // to touch a node it cut the corner on.
+        while let Some(&w) = self.path.get(self.next) {
+            let w = g.nodes[w as usize];
+            let past = self.path.get(self.next + 1).is_some_and(|&n| {
+                let n = g.nodes[n as usize];
+                flat(n) < (n - w).truncate().length()
+            });
+            if (flat(w) < REACH && (w.z - here.z).abs() < 48.0) || past {
+                self.next += 1;
+                self.best = f32::INFINITY;
+                self.idle = 0;
+            } else {
+                break;
+            }
+        }
+        let Some(&w) = self.path.get(self.next) else {
+            // Arrived. A roam picks somewhere new; a point is walked at.
+            self.path.clear();
+            return match goal {
+                Goal::To(p) => {
+                    self.arrived = true;
+                    Some(p)
+                }
+                _ => {
+                    self.dest = None;
+                    None
+                }
+            };
+        };
+        let w = g.nodes[w as usize];
+        let d = flat(w);
+        if d > OFF_PATH_STEPS * g.spacing {
+            self.path.clear();
+            return None;
+        }
+        if d < self.best - 1.0 {
+            self.best = d;
+            self.idle = 0;
+        } else {
+            self.idle += 1;
+            if self.idle > STUCK_TICKS {
+                self.reset();
+                self.rest = REST_TICKS;
+                return None;
+            }
+        }
+        Some(w.into())
+    }
+
+    fn reset(&mut self) {
+        self.dest = None;
+        self.path.clear();
+        self.arrived = false;
+    }
+}
+
+impl NavGraph {
+    /// A roam destination: of a handful of random nodes, the first at least
+    /// [`ROAM_MIN`] from `from`, else the farthest.
+    fn roam_from(&self, from: Vec3, rand: &mut dyn FnMut() -> i32) -> Option<u32> {
+        if self.nodes.is_empty() {
+            return None;
+        }
+        let mut best: Option<(f32, u32)> = None;
+        for _ in 0..8 {
+            let n = (rand() as usize % self.nodes.len()) as u32;
+            let d = self.nodes[n as usize].distance(from);
+            if d >= ROAM_MIN {
+                return Some(n);
+            }
+            if best.is_none_or(|(b, _)| d > b) {
+                best = Some((d, n));
+            }
+        }
+        best.map(|(_, n)| n)
     }
 }
 
@@ -403,7 +658,9 @@ fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> 
             }
         }
     });
-    out.into_iter().map(|r| r.expect("every item mapped")).collect()
+    out.into_iter()
+        .map(|r| r.expect("every item mapped"))
+        .collect()
 }
 
 /// Idle cmds until a body dropped at `p` stands on something; `None` when it
@@ -438,22 +695,21 @@ enum Walked {
 }
 
 /// [`walk_as`] forward, and backward when the forward run fell.
-fn walk(world: &CollisionWorld, from: Vec3, c: (i32, i32)) -> Option<Vec3> {
-    match walk_as(world, from, c, Gait::Forward) {
+fn walk(world: &CollisionWorld, from: Vec3, target: glam::Vec2) -> Option<Vec3> {
+    match walk_as(world, from, target, Gait::Forward) {
         Walked::Arrived(p) => Some(p),
         Walked::Blocked => None,
-        Walked::Fell => match walk_as(world, from, c, Gait::Backward) {
+        Walked::Fell => match walk_as(world, from, target, Gait::Backward) {
             Walked::Arrived(p) => Some(p),
             _ => None,
         },
     }
 }
 
-/// Runs a body from `from` toward column `c`'s centre, re-aiming every
-/// tick, and reports where it came to rest when it got within [`ARRIVE`] on
-/// the ground without falling past [`MAX_DROP`].
-fn walk_as(world: &CollisionWorld, from: Vec3, c: (i32, i32), gait: Gait) -> Walked {
-    let target = glam::Vec2::new(c.0 as f32 * SPACING, c.1 as f32 * SPACING);
+/// Runs a body from `from` toward `target`, re-aiming every tick, and
+/// reports where it came to rest when it got within [`ARRIVE`] on the
+/// ground without falling past [`MAX_DROP`].
+fn walk_as(world: &CollisionWorld, from: Vec3, target: glam::Vec2, gait: Gait) -> Walked {
     let dist = target.distance(from.truncate());
     if dist < ARRIVE {
         return Walked::Arrived(from);
@@ -497,6 +753,9 @@ fn walk_as(world: &CollisionWorld, from: Vec3, c: (i32, i32), gait: Gait) -> Wal
             }
         }
         if ps.on_ground && target.distance(ps.origin.truncate()) < ARRIVE {
+            if under_ground(world, ps.origin) {
+                return Walked::Blocked;
+            }
             return Walked::Arrived(ps.origin);
         }
         // A climb is slower than a run and straight up, so the budget
@@ -520,6 +779,25 @@ fn walk_as(world: &CollisionWorld, from: Vec3, c: (i32, i32), gait: Gait) -> Wal
         }
     }
     if fell { Walked::Fell } else { Walked::Blocked }
+}
+
+/// Whether `p` lies beneath a sheet of ground. Terrain and patches are
+/// surfaces, not solids, so a run that finds a gap at a sheet's edge can
+/// walk the map's floor under them (mp_hurtgen's, 48 units below its river
+/// bed). From there the ray up either stops on the underside of a triangle
+/// whose own face, `(b - a) x (c - a)`, points up, or passes through a
+/// one-sided one and the same ray back down hits it.
+fn under_ground(world: &CollisionWorld, p: Vec3) -> bool {
+    let head = p + Vec3::Z * 72.0;
+    let up = world.point_trace(head, head + Vec3::Z * 8192.0, u32::MAX, false);
+    if let Some(Prim::Tri(t)) = up.hit {
+        let [a, b, c] = world.tris[t as usize];
+        if (b - a).cross(c - a).normalize_or_zero().z > 0.7 {
+            return true;
+        }
+    }
+    let down = world.point_trace(up.endpos - Vec3::Z, head, u32::MAX, false);
+    down.fraction < 1.0
 }
 
 /// The bits of a client a walk carries between cmds.
@@ -597,6 +875,112 @@ mod tests {
         assert_ne!(c[4], c[0], "the node below the drop is its own component");
     }
 
+    /// Six nodes in a two-way row along +x, 32 apart.
+    fn row() -> NavGraph {
+        let nodes = (0..6)
+            .map(|i| Vec3::new(i as f32 * 32.0, 0.0, 0.0))
+            .collect();
+        let edges = (0..6u32)
+            .map(|i| {
+                [i.wrapping_sub(1), i + 1]
+                    .into_iter()
+                    .filter(|&n| n < 6)
+                    .collect()
+            })
+            .collect();
+        NavGraph::from_parts(nodes, edges)
+    }
+
+    #[test]
+    fn a_follower_hands_out_the_path_then_the_point() {
+        use crate::bots::Goal;
+        let g = row();
+        let mut f = Follower::default();
+        let goal = Goal::To([170.0, 0.0, 40.0]);
+        let mut plans = 1;
+        let mut rand = || 0;
+        let mut at = [0.0, 0.0, 0.0];
+        let mut seen = Vec::new();
+        for _ in 0..10 {
+            let Some(w) = f.waypoint(&g, goal, at, &mut plans, &mut rand) else {
+                panic!("no waypoint at {at:?}");
+            };
+            seen.push(w[0]);
+            if w == [170.0, 0.0, 40.0] {
+                break;
+            }
+            at = w;
+        }
+        assert_eq!(seen, [32.0, 64.0, 96.0, 128.0, 160.0, 170.0]);
+        assert_eq!(plans, 0, "one plan for the whole walk");
+    }
+
+    #[test]
+    fn a_spent_plan_budget_leaves_the_bot_without_a_waypoint() {
+        let g = row();
+        let mut f = Follower::default();
+        let w = f.waypoint(&g, crate::bots::Goal::Roam, [0.0; 3], &mut 0, &mut || 0);
+        assert_eq!(w, None);
+    }
+
+    #[test]
+    fn a_roam_heads_for_a_far_node() {
+        let g = row();
+        let mut f = Follower::default();
+        let mut picks = [1, 5].into_iter();
+        let mut rand = || picks.next().unwrap_or(0);
+        let w = f.waypoint(&g, crate::bots::Goal::Roam, [0.0; 3], &mut 1, &mut rand);
+        assert_eq!(w, Some([32.0, 0.0, 0.0]));
+        // Nothing is ROAM_MIN away on a 160-unit row: the farthest pick wins.
+        assert_eq!(f.dest, Some(5));
+    }
+
+    #[test]
+    fn a_follower_that_stops_closing_in_gives_up_and_rests() {
+        let g = row();
+        let mut f = Follower::default();
+        let goal = crate::bots::Goal::To([160.0, 0.0, 0.0]);
+        let mut plans = 1;
+        let mut last = None;
+        for _ in 0..=STUCK_TICKS + 1 {
+            last = f.waypoint(&g, goal, [0.0; 3], &mut plans, &mut || 0);
+        }
+        assert_eq!(last, None, "still steering at a waypoint it never nears");
+        assert_eq!(f.rest, REST_TICKS);
+    }
+
+    /// mp_carentan's graph from the real collision: every spawn point sits on
+    /// it, and nearly all of them reach each other both ways.
+    #[test]
+    fn carentans_spawns_reach_each_other() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let entry = fs
+            .resolve_map("mp_carentan")
+            .expect("mp_carentan in the paks");
+        let bsp = vcod_common::bsp::parse(&fs.read(&entry).unwrap()).unwrap();
+        let world = crate::world::World::from_bsp(&bsp, Some(&fs));
+        let g = graph_for("mp_carentan", &world);
+        let on: Vec<u32> = world
+            .spawn_points
+            .iter()
+            .filter_map(|s| g.nearest(*s))
+            .collect();
+        assert_eq!(on.len(), world.spawn_points.len(), "a spawn off the graph");
+        let comp = g.components();
+        let mut count = std::collections::BTreeMap::new();
+        for n in &on {
+            *count.entry(comp[*n as usize]).or_insert(0) += 1;
+        }
+        let most = count.values().max().copied().unwrap_or(0);
+        assert!(
+            most * 100 >= on.len() * 95,
+            "only {most} of {} spawns in one component",
+            on.len()
+        );
+    }
+
     #[test]
     fn nearest_prefers_the_floor_under_the_feet() {
         let mut g = tiny();
@@ -608,46 +992,5 @@ mod tests {
         assert_eq!(g.nearest([30.0, 2.0, 10.0]), Some(1));
         assert_eq!(g.nearest([30.0, 2.0, 140.0]), Some(5));
         assert_eq!(g.nearest([5000.0, 0.0, 0.0]), None);
-    }
-}
-#[cfg(test)]
-mod dbg_tmp {
-    use super::*;
-    #[test]
-    fn dbg_walk() {
-        let fs = vcod_common::testing::game_fs().unwrap();
-        let e = fs.resolve_map("mp_ship").unwrap();
-        let bsp = vcod_common::bsp::parse(&fs.read(&e).unwrap()).unwrap();
-        let w = crate::world::World::from_bsp(&bsp, Some(&fs));
-        for b in &w.collision.brushes {
-            if b.surface_flags & vcod_common::collision::SURF_LADDER != 0 {
-                let mut lo = [0.0f32; 3];
-                let mut hi = [0.0f32; 3];
-                for (n, d) in &b.planes {
-                    for i in 0..3 {
-                        if n[i] > 0.999 { hi[i] = *d; }
-                        if n[i] < -0.999 { lo[i] = -*d; }
-                    }
-                }
-                eprintln!("LADDER {} {} {} .. {} {} {}", lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
-            }
-        }
-        for z in [80.0, 120.0, 200.0, 320.0] { for x in [4200.0, 4260.0] {
-            eprintln!("try {x} {z}: {:?}", settle(&w.collision, Vec3::new(x, 232.0, z)));
-        } }
-        for start in [Vec3::new(4200.0, 232.0, 80.0), Vec3::new(4260.0, 232.0, 80.0)] {
-            let Some(from) = settle(&w.collision, start) else { continue };
-            eprintln!("settled {from:?}");
-            let target = glam::Vec2::new(4240.0, 224.0);
-            let mut ps = PlayerState::spawn(from, 0.0);
-            let mut sim = Sim::default();
-            for t in 0..60 {
-                let to = target - ps.origin.truncate();
-                let yaw = to.y.atan2(to.x).to_degrees();
-                let cmd = UserCmd { forward: 127, angles: [0, (yaw * ANGLE2SHORT) as i32, 0], ..NULL_USERCMD };
-                sim.tick(&w.collision, &mut ps, &cmd);
-                if t % 4 == 0 { eprintln!("{t} {:?} v {:?} ground {} ladder {}", ps.origin, ps.velocity, ps.on_ground, ps.on_ladder); }
-            }
-        }
     }
 }

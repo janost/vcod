@@ -12,6 +12,9 @@ pub struct World {
     pub vis: bsp::Visibility,
     /// Feet origin and yaw degrees, from the ents lump's spawn classes.
     pub spawn: ([f32; 3], f32),
+    /// Every gametype's spawn points, what the bots' navigation graph is
+    /// flooded from (`crate::nav`).
+    pub spawn_points: Vec<[f32; 3]>,
 }
 
 /// The unit the engine grows a linked entity's box by on each axis before
@@ -98,6 +101,7 @@ impl World {
             collision,
             vis: b.visibility(),
             spawn,
+            spawn_points: crate::nav::spawn_points(&b.entities),
         }
     }
 }

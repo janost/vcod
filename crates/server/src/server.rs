@@ -70,6 +70,8 @@ const FLOOD_WINDOW_MS: i32 = 800;
 /// How often a bot re-runs its enemy search (range gate + LOS traces).
 /// The cached verdict is at most this stale.
 const ENEMY_REFRESH_MS: i32 = 100;
+/// A* runs a tick may spend across all bots.
+const BOT_PLANS_PER_TICK: u32 = 2;
 /// The tick pace (`1000 / sv_fps`), also the dt floor a fresh sim starts from.
 pub(crate) const FRAME_MS: i32 = 50;
 /// Retail's `MAX_CLIENTS`. Client slots index a 6-bit wire field
@@ -90,7 +92,7 @@ pub struct ServerConfig {
     pub trace: bool,
     /// Debug bots in play. Each takes a real slot; 0 is off.
     pub bots: usize,
-    /// Whether the bots fight. Without it they only wander.
+    /// Whether the bots fight. Without it they only roam.
     pub bots_shoot: bool,
 }
 
@@ -910,6 +912,10 @@ pub struct Server {
     /// A fresh LOS trace per bot per tick was the other half of the 24-bot
     /// CPU load; a bot does not need a new verdict every 50 ms.
     bot_enemies: BTreeMap<usize, (i32, Option<crate::bots::EnemyView>)>,
+    /// The level's navigation graph, built on the first tick with bots.
+    nav: Option<std::sync::Arc<crate::nav::NavGraph>>,
+    /// Per bot, its walk along `nav`.
+    bot_paths: BTreeMap<usize, crate::nav::Follower>,
     /// The frames the killcam replays, kept while script has `setarchive`
     /// on and cleared by every level load (`crate::archive`).
     archive: crate::archive::Archive,
@@ -1050,6 +1056,8 @@ impl Server {
             bots: BTreeMap::new(),
             bots_spawned: false,
             bot_enemies: BTreeMap::new(),
+            nav: None,
+            bot_paths: BTreeMap::new(),
             archive: Default::default(),
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
@@ -1982,6 +1990,11 @@ impl Server {
             self.bots_spawned = true;
             self.spawn_bots();
         }
+        if self.nav.is_none()
+            && let Some(w) = self.world.as_ref()
+        {
+            self.nav = Some(crate::nav::graph_for(&self.cfg.map, w));
+        }
         let sid = i32::from(self.server_id);
         // The team table once per frame; `client_team` needs the script's
         // mutable face, so the enemy pass reads this instead.
@@ -2053,9 +2066,21 @@ impl Server {
             })
             .collect();
 
-        // Pass 3: the tick's cmd.
+        // Pass 3: the tick's waypoint toward each brain's goal, then its
+        // cmd. A* runs are capped per tick across all bots; one that misses
+        // out wanders for a tick and asks again.
         let mut moves: Vec<(usize, UserCmd)> = Vec::new();
-        for (slot, view) in views {
+        let mut plans = BOT_PLANS_PER_TICK;
+        for (slot, mut view) in views {
+            let Some(goal) = self.bots.get(&slot).map(|b| b.goal(&view)) else {
+                continue;
+            };
+            if let Some(g) = self.nav.clone() {
+                let mut follower = self.bot_paths.remove(&slot).unwrap_or_default();
+                let mut rand = || self.rand();
+                view.waypoint = follower.waypoint(&g, goal, view.origin, &mut plans, &mut rand);
+                self.bot_paths.insert(slot, follower);
+            }
             if let Some(bot) = self.bots.get_mut(&slot) {
                 let cmd = bot.think(&view);
                 moves.push((slot, cmd));
@@ -2065,6 +2090,8 @@ impl Server {
         // Pass 4: everything lands.
         self.bots.retain(|slot, _| self.clients[*slot].is_some());
         self.bot_enemies
+            .retain(|slot, _| self.clients[*slot].is_some());
+        self.bot_paths
             .retain(|slot, _| self.clients[*slot].is_some());
         for (slot, r) in replies {
             if let Some(bot) = self.bots.get_mut(&slot) {
@@ -2214,6 +2241,7 @@ impl Server {
             playing: sim.pm_type == crate::spectate::PmType::Normal && !sim.dead,
             enemy,
             grenade,
+            waypoint: None,
         })
     }
 
@@ -2310,6 +2338,8 @@ impl Server {
     /// Swap in the map built by the binary; tests run without one.
     pub fn load_world(&mut self, world: World) {
         self.world = Some(Rc::new(world));
+        self.nav = None;
+        self.bot_paths.clear();
     }
 
     /// The cvar table a gametype script starts with: the engine defaults,
@@ -6085,6 +6115,7 @@ mod tests {
             collision: test_world(&[]),
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
+            spawn_points: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -6136,6 +6167,7 @@ mod tests {
             collision: test_world(&[]),
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
+            spawn_points: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
 
@@ -6229,6 +6261,7 @@ mod tests {
             collision: test_world(&[]),
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
+            spawn_points: Vec::new(),
         });
         install_script(&mut sv, rt);
         sv.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs));
@@ -6481,6 +6514,7 @@ mod tests {
             collision: test_world(&[]),
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 1.0], 0.0),
+            spawn_points: Vec::new(),
         });
         install_script(
             &mut sv,
@@ -6561,6 +6595,7 @@ mod tests {
             collision: test_world(&[]),
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 1.0], 0.0),
+            spawn_points: Vec::new(),
         });
         install_script(
             &mut sv,
@@ -6745,6 +6780,7 @@ mod tests {
             collision: test_world(&[]),
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 90.0),
+            spawn_points: Vec::new(),
         });
         let mut nc = active(&mut sv, now);
 
@@ -6791,6 +6827,7 @@ mod tests {
             collision: test_world(&[]),
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
+            spawn_points: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -6862,6 +6899,7 @@ mod tests {
             collision: test_world(&[]),
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
+            spawn_points: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -6922,6 +6960,7 @@ mod tests {
             collision: test_world(&[]),
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
+            spawn_points: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -6995,6 +7034,7 @@ mod tests {
             collision: test_world(&[]),
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
+            spawn_points: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -7064,6 +7104,7 @@ mod tests {
             collision: test_world(&[]),
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
+            spawn_points: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -7144,6 +7185,7 @@ mod tests {
             collision: test_world(&[]),
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
+            spawn_points: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -7220,6 +7262,7 @@ mod tests {
             collision: test_world(&[]),
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
+            spawn_points: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -7338,6 +7381,7 @@ mod tests {
                 collision: test_world(&[]),
                 vis: vcod_common::bsp::Visibility::single_cluster(),
                 spawn: ([0.0, 0.0, 64.0], 0.0),
+                spawn_points: Vec::new(),
             });
             install_script(&mut sv, rt);
             let nc = begun(&mut sv, now);
