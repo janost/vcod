@@ -74,7 +74,7 @@ built from the bytes up, this might be your kind of thing.
   players. A correction eases out over 100 ms.
 - Draws your weapon in first person with the hands your team gets, zooms the
   sight to the weapon's own FOV, puts a sniper scope's overlay up where the
-  swaying gun points, and plays your own fire, reload and footstep
+  swaying, hit-kicked gun points, and plays your own fire, reload and footstep
   sounds off the prediction. The snapshot that confirms them later stays
   quiet.
 - Draws mounted MG42s turned by the barrel angles the server sends, with
@@ -83,8 +83,8 @@ built from the bytes up, this might be your kind of thing.
 - Draws the HUD that the stock `hud.menu` lays out: crosshair that opens with
   spread, health, ammo, fire-mode icon, stance with its change flash, compass
   with objectives and teammates, use hints and hit direction. A spectator
-  following a player sees that player's HUD. It also draws the gametype
-  script's own HUD elements, such as the S&D clock, the bomb icons and the
+  following a player sees that player's HUD, weapon, zoom and scope. It
+  also draws the gametype script's own HUD elements, such as the S&D clock, the bomb icons and the
   progress bar, in retail's fonts, fixed-width slots included.
 - Follows the server through a map change: loading screen, downloads, new
   map.

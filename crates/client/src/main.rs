@@ -2104,16 +2104,18 @@ impl ApplicationHandler for App {
                                     if let Some(v) = &predicted {
                                         cam.pos = v.origin + Vec3::Z * v.view_height;
                                     }
+                                    // A followed player's view weapon, zoom and scope
+                                    // come off the snapshot, as retail draws them.
                                     let view_ps = net.snapshots().newest().and_then(|s| {
-                                        (!following && pmove::predict::predictable(pm_type)).then(
-                                            || match &predicted {
+                                        pmove::predict::predictable(pm_type).then(|| {
+                                            match &predicted {
                                                 Some(v) => play::view::ViewPs::from_predicted(
                                                     &v.pred,
                                                     s.ps.field_i32(p, "viewmodelIndex"),
                                                 ),
                                                 None => play::view::ViewPs::from_snapshot(p, &s.ps),
-                                            },
-                                        )
+                                            }
+                                        })
                                     });
                                     if let Some(ps) = &view_ps
                                         && let Some(models) =
