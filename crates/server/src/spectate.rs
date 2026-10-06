@@ -59,6 +59,9 @@ const EF_MOUNTED_STAND: i32 = 0xC000;
 const EF_MOUNTED_DUCK: i32 = 0x8000;
 const EF_MOUNTED_PRONE: i32 = 0x4000;
 const EF_FIRING: i32 = 0x400;
+/// `pingPlayer`'s bit (docs/research/cod11-hud-protocol.md, "Compass
+/// friendlies").
+const EF_PING: i32 = 0x80000;
 /// `docs/research/cod11-events-and-fx.md`.
 const EV_PLAYER_TELEPORT_IN: i32 = 199;
 const EV_PLAYER_TELEPORT_OUT: i32 = 200;
@@ -287,6 +290,9 @@ pub struct ClientSim {
     /// `ps.eFlags` 0x400, on a frame the gun this client mans fired (turrets
     /// doc 12.4).
     pub firing: bool,
+    /// `eFlags` 0x80000, `pingPlayer`'s chat flash on teammates' compasses,
+    /// held until the stamp the builtin left (`GameHost::client_ping_until`).
+    pub ping: bool,
     /// The last cmd's angles, retail's `pers.cmd.angles`, which
     /// `set_view_angle` rewrites `delta_angles` against.
     last_cmd_angles: [i32; 3],
@@ -454,6 +460,7 @@ impl ClientSim {
             gunfx: 0,
             mounted_on: None,
             firing: false,
+            ping: false,
             last_cmd_angles: cmd_angles,
             contents: 0,
             linked_solid: 0,
@@ -753,6 +760,7 @@ impl ClientSim {
                 0
             }
             | if self.firing { EF_FIRING } else { 0 }
+            | if self.ping { EF_PING } else { 0 }
     }
 
     /// `SpectatorThink`'s button half (`game.mp.i386.so` 0x3fab8) for one

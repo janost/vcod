@@ -14,6 +14,7 @@
 use crate::configstrings::{CsRange, script_menu_index, weapon_index};
 use crate::game::builtins::entity::entity_receiver;
 use crate::game::host::{GameHost, SimOp, WeaponOp};
+use crate::game::say::SayMode;
 use vcod_common::pmove;
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Target, Value};
 
@@ -43,6 +44,9 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("closemenu", close_menu),
     ("setorigin", set_player_origin),
     ("setplayerangles", set_player_angles),
+    ("sayall", say_all),
+    ("sayteam", say_team),
+    ("pingplayer", ping_player),
 ];
 
 /// `self useButtonPressed()`: whether the client's last usercmd held the
@@ -243,6 +247,64 @@ pub fn drop_item(
     let at = crate::game::item::DropAt::Thrown { tag };
     let id = crate::game::item::launch_weapon(host, cx, slot, d, at)?;
     Ok(Value::Entity(id))
+}
+
+/// `self sayAll(message [, args...])` (0x45884): the message packed by
+/// `Scr_ConstructMessageString` behind a `\x14`, so the client localizes it,
+/// and said through `G_Say` as the receiver's own `say`
+/// (docs/research/cod11-chat.md).
+pub fn say_all(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    script_say(host, cx, recv, args, SayMode::All)
+}
+
+/// `self sayTeam(message [, args...])` (0x45920): [`say_all`] as a
+/// `say_team`.
+pub fn say_team(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    script_say(host, cx, recv, args, SayMode::Team)
+}
+
+fn script_say(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+    mode: SayMode,
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let mut text = format!("\u{14}{}", super::message::construct(host, cx, args));
+    // The 0x3ff-byte buffer behind the leading byte.
+    while text.len() > 0x3ff {
+        text.pop();
+    }
+    host.say(cx, slot, None, mode, &text);
+    Ok(Value::Undefined)
+}
+
+/// `self pingPlayer()` (`PlayerCmd_pingPlayer` 0x450a4): `eFlags` 0x80000
+/// for 3 s, the chat flash a teammate's compass shows
+/// (docs/research/cod11-hud-protocol.md, "Compass friendlies").
+pub fn ping_player(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let until = host.level_time_ms + 3000;
+    if let Some(p) = host.client_ping_until.get_mut(slot) {
+        *p = until;
+    }
+    Ok(Value::Undefined)
 }
 
 /// `self closeMenu()` (`.so` 0x45574): the reliable command `u`, with no
