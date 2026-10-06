@@ -119,8 +119,8 @@ either: the people on it signed up for Call of Duty.
 - Mounted MG42s: mount with use, aim inside the gun's arc, fire, dismount.
 - Map triggers (`trigger_multiple`, `trigger_hurt`, `trigger_use`,
   `trigger_lookat`), and script movers whose trajectories reach the wire.
-  A moving brush model carries the players on it and shoves the ones in its
-  way, and a player linked to a moving entity rides it. The client draws a
+  A moving brush model carries the players and items on it and shoves the
+  players in its way, and a player linked to a moving entity rides it. The client draws a
   brush model where its entity is, so a hidden or deleted one is gone.
 - Intermission, `map_restart`, and `sv_mapRotation` the way retail runs them,
   with the next map's gamestate sent on the live connection.
@@ -188,7 +188,9 @@ console, no key rebinding. You get command-line flags and the binds below.
 
 - `re` (Retrieval) and `bel` (Behind Enemy Lines) run through the same
   script path, but I haven't checked either against retail.
-- A moving brush model pushes players only, not items, grenades or corpses.
+- A brush model that has turned and turned back keeps a sliver of yaw on
+  retail, which drifts what it carries by about 0.02 units a frame; vcod's
+  comes back to exactly zero.
 - A blast walks its victims (players and MG42s) in entity order, not
   retail's area-tree order, so who shields whom can differ when several
   stand in a line. Bullets don't damage MG42s.

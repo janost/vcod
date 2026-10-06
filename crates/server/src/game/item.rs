@@ -315,6 +315,59 @@ pub fn run_items(host: &mut GameHost, cx: &mut Cx, now_ms: i32) {
     }
 }
 
+/// A mover's push over the items (`crate::push::push_item`), in entity
+/// order. Runs after the players' push and only when that did not stall the
+/// mover; an item never stalls one. A pushed item gets the spot as its
+/// `origin` and its `s.pos.trBase` (0x54b84), and its ground, unless it
+/// stood on the mover, is `ENTITYNUM_NONE`, which the next `run_items`
+/// drops it from (docs/research/cod11-movers.md, section 12).
+pub fn push_items(host: &mut GameHost, cx: &mut Cx, step: &crate::game::mover::Step) {
+    let Some(world) = host.world.clone() else {
+        return;
+    };
+    let ids: Vec<EntId> = host
+        .ents
+        .iter_inuse()
+        .filter(|(_, e)| e.item.is_some_and(|i| !i.taken))
+        .map(|(id, _)| id)
+        .collect();
+    let origin_atom = cx.intern_folded("origin");
+    for id in ids {
+        let Some(mut st) = host.ents.get(id).and_then(|e| e.item) else {
+            continue;
+        };
+        let (mins, maxs) = bounds(crate::game::spawn::is_weapon_row(st.index as usize));
+        let body = crate::push::ItemBody {
+            origin: Vec3::from(origin_of(host, cx, id)),
+            mins,
+            maxs,
+            mask: if st.clipmask != 0 {
+                st.clipmask
+            } else {
+                crate::push::PUSH_DEFAULT_MASK
+            },
+            ground: st.ground,
+        };
+        let Some(fit) = crate::push::push_item(step, &body, &world.collision) else {
+            continue;
+        };
+        if st.ground != step.number as i32 {
+            st.ground = ENTITYNUM_NONE as i32;
+        }
+        if let crate::push::ItemPush::At(at) = fit {
+            if let Some(pos) = st.pos.as_mut() {
+                pos.base = at;
+            }
+            let _ = host.set_field(cx, id, origin_atom, Value::Vector(at.into()));
+        } else {
+            st.ground = ENTITYNUM_NONE as i32;
+        }
+        if let Some(e) = host.ents.get_mut(id) {
+            e.item = Some(st);
+        }
+    }
+}
+
 /// The player as the pickup arithmetic sees it, off the host's mirrors.
 pub fn inventory(host: &GameHost, slot: usize) -> Inventory {
     let v = host.client_vitals[slot];

@@ -257,6 +257,56 @@ those branches: a player is pushed when it stands on the pusher, or when its
 box overlaps the pusher where the pusher now is; a corpse never is, its
 contents being outside the box mask.
 
+VERIFIED, `cod_lnxded`: the area-node walk at `0x08059590` (the function
+that prints `CM_AreaEntities: MAXCOUNT`) lists an entity only when its
+`r.contents` (`+0x118`) shares a bit with the query's mask, and descends a
+node only when the node's own contents word does. INFERRED: that is
+`trap_EntitiesInBox`'s fifth argument, so `0x2000180` lists by contents
+before any `eType` test runs. VERIFIED, the contents writers in game.mp: a
+playing client `0x2000000`; `player_die` `0x4000000` on the dying player
+(`0x49c28`); `G_SpawnItem` (`0x4e778`) and `LaunchItem` (`0x4dc97`)
+`0x407c0108`; `RespawnItem` `0x407c0008` (`0x4ece9`); `Touch_Item` 0
+(`0x4d90c`, `0x4d9ce`). `fire_grenade` and `fire_rocket` write a clipmask
+(`0x544a0`, `0x546ef`) and no contents, and a body-queue clone's contents is
+0 (`docs/research/cod11-combat.md` 5.2). INFERRED: the list holds live
+players and items lying in the world, and never a grenade, a rocket, a
+corpse, a dead player, an item taken, or one `RespawnItem` brought back
+(`0x407c0008` has no `0x100`); the `eType` 4 arm and the `0x4000000` test
+are never reached through this query.
+
+VERIFIED, mp_carentan's BSP: all ten brushes of model `*5` are
+`textures/common/clip_metal`, contents word `0x280306c0`: `0x80` and `0x10000`
+set, `0x1` and `0x10` clear. A player's clipmask (`0x2810011`) sees them
+through `0x10000`; an item's push trace, `0x11` for a clipmask of 0, sees
+neither.
+
+VERIFIED, off a paired capture against the retail 1.1d Linux server,
+mp_carentan under a `dm`-shaped probe, 2026-10-06:
+`crates/server/tests/fixtures/movers/mp_carentan-dm-push.txt` (the server's
+`PROBE` lines from `client-probes/probe_push.gsc` and the `--probe-items`
+client's `ITEM` lines). The probe drops carbine `a` onto the slab, health
+pack `b` onto the ground south of it and hangs carbine `c` there
+(`spawnflags 1`), then runs the slab through probe_ride's verbs.
+
+- **Carried.** `a` rests on the slab with ground 177 and follows it to the
+  hundredth through `movez`, `movex` and both `rotateyaw`s, ground 177 on
+  every snapshot and the slab's position in `pos.trBase`, `trType` 0, each
+  frame. From `push_y` on it creeps +x 0.021 a frame, the residual yaw of
+  this section.
+- **Not shoved.** `b` and `c` never move: the slab sweeps through both in
+  `ride_yaw` and `push_y`, `b`'s ground stays 1022 and `c`'s 0, and the
+  slab lowered onto `b` (`crush`) runs its whole move without stalling.
+
+INFERRED, off the listing, the masks and the capture: an item resting on a
+mover is carried because the ground test keeps it before any trace; an item
+in a mover's way is shoved only when its own push mask sees the mover's
+brushes, which a script-spawned or placed item's `0x11` does not for a clip
+brush; a dropped item's `0x81` would, through `0x80` (not captured). An item
+is 2 units wide, so `maxs.x * 0.5` never passes the jitter's 4, and an item
+that fits nowhere is relinked where it was without stalling the mover.
+`G_TryPushingEntity` writes `0x3ff` to the ground of anything it moves off
+another ground or leaves in place, which `G_RunItem` drops from.
+
 VERIFIED, then: every kept entity is unlinked (`0x55561`), handed to
 `G_TryPushingEntity` in list order (`0x555c8`) and relinked when that returns
 1 (`0x555e1`). On a 0, an `eType` 3 entity is relinked and skipped
@@ -329,15 +379,20 @@ VERIFIED, off the capture:
 
 vcod: `crate::push` runs the push over the players after each frame's
 script, in slot order, with `G_TryPushingEntity`'s jitter and its keep-in-place
-fallback, and stalls the mover when one fits nowhere. Its candidate test is
+fallback, and stalls the mover when one fits nowhere. When it does not stall,
+`crate::game::item::push_items` runs the same test over the items not taken,
+under each item's push mask, in entity order. A blocked push leaves every
+item where it was; retail would put back the ones listed ahead of the
+blocker but keep their ground at `0x3ff`, which vcod does not model. Its candidate test is
 a box, as retail's; its position test is our capsule plus a sweep from where
 the body stood that passes through the pusher, because a zero-length capsule
 is never `startsolid` under terrain and without the sweep the lowered slab
 pushed the player through the ground. VERIFIED, vcod measurement against
 the same fixture: a capsule candidate test met the plank 4.8 units of slab
-travel later than retail's box did. Items, missiles and corpses are not
-pushed, the residual yaw is not modelled, and the `TR_SINE` crush has no
-verb that reaches it. `crates/server/tests/ride_ab.rs` is the gate.
+travel later than retail's box did. The residual yaw is not
+modelled, and the `TR_SINE` crush has no verb that reaches it.
+`crates/server/tests/ride_ab.rs` is the gate for players and
+`crates/server/tests/push_ab.rs` for items.
 
 ## 13. A player linked to a mover
 

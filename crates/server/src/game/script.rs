@@ -858,6 +858,14 @@ impl ScriptRuntime {
         }
     }
 
+    /// The items' half of the push `step` asked for, once the players'
+    /// half has not stalled it (`crate::game::item::push_items`).
+    pub fn push_items(&mut self, step: &crate::game::mover::Step) {
+        let host = &mut self.host;
+        self.vm
+            .with_cx(|cx| crate::game::item::push_items(host, cx, step));
+    }
+
     /// Where a link parent is this frame, origin and angles, `None` once it
     /// has been freed. `G_RunFrame` runs a linked entity's parent ahead of it
     /// (0x50939-0x50955), so a mover parent is read on its own clock, the
