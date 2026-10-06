@@ -42,6 +42,9 @@ const PROBE_SRC: &str = "../gsc/tests/fixtures/semantics/client-probes/probe_fal
 const MAP: &str = "mp_carentan";
 const STOCK: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-damage.txt";
 const CVARS: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-damage-cvars.txt";
+const WALK: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-walk.txt";
+/// `--probe-fall-walk`'s yaw in the walk fixture.
+const WALK_YAW: f32 = 315.0;
 
 const EV_LANDING_PAIN: std::ops::RangeInclusive<i32> = 116..=138;
 const EV_PAIN: i32 = 187;
@@ -183,8 +186,9 @@ fn same_but_origin_ulp(a: &str, b: &str) -> bool {
 struct Retail {
     probe: Vec<String>,
     falls: Vec<FallLine>,
-    /// Every cmd `serverTime` the probe client sent, ascending.
-    cmds: Vec<i32>,
+    /// Every cmd the probe client sent, ascending: its `serverTime` and,
+    /// under `--probe-fall-walk`, the yaw word it carried with forward held.
+    cmds: Vec<(i32, Option<i32>)>,
 }
 
 fn parse_retail(text: &str) -> Retail {
@@ -200,16 +204,26 @@ fn parse_retail(text: &str) -> Retail {
         .collect();
     let mut cmds = Vec::new();
     for l in text.lines().filter_map(|l| l.strip_prefix("CMDS st=")) {
-        let (st, steps) = l.split_once(" d=").expect("a CMDS line");
+        let (st, rest) = l.split_once(" d=").expect("a CMDS line");
+        let (steps, yaws) = match rest.split_once(" yaw=") {
+            Some((steps, yaws)) => (steps, Some(yaws)),
+            None => (rest, None),
+        };
         let mut t: i32 = st.parse().unwrap();
-        cmds.push(t);
+        let mut times = vec![t];
         for d in steps.split(',') {
             t += d.parse::<i32>().unwrap();
-            cmds.push(t);
+            times.push(t);
         }
+        let yaws: Vec<Option<i32>> = match yaws {
+            Some(y) => y.split(',').map(|w| Some(w.parse().unwrap())).collect(),
+            None => vec![None; times.len()],
+        };
+        assert_eq!(yaws.len(), times.len(), "{l}");
+        cmds.extend(times.into_iter().zip(yaws));
     }
     cmds.sort_unstable();
-    cmds.dedup();
+    cmds.dedup_by_key(|c| c.0);
     Retail { probe, falls, cmds }
 }
 
@@ -237,12 +251,14 @@ fn shape(line: &str, first_after: bool) -> String {
     out.join(" ")
 }
 
-fn shapes(lines: &[String]) -> Vec<String> {
+/// `all_after` masks every `after` line's origin: a walking player ends each
+/// drop in a corner whose rest is not a pmove-under-a-timer question.
+fn shapes(lines: &[String], all_after: bool) -> Vec<String> {
     let first_after = lines.iter().position(|l| l.starts_with("PROBE after "));
     lines
         .iter()
         .enumerate()
-        .map(|(i, l)| shape(l, Some(i) == first_after))
+        .map(|(i, l)| shape(l, all_after || Some(i) == first_after))
         .collect()
 }
 
@@ -311,9 +327,14 @@ struct Ours {
 }
 
 /// The probe on our server, `sets` as `+set`s, until it logs `done`. Until
-/// the first drop the client sends 16 and 17 ms cmds of its own; from then
-/// on, retail's, shifted onto our clock.
-fn run_ours(fs: vcod_common::pk3::Pk3Fs, sets: &[(&str, &str)], retail: &Retail) -> Ours {
+/// the first drop the client sends 16 and 17 ms cmds of its own, walking at
+/// `walk` if given; from then on, retail's, shifted onto our clock.
+fn run_ours(
+    fs: vcod_common::pk3::Pk3Fs,
+    sets: &[(&str, &str)],
+    walk: Option<f32>,
+    retail: &Retail,
+) -> Ours {
     let probe = std::fs::read_to_string(PROBE_SRC).expect("read the probe");
     let bsp_path = fs.resolve_map(MAP).expect("the map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("bsp");
@@ -352,10 +373,15 @@ fn run_ours(fs: vcod_common::pk3::Pk3Fs, sets: &[(&str, &str)], retail: &Retail)
                 for ms in [16, 17, 17] {
                     now += Duration::from_millis(ms);
                     cl.pump_at(now);
-                    if let Some(c) = cl.send_frame(&UserCmd {
+                    let mut cmd = UserCmd {
                         weapon,
                         ..NULL_USERCMD
-                    }) {
+                    };
+                    if let Some(yaw) = walk {
+                        cmd.forward = 127;
+                        cmd.angles[1] = (yaw * 65536.0 / 360.0).round() as i32;
+                    }
+                    if let Some(c) = cl.send_frame(&cmd) {
                         last_sent = c.server_time;
                     }
                 }
@@ -369,15 +395,24 @@ fn run_ours(fs: vcod_common::pk3::Pk3Fs, sets: &[(&str, &str)], retail: &Retail)
                 let upto = retail_ct
                     .get(&(next - shift))
                     .map_or(next - 1, |ct| ct + shift);
+                // Verbatim: the yaw word already had retail's `delta_angles`
+                // taken off, which the server adds back.
                 let cmds: Vec<UserCmd> = retail
                     .cmds
                     .iter()
-                    .map(|st| st + shift)
-                    .filter(|&st| st > last_sent && st <= upto)
-                    .map(|server_time| UserCmd {
-                        server_time,
-                        weapon,
-                        ..NULL_USERCMD
+                    .map(|&(st, yaw)| (st + shift, yaw))
+                    .filter(|&(st, _)| st > last_sent && st <= upto)
+                    .map(|(server_time, yaw)| {
+                        let mut cmd = UserCmd {
+                            server_time,
+                            weapon,
+                            ..NULL_USERCMD
+                        };
+                        if let Some(yaw) = yaw {
+                            cmd.forward = 127;
+                            cmd.angles[1] = yaw;
+                        }
+                        cmd
                     })
                     .collect();
                 if let Some(c) = cmds.last() {
@@ -415,8 +450,103 @@ fn run_ours(fs: vcod_common::pk3::Pk3Fs, sets: &[(&str, &str)], retail: &Retail)
     }
 }
 
-/// `sets` are the two bounds as retail's systeminfo carried them.
-fn gate(fixture: &str, sets: &[(&str, &str)]) {
+/// Every retail `FALL` line from the second drop on against ours at the
+/// same time shifted onto our clock: the origin to a unit in its last
+/// printed decimal, the rest exactly.
+fn compare_rows(retail: &Retail, ours: &Ours, second: i32) -> Vec<String> {
+    let mut diffs = Vec::new();
+    let mut lines = 0;
+    for r in retail.falls.iter().filter(|l| l.t > second) {
+        lines += 1;
+        let o = ours.falls.get(&(r.t + ours.shift));
+        let close =
+            o.is_some_and(|o| o.ct == r.ct + ours.shift && same_but_origin_ulp(&o.rest, &r.rest));
+        if !close {
+            diffs.push(format!(
+                "retail t={}: ct={} {}\n  ours: {}",
+                r.t,
+                r.ct + ours.shift,
+                r.rest,
+                o.map_or("no snapshot".into(), |o| format!("ct={} {}", o.ct, o.rest))
+            ));
+        }
+    }
+    assert!(lines > 100, "only {lines} FALL lines past the second drop");
+    diffs
+}
+
+/// The value of `key` in a `FALL` line's tail.
+fn tail_field<'a>(rest: &'a str, key: &str) -> &'a str {
+    rest.split_whitespace()
+        .find_map(|t| t.strip_prefix(key))
+        .unwrap_or_else(|| panic!("no {key} in {rest}"))
+}
+
+/// The walk capture's rows under a landing stun (`pm_flags` 0x100) from the
+/// second drop on: ours at the same shifted time holds the same `commandTime`,
+/// velocity, ground, `pm_flags`, `pm_time` and health, and an origin within a
+/// unit. Each drop starts from where the last walk came to rest in a corner
+/// whose rest is not this gate's (cod11-player-clip.md 12), which moves the
+/// origin by up to 0.93 and nothing else. Retail must also have pressed into
+/// the wall: rows on its plane with a velocity into it.
+fn compare_stun_rows(retail: &Retail, ours: &Ours, second: i32) -> Vec<String> {
+    const WALL_Y: f32 = 1815.128;
+    let mut diffs = Vec::new();
+    let (mut lines, mut pressed) = (0, 0);
+    for r in retail.falls.iter().filter(|l| l.t > second) {
+        let flags = i32::from_str_radix(tail_field(&r.rest, "pm_flags=0x"), 16).unwrap();
+        if flags & 0x100 == 0 {
+            continue;
+        }
+        lines += 1;
+        let origin = |rest: &str| -> Vec<f32> {
+            tail_field(rest, "origin=")
+                .split(',')
+                .map(|n| n.parse().unwrap())
+                .collect()
+        };
+        let vel: Vec<i32> = tail_field(&r.rest, "vel=")
+            .split(',')
+            .map(|n| n.parse().unwrap())
+            .collect();
+        if (origin(&r.rest)[1] - WALL_Y).abs() < 0.01 && vel[1] < 0 {
+            pressed += 1;
+        }
+        let same = |o: &FallLine| {
+            o.ct == r.ct + ours.shift
+                && ["vel=", "ground=", "pm_flags=", "pm_time=", "health="]
+                    .iter()
+                    .all(|k| tail_field(&o.rest, k) == tail_field(&r.rest, k))
+                && origin(&o.rest)
+                    .iter()
+                    .zip(origin(&r.rest))
+                    .all(|(a, b)| (a - b).abs() < 1.0)
+        };
+        let o = ours.falls.get(&(r.t + ours.shift));
+        if !o.is_some_and(same) {
+            diffs.push(format!(
+                "retail t={}: ct={} {}\n  ours: {}",
+                r.t,
+                r.ct + ours.shift,
+                r.rest,
+                o.map_or("no snapshot".into(), |o| format!("ct={} {}", o.ct, o.rest))
+            ));
+        }
+    }
+    assert!(
+        lines > 50,
+        "only {lines} stunned FALL lines past the second drop"
+    );
+    assert!(
+        pressed > 20,
+        "retail pressed into the wall on only {pressed} rows"
+    );
+    diffs
+}
+
+/// `sets` are the two bounds as retail's systeminfo carried them, `walk` the
+/// capture's `--probe-fall-walk` yaw.
+fn gate(fixture: &str, sets: &[(&str, &str)], walk: Option<f32>) {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
@@ -427,7 +557,7 @@ fn gate(fixture: &str, sets: &[(&str, &str)]) {
         "{fixture} has no finished run"
     );
     let retail_events = ring_events(retail.falls.iter());
-    let ours = run_ours(fs, sets, &retail);
+    let ours = run_ours(fs, sets, walk, &retail);
     let ours_events = ring_events(ours.falls.values());
     let mut diffs = Vec::new();
 
@@ -445,34 +575,17 @@ fn gate(fixture: &str, sets: &[(&str, &str)]) {
         }
     }
 
-    // Every retail snapshot from the second drop on, shifted onto our clock.
     let second = drop_time(&retail.probe, 1).expect("a second retail drop");
-    let mut lines = 0;
-    for r in retail.falls.iter().filter(|l| l.t > second) {
-        lines += 1;
-        let want = format!("ct={} {}", r.ct + ours.shift, r.rest);
-        let got = ours
-            .falls
-            .get(&(r.t + ours.shift))
-            .map(|o| format!("ct={} {}", o.ct, o.rest));
-        let close = ours
-            .falls
-            .get(&(r.t + ours.shift))
-            .is_some_and(|o| o.ct == r.ct + ours.shift && same_but_origin_ulp(&o.rest, &r.rest));
-        if !close {
-            diffs.push(format!(
-                "retail t={}: {want}\n  ours: {}",
-                r.t,
-                got.as_deref().unwrap_or("no snapshot")
-            ));
-        }
+    if walk.is_some() {
+        diffs.extend(compare_stun_rows(&retail, &ours, second));
+    } else {
+        diffs.extend(compare_rows(&retail, &ours, second));
     }
-    assert!(
-        lines > 100,
-        "{fixture}: only {lines} FALL lines past the second drop"
-    );
 
-    let (rs, os) = (shapes(&retail.probe), shapes(&ours.probe));
+    let (rs, os) = (
+        shapes(&retail.probe, walk.is_some()),
+        shapes(&ours.probe, walk.is_some()),
+    );
     if rs != os {
         diffs.push(format!(
             "the probe lines differ\nretail:\n  {}\nours:\n  {}",
@@ -504,7 +617,7 @@ fn gate(fixture: &str, sets: &[(&str, &str)]) {
 
 #[test]
 fn fall_damage_matches_retail_at_the_stock_bounds() {
-    gate(STOCK, &[]);
+    gate(STOCK, &[], None);
 }
 
 #[test]
@@ -515,5 +628,15 @@ fn fall_damage_follows_the_bound_cvars_as_retail_does() {
             ("bg_fallDamageMinHeight", "200"),
             ("bg_fallDamageMaxHeight", "1000"),
         ],
+        None,
     );
+}
+
+/// Each stun walks the player obliquely into the street's south wall, where
+/// retail's slide hands back the velocity it started with while `pm_time`
+/// runs: the rows read a velocity into the wall at a standstill across it
+/// (8.5).
+#[test]
+fn a_stunned_walk_into_a_wall_keeps_its_velocity_as_retail_does() {
+    gate(WALK, &[], Some(WALK_YAW));
 }

@@ -2391,12 +2391,15 @@ fn slide_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32, gravity: bool, m
     // `pml.walking`); `on_ground` covers a state no ground trace has run on.
     let ground = ps.ground_plane.or(ps.on_ground.then_some(ps.ground_normal));
     // average of start and end velocity, matching the analytic parabola
+    // Q3's `primal_velocity`: what a running timer hands back at the end.
+    let mut primal = ps.velocity;
     let mut end_velocity = ps.velocity;
     if gravity {
         // The x87 keeps `v - g * frametime` unrounded into the average and
         // rounds each store once (0x34811-0x34838).
         let end_z = f64::from(ps.velocity.z) - f64::from(GRAVITY) * f64::from(dt);
         end_velocity.z = end_z as f32;
+        primal.z = end_velocity.z;
         ps.velocity.z = ((end_z + f64::from(ps.velocity.z)) * 0.5) as f32;
         if let Some(n) = ground {
             ps.velocity = clip_velocity(ps.velocity, n);
@@ -2490,6 +2493,11 @@ fn slide_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32, gravity: bool, m
 
     if gravity {
         ps.velocity = end_velocity;
+    }
+    // Under a running `pm_time` the clips do not reach the velocity
+    // (0x34f83-0x34f9c; docs/research/cod11-player-clip.md 8.5).
+    if ps.knockback_ms != 0.0 {
+        ps.velocity = primal;
     }
     Slide {
         blocked: bumps != 0,
@@ -4372,6 +4380,28 @@ mod tests {
             "should have slid along the wall, at {}",
             ps.origin
         );
+    }
+
+    #[test]
+    fn a_running_timer_keeps_the_velocity_the_slide_clipped() {
+        let w = test_world(&[(Vec3::new(50.0, -400.0, 0.0), Vec3::new(100.0, 400.0, 100.0))]);
+        let w = MoveWorld::bare(&w);
+        let slide = |timer: f32| {
+            let mut ps = PlayerState::spawn(Vec3::new(30.0, 0.0, 1.0), 0.0);
+            ps.velocity = Vec3::new(300.0, 300.0, 0.0);
+            ps.knockback_ms = timer;
+            slide_move(&mut ps, &w, 0.05, false, MASK_PLAYERSOLID);
+            ps
+        };
+        let free = slide(0.0);
+        assert!(
+            free.velocity.x <= 0.0,
+            "the wall took the x: {}",
+            free.velocity
+        );
+        let held = slide(500.0);
+        assert_eq!(held.origin, free.origin, "the move itself is the same");
+        assert_eq!(held.velocity, Vec3::new(300.0, 300.0, 0.0));
     }
 
     #[test]

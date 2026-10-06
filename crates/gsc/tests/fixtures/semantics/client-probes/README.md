@@ -328,7 +328,10 @@ callback or `CMDS` lines), `mp_carentan-dm-fall-damage.txt` and
 `mp_carentan-dm-fall-damage-cvars.txt` (2026-10-06, the second with `+set
 bg_fallDamageMinHeight 200 +set bg_fallDamageMaxHeight 1000` after the
 `probe_teleport` set). `fall_ab` replays the `CMDS` timeline, so a new
-capture of either needs those lines. `docs/research/cod11-player-clip.md` 8.9 and 8.10 read
+capture of either needs those lines. `mp_carentan-dm-fall-walk.txt`
+(2026-10-06) is the stock-bounds run with `--probe-fall-walk 315` on the
+client, which holds forward at that world yaw, so each stun walks the player
+into the street's south wall; its `CMDS` lines carry each cmd's yaw word. `docs/research/cod11-player-clip.md` 8.9 and 8.10 read
 them, and `crates/server/tests/fall_ab.rs` gates the last two.
 
 ```

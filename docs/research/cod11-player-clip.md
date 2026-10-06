@@ -462,9 +462,31 @@ was, since the early return comes before step 4 of `cod11-mantle.md`'s
 VERIFIED: `PM_SlideMove` copies the velocity into a local at 0x347d4-0x347e7,
 replaces its z with the gravity-applied end velocity at 0x34838, and at
 0x34f83-0x34f9c, when `pm_time` is non-zero, stores that local back into the
-velocity. INFERRED: Q3's "don't change velocity if in a timer": under any
-running timer the slide's clips do not reach the velocity. Not modelled
-(section 12).
+velocity. The three early returns, all solid (0x348a5-0x348b8), too many
+planes and the three-plane stop (0x34a4b-0x34a6c), jump past it to 0x34fac.
+INFERRED: Q3's "don't change velocity if in a timer": under any running
+timer the slide's clips do not reach the velocity, and the move itself is
+unchanged. VERIFIED: the only `pm_time` stores in the pmove range are
+0x2ffd7 (8.7), 0x300af (8.4) and `PM_DropTimers` (0x32a66, 0x32a72); there
+is no water-jump timer.
+
+VERIFIED, one run on 2026-10-06 against the retail 1.1d server:
+`probe_fall` with a `--probe-fall-walk 315` client, which holds forward at
+world yaw 315 on every cmd, so each stunned landing walks the player
+diagonally into the street's south wall, whose plane the player's origin
+meets at y 1815.128
+(`crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall-walk.txt`).
+Rows under the stun read the player on that plane with a velocity into it:
+`ct=19967 origin=1026.589,1815.128,-39.875 vel=157,-152,0 ...
+pm_flags=0x40100 pm_time=573` (line 213), and further along, where the
+street rises, `ct=20536 ... vel=160,-157,10 ... pm_time=4`; the next row,
+`ct=20566`, has `pm_time` 0 and reads `vel=169,0,11` on the same plane.
+VERIFIED, vcod measurement the same day: without the restore ours read
+`vel=149,0,0` on the wall under the stun; with it, every stunned row's
+velocity, `pm_time` and `commandTime` match retail's.
+INFERRED: the velocity survives the wire because `PmoveSingle`'s tail
+(0x34398) only replaces a velocity at least twice the move, and a 45-degree
+slide moves 0.71 of it.
 
 ### 8.6 The damage-free ladder's parm
 
@@ -933,7 +955,10 @@ The gates:
   ring), to the probe's lines with only their times masked (and the resting
   origin of the first drop and of the corpse), to the same landing parms,
   to each damage against the share of its own parm, no `EV_PAIN`, and the
-  systeminfo bounds. `FALL_REPORT=1` prints both sides' parms.
+  systeminfo bounds. `FALL_REPORT=1` prints both sides' parms. The walk
+  capture (8.5) is replayed the same way with each cmd's yaw word and
+  forward held, and held on its stunned rows: `commandTime`, velocity,
+  ground, `pm_flags`, `pm_time` and health exactly, origin within a unit.
 
 ## 12. Divergences and not modelled
 
@@ -983,13 +1008,16 @@ The gates:
   The callback's ops now reach the sim straight after that touch pass. A
   stock map's only `trigger_hurt` is the kill volume under the floor.
 - **The landing stun**, closed 2026-10-05 (section 8). What it left open:
-  - **The slide's timer restore** (8.5) is not ported: under any running
-    timer, the push's included, retail's `PM_SlideMove` hands back the
-    velocity it started with. VERIFIED, vcod measurement 2026-10-05: with
-    the restore added, `bump_ab`, `stuck_ab`, `playerstate_slope_ab`,
-    `playerstate_motion_ab`, `predict_ab`, `player_clip`, `combat` and
-    `playerstate_combat_ab` all stay green, so no committed capture reaches
-    a clip under a timer. Left to whoever next touches the step-slide move.
+  - **The slide's timer restore** (8.5), closed 2026-10-06: `slide_move`
+    hands back its starting velocity, with the gravity end velocity for z,
+    whenever `knockback_ms` runs. `fall_ab`'s walk capture measured it.
+  - **The walk capture's corner.** VERIFIED, 2026-10-06: walking 315 after
+    each stun ends at a corner where retail's player rests at x 1231.15
+    with `groundEntityNum` flipping between 1022 and 1023 and `velocity`
+    reading `0,0,1`, `-1,0,0` or `0,0,3` from snapshot to snapshot; ours
+    rests at 1230.87 on 1022 at `0,0,0`. Not looked into; `fall_ab` masks
+    the walk's rest and allows a unit of origin on the stun rows that
+    follow.
   - **Fall damage, the two cvars and a dead player's landing**, closed
     2026-10-05 (8.8, 8.10). VERIFIED: `PmoveSingle`'s jump table (rodata
     0x70ce8) sends `pm_type` 6 to 0x34274 and on to the default arm, whose
