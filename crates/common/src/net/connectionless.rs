@@ -4,9 +4,14 @@
 //! Out-of-band packets: 0xFFFFFFFF prefix and a text command, both halves of
 //! the wire (RTCW net_chan.c NET_OutOfBandPrint, cl_main.c CL_ConnectionlessPacket).
 
+const OOB_PREFIX: [u8; 4] = [0xff; 4];
+/// The command word of a connect packet; huffman starts right after it.
+const CONNECT_CMD: &str = "connect ";
+const CONNECT_COMPRESS_START: usize = OOB_PREFIX.len() + CONNECT_CMD.len();
+
 pub fn build_oob(cmd: &str) -> Vec<u8> {
-    let mut v = Vec::with_capacity(4 + cmd.len());
-    v.extend_from_slice(&[0xff, 0xff, 0xff, 0xff]);
+    let mut v = Vec::with_capacity(OOB_PREFIX.len() + cmd.len());
+    v.extend_from_slice(&OOB_PREFIX);
     v.extend_from_slice(cmd.as_bytes());
     v
 }
@@ -16,24 +21,25 @@ pub fn build_oob(cmd: &str) -> Vec<u8> {
 /// decompresses. Plaintext gets `error\nEXE_SERVER_IS_DIFFERENT_VER`.
 /// docs/protocol-1.1.md, divergence #1.
 pub fn build_connect(userinfo: &str) -> Vec<u8> {
-    let mut v = build_oob("connect ");
+    let mut v = build_oob(CONNECT_CMD);
     v.push(b'"');
     v.extend_from_slice(userinfo.as_bytes());
     v.push(b'"');
-    super::huffman::compress(&mut v, 12);
+    super::huffman::compress(&mut v, CONNECT_COMPRESS_START);
     v
 }
 
 /// Server half of [`build_connect`]; returns the userinfo without its quotes
 /// (`SV_DirectConnect`'s `Cmd_Argv(1)`).
 pub fn parse_connect(packet: &[u8]) -> anyhow::Result<String> {
+    let start = CONNECT_COMPRESS_START;
     anyhow::ensure!(
-        packet.len() > 12 && &packet[..12] == b"\xff\xff\xff\xffconnect ",
+        packet.len() > start && packet[..start] == *build_oob(CONNECT_CMD),
         "not a connect packet"
     );
     let mut body = packet.to_vec();
-    super::huffman::decompress(&mut body, 12);
-    let s = body[12..].strip_prefix(b"\"").unwrap_or(&body[12..]);
+    super::huffman::decompress(&mut body, start);
+    let s = body[start..].strip_prefix(b"\"").unwrap_or(&body[start..]);
     let end = s
         .iter()
         .position(|&b| b == b'"' || b == 0)
@@ -98,7 +104,7 @@ pub fn info_value_for_key<'a>(info: &'a str, key: &str) -> Option<&'a str> {
 
 /// `(first word, remainder after the separator)`; `None` without the -1 prefix.
 pub fn parse_oob(packet: &[u8]) -> Option<(&str, &[u8])> {
-    let body = packet.strip_prefix(&[0xff, 0xff, 0xff, 0xff][..])?;
+    let body = packet.strip_prefix(&OOB_PREFIX[..])?;
     let end = body
         .iter()
         .position(|&b| b == b' ' || b == b'\n' || b == 0)
