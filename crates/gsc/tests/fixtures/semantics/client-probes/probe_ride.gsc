@@ -2,7 +2,8 @@
 //	bombzone_A brush model *5 (dm's _gameobjects would delete it), puts every
 //	allied player on its floor slab (brush 4281, top z -22) under
 //	probe_teleport 1, and runs one verb per phase on the brush model, then on a
-//	script_origin the player is linked to. Every server frame of a phase logs
+//	script_origin the player is linked to, and last hides, shows, notsolids,
+//	solids and deletes the brush model. Every server frame of a phase logs
 //	the player's origin and the mover's getorigin()/.angles:
 //
 //		PROBE f <phase> <time> <player origin> <mover origin> <mover angles>
@@ -157,6 +158,25 @@ phases(bz)
 
 	self unlink();
 	org delete();
+
+	//	Back beside the slab, in range of it: what hide, notsolid and delete
+	//	do to the brush model's entity on the wire.
+	self place((-215, 2430, -31), 90);
+	logPrint("PROBE at bm_hide " + getTime() + "\n");
+	bz hide();
+	self sample("bm_hide", bz, 1);
+	logPrint("PROBE at bm_show " + getTime() + "\n");
+	bz show();
+	self sample("bm_show", bz, 1);
+	logPrint("PROBE at bm_notsolid " + getTime() + "\n");
+	bz notsolid();
+	self sample("bm_notsolid", bz, 1);
+	logPrint("PROBE at bm_solid " + getTime() + "\n");
+	bz solid();
+	self sample("bm_solid", bz, 1);
+	logPrint("PROBE at bm_delete " + getTime() + "\n");
+	bz delete();
+	wait 1;
 	logPrint("PROBE done " + getTime() + "\n");
 }
 

@@ -320,7 +320,10 @@ fn a_ramped_move_puts_retails_four_records_on_the_wire() {
         for f in 0..=45 {
             host.level_time_ms = f * FRAME_MS;
             vcod_server::game::mover::run(&mut host, cx);
-            let (pos, _) = host.movers.wire(e).expect("a mover row");
+            let (pos, _) = host
+                .movers
+                .wire(e, host.level_time_ms)
+                .expect("a mover row");
             let rec = (pos.tr_type, pos.tr_duration, pos.base.z, pos.delta.z);
             if last.as_ref() != Some(&rec) {
                 ours.push(rec);

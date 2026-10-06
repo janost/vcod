@@ -309,7 +309,9 @@ VERIFIED, off the capture:
   away it went on down.
 - **A verb on a moving entity.** A `moveto((0, 0, 0), 1)` called at 42250
   while the stalled descent was still running replaced it: the wire's new
-  `trBase` z 30 is what `getorigin()` read at the call.
+  `trBase` z 30 is the old trajectory at the call's level time, and its
+  `trDelta` z -32 is the 32 that `getorigin()` read a frame earlier. Section
+  14 has the second run that tells the two apart.
 - **The residual yaw.** After `rotateyaw(2, 1)` and `rotateyaw(-2, 1)` the
   slab's `apos.trBase` reads `-0.0` and the pushed player drifts +x by 0.021
   a frame while it is pushed, the slab's whole push turning about the world
@@ -347,9 +349,56 @@ angles at the link, so it cannot tell a parent-frame offset from a world one.
 vcod: the re-anchor reads `ScriptRuntime::link_anchor`, the mover's plan at
 the level time, and `linkTo` stores the offset in the parent's frame.
 
-## 14. The client's half
+## 14. The brush model on the wire, and the client's half
 
-Not implemented in vcod; read here for the follow-up.
+The evidence for the wire half is a third capture from the same probe with
+five phases added at its end (`hide`, `show`, `notsolid`, `solid`, `delete`
+on the slab), 2026-10-06:
+`crates/server/tests/fixtures/movers/mp_carentan-dm-ride-ents.txt`, the
+server's phase starts and the `--probe-ride` client's `RIDE_ENT` (the slab's
+`solid`, `index` and `eFlags` on change), `RIDE_GONE` and trajectory lines.
+
+VERIFIED, off that capture: both bombzone brush models arrive on the first
+snapshot as `eType` 8, `solid` `0xffffff`, `index` 5 and 6 (their inline
+model numbers) and `eFlags` 0. Model configstring 5 on that load is
+`xmodel/barrel_black1`, so the `index` of a `0xffffff` entity names an inline
+model, not a configstring slot. VERIFIED: `SV_LinkEntity` (cod_lnxded
+`0x80908b0`) stores `0xffffff` into `s.solid` when `r.bmodel` is set
+(`0x80908da`) before it reads `r.contents`.
+
+VERIFIED, off the capture: `hide()` at 53450 put `eFlags` `0x100` on the
+53450 snapshot and `show()` at 54450 took it off on the 54450 one; `notsolid()`
+and `solid()` changed nothing on the wire, the entity staying in every
+snapshot with `solid` `0xffffff`; `delete()` at 57450 took it out of the 57450
+snapshot. VERIFIED, game.mp: the per-entity runner `0x602bc` sets byte
+`ent+9` bit 1 (`s.eFlags` `0x100`) when byte `ent+0x17d` bit `0x10` (the
+`flags` `0x1000` `ScrCmd_Hide` writes) is set and clears it otherwise, for an
+entity with no client (`ent+0x158` zero). INFERRED: a `notSolid()`ed brush
+model is still sent as one, and the entity leaves the snapshot on the frame
+of the `delete()`, a tenth of a second before the free.
+
+VERIFIED, off the capture's trajectory lines: a move reads stationary on the
+snapshot of the frame its last segment ends (`ride_up`, called at 10450 for
+2 s, reads `trType` 0 `trTime` 12450 at 12450), a frame before script's
+`movedone` (section 8). Every frame the lowered slab is blocked, `trTime` of
+`pos` and of the stationary `apos` both advance 50 (section 12).
+
+VERIFIED, off the same: the `moveto((0, 0, 0), 1)` at 41450 on the
+descending slab sent `trBase` z 28 and `trDelta` z -30, where script read z
+30 at the call; the move ended at 42450 on `trBase` `(0, 0, 0)`. INFERRED:
+`trBase` is the old trajectory at the call's level time, the velocity is
+taken from `r.currentOrigin`, a frame behind it, and the stationary end is
+the destination rather than where the segment ran out (z -2). The first run's
+moveto (section 12) is the same rule with the slab 2 units higher.
+
+vcod: `crate::game::wire` sends a `script_brushmodel` as `eType` 8, `solid`
+`0xffffff`, `index` its `*N`, `eFlags` `0x100` while hidden, and drops it on
+`delete()`; `Movers::wire` hands the plans over advanced to the level time;
+`crate::world` culls a brush model by its inline model's bounds (a cube of
+their radius once its angles are not zero, `SV_LinkEntity`'s `r.bmodel`
+arm). `ride_ab.rs` diffs the slab's entity per snapshot against the capture.
+
+### The client
 
 VERIFIED, `cgame_mp_x86.dll`: `CG_ClipMoveToEntities` (`0x30028df0`) takes
 an entity whose `solid` is `0xffffff` down a separate arm that calls syscall
@@ -366,13 +415,3 @@ four times and writes `in + (a - b)` and an angle delta;
 `CG_PredictPlayerState` (`0x300294f0`) calls it at two sites. INFERRED: it is
 Q3's `CG_AdjustPositionForMover`, carrying the predicted origin with the
 ground entity's motion between the snapshot time and the render time.
-
-VERIFIED, off a second `--probe-ride` run against the same probe
-(`RIDE_ENT` lines, 2026-10-05, not kept): retail sends both bombzone brush
-models to a client in range as `eType` 8 with `solid` `0xffffff` and `index`
-5 and 6, their inline model numbers, and `eFlags` 0. Model configstring 5 on
-that load is `xmodel/barrel_black1`. INFERRED: a `0xffffff` entity's `index`
-names an inline model, not a configstring slot. vcod's server does not put a
-`script_brushmodel` on the wire yet (`crate::game::wire`, `kind_of`), and
-vcod's client resolves every mover's `index` through the model configstrings
-(`crates/client/src/entities.rs`), so it would draw the barrel.

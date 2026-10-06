@@ -48,6 +48,9 @@ struct Plan {
     /// untouched, and writing an unstarted group's zero trajectory back onto
     /// the entity would teleport it to the origin.
     started: bool,
+    /// Where a bounded verb settles, which is its destination rather than
+    /// where its segments run out when the two differ (`Movers::move_to`).
+    dest: Option<Vec3>,
 }
 
 impl Plan {
@@ -80,11 +83,12 @@ impl Plan {
     }
 
     /// `G_MoverTeam`'s blocked arm: the running segment starts a frame later,
-    /// so the group holds where it was for this frame.
+    /// so the group holds where it was for this frame. Retail shifts both
+    /// groups whether or not they are moving: the stationary `apos` of the
+    /// crush capture advances its `trTime` 50 a frame too (movers doc,
+    /// section 12).
     fn stall(&mut self) {
-        if self.notify.is_some() {
-            self.current.tr_time += crate::server::FRAME_MS;
-        }
+        self.current.tr_time += crate::server::FRAME_MS;
     }
 }
 
@@ -93,9 +97,10 @@ impl Plan {
     /// on a moving entity taking over rather than queueing behind it is
     /// UNVERIFIED (movers doc, section 10); it is the reading that keeps one
     /// group to one trajectory, which is all the wire can carry. The caller
-    /// sets `current` stationary at the origin script reads first, so a verb
-    /// on a moving entity starts from there, not from the old trajectory.
+    /// sets `current` stationary where the verb starts first, and the
+    /// destination after.
     fn start(&mut self, now_ms: i32, segments: Vec<Trajectory>, notify: &'static str) {
+        self.dest = None;
         let mut q: std::collections::VecDeque<Trajectory> = segments.into();
         let Some(mut first) = q.pop_front() else {
             return;
@@ -138,7 +143,7 @@ impl Plan {
             self.current = Trajectory {
                 tr_type: TR_STATIONARY,
                 tr_time: end,
-                base: self.current.evaluate(end),
+                base: self.dest.unwrap_or_else(|| self.current.evaluate(end)),
                 ..self.current
             };
         }
@@ -183,10 +188,18 @@ pub struct Done {
 }
 
 impl Movers {
-    /// The trajectory pair to put on the wire, or `None` for an entity no
-    /// verb has ever touched.
-    pub fn wire(&self, id: EntId) -> Option<(Trajectory, Trajectory)> {
-        self.rows.get(&id).map(|m| (m.pos.current, m.apos.current))
+    /// The trajectory pair to put on the wire at level time `t`, or `None`
+    /// for an entity no verb has ever touched. The plans retire segments on
+    /// script's clock, a frame behind; the wire is on `G_MoverTeam`'s, so a
+    /// move reads stationary on the snapshot of the frame it ends, as the
+    /// ride capture's trajectory lines show (movers doc, section 14).
+    pub fn wire(&self, id: EntId, t: i32) -> Option<(Trajectory, Trajectory)> {
+        let at = |p: &Plan| {
+            let mut p = p.clone();
+            p.advance(t);
+            p.current
+        };
+        self.rows.get(&id).map(|m| (at(&m.pos), at(&m.apos)))
     }
 
     pub fn forget(&mut self, id: EntId) {
@@ -215,19 +228,40 @@ impl Movers {
     /// `moveto` and the three axis verbs, which differ only in how the
     /// caller builds `dest` (movers doc, section 3: the axis verbs take a
     /// delta, `moveto` a destination).
+    ///
+    /// The segments' velocities come from `from`, the origin script reads,
+    /// but a verb on a moving entity starts its `trBase` where the running
+    /// trajectory has it at `now_ms`, a frame further on: the ride
+    /// capture's `moveto` on the descending slab sent `trBase` z 28 with a
+    /// velocity of -30 from the 30 script read, ran out 2 units short and
+    /// settled on `dest` (movers doc, section 14).
     pub fn move_to(&mut self, id: EntId, now_ms: i32, from: Vec3, dest: Vec3, m: Ramp) {
         let row = self.rows.entry(id).or_default();
-        row.pos.current = stationary(from);
+        let base = if row.pos.started {
+            row.pos.at(now_ms)
+        } else {
+            from
+        };
+        row.pos.current = stationary(base);
         row.pos.start(now_ms, m.segments(dest - from), MOVEDONE);
+        row.pos.dest = Some(dest);
     }
 
     /// `rotateto` and the three axis verbs. The delta is taken per component
     /// rather than along the shortest arc: every measured case is a single
     /// axis, where the two agree, and a multi-axis `rotateto` is UNVERIFIED.
+    /// Started like [`Self::move_to`], which is INFERRED for the angles: no
+    /// capture holds a rotate called on an entity already turning.
     pub fn rotate_to(&mut self, id: EntId, now_ms: i32, from: Vec3, dest: Vec3, m: Ramp) {
         let row = self.rows.entry(id).or_default();
-        row.apos.current = stationary(from);
+        let base = if row.apos.started {
+            row.apos.at(now_ms)
+        } else {
+            from
+        };
+        row.apos.current = stationary(base);
         row.apos.start(now_ms, m.segments(dest - from), ROTATEDONE);
+        row.apos.dest = Some(dest);
     }
 
     /// `movegravity(velocity, seconds)`: one unbounded-shape segment on a
@@ -578,7 +612,7 @@ mod tests {
             Vec3::new(0.0, 0.0, 300.0),
             3.0,
         );
-        let (pos, _) = movers.wire(id).unwrap();
+        let (pos, _) = movers.wire(id, 0).unwrap();
         // z(t) = 100 + 300t - 400t^2, the retail trace to the digit.
         assert!((pos.evaluate(375).z - 156.25).abs() < 0.01);
         assert!((pos.evaluate(3000).z + 2600.0).abs() < 0.01);

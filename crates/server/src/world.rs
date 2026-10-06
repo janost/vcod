@@ -48,12 +48,35 @@ pub fn visible_entities(
 /// [`visible_entities`]' test for one entity, from the cluster `from`.
 pub fn entity_visible(vis: &bsp::Visibility, from: i32, e: &EntityState, p: &Protocol) -> bool {
     let o = e.origin(p);
-    let (mins, maxs) = crate::game::wire::link_box(e.field_i32(p, "eType"));
+    let (mins, maxs) = link_bounds(vis, e, p);
     let at = |b: [f32; 3], pad: f32| [o[0] + b[0] + pad, o[1] + b[1] + pad, o[2] + b[2] + pad];
     let clusters = vis.clusters_in_box(at(mins, -LINK_EPSILON), at(maxs, LINK_EPSILON));
     // An entity whose box touches no cluster at all is skipped, the way the
     // module's loop skips one with `numClusters == 0`.
     clusters.iter().any(|&c| vis.visible(from, c))
+}
+
+/// The box about the origin an entity links with. A brush model's is its
+/// inline model's bounds, or with any angle set a cube of the radius of those
+/// bounds: VERIFIED, `SV_LinkEntity`'s `r.bmodel` arm (cod_lnxded 0x80908b0)
+/// takes `RadiusFromBounds` when `r.currentAngles` is not zero. The origin is
+/// `pos.trBase`, where retail links at the evaluated `r.currentOrigin`; the
+/// two differ only while a trajectory runs.
+fn link_bounds(vis: &bsp::Visibility, e: &EntityState, p: &Protocol) -> ([f32; 3], [f32; 3]) {
+    let model = (e.field_i32(p, "solid") == crate::game::wire::SOLID_BMODEL)
+        .then(|| vis.model_bounds(e.field_i32(p, "index") as usize))
+        .flatten();
+    let Some((mins, maxs)) = model else {
+        return crate::game::wire::link_box(e.field_i32(p, "eType"));
+    };
+    if e.angles(p) == [0.0; 3] {
+        return (mins, maxs);
+    }
+    let r = (0..3)
+        .map(|i| mins[i].abs().max(maxs[i].abs()).powi(2))
+        .sum::<f32>()
+        .sqrt();
+    ([-r; 3], [r; 3])
 }
 
 impl World {
