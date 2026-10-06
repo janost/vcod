@@ -80,8 +80,9 @@ VERIFIED (measured, `crates/server/tests/bot_objectives.rs`, 2 bots, shoot
 off, seed 7, `mp_carentan`): the attacker plants at tick 654 of the run,
 counting the match-start restart; the defender defuses 222 ticks later.
 Sweeps over seeds 1-6 on `mp_carentan`, `mp_harbor`, `mp_dawnville` and
-`mp_rocket`, and with 4 and 6 bots on the first two, all planted and
-defused; the slowest defuse (1109 ticks, `mp_rocket`) was the nav follower
+`mp_rocket`, with 4 bots on `mp_carentan` and 6 on `mp_harbor`, and with 6
+shooting bots on `mp_carentan` (seed 7: plant at tick 729, defuse 496 ticks
+later), all planted and defused; the slowest defuse (1109 ticks, `mp_rocket`) was the nav follower
 stalled at a drop on the way. `mp_chateau` and `mp_ship` carry no
 `bombzone`, `bombtrigger` or S&D spawn entity (VERIFIED, ents lump strings),
 so stock S&D does not run there.
