@@ -1477,7 +1477,11 @@ impl ApplicationHandler for App {
                 if let Some(w) = &self.world
                     && !matches!(self.mode, Mode::Online { .. })
                 {
-                    r.set_static_submodels(&(1..w.bsp.models.len()).collect::<Vec<_>>());
+                    r.set_submodels(
+                        &(1..w.bsp.models.len())
+                            .map(|m| (m, glam::Mat4::IDENTITY))
+                            .collect::<Vec<_>>(),
+                    );
                 }
                 if !self.viewmodel.is_empty() {
                     r.set_viewmodel(&self.fs, &self.viewmodel);
@@ -1991,8 +1995,6 @@ impl ApplicationHandler for App {
                                         last_loop_snap,
                                         drawn_pos,
                                     } = &mut **live;
-                                    let bsp =
-                                        &self.world.as_ref().expect("live phase has a map").bsp;
                                     let p = &net::protocol::PROTOCOL_V1;
                                     let client_num = net.gamestate().map_or(-1, |g| g.client_num);
                                     // While following, ps.clientNum is the followed
@@ -2046,7 +2048,6 @@ impl ApplicationHandler for App {
                                             skip_num,
                                             net.configstrings(),
                                             &self.fs,
-                                            bsp,
                                             r,
                                             p,
                                         );
@@ -2056,7 +2057,7 @@ impl ApplicationHandler for App {
                                         weapon_flash = built.weapon_flash;
                                         entity_pos = built.entity_pos;
                                         turret_eye = built.turret_eye;
-                                        r.set_static_submodels(&built.static_submodels);
+                                        r.set_submodels(&built.submodels);
                                         // Over 512 u is a teleport, not motion.
                                         let pos = if oa.distance(ob) > 512.0 {
                                             ob

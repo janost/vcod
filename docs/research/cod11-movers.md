@@ -489,13 +489,18 @@ surfaces are in world space; the only submodels with draw surfaces belong to
 none. INFERRED: the ride capture's slab is clip only, drawn by nothing on
 retail either.
 
+INFERRED, off the ref entity at `0x3001b76d` naming the inline model rather
+than an xmodel: the renderer draws a moved brush model's own BSP surfaces,
+lightmap indices and all, so it keeps the lighting baked where it was
+compiled. Not read in `CoDMP.exe`.
+
 vcod: `entities::resolve_visual` takes a `0xffffff` entity's `index` as its
 inline model and skips one with `eFlags` `0x100`. A brush model whose entity
-stands at the zero pose draws with the world, lightmapped; one that has moved
-draws as a dynamic instance at its interpolated pose, under the dynamic
-models' fixed key light; one with no entity in the snapshot draws nowhere
-(`Renderer::set_static_submodels`). With no server, every one draws at
-spawn.
+stands at the zero pose draws with the world; one that has moved draws its
+own soups through the world's pipelines and lightmaps under a camera whose
+`model` matrix is its interpolated pose; one with no entity in the snapshot
+draws nowhere (`Renderer::set_submodels`). With no server, every one draws
+at spawn.
 
 VERIFIED, `cgame_mp_x86.dll`: `CG_ClipMoveToEntities` (`0x30028df0`) takes
 an entity whose `solid` is `0xffffff` down a separate arm that calls syscall

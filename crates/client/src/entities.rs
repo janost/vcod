@@ -8,7 +8,6 @@ use glam::{Mat4, Quat, Vec3};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use vcod_common::animtree::PlayerAnims;
-use vcod_common::bsp::Bsp;
 use vcod_common::net::msg::{ClientState, EntityState};
 use vcod_common::net::protocol::{CS_MODELS_V1, CS_TAGS_V1, Protocol};
 use vcod_common::net::snapshot::Snapshot;
@@ -458,9 +457,6 @@ pub struct EntityScene {
     model_cache: HashMap<String, Option<ModelHandle>>,
     /// Weapon defs by CS 7 name. `None` is a failed load, warned once.
     weapon_cache: HashMap<String, Option<vcod_common::weapon::WeaponDef>>,
-    /// Uploaded inline BSP submodels by index. `None` is a collision-only
-    /// submodel, the common case; it must not be re-extracted every frame.
-    submodel_cache: HashMap<usize, Option<ModelHandle>>,
     /// `ET_ITEM`/held-weapon failure reasons already logged, keyed by kind
     /// and index or name.
     warned_items: HashSet<String>,
@@ -523,7 +519,6 @@ impl EntityScene {
             parts: HashMap::new(),
             model_cache: HashMap::new(),
             weapon_cache: HashMap::new(),
-            submodel_cache: HashMap::new(),
             warned_items: HashSet::new(),
             anims: None,
             clips: HashMap::new(),
@@ -623,28 +618,6 @@ fn resolve_turret_rig<'a>(
         cache.insert(name.to_string(), rig);
     }
     cache.get_mut(name).unwrap().as_mut()
-}
-
-/// Uploads inline BSP submodel `n`, caching the result: a brush model that
-/// has moved off its spawn pose. At rest it draws with the world instead,
-/// lightmapped; this path has the dynamic models' fixed key light.
-fn resolve_submodel(
-    cache: &mut HashMap<usize, Option<ModelHandle>>,
-    renderer: &mut Renderer,
-    fs: &Pk3Fs,
-    bsp: &Bsp,
-    n: usize,
-) -> Option<ModelHandle> {
-    if let Some(h) = cache.get(&n) {
-        return *h;
-    }
-    // submodel 0 is the whole world: wrong here and expensive to flatten
-    let handle = (n > 0)
-        .then(|| bsp.submodel_mesh(n))
-        .flatten()
-        .and_then(|(surfaces, materials)| renderer.upload_dynamic_mesh(fs, &surfaces, &materials));
-    cache.insert(n, handle);
-    handle
 }
 
 /// Loads the weapon file for a CS 7 name, caching failures as `None`.
@@ -755,9 +728,9 @@ pub struct BuiltScene {
     pub entity_pos: HashMap<u32, Vec3>,
     /// The gun `b.ps` rides, when it was drawn: the first-person eye.
     pub turret_eye: Option<TurretEye>,
-    /// Inline models whose entity stands where the map put them, drawn with
-    /// the world ([`Renderer::set_static_submodels`]).
-    pub static_submodels: Vec<usize>,
+    /// Inline models drawn this frame with their entity's pose, the identity
+    /// for one where the map put it ([`Renderer::set_submodels`]).
+    pub submodels: Vec<(usize, Mat4)>,
 }
 
 /// An entity's origin and `[pitch, yaw, roll]` at `render_time`. STATIONARY
@@ -909,7 +882,6 @@ pub fn build_instances(
     skip_num: i32,
     configstrings: &[String],
     fs: &Pk3Fs,
-    bsp: &Bsp,
     renderer: &mut Renderer,
     p: &Protocol,
 ) -> BuiltScene {
@@ -919,7 +891,6 @@ pub fn build_instances(
         parts,
         model_cache,
         weapon_cache,
-        submodel_cache,
         warned_items,
         anims,
         clips,
@@ -950,7 +921,7 @@ pub fn build_instances(
     let mut weapon_flash: HashMap<i32, String> = HashMap::new();
     let mut entity_pos: HashMap<u32, Vec3> = HashMap::new();
     let mut turret_eye = None;
-    let mut static_submodels = Vec::new();
+    let mut submodels = Vec::new();
     let ps_int = |name: &str| b.ps.field_i32(p, name);
     let ridden = turret::ridden(
         ps_int("eFlags"),
@@ -1313,18 +1284,8 @@ pub fn build_instances(
                 // At rest where the map put it, which is the zero pose: no
                 // stock `script_brushmodel` carries an `origin` key, so its
                 // brushes and surfaces are in world space.
-                if pos.abs().max_element() < 0.01 && angles.abs().max_element() < 0.01 {
-                    static_submodels.push(n);
-                    continue;
-                }
-                let Some(handle) = resolve_submodel(submodel_cache, renderer, fs, bsp, n) else {
-                    continue; // collision-only submodel: nothing to draw
-                };
-                out.push(DynamicModelInstance {
-                    model: handle,
-                    transform,
-                    bones: None,
-                });
+                let at_rest = pos.abs().max_element() < 0.01 && angles.abs().max_element() < 0.01;
+                submodels.push((n, if at_rest { Mat4::IDENTITY } else { transform }));
             }
             EntityVisual::Turret { model, weapon } => {
                 let (Some(rig), Some(gun)) = (
@@ -1448,7 +1409,7 @@ pub fn build_instances(
         weapon_flash,
         entity_pos,
         turret_eye,
-        static_submodels,
+        submodels,
     }
 }
 
