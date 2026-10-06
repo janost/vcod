@@ -5380,7 +5380,7 @@ mod tests {
         let w = flat();
         let bodies = [body(20.0, 0.0, 0.0)];
         let mw = MoveWorld::new(&w, &bodies, 0);
-        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.125), 0.0);
         ps.velocity = Vec3::new(200.0, 0.0, 0.0);
         for _ in 0..10 {
             dead_move(&mut ps, &mw, 0.05);
