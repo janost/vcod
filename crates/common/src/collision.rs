@@ -647,6 +647,10 @@ pub struct CollisionWorld {
     /// against a render soup's facet.
     tris_terrain: Vec<bool>,
     nodes: Vec<BvhNode>,
+    /// The subtree holding every [`Prim::Model`] and nothing else, which a
+    /// trace without the static models skips whole; `u32::MAX` when the map
+    /// has none or nothing else.
+    models_root: u32,
     prims: Vec<(Prim, Vec3, Vec3)>,
     water: Vec<Volume>,
     /// Brushes whose material carries [`CONTENTS_NODROP`], for
@@ -1032,10 +1036,37 @@ impl CollisionWorld {
             model_tris_out.push(*mt);
         }
 
+        // The static models sit in a subtree of their own under the root:
+        // movement traces never clip them, and mixed in they widen every box
+        // a player's sweep enters.
         let mut nodes = Vec::new();
-        if !t.prims.is_empty() {
-            build_bvh(&mut t.prims, 0, &mut nodes);
-        }
+        let split = t.prims.partition_point(|p| !matches!(p.0, Prim::Model(_)));
+        let models_root = if split == 0 || split == t.prims.len() {
+            if !t.prims.is_empty() {
+                build_bvh(&mut t.prims, 0, &mut nodes);
+            }
+            u32::MAX
+        } else {
+            nodes.push(BvhNode {
+                lo: Vec3::ZERO,
+                hi: Vec3::ZERO,
+                first: 0,
+                second: 0,
+                count: 0,
+            });
+            let (world_prims, model_prims) = t.prims.split_at_mut(split);
+            let wi = build_bvh(world_prims, 0, &mut nodes);
+            let mi = build_bvh(model_prims, split as u32, &mut nodes);
+            let (w, m) = (&nodes[wi as usize], &nodes[mi as usize]);
+            nodes[0] = BvhNode {
+                lo: w.lo.min(m.lo),
+                hi: w.hi.max(m.hi),
+                first: wi,
+                second: mi,
+                count: 0,
+            };
+            mi
+        };
 
         CollisionWorld {
             brushes,
@@ -1045,6 +1076,7 @@ impl CollisionWorld {
             tris_contents: t.contents,
             tris_terrain: t.terrain,
             nodes,
+            models_root,
             prims: t.prims,
             water,
             nodrop,
@@ -1381,7 +1413,7 @@ impl CollisionWorld {
         let mut stack = vec![0u32];
         while let Some(i) = stack.pop() {
             let node = &self.nodes[i as usize];
-            if !(p.cmple(node.hi).all() && p.cmpge(node.lo).all()) {
+            if i == self.models_root || !(p.cmple(node.hi).all() && p.cmpge(node.lo).all()) {
                 continue;
             }
             if node.count == 0 {
@@ -1557,6 +1589,9 @@ impl CollisionWorld {
         trace: &mut Trace,
         scratch: &mut Vec<(Vec3, f32)>,
     ) {
+        if !statics && i == self.models_root {
+            return;
+        }
         let node = &self.nodes[i as usize];
         let cur_end = start + (end - start) * trace.fraction;
         let lo = start.min(cur_end) + mins - Vec3::ONE;
@@ -1712,11 +1747,18 @@ impl CollisionWorld {
 }
 
 /// `base` is the absolute index of prims[0] within CollisionWorld::prims.
+/// Splits by the surface area heuristic over binned centroids: a few large
+/// brushes or terrain sheets otherwise widen a median split's boxes until a
+/// small sweep enters most of the tree.
 fn build_bvh(prims: &mut [(Prim, Vec3, Vec3)], base: u32, nodes: &mut Vec<BvhNode>) -> u32 {
     let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+    let (mut clo, mut chi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
     for (_, plo, phi) in prims.iter() {
         lo = lo.min(*plo);
         hi = hi.max(*phi);
+        let c = (*plo + *phi) * 0.5;
+        clo = clo.min(c);
+        chi = chi.max(c);
     }
     let idx = nodes.len() as u32;
     nodes.push(BvhNode {
@@ -1729,20 +1771,67 @@ fn build_bvh(prims: &mut [(Prim, Vec3, Vec3)], base: u32, nodes: &mut Vec<BvhNod
     if prims.len() <= 4 {
         return idx;
     }
-    let extent = hi - lo;
-    let axis = if extent.x >= extent.y && extent.x >= extent.z {
-        0
-    } else if extent.y >= extent.z {
-        1
-    } else {
-        2
+    const BINS: usize = 16;
+    let area = |lo: Vec3, hi: Vec3| {
+        let e = (hi - lo).max(Vec3::ZERO);
+        e.x * e.y + e.y * e.z + e.z * e.x
     };
-    let mid = prims.len() / 2;
-    prims.select_nth_unstable_by(mid, |x, y| {
-        let cx = (x.1[axis] + x.2[axis]) * 0.5;
-        let cy = (y.1[axis] + y.2[axis]) * 0.5;
-        cx.total_cmp(&cy)
-    });
+    let span = chi - clo;
+    let bin_of = |axis: usize, p: &(Prim, Vec3, Vec3)| {
+        let c = (p.1[axis] + p.2[axis]) * 0.5;
+        (((c - clo[axis]) / span[axis] * BINS as f32) as usize).min(BINS - 1)
+    };
+    // (cost, axis, first bin of the right half)
+    let mut best: Option<(f32, usize, usize)> = None;
+    for axis in 0..3 {
+        if span[axis] <= 0.0 {
+            continue;
+        }
+        let mut bins = [(0usize, Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)); BINS];
+        for p in prims.iter() {
+            let b = &mut bins[bin_of(axis, p)];
+            b.0 += 1;
+            b.1 = b.1.min(p.1);
+            b.2 = b.2.max(p.2);
+        }
+        // Right-to-left sweep first, so the left one can price each split.
+        let mut right = [0.0f32; BINS];
+        let (mut n, mut rlo, mut rhi) = (0, Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for i in (1..BINS).rev() {
+            n += bins[i].0;
+            rlo = rlo.min(bins[i].1);
+            rhi = rhi.max(bins[i].2);
+            right[i] = n as f32 * area(rlo, rhi);
+        }
+        let (mut n, mut llo, mut lhi) = (0, Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for i in 1..BINS {
+            n += bins[i - 1].0;
+            llo = llo.min(bins[i - 1].1);
+            lhi = lhi.max(bins[i - 1].2);
+            if n == 0 || n == prims.len() {
+                continue;
+            }
+            let cost = n as f32 * area(llo, lhi) + right[i];
+            if best.is_none_or(|(c, _, _)| cost < c) {
+                best = Some((cost, axis, i));
+            }
+        }
+    }
+    let mid = match best {
+        Some((_, axis, split)) => {
+            // In-place partition: bins below `split` to the front.
+            let mut mid = 0;
+            for i in 0..prims.len() {
+                if bin_of(axis, &prims[i]) < split {
+                    prims.swap(i, mid);
+                    mid += 1;
+                }
+            }
+            mid
+        }
+        // Every centroid in one spot: any halving will do.
+        None => prims.len() / 2,
+    };
     let (l, r) = prims.split_at_mut(mid);
     let li = build_bvh(l, base, nodes);
     let ri = build_bvh(r, base + mid as u32, nodes);
