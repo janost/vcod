@@ -25,7 +25,8 @@ use vcod_common::net::connectionless::{Info, build_oob, parse_connect, parse_oob
 use vcod_common::net::gamestate::{self, Gamestate};
 use vcod_common::net::huffman::Huffman;
 use vcod_common::net::msg::{
-    self, MsgReader, MsgWriter, NULL_USERCMD, UserCmd, read_delta_usercmd,
+    self, CLC_BITS, CLC_CLIENT_COMMAND, CLC_EOF, CLC_MOVE, CLC_MOVE_NO_DELTA, MsgReader, MsgWriter,
+    NULL_USERCMD, UserCmd, read_delta_usercmd,
 };
 use vcod_common::net::netchan::{ClientMessage, MAX_RELIABLE_COMMANDS, ServerNetchan};
 use vcod_common::net::protocol::{PROTOCOL_V1, Protocol};
@@ -51,12 +52,7 @@ const GLOBAL_BURST: u32 = 10;
 const GLOBAL_PERIOD: Duration = Duration::from_millis(100);
 /// Source ips tracked at once; the least recently seen is evicted.
 const MAX_BUCKETS: usize = 1024;
-/// clc ops, 2 bits on the wire.
-const CLC_MOVE: i32 = 0;
-const CLC_MOVE_NO_DELTA: i32 = 1;
-const CLC_CLIENT_COMMAND: i32 = 2;
-const CLC_EOF: i32 = 3;
-const MAX_PACKET_USERCMDS: u8 = 32;
+const MAX_PACKET_USERCMDS: u8 = vcod_common::net::MAX_MOVE_CMDS as u8;
 /// Queued-but-unreplayed usercmds per client; past this a flood drops the
 /// oldest rather than building latency.
 const MAX_PENDING_CMDS: usize = 64;
@@ -1450,7 +1446,7 @@ impl Server {
         let mut ops = Vec::new();
         let mut prev = base;
         loop {
-            let op = r.read_bits(2);
+            let op = r.read_bits(CLC_BITS);
             if r.is_overflowed() {
                 return None;
             }
@@ -1469,7 +1465,7 @@ impl Server {
                     ops.push(ClientOp::Move(cmds));
                     return Some((ops, prev));
                 }
-                // `read_bits(2)` yields 0..=3; unreachable.
+                // `read_bits(CLC_BITS)` yields 0..=3; unreachable.
                 _ => return None,
             }
         }
