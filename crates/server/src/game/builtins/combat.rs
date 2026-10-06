@@ -438,6 +438,7 @@ pub fn radius_damage(
         "MOD_EXPLOSIVE",
     );
     let candidates = blast_candidates(host, cx, &blast);
+    host.blast_noises.push(*origin);
     host.radius_ignore_active = host.ignore_radius_damage;
     host.blasts.push(ScriptBlast { blast, candidates });
     blast_step(host, cx);
@@ -1010,6 +1011,27 @@ mod tests {
         rt.deliver_hits(vec![hit(67)], 150);
         assert!(rt.take_sim_ops().is_empty(), "nothing reached it");
         assert_eq!(rt.client_vitals(0).health, -999);
+    }
+
+    /// Every `radiusDamage` is a noise the bots hear, whoever it hurt.
+    #[test]
+    fn radiusdamage_is_heard() {
+        const SCRIPT: &str = r#"
+            main() {
+                wait 1;
+                radiusDamage((10, 20, 30), 300, 2000, 50);
+                radiusDamage((40, 50, 60), 300, 2000, 50);
+            }
+            CodeCallback_PlayerConnect() {}
+        "#;
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
+        rt.run_frame(1100);
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(
+            rt.take_blast_noises(),
+            [[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]]
+        );
+        assert!(rt.take_blast_noises().is_empty(), "heard twice");
     }
 
     /// `radiusDamage` runs `CodeCallback_PlayerDamage` on every live client

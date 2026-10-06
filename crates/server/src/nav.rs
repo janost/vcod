@@ -100,7 +100,7 @@ impl NavGraph {
         };
         let mut queue = Vec::new();
         for seed in seeds {
-            let Some(p) = settle(world, Vec3::from(*seed)) else {
+            let Some(p) = settle(world, Vec3::from(*seed), 0.0) else {
                 continue;
             };
             // On the lattice when the seed can walk to its own column's
@@ -161,7 +161,69 @@ impl NavGraph {
             }
             frontier = next;
         }
+        g.link_ladders(world);
         g
+    }
+
+    /// The flood walks only to a neighbouring column, which rarely lines up
+    /// with a ladder. So each ladder face gets two nodes of its own: a foot
+    /// in front of the face and a head where a climb up it comes to rest,
+    /// linked where the bots' own steering proves the way, and each linked
+    /// to the graph around it (bot-navigation.md, "Ladders").
+    fn link_ladders(&mut self, world: &CollisionWorld) {
+        let faces: Vec<(Vec3, Vec3, Vec3)> = ladders(world)
+            .into_iter()
+            .flat_map(|(lo, hi)| {
+                let ext = hi - lo;
+                let axis = if ext.x < ext.y { Vec3::X } else { Vec3::Y };
+                [(lo, hi, axis), (lo, hi, -axis)]
+            })
+            .collect();
+        let rungs = par_map(&faces, |&(lo, hi, n)| rung(world, lo, hi, n));
+        let mut ends = Vec::new();
+        for (foot, head, up, down) in rungs.into_iter().flatten() {
+            let f = self.add(self.column(foot), foot);
+            let h = self.add(self.column(head), head);
+            if up {
+                self.link(f, h);
+            }
+            if down {
+                self.link(h, f);
+            }
+            ends.extend([f, h]);
+        }
+        // Each end to the nodes on its floor around it, each way walked.
+        let mut jobs = Vec::new();
+        for &e in &ends {
+            let p = self.nodes[e as usize];
+            let (cx, cy) = self.column(p);
+            for dx in -2..=2 {
+                for dy in -2..=2 {
+                    for &m in self.columns.get(&(cx + dx, cy + dy)).into_iter().flatten() {
+                        let q = self.nodes[m as usize];
+                        if m != e && (q.z - p.z).abs() < Z_MERGE {
+                            jobs.extend([(e, m), (m, e)]);
+                        }
+                    }
+                }
+            }
+        }
+        let ok = par_map(&jobs, |&(a, b)| {
+            let to = self.nodes[b as usize];
+            let walked = walk_as(
+                world,
+                self.nodes[a as usize],
+                to.truncate(),
+                Some(to.z),
+                Gait::Forward,
+            );
+            matches!(walked, Walked::Arrived(_))
+        });
+        for (&(a, b), ok) in jobs.iter().zip(ok) {
+            if ok {
+                self.link(a, b);
+            }
+        }
     }
 
     /// Where a run from node `n` toward column `c`'s centre comes to rest,
@@ -604,14 +666,16 @@ impl Follower {
         let flat = |p: Vec3| (p - here).truncate().length();
         // Past a waypoint once inside its reach, or once nearer the next one
         // than the waypoint itself is: that keeps a bot from doubling back
-        // to touch a node it cut the corner on.
+        // to touch a node it cut the corner on. Either only on the
+        // waypoint's floor: a ladder's head is right above its foot.
         while let Some(&w) = self.path.get(self.next) {
             let w = g.nodes[w as usize];
+            let level = (w.z - here.z).abs() < 48.0;
             let past = self.path.get(self.next + 1).is_some_and(|&n| {
                 let n = g.nodes[n as usize];
                 flat(n) < (n - w).truncate().length()
             });
-            if (flat(w) < REACH && (w.z - here.z).abs() < 48.0) || past {
+            if level && (flat(w) < REACH || past) {
                 self.next += 1;
                 self.best = f32::INFINITY;
                 self.idle = 0;
@@ -634,11 +698,12 @@ impl Follower {
             };
         };
         let w = g.nodes[w as usize];
-        let d = flat(w);
-        if d > OFF_PATH_STEPS * g.spacing {
+        if flat(w) > OFF_PATH_STEPS * g.spacing {
             self.path.clear();
             return None;
         }
+        // Progress counts height too: a climb closes on nothing flat.
+        let d = flat(w) + (w.z - here.z).abs();
         if d < self.best - 1.0 {
             self.best = d;
             self.idle = 0;
@@ -751,13 +816,123 @@ fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> 
         .collect()
 }
 
+/// The world's ladders as axial boxes: the `SURF_LADDER` brushes of the
+/// world model, with touching ones merged, since a tall ladder is often
+/// several brushes stacked.
+fn ladders(world: &CollisionWorld) -> Vec<(Vec3, Vec3)> {
+    let mut boxes: Vec<(Vec3, Vec3)> = world
+        .brushes
+        .iter()
+        .filter(|b| b.model == 0 && b.surface_flags & vcod_common::collision::SURF_LADDER != 0)
+        .filter_map(|b| {
+            let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+            for &(n, d) in &b.planes {
+                for i in 0..3 {
+                    if n[i] == 1.0 {
+                        hi[i] = d;
+                    } else if n[i] == -1.0 {
+                        lo[i] = -d;
+                    }
+                }
+            }
+            lo.cmple(hi).all().then_some((lo, hi))
+        })
+        .collect();
+    let mut merged = true;
+    while merged {
+        merged = false;
+        'outer: for i in 0..boxes.len() {
+            for j in i + 1..boxes.len() {
+                let (a, b) = (boxes[i], boxes[j]);
+                if (a.0 - 2.0).cmple(b.1).all() && (b.0 - 2.0).cmple(a.1).all() {
+                    boxes[i] = (a.0.min(b.0), a.1.max(b.1));
+                    boxes.swap_remove(j);
+                    merged = true;
+                    break 'outer;
+                }
+            }
+        }
+    }
+    boxes
+}
+
+/// A ladder face's foot and head, `(foot, head, up, down)`: the foot is a
+/// body settled in front of the face with normal `n`, the head where a climb
+/// from there facing the face comes to rest a few steps past the top. `up`
+/// and `down` say whether the bots' steering between the two arrives: a run
+/// at the head looking up, a back down onto the face (`bots::steer`).
+fn rung(world: &CollisionWorld, lo: Vec3, hi: Vec3, n: Vec3) -> Option<(Vec3, Vec3, bool, bool)> {
+    let mid = (lo + hi) * 0.5;
+    let half = (hi - lo).dot(n.abs()) * 0.5;
+    let start = (mid.truncate() + n.truncate() * (half + 16.0)).extend(lo.z + 16.0);
+    let probe = PlayerState::spawn(start, 0.0);
+    if world
+        .box_trace(start, start, probe.mins(), probe.maxs())
+        .startsolid
+    {
+        return None;
+    }
+    // Dropped facing away, or an airborne grab would hang it on the face.
+    let foot = settle(world, start, (n.y).atan2(n.x).to_degrees())?;
+    if foot.z < lo.z - 48.0 || under_ground(world, foot) {
+        return None;
+    }
+    let yaw = (-n.y).atan2(-n.x).to_degrees();
+    let mut ps = PlayerState::spawn(foot, yaw);
+    let mut sim = Sim::default();
+    let mut climbed = false;
+    let mut top: Option<Vec3> = None;
+    for _ in 0..LADDER_TICKS {
+        let pitch = if ps.on_ladder { -LADDER_PITCH } else { 0.0 };
+        // A few steps in past the lip, then the keys come up and it stands.
+        let forward = match top {
+            Some(t) if (ps.origin - t).truncate().length() >= LADDER_STEP_IN => 0,
+            _ => 127,
+        };
+        let cmd = UserCmd {
+            forward,
+            angles: [(pitch * ANGLE2SHORT) as i32, (yaw * ANGLE2SHORT) as i32, 0],
+            ..NULL_USERCMD
+        };
+        sim.tick(world, &mut ps, &cmd);
+        climbed |= ps.on_ladder;
+        if top.is_none() && climbed && ps.on_ground && ps.origin.z > foot.z + 48.0 {
+            top = Some(ps.origin);
+        }
+        if forward == 0 && ps.on_ground && ps.velocity.length() < 1.0 {
+            break;
+        }
+    }
+    top?;
+    if !ps.on_ground || under_ground(world, ps.origin) {
+        return None;
+    }
+    let head = ps.origin;
+    let arrives = |from: Vec3, to: Vec3, gait| {
+        matches!(
+            walk_as(world, from, to.truncate(), Some(to.z), gait),
+            Walked::Arrived(_)
+        )
+    };
+    let up = arrives(foot, head, Gait::Forward);
+    let down = arrives(head, foot, Gait::Creep);
+    (up || down).then_some((foot, head, up, down))
+}
+
+/// How far a climb walks on past the top of a ladder before it stops.
+const LADDER_STEP_IN: f32 = 24.0;
+
 /// Idle cmds until a body dropped at `p` stands on something; `None` when it
 /// falls out of the world or never lands.
-fn settle(world: &CollisionWorld, p: Vec3) -> Option<Vec3> {
-    let mut ps = PlayerState::spawn(p + Vec3::Z, 0.0);
+fn settle(world: &CollisionWorld, p: Vec3, yaw: f32) -> Option<Vec3> {
+    let mut ps = PlayerState::spawn(p + Vec3::Z, yaw);
+    let idle = UserCmd {
+        angles: [0, (yaw * ANGLE2SHORT) as i32, 0],
+        ..NULL_USERCMD
+    };
     let mut sim = Sim::default();
     for _ in 0..40 {
-        sim.tick(world, &mut ps, &NULL_USERCMD);
+        sim.tick(world, &mut ps, &idle);
         if ps.on_ground {
             return Some(ps.origin);
         }
@@ -765,13 +940,65 @@ fn settle(world: &CollisionWorld, p: Vec3) -> Option<Vec3> {
     None
 }
 
+/// A walk's tick budget for `dist` units: twice the run time, plus slack for
+/// a stair or a slide along a wall.
+fn run_ticks(dist: f32) -> usize {
+    (dist / (vcod_common::pmove::SPEED_RUN * 0.05) * 2.0) as usize + 4
+}
+
+/// Inside this of its target, horizontally, a body backing onto a ladder
+/// below a ledge creeps: an airborne grab reaches 17 units past the box
+/// (`check_ladder_move`, the box shrunk 6 and the trace 8), and at a run the
+/// body is past that within the tick it leaves the lip.
+const CREEP_RADIUS: f32 = 24.0;
+/// The creep's move key, about 16 units/s. The body leaves the lip at 15
+/// units past the face and is first low enough to grab (under the ladder's
+/// top) a tick later, so two ticks of travel have to stay under 2 units.
+const CREEP: i8 = 15;
+/// [`CREEP`], for the bots' tests.
+#[cfg(test)]
+pub const CREEP_KEY: i8 = CREEP;
+/// The ticks the creep adds to a backing walk's budget.
+const CREEP_TICKS: usize = 16;
+
+/// The move key a body backing toward a point `flat` units away sends:
+/// full off the ground near it and on a ladder, a creep at the lip.
+pub fn back_move(flat: f32, on_ladder: bool) -> i8 {
+    if on_ladder || flat > CREEP_RADIUS {
+        -127
+    } else {
+        -CREEP
+    }
+}
+
+/// The heading a creep holds. The lip is a step or two from the point it
+/// backs toward, and re-aiming as the body passes over it would turn it
+/// round in the air, away from the face its grab traces toward.
+#[derive(Default, Clone, Copy)]
+pub struct Creep(Option<f32>);
+
+impl Creep {
+    /// The yaw to send with move key `forward`: `want` at full speed, the
+    /// first creeping tick's yaw for as long as the creep lasts.
+    pub fn hold(&mut self, forward: i8, want: f32) -> f32 {
+        if forward == -CREEP {
+            *self.0.get_or_insert(want)
+        } else {
+            self.0 = None;
+            want
+        }
+    }
+}
+
 /// How a walk is driven: facing its way, or backing along it facing the
 /// other way, which is how a body gets onto a ladder below a ledge (the grab
-/// traces along the view, `ladder_move`).
+/// traces along the view, `ladder_move`), at a run or creeping at the lip
+/// ([`back_move`]).
 #[derive(Clone, Copy, PartialEq)]
 enum Gait {
     Forward,
     Backward,
+    Creep,
 }
 
 /// What a walk came to.
@@ -782,24 +1009,35 @@ enum Walked {
     Fell,
 }
 
-/// [`walk_as`] forward, and backward when the forward run fell.
+/// [`walk_as`] forward, backward when the forward run fell, and creeping
+/// when that fell too. The creep is last because it is slow: a back down
+/// off every ledge on a map is most of a build, and only a ladder below
+/// needs it.
 fn walk(world: &CollisionWorld, from: Vec3, target: glam::Vec2) -> Option<Vec3> {
-    match walk_as(world, from, target, Gait::Forward) {
-        Walked::Arrived(p) => Some(p),
-        Walked::Blocked => None,
-        Walked::Fell => match walk_as(world, from, target, Gait::Backward) {
-            Walked::Arrived(p) => Some(p),
-            _ => None,
-        },
+    for gait in [Gait::Forward, Gait::Backward, Gait::Creep] {
+        match walk_as(world, from, target, None, gait) {
+            Walked::Arrived(p) => return Some(p),
+            Walked::Blocked => return None,
+            Walked::Fell => {}
+        }
     }
+    None
 }
 
 /// Runs a body from `from` toward `target`, re-aiming every tick, and
 /// reports where it came to rest when it got within [`ARRIVE`] on the
-/// ground without falling past [`MAX_DROP`].
-fn walk_as(world: &CollisionWorld, from: Vec3, target: glam::Vec2, gait: Gait) -> Walked {
+/// ground (on the floor at `floor`, when given) without falling past
+/// [`MAX_DROP`].
+fn walk_as(
+    world: &CollisionWorld,
+    from: Vec3,
+    target: glam::Vec2,
+    floor: Option<f32>,
+    gait: Gait,
+) -> Walked {
     let dist = target.distance(from.truncate());
-    if dist < ARRIVE {
+    let on_floor = |z: f32| floor.is_none_or(|f| (z - f).abs() < Z_MERGE);
+    if dist < ARRIVE && on_floor(from.z) {
         return Walked::Arrived(from);
     }
     // A running start: a following bot never stops at a node, and the
@@ -808,9 +1046,17 @@ fn walk_as(world: &CollisionWorld, from: Vec3, target: glam::Vec2, gait: Gait) -
     let dir = (target - from.truncate()) / dist;
     ps.velocity = (dir * vcod_common::pmove::SPEED_RUN).extend(0.0);
     let mut sim = Sim::default();
-    // Twice the run time, plus slack for a stair or a slide along a wall.
-    let mut budget = (dist / (vcod_common::pmove::SPEED_RUN * 0.05) * 2.0) as usize + 4;
+    let mut budget = run_ticks(dist);
+    // A floor-bound walk is a ladder's (`link_ladders`): room to reach it.
+    if floor.is_some() {
+        budget = budget.max(60);
+    }
+    if gait == Gait::Creep {
+        budget += CREEP_TICKS;
+    }
     let mut stalled = 0;
+    let mut creep = Creep::default();
+    let mut climbed = false;
     let mut fell = false;
     // Where the body last stood or held on; a fall is measured from here.
     let mut support_z = from.z;
@@ -822,6 +1068,11 @@ fn walk_as(world: &CollisionWorld, from: Vec3, target: glam::Vec2, gait: Gait) -
         let (yaw, forward) = match gait {
             Gait::Forward => (to.y.atan2(to.x).to_degrees(), 127),
             Gait::Backward => ((-to.y).atan2(-to.x).to_degrees(), -127),
+            Gait::Creep => {
+                let forward = back_move(to.length(), ps.on_ladder);
+                let yaw = (-to.y).atan2(-to.x).to_degrees();
+                (creep.hold(forward, yaw), forward)
+            }
         };
         // On a ladder the view goes up, where `ladder_move` climbs at full
         // rate (a level view climbs at a third); backing off it climbs down.
@@ -840,24 +1091,29 @@ fn walk_as(world: &CollisionWorld, from: Vec3, target: glam::Vec2, gait: Gait) -
                 return Walked::Fell;
             }
         }
-        if ps.on_ground && target.distance(ps.origin.truncate()) < ARRIVE {
+        if ps.on_ground && target.distance(ps.origin.truncate()) < ARRIVE && on_floor(ps.origin.z) {
             if under_ground(world, ps.origin) {
                 return Walked::Blocked;
             }
             return Walked::Arrived(ps.origin);
         }
         // A climb is slower than a run and straight up, so the budget
-        // stretches while it goes on, and progress is the height gained.
+        // stretches while it goes on, with the run still left past the top,
+        // and progress is the height gained.
         let moved = if ps.on_ladder {
-            budget = budget.max(tick + 4).min(LADDER_TICKS);
+            let rest = run_ticks(target.distance(ps.origin.truncate()));
+            budget = budget.max(tick + rest).min(LADDER_TICKS + rest);
             (ps.origin.z - before.z).abs() * 4.0
         } else {
             (ps.origin - before).length()
         };
-        // Pinned against a wall: two ticks without moving two units. A run
-        // that only slides along a wall, or overshoots off a ledge and turns
-        // back, keeps its budget.
-        if moved < 2.0 {
+        // Pinned against a wall: two ticks without moving two units (half
+        // one, creeping). A run that only slides along a wall, or overshoots
+        // off a ledge and turns back, keeps its budget, and so does one
+        // hanging in the air at the top of a ladder before it tips over.
+        climbed |= ps.on_ladder;
+        let least = if forward.abs() < 127 { 0.5 } else { 2.0 };
+        if moved < least && !(climbed && !ps.on_ground && !ps.on_ladder) {
             stalled += 1;
             if stalled == 2 {
                 break;
@@ -1084,6 +1340,83 @@ mod tests {
             "only {most} of {} spawns in one component",
             on.len()
         );
+    }
+
+    /// A ladder whose head is right above its foot: the follower keeps the
+    /// head as its waypoint up the climb, though the climb never closes in
+    /// flat, and does not skip it for the next node from a floor below.
+    #[test]
+    fn a_follower_climbs_to_a_head_above_its_foot() {
+        let g = NavGraph::from_parts(
+            vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(10.0, 0.0, 200.0),
+                Vec3::new(40.0, 0.0, 200.0),
+            ],
+            vec![vec![1], vec![0, 2], vec![1]],
+        );
+        let mut f = Follower::default();
+        let goal = crate::bots::Goal::To([40.0, 0.0, 200.0]);
+        let mut plans = 1;
+        let mut at = [0.0, 0.0, 0.0];
+        // 2.5 units a tick, the climb rate looking up, until the head's
+        // floor is in reach.
+        while at[2] <= 152.0 {
+            let w = f.waypoint(&g, goal, at, &mut plans, &mut || 0);
+            assert_eq!(w, Some([10.0, 0.0, 200.0]), "at z {}", at[2]);
+            at[2] += 2.5;
+        }
+        at[0] = 10.0;
+        let w = f.waypoint(&g, goal, at, &mut plans, &mut || 0);
+        assert_eq!(w, Some([40.0, 0.0, 200.0]), "on the head's floor");
+    }
+
+    #[test]
+    fn a_creep_holds_its_first_heading() {
+        let mut c = Creep::default();
+        assert_eq!(back_move(100.0, false), -127);
+        assert_eq!(c.hold(-127, 10.0), 10.0);
+        assert_eq!(back_move(20.0, false), -CREEP);
+        assert_eq!(c.hold(-CREEP, 20.0), 20.0);
+        assert_eq!(c.hold(-CREEP, 200.0), 20.0, "turned round over the lip");
+        assert_eq!(back_move(20.0, true), -127, "full speed down the ladder");
+        assert_eq!(c.hold(-127, 30.0), 30.0);
+        assert_eq!(c.hold(-CREEP, 40.0), 40.0, "a new creep, a new heading");
+    }
+
+    /// mp_ship's ladders, each from its open face: up and down both proved
+    /// by the bots' own steering. One plain, one whose head stands right
+    /// above its foot in a shaft, and one only the creep gets down.
+    #[test]
+    fn ships_ladders_are_climbed_both_ways() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let Some(entry) = fs.resolve_map("mp_ship") else {
+            return;
+        };
+        let bsp = vcod_common::bsp::parse(&fs.read(&entry).unwrap()).unwrap();
+        let world = crate::world::World::from_bsp(&bsp, Some(&fs));
+        let boxes = ladders(&world.collision);
+        for (at, n, foot_z, head_z) in [
+            ([5872.5, 47.0], Vec3::X, 352.125, 480.125),
+            ([3711.5, 56.0], -Vec3::X, 760.125, 992.125),
+            ([3792.5, 65.0], Vec3::X, 304.125, 616.125),
+        ] {
+            let &(lo, hi) = boxes
+                .iter()
+                .find(|(lo, hi)| (0..2).all(|i| lo[i] <= at[i] && at[i] <= hi[i]))
+                .unwrap_or_else(|| panic!("no ladder at {at:?}"));
+            let (foot, head, up, down) =
+                rung(&world.collision, lo, hi, n).unwrap_or_else(|| panic!("{at:?}: no rung"));
+            assert!((foot.z - foot_z).abs() < 1.0, "{at:?}: foot {foot}");
+            assert!((head.z - head_z).abs() < 1.0, "{at:?}: head {head}");
+            assert!(up && down, "{at:?}: up {up} down {down}");
+            assert!(
+                rung(&world.collision, lo, hi, -n).is_none(),
+                "{at:?}: the back"
+            );
+        }
     }
 
     #[test]

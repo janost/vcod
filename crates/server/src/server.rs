@@ -69,6 +69,8 @@ const FLOOD_WINDOW_MS: i32 = 800;
 const ENEMY_REFRESH_MS: i32 = 100;
 /// A* runs a tick may spend across all bots.
 const BOT_PLANS_PER_TICK: u32 = 2;
+/// A retrieval objective as the bots see it, with its carrier's slot.
+type ReObjCarried = (crate::bots::ReObjView, Option<usize>);
 /// The tick pace (`1000 / sv_fps`), also the dt floor a fresh sim starts from.
 pub(crate) const FRAME_MS: i32 = 50;
 /// Retail's `MAX_CLIENTS`. Client slots index a 6-bit wire field
@@ -2074,7 +2076,19 @@ impl Server {
     /// queue when the sim reads it. Four passes, because the brains need the
     /// whole of `self` to think and their writes land after.
     fn step_bots(&mut self) {
-        let noises = std::mem::take(&mut self.bot_noises);
+        let mut noises = std::mem::take(&mut self.bot_noises);
+        // A script's `radiusDamage` (the S&D bomb, an exploder) is nobody's.
+        if let Some(rt) = self.script.as_mut() {
+            noises.extend(
+                rt.take_blast_noises()
+                    .into_iter()
+                    .map(|at| crate::bots::Noise {
+                        at: [at[0], at[1], at[2] + 40.0],
+                        source: usize::MAX,
+                        radius: crate::bots::HEAR_BLAST,
+                    }),
+            );
+        }
         if self.cfg.bots == 0 {
             return;
         }
@@ -2143,7 +2157,8 @@ impl Server {
         // Pass 2: what each bot's body sees, for the brains. The enemy
         // lookup refreshes at ~10 Hz per bot and is cached in between.
         let sd = self.bot_sd();
-        let views: Vec<(usize, crate::bots::BotView)> = slots
+        let re = self.bot_re();
+        let mut views: Vec<(usize, crate::bots::BotView)> = slots
             .iter()
             .filter_map(|slot| {
                 let fresh = self
@@ -2159,20 +2174,73 @@ impl Server {
                 };
                 let mut view = self.bot_view(*slot, enemy)?;
                 view.noise = crate::bots::loudest(&noises, *slot, view.origin);
-                view.sd = sd.as_ref().and_then(|(attackers, defenders, sd)| {
-                    let team = teams.get(*slot).copied().unwrap_or(0);
-                    let role = if team == *attackers {
-                        crate::bots::ObjRole::Attack
-                    } else if team == *defenders {
-                        crate::bots::ObjRole::Defend
-                    } else {
-                        return None;
-                    };
-                    Some(crate::bots::SdView { role, ..sd.clone() })
-                });
                 Some((*slot, view))
             })
             .collect();
+        if let Some((attackers, defenders, objectives)) = &re {
+            let team = |slot: usize| teams.get(slot).copied().unwrap_or(0);
+            let slots: Vec<usize> = views.iter().map(|(s, _)| *s).collect();
+            for (slot, view) in views.iter_mut() {
+                let mine = team(*slot);
+                let role = if mine == *attackers {
+                    crate::bots::ObjRole::Attack
+                } else if mine == *defenders {
+                    crate::bots::ObjRole::Defend
+                } else {
+                    continue;
+                };
+                view.re = Some(crate::bots::ReView {
+                    role,
+                    rank: slots
+                        .iter()
+                        .filter(|s| team(**s) == mine && *s < slot)
+                        .count(),
+                    objectives: objectives
+                        .iter()
+                        .map(|(o, carrier)| crate::bots::ReObjView {
+                            mine: *carrier == Some(*slot),
+                            ..*o
+                        })
+                        .collect(),
+                });
+            }
+        }
+        if let Some((attackers, defenders, sd)) = &sd {
+            let team = |slot: usize| teams.get(slot).copied().unwrap_or(0);
+            // The team's bots that play, by slot, and each one's distance
+            // to the bomb.
+            let bomb_dist = |v: &crate::bots::BotView| {
+                sd.bomb
+                    .map_or(0.0, |b| crate::bots::dist_sq(v.origin, b.origin))
+            };
+            let side: Vec<(usize, i32, f32, bool)> = views
+                .iter()
+                .map(|(slot, v)| (*slot, team(*slot), bomb_dist(v), v.playing))
+                .collect();
+            for (slot, view) in views.iter_mut() {
+                let mine = team(*slot);
+                let role = if mine == *attackers {
+                    crate::bots::ObjRole::Attack
+                } else if mine == *defenders {
+                    crate::bots::ObjRole::Defend
+                } else {
+                    continue;
+                };
+                let rank = side.iter().filter(|s| s.1 == mine && s.0 < *slot).count();
+                // Nearest first, the lower slot on a tie.
+                let lead = side
+                    .iter()
+                    .filter(|s| s.1 == mine && s.3)
+                    .min_by(|a, b| a.2.total_cmp(&b.2).then(a.0.cmp(&b.0)))
+                    .is_some_and(|s| s.0 == *slot);
+                view.sd = Some(crate::bots::SdView {
+                    role,
+                    rank,
+                    lead,
+                    ..sd.clone()
+                });
+            }
+        }
 
         // Pass 3: the tick's waypoint toward each brain's goal, then its
         // cmd. A* runs are capped per tick across all bots; one that misses
@@ -2325,12 +2393,13 @@ impl Server {
         let sim = self.clients[slot].as_ref()?.sim.as_ref()?;
         let weapons = self.weapon_table.clone();
         let def = weapons.get(sim.ps.weapon as usize);
-        let grenade = (1u8..64).find(|i| {
-            sim.ps.weapons_held >> i & 1 == 1
-                && weapons
-                    .get(*i as usize)
-                    .is_some_and(|d| d.weapon_type == "grenade")
-        });
+        let held = |pick: &dyn Fn(&vcod_common::weapon::WeaponDef) -> bool| {
+            (1u8..64).find(|i| {
+                sim.ps.weapons_held >> i & 1 == 1 && weapons.get(*i as usize).is_some_and(pick)
+            })
+        };
+        let grenade = held(&|d| d.weapon_type == "grenade");
+        let pistol = held(&|d| d.weapon_slot == "pistol");
         Some(crate::bots::BotView {
             origin: sim.ps.origin.into(),
             delta_angles: sim.delta_angles(),
@@ -2351,7 +2420,10 @@ impl Server {
             grenade,
             waypoint: None,
             linked: sim.link_to.is_some(),
+            on_ladder: sim.ps.on_ladder,
+            pistol,
             sd: None,
+            re: None,
             noise: None,
         })
     }
@@ -2390,15 +2462,59 @@ impl Server {
                 role: crate::bots::ObjRole::Attack,
                 sites,
                 bomb,
+                rank: 0,
+                lead: false,
             },
         ))
     }
 
-    /// Where a bot stands to plant in a zone: the graph node inside the
-    /// bounds nearest their middle, from the component holding the most
-    /// nodes so a bot anywhere can reach it, else the nearest such node to
-    /// the middle. Cached per zone; the zones keep their bounds across
-    /// rounds.
+    /// The retrieval objectives for this frame's bot views, on an `re` level
+    /// only: the attacking and defending team values and each objective,
+    /// with `mine` left for the caller and its carrier's slot beside it.
+    fn bot_re(&mut self) -> Option<(i32, i32, Vec<ReObjCarried>)> {
+        if self.level_cvars.as_ref().is_none_or(|(g, _)| g != "re") {
+            return None;
+        }
+        let clients = self.clients.len();
+        let o = self.script.as_mut()?.re_objectives(clients);
+        let team = |t: &str| match t {
+            "axis" => script::TEAM_AXIS,
+            "allies" => script::TEAM_ALLIES,
+            _ => -1,
+        };
+        let objectives = o
+            .objectives
+            .iter()
+            .map(|r| {
+                let mid = |(lo, hi): ([f32; 3], [f32; 3])| -> [f32; 3] {
+                    std::array::from_fn(|i| (lo[i] + hi[i]) * 0.5)
+                };
+                let (lo, hi) = r.goal;
+                let goal = self.site_stand(lo, hi);
+                // The farthest corner, flat, and a body's half width past it.
+                let goal_clear = [lo[0], hi[0]]
+                    .iter()
+                    .flat_map(|&x| [lo[1], hi[1]].map(|y| (x - goal[0]).hypot(y - goal[1])))
+                    .fold(0.0, f32::max)
+                    + 16.0;
+                let view = crate::bots::ReObjView {
+                    pickup: r.pickup.map(mid),
+                    goal,
+                    goal_clear,
+                    carried: r.carrier.is_some(),
+                    mine: false,
+                };
+                (view, r.carrier)
+            })
+            .collect();
+        Some((team(&o.attackers), team(&o.defenders), objectives))
+    }
+
+    /// Where a bot stands in a zone (a bombzone, a retrieval goal): the
+    /// graph node inside the bounds nearest their middle, from the
+    /// component holding the most nodes so a bot anywhere can reach it,
+    /// else the nearest such node to the middle. Cached per zone; the zones
+    /// keep their bounds across rounds.
     fn site_stand(&mut self, mins: [f32; 3], maxs: [f32; 3]) -> [f32; 3] {
         let mid = [
             (mins[0] + maxs[0]) * 0.5,
@@ -2509,6 +2625,11 @@ impl Server {
             }
         }
         None
+    }
+
+    /// Test-facing: the shots and blasts the bots hear next tick.
+    pub fn bot_noises(&self) -> &[crate::bots::Noise] {
+        &self.bot_noises
     }
 
     /// Test-facing, for the bot gates: the slots the bots hold.
@@ -3348,14 +3469,12 @@ impl Server {
             }
             // What the radius damage pass charges, on this same frame.
             self.pending_explosions = frame.exploded;
-            if self.cfg.bots > 0 {
-                self.bot_noises
-                    .extend(self.pending_explosions.iter().map(|x| crate::bots::Noise {
-                        at: (x.at + glam::Vec3::Z * 40.0).into(),
-                        source: x.owner,
-                        radius: crate::bots::HEAR_BLAST,
-                    }));
-            }
+            self.bot_noises
+                .extend(self.pending_explosions.iter().map(|x| crate::bots::Noise {
+                    at: (x.at + glam::Vec3::Z * 40.0).into(),
+                    source: x.owner,
+                    radius: crate::bots::HEAR_BLAST,
+                }));
             // The client commands the packet pass queued, on this frame's
             // clock: a thread started here sees `level.time` already
             // advanced, which is what a `cloneplayer` in it needs.
@@ -3776,6 +3895,11 @@ impl Server {
                 ) else {
                     continue;
                 };
+                self.bot_noises.push(crate::bots::Noise {
+                    at: shot.muzzle.into(),
+                    source: shot.slot,
+                    radius: crate::bots::HEAR_GUNFIRE,
+                });
                 let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
                     .clients
                     .iter()
@@ -4087,13 +4211,11 @@ impl Server {
                         })
                     }
                     EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT => {
-                        if self.cfg.bots > 0 {
-                            self.bot_noises.push(crate::bots::Noise {
-                                at: (sim.ps.origin + glam::Vec3::Z * 40.0).into(),
-                                source: slot,
-                                radius: crate::bots::HEAR_GUNFIRE,
-                            });
-                        }
+                        self.bot_noises.push(crate::bots::Noise {
+                            at: (sim.ps.origin + glam::Vec3::Z * 40.0).into(),
+                            source: slot,
+                            radius: crate::bots::HEAR_GUNFIRE,
+                        });
                         attacks.push(Attack::Shot(Shot {
                             slot,
                             weapon,

@@ -538,6 +538,11 @@ impl ScriptRuntime {
         }
     }
 
+    /// Where the `radiusDamage` calls since the last ask went off.
+    pub fn take_blast_noises(&mut self) -> Vec<[f32; 3]> {
+        std::mem::take(&mut self.host.blast_noises)
+    }
+
     /// The buttons of the last cmd `item_pass` saw from `slot`, which its
     /// use edge is taken against.
     pub fn client_old_buttons(&self, slot: usize) -> u8 {
@@ -2031,6 +2036,80 @@ impl ScriptRuntime {
     /// bounds in that order, and once `level.bombplanted` the defuse
     /// trigger's origin and bounds. Entity handles do not survive a
     /// `map_restart`, so the caller asks again every frame.
+    /// The stock `re.gsc` objectives as they stand this frame
+    /// (docs/research/bot-objectives.md, "Retrieval"): the sides from
+    /// `game["re_attackers"]` and `game["re_defenders"]`, and each entity of
+    /// `level.retrieval_objective` the script has not deleted, through its
+    /// `trigger`, `goal` and `objnum` fields. `clients` bounds the carrier
+    /// search.
+    pub fn re_objectives(&mut self, clients: usize) -> ReObjectives {
+        use crate::game::trigger::entity_abs_bounds;
+        use vcod_gsc::{ArrayKey, Host};
+        let level = self.vm.level_id();
+        let client_ents: Vec<(usize, EntId)> = (0..clients)
+            .filter_map(|slot| Some((slot, self.client_entity(slot)?)))
+            .collect();
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let game = cx.game();
+            let mut team = |key: &str| {
+                let k = ArrayKey::Str(cx.intern_exact(key));
+                match cx.get_index(game, k) {
+                    Value::String(a) => cx.resolve(a).to_string(),
+                    _ => String::new(),
+                }
+            };
+            let attackers = team("re_attackers");
+            let defenders = team("re_defenders");
+            let [list, trigger, goal, objnum, hasobj] =
+                ["retrieval_objective", "trigger", "goal", "objnum", "hasobj"]
+                    .map(|f| cx.intern_folded(f));
+            let Value::Array(list) = cx.get_field(level, list) else {
+                return ReObjectives {
+                    attackers,
+                    defenders,
+                    objectives: Vec::new(),
+                };
+            };
+            let mut objectives = Vec::new();
+            for i in 0..cx.array_len(list) {
+                let Value::Entity(obj) = cx.get_index(list, ArrayKey::Int(i as i32)) else {
+                    continue;
+                };
+                if host.ents.get(obj).is_none() {
+                    continue;
+                }
+                let (Value::Entity(t), Value::Entity(g)) = (
+                    host.get_field(cx, obj, trigger),
+                    host.get_field(cx, obj, goal),
+                ) else {
+                    continue;
+                };
+                let pickup = Some(entity_abs_bounds(host, cx, t)).filter(|b| b.1[2] > -5000.0);
+                let goal = entity_abs_bounds(host, cx, g);
+                let carrier = match host.get_field(cx, obj, objnum) {
+                    Value::Int(n) => client_ents.iter().find_map(|&(slot, ent)| {
+                        let Value::Array(held) = host.get_field(cx, ent, hasobj) else {
+                            return None;
+                        };
+                        (cx.get_index(held, ArrayKey::Int(n)) == Value::Entity(obj)).then_some(slot)
+                    }),
+                    _ => None,
+                };
+                objectives.push(ReObjective {
+                    pickup,
+                    goal,
+                    carrier,
+                });
+            }
+            ReObjectives {
+                attackers,
+                defenders,
+                objectives,
+            }
+        })
+    }
+
     pub fn sd_objectives(&mut self) -> SdObjectives {
         use crate::game::builtins::entity::get_ent;
         use crate::game::trigger::entity_abs_bounds;
@@ -2088,6 +2167,24 @@ impl ScriptRuntime {
             }
         })
     }
+}
+
+/// [`ScriptRuntime::re_objectives`]: the retrieval state a bot plays to.
+pub struct ReObjectives {
+    pub attackers: String,
+    pub defenders: String,
+    pub objectives: Vec<ReObjective>,
+}
+
+/// One of `level.retrieval_objective` still standing.
+pub struct ReObjective {
+    /// Its pickup `trigger_use`'s bounds, while it lies there to be taken;
+    /// `None` once carried (`triggerOff` sends it 10000 units down).
+    pub pickup: Option<Bounds>,
+    /// The `trigger_multiple` a carrier delivers it to.
+    pub goal: Bounds,
+    /// The client carrying it: the one whose `hasobj[objnum]` is it.
+    pub carrier: Option<usize>,
 }
 
 /// [`ScriptRuntime::sd_objectives`]: the S&D state a bot plays to.

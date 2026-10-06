@@ -138,12 +138,15 @@ either: the people on it signed up for Call of Duty.
   frames.
 - `--bots` adds debug bots that join through the stock menus, pick a random
   weapon the menu and the `scr_allow_*` cvars allow, and roam the map along
-  a navigation graph built from pmove runs, heading for an enemy they see
-  and toward gunfire and grenade blasts they hear. In S&D attackers plant at
-  a bombzone and defenders guard one, then defuse. `--bots-shoot` makes them
-  fight with a reaction delay, a capped turn rate and aim error that settles
-  while they hold a target, and chase a lost enemy to where it was last
-  seen. They are still bad at it.
+  a navigation graph built from pmove runs, ladders included, heading for an
+  enemy they see and toward gunfire, turret fire and blasts they hear. In
+  S&D each team spreads over both bombzones, attackers plant and one
+  defender defuses while the rest cover. In Retrieval attackers pick the
+  objective up and carry it to its goal while defenders guard.
+  `--bots-shoot` makes them fight with a reaction delay, a capped turn rate
+  and aim error that settles while they hold a target, draw the pistol when
+  the primary runs dry up close, and chase a lost enemy to where it was
+  last seen. They are still bad at it.
 
 ### The research
 
@@ -195,7 +198,7 @@ console, no key rebinding. You get command-line flags and the binds below.
 
 - `re` and `bel` play past the round start, but I haven't checked a
   Retrieval pickup and capture or the Behind Enemy Lines team swap against
-  retail. The bots don't play either gametype.
+  retail. The bots don't play `bel`.
 - `linkTo` takes only a player. A script calling it on any other entity
   stops with an error; no stock MP script does.
 - A brush model that has turned and turned back keeps a sliver of yaw on

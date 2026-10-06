@@ -72,12 +72,58 @@ measured).
 - Walks run on every core, a layer at a time, handed out one node at a time;
   the merge is serial in job order, so the graph does not depend on the thread
   count.
+- A walk that has been on a ladder keeps its budget while it hangs in the air
+  at the top before tipping onto the deck, and a climb's budget carries the
+  run still left past the top. Without either, a climb to a node more than a
+  column past the face ran out at the lip.
+
+### Ladders
+
+The flood's neighbour walks meet few ladders square on: a climb ends a storey
+up and up to 70 units past the face, out of the column the walk aimed at. A
+pass after the flood (`NavGraph::link_ladders`) handles them on their own.
+
+- The ladders are the world model's `SURF_LADDER` brushes as axial boxes,
+  touching boxes merged (a tall ladder is often several brushes). Each box's
+  two broad faces, normal along its thinner horizontal axis, are tried.
+- The foot is a body dropped 16 units in front of the face's middle, 16
+  units above the box's bottom, facing away from it. Facing it, the airborne
+  grab hangs the body on the face and it never lands.
+- The climb faces the face, holds forward, looks 45 degrees up while on the
+  ladder, and once it stands 48 units above the foot walks on 24 units and
+  stops. Where it comes to rest is the head.
+- Up is proved by the bots' own run from foot to head and down by their back
+  from head to foot (section 3), each having to arrive on the other end's
+  floor. A ladder's head often stands right above its foot, so arriving in
+  the right column is not enough. The two ends become nodes, linked as
+  proved, and each is walked to and from every node within two columns on
+  its floor.
+- The back down creeps. The body leaves the lip 15 units past the face and
+  can be grabbed only while it is under the ladder's top and the face is
+  within 17 units (`check_ladder_move`: the probe box shrunk 6 per side, the
+  airborne trace 8 long). At a run, 6.6 units a tick, it is past that before
+  it has dropped. Inside 24 units of the foot a back down sends move key 15
+  instead of 127, about 16 units/s, so two ticks of travel stay under 2
+  units, and it holds the heading the creep began with (`nav::Creep`):
+  re-aiming as the body passes over the foot's column turns it round in the
+  air, away from the face its grab traces toward.
+- VERIFIED (measured, the `mp_ship` ladders at x 3354 and 3793): the back
+  down missed the grab at a full run and, without the held heading, at every
+  creep speed tried; with it, move keys 15 to 30 caught both.
+- The flood creeps too, but only as a third try, after a forward walk and a
+  back down at a run have both fallen. VERIFIED (measured, `mp_ship`, each
+  build paired with one of the old code on the same loaded machine): with
+  every flood back down creeping, the build took 4.6 times the old one's;
+  as a third try, 1.7 times. Without the creep in the flood, 4 spawns on
+  the decks above z 760 stayed apart.
 
 ### Build times
 
 VERIFIED (measured) with `cargo run --release -p vcod-server --example nav_build` on an
 8-core, 16-thread Ryzen 7 5850U laptop. Last column: spawn points in the
 strongly connected component holding the most of them.
+
+Before the ladder pass (2026-10-06):
 
 | map | spacing | nodes | edges | ms | spawns in one component |
 |---|---|---|---|---|---|
@@ -93,6 +139,28 @@ strongly connected component holding the most of them.
 | mp_railyard | 32 | 11288 | 79510 | 1331 | 157 / 161 |
 | mp_rocket | 48 | 18290 | 135954 | 2071 | 136 / 153 |
 | mp_ship | 32 | 9373 | 62377 | 1497 | 87 / 112 |
+
+With the ladder pass (VERIFIED, measured with the same example, each map's
+build paired with one of the code before it). The timings came off a machine
+other builds were loading, so only their ratio means anything: new over old
+ran 0.7 to 1.5 on ten maps, 1.6 on `mp_depot` and 1.7 to 2.0 on `mp_ship`.
+The counts below were taken again (2026-10-07) after the BVH rework and
+the move of world collision to brushes and patches only.
+
+| map | nodes | edges | spawns in one component |
+|---|---|---|---|
+| mp_brecourt | 19102 | 146458 | 159 / 161 |
+| mp_carentan | 9668 | 68037 | 185 / 185 |
+| mp_chateau | 6502 | 43454 | 110 / 113 |
+| mp_dawnville | 7275 | 50200 | 174 / 185 |
+| mp_depot | 12144 | 83515 | 153 / 161 |
+| mp_harbor | 7520 | 53249 | 156 / 161 |
+| mp_hurtgen | 20416 | 152075 | 178 / 193 |
+| mp_pavlov | 25994 | 191832 | 161 / 161 |
+| mp_powcamp | 5977 | 41182 | 149 / 161 |
+| mp_railyard | 11348 | 80710 | 159 / 161 |
+| mp_rocket | 15759 | 116401 | 136 / 153 |
+| mp_ship | 11076 | 74180 | 105 / 112 |
 
 - VERIFIED (measured): an early single-threaded build of `mp_carentan`, before
   the diagonal shortcut and the stall cutoff, took 10.6 s. `perf` puts 80% of
@@ -124,9 +192,11 @@ strongly connected component holding the most of them.
   `Server::build_nav_in_background` off and wait for the graph on that tick,
   so a run does not depend on how fast the build was.
 - VERIFIED (the off-component spawns' heights against the map's
-  `SURF_LADDER` brushes): `mp_ship`'s gap is its upper decks, which connect by
-  ladders. INFERRED: the lattice meets few of them square on. The other maps'
-  gaps were not investigated.
+  `SURF_LADDER` brushes): `mp_ship`'s gap was its upper decks, which connect
+  by ladders, and the ladder pass closed most of it (section 2, "Ladders").
+  VERIFIED (measured): its 7 spawns still apart sit in the hull at z 64 to
+  408, none within 300 units of a ladder the pass could not climb. The other
+  maps' gaps were not investigated.
 
 ## 3. Following
 
@@ -142,11 +212,14 @@ else a spot it remembers or heard, section 4) or `Roam`. A per-bot `nav::Followe
 - A `To` point is re-planned only once it moves 128 units off the planned
   destination; at the end of the path the bot heads at the point itself.
 - A waypoint is passed within 24 units horizontally, or once the bot is nearer
-  the next node than the waypoint is. A waypoint four grid steps away means the
-  bot left the path: plan again. Forty ticks without closing on a waypoint
-  drop the path, and the edge the bot was on stays out of its plans for 200
-  ticks (10 s); when no path goes round it, the plan takes it anyway. Stuck
-  before the first node, the bot is left 20 ticks to its own unstick.
+  the next node than the waypoint is, either only within 48 units of its
+  height: a ladder's head stands right above its foot. A waypoint four grid
+  steps away means the bot left the path: plan again. Forty ticks without
+  closing on a waypoint, height counted with the flat distance so a climb
+  closes in, drop the path, and the edge the bot was on stays out of its
+  plans for 200 ticks (10 s); when no path goes round it, the plan takes it
+  anyway. Stuck before the first node, the bot is left 20 ticks to its own
+  unstick.
 - VERIFIED (measured, `mp_rocket` `sd`, 2 bots, shoot off, seed 1): an
   attacker guarding the planted bomb stood at the foot of the stairs down to
   it, on the graph's edge, and the defender behind him gave up and planned
@@ -155,8 +228,11 @@ else a spot it remembers or heard, section 4) or `Roam`. A per-bot `nav::Followe
   stall, and the defuse comes 886 ticks after the plant.
 
 The brain runs at the waypoint, looks 45 degrees up when it is more than 48
-units above (a ladder), and backs toward it facing away when it is more than
-64 below (a ladder or ledge below, the way the graph proved it). A bot that
+units above or the body is on a ladder (`BotView::on_ladder`, `ps.on_ladder`),
+and backs toward it facing away when it is more than 64 below or below at all
+while on a ladder (a ladder or ledge below, the way the graph proved it),
+creeping inside 24 units with its heading held, as the ladder pass's walks
+did. A bot that
 has not left a 15-unit circle in ten ticks takes a random heading for 15 ticks
 whether it has a waypoint or not. Engaging an enemy overrides all of it.
 In S&D the objective names the point and can hold the bot still
@@ -180,9 +256,11 @@ Two goals sit between a visible enemy and `Roam`, both kept by the brain
   and the move keys are rotated so the body keeps the path. Ladder and ledge
   waypoints keep the path's own view.
 - Hearing. The server records a noise for every `EV_FIRE_WEAPON` shot in the
-  per-cmd attack pass (grenade throws and melee excluded) and for every blast
+  per-cmd attack pass (grenade throws and melee excluded), for every blast
   the missile pass sets off, chest high at the shooter or the blast, with the
-  client it belongs to. `step_bots` takes the list at the top of the next
+  client it belongs to, for every round a manned turret fires, at its muzzle,
+  the gunner's, and for every script `radiusDamage` (the S&D bomb), chest
+  high above its origin, nobody's. `step_bots` takes the list at the top of the next
   tick and hands each bot the loudest one it did not make (`bots::loudest`:
   the smallest distance over range, inside range). No line of sight is
   needed. Teammates' fire counts: a friend shooting means an enemy near him.
