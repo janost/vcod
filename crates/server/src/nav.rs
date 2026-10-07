@@ -3,6 +3,7 @@
 //! Design and build times: `docs/research/bot-navigation.md`.
 
 use crate::game::trigger::{BrushHull, box_contacts_hulls};
+use crate::server::FRAME_MS;
 use glam::Vec3;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
@@ -40,8 +41,6 @@ const MAX_DROP: f32 = 200.0;
 const LEVEL: f32 = 1.0;
 /// The flood stops here; a stock map fills well under it.
 const MAX_NODES: usize = 60_000;
-/// One bot tick, the cmd length every walk is stepped in.
-const TICK_MS: i32 = 50;
 /// The longest a walk runs with a ladder in it: 15 s, ~800 units of climb
 /// at the 53 units/s a full-rate climb makes. mp_ship's hold ladder is 560.
 const LADDER_TICKS: usize = 300;
@@ -1272,7 +1271,7 @@ struct Sim {
 impl Sim {
     fn tick(&mut self, world: &CollisionWorld, ps: &mut PlayerState, cmd: &UserCmd) {
         let cmd = UserCmd {
-            server_time: self.time + TICK_MS,
+            server_time: self.time + FRAME_MS,
             ..*cmd
         };
         let mw = MoveWorld::bare(world);
