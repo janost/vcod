@@ -281,7 +281,7 @@ vcod's rule: a soup collides when its material carries `0x1` or `0x10000`, or is
 
 ## Terrain has no brushes
 
-Ground-level spawns on mp_pavlov sit 200 or more units above the first brush below them (bedrock at z = -192). Terrain and patch surfaces have no brushes: the engine collides them through lumps 24-26 (below), and the render soups draw the same surfaces. `CollisionWorld::build` takes the terrain partitions' triangles from those lumps and sweeps them as retail's sphere (`cod11-mantle.md`, "Terrain is a swept sphere, a patch is a facet"), and harvests the world model's soups as Q3 facets for everything else (submodel meshes are replaced by their brush hulls), skipping sky materials, everything the soup-side content-word rule above drops, degenerate triangles (cross product under 1e-6) and the soups that draw a terrain triangle; each triangle's AABB is padded by 0.25 units before building the BVH. Brushes are swept with the Q3 `CM_TraceThroughBrush` clip against their planes pushed out by a capsule's radius and tested against its nearer sphere: retail's mover traces as a capsule, `trap_TraceCapsule` (`cod11-mantle.md`, "The player is a capsule").
+Ground-level spawns on mp_pavlov sit 200 or more units above the first brush below them (bedrock at z = -192). Terrain and patch surfaces have no brushes: the engine collides them through lumps 24-26 (below), and the render soups draw the same surfaces. `CollisionWorld::build` takes the terrain partitions' triangles from those lumps and sweeps them as retail's sphere (`cod11-mantle.md`, "Terrain is a swept sphere, a patch is a facet"), skipping degenerate triangles (cross product under 1e-6) and padding each triangle's AABB by 0.25 units for the BVH, and builds each patch record into retail's facet grid ("Patch collision" below). No render soup collides; the soup-side content-word rule above describes the soups, not the clip. Brushes are swept with the Q3 `CM_TraceThroughBrush` clip against their planes pushed out by a capsule's radius and tested against its nearer sphere: retail's mover traces as a capsule, `trap_TraceCapsule` (`cod11-mantle.md`, "The player is a capsule").
 
 ### Lump 24, collision partitions (16 bytes)
 
@@ -293,7 +293,7 @@ u8  kind                // 0 = bezier patch, else terrain
 u8  pad
 // patch:
 u16 width, height       // control grid, width x height points
-u32 flags               // handed to CM_GeneratePatchCollide, not decoded
+u32 tolerance           // CM_GeneratePatchCollide's subdivision distance
 u32 first_vert          // into lump 25
 // terrain:
 u16 vert_count, index_count
@@ -302,6 +302,47 @@ u32 first_index         // into lump 26, indices relative to first_vert
 ```
 
 Lump 25 is `f32 xyz` per vertex and lump 26 `u16` per index, both shared by the two kinds. mp_carentan carries 568 terrain and 534 patch records, mp_pavlov 619 in all; the patches are almost all 3x3, 3x5, 5x3 and 9x3 grids, and every kerb wall on carentan is a flat 3x3 one. `bsp.rs` parses the three lumps into `Bsp::terrain`, `patches`, `collision_verts` and `collision_indices`.
+
+### Patch collision
+
+VERIFIED, `cod_lnxded`: `CM_LoadMap`'s loop (0x804b010) copies a patch record's `width * height` control points out of lump 25 and calls 0x804dfb4 with the width, the height, the record's `u32` at +8 and the points, and stores the result in the partition's slot +0x24 and the bounds in +0x0c..+0x20. 0x804dfb4 raises `CM_GeneratePatchFacets: bad parameters` (0x80ccdc0), `... even sizes are invalid for quadratic meshes` (0x80cce00) and `... source is > MAX_GRID_SIZE` (0x80cce60), Q3's `CM_GeneratePatchCollide` strings. INFERRED, from the call structure and the strings (`CM_SetBorderInward: mixed plane sides`, `CM_AddFacetBevels... invalid bevel`, `MAX_FACETS` at 0x80ccda0) read against Q3 1.32's `cm_patch.c`: the functions below are Q3's, with the same `facet_t` (0x140 bytes: surface plane, border count, 26 border planes, 26 inward flags, 26 no-adjust flags), the same 129-point grid (0x60c bytes per column) and the same pools (0x1000 planes, 0x400 facets).
+
+| function | address |
+|---|---|
+| `CM_TransposeGrid` | 0x804bdf0 |
+| `CM_SubdivideGridColumns` | 0x804c040 |
+| `CM_RemoveDegenerateColumns` | 0x804c338 |
+| `CM_PlaneEqual` | 0x804c454 |
+| `CM_FindPlane2` | 0x804c568 |
+| `CM_FindPlane` | 0x804c648 |
+| `CM_EdgePlaneNum` | 0x804c8b0 |
+| `CM_SetBorderInward` | 0x804caf4 |
+| `CM_ValidateFacet` | 0x804cd28 |
+| `CM_AddFacetBevels` | 0x804ceec |
+| `CM_PatchCollideFromGrid` | 0x804d754 |
+| `CM_TracePointThroughPatchCollide` | 0x804e334 |
+| `CM_TraceThroughPatchCollide` | 0x804e944 |
+| `CM_PositionTestInPatchCollide` | 0x804f49c |
+| `BaseWindingForPlane` | 0x804fb7c |
+| `ChopWindingInPlace` | 0x805046c |
+
+VERIFIED, the epsilons in `.rodata`, Q3's values stored as doubles: the plane compare's 0.0001 on the normal and 0.02 on the distance (0x80ccbb8, 0x80ccbc0); the triangle-plane and border-side ±0.1 (0x80ccbe0, 0x80ccbe8, 0x80cccb0, 0x80cccb8); the wrap and degenerate-column point compare ±0.1 (0x80cce98, 0x80ccea0, 0x80ccba8, 0x80ccbb0); the edge plane's 4 units off the triangle (0x80ccc20, a float); the winding chop's 0.1 (floats at 0x80cccc0 and 0x80ccd70); the 0.5 under which an edge or bevel is degenerate (0x80ccd78); the trace's 0.125 and -1 (floats at 0x80ccebc and 0x80cceb8); the base winding's 131072 (0x80ccf68, with -131072 at 0x80ccf64), where Q3 has 65535.
+
+CoD's differences from Q3, INFERRED from the code at each address:
+
+- **The subdivision tolerance is the record's.** `CM_SubdivideGridColumns` loads the +8 word with `fild` (0x804c11d) and splits a column where `0.25 * |p0 + p2 - 2 p1|` (0.25 at 0x80ccba0) is above it; Q3 compares against the constant 16. VERIFIED, vcod census of the 15636 patch records of the 45 stock maps (2026-10-07): the word runs 1 to 61, 4 on 8181 records and 8 on 5264.
+- **A column that needs no split keeps its approximating point.** CoD steps two columns (`add [ebp-0x2c], 2` at 0x804c17b) where Q3 removes the middle column and steps one, so a flat 3x3 patch stays a 3x3 grid of four facets where Q3 collapses it to one. `CM_RemoveDegenerateColumns` removes only a column equal to its neighbour.
+- **An edge bevel needs a point behind it.** `CM_AddFacetBevels` keeps an edge-by-axis bevel when no winding point is more than 0.1 in front of it and at least one is more than 0.1 behind it (0x804d490-0x804d4f9). Q3 skips a bevel equal to the surface plane instead, and CoD has no such test for the edge bevels; its axial bevels keep it (0x804d0dc).
+- **`CM_ValidateFacet` rejects a facet wider than 131072** (0x80cccc4) rather than 65535.
+- **The trace's leave fraction starts at the trace's fraction**, not 1 (0x804e990). A hit needs its enter fraction under the trace's fraction anyway, so the outcome is Q3's.
+
+VERIFIED, the x87 roundings from the disassembly: the cross product (0x80659cc) rounds each component once; `VectorNormalize` (0x8065a38) stores the length as a float and multiplies each component by its reciprocal; `ChopWindingInPlace` stores each distance as a float (0x805050a) after comparing the unrounded one, and computes a split point from an unrounded `dist / (dist - next)` with one rounding per coordinate (0x8050787-0x805080f), a coordinate whose normal component is exactly ±1 taking the plane's distance; the subdivision stores the three new points from unrounded midpoints (0x804c2d4-0x804c2f8). The capsule trace keeps `d1`, `d2` and each fraction unrounded and compares a fraction before storing it (0x804eb87-0x804eb91).
+
+VERIFIED, the dispatch (`cod_lnxded`): `CM_TraceThroughPatchCollide` hands a point trace (`tw+0xc0`) to 0x804e334 (0x804e950); 0x804e334 runs only while `cm_playerCurveClip` is set, registered by `CM_LoadMap` (0x804b426) with the default "1"; the box trace (0x8056310) sends a trace whose start equals its end to the leaf position test (0x8056798), whose patch arm calls 0x804f49c (0x8054648) and on a hit writes fraction 0, `startsolid` and `allsolid`; the leaf trace (0x8055608) clips a patch whose bounds meet the trace's and copies the material's surface flags and contents when the fraction drops. INFERRED: nothing else in the patch code writes `startsolid`, so a moving trace never reads a patch as solid.
+
+VERIFIED, the same vcod census: every stock record builds, 303002 facets in all, none past a pool. The patch materials carry 0x1, 0x2080 (4915 records: rails and kerbs, which stop a shot and not a player), 0x20030000 and 0x20032080 (masked iron fences), 0x20001000 and 0x20003080 (flags), 0x20000001, 0x20000000 and 0x20020000; the trace tests each against its mask unchanged (0x8055608).
+
+vcod: `crates/common/src/patch.rs` ports the generation and the capsule, point and position-test arms with those roundings: `f64` where the x87 keeps a value, `f32` where it stores one. The box arm (`tw->offsets[signbits]`) is not ported, since every vcod trace that reaches a patch is a capsule or a point. VERIFIED, vcod measurement 2026-10-07: a patch record whose rows run along +y and columns along +x faces +z, since the grid is transposed once before its facets are built. A patch hit replaces the trace's only when strictly closer, retail's own test; a tie with a brush or terrain falls to the BVH's order, where retail's falls to its leaf order (brushes before partitions within a leaf).
 
 ## Movement constants and their provenance
 

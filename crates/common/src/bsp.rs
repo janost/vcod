@@ -216,13 +216,15 @@ pub struct TerrainPart {
 }
 
 /// One lump-24 patch partition: a `width x height` grid of bezier control
-/// points at `first_vert` of lump 25, the engine's `CM_GeneratePatchCollide`
-/// input. Kept for the record; vcod clips a patch through its render soup.
+/// points at `first_vert` of lump 25 and the subdivision tolerance, the
+/// engine's `CM_GeneratePatchCollide` input (`patch.rs`).
 #[derive(Debug, Clone)]
 pub struct PatchPart {
     pub material: u16,
     pub width: u16,
     pub height: u16,
+    /// How far a curve may stray from its chord before the grid splits it.
+    pub tolerance: i32,
     pub first_vert: u32,
 }
 
@@ -870,6 +872,7 @@ pub fn parse(data: &[u8]) -> Result<Bsp> {
                 material,
                 width: a,
                 height: c,
+                tolerance: le_u32(b, 8) as i32,
                 first_vert,
             });
         } else {

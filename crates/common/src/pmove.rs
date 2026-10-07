@@ -2016,15 +2016,18 @@ fn set_movement_dir(ps: &mut PlayerState, input: &PmInput, dt: f32) {
     ps.movement_dir = clamp_movement_dir(deg, MOVEMENT_DIR_CAP);
 }
 
-/// Q3 `bg_pmove.c` `PM_ClipVelocity`.
+/// Q3 `bg_pmove.c` `PM_ClipVelocity` (game.mp 0x3460c): the dot, the
+/// overclip's product or quotient and each component's difference stay on
+/// the x87 stack, and only the stored component is rounded.
 fn clip_velocity(vel: Vec3, normal: Vec3) -> Vec3 {
-    let backoff = vel.dot(normal)
-        * if vel.dot(normal) < 0.0 {
-            OVERCLIP
-        } else {
-            1.0 / OVERCLIP
-        };
-    vel - normal * backoff
+    let (v, n) = (vel.as_dvec3(), normal.as_dvec3());
+    let dot = v.dot(n);
+    let backoff = if dot < 0.0 {
+        dot * f64::from(OVERCLIP)
+    } else {
+        dot / f64::from(OVERCLIP)
+    };
+    (v - n * backoff).as_vec3()
 }
 
 /// Q3 `bg_pmove.c` `PM_WalkMove`.
