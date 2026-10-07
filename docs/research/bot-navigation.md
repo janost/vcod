@@ -61,6 +61,18 @@ measured).
 - A walk starts at run speed (a following bot never stops at a node), re-aims
   at the target every tick, and gives up after two ticks of moving under 2
   units or at twice the run time plus four ticks.
+- A walk still in the air when its budget runs out gets up to 16 ticks more
+  to land (a 200-unit drop takes 14), and, landed past its budget, the run
+  back to the target from there. VERIFIED (measured, `mp_ship`): the stair
+  from the deck at z 168 down to the hull at z 104 by x 3430-3472, y 288
+  rises about 48 units in 17, so a run down it leaves the top step and
+  falls past the rest; the walk was in the air at z 88 when its 9-tick
+  budget ran out, and lands at z 80 on tick 12. Without the extra ticks
+  the hull's 126 nodes at z 56-200 and the spawns on them had 2 edges out
+  and none in.
+- A forward walk pinned on the ground (the two stalled ticks that end it)
+  jumps once where a body box raised by the jump's 39 units has room ahead
+  (`jump_clear`), and the edge it proves is a jump edge (section "Jumps").
 - On a ladder the body looks 45 degrees up, where `ladder_move`'s climb
   saturates, and the budget stretches to 300 ticks. VERIFIED (measured, the
   `mp_ship` hold ladder): a full-rate climb makes 53 units/s, so the 560
@@ -152,12 +164,71 @@ pass after the flood (`NavGraph::link_ladders`) handles them on their own.
   every flood back down creeping, the build took 4.6 times the old one's;
   as a third try, 1.7 times. Without the creep in the flood, 4 spawns on
   the decks above z 760 stayed apart.
+- The creep is tried only from a node within 96 units across of a ladder
+  box that spans its floor down to a drop below it (`nav::ladder_near`).
+  Away from a ladder it proved edges no bot follows: a bot backs toward a
+  waypoint only more than 64 units below or from a ladder (section 3), and
+  the creep found, VERIFIED (measured, `mp_depot`), 20-unit steps down a
+  sloped roof at z 384 that a forward run and a back down at a run fell
+  off. Without them `mp_depot` loses the 1 600 nodes of its roofs at z 192
+  to 300 and no spawn; across the twelve maps the creep was 5 to 25% of a
+  build's pmove ticks.
+- After the ladder pass the flood goes on from the ladders' ends, so a floor
+  reached only by a ladder is flooded like any other. Before, a rung's ends
+  were walked to and from the nodes within two columns and no further.
+  VERIFIED (measured): with it all 112 of `mp_ship`'s spawns are in one
+  component, and `mp_depot` keeps 650 nodes of its upper floors that it
+  reached before only by creeping down off its roofs.
 - VERIFIED (measured, 2026-10-07): every one of `mp_ship`'s 32 ladder boxes
   gets a rung from one face. Before the budget, foot and `under_ground`
   changes above, six got none: the hold ladder (box x 4320-4344, z 56-615),
   the mast (x 3666-3684, z 902-1145), the crow's nest (x 4975, z 701-1219),
   the two whose foot did not fit (x 6475 and x 3600, y -131) and one at
   x 4229 that a later collision change had already fixed.
+
+### Jumps
+
+`PM_CheckJump` lifts the feet 39 units (vz `sqrt(2 * 39 * 800)` = 249.8,
+`vcod_common::pmove::JUMP_HEIGHT`; docs/research/cod11-mantle.md, "Jumps"),
+over the 18-unit step. Two kinds of edge use it, kept in
+`NavGraph::jumps`, and a bot on one sends the jump key on the walk's cue
+(`nav::jump_cue`, `nav::jump_key`):
+
+- A pinned jump: the flood's forward walk above, stalled at a ledge's face
+  or a low wall. A bot on the edge jumps on the ground while it closes on
+  the waypoint under 2 units a tick (stopped at the face or sliding along
+  it), or stands within 16 units flat under a waypoint more than a step
+  above. VERIFIED (measured, `mp_depot` `re`, seed 7): from the stair
+  landing at z 84 to the step at z 116 by (-1759, -603) the bot came in at
+  an angle, slid along the step's face and ran off the stair's side at
+  every try on the pinned cue alone; the cue under the waypoint takes it up.
+- A leap (`NavGraph::link_leaps`, `NavGraph::leaps`): after the flood,
+  ladders and walk-back passes, every node 2 columns off whose floor is
+  between a step and a jump higher, that 3 edges do not already reach, is
+  run at from a standstill with a jump on the tick the body would lose the
+  ground (`nav::lip_ahead`: no floor within a step under where its velocity
+  takes it). VERIFIED (measured, `mp_depot`): the Retrieval documents lie
+  on a crate top at z 148.125 (x -1964 to -1796, y -576 to -464), across a
+  gap from a step at z 116.125 (y -616 to -624) that a run off falls into.
+  The flood walks one column, so it never tried the step to the crate. A
+  leap from the step at (-1820, -609) lands on the crate; a forward walk
+  falls.
+- A bot comes to rest on a leap's foot first: the follower holds the foot
+  as its waypoint until the body is within 12 units of it flat, on the
+  ground, under 2 units a tick, with the jump off its 500 ms cooldown
+  (`nav::ready_to_leap`), and the bot slows into it. Then the follower runs
+  the leap's walk again from where the body stands, and takes the edge out
+  of its plans for 200 ticks when that walk does not arrive. VERIFIED
+  (measured, `mp_depot`, seed 7): a bot on the move turned onto the leap at
+  the lip with its pace along the step and fell into the gap, one that
+  jumped onto the step 5 ticks earlier was refused the jump by the
+  cooldown, and one resting 4 units nearer the lip than the node left the
+  ground on the first tick of the run, before it had the pace to cross.
+- A jump edge's top counts as reached only within 16 units of its height,
+  where any other waypoint passes within 48: from the foot of a 32-unit
+  ledge the top is in reach flat.
+- With both, `mp_depot` `re` (2 bots, seed 7) picks the documents up at
+  tick 814 and delivers them 224 ticks later (`tests/bot_objectives.rs`).
 
 ### Build times
 
@@ -209,6 +280,36 @@ edges and the 48-unit pitch cap (section 2, "Spacing", "The flood" and
 | mp_rocket | 12331 | 90444 | 141 / 153 |
 | mp_ship | 11169 | 75091 | 107 / 112 |
 
+With jumps, leaps, the fall budget, the creep only near ladders and the
+flood from the ladders' ends (2026-10-07; section 2, "The flood" and
+"Jumps"). VERIFIED (measured, same example, this branch's binary
+interleaved with the one before it three times under a load average of
+10-17 from other builds; the quietest the machine got). The wall times are
+each map's best of three, before and after. They are noisy: the same
+binary's CPU time over all twelve maps ran 102 to 215 s across the three
+runs. The pmove ticks the build simulated (counted with a temporary counter
+in `Sim::tick`, not committed) do not depend on load: 6.10 million before,
+6.39 million after (+4.7%).
+
+| map | nodes | edges | spawns in one component | ms before / after | pmove ticks before / after |
+|---|---|---|---|---|---|
+| mp_brecourt | 15237 | 116890 | 161 / 161 | 1272 / 813 | 725437 / 717483 |
+| mp_carentan | 10196 | 72394 | 185 / 185 | 391 / 452 | 237899 / 294297 |
+| mp_chateau | 7148 | 49964 | 112 / 113 | 336 / 385 | 181627 / 233376 |
+| mp_dawnville | 7420 | 51661 | 176 / 185 | 549 / 547 | 348611 / 373589 |
+| mp_depot | 11353 | 79056 | 154 / 161 | 733 / 652 | 519414 / 435802 |
+| mp_harbor | 7715 | 54703 | 158 / 161 | 247 / 264 | 159361 / 166015 |
+| mp_hurtgen | 27388 | 206990 | 190 / 193 | 2035 / 1638 | 1621316 / 1517702 |
+| mp_pavlov | 16258 | 116910 | 161 / 161 | 979 / 811 | 636434 / 612428 |
+| mp_powcamp | 6196 | 42805 | 147 / 161 | 293 / 321 | 176545 / 212222 |
+| mp_railyard | 12037 | 86342 | 161 / 161 | 576 / 585 | 312426 / 372831 |
+| mp_rocket | 12339 | 90683 | 140 / 153 | 947 / 804 | 721977 / 676427 |
+| mp_ship | 14066 | 95197 | 112 / 112 | 903 / 1347 | 461897 / 775829 |
+
+`mp_ship` costs most: its hull below the deck, reached now down the stair
+the fall budget lets a walk land on, is 2 900 more nodes. `mp_powcamp` lost
+two spawns to the component and `mp_rocket` one; not looked into.
+
 - VERIFIED (measured): an early single-threaded build of `mp_carentan`, before
   the diagonal shortcut and the stall cutoff, took 10.6 s. `perf` puts 80% of
   the build in `CollisionWorld::trace_node`.
@@ -252,12 +353,33 @@ edges and the 48-unit pitch cap (section 2, "Spacing", "The flood" and
   `SURF_LADDER` brushes): `mp_ship`'s gap was its upper decks, which connect
   by ladders, and the ladder pass closed most of it (section 2, "Ladders").
   VERIFIED (measured): its 7 spawns still apart sat in the hull at z 64 to
-  408 (5 after the patch grid, not broken down again), in five islands of 11 to 80 nodes that reach the main component
-  neither way, though every ladder now has a rung. Walking node to node
+  408 (5 after the patch grid), in islands that reach the main component
+  neither way, though every ladder has a rung. Walking node to node
   between neighbouring columns on one floor with no edge either way (a gap
   pass after the ladders) added 235 edges on `mp_ship` and joined none of
-  them, so the islands are walled off from the graph by something other
-  than a missed neighbour walk. The other maps' gaps were not investigated.
+  them. VERIFIED (measured, 2026-10-07, point traces and walks): the five
+  stood in two places. Three were on the hull's deck at z 56-200 (126
+  nodes, the spawn at (3534, 61, 64) among them), which a walk left up the
+  stair at x 3430-3472, y 288 but never entered: a run down that stair
+  falls past its steps and its budget ran out in the air (section 2, "The
+  flood"). Two were in a lifeboat at x 3968-4250, y -380 to -225, floor
+  z 394-412, walled by a gunwale whose top stands about 40 units over the
+  floor, with the deck outside at z 341-351: no walk got over the gunwale
+  without a jump. With the fall budget, jumps and the flood from the
+  ladders' ends all 112 spawns are in one component; a bot gets into the
+  lifeboat by jumping along the deckhouse roof at z 641-664 from the hold
+  ladder's head and dropping in from z 648.
+- VERIFIED (measured, point traces, 2026-10-07): `mp_carentan` has no
+  playable ground at x -1180, y 1900-3300, z -47.875. That floor is the
+  map's base brush west of a concrete wall (brush 3164,
+  `textures/normandy/walls/concrete@dirtywhite_wallwthrd`, solid at z 2000)
+  that runs diagonally from (-1100, 1650) to (-260, 3430), with the town on
+  its east side; a flood seeded there reaches the town only under the
+  terrain, through (389, 575, -46.7), 37 units under the terrain triangle
+  at z -9.27 (`under_ground` misses it: the ray up starts 72 units over the
+  feet, above the sheet). The fight-spot test's listener stood there because
+  `Server::test_ground_under` traces down outside the wall too; the graph
+  is right to leave it out. The other maps' gaps were not investigated.
 
 ## 3. Following
 
@@ -266,10 +388,22 @@ The brain stays pure. Each tick the server asks `Bot::goal(&BotView)` for a
 else a spot it remembers or heard, section 4) or `Roam`. A per-bot `nav::Follower` turns that into `BotView::waypoint`:
 
 - A* (Euclidean cost and heuristic) from the node nearest the bot to the node
-  nearest the goal, at most two A* runs per server tick across all bots.
-- `Roam` picks of eight random nodes the first 1000 units away (else the
-  farthest), using the server's seeded generator; a reached or unreachable
-  roam destination is replaced.
+  nearest the goal. The bots of a tick share a budget of 4000 expanded
+  nodes (`BOT_PLAN_BUDGET`): a plan starts only while some are left, and a
+  bot that finds them spent wanders that tick and asks again. VERIFIED
+  (measured, `mp_ship`, 8 bots, background build, release, load average
+  30-40 from other builds): the tick the graph lands now runs two plans,
+  2.0 and 1.3 ms. Before, the cap was two plans a tick and one plan could
+  be three full searches (round the avoided edges, then without them, then
+  toward the nearest reachable node); the first two plans after the graph
+  landed took 13.5 and 11.2 ms. A plan now searches round the
+  avoided edges only when there are some, and its last search is the
+  partial one for a point goal.
+- `Roam` picks of eight random nodes in the bot's own strongly connected
+  component the first 1000 units away (else the farthest), using the
+  server's seeded generator; a reached or unreachable roam destination is
+  replaced. A pick outside the component was the costly plan: a search of
+  everything the start reaches, then nothing.
 - A `To` point is re-planned only once it moves 128 units off the planned
   destination; at the end of the path the bot heads at the point itself.
   A point the graph does not reach is planned for as far as it goes: the

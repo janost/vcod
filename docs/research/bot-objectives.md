@@ -163,10 +163,12 @@ tick 1108 and delivers at tick 2275. Its rounds ended because the lone axis
 bot wandered into the minefields round its spawn (`MOD_EXPLOSIVE`, killer
 `world`), and it wandered because the objective's bunker was not on the
 graph (bot-navigation.md, "Spacing", "The flood" and section 3).
-`mp_depot` still picks nothing up. Its documents lie on a crate top at
-z 148, and the nearest the graph gets is a step 32 units below at
-(-1852, -608, 116): the crate needs a jump and the flood never jumps. The
-attacker stands on the step, 90 units from the trigger's middle, outside
-`PICKUP_REACH` (48); widening the reach to 96 did not get the pickup either
-(not looked into further). With 6 shooting bots, `mp_carentan` delivered and `mp_harbor` picked
-up twice in 150 s and delivered neither.
+`mp_depot` still picked nothing up then. Its documents lie on a crate top
+at z 148, and the nearest the graph got was a step 32 units below at
+(-1852, -608, 116), across a gap the flood never jumped. VERIFIED (measured,
+2026-10-07, `tests/bot_objectives.rs`, same run): with leaps
+(bot-navigation.md, "Jumps") the attacker comes to rest on the step, leaps
+onto the crate, picks up at tick 814 and delivers 224 ticks later.
+
+With 6 shooting bots, `mp_carentan` delivered and `mp_harbor` picked up
+twice in 150 s and delivered neither.
