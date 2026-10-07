@@ -19,7 +19,7 @@ use vcod_gsc::{Atom, Cx, EntId, ErrorKind, Host, Target, Value};
 
 /// `ENTITYNUM_NONE`, the entity number an unattached objective record and an
 /// unowned HUD element both carry.
-pub const ENTITYNUM_NONE: i32 = 0x3ff;
+pub const ENTITYNUM_NONE: i32 = vcod_common::net::protocol::ENTITYNUM_NONE as i32;
 
 /// A cleared level objective record: what `objective_add` starts from and
 /// what `objective_delete` leaves.

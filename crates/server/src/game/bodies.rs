@@ -11,7 +11,7 @@ use vcod_common::net::trajectory::{TR_GRAVITY, TR_STATIONARY};
 
 /// `ET_CORPSE`. The client resolves the body model through `clientNum` on
 /// the roster (`docs/research/clientstate-wire-format.md`).
-pub const ET_CORPSE: i32 = 2;
+pub use vcod_common::net::flags::ET_CORPSE;
 
 /// `G_SpawnPlayerClone` indexes `&g_entities[64 + level->bodyQueIndex]` and
 /// advances the index `(i + 1) & 7`, so the queue is eight entities starting

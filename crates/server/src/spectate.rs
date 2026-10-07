@@ -19,7 +19,7 @@ use vcod_common::weapon::WeaponDef;
 
 /// `ET_PLAYER`, what another client sees a player as
 /// (`crates/client/src/entities.rs` carries the table).
-const ET_PLAYER: i32 = 1;
+use vcod_common::net::flags::ET_PLAYER;
 
 /// A player entity's `eFlags` and `pos.trDuration`, transcribed from the
 /// retail two-probe capture rather than derived.
@@ -30,15 +30,13 @@ const PLAYER_TR_DURATION: i32 = 50;
 /// think runs the client up to it (0x42a48).
 const SPAWN_THINK_MS: f32 = 100.0;
 
-const EF_FIRING: i32 = 0x400;
+/// `docs/research/cod11-events-and-fx.md`.
+use vcod_common::net::event_ids::EV_PLAYER_TELEPORT_IN;
+use vcod_common::net::event_ids::EV_PLAYER_TELEPORT_OUT;
+use vcod_common::net::flags::EF_FIRING;
 /// `pingPlayer`'s bit (docs/research/cod11-hud-protocol.md, "Compass
 /// friendlies").
-const EF_PING: i32 = 0x80000;
-/// `ps.eFlags` 0x100000, the compass teammate's ping.
-const EF_FRIEND_PING: i32 = 0x100000;
-/// `docs/research/cod11-events-and-fx.md`.
-const EV_PLAYER_TELEPORT_IN: i32 = 199;
-const EV_PLAYER_TELEPORT_OUT: i32 = 200;
+use vcod_common::net::flags::{EF_FRIEND_PING, EF_PING};
 
 /// What `linkTo` left on a client: the parent it follows, the gap it stood
 /// at when it linked and the velocity it had then. `Server` re-applies all
@@ -51,9 +49,9 @@ pub struct Link {
     pub offset: [f32; 3],
     pub velocity: [f32; 3],
 }
+use vcod_common::net::event_ids::EV_DEATH;
 /// `EV_PAIN` and `EV_DEATH` (`docs/research/cod11-events-and-fx.md`).
-const EV_PAIN: i32 = 187;
-const EV_DEATH: i32 = 189;
+use vcod_common::net::event_ids::EV_PAIN;
 /// One `EV_PAIN` per 700 ms (combat doc, section 6, step 9).
 const PAIN_DEBOUNCE_MS: i32 = 700;
 /// `finishPlayerDamage`'s knockback (combat doc, 4.5): the stance scales,

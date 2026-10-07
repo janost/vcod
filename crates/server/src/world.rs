@@ -94,7 +94,7 @@ fn entity_clusters(vis: &bsp::Visibility, e: &EntityState, time: i32, p: &Protoc
 /// (`G_MoverTeam` and the push, docs/research/cod11-movers.md sections 11
 /// and 14); anything else at its `trBase`.
 fn link_pose(e: &EntityState, time: i32, p: &Protocol) -> ([f32; 3], [f32; 3]) {
-    if e.field_i32(p, "eType") == crate::game::wire::ET_SCRIPTMOVER {
+    if e.field_i32(p, "eType") == vcod_common::net::flags::ET_SCRIPTMOVER {
         let at = |group| Trajectory::read(e, p, group).evaluate(time).to_array();
         return (at("pos"), at("apos"));
     }
@@ -111,7 +111,7 @@ fn link_bounds(
     angles: [f32; 3],
     p: &Protocol,
 ) -> ([f32; 3], [f32; 3]) {
-    let model = (e.field_i32(p, "solid") == crate::game::wire::SOLID_BMODEL)
+    let model = (e.field_i32(p, "solid") == vcod_common::net::flags::SOLID_BMODEL)
         .then(|| vis.model_bounds(e.field_i32(p, "index") as usize))
         .flatten();
     let Some((mins, maxs)) = model else {
@@ -265,8 +265,8 @@ mod tests {
         let put = |e: &mut EntityState, name: &str, v: i32| {
             e.fields[EntityState::field_index(p, name).unwrap()] = v;
         };
-        put(&mut e, "eType", crate::game::wire::ET_SCRIPTMOVER);
-        put(&mut e, "solid", crate::game::wire::SOLID_BMODEL);
+        put(&mut e, "eType", vcod_common::net::flags::ET_SCRIPTMOVER);
+        put(&mut e, "solid", vcod_common::net::flags::SOLID_BMODEL);
         put(&mut e, "index", model as i32);
         let seen_at = |from: i32, off: [f32; 3]| {
             let mut e = e.clone();

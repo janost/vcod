@@ -9,8 +9,8 @@ use crate::game::host::GameHost;
 use crate::game::temp_entity::{Scope, TempEntity};
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
-pub const EV_PLAY_FX: i32 = 191;
-pub const EV_PLAY_FX_DIR: i32 = 192;
+pub use vcod_common::net::event_ids::EV_PLAY_FX;
+pub use vcod_common::net::event_ids::EV_PLAY_FX_DIR;
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
 

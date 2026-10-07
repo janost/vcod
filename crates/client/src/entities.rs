@@ -38,24 +38,16 @@ const STATE_TTL_MS: i32 = 5000;
 /// 0.2-7ms, so several new loadouts in one frame would stall it by their sum.
 const ASSEMBLY_LOAD_BUDGET_PER_FRAME: u32 = 1;
 
-pub const ET_GENERAL: i32 = 0;
-pub const ET_PLAYER: i32 = 1;
-pub const ET_CORPSE: i32 = 2;
-pub const ET_ITEM: i32 = 3;
-pub const ET_MISSILE: i32 = 4;
-pub const ET_MOVER: i32 = 5;
-#[cfg_attr(not(test), allow(dead_code))] // only tests name it
-pub const ET_PORTAL: i32 = 6;
-#[cfg_attr(not(test), allow(dead_code))] // only tests name it
-pub const ET_INVISIBLE: i32 = 7;
-pub const ET_SCRIPTMOVER: i32 = 8;
+pub use vcod_common::net::events::ET_EVENTS;
 /// `eFlags` bit that hides an entity's model.
-const EF_NODRAW: i32 = 0x100;
+use vcod_common::net::flags::EF_NODRAW;
 /// `solid` of a brush model entity, whose `index` is then an inline model
 /// number rather than a model configstring slot
 /// (docs/research/cod11-movers.md, section 14).
-pub const SOLID_BMODEL: i32 = 0xff_ffff;
-pub use vcod_common::net::events::ET_EVENTS;
+pub use vcod_common::net::flags::SOLID_BMODEL;
+pub use vcod_common::net::flags::{
+    ET_CORPSE, ET_GENERAL, ET_ITEM, ET_MISSILE, ET_MOVER, ET_PLAYER, ET_SCRIPTMOVER,
+};
 
 /// What one snapshot entity draws as.
 #[derive(Debug, Clone, PartialEq)]
@@ -735,7 +727,7 @@ pub struct BuiltScene {
 }
 
 /// Entity numbers below this are clients (`MAX_CLIENTS`).
-const MAX_CLIENTS: u32 = 64;
+const MAX_CLIENTS: u32 = vcod_common::net::protocol::MAX_CLIENTS as u32;
 
 /// The older snapshot of the pair an entity is drawn between, with its
 /// movers, which is what retail's `cg.snap` holds.
@@ -1652,7 +1644,12 @@ mod tests {
             resolve_visual(&ent(ET_MOVER, 0, 10), &none, &cs, p),
             EntityVisual::Submodel(2)
         );
-        for skip in [ET_PORTAL, ET_INVISIBLE, ET_EVENTS, ET_EVENTS + 5] {
+        for skip in [
+            vcod_common::net::flags::ET_PORTAL,
+            vcod_common::net::flags::ET_INVISIBLE,
+            ET_EVENTS,
+            ET_EVENTS + 5,
+        ] {
             assert_eq!(
                 resolve_visual(&ent(skip, 0, 9), &none, &cs, p),
                 EntityVisual::None

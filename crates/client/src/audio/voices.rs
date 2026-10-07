@@ -14,7 +14,7 @@ pub type VoiceId = u64;
 
 /// Retail's world-space entity; `Source::Point` voices carry it for the
 /// replacement rule (research doc, section 2).
-pub const ENTITYNUM_WORLD: u32 = 1022;
+pub use vcod_common::net::protocol::ENTITYNUM_WORLD;
 
 /// Retail's voice pools: 32 3D samples, 32 2D samples, 13 streams with slots
 /// 0-4 reserved, so 8 general (`FUN_0044ba30`/`FUN_0044bb70`, research doc,
