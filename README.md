@@ -140,8 +140,8 @@ either: the people on it signed up for Call of Duty.
   frames.
 - `--bots` adds debug bots that join through the stock menus, pick a random
   weapon the menu and the `scr_allow_*` cvars allow, and roam the map along
-  a navigation graph built from pmove runs, ladders included and minefields
-  left out, heading for an
+  a navigation graph built from pmove runs, ladders and jumps included and
+  minefields left out, heading for an
   enemy they see and toward gunfire, turret fire and blasts they hear. In
   S&D each team spreads over both bombzones, attackers plant and one
   defender defuses while the rest cover. In Retrieval attackers pick the

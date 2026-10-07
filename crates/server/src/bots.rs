@@ -116,6 +116,8 @@ pub struct BotView {
     pub ads_frac: f32,
     /// Horizontal speed, units/s.
     pub speed: f32,
+    /// `ps.velocity`, units/s.
+    pub velocity: [f32; 3],
     pub dead: bool,
     /// `pm_type` 0, a spawned player rather than a spectator or camera.
     pub playing: bool,
@@ -138,6 +140,17 @@ pub struct BotView {
     pub linked: bool,
     /// `ps.on_ladder`: the climb looks up, as the graph's walks did.
     pub on_ladder: bool,
+    /// `ps.on_ground`.
+    pub on_ground: bool,
+    /// The way to [`Self::waypoint`] is a jump edge: jump where the body
+    /// stands pinned or at a lip, as the graph's walk did (`nav::jump_cue`).
+    pub jump: bool,
+    /// The jump edge is a leap, taken from rest with a jump at the lip.
+    pub leap: bool,
+    /// On a jump edge, the body loses the ground next tick (`nav::lip_ahead`).
+    pub lip: bool,
+    /// [`Self::waypoint`] is a leap's foot: come to rest on it.
+    pub stop: bool,
     /// A held pistol's configstring index, when one is in the kit.
     pub pistol: Option<u8>,
     /// The S&D objectives, on an `sd` level only.
@@ -325,6 +338,8 @@ pub struct Bot {
     loadout: Option<(String, &'static str)>,
     /// The heading a back down onto a ladder holds (`crate::nav::Creep`).
     creep: crate::nav::Creep,
+    /// The last cmd held the jump key; a second jump needs it released.
+    jump_held: bool,
     obj: Objective,
     /// The last reliable server command the bot consumed.
     pub(crate) last_seen_seq: i32,
@@ -473,6 +488,7 @@ impl Bot {
             calm_ticks: 0,
             loadout: None,
             creep: crate::nav::Creep::default(),
+            jump_held: false,
             obj: Objective::default(),
             last_seen_seq: 0,
             next_command_seq: 1,
@@ -971,7 +987,8 @@ impl Bot {
         // at its objective, or held by a link, means to stay put.
         let standing = self.objective_standing(view);
         self.stall_ticks += 1;
-        if standing {
+        // Coming to rest at a leap's foot is not being stuck either.
+        if standing || view.stop {
             self.stall_origin = view.origin;
             self.stall_ticks = 0;
             self.unstick_ticks = 0;
@@ -984,6 +1001,8 @@ impl Bot {
                 self.stall_ticks = 0;
             }
         }
+        let steering = !standing && view.waypoint.is_some() && self.unstick_ticks == 0;
+        let foot = view.waypoint.filter(|_| steering && view.stop);
         let (mut pitch, mut yaw, mut forward) = match view.waypoint {
             // On guard: look about, feet still.
             _ if standing => {
@@ -1024,9 +1043,32 @@ impl Bot {
             cmd.right = (-d.sin() * 127.0).round() as i8;
             [pitch, yaw] = look;
         }
+        // Slowing onto a leap's foot, then standing on it.
+        if let Some(w) = foot {
+            let flat = (w[0] - view.origin[0]).hypot(w[1] - view.origin[1]);
+            forward = if flat < crate::nav::LEAP_FOOT * 0.5 {
+                0
+            } else {
+                (flat / LEAP_SLOW * 127.0).min(127.0) as i8
+            };
+        }
         // Engaging overrides all of this: `footwork` owns the move keys and
         // the aim owns the view.
         cmd.forward = forward;
+        if steering
+            && view.jump
+            && let Some(w) = view.waypoint
+        {
+            // Closing on the waypoint under the walk's pinned pace: stopped
+            // at the ledge's face, or sliding along it.
+            let to = glam::Vec2::new(w[0] - view.origin[0], w[1] - view.origin[1]);
+            let v = glam::Vec2::new(view.velocity[0], view.velocity[1]);
+            let closing = v.dot(to.normalize_or_zero()) * 0.05;
+            let rise = w[2] - view.origin[2];
+            let cue = crate::nav::jump_cue(view.leap, view.lip, closing, to.length(), rise);
+            cmd.up = crate::nav::jump_key(view.on_ground, cue, self.jump_held);
+        }
+        self.jump_held = cmd.up > 0;
         if self.shoot {
             self.track(view.enemy);
             if let Some(e) = view.enemy
@@ -1361,6 +1403,8 @@ pub fn octant(yaw: f32) -> usize {
 
 /// Ticks a stuck bot spends on a random heading before its waypoint again.
 const UNSTICK_TICKS: u32 = 15;
+/// Inside this of a leap's foot, flat, the run slows in proportion.
+const LEAP_SLOW: f32 = 48.0;
 /// A waypoint this far above the feet is up a ladder: look up, where
 /// `ladder_move` climbs at full rate.
 const CLIMB_HEIGHT: f32 = 48.0;
@@ -1507,6 +1551,7 @@ mod tests {
             sniper: false,
             ads_frac: 0.0,
             speed: 0.0,
+            velocity: [0.0; 3],
             dead: false,
             playing: true,
             enemy: None,
@@ -1516,6 +1561,11 @@ mod tests {
             noise: None,
             linked: false,
             on_ladder: false,
+            on_ground: true,
+            jump: false,
+            leap: false,
+            lip: false,
+            stop: false,
             pistol: None,
             sd: None,
             re: None,
@@ -2034,6 +2084,45 @@ mod tests {
         let cmd = bot.think(&v);
         assert_eq!(cmd.forward, 127);
         assert_eq!(cmd.angles, [0, deg_short(90.0), 0], "level, facing +y");
+    }
+
+    /// Pinned at a ledge's face on a jump edge: jump, release the key the
+    /// next tick (a held key never jumps again), then press again.
+    #[test]
+    fn a_bot_jumps_a_jump_edge_and_releases_the_key() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([30.0, 0.0, 96.0]);
+        assert_eq!(bot.think(&v).up, 0, "a plain edge");
+        v.jump = true;
+        let ups: Vec<i8> = (0..3).map(|_| bot.think(&v).up).collect();
+        assert_eq!(ups, [127, 0, 127]);
+        // Still running at the ledge: no jump yet.
+        v.velocity = [190.0, 0.0, 0.0];
+        v.speed = 190.0;
+        assert_eq!(bot.think(&v).up, 0);
+    }
+
+    /// At a leap's foot the run slows and stops on it; the leap itself
+    /// jumps only at the lip.
+    #[test]
+    fn a_bot_stops_at_a_leaps_foot_and_leaps_at_the_lip() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.stop = true;
+        v.waypoint = Some([100.0, 0.0, 64.0]);
+        assert_eq!(bot.think(&v).forward, 127);
+        v.waypoint = Some([24.0, 0.0, 64.0]);
+        assert_eq!(bot.think(&v).forward, 63);
+        v.waypoint = Some([4.0, 0.0, 64.0]);
+        assert_eq!(bot.think(&v).forward, 0);
+        v.stop = false;
+        v.jump = true;
+        v.leap = true;
+        v.waypoint = Some([60.0, 0.0, 96.0]);
+        assert_eq!(bot.think(&v).up, 0, "at rest, no lip");
+        v.lip = true;
+        assert_eq!(bot.think(&v).up, 127);
     }
 
     #[test]
