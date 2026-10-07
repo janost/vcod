@@ -125,6 +125,8 @@ either: the people on it signed up for Call of Duty.
   flagged to respawn comes back on retail's timer.
 - Search & Destroy end to end: plant, defuse, progress bar, objectives on the
   compass.
+- A teammate out of view still shows on the compass, with its quick-chat
+  flash, packed into the playerstate the way retail packs it.
 - Mounted MG42s: mount with use, aim inside the gun's arc, fire, dismount.
 - Map triggers (`trigger_multiple`, `trigger_hurt`, `trigger_use`,
   `trigger_lookat`), and script movers whose trajectories reach the wire.
@@ -186,8 +188,7 @@ console, no key rebinding. You get command-line flags and the binds below.
 - The HUD skips a few retail touches: the compass's spring, the stance key
   hints, the weapon name timing out after a switch and the hit icon's jitter
   ([docs/research/cod11-hud-protocol.md](docs/research/cod11-hud-protocol.md),
-  section 9). vcod's own server doesn't send the out-of-view teammate, so
-  that compass mark shows only on a retail server.
+  section 9).
 - Only protocol 1 (patch 1.1). 1.5 and United Offensive servers won't talk to
   it.
 - Prediction carries you with a moving brush model you stand on but not

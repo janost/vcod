@@ -4,7 +4,7 @@ use crate::spectate::ClientSim;
 use std::net::SocketAddr;
 use std::time::Instant;
 use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
-use vcod_common::net::netchan::{ClientMessage, ServerNetchan};
+use vcod_common::net::netchan::{ClientMessage, MAX_RELIABLE_COMMANDS, ServerNetchan};
 use vcod_common::net::snapshot::Snapshot;
 
 /// `MAX_NAME_LENGTH`, a byte cap since the value is remote input.
@@ -38,6 +38,74 @@ impl From<UserCmd> for QueuedCmd {
     }
 }
 
+/// `svscmd_type`, what `SV_AddServerCommand` may do with a queued command
+/// (docs/protocol-1.1.md, "The server command queue").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CmdKind {
+    /// 0: dropped while the client is not active or 32 behind, never
+    /// replaced by a later command.
+    #[default]
+    CanIgnore,
+    /// 1: always queued, and replaces a matching command still unsent.
+    Reliable,
+}
+
+impl CmdKind {
+    /// The type retail's call sites pass, which is one per letter: every
+    /// print, chat, quick chat, announcement and local sound is 0.
+    pub fn of(cmd: &str) -> CmdKind {
+        match cmd.as_bytes().first() {
+            Some(b'c' | b'e' | b'f' | b'g' | b'h' | b'i' | b'j' | b'k' | b'l' | b's') => {
+                CmdKind::CanIgnore
+            }
+            _ => CmdKind::Reliable,
+        }
+    }
+}
+
+/// What [`Client::queue_server_command`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Queued {
+    Added,
+    /// An unsent match was taken out and this one appended.
+    Replaced,
+    /// A [`CmdKind::CanIgnore`] command the client is not ready for.
+    Dropped,
+    /// Queueing would overwrite a slot the client has not acked; nothing
+    /// was written, the caller drops the client.
+    Overflow,
+}
+
+/// `SV_FindPendingCommand` (cod_lnxded 0x808b580): whether `new` makes the
+/// pending `old` redundant. Same text, or the same letter for `a b o p q r
+/// t`, or the same first argument for `d` and `v`; never a `x y z` big
+/// configstring chunk.
+fn supersedes(new: &str, old: &str) -> bool {
+    let (n, o) = (new.as_bytes(), old.as_bytes());
+    let Some(&letter) = n.first() else {
+        return false;
+    };
+    if o.first() != Some(&letter) || (b'x'..=b'z').contains(&letter) {
+        return false;
+    }
+    if n[1..] == o[1..] {
+        return true;
+    }
+    let first_arg = |b: &[u8]| -> Vec<u8> {
+        b.get(2..)
+            .unwrap_or_default()
+            .iter()
+            .copied()
+            .take_while(|&c| c != b' ')
+            .collect()
+    };
+    match letter {
+        b'a' | b'b' | b'o' | b'p' | b'q' | b'r' | b't' => true,
+        b'd' | b'v' => first_arg(n) == first_arg(o),
+        _ => false,
+    }
+}
+
 pub struct Client {
     pub addr: SocketAddr,
     pub netchan: ServerNetchan,
@@ -55,6 +123,11 @@ pub struct Client {
     pub next_reliable_ms: i32,
     /// The client's `reliableAcknowledge`, what it has seen of our server commands.
     pub reliable_ack: i32,
+    /// `reliableSent`: the last server command a message has carried. Only
+    /// the ones past it can still be squashed.
+    pub reliable_sent: i32,
+    /// Each ring slot's [`CmdKind`], beside `netchan.reliable`.
+    pub reliable_kind: [CmdKind; MAX_RELIABLE_COMMANDS],
     pub message_ack: i32,
     /// The serverTime of the last usercmd the sim consumed; cmd-to-cmd
     /// deltas drive the pmove dt, retail-style.
@@ -103,6 +176,8 @@ impl Client {
             last_client_command: 0,
             next_reliable_ms: 0,
             reliable_ack: 0,
+            reliable_sent: 0,
+            reliable_kind: [CmdKind::CanIgnore; MAX_RELIABLE_COMMANDS],
             message_ack: 0,
             last_processed_st: 0,
             pending: Vec::new(),
@@ -142,6 +217,64 @@ impl Client {
         self.frames = vec![None; SV_PACKET_BACKUP];
         self.pending.clear();
         self.kill_at = None;
+    }
+
+    /// `SV_AddServerCommand` (cod_lnxded 0x808b680) without the overflow's
+    /// drop, which is the caller's. A client neither active nor within 32
+    /// of its acks first loses its unsent [`CmdKind::CanIgnore`] commands
+    /// and takes no new one; then a pending command `cmd` supersedes is
+    /// taken out and `cmd` goes on the end. A bot is never sent anything on
+    /// retail; here it reads the ring itself, so it gets every command as
+    /// is.
+    pub fn queue_server_command(&mut self, cmd: &str) -> Queued {
+        const RING: i32 = MAX_RELIABLE_COMMANDS as i32;
+        let kind = CmdKind::of(cmd);
+        let slot = |seq: i32| seq as usize & (MAX_RELIABLE_COMMANDS - 1);
+        let mut seq = self.netchan.reliable_sequence as i32;
+        let mut queued = Queued::Added;
+        if !self.is_bot {
+            if seq - self.reliable_ack > 31 || self.state != ClientState::Active {
+                let mut to = self.reliable_sent + 1;
+                for from in self.reliable_sent + 1..=seq {
+                    if self.reliable_kind[slot(from)] == CmdKind::CanIgnore {
+                        continue;
+                    }
+                    if slot(from) != slot(to) {
+                        self.netchan.reliable[slot(to)] =
+                            std::mem::take(&mut self.netchan.reliable[slot(from)]);
+                        self.reliable_kind[slot(to)] = self.reliable_kind[slot(from)];
+                    }
+                    to += 1;
+                }
+                seq = to - 1;
+                self.netchan.reliable_sequence = seq as u32;
+                if kind == CmdKind::CanIgnore {
+                    return Queued::Dropped;
+                }
+            }
+            let found = (self.reliable_sent + 1..=seq).find(|&i| {
+                self.reliable_kind[slot(i)] == CmdKind::Reliable
+                    && supersedes(cmd, &self.netchan.reliable[slot(i)])
+            });
+            if let Some(at) = found {
+                for i in at..seq {
+                    self.netchan.reliable[slot(i)] =
+                        std::mem::take(&mut self.netchan.reliable[slot(i + 1)]);
+                    self.reliable_kind[slot(i)] = self.reliable_kind[slot(i + 1)];
+                }
+                // The freed last slot takes `cmd` below.
+                seq -= 1;
+                queued = Queued::Replaced;
+            }
+        }
+        if seq + 1 - self.reliable_ack > RING {
+            return Queued::Overflow;
+        }
+        seq += 1;
+        self.netchan.reliable_sequence = seq as u32;
+        self.netchan.reliable[slot(seq)] = cmd.to_string();
+        self.reliable_kind[slot(seq)] = kind;
+        queued
     }
 
     /// The frame sent as `message_num`, if still in the ring.
@@ -186,7 +319,118 @@ pub fn sanitize_name(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_name;
+    use super::*;
+
+    fn active() -> Client {
+        let addr = "127.0.0.1:1".parse().unwrap();
+        let mut c = Client::new(addr, 1, 1, String::new(), Instant::now());
+        c.state = ClientState::Active;
+        c
+    }
+
+    /// What the next message would carry, oldest first.
+    fn unsent(c: &Client) -> Vec<&str> {
+        (c.reliable_sent + 1..=c.netchan.reliable_sequence as i32)
+            .map(|s| c.netchan.reliable[s as usize & 63].as_str())
+            .collect()
+    }
+
+    /// The burst `client-probes/probe_squash` queued in one frame on
+    /// retail, in, and the commands its probe received, out.
+    #[test]
+    fn one_frame_squashes_as_the_retail_probe_did() {
+        let mut c = active();
+        for cmd in [
+            "v sq_a \"1\"",
+            "v sq_a \"2\"",
+            "v sq_b \"1\"",
+            "v sq_c \"1\"",
+            "f \"sq dup\"",
+            "f \"sq dup\"",
+            "u",
+            "u",
+            "v sq_d \"1\"",
+            "f \"sq between\"",
+            "v sq_d \"2\"",
+        ] {
+            c.queue_server_command(cmd);
+        }
+        assert_eq!(
+            unsent(&c),
+            [
+                "v sq_a \"2\"",
+                "v sq_b \"1\"",
+                "v sq_c \"1\"",
+                "f \"sq dup\"",
+                "f \"sq dup\"",
+                "u",
+                "f \"sq between\"",
+                "v sq_d \"2\"",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_command_already_sent_is_never_replaced() {
+        let mut c = active();
+        c.queue_server_command("v sq_a \"3\"");
+        c.reliable_sent = c.netchan.reliable_sequence as i32;
+        assert_eq!(c.queue_server_command("v sq_a \"4\""), Queued::Added);
+        assert_eq!(unsent(&c), ["v sq_a \"4\""]);
+    }
+
+    #[test]
+    fn what_supersedes_what() {
+        // `d` matches on the index alone, as `v` on the name.
+        assert!(supersedes("d 5 118", "d 5 117"));
+        assert!(!supersedes("d 5 118", "d 51 118"));
+        // These letters on the letter alone.
+        assert!(supersedes("t 3", "t 1"));
+        assert!(supersedes("b 0 1 2", "b 9"));
+        // Anything else on the whole text only.
+        assert!(supersedes("n", "n"));
+        assert!(!supersedes("m 1", "m 2"));
+        // A big configstring's chunks never.
+        assert!(!supersedes("x 20 abc", "x 20 abc"));
+    }
+
+    /// Before it is active, and once 32 behind its acks, a client loses
+    /// its unsent prints and takes no new one; its cvars stay queued.
+    #[test]
+    fn a_client_not_ready_drops_prints_only() {
+        let addr = "127.0.0.1:1".parse().unwrap();
+        let mut c = Client::new(addr, 1, 1, String::new(), Instant::now());
+        assert_eq!(
+            c.queue_server_command("f \"sq early print\""),
+            Queued::Dropped
+        );
+        assert_eq!(c.queue_server_command("v sq_early \"1\""), Queued::Added);
+        assert_eq!(unsent(&c), ["v sq_early \"1\""]);
+
+        let mut c = active();
+        c.queue_server_command("e \"kept\"");
+        for i in 0..30 {
+            c.queue_server_command(&format!("v c{i} 1"));
+        }
+        // 31 behind: still queued.
+        assert_eq!(c.queue_server_command("e \"late\""), Queued::Added);
+        // 32: both prints go, and the new one with them.
+        assert_eq!(c.queue_server_command("e \"later\""), Queued::Dropped);
+        assert_eq!(unsent(&c).len(), 30);
+        assert!(unsent(&c).iter().all(|cmd| cmd.starts_with('v')));
+    }
+
+    #[test]
+    fn the_ring_overflows_past_64_unacked() {
+        let mut c = active();
+        for i in 0..64 {
+            assert_eq!(c.queue_server_command(&format!("v c{i} 1")), Queued::Added);
+        }
+        assert_eq!(c.queue_server_command("v c99 1"), Queued::Overflow);
+        assert_eq!(c.netchan.reliable_sequence, 64);
+        // A replacement takes no new slot.
+        assert_eq!(c.queue_server_command("v c3 2"), Queued::Replaced);
+    }
 
     #[test]
     fn a_name_cannot_forge_a_status_line_or_an_escape_sequence() {
