@@ -4,9 +4,13 @@
 //! minus the socket.
 
 use super::cvars::ClientCvars;
+use vcod_common::net::protocol::CsRange;
 
-/// Configstrings 1180..1212 name the 32 script menus a `t <index>` opens.
-const SCRIPT_MENUS: std::ops::Range<usize> = 1180..1212;
+/// Configstrings 1180..=1211 name the 32 script menus a `t <index>` opens.
+const SCRIPT_MENUS: std::ops::RangeInclusive<usize> = {
+    let (first, last) = CsRange::Menu.bounds();
+    first..=last
+};
 
 /// The script menu currently open, waiting on a `choose` or a `close`.
 pub struct OpenMenu {
@@ -71,7 +75,7 @@ impl Join {
                 };
                 let Some(name) = usize::try_from(idx)
                     .ok()
-                    .map(|i| SCRIPT_MENUS.start + i)
+                    .map(|i| SCRIPT_MENUS.start() + i)
                     .filter(|cs| SCRIPT_MENUS.contains(cs))
                     .and_then(|cs| configstrings.get(cs))
                     .filter(|n| !n.is_empty())
@@ -130,7 +134,7 @@ impl Join {
             return;
         };
         self.open = Some(OpenMenu {
-            index: (index - SCRIPT_MENUS.start) as i32,
+            index: (index - SCRIPT_MENUS.start()) as i32,
             name,
         });
     }

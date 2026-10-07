@@ -10,10 +10,7 @@ use super::font::{self, Font, Slot, UiFonts};
 use vcod_common::localize::Localized;
 use vcod_common::net::msg::{HudElem, hud_field as f};
 
-/// `text`, `label` and the hint strings index configstrings from here.
-pub const CS_LOCALIZED: usize = 1244;
-/// `shaderIndex` and the objective icons index configstrings from here.
-pub const CS_SHADERS: usize = 1500;
+pub use vcod_common::net::protocol::{CS_LOCALIZED, CS_SHADERS};
 
 /// Retail's 640x480 virtual screen, scaled by the window height and centred
 /// horizontally, so a wider window letterboxes to 4:3.
