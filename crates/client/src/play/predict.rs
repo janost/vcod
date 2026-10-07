@@ -23,10 +23,10 @@ const ERROR_DECAY_MS: f64 = 100.0;
 const SNAP_DISTANCE: f32 = 256.0;
 /// `eFlags` capsule bit; the client clips only capsule entities.
 const EF_CAPSULE: i32 = 0x10;
-const ET_PLAYER: i32 = 1;
-const ET_ITEM: i32 = 3;
+use vcod_common::net::flags::ET_ITEM;
+use vcod_common::net::flags::ET_PLAYER;
 /// A brush submodel's `solid`; `SnapshotMovers` clips those.
-const SOLID_BMODEL: i32 = 0xffffff;
+use vcod_common::net::flags::SOLID_BMODEL;
 
 /// What the camera draws for a predicted frame.
 pub struct PredictedView {

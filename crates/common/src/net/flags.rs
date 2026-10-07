@@ -1,6 +1,7 @@
-//! Playerstate `pm_type` values and `eFlags` / `pm_flags` bits, shared by the
-//! server's `ClientSim::to_wire` and the client's `predict::from_wire` so both
-//! directions read one definition.
+//! Playerstate `pm_type` values, entity `eType` values, `eFlags` /
+//! `pm_flags` bits and the brush-model `solid`, shared by the server that
+//! writes them and the client that reads them so both directions read one
+//! definition.
 
 /// `pm_type`. `PM_NORMAL_LINKED` and `PM_DEAD_LINKED` are CoDExtended's names
 /// for a linked live player and a linked dead one; the two values and the
@@ -46,6 +47,15 @@ pub const EF_MOUNTED: i32 = 0xC000;
 pub const EF_MOUNTED_STAND: i32 = 0xC000;
 pub const EF_MOUNTED_DUCK: i32 = 0x8000;
 pub const EF_MOUNTED_PRONE: i32 = 0x4000;
+/// Hides an entity's model. The per-entity runner (game.mp 0x602bc) mirrors
+/// `hide()`'s `flags & 0x1000` into it every frame for an entity with no
+/// client (movers doc, section 14).
+pub const EF_NODRAW: i32 = 0x100;
+/// On a turret entity: the server fired it this frame (turrets doc 6.3).
+pub const EF_FIRING: i32 = 0x400;
+/// An `ET_PLAYER`'s `pingPlayer` bit (docs/research/cod11-hud-protocol.md,
+/// "Compass friendlies").
+pub const EF_PING: i32 = 0x80000;
 
 pub const PMF_PRONE: i32 = 0x1;
 pub const PMF_DUCKED: i32 = 0x2;
@@ -65,3 +75,30 @@ pub const PMF_RESPAWNED: i32 = 0x800;
 /// out of its own body carries it and neither spectator view does
 /// (docs/research/cod11-gsc-object-model.md, section 20).
 pub const PMF_OWN_VIEW: i32 = 0x40000;
+
+/// `eType` values (CoDExtended's `entityType_t`; `ET_EVENTS` is in
+/// `net::events`).
+pub const ET_GENERAL: i32 = 0;
+pub const ET_PLAYER: i32 = 1;
+/// The client resolves the body model through `clientNum` on the roster
+/// (`docs/research/clientstate-wire-format.md`).
+pub const ET_CORPSE: i32 = 2;
+/// An item, `index` its `bg_itemlist` row (a weapon's is its configstring 7
+/// index).
+pub const ET_ITEM: i32 = 3;
+pub const ET_MISSILE: i32 = 4;
+pub const ET_MOVER: i32 = 5;
+pub const ET_PORTAL: i32 = 6;
+pub const ET_INVISIBLE: i32 = 7;
+/// A script model, `index` a model configstring index, or a
+/// `script_brushmodel`, `index` its inline model number.
+pub const ET_SCRIPTMOVER: i32 = 8;
+/// A mounted MG (`misc_mg42` / `misc_turret`). Not in CoDExtended's
+/// `entityType_t`, read off the traces: carentan's and pavlov's `misc_mg42`s
+/// arrive as 11 with the `mg42_bipod` model index.
+pub const ET_TURRET: i32 = 11;
+
+/// `solid` of an entity linked as a brush model: `SV_LinkEntity` stores it
+/// for `r.bmodel` (cod_lnxded 0x80908da) whatever the entity's contents, so a
+/// `notSolid()`ed brush model keeps it (docs/research/cod11-movers.md 14).
+pub const SOLID_BMODEL: i32 = 0xff_ffff;

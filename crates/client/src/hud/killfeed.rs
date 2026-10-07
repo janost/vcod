@@ -11,7 +11,7 @@ pub const FEED_LINES: usize = 5;
 pub const FEED_LIFE: f32 = 6.0;
 
 /// `attackerEntityNum` for a world kill (doc section 1).
-const ENTITYNUM_WORLD: i32 = 1022;
+const ENTITYNUM_WORLD: i32 = vcod_common::net::protocol::ENTITYNUM_WORLD as i32;
 
 /// `Obituary::mod_` on a weapon death; real ids are 0..=24.
 const NO_MOD: i32 = -1;

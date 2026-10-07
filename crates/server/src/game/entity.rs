@@ -4,12 +4,12 @@
 
 /// `MAX_GENTITIES` on CoD 1.1; the object table's gentity range is
 /// `0..MAX_GENTITIES` and HUD elements start above it.
-pub const MAX_GENTITIES: u32 = 1024;
+pub const MAX_GENTITIES: u32 = vcod_common::net::protocol::MAX_GENTITIES as u32;
 
 /// The world. `G_SpawnEntitiesFromString` runs `SP_worldspawn` on the first
 /// entity block directly rather than allocating one, so this number is never
 /// handed out by the allocator.
-pub const ENTITYNUM_WORLD: u32 = 1022;
+pub use vcod_common::net::protocol::ENTITYNUM_WORLD;
 
 /// `G_InitGame` sets `level.num_entities` to 72, so the first entity the map
 /// load creates is number 72 whatever `sv_maxclients` is. `MAX_CLIENTS` is 64

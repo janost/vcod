@@ -4,6 +4,7 @@
 pub mod connectionless;
 pub use connectionless::info_value_for_key;
 pub mod download;
+pub mod event_ids;
 pub mod events;
 pub mod fields_v1;
 pub mod flags;

@@ -114,8 +114,8 @@ const TOUCH_MAX_PM_TYPE: i32 = 1;
 const HINT_MG42: i32 = 6;
 /// A manned gun's shot and its cooldown alias, both on the gun's own ring
 /// (`docs/research/cod11-events-and-fx.md` section 1, turrets doc 6.3, 6.4).
-const EV_FIRE_WEAPON_MG42: i32 = 168;
-pub(crate) const EV_SOUND_ALIAS: i32 = 172;
+use vcod_common::net::event_ids::EV_FIRE_WEAPON_MG42;
+pub(crate) use vcod_common::net::event_ids::EV_SOUND_ALIAS;
 
 pub struct ScriptRuntime {
     vm: Vm,
