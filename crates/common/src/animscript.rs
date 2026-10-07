@@ -6,6 +6,7 @@
 //! docs/research/player-model-anim-system.md.
 
 use crate::animtree::strip_comments;
+use crate::net::flags::ANIM_TOGGLEBIT;
 use anyhow::{Result, bail};
 use std::collections::{HashMap, HashSet};
 
@@ -506,10 +507,6 @@ fn pick(block: &Block, c: &Conditions) -> Selection {
         torso: clause.torso.first().cloned(),
     })
 }
-
-/// The restart toggle, `ANIM_TOGGLEBIT`. Index is the low 9 bits;
-/// docs/research/player-model-anim-system.md, "Animation indices".
-const ANIM_TOGGLEBIT: i32 = 512;
 
 /// What an event anim's hold gets on top of the clip's own length, RTCW's
 /// `duration + 50 // account for lerping between anims` (`bg_animation.c`,

@@ -234,12 +234,20 @@ fn client_spawn(
         _ => SpawnMode::Spectator,
     };
 
+    // `ClientSpawn`'s `Scr_SetString(ent->classname, "player")` (0x4271d).
+    let classname = cx.intern_folded("classname");
+    let player = Value::String(cx.intern_exact("player"));
+    host.set_field(cx, id, classname, player)?;
     let origin_field = cx.intern_folded("origin");
     host.set_field(cx, id, origin_field, Value::Vector(origin))?;
     let angles_field = cx.intern_folded("angles");
     host.set_field(cx, id, angles_field, Value::Vector(angles))?;
 
     host.client_weapons[slot] = crate::weapons::PlayerWeapons::default();
+    // The `gclient_t` memset (0x42804) takes the client's objective copy
+    // with it; the next frame's filter refills only the live records
+    // (docs/research/cod11-gametypes-re-bel.md, 8.4).
+    host.reset_client_objectives(slot);
     // `ClientSpawn` gives the sim a fresh playerstate, ammo included; the
     // script's gives that follow land on this.
     host.client_ammo[slot] = crate::game::host::AmmoArrays::default();

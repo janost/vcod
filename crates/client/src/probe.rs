@@ -56,7 +56,7 @@ const SNAP_CAPTURE_TARGET: usize = 24;
 /// writes nothing.
 /// Which captures a probe run overwrites. Each is a separate flag because
 /// each pins a different thing; the flag docs in `main.rs` say why.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub struct Save {
     pub fixture: bool,
     pub snapshots: bool,
@@ -106,6 +106,8 @@ pub struct Save {
     /// `--probe-compass`: print every snapshot `iCompassFriendInfo` or the
     /// eye changed, no fixture.
     pub compass: bool,
+    /// `--save-scripted <role>`: the scripted gametype capture.
+    pub scripted: Option<String>,
 }
 
 /// Which script the two halves of the hit capture run. The target's own
@@ -216,6 +218,7 @@ pub fn probe(
         ride: probe_ride,
         items: probe_items,
         compass: probe_compass,
+        scripted: scripted_role,
     } = save;
     // The two map-cycle captures record the same lines; the flag picks the
     // role and, for the round restart, which half of the pair this probe is.
@@ -263,6 +266,7 @@ pub fn probe(
         || probe_ride
         || probe_items
         || probe_compass
+        || scripted_role.is_some()
         || team.is_some();
     // A sweep is a measurement, not a fixture: it walks a table of pitch
     // offsets instead of aiming at the eye, so the numbers it produces are not
@@ -341,6 +345,8 @@ pub fn probe(
     let mut ride = RideProbe::default();
     let mut items = ItemsProbe::default();
     let mut compass = CompassProbe::default();
+    let mut scripted = net::capture::ScriptedCapture::default();
+    let mut scripted_seen: Option<u32> = None;
     // The fixture is named for the map the run started on, which is not the
     // map cs 0 holds once the rotation has moved on.
     let mut first_map = String::new();
@@ -369,6 +375,14 @@ pub fn probe(
                     }
                     if netchan_capture {
                         netchan.on_gamestate(now, &client);
+                    }
+                    if scripted_role.is_some() {
+                        scripted.on_gamestate(
+                            now.duration_since(start).as_millis() as i64,
+                            client.server_id(),
+                            net::info_value_for_key(client.configstring(0), "mapname")
+                                .unwrap_or("?"),
+                        );
                     }
                     let gs = client.gamestate().unwrap();
                     println!("systeminfo: {}", gs.configstrings[1]);
@@ -582,6 +596,13 @@ pub fn probe(
             if netchan_capture {
                 netchan.on_commands(now, seq, &cmds);
             }
+            if scripted_role.is_some() {
+                scripted.on_commands(
+                    now.duration_since(start).as_millis() as i64,
+                    &cmds,
+                    client.configstrings(),
+                );
+            }
             for cmd in cmds {
                 println!("JOIN cmd: {cmd}");
                 join.commands.push(cmd);
@@ -614,7 +635,12 @@ pub fn probe(
                 cmd.forward = 127;
             }
         }
-        if save_motion && motion.running() {
+        if scripted_role.is_some() {
+            cmd = scripted.cmd(
+                now.duration_since(start).as_millis() as i64,
+                client.snapshots().newest(),
+            );
+        } else if save_motion && motion.running() {
             cmd = motion.cmd();
             hold_view_yaw(&mut cmd, &client, &mut motion.spawn_delta_yaw);
         } else if save_combat && combat.running() {
@@ -722,7 +748,8 @@ pub fn probe(
         // Retail sends the `b` scoreboard only in answer to `score`, so the
         // one a map end produces is in the capture only if it is asked for.
         // The round-restart pair's target half already asks on its own.
-        if save_mapchange && last_score.is_none_or(|t| now.duration_since(t) >= TARGET_SCORE_PERIOD)
+        if (save_mapchange || scripted_role.is_some())
+            && last_score.is_none_or(|t| now.duration_since(t) >= TARGET_SCORE_PERIOD)
         {
             last_score = Some(now);
             client.send_reliable("score");
@@ -767,6 +794,14 @@ pub fn probe(
             watch.check_movers(s);
             if netchan_capture {
                 netchan.sample(now, s);
+            }
+            if scripted_role.is_some() && scripted_seen != Some(s.message_num) {
+                scripted_seen = Some(s.message_num);
+                scripted.sample(
+                    now.duration_since(start).as_millis() as i64,
+                    s,
+                    client.configstrings(),
+                );
             }
         }
 
@@ -1145,6 +1180,16 @@ pub fn probe(
             "roundrestart-shooter"
         };
         write_mapchange_fixture(role, client.configstrings(), &join, &netchan, &first_map)?;
+    }
+    if let Some(role) = &scripted_role {
+        write_scripted_fixture(
+            role,
+            client.configstrings(),
+            &join,
+            &scripted,
+            &first_map,
+            overwrite,
+        )?;
     }
     if save_combat && !wrote_playerstate {
         println!(
@@ -5450,6 +5495,56 @@ first_snapshot_after_gamestate_ms={}\n",
     std::fs::create_dir_all(NETCHAN_FIXTURE_DIR)?;
     std::fs::write(&path, out)?;
     println!("netchan: {role} -> {path}");
+    Ok(())
+}
+
+/// Where `--save-scripted` writes.
+const GAMETYPES_FIXTURE_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../server/tests/fixtures/gametypes"
+);
+
+/// Writes the scripted gametype capture to
+/// `<map>-<gametype>-<role>.txt`, the gametype as the stock name the gsc
+/// probe wraps. The recipe in the header is the one the gate's doc names.
+fn write_scripted_fixture(
+    role: &str,
+    configstrings: &[String],
+    join: &JoinProbe,
+    capture: &net::capture::ScriptedCapture,
+    map: &str,
+    overwrite: bool,
+) -> anyhow::Result<()> {
+    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
+    let probe_gt = net::info_value_for_key(serverinfo, "g_gametype").unwrap_or("?");
+    let gametype = probe_gt.strip_prefix("probe_").unwrap_or(probe_gt);
+    let mut out = String::new();
+    out.push_str(&format!(
+        "# Retail CoD 1.1d dedicated server running stock {gametype}.gsc under the gsc probe\n\
+         # client-probes/{probe_gt}.gsc on {map}; this probe joined {}, weapon {}, role {role}.\n",
+        join.team, join.weapon
+    ));
+    out.push_str(
+        "# Three shells, the server first, then the two probes, the order the roles join in:\n\
+         #   COD_LNXDED_HOME=<absolute, no '+'> PORT=<p> SECS=<s> \\\n\
+         #       tools/run_probe.sh client-probes/<probe> <map>\n\
+         #   cargo run -p vcod -- --net-probe 127.0.0.1:<p> --probe-team <team> \\\n\
+         #       --save-scripted <role> --probe-secs <s>\n\
+         # docs/research/cod11-gametypes-re-bel.md sections 7 (re) and 8 (bel) have the teams, roles and times.\n\
+         # One !gamestate per gamestate, one !cmd per serverCommand verbatim, a !sound after\n\
+         # each `s` with the alias it names, and one !trace per snapshot whose rendering\n\
+         # moved plus one a second (vcod_common::net::capture::trace_body has the format).\n\
+         # ms is since the probe started. The probe sends `score` every 2 s, so every `b`\n\
+         # here was asked for.\n",
+    );
+    for l in &capture.lines {
+        out.push_str(l);
+        out.push('\n');
+    }
+    std::fs::create_dir_all(GAMETYPES_FIXTURE_DIR)?;
+    let path = format!("{GAMETYPES_FIXTURE_DIR}/{map}-{gametype}-{role}.txt");
+    write_tagged_fixture(&path, &out, overwrite)?;
+    println!("scripted: {} lines -> {path}", capture.lines.len());
     Ok(())
 }
 

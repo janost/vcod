@@ -1,5 +1,6 @@
 mod audio;
 mod camera;
+mod console;
 mod entities;
 mod fx;
 mod hud;
@@ -15,7 +16,7 @@ mod turret;
 mod viewmodel;
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{CommandFactory, Parser};
+use clap::Parser;
 use glam::Vec3;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -60,11 +61,12 @@ struct Args {
     /// and weapon menus; spectator is one of the team menu's choices
     #[arg(long)]
     connect: Option<String>,
-    /// Answer the stock team menu with this after --connect
-    #[arg(long, requires = "connect")]
+    /// Answer the stock team menu with this after --connect or the console's
+    /// `connect`
+    #[arg(long)]
     team: Option<String>,
     /// Answer the stock weapon menu with this weapon file name (e.g. m1carbine_mp)
-    #[arg(long, requires = "connect")]
+    #[arg(long)]
     weapon: Option<String>,
     /// Overwrite the committed gamestate.bin fixture with the --net-probe capture.
     /// Off by default: the parser tests pin that file, and a capture from another
@@ -311,6 +313,17 @@ struct Args {
     /// fixture.
     #[arg(long)]
     probe_compass: bool,
+    /// With `--net-probe` and `--probe-team`: the scripted gametype capture.
+    /// Presses use as the gsc probe's `setClientCvar("probe_use", ...)` says
+    /// (`tap`, `hold`, `0`), keeps the view the server set, sends `score`
+    /// every 2 s and writes every serverCommand and every snapshot whose
+    /// HUD, objectives, roster or players moved to
+    /// crates/server/tests/fixtures/gametypes/<map>-<gametype>-<ROLE>.txt,
+    /// the gametype without its `probe_` prefix. Pairs with
+    /// `client-probes/probe_re` and `probe_bel`; the fixture header carries
+    /// the recipe. Refuses to replace a fixture without --overwrite-fixture.
+    #[arg(long, value_name = "ROLE")]
+    save_scripted: Option<String>,
     /// Walk the --probe-slope route and write every usercmd sent and every
     /// snapshot's movement fields to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt,
@@ -459,6 +472,9 @@ fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp, net: &net::NetClient<net::UdpTransport
 }
 
 enum Mode {
+    /// No map and no server: the console fills the screen, as retail's does
+    /// when disconnected with no menu up.
+    Idle,
     Fly(FlyCamera),
     /// Position follows the interpolated playerstate. The client joins
     /// through the stock menus and plays or spectates as the snapshot says.
@@ -545,32 +561,6 @@ fn digit_slot(code: KeyCode) -> Option<usize> {
         KeyCode::Digit5 => 4,
         KeyCode::Digit6 => 5,
         KeyCode::Digit7 => 6,
-        _ => return None,
-    })
-}
-
-/// Retail's `config_mp.cfg` binds for `--connect`; the mouse buttons and
-/// wheel are mapped where their events arrive.
-fn play_action(code: KeyCode) -> Option<play::input::Action> {
-    use play::input::Action;
-    Some(match code {
-        KeyCode::KeyW => Action::Forward,
-        KeyCode::KeyS => Action::Back,
-        KeyCode::KeyA => Action::Left,
-        KeyCode::KeyD => Action::Right,
-        KeyCode::Space => Action::Jump,
-        KeyCode::KeyC => Action::Crouch,
-        KeyCode::ControlLeft | KeyCode::ControlRight => Action::Prone,
-        KeyCode::ShiftLeft | KeyCode::ShiftRight => Action::Melee,
-        KeyCode::KeyF => Action::Use,
-        KeyCode::KeyR => Action::Reload,
-        KeyCode::KeyQ => Action::LeanLeft,
-        KeyCode::KeyE => Action::LeanRight,
-        // `weaponslot primary`, `primaryb`, `pistol`, `grenade`.
-        KeyCode::Digit1 => Action::Slot(1),
-        KeyCode::Digit2 => Action::Slot(2),
-        KeyCode::Digit3 => Action::Slot(3),
-        KeyCode::Digit4 => Action::Slot(4),
         _ => return None,
     })
 }
@@ -706,6 +696,7 @@ fn hud_lines(
         )
     };
     match mode {
+        Mode::Idle => {}
         Mode::Fly(cam) => lines.push(cam_line("fly", cam.pos, cam.yaw, cam.pitch)),
         Mode::Walk { ps, .. } => {
             lines.push(cam_line("walk", ps.origin, ps.yaw, ps.pitch));
@@ -765,7 +756,7 @@ fn hud_lines(
 }
 
 fn main() -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    console::log::init();
     let args = Args::parse();
     quit::install();
 
@@ -825,6 +816,7 @@ fn main() -> Result<()> {
                 ride: args.probe_ride,
                 items: args.probe_items,
                 compass: args.probe_compass,
+                scripted: args.save_scripted.clone(),
             },
             args.capture_tag.clone(),
             args.overwrite_fixture,
@@ -851,25 +843,33 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // The config's binds and cvars, or the defaults when there is none yet.
+    let config_path = dir.join(CONFIG_FILE);
+    let mut shell = console::shell::Shell::new();
+    if let Ok(text) = std::fs::read_to_string(&config_path) {
+        for effect in shell.execute(&text) {
+            if let console::shell::Effect::Print(line) = effect {
+                log::warn!("{CONFIG_FILE}: {line}");
+            }
+        }
+    }
+
     let net_client = match &args.connect {
-        Some(addr) => Some(
-            net::NetClient::connect(addr)
-                .with_context(|| format!("cannot open a socket to {addr}"))?,
-        ),
+        Some(addr) => {
+            let mut net = net::NetClient::connect(addr)
+                .with_context(|| format!("cannot open a socket to {addr}"))?;
+            net.set_name(shell.cvar("name").unwrap_or_default());
+            Some(net)
+        }
         None => None,
     };
 
     // Fly and walk need their map up front; online learns it from the
     // server inside the loop and loads through the same path as a map change.
-    let local = if net_client.is_none() {
-        let Some(map) = args.map.as_deref() else {
-            Args::command()
-                .error(
-                    clap::error::ErrorKind::MissingRequiredArgument,
-                    "a map name is required (or pass --list to see the available maps)",
-                )
-                .exit();
-        };
+    // With neither, the window opens on the console.
+    let local = if net_client.is_none()
+        && let Some(map) = args.map.as_deref()
+    {
         let Some(path) = fs.resolve_map(map) else {
             let all = fs.find_maps();
             let needle = map.to_lowercase();
@@ -890,7 +890,7 @@ fn main() -> Result<()> {
         None
     };
 
-    let (viewmodel, view_weapon) = if args.walk && net_client.is_none() {
+    let (viewmodel, view_weapon) = if args.walk && local.is_some() {
         viewmodel::load_view_weapon(&fs, "kar98k_mp").unwrap_or_else(|| {
             log::warn!("no viewmodel; walking without one");
             (Vec::new(), None)
@@ -926,28 +926,11 @@ fn main() -> Result<()> {
 
     let (mode, world, title) = if let Some(net) = net_client {
         (
-            Mode::Online {
-                net: Box::new(net),
-                cam: FlyCamera::new(Vec3::ZERO, 0.0),
-                input: Box::default(),
-                clock: play::cmds::CmdClock::default(),
-                ring: play::cmds::CmdRing::default(),
-                predictor: Box::default(),
-                view: Box::default(),
-                phase: Phase::Connecting {
-                    since: Instant::now(),
-                },
-                join: Box::new(play::join::Join::new(
-                    args.team.clone(),
-                    args.weapon.clone(),
-                )),
-                menu_view: None,
-            },
+            online_mode(net, args.team.clone(), args.weapon.clone()),
             None,
             "vcod — connecting".to_string(),
         )
-    } else {
-        let (map, bsp) = local.expect("fly or walk without a local map");
+    } else if let Some((map, bsp)) = local {
         audio.on_gamestate(&map);
         // No server to send configstring 3; every stock MP map ships an
         // `ambient_<map>` alias (iw_sound.csv), unknown names just stay silent.
@@ -967,6 +950,8 @@ fn main() -> Result<()> {
             })
         };
         (mode, Some(World { bsp }), format!("vcod — {map}"))
+    } else {
+        (Mode::Idle, None, "vcod".to_string())
     };
 
     println!("click to capture mouse, Esc to release");
@@ -977,12 +962,14 @@ fn main() -> Result<()> {
         println!("WASD move, Space jump/stand, C crouch, Ctrl prone, Q/E lean, Shift melee, F use");
         println!("LMB fire, RMB aim, R reload, 1-4 weapon slots, wheel next/prev weapon");
         println!("M opens the script menu; 0-9 or arrows + Enter pick, Esc closes");
-    } else {
+    } else if args.map.is_some() {
         println!("WASD + Space/Ctrl fly, Shift boost, scroll changes speed");
     }
+    println!("` opens the console");
 
     fx::registry::init(&fs);
 
+    let console = console::Console::new(&fs);
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
@@ -992,6 +979,12 @@ fn main() -> Result<()> {
         game_dir: args.game_dir.clone(),
         mod_dir: args.mod_dir.clone(),
         connect_addr: args.connect.clone(),
+        team: args.team.clone(),
+        weapon: args.weapon.clone(),
+        console,
+        shell,
+        config_path,
+        grab_before_console: false,
         mode,
         viewmodel,
         input: InputState::default(),
@@ -1027,6 +1020,33 @@ fn main() -> Result<()> {
     match app.error.take() {
         Some(e) => Err(e),
         None => Ok(()),
+    }
+}
+
+/// vcod's config, beside retail's `config_mp.cfg` in the mod directory and
+/// written the same way (`Shell::config_text`).
+const CONFIG_FILE: &str = "vcod_mp.cfg";
+
+/// A client joining `net` through the stock menus, answering them with
+/// `team` and `weapon` when given.
+fn online_mode(
+    net: net::NetClient<net::UdpTransport>,
+    team: Option<String>,
+    weapon: Option<String>,
+) -> Mode {
+    Mode::Online {
+        net: Box::new(net),
+        cam: FlyCamera::new(Vec3::ZERO, 0.0),
+        input: Box::default(),
+        clock: play::cmds::CmdClock::default(),
+        ring: play::cmds::CmdRing::default(),
+        predictor: Box::default(),
+        view: Box::default(),
+        phase: Phase::Connecting {
+            since: Instant::now(),
+        },
+        join: Box::new(play::join::Join::new(team, weapon)),
+        menu_view: None,
     }
 }
 
@@ -1179,6 +1199,7 @@ fn loading_frame(
     cull: renderer::CullMode,
     configstrings: &[String],
     text: String,
+    hud_quads: &mut Vec<hud::HudQuad>,
 ) -> renderer::Frame {
     if let Some(hud) = hud {
         let (screen_w, screen_h) = r.screen_size();
@@ -1206,8 +1227,7 @@ fn loading_frame(
             entity_origin: &|_| None,
             turret_weapon: None,
         };
-        let quads = hud.build(&f);
-        r.set_hud_quads(fs, quads);
+        *hud_quads = hud.build(&f);
     }
     renderer::Frame {
         // Nothing is drawn, so any projection works.
@@ -1314,8 +1334,18 @@ struct App {
     /// Where downloads land and the pk3 path reopens from.
     game_dir: std::path::PathBuf,
     mod_dir: String,
-    /// `--connect` target, for the connecting screen text.
+    /// The last server connected to: the connecting screen's text and what
+    /// `reconnect` reconnects to.
     connect_addr: Option<String>,
+    /// `--team` / `--weapon`, the stock menu answers for every connect.
+    team: Option<String>,
+    weapon: Option<String>,
+    console: console::Console,
+    shell: console::shell::Shell,
+    config_path: std::path::PathBuf,
+    /// Whether the mouse was captured when the console opened; closing it
+    /// captures it again.
+    grab_before_console: bool,
     mode: Mode,
     viewmodel: Vec<xmodel::XModel>,
     /// Fly-mode keys; walk keeps its own in `Mode::Walk`.
@@ -1375,6 +1405,7 @@ impl App {
     /// and the `--connect` stance stay, neither is a held key. The scoreboard drops, Tab is held too.
     fn clear_held_keys(&mut self) {
         match &mut self.mode {
+            Mode::Idle => {}
             Mode::Fly(_) => self.input = InputState::default(),
             Mode::Online { input, .. } => input.release_all(),
             Mode::Walk {
@@ -1403,29 +1434,18 @@ impl App {
         }
     }
 
-    /// The chat field's keys while it is open, and T (`messagemode`, say)
-    /// or Y (`messagemode2`, say_team) to open it, online only. Enter sends
+    /// The chat field's keys while it is open, online only. Enter sends
     /// `say "<line>"` the way the console's field does (CoDMP.exe 0x40d40b);
     /// Escape drops the line. False when the key is not the field's.
     fn chat_key(&mut self, code: KeyCode, text: Option<&str>) -> bool {
-        let Mode::Online { net, input, .. } = &mut self.mode else {
+        let Mode::Online { net, .. } = &mut self.mode else {
             return false;
         };
         let Some(hud) = &mut self.hud else {
             return false;
         };
         let Some(field) = &mut hud.chat_field else {
-            let team = match code {
-                KeyCode::KeyT => false,
-                KeyCode::KeyY => true,
-                _ => return false,
-            };
-            input.release_all();
-            hud.chat_field = Some(hud::ChatField {
-                team,
-                text: String::new(),
-            });
-            return true;
+            return false;
         };
         match code {
             KeyCode::Escape => hud.chat_field = None,
@@ -1449,6 +1469,201 @@ impl App {
             }
         }
         true
+    }
+
+    /// Whether keys go to the console: it is down, or there is nothing else.
+    fn console_active(&self) -> bool {
+        self.console.open || matches!(self.mode, Mode::Idle)
+    }
+
+    /// Opening the console lets go of the game's keys and the mouse, as
+    /// retail's key catcher does; closing it captures the mouse again if it
+    /// was captured before.
+    fn toggle_console(&mut self) {
+        self.console.toggle();
+        if self.console.open {
+            self.grab_before_console = self.grabbed;
+            self.set_grab(false);
+            self.clear_held_keys();
+        } else if self.grab_before_console {
+            self.set_grab(true);
+        }
+    }
+
+    /// A line typed into the console.
+    fn console_line(&mut self, event_loop: &ActiveEventLoop, line: &str) {
+        let in_game = matches!(
+            &self.mode,
+            Mode::Online { net, .. } if net.state() == net::NetState::Active
+        );
+        if let Some(cmd) = console::command_for(line, in_game) {
+            let effects = self.shell.execute(&cmd);
+            self.apply(event_loop, effects);
+        }
+    }
+
+    /// A bound key or button's edge, online only.
+    fn bound_key(&mut self, event_loop: &ActiveEventLoop, key: &str, pressed: bool) {
+        // A gameplay press counts only while the mouse is captured; a
+        // release always passes so nothing stays held.
+        if pressed && !self.grabbed && self.shell.bind_is_gameplay(key) {
+            return;
+        }
+        let effects = self.shell.key_event(key, pressed);
+        self.apply(event_loop, effects);
+    }
+
+    /// Carries out what the console's commands asked for.
+    fn apply(&mut self, event_loop: &ActiveEventLoop, effects: Vec<console::shell::Effect>) {
+        use console::shell::Effect;
+        for effect in effects {
+            match effect {
+                Effect::Print(line) => console::log::print(&line),
+                Effect::Clear => self.console.clear(),
+                Effect::Connect(addr) => self.connect(addr),
+                Effect::Reconnect => match self.connect_addr.clone() {
+                    Some(addr) => self.connect(addr),
+                    None => console::log::print("Not connected to a server."),
+                },
+                Effect::Disconnect => {
+                    if matches!(self.mode, Mode::Online { .. }) {
+                        self.disconnect(None);
+                    } else {
+                        console::log::print("Not connected to a server.");
+                    }
+                }
+                Effect::Quit => event_loop.exit(),
+                Effect::Forward(line) => match &mut self.mode {
+                    Mode::Online { net, .. } if net.state() != net::NetState::Disconnected => {
+                        net.send_reliable(&line)
+                    }
+                    _ => console::log::print("Not connected to a server."),
+                },
+                // `CL_ForwardCommandToServer`: a key-up command goes nowhere,
+                // a `+` one or one with no server is unknown.
+                Effect::Unknown { word, line } => match &mut self.mode {
+                    _ if word.starts_with('-') => {}
+                    Mode::Online { net, .. }
+                        if net.state() != net::NetState::Disconnected && !word.starts_with('+') =>
+                    {
+                        net.send_reliable(&line)
+                    }
+                    _ => console::log::print(&format!("Unknown command \"{word}\"")),
+                },
+                Effect::Button(action, down) => {
+                    if let Mode::Online { input, .. } = &mut self.mode {
+                        input.key(action, down);
+                    }
+                }
+                Effect::Impulse(action) => {
+                    if let Mode::Online { input, .. } = &mut self.mode {
+                        input.key(action, true);
+                        input.key(action, false);
+                    }
+                }
+                // The server never pushes scores: send `score` on the down
+                // edge, and every 2 s while held (see the redraw tick;
+                // docs/research/cod11-hud-protocol.md, section 4).
+                Effect::Scores(down) => {
+                    if let (Mode::Online { net, .. }, Some(hud)) = (&mut self.mode, &mut self.hud) {
+                        hud.scoreboard.visible = down;
+                        if down {
+                            let now = (Instant::now() - self.start).as_secs_f32();
+                            net.send_reliable("score");
+                            hud.scoreboard.mark_requested(now);
+                        }
+                    }
+                }
+                Effect::MessageMode { team } => {
+                    if let (Mode::Online { input, .. }, Some(hud)) = (&mut self.mode, &mut self.hud)
+                    {
+                        input.release_all();
+                        hud.chat_field = Some(hud::ChatField {
+                            team,
+                            text: String::new(),
+                        });
+                    }
+                }
+                Effect::ToggleConsole => self.toggle_console(),
+                Effect::Userinfo => {
+                    if let Mode::Online { net, .. } = &mut self.mode {
+                        net.set_name(self.shell.cvar("name").unwrap_or_default());
+                    }
+                }
+                Effect::SaveConfig => {
+                    if let Err(e) = std::fs::write(&self.config_path, self.shell.config_text()) {
+                        log::warn!("cannot write {}: {e}", self.config_path.display());
+                    }
+                }
+            }
+        }
+    }
+
+    /// `connect`: leaves any server first, then joins `addr` the way
+    /// `--connect` does. Like retail's `CL_Connect_f`, it closes the console.
+    fn connect(&mut self, addr: String) {
+        if matches!(self.mode, Mode::Online { .. }) {
+            self.disconnect(None);
+        }
+        let mut net = match net::NetClient::connect(&addr) {
+            Ok(net) => net,
+            Err(e) => {
+                log::error!("cannot open a socket to {addr}: {e:#}");
+                return;
+            }
+        };
+        net.set_name(self.shell.cvar("name").unwrap_or_default());
+        log::info!("connecting to {addr}");
+        if self.hud.is_none() {
+            self.hud = hud::Hud::new(&self.fs)
+                .map_err(|e| log::warn!("hud: {e}, disabling the on-screen HUD"))
+                .ok();
+            self.localized = vcod_common::localize::Localized::load(&self.fs);
+        }
+        self.unload_world();
+        self.mode = online_mode(net, self.team.clone(), self.weapon.clone());
+        self.connect_addr = Some(addr);
+        self.set_title("vcod — connecting".to_string());
+        if self.console.open {
+            self.toggle_console();
+        }
+    }
+
+    /// Leaves the server (`CL_Disconnect`) for the full-screen console,
+    /// printing `reason` when the server or the load is what ended it.
+    fn disconnect(&mut self, reason: Option<String>) {
+        if let Mode::Online { net, .. } = &mut self.mode {
+            net.disconnect();
+        }
+        if let Some(reason) = reason {
+            log::error!("{reason}");
+        }
+        self.unload_world();
+        self.mode = Mode::Idle;
+        self.set_grab(false);
+        self.set_title("vcod".to_string());
+    }
+
+    /// Drops the map, its sounds and effects, between servers.
+    fn unload_world(&mut self) {
+        if let Some(r) = &mut self.renderer {
+            r.unload_world();
+        }
+        self.world = None;
+        self.fx.clear();
+        self.audio.on_gamestate("");
+        if let Some(hud) = &mut self.hud {
+            hud.on_gamestate();
+            hud.chat_field = None;
+            hud.scoreboard.visible = false;
+        }
+    }
+
+    fn set_title(&mut self, title: String) {
+        if let Some(window) = &self.window {
+            window.set_title(&title);
+        }
+        self.title = title;
     }
 
     /// The open script menu's keys, ahead of every other binding, and M to
@@ -1580,6 +1795,32 @@ impl ApplicationHandler for App {
                 let PhysicalKey::Code(code) = event.physical_key else {
                     return;
                 };
+                // ` and ~ toggle the console whatever they are bound to
+                // (CoDMP.exe 0x40dc30).
+                if code == KeyCode::Backquote {
+                    if pressed && !event.repeat {
+                        self.toggle_console();
+                    }
+                    return;
+                }
+                if self.console_active() {
+                    if !pressed {
+                        return;
+                    }
+                    match code {
+                        KeyCode::Escape if self.console.open => self.toggle_console(),
+                        _ => {
+                            let shell = &self.shell;
+                            if let Some(line) = self
+                                .console
+                                .key(code, event.text.as_deref(), |p| shell.complete(p))
+                            {
+                                self.console_line(event_loop, &line);
+                            }
+                        }
+                    }
+                    return;
+                }
                 if pressed && self.chat_key(code, event.text.as_deref()) {
                     return;
                 }
@@ -1603,8 +1844,15 @@ impl ApplicationHandler for App {
                     self.cull_mode = self.cull_mode.next();
                     return;
                 }
+                if matches!(self.mode, Mode::Online { .. }) {
+                    if let Some(key) = console::keys::key_name(code) {
+                        self.bound_key(event_loop, key, pressed);
+                    }
+                    return;
+                }
                 let grabbed = self.grabbed;
                 match &mut self.mode {
+                    Mode::Idle | Mode::Online { .. } => {}
                     Mode::Fly(_) => match code {
                         KeyCode::KeyW => self.input.forward = pressed,
                         KeyCode::KeyS => self.input.back = pressed,
@@ -1614,30 +1862,6 @@ impl ApplicationHandler for App {
                         KeyCode::ControlLeft => self.input.down = pressed,
                         KeyCode::ShiftLeft => self.input.boost = pressed,
                         _ => {}
-                    },
-                    Mode::Online { net, input, .. } => match code {
-                        // The server never pushes scores: send `score` on the
-                        // down edge, and every 2 s while held (see the redraw
-                        // tick; docs/research/cod11-hud-protocol.md, section 4).
-                        KeyCode::Tab => {
-                            if let Some(hud) = &mut self.hud {
-                                hud.scoreboard.visible = pressed;
-                                if pressed {
-                                    let now = (Instant::now() - self.start).as_secs_f32();
-                                    net.send_reliable("score");
-                                    hud.scoreboard.mark_requested(now);
-                                }
-                            }
-                        }
-                        // A press counts only while the mouse is captured; a
-                        // release always passes so nothing stays held.
-                        _ => {
-                            if let Some(action) = play_action(code)
-                                && (grabbed || !pressed)
-                            {
-                                input.key(action, pressed);
-                            }
-                        }
                     },
                     Mode::Walk {
                         input,
@@ -1673,9 +1897,18 @@ impl ApplicationHandler for App {
             WindowEvent::MouseInput { state, button, .. } => {
                 use winit::event::MouseButton;
                 let pressed = state == ElementState::Pressed;
+                if self.console_active() {
+                    return;
+                }
                 // the click that captures the mouse must not also fire
                 if button == MouseButton::Left && pressed && !self.grabbed {
                     self.set_grab(true);
+                    return;
+                }
+                if matches!(self.mode, Mode::Online { .. }) {
+                    if let Some(key) = console::keys::mouse_name(button) {
+                        self.bound_key(event_loop, key, pressed);
+                    }
                     return;
                 }
                 if !self.grabbed {
@@ -1696,12 +1929,7 @@ impl ApplicationHandler for App {
                         MouseButton::Right => *ads_held = pressed,
                         _ => {}
                     },
-                    Mode::Online { input, .. } => match button {
-                        MouseButton::Left => input.key(play::input::Action::Attack, pressed),
-                        MouseButton::Right => input.key(play::input::Action::Ads, pressed),
-                        _ => {}
-                    },
-                    Mode::Fly(_) => {}
+                    Mode::Idle | Mode::Online { .. } | Mode::Fly(_) => {}
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -1709,20 +1937,25 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / 60.0,
                 };
+                if self.console_active() {
+                    if scroll != 0.0 {
+                        self.console.scroll(scroll > 0.0);
+                    }
+                    return;
+                }
                 let grabbed = self.grabbed;
                 match &mut self.mode {
                     Mode::Fly(cam) => cam.adjust_speed(scroll),
-                    // Retail binds MWHEELDOWN to weapnext, MWHEELUP to weapprev.
-                    Mode::Online {
-                        input, menu_view, ..
-                    } if grabbed && menu_view.is_none() && scroll != 0.0 => {
-                        let action = if scroll < 0.0 {
-                            play::input::Action::NextWeapon
+                    Mode::Online { menu_view, .. }
+                        if grabbed && menu_view.is_none() && scroll != 0.0 =>
+                    {
+                        let key = if scroll < 0.0 {
+                            "MWHEELDOWN"
                         } else {
-                            play::input::Action::PrevWeapon
+                            "MWHEELUP"
                         };
-                        input.key(action, true);
-                        input.key(action, false);
+                        self.bound_key(event_loop, key, true);
+                        self.bound_key(event_loop, key, false);
                     }
                     _ => {}
                 }
@@ -1740,7 +1973,28 @@ impl ApplicationHandler for App {
                 // Set inside the online arm where `self` is borrowed out
                 // field-by-field; acted on once the borrows end.
                 let mut fatal: Option<anyhow::Error> = None;
+                // What the mode draws on the 2D layer; the console goes on top.
+                let mut hud_quads: Vec<hud::HudQuad> = Vec::new();
                 let (mut frame, vm) = match &mut self.mode {
+                    Mode::Idle => (
+                        renderer::Frame {
+                            // Nothing is drawn, so any projection works.
+                            view_proj: camera::view_proj_from(
+                                Vec3::ZERO,
+                                0.0,
+                                0.0,
+                                0.0,
+                                camera::DEFAULT_FOV_DEG,
+                                aspect,
+                            ),
+                            eye: Vec3::ZERO,
+                            fwd: camera::basis(0.0, 0.0).0,
+                            time,
+                            cull,
+                            hud_lines: Vec::new(),
+                        },
+                        None,
+                    ),
                     Mode::Fly(cam) => {
                         cam.update(&self.input, dt);
                         let (cam_forward, cam_right, cam_up) = camera::basis(cam.yaw, cam.pitch);
@@ -1792,13 +2046,10 @@ impl ApplicationHandler for App {
                                 // `player_talk` with every chat line, as
                                 // `CG_ServerCommand`'s `h`/`i` play it.
                                 net::NetEvent::Chat { text, .. } => {
-                                    println!(
-                                        "{}",
-                                        net::strip_colors(&self.localized.message(text))
-                                    );
+                                    console::log::print(&self.localized.message(text));
                                     self.audio.play_local(&self.fs, "player_talk");
                                 }
-                                net::NetEvent::Print(s) => println!("{s}"),
+                                net::NetEvent::Print(s) => console::log::print(s),
                                 net::NetEvent::Dropped(why) => {
                                     fatal = Some(anyhow!("disconnected: {why}"))
                                 }
@@ -1885,7 +2136,7 @@ impl ApplicationHandler for App {
                                 .and_then(|s| s.clients.get(&line.client_num))
                                 .map(|c| c.name(&net::protocol::PROTOCOL_V1))
                                 .unwrap_or_else(|| format!("player {}", line.client_num));
-                            println!("{}", net::strip_colors(&format!("{name}: {}", line.text)));
+                            console::log::print(&format!("{name}: {}", line.text));
                             if let Some(hud) = &mut self.hud {
                                 let now_ms = (time * 1000.0) as i32;
                                 hud.chat.push(&format!("{name}: {}", line.text), now_ms);
@@ -1925,6 +2176,8 @@ impl ApplicationHandler for App {
                                         )
                                     },
                                 );
+                                input.cl_run =
+                                    play::input::ClRun(self.shell.cvar_f32("cl_run") as i32);
                                 let new: Vec<_> =
                                     times.iter().map(|&t| input.build(t, &held)).collect();
                                 net.send_cmds(&ring.packet(&new));
@@ -1966,6 +2219,7 @@ impl ApplicationHandler for App {
                                         "Connecting to {}...",
                                         self.connect_addr.as_deref().unwrap_or("?")
                                     ),
+                                    &mut hud_quads,
                                 )
                             }
                             Phase::Loading { loader } => {
@@ -2028,6 +2282,7 @@ impl ApplicationHandler for App {
                                     cull,
                                     net.configstrings(),
                                     loading_text(&map, waited),
+                                    &mut hud_quads,
                                 )
                             }
                             Phase::Live(live) => {
@@ -2061,6 +2316,7 @@ impl ApplicationHandler for App {
                                         cull,
                                         net.configstrings(),
                                         format!("Loading {map}"),
+                                        &mut hud_quads,
                                     )
                                 } else {
                                     let LivePhase {
@@ -2465,8 +2721,7 @@ impl ApplicationHandler for App {
 
                                     if let Some(hud) = &mut self.hud {
                                         let hud_t0 = Instant::now();
-                                        let quads = hud.build(&hud_frame);
-                                        r.set_hud_quads(&self.fs, quads);
+                                        hud_quads = hud.build(&hud_frame);
                                         self.hud_ms = hud_t0.elapsed().as_secs_f32() * 1000.0;
                                     }
 
@@ -2722,7 +2977,7 @@ impl ApplicationHandler for App {
                             damp,
                         );
                         *mouse_delta = (0.0, 0.0);
-                        r.set_hud_quads(&self.fs, scope_quads);
+                        hud_quads = scope_quads;
                         self.audio.step(&HashMap::new(), None);
                         r.set_fx_quads(
                             &self.fs,
@@ -2764,10 +3019,26 @@ impl ApplicationHandler for App {
                         )
                     }
                 };
+                // A drop or a failed load ends the session, not the program:
+                // retail falls back to its console and menus.
                 if let Some(err) = fatal {
-                    self.fail(event_loop, err);
+                    self.disconnect(Some(format!("{err:#}")));
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
                     return;
                 }
+                self.console.drain_log();
+                self.console.update(
+                    dt * 1000.0,
+                    self.shell.cvar_f32("scr_conspeed"),
+                    matches!(self.mode, Mode::Idle),
+                );
+                if self.console.visible() {
+                    let (w, h) = r.screen_size();
+                    hud_quads.extend(self.console.build(w, h, elapsed.as_millis() as u64));
+                }
+                r.set_hud_quads(&self.fs, hud_quads);
                 // The scene lives in the online phase, so pull it back
                 // out for the overlay after the mode's mutable borrows end.
                 let scene = match &self.mode {
@@ -2817,6 +3088,7 @@ impl ApplicationHandler for App {
             }
             let (dx, dy) = (dx as f32, dy as f32);
             match &mut self.mode {
+                Mode::Idle => {}
                 Mode::Fly(cam) => cam.mouse_delta(dx, dy),
                 Mode::Online { input, view, .. } => {
                     input.mouse(dx, dy);

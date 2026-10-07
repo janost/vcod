@@ -596,11 +596,6 @@ pub fn load(fs: &Pk3Fs, name: &str) -> Result<WeaponDef> {
     Ok(WeaponDef::from_map(&map))
 }
 
-/// Bit 512 on `ps.weapAnim`: retail flips it on every `set_anim`, including a
-/// repeat of the same clip, so it is not part of the wire index (combat doc,
-/// 1.2).
-const ANIM_TOGGLE_BIT: i32 = 512;
-
 /// Picks the viewmodel clip for the wire's `ps.weapAnim`
 /// (docs/research/cod11-combat.md, 1.2; index table there, constants in
 /// `crates/common/src/pmove/weapon.rs`). Index 0 reads `frac_trend` for the
@@ -612,7 +607,7 @@ pub fn view_anim(
     frac_trend: i32,
     clip_empty: bool,
 ) -> WeaponAnim {
-    match weap_anim & !ANIM_TOGGLE_BIT {
+    match weap_anim & !crate::net::flags::ANIM_TOGGLEBIT {
         0 => {
             if ads_frac >= 1.0 || frac_trend > 0 {
                 WeaponAnim::AdsUp

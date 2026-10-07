@@ -425,6 +425,15 @@ pub fn spectator_client_index() -> usize {
 
 /// `Route::Client`'s index for `.archivetime`, which holds milliseconds
 /// behind the seconds script reads (`GameHost`'s field accessors).
+/// A client field's position in [`CLIENT_FIELDS`], the index of its cell in
+/// a client's store.
+pub fn client_index(name: &str) -> usize {
+    CLIENT_FIELDS
+        .iter()
+        .position(|f| f.name == name)
+        .expect("a CLIENT_FIELDS name")
+}
+
 pub fn archive_time_index() -> usize {
     CLIENT_FIELDS
         .iter()

@@ -1053,3 +1053,17 @@ cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-compass --probe-secs 60
 The `PROBE step` lines carry slot 1's origin; slot 0's `COMPASS` lines carry
 what it was sent. Against ours: `vcod-server mp_harbor --gametype-script
 crates/gsc/tests/fixtures/semantics/client-probes/probe_compass.gsc`.
+
+## probe_re and probe_bel
+
+Stock `re.gsc` and `bel.gsc` on mp_brecourt with the probe driving: the
+Retrieval pickup, hold-use drop, timeout return, drop on death, refused
+defender pickup and capture, and the Behind Enemy Lines swap on three
+scripted kills. The clients are two `--save-scripted <role>` probes, which
+press use when the probe's `setClientCvar("probe_use", ...)` says and record
+into `crates/server/tests/fixtures/gametypes/`; the server's `games_mp.log`
+goes there too, as `mp_brecourt-<gametype>-log.txt`.
+`crates/server/tests/gametypes_ab.rs` runs both probes on ours and compares.
+Recipe, timeline and findings: `docs/research/cod11-gametypes-re-bel.md`,
+sections 7 (re: allies `attacker` first, axis `defender` 3 s later, 150 s)
+and 8 (bel: both `--probe-team axis`, `first` then `second`, 130 s).

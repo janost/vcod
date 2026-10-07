@@ -4,7 +4,7 @@
 
 use crate::server::ServerConfig;
 use vcod_common::net::connectionless::Info;
-use vcod_common::net::protocol::PROTOCOL_V1;
+use vcod_common::net::protocol::{CS_LEVEL_START_TIME, CS_SERVERINFO, CS_SYSTEMINFO, PROTOCOL_V1};
 use vcod_common::pmove::FallHeights;
 use vcod_gsc::ErrorKind;
 
@@ -33,7 +33,7 @@ pub fn weapon_index(name: &str) -> Option<usize> {
 pub const STATIC: &[(usize, &str)] = &[
     (2, "cod"),
     (7, WEAPON_LIST),
-    (13, "0"), // level.startTime
+    (CS_LEVEL_START_TIME, "0"),
     (20, "\\winner\\0"),
     (1212, "CGAME_USEMG42"),
     (1213, "CGAME_USEPTRS41"),
@@ -84,59 +84,15 @@ pub fn static_configstrings(cfg: &ServerConfig, server_id: u8, fall: FallHeights
     let mut cs = vec![String::new(); PROTOCOL_V1.max_configstrings];
     // Names an out-of-range literal instead of a bare index panic.
     debug_assert!(STATIC.iter().all(|&(i, _)| i < cs.len()));
-    cs[0] = serverinfo(cfg).to_string();
-    cs[1] = systeminfo(server_id, fall).to_string();
+    cs[CS_SERVERINFO] = serverinfo(cfg).to_string();
+    cs[CS_SYSTEMINFO] = systeminfo(server_id, fall).to_string();
     for &(i, s) in STATIC {
         cs[i] = s.to_string();
     }
     cs
 }
 
-/// A configstring block the game module allocates into at runtime, each
-/// mirroring one engine indexer in `game.mp.i386.so`. The bounds are the
-/// ones those indexers walk; the addresses are in
-/// docs/research/clientstate-wire-format.md.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum CsRange {
-    StatusIcon,
-    HeadIcon,
-    Tag,
-    Model,
-    SoundAlias,
-    Effect,
-    Menu,
-    Localized,
-    Shader,
-}
-
-impl CsRange {
-    pub const ALL: [CsRange; 9] = [
-        CsRange::StatusIcon,
-        CsRange::HeadIcon,
-        CsRange::Tag,
-        CsRange::Model,
-        CsRange::SoundAlias,
-        CsRange::Effect,
-        CsRange::Menu,
-        CsRange::Localized,
-        CsRange::Shader,
-    ];
-
-    /// Inclusive.
-    pub fn bounds(self) -> (usize, usize) {
-        match self {
-            CsRange::StatusIcon => (21, 28),
-            CsRange::HeadIcon => (29, 43),
-            CsRange::Tag => (109, 139),
-            CsRange::Model => (269, 523),
-            CsRange::SoundAlias => (525, 779),
-            CsRange::Effect => (781, 843),
-            CsRange::Menu => (1180, 1211),
-            CsRange::Localized => (1245, 1499),
-            CsRange::Shader => (1501, 1627),
-        }
-    }
-}
+pub use vcod_common::net::protocol::CsRange;
 
 /// One next-free cursor per range, named rather than kept in a `CsRange::ALL`-
 /// order array: `next_mut`'s match is exhaustive, so a range added to the enum
@@ -291,8 +247,6 @@ pub fn script_menu_index(cs: &[String], name: &str) -> Option<usize> {
     (lo..=hi).find(|s| cs[*s] == name).map(|s| s - lo)
 }
 
-/// `CS_SOUNDS`: an alias index counts from here, so the range's first slot
-/// is 1 (docs/protocol-1.1.md, `s <idx>`).
 use vcod_common::net::protocol::CS_SOUNDS;
 
 /// The index an already registered sound alias travels as, in

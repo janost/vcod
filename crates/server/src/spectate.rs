@@ -207,6 +207,10 @@ pub struct ClientSim {
     /// `ps.serverCursorHintString`, -1 for none: the same pass writes it,
     /// and leaves it alone for a dead player or a gunner (turrets doc 4.3).
     pub cursor_hint_string: i32,
+    /// `iHeadIcon` and `iHeadIconTeam`, which script's `.headicon` and
+    /// `.headiconteam` own; the end frame mirrors them here.
+    pub head_icon: i32,
+    pub head_icon_team: i32,
     damage: DamageAccum,
     feedback: DamageFeedback,
     /// `ps.stats[1]`, the yaw toward the killer (combat doc, 5.1, item 11).
@@ -400,6 +404,8 @@ impl ClientSim {
             linked_unsnapped: false,
             cursor_hint: 0,
             cursor_hint_string: -1,
+            head_icon: 0,
+            head_icon_team: 0,
             health: 0,
             max_health: 0,
             dead: false,
@@ -1472,6 +1478,8 @@ impl ClientSim {
         // weapon's, and the next task is what gives it a value.
         set("torsoAnim", self.anim.torso());
         set("weapon", i32::from(self.ps.weapon));
+        set("iHeadIcon", self.head_icon);
+        set("iHeadIconTeam", self.head_icon_team);
         // The gun a gunner mans (turrets doc, 4.4); 0 off one, as release
         // writes it.
         set(
@@ -2947,7 +2955,14 @@ mod tests {
         for _ in 0..5 {
             sim.step(&run, 0.05, Some(MoveWorld::bare(&w_test)), &[]);
         }
-        assert_eq!(sim.ps.origin, before, "input does not move a body");
+        // Only in the last bits of z: a still trace's end point carries the
+        // rounding of the box-centre shift, as retail's does.
+        assert_eq!(
+            sim.ps.origin.truncate(),
+            before.truncate(),
+            "input does not move a body"
+        );
+        assert!((sim.ps.origin.z - before.z).abs() < 1e-5);
 
         // A respawn clears all of it.
         sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);

@@ -33,6 +33,8 @@ Handshake:
 
 The reject tokens, verbatim from the binary, are localized keys the client looks up: `EXE_SERVER_IS_DIFFERENT_VER` (followed by ` 1.1` on the wire), `EXE_BAD_CHALLENGE` and `EXE_SERVERISFULL` (no underscores) go out at connect time as OOB `error\n<TOKEN>`. `EXE_LOSTRELIABLECOMMANDS`, `EXE_DISCONNECTED` and `EXE_TIMEDOUT` are the drop reasons; a connected client gets those in the `w` server command (see svc_serverCommand below). `connectResponse` carries no arguments. The gamestate is sent on the client's first netchan message, because the fresh slot has `gamestateMessageNum = -1` and its `serverId` (0) mismatches (`SV_ExecuteClientMessage`, cod_lnxded `0x80872ec`).
 
+`rcon <password> <command>` answers in `print\n<text>` packets, and a `dedicated 2` server sends the master `heartbeat COD-1\n` every 180 s and `heartbeat flatline\n` on the way down. Both, and the `CS_ZOMBIE` window a dropped client gets, are measured in `docs/research/cod11-server-handshake.md`, "Housekeeping". The password cvar is `rconPassword`, not Q3's `rcon_password`.
+
 **Divergence from RTCW, #1.** RTCW sends the connect userinfo as plaintext. CoD 1.1 sends it Huffman-compressed from byte 12. A plaintext `connect` gets no `connectResponse`, because the server decompresses unconditionally and reads garbage. The userinfo I send:
 
 ```
@@ -1186,5 +1188,8 @@ Anti-abuse behaviour, and one timing difference; the wire format is unchanged (`
 - A netchan message is parsed in full (header checks, `serverId`, every command and every usercmd) before anything about the client is updated. Retail commits the sequence number, the address and the timeout stamp first, so one spoofed packet with a client's IP and qport and a huge sequence number stalls that client until it times out.
 - A `connect` that matches a live client's address and qport may replace it only when it carries that client's challenge, or when the slot has been silent for `sv_reconnectlimit` (3 s). Retail hands the slot over on the address match alone.
 - Challenges expire after 60 s.
+- Packets wait for the next tick to be read, up to 50 ms, and rcon's 500 ms window is measured at that read; requests sent less than about 550 ms apart can be dropped where retail would have answered both.
+- `dedicated` defaults to 1, so no master heartbeat, where retail's default of 2 heartbeats. This is deliberate, so dev runs stay off the public list; `--set dedicated=2` opts in.
+- A zombie slot is sent its last frame again, not retail's stale ring slot (`docs/research/cod11-server-handshake.md`, "Zombie slots").
 - Clients' packets run at the tick, not as they arrive. Retail's `SV_UserMove` calls the game's `ClientThink` per cmd as each client's message is parsed (cod_lnxded `0x80872cb`; the call is VERIFIED, that it is `ClientThink` is INFERRED), between game frames, on the previous frame's `level.time`. `replay_moves` runs every packet queued since the last tick in the order the server executed it, a packet's `kill` ahead of its cmds and each cmd's shots inside it, so the order is retail's; only the clock differs (`docs/research/cod11-combat.md`, section 16).
 
