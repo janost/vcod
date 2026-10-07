@@ -11,8 +11,9 @@
 use std::collections::BTreeMap;
 use vcod_gsc::ErrorKind;
 
-pub const MIRROR_NAMES: std::ops::RangeInclusive<usize> = 140..=203;
-pub const MIRROR_VALUES: std::ops::RangeInclusive<usize> = 204..=267;
+pub use vcod_common::net::protocol::{
+    CS_CVAR_NAMES as MIRROR_NAMES, CS_CVAR_VALUES as MIRROR_VALUES,
+};
 
 /// The 21 cvars the game module registers into the mirror at init, before
 /// any script runs: its cvar table's 0x800-flagged rows. Values are the

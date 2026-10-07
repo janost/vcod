@@ -257,8 +257,9 @@ pub const TURRET_CONTENTS: i32 = 0x0020_0004;
 /// (0x52ee7, 0x52ef0).
 pub const TURRET_HEALTH: i32 = 100;
 /// What the cooldown and the loop timer drop by per server frame, whatever
-/// the frame's length (turrets doc 6.3 and 6.4).
-const FRAME_MS: i32 = 50;
+/// the frame's length (turrets doc 6.3 and 6.4): a retail immediate, not
+/// `sv_fps`, so it stays apart from `server::FRAME_MS`.
+const TIMER_STEP_MS: i32 = 50;
 
 /// 0x5201c (turrets doc 6.2): each barrel axis follows the view relative to
 /// the gun, clamped to its arc, then limited to 15 degrees from where it
@@ -305,7 +306,7 @@ pub fn aim(rec: &mut TurretRecord, view: [f32; 3], turret_angles: [f32; 3]) -> O
 /// attack bit is the frame's last cmd's, held rather than an edge.
 pub fn fire_tick(rec: &mut TurretRecord, attack_held: bool) -> bool {
     rec.firing = false;
-    rec.cooldown_ms -= FRAME_MS;
+    rec.cooldown_ms -= TIMER_STEP_MS;
     if rec.cooldown_ms > 0 {
         return false;
     }
@@ -327,7 +328,7 @@ pub fn loop_tick(rec: &mut TurretRecord, loop_index: i32) -> (i32, bool) {
     if rec.loop_left_ms <= 0 {
         return (0, false);
     }
-    rec.loop_left_ms -= FRAME_MS;
+    rec.loop_left_ms -= TIMER_STEP_MS;
     if rec.loop_left_ms > 0 || rec.def.stop_sound.is_none() {
         return (loop_index, false);
     }

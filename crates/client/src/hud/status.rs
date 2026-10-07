@@ -6,14 +6,9 @@ use super::HudQuad;
 use super::font::{self, Font};
 use vcod_common::net::info_value_for_key;
 
-/// Serverinfo; `g_gametype` is one of its keys.
-pub const CS_SERVERINFO: usize = 0;
-/// Written by `setteamscore("axis", ...)` (doc section 5, "Which team score is which").
-pub const CS_AXIS_SCORE: usize = 5;
-/// Written by `setteamscore("allies", ...)`.
-pub const CS_ALLIES_SCORE: usize = 6;
-/// `level.startTime`, server-clock ms.
-pub const CS_LEVEL_START_TIME: usize = 13;
+pub use vcod_common::net::protocol::{
+    CS_ALLIES_SCORE, CS_AXIS_SCORE, CS_LEVEL_START_TIME, CS_SERVERINFO,
+};
 
 /// First header line; the timer follows one `line_height` below.
 const TOP_Y: f32 = 12.0;

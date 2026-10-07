@@ -4,6 +4,7 @@
 use crate::configstrings::CsRange;
 use crate::game::fields::{self, FieldType, Route};
 use crate::game::host::GameHost;
+use vcod_common::net::protocol::CS_NORTHYAW;
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Value};
 
 /// The `spawns` table at 0x7eb30, dumped by `tools/re/dump_builtins.py`.
@@ -72,7 +73,7 @@ pub fn spawn_entities_from_string(
     if world.get("classname").map(String::as_str) != Some("worldspawn") {
         return Err(ErrorKind::BadType("first entity block is not worldspawn"));
     }
-    host.configstrings[11] = worldspawn_northyaw(&world);
+    host.configstrings[CS_NORTHYAW] = worldspawn_northyaw(&world);
     for block in blocks {
         let Some(classname) = block.get("classname").cloned() else {
             // `G_CallSpawn` warns and creates nothing.
