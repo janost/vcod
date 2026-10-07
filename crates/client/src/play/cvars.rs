@@ -5,10 +5,11 @@
 
 use std::collections::HashMap;
 
-/// Configstrings 140..204 name the mirrored server cvars, 204..268 their
+use vcod_common::net::protocol::{CS_CVAR_NAMES as MIRROR_NAMES, CS_CVAR_VALUES};
+
+/// Configstrings 140..=203 name the mirrored server cvars, 204..=267 their
 /// values, paired by this offset.
-const MIRROR_NAMES: std::ops::Range<usize> = 140..204;
-const MIRROR_VALUE_OFFSET: usize = 64;
+const MIRROR_VALUE_OFFSET: usize = *CS_CVAR_VALUES.start() - *MIRROR_NAMES.start();
 
 /// Cvars a `v` command set, keyed lowercase. A `v` wins over the 140/204
 /// mirror `get` also checks.
