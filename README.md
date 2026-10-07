@@ -103,10 +103,10 @@ either: the people on it signed up for Call of Duty.
 - Runs Activision's own gametype and map scripts on `vcod-gsc`, a virtual
   machine for CoD's `.gsc` script language that lives in this repo. Team
   menus, spawn points, scoring, round logic, time and score limits all come
-  from the stock scripts, not from Rust. `dm`, `tdm` and `sd` are the
-  gametypes I have checked against retail end to end. `re` (Retrieval) and
-  `bel` (Behind Enemy Lines) match retail through the join, the round start
-  and the round end
+  from the stock scripts, not from Rust. All five stock gametypes are
+  checked against retail: `dm`, `tdm` and `sd` end to end, `re` (Retrieval)
+  through a pickup, a drop, the timeout return, a drop on death and a
+  capture, and `bel` (Behind Enemy Lines) through the team swap on a kill
   ([docs/research/cod11-gametypes-re-bel.md](docs/research/cod11-gametypes-re-bel.md)).
 - Movement on the shared pmove, with players as capsules that block and push
   each other the way retail's do. Falls stun and hurt, scaled by the
@@ -190,6 +190,9 @@ console, no key rebinding. You get command-line flags and the binds below.
   hints, the weapon name timing out after a switch and the hit icon's jitter
   ([docs/research/cod11-hud-protocol.md](docs/research/cod11-hud-protocol.md),
   section 9).
+- No head icons: the server sends `iHeadIcon`, but the client draws no icon
+  over a player's head, so a Retrieval carrier or a `scr_drawfriend`
+  teammate looks like anyone else.
 - Only protocol 1 (patch 1.1). 1.5 and United Offensive servers won't talk to
   it.
 - Prediction carries you with a moving brush model you stand on but not
@@ -198,9 +201,7 @@ console, no key rebinding. You get command-line flags and the binds below.
 
 **Server**
 
-- `re` and `bel` play past the round start, but I haven't checked a
-  Retrieval pickup and capture or the Behind Enemy Lines team swap against
-  retail. The bots don't play `bel`.
+- The bots don't play `bel`.
 - `linkTo` takes only a player. A script calling it on any other entity
   stops with an error; no stock MP script does.
 - A brush model that has turned and turned back keeps a sliver of yaw on
