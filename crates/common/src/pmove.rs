@@ -9,6 +9,7 @@ use crate::collision::MASK_PLAYERSOLID;
 use crate::movetrace::{MASK_DEADSOLID, MoveWorld};
 use crate::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use crate::weapon::WeaponDef;
+use crate::x87;
 use glam::Vec3;
 
 pub mod aim;
@@ -83,7 +84,9 @@ const KNOCKBACK_ACCEL_SCALE: f32 = 0.25;
 /// Entity numbers below this are clients.
 const MAX_CLIENTS: u32 = crate::net::protocol::MAX_CLIENTS as u32;
 pub const MIN_WALK_NORMAL: f32 = 0.7;
-pub const MAX_CLIP_PLANES: usize = 5;
+/// `PM_SlideMove` clears the velocity past 7 planes (game.mp 0x34a1c),
+/// which four bumps on two starting planes never reach; Q3 has 5.
+pub const MAX_CLIP_PLANES: usize = 8;
 pub const HALF_WIDTH: f32 = 15.0; // bbox is (-15,-15,0)..(15,15,height)
 pub const HEIGHT_STAND: f32 = 70.0;
 pub const HEIGHT_CROUCH: f32 = 50.0;
@@ -1852,17 +1855,18 @@ fn on_slick(ps: &PlayerState) -> bool {
 /// water level <= 1, plus a water term that already applies while wading, and
 /// the ladder term whenever on a ladder.
 fn friction(ps: &mut PlayerState, on_ladder: bool, dt: f32) {
-    // when walking, slope movement along z does not count toward the speed
-    let mut planar = ps.velocity;
-    if ps.on_ground {
-        planar.z = 0.0;
-    }
-    let speed = planar.length();
+    // `PM_Friction` (0x2e460) on the x87: the speed is stored as a float,
+    // the drop and the scale stay on the stack, and each component is
+    // rounded once.
+    let v = ps.velocity.as_dvec3();
+    let vz = if ps.on_ground { 0.0 } else { v.z };
+    let speed = ((v.x * v.x + v.y * v.y) + vz * vz).sqrt() as f32;
     if speed < 1.0 {
         ps.velocity.x = 0.0;
         ps.velocity.y = 0.0;
         return;
     }
+    let (s, dt) = (f64::from(speed), f64::from(dt));
     let mut drop = 0.0;
     // Slick ground and a hit's knockback slide free of the ground term
     // (0x2e4ed, 0x2e4fb).
@@ -1871,20 +1875,20 @@ fn friction(ps: &mut PlayerState, on_ladder: bool, dt: f32) {
         && !on_slick(ps)
         && ps.knockback_flags & PMF_TIME_DAMAGE == 0
     {
-        let mut control = speed.max(PM_STOPSPEED);
+        let mut control = s.max(f64::from(PM_STOPSPEED));
         if ps.knockback_flags & PMF_TIME_KNOCKBACK != 0 {
-            control *= KNOCKBACK_FRICTION_SCALE;
+            control *= f64::from(KNOCKBACK_FRICTION_SCALE);
         }
-        drop += control * PM_FRICTION * dt;
+        drop += control * f64::from(PM_FRICTION) * dt;
     }
     if ps.water_level > 0 {
-        drop += speed * WATER_FRICTION * ps.water_level as f32 * dt;
+        drop += f64::from(ps.water_level) * s * f64::from(WATER_FRICTION) * dt;
     }
     if on_ladder {
-        drop += speed * PM_LADDER_FRICTION * dt;
+        drop += s * f64::from(PM_LADDER_FRICTION) * dt;
     }
-    let scale = ((speed - drop) / speed).max(0.0);
-    ps.velocity *= scale;
+    let scale = (s - drop).max(0.0) / s;
+    ps.velocity = x87::scale(ps.velocity, scale);
 }
 
 /// Desired direction (world space, unit or zero) and speed.
@@ -1901,28 +1905,69 @@ fn friction(ps: &mut PlayerState, on_ladder: bool, dt: f32) {
 /// `walk_slow` is the client's own fly-mode key and takes the walk scale.
 /// Not ported: the `wbuttons` 0x4 factor (0.4, rodata 0x70894), which no
 /// measured key sets.
-fn wish(ps: &PlayerState, input: &PmInput, weapon: Option<&WeaponDef>) -> (Vec3, f32) {
-    let (f, r) = (input.forward * 127.0, input.right * 127.0);
-    let max = if f < 0.0 { -f * SCALE_BACK } else { f }.max(r.abs() * SCALE_STRAFE);
-    if max <= 0.0 {
+///
+/// The direction is `PM_WalkMove`'s (0x2f2c7-0x2f433): `pml.forward` and
+/// `pml.right` flattened, clipped onto the ground plane and normalized, then
+/// combined by the cmd bytes and normalized again; the speed is that
+/// length times the stored scale, left unrounded.
+fn wish(ps: &PlayerState, input: &PmInput, weapon: Option<&WeaponDef>) -> (Vec3, f64) {
+    let (f, r) = (
+        (input.forward * 127.0).round(),
+        (input.right * 127.0).round(),
+    );
+    let (fd, rd) = (f64::from(f), f64::from(r));
+    let back = if f < 0.0 {
+        (fd * f64::from(SCALE_BACK)).abs()
+    } else {
+        fd.abs()
+    };
+    let max = back.max((rd * f64::from(SCALE_STRAFE)).abs());
+    if max == 0.0 {
         return (Vec3::ZERO, 0.0);
     }
-    let total = (f * f + r * r).sqrt();
-    let mut scale = SPEED_RUN * max / (127.0 * total);
+    let total = (fd * fd + rd * rd).sqrt();
+    let mut scale = (f64::from(SPEED_RUN) * max) / (total * 127.0);
     if ps.walking || input.walk_slow {
-        scale *= SCALE_WALK;
+        scale *= f64::from(SCALE_WALK);
     } else if ps.lean != 0.0 {
-        scale *= SCALE_LEAN;
+        scale *= f64::from(SCALE_LEAN);
     }
-    scale *= stance_speed_scale(ps);
-    scale *= 1.0 - ps.water_level as f32 / 3.0 * WADE_SCALE;
+    let stance = stance_speed_scale(ps);
+    if stance != 1.0 {
+        scale *= f64::from(stance);
+    }
+    if ps.water_level > 0 {
+        scale *= 1.0 - f64::from(ps.water_level) / 3.0 * f64::from(WADE_SCALE);
+    }
     if let Some(w) = weapon.filter(|w| w.move_speed_scale > 0.0) {
-        scale *= w.move_speed_scale;
+        scale *= f64::from(w.move_speed_scale);
     }
-    let fwd = Vec3::new(ps.yaw.cos(), ps.yaw.sin(), 0.0);
-    let right = Vec3::new(ps.yaw.sin(), -ps.yaw.cos(), 0.0);
-    let wishvel = fwd * f + right * r;
-    (wishvel.normalize_or_zero(), wishvel.length() * scale)
+    let scale = scale as f32;
+
+    let (forward, right) = view_vectors(ps);
+    let flat = |v: Vec3| x87::normalize(clip_velocity(v.with_z(0.0), ps.ground_normal));
+    let (forward, right) = (flat(forward), flat(right));
+    let wishvel = (forward.as_dvec3() * fd + right.as_dvec3() * rd).as_vec3();
+    let len = x87::dot(wishvel, wishvel).sqrt() as f32;
+    (x87::normalize(wishvel), f64::from(len) * f64::from(scale))
+}
+
+/// `AngleVectors`' forward and right (game.mp 0x3b228) for the view yaw and
+/// pitch: each angle rounded to a float in radians, its sine and cosine
+/// (`fsincos`) stored as floats, the products rounded once. No roll.
+fn view_vectors(ps: &PlayerState) -> (Vec3, Vec3) {
+    let (sy, cy) = (
+        f64::from(ps.yaw).sin() as f32,
+        f64::from(ps.yaw).cos() as f32,
+    );
+    // The sim's pitch is positive up; the view's is positive down.
+    let (sp, cp) = (
+        f64::from(-ps.pitch).sin() as f32,
+        f64::from(-ps.pitch).cos() as f32,
+    );
+    let forward = Vec3::new(cp * cy, cp * sy, -sp);
+    let right = Vec3::new(sy, -cy, 0.0);
+    (forward, right)
 }
 
 /// The air mover's wish, retail's Q3-shaped scale (0x2e5bc, called from
@@ -2040,40 +2085,43 @@ fn walk_move(
     mask: u32,
     events: Option<&mut Vec<PmEvent>>,
 ) {
+    // along the slope, so it costs no speed
     let (dir, wishspeed) = wish(ps, input, weapon);
     // Slick ground or a hit's knockback (0x2f492, 0x2f58c).
     let sliding = on_slick(ps) || ps.knockback_flags & PMF_TIME_DAMAGE != 0;
-    let mut accel = match move_stance(ps) {
+    let mut accel = f64::from(match move_stance(ps) {
         _ if sliding => 1.0,
         Stance::Stand => PM_ACCELERATE,
         Stance::Crouch => PM_DUCKED_ACCELERATE,
         Stance::Prone => PM_PRONE_ACCELERATE,
-    };
+    });
     if ps.knockback_flags & PMF_TIME_KNOCKBACK != 0 {
-        accel *= KNOCKBACK_ACCEL_SCALE;
+        accel *= f64::from(KNOCKBACK_ACCEL_SCALE);
     }
-    // along the slope, so it costs no speed
-    let dir = clip_velocity(dir, ps.ground_normal).normalize_or_zero();
     // Q3's `PM_Accelerate` inline, with the rate floored: a prone or
     // sighted wish of under 100 still gains 100's worth per frame, capped
     // at the wish (docs/research/cod11-mantle.md, "The walk's accel floor").
-    let current = ps.velocity.dot(dir);
-    let add = wishspeed - current;
+    // All of it on the x87 stack, the velocity rounded once per component
+    // (0x2f4e4-0x2f57c).
+    let add = wishspeed - x87::dot(ps.velocity, dir);
     if add > 0.0 {
-        ps.velocity += dir * (accel * dt * wishspeed.max(WALK_ACCEL_FLOOR)).min(add);
+        let rate = wishspeed.max(f64::from(WALK_ACCEL_FLOOR));
+        let speed = (accel * f64::from(dt) * rate).min(add);
+        ps.velocity = (dir.as_dvec3() * speed + ps.velocity.as_dvec3()).as_vec3();
     }
     // Q3's slick-or-knockback gravity, which the clip below turns into
     // ground speed.
     if sliding {
-        ps.velocity.z -= GRAVITY * dt;
+        ps.velocity.z = (f64::from(ps.velocity.z) - f64::from(GRAVITY) * f64::from(dt)) as f32;
     }
     // The clip onto the ground keeps the speed whenever it leaves the
     // velocity pointing the same way (0x2f5b8-0x2f6b3), so a landing that
     // still carries its fall turns it into ground speed.
-    let (before, speed) = (ps.velocity, ps.velocity.length());
+    let before = ps.velocity;
+    let speed = x87::dot(before, before).sqrt() as f32;
     ps.velocity = clip_velocity(ps.velocity, ps.ground_normal);
-    if ps.velocity.dot(before) > 0.0 {
-        ps.velocity = ps.velocity.normalize_or_zero() * speed;
+    if x87::dot(ps.velocity, before) > 0.0 {
+        ps.velocity = x87::scale(x87::normalize(ps.velocity), f64::from(speed));
     }
     // Standing still skips the move but not the legs: retail jumps straight
     // to PM_SetMovementDir (@0x2f6db), which is what keeps a prone player's
@@ -2388,7 +2436,7 @@ fn slide_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32, gravity: bool, m
     if let Some(n) = ground {
         planes.push(n);
     }
-    planes.push(ps.velocity.normalize_or_zero());
+    planes.push(x87::normalize(ps.velocity));
 
     let mut time_left = dt;
     let mut bumps = 0;
@@ -2408,45 +2456,48 @@ fn slide_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32, gravity: bool, m
             break;
         }
         bumps += 1;
-        time_left -= time_left * t.fraction;
+        time_left = (f64::from(time_left) - f64::from(time_left) * f64::from(t.fraction)) as f32;
 
         if planes.len() >= MAX_CLIP_PLANES {
             ps.velocity = Vec3::ZERO;
             return Slide { blocked: true };
         }
         // same plane again: nudge out along it (epsilon on non-axial planes)
-        if planes.iter().any(|p| t.normal.dot(*p) > 0.99) {
+        if planes
+            .iter()
+            .any(|p| x87::dot(t.normal, *p) > f64::from(0.99f32))
+        {
             ps.velocity += t.normal;
             continue;
         }
         planes.push(t.normal);
 
         for (i, &plane_i) in planes.iter().enumerate() {
-            if ps.velocity.dot(plane_i) >= 0.1 {
+            if x87::dot(ps.velocity, plane_i) >= 0.1 {
                 continue;
             }
             let mut clipped = clip_velocity(ps.velocity, plane_i);
             let mut end_clipped = clip_velocity(end_velocity, plane_i);
 
             for (j, &plane_j) in planes.iter().enumerate() {
-                if j == i || clipped.dot(plane_j) >= 0.1 {
+                if j == i || x87::dot(clipped, plane_j) >= 0.1 {
                     continue;
                 }
                 clipped = clip_velocity(clipped, plane_j);
                 end_clipped = clip_velocity(end_clipped, plane_j);
-                if clipped.dot(plane_i) >= 0.0 {
+                if x87::dot(clipped, plane_i) >= 0.0 {
                     continue;
                 }
                 // two planes: slide along their crease
-                let crease = plane_i.cross(plane_j).normalize_or_zero();
-                clipped = crease * crease.dot(ps.velocity);
-                end_clipped = crease * crease.dot(end_velocity);
+                let crease = x87::normalize(x87::cross(plane_i, plane_j));
+                clipped = x87::scale(crease, x87::dot(crease, ps.velocity));
+                end_clipped = x87::scale(crease, x87::dot(crease, end_velocity));
 
                 // three planes: nowhere left to go
                 if planes
                     .iter()
                     .enumerate()
-                    .any(|(k, &p)| k != i && k != j && clipped.dot(p) < 0.1)
+                    .any(|(k, &p)| k != i && k != j && x87::dot(clipped, p) < 0.1)
                 {
                     ps.velocity = Vec3::ZERO;
                     return Slide { blocked: true };
@@ -5370,9 +5421,11 @@ mod tests {
             pmove(&mut ps, &run, &mw, 0.008, &[]);
         }
         // A push this slow creeps inside the backoff through the step's down
-        // pass, which misses the bare radius; nothing gets past that.
+        // pass, which misses the bare radius; nothing gets past that. The
+        // down pass's float fraction leaves the floor a few millionths under
+        // 0.125, as retail's does.
         assert!(
-            ps.origin.z == 0.125 && (30.0..30.2).contains(&(60.0 - ps.origin.x)),
+            (ps.origin.z - 0.125).abs() < 1e-5 && (30.0..30.2).contains(&(60.0 - ps.origin.x)),
             "{:?}",
             ps.origin
         );
