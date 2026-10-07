@@ -104,3 +104,9 @@ pub const ET_TURRET: i32 = 11;
 /// for `r.bmodel` (cod_lnxded 0x80908da) whatever the entity's contents, so a
 /// `notSolid()`ed brush model keeps it (docs/research/cod11-movers.md 14).
 pub const SOLID_BMODEL: i32 = 0xff_ffff;
+
+/// The restart toggle on `legsAnim`, `torsoAnim` and `ps.weapAnim`: every
+/// `set_anim` flips it, a repeat of the same clip included, so the index is
+/// the low 9 bits (player-model-anim-system.md, "Animation indices"; combat
+/// doc, 1.2).
+pub const ANIM_TOGGLEBIT: i32 = 512;
