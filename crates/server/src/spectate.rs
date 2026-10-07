@@ -2947,7 +2947,14 @@ mod tests {
         for _ in 0..5 {
             sim.step(&run, 0.05, Some(MoveWorld::bare(&w_test)), &[]);
         }
-        assert_eq!(sim.ps.origin, before, "input does not move a body");
+        // Only in the last bits of z: a still trace's end point carries the
+        // rounding of the box-centre shift, as retail's does.
+        assert_eq!(
+            sim.ps.origin.truncate(),
+            before.truncate(),
+            "input does not move a body"
+        );
+        assert!((sim.ps.origin.z - before.z).abs() < 1e-5);
 
         // A respawn clears all of it.
         sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);

@@ -66,8 +66,11 @@ pub fn view_angles(cmd_angles: [i32; 3], delta_angles: [i32; 3]) -> [f32; 3] {
 /// camera's convention (positive up). Returns the wire-convention view.
 pub fn apply_view(ps: &mut PlayerState, cmd_angles: [i32; 3], delta_angles: [i32; 3]) -> [f32; 3] {
     let view = view_angles(cmd_angles, delta_angles);
-    ps.yaw = view[1].to_radians();
-    ps.pitch = -view[0].to_radians();
+    // `AngleVectors` takes each angle to radians by the double pi / 180 and
+    // rounds it to a float (game.mp 0x3b234).
+    let rad = |deg: f32| (f64::from(deg) * (std::f64::consts::PI / 180.0)) as f32;
+    ps.yaw = rad(view[1]);
+    ps.pitch = -rad(view[0]);
     view
 }
 

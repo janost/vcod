@@ -9,6 +9,7 @@
 use crate::bsp::Bsp;
 use crate::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use crate::patch::{PatchCollide, Sweep};
+use crate::terrain::{CapsuleSweep, Terrain};
 use glam::Vec3;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -96,8 +97,11 @@ pub struct ModelTri {
 #[derive(Clone, Copy, Debug)]
 pub enum Prim {
     Brush(u32),
-    /// A lump-26 terrain triangle.
+    /// A lump-26 terrain triangle: what a trace reports it stopped on.
     Tri(u32),
+    /// A lump-24 terrain partition, the unit the BVH holds and the clip
+    /// walks, its triangles in lump order.
+    Terrain(u32),
     /// A lump-24 patch, all its facets.
     Patch(u32),
     Model(u32),
@@ -115,22 +119,41 @@ pub struct Trace {
     pub allsolid: bool,
     /// What the reported contact is against, for diagnostics (`describe`).
     pub hit: Option<Prim>,
-    /// The hit's unclamped enter fraction. A box touching two surfaces
-    /// clips both at fraction 0, and the one it sits closest to (the
-    /// largest raw value) is the contact reported, so a 0.25-unit ground
-    /// trace and a 9-unit snap agree on the normal at a mesh seam.
+    /// The hit's unclamped enter fraction. Only the posed brushes' clip
+    /// ([`clip_segment`]) reads it: of two surfaces a box touches at fraction
+    /// 0 it reports the one it sits closest to. The world's clips settle a
+    /// tie by retail's walk order instead.
     enter: f32,
 }
 
 pub const SURFACE_CLIP_EPSILON: f32 = 0.125;
+
+/// Where a world trace ends, as `CM_BoxTrace` (`cod_lnxded` 0x8056310)
+/// rounds it: the box is centred on `(mins + maxs) / 2`, the start and the
+/// end each shifted by it, the delta taken between the shifted points with
+/// the start stored as a float (0x80563d1-0x8056420), and the end point
+/// `start + fraction * delta` off the unshifted start, rounded once
+/// (0x8056887-0x80568c4). On a clear trace that is not `end` in the last
+/// bit (docs/research/cod11-player-clip.md 8.9).
+pub fn cm_endpos(start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, fraction: f32) -> Vec3 {
+    let off = (mins + maxs) * 0.5;
+    let f = f64::from(fraction);
+    let axis = |s: f32, e: f32, o: f32| {
+        let shifted = s + o;
+        let delta = (f64::from(e) + f64::from(o) - f64::from(shifted)) as f32;
+        (f64::from(s) + f * f64::from(delta)) as f32
+    };
+    Vec3::new(
+        axis(start.x, end.x, off.x),
+        axis(start.y, end.y, off.y),
+        axis(start.z, end.z, off.z),
+    )
+}
+
 /// How far outside an edge plane the static-model clip still counts a
 /// crossing as inside the triangle (`cod_lnxded` rodata 0x80db974 and
 /// 0x80db978: -0.001 and 1.001).
 const MODEL_BARY_EPS: f32 = 0.001;
-/// What retail's terrain clip takes off every fraction it returns
-/// (`cod_lnxded` rodata 0x80cd30c); a fraction at or under it is a
-/// `startsolid` at 0. The radius pad is `SURFACE_CLIP_EPSILON` (0x80cd308).
-const TERRAIN_FRACTION_EPS: f32 = 1e-5;
 
 /// The 5-bit sound-surface index every trace consumer reads
 /// (`cod11-events-and-fx.md`, section 4). 0 means the material carries no
@@ -260,6 +283,107 @@ fn clip_segment(
             trace.fraction = fraction;
             trace.enter = enter;
             trace.normal = clip_normal;
+            trace.surface_flags = surface_flags;
+            trace.hit = Some(prim);
+        }
+    }
+}
+
+/// Retail's brush clip (`cod_lnxded` 0x8054e90, the capsule arm) on a
+/// brush whose first six planes are the axial ones, `-x, +x, -y, +y, -z,
+/// +z`, as `brush_side_planes` lays them out. The axial sides take the
+/// capsule as a box of half extents `(r, r, half height)`, the bounds in
+/// the binary's order (mins x, y, z, then maxs); every other side tests
+/// the sphere nearer it against its distance pushed out by the radius
+/// (0x8055080-0x8055176). Distances and fractions stay on the x87 stack
+/// but the enter fraction, which is stored and compared as a float, and
+/// the leave fraction starts at the trace's. A trace a brush clips always
+/// lands closer than the trace's fraction, so the lead side replaces the
+/// trace's contact outright.
+fn clip_brush_capsule(
+    trace: &mut Trace,
+    sw: &CapsuleSweep,
+    planes: &[(Vec3, f32)],
+    surface_flags: u32,
+    prim: Prim,
+) {
+    let d = f64::from;
+    let r = sw.radius;
+    let off = sw.half_height - r;
+    let ext = [r, r, off.abs() + r];
+    let mut enter = 0.0f32;
+    let mut leave = d(trace.fraction);
+    let mut allsolid = true;
+    let mut lead: Option<Vec3> = None;
+    // One side's distances; `false` when the side rules the brush out.
+    let mut side = |d1: f64, d2: f64, normal: Vec3| -> bool {
+        if d1 <= 0.0 {
+            if d2 > 0.0 {
+                allsolid = false;
+                if leave * (d1 - d2) < d1 {
+                    leave = d1 / (d1 - d2);
+                    if leave <= d(enter) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+        if d2 > 0.0 {
+            if d1 - d2 <= 0.0 || d(SURFACE_CLIP_EPSILON) <= d2 {
+                return false;
+            }
+            allsolid = false;
+        }
+        let eps = d(SURFACE_CLIP_EPSILON);
+        if d(enter) * (d1 - d2) < d1 - eps {
+            let e = (d1 - eps) / (d1 - d2);
+            enter = e as f32;
+            if leave <= e {
+                return false;
+            }
+            lead = Some(normal);
+        } else if lead.is_none() {
+            lead = Some(normal);
+        }
+        true
+    };
+    for (k, sign) in [(0usize, -1.0f64), (1, 1.0)] {
+        for axis in 0..3 {
+            let (n, dist) = planes[axis * 2 + k];
+            let bound = d(dist) * sign;
+            let d1 = (d(sw.start[axis]) - bound) * sign - d(ext[axis]);
+            let d2 = (d(sw.end[axis]) - bound) * sign - d(ext[axis]);
+            if !side(d1, d2, n) {
+                return;
+            }
+        }
+    }
+    for &(n, dist) in &planes[6..] {
+        let pushed = d(dist + r);
+        let toward = if d(n.z) * d(off) > 0.0 { -off } else { off };
+        let at = |p: [f32; 3]| {
+            let q = Vec3::new(p[0], p[1], p[2] + toward);
+            crate::x87::dot(n, q) - pushed
+        };
+        if !side(at(sw.start), at(sw.end), n) {
+            return;
+        }
+    }
+    match lead {
+        None => {
+            trace.startsolid = true;
+            if allsolid {
+                trace.allsolid = true;
+                trace.fraction = 0.0;
+                trace.surface_flags = 0;
+                trace.hit = Some(prim);
+            }
+        }
+        Some(normal) => {
+            trace.fraction = enter;
+            trace.enter = enter;
+            trace.normal = normal;
             trace.surface_flags = surface_flags;
             trace.hit = Some(prim);
         }
@@ -417,184 +541,24 @@ fn clip_patch(
     trace.hit = Some(prim);
 }
 
-/// Retail's terrain clip (`cod_lnxded` 0x8052a58), one triangle at a time:
-/// the capsule's sphere nearest the face is swept against the face, and
-/// when its contact point projects outside the triangle, against the edges
-/// as cylinders and the vertices as spheres. Nothing is bevelled, so a
-/// sphere walking up a ramp into a flat is not lifted onto the flat's
-/// radius-wide slab a facet would put beside it
-/// (docs/research/cod11-mantle.md, "Terrain is a swept sphere, a patch is a
-/// facet"). The face is one-sided: a start deeper than
-/// the padded radius behind it is solid only where the capsule's axis
-/// crosses the triangle, else the triangle is skipped. Every fraction loses
-/// `TERRAIN_FRACTION_EPS`, and one at or under it is a `startsolid` at 0.
-/// Retail picks the sphere per terrain partition off a stored facing flag;
-/// ours takes the one nearest the plane, which is that flag for a floor and
-/// for a ceiling. A point trace takes retail's point arm instead
-/// (0x8052894): the front face alone, backed off `SURFACE_CLIP_EPSILON`
-/// along the segment, the crossing inside the edges within
-/// `MODEL_BARY_EPS`, no fraction epsilon and no `startsolid`.
-///
-/// `start` and `end` are the capsule's centre; `tri` is wound so
-/// `cross(b - a, c - a)` faces out.
-fn clip_sphere_triangle(
-    trace: &mut Trace,
-    start: Vec3,
-    end: Vec3,
-    tri: &[Vec3; 3],
-    capsule: Capsule,
-    surface_flags: u32,
-    prim: Prim,
-) {
-    let [a, b, c] = *tri;
-    let n = (b - a).cross(c - a).normalize();
-    if capsule.radius == 0.0 {
-        let mt = ModelTri {
-            tri: *tri,
-            contents: 0,
-            surface_flags,
-        };
-        clip_segment_model(trace, start, end, &mt, prim);
-        return;
-    }
-    let shift = if n.dot(capsule.offset) > 0.0 {
-        -capsule.offset
-    } else {
-        capsule.offset
-    };
-    let (s, e) = (start + shift, end + shift);
-    let r_eps = capsule.radius + SURFACE_CLIP_EPSILON;
-    let d_e = n.dot(e - a);
-    if d_e >= r_eps {
-        return;
-    }
-    let d_s = n.dot(s - a);
-    if d_s - d_e <= 0.0 {
-        return;
-    }
-    // Barycentrics of `p` projected along `n`: p = a + u (c - a) + v (b - a),
-    // and which edges it lies outside of, as retail's three bits.
-    let (e1, e2) = (c - a, b - a);
-    let (d11, d12, d22) = (e1.dot(e1), e1.dot(e2), e2.dot(e2));
-    let det = d11 * d22 - d12 * d12;
-    if det.abs() < 1e-12 {
-        return;
-    }
-    let outside = |p: Vec3| -> u32 {
-        let w = p - a;
-        let (dw1, dw2) = (w.dot(e1), w.dot(e2));
-        let u = (d22 * dw1 - d12 * dw2) / det;
-        let v = (d11 * dw2 - d12 * dw1) / det;
-        u32::from(u + v > 1.0) | (u32::from(u < 0.0) << 1) | (u32::from(v < 0.0) << 2)
-    };
-    let record = |trace: &mut Trace, raw: f32, normal: Vec3| {
-        if raw <= TERRAIN_FRACTION_EPS {
-            trace.fraction = 0.0;
-            trace.startsolid = true;
-        } else {
-            trace.fraction = raw - TERRAIN_FRACTION_EPS;
-        }
-        trace.enter = raw;
-        trace.normal = normal;
-        trace.surface_flags = surface_flags;
-        trace.hit = Some(prim);
-    };
-    if d_s <= -r_eps {
-        // Deep behind the face: solid where the axis to the other sphere
-        // crosses the triangle, at the near pad or at the far one.
-        let axis = -2.0 * shift;
-        let d_o = d_s + n.dot(axis);
-        if d_o <= -r_eps {
-            return;
-        }
-        let near = s + axis * ((-r_eps - d_s) / (d_o - d_s));
-        let far = if d_o < r_eps {
-            s + axis
-        } else {
-            s + axis * ((r_eps - d_s) / (d_o - d_s))
-        };
-        if outside(near) == 0 || outside(far) == 0 {
-            record(trace, 0.0, n);
-        }
-        return;
-    }
-    let dir = e - s;
-    let f = if d_s < r_eps {
-        0.0
-    } else {
-        (d_s - r_eps) / (d_s - d_e)
-    };
-    if f > trace.fraction {
-        return;
-    }
-    let p = s + dir * f;
-    let bits = outside(p);
-    if bits == 0 {
-        if f < trace.fraction || f > trace.enter {
-            record(trace, f, n);
-        }
-        return;
-    }
-    let dir_sq = dir.length_squared();
-    let r = capsule.radius;
-    // Vertex i is the one opposite edge i, in retail's bit order.
-    let verts = [a, c, b];
-    let edges = [(c, b), (a, b), (a, c)];
-    for i in 0..3 {
-        if bits & (1 << i) == 0 {
-            let q = s - verts[i];
-            let sep = q.length_squared() - r * r;
-            if sep <= 0.0 {
-                record(trace, 0.0, n);
-                continue;
-            }
-            let bq = dir.dot(q);
-            if bq >= 0.0 {
-                continue;
-            }
-            let disc = bq * bq - dir_sq * sep;
-            if disc < 0.0 {
-                continue;
-            }
-            let t = (-disc.sqrt() - bq) / dir_sq;
-            if t < trace.fraction {
-                record(trace, t, (q + dir * t) / r);
-            }
-        } else {
-            let (v0, v1) = edges[i];
-            let along = v1 - v0;
-            let len = along.length();
-            if len < 1e-6 {
-                continue;
-            }
-            let w = along / len;
-            let u_axis = n;
-            let v_axis = w.cross(u_axis);
-            let q = s - v0;
-            let (qu, qv, qw) = (q.dot(u_axis), q.dot(v_axis), q.dot(w));
-            let sep = qu * qu + qv * qv - r * r;
-            if sep <= 0.0 {
-                if (0.0..=len).contains(&qw) {
-                    record(trace, 0.0, n);
-                }
-                continue;
-            }
-            let (du, dv, dw) = (dir.dot(u_axis), dir.dot(v_axis), dir.dot(w));
-            let bq = du * qu + dv * qv;
-            if bq >= 0.0 {
-                continue;
-            }
-            let aa = du * du + dv * dv;
-            let disc = bq * bq - aa * sep;
-            if disc <= 0.0 {
-                continue;
-            }
-            let t = (-disc.sqrt() - bq) / aa;
-            if t < trace.fraction && (0.0..=len).contains(&(qw + t * dw)) {
-                let normal = (u_axis * (qu + t * du) + v_axis * (qv + t * dv)) / r;
-                record(trace, t, normal);
-            }
-        }
+/// The sweep `CM_BoxTrace` (`cod_lnxded` 0x8056310) hands the terrain
+/// clip: start and end moved to the box centre, the delta between them, and
+/// the capsule's radius (the smaller of the half width and the half height)
+/// and half height (0x80563d1-0x805644b).
+fn capsule_sweep(start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3) -> CapsuleSweep {
+    let off = (mins + maxs) * 0.5;
+    let (s, e) = (start + off, end + off);
+    let delta: [f32; 3] =
+        std::array::from_fn(|i| (f64::from(end[i]) + f64::from(off[i]) - f64::from(s[i])) as f32);
+    let sq = |i: usize| f64::from(delta[i]) * f64::from(delta[i]);
+    let size = maxs - off;
+    CapsuleSweep {
+        start: s.to_array(),
+        end: e.to_array(),
+        delta,
+        delta_sq: ((sq(0) + sq(1)) + sq(2)) as f32,
+        radius: if size.z < size.x { size.z } else { size.x },
+        half_height: size.z,
     }
 }
 
@@ -620,6 +584,9 @@ pub struct CollisionWorld {
     tris_surf: Vec<u32>,
     /// Per-triangle mask-relevant content flags, parallel to `tris`.
     tris_contents: Vec<u32>,
+    /// Lump 24's terrain partitions as retail's records, one triangle record
+    /// per entry of `tris`.
+    terrain: Terrain,
     /// Lump 24's patches as retail's facet grids.
     pub patches: Vec<WorldPatch>,
     nodes: Vec<BvhNode>,
@@ -669,6 +636,7 @@ impl Clone for CollisionWorld {
             model_tris: self.model_tris.clone(),
             tris_surf: self.tris_surf.clone(),
             tris_contents: self.tris_contents.clone(),
+            terrain: self.terrain.clone(),
             patches: self.patches.clone(),
             nodes: self.nodes.clone(),
             models_root: self.models_root,
@@ -783,22 +751,41 @@ struct Tris {
     surf: Vec<u32>,
     contents: Vec<u32>,
     prims: Vec<(Prim, Vec3, Vec3)>,
+    terrain: Terrain,
 }
 
 impl Tris {
-    /// Drops slivers, pads the AABB by 0.25 so the BVH query finds a
-    /// triangle the box merely touches. `tri` is wound with
-    /// `cross(b - a, c - a)` on the outside, the side the sphere clip faces.
-    fn push(&mut self, [a, b, c]: [Vec3; 3], surface_flags: u32, contents: u32) {
-        if (b - a).cross(c - a).length_squared() < 1e-6 {
+    /// One lump-24 terrain partition: its records for the clip, and each
+    /// triangle in lump order wound with `cross(b - a, c - a)` on the
+    /// outside, the side the sphere clip faces. The BVH holds the
+    /// partition, padded by 0.25 so the query finds one the box merely
+    /// touches.
+    fn push_partition(
+        &mut self,
+        points: &[[f32; 3]],
+        tris: &[[u16; 3]],
+        surface_flags: u32,
+        contents: u32,
+    ) {
+        if tris.is_empty() {
             return;
         }
-        let lo = a.min(b).min(c) - Vec3::splat(0.25);
-        let hi = a.max(b).max(c) + Vec3::splat(0.25);
-        self.prims.push((Prim::Tri(self.tris.len() as u32), lo, hi));
-        self.tris.push([a, b, c]);
-        self.surf.push(surface_flags);
-        self.contents.push(contents);
+        let part = self.terrain.add_partition(points, tris);
+        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for tri in tris {
+            let p = |i: usize| Vec3::from_array(points[tri[i] as usize]);
+            let (a, b, c) = (p(0), p(2), p(1));
+            lo = lo.min(a).min(b).min(c);
+            hi = hi.max(a).max(b).max(c);
+            self.tris.push([a, b, c]);
+            self.surf.push(surface_flags);
+            self.contents.push(contents);
+        }
+        self.prims.push((
+            Prim::Terrain(part),
+            lo - Vec3::splat(0.25),
+            hi + Vec3::splat(0.25),
+        ));
     }
 }
 
@@ -823,6 +810,7 @@ impl CollisionWorld {
             surf: Vec::new(),
             contents: Vec::new(),
             prims: Vec::new(),
+            terrain: Terrain::default(),
         };
 
         #[derive(Clone, Copy)]
@@ -929,14 +917,9 @@ impl CollisionWorld {
             };
             let idx =
                 &bsp.collision_indices[part.first_index as usize..][..part.index_count as usize];
-            for tri in idx.as_chunks::<3>().0 {
-                let p = |i: usize| {
-                    Vec3::from_array(
-                        bsp.collision_verts[part.first_vert as usize + tri[i] as usize],
-                    )
-                };
-                t.push([p(0), p(2), p(1)], mat.surface_flags, contents);
-            }
+            let points =
+                &bsp.collision_verts[part.first_vert as usize..][..part.vert_count as usize];
+            t.push_partition(points, idx.as_chunks::<3>().0, mat.surface_flags, contents);
         }
         // `CM_LoadMap` builds every patch whatever its contents; the trace's
         // mask test skips the ones it does not meet.
@@ -1013,6 +996,7 @@ impl CollisionWorld {
             model_tris: model_tris_out,
             tris_surf: t.surf,
             tris_contents: t.contents,
+            terrain: t.terrain,
             patches,
             nodes,
             models_root,
@@ -1259,7 +1243,7 @@ impl CollisionWorld {
             Some(Prim::Tri(t)) => self.tris_contents[t as usize],
             Some(Prim::Patch(p)) => self.patches[p as usize].content_flags,
             Some(Prim::Model(t)) => self.model_tris[t as usize].contents,
-            Some(Prim::Body(_)) | None => 0,
+            Some(Prim::Terrain(_) | Prim::Body(_)) | None => 0,
         }
     }
 
@@ -1482,19 +1466,15 @@ impl CollisionWorld {
         let mut scratch = Vec::new();
         let capsule = Capsule::of(mins, maxs);
         if !self.nodes.is_empty() {
-            self.trace_node(
-                0,
-                start,
-                end,
-                mins,
-                maxs,
-                capsule,
-                mask,
-                statics,
-                skip,
-                &mut trace,
-                &mut scratch,
-            );
+            // Brushes, then the partitions: retail's leaf walk clips a
+            // leaf's brushes before its partitions (`cod_lnxded` 0x8055608),
+            // and a contact at fraction 0 ends the walk, so a box resting on
+            // a brush floor beside a patch reads the floor.
+            for brushes in [true, false] {
+                self.trace_node(
+                    0, start, end, mins, maxs, capsule, mask, statics, skip, brushes, &mut trace,
+                );
+            }
         }
         self.trace_posed(
             start,
@@ -1507,7 +1487,7 @@ impl CollisionWorld {
             &mut trace,
             &mut scratch,
         );
-        trace.endpos = start + (end - start) * trace.fraction;
+        trace.endpos = cm_endpos(start, end, mins, maxs, trace.fraction);
         trace
     }
 
@@ -1525,10 +1505,10 @@ impl CollisionWorld {
         mask: u32,
         statics: bool,
         skip: Option<usize>,
+        brushes: bool,
         trace: &mut Trace,
-        scratch: &mut Vec<(Vec3, f32)>,
     ) {
-        if !statics && i == self.models_root {
+        if !statics && i == self.models_root || brushes && i == self.models_root {
             return;
         }
         let node = &self.nodes[i as usize];
@@ -1541,10 +1521,17 @@ impl CollisionWorld {
         if node.count > 0 {
             let first = node.first as usize;
             for (prim, plo, phi) in &self.prims[first..first + node.count as usize] {
+                // Retail's leaf walk stops once the fraction reaches 0
+                // (`cod_lnxded` 0x8055608, 0x8055fe0).
+                if trace.fraction <= 0.0 {
+                    return;
+                }
                 // The node test once more per prim: a leaf's box is the union
                 // of up to four, and setting up a brush's planes costs far
                 // more than this.
-                if !(lo.cmple(*phi).all() && hi.cmpge(*plo).all()) {
+                if !(lo.cmple(*phi).all() && hi.cmpge(*plo).all())
+                    || brushes != matches!(prim, Prim::Brush(_))
+                {
                     continue;
                 }
                 match *prim {
@@ -1557,31 +1544,19 @@ impl CollisionWorld {
                         {
                             continue;
                         }
-                        expand_brush(&brush.planes, capsule.radius, scratch);
-                        clip_segment(
+                        let sweep = capsule_sweep(start, end, mins, maxs);
+                        clip_brush_capsule(
                             trace,
-                            start + capsule.center,
-                            end + capsule.center,
-                            scratch,
+                            &sweep,
+                            &brush.planes,
                             brush.surface_flags,
-                            capsule.offset,
                             *prim,
                         );
                     }
-                    Prim::Tri(t) => {
-                        if self.tris_contents[t as usize] & mask == 0 {
-                            continue;
-                        }
-                        clip_sphere_triangle(
-                            trace,
-                            start + capsule.center,
-                            end + capsule.center,
-                            &self.tris[t as usize],
-                            capsule,
-                            self.tris_surf[t as usize],
-                            *prim,
-                        );
+                    Prim::Terrain(p) => {
+                        self.clip_terrain(p, start, end, mins, maxs, capsule, mask, trace);
                     }
+                    Prim::Tri(_) => unreachable!("the BVH holds partitions"),
                     Prim::Patch(p) => {
                         let patch = &self.patches[p as usize];
                         if patch.content_flags & mask == 0 {
@@ -1612,12 +1587,65 @@ impl CollisionWorld {
         } else {
             (node.second, node.first)
         };
-        self.trace_node(
-            near, start, end, mins, maxs, capsule, mask, statics, skip, trace, scratch,
-        );
-        self.trace_node(
-            far, start, end, mins, maxs, capsule, mask, statics, skip, trace, scratch,
-        );
+        for n in [near, far] {
+            self.trace_node(
+                n, start, end, mins, maxs, capsule, mask, statics, skip, brushes, trace,
+            );
+        }
+    }
+
+    /// Terrain partition `part` against a sweep (docs/research/cod11-mantle.md,
+    /// "Terrain is a swept sphere, a patch is a facet"): retail's capsule clip
+    /// (`terrain.rs`), or for a point trace its point arm (0x8052894) on each
+    /// triangle. A trace already at fraction 0 has stopped, as retail's tree
+    /// walk does.
+    #[allow(clippy::too_many_arguments)]
+    fn clip_terrain(
+        &self,
+        part: u32,
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+        capsule: Capsule,
+        mask: u32,
+        trace: &mut Trace,
+    ) {
+        let tp = self.terrain.parts[part as usize];
+        let first = tp.first as usize;
+        if self.tris_contents[first] & mask == 0 || trace.fraction <= 0.0 {
+            return;
+        }
+        let surface_flags = self.tris_surf[first];
+        if capsule.radius == 0.0 {
+            for t in tp.first..tp.first + tp.count {
+                if self.terrain.degenerate(t) {
+                    continue;
+                }
+                let mt = ModelTri {
+                    tri: self.tris[t as usize],
+                    contents: 0,
+                    surface_flags,
+                };
+                clip_segment_model(
+                    trace,
+                    start + capsule.center,
+                    end + capsule.center,
+                    &mt,
+                    Prim::Tri(t),
+                );
+            }
+            return;
+        }
+        let sweep = capsule_sweep(start, end, mins, maxs);
+        if let Some(h) = self.terrain.clip_capsule(&tp, &sweep, trace.fraction) {
+            trace.fraction = h.fraction;
+            trace.enter = h.fraction + crate::terrain::FRACTION_EPS;
+            trace.normal = Vec3::from_array(h.normal);
+            trace.surface_flags = surface_flags;
+            trace.hit = Some(Prim::Tri(h.tri));
+            trace.startsolid |= h.startsolid;
+        }
     }
 
     /// A one-line name for what a trace hit, for reports.
@@ -1634,6 +1662,7 @@ impl CollisionWorld {
                 "terrain tri {t} sf={:#x} cf={:#x}",
                 self.tris_surf[t as usize], self.tris_contents[t as usize]
             ),
+            Prim::Terrain(p) => format!("terrain partition {p}"),
             Prim::Patch(p) => {
                 let patch = &self.patches[p as usize];
                 format!(
@@ -2534,58 +2563,62 @@ mod tests {
             hit: None,
             enter: -1.0,
         };
-        let mut scratch = Vec::new();
         let capsule = Capsule::of(mins, maxs);
-        for (prim, _, _) in &world.prims {
-            match *prim {
-                Prim::Brush(i) => {
-                    let brush = &world.brushes[i as usize];
-                    expand_brush(&brush.planes, capsule.radius, &mut scratch);
-                    clip_segment(
-                        &mut trace,
-                        start + capsule.center,
-                        end + capsule.center,
-                        &scratch,
-                        brush.surface_flags,
-                        capsule.offset,
-                        *prim,
-                    );
+        let sweep = capsule_sweep(start, end, mins, maxs);
+        for brushes in [true, false] {
+            for (prim, _, _) in &world.prims {
+                if trace.fraction <= 0.0 || brushes != matches!(prim, Prim::Brush(_)) {
+                    continue;
                 }
-                Prim::Tri(i) => {
-                    clip_sphere_triangle(
-                        &mut trace,
-                        start + capsule.center,
-                        end + capsule.center,
-                        &world.tris[i as usize],
-                        capsule,
-                        0,
-                        *prim,
-                    );
+                match *prim {
+                    Prim::Brush(i) => {
+                        let brush = &world.brushes[i as usize];
+                        clip_brush_capsule(
+                            &mut trace,
+                            &sweep,
+                            &brush.planes,
+                            brush.surface_flags,
+                            *prim,
+                        );
+                    }
+                    Prim::Terrain(i) => {
+                        world.clip_terrain(
+                            i,
+                            start,
+                            end,
+                            mins,
+                            maxs,
+                            capsule,
+                            u32::MAX,
+                            &mut trace,
+                        );
+                    }
+                    Prim::Tri(_) => unreachable!(),
+                    Prim::Patch(i) => {
+                        clip_patch(
+                            &mut trace,
+                            start,
+                            end,
+                            capsule,
+                            &world.patches[i as usize],
+                            *prim,
+                        );
+                    }
+                    Prim::Model(i) => {
+                        clip_segment_model(
+                            &mut trace,
+                            start,
+                            end,
+                            &world.model_tris[i as usize],
+                            *prim,
+                        );
+                    }
+                    // Never stored in world.prims; only movetrace.rs constructs it.
+                    Prim::Body(_) => unreachable!(),
                 }
-                Prim::Patch(i) => {
-                    clip_patch(
-                        &mut trace,
-                        start,
-                        end,
-                        capsule,
-                        &world.patches[i as usize],
-                        *prim,
-                    );
-                }
-                Prim::Model(i) => {
-                    clip_segment_model(
-                        &mut trace,
-                        start,
-                        end,
-                        &world.model_tris[i as usize],
-                        *prim,
-                    );
-                }
-                // Never stored in world.prims; only movetrace.rs constructs it.
-                Prim::Body(_) => unreachable!(),
             }
         }
-        trace.endpos = start + (end - start) * trace.fraction;
+        trace.endpos = cm_endpos(start, end, mins, maxs, trace.fraction);
         trace
     }
 
