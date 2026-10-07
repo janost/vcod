@@ -91,6 +91,11 @@ built from the bytes up, this might be your kind of thing.
   progress bar, in retail's fonts, fixed-width slots included.
 - Follows the server through a map change: loading screen, downloads, new
   map.
+- Has retail's drop-down console on `` ` `` / `~`: the log, chat and server
+  prints scroll in it, and it takes `connect`, `disconnect`, `name`, `bind`
+  and the rest of the commands under [Console](#console). Binds and archived
+  cvars persist in `main/vcod_mp.cfg`. Losing the server or failing a load
+  drops you to the console instead of closing the window.
 
 I have played it against my own server and against the retail Linux 1.1d
 dedicated server running locally. I have spectated public servers with it. I
@@ -184,8 +189,9 @@ how something looks or sounds still needs a human squinting at a screen.
 The list of what retail does and vcod doesn't is longer than this. These are
 the gaps you're most likely to run into.
 
-**No front end.** No main menu, no server browser, no options screen, no
-console, no key rebinding. You get command-line flags and the binds below.
+**No front end.** No main menu, no server browser, no options screen. You get
+command-line flags and the console: `connect`, binds and a few client cvars
+(see [Console](#console)).
 
 **Client**
 
@@ -324,7 +330,8 @@ vcod --connect <ip:port> --team axis --weapon kar98k_mp
 vcod mp_pavlov --game-dir /path/to/CallOfDuty
 ```
 
-- The first positional argument is the map name (case-insensitive).
+- The first positional argument is the map name (case-insensitive). With no
+  map and no `--connect`, the window opens on a full-screen console.
 - `--list` prints every `.bsp` in the search path instead of opening a window.
 - `--mod-dir` picks which subdirectory's pk3s to index: `main` (default) or
   `uo` for United Offensive. Only one directory mounts at a time, so a UO map
@@ -335,7 +342,7 @@ vcod mp_pavlov --game-dir /path/to/CallOfDuty
 - `--connect ip:port` joins a server. To find one, the master server at
   `codmaster.activision.com:20510` still answers `getservers 1 full empty`.
 - `--team <allies|axis|autoassign|spectator>` answers the team menu without
-  showing it. `--weapon <name>` does the same for the weapon menu, with a
+  showing it, for `--connect` and for every console `connect`. `--weapon <name>` does the same for the weapon menu, with a
   weapon file name such as `m1carbine_mp`. If the menu refuses the weapon, it
   reopens and you pick by hand.
 - `--debug-overlay` (or F3 at runtime) shows frame time, draw stats, net and
@@ -397,8 +404,9 @@ Click to capture the mouse, Esc to release it, mouse to look around.
 
 ### Playing (`--connect`)
 
-The binds follow retail's `config_mp.cfg`, except the right mouse button,
-which retail binds to `toggle cl_run` and vcod uses for the sight.
+These are the default binds, the stock `config_mp.cfg` ones with the sight on
+the right mouse button as `+speed`. The console's `bind` changes them; `bind
+MOUSE2 "toggle cl_run"` makes the sight a toggle, as retail's option does.
 
 | Input | Action |
 |---|---|
@@ -447,10 +455,48 @@ D still move.
 | R | Reload |
 | 1-7 | Weapon: colt, thompson, mp40, mp44, enfield, kar98k, scoped kar98k |
 
+### Console
+
+`` ` `` or `~` drops it down, and again (or Esc) puts it away. While it is down
+the game gets no keys and the mouse is released. Up / Down walk the last 32
+lines, Tab completes a command or cvar name, Page Up / Page Down and the wheel
+scroll. In game, a line without a leading `/` or `\` is said as chat, as in
+retail; anything else runs as a command. Several commands go on one line
+separated by `;`.
+
+| Command | Does |
+|---|---|
+| `connect <ip:port>` | Leave any server and join this one |
+| `disconnect` | Leave the server for the console |
+| `reconnect` | Join the last server again |
+| `quit` | Leave and close the window |
+| `say <text>`, `say_team <text>` | Chat to everyone / your team |
+| `cmd <text>` | Send `<text>` to the server as a client command |
+| `bind <key> [command]` | Bind a key, or show its bind; `unbind <key>`, `unbindall`, `bindlist` |
+| `set`, `seta <cvar> <value>` | Set a cvar; `seta` also saves it. `<cvar>` alone prints it, `<cvar> <value>` sets it |
+| `toggle <cvar> [values...]` | Flip a cvar between 0 and 1, or step through the values |
+| `cvarlist`, `cmdlist` | List the cvars and commands, optionally by prefix |
+| `echo`, `clear` | Print a line; empty the scrollback |
+
+Any other command goes to the server while connected, as retail forwards it
+(`callvote`, `vote yes`, `kill`, `follownext`). Bindable commands are the
+stock ones: `+forward`, `+back`, `+moveleft`, `+moveright`, `+gostand`,
+`gocrouch`, `goprone`, `+leanleft`, `+leanright`, `+attack`, `+speed` (the
+sight), `+melee`, `+activate`, `+reload`, `weaponslot
+<primary|primaryb|pistol|grenade>`, `weapnext`, `weapprev`, `+scores`,
+`messagemode`, `messagemode2`, `toggleconsole`. Key names are retail's
+(`MOUSE1`, `MWHEELUP`, `CTRL`, `SPACE`, `KP_ENTER`, letters and digits).
+
+The client's cvars are `name`, `cl_run` (1: the sight key aims while held, 0:
+while released) and `scr_conspeed` (how fast the console slides). Binds only
+act while connected; fly and walk mode keep their fixed keys. Esc, M (the
+script menu), F3 and F4 are fixed.
+
 ### Everywhere
 
 | Input | Action |
 |---|---|
+| `` ` `` / ~ | Console |
 | F3 | Toggle the debug overlay |
 | F4 | Culling: on, locked (freeze the visible set), off |
 
