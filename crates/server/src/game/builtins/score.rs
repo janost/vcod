@@ -4,6 +4,7 @@
 //! back in that order.
 
 use crate::game::host::GameHost;
+use vcod_common::net::protocol::{CS_ALLIES_SCORE, CS_AXIS_SCORE};
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
@@ -25,8 +26,8 @@ fn team(cx: &Cx, v: Option<&Value>) -> Result<(usize, usize), ErrorKind> {
         return Err(ErrorKind::BadType("a team score takes a team string"));
     };
     match cx.resolve(*s) {
-        "axis" => Ok((0, 5)),
-        "allies" => Ok((1, 6)),
+        "axis" => Ok((0, CS_AXIS_SCORE)),
+        "allies" => Ok((1, CS_ALLIES_SCORE)),
         _ => Err(ErrorKind::BadType(
             "illegal team string: must be allies, or axis",
         )),

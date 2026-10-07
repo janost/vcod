@@ -51,7 +51,7 @@ const MAX_HUD_GLYPHS: usize = 1024;
 /// `fx::sim::MAX_PARTICLES` + `fx::sim::MAX_DECALS`.
 const MAX_FX_QUADS: usize = 2048 + 256;
 
-const MAX_HUD_QUADS: usize = 4096;
+const MAX_HUD_QUADS: usize = 16384;
 
 /// Per-vertex rgba lets particles, decals and tracers share one pipeline.
 #[repr(C)]

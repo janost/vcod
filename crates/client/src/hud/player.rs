@@ -16,9 +16,7 @@ use vcod_common::pmove::weapon::{SpreadStance, hip_spread_min};
 use vcod_common::weapon::{SightDirection, WeaponDef};
 
 /// Hint strings (`serverCursorHintString`) index configstrings from here.
-pub use vcod_common::net::protocol::CS_HINT_STRINGS;
-/// `northyaw`, the compass's north in world yaw degrees.
-pub const CS_NORTHYAW: usize = 11;
+pub use vcod_common::net::protocol::{CS_HINT_STRINGS, CS_NORTHYAW};
 
 /// `cg_crosshairAlpha` and `cg_crosshairAlphaMin` at their cvar-table defaults.
 const CROSSHAIR_ALPHA: f32 = 1.0;

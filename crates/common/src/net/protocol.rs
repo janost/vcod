@@ -96,17 +96,92 @@ pub const CLIENTNUM_BITS: u32 = 6;
 /// (`ps.clientNum` gets 8), so more than 64 would collide silently.
 pub const MAX_CLIENTS: usize = 1 << CLIENTNUM_BITS;
 
+/// Serverinfo, `Cvar_InfoString(CVAR_SERVERINFO)`; `g_gametype` is a key.
+pub const CS_SERVERINFO: usize = 0;
+/// Systeminfo, `Cvar_InfoString_Big(CVAR_SYSTEMINFO)`, `sv_serverid` included.
+pub const CS_SYSTEMINFO: usize = 1;
+/// `setTeamScore("axis", ...)` writes here, "allies" to the next slot
+/// (docs/research/cod11-hud-protocol.md 5, "Which team score is which").
+pub const CS_AXIS_SCORE: usize = 5;
+pub const CS_ALLIES_SCORE: usize = 6;
+/// `northyaw`, the compass's north in world yaw degrees, copied verbatim by
+/// `SP_worldspawn` (0x61cec).
+pub const CS_NORTHYAW: usize = 11;
+/// `level.startTime`, server-clock ms.
+pub const CS_LEVEL_START_TIME: usize = 13;
+
+/// The mirrored server cvars: names here, values in the next block at the
+/// same offset; the client `Cvar_Set`s the pairs.
+pub const CS_CVAR_NAMES: std::ops::RangeInclusive<usize> = 140..=203;
+pub const CS_CVAR_VALUES: std::ops::RangeInclusive<usize> = 204..=267;
+
 /// `CS_SOUNDS`: a sound-alias index (`EV_SOUND_ALIAS`'s parm, `loopSound`,
 /// `s <idx>`) counts from here, so the alias range's first slot travels as 1
 /// and 0 means no alias (docs/protocol-1.1.md, `s <idx>`).
-pub const CS_SOUNDS: usize = 524;
+pub const CS_SOUNDS: usize = CsRange::SoundAlias.bounds().0 - 1;
+/// A hudelem's `text`/`label` index counts from here, 1-based like
+/// `CS_SOUNDS`.
+pub const CS_LOCALIZED: usize = CsRange::Localized.bounds().0 - 1;
+/// A hudelem's `shaderIndex` and the objective icons count from here, 1-based.
+pub const CS_SHADERS: usize = CsRange::Shader.bounds().0 - 1;
 /// The first of the 32 hint-string configstrings `G_GetHintStringIndex`
 /// (0x5a238) fills; `serverCursorHintString` indexes from here.
 pub const CS_HINT_STRINGS: usize = 1212;
 
+/// A configstring block the game module allocates into at runtime, each
+/// mirroring one engine indexer in `game.mp.i386.so`. The bounds are the
+/// ones those indexers walk; the addresses are in
+/// docs/research/clientstate-wire-format.md.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum CsRange {
+    StatusIcon,
+    HeadIcon,
+    Tag,
+    Model,
+    SoundAlias,
+    Effect,
+    Menu,
+    Localized,
+    Shader,
+}
+
+impl CsRange {
+    pub const ALL: [CsRange; 9] = [
+        CsRange::StatusIcon,
+        CsRange::HeadIcon,
+        CsRange::Tag,
+        CsRange::Model,
+        CsRange::SoundAlias,
+        CsRange::Effect,
+        CsRange::Menu,
+        CsRange::Localized,
+        CsRange::Shader,
+    ];
+
+    /// Inclusive.
+    pub const fn bounds(self) -> (usize, usize) {
+        match self {
+            CsRange::StatusIcon => (21, 28),
+            CsRange::HeadIcon => (29, 43),
+            CsRange::Tag => (109, 139),
+            CsRange::Model => (269, 523),
+            CsRange::SoundAlias => (525, 779),
+            CsRange::Effect => (781, 843),
+            CsRange::Menu => (1180, 1211),
+            CsRange::Localized => (1245, 1499),
+            CsRange::Shader => (1501, 1627),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn range_bases_sit_one_below_their_ranges() {
+        assert_eq!((CS_SOUNDS, CS_LOCALIZED, CS_SHADERS), (524, 1244, 1500));
+    }
 
     #[test]
     fn v1_tables_look_sane() {
