@@ -8,6 +8,7 @@
 //! [`BotView`] the server fills. Everything wire- and VM-shaped stays in
 //! `server.rs`.
 
+use crate::server::FRAME_MS;
 use vcod_common::net::msg::{self, NULL_USERCMD, UserCmd};
 
 /// Hip-shot range; beyond it a tap is noise anyway.
@@ -19,8 +20,6 @@ const RESPAWN_DELAY: u32 = 30;
 /// Ticks between use-press retries, and the press length: two ticks down,
 /// then 1 s of release, repeated until the script's poll catches one.
 const RESPAWN_RETRY: u32 = 20;
-/// The bot sends one cmd per tick; `sv_fps 20`.
-const TICK_MS: i32 = 50;
 /// Half the width of what a shot has to land in (chest or head), units; the
 /// fire cone is the angle it subtends at the target's range.
 const HIT_RADIUS: f32 = 10.0;
@@ -1252,7 +1251,7 @@ impl Bot {
             };
             // Rounded up, and never under two ticks: the bit has to come up
             // between taps for the next to read as a press.
-            let ticks = ((fire + TICK_MS - 1) / TICK_MS).max(2) as u32;
+            let ticks = ((fire + FRAME_MS - 1) / FRAME_MS).max(2) as u32;
             self.fire_cooldown = ticks + self.rand_below(3);
         }
     }
@@ -2223,7 +2222,7 @@ mod tests {
         let (mut bot, v) = engaged(9);
         let mut last = None;
         let mut count = 0;
-        let gap = (v.fire_time_ms / TICK_MS).max(2);
+        let gap = (v.fire_time_ms / FRAME_MS).max(2);
         for tick in 0..60 {
             if bot.think(&v).buttons & BUTTON_ATTACK != 0 {
                 if let Some(l) = last {

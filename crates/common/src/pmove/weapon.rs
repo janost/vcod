@@ -16,6 +16,7 @@
 //! is not disarmed every frame.
 
 use super::{PlayerState, PmEvent, PmInput, Stance};
+use crate::net::flags::ANIM_TOGGLEBIT;
 use crate::weapon::WeaponDef;
 
 /// `ps.weaponstate`, the twelve values of section 1.1.
@@ -58,8 +59,6 @@ pub const WEAP_RELOAD_END: i32 = 14;
 /// The pullback has no name in the binary's printer: it is index 17, past the
 /// seventeen the switch there covers (section 1.11).
 pub const WEAP_GRENADE_PULLBACK: i32 = 17;
-/// Bit 512, the restart toggle, is not part of the index (section 1.2).
-const ANIM_TOGGLEBIT: i32 = 512;
 
 /// `ps.ammo` and `ps.ammoclip` are 64 entries each, indexed by the weapon
 /// def's ammo and clip index and not by weapon (docs/protocol-1.1.md).
