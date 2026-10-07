@@ -12,12 +12,12 @@ use crate::net::trajectory::Trajectory;
 use glam::Vec3;
 
 /// `solid` of an entity the server linked as a brush model.
-const SOLID_BMODEL: i32 = 0xff_ffff;
+use crate::net::flags::SOLID_BMODEL;
 /// The `eFlags` bit that keeps a brush model out of the solid list
 /// (cgame 0x30028d9b); `SP_trigger_*` set it.
 const EF_NONSOLID_BMODEL: i32 = 0x2;
-const ET_MOVER: i32 = 5;
-const ET_SCRIPTMOVER: i32 = 8;
+use crate::net::flags::ET_MOVER;
+use crate::net::flags::ET_SCRIPTMOVER;
 /// The entity numbers the carry reads (cgame 0x3001baa0): not the world,
 /// not `ENTITYNUM_NONE`.
 const CARRIERS: std::ops::RangeInclusive<i32> = 1..=0x3fd;

@@ -26,12 +26,12 @@ use vcod_common::pmove::cmd::EventRing;
 use vcod_common::weapon::WeaponDef;
 use vcod_gsc::{Cx, EntId, ErrorKind, Value};
 
-/// `ET_MISSILE` (11.1).
-pub const ET_MISSILE: i32 = 4;
+pub use vcod_common::net::event_ids::EV_GRENADE_BOUNCE;
+pub use vcod_common::net::event_ids::EV_GRENADE_EXPLODE;
 /// `ET_GENERAL`, what the explode flips `eType` to (13.1).
-pub const ET_GENERAL: i32 = 0;
-pub const EV_GRENADE_BOUNCE: i32 = 177;
-pub const EV_GRENADE_EXPLODE: i32 = 178;
+pub use vcod_common::net::flags::ET_GENERAL;
+/// `ET_MISSILE` (11.1).
+pub use vcod_common::net::flags::ET_MISSILE;
 
 /// The `eFlags` bit `G_ExplodeMissile` ORs in (13.2). The two bounce bits
 /// `fire_grenade` sets, `0x03000000`, are above the 24 the `eFlags` netfield

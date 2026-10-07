@@ -40,11 +40,11 @@ fn alloc_alias(host: &mut GameHost, cx: &mut Cx, args: &[Value]) -> Result<usize
 /// `CS_SOUNDS`, what an `s <idx>` index counts from: the alias range starts
 /// one slot above it, so the first alias travels as 1
 /// (docs/protocol-1.1.md, `s <idx>`).
-const CS_SOUNDS: usize = 524;
+use vcod_common::net::protocol::CS_SOUNDS;
 
 /// `EV_SOUND_ALIAS`, what `G_PlaySoundAlias` appends
 /// (docs/research/cod11-sound-system.md, section 9).
-const EV_SOUND_ALIAS: i32 = 172;
+use vcod_common::net::event_ids::EV_SOUND_ALIAS;
 
 /// `<ent> playSound(alias)`: `G_SoundAliasIndex` -> `G_PlaySoundAlias`. The
 /// two rings that call chooses between are owned by different halves of the

@@ -26,7 +26,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
 
 /// `EV_OBITUARY`, the killfeed event
 /// (`docs/research/cod11-events-and-fx.md` section 1).
-const EV_OBITUARY: i32 = 201;
+use vcod_common::net::event_ids::EV_OBITUARY;
 
 /// `self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags,
 /// sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc)` (`.so` 0x4376c), where a
