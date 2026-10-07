@@ -29,20 +29,14 @@ fn main() {
         let t = Instant::now();
         let g = NavGraph::build(&world.collision, &seeds, &world.hazards);
         let ms = t.elapsed().as_secs_f64() * 1000.0;
-        // The component holding the most spawns, and how many it holds.
-        let comp = g.components();
-        let nodes: Vec<u32> = seeds.iter().filter_map(|s| g.nearest(*s)).collect();
-        let mut count = std::collections::BTreeMap::new();
-        for n in &nodes {
-            *count.entry(comp[*n as usize]).or_insert(0) += 1;
-        }
-        let reach = count.values().max().copied().unwrap_or(0);
+        let on = seeds.iter().filter(|s| g.nearest(**s).is_some()).count();
+        let reach = g.spawns_in_one_component(&world.collision, &seeds);
         println!(
             "{map}: spacing {}, {} nodes, {} edges, {ms:.0} ms, spawns {}/{} on graph, {reach} in one component",
             g.spacing,
             g.len(),
             g.edge_count(),
-            nodes.len(),
+            on,
             seeds.len(),
         );
     }

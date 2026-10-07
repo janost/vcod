@@ -71,8 +71,9 @@ const FLOOD_WINDOW_MS: i32 = 800;
 /// How often a bot re-runs its enemy search (range gate + LOS traces).
 /// The cached verdict is at most this stale.
 const ENEMY_REFRESH_MS: i32 = 100;
-/// A* runs a tick may spend across all bots.
-const BOT_PLANS_PER_TICK: u32 = 2;
+/// A* nodes a tick may expand across all bots; a plan starts only while
+/// some are left (bot-navigation.md, section 3).
+const BOT_PLAN_BUDGET: u32 = 4000;
 /// A retrieval objective as the bots see it, with its carrier's slot.
 type ReObjCarried = (crate::bots::ReObjView, Option<usize>);
 /// The tick pace (`1000 / sv_fps`), also the dt floor a fresh sim starts from.
@@ -235,6 +236,11 @@ pub(crate) enum Attack {
 /// How long a fall holds off `P_DamageFeedback`'s `EV_PAIN`: `ClientEvents`
 /// stores `level.time + 200` into `pain_debounce_time` (player-clip doc 8.8).
 const FALL_PAIN_DEBOUNCE_MS: i32 = 200;
+
+/// The server generator's next value, 0..2^31.
+fn rand_from(rng: &mut u64) -> i32 {
+    (vcod_common::rng::xorshift(rng) >> 33) as i32 & 0x7fff_ffff
+}
 
 /// `ClientEvents`' fall damage before `G_Damage`'s location multiplier: the
 /// landing pain's percent of `max_health` (`ps.stats[2]`), 1.1 past 99,
@@ -1256,7 +1262,7 @@ impl Server {
     /// `(rand() << 16) ^ rand()` wraps into the sign bit and challenges come
     /// out signed like retail's.
     fn rand(&mut self) -> i32 {
-        (vcod_common::rng::xorshift(&mut self.rng) >> 33) as i32 & 0x7fff_ffff
+        rand_from(&mut self.rng)
     }
 
     pub fn configstring(&self, i: usize) -> &str {
@@ -2524,18 +2530,34 @@ impl Server {
         }
 
         // Pass 3: the tick's waypoint toward each brain's goal, then its
-        // cmd. A* runs are capped per tick across all bots; one that misses
-        // out wanders for a tick and asks again.
+        // cmd. A* is capped per tick across all bots; one that misses out
+        // wanders for a tick and asks again.
         let mut moves: Vec<(usize, UserCmd)> = Vec::new();
-        let mut plans = BOT_PLANS_PER_TICK;
+        let mut budget = BOT_PLAN_BUDGET;
         for (slot, mut view) in views {
             let Some(goal) = self.bots.get(&slot).map(|b| b.goal(&view)) else {
                 continue;
             };
             if let Some(g) = self.nav.clone() {
                 let mut follower = self.bot_paths.remove(&slot).unwrap_or_default();
-                let mut rand = || self.rand();
-                view.waypoint = follower.waypoint(&g, goal, view.origin, &mut plans, &mut rand);
+                let ps = self.clients[slot]
+                    .as_ref()
+                    .and_then(|c| c.sim.as_ref())
+                    .map(|sim| sim.ps);
+                let still = ps.as_ref().is_some_and(crate::nav::ready_to_leap);
+                // The generator alone, so the world stays readable.
+                let rng = &mut self.rng;
+                let mut rand = || rand_from(rng);
+                let at = view.origin;
+                let world = self.world.as_ref().map(|w| &w.collision);
+                view.waypoint =
+                    follower.waypoint(&g, world, goal, at, still, &mut budget, &mut rand);
+                view.jump = follower.jumping(&g);
+                view.leap = follower.leaping(&g);
+                view.stop = follower.holding(&g);
+                view.lip = view.jump
+                    && matches!((self.world.as_ref(), ps), (Some(w), Some(ps))
+                        if crate::nav::lip_ahead(&w.collision, &ps));
                 self.bot_paths.insert(slot, follower);
             }
             if let Some(bot) = self.bots.get_mut(&slot) {
@@ -2695,6 +2717,7 @@ impl Server {
             sniper: def.is_some_and(|d| d.ads_overlay_shader.is_some()),
             ads_frac: sim.ps.weapon_pos_frac,
             speed: sim.ps.velocity.truncate().length(),
+            velocity: sim.ps.velocity.into(),
             dead: sim.dead,
             playing: sim.pm_type == crate::spectate::PmType::Normal && !sim.dead,
             enemy,
@@ -2709,6 +2732,11 @@ impl Server {
             }),
             linked: sim.link_to.is_some(),
             on_ladder: sim.ps.on_ladder,
+            on_ground: sim.ps.on_ground,
+            jump: false,
+            leap: false,
+            lip: false,
+            stop: false,
             pistol,
             sd: None,
             re: None,
