@@ -427,15 +427,14 @@ impl ObjectTable {
         }
         client[pers_index()] = Value::Array(pers_id);
         let mut engine = vec![Value::Undefined; engine_slot_count()];
-        // A client is `classname` "player" from the moment it exists, because
-        // that is how every stock script reaches the players:
-        // `getentarray("player", "classname")` in `bel.gsc` and the spawn
-        // logic. Without it `_spawnlogic::getSpawnpoint_DM` finds nobody to
-        // score against and quietly degrades to `getSpawnpoint_Random`.
+        // `ClientConnect`'s `G_InitGentity` names it "noclass" (0x6783c);
+        // `ClientSpawn` makes it "player" (0x4271d, `client_spawn` here), so
+        // `getentarray("player", "classname")` skips a client still on the
+        // connect callback (docs/research/cod11-gametypes-re-bel.md, 8.3).
         if let crate::game::fields::Route::Engine { slot: cs, .. } =
             crate::game::fields::route_entity("classname")
         {
-            engine[cs] = Value::String(cx.intern_exact("player"));
+            engine[cs] = Value::String(cx.intern_exact("noclass"));
         }
         self.ents[slot] = Some(GEntity {
             engine,

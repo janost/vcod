@@ -1,6 +1,7 @@
 //! CoD 1.1 network client, headless (no wgpu/winit types). Wire reference:
 //! docs/protocol-1.1.md.
 
+pub mod capture;
 pub mod connectionless;
 pub use connectionless::info_value_for_key;
 pub mod download;

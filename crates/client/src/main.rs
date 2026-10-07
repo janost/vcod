@@ -313,6 +313,17 @@ struct Args {
     /// fixture.
     #[arg(long)]
     probe_compass: bool,
+    /// With `--net-probe` and `--probe-team`: the scripted gametype capture.
+    /// Presses use as the gsc probe's `setClientCvar("probe_use", ...)` says
+    /// (`tap`, `hold`, `0`), keeps the view the server set, sends `score`
+    /// every 2 s and writes every serverCommand and every snapshot whose
+    /// HUD, objectives, roster or players moved to
+    /// crates/server/tests/fixtures/gametypes/<map>-<gametype>-<ROLE>.txt,
+    /// the gametype without its `probe_` prefix. Pairs with
+    /// `client-probes/probe_re` and `probe_bel`; the fixture header carries
+    /// the recipe. Refuses to replace a fixture without --overwrite-fixture.
+    #[arg(long, value_name = "ROLE")]
+    save_scripted: Option<String>,
     /// Walk the --probe-slope route and write every usercmd sent and every
     /// snapshot's movement fields to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt,
@@ -805,6 +816,7 @@ fn main() -> Result<()> {
                 ride: args.probe_ride,
                 items: args.probe_items,
                 compass: args.probe_compass,
+                scripted: args.save_scripted.clone(),
             },
             args.capture_tag.clone(),
             args.overwrite_fixture,

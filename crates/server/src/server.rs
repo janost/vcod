@@ -4330,6 +4330,7 @@ impl Server {
                 if let Some(string) = string {
                     sim.cursor_hint_string = string;
                 }
+                (sim.head_icon, sim.head_icon_team) = rt.head_icon(slot);
                 // `BG_PlayerAnimation` (0x41486) runs after this slot's
                 // aim trace: a higher slot's trace meets this frame's
                 // pose, a lower one's met the last (combat doc 16.1).
@@ -5866,10 +5867,11 @@ mod tests {
         let huff = Huffman::new();
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
+        // The clients never spawn, so they are still G_InitGentity's "noclass".
         install_script(
             &mut sv,
             crate::game::script::ScriptRuntime::for_test(
-                "main() { wait 0.5; p = getentarray(\"player\", \"classname\"); \
+                "main() { wait 0.5; p = getentarray(\"noclass\", \"classname\"); \
              p[0] playlocalsound(\"MP_announcer_allies_win\"); }",
             ),
         );
@@ -6996,13 +6998,14 @@ mod tests {
     fn a_script_playsound_on_a_player_reaches_that_client_s_ring() {
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
+        // The clients never spawn, so they are still G_InitGentity's "noclass".
         install_script(
             &mut sv,
             crate::game::script::ScriptRuntime::for_test(
                 "main() { \
                    while (1) { \
                      wait 0.05; \
-                     players = getentarray(\"player\", \"classname\"); \
+                     players = getentarray(\"noclass\", \"classname\"); \
                      if (players.size > 0) { \
                        players[0] playsound(\"minefield_click\"); \
                        return; \
@@ -7255,12 +7258,13 @@ mod tests {
     /// back in the frame it was thrown stays held.
     #[test]
     fn a_frag_given_back_in_the_frame_it_was_thrown_stays_held() {
+        // The clients never spawn, so they are still G_InitGentity's "noclass".
         let script = "main() { \
                while (1) { \
                  wait 0.05; \
                  g = getentarray(\"grenade\", \"classname\"); \
                  if (g.size > 0) { \
-                   p = getentarray(\"player\", \"classname\"); \
+                   p = getentarray(\"noclass\", \"classname\"); \
                    p[0] giveweapon(\"fraggrenade_mp\"); \
                    logprint(\"regive\"); \
                    return; \
@@ -7499,13 +7503,14 @@ mod tests {
     fn the_minefield_kill_delay_is_half_to_one_second() {
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
+        // The clients never spawn, so they are still G_InitGentity's "noclass".
         install_script(
             &mut sv,
             crate::game::script::ScriptRuntime::for_test(
                 "main() { \
                    while (1) { \
                      wait 0.05; \
-                     players = getentarray(\"player\", \"classname\"); \
+                     players = getentarray(\"noclass\", \"classname\"); \
                      if (players.size > 0) { \
                        for (i = 0; i < 6; i++) { players[0] mine(); } \
                        return; \
@@ -8427,7 +8432,8 @@ mod tests {
             r#"main() { thread killer(2); thread killer(1); }
                killer(n) {
                    while (!isdefined(level.kill) || level.kill != n) wait 0.05;
-                   players = getentarray("player", "classname");
+                   // Never spawned, so still G_InitGentity's "noclass".
+                   players = getentarray("noclass", "classname");
                    for (i = 0; i < players.size; i++)
                        if (players[i] getentitynumber() == n)
                            victim = players[i];

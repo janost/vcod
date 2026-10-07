@@ -146,7 +146,11 @@ pub fn objective_icon(
     Ok(Value::Undefined)
 }
 
-/// `objective_position(index, origin)` (0x5e128).
+/// `objective_position(index, origin)` (0x5e128): the origin, after the
+/// same detach `objective_onentity` makes (0x5e179..0x5e197), so a record
+/// that was following an entity stays where it is put. `re.gsc`'s
+/// `retrieval_think` relies on it to pin a dropped objective's compass
+/// marker (docs/research/cod11-gametypes-re-bel.md, 7.4).
 pub fn objective_position(
     host: &mut GameHost,
     _cx: &mut Cx,
@@ -155,6 +159,7 @@ pub fn objective_position(
 ) -> Result<Value, ErrorKind> {
     let i = index_arg(args.first())?;
     let o = origin_arg(args.get(1))?;
+    host.objectives[i].ent_num = ENTITYNUM_NONE;
     host.objectives[i].set_origin(o);
     Ok(Value::Undefined)
 }
@@ -278,6 +283,25 @@ mod tests {
             assert_eq!(host.objectives[0].origin_f32(), [10.0, 0.0, 0.0]);
             // -0.5 goes through an integer, so the slot holds +0.0's bits.
             assert_eq!(host.objectives[0].origin[1], 0);
+        });
+    }
+
+    /// `re.gsc` puts a carried objective on its carrier and, once dropped,
+    /// pins it again with `objective_position`; the retail capture reads
+    /// `entNum` 1023 from that frame on.
+    #[test]
+    fn objective_position_detaches_the_entity() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let current = s(cx, "current");
+            objective_add(&mut host, cx, None, &[Value::Int(2), current]).unwrap();
+            let ent = host.ents.spawn(cx).unwrap();
+            objective_onentity(&mut host, cx, None, &[Value::Int(2), Value::Entity(ent)]).unwrap();
+            assert_eq!(host.objectives[2].ent_num, ent.0 as i32);
+            let args = [Value::Int(2), Value::Vector([1443.0, -965.7, -38.5])];
+            objective_position(&mut host, cx, None, &args).unwrap();
+            assert_eq!(host.objectives[2].ent_num, 0x3ff);
+            assert_eq!(host.objectives[2].origin_f32(), [1443.0, -965.0, -38.0]);
         });
     }
 

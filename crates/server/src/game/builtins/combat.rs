@@ -1124,7 +1124,8 @@ mod tests {
         const SCRIPT: &str = r#"
             main() {
                 wait 1;
-                players = getentarray("player", "classname");
+                // Never spawned, so still G_InitGentity's "noclass".
+                players = getentarray("noclass", "classname");
                 for (i = 0; i < players.size; i++)
                 {
                     if (players[i] getEntityNumber() == 1)
@@ -1300,7 +1301,8 @@ mod tests {
             main() {
                 level.log = "";
                 wait 1;
-                players = getentarray("player", "classname");
+                // Never spawned, so still G_InitGentity's "noclass".
+                players = getentarray("noclass", "classname");
                 for (i = 0; i < players.size; i++)
                     level.p[players[i] getEntityNumber()] = players[i];
                 level.p[0] setorigin((-290, 2430, -32));
@@ -1366,7 +1368,8 @@ mod tests {
                 level.log = "";
                 wait 0.1;
                 nade = spawn("script_origin", (0, 0, 0));
-                p = getentarray("player", "classname");
+                // Never spawned, so still G_InitGentity's "noclass".
+                p = getentarray("noclass", "classname");
                 p[0] finishPlayerDamage(nade, p[1], 500, 0, "MOD_GRENADE_SPLASH", "none", (0, 0, 0), (0, 0, 1), "none");
                 p[1] finishPlayerDamage(undefined, p[0], 500, 0, "MOD_RIFLE_BULLET", "none", (0, 0, 0), (0, 0, 1), "none");
             }

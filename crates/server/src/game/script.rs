@@ -1296,6 +1296,11 @@ impl ScriptRuntime {
         Some(self.field_str(ent, name))
     }
 
+    /// A client's `(iHeadIcon, iHeadIconTeam)` (`GameHost::head_icon`).
+    pub fn head_icon(&self, slot: usize) -> (i32, i32) {
+        self.host.head_icon(slot)
+    }
+
     /// One key out of a client's `.pers`, rendered the same way. Array keys
     /// are exact-cased, unlike the field name (`docs/research/
     /// cod11-gsc-language.md`), so the key is interned as written.
@@ -1383,6 +1388,12 @@ impl ScriptRuntime {
         let Some(name) = self.client_field(slot, "model") else {
             return 0;
         };
+        // A client that has never had `setModel` reads model configstring
+        // 0, "", which must not match the first unused model slot: retail
+        // sends 0 for a spectator who never spawned.
+        if name.is_empty() {
+            return 0;
+        }
         let (first, last) = crate::configstrings::CsRange::Model.bounds();
         self.host.configstrings[first..=last]
             .iter()
