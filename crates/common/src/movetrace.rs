@@ -78,6 +78,7 @@ impl<'a> MoveWorld<'a> {
         if t.fraction == 0.0 {
             return t;
         }
+        let world_fraction = t.fraction;
         let mover = Capsule::of(mins, maxs);
         // Broad phase: a body whose padded box misses the padded swept AABB
         // can't be hit, since the backoff only ever shortens a real hit and
@@ -96,7 +97,18 @@ impl<'a> MoveWorld<'a> {
             }
             clip_capsule(&mut t, start, end, mover, (maxs - mins).z * 0.5, b);
         }
-        t.endpos = start + (end - start) * t.fraction;
+        // `SV_Trace` recomputes the end point only when an entity cut the
+        // world's fraction, from the unshifted points in one rounding
+        // (`cod_lnxded` 0x8091a06-0x8091a51).
+        if t.fraction < world_fraction {
+            let f = f64::from(t.fraction);
+            let lerp = |s: f32, e: f32| (f64::from(s) + (f64::from(e) - f64::from(s)) * f) as f32;
+            t.endpos = Vec3::new(
+                lerp(start.x, end.x),
+                lerp(start.y, end.y),
+                lerp(start.z, end.z),
+            );
+        }
         t
     }
 

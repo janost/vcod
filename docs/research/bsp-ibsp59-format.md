@@ -368,7 +368,7 @@ vcod: `crates/common/src/patch.rs` ports the generation and the capsule, point a
 | `STEPSIZE` | 18 | `bg_local.h`; retail drops to 10 while PRONE (chooser @0x35045) |
 | `OVERCLIP` | 1.001 | `bg_local.h` |
 | `MIN_WALK_NORMAL` | 0.7 | `bg_local.h` (steeper than about 45.6 degrees is not ground) |
-| `MAX_CLIP_PLANES` | 5 | `bg_slidemove.c` |
+| `MAX_CLIP_PLANES` | 8 | game.mp 0x34a1c: `PM_SlideMove` clears the velocity once `numplanes > 7`; Q3 has 5, and four bumps from two starting planes never reach 8 |
 | `SURFACE_CLIP_EPSILON` | 0.125 | `qcommon/cm_local.h` |
 | `MAX_FRAME_MS` | 66 | `bg_pmove.c` pmove msec clamp |
 | `HALF_WIDTH` | 15 | CoD bbox `(-15, -15, 0)..(15, 15, height)` |

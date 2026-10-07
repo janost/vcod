@@ -1184,7 +1184,8 @@ the walking sphere hit at x 1057, where retail's step-up happened.
 
 vcod: `CollisionWorld::build` takes the terrain triangles from lumps 24-26
 (wound `cross(c - a, b - a)` out, Q3's `PlaneFromPoints`) and clips them
-with the sphere sweep above (`clip_sphere_triangle`), and builds each
+with the sphere sweep above (`crates/common/src/terrain.rs`, "The terrain
+clip's arithmetic" below), and builds each
 patch record into `CM_GeneratePatchCollide`'s facet grid, CoD's variant
 (`crates/common/src/patch.rs`, `bsp-ibsp59-format.md`, "Patch collision").
 No render soup collides: a brush face's or a decal's soup is no collision
@@ -1193,6 +1194,111 @@ a flat patch's middle points, so the 3x3 kerb wall is four facets, not the
 one the previous paragraph's Q3 reading has; each is bevelled the same way.
 The `startsolid` a terrain touch reads is kept, since retail's stance and
 prone checks read the same flag off the same trace.
+
+### The terrain clip's arithmetic
+
+All in `cod_lnxded`, read 2026-10-07 to close `fall_ab`'s last-digit rows.
+Each function runs on the x87; "stored" below is a float store, anything
+else stays on the 80-bit stack.
+
+VERIFIED, `CM_GenerateTerrainCollide` (0x8051b30), per partition:
+
+- Edges: each triangle's three edges in lump order, `(i, i+1)` with the
+  third corner as its opposite. An edge already listed is not added again;
+  the second triangle drops it when the listed opposite corner is in front
+  of the new triangle's plane (`(b - c) x (a - c)`, stored per component by
+  `CrossProduct` 0x80659cc, dotted on the stack with the stored `opp - c`)
+  and that cross product's squared length is under the larger squared
+  distance from the opposite corner to the edge's ends times 6.4e-9
+  (0x80cd2ec). The drop swaps the last edge into its slot (0x8051f2d).
+  INFERRED: the second test is the new triangle's area against its size,
+  so only a sliver drops an edge; two coplanar triangles keep the edge
+  they share.
+- Vertex records (16 bytes, a check count and the point) for the ends of
+  the kept edges, in their order. Edge records (0x38 bytes): the first
+  end, a frame `u, v, w` and the length. `w` is the edge, its length
+  stored and each component times the stack reciprocal stored
+  (`VectorNormalize` 0x8065a38); `u` is `PerpendicularVector` (0x80661fc:
+  the axis `w` is shortest along, projected off `w` on the stack by
+  0x806717c, stored, then normalized); `v` is `w x u`.
+- Triangle records (0x48 bytes): the plane from `PlaneFromPoints`
+  (0x8064fec: `(p2 - p0) x (p1 - p0)` on the stack, its length stored,
+  each component times the stack reciprocal stored, the distance
+  `p0 . n` stored); two barycentric planes `u` (+0x10) and `v` (+0x20)
+  with distances (0x80521a9-0x80523f4): `e1 = p1 - p0` and `e2 = p2 - p0`
+  stored and normalized, `k = 1 / (1 - (e1 . e2)^2)` on the stack, `u =
+  (e1 k - (e1 . e2) e2 k) / |e1|` and `v = (e2 k - (e1 . e2) e1 k) / |e2|`,
+  with the scaled edges stored but for `u`'s x term, and each distance
+  `p0 . u` stored; then the vertex record of each corner (+0x30) and the
+  edge record opposite each corner (+0x3c), 0 for none.
+- The facing flag (header byte 2): some normal's z under -0.001
+  (0x80cd2f0) and none over 0.001 (0x80cd2f4).
+
+VERIFIED, the capsule clip (0x8052a58):
+
+- The sphere's centre z is the stored start and end z moved by the stack
+  `halfheight - radius`, down unless the flag is set; the axis to the
+  other sphere is stored as twice that (or -2 times, 0x80cd304). The pad
+  `radius + 0.125` is stored.
+- Per triangle: the end's plane distance on the stack, `y + x + z` order;
+  a triangle is skipped unless it is under the pad and the start's is
+  larger. The front case's fraction `(d_s - pad) / (d_s - d_e)` stays on
+  the stack, and a triangle whose fraction is past the trace's is skipped;
+  the contact point is `start + delta * f` stored, where `delta` is
+  `CM_BoxTrace`'s (below), not the sphere's own; its barycentrics are
+  `p . u - u_d` and `p . v - v_d` on the stack, outside when `u + v > 1`,
+  `u < 0` or `v < 0` (bits 1, 2, 4).
+- Inside: the triangle's normal, and the fraction stored as `f - 1e-5`, or
+  `startsolid` at 0 for `f <= 1e-5`. Outside: for each bit clear the
+  corner's vertex record, for each bit set the opposite edge's record,
+  each once per trace by its check count. **Both sweep the pad, `radius +
+  0.125`, not the radius** (`[ebp-0x40]` at 0x8052efb and 0x8053150, the
+  divisor at 0x8053094 and 0x80531fa). A start inside either is
+  `startsolid` with the triangle's normal. A vertex's time is stored
+  (0x80531ce) and must be under the trace's fraction; its normal is
+  `(q + delta t) / pad` stored. An edge's `q . u` is stored through three
+  partial sums (0x8052e9d-0x8052eb6), `q . v` stays on the stack for the
+  separation and is stored for the rest, the time is stored (0x8053022),
+  and the hit must land within the edge's length.
+- **A vertex or edge hit tests the trace's fraction before it against
+  1e-5, not its own time** (0x8053221 compares `[ecx+0xc4]`, loaded at
+  0x8053028 / 0x80531d4): at or under, `startsolid` at 0; otherwise the
+  fraction is the time less 1e-5, which can come out negative.
+- Every `startsolid` returns from the partition (0x8052f75).
+
+VERIFIED, the leaf walk (0x8055608): a leaf's brushes, then its
+partitions, each once per trace by check count; it returns as soon as
+the fraction reads 0, and the tree walk (0x8055fe0) skips any node whose
+start fraction the trace's has reached. A partition's material word goes
+into the trace only when its clip lowered the fraction.
+
+VERIFIED, the brush clip (0x8054e90), capsule arm: the six axial sides
+first, the bounds' mins x, y, z then maxs x, y, z, the capsule taken as a
+box of half extents `(r, r, halfheight)` (`tw+0x10c`); then each other
+side against its distance plus the radius (stored, 0x805509d) with the
+start and end moved to the sphere nearer it and stored (0x80550ce-
+0x805512e). The enter fraction starts at 0 and is stored each time it
+grows (0x8054f9e); the leave fraction starts at the trace's fraction and
+stays on the stack. Q3's `startout` and `getout` rules otherwise, with no
+`SURFACE_CLIP_EPSILON` on the leave. The lead side's normal and the
+stored enter fraction replace the trace's outright.
+
+VERIFIED, `CM_BoxTrace` (0x8056310): `offset = (mins + maxs) / 2` stored;
+the shifted start stored; the delta is the shifted end on the stack less
+the stored shifted start, stored (0x80563d1-0x8056420), and its squared
+length stored. The end point is `start + fraction * delta` off the
+unshifted start, rounded once (0x8056887-0x80568c4), so a clear trace's
+end point differs from its end in the last bit, and a trace whose start
+equals its end moves by the shift's rounding. `SV_Trace` (0x80916f4)
+replaces it only when an entity cut the fraction, then with `start +
+(end - start) * fraction` rounded once (0x8091a06-0x8091a51).
+
+vcod: `terrain.rs` builds the records and runs the capsule clip in this
+order, `f64` for every stack value; `collision.rs` holds a partition as
+one BVH prim, clips brushes in the order above (`clip_brush_capsule`),
+walks the BVH twice, brushes then everything else, stops at fraction 0,
+and computes the end point as `CM_BoxTrace` does (`cm_endpos`). The leaf
+order inside each pass is the BVH's, not the BSP's.
 
 ### A submodel's brushes are its entity's
 

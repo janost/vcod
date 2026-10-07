@@ -156,6 +156,19 @@ fn main() -> Result<()> {
         log::error!("loading the map and gametype scripts: {e:#}");
         std::process::exit(1);
     }
+    // Ctrl-C runs `quit`, so the masters get their flatline; a second one
+    // exits at once.
+    let interrupted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let flag = interrupted.clone();
+        ctrlc::set_handler(move || {
+            if flag.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                std::process::exit(130);
+            }
+        })
+        .context("installing the Ctrl-C handler")?;
+    }
+    let mut quit_queued = false;
     let mut buf = vec![0u8; 65536];
     // A fixed schedule, not a sleep after each tick: `SV_Frame` runs one
     // game frame per `sv_fps` slice of wall time and catches up when a
@@ -173,6 +186,10 @@ fn main() -> Result<()> {
             };
             server.handle_packet(from, &buf[..n], now);
         }
+        if interrupted.load(std::sync::atomic::Ordering::Relaxed) && !quit_queued {
+            quit_queued = true;
+            server.push_console("quit");
+        }
         server.tick(now);
         if trace {
             stats.add(now.elapsed(), late);
@@ -188,6 +205,9 @@ fn main() -> Result<()> {
             if let Err(e) = sock.send_to(&pkt, to) {
                 log::debug!("send to {to}: {e}");
             }
+        }
+        if server.quit_requested() {
+            return Ok(());
         }
         next += FRAME;
         if trace && stats.ticks == 20 {

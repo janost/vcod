@@ -646,24 +646,59 @@ the end of each expression:
   is rounded.
 
 INFERRED: each is a single rounding of the exact value, which `pmove.rs`
-gets by computing in `f64` and storing to `f32`. VERIFIED, vcod measurement
-2026-10-06: with `msec / 1000` in place of the float thousandth, one row of
-the wider-bounds run (`ct` 22135) read a height 0.001 above retail's; with
-it, two rows in 630 (`ct` 21789 and 21985) still read 0.001 above, from
-the first frame of that drop on (a one-ulp lower height on any early frame
-of the replay puts both on retail's figure). Not found. VERIFIED, vcod
-measurement 2026-10-06, what it is not: the end point taken as two float
-roundings instead of one (both rows stay), and the trace's end point taken
-as `end` on a clear trace instead of `start + 1.0 * (end - start)` (no row
-moves). VERIFIED: `PM_SlideMove` reloads the averaged velocity from the
-playerstate for the end point (`time_left` at 0x3491c times ps+0x20 at
-0x34922), so no unrounded register value carries into it. The corpse run
-(8.11) shows the same last-digit flip on 12 of its rows, 9 of them on the
-corpse's terrain contact, where the creep is a few thousandths a frame.
-VERIFIED, vcod measurement 2026-10-07: the corpse rests on terrain
-triangle 2838 of `mp_carentan` (normal `(0, -0.0712, 0.9975)`), no patch,
-and neither retail's patch grid nor `PM_ClipVelocity`'s rounding moves
-any of those rows or the two free-fall rows.
+gets by computing in `f64` and storing to `f32`. VERIFIED, vcod
+measurement 2026-10-06: with `msec / 1000` in place of the float
+thousandth, one row of the wider-bounds run (`ct` 22135) read a height
+0.001 above retail's. VERIFIED: `PM_SlideMove` reloads the averaged
+velocity from the playerstate for the end point (`time_left` at 0x3491c
+times ps+0x20 at 0x34922), so no unrounded register value carries into
+it. VERIFIED, vcod measurement 2026-10-07: the corpse rests on terrain
+triangle 2838 of `mp_carentan` (normal `(0, -0.0712, 0.9975)`), no patch.
+
+VERIFIED, the rest of the move's roundings, all in `game.mp.i386.so`:
+
+- `AngleVectors` (0x3b228) takes each view angle to radians by the double
+  `pi / 180` (rodata 0x72930), stores it as a float, and stores its
+  `fsincos` results; the vectors are their products rounded once.
+- `PM_Friction` (0x2e460) stores the speed and keeps the drop and the
+  scale on the stack; each component is rounded once.
+- `PM_WalkMove` (0x2f258): the cmd scale (0x2e690) returned on the stack
+  and stored (0x2f2c4); `pml.forward` and `pml.right` with z zeroed,
+  clipped onto the ground plane inline and normalized each
+  (0x2f2c7-0x2f3db), combined by the stored cmd bytes and normalized again;
+  the wish speed is that stored length times the stored scale, on the
+  stack. The accelerate (0x2f4e4-0x2f57c) keeps the dot, the add and the
+  rate on the stack and rounds each component of `v + dir * speed` once.
+  The ground clip stores the speed first and scales the normalized clip by
+  it (0x2f5b8-0x2f6b3).
+- `PM_SlideMove` (0x347c0): `time_left - time_left * fraction` rounded once
+  (0x34a01); the planes compare against 0.99 as a float and 0.1 as a
+  double; the crease is `CrossProduct` (0x3d86c, one rounding per
+  component), `VectorNormalize` (0x3d8d8) and the dot on the stack, scaled
+  and rounded once; the velocity is cleared once `numplanes > 7`
+  (0x34a1c), where Q3 has 5.
+- The trace's end point is `CM_BoxTrace`'s (`cod11-mantle.md`, "The
+  terrain clip's arithmetic").
+
+VERIFIED, vcod measurement 2026-10-07: with `CM_BoxTrace`'s end point
+alone, both free-fall rows (`ct` 21789 and 21985) and the corpse run's
+three free-fall rows close; a clear move's end point is `start + delta`
+with `delta` taken between the box-centre-shifted points, and the 35-unit
+shift rounds the start whenever it crosses a power of two. With the
+terrain clip, the brush clip, the slide, the friction and the walk ported
+as above, every row of all four `fall_ab` fixtures matches retail to the
+printed thousandth: the corpse's nine terrain rows, the south wall's
+1815.128 rows and the pillar jitter included. Each was ruled in by
+measurement: the terrain port closed the corpse rows and left the walk's
+jitter phase three drops off retail's; the slide's float order and
+`MAX_CLIP_PLANES` brought the jitter's runs onto retail's but held a
+landed state retail never reads; the walk's wish and accelerate order
+closed that and the wall rows. INFERRED, from the slide's trace: the
+1815.128 rows are a cmd that ends drifting 0.0025 off the wall at the
+overclip's 0.159, and retail's 1815.125 rows are a cmd whose clip against
+the ground and then the wall turns the dot with the ground plane negative,
+which sends the velocity along the crease of the two, with no y; the sign
+of that dot is the last bit of the walk's velocity.
 
 VERIFIED: the first frame of a drop from rest takes the tail of
 `PmoveSingle` (0x34398-0x3443d): it moves `400 * t^2` while its end
@@ -1050,15 +1085,16 @@ The gates:
   and, from the first drop on, sends retail's own cmds (the fixture's `CMDS`
   timeline, shifted onto our clock), each ahead of the frame whose retail
   snapshot first counted it. It holds ours to every retail `FALL` line from
-  the second drop on (origin to one unit in the last printed decimal, 8.9,
-  the rest exactly: velocity, ground, `pm_flags`, `pm_time`, health, event
-  ring), to the probe's lines with only their times masked (and the resting
-  origin of the first drop and of the corpse), to the same landing parms,
-  to each damage against the share of its own parm, no `EV_PAIN`, and the
-  systeminfo bounds. `FALL_REPORT=1` prints both sides' parms. The walk
-  capture (8.5) is replayed the same way with each cmd's yaw word and
-  forward held, and held on its stunned rows: `commandTime`, velocity,
-  ground, `pm_flags`, `pm_time` and health exactly, origin within a unit.
+  the second drop on exactly (origin to the printed thousandth, 8.9,
+  velocity, ground, `pm_flags`, `pm_time`, health, event ring), to the
+  probe's lines with only their times masked (and the resting origin of
+  the first drop), to the same landing parms, to each damage against the
+  share of its own parm, no `EV_PAIN`, and the systeminfo bounds.
+  `FALL_REPORT=1` prints both sides' parms, `FALL_DUMP=<path>` every row
+  beside ours. The walk capture (8.5) is replayed the same way with each
+  cmd's yaw word and forward held, and held on every row from the second
+  drop to the fatal one, the event ring aside (its footsteps count from the
+  first drop's own cadence), and on every `after` line but the corpse's.
 
 ## 12. Divergences and not modelled
 
@@ -1135,14 +1171,17 @@ The gates:
     retail's two states to the printed thousandth, lifted at `(1231.152,
     1815.125, -26.263)` on 1023 at `0,0,1` and landed at `(1231.146,
     1815.125, -26.285)` on 1022 at `-1,0,0`; the soup clip had the lifted
-    one at -26.266. Ours alternates between them every snapshot, where
-    retail holds the lifted one for runs of up to ten. From the lifted
-    state the slide's second trace runs along the pillar plane the ground
-    clip just put the velocity on, and whether it meets that plane at
-    fraction 0 or passes to the street turns on the float end point's last
-    bit. Every stun row `fall_ab` compares is within 0.005 of retail's; the
-    rest are rows on the south wall at 1815.128 where retail reads
-    1815.125. The jitter's air frames are still not gated row by row.
+    one at -26.266. Closed 2026-10-07 (8.9): with the trace end point, the
+    terrain and brush clips, the slide and the walk rounded as retail
+    rounds them, ours holds the lifted state for retail's runs and every
+    row of the capture matches, the south wall's 1815.128 rows and the
+    jitter's air frames included; `fall_ab` gates them row by row.
+  - **The walk capture's corpse**, open. VERIFIED: after the fatal drop the
+    retail corpse reads `vel=134,-134,0` at t 53950 (`commandTime` 45800)
+    and rests at `(1034.14, 1815.13)` in the probe's `after` line; ours
+    stops at `(995.14, 1833.72)` with a zero velocity and has run cmds to
+    46564 by the same snapshot. Not investigated; `fall_ab` masks that one
+    `after` line.
   - **Fall damage, the two cvars and a dead player's landing**, closed
     2026-10-05 (8.8, 8.10). VERIFIED: `PmoveSingle`'s jump table (rodata
     0x70ce8) sends `pm_type` 6 to 0x34274 and on to the default arm, whose

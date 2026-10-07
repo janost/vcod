@@ -2528,6 +2528,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "ctrlc",
  "env_logger",
  "glam 0.34.0",
  "log",

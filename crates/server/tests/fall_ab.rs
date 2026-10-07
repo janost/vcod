@@ -11,10 +11,11 @@
 //! runs' first drops) on the real server, each cmd delivered ahead of the
 //! frame whose snapshot first reported it. Ours is held to:
 //!
-//! - every retail `FALL` line from the second drop on, `t` and `ct` shifted:
-//!   origin, velocity, ground, `pm_flags`, `pm_time`, health and the event
-//!   ring, so each landing's parm, stun and damage, exactly. The first drop
-//!   runs on our own cadence until its line names the shift;
+//! - every retail `FALL` line from the second drop on (the walk capture's up
+//!   to its fatal drop), `t` and `ct` shifted: origin to the printed
+//!   thousandth, velocity, ground, `pm_flags`, `pm_time`, health and the
+//!   event ring, so each landing's parm, stun and damage, exactly. The first
+//!   drop runs on our own cadence until its line names the shift;
 //! - the probe's lines, timestamps aside: the damage callback's arguments
 //!   (undefined entities and vectors, `MOD_FALLING`, weapon and hit location
 //!   `none`, the damage and health), the killed callback's (the world twice,
@@ -24,9 +25,9 @@
 //! - no landing raises `EV_PAIN`, on either side: the fall's
 //!   `pain_debounce_time` holds it off.
 //!
-//! `FALL_REPORT=1` prints both sides' parms and every row whose origin
-//! differs from retail's inside the tolerance. Needs `COD_DIR`; without the
-//! paks it returns early.
+//! `FALL_REPORT=1` prints both sides' parms; `FALL_DUMP=<path>` writes
+//! every retail `FALL` row beside ours. Needs `COD_DIR`; without the paks it
+//! returns early.
 
 mod common;
 
@@ -167,23 +168,6 @@ fn ring_events<'a>(lines: impl Iterator<Item = &'a FallLine>) -> Events {
     out
 }
 
-/// Two `FALL` lines' tails equal but for each origin component, which may
-/// read one unit apart in the last printed decimal: a fall of a few hundred
-/// units leaves a one-ulp difference against retail's x87 now and then
-/// (docs/research/cod11-player-clip.md 8.9).
-fn same_but_origin_ulp(a: &str, b: &str) -> bool {
-    let split = |s: &str| -> ([f32; 3], String) {
-        let (o, rest) = s
-            .strip_prefix("origin=")
-            .and_then(|s| s.split_once(' '))
-            .expect("an origin first");
-        let v: Vec<f32> = o.split(',').map(|n| n.parse().unwrap()).collect();
-        ([v[0], v[1], v[2]], rest.to_string())
-    };
-    let ((oa, ra), (ob, rb)) = (split(a), split(b));
-    ra == rb && oa.iter().zip(ob).all(|(x, y)| (x - y).abs() < 0.0015)
-}
-
 /// What a retail fixture carries.
 struct Retail {
     probe: Vec<String>,
@@ -251,14 +235,18 @@ fn shape(line: &str, first_after: bool) -> String {
     out.join(" ")
 }
 
-/// `all_after` masks every `after` line's origin: a walking player ends each
-/// drop in a corner whose rest is not a pmove-under-a-timer question.
-fn shapes(lines: &[String], all_after: bool) -> Vec<String> {
-    let first_after = lines.iter().position(|l| l.starts_with("PROBE after "));
+/// `last_after` masks the last `after` line's origin too: in the walk
+/// capture that is a corpse the fatal drop left, and retail's corpse slid on
+/// at 134 units a second where ours stopped (cod11-player-clip.md 12).
+fn shapes(lines: &[String], last_after: bool) -> Vec<String> {
+    let afters: Vec<usize> = (0..lines.len())
+        .filter(|&i| lines[i].starts_with("PROBE after "))
+        .collect();
+    let masked = |i: usize| afters.first() == Some(&i) || last_after && afters.last() == Some(&i);
     lines
         .iter()
         .enumerate()
-        .map(|(i, l)| shape(l, all_after || Some(i) == first_after))
+        .map(|(i, l)| shape(l, masked(i)))
         .collect()
 }
 
@@ -465,27 +453,30 @@ fn run_ours(
     }
 }
 
-/// Every retail `FALL` line from the second drop on against ours at the
-/// same time shifted onto our clock: the origin to a unit in its last
-/// printed decimal, the rest exactly.
-fn compare_rows(retail: &Retail, ours: &Ours, second: i32) -> Vec<String> {
+/// Every retail `FALL` line past `second` and before `until` against ours
+/// at the same time shifted onto our clock, exactly: `commandTime` and the
+/// tail, origin to the printed thousandth included, and the event ring
+/// unless `ring` is off.
+fn compare_rows(
+    retail: &Retail,
+    ours: &Ours,
+    second: i32,
+    until: i32,
+    ring: bool,
+) -> (usize, Vec<String>) {
+    let tail = |rest: &str| -> String {
+        if ring {
+            rest.to_string()
+        } else {
+            rest.split(" seq=").next().unwrap().to_string()
+        }
+    };
     let mut diffs = Vec::new();
     let mut lines = 0;
-    for r in retail.falls.iter().filter(|l| l.t > second) {
+    for r in retail.falls.iter().filter(|l| l.t > second && l.t < until) {
         lines += 1;
         let o = ours.falls.get(&(r.t + ours.shift));
-        let close =
-            o.is_some_and(|o| o.ct == r.ct + ours.shift && same_but_origin_ulp(&o.rest, &r.rest));
-        if close && std::env::var_os("FALL_REPORT").is_some() && o.is_some_and(|o| o.rest != r.rest)
-        {
-            eprintln!(
-                "last-digit row t={}: retail {}\n  ours {}",
-                r.t,
-                r.rest,
-                o.map_or("", |o| &o.rest)
-            );
-        }
-        if !close {
+        if !o.is_some_and(|o| o.ct == r.ct + ours.shift && tail(&o.rest) == tail(&r.rest)) {
             diffs.push(format!(
                 "retail t={}: ct={} {}\n  ours: {}",
                 r.t,
@@ -495,8 +486,7 @@ fn compare_rows(retail: &Retail, ours: &Ours, second: i32) -> Vec<String> {
             ));
         }
     }
-    assert!(lines > 100, "only {lines} FALL lines past the second drop");
-    diffs
+    (lines, diffs)
 }
 
 /// The value of `key` in a `FALL` line's tail.
@@ -506,93 +496,42 @@ fn tail_field<'a>(rest: &'a str, key: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no {key} in {rest}"))
 }
 
-/// The walk capture's rows under a landing stun (`pm_flags` 0x100) from the
-/// second drop on: ours at the same shifted time holds the same `commandTime`,
-/// velocity, ground, `pm_flags`, `pm_time` and health, and an origin within
-/// 0.005: some rows on the south wall read 1815.128 where retail's read
-/// 1815.125. Each walk ends jittering against a pillar (cod11-player-clip.md
-/// 12), and `setorigin` keeps the velocity, so a drop starts with whatever
-/// the jitter's phase left: one whose teleport row's velocity differs
-/// between the two sides lands on another cmd and is left out, at most two
-/// of the five from the second on (the last, fatal one has no stun rows).
-/// Retail must also have pressed into the wall: rows on its plane with a
+/// The walk capture from the second drop to the fatal one, row by row
+/// ([`compare_rows`]) but for the event ring, whose footsteps count from the
+/// first drop's own cadence: each stun walks the player obliquely into the
+/// street's south wall, and each walk ends jittering against a pillar
+/// (cod11-player-clip.md 12), whose air frames ride every last bit of the
+/// slide. The corpse's rows after the fatal drop are not walk rows. Retail
+/// must have pressed into the wall under the stun: rows on its plane with a
 /// velocity into it.
-fn compare_stun_rows(retail: &Retail, ours: &Ours, second: i32) -> Vec<String> {
-    const WALL_Y: f32 = 1815.128;
-    let drops: Vec<i32> = (0..).map_while(|n| drop_time(&retail.probe, n)).collect();
-    let skipped: Vec<(i32, i32)> = drops
+fn compare_walk_rows(retail: &Retail, ours: &Ours, second: i32) -> Vec<String> {
+    let fatal = (0..)
+        .map_while(|n| drop_time(&retail.probe, n))
+        .last()
+        .expect("a fatal drop");
+    let (lines, diffs) = compare_rows(retail, ours, second, fatal, false);
+    assert!(lines > 200, "only {lines} walk lines past the second drop");
+    let pressed = retail
+        .falls
         .iter()
-        .enumerate()
-        .filter(|&(_, &d)| {
-            if d < second {
-                return false;
-            }
-            let r = retail.falls.iter().find(|l| l.t >= d);
-            let o = r.and_then(|r| ours.falls.get(&(r.t + ours.shift)));
-            r.zip(o)
-                .is_some_and(|(r, o)| tail_field(&r.rest, "vel=") != tail_field(&o.rest, "vel="))
-        })
-        .map(|(i, &d)| (d, drops.get(i + 1).copied().unwrap_or(i32::MAX)))
-        .collect();
-    assert!(skipped.len() <= 2, "drops off another start: {skipped:?}");
-    let mut diffs = Vec::new();
-    let (mut lines, mut pressed) = (0, 0);
-    for r in retail.falls.iter().filter(|l| l.t > second) {
-        let flags = i32::from_str_radix(tail_field(&r.rest, "pm_flags=0x"), 16).unwrap();
-        if flags & 0x100 == 0 || skipped.iter().any(|&(a, b)| (a..b).contains(&r.t)) {
-            continue;
-        }
-        lines += 1;
-        let origin = |rest: &str| -> Vec<f32> {
-            tail_field(rest, "origin=")
+        .filter(|r| r.t > second && r.t < fatal)
+        .filter(|r| {
+            let flags = i32::from_str_radix(tail_field(&r.rest, "pm_flags=0x"), 16).unwrap();
+            let y: f32 = tail_field(&r.rest, "origin=")
                 .split(',')
-                .map(|n| n.parse().unwrap())
-                .collect()
-        };
-        let vel: Vec<i32> = tail_field(&r.rest, "vel=")
-            .split(',')
-            .map(|n| n.parse().unwrap())
-            .collect();
-        if (origin(&r.rest)[1] - WALL_Y).abs() < 0.01 && vel[1] < 0 {
-            pressed += 1;
-        }
-        let same = |o: &FallLine| {
-            o.ct == r.ct + ours.shift
-                && ["vel=", "ground=", "pm_flags=", "pm_time=", "health="]
-                    .iter()
-                    .all(|k| tail_field(&o.rest, k) == tail_field(&r.rest, k))
-                && origin(&o.rest)
-                    .iter()
-                    .zip(origin(&r.rest))
-                    .all(|(a, b)| (a - b).abs() < 0.005)
-        };
-        let o = ours.falls.get(&(r.t + ours.shift));
-        if std::env::var_os("FALL_REPORT").is_some()
-            && o.is_some_and(|o| {
-                same(o) && tail_field(&o.rest, "origin=") != tail_field(&r.rest, "origin=")
-            })
-        {
-            eprintln!(
-                "stun origin row t={}: retail {}\n  ours {}",
-                r.t,
-                r.rest,
-                o.map_or("", |o| &o.rest)
-            );
-        }
-        if !o.is_some_and(same) {
-            diffs.push(format!(
-                "retail t={}: ct={} {}\n  ours: {}",
-                r.t,
-                r.ct + ours.shift,
-                r.rest,
-                o.map_or("no snapshot".into(), |o| format!("ct={} {}", o.ct, o.rest))
-            ));
-        }
-    }
-    assert!(
-        lines > 50,
-        "only {lines} stunned FALL lines past the second drop"
-    );
+                .nth(1)
+                .unwrap()
+                .parse()
+                .unwrap();
+            let vy: i32 = tail_field(&r.rest, "vel=")
+                .split(',')
+                .nth(1)
+                .unwrap()
+                .parse()
+                .unwrap();
+            flags & 0x100 != 0 && (y - 1815.125).abs() < 0.01 && vy < 0
+        })
+        .count();
     assert!(
         pressed > 20,
         "retail pressed into the wall on only {pressed} rows"
@@ -614,6 +553,24 @@ fn gate(fixture: &str, sets: &[(&str, &str)], walk: Option<f32>) {
     );
     let retail_events = ring_events(retail.falls.iter());
     let ours = run_ours(fs, sets, walk, &retail);
+    if let Some(path) = std::env::var_os("FALL_DUMP") {
+        let mut out = String::new();
+        for r in &retail.falls {
+            let o = ours.falls.get(&(r.t + ours.shift));
+            out += &format!(
+                "t={} R ct={} {}\n         O {}\n",
+                r.t,
+                r.ct + ours.shift,
+                r.rest.split(" seq=").next().unwrap(),
+                o.map_or("-".into(), |o| format!(
+                    "ct={} {}",
+                    o.ct,
+                    o.rest.split(" seq=").next().unwrap()
+                ))
+            );
+        }
+        std::fs::write(path, out).unwrap();
+    }
     let ours_events = ring_events(ours.falls.values());
     let mut diffs = Vec::new();
 
@@ -633,9 +590,11 @@ fn gate(fixture: &str, sets: &[(&str, &str)], walk: Option<f32>) {
 
     let second = drop_time(&retail.probe, 1).expect("a second retail drop");
     if walk.is_some() {
-        diffs.extend(compare_stun_rows(&retail, &ours, second));
+        diffs.extend(compare_walk_rows(&retail, &ours, second));
     } else {
-        diffs.extend(compare_rows(&retail, &ours, second));
+        let (lines, rows) = compare_rows(&retail, &ours, second, i32::MAX, true);
+        assert!(lines > 100, "only {lines} FALL lines past the second drop");
+        diffs.extend(rows);
     }
 
     let (rs, os) = (
