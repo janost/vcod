@@ -58,13 +58,35 @@ pub fn entity_visible(
     time: i32,
     p: &Protocol,
 ) -> bool {
+    // An entity whose box touches no cluster at all is skipped, the way the
+    // module's loop skips one with `numClusters == 0`.
+    entity_clusters(vis, e, time, p)
+        .iter()
+        .any(|&c| vis.visible(from, c))
+}
+
+/// `SV_inSnapshot` (cod_lnxded 0x8087b90), what the game's
+/// `trap_InSnapshot` asks of an entity from a point: the cull's cluster
+/// test, except that an entity touching no cluster counts as seen
+/// (docs/research/cod11-hud-protocol.md, section 9, "Compass friendlies").
+pub fn in_snapshot(
+    vis: &bsp::Visibility,
+    eye: [f32; 3],
+    e: &EntityState,
+    time: i32,
+    p: &Protocol,
+) -> bool {
+    let clusters = entity_clusters(vis, e, time, p);
+    let from = vis.cluster_at(eye);
+    clusters.is_empty() || clusters.iter().any(|&c| vis.visible(from, c))
+}
+
+/// The clusters an entity's link box touches.
+fn entity_clusters(vis: &bsp::Visibility, e: &EntityState, time: i32, p: &Protocol) -> Vec<i32> {
     let (o, angles) = link_pose(e, time, p);
     let (mins, maxs) = link_bounds(vis, e, angles, p);
     let at = |b: [f32; 3], pad: f32| [o[0] + b[0] + pad, o[1] + b[1] + pad, o[2] + b[2] + pad];
-    let clusters = vis.clusters_in_box(at(mins, -LINK_EPSILON), at(maxs, LINK_EPSILON));
-    // An entity whose box touches no cluster at all is skipped, the way the
-    // module's loop skips one with `numClusters == 0`.
-    clusters.iter().any(|&c| vis.visible(from, c))
+    vis.clusters_in_box(at(mins, -LINK_EPSILON), at(maxs, LINK_EPSILON))
 }
 
 /// Where an entity was last linked, origin and angles. A mover is relinked

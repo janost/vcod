@@ -5,6 +5,7 @@ pub mod archive;
 pub mod area;
 pub mod bots;
 pub mod client;
+pub mod compass;
 pub mod configstrings;
 pub mod console;
 pub mod cvars;

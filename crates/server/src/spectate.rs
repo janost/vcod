@@ -34,6 +34,8 @@ const EF_FIRING: i32 = 0x400;
 /// `pingPlayer`'s bit (docs/research/cod11-hud-protocol.md, "Compass
 /// friendlies").
 const EF_PING: i32 = 0x80000;
+/// `ps.eFlags` 0x100000, the compass teammate's ping.
+const EF_FRIEND_PING: i32 = 0x100000;
 /// `docs/research/cod11-events-and-fx.md`.
 const EV_PLAYER_TELEPORT_IN: i32 = 199;
 const EV_PLAYER_TELEPORT_OUT: i32 = 200;
@@ -244,6 +246,15 @@ pub struct ClientSim {
     /// `eFlags` 0x80000, `pingPlayer`'s chat flash on teammates' compasses,
     /// held until the stamp the builtin left (`GameHost::client_ping_until`).
     pub ping: bool,
+    /// `ps.iCompassFriendInfo`, the out-of-view teammate the end frame packs
+    /// (`crate::compass`), 0 for none.
+    pub compass_friend: i32,
+    /// `client + 0x2264`: the slot of the last answer, where the next scan
+    /// starts after.
+    pub last_friend: u32,
+    /// `ps.eFlags` 0x100000: that teammate's `pingPlayer` bit, which the
+    /// compass flashes on.
+    pub friend_ping: bool,
     /// The last cmd's angles, retail's `pers.cmd.angles`, which
     /// `set_view_angle` rewrites `delta_angles` against.
     last_cmd_angles: [i32; 3],
@@ -413,6 +424,9 @@ impl ClientSim {
             mounted_on: None,
             firing: false,
             ping: false,
+            compass_friend: 0,
+            last_friend: 0,
+            friend_ping: false,
             last_cmd_angles: cmd_angles,
             contents: 0,
             linked_solid: 0,
@@ -578,6 +592,10 @@ impl ClientSim {
         self.gunfx = 0;
         self.mounted_on = None;
         self.firing = false;
+        // The memset again; nothing after it in `ClientSpawn` rewrites them.
+        self.compass_friend = 0;
+        self.last_friend = 0;
+        self.friend_ping = false;
         self.last_cmd_angles = cmd_angles;
         // Retail's respawn frame reads an empty ring at sequence 0
         // (combat doc, 9.2).
@@ -714,6 +732,7 @@ impl ClientSim {
             }
             | if self.firing { EF_FIRING } else { 0 }
             | if self.ping { EF_PING } else { 0 }
+            | if self.friend_ping { EF_FRIEND_PING } else { 0 }
     }
 
     /// `SpectatorThink`'s button half (`game.mp.i386.so` 0x3fab8) for one
@@ -1506,6 +1525,7 @@ impl ClientSim {
             w.fields[msg::PlayerState::field_index(p, name).unwrap()] = v;
         };
         set("clientNum", client_num);
+        set("iCompassFriendInfo", self.compass_friend);
         set(
             "commandTime",
             self.frozen_command_time.unwrap_or(command_time),

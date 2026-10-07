@@ -6,6 +6,7 @@
 //! strings come from docs/research/cod11-server-handshake.md.
 
 use crate::client::{Client, ClientState, CmdKind, Queued, QueuedCmd, sanitize_name};
+use crate::compass;
 use crate::configstrings;
 use crate::console;
 use crate::follow;
@@ -1037,6 +1038,53 @@ fn challenge_arg(arg: &str) -> String {
     out
 }
 
+/// `ClientEndFrame`'s call of `G_GetNonPVSFriendlyInfo` for `slot`
+/// (`crate::compass`): `None` when its session takes no end frame that
+/// makes the call (spectator, intermission), else the packed teammate, its
+/// slot and its ping bit, or `Some(None)` for nobody. The viewer needs a
+/// team other than none or spectator; a candidate is a playing client on
+/// it whose entity is not in a snapshot from the viewer's leaned eye.
+fn compass_friend(
+    clients: &[Option<Client>],
+    slot: usize,
+    sessions: &[Option<follow::SessionState>],
+    teams: &[i32],
+    vis: Option<&vcod_common::bsp::Visibility>,
+    time: i32,
+    p: &Protocol,
+) -> Option<Option<(i32, u32, bool)>> {
+    use follow::SessionState::{Dead, Playing};
+    let sim = clients[slot].as_ref()?.sim.as_ref()?;
+    if !matches!(sessions[slot], Some(Playing | Dead)) {
+        return None;
+    }
+    let team = teams[slot];
+    if team == script::TEAM_NONE || team == script::TEAM_SPECTATOR {
+        return Some(None);
+    }
+    let eye: [f32; 3] = sim.ps.view().eye.into();
+    let mut pinged = false;
+    let found = compass::next_friend(sim.last_friend, [eye[0], eye[1]], |n| {
+        let c = clients.get(n)?.as_ref()?;
+        let other = c.sim.as_ref()?;
+        if sessions[n] != Some(Playing) || other.pm_type != PmType::Normal || teams[n] != team {
+            return None;
+        }
+        // No map: nothing to cull against, so everything is in view.
+        let vis = vis?;
+        let e = other.to_entity(p, n, c.last_processed_st);
+        if crate::world::in_snapshot(vis, eye, &e, time, p) {
+            return None;
+        }
+        pinged = other.ping;
+        Some(compass::Candidate {
+            at: [other.ps.origin.x, other.ps.origin.y],
+            yaw: other.view_angles()[1],
+        })
+    });
+    Some(found.map(|(info, n)| (info, n, pinged)))
+}
+
 /// `SV_UpdateServerCommandsToClient`. The caller bounds `from_ack` to
 /// `0..=reliable_sequence`, so the range is empty or inside the ring.
 fn write_pending_commands(w: &mut MsgWriter, nc: &ServerNetchan, from_ack: i32) {
@@ -1855,6 +1903,17 @@ impl Server {
         mirror_roster(&self.clients, rt);
         for (to, cmd) in rt.say(slot, target, mode, text) {
             self.send_server_command(to, &cmd);
+        }
+    }
+
+    /// Test-facing: `self pingPlayer()` on `slot`, with no script to call
+    /// it.
+    pub fn test_ping_player(&mut self, slot: usize) {
+        if let Some(rt) = self.script.as_mut() {
+            let until = rt.host.level_time_ms + 3000;
+            if let Some(p) = rt.host.client_ping_until.get_mut(slot) {
+                *p = until;
+            }
         }
     }
 
@@ -3839,6 +3898,41 @@ impl Server {
                     .unwrap()
                     .end_frame(self.sv_time_ms);
             }
+            // `ClientEndFrame`'s `pingPlayer` clear (0x41024) and its compass
+            // teammate (0x411fc), per slot in slot order: a lower slot reads
+            // a higher one's ping bit as that slot's last end frame left it.
+            let sessions: Vec<Option<follow::SessionState>> = (0..self.clients.len())
+                .map(|slot| rt.client_session(slot).map(|s| s.state))
+                .collect();
+            let teams: Vec<i32> = (0..self.clients.len())
+                .map(|slot| rt.client_team(slot))
+                .collect();
+            for slot in 0..self.clients.len() {
+                let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) else {
+                    continue;
+                };
+                sim.ping = rt.host.client_ping_until[slot] > rt.host.level_time_ms;
+                let found = compass_friend(
+                    &self.clients,
+                    slot,
+                    &sessions,
+                    &teams,
+                    self.world.as_ref().map(|w| &w.vis),
+                    self.sv_time_ms,
+                    self.proto,
+                );
+                let sim = self.clients[slot].as_mut().unwrap().sim.as_mut().unwrap();
+                if let Some(found) = found {
+                    sim.compass_friend = found.map_or(0, |(info, _, _)| info);
+                    match found {
+                        Some((_, n, ping)) => {
+                            sim.last_friend = n;
+                            sim.friend_ping = ping;
+                        }
+                        None => sim.last_friend = compass::NO_FRIEND,
+                    }
+                }
+            }
             // `ClientEndFrame`'s aim trace and cursor hint, after the script
             // frame and the mirrors so they read the frame's final eye, aim
             // and items; the fire it raises wakes its waiters next frame
@@ -3966,13 +4060,6 @@ impl Server {
                     self.sv_time_ms,
                 );
                 mirror_vitals(&mut self.clients, rt);
-                // `ClientEndFrame` clears `pingPlayer`'s bit once its stamp is
-                // reached (0x41024).
-                for (slot, c) in self.clients.iter_mut().enumerate() {
-                    if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
-                        sim.ping = rt.host.client_ping_until[slot] > rt.host.level_time_ms;
-                    }
-                }
                 for slot in feedback_now {
                     if let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) {
                         sim.end_frame(self.sv_time_ms);

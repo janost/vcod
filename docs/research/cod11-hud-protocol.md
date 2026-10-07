@@ -1412,15 +1412,69 @@ into the playerstate's `eFlags` byte `+0x82`, the `0x80000` bit, and stamps
 once that time has passed. VERIFIED, pak5's `_teams.gsc`: the quick-chat
 commands call `self pingPlayer()` after `sayTeam`.
 
-VERIFIED, `G_GetNonPVSFriendlyInfo` (`0x52c30`): for a viewer on a team it
-returns the next live teammate after the previous answer that
-`trap_InSnapshot` says the viewer's snapshot lacks, packed as the client
-number in bits 0..5, the x and y offsets from the viewer's leaned eye in
-bits 6..14 and 15..23 (each `offset / 4 + 255` after rounding, the pair
-scaled down together to fit 1024 and -1022 and then clamped), and the yaw
-times 256/360 in the top byte. `ClientEndFrame` stores it at
-`iCompassFriendInfo` (playerstate `+0x3c0`) and sets the playerstate's
-`eFlags` `0x100000` from that teammate's `0x80000`.
+VERIFIED, `G_GetNonPVSFriendlyInfo` (`0x42c30`; Ghidra's import places it
+at `0x52c30`): it returns 0 for a viewer whose `sess.team` (client
+`+0x217c`) is 0 or 3 (`0x42c50`, `0x42c59`). VERIFIED: it walks 64 slots
+from `last + 1` modulo 64, `last` being its third argument and 0 standing in
+when that reads `0x3ff` (`0x42c65`), and skips a slot whose entity is not in
+use (`+0x160`, `0x42ca0`), whose `s.eType` is not 1 (`0x42cad`), whose
+`s.eFlags` has bit 1 (`0x42cba`), which has no client (`+0x158`) or whose
+client's team differs (`0x42cd8`), or for which `trap_InSnapshot(eye,
+s.number)` (`0x42cf2`, syscall `0x2f`) answers non-zero. INFERRED: the first
+slot left is the answer, so the field cycles through every out-of-view
+teammate, one per frame.
+VERIFIED, the packing (`0x42d02`..`0x42f19`): each offset is the
+teammate's `r.currentOrigin` (`+0x134`, `+0x138`) less the eye's, plus 0.5
+(`0x7311c`), stored by `fistp` under a control word ORed with `0xc00`, so
+truncated; an offset above 1024 gives a factor `1024.0 / offset`
+(`0x73120`) and one below -1022 `-1022.0 / offset` (`0x73124`); when either
+factor is below 1 the axis with the larger factor is multiplied by the
+smaller one and truncated (`0x42df9`..`0x42e5e`); both are then clamped to
+-1022..1024 (`0x42e64`..`0x42e98`) and packed as `(offset + 2) / 4 + 255`
+with C's truncating division (`0x42ea3`..`0x42eda`), x at bit 6 and y at bit
+15, 9 bits each; the client number (`s.number & 0x3f`) fills bits 0..5 and
+`r.currentAngles[YAW]` (`+0x144`) times 256/360 (`0x73128`), truncated, the
+top byte. VERIFIED: `ClientEndFrame` passes the playerstate origin with
+`viewHeightCurrent` (`ps + 0xd0`) added to z, through `G_AddLean`
+(`0x411c2`..`0x411e8`), and client `+0x2264` as `last` (`0x411ed`), stores
+the answer at `iCompassFriendInfo` (playerstate `+0x3c0`, `0x41201`), and
+writes `answer & 0x3f` back to `+0x2264`, or `0x3ff` for 0 (`0x4120e`,
+`0x41240`). VERIFIED: with a non-zero answer it sets the playerstate's
+`eFlags` `0x100000` when that teammate's `s.eFlags` has `0x80000` and
+clears it otherwise (`0x4121d`..`0x41230`); a zero answer leaves the bit as
+it was. VERIFIED: `ClientSpawn` zeroes the client up to `+0x22c4`
+(`bzero` at `0x42804`), which covers `+0x2264` and the playerstate.
+VERIFIED, `SV_inSnapshot` (cod_lnxded `0x8087b90`, syscall `0x2f`'s
+handler): it returns 0 when the entity's `+0xf0` is 0 or its `+0xf4` has
+bit 1, 1 when `+0xf4` has `0x18`, 1 when the `svEntity`'s cluster count is
+0, and otherwise 0 unless one of two area tests (`0x8053f44`) passes and
+one of the entity's clusters is set in the eye's row. INFERRED: those are
+`r.linked`, `SVF_NOCLIENT`, the broadcast flags and the snapshot cull's
+own PVS test, so the answer is whether a snapshot built from the eye would
+carry the entity, except that an entity in no cluster counts as carried.
+VERIFIED, `BG_PlayerStateToEntityState` (`0x2cbe8`): `s.eType` is 1 when
+the playerstate's `pm_flags` has `0x10000` or `0x40000` and 7 otherwise.
+
+VERIFIED live, `client-probes/probe_compass` on retail mp_harbor
+2026-10-07, two allied probes, slot 0 standing at (-7352, -7976) and slot 1
+set down at spawns 2 to 13: slot 0 read `0x00a08f01` with slot 1 at
+(-8136, -7712), `0x00611001` at (-8120, -8224), `0x001b4841` at
+(-7216, -8784), `0x004a8001` at (-9104, -8712), and 0 at (-6784, -7416) and
+(-7562, -7344), where slot 1 was in its snapshot. Slot 1 read slot 0 as
+`0x005f70c0` from (-8136, -7712) and `0x00ffd340` from (-7680, -9056), its
+y clamped to 1024 and its x scaled from 328 to 312. On the frame
+`setPlayerAngles` turned slot 1 to 45, 270 and 180 the top byte read
+`0x20`, `0xc0` and `0x80`, and 0 again the frame after, when the probe's
+own cmd angles took over. The `0x100000` bit rose on slot 0 one frame after
+slot 1's `pingPlayer` and fell one frame after slot 1's own `0x80000`, 3 s
+later: slot 0's end frame runs before slot 1 copies its playerstate into
+its entity. The field read 0 while slot 1 was on axis, came back with it on
+allies, stayed through a `suicide()` that left slot 1 `playing`
+(`pm_type` 0), went to 0 a frame after its `sessionstate` became `dead`
+(`pm_type` 6), and stayed 0 with it a spectator. The raw lines are in the
+probe's README section's recipe; the packings are
+`crates/server/src/compass.rs`'s test.
+
 VERIFIED, the cgame's read of it (`0x30013646`..`0x300137a5`): a non-zero
 `+0x3c0` stamps slot `info & 0x3f`, decodes each offset as
 `field * 4 - 0x3fc`, tests both against 1024.0 (`0x44800000`) and -1020.0
@@ -1453,9 +1507,13 @@ teammate's.
 
 vcod draws the snapshot's teammates off their interpolated origins with
 the snapshot's yaw, and the packed one, with the compass turned by the view
-yaw (no spring). vcod's server sets `pingPlayer`'s bit but does not write
-`iCompassFriendInfo`, so the packed teammate shows only against a retail
-server.
+yaw (no spring). vcod's server writes `iCompassFriendInfo` and the
+`0x100000` bit from each playing or dead client's end frame
+(`crate::compass`, `compass_friend` in `server.rs`), its candidates the
+clients whose `sessionstate` is `playing` and whose sim is a live player,
+which is what the probe saw retail answer for; it reads every teammate's
+state as of this frame, where retail reads a higher slot's as its last end
+frame left it, and skips the area check, which stock maps never fail.
 
 ### Cursor hint
 
