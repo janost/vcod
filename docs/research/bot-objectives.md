@@ -91,8 +91,8 @@ objective, since its rising edge also picks up weapons and mounts turrets.
   ticks with no link and tries again.
 
 VERIFIED (measured, `crates/server/tests/bot_objectives.rs`, 2 bots, shoot
-off, seed 7, `mp_carentan`): the attacker plants at tick 731 of the run,
-counting the match-start restart; the defender defuses 227 ticks later.
+off, seed 7, `mp_carentan`): the attacker plants at tick 733 of the run,
+counting the match-start restart; the defender defuses 225 ticks later.
 Sweeps over seeds 1, 2 and 7 with shoot off, 4 bots on `mp_carentan` and
 `mp_rocket` and 6 on `mp_harbor` and `mp_dawnville`, all planted and
 defused, the defuse 221 to 234 ticks after the plant. With 6 shooting bots
@@ -153,9 +153,20 @@ distance at which a body is clear of the goal trigger, and who carries it.
 
 VERIFIED (measured, `crates/server/tests/bot_objectives.rs`, 2 bots, shoot
 off, seed 7, `mp_carentan`): the attacker picks up at tick 483 and delivers
-372 ticks later. The same run on each stock map for 150 s: 10 of 12 pick
+377 ticks later. The same run on each stock map for 150 s: 10 of 12 pick
 up and deliver. On `mp_depot` the attacker never reaches the objective,
 which lies on an upper floor at z 148; on `mp_hurtgen` every round ends in
-an allied win within 18 s and nothing is picked up. Neither was looked into
-further. With 6 shooting bots, `mp_carentan` delivered and `mp_harbor` picked
+an allied win within 18 s and nothing is picked up.
+
+VERIFIED (measured, 2026-10-07, same run): `mp_hurtgen` now picks up at
+tick 1108 and delivers at tick 2275. Its rounds ended because the lone axis
+bot wandered into the minefields round its spawn (`MOD_EXPLOSIVE`, killer
+`world`), and it wandered because the objective's bunker was not on the
+graph (bot-navigation.md, "Spacing", "The flood" and section 3).
+`mp_depot` still picks nothing up. Its documents lie on a crate top at
+z 148, and the nearest the graph gets is a step 32 units below at
+(-1852, -608, 116): the crate needs a jump and the flood never jumps. The
+attacker stands on the step, 90 units from the trigger's middle, outside
+`PICKUP_REACH` (48); widening the reach to 96 did not get the pickup either
+(not looked into further). With 6 shooting bots, `mp_carentan` delivered and `mp_harbor` picked
 up twice in 150 s and delivered neither.

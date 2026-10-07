@@ -53,7 +53,8 @@ struct Args {
 
     /// Log one line per snapshot per client: send interval, the serverTime and
     /// commandTime a client predicts from, the usercmds consumed, and whether
-    /// the frame went out as a delta.
+    /// the frame went out as a delta. Also one `tick:` line per second: the
+    /// slowest tick and how far the loop ran behind its schedule.
     #[arg(long)]
     trace: bool,
 }
@@ -121,6 +122,7 @@ fn main() -> Result<()> {
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos() as u64);
+    let trace = args.trace;
     let mut server = Server::with_seed(
         ServerConfig {
             map: args.map,
@@ -161,8 +163,10 @@ fn main() -> Result<()> {
     // remainder of each tick lets every overshoot accumulate, which read as
     // a serverTime 5-10% slow against a probe's wall clock under load.
     let mut next = Instant::now();
+    let mut stats = TickStats::default();
     loop {
         let now = Instant::now();
+        let late = now.saturating_duration_since(next);
         for _ in 0..MAX_PACKETS_PER_FRAME {
             let Ok((n, from)) = sock.recv_from(&mut buf) else {
                 break;
@@ -170,6 +174,9 @@ fn main() -> Result<()> {
             server.handle_packet(from, &buf[..n], now);
         }
         server.tick(now);
+        if trace {
+            stats.add(now.elapsed(), late);
+        }
         // A level load that failed with the level already torn down: there is
         // no script to end the level and no table for a client to pull, which
         // is what retail's `Com_Error` ends the process for.
@@ -183,6 +190,9 @@ fn main() -> Result<()> {
             }
         }
         next += FRAME;
+        if trace && stats.ticks == 20 {
+            stats.log_and_reset();
+        }
         let after = Instant::now();
         if next > after {
             std::thread::sleep(next - after);
@@ -191,5 +201,34 @@ fn main() -> Result<()> {
             // dropped rather than replayed as a burst of ticks.
             next = after;
         }
+    }
+}
+
+/// `--trace`'s per-second tick summary: the slowest `Server::tick` and the
+/// worst lag of a tick's start behind its slot on the fixed schedule.
+#[derive(Default)]
+struct TickStats {
+    ticks: u32,
+    sum: Duration,
+    max: Duration,
+    late: Duration,
+}
+
+impl TickStats {
+    fn add(&mut self, took: Duration, late: Duration) {
+        self.ticks += 1;
+        self.sum += took;
+        self.max = self.max.max(took);
+        self.late = self.late.max(late);
+    }
+
+    fn log_and_reset(&mut self) {
+        log::info!(
+            "tick: mean {:.2} ms max {:.2} ms late {:.2} ms",
+            self.sum.as_secs_f64() * 1000.0 / f64::from(self.ticks.max(1)),
+            self.max.as_secs_f64() * 1000.0,
+            self.late.as_secs_f64() * 1000.0
+        );
+        *self = TickStats::default();
     }
 }

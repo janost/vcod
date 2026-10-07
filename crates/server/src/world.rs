@@ -15,6 +15,9 @@ pub struct World {
     /// Every gametype's spawn points, what the bots' navigation graph is
     /// flooded from (`crate::nav`).
     pub spawn_points: Vec<[f32; 3]>,
+    /// The brushes of the triggers that kill whoever walks in: minefields
+    /// and `trigger_hurt`. The navigation graph keeps out of them.
+    pub hazards: Vec<crate::game::trigger::BrushHull>,
 }
 
 /// The unit the engine grows a linked entity's box by on each axis before
@@ -147,8 +150,31 @@ impl World {
             vis: b.visibility(),
             spawn,
             spawn_points: crate::nav::spawn_points(&b.entities),
+            hazards: hazards(b),
         }
     }
+}
+
+/// The brushes of every `trigger_hurt` and every `trigger_multiple` named
+/// `minefield` (`maps/mp/_minefields.gsc` kills whoever stays in one).
+fn hazards(b: &bsp::Bsp) -> Vec<crate::game::trigger::BrushHull> {
+    let mut hulls = crate::game::trigger::model_brush_hulls(b);
+    let mut out = Vec::new();
+    for e in bsp::entity_blocks(&b.entities) {
+        let class = e.get("classname").map(String::as_str);
+        let minefield = class == Some("trigger_multiple")
+            && e.get("targetname").is_some_and(|t| t == "minefield");
+        if !(minefield || class == Some("trigger_hurt")) {
+            continue;
+        }
+        let model = e
+            .get("model")
+            .and_then(|m| m.strip_prefix('*')?.parse::<usize>().ok());
+        if let Some(m) = model.filter(|&m| m < hulls.len()) {
+            out.append(&mut hulls[m]);
+        }
+    }
+    out
 }
 
 /// Scripted entities that exist only to drive the packet-entity wire path:

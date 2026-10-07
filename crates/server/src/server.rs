@@ -2045,6 +2045,27 @@ impl Server {
         )
     }
 
+    /// Test-facing: the length of the bots' planned route from the graph
+    /// node nearest `from` to the one nearest `to`, or `None` when either
+    /// point is off the graph, no route exists, or the graph is not built
+    /// yet. What a bot scenario needs to put a walker where it can reach its
+    /// goal. On the graph means within a pitch of a node on the same floor:
+    /// `nearest` alone answers from a bank for a point down in a ditch.
+    pub fn test_nav_route(&self, from: [f32; 3], to: [f32; 3]) -> Option<f32> {
+        let g = self.nav.as_ref()?;
+        let on = |p: [f32; 3]| {
+            let n = g.nearest(p)?;
+            let d = g.nodes[n as usize] - glam::Vec3::from(p);
+            (d.truncate().length() <= g.spacing && d.z.abs() < 18.0).then_some(n)
+        };
+        let path = g.path(on(from)?, on(to)?)?;
+        Some(
+            path.windows(2)
+                .map(|w| g.nodes[w[0] as usize].distance(g.nodes[w[1] as usize]))
+                .sum(),
+        )
+    }
+
     /// Test-facing: where a standing player dropped at `p` comes to rest,
     /// or `None` when it starts inside geometry or finds no floor within
     /// 256 units. What a test needs to put a second client somewhere the map
@@ -2530,6 +2551,13 @@ impl Server {
             enemy,
             grenade,
             waypoint: None,
+            hazard_ahead: std::array::from_fn(|i| {
+                self.world.as_ref().is_some_and(|w| {
+                    let (s, c) = (i as f32 * 45.0).to_radians().sin_cos();
+                    let ahead = glam::Vec3::new(c, s, 0.0) * crate::bots::HAZARD_LOOK;
+                    crate::nav::hazard(&w.hazards, sim.ps.origin + ahead)
+                })
+            }),
             linked: sim.link_to.is_some(),
             on_ladder: sim.ps.on_ladder,
             pistol,
@@ -6576,6 +6604,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
+            hazards: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -6628,6 +6657,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
+            hazards: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
 
@@ -6722,6 +6752,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
+            hazards: Vec::new(),
         });
         install_script(&mut sv, rt);
         sv.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs));
@@ -6980,6 +7011,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 1.0], 0.0),
             spawn_points: Vec::new(),
+            hazards: Vec::new(),
         });
         install_script(
             &mut sv,
@@ -7061,6 +7093,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 1.0], 0.0),
             spawn_points: Vec::new(),
+            hazards: Vec::new(),
         });
         install_script(
             &mut sv,
@@ -7246,6 +7279,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 90.0),
             spawn_points: Vec::new(),
+            hazards: Vec::new(),
         });
         let mut nc = active(&mut sv, now);
 
@@ -7293,6 +7327,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
+            hazards: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -7365,6 +7400,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
+            hazards: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -7426,6 +7462,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
+            hazards: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -7500,6 +7537,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
+            hazards: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -7570,6 +7608,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
+            hazards: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -7651,6 +7690,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
+            hazards: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -7728,6 +7768,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
+            hazards: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
@@ -7847,6 +7888,7 @@ mod tests {
                 vis: vcod_common::bsp::Visibility::single_cluster(),
                 spawn: ([0.0, 0.0, 64.0], 0.0),
                 spawn_points: Vec::new(),
+                hazards: Vec::new(),
             });
             install_script(&mut sv, rt);
             let nc = begun(&mut sv, now);

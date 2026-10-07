@@ -1,7 +1,8 @@
 //! The `--bots` debug feature end to end: two synthetic clients join through
 //! the stock menus, wander, and, with shoot on, wound each other.
 //!
-//! Needs `COD_DIR`; without the paks it returns early.
+//! Needs `COD_DIR`; without the paks it returns early. `BOTS_SEED=<n>`
+//! replaces the server's fixed seed, for sweeping a scenario over many games.
 
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -31,7 +32,11 @@ fn server_on(bots: usize, shoot: bool, gametype: &str) -> Option<(vcod_server::S
     let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
     let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
     let now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(bots, shoot, gametype), now);
+    let cfg = cfg(bots, shoot, gametype);
+    let mut sv = match std::env::var("BOTS_SEED") {
+        Ok(seed) => vcod_server::Server::with_seed(cfg, now, seed.parse().expect("BOTS_SEED")),
+        Err(_) => vcod_server::Server::new(cfg, now),
+    };
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     Some((sv, now))
@@ -45,6 +50,27 @@ fn run(sv: &mut vcod_server::Server, now: &mut Instant, ticks: usize) {
         *now += FRAME;
         sv.tick(*now);
     }
+}
+
+/// Two floors 100 units apart along +x near `at` with a clear eye line
+/// between them, for a fight whose first taps land. Where a bot stands
+/// after the warm-up depends on its roam, and a wall, a pillar or a brush
+/// at the second spot leaves the pair blind and the fight silent.
+fn fight_spot(sv: &vcod_server::Server, at: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    (0..49)
+        .find_map(|i| {
+            let (dx, dy) = ((i % 7 - 3) as f32 * 96.0, (i / 7 - 3) as f32 * 96.0);
+            let a = sv.test_ground_under([at[0] + dx, at[1] + dy, at[2] + 64.0])?;
+            let b = sv.test_ground_under([a[0] + 100.0, a[1], a[2] + 32.0])?;
+            ((b[2] - a[2]).abs() < 8.0 && sv.test_clear_line(a, 0.0, 100.0)).then_some((a, b))
+        })
+        .unwrap_or_else(|| panic!("no floor with a sightline for a fight round {at:?}"))
+}
+
+/// Puts the two bots of `pair` eye to eye at `spot`, facing each other.
+fn face_off(sv: &mut vcod_server::Server, pair: [usize; 2], spot: ([f32; 3], [f32; 3])) {
+    sv.place_client(pair[0], spot.0, 0.0);
+    sv.place_client(pair[1], spot.1, 180.0);
 }
 
 #[test]
@@ -87,10 +113,9 @@ fn a_bot_with_shoot_on_wounds_the_other() {
     };
     run(&mut sv, &mut now, 100);
     let slots = sv.bot_slots();
-    // Eye to eye, 100 units apart, facing each other, so the first taps land.
-    let a = sv.bot_body(slots[0]).unwrap().origin;
-    sv.place_client(slots[0], a, 0.0);
-    sv.place_client(slots[1], [a[0] + 100.0, a[1], a[2]], 180.0);
+    let pair = [slots[0], slots[1]];
+    let spot = fight_spot(&sv, sv.bot_body(slots[0]).unwrap().origin);
+    face_off(&mut sv, pair, spot);
 
     let mut hurt = false;
     for tick in 0..600 {
@@ -102,9 +127,7 @@ fn a_bot_with_shoot_on_wounds_the_other() {
                 sv.bot_body(slots[1]).unwrap(),
             );
             if ba.playing && bb.playing {
-                let a = ba.origin;
-                sv.place_client(slots[0], a, 0.0);
-                sv.place_client(slots[1], [a[0] + 100.0, a[1], a[2]], 180.0);
+                face_off(&mut sv, pair, spot);
             }
         }
         let (ha, hb) = (
@@ -129,9 +152,9 @@ fn a_dead_bot_respawns_and_keeps_playing() {
     };
     run(&mut sv, &mut now, 100);
     let slots = sv.bot_slots();
-    let a = sv.bot_body(slots[0]).unwrap().origin;
-    sv.place_client(slots[0], a, 0.0);
-    sv.place_client(slots[1], [a[0] + 100.0, a[1], a[2]], 180.0);
+    let pair = [slots[0], slots[1]];
+    let spot = fight_spot(&sv, sv.bot_body(slots[0]).unwrap().origin);
+    face_off(&mut sv, pair, spot);
 
     // Fight until someone dies, then give the use press 10 s to work. The
     // two wander apart, so pull them eye to eye again whenever both are
@@ -145,9 +168,7 @@ fn a_dead_bot_respawns_and_keeps_playing() {
                 sv.bot_body(slots[1]).unwrap(),
             );
             if ba.playing && bb.playing {
-                let a = ba.origin;
-                sv.place_client(slots[0], a, 0.0);
-                sv.place_client(slots[1], [a[0] + 100.0, a[1], a[2]], 180.0);
+                face_off(&mut sv, pair, spot);
             }
         }
         let dead = slots
@@ -259,7 +280,7 @@ fn bots_roam_far_along_the_graph() {
 }
 
 /// Gunfire carries through walls: a third bot with no line to a fight
-/// 900-1300 units off walks toward it.
+/// 900-1300 units off, and a route to it on the graph, walks toward it.
 #[test]
 fn a_bot_walks_toward_gunfire_it_cannot_see() {
     let Some((mut sv, mut now)) = server_with(3, true) else {
@@ -269,19 +290,11 @@ fn a_bot_walks_toward_gunfire_it_cannot_see() {
     run(&mut sv, &mut now, 100);
     let slots = sv.bot_slots();
     let (fighters, listener) = ([slots[0], slots[1]], slots[2]);
-    // The fighters go eye to eye 100 units apart along +x; a spot with a
-    // wall or pillar there leaves them blind and the fight silent. Where
-    // the first one stands after the warm-up depends on its roam, so the
-    // fight goes on the first floor round it with a clear line.
-    let at = sv.bot_body(fighters[0]).unwrap().origin;
-    let a = (0..25)
-        .filter_map(|i| {
-            let (dx, dy) = ((i % 5 - 2) as f32 * 96.0, (i / 5 - 2) as f32 * 96.0);
-            sv.test_ground_under([at[0] + dx, at[1] + dy, at[2] + 64.0])
-        })
-        .find(|p| sv.test_clear_line(*p, 0.0, 100.0))
-        .unwrap_or_else(|| panic!("no sightline for a fight round {at:?}"));
-    // A floor in a ring round the fight with the eye line to it blocked.
+    let fight = fight_spot(&sv, sv.bot_body(fighters[0]).unwrap().origin);
+    let a = fight.0;
+    // A floor in a ring round the fight with the eye line to it blocked and
+    // a route to it short enough to walk most of in 20 s. A spot with no
+    // route (a roof, a closed yard) tests the graph, not the hearing.
     let spot = (0..48)
         .filter_map(|i| {
             let r = 900.0 + 200.0 * (i / 16) as f32;
@@ -289,25 +302,27 @@ fn a_bot_walks_toward_gunfire_it_cannot_see() {
             let (s, c) = yaw.to_radians().sin_cos();
             let p = sv.test_ground_under([a[0] + c * r, a[1] + s * r, a[2] + 64.0])?;
             let back = yaw + 180.0;
-            (!sv.test_clear_line(p, back, r)).then_some((p, back))
+            let route = sv.test_nav_route(p, a)?;
+            (!sv.test_clear_line(p, back, r) && route < 1.5 * r).then_some((p, back))
         })
         .next()
-        .expect("no walled-off floor round the fight");
+        .expect("no walled-off floor with a route to the fight");
     let dist = |p: [f32; 3]| (p[0] - a[0]).hypot(p[1] - a[1]);
     // Facing away, so it does not stumble on the fight by looking.
     sv.place_client(listener, spot.0, spot.1 + 180.0);
     let start = dist(spot.0);
 
+    // 20 s: each death in the fight silences it until the respawn, and the
+    // listener heads off on a roam between bursts.
     let mut closest = start;
-    for tick in 0..300 {
+    for tick in 0..400 {
         if tick % 50 == 0 {
             let (ba, bb) = (
                 sv.bot_body(fighters[0]).unwrap(),
                 sv.bot_body(fighters[1]).unwrap(),
             );
             if ba.playing && bb.playing {
-                sv.place_client(fighters[0], a, 0.0);
-                sv.place_client(fighters[1], [a[0] + 100.0, a[1], a[2]], 180.0);
+                face_off(&mut sv, fighters, fight);
             }
         }
         run(&mut sv, &mut now, 1);

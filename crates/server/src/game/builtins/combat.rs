@@ -1154,6 +1154,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
+            hazards: Vec::new(),
         }));
         for (slot, name) in [(0, "victim"), (1, "blocker")] {
             rt.push_client_event(ClientEvent::Connect {
@@ -1234,6 +1235,7 @@ mod tests {
                 vis: vcod_common::bsp::Visibility::none(),
                 spawn: ([0.0, 0.0, 64.0], 0.0),
                 spawn_points: Vec::new(),
+                hazards: Vec::new(),
             }));
             for (slot, name) in [(0, "a"), (1, "b")] {
                 rt.push_client_event(ClientEvent::Connect {
@@ -1330,6 +1332,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
+            hazards: Vec::new(),
         }));
         for slot in 0..4 {
             rt.push_client_event(ClientEvent::Connect {
@@ -1433,6 +1436,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
+            hazards: Vec::new(),
         }));
         rt.place_turret([0.0, 0.0, 8.0]);
         for t in [50, 100, 150, 200, 250] {
@@ -1550,6 +1554,7 @@ mod tests {
             vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
+            hazards: Vec::new(),
         }));
         vm.with_cx(|cx| {
             let from = Value::Vector([0.0, 0.0, 100.0]);

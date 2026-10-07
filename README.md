@@ -140,7 +140,8 @@ either: the people on it signed up for Call of Duty.
   frames.
 - `--bots` adds debug bots that join through the stock menus, pick a random
   weapon the menu and the `scr_allow_*` cvars allow, and roam the map along
-  a navigation graph built from pmove runs, ladders included, heading for an
+  a navigation graph built from pmove runs, ladders included and minefields
+  left out, heading for an
   enemy they see and toward gunfire, turret fire and blasts they hear. In
   S&D each team spreads over both bombzones, attackers plant and one
   defender defuses while the rest cover. In Retrieval attackers pick the
@@ -363,7 +364,8 @@ vcod-server mp_carentan --port 28960 --hostname "my server" --gametype tdm
   paks. The probe recipes use it.
 - `--test-entities <n>` adds entities that move on the wire, to exercise the
   packet-entity encoding. A client draws nothing for them.
-- `--trace` logs one line per snapshot per client.
+- `--trace` logs one line per snapshot per client, and once a second the
+  slowest tick and how far the loop ran behind its 20 Hz schedule.
 - `--game-dir`, `--mod-dir` and `COD_DIR` work as they do for the client.
 
 ## Controls

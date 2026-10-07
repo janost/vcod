@@ -2,6 +2,7 @@
 //! points, each edge proven by running pmove along it, and A* over it.
 //! Design and build times: `docs/research/bot-navigation.md`.
 
+use crate::game::trigger::{BrushHull, box_contacts_hulls};
 use glam::Vec3;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
@@ -15,9 +16,10 @@ use vcod_common::pmove::cmd::{ANGLE2SHORT, EventRing, chop, player_step};
 /// Grid pitch bounds in world units. The finest is about a capsule width
 /// plus the slack a doorway leaves; a large map coarsens toward the other
 /// to keep its node count near [`TARGET_CELLS`] (bot-navigation.md,
-/// "Spacing").
+/// "Spacing"). At 64 mp_hurtgen's Retrieval bunker, the objective's room,
+/// came out as islands its stairs never joined.
 const SPACING_MIN: f32 = 32.0;
-const SPACING_MAX: f32 = 64.0;
+const SPACING_MAX: f32 = 48.0;
 /// The cells the spawn points' bounding box is cut into.
 const TARGET_CELLS: f32 = 20_000.0;
 /// How far past the spawn points' bounding box the flood goes. Stock maps
@@ -40,8 +42,9 @@ const LEVEL: f32 = 1.0;
 const MAX_NODES: usize = 60_000;
 /// One bot tick, the cmd length every walk is stepped in.
 const TICK_MS: i32 = 50;
-/// The longest a walk runs with a ladder in it: 10 s, ~900 units of climb.
-const LADDER_TICKS: usize = 200;
+/// The longest a walk runs with a ladder in it: 15 s, ~800 units of climb
+/// at the 53 units/s a full-rate climb makes. mp_ship's hold ladder is 560.
+const LADDER_TICKS: usize = 300;
 /// Degrees up a climbing body looks; past ~9 deg `ladder_move`'s upscale
 /// saturates. Shared with the bots, which climb the same way.
 pub const LADDER_PITCH: f32 = 45.0;
@@ -77,8 +80,9 @@ fn seed_bounds(seeds: &[[f32; 3]]) -> (glam::Vec2, glam::Vec2) {
 impl NavGraph {
     /// Floods the grid from `seeds` (feet origins, typically every spawn
     /// point of the map) and keeps an edge only where a standing run, one
-    /// usercmd per 50 ms through the shared cmd step, arrives.
-    pub fn build(world: &CollisionWorld, seeds: &[[f32; 3]]) -> NavGraph {
+    /// usercmd per 50 ms through the shared cmd step, arrives. No node
+    /// stands where a body would touch one of `hazards`.
+    pub fn build(world: &CollisionWorld, seeds: &[[f32; 3]], hazards: &[BrushHull]) -> NavGraph {
         // The pitch cuts the spawns' box into about TARGET_CELLS, rounded up
         // to a multiple of 16; the flood stays within MARGIN of the box.
         let (lo, hi) = seed_bounds(seeds);
@@ -146,7 +150,7 @@ impl NavGraph {
                     let c = (cx + dx, cy + dy);
                     let m = match g.find(c, to.z) {
                         Some(m) => m,
-                        None if g.nodes.len() < MAX_NODES && inside(to) => {
+                        None if g.nodes.len() < MAX_NODES && inside(to) && !hazard(hazards, to) => {
                             let m = g.add(c, to);
                             next.push(m);
                             m
@@ -161,8 +165,43 @@ impl NavGraph {
             }
             frontier = next;
         }
-        g.link_ladders(world);
+        g.link_ladders(world, hazards);
+        g.link_back(world);
         g
+    }
+
+    /// The flood walks toward a column's centre, so a node that stands off
+    /// its centre (a spawn point against a wall, which never reached it) is
+    /// walked out of but never into: its neighbours aim at the centre and
+    /// meet the wall. Every one-way edge between nodes on one floor is
+    /// walked back node to node.
+    fn link_back(&mut self, world: &CollisionWorld) {
+        let mut jobs = Vec::new();
+        for (a, out) in self.edges.iter().enumerate() {
+            let p = self.nodes[a];
+            for &b in out {
+                let q = self.nodes[b as usize];
+                if (q.z - p.z).abs() < Z_MERGE && !self.edges[b as usize].contains(&(a as u32)) {
+                    jobs.push((b, a as u32));
+                }
+            }
+        }
+        let ok = par_map(&jobs, |&(a, b)| {
+            let to = self.nodes[b as usize];
+            let walked = walk_as(
+                world,
+                self.nodes[a as usize],
+                to.truncate(),
+                Some(to.z),
+                Gait::Forward,
+            );
+            matches!(walked, Walked::Arrived(_))
+        });
+        for (&(a, b), ok) in jobs.iter().zip(ok) {
+            if ok {
+                self.link(a, b);
+            }
+        }
     }
 
     /// The flood walks only to a neighbouring column, which rarely lines up
@@ -170,7 +209,7 @@ impl NavGraph {
     /// in front of the face and a head where a climb up it comes to rest,
     /// linked where the bots' own steering proves the way, and each linked
     /// to the graph around it (bot-navigation.md, "Ladders").
-    fn link_ladders(&mut self, world: &CollisionWorld) {
+    fn link_ladders(&mut self, world: &CollisionWorld, hazards: &[BrushHull]) {
         let faces: Vec<(Vec3, Vec3, Vec3)> = ladders(world)
             .into_iter()
             .flat_map(|(lo, hi)| {
@@ -181,7 +220,8 @@ impl NavGraph {
             .collect();
         let rungs = par_map(&faces, |&(lo, hi, n)| rung(world, lo, hi, n));
         let mut ends = Vec::new();
-        for (foot, head, up, down) in rungs.into_iter().flatten() {
+        let safe = |r: &(Vec3, Vec3, bool, bool)| !hazard(hazards, r.0) && !hazard(hazards, r.1);
+        for (foot, head, up, down) in rungs.into_iter().flatten().filter(safe) {
             let f = self.add(self.column(foot), foot);
             let h = self.add(self.column(head), head);
             if up {
@@ -337,6 +377,18 @@ impl NavGraph {
 
     /// [`Self::path`] without the directed edges in `avoid`.
     pub fn path_avoiding(&self, from: u32, to: u32, avoid: &[(u32, u32)]) -> Option<Vec<u32>> {
+        self.astar(from, to, avoid, false)
+    }
+
+    /// [`Self::path`], or when `to` is out of reach, the path to the
+    /// reachable node nearest it: a goal the graph does not reach (an
+    /// objective down a bunker's stairs, on a pitch too coarse for them)
+    /// is still closed in on along the graph, not wandered at.
+    pub fn path_toward(&self, from: u32, to: u32) -> Option<Vec<u32>> {
+        self.astar(from, to, &[], true)
+    }
+
+    fn astar(&self, from: u32, to: u32, avoid: &[(u32, u32)], partial: bool) -> Option<Vec<u32>> {
         let n = self.nodes.len();
         if from as usize >= n || to as usize >= n {
             return None;
@@ -352,16 +404,21 @@ impl NavGraph {
             node: from,
         });
         let mut expanded = 0;
+        let back = |came: &[u32], to: u32| {
+            let mut out = vec![to];
+            let mut at = to;
+            while at != from {
+                at = came[at as usize];
+                out.push(at);
+            }
+            out.reverse();
+            out
+        };
+        // The expanded node nearest the goal, for a partial plan.
+        let mut closest = (h(from), from);
         while let Some(Open { f, node }) = open.pop() {
             if node == to {
-                let mut out = vec![to];
-                let mut at = to;
-                while at != from {
-                    at = came[at as usize];
-                    out.push(at);
-                }
-                out.reverse();
-                return Some(out);
+                return Some(back(&came, to));
             }
             // A stale heap entry: the node was reached cheaper since.
             if f > cost[node as usize] + h(node) + 1e-3 {
@@ -370,6 +427,9 @@ impl NavGraph {
             expanded += 1;
             if expanded > MAX_EXPANSIONS {
                 return None;
+            }
+            if h(node) < closest.0 {
+                closest = (h(node), node);
             }
             let here = self.nodes[node as usize];
             for &next in &self.edges[node as usize] {
@@ -387,7 +447,7 @@ impl NavGraph {
                 }
             }
         }
-        None
+        (partial && closest.1 != from).then(|| back(&came, closest.1))
     }
 
     /// Each node's strongly connected component, numbered from 0 (Kosaraju,
@@ -465,7 +525,7 @@ impl NavGraph {
 /// The graphs built so far this process, by map. A map cycle comes back
 /// to a map without a second build, and the test gates that start a server
 /// per test share one.
-type CacheKey = (String, usize, usize, usize, Vec<[u32; 3]>);
+type CacheKey = (String, usize, usize, usize, usize, Vec<[u32; 3]>);
 static CACHE: std::sync::Mutex<Vec<(CacheKey, Arc<NavGraph>)>> = std::sync::Mutex::new(Vec::new());
 
 /// The key carries the collision's counts and the spawn points too, so a
@@ -478,6 +538,7 @@ fn cache_key(map: &str, world: &crate::world::World) -> CacheKey {
         c.brushes.len(),
         c.tris.len(),
         c.model_tris.len(),
+        world.hazards.len(),
         world
             .spawn_points
             .iter()
@@ -510,7 +571,7 @@ fn cached(key: CacheKey, build: impl FnOnce() -> NavGraph) -> Arc<NavGraph> {
 /// `map`'s graph, built on first use on the calling thread.
 pub fn graph_for(map: &str, world: &crate::world::World) -> Arc<NavGraph> {
     cached(cache_key(map, world), || {
-        NavGraph::build(&world.collision, &world.spawn_points)
+        NavGraph::build(&world.collision, &world.spawn_points, &world.hazards)
     })
 }
 
@@ -540,7 +601,13 @@ impl NavJob {
         }
         let collision = world.collision.clone();
         let seeds = world.spawn_points.clone();
-        let build = move || cached(key, || NavGraph::build(&collision, &seeds));
+        let hazards = world.hazards.clone();
+        let build = move || {
+            // One core stays the tick's, so a build doesn't jitter the
+            // schedule it runs beside.
+            SPARE_CORE.set(true);
+            cached(key, || NavGraph::build(&collision, &seeds, &hazards))
+        };
         NavJob {
             ready: None,
             building: Some(std::thread::spawn(build)),
@@ -569,6 +636,10 @@ const REST_TICKS: u32 = 20;
 /// blocks a proven edge is mostly a body: a bot guarding the bomb at the
 /// foot of mp_rocket's stairs held another there for 11 s.
 const AVOID_TICKS: u32 = 200;
+/// How far below where its path ended a body walking at a point goal has
+/// to drop before the follower plans for the point again: more than a stair
+/// or a step off a kerb.
+const ARRIVED_DROP: f32 = 48.0;
 /// A roam goal is picked at least this far away when it can be.
 const ROAM_MIN: f32 = 1000.0;
 /// A seen enemy has to move this far off the planned destination before the
@@ -591,6 +662,11 @@ pub struct Follower {
     rest: u32,
     /// A point goal's path is walked out; the bot heads at the point itself.
     arrived: bool,
+    /// Where the body stood when the path was walked out. Walking at the
+    /// point off the graph can drop it a floor (mp_depot's Retrieval
+    /// documents sit by an upper floor's edge), and from there the point is
+    /// planned for again.
+    arrived_at: Vec3,
     /// Calls to [`Self::waypoint`], one per tick: the clock `avoid` runs on.
     clock: u32,
     /// Edges it got stuck on, left out of its plans until the tick given.
@@ -632,7 +708,12 @@ impl Follower {
                     self.reset();
                     self.dest = g.nearest(p);
                 } else if self.arrived {
-                    return Some(p);
+                    let fell = here.z < self.arrived_at.z - ARRIVED_DROP;
+                    if !fell {
+                        return Some(p);
+                    }
+                    self.reset();
+                    self.dest = g.nearest(p);
                 }
             }
         }
@@ -648,9 +729,13 @@ impl Follower {
             // Round the edges it got stuck on when there is a way round, else
             // through them again: whatever blocked one may have moved.
             let avoid: Vec<(u32, u32)> = self.avoid.iter().map(|e| (e.0, e.1)).collect();
+            // A point out of the graph's reach is closed in on as far as the
+            // graph goes, then walked at.
+            let point = matches!(goal, Goal::To(_));
             let plan = |d| {
                 g.path_avoiding(start, d, &avoid)
                     .or_else(|| g.path(start, d))
+                    .or_else(|| point.then(|| g.path_toward(start, d)).flatten())
             };
             let Some(path) = self.dest.and_then(plan) else {
                 // Unreachable from here: a roam picks again next time.
@@ -689,6 +774,7 @@ impl Follower {
             return match goal {
                 Goal::To(p) => {
                     self.arrived = true;
+                    self.arrived_at = here;
                     Some(p)
                 }
                 _ => {
@@ -779,9 +865,20 @@ impl PartialOrd for Open {
     }
 }
 
-/// `f` over `items` on every core, results in `items` order.
+thread_local! {
+    /// Set on a [`NavJob`]'s thread: its [`par_map`]s leave one core free.
+    static SPARE_CORE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `f` over `items` on every core (all but one under [`SPARE_CORE`]),
+/// results in `items` order.
 fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let threads = if SPARE_CORE.get() {
+        cores.saturating_sub(1).max(1)
+    } else {
+        cores
+    };
     if threads == 1 || items.len() < 16 {
         return items.iter().map(f).collect();
     }
@@ -864,14 +961,17 @@ fn ladders(world: &CollisionWorld) -> Vec<(Vec3, Vec3)> {
 fn rung(world: &CollisionWorld, lo: Vec3, hi: Vec3, n: Vec3) -> Option<(Vec3, Vec3, bool, bool)> {
     let mid = (lo + hi) * 0.5;
     let half = (hi - lo).dot(n.abs()) * 0.5;
-    let start = (mid.truncate() + n.truncate() * (half + 16.0)).extend(lo.z + 16.0);
-    let probe = PlayerState::spawn(start, 0.0);
-    if world
-        .box_trace(start, start, probe.mins(), probe.maxs())
-        .startsolid
-    {
-        return None;
-    }
+    let front = mid.truncate() + n.truncate() * (half + 16.0);
+    let side = glam::Vec2::new(-n.y, n.x);
+    let probe = PlayerState::spawn(lo, 0.0);
+    // A ladder brush often runs on below the floor it stands on, and a wall
+    // can crowd one edge of it, so the drop starts at the first height in
+    // front of it a body fits, the middle first, then up to 16 units aside.
+    let start = (1..=FOOT_TRIES)
+        .map(|i| lo.z + 16.0 * i as f32)
+        .take_while(|&z| z < hi.z)
+        .flat_map(|z| [0.0, -8.0, 8.0, -16.0, 16.0].map(|s| (front + side * s).extend(z)))
+        .find(|&p| !world.box_trace(p, p, probe.mins(), probe.maxs()).startsolid)?;
     // Dropped facing away, or an airborne grab would hang it on the face.
     let foot = settle(world, start, (n.y).atan2(n.x).to_degrees())?;
     if foot.z < lo.z - 48.0 || under_ground(world, foot) {
@@ -899,7 +999,9 @@ fn rung(world: &CollisionWorld, lo: Vec3, hi: Vec3, n: Vec3) -> Option<(Vec3, Ve
         if top.is_none() && climbed && ps.on_ground && ps.origin.z > foot.z + 48.0 {
             top = Some(ps.origin);
         }
-        if forward == 0 && ps.on_ground && ps.velocity.length() < 1.0 {
+        // Stopped past the top, or pinned at the lip against whatever
+        // stands beyond it.
+        if top.is_some() && ps.on_ground && ps.velocity.length() < 1.0 {
             break;
         }
     }
@@ -919,8 +1021,18 @@ fn rung(world: &CollisionWorld, lo: Vec3, hi: Vec3, n: Vec3) -> Option<(Vec3, Ve
     (up || down).then_some((foot, head, up, down))
 }
 
+/// Heights, 16 units apart from the ladder's bottom, a foot's drop is
+/// tried from.
+const FOOT_TRIES: usize = 6;
 /// How far a climb walks on past the top of a ladder before it stops.
 const LADDER_STEP_IN: f32 = 24.0;
+
+/// Whether a standing body with its feet at `p` touches one of `hazards`.
+pub(crate) fn hazard(hazards: &[BrushHull], p: Vec3) -> bool {
+    use vcod_common::pmove::{HALF_WIDTH, Stance};
+    let half = Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height() * 0.5);
+    !hazards.is_empty() && box_contacts_hulls(p + Vec3::Z * half.z, half, Vec3::ZERO, hazards)
+}
 
 /// Idle cmds until a body dropped at `p` stands on something; `None` when it
 /// falls out of the world or never lands.
@@ -1130,8 +1242,12 @@ fn walk_as(
 /// walk the map's floor under them (mp_hurtgen's, 48 units below its river
 /// bed). From there the ray up either stops on the underside of a triangle
 /// whose own face, `(b - a) x (c - a)`, points up, or passes through a
-/// one-sided one and the same ray back down hits it. Both rays see what a
-/// player clips, not the brushes only a shot meets.
+/// one-sided terrain triangle and the same ray back down hits it. Both rays
+/// see what a player clips, not the brushes only a shot meets. Nothing else
+/// the ray back down meets is ground over the point: a patch (mp_ship's
+/// mast ladder stands 540 units under a spar's top facet), or a ceiling
+/// just over the head that the ray starts against (a low doorway on
+/// mp_pavlov kept 540 nodes behind it off the graph).
 fn under_ground(world: &CollisionWorld, p: Vec3) -> bool {
     let head = p + Vec3::Z * 72.0;
     let up = world.point_trace(head, head + Vec3::Z * 8192.0, MASK_PLAYERSOLID, false);
@@ -1142,7 +1258,7 @@ fn under_ground(world: &CollisionWorld, p: Vec3) -> bool {
         }
     }
     let down = world.point_trace(up.endpos - Vec3::Z, head, MASK_PLAYERSOLID, false);
-    down.fraction < 1.0
+    matches!(down.hit, Some(Prim::Tri(_)))
 }
 
 /// The bits of a client a walk carries between cmds.
@@ -1345,6 +1461,59 @@ mod tests {
     /// A ladder whose head is right above its foot: the follower keeps the
     /// head as its waypoint up the climb, though the climb never closes in
     /// flat, and does not skip it for the next node from a floor below.
+    /// A goal the graph does not reach is closed in on as far as it goes.
+    #[test]
+    fn a_path_toward_an_island_ends_at_the_node_nearest_it() {
+        let g = NavGraph::from_parts(
+            vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(32.0, 0.0, 0.0),
+                Vec3::new(64.0, 0.0, 0.0),
+                Vec3::new(200.0, 0.0, 0.0),
+            ],
+            vec![vec![1], vec![0, 2], vec![1], vec![]],
+        );
+        assert_eq!(g.path(0, 3), None);
+        assert_eq!(g.path_toward(0, 3), Some(vec![0, 1, 2]));
+        assert_eq!(g.path_toward(3, 0), None, "nowhere to go from the island");
+    }
+
+    /// Walking at a point past the path's end can drop the body a floor;
+    /// from there the point is planned for again, not walked at blind.
+    #[test]
+    fn a_follower_that_falls_off_its_point_plans_again() {
+        let g = NavGraph::from_parts(
+            vec![
+                Vec3::new(0.0, 0.0, 100.0),
+                Vec3::new(32.0, 0.0, 100.0),
+                Vec3::new(64.0, 0.0, 0.0),
+                Vec3::new(32.0, 0.0, 0.0),
+            ],
+            vec![vec![1], vec![0, 2], vec![3, 1], vec![2]],
+        );
+        let mut f = Follower::default();
+        let goal = crate::bots::Goal::To([40.0, 0.0, 120.0]);
+        let mut plans = 4;
+        // Standing on the path's last node: walked out, head at the point.
+        let at = [32.0, 0.0, 100.0];
+        assert_eq!(
+            f.waypoint(&g, goal, at, &mut plans, &mut || 0),
+            Some([40.0, 0.0, 120.0])
+        );
+        assert_eq!(
+            f.waypoint(&g, goal, at, &mut plans, &mut || 0),
+            Some([40.0, 0.0, 120.0])
+        );
+        // Fell to the floor below: a new plan back up, its waypoints nodes.
+        let below = [34.0, 0.0, 0.0];
+        let w = f.waypoint(&g, goal, below, &mut plans, &mut || 0);
+        assert_eq!(plans, 2, "planned again");
+        assert!(
+            w.is_some_and(|w| g.nodes.contains(&Vec3::from(w))),
+            "still walking at the point: {w:?}"
+        );
+    }
+
     #[test]
     fn a_follower_climbs_to_a_head_above_its_foot() {
         let g = NavGraph::from_parts(
@@ -1386,7 +1555,8 @@ mod tests {
 
     /// mp_ship's ladders, each from its open face: up and down both proved
     /// by the bots' own steering. One plain, one whose head stands right
-    /// above its foot in a shaft, and one only the creep gets down.
+    /// above its foot in a shaft, one only the creep gets down, and the five
+    /// that got no rung before 2026-10-07.
     #[test]
     fn ships_ladders_are_climbed_both_ways() {
         let Some(fs) = vcod_common::testing::game_fs() else {
@@ -1402,6 +1572,14 @@ mod tests {
             ([5872.5, 47.0], Vec3::X, 352.125, 480.125),
             ([3711.5, 56.0], -Vec3::X, 760.125, 992.125),
             ([3792.5, 65.0], Vec3::X, 304.125, 616.125),
+            // The hold's 560-unit ladder, the mast's under a spar, a crow's
+            // nest: climbs past the old 10 s budget, or under a patch.
+            ([4332.0, -77.5], -Vec3::Y, 56.125, 615.125),
+            ([3675.0, -86.5], -Vec3::Y, 896.125, 1145.125),
+            ([4975.5, 64.0], -Vec3::X, 692.125, 1219.125),
+            // A brush running on below the floor, a wall crowding one edge.
+            ([6487.0, 324.5], Vec3::Y, 80.125, 216.125),
+            ([3600.5, -119.0], Vec3::X, 760.125, 896.125),
         ] {
             let &(lo, hi) = boxes
                 .iter()
@@ -1417,6 +1595,28 @@ mod tests {
                 "{at:?}: the back"
             );
         }
+    }
+
+    /// mp_hurtgen's minefields ring the axis spawn: a bot that wandered off
+    /// it died about every 12 s and ended the Retrieval round.
+    #[test]
+    fn hurtgens_minefields_are_hazards() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let Some(entry) = fs.resolve_map("mp_hurtgen") else {
+            return;
+        };
+        let bsp = vcod_common::bsp::parse(&fs.read(&entry).unwrap()).unwrap();
+        let world = crate::world::World::from_bsp(&bsp, Some(&fs));
+        assert!(
+            hazard(&world.hazards, Vec3::new(6198.0, -302.0, 188.0)),
+            "where the bot died"
+        );
+        assert!(
+            !hazard(&world.hazards, Vec3::new(6304.0, 296.0, 96.125)),
+            "the spawn beside it"
+        );
     }
 
     #[test]
