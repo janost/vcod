@@ -11,17 +11,16 @@
 
 use super::flags::{ET_CORPSE, ET_ITEM, ET_PLAYER, ET_SCRIPTMOVER};
 use super::msg::{BUTTON_USE, HudElem, NULL_USERCMD, Objective, UserCmd, hud_field as h};
-use super::protocol::PROTOCOL_V1;
+use super::protocol::{
+    CS_LOCALIZED, CS_MODELS_V1 as CS_MODELS, CS_SHADERS, CS_SOUNDS, CsRange, PROTOCOL_V1,
+};
 use super::snapshot::Snapshot;
 
 /// The cvar the gsc probe sets on a client with `setClientCvar`.
 pub const USE_CVAR: &str = "probe_use";
 
-const CS_HEAD_ICONS: usize = 28;
-const CS_MODELS: usize = 268;
-const CS_SOUNDS: usize = 524;
-const CS_LOCALIZED: usize = 1244;
-const CS_SHADERS: usize = 1500;
+/// A head icon is 1-based into its range, as a sound or a shader is.
+const CS_HEAD_ICONS: usize = CsRange::HeadIcon.bounds().0 - 1;
 
 /// A tap is held this long, under re.gsc's 0.3 s hold-to-drop delay.
 const TAP_HOLD_MS: i64 = 100;
