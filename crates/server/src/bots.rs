@@ -126,6 +126,10 @@ pub struct BotView {
     /// The next point on the server's path toward [`Bot::goal`]; `None`
     /// while there is no path, and the bot wanders.
     pub waypoint: Option<[f32; 3]>,
+    /// Per compass octant (0 is +x, counter-clockwise by 45 degrees), a
+    /// minefield or `trigger_hurt` [`HAZARD_LOOK`] units that way. A wander
+    /// heading keeps out of them; the graph already does.
+    pub hazard_ahead: [bool; 8],
     /// The loudest gunfire or blast another player made last tick within
     /// earshot ([`loudest`]), chest high.
     pub noise: Option<[f32; 3]>,
@@ -993,7 +997,7 @@ impl Bot {
             Some(w) if self.unstick_ticks == 0 => self.steer(view, w),
             _ => {
                 self.unstick_ticks = self.unstick_ticks.saturating_sub(1);
-                if self.heading_ticks == 0 {
+                if self.heading_ticks == 0 || view.hazard_ahead[octant(self.heading)] {
                     self.pick_heading(view);
                 } else {
                     self.heading_ticks -= 1;
@@ -1292,6 +1296,13 @@ impl Bot {
     /// A fresh wander heading, and a new stall baseline to measure it by.
     fn pick_heading(&mut self, view: &BotView) {
         self.heading = (self.rand() % 360) as f32;
+        // Turned a step at a time off a hazard; boxed in, it goes anyway.
+        for _ in 0..8 {
+            if !view.hazard_ahead[octant(self.heading)] {
+                break;
+            }
+            self.heading = (self.heading + 45.0) % 360.0;
+        }
         self.heading_ticks = 40 + (self.rand() % 40) as u32;
         self.stall_origin = view.origin;
         self.stall_ticks = 0;
@@ -1337,6 +1348,15 @@ impl Bot {
         }
         cmd
     }
+}
+
+/// How far ahead of a wandering bot [`BotView::hazard_ahead`] looks.
+pub const HAZARD_LOOK: f32 = 64.0;
+
+/// The compass octant of a yaw in degrees, as [`BotView::hazard_ahead`]
+/// indexes them.
+pub fn octant(yaw: f32) -> usize {
+    ((yaw.rem_euclid(360.0) + 22.5) / 45.0) as usize % 8
 }
 
 /// Ticks a stuck bot spends on a random heading before its waypoint again.
@@ -1492,6 +1512,7 @@ mod tests {
             enemy: None,
             grenade: Some(6),
             waypoint: None,
+            hazard_ahead: [false; 8],
             noise: None,
             linked: false,
             on_ladder: false,
@@ -1967,6 +1988,42 @@ mod tests {
         let far_shot = noise(1800.0, 2, HEAR_GUNFIRE);
         let near_blast = noise(1400.0, 3, HEAR_BLAST);
         assert_eq!(heard(&[near_blast, far_shot]), Some(far_shot.at));
+    }
+
+    /// With no path a bot wanders on a random heading; it never takes one
+    /// into a minefield, and turns off one it walks up to.
+    #[test]
+    fn a_wandering_bot_keeps_out_of_hazards() {
+        for seed in 1..20 {
+            let mut bot = Bot::new("allies", false, seed);
+            let mut v = view();
+            // Everywhere but -y (octant 6) is a minefield.
+            v.hazard_ahead = [true; 8];
+            v.hazard_ahead[6] = false;
+            let cmd = bot.think(&v);
+            assert_eq!(
+                octant(bot.heading),
+                6,
+                "seed {seed}: heading {}",
+                bot.heading
+            );
+            assert_eq!(cmd.forward, 127);
+            // A hazard turns up in front: the next tick picks again.
+            v.hazard_ahead = [false; 8];
+            v.hazard_ahead[6] = true;
+            bot.think(&v);
+            assert_ne!(octant(bot.heading), 6, "seed {seed}: kept walking in");
+        }
+    }
+
+    #[test]
+    fn octants_run_counter_clockwise_from_plus_x() {
+        assert_eq!(octant(0.0), 0);
+        assert_eq!(octant(22.0), 0);
+        assert_eq!(octant(23.0), 1);
+        assert_eq!(octant(90.0), 2);
+        assert_eq!(octant(-90.0), 6);
+        assert_eq!(octant(350.0), 0);
     }
 
     #[test]

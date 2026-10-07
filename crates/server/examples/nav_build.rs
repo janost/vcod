@@ -27,7 +27,7 @@ fn main() {
         let world = vcod_server::world::World::from_bsp(&bsp, Some(&fs));
         let seeds = spawn_points(&bsp.entities);
         let t = Instant::now();
-        let g = NavGraph::build(&world.collision, &seeds);
+        let g = NavGraph::build(&world.collision, &seeds, &world.hazards);
         let ms = t.elapsed().as_secs_f64() * 1000.0;
         // The component holding the most spawns, and how many it holds.
         let comp = g.components();

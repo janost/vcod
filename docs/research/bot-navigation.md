@@ -35,9 +35,14 @@ same code a player moves with. Edges are directed: a drop of up to 200 units
 ### Spacing
 
 The lattice pitch is chosen per map: the spawn points' bounding box cut into
-about 20 000 cells, rounded up to a multiple of 16 and clamped to 32..64. The
-small maps get 32; `mp_brecourt`, `mp_dawnville`, `mp_powcamp` and `mp_rocket`
-get 48; `mp_hurtgen` 64. 32 is the finest worth having: with a player half
+about 20 000 cells, rounded up to a multiple of 16 and clamped to 32..48. The
+small maps get 32; `mp_brecourt`, `mp_dawnville`, `mp_hurtgen`, `mp_powcamp`
+and `mp_rocket` get 48. VERIFIED (measured, 2026-10-07): at 64, where its box
+put it before, `mp_hurtgen`'s Retrieval bunker, the objective's room at
+z -198, came out as islands of 6 and 10 nodes its stairs never joined, and
+the objective was out of every bot's reach. At 48 it joins the main
+component, the graph has 27 406 nodes against 15 365, and the build takes
+about 1.5 times as long. 32 is the finest worth having: with a player half
 width of 15, a lattice line has to pass within a few units of a door's centre,
 and the capsule's slide round a frame's edge covers most of the rest. At 48 and
 64 on the small maps the measured spawn connectivity drops (`mp_carentan` 177
@@ -75,6 +80,23 @@ measured).
   `mp_pavlov` put a brush ceiling 3.75 units over the head, which the ray
   back down starts against. Counting either refused the node, and the
   doorway kept 540 nodes behind it off the graph.
+- No node stands where a body would touch the brushes of a `trigger_hurt`
+  or a `trigger_multiple` named `minefield` (`World::hazards`), so no edge
+  starts or ends in one. VERIFIED (measured, `mp_hurtgen` `re`, 2 bots,
+  seed 7): the axis spawn sits against minefields, and a bot that wandered
+  off it died to `MOD_EXPLOSIVE` about every 12 s, which ended each round as
+  an allied win. The rule takes 3 900 nodes off `mp_brecourt`, 3 400 off
+  `mp_rocket` and 10 400 off `mp_pavlov` (VERIFIED, measured; spawn
+  connectivity is unchanged or better on every map). INFERRED: the count
+  is the minefields plus ground the flood reached only through them.
+- After the flood and the ladders, every one-way edge between two nodes on
+  one floor is walked back node to node. A flood walk aims at a column's
+  centre, so a node off its centre is walked out of and never into. VERIFIED
+  (measured): the ten axis spawns on `mp_hurtgen` stand against a wall at
+  x 6304, whose columns' centres lie 32 units inside it, and each was a
+  component of one node until this pass. With it `mp_hurtgen` reaches 188
+  of 193 spawns in one component (178 before), `mp_brecourt` 161 (159),
+  `mp_dawnville` 176 (174) and `mp_rocket` 141 (136).
 - New nodes stay within 512 units of the spawns' bounding box. Past it lies
   scenery: `mp_hurtgen`'s forest added 10 000 nodes.
 - Walks run on every core, a layer at a time, handed out one node at a time;
@@ -165,22 +187,24 @@ other builds were loading, so only their ratio means anything: new over old
 ran 0.7 to 1.5 on ten maps, 1.6 on `mp_depot` and 1.7 to 2.0 on `mp_ship`.
 The counts below were taken again (2026-10-07) after the BVH rework, the
 move of world collision to brushes and patches only, and the ladder budget,
-foot and `under_ground` changes (section 2, "Ladders" and "The flood").
+foot and `under_ground` changes, the hazards, the walk back over one-way
+edges and the 48-unit pitch cap (section 2, "Spacing", "The flood" and
+"Ladders").
 
 | map | nodes | edges | spawns in one component |
 |---|---|---|---|
-| mp_brecourt | 19103 | 146464 | 159 / 161 |
-| mp_carentan | 9668 | 68037 | 185 / 185 |
-| mp_chateau | 6508 | 43481 | 110 / 113 |
-| mp_dawnville | 7278 | 50219 | 174 / 185 |
-| mp_depot | 12144 | 83536 | 153 / 161 |
-| mp_harbor | 7520 | 53250 | 156 / 161 |
-| mp_hurtgen | 20416 | 152078 | 178 / 193 |
-| mp_pavlov | 26534 | 195633 | 161 / 161 |
-| mp_powcamp | 5977 | 41182 | 149 / 161 |
-| mp_railyard | 11348 | 80712 | 159 / 161 |
-| mp_rocket | 15759 | 116401 | 136 / 153 |
-| mp_ship | 11171 | 74831 | 105 / 112 |
+| mp_brecourt | 15214 | 116117 | 161 / 161 |
+| mp_carentan | 9668 | 68217 | 185 / 185 |
+| mp_chateau | 6508 | 43669 | 110 / 113 |
+| mp_dawnville | 7278 | 50329 | 176 / 185 |
+| mp_depot | 12144 | 83952 | 153 / 161 |
+| mp_harbor | 7520 | 53362 | 156 / 161 |
+| mp_hurtgen | 27406 | 206843 | 190 / 193 |
+| mp_pavlov | 16085 | 114252 | 161 / 161 |
+| mp_powcamp | 5977 | 41255 | 149 / 161 |
+| mp_railyard | 11348 | 80901 | 159 / 161 |
+| mp_rocket | 12344 | 90580 | 141 / 153 |
+| mp_ship | 11171 | 75212 | 105 / 112 |
 
 - VERIFIED (measured): an early single-threaded build of `mp_carentan`, before
   the diagonal shortcut and the stall cutoff, took 10.6 s. `perf` puts 80% of
@@ -245,6 +269,14 @@ else a spot it remembers or heard, section 4) or `Roam`. A per-bot `nav::Followe
   roam destination is replaced.
 - A `To` point is re-planned only once it moves 128 units off the planned
   destination; at the end of the path the bot heads at the point itself.
+  A point the graph does not reach is planned for as far as it goes: the
+  path ends at the reachable node nearest it (`NavGraph::path_toward`), and
+  the bot heads at the point from there. Heading at the point off the graph
+  can drop the body a floor; 48 units below where the path ended, the
+  point is planned for again. VERIFIED (measured, `mp_depot` `re`, 2 bots,
+  seed 7): before, the attacker climbed to the documents' floor, walked
+  off its edge at them, and spent the rest of the round walking at them
+  from the floor below.
 - A waypoint is passed within 24 units horizontally, or once the bot is nearer
   the next node than the waypoint is, either only within 48 units of its
   height: a ladder's head stands right above its foot. A waypoint four grid
@@ -268,7 +300,9 @@ while on a ladder (a ladder or ledge below, the way the graph proved it),
 creeping inside 24 units with its heading held, as the ladder pass's walks
 did. A bot that
 has not left a 15-unit circle in ten ticks takes a random heading for 15 ticks
-whether it has a waypoint or not. Engaging an enemy overrides all of it.
+whether it has a waypoint or not. A random heading is never one with a
+hazard 64 units along it (`BotView::hazard_ahead`, one flag per 45-degree
+octant), and a bot wandering up to one picks again. Engaging an enemy overrides all of it.
 In S&D the objective names the point and can hold the bot still
 (`bot-objectives.md`); a bot standing at its objective or linked by the
 script is never counted as stuck.

@@ -291,6 +291,7 @@ pub(crate) const TOUCH_BOX: [f32; 3] = [40.0, 40.0, 52.0];
 /// the entity's current origin is applied at test time, so a relocated
 /// trigger takes its brushes with it. Point p is inside iff n·p <= d for
 /// every plane.
+#[derive(Clone)]
 pub struct BrushHull {
     pub planes: Vec<(Vec3, f32)>,
 }
@@ -329,7 +330,12 @@ pub fn model_brush_hulls(bsp: &vcod_common::bsp::Bsp) -> Vec<Vec<BrushHull>> {
 /// `origin`? Q3's separating-plane test, which is what a contact test reduces
 /// to for an AABB: the box clears a brush only if some plane separates it, so
 /// a brush with no separating plane is in contact.
-fn box_contacts_hulls(centre: Vec3, half: Vec3, origin: Vec3, hulls: &[BrushHull]) -> bool {
+pub(crate) fn box_contacts_hulls(
+    centre: Vec3,
+    half: Vec3,
+    origin: Vec3,
+    hulls: &[BrushHull],
+) -> bool {
     let c = centre - origin;
     hulls.iter().any(|b| {
         b.planes.iter().all(|&(n, d)| {
@@ -1043,6 +1049,7 @@ mod tests {
                 vis: vcod_common::bsp::Visibility::none(),
                 spawn: ([0.0; 3], 0.0),
                 spawn_points: Vec::new(),
+                hazards: Vec::new(),
             }))
         };
         vm.with_cx(|cx| {
