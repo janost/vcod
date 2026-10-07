@@ -330,8 +330,9 @@ fn a_disconnect_frees_the_clients_own_elements() {
     assert!(texted, "B was never sent its respawn text");
 
     cb.disconnect();
+    // Past `sv_zombietime`, which holds B's slot after the drop.
     let mut at = None;
-    for _ in 0..5 {
+    for _ in 0..50 {
         ca.send_frame(&NULL_USERCMD);
         at = Some(step(&mut sv, &mut ca, &mut cb));
     }

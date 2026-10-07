@@ -503,6 +503,15 @@ impl<T: Transport> NetClient<T> {
             self.handle_oob(cmd, rest);
             return;
         }
+        // `CL_PacketEvent`: nothing sequenced is valid before
+        // `connectResponse`. A reconnect from the same socket would otherwise
+        // read the old slot's zombie frames, drop notice included.
+        if matches!(
+            self.state,
+            NetState::Disconnected | NetState::Challenging | NetState::Connecting
+        ) {
+            return;
+        }
         match self.netchan.process_in(pkt, &self.huff) {
             Ok(Some(msg)) => self.handle_message(&msg),
             Ok(None) => {}
