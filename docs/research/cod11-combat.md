@@ -5355,16 +5355,47 @@ What still differs, each INFERRED from 16.1 and not measured:
 - The packets of a tick run at the tick, after the clock has advanced;
   retail runs them as they arrive, on the previous frame's `level.time`
   (15.6's 50 ms). Their relative order is the same.
-- A gunner's rounds are traced inside its own slot's turn of the end-frame
-  loop, right after its `commit_pose`, so they meet a lower slot's new pose
-  and a higher slot's last-frame one, as retail's inside `ClientEndFrame`
-  (`cod11-turrets.md` 6.1) do; pinned by
-  `a_round_meets_a_higher_slots_last_pose_and_a_lower_slots_new_one`
-  (`crates/server/tests/turret_ab.rs`). Their hits are delivered after the
-  whole loop, where retail runs each callback inside the gunner's
-  `ClientEndFrame`, before any higher slot's aim trace and anim update; a
-  callback that moves or kills a higher slot is therefore seen one pass late
-  by that slot's aim trace and pose.
+
+**A turret round inside its gunner's end frame.** VERIFIED,
+`game.mp.i386.so`: `G_RunFrame`'s slot loop (0x50ab0..0x50add) calls
+`ClientEndFrame` once per slot at 0x50abd; `ClientEndFrame` calls
+`G_CheckForPreventFriendlyFire` at 0x4110d, `G_CheckForCursorHints` at
+0x41119, `P_DamageFeedback` at 0x41128, `BG_PlayerAnimation` at 0x41486 and
+`turret_think_client` at 0x414b1; the turret fire 0x521d4 calls `Bullet_Fire`
+at 0x522f1, `Bullet_Fire` calls `Bullet_Fire_Extended` at 0x691b4, and that
+calls `G_Damage` at 0x68beb, which calls `Scr_PlayerDamage` at 0x49e62.
+INFERRED, off those calls and 16.1's callback path: a gunner's
+`CodeCallback_PlayerDamage`, and the `CodeCallback_PlayerKilled` and
+`player_die` a killing round reaches, run inside the gunner's own
+`ClientEndFrame`, so a higher slot's turn of the same loop (its feedback,
+its aim trace, its pose, its own turret) reads what they wrote, and a lower
+slot's turn already ran.
+
+Ours does the same: each gunner's rounds are traced inside its own turn,
+right after its `commit_pose`, meeting a lower slot's new pose and a higher
+slot's last-frame one (pinned by
+`a_round_meets_a_higher_slots_last_pose_and_a_lower_slots_new_one`,
+`crates/server/tests/turret_ab.rs`), and delivered there by
+`deliver_turret_rounds` (`crates/server/src/server.rs`): the callback, the
+weapon and sim ops it queued, the vitals mirror, a higher victim's end frame
+again for its feedback, and every body refreshed for the later slots' aim
+traces. A victim below the gunner takes its feedback on the next frame.
+
+- A higher-slot gunner the round kills is dead on its own turn, so
+  `turret_think_client` releases instead of firing (0x5236b, turrets doc 8)
+  and a held trigger raises no shot that frame; pinned by
+  `a_gunner_killed_by_a_turret_round_lets_go_that_frame`. A lower-slot
+  gunner killed by a higher slot's round keeps the gun until its turn on the
+  next frame; INFERRED, `player_die` calls no release (its calls at
+  0x49a6e..0x49d9d).
+- Two gunners on one target in one frame: INFERRED, from 16.1's
+  `player_die` stores (`r.contents` 0x4000000 at 0x49c28) and the shot mask
+  0x2802031 without that bit, the later slot's rounds pass the body the
+  earlier slot's round killed. Ours drops a dead sim from the traced bodies
+  (`ClientSim::hit_body`), and the delivery inside the loop makes that
+  death visible before the later gunner traces. No test pins it: carentan's
+  rig has two clients and the guns' arcs do not overlap. No retail capture
+  covers either case.
 
 VERIFIED, two runs against ours on 2026-09-27, the `probe_passthru` recipe
 of `client-probes/README.md` with one `--probe-target --probe-team axis` and

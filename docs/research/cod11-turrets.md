@@ -1331,8 +1331,12 @@ The release (section 8) is `game::turret::release` on the record and
   byte is not 1 or the gunner is dead or not playing. The use key's busy 2 is
   set in the cmd's own item pass, ahead of the touch pass's `pm_type` gate.
   INFERRED, section 4.1: `Cmd_Activate_f` has no `pm_type` gate of its own.
-- the turret pass releases, after its rounds' damage callback, any gunner
-  those rounds killed, so the victim's death snapshot is already unlocked.
+- a gunner a lower slot's round killed reaches that release on its own turn
+  of the same pass, since the round's callback runs inside the shooter's turn
+  (`cod11-combat.md` 16.2). One a higher slot's round killed keeps the gun
+  until its next frame's turn. INFERRED, 6.1 and 8: retail's
+  `turret_think_client` runs inside each gunner's own `ClientEndFrame` and
+  `player_die` (0x49a48) calls no release.
 - a spawn the script queued releases before the sim is reset, and keeps the
   teleport's temp entities only for a spawn into play, the `sessionstate`
   the script set ahead of it.

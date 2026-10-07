@@ -88,6 +88,8 @@ struct Rig {
     gun: u32,
     /// The target's `wbuttons` on every frame's cmd.
     target_wbuttons: u8,
+    /// The target's `buttons` on every frame's cmd.
+    target_buttons: u8,
 }
 
 /// One drained event: the id, its parm and whose it was (see [`who`]).
@@ -187,6 +189,7 @@ fn build(cvars: &[(&str, &str)], weapon: &str, gunner_second: bool) -> Option<Ri
         events: EventTracker::new(),
         gun: 0,
         target_wbuttons: 0,
+        target_buttons: 0,
     };
     for _ in 0..40 {
         let h = rig.still();
@@ -243,6 +246,7 @@ impl Rig {
         self.target.pump_at(self.now);
         let held = UserCmd {
             wbuttons: self.target_wbuttons,
+            buttons: self.target_buttons,
             ..holding(&self.target)
         };
         self.target.send_frame(&held);
@@ -775,8 +779,10 @@ fn a_gunner_who_disconnects_leaves_the_gun_to_walk_home() {
     assert_eq!(s[1], 0.0, "{s:?}");
 }
 
-/// A gunner killed by another gun's round lets go on the frame it dies,
-/// though its own `ClientEndFrame` ran before the round was traced, and its
+/// A gunner killed by a lower slot's round is dead on its own turn of the
+/// end-frame loop, since the callback runs inside the shooter's
+/// `ClientEndFrame` (combat doc 16.2): `turret_think_client` lets go instead
+/// of firing, so its held trigger raises no shot on the death frame, and the
 /// corpse lies where it died, not where the release teleports the dead
 /// player. Carentan's second gun is out of the first one's arc, so it is
 /// moved to put its gunner's body where the target stood, and the target
@@ -845,15 +851,30 @@ fn a_gunner_killed_by_a_turret_round_lets_go_that_frame() {
         buttons: h.buttons | BUTTON_ATTACK,
         ..h
     };
+    let other_seq = |rig: &Rig| {
+        rig.gunner
+            .snapshots()
+            .newest()
+            .and_then(|s| s.entities.get(&other))
+            .map(|e| e.field_i32(p, "eventSequence"))
+            .expect("the second gun in the gunner's view")
+    };
+    rig.target_buttons = BUTTON_ATTACK;
     let mut dead = None;
+    let mut fired_alive = false;
     for _ in 0..20 {
+        let before = other_seq(&rig);
         rig.frame([fire, fire]);
+        let fired = other_seq(&rig) != before;
         let t = rig.target.snapshots().newest().unwrap();
         if t.ps.field_i32(p, "pm_type") == 6 {
+            assert!(!fired, "the dead gunner's gun fired on its death frame");
             dead = Some(t.clone());
             break;
         }
+        fired_alive |= fired;
     }
+    assert!(fired_alive, "the held trigger fires while the target lives");
     let t = dead.expect("the rounds kill the target");
     assert_eq!(t.ps.field_i32(p, "viewlocked"), 0);
     assert_eq!(t.ps.field_i32(p, "eFlags") & 0xC000, 0);
