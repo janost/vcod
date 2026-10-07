@@ -3,7 +3,9 @@
 //! docs/research/bot-navigation.md, "Build times"; a change that loses a
 //! spawn fails here, one that joins more passes and should raise the floor.
 //!
-//! Needs `COD_DIR`; without the paks it returns early.
+//! Needs `COD_DIR`; without the paks it returns early. Ignored by default
+//! (about 3 min, 2300 s of CPU): run it with `cargo test -p vcod-server
+//! --test nav_census -- --ignored` after touching nav.
 
 use vcod_server::nav::NavGraph;
 
@@ -23,6 +25,7 @@ const FLOORS: [(&str, usize, usize); 12] = [
 ];
 
 #[test]
+#[ignore = "builds all 12 stock nav graphs, ~3 min; run with --ignored"]
 fn every_stock_maps_spawns_stay_in_one_component() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
