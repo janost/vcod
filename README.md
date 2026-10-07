@@ -362,7 +362,8 @@ vcod-server mp_carentan --port 28960 --hostname "my server" --gametype tdm
   paks. The probe recipes use it.
 - `--test-entities <n>` adds entities that move on the wire, to exercise the
   packet-entity encoding. A client draws nothing for them.
-- `--trace` logs one line per snapshot per client.
+- `--trace` logs one line per snapshot per client, and once a second the
+  slowest tick and how far the loop ran behind its 20 Hz schedule.
 - `--game-dir`, `--mod-dir` and `COD_DIR` work as they do for the client.
 
 ## Controls
