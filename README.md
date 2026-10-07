@@ -27,9 +27,11 @@ fun, and I stop when something stops being fun.
   day, that will be an accident and I'll take the credit.
 - **It will not replace your copy of the game.** You need that copy to run
   vcod at all.
-- **Don't run it as a public server for real players.** It has no rcon, no
-  anti-cheat and no admin tooling. It has a lot of opinions about the order
-  in which a tick runs.
+- **Don't run it as a public server for real players.** It has no
+  anti-cheat and its rcon knows a handful of commands. It has a lot of
+  opinions about the order in which a tick runs. Like retail it heartbeats
+  the Activision master by default; `--set dedicated=1` keeps it off the
+  list.
 
 If you want to play Call of Duty, play Call of Duty. If you want to see how
 it works under the hood, or watch a 2003 game boot inside a window someone
@@ -125,6 +127,8 @@ either: the people on it signed up for Call of Duty.
   flagged to respawn comes back on retail's timer.
 - Search & Destroy end to end: plant, defuse, progress bar, objectives on the
   compass.
+- rcon, the master heartbeat and the two-second zombie slot a dropped client
+  keeps, timed against retail.
 - A teammate out of view still shows on the compass, with its quick-chat
   flash, packed into the playerstate the way retail packs it.
 - Mounted MG42s: mount with use, aim inside the gun's arc, fire, dismount.
@@ -206,7 +210,11 @@ console, no key rebinding. You get command-line flags and the binds below.
 - A brush model that has turned and turned back keeps a sliver of yaw on
   retail, which drifts what it carries by about 0.02 units a frame; vcod's
   comes back to exactly zero.
-- No rcon, no anti-cheat, no PunkBuster, no master server heartbeat.
+- rcon runs `map`, `map_restart`, `map_rotate`, `status`, `clientkick`,
+  `heartbeat` and `quit`; nothing else (`say`, `kick <name>`, `set`, ...).
+  `status` prints a ping of 0. A heartbeat reaches the master, which probes
+  back, but I haven't seen vcod listed yet.
+- No anti-cheat, no PunkBuster.
 
 **Rendering and sound**
 
@@ -352,6 +360,12 @@ vcod-server mp_carentan --port 28960 --hostname "my server" --gametype tdm
 - `--set NAME=VALUE` sets a cvar before the scripts load, retail's `+set`.
   Repeatable, e.g. `--set scr_friendlyfire=1`. Set `sv_mapRotation` this way
   to get a rotation.
+- `dedicated` defaults to 2, as on retail: the server sends a heartbeat to
+  `sv_master1` (`codmaster.activision.com`) every three minutes and a
+  flatline on Ctrl-C or `quit`. `--set dedicated=1` keeps it off the master
+  list.
+- `--set rconPassword=<pw>` turns on rcon (`rcon <pw> status` from a client
+  console or any rcon tool).
 - `--bots <n>` adds `n` debug bots, each in a real client slot, alternating
   allies and axis. The first tick with bots starts building the map's
   navigation graph on a thread of its own (a second or two on the big stock
