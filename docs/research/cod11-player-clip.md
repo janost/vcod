@@ -639,7 +639,11 @@ the end of each expression:
   `velocity[2]` and halved (0.5 at 0x70d74) into `velocity[2]`
   (0x34826-0x3482f);
 - the move's end point, `time_left * velocity + origin` per axis, stored
-  once (0x3491c-0x34928).
+  once (0x3491c-0x34928);
+- `PM_ClipVelocity` (0x3460c-0x3466b): the dot product, its product with
+  the 1.001 overclip or its quotient by it, and each component's
+  `in - normal * backoff` stay on the stack, and only the stored component
+  is rounded.
 
 INFERRED: each is a single rounding of the exact value, which `pmove.rs`
 gets by computing in `f64` and storing to `f32`. VERIFIED, vcod measurement
@@ -656,6 +660,10 @@ playerstate for the end point (`time_left` at 0x3491c times ps+0x20 at
 0x34922), so no unrounded register value carries into it. The corpse run
 (8.11) shows the same last-digit flip on 12 of its rows, 9 of them on the
 corpse's terrain contact, where the creep is a few thousandths a frame.
+VERIFIED, vcod measurement 2026-10-07: the corpse rests on terrain
+triangle 2838 of `mp_carentan` (normal `(0, -0.0712, 0.9975)`), no patch,
+and neither retail's patch grid nor `PM_ClipVelocity`'s rounding moves
+any of those rows or the two free-fall rows.
 
 VERIFIED: the first frame of a drop from rest takes the tail of
 `PmoveSingle` (0x34398-0x3443d): it moves `400 * t^2` while its end
@@ -1121,8 +1129,20 @@ The gates:
     brushes and lump 24 alone ("Terrain is a swept sphere, a patch is a
     facet" in `cod11-mantle.md`), so `CollisionWorld::build` now keeps a
     render soup triangle only inside some patch's control-point box.
-    `fall_ab` still allows a unit of origin on the stun rows and masks the
-    walk's rest; the jitter's air frames are not gated row by row.
+    VERIFIED, vcod measurement 2026-10-07, with patches built as retail
+    builds them (`bsp-ibsp59-format.md`, "Patch collision") and
+    `PM_ClipVelocity` rounded as retail rounds it (8.9): the rest reads
+    retail's two states to the printed thousandth, lifted at `(1231.152,
+    1815.125, -26.263)` on 1023 at `0,0,1` and landed at `(1231.146,
+    1815.125, -26.285)` on 1022 at `-1,0,0`; the soup clip had the lifted
+    one at -26.266. Ours alternates between them every snapshot, where
+    retail holds the lifted one for runs of up to ten. From the lifted
+    state the slide's second trace runs along the pillar plane the ground
+    clip just put the velocity on, and whether it meets that plane at
+    fraction 0 or passes to the street turns on the float end point's last
+    bit. Every stun row `fall_ab` compares is within 0.005 of retail's; the
+    rest are rows on the south wall at 1815.128 where retail reads
+    1815.125. The jitter's air frames are still not gated row by row.
   - **Fall damage, the two cvars and a dead player's landing**, closed
     2026-10-05 (8.8, 8.10). VERIFIED: `PmoveSingle`'s jump table (rodata
     0x70ce8) sends `pm_type` 6 to 0x34274 and on to the default arm, whose

@@ -983,9 +983,10 @@ kerb it is inside the kerb top's slab. The soup clip used to read a start
 inside a slab as `allsolid` the way `CM_TraceThroughBrush` reads a start
 inside a brush, so the 0.25-unit ground trace failed on the seam and the
 9-unit snap did nothing there. Q3's patch facets never report a start as
-solid (`CM_TraceThroughPatchCollide`, `cm_patch.c`), and the soup clip now
-does the same: a start within 8 units behind a face is a fraction-0 contact
-with that face, deeper than that the triangle does not clip the trace.
+solid (`CM_TraceThroughPatchCollide`, `cm_patch.c`), and the soup clip was
+changed to do the same. Since 2026-10-07 no soup collides: terrain is the
+sphere sweep below and a patch is retail's own facet grid
+(`bsp-ibsp59-format.md`, "Patch collision").
 
 VERIFIED: a box touching two surfaces clips both at fraction 0, and the one
 reported used to be whichever the BVH walk reached first, so the ground trace
@@ -1183,19 +1184,15 @@ the walking sphere hit at x 1057, where retail's step-up happened.
 
 vcod: `CollisionWorld::build` takes the terrain triangles from lumps 24-26
 (wound `cross(c - a, b - a)` out, Q3's `PlaneFromPoints`) and clips them
-with the sphere sweep above (`clip_sphere_triangle`); the render soups of
-model 0 stay facets under the polyhedron clip (`triangle_planes`), minus
-the ones that draw terrain, matched as a soup whose centroid lies inside a
-coplanar terrain triangle sharing one of its vertices (an edge match is
-not enough: the render mesh triangulates the grid the other way, and a
-flat patch abutting terrain shares an edge with it), and minus every
-triangle outside all of lump 24's patch control-point boxes: a brush
-face's or a decal's soup is no collision on retail
-(`cod11-player-clip.md` 12, the walk capture's corner). A patch's bezier
-tessellation is not built; its render soup stands in, which is exact for
-the flat patches every kerb wall on carentan is. The `startsolid` a
-terrain touch reads is kept, since retail's stance and prone checks read
-the same flag off the same trace.
+with the sphere sweep above (`clip_sphere_triangle`), and builds each
+patch record into `CM_GeneratePatchCollide`'s facet grid, CoD's variant
+(`crates/common/src/patch.rs`, `bsp-ibsp59-format.md`, "Patch collision").
+No render soup collides: a brush face's or a decal's soup is no collision
+on retail (`cod11-player-clip.md` 12, the walk capture's corner). CoD keeps
+a flat patch's middle points, so the 3x3 kerb wall is four facets, not the
+one the previous paragraph's Q3 reading has; each is bevelled the same way.
+The `startsolid` a terrain touch reads is kept, since retail's stance and
+prone checks read the same flag off the same trace.
 
 ### A submodel's brushes are its entity's
 
