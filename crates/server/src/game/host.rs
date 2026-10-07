@@ -1234,10 +1234,36 @@ impl Host for GameHost {
         // `ps.stats[0]` and `maxhealth`'s writes `sess.maxHealth`, which is
         // what the wire and the damage path read (docs/protocol-1.1.md,
         // "Block 1"). A map entity's `health` is still its own slot.
-        if e.client.is_some() {
+        if let Some(c) = &e.client {
             match cx.resolve_folded(field) {
                 "health" => return Value::Int(self.client_vitals[ent.0 as usize].health),
                 "maxhealth" => return Value::Int(self.client_vitals[ent.0 as usize].max_health),
+                // Retail keeps an icon index and reads 0 back as ""
+                // (0x41b7c); the name is stored here, so only the unset
+                // case needs the answer.
+                "statusicon" => {
+                    let i = fields::client_index("statusicon");
+                    if c[i] == Value::Undefined {
+                        return Value::String(cx.intern_exact(""));
+                    }
+                }
+                "headicon" => {
+                    let n = head_icon_of(c);
+                    let name = match n {
+                        0 => "",
+                        n => {
+                            let (first, _) = CsRange::HeadIcon.bounds();
+                            self.configstrings
+                                .get(first + n as usize - 1)
+                                .map_or("", String::as_str)
+                        }
+                    };
+                    return Value::String(cx.intern_exact(name));
+                }
+                "headiconteam" => {
+                    let name = HEAD_ICON_TEAMS[head_icon_team_of(c) as usize];
+                    return Value::String(cx.intern_exact(name));
+                }
                 _ => {}
             }
         }
@@ -1344,7 +1370,7 @@ impl GameHost {
         let Some(e) = self.ents.get_mut(ent) else {
             return Err(ErrorKind::BadType("no such entity"));
         };
-        if e.client.is_some() {
+        if let Some(c) = e.client.as_mut() {
             let v = &mut self.client_vitals[ent.0 as usize];
             match cx.resolve_folded(field) {
                 "health" => {
@@ -1356,6 +1382,16 @@ impl GameHost {
                 "maxhealth" => {
                     v.max_health = as_health(value)?;
                     v.health = v.health.min(v.max_health);
+                    return Ok(());
+                }
+                "headicon" => {
+                    let n = head_icon_index(&self.configstrings, cx, value)?;
+                    c[fields::client_index("headicon")] = Value::Int(n);
+                    return Ok(());
+                }
+                "headiconteam" => {
+                    let n = head_icon_team(cx, value)?;
+                    c[fields::client_index("headiconteam")] = Value::Int(n);
                     return Ok(());
                 }
                 _ => {}
@@ -1412,6 +1448,80 @@ impl GameHost {
                 Ok(())
             }
         }
+    }
+}
+
+/// `iHeadIconTeam`'s four values as the getter (0x41d3c) names them.
+const HEAD_ICON_TEAMS: [&str; 4] = ["none", "axis", "allies", "spectator"];
+
+fn head_icon_of(c: &[Value]) -> i32 {
+    match c[fields::client_index("headicon")] {
+        Value::Int(n) => n,
+        _ => 0,
+    }
+}
+
+fn head_icon_team_of(c: &[Value]) -> i32 {
+    match c[fields::client_index("headiconteam")] {
+        Value::Int(n) => n & 3,
+        _ => 0,
+    }
+}
+
+/// `.headicon`'s setter (0x41bd4) through `GScr_GetHeadIconIndex`
+/// (0x5c840): "" is 0, a precached icon its 1-based slot in
+/// `CsRange::HeadIcon`, anything else an error. The index is what the
+/// entity's `iHeadIcon` carries (docs/research/cod11-gametypes-re-bel.md, 7.3).
+fn head_icon_index(cs: &[String], cx: &mut Cx, value: Value) -> Result<i32, ErrorKind> {
+    let Value::String(a) = value else {
+        return Err(ErrorKind::BadType("headicon takes a string"));
+    };
+    let name = cx.resolve(a).to_string();
+    if name.is_empty() {
+        return Ok(0);
+    }
+    let (first, last) = CsRange::HeadIcon.bounds();
+    cs.get(first..=last)
+        .and_then(|r| r.iter().position(|s| s.eq_ignore_ascii_case(&name)))
+        .map(|i| i as i32 + 1)
+        .ok_or_else(|| ErrorKind::Custom(format!("Head icon '{name}' was not precached")))
+}
+
+/// `.headiconteam`'s setter (0x41c84): `none`, `axis` and `allies` store
+/// 0, 1 and 2; `spectator` is the error; any other string stores 3, which
+/// the getter reads back as `spectator`.
+fn head_icon_team(cx: &mut Cx, value: Value) -> Result<i32, ErrorKind> {
+    let Value::String(a) = value else {
+        return Err(ErrorKind::BadType("headiconteam takes a string"));
+    };
+    Ok(match cx.resolve(a) {
+        "none" => 0,
+        "axis" => 1,
+        "allies" => 2,
+        "spectator" => {
+            return Err(ErrorKind::Custom(
+                "'spectator' is an illegal head icon team string. Must be none, allies, axis, \
+                 or spectator."
+                    .to_string(),
+            ));
+        }
+        _ => 3,
+    })
+}
+
+impl GameHost {
+    /// A client's `(iHeadIcon, iHeadIconTeam)`, the two entity-state words
+    /// retail's setters write straight into `ent->s`.
+    pub fn head_icon(&self, slot: usize) -> (i32, i32) {
+        let Some(c) = self
+            .ents
+            .handle(slot as u32)
+            .and_then(|e| self.ents.get(e))
+            .and_then(|e| e.client.as_ref())
+        else {
+            return (0, 0);
+        };
+        (head_icon_of(c), head_icon_team_of(c))
     }
 }
 
@@ -1900,7 +2010,11 @@ mod tests {
             assert_eq!(read(&mut host, cx, "deaths"), Value::Int(0));
             assert_eq!(read(&mut host, cx, "spectatorclient"), Value::Int(-1));
             assert_eq!(read(&mut host, cx, "archivetime"), Value::Float(0.0));
-            assert_eq!(read(&mut host, cx, "statusicon"), Value::Undefined);
+            let empty = Value::String(cx.intern_exact(""));
+            assert_eq!(read(&mut host, cx, "statusicon"), empty);
+            assert_eq!(read(&mut host, cx, "headicon"), empty);
+            let none = Value::String(cx.intern_exact("none"));
+            assert_eq!(read(&mut host, cx, "headiconteam"), none);
             assert!(matches!(read(&mut host, cx, "pers"), Value::Array(_)));
         });
     }
