@@ -375,6 +375,54 @@ fn apply_effects(rt: &mut script::ScriptRuntime, effects: Vec<Effect>, now_ms: i
     }
 }
 
+/// One gunner's rounds delivered inside its own `ClientEndFrame`, as
+/// `turret_think_client` -> `Bullet_Fire` -> `G_Damage` runs the callback
+/// there (combat doc 16.2): what it queued is applied before the next
+/// slot's turn, so a later gunner's trace passes a corpse it made and a
+/// higher slot's aim trace and pose read the move. A victim above the
+/// gunner takes its feedback this frame; one below had its end frame
+/// already and takes it on the next, and a gunner below that dies keeps
+/// the gun until its own next turn releases it.
+#[allow(clippy::too_many_arguments)]
+fn deliver_turret_rounds(
+    clients: &mut [Option<Client>],
+    rt: &mut script::ScriptRuntime,
+    effects: Vec<Effect>,
+    gunner: usize,
+    anims: Option<&vcod_common::animtree::PlayerAnims>,
+    weapons: &crate::weapons::WeaponTable,
+    rng: &mut u64,
+    now_ms: i32,
+) {
+    if effects.is_empty() {
+        return;
+    }
+    let feedback_now: Vec<usize> = effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Hit(h) if h.victim > gunner => Some(h.victim),
+            _ => None,
+        })
+        .collect();
+    mirror_roster(clients, rt);
+    apply_effects(rt, effects, now_ms);
+    mirror_weapons(clients, rt);
+    apply_weapon_ops(clients, rt, weapons);
+    apply_sim_ops(clients, rt, anims, weapons, rng, now_ms);
+    mirror_vitals(clients, rt);
+    for slot in feedback_now {
+        if let Some(sim) = clients[slot].as_mut().and_then(|c| c.sim.as_mut()) {
+            sim.end_frame(now_ms);
+        }
+    }
+    // A body the callback killed or moved, for the later slots' aim traces.
+    for (slot, c) in clients.iter().enumerate() {
+        let sim = c.as_ref().and_then(|c| c.sim.as_ref());
+        rt.set_client_body(slot, sim.and_then(|s| s.hit_body(slot)));
+        rt.set_client_dobj(slot, sim.and_then(|s| s.dobj(slot)));
+    }
+}
+
 /// The host's health onto each playing sim. Neither `ClientEndFrame`'s
 /// intermission arm nor `SpectatorClientEndFrame` copies `ent->health` into
 /// the playerstate, so both keep the zero their own spawn left (map-cycle
@@ -3948,10 +3996,10 @@ impl Server {
             }
             // Per slot, `ClientEndFrame`'s tail: the aim trace and cursor
             // hint, `BG_PlayerAnimation`, then `turret_think_client`
-            // (turrets doc 6.1). A gunner's rounds are traced right there, so
-            // they meet a lower slot's new pose and a higher slot's last-frame
-            // one (combat doc 16.1); their hits are delivered after the loop.
-            let mut turret_effects = Vec::new();
+            // (turrets doc 6.1). A gunner's rounds are traced and delivered
+            // right there, so they meet a lower slot's new pose and a higher
+            // slot's last-frame one, and a higher slot's turn sees what the
+            // callback did (combat doc 16.1, 16.2).
             for slot in 0..self.clients.len() {
                 let Some(c) = self.clients[slot].as_mut() else {
                     continue;
@@ -4032,52 +4080,18 @@ impl Server {
                     &self.hitlocs,
                     bones.as_mut(),
                 );
-                turret_effects.extend(r.effects);
-            }
-            rt.drop_turret_releases();
-            if !turret_effects.is_empty() {
-                // The damage callback runs here, after the script frame, so
-                // what it leaves is applied again. A victim numbered above its
-                // gunner takes its feedback this frame; one below had its
-                // `ClientEndFrame` already and takes it on the next.
-                let feedback_now: Vec<usize> = turret_effects
-                    .iter()
-                    .filter_map(|e| match e {
-                        Effect::Hit(h) if h.victim > h.attacker => Some(h.victim),
-                        _ => None,
-                    })
-                    .collect();
-                mirror_roster(&self.clients, rt);
-                apply_effects(rt, turret_effects, self.sv_time_ms);
-                mirror_weapons(&mut self.clients, rt);
-                apply_weapon_ops(&mut self.clients, rt, &weapons);
-                apply_sim_ops(
+                deliver_turret_rounds(
                     &mut self.clients,
                     rt,
+                    r.effects,
+                    slot,
                     self.anims.as_deref(),
                     &weapons,
                     &mut self.rng,
                     self.sv_time_ms,
                 );
-                mirror_vitals(&mut self.clients, rt);
-                for slot in feedback_now {
-                    if let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) {
-                        sim.end_frame(self.sv_time_ms);
-                    }
-                }
-                // A gunner these rounds killed lets go now: its own pass
-                // above ran while it was alive, and its death snapshot and
-                // corpse must not carry the gun.
-                for (slot, c) in self.clients.iter_mut().enumerate() {
-                    if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut())
-                        && !sim.linked()
-                    {
-                        for te in rt.release_turret(slot, sim) {
-                            rt.push_temp_entity(te);
-                        }
-                    }
-                }
             }
+            rt.drop_turret_releases();
             console_lines = rt.take_console();
             client_commands = rt.take_client_commands();
             ranks_dirty = rt.take_ranks_dirty();
