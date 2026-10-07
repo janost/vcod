@@ -81,7 +81,7 @@ const KNOCKBACK_FRICTION_SCALE: f32 = 0.3;
 /// `PM_WalkMove`'s accel multiplier while the knockback timer runs (0x2f4d8).
 const KNOCKBACK_ACCEL_SCALE: f32 = 0.25;
 /// Entity numbers below this are clients.
-const MAX_CLIENTS: u32 = 64;
+const MAX_CLIENTS: u32 = crate::net::protocol::MAX_CLIENTS as u32;
 pub const MIN_WALK_NORMAL: f32 = 0.7;
 pub const MAX_CLIP_PLANES: usize = 5;
 pub const HALF_WIDTH: f32 = 15.0; // bbox is (-15,-15,0)..(15,15,height)
@@ -217,18 +217,17 @@ pub const LADDER_PUSHOFF_SPEED: f32 = 128.0;
 // PM_FootstepEvent @0x31fe4 (game.mp.i386.so); facts live in
 // docs/research/cod11-sound-system.md, "Footstep and landing cadence".
 /// Wire `EV_*` group bases; the sound surface index is added to the base.
-const EV_FOOTSTEP_RUN_BASE: i32 = 1;
-const EV_FOOTSTEP_WALK_BASE: i32 = 24;
-const EV_FOOTSTEP_PRONE_BASE: i32 = 47;
-const EV_JUMP_BASE: i32 = 70;
-const EV_LANDING_BASE: i32 = 93;
+use crate::net::event_ids::{
+    EV_FOOTSTEP_PRONE_BASE, EV_FOOTSTEP_RUN_BASE, EV_FOOTSTEP_WALK_BASE, EV_JUMP_BASE,
+    EV_LANDING_BASE,
+};
 /// `PM_CrashLand`'s gate on the land anim, against the vertical velocity the
 /// move started with (`game.mp.i386.so` rodata 0x70a08).
 pub const LAND_ANIM_SPEED: f32 = -220.0;
 /// `EV_STEP_VIEW`: the vertical jump the step machinery added this frame,
 /// which the client smooths the eye over
 /// (docs/research/cod11-mantle.md, "The step event and the velocity scale").
-const EV_STEP_VIEW: i32 = 143;
+use crate::net::event_ids::EV_STEP_VIEW;
 /// Step below which retail raises nothing (double @0x70f08).
 const STEP_VIEW_EPS: f32 = 0.5;
 /// Clamp and bias the rounded step takes before it becomes the parm
@@ -1203,8 +1202,9 @@ fn crash_land(ps: &mut PlayerState, start_vz: f32, dead: bool, events: &mut Vec<
 const SURF_NODAMAGE: u32 = 0x1;
 /// `EV_LANDING_PAIN_*`, one per surface material up to 138; the server's
 /// `ClientEvents` turns each into fall damage.
-pub const EV_LANDING_PAIN_BASE: i32 = 116;
-pub const EV_LANDING_PAIN_LAST: i32 = 138;
+pub use crate::net::event_ids::EV_LANDING_PAIN_BASE;
+pub const EV_LANDING_PAIN_LAST: i32 =
+    EV_LANDING_PAIN_BASE + crate::net::event_ids::SURFACE_GROUP_SIZE - 1;
 
 /// The fall damage percent: linear from 0 at the min height to 100 at the
 /// max, truncated, halved (truncated again) at water level 2. Bounds out of

@@ -376,12 +376,12 @@ pub fn lift_onto_floor(
     at
 }
 
+use vcod_common::net::event_ids::EV_STANCE_FORCE_CROUCH;
+use vcod_common::net::event_ids::EV_STANCE_FORCE_PRONE;
 /// `EV_STANCE_FORCE_STAND`/`_CROUCH`/`_PRONE` (`cod11-events-and-fx.md`).
-const EV_STANCE_FORCE_STAND: i32 = 140;
-const EV_STANCE_FORCE_CROUCH: i32 = 141;
-const EV_STANCE_FORCE_PRONE: i32 = 142;
+use vcod_common::net::event_ids::EV_STANCE_FORCE_STAND;
 /// `viewlocked_entNum` after a release (turrets doc 12.7).
-const ENTITYNUM_NONE: u32 = 1023;
+use vcod_common::net::protocol::ENTITYNUM_NONE;
 
 /// The record half of `G_ClientStopUsingTurret` (0x53054, turrets doc 8):
 /// the gun is free and its loop timer spent. Returns the gunner's slot and

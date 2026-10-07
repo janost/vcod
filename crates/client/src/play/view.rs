@@ -29,7 +29,7 @@ pub struct ViewPs {
 }
 
 /// `pm_type` at intermission.
-const PM_INTERMISSION: i32 = 5;
+use vcod_common::net::flags::PM_INTERMISSION;
 
 impl ViewPs {
     /// `viewmodel_index` comes from the snapshot: prediction does not carry it.

@@ -12,7 +12,7 @@ use vcod_common::movetrace::{Body, CONTENTS_BODY, MoveWorld};
 /// width (`maxs.x * 0.5`, rodata 0x75bf8 and 0x75c08).
 const JITTER_INC: f32 = 4.0;
 /// `ANGLE2SHORT`'s factor (rodata 0x75bf4).
-const ANGLE2SHORT: f32 = 65536.0 / 360.0;
+use vcod_common::pmove::cmd::ANGLE2SHORT;
 
 /// One push to undo if a later body blocks the mover: `G_MoverTeam` puts
 /// every pushed body back before it stalls.

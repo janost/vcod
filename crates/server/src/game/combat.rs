@@ -241,14 +241,14 @@ impl ShotResult {
     }
 }
 
-/// `EV_BULLET_HIT_SMALL` / `EV_BULLET_HIT_LARGE`
-/// (`docs/research/cod11-events-and-fx.md` section 1).
-const EV_BULLET_HIT_SMALL: i32 = 173;
-const EV_BULLET_HIT_LARGE: i32 = 174;
+use vcod_common::net::event_ids::EV_BULLET_HIT_CLIENT_LARGE;
 /// `EV_BULLET_HIT_CLIENT_SMALL` / `EV_BULLET_HIT_CLIENT_LARGE`, the victim's
 /// copy of a flesh hit (`docs/research/cod11-events-and-fx.md` section 2).
-const EV_BULLET_HIT_CLIENT_SMALL: i32 = 175;
-const EV_BULLET_HIT_CLIENT_LARGE: i32 = 176;
+use vcod_common::net::event_ids::EV_BULLET_HIT_CLIENT_SMALL;
+use vcod_common::net::event_ids::EV_BULLET_HIT_LARGE;
+/// `EV_BULLET_HIT_SMALL` / `EV_BULLET_HIT_LARGE`
+/// (`docs/research/cod11-events-and-fx.md` section 1).
+use vcod_common::net::event_ids::EV_BULLET_HIT_SMALL;
 /// The flesh `surfType` `finishPlayerDamage` hardcodes (combat doc, 4.5).
 const SURF_FLESH: i32 = 7;
 /// The surface flag that suppresses the impact effect (combat doc, 2.3).
@@ -742,8 +742,8 @@ pub fn trace_bodies(
 
 /// The two a swing spawns a temp entity for
 /// (`docs/research/cod11-events-and-fx.md` section 1).
-pub const EV_MELEE_HIT: i32 = 166;
-pub const EV_MELEE_MISS: i32 = 167;
+pub use vcod_common::net::event_ids::EV_MELEE_HIT;
+pub use vcod_common::net::event_ids::EV_MELEE_MISS;
 /// `Weapon_Melee`'s reach, `.rodata 0x79c00` (combat doc, 2.5).
 pub const MELEE_RANGE: f32 = 64.0;
 

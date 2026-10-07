@@ -11,11 +11,11 @@ use vcod_common::net::flags::EF_TELEPORT_BIT;
 use vcod_common::skeleton::{PoseBuffer, Skeleton};
 use vcod_common::turretpose::angles_quat;
 
-/// `eType` of a `misc_mg42` / `misc_turret`.
-pub const ET_TURRET: i32 = 11;
 /// On a turret entity: the server fired it this frame (turrets doc 6.3).
-const EF_FIRING: i32 = 0x400;
-const ENTITYNUM_NONE: i32 = 1023;
+use vcod_common::net::flags::EF_FIRING;
+/// `eType` of a `misc_mg42` / `misc_turret`.
+pub use vcod_common::net::flags::ET_TURRET;
+const ENTITYNUM_NONE: i32 = vcod_common::net::protocol::ENTITYNUM_NONE as i32;
 /// The 0.1 s the controller hands its goal-weight call.
 pub const ANIM_BLEND_MS: i32 = 100;
 

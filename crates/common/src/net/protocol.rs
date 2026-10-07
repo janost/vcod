@@ -92,6 +92,17 @@ pub const ENTITYNUM_NONE: u32 = (MAX_GENTITIES - 1) as u32;
 pub const ENTITYNUM_WORLD: u32 = (MAX_GENTITIES - 2) as u32;
 /// The client index in the snapshot's clientState stream (cod_lnxded 0x808e1fd).
 pub const CLIENTNUM_BITS: u32 = 6;
+/// Retail's `MAX_CLIENTS`: client slots index the 6-bit clientState field
+/// (`ps.clientNum` gets 8), so more than 64 would collide silently.
+pub const MAX_CLIENTS: usize = 1 << CLIENTNUM_BITS;
+
+/// `CS_SOUNDS`: a sound-alias index (`EV_SOUND_ALIAS`'s parm, `loopSound`,
+/// `s <idx>`) counts from here, so the alias range's first slot travels as 1
+/// and 0 means no alias (docs/protocol-1.1.md, `s <idx>`).
+pub const CS_SOUNDS: usize = 524;
+/// The first of the 32 hint-string configstrings `G_GetHintStringIndex`
+/// (0x5a238) fills; `serverCursorHintString` indexes from here.
+pub const CS_HINT_STRINGS: usize = 1212;
 
 #[cfg(test)]
 mod tests {
