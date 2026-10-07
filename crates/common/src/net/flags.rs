@@ -56,6 +56,8 @@ pub const EF_FIRING: i32 = 0x400;
 /// An `ET_PLAYER`'s `pingPlayer` bit (docs/research/cod11-hud-protocol.md,
 /// "Compass friendlies").
 pub const EF_PING: i32 = 0x80000;
+/// The playerstate's copy of it for the `iCompassFriendInfo` teammate.
+pub const EF_FRIEND_PING: i32 = 0x100000;
 
 pub const PMF_PRONE: i32 = 0x1;
 pub const PMF_DUCKED: i32 = 0x2;

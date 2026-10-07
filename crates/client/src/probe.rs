@@ -103,6 +103,9 @@ pub struct Save {
     pub ride: bool,
     /// `--probe-items`: print every snapshot an item changed, no fixture.
     pub items: bool,
+    /// `--probe-compass`: print every snapshot `iCompassFriendInfo` or the
+    /// eye changed, no fixture.
+    pub compass: bool,
 }
 
 /// Which script the two halves of the hit capture run. The target's own
@@ -212,6 +215,7 @@ pub fn probe(
         fall_walk,
         ride: probe_ride,
         items: probe_items,
+        compass: probe_compass,
     } = save;
     // The two map-cycle captures record the same lines; the flag picks the
     // role and, for the round restart, which half of the pair this probe is.
@@ -258,6 +262,7 @@ pub fn probe(
         || probe_fall
         || probe_ride
         || probe_items
+        || probe_compass
         || team.is_some();
     // A sweep is a measurement, not a fixture: it walks a table of pitch
     // offsets instead of aiming at the eye, so the numbers it produces are not
@@ -335,6 +340,7 @@ pub fn probe(
     let mut fall = FallProbe::default();
     let mut ride = RideProbe::default();
     let mut items = ItemsProbe::default();
+    let mut compass = CompassProbe::default();
     // The fixture is named for the map the run started on, which is not the
     // map cs 0 holds once the rotation has moved on.
     let mut first_map = String::new();
@@ -753,6 +759,9 @@ pub fn probe(
             }
             if probe_items {
                 items.observe(s);
+            }
+            if probe_compass {
+                compass.observe(s);
             }
             watch.check_sounds(s, client.configstrings());
             watch.check_movers(s);
@@ -8997,6 +9006,71 @@ health={} seq={} events=[{},{},{},{}] parms=[{},{},{},{}]",
             i("eventParms[2]"),
             i("eventParms[3]"),
         );
+    }
+}
+
+/// `--probe-compass`: one `COMPASS` line per snapshot whose
+/// `iCompassFriendInfo`, eye, yaw or player entity list changed, with the
+/// field decoded the way the cgame reads it (offsets `field * 4 - 1020`, yaw
+/// the signed top byte times 360/256) and the players the snapshot carries
+/// with their origins. Two of these on one team measure
+/// `G_GetNonPVSFriendlyInfo` (docs/research/cod11-hud-protocol.md, section
+/// 9, "Compass friendlies"). Writes no fixture.
+#[derive(Default)]
+struct CompassProbe {
+    last: String,
+}
+
+impl CompassProbe {
+    fn observe(&mut self, snap: &net::snapshot::Snapshot) {
+        let p = &net::protocol::PROTOCOL_V1;
+        let ps = &snap.ps;
+        let o = ps.origin(p);
+        let info = ps.field_i32(p, "iCompassFriendInfo") as u32;
+        let decoded = if info == 0 {
+            "-".to_string()
+        } else {
+            let off = |shift: u32| ((info >> shift) & 0x1ff) as i32 * 4 - 1020;
+            format!(
+                "c{} dx={} dy={} yaw={:.2}",
+                info & 0x3f,
+                off(6),
+                off(15),
+                f32::from((info >> 24) as u8 as i8) * 1.40625
+            )
+        };
+        let players: Vec<String> = snap
+            .entities
+            .iter()
+            .filter(|(_, e)| e.field_i32(p, "eType") == 1)
+            .map(|(n, e)| {
+                let t = Trajectory::read(e, p, "pos");
+                format!(
+                    "{n}@{:.1},{:.1},{:.1} ef={:#x}",
+                    t.base.x,
+                    t.base.y,
+                    t.base.z,
+                    e.field_i32(p, "eFlags")
+                )
+            })
+            .collect();
+        let line = format!(
+            "num={} pm={} o={:.3},{:.3},{:.3} vh={:.3} leanf={:.3} yaw={:.3} ef={:#x} info={info:#010x} {decoded} players=[{}]",
+            ps.field_i32(p, "clientNum"),
+            ps.field_i32(p, "pm_type"),
+            o[0],
+            o[1],
+            o[2],
+            ps.field_f32(p, "viewHeightCurrent"),
+            ps.field_f32(p, "leanf"),
+            ps.field_f32(p, "viewangles[1]"),
+            ps.field_i32(p, "eFlags"),
+            players.join(" "),
+        );
+        if line != self.last {
+            println!("COMPASS t={} {line}", snap.server_time);
+            self.last = line;
+        }
     }
 }
 

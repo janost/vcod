@@ -7,10 +7,9 @@ use super::HudQuad;
 use super::hudelem::Virtual;
 use super::player::{COMPASS_CENTRE, COMPASS_RADIUS, compass_offset};
 
+pub use vcod_common::net::flags::EF_FRIEND_PING as PS_EF_FRIEND_PING;
 /// An `ET_PLAYER` entity's `eFlags` bit `pingPlayer` sets.
 pub use vcod_common::net::flags::EF_PING;
-/// The playerstate's copy of it for the `iCompassFriendInfo` teammate.
-pub const PS_EF_FRIEND_PING: i32 = 0x100000;
 
 /// A teammate seen this frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
