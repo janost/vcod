@@ -91,8 +91,8 @@ objective, since its rising edge also picks up weapons and mounts turrets.
   ticks with no link and tries again.
 
 VERIFIED (measured, `crates/server/tests/bot_objectives.rs`, 2 bots, shoot
-off, seed 7, `mp_carentan`): the attacker plants at tick 732 of the run,
-counting the match-start restart; the defender defuses 227 ticks later.
+off, seed 7, `mp_carentan`): the attacker plants at tick 733 of the run,
+counting the match-start restart; the defender defuses 225 ticks later.
 Sweeps over seeds 1, 2 and 7 with shoot off, 4 bots on `mp_carentan` and
 `mp_rocket` and 6 on `mp_harbor` and `mp_dawnville`, all planted and
 defused, the defuse 221 to 234 ticks after the plant. With 6 shooting bots
@@ -152,14 +152,14 @@ distance at which a body is clear of the goal trigger, and who carries it.
   units of its trigger.
 
 VERIFIED (measured, `crates/server/tests/bot_objectives.rs`, 2 bots, shoot
-off, seed 7, `mp_carentan`): the attacker picks up at tick 487 and delivers
-371 ticks later. The same run on each stock map for 150 s: 10 of 12 pick
+off, seed 7, `mp_carentan`): the attacker picks up at tick 483 and delivers
+377 ticks later. The same run on each stock map for 150 s: 10 of 12 pick
 up and deliver. On `mp_depot` the attacker never reaches the objective,
 which lies on an upper floor at z 148; on `mp_hurtgen` every round ends in
 an allied win within 18 s and nothing is picked up.
 
 VERIFIED (measured, 2026-10-07, same run): `mp_hurtgen` now picks up at
-tick 1108 and delivers at tick 2279. Its rounds ended because the lone axis
+tick 1108 and delivers at tick 2275. Its rounds ended because the lone axis
 bot wandered into the minefields round its spawn (`MOD_EXPLOSIVE`, killer
 `world`), and it wandered because the objective's bunker was not on the
 graph (bot-navigation.md, "Spacing", "The flood" and section 3).

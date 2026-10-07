@@ -74,8 +74,8 @@ measured).
   (VERIFIED, point traces from those nodes).
   From there the ray up stops on the underside of a triangle whose
   `(b - a) x (c - a)` faces up, or passes through a one-sided terrain
-  triangle that the ray back down then hits. Only terrain counts on the way
-  back down. VERIFIED (measured, point traces): `mp_ship`'s mast ladder foot
+  triangle that the ray back down then hits. Only terrain (`Prim::Tri`,
+  which since the patch grid is terrain alone) counts on the way back down. VERIFIED (measured, point traces): `mp_ship`'s mast ladder foot
   stands 540 units under a spar's top facet (a patch), and a low doorway on
   `mp_pavlov` put a brush ceiling 3.75 units over the head, which the ray
   back down starts against. Counting either refused the node, and the
@@ -96,7 +96,8 @@ measured).
   x 6304, whose columns' centres lie 32 units inside it, and each was a
   component of one node until this pass. With it `mp_hurtgen` reaches 188
   of 193 spawns in one component (178 before), `mp_brecourt` 161 (159),
-  `mp_dawnville` 176 (174) and `mp_rocket` 141 (136).
+  `mp_dawnville` 176 (174) and `mp_rocket` 141 (136), measured before the
+patch grid moved `mp_brecourt` back to 159.
 - New nodes stay within 512 units of the spawns' bounding box. Past it lies
   scenery: `mp_hurtgen`'s forest added 10 000 nodes.
 - Walks run on every core, a layer at a time, handed out one node at a time;
@@ -189,22 +190,24 @@ The counts below were taken again (2026-10-07) after the BVH rework, the
 move of world collision to brushes and patches only, and the ladder budget,
 foot and `under_ground` changes, the hazards, the walk back over one-way
 edges and the 48-unit pitch cap (section 2, "Spacing", "The flood" and
-"Ladders").
+"Ladders"), then once more after patches moved to retail's facet grid
+(`patch.rs`). That move cost `mp_brecourt` two spawns (161 to 159) and gave
+`mp_ship` two (105 to 107); neither was looked into.
 
 | map | nodes | edges | spawns in one component |
 |---|---|---|---|
-| mp_brecourt | 15214 | 116117 | 161 / 161 |
-| mp_carentan | 9668 | 68217 | 185 / 185 |
-| mp_chateau | 6508 | 43669 | 110 / 113 |
-| mp_dawnville | 7278 | 50329 | 176 / 185 |
-| mp_depot | 12144 | 83952 | 153 / 161 |
-| mp_harbor | 7520 | 53362 | 156 / 161 |
-| mp_hurtgen | 27406 | 206843 | 190 / 193 |
-| mp_pavlov | 16085 | 114252 | 161 / 161 |
-| mp_powcamp | 5977 | 41255 | 149 / 161 |
-| mp_railyard | 11348 | 80901 | 159 / 161 |
-| mp_rocket | 12344 | 90580 | 141 / 153 |
-| mp_ship | 11171 | 75212 | 105 / 112 |
+| mp_brecourt | 15214 | 116099 | 159 / 161 |
+| mp_carentan | 9667 | 68211 | 185 / 185 |
+| mp_chateau | 6509 | 43677 | 110 / 113 |
+| mp_dawnville | 7280 | 50345 | 176 / 185 |
+| mp_depot | 12147 | 83997 | 153 / 161 |
+| mp_harbor | 7518 | 53344 | 156 / 161 |
+| mp_hurtgen | 27406 | 206844 | 190 / 193 |
+| mp_pavlov | 16084 | 114248 | 161 / 161 |
+| mp_powcamp | 5978 | 41249 | 149 / 161 |
+| mp_railyard | 11348 | 80908 | 159 / 161 |
+| mp_rocket | 12331 | 90444 | 141 / 153 |
+| mp_ship | 11169 | 75091 | 107 / 112 |
 
 - VERIFIED (measured): an early single-threaded build of `mp_carentan`, before
   the diagonal shortcut and the stall cutoff, took 10.6 s. `perf` puts 80% of
@@ -248,8 +251,8 @@ edges and the 48-unit pitch cap (section 2, "Spacing", "The flood" and
 - VERIFIED (the off-component spawns' heights against the map's
   `SURF_LADDER` brushes): `mp_ship`'s gap was its upper decks, which connect
   by ladders, and the ladder pass closed most of it (section 2, "Ladders").
-  VERIFIED (measured): its 7 spawns still apart sit in the hull at z 64 to
-  408, in five islands of 11 to 80 nodes that reach the main component
+  VERIFIED (measured): its 7 spawns still apart sat in the hull at z 64 to
+  408 (5 after the patch grid, not broken down again), in five islands of 11 to 80 nodes that reach the main component
   neither way, though every ladder now has a rung. Walking node to node
   between neighbouring columns on one floor with no edge either way (a gap
   pass after the ladders) added 235 edges on `mp_ship` and joined none of

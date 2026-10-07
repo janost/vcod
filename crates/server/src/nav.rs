@@ -1258,7 +1258,7 @@ fn under_ground(world: &CollisionWorld, p: Vec3) -> bool {
         }
     }
     let down = world.point_trace(up.endpos - Vec3::Z, head, MASK_PLAYERSOLID, false);
-    matches!(down.hit, Some(Prim::Tri(t)) if world.is_terrain(t))
+    matches!(down.hit, Some(Prim::Tri(_)))
 }
 
 /// The bits of a client a walk carries between cmds.

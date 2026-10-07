@@ -293,7 +293,7 @@ fn a_bot_walks_toward_gunfire_it_cannot_see() {
     let fight = fight_spot(&sv, sv.bot_body(fighters[0]).unwrap().origin);
     let a = fight.0;
     // A floor in a ring round the fight with the eye line to it blocked and
-    // a route to it short enough to walk most of in 15 s. A spot with no
+    // a route to it short enough to walk most of in 20 s. A spot with no
     // route (a roof, a closed yard) tests the graph, not the hearing.
     let spot = (0..48)
         .filter_map(|i| {
@@ -312,8 +312,10 @@ fn a_bot_walks_toward_gunfire_it_cannot_see() {
     sv.place_client(listener, spot.0, spot.1 + 180.0);
     let start = dist(spot.0);
 
+    // 20 s: each death in the fight silences it until the respawn, and the
+    // listener heads off on a roam between bursts.
     let mut closest = start;
-    for tick in 0..300 {
+    for tick in 0..400 {
         if tick % 50 == 0 {
             let (ba, bb) = (
                 sv.bot_body(fighters[0]).unwrap(),
