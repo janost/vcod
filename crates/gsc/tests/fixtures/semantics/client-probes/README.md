@@ -1014,3 +1014,42 @@ An earlier run without the `mt` and `pt` watchers printed the same `f` and
 come out in another order (`mt 101`, `mt 102`, `pt 102`, `t a`, `t b`,
 `t c`, `f 101`, `f 102`, once a frame), since vcod delivers the notifies at
 the next script frame and runs the waiters in thread age.
+
+## probe_squash
+
+Which queued server commands `SV_AddServerCommand` replaces or drops, for
+`docs/protocol-1.1.md`, "The server command queue". One plain probe; its
+`serverCommand:` lines are the measurement.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=40 tools/run_probe.sh client-probes/probe_squash mp_carentan
+# second shell, once the map is up:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-secs 25
+```
+
+Retail, 2026-10-07: `v sq_early "1"` arrives and the early print does not;
+the one-frame burst arrives as `v sq_a "2"`, `v sq_b "1"`, `v sq_c "1"`,
+`f "sq dup"` twice, `u`, `f "sq between"`, `v sq_d "2"`; `v sq_a "3"` and
+`v sq_a "4"` both arrive. `crates/server/src/client.rs`'s
+`one_frame_squashes_as_the_retail_probe_did` replays the burst.
+
+## probe_compass
+
+What `G_GetNonPVSFriendlyInfo` packs into `iCompassFriendInfo`, for
+`docs/research/cod11-hud-protocol.md` section 9, "Compass friendlies". Both
+clients join allies; slot 0 stands at a spawn, slot 1 is set down at spawns 2
+to 13 of mp_harbor in turn, pings, changes team and back, suicides, takes the
+dead session and ends a spectator. Two probes with `--probe-compass`, whose
+`COMPASS` lines print the field decoded beside the eye and the players the
+snapshot carries:
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=75 tools/run_probe.sh client-probes/probe_compass mp_harbor
+# second and third shells, once the map is up, two seconds apart:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-compass --probe-secs 62
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-compass --probe-secs 60
+```
+
+The `PROBE step` lines carry slot 1's origin; slot 0's `COMPASS` lines carry
+what it was sent. Against ours: `vcod-server mp_harbor --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_compass.gsc`.

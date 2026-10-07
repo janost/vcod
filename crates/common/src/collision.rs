@@ -1,14 +1,15 @@
 //! Contains routines ported from the Quake III Arena GPL source, Copyright (C) 1999-2005 Id Software, Inc..
 //! See NOTICE.
 //!
-//! Brush clip planes, render triangles and a BVH from the BSP collision
-//! lumps, swept by a Q3-style AABB `box_trace`. Layouts and why triangles
-//! are required: docs/research/bsp-ibsp59-format.md, "Terrain has no brushes".
+//! Brush clip planes, terrain triangles, patch facets and a BVH from the
+//! BSP collision lumps, swept by a Q3-style `box_trace`. Layouts and why
+//! triangles are required: docs/research/bsp-ibsp59-format.md, "Terrain has
+//! no brushes".
 
 use crate::bsp::Bsp;
 use crate::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
+use crate::patch::{PatchCollide, Sweep};
 use glam::Vec3;
-use std::collections::HashMap;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -20,7 +21,6 @@ pub const CONTENTS_SOLID: u32 = 0x1;
 /// (docs/research/bsp-ibsp59-format.md, "Content flags").
 pub const CONTENTS_GLASS: u32 = 0x10;
 const CONTENTS_PLAYERCLIP: u32 = 0x10000;
-const CONTENTS_SKY: u32 = 0x800;
 /// Census-proven water bit: docs/research/bsp-ibsp59-format.md, "Content flags".
 pub const CONTENTS_WATER: u32 = 0x20;
 /// The mask `G_RunItem` (game.mp 0x4ec47) hands `trap_PointContents` before
@@ -96,7 +96,10 @@ pub struct ModelTri {
 #[derive(Clone, Copy, Debug)]
 pub enum Prim {
     Brush(u32),
+    /// A lump-26 terrain triangle.
     Tri(u32),
+    /// A lump-24 patch, all its facets.
+    Patch(u32),
     Model(u32),
     /// A player capsule hit, carrying its entity number (`movetrace.rs`).
     Body(u32),
@@ -128,10 +131,6 @@ const MODEL_BARY_EPS: f32 = 0.001;
 /// (`cod_lnxded` rodata 0x80cd30c); a fraction at or under it is a
 /// `startsolid` at 0. The radius pad is `SURFACE_CLIP_EPSILON` (0x80cd308).
 const TERRAIN_FRACTION_EPS: f32 = 1e-5;
-/// How far behind a facet's face a start still counts as resting on it.
-/// A 30-unit shape straddling a convex seam is inside the uphill facet's
-/// slab by half its width times the grade change, 8.7 units at 30 degrees.
-const SEAM_DEPTH: f32 = 8.0;
 
 /// The 5-bit sound-surface index every trace consumer reads
 /// (`cod11-events-and-fx.md`, section 4). 0 means the material carries no
@@ -188,23 +187,11 @@ impl Capsule {
 /// Q3 `cm_trace.c` `CM_TraceThroughBrush`, on planes already expanded by the
 /// shape, which is retail's own brush arm (`cod_lnxded` 0x8054e90, the
 /// `sphere.use` branch: `dist + radius` per side, the sphere nearest the
-/// side) and, on a facet's planes, its patch arm (Q3's
-/// `CM_TraceThroughPatchCollide`, every border and bevel `+= radius`).
+/// side).
 ///
 /// `sphere` is the capsule's sphere offset: each plane is tested against the
 /// sphere nearest it, with `start` and `end` already at the capsule's
-/// centre. `hollow` is a facet's clip. A start inside the expanded slab of a
-/// zero-thickness facet is never `startsolid`, the way Q3's patch facets
-/// never are: a shape resting on one facet sits inside the neighbouring
-/// facet's slab at every convex seam, and beside a kerb it is inside the
-/// top face's slab, and reading either as solid made the ground trace fail
-/// and trapped the walker (docs/research/cod11-mantle.md, "The ground
-/// snap"). A start within `SEAM_DEPTH` behind a face is resting on that
-/// face: a fraction-0 hit with the face's normal when the trace moves into
-/// it, nothing when it moves out. Deeper than that the facet does not clip
-/// the trace at all. Q3's facets trust their winding, which a soup does
-/// not, so both faces of the slab clip an entry from outside.
-#[allow(clippy::too_many_arguments)]
+/// centre.
 fn clip_segment(
     trace: &mut Trace,
     start: Vec3,
@@ -212,7 +199,6 @@ fn clip_segment(
     planes: &[(Vec3, f32)],
     surface_flags: u32,
     sphere: Vec3,
-    hollow: bool,
     prim: Prim,
 ) {
     let mut enter = -1.0f32;
@@ -220,18 +206,13 @@ fn clip_segment(
     let mut clip_normal = Vec3::ZERO;
     let mut getout = false;
     let mut startout = false;
-    // The face pair's distances, for the resting test below.
-    let mut faces = [(0.0f32, 0.0f32); 2];
 
-    for (i, &(n, d)) in planes.iter().enumerate() {
+    for &(n, d) in planes {
         // The sphere nearest the plane is the one the plane's normal points
         // away from.
         let shift = if n.dot(sphere) > 0.0 { -sphere } else { sphere };
         let d1 = n.dot(start + shift) - d;
         let d2 = n.dot(end + shift) - d;
-        if i < 2 {
-            faces[i] = (d1, d2);
-        }
         if d2 > 0.0 {
             getout = true;
         }
@@ -262,23 +243,6 @@ fn clip_segment(
     }
 
     if !startout {
-        if hollow {
-            // `triangle_planes` pushes the face first and its reverse second;
-            // the one the start is closer to is the surface it rests on.
-            let i = usize::from(faces[1].0 > faces[0].0);
-            let (d1, d2) = faces[i];
-            if d1 > -SEAM_DEPTH && d1 > d2 {
-                let enter = (d1 - SURFACE_CLIP_EPSILON) / (d1 - d2);
-                if trace.fraction > 0.0 || enter > trace.enter {
-                    trace.fraction = 0.0;
-                    trace.enter = enter;
-                    trace.normal = planes[i].0;
-                    trace.surface_flags = surface_flags;
-                    trace.hit = Some(prim);
-                }
-            }
-            return;
-        }
         trace.startsolid = true;
         if !getout {
             trace.allsolid = true;
@@ -288,8 +252,8 @@ fn clip_segment(
         }
         return;
     }
-    // `<=`, not Q3's `<`: a zero-thickness facet's paired face planes make
-    // enter == leave for a grazing ray. Brushes have thickness, so unaffected.
+    // `<=` where Q3 has `<`; it only differs for a zero-thickness slab, which
+    // no brush has.
     if enter <= leave && enter > -1.0 {
         let fraction = enter.max(0.0);
         if fraction < trace.fraction || (fraction == trace.fraction && enter > trace.enter) {
@@ -408,38 +372,49 @@ fn expand_brush(planes: &[(Vec3, f32)], radius: f32, out: &mut Vec<(Vec3, f32)>)
     }
 }
 
-/// Planes for a facet swept by a capsule of `radius`: face, axis bevels,
-/// edge x axis bevels, each pushed out by the radius the way Q3 expands a
-/// patch facet for a sphere (`cm_patch.c`, `CM_AddFacetBevels` for the
-/// planes, `plane[3] += tw->sphere.radius` in the trace). This is what a
-/// patch's render soup gets, and what a brush face's soup gets, which the
-/// brush behind it settles anyway (docs/research/cod11-mantle.md, "Terrain
-/// is a swept sphere, a patch is a facet"). Edge hits report the bevel
-/// normal, which lets pmove slide around edges.
-fn triangle_planes(tri: &[Vec3; 3], radius: f32, out: &mut Vec<(Vec3, f32)>) {
-    out.clear();
-    let mut push = |n: Vec3| {
-        let d_tri = n.dot(tri[0]).max(n.dot(tri[1])).max(n.dot(tri[2]));
-        out.push((n, d_tri + radius));
-    };
-    let face = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize();
-    push(face);
-    push(-face);
-    for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
-        push(axis);
-        push(-axis);
-    }
-    for k in 0..3 {
-        let edge = tri[(k + 1) % 3] - tri[k];
-        for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
-            let c = edge.cross(axis);
-            if c.length_squared() > 1e-8 {
-                let c = c.normalize();
-                push(c);
-                push(-c);
-            }
+/// One patch against a trace, retail's `CM_TraceThroughPatch` arm of the
+/// leaf walk (`cod_lnxded` 0x8055608): a point takes the patch's point
+/// clip, anything else its capsule; a trace that does not move is a
+/// position test (`CM_PositionTestInPatchCollide`), the only way a patch
+/// reads `startsolid`. A hit replaces the trace's only when it is strictly
+/// closer, retail's `enterFrac < tw->trace.fraction`.
+fn clip_patch(
+    trace: &mut Trace,
+    start: Vec3,
+    end: Vec3,
+    capsule: Capsule,
+    patch: &WorldPatch,
+    prim: Prim,
+) {
+    let sweep = if capsule.radius == 0.0 {
+        Sweep::Point
+    } else {
+        Sweep::Capsule {
+            radius: capsule.radius,
+            offset: capsule.offset.z,
         }
+    };
+    let (s, e) = (start + capsule.center, end + capsule.center);
+    if start == end {
+        if patch.collide.position_test(s.to_array(), sweep) {
+            trace.startsolid = true;
+            trace.allsolid = true;
+            trace.fraction = 0.0;
+            trace.hit = Some(prim);
+        }
+        return;
     }
+    let Some(hit) = patch
+        .collide
+        .trace(s.to_array(), e.to_array(), sweep, trace.fraction)
+    else {
+        return;
+    };
+    trace.fraction = hit.fraction;
+    trace.enter = hit.raw;
+    trace.normal = Vec3::from_array(hit.normal);
+    trace.surface_flags = patch.surface_flags;
+    trace.hit = Some(prim);
 }
 
 /// Retail's terrain clip (`cod_lnxded` 0x8052a58), one triangle at a time:
@@ -645,9 +620,8 @@ pub struct CollisionWorld {
     tris_surf: Vec<u32>,
     /// Per-triangle mask-relevant content flags, parallel to `tris`.
     tris_contents: Vec<u32>,
-    /// Parallel to `tris`: a lump-26 terrain triangle, swept as a sphere,
-    /// against a render soup's facet.
-    tris_terrain: Vec<bool>,
+    /// Lump 24's patches as retail's facet grids.
+    pub patches: Vec<WorldPatch>,
     nodes: Vec<BvhNode>,
     /// The subtree holding every [`Prim::Model`] and nothing else, which a
     /// trace without the static models skips whole; `u32::MAX` when the map
@@ -695,7 +669,7 @@ impl Clone for CollisionWorld {
             model_tris: self.model_tris.clone(),
             tris_surf: self.tris_surf.clone(),
             tris_contents: self.tris_contents.clone(),
-            tris_terrain: self.tris_terrain.clone(),
+            patches: self.patches.clone(),
             nodes: self.nodes.clone(),
             models_root: self.models_root,
             prims: self.prims.clone(),
@@ -712,6 +686,17 @@ impl Clone for CollisionWorld {
             poses: RwLock::new(self.poses.read().unwrap_or_else(|e| e.into_inner()).clone()),
         }
     }
+}
+
+/// A lump-24 patch with its material's words, which the mask test and a
+/// hit report read.
+#[derive(Clone, Debug)]
+pub struct WorldPatch {
+    pub collide: PatchCollide,
+    pub content_flags: u32,
+    pub surface_flags: u32,
+    /// Its record's index among lump 24's patches, for `describe`.
+    pub index: u32,
 }
 
 /// One model's brushes as built: their run in `CollisionWorld::brushes`, the
@@ -797,7 +782,6 @@ struct Tris {
     tris: Vec<[Vec3; 3]>,
     surf: Vec<u32>,
     contents: Vec<u32>,
-    terrain: Vec<bool>,
     prims: Vec<(Prim, Vec3, Vec3)>,
 }
 
@@ -805,7 +789,7 @@ impl Tris {
     /// Drops slivers, pads the AABB by 0.25 so the BVH query finds a
     /// triangle the box merely touches. `tri` is wound with
     /// `cross(b - a, c - a)` on the outside, the side the sphere clip faces.
-    fn push(&mut self, [a, b, c]: [Vec3; 3], surface_flags: u32, contents: u32, terrain: bool) {
+    fn push(&mut self, [a, b, c]: [Vec3; 3], surface_flags: u32, contents: u32) {
         if (b - a).cross(c - a).length_squared() < 1e-6 {
             return;
         }
@@ -815,18 +799,7 @@ impl Tris {
         self.tris.push([a, b, c]);
         self.surf.push(surface_flags);
         self.contents.push(contents);
-        self.terrain.push(terrain);
     }
-}
-
-/// A vertex quantised to 1/8 unit, the key the terrain vertex table uses to
-/// match a render soup's triangle to the lump-26 triangles it draws.
-fn vkey(v: Vec3) -> [i32; 3] {
-    [
-        (v.x * 8.0).round() as i32,
-        (v.y * 8.0).round() as i32,
-        (v.z * 8.0).round() as i32,
-    ]
 }
 
 impl CollisionWorld {
@@ -838,24 +811,17 @@ impl CollisionWorld {
     /// from the entities lump), except those of `trigger*` entities: their
     /// brushes carry plain CONTENTS_SOLID in the lump, but retail leaves them
     /// hollow to movement. The terrain partitions of lump 24 enter as the
-    /// engine's own triangles, swept as a sphere; the render soups of model
-    /// 0 stand in for lump 24's patches as facets, so only a triangle inside
-    /// some patch's control-point box enters, minus the ones that draw
-    /// terrain (a soup whose centroid lies in a coplanar terrain triangle
-    /// sharing a vertex with it; the render mesh triangulates the same grid
-    /// the other way, so an edge match is not enough, and a flat patch
-    /// abutting terrain shares an edge without drawing it). Submodel meshes are local-space and
-    /// their brush hulls replace them.
+    /// engine's own triangles, swept as a sphere, and its patches as
+    /// `CM_GeneratePatchCollide`'s facets. No render soup collides: retail
+    /// clips model 0 through its brushes and lump 24 alone.
     pub fn build(bsp: &Bsp, model_tris: &[ModelTri]) -> Self {
         let mut brushes = Vec::new();
         let mut water = Vec::new();
         let mut nodrop = Vec::new();
-        let mut panes: Vec<Volume> = Vec::new();
         let mut t = Tris {
             tris: Vec::new(),
             surf: Vec::new(),
             contents: Vec::new(),
-            terrain: Vec::new(),
             prims: Vec::new(),
         };
 
@@ -932,15 +898,6 @@ impl CollisionWorld {
                         hi,
                     });
                 }
-                if mi == 0
-                    && mat.content_flags & (CONTENTS_GLASS | CONTENTS_SOLID) == CONTENTS_GLASS
-                {
-                    panes.push(Volume {
-                        planes: planes.clone(),
-                        lo,
-                        hi,
-                    });
-                }
                 if mat.content_flags & CLIP_BRUSH != 0 {
                     let idx = brushes.len() as u32;
                     brushes.push(BrushPlanes {
@@ -964,9 +921,7 @@ impl CollisionWorld {
         }
 
         // The engine's terrain, wound the way `CM_GenerateTerrainCollide`
-        // takes its plane (Q3's `PlaneFromPoints`: `cross(c - a, b - a)`),
-        // and its vertices keyed for the soup pass.
-        let mut terrain_by_vertex: HashMap<[i32; 3], Vec<usize>> = HashMap::new();
+        // takes its plane (Q3's `PlaneFromPoints`: `cross(c - a, b - a)`).
         for part in &bsp.terrain {
             let mat = &bsp.materials[part.material as usize];
             let Some(contents) = tri_contents(mat.content_flags) else {
@@ -980,109 +935,31 @@ impl CollisionWorld {
                         bsp.collision_verts[part.first_vert as usize + tri[i] as usize],
                     )
                 };
-                let tri = [p(0), p(2), p(1)];
-                let before = t.tris.len();
-                t.push(tri, mat.surface_flags, contents, true);
-                if t.tris.len() == before {
-                    continue;
-                }
-                for v in tri {
-                    terrain_by_vertex.entry(vkey(v)).or_default().push(before);
-                }
+                t.push([p(0), p(2), p(1)], mat.surface_flags, contents);
             }
         }
-        // A soup triangle whose centroid lies in a coplanar terrain triangle
-        // sharing one of its vertices draws that terrain; the rest are
-        // facets. A soup winds clockwise seen from its normal's side
-        // (bsp-ibsp59-format.md, lump 6), so it is stored reversed.
-        let terrain_tris = t.tris.clone();
-        let draws_terrain = |tri: &[Vec3; 3]| {
-            let n = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize();
-            let c = (tri[0] + tri[1] + tri[2]) / 3.0;
-            tri.iter().any(|v| {
-                terrain_by_vertex.get(&vkey(*v)).is_some_and(|owners| {
-                    owners.iter().any(|&i| {
-                        let [a, b, cc] = terrain_tris[i];
-                        let n2 = (b - a).cross(cc - a).normalize();
-                        if n.dot(n2) < 0.995 || (n2.dot(c - a)).abs() > 0.5 {
-                            return false;
-                        }
-                        // Barycentrics of the centroid in that triangle's plane.
-                        let (e1, e2, w) = (cc - a, b - a, c - a);
-                        let (d11, d12, d22) = (e1.dot(e1), e1.dot(e2), e2.dot(e2));
-                        let (dw1, dw2) = (w.dot(e1), w.dot(e2));
-                        let det = d11 * d22 - d12 * d12;
-                        if det.abs() < 1e-12 {
-                            return false;
-                        }
-                        let u = (d22 * dw1 - d12 * dw2) / det;
-                        let v = (d11 * dw2 - d12 * dw1) / det;
-                        u >= -0.01 && v >= -0.01 && u + v <= 1.01
-                    })
-                })
-            })
-        };
-        // A pane's faces draw with their sides' materials, some of them
-        // SOLID (mp_depot's `glass_nosight@fwindow5` outer faces), where the
-        // clip takes the brush's glass word alone.
-        let on_pane = |tri: &[Vec3; 3]| {
-            panes.iter().any(|p| {
-                tri.iter().all(|v| {
-                    v.cmpge(p.lo - Vec3::splat(0.5)).all()
-                        && v.cmple(p.hi + Vec3::splat(0.5)).all()
-                        && p.planes.iter().all(|&(n, d)| n.dot(*v) <= d + 0.5)
-                })
-            })
-        };
-        // Retail collides model 0 through its brushes and lump 24 alone, so a
-        // soup stands in for a patch only inside that patch's control-point
-        // box, which holds the whole bezier surface; a brush face's or a
-        // decal's soup is no collision of its own.
-        let patch_boxes: Vec<(Vec3, Vec3)> = bsp
-            .patches
-            .iter()
-            .map(|pp| {
-                let n = pp.width as usize * pp.height as usize;
-                bsp.collision_verts[pp.first_vert as usize..][..n]
-                    .iter()
-                    .fold(
-                        (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
-                        |(lo, hi), v| (lo.min(Vec3::from_array(*v)), hi.max(Vec3::from_array(*v))),
-                    )
-            })
-            .collect();
-        let in_patch = |tri: &[Vec3; 3]| {
-            patch_boxes.iter().any(|&(lo, hi)| {
-                tri.iter().all(|v| {
-                    v.cmpge(lo - Vec3::splat(0.5)).all() && v.cmple(hi + Vec3::splat(0.5)).all()
-                })
-            })
-        };
-        let world_model = &bsp.models[0];
-        let soup_range = world_model.first_soup as usize
-            ..(world_model.first_soup + world_model.num_soups) as usize;
-        for soup in &bsp.soups[soup_range] {
-            let mat = &bsp.materials[soup.material as usize];
-            if mat.content_flags & CONTENTS_SKY != 0 {
-                continue;
-            }
-            let Some(contents) = tri_contents(mat.content_flags) else {
+        // `CM_LoadMap` builds every patch whatever its contents; the trace's
+        // mask test skips the ones it does not meet.
+        let mut patches = Vec::new();
+        for (index, part) in bsp.patches.iter().enumerate() {
+            let mat = &bsp.materials[part.material as usize];
+            let (w, h) = (part.width as usize, part.height as usize);
+            let points = &bsp.collision_verts[part.first_vert as usize..][..w * h];
+            let Some(collide) = PatchCollide::generate(w, h, part.tolerance, points) else {
+                log::warn!("lump 24 patch {index} ({w}x{h}) builds no collision");
                 continue;
             };
-            let idx = &bsp.indices[soup.first_index as usize..][..soup.index_count as usize];
-            for tri in idx.as_chunks::<3>().0 {
-                let p = |i: usize| {
-                    Vec3::from_array(bsp.verts[soup.first_vertex as usize + tri[i] as usize].pos)
-                };
-                let tri = [p(0), p(2), p(1)];
-                if !terrain_by_vertex.is_empty() && draws_terrain(&tri) {
-                    continue;
-                }
-                if on_pane(&tri) || !in_patch(&tri) {
-                    continue;
-                }
-                t.push(tri, mat.surface_flags, contents, false);
-            }
+            t.prims.push((
+                Prim::Patch(patches.len() as u32),
+                Vec3::from_array(collide.mins),
+                Vec3::from_array(collide.maxs),
+            ));
+            patches.push(WorldPatch {
+                collide,
+                content_flags: mat.content_flags,
+                surface_flags: mat.surface_flags,
+                index: index as u32,
+            });
         }
         let mut model_tris_out = Vec::with_capacity(model_tris.len());
         for mt in model_tris {
@@ -1136,7 +1013,7 @@ impl CollisionWorld {
             model_tris: model_tris_out,
             tris_surf: t.surf,
             tris_contents: t.contents,
-            tris_terrain: t.terrain,
+            patches,
             nodes,
             models_root,
             prims: t.prims,
@@ -1300,7 +1177,6 @@ impl CollisionWorld {
                 scratch,
                 brush.surface_flags,
                 sphere,
-                false,
                 Prim::Brush(b),
             );
         }
@@ -1381,6 +1257,7 @@ impl CollisionWorld {
         match trace.hit {
             Some(Prim::Brush(b)) => self.brushes[b as usize].content_flags,
             Some(Prim::Tri(t)) => self.tris_contents[t as usize],
+            Some(Prim::Patch(p)) => self.patches[p as usize].content_flags,
             Some(Prim::Model(t)) => self.model_tris[t as usize].contents,
             Some(Prim::Body(_)) | None => 0,
         }
@@ -1688,7 +1565,6 @@ impl CollisionWorld {
                             scratch,
                             brush.surface_flags,
                             capsule.offset,
-                            false,
                             *prim,
                         );
                     }
@@ -1696,29 +1572,22 @@ impl CollisionWorld {
                         if self.tris_contents[t as usize] & mask == 0 {
                             continue;
                         }
-                        if self.tris_terrain[t as usize] {
-                            clip_sphere_triangle(
-                                trace,
-                                start + capsule.center,
-                                end + capsule.center,
-                                &self.tris[t as usize],
-                                capsule,
-                                self.tris_surf[t as usize],
-                                *prim,
-                            );
-                        } else {
-                            triangle_planes(&self.tris[t as usize], capsule.radius, scratch);
-                            clip_segment(
-                                trace,
-                                start + capsule.center,
-                                end + capsule.center,
-                                scratch,
-                                self.tris_surf[t as usize],
-                                capsule.offset,
-                                true,
-                                *prim,
-                            );
+                        clip_sphere_triangle(
+                            trace,
+                            start + capsule.center,
+                            end + capsule.center,
+                            &self.tris[t as usize],
+                            capsule,
+                            self.tris_surf[t as usize],
+                            *prim,
+                        );
+                    }
+                    Prim::Patch(p) => {
+                        let patch = &self.patches[p as usize];
+                        if patch.content_flags & mask == 0 {
+                            continue;
                         }
+                        clip_patch(trace, start, end, capsule, patch, *prim);
                     }
                     Prim::Model(t) => {
                         let mt = &self.model_tris[t as usize];
@@ -1767,15 +1636,16 @@ impl CollisionWorld {
                 )
             }
             Prim::Tri(t) => format!(
-                "{} tri {t} sf={:#x} cf={:#x}",
-                if self.tris_terrain[t as usize] {
-                    "terrain"
-                } else {
-                    "facet"
-                },
-                self.tris_surf[t as usize],
-                self.tris_contents[t as usize]
+                "terrain tri {t} sf={:#x} cf={:#x}",
+                self.tris_surf[t as usize], self.tris_contents[t as usize]
             ),
+            Prim::Patch(p) => {
+                let patch = &self.patches[p as usize];
+                format!(
+                    "patch {} sf={:#x} cf={:#x}",
+                    patch.index, patch.surface_flags, patch.content_flags
+                )
+            }
             Prim::Model(t) => {
                 let mt = &self.model_tris[t as usize];
                 format!(
@@ -2033,39 +1903,81 @@ pub fn submodel_test_world(entities: &str, submodels: &[([f32; 3], [f32; 3])]) -
     )
 }
 
-/// A test map's lump 24: one patch record whose control points box every
-/// soup vertex, so its soups clip as patches do (`CollisionWorld::build`).
+/// A test map's lump 24: each triangle `[a, b, c]` as a flat 3x3 patch of
+/// `material` whose last row collapses onto `c`, its front the side
+/// `cross(b - a, c - a)` points to.
 #[doc(hidden)]
-pub fn patch_over_soups(mut bsp: crate::bsp::Bsp) -> crate::bsp::Bsp {
-    let (lo, hi) = bsp.verts.iter().fold(
-        (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
-        |(lo, hi), v| {
-            (
-                lo.min(Vec3::from_array(v.pos)),
-                hi.max(Vec3::from_array(v.pos)),
-            )
-        },
-    );
-    if lo.x <= hi.x {
+pub fn push_tri_patches(bsp: &mut crate::bsp::Bsp, tris: &[[Vec3; 3]], material: u16) {
+    for &[a, b, c] in tris {
+        let mid = |p: Vec3, q: Vec3| (p + q) * 0.5;
+        let ab = mid(a, b);
+        let rows = [[a, ab, b], [mid(a, c), mid(ab, c), mid(b, c)], [c, c, c]];
+        let first_vert = bsp.collision_verts.len() as u32;
+        bsp.collision_verts
+            .extend(rows.iter().flatten().map(|v| v.to_array()));
         bsp.patches.push(crate::bsp::PatchPart {
-            material: 0,
-            width: 1,
-            height: 2,
-            first_vert: bsp.collision_verts.len() as u32,
+            material,
+            width: 3,
+            height: 3,
+            tolerance: 4,
+            first_vert,
         });
-        bsp.collision_verts.extend([lo.to_array(), hi.to_array()]);
     }
-    bsp
 }
 
-/// [`synthetic_world`] plus world-space triangles as soups of material 0,
-/// the only way this module takes swept geometry that is not axis-aligned.
+/// A test map's lump 24: `tris` as one terrain partition of `material`,
+/// each front the side `cross(b - a, c - a)` points to.
+#[doc(hidden)]
+pub fn push_tri_terrain(bsp: &mut crate::bsp::Bsp, tris: &[[Vec3; 3]], material: u16) {
+    let first_vert = bsp.collision_verts.len() as u32;
+    let first_index = bsp.collision_indices.len() as u32;
+    for (i, tri) in tris.iter().enumerate() {
+        bsp.collision_verts.extend(tri.iter().map(|v| v.to_array()));
+        let i = (i * 3) as u16;
+        // The build reads a lump-26 triangle `a, c, b`.
+        bsp.collision_indices.extend([i, i + 2, i + 1]);
+    }
+    bsp.terrain.push(crate::bsp::TerrainPart {
+        material,
+        first_vert,
+        vert_count: (tris.len() * 3) as u16,
+        first_index,
+        index_count: (tris.len() * 3) as u16,
+    });
+}
+
+/// [`synthetic_world`] plus world-space triangles as terrain of material 0
+/// ([`push_tri_terrain`]), the only way this module takes swept geometry
+/// that is not axis-aligned.
 #[doc(hidden)]
 pub fn synthetic_world_tris(
     materials: &[(&str, u32, u32)],
     brushes: &[(usize, [f32; 3], [f32; 3])],
     tris: &[[Vec3; 3]],
 ) -> CollisionWorld {
+    let mut bsp = synthetic_bsp(materials, brushes);
+    push_tri_terrain(&mut bsp, tris, 0);
+    CollisionWorld::build(&bsp, &[])
+}
+
+/// [`synthetic_world`] plus world-space triangles as patches of material 0
+/// ([`push_tri_patches`]).
+#[doc(hidden)]
+pub fn synthetic_world_patches(
+    materials: &[(&str, u32, u32)],
+    brushes: &[(usize, [f32; 3], [f32; 3])],
+    tris: &[[Vec3; 3]],
+) -> CollisionWorld {
+    let mut bsp = synthetic_bsp(materials, brushes);
+    push_tri_patches(&mut bsp, tris, 0);
+    CollisionWorld::build(&bsp, &[])
+}
+
+/// A model-0 map of named materials and axial brushes.
+fn synthetic_bsp(
+    materials: &[(&str, u32, u32)],
+    brushes: &[(usize, [f32; 3], [f32; 3])],
+) -> crate::bsp::Bsp {
     let side = |m: u32, v: f32| crate::bsp::BrushSide {
         plane_or_dist: v.to_bits(),
         material: m,
@@ -2091,76 +2003,49 @@ pub fn synthetic_world_tris(
             maxs[axis] = maxs[axis].max(hi[axis]);
         }
     }
-    let mut verts = Vec::new();
-    let mut indices = Vec::new();
-    let mut soups = Vec::new();
-    for tri in tris {
-        let first_vertex = verts.len() as u32;
-        verts.extend(tri.iter().map(|v| crate::bsp::DrawVert {
-            pos: v.to_array(),
-            uv: [0.0; 2],
-            lm_uv: [0.0; 2],
-            normal: [0.0, 0.0, 1.0],
-            color: [255; 4],
-        }));
-        let first_index = indices.len() as u32;
-        indices.extend_from_slice(&[0, 1, 2]);
-        soups.push(crate::bsp::TriangleSoup {
-            material: 0,
-            lightmap: crate::bsp::NO_LIGHTMAP,
-            first_vertex,
-            vertex_count: 3,
-            index_count: 3,
-            first_index,
-        });
+    crate::bsp::Bsp {
+        materials: materials
+            .iter()
+            .map(|(name, content, surface)| crate::bsp::Material {
+                name: name.to_string(),
+                surface_flags: *surface,
+                content_flags: *content,
+            })
+            .collect(),
+        lightmaps: vec![],
+        soups: vec![],
+        verts: vec![],
+        indices: vec![],
+        entities: String::new(),
+        planes: vec![],
+        brush_sides,
+        brushes: bsp_brushes,
+        models: vec![crate::bsp::Model {
+            mins,
+            maxs,
+            first_soup: 0,
+            num_soups: 0,
+            first_brush: 0,
+            num_brushes: n,
+        }],
+        cull_groups: vec![],
+        cull_indices: vec![],
+        portal_verts: vec![],
+        occluders: vec![],
+        occluder_plane_indices: vec![],
+        occluder_edges: vec![],
+        occluder_indices: vec![],
+        aabb_nodes: vec![],
+        cells: vec![],
+        portals: vec![],
+        nodes: vec![],
+        leafs: vec![],
+        terrain: vec![],
+        patches: vec![],
+        collision_verts: vec![],
+        collision_indices: vec![],
+        pvs: None,
     }
-    let num_soups = soups.len() as u32;
-    CollisionWorld::build(
-        &patch_over_soups(crate::bsp::Bsp {
-            materials: materials
-                .iter()
-                .map(|(name, content, surface)| crate::bsp::Material {
-                    name: name.to_string(),
-                    surface_flags: *surface,
-                    content_flags: *content,
-                })
-                .collect(),
-            lightmaps: vec![],
-            soups,
-            verts,
-            indices,
-            entities: String::new(),
-            planes: vec![],
-            brush_sides,
-            brushes: bsp_brushes,
-            models: vec![crate::bsp::Model {
-                mins,
-                maxs,
-                first_soup: 0,
-                num_soups,
-                first_brush: 0,
-                num_brushes: n,
-            }],
-            cull_groups: vec![],
-            cull_indices: vec![],
-            portal_verts: vec![],
-            occluders: vec![],
-            occluder_plane_indices: vec![],
-            occluder_edges: vec![],
-            occluder_indices: vec![],
-            aabb_nodes: vec![],
-            cells: vec![],
-            portals: vec![],
-            nodes: vec![],
-            leafs: vec![],
-            terrain: vec![],
-            patches: vec![],
-            collision_verts: vec![],
-            collision_indices: vec![],
-            pvs: None,
-        }),
-        &[],
-    )
 }
 
 #[cfg(test)]
@@ -2310,34 +2195,24 @@ mod tests {
     use crate::bsp::{self, Bsp};
     use glam::Vec3;
 
-    /// One axial brush (-64,-64,-16)..(64,64,0), one triangle at z=10 over x,y in 100..200.
+    /// One axial brush (-64,-64,-16)..(64,64,0), one upward triangle patch
+    /// at z=10 over x,y in 100..200.
     pub(crate) fn tiny_world() -> Bsp {
         let dist = |v: f32| v.to_bits();
         let side = |v: f32| bsp::BrushSide {
             plane_or_dist: dist(v),
             material: 0,
         };
-        patch_over_soups(Bsp {
+        let mut bsp = Bsp {
             materials: vec![bsp::Material {
                 name: "textures/test/solid".into(),
                 surface_flags: 0,
                 content_flags: 0x1,
             }],
             lightmaps: vec![],
-            soups: vec![bsp::TriangleSoup {
-                material: 0,
-                lightmap: bsp::NO_LIGHTMAP,
-                first_vertex: 0,
-                vertex_count: 3,
-                index_count: 3,
-                first_index: 0,
-            }],
-            verts: vec![
-                vert([100.0, 100.0, 10.0]),
-                vert([200.0, 100.0, 10.0]),
-                vert([100.0, 200.0, 10.0]),
-            ],
-            indices: vec![0, 1, 2],
+            soups: vec![],
+            verts: vec![],
+            indices: vec![],
             entities: String::new(),
             planes: vec![],
             brush_sides: vec![
@@ -2357,7 +2232,7 @@ mod tests {
                 mins: [-64.0, -64.0, -16.0],
                 maxs: [64.0, 64.0, 0.0],
                 first_soup: 0,
-                num_soups: 1,
+                num_soups: 0,
                 first_brush: 0,
                 num_brushes: 1,
             }],
@@ -2378,7 +2253,17 @@ mod tests {
             collision_verts: vec![],
             collision_indices: vec![],
             pvs: None,
-        })
+        };
+        push_tri_patches(
+            &mut bsp,
+            &[[
+                Vec3::new(100.0, 100.0, 10.0),
+                Vec3::new(200.0, 100.0, 10.0),
+                Vec3::new(100.0, 200.0, 10.0),
+            ]],
+            0,
+        );
+        bsp
     }
 
     fn vert(pos: [f32; 3]) -> bsp::DrawVert {
@@ -2412,16 +2297,16 @@ mod tests {
     }
 
     #[test]
-    fn harvests_triangles_and_answers_aabb_queries() {
+    fn builds_patches_and_answers_aabb_queries() {
         let world = CollisionWorld::build(&tiny_world(), &[]);
-        assert_eq!(world.tris.len(), 1);
+        assert_eq!(world.patches.len(), 1);
         let mut out = Vec::new();
         world.candidates(
             Vec3::new(140.0, 140.0, 0.0),
             Vec3::new(150.0, 150.0, 20.0),
             &mut out,
         );
-        assert!(out.iter().any(|p| matches!(p, Prim::Tri(_))));
+        assert!(out.iter().any(|p| matches!(p, Prim::Patch(_))));
         out.clear();
         world.candidates(
             Vec3::new(0.0, 0.0, -8.0),
@@ -2448,8 +2333,9 @@ mod tests {
         // model 0's 7575 solid+playerclip brushes plus its two stray
         // non-trigger submodel clips; the 32 trigger brushes stay hollow
         assert_eq!(world.brushes.len(), 7577);
-        // terrain and the patches' soups; brush faces' soups are no clip
-        assert!(world.tris.len() > 5_000);
+        // terrain triangles and lump 24's patches
+        assert!(world.tris.len() > 4_000, "{}", world.tris.len());
+        assert_eq!(world.patches.len(), bsp.patches.len());
         // a query around a known spawn; only holds if candidates() walks from the root
         let mut out = Vec::new();
         world.candidates(
@@ -2460,39 +2346,31 @@ mod tests {
         assert!(!out.is_empty());
     }
 
-    /// Six triangles 1000 units apart along X: the median split yields a
-    /// 3-node BVH, so root (0) and last-pushed node (2) differ and a walk
-    /// that starts anywhere but the root misses the low-X leaf.
+    /// Six triangle patches 1000 units apart along X: the median split
+    /// yields a 3-node BVH, so root (0) and last-pushed node (2) differ and
+    /// a walk that starts anywhere but the root misses the low-X leaf.
     fn spread_tris_world() -> Bsp {
         const N: usize = 6;
-        let mut verts = Vec::with_capacity(N * 3);
-        let mut indices = Vec::with_capacity(N * 3);
-        let mut soups = Vec::with_capacity(N);
-        for i in 0..N {
-            let ox = i as f32 * 1000.0;
-            verts.push(vert([ox, 0.0, 10.0]));
-            verts.push(vert([ox + 10.0, 0.0, 10.0]));
-            verts.push(vert([ox, 10.0, 10.0]));
-            indices.extend_from_slice(&[0, 1, 2]);
-            soups.push(bsp::TriangleSoup {
-                material: 0,
-                lightmap: bsp::NO_LIGHTMAP,
-                first_vertex: (i * 3) as u32,
-                vertex_count: 3,
-                index_count: 3,
-                first_index: (i * 3) as u32,
-            });
-        }
-        patch_over_soups(Bsp {
+        let tris: Vec<[Vec3; 3]> = (0..N)
+            .map(|i| {
+                let ox = i as f32 * 1000.0;
+                [
+                    Vec3::new(ox, 0.0, 10.0),
+                    Vec3::new(ox + 10.0, 0.0, 10.0),
+                    Vec3::new(ox, 10.0, 10.0),
+                ]
+            })
+            .collect();
+        let mut bsp = Bsp {
             materials: vec![bsp::Material {
                 name: "textures/test/solid".into(),
                 surface_flags: 0,
                 content_flags: 0x1,
             }],
             lightmaps: vec![],
-            soups,
-            verts,
-            indices,
+            soups: vec![],
+            verts: vec![],
+            indices: vec![],
             entities: String::new(),
             planes: vec![],
             brush_sides: vec![],
@@ -2501,7 +2379,7 @@ mod tests {
                 mins: [0.0, 0.0, 0.0],
                 maxs: [0.0, 0.0, 0.0],
                 first_soup: 0,
-                num_soups: N as u32,
+                num_soups: 0,
                 first_brush: 0,
                 num_brushes: 0,
             }],
@@ -2522,7 +2400,9 @@ mod tests {
             collision_verts: vec![],
             collision_indices: vec![],
             pvs: None,
-        })
+        };
+        push_tri_patches(&mut bsp, &tris, 0);
+        bsp
     }
 
     fn world() -> CollisionWorld {
@@ -2610,7 +2490,7 @@ mod tests {
     #[test]
     fn answers_aabb_queries_across_a_multi_node_bvh() {
         let world = CollisionWorld::build(&spread_tris_world(), &[]);
-        assert_eq!(world.tris.len(), 6);
+        assert_eq!(world.patches.len(), 6);
 
         // low-X triangle: only reachable from the true root
         let mut out = Vec::new();
@@ -2619,7 +2499,7 @@ mod tests {
             Vec3::new(15.0, 15.0, 20.0),
             &mut out,
         );
-        assert!(out.iter().any(|p| matches!(p, Prim::Tri(0))));
+        assert!(out.iter().any(|p| matches!(p, Prim::Patch(0))));
 
         // high-X triangle (index 5)
         out.clear();
@@ -2629,7 +2509,7 @@ mod tests {
             Vec3::new(ox + 15.0, 15.0, 20.0),
             &mut out,
         );
-        assert!(out.iter().any(|p| matches!(p, Prim::Tri(5))));
+        assert!(out.iter().any(|p| matches!(p, Prim::Patch(5))));
 
         // nowhere near any triangle
         out.clear();
@@ -2673,11 +2553,10 @@ mod tests {
                         &scratch,
                         brush.surface_flags,
                         capsule.offset,
-                        false,
                         *prim,
                     );
                 }
-                Prim::Tri(i) if world.tris_terrain[i as usize] => {
+                Prim::Tri(i) => {
                     clip_sphere_triangle(
                         &mut trace,
                         start + capsule.center,
@@ -2688,16 +2567,13 @@ mod tests {
                         *prim,
                     );
                 }
-                Prim::Tri(i) => {
-                    triangle_planes(&world.tris[i as usize], capsule.radius, &mut scratch);
-                    clip_segment(
+                Prim::Patch(i) => {
+                    clip_patch(
                         &mut trace,
-                        start + capsule.center,
-                        end + capsule.center,
-                        &scratch,
-                        0,
-                        capsule.offset,
-                        true,
+                        start,
+                        end,
+                        capsule,
+                        &world.patches[i as usize],
                         *prim,
                     );
                 }
@@ -3309,151 +3185,96 @@ mod tests {
         assert!(flagged, "no approach reported the ladder flag");
     }
 
-    /// Axial-free test helper: one triangle per soup entry against named
+    /// Axial-free test helper: one triangle patch per entry against named
     /// `(name, contents, surface)` materials. Model 0 only, no brushes.
-    #[doc(hidden)]
-    pub fn synthetic_soup_world(
+    fn synthetic_patch_world(
         materials: &[(&str, u32, u32)],
-        soups: &[(usize, [[f32; 3]; 3])],
+        tris: &[(usize, [[f32; 3]; 3])],
     ) -> CollisionWorld {
-        let mut verts = Vec::new();
-        let mut indices = Vec::new();
-        let mut soup_lump = Vec::new();
-        for (mat, tri) in soups {
-            let first_vertex = verts.len() as u32;
-            for pos in tri {
-                verts.push(vert(*pos));
-            }
-            let first_index = indices.len() as u16;
-            indices.extend_from_slice(&[first_index, first_index + 1, first_index + 2]);
-            soup_lump.push(crate::bsp::TriangleSoup {
-                material: *mat as u16,
-                lightmap: crate::bsp::NO_LIGHTMAP,
-                first_vertex,
-                vertex_count: 3,
-                index_count: 3,
-                first_index: first_index as u32,
-            });
+        let mut bsp = Bsp {
+            materials: materials
+                .iter()
+                .map(|(name, content, surface)| crate::bsp::Material {
+                    name: name.to_string(),
+                    surface_flags: *surface,
+                    content_flags: *content,
+                })
+                .collect(),
+            lightmaps: vec![],
+            soups: vec![],
+            verts: vec![],
+            indices: vec![],
+            entities: String::new(),
+            planes: vec![],
+            brush_sides: vec![],
+            brushes: vec![],
+            models: vec![crate::bsp::Model {
+                mins: [0.0; 3],
+                maxs: [0.0; 3],
+                first_soup: 0,
+                num_soups: 0,
+                first_brush: 0,
+                num_brushes: 0,
+            }],
+            cull_groups: vec![],
+            cull_indices: vec![],
+            portal_verts: vec![],
+            occluders: vec![],
+            occluder_plane_indices: vec![],
+            occluder_edges: vec![],
+            occluder_indices: vec![],
+            aabb_nodes: vec![],
+            cells: vec![],
+            portals: vec![],
+            nodes: vec![],
+            leafs: vec![],
+            terrain: vec![],
+            patches: vec![],
+            collision_verts: vec![],
+            collision_indices: vec![],
+            pvs: None,
+        };
+        for (mat, tri) in tris {
+            push_tri_patches(&mut bsp, &[tri.map(Vec3::from_array)], *mat as u16);
         }
-        let soup_count = soup_lump.len() as u32;
-        CollisionWorld::build(
-            &patch_over_soups(crate::bsp::Bsp {
-                materials: materials
-                    .iter()
-                    .map(|(name, content, surface)| crate::bsp::Material {
-                        name: name.to_string(),
-                        surface_flags: *surface,
-                        content_flags: *content,
-                    })
-                    .collect(),
-                lightmaps: vec![],
-                soups: soup_lump,
-                verts,
-                indices,
-                entities: String::new(),
-                planes: vec![],
-                brush_sides: vec![],
-                brushes: vec![],
-                models: vec![crate::bsp::Model {
-                    mins: [0.0; 3],
-                    maxs: [0.0; 3],
-                    first_soup: 0,
-                    num_soups: soup_count,
-                    first_brush: 0,
-                    num_brushes: 0,
-                }],
-                cull_groups: vec![],
-                cull_indices: vec![],
-                portal_verts: vec![],
-                occluders: vec![],
-                occluder_plane_indices: vec![],
-                occluder_edges: vec![],
-                occluder_indices: vec![],
-                aabb_nodes: vec![],
-                cells: vec![],
-                portals: vec![],
-                nodes: vec![],
-                leafs: vec![],
-                terrain: vec![],
-                patches: vec![],
-                collision_verts: vec![],
-                collision_indices: vec![],
-                pvs: None,
-            }),
-            &[],
-        )
+        CollisionWorld::build(&bsp, &[])
     }
 
-    /// Census words from bsp-ibsp59-format.md "Content flags": bushwalls are
-    /// TRANSLUCENT|WINDOW, brushless terrain bare 0x4, masked fences carry
+    /// Patch content words from the stock maps' lump 24: foliage-like
+    /// TRANSLUCENT|WINDOW (a terrain word; no patch carries it, so it stands
+    /// for any word outside every mask) and a masked fence's
     /// TRANSLUCENT|PLAYERCLIP|MONSTERCLIP.
     const BUSH_WALL: (&str, u32, u32) = (
         "textures/global_use/foliage_masked@bushwall1",
         0x2000_0002,
         8_454_176,
     );
-    const TERRAIN: (&str, u32, u32) = ("textures/normandy/ground/a_grass1a", 0x4, 10 << 20);
-    const BARBED_FENCE: (&str, u32, u32) = (
-        "textures/normandy/transparents/metal_masked@barbed_fence1",
+    const IRON_FENCE: (&str, u32, u32) = (
+        "textures/austria/transparents/metal_masked@ironfence1a",
         0x2003_0000,
         13_713_440,
     );
 
+    /// A wall facing -x, toward a trace from the origin.
     fn wall_tri(x: f32) -> [[f32; 3]; 3] {
-        [[x, -50.0, 0.0], [x, 50.0, 0.0], [x, 50.0, 100.0]]
+        [[x, -50.0, 0.0], [x, -50.0, 100.0], [x, 50.0, 0.0]]
     }
 
     #[test]
-    fn cutout_foliage_soups_enter_no_collision() {
-        let world = synthetic_soup_world(&[BUSH_WALL], &[(0, wall_tri(100.0))]);
-        assert!(world.tris.is_empty(), "the bush soup must not be harvested");
+    fn a_patch_outside_every_mask_clips_nothing() {
+        let world = synthetic_patch_world(&[BUSH_WALL], &[(0, wall_tri(100.0))]);
+        assert_eq!(world.patches.len(), 1);
+        let (start, end) = (Vec3::new(0.0, 0.0, 50.0), Vec3::new(200.0, 0.0, 50.0));
         assert_eq!(
-            world
-                .box_trace(
-                    Vec3::new(0.0, 0.0, 50.0),
-                    Vec3::new(200.0, 0.0, 50.0),
-                    Vec3::ZERO,
-                    Vec3::ZERO
-                )
-                .fraction,
+            world.box_trace(start, end, Vec3::ZERO, Vec3::ZERO).fraction,
             1.0
         );
+        assert_eq!(world.shot_trace(start, end).fraction, 1.0);
     }
 
     #[test]
-    fn terrain_soups_stay_solid() {
-        let floor = [
-            [100.0, -50.0, 10.0],
-            [100.0, 50.0, 10.0],
-            [300.0, 0.0, 10.0],
-        ];
-        let world = synthetic_soup_world(&[TERRAIN], &[(0, floor)]);
-        let down = world.box_trace(
-            Vec3::new(150.0, 0.0, 100.0),
-            Vec3::new(150.0, 0.0, -100.0),
-            Vec3::ZERO,
-            Vec3::ZERO,
-        );
-        assert!(
-            down.fraction < 1.0 && (down.endpos.z - 10.0).abs() < 0.2,
-            "{down:?}"
-        );
-        assert!(
-            world
-                .shot_trace(Vec3::new(150.0, 0.0, 100.0), Vec3::new(150.0, 0.0, -100.0))
-                .fraction
-                < 1.0
-        );
-    }
-
-    #[test]
-    fn playerclip_fence_soups_stop_movement_but_not_shots() {
-        let world = synthetic_soup_world(&[BARBED_FENCE], &[(0, wall_tri(100.0))]);
-        assert_eq!(
-            world.tris.len(),
-            1,
-            "a clipped fence soup stays in the world"
-        );
+    fn a_playerclip_fence_patch_stops_movement_but_not_shots() {
+        let world = synthetic_patch_world(&[IRON_FENCE], &[(0, wall_tri(100.0))]);
         let (start, end) = (Vec3::new(0.0, 0.0, 50.0), Vec3::new(200.0, 0.0, 50.0));
         let box_mins = Vec3::new(-15.0, -15.0, 0.0);
         let box_maxs = Vec3::new(15.0, 15.0, 60.0);
@@ -3464,16 +3285,21 @@ mod tests {
     }
 
     #[test]
-    fn solid_soups_stop_movement_and_shots() {
-        let world = synthetic_soup_world(
+    fn a_solid_patch_stops_movement_and_shots_from_its_front() {
+        let world = synthetic_patch_world(
             &[("textures/test/solid", 0x1, 5 << 20)],
             &[(0, wall_tri(100.0))],
         );
         let (start, end) = (Vec3::new(0.0, 0.0, 50.0), Vec3::new(200.0, 0.0, 50.0));
-        assert!(
-            world.box_trace(start, end, Vec3::ZERO, Vec3::ZERO).fraction < 1.0,
-            "movement stops"
-        );
+        let t = world.box_trace(start, end, Vec3::ZERO, Vec3::ZERO);
+        assert!(t.fraction < 1.0, "movement stops");
+        assert_eq!(world.hit_contents(&t), 0x1);
+        assert_eq!(sound_material(t.surface_flags), 5);
         assert!(world.shot_trace(start, end).fraction < 1.0, "shots stop");
+        assert_eq!(
+            world.shot_trace(end, start).fraction,
+            1.0,
+            "the back is open"
+        );
     }
 }

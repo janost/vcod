@@ -24,7 +24,8 @@
 //! - no landing raises `EV_PAIN`, on either side: the fall's
 //!   `pain_debounce_time` holds it off.
 //!
-//! `FALL_REPORT=1` prints both sides' parms. Needs `COD_DIR`; without the
+//! `FALL_REPORT=1` prints both sides' parms and every row whose origin
+//! differs from retail's inside the tolerance. Needs `COD_DIR`; without the
 //! paks it returns early.
 
 mod common;
@@ -475,6 +476,15 @@ fn compare_rows(retail: &Retail, ours: &Ours, second: i32) -> Vec<String> {
         let o = ours.falls.get(&(r.t + ours.shift));
         let close =
             o.is_some_and(|o| o.ct == r.ct + ours.shift && same_but_origin_ulp(&o.rest, &r.rest));
+        if close && std::env::var_os("FALL_REPORT").is_some() && o.is_some_and(|o| o.rest != r.rest)
+        {
+            eprintln!(
+                "last-digit row t={}: retail {}\n  ours {}",
+                r.t,
+                r.rest,
+                o.map_or("", |o| &o.rest)
+            );
+        }
         if !close {
             diffs.push(format!(
                 "retail t={}: ct={} {}\n  ours: {}",
@@ -498,13 +508,13 @@ fn tail_field<'a>(rest: &'a str, key: &str) -> &'a str {
 
 /// The walk capture's rows under a landing stun (`pm_flags` 0x100) from the
 /// second drop on: ours at the same shifted time holds the same `commandTime`,
-/// velocity, ground, `pm_flags`, `pm_time` and health, and an origin within a
-/// unit. Each walk ends jittering against a pillar (cod11-player-clip.md
+/// velocity, ground, `pm_flags`, `pm_time` and health, and an origin within
+/// 0.005: some rows on the south wall read 1815.128 where retail's read
+/// 1815.125. Each walk ends jittering against a pillar (cod11-player-clip.md
 /// 12), and `setorigin` keeps the velocity, so a drop starts with whatever
 /// the jitter's phase left: one whose teleport row's velocity differs
 /// between the two sides lands on another cmd and is left out, at most two
 /// of the five from the second on (the last, fatal one has no stun rows).
-/// The rest of the start moves the origin by up to 0.93 and nothing else.
 /// Retail must also have pressed into the wall: rows on its plane with a
 /// velocity into it.
 fn compare_stun_rows(retail: &Retail, ours: &Ours, second: i32) -> Vec<String> {
@@ -554,9 +564,21 @@ fn compare_stun_rows(retail: &Retail, ours: &Ours, second: i32) -> Vec<String> {
                 && origin(&o.rest)
                     .iter()
                     .zip(origin(&r.rest))
-                    .all(|(a, b)| (a - b).abs() < 1.0)
+                    .all(|(a, b)| (a - b).abs() < 0.005)
         };
         let o = ours.falls.get(&(r.t + ours.shift));
+        if std::env::var_os("FALL_REPORT").is_some()
+            && o.is_some_and(|o| {
+                same(o) && tail_field(&o.rest, "origin=") != tail_field(&r.rest, "origin=")
+            })
+        {
+            eprintln!(
+                "stun origin row t={}: retail {}\n  ours {}",
+                r.t,
+                r.rest,
+                o.map_or("", |o| &o.rest)
+            );
+        }
         if !o.is_some_and(same) {
             diffs.push(format!(
                 "retail t={}: ct={} {}\n  ours: {}",

@@ -223,5 +223,5 @@ uses the same keys.
 ## 5. `pingPlayer`
 
 `docs/research/cod11-hud-protocol.md`, "Compass friendlies": `eFlags`
-0x80000 until `level.time + 3000`. vcod's server now sets it; the
-`iCompassFriendInfo` half is still not written.
+0x80000 until `level.time + 3000`. vcod's server sets it, and the
+`iCompassFriendInfo` half that carries it to a teammate's compass.

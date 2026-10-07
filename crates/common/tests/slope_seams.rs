@@ -1,11 +1,13 @@
-//! A walker on a terrain mesh at a high-fps client's cmd rate: the convex
-//! seams and kerbs of a triangle soup, and a wall the slope rises toward.
+//! A walker on a terrain mesh at a high-fps client's cmd rate: its convex
+//! seams, a wall the slope rises toward, and a patch kerb beside it.
 //! What each of these used to do to the ground trace, and why the sight
 //! ramp reversed with it, is in `docs/research/cod11-mantle.md`, "The
 //! ground snap" and "What the collider does to a walker on a terrain seam".
 
 use glam::Vec3;
-use vcod_common::collision::{CONTENTS_SOLID, CollisionWorld, synthetic_world_tris};
+use vcod_common::collision::{
+    CONTENTS_SOLID, CollisionWorld, synthetic_world_patches, synthetic_world_tris,
+};
 use vcod_common::movetrace::MoveWorld;
 use vcod_common::pmove::{PlayerState, PmInput, pmove};
 
@@ -69,9 +71,9 @@ fn convex_seam() -> CollisionWorld {
     )
 }
 
-/// The floor with an 8-unit kerb made of triangles from x = 50 on: a top
-/// quad and a vertical face, the way a soup kerb arrives.
-fn soup_kerb() -> CollisionWorld {
+/// The floor with an 8-unit kerb of flat patches from x = 50 on: a top
+/// and a vertical face.
+fn patch_kerb() -> CollisionWorld {
     let mut tris = Vec::new();
     tris.extend(quad(
         Vec3::new(50.0, -200.0, 8.0),
@@ -85,36 +87,19 @@ fn soup_kerb() -> CollisionWorld {
         Vec3::new(50.0, 200.0, 8.0),
         Vec3::new(50.0, 200.0, 0.0),
     ));
-    synthetic_world_tris(
+    synthetic_world_patches(
         &[("textures/test/solid", CONTENTS_SOLID, 0)],
         &[(0, [-1024.0, -1024.0, -16.0], [1024.0, 1024.0, 0.0])],
         &tris,
     )
 }
 
-/// Past the seam the box is inside the steeper facet's slab, 2.7 units under
-/// its plane at 12 units along. That is a contact with the facet it stands
-/// on, not a solid start.
-#[test]
-fn a_box_past_a_convex_seam_rests_on_the_facet_under_it() {
-    let w = convex_seam();
-    let start = Vec3::new(312.0, 0.0, 0.14 * 312.0 + 67.2 + 0.125);
-    let down = w.box_trace(start, start - Vec3::Z * 9.0, MINS, MAXS);
-    assert!(
-        !down.startsolid && !down.allsolid,
-        "the steeper facet's slab read as solid: {down:?}"
-    );
-    assert!(down.fraction < 0.05, "no floor under the box: {down:?}");
-    assert!(down.normal.z > 0.98, "{down:?}");
-    let along = w.box_trace(start, start + Vec3::new(2.0, 0.0, 0.28), MINS, MAXS);
-    assert_eq!(along.fraction, 1.0, "the facet is free to walk: {along:?}");
-}
-
 /// Beside a kerb the box is 8 units under the kerb top's slab and inside
-/// its bevels. The floor under the box is what the down trace reports.
+/// its bevels. The floor under the box is what the down trace reports: a
+/// patch never reads a moving start as solid.
 #[test]
-fn a_box_beside_a_soup_kerb_finds_the_floor_under_it() {
-    let w = soup_kerb();
+fn a_box_beside_a_patch_kerb_finds_the_floor_under_it() {
+    let w = patch_kerb();
     let start = Vec3::new(40.0, 0.0, 0.125);
     let down = w.box_trace(start, start - Vec3::Z * 0.25, MINS, MAXS);
     assert!(
@@ -125,7 +110,8 @@ fn a_box_beside_a_soup_kerb_finds_the_floor_under_it() {
         down.fraction < 0.05 && down.normal.abs_diff_eq(Vec3::Z, 1e-3),
         "{down:?}"
     );
-    // And the kerb face still stops a walk into it.
+    // And the kerb face stops a walk into it from outside its reach.
+    let start = Vec3::new(34.0, 0.0, 0.125);
     let into = w.box_trace(start, start + Vec3::X * 2.0, MINS, MAXS);
     assert!(
         into.fraction < 1.0 && into.normal.abs_diff_eq(-Vec3::X, 1e-3),
