@@ -357,6 +357,32 @@ pub fn layout_fixed(
     cursor - x
 }
 
+/// [`layout_fixed`] without the shadow, as the console draws its text.
+#[allow(clippy::too_many_arguments)]
+pub fn layout_cells(
+    font: &Font,
+    text: &str,
+    x: f32,
+    y: f32,
+    scale: f32,
+    cell: f32,
+    color: [f32; 4],
+    out: &mut Vec<HudQuad>,
+) {
+    let s = font.glyph_scale * font.unit_scale() * scale;
+    let mut cursor = x;
+    for (seg, seg_color) in split_color_codes(text, color) {
+        for c in seg.chars() {
+            let g = &font.glyphs[glyph_index(c)];
+            let gx = cursor + (cell - g.advance * s) * 0.5 + g.bearing * s;
+            let gy = y + (font.max_height - g.height) as f32 * s;
+            let (w, h) = (g.image_width as f32 * s, g.image_height as f32 * s);
+            push_quad(out, gx, gy, w, h, g, seg_color, &font.page);
+            cursor += cell;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

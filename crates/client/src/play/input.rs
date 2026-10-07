@@ -132,6 +132,18 @@ fn step_slot(held: &Held, from: u8, forward: bool) -> u8 {
     0
 }
 
+/// The `cl_run` cvar. The ads bit is set when it equals the `+speed` key's
+/// state (CoDMP.exe 0x40aefb), so 1, the default, aims while the key is held
+/// and 0 while it is not: retail's `toggle cl_run` is its ads toggle.
+#[derive(Clone, Copy, Debug)]
+pub struct ClRun(pub i32);
+
+impl Default for ClRun {
+    fn default() -> Self {
+        ClRun(1)
+    }
+}
+
 /// Accumulates held keys, mouse motion and a pending weapon switch between
 /// `build` calls, and turns them into one [`UserCmd`] per call.
 #[derive(Default)]
@@ -159,6 +171,7 @@ pub struct PlayInput {
     /// The sub-unit rest of the mouse motion per axis [pitch, yaw], carried
     /// so slow motion still turns.
     mouse_rest: [f32; 2],
+    pub cl_run: ClRun,
 }
 
 impl PlayInput {
@@ -286,7 +299,7 @@ impl PlayInput {
         if self.down.contains(&Action::Attack) {
             buttons |= msg::BUTTON_ATTACK;
         }
-        if self.down.contains(&Action::Ads) {
+        if self.cl_run.0 == self.down.contains(&Action::Ads) as i32 {
             buttons |= msg::BUTTON_ADS;
         }
         if self.down.contains(&Action::Melee) {
@@ -477,6 +490,16 @@ mod tests {
         let c = i.build(100, &held(10));
         assert_ne!(c.wbuttons & msg::WBUTTON_PRONE, 0);
         assert_eq!(c.up, -127);
+    }
+
+    #[test]
+    fn cl_run_zero_aims_while_the_ads_key_is_up() {
+        let mut i = PlayInput::default();
+        assert_eq!(i.build(100, &held(10)).buttons & msg::BUTTON_ADS, 0);
+        i.cl_run = ClRun(0);
+        assert_ne!(i.build(108, &held(10)).buttons & msg::BUTTON_ADS, 0);
+        i.key(Action::Ads, true);
+        assert_eq!(i.build(116, &held(10)).buttons & msg::BUTTON_ADS, 0);
     }
 
     #[test]
