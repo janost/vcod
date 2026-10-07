@@ -57,7 +57,10 @@ measured).
   at the target every tick, and gives up after two ticks of moving under 2
   units or at twice the run time plus four ticks.
 - On a ladder the body looks 45 degrees up, where `ladder_move`'s climb
-  saturates, and the budget stretches to 200 ticks. A forward walk that fell
+  saturates, and the budget stretches to 300 ticks. VERIFIED (measured, the
+  `mp_ship` hold ladder): a full-rate climb makes 53 units/s, so the 560
+  units of that ladder take about 210 ticks and the old 200-tick budget ran
+  out short of its top. A forward walk that fell
   and never arrived is retried backing along the line facing the way it came,
   which is how a body grabs a ladder below a ledge.
 - A node is refused when it lies under a sheet of ground: terrain and patches
@@ -65,8 +68,13 @@ measured).
   `mp_hurtgen` walk the map's floor at z -447.875 under the whole terrain
   (VERIFIED, point traces from those nodes).
   From there the ray up stops on the underside of a triangle whose
-  `(b - a) x (c - a)` faces up, or passes through a one-sided one that the ray
-  back down then hits.
+  `(b - a) x (c - a)` faces up, or passes through a one-sided terrain
+  triangle that the ray back down then hits. Only terrain counts on the way
+  back down. VERIFIED (measured, point traces): `mp_ship`'s mast ladder foot
+  stands 540 units under a spar's top facet (a patch), and a low doorway on
+  `mp_pavlov` put a brush ceiling 3.75 units over the head, which the ray
+  back down starts against. Counting either refused the node, and the
+  doorway kept 540 nodes behind it off the graph.
 - New nodes stay within 512 units of the spawns' bounding box. Past it lies
   scenery: `mp_hurtgen`'s forest added 10 000 nodes.
 - Walks run on every core, a layer at a time, handed out one node at a time;
@@ -88,10 +96,15 @@ pass after the flood (`NavGraph::link_ladders`) handles them on their own.
   two broad faces, normal along its thinner horizontal axis, are tried.
 - The foot is a body dropped 16 units in front of the face's middle, 16
   units above the box's bottom, facing away from it. Facing it, the airborne
-  grab hangs the body on the face and it never lands.
+  grab hangs the body on the face and it never lands. Where a body does not
+  fit there, the drop is tried 8 and 16 units aside along the face, then
+  16 units higher, up to 96. VERIFIED (measured, `mp_ship`): one ladder
+  brush runs 23 units below the deck it stands on, and a bulkhead crowds
+  another's edge so that only a body 8 units aside fits.
 - The climb faces the face, holds forward, looks 45 degrees up while on the
   ladder, and once it stands 48 units above the foot walks on 24 units and
-  stops. Where it comes to rest is the head.
+  stops, or stops where something at the lip pins it first. Where it comes
+  to rest is the head.
 - Up is proved by the bots' own run from foot to head and down by their back
   from head to foot (section 3), each having to arrive on the other end's
   floor. A ladder's head often stands right above its foot, so arriving in
@@ -116,6 +129,12 @@ pass after the flood (`NavGraph::link_ladders`) handles them on their own.
   every flood back down creeping, the build took 4.6 times the old one's;
   as a third try, 1.7 times. Without the creep in the flood, 4 spawns on
   the decks above z 760 stayed apart.
+- VERIFIED (measured, 2026-10-07): every one of `mp_ship`'s 32 ladder boxes
+  gets a rung from one face. Before the budget, foot and `under_ground`
+  changes above, six got none: the hold ladder (box x 4320-4344, z 56-615),
+  the mast (x 3666-3684, z 902-1145), the crow's nest (x 4975, z 701-1219),
+  the two whose foot did not fit (x 6475 and x 3600, y -131) and one at
+  x 4229 that a later collision change had already fixed.
 
 ### Build times
 
@@ -144,23 +163,24 @@ With the ladder pass (VERIFIED, measured with the same example, each map's
 build paired with one of the code before it). The timings came off a machine
 other builds were loading, so only their ratio means anything: new over old
 ran 0.7 to 1.5 on ten maps, 1.6 on `mp_depot` and 1.7 to 2.0 on `mp_ship`.
-The counts below were taken again (2026-10-07) after the BVH rework and
-the move of world collision to brushes and patches only.
+The counts below were taken again (2026-10-07) after the BVH rework, the
+move of world collision to brushes and patches only, and the ladder budget,
+foot and `under_ground` changes (section 2, "Ladders" and "The flood").
 
 | map | nodes | edges | spawns in one component |
 |---|---|---|---|
-| mp_brecourt | 19102 | 146458 | 159 / 161 |
+| mp_brecourt | 19103 | 146464 | 159 / 161 |
 | mp_carentan | 9668 | 68037 | 185 / 185 |
-| mp_chateau | 6502 | 43454 | 110 / 113 |
-| mp_dawnville | 7275 | 50200 | 174 / 185 |
-| mp_depot | 12144 | 83515 | 153 / 161 |
-| mp_harbor | 7520 | 53249 | 156 / 161 |
-| mp_hurtgen | 20416 | 152075 | 178 / 193 |
-| mp_pavlov | 25994 | 191832 | 161 / 161 |
+| mp_chateau | 6508 | 43481 | 110 / 113 |
+| mp_dawnville | 7278 | 50219 | 174 / 185 |
+| mp_depot | 12144 | 83536 | 153 / 161 |
+| mp_harbor | 7520 | 53250 | 156 / 161 |
+| mp_hurtgen | 20416 | 152078 | 178 / 193 |
+| mp_pavlov | 26534 | 195633 | 161 / 161 |
 | mp_powcamp | 5977 | 41182 | 149 / 161 |
-| mp_railyard | 11348 | 80710 | 159 / 161 |
+| mp_railyard | 11348 | 80712 | 159 / 161 |
 | mp_rocket | 15759 | 116401 | 136 / 153 |
-| mp_ship | 11076 | 74180 | 105 / 112 |
+| mp_ship | 11171 | 74831 | 105 / 112 |
 
 - VERIFIED (measured): an early single-threaded build of `mp_carentan`, before
   the diagonal shortcut and the stall cutoff, took 10.6 s. `perf` puts 80% of
@@ -191,12 +211,26 @@ the move of world collision to brushes and patches only.
   a second through the whole build (VERIFIED, measured). Tests leave
   `Server::build_nav_in_background` off and wait for the graph on that tick,
   so a run does not depend on how fast the build was.
+- A background build's walks leave one core to the tick (`nav::par_map`
+  under `SPARE_CORE`). `vcod-server --trace` logs a `tick:` line a second:
+  mean and slowest `Server::tick` and the worst lag of a tick's start behind
+  its slot. VERIFIED (measured, release, 4 bots, 16 threads, load average
+  17-31 from other builds): through `mp_ship`'s 2.8 s build and
+  `mp_carentan`'s 1.3 s one the slowest tick was 9-11 ms and the worst lag
+  under 8 ms against the 50 ms frame, the same range as after the build. The
+  tick that takes the finished graph and plans every bot's first path ran
+  33 ms once on `mp_ship`. Built on the tick thread, the same builds would
+  have stalled it for their whole length.
 - VERIFIED (the off-component spawns' heights against the map's
   `SURF_LADDER` brushes): `mp_ship`'s gap was its upper decks, which connect
   by ladders, and the ladder pass closed most of it (section 2, "Ladders").
   VERIFIED (measured): its 7 spawns still apart sit in the hull at z 64 to
-  408, none within 300 units of a ladder the pass could not climb. The other
-  maps' gaps were not investigated.
+  408, in five islands of 11 to 80 nodes that reach the main component
+  neither way, though every ladder now has a rung. Walking node to node
+  between neighbouring columns on one floor with no edge either way (a gap
+  pass after the ladders) added 235 edges on `mp_ship` and joined none of
+  them, so the islands are walled off from the graph by something other
+  than a missed neighbour walk. The other maps' gaps were not investigated.
 
 ## 3. Following
 

@@ -1751,6 +1751,11 @@ impl CollisionWorld {
         );
     }
 
+    /// Whether triangle `t` is lump-26 terrain rather than a patch facet.
+    pub fn is_terrain(&self, t: u32) -> bool {
+        self.tris_terrain[t as usize]
+    }
+
     /// A one-line name for what a trace hit, for reports.
     pub fn describe(&self, prim: Prim) -> String {
         match prim {

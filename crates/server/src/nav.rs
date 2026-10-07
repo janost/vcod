@@ -40,8 +40,9 @@ const LEVEL: f32 = 1.0;
 const MAX_NODES: usize = 60_000;
 /// One bot tick, the cmd length every walk is stepped in.
 const TICK_MS: i32 = 50;
-/// The longest a walk runs with a ladder in it: 10 s, ~900 units of climb.
-const LADDER_TICKS: usize = 200;
+/// The longest a walk runs with a ladder in it: 15 s, ~800 units of climb
+/// at the 53 units/s a full-rate climb makes. mp_ship's hold ladder is 560.
+const LADDER_TICKS: usize = 300;
 /// Degrees up a climbing body looks; past ~9 deg `ladder_move`'s upscale
 /// saturates. Shared with the bots, which climb the same way.
 pub const LADDER_PITCH: f32 = 45.0;
@@ -880,14 +881,17 @@ fn ladders(world: &CollisionWorld) -> Vec<(Vec3, Vec3)> {
 fn rung(world: &CollisionWorld, lo: Vec3, hi: Vec3, n: Vec3) -> Option<(Vec3, Vec3, bool, bool)> {
     let mid = (lo + hi) * 0.5;
     let half = (hi - lo).dot(n.abs()) * 0.5;
-    let start = (mid.truncate() + n.truncate() * (half + 16.0)).extend(lo.z + 16.0);
-    let probe = PlayerState::spawn(start, 0.0);
-    if world
-        .box_trace(start, start, probe.mins(), probe.maxs())
-        .startsolid
-    {
-        return None;
-    }
+    let front = mid.truncate() + n.truncate() * (half + 16.0);
+    let side = glam::Vec2::new(-n.y, n.x);
+    let probe = PlayerState::spawn(lo, 0.0);
+    // A ladder brush often runs on below the floor it stands on, and a wall
+    // can crowd one edge of it, so the drop starts at the first height in
+    // front of it a body fits, the middle first, then up to 16 units aside.
+    let start = (1..=FOOT_TRIES)
+        .map(|i| lo.z + 16.0 * i as f32)
+        .take_while(|&z| z < hi.z)
+        .flat_map(|z| [0.0, -8.0, 8.0, -16.0, 16.0].map(|s| (front + side * s).extend(z)))
+        .find(|&p| !world.box_trace(p, p, probe.mins(), probe.maxs()).startsolid)?;
     // Dropped facing away, or an airborne grab would hang it on the face.
     let foot = settle(world, start, (n.y).atan2(n.x).to_degrees())?;
     if foot.z < lo.z - 48.0 || under_ground(world, foot) {
@@ -915,7 +919,9 @@ fn rung(world: &CollisionWorld, lo: Vec3, hi: Vec3, n: Vec3) -> Option<(Vec3, Ve
         if top.is_none() && climbed && ps.on_ground && ps.origin.z > foot.z + 48.0 {
             top = Some(ps.origin);
         }
-        if forward == 0 && ps.on_ground && ps.velocity.length() < 1.0 {
+        // Stopped past the top, or pinned at the lip against whatever
+        // stands beyond it.
+        if top.is_some() && ps.on_ground && ps.velocity.length() < 1.0 {
             break;
         }
     }
@@ -935,6 +941,9 @@ fn rung(world: &CollisionWorld, lo: Vec3, hi: Vec3, n: Vec3) -> Option<(Vec3, Ve
     (up || down).then_some((foot, head, up, down))
 }
 
+/// Heights, 16 units apart from the ladder's bottom, a foot's drop is
+/// tried from.
+const FOOT_TRIES: usize = 6;
 /// How far a climb walks on past the top of a ladder before it stops.
 const LADDER_STEP_IN: f32 = 24.0;
 
@@ -1146,8 +1155,12 @@ fn walk_as(
 /// walk the map's floor under them (mp_hurtgen's, 48 units below its river
 /// bed). From there the ray up either stops on the underside of a triangle
 /// whose own face, `(b - a) x (c - a)`, points up, or passes through a
-/// one-sided one and the same ray back down hits it. Both rays see what a
-/// player clips, not the brushes only a shot meets.
+/// one-sided terrain triangle and the same ray back down hits it. Both rays
+/// see what a player clips, not the brushes only a shot meets. Nothing else
+/// the ray back down meets is ground over the point: a patch (mp_ship's
+/// mast ladder stands 540 units under a spar's top facet), or a ceiling
+/// just over the head that the ray starts against (a low doorway on
+/// mp_pavlov kept 540 nodes behind it off the graph).
 fn under_ground(world: &CollisionWorld, p: Vec3) -> bool {
     let head = p + Vec3::Z * 72.0;
     let up = world.point_trace(head, head + Vec3::Z * 8192.0, MASK_PLAYERSOLID, false);
@@ -1158,7 +1171,7 @@ fn under_ground(world: &CollisionWorld, p: Vec3) -> bool {
         }
     }
     let down = world.point_trace(up.endpos - Vec3::Z, head, MASK_PLAYERSOLID, false);
-    down.fraction < 1.0
+    matches!(down.hit, Some(Prim::Tri(t)) if world.is_terrain(t))
 }
 
 /// The bits of a client a walk carries between cmds.
@@ -1402,7 +1415,8 @@ mod tests {
 
     /// mp_ship's ladders, each from its open face: up and down both proved
     /// by the bots' own steering. One plain, one whose head stands right
-    /// above its foot in a shaft, and one only the creep gets down.
+    /// above its foot in a shaft, one only the creep gets down, and the five
+    /// that got no rung before 2026-10-07.
     #[test]
     fn ships_ladders_are_climbed_both_ways() {
         let Some(fs) = vcod_common::testing::game_fs() else {
@@ -1418,6 +1432,14 @@ mod tests {
             ([5872.5, 47.0], Vec3::X, 352.125, 480.125),
             ([3711.5, 56.0], -Vec3::X, 760.125, 992.125),
             ([3792.5, 65.0], Vec3::X, 304.125, 616.125),
+            // The hold's 560-unit ladder, the mast's under a spar, a crow's
+            // nest: climbs past the old 10 s budget, or under a patch.
+            ([4332.0, -77.5], -Vec3::Y, 56.125, 615.125),
+            ([3675.0, -86.5], -Vec3::Y, 896.125, 1145.125),
+            ([4975.5, 64.0], -Vec3::X, 692.125, 1219.125),
+            // A brush running on below the floor, a wall crowding one edge.
+            ([6487.0, 324.5], Vec3::Y, 80.125, 216.125),
+            ([3600.5, -119.0], Vec3::X, 760.125, 896.125),
         ] {
             let &(lo, hi) = boxes
                 .iter()
