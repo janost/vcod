@@ -1560,7 +1560,7 @@ pub fn jump_key(on_ground: bool, cue: bool, held: bool) -> i8 {
 /// proved from.
 pub fn ready_to_leap(ps: &PlayerState) -> bool {
     ps.on_ground
-        && ps.velocity.truncate().length() * (TICK_MS as f32 / 1000.0) < PINNED
+        && ps.velocity.truncate().length() * (FRAME_MS as f32 / 1000.0) < PINNED
         && ps.since_jump_ms >= vcod_common::pmove::JUMP_COOLDOWN_MS
 }
 
@@ -1569,7 +1569,7 @@ pub fn ready_to_leap(ps: &PlayerState) -> bool {
 /// there (`Gait::Leap`, and the bots on its edges).
 pub fn lip_ahead(world: &CollisionWorld, ps: &PlayerState) -> bool {
     let (mins, maxs) = (ps.mins(), ps.maxs());
-    let ahead = ps.origin + (ps.velocity.truncate() * (TICK_MS as f32 / 1000.0)).extend(0.0);
+    let ahead = ps.origin + (ps.velocity.truncate() * (FRAME_MS as f32 / 1000.0)).extend(0.0);
     let down = ahead - Vec3::Z * vcod_common::pmove::STEPSIZE;
     let t = world.box_trace(ahead, down, mins, maxs);
     !t.startsolid && t.fraction == 1.0
