@@ -293,7 +293,7 @@ pub fn script_menu_index(cs: &[String], name: &str) -> Option<usize> {
 
 /// `CS_SOUNDS`: an alias index counts from here, so the range's first slot
 /// is 1 (docs/protocol-1.1.md, `s <idx>`).
-const CS_SOUNDS: usize = 524;
+use vcod_common::net::protocol::CS_SOUNDS;
 
 /// The index an already registered sound alias travels as, in
 /// `EV_SOUND_ALIAS`'s parm and in `loopSound`; `None` if nothing indexed it.
@@ -307,14 +307,14 @@ pub fn sound_alias_index(cs: &[String], name: &str) -> Option<i32> {
 /// The first of the 32 hint-string configstrings `G_GetHintStringIndex`
 /// (0x5a238) fills (`docs/research/cod11-gsc-object-model.md`, the
 /// hint-string paragraph).
-const HINT_STRINGS: usize = 1212;
+use vcod_common::net::protocol::CS_HINT_STRINGS;
 const MAX_HINT_STRINGS: usize = 32;
 
 /// The slot within the hint-string range holding `name`, which is what
 /// `serverCursorHintString` carries: the stock turret's `CGAME_USEMG42` is 0.
 pub fn hint_string_index(cs: &[String], name: &str) -> Option<i32> {
     (0..MAX_HINT_STRINGS)
-        .find(|i| cs.get(HINT_STRINGS + i).is_some_and(|s| s == name))
+        .find(|i| cs.get(CS_HINT_STRINGS + i).is_some_and(|s| s == name))
         .map(|i| i as i32)
 }
 
@@ -326,7 +326,7 @@ pub fn hint_string_index(cs: &[String], name: &str) -> Option<i32> {
 /// (docs/research/cod11-gametypes-re-bel.md 4).
 pub fn hint_string_alloc(cs: &mut [String], name: &str) -> Option<i32> {
     for i in 0..MAX_HINT_STRINGS {
-        let slot = &mut cs[HINT_STRINGS + i];
+        let slot = &mut cs[CS_HINT_STRINGS + i];
         if slot == name {
             return Some(i as i32);
         }

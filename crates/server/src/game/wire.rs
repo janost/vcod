@@ -26,31 +26,14 @@
 use super::host::GameHost;
 use crate::game::entity::{HUD_OWNER_ALL, HudState};
 use std::collections::BTreeMap;
+use vcod_common::net::flags::{
+    EF_FIRING, EF_NODRAW, EF_TELEPORT_BIT, ET_CORPSE, ET_ITEM, ET_PLAYER, ET_SCRIPTMOVER,
+    ET_TURRET, SOLID_BMODEL,
+};
 use vcod_common::net::msg::{EntityState, HudElem, MAX_HUD_ELEMS};
 use vcod_common::net::protocol::Protocol;
 use vcod_gsc::EntId;
 use vcod_gsc::{Cx, Host, Value};
-
-/// `ET_ITEM`: an item, `index` its `bg_itemlist` row (a weapon's is its
-/// configstring 7 index).
-const ET_ITEM: i32 = 3;
-/// `ET_SCRIPTMOVER`: a script model, `index` a model configstring index, or
-/// a `script_brushmodel`, `index` its inline model number.
-pub(crate) const ET_SCRIPTMOVER: i32 = 8;
-/// `s.solid` of an entity linked as a brush model: `SV_LinkEntity` stores it
-/// for `r.bmodel` (cod_lnxded 0x80908da) whatever the entity's contents, so a
-/// `notSolid()`ed brush model keeps it (docs/research/cod11-movers.md 14).
-pub const SOLID_BMODEL: i32 = 0xff_ffff;
-/// `s.eFlags` 0x100 (`EF_NODRAW`): the per-entity runner (game.mp 0x602bc)
-/// mirrors `hide()`'s `flags & 0x1000` into it every frame for an entity
-/// with no client (movers doc, section 14).
-const EF_NODRAW: i32 = 0x100;
-/// `ET_PLAYER`: another client.
-const ET_PLAYER: i32 = 1;
-/// A mounted MG. Not in CoDExtended's `entityType_t`, read off the traces:
-/// carentan's and pavlov's `misc_mg42`s arrive as 11 with the `mg42_bipod`
-/// model index.
-const ET_TURRET: i32 = 11;
 
 /// `eFlags` as the traces carry it on every item, and `clientNum` on one no
 /// dropper's lockout holds: 0x3fe through the 8-bit netfield
@@ -59,12 +42,6 @@ const ITEM_EFLAGS: i32 = 16;
 const ITEM_CLIENTNUM: i32 = 254;
 /// A turret's `apos.trType` in both maps' traces.
 const TURRET_APOS_TRTYPE: i32 = 3;
-/// `s.eFlags` bit `0x8`: the teleport bit, flipped by the aim step's first
-/// frame after a mount (`docs/research/cod11-turrets.md` section 6.2).
-const TURRET_EFLAGS_TELEPORT: i32 = 0x8;
-/// `s.eFlags` bit `0x400`: set on a firing frame, cleared at the top of the
-/// next (`docs/research/cod11-turrets.md` section 6.3).
-const TURRET_EFLAGS_FIRING: i32 = 0x400;
 
 /// The `r.mins`/`r.maxs` an entity's spawn function leaves on it. The clusters
 /// it links with come from this grown by the engine's link epsilon, which is
@@ -89,7 +66,7 @@ pub fn link_box(etype: i32) -> ([f32; 3], [f32; 3]) {
         // already flattened to 30 units tall (cod11-combat.md 5.2). The
         // extra height only widens the cluster set, so the taller box is
         // the conservative one to cull with.
-        ET_PLAYER | crate::game::bodies::ET_CORPSE => (
+        ET_PLAYER | ET_CORPSE => (
             [
                 -vcod_common::pmove::HALF_WIDTH,
                 -vcod_common::pmove::HALF_WIDTH,
@@ -292,11 +269,7 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
         Kind::Item(item) => {
             seti(&mut e, "eType", ET_ITEM);
             seti(&mut e, "index", i32::from(item.index));
-            let nodraw = if item.nodraw {
-                crate::game::item::EF_NODRAW
-            } else {
-                0
-            };
+            let nodraw = if item.nodraw { EF_NODRAW } else { 0 };
             seti(&mut e, "eFlags", ITEM_EFLAGS | nodraw);
             seti(&mut e, "groundEntityNum", item.ground);
             seti(
@@ -343,10 +316,10 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
                 setf(&mut e, "angles2[1]", rec.angles2[1]);
                 let mut eflags = 0;
                 if rec.teleport_bit {
-                    eflags |= TURRET_EFLAGS_TELEPORT;
+                    eflags |= EF_TELEPORT_BIT;
                 }
                 if rec.firing {
-                    eflags |= TURRET_EFLAGS_FIRING;
+                    eflags |= EF_FIRING;
                 }
                 seti(&mut e, "eFlags", eflags);
             }

@@ -172,7 +172,9 @@ comments cite the section that measured each step. In outline:
    there, then the touch and item passes.
 3. Missiles, blasts, menu responses, `deliver_hits`, the script frame.
 4. Script spawns, weapon / link / sim ops, then per slot the end frame, the
-   aim trace and `commit_pose`, then turrets.
+   aim trace and `commit_pose`, then that slot's turret: its rounds are
+   traced and their callbacks delivered inside its turn, so a higher slot
+   sees what they did.
 5. Outgoing commands, snapshots, archive.
 
 Moving work across this order makes a snapshot or a later round read a

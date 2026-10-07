@@ -1380,7 +1380,7 @@ const SCOPE_MIN_RANGE: f32 = 200.0;
 /// Grenade reuses are minutes apart, not seconds.
 const GRENADE_COOLDOWN_TICKS: u32 = 400;
 const BOT_EYE_HEIGHT: f32 = 60.0;
-const ANGLE2SHORT: f32 = 65536.0 / 360.0;
+use vcod_common::pmove::cmd::ANGLE2SHORT;
 
 /// Whether a body at `origin` (feet) has reached the chest-high `spot`.
 fn arrived(origin: [f32; 3], spot: [f32; 3]) -> bool {

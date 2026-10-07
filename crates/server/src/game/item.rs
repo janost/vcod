@@ -51,9 +51,9 @@ pub const DROP_RING: usize = 32;
 pub const OWNER_LOCKOUT_MS: i32 = 1000;
 pub const FREE_AFTER_PICKUP_MS: i32 = 100;
 /// `EV_ITEM_RESPAWN`, which `RespawnItem` puts on the item (0x4ed0f).
-pub const EV_ITEM_RESPAWN: i32 = 197;
+pub use vcod_common::net::event_ids::EV_ITEM_RESPAWN;
 /// `s.eFlags` bit the hide mirrors into (section 14).
-pub const EF_NODRAW: i32 = 0x100;
+pub use vcod_common::net::flags::EF_NODRAW;
 /// `Drop_Weapon`'s and `Drop_Item`'s horizontal launch speed (0x74d4c,
 /// 0x74e5c); the vertical one is `200 + 50 * crandom()`.
 const LAUNCH_SPEED: f32 = 150.0;

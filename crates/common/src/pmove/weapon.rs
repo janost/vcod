@@ -32,22 +32,13 @@ pub const WEAPON_RELOAD_END: u8 = 9;
 pub const WEAPON_MELEE_WINDUP: u8 = 10;
 pub const WEAPON_MELEE_RELAX: u8 = 11;
 
-/// Wire `EV_*` numbering (docs/research/cod11-events-and-fx.md). `EV_EMPTYCLIP`
-/// (150) has no constant on purpose: section 1.5 found no site that raises it.
-pub const EV_NOAMMO: i32 = 149;
-pub const EV_RELOAD: i32 = 151;
-pub const EV_RELOAD_FROM_EMPTY: i32 = 152;
-pub const EV_RELOAD_START: i32 = 153;
-pub const EV_RELOAD_END: i32 = 154;
-pub const EV_RAISE_WEAPON: i32 = 155;
-pub const EV_PUTAWAY_WEAPON: i32 = 156;
-pub const EV_PULLBACK_WEAPON: i32 = 158;
-pub const EV_FIRE_WEAPON: i32 = 159;
-pub const EV_FIRE_WEAPON_LASTSHOT: i32 = 161;
-pub const EV_RECHAMBER_WEAPON: i32 = 162;
-pub const EV_EJECT_BRASS: i32 = 163;
-pub const EV_MELEE_SWIPE: i32 = 164;
-pub const EV_FIRE_MELEE: i32 = 165;
+/// The wire `EV_*` ids pmove raises. `EV_EMPTYCLIP` (150) is not among them:
+/// docs/research/cod11-events-and-fx.md section 1.5 found no site that raises it.
+pub use crate::net::event_ids::{
+    EV_EJECT_BRASS, EV_FIRE_MELEE, EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT, EV_MELEE_SWIPE,
+    EV_NOAMMO, EV_PULLBACK_WEAPON, EV_PUTAWAY_WEAPON, EV_RAISE_WEAPON, EV_RECHAMBER_WEAPON,
+    EV_RELOAD, EV_RELOAD_END, EV_RELOAD_FROM_EMPTY, EV_RELOAD_START,
+};
 
 /// `ps.weapAnim` indices, the `WEAP_*` order of section 1.2.
 pub const WEAP_IDLE: i32 = 0;
