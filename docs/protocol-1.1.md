@@ -1189,6 +1189,7 @@ Anti-abuse behaviour, and one timing difference; the wire format is unchanged (`
 - A `connect` that matches a live client's address and qport may replace it only when it carries that client's challenge, or when the slot has been silent for `sv_reconnectlimit` (3 s). Retail hands the slot over on the address match alone.
 - Challenges expire after 60 s.
 - Packets wait for the next tick to be read, up to 50 ms, and rcon's 500 ms window is measured at that read; requests sent less than about 550 ms apart can be dropped where retail would have answered both.
+- `dedicated` defaults to 1, so no master heartbeat, where retail's default of 2 heartbeats. This is deliberate, so dev runs stay off the public list; `--set dedicated=2` opts in.
 - A zombie slot is sent its last frame again, not retail's stale ring slot (`docs/research/cod11-server-handshake.md`, "Zombie slots").
 - Clients' packets run at the tick, not as they arrive. Retail's `SV_UserMove` calls the game's `ClientThink` per cmd as each client's message is parsed (cod_lnxded `0x80872cb`; the call is VERIFIED, that it is `ClientThink` is INFERRED), between game frames, on the previous frame's `level.time`. `replay_moves` runs every packet queued since the last tick in the order the server executed it, a packet's `kill` ahead of its cmds and each cmd's shots inside it, so the order is retail's; only the clock differs (`docs/research/cod11-combat.md`, section 16).
 

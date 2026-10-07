@@ -453,15 +453,27 @@ and the zombie half of `Server::drop_client`.
   but is still gated on `dedicated 2`. INFERRED.
 - The live master answers a heartbeat within 0.2 s with `getchallenge <n>`
   and `getstatus <n>` from the address it was sent to, which a home NAT lets
-  through. VERIFIED 2026-10-07 with one heartbeat from a bare socket. vcod's
-  server sent one `heartbeat COD-1` and its `flatline` to the real master
-  the same day; `getservers 1 full empty` 12 s and 32 s later listed 48
-  servers, not this one. VERIFIED. Why is open: retail answers a non-LAN
-  `getchallenge` through the `codauthorize.activision.com` round trip
-  (`sending getIpAuthorize for %s`, 0x8084d90) rather than straight away, and
-  the master may want that or something in `statusResponse` vcod does not
-  send. UNVERIFIED; a retail heartbeat against the real master would settle
-  it.
+  through. VERIFIED 2026-10-07 with one heartbeat from a bare socket, and
+  again on retail with `developer 1` (`SV packet 185.34.107.179:20510 :
+  getchallenge`, then `: getstatus`).
+- Retail answers that `getchallenge` by resolving
+  `codauthorize.activision.com` and logging `sending getIpAuthorize for
+  185.34.107.179:20510` (0x8084d90), not with a `challengeResponse`.
+  VERIFIED by log. On the machine these captures ran on, `/etc/hosts` points
+  `codauthorize.activision.com` at `127.0.1.2`, so that request never left
+  the host and no authorize reply came back. VERIFIED. Public DNS resolves it
+  to `185.34.107.179`, the master's own address. VERIFIED (`dig @1.1.1.1`).
+- Neither server got listed. Retail (`dedicated 2`, one heartbeat, stopped
+  with `rcon quit` after about 60 s) was missing from `getservers 1 full
+  empty` at 15, 35 and 60 s, among 48 listed servers. vcod's server (one
+  heartbeat and its flatline) was missing at 12 and 32 s. VERIFIED
+  2026-10-07. With both unlisted there was no behaviour to copy. Whether the
+  missing authorize round trip, the address or something else keeps a
+  server off the list is still open. UNVERIFIED. The next test is retail
+  from a host whose `codauthorize` lookup reaches the real server.
+- vcod's binary starts at `dedicated 1`, not retail's 2. That is deliberate:
+  dev and agent runs stay off the public list unless they opt in with
+  `--set dedicated=2`.
 
 ### rcon (`SVC_RemoteCommand`, 0x808c404)
 

@@ -142,9 +142,6 @@ fn main() -> Result<()> {
     if let Some((stem, text)) = &overlay {
         server.overlay_script(&format!("maps/mp/gametypes/{stem}"), text);
     }
-    // Retail's `dedicated` default: heartbeat the masters. `--set dedicated=1`
-    // keeps a LAN run off the list.
-    server.set_cvar("dedicated", "2");
     for pair in &args.set {
         let Some((name, value)) = pair.split_once('=') else {
             bail!("--set takes NAME=VALUE, got {pair:?}");

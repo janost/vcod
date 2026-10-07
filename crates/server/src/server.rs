@@ -1021,8 +1021,9 @@ pub struct Server {
     /// The frames the killcam replays, kept while script has `setarchive`
     /// on and cleared by every level load (`crate::archive`).
     archive: crate::archive::Archive,
-    /// `dedicated`. Retail's default is 2, which heartbeats; the library
-    /// starts at 1 so no test reaches the network, and the binary sets 2.
+    /// `dedicated`. Retail's default is 2, which heartbeats; vcod's is 1 on
+    /// purpose, so dev and test runs stay off the master list. `--set
+    /// dedicated=2` opts in.
     dedicated: i32,
     masters: crate::master::Masters,
     /// `NET_StringToAdr` for the masters; a test swaps in its own.

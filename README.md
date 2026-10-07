@@ -29,9 +29,8 @@ fun, and I stop when something stops being fun.
   vcod at all.
 - **Don't run it as a public server for real players.** It has no
   anti-cheat and its rcon knows a handful of commands. It has a lot of
-  opinions about the order in which a tick runs. Like retail it heartbeats
-  the Activision master by default; `--set dedicated=1` keeps it off the
-  list.
+  opinions about the order in which a tick runs. Unlike retail it does not
+  heartbeat the Activision master unless you pass `--set dedicated=2`.
 
 If you want to play Call of Duty, play Call of Duty. If you want to see how
 it works under the hood, or watch a 2003 game boot inside a window someone
@@ -360,10 +359,10 @@ vcod-server mp_carentan --port 28960 --hostname "my server" --gametype tdm
 - `--set NAME=VALUE` sets a cvar before the scripts load, retail's `+set`.
   Repeatable, e.g. `--set scr_friendlyfire=1`. Set `sv_mapRotation` this way
   to get a rotation.
-- `dedicated` defaults to 2, as on retail: the server sends a heartbeat to
-  `sv_master1` (`codmaster.activision.com`) every three minutes and a
-  flatline on Ctrl-C or `quit`. `--set dedicated=1` keeps it off the master
-  list.
+- `dedicated` defaults to 1, where retail's is 2, so dev runs stay off the
+  master list. `--set dedicated=2` sends a heartbeat to `sv_master1`
+  (`codmaster.activision.com`) every three minutes and a flatline on Ctrl-C
+  or `quit`.
 - `--set rconPassword=<pw>` turns on rcon (`rcon <pw> status` from a client
   console or any rcon tool).
 - `--bots <n>` adds `n` debug bots, each in a real client slot, alternating
