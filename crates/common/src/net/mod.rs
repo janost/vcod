@@ -117,6 +117,8 @@ pub struct NetClient<T: Transport> {
     challenge: i32,
     qport: u16,
     userinfo: String,
+    /// The userinfo `name`; [`NetClient::set_name`] changes it.
+    name: String,
     netchan: Netchan,
 
     gamestate: Option<Gamestate>,
@@ -199,6 +201,7 @@ impl<T: Transport> NetClient<T> {
             challenge: 0,
             qport,
             userinfo: String::new(),
+            name: "vcod".into(),
             netchan: Netchan::new(qport, 0),
             gamestate: None,
             snapshots: SnapshotRing::new(),
@@ -432,12 +435,40 @@ impl<T: Transport> NetClient<T> {
             .send(&connectionless::build_oob("getchallenge"));
     }
 
+    /// The userinfo `name`. Once connected, the change goes to the server as
+    /// a `userinfo` client command, as retail's `CL_CheckUserinfo` sends it;
+    /// before that it rides the `connect`. A `\\`, `;` or `"` would break the
+    /// info string or the command, so they are dropped.
+    pub fn set_name(&mut self, name: &str) {
+        let name: String = name
+            .chars()
+            .filter(|c| !matches!(c, '\\' | ';' | '"'))
+            .collect();
+        if name == self.name {
+            return;
+        }
+        self.name = name;
+        if matches!(self.state, NetState::LoadingGamestate | NetState::Active) {
+            let info = self.base_userinfo();
+            self.send_reliable(&format!("userinfo \"{info}\""));
+        }
+    }
+
+    fn base_userinfo(&self) -> String {
+        format!(
+            "\\cg_predictItems\\1\\cl_anonymous\\0\\handicap\\100\\color\\4\\head\\default\
+             \\model\\multi\\snaps\\20\\rate\\25000\\name\\{}",
+            self.name
+        )
+    }
+
     fn send_connect(&mut self) {
         self.userinfo = format!(
-            "\\cg_predictItems\\1\\cl_anonymous\\0\\handicap\\100\\color\\4\\head\\default\
-             \\model\\multi\\snaps\\20\\rate\\25000\\name\\vcod\
-             \\protocol\\{}\\qport\\{}\\challenge\\{}",
-            self.proto.version, self.qport, self.challenge
+            "{}\\protocol\\{}\\qport\\{}\\challenge\\{}",
+            self.base_userinfo(),
+            self.proto.version,
+            self.qport,
+            self.challenge
         );
         self.transport
             .send(&connectionless::build_connect(&self.userinfo));
@@ -1230,6 +1261,26 @@ mod tests {
         for &b in data {
             w.write_byte(b);
         }
+    }
+
+    #[test]
+    fn set_name_rides_the_connect_then_a_userinfo_command() {
+        let t0 = Instant::now();
+        let mut c = NetClient::start(FakeTransport::default(), t0);
+        c.set_name("Big \"Bob\";");
+        c.transport
+            .incoming
+            .push_back(oob("challengeResponse", " 7"));
+        c.pump_at(t0);
+        assert!(c.userinfo.contains("\\name\\Big Bob\\protocol\\"));
+
+        let mut c = active_client();
+        c.set_name("Rob");
+        let sent = format!("userinfo \"{}\"", c.base_userinfo());
+        assert!(sent.ends_with("\\name\\Rob\""));
+        assert_eq!(reliable_count(&c, &sent), 1);
+        c.set_name("Rob");
+        assert_eq!(reliable_count(&c, &sent), 1);
     }
 
     #[test]
