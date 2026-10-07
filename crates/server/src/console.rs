@@ -1,6 +1,7 @@
-//! The server console: the three commands the map cycle is made of, and
-//! `sv_mapRotation`'s token grammar. Numbers and addresses are in
-//! docs/research/cod11-map-cycle.md sections 3 to 5.
+//! The server console: the three commands the map cycle is made of, the
+//! handful rcon is for, and `sv_mapRotation`'s token grammar. Numbers and
+//! addresses are in docs/research/cod11-map-cycle.md sections 3 to 5 and
+//! docs/research/cod11-server-handshake.md, "rcon".
 
 use std::collections::VecDeque;
 
@@ -28,6 +29,15 @@ pub enum Command {
     Map(String),
     MapRestart,
     MapRotate,
+    /// `SV_Status_f` (0x80846b4).
+    Status,
+    /// `SV_KickNum_f` (0x8084be4); `None` when the argument count is not
+    /// exactly one, which prints the usage line.
+    ClientKick(Option<String>),
+    /// `SV_Heartbeat_f` (0x8084bd0).
+    Heartbeat,
+    /// `quit`: `SV_Shutdown`, which flatlines the masters, then exit.
+    Quit,
     Unknown(String),
 }
 
@@ -44,6 +54,13 @@ impl Command {
             },
             Some("map_restart") => Command::MapRestart,
             Some("map_rotate") => Command::MapRotate,
+            Some("status") => Command::Status,
+            Some("clientkick") => match (it.next(), it.next()) {
+                (Some(n), None) => Command::ClientKick(Some(n.to_string())),
+                _ => Command::ClientKick(None),
+            },
+            Some("heartbeat") => Command::Heartbeat,
+            Some("quit") => Command::Quit,
             _ => Command::Unknown(line.to_string()),
         }
     }
@@ -129,6 +146,45 @@ impl Rotation {
     }
 }
 
+/// `SV_Status_f`'s ping column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ping {
+    Connecting,
+    Zombie,
+    Ms(i32),
+}
+
+/// One row of `status`, in `SV_Status_f`'s format (0x80846b4, strings at
+/// 0x80d3f5c..0x80d3fa8).
+pub struct StatusRow<'a> {
+    pub num: usize,
+    pub score: i32,
+    pub ping: Ping,
+    pub name: &'a str,
+    pub last_msg_ms: i64,
+    pub addr: std::net::SocketAddr,
+    pub qport: u16,
+    pub rate: i32,
+}
+
+impl std::fmt::Display for StatusRow<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:3} {:5} ", self.num, self.score)?;
+        match self.ping {
+            Ping::Connecting => f.write_str("CNCT ")?,
+            Ping::Zombie => f.write_str("ZMBI ")?,
+            Ping::Ms(ms) => write!(f, "{:4} ", ms.min(9999))?,
+        }
+        // `NET_AdrToString` prints the port as a signed short.
+        let addr = format!("{}:{}", self.addr.ip(), self.addr.port() as i16);
+        writeln!(
+            f,
+            "{:<16}{:7} {:<22}{:5} {:5}",
+            self.name, self.last_msg_ms, addr, self.qport, self.rate
+        )
+    }
+}
+
 /// The lines a builtin queued and `Server::drain_console` eats, one per
 /// `tick` (`Cbuf_Execute`).
 pub type Console = VecDeque<String>;
@@ -185,6 +241,33 @@ mod tests {
         );
     }
 
+    /// Rows from a retail capture (docs/research/cod11-server-handshake.md,
+    /// "rcon").
+    #[test]
+    fn status_rows_match_retail() {
+        let row = |ping, name, last_msg_ms| {
+            StatusRow {
+                num: 0,
+                score: 0,
+                ping,
+                name,
+                last_msg_ms,
+                addr: "127.0.0.1:48014".parse().unwrap(),
+                qport: 12038,
+                rate: 25000,
+            }
+            .to_string()
+        };
+        assert_eq!(
+            row(Ping::Ms(0), "vcod", 0),
+            "  0     0    0 vcod                  0 127.0.0.1:-17522      12038 25000\n"
+        );
+        assert_eq!(
+            row(Ping::Zombie, "", 1550),
+            "  0     0 ZMBI                    1550 127.0.0.1:-17522      12038 25000\n"
+        );
+    }
+
     #[test]
     fn console_lines_parse() {
         assert_eq!(
@@ -193,6 +276,12 @@ mod tests {
         );
         assert_eq!(Command::parse("map_restart"), Command::MapRestart);
         assert_eq!(Command::parse("MAP_ROTATE"), Command::MapRotate);
+        assert_eq!(
+            Command::parse("clientkick 3 "),
+            Command::ClientKick(Some("3".into()))
+        );
+        assert_eq!(Command::parse("clientkick"), Command::ClientKick(None));
+        assert_eq!(Command::parse("clientkick 1 2"), Command::ClientKick(None));
         assert_eq!(
             Command::parse("vstr nextmap"),
             Command::Unknown("vstr nextmap".into())

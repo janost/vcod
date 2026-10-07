@@ -410,6 +410,149 @@ Where each failure points:
 | the client disconnects right after the gamestate with another error | the configstring table in `crates/server/src/configstrings.rs` |
 | no `connectResponse` | `parse_connect` (`crates/common/src/net/connectionless.rs`) |
 
+## Housekeeping: master heartbeat, rcon, zombie slots
+
+Measured 2026-10-07 against `cod_lnxded` (1.1d) with `tools/run_server.sh`
+on a spare port, a UDP listener standing in for the master, `vcod
+--net-probe` as the client, and `rcon status` polled 0.5-0.6 s apart for the
+zombie timing. Each claim carries its own label; the scripts were throwaway.
+vcod's port is `crates/server/src/master.rs`, `crates/server/src/rcon.rs`
+and the zombie half of `Server::drop_client`.
+
+### Master heartbeat (`SV_MasterHeartbeat`, 0x808ba0c)
+
+- Cvars, from `SV_Init`'s registrations: `sv_master1` defaults to
+  `codmaster.activision.com`, `sv_master2..5` to empty. VERIFIED (strings at
+  0x8d6f0..0x8d735, the `Cvar_Get` calls in the export).
+- `dedicated` defaults to `"2"` (the `Cvar_Get` default at 0x80cf769).
+  VERIFIED. The heartbeat runs only when `dedicated` is 2 (`cmp [eax+0x20],2`
+  at 0x808ba22); `dedicated 1` never heartbeats. INFERRED from the branch.
+- The packet is `\xff\xff\xff\xffheartbeat COD-1\n`. VERIFIED by capture;
+  the format `heartbeat %s\n` is at 0x80d5978 and `COD-1` at 0x80d5e69.
+- The port is always 20510. `sv_master1 127.0.0.1:29463` logged
+  `127.0.0.1:29463 resolved to 127.0.0.1:20510` and the packet arrived on
+  20510. VERIFIED by capture. The cause is the swapped `strstr(":", name)`
+  at 0x808baf0 (the `push 0x501e` follows at 0x808baff), the same bug Q3's
+  source has. INFERRED.
+- A name is resolved again only after its cvar changes; one that does not
+  resolve is cleared with `Cvar_Set(name, "")` and so never retried. INFERRED
+  from 0x808ba6f..0x808bad3.
+- Interval: 180 s (`add eax,0x2bf20` at 0x808ba3d). VERIFIED in the binary
+  and by capture: two periodic heartbeats 179.998 s apart. Every send,
+  forced or not, restarts the 180 s.
+- Forced sends (`SV_Heartbeat_f` 0x8084bd0 sets the next time to
+  -9999999): the `heartbeat` console command; `SV_SpawnServer` (call at
+  0x808a915), so the first frame of every map load; `SV_DirectConnect` when
+  the connecting client is the first or fills the last slot (0x8085cd3);
+  `SV_DropClient` when no client is left at `CS_CONNECTED` or above
+  (0x8085edc). INFERRED for the conditions. VERIFIED by capture: a heartbeat
+  at server start, at a probe's connect, at its kick, at `map mp_harbor`, and
+  none at `map_restart`.
+- Shutdown: `SV_MasterShutdown` (0x808d268) sends one `heartbeat
+  flatline\n`. VERIFIED by capture after `rcon quit`. It ignores the timer
+  but is still gated on `dedicated 2`. INFERRED.
+- The live master answers a heartbeat within 0.2 s with `getchallenge <n>`
+  and `getstatus <n>` from the address it was sent to, which a home NAT lets
+  through. VERIFIED 2026-10-07 with one heartbeat from a bare socket, and
+  again on retail with `developer 1` (`SV packet 185.34.107.179:20510 :
+  getchallenge`, then `: getstatus`).
+- Retail answers that `getchallenge` by resolving
+  `codauthorize.activision.com` and logging `sending getIpAuthorize for
+  185.34.107.179:20510` (0x8084d90), not with a `challengeResponse`.
+  VERIFIED by log. On the machine these captures ran on, `/etc/hosts` points
+  `codauthorize.activision.com` at `127.0.1.2`, so that request never left
+  the host and no authorize reply came back. VERIFIED. Public DNS resolves it
+  to `185.34.107.179`, the master's own address. VERIFIED (`dig @1.1.1.1`).
+- Neither server got listed. Retail (`dedicated 2`, one heartbeat, stopped
+  with `rcon quit` after about 60 s) was missing from `getservers 1 full
+  empty` at 15, 35 and 60 s, among 48 listed servers. vcod's server (one
+  heartbeat and its flatline) was missing at 12 and 32 s. VERIFIED
+  2026-10-07. With both unlisted there was no behaviour to copy. Whether the
+  missing authorize round trip, the address or something else keeps a
+  server off the list is still open. UNVERIFIED. The next test is retail
+  from a host whose `codauthorize` lookup reaches the real server.
+- vcod's binary starts at `dedicated 1`, not retail's 2. That is deliberate:
+  dev and agent runs stay off the public list unless they opt in with
+  `--set dedicated=2`.
+
+### rcon (`SVC_RemoteCommand`, 0x808c404)
+
+- The password cvar is `rconPassword` (registered at 0x8d699, flags 0x100);
+  Q3's `rcon_password` does not exist. Cvar names fold case, so
+  `+set rconpassword x` works. VERIFIED.
+- The whole packet is tokenized; argv 1 is the password, argv 2 on the
+  command. INFERRED from the `Cmd_Argv` calls.
+- Rate limit: one request per 500 ms server-wide, whatever the password or
+  source. A request arriving within 499 ms of the last answered one is
+  dropped with no reply, and a dropped request does not restart the window.
+  VERIFIED by capture: a second socket 5 ms after the first got nothing, a
+  good password 450 ms after an answered one got nothing, and one 200 ms
+  after a dropped one was answered. The check (`cmp eax,0x1f3` at
+  0x808c423, skipped while the last time is still 0) runs before the
+  password test. INFERRED.
+- Replies, VERIFIED by capture:
+  - no `rconPassword` set: `print\nNo rconpassword set on the server.\n`;
+  - wrong password: `print\nBad rconpassword.\n`;
+  - a good one: `print\n` followed by everything the command printed. An
+    unknown command, an empty command and `say` print nothing, so the
+    reply is a bare `print\n`. `map_restart` replies with the restart's log
+    once it has run.
+- The command line is rebuilt from argv 2 on, each token quoted when it is
+  empty or holds a byte at or below a space, each followed by one space
+  (0x806dbd4), into a 1 KB buffer; one that overflows is not run. INFERRED.
+- Output is collected by `Com_BeginRedirect` into a 0x3ff0-byte buffer
+  (0x808c526). A print that would take it past 0x3fef bytes sends what is
+  there first (0x806b5db..0x806b5f5), so the reply splits at a print
+  boundary. VERIFIED by capture: `fdir *.tga` came back as two packets,
+  16350 and 14282 bytes of text after `print\n`. The rest goes out when the
+  redirect ends, even when empty. INFERRED, and consistent with the bare
+  `print\n` replies.
+- The log line is `Rcon from <addr>:\n<argv 2>` or `Bad rcon from
+  <addr>:\n<argv 2>` (0x80d5ae3, 0x80d5acd), printed before the redirect
+  starts, so it is not in the reply. INFERRED.
+- `status` (`SV_Status_f` 0x80846b4) prints `map: <name>`, a header, a rule,
+  one row per slot not `CS_FREE`, then an empty line. Row format Q3's:
+  `%3i %5i `, then `CNCT `, `ZMBI ` or `%4i ` ping, the name padded to 16,
+  `%7i ` milliseconds since the last packet, the address padded to 22,
+  `%5i` qport, ` %5i` rate. The port prints as a signed short
+  (`127.0.0.1:-17446`). VERIFIED by capture.
+- `clientkick <n>` (`SV_KickNum_f` 0x8084be4, usage `kicknum`) prints
+  `Usage: kicknum <client number>`, `Bad slot number: %s`, `Bad client slot:
+  %i` or `Client %i is not active` (0x8083b9c) and otherwise drops with
+  `EXE_PLAYERKICKED` and sets the slot's last-packet time to now. INFERRED.
+  The reply to a kick of slot 0 was `print\n0:vcod EXE_PLAYERKICKED\n`
+  (plus `Going to CS_ZOMBIE for vcod` under `developer 1`). VERIFIED.
+
+### Zombie slots (`SV_DropClient` 0x8085cf4, `SV_CheckTimeouts` 0x808cbc0)
+
+- A drop sets the slot to `CS_ZOMBIE` (1) at once, before the game's
+  disconnect runs, and returns early on a slot already a zombie. INFERRED
+  from 0x8085d00..0x8085d29.
+- Unless the reason is `EXE_DISCONNECTED`, every client above `CS_CONNECTED`
+  is sent `e "\x15<name>^7 \x14<reason>"` (0x80d45b7, the `> 2` state test
+  in 0x808b900); the zombie is not among them. Then `<slot>:<name> <reason>`
+  is printed and the zombie gets `w "<reason>"`. INFERRED.
+- A zombie is still sent a message each snapshot interval: its unacked
+  server commands, then a snapshot built from nothing, since
+  `SV_BuildClientSnapshot` (0x808f130) skips a zombie and the ring slot keeps
+  whatever frame it held. INFERRED from 0x809045c and 0x808f844.
+- A zombie's packets still go through the netchan and update its message
+  and reliable acks; they are not executed and do not move its last-packet
+  time (`cmp [piVar2],1` before the store at 0x808ca44). INFERRED.
+- `sv_zombietime` defaults to 2 (0x80d56cf). VERIFIED. The slot is freed
+  once its last-packet time is more than `sv_zombietime` seconds old.
+  VERIFIED by capture: after `clientkick` (which stamps that time) the row
+  read `ZMBI` with 500, 1050 and 1550 ms at 0.51, 1.03 and 1.53 s, and was
+  gone at 2.04 s. After a client's own disconnect the last `ZMBI` row read
+  1550 ms and the next poll, 510 ms later, found the slot free.
+- A timeout drop frees the slot at once (`*piVar3 = 0` after the drop in
+  0x808cbc0), so the timed-out client is never sent its `w`. INFERRED.
+- A zombie is not free for a new connect, but a connect from the same
+  address and qport (or port) reconnects into it. INFERRED from Q3's
+  `SV_DirectConnect`, which this one shares the shape of; not measured.
+- vcod's zombie repeats the last frame it sent in place of retail's stale
+  ring slot; both carry the command sequence that gets the `w` executed.
+
 ## Raw captures
 
 Two of them are in the repo now:

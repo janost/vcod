@@ -63,8 +63,9 @@ fn disconnect_frees_the_slot_and_a_fresh_connect_gets_one() {
     step(&mut sv, &q, &mut cl, now);
     assert_eq!(sv.client_count(), 0);
 
-    // An ordinary connect, not a reconnect; `sv_reconnectlimit` only looks at
-    // clients that still hold a slot.
+    // The slot is a zombie sending the drop notice to this same socket; the
+    // connect takes it back, and the new client ignores those frames until
+    // its `connectResponse`.
     let cl2 = connect(&mut sv, &q, &mut now);
     assert_eq!(cl2.state(), NetState::Active);
     assert_eq!(sv.client_count(), 1);

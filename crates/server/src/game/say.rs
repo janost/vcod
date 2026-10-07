@@ -161,7 +161,7 @@ pub fn concat_args(args: &str) -> Option<String> {
 
 /// `Cmd_TokenizeString` for a client command's arguments: whitespace splits,
 /// a `"` opens a token that runs to the next `"`.
-fn tokenize(s: &str) -> Vec<String> {
+pub(crate) fn tokenize(s: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut chars = s.chars().peekable();
     while let Some(&c) = chars.peek() {
