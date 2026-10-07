@@ -1,0 +1,76 @@
+# Retail CoD 1.1d dedicated server's games_mp.log for the probe_re run beside it
+# (the two mp_brecourt-re-<role>.txt fixtures), the engine's m:ss stamp stripped.
+------------------------------------------------------------
+InitGame: \g_gametype\probe_re\gamename\main\mapname\mp_brecourt\protocol\1\shortversion\1.1\sv_allowAnonymous\0\sv_floodProtect\1\sv_hostname\CoDHost\sv_maxclients\8\sv_maxPing\0\sv_maxRate\0\sv_minPing\0\sv_privateClients\0\sv_pure\0
+PROBE prematch
+J;0;vcod
+J;1;vcod
+RestartGame:
+------------------------------------------------------------
+------------------------------------------------------------
+InitGame: \g_gametype\probe_re\gamename\main\mapname\mp_brecourt\protocol\1\shortversion\1.1\sv_allowAnonymous\0\sv_floodProtect\1\sv_hostname\CoDHost\sv_maxclients\8\sv_maxPing\0\sv_maxRate\0\sv_minPing\0\sv_privateClients\0\sv_pure\0
+J;1;vcod
+J;0;vcod
+PROBE round 1 obj 129 (1104.00, -1116.00, -3.00) goal (-3320.00, 1672.00, 83.00)
+PROBE state obj (1104.00, -1116.00, -3.00) | 0 playing st= hi= ht=none sc=0 d=0 held=0 | 1 playing st= hi= ht=none sc=0 d=0 held=0 | allies 0 axis 0
+PROBE players 0 1
+PROBE placed 0 16900 (1104.00, -1116.00, -2.00)
+A;0;allies;vcod;re_pickup
+PROBE picked_up 16950 1
+PROBE state obj (1104.00, -1116.00, -3.00) | 0 playing st=gfx/hud/headicon@re_objcarrier.tga hi=gfx/hud/headicon@re_objcarrier.tga ht=allies sc=0 d=0 held=1 | 1 playing st= hi= ht=none sc=0 d=0 held=0 | allies 0 axis 0
+PROBE moved (1432.00, -988.00, -36.00)
+PROBE settled (1432.00, -987.99, -37.66) (0.00, 0.00, 0.00)
+PROBE state obj (1443.00, -987.99, -37.67) | 0 playing st= hi= ht=allies sc=0 d=0 held=0 | 1 playing st= hi= ht=none sc=0 d=0 held=0 | allies 0 axis 0
+PROBE dropped 22350 (1443.00, -987.99, -37.67)
+PROBE returned 82400 (1104.00, -1116.00, -3.00)
+PROBE state obj (1104.00, -1116.00, -3.00) | 0 playing st= hi= ht=allies sc=0 d=0 held=0 | 1 playing st= hi= ht=none sc=0 d=0 held=0 | allies 0 axis 0
+PROBE placed 0 84400 (1104.00, -1116.00, -2.00)
+A;0;allies;vcod;re_pickup
+PROBE picked_up 84450 1
+PROBE state obj (1104.00, -1116.00, -3.00) | 0 playing st=gfx/hud/headicon@re_objcarrier.tga hi=gfx/hud/headicon@re_objcarrier.tga ht=allies sc=0 d=0 held=1 | 1 playing st= hi= ht=none sc=0 d=0 held=0 | allies 0 axis 0
+PROBE suicide 86450
+K;0;allies;vcod;0;allies;vcod;none;100000;MOD_SUICIDE;none
+W;axis;vcod
+L;allies;vcod
+PROBE state obj (1115.00, -1116.00, -2.88) | 0 dead st=gfx/hud/hud@status_dead.tga hi= ht=allies sc=-1 d=1 held=1 | 1 playing st= hi= ht=none sc=0 d=0 held=0 | allies 0 axis 1
+PROBE state obj (1115.00, -1116.00, -2.88) | 0 spectator st=gfx/hud/hud@status_dead.tga hi= ht=allies sc=-1 d=1 held=1 | 1 playing st= hi= ht=none sc=0 d=0 held=0 | allies 0 axis 1
+RestartGame:
+------------------------------------------------------------
+------------------------------------------------------------
+InitGame: \g_gametype\probe_re\gamename\main\mapname\mp_brecourt\protocol\1\shortversion\1.1\sv_allowAnonymous\0\sv_floodProtect\1\sv_hostname\CoDHost\sv_maxclients\8\sv_maxPing\0\sv_maxRate\0\sv_minPing\0\sv_privateClients\0\sv_pure\0
+J;1;vcod
+J;0;vcod
+PROBE round 2 obj 129 (1104.00, -1116.00, -3.00) goal (-3320.00, 1672.00, 83.00)
+PROBE state obj (1104.00, -1116.00, -3.00) | 0 playing st= hi= ht=none sc=-1 d=1 held=0 | 1 playing st= hi= ht=none sc=0 d=0 held=0 | allies 0 axis 1
+PROBE players 0 1
+PROBE placed 1 94500 (1104.00, -1116.00, -2.00)
+PROBE defender_back 97500
+PROBE placed 0 99500 (1104.00, -1116.00, -2.00)
+A;0;allies;vcod;re_pickup
+PROBE picked_up 99550 1
+PROBE state obj (1104.00, -1116.00, -3.00) | 0 playing st=gfx/hud/headicon@re_objcarrier.tga hi=gfx/hud/headicon@re_objcarrier.tga ht=allies sc=-1 d=1 held=1 | 1 playing st= hi= ht=none sc=0 d=0 held=0 | allies 0 axis 1
+PROBE to_goal 101550 (-3320.00, 1672.00, 34.00)
+A;0;allies;vcod;re_capture
+W;allies;vcod
+L;axis;vcod
+PROBE state obj (1104.00, -1116.00, -3.00) | 0 playing st= hi= ht=allies sc=-1 d=1 held=0 | 1 playing st= hi= ht=none sc=0 d=0 held=0 | allies 1 axis 1
+PROBE state obj gone | 0 playing st= hi= ht=allies sc=-1 d=1 held=0 | 1 playing st= hi= ht=none sc=0 d=0 held=0 | allies 1 axis 1
+RestartGame:
+------------------------------------------------------------
+------------------------------------------------------------
+InitGame: \g_gametype\probe_re\gamename\main\mapname\mp_brecourt\protocol\1\shortversion\1.1\sv_allowAnonymous\0\sv_floodProtect\1\sv_hostname\CoDHost\sv_maxclients\8\sv_maxPing\0\sv_maxRate\0\sv_minPing\0\sv_privateClients\0\sv_pure\0
+J;1;vcod
+J;0;vcod
+PROBE round 3 obj 129 (1104.00, -1116.00, -3.00) goal (-3320.00, 1672.00, 83.00)
+PROBE state obj (1104.00, -1116.00, -3.00) | 0 playing st= hi= ht=none sc=-1 d=1 held=0 | 1 playing st= hi= ht=none sc=0 d=0 held=0 | allies 1 axis 1
+PROBE players 0 1
+PROBE done 109650
+Q;0;vcod
+Q;1;vcod
+PROBE state obj (1104.00, -1116.00, -3.00) | allies 1 axis 1
+RestartGame:
+------------------------------------------------------------
+------------------------------------------------------------
+InitGame: \g_gametype\probe_re\gamename\main\mapname\mp_brecourt\protocol\1\shortversion\1.1\sv_allowAnonymous\0\sv_floodProtect\1\sv_hostname\CoDHost\sv_maxclients\8\sv_maxPing\0\sv_maxRate\0\sv_minPing\0\sv_privateClients\0\sv_pure\0
+PROBE round 4 obj 129 (1104.00, -1116.00, -3.00) goal (-3320.00, 1672.00, 83.00)
+PROBE state obj (1104.00, -1116.00, -3.00) | allies 1 axis 1
