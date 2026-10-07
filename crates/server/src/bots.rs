@@ -1062,7 +1062,7 @@ impl Bot {
             // at the ledge's face, or sliding along it.
             let to = glam::Vec2::new(w[0] - view.origin[0], w[1] - view.origin[1]);
             let v = glam::Vec2::new(view.velocity[0], view.velocity[1]);
-            let closing = v.dot(to.normalize_or_zero()) * (crate::server::FRAME_MS as f32 / 1000.0);
+            let closing = v.dot(to.normalize_or_zero()) * (FRAME_MS as f32 / 1000.0);
             let rise = w[2] - view.origin[2];
             let cue = crate::nav::jump_cue(view.leap, view.lip, closing, to.length(), rise);
             cmd.up = crate::nav::jump_key(view.on_ground, cue, self.jump_held);
