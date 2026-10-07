@@ -90,7 +90,7 @@ fn an_attacker_bot_carries_a_retrieval_objective_home() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    // Seed 7 picks the documents up at tick 480 and delivers them 407
+    // Seed 7 picks the documents up at tick 480 and delivers them 411
     // ticks later; the lone defender guards and never shoots.
     let picked = wait_for(&mut sv, &mut now, "re_pickup", 1200);
     eprintln!("picked up at tick {picked:?}");

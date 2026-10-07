@@ -6,7 +6,7 @@ use crate::game::trigger::{BrushHull, box_contacts_hulls};
 use crate::server::FRAME_MS;
 use glam::Vec3;
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use vcod_common::collision::{CollisionWorld, MASK_PLAYERSOLID, Prim};
 use vcod_common::movetrace::MoveWorld;
@@ -205,6 +205,22 @@ impl NavGraph {
         }
     }
 
+    /// The spawn points in the strongly connected component holding the most
+    /// of them: the census bot-navigation.md's tables report. Each spawn is
+    /// looked up from where a body dropped at it lands, where a bot spawned
+    /// there stands; from the spawn's own origin, often 100 units up, the
+    /// nearest node can be one on a crate beside it.
+    pub fn spawns_in_one_component(&self, world: &CollisionWorld, spawns: &[[f32; 3]]) -> usize {
+        let mut count = BTreeMap::new();
+        for s in spawns {
+            let feet = settle(world, Vec3::from(*s), 0.0).map_or(*s, Into::into);
+            if let Some(n) = self.nearest(feet) {
+                *count.entry(self.comp[n as usize]).or_insert(0) += 1;
+            }
+        }
+        count.into_values().max().unwrap_or(0)
+    }
+
     fn index_components(&mut self) {
         self.comp = self.components();
         let count = self.comp.iter().max().map_or(0, |&c| c as usize + 1);
@@ -295,7 +311,7 @@ impl NavGraph {
                 }
             }
         }
-        self.walk_jobs(world, &jobs);
+        self.walk_jobs(world, &jobs, true);
     }
 
     /// The flood walks only to a neighbouring column, which rarely lines up
@@ -344,20 +360,27 @@ impl NavGraph {
                 }
             }
         }
-        self.walk_jobs(world, &jobs);
+        self.walk_jobs(world, &jobs, false);
         ends
     }
 
     /// Walks each `(a, b)` node to node on `b`'s floor and links the ones
-    /// that arrive.
-    fn walk_jobs(&mut self, world: &CollisionWorld, jobs: &[(u32, u32)]) {
+    /// that arrive. With `sidestep`, a walk that does not is tried again
+    /// at [`SIDESTEP`] either side of `b`, across the line: a run pinned on
+    /// a door frame's corner can slide past it a few units over.
+    fn walk_jobs(&mut self, world: &CollisionWorld, jobs: &[(u32, u32)], sidestep: bool) {
         let walked = par_map(jobs, |&(a, b)| {
             let to = self.nodes[b as usize];
             let from = self.nodes[a as usize];
-            match walk_as(world, from, to.truncate(), Some(to.z), Gait::Forward) {
-                Walked::Arrived(_, jumped) => Some(jumped),
-                _ => None,
-            }
+            let across = (to - from).truncate().perp().normalize_or_zero() * SIDESTEP;
+            let tries: &[f32] = if sidestep { &[0.0, 1.0, -1.0] } else { &[0.0] };
+            tries.iter().find_map(|&k| {
+                let target = to.truncate() + across * k;
+                match walk_as(world, from, target, Some(to.z), Gait::Forward) {
+                    Walked::Arrived(_, jumped) => Some(jumped),
+                    _ => None,
+                }
+            })
         });
         for (&(a, b), jumped) in jobs.iter().zip(walked) {
             if let Some(jumped) = jumped {
@@ -1270,6 +1293,11 @@ fn run_ticks(dist: f32) -> usize {
     (dist / (vcod_common::pmove::SPEED_RUN * 0.05) * 2.0) as usize + 4
 }
 
+/// How far to either side of a node a walk back to it is retried
+/// (`NavGraph::link_back`). VERIFIED (measured, `mp_rocket`): the walk west
+/// from (11858, 4224, 262) pins on a corner at x 11840 aimed at the node at
+/// (11803, 4226), and arrives aimed 8 units north of it.
+const SIDESTEP: f32 = 8.0;
 /// How far across from a ladder box a fall is retried backing down.
 const LADDER_NEAR: f32 = 96.0;
 /// The ticks a walk's budget stretches by while the body is in the air:

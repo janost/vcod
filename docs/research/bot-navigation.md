@@ -102,7 +102,12 @@ measured).
   connectivity is unchanged or better on every map). INFERRED: the count
   is the minefields plus ground the flood reached only through them.
 - After the flood and the ladders, every one-way edge between two nodes on
-  one floor is walked back node to node. A flood walk aims at a column's
+  one floor is walked back node to node, and where that walk does not
+  arrive, again aimed 8 units to either side of the node. VERIFIED
+  (measured, `mp_rocket`, master 2000b76's pmove): the walk west from
+  (11858, 4224, 262) pins on a corner at x 11840 aimed at the node at
+  (11803, 4226) and arrives aimed 8 units north; without it the corridor
+  to the spawn at (12406, 4209) was 54 nodes bots entered and never left. A flood walk aims at a column's
   centre, so a node off its centre is walked out of and never into. VERIFIED
   (measured): the ten axis spawns on `mp_hurtgen` stand against a wall at
   x 6304, whose columns' centres lie 32 units inside it, and each was a
@@ -280,35 +285,53 @@ edges and the 48-unit pitch cap (section 2, "Spacing", "The flood" and
 | mp_rocket | 12331 | 90444 | 141 / 153 |
 | mp_ship | 11169 | 75091 | 107 / 112 |
 
-With jumps, leaps, the fall budget, the creep only near ladders and the
-flood from the ladders' ends (2026-10-07; section 2, "The flood" and
-"Jumps"). VERIFIED (measured, same example, this branch's binary
-interleaved with the one before it three times under a load average of
-10-17 from other builds; the quietest the machine got). The wall times are
-each map's best of three, before and after. They are noisy: the same
-binary's CPU time over all twelve maps ran 102 to 215 s across the three
-runs. The pmove ticks the build simulated (counted with a temporary counter
-in `Sim::tick`, not committed) do not depend on load: 6.10 million before,
-6.39 million after (+4.7%).
+With jumps, leaps, the fall budget, the creep only near ladders, the
+flood from the ladders' ends and the sidestep on the walk back (2026-10-07;
+section 2, "The flood" and "Jumps"). VERIFIED (measured, same example).
 
-| map | nodes | edges | spawns in one component | ms before / after | pmove ticks before / after |
-|---|---|---|---|---|---|
-| mp_brecourt | 15237 | 116890 | 161 / 161 | 1272 / 813 | 725437 / 717483 |
-| mp_carentan | 10196 | 72394 | 185 / 185 | 391 / 452 | 237899 / 294297 |
-| mp_chateau | 7148 | 49964 | 112 / 113 | 336 / 385 | 181627 / 233376 |
-| mp_dawnville | 7420 | 51661 | 176 / 185 | 549 / 547 | 348611 / 373589 |
-| mp_depot | 11353 | 79056 | 154 / 161 | 733 / 652 | 519414 / 435802 |
-| mp_harbor | 7715 | 54703 | 158 / 161 | 247 / 264 | 159361 / 166015 |
-| mp_hurtgen | 27388 | 206990 | 190 / 193 | 2035 / 1638 | 1621316 / 1517702 |
-| mp_pavlov | 16258 | 116910 | 161 / 161 | 979 / 811 | 636434 / 612428 |
-| mp_powcamp | 6196 | 42805 | 147 / 161 | 293 / 321 | 176545 / 212222 |
-| mp_railyard | 12037 | 86342 | 161 / 161 | 576 / 585 | 312426 / 372831 |
-| mp_rocket | 12339 | 90683 | 140 / 153 | 947 / 804 | 721977 / 676427 |
-| mp_ship | 14066 | 95197 | 112 / 112 | 903 / 1347 | 461897 / 775829 |
+- From here on the census looks each spawn up from where a body dropped at
+  it lands (`NavGraph::spawns_in_one_component`), as a bot spawned there
+  stands. From the spawn's own origin, often 100 units up, `nearest`
+  weighs height four times and can pick a node on a crate beside it.
+  VERIFIED (measured, `mp_powcamp`): five spawns at z 104 by (1600-1728,
+  4344-4624) land on the floor at z 0.125, whose nodes are in the main
+  component, but their origins' nearest nodes were on a platform at
+  z 64-94 the jumps added, an island bots leave and never enter. By the
+  old lookup `mp_powcamp` read 147 against 149 and `mp_rocket` 140 against
+  141; neither was a lost connection on `mp_powcamp`.
+- `tests/nav_census.rs` builds all twelve and fails on a map under its
+  count in the table. In the test profile it takes about 3 minutes and
+  2300 s of CPU.
+- The "master" column is the same census on master at 2000b76 (merged into
+  this branch), which already reads `mp_rocket` lower: its pmove changes pin
+  the walk back at (11840, 4226) that `SIDESTEP` gets past (section 2,
+  "The flood").
+- Wall times: this branch's binary interleaved with the one before it
+  three times under a load average of 10-17 from other builds (the
+  quietest the machine got), each map's best of three. They are noisy: the
+  same binary's CPU time over the twelve maps ran 102 to 215 s across the
+  runs. The pmove ticks the build simulated (counted with a temporary
+  counter in `Sim::tick`, not committed) do not depend on load: 6.10
+  million before, 6.39 million after (+4.7%), measured before the sidestep,
+  which walks only the walk-backs that fail.
+
+| map | nodes | edges | spawns in one component | master | ms before / after | pmove ticks before / after |
+|---|---|---|---|---|---|---|
+| mp_brecourt | 15237 | 116985 | 161 / 161 | 160 | 1272 / 813 | 725437 / 717483 |
+| mp_carentan | 10197 | 72530 | 185 / 185 | 185 | 391 / 452 | 237899 / 294297 |
+| mp_chateau | 7148 | 50070 | 112 / 113 | 110 | 336 / 385 | 181627 / 233376 |
+| mp_dawnville | 7420 | 51805 | 178 / 185 | 176 | 549 / 547 | 348611 / 373589 |
+| mp_depot | 11353 | 79231 | 154 / 161 | 153 | 733 / 652 | 519414 / 435802 |
+| mp_harbor | 7715 | 54768 | 160 / 161 | 158 | 247 / 264 | 159361 / 166015 |
+| mp_hurtgen | 27395 | 207433 | 190 / 193 | 190 | 2035 / 1638 | 1621316 / 1517702 |
+| mp_pavlov | 16256 | 117105 | 161 / 161 | 161 | 979 / 811 | 636434 / 612428 |
+| mp_powcamp | 6196 | 42913 | 157 / 161 | 154 | 293 / 321 | 176545 / 212222 |
+| mp_railyard | 12037 | 86563 | 161 / 161 | 159 | 576 / 585 | 312426 / 372831 |
+| mp_rocket | 12332 | 90843 | 148 / 153 | 145 | 947 / 804 | 721977 / 676427 |
+| mp_ship | 14065 | 95533 | 112 / 112 | 107 | 903 / 1347 | 461897 / 775829 |
 
 `mp_ship` costs most: its hull below the deck, reached now down the stair
-the fall budget lets a walk land on, is 2 900 more nodes. `mp_powcamp` lost
-two spawns to the component and `mp_rocket` one; not looked into.
+the fall budget lets a walk land on, is 2 900 more nodes.
 
 - VERIFIED (measured): an early single-threaded build of `mp_carentan`, before
   the diagonal shortcut and the stall cutoff, took 10.6 s. `perf` puts 80% of
