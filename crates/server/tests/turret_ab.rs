@@ -1037,10 +1037,6 @@ const GAPS: &[(&str, &str)] = &[
         KILLING_ROUND,
     ),
     ("[target] impact t=34950: ours only 174@[151", KILLING_ROUND),
-    ("[uncrouch] ground t=38900", CROUCH_DROP),
-    ("[uncrouch] hint t=38900", CROUCH_DROP),
-    ("[uncrouch] hint_string t=38900", CROUCH_DROP),
-    ("[uncrouch] legs_anim t=38900", CROUCH_DROP),
     ("[strafe] eventSequence t=395", FOOTSTEP),
     ("[strafe] event t=39500: ours only (6, 0, ", FOOTSTEP),
     ("[strafe] event t=39600: retail only (6, 0, ", FOOTSTEP),
@@ -1059,9 +1055,6 @@ const ENTRY_POINT: &str = "the wounding round enters the target's body a truncat
     off retail's along the same ray: where it enters is the posed bone box the locational \
     trace meets (cod11-combat.md 3.4), whose idle phase runs from the target's spawn, which \
     the two joins do not put at the same time; not the turret";
-const CROUCH_DROP: &str = "the crouch release's one-unit drop reads grounded 0.2 above the \
-    floor on ours and airborne at the same height on retail, which lands a frame later; the \
-    stand release lands on the same frame on both, and the capture holds one of each";
 const FOOTSTEP: &str = "footstep phase: bobCycle is not in the capture and the join leaves \
     each side its own, so the strafe's first footstep falls two frames apart, and ours raises a \
     second one at 40000 where retail raises none before the strafe ends; the eventSequence rows \

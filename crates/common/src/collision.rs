@@ -1618,6 +1618,10 @@ impl CollisionWorld {
         }
         let surface_flags = self.tris_surf[first];
         if capsule.radius == 0.0 {
+            let (s, e) = (start + capsule.center, end + capsule.center);
+            if !tp.touches_segment(s.to_array(), e.to_array()) {
+                return;
+            }
             for t in tp.first..tp.first + tp.count {
                 if self.terrain.degenerate(t) {
                     continue;
@@ -1638,6 +1642,9 @@ impl CollisionWorld {
             return;
         }
         let sweep = capsule_sweep(start, end, mins, maxs);
+        if !tp.touches(&sweep) {
+            return;
+        }
         if let Some(h) = self.terrain.clip_capsule(&tp, &sweep, trace.fraction) {
             trace.fraction = h.fraction;
             trace.enter = h.fraction + crate::terrain::FRACTION_EPS;
