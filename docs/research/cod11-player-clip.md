@@ -815,6 +815,72 @@ VERIFIED, the run's cmd log: the client's clock stepped back once, sending
 which ran 54750 first and left the corpse 0.006 units up the grade for the
 rest of the run. It replays them in the order they were sent now.
 
+### 8.12 The walk capture's corpse: a stalled frame
+
+VERIFIED, the walk capture
+(`crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall-walk.txt`):
+the fatal drop's `PROBE damage` and `PROBE killed` lines read 51950. The
+`FALL` row before the death is t 51900 at `commandTime` 50300; the next is
+t 53950 at `commandTime` 52150, `vel=134,-134,0`, `pm_type` 6. The client's
+`CMDS` lines carry cmds every 16 or 17 ms from 51900 to 52914 and then
+53950. The probe's `after` line reads `(1034.14, 1815.13, -39.92)`.
+
+VERIFIED: `ClientThink_real` clamps a cmd's `serverTime` to at most
+`level.time + 200` and at least `level.time - 1000` before it takes the
+span, and returns on a span below 1 (`game.mp.i386.so` 0x3ff05-0x3ff35;
+the table in docs/protocol-1.1.md, "How long a cmd is simulated for").
+52150 is 51950 + 200.
+
+INFERRED, from those numbers: the server stalled after its frame at 51950.
+Every cmd the client sent up to 52914 ran on `level.time` 51950: the
+landing and the death among them, which is why both read 51950; the first
+cmd past 52150 ran clamped to 52150; every later one had a span of 0 and
+returned. The server then caught up to 53950 with no packets between, and
+53950 is the first snapshot after the stall. The stall's cause was not
+measured.
+
+VERIFIED: `pm_type` 6 is written by `ClientEndFrame` (0x41079), not at the
+death. INFERRED: the cmds after the death inside the stall run as
+`pm_type` 0, with forward held, so the dead player walks on. VERIFIED,
+stock `maps/MP/gametypes/dm.gsc` in `pak5.pk3`: `Callback_PlayerKilled`
+calls `self dropItem(self getcurrentweapon())` before its first `wait`, so
+those cmds walk with no weapon at the plain 190 (134 on each axis at yaw
+315) instead of the carbine's speed. The cmd at 53950 then runs 1000 ms of
+corpse frames (the arrears past a second are dropped), which slide the body
+along the south wall to rest.
+
+VERIFIED: the capture shows no corpse row after 53950 because the client
+that took it predates the probe's corpse key: the fixture landed in
+2a1dcd0, the key in `FallProbe::observe` in a72829a.
+
+vcod: `replay_moves` applies both clamps on the last frame's clock, and
+`fall_ab` replays the stall as `WALK_HITCH`: every cmd sent before the
+53950 snapshot goes in the frame after 51950, in packets of at most 32,
+and nothing runs until 53950. VERIFIED, vcod measurement 2026-10-08: the
+53950 row matches to the printed thousandth, `vel=134,-134,0` and
+`commandTime` included, and the corpse rests at `(1034.139, 1815.130)`,
+the `after` line's x and y.
+
+Open, the corpse's height. VERIFIED, the `after` line reads z -39.92 where
+ours rests at -39.875, on `mp_carentan` terrain triangle 2486, whose face
+is at z -40 (a live player rests at -39.875 on it in both servers).
+VERIFIED, a second retail run of the same probe and client on 2026-10-08,
+with no stall
+(`crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall-walk-corpse.txt`):
+the fatal landing reads z -39.862 at t 50800, and every corpse row from
+t 50850 on reads -39.963 or -39.964, sliding at 48 and then at rest. The
+corpse on the street's sloped triangle 2838 (8.11) matches ours to the
+thousandth, so the sink shows on the flat face only.
+
+INFERRED, from the numbers: each sink is one frame's unstopped gravity,
+`0.5 * 800 * dt^2`. The second run's 0.101 is a 16 ms frame from the
+landing height; the walk run's 0.04 is the 10 ms step that ends the 1000 ms
+chop at 53950, after fifteen 66 ms steps that did not sink. A fall whose end
+stays above the face is not stopped at the 0.125 pad, and one whose end
+would cross the face is stopped where it starts. vcod's terrain clip
+(`terrain.rs`, 0x8052a58's capsule arm) stops both at the pad, so the
+corpse's trace may take another arm. Not followed further.
+
 ## 9. What the bump capture measured
 
 The capture is two committed files from one run on 2026-09-25:
@@ -1176,12 +1242,13 @@ The gates:
     rounds them, ours holds the lifted state for retail's runs and every
     row of the capture matches, the south wall's 1815.128 rows and the
     jitter's air frames included; `fall_ab` gates them row by row.
-  - **The walk capture's corpse**, open. VERIFIED: after the fatal drop the
-    retail corpse reads `vel=134,-134,0` at t 53950 (`commandTime` 45800)
-    and rests at `(1034.14, 1815.13)` in the probe's `after` line; ours
-    stops at `(995.14, 1833.72)` with a zero velocity and has run cmds to
-    46564 by the same snapshot. Not investigated; `fall_ab` masks that one
-    `after` line.
+  - **The walk capture's corpse**, closed 2026-10-08 but for its
+    height (8.12). The capture's server stalled at the fatal landing:
+    `ClientThink_real`'s 200 ms clamp held `commandTime` at 52150 and the
+    dead player walked on until the end frame. `fall_ab` replays the stall
+    and compares every row past the fatal drop. It masks only the z of the
+    corpse's `after` line: retail's corpse sinks below a live player's rest
+    on flat terrain and ours does not.
   - **Fall damage, the two cvars and a dead player's landing**, closed
     2026-10-05 (8.8, 8.10). VERIFIED: `PmoveSingle`'s jump table (rodata
     0x70ce8) sends `pm_type` 6 to 0x34274 and on to the default arm, whose

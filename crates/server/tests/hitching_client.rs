@@ -55,8 +55,8 @@ fn a_hitching_clients_gap_is_chopped_into_66_ms_steps_not_clamped_away() {
 
     // Enter the world, then settle until the client's cmds are landing one
     // frame apart. The handshake stamps its first cmds off a clock with no
-    // snapshot to anchor to yet, so the entering cmd can sit ahead of
-    // `sv_time` and freeze the sim until the server catches up (`enter_world`).
+    // snapshot to anchor to yet, so the first cmds can sit ahead of `sv_time`
+    // and run on `ClientThink_real`'s clamp until the client's clock settles.
     // An all-zero cmd moves a resting spectator nowhere, so once they do land
     // the sim is still exactly `PlayerState::spawn` at the fallback spawn.
     let mut command_time_before = 0;
