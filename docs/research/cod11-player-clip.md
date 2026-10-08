@@ -870,7 +870,16 @@ with no stall
 the fatal landing reads z -39.862 at t 50800, and every corpse row from
 t 50850 on reads -39.963 or -39.964, sliding at 48 and then at rest. The
 corpse on the street's sloped triangle 2838 (8.11) matches ours to the
-thousandth, so the sink shows on the flat face only. Not investigated.
+thousandth, so the sink shows on the flat face only.
+
+INFERRED, from the numbers: each sink is one frame's unstopped gravity,
+`0.5 * 800 * dt^2`. The second run's 0.101 is a 16 ms frame from the
+landing height; the walk run's 0.04 is the 10 ms step that ends the 1000 ms
+chop at 53950, after fifteen 66 ms steps that did not sink. A fall whose end
+stays above the face is not stopped at the 0.125 pad, and one whose end
+would cross the face is stopped where it starts. vcod's terrain clip
+(`terrain.rs`, 0x8052a58's capsule arm) stops both at the pad, so the
+corpse's trace may take another arm. Not followed further.
 
 ## 9. What the bump capture measured
 
