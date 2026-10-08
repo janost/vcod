@@ -1270,7 +1270,10 @@ VERIFIED, the leaf walk (0x8055608): a leaf's brushes, then its
 partitions, each once per trace by check count; it returns as soon as
 the fraction reads 0, and the tree walk (0x8055fe0) skips any node whose
 start fraction the trace's has reached. A partition's material word goes
-into the trace only when its clip lowered the fraction.
+into the trace only when its clip lowered the fraction. VERIFIED: each partition
+is clipped only when its point bounds meet `CM_BoxTrace`'s trace bounds,
+which carry no 0.125 pad (0x80556e9 calling 0x8054c48;
+`cod11-player-clip.md` 8.12).
 
 VERIFIED, the brush clip (0x8054e90), capsule arm: the six axial sides
 first, the bounds' mins x, y, z then maxs x, y, z, the capsule taken as a
