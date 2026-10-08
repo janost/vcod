@@ -650,34 +650,80 @@ pub fn is_touching(
     ))
 }
 
-/// `self linkTo(parent [, tag, originOffset, anglesOffset])` (0x59cc4). The
-/// offset is the gap the receiver already stands at, in the parent's frame,
-/// which is what retail's fixed-link arm re-applies off the parent every
-/// frame; the sim owns the
-/// playerstate, so this only queues the edge
-/// (docs/research/cod11-gsc-object-model.md, 23.2).
+/// `self linkTo(parent [, tag [, originOffset, anglesOffset]])` (0x59cc4).
 ///
-/// The receiver must be a client: retail gates on its svFlags 0x20 and
-/// `ClientSpawn` is the only writer of that bit a stock MP script reaches,
-/// since neither `sd.gsc` nor `re.gsc` calls `enableLinkTo`.
+/// On a client the offset is the gap it already stands at, in the parent's
+/// frame, which is what retail's fixed-link arm re-applies off the parent
+/// every frame; the sim owns the playerstate, so this only queues the edge
+/// (docs/research/cod11-gsc-object-model.md, 23.2). A client takes no tag.
+///
+/// Anything else goes through `crate::game::link`. Retail gates the receiver
+/// on svFlags 0x20, which `G_SpawnItem`, `G_SpawnTurret`, `InitScriptMover`
+/// (every `script_model`, `script_origin` and `script_brushmodel`),
+/// `ClientSpawn` and `enableLinkTo` set (23.2).
 pub fn link_to(
     host: &mut GameHost,
     cx: &mut Cx,
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = super::client::client_receiver(host, recv)?;
+    let child = entity_receiver(recv)?;
     let Some(&Value::Entity(parent)) = args.first() else {
         return Err(ErrorKind::BadType("linkTo needs an entity to link to"));
     };
-    // The tag and the two offset vectors retail's four-argument form takes
-    // are accepted and ignored: no stock script passes them.
+    if host.ents.get(child).is_some_and(|e| e.client.is_some()) {
+        return link_client(host, cx, child, parent);
+    }
+    let classname = super::super::link::classname(host, cx, child);
+    let item = host.ents.get(child).is_some_and(|e| e.item.is_some());
+    let mover = matches!(
+        classname.as_str(),
+        "script_model" | "script_origin" | "script_brushmodel"
+    );
+    if host.turrets.contains_key(&child) {
+        // Retail links a turret through `turret_think`'s own
+        // `G_GeneralLink` (0x532b2); the turret record here would not follow.
+        return Err(ErrorKind::Custom(
+            "vcod: linkTo on a turret is not supported".into(),
+        ));
+    }
+    if !mover && !item {
+        return Err(ErrorKind::Custom(format!(
+            "entity (classname: '{classname}') does not currently support linkTo"
+        )));
+    }
+    let tag = match args.get(1) {
+        Some(Value::String(t)) => Some(cx.resolve(*t).to_string()),
+        Some(_) => return Err(ErrorKind::BadType("linkTo's tag must be a string")),
+        None => None,
+    };
+    let offset = if args.len() > 2 {
+        match (args.get(2), args.get(3)) {
+            (Some(Value::Vector(o)), Some(Value::Vector(a))) => Some((*o, *a)),
+            _ => return Err(ErrorKind::BadType("linkTo's offsets must be two vectors")),
+        }
+    } else {
+        None
+    };
+    super::super::link::link(host, cx, child, parent, tag.as_deref(), offset)
+        .map(|()| Value::Undefined)
+        .map_err(|e| ErrorKind::Custom(e.message()))
+}
+
+/// [`link_to`] on a client.
+fn link_client(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    child: EntId,
+    parent: EntId,
+) -> Result<Value, ErrorKind> {
+    let slot = child.0 as usize;
     let origin = cx.intern_folded("origin");
     let at = |host: &mut GameHost, cx: &mut Cx, id| match host.get_field(cx, id, origin) {
         Value::Vector(v) => v,
         _ => [0.0; 3],
     };
-    let child = at(host, cx, entity_receiver(recv)?);
+    let child = at(host, cx, child);
     let anchor = at(host, cx, parent);
     let angles = cx.intern_folded("angles");
     let parent_angles = match host.get_field(cx, parent, angles) {
@@ -694,16 +740,21 @@ pub fn link_to(
     Ok(Value::Undefined)
 }
 
-/// `self unlink()` (0x5d594). A no-op on an unlinked player: retail's
-/// `G_EntUnlink` returns having done nothing without a link record.
+/// `self unlink()` (0x5d594), `G_EntUnlink`: the entity stays where the link
+/// last put it. A no-op on an unlinked entity: `G_EntUnlink` does nothing
+/// without a link record.
 pub fn unlink(
     host: &mut GameHost,
     _cx: &mut Cx,
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let slot = super::client::client_receiver(host, recv)?;
-    host.client_link_ops.push((slot, LinkOp::Unlink));
+    let id = entity_receiver(recv)?;
+    if host.ents.get(id).is_some_and(|e| e.client.is_some()) {
+        host.client_link_ops.push((id.0 as usize, LinkOp::Unlink));
+    } else {
+        host.links.unlink(id);
+    }
     Ok(Value::Undefined)
 }
 
@@ -1344,8 +1395,7 @@ mod tests {
     }
 
     /// `linkTo` takes the offset the client already stands at and `unlink`
-    /// releases it; both are edges the sim applies, and only a client links
-    /// in stock MP (object-model doc, 23.2).
+    /// releases it; both are edges the sim applies (object-model doc, 23.2).
     #[test]
     fn link_to_queues_the_offset_and_unlink_queues_the_release() {
         let (mut vm, mut host) = fixture();
@@ -1386,8 +1436,8 @@ mod tests {
                 .is_err(),
                 "linkTo needs an entity to link to"
             );
-            // Only a client links: retail gates on the receiver's svFlags
-            // 0x20, which `ClientSpawn` is what sets in stock MP (23.2).
+            // Retail gates on the receiver's svFlags 0x20, which no spawn
+            // function set on a bare `spawn()`ed entity with no classname.
             assert!(
                 link_to(
                     &mut host,
