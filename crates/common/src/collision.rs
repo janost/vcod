@@ -619,6 +619,10 @@ pub struct CollisionWorld {
     /// The posed models, few and short-lived: a script mover's, while its
     /// entity is anywhere but where the map placed it.
     poses: RwLock<Vec<(usize, ModelPose)>>,
+    /// Whether `poses` holds any: a trace reads this and skips the lock,
+    /// whose reader count every thread of a parallel nav build otherwise
+    /// writes on every trace.
+    any_posed: AtomicBool,
 }
 
 /// A snapshot: the links, poses and entity numbers as they stand now, which
@@ -652,6 +656,7 @@ impl Clone for CollisionWorld {
             model_span: self.model_span.clone(),
             model_posed: bools(&self.model_posed),
             poses: RwLock::new(self.poses.read().unwrap_or_else(|e| e.into_inner()).clone()),
+            any_posed: AtomicBool::new(self.any_posed.load(Ordering::Acquire)),
         }
     }
 }
@@ -1012,6 +1017,7 @@ impl CollisionWorld {
             model_posed: bsp.models.iter().map(|_| AtomicBool::new(false)).collect(),
             model_span,
             poses: RwLock::new(Vec::new()),
+            any_posed: AtomicBool::new(false),
         }
     }
 
@@ -1032,6 +1038,7 @@ impl CollisionWorld {
         let spawn = origin == span.origin && angles == Vec3::ZERO;
         self.model_posed[model].store(!spawn, Ordering::Relaxed);
         if spawn {
+            self.any_posed.store(!poses.is_empty(), Ordering::Release);
             return;
         }
         let [f, l, u] = crate::pmove::aim::angles_to_axis(angles.to_array());
@@ -1052,6 +1059,7 @@ impl CollisionWorld {
             pose.hi = pose.hi.max(w);
         }
         poses.push((model, pose));
+        self.any_posed.store(true, Ordering::Release);
     }
 
     /// Lump 27's model count, the world's model 0 included.
@@ -1180,10 +1188,10 @@ impl CollisionWorld {
         trace: &mut Trace,
         scratch: &mut Vec<(Vec3, f32)>,
     ) {
-        let poses = self.poses.read().unwrap_or_else(|e| e.into_inner());
-        if poses.is_empty() {
+        if !self.any_posed.load(Ordering::Acquire) {
             return;
         }
+        let poses = self.poses.read().unwrap_or_else(|e| e.into_inner());
         let mut moved = Vec::new();
         for (model, pose) in poses.iter() {
             let cur_end = start + (end - start) * trace.fraction;
@@ -1333,32 +1341,9 @@ impl CollisionWorld {
             return out;
         }
         // The traces' BVH: pmove samples this on every step.
-        let mut stack = vec![0u32];
-        while let Some(i) = stack.pop() {
-            let node = &self.nodes[i as usize];
-            if i == self.models_root || !(p.cmple(node.hi).all() && p.cmpge(node.lo).all()) {
-                continue;
-            }
-            if node.count == 0 {
-                stack.push(node.first);
-                stack.push(node.second);
-                continue;
-            }
-            let first = node.first as usize;
-            for (prim, lo, hi) in &self.prims[first..first + node.count as usize] {
-                if let Prim::Brush(b) = prim
-                    && p.cmple(*hi).all()
-                    && p.cmpge(*lo).all()
-                {
-                    let brush = &self.brushes[*b as usize];
-                    if self.brush_linked(brush)
-                        && self.brush_at_spawn(brush)
-                        && brush.planes.iter().all(|&(n, d)| n.dot(p) <= d)
-                    {
-                        out |= brush.content_flags;
-                    }
-                }
-            }
+        out |= self.node_contents(0, p);
+        if !self.any_posed.load(Ordering::Acquire) {
+            return out;
         }
         let poses = self.poses.read().unwrap_or_else(|e| e.into_inner());
         for (model, pose) in poses.iter() {
@@ -1371,6 +1356,34 @@ impl CollisionWorld {
                     let (n, d) = pose.plane(pl, span.origin);
                     n.dot(p) <= d
                 }) {
+                    out |= brush.content_flags;
+                }
+            }
+        }
+        out
+    }
+
+    /// The contents of the spawn-placed brushes under node `i` that hold `p`.
+    fn node_contents(&self, i: u32, p: Vec3) -> u32 {
+        let node = &self.nodes[i as usize];
+        if i == self.models_root || !(p.cmple(node.hi).all() && p.cmpge(node.lo).all()) {
+            return 0;
+        }
+        if node.count == 0 {
+            return self.node_contents(node.first, p) | self.node_contents(node.second, p);
+        }
+        let first = node.first as usize;
+        let mut out = 0;
+        for (prim, lo, hi) in &self.prims[first..first + node.count as usize] {
+            if let Prim::Brush(b) = prim
+                && p.cmple(*hi).all()
+                && p.cmpge(*lo).all()
+            {
+                let brush = &self.brushes[*b as usize];
+                if self.brush_linked(brush)
+                    && self.brush_at_spawn(brush)
+                    && brush.planes.iter().all(|&(n, d)| n.dot(p) <= d)
+                {
                     out |= brush.content_flags;
                 }
             }
