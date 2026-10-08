@@ -228,8 +228,6 @@ command-line flags and the console: `connect`, binds and a few client cvars
   cvar queries, `heartbeat` and `quit`; not `banUser`, `banClient`,
   `devmap` or `killserver`. A heartbeat reaches the master, which probes
   back, but I haven't seen vcod listed yet.
-- Pings read up to a frame (50 ms) higher than retail's: the server ticks on
-  a fixed schedule, where retail runs its frame right behind a packet.
 - No anti-cheat, no PunkBuster.
 
 **Rendering and sound**
