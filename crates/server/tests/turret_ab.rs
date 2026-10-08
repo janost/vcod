@@ -772,8 +772,7 @@ fn a_gunner_who_disconnects_leaves_the_gun_to_walk_home() {
     }
     let held = target_gun_angles2(&rig).expect("the gun in the target's view");
     assert!(held[1] > 20.0, "{held:?}");
-    rig.sv
-        .handle_packet(common::ADDR, b"\xff\xff\xff\xffdisconnect", rig.now);
+    rig.gunner.disconnect();
     rig.hold(10);
     let s = target_gun_angles2(&rig).unwrap();
     assert_eq!(s[1], 0.0, "{s:?}");
