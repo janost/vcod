@@ -635,6 +635,7 @@ fn scoreboard(clients: &[Option<Client>], rt: Option<&mut script::ScriptRuntime>
                         spectator: false,
                         score: 0,
                         deaths: 0,
+                        ping: r.ping,
                         icon: 0,
                     })
                 })
@@ -654,6 +655,7 @@ fn roster(
             connecting: c.state == ClientState::Connected,
             active: c.state == ClientState::Active,
             following: c.sim.as_ref().and_then(|s| s.follow.target),
+            ping: c.ping,
         })
     })
 }
@@ -1175,6 +1177,50 @@ fn write_pending_commands(w: &mut MsgWriter, nc: &ServerNetchan, from_ack: i32) 
     }
 }
 
+/// `Info_RemoveKey`: the info string without `key`'s pair.
+fn remove_info_key(info: &str, key: &str) -> String {
+    let mut out = String::new();
+    let mut parts = info.strip_prefix('\\').unwrap_or(info).split('\\');
+    while let (Some(k), Some(v)) = (parts.next(), parts.next()) {
+        if k != key {
+            out.push_str(&format!("\\{k}\\{v}"));
+        }
+    }
+    out
+}
+
+/// One message off a client the snapshot pass does not build for: its
+/// unacked server commands and its last frame repeated under the new
+/// sequence. The packets come back for the caller to address.
+fn resend_last_frame(
+    c: &mut Client,
+    sv_time_ms: i32,
+    proto: &'static Protocol,
+    huff: &Huffman,
+    baselines: &HashMap<u32, msg::EntityState>,
+) -> Vec<Vec<u8>> {
+    let mut w = MsgWriter::new(huff);
+    write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
+    c.reliable_sent = c.netchan.reliable_sequence as i32;
+    let message_num = c.netchan.outgoing_sequence;
+    if let Some(last) = c.sent_frame(message_num.wrapping_sub(1)) {
+        let frame = snapshot::Snapshot {
+            server_time: sv_time_ms,
+            message_num,
+            delta_num: -1,
+            ..last.clone()
+        };
+        let base = c
+            .sent_frame(c.message_ack.max(0) as u32)
+            .filter(|b| (1..=255).contains(&message_num.saturating_sub(b.message_num)));
+        w.write_byte(snapshot::SVC_SNAPSHOT);
+        snapshot::write(&mut w, proto, base, &frame, baselines);
+        c.record_frame(frame);
+    }
+    c.netchan
+        .transmit(c.last_client_command, &w.into_ops(), huff)
+}
+
 impl Server {
     /// A server whose generator starts from a fixed seed, so a test run
     /// replays the same bot picks, script `randomInt`s and spawn choices.
@@ -1317,15 +1363,9 @@ impl Server {
             "connect" => self.svc_direct_connect(from, raw, now),
             // Rate limited by its own server-wide window, not the buckets.
             "rcon" => self.svc_remote_command(from, raw, now),
-            // Retail drops by source address alone; the bucket keeps a spoofer
-            // from cycling a slot faster than the client can reconnect.
-            "disconnect" => {
-                if self.limiter.addr_limited(from.ip(), now) {
-                    log::debug!("{from}: disconnect rate limited");
-                    return;
-                }
-                self.oob_disconnect(from)
-            }
+            // `SV_ConnectionlessPacket` (0x808c827) matches it and does
+            // nothing; a client leaves through the netchan `disconnect`.
+            "disconnect" => {}
             other => log::debug!("{from}: unhandled oob {other:?}"),
         }
     }
@@ -1352,8 +1392,13 @@ impl Server {
         let mut i = configstrings::serverinfo(&self.cfg);
         i.set("challenge", challenge_arg(challenge)).set("pswrd", 0);
         let mut lines = String::new();
-        for c in self.clients.iter().flatten() {
-            lines.push_str(&format!("0 0 \"{}\"\n", c.name));
+        for slot in 0..self.clients.len() {
+            let Some(c) = self.clients[slot].as_ref() else {
+                continue;
+            };
+            let (ping, name) = (c.ping, c.name.clone());
+            let score = self.client_score(slot);
+            lines.push_str(&format!("{score} {ping} \"{name}\"\n"));
         }
         self.send_oob(from, &format!("statusResponse\n{i}\n{lines}"));
     }
@@ -1380,6 +1425,11 @@ impl Server {
                 self.exec_console_line(&line, now);
             }
             Verdict::Run(None) | Verdict::Limited => {}
+        }
+        // A `quit` exits before the redirect is flushed: no reply.
+        if self.quit {
+            self.redirect = None;
+            return;
         }
         for reply in self.redirect.take().unwrap_or_default().finish() {
             self.send_oob(from, &reply);
@@ -1512,6 +1562,14 @@ impl Server {
                 }
             },
         };
+        // `Info_SetValueForKey(userinfo, "ip", NET_AdrToString(from))`
+        // (0x8085498, key at 0x80d43da): any `ip` the client sent goes, the real one is last.
+        let userinfo = format!(
+            "{}\\ip\\{}:{}",
+            remove_info_key(&userinfo, "ip"),
+            from.ip(),
+            from.port() as i16
+        );
         let client = Client::new(from, qport, challenge, userinfo, now);
         log::info!("client {slot} {:?} connected from {from}", client.name);
         let name = client.name.clone();
@@ -1530,17 +1588,6 @@ impl Server {
     /// A slot neither a client nor a zombie holds.
     fn free_slot(&self) -> Option<usize> {
         (0..self.clients.len()).find(|&i| self.clients[i].is_none() && self.zombies[i].is_none())
-    }
-
-    /// OOB `disconnect` (0x808c827).
-    fn oob_disconnect(&mut self, from: SocketAddr) {
-        if let Some(slot) = self
-            .clients
-            .iter()
-            .position(|c| c.as_ref().is_some_and(|c| c.addr == from))
-        {
-            self.drop_client(slot, "EXE_DISCONNECTED");
-        }
     }
 
     /// The netchan half of `SV_PacketEvent`, then `SV_ExecuteClientMessage`.
@@ -1854,6 +1901,7 @@ impl Server {
         let Some(c) = self.clients[slot].as_mut() else {
             return;
         };
+        c.stamp_acked(self.sv_time_ms);
         c.pending
             .extend(cmds.into_iter().map(|cmd| QueuedCmd { packet, cmd }));
         let excess = c.pending.len().saturating_sub(MAX_PENDING_CMDS);
@@ -1888,6 +1936,7 @@ impl Server {
         if is_bot {
             return;
         }
+        c.stamp_sent(c.netchan.outgoing_sequence, self.sv_time_ms);
         for pkt in c.netchan.transmit(c.last_client_command, &ops, &self.huff) {
             self.outbox.push((c.addr, pkt));
         }
@@ -2303,30 +2352,47 @@ impl Server {
     /// carries the new command sequence the same way.
     fn send_zombies(&mut self) {
         for z in self.zombies.iter_mut().flatten() {
-            let mut w = MsgWriter::new(&self.huff);
-            write_pending_commands(&mut w, &z.netchan, z.reliable_ack);
-            z.reliable_sent = z.netchan.reliable_sequence as i32;
-            let message_num = z.netchan.outgoing_sequence;
-            if let Some(last) = z.sent_frame(message_num.wrapping_sub(1)) {
-                let frame = snapshot::Snapshot {
-                    server_time: self.sv_time_ms,
-                    message_num,
-                    delta_num: -1,
-                    ..last.clone()
+            let sent =
+                resend_last_frame(z, self.sv_time_ms, self.proto, &self.huff, &self.baselines);
+            self.outbox.extend(sent.into_iter().map(|p| (z.addr, p)));
+        }
+    }
+
+    /// `SV_FinalMessage` (0x808ad8c), which `SV_Shutdown` runs before the
+    /// process exits: twice over, every client past `CS_ZOMBIE` is queued
+    /// `e "<message>"` and a bare `w` and sent a snapshot carrying them.
+    /// The `e` is dropped for a client not yet active.
+    fn final_message(&mut self, message: &str) {
+        let notice = format!("e \"{message}\"");
+        for _ in 0..2 {
+            for slot in 0..self.clients.len() {
+                if self.clients[slot].as_ref().is_none_or(|c| c.is_bot) {
+                    continue;
+                }
+                self.send_server_command(slot, &notice);
+                self.send_server_command(slot, "w");
+                let Some(c) = self.clients[slot].as_mut() else {
+                    continue;
                 };
-                let base = z
-                    .sent_frame(z.message_ack.max(0) as u32)
-                    .filter(|b| (1..=255).contains(&message_num.saturating_sub(b.message_num)));
-                w.write_byte(snapshot::SVC_SNAPSHOT);
-                snapshot::write(&mut w, self.proto, base, &frame, &self.baselines);
-                z.record_frame(frame);
+                let sent =
+                    resend_last_frame(c, self.sv_time_ms, self.proto, &self.huff, &self.baselines);
+                self.outbox.extend(sent.into_iter().map(|p| (c.addr, p)));
             }
-            for pkt in z
-                .netchan
-                .transmit(z.last_client_command, &w.into_ops(), &self.huff)
-            {
-                self.outbox.push((z.addr, pkt));
-            }
+        }
+    }
+
+    /// `SV_CalcPings` (0x808cab8), once a frame after the packets and before
+    /// the clock moves. Only an active client in the world is measured; a
+    /// bot, which retail does not have, reads 0 as Q3's do.
+    fn calc_pings(&mut self) {
+        for c in self.clients.iter_mut().flatten() {
+            c.ping = if c.is_bot {
+                0
+            } else if c.state != ClientState::Active || c.sim.is_none() {
+                999
+            } else {
+                c.calc_ping()
+            };
         }
     }
 
@@ -3204,7 +3270,15 @@ impl Server {
                 .cvar_overrides
                 .push((name.to_string(), value.to_string())),
         }
-        // The engine's own cvars; names fold case.
+        self.apply_engine_cvar(name, value);
+        if name == "g_gametype" {
+            self.cfg.gametype = value.to_string();
+            self.refresh_serverinfo();
+        }
+    }
+
+    /// The engine cvars `Server` keeps in its own fields. Names fold case.
+    fn apply_engine_cvar(&mut self, name: &str, value: &str) {
         let lower = name.to_ascii_lowercase();
         if let Some(i) = crate::master::Masters::index(&lower) {
             self.masters.set(i, value);
@@ -3212,12 +3286,9 @@ impl Server {
         match lower.as_str() {
             "dedicated" => self.dedicated = value.trim().parse().unwrap_or(0),
             "rconpassword" => self.rcon_password = value.to_string(),
-            _ => {}
-        }
-        match name {
-            "sv_mapRotation" => self.sv_map_rotation = value.to_string(),
-            "g_gametype" => {
-                self.cfg.gametype = value.to_string();
+            "sv_maprotation" => self.sv_map_rotation = value.to_string(),
+            "sv_hostname" => {
+                self.cfg.hostname = value.to_string();
                 self.refresh_serverinfo();
             }
             _ => {}
@@ -3650,15 +3721,15 @@ impl Server {
     /// top of the next tick, which is `EXEC_APPEND`.
     fn drain_console(&mut self, now: Instant) {
         while let Some(line) = self.console.pop_front() {
-            if !self.exec_console_line(&line, now) {
+            if !self.exec_console_line(&line, now) || self.quit {
                 return;
             }
         }
     }
 
-    /// `Cmd_ExecuteString` for the commands the map cycle and rcon use;
-    /// anything else logs and drops, and prints nothing, as retail's does
-    /// for a command no one registered. `false` when a load left no level,
+    /// `Cmd_ExecuteString` for the commands the map cycle and rcon use, then
+    /// `Cvar_Command`; anything else logs and drops, and prints nothing, as
+    /// retail's does for a command no one registered. `false` when a load left no level,
     /// which stops the drain.
     ///
     /// A load that failed before the teardown -- no paks, a map the paks do
@@ -3713,8 +3784,37 @@ impl Server {
                 self.print(&text);
             }
             console::Command::ClientKick(arg) => self.client_kick(arg.as_deref(), now),
+            console::Command::Kick(arg) => self.kick(arg.as_deref(), now),
+            console::Command::DumpUser(arg) => self.dump_user(arg.as_deref()),
+            console::Command::ServerInfo => {
+                let info = self.configstrings.first().cloned().unwrap_or_default();
+                self.print(&format!(
+                    "Server info settings:\n{}",
+                    console::info_print(&info)
+                ));
+            }
+            console::Command::SystemInfo => {
+                let info = self.configstrings.get(1).cloned().unwrap_or_default();
+                self.print(&format!(
+                    "System info settings:\n{}",
+                    console::info_print(&info)
+                ));
+            }
+            console::Command::Say(text) => {
+                if let Some(text) = text {
+                    self.console_say(&text);
+                }
+            }
+            console::Command::Set { cmd, args: None } => {
+                self.print(&format!("usage: {cmd} <variable> <value>\n"));
+            }
+            console::Command::Set {
+                args: Some((name, value)),
+                ..
+            } => self.console_set(&name, &value),
             console::Command::Heartbeat => self.masters.force(),
             console::Command::Quit => {
+                self.final_message("EXE_SERVERQUIT");
                 let mut resolve = self.resolver;
                 let beats = self
                     .masters
@@ -3722,7 +3822,11 @@ impl Server {
                 self.outbox.extend(beats);
                 self.quit = true;
             }
-            console::Command::Unknown(l) => log::warn!("console: unknown command {l:?}"),
+            console::Command::Unknown(argv) => {
+                if !self.cvar_command(&argv) {
+                    log::warn!("console: unknown command {line:?}");
+                }
+            }
         }
         true
     }
@@ -3750,14 +3854,167 @@ impl Server {
             self.print(&format!("Client {n} is not active\n"));
             return;
         }
-        self.drop_client(n, "EXE_PLAYERKICKED");
-        if let Some(z) = self.zombies[n].as_mut() {
+        self.kick_slot(n, now);
+    }
+
+    /// The drop both kicks end in; a zombie's clock restarts, so a kicked
+    /// zombie only lingers longer.
+    fn kick_slot(&mut self, slot: usize, now: Instant) {
+        self.drop_client(slot, "EXE_PLAYERKICKED");
+        if let Some(z) = self.zombies[slot].as_mut() {
             z.last_packet = now;
         }
     }
 
-    /// `SV_Status_f` (0x80846b4). The ping column reads 0: no round trip is
-    /// measured yet.
+    /// `SV_GetPlayerByName` (0x8083aa0): the first slot in use whose name
+    /// matches `name` case-insensitively, as is or with its colour codes
+    /// stripped. A zombie's name is gone with its userinfo, so it matches
+    /// only an empty one.
+    fn player_by_name(&mut self, name: &str) -> Option<usize> {
+        let found = (0..self.clients.len()).find(|&slot| {
+            let n = match (&self.clients[slot], &self.zombies[slot]) {
+                (Some(c), _) => c.name.as_str(),
+                (None, Some(_)) => "",
+                (None, None) => return false,
+            };
+            n.eq_ignore_ascii_case(name)
+                || crate::game::say::clean_name(n).eq_ignore_ascii_case(name)
+        });
+        if found.is_none() {
+            self.print(&format!("Player {name} is not on the server\n"));
+        }
+        found
+    }
+
+    /// `SV_Kick_f` (0x8084288). The name is looked up first, so `kick all`
+    /// prints the miss before it kicks every slot in use.
+    fn kick(&mut self, arg: Option<&str>, now: Instant) {
+        let Some(arg) = arg else {
+            self.print("Usage: kick <player name>\nkick all = kick everyone\n");
+            return;
+        };
+        if let Some(slot) = self.player_by_name(arg) {
+            self.kick_slot(slot, now);
+        } else if arg.eq_ignore_ascii_case("all") {
+            for slot in 0..self.clients.len() {
+                if self.clients[slot].is_some() || self.zombies[slot].is_some() {
+                    self.kick_slot(slot, now);
+                }
+            }
+        }
+    }
+
+    /// `SV_DumpUser_f` (0x8084cc0).
+    fn dump_user(&mut self, arg: Option<&str>) {
+        let Some(arg) = arg else {
+            self.print("Usage: info <userid>\n");
+            return;
+        };
+        let Some(slot) = self.player_by_name(arg) else {
+            return;
+        };
+        let info = self.clients[slot]
+            .as_ref()
+            .map_or_else(String::new, |c| c.userinfo.clone());
+        self.print(&format!(
+            "userinfo\n--------\n{}",
+            console::info_print(&info)
+        ));
+    }
+
+    /// `SV_ConSay_f` (0x8084974): `h "\x15console: <text>"` to every client
+    /// past `CS_CONNECTED`, as a droppable command.
+    fn console_say(&mut self, text: &str) {
+        let cmd = format!("h \"\u{15}console: {text}\"");
+        log::info!("say: console: {text}");
+        for slot in 0..self.clients.len() {
+            if self.clients[slot]
+                .as_ref()
+                .is_some_and(|c| c.state != ClientState::Connected)
+            {
+                self.send_server_command(slot, &cmd);
+            }
+        }
+    }
+
+    /// The two `CVAR_LATCH` cvars the level reads at load, by their folded
+    /// name: the registered spelling and the value the next load takes.
+    fn latched_cvar(&self, name: &str) -> Option<(&'static str, String)> {
+        match name.to_ascii_lowercase().as_str() {
+            "g_gametype" => Some(("g_gametype", self.cfg.gametype.clone())),
+            "sv_maxclients" => Some((
+                "sv_maxclients",
+                self.pending_cvar("sv_maxclients", &self.cfg.max_clients.to_string()),
+            )),
+            _ => None,
+        }
+    }
+
+    /// `Cvar_Set_f`: a latched cvar keeps its value until the next load
+    /// and says so; anything else is written to the running level's table
+    /// at once. A `--set` override of the same name follows, so the next
+    /// load does not put the old value back.
+    fn console_set(&mut self, name: &str, value: &str) {
+        if let Some((canon, pending)) = self.latched_cvar(name) {
+            if pending != value {
+                self.print(&format!("{canon} will be changed upon restarting.\n"));
+            }
+            self.set_cvar(canon, value);
+            return;
+        }
+        self.apply_engine_cvar(name, value);
+        if let Some((_, v)) = self
+            .cvar_overrides
+            .iter_mut()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+        {
+            *v = value.to_string();
+        }
+        match self.script.as_mut() {
+            Some(rt) => rt.host.cvars.set(name, value),
+            None => self.set_cvar(name, value),
+        }
+    }
+
+    /// `Cvar_Command`: a line whose first word names a cvar prints it, or
+    /// sets it to the second word. False when no such cvar exists, which
+    /// leaves the line an unknown command.
+    fn cvar_command(&mut self, argv: &[String]) -> bool {
+        let Some(name) = argv.first() else {
+            return false;
+        };
+        let Some((canon, value, default)) = self
+            .script
+            .as_ref()
+            .and_then(|rt| rt.cvars().lookup(name))
+            .map(|(n, v, d)| (n.to_string(), v.to_string(), d.to_string()))
+        else {
+            return false;
+        };
+        if let Some(v) = argv.get(1) {
+            self.console_set(&canon, v);
+            return true;
+        }
+        let mut text = format!("\"{canon}\" is:\"{value}^7\" default:\"{default}^7\"\n");
+        if let Some((_, pending)) = self.latched_cvar(&canon)
+            && pending != value
+        {
+            text.push_str(&format!("latched: \"{pending}\"\n"));
+        }
+        self.print(&text);
+        true
+    }
+
+    /// A client's `score` script field, 0 without one.
+    fn client_score(&mut self, slot: usize) -> i32 {
+        self.script
+            .as_mut()
+            .and_then(|rt| rt.client_field(slot, "score"))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// `SV_Status_f` (0x80846b4).
     fn status_text(&mut self, now: Instant) -> String {
         let mut out = format!(
             "map: {}\nnum score ping name            lastmsg address               qport rate\n\
@@ -3765,17 +4022,10 @@ impl Server {
             self.cfg.map
         );
         for slot in 0..self.clients.len() {
-            let (c, zombie) = match (&self.clients[slot], &self.zombies[slot]) {
-                (Some(c), _) => (c, false),
-                (None, Some(z)) => (z, true),
-                (None, None) => continue,
-            };
-            let score = match (zombie, self.script.as_mut()) {
-                (false, Some(rt)) => rt
-                    .client_field(slot, "score")
-                    .and_then(|v| v.parse::<i32>().ok())
-                    .unwrap_or(0),
-                _ => 0,
+            let zombie = self.clients[slot].is_none();
+            let score = if zombie { 0 } else { self.client_score(slot) };
+            let Some(c) = self.clients[slot].as_ref().or(self.zombies[slot].as_ref()) else {
+                continue;
             };
             let row = console::StatusRow {
                 num: slot,
@@ -3785,16 +4035,14 @@ impl Server {
                 } else if c.state == ClientState::Connected {
                     console::Ping::Connecting
                 } else {
-                    console::Ping::Ms(0)
+                    console::Ping::Ms(c.ping)
                 },
                 // The drop nukes the userinfo, and the name with it.
                 name: if zombie { "" } else { &c.name },
                 last_msg_ms: now.saturating_duration_since(c.last_packet).as_millis() as i64,
                 addr: c.addr,
                 qport: c.netchan.qport,
-                rate: info_value_for_key(&c.userinfo, "rate")
-                    .and_then(|r| r.parse().ok())
-                    .unwrap_or(0),
+                rate: c.rate(self.dedicated),
             };
             out.push_str(&row.to_string());
         }
@@ -3858,8 +4106,13 @@ impl Server {
 
     pub fn tick(&mut self, now: Instant) {
         self.drain_console(now);
+        // `Com_Quit_f` exits inside the command; nothing after it runs.
+        if self.quit {
+            return;
+        }
         self.check_timeouts(now);
         self.step_bots();
+        self.calc_pings();
         self.sv_time_ms = self.sv_time_ms.wrapping_add(FRAME_MS);
         // Wall gap between ticks: sv_time always advances exactly FRAME_MS, so
         // a gap far off it means the frames the client interpolates between
@@ -5520,6 +5773,7 @@ cmds {processed} span {span} queued {queued} ack {} behind {ack_behind} {base_de
                     ops.len(),
                 );
             }
+            c.stamp_sent(message_num, self.sv_time_ms);
             for pkt in c.netchan.transmit(c.last_client_command, &ops, &self.huff) {
                 self.outbox.push((c.addr, pkt));
             }
@@ -6509,7 +6763,8 @@ mod tests {
         assert_eq!(out.len(), 1, "expected one snapshot");
         let cmds = server_commands(&mut nc, &out[0].1, &huff);
         assert_eq!(cmds.len(), 1);
-        assert!(cmds[0].starts_with("b 1 0 0 0 0 0 0 0"), "{:?}", cmds[0]);
+        // No ack has landed after time 0 yet, so `SV_CalcPings` reads 999.
+        assert!(cmds[0].starts_with("b 1 0 0 0 0 999 0 0"), "{:?}", cmds[0]);
     }
 
     #[test]
@@ -6590,24 +6845,16 @@ mod tests {
         );
     }
 
+    /// Retail matches an OOB `disconnect` and drops nothing (0x808c827).
     #[test]
-    fn oob_disconnect_honours_the_address_limit() {
+    fn an_oob_disconnect_is_ignored() {
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
         connected(&mut sv, addr(5), now);
-        // The challenge took one token; spend the rest on getinfo.
-        for _ in 1..ADDR_BURST {
-            sv.handle_packet(addr(5), &oob("getinfo x"), now);
-        }
         sv.take_outgoing();
         sv.handle_packet(addr(5), &oob("disconnect"), now);
-        assert_eq!(
-            sv.client_count(),
-            1,
-            "a rate-limited disconnect went through"
-        );
-        sv.handle_packet(addr(5), &oob("disconnect"), now + ADDR_PERIOD);
-        assert_eq!(sv.client_count(), 0);
+        assert_eq!(sv.client_count(), 1);
+        assert!(sv.take_outgoing().is_empty());
     }
 
     /// A forged packet carrying the victim's ip and qport must not advance the
@@ -9021,6 +9268,170 @@ mod tests {
 
     /// `dedicated 2` heartbeats on the first frame, again when the first
     /// client connects, and flatlines on `quit`; the port is always 20510.
+    /// `kick`, `dumpuser`, `serverinfo` and `say` against the replies a
+    /// retail server gave (handshake doc, "rcon commands").
+    #[test]
+    fn rcon_admin_commands_answer_like_retail() {
+        let t = Instant::now();
+        let mut sv = Server::new(cfg(), t);
+        sv.set_cvar("rconpassword", "pw");
+        let mut nc = begun(&mut sv, t);
+        sv.tick(t);
+        let huff = Huffman::new();
+        for (_, pkt) in sv.take_outgoing() {
+            let _ = nc.process_in(&pkt, &huff);
+        }
+        let step = Duration::from_millis(500);
+        let mut at = t;
+        let mut ask = |sv: &mut Server, line: &str| {
+            at += step;
+            rcon(sv, &format!("pw {line}"), at).concat()
+        };
+        assert_eq!(
+            ask(&mut sv, "kick"),
+            "print\nUsage: kick <player name>\nkick all = kick everyone\n"
+        );
+        assert_eq!(
+            ask(&mut sv, "dumpuser nobody"),
+            "print\nPlayer nobody is not on the server\n"
+        );
+        assert_eq!(ask(&mut sv, "dumpuser"), "print\nUsage: info <userid>\n");
+        let dump = ask(&mut sv, "dumpuser VCOD");
+        assert!(dump.starts_with("print\nuserinfo\n--------\nname                vcod\n"));
+        assert!(
+            dump.ends_with("ip                  127.0.0.1:5\n"),
+            "{dump}"
+        );
+        let info = ask(&mut sv, "serverinfo");
+        assert!(info.starts_with("print\nServer info settings:\ng_gametype          dm\n"));
+        assert!(info.contains("sv_hostname         vcod test\n"), "{info}");
+        assert_eq!(
+            ask(&mut sv, "set foo"),
+            "print\nusage: set <variable> <value>\n"
+        );
+
+        assert_eq!(ask(&mut sv, "say hello there"), "print\n");
+        sv.tick(t);
+        let out = sv.take_outgoing();
+        let cmds = server_commands(&mut nc, &out[0].1, &huff);
+        assert_eq!(cmds, ["h \"\u{15}console: hello there\""]);
+
+        assert_eq!(
+            ask(&mut sv, "kick vcod"),
+            "print\n0:vcod EXE_PLAYERKICKED\n"
+        );
+        assert_eq!(sv.client_count(), 0);
+        assert!(sv.zombies[0].is_some());
+    }
+
+    /// `set` writes the running level's table and a bare name reads it back
+    /// in `Cvar_Command`'s format; `g_gametype` is latched until a load.
+    #[test]
+    fn rcon_set_and_query_cvars_like_retail() {
+        let t = Instant::now();
+        let mut sv = Server::new(cfg(), t);
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test("main() {}"),
+        );
+        if let Some(rt) = sv.script.as_mut() {
+            rt.host.cvars.set("g_gametype", "dm");
+            rt.host.cvars.set("scr_dm_timelimit", "30");
+        }
+        sv.set_cvar("rconpassword", "pw");
+        let step = Duration::from_millis(500);
+        let mut at = t;
+        let mut ask = |sv: &mut Server, line: &str| {
+            at += step;
+            rcon(sv, &format!("pw {line}"), at).concat()
+        };
+        assert_eq!(ask(&mut sv, "set foo a b c"), "print\n");
+        assert_eq!(
+            ask(&mut sv, "foo"),
+            "print\n\"foo\" is:\"a b c^7\" default:\"a b c^7\"\n"
+        );
+        assert_eq!(ask(&mut sv, "foo baz"), "print\n");
+        assert_eq!(
+            ask(&mut sv, "FOO"),
+            "print\n\"foo\" is:\"baz^7\" default:\"a b c^7\"\n"
+        );
+        assert_eq!(ask(&mut sv, "set scr_dm_timelimit 5"), "print\n");
+        assert_eq!(sv.script_cvar("scr_dm_timelimit").as_deref(), Some("5"));
+        assert_eq!(
+            ask(&mut sv, "set g_gametype tdm"),
+            "print\ng_gametype will be changed upon restarting.\n"
+        );
+        assert_eq!(
+            ask(&mut sv, "g_gametype"),
+            "print\n\"g_gametype\" is:\"dm^7\" default:\"dm^7\"\nlatched: \"tdm\"\n"
+        );
+        assert_eq!(ask(&mut sv, "set sv_hostname newname"), "print\n");
+        assert!(sv.configstring(0).contains("\\sv_hostname\\newname"));
+    }
+
+    /// `quit` runs `SV_FinalMessage("EXE_SERVERQUIT")` and exits without
+    /// answering the rcon that asked for it.
+    #[test]
+    fn quit_tells_the_clients_and_answers_nothing() {
+        let t = Instant::now();
+        let mut sv = Server::new(cfg(), t);
+        sv.set_cvar("rconpassword", "pw");
+        let mut nc = begun(&mut sv, t);
+        sv.tick(t);
+        let huff = Huffman::new();
+        for (_, pkt) in sv.take_outgoing() {
+            let _ = nc.process_in(&pkt, &huff);
+        }
+        sv.handle_packet(addr(9), &oob("rcon pw quit"), t);
+        assert!(sv.quit_requested());
+        let out = sv.take_outgoing();
+        assert!(
+            out.iter().all(|(to, _)| *to == addr(5)),
+            "an rcon reply went out"
+        );
+        assert_eq!(out.len(), 2);
+        assert_eq!(
+            server_commands(&mut nc, &out[0].1, &huff),
+            ["e \"EXE_SERVERQUIT\"", "w"]
+        );
+        sv.tick(t);
+        assert!(sv.take_outgoing().is_empty());
+    }
+
+    /// `SV_CalcPings`: the round trip each acked message took, on the
+    /// server's frame clock, averaged into `status`, `getstatus` and the
+    /// scoreboard.
+    #[test]
+    fn ping_is_the_mean_ack_time_over_the_ring() {
+        let t = Instant::now();
+        let mut sv = Server::new(cfg(), t);
+        let mut nc = begun(&mut sv, t);
+        let huff = Huffman::new();
+        let mut last = NULL_USERCMD;
+        // Each frame's snapshot is acked one frame later: 50 ms apiece.
+        for i in 0..40 {
+            sv.tick(t);
+            for (_, pkt) in sv.take_outgoing() {
+                let _ = nc.process_in(&pkt, &huff);
+            }
+            last.server_time = 100 + i * 50;
+            let ack = nc.incoming_sequence as i32;
+            sv.tick(t);
+            sv.take_outgoing();
+            let ops = move_ops(sv.checksum_feed, ack, last);
+            let pkt = nc
+                .build_out(i32::from(sv.server_id), ack, 0, &ops, &huff)
+                .unwrap();
+            sv.handle_packet(addr(5), &pkt, t);
+        }
+        sv.tick(t);
+        assert_eq!(sv.clients[0].as_ref().unwrap().ping, 50);
+        sv.take_outgoing();
+        sv.handle_packet(addr(7), &oob("getstatus x"), t);
+        let (_, body) = reply_text(&mut sv);
+        assert!(body.ends_with("\n0 50 \"vcod\""), "{body}");
+    }
+
     #[test]
     fn dedicated_2_heartbeats_and_flatlines() {
         let t = Instant::now();

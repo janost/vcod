@@ -17,6 +17,8 @@ pub struct RosterSlot {
     /// The slot this client's follow is on, the `spectatorClient` the walk
     /// compares.
     pub following: Option<usize>,
+    /// `cl->ping`, which `SV_CalcPings` copies into `ps.ping`.
+    pub ping: i32,
 }
 
 /// One client's row before `SortRanks`.
@@ -26,15 +28,14 @@ pub struct Row {
     pub spectator: bool,
     pub score: i64,
     pub deaths: i64,
+    pub ping: i32,
     /// The 1-based `CsRange::StatusIcon` index, 0 for none.
     pub icon: usize,
 }
 
 /// `b <numRows> <axis> <allies>{ <client> <score> <ping> <time> <icon>}*`,
 /// one row per online client (`docs/research/cod11-hud-protocol.md` section
-/// 3). `ping` is 0: the netchan keeps no round-trip estimate, and 0 renders
-/// as a number where retail's `-1` renders as "-" for a client still
-/// connecting.
+/// 3). `ping` is `-1` for a client still connecting, else capped at 999.
 pub fn text(mut rows: Vec<Row>, [axis, allies]: [i32; 2]) -> String {
     // `level.sortedClients[]`'s order, `SortRanks` (.so 0x50090): a
     // connecting client last, then spectators last among themselves by
@@ -43,8 +44,9 @@ pub fn text(mut rows: Vec<Row>, [axis, allies]: [i32; 2]) -> String {
     rows.sort_by_key(|r| (r.connecting, r.spectator, -r.score, r.deaths, r.slot));
     let mut text = format!("b {} {axis} {allies}", rows.len());
     for r in rows {
+        let ping = if r.connecting { -1 } else { r.ping.min(999) };
         text.push_str(&format!(
-            " {} {} 0 {} {}",
+            " {} {} {ping} {} {}",
             r.slot, r.score, r.deaths, r.icon
         ));
     }
@@ -58,14 +60,14 @@ impl GameHost {
     /// them; tokens 2 and 3 are the two team scores, axis before allies
     /// (map-cycle doc, 6.3).
     pub fn scoreboard(&mut self, cx: &mut Cx) -> String {
-        let roster: Vec<(usize, bool)> = self
+        let roster: Vec<(usize, bool, i32)> = self
             .client_roster
             .iter()
             .enumerate()
-            .filter_map(|(slot, r)| r.map(|r| (slot, r.connecting)))
+            .filter_map(|(slot, r)| r.map(|r| (slot, r.connecting, r.ping)))
             .collect();
         let mut rows = Vec::with_capacity(roster.len());
-        for (slot, connecting) in roster {
+        for (slot, connecting, ping) in roster {
             let mut field = |name: &str| self.client_field(cx, slot, name);
             let num = |v: Option<String>| v.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
             let score = num(field("score"));
@@ -78,6 +80,7 @@ impl GameHost {
                 spectator,
                 score,
                 deaths,
+                ping,
                 icon: status_icon_index(&self.configstrings, icon.as_deref()),
             });
         }
