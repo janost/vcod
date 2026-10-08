@@ -1296,9 +1296,18 @@ replaces it only when an entity cut the fraction, then with `start +
 vcod: `terrain.rs` builds the records and runs the capsule clip in this
 order, `f64` for every stack value; `collision.rs` holds a partition as
 one BVH prim, clips brushes in the order above (`clip_brush_capsule`),
-walks the BVH twice, brushes then everything else, stops at fraction 0,
-and computes the end point as `CM_BoxTrace` does (`cm_endpos`). The leaf
-order inside each pass is the BVH's, not the BSP's.
+then everything else, stops at fraction 0, and computes the end point as
+`CM_BoxTrace` does (`cm_endpos`). The leaf order inside each pass is the
+BVH's, not the BSP's. The brush pass walks the tree and logs the leaves it
+enters; the second pass replays that list, which holds every leaf it would
+reach in the same order, since its fraction is never larger. Two rejects
+skip work no clip would turn into a contact: a terrain triangle whose
+corners' box is past the sweep's reach by the sphere's radius and a unit,
+and a patch facet whose six axial planes (its bevels) keep the sweep out
+by the same margin. Neither is retail's; tests hold each to the answer
+without it (`the_leaf_replay_matches_a_second_walk_on_mp_pavlov`,
+`the_bounds_reject_never_changes_a_clip`,
+`the_facet_box_reject_never_changes_a_trace`).
 
 ### A submodel's brushes are its entity's
 

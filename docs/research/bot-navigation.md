@@ -340,6 +340,54 @@ section 2, "The flood" and "Jumps"). VERIFIED (measured, same example).
 `mp_ship` costs most: its hull below the deck, reached now down the stair
 the fall budget lets a walk land on, is 2 900 more nodes.
 
+Cheaper traces (2026-10-08). VERIFIED (measured, same example, the two
+binaries interleaved, each map twice, load average 33-41 from other
+builds). Instructions are `perf stat -e instructions:u` over the whole
+process, map load included, and do not depend on load; ms is the build's
+best wall time of the two. Node, edge and spawn counts are the same on
+every map: no trace changed its answer.
+
+| map | instructions (G) before / after | CPU s before / after | build ms before / after |
+|---|---|---|---|
+| mp_brecourt | 96.7 / 44.5 | 21.0 / 10.0 | 4944 / 2521 |
+| mp_carentan | 42.9 / 22.0 | 10.5 / 5.2 | 3505 / 1879 |
+| mp_chateau | 40.2 / 19.4 | 9.6 / 4.5 | 3411 / 1553 |
+| mp_dawnville | 57.0 / 28.0 | 14.3 / 6.5 | 3155 / 1530 |
+| mp_depot | 57.9 / 27.2 | 14.8 / 6.2 | 4076 / 2146 |
+| mp_harbor | 22.2 / 10.9 | 5.0 / 2.6 | 1621 / 946 |
+| mp_hurtgen | 192.7 / 87.1 | 42.8 / 19.5 | 8836 / 3573 |
+| mp_pavlov | 82.5 / 42.1 | 22.1 / 9.4 | 3923 / 1731 |
+| mp_powcamp | 26.3 / 13.1 | 5.9 / 3.1 | 1457 / 743 |
+| mp_railyard | 65.2 / 27.8 | 14.3 / 6.4 | 2490 / 1209 |
+| mp_rocket | 87.2 / 41.6 | 19.4 / 9.6 | 3247 / 1770 |
+| mp_ship | 108.8 / 50.0 | 23.7 / 11.1 | 4898 / 2270 |
+
+- VERIFIED (`perf record`, a symbolized release build): before, the build
+  was `trace_node` 47%, `Terrain::clip_capsule` 35% on `mp_hurtgen`, and
+  `trace_node` 31%, `PatchCollide::trace` 26% on `mp_ship`, and the poses'
+  `RwLock` took a contended read 3% of `mp_hurtgen`'s samples.
+- Four changes, all in `vcod-common`'s collision and each held to the old
+  answer by a test (`cod11-mantle.md`, "Terrain is a swept sphere, a patch
+  is a facet"): the second pass of a trace replays the leaves the brush
+  pass logged instead of walking the tree again (-29% instructions on
+  `mp_hurtgen`, -39% on `mp_ship`); a terrain triangle out of the sweep's
+  reach skips the clip (`mp_hurtgen` a further -34%); a patch facet whose
+  axial bevels keep the sweep out is skipped (`mp_ship` -25%); a world
+  with no posed model skips the poses' lock, whose reader count every
+  thread wrote on every trace. On `mp_rocket` that last one took the CPU
+  time from 15.7 to 10.0 s with 3% fewer instructions.
+- Not changed: the flood's layers are still a barrier each. Measured with
+  a temporary per-layer timer under a load average of about 57, walks kept
+  the 16 threads 66% busy on `mp_ship` (149 layers) and 85-89% on
+  `mp_rocket` and `mp_hurtgen` (46-54 layers); under that load the figure
+  says little.
+- Not changed either: a back down off a ledge away from a ladder. Of the
+  1 600 to 8 600 back walks a map runs, about 8% of `mp_hurtgen`'s pmove
+  ticks, few arrive, and most of those that do land under 64 units down,
+  where a bot runs forward and never backs (section 3). Trying the back
+  only near a ladder or after a forward run that fell more than 64 cost
+  `mp_ship` 2 spawns and `mp_chateau` 1 (VERIFIED, measured), so it stays.
+
 - VERIFIED (measured): an early single-threaded build of `mp_carentan`, before
   the diagonal shortcut and the stall cutoff, took 10.6 s. `perf` puts 80% of
   the build in `CollisionWorld::trace_node`.
@@ -476,7 +524,22 @@ while on a ladder (a ladder or ledge below, the way the graph proved it),
 creeping inside 24 units with its heading held, as the ladder pass's walks
 did. A bot that
 has not left a 15-unit circle in ten ticks takes a random heading for 15 ticks
-whether it has a waypoint or not. A random heading is never one with a
+whether it has a waypoint or not. On a ladder it climbs down instead, as it does
+with no waypoint: the heading is nothing to a body on a ladder, and the
+level view of a wander climbs at a third of the rate. A leap's foot is slowed
+onto only within 48 units of its height and off a ladder; one at a ladder's
+head is climbed to at the full rate first. VERIFIED (measured, `mp_ship`
+`dm`, 6 bots, shoot off, seeds 1-4, 4000 ticks): before, a bot pushed up
+under a spar on the deck ladder at x 3696 at z 808.875 for the rest of the
+run, and bots took 60 s up the hold ladder at 0.4 units a tick, slowed
+onto the leap's foot at its head. With the climb down alone, seed 1 still
+had 1 501 bot-ticks within 150 units of where the bot stood 12 s before,
+all on the hold ladder; with both, seeds 1-4 had 7 to 59, none on a ladder
+(`tests/bots.rs`, `bots_on_mp_ships_ladders_keep_climbing`). The 59 are a
+bot on `mp_ship`'s hull floor at (2180, 407, -45) against a diagonal beam
+whose top at z -31.875 carries nodes: it passes the beam-top waypoint from
+the beam's side, within 48 of its height, and the drop beyond is not where
+the graph proved it. A random heading is never one with a
 hazard 64 units along it (`BotView::hazard_ahead`, one flag per 45-degree
 octant), and a bot wandering up to one picks again. Engaging an enemy overrides all of it.
 In S&D the objective names the point and can hold the bot still
