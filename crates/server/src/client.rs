@@ -151,6 +151,12 @@ pub struct Client {
     /// Frames sent to this client, indexed message_num % SV_PACKET_BACKUP;
     /// the delta base for a later frame is picked from here by message_ack.
     pub frames: Vec<Option<Snapshot>>,
+    /// `frames[].messageSent` and `.messageAcked` by `outgoingSequence &
+    /// 31`: `svs.time` when the message went out, and when the last move
+    /// message acking it arrived, -1 until then.
+    pub ping_ring: [(i32, i32); SV_PACKET_BACKUP],
+    /// `cl->ping`, `SV_CalcPings`' average over [`Self::ping_ring`].
+    pub ping: i32,
 }
 
 impl Client {
@@ -186,6 +192,8 @@ impl Client {
             sim: None,
             is_bot: false,
             frames: vec![None; SV_PACKET_BACKUP],
+            ping_ring: [(0, 0); SV_PACKET_BACKUP],
+            ping: 999,
         }
     }
 
@@ -290,6 +298,44 @@ impl Client {
         self.frames[idx] = Some(snap);
     }
 
+    /// `SV_SendMessageToClient` (0x808f680): stamps the ring slot of the
+    /// message about to go out as `sequence`.
+    pub fn stamp_sent(&mut self, sequence: u32, sv_time_ms: i32) {
+        self.ping_ring[sequence as usize % SV_PACKET_BACKUP] = (sv_time_ms, -1);
+    }
+
+    /// `SV_UserMove` (0x8086fa4), once the cmds decode: a move message stamps the
+    /// slot it acks, overwriting an earlier ack of the same message.
+    pub fn stamp_acked(&mut self, sv_time_ms: i32) {
+        self.ping_ring[self.message_ack as usize % SV_PACKET_BACKUP].1 = sv_time_ms;
+    }
+
+    /// `SV_CalcPings`' average (0x808cab8): every slot with a positive ack
+    /// time counts, capped at 999, and 999 with none.
+    pub fn calc_ping(&self) -> i32 {
+        let (sum, n) = self
+            .ping_ring
+            .iter()
+            .filter(|(_, acked)| *acked > 0)
+            .fold((0i32, 0i32), |(s, n), (sent, acked)| {
+                (s.wrapping_add(acked - sent), n + 1)
+            });
+        if n == 0 { 999 } else { (sum / n).min(999) }
+    }
+
+    /// `cl->rate` as `SV_UserinfoChanged` (0x8086ab4) sets it: a LAN client
+    /// on a server below `dedicated 2` reads 99999, anyone else the
+    /// userinfo's `rate` clamped to 1000..90000, or 5000 when it is empty.
+    pub fn rate(&self, dedicated: i32) -> i32 {
+        if dedicated != 2 && is_lan(self.addr.ip()) {
+            return 99999;
+        }
+        match vcod_common::net::info_value_for_key(&self.userinfo, "rate") {
+            None | Some("") => 5000,
+            Some(r) => atoi(r).clamp(1000, 90000),
+        }
+    }
+
     /// Commits a message that passed every check: the netchan sequence, the
     /// acks and the timeout clock. The address is the caller's call, see
     /// `Server::handle_client_packet`.
@@ -299,6 +345,33 @@ impl Client {
         self.message_ack = m.message_ack;
         self.reliable_ack = m.reliable_ack;
     }
+}
+
+/// `Sys_IsLANAddress` (0x80c72f8) compares against the host's own
+/// interface addresses by class; this takes loopback and the private ranges
+/// instead.
+fn is_lan(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
+        std::net::IpAddr::V6(v6) => v6.is_loopback(),
+    }
+}
+
+/// `strtol(s, 0, 10)` saturated to `i32`: leading blanks and a sign, then
+/// digits until the first non-digit; 0 with none.
+fn atoi(s: &str) -> i32 {
+    let s = s.trim_start();
+    let (neg, digits) = match s.as_bytes().first() {
+        Some(b'-') => (true, &s[1..]),
+        Some(b'+') => (false, &s[1..]),
+        _ => (false, s),
+    };
+    let mut n: i64 = 0;
+    for b in digits.bytes().take_while(u8::is_ascii_digit) {
+        n = (n * 10 + i64::from(b - b'0')).min(i64::from(i32::MAX) + 1);
+    }
+    let n = if neg { -n } else { n };
+    n.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 /// Strips the quote that delimits a `statusResponse` player line and any
@@ -326,6 +399,45 @@ mod tests {
         let mut c = Client::new(addr, 1, 1, String::new(), Instant::now());
         c.state = ClientState::Active;
         c
+    }
+
+    /// `SV_CalcPings` counts only acked slots, divides as an int, caps at
+    /// 999, and reads 999 with nothing acked.
+    #[test]
+    fn ping_averages_the_acked_slots() {
+        let mut c = active();
+        assert_eq!(c.calc_ping(), 999);
+        c.stamp_sent(0, 1000);
+        c.stamp_sent(1, 1050);
+        c.stamp_sent(2, 1100);
+        c.message_ack = 0;
+        c.stamp_acked(1050);
+        c.message_ack = 1;
+        c.stamp_acked(1050);
+        // (50 + 0) / 2; slot 2 is still -1.
+        assert_eq!(c.calc_ping(), 25);
+        c.message_ack = 2;
+        c.stamp_acked(5000);
+        assert_eq!(c.calc_ping(), 999);
+    }
+
+    /// `SV_UserinfoChanged`'s rate: 99999 for a LAN client below
+    /// `dedicated 2` (what retail's `status` printed for a loopback probe),
+    /// else clamped, 5000 when empty.
+    #[test]
+    fn rate_is_clamped_as_retail_does() {
+        let mut c = active();
+        c.userinfo = "\\rate\\25000".into();
+        assert_eq!(c.rate(1), 99999);
+        assert_eq!(c.rate(2), 25000);
+        c.addr = "8.8.8.8:1".parse().unwrap();
+        assert_eq!(c.rate(1), 25000);
+        for (rate, want) in [("100", 1000), ("200000", 90000), ("", 5000), ("abc", 1000)] {
+            c.userinfo = format!("\\rate\\{rate}");
+            assert_eq!(c.rate(1), want, "{rate:?}");
+        }
+        c.userinfo = String::new();
+        assert_eq!(c.rate(1), 5000);
     }
 
     /// What the next message would carry, oldest first.

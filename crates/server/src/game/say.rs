@@ -112,7 +112,7 @@ impl GameHost {
 }
 
 /// `Q_CleanStr`: colour codes and anything unprintable out.
-fn clean_name(name: &str) -> String {
+pub(crate) fn clean_name(name: &str) -> String {
     let mut out = String::new();
     let mut chars = name.chars().peekable();
     while let Some(c) = chars.next() {

@@ -34,36 +34,76 @@ pub enum Command {
     /// `SV_KickNum_f` (0x8084be4); `None` when the argument count is not
     /// exactly one, which prints the usage line.
     ClientKick(Option<String>),
+    /// `SV_Kick_f` (0x8084288): a player name or `all`; `None` unless
+    /// there is exactly one argument.
+    Kick(Option<String>),
+    /// `SV_DumpUser_f` (0x8084cc0), by player name; `None` unless there is
+    /// exactly one argument.
+    DumpUser(Option<String>),
+    /// `SV_Serverinfo_f` (0x8084c68).
+    ServerInfo,
+    /// `SV_Systeminfo_f` (0x8084c94).
+    SystemInfo,
+    /// `SV_ConSay_f` (0x8084974): the arguments joined, `None` without any.
+    Say(Option<String>),
+    /// `Cvar_Set_f` / `Cvar_SetA_f`: the name and `argv[2..]` joined by
+    /// spaces, or `None` for the usage line, which names the command.
+    Set {
+        cmd: &'static str,
+        args: Option<(String, String)>,
+    },
     /// `SV_Heartbeat_f` (0x8084bd0).
     Heartbeat,
     /// `quit`: `SV_Shutdown`, which flatlines the masters, then exit.
     Quit,
-    Unknown(String),
+    /// Anything else, tokenized: `Cvar_Command` gets the first look, which
+    /// prints a cvar named alone and sets it given a value.
+    Unknown(Vec<String>),
 }
 
 impl Command {
-    /// `Cmd_TokenizeString` plus the dispatch `SV_Map_f` /
-    /// `SV_MapRestart_f` / `SV_MapRotate_f` register themselves under.
+    /// `Cmd_TokenizeString` plus the dispatch each command registers itself
+    /// under (`SV_AddOperatorCommands`, 0x8084a3c). Names fold case.
     pub fn parse(line: &str) -> Command {
-        let line = line.trim();
-        let mut it = line.split_whitespace();
-        match it.next().map(|w| w.to_ascii_lowercase()).as_deref() {
-            Some("map") => match it.next() {
-                Some(m) => Command::Map(m.to_string()),
-                None => Command::Unknown(line.to_string()),
-            },
+        let argv = crate::game::say::tokenize(line);
+        let one_arg = || (argv.len() == 2).then(|| argv[1].clone());
+        match argv.first().map(|w| w.to_ascii_lowercase()).as_deref() {
+            Some("map") if argv.len() >= 2 => Command::Map(argv[1].clone()),
             Some("map_restart") => Command::MapRestart,
             Some("map_rotate") => Command::MapRotate,
             Some("status") => Command::Status,
-            Some("clientkick") => match (it.next(), it.next()) {
-                (Some(n), None) => Command::ClientKick(Some(n.to_string())),
-                _ => Command::ClientKick(None),
+            Some("clientkick") => Command::ClientKick(one_arg()),
+            Some("kick") => Command::Kick(one_arg()),
+            Some("dumpuser") => Command::DumpUser(one_arg()),
+            Some("serverinfo") => Command::ServerInfo,
+            Some("systeminfo") => Command::SystemInfo,
+            Some("say") => Command::Say(crate::game::say::concat_args(
+                line.trim_start().get(3..).unwrap_or(""),
+            )),
+            Some(w @ ("set" | "seta")) => Command::Set {
+                cmd: if w == "set" { "set" } else { "seta" },
+                args: (argv.len() >= 3).then(|| (argv[1].clone(), argv[2..].join(" "))),
             },
             Some("heartbeat") => Command::Heartbeat,
             Some("quit") => Command::Quit,
-            _ => Command::Unknown(line.to_string()),
+            _ => Command::Unknown(argv),
         }
     }
+}
+
+/// `Info_Print`: one line per pair, the key padded to 20 columns and not
+/// cut when longer.
+pub fn info_print(info: &str) -> String {
+    let mut out = String::new();
+    let mut parts = info.strip_prefix('\\').unwrap_or(info).split('\\');
+    while let Some(k) = parts.next() {
+        if k.is_empty() {
+            break;
+        }
+        let v = parts.next().unwrap_or("MISSING VALUE");
+        out.push_str(&format!("{k:<20}{v}\n"));
+    }
+    out
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -284,7 +324,47 @@ mod tests {
         assert_eq!(Command::parse("clientkick 1 2"), Command::ClientKick(None));
         assert_eq!(
             Command::parse("vstr nextmap"),
-            Command::Unknown("vstr nextmap".into())
+            Command::Unknown(vec!["vstr".into(), "nextmap".into()])
+        );
+    }
+
+    /// The argument rules each retail command checks, with rcon's requoting.
+    #[test]
+    fn admin_commands_parse() {
+        assert_eq!(
+            Command::parse("kick \"my name\" "),
+            Command::Kick(Some("my name".into()))
+        );
+        assert_eq!(Command::parse("kick a b"), Command::Kick(None));
+        assert_eq!(Command::parse("dumpuser"), Command::DumpUser(None));
+        assert_eq!(Command::parse("say"), Command::Say(None));
+        assert_eq!(
+            Command::parse("say \"quoted words\" tail "),
+            Command::Say(Some("quoted words tail".into()))
+        );
+        assert_eq!(
+            Command::parse("set foo a b c"),
+            Command::Set {
+                cmd: "set",
+                args: Some(("foo".into(), "a b c".into()))
+            }
+        );
+        assert_eq!(
+            Command::parse("seta foo"),
+            Command::Set {
+                cmd: "seta",
+                args: None
+            }
+        );
+    }
+
+    /// Lines from retail's `systeminfo` (handshake doc, "rcon"): the key
+    /// padded to 20, a longer key runs straight into its value.
+    #[test]
+    fn info_print_matches_retail() {
+        assert_eq!(
+            info_print("\\bg_fallDamageMaxHeight\\480\\pmove_msec\\8"),
+            "bg_fallDamageMaxHeight480\npmove_msec          8\n"
         );
     }
 }

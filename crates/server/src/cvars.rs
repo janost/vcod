@@ -72,6 +72,9 @@ struct Cvar {
     /// capture holds `g_TeamName_Allies`, not `g_teamname_allies`.
     name: String,
     value: String,
+    /// `resetString`: the value the cvar was created with, by a `set` or a
+    /// registration, which a console query prints beside the value.
+    default: String,
     /// In the 140/204 mirror. Set by `makeCvarServerInfo`, which despite
     /// its name does not put the cvar in configstring 0: retail's cs 0
     /// holds only the `sv_*` and `g_gametype` set.
@@ -112,6 +115,14 @@ impl Cvars {
             .map_or("", |c| c.value.as_str())
     }
 
+    /// `Cvar_Command`'s view of one cvar: the registration spelling, the
+    /// value and the default. `None` when no such cvar exists.
+    pub fn lookup(&self, name: &str) -> Option<(&str, &str, &str)> {
+        self.vars
+            .get(&name.to_ascii_lowercase())
+            .map(|c| (c.name.as_str(), c.value.as_str(), c.default.as_str()))
+    }
+
     /// `Cvar_Set`: registers the cvar if it does not exist, and never
     /// changes an existing one's flags.
     pub fn set(&mut self, name: &str, value: &str) {
@@ -121,6 +132,7 @@ impl Cvars {
             .or_insert_with(|| Cvar {
                 name: name.to_string(),
                 value: String::new(),
+                default: value.to_string(),
                 mirrored: false,
             });
         entry.value = value.to_string();
@@ -137,6 +149,7 @@ impl Cvars {
             .or_insert_with(|| Cvar {
                 name: name.to_string(),
                 value: default.to_string(),
+                default: default.to_string(),
                 mirrored: false,
             });
     }
