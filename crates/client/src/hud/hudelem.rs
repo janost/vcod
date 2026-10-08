@@ -460,6 +460,7 @@ pub(crate) mod tests {
             t: 0.0,
             s2: 1.0,
             t2: 1.0,
+            page: 0,
         };
         Font {
             size: 16,
@@ -468,6 +469,7 @@ pub(crate) mod tests {
             line_advance: 30.0,
             max_height: 10,
             page: "fonts/test".into(),
+            pages: vec!["fonts/test".into()],
         }
     }
 

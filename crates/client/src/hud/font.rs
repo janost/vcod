@@ -32,6 +32,9 @@ pub struct Glyph {
     pub t: f32,
     pub s2: f32,
     pub t2: f32,
+    /// Index into [`Font::pages`]: the 24, 30 and 32 point atlases span
+    /// several images, named per glyph at +48.
+    pub page: u8,
 }
 
 pub struct Font {
@@ -45,6 +48,8 @@ pub struct Font {
     /// puts every glyph bottom on one baseline, since `image_height == height`.
     pub max_height: i32,
     pub page: String, // "fonts/fontImage_0_<size>"
+    /// Every atlas image the glyphs use, [`Font::page`] first.
+    pub pages: Vec<String>,
 }
 
 impl Font {
@@ -52,6 +57,11 @@ impl Font {
     /// at `scale == 1.0`. Raw `glyph_scale` alone renders about 3x too big.
     pub fn unit_scale(&self) -> f32 {
         self.size as f32 / (self.max_height as f32 * self.glyph_scale)
+    }
+
+    /// The atlas image `g` sits on.
+    pub fn glyph_page(&self, g: &Glyph) -> &str {
+        self.pages.get(g.page as usize).unwrap_or(&self.page)
     }
 
     /// Line spacing in window px at `scale`.
@@ -76,9 +86,25 @@ pub fn parse_font_dat(bytes: &[u8], size: u32) -> Result<Font, String> {
     let i32_at = |o: usize| i32::from_le_bytes(bytes[o..o + 4].try_into().unwrap());
     let f32_at = |o: usize| f32::from_le_bytes(bytes[o..o + 4].try_into().unwrap());
 
+    let mut pages = vec![format!("fonts/fontImage_0_{size}")];
     let mut glyphs = Vec::with_capacity(GLYPH_COUNT);
     for i in 0..GLYPH_COUNT {
         let o = i * RECORD_SIZE;
+        let name = &bytes[o + 48..o + 80];
+        let name =
+            String::from_utf8_lossy(&name[..name.iter().position(|&b| b == 0).unwrap_or(32)]);
+        let name = name.trim_end_matches(".tga");
+        let page = if name.is_empty() {
+            0
+        } else {
+            match pages.iter().position(|p| p.eq_ignore_ascii_case(name)) {
+                Some(p) => p,
+                None => {
+                    pages.push(name.to_string());
+                    pages.len() - 1
+                }
+            }
+        };
         glyphs.push(Glyph {
             height: i32_at(o),
             width: i32_at(o + 4),
@@ -91,7 +117,8 @@ pub fn parse_font_dat(bytes: &[u8], size: u32) -> Result<Font, String> {
             t: f32_at(o + 32),
             s2: f32_at(o + 36),
             t2: f32_at(o + 40),
-            // +44 glyph handle, +48..+80 shader name: skipped.
+            // +44 glyph handle: skipped.
+            page: page as u8,
         });
     }
 
@@ -108,7 +135,8 @@ pub fn parse_font_dat(bytes: &[u8], size: u32) -> Result<Font, String> {
         glyph_scale,
         line_advance,
         max_height,
-        page: format!("fonts/fontImage_0_{size}"),
+        page: pages[0].clone(),
+        pages,
     })
 }
 
@@ -302,9 +330,9 @@ pub fn layout(
                 h,
                 g,
                 [0.0, 0.0, 0.0, 0.8],
-                &font.page,
+                font.glyph_page(g),
             );
-            push_quad(out, gx, gy, w, h, g, seg_color, &font.page);
+            push_quad(out, gx, gy, w, h, g, seg_color, font.glyph_page(g));
 
             cursor += g.advance * s;
         }
@@ -348,9 +376,9 @@ pub fn layout_fixed(
                 h,
                 g,
                 [0.0, 0.0, 0.0, 0.8],
-                &font.page,
+                font.glyph_page(g),
             );
-            push_quad(out, gx, gy, w, h, g, seg_color, &font.page);
+            push_quad(out, gx, gy, w, h, g, seg_color, font.glyph_page(g));
             cursor += cell;
         }
     }
@@ -377,7 +405,7 @@ pub fn layout_cells(
             let gx = cursor + (cell - g.advance * s) * 0.5 + g.bearing * s;
             let gy = y + (font.max_height - g.height) as f32 * s;
             let (w, h) = (g.image_width as f32 * s, g.image_height as f32 * s);
-            push_quad(out, gx, gy, w, h, g, seg_color, &font.page);
+            push_quad(out, gx, gy, w, h, g, seg_color, font.glyph_page(g));
             cursor += cell;
         }
     }
@@ -448,6 +476,23 @@ mod tests {
             "{}",
             measure(&f, "Hello World", 1.0)
         );
+    }
+
+    #[test]
+    fn big_fonts_span_several_atlas_pages() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let f = load_font(&fs, 32).unwrap();
+        assert_eq!(
+            f.glyph_page(&f.glyphs[b'A' as usize]),
+            "fonts/fontImage_0_32"
+        );
+        assert_eq!(
+            f.glyph_page(&f.glyphs[b'U' as usize]),
+            "fonts/fontImage_1_32"
+        );
+        assert_eq!(f.pages.len(), 3);
     }
 
     #[test]
