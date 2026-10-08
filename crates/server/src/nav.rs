@@ -74,6 +74,10 @@ pub struct NavGraph {
     /// among the nodes its start reaches both ways.
     comp: Vec<u32>,
     members: Vec<Vec<u32>>,
+    /// Per component, a bitset of the components it reaches (itself
+    /// included): an unreachable goal fails before any search. A stock map
+    /// has 1 to 13 components.
+    reach: Vec<Vec<u64>>,
     /// The world's ladders ([`ladders`]), for the build.
     ladder_boxes: Vec<(Vec3, Vec3)>,
 }
@@ -117,6 +121,7 @@ impl NavGraph {
             columns: HashMap::new(),
             comp: Vec::new(),
             members: Vec::new(),
+            reach: Vec::new(),
             ladder_boxes: ladders(world),
         };
         let mut queue = Vec::new();
@@ -228,6 +233,64 @@ impl NavGraph {
         for (n, &c) in self.comp.iter().enumerate() {
             self.members[c as usize].push(n as u32);
         }
+        // The condensation's edges, then a walk of them from each component.
+        let mut out = vec![HashSet::new(); count];
+        for (a, next) in self.edges.iter().enumerate() {
+            let ca = self.comp[a];
+            for &b in next {
+                let cb = self.comp[b as usize];
+                if cb != ca {
+                    out[ca as usize].insert(cb);
+                }
+            }
+        }
+        let words = count.div_ceil(64);
+        self.reach = (0..count)
+            .map(|root| {
+                let mut bits = vec![0u64; words];
+                let mut stack = vec![root as u32];
+                bits[root / 64] |= 1 << (root % 64);
+                while let Some(c) = stack.pop() {
+                    for &d in &out[c as usize] {
+                        let (w, b) = (d as usize / 64, d % 64);
+                        if bits[w] & (1 << b) == 0 {
+                            bits[w] |= 1 << b;
+                            stack.push(d);
+                        }
+                    }
+                }
+                bits
+            })
+            .collect();
+    }
+
+    /// Whether some path leads from node `a` to node `b`.
+    pub fn reaches(&self, a: u32, b: u32) -> bool {
+        let (Some(&ca), Some(&cb)) = (self.comp.get(a as usize), self.comp.get(b as usize)) else {
+            return false;
+        };
+        self.reach[ca as usize][cb as usize / 64] & (1 << (cb % 64)) != 0
+    }
+
+    /// The node `from` reaches that lies nearest `to`, `to` itself when it
+    /// is reached; `None` when that is `from` and `from` is not `to`.
+    fn nearest_reached(&self, from: u32, to: u32) -> Option<u32> {
+        if self.reaches(from, to) {
+            return Some(to);
+        }
+        let goal = self.nodes[to as usize];
+        let ca = self.comp[from as usize] as usize;
+        let best = self
+            .members
+            .iter()
+            .enumerate()
+            .filter(|(c, _)| self.reach[ca][c / 64] & (1 << (c % 64)) != 0)
+            .flat_map(|(_, m)| m)
+            .min_by(|a, b| {
+                let d = |n: u32| self.nodes[n as usize].distance_squared(goal);
+                d(**a).total_cmp(&d(**b)).then(a.cmp(b))
+            })?;
+        (*best != from).then_some(*best)
     }
 
     /// The flood walks to a neighbouring column only, so a ledge across a
@@ -516,7 +579,13 @@ impl NavGraph {
 
     /// [`Self::path`] without the directed edges in `avoid`.
     pub fn path_avoiding(&self, from: u32, to: u32, avoid: &[(u32, u32)]) -> Option<Vec<u32>> {
-        self.astar(from, to, avoid, false, &mut 0)
+        if !self.reaches(from, to) {
+            return None;
+        }
+        match Search::new(self, from, to, avoid.to_vec()).run(self, &mut { u32::MAX }) {
+            Plan::Found(p) => Some(p),
+            _ => None,
+        }
     }
 
     /// [`Self::path`], or when `to` is out of reach, the path to the
@@ -524,78 +593,10 @@ impl NavGraph {
     /// objective down a bunker's stairs, on a pitch too coarse for them)
     /// is still closed in on along the graph, not wandered at.
     pub fn path_toward(&self, from: u32, to: u32) -> Option<Vec<u32>> {
-        self.astar(from, to, &[], true, &mut 0)
-    }
-
-    /// The A* behind the paths; `spent` counts the nodes it expands.
-    fn astar(
-        &self,
-        from: u32,
-        to: u32,
-        avoid: &[(u32, u32)],
-        partial: bool,
-        spent: &mut u32,
-    ) -> Option<Vec<u32>> {
-        let n = self.nodes.len();
-        if from as usize >= n || to as usize >= n {
+        if from as usize >= self.nodes.len() || to as usize >= self.nodes.len() {
             return None;
         }
-        let goal = self.nodes[to as usize];
-        let h = |i: u32| self.nodes[i as usize].distance(goal);
-        let mut cost = vec![f32::INFINITY; n];
-        let mut came = vec![u32::MAX; n];
-        let mut open = BinaryHeap::new();
-        cost[from as usize] = 0.0;
-        open.push(Open {
-            f: h(from),
-            node: from,
-        });
-        let mut expanded = 0;
-        let back = |came: &[u32], to: u32| {
-            let mut out = vec![to];
-            let mut at = to;
-            while at != from {
-                at = came[at as usize];
-                out.push(at);
-            }
-            out.reverse();
-            out
-        };
-        // The expanded node nearest the goal, for a partial plan.
-        let mut closest = (h(from), from);
-        while let Some(Open { f, node }) = open.pop() {
-            if node == to {
-                return Some(back(&came, to));
-            }
-            // A stale heap entry: the node was reached cheaper since.
-            if f > cost[node as usize] + h(node) + 1e-3 {
-                continue;
-            }
-            expanded += 1;
-            *spent += 1;
-            if expanded > MAX_EXPANSIONS {
-                return None;
-            }
-            if h(node) < closest.0 {
-                closest = (h(node), node);
-            }
-            let here = self.nodes[node as usize];
-            for &next in &self.edges[node as usize] {
-                if avoid.contains(&(node, next)) {
-                    continue;
-                }
-                let c = cost[node as usize] + here.distance(self.nodes[next as usize]);
-                if c < cost[next as usize] {
-                    cost[next as usize] = c;
-                    came[next as usize] = node;
-                    open.push(Open {
-                        f: c + h(next),
-                        node: next,
-                    });
-                }
-            }
-        }
-        (partial && closest.1 != from).then(|| back(&came, closest.1))
+        self.path(from, self.nearest_reached(from, to)?)
     }
 
     /// Each node's strongly connected component, numbered from 0 (Kosaraju,
@@ -664,6 +665,7 @@ impl NavGraph {
             columns: HashMap::new(),
             comp: Vec::new(),
             members: Vec::new(),
+            reach: Vec::new(),
             ladder_boxes: Vec::new(),
         };
         for p in nodes {
@@ -786,6 +788,9 @@ const OFF_PATH_STEPS: f32 = 4.0;
 /// it, and the ticks it then leaves the bot to its own unstick.
 const STUCK_TICKS: u32 = 40;
 const REST_TICKS: u32 = 20;
+/// The most of the tick's plan budget one follower's search takes, so a
+/// long search leaves some for the bots after it.
+const PLAN_SLICE: u32 = 2000;
 /// How long the edge a follower got stuck on stays out of its plans. What
 /// blocks a proven edge is mostly a body: a bot guarding the bomb at the
 /// foot of mp_rocket's stairs held another there for 11 s.
@@ -830,15 +835,23 @@ pub struct Follower {
     clock: u32,
     /// Edges it got stuck on, left out of its plans until the tick given.
     avoid: Vec<(u32, u32, u32)>,
+    /// The plan under way, and whether it leaves out `avoid` (a plain one
+    /// follows if it fails).
+    search: Option<Search>,
+    round: bool,
+    /// The threat an [`Goal::Away`](crate::bots::Goal::Away) destination
+    /// was picked against.
+    threat: Option<Vec3>,
 }
 
 impl Follower {
     /// The waypoint toward `goal` for a bot standing at `at`; `still` says
     /// it stands at rest with a jump ready ([`ready_to_leap`]). `world`
     /// re-proves a leap from where the bot rests (none in unit tests).
-    /// `budget` is the tick's shared A* budget in expanded nodes; a bot that
-    /// needs a plan once it is spent gets none this tick, so the plans of
-    /// many bots at once (the tick the graph lands) spread over ticks.
+    /// `budget` is the tick's shared A* budget in expanded nodes; a bot whose
+    /// plan it does not finish gets no waypoint this tick and resumes the
+    /// search next tick, so neither one long plan nor many bots planning at
+    /// once (the tick the graph lands) stall a tick.
     /// `rand` picks roam destinations.
     #[allow(clippy::too_many_arguments)]
     pub fn waypoint(
@@ -866,6 +879,13 @@ impl Follower {
                 return None;
             }
             Goal::Roam => {}
+            Goal::Away(t) => {
+                let t = Vec3::from(t);
+                if self.threat.is_none_or(|p| p.distance(t) > RETARGET) {
+                    self.reset();
+                    self.threat = Some(t);
+                }
+            }
             Goal::To(p) => {
                 let moved = self
                     .dest
@@ -884,36 +904,7 @@ impl Follower {
             }
         }
         if self.path.is_empty() {
-            if *budget == 0 {
-                return None;
-            }
-            let start = g.nearest(at)?;
-            if goal == Goal::Roam && self.dest.is_none() {
-                self.dest = g.roam_from(start, here, rand);
-            }
-            // Round the edges it got stuck on when there is a way round, else
-            // through them again: whatever blocked one may have moved.
-            let avoid: Vec<(u32, u32)> = self.avoid.iter().map(|e| (e.0, e.1)).collect();
-            // A point out of the graph's reach is closed in on as far as the
-            // graph goes, then walked at.
-            let point = matches!(goal, Goal::To(_));
-            let mut spent = 0;
-            let path = self.dest.and_then(|d| {
-                let round = if avoid.is_empty() {
-                    None
-                } else {
-                    g.astar(start, d, &avoid, false, &mut spent)
-                };
-                round.or_else(|| g.astar(start, d, &[], point, &mut spent))
-            });
-            *budget = budget.saturating_sub(spent.max(1));
-            let Some(path) = path else {
-                // Unreachable from here: a roam picks again next time.
-                self.reset();
-                self.rest = REST_TICKS;
-                return None;
-            };
-            self.path = path;
+            self.path = self.plan(g, goal, here, budget, rand)?;
             self.next = 0;
             self.best = f32::INFINITY;
             self.idle = 0;
@@ -1001,6 +992,73 @@ impl Follower {
         Some(w.into())
     }
 
+    /// The path toward the destination, once the search for it is done.
+    /// A search starts only while `budget` has some left and runs at most
+    /// [`PLAN_SLICE`] of it a tick; a destination the start does not reach
+    /// fails before any search, and a point goal then heads for the reached
+    /// node nearest it instead.
+    fn plan(
+        &mut self,
+        g: &NavGraph,
+        goal: crate::bots::Goal,
+        here: Vec3,
+        budget: &mut u32,
+        rand: &mut dyn FnMut() -> i32,
+    ) -> Option<Vec<u32>> {
+        if *budget == 0 {
+            return None;
+        }
+        if self.search.is_none() {
+            let start = g.nearest(here.into())?;
+            if self.dest.is_none() {
+                self.dest = match goal {
+                    crate::bots::Goal::Roam => g.roam_from(start, here, rand),
+                    crate::bots::Goal::Away(t) => g.flee_from(start, here, t.into(), rand),
+                    _ => None,
+                };
+            }
+            let to = match goal {
+                crate::bots::Goal::To(_) => self.dest.and_then(|d| g.nearest_reached(start, d)),
+                _ => self.dest.filter(|&d| g.reaches(start, d)),
+            };
+            let Some(to) = to else {
+                // Unreachable from here: a roam picks again next time.
+                self.reset();
+                self.rest = REST_TICKS;
+                return None;
+            };
+            // Round the edges it got stuck on when there is a way round,
+            // else through them again: whatever blocked one may have moved.
+            let avoid: Vec<(u32, u32)> = self.avoid.iter().map(|e| (e.0, e.1)).collect();
+            self.round = !avoid.is_empty();
+            self.search = Some(Search::new(g, start, to, avoid));
+        }
+        let search = self.search.as_mut()?;
+        let mut slice = (*budget).min(PLAN_SLICE);
+        let before = slice;
+        let plan = search.run(g, &mut slice);
+        // A plan that finds its path at once still costs one.
+        *budget -= (before - slice).max(1).min(*budget);
+        match plan {
+            Plan::Pending => None,
+            Plan::Found(path) => {
+                self.search = None;
+                Some(path)
+            }
+            Plan::Failed if self.round => {
+                let s = self.search.take()?;
+                self.round = false;
+                self.search = Some(Search::new(g, s.from, s.to, Vec::new()));
+                None
+            }
+            Plan::Failed => {
+                self.reset();
+                self.rest = REST_TICKS;
+                None
+            }
+        }
+    }
+
     /// Whether the leap from the current waypoint, a leap's foot, arrives run
     /// from `at`, where the bot came to rest: the graph proved it from the
     /// node, and a body a few units nearer the lip leaves the ground before
@@ -1049,6 +1107,7 @@ impl Follower {
 
     fn reset(&mut self) {
         self.dest = None;
+        self.search = None;
         self.path.clear();
         self.arrived = false;
     }
@@ -1073,6 +1132,129 @@ impl NavGraph {
             }
         }
         best.map(|(_, n)| n)
+    }
+}
+
+/// Where a [`Search`] stands after a call to [`Search::run`].
+#[derive(Debug, PartialEq)]
+pub enum Plan {
+    /// The node list from `from` to `to` inclusive.
+    Found(Vec<u32>),
+    /// No way, or past [`MAX_EXPANSIONS`].
+    Failed,
+    /// The budget ran out first; call again.
+    Pending,
+}
+
+/// An A* under way, over the directed edges with Euclidean cost and
+/// heuristic. [`Search::run`] expands at most its budget per call, so a long
+/// plan spreads over ticks rather than stalling one.
+pub struct Search {
+    from: u32,
+    to: u32,
+    avoid: Vec<(u32, u32)>,
+    cost: Vec<f32>,
+    came: Vec<u32>,
+    open: BinaryHeap<Open>,
+    expanded: usize,
+}
+
+impl Search {
+    pub fn new(g: &NavGraph, from: u32, to: u32, avoid: Vec<(u32, u32)>) -> Search {
+        let n = g.nodes.len();
+        let mut s = Search {
+            from,
+            to,
+            avoid,
+            cost: vec![f32::INFINITY; n],
+            came: vec![u32::MAX; n],
+            open: BinaryHeap::new(),
+            expanded: 0,
+        };
+        if (from as usize) < n && (to as usize) < n {
+            s.cost[from as usize] = 0.0;
+            s.open.push(Open {
+                f: g.nodes[from as usize].distance(g.nodes[to as usize]),
+                node: from,
+            });
+        }
+        s
+    }
+
+    /// Expands nodes until the path is found or ruled out, each one taken
+    /// from `budget`; [`Plan::Pending`] once `budget` is 0.
+    pub fn run(&mut self, g: &NavGraph, budget: &mut u32) -> Plan {
+        let goal = g.nodes.get(self.to as usize).copied().unwrap_or(Vec3::ZERO);
+        let h = |i: u32| g.nodes[i as usize].distance(goal);
+        while let Some(&Open { f, node }) = self.open.peek() {
+            if node == self.to {
+                let mut out = vec![node];
+                let mut at = node;
+                while at != self.from {
+                    at = self.came[at as usize];
+                    out.push(at);
+                }
+                out.reverse();
+                return Plan::Found(out);
+            }
+            // A stale heap entry: the node was reached cheaper since.
+            if f > self.cost[node as usize] + h(node) + 1e-3 {
+                self.open.pop();
+                continue;
+            }
+            if *budget == 0 {
+                return Plan::Pending;
+            }
+            self.open.pop();
+            *budget -= 1;
+            self.expanded += 1;
+            if self.expanded > MAX_EXPANSIONS {
+                return Plan::Failed;
+            }
+            let here = g.nodes[node as usize];
+            for &next in &g.edges[node as usize] {
+                if self.avoid.contains(&(node, next)) {
+                    continue;
+                }
+                let c = self.cost[node as usize] + here.distance(g.nodes[next as usize]);
+                if c < self.cost[next as usize] {
+                    self.cost[next as usize] = c;
+                    self.came[next as usize] = node;
+                    self.open.push(Open {
+                        f: c + h(next),
+                        node: next,
+                    });
+                }
+            }
+        }
+        Plan::Failed
+    }
+}
+
+impl NavGraph {
+    /// A destination away from `threat`: of a handful of random nodes in
+    /// the component of node `start`, which stands at `from`, the one
+    /// farthest from the threat among those nearer the bot than the threat
+    /// (a way there that runs past the threat is no escape), else the
+    /// farthest of all.
+    fn flee_from(
+        &self,
+        start: u32,
+        from: Vec3,
+        threat: Vec3,
+        rand: &mut dyn FnMut() -> i32,
+    ) -> Option<u32> {
+        let pool = self.members.get(*self.comp.get(start as usize)? as usize)?;
+        let mut best: Option<(bool, f32, u32)> = None;
+        for _ in 0..12 {
+            let n = pool[rand() as usize % pool.len()];
+            let p = self.nodes[n as usize];
+            let key = (p.distance(from) < p.distance(threat), p.distance(threat));
+            if best.is_none_or(|(s, d, _)| key > (s, d)) {
+                best = Some((key.0, key.1, n));
+            }
+        }
+        best.map(|(_, _, n)| n)
     }
 }
 
@@ -1630,17 +1812,20 @@ fn jump_clear(world: &CollisionWorld, ps: &PlayerState, target: glam::Vec2) -> b
 /// the ray back down meets is ground over the point: a patch (mp_ship's
 /// mast ladder stands 540 units under a spar's top facet), or a ceiling
 /// just over the head that the ray starts against (a low doorway on
-/// mp_pavlov kept 540 nodes behind it off the graph).
+/// mp_pavlov kept 540 nodes behind it off the graph). The rays start a step
+/// over the feet, not at the head: mp_carentan's terrain runs 38 units over
+/// the base brush west of its boundary wall, and from the head a flood
+/// seeded there walked under it into the town.
 fn under_ground(world: &CollisionWorld, p: Vec3) -> bool {
-    let head = p + Vec3::Z * 72.0;
-    let up = world.point_trace(head, head + Vec3::Z * 8192.0, MASK_PLAYERSOLID, false);
+    let start = p + Vec3::Z * vcod_common::pmove::STEPSIZE;
+    let up = world.point_trace(start, start + Vec3::Z * 8192.0, MASK_PLAYERSOLID, false);
     if let Some(Prim::Tri(t)) = up.hit {
         let [a, b, c] = world.tris[t as usize];
         if (b - a).cross(c - a).normalize_or_zero().z > 0.7 {
             return true;
         }
     }
-    let down = world.point_trace(up.endpos - Vec3::Z, head, MASK_PLAYERSOLID, false);
+    let down = world.point_trace(up.endpos - Vec3::Z, start, MASK_PLAYERSOLID, false);
     matches!(down.hit, Some(Prim::Tri(_)))
 }
 
@@ -1741,22 +1926,146 @@ mod tests {
         let g = row();
         let mut f = Follower::default();
         let goal = Goal::To([170.0, 0.0, 40.0]);
-        let mut budget = 1;
+        let mut budget = 100;
         let mut rand = || 0;
         let mut at = [0.0, 0.0, 0.0];
         let mut seen = Vec::new();
+        let mut planned = None;
         for _ in 0..10 {
             let Some(w) = f.waypoint(&g, None, goal, at, true, &mut budget, &mut rand) else {
                 panic!("no waypoint at {at:?}");
             };
             seen.push(w[0]);
+            planned.get_or_insert(budget);
             if w == [170.0, 0.0, 40.0] {
                 break;
             }
             at = w;
         }
         assert_eq!(seen, [32.0, 64.0, 96.0, 128.0, 160.0, 170.0]);
-        assert_eq!(budget, 0, "one plan for the whole walk");
+        assert_eq!(Some(budget), planned, "one plan for the whole walk");
+    }
+
+    /// A `side` x `side` two-way grid 32 apart, and one node 1000 units off
+    /// it with no edges: an island no plan reaches.
+    fn grid_and_island(side: u32) -> NavGraph {
+        let mut nodes: Vec<Vec3> = (0..side * side)
+            .map(|i| Vec3::new((i % side) as f32 * 32.0, (i / side) as f32 * 32.0, 0.0))
+            .collect();
+        let mut edges: Vec<Vec<u32>> = (0..side * side)
+            .map(|i| {
+                let (x, y) = (i % side, i / side);
+                let mut out = Vec::new();
+                if x > 0 {
+                    out.push(i - 1);
+                }
+                if x + 1 < side {
+                    out.push(i + 1);
+                }
+                if y > 0 {
+                    out.push(i - side);
+                }
+                if y + 1 < side {
+                    out.push(i + side);
+                }
+                out
+            })
+            .collect();
+        nodes.push(Vec3::new(-1000.0, -1000.0, 0.0));
+        edges.push(Vec::new());
+        NavGraph::from_parts(nodes, edges)
+    }
+
+    /// The island is ruled out by the component table, not by a search of
+    /// all 40000 nodes: the plan heads for the grid's corner nearest it at
+    /// the cost of the walk there, a handful of expansions.
+    #[test]
+    fn an_unreachable_goal_fails_without_a_search() {
+        let g = grid_and_island(200);
+        let island = g.nodes.len() as u32 - 1;
+        assert!(!g.reaches(0, island) && !g.reaches(island, 0));
+        assert_eq!(g.path(5, island), None);
+        let mut f = Follower::default();
+        let mut budget = 4000;
+        let at = [64.0, 64.0, 0.0];
+        let w = f.waypoint(
+            &g,
+            None,
+            crate::bots::Goal::To([-1000.0, -1000.0, 0.0]),
+            at,
+            true,
+            &mut budget,
+            &mut || 0,
+        );
+        assert!(w.is_some(), "heads for the corner");
+        assert!(4000 - budget < 10, "spent {}", 4000 - budget);
+        assert_eq!(f.path.last(), Some(&0), "ends at the corner");
+        // From the island nothing is reached: no search and no waypoint.
+        let mut f = Follower::default();
+        let mut budget = 4000;
+        let w = f.waypoint(
+            &g,
+            None,
+            crate::bots::Goal::To([0.0; 3]),
+            [-1000.0, -1000.0, 0.0],
+            true,
+            &mut budget,
+            &mut || 0,
+        );
+        assert_eq!((w, budget), (None, 4000));
+    }
+
+    /// A plan longer than one tick's slice resumes where it stopped: no
+    /// tick spends more than [`PLAN_SLICE`], and the path still arrives.
+    #[test]
+    fn a_long_plan_spreads_over_ticks() {
+        // A serpentine: rows joined at alternate ends, so A*'s straight-line
+        // guess is wrong nearly everywhere.
+        let side = 120u32;
+        let nodes = (0..side * side)
+            .map(|i| Vec3::new((i % side) as f32 * 32.0, (i / side) as f32 * 32.0, 0.0))
+            .collect();
+        let edges = (0..side * side)
+            .map(|i| {
+                let (x, y) = (i % side, i / side);
+                let mut out = Vec::new();
+                if x > 0 {
+                    out.push(i - 1);
+                }
+                if x + 1 < side {
+                    out.push(i + 1);
+                }
+                let open = if y % 2 == 0 { side - 1 } else { 0 };
+                if x == open && y + 1 < side {
+                    out.push(i + side);
+                }
+                let below = if y % 2 == 1 { side - 1 } else { 0 };
+                if x == below && y > 0 {
+                    out.push(i - side);
+                }
+                out
+            })
+            .collect();
+        let g = NavGraph::from_parts(nodes, edges);
+        let goal = crate::bots::Goal::To([0.0, (side - 1) as f32 * 32.0, 0.0]);
+        let mut f = Follower::default();
+        let mut ticks = 0;
+        let w = loop {
+            let mut budget = 4000;
+            let w = f.waypoint(&g, None, goal, [0.0; 3], true, &mut budget, &mut || 0);
+            assert!(
+                4000 - budget <= PLAN_SLICE,
+                "tick {ticks} spent {}",
+                4000 - budget
+            );
+            ticks += 1;
+            if w.is_some() || ticks > 100 {
+                break w;
+            }
+        };
+        assert!(ticks > 1, "one tick held the whole plan");
+        assert_eq!(w, Some([32.0, 0.0, 0.0]));
+        assert_eq!(f.path.len() as u32, side * side);
     }
 
     #[test]
@@ -1787,12 +2096,30 @@ mod tests {
             crate::bots::Goal::Roam,
             [0.0; 3],
             true,
-            &mut 1,
+            &mut 100,
             &mut rand,
         );
         assert_eq!(w, Some([32.0, 0.0, 0.0]));
         // Nothing is ROAM_MIN away on a 160-unit row: the farthest pick wins.
         assert_eq!(f.dest, Some(5));
+    }
+
+    /// Away from a threat at one end of the row, the farthest pick that is
+    /// nearer the bot than the threat wins.
+    #[test]
+    fn a_flight_heads_away_from_the_threat() {
+        let g = row();
+        let mut f = Follower::default();
+        let mut picks = [0, 4, 1, 5, 3].into_iter().cycle();
+        let mut rand = || picks.next().unwrap();
+        let goal = crate::bots::Goal::Away([0.0, 0.0, 0.0]);
+        let w = f.waypoint(&g, None, goal, [64.0, 0.0, 0.0], true, &mut 100, &mut rand);
+        assert_eq!(f.dest, Some(5));
+        assert_eq!(w, Some([96.0, 0.0, 0.0]));
+        // The threat moves past the far end: the flight turns round.
+        let goal = crate::bots::Goal::Away([300.0, 0.0, 0.0]);
+        f.waypoint(&g, None, goal, [64.0, 0.0, 0.0], true, &mut 100, &mut rand);
+        assert_eq!(f.dest, Some(0));
     }
 
     /// A bot pinned on its way from node 1 to node 2 (by a body guarding the
@@ -1823,6 +2150,22 @@ mod tests {
             Some([60.0, 30.0, 0.0]),
             "planned through the blocked edge"
         );
+    }
+
+    /// West of mp_carentan's boundary wall the map's base brush runs on
+    /// under the terrain; a flood seeded there reached the town at this
+    /// point, with the terrain sheet under 72 units over the feet.
+    #[test]
+    fn carentans_floor_under_a_low_terrain_sheet_is_under_ground() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let entry = fs.resolve_map("mp_carentan").unwrap();
+        let bsp = vcod_common::bsp::parse(&fs.read(&entry).unwrap()).unwrap();
+        let world = crate::world::World::from_bsp(&bsp, Some(&fs));
+        let w = &world.collision;
+        let p = Vec3::new(389.0, 575.0, -46.7);
+        assert!(under_ground(w, p));
     }
 
     /// mp_carentan's graph from the real collision: every spawn point sits on
@@ -1926,7 +2269,7 @@ mod tests {
         );
         let mut f = Follower::default();
         let goal = crate::bots::Goal::To([40.0, 0.0, 200.0]);
-        let mut budget = 1;
+        let mut budget = 100;
         let mut at = [0.0, 0.0, 0.0];
         // 2.5 units a tick, the climb rate looking up, until the head's
         // floor is in reach.

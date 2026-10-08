@@ -1007,12 +1007,14 @@ goes out as `commandTime` -- at the cmd's own clock.
 the single clamped step it used to take covered 16. The `PMF_JUMP_HELD`
 `upmove` force of 20 is not modelled; vcod's held-jump latch survives a chop
 without it, and only the later steps' air wish differs
-(`docs/research/cod11-mantle.md`, "Jumps"). The two `level.time` clamps are not implemented either: they are a
-speed-cheat guard rather than part of the dt rule, and vcod seeds a client's
-`commandTime` from the entering cmd's own clock (`enter_world`) where retail
-leaves it at whatever `ClientSpawn` wrote, so a window measured against
-`sv_time` would strand a client whose handshake stamped that cmd ahead of the
-server.
+(`docs/research/cod11-mantle.md`, "Jumps"). `replay_moves` holds each cmd's
+clock to the two `level.time` clamps, `level.time` being the last frame's
+(the one a packet between two frames runs on), before the stale test and the
+chop. `enter_world` seeds `commandTime` from the entering cmd's clock held to
+the same window, so a handshake cmd stamped far ahead cannot leave it past
+every cmd that follows. The clamps are what a server stall turns into a
+`commandTime` stuck 200 ms past the stalled frame
+(`docs/research/cod11-player-clip.md` 8.12).
 
 The vcod client predicts on the same rule. Each frame it rebuilds the sim
 playerstate from the newest snapshot and replays every cmd it sent with a

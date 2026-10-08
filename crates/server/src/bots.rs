@@ -156,6 +156,21 @@ pub struct BotView {
     pub sd: Option<SdView>,
     /// The retrieval objectives, on an `re` level only.
     pub re: Option<ReView>,
+    /// The bot's side of Behind Enemy Lines, on a `bel` level only.
+    pub bel: Option<BelView>,
+}
+
+/// Behind Enemy Lines as the bot plays it (docs/research/bot-objectives.md,
+/// "Behind Enemy Lines"): a few allies score by staying alive, the axis
+/// hunt them, and an axis player who kills one takes his place.
+#[derive(Clone, Debug)]
+pub struct BelView {
+    /// The bot is allied: the hunted side.
+    pub hunted: bool,
+    /// The compass markers its team sees. On the axis side, one per allied
+    /// player, a lagging mean of where he stood (`bel.gsc`
+    /// `make_obj_marker`); the allies see none.
+    pub markers: Vec<[f32; 3]>,
 }
 
 /// The stock `re.gsc` objectives as the server read them this frame
@@ -238,6 +253,9 @@ pub enum Goal {
     Roam,
     /// A point, feet or chest high.
     To([f32; 3]),
+    /// Anywhere far from a threat: the server picks a spot away from it and
+    /// keeps it until reached or the threat moves.
+    Away([f32; 3]),
 }
 
 #[derive(Clone, Copy)]
@@ -340,6 +358,10 @@ pub struct Bot {
     /// The last cmd held the jump key; a second jump needs it released.
     jump_held: bool,
     obj: Objective,
+    /// The `bel` marker this bot last stood at; it holds still for
+    /// `scr_bel_positiontime` seconds, and the hunt looks round from it
+    /// rather than standing on it.
+    marker_reached: Option<[f32; 3]>,
     /// The last reliable server command the bot consumed.
     pub(crate) last_seen_seq: i32,
     /// The client-command sequence the bot's own replies use.
@@ -489,6 +511,7 @@ impl Bot {
             creep: crate::nav::Creep::default(),
             jump_held: false,
             obj: Objective::default(),
+            marker_reached: None,
             last_seen_seq: 0,
             next_command_seq: 1,
             team: team.to_string(),
@@ -545,6 +568,11 @@ impl Bot {
     /// The team menu takes the bot's team; the weapon menu takes a weapon
     /// its nationality offers and the cvars allow, picked at random.
     fn menu_reply(&mut self, allowed: &dyn Fn(&str) -> bool) -> Option<String> {
+        // `bel`'s team menu takes axis only (`bel.gsc` 150, 287); the script
+        // deals out the allied places.
+        if self.main_menu == "team_germanonly" {
+            return Some("axis".to_string());
+        }
         if self.main_menu.starts_with("team_") {
             return Some(self.team.clone());
         }
@@ -594,6 +622,9 @@ impl Bot {
         if let Some(e) = view.enemy {
             return Goal::To(e.origin);
         }
+        if let Some(bel) = view.bel.as_ref() {
+            return self.bel_goal(view, bel);
+        }
         if let Some(g) = self.objective_goal(view) {
             return g;
         }
@@ -601,6 +632,34 @@ impl Bot {
             return Goal::To(p);
         }
         Goal::Roam
+    }
+
+    /// The hunted keep moving, and away from the last enemy they saw or
+    /// heard; the hunters go after what they saw or heard, else the nearest
+    /// compass marker they have not yet stood at.
+    fn bel_goal(&self, view: &BotView, bel: &BelView) -> Goal {
+        if bel.hunted {
+            return match self.recall.map(|r| r.at).or(view.noise) {
+                Some(threat) => Goal::Away(threat),
+                None => Goal::Roam,
+            };
+        }
+        if let Some(p) = self.recall_goal(view) {
+            return Goal::To(p);
+        }
+        match self.next_marker(view, bel) {
+            Some(m) => Goal::To(m),
+            None => Goal::Roam,
+        }
+    }
+
+    /// The nearest marker other than the one last stood at.
+    fn next_marker(&self, view: &BotView, bel: &BelView) -> Option<[f32; 3]> {
+        bel.markers
+            .iter()
+            .filter(|m| self.marker_reached.is_none_or(|r| dist_sq(r, **m) > 1.0))
+            .min_by(|a, b| dist_sq(view.origin, **a).total_cmp(&dist_sq(view.origin, **b)))
+            .copied()
     }
 
     /// A plant or defuse is under way: use is held, or the script holds
@@ -954,6 +1013,12 @@ impl Bot {
         self.respawn_ticks = 0;
         self.obj.live = true;
         self.remember(view);
+        if let Some(bel) = view.bel.as_ref()
+            && let Some(m) = self.next_marker(view, bel)
+            && arrived(view.origin, m)
+        {
+            self.marker_reached = Some(m);
+        }
         match self.stage {
             Stage::ToGrenade => return self.think_grenade(view, cmd),
             Stage::Cook { left } => return self.think_cook(view, cmd, left),
@@ -1568,6 +1633,7 @@ mod tests {
             pistol: None,
             sd: None,
             re: None,
+            bel: None,
         }
     }
 
@@ -1859,6 +1925,67 @@ mod tests {
         plant_bomb(&mut v, [500.0, 0.0, 64.0]);
         assert_eq!(bot.goal(&v), Goal::To([500.0, 0.0, 64.0]));
         assert_eq!(bot.think(&v).buttons & BUTTON_USE, 0);
+    }
+
+    #[test]
+    fn an_allied_bot_answers_bels_team_menu_with_axis() {
+        let mut bot = Bot::new("allies", false, 1);
+        bot.observe(SID, &[(1, "v g_scriptMainMenu \"team_germanonly\"")], &all);
+        let reply = bot.observe(SID, &[(2, "t 3")], &all);
+        assert_eq!(reply, [format!("mr {SID} 3 axis")]);
+    }
+
+    fn bel_view(hunted: bool, markers: Vec<[f32; 3]>) -> BotView {
+        let mut v = view();
+        v.bel = Some(BelView { hunted, markers });
+        v
+    }
+
+    /// A hunter heads for the nearest allied marker, looks round from it
+    /// once there instead of standing on it, and a seen or heard enemy
+    /// comes first.
+    #[test]
+    fn a_hunter_goes_for_the_nearest_marker_once() {
+        let mut bot = Bot::new("axis", true, 1);
+        let mut v = bel_view(false, vec![[2000.0, 0.0, 64.0], [800.0, 0.0, 64.0]]);
+        assert_eq!(bot.goal(&v), Goal::To([800.0, 0.0, 64.0]));
+        v.origin = [790.0, 10.0, 64.0];
+        bot.think(&v);
+        assert_eq!(
+            bot.goal(&v),
+            Goal::To([2000.0, 0.0, 64.0]),
+            "the next marker"
+        );
+        v.bel.as_mut().unwrap().markers.pop();
+        bot.think(&v);
+        v.origin = [1990.0, 0.0, 64.0];
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::Roam, "every marker stood at");
+        // The marker moves on: a new one to go for.
+        v.bel.as_mut().unwrap().markers = vec![[1500.0, 300.0, 64.0]];
+        assert_eq!(bot.goal(&v), Goal::To([1500.0, 300.0, 64.0]));
+        v.noise = Some([0.0, 900.0, 104.0]);
+        assert_eq!(bot.goal(&v), Goal::To([0.0, 900.0, 104.0]), "a noise first");
+    }
+
+    /// The hunted roam, run from what they last saw or heard, and fight
+    /// what they see.
+    #[test]
+    fn the_hunted_run_from_a_threat() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = bel_view(true, Vec::new());
+        assert_eq!(bot.goal(&v), Goal::Roam);
+        v.noise = Some([0.0, 900.0, 104.0]);
+        assert_eq!(bot.goal(&v), Goal::Away([0.0, 900.0, 104.0]));
+        bot.think(&v);
+        v.noise = None;
+        assert_eq!(bot.goal(&v), Goal::Away([0.0, 900.0, 104.0]), "remembered");
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [500.0, 0.0, 40.0],
+            velocity: [0.0; 3],
+        });
+        assert_eq!(bot.goal(&v), Goal::To([500.0, 0.0, 40.0]));
     }
 
     #[test]

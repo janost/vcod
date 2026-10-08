@@ -91,7 +91,14 @@ measured).
   stands 540 units under a spar's top facet (a patch), and a low doorway on
   `mp_pavlov` put a brush ceiling 3.75 units over the head, which the ray
   back down starts against. Counting either refused the node, and the
-  doorway kept 540 nodes behind it off the graph.
+  doorway kept 540 nodes behind it off the graph. Both rays start a step
+  (18 units) over the feet, not at the head: VERIFIED (measured, point
+  traces, 2026-10-08) at (389, 575, -46.7) on `mp_carentan`, where a
+  flood seeded west of the boundary wall reached the town ("Build times"),
+  the terrain sheet is triangle 2968 at z -9, 38 units over the feet, and the rays
+  from 72 units up missed it; from 18 the ray back down hits it. The
+  stock graphs are unchanged by it but for one node on `mp_rocket` (12 333
+  nodes, 90 852 edges); the spawn census is the same.
 - No node stands where a body would touch the brushes of a `trigger_hurt`
   or a `trigger_multiple` named `minefield` (`World::hazards`), so no edge
   starts or ends in one. VERIFIED (measured, `mp_hurtgen` `re`, 2 bots,
@@ -399,8 +406,9 @@ the fall budget lets a walk land on, is 2 900 more nodes.
   that runs diagonally from (-1100, 1650) to (-260, 3430), with the town on
   its east side; a flood seeded there reaches the town only under the
   terrain, through (389, 575, -46.7), 37 units under the terrain triangle
-  at z -9.27 (`under_ground` misses it: the ray up starts 72 units over the
-  feet, above the sheet). The fight-spot test's listener stood there because
+  at z -9.27. `under_ground` missed it while its rays started 72 units over
+  the feet, above the sheet; since 2026-10-08 they start 18 over ("The
+  flood"). The fight-spot test's listener stood there because
   `Server::test_ground_under` traces down outside the wall too; the graph
   is right to leave it out. The other maps' gaps were not investigated.
 
@@ -408,30 +416,38 @@ the fall budget lets a walk land on, is 2 900 more nodes.
 
 The brain stays pure. Each tick the server asks `Bot::goal(&BotView)` for a
 `Goal`: `Hold` (dead, spectating, mid-throw), `To(point)` (the enemy it sees,
-else a spot it remembers or heard, section 4) or `Roam`. A per-bot `nav::Follower` turns that into `BotView::waypoint`:
+else a spot it remembers or heard, section 4), `Roam`, or `Away(threat)`
+(the hunted side of `bel`, `bot-objectives.md` section 5). A per-bot `nav::Follower` turns that into `BotView::waypoint`:
 
 - A* (Euclidean cost and heuristic) from the node nearest the bot to the node
   nearest the goal. The bots of a tick share a budget of 4000 expanded
-  nodes (`BOT_PLAN_BUDGET`): a plan starts only while some are left, and a
-  bot that finds them spent wanders that tick and asks again. VERIFIED
-  (measured, `mp_ship`, 8 bots, background build, release, load average
-  30-40 from other builds): the tick the graph lands now runs two plans,
-  2.0 and 1.3 ms. Before, the cap was two plans a tick and one plan could
-  be three full searches (round the avoided edges, then without them, then
-  toward the nearest reachable node); the first two plans after the graph
-  landed took 13.5 and 11.2 ms. A plan now searches round the
-  avoided edges only when there are some, and its last search is the
-  partial one for a point goal.
-- `Roam` picks of eight random nodes in the bot's own strongly connected
-  component the first 1000 units away (else the farthest), using the
-  server's seeded generator; a reached or unreachable roam destination is
-  replaced. A pick outside the component was the costly plan: a search of
-  everything the start reaches, then nothing.
+  nodes (`BOT_PLAN_BUDGET`). A search is resumable (`nav::Search`): each
+  tick a follower's search runs at most 2000 of what is left
+  (`PLAN_SLICE`), the bot wanders while it is unfinished, and the search
+  resumes next tick where it stopped. A plan searches round the avoided
+  edges only when there are some, then without them if that fails.
+  VERIFIED (measured, `mp_ship`, 8 bots, background build, release, load
+  average 30-40 from other builds): the tick the graph lands ran two
+  plans, 2.0 and 1.3 ms, against 13.5 and 11.2 ms when one plan could be
+  three full searches.
+- Before any search, the component table rules out a goal the start does
+  not reach: per strongly connected component, a bitset of the components
+  it reaches over the condensation's edges (`NavGraph::reaches`). The stock
+  graphs have 1 to 13 components (VERIFIED, measured 2026-10-08: 1 on
+  `mp_carentan` and `mp_brecourt`, 3 on `mp_hurtgen`, 13 on `mp_ship`), so
+  the table is a few words. VERIFIED (measured, release, loaded machine,
+  2026-10-08): on `mp_hurtgen` a search from the main component toward a
+  14-node island expanded all 27 394 nodes it reaches in 5.5 ms, one tick
+  over a tenth of the frame; with the table the follower's worst tick
+  toward the same island was 0.8 ms, and its path came on the second
+  tick. With 6 shooting bots on `mp_brecourt` `bel` for 90 s, the bots'
+  waypoint pass never took more than 1.6 ms in a tick.
 - A `To` point is re-planned only once it moves 128 units off the planned
   destination; at the end of the path the bot heads at the point itself.
   A point the graph does not reach is planned for as far as it goes: the
-  path ends at the reachable node nearest it (`NavGraph::path_toward`), and
-  the bot heads at the point from there. Heading at the point off the graph
+  path ends at the reachable node nearest it (`NavGraph::path_toward`; the
+  component table picks the candidates, so finding it costs no search),
+  and the bot heads at the point from there. Heading at the point off the graph
   can drop the body a floor; 48 units below where the path ended, the
   point is planned for again. VERIFIED (measured, `mp_depot` `re`, 2 bots,
   seed 7): before, the attacker climbed to the documents' floor, walked
