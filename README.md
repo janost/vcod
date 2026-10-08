@@ -487,8 +487,20 @@ sight), `+melee`, `+activate`, `+reload`, `weaponslot
 `messagemode`, `messagemode2`, `toggleconsole`. Key names are retail's
 (`MOUSE1`, `MWHEELUP`, `CTRL`, `SPACE`, `KP_ENTER`, letters and digits).
 
-The client's cvars are `name`, `cl_run` (1: the sight key aims while held, 0:
-while released) and `scr_conspeed` (how fast the console slides). Binds only
+The client's cvars, at retail's defaults:
+
+- `name`.
+- `cl_run`: 1, the sight key aims while held; 0, while released.
+- `sensitivity`, `m_yaw`, `m_pitch`: the mouse turns `sensitivity * m_yaw`
+  degrees a count (5 x 0.022), scaled down with the zoom as retail does.
+- `cg_fov`: 80, readable up to 160. It is cheat-protected, as in retail, so
+  it stays at 80 unless the server runs `sv_cheats 1`.
+- `rate`, `snaps`: 5000 and 20, sent in the userinfo; a change goes to the
+  server at once. 5000 is retail's first-run value; a busy server wants
+  `rate 25000`.
+- `scr_conspeed`: how fast the console slides.
+
+Binds only
 act while connected; fly and walk mode keep their fixed keys. Esc, M (the
 script menu), F3 and F4 are fixed.
 

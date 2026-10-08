@@ -12,10 +12,44 @@ use vcod_common::net::protocol::Protocol;
 /// to build [`Held::stance`] from a playerstate.
 pub use vcod_common::net::flags::{EF_CROUCH, EF_PRONE};
 
-/// Mouse look rate, matching `FlyCamera::mouse_delta` (`camera.rs`).
-const MOUSE_SENS: f32 = 0.003;
-/// ANGLE2SHORT units per radian (`65536` units per `360` degrees).
-const SHORT_PER_RAD: f32 = 65536.0 / (2.0 * std::f32::consts::PI);
+/// ANGLE2SHORT units per degree.
+const SHORT_PER_DEG: f32 = 65536.0 / 360.0;
+
+/// Degrees of view per mouse count, `CL_MouseMove` (CoDMP.exe 0x40b240;
+/// docs/research/cod11-console.md, section 5).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MouseLook {
+    pub sensitivity: f32,
+    pub m_yaw: f32,
+    pub m_pitch: f32,
+}
+
+impl Default for MouseLook {
+    /// Retail's defaults: 5 x 0.022 = 0.11 degrees a count.
+    fn default() -> Self {
+        MouseLook {
+            sensitivity: 5.0,
+            m_yaw: 0.022,
+            m_pitch: 0.022,
+        }
+    }
+}
+
+impl MouseLook {
+    /// `[pitch, yaw]` degrees for a motion of `(dx, dy)` counts: pitch
+    /// down-positive, yaw left-positive, as the view angles run. `zoom` is
+    /// cgame's sensitivity scale, the view's fov over `cg_fov`. On a mounted
+    /// gun retail drops the sensitivity for 2.5 on yaw and 2 on pitch.
+    pub fn degrees(&self, dx: f32, dy: f32, zoom: f32, mounted: bool) -> [f32; 2] {
+        let (sx, sy) = if mounted {
+            (2.5, 2.0)
+        } else {
+            let s = self.sensitivity * zoom;
+            (s, s)
+        };
+        [dy * sy * self.m_pitch, -dx * sx * self.m_yaw]
+    }
+}
 /// `weaponSlots` 1..=5 are the number-key slots a switch cycles through
 /// (`docs/protocol-1.1.md`); 0 and 6/7 are not.
 const CYCLE_SLOTS: std::ops::RangeInclusive<usize> = 1..=5;
@@ -216,13 +250,10 @@ impl PlayInput {
         self.jump_consumed_by_stand = false;
     }
 
-    pub fn mouse(&mut self, dx: f32, dy: f32) {
-        // Wire pitch is down-positive; `FlyCamera::mouse_delta` is
-        // up-positive (`pitch -= dy * SENS`), so this accumulator takes the
-        // opposite sign on dy. Yaw keeps `FlyCamera`'s own sign.
-        let delta = [dy, -dx];
+    /// Turns the view by `[pitch, yaw]` degrees ([`MouseLook::degrees`]).
+    pub fn mouse(&mut self, delta: [f32; 2]) {
         for (axis, d) in delta.into_iter().enumerate() {
-            let total = self.mouse_rest[axis] + d * MOUSE_SENS * SHORT_PER_RAD;
+            let total = self.mouse_rest[axis] + d * SHORT_PER_DEG;
             let whole = total.trunc();
             self.raw_angles[axis] += whole as i32;
             self.mouse_rest[axis] = total - whole;
@@ -464,7 +495,7 @@ mod tests {
     #[test]
     fn mouse_turns_raw_angles() {
         let mut i = PlayInput::default();
-        i.mouse(100.0, 0.0);
+        i.mouse(MouseLook::default().degrees(100.0, 0.0, 1.0, false));
         let yaw = i.build(100, &held(10)).angles[1];
         assert_ne!(yaw, 0);
     }
@@ -474,13 +505,36 @@ mod tests {
         // 0.01 counts is a third of a short unit, which truncated per event
         // to nothing.
         let mut i = PlayInput::default();
+        let look = MouseLook::default();
         for _ in 0..1000 {
-            i.mouse(0.01, -0.01);
+            i.mouse(look.degrees(0.01, -0.01, 1.0, false));
         }
-        let per_1000 = 10.0 * MOUSE_SENS * SHORT_PER_RAD;
+        let per_1000 = 10.0 * 0.11 * SHORT_PER_DEG;
         let [pitch, yaw, _] = i.raw_angles();
         assert!((yaw as f32 + per_1000).abs() <= 1.0, "yaw {yaw}");
         assert!((pitch as f32 + per_1000).abs() <= 1.0, "pitch {pitch}");
+    }
+
+    #[test]
+    fn mouse_look_is_retail_cl_mousemove() {
+        let look = MouseLook::default();
+        let [pitch, yaw] = look.degrees(100.0, 10.0, 1.0, false);
+        assert!(
+            (yaw + 11.0).abs() < 1e-4,
+            "100 counts right is 11 degrees, {yaw}"
+        );
+        assert!((pitch - 1.1).abs() < 1e-4, "{pitch}");
+        let [_, zoomed] = look.degrees(100.0, 0.0, 0.5, false);
+        assert!((zoomed + 5.5).abs() < 1e-4, "{zoomed}");
+        let [pitch, yaw] = look.degrees(100.0, 10.0, 0.5, true);
+        assert!(
+            (yaw + 5.5).abs() < 1e-4,
+            "mounted yaw is 2.5 x m_yaw, {yaw}"
+        );
+        assert!(
+            (pitch - 0.44).abs() < 1e-4,
+            "mounted pitch is 2 x m_pitch, {pitch}"
+        );
     }
 
     #[test]
