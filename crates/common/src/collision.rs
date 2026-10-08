@@ -1469,11 +1469,32 @@ impl CollisionWorld {
             // Brushes, then the partitions: retail's leaf walk clips a
             // leaf's brushes before its partitions (`cod_lnxded` 0x8055608),
             // and a contact at fraction 0 ends the walk, so a box resting on
-            // a brush floor beside a patch reads the floor.
-            for brushes in [true, false] {
-                self.trace_node(
-                    0, start, end, mins, maxs, capsule, mask, statics, skip, brushes, &mut trace,
-                );
+            // a brush floor beside a patch reads the floor. The brush walk
+            // records the leaves it enters; the partition pass visits a
+            // subsequence of them in the same order (its fraction is never
+            // larger), so it replays the list instead of walking again.
+            let mut walk = Walk {
+                sweep: TraceInput {
+                    start,
+                    end,
+                    mins,
+                    maxs,
+                    capsule,
+                    mask,
+                    statics,
+                    skip,
+                },
+                leaves: [0; LEAF_LOG],
+                logged: 0,
+            };
+            self.trace_node(0, &mut walk, true, &mut trace);
+            if walk.logged <= LEAF_LOG && !two_walks() {
+                for &leaf in &walk.leaves[..walk.logged] {
+                    self.clip_leaf(leaf, &walk.sweep, false, &mut trace);
+                }
+            } else {
+                walk.logged = usize::MAX;
+                self.trace_node(0, &mut walk, false, &mut trace);
             }
         }
         self.trace_posed(
@@ -1492,92 +1513,32 @@ impl CollisionWorld {
     }
 
     /// Nearest child first; the sweep box shrinks with `trace.fraction`, so
-    /// prims past the current hit are never clipped.
-    #[allow(clippy::too_many_arguments)]
-    fn trace_node(
-        &self,
-        i: u32,
-        start: Vec3,
-        end: Vec3,
-        mins: Vec3,
-        maxs: Vec3,
-        capsule: Capsule,
-        mask: u32,
-        statics: bool,
-        skip: Option<usize>,
-        brushes: bool,
-        trace: &mut Trace,
-    ) {
-        if !statics && i == self.models_root || brushes && i == self.models_root {
+    /// prims past the current hit are never clipped. Clips the brushes or
+    /// everything else, and logs each leaf it enters while `walk.logged`
+    /// is not `usize::MAX`.
+    fn trace_node(&self, i: u32, walk: &mut Walk, brushes: bool, trace: &mut Trace) {
+        let sw = &walk.sweep;
+        // The brush walk enters the static models' subtree only to log it
+        // for the partition pass of a trace that clips them.
+        if !sw.statics && i == self.models_root {
             return;
         }
         let node = &self.nodes[i as usize];
-        let cur_end = start + (end - start) * trace.fraction;
-        let lo = start.min(cur_end) + mins - Vec3::ONE;
-        let hi = start.max(cur_end) + maxs + Vec3::ONE;
+        let (lo, hi) = sw.bounds(trace.fraction);
         if !(lo.cmple(node.hi).all() && hi.cmpge(node.lo).all()) {
             return;
         }
         if node.count > 0 {
-            let first = node.first as usize;
-            for (prim, plo, phi) in &self.prims[first..first + node.count as usize] {
-                // Retail's leaf walk stops once the fraction reaches 0
-                // (`cod_lnxded` 0x8055608, 0x8055fe0).
-                if trace.fraction <= 0.0 {
-                    return;
+            if walk.logged != usize::MAX {
+                if let Some(slot) = walk.leaves.get_mut(walk.logged) {
+                    *slot = i;
                 }
-                // The node test once more per prim: a leaf's box is the union
-                // of up to four, and setting up a brush's planes costs far
-                // more than this.
-                if !(lo.cmple(*phi).all() && hi.cmpge(*plo).all())
-                    || brushes != matches!(prim, Prim::Brush(_))
-                {
-                    continue;
-                }
-                match *prim {
-                    Prim::Brush(b) => {
-                        let brush = &self.brushes[b as usize];
-                        if brush.content_flags & mask == 0
-                            || !self.brush_linked(brush)
-                            || !self.brush_at_spawn(brush)
-                            || skip == Some(brush.model as usize)
-                        {
-                            continue;
-                        }
-                        let sweep = capsule_sweep(start, end, mins, maxs);
-                        clip_brush_capsule(
-                            trace,
-                            &sweep,
-                            &brush.planes,
-                            brush.surface_flags,
-                            *prim,
-                        );
-                    }
-                    Prim::Terrain(p) => {
-                        self.clip_terrain(p, start, end, mins, maxs, capsule, mask, trace);
-                    }
-                    Prim::Tri(_) => unreachable!("the BVH holds partitions"),
-                    Prim::Patch(p) => {
-                        let patch = &self.patches[p as usize];
-                        if patch.content_flags & mask == 0 {
-                            continue;
-                        }
-                        clip_patch(trace, start, end, capsule, patch, *prim);
-                    }
-                    Prim::Model(t) => {
-                        let mt = &self.model_tris[t as usize];
-                        if !statics || mt.contents & mask == 0 {
-                            continue;
-                        }
-                        clip_segment_model(trace, start, end, mt, *prim);
-                    }
-                    // Never stored in world.prims; only movetrace.rs constructs it.
-                    Prim::Body(_) => unreachable!(),
-                }
+                walk.logged += 1;
             }
+            self.clip_leaf(i, &walk.sweep, brushes, trace);
             return;
         }
-        let dir = end - start;
+        let (start, dir) = (sw.start, sw.end - sw.start);
         let along = |n: u32| {
             let node = &self.nodes[n as usize];
             ((node.lo + node.hi) * 0.5 - start).dot(dir)
@@ -1588,9 +1549,77 @@ impl CollisionWorld {
             (node.second, node.first)
         };
         for n in [near, far] {
-            self.trace_node(
-                n, start, end, mins, maxs, capsule, mask, statics, skip, brushes, trace,
-            );
+            self.trace_node(n, walk, brushes, trace);
+        }
+    }
+
+    /// Leaf `i`'s brushes, or its other prims, against `sw`; nothing when
+    /// the leaf's box misses the sweep cut at the current fraction.
+    fn clip_leaf(&self, i: u32, sw: &TraceInput, brushes: bool, trace: &mut Trace) {
+        let node = &self.nodes[i as usize];
+        let (lo, hi) = sw.bounds(trace.fraction);
+        if !(lo.cmple(node.hi).all() && hi.cmpge(node.lo).all()) {
+            return;
+        }
+        let TraceInput {
+            start,
+            end,
+            mins,
+            maxs,
+            capsule,
+            mask,
+            statics,
+            skip,
+        } = *sw;
+        let first = node.first as usize;
+        for (prim, plo, phi) in &self.prims[first..first + node.count as usize] {
+            // Retail's leaf walk stops once the fraction reaches 0
+            // (`cod_lnxded` 0x8055608, 0x8055fe0).
+            if trace.fraction <= 0.0 {
+                return;
+            }
+            // The node test once more per prim: a leaf's box is the union
+            // of up to four, and setting up a brush's planes costs far
+            // more than this.
+            if !(lo.cmple(*phi).all() && hi.cmpge(*plo).all())
+                || brushes != matches!(prim, Prim::Brush(_))
+            {
+                continue;
+            }
+            match *prim {
+                Prim::Brush(b) => {
+                    let brush = &self.brushes[b as usize];
+                    if brush.content_flags & mask == 0
+                        || !self.brush_linked(brush)
+                        || !self.brush_at_spawn(brush)
+                        || skip == Some(brush.model as usize)
+                    {
+                        continue;
+                    }
+                    let sweep = capsule_sweep(start, end, mins, maxs);
+                    clip_brush_capsule(trace, &sweep, &brush.planes, brush.surface_flags, *prim);
+                }
+                Prim::Terrain(p) => {
+                    self.clip_terrain(p, start, end, mins, maxs, capsule, mask, trace);
+                }
+                Prim::Tri(_) => unreachable!("the BVH holds partitions"),
+                Prim::Patch(p) => {
+                    let patch = &self.patches[p as usize];
+                    if patch.content_flags & mask == 0 {
+                        continue;
+                    }
+                    clip_patch(trace, start, end, capsule, patch, *prim);
+                }
+                Prim::Model(t) => {
+                    let mt = &self.model_tris[t as usize];
+                    if !statics || mt.contents & mask == 0 {
+                        continue;
+                    }
+                    clip_segment_model(trace, start, end, mt, *prim);
+                }
+                // Never stored in world.prims; only movetrace.rs constructs it.
+                Prim::Body(_) => unreachable!(),
+            }
         }
     }
 
@@ -1705,6 +1734,56 @@ impl CollisionWorld {
             }
         }
     }
+}
+
+/// A trace's fixed inputs, as `trace_node` and `clip_leaf` read them.
+#[derive(Clone, Copy)]
+struct TraceInput {
+    start: Vec3,
+    end: Vec3,
+    mins: Vec3,
+    maxs: Vec3,
+    capsule: Capsule,
+    mask: u32,
+    statics: bool,
+    skip: Option<usize>,
+}
+
+impl TraceInput {
+    /// The box the sweep covers up to `fraction`, padded a unit.
+    fn bounds(&self, fraction: f32) -> (Vec3, Vec3) {
+        let cur_end = self.start + (self.end - self.start) * fraction;
+        (
+            self.start.min(cur_end) + self.mins - Vec3::ONE,
+            self.start.max(cur_end) + self.maxs + Vec3::ONE,
+        )
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Set by a test: the partition pass walks the tree again, as it did
+    /// before the leaf log, to hold the replay to the same answer.
+    static TWO_WALKS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn two_walks() -> bool {
+    #[cfg(test)]
+    return TWO_WALKS.get();
+    #[cfg(not(test))]
+    false
+}
+
+/// The leaves a brush walk logs for its partition pass; a walk that enters
+/// more walks the tree again instead.
+const LEAF_LOG: usize = 64;
+
+struct Walk {
+    sweep: TraceInput,
+    leaves: [u32; LEAF_LOG],
+    /// Leaves entered so far (past `LEAF_LOG` when some went unlogged);
+    /// `usize::MAX` stops the logging.
+    logged: usize,
 }
 
 /// `base` is the absolute index of prims[0] within CollisionWorld::prims.
@@ -2683,6 +2762,58 @@ mod tests {
             300,
             0xD1B54A32D192ED03,
         );
+    }
+
+    #[test]
+    fn the_leaf_replay_matches_a_second_walk_on_mp_pavlov() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let bsp = crate::bsp::parse(&fs.read("maps/mp/mp_pavlov.bsp").unwrap()).unwrap();
+        // With the props, so a shot walks the static models' subtree.
+        let world = CollisionWorld::build(&bsp, &crate::props::collision_tris(&fs, &bsp.entities));
+        assert_ne!(world.models_root, u32::MAX);
+        let (lo, hi) = crate::mesh::map_bounds(&bsp);
+        let mut s = 0x9E3779B97F4A7C15u64;
+        let mut hits = 0;
+        for i in 0..3000 {
+            let r = |s: &mut u64| Vec3::new(rng(s), rng(s), rng(s));
+            let start = Vec3::from(lo) + (Vec3::from(hi) - Vec3::from(lo)) * r(&mut s);
+            let end =
+                start + (r(&mut s) - Vec3::splat(0.5)) * if i % 2 == 0 { 100.0 } else { 2000.0 };
+            let (mins, maxs) = if i % 3 == 0 {
+                (Vec3::ZERO, Vec3::ZERO)
+            } else {
+                (Vec3::new(-15.0, -15.0, 0.0), Vec3::new(15.0, 15.0, 70.0))
+            };
+            let both = |f: &dyn Fn() -> Trace| {
+                TWO_WALKS.set(false);
+                let a = f();
+                TWO_WALKS.set(true);
+                let b = f();
+                TWO_WALKS.set(false);
+                (a, b)
+            };
+            for (a, b) in [
+                both(&|| world.box_trace(start, end, mins, maxs)),
+                both(&|| world.shot_trace(start, end)),
+            ] {
+                assert_eq!(
+                    a.fraction.to_bits(),
+                    b.fraction.to_bits(),
+                    "{start} -> {end}"
+                );
+                assert_eq!(a.endpos, b.endpos);
+                assert_eq!(a.normal, b.normal);
+                assert_eq!(
+                    (a.startsolid, a.allsolid, format!("{:?}", a.hit)),
+                    (b.startsolid, b.allsolid, format!("{:?}", b.hit))
+                );
+                assert_eq!(a.surface_flags, b.surface_flags);
+                hits += usize::from(a.fraction < 1.0);
+            }
+        }
+        assert!(hits > 1000, "{hits}");
     }
 
     #[test]
