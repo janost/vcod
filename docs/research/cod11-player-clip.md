@@ -877,9 +877,75 @@ INFERRED, from the numbers: each sink is one frame's unstopped gravity,
 landing height; the walk run's 0.04 is the 10 ms step that ends the 1000 ms
 chop at 53950, after fifteen 66 ms steps that did not sink. A fall whose end
 stays above the face is not stopped at the 0.125 pad, and one whose end
-would cross the face is stopped where it starts. vcod's terrain clip
-(`terrain.rs`, 0x8052a58's capsule arm) stops both at the pad, so the
-corpse's trace may take another arm. Not followed further.
+would cross the face is stopped where it starts.
+
+VERIFIED, `cod_lnxded`, what lets that fall through: the leaf walk
+(0x8055608) tests every partition's bounds against the trace's before it
+clips it. It calls 0x8054c48 at 0x80556e9 with the leaf-partition record's
+`+0xc` and `+0x18` vectors, and goes to the patch clip (0x804e944) or the
+terrain clip (0x80536c8) only when that returns 1. 0x8054c48 returns 0 when,
+on any axis, the record's max is under the trace's `bounds[0]` or its min
+over `bounds[1]` (strict compares, 0x8054c5b-0x8054cfc); for a trace that is
+not a point (`tw+0xc0` clear) that is the whole test (the jump to 0x8054e68).
+The record's two vectors are the partition's bounds: `CM_LoadMap` (0x804b010)
+hands `record + 0xc` to `CM_GenerateTerrainCollide` (0x804b24f), which
+clears them (0x80526f8, `ClearBounds` 0x8066ec0) and adds every one of the
+partition's `vert_count` points (0x8052727, `AddPointToBounds` 0x8066eec)
+with no padding. `CM_BoxTrace` (0x8056310) fills `tw.bounds` once, for the
+whole move: for a capsule (`tw+0xf4`), per axis, the nearer of the
+centre-shifted start and end less `|sphere offset|` and less the radius, the
+farther plus both, each stored (0x80565c0-0x8056635); for anything else the
+segment's box widened by the trace's own box (0x8056640-0x80566ee). The
+clip's 0.125 pad is not in it.
+
+INFERRED, from those: on a flat partition (its max z the face itself) a
+fall whose capsule bottom ends above the face has `bounds[0].z` above the
+partition's max and never reaches the clip, so it falls the full frame;
+on a slope the partition's bounds span the move and the clip runs as
+before, which is why the 8.11 corpse matched.
+
+vcod: `TerrainPart` keeps the partition's point bounds and
+`CollisionWorld::clip_terrain` skips a partition whose bounds miss the
+trace's, computed as above (`TerrainPart::touches`; a point trace takes its
+segment's box, `touches_segment`). VERIFIED, vcod measurement 2026-10-08:
+`fall_ab` gates both corpse heights unmasked, the walk capture's -39.92 and
+every row of the second run (the -39.963 and -39.964 rows included). Not
+ported: the point arm's further tests in 0x8054c48 (0x8054d0f-0x8054e66),
+and the same bounds test for patches, whose records take their bounds from
+the patch branch of `CM_LoadMap` (not read).
+
+### 8.13 The second walk run's first drop
+
+VERIFIED, the second run's fixture
+(`mp_carentan-dm-fall-walk-corpse.txt`): the `FALL` row at the second drop,
+t 17650, reads `origin=900.000,1930.000,263.000 vel=-1,0,0`; the rows
+before it are the rest at the south wall of 8.9, alternating between
+`0,0,1..3` on 1023 and `-1,0,0` on 1022. The teleport (`setOrigin`) keeps
+the velocity, so the second drop starts with x at -1, and its air frames
+carry it: from t 17700 on, retail's x reads 0.049 per 49 ms behind a drop
+started at rest, with y and z matching. INFERRED: which phase of the
+jitter the teleport lands on decides the second drop's start, so a replay
+must reach that rest on retail's clock.
+
+VERIFIED, both walk fixtures' `CMDS` yaw words step by -24576 at the spawn
+and at every drop (57344, 32768, 8192, 49152, 24576, 0, 40960, 16384,
+57344) and differ only in how many cmds carry each. VERIFIED, `probe_fall`
+calls `setplayerangles((0, 90, 0))` after each `setorigin`; INFERRED,
+retail's `SetClientViewAngle`: the new `delta_angles` is the set angle less
+the yaw word of the client's last cmd, so the words that follow depend on
+the word in flight at the teleport. The yaw words were not what differed
+between the two runs.
+
+vcod, `fall_ab`: ours used to walk at an absolute 315 until our first drop,
+on our own spawn's `delta_angles`. Our first teleport then set a
+`delta_angles` 8192 off retail's, the replayed first-drop words walked the
+player south into another corner (960.875, 1663.125), and it reached the
+second drop at rest with x at 0. Before the first drop ours now stands still
+on the yaw word retail sent last before its own (8192 in both fixtures), so
+the teleport sets retail's `delta_angles`, and the first drop's replay ends
+in retail's rest at the wall. VERIFIED, vcod measurement 2026-10-08: every
+row of the second run from the second drop on matches, -1 at t 17650
+included; the 10-06 walk run is unchanged.
 
 ## 9. What the bump capture measured
 
@@ -1160,7 +1226,8 @@ The gates:
   beside ours. The walk capture (8.5) is replayed the same way with each
   cmd's yaw word and forward held, and held on every row from the second
   drop to the fatal one, the event ring aside (its footsteps count from the
-  first drop's own cadence), and on every `after` line but the corpse's.
+  first drop's own cadence), and on every `after` line. The second walk run
+  (8.12, 8.13) is held the same way, its corpse rows included.
 
 ## 12. Divergences and not modelled
 
@@ -1242,13 +1309,13 @@ The gates:
     rounds them, ours holds the lifted state for retail's runs and every
     row of the capture matches, the south wall's 1815.128 rows and the
     jitter's air frames included; `fall_ab` gates them row by row.
-  - **The walk capture's corpse**, closed 2026-10-08 but for its
-    height (8.12). The capture's server stalled at the fatal landing:
-    `ClientThink_real`'s 200 ms clamp held `commandTime` at 52150 and the
-    dead player walked on until the end frame. `fall_ab` replays the stall
-    and compares every row past the fatal drop. It masks only the z of the
-    corpse's `after` line: retail's corpse sinks below a live player's rest
-    on flat terrain and ours does not.
+  - **The walk capture's corpse**, closed 2026-10-08 (8.12). The
+    capture's server stalled at the fatal landing: `ClientThink_real`'s
+    200 ms clamp held `commandTime` at 52150 and the dead player walked on
+    until the end frame. `fall_ab` replays the stall and compares every row
+    past the fatal drop. The corpse's sink below a live player's rest on
+    flat terrain is the leaf walk's partition bounds test, now ported; the
+    corpse's height is gated in both walk runs.
   - **Fall damage, the two cvars and a dead player's landing**, closed
     2026-10-05 (8.8, 8.10). VERIFIED: `PmoveSingle`'s jump table (rodata
     0x70ce8) sends `pm_type` 6 to 0x34274 and on to the default arm, whose

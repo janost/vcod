@@ -46,6 +46,7 @@ const STOCK: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-damage.txt";
 const CVARS: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-damage-cvars.txt";
 const WALK: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-walk.txt";
 const CORPSE: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-corpse.txt";
+const WALK_CORPSE: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-walk-corpse.txt";
 /// `--probe-fall-walk`'s yaw in the walk fixture.
 const WALK_YAW: f32 = 315.0;
 /// The walk run's retail server stalled on the fatal landing's frame: the
@@ -251,23 +252,13 @@ fn shape(line: &str, first_after: bool) -> String {
     out.join(" ")
 }
 
-/// `corpse_z` masks the height of the last `after` line: in the walk
-/// capture that is a corpse that slid on flat terrain, which sinks below a
-/// live player's rest on retail and not on ours (cod11-player-clip.md 12).
-fn shapes(lines: &[String], corpse_z: bool) -> Vec<String> {
-    let afters: Vec<usize> = (0..lines.len())
-        .filter(|&i| lines[i].starts_with("PROBE after "))
-        .collect();
+/// Every probe line shaped by [`shape`].
+fn shapes(lines: &[String]) -> Vec<String> {
+    let first = lines.iter().position(|l| l.starts_with("PROBE after "));
     lines
         .iter()
         .enumerate()
-        .map(|(i, l)| {
-            let line = shape(l, afters.first() == Some(&i));
-            match line.rsplit_once(", ") {
-                Some((head, _)) if corpse_z && afters.last() == Some(&i) => format!("{head}, <z>)"),
-                _ => line,
-            }
-        })
+        .map(|(i, l)| shape(l, first == Some(i)))
         .collect()
 }
 
@@ -366,6 +357,13 @@ fn run_ours(
     // ours ahead of the same frame it reached retail's.
     let retail_ct: BTreeMap<i32, i32> = retail.falls.iter().map(|l| (l.t, l.ct)).collect();
     let mut shift = None;
+    // Retail's yaw word on its last cmd before the first drop.
+    let first_word = retail
+        .cmds
+        .iter()
+        .take_while(|&&(st, _)| st < retail_first)
+        .last()
+        .and_then(|&(_, yaw)| yaw);
     let mut last_sent = i32::MIN;
     // The next of retail's cmds to send, in the order the client sent them:
     // a client whose clock stepped back sent a stale cmd, which the server
@@ -382,6 +380,10 @@ fn run_ours(
             .snapshots()
             .newest()
             .map_or(0, |s| s.ps.field_i32(p, "weapon") as u8);
+        let delta_yaw = cl
+            .snapshots()
+            .newest()
+            .map_or(0, |s| s.ps.field_i32(p, "delta_angles[1]"));
         match shift {
             None => {
                 for ms in [16, 17, 17] {
@@ -391,9 +393,17 @@ fn run_ours(
                         weapon,
                         ..NULL_USERCMD
                     };
+                    // Before the first drop ours stands still on retail's
+                    // last yaw word. The drop's `setPlayerAngles` sets
+                    // `delta_angles` off that word, which retail's replayed
+                    // words need from then on, and the teleport keeps the
+                    // velocity, which retail's rest in a corner held at 0
+                    // (cod11-player-clip.md 8.13). `send_frame` takes our
+                    // own `delta_angles` off.
                     if let Some(yaw) = walk {
-                        cmd.forward = 127;
-                        cmd.angles[1] = (yaw * 65536.0 / 360.0).round() as i32;
+                        let word = first_word
+                            .unwrap_or((yaw * 65536.0 / 360.0).round() as i32 - delta_yaw);
+                        cmd.angles[1] = word + delta_yaw;
                     }
                     if let Some(c) = cl.send_frame(&cmd) {
                         last_sent = c.server_time;
@@ -629,10 +639,7 @@ fn gate(fixture: &str, sets: &[(&str, &str)], walk: Option<f32>, hitch: Option<H
         diffs.extend(rows);
     }
 
-    let (rs, os) = (
-        shapes(&retail.probe, walk.is_some()),
-        shapes(&ours.probe, walk.is_some()),
-    );
+    let (rs, os) = (shapes(&retail.probe), shapes(&ours.probe));
     if rs != os {
         diffs.push(format!(
             "the probe lines differ\nretail:\n  {}\nours:\n  {}",
@@ -695,4 +702,13 @@ fn a_corpse_slides_down_the_grade_as_retail_does() {
 #[test]
 fn a_stunned_walk_into_a_wall_keeps_its_velocity_as_retail_does() {
     gate(WALK, &[], Some(WALK_YAW), Some(WALK_HITCH));
+}
+
+/// The walk run again with no stall, its client printing every snapshot
+/// that moved the corpse: the fatal drop's body slides on flat terrain and
+/// sinks 0.1 below a live player's rest, since a fall that ends above the
+/// face misses the partition's bounds (8.12).
+#[test]
+fn a_corpse_on_flat_terrain_sinks_as_retail_does() {
+    gate(WALK_CORPSE, &[], Some(WALK_YAW), None);
 }
