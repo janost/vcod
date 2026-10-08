@@ -3360,7 +3360,6 @@ impl Server {
             area: carry.area.filter(|_| restart),
         };
         let source = crate::game::script::PakScripts::new(fs.clone(), self.script_overlay.clone());
-        let rng_seed = vcod_common::rng::xorshift(&mut self.rng);
         let mut rt = crate::game::script::ScriptRuntime::load_from(
             Box::new(source),
             fs,
@@ -3371,7 +3370,6 @@ impl Server {
             self.world.clone(),
             self.weapon_table.clone(),
             self.sv_time_ms,
-            rng_seed,
             carry,
         )?;
         rt.set_player_anims(self.anims.clone());

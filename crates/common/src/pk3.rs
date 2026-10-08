@@ -22,6 +22,8 @@ pub struct Pk3Fs {
     // Kept open after first read; re-parsing a central directory per entry
     // dominates when loading ~3000 anims. Reads take &self, hence the lock.
     open: Mutex<HashMap<usize, zip::ZipArchive<File>>>,
+    // lowercased path -> bytes `read` returns ahead of every archive.
+    overlay: HashMap<String, Vec<u8>>,
 }
 
 impl Pk3Fs {
@@ -71,6 +73,7 @@ impl Pk3Fs {
             index,
             alias_index,
             open: Mutex::new(HashMap::new()),
+            overlay: HashMap::new(),
         })
     }
 
@@ -82,13 +85,22 @@ impl Pk3Fs {
             index: HashMap::new(),
             alias_index: HashMap::new(),
             open: Mutex::new(HashMap::new()),
+            overlay: HashMap::new(),
         }
+    }
+
+    /// Serves `bytes` for `path` ahead of every archive, the way a later pak
+    /// overrides an earlier one. For tests that run a patched copy of an asset.
+    pub fn overlay(&mut self, path: &str, bytes: Vec<u8>) {
+        self.overlay.insert(path.to_lowercase(), bytes);
     }
 
     /// Same lookup as `read`, without touching the archive.
     pub fn contains(&self, path: &str) -> bool {
         let key = path.to_lowercase();
-        self.index.contains_key(&key) || self.alias_index.contains_key(&key)
+        self.overlay.contains_key(&key)
+            || self.index.contains_key(&key)
+            || self.alias_index.contains_key(&key)
     }
 
     /// The archive `read(path)` would hit.
@@ -111,6 +123,9 @@ impl Pk3Fs {
     /// buffer; the stream itself is bounded, since the field can lie.
     pub fn read_limited(&self, path: &str, limit: u64) -> Option<Vec<u8>> {
         let key = path.to_lowercase();
+        if let Some(bytes) = self.overlay.get(&key) {
+            return (bytes.len() as u64 <= limit).then(|| bytes.clone());
+        }
         let (ai, entry) = self
             .index
             .get(&key)
