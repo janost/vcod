@@ -4220,6 +4220,17 @@ suppresses player damage only for the duration of a scripted `radiusDamage`
 call and has no effect at all on a grenade's own blast, whose two callers
 never touch `level+0x29F4`.
 
+VERIFIED, `probe_blastmove` on retail (14.5): `setPlayerIgnoreRadiusDamage(true)`
+called inside a victim's callback left the rest of that walk reaching its
+victims, and the next blast reached nobody. VERIFIED: the builtin's store
+of 0 to `level+0x29F4` is at `0x5EF5A`, the instruction after its
+`G_RadiusDamage` call at `0x5EF55`. INFERRED: the walk tests the
+`level+0x29F4` copy, which only the builtin writes, so the flag takes hold
+at the next `radiusDamage`; and since a nested `radiusDamage` writes 0 back
+into the copy on its way out, a walk resumed after one tests 0,
+which no walk can observe, since a walk that tests 1 reaches no client and
+so runs no callback a nested call could sit in.
+
 VERIFIED, `probe_blastloop` on retail (14.5): a blast after
 `setPlayerIgnoreRadiusDamage(true)` reached nobody, a second one with no call
 in between reached nobody either, and one after `(false)` reached both
@@ -4508,6 +4519,38 @@ INFERRED, from the rows:
 
 The same probe checked 14.2: see there.
 
+What a callback does to the rest of its own walk. VERIFIED,
+`client-probes/probe_blastmove` on retail, 2026-10-08, three clients under dm
+on mp_carentan at 1000 health set down at `probe_blastorder`'s first three
+spots (walk order 1, 0, 2), flat-20 blasts from `(-176.8, 2473.1, 7)`, the
+damage callback wrapped so the first victim of each walk does one thing
+before it returns (rows in that directory's README):
+
+| row | the first victim's callback | walk |
+|---|---|---|
+| plain | nothing | 1, 0, 2 |
+| move_out | `setOrigin`s 0 and 2 out of the radius | 1 |
+| move_in | 2 starts out of the blast's box; it `setOrigin`s 2 to `(-200, 2430)`, inside the radius | 1, 0 |
+| ignore_mid | `setPlayerIgnoreRadiusDamage(true)` | 1, 0, 2 |
+| ignore_after | (the next blast, flag still set) | none |
+| nested | `radiusDamage` of 5 round slot 0 | 1, 0 (5, inside 1's callback), 0, 2 |
+| kill | a lethal `radiusDamage` round 0 and round 2 | 1, 0 and 2 die inside 1's callback, then 0 and 2 `dead` |
+
+INFERRED, from the rows: each candidate is measured where it stands when its
+turn comes, so a victim moved out by an earlier callback is passed by; the
+list is taken once, so one moved in from outside the box is never walked; the
+walk reads the copy the builtin took of the flag, not the flag; a nested
+`radiusDamage` runs its own walk to the end inside the callback, which is
+`G_RadiusDamage` re-entered; and a victim killed inside the walk is still
+reached, as 14.5's same-frame rows read.
+
+The same probe's fourth client throws grenades (`--save-grenade`), and the
+three stand round each grenade in flight; the first victim of each grenade
+walk sets the other two out of reach. VERIFIED, retail: three walks, each
+logged its first victim (slot 2, 99, 66 and 66 damage) and no other.
+INFERRED: a grenade's walk measures each victim on its turn as the builtin's
+does, which is the one `G_RadiusDamage` both reach (14.1).
+
 **As implemented.** `Vitals::takedamage` on the host, written by the end
 frame from `sessionstate`, by the `spawn` builtin and by `GameHost::die`;
 `ScriptRuntime::deliver_hits` and `deliver_world_hit` drop a hit on a victim
@@ -4517,7 +4560,8 @@ the client entities whose link box meets the blast's box, test each for
 `takedamage` on its turn, measure it, and run its callback before the next:
 the builtin through a `Cx::spawn_then` per victim whose
 `Host::spawn_returned` takes the next turn (`builtins::combat::blast_step`),
-the grenade pass by delivering each hit as it is computed. A client killed
+the grenade pass (`Server::tick`) by measuring each candidate on its turn and
+delivering its hit before the next. A client killed
 earlier in the walk, or anywhere earlier in the frame, is left out of the
 bodies that stop a probe. `a_blast_walks_its_victims_one_callback_at_a_time`
 (`crates/server/src/game/builtins/combat.rs`) replays the rows above in
@@ -4525,9 +4569,18 @@ both slot orders; the same probe against `vcod-server` read every line-1 row
 as retail did, and since the walk took the area tree's order (14.7) and
 the player set down inside the flak88 clip stays there (mantle doc, "A
 start inside a solid") every line-2 row too. A grenade blast reads victims
-and bodies off the sims, so a `setOrigin` from an earlier callback of the
-same walk does not move them; the builtin reads the script `origin` and
-does.
+and bodies off the sims, except a client whose link a callback of the walk
+moved (`setOrigin`, `client_link_origin`), which it measures and stands at
+that link with the sim's box. `probe_blastmove` against `vcod-server` read
+every builtin row above as retail did;
+`a_callback_reaches_the_rest_of_its_walk`
+(`crates/server/src/game/builtins/combat.rs`) replays them, and
+`a_grenade_walk_meets_a_victim_where_an_earlier_callback_moved_it`
+(`crates/server/tests/combat.rs`) the grenade case, which before the change
+reached the parked victim at the spot it had left. The grenade half of the
+probe does not run the same on ours: a missile's script `origin` reads
+`(0, 0, 0)`, so the three stand round the origin of the map, and the thrower's
+grenades went off beside it, where retail's flew clear.
 
 ### 14.6 Turrets, and the other entities with `takedamage`
 
@@ -5356,6 +5409,10 @@ What still differs, each INFERRED from 16.1 and not measured:
   retail runs them as they arrive, on the previous frame's `level.time`
   (15.6's 50 ms). Their relative order is the same.
 
+What differs, measured: ours poses the new view pitch whole at the end frame
+that copies it, where retail eases into it over four to six frames
+(`probe_pose`, below).
+
 **A turret round inside its gunner's end frame.** VERIFIED,
 `game.mp.i386.so`: `G_RunFrame`'s slot loop (0x50ab0..0x50add) calls
 `ClientEndFrame` once per slot at 0x50abd; `ClientEndFrame` calls
@@ -5371,11 +5428,37 @@ INFERRED, off those calls and 16.1's callback path: a gunner's
 its aim trace, its pose, its own turret) reads what they wrote, and a lower
 slot's turn already ran.
 
+Measured. VERIFIED, `client-probes/probe_turret` under `probe_pose 1` on
+retail, 2026-10-08, mp_carentan's gun at (1712, 1830, 8): the
+`--save-turret` gunner held the trigger 8 s at the axis client's eye, one
+round a frame, and the axis client (`--probe-pitch-flip 85`) held view pitch
+85 and 0 in alternate 400 ms windows; the gsc logged every hit's time and
+point instead of landing it. Per pitch change, `k0` is the frame whose
+snapshot first read the new pitch, so its cmds carried it and its
+`ClientEndFrame` copied it; the columns are each frame's hit x:
+
+| target slot | change | k-1 | k0 | k+1 | k+2 | k+3 |
+|---|---|---|---|---|---|---|
+| 1, gunner 0 | 0 to 85 | 1518.34 | 1518.34 | 1515.40 | 1512.97 | 1512.08 |
+| 0, gunner 1 | 0 to 85 | 1518.11 | 1515.98 | 1513.45 | 1512.48 | 1512.03 |
+
+Over the whole run, counting the changes whose three frames k-1 to k+1 all
+hit: with the target in slot 1, 11 of 11 read k0 within 0.2 units of k-1;
+with it in slot 0, 18 of 18 had already moved at k0. INFERRED: a round meets
+a higher slot posed as its last end frame left it and a lower slot posed as
+this frame's, 16.1's reading. VERIFIED, the same rows: the point eases over
+four to six frames after a change rather than stepping, so the pitch the
+controllers bend the spine by is smoothed between end frames; where that
+smoothing lives is not read out here.
+
 Ours does the same: each gunner's rounds are traced inside its own turn,
 right after its `commit_pose`, meeting a lower slot's new pose and a higher
 slot's last-frame one (pinned by
-`a_round_meets_a_higher_slots_last_pose_and_a_lower_slots_new_one`,
-`crates/server/tests/turret_ab.rs`), and delivered there by
+`a_round_meets_a_higher_slots_last_pose_and_a_lower_slots_new_one` and
+`a_round_meets_a_pitch_flip_a_frame_late_on_a_higher_slot`,
+`crates/server/tests/turret_ab.rs`; the same `probe_pose` run against
+`vcod-server` switched hit location at k+1 with the target in slot 1 and at
+k0 with it in slot 0), and delivered there by
 `deliver_turret_rounds` (`crates/server/src/server.rs`): the callback, the
 weapon and sim ops it queued, the vitals mirror, a higher victim's end frame
 again for its feedback, and every body refreshed for the later slots' aim

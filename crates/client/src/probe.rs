@@ -85,6 +85,8 @@ pub struct Save {
     pub pickup: bool,
     /// `--save-turret`: the mounted MG capture.
     pub turret: bool,
+    /// `--probe-turret-target-ms`: how long `target` holds the trigger.
+    pub turret_target_ms: Option<u64>,
     /// `--save-bump`: the player-clip walker.
     pub bump: bool,
     /// `--probe-bump-target`: the player-clip target, no fixture.
@@ -99,6 +101,8 @@ pub struct Save {
     pub fall: bool,
     /// `--probe-fall-walk`: the world yaw `--probe-fall` walks at.
     pub fall_walk: Option<f32>,
+    /// `--probe-pitch-flip`: the view pitch every other 400 ms window holds.
+    pub pitch_flip: Option<f32>,
     /// `--probe-ride`: print every snapshot's movement fields, no fixture.
     pub ride: bool,
     /// `--probe-items`: print every snapshot an item changed, no fixture.
@@ -163,6 +167,10 @@ impl ShooterScript {
     }
 }
 
+/// The `--probe-pitch-flip` window: the pitch is held this long, then 0 as
+/// long.
+const PITCH_FLIP_MS: u128 = 400;
+
 /// Retail's melee trace reaches 64 units from the player's origin
 /// (docs/research/cod11-combat.md, 2.5), so the swing has to land inside this.
 pub const MELEE_RANGE: f32 = 40.0;
@@ -208,6 +216,7 @@ pub fn probe(
         defuse: save_defuse,
         pickup: save_pickup,
         turret: save_turret,
+        turret_target_ms,
         bump: save_bump,
         bump_target: probe_bump_target,
         follow: probe_follow,
@@ -215,6 +224,7 @@ pub fn probe(
         killcam_skip_ms,
         fall: probe_fall,
         fall_walk,
+        pitch_flip,
         ride: probe_ride,
         items: probe_items,
         compass: probe_compass,
@@ -330,7 +340,12 @@ pub fn probe(
     let mut pickup = PickupProbe::default();
     let mut wrote_pickup = false;
     let mut pickup_spawned = false;
-    let mut turret = TurretProbe::default();
+    // `--probe-pitch-flip`'s last snapshot and the pitch it read.
+    let mut last_pitch: Option<(u32, f32)> = None;
+    let mut turret = TurretProbe {
+        target_for: turret_target_ms.map(Duration::from_millis),
+        ..TurretProbe::default()
+    };
     let mut wrote_turret = false;
     let mut turret_spawned = false;
     // A tag starting `overlap` picks the walker's overlap script, which pairs
@@ -701,6 +716,22 @@ pub fn probe(
             // No `hold_view_yaw`: the script's angles are world angles, which
             // `send_frame` rebases on each snapshot's `delta_angles`.
             cmd = prone.cmd(now);
+        } else if let Some(pitch) = pitch_flip.filter(|_| client.state() == NetState::Active) {
+            // Absolute, as below: world yaw 0, the pitch in alternate windows.
+            let active_at = *reached_active.get_or_insert(now);
+            if (now.duration_since(active_at).as_millis() / PITCH_FLIP_MS) % 2 == 1 {
+                cmd.angles[0] = deg_to_short(pitch);
+            }
+            cmd.forward = 0;
+            if let Some(s) = client.snapshots().newest() {
+                let p = s.ps.viewangles(&net::protocol::PROTOCOL_V1)[0];
+                if last_pitch.is_none_or(|(n, _)| n != s.message_num)
+                    && last_pitch.is_none_or(|(_, q)| q != p)
+                {
+                    println!("PITCH serverTime={} pitch={p:.2}", s.server_time);
+                }
+                last_pitch = Some((s.message_num, p));
+            }
         } else if let Some(yaw) = fall_walk.filter(|_| client.state() == NetState::Active) {
             // Absolute: `send_frame` takes `delta_angles` off.
             cmd.forward = 127;
@@ -954,7 +985,13 @@ pub fn probe(
                 None => false,
             };
             if done {
-                write_turret_fixture(client.configstrings(), &join, &turret)?;
+                write_turret_fixture(
+                    client.configstrings(),
+                    &join,
+                    &turret,
+                    tag.as_deref(),
+                    overwrite,
+                )?;
                 wrote_turret = true;
                 break;
             }
@@ -1154,7 +1191,13 @@ pub fn probe(
         turret
             .notes
             .push(format!("# BROKEN run ended in {}", turret.phase.label()));
-        write_turret_fixture(client.configstrings(), &join, &turret)?;
+        write_turret_fixture(
+            client.configstrings(),
+            &join,
+            &turret,
+            tag.as_deref(),
+            overwrite,
+        )?;
     }
     if save_bump && !wrote_bump {
         println!(
@@ -8226,6 +8269,8 @@ events={},{},{},{} eventParms={},{},{},{}",
 #[derive(Default)]
 struct TurretProbe {
     phase: TurretPhase,
+    /// How long `target` holds the trigger; [`TURRET_FIRE`] when unset.
+    target_for: Option<Duration>,
     phase_started: Option<Instant>,
     settled_at: Option<Instant>,
     gun: Option<TurretGun>,
@@ -8617,7 +8662,9 @@ impl TurretProbe {
             }
             TurretPhase::Flick if settled => TurretPhase::Fire,
             TurretPhase::Fire if in_phase >= TURRET_FIRE => TurretPhase::Target,
-            TurretPhase::Target if in_phase >= TURRET_FIRE => TurretPhase::Cool,
+            TurretPhase::Target if in_phase >= self.target_for.unwrap_or(TURRET_FIRE) => {
+                TurretPhase::Cool
+            }
             TurretPhase::Cool if self.cooled || in_phase >= TURRET_COOL => TurretPhase::Dismount,
             TurretPhase::Dismount if settled => TurretPhase::Crouch,
             TurretPhase::Crouch if in_phase >= TURRET_SETTLE * 2 => TurretPhase::Uncrouch,
@@ -8656,6 +8703,8 @@ fn write_turret_fixture(
     configstrings: &[String],
     join: &JoinProbe,
     tp: &TurretProbe,
+    tag: Option<&str>,
+    overwrite: bool,
 ) -> anyhow::Result<()> {
     let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
     let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
@@ -8778,9 +8827,18 @@ fn write_turret_fixture(
         }
     }
     std::fs::create_dir_all(TURRET_FIXTURE_DIR)?;
-    let path = format!("{TURRET_FIXTURE_DIR}/{map}-dm-turret.txt");
-    std::fs::write(&path, out)?;
-    println!("turret: wrote {path}");
+    match tag {
+        Some(tag) => {
+            let path = format!("{TURRET_FIXTURE_DIR}/{map}-dm-turret-{tag}.txt");
+            write_tagged_fixture(&path, &out, overwrite)?;
+            println!("turret: wrote {path}");
+        }
+        None => {
+            let path = format!("{TURRET_FIXTURE_DIR}/{map}-dm-turret.txt");
+            std::fs::write(&path, out)?;
+            println!("turret: wrote {path}");
+        }
+    }
     Ok(())
 }
 

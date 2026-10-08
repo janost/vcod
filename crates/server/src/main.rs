@@ -74,6 +74,10 @@ const MAX_CATCH_UP: Duration = Duration::from_secs(1);
 /// the outbox is never flushed.
 const MAX_PACKETS_PER_FRAME: usize = 256;
 
+/// Packets the reader thread holds for the tick; past this it blocks and the
+/// socket's own buffer drops the excess.
+const PACKET_QUEUE: usize = 4 * MAX_PACKETS_PER_FRAME;
+
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
@@ -121,7 +125,29 @@ fn main() -> Result<()> {
 
     let sock = UdpSocket::bind(("0.0.0.0", args.port))
         .with_context(|| format!("binding udp/{}", args.port))?;
-    sock.set_nonblocking(true)?;
+    // A thread reads the socket as packets arrive so each carries its arrival
+    // time into the tick (`Server::handle_packet_at`); the tick still handles
+    // them in arrival order at its start.
+    let (packet_tx, packets) = std::sync::mpsc::sync_channel(PACKET_QUEUE);
+    {
+        let sock = sock.try_clone().context("cloning the socket")?;
+        std::thread::spawn(move || {
+            let mut buf = vec![0u8; 65536];
+            loop {
+                match sock.recv_from(&mut buf) {
+                    Ok((n, from)) => {
+                        if packet_tx
+                            .send((Instant::now(), from, buf[..n].to_vec()))
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    Err(e) => log::debug!("recv: {e}"),
+                }
+            }
+        });
+    }
     log::info!("vcod-server: {} on udp/{}", args.map, args.port);
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -188,7 +214,6 @@ fn main() -> Result<()> {
         .context("installing the Ctrl-C handler")?;
     }
     let mut quit_queued = false;
-    let mut buf = vec![0u8; 65536];
     // A fixed schedule, not a sleep after each tick: `SV_Frame` runs one
     // game frame per `sv_fps` slice of wall time and catches up when a
     // frame overran, so `svs.time` tracks the wall clock. Sleeping the
@@ -200,10 +225,10 @@ fn main() -> Result<()> {
         let now = Instant::now();
         let late = now.saturating_duration_since(next);
         for _ in 0..MAX_PACKETS_PER_FRAME {
-            let Ok((n, from)) = sock.recv_from(&mut buf) else {
+            let Ok((arrived, from, pkt)) = packets.try_recv() else {
                 break;
             };
-            server.handle_packet(from, &buf[..n], now);
+            server.handle_packet_at(from, &pkt, now, arrived);
         }
         if interrupted.load(std::sync::atomic::Ordering::Relaxed) && !quit_queued {
             quit_queued = true;
@@ -225,6 +250,7 @@ fn main() -> Result<()> {
                 log::debug!("send to {to}: {e}");
             }
         }
+        server.frame_sent(Instant::now());
         if server.quit_requested() {
             return Ok(());
         }

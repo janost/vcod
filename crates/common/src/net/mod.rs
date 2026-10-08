@@ -11,6 +11,7 @@ pub mod fields_v1;
 pub mod flags;
 pub mod gamestate;
 pub mod huffman;
+pub mod master;
 pub mod msg;
 pub mod netchan;
 pub mod protocol;

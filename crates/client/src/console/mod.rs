@@ -75,6 +75,12 @@ impl Console {
         self.history_pos = self.history.len();
     }
 
+    /// Puts `text` in the input field with the cursor at its end.
+    pub fn set_input(&mut self, text: &str) {
+        self.field = text.to_string();
+        self.cursor = self.field.len();
+    }
+
     pub fn print(&mut self, text: &str) {
         for line in text.lines() {
             if self.lines.len() == SCROLLBACK_LINES {
@@ -203,7 +209,7 @@ impl Console {
     }
 
     /// Slides toward its target: half the screen open, gone closed, the
-    /// whole screen at once when `full` (disconnected with no map). Retail
+    /// whole screen at once when `full` (disconnected with no menu up). Retail
     /// moves `scr_conspeed` screens a second.
     pub fn update(&mut self, dt_ms: f32, conspeed: f32, full: bool) {
         if full {
