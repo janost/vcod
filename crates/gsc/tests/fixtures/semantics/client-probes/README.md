@@ -284,6 +284,31 @@ cargo run -p vcod -- --net-probe 127.0.0.1:28970 --save-turret --probe-secs 170
 The server's `PROBE` lines and `games_mp.log`'s `D;`/`K;` records are the
 retail evidence a later capture reads; this probe itself writes no fixture.
 
+`probe_pose 1` is the pose measurement of `docs/research/cod11-combat.md`
+16.2: every hit logs `PROBE hit <time> <clientnum> <sHitLoc> <iDamage>
+<point>` and none lands. The target flips its own view pitch and logs the
+snapshot each flip reached; the gunner holds the trigger at it for 8 s. The
+connect order picks the slots: gunner first puts the target in slot 1,
+target first puts it in slot 0. A tagged turret fixture lands in
+`crates/server/tests/fixtures/turret/`; move it out after the run.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=120 \
+    tools/run_probe.sh client-probes/probe_turret mp_carentan +set probe_teleport 1 +set probe_pose 1
+# 15 s later, the two in the order that picks the slots, 3 s apart:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --save-turret --probe-turret-target-ms 8000 --capture-tag pose --probe-secs 90
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team axis --probe-pitch-flip 85 --probe-secs 95
+```
+
+Pair each `PITCH serverTime=<t>` line of the target with the `PROBE hit`
+lines at `t - 50`, `t` and `t + 50`. Retail, 2026-10-08, one change each way
+(hit x of the frames k-1 to k+3, `k0` the frame at `t`):
+
+```
+target slot 1:  0 -> 85  1518.34 1518.34 1515.40 1512.97 1512.08
+target slot 0:  0 -> 85  1518.11 1515.98 1513.45 1512.48 1512.03
+```
+
 ## probe_prone
 
 The prone slope capture's server half. Under `probe_teleport 1` it puts each
@@ -1090,3 +1115,35 @@ COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=95 \
 # second shell, about 7 s later:
 cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-secs 85
 ```
+
+## probe_blastmove
+
+What a blast victim's damage callback does to the rest of its walk, for
+`docs/research/cod11-combat.md` 14.5. dm on mp_carentan with
+`+set scr_forcerespawn 1`; three `--probe-team` clients 2 s apart, then a
+fourth `--save-grenade --capture-tag <tag>` client 35 s later (move its
+tagged fixture out of `crates/server/tests/fixtures/playerstate/` after the
+run). 120 s on the server, `--probe-secs 100` on the three and 60 on the
+thrower. Against ours the server half is `vcod-server mp_carentan
+--gametype-script crates/gsc/tests/fixtures/semantics/client-probes/probe_blastmove.gsc
+--set scr_forcerespawn=1`.
+
+Each row logs `PROBE cb <row> <entity> <iDamage> <sessionstate> <origin>`
+per victim and `PROBE cbdone <row> <entity>` once the first victim's action
+is over. Retail, 2026-10-08, the walk per row (state lines dropped):
+
+```
+plain         cb 1, cb 0, cb 2
+move_out      cb 1 (parks 0 and 2)
+move_in       cb 1 (pulls 2 in from outside the box), cb 0
+ignore_mid    cb 1 (setPlayerIgnoreRadiusDamage(true)), cb 0, cb 2
+ignore_after  (none)
+nested        cb 1, cb nested_inner 0 5, cbdone 1, cb 0, cb 2
+kill          cb 1, cb kill_inner 0 50, cb kill_inner 2 50, cbdone 1,
+              cb 0 dead, cb 2 dead
+```
+
+The grenade half logs `PROBE gcb first <time> <entity> <iDamage> <origin>`
+for the first victim of each grenade walk, which parks the other two, and
+`PROBE gcb later ...` for any victim after it. Retail logged three `first`
+lines and no `later` one.

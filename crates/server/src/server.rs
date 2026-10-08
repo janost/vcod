@@ -849,10 +849,10 @@ fn relink(bodies: &mut Vec<vcod_common::movetrace::Body>, clients: &[Option<Clie
     }
 }
 
-/// One victim of a grenade's walk: a client, or an entity with no client.
+/// One candidate of a grenade's walk: a client, or an entity with no client.
 enum BlastCandidate<'a> {
     Client(usize, &'a ClientSim),
-    Entity(crate::game::combat::EntityVictim),
+    Entity(vcod_gsc::EntId),
 }
 
 /// What one client's usercmd replay did this tick, for the trace line.
@@ -4241,14 +4241,34 @@ impl Server {
                 .enumerate()
                 .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
                 .collect();
+            // Where a callback earlier in the walk set a client down: its
+            // link moved off the one its last cmd made (`setOrigin` relinks
+            // at once, combat doc 14.7), and the walk measures it there.
+            let set_down =
+                |rt: &script::ScriptRuntime, slot: usize, s: &crate::spectate::ClientSim| {
+                    let link = glam::Vec3::from(rt.host.client_link_origin[slot]);
+                    (link != s.link_origin()).then_some(link)
+                };
             let victim =
-                |slot: usize, s: &crate::spectate::ClientSim| crate::game::combat::BlastVictim {
-                    slot,
-                    origin: s.ps.origin,
-                    link_origin: s.link_origin(),
-                    mins: s.ps.mins(),
-                    maxs: s.ps.maxs(),
-                    eye: s.ps.view().eye,
+                |rt: &script::ScriptRuntime, slot: usize, s: &crate::spectate::ClientSim| {
+                    let eye = s.ps.view().eye;
+                    let mut v = crate::game::combat::BlastVictim {
+                        slot,
+                        origin: s.ps.origin,
+                        link_origin: s.link_origin(),
+                        mins: s.ps.mins(),
+                        maxs: s.ps.maxs(),
+                        eye,
+                    };
+                    if let Some(at) = set_down(rt, slot, s) {
+                        v = crate::game::combat::BlastVictim {
+                            origin: at,
+                            link_origin: at,
+                            eye: at + (eye - s.ps.origin),
+                            ..v
+                        };
+                    }
+                    v
                 };
             for x in &self.pending_explosions {
                 let Some(def) = weapons.get(x.weapon as usize) else {
@@ -4265,8 +4285,9 @@ impl Server {
                     "MOD_GRENADE_SPLASH",
                 );
                 // `trap_EntitiesInBox`' order (combat doc 14.7): the
-                // clients and the turrets as the area tree lists them.
-                let entities = rt.blast_entities();
+                // clients and the turrets as the area tree lists them, taken
+                // once. Each is measured on its turn, after every earlier
+                // victim's callback (14.5).
                 let (mins, maxs) = blast.search_box();
                 let candidates: Vec<BlastCandidate> = rt
                     .host
@@ -4276,14 +4297,10 @@ impl Server {
                     .filter_map(|n| {
                         if let Some(&(slot, s)) = sims.iter().find(|(slot, _)| *slot == n as usize)
                         {
-                            return blast
-                                .reaches(&victim(slot, s))
-                                .then_some(BlastCandidate::Client(slot, s));
+                            return Some(BlastCandidate::Client(slot, s));
                         }
-                        let v = entities.iter().find(|v| v.id.0 == n)?;
-                        blast
-                            .reaches_entity(v)
-                            .then(|| BlastCandidate::Entity(v.clone()))
+                        let id = rt.host.ents.handle(n)?;
+                        Some(BlastCandidate::Entity(id))
                     })
                     .collect();
                 // A client a callback of this walk killed is a corpse and
@@ -4292,28 +4309,43 @@ impl Server {
                     |rt: &script::ScriptRuntime| -> Vec<crate::game::combat::HitBody> {
                         sims.iter()
                             .filter(|(other, _)| !rt.client_vitals(*other).dead)
-                            .filter_map(|(other, s)| s.hit_body(*other))
+                            .filter_map(|&(other, s)| {
+                                let mut body = s.hit_body(other)?;
+                                if let Some(at) = set_down(rt, other, s) {
+                                    body.origin = at;
+                                }
+                                Some(body)
+                            })
                             .collect()
                     };
                 for candidate in candidates {
-                    let bodies = live_bodies(rt);
-                    let models = rt.placed_script_models();
                     match candidate {
                         BlastCandidate::Client(slot, s) => {
                             if !rt.client_vitals(slot).takedamage {
                                 continue;
                             }
-                            if let Some(hit) = blast.hit(
-                                &victim(slot, s),
-                                collision,
-                                &models,
-                                &bodies,
-                                bones.as_mut(),
-                            ) {
+                            let v = victim(rt, slot, s);
+                            if !blast.reaches(&v) {
+                                continue;
+                            }
+                            let bodies = live_bodies(rt);
+                            let models = rt.placed_script_models();
+                            if let Some(hit) =
+                                blast.hit(&v, collision, &models, &bodies, bones.as_mut())
+                            {
                                 rt.deliver_hits(vec![hit], self.sv_time_ms);
                             }
                         }
-                        BlastCandidate::Entity(v) => {
+                        BlastCandidate::Entity(id) => {
+                            let Some(v) = rt.blast_entities().into_iter().find(|v| v.id == id)
+                            else {
+                                continue;
+                            };
+                            if !blast.reaches_entity(&v) {
+                                continue;
+                            }
+                            let bodies = live_bodies(rt);
+                            let models = rt.placed_script_models();
                             if let Some(damage) =
                                 blast.entity_damage(&v, collision, &models, &bodies, bones.as_mut())
                             {
