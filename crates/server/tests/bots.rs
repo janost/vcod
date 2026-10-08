@@ -340,6 +340,7 @@ fn a_bot_walks_toward_gunfire_it_cannot_see() {
 /// a leap's foot at its head, and others for good under a spar on a deck
 /// ladder, wandering with a level view.
 #[test]
+#[ignore = "runs 6 bots on mp_ship for 4 seeds, ~2 min; run with --ignored"]
 fn bots_on_mp_ships_ladders_keep_climbing() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
