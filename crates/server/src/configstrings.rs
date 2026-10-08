@@ -64,15 +64,15 @@ pub fn serverinfo(cfg: &ServerConfig) -> Info {
 /// Must stay under `MAX_INFO_STRING` with `sv_serverid` intact; the overflow
 /// is in docs/research/cod11-server-handshake.md, "Configstring 1, systeminfo".
 /// The fall bounds are the cvars' current values, which a client predicts
-/// its landings with.
-pub fn systeminfo(server_id: u8, fall: FallHeights) -> Info {
+/// its landings with; `cheats` is `sv_cheats`, which `devmap` sets.
+pub fn systeminfo(server_id: u8, fall: FallHeights, cheats: bool) -> Info {
     let mut i = Info::new();
     i.set("bg_fallDamageMaxHeight", fall.max)
         .set("bg_fallDamageMinHeight", fall.min)
         .set("g_synchronousClients", 0)
         .set("pmove_fixed", 0)
         .set("pmove_msec", 8)
-        .set("sv_cheats", 0)
+        .set("sv_cheats", u8::from(cheats))
         .set("sv_pure", 0)
         .set("sv_serverid", server_id)
         .set("timescale", 1);
@@ -80,12 +80,17 @@ pub fn systeminfo(server_id: u8, fall: FallHeights) -> Info {
 }
 
 /// The full 2048-slot table for a fresh map.
-pub fn static_configstrings(cfg: &ServerConfig, server_id: u8, fall: FallHeights) -> Vec<String> {
+pub fn static_configstrings(
+    cfg: &ServerConfig,
+    server_id: u8,
+    fall: FallHeights,
+    cheats: bool,
+) -> Vec<String> {
     let mut cs = vec![String::new(); PROTOCOL_V1.max_configstrings];
     // Names an out-of-range literal instead of a bare index panic.
     debug_assert!(STATIC.iter().all(|&(i, _)| i < cs.len()));
     cs[CS_SERVERINFO] = serverinfo(cfg).to_string();
-    cs[CS_SYSTEMINFO] = systeminfo(server_id, fall).to_string();
+    cs[CS_SYSTEMINFO] = systeminfo(server_id, fall, cheats).to_string();
     for &(i, s) in STATIC {
         cs[i] = s.to_string();
     }

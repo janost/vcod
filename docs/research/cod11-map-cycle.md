@@ -702,7 +702,8 @@ setups they select: either prefix is stripped and the bound shrinks with it. The
 `crates/server/src/console.rs` carries the `Command` parsing, 5.1's
 destructive token consumer and 5.2's keyword loop;
 `crates/server/src/server.rs`'s console drain in `tick` is what runs the
-`map %s` line the loop queues. vcod does not model `devmap` or `sv_cheats`.
+`map %s` line the loop queues. `devmap` sets `sv_cheats` after the load
+(handshake doc, "Console commands over rcon").
 
 ---
 

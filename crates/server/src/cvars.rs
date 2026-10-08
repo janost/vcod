@@ -11,6 +11,8 @@
 use std::collections::BTreeMap;
 use vcod_gsc::ErrorKind;
 
+mod registry;
+
 pub use vcod_common::net::protocol::{
     CS_CVAR_NAMES as MIRROR_NAMES, CS_CVAR_VALUES as MIRROR_VALUES,
 };
@@ -55,16 +57,43 @@ const ENGINE_MIRRORED: &[(&str, &str)] = &[
 /// seconds a `spawnflags & 8` weapon takes to come back
 /// (docs/research/cod11-items.md section 7).
 ///
-/// The other 69 rows are deliberately not transcribed, and a script that
-/// reads one of them gets `""` with no warning. `tools/re/dump_cvars.py`
-/// prints the table, so adding a row is a lookup: pass the cvar's name and
-/// take its default.
-const ENGINE_DEFAULTS: &[(&str, &str)] = &[
-    ("g_useGear", "1"),
-    ("bg_fallDamageMinHeight", "256"),
-    ("bg_fallDamageMaxHeight", "480"),
-    ("g_weaponrespawn", "5"),
+/// The middle field is the row's `cvarlist` flag letters. Every other
+/// registered cvar is in [`registry::REGISTRY`].
+const ENGINE_DEFAULTS: &[(&str, &str, &str)] = &[
+    ("g_useGear", "AL", "1"),
+    ("bg_fallDamageMinHeight", "C", "256"),
+    ("bg_fallDamageMaxHeight", "C", "480"),
+    ("g_weaponrespawn", "", "5"),
 ];
+
+/// `cvar_t` flag bits, in `cvarlist`'s column order: the letters
+/// `S U R I A L C` (`Cvar_List_f`, cod_lnxded 0x806f530).
+pub mod flag {
+    pub const ARCHIVE: u16 = 0x1;
+    pub const USERINFO: u16 = 0x2;
+    pub const SERVERINFO: u16 = 0x4;
+    pub const INIT: u16 = 0x10;
+    pub const LATCH: u16 = 0x20;
+    pub const ROM: u16 = 0x40;
+    pub const CHEAT: u16 = 0x200;
+    /// Bit and letter, in the order `cvarlist` prints them.
+    pub const COLUMNS: [(u16, char); 7] = [
+        (SERVERINFO, 'S'),
+        (USERINFO, 'U'),
+        (ROM, 'R'),
+        (INIT, 'I'),
+        (ARCHIVE, 'A'),
+        (LATCH, 'L'),
+        (CHEAT, 'C'),
+    ];
+
+    pub fn parse(letters: &str) -> u16 {
+        COLUMNS
+            .iter()
+            .filter(|(_, c)| letters.contains(*c))
+            .fold(0, |f, (b, _)| f | b)
+    }
+}
 
 #[derive(Clone)]
 struct Cvar {
@@ -73,12 +102,32 @@ struct Cvar {
     name: String,
     value: String,
     /// `resetString`: the value the cvar was created with, by a `set` or a
-    /// registration, which a console query prints beside the value.
+    /// registration, which a console query prints beside the value. A
+    /// registration of a cvar a `set` created takes over its default, which
+    /// is why retail's `scr_allow_fg42` reads `"0"` with default `"1"`.
     default: String,
+    /// Created by a `set` and not registered since.
+    user_created: bool,
+    flags: u16,
+    /// `latchedString`: a console write to a `LATCH` cvar, taken at the
+    /// next level load by [`Cvars::apply_latched`].
+    latched: Option<String>,
     /// In the 140/204 mirror. Set by `makeCvarServerInfo`, which despite
     /// its name does not put the cvar in configstring 0: retail's cs 0
     /// holds only the `sv_*` and `g_gametype` set.
     mirrored: bool,
+}
+
+/// What a console write did; the message, if any, is `Cvar_Set2`'s.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ConsoleSet {
+    /// The value is live.
+    Applied,
+    /// Held for the next level load, or a latch cleared; the live value
+    /// is unchanged.
+    Latched(Option<String>),
+    /// Refused: read only, write protected or cheat protected.
+    Refused(String),
 }
 
 #[derive(Clone)]
@@ -103,8 +152,9 @@ impl Cvars {
         for &(name, value) in ENGINE_MIRRORED {
             cv.make_server_info(name, value);
         }
-        for &(name, value) in ENGINE_DEFAULTS {
+        for &(name, flags, value) in ENGINE_DEFAULTS.iter().chain(registry::REGISTRY) {
             cv.register(name, value);
+            cv.add_flags(name, flag::parse(flags));
         }
         cv
     }
@@ -133,9 +183,85 @@ impl Cvars {
                 name: name.to_string(),
                 value: String::new(),
                 default: value.to_string(),
+                user_created: true,
+                flags: 0,
+                latched: None,
                 mirrored: false,
             });
         entry.value = value.to_string();
+    }
+
+    /// `Cvar_Set2` without `force`, as `set` and a bare `<name> <value>`
+    /// reach it: read-only, init and cheat cvars refuse, a latched one
+    /// holds the value for the next load. `cheats` is `sv_cheats`.
+    /// The messages name the cvar as the caller spelled it.
+    pub fn console_set(&mut self, name: &str, value: &str, cheats: bool) -> ConsoleSet {
+        let Some(c) = self.vars.get_mut(&name.to_ascii_lowercase()) else {
+            self.set(name, value);
+            return ConsoleSet::Applied;
+        };
+        if c.flags & flag::ROM != 0 {
+            return ConsoleSet::Refused(format!("{name} is read only.\n"));
+        }
+        if c.flags & flag::INIT != 0 {
+            return ConsoleSet::Refused(format!("{name} is write protected.\n"));
+        }
+        if c.flags & flag::LATCH != 0 {
+            return ConsoleSet::Latched(latch(&mut c.latched, &c.value, name, value));
+        }
+        if c.flags & flag::CHEAT != 0 && !cheats {
+            return ConsoleSet::Refused(format!("{name} is cheat protected.\n"));
+        }
+        c.value = value.to_string();
+        ConsoleSet::Applied
+    }
+
+    /// The value a latched cvar waits with, if any.
+    pub fn latched(&self, name: &str) -> Option<&str> {
+        self.vars
+            .get(&name.to_ascii_lowercase())
+            .and_then(|c| c.latched.as_deref())
+    }
+
+    /// A level load's `Cvar_Get` of every latched cvar: the waiting value
+    /// goes live.
+    pub fn apply_latched(&mut self) {
+        for c in self.vars.values_mut() {
+            if let Some(v) = c.latched.take() {
+                c.value = v;
+            }
+        }
+    }
+
+    /// ORs flag bits into an existing cvar, as a registration does.
+    pub fn add_flags(&mut self, name: &str, bits: u16) {
+        if let Some(c) = self.vars.get_mut(&name.to_ascii_lowercase()) {
+            c.flags |= bits;
+        }
+    }
+
+    pub fn flags(&self, name: &str) -> Option<u16> {
+        self.vars.get(&name.to_ascii_lowercase()).map(|c| c.flags)
+    }
+
+    /// `Cvar_List_f` (cod_lnxded 0x806f530): every cvar whose name matches
+    /// `filter` (`*` and `?`, case-insensitive), sorted case-folded, each
+    /// as seven flag columns, the name and the quoted value; then the
+    /// count of every cvar, matched or not, twice.
+    pub fn list(&self, filter: Option<&str>) -> String {
+        let mut out = String::new();
+        for c in self.vars.values() {
+            if filter.is_some_and(|f| !wildcard(f, &c.name)) {
+                continue;
+            }
+            for (bit, letter) in flag::COLUMNS {
+                out.push(if c.flags & bit != 0 { letter } else { ' ' });
+            }
+            out.push_str(&format!(" {} \"{}\"\n", c.name, c.value));
+        }
+        let n = self.vars.len();
+        out.push_str(&format!("\n{n} total cvars\n{n} cvar indexes\n"));
+        out
     }
 
     /// `Cvar_Get(name, default)`: takes the default only when the cvar does
@@ -144,14 +270,22 @@ impl Cvars {
     /// `set` above -- seeding with `set` would silently overwrite whatever
     /// the operator passed.
     pub fn register(&mut self, name: &str, default: &str) {
-        self.vars
+        let c = self
+            .vars
             .entry(name.to_ascii_lowercase())
             .or_insert_with(|| Cvar {
                 name: name.to_string(),
                 value: default.to_string(),
                 default: default.to_string(),
+                user_created: false,
+                flags: 0,
+                latched: None,
                 mirrored: false,
             });
+        if c.user_created && !default.is_empty() {
+            c.user_created = false;
+            c.default = default.to_string();
+        }
     }
 
     /// Applies a config file's `set` lines, as `Cvar_Set` each, and returns
@@ -208,6 +342,36 @@ impl Cvars {
         }
         Ok(())
     }
+}
+
+/// The `LATCH` arm of `Cvar_Set2`, measured on retail: the live value
+/// clears a waiting one silently, the waiting value again is silent, and
+/// anything else waits and says so.
+pub fn latch(latched: &mut Option<String>, live: &str, name: &str, value: &str) -> Option<String> {
+    if value == live {
+        *latched = None;
+        None
+    } else if latched.as_deref() == Some(value) {
+        None
+    } else {
+        *latched = Some(value.to_string());
+        Some(format!("{name} will be changed upon restarting.\n"))
+    }
+}
+
+/// `Com_Filter` without its `[...]` sets: `*` any run, `?` any one
+/// character, the rest compared case-insensitively over the whole name.
+fn wildcard(pattern: &str, name: &str) -> bool {
+    fn go(p: &[u8], n: &[u8]) -> bool {
+        match p.split_first() {
+            None => n.is_empty(),
+            Some((b'*', rest)) => (0..=n.len()).any(|i| go(rest, &n[i..])),
+            Some((&c, rest)) => n.split_first().is_some_and(|(&d, tail)| {
+                (c == b'?' || c.eq_ignore_ascii_case(&d)) && go(rest, tail)
+            }),
+        }
+    }
+    go(pattern.as_bytes(), name.as_bytes())
 }
 
 /// `Cmd_TokenizeString` cut down to what a cfg line needs: `//` starts a
@@ -436,5 +600,134 @@ mod tests {
                 "the static table sets {i}, which the mirror writes"
             );
         }
+    }
+    /// `cvarlist g_*` off a retail 1.1d server before any client joined
+    /// (handshake doc, "Console commands over rcon"): flag columns, case-folded order, every
+    /// engine and game module row. That server's archived config had
+    /// `g_logSync 1`; the default is 0.
+    #[test]
+    fn cvarlist_matches_retail() {
+        let mut cv = Cvars::new();
+        cv.set("g_logSync", "1");
+        let want = concat!(
+            "        g_allowVote \"1\"\n",
+            "    A   g_banIPs \"\"\n",
+            "      C g_bounds_height_standing \"70\"\n",
+            "      C g_bounds_width \"30\"\n",
+            "    A   g_complaintlimit \"3\"\n",
+            "        g_debugAlloc \"0\"\n",
+            "      C g_debuganim \"0\"\n",
+            "      C g_debugBullets \"0\"\n",
+            "      C g_debugDamage \"0\"\n",
+            "      C g_debugLocDamage \"0\"\n",
+            "        g_debugMove \"0\"\n",
+            "        g_debugProneCheck \"0\"\n",
+            "        g_debugProneCheckDepthCheck \"1\"\n",
+            "      C g_debugShowHit \"0\"\n",
+            "      C g_dumpAnims \"-1\"\n",
+            "S    L  g_gametype \"dm\"\n",
+            "        g_gravity \"800\"\n",
+            "        g_inactivity \"0\"\n",
+            "        g_intermissionDelay \"1000\"\n",
+            "        g_knockback \"1000\"\n",
+            "        g_listEntity \"0\"\n",
+            "    A   g_log \"games_mp.log\"\n",
+            "    A   g_logSync \"1\"\n",
+            "        g_motd \"\"\n",
+            "        g_no_script_spam \"0\"\n",
+            "        g_password \"\"\n",
+            "        g_ScoresBanner_Allies \"gfx/hud/hud@mpflag_american.tga\"\n",
+            "        g_ScoresBanner_Axis \"gfx/hud/hud@mpflag_german.tga\"\n",
+            "        g_ScoresBanner_None \"gfx/hud/hud@mpflag_none.tga\"\n",
+            "        g_ScoresBanner_Spectators \"gfx/hud/hud@mpflag_spectator.tga\"\n",
+            "        g_scriptMainMenu \"\"\n",
+            "        g_smoothClients \"1\"\n",
+            "        g_speed \"190\"\n",
+            "        g_synchronousClients \"0\"\n",
+            "        g_TeamColor_Allies \"0.5 0.5 1\"\n",
+            "        g_TeamColor_Axis \"1 0.5 0.5\"\n",
+            "        g_TeamName_Allies \"GAME_ALLIES\"\n",
+            "        g_TeamName_Axis \"GAME_AXIS\"\n",
+            "    AL  g_useGear \"1\"\n",
+            "    A   g_voiceChatsAllowed \"4\"\n",
+            "        g_weaponAmmoPools \"0\"\n",
+            "        g_weaponrespawn \"5\"\n",
+        );
+        let n = cv.vars.len();
+        assert_eq!(
+            cv.list(Some("g_*")),
+            format!("{want}\n{n} total cvars\n{n} cvar indexes\n")
+        );
+        assert_eq!(
+            cv.list(Some("G_SPEED")),
+            format!("        g_speed \"190\"\n\n{n} total cvars\n{n} cvar indexes\n")
+        );
+        assert!(
+            cv.list(Some("*_debugMove"))
+                .starts_with("        g_debugMove \"0\"\n\n")
+        );
+    }
+
+    /// `Cvar_Set2`'s refusals and its latch, each string as retail printed
+    /// it over rcon.
+    #[test]
+    fn console_writes_follow_the_flags() {
+        let mut cv = Cvars::new();
+        let refused = |m: &str| ConsoleSet::Refused(m.to_string());
+        assert_eq!(
+            cv.console_set("sv_cheats", "1", false),
+            refused("sv_cheats is read only.\n")
+        );
+        assert_eq!(
+            cv.console_set("fs_game", "x", false),
+            refused("fs_game is write protected.\n")
+        );
+        assert_eq!(
+            cv.console_set("timescale", "2", false),
+            refused("timescale is cheat protected.\n")
+        );
+        assert_eq!(cv.console_set("timescale", "2", true), ConsoleSet::Applied);
+        assert_eq!(cv.get("timescale"), "2");
+
+        assert_eq!(
+            cv.console_set("g_useGear", "0", false),
+            ConsoleSet::Latched(Some("g_useGear will be changed upon restarting.\n".into()))
+        );
+        assert_eq!(
+            cv.console_set("g_useGear", "0", false),
+            ConsoleSet::Latched(None)
+        );
+        assert_eq!(
+            (cv.get("g_useGear"), cv.latched("g_usegear")),
+            ("1", Some("0"))
+        );
+        // The live value again clears the latch without a word.
+        assert_eq!(
+            cv.console_set("g_useGear", "1", false),
+            ConsoleSet::Latched(None)
+        );
+        assert_eq!(cv.latched("g_useGear"), None);
+        cv.console_set("g_useGear", "0", false);
+        cv.apply_latched();
+        assert_eq!((cv.get("g_useGear"), cv.latched("g_useGear")), ("0", None));
+    }
+
+    /// A registration takes over the default of a cvar a `set` created:
+    /// retail's `scr_allow_fg42` reads `"0"` from `default_mp.cfg` and
+    /// `default:"1"` from `makeCvarServerInfo`.
+    #[test]
+    fn a_registration_takes_over_a_set_cvar_s_default() {
+        let mut cv = Cvars::new();
+        cv.exec_cfg("set scr_allow_fg42 0\n");
+        cv.make_server_info("scr_allow_fg42", "1");
+        assert_eq!(
+            cv.lookup("scr_allow_fg42"),
+            Some(("scr_allow_fg42", "0", "1"))
+        );
+        cv.register("scr_allow_fg42", "2");
+        assert_eq!(
+            cv.lookup("scr_allow_fg42"),
+            Some(("scr_allow_fg42", "0", "1"))
+        );
     }
 }

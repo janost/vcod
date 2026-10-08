@@ -563,8 +563,8 @@ registers `heartbeat`, `kick`, `banUser`, `banClient`, `clientkick`,
 `status`, `serverinfo`, `systeminfo`, `dumpuser`, `map_restart`, `map`,
 `map_rotate`, `gameCompleteStatus`, `devmap`, `killserver`, `scriptUsage`,
 `stringUsage`, and `say` only when `dedicated` is non-zero. VERIFIED (string
-table at 0x8084a3c's calls). vcod ports the ones marked below; `banUser`,
-`banClient` (ban.txt), `devmap`, `killserver` and the usage dumps are not.
+table at 0x8084a3c's calls). vcod ports all but `gameCompleteStatus` and
+the two usage dumps.
 
 - `kick <name>` (`SV_Kick_f` 0x8084288, ported): exactly one argument, else
   `Usage: kick <player name>\nkick all = kick everyone\n` (0x80d3c80).
@@ -615,10 +615,67 @@ table at 0x8084a3c's calls). vcod ports the ones marked below; `banUser`,
 - `g_gametype` is latched: `set g_gametype tdm` replies `g_gametype will be
   changed upon restarting.\n` (0x80cfc40), and the query then reads
   `"g_gametype" is:"dm^7" default:"dm^7"\nlatched: "tdm"\n`. VERIFIED.
-  `cvarlist` flags `g_useGear` `L` too. VERIFIED. vcod latches
-  `g_gametype` and `sv_maxclients` (the two `SV_MapRestart_f` escalates on,
-  map-cycle doc section 4) and writes everything else to the running
-  level's cvar table at once; `g_useGear` is not latched there.
+  `cvarlist` flags `g_useGear` `L` too. VERIFIED. The serverinfo
+  configstring keeps the old value until the restart: `serverinfo` read
+  `g_gametype dm` with `tdm` latched. VERIFIED. vcod keeps `g_gametype`'s
+  and `sv_maxclients`' latch in its own fields (the two `SV_MapRestart_f`
+  escalates on, map-cycle doc section 4) and every other `L` cvar's in the
+  cvar table, which a level load applies.
+- The latch, measured over rcon on `g_gametype`, `sv_maxclients` and
+  `g_useGear`: a value other than the live one and the waiting one prints
+  `%s will be changed upon restarting.\n` (0x80cfc40) and waits; the
+  waiting value again prints nothing; the live value prints nothing and
+  clears the wait (the next query has no `latched:` line). VERIFIED.
+- The other refusals of `Cvar_Set2`, each VERIFIED by rcon: an `R` cvar
+  prints `%s is read only.\n` (0x80cfbf8; `set sv_cheats 1`, `set version
+  x`), an `I` cvar `%s is write protected.\n` (0x80cfc0a; `fs_game`,
+  `net_qport`), and a `C` cvar while `sv_cheats` is 0 `%s is cheat
+  protected.\n` (0x80cfc22; `set timescale 2`, and `timescale 2` through
+  `Cvar_Command`). The name is the one typed. Under `sv_cheats 1` the same
+  `set timescale` answers nothing. vcod applies all four from the cvar
+  table's flags.
+- `cvarlist [filter]` (`Cvar_List_f` 0x806f530): one line per cvar whose
+  name matches the filter, seven flag columns then ` %s "%s"\n`; the
+  columns test, in order, 0x4 `S`, 0x2 `U`, 0x40 `R`, 0x10 `I`, 0x1 `A`,
+  0x20 `L`, 0x200 `C`, each a space when clear. INFERRED from the branch
+  order; the letters and their columns VERIFIED (`S    L  g_gametype`,
+  `    AL  g_useGear`, `     LC fs_ignoreLozalized`). It ends with
+  `\n%i total cvars\n%i cvar indexes\n`, both counting every cvar, matched
+  or not (210 and 210 on an idle `dm` server). VERIFIED. The list is sorted
+  case-insensitively with letters folded to lower case: `scr_hq_scorelimit`
+  sorts before `scr_hqt_scorelimit` and `g_ScoresBanner_Allies` before
+  `g_scriptMainMenu`. VERIFIED. The filter matches the whole name without
+  case (`cvarlist G_SPEED` printed `g_speed`, `cvarlist foo` only `foo`)
+  and takes `*` (`*_debugMove`). VERIFIED. vcod's `Com_Filter` has no
+  `[...]` sets.
+- The registry: `tools/capture_cvars.py` lists every cvar a retail server
+  holds with its flags and the default its query prints, and wrote
+  `crates/server/src/cvars/registry.rs`, which seeds vcod's table. VERIFIED.
+  Leaving out the cvars `default_mp.cfg` creates and the ones the scripts
+  register, the defaults that differ from the running values were
+  `dedicated 2`, `net_port 28960`, `sv_maxclients 20`, `sv_pure 1`,
+  `sv_hostname CoDHost`, `mapname nomap`. VERIFIED. A `+set` before the
+  registration keeps its value and the registration still sets the
+  default (`sv_maxclients` read `is:"8" default:"20"`). A registration of a
+  cvar a `set` created takes over its default: `scr_allow_fg42` read
+  `is:"0" default:"1"` after `default_mp.cfg`'s `set` and the script's
+  `makeCvarServerInfo(..., "1")`. VERIFIED. That retail homepath mounted
+  1.5's localized paks, whose `default_mp.cfg` also sets `scr_killcam`,
+  `scr_freelook`, `scr_teambalance`, `scr_spectateenemy` and four `scr_hq*`
+  limits, so its count ran 8 above vcod's on a 1.1 install. VERIFIED.
+- `map` / `devmap` (`SV_Map_f` 0x8083c68, map-cycle doc 5.3): the existence
+  check prints `Can't find map %s\n` (0x80d3903) with the path it tried:
+  `maps/mp/%s.bsp`, or `maps/%s.bsp` for an argument starting `mp/`, and
+  `maps/mp/.bsp` with no argument at all. VERIFIED (`devmap`, `devmap
+  nosuchmap`). The `Cvar_Set("sv_cheats", ...)` comes after the load
+  (0x8083dac..0x8083dd1), `"1"` for `devmap` and `"0"` (0x80d392c) for
+  `map`. VERIFIED by probe: after `devmap mp/mp_carentan` and then `map
+  mp_harbor`, both gamestates carried systeminfo `sv_cheats\1`, and after
+  the second one a configstring 1 update followed while `sv_cheats` queried
+  0. `devmap` on the running map took the restart path, printed the game
+  module's `==== RestartGame ====` banner block, and was followed by a
+  configstring 1 update. VERIFIED. vcod prints no `G_InitGame` banner on a
+  restart.
 - `quit` gets no rcon reply: `Com_Quit_f` exits inside the redirect, before
   it is flushed. VERIFIED (no packet came back).
 
@@ -702,6 +759,40 @@ table at 0x8084a3c's calls). vcod ports the ones marked below; `banUser`,
   three, plus the 172.16/12 and 192.168/16 cases). INFERRED. vcod takes
   loopback and the RFC 1918 ranges instead of enumerating interfaces.
 
+### Bans (`SV_BanUser_f` 0x8084394, `SV_BanNum_f` 0x8084524)
+
+- 1.1 keeps no ban file: the binary has no `ban.txt` string. Both commands
+  find the client the way `kick` and `clientkick` do, then send the
+  out-of-band `banUser %i.%i.%i.%i` (0x80d3d7f) with the client's IPv4
+  address to `codauthorize.activision.com` port 20500 and print `%s was
+  banned from coming back\n` (0x80d3da0) with the client's name. The client
+  is not dropped. A loopback client gets `e "EXE_CANNOTKICKHOSTPLAYER"`
+  instead. INFERRED from 0x8084394's control flow.
+- VERIFIED by capture (`banUser vcod`, `banClient 0` against a probe, with
+  a UDP listener on the address the host resolves the authorize name to):
+  usage lines `Usage: banUser <player name>\n` (0x80d3ce6) and `Usage:
+  banClient <client number>\n` (0x80d3dc0); the misses `Player nobody is
+  not on the server`, `Client 3 is not active`, `Bad slot number: x`; the
+  first ban's reply `Resolving codauthorize.activision.com\n`
+  `codauthorize.activision.com resolved to <ip>:20500\n` then `vcod was
+  banned from coming back\n`, later ones only the last line; the listener
+  read `\xff\xff\xff\xffbanUser 127.0.0.1` from the server's own port each
+  time; the probe stayed connected and `status` still listed it.
+- The ban takes effect only through the authorize server's answer to a
+  later `getIpAuthorize`, which `SV_GetChallenge` sends for a client that
+  is not on the LAN (`net_lanauthorize 0`). `SV_AuthorizeIpPacket`
+  (0x808514c) relays a `deny` to the client as `error\nEXE_ERR_CDKEY_IN_USE`
+  with an empty reason or `INVALID_CDKEY`, as `needcdkey` for
+  `CLIENT_UNKNOWN_TO_AUTH` or `BAD_CDKEY`, and as
+  `error\nEXE_ERR_BAD_CDKEY` for anything else, `BANNED_CDKEY` included.
+  INFERRED (0x8085339..0x80853d9). What reason the authorize server gives
+  for a banned address is not measurable; it no longer answers.
+- vcod: no authorize detour, so the list is vcod's own (`crate::bans`,
+  `--ban-file` to keep it). `getchallenge` from a banned address off the
+  LAN gets `error\nEXE_ERR_BAD_CDKEY`; a LAN address is never refused, as
+  on retail. The reply skips the two `Resolving` lines and nothing goes to
+  the authorize server.
+
 ### Shutdown (`SV_Shutdown` 0x808ad8c)
 
 - `SV_FinalMessage` runs twice over every slot past `CS_ZOMBIE`: for a
@@ -712,6 +803,17 @@ table at 0x8084a3c's calls). vcod ports the ones marked below; `banUser`,
   INFERRED. VERIFIED by capture: on `rcon quit` the probe read
   `e "EXE_SERVERQUIT"` then `w` and dropped; it read nothing after the
   first packet, so the second pass is not seen.
+- `killserver` (0x8084d3c) calls `0x806dc68`, which runs `SV_Shutdown`
+  between the hunk calls and returns; the process does not exit. INFERRED.
+  `SV_Frame` does the same when `sv_killserver` is set, and resets it.
+  INFERRED. With `sv_running` (0x833efc0) at 0 the event loop skips the
+  call to `SV_PacketEvent` (0x808c870, returning to 0x806c1bd). INFERRED.
+  VERIFIED by capture: `rcon killserver` got no reply, the probe read `e
+  "EXE_SERVERKILLED"` and dropped, and afterwards rcon `status`, rcon `map
+  mp_harbor` and `getinfo` all went unanswered while the process stayed
+  up. Only its stdin console could load a map again. vcod: the same, and a
+  console `map` (which only a test can push; vcod-server has no stdin
+  console) brings it back.
 
 ### Out-of-band `disconnect`
 

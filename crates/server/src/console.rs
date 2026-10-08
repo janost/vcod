@@ -26,7 +26,14 @@ pub fn next_restart_id(id: u8) -> u8 {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
-    Map(String),
+    /// `SV_Map_f` (0x8083c68), registered as `map` and `devmap`: the map
+    /// with a leading `mp/` or `mp\` cut, the bsp path the existence check
+    /// names, and whether it was `devmap`, which sets `sv_cheats`.
+    Map {
+        map: String,
+        bsp: String,
+        cheats: bool,
+    },
     MapRestart,
     MapRotate,
     /// `SV_Status_f` (0x80846b4).
@@ -56,6 +63,17 @@ pub enum Command {
     Heartbeat,
     /// `quit`: `SV_Shutdown`, which flatlines the masters, then exit.
     Quit,
+    /// `SV_KillServer_f` (0x8084d3c): `SV_Shutdown("EXE_SERVERKILLED")`
+    /// and keep the process.
+    KillServer,
+    /// `SV_BanUser_f` (0x8084394), by player name; `None` unless there is
+    /// exactly one argument.
+    BanUser(Option<String>),
+    /// `SV_BanNum_f` (0x8084524), by slot; `None` unless there is exactly
+    /// one argument.
+    BanClient(Option<String>),
+    /// `Cvar_List_f` (0x806f530) and its optional filter.
+    CvarList(Option<String>),
     /// Anything else, tokenized: `Cvar_Command` gets the first look, which
     /// prints a cvar named alone and sets it given a value.
     Unknown(Vec<String>),
@@ -68,7 +86,18 @@ impl Command {
         let argv = crate::game::say::tokenize(line);
         let one_arg = || (argv.len() == 2).then(|| argv[1].clone());
         match argv.first().map(|w| w.to_ascii_lowercase()).as_deref() {
-            Some("map") if argv.len() >= 2 => Command::Map(argv[1].clone()),
+            Some(w @ ("map" | "devmap")) => {
+                let arg = argv.get(1).map_or("", String::as_str);
+                let (map, bsp) = match arg.strip_prefix("mp/").or(arg.strip_prefix("mp\\")) {
+                    Some(rest) => (rest, format!("maps/{arg}.bsp")),
+                    None => (arg, format!("maps/mp/{arg}.bsp")),
+                };
+                Command::Map {
+                    map: map.to_string(),
+                    bsp,
+                    cheats: w == "devmap",
+                }
+            }
             Some("map_restart") => Command::MapRestart,
             Some("map_rotate") => Command::MapRotate,
             Some("status") => Command::Status,
@@ -86,6 +115,10 @@ impl Command {
             },
             Some("heartbeat") => Command::Heartbeat,
             Some("quit") => Command::Quit,
+            Some("killserver") => Command::KillServer,
+            Some("banuser") => Command::BanUser(one_arg()),
+            Some("banclient") => Command::BanClient(one_arg()),
+            Some("cvarlist") => Command::CvarList(argv.get(1).cloned()),
             _ => Command::Unknown(argv),
         }
     }
@@ -312,7 +345,29 @@ mod tests {
     fn console_lines_parse() {
         assert_eq!(
             Command::parse("map mp_ship\n"),
-            Command::Map("mp_ship".into())
+            Command::Map {
+                map: "mp_ship".into(),
+                bsp: "maps/mp/mp_ship.bsp".into(),
+                cheats: false
+            }
+        );
+        // Retail's replies: `devmap` alone looks for `maps/mp/.bsp`, and an
+        // `mp/` prefix is cut from the map but kept in the path.
+        assert_eq!(
+            Command::parse("devmap"),
+            Command::Map {
+                map: String::new(),
+                bsp: "maps/mp/.bsp".into(),
+                cheats: true
+            }
+        );
+        assert_eq!(
+            Command::parse("devmap mp/mp_carentan"),
+            Command::Map {
+                map: "mp_carentan".into(),
+                bsp: "maps/mp/mp_carentan.bsp".into(),
+                cheats: true
+            }
         );
         assert_eq!(Command::parse("map_restart"), Command::MapRestart);
         assert_eq!(Command::parse("MAP_ROTATE"), Command::MapRotate);
@@ -337,6 +392,16 @@ mod tests {
         );
         assert_eq!(Command::parse("kick a b"), Command::Kick(None));
         assert_eq!(Command::parse("dumpuser"), Command::DumpUser(None));
+        assert_eq!(Command::parse("banUser a b"), Command::BanUser(None));
+        assert_eq!(
+            Command::parse("banclient 3"),
+            Command::BanClient(Some("3".into()))
+        );
+        assert_eq!(Command::parse("cvarlist"), Command::CvarList(None));
+        assert_eq!(
+            Command::parse("cvarlist g_* x"),
+            Command::CvarList(Some("g_*".into()))
+        );
         assert_eq!(Command::parse("say"), Command::Say(None));
         assert_eq!(
             Command::parse("say \"quoted words\" tail "),

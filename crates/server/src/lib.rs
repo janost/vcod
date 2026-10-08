@@ -3,6 +3,7 @@
 
 pub mod archive;
 pub mod area;
+pub mod bans;
 pub mod bots;
 pub mod client;
 pub mod compass;

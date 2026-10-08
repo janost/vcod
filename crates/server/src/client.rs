@@ -350,7 +350,7 @@ impl Client {
 /// `Sys_IsLANAddress` (0x80c72f8) compares against the host's own
 /// interface addresses by class; this takes loopback and the private ranges
 /// instead.
-fn is_lan(ip: std::net::IpAddr) -> bool {
+pub(crate) fn is_lan(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
         std::net::IpAddr::V6(v6) => v6.is_loopback(),

@@ -235,11 +235,17 @@ menu.
 - A brush model that has turned and turned back keeps a sliver of yaw on
   retail, which drifts what it carries by about 0.02 units a frame; vcod's
   comes back to exactly zero.
-- rcon runs `map`, `map_restart`, `map_rotate`, `status`, `clientkick`,
-  `kick`, `dumpuser`, `serverinfo`, `systeminfo`, `say`, `set`, `seta`,
-  cvar queries, `heartbeat` and `quit`; not `banUser`, `banClient`,
-  `devmap` or `killserver`. A heartbeat reaches the master, which probes
-  back, but I haven't seen vcod listed yet.
+- rcon runs `map`, `devmap`, `map_restart`, `map_rotate`, `status`,
+  `clientkick`, `kick`, `banUser`, `banClient`, `dumpuser`, `serverinfo`,
+  `systeminfo`, `say`, `set`, `seta`, `cvarlist`, cvar queries,
+  `heartbeat`, `killserver` and `quit`; not `gameCompleteStatus`,
+  `scriptUsage` or `stringUsage`. A ban is kept by vcod itself
+  (`--ban-file` keeps it across runs) where retail hands it to Activision's
+  authorize server; like retail's, it refuses an address off the LAN and
+  leaves the banned player connected until they leave. After `killserver`
+  the process sits idle: vcod has no stdin console to load a map from. A
+  heartbeat reaches the master, which probes back, but I haven't seen vcod
+  listed yet.
 - No anti-cheat, no PunkBuster.
 
 **Rendering and sound**
