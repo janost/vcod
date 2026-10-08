@@ -936,6 +936,14 @@ pub struct Server {
     /// The number of the last client packet executed, bots' included: what
     /// `replay_moves` orders every client's cmds and `kill`s by.
     packet_seq: u64,
+    /// When the last frame's messages went out (`Server::frame_sent`), and
+    /// the frame time of the one sent before it.
+    last_send: Option<(Instant, i32)>,
+    /// The frame time of the newest frame sent, for `last_send`.
+    sent_time_ms: i32,
+    /// The ack time of the packet being handled, when it differs from
+    /// `sv_time_ms` (`Server::handle_packet_at`).
+    ack_time_ms: Option<i32>,
     /// The blasts this frame's missile pass set off, for the radius damage
     /// pass to charge (`crate::game::missile::Explosion`).
     pending_explosions: Vec<crate::game::missile::Explosion>,
@@ -1259,6 +1267,9 @@ impl Server {
             anims: None,
             weapon_table: Rc::new(crate::weapons::WeaponTable::empty()),
             packet_seq: 0,
+            last_send: None,
+            sent_time_ms: 0,
+            ack_time_ms: None,
             pending_explosions: Vec::new(),
             cvar_overrides: Vec::new(),
             fall_heights: fall,
@@ -1331,6 +1342,34 @@ impl Server {
 
     fn send_oob(&mut self, to: SocketAddr, text: &str) {
         self.outbox.push((to, build_oob(text)));
+    }
+
+    /// [`Self::handle_packet`] for a packet read off the socket at
+    /// `arrived`. Retail reads its socket every 5 ms and runs a frame in well
+    /// under one, so a move message is stamped with the newest frame that had
+    /// gone out when it arrived; vcod's tick takes long enough that one read
+    /// at the next tick would stamp a packet that came in during the tick a
+    /// frame late. docs/research/cod11-server-handshake.md, "Pings".
+    pub fn handle_packet_at(
+        &mut self,
+        from: SocketAddr,
+        pkt: &[u8],
+        now: Instant,
+        arrived: Instant,
+    ) {
+        self.ack_time_ms = self
+            .last_send
+            .filter(|&(at, _)| arrived < at)
+            .map(|(_, before)| before);
+        self.handle_packet(from, pkt, now);
+        self.ack_time_ms = None;
+    }
+
+    /// Marks the frame just ticked as sent at `at`: the outbox it left has
+    /// gone onto the socket.
+    pub fn frame_sent(&mut self, at: Instant) {
+        self.last_send = Some((at, self.sent_time_ms));
+        self.sent_time_ms = self.sv_time_ms;
     }
 
     /// `SV_PacketEvent`.
@@ -1898,10 +1937,11 @@ impl Server {
             self.enter_world(slot, Some(&first));
         }
         let packet = self.packet_seq;
+        let acked = self.ack_time_ms.unwrap_or(self.sv_time_ms);
         let Some(c) = self.clients[slot].as_mut() else {
             return;
         };
-        c.stamp_acked(self.sv_time_ms);
+        c.stamp_acked(acked);
         c.pending
             .extend(cmds.into_iter().map(|cmd| QueuedCmd { packet, cmd }));
         let excess = c.pending.len().saturating_sub(MAX_PENDING_CMDS);
@@ -9516,6 +9556,46 @@ mod tests {
         sv.handle_packet(addr(7), &oob("getstatus x"), t);
         let (_, body) = reply_text(&mut sv);
         assert!(body.ends_with("\n0 50 \"vcod\""), "{body}");
+    }
+
+    #[test]
+    fn an_ack_is_stamped_with_the_frame_sent_before_it_arrived() {
+        // Each ack of frame i reaches the socket after frame i went out and
+        // is read after frame i + 1. Every other one arrives before frame
+        // i + 1 went out (0 ms), the rest after it (50 ms).
+        let t = Instant::now();
+        let ms = |n: u64| t + Duration::from_millis(n);
+        let mut sv = Server::new(cfg(), t);
+        let mut nc = begun(&mut sv, t);
+        let huff = Huffman::new();
+        let mut last = NULL_USERCMD;
+        let mut clock = 0;
+        for i in 0..40 {
+            sv.tick(t);
+            clock += 50;
+            sv.frame_sent(ms(clock));
+            for (_, pkt) in sv.take_outgoing() {
+                let _ = nc.process_in(&pkt, &huff);
+            }
+            last.server_time = 100 + i * 50;
+            let ack = nc.incoming_sequence as i32;
+            sv.tick(t);
+            clock += 50;
+            sv.frame_sent(ms(clock));
+            sv.take_outgoing();
+            let ops = move_ops(sv.checksum_feed, ack, last);
+            let pkt = nc
+                .build_out(i32::from(sv.server_id), ack, 0, &ops, &huff)
+                .unwrap();
+            let arrived = if i % 2 == 0 {
+                ms(clock - 1)
+            } else {
+                ms(clock + 1)
+            };
+            sv.handle_packet_at(addr(5), &pkt, t, arrived);
+        }
+        sv.tick(t);
+        assert_eq!(sv.clients[0].as_ref().unwrap().ping, 25);
     }
 
     #[test]

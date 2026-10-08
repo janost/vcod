@@ -1009,7 +1009,7 @@ impl GameHost {
         // number is on the free list from here, and the next entity to take
         // it would start out on the dead one's trajectory.
         self.movers.forget(id);
-        self.links.unlink(id);
+        self.links.forget(id);
         self.ents.free(id);
     }
 

@@ -7,7 +7,8 @@
 //! entity pass after the threads (`G_GeneralLink`) re-applies it off the
 //! parent each frame, in entity-number order with the parent run first, one
 //! level deep; script reads the result a frame later, the wire carries it
-//! as `TR_INTERPOLATE` on the frame it was computed.
+//! as `TR_INTERPOLATE` on the frame it was computed. Section 16 adds
+//! `enableLinkTo`, turrets and a tag parent's model change.
 
 use crate::game::host::GameHost;
 use crate::game::spawn::{angles_to_axis, axis_to_angles};
@@ -80,10 +81,12 @@ pub struct Link {
     pub rel: Frame,
 }
 
-/// Every linked entity that is not a client, by child.
+/// Every linked entity that is not a client, by child, and the entities
+/// `enableLinkTo` opened to `linkTo`.
 #[derive(Default)]
 pub struct Links {
     rows: BTreeMap<EntId, Link>,
+    enabled: HashSet<EntId>,
 }
 
 impl Links {
@@ -99,9 +102,35 @@ impl Links {
         self.rows.insert(child, link);
     }
 
-    /// `G_EntUnlink`: the child keeps the pose it has.
-    pub fn unlink(&mut self, child: EntId) {
-        self.rows.remove(&child);
+    /// `G_EntUnlink`: the child keeps the pose it has. Whether there was a
+    /// record to drop.
+    pub fn unlink(&mut self, child: EntId) -> bool {
+        self.rows.remove(&child).is_some()
+    }
+
+    /// `G_FreeEntity`: the record and the `enableLinkTo` bit both go with
+    /// the slot.
+    pub fn forget(&mut self, id: EntId) {
+        self.rows.remove(&id);
+        self.enabled.remove(&id);
+    }
+
+    /// Whether `enableLinkTo` set the receiver's link bit.
+    pub fn is_enabled(&self, id: EntId) -> bool {
+        self.enabled.contains(&id)
+    }
+
+    pub fn enable(&mut self, id: EntId) {
+        self.enabled.insert(id);
+    }
+
+    /// The children linked to `parent` with a tag, and their tags.
+    pub fn tagged_children(&self, parent: EntId) -> Vec<(EntId, String)> {
+        self.rows
+            .iter()
+            .filter(|(_, l)| l.parent == parent)
+            .filter_map(|(c, l)| l.tag.clone().map(|t| (*c, t)))
+            .collect()
     }
 
     /// Whether linking `child` to `parent` would close a loop: the helper
@@ -257,7 +286,7 @@ pub fn link(
     tag: Option<&str>,
     offset: Option<([f32; 3], [f32; 3])>,
 ) -> Result<(), LinkError> {
-    host.links.unlink(child);
+    unlink(host, child);
     let tag = tag.filter(|t| !t.is_empty());
     let base = field_frame(host, cx, parent);
     let frame = tag_frame(host, cx, parent, base, tag);
@@ -298,6 +327,80 @@ pub fn link(
     Ok(())
 }
 
+/// `G_EntUnlink` (0x680d4): the record goes and the child stays where it
+/// is. Its `G_SetAngle` leaves a turret's `apos` stationary for good
+/// (movers doc 16).
+pub fn unlink(host: &mut GameHost, child: EntId) {
+    if host.links.unlink(child) {
+        angle_set(host, child);
+    }
+}
+
+fn angle_set(host: &mut GameHost, id: EntId) {
+    if let Some(r) = host.turrets.get_mut(&id) {
+        r.angle_set = true;
+    }
+}
+
+/// `G_UpdateTagInfoOfChildren` (0x68294), which `G_DObjUpdate` runs after
+/// `setModel` on an entity that is not a client: a child on a tag is
+/// unlinked where it stands when the parent's new model has no such bone,
+/// or no model at all. A child on the entity's own frame keeps its link.
+/// A bone the new model has is looked up again on every pass, so a kept
+/// link needs nothing more here.
+pub fn model_changed(host: &mut GameHost, cx: &mut Cx, parent: EntId) {
+    if client_slot(host, parent).is_some() {
+        return;
+    }
+    let model = model_of(host, cx, parent);
+    for (child, tag) in host.links.tagged_children(parent) {
+        if model.is_empty() || model_bone(host, &model, &tag).is_none() {
+            unlink(host, child);
+        }
+    }
+}
+
+/// `self enableLinkTo()` (0x5d5d0): opens a trigger, or any other plain
+/// entity with no think, to `linkTo`, with `Think_GeneralLink` as its think
+/// (object-model doc 23.2). Errors as retail words them.
+pub fn enable(host: &mut GameHost, cx: &mut Cx, id: EntId) -> Result<(), String> {
+    let classname = classname(host, cx, id);
+    if has_link_bit(host, id, &classname) {
+        return Err("entity already has linkTo enabled".into());
+    }
+    // `eType` and `physicsObject` both 0: none of ours is, past the
+    // receivers the bit test above already took, but a missile or a body.
+    let thinks = host
+        .ents
+        .get(id)
+        .is_some_and(|e| e.think.is_some() || e.nextthink != 0);
+    let general = host.ents.get(id).is_some_and(|e| e.hud.is_none());
+    if !general || (thinks && !classname.eq_ignore_ascii_case("trigger_multiple")) {
+        return Err(format!(
+            "entity (classname: '{classname}') does not currently support enableLinkTo"
+        ));
+    }
+    host.links.enable(id);
+    Ok(())
+}
+
+/// `ent+0x17d` bit 0x20, which `linkTo` gates its receiver on: set by
+/// `G_SpawnItem`, `G_SpawnTurret`, `InitScriptMover`, `ClientSpawn` and
+/// `enableLinkTo` (object-model doc 23.2).
+pub fn has_link_bit(host: &GameHost, id: EntId, classname: &str) -> bool {
+    let Some(e) = host.ents.get(id) else {
+        return false;
+    };
+    e.client.is_some()
+        || e.item.is_some()
+        || host.turrets.contains_key(&id)
+        || host.links.is_enabled(id)
+        || matches!(
+            classname,
+            "script_model" | "script_origin" | "script_brushmodel"
+        )
+}
+
 /// `G_RunFrame`'s entity loop, the link half: every linked entity re-anchored
 /// off its parent, ascending by entity number, each one's parent run first
 /// (0x50939..0x50955). A parent's parent is not, so a chain whose parents
@@ -310,7 +413,16 @@ pub fn run(host: &mut GameHost, cx: &mut Cx) {
     links.rows.retain(|id, _| host.ents.get(*id).is_some());
     // A freed parent's children are unlinked where they stand
     // (`G_FreeEntity` 0x669f1..0x66a9e).
-    links.rows.retain(|_, l| host.ents.get(l.parent).is_some());
+    let orphans: Vec<EntId> = links
+        .rows
+        .iter()
+        .filter(|(_, l)| host.ents.get(l.parent).is_none())
+        .map(|(c, _)| *c)
+        .collect();
+    for child in orphans {
+        links.rows.remove(&child);
+        angle_set(host, child);
+    }
 
     let children: Vec<EntId> = links.rows.keys().copied().collect();
     // Every entity the loop has run this frame, below `child.0` or not.
@@ -508,6 +620,48 @@ mod tests {
                 "failed to link entity since parent has no model"
             );
             assert!(!host.links.contains(y), "the failed link left y unlinked");
+        });
+    }
+
+    /// `enableLinkTo` opens a trigger to `linkTo` once; an entity that has
+    /// the bit already, or a think on anything but a `trigger_multiple`,
+    /// is refused in retail's words.
+    #[test]
+    fn enable_link_to_opens_a_trigger_once() {
+        let (mut vm, mut host): (Vm, GameHost) = fixture();
+        vm.with_cx(|cx| {
+            let p = spawn(&mut host, cx, "script_origin", [0.0; 3], [0.0; 3]);
+            let t = spawn(
+                &mut host,
+                cx,
+                "trigger_multiple",
+                [16.0, 0.0, 0.0],
+                [0.0; 3],
+            );
+            let u = spawn(&mut host, cx, "trigger_use", [0.0; 3], [0.0; 3]);
+            let msg = |r: Result<(), String>| r.unwrap_err();
+            assert_eq!(
+                msg(enable(&mut host, cx, p)),
+                "entity already has linkTo enabled"
+            );
+            host.ents.get_mut(t).unwrap().think = Some(crate::game::entity::ThinkFn::Free);
+            host.ents.get_mut(u).unwrap().think = Some(crate::game::entity::ThinkFn::Free);
+            assert_eq!(
+                msg(enable(&mut host, cx, u)),
+                "entity (classname: 'trigger_use') does not currently support enableLinkTo"
+            );
+            // A `trigger_multiple` passes with a think (its wait's).
+            enable(&mut host, cx, t).unwrap();
+            assert_eq!(
+                msg(enable(&mut host, cx, t)),
+                "entity already has linkTo enabled"
+            );
+            link_to(&mut host, cx, Some(Target::Entity(t)), &[Value::Entity(p)]).unwrap();
+            let o = cx.intern_folded("origin");
+            host.set_field(cx, p, o, Value::Vector([0.0, 0.0, 32.0]))
+                .unwrap();
+            run(&mut host, cx);
+            assert!(close(origin(&mut host, cx, t), [16.0, 0.0, 32.0]));
         });
     }
 

@@ -1147,3 +1147,26 @@ The grenade half logs `PROBE gcb first <time> <entity> <iDamage> <origin>`
 for the first victim of each grenade walk, which parks the other two, and
 `PROBE gcb later ...` for any victim after it. Retail logged three `first`
 lines and no `later` one.
+||||||| 2ff9a33
+
+## probe_linkto2
+
+`linkTo`'s second round on mp_carentan. Once an allied player has spawned it
+moves the bombzone_A `trigger_multiple` onto the player by an origin write,
+then calls `enableLinkTo` on it and links it to a script_origin that carries it
+there and back, logging every `trigger` notify. It links the `misc_mg42` 297
+to a script_origin and lifts and turns it, links two script_origins to a
+script_model (one on `bip01 head`, one on the model's own frame) and changes
+the model four times, links an item the frame it spawns in mid-air and one
+that has landed, lifts both and unlinks them, and ends on `enableLinkTo` on a
+script_origin, whose fatal is the last measurement. The 2026-10-08 run is
+`crates/server/tests/fixtures/movers/mp_carentan-dm-linkto2.txt` and
+`-linkto2-wire.txt`; `crates/server/tests/linkto_ab.rs` replays it and
+`docs/research/cod11-movers.md` 16 reads it.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PORT=29581 PROBE_SECS=75 \
+    tools/run_probe.sh client-probes/probe_linkto2 mp_carentan
+# second shell, about 8 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:29581 --probe-team allies --probe-secs 64
+```
