@@ -5,6 +5,8 @@
 
 use std::collections::BTreeMap;
 
+use vcod_common::net::Userinfo;
+
 use crate::play::input::Action;
 
 use super::keys;
@@ -42,6 +44,7 @@ pub enum Effect {
 }
 
 /// One cvar. `archive` is retail's `CVAR_ARCHIVE`: written to the config.
+/// `cheat` is `CVAR_CHEAT`: only `sv_cheats 1` lets it move off its default.
 #[derive(Debug, Clone)]
 pub struct Cvar {
     pub name: String,
@@ -49,7 +52,13 @@ pub struct Cvar {
     pub default: String,
     pub archive: bool,
     pub userinfo: bool,
+    pub cheat: bool,
 }
+
+/// Retail's cvar flag bits (docs/research/cod11-console.md, section 5).
+const ARCHIVE: u32 = 0x1;
+const USERINFO: u32 = 0x2;
+const CHEAT: u32 = 0x200;
 
 /// The client commands, for `cmdlist` and completion.
 const COMMANDS: &[&str] = &[
@@ -171,6 +180,9 @@ pub struct Shell {
     cvars: BTreeMap<String, Cvar>,
     /// Keyed by canonical key name ([`keys::canonical`]).
     binds: BTreeMap<String, String>,
+    /// The server's `sv_cheats`; off until a systeminfo says otherwise, as
+    /// CoDMP.exe registers it `"0"`.
+    cheats: bool,
 }
 
 impl Default for Shell {
@@ -185,29 +197,59 @@ impl Shell {
         let mut s = Shell {
             cvars: BTreeMap::new(),
             binds: BTreeMap::new(),
+            cheats: false,
         };
-        s.register("name", "vcod", true, true);
+        s.register("name", "vcod", ARCHIVE | USERINFO);
         // CoDMP.exe registers both with these defaults
         // (docs/research/cod11-console.md, section 4).
-        s.register("cl_run", "1", true, false);
-        s.register("scr_conspeed", "3", false, false);
+        s.register("cl_run", "1", ARCHIVE);
+        s.register("scr_conspeed", "3", 0);
+        // CL_Init and cgame's cvar table (section 5).
+        s.register("sensitivity", "5", ARCHIVE);
+        s.register("m_yaw", "0.022", ARCHIVE);
+        s.register("m_pitch", "0.022", ARCHIVE);
+        s.register("rate", "5000", ARCHIVE | USERINFO);
+        s.register("snaps", "20", ARCHIVE | USERINFO);
+        s.register("cg_fov", "80", ARCHIVE | CHEAT);
         for (key, cmd) in DEFAULT_BINDS {
             s.binds.insert(key.to_string(), cmd.to_string());
         }
         s
     }
 
-    fn register(&mut self, name: &str, value: &str, archive: bool, userinfo: bool) {
+    fn register(&mut self, name: &str, value: &str, flags: u32) {
         self.cvars.insert(
             name.to_ascii_lowercase(),
             Cvar {
                 name: name.to_string(),
                 value: value.to_string(),
                 default: value.to_string(),
-                archive,
-                userinfo,
+                archive: flags & ARCHIVE != 0,
+                userinfo: flags & USERINFO != 0,
+                cheat: flags & CHEAT != 0,
             },
         );
+    }
+
+    /// The server's `sv_cheats` changed. Turning it off puts every cheat
+    /// cvar back to its default, as `Cvar_SetCheatState` does.
+    pub fn set_cheats(&mut self, on: bool) {
+        self.cheats = on;
+        if !on {
+            for c in self.cvars.values_mut().filter(|c| c.cheat) {
+                c.value.clone_from(&c.default);
+            }
+        }
+    }
+
+    /// The userinfo the cvars make.
+    pub fn userinfo(&self) -> Userinfo {
+        let get = |n: &str| self.cvar(n).unwrap_or_default().to_string();
+        Userinfo {
+            name: get("name"),
+            rate: get("rate"),
+            snaps: get("snaps"),
+        }
     }
 
     pub fn cvar(&self, name: &str) -> Option<&str> {
@@ -461,7 +503,12 @@ impl Shell {
             default: value.to_string(),
             archive: false,
             userinfo: false,
+            cheat: false,
         });
+        if c.cheat && !self.cheats && c.value != value {
+            out.push(Effect::Print(format!("{} is cheat protected.", c.name)));
+            return;
+        }
         let changed = c.value != value;
         let newly_archived = archive && !c.archive;
         c.value = value.to_string();
@@ -733,5 +780,59 @@ mod tests {
         assert_eq!(s.complete("unb"), ["unbind", "unbindall"]);
         assert_eq!(s.complete("CL_"), ["cl_run"]);
         assert!(s.complete("zzz").is_empty());
+    }
+
+    #[test]
+    fn client_cvars_start_at_retail_defaults() {
+        let s = Shell::new();
+        for (name, v) in [
+            ("sensitivity", "5"),
+            ("m_yaw", "0.022"),
+            ("m_pitch", "0.022"),
+            ("rate", "5000"),
+            ("snaps", "20"),
+            ("cg_fov", "80"),
+        ] {
+            assert_eq!(s.cvar(name), Some(v), "{name}");
+        }
+        assert_eq!(
+            s.userinfo(),
+            Userinfo {
+                name: "vcod".into(),
+                rate: "5000".into(),
+                snaps: "20".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn rate_and_snaps_are_userinfo() {
+        let mut s = Shell::new();
+        assert_eq!(
+            s.execute("rate 25000"),
+            [Effect::Userinfo, Effect::SaveConfig]
+        );
+        assert_eq!(
+            s.execute("seta snaps 30"),
+            [Effect::Userinfo, Effect::SaveConfig]
+        );
+        assert_eq!(s.userinfo().rate, "25000");
+        assert_eq!(s.userinfo().snaps, "30");
+        assert_eq!(s.execute("sensitivity 3"), [Effect::SaveConfig]);
+    }
+
+    #[test]
+    fn cg_fov_is_cheat_protected() {
+        let mut s = Shell::new();
+        assert_eq!(
+            s.execute("cg_fov 95"),
+            [Effect::Print("cg_fov is cheat protected.".into())]
+        );
+        assert_eq!(s.cvar("cg_fov"), Some("80"));
+        s.set_cheats(true);
+        assert_eq!(s.execute("cg_fov 95"), [Effect::SaveConfig]);
+        assert_eq!(s.cvar("cg_fov"), Some("95"));
+        s.set_cheats(false);
+        assert_eq!(s.cvar("cg_fov"), Some("80"), "sv_cheats 0 resets it");
     }
 }

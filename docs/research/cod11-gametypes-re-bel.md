@@ -303,6 +303,36 @@ precached\n")` (0x773a0).
 VERIFIED, `.statusicon`'s getter (0x41b7c): 0 reads `""` and `1..8`
 configstring `0x14 + n`.
 
+#### The client draw (`cgame_mp_x86.dll` 1.1)
+
+- VERIFIED: the player draw (0x30028210) calls the sprite pass 0x300274d0
+  (call at 0x300282de) after it has skipped any entity whose `eFlags` has
+  0x100 or 0x1 (tests at 0x3002822e and 0x30028249).
+- VERIFIED: the pass needs `infoValid` (clientinfo `+0x0`, table
+  0x3018bc0c, stride 0x448) for both the entity's `clientNum` (`es+0x90`)
+  and the viewed client (`cg.snap->ps.clientNum`, snap `+0xb8`); the team
+  is clientinfo `+0x2c` (0x3018bc38).
+- VERIFIED, 0x30027523..0x3002753e: the head icon draws when `iHeadIcon`
+  (`es+0x94`) is non-zero and `iHeadIconTeam` (`es+0x98`) is 0, the viewer's
+  team is 3 (spectator), or the two teams match. The material is
+  configstring `0x1c + iHeadIcon` registered at 0x30027549 (type 5).
+- VERIFIED, the sprite (0x30027310, called with height 0 and no distance
+  scaling): when the entity has a model and the `Bip01 Head` tag (string
+  0x300630a8) resolves, the centre is that tag plus `18.0` up (0x300694d8);
+  otherwise `lerpOrigin` (`cent+0x1f8`) plus `72.0` up (0x30069784). The
+  refEntity is type 4 with radius `6.66` (0x3006977c), rotation 0 and
+  shaderRGBA `ff ff ff ff`, handed to the renderer through trap `0x3d`.
+  `renderfx` is 2 only for the viewed client's own body in first person.
+- VERIFIED: the same pass then stacks the other player sprites, raising the
+  height by `16.0` (0x30027565) when a head icon drew: `headiconYouInKillCam`
+  for the killcam's subject, `headiconDisconnected` on `eFlags` 0x1000,
+  a voice-chat icon while `cent+0x224 > cg.time`, and
+  `headiconTalkBalloon` on `eFlags` 0x40000 at `height - 5.0` (0x30069414),
+  the last two only for a teammate or a spectating viewer. The killcam
+  icon alone passes the distance flag: radius `6.66 * max(0.6, d * 1/256 +
+  0.2)` and centre raised `8 * scale - 8` (0x30027404..0x30027435). vcod
+  draws only the head icon (`crates/client/src/head_icon.rs`).
+
 ### 7.4 `objective_position` detaches
 
 VERIFIED: `objective_position` (0x5e128) opens with the same detach
