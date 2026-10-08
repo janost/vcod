@@ -96,8 +96,13 @@ built from the bytes up, this might be your kind of thing.
 - Has retail's drop-down console on `` ` `` / `~`: the log, chat and server
   prints scroll in it, and it takes `connect`, `disconnect`, `name`, `bind`
   and the rest of the commands under [Console](#console). Binds and archived
-  cvars persist in `main/vcod_mp.cfg`. Losing the server or failing a load
-  drops you to the console instead of closing the window.
+  cvars persist in `main/vcod_mp.cfg`.
+- Opens on the stock main menu and server browser, drawn from the game's own
+  `ui_mp/*.menu` files: Join a Game lists the servers
+  `codmaster.activision.com` knows with name, map, players, type and ping,
+  sorts by column, and joins on double-click or Join Server. Losing the
+  server or failing a load puts you back on the main menu with the reason in
+  the stock error popup.
 
 I have played it against my own server and against the retail Linux 1.1d
 dedicated server running locally. I have spectated public servers with it. I
@@ -143,8 +148,9 @@ either: the people on it signed up for Call of Duty.
   `trigger_lookat`), and script movers whose trajectories reach the wire.
   A moving brush model carries the players and items on it and shoves the
   players in its way, and a player linked to a moving entity rides it.
-  `linkTo` works on script models, origins, brush models and items too,
-  including to a tag on a player's model. The client draws a
+  `linkTo` works on script models, origins, brush models, items and
+  turrets too, and on a trigger after `enableLinkTo`, including to a tag
+  on a player's model. The client draws a
   brush model where its entity is, with its baked lightmap, so a hidden or
   deleted one is gone, and draws an item resting on a mover riding it.
 - Intermission, `map_restart`, and `sv_mapRotation` the way retail runs them,
@@ -158,12 +164,15 @@ either: the people on it signed up for Call of Duty.
   enemy they see and toward gunfire, turret fire and blasts they hear. In
   S&D each team spreads over both bombzones, attackers plant and one
   defender defuses while the rest cover. In Retrieval attackers pick the
-  objective up and carry it to its goal while defenders guard. In Behind
-  Enemy Lines the axis hunt the allied compass markers and the hunted
-  allies keep moving away from what they last saw or heard.
+  objective up, carry it to its goal and escort the carrier, while
+  defenders guard it, then hold the goal and go after the carrier. In
+  Behind Enemy Lines the axis hunt the allied compass markers and the
+  hunted allies keep moving away from what they last saw or heard and from
+  their own marker.
   `--bots-shoot` makes them fight with a reaction delay, a capped turn rate
   and aim error that settles while they hold a target, draw the pistol when
-  the primary runs dry up close, and chase a lost enemy to where it was
+  the primary runs dry up close and the draw beats the reload, or when the
+  primary is out of ammo, and chase a lost enemy to where it was
   last seen. They are still bad at it.
 
 ### The research
@@ -196,9 +205,13 @@ how something looks or sounds still needs a human squinting at a screen.
 The list of what retail does and vcod doesn't is longer than this. These are
 the gaps you're most likely to run into.
 
-**No front end.** No main menu, no server browser, no options screen. You get
-command-line flags and the console: `connect`, binds and a few client cvars
-(see [Console](#console)).
+**Partial front end.** The main menu, server browser, quit and error popups
+work. Options, Multiplayer Options, Start New Server, Mods, the browser's
+password, server info and filter popups print "not in vcod yet" in the
+console instead. There is no favourites list or LAN scan: New Favorite opens
+the console with `connect ` typed, and that is the way to a LAN or
+favourite server. Esc in a game releases the mouse; there is no in-game
+menu.
 
 **Client**
 
@@ -214,10 +227,11 @@ command-line flags and the console: `connect`, binds and a few client cvars
 
 **Server**
 
-- `linkTo` on a turret stops with an error, and `enableLinkTo` is missing;
-  no stock MP script uses either. An entity linked to a tag on a player's
-  model sits within a few units of where retail puts it, and does not
-  follow the body's swing after `setPlayerAngles`.
+- An entity linked to a tag on a player's model sits within a few units of
+  where retail puts it, and does not follow the body's swing after
+  `setPlayerAngles`. A tag on a model attached with `attach` cannot take a
+  link. The gunner on a linked turret has not been measured against
+  retail.
 - A brush model that has turned and turned back keeps a sliver of yaw on
   retail, which drifts what it carries by about 0.02 units a frame; vcod's
   comes back to exactly zero.
@@ -338,7 +352,7 @@ vcod mp_pavlov --game-dir /path/to/CallOfDuty
 ```
 
 - The first positional argument is the map name (case-insensitive). With no
-  map and no `--connect`, the window opens on a full-screen console.
+  map and no `--connect`, the window opens on the main menu.
 - `--list` prints every `.bsp` in the search path instead of opening a window.
 - `--mod-dir` picks which subdirectory's pk3s to index: `main` (default) or
   `uo` for United Offensive. Only one directory mounts at a time, so a UO map
@@ -509,6 +523,16 @@ The client's cvars, at retail's defaults:
 Binds only
 act while connected; fly and walk mode keep their fixed keys. Esc, M (the
 script menu), F3 and F4 are fixed.
+
+### Main menu and server browser
+
+| Input | Action |
+|---|---|
+| Mouse, left click | Pick a button, select a server |
+| Double-click a server | Join it |
+| Up / Down, Enter | Move the server selection, join it |
+| Wheel, Page Up / Page Down | Scroll the server list |
+| Esc | Back (the browser returns to the main menu) |
 
 ### Everywhere
 

@@ -75,7 +75,10 @@ const ENEMY_REFRESH_MS: i32 = 100;
 /// resumes next tick (bot-navigation.md, section 3).
 const BOT_PLAN_BUDGET: u32 = 4000;
 /// A retrieval objective as the bots see it, with its carrier's slot.
-type ReObjCarried = (crate::bots::ReObjView, Option<usize>);
+/// A retrieval objective as [`Server::bot_re`] reads it: the view with the
+/// carrier's feet in `carrier_at` for every team, the carrier's slot, and
+/// the compass record's `teamNum`.
+type ReObjCarried = (crate::bots::ReObjView, Option<usize>, i32);
 /// The tick pace (`1000 / sv_fps`), also the dt floor a fresh sim starts from.
 pub(crate) const FRAME_MS: i32 = 50;
 /// Retail's `MAX_CLIENTS`. Client slots index a 6-bit wire field
@@ -849,10 +852,10 @@ fn relink(bodies: &mut Vec<vcod_common::movetrace::Body>, clients: &[Option<Clie
     }
 }
 
-/// One victim of a grenade's walk: a client, or an entity with no client.
+/// One candidate of a grenade's walk: a client, or an entity with no client.
 enum BlastCandidate<'a> {
     Client(usize, &'a ClientSim),
-    Entity(crate::game::combat::EntityVictim),
+    Entity(vcod_gsc::EntId),
 }
 
 /// What one client's usercmd replay did this tick, for the trace line.
@@ -2591,8 +2594,12 @@ impl Server {
                         .count(),
                     objectives: objectives
                         .iter()
-                        .map(|(o, carrier)| crate::bots::ReObjView {
+                        .map(|(o, carrier, shown_to)| crate::bots::ReObjView {
                             mine: *carrier == Some(*slot),
+                            // What the bot's compass shows.
+                            carrier_at: o
+                                .carrier_at
+                                .filter(|_| *shown_to == 0 || *shown_to == mine),
                             ..*o
                         })
                         .collect(),
@@ -2610,9 +2617,15 @@ impl Server {
                     // What the compass shows the team (`objectives_for`).
                     markers: markers
                         .iter()
-                        .filter(|(t, _)| *t == 0 || *t == mine)
-                        .map(|(_, at)| *at)
+                        .filter(|(_, t, _)| *t == 0 || *t == mine)
+                        .map(|(_, _, at)| *at)
                         .collect(),
+                    // `make_obj_marker` numbers a player's record
+                    // entnum + 1 (`bel.gsc` 1574).
+                    trail: markers
+                        .iter()
+                        .find(|(n, _, _)| *n == *slot + 1)
+                        .map(|(_, _, at)| *at),
                 });
             }
         }
@@ -2751,6 +2764,10 @@ impl Server {
                 return;
             };
             let team = if i % 2 == 0 { "allies" } else { "axis" };
+            // `bel`'s menu takes axis only and the script deals the allied
+            // places, so that is the team the bot asks for there.
+            let bel = self.level_cvars.as_ref().is_some_and(|(g, _)| g == "bel");
+            let asks = if bel { "axis" } else { team };
             let mut bot = crate::bots::Bot::new(team, self.cfg.bots_shoot, self.rand() as u64);
             let name = format!("bot{}", i + 1);
             bot.name = name.clone();
@@ -2774,7 +2791,7 @@ impl Server {
                     name: name.clone(),
                 });
             }
-            log::info!("client {slot} {name:?} connected (bot, team {team})");
+            log::info!("client {slot} {name:?} connected (bot, team {asks})");
         }
     }
 
@@ -2827,6 +2844,34 @@ impl Server {
         };
         let grenade = held(&|d| d.weapon_type == "grenade");
         let pistol = held(&|d| d.weapon_slot == "pistol");
+        let ms = |s: f32| (s * 1000.0) as i32;
+        // A segmented reload's first round lands after its start segment
+        // and one loop segment.
+        let reload_ms = def.map_or(0, |d| {
+            if d.segmented_reload {
+                ms(d.reload_start_time + d.reload_time)
+            } else if d.reload_empty_time > 0.0 {
+                ms(d.reload_empty_time)
+            } else {
+                ms(d.reload_time)
+            }
+        });
+        let draw_ms = pistol
+            .and_then(|p| weapons.get(p as usize))
+            .map_or(0, |p| ms(def.map_or(0.0, |d| d.drop_time) + p.raise_time));
+        let loaded = (1u8..64)
+            .filter(|&i| sim.ps.weapons_held >> i & 1 == 1)
+            .filter(|&i| {
+                weapons.get(i as usize).is_some_and(|d| {
+                    let reserve = if d.clip_only {
+                        0
+                    } else {
+                        sim.ps.ammo[d.ammo_index]
+                    };
+                    sim.ps.ammoclip[d.clip_index] as i32 + reserve as i32 > 0
+                })
+            })
+            .fold(0u64, |m, i| m | 1 << i);
         Some(crate::bots::BotView {
             origin: sim.ps.origin.into(),
             delta_angles: sim.delta_angles(),
@@ -2862,6 +2907,9 @@ impl Server {
             lip: false,
             stop: false,
             pistol,
+            reload_ms,
+            draw_ms,
+            loaded,
             sd: None,
             re: None,
             bel: None,
@@ -2909,9 +2957,9 @@ impl Server {
         ))
     }
 
-    /// The live objective records as `(teamNum, origin)`, on a `bel` level
-    /// only: the allied players' compass markers.
-    fn bot_bel(&self) -> Option<Vec<(i32, [f32; 3])>> {
+    /// The live objective records as `(index, teamNum, origin)`, on a `bel`
+    /// level only: the allied players' compass markers.
+    fn bot_bel(&self) -> Option<Vec<(usize, i32, [f32; 3])>> {
         if self.level_cvars.as_ref().is_none_or(|(g, _)| g != "bel") {
             return None;
         }
@@ -2920,15 +2968,16 @@ impl Server {
             rt.host
                 .objectives
                 .iter()
-                .filter(|o| o.state != 0)
-                .map(|o| (o.team_num, o.origin_f32()))
+                .enumerate()
+                .filter(|(_, o)| o.state != 0)
+                .map(|(i, o)| (i, o.team_num, o.origin_f32()))
                 .collect(),
         )
     }
 
     /// The retrieval objectives for this frame's bot views, on an `re` level
     /// only: the attacking and defending team values and each objective,
-    /// with `mine` left for the caller and its carrier's slot beside it.
+    /// with `mine` and the compass filter left for the caller.
     fn bot_re(&mut self) -> Option<(i32, i32, Vec<ReObjCarried>)> {
         if self.level_cvars.as_ref().is_none_or(|(g, _)| g != "re") {
             return None;
@@ -2955,14 +3004,20 @@ impl Server {
                     .flat_map(|&x| [lo[1], hi[1]].map(|y| (x - goal[0]).hypot(y - goal[1])))
                     .fold(0.0, f32::max)
                     + 16.0;
+                let carrier_at = r.carrier.and_then(|slot| {
+                    let sim = self.clients.get(slot)?.as_ref()?.sim.as_ref()?;
+                    Some(sim.ps.origin.into())
+                });
                 let view = crate::bots::ReObjView {
                     pickup: r.pickup.map(mid),
                     goal,
                     goal_clear,
                     carried: r.carrier.is_some(),
                     mine: false,
+                    carrier_at,
+                    laid: r.laid,
                 };
-                (view, r.carrier)
+                (view, r.carrier, r.shown_to)
             })
             .collect();
         Some((team(&o.attackers), team(&o.defenders), objectives))
@@ -4282,14 +4337,34 @@ impl Server {
                 .enumerate()
                 .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
                 .collect();
+            // Where a callback earlier in the walk set a client down: its
+            // link moved off the one its last cmd made (`setOrigin` relinks
+            // at once, combat doc 14.7), and the walk measures it there.
+            let set_down =
+                |rt: &script::ScriptRuntime, slot: usize, s: &crate::spectate::ClientSim| {
+                    let link = glam::Vec3::from(rt.host.client_link_origin[slot]);
+                    (link != s.link_origin()).then_some(link)
+                };
             let victim =
-                |slot: usize, s: &crate::spectate::ClientSim| crate::game::combat::BlastVictim {
-                    slot,
-                    origin: s.ps.origin,
-                    link_origin: s.link_origin(),
-                    mins: s.ps.mins(),
-                    maxs: s.ps.maxs(),
-                    eye: s.ps.view().eye,
+                |rt: &script::ScriptRuntime, slot: usize, s: &crate::spectate::ClientSim| {
+                    let eye = s.ps.view().eye;
+                    let mut v = crate::game::combat::BlastVictim {
+                        slot,
+                        origin: s.ps.origin,
+                        link_origin: s.link_origin(),
+                        mins: s.ps.mins(),
+                        maxs: s.ps.maxs(),
+                        eye,
+                    };
+                    if let Some(at) = set_down(rt, slot, s) {
+                        v = crate::game::combat::BlastVictim {
+                            origin: at,
+                            link_origin: at,
+                            eye: at + (eye - s.ps.origin),
+                            ..v
+                        };
+                    }
+                    v
                 };
             for x in &self.pending_explosions {
                 let Some(def) = weapons.get(x.weapon as usize) else {
@@ -4306,8 +4381,9 @@ impl Server {
                     "MOD_GRENADE_SPLASH",
                 );
                 // `trap_EntitiesInBox`' order (combat doc 14.7): the
-                // clients and the turrets as the area tree lists them.
-                let entities = rt.blast_entities();
+                // clients and the turrets as the area tree lists them, taken
+                // once. Each is measured on its turn, after every earlier
+                // victim's callback (14.5).
                 let (mins, maxs) = blast.search_box();
                 let candidates: Vec<BlastCandidate> = rt
                     .host
@@ -4317,14 +4393,10 @@ impl Server {
                     .filter_map(|n| {
                         if let Some(&(slot, s)) = sims.iter().find(|(slot, _)| *slot == n as usize)
                         {
-                            return blast
-                                .reaches(&victim(slot, s))
-                                .then_some(BlastCandidate::Client(slot, s));
+                            return Some(BlastCandidate::Client(slot, s));
                         }
-                        let v = entities.iter().find(|v| v.id.0 == n)?;
-                        blast
-                            .reaches_entity(v)
-                            .then(|| BlastCandidate::Entity(v.clone()))
+                        let id = rt.host.ents.handle(n)?;
+                        Some(BlastCandidate::Entity(id))
                     })
                     .collect();
                 // A client a callback of this walk killed is a corpse and
@@ -4333,28 +4405,43 @@ impl Server {
                     |rt: &script::ScriptRuntime| -> Vec<crate::game::combat::HitBody> {
                         sims.iter()
                             .filter(|(other, _)| !rt.client_vitals(*other).dead)
-                            .filter_map(|(other, s)| s.hit_body(*other))
+                            .filter_map(|&(other, s)| {
+                                let mut body = s.hit_body(other)?;
+                                if let Some(at) = set_down(rt, other, s) {
+                                    body.origin = at;
+                                }
+                                Some(body)
+                            })
                             .collect()
                     };
                 for candidate in candidates {
-                    let bodies = live_bodies(rt);
-                    let models = rt.placed_script_models();
                     match candidate {
                         BlastCandidate::Client(slot, s) => {
                             if !rt.client_vitals(slot).takedamage {
                                 continue;
                             }
-                            if let Some(hit) = blast.hit(
-                                &victim(slot, s),
-                                collision,
-                                &models,
-                                &bodies,
-                                bones.as_mut(),
-                            ) {
+                            let v = victim(rt, slot, s);
+                            if !blast.reaches(&v) {
+                                continue;
+                            }
+                            let bodies = live_bodies(rt);
+                            let models = rt.placed_script_models();
+                            if let Some(hit) =
+                                blast.hit(&v, collision, &models, &bodies, bones.as_mut())
+                            {
                                 rt.deliver_hits(vec![hit], self.sv_time_ms);
                             }
                         }
-                        BlastCandidate::Entity(v) => {
+                        BlastCandidate::Entity(id) => {
+                            let Some(v) = rt.blast_entities().into_iter().find(|v| v.id == id)
+                            else {
+                                continue;
+                            };
+                            if !blast.reaches_entity(&v) {
+                                continue;
+                            }
+                            let bodies = live_bodies(rt);
+                            let models = rt.placed_script_models();
                             if let Some(damage) =
                                 blast.entity_damage(&v, collision, &models, &bodies, bones.as_mut())
                             {

@@ -152,6 +152,15 @@ pub struct BotView {
     pub stop: bool,
     /// A held pistol's configstring index, when one is in the kit.
     pub pistol: Option<u8>,
+    /// Ms from a dry reload's start to the held weapon's next shot; 0 when
+    /// unknown.
+    pub reload_ms: i32,
+    /// Ms from putting the held weapon away to the pistol's first shot
+    /// (`dropTime` plus the pistol's `raiseTime`); 0 with no pistol.
+    pub draw_ms: i32,
+    /// The weapons held with a round left, clip or reserve, as a
+    /// `weapons_held` mask.
+    pub loaded: u64,
     /// The S&D objectives, on an `sd` level only.
     pub sd: Option<SdView>,
     /// The retrieval objectives, on an `re` level only.
@@ -171,6 +180,9 @@ pub struct BelView {
     /// player, a lagging mean of where he stood (`bel.gsc`
     /// `make_obj_marker`); the allies see none.
     pub markers: Vec<[f32; 3]>,
+    /// The bot's own marker, which the hunters walk to: a hunted bot
+    /// knows the rule if not the spot on its compass.
+    pub trail: Option<[f32; 3]>,
 }
 
 /// The stock `re.gsc` objectives as the server read them this frame
@@ -198,6 +210,12 @@ pub struct ReObjView {
     /// Someone carries it; `mine` when that is this bot.
     pub carried: bool,
     pub mine: bool,
+    /// The carrier's feet, while the bot's team's compass follows him: the
+    /// attackers always, the defenders only under `scr_re_showcarrier`.
+    pub carrier_at: Option<[f32; 3]>,
+    /// Where its compass marker last lay; a carry leaves it there, so it
+    /// is where the carrier set out from.
+    pub laid: Option<[f32; 3]>,
 }
 
 /// Which side of the S&D objective the bot's team plays this map.
@@ -399,6 +417,9 @@ struct Objective {
     rest: u32,
     /// Set while the bot plays, so the end of a life redraws `pick` once.
     live: bool,
+    /// A defender has walked to where the carried objective was taken
+    /// from; cleared once nothing is carried.
+    swept: bool,
 }
 
 /// What the objective wants of the bot right now.
@@ -420,6 +441,11 @@ enum ObjTarget {
     },
     /// Carry a retrieval objective into its goal; touching it delivers.
     Deliver([f32; 3]),
+    /// Run at a moving point: a carrier the compass shows.
+    Chase([f32; 3]),
+    /// Walk the carrier's likely way backwards, from the goal side to where
+    /// the objective was taken, once per carry.
+    Sweep([f32; 3]),
 }
 
 /// `level.planttime` is 5 s (`sd.gsc` `bombzones`); a hold this long that
@@ -635,12 +661,13 @@ impl Bot {
         Goal::Roam
     }
 
-    /// The hunted keep moving, and away from the last enemy they saw or
-    /// heard; the hunters go after what they saw or heard, else the nearest
-    /// compass marker they have not yet stood at.
+    /// The hunted run from the last enemy they saw or heard, else from
+    /// their own marker, where the hunters are headed; the hunters go after
+    /// what they saw or heard, else the nearest compass marker they have
+    /// not yet stood at.
     fn bel_goal(&self, view: &BotView, bel: &BelView) -> Goal {
         if bel.hunted {
-            return match self.recall.map(|r| r.at).or(view.noise) {
+            return match self.recall.map(|r| r.at).or(view.noise).or(bel.trail) {
                 Some(threat) => Goal::Away(threat),
                 None => Goal::Roam,
             };
@@ -699,9 +726,11 @@ impl Bot {
     }
 
     /// Attackers: deliver what they carry, else go for the nearest objective
-    /// lying there, else stand by the goal a teammate is carrying one to.
-    /// Defenders: each guards an objective by rank, or the goal of one
-    /// being carried.
+    /// lying there, else escort a teammate carrying one, else stand by the
+    /// goal it goes to. Defenders: each guards an objective lying there by
+    /// rank. Once one is carried the first by rank holds its goal and the
+    /// rest go after the carrier: at him while the compass shows him, else
+    /// back along his likely way once, then to the goal.
     fn retrieval_target(&self, view: &BotView, re: &ReView) -> Option<ObjTarget> {
         let o = &re.objectives;
         let nearest = |at: fn(&ReObjView) -> Option<[f32; 3]>| {
@@ -731,11 +760,24 @@ impl Bot {
                     };
                     return Some(ObjTarget::Pickup { aim, from });
                 }
+                if let Some(at) = Self::carrier(view, o) {
+                    return Some(ObjTarget::Guard { at, inner: 0.0 });
+                }
                 Self::goal_guard(view, o)
             }
             ObjRole::Defend => {
                 if let Some(g) = Self::goal_guard(view, o) {
-                    return Some(g);
+                    if re.rank == 0 {
+                        return Some(g);
+                    }
+                    if let Some(at) = Self::carrier(view, o) {
+                        return Some(ObjTarget::Chase(at));
+                    }
+                    let laid = o.iter().filter(|m| m.carried).find_map(|m| m.laid);
+                    return Some(match laid {
+                        Some(at) if !self.obj.swept => ObjTarget::Sweep(at),
+                        _ => g,
+                    });
                 }
                 let lying: Vec<[f32; 3]> = o.iter().filter_map(|m| m.pickup).collect();
                 (!lying.is_empty()).then(|| ObjTarget::Guard {
@@ -744,6 +786,14 @@ impl Bot {
                 })
             }
         }
+    }
+
+    /// The nearest carrier the compass shows.
+    fn carrier(view: &BotView, o: &[ReObjView]) -> Option<[f32; 3]> {
+        o.iter()
+            .filter(|m| !m.mine)
+            .filter_map(|m| m.carrier_at)
+            .min_by(|a, b| dist_sq(view.origin, *a).total_cmp(&dist_sq(view.origin, *b)))
     }
 
     /// A ring round the nearest goal an objective is being carried to, just
@@ -782,7 +832,8 @@ impl Bot {
             }
             // The goal trigger's touch delivers; there is nothing to stand
             // at.
-            ObjTarget::Deliver(_) => false,
+            ObjTarget::Deliver(_) | ObjTarget::Chase(_) => false,
+            ObjTarget::Sweep(at) => arrived(o, *at),
         }
     }
 
@@ -802,7 +853,10 @@ impl Bot {
             }
             ObjTarget::Guard { at, .. } => Goal::To(at),
             ObjTarget::Defuse(b) => Goal::To(b.origin),
-            ObjTarget::Pickup { from: at, .. } | ObjTarget::Deliver(at) => Goal::To(at),
+            ObjTarget::Pickup { from: at, .. }
+            | ObjTarget::Deliver(at)
+            | ObjTarget::Chase(at)
+            | ObjTarget::Sweep(at) => Goal::To(at),
         })
     }
 
@@ -821,6 +875,14 @@ impl Bot {
         self.obj.rest = self.obj.rest.saturating_sub(1);
         let t = self.objective_target(view);
         let at = t.is_some_and(|t| Self::at_objective(view, &t));
+        if let Some(re) = view.re.as_ref() {
+            if matches!(t, Some(ObjTarget::Sweep(_))) && at {
+                self.obj.swept = true;
+            }
+            if !re.objectives.iter().any(|m| m.carried) {
+                self.obj.swept = false;
+            }
+        }
         let ready = self.obj.rest == 0 && (at || (view.linked && self.obj.held > 0));
         let cur = [yaw_diff(view.view[0], 0.0), view.view[1]];
         match t {
@@ -1154,20 +1216,28 @@ impl Bot {
                 [pitch, yaw] = aim;
             }
         }
+        // A switch ends when it lands, or when the weapon is gone (dropped,
+        // or swapped at a pickup) and the byte would read as a holster for
+        // good.
+        if let Some(w) = self.switch_to
+            && (view.weapon == w || view.weapons_held >> w & 1 == 0)
+        {
+            self.switch_to = None;
+        }
         if self.shoot {
             self.sidearm(view);
         }
         if let Some(w) = self.switch_to {
-            if view.weapon == w {
-                self.switch_to = None;
-            } else {
-                cmd.weapon = w;
-            }
+            cmd.weapon = w;
         }
-        // A dry clip reloads, unless a switch is putting it away; the tap is
-        // suppressed while the machine is busy so a held bit cannot restart
-        // the reload it started.
-        if view.clip == 0 && view.busy_ms == 0 && self.switch_to.is_none() {
+        // A dry clip reloads, unless a switch is putting it away or there is
+        // nothing to load; the tap is suppressed while the machine is busy
+        // so a held bit cannot restart the reload it started.
+        if view.clip == 0
+            && view.busy_ms == 0
+            && self.switch_to.is_none()
+            && view.loaded >> view.weapon.min(63) & 1 == 1
+        {
             cmd.wbuttons |= msg::WBUTTON_RELOAD;
         }
         cmd.angles = cmd_angles(view, [pitch, yaw]);
@@ -1175,8 +1245,10 @@ impl Bot {
     }
 
     /// The pistol comes out when the held weapon runs dry with an enemy
-    /// close, quicker than a reload; it goes back once no enemy has been in
-    /// sight for [`HOLSTER_TICKS`].
+    /// close and the draw beats the reload to the next shot, or when the
+    /// held weapon has nothing left to reload. It goes back once no enemy
+    /// has been in sight for [`HOLSTER_TICKS`], or at once when the pistol
+    /// is spent, as long as the primary has a round left.
     fn sidearm(&mut self, view: &BotView) {
         let Some(pistol) = view.pistol else {
             return;
@@ -1184,11 +1256,17 @@ impl Bot {
         if self.switch_to.is_some() {
             return;
         }
+        let loaded = |w: u8| w != 0 && w < 64 && view.loaded >> w & 1 == 1;
         if view.weapon != pistol {
+            let held = view.weapon != 0 && view.weapons_held >> view.weapon & 1 == 1;
+            if !held || view.grenade == Some(view.weapon) || !loaded(pistol) {
+                return;
+            }
             let close = view
                 .enemy
                 .is_some_and(|e| dist_sq(view.origin, e.origin) < PISTOL_RANGE * PISTOL_RANGE);
-            if close && view.clip == 0 && view.grenade != Some(view.weapon) {
+            let quicker = view.draw_ms < view.reload_ms;
+            if (view.clip == 0 && close && quicker) || !loaded(view.weapon) {
                 self.primary = view.weapon;
                 self.calm_ticks = 0;
                 self.switch_to = Some(pistol);
@@ -1200,8 +1278,7 @@ impl Bot {
         } else {
             self.calm_ticks + 1
         };
-        let held = self.primary != 0 && view.weapons_held >> self.primary & 1 == 1;
-        if self.calm_ticks >= HOLSTER_TICKS && held {
+        if loaded(self.primary) && (self.calm_ticks >= HOLSTER_TICKS || !loaded(pistol)) {
             self.switch_to = Some(self.primary);
         }
     }
@@ -1644,6 +1721,9 @@ mod tests {
             lip: false,
             stop: false,
             pistol: None,
+            reload_ms: 2500,
+            draw_ms: 750,
+            loaded: (1 << 10) | (1 << 6),
             sd: None,
             re: None,
             bel: None,
@@ -1846,6 +1926,8 @@ mod tests {
                 goal_clear: 300.0,
                 carried: false,
                 mine: false,
+                carrier_at: None,
+                laid: Some([30.0, 0.0, 64.0]),
             }],
         });
         v
@@ -1908,6 +1990,47 @@ mod tests {
         assert_eq!(bot.goal(&v), Goal::Roam);
     }
 
+    /// Past the first by rank, a defender goes after a carried objective:
+    /// back to where it was taken while the compass hides the carrier,
+    /// then to the goal; straight at him once the compass shows him.
+    #[test]
+    fn the_other_defenders_go_after_the_carrier() {
+        let mut bot = Bot::new("axis", true, 1);
+        let mut v = re_view(ObjRole::Defend);
+        v.origin = [2500.0, 0.0, 64.0];
+        let re = v.re.as_mut().unwrap();
+        re.rank = 1;
+        let o = &mut re.objectives[0];
+        (o.pickup, o.carried) = (None, true);
+        assert_eq!(bot.goal(&v), Goal::To([30.0, 0.0, 64.0]));
+        v.origin = [40.0, 0.0, 64.0];
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::To([3000.0, 0.0, 64.0]), "swept once");
+        v.re.as_mut().unwrap().objectives[0].carrier_at = Some([1200.0, 50.0, 64.0]);
+        assert_eq!(bot.goal(&v), Goal::To([1200.0, 50.0, 64.0]));
+        // Dropped and lying again: the next carry is swept afresh.
+        let o = &mut v.re.as_mut().unwrap().objectives[0];
+        (o.pickup, o.carried, o.carrier_at) = (Some([30.0, 0.0, 72.0]), false, None);
+        bot.think(&v);
+        let o = &mut v.re.as_mut().unwrap().objectives[0];
+        (o.pickup, o.carried) = (None, true);
+        v.origin = [2500.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::To([30.0, 0.0, 64.0]));
+    }
+
+    /// An attacker escorts a teammate's carry: it closes on him and holds
+    /// once within the guard ring.
+    #[test]
+    fn an_attacker_escorts_the_carrier() {
+        let bot = Bot::new("allies", true, 1);
+        let mut v = re_view(ObjRole::Attack);
+        let o = &mut v.re.as_mut().unwrap().objectives[0];
+        (o.pickup, o.carried, o.carrier_at) = (None, true, Some([1000.0, 0.0, 64.0]));
+        assert_eq!(bot.goal(&v), Goal::To([1000.0, 0.0, 64.0]));
+        v.origin = [900.0, 0.0, 64.0];
+        assert_eq!(bot.goal(&v), Goal::Hold);
+    }
+
     #[test]
     fn use_is_pressed_only_at_the_objective() {
         for role in [ObjRole::Attack, ObjRole::Defend] {
@@ -1950,7 +2073,11 @@ mod tests {
 
     fn bel_view(hunted: bool, markers: Vec<[f32; 3]>) -> BotView {
         let mut v = view();
-        v.bel = Some(BelView { hunted, markers });
+        v.bel = Some(BelView {
+            hunted,
+            markers,
+            trail: None,
+        });
         v
     }
 
@@ -1981,8 +2108,8 @@ mod tests {
         assert_eq!(bot.goal(&v), Goal::To([0.0, 900.0, 104.0]), "a noise first");
     }
 
-    /// The hunted roam, run from what they last saw or heard, and fight
-    /// what they see.
+    /// The hunted run from what they last saw or heard, else from their own
+    /// marker, and fight what they see.
     #[test]
     fn the_hunted_run_from_a_threat() {
         let mut bot = Bot::new("allies", true, 1);
@@ -1993,6 +2120,13 @@ mod tests {
         bot.think(&v);
         v.noise = None;
         assert_eq!(bot.goal(&v), Goal::Away([0.0, 900.0, 104.0]), "remembered");
+        // Nothing seen or heard: away from its own marker.
+        let mut calm = bel_view(true, Vec::new());
+        calm.bel.as_mut().unwrap().trail = Some([-300.0, 0.0, 64.0]);
+        assert_eq!(
+            Bot::new("allies", true, 1).goal(&calm),
+            Goal::Away([-300.0, 0.0, 64.0])
+        );
         v.enemy = Some(EnemyView {
             slot: 3,
             origin: [500.0, 0.0, 40.0],
@@ -2527,6 +2661,7 @@ mod tests {
         let (mut bot, mut v) = engaged(21);
         v.pistol = Some(2);
         v.weapons_held |= 1 << 2;
+        v.loaded |= 1 << 2;
         v.clip = 0;
         let cmd = bot.think(&v);
         assert_eq!(cmd.weapon, 2, "kept the dry rifle up");
@@ -2540,6 +2675,69 @@ mod tests {
         v.enemy = None;
         let back = (0..HOLSTER_TICKS + 1).any(|_| bot.think(&v).weapon == 10);
         assert!(back, "the pistol stayed out");
+    }
+
+    /// A reload quicker than the draw (a Garand's 1.6 s against a slow
+    /// putaway) keeps the primary up even point blank.
+    #[test]
+    fn a_quick_reload_beats_a_slow_draw() {
+        let (mut bot, mut v) = engaged(21);
+        v.pistol = Some(2);
+        v.weapons_held |= 1 << 2;
+        v.loaded |= 1 << 2;
+        v.clip = 0;
+        (v.reload_ms, v.draw_ms) = (700, 750);
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.weapon, 10);
+        assert!(cmd.wbuttons & WBUTTON_RELOAD != 0);
+    }
+
+    /// A primary with nothing left goes away for the pistol with nobody in
+    /// sight, presses no reload, and is not drawn again while it stays
+    /// empty; a spent pistol hands back to a primary that has rounds.
+    #[test]
+    fn an_empty_primary_is_swapped_and_not_redrawn() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = view();
+        v.pistol = Some(2);
+        v.weapons_held |= 1 << 2;
+        (v.clip, v.loaded) = (0, 1 << 2);
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.weapon, 2);
+        assert_eq!(cmd.wbuttons & WBUTTON_RELOAD, 0, "reloaded an empty gun");
+        (v.weapon, v.clip) = (2, 7);
+        for _ in 0..HOLSTER_TICKS * 2 {
+            assert_eq!(bot.think(&v).weapon, 2, "the empty primary came back");
+        }
+        // A pickup refills the primary: the calm spell hands it back.
+        v.loaded |= 1 << 10;
+        assert_eq!(bot.think(&v).weapon, 10);
+        // The pistol runs out mid-fight with the primary loaded: back at
+        // once.
+        let (mut bot, mut v) = engaged(21);
+        v.pistol = Some(2);
+        v.weapons_held |= 1 << 2;
+        v.loaded |= 1 << 2;
+        v.clip = 0;
+        assert_eq!(bot.think(&v).weapon, 2);
+        (v.weapon, v.clip, v.loaded) = (2, 0, 1 << 10);
+        assert_eq!(bot.think(&v).weapon, 10, "kept the spent pistol up");
+    }
+
+    /// A switch whose weapon leaves the kit before it lands stops riding
+    /// the cmds; the byte would otherwise read as a holster for good.
+    #[test]
+    fn a_switch_to_a_weapon_no_longer_held_is_dropped() {
+        let (mut bot, mut v) = engaged(21);
+        v.pistol = Some(2);
+        v.weapons_held |= 1 << 2;
+        v.loaded |= 1 << 2;
+        v.clip = 0;
+        assert_eq!(bot.think(&v).weapon, 2);
+        v.pistol = None;
+        v.weapons_held &= !(1 << 2);
+        v.loaded &= !(1 << 2);
+        assert_eq!(bot.think(&v).weapon, 10);
     }
 
     #[test]

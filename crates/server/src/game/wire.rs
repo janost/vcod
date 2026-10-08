@@ -313,8 +313,12 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
             seti(&mut e, "weapon", weapon);
             // Transcribed from the traces, not derived: every turret in both
             // captures carries 3 here and nothing in the module has been read
-            // that says why.
-            seti(&mut e, "apos.trType", TURRET_APOS_TRTYPE);
+            // that says why. A link writes 1 instead, and its `G_EntUnlink`
+            // 0 for good (movers doc 16).
+            let angle_set = host.turrets.get(&id).is_some_and(|r| r.angle_set);
+            if !host.links.contains(id) && !angle_set {
+                seti(&mut e, "apos.trType", TURRET_APOS_TRTYPE);
+            }
             // The barrel's own record, built at spawn (`game::turret`). A
             // host with no collision world built no record and sends the
             // entity with everything else at its zeroed default: rest pitch

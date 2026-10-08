@@ -8,6 +8,7 @@ main()
 	thread log_turrets();
 	thread watch_teleports();
 	thread watch_delete();
+	thread watch_pose();
 	maps\mp\gametypes\dm::main();
 }
 
@@ -97,4 +98,21 @@ try_place(gun)
 	self setorigin(spot);
 	self setplayerangles((0, yaw, 0));
 	logPrint("PROBE place " + self getEntityNumber() + " " + self.pers["team"] + " " + spot + " " + yaw + "\n");
+}
+
+//	With `probe_pose 1`: which pose a turret round meets on a body whose own
+//	end frame has not run yet (combat doc 16.1). Every hit logs its time,
+//	location and point instead of landing; the axis client flips its own view
+//	pitch (`--probe-pitch-flip`) and logs the snapshot each flip reached.
+watch_pose()
+{
+	if (getcvar("probe_pose") != "1")
+		return;
+	wait 1;
+	level.callbackPlayerDamage = ::pose_damage;
+}
+
+pose_damage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc)
+{
+	logPrint("PROBE hit " + gettime() + " " + self getEntityNumber() + " " + sHitLoc + " " + iDamage + " " + vPoint + "\n");
 }

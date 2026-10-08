@@ -124,6 +124,26 @@ Line numbers are `maps/MP/gametypes/re.gsc` in `pak5.pk3`.
   other player's touch is let through and ignored.
 - INFERRED (`holduse`, 2434-2534, branch conditions): a carrier holding use
   0.3 s is linked in place, and 2 s drops the objective.
+- VERIFIED (`objective_think`, 1888-1911, and the default at 184-185): each
+  objective and each goal gets a compass record with no team. With
+  `scr_re_showcarrier` "0", the default, a pickup sets the objective's
+  record to `game["re_attackers"]` and a drop sets it back to none, so the
+  defenders' compass loses it while it is carried. With any other value
+  the record stays on both compasses.
+- VERIFIED (`hold_objective`, 2062; `retrieval_think`, 1983-1984): the
+  record follows the carrier (`objective_onEntity`), and the next
+  `retrieval_think` after a drop pins it with `objective_position`, which
+  detaches it (`cod11-gametypes-re-bel.md` 7.4). While it is carried the
+  record's origin still reads where the objective last lay.
+- VERIFIED (`Callback_PlayerKilled`, 853-872, and
+  `drop_objective_on_disconnect_or_death`, 2617-2760): a carrier's death
+  drops the objective without clearing his `hasobj[objnum]`. Only the
+  use-key drop (`drop_objective`, 2302-2308) and the capture (2159-2161)
+  clear it. The dead carrier's `hasobj` therefore still names the
+  objective while it lies there and after the next attacker takes it.
+- VERIFIED (`objective_timeout`, 2422-2432): an objective left lying 60 s
+  goes back to its start. VERIFIED (`retrieval_think`, 2021-2037): a
+  defender's use only prints a message; defenders cannot return it.
 - VERIFIED (measured on ours, `mp_dawnville`): the two goal triggers there
   are 500 by 368 units. A defender standing in one fired it every frame it
   was armed, before the carrier's touch (slot order) could, and the carrier
@@ -136,7 +156,15 @@ Line numbers are `maps/MP/gametypes/re.gsc` in `pak5.pk3`.
 `BotView::re`, filled on an `re` level from `ScriptRuntime::re_objectives`:
 the bot's role, each objective's pickup trigger middle while it lies there,
 its goal's standing point (`site_stand`, as for a bombzone) with the
-distance at which a body is clear of the goal trigger, and who carries it.
+distance at which a body is clear of the goal trigger, who carries it, the
+carrier's position when the bot's team's compass shows the record, and the
+record's own origin (where it last lay).
+
+The carrier is the client the compass record follows (`entNum`), not the
+one whose `hasobj` names it. Read off `hasobj`, a carrier who died kept
+the objective in the bots' view: while it lay, the defenders guarded the
+goal instead of it, and once a teammate with a higher slot took it, that
+teammate was not told it carried and stood outside the goal.
 
 - Attacker carrying an objective: walks to its goal and never presses use.
 - Attacker otherwise: walks to the nearest objective lying there, stops
@@ -146,10 +174,17 @@ distance at which a body is clear of the goal trigger, and who carries it.
   the graph led to, the eye's trace to the trigger's middle met the world,
   so each tap that took nothing moves the next try 40 units round the
   objective, eight sides in turn.
-- Attacker with every objective carried, and defender with one carried:
-  a ring round its goal from just clear of the trigger to 150 units past.
+- Attacker with a teammate carrying: escorts him, holding within 250
+  units and closing again when he moves on. Its compass always shows him.
+- Attacker with nothing to pick up and no carrier on its compass, and the
+  first defender by rank with one carried: a ring round its goal from just
+  clear of the trigger to 150 units past.
+- Other defenders with one carried: at the carrier while the compass shows
+  him (`scr_re_showcarrier` set). Under the default they walk to where the
+  objective last lay, once per carry: the carrier set out from there for
+  the goal, so the walk runs his likely way backwards. Then the goal ring.
 - Defender with nothing carried: guards an objective by rank, within 250
-  units of its trigger.
+  units of its trigger. A dropped objective counts as lying there.
 
 VERIFIED (measured, `crates/server/tests/bot_objectives.rs`, 2 bots, shoot
 off, seed 7, `mp_carentan`): the attacker picks up at tick 483 and delivers
@@ -172,6 +207,15 @@ onto the crate, picks up at tick 814 and delivers 224 ticks later.
 
 With 6 shooting bots, `mp_carentan` delivered and `mp_harbor` picked up
 twice in 150 s and delivered neither.
+
+VERIFIED (measured, ours, 2026-10-08, release, 6 shooting bots, seeds 3
+to 6, 200 s per run, the carrier read off the compass record and the
+escort and chase above, against the same runs on the code before them):
+`mp_carentan` picked up 17 times and delivered 9 (before: 24 and 1);
+`mp_dawnville` 19 and 0 (23 and 0), `mp_harbor` 4 and 0 (4 and 0),
+`mp_brecourt` 10 and 0 (10 and 0). Kills were 55 to 66 per map in both.
+On the three maps that never deliver the carrier dies on the way; the
+rounds end on eliminations.
 
 ## 5. Behind Enemy Lines (`bel`)
 
@@ -214,8 +258,11 @@ axis side are the allied players' markers.
 - A visible enemy comes first on both sides, as everywhere.
 - Hunted (allies): with no enemy in sight, `Goal::Away` from the last
   enemy it saw or the gunfire it heard (`Bot::recall`, else the tick's
-  noise), else `Roam`. It never walks toward a noise. A mover's marker
-  trails further, and the points come from staying alive.
+  noise), else from its own marker (record `entnum + 1`), else `Roam`. It
+  never walks toward a noise. Its compass does not show the marker; the
+  bot reads it because a player knows the hunters walk to where he was,
+  and moving off it keeps the marker trailing. The points come from
+  staying alive.
 - Hunters (axis): a remembered or heard spot first, else the nearest
   marker it has not yet stood at, else `Roam`. The marker sits still for
   6 s, so a hunter that reached it looks round from there (the roam)
@@ -227,3 +274,9 @@ killed an allied bot 8 times in each run, so 8 swaps each; allied bots
 killed axis ones 6 and 7 times and earned 17 and 11 `bel_alive_tick`s.
 Whether the hunt and the flight look sensible is a hand check
 (`pending-manual-test.md` section 49).
+
+VERIFIED (measured, ours, 2026-10-08, release, 6 shooting bots, seeds 1
+to 4, 150 s, `mp_brecourt` and `mp_carentan`): with the flight from the
+bot's own marker the allied side earned 160 `bel_alive_tick`s over the
+eight runs, against 163 without it. The flight changes how the hunted
+move, not measurably how long they live.

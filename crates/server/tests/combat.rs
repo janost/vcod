@@ -1278,11 +1278,29 @@ struct Pair {
 }
 
 fn two_placed(b_at: impl Fn(&vcod_server::Server, [f32; 3]) -> [f32; 3]) -> Option<Pair> {
+    two_placed_under(None, b_at)
+}
+
+/// [`two_placed`] with `gametype`, `(name, source)`, run instead of stock
+/// dm.
+fn two_placed_under(
+    gametype: Option<(&str, &str)>,
+    b_at: impl Fn(&vcod_server::Server, [f32; 3]) -> [f32; 3],
+) -> Option<Pair> {
     let fs = vcod_common::testing::game_fs()?;
     let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(), now);
+    let mut config = cfg();
+    let mut sv = match gametype {
+        Some((name, src)) => {
+            config.gametype = name.into();
+            let mut sv = vcod_server::Server::new(config, now);
+            sv.overlay_script(&format!("maps/mp/gametypes/{name}"), src);
+            sv
+        }
+        None => vcod_server::Server::new(config, now),
+    };
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let qa = Rc::new(RefCell::new(Queues::default()));
@@ -1397,6 +1415,93 @@ fn a_thrown_grenade_damages_a_player_in_its_blast() {
         "the thrower's body stood in the target's line"
     );
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
+}
+
+/// A grenade's walk measures each victim on its turn (combat doc 14.5):
+/// the first victim's damage callback sets the other down out of reach,
+/// and the walk passes it by. Retail, `client-probes/probe_blastmove`:
+/// every grenade walk whose first callback parked the others logged no
+/// later victim.
+#[test]
+fn a_grenade_walk_meets_a_victim_where_an_earlier_callback_moved_it() {
+    use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
+
+    const PARK: &str = r#"
+main()
+{
+	thread wrap();
+	maps\mp\gametypes\dm::main();
+}
+
+wrap()
+{
+	wait 0.05;
+	level.probe_damage = level.callbackPlayerDamage;
+	level.callbackPlayerDamage = ::park;
+}
+
+park(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc)
+{
+	logPrint("PROBE gcb " + self getEntityNumber() + " " + iDamage + "\n");
+	if (!isdefined(level.probe_parked))
+	{
+		level.probe_parked = 1;
+		players = getentarray("player", "classname");
+		for (i = 0; i < players.size; i++)
+		{
+			if (players[i] != self)
+				players[i] setorigin((224, -1280, 1.86));
+		}
+	}
+	[[level.probe_damage]](eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc);
+}
+"#;
+    let Some(pair) = two_placed_under(Some(("probe_park", PARK)), |sv, spot| {
+        assert!(
+            sv.test_clear_line(spot, 0.0, 150.0),
+            "no clear 150 units along +x from the spawn"
+        );
+        [spot[0] + 150.0, spot[1], spot[2]]
+    }) else {
+        return;
+    };
+    let Pair {
+        mut sv,
+        mut ca,
+        mut cb,
+        qa,
+        qb,
+        mut now,
+    } = pair;
+    let facing_a = UserCmd {
+        angles: [0, angle_short(180.0), 0],
+        ..NULL_USERCMD
+    };
+    let mut step = |sv: &mut vcod_server::Server, a: &mut Client, b: &mut Client| {
+        now += Duration::from_millis(50);
+        common::step_pair(sv, (&qa, a), (&qb, b), now);
+    };
+    for _ in 0..40 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&facing_a);
+        step(&mut sv, &mut ca, &mut cb);
+    }
+    cook_and_throw_down(
+        &mut sv,
+        &mut step,
+        &mut ca,
+        &mut cb,
+        &facing_a,
+        frag_index(),
+        (180.0, 80.0),
+    );
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+    let hits: Vec<&String> = sv
+        .script_log()
+        .iter()
+        .filter(|l| l.contains("PROBE gcb"))
+        .collect();
+    assert_eq!(hits.len(), 1, "one victim, the other parked: {hits:?}");
 }
 
 /// 11.2 to 11.4: a throw's first frame on the wire, pinned to retail's pair
