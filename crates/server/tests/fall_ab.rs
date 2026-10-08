@@ -25,6 +25,10 @@
 //! - no landing raises `EV_PAIN`, on either side: the fall's
 //!   `pain_debounce_time` holds it off.
 //!
+//! The same harness replays `client-probes/probe_slide`'s capture, where a
+//! hit's knockback timer runs while the walker slides along a wall
+//! ([`slide_gate`], cod11-player-clip.md 8.5).
+//!
 //! `FALL_REPORT=1` prints both sides' parms; `FALL_DUMP=<path>` writes
 //! every retail `FALL` row beside ours. Needs `COD_DIR`; without the paks it
 //! returns early.
@@ -39,14 +43,16 @@ use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::snapshot::Snapshot;
 
-const PROBE_PATH: &str = "maps/mp/gametypes/probe_fall";
-const PROBE_SRC: &str = "../gsc/tests/fixtures/semantics/client-probes/probe_fall.gsc";
+/// The gametype a run's server half is installed as.
+const FALL_PROBE: &str = "probe_fall";
+const SLIDE_PROBE: &str = "probe_slide";
 const MAP: &str = "mp_carentan";
 const STOCK: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-damage.txt";
 const CVARS: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-damage-cvars.txt";
 const WALK: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-walk.txt";
 const CORPSE: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-corpse.txt";
 const WALK_CORPSE: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-walk-corpse.txt";
+const SLIDE_HIT: &str = "tests/fixtures/playerstate/mp_carentan-dm-slide-hit.txt";
 /// `--probe-fall-walk`'s yaw in the walk fixture.
 const WALK_YAW: f32 = 315.0;
 /// The walk run's retail server stalled on the fatal landing's frame: the
@@ -330,18 +336,20 @@ struct Ours {
 /// the first drop the client sends 16 and 17 ms cmds of its own, walking at
 /// `walk` if given; from then on, retail's, shifted onto our clock.
 fn run_ours(
+    gametype: &str,
     fs: vcod_common::pk3::Pk3Fs,
     sets: &[(&str, &str)],
     walk: Option<f32>,
     hitch: Option<Hitch>,
     retail: &Retail,
 ) -> Ours {
-    let probe = std::fs::read_to_string(PROBE_SRC).expect("read the probe");
+    let src = format!("../gsc/tests/fixtures/semantics/client-probes/{gametype}.gsc");
+    let probe = std::fs::read_to_string(src).expect("read the probe");
     let bsp_path = fs.resolve_map(MAP).expect("the map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("bsp");
     let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_fall"), now);
-    sv.overlay_script(PROBE_PATH, &probe);
+    let mut sv = vcod_server::Server::new(common::cfg(MAP, gametype), now);
+    sv.overlay_script(&format!("maps/mp/gametypes/{gametype}"), &probe);
     sv.set_cvar("probe_teleport", "1");
     for (k, v) in sets {
         sv.set_cvar(k, v);
@@ -594,7 +602,7 @@ fn gate(fixture: &str, sets: &[(&str, &str)], walk: Option<f32>, hitch: Option<H
         "{fixture} has no finished run"
     );
     let retail_events = ring_events(retail.falls.iter());
-    let ours = run_ours(fs, sets, walk, hitch, &retail);
+    let ours = run_ours(FALL_PROBE, fs, sets, walk, hitch, &retail);
     if let Some(path) = std::env::var_os("FALL_DUMP") {
         let mut out = String::new();
         for r in &retail.falls {
@@ -711,4 +719,100 @@ fn a_stunned_walk_into_a_wall_keeps_its_velocity_as_retail_does() {
 #[test]
 fn a_corpse_on_flat_terrain_sinks_as_retail_does() {
     gate(WALK_CORPSE, &[], Some(WALK_YAW), None);
+}
+
+/// The hit-timer capture ([`SLIDE_HIT`], `client-probes/probe_slide`): each
+/// trial sets the walker down beside the street's south wall and a
+/// `radiusDamage` starts the 0x200 timer while it slides east along it. From
+/// the second trial on, every retail row against ours ([`compare_rows`],
+/// the event ring aside, as in the walk) and the probe lines, timestamps
+/// aside. Retail must have pressed into the wall under the timer: rows on the
+/// wall's plane with 0x200 set and a velocity into it.
+fn slide_gate(fixture: &str) {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    let text = std::fs::read_to_string(fixture).unwrap_or_else(|e| panic!("read {fixture}: {e}"));
+    let retail = parse_retail(&text);
+    assert!(
+        retail.probe.iter().any(|l| l.starts_with("PROBE done")),
+        "{fixture} has no finished run"
+    );
+    let pressed = retail
+        .falls
+        .iter()
+        .filter(|r| {
+            let flags = i32::from_str_radix(tail_field(&r.rest, "pm_flags=0x"), 16).unwrap();
+            let y: f32 = tail_field(&r.rest, "origin=")
+                .split(',')
+                .nth(1)
+                .unwrap()
+                .parse()
+                .unwrap();
+            let vy: f32 = tail_field(&r.rest, "vel=")
+                .split(',')
+                .nth(1)
+                .unwrap()
+                .parse()
+                .unwrap();
+            flags & 0x200 != 0 && (y - 1815.125).abs() < 0.01 && vy < 0.0
+        })
+        .count();
+    assert!(
+        pressed >= 10,
+        "retail pressed into the wall under a hit's timer on only {pressed} rows"
+    );
+    let ours = run_ours(SLIDE_PROBE, fs, &[], Some(WALK_YAW), None, &retail);
+    if let Some(path) = std::env::var_os("FALL_DUMP") {
+        let mut out = String::new();
+        for r in &retail.falls {
+            let o = ours.falls.get(&(r.t + ours.shift));
+            out += &format!(
+                "t={} R ct={} {}\n         O {}\n",
+                r.t,
+                r.ct + ours.shift,
+                r.rest.split(" seq=").next().unwrap(),
+                o.map_or("-".into(), |o| format!(
+                    "ct={} {}",
+                    o.ct,
+                    o.rest.split(" seq=").next().unwrap()
+                ))
+            );
+        }
+        std::fs::write(path, out).unwrap();
+    }
+    let second = drop_time(&retail.probe, 1).expect("a second retail drop");
+    // The client's last partial `CMDS` line never printed, so rows past the
+    // last logged cmd have nothing to replay.
+    let last_cmd = retail.cmds.last().expect("retail cmds").0;
+    let (lines, mut diffs) = compare_rows(&retail, &ours, second, last_cmd, false);
+    assert!(lines > 100, "only {lines} slide lines past the second drop");
+    // The first trial starts from the velocity each side walked in with.
+    let from_second = |probe: &[String]| -> Vec<String> {
+        let at = probe
+            .iter()
+            .filter(|l| l.starts_with("PROBE drop "))
+            .nth(1)
+            .and_then(|d| probe.iter().position(|l| l == d))
+            .expect("a second drop");
+        probe[at..].iter().map(|l| shape(l, false)).collect()
+    };
+    let (rs, os) = (from_second(&retail.probe), from_second(&ours.probe));
+    if rs != os {
+        diffs.push(format!(
+            "the probe lines differ\nretail:\n  {}\nours:\n  {}",
+            rs.join("\n  "),
+            os.join("\n  ")
+        ));
+    }
+    assert!(diffs.is_empty(), "{fixture}:\n{}", diffs.join("\n"));
+}
+
+/// A hit's knockback timer (0x200) while sliding along a wall: retail's slide
+/// hands back the velocity it started with while `pm_time` runs, so the rows
+/// read the push into the wall at a standstill across it, and a second hit
+/// inside the timer adds its push without restarting it (8.5).
+#[test]
+fn a_hit_slide_along_a_wall_keeps_its_velocity_as_retail_does() {
+    slide_gate(SLIDE_HIT);
 }
