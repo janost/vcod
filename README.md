@@ -164,12 +164,15 @@ either: the people on it signed up for Call of Duty.
   enemy they see and toward gunfire, turret fire and blasts they hear. In
   S&D each team spreads over both bombzones, attackers plant and one
   defender defuses while the rest cover. In Retrieval attackers pick the
-  objective up and carry it to its goal while defenders guard. In Behind
-  Enemy Lines the axis hunt the allied compass markers and the hunted
-  allies keep moving away from what they last saw or heard.
+  objective up, carry it to its goal and escort the carrier, while
+  defenders guard it, then hold the goal and go after the carrier. In
+  Behind Enemy Lines the axis hunt the allied compass markers and the
+  hunted allies keep moving away from what they last saw or heard and from
+  their own marker.
   `--bots-shoot` makes them fight with a reaction delay, a capped turn rate
   and aim error that settles while they hold a target, draw the pistol when
-  the primary runs dry up close, and chase a lost enemy to where it was
+  the primary runs dry up close and the draw beats the reload, or when the
+  primary is out of ammo, and chase a lost enemy to where it was
   last seen. They are still bad at it.
 
 ### The research

@@ -2065,8 +2065,8 @@ impl ScriptRuntime {
     /// (docs/research/bot-objectives.md, "Retrieval"): the sides from
     /// `game["re_attackers"]` and `game["re_defenders"]`, and each entity of
     /// `level.retrieval_objective` the script has not deleted, through its
-    /// `trigger`, `goal` and `objnum` fields. `clients` bounds the carrier
-    /// search.
+    /// `trigger`, `goal` and `objnum` fields and the compass record `objnum`
+    /// names. `clients` bounds the carrier search.
     pub fn re_objectives(&mut self, clients: usize) -> ReObjectives {
         use crate::game::trigger::entity_abs_bounds;
         use vcod_gsc::{ArrayKey, Host};
@@ -2086,9 +2086,8 @@ impl ScriptRuntime {
             };
             let attackers = team("re_attackers");
             let defenders = team("re_defenders");
-            let [list, trigger, goal, objnum, hasobj] =
-                ["retrieval_objective", "trigger", "goal", "objnum", "hasobj"]
-                    .map(|f| cx.intern_folded(f));
+            let [list, trigger, goal, objnum] =
+                ["retrieval_objective", "trigger", "goal", "objnum"].map(|f| cx.intern_folded(f));
             let Value::Array(list) = cx.get_field(level, list) else {
                 return ReObjectives {
                     attackers,
@@ -2112,19 +2111,26 @@ impl ScriptRuntime {
                 };
                 let pickup = Some(entity_abs_bounds(host, cx, t)).filter(|b| b.1[2] > -5000.0);
                 let goal = entity_abs_bounds(host, cx, g);
-                let carrier = match host.get_field(cx, obj, objnum) {
-                    Value::Int(n) => client_ents.iter().find_map(|&(slot, ent)| {
-                        let Value::Array(held) = host.get_field(cx, ent, hasobj) else {
-                            return None;
-                        };
-                        (cx.get_index(held, ArrayKey::Int(n)) == Value::Entity(obj)).then_some(slot)
-                    }),
+                // The compass record follows its carrier (`objective_onEntity`,
+                // `re.gsc` 2062) until a drop pins it again (`retrieval_think`,
+                // 1983). `hasobj` is no guide: a death drop never clears it
+                // (`drop_objective_on_disconnect_or_death`, 2617).
+                let record = match host.get_field(cx, obj, objnum) {
+                    Value::Int(n) => host.objectives.get(n as usize).filter(|o| o.state != 0),
                     _ => None,
                 };
+                let carrier = record.and_then(|o| {
+                    client_ents
+                        .iter()
+                        .find(|(_, ent)| ent.0 as i32 == o.ent_num)
+                        .map(|(slot, _)| *slot)
+                });
                 objectives.push(ReObjective {
                     pickup,
                     goal,
                     carrier,
+                    shown_to: record.map_or(0, |o| o.team_num),
+                    laid: record.map(|o| o.origin_f32()),
                 });
             }
             ReObjectives {
@@ -2208,8 +2214,15 @@ pub struct ReObjective {
     pub pickup: Option<Bounds>,
     /// The `trigger_multiple` a carrier delivers it to.
     pub goal: Bounds,
-    /// The client carrying it: the one whose `hasobj[objnum]` is it.
+    /// The client its compass record follows.
     pub carrier: Option<usize>,
+    /// The record's `teamNum`: 0 shows it to everyone, else to that team
+    /// only. A carried one shows to the attackers alone unless
+    /// `scr_re_showcarrier` is set (`re.gsc` `objective_think`, 1896-1911).
+    pub shown_to: i32,
+    /// The record's origin: where it last lay, which a carry leaves in
+    /// place.
+    pub laid: Option<[f32; 3]>,
 }
 
 /// [`ScriptRuntime::sd_objectives`]: the S&D state a bot plays to.
@@ -3019,6 +3032,47 @@ mod tests {
         rt.touch_triggers(0, 100);
         rt.run_frame(100);
         assert_eq!(rt.level_field("hits"), Value::Int(1));
+    }
+
+    /// The retrieval carrier is the client the compass record follows. A
+    /// death drop leaves the dead carrier's `hasobj` naming the objective
+    /// (bot-objectives.md 4.1), so a stale `hasobj` on a lower slot must not
+    /// win over the record.
+    #[test]
+    fn the_retrieval_carrier_is_who_the_compass_follows() {
+        let mut rt = ScriptRuntime::for_test(
+            "main() {
+                game[\"re_attackers\"] = \"allies\";
+                game[\"re_defenders\"] = \"axis\";
+                obj = spawn(\"script_model\", (0, 0, 0));
+                obj.trigger = spawn(\"script_origin\", (0, 0, 0));
+                obj.goal = spawn(\"script_origin\", (500, 0, 0));
+                obj.objnum = 1;
+                objective_add(1, \"current\", (100, 0, 0));
+                level.retrieval_objective = [];
+                level.retrieval_objective[0] = obj;
+            }
+            stale() {
+                self.hasobj = [];
+                self.hasobj[1] = level.retrieval_objective[0];
+                level.stale = 1;
+            }
+            carry() { objective_onEntity(1, self); }",
+        );
+        rt.run_frame(0);
+        let o = rt.re_objectives(4);
+        assert_eq!(o.objectives[0].carrier, None);
+        assert_eq!(o.objectives[0].laid, Some([100.0, 0.0, 0.0]));
+        let dead = rt.spawn_client_for_test(0, [0.0; 3]);
+        let live = rt.spawn_client_for_test(1, [0.0; 3]);
+        rt.start_thread_for_test(dead, "stale", 50);
+        rt.start_thread_for_test(live, "carry", 50);
+        rt.run_frame(50);
+        assert_eq!(rt.level_field("stale"), Value::Int(1));
+        let o = rt.re_objectives(4);
+        assert_eq!(o.objectives[0].carrier, Some(1));
+        assert_eq!(o.objectives[0].shown_to, 0);
+        assert_eq!(o.objectives[0].laid, Some([100.0, 0.0, 0.0]));
     }
 
     /// A touch lands between frames, and the thread it wakes runs on the
