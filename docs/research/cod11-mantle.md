@@ -211,8 +211,9 @@ VERIFIED: 0x2000 is set, with `pm_time` 200, in `PM_CrashLand`
 (0x2ffb3-0x2ffd1), and cleared by `PM_DropTimers`. VERIFIED: the ground
 trace (fn 0x30474) zeroes `fJumpOriginZ` on every hit at 0x305c8, ahead of
 its only call to `PM_CrashLand` at 0x30721. INFERRED: that landing lockout
-never arms. VERIFIED on the wire: the bump walker lands at stand/jump
-`commandTime` 39682 with `pm_flags` 0x40008 and `pm_time` 0. Not modelled.
+never arms. VERIFIED on the wire: every jump landing in the retail captures
+reads 0x2000 clear and no 200 ms timer (`cod11-player-clip.md` 8.7). Not
+modelled, on purpose.
 
 ### The takeoff
 
@@ -1270,7 +1271,10 @@ VERIFIED, the leaf walk (0x8055608): a leaf's brushes, then its
 partitions, each once per trace by check count; it returns as soon as
 the fraction reads 0, and the tree walk (0x8055fe0) skips any node whose
 start fraction the trace's has reached. A partition's material word goes
-into the trace only when its clip lowered the fraction.
+into the trace only when its clip lowered the fraction. VERIFIED: each partition
+is clipped only when its point bounds meet `CM_BoxTrace`'s trace bounds,
+which carry no 0.125 pad (0x80556e9 calling 0x8054c48;
+`cod11-player-clip.md` 8.12).
 
 VERIFIED, the brush clip (0x8054e90), capsule arm: the six axial sides
 first, the bounds' mins x, y, z then maxs x, y, z, the capsule taken as a
@@ -1561,9 +1565,9 @@ What each of the four does:
   0x100 into `pm_flags` (0x300b4) and scale the velocity (0x300ba-0x300d1).
   INFERRED, off that `jne`: slick ground takes no landing stun.
 
-vcod models the friction, accel and gravity arms in `pmove.rs` (`on_slick`,
-reading `SURF_SLICK` off the ground trace's `surface_flags`). The landing
-arm belongs to the stun, which this change does not port.
+vcod models all four arms in `pmove.rs` (`on_slick`, reading `SURF_SLICK`
+off the ground trace's `surface_flags`): friction, accel and gravity in the
+walk, and the stun's skip in `crash_land`.
 
 VERIFIED, read out of lump 0 of each map: no material of the fourteen
 `maps/mp` maps in 1.5's `pak[0-9].pk3` (the twelve of 1.1's plus mp_bocage

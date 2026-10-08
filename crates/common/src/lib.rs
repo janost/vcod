@@ -23,6 +23,7 @@ pub mod skeleton;
 pub mod terrain;
 pub mod testing;
 pub mod turretpose;
+pub mod ui_menu;
 pub mod vis;
 pub mod voicechat;
 pub mod weapon;

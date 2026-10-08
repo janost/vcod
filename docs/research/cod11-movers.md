@@ -778,5 +778,133 @@ every non-player row matches to 0.02 but the yaw residual of section 12
 (0.1 units at the children's radius), the player's entity-frame links match
 to 0.02, and the bone-linked children sit within 3 units of retail's with
 their angles not compared; the body's swing after `setPlayerAngles` is not
-modelled. Not done: `enableLinkTo` (no stock MP script calls it) and a link
-on a turret, which errors on ours.
+modelled. `enableLinkTo`, turrets, a tag parent's model change and an item
+unlinked in mid-air are section 16.
+
+## 16. `enableLinkTo`, turrets, model changes and unlinked items
+
+The evidence is a second paired capture against the retail 1.1d Linux
+server, mp_carentan under a `dm`-shaped probe, 2026-10-08:
+`crates/server/tests/fixtures/movers/mp_carentan-dm-linkto2.txt` (the server
+half, from `crates/gsc/tests/fixtures/semantics/client-probes/probe_linkto2.gsc`)
+and `mp_carentan-dm-linkto2-wire.txt` (the client half). The player stands
+at `(-512, 2688, -15.91)` throughout. Addresses are `game.mp.i386.so`.
+
+### `enableLinkTo` and `Think_GeneralLink`
+
+VERIFIED, `enableLinkTo` (0x5d5d0): object-model doc 23.2 has its tests and
+stores; the think it installs is `Think_GeneralLink` (relocation at
+0x5d69c). VERIFIED, `Think_GeneralLink` (0x68588): it writes
+`ent+0x1fc = level.time + 50` (0x6859a), tests the link record at
+`ent+0x2e4` (0x685a0), and calls `G_SetFixedLink(ent, 0)` (0x685af),
+`G_SetOrigin` (0x685bf), `G_SetAngle` (0x685d2), writes 1 to `ent+0xc` and
+`ent+0x30` (0x685d7, 0x685de) and calls `trap_LinkEntity` (0x685e9).
+INFERRED, off the store at 0x6859a sitting ahead of the record test: the
+think re-arms itself every frame whether or not the entity is linked, and on
+a linked frame does what `G_GeneralLink` does (section 15).
+
+VERIFIED: `Touch_Multi` (0x65a18) raises its `"trigger"` notify (0x65a5a)
+before it compares the think with `Think_GeneralLink` (0x65aa2) and
+`nextthink` with 0 (0x65ab2); `multi_trigger` (0x65897) and `Use_Multi`
+(0x6595f) carry the same compare, and `Activate_trigger_damage` compares
+with it at 0x650db and 0x651b8. INFERRED, off the branches those compares
+feed: a `trigger_multiple` whose think is `Think_GeneralLink` skips the
+`wait` arm (`multi_wait`, or the 100 ms `G_FreeEntity` for a `wait` not above
+0) and keeps its think. VERIFIED: `SP_trigger_multiple` (0x64c50) reads
+`wait` with the default `"0.5"` (0x79940, `G_SpawnFloat` at 0x64c6e).
+
+VERIFIED, off the capture: the bombzone_A `trigger_multiple` (entity 176,
+model `*4`, no `wait` key), moved onto the player by an origin write and not
+linked, notified on every touch, two to four a frame with the client's three
+cmds a frame, from 10700 to 12150. INFERRED: the notify does not wait out
+`wait`; only the think arm behind it does.
+
+VERIFIED, off the capture: after `t enableLinkTo()` and `t linkTo(p)`, `p
+moveto(at, 1)` carries the trigger at the parent's pace (`-164.30` at
+12750, the player's spot at 13700) and the notifies run from 13450 to 15450,
+the frames its box overlaps the player.
+
+VERIFIED, off the capture's first run: `spawn("trigger_radius", origin, 0,
+32, 64)` dies with `unable to spawn "trigger_radius" entity`. A trigger to
+link has to come from the map.
+
+VERIFIED, off the capture: `enableLinkTo` on a script_origin is the fatal
+`entity already has linkTo enabled`.
+
+### A linked turret
+
+VERIFIED: `turret_think` (0x5328c) writes `ent+0x1fc = level.time + 50`
+(0x5329e), tests the record (0x532a4) and calls `G_GeneralLink` (0x532b2)
+before it reads the gunner. VERIFIED, off the capture: `mg linkTo(mp)` on
+the misc_mg42 297 with `mp` at its origin, then `mp movez(32, 1)` and `mp
+rotateyaw(45, 1)`, carries the gun from z 175 to 207 and its yaw from 295
+to 340 in step with the parent. VERIFIED, off the wire half: entity 297 goes
+out `apos.trType` 3 from its spawn, both groups `trType` 1 with `trTime` 0
+on every linked snapshot (16650..19150), and both 0 from the unlink on
+(19650). VERIFIED, `G_EntUnlink` (0x680d4) calls `G_SetOrigin` (0x680f9) and
+`G_SetAngle` (0x68109), and `G_SetAngle` writes 0 to `ent+0x30..0x38`
+(0x67dcd..0x67ddb). INFERRED: an unlinked turret never goes back to the 3.
+
+INFERRED, off `turret_think` running in `G_RunFrame`'s entity loop and
+`turret_think_client` in `ClientEndFrame` (turrets doc 6): a gunner reads
+the gun where this frame's link put it. The capture had no gunner.
+
+### A tag parent's model change
+
+VERIFIED: `G_DObjUpdate` (0x66054) returns at once on a client
+(`ent+0x158`, 0x66060); otherwise it frees the DObj and, with model byte
+`ent+0x175` 0, calls `G_UpdateTagInfoOfChildren(ent, 0)` (0x6608d), and
+with a model builds the DObj and calls it with 1 (0x6617e). The `setModel`
+method (0x5dabc) calls `G_SetModel` and then `G_DObjUpdate` (0x5db0d);
+`G_EntAttach`, `G_EntDetach` and `G_EntDetachAll` call it too (0x662bc,
+0x67fb0, 0x68022). VERIFIED, `G_SetModel` (0x67020): an empty name stores
+model byte 0 and returns (0x6702c..0x6703b). VERIFIED,
+`G_UpdateTagInfoOfChildren` (0x68294): it walks the list at `ent+0x2e8`, and
+for a record with a tag (`record+0x8`, 0x682bc) calls
+`trap_DObjGetBoneIndex` (0x682e1) only when its second argument is non-zero
+(0x682c7) and stores the result at `record+0xc`; the unlink body at
+0x682f4..0x6837b (`G_SetOrigin`, `G_SetAngle`, the list splice, the record
+freed) runs past both tests; a record with no tag gets -1 (0x68385).
+INFERRED, off those branches: a child on a tag is unlinked where it stands
+when the parent has no model or its new model has no such bone, and keeps
+its link with the bone looked up again otherwise; a child on the entity's
+own frame is never touched. VERIFIED: no call and no relocation in the
+module targets `G_UpdateTagInfo` (0x6819c), the same body for one entity.
+
+VERIFIED, off the capture: k1 linked to a script_model on `bip01 head` with
+zero offsets sits `(-2.18, 0, 62.68)` from the model's origin with angles
+`(282.50, 0, -90)`, the body's bind pose. After `setModel` to
+`playerbody_german_wehrmacht` it rides on at the same offset; after
+`setModel("xmodel/weapon_thompson")` it stays at z 38.77, the pose script
+read on that frame, while k0 (no tag) rides on; setting the body back does
+not relink it. Linked again and followed by `setModel("")`, k1 does not
+move.
+
+### An item unlinked in mid-air
+
+VERIFIED, `G_RunItem` (0x4eb18): with `groundEntityNum` (`ent+0x7c`) at
+0x3ff and `pos.trType` not 5 (0x4eb24, 0x4eb2d) it writes 5 and the level
+time (0x4eb33, 0x4eb3f); a type of 0 or 8 then runs only `G_RunThink`
+(0x4eb42..0x4eb52).
+
+VERIFIED, off the capture: an `item_health` linked on the frame it spawns
+at the player's origin plus 100 (it reads 8 lower, 76.09), carried up 20 and
+unlinked, stays at 96.09 for the 2 s sampled; one that had landed at
+-22.91, lifted 60 and unlinked, stays at 37.09. VERIFIED, off the wire
+half: from the unlink on, both go out `pos.trType` 5 with `trTime` the
+snapshot's own time and the same `trBase`, which is how the landed one went
+out before its link (30650..30750). The capture does not say which store
+puts the type back each frame; ours produced the same rows and wire before
+this round, so `crate::game::item::run_items` is unchanged.
+
+vcod: `crate::game::link::enable` is `enableLinkTo` (the link bit is
+`link::has_link_bit`), and the touch pass gives an enabled
+`trigger_multiple` no `wait` gate. `linkTo` takes a turret; the record
+reads the gun's own pose, so the barrel and gunner follow, and
+`TurretRecord::angle_set` keeps `apos.trType` 0 after the unlink.
+`link::model_changed`, from the `setModel` builtin on an entity that is not
+a client, is `G_UpdateTagInfoOfChildren`. `crates/server/tests/linkto_ab.rs`
+replays the probe: every row matches to 0.06 (the player stood 0.04 higher
+on ours), the notify frames match, and the turret's and the mid-air item's
+wire types and bases match per snapshot. Not done: `attach` and `detach`
+re-resolve tags on retail, but ours resolves a tag only in the main model.

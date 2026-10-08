@@ -852,10 +852,10 @@ fn relink(bodies: &mut Vec<vcod_common::movetrace::Body>, clients: &[Option<Clie
     }
 }
 
-/// One victim of a grenade's walk: a client, or an entity with no client.
+/// One candidate of a grenade's walk: a client, or an entity with no client.
 enum BlastCandidate<'a> {
     Client(usize, &'a ClientSim),
-    Entity(crate::game::combat::EntityVictim),
+    Entity(vcod_gsc::EntId),
 }
 
 /// What one client's usercmd replay did this tick, for the trace line.
@@ -939,6 +939,14 @@ pub struct Server {
     /// The number of the last client packet executed, bots' included: what
     /// `replay_moves` orders every client's cmds and `kill`s by.
     packet_seq: u64,
+    /// When the last frame's messages went out (`Server::frame_sent`), and
+    /// the frame time of the one sent before it.
+    last_send: Option<(Instant, i32)>,
+    /// The frame time of the newest frame sent, for `last_send`.
+    sent_time_ms: i32,
+    /// The ack time of the packet being handled, when it differs from
+    /// `sv_time_ms` (`Server::handle_packet_at`).
+    ack_time_ms: Option<i32>,
     /// The blasts this frame's missile pass set off, for the radius damage
     /// pass to charge (`crate::game::missile::Explosion`).
     pending_explosions: Vec<crate::game::missile::Explosion>,
@@ -1262,6 +1270,9 @@ impl Server {
             anims: None,
             weapon_table: Rc::new(crate::weapons::WeaponTable::empty()),
             packet_seq: 0,
+            last_send: None,
+            sent_time_ms: 0,
+            ack_time_ms: None,
             pending_explosions: Vec::new(),
             cvar_overrides: Vec::new(),
             fall_heights: fall,
@@ -1334,6 +1345,34 @@ impl Server {
 
     fn send_oob(&mut self, to: SocketAddr, text: &str) {
         self.outbox.push((to, build_oob(text)));
+    }
+
+    /// [`Self::handle_packet`] for a packet read off the socket at
+    /// `arrived`. Retail reads its socket every 5 ms and runs a frame in well
+    /// under one, so a move message is stamped with the newest frame that had
+    /// gone out when it arrived; vcod's tick takes long enough that one read
+    /// at the next tick would stamp a packet that came in during the tick a
+    /// frame late. docs/research/cod11-server-handshake.md, "Pings".
+    pub fn handle_packet_at(
+        &mut self,
+        from: SocketAddr,
+        pkt: &[u8],
+        now: Instant,
+        arrived: Instant,
+    ) {
+        self.ack_time_ms = self
+            .last_send
+            .filter(|&(at, _)| arrived < at)
+            .map(|(_, before)| before);
+        self.handle_packet(from, pkt, now);
+        self.ack_time_ms = None;
+    }
+
+    /// Marks the frame just ticked as sent at `at`: the outbox it left has
+    /// gone onto the socket.
+    pub fn frame_sent(&mut self, at: Instant) {
+        self.last_send = Some((at, self.sent_time_ms));
+        self.sent_time_ms = self.sv_time_ms;
     }
 
     /// `SV_PacketEvent`.
@@ -1901,10 +1940,11 @@ impl Server {
             self.enter_world(slot, Some(&first));
         }
         let packet = self.packet_seq;
+        let acked = self.ack_time_ms.unwrap_or(self.sv_time_ms);
         let Some(c) = self.clients[slot].as_mut() else {
             return;
         };
-        c.stamp_acked(self.sv_time_ms);
+        c.stamp_acked(acked);
         c.pending
             .extend(cmds.into_iter().map(|cmd| QueuedCmd { packet, cmd }));
         let excess = c.pending.len().saturating_sub(MAX_PENDING_CMDS);
@@ -4296,14 +4336,34 @@ impl Server {
                 .enumerate()
                 .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
                 .collect();
+            // Where a callback earlier in the walk set a client down: its
+            // link moved off the one its last cmd made (`setOrigin` relinks
+            // at once, combat doc 14.7), and the walk measures it there.
+            let set_down =
+                |rt: &script::ScriptRuntime, slot: usize, s: &crate::spectate::ClientSim| {
+                    let link = glam::Vec3::from(rt.host.client_link_origin[slot]);
+                    (link != s.link_origin()).then_some(link)
+                };
             let victim =
-                |slot: usize, s: &crate::spectate::ClientSim| crate::game::combat::BlastVictim {
-                    slot,
-                    origin: s.ps.origin,
-                    link_origin: s.link_origin(),
-                    mins: s.ps.mins(),
-                    maxs: s.ps.maxs(),
-                    eye: s.ps.view().eye,
+                |rt: &script::ScriptRuntime, slot: usize, s: &crate::spectate::ClientSim| {
+                    let eye = s.ps.view().eye;
+                    let mut v = crate::game::combat::BlastVictim {
+                        slot,
+                        origin: s.ps.origin,
+                        link_origin: s.link_origin(),
+                        mins: s.ps.mins(),
+                        maxs: s.ps.maxs(),
+                        eye,
+                    };
+                    if let Some(at) = set_down(rt, slot, s) {
+                        v = crate::game::combat::BlastVictim {
+                            origin: at,
+                            link_origin: at,
+                            eye: at + (eye - s.ps.origin),
+                            ..v
+                        };
+                    }
+                    v
                 };
             for x in &self.pending_explosions {
                 let Some(def) = weapons.get(x.weapon as usize) else {
@@ -4320,8 +4380,9 @@ impl Server {
                     "MOD_GRENADE_SPLASH",
                 );
                 // `trap_EntitiesInBox`' order (combat doc 14.7): the
-                // clients and the turrets as the area tree lists them.
-                let entities = rt.blast_entities();
+                // clients and the turrets as the area tree lists them, taken
+                // once. Each is measured on its turn, after every earlier
+                // victim's callback (14.5).
                 let (mins, maxs) = blast.search_box();
                 let candidates: Vec<BlastCandidate> = rt
                     .host
@@ -4331,14 +4392,10 @@ impl Server {
                     .filter_map(|n| {
                         if let Some(&(slot, s)) = sims.iter().find(|(slot, _)| *slot == n as usize)
                         {
-                            return blast
-                                .reaches(&victim(slot, s))
-                                .then_some(BlastCandidate::Client(slot, s));
+                            return Some(BlastCandidate::Client(slot, s));
                         }
-                        let v = entities.iter().find(|v| v.id.0 == n)?;
-                        blast
-                            .reaches_entity(v)
-                            .then(|| BlastCandidate::Entity(v.clone()))
+                        let id = rt.host.ents.handle(n)?;
+                        Some(BlastCandidate::Entity(id))
                     })
                     .collect();
                 // A client a callback of this walk killed is a corpse and
@@ -4347,28 +4404,43 @@ impl Server {
                     |rt: &script::ScriptRuntime| -> Vec<crate::game::combat::HitBody> {
                         sims.iter()
                             .filter(|(other, _)| !rt.client_vitals(*other).dead)
-                            .filter_map(|(other, s)| s.hit_body(*other))
+                            .filter_map(|&(other, s)| {
+                                let mut body = s.hit_body(other)?;
+                                if let Some(at) = set_down(rt, other, s) {
+                                    body.origin = at;
+                                }
+                                Some(body)
+                            })
                             .collect()
                     };
                 for candidate in candidates {
-                    let bodies = live_bodies(rt);
-                    let models = rt.placed_script_models();
                     match candidate {
                         BlastCandidate::Client(slot, s) => {
                             if !rt.client_vitals(slot).takedamage {
                                 continue;
                             }
-                            if let Some(hit) = blast.hit(
-                                &victim(slot, s),
-                                collision,
-                                &models,
-                                &bodies,
-                                bones.as_mut(),
-                            ) {
+                            let v = victim(rt, slot, s);
+                            if !blast.reaches(&v) {
+                                continue;
+                            }
+                            let bodies = live_bodies(rt);
+                            let models = rt.placed_script_models();
+                            if let Some(hit) =
+                                blast.hit(&v, collision, &models, &bodies, bones.as_mut())
+                            {
                                 rt.deliver_hits(vec![hit], self.sv_time_ms);
                             }
                         }
-                        BlastCandidate::Entity(v) => {
+                        BlastCandidate::Entity(id) => {
+                            let Some(v) = rt.blast_entities().into_iter().find(|v| v.id == id)
+                            else {
+                                continue;
+                            };
+                            if !blast.reaches_entity(&v) {
+                                continue;
+                            }
+                            let bodies = live_bodies(rt);
+                            let models = rt.placed_script_models();
                             if let Some(damage) =
                                 blast.entity_damage(&v, collision, &models, &bodies, bones.as_mut())
                             {
@@ -9539,6 +9611,46 @@ mod tests {
         sv.handle_packet(addr(7), &oob("getstatus x"), t);
         let (_, body) = reply_text(&mut sv);
         assert!(body.ends_with("\n0 50 \"vcod\""), "{body}");
+    }
+
+    #[test]
+    fn an_ack_is_stamped_with_the_frame_sent_before_it_arrived() {
+        // Each ack of frame i reaches the socket after frame i went out and
+        // is read after frame i + 1. Every other one arrives before frame
+        // i + 1 went out (0 ms), the rest after it (50 ms).
+        let t = Instant::now();
+        let ms = |n: u64| t + Duration::from_millis(n);
+        let mut sv = Server::new(cfg(), t);
+        let mut nc = begun(&mut sv, t);
+        let huff = Huffman::new();
+        let mut last = NULL_USERCMD;
+        let mut clock = 0;
+        for i in 0..40 {
+            sv.tick(t);
+            clock += 50;
+            sv.frame_sent(ms(clock));
+            for (_, pkt) in sv.take_outgoing() {
+                let _ = nc.process_in(&pkt, &huff);
+            }
+            last.server_time = 100 + i * 50;
+            let ack = nc.incoming_sequence as i32;
+            sv.tick(t);
+            clock += 50;
+            sv.frame_sent(ms(clock));
+            sv.take_outgoing();
+            let ops = move_ops(sv.checksum_feed, ack, last);
+            let pkt = nc
+                .build_out(i32::from(sv.server_id), ack, 0, &ops, &huff)
+                .unwrap();
+            let arrived = if i % 2 == 0 {
+                ms(clock - 1)
+            } else {
+                ms(clock + 1)
+            };
+            sv.handle_packet_at(addr(5), &pkt, t, arrived);
+        }
+        sv.tick(t);
+        assert_eq!(sv.clients[0].as_ref().unwrap().ping, 25);
     }
 
     #[test]

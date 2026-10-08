@@ -513,6 +513,43 @@ fn captured_solid_values_are_the_three_stance_packs_at_a_fixed_spot() {
     assert_eq!(fx.delta_angles, [0, 16384, 0]);
 }
 
+/// Runs without the paks. `PM_CrashLand`'s 0x2000 arm (`pm_time` 200) needs
+/// `fJumpOriginZ` set, which the ground trace has already zeroed, so vcod
+/// leaves it out; each jump landing here is the evidence
+/// (docs/research/cod11-player-clip.md 8.7).
+#[test]
+fn no_jump_landing_arms_the_0x2000_lockout() {
+    let fx = fixture();
+    let mut phase = "";
+    let mut prev: Option<&Snap> = None;
+    let mut landings = Vec::new();
+    for line in &fx.lines {
+        match line {
+            Line::Phase(p) => {
+                phase = p;
+                prev = None;
+            }
+            Line::Snap(s) => {
+                if prev.is_some_and(|p| p.ground == ENTITYNUM_NONE) && s.ground != ENTITYNUM_NONE {
+                    landings.push((phase, s.ct, s.pm_flags, s.pm_time));
+                }
+                prev = Some(s);
+            }
+            Line::Cmd(_) => {}
+        }
+    }
+    // The timed two run down `StuckInClient`'s 300 from the pushes at 70633
+    // and 97483; a lockout would have written 200.
+    assert_eq!(
+        landings,
+        [
+            ("stand/jump", 39682, 0x40008, 0),
+            ("crouch/jump", 70832, 0x40108, 101),
+            ("prone/jump", 97632, 0x40108, 151),
+        ]
+    );
+}
+
 /// Rebased rows the mover misses for reasons outside player clipping: the
 /// phase, the snapshot `commandTime`, the most the row may miss by (the
 /// larger of |dz| and dxy, a ground disagreement aside) and why. Kept out of

@@ -1489,7 +1489,9 @@ What it lets through, each a `GAPS` line in the gate:
   next snapshot; the hint and the legs follow
   the ground. The stand release lands on the same snapshot on both, and the
   capture holds one of each. Ours then stays 0.21 above the floor, inside the
-  origin tolerance.
+  origin tolerance. Closed 2026-10-08: VERIFIED, vcod measurement, with the
+  leaf walk's partition bounds test ported (`cod11-player-clip.md` 8.12)
+  `turret_ab` matches the ground, hint, hint string and legs rows at 38900.
 - The strafe's first footstep falls on 39500 on ours and, VERIFIED (fixture
   lines 1495-1496, event 6 on the playerstate ring), 39600 on retail.
   INFERRED: `bobCycle` is not in the capture and the join leaves each side
