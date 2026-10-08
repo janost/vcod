@@ -1147,7 +1147,6 @@ The grenade half logs `PROBE gcb first <time> <entity> <iDamage> <origin>`
 for the first victim of each grenade walk, which parks the other two, and
 `PROBE gcb later ...` for any victim after it. Retail logged three `first`
 lines and no `later` one.
-||||||| 2ff9a33
 
 ## probe_linkto2
 
@@ -1169,4 +1168,25 @@ COD_LNXDED_HOME=<absolute, no '+'> PORT=29581 PROBE_SECS=75 \
     tools/run_probe.sh client-probes/probe_linkto2 mp_carentan
 # second shell, about 8 s later:
 cargo run -p vcod -- --net-probe 127.0.0.1:29581 --probe-team allies --probe-secs 64
+```
+
+## probe_trigwait
+
+`Touch_Multi`'s `wait` arm on mp_carentan with four same-length entity lump
+edits (`wait` keys on three `trigger_multiple`s, auto2 turned into a
+`trigger_once`; the fixture header lists them, and `trigwait_bsp` in
+`crates/server/tests/linkto_ab.rs` applies them). `wait` is a gsc keyword, so
+the field cannot be written from script; the patched bsp goes into a
+`zzz_trigwait.pk3` in the server's homepath, which overrides pak4. The probe
+moves one trigger at a time onto the parked player for 20 frames and logs
+`isdefined`, the trigger count and every `trigger` notify, then ends on
+`enableLinkTo` on a script_origin. The 2026-10-09 run is
+`crates/server/tests/fixtures/movers/mp_carentan-dm-trigwait.txt`;
+`linkto_ab.rs` replays it and `docs/research/cod11-movers.md` 17 reads it.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PORT=29671 PROBE_SECS=55 \
+    tools/run_probe.sh client-probes/probe_trigwait mp_carentan
+# second shell, about 10 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:29671 --probe-team allies --probe-secs 40
 ```
