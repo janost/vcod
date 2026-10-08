@@ -886,6 +886,16 @@ pub enum LoadFailure {
     Fatal(anyhow::Error),
 }
 
+/// What `G_ShutdownGame(1)` and `G_InitGame` print on a restart, ahead of
+/// the scripts (handshake doc, "Console commands over rcon"). The team count
+/// is `G_FindTeams` over `team` keys, which no stock map carries.
+const RESTART_GAME_BANNER: &str = "==== RestartGame ====\n\
+    ------- Game Initialization -------\n\
+    gamename: main\n\
+    gamedate: Nov 13 2003\n\
+    0 teams with 0 entities\n\
+    -----------------------------------\n";
+
 pub struct Server {
     cfg: ServerConfig,
     huff: Huffman,
@@ -3714,6 +3724,7 @@ impl Server {
         }
         // Step 7: `SV_RestartGameProgs(savePersist)`. Past the teardown: the
         // outgoing level's script is gone and a failure here leaves none.
+        self.print(RESTART_GAME_BANNER);
         self.load_scripts_with(fs, true, carry, save_persist)
             .map_err(LoadFailure::Fatal)?;
         // Step 8: three frames, 100 ms of `svs.time` each.
@@ -9960,6 +9971,32 @@ mod tests {
             ask(&mut sv, "set timescale 1"),
             "print\ntimescale is cheat protected.\n"
         );
+    }
+
+    /// A restart over rcon, by `map_restart` or by `map` on the map already
+    /// serving, answers with the game module's banner block; retail's reply
+    /// was these bytes, client or not and whatever the argument (handshake
+    /// doc, "Console commands over rcon").
+    #[test]
+    fn a_restart_over_rcon_prints_the_game_banner() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let t = Instant::now();
+        let mut sv = Server::new(cfg(), t);
+        sv.set_cvar("rconpassword", "pw");
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        let banner = "print\n==== RestartGame ====\n------- Game Initialization -------\n\
+                      gamename: main\ngamedate: Nov 13 2003\n0 teams with 0 entities\n\
+                      -----------------------------------\n";
+        let mut at = t;
+        for line in ["map_restart", "map_restart 1", "map mp_carentan"] {
+            at += Duration::from_millis(500);
+            assert_eq!(rcon(&mut sv, &format!("pw {line}"), at), [banner], "{line}");
+            sv.tick(at);
+            sv.take_outgoing();
+        }
     }
 
     /// `SV_CalcPings`: the round trip each acked message took, on the
