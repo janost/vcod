@@ -57,6 +57,10 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
   `ui_mp/*.menu` files. The browser lists what `codmaster.activision.com`
   knows, pings it, sorts by column and joins on double-click. Losing the
   server drops you back on the menu with the reason in the stock error popup.
+- The stock Options and Multiplayer Options screens: rebind keys, mouse
+  sensitivity and invert, player name, rate, master volume, video mode and
+  full screen. Choices land in the console's binds and cvars and persist in
+  `vcod_mp.cfg`; settings vcod has no use for are kept but do nothing.
 - Joins a 1.1 server (`--connect` or the browser): handshake, Huffman,
   netchan, delta snapshots, and pak downloads for whatever the server has and
   you don't.
@@ -147,9 +151,12 @@ squinting at a screen.
 
 Retail does a lot more than this list. These are the gaps you'll hit first.
 
-**Front end.** Main menu, browser, quit and error popups work. Options,
-Start New Server, Mods and the browser's password, info and filter popups
-print "not in vcod yet". No favourites or LAN scan: type `connect` in the
+**Front end.** Main menu, browser, options, quit and error popups work. On
+the options screens only binds, sensitivity, invert mouse, name, rate,
+volume, video mode and full screen take effect; texture, lighting, gamma,
+HUD, crosshair, sound quality and language settings are stored but ignored.
+Start New Server, Mods, CD key and the browser's password, info and filter
+popups print "not in vcod yet". No favourites or LAN scan: type `connect` in the
 console. Esc in a game releases the mouse; there is no in-game menu.
 
 **Client**
@@ -280,7 +287,8 @@ vcod --connect <ip:port> --team axis --weapon kar98k_mp
   missing textures. I've flown noville this way. Anything else in UO is
   untested.
 - `--debug-overlay` (or F3) shows frame, draw, vis, net and audio counters.
-- `--no-audio` runs silent; `--volume <0..1>` sets the master volume.
+- `--no-audio` runs silent; `--volume <0..1>` sets the master volume
+  (`mss_volume`, default 0.8, also on the Sound screen).
 - `--net-probe <ip:port>` is the headless probe client; `vcod --help`
   documents its modes.
 
@@ -381,13 +389,16 @@ Anything else goes to the server while connected (`callvote`, `kill`,
 `+speed`, `weaponslot pistol`, `MOUSE1`, `MWHEELUP`). The client cvars are
 `name`, `cl_run`, `sensitivity`, `m_yaw`, `m_pitch`, `cg_fov`
 (cheat-protected, so 80 unless the server runs `sv_cheats 1`), `rate`
-(25000; retail's first-run 5000 starves snapshots), `snaps` and
-`scr_conspeed`. Binds only act while connected.
+(25000; retail's first-run 5000 starves snapshots), `snaps`,
+`scr_conspeed`, `mss_volume`, and `r_mode` / `r_fullscreen` (applied at
+start and by `vid_restart`). `exec <file>` runs a config from the paks or
+`main/`. Binds only act while connected.
 
 ### Main menu and browser
 
 Mouse to pick, double-click or Enter to join, wheel or Page Up / Down to
-scroll, Esc to go back.
+scroll, Esc to go back. On a bind, click or Enter, then press the new key
+(Esc cancels, Backspace clears); a third key replaces both of the old ones.
 
 ### Everywhere
 
