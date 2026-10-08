@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Prints a running retail server's cvar registry as the Rust rows of
-`crates/server/src/cvar_registry.rs`.
+`crates/server/src/cvars/registry.rs`.
 
 Runs `cvarlist` over rcon for the names and flag letters, then queries each
 name for the default `Cvar_Command` prints. Start the server with
