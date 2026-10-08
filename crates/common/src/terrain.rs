@@ -100,6 +100,11 @@ pub(crate) struct TerrainTri {
     /// The plane did not normalize: the binary leaves the record half
     /// written, and no trace can hit it.
     degenerate: bool,
+    /// The corners' bounds: not in the record, a reject vcod adds in front
+    /// of the clip (a sphere that never comes within its radius of them
+    /// can't touch the face, an edge or a corner).
+    lo: [f32; 3],
+    hi: [f32; 3],
 }
 
 /// An edge's record (0x38 bytes): its first point, a frame whose `w` runs
@@ -214,6 +219,8 @@ impl Terrain {
                 vert_rec[i2 as usize],
             ];
             rec.edges = [edge_of(i2, i1), edge_of(i0, i2), edge_of(i1, i0)];
+            rec.lo = std::array::from_fn(|i| p0[i].min(p1[i]).min(p2[i]));
+            rec.hi = std::array::from_fn(|i| p0[i].max(p1[i]).max(p2[i]));
             self.tris.push(rec);
         }
 
@@ -316,6 +323,8 @@ fn plane_record(p0: [f32; 3], p1: [f32; 3], p2: [f32; 3]) -> TerrainTri {
         verts: [NONE; 3],
         edges: [NONE; 3],
         degenerate: degenerate || !finite,
+        lo: [0.0; 3],
+        hi: [0.0; 3],
     }
 }
 
@@ -382,7 +391,19 @@ impl Terrain {
         &self,
         part: &TerrainPart,
         sw: &CapsuleSweep,
+        fraction: f32,
+    ) -> Option<TerrainHit> {
+        self.clip_capsule_as(part, sw, fraction, true)
+    }
+
+    /// [`Self::clip_capsule`], with or without the bounds reject in front
+    /// of each triangle; the tests hold the two to the same answer.
+    fn clip_capsule_as(
+        &self,
+        part: &TerrainPart,
+        sw: &CapsuleSweep,
         mut fraction: f32,
+        reject: bool,
     ) -> Option<TerrainHit> {
         // The sphere nearer the partition's faces: the lower one, or the
         // upper for a partition facing down only. `axis` reaches the other.
@@ -408,9 +429,21 @@ impl Terrain {
             startsolid: true,
         };
 
+        // Every contact puts a sphere centre on `s..e` or on the axis up
+        // from `s` within `r_eps` of the triangle; a unit more of pad
+        // covers the rounding.
+        let pad = r_eps + 1.0;
+        let reach_lo: [f32; 3] = std::array::from_fn(|i| {
+            s[i].min(e[i]).min(if i == 2 { s[2] + axis } else { s[i] }) - pad
+        });
+        let reach_hi: [f32; 3] = std::array::from_fn(|i| {
+            s[i].max(e[i]).max(if i == 2 { s[2] + axis } else { s[i] }) + pad
+        });
         for ti in part.first..part.first + part.count {
             let t = &self.tris[ti as usize];
-            if t.degenerate {
+            if t.degenerate
+                || reject && (0..3).any(|i| t.hi[i] < reach_lo[i] || t.lo[i] > reach_hi[i])
+            {
                 continue;
             }
             let n = t.normal.map(d);
@@ -636,6 +669,74 @@ mod tests {
             radius: 15.0,
             half_height: 35.0,
         }
+    }
+
+    #[test]
+    fn the_bounds_reject_never_changes_a_clip() {
+        // A bumpy 8x8 sheet, one partition, and capsules swept through and
+        // over it from random spots; the down-facing copy checks the upper
+        // sphere's case.
+        let mut seed = 0x2545F4914F6CDD1Du64;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f32 / (1u64 << 53) as f32
+        };
+        let mut points = Vec::new();
+        for y in 0..9 {
+            for x in 0..9 {
+                points.push([x as f32 * 64.0, y as f32 * 64.0, rnd() * 48.0]);
+            }
+        }
+        let mut tris = Vec::new();
+        for y in 0..8u16 {
+            for x in 0..8u16 {
+                let i = y * 9 + x;
+                tris.extend([[i, i + 9, i + 10], [i, i + 10, i + 1]]);
+            }
+        }
+        let mut t = Terrain::default();
+        t.add_partition(&points, &tris);
+        let flipped: Vec<[u16; 3]> = tris.iter().map(|&[a, b, c]| [a, c, b]).collect();
+        t.add_partition(&points, &flipped);
+        assert!(t.parts[1].down);
+        let mut hits = 0;
+        for _ in 0..4000 {
+            let mut p = || {
+                [
+                    rnd() * 600.0 - 40.0,
+                    rnd() * 600.0 - 40.0,
+                    rnd() * 160.0 - 60.0,
+                ]
+            };
+            let (a, b) = (p(), p());
+            let short = rnd() < 0.5;
+            let b = if short {
+                std::array::from_fn(|i| a[i] + (b[i] - a[i]) * 0.05)
+            } else {
+                b
+            };
+            let sw = sweep(a, b);
+            let f = if rnd() < 0.3 { rnd() } else { 1.0 };
+            for part in &t.parts {
+                let x = t.clip_capsule_as(part, &sw, f, true);
+                let y = t.clip_capsule_as(part, &sw, f, false);
+                let key = |h: &Option<TerrainHit>| {
+                    h.as_ref().map(|h| {
+                        (
+                            h.fraction.to_bits(),
+                            h.normal.map(f32::to_bits),
+                            h.tri,
+                            h.startsolid,
+                        )
+                    })
+                };
+                assert_eq!(key(&x), key(&y), "{a:?} -> {b:?} at {f}");
+                hits += usize::from(x.is_some());
+            }
+        }
+        assert!(hits > 400, "too few hits to trust the check: {hits}");
     }
 
     #[test]

@@ -3182,6 +3182,7 @@ impl Server {
         let sim = self.clients[slot].as_ref()?.sim.as_ref()?;
         Some(crate::bots::BotBody {
             origin: sim.ps.origin.into(),
+            on_ladder: sim.ps.on_ladder,
             playing: sim.pm_type == crate::spectate::PmType::Normal && !sim.dead,
             dead: sim.dead,
             health: sim.health,

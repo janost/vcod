@@ -47,6 +47,12 @@ struct Facet {
 pub struct PatchCollide {
     planes: Vec<Plane>,
     facets: Vec<Facet>,
+    /// Per facet, the box its axial planes (the bevels, or the surface)
+    /// close, as the trace reads them; `None` where one of the six is
+    /// missing. A capsule sweep that stays past one of them, by its radius
+    /// and more, fails that plane's check, so [`Self::trace`] skips the
+    /// facet without walking its planes.
+    facet_boxes: Vec<Option<(V3, V3)>>,
     pub mins: V3,
     pub maxs: V3,
 }
@@ -747,6 +753,34 @@ fn snap_vector(v: &mut V3) {
     }
 }
 
+/// The box `facet`'s axial planes close, in the trace's sense of each
+/// border (`inward` flips the plane), when all six are there.
+fn facet_box(planes: &[Plane], facet: &Facet) -> Option<(V3, V3)> {
+    let (mut lo, mut hi) = ([None; 3], [None; 3]);
+    let s = planes[facet.surface as usize];
+    let borders = facet.borders.iter().map(|b| {
+        let p = planes[b.plane as usize];
+        if b.inward {
+            ([-p.n[0], -p.n[1], -p.n[2]], -p.d)
+        } else {
+            (p.n, p.d)
+        }
+    });
+    for (n, d) in std::iter::once((s.n, s.d)).chain(borders) {
+        for i in 0..3 {
+            let axial = (0..3).all(|j| j == i || n[j] == 0.0);
+            if axial && n[i] == 1.0 {
+                hi[i] = Some(hi[i].map_or(d, |h: f32| h.min(d)));
+            } else if axial && n[i] == -1.0 {
+                lo[i] = Some(lo[i].map_or(-d, |l: f32| l.max(-d)));
+            }
+        }
+    }
+    let lo = [lo[0]?, lo[1]?, lo[2]?];
+    let hi = [hi[0]?, hi[1]?, hi[2]?];
+    Some((lo, hi))
+}
+
 impl PatchCollide {
     /// `CM_GeneratePatchCollide` (0x804dfb4): `points` are the record's
     /// `width x height` control points, rows of `width`; `tolerance` is the
@@ -803,9 +837,11 @@ impl PatchCollide {
         if b.overflow {
             return None;
         }
+        let facet_boxes = b.facets.iter().map(|f| facet_box(&b.planes, f)).collect();
         Some(PatchCollide {
             planes: b.planes,
             facets: b.facets,
+            facet_boxes,
             mins: mins.map(|v| v - 1.0),
             maxs: maxs.map(|v| v + 1.0),
         })
@@ -830,13 +866,39 @@ impl PatchCollide {
     /// shape's centre, against a trace already at `fraction`. A point takes
     /// `CM_TracePointThroughPatchCollide` (0x804e334).
     pub fn trace(&self, start: V3, end: V3, sweep: Sweep, fraction: f32) -> Option<PatchHit> {
+        self.trace_as(start, end, sweep, fraction, true)
+    }
+
+    /// [`Self::trace`], with or without the facet box reject; the tests
+    /// hold the two to the same answer.
+    fn trace_as(
+        &self,
+        start: V3,
+        end: V3,
+        sweep: Sweep,
+        fraction: f32,
+        reject: bool,
+    ) -> Option<PatchHit> {
         let (radius, offset) = match sweep {
             Sweep::Point => return self.trace_point(start, end, fraction),
             Sweep::Capsule { radius, offset } => (radius, offset),
         };
         let mut fraction = fraction;
         let mut best: Option<PatchHit> = None;
-        'facets: for facet in &self.facets {
+        // The sweep's box: an axial plane's check moves the trace to the
+        // sphere nearest it, `offset` along z, and pushes the plane out by
+        // the radius. A unit more covers the epsilon and the rounding.
+        let off = offset.abs();
+        let pad = [radius + 1.0, radius + 1.0, radius + off + 1.0];
+        let lo: V3 = std::array::from_fn(|i| start[i].min(end[i]) - pad[i]);
+        let hi: V3 = std::array::from_fn(|i| start[i].max(end[i]) + pad[i]);
+        'facets: for (facet, bounds) in self.facets.iter().zip(&self.facet_boxes) {
+            if reject
+                && let Some((flo, fhi)) = bounds
+                && (0..3).any(|i| hi[i] < flo[i] || lo[i] > fhi[i])
+            {
+                continue;
+            }
             let mut enter = -1.0f32;
             let mut leave = fraction;
             let mut enter_raw = -1.0f32;
@@ -1059,5 +1121,67 @@ mod tests {
         let coarse = PatchCollide::generate(3, 3, 16, &pts).unwrap();
         let fine = PatchCollide::generate(3, 3, 2, &pts).unwrap();
         assert!(fine.facet_count() > coarse.facet_count());
+    }
+
+    #[test]
+    fn the_facet_box_reject_never_changes_a_trace() {
+        // An arch 5 control points wide, curved in x and z, finely cut,
+        // and capsules swept through and round it from random spots.
+        let pts: Vec<V3> = (0..5)
+            .flat_map(|j| {
+                (0..5).map(move |i| {
+                    let a = i as f32 * std::f32::consts::FRAC_PI_4;
+                    [
+                        64.0 * a.cos(),
+                        j as f32 * 48.0 + i as f32 * 6.0,
+                        64.0 * a.sin(),
+                    ]
+                })
+            })
+            .collect();
+        let patch = PatchCollide::generate(5, 5, 2, &pts).unwrap();
+        assert!(patch.facet_boxes.iter().filter(|b| b.is_some()).count() > 8);
+        let mut seed = 0x9E3779B97F4A7C15u64;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f32 / (1u64 << 53) as f32
+        };
+        let mut hits = 0;
+        for _ in 0..4000 {
+            let mut p = || {
+                [
+                    rnd() * 240.0 - 120.0,
+                    rnd() * 260.0 - 40.0,
+                    rnd() * 160.0 - 60.0,
+                ]
+            };
+            let (a, b) = (p(), p());
+            let b = if rnd() < 0.5 {
+                std::array::from_fn(|i| a[i] + (b[i] - a[i]) * 0.1)
+            } else {
+                b
+            };
+            let sweep = Sweep::Capsule {
+                radius: 15.0,
+                offset: if rnd() < 0.5 { 20.0 } else { -20.0 },
+            };
+            let f = if rnd() < 0.3 { rnd() } else { 1.0 };
+            let x = patch.trace_as(a, b, sweep, f, true);
+            let y = patch.trace_as(a, b, sweep, f, false);
+            let key = |h: &Option<PatchHit>| {
+                h.as_ref().map(|h| {
+                    (
+                        h.fraction.to_bits(),
+                        h.normal.map(f32::to_bits),
+                        h.raw.to_bits(),
+                    )
+                })
+            };
+            assert_eq!(key(&x), key(&y), "{a:?} -> {b:?} at {f}");
+            hits += usize::from(x.is_some());
+        }
+        assert!(hits > 300, "too few hits to trust the check: {hits}");
     }
 }
