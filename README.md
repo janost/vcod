@@ -153,7 +153,9 @@ either: the people on it signed up for Call of Duty.
   enemy they see and toward gunfire, turret fire and blasts they hear. In
   S&D each team spreads over both bombzones, attackers plant and one
   defender defuses while the rest cover. In Retrieval attackers pick the
-  objective up and carry it to its goal while defenders guard.
+  objective up and carry it to its goal while defenders guard. In Behind
+  Enemy Lines the axis hunt the allied compass markers and the hunted
+  allies keep moving away from what they last saw or heard.
   `--bots-shoot` makes them fight with a reaction delay, a capped turn rate
   and aim error that settles while they hold a target, draw the pistol when
   the primary runs dry up close, and chase a lost enemy to where it was
@@ -210,7 +212,6 @@ command-line flags and the console: `connect`, binds and a few client cvars
 
 **Server**
 
-- The bots don't play `bel`.
 - `linkTo` takes only a player. A script calling it on any other entity
   stops with an error; no stock MP script does.
 - A brush model that has turned and turned back keeps a sliver of yaw on

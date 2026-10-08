@@ -1,7 +1,7 @@
-# Bot objectives (S&D, retrieval)
+# Bot objectives (S&D, retrieval, Behind Enemy Lines)
 
-How vcod's debug bots (`--bots`) play stock Search & Destroy and Retrieval
-(section 4). The brain is
+How vcod's debug bots (`--bots`) play stock Search & Destroy, Retrieval
+(section 4) and Behind Enemy Lines (section 5). The brain is
 `crates/server/src/bots.rs` (`ObjTarget`, `think_objective`); the server fills
 `BotView::sd` and `BotView::linked` in `crates/server/src/server.rs`
 (`bot_sd`, `site_stand`) from `ScriptRuntime::sd_objectives`
@@ -172,3 +172,58 @@ onto the crate, picks up at tick 814 and delivers 224 ticks later.
 
 With 6 shooting bots, `mp_carentan` delivered and `mp_harbor` picked up
 twice in 150 s and delivered neither.
+
+## 5. Behind Enemy Lines (`bel`)
+
+### 5.1 What stock `bel.gsc` asks of a player
+
+Line numbers are `maps/MP/gametypes/bel.gsc` in `pak5.pk3`. The team swap
+itself was measured against retail in `cod11-gametypes-re-bel.md` 8.
+
+- VERIFIED (150, 283-310): the team menu is `team_germanonly`, and the
+  menu response handler has an `axis` and a `spectator` case and no
+  `allies` one. A player only ever joins axis; the script picks who plays
+  allied. A bot that answered the menu with `allies` stayed a spectator.
+- VERIFIED (`Set_Number_Allowed_Allies`, 1329-1352): `level.alliesallowed`
+  is 1 for up to 3 axis players, then one more per 3, up to 11 past 30.
+  `CheckAllies_andMoveAxis_to_Allies` (1265-1327) moves random players
+  across to keep the allied count there.
+- INFERRED (`Callback_PlayerKilled`, 634-760, branch conditions): an axis
+  player who kills an allied one becomes allied on his respawn 2 s later
+  (`move_to_allies`) while there is room, and the victim respawns axis.
+  An allied player who kills an axis one scores a point. An allied death to
+  himself or the world moves him to axis and an axis player across.
+- INFERRED (`make_obj_marker`, 1563-1606, and `give_allied_points`,
+  1608-1628): an allied player scores one point on spawning and one every
+  `scr_bel_alivepointtime` seconds (10) while alive, and heals 3 health a
+  second under 100. With `scr_bel_showoncompass` 1 (the default, 96-97),
+  each one carries objective slot `entnum + 1`, team axis: the axis compass
+  shows it. INFERRED (`updateScriptCvars`, 1167-1265, `wait 1` and the
+  `update obj` notify; 1588-1603): every `scr_bel_positiontime` seconds (6)
+  the marker moves to the mean of where it was and where the player
+  stands, so it trails him.
+
+### 5.2 The brain
+
+`BotView::bel`, filled on a `bel` level: whether the bot is allied (the
+hunted side), and the live objective records its team's compass shows
+(`GameHost::objectives` filtered as `objectives_for` does), which on the
+axis side are the allied players' markers.
+
+- Every bot answers `team_germanonly` with `axis`.
+- A visible enemy comes first on both sides, as everywhere.
+- Hunted (allies): with no enemy in sight, `Goal::Away` from the last
+  enemy it saw or the gunfire it heard (`Bot::recall`, else the tick's
+  noise), else `Roam`. It never walks toward a noise. A mover's marker
+  trails further, and the points come from staying alive.
+- Hunters (axis): a remembered or heard spot first, else the nearest
+  marker it has not yet stood at, else `Roam`. The marker sits still for
+  6 s, so a hunter that reached it looks round from there (the roam)
+  instead of standing on it, and heads for it again once it moves.
+
+VERIFIED (measured, ours, 2026-10-08, `mp_brecourt` `bel`, 6 shooting
+bots, release, two runs of 120 and 90 s): all six joined; the axis
+killed an allied bot 8 times in each run, so 8 swaps each; allied bots
+killed axis ones 6 and 7 times and earned 17 and 11 `bel_alive_tick`s.
+Whether the hunt and the flight look sensible is a hand check
+(`pending-manual-test.md` section 49).
