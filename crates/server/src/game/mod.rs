@@ -9,6 +9,7 @@ pub mod fields;
 pub mod hitrig;
 pub mod host;
 pub mod item;
+pub mod link;
 pub mod missile;
 pub mod mover;
 pub mod pickup;

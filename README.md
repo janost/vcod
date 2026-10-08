@@ -141,7 +141,9 @@ either: the people on it signed up for Call of Duty.
 - Map triggers (`trigger_multiple`, `trigger_hurt`, `trigger_use`,
   `trigger_lookat`), and script movers whose trajectories reach the wire.
   A moving brush model carries the players and items on it and shoves the
-  players in its way, and a player linked to a moving entity rides it. The client draws a
+  players in its way, and a player linked to a moving entity rides it.
+  `linkTo` works on script models, origins, brush models and items too,
+  including to a tag on a player's model. The client draws a
   brush model where its entity is, with its baked lightmap, so a hidden or
   deleted one is gone, and draws an item resting on a mover riding it.
 - Intermission, `map_restart`, and `sv_mapRotation` the way retail runs them,
@@ -210,8 +212,10 @@ command-line flags and the console: `connect`, binds and a few client cvars
 **Server**
 
 - The bots don't play `bel`.
-- `linkTo` takes only a player. A script calling it on any other entity
-  stops with an error; no stock MP script does.
+- `linkTo` on a turret stops with an error, and `enableLinkTo` is missing;
+  no stock MP script uses either. An entity linked to a tag on a player's
+  model sits within a few units of where retail puts it, and does not
+  follow the body's swing after `setPlayerAngles`.
 - A brush model that has turned and turned back keeps a sliver of yaw on
   retail, which drifts what it carries by about 0.02 units a frame; vcod's
   comes back to exactly zero.
