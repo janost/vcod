@@ -9,6 +9,11 @@
 //! start. `docs/research/cod11-movers.md` section 15 is what the run
 //! measured.
 //!
+//! `-linkto2.txt` and `-linkto2-wire.txt` are the same for
+//! `client-probes/probe_linkto2.gsc`: `enableLinkTo` on a trigger, a linked
+//! turret, a tag parent's model change and items unlinked in mid-air
+//! (movers doc section 16).
+//!
 //! `LINKTO_REPORT=1` prints every compared row.
 //!
 //! Needs `COD_DIR`; without the paks the test returns early.
@@ -127,34 +132,63 @@ fn diff(retail: &[[f32; 3]], ours: &[[f32; 3]]) -> f32 {
 struct Ours {
     log: Vec<String>,
     aborts: Vec<String>,
-    /// The linked script_model's `pos` per snapshot, by serverTime.
-    wire: BTreeMap<i32, (Trajectory, Trajectory)>,
+    /// The watched entities' `pos` and `apos` per snapshot, by entity
+    /// number and serverTime.
+    wire: BTreeMap<u32, BTreeMap<i32, (Trajectory, Trajectory)>>,
 }
 
 fn ours() -> Option<&'static Ours> {
     static RUN: std::sync::OnceLock<Option<Ours>> = std::sync::OnceLock::new();
-    RUN.get_or_init(run_ours).as_ref()
+    RUN.get_or_init(|| {
+        run_ours(
+            "probe_linkto",
+            include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_linkto.gsc"),
+            &["b"],
+        )
+    })
+    .as_ref()
 }
 
-/// The probe on ours with one allied client standing still, run until the
-/// cycle's fatal has stopped it.
-fn run_ours() -> Option<Ours> {
+fn ours2() -> Option<&'static Ours> {
+    static RUN: std::sync::OnceLock<Option<Ours>> = std::sync::OnceLock::new();
+    RUN.get_or_init(|| {
+        run_ours(
+            "probe_linkto2",
+            include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_linkto2.gsc"),
+            &["mg", "it"],
+        )
+    })
+    .as_ref()
+}
+
+/// The entity number a `PROBE ents ... <name> <num>` line gives `name`.
+fn ent_number(log: &[String], name: &str) -> Option<u32> {
+    log.iter().find_map(|l| {
+        let t: Vec<&str> = l.split_whitespace().collect();
+        if t.get(1) != Some(&"ents") {
+            return None;
+        }
+        let i = t.iter().skip(2).position(|w| *w == name)? + 2;
+        t.get(i + 1)?.parse().ok()
+    })
+}
+
+/// `probe` on ours with one allied client standing still, run until the
+/// probe's closing fatal has stopped it, watching the entities its `ents`
+/// lines name `watch` on the wire.
+fn run_ours(probe: &str, src: &str, watch: &[&str]) -> Option<Ours> {
     let fs = vcod_common::testing::game_fs()?;
     let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_linkto"), now);
-    sv.overlay_script(
-        "maps/mp/gametypes/probe_linkto",
-        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_linkto.gsc"),
-    );
+    let mut sv = vcod_server::Server::new(common::cfg(MAP, probe), now);
+    sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), src);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut cl = NetClient::start_with_qport(ClientEnd(q.clone()), now, 0x2001);
     let mut join = Join::new("allies", "m1carbine_mp");
-    let mut wire = BTreeMap::new();
-    let mut model: Option<u32> = None;
+    let mut wire: BTreeMap<u32, BTreeMap<i32, _>> = BTreeMap::new();
     for _ in 0..3000 {
         now += Duration::from_millis(FRAME_MS as u64);
         cl.send_frame(&holding(&cl));
@@ -165,25 +199,22 @@ fn run_ours() -> Option<Ours> {
                 _ => {}
             }
         }
-        if model.is_none() {
-            model = sv.script_log().iter().find_map(|l| {
-                let t: Vec<&str> = l.split_whitespace().collect();
-                let i = t.iter().position(|w| *w == "b")?;
-                (t.get(1) == Some(&"ents") && t.get(2) == Some(&"bz"))
-                    .then(|| t[i + 1].parse().ok())?
-            });
-        }
-        if let (Some(n), Some(s)) = (model, cl.snapshots().newest())
-            && let Some(e) = s.entities.get(&n)
-        {
-            let p = &PROTOCOL_V1;
-            wire.insert(
-                s.server_time,
-                (
-                    Trajectory::read(e, p, "pos"),
-                    Trajectory::read(e, p, "apos"),
-                ),
-            );
+        if let Some(s) = cl.snapshots().newest() {
+            for name in watch {
+                let Some(n) = ent_number(sv.script_log(), name) else {
+                    continue;
+                };
+                if let Some(e) = s.entities.get(&n) {
+                    let p = &PROTOCOL_V1;
+                    wire.entry(n).or_default().insert(
+                        s.server_time,
+                        (
+                            Trajectory::read(e, p, "pos"),
+                            Trajectory::read(e, p, "apos"),
+                        ),
+                    );
+                }
+            }
         }
         if !sv.script_aborts().is_empty() {
             break;
@@ -338,7 +369,8 @@ fn the_linked_model_goes_out_interpolated_at_the_frames_pose() {
         let tr_pos: i32 = t[t.iter().position(|w| *w == "pos").unwrap() + 2]
             .parse()
             .unwrap();
-        let Some((pos, apos)) = run.wire.get(&(os + st - rs)) else {
+        let model = ent_number(&run.log, "b").unwrap();
+        let Some((pos, apos)) = run.wire.get(&model).and_then(|w| w.get(&(os + st - rs))) else {
             continue;
         };
         seen += 1;
@@ -352,5 +384,160 @@ fn the_linked_model_goes_out_interpolated_at_the_frames_pose() {
         }
     }
     assert!(seen > 100, "only {seen} snapshots compared");
+    assert!(bad.is_empty(), "{} differ:\n{}", bad.len(), bad.join("\n"));
+}
+
+const SERVER2: &str = "tests/fixtures/movers/mp_carentan-dm-linkto2.txt";
+const WIRE2: &str = "tests/fixtures/movers/mp_carentan-dm-linkto2-wire.txt";
+
+/// Retail's player settled at z -15.91 on this run (-15.87 on the first
+/// one), ours at -15.87, and every spot the probe picks is the player's
+/// origin plus an offset.
+const TOL2: f32 = TOL + 0.04;
+
+/// Every `trigger` notify's time, by the phase it fell in, as an offset from
+/// that phase's start, one per frame: retail's client sent about three cmds
+/// a frame and each touch notifies, ours sends one.
+fn notifies<'a>(
+    lines: impl Iterator<Item = &'a str>,
+    starts: &BTreeMap<String, i32>,
+) -> BTreeMap<String, std::collections::BTreeSet<i32>> {
+    let mut out: BTreeMap<String, std::collections::BTreeSet<i32>> = BTreeMap::new();
+    for line in lines.filter(|l| !l.starts_with('#')) {
+        let Some(rest) = line.find("PROBE n ").map(|i| &line[i + 8..]) else {
+            continue;
+        };
+        let t: i32 = rest.split_whitespace().nth(1).unwrap().parse().unwrap();
+        let Some((phase, start)) = starts
+            .iter()
+            .filter(|(_, s)| **s <= t)
+            .max_by_key(|(_, s)| **s)
+        else {
+            continue;
+        };
+        out.entry(phase.clone()).or_default().insert(t - start);
+    }
+    out
+}
+
+/// enableLinkTo's trigger, the linked turret, the tag parent's model changes
+/// and the unlinked items, row by row against retail.
+#[test]
+fn enable_link_to_turrets_tags_and_items_follow_retail() {
+    let Some(run) = ours2() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let retail_text = std::fs::read_to_string(SERVER2).unwrap();
+    let retail = capture(retail_text.lines());
+    let ours = capture(run.log.iter().map(String::as_str));
+    let mut bad = Vec::new();
+    for (phase, rows) in &retail.rows {
+        let o = ours
+            .rows
+            .get(phase)
+            .unwrap_or_else(|| panic!("ours never ran {phase}"));
+        assert_eq!(rows.len(), o.len(), "{phase}: sample count");
+        for (k, ((rk, rv), (_, ov))) in rows.iter().zip(o).enumerate() {
+            // `m` rows: the parent, k1, k1's angles, k0.
+            let d = if rk == "m" {
+                let pos = |v: &[[f32; 3]]| vec![v[0], v[1], v[3]];
+                diff(&pos(rv), &pos(ov)).max(diff(&[[0.0; 3], rv[2]], &[[0.0; 3], ov[2]]))
+            } else {
+                diff(rv, ov)
+            };
+            if report() {
+                println!("{phase} {k} {rk} retail {rv:?}\n{phase} {k} {rk} ours   {ov:?}");
+            }
+            if d > TOL2 {
+                bad.push(format!("{phase} {k}: retail {rv:?} ours {ov:?}"));
+            }
+        }
+    }
+    let rn = notifies(retail_text.lines(), &retail.starts);
+    let on = notifies(run.log.iter().map(String::as_str), &ours.starts);
+    if report() {
+        println!("notifies retail {rn:?}\nnotifies ours   {on:?}");
+    }
+    if rn != on {
+        bad.push(format!("notifies: retail {rn:?} ours {on:?}"));
+    }
+    assert!(
+        bad.is_empty(),
+        "{} rows differ:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+    assert!(
+        run.aborts
+            .iter()
+            .any(|a| a.contains("entity already has linkTo enabled")),
+        "{:?}",
+        run.aborts
+    );
+}
+
+/// The turret and the item linked in mid-air on the wire: `TR_INTERPOLATE`
+/// on both groups while linked, and what each goes out as once unlinked.
+#[test]
+fn the_linked_turret_and_item_go_out_like_retail() {
+    let Some(run) = ours2() else {
+        return;
+    };
+    let retail_text = std::fs::read_to_string(SERVER2).unwrap();
+    let retail = capture(retail_text.lines());
+    let ours = capture(run.log.iter().map(String::as_str));
+    let retail_log: Vec<String> = retail_text.lines().map(str::to_string).collect();
+    let mut bad = Vec::new();
+    let mut seen = 0;
+    for (name, phase) in [("mg", "mg_up"), ("it", "item_air")] {
+        let rn = ent_number(&retail_log, name).unwrap();
+        let on = ent_number(&run.log, name).unwrap();
+        let (rs, os) = (retail.starts[phase], ours.starts[phase]);
+        for line in std::fs::read_to_string(WIRE2).unwrap().lines() {
+            let t: Vec<&str> = line.split_whitespace().collect();
+            if t.first() != Some(&"entity") || t[1].parse::<u32>().ok() != Some(rn) {
+                continue;
+            }
+            let st: i32 = t[3].parse().unwrap();
+            if st < rs {
+                continue;
+            }
+            let v: Vec<[f32; 3]> = line
+                .split('[')
+                .skip(1)
+                .filter_map(|s| {
+                    let n: Vec<f32> = s
+                        .split(']')
+                        .next()?
+                        .split(',')
+                        .filter_map(|x| x.parse().ok())
+                        .collect();
+                    (n.len() == 3).then(|| [n[0], n[1], n[2]])
+                })
+                .collect();
+            let field = |group: &str, k: usize| -> i32 {
+                t[t.iter().position(|w| *w == group).unwrap() + k]
+                    .parse()
+                    .unwrap()
+            };
+            let (pos_type, apos_type) = (field("pos", 2), field("apos", 2));
+            let Some((pos, apos)) = run.wire.get(&on).and_then(|w| w.get(&(os + st - rs))) else {
+                continue;
+            };
+            seen += 1;
+            let d = (pos.base - glam::Vec3::from(v[0]))
+                .abs()
+                .max_element()
+                .max((apos.base - glam::Vec3::from(v[2])).abs().max_element());
+            if report() {
+                println!("wire {name} {st} retail {line}\nwire {name} ours {pos:?} {apos:?}");
+            }
+            if pos.tr_type != pos_type || apos.tr_type != apos_type || d > 0.11 {
+                bad.push(format!("{name} {st}: retail {line}\nours {pos:?} {apos:?}"));
+            }
+        }
+    }
+    assert!(seen > 50, "only {seen} snapshots compared");
     assert!(bad.is_empty(), "{} differ:\n{}", bad.len(), bad.join("\n"));
 }

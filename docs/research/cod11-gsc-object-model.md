@@ -2108,7 +2108,8 @@ reaches `pm_type` 1 through a jump table instead (below).
 
 The link record, the per-frame re-anchor and the failure messages, measured
 on entities that are not clients, are `docs/research/cod11-movers.md`
-section 15.
+section 15; `enableLinkTo`'s think, a linked turret and a tag parent's model
+change are section 16.
 
 VERIFIED, of `unlink` (0x5d594): it calls `G_EntUnlink` (0x680d4). VERIFIED,
 of `G_EntUnlink`: it calls `G_SetOrigin` and `G_SetAngle` with the entity's
