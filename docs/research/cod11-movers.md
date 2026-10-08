@@ -584,8 +584,8 @@ then 1 to `pos.trType` and `apos.trType` (`0x68568`, `0x6856f`) and
 it between snapshots; the ground carry above never reaches it.
 
 vcod: `entities::lerp_pos_angles` makes the same choice on the older
-snapshot's state and carries through `SnapshotMovers::carry`. `linkTo` on
-a receiver that is not a player errors on ours.
+snapshot's state and carries through `SnapshotMovers::carry`. Section 15
+measures the link itself.
 
 vcod: `vcod_common::pmove::movers::SnapshotMovers` is that solid list and
 that carry. The client unlinks every submodel at map load, and each
@@ -597,3 +597,186 @@ correction compares both sides carried to the old `commandTime`.
 rider from each snapshot to the next against retail's next playerstate:
 exact to 0.05 through every carried phase, 4.3 units out through the two yaw
 phases, as retail's own prediction is.
+
+## 15. `linkTo` on script entities
+
+The evidence is one paired capture against the retail 1.1d Linux server,
+mp_carentan under a `dm`-shaped probe, 2026-10-08:
+`crates/server/tests/fixtures/movers/mp_carentan-dm-linkto.txt` (the server
+half, one `PROBE` line per server frame of a phase, from
+`crates/gsc/tests/fixtures/semantics/client-probes/probe_linkto.gsc`) and
+`mp_carentan-dm-linkto-wire.txt` (the client half, every snapshot's state of
+the linked script_model, entity 171). The probe keeps model `*5` (entity 177,
+origin and angles zero) as `probe_ride` does, links a script_origin `a`
+(170, yaw 30) and a script_model `b` (171) to it and moves it, runs two
+three-entity chains, deletes a moving parent, links four script_origins to
+the player, and ends on a link cycle.
+
+### Which receivers
+
+VERIFIED: `InitScriptMover` (`0x60214`) writes `eType` 8 (`0x60378`) and
+sets the `ent+0x17d` bit 0x20 `linkTo` tests (`0x6038d`); object-model doc
+23.2 lists the other writers (`G_SpawnItem`, `G_SpawnTurret`, `ClientSpawn`,
+`enableLinkTo`). INFERRED, off the mover verbs' classname gate (section 1)
+naming the same three classes: every `script_model`, `script_origin` and
+`script_brushmodel` takes a link, and so do items and turrets.
+
+### The record
+
+VERIFIED, the helper both link builtins call (`0x662e0`, unnamed, between
+`G_EntAttach` and `G_CalcTagAxis`): it calls `G_EntUnlink` on the child
+(`0x662f3`), `trap_DObjExists` on the parent (`0x66307`) and
+`trap_DObjGetBoneIndex` (`0x6631b`), and loads -1 as the bone at `0x66330`;
+it compares the parent with the child (`0x66335`) and reads each record's
+first dword along the parent's chain (`0x66344`..`0x66353`); it allocates
+`0x70` bytes (`0x6635c`) and stores the parent at `+0x0`, the lowercased tag
+string at `+0x8` (`SL_GetLowercaseString` `0x66376`), the parent's old
+first child at `+0x4` and the bone at `+0xc`, zeroes `+0x10` and `+0x40`,
+0x30 bytes each, and writes `parent+0x2e8 = child`, `child+0x2e4 = record`
+(`0x66386`..`0x663bf`). INFERRED, off the branches around those sites and to
+`0x66380`, which returns 0: the two DObj calls run for a non-empty tag and
+the -1 is an empty tag's; a missing DObj or bone, the parent being the
+child and a parent chain that reaches the child all refuse the link, and
+the unlink at the top has already run by then.
+
+VERIFIED, `G_EntLinkTo` (`0x68034`): it calls the helper (`0x6804a`) and
+`G_CalcTagAxis(child, 0)` (`0x6805c`). VERIFIED, `G_CalcTagAxis`
+(`0x663d4`): it reads the parent's `AnglesToAxis(r.currentAngles)` and
+`r.currentOrigin`, calls `G_DObjCalcBone` and `DObjSkelMatrixMultiply43`
+(`0x6643c`..`0x66463`), the child's own `AnglesToAxis` (`0x664b4`),
+`MatrixInverseOrthogonal43` (`0x66502`) and `MatrixMultiply43` into
+`record+0x10` (`0x6652e`). INFERRED, off the bone test at `0x663f8` and the
+mode test at `0x664c9`: the bone matrix enters only for a bone that is not
+negative, and on mode 0 the record ends up holding the child's pose in the
+parent's (or the tag's) frame, so the link moves nothing on the frame it is
+made.
+VERIFIED, off the capture's `PROBE linked` and `PROBE linked_pl` lines: every
+child reads the pose it had before the call.
+
+VERIFIED, `G_EntLinkToWithOffset` (`0x68074`): it calls the helper and
+writes `AnglesToAxis` of the fourth argument into `record+0x10` and the
+third into `record+0x34`. VERIFIED, off the capture: `k4 linkto(player, "", (16, 0, 8),
+(0, 90, 0))` reads the player's origin plus `(16, 0, 8)` and angles
+`(0, 90, 0)`.
+
+VERIFIED, the builtin's failure arm (`0x59df5`..`0x59ea8`): it calls
+`trap_DObjExists` on the parent (`0x59e01`), reads the model byte
+`ent+0x175` (`0x59e0d`), `trap_DObjGetBoneIndex` (`0x59e5d`) and carries the
+errors `"failed to link entity since parent has no model"` (`0x76bc0`),
+`"failed to link entity since parent model '%s' is invalid"` (`0x76c00`),
+`"failed to link entity since tag '%s' does not exist in parent model
+'%s'"` (`0x76c40`) and `"failed to link entity due to link cycle"`
+(`0x76ca0`). INFERRED, off its branches: a parent with no DObj takes the
+first error when its model byte is 0 and the second otherwise, a missing bone
+takes the third, and only a parent with a DObj and a good tag reaches the
+cycle's. VERIFIED, off the capture: `y linkto(x)` with
+`x` already linked to `y`, both script_origins, is the fatal `failed to link
+entity since parent has no model`.
+
+### The per-frame re-anchor
+
+VERIFIED, the per-entity runner `0x502bc` (section 11) compares `eType`
+with 3 (`0x50380`), tests the link record (`0x50385`) and calls
+`G_GeneralLink` (`0x50392`) and the think pointer (`0x503e1`) on that path;
+`G_RunMover` tests the record (`0x57616`), calls `G_GeneralLink`
+(`0x57623`) and jumps to `G_RunThink` (`0x57628`, `0x5767e`). INFERRED, off
+those branches: a linked item runs the link and its think instead of
+`G_RunItem`, and a linked mover never reaches `G_MoverTeam`. VERIFIED,
+`G_GeneralLink` (`0x68530`): `G_SetFixedLink(ent, 0)` (`0x68540`),
+`G_SetOrigin`, `G_SetAngle`, 1 into both `trType`s (`0x68568`, `0x6856f`),
+`trap_LinkEntity`. VERIFIED, `G_SetFixedLink` (`0x66540`): it builds the
+parent's frame from the same reads as `G_CalcTagAxis` and its mode-0 arm
+(`0x66630`) calls `MatrixMultiply43` on `record+0x10` and `AxisToAngles`
+into the child's `r.currentAngles`.
+
+VERIFIED, off the capture: `a` and `b` move on the same script frame as the
+brush model's own `getorigin()`: at 12600 the model reads z 1.20, `a` 41.20
+and `b` -20.80. INFERRED, off section 11's clocks: the pass runs after the
+threads and reads the parent where it is on the level time, and script reads
+the result a frame later, as it reads the parent's.
+
+VERIFIED, off the wire half: entity 171 goes out `trType` 1 with `trTime` 0
+and `trDuration` 0 on both groups on every snapshot it is linked, and its
+`trBase` z at `serverTime` 12550 is -20.8, the value script reads at 12600.
+
+VERIFIED, off the capture: a turning parent swings the child round its own
+origin and adds its yaw to the child's: at 15600 the model reads yaw 0.50,
+`a` yaw 30.50 and `b` yaw 0.50. `b.angles` reads `(0, 360.00, 0)` once the
+model's yaw is back to `-0.00`: `AxisToAngles` wraps a yaw a hair below 0
+into `[0, 360)`.
+
+VERIFIED, off the capture's `verb_linked` phase: `a movez(100, 1)` on the
+linked `a` moves nothing and no `movedone` comes in the next 2 s, nor after
+the unlink. INFERRED, off `G_RunMover` skipping `G_MoverTeam` and
+`G_SetOrigin` rewriting the trajectory on every link frame: a verb on a
+linked entity is lost outright.
+
+VERIFIED, off the `unlink` phase: `a unlink()` at 25500 leaves `a` at z
+65.20, the value script read that frame, while `b` rides on. VERIFIED,
+`G_EntUnlink` (object-model doc 23.2): `G_SetOrigin` and `G_SetAngle` at the
+entity's own current pose.
+
+### Order: a parent runs first, a grandparent does not
+
+VERIFIED, `G_RunFrame` (`0x50912`..`0x50975`, section 11): the loop counts
+the entity number up, calls the runner on the first dword of the link
+record (`0x50949`) and on the entity (`0x50955`), and nowhere reads the
+parent's own record. INFERRED, off that order and the runner's level-time
+stamp (`0x502cb`): a parent runs ahead of its child and never twice, and
+nothing runs the parent's own parent first.
+
+VERIFIED, off the capture: the forward chain `c0` 172 (moved), `c1` 173,
+`c2` 174 reads in step, all three z 102.40 at 30600. The reversed chain `r2`
+175, `r1` 176, `r0` 179 (moved) does not: at 33800 `r0` reads 102.40 and
+`r1` and `r2` 100.00, and through the yaw `r1` reads `r0`'s previous frame
+plus 45 (35350: 9.00 and 49.50). INFERRED: at 175 the loop runs 176 first,
+which reads 179 before 179 has run; 175 then reads 176 current.
+
+### A deleted parent
+
+VERIFIED, `G_FreeEntity` (`0x66948`): `0x66954`..`0x669ee` is
+`G_EntUnlink`'s body inlined on the entity itself, and `0x669f1`..`0x66a9e`
+the same body looped over the list at `ent+0x2e8`, `G_SetOrigin` and
+`G_SetAngle` at each child's own current pose. INFERRED, off the loop's
+exit test at `0x66a9c`: every child is unlinked where it stands before the
+entity's slot is cleared.
+
+VERIFIED, off the `del_parent` phase: the parent deleted at 37700 mid-move
+carries its child for two more frames (124.00 at 37750, 125.20 at 37800) and
+the child then holds 125.20. INFERRED: `delete()` frees a tenth of a second
+later off the think (object-model doc 14), and the deleted mover runs its
+trajectory until then.
+
+### A player parent
+
+VERIFIED, `ClientThink_real` (`0x405bb`..`0x405f6`, just past its
+`G_TouchTriggers` call): it copies `ps.origin` into `r.currentOrigin` and
+writes 0 to all three of `r.currentAngles`. VERIFIED, off the capture: the player's `.angles` read
+`(0, 0, 0)` on every frame but the one `setPlayerAngles((0, 180, 0))` ran
+on, and `k1 linkto(player)` with no tag keeps its `(32, 0, 40)` offset and
+angles 0, swinging to `(-32, 0, 40)` and yaw 180 for that one frame
+(39850). INFERRED: a link to a player's entity ignores where the player
+looks.
+
+VERIFIED, off the capture: `k2 linkto(player, "bip01 head")` and
+`k3 linkto(player, "tag_weapon_right", (0,0,0), (0,0,0))` follow the
+posed bones: `k3` sits on the right hand, `(6.3, -5.2, 48.1)` from the feet,
+and both drift a few degrees a frame with the idle. From the
+`setPlayerAngles` frame on, `k3`'s yaw reads 179.47, 269.54, 44.62, 21.99 and
+then settles back near 0. INFERRED: the bone carries the body's own yaw
+(`tag_origin`'s controller, player-model doc), multiplied by the entity's
+zero axis, and the body turns after the view and back.
+
+vcod: `crate::game::link` holds the records and `link::run` is the pass,
+at the end of `ScriptRuntime::run_frame`, ascending by child with the parent
+run first, a mover parent read at the level time once it has run. It writes
+the child's `origin` and `angles`, relinks it, poses a brush model's clip
+and forgets any mover plan; the wire sends a linked entity `TR_INTERPOLATE`.
+A player's bone is the hit rig's pose (`link::client_bone`), a script
+model's its bind pose. `crates/server/tests/linkto_ab.rs` replays the probe:
+every non-player row matches to 0.02 but the yaw residual of section 12
+(0.1 units at the children's radius), the player's entity-frame links match
+to 0.02, and the bone-linked children sit within 3 units of retail's with
+their angles not compared; the body's swing after `setPlayerAngles` is not
+modelled. Not done: `enableLinkTo` (no stock MP script calls it) and a link
+on a turret, which errors on ours.

@@ -32,6 +32,7 @@ use vcod_common::net::flags::{
 };
 use vcod_common::net::msg::{EntityState, HudElem, MAX_HUD_ELEMS};
 use vcod_common::net::protocol::Protocol;
+use vcod_common::net::trajectory::TR_INTERPOLATE;
 use vcod_gsc::EntId;
 use vcod_gsc::{Cx, Host, Value};
 
@@ -242,6 +243,13 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
         None => {
             let origin = field_vec(host, cx, id, "origin").unwrap_or([0.0; 3]);
             let angles = field_vec(host, cx, id, "angles").unwrap_or([0.0; 3]);
+            // A link re-anchors the entity every frame and sends both groups
+            // `TR_INTERPOLATE` at the pose (`G_GeneralLink` 0x68568,
+            // docs/research/cod11-movers.md 15).
+            if host.links.contains(id) {
+                seti(&mut e, "pos.trType", TR_INTERPOLATE);
+                seti(&mut e, "apos.trType", TR_INTERPOLATE);
+            }
             for (axis, v) in origin.iter().enumerate() {
                 setf(&mut e, &format!("pos.trBase[{axis}]"), *v);
             }

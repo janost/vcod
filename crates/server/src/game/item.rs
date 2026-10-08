@@ -262,7 +262,8 @@ pub fn run_items(host: &mut GameHost, cx: &mut Cx, now_ms: i32) {
     let ids: Vec<EntId> = host
         .ents
         .iter_inuse()
-        .filter(|(_, e)| e.item.is_some())
+        // A linked item takes the runner's link arm instead (0x50385).
+        .filter(|(id, e)| e.item.is_some() && !host.links.contains(*id))
         .map(|(id, _)| id)
         .collect();
     let world = host.world.clone();

@@ -10,7 +10,7 @@ use vcod_common::net::protocol::{CS_MODELS_V1, ENTITYNUM_NONE, Protocol};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::predict::Predicted;
 use vcod_common::pmove::weapon::NUM_AMMO;
-use vcod_common::weapon::{self, CG_FOV, SightDirection, ViewAnimClock, WeaponAnim, WeaponDef};
+use vcod_common::weapon::{self, SightDirection, ViewAnimClock, WeaponAnim, WeaponDef};
 use vcod_common::xmodel::XModel;
 
 /// The playerstate fields the viewmodel reads, from the prediction when there
@@ -192,6 +192,7 @@ impl OnlineView {
     /// configstring 7 table, for the clip index and the zoom.
     pub fn frame(
         &mut self,
+        cg_fov: f32,
         weapons: &[Option<WeaponDef>],
         ps: Option<&ViewPs>,
         dt: f32,
@@ -201,9 +202,10 @@ impl OnlineView {
         self.flash = None;
         let held = ps.and_then(|ps| weapons.get(usize::from(ps.weapon))?.as_ref());
         let mut zooming_in = false;
-        let fov = ps.map_or(CG_FOV, |ps| {
+        let fov = ps.map_or(cg_fov, |ps| {
             zooming_in = self.sight.step(held, ps.ads_frac);
             weapon::view_fov_x(
+                cg_fov,
                 held,
                 ps.ads_frac,
                 zooming_in,
@@ -301,6 +303,7 @@ impl OnlineView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::weapon::CG_FOV;
 
     fn configstrings() -> Vec<String> {
         let mut cs = vec![String::new(); CS_MODELS_V1 + 90];
@@ -344,7 +347,7 @@ mod tests {
         let fs = Pk3Fs::empty();
         assert!(view.sync_rig(&fs, &cs, &ps(0, 82)).is_none());
         assert_eq!(view.built_for, Some(None));
-        let (draw, fov) = view.frame(&[], Some(&ps(0, 82)), 0.016, 0.0);
+        let (draw, fov) = view.frame(CG_FOV, &[], Some(&ps(0, 82)), 0.016, 0.0);
         assert!(draw.is_none());
         assert_eq!(fov, CG_FOV);
     }
@@ -354,7 +357,7 @@ mod tests {
         let mut view = OnlineView::default();
         view.clock.update(10 | 512, 0.5, 0.0);
         view.trend = 1;
-        view.frame(&[], None, 0.016, 100.0);
+        view.frame(CG_FOV, &[], None, 0.016, 100.0);
         assert!(view.clock.update(10 | 512, 0.5, 200.0).0, "raise restarts");
         assert_eq!(view.trend, 0);
     }
@@ -458,7 +461,7 @@ mod tests {
 
         // Gun bones for one frame at `now`.
         let pose = |view: &mut OnlineView, state: &ViewPs, now: f64| {
-            let (draw, fov) = view.frame(&weapons, Some(state), 0.016, now);
+            let (draw, fov) = view.frame(CG_FOV, &weapons, Some(state), 0.016, now);
             let draw = draw.expect("drawn");
             assert_eq!(draw.bone_sets.len(), 2);
             assert!(draw.bone_sets.iter().flatten().all(|m| m.is_finite()));
@@ -507,7 +510,7 @@ mod tests {
         let mut up = ps(1, 82);
         for (i, frac) in [0.0, 0.3, 0.9, 1.0].into_iter().enumerate() {
             up.ads_frac = frac;
-            let (draw, _) = scoped.frame(&weapons, Some(&up), 0.016, i as f64 * 16.0);
+            let (draw, _) = scoped.frame(CG_FOV, &weapons, Some(&up), 0.016, i as f64 * 16.0);
             assert_eq!(draw.is_none(), frac >= 0.9, "at {frac}");
             assert_eq!(scoped.scoped(), frac >= 0.9);
         }

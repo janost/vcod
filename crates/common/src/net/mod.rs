@@ -107,6 +107,29 @@ pub enum NetEvent {
     OutOfBand(String),
 }
 
+/// The userinfo keys the client's cvars drive (`name`, `rate`, `snaps`);
+/// the rest of the string is fixed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Userinfo {
+    pub name: String,
+    pub rate: String,
+    pub snaps: String,
+}
+
+/// What a client sends until told otherwise, the probes included. The
+/// game client overrides it from its cvars, whose `rate` default is
+/// retail's 5000; a probe keeps 25000 so a retail server never throttles a
+/// capture.
+impl Default for Userinfo {
+    fn default() -> Self {
+        Userinfo {
+            name: "vcod".into(),
+            rate: "25000".into(),
+            snaps: "20".into(),
+        }
+    }
+}
+
 /// CoD 1.1 spectate client, generic over its [`Transport`] so the state
 /// machine is testable without a socket.
 pub struct NetClient<T: Transport> {
@@ -118,8 +141,8 @@ pub struct NetClient<T: Transport> {
     challenge: i32,
     qport: u16,
     userinfo: String,
-    /// The userinfo `name`; [`NetClient::set_name`] changes it.
-    name: String,
+    /// The cvar half of the userinfo; [`NetClient::set_userinfo`] changes it.
+    info: Userinfo,
     netchan: Netchan,
 
     gamestate: Option<Gamestate>,
@@ -202,7 +225,7 @@ impl<T: Transport> NetClient<T> {
             challenge: 0,
             qport,
             userinfo: String::new(),
-            name: "vcod".into(),
+            info: Userinfo::default(),
             netchan: Netchan::new(qport, 0),
             gamestate: None,
             snapshots: SnapshotRing::new(),
@@ -436,19 +459,25 @@ impl<T: Transport> NetClient<T> {
             .send(&connectionless::build_oob("getchallenge"));
     }
 
-    /// The userinfo `name`. Once connected, the change goes to the server as
-    /// a `userinfo` client command, as retail's `CL_CheckUserinfo` sends it;
+    /// The userinfo cvars. Once connected, a change goes to the server as a
+    /// `userinfo` client command, as retail's `CL_CheckUserinfo` sends it;
     /// before that it rides the `connect`. A `\\`, `;` or `"` would break the
     /// info string or the command, so they are dropped.
-    pub fn set_name(&mut self, name: &str) {
-        let name: String = name
-            .chars()
-            .filter(|c| !matches!(c, '\\' | ';' | '"'))
-            .collect();
-        if name == self.name {
+    pub fn set_userinfo(&mut self, info: Userinfo) {
+        let clean = |v: String| -> String {
+            v.chars()
+                .filter(|c| !matches!(c, '\\' | ';' | '"'))
+                .collect()
+        };
+        let info = Userinfo {
+            name: clean(info.name),
+            rate: clean(info.rate),
+            snaps: clean(info.snaps),
+        };
+        if info == self.info {
             return;
         }
-        self.name = name;
+        self.info = info;
         if matches!(self.state, NetState::LoadingGamestate | NetState::Active) {
             let info = self.base_userinfo();
             self.send_reliable(&format!("userinfo \"{info}\""));
@@ -456,10 +485,10 @@ impl<T: Transport> NetClient<T> {
     }
 
     fn base_userinfo(&self) -> String {
+        let Userinfo { name, rate, snaps } = &self.info;
         format!(
             "\\cg_predictItems\\1\\cl_anonymous\\0\\handicap\\100\\color\\4\\head\\default\
-             \\model\\multi\\snaps\\20\\rate\\25000\\name\\{}",
-            self.name
+             \\model\\multi\\snaps\\{snaps}\\rate\\{rate}\\name\\{name}"
         )
     }
 
@@ -1274,22 +1303,35 @@ mod tests {
     }
 
     #[test]
-    fn set_name_rides_the_connect_then_a_userinfo_command() {
+    fn userinfo_rides_the_connect_then_a_userinfo_command() {
+        let info = |name: &str, rate: &str| Userinfo {
+            name: name.into(),
+            rate: rate.into(),
+            snaps: "20".into(),
+        };
         let t0 = Instant::now();
         let mut c = NetClient::start(FakeTransport::default(), t0);
-        c.set_name("Big \"Bob\";");
+        c.set_userinfo(info("Big \"Bob\";", "5000"));
         c.transport
             .incoming
             .push_back(oob("challengeResponse", " 7"));
         c.pump_at(t0);
-        assert!(c.userinfo.contains("\\name\\Big Bob\\protocol\\"));
+        assert!(
+            c.userinfo
+                .contains("\\rate\\5000\\name\\Big Bob\\protocol\\")
+        );
 
         let mut c = active_client();
-        c.set_name("Rob");
+        c.set_userinfo(info("Rob", "5000"));
         let sent = format!("userinfo \"{}\"", c.base_userinfo());
-        assert!(sent.ends_with("\\name\\Rob\""));
+        assert!(sent.ends_with("\\rate\\5000\\name\\Rob\""));
         assert_eq!(reliable_count(&c, &sent), 1);
-        c.set_name("Rob");
+        c.set_userinfo(info("Rob", "5000"));
+        assert_eq!(reliable_count(&c, &sent), 1);
+        // A rate change alone resends the info, as a name change does.
+        c.set_userinfo(info("Rob", "25000"));
+        let sent = format!("userinfo \"{}\"", c.base_userinfo());
+        assert!(sent.contains("\\rate\\25000\\"));
         assert_eq!(reliable_count(&c, &sent), 1);
     }
 
