@@ -3874,6 +3874,17 @@ the ordering and the conditions in it.
   explode path sets `s.eType` to 0 (13.1), so the test is what stops a
   detonated missile from thinking again in the same frame.
 
+### 12.3a What a script reads as a missile's `origin`
+
+VERIFIED: the entity field table's `origin` sits at gentity offset 308
+(0x134, `crate::game::fields`), so `ent+0x13c` is its z, and
+`G_RunMissile` (0x53fcc) stores to `ent+0x13c` at 0x54206 and 0x542e6 ahead
+of its `trap_LinkEntity` (0x542f0). INFERRED: a script reading a grenade's
+`origin` reads `r.currentOrigin` as this frame's move left it. vcod copies
+each live missile's origin into the entity's script `origin` at the throw
+and after every missile pass (`Missiles::sync_origins`); before 2026-10-09
+it read `(0, 0, 0)`.
+
 ### 12.4 `G_BounceMissile`
 
 VERIFIED: `G_BounceMissile` is `0x537C0`, `0x2F3` bytes, reads stack slots

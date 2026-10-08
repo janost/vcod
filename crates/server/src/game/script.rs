@@ -1887,6 +1887,7 @@ impl ScriptRuntime {
         for id in &frame.freed {
             host.free_entity(*id);
         }
+        host.missiles.sync_origins(&mut host.ents);
         frame
     }
 
