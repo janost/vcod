@@ -58,7 +58,7 @@ impl Menu {
 
 /// `//` and `/* */` comments dropped, `#`-lines skipped, quoted strings kept
 /// as one token, `{`, `}` and `;` as their own tokens.
-fn tokenize(text: &str) -> Vec<String> {
+pub(crate) fn tokenize(text: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let bytes = text.as_bytes();
     let mut i = 0;
@@ -106,7 +106,7 @@ fn tokenize(text: &str) -> Vec<String> {
 /// The tokens strictly between the `{` at `tokens[*i]` and its matching `}`,
 /// advancing `*i` past the closing brace. Empty and `*i` unchanged if
 /// `tokens[*i]` is not `{`.
-fn block<'a>(tokens: &'a [String], i: &mut usize) -> &'a [String] {
+pub(crate) fn block<'a>(tokens: &'a [String], i: &mut usize) -> &'a [String] {
     if tokens.get(*i).map(String::as_str) != Some("{") {
         return &[];
     }
