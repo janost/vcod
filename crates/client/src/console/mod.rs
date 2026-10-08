@@ -23,10 +23,8 @@ const CHAR_W: f32 = 8.0;
 const ROW_H: f32 = 16.0;
 /// Rows a Page Up / Page Down or a wheel notch moves.
 const PAGE_ROWS: usize = 2;
-/// The `console` shader is `$whiteimage` at `rgbGen constLighting 0.15`, a
-/// display value. The HUD pass writes vertex colours as linear into an sRGB
-/// target, so it goes in linearised.
-const BACKGROUND: [f32; 4] = [0.0196, 0.0196, 0.0196, 1.0];
+/// The `console` shader is `$whiteimage` at `rgbGen constLighting 0.15`.
+const BACKGROUND: [f32; 4] = [0.15, 0.15, 0.15, 1.0];
 const SEPARATOR: [f32; 4] = [0.0, 0.0, 0.0, 0.6];
 const WHITE: [f32; 4] = [1.0; 4];
 
