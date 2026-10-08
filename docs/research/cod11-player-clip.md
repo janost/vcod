@@ -535,6 +535,23 @@ would have stopped a player twice as fast and refused a jump for 200 ms;
 with the arm dead neither happens. vcod models neither the flag nor its two
 readers.
 
+Re-read on 2026-10-08. VERIFIED, `annotate_func.py` on the ground trace
+(0x30474): the store at 0x305c8 follows the `jne` at 0x305b4, which skips
+the no-hit call to fn 0x3037c on a trace fraction other than 1.0, and every
+path to the call at 0x30721 passes through it; the call is the only entry
+to `PM_CrashLand`. VERIFIED, on the wire, the bump walker's three jump
+landings, each the first grounded snapshot of its phase
+(`mp_carentan-dm-bump-walker.txt`): stand/jump ct 39682 `pm_flags` 0x40008
+`pm_time` 0; crouch/jump ct 70832 0x40108 and 101; prone/jump ct 97632
+0x40108 and 151. The two timed ones are `StuckInClient`'s 300 from the push
+at 70633 and 97483 run down by the frames since; an armed lockout would
+have overwritten `pm_time` with 200. VERIFIED: of the 16205 `pm_flags`
+values in the committed fixtures under `crates/*/tests/fixtures`, none
+carries 0x2000. `bump_ab.rs`'s
+`no_jump_landing_arms_the_0x2000_lockout` holds the three landings.
+INFERRED: porting the arm would add a branch no retail frame takes; vcod
+leaves it out.
+
 ### 8.8 The game half
 
 Read out of `game.mp.i386.so` on 2026-10-05 with `tools/re/annotate_func.py`.
