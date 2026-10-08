@@ -312,6 +312,7 @@ pub(crate) fn loudest(noises: &[Noise], listener: usize, at: [f32; 3]) -> Option
 /// What a bot's body is doing, as the gates read it.
 pub struct BotBody {
     pub origin: [f32; 3],
+    pub on_ladder: bool,
     pub playing: bool,
     pub dead: bool,
     pub health: i32,
@@ -1128,7 +1129,11 @@ impl Bot {
             }
         }
         let steering = !standing && view.waypoint.is_some() && self.unstick_ticks == 0;
-        let foot = view.waypoint.filter(|_| steering && view.stop);
+        // A leap's foot is slowed onto only on its floor: one at a ladder's
+        // head is climbed to at the full rate first.
+        let foot = view.waypoint.filter(|w| {
+            steering && view.stop && !view.on_ladder && (w[2] - view.origin[2]).abs() < CLIMB_HEIGHT
+        });
         let (mut pitch, mut yaw, mut forward) = match view.waypoint {
             // On guard: look about, feet still.
             _ if standing => {
@@ -1140,6 +1145,14 @@ impl Bot {
                 (0.0, self.heading, 0)
             }
             Some(w) if self.unstick_ticks == 0 => self.steer(view, w),
+            // On a ladder with no way to steer, or pinned on it: down.
+            // The heading is nothing to a body on a ladder, and the level
+            // view of a wander climbs at a third of the rate, which held
+            // bots under a spar on mp_ship's ladders for good.
+            _ if view.on_ladder => {
+                self.unstick_ticks = self.unstick_ticks.saturating_sub(1);
+                (crate::nav::LADDER_PITCH, self.heading, 127)
+            }
             _ => {
                 self.unstick_ticks = self.unstick_ticks.saturating_sub(1);
                 if self.heading_ticks == 0 || view.hazard_ahead[octant(self.heading)] {
@@ -2420,6 +2433,36 @@ mod tests {
         // Near the bottom of a descent: the foot is 20 below, still backing.
         v.waypoint = Some([16.0, 0.0, 44.0]);
         assert_eq!(bot.think(&v).forward, -127);
+    }
+
+    #[test]
+    fn a_leaps_foot_at_a_ladders_head_is_climbed_to_at_full_rate() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.stop = true;
+        v.on_ladder = true;
+        v.waypoint = Some([4.0, 0.0, 600.0]);
+        let climb = bot.think(&v);
+        assert_eq!(
+            (climb.forward, climb.angles[0]),
+            (127, deg_short(-crate::nav::LADDER_PITCH))
+        );
+    }
+
+    #[test]
+    fn a_bot_on_a_ladder_with_no_waypoint_or_pinned_climbs_down() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.on_ladder = true;
+        let down = (127, deg_short(crate::nav::LADDER_PITCH));
+        let cmd = bot.think(&v);
+        assert_eq!((cmd.forward, cmd.angles[0]), down, "no waypoint");
+        // Pinned under something on the way up: the unstick goes down too.
+        v.waypoint = Some([16.0, 0.0, 200.0]);
+        let unstuck = (0..25)
+            .map(|_| bot.think(&v))
+            .any(|c| (c.forward, c.angles[0]) == down);
+        assert!(unstuck, "a pinned climber kept pushing up");
     }
 
     #[test]

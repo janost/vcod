@@ -333,3 +333,42 @@ fn a_bot_walks_toward_gunfire_it_cannot_see() {
         "the listener got from {start:.0} to {closest:.0} of the fight"
     );
 }
+
+/// mp_ship's ladders, climbed by six roaming bots: none hangs on one for
+/// longer than the 560-unit hold ladder takes at the full rate (11 s).
+/// Seed 1 used to hold a bot on the hold ladder for a minute, slowed onto
+/// a leap's foot at its head, and others for good under a spar on a deck
+/// ladder, wandering with a level view.
+#[test]
+#[ignore = "runs 6 bots on mp_ship for 4 seeds, ~2 min; run with --ignored"]
+fn bots_on_mp_ships_ladders_keep_climbing() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_ship").unwrap()).unwrap())
+        .expect("parse the bsp");
+    let mut now = Instant::now();
+    let mut cfg = cfg(6, false, "dm");
+    cfg.map = "mp_ship".into();
+    let mut sv = vcod_server::Server::new(cfg, now);
+    sv.test_seed_rng(1);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let mut hanging = [0usize; 8];
+    let mut climbs = 0;
+    for _ in 0..2000 {
+        run(&mut sv, &mut now, 1);
+        for slot in sv.bot_slots() {
+            let on = sv.bot_body(slot).is_some_and(|b| b.playing && b.on_ladder);
+            climbs += usize::from(on && hanging[slot] == 0);
+            hanging[slot] = if on { hanging[slot] + 1 } else { 0 };
+            assert!(
+                hanging[slot] < 300,
+                "bot {slot} on a ladder for 15 s at {:?}",
+                sv.bot_body(slot).map(|b| b.origin)
+            );
+        }
+    }
+    assert!(climbs >= 3, "only {climbs} ladder grabs");
+}
