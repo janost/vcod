@@ -444,6 +444,16 @@ fn bounce(vel: Vec3, normal: Vec3) -> Vec3 {
     (vel - 2.0 * vel.dot(normal) * normal) * 0.3
 }
 
+/// Farthest from `cam_pos` first, the order `Renderer::set_fx_quads` draws in.
+pub fn sort_back_to_front(quads: &mut [FxQuad], cam_pos: Vec3) {
+    quads.sort_by(|a, b| {
+        let da = (quad_center(a) - cam_pos).length_squared();
+        let db = (quad_center(b) - cam_pos).length_squared();
+        // total_cmp: a NaN must not panic here.
+        db.total_cmp(&da)
+    });
+}
+
 fn quad_center(q: &FxQuad) -> Vec3 {
     q.verts.iter().map(|v| Vec3::from(*v)).sum::<Vec3>() / 4.0
 }
@@ -751,12 +761,7 @@ impl FxSystem {
         let mut out = Vec::new();
         push_quads(&self.particles, cam_pos, cam_right, cam_up, now, &mut out);
         push_quads(&self.decals, cam_pos, cam_right, cam_up, now, &mut out);
-        out.sort_by(|a, b| {
-            let da = (quad_center(a) - cam_pos).length_squared();
-            let db = (quad_center(b) - cam_pos).length_squared();
-            // total_cmp: a NaN must not panic here.
-            db.total_cmp(&da)
-        });
+        sort_back_to_front(&mut out, cam_pos);
         out
     }
 

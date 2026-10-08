@@ -1067,3 +1067,26 @@ goes there too, as `mp_brecourt-<gametype>-log.txt`.
 Recipe, timeline and findings: `docs/research/cod11-gametypes-re-bel.md`,
 sections 7 (re: allies `attacker` first, axis `defender` 3 s later, 150 s)
 and 8 (bel: both `--probe-team axis`, `first` then `second`, 130 s).
+
+## probe_linkto
+
+`linkTo` on script entities. It keeps mp_carentan's bombzone_A brush model
+`*5` as probe_ride does and, once an allied player has spawned, links a
+script_origin and a script_model to it and moves and turns it, verbs and
+unlinks a linked child, runs a link chain in each entity order, deletes a
+moving parent, links four script_origins to the player (no tag, a bone, a
+tag with zero offsets, the four-argument form with no tag), and ends on a
+link cycle whose fatal is the last measurement. Every server frame of a
+phase logs `PROBE f`/`g`/`h` lines (the header of the fixture spells them
+out). The plain `--net-probe` client's trajectory lines are the wire half.
+The 2026-10-08 run is
+`crates/server/tests/fixtures/movers/mp_carentan-dm-linkto.txt` and
+`-linkto-wire.txt`, which `crates/server/tests/linkto_ab.rs` replays and
+`docs/research/cod11-movers.md` 15 reads.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=95 \
+    tools/run_probe.sh client-probes/probe_linkto mp_carentan
+# second shell, about 7 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-secs 85
+```

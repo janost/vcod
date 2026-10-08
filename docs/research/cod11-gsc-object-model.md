@@ -2106,6 +2106,10 @@ byte scan of both encodings over `.text`: `PM_UpdateLean` (0x32c63),
 `G_GetNonPVSFriendlyInfo` (0x42cad). None of them is in `PmoveSingle`, which
 reaches `pm_type` 1 through a jump table instead (below).
 
+The link record, the per-frame re-anchor and the failure messages, measured
+on entities that are not clients, are `docs/research/cod11-movers.md`
+section 15.
+
 VERIFIED, of `unlink` (0x5d594): it calls `G_EntUnlink` (0x680d4). VERIFIED,
 of `G_EntUnlink`: it calls `G_SetOrigin` and `G_SetAngle` with the entity's
 own origin and angles (0x680f9, 0x68109), unhooks the entity from the parent's

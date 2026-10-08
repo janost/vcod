@@ -88,7 +88,9 @@ built from the bytes up, this might be your kind of thing.
   spectator following a player sees that player's HUD, weapon, zoom and
   scope. It also draws the gametype script's own HUD elements, such as the
   S&D clock, the bomb icons and the
-  progress bar, in retail's fonts, fixed-width slots included.
+  progress bar, in retail's fonts, fixed-width slots included. A script's
+  head icon (the Retrieval carrier, `scr_drawfriend` teammates) floats over
+  the player, filtered by team as retail does.
 - Follows the server through a map change: loading screen, downloads, new
   map.
 - Has retail's drop-down console on `` ` `` / `~`: the log, chat and server
@@ -139,7 +141,9 @@ either: the people on it signed up for Call of Duty.
 - Map triggers (`trigger_multiple`, `trigger_hurt`, `trigger_use`,
   `trigger_lookat`), and script movers whose trajectories reach the wire.
   A moving brush model carries the players and items on it and shoves the
-  players in its way, and a player linked to a moving entity rides it. The client draws a
+  players in its way, and a player linked to a moving entity rides it.
+  `linkTo` works on script models, origins, brush models and items too,
+  including to a tag on a player's model. The client draws a
   brush model where its entity is, with its baked lightmap, so a hidden or
   deleted one is gone, and draws an item resting on a mover riding it.
 - Intermission, `map_restart`, and `sv_mapRotation` the way retail runs them,
@@ -199,9 +203,6 @@ command-line flags and the console: `connect`, binds and a few client cvars
   hints, the weapon name timing out after a switch and the hit icon's jitter
   ([docs/research/cod11-hud-protocol.md](docs/research/cod11-hud-protocol.md),
   section 9).
-- No head icons: the server sends `iHeadIcon`, but the client draws no icon
-  over a player's head, so a Retrieval carrier or a `scr_drawfriend`
-  teammate looks like anyone else.
 - Only protocol 1 (patch 1.1). 1.5 and United Offensive servers won't talk to
   it.
 - Prediction carries you with a moving brush model you stand on but not
@@ -211,8 +212,10 @@ command-line flags and the console: `connect`, binds and a few client cvars
 **Server**
 
 - The bots don't play `bel`.
-- `linkTo` takes only a player. A script calling it on any other entity
-  stops with an error; no stock MP script does.
+- `linkTo` on a turret stops with an error, and `enableLinkTo` is missing;
+  no stock MP script uses either. An entity linked to a tag on a player's
+  model sits within a few units of where retail puts it, and does not
+  follow the body's swing after `setPlayerAngles`.
 - A brush model that has turned and turned back keeps a sliver of yaw on
   retail, which drifts what it carries by about 0.02 units a frame; vcod's
   comes back to exactly zero.
@@ -488,8 +491,20 @@ sight), `+melee`, `+activate`, `+reload`, `weaponslot
 `messagemode`, `messagemode2`, `toggleconsole`. Key names are retail's
 (`MOUSE1`, `MWHEELUP`, `CTRL`, `SPACE`, `KP_ENTER`, letters and digits).
 
-The client's cvars are `name`, `cl_run` (1: the sight key aims while held, 0:
-while released) and `scr_conspeed` (how fast the console slides). Binds only
+The client's cvars, at retail's defaults:
+
+- `name`.
+- `cl_run`: 1, the sight key aims while held; 0, while released.
+- `sensitivity`, `m_yaw`, `m_pitch`: the mouse turns `sensitivity * m_yaw`
+  degrees a count (5 x 0.022), scaled down with the zoom as retail does.
+- `cg_fov`: 80, readable up to 160. It is cheat-protected, as in retail, so
+  it stays at 80 unless the server runs `sv_cheats 1`.
+- `rate`, `snaps`: 5000 and 20, sent in the userinfo; a change goes to the
+  server at once. 5000 is retail's first-run value; a busy server wants
+  `rate 25000`.
+- `scr_conspeed`: how fast the console slides.
+
+Binds only
 act while connected; fly and walk mode keep their fixed keys. Esc, M (the
 script menu), F3 and F4 are fixed.
 

@@ -3,6 +3,7 @@ mod camera;
 mod console;
 mod entities;
 mod fx;
+mod head_icon;
 mod hud;
 mod hud_text;
 mod loading;
@@ -858,7 +859,7 @@ fn main() -> Result<()> {
         Some(addr) => {
             let mut net = net::NetClient::connect(addr)
                 .with_context(|| format!("cannot open a socket to {addr}"))?;
-            net.set_name(shell.cvar("name").unwrap_or_default());
+            net.set_userinfo(shell.userinfo());
             Some(net)
         }
         None => None,
@@ -1003,6 +1004,7 @@ fn main() -> Result<()> {
         build_ms: 0.0,
         render_ms: 0.0,
         fx_ms: 0.0,
+        look_zoom: (1.0, false),
         hud,
         hud_ms: 0.0,
         localized,
@@ -1369,6 +1371,9 @@ struct App {
     build_ms: f32,
     render_ms: f32,
     fx_ms: f32,
+    /// Last frame's fov over `cg_fov` and whether the view rides a mounted
+    /// gun: the mouse's sensitivity scale ([`play::input::MouseLook`]).
+    look_zoom: (f32, bool),
     hud: Option<hud::Hud>,
     hud_ms: f32,
     /// Menu labels; empty outside `--connect`.
@@ -1587,7 +1592,7 @@ impl App {
                 Effect::ToggleConsole => self.toggle_console(),
                 Effect::Userinfo => {
                     if let Mode::Online { net, .. } = &mut self.mode {
-                        net.set_name(self.shell.cvar("name").unwrap_or_default());
+                        net.set_userinfo(self.shell.userinfo());
                     }
                 }
                 Effect::SaveConfig => {
@@ -1612,7 +1617,7 @@ impl App {
                 return;
             }
         };
-        net.set_name(self.shell.cvar("name").unwrap_or_default());
+        net.set_userinfo(self.shell.userinfo());
         log::info!("connecting to {addr}");
         if self.hud.is_none() {
             self.hud = hud::Hud::new(&self.fs)
@@ -2109,10 +2114,12 @@ impl ApplicationHandler for App {
                                     gamestate_ready = true;
                                     predictor.fall_heights =
                                         pmove::FallHeights::from_systeminfo(net.configstring(1));
+                                    self.shell.set_cheats(sv_cheats(net.configstring(1)));
                                 }
                                 net::NetEvent::ConfigstringChanged(1) => {
                                     predictor.fall_heights =
                                         pmove::FallHeights::from_systeminfo(net.configstring(1));
+                                    self.shell.set_cheats(sv_cheats(net.configstring(1)));
                                 }
                                 _ => {}
                             }
@@ -2355,6 +2362,7 @@ impl ApplicationHandler for App {
                                     let mut muzzles: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
                                     let mut weapon_flash: HashMap<i32, String> = HashMap::new();
                                     let mut entity_pos: HashMap<u32, Vec3> = HashMap::new();
+                                    let mut heads: HashMap<u32, Vec3> = HashMap::new();
                                     let mut turret_eye = None;
 
                                     let render_time = net
@@ -2399,6 +2407,7 @@ impl ApplicationHandler for App {
                                         muzzles = built.muzzles;
                                         weapon_flash = built.weapon_flash;
                                         entity_pos = built.entity_pos;
+                                        heads = built.heads;
                                         turret_eye = built.turret_eye;
                                         r.set_submodels(&built.submodels);
                                         // Over 512 u is a teleport, not motion.
@@ -2468,8 +2477,11 @@ impl ApplicationHandler for App {
                                         r.set_viewmodel(&self.fs, &models);
                                         self.viewmodel = models;
                                     }
+                                    let cg_fov = cg_fov(&self.shell);
                                     let (vm_draw, fov) =
-                                        view.frame(weapons, view_ps.as_ref(), dt, local_ms);
+                                        view.frame(cg_fov, weapons, view_ps.as_ref(), dt, local_ms);
+                                    self.look_zoom =
+                                        (fov / cg_fov, view_ps.as_ref().is_some_and(|v| v.mounted));
                                     vm = vm_draw;
                                     if !snapshot_view {
                                         let delta = match &predicted {
@@ -2706,10 +2718,25 @@ impl ApplicationHandler for App {
                                     // After the drain, so new voices get this frame's positions.
                                     self.audio.step(&entity_pos, Some(&*world));
 
-                                    r.set_fx_quads(
-                                        &self.fs,
-                                        self.fx.build_quads(cam.pos, cam_right, cam_up, time),
-                                    );
+                                    let mut fx_quads =
+                                        self.fx.build_quads(cam.pos, cam_right, cam_up, time);
+                                    if let Some(newest) = newest {
+                                        fx_quads.extend(head_icon::quads(
+                                            &head_icon::Scene {
+                                                protocol: p,
+                                                entities: &newest.entities,
+                                                clients: &newest.clients,
+                                                configstrings: net.configstrings(),
+                                                viewer: ps_client,
+                                                heads: &heads,
+                                                entity_pos: &entity_pos,
+                                            },
+                                            cam_right,
+                                            cam_up,
+                                        ));
+                                        fx::sim::sort_back_to_front(&mut fx_quads, cam.pos);
+                                    }
+                                    r.set_fx_quads(&self.fs, fx_quads);
                                     r.set_fx_lights(&self.fx.lights(cam.pos, time));
                                     r.set_fog(
                                         net::FogParams::parse(
@@ -2846,6 +2873,7 @@ impl ApplicationHandler for App {
                                     .collect();
                             }
                             fov = weapon::view_fov_x(
+                                cg_fov(&self.shell),
                                 Some(&w.def),
                                 out.ads_frac,
                                 *ads_held,
@@ -3087,21 +3115,27 @@ impl ApplicationHandler for App {
                 return;
             }
             let (dx, dy) = (dx as f32, dy as f32);
+            let look = play::input::MouseLook {
+                sensitivity: self.shell.cvar_f32("sensitivity"),
+                m_yaw: self.shell.cvar_f32("m_yaw"),
+                m_pitch: self.shell.cvar_f32("m_pitch"),
+            };
             match &mut self.mode {
                 Mode::Idle => {}
-                Mode::Fly(cam) => cam.mouse_delta(dx, dy),
+                Mode::Fly(cam) => cam.look(look.degrees(dx, dy, 1.0, false)),
                 Mode::Online { input, view, .. } => {
-                    input.mouse(dx, dy);
+                    let (zoom, mounted) = self.look_zoom;
+                    input.mouse(look.degrees(dx, dy, zoom, mounted));
                     view.mouse(dx, dy);
                 }
                 Mode::Walk {
                     ps, mouse_delta, ..
                 } => {
-                    // same sensitivity and pitch clamp as FlyCamera::mouse_delta
-                    const SENS: f32 = 0.003;
-                    ps.yaw -= dx * SENS;
+                    // the same turn and pitch clamp as FlyCamera::look
+                    let [pitch, yaw] = look.degrees(dx, dy, 1.0, false);
+                    ps.yaw += yaw.to_radians();
                     ps.pitch =
-                        (ps.pitch - dy * SENS).clamp(-89.0f32.to_radians(), 89.0f32.to_radians());
+                        (ps.pitch - pitch.to_radians()).clamp(camera::PITCH_MIN, camera::PITCH_MAX);
                     // raw counts; the sway spring scales them
                     mouse_delta.0 += dx;
                     mouse_delta.1 += dy;
@@ -3109,6 +3143,16 @@ impl ApplicationHandler for App {
             }
         }
     }
+}
+
+/// `cg_fov` as cgame reads it, clamped to 80..160 (0x30032e20).
+fn cg_fov(shell: &console::shell::Shell) -> f32 {
+    shell.cvar_f32("cg_fov").clamp(weapon::CG_FOV, 160.0)
+}
+
+/// The systeminfo's `sv_cheats`, as `CL_SystemInfoChanged` reads it.
+fn sv_cheats(systeminfo: &str) -> bool {
+    net::info_value_for_key(systeminfo, "sv_cheats") == Some("1")
 }
 
 /// `--probe-say`'s `SECS:COMMAND`.

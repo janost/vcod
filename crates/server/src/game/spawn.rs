@@ -671,7 +671,7 @@ pub(crate) fn angle_forward(angles: [f32; 3]) -> [f32; 3] {
 /// the right axis once it has been rotated back through both. The constants
 /// are the module's: 180 over pi, 360 for the wrap, and 90/270 for an axis
 /// pointing straight up (rodata `0x7293c`, `0x72940`, `0x72958`).
-fn axis_to_angles(axis: [[f32; 3]; 3]) -> [f32; 3] {
+pub(crate) fn axis_to_angles(axis: [[f32; 3]; 3]) -> [f32; 3] {
     let [fwd, right, _up] = axis;
     let (pitch, yaw);
     if fwd[1] == 0.0 && fwd[0] == 0.0 {

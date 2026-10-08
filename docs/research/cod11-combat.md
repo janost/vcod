@@ -4898,8 +4898,8 @@ as retail does, where the entity-number order took d.
 Not routed through the tree: a linked client's per-frame relink in
 `G_RunClient`, a gunner's relink in the turret think, `func_*` entities
 (vcod spawns none of them), the link `ScriptEntCmd_MoveTo` and
-`Reached_ScriptMover` make at a move's ends, `linkTo`'s `G_GeneralLink`, and
-an entity whose box touches no BSP leaf, which `SV_LinkEntity` unlinks
+`Reached_ScriptMover` make at a move's ends, and an entity whose box
+touches no BSP leaf, which `SV_LinkEntity` unlinks
 (the leaf count at 0x8090c68, the unlink at 0x8090c84). Not walking it yet: `G_GetActivateEnt` (the use key; sorted
 by score, so the order reaches it only through ties), `G_TryPushingEntity`
 (a mover's push, mask 0x2000180), `G_KillBox`, `positionWouldTelefrag` and
