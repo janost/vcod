@@ -3840,13 +3840,17 @@ impl Server {
         c.sim = Some(ClientSim::spectator(spawn.0, spawn.1, cmd_angles));
         // The entering cmd is not simulated: retail's execute loop skips
         // every cmd at or before `lastUsercmd`, which entry has just set to
-        // it. The clock is therefore the client's own, as retail's is: a
-        // first cmd stamped far in the future freezes that client's sim until
-        // its clock catches up, and only that client's. With no entering cmd,
-        // one frame back, so the first cmd's dt is a sane 50 ms rather than
-        // the whole age of the client's clock.
-        c.last_processed_st =
-            entering.map_or(self.sv_time_ms.wrapping_sub(FRAME_MS), |c| c.server_time);
+        // it. The clock is the client's own, held to the window
+        // `replay_moves` holds every cmd to, so a handshake cmd stamped far
+        // ahead cannot leave `commandTime` past every cmd that follows. With
+        // no entering cmd, one frame back, so the first cmd's dt is a sane
+        // 50 ms rather than the whole age of the client's clock.
+        c.last_processed_st = entering.map_or(self.sv_time_ms.wrapping_sub(FRAME_MS), |c| {
+            c.server_time.clamp(
+                self.sv_time_ms.wrapping_sub(1000),
+                self.sv_time_ms.wrapping_add(200),
+            )
+        });
         log::info!("client {slot} {:?} begin (spectator)", c.name);
         // `ClientBegin`: the notify that releases the connect callback's
         // `waittill("begin")`. The event queues rather than fires here, so it
@@ -4591,7 +4595,14 @@ impl Server {
                 capped[slot] = true;
                 continue;
             }
-            let cmd = c.pending.remove(0).cmd;
+            let mut cmd = c.pending.remove(0).cmd;
+            // `ClientThink_real` holds the cmd's clock within 1000 ms behind
+            // and 200 ms ahead of the `level.time` it runs on, the last
+            // frame's (player-clip doc 8.12).
+            let level_ms = now_ms.wrapping_sub(FRAME_MS);
+            cmd.server_time = cmd
+                .server_time
+                .clamp(level_ms.wrapping_sub(1000), level_ms.wrapping_add(200));
             // Stale cmds (dt <= 0) are skipped whole; a long one is chopped
             // rather than clamped away.
             let dt_ms = cmd.server_time.wrapping_sub(c.last_processed_st);
@@ -7126,6 +7137,9 @@ mod tests {
         for i in 0..60 {
             let cmd = frag_throw_cmd(i, st, frag);
             sv.clients[0].as_mut().unwrap().pending.push(cmd.into());
+            // The frame's clock keeps up with the cmds, which `replay_moves`
+            // clamps to 200 ms past `level.time`.
+            sv.sv_time_ms = cmd.server_time;
             sv.replay_moves();
             let rt = sv.script.as_ref().unwrap();
             let thrown = rt.missiles().entities(sv.proto).next().is_some();
@@ -7385,6 +7399,7 @@ mod tests {
             ..NULL_USERCMD
         };
         c.pending.push(cmd.into());
+        sv.sv_time_ms = cmd.server_time;
         sv.replay_moves();
         let sim = sv.clients[0].as_ref().unwrap().sim.as_ref().unwrap();
         assert_eq!(sim.ps.weapon, thompson as u8, "the switch did not land");
@@ -8064,6 +8079,9 @@ mod tests {
                 .unwrap(),
             t1,
         );
+        // A clock the burst's last cmd is within 200 ms of: the earliest
+        // cmds clamp up to 1000 ms behind it, and their frames run as one.
+        sv.sv_time_ms = 1900;
         let s2 = latest_snapshot(
             &mut sv,
             &mut nc,
