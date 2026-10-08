@@ -43,6 +43,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("placespawnpoint", place_spawnpoint),
     ("linkto", link_to),
     ("unlink", unlink),
+    ("enablelinkto", enable_link_to),
     ("sethintstring", set_hint_string),
 ];
 
@@ -450,7 +451,8 @@ pub fn not_solid(
 }
 
 /// `setModel(name)` allocates a model configstring slot and stores the name,
-/// so `.model` reads back what was set.
+/// so `.model` reads back what was set, then drops the links of children on
+/// a tag the new model lacks (`G_DObjUpdate`, `link::model_changed`).
 pub fn set_model(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -463,10 +465,14 @@ pub fn set_model(
     };
     let name = *name;
     let text = cx.resolve(name).to_string();
-    host.allocators
-        .index(&mut host.configstrings, CsRange::Model, &text)?;
+    // `G_SetModel` takes "" as no model and registers nothing (0x6702c).
+    if !text.is_empty() {
+        host.allocators
+            .index(&mut host.configstrings, CsRange::Model, &text)?;
+    }
     let field = cx.intern_folded("model");
     host.set_field(cx, id, field, Value::String(name))?;
+    super::super::link::model_changed(host, cx, id);
     Ok(Value::Undefined)
 }
 
@@ -657,10 +663,9 @@ pub fn is_touching(
 /// every frame; the sim owns the playerstate, so this only queues the edge
 /// (docs/research/cod11-gsc-object-model.md, 23.2). A client takes no tag.
 ///
-/// Anything else goes through `crate::game::link`. Retail gates the receiver
-/// on svFlags 0x20, which `G_SpawnItem`, `G_SpawnTurret`, `InitScriptMover`
-/// (every `script_model`, `script_origin` and `script_brushmodel`),
-/// `ClientSpawn` and `enableLinkTo` set (23.2).
+/// Anything else goes through `crate::game::link`, gated on the receiver's
+/// link bit (`link::has_link_bit`, 23.2). A turret's record reads the gun's
+/// own pose, so the barrel and its gunner follow the link.
 pub fn link_to(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -675,19 +680,7 @@ pub fn link_to(
         return link_client(host, cx, child, parent);
     }
     let classname = super::super::link::classname(host, cx, child);
-    let item = host.ents.get(child).is_some_and(|e| e.item.is_some());
-    let mover = matches!(
-        classname.as_str(),
-        "script_model" | "script_origin" | "script_brushmodel"
-    );
-    if host.turrets.contains_key(&child) {
-        // Retail links a turret through `turret_think`'s own
-        // `G_GeneralLink` (0x532b2); the turret record here would not follow.
-        return Err(ErrorKind::Custom(
-            "vcod: linkTo on a turret is not supported".into(),
-        ));
-    }
-    if !mover && !item {
+    if !super::super::link::has_link_bit(host, child, &classname) {
         return Err(ErrorKind::Custom(format!(
             "entity (classname: '{classname}') does not currently support linkTo"
         )));
@@ -753,9 +746,22 @@ pub fn unlink(
     if host.ents.get(id).is_some_and(|e| e.client.is_some()) {
         host.client_link_ops.push((id.0 as usize, LinkOp::Unlink));
     } else {
-        host.links.unlink(id);
+        super::super::link::unlink(host, id);
     }
     Ok(Value::Undefined)
+}
+
+/// `self enableLinkTo()` (0x5d5d0, `crate::game::link::enable`).
+pub fn enable_link_to(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = entity_receiver(recv)?;
+    super::super::link::enable(host, cx, id)
+        .map(|()| Value::Undefined)
+        .map_err(ErrorKind::Custom)
 }
 
 #[cfg(test)]
