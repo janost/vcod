@@ -734,6 +734,16 @@ So Q3's `height/top/bottom/pitch/xSkip/imageWidth/imageHeight` block became
 with three of the seven promoted from `int` to `float`. The `s/t/s2/t2/glyph/
 shaderName` tail is unchanged from Q3.
 
+The shader name is per glyph, and the bigger fonts span several atlas
+images. VERIFIED (1.1 `pak5.pk3`, the +48 names over all 256 records):
+`fontImage_12`, `_16` and `_18` name only `fonts/fontImage_0_<size>.tga`;
+`fontImage_24` splits 151/104 over `_0_24` and `_1_24`; `fontImage_30`
+splits 92/98/65 over `_0_30`, `_1_30` and `_2_30`; `fontImage_32` splits
+85/86/84 over three pages, with `A`..`T` on `_0_32` and `U`..`Z` and `o` on
+`_1_32`. One record per font has an empty name. A renderer that draws every
+glyph from page 0 garbles the 24, 30 and 32 point fonts; vcod reads the page
+per glyph (`hud/font.rs`, `Font::glyph_page`).
+
 ### The extra 4 bytes
 
 `20552 - 20480 = 72` bytes of header follow the glyph array; Q3's tail is
