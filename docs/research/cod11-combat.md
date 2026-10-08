@@ -5370,6 +5370,8 @@ tests `pm_flags` 0x200 at 0x2e4fb and jumps past the ground term;
 (0x3431b). INFERRED: for the timer's 50 to 200 ms a hit player slides with
 no ground friction, and a cmd as long as the timer runs its walk with the
 timer already dropped.
+VERIFIED, by capture: under the timer `PM_SlideMove` leaves a push into a
+wall in the velocity (`cod11-player-clip.md` 8.5, `probe_slide`).
 
 ### 16.2 As implemented
 

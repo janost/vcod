@@ -1,5 +1,5 @@
 //! The stock options screens' controls (docs/research/cod11-front-end.md,
-//! section 7): key binds, yes/no toggles, sliders, string lists and the name
+//! section 8): key binds, yes/no toggles, sliders, string lists and the name
 //! field, each reading and writing the console's cvars and binds the way
 //! `ui_mp_x86.dll`'s item handlers do.
 

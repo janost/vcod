@@ -184,7 +184,7 @@ pub const DEFAULT_BINDS: &[(&str, &str)] = &[
 
 /// The archived cvars the stock options screens set beyond the ones above,
 /// at the defaults CoDMP.exe and cgame register them with
-/// (docs/research/cod11-front-end.md, section 7), so a choice made there
+/// (docs/research/cod11-front-end.md, section 8), so a choice made there
 /// survives a restart. Only `mss_volume`, `r_mode` and `r_fullscreen` drive
 /// anything; vcod's window starts at its own size and windowed, so `r_mode`
 /// -1 and `r_fullscreen` 0 stand in for retail's 3 and 1.

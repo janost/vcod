@@ -27,7 +27,21 @@ pub struct MenuItem {
     pub text: String,
     pub visible: bool,
     pub response: Option<String>,
+    /// The menu an `open` in the action names: the team and weapon menus'
+    /// "Main Menu" tab is `close <self>; open main` with no response.
+    pub opens: Option<String>,
     pub gate: Option<CvarGate>,
+}
+
+impl MenuItem {
+    /// The tab that leaves the script menu for the UI's `main` menu.
+    pub fn opens_main(&self) -> bool {
+        self.response.is_none()
+            && self
+                .opens
+                .as_deref()
+                .is_some_and(|m| m.eq_ignore_ascii_case("main"))
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -40,13 +54,16 @@ pub struct Menu {
 }
 
 impl Menu {
-    /// Items a client can actually pick: visible, not an `open`/`close`
-    /// action, and whose cvar gate passes.
+    /// Items a client can actually pick: visible, a response other than
+    /// `open`/`close` or the "Main Menu" tab, and whose cvar gate passes.
     pub fn choices(&self, cvar: impl Fn(&str) -> Option<String>) -> Vec<&MenuItem> {
         self.items
             .iter()
             .filter(|i| i.visible)
-            .filter(|i| !matches!(i.response.as_deref(), None | Some("open") | Some("close")))
+            .filter(|i| {
+                i.opens_main()
+                    || !matches!(i.response.as_deref(), None | Some("open") | Some("close"))
+            })
             .filter(|i| {
                 i.gate
                     .as_ref()
@@ -147,6 +164,7 @@ fn parse_item(tokens: &[String]) -> (MenuItem, Option<String>) {
         text: String::new(),
         visible: false,
         response: None,
+        opens: None,
         gate: None,
     };
     let mut background = None;
@@ -185,6 +203,14 @@ fn parse_item(tokens: &[String]) -> (MenuItem, Option<String>) {
                 i += 1;
                 let inner = block(tokens, &mut i);
                 item.response = first_response(inner);
+                item.opens = inner
+                    .windows(2)
+                    .enumerate()
+                    .find(|(p, w)| {
+                        w[0].eq_ignore_ascii_case("open")
+                            && (*p == 0 || inner[p - 1] != "scriptMenuResponse")
+                    })
+                    .map(|(_, w)| w[1].clone());
             }
             _ => i += 1,
         }
@@ -294,6 +320,21 @@ mod tests {
     }
 
     #[test]
+    fn the_main_menu_tab_is_a_choice() {
+        let m = parse(
+            r#"{ menuDef { name "weapon_x"
+      itemDef { name "button_mainmenu" visible 1 text "@MPMENU_MAIN_MENU" action { play "mouse_click"; close weapon_x; open main; } }
+      itemDef { name "b" visible 1 text "Garand" action { scriptMenuResponse "m1garand_mp"; } }
+      itemDef { name "c" visible 1 text "Map" action { open viewmap; } }
+    } }"#,
+        );
+        let c = m.choices(|_| None);
+        assert_eq!(c.len(), 2);
+        assert!(c[0].opens_main());
+        assert!(!c[1].opens_main());
+    }
+
+    #[test]
     fn show_cvar_reveals_the_weapon_tab() {
         let m = parse(TEAM);
         let n = m
@@ -362,5 +403,6 @@ mod tests {
             .find(|i| i.response.as_deref() == Some("m1carbine_mp"))
             .unwrap();
         assert_eq!(carbine.gate.as_ref().unwrap().cvar, "scr_allow_m1carbine");
+        assert!(w.choices(|_| None).iter().any(|i| i.opens_main()));
     }
 }

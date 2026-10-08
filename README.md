@@ -57,6 +57,8 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
   `ui_mp/*.menu` files. The browser lists what `codmaster.activision.com`
   knows, pings it, sorts by column and joins on double-click. Losing the
   server drops you back on the menu with the reason in the stock error popup.
+  In a game, Esc opens the script menu and its Main Menu tab the stock
+  in-game main menu (Back to Game, Disconnect).
 - The stock Options and Multiplayer Options screens: rebind keys, mouse
   sensitivity and invert, player name, rate, master volume, video mode and
   full screen. Choices land in the console's binds and cvars and persist in
@@ -156,8 +158,8 @@ the options screens only binds, sensitivity, invert mouse, name, rate,
 volume, video mode and full screen take effect; texture, lighting, gamma,
 HUD, crosshair, sound quality and language settings are stored but ignored.
 Start New Server, Mods, CD key and the browser's password, info and filter
-popups print "not in vcod yet". No favourites or LAN scan: type `connect` in the
-console. Esc in a game releases the mouse; there is no in-game menu.
+popups print "not in vcod yet". No favourites or LAN scan: type `connect` in
+the console.
 
 **Client**
 
@@ -351,9 +353,11 @@ The stock `config_mp.cfg` binds, with the sight on the right mouse button as
 | Tab | Scoreboard (held) |
 | T / Y | Chat to everyone / your team |
 | M | Script menu: team, or weapon once you have a team |
+| Esc | Script menu, as retail; its Main Menu row opens the main menu (Back to Game, Disconnect, Quit) |
 
 With a script menu open, digits pick a row, Up / Down and Enter navigate,
-and Esc closes it. As a spectator, Space rises and C sinks.
+and Esc closes it. The main menu takes the mouse; Esc or Back to Game
+returns to the game. As a spectator, Space rises and C sinks.
 
 ### Walk mode
 
