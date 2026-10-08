@@ -1,11 +1,10 @@
 # vcod
 
 A from-scratch reimplementation of bits of Call of Duty (2003), patch 1.1,
-written in Rust. It has a map viewer, a client that spectates and plays on
-real 1.1 servers, and a dedicated server that a retail 1.1 client can join and
-play on. It reads the game's own pk3 archives and speaks the original 1.1 wire
-protocol. Nobody ever wrote that protocol down, so I recovered it from the
-binaries.
+in Rust. A map viewer, a client that spectates and plays on real 1.1
+servers, and a dedicated server a retail 1.1 client can join. It reads the
+game's own pk3s and speaks the original 1.1 wire protocol, which nobody ever
+wrote down, so I dug it out of the binaries.
 
 ![mp_pavlov in fly mode](docs/screenshots/fly-mp_pavlov.jpg)
 
@@ -15,329 +14,245 @@ binaries.
 
 ## Read this first: it's a toy
 
-vcod is a hobby project. I build it because poking at a 2003 game engine is
-fun, and I stop when something stops being fun.
+vcod is a hobby project. I work on it while poking at a 2003 engine is fun,
+and I stop when it isn't.
 
-- **It is not a playable game.** You can run around, shoot people and plant a
-  bomb, and some evenings it feels close. It is still a pile of research
-  scaffolding with a renderer on top. Expect missing pieces, rough edges and
-  the occasional soldier stuck in a wall.
-- **Retail feature parity is not a goal.** There is no roadmap to a "1.0" and
-  no plan to cover everything CoD 1.1 does. If vcod ends up fully playable one
-  day, that will be an accident and I'll take the credit.
-- **It will not replace your copy of the game.** You need that copy to run
-  vcod at all.
-- **Don't run it as a public server for real players.** It has no
-  anti-cheat and its rcon knows a handful of commands. It has a lot of
-  opinions about the order in which a tick runs. Unlike retail it does not
-  heartbeat the Activision master unless you pass `--set dedicated=2`.
+- **It is not a playable game.** You can run around, shoot people and plant
+  a bomb, and some evenings it almost feels like Call of Duty. It is still a
+  research rig with a renderer bolted on. Expect missing pieces and the
+  occasional soldier living inside a wall.
+- **Retail parity is not a goal.** No roadmap, no "1.0". If it ever becomes
+  fully playable, that's an accident and I'll take the credit anyway.
+- **It doesn't replace your copy of the game.** It needs that copy to run.
+- **Don't host real players on it.** No anti-cheat, an rcon that knows a
+  couple of dozen commands, and strong opinions about tick order. Your
+  regulars deserve a server that was tested on someone other than bots.
 
-If you want to play Call of Duty, play Call of Duty. If you want to see how
-it works under the hood, or watch a 2003 game boot inside a window someone
-built from the bytes up, this might be your kind of thing.
+If you want to play Call of Duty, play Call of Duty. If you want to watch a
+2003 game boot in a window someone rebuilt from the bytes up, stick around.
 
 ## What it does
 
 ### Map viewer
 
-- Opens any stock or custom map from an installed copy of the game and draws
-  it with textures, lightmaps and props. Skies, water, fences, foliage and
-  terrain blends go through the maps' own Q3-style shader scripts, with the sun
-  disc and the map's fog.
-- Visibility follows the retail cells, portals and occluders, with F4 to
-  freeze or disable culling and fly out to see what the camera was drawing.
-- The map's ambient sound loop plays.
+- Draws any stock or custom map with textures, lightmaps and props. Skies,
+  water, fences, foliage and terrain blends run through the maps' own
+  Q3-style shader scripts, sun disc and fog included.
+- Culls with retail's cells, portals and occluders. F4 freezes or disables
+  culling so you can fly out and see what the camera was drawing.
+- Plays the map's ambient loop.
 
 ### Walk mode (`--walk`), offline
 
-- Spawns you as a soldier on a spawn point with the retail movement code:
-  gravity, crouch, prone, stepping, leaning, wall sliding.
-- Six weapons with their own viewmodels, xanim clips, sounds and reserve ammo.
-  Shots are hitscan with per-surface impact effects and tracers.
-- Footsteps follow retail's cadence per surface, and the landing sound picks
-  its alias from fall speed.
+- Spawns a soldier on a spawn point with retail movement: gravity, crouch,
+  prone, stepping, leaning, wall sliding.
+- Seven weapons with their own viewmodels, animations, sounds and reserve
+  ammo. Hitscan shots with per-surface impacts and tracers.
+- Footsteps on retail's cadence per surface; the landing sound scales with
+  fall speed.
 
-### Client (`--connect`)
+### Client
 
-- Joins a CoD 1.1 server: handshake, Huffman coding, netchan, delta
-  snapshots, the lot. It downloads any pak the server references and the
-  install lacks, the way the retail client does.
-- Answers the stock team and weapon menus, either through a simple list
-  built from the game's own `.menu` files or from `--team` and `--weapon`.
-- **Spectates.** Every player is an assembled soldier playing the animations
-  the server drives. Kill feed, chat, scoreboard, sounds, tracers, impacts and
-  muzzle flashes come from the same events the retail client reads.
-- **Plays.** Move, jump, crouch, go prone, lean, fire, aim down the sight,
-  reload, melee, use and switch weapons, on retail's default binds. It sends
-  a usercmd every 8 ms, the way a 125 fps retail client does.
-- Predicts your own movement by replaying every unacknowledged cmd through
-  the same movement step the server runs, against the map and the other
-  players. A correction eases out over 100 ms.
-- Draws your weapon in first person with the hands your team gets, zooms the
-  sight to the weapon's own FOV, puts a sniper scope's overlay up where the
-  swaying, hit-kicked gun points, and plays your own fire, reload and footstep
-  sounds off the prediction. The snapshot that confirms them later stays
-  quiet.
-- Draws mounted MG42s turned by the barrel angles the server sends, with
-  their fire anim and muzzle flash. On the gun, the view rides the gun's
-  `tag_player` and the HUD swaps the crosshair for the gun's reticle.
-- Draws the HUD that the stock `hud.menu` lays out: crosshair that opens with
-  spread, health, ammo, fire-mode icon, stance with its change flash, compass
-  with objectives and teammates, use hints and hit direction, chat top left,
-  game messages over the compass and announcements over the crosshair. A
-  spectator following a player sees that player's HUD, weapon, zoom and
-  scope. It also draws the gametype script's own HUD elements, such as the
-  S&D clock, the bomb icons and the
-  progress bar, in retail's fonts, fixed-width slots included. A script's
-  head icon (the Retrieval carrier, `scr_drawfriend` teammates) floats over
-  the player, filtered by team as retail does.
+- Opens on the stock main menu and server browser, drawn from the game's own
+  `ui_mp/*.menu` files. The browser lists what `codmaster.activision.com`
+  knows, pings it, sorts by column and joins on double-click. Losing the
+  server drops you back on the menu with the reason in the stock error popup.
+- Joins a 1.1 server (`--connect` or the browser): handshake, Huffman,
+  netchan, delta snapshots, and pak downloads for whatever the server has and
+  you don't.
+- Answers the stock team and weapon menus as a keyboard list built from
+  their `.menu` files, or straight from `--team` and `--weapon`.
+- **Spectates.** Every player is an assembled, animated soldier. Kill feed,
+  chat, scoreboard, sounds, tracers, impacts and muzzle flashes come off the
+  same events retail reads.
+- **Plays.** Move, jump, crouch, prone, lean, fire, aim down the sight,
+  reload, melee, use, switch weapons, on retail's default binds. A usercmd
+  goes out every 8 ms, like a 125 fps retail client.
+- Predicts your movement by replaying unacknowledged cmds through the same
+  step the server runs. A correction eases out over 100 ms.
+- First-person weapon with your team's hands, sight zoom at the weapon's FOV,
+  sniper scope overlay that follows the sway and the hit kick, and your own
+  fire, reload and footstep sounds played off the prediction.
+- Mounted MG42s with their fire anim and flash; on the gun the view rides
+  `tag_player` and the crosshair turns into the gun's reticle.
+- The HUD the stock `hud.menu` lays out: crosshair that opens with spread,
+  health, ammo, stance, compass with objectives and teammates, use hints, hit
+  direction, chat and announcements. Also the gametype script's own HUD
+  elements (S&D clock, bomb icons, progress bar) in retail's fonts, and head
+  icons over players. A spectator following someone sees their HUD, weapon
+  and scope.
 - Follows the server through a map change: loading screen, downloads, new
   map.
-- Has retail's drop-down console on `` ` `` / `~`: the log, chat and server
-  prints scroll in it, and it takes `connect`, `disconnect`, `name`, `bind`
-  and the rest of the commands under [Console](#console). Binds and archived
-  cvars persist in `main/vcod_mp.cfg`.
-- Opens on the stock main menu and server browser, drawn from the game's own
-  `ui_mp/*.menu` files: Join a Game lists the servers
-  `codmaster.activision.com` knows with name, map, players, type and ping,
-  sorts by column, and joins on double-click or Join Server. Losing the
-  server or failing a load puts you back on the main menu with the reason in
-  the stock error popup.
+- Retail's drop-down console on `` ` ``. It takes the commands under
+  [Console](#console); binds and archived cvars persist in `main/vcod_mp.cfg`.
 
-I have played it against my own server and against the retail Linux 1.1d
-dedicated server running locally. I have spectated public servers with it. I
-have not joined a public server as a player, and I'd rather you didn't
-either: the people on it signed up for Call of Duty.
+I have played it against my own server and the retail Linux 1.1d server, and
+spectated public servers with it. I haven't joined a public server as a
+player, and neither should you. Those people signed up for Call of Duty, not
+for my test suite.
 
 ### Dedicated server (`vcod-server`)
 
 - Answers server browsers, accepts retail 1.1 clients, sends the gamestate
-  and delta-compressed snapshots.
-- Runs Activision's own gametype and map scripts on `vcod-gsc`, a virtual
-  machine for CoD's `.gsc` script language that lives in this repo. Team
-  menus, spawn points, scoring, round logic, time and score limits all come
-  from the stock scripts, not from Rust. All five stock gametypes are
-  checked against retail: `dm`, `tdm` and `sd` end to end, `re` (Retrieval)
-  through a pickup, a drop, the timeout return, a drop on death and a
-  capture, and `bel` (Behind Enemy Lines) through the team swap on a kill
-  ([docs/research/cod11-gametypes-re-bel.md](docs/research/cod11-gametypes-re-bel.md)).
-- Movement on the shared pmove, with players as capsules that block and push
-  each other the way retail's do. Falls stun and hurt, scaled by the
-  `bg_fallDamageMinHeight` and `bg_fallDamageMaxHeight` cvars.
-- Combat: bullets trace the world, players and static props. Hits go through
-  the stock damage callback with per-bone hit locations. Rifle rounds pass
-  through players and every round passes through glass. Melee works, and
-  grenades fly as real missiles that bounce, rest and explode with retail's
-  falloff. A blast walks its victims (players and MG42s) in the order of
-  retail's entity area tree, so players in a line shield each other the way
-  they do there. Bullets pass through mounted MG42s, as on retail.
-- Deaths leave corpses in the eight-slot body queue and drop the dead player's
-  weapon. Players pick up weapons, ammo and health packs by touch or the use
-  key. Dropped and spawned items fly retail's arc and land on what they hit,
-  an item that lands in a `CONTENTS_NODROP` brush is freed, and an item
-  flagged to respawn comes back on retail's timer.
-- Search & Destroy end to end: plant, defuse, progress bar, objectives on the
-  compass.
-- rcon with retail's console commands and replies, the master heartbeat, the
-  two-second zombie slot a dropped client keeps, and pings measured the way
-  retail measures them, all checked against retail.
-- A teammate out of view still shows on the compass, with its quick-chat
-  flash, packed into the playerstate the way retail packs it.
-- Mounted MG42s: mount with use, aim inside the gun's arc, fire, dismount.
-- Map triggers (`trigger_multiple`, `trigger_hurt`, `trigger_use`,
-  `trigger_lookat`), and script movers whose trajectories reach the wire.
-  A moving brush model carries the players and items on it and shoves the
-  players in its way, and a player linked to a moving entity rides it.
-  `linkTo` works on script models, origins, brush models, items and
-  turrets too, and on a trigger after `enableLinkTo`, including to a tag
-  on a player's model. The client draws a
-  brush model where its entity is, with its baked lightmap, so a hidden or
-  deleted one is gone, and draws an item resting on a mover riding it.
-- Intermission, `map_restart`, and `sv_mapRotation` the way retail runs them,
-  with the next map's gamestate sent on the live connection.
-- Spectator follow mode and the killcam, replayed out of a ring of archived
-  frames.
-- `--bots` adds debug bots that join through the stock menus, pick a random
-  weapon the menu and the `scr_allow_*` cvars allow, and roam the map along
-  a navigation graph built from pmove runs, ladders and jumps included and
-  minefields left out, heading for an
-  enemy they see and toward gunfire, turret fire and blasts they hear. In
-  S&D each team spreads over both bombzones, attackers plant and one
-  defender defuses while the rest cover. In Retrieval attackers pick the
-  objective up, carry it to its goal and escort the carrier, while
-  defenders guard it, then hold the goal and go after the carrier. In
-  Behind Enemy Lines the axis hunt the allied compass markers and the
-  hunted allies keep moving away from what they last saw or heard and from
-  their own marker.
-  `--bots-shoot` makes them fight with a reaction delay, a capped turn rate
-  and aim error that settles while they hold a target, draw the pistol when
-  the primary runs dry up close and the draw beats the reload, or when the
-  primary is out of ammo, and chase a lost enemy to where it was
-  last seen. They are still bad at it.
-
-### The research
-
-The part I'd call the most useful lives in [docs/](docs/). It holds the
-1.1 wire protocol in both directions, and about two dozen research documents
-on file formats, movement, combat, sound, HUD, script semantics, turrets,
-items and more. Every claim names the module and address it rests on and says
-whether it was verified against a binary or live capture, or inferred.
+  and delta snapshots.
+- Runs Activision's own gametype and map scripts on `vcod-gsc`, a VM for
+  CoD's `.gsc` language that lives in this repo. Menus, spawns, scoring,
+  rounds and limits all come from the stock scripts, not from Rust. All five
+  stock gametypes are checked against retail: `dm`, `tdm` and `sd` end to
+  end, `re` and `bel` through their key events
+  ([cod11-gametypes-re-bel.md](docs/research/cod11-gametypes-re-bel.md)).
+- Shared pmove with capsule players that block and push each other. Falls
+  stun and hurt.
+- Bullets trace the world, players and static props, through the stock
+  damage callback with per-bone hit locations. Rifle rounds go through
+  players, every round goes through glass. Melee works. Grenades are real
+  missiles that bounce, rest and explode with retail's falloff, and a blast
+  walks its victims in retail's area-tree order, so the guy in front still
+  eats it for the guy behind.
+- Corpses in the eight-slot body queue, dropped weapons, pickups by touch or
+  use key, items that fly retail's arc and respawn on its timer.
+- Search & Destroy end to end: plant, defuse, progress bar, compass
+  objectives.
+- Mounted MG42s: mount, aim inside the arc, fire, dismount.
+- Map triggers, script movers that carry and shove players and items, and
+  `linkTo` on script models, brush models, items, turrets and player tags.
+- Intermission, `map_restart` and `sv_mapRotation` the way retail runs them.
+- Spectator follow and the killcam, replayed from a ring of archived frames.
+- rcon with retail's commands and replies, bans, the master heartbeat,
+  zombie slots and retail-measured pings.
+- `--bots` adds bots that join through the stock menus and roam a nav graph
+  built from pmove runs, ladders and jumps. They play the objectives: S&D
+  plants and defuses, Retrieval carries and escorts, Behind Enemy Lines
+  hunts. With `--bots-shoot` they fight back, with a reaction delay, a turn
+  cap and aim that settles on target. They are still bad at it. So am I.
 
 ## How I know it's right (when it is)
 
-The retail 1.1d Linux dedicated server is the oracle. When vcod and retail
-disagree, retail wins and the disagreement goes into a research doc.
+The retail 1.1d Linux server is the oracle. When vcod and retail disagree,
+retail wins and the disagreement goes into a research doc.
 
-- A headless probe client (`vcod --net-probe`) joins a server and records what
-  it sees. It has a few dozen scripted modes: shoot someone, throw a grenade,
-  plant the bomb, crawl prone up a hill, get stuck inside another player.
-- Those recordings against retail are committed as fixtures. A/B tests replay
-  the same inputs on vcod's server and diff the playerstate, snapshot by
-  snapshot.
-- Script semantics are measured the same way. Small `.gsc` probes run on the
-  retail server and on `vcod-gsc`, and the test suite compares their output.
+- A headless probe client (`vcod --net-probe`) joins a server and records
+  what it sees, with a few dozen scripted modes: shoot someone, throw a
+  grenade, plant the bomb, crawl prone up a hill, get stuck inside another
+  player.
+- The retail recordings are committed as fixtures. A/B tests replay the same
+  inputs on vcod's server and diff the result snapshot by snapshot.
+- Small `.gsc` probes run on retail and on `vcod-gsc`, and the suite compares
+  their output.
 
-This catches a lot. It does not catch everything, and anything that is about
-how something looks or sounds still needs a human squinting at a screen.
+This catches a lot. Anything about how it looks or sounds still needs a human
+squinting at a screen.
 
 ## What it doesn't do
 
-The list of what retail does and vcod doesn't is longer than this. These are
-the gaps you're most likely to run into.
+Retail does a lot more than this list. These are the gaps you'll hit first.
 
-**Partial front end.** The main menu, server browser, quit and error popups
-work. Options, Multiplayer Options, Start New Server, Mods, the browser's
-password, server info and filter popups print "not in vcod yet" in the
-console instead. There is no favourites list or LAN scan: New Favorite opens
-the console with `connect ` typed, and that is the way to a LAN or
-favourite server. Esc in a game releases the mouse; there is no in-game
-menu.
+**Front end.** Main menu, browser, quit and error popups work. Options,
+Start New Server, Mods and the browser's password, info and filter popups
+print "not in vcod yet". No favourites or LAN scan: type `connect` in the
+console. Esc in a game releases the mouse; there is no in-game menu.
 
 **Client**
 
-- The HUD skips a few retail touches: the compass's spring, the stance key
-  hints, the weapon name timing out after a switch and the hit icon's jitter
-  ([docs/research/cod11-hud-protocol.md](docs/research/cod11-hud-protocol.md),
-  section 9).
-- Only protocol 1 (patch 1.1). 1.5 and United Offensive servers won't talk to
-  it.
-- Prediction carries you with a moving brush model you stand on but not
-  with its rotation, which retail's client doesn't either; a turning mover's
-  rider is corrected at each snapshot.
+- Protocol 1 (patch 1.1) only. 1.5 and United Offensive servers won't talk
+  to it.
+- The HUD skips a few retail touches: compass spring, stance key hints, the
+  weapon name timing out, hit icon jitter
+  ([cod11-hud-protocol.md](docs/research/cod11-hud-protocol.md) section 9).
+- Prediction carries you on a moving brush model but not its rotation.
+  Neither does retail's.
 
 **Server**
 
-- An entity linked to a tag on a player's model sits within a few units of
-  where retail puts it, and does not follow the body's swing after
-  `setPlayerAngles`. A tag on a model attached with `attach` cannot take a
-  link. The gunner on a linked turret has not been measured against
-  retail.
-- A brush model that has turned and turned back keeps a sliver of yaw on
-  retail, which drifts what it carries by about 0.02 units a frame; vcod's
-  comes back to exactly zero.
+- An entity linked to a player tag sits within a few units of retail's spot
+  and doesn't follow the body after `setPlayerAngles`. A tag on an `attach`ed
+  model can't take a link.
+- A brush model that turned and turned back keeps a sliver of yaw on retail
+  and drifts its riders about 0.02 units a frame. vcod's comes back to zero.
+  Yes, I'm calling that a bug in retail.
 - rcon runs `map`, `devmap`, `map_restart`, `map_rotate`, `status`,
   `clientkick`, `kick`, `banUser`, `banClient`, `dumpuser`, `serverinfo`,
-  `systeminfo`, `say`, `set`, `seta`, `cvarlist`, cvar queries,
-  `heartbeat`, `killserver` and `quit`; not `gameCompleteStatus`,
-  `scriptUsage` or `stringUsage`. A ban is kept by vcod itself
-  (`--ban-file` keeps it across runs) where retail hands it to Activision's
-  authorize server; like retail's, it refuses an address off the LAN and
-  leaves the banned player connected until they leave. After `killserver`
-  the process sits idle: vcod has no stdin console to load a map from. A
-  heartbeat reaches the master, which probes back, but I haven't seen vcod
+  `systeminfo`, `say`, `set`, `seta`, `cvarlist`, cvar queries, `heartbeat`,
+  `killserver` and `quit`. Not `gameCompleteStatus`, `scriptUsage` or
+  `stringUsage`. Bans live in vcod (`--ban-file` keeps them across runs)
+  where retail hands them to Activision's authorize server. Like retail's, a
+  ban refuses an address off the LAN and leaves the banned player connected
+  until they leave on their own. After `killserver` the process sits there
+  deaf, since there is no stdin console.
+- A heartbeat reaches the master, which probes back. I haven't seen vcod
   listed yet.
-- No anti-cheat, no PunkBuster.
 
 **Rendering and sound**
 
-- Props get one colour from the compiler's per-entity `lightingPrecalc` tint.
-  The engine samples its light grid per vertex.
-- Shadow-decal props (`shadow_tree_*`, `shadow_crate`) draw as coplanar,
-  depth-biased decals on the ground.
-- Shader scripts cover skies, water, blends, the sun disc and the ocean's
-  `deformVertexes wave`. The other `deformVertexes` forms parse and do
-  nothing, and NV/ATI hardware-path stages are dropped, as retail dropped them
-  on cards without those extensions. Engine-generated `$dlight` images and the
-  ship's deckflag texture have no file behind them, so a generated blob and a
-  white pixel stand in
-  ([docs/research/cod11-shader-scripts.md](docs/research/cod11-shader-scripts.md)).
-- Visibility draws a little more than retail on purpose. Retail assumes
-  nobody looks over a cell's walls, and the mp_ship decks prove otherwise.
-  Outside every cell, in fly mode above the map, only the frustum culls.
-- Audio follows the retail engine on paper (falloff, panning, 32/32/8 voice
-  pools with priority stealing, ducking) but hasn't been checked by ear
-  against the real game. Wall occlusion, about -12 dB, is a vcod addition
-  retail doesn't have.
-- Quick chat (`vsay`) is handled and does nothing on a stock install, same as
-  retail: the `.voice` tables it looks up only ship in mods
-  ([docs/research/cod11-quick-chat.md](docs/research/cod11-quick-chat.md)).
+- Props get one colour from the compiler's `lightingPrecalc` tint; retail
+  samples the light grid per vertex.
+- Shadow-decal props draw as depth-biased decals on the ground.
+- Only the ocean's `deformVertexes wave` moves; the other forms parse and do
+  nothing. NV/ATI hardware-path stages are dropped, as retail did on cards
+  without them. `$dlight` and the ship's deckflag have no file behind them,
+  so stand-ins draw
+  ([cod11-shader-scripts.md](docs/research/cod11-shader-scripts.md)).
+- Visibility draws a bit more than retail on purpose. Retail assumes nobody
+  looks over a cell's walls, and the mp_ship decks disagree.
+- Audio follows the engine on paper (falloff, panning, voice pools, stealing,
+  ducking) but hasn't been checked by ear against the real game. Wall
+  occlusion is a vcod addition.
 
 **Things that look like gaps and aren't**
 
-- No mantling. Retail 1.1 MP doesn't have it either
-  ([docs/research/cod11-mantle.md](docs/research/cod11-mantle.md)).
-- No grenade cooking. Retail 1.1 MP doesn't have it either. The fuse runs
-  from the release, however long you held the trigger.
-- No doppler. The 1.1 engine never sets a velocity on a sound.
+- No mantling, no swimming. Retail 1.1 MP has neither
+  ([cod11-mantle.md](docs/research/cod11-mantle.md)).
+- No grenade cooking. The fuse runs in full from the release, however long
+  you clutched it.
+- No doppler. The 1.1 engine never gives a sound a velocity.
+- Quick chat (`vsay`) does nothing on a stock install, same as retail: its
+  `.voice` tables only ship in mods.
 - Asphalt footsteps are silent in retail because the engine asks for
   `asphalt` and the sound table spells it `asphault`. vcod uses the table's
-  spelling, so in vcod you can hear asphalt. I consider this my one gameplay
-  improvement over Infinity Ward.
+  spelling, so you can hear asphalt. Twenty-three years late, Infinity Ward,
+  you're welcome.
 
 ## Requirements
 
-- A purchased, original copy of Call of Duty (2003) with patch 1.1. This
-  repository contains no game data. The 1.5 patch ships the same `pak0-4.pk3`
-  assets, so a 1.5 install works as the asset source; the netcode is 1.1 only.
+- A purchased copy of Call of Duty (2003) with patch 1.1. This repo has no
+  game data. Patch 1.5 ships the same `pak0-4.pk3`, so a 1.5 install works as
+  the asset source; the netcode is 1.1 only.
 - Rust 1.90 or newer.
-- For the client, a GPU and driver with BC (DXT) texture compression. wgpu
-  picks a backend (Vulkan, DX12, Metal, GL), and
-  `WGPU_BACKEND=vulkan|gl|dx12|metal` narrows the choice. The server needs no
-  GPU.
+- For the client, a GPU with BC (DXT) texture compression. wgpu picks a
+  backend; `WGPU_BACKEND=vulkan|gl|dx12|metal` narrows it. The server needs
+  no GPU.
 - Linux is the only platform I run. Windows and macOS builds exist and are
-  untested.
-- A default audio output device if you want sound. Without one the client
-  logs a warning and runs silent.
+  untested, so godspeed.
+- An audio device if you want sound. Without one the client warns and runs
+  silent.
 
-## Building and installing
+## Building
 
-Prebuilt binaries for Linux amd64, Windows amd64 and macOS arm64 are on the
-[nightly release](https://github.com/janost/vcod/releases/tag/nightly), rebuilt
-from `master` on every push that touches code. It's a rolling tag: the assets
-are replaced in place, so the download URLs never change and the previous
-build is gone. Linux and macOS ship as `.tar.zst`, Windows as `.zip`.
-
-To build it yourself:
+Prebuilt Linux amd64, Windows amd64 and macOS arm64 binaries are on the
+[nightly release](https://github.com/janost/vcod/releases/tag/nightly),
+rebuilt from `master` on every push that touches code. It's a rolling tag:
+the assets are replaced in place and the previous build is gone.
 
 ```
 cargo build --release
 ```
 
-That gives you `target/release/vcod` (client) and
-`target/release/vcod-server`. `cargo build -p vcod` or `-p vcod-server`
-builds one of them.
-
-The binaries expect to sit inside the game install, next to `CoDMP.exe`, and
-read the paks from its `main/` subdirectory. Copy them there, set
+gives `target/release/vcod` and `target/release/vcod-server`. Both expect to
+sit next to `CoDMP.exe` and read the paks from `main/`. Copy them there, set
 `COD_DIR=/path/to/CallOfDuty`, or pass `--game-dir`. `--game-dir` beats
-`COD_DIR`, which beats the executable's own directory, with the working
-directory as the last resort.
-
-### Running the tests
+`COD_DIR`, which beats the executable's directory.
 
 ```
 COD_DIR=/path/to/CallOfDuty cargo test
 ```
 
-Without `COD_DIR`, the tests that need game data return early and report ok,
-so a green run on a machine without the game proves nothing about the
-parsers. The protocol tests read committed captures and run anywhere. CI runs the suite without game data, since it can't ship any.
+Without `COD_DIR` the tests that need game data return early and pass, so a
+green run without the game proves nothing about the parsers. CI runs that
+way, because it can't ship the game either.
 
 ## Usage
 
 ### The closest thing to a game
-
-Two terminals:
 
 ```
 vcod-server mp_carentan --bots 4 --bots-shoot
@@ -349,35 +264,25 @@ Pick a team, pick a weapon, go get shot by a bot.
 ### Client
 
 ```
-vcod mp_pavlov
-vcod mp_pavlov --walk
-vcod --list
-vcod --connect <ip:port>
+vcod                                   # main menu and server browser
+vcod mp_pavlov                         # fly
+vcod mp_pavlov --walk                  # walk, offline
+vcod --list                            # every .bsp in the search path
 vcod --connect <ip:port> --team axis --weapon kar98k_mp
-vcod mp_pavlov --game-dir /path/to/CallOfDuty
 ```
 
-- The first positional argument is the map name (case-insensitive). With no
-  map and no `--connect`, the window opens on the main menu.
-- `--list` prints every `.bsp` in the search path instead of opening a window.
-- `--mod-dir` picks which subdirectory's pk3s to index: `main` (default) or
-  `uo` for United Offensive. Only one directory mounts at a time, so a UO map
-  whose art ships in `main/` shows missing textures. I've flown noville this
-  way and it renders apart from that. Anything else in UO is untested.
-- `--walk` starts at a player spawn point as a collidable soldier. The map
-  needs a spawn entity.
-- `--connect ip:port` joins a server. To find one, the master server at
-  `codmaster.activision.com:20510` still answers `getservers 1 full empty`.
-- `--team <allies|axis|autoassign|spectator>` answers the team menu without
-  showing it, for `--connect` and for every console `connect`. `--weapon <name>` does the same for the weapon menu, with a
-  weapon file name such as `m1carbine_mp`. If the menu refuses the weapon, it
-  reopens and you pick by hand.
-- `--debug-overlay` (or F3 at runtime) shows frame time, draw stats, net and
-  audio counters.
+- The map name is case-insensitive.
+- `--team <allies|axis|autoassign|spectator>` and `--weapon <file>` answer
+  the menus without showing them, for `--connect` and every console
+  `connect`. If the menu refuses the weapon, you pick by hand.
+- `--mod-dir uo` indexes United Offensive's pk3s instead of `main/`. One
+  directory mounts at a time, so a UO map whose art lives in `main/` shows
+  missing textures. I've flown noville this way. Anything else in UO is
+  untested.
+- `--debug-overlay` (or F3) shows frame, draw, vis, net and audio counters.
 - `--no-audio` runs silent; `--volume <0..1>` sets the master volume.
-- `--net-probe ip:port` is the headless probe client. It prints what it
-  receives and dumps captures to `tmp/`. Its many modes are documented in
-  [AGENTS.md](AGENTS.md).
+- `--net-probe <ip:port>` is the headless probe client; `vcod --help`
+  documents its modes.
 
 ### Server
 
@@ -385,264 +290,188 @@ vcod mp_pavlov --game-dir /path/to/CallOfDuty
 vcod-server mp_carentan --port 28960 --hostname "my server" --gametype tdm
 ```
 
-- The server binds `0.0.0.0` and, like retail, answers `getstatus` from anyone.
-  Keep it on a LAN or behind a firewall you control.
-- `--gametype` picks the script under `maps/mp/gametypes/` (default `dm`).
-- `--max-clients` sets `sv_maxclients` (default 8).
-- `--set NAME=VALUE` sets a cvar before the scripts load, retail's `+set`.
-  Repeatable, e.g. `--set scr_friendlyfire=1`. Set `sv_mapRotation` this way
-  to get a rotation.
-- `dedicated` defaults to 1, where retail's is 2, so dev runs stay off the
-  master list. `--set dedicated=2` sends a heartbeat to `sv_master1`
-  (`codmaster.activision.com`) every three minutes and a flatline on Ctrl-C
-  or `quit`.
-- `--set rconPassword=<pw>` turns on rcon (`rcon <pw> status` from a client
-  console or any rcon tool).
-- `--bots <n>` adds `n` debug bots, each in a real client slot, alternating
-  allies and axis. The first tick with bots starts building the map's
-  navigation graph on a thread of its own (a second or two on the big stock
-  maps); the server keeps ticking and the bots wander until it is ready.
-  `--bots-shoot` lets them engage the nearest visible enemy: semi-autos tap,
-  automatics fire in bursts, sights go up at range, and they strafe and
-  crouch while fighting. They also reload and throw frags, and go looking
-  where a lost enemy was last seen.
-- `--gametype-script <file>` runs a gametype script from disk instead of the
-  paks. The probe recipes use it.
-- `--test-entities <n>` adds entities that move on the wire, to exercise the
-  packet-entity encoding. A client draws nothing for them.
-- `--trace` logs one line per snapshot per client, and once a second the
-  slowest tick and how far the loop ran behind its 20 Hz schedule.
-- `--game-dir`, `--mod-dir` and `COD_DIR` work as they do for the client.
+- Binds `0.0.0.0` and answers `getstatus` from anyone, like retail. Keep it
+  on a LAN or behind a firewall you control.
+- `--gametype` picks the script under `maps/mp/gametypes/` (default `dm`);
+  `--max-clients` sets `sv_maxclients` (default 8).
+- `--set NAME=VALUE` is retail's `+set`, repeatable:
+  `--set scr_friendlyfire=1`, `--set sv_mapRotation="..."`.
+- `--set rconPassword=<pw>` turns rcon on.
+- `dedicated` defaults to 1, not retail's 2, so dev runs stay off the master
+  list. `--set dedicated=2` heartbeats `codmaster.activision.com` every three
+  minutes and sends a flatline on Ctrl-C or `quit`.
+- `--bots <n>` adds `n` bots in real client slots. The nav graph builds on
+  its own thread on the first tick (a second or two on big maps); bots
+  wander until it's ready. `--bots-shoot` lets them fight.
+- `--gametype-script <file>` runs a gametype from disk instead of the paks.
+- `--test-entities <n>` adds invisible entities that move on the wire, to
+  exercise the entity encoding.
+- `--trace` logs every snapshot per client, and once a second the slowest
+  tick and how far the loop fell behind its 20 Hz schedule.
 
 ## Controls
 
-Click to capture the mouse, Esc to release it, mouse to look around.
+Click to capture the mouse, Esc to release it.
 
-### Fly mode (default)
+### Fly mode
 
 | Input | Action |
 |---|---|
-| W / A / S / D | Move forward / left / back / right |
-| Space | Move up |
-| Ctrl | Move down |
+| W / A / S / D | Move |
+| Space / Ctrl | Up / down |
 | Shift | Speed boost |
-| Scroll | Adjust fly speed |
+| Scroll | Fly speed |
 
-### Playing (`--connect`)
+### Playing
 
-These are the default binds, the stock `config_mp.cfg` ones with the sight on
-the right mouse button as `+speed`. The console's `bind` changes them; `bind
-MOUSE2 "toggle cl_run"` makes the sight a toggle, as retail's option does.
+The stock `config_mp.cfg` binds, with the sight on the right mouse button as
+`+speed`. `bind MOUSE2 "toggle cl_run"` makes the sight a toggle.
 
 | Input | Action |
 |---|---|
-| W / A / S / D | Move forward / left / back / right |
-| Space | Stand up from crouch or prone; jump when standing |
-| C | Crouch |
-| Ctrl | Prone |
-| Q / E | Lean left / right (held) |
-| LMB | Fire (semi-automatic weapons fire once per click) |
+| W / A / S / D | Move |
+| Space | Stand up; jump when standing |
+| C / Ctrl | Crouch / prone |
+| Q / E | Lean (held) |
+| LMB | Fire (semi-autos fire once per click) |
 | RMB | Aim down the sight (held) |
 | R | Reload |
 | Shift | Melee |
-| F | Use: pick up a weapon, mount an MG, plant or defuse, respawn after a death |
-| 1 / 2 / 3 / 4 | Weapon slot: primary, second primary, pistol, grenade |
+| F | Use: pick up, mount an MG, plant, defuse, respawn |
+| 1 / 2 / 3 / 4 | Primary, second primary, pistol, grenade |
 | Scroll | Next / previous weapon |
 | Tab | Scoreboard (held) |
-| T / Y | Type a chat line to everyone / your team; Enter sends, Escape drops it |
+| T / Y | Chat to everyone / your team |
+| M | Script menu: team, or weapon once you have a team |
 
-Your position is predicted while you play. While you spectate, are dead,
-follow someone or sit through the intermission, it comes from the server. As a
-spectator, Space rises while held and C sinks until Space is pressed.
+With a script menu open, digits pick a row, Up / Down and Enter navigate,
+and Esc closes it. As a spectator, Space rises and C sinks.
 
-| Input | Action |
-|---|---|
-| M | Open the main script menu: the team menu, or on stock gametypes the weapon menu once you have a team |
-| 0-9 | Pick the menu row bound to that key |
-| Up / Down, Enter | Move the menu selection, pick it |
-| Esc | Close the menu |
-
-While a menu is open these keys go to it, so the digits pick a row instead of
-a weapon and Esc closes the menu rather than releasing the mouse. W / A / S /
-D still move.
-
-### Walk mode (`--walk`)
+### Walk mode
 
 | Input | Action |
 |---|---|
-| W / A / S / D | Move forward / left / back / right |
-| Space | Jump (re-press to jump again, no autohop) |
+| W / A / S / D | Move |
+| Space | Jump (no autohop) |
 | Ctrl | Crouch (held) |
 | Z | Toggle prone |
-| Q / E | Lean left / right |
+| Q / E | Lean |
 | Shift | Slow walk |
-| LMB | Fire |
-| RMB | Aim down sights (held) |
+| LMB / RMB | Fire / aim down sights |
 | R | Reload |
-| 1-7 | Weapon: colt, thompson, mp40, mp44, enfield, kar98k, scoped kar98k |
+| 1-7 | colt, thompson, mp40, mp44, enfield, kar98k, scoped kar98k |
 
 ### Console
 
-`` ` `` or `~` drops it down, and again (or Esc) puts it away. While it is down
-the game gets no keys and the mouse is released. Up / Down walk the last 32
-lines, Tab completes a command or cvar name, Page Up / Page Down and the wheel
-scroll. In game, a line without a leading `/` or `\` is said as chat, as in
-retail; anything else runs as a command. Several commands go on one line
-separated by `;`.
+`` ` `` or `~` toggles it; while it's down the game gets no keys. Up / Down
+walk history, Tab completes, Page Up / Page Down scroll. In game, a line
+without a leading `/` or `\` is chat, as in retail. `;` separates commands.
 
 | Command | Does |
 |---|---|
-| `connect <ip:port>` | Leave any server and join this one |
-| `disconnect` | Leave the server for the console |
-| `reconnect` | Join the last server again |
-| `quit` | Leave and close the window |
-| `say <text>`, `say_team <text>` | Chat to everyone / your team |
-| `cmd <text>` | Send `<text>` to the server as a client command |
-| `bind <key> [command]` | Bind a key, or show its bind; `unbind <key>`, `unbindall`, `bindlist` |
-| `set`, `seta <cvar> <value>` | Set a cvar; `seta` also saves it. `<cvar>` alone prints it, `<cvar> <value>` sets it |
-| `toggle <cvar> [values...]` | Flip a cvar between 0 and 1, or step through the values |
-| `cvarlist`, `cmdlist` | List the cvars and commands, optionally by prefix |
-| `echo`, `clear` | Print a line; empty the scrollback |
+| `connect <ip:port>`, `disconnect`, `reconnect`, `quit` | What they say |
+| `say`, `say_team` | Chat |
+| `cmd <text>` | Send a raw client command |
+| `bind`, `unbind`, `unbindall`, `bindlist` | Binds |
+| `set`, `seta`, `toggle`, `<cvar> [value]` | Cvars; `seta` also saves |
+| `cvarlist`, `cmdlist`, `echo`, `clear` | The usual |
 
-Any other command goes to the server while connected, as retail forwards it
-(`callvote`, `vote yes`, `kill`, `follownext`). Bindable commands are the
-stock ones: `+forward`, `+back`, `+moveleft`, `+moveright`, `+gostand`,
-`gocrouch`, `goprone`, `+leanleft`, `+leanright`, `+attack`, `+speed` (the
-sight), `+melee`, `+activate`, `+reload`, `weaponslot
-<primary|primaryb|pistol|grenade>`, `weapnext`, `weapprev`, `+scores`,
-`messagemode`, `messagemode2`, `toggleconsole`. Key names are retail's
-(`MOUSE1`, `MWHEELUP`, `CTRL`, `SPACE`, `KP_ENTER`, letters and digits).
+Anything else goes to the server while connected (`callvote`, `kill`,
+`follownext`). Bindable commands and key names are retail's (`+attack`,
+`+speed`, `weaponslot pistol`, `MOUSE1`, `MWHEELUP`). The client cvars are
+`name`, `cl_run`, `sensitivity`, `m_yaw`, `m_pitch`, `cg_fov`
+(cheat-protected, so 80 unless the server runs `sv_cheats 1`), `rate`
+(25000; retail's first-run 5000 starves snapshots), `snaps` and
+`scr_conspeed`. Binds only act while connected.
 
-The client's cvars, at retail's defaults:
+### Main menu and browser
 
-- `name`.
-- `cl_run`: 1, the sight key aims while held; 0, while released.
-- `sensitivity`, `m_yaw`, `m_pitch`: the mouse turns `sensitivity * m_yaw`
-  degrees a count (5 x 0.022), scaled down with the zoom as retail does.
-- `cg_fov`: 80, readable up to 160. It is cheat-protected, as in retail, so
-  it stays at 80 unless the server runs `sv_cheats 1`.
-- `rate`, `snaps`: 25000 and 20, sent in the userinfo; a change goes to the
-  server at once. Retail's first-run `rate` is 5000, which starves snapshots
-  on a busy server.
-- `scr_conspeed`: how fast the console slides.
-
-Binds only
-act while connected; fly and walk mode keep their fixed keys. Esc, M (the
-script menu), F3 and F4 are fixed.
-
-### Main menu and server browser
-
-| Input | Action |
-|---|---|
-| Mouse, left click | Pick a button, select a server |
-| Double-click a server | Join it |
-| Up / Down, Enter | Move the server selection, join it |
-| Wheel, Page Up / Page Down | Scroll the server list |
-| Esc | Back (the browser returns to the main menu) |
+Mouse to pick, double-click or Enter to join, wheel or Page Up / Down to
+scroll, Esc to go back.
 
 ### Everywhere
 
 | Input | Action |
 |---|---|
 | `` ` `` / ~ | Console |
-| F3 | Toggle the debug overlay |
-| F4 | Culling: on, locked (freeze the visible set), off |
+| F3 | Debug overlay |
+| F4 | Culling: on, locked, off |
 
-## How it's put together
+## Documentation
 
-A Cargo workspace of four crates:
+- [docs/protocol-1.1.md](docs/protocol-1.1.md): the 1.1 wire protocol, both
+  directions, with every divergence from RTCW/Q3 at the end.
+- [docs/research/](docs/research/): about thirty documents on file formats,
+  movement, combat, items, turrets, movers, HUD, sound, script semantics,
+  the console, the front end, bots and more. Every claim names the module and
+  address it rests on and says whether it was verified against a binary or
+  capture, or inferred. I'd call this the most useful part of the repo.
+- [tools/re/](tools/re/): the scripts that pull tables out of the binaries,
+  and the Linux server disassembly notes.
+- [AGENTS.md](AGENTS.md): the contributor guide. Layout, measuring against
+  retail, and the traps I already paid for.
 
-- `crates/common` (`vcod-common`): file formats (BSP, xmodel, xanim, pk3,
-  shaders, sound aliases), collision, movement, weapons and the 1.1 protocol
-  in both directions. Shared by client and server. It imports no wgpu, winit
-  or kira.
-- `crates/client` (`vcod`): window, renderer, HUD, effects, audio, prediction
-  and the probe client. wgpu, winit and kira.
-- `crates/server` (`vcod-server`): the dedicated server.
-- `crates/gsc` (`vcod-gsc`): lexer, parser, bytecode compiler and VM for
-  CoD's script language. It depends on nothing else in the workspace.
-
-[AGENTS.md](AGENTS.md) is the contributor guide. It's long, and it holds the
-lessons the code doesn't make obvious.
+The code is four crates: `vcod-common` (formats, collision, movement,
+protocol; no GPU or audio), `vcod` (client), `vcod-server` and `vcod-gsc`
+(the script VM, which depends on nothing else here).
 
 ## Some numbers, for fun
 
 As of October 2026:
 
-- about 140,000 lines of Rust,
-- about 1,900 tests,
-- about 220,000 words of protocol and research notes, which is more than
-  most novels and has fewer plot twists, except for the part where the
-  grenade cook turned out not to exist,
+- about 173,000 lines of Rust,
+- about 2,200 tests,
+- about 270,000 words of protocol and research notes, longer than most novels
+  and with a worse plot, except the twist where grenade cooking turned out
+  not to exist,
 - one asphalt footstep restored.
 
 ## Why
 
-Mostly to see whether it could be done. Call of Duty 1 is an id Tech 3
-descendant, and the Quake III Arena and Return to Castle Wolfenstein sources
-are public, but the 1.1 wire protocol has never been documented. Every field
-width, every enum order and every place Infinity Ward diverged from RTCW had to
-be recovered from the binaries and confirmed against the retail server. The
-result is in [docs/protocol-1.1.md](docs/protocol-1.1.md).
-
-The other reason is that watching a 2003 game come back to life in a window
-you built yourself is a lot of fun.
+Mostly to see whether it could be done. CoD 1 descends from id Tech 3, and
+the Quake III and RTCW sources are public, but the 1.1 wire protocol was
+never documented. Every field width, enum order and place Infinity Ward
+wandered off from RTCW had to come out of the binaries and be confirmed
+against the retail server. Also, watching a 2003 game come back to life in a
+window you built yourself is a lot of fun.
 
 ### This is an AI-driven project
 
-Most of the code and documentation in this repository was written by an AI
-coding agent working under my direction. I decide what to build, review what
-comes back, run it against the real game and the retail server, and do the
-pixel-level and by-ear checks the agent can't. The research docs label each
-fact as verified against a binary or capture, or inferred from a
-decompilation, so you can tell the two apart. Treat the code as a working
-prototype, not a reference implementation.
-
-## Documentation
-
-- [docs/protocol-1.1.md](docs/protocol-1.1.md): the CoD 1.1 wire protocol,
-  both directions, with every divergence from RTCW/Q3 listed at the end.
-- [docs/research/](docs/research/): per-subsystem notes recovered from the
-  binaries and checked live. File formats (BSP, xmodel, xanim, efx), the
-  clientState stream, player models and animation, events and effects, the
-  HUD protocol, the sound system, shader scripts, the server handshake,
-  movement and player clipping, combat, items, turrets, movers, map cycling,
-  spectator follow and the killcam, and the gsc language and object model.
-- [tools/re/](tools/re/): the scripts used to pull tables out of the binaries
-  (event enum, netfield tables, xrefs, script field and builtin tables, a
-  Ghidra export script) and the disassembly notes for the Linux server.
-- [AGENTS.md](AGENTS.md): working notes for contributors and coding agents.
-  Layout, test setup, every probe mode, the reverse-engineering workflow, and
-  a long list of gotchas I paid for so you don't have to.
+An AI coding agent wrote most of the code and docs here, under my direction.
+I decide what to build, review what comes back, run it against the real game
+and the retail server, and do the pixel and by-ear checks the agent can't.
+The research docs label each fact verified or inferred so you can tell them
+apart. Treat the code as a working prototype, not a reference
+implementation.
 
 ## Lineage and inspiration
 
 - [Quake III Arena](https://github.com/id-Software/Quake-III-Arena) and
   [Return to Castle Wolfenstein](https://github.com/id-Software/RTCW-MP) by
-  id Software, GPL. CoD1 is an RTCW-MP descendant and its netcode, movement
-  and animation code follow those sources closely. Where vcod ports a routine,
+  id Software, GPL. CoD1 descends from RTCW-MP, and its netcode, movement and
+  animation code follow those sources closely. Where vcod ports a routine,
   the comment names the file it came from.
 - [ioquake3](https://github.com/ioquake/ioq3), for a cleaner reading of the
   same netcode.
 - [CoDExtended](https://github.com/xtnded/codextended), a GPL server
-  extension for CoD1 1.1 whose reverse-engineered struct layouts were the
-  starting point for the netfield tables.
-- [cod-asset-importer](https://github.com/mauserzjeh/cod-asset-importer),
-  a GPL Blender add-on for CoD assets. The xmodel triangle-strip decoder is
-  ported from it and the xmodel layout was cross-checked against it.
-- [wgpu](https://github.com/gfx-rs/wgpu), [winit](https://github.com/rust-windowing/winit)
-  and [kira](https://github.com/tesselode/kira) for graphics, windowing and audio.
+  extension for CoD1 1.1 whose struct layouts were the starting point for the
+  netfield tables.
+- [cod-asset-importer](https://github.com/mauserzjeh/cod-asset-importer), a
+  GPL Blender add-on. The xmodel triangle-strip decoder is ported from it.
+- [wgpu](https://github.com/gfx-rs/wgpu),
+  [winit](https://github.com/rust-windowing/winit) and
+  [kira](https://github.com/tesselode/kira) for graphics, windowing and
+  audio.
 
 ## Legal
 
 vcod is not affiliated with or endorsed by Activision or Infinity Ward. Call
-of Duty is a trademark of Activision Publishing, Inc. This repository contains
-no game assets, no game code and no binaries from the game; it reads the files
-of a copy you own. The reverse engineering was done to interoperate with the
-game's own files and servers. The research notes document file formats and the
-network protocol for that purpose: they contain layouts and addresses
-recovered from the binaries, and no copied code. The screenshots above show
-art owned by Activision.
+of Duty is a trademark of Activision Publishing, Inc. This repository
+contains no game assets, game code or binaries; it reads the files of a copy
+you own. The reverse engineering was done to interoperate with the game's own
+files and servers. The research notes document file formats and the network
+protocol for that purpose: layouts and addresses recovered from the
+binaries, no copied code. The screenshots show art owned by Activision.
 
 Quake III Arena and Return to Castle Wolfenstein are trademarks of id
 Software. Their GPL sources, and the other ported code, are credited in
