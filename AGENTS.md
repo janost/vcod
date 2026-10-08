@@ -1,8 +1,7 @@
 # vcod agent notes
 
 Rust map viewer, client and dedicated server for Call of Duty 1 (2003), patch
-1.1. README.md says what it does and doesn't do; update its feature and
-limitation lists when a change moves either. This file holds what the code
+1.1. README.md says what it does and doesn't do. This file holds what the code
 and configs don't tell you: where the evidence lives, how to measure against
 retail, and the traps already paid for.
 
@@ -83,6 +82,10 @@ check.
   `merge <branch>: <summary>`. Other sessions push to master too.
   Conventional prefixes (`feat:`, `fix:`, `docs:`, `test:`, `perf:`,
   `refactor:`, `style:`, `chore:`).
+- Before merging a feature or a fix, reread every line of AGENTS.md and
+  README.md that touches what the branch changed (README's feature and
+  limitation lists included), and commit a fix on the branch for each one the
+  work made stale or wrong. The merge waits until both files match the code.
 - Before a commit, run what CI runs: `cargo fmt --all --check`, `cargo clippy
   --workspace --all-targets -- -D warnings`, `cargo test --workspace`. Set
   `COD_DIR` for the suite: tests that need paks go through
