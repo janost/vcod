@@ -208,6 +208,15 @@ onto the crate, picks up at tick 814 and delivers 224 ticks later.
 With 6 shooting bots, `mp_carentan` delivered and `mp_harbor` picked up
 twice in 150 s and delivered neither.
 
+VERIFIED (measured, ours, 2026-10-08, release, 6 shooting bots, seeds 3
+to 6, 200 s per run, the carrier read off the compass record and the
+escort and chase above, against the same runs on the code before them):
+`mp_carentan` picked up 17 times and delivered 9 (before: 24 and 1);
+`mp_dawnville` 19 and 0 (23 and 0), `mp_harbor` 4 and 0 (4 and 0),
+`mp_brecourt` 10 and 0 (10 and 0). Kills were 55 to 66 per map in both.
+On the three maps that never deliver the carrier dies on the way; the
+rounds end on eliminations.
+
 ## 5. Behind Enemy Lines (`bel`)
 
 ### 5.1 What stock `bel.gsc` asks of a player
@@ -265,3 +274,9 @@ killed an allied bot 8 times in each run, so 8 swaps each; allied bots
 killed axis ones 6 and 7 times and earned 17 and 11 `bel_alive_tick`s.
 Whether the hunt and the flight look sensible is a hand check
 (`pending-manual-test.md` section 49).
+
+VERIFIED (measured, ours, 2026-10-08, release, 6 shooting bots, seeds 1
+to 4, 150 s, `mp_brecourt` and `mp_carentan`): with the flight from the
+bot's own marker the allied side earned 160 `bel_alive_tick`s over the
+eight runs, against 163 without it. The flight changes how the hunted
+move, not measurably how long they live.
