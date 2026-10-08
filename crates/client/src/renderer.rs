@@ -2649,7 +2649,7 @@ impl Renderer {
             let rgba = if quad.texture == "black" {
                 [0.0, 0.0, 0.0, quad.rgba[3]]
             } else {
-                quad.rgba
+                hud_colour(quad.rgba)
             };
 
             for i in 0..4 {
@@ -3619,6 +3619,20 @@ fn create_fx_pass(
 /// first; if that file is missing the other extensions are probed too, since
 /// weapon `killIcon`s say `.tga` while the art ships as `.dds`
 /// (docs/research/cod11-hud-protocol.md, section 2).
+/// A HUD colour is a display value, as retail multiplies it into the
+/// texel in gamma space. The texture samples decode sRGB and the target
+/// re-encodes, so the rgb goes in linearised; alpha stays a coverage weight.
+fn hud_colour([r, g, b, a]: [f32; 4]) -> [f32; 4] {
+    let lin = |c: f32| {
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    [lin(r), lin(g), lin(b), a]
+}
+
 fn resolve_fx_path(
     shader_images: &HashMap<String, String>,
     fs: &Pk3Fs,
@@ -4629,6 +4643,16 @@ mod tests {
         assert_eq!(mats.len(), MAX_INSTANCE_BONES + 3);
         assert_eq!(mats[0], Mat4::IDENTITY.to_cols_array());
         assert_eq!(mats[MAX_INSTANCE_BONES], bones_a[0].to_cols_array());
+    }
+
+    #[test]
+    fn hud_colour_linearises_rgb_and_keeps_alpha() {
+        assert_eq!(hud_colour([0.0, 1.0, 0.0, 0.6]), [0.0, 1.0, 0.0, 0.6]);
+        let [r, _, _, a] = hud_colour([0.5, 0.0, 0.0, 0.5]);
+        assert!((r - 0.2140).abs() < 1e-4, "{r}");
+        assert_eq!(a, 0.5);
+        // The console background, `constLighting 0.15`.
+        assert!((hud_colour([0.15; 4])[0] - 0.0196).abs() < 1e-4);
     }
 
     #[test]

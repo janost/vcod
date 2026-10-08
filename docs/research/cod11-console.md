@@ -139,3 +139,50 @@ equals that `active` word and clears it otherwise (`0x40aefb`..`0x40af0e` and
 again at `0x40b130`). So `+speed` is the ads key, held to aim at the default,
 and `toggle cl_run` turns it into a toggle. vcod mirrors this in
 `play::input::ClRun`.
+
+## 5. Client cvars: mouse, fov, rate and snaps
+
+VERIFIED, `CL_Init` (0x411e60) registers, with the default string at the
+address given and the flags word: `sensitivity` `"5"` (0x5686b0) flags 1,
+`cl_mouseAccel` `"0"` flags 1, `m_pitch` and `m_yaw` `"0.022"` flags 1,
+`m_filter` `"0"` flags 1, the userinfo `name` `"Unknown Soldier"` flags 3,
+`rate` (0x5667b4) `"5000"` (0x5667bc) flags 3 and `snaps` `"20"`
+(0x5667b0) flags 3.
+
+VERIFIED: the flag bits are Q3's. `Cvar_Set2` (0x439650) prints `%s is read
+only.` on 0x40, `%s is write protected.` on 0x10 and `%s is cheat
+protected.` on 0x200 while `sv_cheats`' integer is 0. `sv_cheats` is
+registered at 0x4375c0 with `"0"` and flags 0x48. So 1 is `CVAR_ARCHIVE`,
+2 is `CVAR_USERINFO` and 0x200 is `CVAR_CHEAT`.
+
+VERIFIED, `cgame_mp_x86.dll`: the cvar table row at 0x300749e0 is `cg_fov`
+`"80"` with flags 0x201, so `cg_fov` is archived and cheat-protected.
+`xmodel-v14-format.md`, "The view fov", has the 80..160 clamp that reads it.
+
+VERIFIED, `localized_english_pak0.pk3` `default_mp.cfg`: `set sensitivity
+5`, `set m_pitch "0.022"`, `set m_filter 0`, `set cl_mouseAccel 0`. It sets
+no `rate`, `snaps` or `cg_fov`.
+
+VERIFIED, `CL_MouseMove` (0x40b240): the rate is `cl_mouseAccel * speed +
+sensitivity` (values at cvar `+0x1c`) times the scale cgame hands over
+(0x143a97c). Yaw takes `mx * rate * m_yaw` off `cl.viewangles[YAW]`
+(0x143a9a4); pitch adds `my * rate * m_pitch` to 0x143a9a0. The scale is
+stored by the cgame syscall switch (0x401df0), case 0x55, from its second
+argument. INFERRED, off the branch on `0x1432a00 & 0xc000` (the mounted
+`eFlags` bits): there the rate is the double `2.5` (0x5690b8) for yaw, and
+pitch is `2 * my * m_pitch` with no sensitivity.
+
+VERIFIED, cgame: the fov function (0x30032e20) ends by storing `fov_x /
+cg_fov` (0x30032fe2, into 0x3020b5f4), and the frame passes it to trap 0x55
+(0x30033ede) with `cg_weaponSelect`, multiplied first by a second factor at
+0x3020d5c0 when that is not 1. INFERRED: that factor is the shellshock's
+mouse scale; 0x3002f5b0 writes it off the active shock's record (`+0x70`)
+and resets it to 1 when no shock runs. vcod has no shellshock, so the
+scale is the fov ratio alone.
+
+So the default turn is 5 x 0.022 = 0.11 degrees a count, the same both ways,
+and a sight that zooms to half the fov halves it. vcod's
+`play::input::MouseLook` and `console::shell` carry these. vcod keeps its
+own default `name`. The client's userinfo carries `rate` and `snaps` from the
+cvars and resends on a change. The probes keep 25000, so a retail server
+never throttles a capture.
