@@ -131,8 +131,9 @@ either: the people on it signed up for Call of Duty.
   flagged to respawn comes back on retail's timer.
 - Search & Destroy end to end: plant, defuse, progress bar, objectives on the
   compass.
-- rcon, the master heartbeat and the two-second zombie slot a dropped client
-  keeps, timed against retail.
+- rcon with retail's console commands and replies, the master heartbeat, the
+  two-second zombie slot a dropped client keeps, and pings measured the way
+  retail measures them, all checked against retail.
 - A teammate out of view still shows on the compass, with its quick-chat
   flash, packed into the playerstate the way retail packs it.
 - Mounted MG42s: mount with use, aim inside the gun's arc, fire, dismount.
@@ -217,9 +218,12 @@ command-line flags and the console: `connect`, binds and a few client cvars
   retail, which drifts what it carries by about 0.02 units a frame; vcod's
   comes back to exactly zero.
 - rcon runs `map`, `map_restart`, `map_rotate`, `status`, `clientkick`,
-  `heartbeat` and `quit`; nothing else (`say`, `kick <name>`, `set`, ...).
-  `status` prints a ping of 0. A heartbeat reaches the master, which probes
+  `kick`, `dumpuser`, `serverinfo`, `systeminfo`, `say`, `set`, `seta`,
+  cvar queries, `heartbeat` and `quit`; not `banUser`, `banClient`,
+  `devmap` or `killserver`. A heartbeat reaches the master, which probes
   back, but I haven't seen vcod listed yet.
+- Pings read up to a frame (50 ms) higher than retail's: the server ticks on
+  a fixed schedule, where retail runs its frame right behind a packet.
 - No anti-cheat, no PunkBuster.
 
 **Rendering and sound**
@@ -359,9 +363,8 @@ vcod mp_pavlov --game-dir /path/to/CallOfDuty
 vcod-server mp_carentan --port 28960 --hostname "my server" --gametype tdm
 ```
 
-- The server binds `0.0.0.0` and, like retail, answers `getstatus` from anyone
-  and honours an out-of-band `disconnect` by source address. Keep it on a LAN
-  or behind a firewall you control.
+- The server binds `0.0.0.0` and, like retail, answers `getstatus` from anyone.
+  Keep it on a LAN or behind a firewall you control.
 - `--gametype` picks the script under `maps/mp/gametypes/` (default `dm`).
 - `--max-clients` sets `sv_maxclients` (default 8).
 - `--set NAME=VALUE` sets a cvar before the scripts load, retail's `+set`.

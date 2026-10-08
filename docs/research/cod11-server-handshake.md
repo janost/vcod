@@ -495,7 +495,8 @@ and the zombie half of `Server::drop_client`.
   - wrong password: `print\nBad rconpassword.\n`;
   - a good one: `print\n` followed by everything the command printed. An
     unknown command, an empty command and `say` print nothing, so the
-    reply is a bare `print\n`. `map_restart` replies with the restart's log
+    reply is a bare `print\n` (more in "Console commands over rcon").
+    `map_restart` replies with the restart's log
     once it has run.
 - The command line is rebuilt from argv 2 on, each token quoted when it is
   empty or holds a byte at or below a space, each followed by one space
@@ -552,6 +553,142 @@ and the zombie half of `Server::drop_client`.
   `SV_DirectConnect`, which this one shares the shape of; not measured.
 - vcod's zombie repeats the last frame it sent in place of retail's stale
   ring slot; both carry the command sequence that gets the `w` executed.
+
+### Console commands over rcon
+
+Measured 2026-10-08 the same way (retail on a spare port, `rconPassword pw`,
+one `vcod --net-probe` for the commands that need a client). Reply strings
+VERIFIED by capture unless marked. `SV_AddOperatorCommands` (0x8084a3c)
+registers `heartbeat`, `kick`, `banUser`, `banClient`, `clientkick`,
+`status`, `serverinfo`, `systeminfo`, `dumpuser`, `map_restart`, `map`,
+`map_rotate`, `gameCompleteStatus`, `devmap`, `killserver`, `scriptUsage`,
+`stringUsage`, and `say` only when `dedicated` is non-zero. VERIFIED (string
+table at 0x8084a3c's calls). vcod ports the ones marked below; `banUser`,
+`banClient` (ban.txt), `devmap`, `killserver` and the usage dumps are not.
+
+- `kick <name>` (`SV_Kick_f` 0x8084288, ported): exactly one argument, else
+  `Usage: kick <player name>\nkick all = kick everyone\n` (0x80d3c80).
+  `SV_GetPlayerByName` (0x8083aa0) walks every slot not `CS_FREE` and takes
+  the first whose name matches the argument case-insensitively, as is or
+  after `Q_CleanStr`; a miss prints `Player %s is not on the server\n`
+  (0x80d3880). INFERRED from control flow; the miss line and the
+  case-insensitive hit (`kick VCOD` dropped `vcod`, reply
+  `0:vcod EXE_PLAYERKICKED\n`) VERIFIED. The lookup runs before the `all`
+  test, so `kick all` prints the miss line. VERIFIED on an empty server.
+  It then drops every slot in use except a loopback one with
+  `EXE_PLAYERKICKED`, stamping each slot's last-packet time. INFERRED. Kicking a loopback client by name broadcasts
+  `e "EXE_CANNOTKICKHOSTPLAYER"` instead (0x80d3cc9). INFERRED; a dedicated
+  server has none.
+- `dumpuser <name>` (`SV_DumpUser_f` 0x8084cc0, ported): usage
+  `Usage: info <userid>\n` (0x80d3f5a) unless exactly one argument, the
+  same name lookup, then `userinfo\n--------\n` and `Info_Print` of the
+  client's userinfo. The userinfo ends with `ip`, which `SV_DirectConnect`
+  (0x8085498) appends with the key at 0x80d43da and the port as a signed
+  short (`ip                  127.0.0.1:-9130`). VERIFIED.
+- `Info_Print` (0x806bbd4): one line per pair, the key left-justified in 20
+  columns, a longer key running straight into its value
+  (`bg_fallDamageMaxHeight480`). VERIFIED.
+- `serverinfo` / `systeminfo` (0x8084c68 / 0x8084c94, ported):
+  `Server info settings:\n` (0x80d3f2c) or `System info settings:\n`, then
+  `Info_Print` of the serverinfo or systeminfo cvar string. Retail's
+  serverinfo keys are the 14 vcod's configstring 0 already carries, in the
+  same order; a `set sv_hostname` shows up in it at once. VERIFIED. vcod's
+  systeminfo lacks the `sv_referencedPaks` pair (see "Configstring 1").
+- `say <text>` (`SV_ConSay_f` 0x8084974, ported): nothing without an
+  argument; otherwise `"console: "` (0x80d3f1a) plus the joined arguments
+  goes to every client past `CS_CONNECTED` as `h "\x15%s"` (0x80d3f24), a
+  type-0 command. The rcon reply is a bare `print\n`. VERIFIED: the probe
+  read `h "\x15console: hello there"`.
+- `set` / `seta` (ported): `usage: set <variable> <value>\n` (0x80cfdc0;
+  `seta` names itself) with fewer than two arguments; otherwise the value
+  is argv 2 onward joined by single spaces (`set foo a b c` reads back
+  `a b c`) and the reply is empty. VERIFIED.
+- `Cvar_Command` (ported): a line whose first word names a cvar prints
+  `"%s" is:"%s^7" default:"%s^7"\n` (0x80cfd40) with the registration
+  spelling (`foo2` answered `"FOO2"`), plus `latched: "%s"\n` (0x80cfd5f)
+  when a latched value waits; with a second word it sets the cvar
+  (`foo baz`). The default is the value the cvar was created with: `set foo
+  a b c` then `foo baz` reads `default:"a b c^7"`, and `scr_dm_timelimit`,
+  which only `default_mp.cfg`'s `set` creates, reads `default:"30^7"` after
+  a `set` to 5. VERIFIED. A name that is no cvar is an unknown command and
+  prints nothing.
+- `g_gametype` is latched: `set g_gametype tdm` replies `g_gametype will be
+  changed upon restarting.\n` (0x80cfc40), and the query then reads
+  `"g_gametype" is:"dm^7" default:"dm^7"\nlatched: "tdm"\n`. VERIFIED.
+  `cvarlist` flags `g_useGear` `L` too. VERIFIED. vcod latches
+  `g_gametype` and `sv_maxclients` (the two `SV_MapRestart_f` escalates on,
+  map-cycle doc section 4) and writes everything else to the running
+  level's cvar table at once; `g_useGear` is not latched there.
+- `quit` gets no rcon reply: `Com_Quit_f` exits inside the redirect, before
+  it is flushed. VERIFIED (no packet came back).
+
+### Pings (`SV_CalcPings`, 0x808cab8)
+
+- `SV_SendMessageToClient` (0x808f680) stamps
+  `frames[outgoingSequence & 31]` with `messageSent = svs.time` and
+  `messageAcked = -1` for every message, the gamestate's
+  (`SV_SendClientGameState` 0x8085eec) included. `SV_UserMove` (0x8086fa4),
+  once a move message's cmds decode, writes `svs.time` into
+  `frames[messageAcknowledge & 31].messageAcked`, overwriting an earlier
+  ack of the same message. INFERRED.
+- Once a frame, before the clock advances (`SV_Frame`, the call ahead of
+  the `svs.time += frameMsec` loop), each client's ping is 999 unless it is
+  `CS_ACTIVE` with a game entity; otherwise the mean of `messageAcked -
+  messageSent` over the 32 slots with `messageAcked > 0`, integer division,
+  capped at 999, and 999 with none. The result is copied to `ps->ping`
+  (`+0x20c8`). There is no bot branch. INFERRED.
+- Both stamps are `svs.time`, which moves in 50 ms steps, and packets are
+  read between frames, so a message acked before the next frame counts 0
+  and one acked a frame later 50. VERIFIED by capture: a loopback probe's
+  `status` ping read 0, 1 or 3 over 15 polls (one or two 50 ms samples in
+  32).
+- The format strings: `status` prints the ping as `%4i`, and `getstatus`'
+  player lines are `%i %i "%s"\n`. VERIFIED. The fields: `status` reads
+  `cl->ping`, `getstatus` (0x808bd58) writes score then `cl->ping` for
+  every slot past `CS_ZOMBIE`, and the scoreboard's ping is `ps.ping`
+  capped at 999, or -1 for a client still connecting (hud protocol doc,
+  section 3). INFERRED.
+- vcod: `Client::stamp_sent` / `stamp_acked` / `calc_ping`,
+  `Server::calc_pings`. A vcod bot reads 0, Q3's rule; retail has no bots.
+  The same probe on vcod's server read 35-45 in `status`. VERIFIED by
+  capture. The ring showed runs of 0 and runs of 50 ms samples: vcod ticks
+  on a fixed wall schedule, so a probe packet sent just before it reads the
+  newest snapshot acks the older one after the next tick. Retail's frame
+  runs right behind a packet's arrival, which leaves the probe a whole send
+  interval to read the snapshot first. INFERRED.
+
+### Rate (`SV_UserinfoChanged`, 0x8086ab4)
+
+- `cl->rate`, which `status` prints, is 99999 when `Sys_IsLANAddress`
+  (0x80c72f8) holds and `dedicated` is not 2. Otherwise it is the
+  userinfo's `rate` through `strtol`, clamped to 1000..90000, or 5000 when
+  the key is empty or missing. INFERRED from control flow. VERIFIED by
+  capture: a loopback probe sending `rate 25000` read 99999 under
+  `dedicated 1`; under `dedicated 2` (the 2026-10-07 captures above) it read
+  25000.
+- `Sys_IsLANAddress` takes loopback and compares an IPv4 address against
+  the host's own interface addresses by class (A: first octet, B: two, C:
+  three, plus the 172.16/12 and 192.168/16 cases). INFERRED. vcod takes
+  loopback and the RFC 1918 ranges instead of enumerating interfaces.
+
+### Shutdown (`SV_Shutdown` 0x808ad8c)
+
+- `SV_FinalMessage` runs twice over every slot past `CS_ZOMBIE`: for a
+  client that is not loopback, `e "%s"` with the reason (type 0, so a
+  client not yet active drops it) and a bare `w` (0x80d57e1, type 1), then
+  `nextSnapshotTime = -1` and `SV_SendClientSnapshot`. `quit`
+  (0x806d910) passes `EXE_SERVERQUIT`, `killserver` `EXE_SERVERKILLED`.
+  INFERRED. VERIFIED by capture: on `rcon quit` the probe read
+  `e "EXE_SERVERQUIT"` then `w` and dropped; it read nothing after the
+  first packet, so the second pass is not seen.
+
+### Out-of-band `disconnect`
+
+- `SV_ConnectionlessPacket` (0x808c63c) compares the command with
+  `"disconnect"` at 0x808c827 and, on a match, does nothing; any other
+  unmatched command prints `bad connectionless packet from %s:\n%s\n`.
+  VERIFIED (read off the decompile of 0x808c63c). A client leaves through the
+  netchan `disconnect` command. vcod ignores it the same way.
 
 ## Raw captures
 
