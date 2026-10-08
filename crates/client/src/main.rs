@@ -249,6 +249,11 @@ struct Args {
     /// `client-probes/probe_turret` as the gametype with `probe_teleport 1`.
     #[arg(long)]
     save_turret: bool,
+    /// With `--save-turret`: hold the trigger at the axis client this many ms
+    /// instead of 1000. `client-probes/probe_turret`'s `probe_pose 1` mode
+    /// wants several seconds of rounds; pair it with a --capture-tag.
+    #[arg(long, requires = "save_turret")]
+    probe_turret_target_ms: Option<u64>,
     /// With `--net-probe`: the player-clip walker. Waits for
     /// `client-probes/probe_bump`'s placement 200 units behind the
     /// `--probe-bump-target` client on mp_carentan, then walks into it
@@ -294,6 +299,13 @@ struct Args {
     /// The stun-slide capture walks 315 into the street's south wall.
     #[arg(long, value_name = "YAW", requires = "probe_fall")]
     probe_fall_walk: Option<f32>,
+    /// With `--net-probe` and `--probe-team`: stand at world yaw 0 and hold
+    /// this view pitch in alternate 400 ms windows (0 between), printing a
+    /// `PITCH` line per snapshot whose pitch moved. The target half of
+    /// `client-probes/probe_turret`'s `probe_pose 1` measurement. Writes no
+    /// fixture.
+    #[arg(long, value_name = "DEG")]
+    probe_pitch_flip: Option<f32>,
     /// With `--net-probe` and `--probe-team`: stand still and print a `RIDE`
     /// line per snapshot with the origin, velocity, ground entity and view
     /// yaw, the mover push and ride capture's wire half;
@@ -808,6 +820,7 @@ fn main() -> Result<()> {
                 defuse: args.probe_defuse,
                 pickup: args.save_pickup,
                 turret: args.save_turret,
+                turret_target_ms: args.probe_turret_target_ms,
                 bump: args.save_bump,
                 bump_target: args.probe_bump_target,
                 follow: args.probe_follow,
@@ -815,6 +828,7 @@ fn main() -> Result<()> {
                 killcam_skip_ms: args.probe_killcam_skip_ms,
                 fall: args.probe_fall,
                 fall_walk: args.probe_fall_walk,
+                pitch_flip: args.probe_pitch_flip,
                 ride: args.probe_ride,
                 items: args.probe_items,
                 compass: args.probe_compass,

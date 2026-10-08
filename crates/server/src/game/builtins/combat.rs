@@ -1286,6 +1286,112 @@ mod tests {
         }
     }
 
+    /// `probe_blastmove` on retail (combat doc 14.5): what the first
+    /// victim's callback does reaches the rest of the same walk. A victim it
+    /// sets down out of range is passed by; one it pulls into range from
+    /// outside the blast's box was never listed; `setPlayerIgnoreRadiusDamage`
+    /// set inside it spares nobody the walk already started on, and the next
+    /// blast reaches nobody; a nested blast runs its whole walk inside the
+    /// callback.
+    #[test]
+    fn a_callback_reaches_the_rest_of_its_walk() {
+        const SCRIPT: &str = r#"
+            main() {
+                level.log = "";
+                wait 1;
+                players = getentarray("noclass", "classname");
+                for (i = 0; i < players.size; i++)
+                    level.p[players[i] getEntityNumber()] = players[i];
+                level.mode = "park";
+                level.first = 0;
+                radiusDamage((0, 0, 8), 300, 20, 20);
+                level.log = level.log + "|";
+                wait 0.5;
+                level.p[0] setorigin((50, 0, 0));
+                level.p[1] setorigin((2000, 0, 0));
+                wait 0.5;
+                level.mode = "pull";
+                level.first = 0;
+                radiusDamage((0, 0, 8), 300, 20, 20);
+                level.log = level.log + "|";
+                wait 0.5;
+                level.p[1] setorigin((100, 0, 0));
+                wait 0.5;
+                level.mode = "ignore";
+                level.first = 0;
+                radiusDamage((0, 0, 8), 300, 20, 20);
+                level.log = level.log + "|";
+                radiusDamage((0, 0, 8), 300, 20, 20);
+                level.log = level.log + "|";
+                setPlayerIgnoreRadiusDamage(false);
+                level.mode = "nested";
+                level.first = 0;
+                radiusDamage((0, 0, 8), 300, 20, 20);
+            }
+            CodeCallback_PlayerConnect() {}
+            CodeCallback_PlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc) {
+                level.log = level.log + " " + self getEntityNumber() + ":" + iDamage;
+                if (level.first)
+                    return;
+                level.first = 1;
+                other = level.p[1 - self getEntityNumber()];
+                if (level.mode == "park")
+                    other setorigin((2000, 0, 0));
+                else if (level.mode == "pull")
+                    other setorigin((100, 0, 0));
+                else if (level.mode == "ignore")
+                    setPlayerIgnoreRadiusDamage(true);
+                else if (level.mode == "nested")
+                    radiusDamage(other.origin + (0, 0, 30), 40, 5, 5);
+                level.log = level.log + " done";
+            }
+            CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {}
+        "#;
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
+        rt.host.world = Some(Rc::new(World {
+            collision: vcod_common::collision::test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+            spawn_points: Vec::new(),
+            hazards: Vec::new(),
+        }));
+        for (slot, name) in [(0, "a"), (1, "b")] {
+            rt.push_client_event(ClientEvent::Connect {
+                slot,
+                name: name.into(),
+            });
+        }
+        rt.run_frame(50);
+        for (slot, x) in [(0, 50.0), (1, 100.0)] {
+            rt.host.client_vitals[slot] = Vitals {
+                health: 1000,
+                max_health: 100,
+                dead: false,
+                takedamage: true,
+            };
+            rt.place_client(slot, [x, 0.0, 0.0]);
+        }
+        for t in (100..=3000).step_by(50) {
+            rt.run_frame(t);
+        }
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        let log = rt.level_field_str("log");
+        let rows: Vec<&str> = log.split('|').map(str::trim).collect();
+        let first = rows[0].split(':').next().unwrap();
+        assert_eq!(rows[0], format!("{first}:20 done"), "park: {log}");
+        assert_eq!(rows[1], "0:20 done", "pull: {log}");
+        let ignore: Vec<&str> = rows[2].split(' ').collect();
+        assert_eq!(ignore.len(), 3, "ignore: both hit, {log}");
+        assert_eq!(rows[3], "", "the flag set in the walk holds: {log}");
+        let nested: Vec<&str> = rows[4].split(' ').collect();
+        assert_eq!(nested.len(), 4, "nested: {log}");
+        assert!(
+            nested[1].ends_with(":5"),
+            "the nested walk runs first: {log}"
+        );
+        assert_eq!(nested[2], "done", "{log}");
+    }
+
     /// `probe_blastorder` on retail (combat doc 14.7): four players set down
     /// round mp_carentan's second split by `setOrigin`, then moved one at a
     /// time, a flat blast after each. The walk is the area tree's, each

@@ -90,6 +90,8 @@ struct Rig {
     target_wbuttons: u8,
     /// The target's `buttons` on every frame's cmd.
     target_buttons: u8,
+    /// The target's absolute view pitch on every frame's cmd.
+    target_pitch: f32,
 }
 
 /// One drained event: the id, its parm and whose it was (see [`who`]).
@@ -190,6 +192,7 @@ fn build(cvars: &[(&str, &str)], weapon: &str, gunner_second: bool) -> Option<Ri
         gun: 0,
         target_wbuttons: 0,
         target_buttons: 0,
+        target_pitch: 0.0,
     };
     for _ in 0..40 {
         let h = rig.still();
@@ -244,11 +247,12 @@ impl Rig {
         }
         self.now = start + Duration::from_millis(FRAME_MS as u64);
         self.target.pump_at(self.now);
-        let held = UserCmd {
+        let mut held = UserCmd {
             wbuttons: self.target_wbuttons,
             buttons: self.target_buttons,
             ..holding(&self.target)
         };
+        held.angles[0] = deg_to_short(self.target_pitch);
         self.target.send_frame(&held);
         if self.gunner_second {
             common::step_pair(
@@ -595,6 +599,86 @@ fn a_round_meets_a_higher_slots_last_pose_and_a_lower_slots_new_one() {
     assert_eq!(higher, 0, "the target in slot 1 is still posed crouched");
     let lower = round_at_a_target_standing_up(true).unwrap();
     assert!(lower > 0, "the target in slot 0 has stood up");
+}
+
+/// `probe_pose`'s hit point for the frame at `t`: where the round met the
+/// target, `None` for a frame whose round missed it.
+fn pose_hit(rig: &Rig, t: i32) -> Option<[f32; 3]> {
+    let tag = format!("PROBE hit {t} ");
+    let line = rig.sv.script_log().iter().find_map(|l| {
+        let i = l.find(&tag)?;
+        Some(l[i + tag.len()..].to_string())
+    })?;
+    let v = line.split_once('(')?.1.trim_end_matches(')');
+    let mut it = v.split(',').map(|x| x.trim().parse::<f32>().unwrap());
+    Some([it.next()?, it.next()?, it.next()?])
+}
+
+fn moved(a: [f32; 3], b: [f32; 3]) -> f32 {
+    (0..3).map(|i| (a[i] - b[i]).powi(2)).sum::<f32>().sqrt()
+}
+
+/// The retail `probe_pose` measurement (combat doc 16.1): the gun fires
+/// every frame at the target, and the target's view pitch drops to 85 on
+/// one frame's cmd. Returns the hit points of the steady frame before, the
+/// flip frame and the one after.
+fn rounds_across_a_pitch_flip(gunner_second: bool) -> Option<[[f32; 3]; 3]> {
+    let mut rig = build(&[("probe_pose", "1")], "m1carbine_mp", gunner_second)?;
+    rig.tap(BUTTON_USE);
+    let p = &PROTOCOL_V1;
+    let gun = rig.gun_origin();
+    let target = rig.target.snapshots().newest()?.ps.origin(p);
+    let (dx, dy, dz) = (
+        target[0] - gun[0],
+        target[1] - gun[1],
+        target[2] + 40.0 - (gun[2] + 21.0),
+    );
+    let yaw = dy.atan2(dx).to_degrees();
+    let pitch = -dz.atan2(dx.hypot(dy)).to_degrees();
+    for _ in 0..4 {
+        rig.look([pitch, yaw]);
+    }
+    let fire = |rig: &mut Rig| {
+        let h = rig.still();
+        let f = UserCmd {
+            buttons: h.buttons | BUTTON_ATTACK,
+            ..h
+        };
+        let s = rig.frame([f, f]);
+        pose_hit(rig, s.t).expect("every round meets the target")
+    };
+    for _ in 0..10 {
+        fire(&mut rig);
+    }
+    let steady = fire(&mut rig);
+    rig.target_pitch = 85.0;
+    let flip = fire(&mut rig);
+    let after = fire(&mut rig);
+    Some([steady, flip, after])
+}
+
+/// Retail, `probe_pose` (combat doc 16.1): with the target in the higher
+/// slot the flip frame's round meets the pose of the frame before and the
+/// next one meets the flip; with the target in the lower slot the flip
+/// frame's round already meets it.
+#[test]
+fn a_round_meets_a_pitch_flip_a_frame_late_on_a_higher_slot() {
+    let Some([steady, flip, after]) = rounds_across_a_pitch_flip(false) else {
+        return;
+    };
+    assert!(
+        moved(steady, flip) < 1.0,
+        "the higher slot is posed as the frame before: {steady:?} {flip:?}"
+    );
+    assert!(
+        moved(steady, after) > 5.0,
+        "the next round meets the flip: {steady:?} {after:?}"
+    );
+    let [steady, flip, _] = rounds_across_a_pitch_flip(true).unwrap();
+    assert!(
+        moved(steady, flip) > 5.0,
+        "the lower slot is posed as this frame: {steady:?} {flip:?}"
+    );
 }
 
 /// The gun's `angles2` as the target's newest snapshot carries it: the
