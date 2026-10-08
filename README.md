@@ -26,7 +26,7 @@ and I stop when it isn't.
 - **It doesn't replace your copy of the game.** It needs that copy to run.
 - **Don't host real players on it.** No anti-cheat, an rcon that knows a
   couple of dozen commands, and strong opinions about tick order. Your
-  regulars deserve better, or at least PunkBuster.
+  regulars deserve a server that was tested on someone other than bots.
 
 If you want to play Call of Duty, play Call of Duty. If you want to watch a
 2003 game boot in a window someone rebuilt from the bytes up, stick around.
