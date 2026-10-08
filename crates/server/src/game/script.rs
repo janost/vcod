@@ -507,14 +507,23 @@ impl ScriptRuntime {
                     .with_cx(|cx| crate::game::item::touch(host, cx, id, slot, true));
                 continue;
             }
+            // `Touch_Multi` skips its wait arm on a trigger whose think is
+            // `enableLinkTo`'s `Think_GeneralLink` (0x65aa2).
+            let linked_multi = self.host.links.is_enabled(id)
+                && self
+                    .host
+                    .triggers
+                    .get(id)
+                    .is_some_and(|t| t.kind == crate::game::trigger::TriggerKind::Multiple);
             let rng = &mut self.rng;
-            let fired = self.host.triggers.fire(id, now_ms, &mut |n| {
-                if n <= 0 {
-                    0
-                } else {
-                    crate::game::host::rand_int(rng) % n
-                }
-            });
+            let fired = linked_multi
+                || self.host.triggers.fire(id, now_ms, &mut |n| {
+                    if n <= 0 {
+                        0
+                    } else {
+                        crate::game::host::rand_int(rng) % n
+                    }
+                });
             if !fired {
                 continue;
             }

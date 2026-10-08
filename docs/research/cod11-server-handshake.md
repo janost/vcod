@@ -648,14 +648,45 @@ table at 0x8084a3c's calls). vcod ports the ones marked below; `banUser`,
   every slot past `CS_ZOMBIE`, and the scoreboard's ping is `ps.ping`
   capped at 999, or -1 for a client still connecting (hud protocol doc,
   section 3). INFERRED.
+- The read schedule. The dedicated main loop (`main`, cod_lnxded
+  0x80c6870, the loop at 0x80c69c0) is `usleep(5000)` then `Com_Frame`
+  (0x806ce88), forever. VERIFIED (`push $0x1388`, `call usleep`, `call
+  0x806ce88`, `jmp 0x80c69c0`).
+- `Com_Frame` runs `Com_EventLoop` (0x806bed4), which drains every queued
+  event, packets included, and handles each at once through
+  `SV_PacketEvent`, until at least 1 ms has passed (`com_maxfps` is read
+  only when `dedicated` is 0), then calls `SV_Frame` (0x808cdf8) with the
+  elapsed msec. INFERRED.
+- `SV_Frame` adds the msec to `sv.timeResidual` and runs a game frame only
+  once the residual reaches `1000 / sv_fps`, sending the snapshots at the
+  end. INFERRED.
+- So retail reads the socket every 5 ms and stamps a move message with the
+  frame time current when it arrived; only a packet that lands during a
+  frame's own run is stamped with that frame. `NET_Sleep` (0x80c786c,
+  `select` on the socket) is called only from `SV_SpawnServer`'s map-change
+  wait, so the frame does not wake on a packet. INFERRED.
+- Why the overwrite matters: the last move message acking frame N is the one
+  a client sends just before it reads N + 1. If that one is stamped with
+  frame N + 1's time, slot N reads 50. Retail's window for that is its frame
+  run; vcod's was the whole tick, since the tick read the socket only at its
+  start. INFERRED.
+- Before the change, a loopback `--net-probe` (16 ms cmd interval) read
+  21-50 in `status` on vcod's debug build, ticking at a 25 ms mean on a
+  loaded host, and the ring alternated 0 and 50 ms samples. VERIFIED by
+  capture (2026-10-08).
 - vcod: `Client::stamp_sent` / `stamp_acked` / `calc_ping`,
-  `Server::calc_pings`. A vcod bot reads 0, Q3's rule; retail has no bots.
-  The same probe on vcod's server read 35-45 in `status`. VERIFIED by
-  capture. The ring showed runs of 0 and runs of 50 ms samples: vcod ticks
-  on a fixed wall schedule, so a probe packet sent just before it reads the
-  newest snapshot acks the older one after the next tick. Retail's frame
-  runs right behind a packet's arrival, which leaves the probe a whole send
-  interval to read the snapshot first. INFERRED.
+  `Server::calc_pings`. A reader thread stamps each packet's arrival, the
+  tick still handles them in arrival order at its start, and
+  `Server::handle_packet_at` stamps a move message's ack with the frame time
+  of the newest frame whose messages had gone out at arrival
+  (`Server::frame_sent`), modelling retail's frame as instantaneous. A
+  packet left over past `MAX_PACKETS_PER_FRAME` from an earlier tick takes
+  the last frame's time. A vcod bot reads 0, Q3's rule; retail has no bots.
+- Measured 2026-10-08 on loopback, mp_harbor, one `--net-probe`, 20
+  `status` polls 1 s apart: retail (port 29561) read 0-3 (`1 0 0 1 1 1 3 0 0
+  0 0 0 0 1 1 0 0 0 0 0`); vcod's debug build (29562) read 21-50 before the
+  change and 0-3 after (`3 0 1 1 0 1 0 1 0 0 1 0 1 0 0 3 0 0 0 0`) with the
+  tick still at 11-19 ms mean. VERIFIED by capture.
 
 ### Rate (`SV_UserinfoChanged`, 0x8086ab4)
 

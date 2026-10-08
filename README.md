@@ -148,8 +148,9 @@ either: the people on it signed up for Call of Duty.
   `trigger_lookat`), and script movers whose trajectories reach the wire.
   A moving brush model carries the players and items on it and shoves the
   players in its way, and a player linked to a moving entity rides it.
-  `linkTo` works on script models, origins, brush models and items too,
-  including to a tag on a player's model. The client draws a
+  `linkTo` works on script models, origins, brush models, items and
+  turrets too, and on a trigger after `enableLinkTo`, including to a tag
+  on a player's model. The client draws a
   brush model where its entity is, with its baked lightmap, so a hidden or
   deleted one is gone, and draws an item resting on a mover riding it.
 - Intermission, `map_restart`, and `sv_mapRotation` the way retail runs them,
@@ -223,10 +224,11 @@ menu.
 
 **Server**
 
-- `linkTo` on a turret stops with an error, and `enableLinkTo` is missing;
-  no stock MP script uses either. An entity linked to a tag on a player's
-  model sits within a few units of where retail puts it, and does not
-  follow the body's swing after `setPlayerAngles`.
+- An entity linked to a tag on a player's model sits within a few units of
+  where retail puts it, and does not follow the body's swing after
+  `setPlayerAngles`. A tag on a model attached with `attach` cannot take a
+  link. The gunner on a linked turret has not been measured against
+  retail.
 - A brush model that has turned and turned back keeps a sliver of yaw on
   retail, which drifts what it carries by about 0.02 units a frame; vcod's
   comes back to exactly zero.
@@ -235,8 +237,6 @@ menu.
   cvar queries, `heartbeat` and `quit`; not `banUser`, `banClient`,
   `devmap` or `killserver`. A heartbeat reaches the master, which probes
   back, but I haven't seen vcod listed yet.
-- Pings read up to a frame (50 ms) higher than retail's: the server ticks on
-  a fixed schedule, where retail runs its frame right behind a packet.
 - No anti-cheat, no PunkBuster.
 
 **Rendering and sound**

@@ -121,6 +121,11 @@ pub(crate) struct TerrainPart {
     pub(crate) first: u32,
     pub(crate) count: u32,
     down: bool,
+    /// The bounds of every point of the partition, unpadded
+    /// (`ClearBounds` 0x8066ec0 and `AddPointToBounds` 0x8066eec in
+    /// 0x8051b30), which the leaf walk tests a trace's bounds against.
+    lo: [f32; 3],
+    hi: [f32; 3],
 }
 
 #[derive(Clone, Default)]
@@ -227,10 +232,19 @@ impl Terrain {
             });
         }
 
+        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+        for p in points {
+            for i in 0..3 {
+                lo[i] = lo[i].min(p[i]);
+                hi[i] = hi[i].max(p[i]);
+            }
+        }
         self.parts.push(TerrainPart {
             first,
             count: tris.len() as u32,
             down: down && !up,
+            lo,
+            hi,
         });
         self.parts.len() as u32 - 1
     }
@@ -327,6 +341,38 @@ pub(crate) struct TerrainHit {
     pub(crate) normal: [f32; 3],
     pub(crate) tri: u32,
     pub(crate) startsolid: bool,
+}
+
+impl TerrainPart {
+    /// The leaf walk's bounds test ahead of every partition (0x80556e9
+    /// calling 0x8054c48): the partition is skipped when its point bounds
+    /// miss the trace's, strictly. A trace's bounds are `CM_BoxTrace`'s
+    /// (0x80565c0-0x8056635): each axis from the nearer to the farther of
+    /// the centre-shifted start and end, widened by the sphere offset's
+    /// magnitude and the radius, without the clip's 0.125 pad. So a fall
+    /// that ends above a flat partition's face is never clipped by it
+    /// (docs/research/cod11-player-clip.md 8.12).
+    pub(crate) fn touches(&self, sw: &CapsuleSweep) -> bool {
+        let off = [0.0, 0.0, r(d(sw.half_height) - d(sw.radius))];
+        (0..3).all(|i| {
+            let (a, b) = if sw.end[i] > sw.start[i] {
+                (sw.start[i], sw.end[i])
+            } else {
+                (sw.end[i], sw.start[i])
+            };
+            let reach = d(off[i]).abs();
+            let lo = r(d(a) - reach - d(sw.radius));
+            let hi = r(d(b) + reach + d(sw.radius));
+            self.hi[i] >= lo && self.lo[i] <= hi
+        })
+    }
+
+    /// The same test for a point trace, whose bounds are its segment's
+    /// (0x8056640-0x80566ee). The point arm's further segment tests in
+    /// 0x8054c48 are not ported.
+    pub(crate) fn touches_segment(&self, start: [f32; 3], end: [f32; 3]) -> bool {
+        (0..3).all(|i| self.hi[i] >= start[i].min(end[i]) && self.lo[i] <= start[i].max(end[i]))
+    }
 }
 
 impl Terrain {
@@ -623,6 +669,15 @@ mod tests {
             "{}",
             hit.fraction
         );
+    }
+
+    #[test]
+    fn a_fall_ending_inside_the_pad_but_above_the_face_misses_the_bounds() {
+        let p = flat_square().parts[0];
+        // Feet from 0.138 to 0.036 over the face: inside the pad, not
+        // through the face, so the partition is never clipped.
+        assert!(!p.touches(&sweep([50.0, 50.0, 35.138], [50.0, 50.0, 35.036])));
+        assert!(p.touches(&sweep([50.0, 50.0, 35.138], [50.0, 50.0, 34.9])));
     }
 
     #[test]

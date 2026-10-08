@@ -5,7 +5,7 @@
 # sleeps), with the corpse key, so every snapshot that moved the corpse is printed;
 # every FALL and CMDS line it printed, unedited. The walk capture again, with no
 # server stall at the fatal landing. Read in docs/research/cod11-player-clip.md 8.12
-# for the corpse's height; not gated (section 12).
+# for the corpse's height; gated by crates/server/tests/fall_ab.rs, which replays the CMDS timeline.
 # PROBE drop 9650 100 (900.00, 1930.00, 62.00) maxhealth 100
 # PROBE after 13650 100 health 100 (1231.15, 1815.12, -26.28)
 # PROBE drop 17650 300 (900.00, 1930.00, 262.00) maxhealth 100

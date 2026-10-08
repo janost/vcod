@@ -66,6 +66,10 @@ pub struct TurretRecord {
     /// The model's tags, `None` when the model or a tag failed to load: the
     /// gun then fires no bullet, retail's missing-tag arm (turrets doc 6.3).
     pub tags: Option<TurretTags>,
+    /// `G_SetAngle` has run on the gun since its spawn (an unlink does,
+    /// movers doc 16), which leaves `apos.trType` 0 for good in place of the
+    /// spawn's 3.
+    pub angle_set: bool,
 }
 
 /// Bind-pose model-space positions of the tags the mounted frame reads
@@ -165,6 +169,7 @@ impl TurretRecord {
             teleport_bit: false,
             firing: false,
             tags: None,
+            angle_set: false,
             def,
         }
     }
