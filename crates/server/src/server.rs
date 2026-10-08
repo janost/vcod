@@ -71,8 +71,8 @@ const FLOOD_WINDOW_MS: i32 = 800;
 /// How often a bot re-runs its enemy search (range gate + LOS traces).
 /// The cached verdict is at most this stale.
 const ENEMY_REFRESH_MS: i32 = 100;
-/// A* nodes a tick may expand across all bots; a plan starts only while
-/// some are left (bot-navigation.md, section 3).
+/// A* nodes a tick may expand across all bots; a plan left unfinished
+/// resumes next tick (bot-navigation.md, section 3).
 const BOT_PLAN_BUDGET: u32 = 4000;
 /// A retrieval objective as the bots see it, with its carrier's slot.
 type ReObjCarried = (crate::bots::ReObjView, Option<usize>);
@@ -2445,6 +2445,7 @@ impl Server {
         // lookup refreshes at ~10 Hz per bot and is cached in between.
         let sd = self.bot_sd();
         let re = self.bot_re();
+        let bel = self.bot_bel();
         let mut views: Vec<(usize, crate::bots::BotView)> = slots
             .iter()
             .filter_map(|slot| {
@@ -2488,6 +2489,23 @@ impl Server {
                             mine: *carrier == Some(*slot),
                             ..*o
                         })
+                        .collect(),
+                });
+            }
+        }
+        if let Some(markers) = &bel {
+            for (slot, view) in views.iter_mut() {
+                let mine = teams.get(*slot).copied().unwrap_or(0);
+                if mine != script::TEAM_AXIS && mine != script::TEAM_ALLIES {
+                    continue;
+                }
+                view.bel = Some(crate::bots::BelView {
+                    hunted: mine == script::TEAM_ALLIES,
+                    // What the compass shows the team (`objectives_for`).
+                    markers: markers
+                        .iter()
+                        .filter(|(t, _)| *t == 0 || *t == mine)
+                        .map(|(_, at)| *at)
                         .collect(),
                 });
             }
@@ -2740,6 +2758,7 @@ impl Server {
             pistol,
             sd: None,
             re: None,
+            bel: None,
             noise: None,
         })
     }
@@ -2782,6 +2801,23 @@ impl Server {
                 lead: false,
             },
         ))
+    }
+
+    /// The live objective records as `(teamNum, origin)`, on a `bel` level
+    /// only: the allied players' compass markers.
+    fn bot_bel(&self) -> Option<Vec<(i32, [f32; 3])>> {
+        if self.level_cvars.as_ref().is_none_or(|(g, _)| g != "bel") {
+            return None;
+        }
+        let rt = self.script.as_ref()?;
+        Some(
+            rt.host
+                .objectives
+                .iter()
+                .filter(|o| o.state != 0)
+                .map(|o| (o.team_num, o.origin_f32()))
+                .collect(),
+        )
     }
 
     /// The retrieval objectives for this frame's bot views, on an `re` level
