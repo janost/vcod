@@ -83,6 +83,7 @@ pub(crate) const FRAME_MS: i32 = 50;
 /// collide silently.
 pub(crate) use vcod_common::net::protocol::MAX_CLIENTS;
 
+#[derive(Clone)]
 pub struct ServerConfig {
     pub map: String,
     pub hostname: String,
@@ -1045,6 +1046,13 @@ pub struct Server {
     /// A `quit` ran: the flatline is in the outbox and the binary exits once
     /// it has flushed it.
     quit: bool,
+    /// A `killserver` ran: `sv_running` is 0, so no packet is read and no
+    /// frame runs until a console `map` loads a level again.
+    killed: bool,
+    /// `sv_cheats`: set by `devmap`, cleared by `map`, carried in
+    /// systeminfo.
+    cheats: bool,
+    bans: crate::bans::Bans,
 }
 
 /// A follower's frame: the followed client's number, its playerstate with
@@ -1236,8 +1244,8 @@ impl Server {
         let server_id = 0x10;
         let fall = FallHeights::default();
         let mut sv = Server {
-            configstrings: configstrings::static_configstrings(&cfg, server_id, fall),
-            sent_configstrings: configstrings::static_configstrings(&cfg, server_id, fall),
+            configstrings: configstrings::static_configstrings(&cfg, server_id, fall, false),
+            sent_configstrings: configstrings::static_configstrings(&cfg, server_id, fall, false),
             clients: (0..cfg.max_clients).map(|_| None).collect(),
             zombies: (0..cfg.max_clients).map(|_| None).collect(),
             cfg,
@@ -1293,6 +1301,9 @@ impl Server {
             rcon: Default::default(),
             redirect: None,
             quit: false,
+            killed: false,
+            cheats: false,
+            bans: Default::default(),
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
@@ -1335,6 +1346,11 @@ impl Server {
 
     /// `SV_PacketEvent`.
     pub fn handle_packet(&mut self, from: SocketAddr, pkt: &[u8], now: Instant) {
+        // `Com_EventLoop` hands a packet to `SV_PacketEvent` only while
+        // `sv_running` is set.
+        if self.killed {
+            return;
+        }
         match parse_oob(pkt) {
             Some((cmd, rest)) => {
                 let cmd = cmd.to_string();
@@ -1380,7 +1396,7 @@ impl Server {
             .set("mapname", &self.cfg.map)
             .set("clients", self.client_count())
             .set("sv_maxclients", self.cfg.max_clients)
-            .set("gametype", &self.cfg.gametype)
+            .set("gametype", self.live_gametype())
             .set("pure", 0)
             .set("sv_allowAnonymous", 0)
             .set("pswrd", 0);
@@ -1389,7 +1405,7 @@ impl Server {
 
     /// `SVC_Status` (0x808bd50).
     fn svc_status(&mut self, from: SocketAddr, challenge: &str) {
-        let mut i = configstrings::serverinfo(&self.cfg);
+        let mut i = configstrings::serverinfo(&self.live_cfg());
         i.set("challenge", challenge_arg(challenge)).set("pswrd", 0);
         let mut lines = String::new();
         for slot in 0..self.clients.len() {
@@ -1426,8 +1442,9 @@ impl Server {
             }
             Verdict::Run(None) | Verdict::Limited => {}
         }
-        // A `quit` exits before the redirect is flushed: no reply.
-        if self.quit {
+        // A `quit` exits before the redirect is flushed, and a `killserver`
+        // shuts the server down under it: no reply either way.
+        if self.quit || self.killed {
             self.redirect = None;
             return;
         }
@@ -1438,7 +1455,17 @@ impl Server {
 
     /// `SV_GetChallenge` without the authorize-server detour. A client still
     /// asking keeps its entry fresh; stale entries go before a new insert.
+    /// A banned address off the LAN gets the error retail relays from an
+    /// authorize denial; retail never asks the authorize server about a LAN
+    /// client, so a ban does not reach one there either.
     fn svc_get_challenge(&mut self, from: SocketAddr, now: Instant) {
+        if let std::net::IpAddr::V4(ip) = from.ip()
+            && !crate::client::is_lan(from.ip())
+            && self.bans.contains(ip)
+        {
+            self.send_oob(from, "error\nEXE_ERR_BAD_CDKEY");
+            return;
+        }
         let challenge = match self
             .challenges
             .iter_mut()
@@ -3094,9 +3121,8 @@ impl Server {
 
     /// The cvar table a gametype script starts with: the engine defaults,
     /// then `default_mp.cfg`, then `g_gametype`, `sv_hostname` and
-    /// `sv_maxclients` mirroring this run's `ServerConfig`, and `debug` at
-    /// retail's default off, which is what `_utility.gsc`'s exploder logic
-    /// (`getCvar("debug") != "1"`) expects when nobody has set it. None of
+    /// `sv_maxclients` mirroring this run's `ServerConfig`, and the engine
+    /// cvars `Server` keeps in its own fields. None of
     /// them are flagged into the 140/204 mirror; only `makeCvarServerInfo`
     /// does that.
     ///
@@ -3136,13 +3162,19 @@ impl Server {
                 cvars
             }
         };
+        // A level load is where a latched value goes live.
+        cvars.apply_latched();
         cvars.set("g_gametype", &self.cfg.gametype);
         // `SV_SpawnServer`'s `Cvar_Set("mapname", ...)` (map-cycle doc,
         // section 3 step 15), which a script's `getCvar("mapname")` reads.
         cvars.set("mapname", &self.cfg.map);
         cvars.set("sv_hostname", &self.cfg.hostname);
         cvars.set("sv_maxclients", &self.cfg.max_clients.to_string());
-        cvars.set("debug", "0");
+        cvars.set("dedicated", &self.dedicated.to_string());
+        cvars.set("sv_pure", "0");
+        cvars.set("sv_running", "1");
+        cvars.set("sv_serverid", &self.server_id.to_string());
+        cvars.set("sv_cheats", if self.cheats { "1" } else { "0" });
         for (name, value) in &self.cvar_overrides {
             cvars.set(name, value);
         }
@@ -3307,6 +3339,8 @@ impl Server {
                 .push((name.to_string(), value.to_string())),
         }
         self.apply_engine_cvar(name, value);
+        // Latched: serverinfo keeps the running level's value until a load,
+        // and takes this one at once only while no level has loaded.
         if name == "g_gametype" {
             self.cfg.gametype = value.to_string();
             self.refresh_serverinfo();
@@ -3338,7 +3372,7 @@ impl Server {
     /// script owns its own copy between level loads and `tick` reads that one
     /// back over this one every frame.
     fn refresh_serverinfo(&mut self) {
-        let info = configstrings::serverinfo(&self.cfg).to_string();
+        let info = configstrings::serverinfo(&self.live_cfg()).to_string();
         if let Some(slot) = self.configstrings.get_mut(0) {
             *slot = info.clone();
         }
@@ -3363,7 +3397,8 @@ impl Server {
             min: atof(cvars.get("bg_fallDamageMinHeight")),
             max: atof(cvars.get("bg_fallDamageMaxHeight")),
         };
-        let info = configstrings::systeminfo(self.server_id, self.fall_heights).to_string();
+        let info =
+            configstrings::systeminfo(self.server_id, self.fall_heights, self.cheats).to_string();
         if let Some(slot) = rt.host.configstrings.get_mut(1) {
             slot.clone_from(&info);
         }
@@ -3443,8 +3478,12 @@ impl Server {
         // rebuilt empty around the serverinfo and systeminfo the new id
         // belongs in, which is where the client reads the id back from.
         self.server_id = console::next_map_id(self.server_id);
-        self.configstrings =
-            configstrings::static_configstrings(&self.cfg, self.server_id, self.fall_heights);
+        self.configstrings = configstrings::static_configstrings(
+            &self.cfg,
+            self.server_id,
+            self.fall_heights,
+            self.cheats,
+        );
         // Step 19. Past the teardown: a failure here leaves no level.
         self.load_scripts_with(fs, false, carry, save_persist)
             .map_err(LoadFailure::Fatal)?;
@@ -3566,10 +3605,14 @@ impl Server {
         // (map-cycle doc, 4.6). The static slots are rebuilt around the new
         // id on top; 4.3 is what carries slot 1 to a client that already
         // has a gamestate.
-        for (i, s) in
-            configstrings::static_configstrings(&self.cfg, self.server_id, self.fall_heights)
-                .into_iter()
-                .enumerate()
+        for (i, s) in configstrings::static_configstrings(
+            &self.cfg,
+            self.server_id,
+            self.fall_heights,
+            self.cheats,
+        )
+        .into_iter()
+        .enumerate()
         {
             if !s.is_empty() {
                 self.configstrings[i] = s;
@@ -3775,7 +3818,15 @@ impl Server {
     /// process through [`Self::take_fatal`].
     fn exec_console_line(&mut self, line: &str, now: Instant) -> bool {
         match console::Command::parse(line) {
-            console::Command::Map(map) => {
+            console::Command::Map { map, bsp, cheats } => {
+                if self
+                    .fs
+                    .as_ref()
+                    .is_some_and(|fs| fs.resolve_map(&map).is_none())
+                {
+                    self.print(&format!("Can't find map {bsp}\n"));
+                    return true;
+                }
                 // `map <the map already serving>` is a restart, not a
                 // spawn (doc section 4.2).
                 let r = if map.eq_ignore_ascii_case(&self.cfg.map) && self.script.is_some() {
@@ -3783,7 +3834,15 @@ impl Server {
                 } else {
                     self.spawn_server(&map)
                 };
-                return self.absorb_load(&format!("map {map}"), r);
+                if !self.absorb_load(&format!("map {map}"), r) {
+                    return false;
+                }
+                // After the load, so the gamestate it sent still carries the
+                // old value and the change follows as a configstring update.
+                self.set_cheats(cheats);
+                if self.script.is_some() {
+                    self.killed = false;
+                }
             }
             console::Command::MapRestart => {
                 let r = self.map_restart();
@@ -3845,9 +3904,17 @@ impl Server {
                 self.print(&format!("usage: {cmd} <variable> <value>\n"));
             }
             console::Command::Set {
+                cmd,
                 args: Some((name, value)),
-                ..
-            } => self.console_set(&name, &value),
+            } => {
+                self.console_set(&name, &value);
+                // `Cvar_SetA_f`: the archive flag whatever the write did.
+                if cmd == "seta"
+                    && let Some(rt) = self.script.as_mut()
+                {
+                    rt.host.cvars.add_flags(&name, crate::cvars::flag::ARCHIVE);
+                }
+            }
             console::Command::Heartbeat => self.masters.force(),
             console::Command::Quit => {
                 self.final_message("EXE_SERVERQUIT");
@@ -3857,6 +3924,36 @@ impl Server {
                     .shutdown(self.dedicated, self.sv_time_ms, &mut resolve);
                 self.outbox.extend(beats);
                 self.quit = true;
+            }
+            console::Command::KillServer => self.kill_server(),
+            console::Command::BanUser(arg) => {
+                let Some(arg) = arg else {
+                    self.print("Usage: banUser <player name>\n");
+                    return true;
+                };
+                if let Some(slot) = self.player_by_name(&arg) {
+                    self.ban_slot(slot);
+                }
+            }
+            console::Command::BanClient(arg) => {
+                let Some(arg) = arg else {
+                    self.print("Usage: banClient <client number>\n");
+                    return true;
+                };
+                if let Some(slot) = self.player_by_num(&arg) {
+                    self.ban_slot(slot);
+                }
+            }
+            console::Command::CvarList(filter) => {
+                let text = match self.script.as_ref() {
+                    Some(rt) => rt.cvars().list(filter.as_deref()),
+                    None => self
+                        .carried_cvars
+                        .clone()
+                        .unwrap_or_default()
+                        .list(filter.as_deref()),
+                };
+                self.print(&text);
             }
             console::Command::Unknown(argv) => {
                 if !self.cvar_command(&argv) {
@@ -3874,9 +3971,17 @@ impl Server {
             self.print("Usage: kicknum <client number>\n");
             return;
         };
+        if let Some(n) = self.player_by_num(arg) {
+            self.kick_slot(n, now);
+        }
+    }
+
+    /// `SV_GetPlayerByNum` (0x8083b9c): the slot in use that `arg` names,
+    /// or `None` after printing why not.
+    fn player_by_num(&mut self, arg: &str) -> Option<usize> {
         if !arg.bytes().all(|b| b.is_ascii_digit()) {
             self.print(&format!("Bad slot number: {arg}\n"));
-            return;
+            return None;
         }
         let n = arg.parse::<usize>().unwrap_or(usize::MAX);
         if n >= self.clients.len() {
@@ -3884,13 +3989,73 @@ impl Server {
                 "Bad client slot: {}\n",
                 arg.parse::<i64>().unwrap_or(-1)
             ));
-            return;
+            return None;
         }
         if self.clients[n].is_none() && self.zombies[n].is_none() {
             self.print(&format!("Client {n} is not active\n"));
-            return;
+            return None;
         }
-        self.kick_slot(n, now);
+        Some(n)
+    }
+
+    /// The tail both bans share (0x8084394, 0x8084524). Retail sends
+    /// `banUser <ip>` to the authorize server and leaves the client
+    /// connected; vcod keeps the address in its own list
+    /// (docs/research/cod11-server-handshake.md, "Bans").
+    fn ban_slot(&mut self, slot: usize) {
+        let Some(c) = self.clients[slot].as_ref().or(self.zombies[slot].as_ref()) else {
+            return;
+        };
+        let name = if self.clients[slot].is_some() {
+            c.name.clone()
+        } else {
+            String::new()
+        };
+        if let std::net::IpAddr::V4(ip) = c.addr.ip() {
+            self.bans.add(ip);
+        }
+        self.print(&format!("{name} was banned from coming back\n"));
+    }
+
+    /// Replaces the ban list; the binary loads it from `--ban-file`.
+    pub fn set_bans(&mut self, bans: crate::bans::Bans) {
+        self.bans = bans;
+    }
+
+    /// `SV_KillServer_f` (0x8084d3c) into `SV_Shutdown("EXE_SERVERKILLED")`:
+    /// the final message to every client, the flatline to the masters,
+    /// every slot freed and the level gone. The process stays; it reads
+    /// no packet and runs no frame until a console `map` loads a level
+    /// (docs/research/cod11-server-handshake.md, "Shutdown").
+    fn kill_server(&mut self) {
+        self.final_message("EXE_SERVERKILLED");
+        let mut resolve = self.resolver;
+        let beats = self
+            .masters
+            .shutdown(self.dedicated, self.sv_time_ms, &mut resolve);
+        self.outbox.extend(beats);
+        // The cvar table is process-global and outlives the shutdown.
+        let _ = self.lift_persistence();
+        self.script = None;
+        self.clients.iter_mut().for_each(|c| *c = None);
+        self.zombies.iter_mut().for_each(|z| *z = None);
+        self.challenges.clear();
+        self.bots.clear();
+        self.bots_spawned = false;
+        self.pending_explosions.clear();
+        self.pending_script_commands.clear();
+        self.weapon_changes.clear();
+        self.killed = true;
+    }
+
+    /// `sv_cheats`, which only `SV_Map_f` writes: into systeminfo on the
+    /// next frame's flush, and into the cvar table a query reads.
+    fn set_cheats(&mut self, on: bool) {
+        self.cheats = on;
+        if let Some(rt) = self.script.as_mut() {
+            rt.host.cvars.set("sv_cheats", if on { "1" } else { "0" });
+        }
+        self.refresh_fall_heights();
     }
 
     /// The drop both kicks end in; a zombie's clock restarts, so a kicked
@@ -3973,42 +4138,89 @@ impl Server {
         }
     }
 
-    /// The two `CVAR_LATCH` cvars the level reads at load, by their folded
-    /// name: the registered spelling and the value the next load takes.
-    fn latched_cvar(&self, name: &str) -> Option<(&'static str, String)> {
+    /// The two `CVAR_LATCH` cvars `Server` keeps in its own fields, by
+    /// their folded name: the registered spelling, the value the running
+    /// level loaded with, and the value the next load takes.
+    fn latched_cvar(&self, name: &str) -> Option<(&'static str, String, String)> {
         match name.to_ascii_lowercase().as_str() {
-            "g_gametype" => Some(("g_gametype", self.cfg.gametype.clone())),
+            "g_gametype" => Some((
+                "g_gametype",
+                self.live_gametype(),
+                self.cfg.gametype.clone(),
+            )),
             "sv_maxclients" => Some((
                 "sv_maxclients",
+                self.level_cvar("sv_maxclients")
+                    .unwrap_or_else(|| self.cfg.max_clients.to_string()),
                 self.pending_cvar("sv_maxclients", &self.cfg.max_clients.to_string()),
             )),
             _ => None,
         }
     }
 
-    /// `Cvar_Set_f`: a latched cvar keeps its value until the next load
-    /// and says so; anything else is written to the running level's table
-    /// at once. A `--set` override of the same name follows, so the next
-    /// load does not put the old value back.
+    /// A cvar in the running level's table; `None` with no level or no
+    /// value. The level stamps `g_gametype` and `sv_maxclients` at load and
+    /// a console write never reaches them there, so this is the live half
+    /// of the latch.
+    fn level_cvar(&self, name: &str) -> Option<String> {
+        let v = self.script.as_ref()?.cvars().get(name);
+        (!v.is_empty()).then(|| v.to_string())
+    }
+
+    /// `g_gametype` as the running level loaded it; serverinfo, `getinfo`
+    /// and `getstatus` carry this one until a load takes a latched value.
+    fn live_gametype(&self) -> String {
+        self.level_cvar("g_gametype")
+            .unwrap_or_else(|| self.cfg.gametype.clone())
+    }
+
+    /// `cfg` with the running level's `g_gametype`.
+    fn live_cfg(&self) -> ServerConfig {
+        let mut cfg = self.cfg.clone();
+        cfg.gametype = self.live_gametype();
+        cfg
+    }
+
+    /// `Cvar_Set_f`: a read-only, init or (without `sv_cheats`) cheat cvar
+    /// refuses, a latched one keeps its value until the next load and says
+    /// so, anything else is written to the running level's table at once.
+    /// A `--set` override of the same name follows, so the next load does
+    /// not put the old value back.
     fn console_set(&mut self, name: &str, value: &str) {
-        if let Some((canon, pending)) = self.latched_cvar(name) {
-            if pending != value {
-                self.print(&format!("{canon} will be changed upon restarting.\n"));
+        if let Some((canon, live, pending)) = self.latched_cvar(name) {
+            let mut waiting = (pending != live).then_some(pending);
+            if let Some(msg) = crate::cvars::latch(&mut waiting, &live, name, value) {
+                self.print(&msg);
             }
-            self.set_cvar(canon, value);
+            self.set_cvar(canon, waiting.as_deref().unwrap_or(&live));
             return;
         }
-        self.apply_engine_cvar(name, value);
+        let cheats = self.cheats;
+        let outcome = match self.script.as_mut() {
+            Some(rt) => rt.host.cvars.console_set(name, value, cheats),
+            None => {
+                self.set_cvar(name, value);
+                return;
+            }
+        };
+        match outcome {
+            crate::cvars::ConsoleSet::Refused(msg) => {
+                self.print(&msg);
+                return;
+            }
+            crate::cvars::ConsoleSet::Latched(msg) => {
+                if let Some(msg) = msg {
+                    self.print(&msg);
+                }
+            }
+            crate::cvars::ConsoleSet::Applied => self.apply_engine_cvar(name, value),
+        }
         if let Some((_, v)) = self
             .cvar_overrides
             .iter_mut()
             .find(|(n, _)| n.eq_ignore_ascii_case(name))
         {
             *v = value.to_string();
-        }
-        match self.script.as_mut() {
-            Some(rt) => rt.host.cvars.set(name, value),
-            None => self.set_cvar(name, value),
         }
     }
 
@@ -4019,22 +4231,28 @@ impl Server {
         let Some(name) = argv.first() else {
             return false;
         };
-        let Some((canon, value, default)) = self
-            .script
-            .as_ref()
-            .and_then(|rt| rt.cvars().lookup(name))
-            .map(|(n, v, d)| (n.to_string(), v.to_string(), d.to_string()))
-        else {
+        let Some((canon, value, default, waiting)) = self.script.as_ref().and_then(|rt| {
+            let cv = rt.cvars();
+            let (n, v, d) = cv.lookup(name)?;
+            Some((
+                n.to_string(),
+                v.to_string(),
+                d.to_string(),
+                cv.latched(name).map(str::to_string),
+            ))
+        }) else {
             return false;
         };
         if let Some(v) = argv.get(1) {
             self.console_set(&canon, v);
             return true;
         }
+        let waiting = match self.latched_cvar(&canon) {
+            Some((_, live, pending)) => (pending != live).then_some(pending),
+            None => waiting,
+        };
         let mut text = format!("\"{canon}\" is:\"{value}^7\" default:\"{default}^7\"\n");
-        if let Some((_, pending)) = self.latched_cvar(&canon)
-            && pending != value
-        {
+        if let Some(pending) = waiting {
             text.push_str(&format!("latched: \"{pending}\"\n"));
         }
         self.print(&text);
@@ -4146,8 +4364,10 @@ impl Server {
 
     pub fn tick(&mut self, now: Instant) {
         self.drain_console(now);
-        // `Com_Quit_f` exits inside the command; nothing after it runs.
-        if self.quit {
+        // `Com_Quit_f` exits inside the command; nothing after it runs. A
+        // killed server runs no frame (`SV_Frame` returns while
+        // `sv_running` is 0).
+        if self.quit || self.killed {
             return;
         }
         self.check_timeouts(now);
@@ -9419,6 +9639,27 @@ mod tests {
             ask(&mut sv, "g_gametype"),
             "print\n\"g_gametype\" is:\"dm^7\" default:\"dm^7\"\nlatched: \"tdm\"\n"
         );
+        // Latched means serverinfo keeps the running level's value.
+        assert!(sv.configstring(0).contains("\\g_gametype\\dm\\"));
+        assert_eq!(ask(&mut sv, "set g_gametype tdm"), "print\n");
+        assert_eq!(
+            ask(&mut sv, "set g_gametype sd"),
+            "print\ng_gametype will be changed upon restarting.\n"
+        );
+        // The live value clears the latch silently.
+        assert_eq!(ask(&mut sv, "set g_gametype dm"), "print\n");
+        assert_eq!(
+            ask(&mut sv, "g_gametype"),
+            "print\n\"g_gametype\" is:\"dm^7\" default:\"dm^7\"\n"
+        );
+        assert_eq!(
+            ask(&mut sv, "set g_useGear 0"),
+            "print\ng_useGear will be changed upon restarting.\n"
+        );
+        assert_eq!(
+            ask(&mut sv, "g_useGear"),
+            "print\n\"g_useGear\" is:\"1^7\" default:\"1^7\"\nlatched: \"0\"\n"
+        );
         assert_eq!(ask(&mut sv, "set sv_hostname newname"), "print\n");
         assert!(sv.configstring(0).contains("\\sv_hostname\\newname"));
     }
@@ -9450,6 +9691,149 @@ mod tests {
         );
         sv.tick(t);
         assert!(sv.take_outgoing().is_empty());
+    }
+
+    /// `banUser` and `banClient` against the replies a retail server gave
+    /// (handshake doc, "Bans"). The client stays connected, as on retail; a
+    /// banned address off the LAN is refused its next challenge, and a LAN
+    /// one is not, since retail never asks the authorize server about it.
+    #[test]
+    fn rcon_bans_answer_like_retail() {
+        let t = Instant::now();
+        let mut sv = Server::new(cfg(), t);
+        sv.set_cvar("rconpassword", "pw");
+        let _nc = begun(&mut sv, t);
+        sv.take_outgoing();
+        let mut at = t;
+        let mut ask = |sv: &mut Server, line: &str| {
+            at += Duration::from_millis(500);
+            rcon(sv, &format!("pw {line}"), at).concat()
+        };
+        for (line, want) in [
+            ("banUser", "Usage: banUser <player name>\n"),
+            ("banUser a b", "Usage: banUser <player name>\n"),
+            ("banUser nobody", "Player nobody is not on the server\n"),
+            ("banClient", "Usage: banClient <client number>\n"),
+            ("banClient 3", "Client 3 is not active\n"),
+            ("banClient x", "Bad slot number: x\n"),
+            ("banUser VCOD", "vcod was banned from coming back\n"),
+            ("banClient 0", "vcod was banned from coming back\n"),
+        ] {
+            assert_eq!(ask(&mut sv, line), format!("print\n{want}"), "{line}");
+        }
+        assert_eq!(sv.client_count(), 1);
+        assert!(sv.bans.contains(std::net::Ipv4Addr::LOCALHOST));
+        sv.handle_packet(addr(6), &oob("getchallenge"), at);
+        assert_eq!(reply(&mut sv).1, "challengeResponse");
+
+        let wan = SocketAddr::from(([203, 0, 113, 7], 28960));
+        sv.bans.add(std::net::Ipv4Addr::new(203, 0, 113, 7));
+        sv.handle_packet(wan, &oob("getchallenge"), at);
+        let (to, cmd, rest) = reply(&mut sv);
+        assert_eq!(
+            (to, cmd.as_str(), rest.as_slice()),
+            (wan, "error", &b"EXE_ERR_BAD_CDKEY"[..])
+        );
+    }
+
+    /// `killserver` tells every client `EXE_SERVERKILLED`, answers nothing,
+    /// and leaves a process that reads no packet; retail's rcon, `getinfo`
+    /// and `status` all went unanswered after it. A console `map` brings
+    /// the server back.
+    #[test]
+    fn killserver_shuts_down_and_keeps_the_process() {
+        let t = Instant::now();
+        let mut sv = Server::new(cfg(), t);
+        sv.set_cvar("rconpassword", "pw");
+        let mut nc = begun(&mut sv, t);
+        sv.tick(t);
+        let huff = Huffman::new();
+        for (_, pkt) in sv.take_outgoing() {
+            let _ = nc.process_in(&pkt, &huff);
+        }
+        sv.handle_packet(addr(9), &oob("rcon pw killserver"), t);
+        assert!(!sv.quit_requested());
+        let out = sv.take_outgoing();
+        assert!(
+            out.iter().all(|(to, _)| *to == addr(5)),
+            "an rcon reply went out"
+        );
+        assert_eq!(
+            server_commands(&mut nc, &out[0].1, &huff),
+            ["e \"EXE_SERVERKILLED\"", "w"]
+        );
+        assert_eq!(sv.client_count(), 0);
+        let later = t + Duration::from_secs(1);
+        sv.handle_packet(addr(9), &oob("rcon pw status"), later);
+        sv.handle_packet(addr(6), &oob("getinfo x"), later);
+        sv.tick(later);
+        assert!(sv.take_outgoing().is_empty());
+
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            eprintln!("COD_DIR unset or has no main/: skipping the restart");
+            return;
+        };
+        sv.fs = Some(Rc::new(fs));
+        sv.push_console("map mp_carentan");
+        sv.tick(later);
+        assert!(sv.take_fatal().is_none());
+        sv.take_outgoing();
+        sv.handle_packet(addr(6), &oob("getinfo x"), later);
+        assert_eq!(reply(&mut sv).1, "infoResponse");
+    }
+
+    /// `devmap` is `map` plus `sv_cheats 1`, written after the load so the
+    /// gamestate still carries the old value; `map` writes it back to 0.
+    /// The replies and the systeminfo values are retail's (handshake doc,
+    /// "Console commands over rcon").
+    #[test]
+    fn devmap_turns_cheats_on_and_map_turns_them_off() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let t = Instant::now();
+        let mut sv = Server::new(cfg(), t);
+        sv.set_cvar("rconpassword", "pw");
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        let mut at = t;
+        let mut ask = |sv: &mut Server, line: &str| {
+            at += Duration::from_millis(500);
+            let r = rcon(sv, &format!("pw {line}"), at).concat();
+            sv.tick(at);
+            sv.take_outgoing();
+            r
+        };
+        assert_eq!(
+            ask(&mut sv, "devmap"),
+            "print\nCan't find map maps/mp/.bsp\n"
+        );
+        assert_eq!(
+            ask(&mut sv, "devmap nosuchmap"),
+            "print\nCan't find map maps/mp/nosuchmap.bsp\n"
+        );
+        assert_eq!(
+            ask(&mut sv, "set timescale 2"),
+            "print\ntimescale is cheat protected.\n"
+        );
+        ask(&mut sv, "devmap mp/mp_carentan");
+        assert_eq!(sv.cfg.map, "mp_carentan");
+        assert_eq!(
+            ask(&mut sv, "sv_cheats"),
+            "print\n\"sv_cheats\" is:\"1^7\" default:\"0^7\"\n"
+        );
+        assert!(sv.configstring(1).contains("\\sv_cheats\\1\\"));
+        assert_eq!(ask(&mut sv, "set timescale 2"), "print\n");
+        assert_eq!(
+            ask(&mut sv, "set sv_cheats 0"),
+            "print\nsv_cheats is read only.\n"
+        );
+        ask(&mut sv, "map mp_carentan");
+        assert!(sv.configstring(1).contains("\\sv_cheats\\0\\"));
+        assert_eq!(
+            ask(&mut sv, "set timescale 1"),
+            "print\ntimescale is cheat protected.\n"
+        );
     }
 
     /// `SV_CalcPings`: the round trip each acked message took, on the

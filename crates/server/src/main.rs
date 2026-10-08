@@ -50,6 +50,10 @@ struct Args {
     /// repeatable, e.g. `--set scr_friendlyfire=1`.
     #[arg(long = "set", value_name = "NAME=VALUE")]
     set: Vec<String>,
+    /// File that keeps `banUser`/`banClient` bans across runs, one IPv4
+    /// address per line. Without it a ban lasts until the process exits.
+    #[arg(long)]
+    ban_file: Option<std::path::PathBuf>,
 
     /// Log one line per snapshot per client: send interval, the serverTime and
     /// commandTime a client predicts from, the usercmds consumed, and whether
@@ -141,6 +145,21 @@ fn main() -> Result<()> {
     server.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     if let Some((stem, text)) = &overlay {
         server.overlay_script(&format!("maps/mp/gametypes/{stem}"), text);
+    }
+    // The engine cvars a retail server fills in from its command line and
+    // host, for `cvarlist` and a query to read; `--set` still outranks them.
+    let base = args.game_dir.display().to_string();
+    for (name, value) in [
+        ("net_port", args.port.to_string()),
+        ("fs_basepath", base.clone()),
+        ("fs_homepath", base),
+    ] {
+        server.set_cvar(name, &value);
+    }
+    if let Some(path) = args.ban_file {
+        let bans = vcod_server::bans::Bans::load(path.clone())
+            .with_context(|| format!("reading {}", path.display()))?;
+        server.set_bans(bans);
     }
     for pair in &args.set {
         let Some((name, value)) = pair.split_once('=') else {
