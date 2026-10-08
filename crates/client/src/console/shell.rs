@@ -208,7 +208,8 @@ impl Shell {
         s.register("sensitivity", "5", ARCHIVE);
         s.register("m_yaw", "0.022", ARCHIVE);
         s.register("m_pitch", "0.022", ARCHIVE);
-        s.register("rate", "5000", ARCHIVE | USERINFO);
+        // Retail's first-run rate is 5000, which starves snapshots on a busy server.
+        s.register("rate", "25000", ARCHIVE | USERINFO);
         s.register("snaps", "20", ARCHIVE | USERINFO);
         s.register("cg_fov", "80", ARCHIVE | CHEAT);
         for (key, cmd) in DEFAULT_BINDS {
@@ -783,13 +784,13 @@ mod tests {
     }
 
     #[test]
-    fn client_cvars_start_at_retail_defaults() {
+    fn client_cvars_start_at_defaults() {
         let s = Shell::new();
         for (name, v) in [
             ("sensitivity", "5"),
             ("m_yaw", "0.022"),
             ("m_pitch", "0.022"),
-            ("rate", "5000"),
+            ("rate", "25000"),
             ("snaps", "20"),
             ("cg_fov", "80"),
         ] {
@@ -799,7 +800,7 @@ mod tests {
             s.userinfo(),
             Userinfo {
                 name: "vcod".into(),
-                rate: "5000".into(),
+                rate: "25000".into(),
                 snaps: "20".into(),
             }
         );
@@ -809,14 +810,14 @@ mod tests {
     fn rate_and_snaps_are_userinfo() {
         let mut s = Shell::new();
         assert_eq!(
-            s.execute("rate 25000"),
+            s.execute("rate 15000"),
             [Effect::Userinfo, Effect::SaveConfig]
         );
         assert_eq!(
             s.execute("seta snaps 30"),
             [Effect::Userinfo, Effect::SaveConfig]
         );
-        assert_eq!(s.userinfo().rate, "25000");
+        assert_eq!(s.userinfo().rate, "15000");
         assert_eq!(s.userinfo().snaps, "30");
         assert_eq!(s.execute("sensitivity 3"), [Effect::SaveConfig]);
     }

@@ -503,9 +503,9 @@ The client's cvars, at retail's defaults:
   degrees a count (5 x 0.022), scaled down with the zoom as retail does.
 - `cg_fov`: 80, readable up to 160. It is cheat-protected, as in retail, so
   it stays at 80 unless the server runs `sv_cheats 1`.
-- `rate`, `snaps`: 5000 and 20, sent in the userinfo; a change goes to the
-  server at once. 5000 is retail's first-run value; a busy server wants
-  `rate 25000`.
+- `rate`, `snaps`: 25000 and 20, sent in the userinfo; a change goes to the
+  server at once. Retail's first-run `rate` is 5000, which starves snapshots
+  on a busy server.
 - `scr_conspeed`: how fast the console slides.
 
 Binds only
