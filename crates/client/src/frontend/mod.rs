@@ -3,7 +3,8 @@
 //!
 //! The front end: the stock main menu, server browser, quit and error popups
 //! drawn from their `.menu` files and driven by mouse and Esc, as the UI
-//! module does while no game is up (docs/research/cod11-front-end.md).
+//! module does while no game is up, and the main menu again over a game with
+//! `cl_ingame` 1 (docs/research/cod11-front-end.md).
 //! Menus vcod cannot run yet (options, create server, mods) are refused with
 //! a console line instead of drawing screens whose controls do nothing.
 
@@ -87,6 +88,9 @@ pub struct Ui {
     last_click: Option<(Instant, SocketAddrV4)>,
     /// `com_errorMessage`, which `error_popmenu` shows.
     error: String,
+    /// `cl_ingame`: the menus are up over a game, not the disconnected
+    /// front end.
+    in_game: bool,
 }
 
 impl Ui {
@@ -127,6 +131,7 @@ impl Ui {
             list_top: 0,
             last_click: None,
             error: String::new(),
+            in_game: false,
         }
     }
 
@@ -135,8 +140,18 @@ impl Ui {
         !self.open.is_empty()
     }
 
-    /// The main menu, as retail shows it with no game up.
+    /// The main menu, as retail shows it with no game up. While connecting
+    /// or loading this is also what Esc opens (`UIMENU_MAIN`).
     pub fn open_main(&mut self, out: &mut Vec<UiEffect>) {
+        self.in_game = false;
+        self.open_menu("main", out);
+    }
+
+    /// The main menu over a game: `cl_ingame` 1 swaps Join a Game and Start
+    /// New Server for Back to Game and Disconnect, and its Esc closes it.
+    pub fn open_ingame(&mut self, out: &mut Vec<UiEffect>) {
+        self.open.clear();
+        self.in_game = true;
         self.open_menu("main", out);
     }
 
@@ -145,12 +160,14 @@ impl Ui {
         self.open.clear();
         self.hover = None;
         self.browser.stop();
+        self.in_game = false;
     }
 
     /// A drop or a failed connect: the main menu with the error popup over
     /// it, as `Com_Error` leaves retail.
     pub fn show_error(&mut self, message: &str, out: &mut Vec<UiEffect>) {
         self.error = message.to_string();
+        self.in_game = false;
         self.open_menu("main", out);
         self.open_menu("error_popmenu", out);
     }
@@ -228,7 +245,8 @@ impl Ui {
                 "exec" => out.push(UiEffect::Command(arg(1).to_string())),
                 "setcvar" => out.push(UiEffect::Command(format!("set {} \"{}\"", arg(1), arg(2)))),
                 "uiscript" => self.ui_script(&cmd[1..], out),
-                // `ingameclose` acts only in a game, where vcod shows no menu.
+                // `main`'s Esc and Back to Game; inert with no game up.
+                "ingameclose" if self.in_game => self.close_menu(arg(1), out),
                 _ => {}
             }
         }
@@ -580,12 +598,12 @@ impl Ui {
 }
 
 impl Ui {
-    /// The cvars a menu reads: `cl_ingame` is 0 (vcod's front end only runs
-    /// with no game up), `shortversion` is vcod's, `com_errorMessage` the
-    /// last error, the rest are the console's.
+    /// The cvars a menu reads: `cl_ingame` is whether the menus are up over
+    /// a game, `shortversion` is vcod's, `com_errorMessage` the last error,
+    /// the rest are the console's.
     fn cvar(&self, name: &str, shell: &Shell) -> Option<String> {
         match name.to_ascii_lowercase().as_str() {
-            "cl_ingame" => Some("0".into()),
+            "cl_ingame" => Some(if self.in_game { "1" } else { "0" }.into()),
             "com_errormessage" => Some(self.error.clone()),
             "shortversion" => Some(concat!("vcod ", env!("CARGO_PKG_VERSION")).into()),
             _ => shell.cvar(name).map(str::to_string),
@@ -835,6 +853,47 @@ mod tests {
         );
         let (_, _) = ui.key(KeyCode::Escape);
         assert_eq!(ui.menus[*ui.open.last().unwrap()].name, "main");
+    }
+
+    #[test]
+    fn the_in_game_main_menu_swaps_its_buttons_and_closes_on_esc() {
+        let Some(mut ui) = ui() else { return };
+        let shell = Shell::new();
+        ui.open_ingame(&mut Vec::new());
+        assert_eq!(ui.cvar("cl_ingame", &shell).as_deref(), Some("1"));
+        let main = ui.find("main").unwrap();
+        let shown: Vec<&str> = (0..ui.menus[main].items.len())
+            .filter(|&i| ui.shown(main, i, &shell))
+            .map(|i| ui.menus[main].items[i].text.as_str())
+            .collect();
+        assert!(shown.contains(&"@MENU_BACKTOGAME"));
+        assert!(shown.contains(&"@MENU_DISCONNECT"));
+        assert!(!shown.contains(&"@MENU_JOIN_GAME"));
+        assert!(!shown.contains(&"@MENU_START_NEW_SERVER"));
+
+        // Quit's No reopens main, still over the game.
+        click_item(&mut ui, "main", "@MENU_QUIT", &shell);
+        click_item(&mut ui, "quit_popmenu", "@MENU_NO", &shell);
+        assert_eq!(ui.menus[*ui.open.last().unwrap()].name, "main");
+        assert_eq!(ui.cvar("cl_ingame", &shell).as_deref(), Some("1"));
+
+        let out = click_item(&mut ui, "main", "@MENU_DISCONNECT", &shell);
+        assert!(out.contains(&UiEffect::Command("disconnect".into())));
+
+        // `onEsc` runs `ingameclose main`.
+        let (used, _) = ui.key(KeyCode::Escape);
+        assert!(used);
+        assert!(!ui.active());
+
+        ui.open_ingame(&mut Vec::new());
+        click_item(&mut ui, "main", "@MENU_BACKTOGAME", &shell);
+        assert!(!ui.active());
+
+        // With no game up the same Esc leaves main open.
+        ui.open_main(&mut Vec::new());
+        assert_eq!(ui.cvar("cl_ingame", &shell).as_deref(), Some("0"));
+        ui.key(KeyCode::Escape);
+        assert!(ui.active());
     }
 
     #[test]
