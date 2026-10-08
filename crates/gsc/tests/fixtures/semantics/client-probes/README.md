@@ -366,6 +366,28 @@ COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=90 \
 cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-fall --probe-secs 78
 ```
 
+## probe_slide
+
+A hit's knockback timer while the player slides along a wall, the server
+half. Under `probe_teleport 1` it sets each spawned allied player down at
+(960 1830) on the mp_carentan street, 15 units north of the south wall, six
+times 3 s apart, and 0.3 s after each sets off a `radiusDamage(at, 100, d,
+d)` beside it: from the north (200, then 100), the north-west, the east,
+and twice from the north one frame apart. It logs `PROBE drop`, `PROBE
+blast <time> <trial> <origin> at <blast> damage <d>`, the damage callback's
+`PROBE damage` / `PROBE damaged` and `PROBE after`, with health held at
+1000. The client half is `probe_fall`'s with `--probe-fall-walk 315`. The
+2026-10-09 run is `crates/server/tests/fixtures/playerstate/mp_carentan-dm-slide-hit.txt`,
+read in `docs/research/cod11-player-clip.md` 8.5 and gated by `fall_ab.rs`.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PORT=29701 PROBE_SECS=50 \
+    tools/run_probe.sh client-probes/probe_slide mp_carentan +set probe_teleport 1
+# second shell, about 7 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:29701 --probe-team allies --probe-fall \
+    --probe-fall-walk 315 --probe-secs 40
+```
+
 ## probe_ride
 
 The mover push and ride capture's server half. It renames mp_carentan's two
