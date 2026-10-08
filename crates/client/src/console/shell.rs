@@ -849,8 +849,26 @@ mod tests {
     fn completion_covers_commands_and_cvars() {
         let s = Shell::new();
         assert_eq!(s.complete("unb"), ["unbind", "unbindall"]);
-        assert_eq!(s.complete("CL_"), ["cl_run"]);
+        assert_eq!(s.complete("CL_"), ["cl_freelook", "cl_run"]);
         assert!(s.complete("zzz").is_empty());
+    }
+
+    #[test]
+    fn setfromcvar_exec_and_keys_in_key_order() {
+        let mut s = Shell::new();
+        s.execute("setfromcvar ui_name name; setfromcvar ui_x nosuchcvar");
+        assert_eq!(s.cvar("ui_name"), Some("vcod"));
+        assert_eq!(s.cvar("ui_x"), Some(""));
+        assert_eq!(
+            s.execute("exec default_mp.cfg; vid_restart"),
+            [Effect::Exec("default_mp.cfg".into()), Effect::VidRestart]
+        );
+        // Space (32) before letters, letters before named keys, mouse last.
+        s.execute("bind MOUSE2 +forward; bind UPARROW +forward; bind SPACE +forward");
+        assert_eq!(
+            s.keys_bound_to("+FORWARD"),
+            ["SPACE", "W", "UPARROW", "MOUSE2"]
+        );
     }
 
     #[test]
