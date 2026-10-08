@@ -3,6 +3,7 @@ mod camera;
 mod console;
 mod entities;
 mod fx;
+mod head_icon;
 mod hud;
 mod hud_text;
 mod loading;
@@ -2355,6 +2356,7 @@ impl ApplicationHandler for App {
                                     let mut muzzles: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
                                     let mut weapon_flash: HashMap<i32, String> = HashMap::new();
                                     let mut entity_pos: HashMap<u32, Vec3> = HashMap::new();
+                                    let mut heads: HashMap<u32, Vec3> = HashMap::new();
                                     let mut turret_eye = None;
 
                                     let render_time = net
@@ -2399,6 +2401,7 @@ impl ApplicationHandler for App {
                                         muzzles = built.muzzles;
                                         weapon_flash = built.weapon_flash;
                                         entity_pos = built.entity_pos;
+                                        heads = built.heads;
                                         turret_eye = built.turret_eye;
                                         r.set_submodels(&built.submodels);
                                         // Over 512 u is a teleport, not motion.
@@ -2706,10 +2709,25 @@ impl ApplicationHandler for App {
                                     // After the drain, so new voices get this frame's positions.
                                     self.audio.step(&entity_pos, Some(&*world));
 
-                                    r.set_fx_quads(
-                                        &self.fs,
-                                        self.fx.build_quads(cam.pos, cam_right, cam_up, time),
-                                    );
+                                    let mut fx_quads =
+                                        self.fx.build_quads(cam.pos, cam_right, cam_up, time);
+                                    if let Some(newest) = newest {
+                                        fx_quads.extend(head_icon::quads(
+                                            &head_icon::Scene {
+                                                protocol: p,
+                                                entities: &newest.entities,
+                                                clients: &newest.clients,
+                                                configstrings: net.configstrings(),
+                                                viewer: ps_client,
+                                                heads: &heads,
+                                                entity_pos: &entity_pos,
+                                            },
+                                            cam_right,
+                                            cam_up,
+                                        ));
+                                        fx::sim::sort_back_to_front(&mut fx_quads, cam.pos);
+                                    }
+                                    r.set_fx_quads(&self.fs, fx_quads);
                                     r.set_fx_lights(&self.fx.lights(cam.pos, time));
                                     r.set_fog(
                                         net::FogParams::parse(
