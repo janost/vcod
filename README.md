@@ -54,9 +54,13 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
 ### Client
 
 - Opens on the stock main menu and server browser, drawn from the game's own
-  `ui_mp/*.menu` files. The browser lists what `codmaster.activision.com`
-  knows, pings it, sorts by column and joins on double-click. Losing the
-  server drops you back on the menu with the reason in the stock error popup.
+  `ui_mp/*.menu` files. The browser's three sources are retail's: Local
+  (a `getinfo` broadcast to ports 28960-28963), Internet (what
+  `codmaster.activision.com` knows) and Favorites (kept in `servercache.dat`
+  beside `CoDMP.exe`, the file retail uses). It pings, filters, sorts by
+  column, joins on double-click, and runs the stock password, server info,
+  filter and favourite popups. Losing the server drops you back on the menu
+  with the reason in the stock error popup.
 - Joins a 1.1 server (`--connect` or the browser): handshake, Huffman,
   netchan, delta snapshots, and pak downloads for whatever the server has and
   you don't.
@@ -147,10 +151,10 @@ squinting at a screen.
 
 Retail does a lot more than this list. These are the gaps you'll hit first.
 
-**Front end.** Main menu, browser, quit and error popups work. Options,
-Start New Server, Mods and the browser's password, info and filter popups
-print "not in vcod yet". No favourites or LAN scan: type `connect` in the
-console. Esc in a game releases the mouse; there is no in-game menu.
+**Front end.** Main menu, browser and its popups, quit and error popups
+work. Options, Start New Server and Mods print "not in vcod yet". The
+browser's game type filter, map preview and refresh date are
+missing. Esc in a game releases the mouse; there is no in-game menu.
 
 **Client**
 
@@ -381,13 +385,15 @@ Anything else goes to the server while connected (`callvote`, `kill`,
 `+speed`, `weaponslot pistol`, `MOUSE1`, `MWHEELUP`). The client cvars are
 `name`, `cl_run`, `sensitivity`, `m_yaw`, `m_pitch`, `cg_fov`
 (cheat-protected, so 80 unless the server runs `sv_cheats 1`), `rate`
-(25000; retail's first-run 5000 starves snapshots), `snaps` and
-`scr_conspeed`. Binds only act while connected.
+(25000; retail's first-run 5000 starves snapshots), `snaps`,
+`scr_conspeed`, `password` and the browser's `ui_netSource` and
+`ui_browserShow*`. Binds only act while connected.
 
 ### Main menu and browser
 
 Mouse to pick, double-click or Enter to join, wheel or Page Up / Down to
-scroll, Esc to go back.
+scroll, Esc to go back. Click Source to cycle Local, Internet and Favorites.
+Click a text field to type into it; Enter, Tab or Esc finishes.
 
 ### Everywhere
 

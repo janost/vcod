@@ -15,6 +15,7 @@ pub mod master;
 pub mod msg;
 pub mod netchan;
 pub mod protocol;
+pub mod server_cache;
 pub use protocol::{CS_FOG_V1, FogParams};
 pub mod snapshot;
 pub mod trajectory;
@@ -108,13 +109,15 @@ pub enum NetEvent {
     OutOfBand(String),
 }
 
-/// The userinfo keys the client's cvars drive (`name`, `rate`, `snaps`);
-/// the rest of the string is fixed.
+/// The userinfo keys the client's cvars drive (`name`, `rate`, `snaps`,
+/// `password`); the rest of the string is fixed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Userinfo {
     pub name: String,
     pub rate: String,
     pub snaps: String,
+    /// The browser's password popup sets it; empty leaves the key out.
+    pub password: String,
 }
 
 /// What a client sends until told otherwise, the probes included. The
@@ -127,6 +130,7 @@ impl Default for Userinfo {
             name: "vcod".into(),
             rate: "25000".into(),
             snaps: "20".into(),
+            password: String::new(),
         }
     }
 }
@@ -474,6 +478,7 @@ impl<T: Transport> NetClient<T> {
             name: clean(info.name),
             rate: clean(info.rate),
             snaps: clean(info.snaps),
+            password: clean(info.password),
         };
         if info == self.info {
             return;
@@ -486,9 +491,22 @@ impl<T: Transport> NetClient<T> {
     }
 
     fn base_userinfo(&self) -> String {
-        let Userinfo { name, rate, snaps } = &self.info;
+        let Userinfo {
+            name,
+            rate,
+            snaps,
+            password,
+        } = &self.info;
+        // `password` (CVAR_USERINFO, registered after `cl_anonymous` and
+        // before `cg_predictItems`, CoDMP.exe 0x4123ea) sits between them in
+        // the newest-first cvar walk; an empty value sets no key.
+        let password = if password.is_empty() {
+            String::new()
+        } else {
+            format!("\\password\\{password}")
+        };
         format!(
-            "\\cg_predictItems\\1\\cl_anonymous\\0\\handicap\\100\\color\\4\\head\\default\
+            "\\cg_predictItems\\1{password}\\cl_anonymous\\0\\handicap\\100\\color\\4\\head\\default\
              \\model\\multi\\snaps\\{snaps}\\rate\\{rate}\\name\\{name}"
         )
     }
@@ -1309,6 +1327,7 @@ mod tests {
             name: name.into(),
             rate: rate.into(),
             snaps: "20".into(),
+            password: String::new(),
         };
         let t0 = Instant::now();
         let mut c = NetClient::start(FakeTransport::default(), t0);
@@ -1334,6 +1353,16 @@ mod tests {
         let sent = format!("userinfo \"{}\"", c.base_userinfo());
         assert!(sent.contains("\\rate\\25000\\"));
         assert_eq!(reliable_count(&c, &sent), 1);
+        // A password rides after `cg_predictItems`; an empty one is absent.
+        assert!(!c.base_userinfo().contains("password"));
+        c.set_userinfo(Userinfo {
+            password: "s3cret".into(),
+            ..info("Rob", "25000")
+        });
+        assert!(
+            c.base_userinfo()
+                .starts_with("\\cg_predictItems\\1\\password\\s3cret\\cl_anonymous\\0")
+        );
     }
 
     #[test]

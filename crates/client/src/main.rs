@@ -987,7 +987,8 @@ fn main() -> Result<()> {
     fx::registry::init(&fs);
 
     let console = console::Console::new(&fs);
-    let ui = frontend::Ui::new(&fs);
+    // Retail keeps the favourites beside CoDMP.exe; vcod shares the file.
+    let ui = frontend::Ui::new(&fs).with_server_cache(args.game_dir.join("servercache.dat"));
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
@@ -1535,12 +1536,6 @@ impl App {
                     self.apply(event_loop, effects);
                 }
                 UiEffect::Sound(alias) => self.audio.play_local(&self.fs, &alias),
-                UiEffect::ConsoleInput(text) => {
-                    if !self.console.open {
-                        self.toggle_console();
-                    }
-                    self.console.set_input(&text);
-                }
             }
         }
     }
@@ -1900,7 +1895,7 @@ impl ApplicationHandler for App {
                     if !pressed {
                         return;
                     }
-                    let (used, effects) = self.ui.key(code);
+                    let (used, effects) = self.ui.key(code, event.text.as_deref());
                     self.ui_effects(event_loop, effects);
                     if used {
                         return;
@@ -3161,7 +3156,7 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if matches!(self.mode, Mode::Idle) && self.ui.active() {
-                    self.ui.frame(now);
+                    self.ui.frame(now, &self.shell);
                     let (w, h) = r.screen_size();
                     hud_quads.extend(self.ui.build(w, h, &self.localized, &self.shell));
                 }

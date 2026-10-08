@@ -75,12 +75,6 @@ impl Console {
         self.history_pos = self.history.len();
     }
 
-    /// Puts `text` in the input field with the cursor at its end.
-    pub fn set_input(&mut self, text: &str) {
-        self.field = text.to_string();
-        self.cursor = self.field.len();
-    }
-
     pub fn print(&mut self, text: &str) {
         for line in text.lines() {
             if self.lines.len() == SCROLLBACK_LINES {

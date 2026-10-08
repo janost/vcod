@@ -11,7 +11,9 @@ use crate::menu::{CvarGate, block, tokenize};
 /// `ITEM_TYPE_*` from `menudef.h`.
 pub const ITEM_TYPE_TEXT: i32 = 0;
 pub const ITEM_TYPE_BUTTON: i32 = 1;
+pub const ITEM_TYPE_EDITFIELD: i32 = 4;
 pub const ITEM_TYPE_LISTBOX: i32 = 6;
+pub const ITEM_TYPE_YESNO: i32 = 11;
 pub const ITEM_TYPE_MULTI: i32 = 12;
 
 /// `WINDOW_STYLE_*`.
@@ -22,8 +24,9 @@ pub const WINDOW_STYLE_SHADER: i32 = 3;
 pub const ITEM_ALIGN_CENTER: i32 = 1;
 pub const ITEM_ALIGN_RIGHT: i32 = 2;
 
-/// `FEEDER_SERVERS`.
+/// `FEEDER_*` from `ui_mp/menudef.h`.
 pub const FEEDER_SERVERS: i32 = 2;
+pub const FEEDER_SERVERSTATUS: i32 = 13;
 
 /// One `columns` entry of a list box: x offset, width and the character cap.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -66,6 +69,9 @@ pub struct UiItem {
     pub ownerdraw_flag: i32,
     pub feeder: Option<i32>,
     pub element_height: f32,
+    /// An edit field's `maxchars` and `maxpaintchars`; 0 is no cap.
+    pub max_chars: usize,
+    pub max_paint_chars: usize,
     pub columns: Vec<Column>,
     /// `cvarFloatList`: an `ITEM_TYPE_MULTI`'s labels and the values they set.
     pub float_list: Vec<(String, f32)>,
@@ -105,6 +111,8 @@ impl Default for UiItem {
             ownerdraw_flag: 0,
             feeder: None,
             element_height: 0.0,
+            max_chars: 0,
+            max_paint_chars: 0,
             columns: Vec::new(),
             float_list: Vec::new(),
             action: Vec::new(),
@@ -316,6 +324,8 @@ fn parse_item(tokens: &[String]) -> UiItem {
             "ownerdrawflag" => item.ownerdraw_flag |= num(tokens.get(i + 1)) as i32,
             "feeder" => item.feeder = Some(num(tokens.get(i + 1)) as i32),
             "elementheight" => item.element_height = num(tokens.get(i + 1)),
+            "maxchars" => item.max_chars = num(tokens.get(i + 1)) as usize,
+            "maxpaintchars" => item.max_paint_chars = num(tokens.get(i + 1)) as usize,
             "columns" => {
                 let n = num(tokens.get(i + 1)) as usize;
                 item.columns = (0..n)

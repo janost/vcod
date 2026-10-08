@@ -21,6 +21,39 @@ pub const GETSERVERS: &str = "getservers 1 full empty";
 /// The ping request (`CL_Ping_f`'s `getinfo xxx`, CoDMP.exe 0x5660e0).
 pub const GETINFO: &str = "getinfo xxx";
 
+/// `CL_LocalServers_f` (CoDMP.exe 0x413710) broadcasts `getinfo xxx` to
+/// each of these ports, in two rounds.
+pub const LAN_PORTS: [u16; 4] = [28960, 28961, 28962, 28963];
+pub const LAN_ROUNDS: usize = 2;
+
+/// The server info popup's request (`CL_ServerStatus`, CoDMP.exe
+/// 0x4133eb), sent with no argument.
+pub const GETSTATUS: &str = "getstatus";
+
+/// `PORT_SERVER`, the port an address without one gets.
+pub const PORT_SERVER: u16 = 28960;
+
+/// `NET_StringToAdr` for an IPv4 address or host name with an optional
+/// `:port`. A name resolves here, blocking, as it does in retail.
+pub fn parse_address(s: &str) -> Option<SocketAddrV4> {
+    use std::net::ToSocketAddrs;
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (host, port) = match s.rsplit_once(':') {
+        Some((h, p)) => (h, p.parse().ok()?),
+        None => (s, PORT_SERVER),
+    };
+    if let Ok(ip) = host.parse::<Ipv4Addr>() {
+        return Some(SocketAddrV4::new(ip, port));
+    }
+    (host, port).to_socket_addrs().ok()?.find_map(|a| match a {
+        std::net::SocketAddr::V4(v4) => Some(v4),
+        _ => None,
+    })
+}
+
 /// `CL_ServersResponsePacket` (CoDMP.exe 0x4107b0) over the bytes after the
 /// command word: every `\` followed by six address bytes and another `\` is
 /// one server, port big-endian. It stops at `\EOT`, at 256 entries, or when
@@ -85,6 +118,20 @@ impl ServerInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn addresses_take_the_server_port_by_default() {
+        assert_eq!(
+            parse_address("10.1.2.3"),
+            Some("10.1.2.3:28960".parse().unwrap())
+        );
+        assert_eq!(
+            parse_address(" 10.1.2.3:29661 "),
+            Some("10.1.2.3:29661".parse().unwrap())
+        );
+        assert_eq!(parse_address("10.1.2.3:x"), None);
+        assert_eq!(parse_address(""), None);
+    }
 
     #[test]
     fn address_list_stops_at_the_master_trailer() {

@@ -212,6 +212,20 @@ impl Shell {
         s.register("rate", "25000", ARCHIVE | USERINFO);
         s.register("snaps", "20", ARCHIVE | USERINFO);
         s.register("cg_fov", "80", ARCHIVE | CHEAT);
+        // CoDMP.exe registers `password` CVAR_USERINFO, not archived
+        // (0x4123ea); the browser's password popup edits it.
+        s.register("password", "", USERINFO);
+        // The browser's cvars, archived, with ui_mp_x86.dll's defaults
+        // (cvar table at 0x40036c8c..0x40036dfc).
+        s.register("ui_netSource", "0", ARCHIVE);
+        for name in [
+            "ui_browserShowFull",
+            "ui_browserShowEmpty",
+            "ui_browserShowPassword",
+            "ui_browserShowNoPassword",
+        ] {
+            s.register(name, "1", ARCHIVE);
+        }
         for (key, cmd) in DEFAULT_BINDS {
             s.binds.insert(key.to_string(), cmd.to_string());
         }
@@ -250,6 +264,7 @@ impl Shell {
             name: get("name"),
             rate: get("rate"),
             snaps: get("snaps"),
+            password: get("password"),
         }
     }
 
@@ -802,6 +817,7 @@ mod tests {
                 name: "vcod".into(),
                 rate: "25000".into(),
                 snaps: "20".into(),
+                password: String::new(),
             }
         );
     }
