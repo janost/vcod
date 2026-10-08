@@ -2,6 +2,7 @@ mod audio;
 mod camera;
 mod console;
 mod entities;
+mod frontend;
 mod fx;
 mod head_icon;
 mod hud;
@@ -473,8 +474,8 @@ fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp, net: &net::NetClient<net::UdpTransport
 }
 
 enum Mode {
-    /// No map and no server: the console fills the screen, as retail's does
-    /// when disconnected with no menu up.
+    /// No map and no server: the main menu, or the full-screen console when
+    /// no menu is up, as retail's is when disconnected.
     Idle,
     Fly(FlyCamera),
     /// Position follows the interpolated playerstate. The client joins
@@ -900,18 +901,19 @@ fn main() -> Result<()> {
         (Vec::new(), None)
     };
 
-    let (hud, localized) = if net_client.is_some() {
-        let hud = match hud::Hud::new(&fs) {
+    let hud = if net_client.is_some() {
+        match hud::Hud::new(&fs) {
             Ok(hud) => Some(hud),
             Err(e) => {
                 log::warn!("hud: {e}, disabling the on-screen HUD");
                 None
             }
-        };
-        (hud, vcod_common::localize::Localized::load(&fs))
+        }
     } else {
-        (None, vcod_common::localize::Localized::default())
+        None
     };
+    // The front end's labels need it too.
+    let localized = vcod_common::localize::Localized::load(&fs);
 
     // Fly and walk have no aliases, but `.efx` spawns carry cues and need a listener.
     let mut audio = audio::AudioSystem::new(
@@ -971,6 +973,7 @@ fn main() -> Result<()> {
     fx::registry::init(&fs);
 
     let console = console::Console::new(&fs);
+    let ui = frontend::Ui::new(&fs);
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
@@ -1011,8 +1014,13 @@ fn main() -> Result<()> {
         menus: hud::menu::MenuCache::default(),
         audio,
         quick_chat: quick_chat::QuickChat::new(0x51ee),
+        ui,
+        ui_pending: Vec::new(),
         error: None,
     };
+    if matches!(app.mode, Mode::Idle) {
+        app.enter_menu(None);
+    }
     event_loop.run_app(&mut app)?;
     // Retail's quit goes through `CL_Disconnect`. Without the `disconnect`
     // the server holds the slot, and anything it owns, until `sv_timeout`.
@@ -1381,6 +1389,11 @@ struct App {
     menus: hud::menu::MenuCache,
     audio: audio::AudioSystem,
     quick_chat: quick_chat::QuickChat,
+    /// The main menu and server browser, up while no game is.
+    ui: frontend::Ui,
+    /// Menu effects queued where no event loop is at hand; `about_to_wait`
+    /// runs them.
+    ui_pending: Vec<frontend::UiEffect>,
     error: Option<anyhow::Error>,
 }
 
@@ -1478,7 +1491,44 @@ impl App {
 
     /// Whether keys go to the console: it is down, or there is nothing else.
     fn console_active(&self) -> bool {
-        self.console.open || matches!(self.mode, Mode::Idle)
+        self.console.open || (matches!(self.mode, Mode::Idle) && !self.ui.active())
+    }
+
+    /// Whether the front end takes the mouse and keys.
+    fn menu_active(&self) -> bool {
+        !self.console.open && matches!(self.mode, Mode::Idle) && self.ui.active()
+    }
+
+    /// The main menu, or the error popup over it when `error` says why the
+    /// game ended. Its music and clicks use the `menu` loadspec's aliases.
+    fn enter_menu(&mut self, error: Option<&str>) {
+        self.audio.on_gamestate("menu");
+        let mut out = Vec::new();
+        match error {
+            Some(e) => self.ui.show_error(e, &mut out),
+            None => self.ui.open_main(&mut out),
+        }
+        self.ui_pending.extend(out);
+    }
+
+    /// Carries out what a menu script asked for.
+    fn ui_effects(&mut self, event_loop: &ActiveEventLoop, effects: Vec<frontend::UiEffect>) {
+        use frontend::UiEffect;
+        for effect in effects {
+            match effect {
+                UiEffect::Command(line) => {
+                    let effects = self.shell.execute(&line);
+                    self.apply(event_loop, effects);
+                }
+                UiEffect::Sound(alias) => self.audio.play_local(&self.fs, &alias),
+                UiEffect::ConsoleInput(text) => {
+                    if !self.console.open {
+                        self.toggle_console();
+                    }
+                    self.console.set_input(&text);
+                }
+            }
+        }
     }
 
     /// Opening the console lets go of the game's keys and the mouse, as
@@ -1626,6 +1676,7 @@ impl App {
             self.localized = vcod_common::localize::Localized::load(&self.fs);
         }
         self.unload_world();
+        self.ui.close_all();
         self.mode = online_mode(net, self.team.clone(), self.weapon.clone());
         self.connect_addr = Some(addr);
         self.set_title("vcod — connecting".to_string());
@@ -1634,19 +1685,21 @@ impl App {
         }
     }
 
-    /// Leaves the server (`CL_Disconnect`) for the full-screen console,
-    /// printing `reason` when the server or the load is what ended it.
+    /// Leaves the server (`CL_Disconnect`) for the main menu, with
+    /// `reason` in the error popup when the server or the load is what
+    /// ended it.
     fn disconnect(&mut self, reason: Option<String>) {
         if let Mode::Online { net, .. } = &mut self.mode {
             net.disconnect();
         }
-        if let Some(reason) = reason {
+        if let Some(reason) = &reason {
             log::error!("{reason}");
         }
         self.unload_world();
         self.mode = Mode::Idle;
         self.set_grab(false);
         self.set_title("vcod".to_string());
+        self.enter_menu(reason.as_deref());
     }
 
     /// Drops the map, its sounds and effects, between servers.
@@ -1785,6 +1838,8 @@ impl ApplicationHandler for App {
         if quit::requested() {
             event_loop.exit();
         }
+        let pending = std::mem::take(&mut self.ui_pending);
+        self.ui_effects(event_loop, pending);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -1825,6 +1880,17 @@ impl ApplicationHandler for App {
                         }
                     }
                     return;
+                }
+                // A key the menu does not take (F3, F4) falls through.
+                if self.menu_active() {
+                    if !pressed {
+                        return;
+                    }
+                    let (used, effects) = self.ui.key(code);
+                    self.ui_effects(event_loop, effects);
+                    if used {
+                        return;
+                    }
                 }
                 if pressed && self.chat_key(code, event.text.as_deref()) {
                     return;
@@ -1899,9 +1965,27 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Focused(false) => self.clear_held_keys(),
+            WindowEvent::CursorMoved { position, .. } => {
+                if self.menu_active()
+                    && let Some(r) = &self.renderer
+                {
+                    let (w, h) = r.screen_size();
+                    let effects =
+                        self.ui
+                            .mouse_move(position.x as f32, position.y as f32, w, h, &self.shell);
+                    self.ui_effects(event_loop, effects);
+                }
+            }
             WindowEvent::MouseInput { state, button, .. } => {
                 use winit::event::MouseButton;
                 let pressed = state == ElementState::Pressed;
+                if self.menu_active() {
+                    if button == MouseButton::Left && pressed {
+                        let effects = self.ui.click(Instant::now(), &self.shell);
+                        self.ui_effects(event_loop, effects);
+                    }
+                    return;
+                }
                 if self.console_active() {
                     return;
                 }
@@ -1942,6 +2026,12 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / 60.0,
                 };
+                if self.menu_active() {
+                    if scroll != 0.0 {
+                        self.ui.scroll(scroll > 0.0);
+                    }
+                    return;
+                }
                 if self.console_active() {
                     if scroll != 0.0 {
                         self.console.scroll(scroll > 0.0);
@@ -3056,11 +3146,16 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                if matches!(self.mode, Mode::Idle) && self.ui.active() {
+                    self.ui.frame(now);
+                    let (w, h) = r.screen_size();
+                    hud_quads.extend(self.ui.build(w, h, &self.localized, &self.shell));
+                }
                 self.console.drain_log();
                 self.console.update(
                     dt * 1000.0,
                     self.shell.cvar_f32("scr_conspeed"),
-                    matches!(self.mode, Mode::Idle),
+                    matches!(self.mode, Mode::Idle) && !self.ui.active(),
                 );
                 if self.console.visible() {
                     let (w, h) = r.screen_size();
