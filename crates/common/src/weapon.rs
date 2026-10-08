@@ -16,11 +16,12 @@ use std::collections::HashMap;
 pub const CG_FOV: f32 = 80.0;
 
 /// The view's horizontal fov in degrees, as retail's cgame computes it each
-/// frame: `CG_FOV` zoomed toward `adsZoomFov` over the last `adsZoomInFrac`
+/// frame: `cg_fov` (clamped to 80..160) zoomed toward `adsZoomFov` over the last `adsZoomInFrac`
 /// (sight rising, `zooming_in`) or `adsZoomOutFrac` of the sight fraction,
 /// 90 at intermission and 55 on a mounted gun. The viewmodel is drawn with
 /// the same fov (docs/research/xmodel-v14-format.md, "The view fov").
 pub fn view_fov_x(
+    cg_fov: f32,
     def: Option<&WeaponDef>,
     frac: f32,
     zooming_in: bool,
@@ -33,7 +34,7 @@ pub fn view_fov_x(
     if intermission {
         return 90.0;
     }
-    let mut fov = CG_FOV;
+    let mut fov = cg_fov.clamp(CG_FOV, 160.0);
     if let Some(def) = def.filter(|d| d.aim_down_sight) {
         if frac == 1.0 {
             fov = def.ads_zoom_fov;
@@ -1876,7 +1877,7 @@ mod tests {
             ads_zoom_out_frac: 0.25,
             ..def()
         };
-        let fov = |frac, zooming_in| view_fov_x(Some(&kar), frac, zooming_in, false, false);
+        let fov = |frac, zooming_in| view_fov_x(CG_FOV, Some(&kar), frac, zooming_in, false, false);
         assert_eq!(fov(0.0, true), CG_FOV);
         assert_eq!(fov(0.4, true), CG_FOV, "short of the in tail");
         assert!((fov(0.75, true) - 65.0).abs() < 1e-4, "{}", fov(0.75, true));
@@ -1887,16 +1888,25 @@ mod tests {
             aim_down_sight: false,
             ..kar.clone()
         };
-        assert_eq!(view_fov_x(Some(&no_sight), 1.0, true, false, false), CG_FOV);
         assert_eq!(
-            view_fov_x(None, 0.0, false, true, false),
+            view_fov_x(CG_FOV, Some(&no_sight), 1.0, true, false, false),
+            CG_FOV
+        );
+        assert_eq!(
+            view_fov_x(CG_FOV, None, 0.0, false, true, false),
             90.0,
             "intermission"
         );
         assert_eq!(
-            view_fov_x(Some(&kar), 1.0, true, true, true),
+            view_fov_x(CG_FOV, Some(&kar), 1.0, true, true, true),
             55.0,
             "mounted"
+        );
+        assert_eq!(view_fov_x(100.0, None, 0.0, false, false, false), 100.0);
+        assert_eq!(
+            view_fov_x(60.0, None, 0.0, false, false, false),
+            CG_FOV,
+            "cg_fov reads no lower than 80"
         );
     }
 }

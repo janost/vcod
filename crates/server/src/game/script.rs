@@ -2039,6 +2039,11 @@ impl ScriptRuntime {
         let host = &mut self.host;
         self.vm
             .with_cx(|cx| crate::game::item::run_items(host, cx, now_ms));
+        // `G_GeneralLink`, in the entity pass after the threads: what this
+        // frame's snapshot carries and the next frame's script reads
+        // (docs/research/cod11-movers.md 15).
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| crate::game::link::run(host, cx));
     }
 
     /// What the bots read off stock `sd.gsc` this frame

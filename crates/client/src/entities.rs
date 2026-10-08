@@ -719,6 +719,9 @@ pub struct BuiltScene {
     /// Per drawn entity number: interpolated world position, for
     /// entity-attached sound voices. Every drawn entity, not only players.
     pub entity_pos: HashMap<u32, Vec3>,
+    /// Per drawn `ET_PLAYER`: the world position of its `Bip01 Head` bone,
+    /// where the head icon hangs (`hud::head_icon`).
+    pub heads: HashMap<u32, Vec3>,
     /// The gun `b.ps` rides, when it was drawn: the first-person eye.
     pub turret_eye: Option<TurretEye>,
     /// Inline models drawn this frame with their entity's pose, the identity
@@ -944,6 +947,7 @@ pub fn build_instances(
     let mut muzzles: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
     let mut weapon_flash: HashMap<i32, String> = HashMap::new();
     let mut entity_pos: HashMap<u32, Vec3> = HashMap::new();
+    let mut heads: HashMap<u32, Vec3> = HashMap::new();
     let mut turret_eye = None;
     let mut submodels = Vec::new();
     let ps_int = |name: &str| b.ps.field_i32(p, name);
@@ -1228,6 +1232,13 @@ pub fn build_instances(
                     }
                 }
 
+                if etype == ET_PLAYER
+                    && let Some(bi) = assembly.skeleton.bone_index("Bip01 Head")
+                {
+                    let (local, _) = st.pose.bone_world(&assembly.skeleton, bi);
+                    heads.insert(num, transform.transform_point3(local));
+                }
+
                 // Prefer the weapon's `tag_flash`; fall back to the
                 // `tag_weapon_right` graft point with the entity yaw as forward.
                 if held_weapon.is_some() {
@@ -1445,6 +1456,7 @@ pub fn build_instances(
         muzzles,
         weapon_flash,
         entity_pos,
+        heads,
         turret_eye,
         submodels,
     }

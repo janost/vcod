@@ -439,6 +439,9 @@ pub struct GameHost {
     pub missiles: crate::game::missile::Missiles,
     /// Every entity a mover verb has been called on (`crate::game::mover`).
     pub movers: crate::game::mover::Movers,
+    /// `linkTo` records of every linked entity that is not a client
+    /// (`crate::game::link`).
+    pub links: crate::game::link::Links,
     /// This frame's brush model moves, for the server's push pass.
     pub mover_steps: Vec<crate::game::mover::Step>,
     /// The map's triggers. Host-side beside the object table for the reason
@@ -873,6 +876,7 @@ impl GameHost {
             bodies: crate::game::bodies::BodyQueue::new(crate::game::bodies::BODY_QUEUE_SIZE),
             missiles: crate::game::missile::Missiles::default(),
             movers: crate::game::mover::Movers::default(),
+            links: crate::game::link::Links::default(),
             mover_steps: Vec::new(),
             triggers: crate::game::trigger::Triggers::default(),
             model_bounds: Vec::new(),
@@ -1005,6 +1009,7 @@ impl GameHost {
         // number is on the free list from here, and the next entity to take
         // it would start out on the dead one's trajectory.
         self.movers.forget(id);
+        self.links.unlink(id);
         self.ents.free(id);
     }
 

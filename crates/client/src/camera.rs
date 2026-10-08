@@ -77,6 +77,10 @@ pub struct InputState {
     pub boost: bool,
 }
 
+/// The fly and walk cameras' pitch range, radians.
+pub const PITCH_MAX: f32 = 89.0 * std::f32::consts::PI / 180.0;
+pub const PITCH_MIN: f32 = -PITCH_MAX;
+
 /// Yaw 0 = +X, positive yaw toward +Y (entity "angles" convention). Radians.
 pub struct FlyCamera {
     pub pos: Vec3,
@@ -129,10 +133,11 @@ impl FlyCamera {
         self.pos += dir.normalize_or_zero() * self.speed * boost * dt;
     }
 
-    pub fn mouse_delta(&mut self, dx: f32, dy: f32) {
-        const SENS: f32 = 0.003;
-        self.yaw -= dx * SENS;
-        self.pitch = (self.pitch - dy * SENS).clamp(-89.0f32.to_radians(), 89.0f32.to_radians());
+    /// Turns by `[pitch, yaw]` degrees, pitch down-positive
+    /// (`play::input::MouseLook::degrees`).
+    pub fn look(&mut self, [pitch, yaw]: [f32; 2]) {
+        self.yaw += yaw.to_radians();
+        self.pitch = (self.pitch - pitch.to_radians()).clamp(PITCH_MIN, PITCH_MAX);
     }
 
     pub fn adjust_speed(&mut self, scroll: f32) {
@@ -195,9 +200,9 @@ mod tests {
     #[test]
     fn pitch_clamps() {
         let mut cam = FlyCamera::new(Vec3::ZERO, 0.0);
-        cam.mouse_delta(0.0, -100000.0);
+        cam.look([-1000.0, 0.0]);
         assert!(cam.pitch <= 89.0f32.to_radians() + 1e-6);
-        cam.mouse_delta(0.0, 100000.0);
+        cam.look([1000.0, 0.0]);
         assert!(cam.pitch >= -89.0f32.to_radians() - 1e-6);
     }
 
