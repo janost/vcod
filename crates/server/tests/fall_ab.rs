@@ -11,8 +11,8 @@
 //! runs' first drops) on the real server, each cmd delivered ahead of the
 //! frame whose snapshot first reported it. Ours is held to:
 //!
-//! - every retail `FALL` line from the second drop on (the walk capture's up
-//!   to its fatal drop), `t` and `ct` shifted: origin to the printed
+//! - every retail `FALL` line from the second drop on (the walk capture's
+//!   with its server stall replayed), `t` and `ct` shifted: origin to the printed
 //!   thousandth, velocity, ground, `pm_flags`, `pm_time`, health and the
 //!   event ring, so each landing's parm, stun and damage, exactly. The first
 //!   drop runs on our own cadence until its line names the shift;
@@ -48,6 +48,22 @@ const WALK: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-walk.txt";
 const CORPSE: &str = "tests/fixtures/playerstate/mp_carentan-dm-fall-corpse.txt";
 /// `--probe-fall-walk`'s yaw in the walk fixture.
 const WALK_YAW: f32 = 315.0;
+/// The walk run's retail server stalled on the fatal landing's frame: the
+/// damage is stamped 51950, the next snapshot is 53950, and its
+/// `commandTime` reads 52150, `ClientThink_real`'s 200 ms past that
+/// `level.time` (cod11-player-clip.md 8.12).
+const WALK_HITCH: Hitch = Hitch {
+    level: 51950,
+    until: 53950,
+};
+
+/// A retail server stall: every cmd the client sent ahead of the snapshot at
+/// `until` ran on `level`'s clock, and no cmd ran in the frames between.
+#[derive(Clone, Copy)]
+struct Hitch {
+    level: i32,
+    until: i32,
+}
 
 const EV_LANDING_PAIN: std::ops::RangeInclusive<i32> = 116..=138;
 const EV_PAIN: i32 = 187;
@@ -235,18 +251,23 @@ fn shape(line: &str, first_after: bool) -> String {
     out.join(" ")
 }
 
-/// `last_after` masks the last `after` line's origin too: in the walk
-/// capture that is a corpse the fatal drop left, and retail's corpse slid on
-/// at 134 units a second where ours stopped (cod11-player-clip.md 12).
-fn shapes(lines: &[String], last_after: bool) -> Vec<String> {
+/// `corpse_z` masks the height of the last `after` line: in the walk
+/// capture that is a corpse that slid on flat terrain, which sinks below a
+/// live player's rest on retail and not on ours (cod11-player-clip.md 12).
+fn shapes(lines: &[String], corpse_z: bool) -> Vec<String> {
     let afters: Vec<usize> = (0..lines.len())
         .filter(|&i| lines[i].starts_with("PROBE after "))
         .collect();
-    let masked = |i: usize| afters.first() == Some(&i) || last_after && afters.last() == Some(&i);
     lines
         .iter()
         .enumerate()
-        .map(|(i, l)| shape(l, masked(i)))
+        .map(|(i, l)| {
+            let line = shape(l, afters.first() == Some(&i));
+            match line.rsplit_once(", ") {
+                Some((head, _)) if corpse_z && afters.last() == Some(&i) => format!("{head}, <z>)"),
+                _ => line,
+            }
+        })
         .collect()
 }
 
@@ -321,6 +342,7 @@ fn run_ours(
     fs: vcod_common::pk3::Pk3Fs,
     sets: &[(&str, &str)],
     walk: Option<f32>,
+    hitch: Option<Hitch>,
     retail: &Retail,
 ) -> Ours {
     let probe = std::fs::read_to_string(PROBE_SRC).expect("read the probe");
@@ -384,9 +406,16 @@ fn run_ours(
                 // Where retail's snapshot is not in the fixture, a cmd
                 // stamped on the frame's own time reached it after the frame,
                 // as it did on almost every snapshot that is.
-                let upto = retail_ct
+                let mut upto = retail_ct
                     .get(&(next - shift))
                     .map_or(next - 1, |ct| ct + shift);
+                // The frame after the hitch's own runs its whole backlog, on
+                // the hitch's clock; the frames up to its end run nothing.
+                match hitch.map(|h| (h, next - shift)) {
+                    Some((h, t)) if t == h.level + FRAME_MS => upto = h.until - 1 + shift,
+                    Some((h, t)) if t > h.level + FRAME_MS && t < h.until => upto = i32::MIN,
+                    _ => {}
+                }
                 // Verbatim: the yaw word already had retail's `delta_angles`
                 // taken off, which the server adds back.
                 let mut cmds = Vec::new();
@@ -408,7 +437,10 @@ fn run_ours(
                     cmds.push(cmd);
                     last_sent = last_sent.max(server_time);
                 }
-                cl.send_cmds(&cmds);
+                // A hitch's backlog went out over many packets.
+                for chunk in cmds.chunks(vcod_common::net::MAX_MOVE_CMDS) {
+                    cl.send_cmds(chunk);
+                }
             }
         }
         common::step(&mut sv, &q, &mut cl, now);
@@ -496,20 +528,20 @@ fn tail_field<'a>(rest: &'a str, key: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no {key} in {rest}"))
 }
 
-/// The walk capture from the second drop to the fatal one, row by row
-/// ([`compare_rows`]) but for the event ring, whose footsteps count from the
-/// first drop's own cadence: each stun walks the player obliquely into the
-/// street's south wall, and each walk ends jittering against a pillar
-/// (cod11-player-clip.md 12), whose air frames ride every last bit of the
-/// slide. The corpse's rows after the fatal drop are not walk rows. Retail
-/// must have pressed into the wall under the stun: rows on its plane with a
-/// velocity into it.
+/// The walk capture from the second drop on, row by row ([`compare_rows`])
+/// but for the event ring, whose footsteps count from the first drop's own
+/// cadence: each stun walks the player obliquely into the street's south
+/// wall, and each walk ends jittering against a pillar (cod11-player-clip.md
+/// 12), whose air frames ride every last bit of the slide. The fatal drop
+/// lands inside [`WALK_HITCH`], whose cmds walk the dead player on until the
+/// end frame (8.12). Retail must have pressed into the wall under the stun:
+/// rows before the fatal drop on its plane with a velocity into it.
 fn compare_walk_rows(retail: &Retail, ours: &Ours, second: i32) -> Vec<String> {
     let fatal = (0..)
         .map_while(|n| drop_time(&retail.probe, n))
         .last()
         .expect("a fatal drop");
-    let (lines, diffs) = compare_rows(retail, ours, second, fatal, false);
+    let (lines, diffs) = compare_rows(retail, ours, second, i32::MAX, false);
     assert!(lines > 200, "only {lines} walk lines past the second drop");
     let pressed = retail
         .falls
@@ -541,7 +573,7 @@ fn compare_walk_rows(retail: &Retail, ours: &Ours, second: i32) -> Vec<String> {
 
 /// `sets` are the two bounds as retail's systeminfo carried them, `walk` the
 /// capture's `--probe-fall-walk` yaw.
-fn gate(fixture: &str, sets: &[(&str, &str)], walk: Option<f32>) {
+fn gate(fixture: &str, sets: &[(&str, &str)], walk: Option<f32>, hitch: Option<Hitch>) {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
@@ -552,7 +584,7 @@ fn gate(fixture: &str, sets: &[(&str, &str)], walk: Option<f32>) {
         "{fixture} has no finished run"
     );
     let retail_events = ring_events(retail.falls.iter());
-    let ours = run_ours(fs, sets, walk, &retail);
+    let ours = run_ours(fs, sets, walk, hitch, &retail);
     if let Some(path) = std::env::var_os("FALL_DUMP") {
         let mut out = String::new();
         for r in &retail.falls {
@@ -632,7 +664,7 @@ fn gate(fixture: &str, sets: &[(&str, &str)], walk: Option<f32>) {
 
 #[test]
 fn fall_damage_matches_retail_at_the_stock_bounds() {
-    gate(STOCK, &[], None);
+    gate(STOCK, &[], None, None);
 }
 
 #[test]
@@ -644,6 +676,7 @@ fn fall_damage_follows_the_bound_cvars_as_retail_does() {
             ("bg_fallDamageMaxHeight", "1000"),
         ],
         None,
+        None,
     );
 }
 
@@ -652,7 +685,7 @@ fn fall_damage_follows_the_bound_cvars_as_retail_does() {
 /// rest of the run, a fall and a landing on every frame (8.11).
 #[test]
 fn a_corpse_slides_down_the_grade_as_retail_does() {
-    gate(CORPSE, &[], None);
+    gate(CORPSE, &[], None, None);
 }
 
 /// Each stun walks the player obliquely into the street's south wall, where
@@ -661,5 +694,5 @@ fn a_corpse_slides_down_the_grade_as_retail_does() {
 /// (8.5).
 #[test]
 fn a_stunned_walk_into_a_wall_keeps_its_velocity_as_retail_does() {
-    gate(WALK, &[], Some(WALK_YAW));
+    gate(WALK, &[], Some(WALK_YAW), Some(WALK_HITCH));
 }
