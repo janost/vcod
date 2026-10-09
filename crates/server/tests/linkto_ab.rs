@@ -177,9 +177,21 @@ fn ent_number(log: &[String], name: &str) -> Option<u32> {
 /// probe's closing fatal has stopped it, watching the entities its `ents`
 /// lines name `watch` on the wire.
 fn run_ours(probe: &str, src: &str, watch: &[&str]) -> Option<Ours> {
-    let fs = vcod_common::testing::game_fs()?;
+    run_ours_patched(probe, src, watch, |b| b)
+}
+
+/// `run_ours` on a copy of the map whose bytes `patch` rewrote.
+fn run_ours_patched(
+    probe: &str,
+    src: &str,
+    watch: &[&str],
+    patch: fn(Vec<u8>) -> Vec<u8>,
+) -> Option<Ours> {
+    let mut fs = vcod_common::testing::game_fs()?;
     let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
-    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let bytes = patch(fs.read(&bsp_path).unwrap());
+    fs.overlay(&bsp_path, bytes.clone());
+    let bsp = vcod_common::bsp::parse(&bytes).unwrap();
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(common::cfg(MAP, probe), now);
     sv.overlay_script(&format!("maps/mp/gametypes/{probe}"), src);
@@ -540,4 +552,106 @@ fn the_linked_turret_and_item_go_out_like_retail() {
     }
     assert!(seen > 50, "only {seen} snapshots compared");
     assert!(bad.is_empty(), "{} differ:\n{}", bad.len(), bad.join("\n"));
+}
+
+const SERVER3: &str = "tests/fixtures/movers/mp_carentan-dm-trigwait.txt";
+
+/// The four same-length entity lump edits the trigwait capture ran on:
+/// `wait` keys on three trigger_multiples and auto2 turned into a
+/// trigger_once (the fixture's header).
+fn trigwait_bsp(mut bytes: Vec<u8>) -> Vec<u8> {
+    let edits: [(&[u8], &[u8]); 4] = [
+        (b"\"script_noteworthy\" \"2\"", b"\"wait\" \"5\""),
+        (b"\"script_noteworthy\" \"1\"", b"\"wait\" \"0\""),
+        (b"\"target\" \"auto5\"", b"\"wait\" \"-1\""),
+        (
+            b"\"targetname\" \"auto2\"\n\"script_gameobjectname\" \"re\"\n\"classname\" \"trigger_multiple\"",
+            b"\"targetname\" \"auto2\"\n\"script_gameobjectname\" \"re\"\n\"classname\" \"trigger_once\"",
+        ),
+    ];
+    for (old, new) in edits {
+        let at: Vec<usize> = bytes
+            .windows(old.len())
+            .enumerate()
+            .filter(|(_, w)| *w == old)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(at.len(), 1, "{}", String::from_utf8_lossy(old));
+        let mut padded = new.to_vec();
+        padded.resize(old.len(), b' ');
+        bytes[at[0]..at[0] + old.len()].copy_from_slice(&padded);
+    }
+    bytes
+}
+
+/// A trigwait run: the `f` lines, each phase's `d` rows as `(offset,
+/// defined, count)`, and its notify offsets, one per frame.
+type TrigWait = (
+    Vec<String>,
+    BTreeMap<String, Vec<(i32, i32, i32)>>,
+    BTreeMap<String, std::collections::BTreeSet<i32>>,
+);
+
+fn trigwait<'a>(lines: impl Iterator<Item = &'a str> + Clone) -> TrigWait {
+    let starts = capture(lines.clone()).starts;
+    let mut fs = Vec::new();
+    let mut ds: BTreeMap<String, Vec<(i32, i32, i32)>> = BTreeMap::new();
+    for line in lines.clone().filter(|l| !l.starts_with('#')) {
+        let Some(rest) = line.find("PROBE ").map(|i| &line[i + 6..]) else {
+            continue;
+        };
+        let t: Vec<&str> = rest.split_whitespace().collect();
+        match t.as_slice() {
+            ["f", ..] => fs.push(rest.to_string()),
+            ["d", phase, time, defined, count] => {
+                let time: i32 = time.parse().unwrap();
+                ds.entry(phase.to_string()).or_default().push((
+                    time - starts[*phase],
+                    defined.parse().unwrap(),
+                    count.parse().unwrap(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    (fs, ds, notifies(lines, &starts))
+}
+
+/// `Touch_Multi`'s `wait` against retail: a positive one never gates the
+/// notify, one not above 0 (and every trigger_once) spends the trigger on
+/// its first touch and frees it 100 ms on, and an `enableLinkTo` trigger is
+/// never spent (movers doc 17).
+#[test]
+fn touch_multi_spends_a_trigger_like_retail() {
+    static RUN: std::sync::OnceLock<Option<Ours>> = std::sync::OnceLock::new();
+    let Some(run) = RUN
+        .get_or_init(|| {
+            run_ours_patched(
+                "probe_trigwait",
+                include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_trigwait.gsc"),
+                &[],
+                trigwait_bsp,
+            )
+        })
+        .as_ref()
+    else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let retail_text = std::fs::read_to_string(SERVER3).unwrap();
+    let retail = trigwait(retail_text.lines());
+    let ours = trigwait(run.log.iter().map(String::as_str));
+    if report() {
+        println!("retail {retail:#?}\nours   {ours:#?}");
+    }
+    assert_eq!(retail.0, ours.0, "the triggers");
+    assert_eq!(retail.1, ours.1, "isdefined and the count, per frame");
+    assert_eq!(retail.2, ours.2, "the notifies");
+    assert!(
+        run.aborts
+            .iter()
+            .any(|a| a.contains("entity already has linkTo enabled")),
+        "{:?}",
+        run.aborts
+    );
 }

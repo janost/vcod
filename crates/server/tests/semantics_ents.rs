@@ -410,7 +410,6 @@ fn probe_bootstrap_matches_retail() {
         None,
         Rc::new(vcod_server::weapons::WeaponTable::empty()),
         0,
-        1, // rng seed, arbitrary nonzero; this probe never touches a trigger
         Carry::default(),
     )
     .expect("load mp_pavlov on probe_bootstrap");
