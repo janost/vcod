@@ -6,6 +6,7 @@ use wgpu::util::DeviceExt;
 
 use crate::camera::{Z_FAR, Z_NEAR};
 use crate::fx::sim::{FxLight, FxQuad, MAX_LIGHTS};
+use crate::gamma::GammaPass;
 use crate::hud::HudQuad;
 use crate::hud_text::{self, HudVert};
 use crate::sky;
@@ -1450,6 +1451,7 @@ pub struct Renderer {
     fx: FxPass,
     hud: HudTextPass,
     hud_pass: HudPass,
+    gamma: GammaPass,
     /// Kept past map load so later inline submodels resolve `textures/...`
     /// names the same way the world did.
     shaders: assets::Shaders,
@@ -1890,6 +1892,7 @@ impl Renderer {
         let fx = create_fx_pass(&device, format, &camera_layout, &vm_pass.skin_layout);
         let hud = create_hud_text_pass(&device, &queue, format);
         let hud_pass = create_hud_pass(&device, format);
+        let gamma = GammaPass::new(&device, format, width, height);
 
         let lib = ShaderLib::load(fs);
         Ok(Renderer {
@@ -1924,6 +1927,7 @@ impl Renderer {
             fx,
             hud,
             hud_pass,
+            gamma,
             hud_quad_cap_warned: false,
             shaders,
             shader_lib: lib,
@@ -2780,6 +2784,12 @@ impl Renderer {
         self.surface.configure(&self.device, &self.config);
         self.msaa_view = create_msaa_view(&self.device, self.config.format, w, h);
         self.depth_view = create_depth_view(&self.device, w, h);
+        self.gamma.resize(&self.device, w, h);
+    }
+
+    /// `r_gamma`, already clamped to retail's range; applied from the next frame.
+    pub fn set_gamma(&mut self, gamma: f32) {
+        self.gamma.set_gamma(&self.queue, gamma);
     }
 
     /// For a lost or outdated swapchain.
@@ -3186,7 +3196,11 @@ impl Renderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.msaa_view,
                     depth_slice: None,
-                    resolve_target: Some(&view),
+                    resolve_target: Some(if self.gamma.active() {
+                        self.gamma.scene_view()
+                    } else {
+                        &view
+                    }),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear),
                         // only the resolved single-sample image is needed
@@ -3449,6 +3463,9 @@ impl Renderer {
                 pass.set_index_buffer(hud.index_buf.slice(..), wgpu::IndexFormat::Uint16);
                 pass.draw_indexed(0..(hud_quads * 6) as u32, 0, 0..1);
             }
+        }
+        if self.gamma.active() {
+            self.gamma.draw(&mut encoder, &view);
         }
         self.queue.submit([encoder.finish()]);
         self.queue.present(surface_tex);
