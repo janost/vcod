@@ -8,7 +8,7 @@ use vcod_common::pk3::Pk3Fs;
 use vcod_common::{skeleton, weapon, xanim, xmodel};
 
 /// A weapon's clips, each bound to the rig's skeleton.
-pub type ViewAnims = HashMap<weapon::WeaponAnim, (xanim::XAnim, skeleton::AnimBinding)>;
+pub type ViewAnims = HashMap<weapon::WeaponAnim, (Arc<xanim::XAnim>, skeleton::AnimBinding)>;
 
 /// The skeleton and clips are shared with [`RigCache`]'s copy; the pose and
 /// the state machine are this rig's own.
@@ -28,6 +28,57 @@ pub struct ViewWeapon {
 pub struct RigCache {
     /// Keyed by (weapon file, hands override).
     rigs: HashMap<(String, Option<String>), Option<CachedRig>>,
+    parts: Parts,
+}
+
+/// Parsed files by name, shared across rigs: a hands model sits under every
+/// weapon, and a weapon's file, gun and clips under every hands model. A
+/// failed read or parse is remembered as `None`.
+#[derive(Default)]
+struct Parts {
+    weapons: HashMap<String, Option<Arc<HashMap<String, String>>>>,
+    models: HashMap<String, Option<Arc<xmodel::XModel>>>,
+    anims: HashMap<String, Option<Arc<xanim::XAnim>>>,
+}
+
+impl Parts {
+    fn weapon(&mut self, fs: &Pk3Fs, name: &str) -> Option<Arc<HashMap<String, String>>> {
+        self.weapons
+            .entry(name.to_string())
+            .or_insert_with(|| {
+                let text = fs.read(&format!("weapons/mp/{name}"))?;
+                Some(Arc::new(xmodel::parse_weapon(&String::from_utf8_lossy(
+                    &text,
+                ))))
+            })
+            .clone()
+    }
+
+    fn model(&mut self, fs: &Pk3Fs, name: &str) -> Option<Arc<xmodel::XModel>> {
+        self.models
+            .entry(name.to_string())
+            .or_insert_with(|| match xmodel::load(fs, name) {
+                Ok(m) => Some(Arc::new(m)),
+                Err(e) => {
+                    log::warn!("viewmodel {name}: {e:#}");
+                    None
+                }
+            })
+            .clone()
+    }
+
+    fn anim(&mut self, fs: &Pk3Fs, name: &str, key: &str) -> Option<Arc<xanim::XAnim>> {
+        self.anims
+            .entry(name.to_string())
+            .or_insert_with(|| match xanim::load(fs, name) {
+                Ok(a) => Some(Arc::new(a)),
+                Err(e) => {
+                    log::warn!("xanim {name} ({key}): {e:#}");
+                    None
+                }
+            })
+            .clone()
+    }
 }
 
 /// Hands then gun, shared between the cache and whoever draws them.
@@ -39,7 +90,7 @@ struct CachedRig {
 }
 
 impl RigCache {
-    /// [`load_view_weapon`] through the cache; a hit hands back the
+    /// [`load_with`] through the cache; a hit hands back the
     /// same models and a fresh rig (pose seeded with idle, state at rest).
     pub fn load(
         &mut self,
@@ -49,7 +100,7 @@ impl RigCache {
     ) -> Option<(ViewModels, Option<Box<ViewWeapon>>)> {
         let key = (name.to_string(), hands_model.map(str::to_string));
         let entry = self.rigs.entry(key).or_insert_with(|| {
-            load_view_weapon(fs, name, hands_model).map(|(models, rig)| CachedRig {
+            load_with(&mut self.parts, fs, name, hands_model).map(|(models, rig)| CachedRig {
                 models: models.into(),
                 rig: rig.map(|r| *r),
             })
@@ -65,7 +116,18 @@ impl RigCache {
     /// clip under the same name.
     pub fn clear(&mut self) {
         self.rigs.clear();
+        self.parts = Parts::default();
     }
+}
+
+/// [`load_with`] off empty parts.
+#[cfg(test)]
+pub fn load_view_weapon(
+    fs: &Pk3Fs,
+    name: &str,
+    hands_model: Option<&str>,
+) -> Option<(Vec<xmodel::XModel>, Option<Box<ViewWeapon>>)> {
+    load_with(&mut Parts::default(), fs, name, hands_model)
 }
 
 /// Hands first so the gun draws over them and the shared skeleton takes the
@@ -74,40 +136,30 @@ impl RigCache {
 /// `hands_model`, when given, replaces the file's `handModel`: retail draws the hands `ps.viewmodelIndex` names
 /// (docs/research/cod11-gsc-object-model.md, "`setViewmodel` reaches
 /// `ps.viewmodelIndex`"). The `xmodel/` prefix is optional.
-pub fn load_view_weapon(
+fn load_with(
+    parts: &mut Parts,
     fs: &Pk3Fs,
     name: &str,
     hands_model: Option<&str>,
 ) -> Option<(Vec<xmodel::XModel>, Option<Box<ViewWeapon>>)> {
-    let text = fs.read(&format!("weapons/mp/{name}"))?;
-    let weapon = xmodel::parse_weapon(&String::from_utf8_lossy(&text));
+    let weapon = parts.weapon(fs, name)?;
     let hands = match hands_model {
         Some(h) => h.strip_prefix("xmodel/").unwrap_or(h),
         None => weapon.get("handModel")?,
     };
-    let mut models = Vec::new();
-    for (i, name) in [hands, weapon.get("gunModel")?].into_iter().enumerate() {
-        match xmodel::load(fs, name) {
-            Ok(mut m) => {
-                if i == 0 {
-                    xmodel::apply_viewhands_placeholder_override(&mut m);
-                }
-                models.push(m);
-            }
-            Err(e) => {
-                log::warn!("viewmodel {name}: {e:#}");
-                return None;
-            }
-        }
-    }
-    let animated = load_anims(fs, &weapon, &models).map(Box::new);
+    let mut hands = (*parts.model(fs, hands)?).clone();
+    xmodel::apply_viewhands_placeholder_override(&mut hands);
+    let gun = (*parts.model(fs, weapon.get("gunModel")?)?).clone();
+    let models = vec![hands, gun];
+    let animated = load_anims(parts, fs, &weapon, &models).map(Box::new);
     Some((models, animated))
 }
 
 /// A clip that is unnamed or fails to load is skipped and its state plays
 /// idle. Without idle there is no fallback, so the rig is dropped and the
 /// viewmodel draws in bind pose.
-pub fn load_anims(
+fn load_anims(
+    parts: &mut Parts,
     fs: &Pk3Fs,
     weapon: &HashMap<String, String>,
     models: &[xmodel::XModel],
@@ -128,12 +180,9 @@ pub fn load_anims(
             log::debug!("weapon: no {key}, that state will play idle");
             continue;
         };
-        match xanim::load(fs, name) {
-            Ok(anim) => {
-                let binding = skeleton.bind(&anim);
-                anims.insert(which, (anim, binding));
-            }
-            Err(e) => log::warn!("xanim {name} ({key}): {e:#}"),
+        if let Some(anim) = parts.anim(fs, name, key) {
+            let binding = skeleton.bind(&anim);
+            anims.insert(which, (anim, binding));
         }
     }
     if !anims.contains_key(&weapon::WeaponAnim::Idle) {
@@ -439,6 +488,29 @@ mod tests {
         assert!(!Arc::ptr_eq(&m1, &us), "other hands are another entry");
         assert!(cache.load(&fs, "no_such_weapon_mp", None).is_none());
         assert!(cache.load(&fs, "no_such_weapon_mp", None).is_none());
+    }
+
+    /// Two hands under one weapon parse its clips once, and one hands model
+    /// under two weapons is parsed once.
+    #[test]
+    fn rigs_share_parsed_parts_by_name() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let mut cache = RigCache::default();
+        let us = Some("xmodel/viewmodel_hands_us");
+        let ru = Some("xmodel/viewmodel_hands_russian");
+        let (_, a) = cache.load(&fs, "kar98k_mp", us).expect("kar98k, us");
+        let (_, b) = cache.load(&fs, "kar98k_mp", ru).expect("kar98k, russian");
+        let idle = |r: &Option<Box<ViewWeapon>>| {
+            r.as_ref().expect("rig").anims[&weapon::WeaponAnim::Idle]
+                .0
+                .clone()
+        };
+        assert!(Arc::ptr_eq(&idle(&a), &idle(&b)), "one parse of the clip");
+        cache.load(&fs, "m1carbine_mp", us).expect("carbine, us");
+        assert_eq!(cache.parts.models.len(), 4, "two hands, two guns");
+        assert_eq!(cache.parts.weapons.len(), 2);
     }
 
     /// A sight already rising on the rig's first frame keys only `tag_torso`;
