@@ -44,7 +44,7 @@ The layout is CoD2's `XModelCollSurf_s` / `XModelCollTri_s` unchanged. VERIFIED 
 - `contents` values seen: `0x1` (solid, 1418 surfaces), `0x0` (288: tree canopies, hanging signs), `0x10` (112, on 38 models: lamp and headlight glass; meaning not verified). A tree is one solid trunk surface plus canopy surfaces at 0, which is why the player walks through the canopy in retail. vcod collides on the solid bit only.
 - `surf_flags` values seen: `0xd00000` (942), `0x1500000` (247, trunks and crates), `0xd04000`, `0x4000` (canopies), `0x900000` (glass), `0x400000`, `0xb00000`, `0x4010`, `0x0`. Not decoded; they look like the BSP material surface flags and are kept on `CollSurf` for whoever needs them.
 - The render mesh is far denser: `barrel_high0` has 372 triangles, its collision surface 28.
-- Stock MP maps place 7168 `misc_model`s over 235 models; 2700 placements (184 models) carry collision. The 51 placed models without (`bookrow`, `grasstuft`, `bottle_wine`, `doorknobcrystal`, `boxhedge`, every `shadow_*`) are passable in retail too. `spawnflags` on those entities is only ever 0 or 2, mostly on winter trees; its meaning is unknown and vcod ignores it (INFERRED to be collision-unrelated, not verified).
+- Stock MP maps place 7168 `misc_model`s over 235 models; 2700 placements (184 models) carry collision. The 51 placed models without (`bookrow`, `grasstuft`, `bottle_wine`, `doorknobcrystal`, `boxhedge`) are passable in retail too. `spawnflags` on those entities is only ever 0 or 2, mostly on winter trees; its meaning is unknown and vcod ignores it (INFERRED to be collision-unrelated, not verified).
 
 ## `xmodelparts/<lod>`
 

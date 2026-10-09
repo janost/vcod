@@ -24,28 +24,24 @@ pub struct Placement {
     pub scale: Vec3,
     /// `lightingPrecalc`, clamped to 0..1; white when absent.
     pub precalc: Vec3,
-    /// Coplanar shadow decal (`shadow_*` / `*_shadow` model names): baked
-    /// onto the ground, so it draws depth-biased and blended.
-    pub shadow_decal: bool,
 }
 
-/// True for coplanar shadow decals: `shadow_tree_*` / `shadow_crate` and the
-/// shrub `*_shadow` twins on bocage/italy. The `_noshadow` variants are the
-/// real geometry and stay false.
-pub fn is_shadow_decal(model: &str) -> bool {
-    model.starts_with("shadow_") || model.ends_with("_shadow")
+/// Retail's static-model loader skips every `xmodel/shadow_*` placement
+/// (`strnicmp`, 0x4dbae0): those models only cast the compiler's lightmap
+/// shadows and are never drawn (cod11-light-grid-and-leaf-lights.md 1).
+pub fn is_unregistered(model: &str) -> bool {
+    model
+        .get(..7)
+        .is_some_and(|p| p.eq_ignore_ascii_case("shadow_"))
 }
 
-/// One prop draw batch: every triangle in the map that uses this skin and
-/// shadow-decal class (a skin like `wood@misc_crate1` serves both real crates
-/// and `shadow_crate`, so the flag splits them into separate batches).
+/// One prop draw batch: every triangle in the map that uses this skin.
 pub struct Batch {
     /// Skin filename with extension under `skins/`, not a `textures/` material
     /// path; resolves through `assets::load_skin_image`.
     pub skin: String,
     pub first_index: u32,
     pub index_count: u32,
-    pub shadow_decal: bool,
 }
 
 /// All props of a map, ready to append to the map's vertex/index buffers.
@@ -128,7 +124,6 @@ pub fn placements(entities: &str) -> Vec<Placement> {
             angles: Vec3::from_array(angles),
             scale: Vec3::from_array(scale),
             precalc,
-            shadow_decal: is_shadow_decal(model),
         });
     }
     out
@@ -209,13 +204,6 @@ fn skin_gen(fs: &Pk3Fs, skin: &str) -> SkinGen {
     }
 }
 
-/// A shadow decal's colour: the precalc tint at full scale, as vcod drew
-/// every prop before the lighting port.
-fn decal_color(p: &Placement) -> [u8; 4] {
-    let b = |v: f32| (v * 255.0).round() as u8;
-    [b(p.precalc.x), b(p.precalc.y), b(p.precalc.z), 255]
-}
-
 /// A model that fails to load is warned once and its placements dropped.
 fn load_model(fs: &Pk3Fs, name: &str) -> Option<xmodel::XModel> {
     xmodel::load(fs, name)
@@ -223,7 +211,7 @@ fn load_model(fs: &Pk3Fs, name: &str) -> Option<xmodel::XModel> {
         .ok()
 }
 
-/// Bakes every placed prop into world geometry, one batch per (skin, decal),
+/// Bakes every placed prop into world geometry, one batch per skin,
 /// lit from the map's lights.
 pub fn build(fs: &Pk3Fs, bsp: &Bsp) -> Props {
     build_with(fs, &bsp.entities, Some(StaticLighting::new(bsp)))
@@ -238,13 +226,17 @@ fn build_with(fs: &Pk3Fs, entities: &str, mut lighting: Option<StaticLighting>) 
     let mut lit_normals: Vec<Vec3> = Vec::new();
     let mut cache: HashMap<String, Option<xmodel::XModel>> = HashMap::new();
     let mut verts: Vec<DrawVert> = Vec::new();
-    let mut groups: BTreeMap<(String, bool), Vec<u32>> = BTreeMap::new();
+    let mut groups: BTreeMap<String, Vec<u32>> = BTreeMap::new();
     let mut drawn = 0usize;
 
-    // per placement: skin -> (decal, offset in the group, count); plus bounds
-    let mut runs: Vec<(u32, String, bool, u32, u32)> = Vec::new();
+    // per placement: skin -> (offset in the group, count); plus bounds
+    let mut runs: Vec<(u32, String, u32, u32)> = Vec::new();
     let mut bounds: Vec<(Vec3, Vec3)> = Vec::new();
     for (pi, p) in placements.iter().enumerate() {
+        if is_unregistered(&p.model) {
+            bounds.push((Vec3::ZERO, Vec3::ZERO));
+            continue;
+        }
         let model = cache
             .entry(p.model.clone())
             .or_insert_with(|| load_model(fs, &p.model));
@@ -258,7 +250,7 @@ fn build_with(fs: &Pk3Fs, entities: &str, mut lighting: Option<StaticLighting>) 
         let mut hi = Vec3::NEG_INFINITY;
         // a placement's surfaces sharing a skin land consecutively in that
         // skin's group, so one (offset, count) per skin stays contiguous
-        let mut this: HashMap<(&str, bool), (u32, u32)> = HashMap::new();
+        let mut this: HashMap<&str, (u32, u32)> = HashMap::new();
         for surf in &model.surfaces {
             let Some(skin) = model.materials.get(surf.material) else {
                 continue;
@@ -276,14 +268,13 @@ fn build_with(fs: &Pk3Fs, entities: &str, mut lighting: Option<StaticLighting>) 
                 .entry(skin.clone())
                 .or_insert_with(|| skin_gen(fs, skin));
             surf_runs.push((pi, base as usize, verts.len(), sg));
-            let key = (skin.as_str(), p.shadow_decal);
-            let group = groups.entry((skin.clone(), p.shadow_decal)).or_default();
-            let run = this.entry(key).or_insert((group.len() as u32, 0));
+            let group = groups.entry(skin.clone()).or_default();
+            let run = this.entry(skin.as_str()).or_insert((group.len() as u32, 0));
             group.extend(surf.indices.iter().map(|&i| base + i as u32));
             run.1 += surf.indices.len() as u32;
         }
-        for ((skin, decal), (offset, count)) in this {
-            runs.push((pi as u32, skin.to_string(), decal, offset, count));
+        for (skin, (offset, count)) in this {
+            runs.push((pi as u32, skin.to_string(), offset, count));
         }
         bounds.push(if lo.x <= hi.x {
             (lo, hi)
@@ -293,14 +284,13 @@ fn build_with(fs: &Pk3Fs, entities: &str, mut lighting: Option<StaticLighting>) 
     }
 
     // Retail registers static models onto a list it then lights head first,
-    // so in reverse entity order; that order fills the grid cache. It skips
-    // `xmodel/shadow_*` (0x4dbae0).
+    // so in reverse entity order; that order fills the grid cache.
     let mut model_lights: Vec<Option<ModelLights>> = vec![None; placements.len()];
     if let Some(l) = lighting.as_mut() {
         let t = std::time::Instant::now();
-        for (pi, p) in placements.iter().enumerate().rev() {
+        for pi in (0..placements.len()).rev() {
             let (lo, hi) = bounds[pi];
-            if p.model.starts_with("shadow_") || lo == hi {
+            if lo == hi {
                 continue;
             }
             model_lights[pi] = Some(l.model_lights((lo + hi) * 0.5));
@@ -311,24 +301,25 @@ fn build_with(fs: &Pk3Fs, entities: &str, mut lighting: Option<StaticLighting>) 
             l.misses
         );
     }
+    // Vertex alpha 255 marks a `lightingDiffuse` skin, which dynamic lights
+    // reach (`vs_prop` in the client's shader.wgsl); the other gens read 0.
     let identity = static_light::identity_byte();
     for (pi, first, end, sg) in surf_runs {
         let p = &placements[pi];
         let precalc = static_light::precalc_byte;
         for (v, n) in verts[first..end].iter_mut().zip(&lit_normals[first..end]) {
             v.color = match sg {
-                _ if p.shadow_decal => decal_color(p),
                 SkinGen::Diffuse => match (&lighting, &model_lights[pi]) {
                     (Some(l), Some(m)) => l.vertex_color(m, Vec3::from(v.pos), *n),
                     _ => [identity, identity, identity, 255],
                 },
-                SkinGen::IdentityLighting => [identity, identity, identity, 255],
-                SkinGen::ConstLighting(c) => [precalc(c.x), precalc(c.y), precalc(c.z), 255],
+                SkinGen::IdentityLighting => [identity, identity, identity, 0],
+                SkinGen::ConstLighting(c) => [precalc(c.x), precalc(c.y), precalc(c.z), 0],
                 SkinGen::Precalc | SkinGen::Other => [
                     precalc(p.precalc.x),
                     precalc(p.precalc.y),
                     precalc(p.precalc.z),
-                    255,
+                    0,
                 ],
             };
         }
@@ -336,24 +327,20 @@ fn build_with(fs: &Pk3Fs, entities: &str, mut lighting: Option<StaticLighting>) 
 
     let mut indices = Vec::new();
     let mut batches = Vec::new();
-    let mut batch_of: HashMap<(String, bool), (u32, u32)> = HashMap::new();
-    for ((skin, decal), idx) in groups {
-        batch_of.insert(
-            (skin.clone(), decal),
-            (batches.len() as u32, indices.len() as u32),
-        );
+    let mut batch_of: HashMap<String, (u32, u32)> = HashMap::new();
+    for (skin, idx) in groups {
+        batch_of.insert(skin.clone(), (batches.len() as u32, indices.len() as u32));
         batches.push(Batch {
             skin,
             first_index: indices.len() as u32,
             index_count: idx.len() as u32,
-            shadow_decal: decal,
         });
         indices.extend(idx);
     }
     let ranges = runs
         .into_iter()
-        .map(|(pi, skin, decal, offset, count)| {
-            let (batch, first) = batch_of[&(skin, decal)];
+        .map(|(pi, skin, offset, count)| {
+            let (batch, first) = batch_of[&skin];
             (
                 pi,
                 IndexRange {
@@ -495,7 +482,6 @@ mod tests {
             angles: Vec3::new(0.0, 90.0, 0.0),
             scale: Vec3::splat(2.0),
             precalc: Vec3::ONE,
-            shadow_decal: false,
         };
         let mut out = Vec::new();
         placed_collision_tris(&p, &model, &mut out);
@@ -574,7 +560,6 @@ mod tests {
                 angles: Vec3::new(5.0, 90.0, 15.0),
                 scale: Vec3::splat(2.0),
                 precalc: Vec3::new(0.5, 0.25, 0.0),
-                shadow_decal: false,
             }
         );
         assert_eq!(
@@ -585,7 +570,6 @@ mod tests {
                 angles: Vec3::ZERO,
                 scale: Vec3::ONE,
                 precalc: Vec3::ONE,
-                shadow_decal: false,
             }
         );
     }
@@ -600,14 +584,13 @@ mod tests {
     }
 
     #[test]
-    fn shadow_decal_matches_prefixed_and_suffixed_models() {
-        assert!(is_shadow_decal("shadow_crate"));
-        assert!(is_shadow_decal("shadow_tree_pine_mid"));
-        assert!(is_shadow_decal("FullSpikeyShrub_shadow"));
-        // the non-shadow twin and unrelated names stay normal props
-        assert!(!is_shadow_decal("fullspikeyshrub_nocol_noshadow"));
-        assert!(!is_shadow_decal("fullspikeyshrub"));
-        assert!(!is_shadow_decal("crate_misc1"));
+    fn shadow_models_are_unregistered() {
+        assert!(is_unregistered("shadow_crate"));
+        assert!(is_unregistered("Shadow_tree_pine_mid"));
+        // only the prefix counts, as in retail's strnicmp
+        assert!(!is_unregistered("FullSpikeyShrub_shadow"));
+        assert!(!is_unregistered("fullspikeyshrub_nocol_noshadow"));
+        assert!(!is_unregistered("crate_misc1"));
     }
 
     #[test]
@@ -661,7 +644,6 @@ mod tests {
             angles: Vec3::new(0.0, 90.0, 0.0), // yaw +90: +x turns into +y
             scale: Vec3::new(2.0, 2.0, 4.0),
             precalc: Vec3::ONE,
-            shadow_decal: false,
         };
         let v = xmodel::VmVert {
             pos: [1.0, 0.0, 1.0],

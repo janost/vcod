@@ -65,6 +65,8 @@ const F_SKY: u32 = 512u;
 const F_VERTEX_HALF: u32 = 1024u;
 // deformVertexes wave: displace along the vertex normal
 const F_DEFORM_WAVE: u32 = 2048u;
+// framebuffer colour that retail's gamma ramp doubles on display
+const F_OVERBRIGHT: u32 = 4096u;
 // glAlphaFunc thresholds are 128/255 for both LT128 and GE128.
 const ATEST128: f32 = 0.5019607843137255;
 
@@ -88,6 +90,10 @@ struct VsOut {
 
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
+    return map_vertex(in);
+}
+
+fn map_vertex(in: VsIn) -> VsOut {
     var out: VsOut;
     let world = camera.model * vec4<f32>(in.pos, 1.0);
     out.clip = camera.view_proj * world;
@@ -175,6 +181,39 @@ fn vs_stage(in: VsIn) -> VsOut {
     return out;
 }
 
+// Retail's dynamic lights on a lit model vertex, in framebuffer units:
+// RE_AddLightToScene (0x4e9b00) builds a point light with diffuse
+// identityLight * r^2 / 32 * rgb, no ambient and attenuation 1 / (d^2 + 0.001),
+// and the light pick (0x4b69f0) takes it within twice its radius
+// (cod11-light-grid-and-leaf-lights.md, section 11).
+fn dlight_term(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+    var sum = vec3(0.0);
+    for (var i = 0u; i < 8u; i++) {
+        let l = fx_lights.pos_radius[i];
+        if (l.w <= 0.0) { continue; }
+        let to = l.xyz - p;
+        let d2 = dot(to, to);
+        if (d2 > 4.0 * l.w * l.w) { continue; }
+        let lambert = max(dot(n, to * inverseSqrt(max(d2, 1e-6))), 0.0);
+        sum += fx_lights.color[i].rgb * (0.5 * l.w * l.w / 32.0 * lambert / (d2 + 0.001));
+    }
+    return sum;
+}
+
+// Static props: the baked vertex colour is a framebuffer value. Vertex alpha
+// marks a `lightingDiffuse` skin, the only kind retail relights while a
+// dynamic light is near (0x505260); the sum clamps like GL lighting does.
+@vertex
+fn vs_prop(in: VsIn) -> VsOut {
+    var out = map_vertex(in);
+    var rgb = in.color.rgb;
+    if (in.color.a > 0.5) {
+        rgb = min(rgb + dlight_term(in.pos, normalize(in.normal)), vec3(1.0));
+    }
+    out.color = vec4<f32>(rgb, 1.0);
+    return out;
+}
+
 // Quadratic falloff to zero at the radius; zero-radius slots are unused.
 fn fx_light_term(world_pos: vec3<f32>) -> vec3<f32> {
     var sum = vec3(0.0);
@@ -223,6 +262,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(apply_fog(shade(in, albedo), in.world_pos), 1.0);
 }
 
+// Props: x2 for the display doubling of retail's gamma ramp, no lightmap.
+@fragment
+fn fs_prop(in: VsOut) -> @location(0) vec4<f32> {
+    let albedo = textureSample(t_diffuse, s_diffuse, in.uv);
+    if (albedo.a < 0.5) { discard; }
+    return vec4<f32>(apply_fog(albedo.rgb * in.color.rgb * 2.0, in.world_pos), 1.0);
+}
+
 // Alpha-to-coverage: sampled alpha drives MSAA coverage for antialiased cutout edges.
 @fragment
 fn fs_overlay(in: VsOut) -> @location(0) vec4<f32> {
@@ -235,19 +282,6 @@ fn fs_overlay(in: VsOut) -> @location(0) vec4<f32> {
 fn fs_layer(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = textureSample(t_diffuse, s_diffuse, in.uv);
     return vec4<f32>(apply_fog(shade(in, albedo), in.world_pos), albedo.a * in.color.a);
-}
-
-// Coplanar shadow decals (`shadow_*` / `*_shadow` props): soft-edged dark
-// skins, so the sampled alpha reaches the blend; nearly-empty texels discard
-// to save the overdraw.
-@fragment
-fn fs_prop_decal(in: VsOut) -> @location(0) vec4<f32> {
-    let albedo = textureSample(t_diffuse, s_diffuse, in.uv);
-    if (albedo.a < 0.01) { discard; }
-    return vec4<f32>(
-        apply_fog(shade(in, albedo), in.world_pos) * albedo.a * in.color.a,
-        albedo.a * in.color.a,
-    );
 }
 
 // alphaFunc decode; GE128 carries both low bits so test the pair first.
@@ -293,6 +327,9 @@ fn fs_stage(in: VsOut) -> @location(0) vec4<f32> {
             vrgb = vrgb * 0.5;
         }
         col = vec4<f32>(col.rgb * vrgb, col.a);
+    }
+    if ((stage.flags & F_OVERBRIGHT) != 0u) {
+        col = vec4<f32>(col.rgb * 2.0, col.a);
     }
     col.a = c0.a * c1.a * stage.tint.a;
     if ((stage.flags & F_VERTEX_ALPHA) != 0u) {
