@@ -1336,8 +1336,7 @@ pub fn build_instances(
             EntityVisual::Item(index) => {
                 // Ammo and health rows (65-69) carry their own world model; a
                 // mod's dropped health pack is one.
-                if let Some((.., model)) = STATIC_ITEMS.iter().find(|(i, ..)| *i == index as usize)
-                {
+                if let Some((.., model)) = STATIC_ITEMS.iter().find(|(i, ..)| *i == index) {
                     if let Some(handle) = resolve_model(model_cache, renderer, fs, model) {
                         out.push(DynamicModelInstance {
                             model: handle,
