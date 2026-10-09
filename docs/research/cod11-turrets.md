@@ -1402,12 +1402,11 @@ may carry 0xC000; no capture covers it.
   diverges from the view yaw by up to roughly 45 degrees at the arc's
   edges; unmeasured, no capture pins which pose a live round is traced
   against.
-- The gunner's `ps.eFlags` bit 0x400 (`EF_FIRING`) is set only on the frame
-  `fire_tick` actually fires the gun, tied to the gun's own cooldown, where
-  12.4 infers it as the generic attack-bit flag a firing entity carries for
-  as long as the trigger is held. INFERRED and unmeasured: whether retail's
-  flag ever separates from the gun's own shot for a turret gunner
-  specifically is not covered by any capture.
+- The gunner's `ps.eFlags` bit 0x400 (`EF_FIRING`) comes from two places on
+  ours: `fire_tick`'s shot and `PmoveSingle`'s trigger bit (combat doc
+  16.5), which holds for every cmd with attack held, the gunner's own weapon
+  ready and its clip loaded. INFERRED and unmeasured: whether retail's ever
+  separates from the gun's own shot for a gunner whose own weapon is empty.
 - The turret pass's damage callback (`apply_effects`, one `deliver_hits` per hit, in round order) runs after the tick's
   one `take_link_ops` drain, so a `linkTo`/`unlink` or a client spawn its
   script notify queues waits for the next tick's drain rather than reaching

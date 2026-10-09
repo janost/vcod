@@ -1,6 +1,7 @@
 //! The server's script runtime: owns the VM, resolves scripts out of the
 //! paks, and steps threads once per server frame.
 
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::game::host::{ClientEvent, GameHost, SpawnRequest};
@@ -116,6 +117,14 @@ const HINT_MG42: i32 = 6;
 /// (`docs/research/cod11-events-and-fx.md` section 1, turrets doc 6.3, 6.4).
 use vcod_common::net::event_ids::EV_FIRE_WEAPON_MG42;
 pub(crate) use vcod_common::net::event_ids::EV_SOUND_ALIAS;
+
+/// Where `G_RunFrame`'s entity loop stands this frame
+/// ([`ScriptRuntime::run_entity_pass`]).
+pub struct EntityPass {
+    next: u32,
+    /// Every entity that has had its `G_RunEntity` this frame (0x502cb).
+    ran: HashSet<EntId>,
+}
 
 pub struct ScriptRuntime {
     vm: Vm,
@@ -1876,22 +1885,6 @@ impl ScriptRuntime {
         }
     }
 
-    /// One frame of the missile pass (`docs/research/cod11-combat.md` 12).
-    pub fn run_missiles(
-        &mut self,
-        world: Option<&vcod_common::collision::CollisionWorld>,
-        sims: &[(usize, &crate::spectate::ClientSim)],
-        now_ms: i32,
-    ) -> crate::game::missile::MissileFrame {
-        let host = &mut self.host;
-        let frame = host.missiles.run(world, sims, now_ms);
-        for id in &frame.freed {
-            host.free_entity(*id);
-        }
-        host.missiles.sync_origins(&mut host.ents);
-        frame
-    }
-
     /// The missiles on the wire this frame. They are `SVF_BROADCAST`, so the
     /// caller adds them past its own PVS cull.
     pub fn missiles(&self) -> &crate::game::missile::Missiles {
@@ -1950,8 +1943,24 @@ impl ScriptRuntime {
         &self.host.script_log
     }
 
-    /// One server frame of script.
+    /// One server frame of script with no clients to trace a missile
+    /// against: [`ScriptRuntime::run_threads`], then the whole entity pass.
+    /// The blasts it sets off go unwalked; `Server::tick` runs the halves
+    /// itself.
     pub fn run_frame(&mut self, now_ms: i32) {
+        self.run_threads(now_ms);
+        let world = self.host.world.clone();
+        let collision = world.as_deref().map(|w| &w.collision);
+        let mut pass = self.begin_entity_pass();
+        while self
+            .run_entity_pass(&mut pass, collision, &[], now_ms)
+            .is_some()
+        {}
+    }
+
+    /// `G_RunFrame` up to its entity loop: the packet pass, `level.time`,
+    /// the touch and item notifies, thinks, movers and the thread pass.
+    pub fn run_threads(&mut self, now_ms: i32) {
         // The packet pass, on the clock the netcode raised its events with:
         // retail runs `ClientBegin`, `ClientCommand` and `ClientDisconnect`
         // from `SV_ExecuteClientMessage` (map-cycle doc, 4.4), before
@@ -2031,16 +2040,91 @@ impl ScriptRuntime {
         for e in self.vm.run_frame(&mut self.host, now_ms) {
             log::warn!("script error: {e:?}");
         }
-        // The items' own entity pass, after the threads
-        // (docs/research/cod11-items.md 14).
+    }
+
+    /// The start of `G_RunFrame`'s entity loop (0x50912), after the threads
+    /// and every client write they made.
+    pub fn begin_entity_pass(&mut self) -> EntityPass {
+        crate::game::link::prune(&mut self.host);
+        EntityPass {
+            next: 0,
+            ran: HashSet::new(),
+        }
+    }
+
+    /// `G_RunFrame`'s entity loop (0x50930..0x50975): `G_RunEntity` once per
+    /// in-use entity by number, its link parent first, so items, links and
+    /// missiles interleave the way retail's do (combat doc 14.7). Returns at
+    /// each blast, which the caller walks before calling again; `None` once
+    /// the loop is past the last entity. An entity spawned on the way runs
+    /// this frame when its number is still ahead of the loop.
+    pub fn run_entity_pass(
+        &mut self,
+        pass: &mut EntityPass,
+        world: Option<&vcod_common::collision::CollisionWorld>,
+        sims: &[(usize, &crate::spectate::ClientSim)],
+        now_ms: i32,
+    ) -> Option<crate::game::missile::Explosion> {
+        while pass.next < self.host.ents.num_entities() {
+            let Some(id) = self.host.ents.handle(pass.next) else {
+                pass.next += 1;
+                continue;
+            };
+            // 0x50939..0x50949. The parent's turn stamps it, so its own
+            // turn later in the loop is a no-op (0x502cb).
+            if let Some(parent) = self.host.links.get(id).map(|l| l.parent)
+                && pass.ran.insert(parent)
+                && let Some(x) = self.run_entity(&pass.ran, parent, world, sims, now_ms)
+            {
+                // `pass.next` stays, so the next call runs the child.
+                return Some(x);
+            }
+            pass.next += 1;
+            if pass.ran.insert(id)
+                && let Some(x) = self.run_entity(&pass.ran, id, world, sims, now_ms)
+            {
+                return Some(x);
+            }
+        }
+        None
+    }
+
+    /// One `G_RunEntity` (0x502bc) for the arms vcod runs in the loop: a
+    /// missile (0x50375), a link (0x50392, and `G_RunMover`'s 0x57623) and an
+    /// item (0x503f5). Movers, thinks and clients run elsewhere.
+    fn run_entity(
+        &mut self,
+        ran: &HashSet<EntId>,
+        id: EntId,
+        world: Option<&vcod_common::collision::CollisionWorld>,
+        sims: &[(usize, &crate::spectate::ClientSim)],
+        now_ms: i32,
+    ) -> Option<crate::game::missile::Explosion> {
+        use crate::game::missile::Turn;
         let host = &mut self.host;
-        self.vm
-            .with_cx(|cx| crate::game::item::run_items(host, cx, now_ms));
-        // `G_GeneralLink`, in the entity pass after the threads: what this
-        // frame's snapshot carries and the next frame's script reads
-        // (docs/research/cod11-movers.md 15).
-        let host = &mut self.host;
-        self.vm.with_cx(|cx| crate::game::link::run(host, cx));
+        match host.missiles.run_one(id, world, sims, now_ms) {
+            Some(Turn::Flew) => {
+                host.missiles.sync_origin(&mut host.ents, id);
+                return None;
+            }
+            Some(Turn::Exploded(x)) => {
+                host.missiles.sync_origin(&mut host.ents, id);
+                return Some(x);
+            }
+            Some(Turn::Freed) => {
+                host.free_entity(id);
+                return None;
+            }
+            None => {}
+        }
+        // A parent that has not had its turn is where script left it.
+        let fresh = host.links.get(id).is_some_and(|l| ran.contains(&l.parent));
+        self.vm.with_cx(|cx| {
+            if !crate::game::link::run_linked(host, cx, id, fresh) {
+                crate::game::item::run_item(host, cx, id, now_ms);
+            }
+        });
+        None
     }
 
     /// What the bots read off stock `sd.gsc` this frame

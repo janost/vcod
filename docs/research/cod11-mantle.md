@@ -350,18 +350,115 @@ maxs `(6,6,6)` swept from the origin **54 units along yaw - 180 degrees**,
 that is, straight backwards from the facing (constants at rodata 0x70174,
 0x70178, 0x7017c, 0x70180). That is the space the body needs behind you when
 you lie down, and it is why standing with your back to a wall refuses the
-prone. Seven further traces follow, using 22, 2.5, 54, 1.5 and 5, and feed the
-two `vectopitch` calls and the `AngleSubtract` at 0x2dd63-0x2ddbc, which
-produce `proneDirectionPitch` (ps+0x36c) and `proneTorsoPitch` (ps+0x370) --
-the pitch the body takes on sloped ground. INFERRED, from the call sequence:
-those seven are ground sampling along the body rather than further clearance
-tests. They are not read out field by field here, because both outputs are
-animation inputs: they change how a prone body is drawn, not whether it may
-lie down or where it may look.
+prone. The traces that follow sample the ground along the body and write
+`fTorsoHeight`, `fTorsoPitch` and `fWaistPitch` ("The ground samples",
+below; an earlier reading of this section had them writing the two prone
+pitches, which `PM_UpdatePronePitch` owns).
 
 VERIFIED live 2026-09-01, independently of the disassembly: the same input
 held for the same three seconds went prone at one spawn and was refused at
 another on the same map.
+
+### The ground samples
+
+Read 2026-10-09 with `tools/re/annotate_func.py` over 0x2d428..0x2e212.
+Rodata, VERIFIED: 10.0 (0x7016c), 0.7 (0x70170), -6.0 and 6.0 (0x70174,
+0x70178), 180.0 (0x7017c), 54.0 (0x70180), 2.0 (0x70184), 24.0 (0x70188),
+22.0 (0x7018c), 60.0 (0x70190), 2.5 (0x70194), -0.75 (0x70198), 30.0
+(0x7019c), 0.5 (0x701a0), 1.5 (0x701a4), -50.0 (0x701a8), 70.0 (0x701ac),
+-0.0 (0x701b0), 5.0 (0x701b4).
+
+The arguments, VERIFIED off the four call sites (`PM_CheckDuck` 0x31947,
+`PM_UpdateViewAngles` 0x33181, `PM_UpdatePronePitch` 0x33434,
+`PM_VerifyPronePosition` 0x34766): `ps.clientNum`, `&ps.origin`,
+`ps+0x330` (the player's maxs x, 15), 30.0, a yaw, `&ps+0x3c4`,
+`&ps+0x3c8`, `&ps+0x3cc` (`fTorsoHeight`, `fTorsoPitch`, `fWaistPitch`, the
+playerstate netfields at 964, 968 and 972), a skip flag, a ground flag, a
+ground trace, `pm+0xf0`, `pm+0xec`, 0. The skip flag is 0 only from
+`PM_CheckDuck`; the ground flag is `groundEntityNum != 1023` from all but
+`PM_VerifyPronePosition`, which passes 1; the yaw is `viewangles[1]` going
+prone, the swing's candidate, and `proneDirection` from the other two.
+VERIFIED: every trace in the function calls the twelfth argument
+(`[ebp+0x34]`, `pm+0xf0`) but the entry trace, which calls the thirteenth
+(`[ebp+0x38]`, `pm+0xec`); `ClientThink_real` fills both with
+`trap_TraceCapsule` ("The player is a capsule").
+
+INFERRED, from the control flow, with `h` the height less 6 (24) and `fwd`
+the yaw minus 180 degrees, all boxes (-6,-6,-6)..(6,6,6) unless named:
+
+1. Going prone only: a trace of (-15,-15,0)..(15,15,30) from the origin 10
+   units up; its byte at `+0x2e` (all-solid, combat doc 3.2) refuses.
+2. The sweep from `origin + h` 54 along `fwd`. A miss is a full body. A hit
+   refuses without the ground flag; with it, the reach `6 + 54 * fraction`
+   must be at least 17, and under `0.7 h + 24` (40.8) the sweep runs again
+   to an end 22 higher, whose own hit must reach 40.8 and whose miss is a
+   full body. A reach that held is a short body. The sweep's end is the
+   feet.
+3. Without the ground flag the three outputs are written 0 and the check
+   passes.
+4. The hips: from `origin + 24 fwd + h` straight down `h + 2.5 * 15 - 6`
+   (55.5); a miss refuses.
+5. A short body: when `-0.75` times the hips' drop (`6 +` the trace's
+   distance) is above the reach less that drop, it refuses; else a trace
+   from the hips' start toward the midpoint, in x and y, of `origin + 54 fwd`
+   and `start + 30 v`, at the height of the latter, `v` the unit vector
+   along `feet - hips + 6 fwd + (0,0,6)`; a hit refuses and its end is the
+   feet.
+6. The feet dropped by `2 (feet.z - hips.z) + 15`, the chest from
+   `origin + h` to 22.5 under the origin; a miss of either refuses.
+7. `AngleSubtract(vectopitch(feet - hips), vectopitch(hips - chest))`
+   outside -50..70 refuses; so does a hit on either point trace 5 units over
+   chest to hips and hips to feet.
+8. `fTorsoHeight = chest.z - origin.z - 6`, `fTorsoPitch =
+   AngleNormalize180(vectopitch(chest - hips))`, `fWaistPitch =
+   AngleNormalize180(vectopitch(hips - feet))`.
+
+A refusal writes nothing. VERIFIED, `vectopitch` (0x3dd7c): `-180.0` and pi
+as doubles (0x72ab8, 0x72ac0), 360.0 (0x72ac8), and 270.0 and 90.0 (0x72ab0,
+0x72ab4) for a vector with no horizontal part; INFERRED: `-atan2(z, |xy|)`
+in degrees, wrapped into 0..360, 270 straight up. VERIFIED,
+`AngleNormalize180` (0x3eb70): a multiply by 0x72bac, an `fistp` under a
+truncating control word, an AND with 0xffff, a multiply by 0x72bb0 and a
+subtract of 0x72bb8 past 0x72bb4; INFERRED: the angle goes through a
+truncated 16-bit short, which is why the capture's pitches are multiples of
+360/65536.
+
+VERIFIED, `BG_PlayerStateToEntityState` (0x2cdd3..0x2cec4): a call to
+`PM_GetEffectiveStance` and a compare of its return with 1; a test of
+`viewHeightLerpTime` (`ps+0xd4`), a call to `PM_GetViewHeightLerpTime` with
+`viewHeightLerpTarget` and `viewHeightLerpDown`, `commandTime - lerpTime`
+divided by it and clamped to 0..1 against 0 and 1, `1 -` that when
+`viewHeightLerpDown` is 0; the three fields times that factor into
+`s+0xe4..0xec`, the pitches through `AngleNormalize180`, and 0 into all
+three on the other arm. VERIFIED, `PM_GetEffectiveStance` (0x34554): tests
+of `pm_flags & 1`, `viewHeightLerpTarget` against `ps+0x33c` (the prone eye)
+and `ps+0x340` (the crouched eye), `viewHeightLerpTime` and
+`viewHeightLerpDown`. INFERRED: the entity carries the body while the player
+is prone, eases into it over the eye's leg down and out of it over the leg
+up to the crouch, and is flat otherwise.
+
+VERIFIED, the two prone crawl captures (below), which carry the three
+playerstate fields on every snapshot: the street's body reads -0.02, -4.09,
+-4.09 lying on the 4-degree street and up to 8.0 units of height over a
+kerb; the mound's pitches reach 19.3 degrees. Replayed on ours
+(`playerstate_slope_ab`, rebased): the street on retail's to the printed
+hundredth on every row, the mound `fTorsoHeight` within 0.0001 and both
+pitches within 0.11 degrees, where our terrain trace names the other of two
+facets (one row). The revert below changed no row of either capture.
+
+`PM_VerifyPronePosition` is "Step-up and steep slopes" ("The step event and
+the velocity scale"): a prone move past the entry gate that no longer fits
+goes back to where it started.
+
+vcod: `pmove::check_prone` is the function; `update_stance` (going prone),
+`update_prone_view` (the swing), `update_prone_pitch` (airborne) and
+`step_slide_move` (the verify and its revert) call it with the callers'
+flags, and `PlayerState::prone_body` holds the three outputs.
+`PlayerState::entity_prone_body` is the entity's copy, which the server
+sends and poses its hit bodies with; the playerstate fields go out as they
+are and `predict::from_wire` reads them back. Not modelled: the debug
+drawing under `g_debugProneCheck`, and the refusal event 141 with `pm_flags`
+0x8000 from `PM_UpdatePronePitch`.
 
 ### The body swing and the yaw cap, `PM_UpdateViewAngles` (0x32d7c)
 
@@ -690,11 +787,9 @@ Still apart, and not modelled:
 - a prone player wedged airborne against the `clip_nosight` brush behind
   the mound's crest, where the capture's last three presses ended; the gate
   stops at 84000 for that reason;
-- the ground samples of `BG_CheckProneValid` past its first trace, the
-  prone-position revert after a step (`PM_VerifyPronePosition`, port note 5),
-  event 141 and `pm_flags` 0x400 (0x8000 is modelled since, "Prone
-  Blocked"), and `fTorsoHeight`,
-  `fTorsoPitch` and `fWaistPitch`.
+- event 141, `pm_flags` 0x400 and the airborne 0x8000 refusal (0x8000 on a
+  refused press or swing is modelled since, "Prone Blocked"; the ground
+  samples, the revert and the three body fields are "The ground samples").
 
 ### Why it matters to a server
 
@@ -1458,8 +1553,10 @@ VERIFIED: `PM_VerifyPronePosition` (0x346e0) returns 1 when `pm_flags & 1` is
 clear. INFERRED, from its control flow: with the bit set it runs the prone fit
 check and, on a refusal, writes its two arguments back over `ps->origin` and
 `ps->velocity` and returns 0, so a prone step that does not fit is undone and
-neither half of the tail runs. vcod does not port that revert - it runs no
-prone fit check inside the move.
+neither half of the tail runs. INFERRED: the entry gate's early returns
+(0x350ce, 0x350f9, 0x3510c) and the down pass's player return (0x35377) jump
+to the epilogue at 0x35865, past the check. vcod ports the check and the
+revert in `step_slide_move` ("The ground samples").
 
 Not ported, and not read past its shape: past 0x3579c a third block, gated on
 a step of more than 3 units and on being on the ground, scales
@@ -1814,9 +1911,9 @@ Status after the pmove work landed on this branch:
    runs on every grounded frame and reaches `stepSize * 0.5` past the step it
    took. SHIPPED - `EV_STEP_VIEW` (143) with the rounded, clamped and biased
    step as its parm, and the post-step velocity scale, both under "The step
-   event and the velocity scale". NOT ported from that tail: the
-   `PM_VerifyPronePosition` revert that gates it (vcod runs no prone fit check
-   inside the move) and the third block past 0x3579c. The snap's gate is
+   event and the velocity scale", and the `PM_VerifyPronePosition` revert
+   that gates them ("The ground samples"). NOT ported from that tail: the
+   third block past 0x3579c. The snap's gate is
    retail's, the ground state taken before the move. A velocity re-test
    that once stood in for a waterjump exclusion refused the snap to every
    walker rubbing a wall on a slope ("The ground snap"); 1.1 MP has no

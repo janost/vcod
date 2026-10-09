@@ -406,22 +406,9 @@ pub fn has_link_bit(host: &GameHost, id: EntId, classname: &str) -> bool {
 /// the threads, like retail's pass; the result is what script reads on the
 /// next frame and what this frame's snapshot carries.
 pub fn run(host: &mut GameHost, cx: &mut Cx) {
+    prune(host);
     let level_ms = host.level_time_ms;
-    let mut links = std::mem::take(&mut host.links);
-    links.rows.retain(|id, _| host.ents.get(*id).is_some());
-    // A freed parent's children are unlinked where they stand
-    // (`G_FreeEntity` 0x669f1..0x66a9e).
-    let orphans: Vec<EntId> = links
-        .rows
-        .iter()
-        .filter(|(_, l)| host.ents.get(l.parent).is_none())
-        .map(|(c, _)| *c)
-        .collect();
-    for child in orphans {
-        links.rows.remove(&child);
-        angle_set(host, child);
-    }
-
+    let links = std::mem::take(&mut host.links);
     let children: Vec<EntId> = links.rows.keys().copied().collect();
     // Every entity the loop has run this frame, below `child.0` or not.
     let mut ran: HashSet<EntId> = HashSet::new();
@@ -443,6 +430,39 @@ pub fn run(host: &mut GameHost, cx: &mut Cx) {
         }
     }
     host.links = links;
+}
+
+/// Drops the rows of freed children, and unlinks where they stand the
+/// children of a freed parent (`G_FreeEntity` 0x669f1..0x66a9e). The entity
+/// pass runs this once ahead of its loop.
+pub fn prune(host: &mut GameHost) {
+    let mut links = std::mem::take(&mut host.links);
+    links.rows.retain(|id, _| host.ents.get(*id).is_some());
+    let orphans: Vec<EntId> = links
+        .rows
+        .iter()
+        .filter(|(_, l)| host.ents.get(l.parent).is_none())
+        .map(|(c, _)| *c)
+        .collect();
+    for child in orphans {
+        links.rows.remove(&child);
+        angle_set(host, child);
+    }
+    host.links = links;
+}
+
+/// `G_RunEntity`'s link arm for one entity (0x50385, and `G_RunMover`'s
+/// 0x57616): [`run_one`] when `id` is linked. `fresh` as there. Returns
+/// whether it ran.
+pub fn run_linked(host: &mut GameHost, cx: &mut Cx, id: EntId, fresh: bool) -> bool {
+    if !host.links.contains(id) {
+        return false;
+    }
+    let level_ms = host.level_time_ms;
+    let links = std::mem::take(&mut host.links);
+    run_one(host, cx, &links, id, fresh, level_ms);
+    host.links = links;
+    true
 }
 
 /// One `G_GeneralLink` (0x68530): `G_SetFixedLink`'s mode 0, the origin and

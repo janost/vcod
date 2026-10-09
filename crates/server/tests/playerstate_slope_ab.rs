@@ -58,6 +58,8 @@ struct ProneFields {
     direction: f32,
     direction_pitch: f32,
     torso_pitch: f32,
+    /// `fTorsoHeight`, `fTorsoPitch`, `fWaistPitch`.
+    body: [f32; 3],
     events: Vec<(i32, i32)>,
 }
 
@@ -126,6 +128,10 @@ fn parse_fixture(text: &str) -> Vec<Line> {
                             direction: float("pdir"),
                             direction_pitch: float("pdirpitch"),
                             torso_pitch: float("ptorso"),
+                            body: {
+                                let v = parse_vec3(kv["torso"]);
+                                [v.x, v.y, v.z]
+                            },
                             events: kv["ev"]
                                 .split(',')
                                 .filter(|e| !e.is_empty())
@@ -235,6 +241,12 @@ fn state_from(snap: &Snap, weapon: u8, eye: Option<EyeLeg>) -> PlayerState {
         set("proneDirection", pf.direction.to_bits() as i32);
         set("proneDirectionPitch", pf.direction_pitch.to_bits() as i32);
         set("proneTorsoPitch", pf.torso_pitch.to_bits() as i32);
+        for (name, v) in ["fTorsoHeight", "fTorsoPitch", "fWaistPitch"]
+            .into_iter()
+            .zip(pf.body)
+        {
+            set(name, v.to_bits() as i32);
+        }
         set("weapon", i32::from(weapon));
         set("weapons[0]", 1 << weapon);
         set("fWeaponPosFrac", snap.frac.to_bits() as i32);
@@ -459,6 +471,10 @@ struct ViewDelta {
     delta_angles: [f32; 2],
     /// The eye, in units.
     view_height: f32,
+    /// `fTorsoHeight` in units, and the larger of the torso and waist
+    /// pitches in degrees.
+    body_height: f32,
+    body_pitch: f32,
 }
 
 impl ViewDelta {
@@ -478,6 +494,10 @@ impl ViewDelta {
             ],
             delta_angles: [da(0), da(1)],
             view_height: (r.ours.view_height() - pf.view_height).abs(),
+            body_height: (r.ours.prone_body.torso_height - pf.body[0]).abs(),
+            body_pitch: angle_off(r.ours.prone_body.torso_pitch, pf.body[1])
+                .abs()
+                .max(angle_off(r.ours.prone_body.waist_pitch, pf.body[2]).abs()),
         })
     }
 
@@ -492,6 +512,8 @@ impl ViewDelta {
                 self.delta_angles[1].max(o.delta_angles[1]),
             ],
             view_height: self.view_height.max(o.view_height),
+            body_height: self.body_height.max(o.body_height),
+            body_pitch: self.body_pitch.max(o.body_pitch),
         }
     }
 
@@ -504,6 +526,7 @@ impl ViewDelta {
             self.view[1],
             self.delta_angles[0],
             self.delta_angles[1],
+            self.body_pitch,
         ]
         .into_iter()
         .fold(0.0, f32::max)
@@ -516,7 +539,7 @@ fn prone_line(r: &Row) -> String {
         return String::new();
     };
     format!(
-        " | eflags={} pmf={:#x} vh={:.2}/{:.2} pdir={:.2}/{:.2} dpitch={:.2}/{:.2} tpitch={:.2}/{:.2} pitch={:.2}/{:.2} yaw={:.2}/{:.2} da={},{}/{},{} ev={:?}",
+        " | eflags={} pmf={:#x} vh={:.2}/{:.2} pdir={:.2}/{:.2} dpitch={:.2}/{:.2} tpitch={:.2}/{:.2} pitch={:.2}/{:.2} yaw={:.2}/{:.2} da={},{}/{},{} body={:.2},{:.2},{:.2}/{:.2},{:.2},{:.2} ev={:?}",
         pf.eflags,
         pf.pm_flags,
         pf.view_height,
@@ -535,6 +558,12 @@ fn prone_line(r: &Row) -> String {
         r.retail.delta_angles[1],
         r.ours_da[0],
         r.ours_da[1],
+        pf.body[0],
+        pf.body[1],
+        pf.body[2],
+        r.ours.prone_body.torso_height,
+        r.ours.prone_body.torso_pitch,
+        r.ours.prone_body.waist_pitch,
         pf.events,
     )
 }
@@ -682,7 +711,11 @@ const SLOPE: Tolerance = Tolerance {
 /// printed hundredth. Before those the dives read 10.7 units off, the body
 /// stood still for 99 snapshots of retail's swing, the pitch cap was missing
 /// outright, 38.8 degrees on the street and 48.8 on the mound, and a
-/// sideways prone press read 2.7 units off.
+/// sideways prone press read 2.7 units off. The body's bend, measured
+/// 2026-10-09 with `BG_CheckProneValid`'s ground samples: the street on
+/// retail's to the printed hundredth throughout, the mound `fTorsoHeight`
+/// within 0.0001 and both pitches within 0.11 degrees; without them all three
+/// read 0, up to 8 units and 19.3 degrees off.
 const PRONE: Tolerance = Tolerance {
     p95_z: 0.02,
     p95_xy: 0.05,
@@ -695,6 +728,8 @@ const PRONE: Tolerance = Tolerance {
         pitches: 2.0,
         view: 0.1,
         view_height: 0.01,
+        body_height: 0.01,
+        body_pitch: 0.2,
     }),
 };
 
@@ -722,6 +757,9 @@ struct ViewTolerance {
     pitches: f32,
     view: f32,
     view_height: f32,
+    /// `fTorsoHeight` in units and the torso and waist pitches in degrees.
+    body_height: f32,
+    body_pitch: f32,
 }
 
 fn check(map: &str, gametype: &str, cmd_ms: u32) {
@@ -783,7 +821,9 @@ fn check_path(map: &str, gametype: &str, path: &str, tol: &Tolerance, until: Opt
                 && v.direction_pitch <= t.pitches
                 && v.torso_pitch <= t.pitches
                 && v.view.iter().chain(&v.delta_angles).all(|&d| d <= t.view)
-                && v.view_height <= t.view_height,
+                && v.view_height <= t.view_height
+                && v.body_height <= t.body_height
+                && v.body_pitch <= t.body_pitch,
             "{path}: the prone view parts from retail's: {v:?}"
         );
     }

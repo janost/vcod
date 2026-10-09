@@ -123,8 +123,6 @@ pub struct Missile {
     ground: i32,
     /// When the explode event went on the ring, if it has.
     exploded_ms: Option<i32>,
-    /// Set once the event has aged out and the entity has been freed.
-    gone: bool,
 }
 
 /// One blast for the radius damage pass to charge.
@@ -147,6 +145,15 @@ pub struct MissileFrame {
     /// `GameHost::free_entity`, the one place an entity going away is wired
     /// up to the tables that hang off it (triggers today).
     pub freed: Vec<EntId>,
+}
+
+/// What one missile's turn did ([`Missiles::run_one`]).
+pub enum Turn {
+    Flew,
+    /// It went off this turn; the blast walk is the caller's.
+    Exploded(Explosion),
+    /// Its event aged out and it left the pool; the caller frees the entity.
+    Freed,
 }
 
 pub struct Missiles {
@@ -515,7 +522,6 @@ impl Missiles {
             surf_type: 0,
             ground: ENTITYNUM_NONE as i32,
             exploded_ms: None,
-            gone: false,
         });
         Ok(id)
     }
@@ -533,23 +539,56 @@ impl Missiles {
             temp: Vec::new(),
             freed: Vec::new(),
         };
-        for m in &mut self.live {
-            if let Some(at) = m.exploded_ms {
-                // `freeAfterEvent`: the entity rides the wire until its
-                // event has aged out, and is freed with it.
-                if now_ms.wrapping_sub(at) > EVENT_VALID_MS {
-                    m.gone = true;
-                    frame.freed.push(m.id);
-                }
-                continue;
-            }
-            m.step(world, sims, now_ms);
-            if now_ms >= m.explode_at_ms {
-                frame.exploded.push(m.explode(world, now_ms));
+        let ids: Vec<EntId> = self.live.iter().map(|m| m.id).collect();
+        for id in ids {
+            match self.run_one(id, world, sims, now_ms) {
+                Some(Turn::Exploded(x)) => frame.exploded.push(x),
+                Some(Turn::Freed) => frame.freed.push(id),
+                _ => {}
             }
         }
-        self.live.retain(|m| !m.gone);
         frame
+    }
+
+    /// `G_RunEntity`'s missile arm for one entity (`eType` 4, 0x50375), on
+    /// its turn in `G_RunFrame`'s entity loop. `None` when `id` is no live
+    /// missile.
+    pub fn run_one(
+        &mut self,
+        id: EntId,
+        world: Option<&CollisionWorld>,
+        sims: &[(usize, &ClientSim)],
+        now_ms: i32,
+    ) -> Option<Turn> {
+        let i = self.live.iter().position(|m| m.id == id)?;
+        let m = &mut self.live[i];
+        if let Some(at) = m.exploded_ms {
+            // `freeAfterEvent`: the entity rides the wire until its event
+            // has aged out, and is freed with it.
+            if now_ms.wrapping_sub(at) > EVENT_VALID_MS {
+                self.live.remove(i);
+                return Some(Turn::Freed);
+            }
+            return Some(Turn::Flew);
+        }
+        m.step(world, sims, now_ms);
+        if now_ms >= m.explode_at_ms {
+            return Some(Turn::Exploded(m.explode(world, now_ms)));
+        }
+        Some(Turn::Flew)
+    }
+
+    /// Whether `id` is a missile this pool runs.
+    pub fn contains(&self, id: EntId) -> bool {
+        self.live.iter().any(|m| m.id == id)
+    }
+
+    /// One missile's `r.currentOrigin` into its script `origin`, as
+    /// [`Missiles::sync_origins`] does for all of them.
+    pub fn sync_origin(&self, ents: &mut ObjectTable, id: EntId) {
+        if let Some(m) = self.live.iter().find(|m| m.id == id) {
+            set_script_origin(ents, m.id, m.origin);
+        }
     }
 
     /// Every live missile's `r.currentOrigin` into its script `origin`, as

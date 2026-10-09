@@ -370,6 +370,10 @@ pub struct PlayerState {
     /// `ps.proneTorsoPitch`: the ground's pitch along the view, eased the
     /// same way; the prone pitch clamp is centred on it.
     pub prone_torso_pitch: f32,
+    /// `fTorsoHeight`, `fTorsoPitch` and `fWaistPitch` (`ps+0x3c4..0x3cc`):
+    /// how the prone body bends over the ground, which `BG_CheckProneValid`
+    /// writes off its ground samples ([`check_prone`]).
+    pub prone_body: ProneBody,
     /// Retail's `pm_flags` 0x4: the prone press landed on a player moving
     /// forward or back, which throws it into the air (the dive). Held while
     /// the prone key is, and it shortens the eye's drop to 200 ms.
@@ -580,6 +584,7 @@ impl PlayerState {
             view_pitch_correction: 0.0,
             prone_direction_pitch: 0.0,
             prone_torso_pitch: 0.0,
+            prone_body: ProneBody::default(),
             prone_dive: false,
             prone_blocked: false,
             ground_plane: None,
@@ -661,6 +666,34 @@ impl PlayerState {
     /// `server_time`: the time the running leg began, or 0.
     pub fn view_lerp_stamp(&self, server_time: i32) -> i32 {
         self.view_lerp_ms.map_or(0, |ms| server_time - ms)
+    }
+
+    /// `BG_PlayerStateToEntityState`'s prone body (0x2cdd3..0x2cec4): the
+    /// playerstate's, folded through `AngleNormalize180` and scaled by how far
+    /// the eye's leg into or out of prone has run, for a body whose effective
+    /// stance is prone (`PM_GetEffectiveStance` 0x34554), and flat otherwise.
+    /// `lerp_time` is the wire's `viewHeightLerpTime`.
+    pub fn entity_prone_body(&self, lerp_time: i32, command_time: i32) -> ProneBody {
+        let lerping = lerp_time != 0;
+        let prone = self.stance == Stance::Prone
+            || self.view_lerp_target == VIEW_PRONE
+            || (lerping && self.view_lerp_target == VIEW_CROUCH && !self.view_lerp_down);
+        if !prone {
+            return ProneBody::default();
+        }
+        let scale = if lerping {
+            let len = view_lerp_length(self.view_lerp_target, self.view_lerp_down, self.prone_dive);
+            let f = (command_time.wrapping_sub(lerp_time) as f32 / len as f32).clamp(0.0, 1.0);
+            if self.view_lerp_down { f } else { 1.0 - f }
+        } else {
+            1.0
+        };
+        let b = self.prone_body;
+        ProneBody {
+            torso_height: b.torso_height * scale,
+            torso_pitch: angle_normalize180(b.torso_pitch) * scale,
+            waist_pitch: angle_normalize180(b.waist_pitch) * scale,
+        }
     }
 
     /// Eye and angles with the lean offset; roll = lean/2 degrees (RTCW).
@@ -806,7 +839,7 @@ pub fn pmove(
     // the walk reads the ADS flag this frame just set.
     ps.walking = walking_flag(ps, input);
     // Then `PM_UpdatePronePitch` (0x342dd), off this frame's ground plane.
-    update_prone_pitch(ps, dt);
+    update_prone_pitch(ps, world, dt);
     // retail checks ladders right after the first ground trace; the check
     // reads `pm_time` before `PM_DropTimers` (0x342f4, 0x342f9)
     let ladder = check_ladder_move(ps, input, world);
@@ -1326,10 +1359,21 @@ fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, dt: f
     // Retail refuses a prone the body does not fit in, which is why a player
     // facing a wall stays standing.
     let entering_prone = desired == Stance::Prone && before != Stance::Prone;
-    if entering_prone && !prone_fits(world, ps.origin, ps.yaw.to_degrees()) {
-        desired = before;
-        // `PM_CheckDuck` 0x3196b, on every cmd the held press is refused.
-        ps.prone_blocked = true;
+    if entering_prone {
+        let q = ProneQuery {
+            origin: ps.origin,
+            yaw_deg: ps.yaw.to_degrees(),
+            entry: true,
+            ground: ps.on_ground,
+        };
+        match check_prone(world, q) {
+            Some(body) => ps.prone_body = body,
+            None => {
+                desired = before;
+                // `PM_CheckDuck` 0x3196b, on every cmd the held press is refused.
+                ps.prone_blocked = true;
+            }
+        }
     }
     // The dive flag lives as long as the prone key is held (`PM_CheckDuck`
     // 0x316f4 clears it on every other arm).
@@ -1531,21 +1575,187 @@ fn stance_speed_scale(ps: &PlayerState) -> f32 {
 
 /// RTCW `bg_pmove.c` `PM_UpdateLean`. Differences: leans while moving (no
 /// `!cmd->forwardmove` gate), and prone blocks leaning.
-/// Whether a body may lie down at `origin` facing `yaw_deg`: retail sweeps a
-/// 12-unit cube 54 units straight *backwards* from the facing, which is where
-/// the body goes (`BG_CheckProneValid` 0x2d428, first trace at 0x2d57a). Not
-/// modelled: the ground samples along the body that follow it on the ground,
-/// which can refuse a bent body and write `fTorsoHeight`, `fTorsoPitch` and
-/// `fWaistPitch`, and the partial clearance they accept.
-pub fn prone_fits(world: &MoveWorld, origin: Vec3, yaw_deg: f32) -> bool {
-    let back = (yaw_deg + 180.0).to_radians();
-    let dir = Vec3::new(back.cos(), back.sin(), 0.0);
-    // The cube's top at the prone height every caller passes (30).
-    let start = origin + Vec3::Z * (HEIGHT_PRONE - PRONE_BODY_HALF_BOX);
-    let end = start + dir * PRONE_BODY_LENGTH;
+/// `fTorsoHeight`, `fTorsoPitch`, `fWaistPitch`: the chest's height off the
+/// origin and the pitches of the torso and the legs along the ground, in
+/// degrees, wire convention.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ProneBody {
+    pub torso_height: f32,
+    pub torso_pitch: f32,
+    pub waist_pitch: f32,
+}
+
+/// What [`check_prone`] is asked: `entry` is `PM_CheckDuck`'s first-frame
+/// call, which also needs room for the prone box where the player stands;
+/// `ground` asks for the ground samples, which every caller passes as
+/// "on the ground" but `PM_VerifyPronePosition`, which always does.
+#[derive(Clone, Copy)]
+pub struct ProneQuery {
+    pub origin: Vec3,
+    pub yaw_deg: f32,
+    pub entry: bool,
+    pub ground: bool,
+}
+
+/// `BG_CheckProneValid` (`game.mp.i386.so` 0x2d428; docs/research/
+/// cod11-mantle.md, "The ground samples"): whether a body may lie at
+/// `origin` facing `yaw_deg`, and how it bends over the ground there. `None`
+/// is a refusal. Without `ground` a fit writes a flat body.
+pub fn check_prone(world: &MoveWorld, q: ProneQuery) -> Option<ProneBody> {
+    const MASK: u32 = MASK_DEADSOLID;
+    let o = q.origin;
+    let hw = HALF_WIDTH;
+    if q.entry {
+        let t = world.box_trace(
+            o,
+            o + Vec3::Z * 10.0,
+            Vec3::new(-hw, -hw, 0.0),
+            Vec3::new(hw, hw, HEIGHT_PRONE),
+            MASK,
+        );
+        if t.allsolid {
+            return None;
+        }
+    }
     let half = Vec3::splat(PRONE_BODY_HALF_BOX);
-    let t = world.box_trace(start, end, -half, half, MASK_DEADSOLID);
-    !t.startsolid && t.fraction >= 1.0
+    let trace = |a: Vec3, b: Vec3| world.box_trace(a, b, -half, half, MASK);
+    let back = (q.yaw_deg - 180.0).to_radians();
+    let fwd = Vec3::new(back.cos(), back.sin(), 0.0);
+    let h = HEIGHT_PRONE - PRONE_BODY_HALF_BOX;
+    // The sweep behind the facing: clear, or clear far enough (`reach`).
+    let start = o + Vec3::Z * h;
+    let mut end = start + fwd * PRONE_BODY_LENGTH;
+    let mut t = trace(start, end);
+    let mut reach = None;
+    if t.fraction < 1.0 {
+        if !q.ground {
+            return None;
+        }
+        let mut got = t.fraction * PRONE_BODY_LENGTH + PRONE_BODY_HALF_BOX;
+        if hw + 2.0 > got {
+            return None;
+        }
+        let limit = h * 0.7 + 24.0;
+        if got < limit {
+            // Again 22 units higher: over a kerb or a sill.
+            end.z += 22.0;
+            let len = (end - start).length();
+            t = trace(start, end);
+            if t.fraction < 1.0 {
+                got = t.fraction * len + PRONE_BODY_HALF_BOX;
+                if got < limit {
+                    return None;
+                }
+                reach = Some(got);
+            }
+        } else {
+            reach = Some(got);
+        }
+    }
+    let mut feet = t.endpos;
+    if !q.ground {
+        return Some(ProneBody::default());
+    }
+    // The hips, 24 behind the origin, dropped onto the ground.
+    let drop = h + hw * 2.5 - PRONE_BODY_HALF_BOX;
+    let hips_from = o + fwd * 24.0 + Vec3::Z * h;
+    let t = trace(hips_from, hips_from - Vec3::Z * drop);
+    if t.fraction == 1.0 {
+        return None;
+    }
+    let hips = t.endpos;
+    let hips_drop = drop * t.fraction + PRONE_BODY_HALF_BOX;
+    if let Some(got) = reach {
+        // A short body bends its legs up the obstacle; the sweep is again
+        // from the hips, toward a point between the full length and that.
+        if hips_drop * -0.75 > got - hips_drop {
+            return None;
+        }
+        let v = ((feet - hips) + fwd * PRONE_BODY_HALF_BOX + Vec3::Z * PRONE_BODY_HALF_BOX)
+            .normalize_or_zero();
+        let reach_to = hips_from + v * 30.0;
+        let far = o + fwd * PRONE_BODY_LENGTH;
+        let to = Vec3::new(
+            0.5 * (far.x + reach_to.x),
+            0.5 * (far.y + reach_to.y),
+            reach_to.z,
+        );
+        let t = trace(hips_from, to);
+        if t.fraction < 1.0 {
+            return None;
+        }
+        feet = t.endpos;
+    }
+    // The feet and the chest dropped onto the ground.
+    let t = trace(feet, feet - Vec3::Z * ((feet.z - hips.z) * 2.0 + hw));
+    if t.fraction == 1.0 {
+        return None;
+    }
+    let feet = t.endpos;
+    let t = trace(o + Vec3::Z * h, Vec3::new(o.x, o.y, o.z - hw * 1.5));
+    if t.fraction == 1.0 {
+        return None;
+    }
+    let chest = t.endpos;
+    let bend = angle_subtract(vectopitch(feet - hips), vectopitch(hips - chest));
+    if !(-50.0..=70.0).contains(&bend) {
+        return None;
+    }
+    // Nothing between the three samples, 5 units up.
+    let up = Vec3::Z * 5.0;
+    let line = |a: Vec3, b: Vec3| world.box_trace(a + up, b + up, Vec3::ZERO, Vec3::ZERO, MASK);
+    if line(chest, hips).fraction < 1.0 || line(hips, feet).fraction < 1.0 {
+        return None;
+    }
+    Some(ProneBody {
+        torso_height: (chest.z - o.z) - PRONE_BODY_HALF_BOX,
+        torso_pitch: angle_normalize180(vectopitch(chest - hips)),
+        waist_pitch: angle_normalize180(vectopitch(hips - feet)),
+    })
+}
+
+/// Whether a body may lie down at `origin` facing `yaw_deg`, the sweep
+/// behind the facing alone: [`check_prone`] off the ground.
+pub fn prone_fits(world: &MoveWorld, origin: Vec3, yaw_deg: f32) -> bool {
+    check_prone(
+        world,
+        ProneQuery {
+            origin,
+            yaw_deg,
+            entry: false,
+            ground: false,
+        },
+    )
+    .is_some()
+}
+
+/// `vectopitch` (0x3dd7c): wire convention (positive down), in 0..360.
+fn vectopitch(v: Vec3) -> f32 {
+    if v.x == 0.0 && v.y == 0.0 {
+        return if v.z > 0.0 { 270.0 } else { 90.0 };
+    }
+    let len = (v.x * v.x + v.y * v.y).sqrt();
+    let p = (-f64::from(v.z).atan2(f64::from(len)) * 180.0 / std::f64::consts::PI) as f32;
+    if p < 0.0 { p + 360.0 } else { p }
+}
+
+/// `AngleSubtract`: `a - b` folded into -180..180.
+fn angle_subtract(a: f32, b: f32) -> f32 {
+    let mut d = a - b;
+    while d > 180.0 {
+        d -= 360.0;
+    }
+    while d < -180.0 {
+        d += 360.0;
+    }
+    d
+}
+
+/// `AngleNormalize180` (0x3eb70): through a truncated 16-bit angle first.
+pub fn angle_normalize180(deg: f32) -> f32 {
+    let short = ((deg * (65536.0 / 360.0)) as i32) & 0xffff;
+    let a = short as f32 * (360.0 / 65536.0);
+    if a > 180.0 { a - 360.0 } else { a }
 }
 
 /// Degrees folded to -180..180, the `AngleNormalize180` the prone code runs
@@ -1640,8 +1850,15 @@ fn update_prone_view(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, d
         } else {
             ps.prone_direction + step
         };
-        if prone_fits(world, ps.origin, candidate) {
+        let q = ProneQuery {
+            origin: ps.origin,
+            yaw_deg: candidate,
+            entry: false,
+            ground: ps.on_ground,
+        };
+        if let Some(body) = check_prone(world, q) {
             ps.prone_direction = candidate;
+            ps.prone_body = body;
         } else if delta.abs() > PRONE_YAWCAP + 0.1 {
             // 0x3319d-0x331c4: a refused swing announces itself only once
             // the view is past the cap (rodata 0x70c90).
@@ -1664,11 +1881,23 @@ fn update_prone_view(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, d
 
 /// `PM_UpdatePronePitch` (0x3338c): both prone pitches ease toward the
 /// ground's pitch under the body and under the view, or toward level with no
-/// ground plane under the player. Not modelled: its airborne refusal
-/// (0x33434), which raises event 141 and `pm_flags` 0x8000.
-fn update_prone_pitch(ps: &mut PlayerState, dt: f32) {
+/// ground plane under the player. Airborne it checks the fit and flattens the
+/// body. Not modelled: its airborne refusal (0x33434), which raises event 141
+/// and `pm_flags` 0x8000.
+fn update_prone_pitch(ps: &mut PlayerState, world: &MoveWorld, dt: f32) {
     if ps.stance != Stance::Prone {
         return;
+    }
+    if !ps.on_ground {
+        let q = ProneQuery {
+            origin: ps.origin,
+            yaw_deg: ps.prone_direction,
+            entry: false,
+            ground: false,
+        };
+        if let Some(body) = check_prone(world, q) {
+            ps.prone_body = body;
+        }
     }
     let rate = PRONE_PITCH_DEG_PER_SEC * dt;
     let ease = |cur: f32, target: f32| {
@@ -2537,14 +2766,52 @@ fn slide_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32, gravity: bool, m
 
 /// Q3 `bg_slidemove.c` `PM_StepSlideMove`. Step height 18, or 10 while prone
 /// (retail picks the height off pm_flags bit 0x1 @0x35045, not ladder state).
+/// A prone move ends in `PM_VerifyPronePosition` (0x346e0): a body that no
+/// longer fits where the move left it goes back to where it started, with
+/// no step event (docs/research/cod11-mantle.md, "The ground samples").
 fn step_slide_move(
     ps: &mut PlayerState,
     world: &MoveWorld,
     dt: f32,
     gravity: bool,
     mask: u32,
-    events: Option<&mut Vec<PmEvent>>,
+    mut events: Option<&mut Vec<PmEvent>>,
 ) {
+    let (start_o, start_v) = (ps.origin, ps.velocity);
+    let raised = events.as_ref().map_or(0, |e| e.len());
+    // The entry gate's and the down pass's early outs skip the tail, and
+    // the check with it (0x350ce..0x3510c, 0x35377).
+    if !step_slide(ps, world, dt, gravity, mask, events.as_deref_mut())
+        || ps.stance != Stance::Prone
+    {
+        return;
+    }
+    let q = ProneQuery {
+        origin: ps.origin,
+        yaw_deg: ps.prone_direction,
+        entry: false,
+        ground: true,
+    };
+    match check_prone(world, q) {
+        Some(body) => ps.prone_body = body,
+        None => {
+            ps.origin = start_o;
+            ps.velocity = start_v;
+            if let Some(e) = events {
+                e.truncate(raised);
+            }
+        }
+    }
+}
+
+fn step_slide(
+    ps: &mut PlayerState,
+    world: &MoveWorld,
+    dt: f32,
+    gravity: bool,
+    mask: u32,
+    events: Option<&mut Vec<PmEvent>>,
+) -> bool {
     let mut step_size = if ps.stance == Stance::Prone {
         STEPSIZE_PRONE
     } else {
@@ -2564,14 +2831,14 @@ fn step_slide_move(
     if blocked && !ps.on_ground && ps.jump_origin_z.abs() > 0.001 && start_o.z < ps.jump_origin_z {
         let reach = ps.jump_origin_z - start_o.z;
         if reach < 1.0 {
-            return;
+            return false;
         }
         step_size = reach.min(STEPSIZE);
         jump_step = true;
     }
     let through = ps.on_ground || jump_step || blocked && ps.on_ladder && ps.velocity.z > 0.0;
     if !through {
-        return;
+        return false;
     }
     let (mins, maxs) = (ps.mins(), ps.maxs());
     let (down_o, down_v) = (ps.origin, ps.velocity);
@@ -2613,7 +2880,7 @@ fn step_slide_move(
         if world.entity_num(&down) < MAX_CLIENTS {
             ps.origin = down_o;
             ps.velocity = down_v;
-            return;
+            return false;
         }
         if down.fraction < 1.0 {
             ps.origin = down.endpos;
@@ -2672,6 +2939,7 @@ fn step_slide_move(
     if let Some(events) = events.filter(|_| through) {
         step_view(ps, events, start_o.z, down_o.z, step_size);
     }
+    true
 }
 
 /// The vertical jump the step machinery added, told to the client and paid
@@ -3855,6 +4123,60 @@ mod tests {
             "the body faces the view, at {}",
             ps.prone_direction
         );
+    }
+
+    /// `BG_CheckProneValid`'s ground samples: a chest on a 4-unit slab and
+    /// hips and feet on the floor behind it pitch the torso up by
+    /// atan(4 / 24) and leave the legs flat.
+    #[test]
+    fn a_prone_body_bends_over_a_step_under_the_chest() {
+        let w = crate::collision::test_world(&[
+            (
+                Vec3::new(-200.0, -200.0, -16.0),
+                Vec3::new(200.0, 200.0, 0.0),
+            ),
+            (Vec3::new(-10.0, -200.0, 0.0), Vec3::new(200.0, 200.0, 4.0)),
+        ]);
+        let w = MoveWorld::bare(&w);
+        let q = ProneQuery {
+            origin: Vec3::new(0.0, 0.0, 4.125),
+            yaw_deg: 0.0,
+            entry: false,
+            ground: true,
+        };
+        let body = check_prone(&w, q).expect("room to lie down");
+        assert!(body.torso_height.abs() < 0.2, "{body:?}");
+        let up = -(4.0f32 / 24.0).atan().to_degrees();
+        assert!((body.torso_pitch - up).abs() < 0.2, "{body:?}");
+        assert!(body.waist_pitch.abs() < 0.01, "{body:?}");
+        // Without the ground samples the fit writes a flat body.
+        let flat = check_prone(&w, ProneQuery { ground: false, ..q });
+        assert_eq!(flat, Some(ProneBody::default()));
+    }
+
+    /// The entity's copy is whole once the eye has settled, follows the eye's
+    /// leg into prone, and is flat for a standing body.
+    #[test]
+    fn the_entity_scales_the_prone_body_by_the_eye_leg() {
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.prone_body = ProneBody {
+            torso_height: 2.0,
+            torso_pitch: 45.0,
+            waist_pitch: -315.0,
+        };
+        assert_eq!(ps.entity_prone_body(0, 1000), ProneBody::default());
+        ps.stance = Stance::Prone;
+        let whole = ProneBody {
+            torso_height: 2.0,
+            torso_pitch: 45.0,
+            waist_pitch: 45.0,
+        };
+        assert_eq!(ps.entity_prone_body(0, 1000), whole);
+        ps.view_lerp_target = VIEW_PRONE;
+        ps.view_lerp_down = true;
+        let len = view_lerp_length(VIEW_PRONE, true, false);
+        let half = ps.entity_prone_body(1000, 1000 + len / 2);
+        assert!((half.torso_pitch - 22.5).abs() < 0.1, "{half:?}");
     }
 
     /// Past the soft edge the body turns toward the view at 55 deg/s, and the

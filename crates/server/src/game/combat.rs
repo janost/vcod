@@ -1328,7 +1328,7 @@ mod tests {
     /// legs and torso onto it, as the retail captures' bodies had.
     fn settle(sim: &mut ClientSim) {
         for _ in 0..20 {
-            sim.commit_pose(50, vcod_common::playerpose::BG_SWING_SPEED, None);
+            sim.commit_pose(50, 0, vcod_common::playerpose::BG_SWING_SPEED, None);
         }
     }
 

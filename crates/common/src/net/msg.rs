@@ -1146,6 +1146,8 @@ pub struct UserCmd {
 /// because it is the one bit there that moves nothing. Bit table and
 /// evidence: docs/protocol-1.1.md, "Usercmd input bits".
 pub const BUTTON_ATTACK: u8 = 0x01;
+/// Q3's `BUTTON_TALK`: the console, a menu or the chat line is up.
+pub const BUTTON_TALK: u8 = 0x02;
 pub const BUTTON_ADS: u8 = 0x10;
 pub const BUTTON_MELEE: u8 = 0x20;
 pub const BUTTON_USE: u8 = 0x40;

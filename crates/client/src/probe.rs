@@ -2926,6 +2926,9 @@ struct CombatSample {
     ground_entity: i32,
     /// The view the snapshot carries, which a client predicts against.
     viewangles: [f32; 3],
+    /// `ps.eFlags`, for 0x400, the bit `PmoveSingle` sets under a held
+    /// trigger (combat doc 16.5).
+    e_flags: i32,
     /// Every missile on the wire in this snapshot.
     missiles: Vec<MissileSample>,
 }
@@ -3253,6 +3256,7 @@ impl CombatProbe {
                     snap.ps.field_f32(p, "viewangles[1]"),
                     snap.ps.field_f32(p, "viewangles[2]"),
                 ],
+                e_flags: snap.ps.field_i32(p, "eFlags"),
                 missiles: self.missiles.sample(snap),
             };
             // Every bullet-impact temp entity this snapshot carries, beside
@@ -3647,7 +3651,7 @@ waited_ready_ms={} retried={} snapshots={} weaponstate={} legsAnim={} torsoAnim=
                 "!trace ms={} serverTime={} buttons={} wbuttons={} weaponstate={} weapAnim={} \
 legsAnim={} torsoAnim={} eventSequence={} events[0]={} events[1]={} events[2]={} events[3]={} \
 fWeaponPosFrac={:.4} aimSpreadScale={:.2} grenadeTimeLeft={} weaponDelay={} pm_flags={} \
-groundEntityNum={} viewangles[0]={:.4} viewangles[1]={:.4} viewangles[2]={:.4}\n",
+groundEntityNum={} viewangles[0]={:.4} viewangles[1]={:.4} viewangles[2]={:.4} eFlags={}\n",
                 s.elapsed_ms,
                 s.server_time,
                 s.buttons,
@@ -3670,6 +3674,7 @@ groundEntityNum={} viewangles[0]={:.4} viewangles[1]={:.4} viewangles[2]={:.4}\n
                 s.viewangles[0],
                 s.viewangles[1],
                 s.viewangles[2],
+                s.e_flags,
             ));
             for m in &s.missiles {
                 out.push_str(&m.line(s.elapsed_ms));
