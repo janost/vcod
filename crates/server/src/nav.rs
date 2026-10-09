@@ -850,6 +850,22 @@ const ROAM_MIN: f32 = 1000.0;
 /// path is planned again.
 const RETARGET: f32 = 128.0;
 
+/// What the body a [`Follower`] steers stands on this tick.
+#[derive(Clone, Copy)]
+pub struct Footing {
+    /// At rest with a jump ready ([`ready_to_leap`]).
+    pub still: bool,
+    pub on_ground: bool,
+}
+
+impl Footing {
+    #[cfg(test)]
+    const STANDING: Footing = Footing {
+        still: true,
+        on_ground: true,
+    };
+}
+
 /// One bot's walk along the graph: the destination, the planned path and
 /// the bookkeeping that notices when it has gone wrong. The server keeps one
 /// per bot and asks it for the waypoint every tick.
@@ -885,8 +901,8 @@ pub struct Follower {
 }
 
 impl Follower {
-    /// The waypoint toward `goal` for a bot standing at `at`; `still` says
-    /// it stands at rest with a jump ready ([`ready_to_leap`]). `world`
+    /// The waypoint toward `goal` for a bot standing at `at` on `body`'s
+    /// footing. `world`
     /// re-proves a leap from where the bot rests (none in unit tests).
     /// `budget` is the tick's shared A* budget in expanded nodes; a bot whose
     /// plan it does not finish gets no waypoint this tick and resumes the
@@ -900,7 +916,7 @@ impl Follower {
         world: Option<&CollisionWorld>,
         goal: crate::bots::Goal,
         at: [f32; 3],
-        still: bool,
+        body: Footing,
         budget: &mut u32,
         rand: &mut dyn FnMut() -> i32,
     ) -> Option<[f32; 3]> {
@@ -974,17 +990,34 @@ impl Follower {
             // From under it, only from its floor: a ladder's head is passed
             // standing at its lip, not from the rungs a storey down.
             let below = rise.min(vcod_common::pmove::STEPSIZE);
-            let level = here.z > w.z - below && here.z < w.z + rise;
+            // A ladder's head only standing on it: the climb proved it facing
+            // the rungs to the top, and a body that turns for the next node
+            // on the rungs or in the air over the lip lets go of them
+            // (mp_ship's mast, section 3).
+            let level = here.z > w.z - below
+                && here.z < w.z + rise
+                && (body.on_ground || !self.climbing(g));
+            // A ladder's foot is passed only on it, past cutting nothing:
+            // the climb was proved from there, and a body beside the face
+            // heading for the head runs past the rungs (mp_ship, section 3).
+            let rung = self.rising(g);
             // Nor is a jump's top cut past: a body still in the air beside
             // it is nearer the next node too, and falls back to the foot.
             let past = !foot
                 && !jump
+                && !rung
                 && self.path.get(self.next + 1).is_some_and(|&n| {
                     let n = g.nodes[n as usize];
                     flat(n) < (n - w).truncate().length()
                 });
             let reached = if foot {
-                flat(w) < LEAP_FOOT && still
+                flat(w) < LEAP_FOOT && body.still
+            } else if rung {
+                // Square in front of the rungs, the run turns into the face
+                // from anywhere near (`face_ahead`); off to the side, only
+                // the foot itself proved the climb.
+                let square = g.face_ahead(w).is_some();
+                flat(w) < if square { REACH } else { ARRIVE }
             } else {
                 flat(w) < REACH
             };
@@ -1054,6 +1087,14 @@ impl Follower {
                 self.reset();
                 return None;
             }
+        }
+        // Up a ladder from its foot: into the face first, the way the climb
+        // that found the head went, then at the head once level with it.
+        if self.climbing(g)
+            && here.z < w.z - vcod_common::pmove::STEPSIZE
+            && let Some(p) = g.face_ahead(g.nodes[self.path[self.next - 1] as usize])
+        {
+            return Some([p.x, p.y, w.z]);
         }
         Some(w.into())
     }
@@ -1164,6 +1205,14 @@ impl Follower {
         )
     }
 
+    /// Test-facing: the current waypoint's node and the one after it.
+    pub fn current(&self) -> (Option<u32>, Option<u32>) {
+        (
+            self.path.get(self.next).copied(),
+            self.path.get(self.next + 1).copied(),
+        )
+    }
+
     /// Whether the current waypoint is a leap's foot: the bot comes to rest
     /// on it before it heads on.
     pub fn holding(&self, g: &NavGraph) -> bool {
@@ -1184,11 +1233,48 @@ impl Follower {
         }
     }
 
+    /// Up a ladder from a foot square in front of the rungs, the foot: the
+    /// climb that proved the head went up level with it along the face,
+    /// and a body that grabbed the rungs off that line strafes back to it
+    /// (`bots::Bot::steer`).
+    pub fn climb_line(&self, g: &NavGraph) -> Option<glam::Vec2> {
+        if !self.climbing(g) {
+            return None;
+        }
+        let foot = g.nodes[self.path[self.next - 1] as usize];
+        g.face_ahead(foot).map(|_| foot.truncate())
+    }
+
+    /// Whether the edge on from the current waypoint climbs more than a
+    /// jump: the waypoint is a ladder's foot.
+    fn rising(&self, g: &NavGraph) -> bool {
+        match (self.path.get(self.next), self.path.get(self.next + 1)) {
+            (Some(&a), Some(&b)) => {
+                g.nodes[b as usize].z > g.nodes[a as usize].z + vcod_common::pmove::JUMP_HEIGHT
+            }
+            _ => false,
+        }
+    }
+
     /// Whether the edge on from the current waypoint drops more than a step.
     fn dropping(&self, g: &NavGraph) -> bool {
         match (self.path.get(self.next), self.path.get(self.next + 1)) {
             (Some(&a), Some(&b)) => {
                 g.nodes[b as usize].z < g.nodes[a as usize].z - vcod_common::pmove::STEPSIZE
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether the way to the current waypoint climbs more than a jump: a
+    /// ladder's foot to its head.
+    fn climbing(&self, g: &NavGraph) -> bool {
+        let Some(i) = self.next.checked_sub(1) else {
+            return false;
+        };
+        match (self.path.get(i), self.path.get(self.next)) {
+            (Some(&a), Some(&b)) => {
+                g.nodes[b as usize].z > g.nodes[a as usize].z + vcod_common::pmove::JUMP_HEIGHT
             }
             _ => false,
         }
@@ -1214,6 +1300,59 @@ impl Follower {
 }
 
 impl NavGraph {
+    /// For a body at `p` on a ladder, the point level with it across the
+    /// face and at the middle of the ladder along it: a climb strafes
+    /// toward it, since what overhangs a ladder (a spar, a hatch's rim)
+    /// mostly pins a body at its edge (section 3).
+    pub fn ladder_middle(&self, p: Vec3) -> Option<glam::Vec2> {
+        self.ladder_boxes
+            .iter()
+            .filter(|(lo, hi)| p.z > lo.z - 80.0 && p.z < hi.z + 8.0)
+            .filter_map(|&(lo, hi)| {
+                let ext = hi - lo;
+                let (a, b) = if ext.x < ext.y { (0, 1) } else { (1, 0) };
+                let away = (lo[a] - p[a]).max(p[a] - hi[a]).max(0.0);
+                let aside = (lo[b] - p[b]).max(p[b] - hi[b]).max(0.0);
+                let mut m = p.truncate();
+                m[b] = (lo[b] + hi[b]) * 0.5;
+                (away < 32.0 && aside < 16.0).then_some((away + aside, m))
+            })
+            .min_by(|x, y| x.0.total_cmp(&y.0))
+            .map(|x| x.1)
+    }
+
+    /// The point a climb from the ladder foot `foot` runs at: straight into
+    /// the nearest ladder face it stands square in front of, as the climb
+    /// in [`rung`] did from there. The heading at the head instead drifts
+    /// along the face from a foot a few units aside and grabs the rungs at
+    /// their edge (section 3). A foot off to the side (a flood walk that
+    /// met the ladder) keeps the heading its walk proved.
+    fn face_ahead(&self, foot: Vec3) -> Option<glam::Vec2> {
+        self.ladder_boxes
+            .iter()
+            .filter(|(lo, hi)| foot.z > lo.z - 48.0 && foot.z < hi.z)
+            .filter_map(|&(lo, hi)| {
+                // The face's axis is the box's thinner one; `a` across the
+                // face, `b` along it.
+                let ext = hi - lo;
+                let (a, b) = if ext.x < ext.y { (0, 1) } else { (1, 0) };
+                let plane = if foot[a] > hi[a] {
+                    hi[a]
+                } else if foot[a] < lo[a] {
+                    lo[a]
+                } else {
+                    return None;
+                };
+                let away = (foot[a] - plane).abs();
+                let aside = (lo[b] - foot[b]).max(foot[b] - hi[b]);
+                let mut p = foot.truncate();
+                p[a] = plane;
+                (away < 48.0 && aside <= 0.0).then_some((away, p))
+            })
+            .min_by(|x, y| x.0.total_cmp(&y.0))
+            .map(|x| x.1)
+    }
+
     /// A roam destination: of a handful of random nodes in the component of
     /// node `start`, which stands at `from`, the first at least [`ROAM_MIN`]
     /// away, else the farthest. A pick the start cannot reach would cost a
@@ -1554,19 +1693,21 @@ pub(crate) fn hazard(hazards: &[BrushHull], p: Vec3) -> bool {
 /// How far apart along a heading [`drop_ahead`] feels for the floor.
 const DROP_SAMPLE: f32 = 16.0;
 
-/// Whether a body standing at `p`, walking `look` units along the flat unit
-/// vector `dir`, meets a drop deeper than a jump (one it cannot come back
-/// up) before a wall stops it. Floors are felt every [`DROP_SAMPLE`], each
-/// against the one before, so a stair down is no drop. Each is felt with
-/// the standing capsule: one standing on a lip it overhangs is held by it.
-pub(crate) fn drop_ahead(world: &CollisionWorld, p: Vec3, dir: Vec3, look: f32) -> bool {
+/// How deep the first drop deeper than a jump (one a body cannot come
+/// back up) is that a body standing at `p`, walking `look` units along the
+/// flat unit vector `dir`, meets before a wall stops it; infinite past
+/// the default `bg_fallDamageMinHeight`, where a fall starts to hurt.
+/// Floors are felt every [`DROP_SAMPLE`], each against the one before, so
+/// a stair down is no drop. Each is felt with the standing capsule: one
+/// standing on a lip it overhangs is held by it.
+pub(crate) fn drop_ahead(world: &CollisionWorld, p: Vec3, dir: Vec3, look: f32) -> Option<f32> {
     use vcod_common::pmove::{HALF_WIDTH, JUMP_HEIGHT, STEPSIZE, Stance};
     let mins = Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0);
     let maxs = Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height());
     let up = p + Vec3::Z * STEPSIZE;
     let t = world.box_trace(up, up + dir * look, mins, maxs - Vec3::Z * STEPSIZE);
     if t.startsolid || t.allsolid {
-        return false;
+        return None;
     }
     let reach = t.fraction * look;
     let mut floor = p.z;
@@ -1575,15 +1716,22 @@ pub(crate) fn drop_ahead(world: &CollisionWorld, p: Vec3, dir: Vec3, look: f32) 
         let at = (p + dir * d).truncate().extend(floor + STEPSIZE);
         let t = world.box_trace(at, at - Vec3::Z * (STEPSIZE + JUMP_HEIGHT), mins, maxs);
         if t.startsolid {
-            return false;
+            return None;
         }
         if t.fraction >= 1.0 {
-            return true;
+            let hurts = vcod_common::pmove::FallHeights::default().min;
+            let deep = world.box_trace(at, at - Vec3::Z * (STEPSIZE + hurts), mins, maxs);
+            let depth = deep.fraction * (STEPSIZE + hurts) - STEPSIZE;
+            return Some(if deep.fraction >= 1.0 {
+                f32::INFINITY
+            } else {
+                depth
+            });
         }
         floor = t.endpos.z;
         d += DROP_SAMPLE;
     }
-    false
+    None
 }
 
 /// Idle cmds until a body dropped at `p` stands on something; `None` when it
@@ -1644,6 +1792,15 @@ pub fn back_move(flat: f32, on_ladder: bool) -> i8 {
     } else {
         -CREEP
     }
+}
+
+/// The yaw a climb holds: square into the ladder's face, whatever the
+/// head's bearing. Aimed at a head off to one side, the body slides along
+/// the rungs to the ladder's edge and pins under what overhangs it there
+/// (mp_ship's ladder at x 3354, bot-navigation.md "Ladders").
+pub fn climb_yaw(ladder_normal: Vec3) -> Option<f32> {
+    let n = ladder_normal.truncate();
+    (n.length_squared() > 0.01).then(|| (-n.y).atan2(-n.x).to_degrees())
 }
 
 /// The heading a creep holds. The lip is a step or two from the point it
@@ -2102,7 +2259,15 @@ mod tests {
         let mut seen = Vec::new();
         let mut planned = None;
         for _ in 0..10 {
-            let Some(w) = f.waypoint(&g, None, goal, at, true, &mut budget, &mut rand) else {
+            let Some(w) = f.waypoint(
+                &g,
+                None,
+                goal,
+                at,
+                Footing::STANDING,
+                &mut budget,
+                &mut rand,
+            ) else {
                 panic!("no waypoint at {at:?}");
             };
             seen.push(w[0]);
@@ -2163,7 +2328,7 @@ mod tests {
             None,
             crate::bots::Goal::To([-1000.0, -1000.0, 0.0]),
             at,
-            true,
+            Footing::STANDING,
             &mut budget,
             &mut || 0,
         );
@@ -2178,7 +2343,7 @@ mod tests {
             None,
             crate::bots::Goal::To([0.0; 3]),
             [-1000.0, -1000.0, 0.0],
-            true,
+            Footing::STANDING,
             &mut budget,
             &mut || 0,
         );
@@ -2222,7 +2387,15 @@ mod tests {
         let mut ticks = 0;
         let w = loop {
             let mut budget = 4000;
-            let w = f.waypoint(&g, None, goal, [0.0; 3], true, &mut budget, &mut || 0);
+            let w = f.waypoint(
+                &g,
+                None,
+                goal,
+                [0.0; 3],
+                Footing::STANDING,
+                &mut budget,
+                &mut || 0,
+            );
             assert!(
                 4000 - budget <= PLAN_SLICE,
                 "tick {ticks} spent {}",
@@ -2247,7 +2420,7 @@ mod tests {
             None,
             crate::bots::Goal::Roam,
             [0.0; 3],
-            true,
+            Footing::STANDING,
             &mut 0,
             &mut || 0,
         );
@@ -2265,7 +2438,7 @@ mod tests {
             None,
             crate::bots::Goal::Roam,
             [0.0; 3],
-            true,
+            Footing::STANDING,
             &mut 100,
             &mut rand,
         );
@@ -2283,12 +2456,28 @@ mod tests {
         let mut picks = [0, 4, 1, 5, 3].into_iter().cycle();
         let mut rand = || picks.next().unwrap();
         let goal = crate::bots::Goal::Away([0.0, 0.0, 0.0]);
-        let w = f.waypoint(&g, None, goal, [64.0, 0.0, 0.0], true, &mut 100, &mut rand);
+        let w = f.waypoint(
+            &g,
+            None,
+            goal,
+            [64.0, 0.0, 0.0],
+            Footing::STANDING,
+            &mut 100,
+            &mut rand,
+        );
         assert_eq!(f.dest, Some(5));
         assert_eq!(w, Some([96.0, 0.0, 0.0]));
         // The threat moves past the far end: the flight turns round.
         let goal = crate::bots::Goal::Away([300.0, 0.0, 0.0]);
-        f.waypoint(&g, None, goal, [64.0, 0.0, 0.0], true, &mut 100, &mut rand);
+        f.waypoint(
+            &g,
+            None,
+            goal,
+            [64.0, 0.0, 0.0],
+            Footing::STANDING,
+            &mut 100,
+            &mut rand,
+        );
         assert_eq!(f.dest, Some(0));
     }
 
@@ -2311,10 +2500,26 @@ mod tests {
         let at = [32.0, 0.0, 0.0];
         let mut last = None;
         for _ in 0..=STUCK_TICKS + 1 {
-            last = f.waypoint(&g, None, goal, at, true, &mut budget, &mut || 0);
+            last = f.waypoint(
+                &g,
+                None,
+                goal,
+                at,
+                Footing::STANDING,
+                &mut budget,
+                &mut || 0,
+            );
         }
         assert_eq!(last, None, "still steering at a waypoint it never nears");
-        let w = f.waypoint(&g, None, goal, at, true, &mut budget, &mut || 0);
+        let w = f.waypoint(
+            &g,
+            None,
+            goal,
+            at,
+            Footing::STANDING,
+            &mut budget,
+            &mut || 0,
+        );
         assert_eq!(
             w,
             Some([60.0, 30.0, 0.0]),
@@ -2409,17 +2614,41 @@ mod tests {
         // Standing on the path's last node: walked out, head at the point.
         let at = [32.0, 0.0, 100.0];
         assert_eq!(
-            f.waypoint(&g, None, goal, at, true, &mut budget, &mut || 0),
+            f.waypoint(
+                &g,
+                None,
+                goal,
+                at,
+                Footing::STANDING,
+                &mut budget,
+                &mut || 0
+            ),
             Some([40.0, 0.0, 120.0])
         );
         assert_eq!(
-            f.waypoint(&g, None, goal, at, true, &mut budget, &mut || 0),
+            f.waypoint(
+                &g,
+                None,
+                goal,
+                at,
+                Footing::STANDING,
+                &mut budget,
+                &mut || 0
+            ),
             Some([40.0, 0.0, 120.0])
         );
         // Fell to the floor below: a new plan back up, its waypoints nodes.
         let below = [34.0, 0.0, 0.0];
         let before = budget;
-        let w = f.waypoint(&g, None, goal, below, true, &mut budget, &mut || 0);
+        let w = f.waypoint(
+            &g,
+            None,
+            goal,
+            below,
+            Footing::STANDING,
+            &mut budget,
+            &mut || 0,
+        );
         assert!(budget < before, "planned again");
         assert!(
             w.is_some_and(|w| g.nodes.contains(&Vec3::from(w))),
@@ -2444,7 +2673,20 @@ mod tests {
         let mut f = Follower::default();
         let goal = crate::bots::Goal::To([-48.0, 0.0, -64.0]);
         let mut budget = 1000;
-        let mut at = |p: [f32; 3]| f.waypoint(&g, None, goal, p, false, &mut budget, &mut || 0);
+        let mut at = |p: [f32; 3]| {
+            f.waypoint(
+                &g,
+                None,
+                goal,
+                p,
+                Footing {
+                    still: false,
+                    on_ground: true,
+                },
+                &mut budget,
+                &mut || 0,
+            )
+        };
         assert_eq!(at([64.0, 0.0, -64.0]), Some([32.0, 0.0, -48.0]));
         assert_eq!(at([12.0, 0.0, -48.0]), Some([0.0, 0.0, -32.0]));
         assert_eq!(at([2.0, 0.0, -32.0]), Some([-48.0, 0.0, -64.0]));
@@ -2466,7 +2708,20 @@ mod tests {
         let mut f = Follower::default();
         let goal = crate::bots::Goal::To([32.0, 64.0, 36.0]);
         let mut budget = 100;
-        let mut at = |p: [f32; 3]| f.waypoint(&g, None, goal, p, false, &mut budget, &mut || 0);
+        let mut at = |p: [f32; 3]| {
+            f.waypoint(
+                &g,
+                None,
+                goal,
+                p,
+                Footing {
+                    still: false,
+                    on_ground: true,
+                },
+                &mut budget,
+                &mut || 0,
+            )
+        };
         assert_eq!(at([0.0, 0.0, 0.0]), Some([32.0, 0.0, 36.0]));
         // 25 flat from the top, 15 under it, mid-jump.
         assert_eq!(at([20.0, 22.0, 30.0]), Some([32.0, 0.0, 36.0]));
@@ -2489,8 +2744,20 @@ mod tests {
         let mut f = Follower::default();
         let goal = crate::bots::Goal::To(beyond.into());
         let mut budget = 100;
-        let mut at =
-            |p: Vec3| f.waypoint(&g, Some(w), goal, p.into(), false, &mut budget, &mut || 0);
+        let mut at = |p: Vec3| {
+            f.waypoint(
+                &g,
+                Some(w),
+                goal,
+                p.into(),
+                Footing {
+                    still: false,
+                    on_ground: true,
+                },
+                &mut budget,
+                &mut || 0,
+            )
+        };
         // In reach of the edge node along the ledge, but the walk on slides
         // back from here: close in on the node.
         let along = Vec3::new(2256.2498, 523.75616, -47.87189);
@@ -2538,13 +2805,74 @@ mod tests {
         // floor is a step off: from further down the rungs the next node
         // is no way on.
         while at[2] <= 182.0 {
-            let w = f.waypoint(&g, None, goal, at, true, &mut budget, &mut || 0);
+            let w = f.waypoint(
+                &g,
+                None,
+                goal,
+                at,
+                Footing::STANDING,
+                &mut budget,
+                &mut || 0,
+            );
             assert_eq!(w, Some([10.0, 0.0, 200.0]), "at z {}", at[2]);
             at[2] += 2.5;
         }
         at[0] = 10.0;
-        let w = f.waypoint(&g, None, goal, at, true, &mut budget, &mut || 0);
+        at[2] = 200.0;
+        // Level with it but still on the rungs: turning for the next node
+        // there lets go of them (mp_ship's mast).
+        let climbing = Footing {
+            still: false,
+            on_ground: false,
+        };
+        let w = f.waypoint(&g, None, goal, at, climbing, &mut budget, &mut || 0);
+        assert_eq!(w, Some([10.0, 0.0, 200.0]), "on the rungs");
+        let w = f.waypoint(
+            &g,
+            None,
+            goal,
+            at,
+            Footing::STANDING,
+            &mut budget,
+            &mut || 0,
+        );
         assert_eq!(w, Some([40.0, 0.0, 200.0]), "on the head's floor");
+    }
+
+    /// A climb from a foot square in front of a ladder runs into the face
+    /// until it is level with the head; from a foot off to the side it runs
+    /// at the head, the way the walk that linked it went.
+    #[test]
+    fn a_climb_runs_into_the_face_from_a_foot_in_front_of_it() {
+        let mut g = NavGraph::from_parts(
+            vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(-40.0, 10.0, 200.0),
+                Vec3::new(0.0, 40.0, 0.0),
+            ],
+            vec![vec![1], vec![0], vec![1]],
+        );
+        // A ladder plate 1 thick at x -17, 24 wide along y.
+        g.ladder_boxes = vec![(Vec3::new(-18.0, -12.0, -8.0), Vec3::new(-17.0, 12.0, 200.0))];
+        let goal = crate::bots::Goal::To([-40.0, 10.0, 200.0]);
+        let mut f = Follower::default();
+        let mut budget = 100;
+        let w = |f: &mut Follower, budget: &mut u32, at: [f32; 3]| {
+            f.waypoint(&g, None, goal, at, Footing::STANDING, budget, &mut || 0)
+        };
+        assert_eq!(w(&mut f, &mut budget, [0.0; 3]), Some([-17.0, 0.0, 200.0]));
+        assert_eq!(
+            w(&mut f, &mut budget, [-2.0, 0.0, 190.0]),
+            Some([-40.0, 10.0, 200.0]),
+            "level with the head"
+        );
+        let mut f = Follower::default();
+        let at = [0.0, 40.0, 0.0];
+        assert_eq!(w(&mut f, &mut budget, at), Some([-40.0, 10.0, 200.0]));
+        assert_eq!(
+            g.ladder_middle(Vec3::new(-2.0, 9.0, 100.0)),
+            Some(glam::Vec2::new(-2.0, 0.0))
+        );
     }
 
     #[test]
@@ -2683,19 +3011,49 @@ mod tests {
         let foot = Some([32.0, 0.0, 0.0]);
         let at = [30.0, 0.0, 0.0];
         assert_eq!(
-            f.waypoint(&g, None, goal, at, false, &mut budget, &mut || 0),
+            f.waypoint(
+                &g,
+                None,
+                goal,
+                at,
+                Footing {
+                    still: false,
+                    on_ground: true,
+                },
+                &mut budget,
+                &mut || 0
+            ),
             foot
         );
         assert!(f.holding(&g) && !f.jumping(&g));
         // Running past the foot, nearer the top than the foot is: held.
         let at = [40.0, 0.0, 0.0];
         assert_eq!(
-            f.waypoint(&g, None, goal, at, false, &mut budget, &mut || 0),
+            f.waypoint(
+                &g,
+                None,
+                goal,
+                at,
+                Footing {
+                    still: false,
+                    on_ground: true,
+                },
+                &mut budget,
+                &mut || 0
+            ),
             foot
         );
         let at = [33.0, 0.0, 0.0];
         assert_eq!(
-            f.waypoint(&g, None, goal, at, true, &mut budget, &mut || 0),
+            f.waypoint(
+                &g,
+                None,
+                goal,
+                at,
+                Footing::STANDING,
+                &mut budget,
+                &mut || 0
+            ),
             Some([96.0, 0.0, 32.0])
         );
         assert!(f.jumping(&g) && f.leaping(&g) && !f.holding(&g));
@@ -2735,7 +3093,7 @@ mod tests {
         let drops: Vec<bool> = (0..8)
             .map(|i| {
                 let (s, c) = (i as f32 * 45.0f32).to_radians().sin_cos();
-                drop_ahead(&world.collision, lip, Vec3::new(c, s, 0.0), 64.0)
+                drop_ahead(&world.collision, lip, Vec3::new(c, s, 0.0), 64.0).is_some()
             })
             .collect();
         assert_eq!((drops[0], drops[2]), (false, false), "{drops:?}");
