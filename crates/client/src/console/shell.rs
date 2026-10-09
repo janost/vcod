@@ -252,6 +252,11 @@ impl Shell {
         s.register("rate", "25000", ARCHIVE | USERINFO);
         s.register("snaps", "20", ARCHIVE | USERINFO);
         s.register("cg_fov", "80", ARCHIVE | CHEAT);
+        // CL_Init (CoDMP.exe 0x411e60): the send rate and the clock's
+        // nudge (docs/protocol-1.1.md, "The client's clock").
+        s.register("cl_maxpackets", "30", ARCHIVE);
+        s.register("cl_packetdup", "1", ARCHIVE);
+        s.register("cl_timeNudge", "0", 0);
         // CoDMP.exe registers `password` CVAR_USERINFO, not archived
         // (0x4123ea); the browser's password popup edits it.
         s.register("password", "", USERINFO);
@@ -869,7 +874,14 @@ mod tests {
         assert_eq!(s.complete("unb"), ["unbind", "unbindall"]);
         assert_eq!(
             s.complete("CL_"),
-            ["cl_allowDownload", "cl_freelook", "cl_run"]
+            [
+                "cl_allowDownload",
+                "cl_freelook",
+                "cl_maxpackets",
+                "cl_packetdup",
+                "cl_run",
+                "cl_timeNudge"
+            ]
         );
         assert!(s.complete("zzz").is_empty());
     }

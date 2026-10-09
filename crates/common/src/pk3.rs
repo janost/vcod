@@ -44,7 +44,7 @@ impl Pk3Fs {
 
     /// `base`'s paks, then `game`'s on top of them: the search path a
     /// systeminfo `fs_game` gives (docs/research/cod11-front-end.md, section
-    /// 15). A `game` directory that does not exist yet adds nothing.
+    /// 16). A `game` directory that does not exist yet adds nothing.
     pub fn open_layered(base: &Path, game: Option<&Path>) -> Result<Self> {
         let mut archives =
             pk3s_in(base).with_context(|| format!("cannot read mod dir {}", base.display()))?;

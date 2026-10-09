@@ -120,6 +120,26 @@ pub struct HudFrame<'a> {
     /// A client cvar: a server `v`, else the 140/204 mirror. Mod `hud.menu`
     /// items read it.
     pub cvar: &'a dyn Fn(&str) -> Option<String>,
+    pub draw: DrawToggles,
+}
+
+/// `cg_drawCrosshair` and `cg_drawStatus`, read as the cgame's vmCvar
+/// integers (docs/research/cod11-hud-protocol.md, "Which views draw it").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DrawToggles {
+    /// The weapon crosshair and the mounted gun's reticle.
+    pub crosshair: bool,
+    /// The `hud.menu` HUD (owner draws included) and the hudelems.
+    pub status: bool,
+}
+
+impl Default for DrawToggles {
+    fn default() -> Self {
+        DrawToggles {
+            crosshair: true,
+            status: true,
+        }
+    }
 }
 
 impl Hud {
@@ -264,16 +284,19 @@ impl Hud {
                     loc: f.localized,
                     font: &self.fonts.normal,
                     entity_origin: f.entity_origin,
+                    draw: f.draw,
                 };
                 self.player
                     .build(&view, &cx, f.server_time, screen, &mut out);
                 // `Menu_PaintAll` paints the rest of hud.menu over the native items.
-                self.hud_menu
-                    .build(&self.fonts, screen, f.localized, f.cvar, &mut out);
+                if f.draw.status {
+                    self.hud_menu
+                        .build(&self.fonts, screen, f.localized, f.cvar, &mut out);
+                }
             }
             None => self.player.hidden(),
         }
-        if let Some(ps) = f.ps {
+        if let Some(ps) = f.ps.filter(|_| f.draw.status) {
             let elems: Vec<HudElem> = ps
                 .arrays
                 .hud_archived
@@ -526,6 +549,7 @@ mod tests {
             entity_origin: &|_| None,
             turret_weapon: None,
             cvar: &|_| None,
+            draw: DrawToggles::default(),
         }
     }
 
@@ -637,6 +661,44 @@ mod tests {
         let own = drawn(0, true);
         assert!(native(&own) && !own.contains(&header));
         assert!(native(&drawn(6, false)), "dead");
+    }
+
+    #[test]
+    fn draw_status_off_hides_the_menu_hud_and_hudelems() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let mut hud = Hud::new(&fs).expect("hud");
+        let mut ps = PlayerState::null(&PROTOCOL_V1);
+        let mut bar = HudElem::default();
+        bar.set(msg_field::TYPE, 3);
+        bar.set(msg_field::SHADER, 1);
+        bar.set(msg_field::WIDTH, 10);
+        bar.set(msg_field::HEIGHT, 10);
+        bar.set(msg_field::COLOR, -1);
+        ps.arrays.hud_current.push(bar);
+        let mut cs = vec![String::new(); hudelem::CS_SHADERS + 2];
+        cs[hudelem::CS_SHADERS + 1] = "white".into();
+        let (loc, clients) = (Localized::default(), BTreeMap::new());
+        let mut drawn = |status: bool| -> Vec<String> {
+            let f = HudFrame {
+                configstrings: &cs,
+                local_player: true,
+                draw: DrawToggles {
+                    crosshair: true,
+                    status,
+                },
+                ..frame(&ps, None, &fs, &loc, &clients)
+            };
+            hud.build(&f).into_iter().map(|q| q.texture).collect()
+        };
+        let on = drawn(true);
+        assert!(on.iter().any(|t| t.contains("health_back")) && on.contains(&"white".into()));
+        let off = drawn(false);
+        assert!(
+            !off.iter()
+                .any(|t| t.contains("health_back") || t == "white")
+        );
     }
 
     fn hud_header_page(fs: &Pk3Fs) -> String {

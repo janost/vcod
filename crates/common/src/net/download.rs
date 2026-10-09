@@ -47,7 +47,7 @@ pub fn safe_rel_path(name: &str, dirs: &[&str]) -> Option<PathBuf> {
 }
 
 /// The systeminfo's `fs_game`, which `CL_SystemInfoChanged` sets on the
-/// client (docs/research/cod11-front-end.md, section 15). `None` when unset,
+/// client (docs/research/cod11-front-end.md, section 16). `None` when unset,
 /// when it names `base` itself, or when it is not a plain directory name.
 pub fn fs_game(systeminfo: &str, base: &str) -> Option<String> {
     let v = super::info_value_for_key(systeminfo, "fs_game")?;
