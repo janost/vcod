@@ -1,6 +1,7 @@
 //! The front end's menu files: `ui_mp/*.menu` and `ui/*.menu`, the full
 //! `menuDef` / `itemDef` grammar the UI module reads, as far as the main menu
-//! and the server browser use it (docs/research/cod11-front-end.md). Unlike
+//! the server browser and the options screens use it
+//! (docs/research/cod11-front-end.md). Unlike
 //! [`crate::menu`], which keeps only what a script menu needs, this keeps the
 //! layout: rects, colours, styles, text placement and the item scripts.
 
@@ -13,8 +14,11 @@ pub const ITEM_TYPE_TEXT: i32 = 0;
 pub const ITEM_TYPE_BUTTON: i32 = 1;
 pub const ITEM_TYPE_EDITFIELD: i32 = 4;
 pub const ITEM_TYPE_LISTBOX: i32 = 6;
+pub const ITEM_TYPE_OWNERDRAW: i32 = 8;
+pub const ITEM_TYPE_SLIDER: i32 = 10;
 pub const ITEM_TYPE_YESNO: i32 = 11;
 pub const ITEM_TYPE_MULTI: i32 = 12;
+pub const ITEM_TYPE_BIND: i32 = 13;
 
 /// `WINDOW_STYLE_*`.
 pub const WINDOW_STYLE_FILLED: i32 = 1;
@@ -34,6 +38,14 @@ pub struct Column {
     pub pos: f32,
     pub width: f32,
     pub max_chars: usize,
+}
+
+/// `cvarFloat "name" default min max`: a slider's range.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SliderRange {
+    pub default: f32,
+    pub min: f32,
+    pub max: f32,
 }
 
 /// `x y w h` in the 640x480 grid.
@@ -69,12 +81,16 @@ pub struct UiItem {
     pub ownerdraw_flag: i32,
     pub feeder: Option<i32>,
     pub element_height: f32,
-    /// An edit field's `maxchars` and `maxpaintchars`; 0 is no cap.
-    pub max_chars: usize,
-    pub max_paint_chars: usize,
     pub columns: Vec<Column>,
     /// `cvarFloatList`: an `ITEM_TYPE_MULTI`'s labels and the values they set.
     pub float_list: Vec<(String, f32)>,
+    /// `cvarStrList`: the same with string values.
+    pub str_list: Vec<(String, String)>,
+    /// `cvarFloat`: an `ITEM_TYPE_SLIDER`'s cvar is `cvar`, this its range.
+    pub slider: Option<SliderRange>,
+    /// An edit field's `maxChars` (0: no cap) and `maxPaintChars`.
+    pub max_chars: usize,
+    pub max_paint_chars: usize,
     /// Scripts as token streams; [`script_commands`] splits one.
     pub action: Vec<String>,
     pub double_click: Vec<String>,
@@ -111,10 +127,12 @@ impl Default for UiItem {
             ownerdraw_flag: 0,
             feeder: None,
             element_height: 0.0,
-            max_chars: 0,
-            max_paint_chars: 0,
             columns: Vec::new(),
             float_list: Vec::new(),
+            str_list: Vec::new(),
+            slider: None,
+            max_chars: 0,
+            max_paint_chars: 0,
             action: Vec::new(),
             double_click: Vec::new(),
             mouse_enter: Vec::new(),
@@ -319,13 +337,11 @@ fn parse_item(tokens: &[String]) -> UiItem {
             "ownerdraw" => {
                 item.ownerdraw = num(tokens.get(i + 1)) as i32;
                 // An ownerdraw is its own item type (`ITEM_TYPE_OWNERDRAW`).
-                item.kind = 8;
+                item.kind = ITEM_TYPE_OWNERDRAW;
             }
             "ownerdrawflag" => item.ownerdraw_flag |= num(tokens.get(i + 1)) as i32,
             "feeder" => item.feeder = Some(num(tokens.get(i + 1)) as i32),
             "elementheight" => item.element_height = num(tokens.get(i + 1)),
-            "maxchars" => item.max_chars = num(tokens.get(i + 1)) as usize,
-            "maxpaintchars" => item.max_paint_chars = num(tokens.get(i + 1)) as usize,
             "columns" => {
                 let n = num(tokens.get(i + 1)) as usize;
                 item.columns = (0..n)
@@ -349,6 +365,32 @@ fn parse_item(tokens: &[String]) -> UiItem {
                     "mouseenter" => item.mouse_enter = script,
                     _ => item.mouse_exit = script,
                 }
+                continue;
+            }
+            "cvarfloat" => {
+                item.cvar = Some(s(i));
+                let [default, min, max] = std::array::from_fn(|k| num(tokens.get(i + 2 + k)));
+                item.slider = Some(SliderRange { default, min, max });
+                skip = 5;
+            }
+            "maxchars" => item.max_chars = num(tokens.get(i + 1)) as usize,
+            "maxpaintchars" => item.max_paint_chars = num(tokens.get(i + 1)) as usize,
+            "cvarstrlist" => {
+                i += 1;
+                // The stock lists separate their entries with commas.
+                let words: Vec<&String> = block(tokens, &mut i)
+                    .iter()
+                    .filter(|t| t.as_str() != ",")
+                    .collect();
+                item.str_list = words
+                    .chunks(2)
+                    .map(|p| {
+                        (
+                            p[0].clone(),
+                            p.get(1).map_or(String::new(), |v| v.to_string()),
+                        )
+                    })
+                    .collect();
                 continue;
             }
             "cvarfloatlist" => {
@@ -418,6 +460,10 @@ fn is_command(t: &str) -> bool {
             | "ingameclose"
             | "setitemcolor"
             | "setfocus"
+            | "fadein"
+            | "fadeout"
+            | "execoncvarintvalue"
+            | "execoncvarfloatvalue"
     )
 }
 
@@ -427,6 +473,7 @@ fn args_done(cur: &[String]) -> bool {
     let want = match cur[0].to_ascii_lowercase().as_str() {
         "setcvar" => 2,
         "setitemcolor" => 6,
+        "execoncvarintvalue" | "execoncvarfloatvalue" => 3,
         "uiscript" => 1,
         _ => 1,
     };
@@ -577,5 +624,51 @@ mod tests {
         );
         // Popups place their items inside their own rect.
         assert_eq!(yes.rect[0], 204.0 + 44.0);
+    }
+
+    #[test]
+    fn stock_options_controls_parse() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let read = |p: &str| fs.read(p).map(|b| String::from_utf8_lossy(&b).into_owned());
+        let find = |file: &str, text: &str| {
+            parse_file(&read(file).unwrap(), &read)[0]
+                .items
+                .iter()
+                .find(|i| i.text == text)
+                .cloned()
+                .unwrap()
+        };
+        let sens = find("ui/options_look.menu", "@MENU_MOUSE_SENSITIVITY");
+        assert_eq!(sens.kind, ITEM_TYPE_SLIDER);
+        assert_eq!(sens.cvar.as_deref(), Some("sensitivity"));
+        assert_eq!(
+            sens.slider,
+            Some(SliderRange {
+                default: 5.0,
+                min: 1.0,
+                max: 30.0
+            })
+        );
+        // OPTIONS_WINDOW_POS 5 75 plus the item's 5 145.
+        assert_eq!(sens.rect, [10.0, 220.0, 350.0, 13.0]);
+        let filter = find("ui/options_graphics.menu", "@MENU_TEXTURE_FILTER");
+        assert_eq!(filter.str_list.len(), 2);
+        assert_eq!(filter.str_list[1].1, "GL_LINEAR_MIPMAP_LINEAR");
+        let name = find("ui_mp/options_multi.menu", "@MENU_PLAYER_NAME");
+        assert_eq!(name.kind, ITEM_TYPE_EDITFIELD);
+        assert_eq!((name.max_chars, name.max_paint_chars), (32, 18));
+        let fwd = find("ui/options_move.menu", "@MENU_FORWARD");
+        assert_eq!(fwd.kind, ITEM_TYPE_BIND);
+        assert_eq!(fwd.cvar.as_deref(), Some("+forward"));
+        let perf = parse_file(&read("ui/options_performance.menu").unwrap(), &read);
+        assert!(script_commands(&perf[0].on_close).iter().any(|c| c
+            == &[
+                "execOnCvarIntValue",
+                "ui_lod",
+                "4",
+                "set r_lodscale 4;set r_lodbias -200"
+            ]));
     }
 }

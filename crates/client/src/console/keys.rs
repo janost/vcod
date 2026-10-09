@@ -87,6 +87,31 @@ pub fn canonical(name: &str) -> Option<String> {
     }
 }
 
+/// A sort key standing in for retail's key number: the keys that are ASCII
+/// in Q3's `keyNum_t` (Tab, Enter, Escape, Space, the printable ones, letters
+/// lowercase) by their code, then the named keys in table order with the
+/// mouse last, as CoD's `K_MOUSE1` is 200. Only the order matters.
+pub fn number(name: &str) -> u32 {
+    match name {
+        "TAB" => return 9,
+        "ENTER" => return 13,
+        "ESCAPE" => return 27,
+        "SPACE" => return 32,
+        "BACKSPACE" => return 127,
+        _ => {}
+    }
+    let mut chars = name.chars();
+    if let (Some(c), None) = (chars.next(), chars.next()) {
+        return c.to_ascii_lowercase() as u32;
+    }
+    let at = NAMES.iter().position(|n| *n == name).unwrap_or(NAMES.len()) as u32;
+    if name.starts_with("MOUSE") || name.starts_with("MWHEEL") {
+        300 + at
+    } else {
+        128 + at
+    }
+}
+
 pub fn key_name(code: KeyCode) -> Option<&'static str> {
     use KeyCode::*;
     Some(match code {

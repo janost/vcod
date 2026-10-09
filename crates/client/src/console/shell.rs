@@ -41,6 +41,10 @@ pub enum Effect {
     Userinfo,
     /// A bind or an archived cvar changed.
     SaveConfig,
+    /// `exec <file>`: run a config file from the game's search path.
+    Exec(String),
+    /// `vid_restart`: apply `r_mode` and `r_fullscreen` to the window.
+    VidRestart,
 }
 
 /// One cvar. `archive` is retail's `CVAR_ARCHIVE`: written to the config.
@@ -97,6 +101,7 @@ const COMMANDS: &[&str] = &[
     "cvarlist",
     "disconnect",
     "echo",
+    "exec",
     "gocrouch",
     "goprone",
     "messagemode",
@@ -107,10 +112,12 @@ const COMMANDS: &[&str] = &[
     "say_team",
     "set",
     "seta",
+    "setfromcvar",
     "toggle",
     "toggleconsole",
     "unbind",
     "unbindall",
+    "vid_restart",
     "weapnext",
     "weaponslot",
     "weapprev",
@@ -175,6 +182,39 @@ pub const DEFAULT_BINDS: &[(&str, &str)] = &[
     ("MWHEELUP", "weapprev"),
 ];
 
+/// The archived cvars the stock options screens set beyond the ones above,
+/// at the defaults CoDMP.exe and cgame register them with
+/// (docs/research/cod11-front-end.md, section 14), so a choice made there
+/// survives a restart. Only `mss_volume`, `r_mode` and `r_fullscreen` drive
+/// anything; vcod's window starts at its own size and windowed, so `r_mode`
+/// -1 and `r_fullscreen` 0 stand in for retail's 3 and 1.
+const MENU_CVARS: &[(&str, &str)] = &[
+    ("mss_volume", "0.8"),
+    ("mss_khz", "44"),
+    ("mss_3d_provider", "Miles Fast 2D Positional Audio"),
+    ("r_mode", "-1"),
+    ("r_fullscreen", "0"),
+    ("r_picmip", "1"),
+    ("r_picmip2", "2"),
+    ("r_textureMode", "GL_LINEAR_MIPMAP_NEAREST"),
+    ("r_texturebits", "0"),
+    ("r_gamma", "1.0"),
+    ("r_ignorehwgamma", "0"),
+    ("r_lodscale", "1"),
+    ("r_lodbias", "0"),
+    ("r_dynamiclight", "1"),
+    ("r_dlightQuality", "1"),
+    ("r_swapInterval", "0"),
+    ("r_nv_fog_dist", "1"),
+    ("cl_freelook", "1"),
+    ("m_filter", "0"),
+    ("cg_drawCrosshair", "1"),
+    ("cg_drawStatus", "1"),
+    ("cg_marks", "1"),
+    ("cg_brass", "1"),
+    ("cg_blood", "1"),
+];
+
 pub struct Shell {
     /// Keyed by lowercase name; `Cvar::name` keeps the registered spelling.
     cvars: BTreeMap<String, Cvar>,
@@ -225,6 +265,9 @@ impl Shell {
             "ui_browserShowNoPassword",
         ] {
             s.register(name, "1", ARCHIVE);
+        }
+        for (name, value) in MENU_CVARS {
+            s.register(name, value, ARCHIVE);
         }
         for (key, cmd) in DEFAULT_BINDS {
             s.binds.insert(key.to_string(), cmd.to_string());
@@ -284,6 +327,19 @@ impl Shell {
     #[cfg(test)]
     pub fn bind(&self, key: &str) -> Option<&str> {
         self.binds.get(key).map(String::as_str)
+    }
+
+    /// Every key bound to exactly `cmd` (case folded), in retail's key-number
+    /// order, which is the order the options screens list them in.
+    pub fn keys_bound_to(&self, cmd: &str) -> Vec<&str> {
+        let mut keys: Vec<&str> = self
+            .binds
+            .iter()
+            .filter(|(_, v)| v.eq_ignore_ascii_case(cmd))
+            .map(|(k, _)| k.as_str())
+            .collect();
+        keys.sort_by_key(|k| keys::number(k));
+        keys
     }
 
     /// Runs `text`: commands split on `;` and newlines outside quotes, as
@@ -402,6 +458,20 @@ impl Shell {
                 self.set(name, &value, word == "seta", out);
             }
             "toggle" => self.cmd_toggle(&tokens, out),
+            // `setfromcvar <variable> <variablein>` (CoDMP.exe 0x43a070): a
+            // missing source reads "".
+            "setfromcvar" => match (arg(1), arg(2)) {
+                (Some(dest), Some(src)) => {
+                    let value = self.cvar(src).unwrap_or("").to_string();
+                    self.set(dest, &value, false, out);
+                }
+                _ => print(out, "usage: setfromcvar <variable> <variablein>".into()),
+            },
+            "exec" => match arg(1) {
+                Some(file) => out.push(Effect::Exec(file.to_string())),
+                None => print(out, "exec <filename> : execute a script file".into()),
+            },
+            "vid_restart" => out.push(Effect::VidRestart),
             "cvarlist" => {
                 let prefix = arg(1).map(str::to_ascii_lowercase);
                 let mut n = 0;
@@ -794,8 +864,26 @@ mod tests {
     fn completion_covers_commands_and_cvars() {
         let s = Shell::new();
         assert_eq!(s.complete("unb"), ["unbind", "unbindall"]);
-        assert_eq!(s.complete("CL_"), ["cl_run"]);
+        assert_eq!(s.complete("CL_"), ["cl_freelook", "cl_run"]);
         assert!(s.complete("zzz").is_empty());
+    }
+
+    #[test]
+    fn setfromcvar_exec_and_keys_in_key_order() {
+        let mut s = Shell::new();
+        s.execute("setfromcvar ui_name name; setfromcvar ui_x nosuchcvar");
+        assert_eq!(s.cvar("ui_name"), Some("vcod"));
+        assert_eq!(s.cvar("ui_x"), Some(""));
+        assert_eq!(
+            s.execute("exec default_mp.cfg; vid_restart"),
+            [Effect::Exec("default_mp.cfg".into()), Effect::VidRestart]
+        );
+        // Space (32) before letters, letters before named keys, mouse last.
+        s.execute("bind MOUSE2 +forward; bind UPARROW +forward; bind SPACE +forward");
+        assert_eq!(
+            s.keys_bound_to("+FORWARD"),
+            ["SPACE", "W", "UPARROW", "MOUSE2"]
+        );
     }
 
     #[test]
