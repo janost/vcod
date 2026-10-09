@@ -10,12 +10,13 @@ use std::rc::Rc;
 use vcod_common::animtree::PlayerAnims;
 use vcod_common::collision::MASK_PLAYERSOLID;
 use vcod_common::movetrace::MoveWorld;
+use vcod_common::net::flags::{EF_DEAD, EF_PRONE};
 use vcod_common::net::msg::{ClientState, EntityState};
 use vcod_common::net::protocol::{CS_MODELS_V1, CS_TAGS_V1, Protocol};
 use vcod_common::net::snapshot::Snapshot;
 use vcod_common::net::trajectory::{TR_INTERPOLATE, TR_LINEAR_STOP, Trajectory};
 use vcod_common::pk3::Pk3Fs;
-use vcod_common::playerpose::{apply_aim, clip_name};
+use vcod_common::playerpose::{AimPitch, PitchSwing, apply_aim, clip_name};
 use vcod_common::pmove::movers::SnapshotMovers;
 use vcod_common::skeleton::{AnimBinding, PoseBuffer, Skeleton};
 use vcod_common::turretpose::{GunnerPlacement, angles_quat, place_gunner, tag_weapon_local};
@@ -466,6 +467,8 @@ pub struct EntityScene {
     turret_anims: HashMap<u32, TurretAnim>,
     /// The firing view's shake.
     shake: MsvcRand,
+    /// The last pass's `render_time`: `cg.frametime` for the pitch swing.
+    last_render_ms: Option<i32>,
     pub stats: SceneStats,
 }
 
@@ -519,6 +522,7 @@ impl EntityScene {
             turret_rigs: HashMap::new(),
             turret_anims: HashMap::new(),
             shake: MsvcRand::default(),
+            last_render_ms: None,
             stats: SceneStats::default(),
         }
     }
@@ -545,6 +549,8 @@ struct EntityAnim {
     /// dead client's live roster entry, which clears when they drop to limbo;
     /// the corpse then draws this instead of vanishing.
     visual: EntityVisual,
+    /// The torso pitch easing after the view (combat doc 16.3).
+    pitch_swing: PitchSwing,
 }
 
 impl EntityAnim {
@@ -557,6 +563,7 @@ impl EntityAnim {
             bindings: HashMap::new(),
             last_seen_ms: now_ms,
             visual: EntityVisual::None,
+            pitch_swing: PitchSwing::default(),
         }
     }
 }
@@ -925,8 +932,11 @@ pub fn build_instances(
         turret_rigs,
         turret_anims,
         shake,
+        last_render_ms,
         stats,
     } = scene;
+    let frametime_ms = last_render_ms.map_or(0, |t| (render_time - t).max(0));
+    *last_render_ms = Some(render_time);
     let anims = anims
         .get_or_insert_with(|| match PlayerAnims::load(fs) {
             Ok(a) => Some(a),
@@ -1134,6 +1144,7 @@ pub fn build_instances(
                         bindings: HashMap::new(),
                         last_seen_ms: st.last_seen_ms,
                         visual: EntityVisual::None,
+                        pitch_swing: st.pitch_swing,
                     };
                 }
                 st.visual = roster_visual;
@@ -1157,6 +1168,7 @@ pub fn build_instances(
                     let pitch = lerp_field("fTorsoPitch");
                     let waist_pitch = lerp_field("fWaistPitch");
                     let lean = lerp_field("leanf");
+                    let eflags = ent.field_i32(p, "eFlags");
 
                     // The clips a wire anim poses: a gunner's turret anim is
                     // the placement's leaf blend (0x300279b0 sets the goal
@@ -1226,9 +1238,31 @@ pub fn build_instances(
                     }
 
                     // Corpses keep their death-clip pose; their aim fields are
-                    // stale and would twist the body forever.
-                    if ent.field_i32(p, "eType") == ET_PLAYER {
-                        apply_aim(&mut st.pose, &assembly.skeleton, pitch, waist_pitch, lean);
+                    // stale and would twist the body forever. A gunner runs no
+                    // controllers (cgame 0x30004710).
+                    if etype == ET_PLAYER {
+                        // cgame's `CG_PlayerAnimation` (0x30004e40) eases the
+                        // torso after the lerped view pitch every frame; a
+                        // dead, mounted or climbing body eases back to level.
+                        let climbing = anims
+                            .name(st.legs.index())
+                            .is_some_and(|n| n.starts_with("pb_climb"));
+                        let mounted = eflags & turret::EF_MOUNTED != 0;
+                        st.pitch_swing.step(
+                            angles.x,
+                            frametime_ms,
+                            eflags & EF_DEAD != 0 || mounted || climbing,
+                        );
+                        if !mounted {
+                            let aim = AimPitch::new(
+                                angles.x,
+                                &st.pitch_swing,
+                                eflags & EF_PRONE != 0,
+                                pitch,
+                                waist_pitch,
+                            );
+                            apply_aim(&mut st.pose, &assembly.skeleton, &aim, lean);
+                        }
                     }
                 }
 

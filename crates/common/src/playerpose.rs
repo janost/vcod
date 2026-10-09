@@ -86,47 +86,175 @@ pub fn descend_aim(tree: &AnimTree, node: usize, pitch_deg: f32, yaw_deg: f32) -
     node
 }
 
-/// Per-bone weight of `fTorsoPitch` on the back control bones; must sum to 1.0.
-/// `BG_Player_DoControllers` (game.mp.i386.so 0x2b7f8) also mixes lean and
-/// torso-height terms; its constants are not decoded. See
-/// docs/research/player-model-anim-system.md, "Legs/torso split and aim layer".
-const BACK_PITCH_WEIGHTS: [f32; 3] = [0.2, 0.3, 0.5]; // back_low, back_mid, back_up
 const PELVIS_LEAN_DEG: f32 = 12.0;
 const BACK_LEAN_DEG: f32 = 8.0;
 
-/// Bends the spine control bones by the transmitted aim: `waist_pitch` on the
-/// pelvis, `torso_pitch` split by [`BACK_PITCH_WEIGHTS`], `lean` (a fraction,
-/// positive presumed right) as sideways roll. Call after the clips and before
-/// `skin_matrices`.
-///
-/// No clip keys these bones, so each bend starts from the bind rotation, not
-/// the previous frame's pose. `set_local_rot` overwrites; composing would spin
-/// further every frame.
-///
-/// Assumes the bind keeps the lateral axis as local Y (true on USAirborne3),
-/// so pitch is local Y and lean local X. Missing bones are skipped.
-pub fn apply_aim(
-    pose: &mut PoseBuffer,
-    skel: &Skeleton,
-    torso_pitch: f32,
-    waist_pitch: f32,
-    lean: f32,
-) {
-    let mut bend = |name: &str, pitch_deg: f32, roll_deg: f32| {
-        if let Some(bi) = skel.bone_index(name) {
-            let bind_rot = skel.bones()[bi].local_rot;
-            let q = Quat::from_rotation_y(pitch_deg.to_radians())
-                * Quat::from_rotation_x(roll_deg.to_radians());
-            pose.set_local_rot(bi, q * bind_rot);
-        }
-    };
-    bend("pelvis", waist_pitch, lean * PELVIS_LEAN_DEG);
-    for (w, name) in BACK_PITCH_WEIGHTS
-        .iter()
-        .zip(["back_low", "back_mid", "back_up"])
-    {
-        bend(name, torso_pitch * w, lean * BACK_LEAN_DEG / 3.0);
+/// The eased torso pitch the spine controllers bend by:
+/// `BG_PlayerAnimation`'s pitch swing (`game.mp.i386.so` 0x2b2ac..0x2b317,
+/// cgame 0x30004343), stored in the client record at `+0x3b4` with its
+/// swinging flag at `+0x3b8`. `docs/research/cod11-combat.md` 16.3.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+pub struct PitchSwing {
+    /// Degrees, engine convention (down positive), folded to 0..360 by
+    /// `AngleMod`.
+    pub angle: f32,
+    pub swinging: bool,
+}
+
+impl PitchSwing {
+    /// One `BG_PlayerAnimation` step: `view_pitch` is the record's
+    /// `viewangles[0]` (engine degrees), `frametime_ms` the game's frame
+    /// length on the server and `cg.frametime` on the client. `rest` is a
+    /// dead, mounted or climbing body, whose swing heads for 0.
+    pub fn step(&mut self, view_pitch: f32, frametime_ms: i32, rest: bool) {
+        let dest = if rest {
+            0.0
+        } else {
+            let p = if view_pitch > 180.0 {
+                view_pitch - 360.0
+            } else {
+                view_pitch
+            };
+            p * 0.6
+        };
+        swing_angles(
+            dest,
+            0.0,
+            45.0,
+            0.15,
+            frametime_ms as f32,
+            &mut self.angle,
+            &mut self.swinging,
+        );
     }
+}
+
+/// `BG_SwingAngles` (`game.mp.i386.so` 0x2ae00, cgame 0x30003ec0): Q3's
+/// `CG_SwingAngles` with the step scale `max(|swing| * 0.05, 0.5)`.
+fn swing_angles(
+    dest: f32,
+    tolerance: f32,
+    clamp: f32,
+    speed: f32,
+    frametime_ms: f32,
+    angle: &mut f32,
+    swinging: &mut bool,
+) {
+    use crate::pmove::aim::{angle_normalize_360 as angle_mod, angle_subtract};
+    if !*swinging {
+        let swing = angle_subtract(*angle, dest);
+        if swing > tolerance || swing < -tolerance {
+            *swinging = true;
+        }
+    }
+    if *swinging {
+        let swing = angle_subtract(dest, *angle);
+        let scale = (swing.abs() * 0.05).max(0.5);
+        if swing >= 0.0 {
+            let mut step = frametime_ms * scale * speed;
+            if step >= swing {
+                step = swing;
+                *swinging = false;
+            }
+            *angle = angle_mod(*angle + step);
+        } else {
+            let mut step = -frametime_ms * scale * speed;
+            if step <= swing {
+                step = swing;
+                *swinging = false;
+            }
+            *angle = angle_mod(*angle + step);
+        }
+    }
+    let swing = angle_subtract(dest, *angle);
+    if swing > clamp {
+        *angle = angle_mod(dest - (clamp - 1.0));
+    } else if swing < -clamp {
+        *angle = angle_mod(dest + (clamp - 1.0));
+    }
+}
+
+/// The pitch half of `BG_Player_DoControllers` (`game.mp.i386.so` 0x2b7f8):
+/// what each control bone is bent by, engine degrees (down positive).
+/// `docs/research/cod11-combat.md` 16.3.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+pub struct AimPitch {
+    pub pelvis: f32,
+    pub back_low: f32,
+    pub back_mid: f32,
+    pub back_up: f32,
+    pub neck: f32,
+    pub head: f32,
+}
+
+impl AimPitch {
+    /// `view_pitch` the record's `viewangles[0]`, `swing` its eased torso
+    /// pitch, `torso`/`waist` the entity's `fTorsoPitch`/`fWaistPitch`.
+    /// A mounted body runs no controllers at all; the caller skips it.
+    pub fn new(view_pitch: f32, swing: &PitchSwing, prone: bool, torso: f32, waist: f32) -> Self {
+        use crate::pmove::aim::{angle_normalize_180, angle_subtract};
+        let mut p = swing.angle;
+        if prone {
+            p = angle_normalize_180(p);
+            p *= if p > 0.0 { 0.5 } else { 0.25 };
+        }
+        // `AnglesSubtract(view, torso)`, then `AnglesSubtract(torso, legs)`
+        // with the legs' pitch 0.
+        let head = angle_subtract(view_pitch, p);
+        let p = angle_subtract(p, 0.0);
+        let slope = if torso != 0.0 || waist != 0.0 {
+            angle_subtract(torso, waist)
+        } else {
+            0.0
+        };
+        let (back_low, back_mid, back_up) = if prone {
+            (slope, 0.0, p)
+        } else {
+            (p * 0.2 + slope, p * 0.3, p * 0.5)
+        };
+        AimPitch {
+            pelvis: -slope,
+            back_low,
+            back_mid,
+            back_up,
+            neck: head * 0.3,
+            head: head * 0.7,
+        }
+    }
+}
+
+/// Bends the control bones: the pitch [`AimPitch`] gives each, and `lean`
+/// (a fraction, positive presumed right) as a roll on the pelvis and back.
+/// Call after the clips and before `skin_matrices`.
+///
+/// A control bone's rotation replaces its local one and turns it in model
+/// space: its world rotation is the control's times its parent's
+/// (`docs/research/cod11-combat.md` 16.3). Pitch is about the model's Y,
+/// down positive, roll about its X. The bones are walked parent first, so
+/// each is measured off the bends above it.
+///
+/// `set_local_rot` overwrites, so nothing accumulates across frames. The
+/// lean split is not retail's, which is not decoded. Missing bones are
+/// skipped.
+pub fn apply_aim(pose: &mut PoseBuffer, skel: &Skeleton, aim: &AimPitch, lean: f32) {
+    let mut bend = |name: &str, pitch_deg: f32, roll_deg: f32| {
+        let Some(bi) = skel.bone_index(name) else {
+            return;
+        };
+        let parent = match usize::try_from(skel.bones()[bi].parent) {
+            Ok(p) => pose.bone_world(skel, p).1,
+            Err(_) => Quat::IDENTITY,
+        };
+        let control = Quat::from_rotation_y(pitch_deg.to_radians())
+            * Quat::from_rotation_x(roll_deg.to_radians());
+        pose.set_local_rot(bi, parent.inverse() * control * parent);
+    };
+    bend("pelvis", aim.pelvis, lean * PELVIS_LEAN_DEG);
+    bend("back_low", aim.back_low, lean * BACK_LEAN_DEG / 3.0);
+    bend("back_mid", aim.back_mid, lean * BACK_LEAN_DEG / 3.0);
+    bend("back_up", aim.back_up, lean * BACK_LEAN_DEG / 3.0);
+    bend("neck", aim.neck, 0.0);
+    bend("head", aim.head, 0.0);
 }
 
 /// True when every child carries an aim annotation (an MG42 aim group, not a
@@ -166,9 +294,11 @@ pub struct PoseInputs<'a> {
     pub legs_start_ms: i32,
     pub torso_start_ms: i32,
     pub now_ms: i32,
-    /// Degrees, and `lean` a fraction of full lean.
-    pub torso_pitch: f32,
-    pub waist_pitch: f32,
+    /// Engine degrees, down positive: what an MG42 aim group descends by.
+    pub group_pitch: f32,
+    /// The controllers' pitch, `None` for a mounted body, which runs none.
+    pub aim: Option<AimPitch>,
+    /// A fraction of full lean.
     pub lean: f32,
 }
 
@@ -189,7 +319,7 @@ pub fn pose_player(
         (inputs.legs, inputs.legs_start_ms),
         (inputs.torso, inputs.torso_start_ms),
     ] {
-        let Some(name) = clip_name(inputs.anims, wire, inputs.torso_pitch, 0.0) else {
+        let Some(name) = clip_name(inputs.anims, wire, inputs.group_pitch, 0.0) else {
             continue;
         };
         let Some(anim) = clip(name) else { continue };
@@ -197,13 +327,9 @@ pub fn pose_player(
         let binding = skel.bind(&anim);
         pose.apply(&anim, &binding, anim.frame_pos(t, anim.looping));
     }
-    apply_aim(
-        &mut pose,
-        skel,
-        inputs.torso_pitch,
-        inputs.waist_pitch,
-        inputs.lean,
-    );
+    if let Some(aim) = &inputs.aim {
+        apply_aim(&mut pose, skel, aim, inputs.lean);
+    }
     pose
 }
 
@@ -329,7 +455,17 @@ main
         let m = spine_fixture();
         let skel = Skeleton::build(&[&m]);
         let mut pose = PoseBuffer::new(&skel);
-        apply_aim(&mut pose, &skel, 30.0, 0.0, 0.0);
+        // A settled swing: the torso takes 0.6 of a 50-degree view.
+        let swing = PitchSwing {
+            angle: 30.0,
+            swinging: false,
+        };
+        apply_aim(
+            &mut pose,
+            &skel,
+            &AimPitch::new(50.0, &swing, false, 0.0, 0.0),
+            0.0,
+        );
         // back_up accumulates all three weights, the full torso pitch
         let up = skel.bone_index("back_up").unwrap();
         let w = world_rot_of(&pose, &skel, up);
@@ -347,14 +483,77 @@ main
         let mut pose = PoseBuffer::new(&skel);
         let up = skel.bone_index("back_up").unwrap();
 
-        apply_aim(&mut pose, &skel, 20.0, 5.0, 0.0);
+        let aim = AimPitch::new(20.0, &PitchSwing::default(), false, 5.0, 0.0);
+        apply_aim(&mut pose, &skel, &aim, 0.0);
         let first = world_rot_of(&pose, &skel, up);
-        apply_aim(&mut pose, &skel, 20.0, 5.0, 0.0);
+        apply_aim(&mut pose, &skel, &aim, 0.0);
         let second = world_rot_of(&pose, &skel, up);
 
         assert!(
             first.abs_diff_eq(second, 1e-5),
             "aim pose drifted across identical frames: {first} != {second}"
         );
+    }
+
+    /// `BG_SwingAngles` on the pitch channel at the server's 50 ms frame:
+    /// the first step covers `51 * 0.05 * 50 * 0.15` of a flip to 85, and
+    /// the swing lands on `0.6 * 85` seven frames later (combat doc 16.3).
+    #[test]
+    fn the_torso_pitch_eases_after_the_view() {
+        let mut s = PitchSwing::default();
+        s.step(85.0, 50, false);
+        assert!((s.angle - 19.125).abs() < 0.01, "{s:?}");
+        assert!(s.swinging);
+        let mut frames = 1;
+        while s.swinging {
+            s.step(85.0, 50, false);
+            frames += 1;
+        }
+        assert_eq!(frames, 7);
+        assert!((s.angle - 51.0).abs() < 0.01, "{s:?}");
+        // Back up: the angle folds through 360 on the way to 0.
+        s.step(0.0, 50, false);
+        assert!((s.angle - 31.875).abs() < 0.01, "{s:?}");
+        // A dead, mounted or climbing body heads for level whatever its view.
+        let mut r = PitchSwing::default();
+        r.step(-60.0, 50, true);
+        assert_eq!(r, PitchSwing::default());
+    }
+
+    /// A short frame cannot leave the torso more than 45 degrees off its
+    /// destination: the clamp puts it 44 inside.
+    #[test]
+    fn the_torso_pitch_is_clamped_to_45_off_the_view() {
+        let mut s = PitchSwing::default();
+        s.step(85.0, 1, false);
+        assert!((s.angle - 7.0).abs() < 0.01, "{s:?}");
+        let mut up = PitchSwing::default();
+        up.step(275.0, 1, false); // -85 as 0..360
+        assert!((up.angle - (360.0 - 7.0)).abs() < 0.01, "{up:?}");
+    }
+
+    /// `BG_Player_DoControllers`' pitch split: the back takes the eased
+    /// torso pitch 0.2 / 0.3 / 0.5 and the neck and head 0.3 / 0.7 of what
+    /// the view is past it; prone puts the halved (down) or quartered (up)
+    /// torso pitch on `back_up` alone.
+    #[test]
+    fn the_controllers_split_the_view_between_back_and_head() {
+        let swing = PitchSwing {
+            angle: 30.0,
+            swinging: false,
+        };
+        let a = AimPitch::new(50.0, &swing, false, 0.0, 0.0);
+        let near = |x: f32, y: f32| (x - y).abs() < 0.01;
+        assert!(near(a.back_low, 6.0) && near(a.back_mid, 9.0) && near(a.back_up, 15.0));
+        assert!(near(a.neck, 6.0) && near(a.head, 14.0), "{a:?}");
+        let pr = AimPitch::new(50.0, &swing, true, 4.0, 1.0);
+        assert!(near(pr.back_up, 15.0) && near(pr.back_mid, 0.0));
+        assert!(near(pr.back_low, 3.0) && near(pr.pelvis, -3.0));
+        assert!(near(pr.head, 35.0 * 0.7), "{pr:?}");
+        let up = PitchSwing {
+            angle: 340.0,
+            swinging: false,
+        };
+        assert!(near(AimPitch::new(0.0, &up, true, 0.0, 0.0).back_up, -5.0));
     }
 }

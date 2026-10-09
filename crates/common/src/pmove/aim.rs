@@ -64,7 +64,7 @@ const PI64: f64 = std::f64::consts::PI;
 /// only because of the truncation: rounded to nearest, it stalls a few
 /// 65536ths out once a step is under half of one, which a run against
 /// ours measured as a constant 0.022 degrees of yaw (combat doc, 15.4).
-fn angle_normalize_360(a: f32) -> f32 {
+pub fn angle_normalize_360(a: f32) -> f32 {
     ((a * (65536.0 / 360.0)) as i32 & 0xffff) as f32 * (360.0 / 65536.0)
 }
 
