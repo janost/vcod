@@ -1175,6 +1175,34 @@ walk met. Retail, 2026-10-09: `first 62350 0`, `first 72400 2`,
 `first 81050 0`, no `later`: this frame's last link each time (combat doc
 14.7).
 
+## probe_blastlink
+
+Which links a grenade's blast walk meets, for `docs/research/cod11-combat.md`
+14.7 ("One entity pass"). dm on mp_carentan with `+set scr_forcerespawn 1`;
+a `--probe-team allies` victim, then 4 s later a `--save-grenade
+--capture-tag <tag>` thrower on allies too (the script throws the frag; move
+its tagged fixture out of `crates/server/tests/fixtures/playerstate/` after
+the run). 110 s on the server, `--probe-secs 95` on the victim and 80 on the
+thrower.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PORT=29821 SECS=110 \
+    tools/run_probe.sh client-probes/probe_blastlink mp_carentan +set scr_forcerespawn 1
+# second shell, about 10 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:29821 --probe-team allies --probe-secs 95
+# third shell, 4 s after that:
+cargo run -p vcod -- --net-probe 127.0.0.1:29821 --probe-team allies --save-grenade --capture-tag blastlink --probe-secs 80
+```
+
+Against ours the server half is `vcod-server mp_carentan --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_blastlink.gsc --set
+scr_forcerespawn=1`. Each damage callback logs `PROBE link <time> <mod>
+<inflictor> <child> <off>` per child, `off` 0 when the child was re-anchored
+this frame and +/-8 when it still sits on the last frame's. Retail,
+2026-10-09: every `MOD_GRENADE_SPLASH` walk read 0 for the children numbered
+below the grenade and 8 for the ones above it (grenades 170, 180, 243), and
+every `MOD_FALLING` callback 0 for all.
+
 ## probe_linkto2
 
 `linkTo`'s second round on mp_carentan. Once an allied player has spawned it

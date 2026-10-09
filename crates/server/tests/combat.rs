@@ -1612,6 +1612,134 @@ hit(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDi
     );
 }
 
+/// Combat doc 14.7, "One entity pass": `G_RunFrame` runs items, links and
+/// missiles in one loop by entity number, so a blast's callbacks read the
+/// re-anchor of a child numbered below the grenade from this frame and that
+/// of a child numbered above it from the last one. The parent moves 8 units
+/// a frame. The map's spawn points sit below the grenade's number and the
+/// children spawned once it is live above it.
+#[test]
+fn a_blast_meets_the_links_below_its_grenade_s_number_only() {
+    use vcod_common::net::msg::NULL_USERCMD;
+
+    const GLUE: &str = r#"
+main()
+{
+	thread glue();
+	maps\mp\gametypes\dm::main();
+}
+
+glue()
+{
+	wait 0.05;
+	level.callbackPlayerDamage = ::hit;
+	level.p = spawn("script_origin", (0, 0, 1000));
+	level.kids = getentarray("mp_deathmatch_spawn", "classname");
+	for (i = 0; i < level.kids.size; i++)
+	{
+		level.kids[i] enablelinkto();
+		hang(level.kids[i]);
+	}
+	for (;;)
+	{
+		level.p.origin = level.p.origin + (0, 0, 8);
+		grenades = getentarray("grenade", "classname");
+		if (grenades.size > 0)
+		{
+			if (!isdefined(level.g))
+			{
+				level.g = grenades[0] getEntityNumber();
+				for (i = 0; i < 16; i++)
+					kid();
+			}
+			players = getentarray("player", "classname");
+			for (i = 0; i < players.size; i++)
+				players[i] setorigin(grenades[0].origin + (0, 32 * i - 16, 80));
+		}
+		wait 0.05;
+	}
+}
+
+kid()
+{
+	k = spawn("script_origin", level.p.origin - (0, 0, 100));
+	level.kids[level.kids.size] = k;
+	hang(k);
+}
+
+hang(k)
+{
+	k linkto(level.p);
+	k.gap = level.p.origin[2] - k.origin[2];
+}
+
+hit(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc)
+{
+	for (i = 0; i < level.kids.size; i++)
+		logPrint("PROBE link " + gettime() + " " + level.g + " " + level.kids[i] getEntityNumber() + " " + (level.p.origin[2] - level.kids[i].origin[2] - level.kids[i].gap) + "\n");
+}
+"#;
+    let Some(pair) = two_placed_under(Some(("probe_glue", GLUE)), |sv, spot| {
+        assert!(
+            sv.test_clear_line(spot, 0.0, 150.0),
+            "no clear 150 units along +x from the spawn"
+        );
+        [spot[0] + 150.0, spot[1], spot[2]]
+    }) else {
+        return;
+    };
+    let Pair {
+        mut sv,
+        mut ca,
+        mut cb,
+        qa,
+        qb,
+        mut now,
+    } = pair;
+    let facing_a = vcod_common::net::msg::UserCmd {
+        angles: [0, angle_short(180.0), 0],
+        ..NULL_USERCMD
+    };
+    let mut step = |sv: &mut vcod_server::Server, a: &mut Client, b: &mut Client| {
+        now += Duration::from_millis(50);
+        common::step_pair(sv, (&qa, a), (&qb, b), now);
+    };
+    for _ in 0..40 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&facing_a);
+        step(&mut sv, &mut ca, &mut cb);
+    }
+    cook_and_throw_down(
+        &mut sv,
+        &mut step,
+        &mut ca,
+        &mut cb,
+        &facing_a,
+        frag_index(),
+        (180.0, 80.0),
+    );
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+    let rows: Vec<[i32; 4]> = sv
+        .script_log()
+        .iter()
+        .filter_map(|l| {
+            let mut f = l.strip_prefix("PROBE link ")?.split_whitespace();
+            let mut n = || f.next()?.parse::<f32>().ok().map(|x| x.round() as i32);
+            Some([n()?, n()?, n()?, n()?])
+        })
+        .collect();
+    let first = rows.first().expect("a blast callback ran")[0];
+    let walk: Vec<_> = rows.iter().filter(|r| r[0] == first).collect();
+    assert!(
+        walk.iter().any(|r| r[2] < r[1]) && walk.iter().any(|r| r[2] > r[1]),
+        "children on both sides of the grenade: {walk:?}"
+    );
+    for [_, grenade, child, gap] in walk {
+        let want = if child < grenade { 0 } else { 8 };
+        assert_eq!(*gap, want, "child {child}, grenade {grenade}: {rows:?}");
+    }
+}
+
 /// 11.2 to 11.4: a throw's first frame on the wire, pinned to retail's pair
 /// capture `fixtures/playerstate/mp_carentan-tdm-grenade-shooter.txt`. Both
 /// throws there stand still at z -23.9 and read `trBase` z 37: the muzzle is

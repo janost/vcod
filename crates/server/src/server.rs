@@ -4819,7 +4819,7 @@ impl Server {
                     radius: crate::bots::HEAR_BLAST,
                 });
                 let Some(def) = weapons.get(x.weapon as usize) else {
-                        self.pending_explosions.push(x);
+                    self.pending_explosions.push(x);
                     continue;
                 };
                 let blast = crate::game::combat::Blast::new(
@@ -4902,7 +4902,7 @@ impl Server {
                         }
                     }
                 }
-                            self.pending_explosions.push(x);
+                self.pending_explosions.push(x);
             }
             // What the blasts' callbacks did to the sims, as above.
             mirror_weapons(&mut self.clients, rt);
