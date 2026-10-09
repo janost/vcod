@@ -255,6 +255,9 @@ impl Shell {
         // CoDMP.exe registers `password` CVAR_USERINFO, not archived
         // (0x4123ea); the browser's password popup edits it.
         s.register("password", "", USERINFO);
+        // CoDMP.exe registers it "0", archived (0x412152); vcod downloads
+        // unless told not to. A server's systeminfo value wins either way.
+        s.register("cl_allowDownload", "1", ARCHIVE);
         // The browser's cvars, archived, with ui_mp_x86.dll's defaults
         // (cvar table at 0x40036c8c..0x40036dfc).
         s.register("ui_netSource", "0", ARCHIVE);

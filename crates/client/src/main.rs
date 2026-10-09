@@ -22,7 +22,7 @@ use clap::Parser;
 use glam::Vec3;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -442,9 +442,7 @@ struct World {
 
 /// Where `--connect` is between connecting and drawing a map.
 enum Phase {
-    Connecting {
-        since: Instant,
-    },
+    Connecting,
     Loading {
         loader: loading::MapLoader,
     },
@@ -1001,6 +999,7 @@ fn main() -> Result<()> {
         fs,
         game_dir: args.game_dir.clone(),
         mod_dir: args.mod_dir.clone(),
+        fs_game: None,
         connect_addr: args.connect.clone(),
         team: args.team.clone(),
         weapon: args.weapon.clone(),
@@ -1094,9 +1093,7 @@ fn online_mode(
         ring: play::cmds::CmdRing::default(),
         predictor: Box::default(),
         view: Box::default(),
-        phase: Phase::Connecting {
-            since: Instant::now(),
-        },
+        phase: Phase::Connecting,
         join: Box::new(play::join::Join::new(team, weapon)),
         menu_view: None,
     }
@@ -1141,7 +1138,8 @@ fn start_loading(
     window: Option<&Window>,
     title: &mut String,
     game_dir: &std::path::Path,
-    mod_dir: &str,
+    dirs: &[&str],
+    allow_download: bool,
 ) -> Result<Phase> {
     let map = net::info_value_for_key(net.configstring(0), "mapname")
         .map(str::to_string)
@@ -1159,18 +1157,57 @@ fn start_loading(
     }
     // Same candidate order as the old blocking downloader; `MapLoader` caps it.
     let systeminfo = net.configstring(1).to_string();
-    let candidates = net::download::candidates_for_map(&systeminfo, &map, mod_dir, |rel| {
-        game_dir.join(rel).exists()
-    })
-    .into_iter()
-    .filter_map(|name| {
-        let rel = net::download::safe_rel_path(&name, mod_dir)?;
-        Some((format!("{name}.pk3"), game_dir.join(rel)))
-    })
-    .collect();
+    let exists = |rel: &std::path::Path| game_dir.join(rel).exists();
+    let candidates = if allow_download {
+        net::download::candidates_for_map(&systeminfo, &map, dirs, exists)
+            .into_iter()
+            .filter_map(|name| {
+                let rel = net::download::safe_rel_path(&name, dirs)?;
+                Some((format!("{name}.pk3"), game_dir.join(rel)))
+            })
+            .collect()
+    } else {
+        // `CL_InitDownloads` with autodownload off: warn, then load what is
+        // there (docs/research/cod11-front-end.md, section 15).
+        let missing = net::download::missing_paks(&systeminfo, dirs, exists);
+        if !missing.is_empty() {
+            log::warn!(
+                "You are missing some files referenced by the server:\n{}\n\
+                 You might not be able to join the game (cl_allowDownload is 0)",
+                missing.join("\n")
+            );
+        }
+        Vec::new()
+    };
     Ok(Phase::Loading {
         loader: loading::MapLoader::new(map, candidates),
     })
+}
+
+/// The search path's directories: `<game_dir>/<mod_dir>`, then the
+/// connection's `fs_game` directory over it.
+fn search_dirs(
+    game_dir: &std::path::Path,
+    mod_dir: &str,
+    fs_game: &Option<String>,
+) -> (std::path::PathBuf, Option<std::path::PathBuf>) {
+    (
+        game_dir.join(mod_dir),
+        fs_game.as_ref().map(|g| game_dir.join(g)),
+    )
+}
+
+/// The directories a download may land in, the same two.
+fn download_dirs<'a>(mod_dir: &'a str, fs_game: &'a Option<String>) -> Vec<&'a str> {
+    std::iter::once(mod_dir).chain(fs_game.as_deref()).collect()
+}
+
+/// `cl_allowDownload`: the systeminfo's value when the server sets one
+/// (`CL_SystemInfoChanged` copies every systeminfo key into a cvar), the
+/// client's own otherwise.
+fn allow_download(shell: &console::shell::Shell, systeminfo: &str) -> bool {
+    net::download::server_allows_download(systeminfo)
+        .unwrap_or_else(|| shell.cvar_f32("cl_allowDownload") != 0.0)
 }
 
 /// Reopens the pk3 search path after a download. Everything read off the old
@@ -1179,7 +1216,8 @@ fn start_loading(
 /// half is `Renderer::reopen`, the viewmodel rig `OnlineView::reopen`.
 #[allow(clippy::too_many_arguments)]
 fn reopen_fs(
-    mod_dir: &std::path::Path,
+    base: &std::path::Path,
+    game: Option<&std::path::Path>,
     fs: &mut Pk3Fs,
     localized: &mut vcod_common::localize::Localized,
     menus: &mut hud::menu::MenuCache,
@@ -1188,7 +1226,7 @@ fn reopen_fs(
     fx: &mut fx::sim::FxSystem,
     quick_chat: &mut quick_chat::QuickChat,
 ) -> Result<()> {
-    *fs = Pk3Fs::open(mod_dir)?;
+    *fs = Pk3Fs::open_layered(base, game)?;
     *localized = vcod_common::localize::Localized::load(fs);
     *menus = hud::menu::MenuCache::default();
     match hud {
@@ -1386,6 +1424,8 @@ struct App {
     /// Where downloads land and the pk3 path reopens from.
     game_dir: std::path::PathBuf,
     mod_dir: String,
+    /// The connection's systeminfo `fs_game`, layered over `mod_dir`.
+    fs_game: Option<String>,
     /// The last server connected to: the connecting screen's text and what
     /// `reconnect` reconnects to.
     connect_addr: Option<String>,
@@ -1782,10 +1822,39 @@ impl App {
             log::error!("{reason}");
         }
         self.unload_world();
+        self.leave_fs_game();
         self.mode = Mode::Idle;
         self.set_grab(false);
         self.set_title("vcod".to_string());
         self.enter_menu(reason.as_deref());
+    }
+
+    /// Back to the base search path after a server's `fs_game`. Retail keeps
+    /// the mod until the next systeminfo names another; vcod drops it with
+    /// the connection (docs/research/cod11-front-end.md, section 15).
+    fn leave_fs_game(&mut self) {
+        if self.fs_game.take().is_none() {
+            return;
+        }
+        let base = self.game_dir.join(&self.mod_dir);
+        match reopen_fs(
+            &base,
+            None,
+            &mut self.fs,
+            &mut self.localized,
+            &mut self.menus,
+            &mut self.hud,
+            &mut self.audio,
+            &mut self.fx,
+            &mut self.quick_chat,
+        ) {
+            Ok(()) => {
+                if let Some(r) = &mut self.renderer {
+                    r.reopen(&self.fs);
+                }
+            }
+            Err(e) => log::error!("cannot reopen {}: {e:#}", base.display()),
+        }
     }
 
     /// Drops the map, its sounds and effects, between servers.
@@ -2482,6 +2551,37 @@ impl ApplicationHandler for App {
                             cmd_clock.reset();
                             ring.clear();
                             predictor.reset();
+                            // `CL_SystemInfoChanged` sets `fs_game`, and the
+                            // gamestate parse restarts the search path when it
+                            // changed (docs/research/cod11-front-end.md, section 15).
+                            let game = net::download::fs_game(net.configstring(1), &self.mod_dir);
+                            if game != self.fs_game {
+                                log::info!(
+                                    "fs_game {}: restarting the search path",
+                                    game.as_deref().unwrap_or("(none)")
+                                );
+                                self.fs_game = game;
+                                let (base, game) =
+                                    search_dirs(&self.game_dir, &self.mod_dir, &self.fs_game);
+                                match reopen_fs(
+                                    &base,
+                                    game.as_deref(),
+                                    &mut self.fs,
+                                    &mut self.localized,
+                                    &mut self.menus,
+                                    &mut self.hud,
+                                    &mut self.audio,
+                                    &mut self.fx,
+                                    &mut self.quick_chat,
+                                ) {
+                                    Ok(()) => {
+                                        *menu_view = None;
+                                        r.reopen(&self.fs);
+                                        view.reopen();
+                                    }
+                                    Err(e) => fatal = Some(e),
+                                }
+                            }
                         }
                         // Only with the map up: the first cmd after a gamestate
                         // is what enters the client into the world
@@ -2511,7 +2611,11 @@ impl ApplicationHandler for App {
 
                         let progress = net.download_progress();
                         let frame = match phase {
-                            Phase::Connecting { since } => {
+                            Phase::Connecting => {
+                                // The net client's own resend and gamestate
+                                // timers decide when a slow server is given up
+                                // on; a mod's connect notice can hold the
+                                // `connectResponse` back for seconds.
                                 if gamestate_ready {
                                     match start_loading(
                                         net,
@@ -2523,13 +2627,12 @@ impl ApplicationHandler for App {
                                         self.window.as_deref(),
                                         &mut self.title,
                                         &self.game_dir,
-                                        &self.mod_dir,
+                                        &download_dirs(&self.mod_dir, &self.fs_game),
+                                        allow_download(&self.shell, net.configstring(1)),
                                     ) {
                                         Ok(next) => *phase = next,
                                         Err(e) => fatal = Some(e),
                                     }
-                                } else if since.elapsed() > Duration::from_secs(10) {
-                                    fatal = Some(anyhow!("no gamestate from the server in 10 s"));
                                 }
                                 loading_frame(
                                     r,
@@ -2560,8 +2663,14 @@ impl ApplicationHandler for App {
                                         }
                                     }
                                     loading::Action::Reopen => {
+                                        let (base, game) = search_dirs(
+                                            &self.game_dir,
+                                            &self.mod_dir,
+                                            &self.fs_game,
+                                        );
                                         match reopen_fs(
-                                            &self.game_dir.join(&self.mod_dir),
+                                            &base,
+                                            game.as_deref(),
                                             &mut self.fs,
                                             &mut self.localized,
                                             &mut self.menus,
@@ -2622,7 +2731,8 @@ impl ApplicationHandler for App {
                                         self.window.as_deref(),
                                         &mut self.title,
                                         &self.game_dir,
-                                        &self.mod_dir,
+                                        &download_dirs(&self.mod_dir, &self.fs_game),
+                                        allow_download(&self.shell, net.configstring(1)),
                                     ) {
                                         Ok(next) => *phase = next,
                                         Err(e) => fatal = Some(e),
@@ -3534,6 +3644,7 @@ mod tests {
         fn reopen(&mut self, dir: &std::path::Path, fs: &mut Pk3Fs) {
             reopen_fs(
                 dir,
+                None,
                 fs,
                 &mut self.localized,
                 &mut self.menus,
