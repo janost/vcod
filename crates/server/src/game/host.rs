@@ -764,7 +764,7 @@ impl GameHost {
                 origin: glam::Vec3::ZERO,
                 angles: glam::Vec3::ZERO,
                 scale: glam::Vec3::ONE,
-                color: [255; 4],
+                precalc: glam::Vec3::ONE,
                 shadow_decal: false,
             };
             let mut out = Vec::new();

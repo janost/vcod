@@ -763,9 +763,11 @@ VERIFIED, off the capture: `k2 linkto(player, "bip01 head")` and
 posed bones: `k3` sits on the right hand, `(6.3, -5.2, 48.1)` from the feet,
 and both drift a few degrees a frame with the idle. From the
 `setPlayerAngles` frame on, `k3`'s yaw reads 179.47, 269.54, 44.62, 21.99 and
-then settles back near 0. INFERRED: the bone carries the body's own yaw
-(`tag_origin`'s controller, player-model doc), multiplied by the entity's
-zero axis, and the body turns after the view and back.
+then settles back near 0. INFERRED: the bone carries the legs' yaw off the view
+(`tag_origin`'s local tag, combat doc 16.4), and the legs swing after the
+view and back. VERIFIED, `linkto_ab` with that swing modelled: ours reads
+182.16, 272.0, 46.6 and 23.75 on the same frames, and the gate holds the yaw
+to 4 degrees.
 
 vcod: `crate::game::link` holds the records and `link::run` is the pass,
 at the end of `ScriptRuntime::run_frame`, ascending by child with the parent

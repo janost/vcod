@@ -162,8 +162,8 @@ Retail does a lot more than this list. These are the gaps you'll hit first.
 
 **Front end.** Main menu, browser and its popups, options, quit and error
 popups work. On the options screens only binds, sensitivity, invert mouse,
-name, rate, volume, video mode, full screen and the crosshair and HUD
-toggles take effect; texture, lighting, gamma, sound quality and language
+name, rate, volume, video mode, full screen, brightness and the crosshair
+and HUD toggles take effect; texture, lighting, sound quality and language
 settings are stored but ignored. Start New Server, Mods and CD key print "not in vcod
 yet". The browser's game type filter, map preview and refresh date are
 missing.
@@ -197,9 +197,12 @@ missing.
 
 **Rendering and sound**
 
-- Props get one colour from the compiler's `lightingPrecalc` tint; retail
-  samples the light grid per vertex.
-- Shadow-decal props draw as depth-biased decals on the ground.
+- Props are lit per vertex from the map's lights and its light-visibility
+  grid at load, as retail does, but without the dynamic lights retail adds
+  on a prop's first draw
+  ([cod11-light-grid-and-leaf-lights.md](docs/research/cod11-light-grid-and-leaf-lights.md)).
+- Shadow-decal props draw as depth-biased decals on the ground. Retail
+  registers no `shadow_*` model as a static model.
 - Only the ocean's `deformVertexes wave` moves; the other forms parse and do
   nothing. NV/ATI hardware-path stages are dropped, as retail did on cards
   without them. `$dlight` and the ship's deckflag have no file behind them,

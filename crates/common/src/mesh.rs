@@ -255,6 +255,10 @@ mod tests {
             patches: vec![],
             collision_verts: vec![],
             collision_indices: vec![],
+            light_indices: vec![],
+            leaf_lights: vec![],
+            lights: vec![],
+            light_vis: vec![],
             pvs: None,
         }
     }

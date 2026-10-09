@@ -59,7 +59,8 @@ instead of leaving the fact in a commit message.
 | Chat, quick chat | `cod11-chat.md`, `cod11-quick-chat.md` |
 | Bots | `bot-navigation.md` (its Build times set the census floors), `bot-objectives.md` |
 | Player models, anims, formats | `player-model-anim-system.md`, `xmodel-v14-format.md`, `xanim-v14-format.md` |
-| Shader scripts, light grid | `cod11-shader-scripts.md`, `cod11-light-grid-and-leaf-lights.md` |
+| Shader scripts, light grid, prop lighting | `cod11-shader-scripts.md`, `cod11-light-grid-and-leaf-lights.md` |
+| Gamma, overbright, `r_intensity` | `cod11-gamma.md` |
 
 ### Evidence labels
 
@@ -220,9 +221,10 @@ retail's `SV_Frame` / `ClientThink_real` / `ClientEndFrame` order, and the
 comments at each step cite the section that measured it. The shape: console
 lines (a `map` reloads first), timeouts, bots, pings, clock; every packet's
 cmds in arrival order, each one a `ClientThink_real` with its shots traced and
-their callbacks run inside the cmd (`cod11-combat.md` 16); missiles, menu
-responses, blasts, the script frame; spawns, weapon, link and sim ops, mover
-push; every slot's end frame, then per slot the aim trace, `commit_pose` and
+their callbacks run inside the cmd (`cod11-combat.md` 16); menu responses,
+the script frame; spawns, weapon, link and sim ops, mover push; missiles and
+their blasts, which meet the links this frame's threads made (14.7); every
+slot's end frame, then per slot the aim trace, `commit_pose` and
 that slot's turret, whose rounds deliver inside its turn; outgoing commands,
 snapshots, zombies, heartbeat.
 
@@ -358,8 +360,10 @@ dropped, so test such a builtin through `ScriptRuntime`.
 - A non-player entity rotates through `AnglesToAxis`: positive pitch is nose
   down.
 - A control bone (`back_*`, `neck`, `head`, `pelvis`) turns about the model's
-  axes, not its own; about its own Y the body leans sideways. The torso pitch
-  eases after the view on both server and client (combat doc 16.3).
+  axes, not its own; about its own Y the body leans sideways. The torso pitch,
+  torso yaw and legs yaw swing after the view on both server and client, and
+  `tag_origin`'s local tag turns the body by the legs' yaw off the view, so a
+  test that poses a turned body must step it to settle (combat doc 16.3, 16.4).
 - The 24/30/32 pt fonts span two or three atlas pages per glyph, named in the
   `.dat`. HUD colours are display values, linearised once in the HUD pass.
 - Effect shaders live in `fxshaders/` in `pak5.pk3`. Some map paths have a

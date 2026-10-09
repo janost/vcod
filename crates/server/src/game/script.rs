@@ -702,6 +702,7 @@ impl ScriptRuntime {
             }
             _ => None,
         };
+        sim.gunner_leaves = placed.as_ref().map(|g| g.leaves.clone());
         if let Some(mut at) = placed.as_ref().map(|g| g.origin) {
             if let Some(world) = &self.host.world {
                 at = crate::game::turret::lift_onto_floor(&world.collision, at, origin[2]);

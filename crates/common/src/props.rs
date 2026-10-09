@@ -1,12 +1,13 @@
 //! `misc_model` props from the BSP entity lump: baked to world space in the
-//! map vertex format so they draw unlit through the map pipeline (`build`),
-//! and their collision triangles for the collision world
-//! (`collision_tris`).
+//! map vertex format with their lighting in the vertex colour, so they draw
+//! through the map pipeline (`build`), and their collision triangles for the
+//! collision world (`collision_tris`).
 
-use crate::bsp::{self, DrawVert};
+use crate::bsp::{self, Bsp, DrawVert};
 use crate::collision::ModelTri;
 use crate::mesh::IndexRange;
 use crate::pk3::Pk3Fs;
+use crate::static_light::{self, ModelLights, StaticLighting};
 use crate::xmodel;
 use glam::{Mat3, Vec3};
 use std::collections::{BTreeMap, HashMap};
@@ -21,8 +22,8 @@ pub struct Placement {
     pub angles: Vec3,
     /// Per-axis scale from `modelscale`/`modelscale_vec`.
     pub scale: Vec3,
-    /// `lightingPrecalc` as an RGBA vertex colour; white when absent.
-    pub color: [u8; 4],
+    /// `lightingPrecalc`, clamped to 0..1; white when absent.
+    pub precalc: Vec3,
     /// Coplanar shadow decal (`shadow_*` / `*_shadow` model names): baked
     /// onto the ground, so it draws depth-biased and blended.
     pub shadow_decal: bool,
@@ -114,13 +115,11 @@ pub fn placements(entities: &str) -> Vec<Placement> {
             .get("modelscale_vec")
             .and_then(|s| bsp::parse_vec3(s))
             .map_or([uniform; 3], |v| v.map(scale_or_one));
-        // "lightingPrecalc" stands in for the lightmap props never get
-        let color = e
+        let precalc = e
             .get("lightingPrecalc")
             .and_then(|s| bsp::parse_vec3(s))
-            .map_or([255; 4], |c| {
-                let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-                [b(c[0]), b(c[1]), b(c[2]), 255]
+            .map_or(Vec3::ONE, |c| {
+                Vec3::from_array(c).clamp(Vec3::ZERO, Vec3::ONE)
             });
 
         out.push(Placement {
@@ -128,7 +127,7 @@ pub fn placements(entities: &str) -> Vec<Placement> {
             origin: Vec3::from_array(origin),
             angles: Vec3::from_array(angles),
             scale: Vec3::from_array(scale),
-            color,
+            precalc,
             shadow_decal: is_shadow_decal(model),
         });
     }
@@ -136,7 +135,8 @@ pub fn placements(entities: &str) -> Vec<Placement> {
 }
 
 /// Scale, rotate, translate. Normals use the inverse-transpose (`R * S⁻¹`) so
-/// a non-uniform `modelscale_vec` doesn't skew them.
+/// a non-uniform `modelscale_vec` doesn't skew them. The colour is filled in
+/// by `build` once the lighting is known.
 fn bake(p: &Placement, rot: Mat3, v: &xmodel::VmVert) -> DrawVert {
     let pos = rot * (p.scale * Vec3::from_array(v.pos)) + p.origin;
     let normal = rot * (Vec3::from_array(v.normal) / p.scale);
@@ -146,8 +146,74 @@ fn bake(p: &Placement, rot: Mat3, v: &xmodel::VmVert) -> DrawVert {
         // props have no lightmap; the renderer binds the white 1x1 page
         lm_uv: [0.0, 0.0],
         normal: normal.normalize_or_zero().to_array(),
-        color: p.color,
+        color: [255; 4],
     }
+}
+
+/// How a prop skin's stage colours its vertices: the `rgbGen` of its
+/// `shadertypes/model/<type>.stype`, `<type>` being the skin name before
+/// `@`. A skin without one is an implicit model skin, `lightingDiffuse`
+/// (0x4fc440).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SkinGen {
+    Diffuse,
+    Precalc,
+    IdentityLighting,
+    ConstLighting(Vec3),
+    /// Anything else (`wave`): drawn with the precalc colour.
+    Other,
+}
+
+/// The first stage `rgbGen` in a shader body.
+pub fn parse_skin_gen(text: &str) -> SkinGen {
+    let mut toks = text
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .flat_map(str::split_whitespace);
+    while let Some(t) = toks.next() {
+        if !t.eq_ignore_ascii_case("rgbgen") {
+            continue;
+        }
+        let Some(kind) = toks.next() else { break };
+        return match kind.to_ascii_lowercase().as_str() {
+            "lightingdiffuse" => SkinGen::Diffuse,
+            "lightingprecalc" => SkinGen::Precalc,
+            "identitylighting" => SkinGen::IdentityLighting,
+            "constlighting" => {
+                let v: Vec<f32> = toks
+                    .by_ref()
+                    .skip_while(|t| *t == "(")
+                    .take(3)
+                    .filter_map(|t| t.parse().ok())
+                    .collect();
+                match v[..] {
+                    [r, g, b] => SkinGen::ConstLighting(Vec3::new(r, g, b)),
+                    _ => SkinGen::Other,
+                }
+            }
+            _ => SkinGen::Other,
+        };
+    }
+    SkinGen::Other
+}
+
+fn skin_gen(fs: &Pk3Fs, skin: &str) -> SkinGen {
+    let Some(at) = skin.rfind('@') else {
+        return SkinGen::Diffuse;
+    };
+    let start = skin[..at].rfind(['/', '\\']).map_or(0, |i| i + 1);
+    let kind = skin[start..at].to_ascii_lowercase();
+    match fs.read(&format!("shadertypes/model/{kind}.stype")) {
+        Some(text) => parse_skin_gen(&String::from_utf8_lossy(&text)),
+        None => SkinGen::Diffuse,
+    }
+}
+
+/// A shadow decal's colour: the precalc tint at full scale, as vcod drew
+/// every prop before the lighting port.
+fn decal_color(p: &Placement) -> [u8; 4] {
+    let b = |v: f32| (v * 255.0).round() as u8;
+    [b(p.precalc.x), b(p.precalc.y), b(p.precalc.z), 255]
 }
 
 /// A model that fails to load is warned once and its placements dropped.
@@ -157,9 +223,19 @@ fn load_model(fs: &Pk3Fs, name: &str) -> Option<xmodel::XModel> {
         .ok()
 }
 
-/// Bakes every placed prop into world geometry, one batch per (skin, decal).
-pub fn build(fs: &Pk3Fs, entities: &str) -> Props {
+/// Bakes every placed prop into world geometry, one batch per (skin, decal),
+/// lit from the map's lights.
+pub fn build(fs: &Pk3Fs, bsp: &Bsp) -> Props {
+    build_with(fs, &bsp.entities, Some(StaticLighting::new(bsp)))
+}
+
+fn build_with(fs: &Pk3Fs, entities: &str, mut lighting: Option<StaticLighting>) -> Props {
     let placements = placements(entities);
+    let mut gens: HashMap<String, SkinGen> = HashMap::new();
+    // (placement, vertex range, gen) per surface, and the normal each
+    // vertex is lit with: retail's, the scaled axis renormalised
+    let mut surf_runs: Vec<(usize, usize, usize, SkinGen)> = Vec::new();
+    let mut lit_normals: Vec<Vec3> = Vec::new();
     let mut cache: HashMap<String, Option<xmodel::XModel>> = HashMap::new();
     let mut verts: Vec<DrawVert> = Vec::new();
     let mut groups: BTreeMap<(String, bool), Vec<u32>> = BTreeMap::new();
@@ -193,7 +269,13 @@ pub fn build(fs: &Pk3Fs, entities: &str) -> Props {
                 lo = lo.min(Vec3::from(dv.pos));
                 hi = hi.max(Vec3::from(dv.pos));
                 verts.push(dv);
+                lit_normals
+                    .push((rot * (p.scale * Vec3::from_array(v.normal))).normalize_or_zero());
             }
+            let sg = *gens
+                .entry(skin.clone())
+                .or_insert_with(|| skin_gen(fs, skin));
+            surf_runs.push((pi, base as usize, verts.len(), sg));
             let key = (skin.as_str(), p.shadow_decal);
             let group = groups.entry((skin.clone(), p.shadow_decal)).or_default();
             let run = this.entry(key).or_insert((group.len() as u32, 0));
@@ -208,6 +290,48 @@ pub fn build(fs: &Pk3Fs, entities: &str) -> Props {
         } else {
             (Vec3::ZERO, Vec3::ZERO)
         });
+    }
+
+    // Retail registers static models onto a list it then lights head first,
+    // so in reverse entity order; that order fills the grid cache. It skips
+    // `xmodel/shadow_*` (0x4dbae0).
+    let mut model_lights: Vec<Option<ModelLights>> = vec![None; placements.len()];
+    if let Some(l) = lighting.as_mut() {
+        let t = std::time::Instant::now();
+        for (pi, p) in placements.iter().enumerate().rev() {
+            let (lo, hi) = bounds[pi];
+            if p.model.starts_with("shadow_") || lo == hi {
+                continue;
+            }
+            model_lights[pi] = Some(l.model_lights((lo + hi) * 0.5));
+        }
+        log::info!(
+            "props: lit in {:.0} ms, {} light grid samples traced",
+            t.elapsed().as_secs_f64() * 1000.0,
+            l.misses
+        );
+    }
+    let identity = static_light::identity_byte();
+    for (pi, first, end, sg) in surf_runs {
+        let p = &placements[pi];
+        let precalc = static_light::precalc_byte;
+        for (v, n) in verts[first..end].iter_mut().zip(&lit_normals[first..end]) {
+            v.color = match sg {
+                _ if p.shadow_decal => decal_color(p),
+                SkinGen::Diffuse => match (&lighting, &model_lights[pi]) {
+                    (Some(l), Some(m)) => l.vertex_color(m, Vec3::from(v.pos), *n),
+                    _ => [identity, identity, identity, 255],
+                },
+                SkinGen::IdentityLighting => [identity, identity, identity, 255],
+                SkinGen::ConstLighting(c) => [precalc(c.x), precalc(c.y), precalc(c.z), 255],
+                SkinGen::Precalc | SkinGen::Other => [
+                    precalc(p.precalc.x),
+                    precalc(p.precalc.y),
+                    precalc(p.precalc.z),
+                    255,
+                ],
+            };
+        }
     }
 
     let mut indices = Vec::new();
@@ -370,7 +494,7 @@ mod tests {
             origin: Vec3::new(10.0, 0.0, 0.0),
             angles: Vec3::new(0.0, 90.0, 0.0),
             scale: Vec3::splat(2.0),
-            color: [255; 4],
+            precalc: Vec3::ONE,
             shadow_decal: false,
         };
         let mut out = Vec::new();
@@ -449,7 +573,7 @@ mod tests {
                 origin: Vec3::new(10.0, 20.0, 30.0),
                 angles: Vec3::new(5.0, 90.0, 15.0),
                 scale: Vec3::splat(2.0),
-                color: [128, 64, 0, 255],
+                precalc: Vec3::new(0.5, 0.25, 0.0),
                 shadow_decal: false,
             }
         );
@@ -460,7 +584,7 @@ mod tests {
                 origin: Vec3::new(1.0, 2.0, 3.0),
                 angles: Vec3::ZERO,
                 scale: Vec3::ONE,
-                color: [255; 4],
+                precalc: Vec3::ONE,
                 shadow_decal: false,
             }
         );
@@ -536,7 +660,7 @@ mod tests {
             origin: Vec3::new(100.0, 0.0, 8.0),
             angles: Vec3::new(0.0, 90.0, 0.0), // yaw +90: +x turns into +y
             scale: Vec3::new(2.0, 2.0, 4.0),
-            color: [10, 20, 30, 255],
+            precalc: Vec3::ONE,
             shadow_decal: false,
         };
         let v = xmodel::VmVert {
@@ -553,7 +677,6 @@ mod tests {
         assert!((Vec3::from_array(out.normal) - Vec3::Y).length() < 1e-5);
         assert_eq!(out.uv, [0.25, 0.75]);
         assert_eq!(out.lm_uv, [0.0, 0.0]);
-        assert_eq!(out.color, [10, 20, 30, 255]);
     }
 
     /// Counts measured from the shipped BSP.
@@ -618,7 +741,7 @@ mod tests {
             return;
         };
         let ents = "{\n\"model\" \"xmodel/crate_misc1a\"\n\"origin\" \"100 200 300\"\n\"classname\" \"misc_model\"\n}";
-        let props = build(&fs, ents);
+        let props = build_with(&fs, ents, None);
         assert_eq!(props.bounds.len(), 1);
         let (lo, hi) = props.bounds[0];
         assert!(
@@ -650,7 +773,7 @@ mod tests {
             return;
         };
         let bsp = bsp::parse(&data).unwrap();
-        let props = build(&fs, &bsp.entities);
+        let props = build(&fs, &bsp);
         assert!(props.verts.len() > 10_000, "{}", props.verts.len());
         assert!(!props.batches.is_empty());
         let total: u32 = props.batches.iter().map(|b| b.index_count).sum();
@@ -668,5 +791,47 @@ mod tests {
                 b.skin
             );
         }
+    }
+
+    #[test]
+    fn skin_gen_reads_the_first_stage() {
+        let wood =
+            "{\n\tsurfaceparm wood\n\t{\n\t\tmap $texturename\n\t\trgbGen lightingDiffuse\n\t}\n}";
+        assert_eq!(parse_skin_gen(wood), SkinGen::Diffuse);
+        let detail =
+            "{\n\tradialNormals\n\t{\n\t\t//rgbGen identity\n\t\trgbGen lightingPrecalc\n\t}\n}";
+        assert_eq!(parse_skin_gen(detail), SkinGen::Precalc);
+        let objective = "{\n\t{\n\t\trgbgen constLighting ( 0.40 0.316 0.124 )\n\t}\n}";
+        assert_eq!(
+            parse_skin_gen(objective),
+            SkinGen::ConstLighting(Vec3::new(0.4, 0.316, 0.124))
+        );
+        assert_eq!(
+            parse_skin_gen("{ { rgbGen wave sin 0 1 0 1 } }"),
+            SkinGen::Other
+        );
+    }
+
+    #[test]
+    fn lights_mp_carentan_props_per_vertex() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let Some(path) = fs.resolve_map("mp_carentan") else {
+            return;
+        };
+        let bsp = bsp::parse(&fs.read(&path).unwrap()).unwrap();
+        let props = build(&fs, &bsp);
+        let colors: std::collections::HashSet<[u8; 4]> =
+            props.verts.iter().map(|v| v.color).collect();
+        // one tint per placement would give a few hundred at most
+        assert!(colors.len() > 2000, "{} distinct colours", colors.len());
+        let mean = props
+            .verts
+            .iter()
+            .map(|v| f32::from(v.color[1]))
+            .sum::<f32>()
+            / props.verts.len() as f32;
+        assert!((40.0..200.0).contains(&mean), "mean green {mean}");
     }
 }

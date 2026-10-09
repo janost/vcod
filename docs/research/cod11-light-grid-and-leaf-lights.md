@@ -1,78 +1,267 @@
-# The light grid and leaf lights (lumps 19, 30, 32)
+# Static-model lighting: lights, leaf lists and the light-visibility grid (lumps 19, 30, 32)
 
-What the "light grid" actually is in CoD 1.1 MP, what lights entities, and
-why per-vertex grid sampling is not a retail mechanism. Evidence from
-`CoDMP.exe` 1.1 (image base `0x00400000`); addresses virtual, xref sweeps
-run against the whole `.text`. The earlier guesses in
-`bsp-ibsp59-format.md` ("72-byte lights", "128x128x64x3 grid, not decoded")
-are corrected here.
+How CoD 1.1 MP lights `misc_model` props, and the BSP data it reads.
+Evidence is `CoDMP.exe` 1.1 (image base `0x00400000`, virtual addresses),
+read in the Ghidra export and the `objdump` disassembly, and the stock
+paks. Each claim carries its own label. An earlier version of this doc said
+lump 30 held 48-byte lights, that nothing in MP read lump 32, and that props
+were lit by their `lightingPrecalc` tint alone. All three were wrong: the
+48-byte loader it cited (0x4db240) is the lump-27 model loader, and the
+grid readers below were missed.
 
-## Lump 32 is a per-cell light table, not an RGB grid
+## 1. When retail lights a static model
 
-The fixed `0x300000` length decomposes as **262144 cells x 48 bytes**:
-262144 = 128x128x64 exactly, so the lattice dims are right but the "3 bytes
-per texel" reading was wrong - every cell carries a 48-byte record on every
-map (the load only accepts that exact length, `FUN_004b7c00` @ `0x4b7c00`,
-gate `param_3 == 0x300000`).
+- VERIFIED: the entity pass of `LoadMap` hands each `misc_model` to 0x4dbae0,
+  which reads `origin`, `model`, `angle`/`angles`, `modelscale_vec` (else
+  `modelscale`) and `lightingPrecalc` (default `"1 1 1"`, string at
+  0x54d2fc) and registers the model through 0x504a20.
+- INFERRED: 0x4dbae0 skips any model whose name starts `xmodel/shadow_`
+  (a branch on `strnicmp` against that 14-byte prefix), so retail registers
+  no static model for those names. vcod still draws them as decals.
+- VERIFIED: 0x504a20 stores the previous head of the list at 0x14072ec in
+  `record+0x9c` and the record as the new head. INFERRED: 0x5050a0 walks
+  that list from its head calling 0x504cc0 on each, so models are lit in
+  reverse entity order.
+- VERIFIED: 0x504cc0 stores `(mins + maxs) * 0.5` of the placed model's
+  bounds at `draw+0xc` and passes it to 0x4b6210, whose outputs land at
+  `draw+0xb8` (light count), `draw+0xbc` (sky factor), `draw+0xc0` (weights)
+  and `draw+0x184` (light pointers). INFERRED: the bounds from 0x5029d0 are
+  the AABB of every vertex taken through the scaled axis (its loop over the
+  posed vertices).
+- VERIFIED: the same function stores `identityLight * c * 255` of each
+  `lightingPrecalc` channel, clamped to 0..255, through 0x538be0 into the
+  bytes at `draw+0x6c` (0x504ea7). 0x538be0 is MSVC's truncating
+  `__ftol2`.
+- INFERRED: lighting therefore happens once at load. The light pick
+  (0x4b7450, section 6) runs the first time a static-model surface is built
+  into the surface cache (`r_smc_enable`, 0x505260 calling 0x4e57e0), off the
+  data 0x504cc0 stored.
 
-`FUN_004b7c00` walks all 65536 x 4 records (stride `0x30`) and distills
-each into a 32-byte ring entry near `DAT_00ca28d4`: it samples a handful of
-byte/u16/u32 fields per record, counts the non-zero ones into
-`DAT_00ca27b0`, and tracks the high-water ring index in `DAT_00ca27ac`
-(`& 0x1f`). The record layout itself stays undecoded - see the negative
-result below for why it does not matter.
+## 2. Lump 30: 72-byte light records
 
-The compile can be re-run from a 24-byte-record light file through
-`FUN_004b7ab0` @ `0x4b7ab0` (it ends by flushing the cvar
-`r_vc_compile`), which is where the ring globals are otherwise touched.
+- VERIFIED: `LoadMap` calls `R_LoadLights` (0x4db620) at 0x4dd380 with
+  the lump-30 header, next to the "Loading lights..." print; the function
+  references "R_LoadLights: funny lump size" (0x54d3f8), divides the length
+  by 0x48 and allocates 0x88 bytes per runtime light. INFERRED: a length
+  not divisible by 0x48 is a fatal error (the branch to that print).
+- VERIFIED, stock census of the 12 MP maps: types 1 (12, one per map), 4
+  (462), 5 (35, mp_powcamp) and 7 (13: mp_railyard, mp_powcamp, mp_harbor,
+  mp_chateau).
 
-## Negative result: nothing in MP samples the grid
+File record, 18 words (VERIFIED from the loader's reads):
 
-An xref sweep over the whole `.text` for the three output globals
-(`DAT_00ca27b0`, `DAT_00ca27ac`, `DAT_00ca28d4`) finds only writers inside
-the compile path itself - `FUN_004b7b47`/`FUN_004b7c00` and the
-`r_vc_compile` recompile. **No code reads the compiled rings.** The grid
-machinery is Singleplayer inheritance: MP ships the data and the compiler,
-but no consumer. Sampling lump 32 per vertex would therefore be invented
-behaviour against data retail ignores - and there is no coordinate mapping
-(origin/cell size) to copy, because MP never needs one.
+| Word | Meaning |
+|---|---|
+| 0 | type |
+| 1..3 | colour (float) |
+| 4..6 | origin |
+| 7..9 | direction (the sun: unit vector towards it) |
+| 10 | type 3: linear falloff; 4 and 7: quadratic; 5: cosine of the cone |
+| 11 | types 4 and 7: constant falloff; 5: cone exponent (an int) |
+| 12 | type 7: cosine of the cone |
+| 13 | type 7: cone exponent (an int) |
 
-## Lump 30: 48-byte lights, not 72
+Runtime record (0x88 bytes), VERIFIED from 0x4db620's stores:
 
-`R_LoadLights` (`FUN_004db240` @ `0x4db240`) rejects the lump unless the
-length divides by `0x30` - the records are **48 bytes**. The census gcd was
-72 because every stock length also divides by 144 (lcm of 48 and 72), so
-both fit; retail's own check settles it. The loader copies fields [0..5]
-and [7] verbatim into a runtime struct and resolves field [6] as
-`base + index * 0xc` (a per-light list). Per-light runtime records are 32
-bytes (`uVar3 << 5` allocation).
+| Offset | Field |
+|---|---|
+| +0x00 | type |
+| +0x04..+0x0c | colour normalised by its luminance |
+| +0x10 | luminance of `colour * identityLight` (weights 0.299, 0.587, 0.114 at 0x5405f8) |
+| +0x14..+0x20 | ambient RGBA: `colour * identityLight * 0.1`, alpha 1 |
+| +0x24..+0x30 | diffuse RGBA: `colour * identityLight * 0.8`, alpha 1 |
+| +0x44..+0x4c | origin, or direction for the sun |
+| +0x50 | w: 0 directional, 1 positional |
+| +0x54..+0x5c | cone axis, the file direction negated |
+| +0x60, +0x64, +0x68 | constant, linear, quadratic falloff |
+| +0x6c | cone exponent |
+| +0x70 | cone half-angle in degrees, `acos(word) * 57.2958`; 180 is no cone |
 
-## Lump 19: leaf -> light indices (unchanged)
+Per type (INFERRED, the switch on the type in 0x4db620): 1, the sun: ambient 0, diffuse
+from the worldspawn (section 3), luminance recomputed from it, direction
+words 7..9, w 0, constant 1; the loader keeps a pointer to it at
+`world+0x114` (the last type-1 light wins). 2: quadratic 1. 3: linear from
+word 10. 4: quadratic word 10, constant word 11. 5: quadratic 1, cone from
+`acos(word 10)` (0x4db8d8), exponent word 11. 7: quadratic word 10, constant
+word 11, cone from `acos(word 12)` (0x4db927), exponent word 13.
 
-`u16` indices into lump 30, stored per leaf (`first_light_index` /
-`light_index_count`), enforced by "R_LoadNodesAndLeafs: too many lights in
-leaf" (`0x54d421`, xref `0x4db533`). This leaf-light wiring is the MP
-entity-lighting path the `r_showLeafLights` cvar debugs.
+## 3. Worldspawn keys
 
-## `lightingPrecalc` is the static-model lighting
+INFERRED, from the first block of the entity pass at 0x4dbf50 (strings
+0x54d28c..0x54d1c8 compared case-insensitively, stores at 0x11a31c0 to
+0x11a31f0, `world` being 0x11a30e8):
 
-The client parses the entity lump itself during LoadMap
-(`FUN_004dbf50`, called with the entities lump at `LoadMap`), and the
-`lightingPrecalc` string (VA `0x54d2fc`) is read by the entity-var getter
-callers at `0x4dbc71` (the light/flare spawn parser `FUN_004dbcd0`) and
-`0x4f8e25` (the shader/vertex-program path). Static models are baked world
-geometry lit by this compiler-generated per-entity tint - which is exactly
-what vcod already applies (`props.rs`), with a white fallback where the key
-is absent, matching the getter's default.
+- `ambient` (default 0; above 2.0 it warns "ambient too big" and scales by
+  4/255), `_color` (normalised), `diffuseFraction` (default 0.5), `suncolor`
+  (normalised), `sundiffusecolor` (normalised; `suncolor` when absent),
+  `sunlight` (default 1), `sundirection`.
+- World ambient (`world+0xd8`): `identityLight * ambient * _color` when
+  both are non-zero, else 0.
+- With `t = (sunlight - ambient) * identityLight`: the sun light's diffuse
+  (`world+0xe8`) is `suncolor * (1 - diffuseFraction) * t`, and the sky
+  colour (`world+0xf8`) is `sundiffusecolor * diffuseFraction * t`, its
+  luminance at `world+0x108`.
 
-## Consequences for vcod
+## 4. Lump 19 and the leaf's light list
 
-- Per-vertex grid sampling: **rejected** - no retail mechanism implements
-  it in MP (the sampler does not exist), and the data it would need from
-  the grid (a world mapping) is never computed by retail MP.
-- Static props keep `lightingPrecalc`; that is full parity already.
-- The one real lighting gap left is **dynamic entities** (player models):
-  retail MP can shade them from their leaf's lump-30 lights via lump 19.
-  That is a separate, well-scoped follow-up ("entity lighting from leaf
-  lights") and needs the 48-byte light record decoded from `FUN_004db240`
-  first.
+- VERIFIED: the leaf loader (0x4db4e1-0x4db548) copies the 36-byte leaf's
+  cluster (byte 0) to `leaf+0xc`, its first light index (byte 28) to
+  `leaf+0x14` and its count (byte 32) to `leaf+0x18`. INFERRED: when the
+  count is non-zero and the first lump-19 entry is negative it steps past
+  that entry and sets `leaf+0x10` to 1, and "R_LoadNodesAndLeafs: too many
+  lights in leaf" (0x54d421) fires above 15 lights.
+- INFERRED: `leaf+0x10` means the leaf sees the sky: only the sky sampling
+  (0x4b4ff0) and the sky factor's 0.25 floor (0x4b6210) read it.
+- INFERRED: the point-to-leaf walk is 0x50b390, where `dot(p, normal) -
+  dist <= 0` takes the back child.
+
+## 5. Lump 32: the light-visibility cache
+
+- VERIFIED: 0x4b7c00 compares the length with 0x300000 and copies into a
+  table at 0x0ca28d0 of 262144 eight-byte slots (key, state, sun, mask), read
+  as 8192 buckets of 32 by 0x4b5420. Each file slot is 12 bytes: `u32 key`,
+  `u8 state`, five sun bytes, a pad byte, `u16 mask`; the copy takes the sun
+  byte at `4 + r_diffuseSunSteps`. INFERRED: the five sun bytes are the
+  samples for one to five steps.
+- VERIFIED, mp_carentan census: 37644 used slots, 32513 with state 1 and
+  5131 with state 2; the sun bytes top out at 2, 8, 18, 32, 50, twice the
+  square of the step count.
+- VERIFIED, the arithmetic in 0x4b5420: the key is `((x & 0x3ff) | (y << 10)) << 12 |
+  (cluster & 0xfff)` and the bucket `(rev(z) + y * 0xc41 - x * 0xc3d) &
+  0x1fff`, `rev` reversing the bits inside each byte (0x4b4de0). x, y, z are
+  grid indices, `cluster` the cluster of the model centre's leaf.
+- VERIFIED: every sampled mp_carentan slot I tested (5369, a seventh of
+  them) fits its bucket with some z in the map's range under that hash.
+- INFERRED, 0x4b5420's control flow: a lookup scans its bucket; an empty
+  slot or a full bucket is a miss. A full bucket shifts its 31 first slots down one
+  (`memmove` of 0xf8 bytes) and the new sample takes slot 0. A miss traces
+  (section 7) and stores the result. The lookup returns the mask for state
+  1 and -1 otherwise, and the sun byte either way.
+
+## 6. Sampling and picking lights
+
+VERIFIED: the grid constants below are the floats at 0x5690fc (-131072),
+0x568ea0 (1/32) and 0x569174 (1/64).
+
+INFERRED, 0x4b6210's control flow on the model centre `p`:
+
+- A centre in a leaf with cluster < 0 gets the sun alone, weight 1, sky
+  factor 1. A leaf with no lights and no sky flag gets nothing.
+- Grid cells are 32 x 32 x 64 from (-131072, -131072, -131072): `x =
+  fistp(p.x + 131072 - 0.5) >> 5` and `frac = (p.x + 131072) / 32 - x`;
+  z uses `>> 6` and 1/64.
+- The eight corners carry trilinear weights. A corner whose lookup returns
+  a mask adds its weight to a running total, `weight * sun * 0.5 / steps^2`
+  to the sky factor (`steps` is `r_diffuseSunSteps`), and its weight to each
+  leaf light whose bit is set.
+- A total under 0.98 and above 0 scales the sky factor and every light
+  weight by `1 / total`, except the sun's, which gains `1 - total` instead.
+  A sky-flag leaf floors the sky factor at 0.25.
+
+INFERRED, the control flow of 0x4b69f0 as 0x4b7450 calls it with the stored
+lights and weights (and the scene's dynamic lights):
+
+- With a non-zero sky factor, sky luminance and `r_diffuseSunQuality`: at
+  quality 1, or with more than `r_maxEntLights` lights, one directional
+  light from above (direction (0, 0, 1)) with ambient and diffuse each half
+  the sky colour. Otherwise two: ambient 0.75 and diffuse 0.25 of the sky
+  from above, and diffuse -0.25 of it from below (direction (0, 0, -1)) with
+  luminance -0.25 of the sky's. Both take the sky factor as weight; the factor left for the
+  vertex pass becomes 0.
+- Each weighted light gets a key: 1e19 for a negative luminance, else
+  `luminance * 2^r_overBrightBits / (c + l d + q d^2) * weight` at the
+  centre (0x4b5e30; no falloff for a directional light), plus
+  `2^r_overBrightBits * skyLuminance * skyFactor` for types 1 and 8. Keys
+  below `r_minEntLightIntensity` drop; the rest go into a list of at most 8
+  sorted strongest first, a new key ahead of an equal one, a ninth pushing
+  the weakest out.
+- 0x4b5ed0 folds lights past `r_maxEntLights` into one; with both at 8 it
+  never runs for a static model.
+
+Cvar defaults, VERIFIED from the registration strings; the clamps are
+INFERRED from 0x4b4d10 and 0x4f0780:
+`r_maxEntLights` "8" (clamped to at least quality + 1 and at most the GL
+light count), `r_diffuseSunSteps` "3" (1..5), `r_diffuseSunQuality` "2"
+(0..2), `r_minEntLightIntensity` "0.02", `r_overBrightBits` "1" (forced to 0
+without hardware gamma).
+
+## 7. A missed sample
+
+INFERRED, 0x4b5190's control flow, run at the grid point `g = ((x - 4096) * 32, (y - 4096)
+* 32, (z - 2048) * 64)`:
+
+- State 2 when `g`'s leaf has cluster < 0 or when a trace from `g` nudged
+  0.01 towards the model centre to the centre is blocked (0x426130, mask
+  0x2001).
+- Otherwise state 1, and for leaf light `i` bit `i`: a directional light
+  is seen when the ray from `g + dir * 0.1` to `g + dir * 32768` leaves
+  without starting solid and either runs its full length or hits a
+  `SURF_SKY` (4) surface (0x4b4f20); a positional light when the ray from
+  `g` nudged 0.1 towards it reaches it (0x4b4f90).
+- For a sky-flag leaf (0x4b4ff0): a `steps x steps` fan of rays from `g` up
+  0.1 to `g + (dx, dy, 32768)`, `dx` and `dy` spaced 32768 apart (16384 above
+  3 steps) and centred; each that gets out adds 2 to the sun byte and sets
+  mask bit 0x8000.
+
+## 8. The vertex colour
+
+INFERRED, 0x4e5210's control flow, called per vertex by the surface cache's
+`lightingDiffuse` case (0x4e57e0, case 10) with the world position and the
+normal taken through the scaled axis and renormalised by 0x42db90
+(`VectorNormalize`):
+
+- A map with no lump-19 entries (`world+0x118` zero) colours every vertex
+  `identityLight` (byte 127).
+- Otherwise `colour = sky * skyFactor + worldAmbient`, plus per picked
+  light `(max(0, N . L) * diffuse + ambient) * atten`. A directional light
+  uses its stored direction and `atten = weight`. A positional light uses
+  the unit vector to it and `atten = weight / ((d q + l) d + c)`; with a
+  cone, the cosine between that vector and the cone axis must exceed the
+  sine table entry `(cutoff + 90) * 1024 / 360` (a quantised cosine) and
+  then multiplies in `exponent` times, else `atten` is 0.
+- Each channel is `fistp(colour * 255)` clamped to 0..255.
+
+## 9. Which stage gets which colour
+
+- VERIFIED, the string loads and stores at 0x4f8c69-0x4f8e34: the `rgbGen`
+  keywords map to stage values
+  wave 8, const and constLighting 0xc, identity 2, identityLighting 1,
+  entity 3, oneMinusEntity 4, vertex 6, exactVertex 5, lightingAmbient 9,
+  lightingDiffuse 10, oneMinusVertex 7, lightingPrecalc 0xb.
+- INFERRED: a prop skin named `type@name` loads the template
+  `shadertypes/model/<type>.stype` (0x4fc0c0 builds `@model/<type>`); a skin
+  with no `@` and no script gets an implicit stage with `rgbGen
+  lightingDiffuse` (0x4fc440 stores 10 in its -1 "model skin" case).
+- VERIFIED, stock `shadertypes/model/*.stype`: 50 stages say
+  `lightingDiffuse`; `foliage_detail` says `lightingPrecalc`; `cloth_light`
+  and `glass_light` `identityLighting`; the two `objective_incomplete`
+  types `constLighting`.
+- INFERRED, 0x4e57e0's switch: the surface cache colours case 1 with the
+  `identityLight` byte, case 0xb with the stored precalc bytes and case 0xc
+  with the stage constant.
+- INFERRED: `radialNormals` (0x547048), which four foliage types carry, is
+  matched and its line skipped (0x4fab30).
+
+## 10. vcod
+
+`crates/common/src/static_light.rs` ports sections 2 to 8 and
+`props::build` applies section 9:
+
+- Lighting is computed at map load with retail's defaults and one
+  overbright bit (`identityLight` 0.5, as `renderer.rs` assumes), in reverse
+  entity order so misses fill the cache in retail's order. The bounds centre
+  is the AABB of the baked LOD-0 vertices.
+- Dynamic lights in the scene at the first draw are not added.
+- Misses trace through a `CollisionWorld` built from the world brushes
+  alone, with no static models, the first time a sample is missing.
+- Shadow decals (`shadow_*`, `*_shadow`) keep the full-scale precalc tint.
+
+VERIFIED, vcod measurement 2026-10-09 (release build, all 12 stock maps):
+most models find all eight corners in lump 32 (mp_carentan 425 of 592,
+mp_chateau 858 of 883); partial misses come in fours, one z layer, or with
+the centre one x cell over. INFERRED: the compile sampled a slightly
+different centre for those, or a different version of the map; retail would
+trace the same misses. Lighting mp_carentan's 592 models, 844 traced
+samples included, takes about 0.5 s; there is no per-frame cost. The mean
+vertex byte over all prop vertices lands near `identityLight *
+lightingPrecalc` (mp_carentan 62 against 49, mp_brecourt 66 against 60).
