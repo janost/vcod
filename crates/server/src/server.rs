@@ -142,6 +142,11 @@ struct Challenge {
     addr: SocketAddr,
     challenge: i32,
     time: Instant,
+    /// When the last `challengeResponse` went out (`pingTime`, +0x1c).
+    ping_time: Instant,
+    /// The first connect's `svs.time - pingTime`, kept for its retries
+    /// (+0x24, 0 until then).
+    ping: Option<i32>,
     connected: bool,
 }
 
@@ -1255,6 +1260,23 @@ fn remove_info_key(info: &str, key: &str) -> String {
     out
 }
 
+/// `SV_WriteDownloadToClient`'s blocks for `c`'s transfer, if it has one:
+/// as many as the rate carries in a snapshot interval. A refusal ends it.
+fn write_download(
+    c: &mut Client,
+    w: &mut MsgWriter,
+    now: i32,
+    rate: i32,
+    open: &impl Fn(&str) -> Result<Vec<u8>, crate::download::Refusal>,
+) {
+    let budget = crate::download::blocks_per_message(rate, FRAME_MS);
+    if let Some(dl) = c.download.as_mut()
+        && !dl.write(w, now, budget, open)
+    {
+        c.download = None;
+    }
+}
+
 /// One message off a client the snapshot pass does not build for: its
 /// unacked server commands and its last frame repeated under the new
 /// sequence. The packets come back for the caller to address.
@@ -1283,6 +1305,7 @@ fn resend_last_frame(
         snapshot::write(&mut w, proto, base, &frame, baselines);
         c.record_frame(frame);
     }
+    c.unsent.clear();
     c.netchan
         .transmit(c.last_client_command, &w.into_ops(), huff)
 }
@@ -1513,6 +1536,11 @@ impl Server {
         crate::game::builtins::cvar::atoi(&self.live_cvar("sv_privateClients", "0"))
     }
 
+    /// A cvar read as `->integer`.
+    fn live_int_cvar(&self, name: &str) -> i32 {
+        crate::game::builtins::cvar::atoi(&self.live_cvar(name, "0"))
+    }
+
     /// `getinfo`/`getstatus`'s `pswrd`: 1 for any non-empty `g_password`,
     /// `none` included (0x808c3ae, 0x808bf23).
     fn pswrd(&self) -> u8 {
@@ -1548,13 +1576,23 @@ impl Server {
         let mut i = Info::new();
         i.set("challenge", challenge_arg(challenge))
             .set("protocol", PROTOCOL_V1.version)
-            .set("hostname", &self.cfg.hostname)
+            .set(
+                "hostname",
+                self.live_cvar("sv_hostname", &self.cfg.hostname),
+            )
             .set("mapname", &self.cfg.map)
             .set("clients", public_clients)
             .set("sv_maxclients", self.cfg.max_clients as i32 - private)
             .set("gametype", self.live_gametype())
-            .set("pure", u8::from(self.paks.pure))
-            .set("sv_allowAnonymous", 0)
+            .set("pure", u8::from(self.paks.pure));
+        // `->integer`, each key only when non-zero (0x808c318, 0x808c344).
+        for (key, cvar) in [("minPing", "sv_minPing"), ("maxPing", "sv_maxPing")] {
+            let v = self.live_int_cvar(cvar);
+            if v != 0 {
+                i.set(key, v);
+            }
+        }
+        i.set("sv_allowAnonymous", self.live_int_cvar("sv_allowAnonymous"))
             .set("pswrd", self.pswrd());
         self.send_oob(from, &format!("infoResponse\n{i}"));
     }
@@ -1630,6 +1668,7 @@ impl Server {
         {
             Some(c) => {
                 c.time = now;
+                c.ping_time = now;
                 c.challenge
             }
             None => {
@@ -1640,6 +1679,8 @@ impl Server {
                     addr: from,
                     challenge,
                     time: now,
+                    ping_time: now,
+                    ping: None,
                     connected: false,
                 };
                 if self.challenges.len() < MAX_CHALLENGES {
@@ -1697,7 +1738,28 @@ impl Server {
             self.send_oob(from, "error\nEXE_BAD_CHALLENGE");
             return;
         };
-        self.challenges[ci].connected = true;
+        let ch = &mut self.challenges[ci];
+        ch.connected = true;
+        let ping = *ch
+            .ping
+            .get_or_insert(now.saturating_duration_since(ch.ping_time).as_millis() as i32);
+        log::debug!("Client {ci} connecting with {ping} challenge ping");
+        // Off the LAN only, against `->value`; 0 turns each test off
+        // (0x80857ee..0x80858a4).
+        if !crate::client::is_lan(from.ip()) {
+            let min = crate::game::builtins::cvar::atof(&self.live_cvar("sv_minPing", "0"));
+            let max = crate::game::builtins::cvar::atof(&self.live_cvar("sv_maxPing", "0"));
+            if min != 0.0 && (ping as f32) < min {
+                log::debug!("Client {ci} rejected on a too low ping");
+                self.send_oob(from, "error\nEXE_ERR_HIGH_PING_ONLY");
+                return;
+            }
+            if max != 0.0 && (ping as f32) > max {
+                log::debug!("Client {ci} rejected on a too high ping: {ping}");
+                self.send_oob(from, "error\nEXE_ERR_LOW_PING_ONLY");
+                return;
+            }
+        }
         let reconnect = self
             .clients
             .iter()
@@ -1773,6 +1835,8 @@ impl Server {
         if let Some(rt) = self.script.as_mut() {
             rt.push_client_event(ClientEvent::Connect { slot, name });
         }
+        // A taken connect clears the stored ping (0x8085c16).
+        self.challenges[ci].ping = None;
         self.send_oob(from, "connectResponse");
         // The first client, or the last the server holds (0x8085cd3).
         let count = self.client_count();
@@ -2241,6 +2305,8 @@ impl Server {
             return;
         }
         c.stamp_sent(c.netchan.outgoing_sequence, self.sv_time_ms);
+        // Whole, ahead of any fragments still queued, which it supersedes.
+        c.unsent.clear();
         for pkt in c.netchan.transmit(c.last_client_command, &ops, &self.huff) {
             self.outbox.push((c.addr, pkt));
         }
@@ -2649,19 +2715,21 @@ impl Server {
         }
     }
 
-    /// `SV_WriteDownloadToClient` (0x8086290) for every client with a
-    /// download, in a message of its own: a downloading client is still
-    /// primed and gets no snapshot. Only paks this server mounts and lists in
-    /// `sv_referencedPakNames` go out; retail serves any file of the name.
-    fn send_downloads(&mut self) {
+    /// What `SV_WriteDownloadToClient` (0x8086290) opens a download with:
+    /// the bytes, or the refusal. Only paks this server mounts and lists in
+    /// `sv_referencedPakNames` go out. Retail's `FS_SV_FOpenFileRead`
+    /// opens any path under its game directories, `..` included, so a
+    /// `download main/server.cfg` hands out the rcon password there
+    /// (docs/research/cod11-server-handshake.md, "Serving a download").
+    fn download_opener(
+        &self,
+    ) -> impl Fn(&str) -> Result<Vec<u8>, crate::download::Refusal> + use<> {
         let allow = self
             .level_cvar("sv_allowDownload")
             .is_none_or(|v| v.trim().parse::<i32>().unwrap_or(0) != 0);
         let pure = self.paks.pure;
-        let dedicated = self.dedicated;
-        let now = self.sv_time_ms;
         let fs = self.fs.clone();
-        let open = |name: &str| -> Result<Vec<u8>, crate::download::Refusal> {
+        move |name: &str| {
             use crate::download::Refusal;
             let stem = name.strip_suffix(".pk3").unwrap_or(name);
             if vcod_common::net::download::is_stock_pak(stem) {
@@ -2678,24 +2746,41 @@ impl Server {
                 .and_then(|p| std::fs::read(&p.path).ok())
                 .filter(|b| !b.is_empty())
                 .ok_or(Refusal::NotFound)
-        };
+        }
+    }
+
+    /// `SV_SendClientSnapshot` (0x808f844) for a client that is downloading
+    /// and not in the world: retail writes the server commands and the
+    /// snapshot only for an active client (or a zombie), so the message is
+    /// the header and the download blocks. It goes out when the client's
+    /// `nextSnapshotTime` comes round, as every message does
+    /// ([`Client::pace`]); a client in the world gets its blocks after its
+    /// snapshot in [`Self::send_snapshots`].
+    fn send_downloads(&mut self) {
+        let open = self.download_opener();
+        let max_rate = self.live_int_cvar("sv_maxRate");
+        let (dedicated, now) = (self.dedicated, self.sv_time_ms);
         for c in self.clients.iter_mut().flatten() {
+            if c.sim.is_some() || c.is_bot || now < c.next_message_ms {
+                continue;
+            }
+            let rate = c.send_rate(dedicated, max_rate);
+            if let Some(pkt) = c.next_fragment(now, rate) {
+                self.outbox.push((c.addr, pkt));
+                continue;
+            }
             if c.download.is_none() {
                 continue;
             }
-            let budget = crate::download::blocks_per_message(c.rate(dedicated), 50);
             let mut w = MsgWriter::new(&self.huff);
-            write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
-            c.reliable_sent = c.netchan.reliable_sequence as i32;
-            if let Some(dl) = c.download.as_mut()
-                && !dl.write(&mut w, now, budget, open)
-            {
-                c.download = None;
-            }
+            write_download(c, &mut w, now, rate, &open);
             let sent = c
                 .netchan
                 .transmit(c.last_client_command, &w.into_ops(), &self.huff);
-            self.outbox.extend(sent.into_iter().map(|p| (c.addr, p)));
+            c.pace(now, sent.iter().map(Vec::len).sum(), rate, FRAME_MS);
+            if let Some(pkt) = c.first_packet(sent) {
+                self.outbox.push((c.addr, pkt));
+            }
         }
     }
 
@@ -3764,13 +3849,36 @@ impl Server {
         }
     }
 
-    /// `Cvar_InfoString(CVAR_SERVERINFO)` with the live cvars the config
-    /// does not hold.
+    /// `Cvar_InfoString(CVAR_SERVERINFO)`: the running level's table, so a
+    /// script `setCvar` of a serverinfo cvar shows as a console write does.
+    /// With no level, the config and the `--set`s the first load stamps.
+    /// `sv_pure` is the one the paks were listed under.
     fn serverinfo(&self) -> Info {
-        let mut i = configstrings::serverinfo(&self.live_cfg());
-        i.set("sv_privateClients", self.private_clients())
-            .set("sv_pure", u8::from(self.paks.pure));
+        let mut i = match self.script.as_ref() {
+            Some(rt) => {
+                let mut i = Info::new();
+                for (k, v) in rt.cvars().info_pairs(crate::cvars::flag::SERVERINFO) {
+                    i.set(k, v);
+                }
+                i
+            }
+            None => {
+                let mut i = configstrings::serverinfo(&self.live_cfg());
+                i.set("sv_privateClients", self.private_clients());
+                i
+            }
+        };
+        i.set("sv_pure", u8::from(self.paks.pure));
         i
+    }
+
+    /// `SV_Frame`'s `cvar_modifiedFlags & CVAR_SERVERINFO` test, as a
+    /// compare: whatever wrote a serverinfo cvar this frame, configstring 0
+    /// follows before the snapshots go out.
+    fn flush_serverinfo(&mut self) {
+        if self.configstrings.first() != Some(&self.serverinfo().to_string()) {
+            self.refresh_serverinfo();
+        }
     }
 
     /// `SV_Frame`'s cvar flush, the serverinfo half: a write to a cvar the
@@ -5426,6 +5534,7 @@ impl Server {
             }
         }
         self.refresh_fall_heights();
+        self.flush_serverinfo();
         // `trap_SendConsoleCommand`'s `EXEC_APPEND`: what a builtin queued
         // this frame runs at the top of the next tick, never mid-frame.
         self.console.extend(console_lines);
@@ -6369,6 +6478,8 @@ impl Server {
             })
             .collect();
 
+        let open = self.download_opener();
+        let max_rate = self.live_int_cvar("sv_maxRate");
         for (slot, follow_frame) in follow_frames.iter().enumerate() {
             let follow_frame = follow_frame.as_ref();
             let Some(c) = self.clients[slot].as_mut() else {
@@ -6377,6 +6488,20 @@ impl Server {
             // No socket to write to; the bot's slot still counts toward the
             // roster and entity lists the real clients are sent.
             if c.is_bot {
+                continue;
+            }
+            if c.sim.is_none() {
+                continue;
+            }
+            // `SV_SendClientMessages` (0x809045c) skips a client until its
+            // `nextSnapshotTime`, and a turn with fragments left sends the
+            // next one instead of a snapshot.
+            if self.sv_time_ms < c.next_message_ms {
+                continue;
+            }
+            let rate = c.send_rate(self.dedicated, max_rate);
+            if let Some(pkt) = c.next_fragment(self.sv_time_ms, rate) {
+                self.outbox.push((c.addr, pkt));
                 continue;
             }
             let Some(sim) = c.sim.as_ref() else {
@@ -6468,6 +6593,7 @@ impl Server {
             w.write_byte(snapshot::SVC_SNAPSHOT);
             snapshot::write(&mut w, self.proto, base.as_ref(), &frame, &self.baselines);
             c.record_frame(frame);
+            write_download(c, &mut w, self.sv_time_ms, rate, &open);
 
             let ops = w.into_ops();
 
@@ -6514,7 +6640,14 @@ cmds {processed} span {span} queued {queued} ack {} behind {ack_behind} {base_de
                 );
             }
             c.stamp_sent(message_num, self.sv_time_ms);
-            for pkt in c.netchan.transmit(c.last_client_command, &ops, &self.huff) {
+            let sent = c.netchan.transmit(c.last_client_command, &ops, &self.huff);
+            c.pace(
+                self.sv_time_ms,
+                sent.iter().map(Vec::len).sum(),
+                rate,
+                FRAME_MS,
+            );
+            if let Some(pkt) = c.first_packet(sent) {
                 self.outbox.push((c.addr, pkt));
             }
         }
@@ -6877,6 +7010,36 @@ mod tests {
             "serverinfo: {:?}",
             sv.configstring(0)
         );
+    }
+
+    /// A script `setCvar` of a serverinfo cvar reaches configstring 0 and
+    /// `getinfo` by the next frame, as retail's `SV_Frame` flush makes it
+    /// (`sv_privateClients 12` on 8 slots read `sv_maxclients -4` live; 4
+    /// slots here).
+    #[test]
+    fn a_script_write_of_a_serverinfo_cvar_reaches_configstring_0() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test(
+                "main() { wait 0.1; setCvar(\"sv_privateClients\", \"12\"); setCvar(\"sv_hostname\", \"scripted\"); }",
+            ),
+        );
+        sv.tick(now);
+        assert!(sv.configstring(0).contains("\\sv_privateClients\\0"));
+        for _ in 0..4 {
+            sv.tick(now);
+        }
+        let cs0 = sv.configstring(0).to_string();
+        assert_eq!(info_value_for_key(&cs0, "sv_privateClients"), Some("12"));
+        assert_eq!(info_value_for_key(&cs0, "sv_hostname"), Some("scripted"));
+        sv.take_outgoing();
+        sv.handle_packet(addr(20), &oob("getinfo x"), now);
+        let (_, _, rest) = reply(&mut sv);
+        let info = String::from_utf8_lossy(&rest).to_string();
+        assert_eq!(info_value_for_key(&info, "sv_maxclients"), Some("-8"));
+        assert_eq!(info_value_for_key(&info, "hostname"), Some("scripted"));
     }
 
     /// `SV_SetConfigstring` broadcasts a slot the running level changed to
@@ -7389,6 +7552,48 @@ mod tests {
         );
         sv.handle_packet(from, &build_connect(&ui), now);
         reply_text(sv)
+    }
+
+    /// `sv_minPing` / `sv_maxPing` against the challenge ping, off the LAN
+    /// only, and the two `getinfo` keys that appear while either is set
+    /// (handshake doc, "Ping limits").
+    #[test]
+    fn ping_limits_refuse_a_connect_off_the_lan() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.set_cvar("sv_minPing", "100");
+        sv.set_cvar("sv_maxPing", "250");
+        let wan = SocketAddr::from(([203, 0, 113, 7], 27960));
+        let connect_after = |sv: &mut Server, from, ms| {
+            let challenge = challenge_for(sv, from, now);
+            let ui = format!(
+                "\\name\\vcod\\protocol\\{}\\qport\\{QPORT}\\challenge\\{challenge}",
+                PROTOCOL_V1.version
+            );
+            sv.handle_packet(from, &build_connect(&ui), now + Duration::from_millis(ms));
+            reply_text(sv)
+        };
+        assert_eq!(
+            connect_after(&mut sv, wan, 50),
+            ("error".into(), "EXE_ERR_HIGH_PING_ONLY".into())
+        );
+        assert_eq!(
+            connect_after(&mut sv, addr(9), 50).0,
+            "connectResponse",
+            "a LAN client skips both tests"
+        );
+        sv.handle_packet(addr(20), &oob("getinfo x"), now);
+        let (_, _, rest) = reply(&mut sv);
+        let info = String::from_utf8_lossy(&rest).to_string();
+        assert_eq!(info_value_for_key(&info, "minPing"), Some("100"));
+        assert_eq!(info_value_for_key(&info, "maxPing"), Some("250"));
+        let wan2 = SocketAddr::from(([203, 0, 113, 8], 27960));
+        assert_eq!(
+            connect_after(&mut sv, wan2, 400),
+            ("error".into(), "EXE_ERR_LOW_PING_ONLY".into())
+        );
+        let wan3 = SocketAddr::from(([203, 0, 113, 9], 27960));
+        assert_eq!(connect_after(&mut sv, wan3, 150).0, "connectResponse");
     }
 
     /// Retail 1.1d with `sv_privateClients 2` (handshake doc, "Private
