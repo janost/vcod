@@ -1582,6 +1582,35 @@ turned by the view yaw less the slot's yaw, with alpha
 behind. VERIFIED: the centre is `0x300695e4` (320.0) and `0x300695e0`
 (240.0). The sense of the turn is inferred from that geometry, not measured.
 
+### Mod items
+
+- `0x30022ba0` registers `cg_hudFiles` with the default `ui_mp/hud.txt`
+  (trap 9) and reads it back (trap 0xb). VERIFIED (strings). The file's
+  `loadMenu` entries are loaded by `0x30022420`, `0x30022350` and
+  `0x30022260`, which falls back to `ui_mp/testhud.menu`. INFERRED (call
+  shape). Stock `hud.txt` names only `ui_mp/hud.menu`. VERIFIED
+  (`pak0.pk3`).
+- `0x3004a6f0` paints every loaded menu whose window flags carry 4
+  (`WINDOW_VISIBLE`) and whose owner-draw-flag test passes: the menu's
+  window, then each item through `0x30047fb0`. INFERRED (shape of RTCW's
+  `Menu_PaintAll`). An item with no `text` and a `cvar` prints the cvar's
+  value, as RTCW's `Item_Text_Paint` does. INFERRED (lineage).
+- Every item of stock `hud.menu` is an owner draw, which vcod draws
+  natively (above). VERIFIED (`pak0.pk3`). A mod's replacement adds plain
+  items: `zzz_zfunmod.pk3` (167.235.192.175:23120, 2026-10-09) adds menus
+  `fm_corners` and `fm_announce` whose `type 1` items read `scr_fm_tl_d`,
+  `scr_fm_bl_d`, `scr_fm_mk` and the like, which the server sets per
+  client with `v` (seen live: `v scr_fm_tl_d "^3King of the Day: ..."`).
+  VERIFIED.
+- vcod (`crates/client/src/hud/hudmenu.rs`) loads `hud.txt`'s menus and
+  paints the visible items of visible menus that are not owner draws:
+  `WINDOW_STYLE_FILLED` and `WINDOW_STYLE_SHADER` backgrounds, then the
+  text or the cvar's value (a `v`, else the 140/204 mirror), placed as the
+  front end places text (`cod11-front-end.md` section 12), with
+  `cvartest` gates. It paints them right after the native items on the
+  views that draw the native HUD. `textstyle`, `textfont`, borders and
+  item scripts are ignored.
+
 ### What vcod does not draw
 
 | Retail piece | Where | vcod |

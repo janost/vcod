@@ -664,3 +664,95 @@ multis, 16 yes/nos, 6 sliders and one edit field. VERIFIED (counted).
 - Not shown: the language picker (`cl_languagesavailable` reads 1, so its
   `hideCvar` hides it), NVIDIA fog (no `r_nv_fog_available`), Driver Info
   (no `developer`). The CD key button is refused.
+
+## 15. Modded servers
+
+What a public 1.1 server sends a joining client beyond the stock set, and
+what the client does with it. Sources: `CoDMP.exe` 1.1, the cgame for the
+HUD side (`cod11-hud-protocol.md` section 9, "Mod items"), and a survey of
+`codmaster.activision.com:20510` on 2026-10-09: `getservers 1 full empty`
+listed 49 servers, all of which answered `getstatus`; vcod joined 13 of
+them as a spectator for 10-25 s each.
+
+### What the survey found
+
+- 36 of 49 serverinfos carry `codextended` (CoDExtended v20/v21), 6 carry
+  `iw1x`, the rest neither. `mod` reads 1 on three. Eleven carry
+  `psv_powerserver`. VERIFIED (`getstatus` replies).
+- Mods ride `main/zzz_*.pk3` and similar names in `sv_referencedPakNames`:
+  CoDaM (`___CoDaM__CoD1.1__`, `__CoDaM_PowerServer`, ...), MiscMod, a
+  fun mod (`zzz_zfunmod`: gametype scripts, `ui_mp/hud.menu`,
+  `mp/playeranim.script`), a weapon menu (`zzz_nexus_weaponmenu_v2`: one
+  script menu, `nexus_weapons`), zombies, jump and gungame maps. VERIFIED
+  (systeminfos and the downloaded paks).
+- Two of the 13 put `fs_game` in the systeminfo (`genesis` on
+  199.247.2.228:28960, `BO7MEDX-MOD` on 63.176.159.145:28960) and name
+  their paks `<fs_game>/<pak>`; the second ships a replacement front end
+  (`ui_mp/main.menu`, `joinserver.menu` and twelve more). VERIFIED.
+- Every one of the 13 systeminfos carries `cl_allowDownload`: 0 on six
+  (the three Katalyst servers joined on 107.191.99.123, `genesis`, an iw1x
+  jump server, a pure LAN-party server), 1 on the rest. A server with it 0
+  answered vcod's `download` with `EXE_AUTODL_SERVERDISABLED<pak>` and
+  dropped it. VERIFIED (live, 107.191.99.123:28961).
+- Two set `sv_wwwBaseURL` (HTTP downloads for patched clients); the stock
+  1.1 client has no HTTP download and fetches over UDP. VERIFIED (no
+  `sv_wwwBaseURL` string in `CoDMP.exe`).
+- UDP downloads ran at 25-40 KB/s, about the `rate` 25000 the client
+  sends. The busiest server references 20 non-stock paks. VERIFIED (live).
+- Localized-string configstrings (1245..) on modded servers hold literal
+  text (`"Press ^1FIRE ^7to vote"`), not table keys; the client prints a
+  key the table lacks as itself. VERIFIED (configstrings).
+- 141.95.34.204:28960 answered `connect` with two OOB `print`s
+  (`^5https://codservers.net`) and sent `connectResponse` 4 s after the
+  challenge. VERIFIED (live).
+
+### The systeminfo sets client cvars
+
+- `CL_SystemInfoChanged` (`0x415eb0`) reads `sv_serverid`, the `sv_cheats`
+  state and the pure and referenced pak lists, then, when no local server
+  runs (`sv_running` 0), calls `Cvar_Set` (`0x439650`) for every key/value
+  pair of the systeminfo. INFERRED (the loop's shape). So `fs_game`,
+  `cl_allowDownload`, `rate`, `snaps` and the rest become client cvars.
+- `fs_game` is registered with flags 0x18 (`CVAR_SYSTEMINFO | CVAR_INIT`)
+  at `0x42cdb0`. VERIFIED. After `CL_SystemInfoChanged`, the gamestate
+  parse (`0x416050`) restarts the filesystem (`0x42d2b0`) when no local
+  server runs and `fs_game` was modified or the checksum feed changed, then
+  runs `CL_InitDownloads` (`0x410240`). INFERRED (call order).
+- `CL_Disconnect` (`0x40ef90`) does not touch `fs_game`, and the systeminfo
+  only sets keys it carries, so retail stays in a mod until another server
+  names one. INFERRED (its body).
+- `cl_allowDownload` is registered "0" with flag 1 (archive) at
+  `0x412152`. VERIFIED. `CL_InitDownloads`, with `sv_running` 0 and
+  `cl_allowDownload` set, has `FS_ComparePaks` (`0x43b830`) list the
+  missing paks and starts the first; otherwise it calls `FS_ComparePaks`
+  for the names only and prints `WARNING: You are missing some files
+  referenced by the server:\n%sYou might not be able to join the game\nGo
+  to the settings menu to turn on autodownload, or get the file
+  elsewhere\n\n` (string `0x5670b9`, its xref at `0x41039b`), then goes on
+  to load. VERIFIED (string, xref); INFERRED (branches).
+- `FS_ComparePaks` compares checksums, not names: a local pak with the
+  right name and the wrong checksum is listed with ` (local file exists
+  with wrong checksum)`, and the download is saved as `%s.%08x.pk3`.
+  VERIFIED (strings in the function).
+- No stock menu sets `cl_allowDownload`; `configure_mp.cfg` and
+  `safemode_mp.cfg` in `pak0.pk3` set it "0". VERIFIED.
+
+### vcod
+
+- The server's `cl_allowDownload` decides when its systeminfo has one, the
+  client's own cvar (default 1, archived) otherwise. vcod applies the
+  server's value to the connection only rather than writing it into the
+  client's cvar the way retail's `Cvar_Set` does. With downloads off it
+  logs the missing paks and loads the map if it resolves.
+- `fs_game` from the systeminfo layers `<game_dir>/<fs_game>` over the base
+  directory (`Pk3Fs::open_layered`) at the gamestate, before the download
+  check; downloads land in either directory and never overwrite a file.
+  Leaving the server drops the layer, which retail does not.
+- Paks are matched by name, not checksum, so a same-named pak of another
+  version counts as present.
+- The front end's menus are read once at start-up, so a mod's replacement
+  main menu (`BO7MEDX-UI`) does not show; script menus, `hud.menu` items,
+  sounds, strings and models come off the layered path.
+- Script menus run the front end's preprocessor (`#include` read off the
+  search path, object-like `#define`s), so `visible MENU_TRUE` and
+  `#define`d responses resolve. Function-like macros are not expanded.
