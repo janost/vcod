@@ -1029,7 +1029,7 @@ fn main() -> Result<()> {
         render_ms: 0.0,
         fx_ms: 0.0,
         look_zoom: (1.0, false),
-        baked_gamma: None,
+        ignore_hw_gamma: false,
         hud,
         hud_ms: 0.0,
         localized,
@@ -1075,12 +1075,16 @@ fn gamma_cvar(shell: &mut console::shell::Shell) -> f32 {
     }
 }
 
-/// With `r_ignorehwgamma 1` retail has no device ramp and bakes `r_gamma`
-/// into textures as they load, so a change waits for `vid_restart`
-/// (docs/research/cod11-gamma.md). vcod keeps its final pass with the gamma
-/// latched here.
-fn baked_gamma(shell: &mut console::shell::Shell) -> Option<f32> {
-    (shell.cvar_f32("r_ignorehwgamma") != 0.0).then(|| gamma_cvar(shell))
+/// `r_ignorehwgamma`, latched: with 1 retail has no device ramp and bakes
+/// `r_gamma` into textures as they load (docs/research/cod11-gamma.md).
+fn ignore_hw_gamma(shell: &console::shell::Shell) -> bool {
+    shell.cvar_f32("r_ignorehwgamma") != 0.0
+}
+
+/// The texture gamma the next world load bakes in: `r_gamma` of that
+/// moment with `r_ignorehwgamma 1`, none with the device ramp.
+fn image_gamma(shell: &mut console::shell::Shell, ignore_hw: bool) -> Option<f32> {
+    ignore_hw.then(|| gamma_cvar(shell))
 }
 
 /// `r_mode`'s size (Q3's mode table, which the stock video mode list picks
@@ -1515,9 +1519,9 @@ struct App {
     /// gun: the mouse's sensitivity scale ([`play::input::MouseLook`]).
     look_zoom: (f32, bool),
     /// `r_ignorehwgamma` as of the last window start or `vid_restart`
-    /// (retail latches it): `Some` holds the `r_gamma` retail would have
-    /// baked into its textures then, `None` is the live device ramp.
-    baked_gamma: Option<f32>,
+    /// (retail latches it): textures bake `r_gamma` at each world load and
+    /// the frame pass only clamps.
+    ignore_hw_gamma: bool,
     hud: Option<hud::Hud>,
     hud_ms: f32,
     /// Menu labels; empty outside `--connect`.
@@ -1807,7 +1811,7 @@ impl App {
                 }
                 Effect::Exec(file) => self.exec_file(event_loop, &file),
                 Effect::VidRestart => {
-                    self.baked_gamma = baked_gamma(&mut self.shell);
+                    self.ignore_hw_gamma = ignore_hw_gamma(&self.shell);
                     if let Some(w) = &self.window {
                         let (size, fullscreen) = video_mode(&self.shell);
                         w.set_fullscreen(
@@ -2126,7 +2130,7 @@ impl ApplicationHandler for App {
             .with_title(&self.title)
             .with_inner_size(winit::dpi::LogicalSize::new(1600.0, 900.0));
         let (size, fullscreen) = video_mode(&self.shell);
-        self.baked_gamma = baked_gamma(&mut self.shell);
+        self.ignore_hw_gamma = ignore_hw_gamma(&self.shell);
         if let Some(size) = size {
             attrs = attrs.with_inner_size(size);
         }
@@ -2144,6 +2148,7 @@ impl ApplicationHandler for App {
         };
         match Renderer::new(window.clone(), &self.fs) {
             Ok(mut r) => {
+                r.set_image_gamma(image_gamma(&mut self.shell, self.ignore_hw_gamma));
                 if let Some(w) = &self.world
                     && let Err(e) = r.load_world(&w.bsp, &self.fs)
                 {
@@ -2460,9 +2465,9 @@ impl ApplicationHandler for App {
                     .window
                     .as_ref()
                     .is_some_and(|w| w.fullscreen().is_some());
-                let overbright = gamma::overbright_bits(fullscreen, self.baked_gamma.is_none());
+                let overbright = gamma::overbright_bits(fullscreen, !self.ignore_hw_gamma);
                 let Some(r) = &mut self.renderer else { return };
-                r.set_gamma(self.baked_gamma.unwrap_or(gamma), overbright);
+                r.set_gamma(if self.ignore_hw_gamma { 1.0 } else { gamma }, overbright);
                 let aspect = r.aspect();
                 // Set inside the online arm where `self` is borrowed out
                 // field-by-field; acted on once the borrows end.
@@ -2816,6 +2821,10 @@ impl ApplicationHandler for App {
                                     }
                                     loading::Action::FinishDownloads => net.finish_downloads(),
                                     loading::Action::Ready => {
+                                        r.set_image_gamma(image_gamma(
+                                            &mut self.shell,
+                                            self.ignore_hw_gamma,
+                                        ));
                                         match load_map(
                                             &map,
                                             net,
