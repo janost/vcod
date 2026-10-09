@@ -652,10 +652,11 @@ multis, 16 yes/nos, 6 sliders and one edit field. VERIFIED (counted).
   closing Multiplayer Options), `rate`, `mss_volume` (the master volume,
   read every frame), and `r_mode` / `r_fullscreen`, which `vid_restart`
   and start-up apply to the window (Q3's mode table; borderless full
-  screen). vcod registers `r_mode` -1 (its own window size) and
+  screen). `cg_drawCrosshair` and `cg_drawStatus` gate the HUD as the cgame
+  does (`cod11-hud-protocol.md`, "Which views draw it"). vcod registers `r_mode` -1 (its own window size) and
   `r_fullscreen` 0 instead of retail's 3 and 1.
 - Stored but inert (archived, so a choice survives): `cl_freelook`,
-  `m_filter`, `cg_drawCrosshair`, `cg_drawStatus`, the texture, picmip,
+  `m_filter`, the texture, picmip,
   gamma, LOD, dynamic light, swap interval and NVIDIA fog cvars,
   `mss_khz`, `mss_3d_provider`, `cg_marks`, `cg_brass`, `cg_blood`.
   `snd_restart` and `setRecommended` are unknown commands. Binds to
@@ -665,3 +666,57 @@ multis, 16 yes/nos, 6 sliders and one edit field. VERIFIED (counted).
 - Not shown: the language picker (`cl_languagesavailable` reads 1, so its
   `hideCvar` hides it), NVIDIA fog (no `r_nv_fog_available`), Driver Info
   (no `developer`). The CD key button is refused.
+
+## 15. The error popup's text
+
+`error_popmenu` prints cvar `com_errorMessage`. How a drop reason gets
+there:
+
+- `Com_Error` is `0x435ad0`. VERIFIED: one path calls
+  `SEH_LocalizeTextMessage` (`0x4aa040`) on the formatted message with the
+  label `"error message"` and copies the result back; the other calls
+  `0x435a40`. INFERRED, off its compares on the code: codes 3, 4 and 5 take
+  the first path, any other code the second.
+- `0x435a40`: VERIFIED, it registers `com_errorMessage` and passes the
+  message to `0x4aa040` with the label at `0x562e84` and a last argument of
+  1. INFERRED, off the null test after that call: `com_errorMessage` gets
+  the result, or the raw message when the result is null. INFERRED, off
+  `0x4a9f80`: with that last argument 1, a part the table lacks makes the
+  call return null, so a message that is not a key, or holds one unknown
+  key, shows as sent.
+- The `w` server command (case `0x77` of the server-command switch,
+  `0x40168b`). VERIFIED: one branch pushes `0x568c0c`
+  (`"EXE_SERVER_DISCONNECTED"`) and code 2 to `Com_Error`; the other passes
+  the first argument and `0x568c24` (`"EXE_SERVERDISCONNECTREASON"`) each
+  through the exe-string translator `0x4a9e50`, formats with `0x44ace0`
+  (`va`) and calls `Com_Error` with code 2. INFERRED, off the compare on the
+  argument count: a bare `w` takes the first branch. INFERRED, off
+  `0x4a9e50`: a key the table lacks comes back as itself when `loc_warnings`
+  is 0. VERIFIED, `localizedstrings/english/exe.str`:
+  `SERVERDISCONNECTREASON` is "Server Disconnected - %s" and
+  `SERVER_DISCONNECTED` "Server Disconnected". So `w "EXE_TIMEDOUT"` reads
+  "Server Disconnected - Timed out", and a plain-text reason is filled in
+  as sent.
+- An OOB `error`. VERIFIED (`0x410df4`..`0x410e5d`; `0x561c08` is
+  `"error"`, `0x566e58` `"server error"`): the handler passes the packet's
+  text to `0x4aa040` with the label `"server error"` and 0, then calls
+  `Com_Error(1, "%s", result)`. INFERRED, off the tests ahead of it: only
+  while connecting or connected, and only from the server's address. The
+  text opens on a key, so `GAME_INVALIDPASSWORD` reads "Invalid Password.".
+  VERIFIED, cod_lnxded's bytes: the version refusal is
+  `error\nEXE_SERVER_IS_DIFFERENT_VER\x15%s\n`, whose version is a literal
+  part.
+- An OOB `disconnect`. VERIFIED (`0x410620`..`0x410676`): the handler
+  calls `Com_Error(1, "EXE_SERVER_DISCONNECTED")`. INFERRED, off its
+  compares: only while connected, from the server's address, and when the
+  clock at `0x155f3e0` is at least 3000 ms past the stamp at `0x15ce868`;
+  after Q3's `CL_DisconnectPacket`, the stamp is the last packet's time.
+
+vcod: `NetClient` emits `Dropped` with the reason in that form (`w <arg>`
+becomes `EXE_SERVERDISCONNECTREASON\x14<arg>`, which
+`Localized::message` resolves the same way), and the client runs
+`Localized::message` over every reason before the popup, so its own English
+reasons pass through. vcod drops on an OOB `disconnect` at once, without
+the 3 s guard. Where a message mixes a known key with an unknown one,
+vcod shows the known part translated; retail shows the whole raw. vcod-server sends `EXE_SERVER_IS_DIFFERENT_VER 1.1` with a
+space, not `\x15`, so that reason shows unlocalized.

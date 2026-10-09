@@ -1591,7 +1591,7 @@ impl Server {
         };
         let val = |k: &str| info_value_for_key(&userinfo, k).and_then(|v| v.parse::<i32>().ok());
         if val("protocol") != Some(self.proto.version as i32) {
-            self.send_oob(from, "error\nEXE_SERVER_IS_DIFFERENT_VER 1.1");
+            self.send_oob(from, "error\nEXE_SERVER_IS_DIFFERENT_VER\x151.1\n");
             return;
         }
         let (Some(challenge), Some(qport)) = (val("challenge"), val("qport")) else {
@@ -7034,7 +7034,7 @@ mod tests {
             reply_text(&mut sv),
             (
                 "error".to_string(),
-                "EXE_SERVER_IS_DIFFERENT_VER 1.1".to_string()
+                "EXE_SERVER_IS_DIFFERENT_VER\x151.1".to_string()
             )
         );
         assert_eq!(sv.client_count(), 0);

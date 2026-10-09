@@ -11,7 +11,6 @@ use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::predict::Predicted;
 use vcod_common::pmove::weapon::NUM_AMMO;
 use vcod_common::weapon::{self, SightDirection, ViewAnimClock, WeaponAnim, WeaponDef};
-use vcod_common::xmodel::XModel;
 
 /// The playerstate fields the viewmodel reads, from the prediction when there
 /// is one, else from the newest snapshot.
@@ -127,6 +126,7 @@ pub struct OnlineView {
     /// load failed, so it is not retried every frame.
     built_for: Option<Option<RigKey>>,
     rig: Option<Box<ViewWeapon>>,
+    rigs: viewmodel::RigCache,
     clock: ViewAnimClock,
     trend: i32,
     sight: SightDirection,
@@ -150,16 +150,18 @@ impl OnlineView {
     /// under the same name: rebuild the rig on the next `sync_rig`.
     pub fn reopen(&mut self) {
         self.built_for = None;
+        self.rigs.clear();
     }
 
-    /// Rebuilds the rig when the weapon or hands `ps` names changed. Returns
-    /// the new models (hands, gun) for the renderer to upload.
+    /// Swaps the rig when the weapon or hands `ps` names changed, out of the
+    /// cache after the first time. Returns the new models (hands, gun) for
+    /// the renderer to draw.
     pub fn sync_rig(
         &mut self,
         fs: &Pk3Fs,
         configstrings: &[String],
         ps: &ViewPs,
-    ) -> Option<Vec<XModel>> {
+    ) -> Option<viewmodel::ViewModels> {
         let names = rig_names(configstrings, ps.weapon, ps.viewmodel_index);
         if let Some(built) = &self.built_for
             && built.as_ref().map(RigKey::names) == names
@@ -173,7 +175,7 @@ impl OnlineView {
         self.rig = None;
         self.clock = ViewAnimClock::default();
         let (weapon, hands) = names?;
-        let (models, rig) = viewmodel::load_view_weapon_with_hands(fs, weapon, hands)?;
+        let (models, rig) = self.rigs.load(fs, weapon, hands)?;
         if rig.is_none() {
             log::warn!("viewmodel {weapon}: no anim rig, not drawing it");
         }
