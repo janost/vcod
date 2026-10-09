@@ -651,11 +651,12 @@ multis, 16 yes/nos, 6 sliders and one edit field. VERIFIED (counted).
   closing Multiplayer Options), `rate`, `mss_volume` (the master volume,
   read every frame), and `r_mode` / `r_fullscreen`, which `vid_restart`
   and start-up apply to the window (Q3's mode table; borderless full
-  screen). vcod registers `r_mode` -1 (its own window size) and
+  screen), and `r_gamma`, read every frame and applied as retail's gamma
+  ramp in a final pass (`cod11-gamma.md`). vcod registers `r_mode` -1 (its own window size) and
   `r_fullscreen` 0 instead of retail's 3 and 1.
 - Stored but inert (archived, so a choice survives): `cl_freelook`,
   `m_filter`, `cg_drawCrosshair`, `cg_drawStatus`, the texture, picmip,
-  gamma, LOD, dynamic light, swap interval and NVIDIA fog cvars,
+  `r_ignorehwgamma`, LOD, dynamic light, swap interval and NVIDIA fog cvars,
   `mss_khz`, `mss_3d_provider`, `cg_marks`, `cg_brass`, `cg_blood`.
   `snd_restart` and `setRecommended` are unknown commands. Binds to
   commands vcod lacks (`+lookup`, `+strafe`, `mp_QuickMessage`,

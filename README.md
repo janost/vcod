@@ -159,8 +159,8 @@ Retail does a lot more than this list. These are the gaps you'll hit first.
 
 **Front end.** Main menu, browser and its popups, options, quit and error
 popups work. On the options screens only binds, sensitivity, invert mouse,
-name, rate, volume, video mode and full screen take effect; texture,
-lighting, gamma, HUD, crosshair, sound quality and language settings are
+name, rate, volume, video mode, full screen and brightness take effect;
+texture, lighting, HUD, crosshair, sound quality and language settings are
 stored but ignored. Start New Server, Mods and CD key print "not in vcod
 yet". The browser's game type filter, map preview and refresh date are
 missing.
