@@ -101,9 +101,9 @@ steps 1, 5 and 7 and `0x4eaa90`).
 
 ## 4. What vcod does
 
-vcod's world shading already carries the one overbright bit (the x2 on
-lightmaps in `shader.wgsl`), so its frame at gamma 1 stands for retail's
-full-screen display at gamma 1. `crates/client/src/gamma.rs` builds
+vcod's frame holds retail's displayed colour, the framebuffer doubled by
+the ramp's one overbright bit; section 5 says where that x2 lands. So its
+frame at gamma 1 stands for retail's full-screen display at gamma 1. `crates/client/src/gamma.rs` builds
 retail's table (`ramp`, step 5, shift 1) into a 256-entry texture; when
 `r_gamma` is not 1 the frame renders offscreen and `gamma.wgsl` maps each
 channel's display byte `e` through table entry `e/2` (linear between
@@ -124,3 +124,55 @@ Divergences:
   distinct brighter shades; vcod caps them at the table entry for 127.5
   (about 128 at gamma 0.5).
 - `r_intensity` is not applied (no stock menu sets it).
+
+## 5. Stage colours and the display doubling
+
+What retail writes to the framebuffer per `rgbGen`, before the ramp
+doubles it:
+
+- VERIFIED, `0x4d9af0` and its only caller `0x4d9f30` (a 512 x 512 loop
+  over a lightmap page): lightmap texels shift left by `1 - overbrightBits`
+  and rescale to the brightest channel when one passes 255, Q3's
+  `R_ColorShiftLightingBytes` with `mapOverBrightBits` fixed at 1. With
+  one overbright bit the shift is 0, so lightmaps reach the framebuffer
+  raw.
+- VERIFIED, the colour switch at `0x4ffa60` (Q3's `RB_CalcColors`, keyed
+  on the stage's gen at `+0x664`; the gen numbers are in
+  `cod11-light-grid-and-leaf-lights.md` section 9): identity (2) writes
+  0xffffffff; exactVertex (5) copies the vertex colour; vertex (6) shifts
+  each channel right by `overbrightBits`; oneMinusVertex (7) inverts, through
+  `__ftol2` when `identityLight` is not 1; const and constLighting (0xc)
+  copy the stage constant; identityLighting (1) and every unlisted gen take
+  `identityLightByte`. lightingAmbient and lightingDiffuse (9, 10) call
+  `0x515ad0` on a map with no lump-19 lights and write white otherwise.
+- VERIFIED: in the GL state setter `0x4d57b0`, state bit 0x100000 enables
+  `GL_LIGHTING` (0xb50) for a map with lump-19 lights while the cvar at
+  `0x16c39e4` is 0; otherwise it disables it and, when the new state carries
+  the bit, sets `glColor3f(identityLight, identityLight, identityLight)`.
+  INFERRED: lit models draw through fixed-function lighting with the picked
+  lights, which is why gens 9 and 10 write white.
+
+So a framebuffer colour is either a texture times a raw lightmap, or a
+texture times a gen that `identityLight` already halved, and the display
+shows each of them doubled. INFERRED from the switch and section 3.
+
+vcod does the doubling per draw instead of in a final pass:
+
+- The implicit lightmapped path and a `$lightmap` bundle multiply the
+  lightmap by 2 (`shade` and `fs_stage` in `shader.wgsl`). Vertex-lit
+  surfaces and props multiply their vertex colour by 2.
+- A scripted stage with no `$lightmap` bundle takes the x2 itself
+  (`STAGE_FLAG_OVERBRIGHT`, `renderer::overbright`) unless it multiplies
+  the framebuffer (source factor zero or dst colour) or a later stage
+  multiplies the framebuffer with a `$lightmap` bundle, which carries the
+  x2 for the whole chain. Before this, `identityLighting`, `constLighting`,
+  `vertex` and `wave` stages on surfaces with no lightmap drew at half
+  retail's brightness.
+- Doubling per draw clamps at the display's 1.0, which is retail's
+  framebuffer 0.5: blends over a bright background and filter stages over
+  a doubled base can differ from retail where retail's framebuffer
+  stayed under 1.0 and the display clipped. A float scene target with one
+  final x2 would remove that; it changes every pass, HUD included.
+- Effects (`fx.wgsl`), the sky farbox, entity models and the HUD keep
+  their own scales; how retail colours those is not traced here.
+

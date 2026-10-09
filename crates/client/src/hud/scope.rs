@@ -41,6 +41,8 @@ pub struct GunAim {
     kick: DamageKick,
     /// `(clientNum, damageEvent)` last seen; a new client is a new baseline.
     last_hit: Option<(i32, i32)>,
+    /// The gun-kick spring's angles this frame (`play::recoil`).
+    pub gun_kick: [f32; 2],
 }
 
 impl GunAim {
@@ -74,6 +76,7 @@ impl GunAim {
             msec,
             now_ms,
             kick: self.kick,
+            gun_kick: self.gun_kick,
         };
         aim::gun_angles(ps, &mut self.state, &input)
     }
