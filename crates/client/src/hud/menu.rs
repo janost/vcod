@@ -14,10 +14,12 @@ use crate::play::join::Join;
 
 /// One selectable row: the localized label, the response it sends, and the
 /// `execKey` (if any) that answers it directly without moving the selection.
+/// The "Main Menu" tab sends nothing and opens the UI's `main` instead.
 pub struct MenuRow {
     pub label: String,
     pub response: String,
     pub key: Option<String>,
+    pub main_menu: bool,
 }
 
 /// A menu's live state: the rows a client can pick from and which is
@@ -48,6 +50,7 @@ pub fn view(menu: &Menu, loc: &Localized, cvar: impl Fn(&str) -> Option<String>)
                 label: loc.translate(&item.text).into_owned(),
                 response,
                 key,
+                main_menu: item.opens_main(),
             }
         })
         .collect::<Vec<MenuRow>>();
@@ -77,8 +80,16 @@ impl MenuView {
         self.selected = (self.selected + 1) % self.rows.len();
     }
 
+    /// The selected row's response; `None` on the "Main Menu" tab.
     pub fn selected_response(&self) -> Option<&str> {
-        self.rows.get(self.selected).map(|r| r.response.as_str())
+        self.rows
+            .get(self.selected)
+            .filter(|r| !r.main_menu)
+            .map(|r| r.response.as_str())
+    }
+
+    pub fn main_menu_selected(&self) -> bool {
+        self.rows.get(self.selected).is_some_and(|r| r.main_menu)
     }
 
     pub fn response_for_key(&self, key: &str) -> Option<&str> {
@@ -234,6 +245,23 @@ mod tests {
         assert_eq!(v.rows[0].key.as_deref(), Some("1"));
         assert_eq!(v.response_for_key("1"), Some("m1carbine_mp"));
         assert_eq!(v.response_for_key("2"), None);
+    }
+
+    #[test]
+    fn the_main_menu_tab_is_a_row_with_no_response() {
+        let m = vcod_common::menu::parse(
+            r#"{ menuDef { name "weapon_x"
+      itemDef { name "button_mainmenu" visible 1 text "@MPMENU_MAIN_MENU" action { close weapon_x; open main; } }
+      itemDef { name "b" visible 1 text "Garand" action { scriptMenuResponse "m1garand_mp"; } }
+      execKey "1" { scriptMenuResponse "m1garand_mp"; }
+    } }"#,
+        );
+        let mut v = view(&m, &Localized::default(), |_| None);
+        assert_eq!(v.rows.len(), 2);
+        assert!(!v.main_menu_selected());
+        v.up();
+        assert!(v.main_menu_selected());
+        assert_eq!(v.selected_response(), None);
     }
 
     #[test]

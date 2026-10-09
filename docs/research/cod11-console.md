@@ -29,9 +29,9 @@ the console or a message field holds the keys.
 `0x155f2c4` (VERIFIED, the 64-dword clear of `0x142f65c` and the `xor 1`).
 INFERRED: while that bit is set the key handler routes keys to the console
 field instead of the binds, which is what stops game input. Escape with the
-console up does not close it: in game the handler opens the menu over it
-(INFERRED, the `0x1b` branch reaching `0x460480` with 7). vcod has no menu,
-so Escape closes the console instead.
+console up does not close it: in game the handler opens the menu under it
+and the console stays down (`cod11-front-end.md` section 13). vcod does the
+same in a game; with no game up its Escape still closes the console.
 
 ## 2. Entering a line
 

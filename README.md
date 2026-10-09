@@ -61,6 +61,8 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
   column, joins on double-click, and runs the stock password, server info,
   filter and favourite popups. Losing the server drops you back on the menu
   with the reason in the stock error popup.
+  In a game, Esc opens the script menu and its Main Menu tab the stock
+  in-game main menu (Back to Game, Disconnect).
 - Joins a 1.1 server (`--connect` or the browser): handshake, Huffman,
   netchan, delta snapshots, and pak downloads for whatever the server has and
   you don't.
@@ -153,8 +155,7 @@ Retail does a lot more than this list. These are the gaps you'll hit first.
 
 **Front end.** Main menu, browser and its popups, quit and error popups
 work. Options, Start New Server and Mods print "not in vcod yet". The
-browser's game type filter, map preview and refresh date are
-missing. Esc in a game releases the mouse; there is no in-game menu.
+browser's game type filter, map preview and refresh date are missing.
 
 **Client**
 
@@ -347,9 +348,11 @@ The stock `config_mp.cfg` binds, with the sight on the right mouse button as
 | Tab | Scoreboard (held) |
 | T / Y | Chat to everyone / your team |
 | M | Script menu: team, or weapon once you have a team |
+| Esc | Script menu, as retail; its Main Menu row opens the main menu (Back to Game, Disconnect, Quit) |
 
 With a script menu open, digits pick a row, Up / Down and Enter navigate,
-and Esc closes it. As a spectator, Space rises and C sinks.
+and Esc closes it. The main menu takes the mouse; Esc or Back to Game
+returns to the game. As a spectator, Space rises and C sinks.
 
 ### Walk mode
 

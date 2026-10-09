@@ -1509,9 +1509,10 @@ impl App {
         self.console.open || (matches!(self.mode, Mode::Idle) && !self.ui.active())
     }
 
-    /// Whether the front end takes the mouse and keys.
+    /// Whether the front end takes the mouse and keys: with no game up, or
+    /// as the in-game main menu.
     fn menu_active(&self) -> bool {
-        !self.console.open && matches!(self.mode, Mode::Idle) && self.ui.active()
+        !self.console.open && self.ui.active()
     }
 
     /// The main menu, or the error popup over it when `error` says why the
@@ -1549,7 +1550,7 @@ impl App {
             self.grab_before_console = self.grabbed;
             self.set_grab(false);
             self.clear_held_keys();
-        } else if self.grab_before_console {
+        } else if self.grab_before_console && !self.ui.active() {
             self.set_grab(true);
         }
     }
@@ -1734,8 +1735,8 @@ impl App {
     }
 
     /// The open script menu's keys, ahead of every other binding, and M to
-    /// open the main menu when none is. False when the key is not the menu's.
-    fn menu_key(&mut self, code: KeyCode) -> bool {
+    /// open the main menu when none is.
+    fn menu_key(&mut self, code: KeyCode) -> ScriptMenuKey {
         let Mode::Online {
             net,
             join,
@@ -1743,39 +1744,121 @@ impl App {
             ..
         } = &mut self.mode
         else {
-            return false;
+            return ScriptMenuKey::Ignored;
         };
         let Some((_, view)) = menu_view else {
             if code == KeyCode::KeyM {
                 join.open_main(net.configstrings());
-                return true;
+                return ScriptMenuKey::Used;
             }
-            return false;
+            return ScriptMenuKey::Ignored;
         };
         let response = match code {
             KeyCode::Escape => {
                 join.close();
-                return true;
+                return ScriptMenuKey::Closed;
             }
             KeyCode::ArrowUp => {
                 view.up();
-                return true;
+                return ScriptMenuKey::Used;
             }
             KeyCode::ArrowDown => {
                 view.down();
-                return true;
+                return ScriptMenuKey::Used;
+            }
+            // The "Main Menu" tab: `close <menu>; open main`.
+            KeyCode::Enter if view.main_menu_selected() => {
+                join.close();
+                return ScriptMenuKey::MainMenu;
             }
             KeyCode::Enter => view.selected_response(),
             _ => match digit_key(code) {
                 Some(key) => view.response_for_key(key),
-                None => return false,
+                None => return ScriptMenuKey::Ignored,
             },
         };
         if let Some(cmd) = response.and_then(|r| join.choose(r, net.server_id())) {
             net.send_reliable(&cmd);
         }
-        true
+        ScriptMenuKey::Used
     }
+
+    /// Esc in a game with nothing else holding the keys, as `CL_KeyEvent`
+    /// does it (docs/research/cod11-front-end.md section 13): once the game
+    /// is live the `g_scriptMainMenu` script menu (vcod falls back to the
+    /// in-game main menu when the server named none), before that the main
+    /// menu. The game keeps running; the mouse goes to the menu.
+    fn escape_in_game(&mut self) {
+        let Mode::Online {
+            net, join, phase, ..
+        } = &mut self.mode
+        else {
+            return;
+        };
+        let live = matches!(phase, Phase::Live(_));
+        if live {
+            join.open_main(net.configstrings());
+        }
+        if !live || join.open().is_none() {
+            let mut out = Vec::new();
+            if live {
+                self.ui.open_ingame(&mut out);
+            } else {
+                self.ui.open_main(&mut out);
+            }
+            self.ui_pending.extend(out);
+        }
+        self.set_grab(false);
+        self.grab_before_console = false;
+        self.clear_held_keys();
+    }
+
+    /// Esc outside the front end: the script menu's own Esc when one is
+    /// open, else the in-game menus online and a mouse release offline.
+    fn menu_key_or_escape(&mut self) {
+        match self.menu_key(KeyCode::Escape) {
+            ScriptMenuKey::Closed => {
+                if !self.console.open {
+                    self.set_grab(true);
+                }
+            }
+            ScriptMenuKey::Ignored if matches!(self.mode, Mode::Online { .. }) => {
+                self.escape_in_game()
+            }
+            _ => {
+                self.set_grab(false);
+                self.clear_held_keys();
+            }
+        }
+    }
+
+    /// The last menu over a game closed (Back to Game, Esc): the mouse goes
+    /// back to the game.
+    fn after_menu(&mut self) {
+        if matches!(self.mode, Mode::Online { .. }) && !self.ui.active() && !self.console.open {
+            self.set_grab(true);
+        }
+    }
+
+    /// The in-game main menu, from a script menu's "Main Menu" tab.
+    fn open_ingame_menu(&mut self) {
+        let mut out = Vec::new();
+        self.ui.open_ingame(&mut out);
+        self.ui_pending.extend(out);
+        self.set_grab(false);
+        self.clear_held_keys();
+    }
+}
+
+/// What a key did to the open script menu.
+enum ScriptMenuKey {
+    /// Not the menu's key.
+    Ignored,
+    Used,
+    /// Esc closed it.
+    Closed,
+    /// Its "Main Menu" tab closed it for the UI's `main`.
+    MainMenu,
 }
 
 /// A menu `execKey` name for the digit row.
@@ -1877,6 +1960,18 @@ impl ApplicationHandler for App {
                         return;
                     }
                     match code {
+                        // In a game Esc reaches the menus under the console
+                        // and leaves it down (CoDMP.exe 0x40ddca, 0x4180a0).
+                        KeyCode::Escape
+                            if self.console.open && matches!(self.mode, Mode::Online { .. }) =>
+                        {
+                            if self.ui.active() {
+                                let (_, effects) = self.ui.key(code, None);
+                                self.ui_effects(event_loop, effects);
+                            } else {
+                                self.menu_key_or_escape();
+                            }
+                        }
                         KeyCode::Escape if self.console.open => self.toggle_console(),
                         _ => {
                             let shell = &self.shell;
@@ -1890,14 +1985,16 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
-                // A key the menu does not take (F3, F4) falls through.
+                // F3 and F4 fall through the menu; in a game nothing else
+                // does, so no bind fires under it.
                 if self.menu_active() {
                     if !pressed {
                         return;
                     }
                     let (used, effects) = self.ui.key(code, event.text.as_deref());
                     self.ui_effects(event_loop, effects);
-                    if used {
+                    self.after_menu();
+                    if used || !matches!(code, KeyCode::F3 | KeyCode::F4) {
                         return;
                     }
                 }
@@ -1908,13 +2005,19 @@ impl ApplicationHandler for App {
                 if event.repeat {
                     return;
                 }
-                if pressed && self.menu_key(code) {
+                if pressed && code == KeyCode::Escape {
+                    self.menu_key_or_escape();
                     return;
                 }
-                if code == KeyCode::Escape && pressed {
-                    self.set_grab(false);
-                    self.clear_held_keys();
-                    return;
+                if pressed {
+                    match self.menu_key(code) {
+                        ScriptMenuKey::Ignored => {}
+                        ScriptMenuKey::MainMenu => {
+                            self.open_ingame_menu();
+                            return;
+                        }
+                        ScriptMenuKey::Used | ScriptMenuKey::Closed => return,
+                    }
                 }
                 if code == KeyCode::F3 && pressed {
                     self.debug_overlay = !self.debug_overlay;
@@ -1992,6 +2095,7 @@ impl ApplicationHandler for App {
                     if button == MouseButton::Left && pressed {
                         let effects = self.ui.click(Instant::now(), &self.shell);
                         self.ui_effects(event_loop, effects);
+                        self.after_menu();
                     }
                     return;
                 }
@@ -3155,7 +3259,7 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
-                if matches!(self.mode, Mode::Idle) && self.ui.active() {
+                if self.ui.active() {
                     self.ui.frame(now, &self.shell);
                     let (w, h) = r.screen_size();
                     hud_quads.extend(self.ui.build(w, h, &self.localized, &self.shell));

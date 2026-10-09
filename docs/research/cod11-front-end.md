@@ -402,9 +402,10 @@ off the branches:
 ## 12. vcod's front end
 
 - vcod draws the main menu, the browser, the quit popup and the error popup
-  from the stock files with their layout, and refuses every other menu with
-  a console line. A button whose script would close its own menu and then
-  open a refused one is refused whole, so `Options` leaves the main menu up.
+  from the stock files with their layout, the main menu again over a game
+  (section 13), and refuses every other menu with a console line. A button
+  whose script would close its own menu and then open a refused one is
+  refused whole, so `Options` leaves the main menu up.
 - Ping pacing (32 `getinfo`s in flight, a 1.5 s timeout, 5 s for the master)
   is vcod's own; retail's numbers were not measured.
 - Text is placed as RTCW's `Item_SetTextExtents` does: baseline at
@@ -412,9 +413,112 @@ off the branches:
   aligned) or half of it (centred); an owner draw with no label draws at
   `textalignx` whatever its alignment. INFERRED from the RTCW lineage, and
   the screenshots match the stock layout by eye.
-- Not done: the options screens, create server, mods, the in-game Esc menu
-  (`cl_ingame` 1), the game type filter (`UI_JOINGAMETYPE` always prints
+- Not done: the options screens, create server, mods, the game type filter (`UI_JOINGAMETYPE` always prints
   `EXE_ALL`), `EXE_REFRESHTIME` and `ui_lastServerRefresh_*` (the line reads
   vcod's own count once a refresh ends), the Internet list's cache in
   `servercache.dat`, the scroll bar, the menu cursor image, keyboard focus
   on buttons, `focusColor`'s pulse and the map preview.
+
+## 13. Esc in a game
+
+### The client's key handler
+
+`CL_KeyEvent` (`0x40dc30`) handles a press of Esc (`0x1b`) at `0x40ddca`
+ahead of the binds. The key-catcher word is `0x155f2c4` (bit 1 console, 2
+UI, 4 message field, 8 cgame), the connection state `0x155f2c0`, the
+cgame VM `0x1617348`, the UI VM `0x161747c`; `0x460480` is the VM call with
+the VM in `eax`. VERIFIED (the disassembly at `0x40ddca`..`0x40deb2`). The
+branches, in order, each INFERRED off its test and jump:
+
+1. Message field up (bit 4): `0x40d380` with the key, which drops the chat
+   line. INFERRED.
+2. cgame catcher (bit 8): the bit is cleared and the cgame VM is called with
+   8, 0 (Q3's `CG_EVENT_HANDLING`, `CGAME_EVENT_NONE`). INFERRED.
+3. UI catcher (bit 2): the UI VM gets 3, `0x1b`, down (`UI_KEY_EVENT`), so
+   the open menu's `onEsc` runs. INFERRED.
+4. State 6 (`CA_ACTIVE`, set at `0x404d00`): with a
+   demo playing (`0x15ef004`) the UI gets 7, 1; otherwise 7, 2 when the cvar
+   `cl_serverloadwaiting` (`0x566684`, registered at `0x412566`, held at
+   `0x1617304`) is 0, else 7, 1. 7 is `UI_SET_ACTIVE_MENU`. INFERRED.
+5. States 7 and 8 (cinematics): `0x40f5f0`, `0x44fa40(0)`, then 7, 1.
+   INFERRED.
+6. Any other state: 7, 1 when the UI VM is loaded. There is no disconnect
+   on this path, unlike Q3's. INFERRED.
+
+The console bit is not tested: with the console down in a game, Esc still
+reaches step 3 or 4. The UI's `Key_SetCatcher` trap (UI syscall `0x31`,
+jump table `0x418c68` entry `0x418730`) calls `0x4180a0`, which ORs the
+console bit back in (VERIFIED). So the menu opens under the console, the
+console stays down and keeps the keys (bit 1 is tested before bit 2 for
+other keys at `0x40dfd2`). INFERRED.
+
+`cl_ingame` is set to `1` at `0x411220` when the state is 6 and to `0`
+otherwise (VERIFIED, the two `Cvar_Set` calls). The UI's `ingameclose` and
+`ingameopen` (`0x40010930`, `0x40010900` in `ui_mp_x86.dll`) act only when
+the display context's call at `+0xa8` returns non-zero (VERIFIED); that is
+syscall `0x65` (`0x40019830`), which returns `cls.state == 6` (`0x418c1b`
+in `CoDMP.exe`). VERIFIED.
+
+### `UI_SetActiveMenu` (`ui_mp_x86.dll` `0x4000d810`)
+
+`vmMain` (`0x400076a0`) sends command 7 there (jump table `0x400077a8`,
+entry 7 is `0x4000770f`). It switches through the table at `0x4000dbcc`
+(VERIFIED). What each case does, INFERRED off its calls and pushes:
+
+| id | case | does |
+|---|---|---|
+| 0 | `0x4000d861` | clears the UI catcher bit, sets `cl_paused` `0`, closes every menu |
+| 1 | `0x4000d8a9` | sets the UI catcher, opens `main`, then `error_popmenu` when `com_errorMessage` is not empty |
+| 2 | `0x4000d9c3` | sets the UI catcher, closes every menu (`0x40010660`), opens the menu the cvar `g_scriptMainMenu` (`0x4002e2dc`) names |
+| 3, 4 | `0x4000d95d`, `0x4000d990` | `needcd`, `badcd` |
+| 5 | `0x4000d92a` | `team` |
+| 8 | `0x4000da11` | `quickmessage` |
+| 9 | `0x4000da62` | `autoupdate` |
+| 10, 11 | `0x4000da8b` | the server's script menu (`ui_newScriptMenu`) |
+
+So Esc in a live game does not open `main`: it opens the gametype's script
+menu, which the stock scripts keep in `g_scriptMainMenu` through
+`setClientCvar` (`tdm.gsc` sets the team menu on connect and a weapon menu
+once a team is picked). Case 2 does not write `cl_paused` (`0x4002e9b4`);
+case 0 sets it to `0` (VERIFIED, the push at `0x4000d878`). Other code in
+the module sets it to `1` (pushes at `0x4000ae43`, `0x4000d1ad`); what pauses
+a client connected to a remote server, if anything, is not measured. The
+server's game keeps running either way. An empty or
+unknown `g_scriptMainMenu` opens nothing: `0x400134b0` looks the name up
+(`0x40010560`) and returns when it is missing. VERIFIED.
+
+### The menus it reaches
+
+- `ui_mp/ingame.txt` lists `ui_mp/ingame.menu` and five more `ingame_*`
+  files; none of them is in any 1.1 pak. VERIFIED (pak listings).
+  `menus.txt` is the list the UI loads.
+- Every stock team and weapon script menu carries a `button_mainmenu` tab,
+  `@MPMENU_MAIN_MENU`, whose action is `play "mouse_click"; close <self>;
+  open main`. Their `onEsc` is `scriptMenuResponse "close"; close <self>`.
+  `callvote.menu` has an `open main` too; `viewmap` and the quick-chat menus
+  do not. VERIFIED (the files in `pak0.pk3`).
+- `main` with `cl_ingame` 1 shows Back to Game (`ingameclose main` and
+  closes) and Disconnect (`exec "disconnect"`) where Join a Game and Start
+  New Server stand; Multiplayer Options, Options, Mods, Single Player and
+  Quit stay. Its `onEsc` is `ingameclose main`, so Esc closes it in a game
+  and does nothing with no game up. VERIFIED (the file, section 2).
+- The `menu` loadspec rows (`mouse_click`, `mouse_over`, `music_mainmenu`)
+  are left out of a map's alias set (`cod11-sound-system.md` section 1d),
+  so in a game the menus' `play` commands find no alias. INFERRED; whether
+  retail keeps the menu set loaded beside the map's is not measured.
+
+### vcod
+
+- Esc in a live game with no script menu open runs `Join::open_main`
+  (`g_scriptMainMenu`), drawn as vcod's keyboard list, whose "Main Menu"
+  row opens `main` with `cl_ingame` 1. When the server named no script menu
+  vcod opens the in-game `main` directly; retail opens nothing there.
+- Esc while connecting or loading opens `main` with `cl_ingame` 0, as menu
+  1 does.
+- Esc with the console down in a game opens the same menus under it and
+  leaves the console down. With no game up vcod still closes the console on
+  Esc; retail reopens `main` under it.
+- The mouse is released while a menu is up and captured again when Esc or
+  Back to Game closes the last one. Usercmds keep going out with no keys
+  held, and no bind fires while the menu has the keys.
+
