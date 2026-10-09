@@ -40,7 +40,7 @@ instead of leaving the fact in a commit message.
 
 | Subsystem | Doc |
 |---|---|
-| Handshake, configstrings, rcon, heartbeat, zombies, pings, rate, bans | `cod11-server-handshake.md` (Housekeeping section) |
+| Handshake, configstrings, rcon, heartbeat, zombies, pings, rate, bans, `g_password` | `cod11-server-handshake.md` (Housekeeping section) |
 | Map change, `map_restart`, `sv_serverid`, rotation | `cod11-map-cycle.md` |
 | Shots, damage, death, grenades, blasts, hit locations, shot timing | `cod11-combat.md` |
 | Movement, stances, constants | `cod11-mantle.md`, `bsp-ibsp59-format.md` (Movement constants) |
