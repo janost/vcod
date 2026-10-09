@@ -212,6 +212,10 @@ const MENU_CVARS: &[(&str, &str)] = &[
     ("m_filter", "0"),
     ("cg_drawCrosshair", "1"),
     ("cg_drawStatus", "1"),
+    // Registered by CoDMP.exe and read by nothing in 1.1, so the compass
+    // and the (absent) team overlay ignore them in retail too.
+    ("cg_drawCompass", "1"),
+    ("cg_drawTeamOverlay", "2"),
     ("cg_marks", "1"),
     ("cg_brass", "1"),
     ("cg_blood", "1"),

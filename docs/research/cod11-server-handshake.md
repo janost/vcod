@@ -593,7 +593,8 @@ the two usage dumps.
   `Info_Print` of the serverinfo or systeminfo cvar string. Retail's
   serverinfo keys are the 14 vcod's configstring 0 already carries, in the
   same order; a `set sv_hostname` shows up in it at once. VERIFIED. vcod's
-  systeminfo lacks the `sv_referencedPaks` pair (see "Configstring 1").
+  systeminfo carries the pak lists since 2026-10-09 (see "Pak checksums and
+  pure servers").
 - `say <text>` (`SV_ConSay_f` 0x8084974, ported): nothing without an
   argument; otherwise `"console: "` (0x80d3f1a) plus the joined arguments
   goes to every client past `CS_CONNECTED` as `h "\x15%s"` (0x80d3f24), a
@@ -771,10 +772,43 @@ the two usage dumps.
   capture: a loopback probe sending `rate 25000` read 99999 under
   `dedicated 1`; under `dedicated 2` (the 2026-10-07 captures above) it read
   25000.
-- `Sys_IsLANAddress` takes loopback and compares an IPv4 address against
-  the host's own interface addresses by class (A: first octet, B: two, C:
-  three, plus the 172.16/12 and 192.168/16 cases). INFERRED. vcod takes
-  loopback and the RFC 1918 ranges instead of enumerating interfaces.
+- `Sys_IsLANAddress` (cod_lnxded `0x80c72f8`, CoDMP.exe `0x464be0`) is Q3
+  1.32's. VERIFIED from the decompiles, check by check:
+  - Address types: lnxded passes loopback (2) and IPX (5); CoDMP.exe also
+    passes type 0 (bot). Any type other than IP (4) then fails.
+  - CoDMP.exe alone passes `127.0.0.1` exactly; lnxded has no such line.
+  - Class A (`ip[0] & 0x80 == 0`): the first octet equals a local address's.
+  - Class B (`ip[0] & 0xc0 == 0x80`): the first two octets match, or both
+    addresses sit in 172.16/12.
+  - Class C (the rest): the first three octets match, or both sit in
+    192.168/16.
+  - There is no RFC 1918 shortcut: 10/8 is plain class A, and 172.16/12 or
+    192.168/16 count only with a local address in the same block.
+- The local table is `NET_GetLocalAddress`: `gethostname` then
+  `gethostbyname`, at most 16 IPv4 addresses, printed as `Hostname: %s`,
+  `Alias: %s`, `IP: %i.%i.%i.%i` (CoDMP.exe `0x465360`, table `0x8e3c78`,
+  count `0x8e3cb8`; lnxded `0x80c7438`, table `0x831a880`, count
+  `0x831a864`). VERIFIED. lnxded keeps Q3 unix_net.c's off-by-one: the
+  count starts at 1 and slot 0 stays 0.0.0.0, so it holds 15 real
+  addresses. VERIFIED. No `SIOCGIFCONF`: the binary's only ioctl is
+  `FIONBIO`. VERIFIED. On a host whose hostname resolves to 127.0.1.1
+  alone, every real LAN peer fails the check. INFERRED.
+- Callers. lnxded, four (VERIFIED): `SV_GetChallenge` `0x8084d90` skips the
+  authorize server for a LAN client under `net_lanauthorize 0`;
+  `SV_DirectConnect` `0x8085498` applies `sv_minPing`/`sv_maxPing` only off
+  the LAN; `SV_UserinfoChanged` `0x8086ab4` (the rate above);
+  `SV_SendClientMessage` `0x808f680` skips `SV_RateMsec` throttling for a
+  LAN client. CoDMP.exe, six (VERIFIED): `CL_ReadyToSendPacket` `0x40b940`
+  (see docs/protocol-1.1.md, "The client's send rate"), `CL_CheckForResend`
+  `0x4103d0` (the key authorize skip under `net_lanauthorize 0`), and the
+  listen server's copies of the four above (`0x452da0`, `0x453390`,
+  `0x454d70`, `0x45dae0`). No browser path calls it: the Local source is
+  broadcast `getinfo xxx` alone (`CL_LocalServers_f` `0x413710`). VERIFIED.
+- vcod (`vcod_common::net::lan`) runs the same class match on client and
+  server against the host's interface addresses (`getifaddrs` on Unix,
+  loopback always included) instead of the hostname lookup, so a Linux host
+  whose name resolves to 127.0.1.1 still sees its LAN. On Windows it resolves
+  `COMPUTERNAME`, as retail does.
 
 ### Bans (`SV_BanUser_f` 0x8084394, `SV_BanNum_f` 0x8084524)
 
@@ -960,6 +994,189 @@ getstatus, getchallenge, a Huffman `connect` with a chosen userinfo) and
   `svc_direct_connect` after the full-server check, and at both level
   boundaries before the script's reconnect. vcod's bots are exempt, as
   retail's test clients are.
+
+## Pak checksums and pure servers
+
+Measured 2026-10-09 against `cod_lnxded` (1.1d) on a spare port with
+`fs_basepath` on a stock 1.1 install (`pak0`-`pak6`, `bonneville`, two
+localized paks) and a scratch homepath, `vcod --net-probe` as the client.
+Code facts come from the decompiles; each claim carries its own label.
+vcod's port: `crates/common/src/pak_checksum.rs`, `Pk3Fs::paks` and
+`search_paks` in `crates/common/src/pk3.rs`, `PakLists` in
+`crates/server/src/configstrings.rs`, `PureCheck` in
+`crates/server/src/server.rs`.
+
+### The checksum
+
+- `FS_LoadZipFile` (CoDMP.exe `0x42ac20`, called from `FS_AddGameDirectory`
+  `0x42bd30`) walks the central directory in order and keeps the CRC-32 of
+  every entry whose uncompressed size is not 0 (`unz_file_info+0x1c`); no
+  names are filtered. VERIFIED.
+- `pack+0x304` = `Com_BlockChecksum(crcs)` (`0x4445b0`) and `pack+0x308` =
+  `Com_BlockChecksumKey(crcs, fs_checksumFeed)` (`0x444640`, the 4 key bytes
+  fed ahead of the CRCs). Both are MD4 (`67452301`.. init, `0x5a827999` and
+  `0x6ed9eba1` round constants) folded as `d0 ^ d1 ^ d2 ^ d3`, printed
+  `%i`. lnxded has the same MD4. VERIFIED.
+- The rule reproduces retail's numbers: `pak1`-`pak5` of the 1.1 install
+  give `1265884747 616334813 918160098 -1825805837 77111478`, `pak6`
+  `1252304247`, the same as both captures'. VERIFIED. The 1.1 install's
+  `pak0` reads `-363972028` and the 1.5 install's `1048127331`: the two
+  `pak0.pk3` files differ (md5 and size). VERIFIED.
+- `pak6.pk3` holds `ui_mp_x86.dll`, `cgame_mp_x86.dll` and
+  `game_mp_x86.dll` and nothing else. VERIFIED.
+
+### The four cvars (`SV_SpawnServer`, map-cycle doc section 3 step 23)
+
+| cvar | built by | entries | with `sv_pure 0` |
+|---|---|---|---|
+| `sv_paks` | `FS_LoadedPakChecksums` `0x8071600` | non-localized paks, `%i ` each | `""` |
+| `sv_pakNames` | `FS_LoadedPakNames` `0x8071580` | same paks, bare name, space-joined | `""` |
+| `sv_referencedPaks` | `FS_ReferencedPakChecksums` `0x80717a4` | every pak, `%i ` each | same |
+| `sv_referencedPakNames` | `FS_ReferencedPakNames` `0x80716cc` | every pak, `<game>/<name>` | same |
+
+- The table is VERIFIED from the code and from the capture below. An empty
+  value leaves its key out of the systeminfo. VERIFIED (the `sv_pure 0`
+  capture has no `sv_paks`).
+- "Referenced" is every pak: Q3's `pack->referenced ||
+  Q_stricmpn(gamename, BASEGAME)` test reads the address of CoD's
+  four-byte `referenced[]` array (`cmp $0xfffffcf0` at `0x80717c7`), which is
+  never null. VERIFIED for the code; that it is a bug is INFERRED. A map
+  download nobody uses still lands in every client's download list.
+- `sv_pure` defaults to `1` (`0x80d542c`). VERIFIED. With it on and no pak
+  loaded the server prints `WARNING: sv_pure set but no PK3 files loaded`
+  (`0x80d5540`). VERIFIED.
+- Order is the search path's, highest priority first: the later game
+  directory first, each directory's paks in reverse sorted order, and every
+  directory's `localized_*` paks after all the others. `FS_AddGameDirectory`
+  sorts with `mp_` read as `zz` and `localized_` as a space. VERIFIED by
+  both captures (the homepath's `pak5..pak0` ahead of the basepath's
+  `pak6 pak5..pak0 bonneville`, then the homepath's localized paks, then the
+  basepath's).
+- Capture (`sv_pure 1` before the map loads, stock 1.1 basepath), the pak
+  part of configstring 1. VERIFIED:
+
+```
+\sv_pakNames\pak6 pak5 pak4 pak3 pak2 pak1 pak0 bonneville\sv_paks\1252304247 77111478 -1825805837 918160098 616334813 1265884747 -363972028 2000562497 \sv_pure\1\sv_referencedPakNames\main/pak6 main/pak5 main/pak4 main/pak3 main/pak2 main/pak1 main/pak0 main/bonneville main/localized_english_pak1 main/localized_english_pak0\sv_referencedPaks\1252304247 77111478 -1825805837 918160098 616334813 1265884747 -363972028 2000562497 -961133319 -1187400494 \sv_serverid\16\timescale\1
+```
+
+- A `+set sv_pure 1` placed after `+map` (as `tools/run_server.sh`'s extra
+  arguments land) reads `sv_pure 1` in the systeminfo with no `sv_paks`: the
+  lists were built under the 0 the map loaded with. VERIFIED. Such a server
+  still drops a client without `cp`, since the drop reads the live cvar.
+
+### The client side
+
+- `CL_SystemInfoChanged` (`0x415eb0`) hands `sv_paks`/`sv_pakNames` to
+  `FS_PureServerSetLoadedPaks` (`0x43c290`) and the referenced pair to
+  `FS_ServerSetReferencedPaks` (`0x43c530`); both error `pak sum/name
+  mismatch` when the counts differ. VERIFIED. A non-empty list prints
+  `Connected to a pure server.` VERIFIED.
+- `FS_PakIsPure` (`0x428ca0`) passes a pak when the list is empty or holds
+  its checksum, names ignored; it gates `FS_FOpenFileRead`, so on a pure
+  server any other pak is invisible. VERIFIED. Localized paks are never in
+  `sv_paks`; that they stay readable is INFERRED (the client would lose its
+  text otherwise).
+- `CL_SendPureChecksums` (`0x40fac0`) sends a reliable `cp` (built as `Va `
+  plus 13 and 15 on the first two bytes) after `CL_InitCGame` in
+  `CL_DownloadsComplete` (`0x40ffb0`) and after a `vid_restart`, pure server
+  or not. There is no serverId in it, unlike Q3 1.32. VERIFIED.
+- Its body is `FS_ReferencedPakPureChecksums` (`0x43c050`, `"%i "` each):
+  the keyed checksum of the first pak flagged for `cgame_mp_x86.dll`
+  (`pack+0x312`), of the first flagged for `ui_mp_x86.dll` (`+0x311`), `@`,
+  every non-localized pak with the general flag (`+0x310`), then
+  `checksumFeed ^ (each general pak) ^ count`. VERIFIED.
+- `FS_FOpenFileRead` sets the general flag for any read except `.shader`,
+  `.txt`, `.cfg`, `.config`, `.bot`, `.arena`, `.menu` and paths containing
+  `levelshots` (`0x429e3e`..). The three DLL flags match obfuscated names
+  that decode to `qagame_mp_x86.dll`, `cgame_mp_x86.dll`, `ui_mp_x86.dll`.
+  VERIFIED (strings); the decoding is INFERRED. The flags clear at
+  `FS_Restart` and `vid_restart` (`0x42d170`). VERIFIED.
+- `FS_ComparePaks` (`0x43b830`) skips stock paks (`FS_iwPak` `0x43b6b0`:
+  `pak0`-`8`, `mp_pak`, `sp_pak`, `mp_bin`, `localized_*_pak`) and calls a
+  referenced pak missing when no loaded pak has its checksum. A file of that
+  name already on disk makes the download land as `<name>.%08x.pk3`, the
+  checksum in lowercase hex, and adds ` (local file exists with wrong
+  checksum)` to the `Need paks:` line. VERIFIED.
+
+### The server's check
+
+- `cp` is `SV_VerifyPaks_f` (`0x808674c`) in the ucmd table at
+  `0x80e2f5c`, beside `userinfo`, `disconnect`, `vdr`, `download`,
+  `nextdl`, `stopdl`, `donedl`, `retransdl`. VERIFIED. `vdr` (`0x8087b14`)
+  resets `pureAuthentic` (`cl+0x528ac`) to 0; nothing else does after the
+  connect, so a map change keeps the last verdict until the next `cp`.
+  VERIFIED.
+- The check, in order: the server's own paks must hold both client DLLs
+  (`FS_FileIsInPAK`); more than five tokens; tokens 1 and 2 equal the cgame
+  and ui pure checksums and do not start with `@`; token 3 is `@`; no
+  duplicate among the general tokens; each is in `FS_LoadedPakPureChecksums`
+  (`0x8071664`, the non-localized paks); `count ^ checksumFeed ^ (each)`
+  equals the last token. Pass sets `pureAuthentic` 1, anything else 2.
+  VERIFIED.
+- `SV_ExecuteClientMessage` (`0x80872ec`) drops a client with
+  `pureAuthentic` 2 under `sv_pure` with `EXE_UNPURECLIENTDETECTED` once the
+  message's commands ran; `SV_UserMove` (`0x8086fa4`) drops one still at 0
+  with `EXE_CANNOTVALIDATEPURECLIENT`, after the entering cmd put it in the
+  world. VERIFIED (code). Live: a probe that sent no `cp` was dropped with
+  `EXE_SERVERDISCONNECTREASON\x14EXE_CANNOTVALIDATEPURECLIENT` right after
+  its gamestate, and one sending `cp <pak6> <pak6> @ <three paks> <key>`
+  stayed Active. VERIFIED.
+- So a pure server whose own paks lack the DLLs (the 1.5 install's server
+  directory has no `pak6`) drops every client. INFERRED.
+
+### Serving a download
+
+- The ucmds `download` (`0x8087a64`: closes any transfer, keeps the name up
+  to 64 bytes), `nextdl` (`0x8086168`), `stopdl` (`0x8087960`), `donedl`
+  (`0x80879fc`: `SV_SendClientGameState`) and `retransdl` (`0x8087a2c`).
+  VERIFIED.
+- `SV_WriteDownloadToClient` (`0x8086290`) opens the file on the next
+  message. The refusals, each `svc_download`, block 0, size -1 and the
+  string with the file name after `\x15`: `EXE_CANTAUTODLGAMEPAK` for a
+  stock pak (`FS_idPak(name, "main")`), `EXE_AUTODL_SERVERDISABLED` under
+  `sv_allowDownload 0` (`EXE_AUTODL_SERVERDISABLED_PURE` with `sv_pure` on),
+  `EXE_AUTODL_FILENOTONSERVER` when the file does not open or is empty.
+  VERIFIED (strings `0x80d4838`, `0x80d48c2`, `0x80d48a0`, `0x80d4914`).
+- It reads the file 0x800 bytes per block into an 8-slot window, adds an
+  empty block once the file is read, and writes `block`, the size on block
+  0, the length and the bytes. Per message it writes the client's rate over
+  one snapshot interval in whole 2048-byte units plus one (`sv_maxRate`
+  caps the rate). When every block in the window went out it waits; past
+  1000 ms with no ack it starts again from the first unacked block.
+  VERIFIED (code). So 1.1d's blocks are 2048 bytes; the 8192-byte blocks in
+  docs/protocol-1.1.md came off public servers. INFERRED.
+- `nextdl <n>` with `n` the block due advances the window, or ends the
+  transfer when that block is the empty one (`clientDownload: %d : file
+  "%s" completed`); any other `n` drops the client with `broken download`.
+  `retransdl <n>` with the block due rewinds the send cursor to it.
+  VERIFIED (code).
+
+### vcod
+
+- The client sends `cp` after each map load (the probe after each
+  gamestate, touching the map's pak first), reopens its search path under a
+  pure server's `sv_paks`, and downloads by checksum with retail's
+  `name.%08x.pk3` rule (`net::download::candidates_for_map`).
+- The server publishes all four cvars from its mounted paks and verifies
+  `cp` the same way. `sv_pure` defaults to 0 (`--set sv_pure=1` turns it
+  on) where retail's default is 1. Its systeminfo under `sv_pure 1` on the
+  1.1 install matched the capture above byte for byte. VERIFIED. When the
+  lists overflow `MAX_INFO_STRING`, vcod drops paks off their ends, the
+  referenced pair first, instead of losing `sv_serverid`.
+- The server serves downloads the same way (`crates/server/src/download.rs`),
+  limited to the paks it lists in `sv_referencedPakNames`; retail opens any
+  file of the name. A downloading client gets the blocks in a message of
+  its own each tick, since vcod sends snapshots only to clients in the
+  world. Against it the probe below fetched the same two paks with matching
+  checksums, `n_degaulle` as `n_degaulle.e3668738.pk3` past a same-named
+  file. VERIFIED.
+- `--net-probe --probe-download <dir>` takes the download path headless.
+  Against the server above with `zzz_zfunmod` and `n_degaulle` added to its
+  homepath, and a `zzz_zfunmod.pk3` copy of `pak6` already in the scratch
+  dir, it fetched `main/zzz_zfunmod.pk3` into `zzz_zfunmod.1b7cedba.pk3`
+  and `main/n_degaulle.pk3` under its own name; both files' checksums
+  (`461172154`, `-479819976`) matched `sv_referencedPaks`, and `donedl`
+  brought the gamestate back. VERIFIED.
 
 ## Raw captures
 

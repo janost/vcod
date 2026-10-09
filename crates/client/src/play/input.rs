@@ -263,6 +263,18 @@ impl PlayInput {
         }
     }
 
+    /// The switch in flight, retail's `cg.weaponSelect` while it differs
+    /// from the playerstate's weapon.
+    pub fn weapon_select(&self) -> Option<u8> {
+        self.pending_weapon
+    }
+
+    /// Selects `weapon` as a bind would; the cmd carries it from the next
+    /// build while the playerstate holds it.
+    pub fn select(&mut self, weapon: u8) {
+        self.pending_weapon = Some(weapon);
+    }
+
     /// The angles a cmd carries: `CL_FinishMove` (CoDMP.exe `0x40b6b7`)
     /// sends `ANGLE2SHORT(cl.viewangles + kick)` truncated, so the server
     /// aims the shot where the kicked view points (combat doc, 15.7). The

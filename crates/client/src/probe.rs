@@ -112,6 +112,9 @@ pub struct Save {
     pub compass: bool,
     /// `--save-scripted <role>`: the scripted gametype capture.
     pub scripted: Option<String>,
+    /// `--probe-download <dir>`: fetch the referenced paks the install
+    /// lacks into this directory, then check each against its checksum.
+    pub download: Option<std::path::PathBuf>,
 }
 
 /// Which script the two halves of the hit capture run. The target's own
@@ -229,7 +232,9 @@ pub fn probe(
         items: probe_items,
         compass: probe_compass,
         scripted: scripted_role,
+        download,
     } = save;
+    let mut download = download.map(|dir| DownloadProbe::new(dir, fs));
     // The two map-cycle captures record the same lines; the flag picks the
     // role and, for the round restart, which half of the pair this probe is.
     let netchan_capture = save_mapchange || save_roundrestart;
@@ -377,7 +382,11 @@ pub fn probe(
             anyhow::bail!("interrupted; sent disconnect");
         }
         let now = Instant::now();
-        for e in client.pump_at(now) {
+        let events = client.pump_at(now);
+        if let Some(d) = &mut download {
+            d.step(&mut client, &events, now)?;
+        }
+        for e in events {
             match e {
                 NetEvent::GamestateReady => {
                     gamestates += 1;
@@ -398,6 +407,18 @@ pub fn probe(
                             net::info_value_for_key(client.configstring(0), "mapname")
                                 .unwrap_or("?"),
                         );
+                    }
+                    // The `cp` a pure server waits for before the first cmd;
+                    // the map's pak stands in for what a client reads loading it.
+                    if let Some(fs) = fs {
+                        let map = net::info_value_for_key(client.configstring(0), "mapname")
+                            .and_then(|m| fs.resolve_map(m));
+                        if let Some(bsp) = map {
+                            fs.touch(&bsp);
+                        }
+                        let cp = fs.pure_command(client.gamestate().map_or(0, |g| g.checksum_feed));
+                        println!("PURE: {cp}");
+                        client.send_reliable(&cp);
                     }
                     let gs = client.gamestate().unwrap();
                     println!("systeminfo: {}", gs.configstrings[1]);
@@ -1660,6 +1681,126 @@ const PM_NORMAL: i32 = 0;
 
 /// Drives the stock team/weapon menu handshake under `--save-playerstate` and
 /// keeps what the fixture header needs.
+/// `--probe-download`: the download path a GUI client takes at a gamestate,
+/// headless. The referenced paks no local pak matches by checksum go into
+/// `dir` (`FS_ComparePaks`' rule and file names), then `donedl`; each pak's
+/// checksum is printed beside the one `sv_referencedPaks` gave for it.
+struct DownloadProbe {
+    dir: std::path::PathBuf,
+    /// Checksums of the install's paks.
+    installed: Vec<i32>,
+    loader: Option<crate::loading::MapLoader>,
+    /// remote name -> (local path, the server's checksum).
+    expected: std::collections::HashMap<String, (std::path::PathBuf, Option<i32>)>,
+    done: bool,
+}
+
+impl DownloadProbe {
+    fn new(dir: std::path::PathBuf, fs: Option<&vcod_common::pk3::Pk3Fs>) -> Self {
+        DownloadProbe {
+            dir,
+            installed: fs.map_or_else(Vec::new, |fs| fs.paks().map(|p| p.checksum).collect()),
+            loader: None,
+            expected: std::collections::HashMap::new(),
+            done: false,
+        }
+    }
+
+    fn step(
+        &mut self,
+        client: &mut NetClient<UdpTransport>,
+        events: &[NetEvent],
+        now: Instant,
+    ) -> anyhow::Result<()> {
+        use crate::loading::Action;
+        if self.done {
+            return Ok(());
+        }
+        if self.loader.is_none() && events.contains(&NetEvent::GamestateReady) {
+            let info = client.configstring(1).to_string();
+            let game = net::download::fs_game(&info, "main");
+            let dirs: Vec<&str> = std::iter::once("main").chain(game.as_deref()).collect();
+            let dir_paths: Vec<std::path::PathBuf> =
+                dirs.iter().map(|d| self.dir.join(d)).collect();
+            let mut have = self.installed.clone();
+            have.extend(
+                vcod_common::pk3::search_paks(
+                    &dir_paths.iter().map(|p| p.as_path()).collect::<Vec<_>>(),
+                )
+                .iter()
+                .map(|p| p.checksum),
+            );
+            let referenced = net::download::referenced_paks(&info);
+            let candidates: Vec<(String, std::path::PathBuf)> = net::download::candidates_for_map(
+                &info,
+                "",
+                &dirs,
+                |c| have.contains(&c),
+                |rel| self.dir.join(rel).exists(),
+            )
+            .into_iter()
+            .map(|(name, rel)| {
+                let sum = referenced
+                    .iter()
+                    .find(|p| p.name == name)
+                    .and_then(|p| p.checksum);
+                let remote = format!("{name}.pk3");
+                let dest = self.dir.join(rel);
+                self.expected.insert(remote.clone(), (dest.clone(), sum));
+                (remote, dest)
+            })
+            .collect();
+            println!(
+                "DOWNLOAD: {} referenced, {} to fetch into {}",
+                referenced.len(),
+                candidates.len(),
+                self.dir.display()
+            );
+            self.loader = Some(crate::loading::MapLoader::new(String::new(), candidates));
+        }
+        let Some(loader) = &mut self.loader else {
+            return Ok(());
+        };
+        for e in events {
+            if let NetEvent::DownloadComplete(remote) = e
+                && let Some((path, want)) = self.expected.get(remote)
+            {
+                let got = vcod_common::pak_checksum::pak_checksums(path, 0)?.checksum;
+                let verdict = match want {
+                    Some(w) if *w == got => "match",
+                    Some(_) => "MISMATCH",
+                    None => "unpaired",
+                };
+                println!(
+                    "DOWNLOAD: {remote} -> {} {} bytes, checksum {got}, server {want:?}: {verdict}",
+                    path.display(),
+                    std::fs::metadata(path).map_or(0, |m| m.len()),
+                );
+            }
+        }
+        match loader.step(events, client.download_progress(), true, now) {
+            Action::BeginDownload { remote, dest } => {
+                println!("DOWNLOAD: requesting {remote}");
+                client.begin_download(&remote, &dest)?;
+            }
+            Action::FinishDownloads => {
+                println!("DOWNLOAD: donedl");
+                client.finish_downloads();
+            }
+            Action::Ready => {
+                println!("DOWNLOAD: done, gamestate in hand");
+                self.done = true;
+            }
+            Action::Failed(why) => {
+                println!("DOWNLOAD: failed: {why}");
+                self.done = true;
+            }
+            Action::Reopen | Action::Wait(_) => {}
+        }
+        Ok(())
+    }
+}
+
 struct JoinProbe {
     /// What the team menu is answered with: `allies`, `axis`, `autoassign`
     /// or `spectator`, the four the stock gametypes accept.

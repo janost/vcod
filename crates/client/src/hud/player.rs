@@ -40,6 +40,9 @@ pub struct PlayerView<'a> {
     pub max_health: i32,
     pub eflags: i32,
     pub weapon: Option<&'a WeaponDef>,
+    /// The weapon the name shows: the pending selection while it is held,
+    /// else `weapon` (0x30023c30 reads `cg.weaponSelect`).
+    pub name_weapon: Option<&'a WeaponDef>,
     /// The mounted gun's def, while riding one.
     pub turret: Option<&'a WeaponDef>,
     pub ammo: &'a [i16; 64],
@@ -172,7 +175,15 @@ impl PlayerHud {
             let lag = self.health_lag.step(p.client_num, frac, now);
             health(frac, lag, &v, out);
             if let Some(def) = p.weapon {
-                weapon_info(def, p, cx, name_alpha, &v, out);
+                weapon_info(
+                    def,
+                    p.name_weapon.unwrap_or(def),
+                    p,
+                    cx,
+                    name_alpha,
+                    &v,
+                    out,
+                );
             }
         }
         if cx.draw.crosshair && p.alive {
@@ -613,6 +624,7 @@ impl HealthLag {
 /// `name_alpha` is the name's fade; `None` leaves it and its backdrop out.
 fn weapon_info(
     def: &WeaponDef,
+    named: &WeaponDef,
     p: &PlayerView,
     cx: &Context,
     name_alpha: Option<f32>,
@@ -620,9 +632,9 @@ fn weapon_info(
     out: &mut Vec<HudQuad>,
 ) {
     let translate = |key: &str| cx.loc.get(key).unwrap_or(key).to_string();
-    let name = match def.mode_name.as_str() {
-        "" => translate(&def.display_name),
-        mode => format!("{} / {}", translate(&def.display_name), translate(mode)),
+    let name = match named.mode_name.as_str() {
+        "" => translate(&named.display_name),
+        mode => format!("{} / {}", translate(&named.display_name), translate(mode)),
     };
     // hud.menu's item order: name back, ammo back, mode icon, name, ammo.
     let w = text_width(cx.font, &name, 0.3);
@@ -1037,6 +1049,7 @@ mod tests {
             max_health: 100,
             eflags: 0,
             weapon: None,
+            name_weapon: None,
             turret: None,
             ammo,
             ammoclip: ammo,

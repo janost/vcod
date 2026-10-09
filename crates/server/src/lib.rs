@@ -10,6 +10,7 @@ pub mod compass;
 pub mod configstrings;
 pub mod console;
 pub mod cvars;
+pub mod download;
 pub mod follow;
 pub mod game;
 pub mod items;

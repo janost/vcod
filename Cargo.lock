@@ -2507,6 +2507,7 @@ dependencies = [
  "bytemuck",
  "glam 0.34.0",
  "image",
+ "libc",
  "log",
  "tempfile",
  "zip",
