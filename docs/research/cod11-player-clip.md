@@ -488,6 +488,32 @@ INFERRED: the velocity survives the wire because `PmoveSingle`'s tail
 (0x34398) only replaces a velocity at least twice the move, and a 45-degree
 slide moves 0.71 of it.
 
+VERIFIED, one run on 2026-10-09 against the retail 1.1d server, a hit's
+timer (`pm_flags` 0x200, combat doc 16.1) instead of the landing's:
+`client-probes/probe_slide` sets the same walker down at (960 1830), 15
+units north of that wall, and 0.3 s on sets off a `radiusDamage` beside it
+with `maxDamage` equal to `minDamage`
+(`crates/server/tests/fixtures/playerstate/mp_carentan-dm-slide-hit.txt`).
+A 200 blast from 40 north pushes the standing player into the wall at 240
+(knockback 60, timer 120), and the rows under the timer read it on the
+wall's plane with the push intact, `ct=14634 origin=988.845,1815.125,-39.875
+vel=190,-240,0 ... pm_flags=0x40200 pm_time=120` through `pm_time=22`; the
+next row, `ct=14782`, has the timer gone and reads `vel=181,0,0` (lines
+84-87). The 100 blast reads `vel=190,-120,0` under its 60 ms timer, the
+north-west one `vel=360,-170,0`. A blast from the east (line 161 on) pushes
+against the walk, and under its timer the walk's own accel into the wall
+piles up unclipped: `vel=-50,0,0`, `-47,-9,0`, `-44,-18,0`. A second blast
+one frame into the first's timer adds its push without restarting the
+timer: `vel=184,-480,0 ... pm_time=70` (line 189). INFERRED: the restore is
+the same for either timer bit, as 0x34f83 tests `pm_time` alone. The row
+after that one, `ct=26749 vel=193,-9,0 pm_time=3` (line 190), ran a 67 ms
+cmd as a 66 ms and a 1 ms step, both still under the timer; INFERRED: its
+velocity is the tail's (0x34398) replacement off the 1 ms step's move, not a
+clip. VERIFIED, vcod measurement the same day: ours matches every row past
+the first trial, and with the restore skipped under 0x200 36 rows differ
+(`fall_ab::a_hit_slide_along_a_wall_keeps_its_velocity_as_retail_does`).
+No capture covers `StuckInClient`'s 0x100 push on a wall.
+
 ### 8.6 The damage-free ladder's parm
 
 VERIFIED: ahead of the 0x2000 arm, 0x2ff5a-0x2ffa6 compute
