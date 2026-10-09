@@ -944,6 +944,88 @@ userinfo values one after another, and `rcon status` for the slots.
   cvars live. The same scenario on vcod-server gave the same slots, the
   same two refusals and the same `getinfo`.
 
+### The serverinfo string follows every write
+
+- `SV_Frame` tests `cvar_modifiedFlags & CVAR_SERVERINFO` once a frame
+  and rewrites configstring 0 with `Cvar_InfoString(CVAR_SERVERINFO)`
+  (map-cycle doc 4.3). The test reads the flag, not the writer, so a
+  script `setCvar` of `sv_privateClients` or `sv_hostname` reaches
+  configstring 0 and `getstatus` the same frame a console `set` would.
+  INFERRED (Q3 lineage and the flag; the console half is VERIFIED by the
+  capture above).
+- `Cvar_InfoString` walks every cvar with flag 4 and leaves out the empty
+  ones, so `sv_keywords` and `sv_mapname` (both flag 4, both empty on a
+  stock server) never show. VERIFIED: the registry rows
+  (`crates/server/src/cvars/registry.rs`) with `S` are exactly the stock
+  capture's keys plus those two.
+- `SVC_Info` reads `sv_hostname->string` for `hostname`, not a copy taken
+  at load. INFERRED (Q3 lineage).
+- vcod: `Server::serverinfo` builds the string from the running level's
+  cvar table (every `S` cvar with a value, case-folded order, `sv_pure`
+  from the pak lists), and `Server::flush_serverinfo` compares it with
+  configstring 0 once a tick, after the script ran. `getinfo` reads the
+  live `sv_hostname`.
+
+### Ping limits (`SV_DirectConnect` 0x8085498)
+
+- The challenge record is 0x2c bytes at `0x83b67f8`: address (+0),
+  challenge (+0x14), `time` (+0x18), `pingTime` (+0x1c), `firstTime`
+  (+0x20), the measured ping (+0x24) and `connected` (+0x28). VERIFIED
+  (the writes at `0x8084e65`..`0x8084e9c`).
+- `pingTime` is stamped when the `challengeResponse` goes out: at once for
+  a LAN client under `net_lanauthorize 0` (`0x8084edc`), else when the
+  authorize server's answer arrives (`0x8085208`). VERIFIED (code).
+- At the connect, once the challenge matched: when the stored ping is 0 it
+  becomes `svs.time - pingTime` (`0x8085795`), the server prints `Client %i
+  connecting with %i challenge ping` (`0x80d43e0`) and marks the challenge
+  connected. VERIFIED (code).
+- Off the LAN only (`Sys_IsLANAddress` called at `0x80857ee`): with `sv_minPing`
+  non-zero and the ping below it (as floats, `->value`), the client gets
+  `error\nEXE_ERR_HIGH_PING_ONLY` and the console `Client %i rejected on a
+  too low ping`; with `sv_maxPing` non-zero and the ping above it,
+  `error\nEXE_ERR_LOW_PING_ONLY` and `Client %i rejected on a too high
+  ping: %i`. The keys name what the server accepts, not what the client
+  had. VERIFIED (strings `0x80d440d`, `0x80d4466`, `0x80d4440`,
+  `0x80d44a0`; the comparisons at `0x808581b` and `0x8085880`).
+- A connect that takes a slot clears the stored ping (`0x8085c16`), so a
+  later connect on the same challenge measures again. VERIFIED (code).
+- `SVC_Info` adds `minPing` and `maxPing` (`%i` of `->integer`) after
+  `pure`, each only when non-zero, then `game` (`fs_game`, when set),
+  `sv_allowAnonymous` and `pswrd` (the key pushes at `0x808c318` and
+  `0x808c344`). VERIFIED (code).
+- vcod: `svc_direct_connect` keeps the first connect's ping on the
+  challenge and runs both tests off the LAN; `svc_info` writes the two
+  keys. vcod has no authorize detour, so its ping is the plain
+  `challengeResponse` to `connect` round trip.
+
+### Message pacing (`SV_SendClientMessages` 0x809045c)
+
+- Each frame, a client whose `nextSnapshotTime` has come gets either the
+  next fragment of an unsent message or a new message from
+  `SV_SendClientSnapshot` (0x808f844). VERIFIED (code).
+- `SV_SendClientSnapshot` writes the server commands and the snapshot only
+  for an active client or a zombie; then, for any client but a zombie,
+  `SV_WriteDownloadToClient`; then `svc_EOF`. A downloading client, which
+  is not active yet, gets messages holding the reliable acknowledge and its
+  download blocks and nothing else. VERIFIED (code, the state tests at
+  `0x808f855`, `0x808f8a1` and `0x808f92a`).
+- After the send, `SV_SendMessageToClient` (0x808f680) sets
+  `nextSnapshotTime`: for a loopback or LAN client `svs.time - 1`, so the
+  next frame; otherwise `svs.time + max(snapshotMsec, (min(bytes, 1500) +
+  48) * 1000 / rate)` with `rate` capped by a non-zero `sv_maxRate` (raised
+  to 1000 if below), and at least a second for a client that is neither
+  active nor downloading. VERIFIED (code).
+- A fragmented message's later fragments go one per turn, each setting
+  `nextSnapshotTime` to `svs.time + (min(bytes left, 1500) + 48) * 1000 /
+  rate` with no LAN shortcut (`0x80904d9`..`0x8090546`). VERIFIED (code). Live: a
+  loopback probe downloading from 1.1d got its blocks three to a message
+  (the LAN rate, 99999, over 50 ms) and a message every 200-300 ms, one
+  fragment per frame. VERIFIED (capture, 2026-10-09, on a loaded host).
+- vcod: `Client::pace`, `Client::first_packet` and `Client::next_fragment`
+  follow these rules for the snapshot and download messages built in the
+  frame loop. The gamestate still goes out whole, ahead of any fragment
+  left over, which it replaces.
+
 ### `g_password` (`ClientConnect`, game.mp.i386.so 0x4246c)
 
 Measured 2026-10-09 against `cod_lnxded` (1.1d) on a spare port with
@@ -1150,6 +1232,23 @@ vcod's port: `crates/common/src/pak_checksum.rs`, `Pk3Fs::paks` and
   "%s" completed`); any other `n` drops the client with `broken download`.
   `retransdl <n>` with the block due rewinds the send cursor to it.
   VERIFIED (code).
+- The file opens through `FS_SV_FOpenFileRead` (`0x806ffb8`): the name as
+  sent, joined to `fs_homepath`, then `fs_basepath`, then `fs_cdpath` by
+  `FS_BuildOSPath` (`0x8062d70`), and `fopen`ed. Nothing checks the
+  extension, the pak lists or `..`. VERIFIED (code). Live, a loopback
+  client on 1.1d asked for `main/game.mp.i386.so` and then
+  `main/../main/game.mp.i386.so` and got all 581180 bytes of the game
+  module both times (285 blocks each; the server logged `begining` for
+  both names). VERIFIED (capture, 2026-10-09). So any client can read any
+  file the server process can, `server.cfg` and its `rconPassword`
+  included.
+- The blocks ride the same per-client message as the snapshot ("Message
+  pacing" above): a downloading client is not active, so its messages
+  carry only the download, at its `nextSnapshotTime`.
+- The client side paces its acks: `CL_ReadyToSendPacket` (CoDMP.exe
+  `0x40b940`) sends no packet within 50 ms of the last while
+  `downloadTempName` is set, and otherwise one per second until the state
+  reaches primed. VERIFIED (code).
 
 ### vcod
 
@@ -1164,12 +1263,20 @@ vcod's port: `crates/common/src/pak_checksum.rs`, `Pk3Fs::paks` and
   lists overflow `MAX_INFO_STRING`, vcod drops paks off their ends, the
   referenced pair first, instead of losing `sv_serverid`.
 - The server serves downloads the same way (`crates/server/src/download.rs`),
-  limited to the paks it lists in `sv_referencedPakNames`; retail opens any
-  file of the name. A downloading client gets the blocks in a message of
-  its own each tick, since vcod sends snapshots only to clients in the
-  world. Against it the probe below fetched the same two paks with matching
-  checksums, `n_degaulle` as `n_degaulle.e3668738.pk3` past a same-named
-  file. VERIFIED.
+  limited on purpose to the paks it mounts and lists in
+  `sv_referencedPakNames`: those are the only names a retail client ever
+  asks for (`FS_ComparePaks` builds its list from them), and retail's open
+  path hands out any file under its directories. A downloading client's
+  blocks go out in the frame loop's per-client message at its
+  `nextSnapshotTime`, alone while it is not in the world and after the
+  snapshot once it is, with no server commands until it is active, and a
+  fragmented message goes one fragment per turn. Against it the probe
+  below fetched the same two paks with matching checksums, `n_degaulle` as
+  `n_degaulle.e3668738.pk3` past a same-named file. VERIFIED.
+- The client sends a packet every 50 ms while a download runs
+  (`NetClient`), and the probe sends no usercmd until its downloads end
+  and the next gamestate is in, so it no longer enters the world
+  mid-download.
 - `--net-probe --probe-download <dir>` takes the download path headless.
   Against the server above with `zzz_zfunmod` and `n_degaulle` added to its
   homepath, and a `zzz_zfunmod.pk3` copy of `pak6` already in the scratch
