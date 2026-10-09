@@ -523,18 +523,15 @@ The entity numbers vcod hands out, one label each:
   index advanced `& 7` (`docs/research/cod11-combat.md` section 5.2).
 - Map and script entities run from 72 up. VERIFIED: `G_InitGame` sets
   `level.num_entities` to 72 whatever `sv_maxclients` is.
-- Temp entities take 958..1021, the 64 numbers below `ENTITYNUM_WORLD`.
-  VERIFIED as vcod's own choice; retail instead gives a temp entity whatever
-  free slot `G_TempEntity` finds.
-- The block is walked by a rolling cursor, so an event repeated in adjacent
-  frames never lands on one number twice. VERIFIED as vcod's own choice, and
-  it is forced by the receiving side: a client keys a fired event entity on
+- Temp entities take their numbers off the same free list as script
+  spawns, and ride every snapshot until the entity pass frees them more than
+  300 ms past their event. VERIFIED: `G_TempEntity` (0x67938) calls
+  `G_Spawn` (0x67947), and `client-probes/probe_entnum` on retail put a
+  `playFx` between two spawns' numbers (`docs/research/cod11-combat.md`
+  14.7, "Entity numbers"). A client keys a fired event entity on
   `(eType, eventParm)` per number and forgets a number only once it leaves
-  the snapshot, so the second of two identical events on one number reads as
-  already fired.
-
-That a temp-entity number may differ from retail's is INFERRED: nothing on
-either side of the wire compares one frame's against the next's.
+  the snapshot; a freed number is out of the snapshot of the frame that
+  frees it, so its next event reads as new.
 
 ### svc_serverCommand (5)
 

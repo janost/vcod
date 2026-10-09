@@ -131,7 +131,13 @@ at 13450 raised `rotatedone` at 15500. So the script-visible origin and angles
 at level time `T` are the trajectory evaluated at `T - 50`, one frame at the
 default `sv_fps` 20, and the completion notify comes on the first frame whose
 lagged clock has passed the end. Whether the lag is one frame or a fixed 50 ms
-is UNVERIFIED; the capture ran at one frame rate.
+is UNVERIFIED; the capture ran at one frame rate. INFERRED, off the entity
+pass's place after the threads (combat doc 14.7, "The pass runs after the
+threads"): `G_RunMover` evaluates at `level.time` on the frame's pass, script
+reads that on the next frame, and the notify it raises on the frame the
+trajectory ends wakes its waiter on the next frame's threads. vcod runs the
+mover on its turn in the pass (`mover::run_one`) and queues the notify for
+the next frame's script (`GameHost::engine_notifies`).
 
 ## 9. What goes on the wire
 
@@ -377,8 +383,8 @@ VERIFIED, off the capture:
   origin by about 0.0005 degrees a frame. INFERRED: `amove` is never quite 0
   for an entity whose `r.currentAngles` came back off a rotate.
 
-vcod: `crate::push` runs the push over the players after each frame's
-script, in slot order, with `G_TryPushingEntity`'s jitter and its keep-in-place
+vcod: `crate::push` runs the push over the players on the mover's turn in
+the entity pass (combat doc 14.7), after the frame's script, in slot order, with `G_TryPushingEntity`'s jitter and its keep-in-place
 fallback, and stalls the mover when one fits nowhere. When it does not stall,
 `crate::game::item::push_items` runs the same test over the items not taken,
 under each item's push mask, in entity order. A blocked push leaves every
@@ -410,8 +416,12 @@ parent where it is this frame and turns the link offset by the parent's
 axis; the offset is held in the parent's frame. The capture's parent had zero
 angles at the link, so it cannot tell a parent-frame offset from a world one.
 
-vcod: the re-anchor reads `ScriptRuntime::link_anchor`, the mover's plan at
-the level time, and `linkTo` stores the offset in the parent's frame.
+vcod: the re-anchor runs on the client's turn in the entity pass, after
+its parent's (`ScriptRuntime::run_entity_pass`, `PassStop::Client`), reads
+`ScriptRuntime::link_anchor`, the mover's plan at the level time, and
+relinks the client, as `G_RunClient` (0x40660) does through
+`G_SetFixedLink` (0x406d9) and `trap_LinkEntity` (0x40713); `linkTo` stores
+the offset in the parent's frame.
 
 ## 14. The brush model on the wire, and the client's half
 
@@ -769,9 +779,10 @@ view and back. VERIFIED, `linkto_ab` with that swing modelled: ours reads
 182.16, 272.0, 46.6 and 23.75 on the same frames, and the gate holds the yaw
 to 4 degrees.
 
-vcod: `crate::game::link` holds the records and `link::run` is the pass,
-at the end of `ScriptRuntime::run_frame`, ascending by child with the parent
-run first, a mover parent read at the level time once it has run. It writes
+vcod: `crate::game::link` holds the records and `link::run_linked` is the
+link arm of the entity pass (`ScriptRuntime::run_entity_pass`), ascending by
+number with the parent run first, a mover parent read at the level time once
+it has run. It writes
 the child's `origin` and `angles`, relinks it, poses a brush model's clip
 and forgets any mover plan; the wire sends a linked entity `TR_INTERPOLATE`.
 A player's bone is the hit rig's pose (`link::client_bone`), a script
