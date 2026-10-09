@@ -4857,13 +4857,63 @@ where the last frame left them: the thrower's first grenade bounced off slot
 (0, -120.5, -10.1), an eighth of the throw, where retail's flew on at 960
 (`--save-grenade` captures of both, kept out of the fixtures).
 
-vcod: `Server::tick` runs the missile pass and the grenade walks after
-`ScriptRuntime::run_frame` and every client write the frame's threads
+vcod: `Server::tick` runs the entity pass (below) after
+`ScriptRuntime::run_threads` and every client write the frame's threads
 queued (spawns, `setOrigin`s, `linkTo` re-anchors, mover pushes), then
-applies what the walks' callbacks queued. `run_frame`'s item and link passes
-still run ahead of the missiles, where retail interleaves all three by
-entity number. `a_grenade_walk_meets_this_frame_s_script_links_first`
+applies what the walks' callbacks queued.
+`a_grenade_walk_meets_this_frame_s_script_links_first`
 (`crates/server/tests/combat.rs`) is the two-client form of the probe.
+
+**One entity pass.** VERIFIED, `game.mp.i386.so`, the call sites in
+`G_RunFrame` (0x50478): `Scr_SetTime` at 0x5070c; past it a loop at
+0x50912..0x50975 that compares its counter with `level.num_entities` (0x50927,
+0x5096f), tests the in-use byte `+0x160` (0x50930) and the link record
+`+0x2e4` (0x5093f), and calls `G_RunEntity` (0x502bc) on that record's
+first dword (0x50949) and on the entity (0x50955). VERIFIED, `G_RunEntity`'s
+compares and calls: `+0x194` against `level.framenum` (`level+0x1e4`,
+0x502cb) and a store of it (0x502d7); `level.time - ent+0x180` against 300
+(0x50309), `G_FreeEntity` (0x5031d) and `trap_UnlinkEntity` (0x5033e);
+`eType` against 4, 3, 5 and 8 (0x5036c, 0x50380, 0x50400, 0x50405), the
+link record (0x50385), byte `+0x161` (0x503e8) and the client pointer
+(0x50415); `G_RunMissile` (0x50375), `G_GeneralLink` (0x50392), `G_RunItem`
+(0x503f5), `G_RunMover` (0x5040e), `G_RunClient` (0x50422) and the think
+pointer (0x503e1, 0x5046f). INFERRED, off those branches and their order:
+each in-use entity runs once a frame, its link parent first, through the
+first arm its type matches (a missile, a linked item's link, an item, a
+mover, a client, a think), so items, links, movers, missiles and thinks
+are one pass by entity number. A blast, which runs inside `G_RunMissile`
+(14.1), meets the entities numbered below its grenade on this frame's turn
+and the ones above it on the last frame's, and an entity spawned during the
+pass runs the same frame when its number is past the loop's, since the
+bound is reread.
+
+VERIFIED, `client-probes/probe_blastlink` on retail, 2026-10-09, dm on
+mp_carentan: a `script_origin` parent moved 8 units up or down every frame,
+the 40 `mp_deathmatch_spawn` points (numbers 78..110 and 261..294) linked to
+it from the start, and 8 spawned `script_origin`s linked once the first
+grenade was live. In the victim's damage callback, per child, how far it sat
+off the gap it linked at:
+
+| grenade | walk at | children below its number | children above it |
+|---|---|---|---|
+| 170 | 24450 | 9, all 0 | 31, all 8 |
+| 180 | 34450 | 17, all 0 | 23, all 8 |
+| 243 | 43150 | 17, all 0 | 23, all 8 |
+
+VERIFIED, the same log: every `MOD_FALLING` callback (inside a cmd, ahead of
+`G_RunFrame`) read all 40 at 0. The same probe against `vcod-server` with
+the pass split by kind read 0 for all 40 in every walk; with the one pass,
+9/31, 17/23 and 17/23 split as retail's, at grenades 170, 179 and 180 (ours
+hands out free numbers in another order).
+
+vcod: `ScriptRuntime::run_entity_pass` is the loop for the arms ours runs in
+it: a missile (`Missiles::run_one`), a link (`link::run_linked`) and an item
+(`item::run_item`), each entity once a frame, its link parent first. It
+returns at each blast; `Server::tick` walks it and calls the pass again from
+the next number. Movers, thinks and the body queue still run ahead of the
+threads in `run_threads`, and a client's link is re-anchored in
+`Server::tick` before the pass. `a_blast_meets_the_links_below_its_grenade_s_number_only`
+(`crates/server/tests/combat.rs`) is the probe's two-client form.
 
 **Other callers.** VERIFIED: `trap_EntitiesInBox` is also called by
 `G_TouchTriggers` (`0x3f925`, mask `0x405c0008`), `G_GetActivateEnt`
@@ -5828,7 +5878,42 @@ frame retail draws a dying body in was not read. GAP: ours sends
 `fTorsoHeight`, `fTorsoPitch` and `fWaistPitch` as 0. `BG_PlayerStateToEntityState`
 (0x2ce55..0x2cea3) copies them from `ps+0x3c4..0x3cc`, scaled by the view
 height lerp, only when prone. `BG_CheckProneValid`'s ground samples
-(0x2d428) write them, and pmove does not model those. GAP: ours sets player
-`eFlags` 0x400 only for a gunner whose gun fired. Retail's `PmoveSingle`
-sets it while attack is held with the weapon ready or firing (0x33fa0..
-0x33fdf), which narrows the torso clamp to 45.
+(0x2d428) write them, and pmove does not model those. Player `eFlags`
+0x400, which narrows the torso clamp to 45, is 16.5.
+
+### 16.5 `eFlags` 0x400, the trigger held
+
+VERIFIED, `game.mp.i386.so`, `PmoveSingle` (0x33dfc): byte `ps+0x82` ORed
+with 4 (0x33f72) or ANDed with 0xfb (0x33f82) beside a test of the cmd's
+buttons byte against 2 (0x33f6a); byte `ps+0x81` ANDed with 0xfb (0x33f91);
+`pm_type` against 5 (0x33f9a); `pm_flags` byte 1 against 8 (0x33fa0);
+`weaponstate` (`ps+0xb4`) against 0 and 3 (0x33fac, 0x33fb0);
+`PM_WeaponAmmoAvailable(ps.weapon)` (0x33fbf) and a test of its return;
+the buttons byte against 1 and 2 (0x33fd3, 0x33fd8); byte `ps+0x81` ORed
+with 4 (0x33fdf); then `pm_type` against 5 (0x33fed), the buttons byte
+against 1 (0x33ff8) and `pm_flags` byte 1 ANDed with 0xf7 (0x34000).
+VERIFIED, `PM_WeaponAmmoAvailable` (0x3abe8): it returns
+`ps+0x20c[def+0x1a8]`, the `ammoclip` entry at the weapon's `clipIndex`.
+INFERRED, off those branches: every cmd clears `eFlags` 0x400 and sets it
+again when the cmd holds attack (buttons 1) without talk (buttons 2), the
+player is not at intermission (`pm_type` 5) and not under `PMF_RESPAWNED`
+(`pm_flags` 0x800), the weapon is ready or firing as the cmd starts, and
+its clip is not empty; the talk bit sets 0x40000 the same way, and a cmd
+with attack released clears `PMF_RESPAWNED`. The bit runs ahead of the
+move and `PM_Weapon` (0x34274 onward), so it reads the weapon state the
+cmd starts from, and the snapshot carries the last cmd's.
+
+VERIFIED, two `--save-combat` runs with `ps.eFlags` added to every trace,
+2026-10-09, dm on mp_carentan, kept out of the fixtures: retail's carbine
+taps read 1040 (0x410) on the snapshot whose `weaponstate` first reads 3 and
+16 on every other, 1072 and 1104 the same crouched and prone; the run on
+`vcod-server` reads the same shape (16550, 18750, 18950, 19300, 19500: 1040
+with `weaponstate` 3). The tdm hit target capture's line 80 is one of these
+(turrets doc 12.4). Turrets doc 12.4's gunner reads 0xC418 on every held
+frame and 0xC018 once the trigger is up, which this rule gives too.
+
+vcod: `spectate::attack_flag` per cmd in `ClientSim::step` (a live player
+only, `PMF_RESPAWNED` clear), on `ClientSim::attacking`; `eflags()` ORs it
+with the gunner's own `firing`. GAP: a dead body (`pm_type` 6) passes the
+`pm_type` test in retail; ours clears the bit for it. Its weapon is 0 after
+the first dead cmd, so only that cmd could differ.
