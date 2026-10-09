@@ -2692,11 +2692,12 @@ mod tests {
     fn grenade_explosion_effect_takes_a_temp_and_a_concussion_number() {
         let mut rt = ScriptRuntime::for_test(
             "n(a) { return (spawn(\"script_origin\", (0, 0, 0)) getEntityNumber()) - a; } \
-             main() { a = spawn(\"script_origin\", (0, 0, 0)) getEntityNumber(); \
+             main() { wait 0.05; a = spawn(\"script_origin\", (0, 0, 0)) getEntityNumber(); \
              grenadeexplosioneffect((0, 0, 0)); level.s = \"\" + n(a); \
              for (i = 1; i <= 16; i++) { wait 0.05; level.s = level.s + \" \" + n(a); } }",
         );
-        for frame in 1..=20 {
+        // From a frame's thread pass, as the probe's calls were (after `wait 1`).
+        for frame in 1..=21 {
             rt.run_frame(frame * 50);
         }
         // Retail: the spawn after the call 3, the +400 one the temp's 1,
