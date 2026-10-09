@@ -7,17 +7,17 @@ use std::collections::HashMap;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
 pub enum TextureFormat {
-    Bc1RgbaUnormSrgb,
-    Bc2RgbaUnormSrgb,
-    Bc3RgbaUnormSrgb,
+    Bc1RgbaUnorm,
+    Bc2RgbaUnorm,
+    Bc3RgbaUnorm,
 }
 
 impl TextureFormat {
     /// Bytes per 4x4 block.
     pub fn block_size(self) -> u32 {
         match self {
-            TextureFormat::Bc1RgbaUnormSrgb => 8,
-            TextureFormat::Bc2RgbaUnormSrgb | TextureFormat::Bc3RgbaUnormSrgb => 16,
+            TextureFormat::Bc1RgbaUnorm => 8,
+            TextureFormat::Bc2RgbaUnorm | TextureFormat::Bc3RgbaUnorm => 16,
         }
     }
 }
@@ -63,9 +63,9 @@ pub fn parse_dds(data: &[u8]) -> Result<Image> {
     if pf_flags & 0x4 != 0 {
         let fourcc = &data[84..88];
         let (format, block_size) = match fourcc {
-            b"DXT1" => (TextureFormat::Bc1RgbaUnormSrgb, 8),
-            b"DXT3" => (TextureFormat::Bc2RgbaUnormSrgb, 16),
-            b"DXT5" => (TextureFormat::Bc3RgbaUnormSrgb, 16),
+            b"DXT1" => (TextureFormat::Bc1RgbaUnorm, 8),
+            b"DXT3" => (TextureFormat::Bc2RgbaUnorm, 16),
+            b"DXT5" => (TextureFormat::Bc3RgbaUnorm, 16),
             _ => bail!(
                 "unsupported DDS fourcc {:?}",
                 String::from_utf8_lossy(fourcc)
@@ -331,21 +331,21 @@ fn invert_mask_alpha(data: &mut ImageData) {
             }
         }
         ImageData::Bc { format, mips } => match format {
-            TextureFormat::Bc2RgbaUnormSrgb => {
+            TextureFormat::Bc2RgbaUnorm => {
                 for block in mips.iter_mut().flat_map(|m| m.as_chunks_mut::<16>().0) {
                     for b in &mut block[..8] {
                         *b ^= 0xFF;
                     }
                 }
             }
-            TextureFormat::Bc3RgbaUnormSrgb => {
+            TextureFormat::Bc3RgbaUnorm => {
                 for block in mips.iter_mut().flat_map(|m| m.as_chunks_mut::<16>().0) {
                     invert_bc3_alpha(&mut block[..8]);
                 }
             }
             // BC1's 1-bit alpha is tied to the colour endpoints; no foliage
             // skin ships as DXT1
-            TextureFormat::Bc1RgbaUnormSrgb => {
+            TextureFormat::Bc1RgbaUnorm => {
                 log::warn!("cannot invert the mask alpha of {format:?}, leaving it as-is")
             }
         },
@@ -441,9 +441,9 @@ mod tests {
 
     #[test]
     fn block_sizes_match_dds_block_bytes() {
-        assert_eq!(TextureFormat::Bc1RgbaUnormSrgb.block_size(), 8);
-        assert_eq!(TextureFormat::Bc2RgbaUnormSrgb.block_size(), 16);
-        assert_eq!(TextureFormat::Bc3RgbaUnormSrgb.block_size(), 16);
+        assert_eq!(TextureFormat::Bc1RgbaUnorm.block_size(), 8);
+        assert_eq!(TextureFormat::Bc2RgbaUnorm.block_size(), 16);
+        assert_eq!(TextureFormat::Bc3RgbaUnorm.block_size(), 16);
     }
 
     #[test]
@@ -455,7 +455,7 @@ mod tests {
         assert_eq!((img.width, img.height), (8, 8));
         match img.data {
             ImageData::Bc { format, mips } => {
-                assert_eq!(format, TextureFormat::Bc1RgbaUnormSrgb);
+                assert_eq!(format, TextureFormat::Bc1RgbaUnorm);
                 assert_eq!(mips.len(), 2);
                 assert_eq!(mips[0].len(), 32);
                 assert_eq!(mips[1].len(), 8);
@@ -472,7 +472,7 @@ mod tests {
         matches!(
             img.data,
             ImageData::Bc {
-                format: TextureFormat::Bc3RgbaUnormSrgb,
+                format: TextureFormat::Bc3RgbaUnorm,
                 ..
             }
         )
