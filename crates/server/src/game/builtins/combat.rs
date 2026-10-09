@@ -100,7 +100,9 @@ pub fn finish_player_damage(
             _ => ENTITYNUM_WORLD,
         };
         let pair = crate::game::combat::flesh_impacts(point, dir, rifle_bullet, other, slot);
-        host.temp_entities.extend(pair);
+        for te in pair {
+            host.add_temp_entity(cx, te);
+        }
     }
     let attacker_origin = match attacker {
         Value::Entity(a) => {
@@ -302,18 +304,21 @@ pub fn obituary(
         Value::Vector(v) => v,
         _ => [0.0; 3],
     };
-    host.temp_entities.push(TempEntity {
-        event: EV_OBITUARY,
-        parm,
-        surf_type: 0,
-        other: victim.0,
-        attacker,
-        weapon: 0,
-        origin,
-        client_num: 0,
-        scale: 0,
-        scope: Scope::Broadcast,
-    });
+    host.add_temp_entity(
+        cx,
+        TempEntity {
+            event: EV_OBITUARY,
+            parm,
+            surf_type: 0,
+            other: victim.0,
+            attacker,
+            weapon: 0,
+            origin,
+            client_num: 0,
+            scale: 0,
+            scope: Scope::Broadcast,
+        },
+    );
     Ok(Value::Undefined)
 }
 
@@ -1764,7 +1769,7 @@ mod tests {
 
             let a = args("MOD_RIFLE_BULLET", cx);
             obituary(&mut host, cx, None, &a).unwrap();
-            let te = host.temp_entities.last().unwrap();
+            let te = &host.temp_entities.last().unwrap().te;
             assert_eq!(te.event, EV_OBITUARY);
             assert_eq!(te.parm, 12, "m1carbine_mp is configstring 7's index 12");
             assert_eq!(te.other, 3);
@@ -1774,11 +1779,11 @@ mod tests {
 
             let a = args("MOD_HEAD_SHOT", cx);
             obituary(&mut host, cx, None, &a).unwrap();
-            assert_eq!(host.temp_entities.last().unwrap().parm, 0x88);
+            assert_eq!(host.temp_entities.last().unwrap().te.parm, 0x88);
 
             let a = args("MOD_SUICIDE", cx);
             obituary(&mut host, cx, None, &a).unwrap();
-            assert_eq!(host.temp_entities.last().unwrap().parm, 0x96);
+            assert_eq!(host.temp_entities.last().unwrap().te.parm, 0x96);
         });
     }
 
@@ -1794,7 +1799,7 @@ mod tests {
             let m = Value::String(cx.intern_exact("MOD_FALLING"));
             let args = [Value::Entity(victim), Value::Undefined, weapon, m];
             obituary(&mut host, cx, None, &args).unwrap();
-            let te = host.temp_entities.last().unwrap();
+            let te = &host.temp_entities.last().unwrap().te;
             assert_eq!(te.attacker, 1022);
             assert_eq!(te.parm, 0x95);
         });

@@ -1095,14 +1095,24 @@ fn a_melee_swing_hits_and_the_kill_shows_the_melee_icon() {
     };
     let mut hits = 0;
     let mut after_first = None;
+    // A temp entity rides every snapshot until it is freed, so a hit is the
+    // snapshot its entity first appears on.
+    let mut shown: Vec<u32> = Vec::new();
     for i in 0..80 {
         ca.send_frame(if i % 20 == 0 { &swing } else { &NULL_USERCMD });
         cb.send_frame(&facing_a);
         step(&mut sv, &mut ca, &mut cb);
         let sa = ca.snapshots().newest().unwrap();
-        let landed = sa.entities.values().any(|e| {
-            e.field_i32(p, "eType") == 12 + 166 && e.field_i32(p, "otherEntityNum") == nb as i32
-        });
+        let now: Vec<u32> = sa
+            .entities
+            .iter()
+            .filter(|(_, e)| {
+                e.field_i32(p, "eType") == 12 + 166 && e.field_i32(p, "otherEntityNum") == nb as i32
+            })
+            .map(|(n, _)| *n)
+            .collect();
+        let landed = now.iter().any(|n| !shown.contains(n));
+        shown = now;
         if !landed {
             continue;
         }

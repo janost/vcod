@@ -712,9 +712,10 @@ mod tests {
                 );
             }
             host.level_time_ms = 1050;
-            crate::game::mover::run(&mut host, cx);
+            // f0, numbered below its chain, has had its turn; r0, numbered
+            // above, has not, and still reads 0.
+            crate::game::mover::run_one(&mut host, cx, f0);
             run(&mut host, cx);
-            // The mover is at z 5 on its own clock; script reads 0.
             assert!(close(origin(&mut host, cx, f1), [32.0, 0.0, 5.0]));
             assert!(close(origin(&mut host, cx, f2), [64.0, 0.0, 5.0]));
             assert!(

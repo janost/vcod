@@ -868,7 +868,7 @@ pub fn touch(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, touched: 
             ],
             _ => vec![Value::Entity(player)],
         };
-        host.item_notifies.push((id, "trigger", args));
+        host.engine_notifies.push((id, "trigger", args));
     }
     if let Some(event) = out.event {
         host.client_sim_ops.push((

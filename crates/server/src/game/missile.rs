@@ -63,11 +63,10 @@ const BOUNCE_NUDGE: f32 = 0.1;
 const EXPLODE_TRACE_DOWN: f32 = 16.0;
 /// `0x14`, the surface type the water branches of 12.1 and 13.2 both use.
 const WATER_SURF_TYPE: i32 = 0x14;
-/// How long an exploded missile stays on the wire before it is freed. Not in
-/// the sections: the capture's three explodes each ride exactly 300 ms of
-/// snapshots past their event and are gone on the next (entity 176,
-/// serverTime 225150 to 225450).
-const EVENT_VALID_MS: i32 = 300;
+// How long an exploded missile stays on the wire before it is freed: the
+// capture's three explodes each ride exactly 300 ms of snapshots past their
+// event and are gone on the next (entity 176, serverTime 225150 to 225450).
+use crate::game::temp_entity::EVENT_VALID_MS;
 /// The fuse `fire_grenade` falls back to when the thrower has no client or a
 /// zero `grenadeTimeLeft` (11.1).
 const DEFAULT_FUSE_MS: i32 = 2500;
