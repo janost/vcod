@@ -32,6 +32,8 @@ const MARGIN: f32 = 512.0;
 const Z_MERGE: f32 = 40.0;
 /// A walk counts as arrived this close to its target, horizontally. One 50
 /// ms tick at run speed covers 9.5 units, so the walk cannot step over it.
+/// A walk bound for a node's floor also ends this close to its height
+/// (bot-navigation.md, "The flood": mp_ship's hull beam).
 const ARRIVE: f32 = 8.0;
 /// A walk that drops further than this is refused: past
 /// `bg_fallDamageMinHeight` (256) the drop hurts.
@@ -804,6 +806,9 @@ pub const LEAP_FOOT: f32 = 12.0;
 /// A jump edge's top counts as reached only within this of its height:
 /// under a stair step, over the slack a slope leaves.
 const JUMP_PASS: f32 = 16.0;
+/// A node the next edge drops more than a step from counts as reached only
+/// within this of its height (bot-navigation.md, section 3).
+const DROP_PASS: f32 = 8.0;
 /// A roam goal is picked at least this far away when it can be.
 const ROAM_MIN: f32 = 1000.0;
 /// A seen enemy has to move this far off the planned destination before the
@@ -917,7 +922,15 @@ impl Follower {
         while let Some(&w) = self.path.get(self.next) {
             // The top of a jump is passed only standing on it: from its
             // foot the node is in reach flat and the jump not yet made.
-            let rise = if self.jumping(g) { JUMP_PASS } else { 48.0 };
+            // So is a node a drop leaves from: from under it the drop is
+            // not where the graph proved it.
+            let rise = if self.jumping(g) {
+                JUMP_PASS
+            } else if self.dropping(g) {
+                DROP_PASS
+            } else {
+                48.0
+            };
             // A leap's foot is passed only at rest on it: the leap was
             // proved from a standstill there.
             let foot = self.holding(g);
@@ -1090,6 +1103,16 @@ impl Follower {
         };
         match (self.path.get(i), self.path.get(self.next)) {
             (Some(&a), Some(&b)) => g.leaps.contains(&(a, b)),
+            _ => false,
+        }
+    }
+
+    /// Whether the edge on from the current waypoint drops more than a step.
+    fn dropping(&self, g: &NavGraph) -> bool {
+        match (self.path.get(self.next), self.path.get(self.next + 1)) {
+            (Some(&a), Some(&b)) => {
+                g.nodes[b as usize].z < g.nodes[a as usize].z - vcod_common::pmove::STEPSIZE
+            }
             _ => false,
         }
     }
@@ -1592,7 +1615,7 @@ fn ladder_near(ladders: &[(Vec3, Vec3)], p: Vec3) -> bool {
 
 /// Runs a body from `from` toward `target`, re-aiming every tick, and
 /// reports where it came to rest when it got within [`ARRIVE`] on the
-/// ground (on the floor at `floor`, when given) without falling past
+/// ground (and of the height `floor`, when given) without falling past
 /// [`MAX_DROP`], and whether it jumped on the way: once where a forward
 /// run stalls, or at the lip for a [`Gait::Leap`].
 fn walk_as(
@@ -1603,7 +1626,7 @@ fn walk_as(
     gait: Gait,
 ) -> Walked {
     let dist = target.distance(from.truncate());
-    let on_floor = |z: f32| floor.is_none_or(|f| (z - f).abs() < Z_MERGE);
+    let on_floor = |z: f32| floor.is_none_or(|f| (z - f).abs() < ARRIVE);
     if dist < ARRIVE && on_floor(from.z) {
         return Walked::Arrived(from, false);
     }
@@ -2257,6 +2280,29 @@ mod tests {
         );
     }
 
+    /// Floor, a ledge 16 up, a top 32 up, the floor beyond: from the ledge,
+    /// beside the top and in reach of it flat, the bot still heads for the
+    /// top, where the drop on was proved.
+    #[test]
+    fn a_node_a_drop_leaves_from_is_passed_only_on_it() {
+        let g = NavGraph::from_parts(
+            vec![
+                Vec3::new(64.0, 0.0, -64.0),
+                Vec3::new(32.0, 0.0, -48.0),
+                Vec3::new(0.0, 0.0, -32.0),
+                Vec3::new(-48.0, 0.0, -64.0),
+            ],
+            vec![vec![1], vec![0, 2], vec![1, 3], vec![]],
+        );
+        let mut f = Follower::default();
+        let goal = crate::bots::Goal::To([-48.0, 0.0, -64.0]);
+        let mut budget = 1000;
+        let mut at = |p: [f32; 3]| f.waypoint(&g, None, goal, p, false, &mut budget, &mut || 0);
+        assert_eq!(at([64.0, 0.0, -64.0]), Some([32.0, 0.0, -48.0]));
+        assert_eq!(at([12.0, 0.0, -48.0]), Some([0.0, 0.0, -32.0]));
+        assert_eq!(at([2.0, 0.0, -32.0]), Some([-48.0, 0.0, -64.0]));
+    }
+
     #[test]
     fn a_follower_climbs_to_a_head_above_its_foot() {
         let g = NavGraph::from_parts(
@@ -2504,6 +2550,25 @@ mod tests {
             out.is_some_and(|(p, jumped)| p.z < 360.0 && jumped),
             "out of the boat: {out:?}"
         );
+    }
+
+    /// mp_ship's hull beam: a body stands on its side's edge 16 under the
+    /// top. A walk from there aimed 8 units beside a top node comes to rest
+    /// on that edge again, which is not the node's floor.
+    #[test]
+    fn a_walk_back_onto_ships_hull_beam_arrives_only_on_top() {
+        let Some(world) = map_world("mp_ship") else {
+            return;
+        };
+        let w = &world.collision;
+        let edge = Vec3::new(2208.5088, 444.68066, -47.875);
+        let top = Vec3::new(2172.9297, 418.1561, -31.875);
+        let aside = top.truncate() + (top - edge).truncate().perp().normalize() * SIDESTEP;
+        let walked = walk_as(w, edge, aside, Some(top.z), Gait::Forward);
+        assert!(!matches!(walked, Walked::Arrived(..)));
+        // The way it went: onto the edge at the beam's foot.
+        let free = walk_as(w, edge, aside, None, Gait::Forward);
+        assert!(matches!(free, Walked::Arrived(p, false) if (p.z - edge.z).abs() < 0.5));
     }
 
     #[test]
