@@ -428,9 +428,10 @@ struct Args {
     /// Run without sound (also what happens when no output device opens).
     #[arg(long)]
     no_audio: bool,
-    /// Master volume, 0.0 to 1.0.
-    #[arg(long, default_value_t = 1.0)]
-    volume: f32,
+    /// Master volume, 0.0 to 1.0: sets `mss_volume`, which the options
+    /// screen's slider also sets and the config keeps (default 0.8).
+    #[arg(long)]
+    volume: Option<f32>,
 }
 
 /// The map every mode reads: the renderer builds from it, entities resolve
@@ -869,6 +870,9 @@ fn main() -> Result<()> {
             }
         }
     }
+    if let Some(v) = args.volume {
+        shell.execute(&format!("set mss_volume {v}"));
+    }
 
     let net_client = match &args.connect {
         Some(addr) => {
@@ -934,7 +938,7 @@ fn main() -> Result<()> {
         &fs,
         audio::AudioOpts {
             enabled: !args.no_audio,
-            volume: args.volume,
+            volume: shell.cvar_f32("mss_volume"),
         },
     );
     if !audio.enabled() {
@@ -1030,6 +1034,7 @@ fn main() -> Result<()> {
         quick_chat: quick_chat::QuickChat::new(0x51ee),
         ui,
         ui_pending: Vec::new(),
+        exec_depth: 0,
         error: None,
     };
     if matches!(app.mode, Mode::Idle) {
@@ -1050,6 +1055,28 @@ fn main() -> Result<()> {
 /// vcod's config, beside retail's `config_mp.cfg` in the mod directory and
 /// written the same way (`Shell::config_text`).
 const CONFIG_FILE: &str = "vcod_mp.cfg";
+
+/// `r_mode`'s size (Q3's mode table, which the stock video mode list picks
+/// from; -1 keeps the window's own) and whether `r_fullscreen` is on.
+fn video_mode(shell: &console::shell::Shell) -> (Option<winit::dpi::PhysicalSize<u32>>, bool) {
+    let size = match shell.cvar_f32("r_mode") as i32 {
+        0 => Some((320, 240)),
+        1 => Some((400, 300)),
+        2 => Some((512, 384)),
+        3 => Some((640, 480)),
+        4 => Some((800, 600)),
+        5 => Some((960, 720)),
+        6 => Some((1024, 768)),
+        7 => Some((1152, 864)),
+        8 => Some((1280, 1024)),
+        9 => Some((1600, 1200)),
+        10 => Some((2048, 1536)),
+        11 => Some((856, 480)),
+        _ => None,
+    };
+    let size = size.map(|(w, h)| winit::dpi::PhysicalSize::new(w, h));
+    (size, shell.cvar_f32("r_fullscreen") != 0.0)
+}
 
 /// A client joining `net` through the stock menus, answering them with
 /// `team` and `weapon` when given.
@@ -1408,6 +1435,8 @@ struct App {
     /// Menu effects queued where no event loop is at hand; `about_to_wait`
     /// runs them.
     ui_pending: Vec<frontend::UiEffect>,
+    /// Nested `exec`s running.
+    exec_depth: u8,
     error: Option<anyhow::Error>,
 }
 
@@ -1542,6 +1571,18 @@ impl App {
                     }
                     self.console.set_input(&text);
                 }
+                UiEffect::ExecOnCvar {
+                    cvar,
+                    value,
+                    int,
+                    command,
+                } => {
+                    let cur = self.shell.cvar(&cvar).unwrap_or("");
+                    if UiEffect::cvar_matches(cur, value, int) {
+                        let effects = self.shell.execute(&command);
+                        self.apply(event_loop, effects);
+                    }
+                }
             }
         }
     }
@@ -1665,8 +1706,43 @@ impl App {
                         log::warn!("cannot write {}: {e}", self.config_path.display());
                     }
                 }
+                Effect::Exec(file) => self.exec_file(event_loop, &file),
+                Effect::VidRestart => {
+                    if let Some(w) = &self.window {
+                        let (size, fullscreen) = video_mode(&self.shell);
+                        w.set_fullscreen(
+                            fullscreen.then_some(winit::window::Fullscreen::Borderless(None)),
+                        );
+                        if let Some(size) = size {
+                            let _ = w.request_inner_size(size);
+                        }
+                    }
+                }
             }
         }
+    }
+
+    /// `exec <file>`: the file from the paks (`default_mp.cfg` lives in
+    /// `localized_english_pak0.pk3`) or else beside the config, run as
+    /// console text. A file that execs itself stops at a fixed depth.
+    fn exec_file(&mut self, event_loop: &ActiveEventLoop, file: &str) {
+        let text = self.fs.read(file).or_else(|| {
+            let dir = self.config_path.parent()?;
+            std::fs::read(dir.join(file)).ok()
+        });
+        let Some(text) = text else {
+            console::log::print(&format!("couldn't exec {file}"));
+            return;
+        };
+        if self.exec_depth >= 8 {
+            log::warn!("exec {file}: too deep, skipped");
+            return;
+        }
+        console::log::print(&format!("execing {file}"));
+        self.exec_depth += 1;
+        let effects = self.shell.execute(&String::from_utf8_lossy(&text));
+        self.apply(event_loop, effects);
+        self.exec_depth -= 1;
     }
 
     /// `connect`: leaves any server first, then joins `addr` the way
@@ -1888,9 +1964,16 @@ impl ApplicationHandler for App {
         if self.window.is_some() {
             return;
         }
-        let attrs = Window::default_attributes()
+        let mut attrs = Window::default_attributes()
             .with_title(&self.title)
             .with_inner_size(winit::dpi::LogicalSize::new(1600.0, 900.0));
+        let (size, fullscreen) = video_mode(&self.shell);
+        if let Some(size) = size {
+            attrs = attrs.with_inner_size(size);
+        }
+        if fullscreen {
+            attrs = attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+        }
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -1996,6 +2079,20 @@ impl ApplicationHandler for App {
                     if !pressed {
                         return;
                     }
+                    // A bind waiting for its key or an edit field takes
+                    // every key.
+                    if self.ui.waiting_for_key() {
+                        if let Some(key) = console::keys::key_name(code) {
+                            let effects = self.ui.bind_key(key, &self.shell);
+                            self.ui_effects(event_loop, effects);
+                        }
+                        return;
+                    }
+                    if self.ui.editing() {
+                        let effects = self.ui.edit_key(code, event.text.as_deref(), &self.shell);
+                        self.ui_effects(event_loop, effects);
+                        return;
+                    }
                     let (used, effects) = self.ui.key(code);
                     self.ui_effects(event_loop, effects);
                     self.after_menu();
@@ -2097,10 +2194,18 @@ impl ApplicationHandler for App {
                 use winit::event::MouseButton;
                 let pressed = state == ElementState::Pressed;
                 if self.menu_active() {
-                    if button == MouseButton::Left && pressed {
+                    if pressed
+                        && self.ui.waiting_for_key()
+                        && let Some(key) = console::keys::mouse_name(button)
+                    {
+                        let effects = self.ui.bind_key(key, &self.shell);
+                        self.ui_effects(event_loop, effects);
+                    } else if button == MouseButton::Left && pressed {
                         let effects = self.ui.click(Instant::now(), &self.shell);
                         self.ui_effects(event_loop, effects);
                         self.after_menu();
+                    } else if button == MouseButton::Left {
+                        self.ui.release();
                     }
                     return;
                 }
@@ -2145,7 +2250,15 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / 60.0,
                 };
                 if self.menu_active() {
-                    if scroll != 0.0 {
+                    if scroll != 0.0 && self.ui.waiting_for_key() {
+                        let key = if scroll > 0.0 {
+                            "MWHEELUP"
+                        } else {
+                            "MWHEELDOWN"
+                        };
+                        let effects = self.ui.bind_key(key, &self.shell);
+                        self.ui_effects(event_loop, effects);
+                    } else if scroll != 0.0 {
                         self.ui.scroll(scroll > 0.0);
                     }
                     return;
@@ -2181,6 +2294,8 @@ impl ApplicationHandler for App {
                 let time = elapsed.as_secs_f32();
                 let local_ms = elapsed.as_secs_f64() * 1000.0;
                 let cull = self.cull_mode;
+                self.audio
+                    .set_master_volume(self.shell.cvar_f32("mss_volume"));
                 let Some(r) = &mut self.renderer else { return };
                 let aspect = r.aspect();
                 // Set inside the online arm where `self` is borrowed out

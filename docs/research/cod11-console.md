@@ -186,3 +186,7 @@ and a sight that zooms to half the fov halves it. vcod's
 own default `name`. The client's userinfo carries `rate` and `snaps` from the
 cvars and resends on a change. The probes keep 25000, so a retail server
 never throttles a capture.
+
+The options screens' cvars (`mss_volume`, `r_mode`, `r_fullscreen` and the
+inert ones), `setfromcvar`, `exec` and `vid_restart` are in
+`cod11-front-end.md`, section 8.
