@@ -357,6 +357,24 @@ Against ours: `vcod-server mp_carentan --gametype-script
 crates/gsc/tests/fixtures/semantics/client-probes/probe_pronedrop.gsc --set
 probe_teleport=1`.
 
+## probe_freeze
+
+`freezeControls`' server half. It calls `freezecontrols(true)` on each
+player on its first frame alive and logs `PROBE freeze <time> <name>`. The
+client half is `--save-motion`, which holds the lean, stance, run and jump
+poses in turn and prints a `MOTION` line per pose with `pm_flags` and
+`leanf`. Its fixture lands under the gametype's name
+(`mp_carentan-probe_freeze-motion.txt`) and is not evidence anyone keeps;
+delete it after the run. `docs/research/cod11-mantle.md`, "`pm_flags`
+0x4000", has the readings: retail freezes nothing.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PORT=<p> PROBE_SECS=75 \
+    tools/run_probe.sh client-probes/probe_freeze mp_carentan
+# second shell, about 10 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:<p> --save-motion
+```
+
 ## probe_fall
 
 The landing stun and fall damage measurement's server half. Under

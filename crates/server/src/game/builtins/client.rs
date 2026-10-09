@@ -42,6 +42,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("cloneplayer", clone_player),
     ("dropitem", drop_item),
     ("closemenu", close_menu),
+    ("freezecontrols", freeze_controls),
     ("setorigin", set_player_origin),
     ("setplayerangles", set_player_angles),
     ("sayall", say_all),
@@ -333,6 +334,24 @@ pub fn close_menu(
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
     host.client_commands.push((slot, "u".to_string()));
+    Ok(Value::Undefined)
+}
+
+/// `self freezeControls(bool)` (0x456ec): the player check, `Scr_GetBool`,
+/// and a store to `client+0x21e0` that nothing reads, so in 1.1 MP it freezes
+/// nothing, as a live run confirms (docs/research/cod11-mantle.md,
+/// "`pm_flags` 0x4000").
+pub fn freeze_controls(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    client_receiver(host, recv)?;
+    let Some(v) = args.first() else {
+        return Err(ErrorKind::BadType("freezeControls takes a boolean"));
+    };
+    v.as_bool()?;
     Ok(Value::Undefined)
 }
 
@@ -1736,5 +1755,33 @@ mod tests {
         };
         sim.set_view_angle(angles);
         assert_eq!(sim.view_angles(), [10.0, 90.0, 0.0]);
+    }
+
+    /// `freezeControls` checks its receiver, reads its bool and stores it
+    /// where nothing reads it, so a frozen player moves on.
+    #[test]
+    fn freezecontrols_takes_a_bool_and_freezes_nothing() {
+        use crate::game::host::ClientEvent;
+        use crate::game::script::ScriptRuntime;
+        let mut rt = ScriptRuntime::for_test(
+            r#"
+            main() {}
+            freeze() {
+                self freezeControls(true);
+                self.frozen = 1;
+            }
+        "#,
+        );
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 0,
+            name: "p".into(),
+        });
+        rt.run_frame(0);
+        let e = rt.client_entity(0).unwrap();
+        rt.start_thread_for_test(e, "freeze", 0);
+        rt.run_frame(50);
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(rt.client_field(0, "frozen").as_deref(), Some("1"));
+        assert!(rt.take_sim_ops().is_empty());
     }
 }

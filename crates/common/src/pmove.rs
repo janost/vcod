@@ -104,9 +104,13 @@ pub const DEAD_VIEW_LERP_SPEED: f32 = 180.0;
 /// several `PmoveSingle` steps of at most this length (`game.mp.i386.so`
 /// 0x344d3). `docs/protocol-1.1.md`, "How long a cmd is simulated for".
 pub const MAX_FRAME_MS: f32 = 66.0;
-pub const LEAN_MAX: f32 = 28.0; // eye offset in units; roll is lean/2 degrees
-pub const LEAN_TIME_TO_MS: f32 = 340.0;
-pub const LEAN_TIME_FROM_MS: f32 = 350.0;
+/// `PM_UpdateLean`'s ramp times for a full lean, out and back (rodata
+/// 0x70c60, 0x70c5c), and the lean the crouched and prone stances top out at,
+/// which also scales both ramps (0x70c58, 0x70c54).
+pub const LEAN_TIME_TO_MS: f32 = 350.0;
+pub const LEAN_TIME_FROM_MS: f32 = 280.0;
+const LEAN_SCALE_CROUCH: f32 = 0.5;
+const LEAN_SCALE_PRONE: f32 = 0.25;
 
 /// The eye's lerp times in ms, per leg (`PM_ViewHeightAdjust` 0x309d8,
 /// docs/research/cod11-mantle.md, "The eye through a stance change"): the
@@ -354,7 +358,8 @@ pub struct PlayerState {
     /// through [`PlayerState::ground_entity_num`].
     pub ground_entity: u32,
     pub ground_normal: Vec3,
-    pub lean: f32, // -LEAN_MAX..LEAN_MAX
+    /// Retail's `leanf` (`ps+0x40`), -1 full left to 1 full right.
+    pub lean: f32,
     /// World yaw of the prone body in degrees, retail's `ps.proneDirection`.
     /// Meaningless unless the stance is prone.
     pub prone_direction: f32,
@@ -713,14 +718,13 @@ impl PlayerState {
         }
     }
 
-    /// Eye and angles with the lean offset; roll = lean/2 degrees (RTCW).
+    /// The eye, `AddLeanToPosition` applied as `G_AddLean` does, and the
+    /// view angles. A lean moves the eye and never rolls the view.
     pub fn view(&self) -> ViewParams {
-        let right = Vec3::new(self.yaw.sin(), -self.yaw.cos(), 0.0);
         ViewParams {
-            eye: self.origin + Vec3::Z * self.view_height() + right * self.lean,
+            eye: self.origin + Vec3::Z * self.view_height() + aim::lean_offset(self.yaw, self.lean),
             yaw: self.yaw,
             pitch: self.pitch,
-            roll: (self.lean * 0.5).to_radians(),
         }
     }
 }
@@ -729,7 +733,6 @@ pub struct ViewParams {
     pub eye: Vec3,
     pub yaw: f32,
     pub pitch: f32,
-    pub roll: f32,
 }
 
 #[derive(Default, Clone, Copy, Debug, PartialEq)]
@@ -828,6 +831,9 @@ pub fn pmove(
     // weapon dispatch below ever runs; the turret moves the body
     // (docs/research/cod11-turrets.md, section 5).
     if let Some(gun) = ps.mounted {
+        // `PM_UpdateViewAngles` (0x340fc) runs ahead of the return, so a lean
+        // carried onto the gun eases back.
+        update_lean(ps, input, true, world, dt);
         ps.on_ground = false;
         ps.ground_normal = Vec3::Z;
         ps.ground_surface_flags = 0;
@@ -835,7 +841,6 @@ pub fn pmove(
         ps.walking = walking_flag(ps, input);
         ps.stance = gun;
         ps.ducked = gun == Stance::Crouch;
-        ps.lean = 0.0;
         ps.on_ladder = false;
         drop_knockback(ps, dt);
         return events;
@@ -847,8 +852,8 @@ pub fn pmove(
     // `PM_UpdateViewAngles` runs ahead of the stance (`PmoveSingle` 0x340fc),
     // so the prone clamps read last frame's stance and pitches.
     update_prone_view(ps, input, world, dt);
+    update_lean(ps, input, true, world, dt);
     update_stance(ps, input, world, dt, &mut events);
-    update_lean(ps, input, world, dt);
     set_water_level(ps, world);
     ground_trace(ps, world, MASK_PLAYERSOLID);
     // Retail updates the ADS flag once per `pm_type` arm, after the ground
@@ -931,7 +936,7 @@ fn linked_move(
     // `PM_UpdateViewAngles`, ahead of the dispatch in every arm; under a link
     // the lean skips its wall clamp (0x32c63).
     update_prone_view(ps, input, world, dt);
-    update_lean_unclamped(ps, input, dt);
+    update_lean(ps, input, true, world, dt);
     // The arm's first store: `groundEntityNum` 1023, `pml.walking` and
     // `pml.groundPlane` 0.
     ps.on_ground = false;
@@ -987,7 +992,8 @@ fn snap_velocity(ps: &mut PlayerState) {
     );
 }
 
-/// A dead player's frame: no input, no stance, lean or weapon step, and the
+/// A dead player's frame: no input, no stance or weapon step, a lean that
+/// only eases back (`PM_UpdateViewAngles`' dead arm, 0x32deb), and the
 /// eye easing to `VIEW_DEAD` at the retail capture's rate
 /// (`DEAD_VIEW_LERP_SPEED`). `PmoveSingle` zeroes a dead cmd's moves
 /// (0x3416a) and runs the default arm, whose ladder check drops a corpse off
@@ -1007,6 +1013,7 @@ pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) -> Vec<PmEven
     // death froze it: the weapon step that would ramp it down does not run
     // for a dead player (combat doc, 1.12 and 1.13).
     ps.ads_active = false;
+    update_lean(ps, &idle, false, world, dt);
     ground_trace(ps, world, MASK_DEADSOLID);
     dead_friction(ps);
     // `PM_CheckLadderMove` past its `pm_time` return: a dead player loses the
@@ -1642,8 +1649,6 @@ fn stance_speed_scale(ps: &PlayerState) -> f32 {
     move_stance(ps).speed_scale()
 }
 
-/// RTCW `bg_pmove.c` `PM_UpdateLean`. Differences: leans while moving (no
-/// `!cmd->forwardmove` gate), and prone blocks leaning.
 /// `fTorsoHeight`, `fTorsoPitch`, `fWaistPitch`: the chest's height off the
 /// origin and the pitches of the torso and the legs along the ground, in
 /// degrees, wire convention.
@@ -1991,52 +1996,88 @@ fn update_prone_pitch(ps: &mut PlayerState, world: &MoveWorld, dt: f32, events: 
     ps.prone_torso_pitch = ease(ps.prone_torso_pitch, view);
 }
 
-fn update_lean(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, dt: f32) {
-    if !update_lean_unclamped(ps, input, dt) {
+/// `PM_UpdateLean` (0x32ac8), the last step of `PM_UpdateViewAngles` (0x33377), so it
+/// reads the stance, ground and eye the previous move left
+/// (docs/research/bsp-ibsp59-format.md, "Lean"). `alive` is `pm_type < 6`:
+/// a dead body's lean only eases back. A linked player leans off the ground
+/// and skips the wall clamp (0x32c63).
+fn update_lean(ps: &mut PlayerState, input: &PmInput, alive: bool, world: &MoveWorld, dt: f32) {
+    let mut dir = 0;
+    if alive && (ps.on_ground || ps.linked) && ps.mounted.is_none() {
+        if input.lean_left {
+            dir -= 1;
+        }
+        if input.lean_right {
+            dir += 1;
+        }
+    }
+    let scale = lean_scale(ps);
+    let msec = msec(dt);
+    let cur = ps.lean;
+    ps.lean = match dir {
+        0 => {
+            let step = msec / LEAN_TIME_FROM_MS * scale;
+            if cur > 0.0 {
+                (cur - step).max(0.0)
+            } else {
+                (cur + step).min(0.0)
+            }
+        }
+        // Past the stance's limit (a lean carried into prone) it snaps back.
+        d if d < 0 => {
+            let l = if cur > -scale {
+                cur - msec / LEAN_TIME_TO_MS * scale
+            } else {
+                cur
+            };
+            l.max(-scale)
+        }
+        _ => {
+            let l = if cur < scale {
+                cur + msec / LEAN_TIME_TO_MS * scale
+            } else {
+                cur
+            };
+            l.min(scale)
+        }
+    };
+    if ps.lean == 0.0 || ps.linked {
         return;
     }
-
-    // wall clamp with RTCW's lean box
+    // A sphere from the eye to where a full lean would put it; the lean
+    // keeps no more than the fraction the sphere got (0x32c97-0x32d50).
     let start = ps.origin + Vec3::Z * ps.view_height();
-    let mut right = Vec3::new(ps.yaw.sin(), -ps.yaw.cos(), 0.0);
-    right.z = if ps.lean < 0.0 { 0.25 } else { -0.25 };
-    let end = start + right * ps.lean;
+    let side = ps.lean.signum();
+    let end = start + aim::lean_offset(ps.yaw, side);
     let t = world.box_trace(
         start,
         end,
-        Vec3::new(-12.0, -12.0, -6.0),
-        Vec3::new(12.0, 12.0, 10.0),
+        Vec3::splat(-8.0),
+        Vec3::splat(8.0),
         MASK_PLAYERSOLID,
     );
-    ps.lean *= t.fraction;
+    let max = aim::unget_lean_fraction(t.fraction);
+    if max < ps.lean.abs() {
+        ps.lean = side * max;
+    }
 }
 
-/// The lean's ramp without the wall clamp; true when a lean key drove it.
-fn update_lean_unclamped(ps: &mut PlayerState, input: &PmInput, dt: f32) -> bool {
-    let msec = msec(dt);
-    let mut dir = 0.0f32;
-    if input.lean_left {
-        dir -= 1.0;
+/// The lean's limit and ramp scale off the stance `PM_UpdateLean` reads from
+/// `pm_flags` and the eye's lerp: prone, or easing up out of it, 0.25;
+/// crouched, or easing down into it, 0.5; standing 1.
+fn lean_scale(ps: &PlayerState) -> f32 {
+    let lerping = ps.view_lerp_ms.is_some();
+    let target = ps.view_lerp_target;
+    if ps.stance == Stance::Prone
+        || target == VIEW_PRONE
+        || (lerping && target == VIEW_CROUCH && !ps.view_lerp_down)
+    {
+        LEAN_SCALE_PRONE
+    } else if ps.ducked || (lerping && target == VIEW_CROUCH) {
+        LEAN_SCALE_CROUCH
+    } else {
+        1.0
     }
-    if input.lean_right {
-        dir += 1.0;
-    }
-    if ps.stance == Stance::Prone {
-        dir = 0.0;
-    }
-
-    if dir == 0.0 {
-        // return to center
-        let step = msec / LEAN_TIME_FROM_MS * LEAN_MAX;
-        ps.lean = if ps.lean > 0.0 {
-            (ps.lean - step).max(0.0)
-        } else {
-            (ps.lean + step).min(0.0)
-        };
-        return false;
-    }
-    ps.lean = (ps.lean + dir * (msec / LEAN_TIME_TO_MS) * LEAN_MAX).clamp(-LEAN_MAX, LEAN_MAX);
-    true
 }
 
 /// Q3 `bg_pmove.c` `PM_GroundTrace`'s kickoff test: the player's own velocity
@@ -5150,6 +5191,7 @@ mod tests {
         assert!((h - SPEED_RUN * SCALE_PRONE).abs() < 3.0, "prone speed {h}");
     }
 
+    /// `PM_UpdateLean`'s ramps: a full lean in 350 ms, back in 280.
     #[test]
     fn lean_ramps_up_clamps_and_returns() {
         let w = flat();
@@ -5160,12 +5202,42 @@ mod tests {
             lean_right: true,
             ..Default::default()
         };
-        // 280 ms to full lean; run 500 ms
-        tick(&mut ps, &lean_r, &w, 63);
-        assert!((ps.lean - LEAN_MAX).abs() < 0.5, "lean {}", ps.lean);
-        // full return within 350 ms; run 500 ms
-        tick(&mut ps, &PmInput::default(), &w, 63);
-        assert!(ps.lean.abs() < 0.5, "lean {}", ps.lean);
+        tick(&mut ps, &lean_r, &w, 43);
+        assert!(
+            (ps.lean - 43.0 * 8.0 / 350.0).abs() < 1e-4,
+            "lean {}",
+            ps.lean
+        );
+        tick(&mut ps, &lean_r, &w, 20);
+        assert_eq!(ps.lean, 1.0);
+        tick(&mut ps, &PmInput::default(), &w, 20);
+        assert!(
+            (ps.lean - (1.0 - 160.0 / 280.0)).abs() < 1e-4,
+            "lean {}",
+            ps.lean
+        );
+        tick(&mut ps, &PmInput::default(), &w, 20);
+        assert_eq!(ps.lean, 0.0);
+    }
+
+    /// Off the ground the lean keys do nothing and a lean eases back.
+    #[test]
+    fn an_airborne_player_does_not_lean() {
+        let w = flat();
+        let w = MoveWorld::bare(&w);
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 200.0), 0.0);
+        ps.lean = 0.5;
+        let lean_r = PmInput {
+            lean_right: true,
+            ..Default::default()
+        };
+        tick(&mut ps, &lean_r, &w, 5);
+        assert!(!ps.on_ground);
+        assert!(
+            (ps.lean - (0.5 - 40.0 / 280.0)).abs() < 1e-4,
+            "lean {}",
+            ps.lean
+        );
     }
 
     #[test]
@@ -5182,15 +5254,12 @@ mod tests {
         };
         tick(&mut ps, &lean_l, &w, 125);
         assert!(ps.lean < 0.0);
-        assert!(
-            ps.lean > -LEAN_MAX + 1.0,
-            "wall should limit lean, got {}",
-            ps.lean
-        );
+        assert!(ps.lean > -0.9, "wall should limit lean, got {}", ps.lean);
     }
 
+    /// Prone tops the lean out at 0.25 (`PM_UpdateLean`'s stance scale).
     #[test]
-    fn prone_blocks_lean() {
+    fn prone_caps_lean_at_a_quarter() {
         let w = flat();
         let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
@@ -5200,7 +5269,8 @@ mod tests {
             ..Default::default()
         };
         tick(&mut ps, &input, &w, 125);
-        assert_eq!(ps.lean, 0.0);
+        assert_eq!(ps.stance, Stance::Prone);
+        assert_eq!(ps.lean, 0.25);
     }
 
     #[test]
@@ -5243,6 +5313,8 @@ mod tests {
         );
     }
 
+    /// A full right lean at yaw 0 moves the eye `20 * right(0, 0, 16)`:
+    /// 19.2 to -Y and 5.5 down (`AddLeanToPosition`).
     #[test]
     fn view_reflects_stance_and_lean() {
         let w = flat();
@@ -5251,19 +5323,18 @@ mod tests {
         tick(&mut ps, &PmInput::default(), &w, 50);
         let v = ps.view();
         assert!((v.eye.z - VIEW_STAND).abs() < 1.0);
-        assert_eq!(v.roll, 0.0);
-        tick(
-            &mut ps,
-            &PmInput {
-                lean_right: true,
-                ..Default::default()
-            },
-            &w,
-            125,
+        let lean_r = PmInput {
+            lean_right: true,
+            ..Default::default()
+        };
+        tick(&mut ps, &lean_r, &w, 125);
+        assert_eq!(ps.lean, 1.0);
+        let d = ps.view().eye - (ps.origin + Vec3::Z * ps.view_height());
+        let (s, c) = 16f32.to_radians().sin_cos();
+        assert!(
+            (d - Vec3::new(0.0, -20.0 * c, -20.0 * s)).length() < 1e-4,
+            "{d}"
         );
-        let v = ps.view();
-        assert!(v.roll > 0.1, "leaning right should roll the view");
-        assert!(v.eye.y < -1.0, "yaw 0 lean right offsets eye toward -Y");
     }
 
     // --- water ---
@@ -6136,10 +6207,6 @@ mod tests {
         };
         tick(&mut ps, &lean_r, &mw, 125);
         assert!(ps.lean > 0.0);
-        assert!(
-            ps.lean < LEAN_MAX - 1.0,
-            "a body should limit lean, got {}",
-            ps.lean
-        );
+        assert!(ps.lean < 0.9, "a body should limit lean, got {}", ps.lean);
     }
 }
