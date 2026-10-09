@@ -1504,6 +1504,114 @@ park(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vD
     assert_eq!(hits.len(), 1, "one victim, the other parked: {hits:?}");
 }
 
+/// A grenade goes off in `G_RunFrame`'s entity pass, after the frame's
+/// threads, so its walk meets the links this frame's `setOrigin`s made
+/// (combat doc 14.7). The thread glues both players over the grenade every
+/// frame, side by side so one area node holds both, in an order that flips
+/// with the frame's parity: the walk's first victim is the one linked last
+/// on the frame it went off. Retail, `client-probes/probe_blastmove`: three
+/// walks out of three.
+#[test]
+fn a_grenade_walk_meets_this_frame_s_script_links_first() {
+    use vcod_common::net::msg::{NULL_USERCMD, UserCmd};
+
+    const GLUE: &str = r#"
+main()
+{
+	thread glue();
+	maps\mp\gametypes\dm::main();
+}
+
+glue()
+{
+	wait 0.05;
+	level.callbackPlayerDamage = ::hit;
+	for (;;)
+	{
+		grenades = getentarray("grenade", "classname");
+		if (grenades.size > 0)
+		{
+			players = getentarray("player", "classname");
+			for (k = 0; k < players.size; k++)
+			{
+				i = k;
+				if (gettime() % 100 != 0)
+					i = players.size - 1 - k;
+				players[i] setorigin(grenades[0].origin + (0, 32 * i - 16, 80));
+			}
+		}
+		wait 0.05;
+	}
+}
+
+hit(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc)
+{
+	logPrint("PROBE hit " + gettime() + " " + self getEntityNumber() + "\n");
+}
+"#;
+    let Some(pair) = two_placed_under(Some(("probe_glue", GLUE)), |sv, spot| {
+        assert!(
+            sv.test_clear_line(spot, 0.0, 150.0),
+            "no clear 150 units along +x from the spawn"
+        );
+        [spot[0] + 150.0, spot[1], spot[2]]
+    }) else {
+        return;
+    };
+    let Pair {
+        mut sv,
+        mut ca,
+        mut cb,
+        qa,
+        qb,
+        mut now,
+    } = pair;
+    let facing_a = UserCmd {
+        angles: [0, angle_short(180.0), 0],
+        ..NULL_USERCMD
+    };
+    let mut step = |sv: &mut vcod_server::Server, a: &mut Client, b: &mut Client| {
+        now += Duration::from_millis(50);
+        common::step_pair(sv, (&qa, a), (&qb, b), now);
+    };
+    for _ in 0..40 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&facing_a);
+        step(&mut sv, &mut ca, &mut cb);
+    }
+    cook_and_throw_down(
+        &mut sv,
+        &mut step,
+        &mut ca,
+        &mut cb,
+        &facing_a,
+        frag_index(),
+        (180.0, 80.0),
+    );
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+    let hits: Vec<(i32, usize)> = sv
+        .script_log()
+        .iter()
+        .filter_map(|l| {
+            let mut f = l.strip_prefix("PROBE hit ")?.split_whitespace();
+            Some((f.next()?.parse().ok()?, f.next()?.parse().ok()?))
+        })
+        .collect();
+    assert_eq!(hits.len(), 2, "both glued players in the walk: {hits:?}");
+    let (time, first) = hits[0];
+    assert_eq!(hits[1].0, time, "one walk: {hits:?}");
+    // `getEntArray` lists the players by entity number; the loop links them
+    // in that order on a frame at a multiple of 100 ms, reversed otherwise.
+    let mut order = [hits[0].1.min(hits[1].1), hits[0].1.max(hits[1].1)];
+    if time % 100 != 0 {
+        order.reverse();
+    }
+    assert_eq!(
+        first, order[1],
+        "the walk starts at the player linked last on {time}: {hits:?}"
+    );
+}
+
 /// 11.2 to 11.4: a throw's first frame on the wire, pinned to retail's pair
 /// capture `fixtures/playerstate/mp_carentan-tdm-grenade-shooter.txt`. Both
 /// throws there stand still at z -23.9 and read `trBase` z 37: the muzzle is

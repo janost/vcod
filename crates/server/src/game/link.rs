@@ -165,11 +165,9 @@ fn vector(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> [f32; 3] {
 }
 
 /// A bone of the client's posed body in the body's own frame: the model
-/// faces its `yaw` about the feet (`crate::game::item::tag_start`'s pose).
-/// Retail's DObj carries that yaw itself (`tag_origin`'s controller), and
-/// the link multiplies it by the entity's axis, which is zero after every
-/// cmd (`ClientThink_real` 0x405e2..0x405f6) and a `setPlayerAngles`'
-/// angles until the next one.
+/// faces its `yaw` about the feet (`crate::game::item::tag_start`'s pose),
+/// and `tag_origin`'s local tag turns the body from there by the legs' yaw
+/// off the view (`docs/research/cod11-combat.md` 16.4).
 pub fn client_bone(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Vec3, Quat)> {
     let body = host.client_dobjs.get(slot)?.clone()?;
     let anims = host.anims.clone()?;
