@@ -10,13 +10,15 @@ use std::rc::Rc;
 use vcod_common::animtree::PlayerAnims;
 use vcod_common::collision::MASK_PLAYERSOLID;
 use vcod_common::movetrace::MoveWorld;
-use vcod_common::net::flags::{EF_DEAD, EF_PRONE};
+use vcod_common::net::flags::EF_DEAD;
 use vcod_common::net::msg::{ClientState, EntityState};
 use vcod_common::net::protocol::{CS_MODELS_V1, CS_TAGS_V1, Protocol};
 use vcod_common::net::snapshot::Snapshot;
 use vcod_common::net::trajectory::{TR_INTERPOLATE, TR_LINEAR_STOP, Trajectory};
 use vcod_common::pk3::Pk3Fs;
-use vcod_common::playerpose::{AimPitch, PitchSwing, apply_aim, clip_name};
+use vcod_common::playerpose::{
+    BG_SWING_SPEED, BodyAngles, BodyInput, BodySlope, Controllers, apply_controllers, clip_name,
+};
 use vcod_common::pmove::movers::SnapshotMovers;
 use vcod_common::skeleton::{AnimBinding, PoseBuffer, Skeleton};
 use vcod_common::turretpose::{GunnerPlacement, angles_quat, place_gunner, tag_weapon_local};
@@ -550,8 +552,8 @@ struct EntityAnim {
     /// dead client's live roster entry, which clears when they drop to limbo;
     /// the corpse then draws this instead of vanishing.
     visual: EntityVisual,
-    /// The torso pitch easing after the view (combat doc 16.3).
-    pitch_swing: PitchSwing,
+    /// The record's legs and torso swings (combat doc 16.3, 16.4).
+    body: BodyAngles,
 }
 
 impl EntityAnim {
@@ -564,7 +566,7 @@ impl EntityAnim {
             bindings: HashMap::new(),
             last_seen_ms: now_ms,
             visual: EntityVisual::None,
-            pitch_swing: PitchSwing::default(),
+            body: BodyAngles::default(),
         }
     }
 }
@@ -1145,7 +1147,7 @@ pub fn build_instances(
                         bindings: HashMap::new(),
                         last_seen_ms: st.last_seen_ms,
                         visual: EntityVisual::None,
-                        pitch_swing: st.pitch_swing,
+                        body: st.body,
                     };
                 }
                 st.visual = roster_visual;
@@ -1242,27 +1244,30 @@ pub fn build_instances(
                     // stale and would twist the body forever. A gunner runs no
                     // controllers (cgame 0x30004710).
                     if etype == ET_PLAYER {
-                        // cgame's `CG_PlayerAnimation` (0x30004e40) eases the
-                        // torso after the lerped view pitch every frame; a
-                        // dead, mounted or climbing body eases back to level.
-                        let climbing = anims
-                            .name(st.legs.index())
-                            .is_some_and(|n| n.starts_with("pb_climb"));
-                        let mounted = eflags & turret::EF_MOUNTED != 0;
-                        st.pitch_swing.step(
-                            angles.x,
-                            frametime_ms,
-                            eflags & EF_DEAD != 0 || mounted || climbing,
-                        );
-                        if !mounted {
-                            let aim = AimPitch::new(
-                                angles.x,
-                                &st.pitch_swing,
-                                eflags & EF_PRONE != 0,
-                                pitch,
-                                waist_pitch,
-                            );
-                            apply_aim(&mut st.pose, &assembly.skeleton, &aim, lean);
+                        // cgame's `CG_PlayerAnimation` (0x30004e40) swings
+                        // the legs, torso and torso pitch after the lerped
+                        // view every frame, then reads the legs anim's
+                        // record, as the server's `BG_PlayerAnimation` does.
+                        let input = BodyInput {
+                            view: angles.to_array(),
+                            movement_dir: ent.field_f32(p, "angles2[1]"),
+                            eflags,
+                            legs: anims.record(st.legs.index()),
+                        };
+                        st.body.step(&input, frametime_ms, BG_SWING_SPEED);
+                        st.body.update_conditions(&input);
+                        let slope = BodySlope {
+                            lean,
+                            torso_height: lerp_field("fTorsoHeight"),
+                            torso_pitch: pitch,
+                            waist_pitch,
+                        };
+                        // A dying body's `tag_origin` takes the legs' world
+                        // yaw, which this draw's yaw would turn twice.
+                        if eflags & EF_DEAD == 0
+                            && let Some(c) = Controllers::new(&st.body, &input, &slope)
+                        {
+                            apply_controllers(&mut st.pose, &assembly.skeleton, &c);
                         }
                     }
                 }

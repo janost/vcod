@@ -5,7 +5,9 @@
 //	--save-grenade thrower, and every frame after that the first three stand
 //	glued round its grenade in flight (round the thrower between throws) so
 //	each grenade's walk has them in reach: the first victim of each grenade
-//	walk parks the other two. Recipe: README.md.
+//	walk parks the other two. The glue alternates its link order by frame
+//	parity, so the first victim names the frame whose links the walk saw.
+//	Recipe: README.md.
 
 main()
 {
@@ -194,22 +196,47 @@ drive()
 		wait 0.05;
 	}
 	logPrint("PROBE thrower " + thrower getEntityNumber() + "\n");
-	thrower setorigin((-176.8, 2473.1, -32));
+	spot = (-176.8, 2473.1, -32);
+	thrower setorigin(spot);
+	away = 0;
 	for (;;)
 	{
-		// Round the grenade in flight, else round the thrower.
+		// Round the grenade in flight, else round the thrower. The thrower
+		// waits out of reach while a grenade is live, and the three float
+		// side by side above it: their xy boxes nearly coincide, so the
+		// walk meets them in one area node in link order (combat doc 14.7).
 		if (!isdefined(thrower))
 			return;
+		thrower.health = 1000;
 		at = thrower.origin;
 		grenades = getentarray("grenade", "classname");
 		if (grenades.size > 0)
-			at = grenades[0].origin;
-		offs[0] = (60, 0, 0);
-		offs[1] = (0, 60, 0);
-		offs[2] = (-60, 0, 0);
-		players = level.probe_players;
-		for (i = 0; i < players.size; i++)
 		{
+			at = grenades[0].origin;
+			if (!away)
+			{
+				thrower setorigin(level.probe_park[0]);
+				away = 1;
+			}
+		}
+		else if (away)
+		{
+			thrower setorigin(spot);
+			away = 0;
+			at = spot;
+		}
+		offs[0] = (0, -32, 60);
+		offs[1] = (0, 0, 60);
+		offs[2] = (0, 32, 60);
+		// Linked 0, 1, 2 on frames at a multiple of 100 ms and 2, 1, 0 on
+		// the others, so the head of the node tells whether this frame's
+		// links ran before the grenade went off.
+		players = level.probe_players;
+		for (k = 0; k < players.size; k++)
+		{
+			i = k;
+			if (gettime() % 100 != 0)
+				i = players.size - 1 - k;
 			if (players[i].sessionstate != "playing")
 				continue;
 			players[i].health = 1000;

@@ -20,6 +20,7 @@ pub mod props;
 pub mod rng;
 pub mod shader;
 pub mod skeleton;
+pub mod static_light;
 pub mod terrain;
 pub mod testing;
 pub mod turretpose;

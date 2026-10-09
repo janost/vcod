@@ -141,7 +141,7 @@ Census over the 14 stock MP maps (`maps/MP/*.bsp` in `pak[0-9].pk3`; note the up
 | 16 | 12 | AABB tree nodes: `i32 first_soup, soup_count, child_count` | 335 |
 | 17 | 52 | cells | 20 |
 | 18 | 16 | portals: `i32 plane, cell, first_vert, vert_count` | 124 |
-| 19 | 2 | leaf light indices (`u16` into lump 30) | 230 |
+| 19 | 2 | leaf light indices (`i16` into lump 30; a negative first entry marks a leaf that sees the sky), see `cod11-light-grid-and-leaf-lights.md` | 230 |
 | 20 | 36 | BSP nodes | 1752 |
 | 21 | 36 | BSP leafs | 1788 |
 | 22 | 4 | leaf brushes (`i32` into lump 4) | 10714 |
@@ -150,9 +150,9 @@ Census over the 14 stock MP maps (`maps/MP/*.bsp` in `pak[0-9].pk3`; note the up
 | 25 | 12 | terrain collision vertices (`f32 xyz`) | 6291 |
 | 26 | 6 | terrain collision triangles (`u16 x 3` into lump 25); mp_ship has none | 4496 |
 | 28 | 8 (+rows) | PVS: `i32 cluster_count, row_bytes` then `cluster_count` bit rows; mp_neuville has none | 666 x 88 |
-| 30 | 48 | lights (one per `r_showLeafLights` entry; retail rejects other lengths, `FUN_004db240`), see `cod11-light-grid-and-leaf-lights.md` | 22 |
+| 30 | 72 | lights: type, colour, origin, direction, falloff and cone words; `R_LoadLights` (0x4db620) rejects a length not divisible by 72, see `cod11-light-grid-and-leaf-lights.md` | 22 |
 | 31 | | empty in every map | 0 |
-| 32 | 3145728 | light grid: 262144 (128x128x64) cells x 48 bytes; compiled but never sampled in MP (same doc) | 1 |
+| 32 | 3145728 | light visibility cache: 8192 hash buckets x 32 slots x 12 bytes, read by the static-model and entity lighting (same doc) | 1 |
 
 Lump 23 is not a list of draw surfaces: on mp_brecourt its indices reach 701 with only 548 soups, and on mp_bocage it references exactly the 626 records of lump 24. Draw-surface visibility never goes through leafs.
 

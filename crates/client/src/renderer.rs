@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
@@ -250,7 +251,18 @@ struct VmPass {
     skin_layout: wgpu::BindGroupLayout,
     bone_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    models: Vec<VmModel>,
+    models: Vec<Rc<VmModel>>,
+    /// Every viewmodel part uploaded so far, keyed by [`vm_cache_key`], so a
+    /// weapon switch back to a gun (and every gun's shared hands) skips the
+    /// upload. Only one viewmodel draws at a time, so parts can share their
+    /// bone buffer.
+    cache: HashMap<String, Rc<VmModel>>,
+}
+
+/// LOD name plus skins: the hands files share one mesh and differ only in
+/// their sleeve skins.
+fn vm_cache_key(m: &xmodel::XModel) -> String {
+    format!("{}|{}", m.lod, m.materials.join("|"))
 }
 
 /// Each player is 4-7 part instances, so 32 players plus corpses and dropped
@@ -1987,7 +1999,7 @@ impl Renderer {
         if batches.is_empty() {
             bail!("map has no drawable surfaces");
         }
-        let props = props::build(fs, &bsp.entities);
+        let props = props::build(fs, bsp);
         let prop_first_index = indices.len() as u32;
         let prop_first_vertex = bsp.verts.len() as u32;
         indices.extend(props.indices.iter().map(|i| i + prop_first_vertex));
@@ -2536,6 +2548,7 @@ impl Renderer {
         self.lib_warn_count = self.shader_lib.warn_count();
         self.fx.textures.clear();
         self.hud_pass.textures.clear();
+        self.vm_pass.cache.clear();
     }
 
     /// Drops the map and every model uploaded for it, so no `ModelHandle`
@@ -2680,24 +2693,28 @@ impl Renderer {
 
     /// Slice order is draw order (hands, then the gun). Replaces anything set before.
     pub fn set_viewmodel(&mut self, fs: &Pk3Fs, models: &[xmodel::XModel]) {
-        let vm = &self.vm_pass;
-        let uploaded: Vec<VmModel> = models
-            .iter()
-            .filter_map(|m| {
-                let uploaded = upload_vm_model(
-                    &self.device,
-                    &self.queue,
-                    vm,
-                    &m.surfaces,
-                    &m.materials,
-                    &|skin| assets::load_skin_image(fs, skin),
-                );
-                if uploaded.is_none() {
-                    log::warn!("viewmodel {}: no drawable surfaces, skipping it", m.lod);
-                }
-                uploaded
-            })
-            .collect();
+        let mut uploaded = Vec::with_capacity(models.len());
+        for m in models {
+            let key = vm_cache_key(m);
+            if let Some(hit) = self.vm_pass.cache.get(&key) {
+                uploaded.push(hit.clone());
+                continue;
+            }
+            let Some(model) = upload_vm_model(
+                &self.device,
+                &self.queue,
+                &self.vm_pass,
+                &m.surfaces,
+                &m.materials,
+                &|skin| assets::load_skin_image(fs, skin),
+            ) else {
+                log::warn!("viewmodel {}: no drawable surfaces, skipping it", m.lod);
+                continue;
+            };
+            let model = Rc::new(model);
+            self.vm_pass.cache.insert(key, model.clone());
+            uploaded.push(model);
+        }
         let surfaces: usize = uploaded.iter().map(|m| m.surfaces.len()).sum();
         println!(
             "viewmodel: {} models, {surfaces} drawn surfaces",
@@ -4197,6 +4214,7 @@ fn create_vm_pass(device: &wgpu::Device, format: wgpu::TextureFormat) -> VmPass 
         bone_layout,
         sampler,
         models: Vec::new(),
+        cache: HashMap::new(),
     }
 }
 
