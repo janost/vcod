@@ -586,7 +586,7 @@ short chunkLen        ; 0 = EOF
 byte  data[chunkLen]
 ```
 
-Ack each accepted block with a reliable `nextdl <block>`; the server's send window retransmits until acked. A zero-length block ends the file. `stopdl` aborts, and a final `donedl` makes the server re-send the gamestate. **Divergence from RTCW, #7.** `MAX_DOWNLOAD_BLKSIZE` is 8192, not RTCW's 2048 (observed live from the retail server; a 2048 cap rejects every real block). Download rate is governed by `sv_dl_maxRate`, and one message can carry several blocks. Stock paks (`main/pak0`..`pak9`, `localized_*`) are refused server-side.
+Ack each accepted block with a reliable `nextdl <block>`; the server's send window retransmits until acked. A zero-length block ends the file. `stopdl` aborts, and a final `donedl` makes the server re-send the gamestate. **Divergence from RTCW, #7.** `MAX_DOWNLOAD_BLKSIZE` is 8192, not RTCW's 2048 (observed live on public servers; a 2048 cap rejects their blocks). The 1.1d Linux server itself sends 2048-byte blocks (`docs/research/cod11-server-handshake.md`, "Serving a download"), so a client takes anything up to 8192. Download rate is governed by `sv_dl_maxRate`, and one message can carry several blocks. Stock paks (`main/pak0`..`pak9`, `localized_*`) are refused server-side.
 
 ## Delta field encoding
 
@@ -921,6 +921,8 @@ A client is only sent snapshots once it's CS_ACTIVE, and that requires the serve
 
 **`begin` is not a client command.** The engine's client command table has nine entries and none of them is `begin`: `userinfo`, `disconnect`, `cp`, `vdr`, `download`, `nextdl`, `stopdl`, `donedl`, `retransdl` (the `ucmds` table in CoDExtended's `src/sv_client.c`, whose entries are the retail server's own function addresses; Quake III Arena's table in `code/server/sv_client.c` is the same nine minus `retransdl`). A retail client never sends one, so a server that waits for it waits forever: the client loads the map to 100%, starts the ambient, and sits on the loading screen with no snapshot ever arriving.
 
+**`cp` carries no serverId.** Q3 1.32's `CL_SendPureChecksums` writes `cp <serverId> ...`; CoD 1.1's is `cp <cgame> <ui> @ <paks...> <key>`, sent after every map load whether or not the server is pure, and a pure server drops a client that entered the world without one (`EXE_CANNOTVALIDATEPURECLIENT`) or whose list fails (`EXE_UNPURECLIENTDETECTED`). The format and the check are in `docs/research/cod11-server-handshake.md`, "Pak checksums and pure servers".
+
 The trigger is **the first usercmd after the gamestate**: `SV_UserMove` promotes a CS_PRIMED client before the block's cmds are applied. The document default does not cover the rest of this paragraph -- CoD's own `SV_ClientEnterWorld` is at cod_lnxded `0x80877d8`, but none of what follows was measured against a running one. It is a Q3/ioq3/RTCW-MP source read, each bullet naming its own, and vcod implements it on that basis:
 
 - The cmd passed in is the *first* of the block, `SV_ClientEnterWorld( cl, &cmds[0] )`, and entry copies it into `cl->lastUsercmd` (Quake III Arena `code/server/sv_client.c`, `SV_UserMove` and `SV_ClientEnterWorld`; ioq3's copy is the same call with a null-cmd branch).
@@ -1212,8 +1214,8 @@ default `"1"`, archived. VERIFIED. So a single lost packet loses nothing and
 two in a row lose the first one's new cmds.
 
 vcod's client does the same (`crates/client/src/play/cmds.rs`, `CmdRing`),
-with loopback and RFC 1918 addresses standing in for the interface match, as
-its server does. It sent a packet every frame to every server before
+with `Sys_IsLANAddress`'s class match against the host's interface addresses
+(`vcod_common::net::lan`), as its server does. It sent a packet every frame to every server before
 2026-10-09.
 
 ### Simulating a bad link
@@ -1293,7 +1295,7 @@ Anti-abuse behaviour, and one timing difference; the wire format is unchanged (`
 - A `connect` that matches a live client's address and qport may replace it only when it carries that client's challenge, or when the slot has been silent for `sv_reconnectlimit` (3 s). Retail hands the slot over on the address match alone.
 - Challenges expire after 60 s.
 - Packets wait for the next tick to be read, up to 50 ms, and rcon's 500 ms window is measured at that read; requests sent less than about 550 ms apart can be dropped where retail would have answered both. Pings are not affected: a reader thread stamps each packet's arrival, and a move message's ack takes the time of the newest frame that had gone out when it arrived, as retail's 5 ms socket poll gives (`docs/research/cod11-server-handshake.md`, "Pings").
-- `Sys_IsLANAddress`, which decides whether a client's `rate` reads 99999 or its clamped userinfo value, is loopback plus the RFC 1918 ranges rather than retail's class match against the host's interfaces (`docs/research/cod11-server-handshake.md`, "Rate").
+- `Sys_IsLANAddress`, which decides whether a client's `rate` reads 99999 or its clamped userinfo value, matches against the host's interface addresses where retail matches against what its hostname resolves to (`docs/research/cod11-server-handshake.md`, "Rate").
 - `dedicated` defaults to 1, so no master heartbeat, where retail's default of 2 heartbeats. This is deliberate, so dev runs stay off the public list; `--set dedicated=2` opts in.
 - A zombie slot is sent its last frame again, not retail's stale ring slot (`docs/research/cod11-server-handshake.md`, "Zombie slots").
 - Clients' packets run at the tick, not as they arrive. Retail's `SV_UserMove` calls the game's `ClientThink` per cmd as each client's message is parsed (cod_lnxded `0x80872cb`; the call is VERIFIED, that it is `ClientThink` is INFERRED), between game frames, on the previous frame's `level.time`. `replay_moves` runs every packet queued since the last tick in the order the server executed it, a packet's `kill` ahead of its cmds and each cmd's shots inside it, so the order is retail's; only the clock differs (`docs/research/cod11-combat.md`, section 16).

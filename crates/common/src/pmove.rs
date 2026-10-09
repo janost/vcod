@@ -374,6 +374,10 @@ pub struct PlayerState {
     /// forward or back, which throws it into the air (the dive). Held while
     /// the prone key is, and it shortens the eye's drop to 200 ms.
     pub prone_dive: bool,
+    /// Retail's `pm_flags` 0x8000: this cmd's prone press, or the body's
+    /// swing past the yaw cap, did not fit. Cleared at the top of every
+    /// move (`PmoveSingle` 0x33e5a); the client prints "Prone Blocked".
+    pub prone_blocked: bool,
     /// The plane the last ground trace hit, walkable or not, and not while
     /// the velocity carries the player off it: retail's `pml.groundPlane`
     /// and its normal. Only the prone pitch reads it.
@@ -577,6 +581,7 @@ impl PlayerState {
             prone_direction_pitch: 0.0,
             prone_torso_pitch: 0.0,
             prone_dive: false,
+            prone_blocked: false,
             ground_plane: None,
             water_level: 0,
             knockback_ms: 0.0,
@@ -734,6 +739,7 @@ pub fn pmove(
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
     ps.view_yaw_correction = 0.0;
     ps.view_pitch_correction = 0.0;
+    ps.prone_blocked = false;
     ps.since_jump_ms += msec(dt);
     // retail clears the held-jump latch post-move when upmove drops (@0x34135)
     if !input.jump {
@@ -1322,6 +1328,8 @@ fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, dt: f
     let entering_prone = desired == Stance::Prone && before != Stance::Prone;
     if entering_prone && !prone_fits(world, ps.origin, ps.yaw.to_degrees()) {
         desired = before;
+        // `PM_CheckDuck` 0x3196b, on every cmd the held press is refused.
+        ps.prone_blocked = true;
     }
     // The dive flag lives as long as the prone key is held (`PM_CheckDuck`
     // 0x316f4 clears it on every other arm).
@@ -1634,6 +1642,10 @@ fn update_prone_view(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, d
         };
         if prone_fits(world, ps.origin, candidate) {
             ps.prone_direction = candidate;
+        } else if delta.abs() > PRONE_YAWCAP + 0.1 {
+            // 0x3319d-0x331c4: a refused swing announces itself only once
+            // the view is past the cap (rodata 0x70c90).
+            ps.prone_blocked = true;
         }
     }
     // The cap measures the excess before the swing and places the view
@@ -1652,8 +1664,8 @@ fn update_prone_view(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, d
 
 /// `PM_UpdatePronePitch` (0x3338c): both prone pitches ease toward the
 /// ground's pitch under the body and under the view, or toward level with no
-/// ground plane under the player. Not modelled: its refusal event (141) and
-/// `pm_flags` 0x8000, which no capture has raised.
+/// ground plane under the player. Not modelled: its airborne refusal
+/// (0x33434), which raises event 141 and `pm_flags` 0x8000.
 fn update_prone_pitch(ps: &mut PlayerState, dt: f32) {
     if ps.stance != Stance::Prone {
         return;
@@ -3824,6 +3836,11 @@ mod tests {
             Stance::Stand,
             "prone into a wall must be refused"
         );
+        // Every refused cmd raises `pm_flags` 0x8000; the next cmd starts
+        // clear.
+        assert!(ps.prone_blocked, "the refusal is announced");
+        tick(&mut ps, &PmInput::default(), &w, 1);
+        assert!(!ps.prone_blocked, "cleared once the press is gone");
 
         ps.yaw = 180f32.to_radians();
         tick(&mut ps, &prone, &w, 20);
@@ -3832,6 +3849,7 @@ mod tests {
             Stance::Prone,
             "prone with room behind must be taken"
         );
+        assert!(!ps.prone_blocked);
         assert!(
             normalize180(ps.prone_direction - 180.0).abs() < 0.01,
             "the body faces the view, at {}",
@@ -3887,6 +3905,36 @@ mod tests {
             ((ps.yaw.to_degrees() - ps.prone_direction).abs() - PRONE_YAWCAP).abs() < 0.01,
             "the view ends exactly on the cap"
         );
+    }
+
+    /// A swing the body does not fit in is refused, and announced through
+    /// `pm_flags` 0x8000 while the view sits past the cap (0x331c4).
+    #[test]
+    fn a_refused_swing_past_the_cap_raises_prone_blocked() {
+        // Lying facing +x, the body runs along -x; a wall 20 units off on -y
+        // stops it from turning toward +y.
+        let w = crate::collision::test_world(&[(
+            Vec3::new(-80.0, -60.0, -8.0),
+            Vec3::new(80.0, -20.0, 72.0),
+        )]);
+        let w = MoveWorld::bare(&w);
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.125), 0.0);
+        let prone = PmInput {
+            prone: true,
+            ..Default::default()
+        };
+        tick(&mut ps, &prone, &w, 20);
+        assert_eq!(ps.stance, Stance::Prone);
+        assert!(!ps.prone_blocked);
+        let mut blocked = false;
+        for _ in 0..200 {
+            // The cmd keeps asking for a view 100 degrees off the body.
+            ps.yaw = (ps.prone_direction + 100.0).to_radians();
+            pmove(&mut ps, &prone, &w, 0.05, &[]);
+            blocked |= ps.prone_blocked;
+        }
+        assert!(blocked, "the body stopped at {}", ps.prone_direction);
+        assert!(ps.prone_direction < 90.0, "the wall held the body");
     }
 
     /// A crawling player's body follows the view inside the soft edge, which

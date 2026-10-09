@@ -100,6 +100,26 @@ impl PredictedEvents {
     }
 }
 
+/// `CG_ItemPickup` (cgame 0x3001da80), reached from the three pickup
+/// events on the body the view rides (call at 0x3001e0ff): a weapon item picked up
+/// with no weapon selected becomes the selection, and the weapon name shows
+/// again. Returns that weapon. Items 1..=64 are configstring 7's weapons
+/// (docs/research/cod11-gsc-object-model.md, section 15).
+pub fn pickup_selects(
+    ev: &GameEvent,
+    view_body: Option<u32>,
+    nothing_selected: bool,
+) -> Option<u8> {
+    use vcod_common::net::event_ids::{EV_AMMO_PICKUP, EV_ITEM_PICKUP, EV_ITEM_PICKUP_QUIET};
+    let pickup = matches!(
+        ev.event,
+        EV_ITEM_PICKUP | EV_ITEM_PICKUP_QUIET | EV_AMMO_PICKUP
+    );
+    // A playerstate event rides the viewed body by construction.
+    let ours = view_body.is_some_and(|b| ev.entity_num == u32::MAX || ev.entity_num == b);
+    (pickup && ours && nothing_selected && (1..=64).contains(&ev.parm)).then_some(ev.parm as u8)
+}
+
 /// A predicted ring event in the form the snapshot drain gives the
 /// playerstate ring's (`EventTracker::drain`).
 pub fn game_event(pred: &Predicted, client_num: i32, event: i32, parm: i32) -> GameEvent {
@@ -123,6 +143,35 @@ mod tests {
     use crate::fx::registry::{EV_FIRE_WEAPON as FIRE, EV_PAIN as PAIN, EV_RELOAD as RELOAD};
 
     const PICKUP: i32 = 20;
+
+    #[test]
+    fn a_weapon_picked_up_empty_handed_becomes_the_selection() {
+        use vcod_common::net::event_ids::{EV_AMMO_PICKUP, EV_ITEM_PICKUP};
+        let ev = |event: i32, parm: i32, entity_num: u32| GameEvent {
+            event,
+            parm,
+            entity_num,
+            client_num: 3,
+            weapon: 0,
+            surf_type: 0,
+            pos: [0.0; 3],
+            dir: [0.0; 3],
+            other_entity_num: u32::MAX,
+            attacker_entity_num: -1,
+        };
+        let me = Some(3);
+        assert_eq!(pickup_selects(&ev(EV_ITEM_PICKUP, 6, 3), me, true), Some(6));
+        assert_eq!(
+            pickup_selects(&ev(EV_AMMO_PICKUP, 6, u32::MAX), me, true),
+            Some(6)
+        );
+        // Something already selected, health, another player, or no body.
+        assert_eq!(pickup_selects(&ev(EV_ITEM_PICKUP, 6, 3), me, false), None);
+        assert_eq!(pickup_selects(&ev(EV_ITEM_PICKUP, 68, 3), me, true), None);
+        assert_eq!(pickup_selects(&ev(EV_ITEM_PICKUP, 6, 5), me, true), None);
+        assert_eq!(pickup_selects(&ev(EV_ITEM_PICKUP, 6, 3), None, true), None);
+        assert_eq!(pickup_selects(&ev(FIRE, 6, 3), me, true), None);
+    }
     const FOOTSTEP: i32 = 1;
 
     fn tracking(at: i32) -> PredictedEvents {

@@ -8,7 +8,7 @@ use crate::movetrace::MoveWorld;
 use crate::net::flags::{
     EF_CROUCH, EF_MOUNTED, EF_MOUNTED_DUCK, EF_MOUNTED_PRONE, EF_MOUNTED_STAND, EF_PRONE,
     PM_DEAD_LINKED, PM_NORMAL, PM_NORMAL_LINKED, PMF_BACKWARDS_RUN, PMF_DUCKED, PMF_JUMP_HELD,
-    PMF_PRONE_DIVE,
+    PMF_PRONE_BLOCKED, PMF_PRONE_DIVE,
 };
 use crate::net::msg::{self, UserCmd};
 use crate::net::protocol::{ENTITYNUM_NONE, Protocol};
@@ -90,6 +90,7 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
     let pm_flags = int("pm_flags");
     ps.ducked = pm_flags & PMF_DUCKED != 0;
     ps.prone_dive = pm_flags & PMF_PRONE_DIVE != 0;
+    ps.prone_blocked = pm_flags & PMF_PRONE_BLOCKED != 0;
     ps.jump_latched = pm_flags & PMF_JUMP_HELD != 0;
     ps.since_jump_ms = command_time.wrapping_sub(int("jumpTime")) as f32;
     ps.jump_origin_z = float("fJumpPeak");

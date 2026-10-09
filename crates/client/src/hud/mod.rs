@@ -21,6 +21,7 @@ use crate::play::input::{EF_CROUCH, EF_PRONE};
 use vcod_common::localize::Localized;
 use vcod_common::net::NetEvent;
 use vcod_common::net::events::GameEvent;
+use vcod_common::net::flags::PMF_PRONE_BLOCKED;
 use vcod_common::net::msg::{ClientState, EntityState, HudElem, PlayerState};
 use vcod_common::net::protocol::Protocol;
 use vcod_common::pk3::Pk3Fs;
@@ -123,6 +124,10 @@ pub struct HudFrame<'a> {
     /// The key text a command is bound to, `None` while unbound.
     pub bound_key: &'a dyn Fn(&str) -> Option<String>,
     pub draw: DrawToggles,
+    /// Our pending weapon switch, the cgame's `cg.weaponSelect`
+    /// (0x301cbb0c) while it differs from `ps.weapon`; the weapon name shows
+    /// it while it is held.
+    pub weapon_select: Option<u8>,
 }
 
 /// `cg_drawCrosshair` and `cg_drawStatus`, read as the cgame's vmCvar
@@ -491,12 +496,22 @@ fn player_view<'a>(
             )
         }
     };
+    let held = match f.predicted {
+        Some(pred) => pred.ps.weapons_held,
+        None => u64::from(int("weapons[0]") as u32) | u64::from(int("weapons[1]") as u32) << 32,
+    };
+    let name_weapon = f
+        .weapon_select
+        .map(usize::from)
+        .filter(|&w| w < 64 && held & 1 << w != 0)
+        .unwrap_or(weapon);
     PlayerView {
         client_num: int("clientNum"),
         health: ps.health(),
         max_health: ps.max_health(),
         eflags,
         weapon: f.weapons.get(weapon).and_then(Option::as_ref),
+        name_weapon: f.weapons.get(name_weapon).and_then(Option::as_ref),
         turret: f.turret_weapon.and_then(|w| f.weapons.get(w)?.as_ref()),
         ammo,
         ammoclip,
@@ -523,7 +538,12 @@ fn player_view<'a>(
             count: int("damageCount"),
         },
         spawn_count: ps.arrays.stats[5],
-        prone_blocked: int("pm_flags") & 0x8000 != 0,
+        // The cgame reads it off the playerstate it predicts.
+        prone_blocked: f
+            .predicted
+            .map_or(int("pm_flags") & PMF_PRONE_BLOCKED != 0, |pred| {
+                pred.ps.prone_blocked
+            }),
     }
 }
 
@@ -567,7 +587,42 @@ mod tests {
             cvar: &|_| None,
             bound_key: &|_| None,
             draw: DrawToggles::default(),
+            weapon_select: None,
         }
+    }
+
+    /// The weapon name follows `cg.weaponSelect` while the playerstate
+    /// holds it, and the playerstate's weapon otherwise (0x30023c30).
+    #[test]
+    fn the_weapon_name_shows_the_held_selection() {
+        let p = &PROTOCOL_V1;
+        let mut ps = PlayerState::null(p);
+        let mut set = |name: &str, v: i32| {
+            ps.fields[PlayerState::field_index(p, name).expect(name)] = v;
+        };
+        set("weapon", 1);
+        set("weapons[0]", 0b110);
+        let def = |name: &str| {
+            Some(WeaponDef {
+                display_name: name.into(),
+                ..Default::default()
+            })
+        };
+        let weapons = [None, def("rifle"), def("pistol"), def("grenade")];
+        let (fs, loc, clients) = (Pk3Fs::empty(), Localized::default(), BTreeMap::new());
+        let named = |select: Option<u8>| {
+            let f = HudFrame {
+                weapons: &weapons,
+                weapon_select: select,
+                ..frame(&ps, None, &fs, &loc, &clients)
+            };
+            let v = player_view(&ps, &[], &f);
+            assert_eq!(v.weapon.map(|d| d.display_name.as_str()), Some("rifle"));
+            v.name_weapon.map(|d| d.display_name.clone())
+        };
+        assert_eq!(named(None).as_deref(), Some("rifle"));
+        assert_eq!(named(Some(2)).as_deref(), Some("pistol"));
+        assert_eq!(named(Some(3)).as_deref(), Some("rifle"), "not held");
     }
 
     #[test]

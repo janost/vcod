@@ -111,8 +111,9 @@ check.
 
 - Both binaries expect to sit next to `CoDMP.exe` and read `main/` (`uo/` with
   `--mod-dir uo`). `COD_DIR` overrides the install, `--game-dir` overrides
-  both. `pak0-4` are identical between 1.1 and 1.5, so a 1.5 install works as
-  the asset source; the netcode and RE notes are about the 1.1 binaries.
+  both. `pak1-4` are identical between 1.1 and 1.5 and `pak0` is not (its
+  checksum differs), so a 1.5 install works as the asset source but not on
+  a pure 1.1 server; the netcode and RE notes are about the 1.1 binaries.
 - Client modes: `vcod <map>` flies, `vcod <map> --walk` walks offline, bare
   `vcod` opens the stock main menu and browser, `vcod --connect ip:port`
   joins through the stock team menu (`--team spectator` spectates).
@@ -267,6 +268,11 @@ dropped, so test such a builtin through `ScriptRuntime`.
   `level.time`, and the entering cmd seeds `commandTime` inside that window.
 - Server commands queue until the next snapshot and squash like
   `SV_AddServerCommand` (rule in `docs/protocol-1.1.md`).
+- A pure server drops a client that enters the world without a valid `cp`
+  (pak checksums keyed with the gamestate's `checksumFeed`). Extra
+  arguments to `tools/run_server.sh` land after `+map`, so `+set sv_pure 1`
+  there leaves `sv_paks` empty yet still drops; pass it before the map to
+  test a pure server.
 - Cvars: every `L` cvar latches until the next load, so a latched
   `g_gametype` must not reach serverinfo early. `devmap` sets `sv_cheats 1`
   after the load and `map` sets it back. The server ignores an OOB

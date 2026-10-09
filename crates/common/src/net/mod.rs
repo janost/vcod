@@ -11,6 +11,7 @@ pub mod fields_v1;
 pub mod flags;
 pub mod gamestate;
 pub mod huffman;
+pub mod lan;
 pub mod master;
 pub mod msg;
 pub mod netchan;
@@ -80,14 +81,9 @@ impl UdpTransport {
                 .map_or(1, |d| d.as_nanos() as u64);
             netsim::NetSim::new(cfg, seed)
         });
-        // Retail's `Sys_IsLANAddress` (CoDMP.exe 0x464be0) as far as vcod
-        // tells it: loopback or an RFC 1918 address. A simulated network is
-        // never one.
-        let lan = sim.is_none()
-            && match sock.peer_addr()?.ip() {
-                std::net::IpAddr::V4(ip) => ip.is_loopback() || ip.is_private(),
-                ip => ip.is_loopback(),
-            };
+        // Retail's `Sys_IsLANAddress` (CoDMP.exe 0x464be0), which lets every
+        // frame send a packet. A simulated network is never one.
+        let lan = sim.is_none() && lan::is_lan(sock.peer_addr()?.ip());
         Ok(UdpTransport { sock, sim, lan })
     }
 
@@ -100,7 +96,7 @@ impl UdpTransport {
         }
     }
 
-    /// Whether the server is on this machine or a private network.
+    /// Whether the server is on this machine or its LAN (`Sys_IsLANAddress`).
     pub fn is_lan(&self) -> bool {
         self.lan
     }

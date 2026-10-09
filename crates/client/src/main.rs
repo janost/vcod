@@ -347,6 +347,13 @@ struct Args {
     /// the recipe. Refuses to replace a fixture without --overwrite-fixture.
     #[arg(long, value_name = "ROLE")]
     save_scripted: Option<String>,
+    /// With --net-probe: take the download path a joining client takes.
+    /// Every referenced pak no installed pak matches by checksum is fetched
+    /// into DIR/<game>/ (a scratch directory, never the install), named as
+    /// retail names it, then `donedl`; each prints its checksum beside the
+    /// server's `sv_referencedPaks` entry. Writes no fixture.
+    #[arg(long, value_name = "DIR")]
+    probe_download: Option<std::path::PathBuf>,
     /// Walk the --probe-slope route and write every usercmd sent and every
     /// snapshot's movement fields to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt,
@@ -824,6 +831,7 @@ fn main() -> Result<()> {
                 items: args.probe_items,
                 compass: args.probe_compass,
                 scripted: args.save_scripted.clone(),
+                download: args.probe_download.clone(),
             },
             args.capture_tag.clone(),
             args.overwrite_fixture,
@@ -983,7 +991,7 @@ fn main() -> Result<()> {
 
     let console = console::Console::new(&fs);
     // Retail keeps the favourites beside CoDMP.exe; vcod shares the file.
-    let ui = frontend::Ui::new(&fs).with_server_cache(args.game_dir.join("servercache.dat"));
+    let ui = new_ui(&fs, &args.game_dir, &args.mod_dir);
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
@@ -993,6 +1001,8 @@ fn main() -> Result<()> {
         game_dir: args.game_dir.clone(),
         mod_dir: args.mod_dir.clone(),
         fs_game: None,
+        fs_pure: None,
+        user_fs_game: None,
         connect_addr: args.connect.clone(),
         team: args.team.clone(),
         weapon: args.weapon.clone(),
@@ -1019,6 +1029,7 @@ fn main() -> Result<()> {
         render_ms: 0.0,
         fx_ms: 0.0,
         look_zoom: (1.0, false),
+        baked_gamma: None,
         hud,
         hud_ms: 0.0,
         localized,
@@ -1062,6 +1073,14 @@ fn gamma_cvar(shell: &mut console::shell::Shell) -> f32 {
     } else {
         g
     }
+}
+
+/// With `r_ignorehwgamma 1` retail has no device ramp and bakes `r_gamma`
+/// into textures as they load, so a change waits for `vid_restart`
+/// (docs/research/cod11-gamma.md). vcod keeps its final pass with the gamma
+/// latched here.
+fn baked_gamma(shell: &mut console::shell::Shell) -> Option<f32> {
+    (shell.cvar_f32("r_ignorehwgamma") != 0.0).then(|| gamma_cvar(shell))
 }
 
 /// `r_mode`'s size (Q3's mode table, which the stock video mode list picks
@@ -1166,18 +1185,22 @@ fn start_loading(
     // Same candidate order as the old blocking downloader; `MapLoader` caps it.
     let systeminfo = net.configstring(1).to_string();
     let exists = |rel: &std::path::Path| game_dir.join(rel).exists();
+    let dir_paths: Vec<std::path::PathBuf> = dirs.iter().map(|d| game_dir.join(d)).collect();
+    let local: Vec<i32> =
+        vcod_common::pk3::search_paks(&dir_paths.iter().map(|p| p.as_path()).collect::<Vec<_>>())
+            .iter()
+            .map(|p| p.checksum)
+            .collect();
+    let have = |c: i32| local.contains(&c);
     let candidates = if allow_download {
-        net::download::candidates_for_map(&systeminfo, &map, dirs, exists)
+        net::download::candidates_for_map(&systeminfo, &map, dirs, have, exists)
             .into_iter()
-            .filter_map(|name| {
-                let rel = net::download::safe_rel_path(&name, dirs)?;
-                Some((format!("{name}.pk3"), game_dir.join(rel)))
-            })
+            .map(|(name, rel)| (format!("{name}.pk3"), game_dir.join(rel)))
             .collect()
     } else {
         // `CL_InitDownloads` with autodownload off: warn, then load what is
         // there (docs/research/cod11-front-end.md, section 16).
-        let missing = net::download::missing_paks(&systeminfo, dirs, exists);
+        let missing = net::download::missing_paks(&systeminfo, dirs, have, exists);
         if !missing.is_empty() {
             log::warn!(
                 "You are missing some files referenced by the server:\n{}\n\
@@ -1190,6 +1213,14 @@ fn start_loading(
     Ok(Phase::Loading {
         loader: loading::MapLoader::new(map, candidates),
     })
+}
+
+/// The front end off `fs`, with the favourites file and the Mods menu's
+/// directory listing under `game_dir`.
+fn new_ui(fs: &Pk3Fs, game_dir: &std::path::Path, mod_dir: &str) -> frontend::Ui {
+    frontend::Ui::new(fs)
+        .with_server_cache(game_dir.join("servercache.dat"))
+        .with_mod_root(game_dir.to_path_buf(), mod_dir.to_string())
 }
 
 /// The search path's directories: `<game_dir>/<mod_dir>`, then the
@@ -1226,6 +1257,7 @@ fn allow_download(shell: &console::shell::Shell, systeminfo: &str) -> bool {
 fn reopen_fs(
     base: &std::path::Path,
     game: Option<&std::path::Path>,
+    pure: Option<&[i32]>,
     fs: &mut Pk3Fs,
     localized: &mut vcod_common::localize::Localized,
     menus: &mut hud::menu::MenuCache,
@@ -1234,7 +1266,7 @@ fn reopen_fs(
     fx: &mut fx::sim::FxSystem,
     quick_chat: &mut quick_chat::QuickChat,
 ) -> Result<()> {
-    *fs = Pk3Fs::open_layered(base, game)?;
+    *fs = Pk3Fs::open_search(base, game, pure)?;
     *localized = vcod_common::localize::Localized::load(fs);
     *menus = hud::menu::MenuCache::default();
     match hud {
@@ -1327,6 +1359,7 @@ fn loading_frame(
             cvar: &|_| None,
             bound_key: &|_| None,
             draw: hud::DrawToggles::default(),
+            weapon_select: None,
         };
         *hud_quads = hud.build(&f);
     }
@@ -1439,6 +1472,10 @@ struct App {
     mod_dir: String,
     /// The connection's systeminfo `fs_game`, layered over `mod_dir`.
     fs_game: Option<String>,
+    /// A pure server's `sv_paks`: only paks with these checksums load.
+    fs_pure: Option<Vec<i32>>,
+    /// The mod the Mods menu picked, the search path between servers.
+    user_fs_game: Option<String>,
     /// The last server connected to: the connecting screen's text and what
     /// `reconnect` reconnects to.
     connect_addr: Option<String>,
@@ -1477,6 +1514,10 @@ struct App {
     /// Last frame's fov over `cg_fov` and whether the view rides a mounted
     /// gun: the mouse's sensitivity scale ([`play::input::MouseLook`]).
     look_zoom: (f32, bool),
+    /// `r_ignorehwgamma` as of the last window start or `vid_restart`
+    /// (retail latches it): `Some` holds the `r_gamma` retail would have
+    /// baked into its textures then, `None` is the live device ramp.
+    baked_gamma: Option<f32>,
     hud: Option<hud::Hud>,
     hud_ms: f32,
     /// Menu labels; empty outside `--connect`.
@@ -1619,6 +1660,7 @@ impl App {
                     self.apply(event_loop, effects);
                 }
                 UiEffect::Sound(alias) => self.audio.play_local(&self.fs, &alias),
+                UiEffect::RunMod(game) => self.run_mod(game),
                 UiEffect::ExecOnCvar {
                     cvar,
                     value,
@@ -1765,6 +1807,7 @@ impl App {
                 }
                 Effect::Exec(file) => self.exec_file(event_loop, &file),
                 Effect::VidRestart => {
+                    self.baked_gamma = baked_gamma(&mut self.shell);
                     if let Some(w) = &self.window {
                         let (size, fullscreen) = video_mode(&self.shell);
                         w.set_fullscreen(
@@ -1854,16 +1897,27 @@ impl App {
         self.enter_menu(reason.as_deref());
     }
 
-    /// Back to the base search path after a server's `fs_game`. Retail keeps
-    /// the mod until the next systeminfo names another; vcod drops it with
-    /// the connection (docs/research/cod11-front-end.md, section 16).
+    /// Back to the player's own search path after a server's `fs_game` or
+    /// pure list. Retail keeps a server's mod until the next systeminfo names
+    /// another; vcod drops it with the connection
+    /// (docs/research/cod11-front-end.md, section 16).
     fn leave_fs_game(&mut self) {
-        if self.fs_game.take().is_none() {
+        self.switch_fs_game(self.user_fs_game.clone());
+    }
+
+    /// Reopens the search path over `game` (no pure list) and rebuilds the
+    /// front end off it, as retail's `FS_Restart` and UI reload do. Nothing
+    /// happens when that is the search path already.
+    fn switch_fs_game(&mut self, game: Option<String>) {
+        let pure = self.fs_pure.take();
+        if self.fs_game == game && pure.is_none() {
             return;
         }
-        let base = self.game_dir.join(&self.mod_dir);
+        self.fs_game = game;
+        let (base, game) = search_dirs(&self.game_dir, &self.mod_dir, &self.fs_game);
         match reopen_fs(
             &base,
+            game.as_deref(),
             None,
             &mut self.fs,
             &mut self.localized,
@@ -1877,9 +1931,24 @@ impl App {
                 if let Some(r) = &mut self.renderer {
                     r.reopen(&self.fs);
                 }
+                self.ui = new_ui(&self.fs, &self.game_dir, &self.mod_dir);
             }
             Err(e) => log::error!("cannot reopen {}: {e:#}", base.display()),
         }
+    }
+
+    /// The Mods menu's `RunMod` (and `Quake3` with `None`): `fs_game` and a
+    /// `vid_restart`, which brings the main menu back up off the mod's
+    /// paks. Refused in a game.
+    fn run_mod(&mut self, game: Option<String>) {
+        if matches!(self.mode, Mode::Online { .. }) {
+            console::log::print("Disconnect before switching mods.");
+            return;
+        }
+        log::info!("fs_game {}", game.as_deref().unwrap_or("(none)"));
+        self.user_fs_game = game.clone();
+        self.switch_fs_game(game);
+        self.enter_menu(None);
     }
 
     /// Drops the map, its sounds and effects, between servers.
@@ -2057,6 +2126,7 @@ impl ApplicationHandler for App {
             .with_title(&self.title)
             .with_inner_size(winit::dpi::LogicalSize::new(1600.0, 900.0));
         let (size, fullscreen) = video_mode(&self.shell);
+        self.baked_gamma = baked_gamma(&mut self.shell);
         if let Some(size) = size {
             attrs = attrs.with_inner_size(size);
         }
@@ -2386,8 +2456,13 @@ impl ApplicationHandler for App {
                 self.audio
                     .set_master_volume(self.shell.cvar_f32("mss_volume"));
                 let gamma = gamma_cvar(&mut self.shell);
+                let fullscreen = self
+                    .window
+                    .as_ref()
+                    .is_some_and(|w| w.fullscreen().is_some());
+                let overbright = gamma::overbright_bits(fullscreen, self.baked_gamma.is_none());
                 let Some(r) = &mut self.renderer else { return };
-                r.set_gamma(gamma);
+                r.set_gamma(self.baked_gamma.unwrap_or(gamma), overbright);
                 let aspect = r.aspect();
                 // Set inside the online arm where `self` is borrowed out
                 // field-by-field; acted on once the borrows end.
@@ -2576,21 +2651,29 @@ impl ApplicationHandler for App {
                             cmd_clock.reset();
                             ring.clear();
                             predictor.reset();
-                            // `CL_SystemInfoChanged` sets `fs_game`, and the
-                            // gamestate parse restarts the search path when it
-                            // changed (docs/research/cod11-front-end.md, section 16).
-                            let game = net::download::fs_game(net.configstring(1), &self.mod_dir);
-                            if game != self.fs_game {
+                            // `CL_SystemInfoChanged` sets `fs_game` and the
+                            // pure list, and the gamestate parse restarts the
+                            // search path when either changed
+                            // (docs/research/cod11-front-end.md, section 16).
+                            // A server with no `fs_game` sends no key, which
+                            // leaves the player's own mod in place.
+                            let game = net::download::fs_game(net.configstring(1), &self.mod_dir)
+                                .or_else(|| self.user_fs_game.clone());
+                            let pure = net::download::pure_paks(net.configstring(1));
+                            if game != self.fs_game || pure != self.fs_pure {
                                 log::info!(
-                                    "fs_game {}: restarting the search path",
-                                    game.as_deref().unwrap_or("(none)")
+                                    "fs_game {}{}: restarting the search path",
+                                    game.as_deref().unwrap_or("(none)"),
+                                    if pure.is_some() { ", pure server" } else { "" },
                                 );
                                 self.fs_game = game;
+                                self.fs_pure = pure;
                                 let (base, game) =
                                     search_dirs(&self.game_dir, &self.mod_dir, &self.fs_game);
                                 match reopen_fs(
                                     &base,
                                     game.as_deref(),
+                                    self.fs_pure.as_deref(),
                                     &mut self.fs,
                                     &mut self.localized,
                                     &mut self.menus,
@@ -2603,6 +2686,7 @@ impl ApplicationHandler for App {
                                         *menu_view = None;
                                         r.reopen(&self.fs);
                                         view.reopen();
+                                        self.ui = new_ui(&self.fs, &self.game_dir, &self.mod_dir);
                                     }
                                     Err(e) => fatal = Some(e),
                                 }
@@ -2713,6 +2797,7 @@ impl ApplicationHandler for App {
                                         match reopen_fs(
                                             &base,
                                             game.as_deref(),
+                                            self.fs_pure.as_deref(),
                                             &mut self.fs,
                                             &mut self.localized,
                                             &mut self.menus,
@@ -2741,7 +2826,26 @@ impl ApplicationHandler for App {
                                             self.window.as_deref(),
                                             &mut self.title,
                                         ) {
-                                            Ok(next) => *phase = next,
+                                            Ok(next) => {
+                                                *phase = next;
+                                                // `CL_DownloadsComplete` sends it
+                                                // after the cgame loads; a pure
+                                                // server drops a client without it.
+                                                let feed =
+                                                    net.gamestate().map_or(0, |g| g.checksum_feed);
+                                                net.send_reliable(&self.fs.pure_command(feed));
+                                                let t0 = Instant::now();
+                                                let rigs =
+                                                    view.prewarm(&self.fs, net.configstrings());
+                                                for models in &rigs {
+                                                    r.preload_viewmodel(&self.fs, models);
+                                                }
+                                                log::info!(
+                                                    "viewmodels: {} rigs preloaded in {:.0} ms",
+                                                    rigs.len(),
+                                                    t0.elapsed().as_secs_f64() * 1000.0
+                                                );
+                                            }
                                             Err(e) => fatal = Some(e),
                                         }
                                     }
@@ -3078,6 +3182,9 @@ impl ApplicationHandler for App {
                                             status: self.shell.cvar_f32("cg_drawStatus") as i32
                                                 != 0,
                                         },
+                                        weapon_select: input
+                                            .weapon_select()
+                                            .filter(|_| local_player),
                                     };
 
                                     // Events use the newest snapshot, not the interpolation
@@ -3149,6 +3256,18 @@ impl ApplicationHandler for App {
                                             }
                                             if let Some(hud) = &mut self.hud {
                                                 hud.on_game_event(&ev, &hud_frame);
+                                            }
+                                            let empty = input.weapon_select().is_none()
+                                                && newest.ps.field_i32(p, "weapon") == 0;
+                                            if let Some(w) = play::events::pickup_selects(
+                                                &ev,
+                                                ctx.view_body,
+                                                empty,
+                                            ) {
+                                                input.select(w);
+                                                if let Some(hud) = &mut self.hud {
+                                                    hud.weapon_selected();
+                                                }
                                             }
                                             self.audio.on_game_event(
                                                 &self.fs,
@@ -3721,6 +3840,7 @@ mod tests {
         fn reopen(&mut self, dir: &std::path::Path, fs: &mut Pk3Fs) {
             reopen_fs(
                 dir,
+                None,
                 None,
                 fs,
                 &mut self.localized,
