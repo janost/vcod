@@ -1244,6 +1244,31 @@ crates/gsc/tests/fixtures/semantics/client-probes/probe_entnum.gsc`. Retail,
 `d_350 303`, `e_400 300`, `f_450 304`; the deleted entity read `isdefined` 1
 at +0, +50 and +100 and 0 at +150; `movedone 3650 3800`.
 
+## probe_concnum
+
+`grenadeExplosionEffect`'s two entity numbers, for
+`docs/research/cod11-combat.md` 13.5. No client needed:
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PORT=29941 SECS=12 \
+    tools/run_probe.sh client-probes/probe_concnum mp_carentan
+```
+
+Retail, 2026-10-09: `a 1050 299`, `b 1050 302`, then one spawn a frame
+303..309, 300 at +400, 310..315, 301 at +750, 316 on. Against ours the
+table is `grenade_explosion_effect_takes_a_temp_and_a_concussion_number`
+(`crates/server/src/game/script.rs`).
+
+## probe_pushorder
+
+The area-tree order a mover's push leaves two players in, for
+`docs/research/cod11-movers.md` 12. mp_carentan under dm rules with two
+`--probe-team allies` clients; the recipe is in the header of
+`crates/server/tests/fixtures/movers/mp_carentan-dm-pushorder.txt`, the
+2026-10-09 run, which `crates/server/tests/push_order_ab.rs` replays. Both
+players go down in the slab's path, slot 0 then slot 1, and a flat
+`radiusDamage` after each `movey` reads the walk off the `cb` lines.
+
 ## probe_linkto2
 
 `linkTo`'s second round on mp_carentan. Once an allied player has spawned it
