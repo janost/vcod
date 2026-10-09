@@ -1773,11 +1773,14 @@ impl App {
 
     /// Leaves the server (`CL_Disconnect`) for the main menu, with
     /// `reason` in the error popup when the server or the load is what
-    /// ended it.
+    /// ended it. `Com_Error` localizes the reason as a message before it
+    /// reaches `com_errorMessage` (CoDMP.exe 0x435a40,
+    /// docs/research/cod11-front-end.md section 15).
     fn disconnect(&mut self, reason: Option<String>) {
         if let Mode::Online { net, .. } = &mut self.mode {
             net.disconnect();
         }
+        let reason = reason.map(|r| self.localized.message(&r));
         if let Some(reason) = &reason {
             log::error!("{reason}");
         }
@@ -2373,9 +2376,7 @@ impl ApplicationHandler for App {
                                     self.audio.play_local(&self.fs, "player_talk");
                                 }
                                 net::NetEvent::Print(s) => console::log::print(s),
-                                net::NetEvent::Dropped(why) => {
-                                    fatal = Some(anyhow!("disconnected: {why}"))
-                                }
+                                net::NetEvent::Dropped(why) => fatal = Some(anyhow!("{why}")),
                                 // Map ambient; each round restart re-sends it
                                 // with a new fade deadline, which is ignored.
                                 net::NetEvent::ConfigstringChanged(3) => {
