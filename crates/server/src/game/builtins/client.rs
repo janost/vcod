@@ -1778,7 +1778,7 @@ mod tests {
         });
         rt.run_frame(0);
         let e = rt.client_entity(0).unwrap();
-        rt.start_thread_for_test(e, "freeze", 0);
+        rt.start_thread_for_test(e, "freeze");
         rt.run_frame(50);
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
         assert_eq!(rt.client_field(0, "frozen").as_deref(), Some("1"));
