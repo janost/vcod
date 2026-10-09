@@ -81,6 +81,9 @@ pair must shade identically for the vertex-alpha cross-fade to read as one
 surface (mp_brecourt: 19 staged overlay soups over 65 implicit base soups).
 vcod applies its x2 overbright and fx-light term to `$lightmap` bundles in
 `fs_stage` for this reason (`shader.wgsl`).
+A stage with no `$lightmap` bundle takes that x2 itself unless it, or a
+later `$lightmap` stage, multiplies the framebuffer (`cod11-gamma.md`
+section 5).
 
 Sky: every stock MP map carries at least one sky-parms material among its soup
 materials (pinned by the corpus test's skyless assertion), and every stock
