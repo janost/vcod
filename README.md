@@ -225,6 +225,11 @@ missing.
   other entity models and the viewmodel pick their eight lights from the
   grid every frame, fx lights among them
   ([cod11-light-grid-and-leaf-lights.md](docs/research/cod11-light-grid-and-leaf-lights.md)).
+- The frame holds retail's framebuffer bytes and the gamma ramp doubles
+  it once at the end, as retail's hardware ramp did; windowed it draws
+  as retail's windowed mode does, with no doubling and lightmaps shifted
+  at load ([cod11-gamma.md](docs/research/cod11-gamma.md)). Entity models
+  draw only their first stage, lit, whatever their material says.
 - Only the ocean's `deformVertexes wave` moves; the other forms parse and do
   nothing. NV/ATI hardware-path stages are dropped, as retail did on cards
   without them. `$dlight` and the ship's deckflag have no file behind them,
