@@ -5874,12 +5874,13 @@ its own pmove selection, then steps and updates. The client steps
 per drawn player per rendered frame, off the lerped `apos`, `angles2[1]`,
 `eFlags` and the legs anim's record. GAP: neither side runs the controllers
 on a dying body (`eFlags & 1`): its `L[1]` is the legs' world yaw. What
-frame retail draws a dying body in was not read. GAP: ours sends
-`fTorsoHeight`, `fTorsoPitch` and `fWaistPitch` as 0. `BG_PlayerStateToEntityState`
-(0x2ce55..0x2cea3) copies them from `ps+0x3c4..0x3cc`, scaled by the view
-height lerp, only when prone. `BG_CheckProneValid`'s ground samples
-(0x2d428) write them, and pmove does not model those. Player `eFlags`
-0x400, which narrows the torso clamp to 45, is 16.5.
+frame retail draws a dying body in was not read. `fTorsoHeight`,
+`fTorsoPitch` and `fWaistPitch` come from `BG_CheckProneValid`'s ground
+samples and reach the entity through `BG_PlayerStateToEntityState`
+(0x2ce55..0x2cea3), scaled by the eye's leg, only when prone
+(cod11-mantle.md, "The ground samples"); ours sends them and poses its hit
+bodies with the entity's copy. Player `eFlags` 0x400, which narrows the
+torso clamp to 45, is 16.5.
 
 ### 16.5 `eFlags` 0x400, the trigger held
 

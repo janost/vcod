@@ -84,6 +84,11 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
     ps.prone_direction = float("proneDirection");
     ps.prone_direction_pitch = float("proneDirectionPitch");
     ps.prone_torso_pitch = float("proneTorsoPitch");
+    ps.prone_body = super::ProneBody {
+        torso_height: float("fTorsoHeight"),
+        torso_pitch: float("fTorsoPitch"),
+        waist_pitch: float("fWaistPitch"),
+    };
     ps.movement_dir = s8("movementDir");
     ps.bob_cycle = int("bobCycle") as u8;
 

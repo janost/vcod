@@ -5059,7 +5059,7 @@ impl Server {
                 // `BG_PlayerAnimation` (0x41486) runs after this slot's
                 // aim trace: a higher slot's trace meets this frame's
                 // pose, a lower one's met the last (combat doc 16.1).
-                sim.commit_pose(FRAME_MS, self.anims.as_deref());
+                sim.commit_pose(FRAME_MS, c.last_processed_st, self.anims.as_deref());
                 rt.set_client_body(slot, sim.hit_body(slot));
                 rt.set_client_dobj(slot, sim.dobj(slot));
                 rt.apply_turret_releases(slot, sim);

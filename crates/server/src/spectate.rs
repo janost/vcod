@@ -777,6 +777,17 @@ impl ClientSim {
     /// The entity's `eFlags`: `BG_PlayerStateToEntityState` copies
     /// `ps.eFlags` whole (0x2cd8b), then sets 0x1 on `pm_type > 5`
     /// (0x2cda6) and 0x200 on the sight flag, `pm_flags` 0x20 (0x2cdb6).
+    /// The entity's `fTorsoHeight`, `fTorsoPitch` and `fWaistPitch`, off the
+    /// same eye-leg stamp the playerstate carries.
+    fn entity_prone_body(&self, command_time: i32) -> pmove::ProneBody {
+        let lerp_time = if self.dead_eye {
+            0
+        } else {
+            self.view_lerp_start.unwrap_or(0)
+        };
+        self.ps.entity_prone_body(lerp_time, command_time)
+    }
+
     fn entity_eflags(&self) -> i32 {
         let dead = if self.wire_pm_type() > PM_INTERMISSION {
             EF_DEAD
@@ -1434,10 +1445,12 @@ impl ClientSim {
     pub fn commit_pose(
         &mut self,
         frametime_ms: i32,
+        command_time: i32,
         anims: Option<&vcod_common::animtree::PlayerAnims>,
     ) {
         use vcod_common::playerpose::{BG_SWING_SPEED, BodyInput, BodySlope};
         let legs = self.anim.legs();
+        let body = self.entity_prone_body(command_time);
         let input = BodyInput {
             view: self.view_angles,
             movement_dir: self.ps.movement_dir as f32,
@@ -1458,12 +1471,12 @@ impl ClientSim {
             torso_start_ms: self.anim.torso_start_ms(),
             input,
             angles,
-            // `fTorsoHeight`, `fTorsoPitch` and `fWaistPitch` come from
-            // `BG_CheckProneValid`'s ground samples, which pmove does not
-            // model, so they stay 0 as this server sends them.
+            // The entity's copy, which the controllers read (combat doc 16.4).
             slope: BodySlope {
                 lean: self.ps.lean / vcod_common::pmove::LEAN_MAX,
-                ..Default::default()
+                torso_height: body.torso_height,
+                torso_pitch: body.torso_pitch,
+                waist_pitch: body.waist_pitch,
             },
             turret_leaves: self.gunner_leaves.clone(),
         };
@@ -1576,6 +1589,12 @@ impl ClientSim {
             "leanf",
             (self.ps.lean / vcod_common::pmove::LEAN_MAX).to_bits() as i32,
         );
+        // How the prone body bends over the ground (mantle doc, "The ground
+        // samples").
+        let body = self.entity_prone_body(command_time);
+        set("fTorsoHeight", body.torso_height.to_bits() as i32);
+        set("fTorsoPitch", body.torso_pitch.to_bits() as i32);
+        set("fWaistPitch", body.waist_pitch.to_bits() as i32);
         set("pos.trType", trajectory::TR_LINEAR_STOP);
         // The time the position was simulated at, not the frame's: retail's
         // capture has trTime 2 to 18 ms behind the snapshot's serverTime,
@@ -1728,6 +1747,10 @@ impl ClientSim {
                 "proneTorsoPitch",
                 self.ps.prone_torso_pitch.to_bits() as i32,
             );
+            let body = self.ps.prone_body;
+            set("fTorsoHeight", body.torso_height.to_bits() as i32);
+            set("fTorsoPitch", body.torso_pitch.to_bits() as i32);
+            set("fWaistPitch", body.waist_pitch.to_bits() as i32);
             // 8 bits on the wire, so a leftward angle travels as its
             // unsigned byte; `angles2[1]` on the entity carries the signed
             // value as a float.
