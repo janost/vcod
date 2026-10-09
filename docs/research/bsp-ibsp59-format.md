@@ -374,9 +374,8 @@ vcod: `crates/common/src/patch.rs` ports the generation and the capsule, point a
 | `HALF_WIDTH` | 15 | CoD bbox `(-15, -15, 0)..(15, 15, height)` |
 | `HEIGHT_STAND / CROUCH / PRONE` | 70 / 50 / 30 | CoD |
 | `VIEW_STAND / CROUCH / PRONE` | 60 / 40 / 11 | CoD viewheights; `standViewHeight = 60` is corroborated in `player-model-anim-system.md` |
-| `LEAN_MAX` | 28 | RTCW-MP `bg_pmove.c` `LEAN_MAX 28.0f` (eye offset in units; roll is lean / 2 degrees) |
-| `LEAN_TIME_TO_MS` | 340 | VERIFIED live 2026-09-01: the retail server's `ps.leanf` ramps 0 to -1 at 0.1429 per snapshot, every snapshot, over two captures, which is full lean in 339-345 ms (`--net-probe --save-motion`). Was 280, attributed to RTCW-SP `bg_pmove.c`; RTCW-MP has 200 |
-| `LEAN_TIME_FROM_MS` | 350 | UNVERIFIED, and not measurable the same way: the retail server's `leanf` never returns to centre when the lean bit clears, so the return is the client's own prediction. RTCW-MP has 300 |
+| `LEAN_TIME_TO_MS` | 350 | game.mp rodata 0x70c60, `PM_UpdateLean`'s ramp out ("Lean" below). The live capture of 2026-09-01 read `leanf` climbing 0.1429 a snapshot, which is 50/350; it was read as 340 before the binary was |
+| `LEAN_TIME_FROM_MS` | 280 | game.mp rodata 0x70c5c, the ramp back ("Lean" below); the retail server does ease `leanf` back to 0 (the 2026-10-09 `probe_freeze` motion run read -1, 0, 1 across `lean_left`, `center`, `lean_right`) |
 
 The friction/accelerate/jump rows were re-sourced from the retail binaries
 during the water/ladder work: the dedicated server's rodata table
@@ -391,6 +390,66 @@ this paragraph used to call absent is in the walk cmd scale, not the mover:
 `pmove::wish` applies it.
 Water and ladder mechanics are documented in `pmove.rs`'s constant blocks with
 their sources; the full retail ladder constants live in `cod11-mantle.md`.
-The lean code is RTCW's `PM_UpdateLean` with two deliberate differences: CoD
-leans while moving, so the `!cmd->forwardmove` gate is dropped, and prone
-blocks leaning outright.
+The lean is retail's `PM_UpdateLean`, below.
+
+### Lean
+
+VERIFIED, symbols and calls in `game.mp.i386.so` (file addresses):
+`PM_UpdateLean` (0x32ac8) is the last call of `PM_UpdateViewAngles`
+(0x33377, and 0x32deb in its dead arm), which `PmoveSingle` calls at
+0x340fc, ahead of the stance and the ground trace.
+
+- `ps.leanf` (`ps+0x40`) runs -1 (left) to 1 (right). VERIFIED, the netfield
+  and the clamps below.
+- Input. VERIFIED, 0x32adc-0x32b19: the keys count (`wbuttons` 0x10 left,
+  0x20 right, both cancel) only with `pm_flags` 0x4000 clear, `pm_type` 5 or
+  below, and `groundEntityNum` not 1023 unless `pm_type` is 1 (linked); then
+  `eFlags & 0xc000` (a mounted gun) zeroes them. INFERRED: a player in the
+  air, on a gun or dead only eases back.
+- The stance scale. VERIFIED, 0x32b1b-0x32b88: 0.25 (rodata 0x70c54) when
+  `pm_flags` 1, or `viewHeightLerpTarget` (`ps+0xd8`) equals
+  `proneViewHeight`, or the eye is lerping (`viewHeightLerpTime` non-zero)
+  up (`viewHeightLerpDown` 0) to `crouchViewHeight`; else 0.5 (0x70c58) when
+  `pm_flags` 2 or the eye is lerping to `crouchViewHeight`; else 1.
+- The ramp. VERIFIED, the divisors: the step out is `msec / 350 * scale`
+  (0x70c60) and the step back `msec / 280 * scale` (0x70c5c). INFERRED, off
+  the branches at 0x32bd0-0x32c4c: out stops at `±scale` and back at 0, a
+  lean held past the stance's limit (one carried into a crouch or prone)
+  snaps to the limit, and with no key it only eases. So prone leans, to a
+  quarter; vcod used to block it.
+- The wall clamp. VERIFIED, 0x32c63-0x32d50: unless `pm_type` is 1, with
+  `leanf` non-zero, a trace through `pm->trace` from the eye
+  (`origin + viewHeightCurrent`) to `AddLeanToPosition(eye, yaw, ±1, 16, 20)`
+  (rodata 0x70c68, 0x70c64) with mins -8 and maxs 8 (0x70c6c, 0x70c70) and
+  mask 0x2810011, then `|leanf|` is held to `UnGetLeanFraction(fraction)`.
+- `GetLeanFraction` (0x6ba64) is `(2 - |f|) * f`, `UnGetLeanFraction`
+  (0x6ba80) `1 - sqrt(1 - f)`. VERIFIED.
+- `AddLeanToPosition(pos, yaw, leanf, roll, dist)` (0x6ba9c). VERIFIED: with
+  `f = GetLeanFraction(leanf)` it builds the angles `(0, yaw, f * roll)`,
+  takes their right vector and adds it times `f * dist`. Every caller passes
+  16 and 20: `G_AddLean` (0x42f3c, rodata 0x73130/0x7312c) for shots,
+  swings, throws and the use and look traces; the server's
+  `SV_BuildClientSnapshot` for the PVS eye (cod_lnxded 0x808f2a9-0x808f2d4,
+  rodata 0x80d6484/0x80d6488); and the cgame's view (below). A full lean
+  puts the eye 19.2 units to the side and 5.5 down. RTCW's 28 units straight
+  sideways is not CoD's.
+- The view. VERIFIED, cgame_mp_x86.dll: `CG_OffsetFirstPersonView`
+  (0x30032ae0) ends with `AddLeanToPosition(refdef.vieworg,
+  refdefViewAngles[1], predicted leanf, 16, 20)` (0x30032dbe-0x30032dda;
+  the cgame's copy is at 0x3003f4e0), and `CG_InterpolatePlayerState` lerps
+  `leanf` between snapshots (0x3002936a). VERIFIED: the refdef's roll
+  (0x302095d4) is written only by the copies of the predicted
+  `viewangles[2]` (0x3003343b, 0x30033527), the add of the offset
+  0x30012cb0 returns (0x30032b9c) and the add at 0x30018057. INFERRED, off
+  their inputs: 0x30012cb0 is the damage kick and 0x30017f00 the earthquake
+  shake. INFERRED: **a lean moves the eye and never rolls the view**; the
+  roll in `AddLeanToPosition` only tips the offset down. VERIFIED, 0x30033413:
+  the intermission arm (`pm_type` 5) copies the view and skips
+  `CG_OffsetFirstPersonView`.
+
+vcod: `pmove::update_lean` is the function above, `pmove::aim::lean_offset`
+is `AddLeanToPosition` with 16 and 20, and `PlayerState::view`,
+`combat::muzzle_point`, `ClientSim::eye_origin` and the playing client's
+camera all add it. The walk mode draws no lean roll. Not modelled: the
+viewmodel's own lean offset (cgame 0x30036990, `(1 - fWeaponPosFrac) *
+f * 1.6` along a right vector rolled `f * -2` degrees).
