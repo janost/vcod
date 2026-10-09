@@ -5701,7 +5701,14 @@ An idle one sets the torso's two only while `firing`.
 
 **Torso yaw.** VERIFIED, 0x2b100..0x2b189, `BG_SwingAngles(dest, 0, clamp,
 bg_swingSpeed, ...)`. The speed is the cvar's value (`bg_swingSpeed + 8`,
-default 0.2 in `crates/server/src/cvars/registry.rs`). Destination and
+default 0.2 in `crates/server/src/cvars/registry.rs`). cgame registers its
+own copy: the cvar table row at 0x30075420 is the vmCvar 0x301d94a0, name
+`bg_swingSpeed`, default `"0.2"`, flags 0x200 (`CVAR_CHEAT`). VERIFIED. The
+server's is cheat protected too: an rcon `bg_swingSpeed 1` on retail
+printed `bg_swingSpeed is cheat protected.` VERIFIED by capture
+(2026-10-09). vcod reads the level's value once per end frame
+(`Server::tick`, into `commit_pose`) and the client's console value each
+drawn frame (`EntityScene::swing_speed`). Destination and
 clamp by case, first match:
 
 | case | destination | clamp |
