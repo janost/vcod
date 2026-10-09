@@ -4,7 +4,7 @@
 
 struct Camera {
     view_proj: mat4x4<f32>,
-    time_pad: vec4<f32>, // .x = seconds since start; yzw reserved
+    time_pad: vec4<f32>, // .x seconds since start; .y identityLight
     // xyz view origin; w fog mode: 0 off, 1 GL_EXP, 2 GL_LINEAR (configstring 12)
     eye_fog_mode: vec4<f32>,
     // rgb fog colour, a density (GL_EXP)
@@ -129,7 +129,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let tex = textureSample(t_diffuse, s_diffuse, in.uv);
     // same alpha-test threshold as the map's masked materials
     if (tex.a < 0.5) { discard; }
-    // the display doubles the framebuffer
-    let rgb = tex.rgb * in.light * 2.0;
+    let rgb = tex.rgb * in.light;
     return vec4<f32>(mix(rgb, camera.fog_color_density.rgb, fog_amount(in.world_pos)), 1.0);
 }

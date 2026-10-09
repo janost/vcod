@@ -32,10 +32,10 @@ const _: () = assert!(std::mem::size_of::<VmVert>() == 52);
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const MSAA_SAMPLES: u32 = 4;
-/// Every pass draws into this; the gamma pass maps it onto the swapchain.
-/// Float so the per-draw overbright x2 keeps retail's framebuffer range
-/// above the display's white (docs/research/cod11-gamma.md, section 4).
-pub const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// Every pass draws retail's framebuffer bytes into this, blending and
+/// clamping in the same byte space; the gamma pass maps it onto the
+/// swapchain (docs/research/cod11-gamma.md, section 4).
+pub const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// `Camera` in shader.wgsl: proj, time, eye/fog tail, view forward, model.
 const CAMERA_FLOATS: usize = 52;
 const CAMERA_BYTES: u64 = (CAMERA_FLOATS * 4) as u64;
@@ -560,15 +560,15 @@ pub const STAGE_FLAG_EYE_OFFSET: u32 = 256;
 /// Sky dome draws only: fog applies in exp mode, never in linear mode
 /// (RTCW-MP tr_main.c R_SetFog sets drawsky per mode).
 pub const STAGE_FLAG_SKY: u32 = 512;
-/// `rgbGen vertex` halves the vertex rgb by identityLight; `exactVertex`
+/// `rgbGen vertex` scales the vertex rgb by identityLight; `exactVertex`
 /// stays raw (RTCW-MP tr_shade.c CGEN_VERTEX vs CGEN_EXACT_VERTEX).
 pub const STAGE_FLAG_VERTEX_RGB_HALF: u32 = 1024;
 /// deformVertexes wave: displace vertices along their normals by
 /// StageParams.wave = [base, amp, phase + t * rate, spread].
 pub const STAGE_FLAG_DEFORM_WAVE: u32 = 2048;
-/// The stage's colour is a framebuffer value that retail's gamma ramp
-/// doubles on display: fs_stage multiplies its rgb by 2 (see [`overbright`]).
-pub const STAGE_FLAG_OVERBRIGHT: u32 = 4096;
+/// The tint rgb scales by identityLight, which the camera uniform carries:
+/// `identityLighting`, `constLighting` and `wave` (0x4ffa60).
+pub const STAGE_FLAG_TINT_LIGHT: u32 = 4096;
 
 /// Per-stage draw parameters, one dynamic-offset slot per stage batch. WGSL
 /// mirror is `StageParams` in shader.wgsl; byte offsets:
@@ -622,29 +622,24 @@ fn stage_params(shader: &Shader, idx: usize, t: f32) -> Option<StageParams> {
     }
 
     let mut rgb = [1.0f32; 3];
-    // Retail runs one overbright bit (RTCW-MP tr_image.c: identityLight =
-    // 1/(1 << overbrightBits)), which halves the gens that read back through
-    // the vertex-colour path; identity, const and exactVertex pass through
-    // unscaled (tr_shade.c CGEN switch).
-    const IDENTITY_LIGHT: f32 = 0.5;
+    // identityLight (1 / (1 << overbrightBits)) scales the lit gens in the
+    // shader; identity, const and exactVertex pass through unscaled
+    // (docs/research/cod11-gamma.md, section 5).
     match &st.rgb_gen {
         RgbGen::Vertex => {
             flags |= STAGE_FLAG_VERTEX_RGB | STAGE_FLAG_VERTEX_RGB_HALF;
         }
         RgbGen::ExactVertex => flags |= STAGE_FLAG_VERTEX_RGB,
         RgbGen::Identity => {}
-        RgbGen::IdentityLighting => rgb = [IDENTITY_LIGHT; 3],
+        RgbGen::IdentityLighting => flags |= STAGE_FLAG_TINT_LIGHT,
         RgbGen::Const(c) => rgb = *c,
         RgbGen::ConstLighting(c) => {
-            rgb = [
-                c[0] * IDENTITY_LIGHT,
-                c[1] * IDENTITY_LIGHT,
-                c[2] * IDENTITY_LIGHT,
-            ]
+            flags |= STAGE_FLAG_TINT_LIGHT;
+            rgb = *c;
         }
         RgbGen::Wave(w) => {
-            let v = wave_value(w, t) * IDENTITY_LIGHT;
-            rgb = [v, v, v];
+            flags |= STAGE_FLAG_TINT_LIGHT;
+            rgb = [wave_value(w, t); 3];
         }
     }
     let alpha = match &st.alpha_gen {
@@ -667,8 +662,7 @@ fn stage_params(shader: &Shader, idx: usize, t: f32) -> Option<StageParams> {
             let tb1 = b1.map_or([0.0; 4], |b| bundle_turb(&b.tcmods, t));
             [tb0[0], tb0[1], tb1[0], tb1[1]]
         },
-        // Retail writes these as colour bytes; the float scene target no
-        // longer clamps them, so an overshooting wave must be clamped here.
+        // Retail writes these as colour bytes (Q3's EvalWaveFormClamped).
         tint: [rgb[0], rgb[1], rgb[2], alpha].map(|c| c.clamp(0.0, 1.0)),
         flags,
         _pad: [0; 3],
@@ -693,36 +687,8 @@ fn stage_params(shader: &Shader, idx: usize, t: f32) -> Option<StageParams> {
         flags |= STAGE_FLAG_DEFORM_WAVE;
         p.wave = [w.base, w.amp, w.phase + t * w.freq, *spread];
     }
-    if overbright(shader, idx) {
-        flags |= STAGE_FLAG_OVERBRIGHT;
-    }
     p.flags = flags;
     Some(p)
-}
-
-/// Whether stage `idx` takes the display doubling itself. vcod's frame holds
-/// retail's displayed colour, which is the framebuffer doubled by the gamma
-/// ramp (docs/research/cod11-gamma.md, section 5). A `$lightmap` bundle
-/// already carries that x2, and so does a later lightmap stage that
-/// multiplies the framebuffer; a stage that multiplies the framebuffer
-/// itself (source factor zero or dst colour) scales what is already there.
-fn overbright(shader: &Shader, idx: usize) -> bool {
-    let multiplies = |st: &vcod_common::shader::Stage| {
-        matches!(
-            st.blend,
-            Some((BlendFactor::Zero | BlendFactor::DstColor, _))
-        )
-    };
-    let lightmapped =
-        |st: &vcod_common::shader::Stage| st.bundles.iter().any(|b| b.image == ImageRef::Lightmap);
-    let Some(st) = shader.stages.get(idx) else {
-        return false;
-    };
-    !lightmapped(st)
-        && !multiplies(st)
-        && !shader.stages[idx + 1..]
-            .iter()
-            .any(|later| multiplies(later) && lightmapped(later))
 }
 
 /// A frame-indexed set of bind groups: one per animMap frame, or a single
@@ -1508,6 +1474,9 @@ pub struct Renderer {
     hud: HudTextPass,
     hud_pass: HudPass,
     gamma: GammaPass,
+    /// Retail's `identityLight` for the current overbright bits
+    /// (`gamma::identity_light`): what lit colours are scaled by.
+    identity_light: f32,
     /// The texture gamma table images load through (`gamma::bake_image`),
     /// set before a world load while `r_ignorehwgamma` is 1.
     image_gamma: Option<[u8; 256]>,
@@ -1973,6 +1942,7 @@ impl Renderer {
             hud,
             hud_pass,
             gamma,
+            identity_light: 0.5,
             image_gamma: None,
             hud_quad_cap_warned: false,
             shaders,
@@ -2650,11 +2620,13 @@ impl Renderer {
                 self.fx.textures.insert(quad.shader.clone(), bg);
             }
 
+            let k = colour_scale(self.shader_lib.get(&quad.shader), self.identity_light);
+            let [r, g, b, a] = quad.rgba;
             for i in 0..4 {
                 verts.push(FxVert {
                     pos: quad.verts[i],
                     uv: quad.uvs[i],
-                    rgba: quad.rgba,
+                    rgba: [r * k, g * k, b * k, a],
                 });
             }
             match runs.last_mut() {
@@ -2671,7 +2643,9 @@ impl Renderer {
         self.fx.runs = runs;
     }
 
-    /// The sim already truncates to `MAX_LIGHTS`; an empty slice zeroes every slot.
+    /// The frame's scene lights (at most `MAX_SCENE_LIGHTS`), nearest the
+    /// camera first: entity picks see all of them, the world shader the
+    /// first `MAX_LIGHTS`. An empty slice zeroes every slot.
     pub fn set_fx_lights(&mut self, lights: &[FxLight]) {
         self.dynamic.scene_lights = entity_light::scene_lights(lights);
         let uniform = FxLightsUniform::from_lights(lights);
@@ -2718,7 +2692,10 @@ impl Renderer {
             let rgba = if quad.texture == "black" {
                 [0.0, 0.0, 0.0, quad.rgba[3]]
             } else {
-                hud_colour(quad.rgba)
+                hud_colour(
+                    quad.rgba,
+                    colour_scale(self.shader_lib.get(&quad.texture), self.identity_light),
+                )
             };
 
             for i in 0..4 {
@@ -2863,7 +2840,7 @@ impl Renderer {
             let key = origin.to_array().map(f32::to_bits);
             raw.light_set = *seen.entry(key).or_insert_with(|| {
                 let l = lighting.entity_lights(*origin, &d.scene_lights);
-                sets.push(entity_light::pack(&l, None));
+                sets.push(entity_light::pack(&l, None, self.identity_light));
                 sets.len() as u32 - 1
             });
         }
@@ -2886,6 +2863,7 @@ impl Renderer {
     /// bits (`gamma::overbright_bits`); applied from the next frame.
     pub fn set_gamma(&mut self, gamma: f32, overbright: u32) {
         self.gamma.set_gamma(&self.queue, gamma, overbright);
+        self.identity_light = crate::gamma::identity_light(overbright);
     }
 
     /// The `r_gamma` textures bake in from the next `load_world` (retail
@@ -2998,10 +2976,18 @@ impl Renderer {
         let mut camera = [0.0f32; CAMERA_FLOATS];
         camera[..16].copy_from_slice(&frame.view_proj.to_cols_array());
         camera[16] = frame.time;
+        camera[17] = self.identity_light;
         if self.fog.set {
             let f = &self.fog.live;
             camera[20..24].copy_from_slice(&[frame.eye.x, frame.eye.y, frame.eye.z, f.mode()]);
-            camera[24..28].copy_from_slice(&[f.color[0], f.color[1], f.color[2], f.density]);
+            // GL_FOG_COLOR carries identityLight (0x4d2ad0); the clear doesn't.
+            let il = self.identity_light;
+            camera[24..28].copy_from_slice(&[
+                f.color[0] * il,
+                f.color[1] * il,
+                f.color[2] * il,
+                f.density,
+            ]);
             camera[28..32].copy_from_slice(&[f.near, f.far, 0.0, 0.0]);
         } else {
             camera[20..24].copy_from_slice(&[frame.eye.x, frame.eye.y, frame.eye.z, 0.0]);
@@ -3236,7 +3222,7 @@ impl Renderer {
                 let lights = match self.dynamic.lighting.as_mut() {
                     Some(l) => {
                         let picked = l.entity_lights(draw.light_origin, &self.dynamic.scene_lights);
-                        entity_light::pack(&picked, Some(to_view))
+                        entity_light::pack(&picked, Some(to_view), self.identity_light)
                     }
                     None => GpuLightSet::default(),
                 };
@@ -3764,18 +3750,27 @@ fn create_fx_pass(
 /// first; if that file is missing the other extensions are probed too, since
 /// weapon `killIcon`s say `.tga` while the art ships as `.dds`
 /// (docs/research/cod11-hud-protocol.md, section 2).
-/// A HUD colour is a display value, as retail multiplies it into the
-/// texel in gamma space. The texture samples decode sRGB and the target
-/// re-encodes, so the rgb goes in linearised; alpha stays a coverage weight.
-fn hud_colour([r, g, b, a]: [f32; 4]) -> [f32; 4] {
-    let lin = |c: f32| {
-        if c <= 0.04045 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    [lin(r), lin(g), lin(b), a]
+/// What a quad's vertex colour is scaled by on its way into the
+/// framebuffer, from the material's first stage: the lit gens (`vertex`,
+/// `identityLighting`, `constLighting`, `wave`) take `identityLight`,
+/// `identity`, `exactVertex` and `const` none. A material with no script is
+/// implicit 2D or fx, `rgbGen vertex` (0x4fc440 case -4); see
+/// docs/research/cod11-gamma.md, section 5.
+fn colour_scale(shader: Option<&Shader>, identity_light: f32) -> f32 {
+    match shader
+        .and_then(|sh| sh.stages.first())
+        .map(|st| &st.rgb_gen)
+    {
+        Some(RgbGen::Identity | RgbGen::ExactVertex | RgbGen::Const(_)) => 1.0,
+        _ => identity_light,
+    }
+}
+
+/// A HUD colour is a display value; `scale` (`colour_scale`) takes it into
+/// the framebuffer, and the ramp's overbright doubling brings a lit gen back
+/// on display. Alpha is a coverage weight.
+fn hud_colour([r, g, b, a]: [f32; 4], scale: f32) -> [f32; 4] {
+    [r * scale, g * scale, b * scale, a]
 }
 
 fn resolve_fx_path(
@@ -4591,9 +4586,9 @@ fn upload_vm_model(
 
 fn wgpu_format(f: assets::TextureFormat) -> wgpu::TextureFormat {
     match f {
-        assets::TextureFormat::Bc1RgbaUnormSrgb => wgpu::TextureFormat::Bc1RgbaUnormSrgb,
-        assets::TextureFormat::Bc2RgbaUnormSrgb => wgpu::TextureFormat::Bc2RgbaUnormSrgb,
-        assets::TextureFormat::Bc3RgbaUnormSrgb => wgpu::TextureFormat::Bc3RgbaUnormSrgb,
+        assets::TextureFormat::Bc1RgbaUnorm => wgpu::TextureFormat::Bc1RgbaUnorm,
+        assets::TextureFormat::Bc2RgbaUnorm => wgpu::TextureFormat::Bc2RgbaUnorm,
+        assets::TextureFormat::Bc3RgbaUnorm => wgpu::TextureFormat::Bc3RgbaUnorm,
     }
 }
 
@@ -4672,7 +4667,7 @@ fn upload_rgba(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
@@ -4822,13 +4817,35 @@ mod tests {
     }
 
     #[test]
-    fn hud_colour_linearises_rgb_and_keeps_alpha() {
-        assert_eq!(hud_colour([0.0, 1.0, 0.0, 0.6]), [0.0, 1.0, 0.0, 0.6]);
-        let [r, _, _, a] = hud_colour([0.5, 0.0, 0.0, 0.5]);
-        assert!((r - 0.2140).abs() < 1e-4, "{r}");
-        assert_eq!(a, 0.5);
-        // The console background, `constLighting 0.15`.
-        assert!((hud_colour([0.15; 4])[0] - 0.0196).abs() < 1e-4);
+    fn hud_colour_scales_rgb_by_identity_light_and_keeps_alpha() {
+        assert_eq!(hud_colour([0.0, 1.0, 0.5, 0.6], 0.5), [0.0, 0.5, 0.25, 0.6]);
+        assert_eq!(hud_colour([0.15; 4], 1.0), [0.15; 4]);
+    }
+
+    /// Lit gens and implicit materials take identityLight; identity,
+    /// exactVertex and const draw their colour as it is (0x4ffa60).
+    #[test]
+    fn colour_scale_follows_the_first_stage_gen() {
+        let with = |rgb_gen: RgbGen| Shader {
+            name: "t".into(),
+            stages: vec![Stage {
+                bundles: vec![],
+                blend: None,
+                depth_write: None,
+                alpha_func: None,
+                rgb_gen,
+                alpha_gen: AlphaGen::Identity,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(colour_scale(None, 0.5), 0.5);
+        assert_eq!(colour_scale(Some(&with(RgbGen::Vertex)), 0.5), 0.5);
+        assert_eq!(colour_scale(Some(&with(RgbGen::ExactVertex)), 0.5), 1.0);
+        assert_eq!(colour_scale(Some(&with(RgbGen::Identity)), 0.5), 1.0);
+        assert_eq!(
+            colour_scale(Some(&with(RgbGen::IdentityLighting)), 1.0),
+            1.0
+        );
     }
 
     #[test]
@@ -5127,7 +5144,6 @@ mod tests {
                 | STAGE_FLAG_VERTEX_RGB
                 | STAGE_FLAG_VERTEX_RGB_HALF
                 | STAGE_FLAG_VERTEX_ALPHA
-                | STAGE_FLAG_OVERBRIGHT
         );
         assert_eq!(p.vec0_s, [1.0, 0.0, 0.0, 0.0]);
         assert_eq!(p.vec0_t, [0.0, 1.0, 0.0, 0.0]);
@@ -5173,15 +5189,12 @@ mod tests {
         let p = stage_params(&sh, 0, 123.0).unwrap();
         let rv = vcod_common::shader::wave_value(&rgb_wave, 123.0);
         let av = vcod_common::shader::wave_value(&a_wave, 123.0);
-        // rgb wave rides the identityLight halving; alpha waves do not
-        assert!(
-            (p.tint[0] - rv * 0.5).abs() < 1e-6 && (rv - 1.5).abs() < 1e-3,
-            "{p:?}"
-        );
-        assert_eq!(p.tint[1], rv * 0.5);
-        assert_eq!(p.tint[2], rv * 0.5);
+        // the rgb wave clamps to a colour byte and scales by identityLight
+        // in the shader; alpha waves do not
+        assert!((rv - 1.5).abs() < 1e-3, "{rv}");
+        assert_eq!(p.tint[..3], [1.0; 3]);
         assert!((p.tint[3] - av).abs() < 1e-6 && (av - 0.25).abs() < 1e-6);
-        assert_eq!(p.flags, STAGE_FLAG_OVERBRIGHT);
+        assert_eq!(p.flags, STAGE_FLAG_TINT_LIGHT);
     }
 
     #[test]
@@ -5210,22 +5223,25 @@ mod tests {
             // ExactVertex routes through the vertex-colour flag like Vertex
             assert_eq!(
                 p.flags,
-                (u32::from(rgb == RgbGen::ExactVertex) * STAGE_FLAG_VERTEX_RGB)
-                    | STAGE_FLAG_OVERBRIGHT
+                u32::from(rgb == RgbGen::ExactVertex) * STAGE_FLAG_VERTEX_RGB
             );
         }
     }
 
-    /// One overbright bit halves identityLighting, constLighting and
-    /// rgbGen vertex; identity, const and exactVertex pass through
-    /// (RTCW-MP tr_shade.c CGEN switch, identityLight = 1/(1<<overbrightBits)).
+    /// identityLighting and constLighting take identityLight in the
+    /// shader; const passes through (0x4ffa60's colour switch).
     #[test]
-    fn stage_params_identity_light_halves_the_lighting_gens() {
-        let cases: &[(RgbGen, [f32; 3])] = &[
-            (RgbGen::IdentityLighting, [0.5; 3]),
-            (RgbGen::ConstLighting([0.6, 0.65, 0.7]), [0.3, 0.325, 0.35]),
+    fn stage_params_identity_light_flags_the_lighting_gens() {
+        let cases: &[(RgbGen, [f32; 3], u32)] = &[
+            (RgbGen::IdentityLighting, [1.0; 3], STAGE_FLAG_TINT_LIGHT),
+            (
+                RgbGen::ConstLighting([0.6, 0.65, 0.7]),
+                [0.6, 0.65, 0.7],
+                STAGE_FLAG_TINT_LIGHT,
+            ),
+            (RgbGen::Const([0.6, 0.65, 0.7]), [0.6, 0.65, 0.7], 0),
         ];
-        for (rgb, want) in cases {
+        for (rgb, want, flags) in cases {
             let sh = Shader {
                 name: "test/il".into(),
                 stages: vec![Stage {
@@ -5246,62 +5262,8 @@ mod tests {
             };
             let p = stage_params(&sh, 0, 9.0).unwrap();
             assert_eq!(p.tint[..3], want[..], "{rgb:?}");
+            assert_eq!(p.flags, *flags, "{rgb:?}");
         }
-    }
-
-    /// The display doubling lands once per colour that reaches the screen:
-    /// on a blended or additive stage, on the base of a texture-only chain,
-    /// and not where a `$lightmap` (x2 already) or a filter stage carries it.
-    #[test]
-    fn overbright_doubles_each_framebuffer_colour_once() {
-        let stage = |image: ImageRef, blend: Option<(BlendFactor, BlendFactor)>| Stage {
-            bundles: vec![Bundle {
-                image,
-                anim: None,
-                clamp: false,
-                tcmods: vec![],
-                vector: None,
-            }],
-            blend,
-            depth_write: None,
-            alpha_func: None,
-            rgb_gen: RgbGen::IdentityLighting,
-            alpha_gen: AlphaGen::Identity,
-        };
-        let tex = || ImageRef::Path("a".into());
-        let filter = Some((BlendFactor::DstColor, BlendFactor::Zero));
-        let add = Some((BlendFactor::One, BlendFactor::One));
-        let blend = Some((BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha));
-        let flags = |stages: Vec<Stage>| -> Vec<bool> {
-            let sh = Shader {
-                name: "test/ob".into(),
-                stages,
-                ..Default::default()
-            };
-            (0..sh.stages.len())
-                .map(|i| stage_params(&sh, i, 0.0).unwrap().flags & STAGE_FLAG_OVERBRIGHT != 0)
-                .collect()
-        };
-        // texture, then the lightmap multiplies the framebuffer
-        assert_eq!(
-            flags(vec![
-                stage(tex(), None),
-                stage(ImageRef::Lightmap, filter.clone())
-            ]),
-            [false, false]
-        );
-        // lightmap first, the texture multiplies it, a glow adds on top
-        assert_eq!(
-            flags(vec![
-                stage(ImageRef::Lightmap, None),
-                stage(tex(), filter),
-                stage(tex(), add),
-            ]),
-            [false, false, true]
-        );
-        // a vertex-lit surface's single stage and a blended decal
-        assert_eq!(flags(vec![stage(tex(), None)]), [true]);
-        assert_eq!(flags(vec![stage(tex(), blend)]), [true]);
     }
 
     /// Every WGSL module parses and validates, so a shader edit fails here
@@ -5351,7 +5313,7 @@ mod tests {
             ..Default::default()
         };
         let p = stage_params(&sh, 0, 1.0).unwrap();
-        assert_eq!(p.flags, STAGE_FLAG_ALPHAFUNC_LT128 | STAGE_FLAG_OVERBRIGHT);
+        assert_eq!(p.flags, STAGE_FLAG_ALPHAFUNC_LT128);
         assert_eq!(p.uv1, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
         assert_eq!(p.turb01[2..], [0.0, 0.0]);
         assert_eq!(p.vec1_s, [0.0; 4]);

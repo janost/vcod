@@ -149,31 +149,50 @@ the clamp.
 
 ## 4. What vcod does
 
-vcod's frame holds retail's full-screen displayed colour, the framebuffer
-doubled by the ramp's one overbright bit; section 5 says where that x2
-lands. So its frame at gamma 1 stands for retail's display at gamma 1.
-Every pass draws into an `Rgba16Float` scene target
-(`renderer::SCENE_FORMAT`), so a doubled colour keeps retail's framebuffer
-range up to 2.0 (retail's framebuffer 1.0) instead of clipping at the
-display's white, and blends see the unclipped value as retail's
-framebuffer does. `gamma.wgsl` then maps every frame onto the swapchain
-through a 512-entry table indexed by the frame's sRGB-encoded value
-`e = k / 255`, `k` in 0..512 (`crate::gamma::display_table`):
+vcod's frame holds retail's framebuffer bytes. Every pass draws into an
+`Rgba8Unorm` scene target (`renderer::SCENE_FORMAT`); textures upload as
+`Rgba8Unorm` and `Bc1`..`Bc3RgbaUnorm`, with no sRGB decode, and vertex
+colours are raw bytes, so products, blends, fog and the clamp at 1.0 all
+happen in byte space as in retail's GL 1.x framebuffer. `gamma.wgsl` then
+maps every frame onto the swapchain through retail's 256-entry table
+(`gamma::ramp(r_gamma, overbrightBits)`), indexed by the framebuffer byte,
+and linearises the result for the sRGB swapchain. So the display doubling
+happens once, at the end, as retail's hardware ramp does it:
 
 - `overbrightBits` 1 (full screen with device gamma,
-  `gamma::overbright_bits`): entry `k` is the shifted ramp's entry `k/2`,
-  odd entries the mean of the two around it. Below gamma 1 the values over
-  1.0 show as retail's framebuffer bytes 128..255 do, as distinct shades.
-- `overbrightBits` 0 (windowed, or `r_ignorehwgamma 1`): entry `k` is the
-  unshifted ramp's entry `min(k, 255)`; the framebuffer byte is the display
-  byte, and retail's framebuffer clamps at 1.0.
+  `gamma::overbright_bits`): the shifted ramp. Below gamma 1 framebuffer
+  bytes 128..255 show as distinct shades, as in retail.
+- `overbrightBits` 0 (windowed, or `r_ignorehwgamma 1`): the unshifted
+  ramp; the framebuffer byte is the display byte.
 
-At gamma 1 both tables are the identity up to 1.0 and clamp above it.
+`identityLight` (`gamma::identity_light`, 0.5 or 1) follows the same bits
+every frame and rides the camera uniform (`time_pad.y`), so the lighting
+switches with the window as retail's does at its `vid_restart`:
+
+- Lightmaps: raw full screen; windowed, doubled and scaled back by the
+  brightest channel (`lightmap_shift` in `shader.wgsl`, section 3's
+  `0x4d9af0`). vcod shifts the filtered sample in the shader; retail
+  shifts texels at load.
+- Stage gens (section 5): `vertex` scales the vertex colour by
+  `identityLight`, `identityLighting`, `constLighting` and `wave` scale the
+  tint (`STAGE_FLAG_VERTEX_RGB_HALF`, `STAGE_FLAG_TINT_LIGHT`); `identity`,
+  `exactVertex` and `const` draw raw, so windowed shows them at half the
+  full-screen brightness, as in retail.
+- Props: the baked colours are computed at `identityLight` 0.5
+  (`static_light.rs`) and the vertex shader rescales them by
+  `2 * identityLight`, clamped at 1. Entity and viewmodel light sets are
+  rescaled the same way before GL's clamp (`entity_light::pack`).
+- Fog colour: `identityLight * rgb` (`0x4d2ad0`, section 5); the clear
+  colour stays raw.
+- HUD and fx quads: the vertex colour is scaled by the material's first
+  stage gen (`renderer::colour_scale`): a material with no script is
+  implicit 2D or fx and takes `rgbGen vertex`, so `identityLight`.
+- Sky farbox and sun: `identityLight` (section 5).
+
 `r_gamma` is read every frame and clamped to 0.5..3 with the write-back of
-step 4, so the slider is live as in retail; the full-screen test reads the
-window's state each frame. The stage tint (`rgbGen`/`alphaGen` wave and
-const) is clamped to 0..1, the colour bytes retail writes, since the float
-target no longer clamps it.
+step 4, so the slider is live as in retail. The stage tint
+(`rgbGen`/`alphaGen` wave and const) is clamped to 0..1, the colour bytes
+retail writes.
 
 `r_ignorehwgamma` is read at start-up and on `vid_restart` (latched). While
 it is 1 the frame pass runs the gamma 1 table, and each world load reads
@@ -182,19 +201,16 @@ unshifted ramp before upload (`gamma::bake_image`): material images,
 shader-stage images, prop and model skins and fx sprites. DDS images, the
 dlight blob, lightmaps and HUD images keep their bytes, as in retail.
 
-Memory and cost: the 4x MSAA colour target is 8 bytes a sample instead of
-4 (about 66 MB at 1920x1080 against 33 MB), plus an 8-byte-a-pixel resolve
-target, and the full-screen pass now runs every frame at gamma 1 too.
-
 Divergences:
 
-- vcod's lighting does not follow `overbrightBits`: windowed, it keeps the
-  full-screen x2 of section 5 instead of retail's hue-keeping lightmap
-  shift at load, and so draws `identity`, `exactVertex` and `const` stages
-  at the full-screen brightness, twice retail's windowed one.
-- The x2 rides each draw in linear space, and the float target never clamps
-  at retail's framebuffer 1.0 (vcod 2.0 encoded): a filter over additive
-  stages that passed it multiplies the unclamped sum.
+- 4x MSAA resolves to the 8-bit target; retail ran without it.
+- vcod's implicit vertex-lit world surfaces multiply the raw vertex colour
+  in both modes. INFERRED: retail does the same, since `0x4d9af0` is called
+  only for lightmap pages (section 3); the BSP vertex-colour load is not
+  traced.
+- The HUD and fx scale is picked from the material's first stage; a
+  scripted material whose later stages use other gens is drawn with the
+  first one's. Debug text (F3) draws raw.
 - `r_ignorehwgamma 1` bakes on every RGBA image the paths above load; retail
   skips images uploaded at their native size without mipmaps (section 3),
   which covers shaders marked `nomipmaps`. A `vid_restart` does not reload
@@ -232,22 +248,51 @@ So a framebuffer colour is either a texture times a raw lightmap, or a
 texture times a gen that `identityLight` already halved, and the display
 shows each of them doubled. INFERRED from the switch and section 3.
 
-vcod does the doubling per draw instead of in a final pass:
+- VERIFIED: the 2D shader registrations (refexport `0x4fca80`, mipmapped,
+  and `0x4fcae0`, no mipmaps) call `0x4fc5c0` with lightmap index -4 (the
+  push at `0x4fcabc`); the console and font atlases (`0x4de850`,
+  `"font/%s_%d_1024_%d.tga"`) register with -4 too. The implicit-shader
+  builder `0x4fc440`, case -4, gives stage 0 `rgbGen vertex` (6),
+  `alphaGen vertex` and state 0x10065. Its other cases: -1 (model skin)
+  gen 10, state 0x100100; -3 gen 5 (exactVertex); -2 gen 1 on the white
+  image; a lightmap index gen 2.
+- VERIFIED: `RE_SetColor` (`0x4ddcf0`) stores `colour * 255` as bytes with
+  no `identityLight` (`0x568ec0` is 255.0f); `0x4d7390` copies them to
+  `backEnd.color2D` (`0x16d8e74`), which the stretch-pic path (push at
+  `0x4d75ad`) writes into the vertex colours (`0x4d73a0`,
+  `0x4d74ac`-`0x4d74c1`). So an implicit 2D quad lands at
+  `colour >> overbrightBits` and shows at its nominal colour. INFERRED:
+  text draws through the same stretch-pic path, as in Q3TA.
+- VERIFIED, `hud.shader` (`pak0.pk3`): 43 of 44 stages say `rgbGen
+  vertex`; `ui/assets/hudbar*` say `identity`, so they show doubled;
+  `black` is `const`, `console` is `constLighting`. The `fonts/` entries
+  sit inside a `/* */` comment, so fonts are implicit.
+- VERIFIED: `constLighting` multiplies its constant by `identityLight` at
+  parse (`0x4f8e96`-`0x4f8eb2`, the keyword at `0x547c34`); plain `const`
+  does not.
+- VERIFIED: a stage with no `rgbGen` defaults to `identityLighting` (1)
+  when its source blend is 0, 2 or 5 and to `identity` (2) otherwise
+  (`0x4f9a0a`-`0x4f9a32`). INFERRED: that is Q3's `ParseStage` rule (no
+  blend, `GL_ONE`, `GL_SRC_ALPHA`).
+- VERIFIED: the farbox drawer `0x4e68e0` binds the six skyParms images
+  (`0x11e67f4`) and sets `glColor3f(identityLight x3)`
+  (`0x4e6ad3`-`0x4e6ade`) before its quads. INFERRED: with the modulate
+  texture env the sky lands halved and shows at its texture colour.
+  VERIFIED, `sun.shader`: the sun discs are `rgbGen identityLighting`, the
+  flares `rgbGen vertex`.
+- VERIFIED, `fxshaders/*.shader` in `pak5.pk3`: 185 stages, each with an
+  explicit `rgbGen`; 166 `vertex`, 19 `exactVertex`, the latter all
+  `blendFunc GL_ONE GL_ONE` (`gfx/effects/explosion/*`,
+  `gfx/effects/fire/*`, `gfx/effects/misc/signal_flash`), which show
+  doubled. Where the efx renderer's vertex colours come from is not traced.
+- VERIFIED: `0x4d2ad0`, called by the fog setter `0x4d28e0`, sets
+  `GL_FOG_COLOR` to `identityLight * rgb` with alpha raw, and to black when
+  `(glState & 0xf0) == 0x20`. INFERRED: that is destination blend `GL_ONE`,
+  so additive stages fog to black. VERIFIED: `glClearColor` takes the raw
+  fog colour (`0x16c4c50`), and `identityLight * 0.5` with no fog and fast
+  sky (`0x568e70` is 0.5f).
 
-- The implicit lightmapped path and a `$lightmap` bundle multiply the
-  lightmap by 2 (`shade` and `fs_stage` in `shader.wgsl`). Vertex-lit
-  surfaces and props multiply their vertex colour by 2.
-- A scripted stage with no `$lightmap` bundle takes the x2 itself
-  (`STAGE_FLAG_OVERBRIGHT`, `renderer::overbright`) unless it multiplies
-  the framebuffer (source factor zero or dst colour) or a later stage
-  multiplies the framebuffer with a `$lightmap` bundle, which carries the
-  x2 for the whole chain. Before this, `identityLighting`, `constLighting`,
-  `vertex` and `wave` stages on surfaces with no lightmap drew at half
-  retail's brightness.
-- Doubling per draw no longer clamps at the display's 1.0 (retail's
-  framebuffer 0.5): the float scene target of section 4 keeps the value up
-  to the final pass, so a blend over a bright background sees what
-  retail's framebuffer held.
-- Effects (`fx.wgsl`), the sky farbox, entity models and the HUD keep
-  their own scales; how retail colours those is not traced here.
-
+vcod applies this in its final pass and per gen (section 4). Before
+2026-10-09 it doubled each draw instead, in linear space, which drew
+lightmapped surfaces at about `2^(1/2.2)`, 1.37 times, rather than twice
+the framebuffer; that is gone.

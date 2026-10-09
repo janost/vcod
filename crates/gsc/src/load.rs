@@ -232,7 +232,7 @@ mod tests {
 
         let mut host = TestHost::default();
         let f = vm.func_ref("maps/mp/mp_pavlov", "main");
-        vm.call_now(&mut host, 0, f, None, vec![]).unwrap();
+        vm.call_now(&mut host, f, None, vec![]).unwrap();
         assert!(host.calls.iter().any(|(n, _)| n == "loaded"));
     }
 
@@ -253,7 +253,7 @@ mod tests {
 
         let mut host = TestHost::default();
         let f = vm.func_ref("maps/mp/b", "cb");
-        assert!(vm.call_now(&mut host, 0, f, None, vec![]).is_ok());
+        assert!(vm.call_now(&mut host, f, None, vec![]).is_ok());
     }
 
     #[test]
@@ -340,7 +340,7 @@ mod tests {
         // "a" must still be marked loaded and still installed/callable.
         let f = vm.func_ref("a", "main");
         assert!(
-            vm.call_now(&mut TestHost::default(), 0, f, None, vec![])
+            vm.call_now(&mut TestHost::default(), f, None, vec![])
                 .is_ok()
         );
     }

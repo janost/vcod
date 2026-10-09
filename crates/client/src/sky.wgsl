@@ -4,7 +4,7 @@
 
 struct Camera {
     view_proj: mat4x4<f32>,
-    time_pad: vec4<f32>, // .x = seconds since start; yzw reserved
+    time_pad: vec4<f32>, // .x seconds since start; .y identityLight
     // xyz view origin; w fog mode: 0 off, 1 GL_EXP, 2 GL_LINEAR (configstring 12)
     eye_fog_mode: vec4<f32>,
     // rgb fog colour, a density (GL_EXP)
@@ -54,7 +54,9 @@ fn vs_main(in: VsIn) -> VsOut {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    var c = textureSample(t_side, s_side, in.uv);
+    // The farbox draws under glColor3f(identityLight) (0x4e68e0).
+    let t = textureSample(t_side, s_side, in.uv);
+    var c = vec4<f32>(t.rgb * camera.time_pad.y, t.a);
     // Linear farclip fog never touches the sky (RTCW drawsky=false); exp does.
     if (camera.eye_fog_mode.w == 1.0) {
         let f = 1.0 - exp(-camera.fog_color_density.a * fog_depth(in.world_pos));
@@ -77,8 +79,9 @@ fn vs_sun(in: VsIn) -> VsOut {
 @fragment
 fn fs_sun(in: VsOut) -> @location(0) vec4<f32> {
     var c = textureSample(t_side, s_side, in.uv);
-    // Additive glow; fogged exactly like the farbox.
-    var rgb = c.rgb * c.a;
+    // Additive glow, `rgbGen identityLighting` (sun.shader); fogged exactly
+    // like the farbox.
+    var rgb = c.rgb * c.a * camera.time_pad.y;
     if (camera.eye_fog_mode.w == 1.0) {
         let f = 1.0 - exp(-camera.fog_color_density.a * fog_depth(in.world_pos));
         rgb = mix(rgb, camera.fog_color_density.rgb, f);

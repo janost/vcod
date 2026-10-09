@@ -4061,7 +4061,7 @@ list below. INFERRED: the ordering and the conditions in it.
   read here says what reads it. VERIFIED: no link call follows its spawn
   (0x53f6f..0x53fcb) and `Concussive_think` has none. INFERRED: it never
   reaches the wire, and what it costs is an entity number for 700 ms (14.7,
-  "Entity numbers").
+  "Entity numbers"); 13.5's probe measured the 700 on the same entity.
 
 ### 13.3 What is not on this path
 
@@ -4146,6 +4146,37 @@ detonating on it. vcod traces against live player boxes and applies that
 damping; the arm itself is out.
 
 ---
+
+### 13.5 `grenadeExplosionEffect`, the script explode
+
+VERIFIED, `game.mp.i386.so`: the builtin table entry `grenadeexplosioneffect`
+points at `0x5aea4` (`tools/re/dump_builtins.py`, entry 71). It reads its one
+vector with `Scr_GetVector(0)`, adds 1.0 to z (`fld1` at `0x5aec6`), calls
+`G_TempEntity(origin, 0xB2)` (`0x5aeda`), writes `DirToByte((0, 0, 1))` into
+its `eventParm` (`0x5af00`, `+0xa0`), runs `trap_Trace(origin, 0, 0, down,
+0x3FF, 0x11)` (`0x5af43`) with `down` the raised origin less `17.0` (`.rodata
+0x778EC`) on z, writes `(tr.surfaceFlags >> 20) & 0x1F` into the temp
+entity's `surfType` (`0x5af53`, `+0x88`), and calls `Concussive_fx(origin)`
+(`0x5af61`). VERIFIED, `Concussive_fx` (`0x54840`): `G_Spawn`, the origin
+into `r.currentOrigin`, `think` `Concussive_think`, `nextthink` `level.time +
+100` and `+0x274` `(float)level.time + 500.0` (`.rodata 0x75B74`), the same
+entity 13.2's `G_ExplodeMissile` builds inline, with no link. INFERRED: unlike
+`G_ExplodeMissile` it packs a fixed up normal rather than the trace's and
+has no water test, and it damages nothing. VERIFIED: the stock paks' only
+mention is a comment in `maps/_fx.gsc` (`pak4.pk3`) saying it was removed.
+
+VERIFIED, `client-probes/probe_concnum.gsc` on the retail 1.1d Linux server,
+mp_carentan, 2026-10-09: a spawn read 299, the call, a spawn 302; one spawn a
+frame after it read 303..309 through +350, 300 at +400, 310..315 through
++700, 301 at +750 and 316 on. INFERRED: the temp entity took 300 and the
+concussion entity 301; the first went back to the free list on the +350
+pass (the temp entity rule of 14.7, "Entity numbers") and the second on the
++700 one (`Concussive_think` passes `+0x274` on +600 and frees on +700).
+
+vcod: `builtins::fx::grenade_explosion_effect` raises the temp entity through
+`GameHost::add_temp_entity` and calls `GameHost::spawn_concussive`.
+`grenade_explosion_effect_takes_a_temp_and_a_concussion_number`
+(`crates/server/src/game/script.rs`) is the probe's table.
 
 ## 14. `G_RadiusDamage` and `CanDamage`
 
@@ -4987,12 +5018,13 @@ vcod: `ObjectTable::spawn` and `free` are the free list.
 snapshot build sends every live temp entity at its number each frame, and
 `GameHost::run_temp_entity` frees it on its turn of the pass.
 `GameHost::spawn_concussive` is 13.2's concussion entity, spawned after each
-blast walk and freed by `ThinkFn::Concussive`.
+blast walk and by `grenadeExplosionEffect` (13.5), and freed by
+`ThinkFn::Concussive`.
 `a_temp_entity_takes_a_spawn_number_and_frees_it_past_300_ms` and
 `a_delete_s_free_runs_after_the_threads_of_its_frame`
 (`crates/server/src/game/script.rs`) are the probe's two halves; against
-`vcod-server` it now reads as retail does, 50 ms earlier throughout (ours
-wakes the `wait 1` after `Callback_StartGameType` at 1000, retail at 1050).
+`vcod-server` it reads line for line as retail does, times included
+(`cod11-gsc-language.md`, "The script clock").
 
 **Other callers.** VERIFIED: `trap_EntitiesInBox` is also called by
 `G_TouchTriggers` (`0x3f925`, mask `0x405c0008`), `G_GetActivateEnt`
@@ -5116,7 +5148,9 @@ script `spawn`; an item at `G_SpawnItem`, `LaunchItem`, its taking and its
 respawn; any `origin` write on an entity with no client
 (`Host::set_field`, which is how `Scr_SetOrigin`, an item's flight and its
 drop to the floor link); a mover once a frame while it moves, at its clip
-pose. `notSolid`/`solid` on a `script_brushmodel` write the contents
+pose, as an unlink and a link (`mover::run_one`, `G_MoverPush`'s 0x55315 and
+0x553ae); what a push lists, as `G_MoverPush` relinks it
+(`crate::push::push`, cod11-movers.md 12). `notSolid`/`solid` on a `script_brushmodel` write the contents
 without a link (`AreaTree::set_contents`), as `trigger_hurt` and
 `trigger_use` do at their spawn; a delete and a free unlink. The walks:
 both blast walks take their candidates from `entities_in_box` over the
@@ -5140,8 +5174,7 @@ Not routed through the tree: a linked client's per-frame relink in
 `Reached_ScriptMover` make at a move's ends, and an entity whose box
 touches no BSP leaf, which `SV_LinkEntity` unlinks
 (the leaf count at 0x8090c68, the unlink at 0x8090c84). Not walking it yet: `G_GetActivateEnt` (the use key; sorted
-by score, so the order reaches it only through ties), `G_TryPushingEntity`
-(a mover's push, mask 0x2000180), `G_KillBox`, `positionWouldTelefrag` and
+by score, so the order reaches it only through ties), `G_KillBox`, `positionWouldTelefrag` and
 the two trigger-damage walks. vcod delivers the `"touch"` and `"trigger"`
 notifies at the top of the next script frame in the order they were
 raised, and runs their waiters in thread age, so the log lines above come

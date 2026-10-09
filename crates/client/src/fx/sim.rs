@@ -10,7 +10,11 @@ use vcod_common::pk3::Pk3Fs;
 
 pub const MAX_PARTICLES: usize = 2048;
 pub const MAX_DECALS: usize = 256;
+/// Fx lights the world shader takes, nearest the camera (vcod's own world
+/// dlight term).
 pub const MAX_LIGHTS: usize = 8;
+/// `RE_AddLightToScene`'s queue (0x4e9b00): later lights in a frame drop.
+pub const MAX_SCENE_LIGHTS: usize = 32;
 
 // Bullet tracers are hardcoded in the retail client, not an `.efx`:
 // CG_Tracer @ cgame_mp_x86.dll 0x30039590, CG_DrawTracer @ 0x300390c0.
@@ -765,8 +769,9 @@ impl FxSystem {
         out
     }
 
-    /// Live Light-kind particles as point lights, nearest `cam_pos` first,
-    /// capped at `MAX_LIGHTS`.
+    /// Live Light-kind particles as point lights: the first
+    /// `MAX_SCENE_LIGHTS` in spawn order, as retail queues them while it
+    /// draws, then sorted nearest `cam_pos` first.
     pub fn lights(&self, cam_pos: Vec3, now: f32) -> Vec<FxLight> {
         let mut candidates: Vec<(f32, FxLight)> = self
             .particles
@@ -786,9 +791,9 @@ impl FxSystem {
                     },
                 )
             })
+            .take(MAX_SCENE_LIGHTS)
             .collect();
         candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
-        candidates.truncate(MAX_LIGHTS);
         candidates.into_iter().map(|(_, l)| l).collect()
     }
 
@@ -1020,6 +1025,28 @@ mod tests {
         let lights = s.lights(Vec3::ZERO, 0.0);
         let xs: Vec<f32> = lights.iter().map(|l| l.pos[0]).collect();
         assert_eq!(xs, vec![5.0, 20.0, 50.0]);
+    }
+
+    /// Retail's scene queue keeps the first 32 lights added, near or far.
+    #[test]
+    fn lights_keep_the_first_32_spawned() {
+        let mut e = simple_emitter();
+        e.kind = "Light".into();
+        let mut s = FxSystem::new();
+        for i in 0..40 {
+            s.spawn_effect_for_test(
+                Effect {
+                    emitters: vec![e.clone()],
+                },
+                SpawnAt::Point {
+                    pos: Vec3::new(1000.0 - i as f32, 0.0, 0.0),
+                },
+                0.0,
+            );
+        }
+        let lights = s.lights(Vec3::ZERO, 0.0);
+        assert_eq!(lights.len(), MAX_SCENE_LIGHTS);
+        assert_eq!(lights[0].pos[0], 1000.0 - 31.0);
     }
 
     #[test]

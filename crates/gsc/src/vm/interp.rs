@@ -1072,7 +1072,7 @@ mod tests {
         vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
-        vm.call_now(&mut host, 0, main, None, vec![])
+        vm.call_now(&mut host, main, None, vec![])
             .map_err(|e| e.kind)
     }
 

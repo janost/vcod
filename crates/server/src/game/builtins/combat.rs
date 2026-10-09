@@ -855,7 +855,7 @@ mod tests {
         };
         rt.place_client(0, [0.0, 0.0, 0.0]);
         let victim = rt.client_entity(0).expect("the client has an entity");
-        rt.start_thread_for_test(victim, "mine", 0);
+        rt.start_thread_for_test(victim, "mine");
         rt.run_frame(0);
 
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
@@ -1376,7 +1376,7 @@ mod tests {
             };
             rt.place_client(slot, [x, 0.0, 0.0]);
         }
-        for t in (100..=3000).step_by(50) {
+        for t in (100..=3050).step_by(50) {
             rt.run_frame(t);
         }
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());

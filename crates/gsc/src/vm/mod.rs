@@ -467,15 +467,9 @@ pub struct Vm {
     /// it, `Call`/`CallPtr` included, so unbounded recursion is caught the
     /// same as an unbounded loop.
     budget: u32,
-    /// The clock a `Suspend::Wait` hit during an immediate run resolves
-    /// against: set by `run_frame` on entry, and by `start_thread` and
-    /// `call_now` before their own immediate runs, so a `wait` a thread's
-    /// first instructions hit -- whether stepped by `run_frame` or by a
-    /// fresh `start_thread`/`call_now` call before any `run_frame` has
-    /// ever run -- always sees the real clock, never the `0` this
-    /// defaults to. A nested `spawn` (recursing from inside any of the
-    /// three) reads whichever last set it, which is always correct since
-    /// none of them changes it mid-recursion.
+    /// The script clock every `wait` counts from (`Vm::time`): the last
+    /// frame's `level.time` between frames, a thread's own due time while
+    /// `run_frame` walks it forward. Only `set_time` and `run_frame` move it.
     now_ms: i32,
     /// How many `spawn` calls are currently nested on the native Rust
     /// stack (a thread whose immediate run itself spawns a thread, whose
@@ -810,7 +804,7 @@ pub(crate) mod tests {
         vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
-        let v = vm.call_now(&mut host, 0, main, None, vec![]).unwrap();
+        let v = vm.call_now(&mut host, main, None, vec![]).unwrap();
         (v, host, vm)
     }
 
@@ -822,7 +816,7 @@ pub(crate) mod tests {
         vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
-        vm.call_now(&mut host, 0, main, None, vec![])
+        vm.call_now(&mut host, main, None, vec![])
             .expect_err("expected a runtime error")
             .kind
     }
@@ -988,13 +982,7 @@ pub(crate) mod tests {
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
         let v = vm
-            .call_now(
-                &mut host,
-                0,
-                main,
-                Some(Target::Entity(EntId(1, 0))),
-                vec![],
-            )
+            .call_now(&mut host, main, Some(Target::Entity(EntId(1, 0))), vec![])
             .unwrap();
         assert_is_x(v, &mut vm);
     }
@@ -1017,7 +1005,7 @@ pub(crate) mod tests {
                 ..TestHost::default()
             };
             let main = vm.func_ref("test/script", "main");
-            let r = vm.call_now(&mut host, 0, main, None, args);
+            let r = vm.call_now(&mut host, main, None, args);
             (r.map_err(|e| e.kind), host)
         };
         let dead = |src| run_on(src, vec![Value::Entity(stale)]).0;
@@ -1122,7 +1110,7 @@ pub(crate) mod tests {
         vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
-        let e = vm.call_now(&mut host, 0, main, None, vec![]).unwrap_err();
+        let e = vm.call_now(&mut host, main, None, vec![]).unwrap_err();
         assert_eq!(e.line, 3);
     }
 
@@ -1134,7 +1122,7 @@ pub(crate) mod tests {
         vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
-        let e = vm.call_now(&mut host, 0, main, None, vec![]).unwrap_err();
+        let e = vm.call_now(&mut host, main, None, vec![]).unwrap_err();
         assert!(matches!(e.kind, ErrorKind::SuspendedInImmediateCall));
     }
 
@@ -1180,7 +1168,7 @@ pub(crate) mod tests {
         vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
-        let e = vm.call_now(&mut host, 0, main, None, vec![]).unwrap_err();
+        let e = vm.call_now(&mut host, main, None, vec![]).unwrap_err();
         assert!(matches!(e.kind, ErrorKind::SuspendedInImmediateCall));
     }
 
@@ -1205,7 +1193,7 @@ pub(crate) mod tests {
         vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
-        let e = vm.call_now(&mut host, 0, main, None, vec![]).unwrap_err();
+        let e = vm.call_now(&mut host, main, None, vec![]).unwrap_err();
         assert!(matches!(e.kind, ErrorKind::BadType(_)));
     }
 
@@ -1434,7 +1422,7 @@ pub(crate) mod tests {
         vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
-        let e = vm.call_now(&mut host, 0, main, None, vec![]).unwrap_err();
+        let e = vm.call_now(&mut host, main, None, vec![]).unwrap_err();
         assert!(matches!(e.kind, ErrorKind::BadType(_)));
     }
 
@@ -1634,7 +1622,7 @@ pub(crate) mod tests {
         vm.install(fns).unwrap();
         let mut host = ArrayHost;
         let f = vm.func_ref("test", "main");
-        let out = vm.call_now(&mut host, 0, f, None, Vec::new()).unwrap();
+        let out = vm.call_now(&mut host, f, None, Vec::new()).unwrap();
         assert_eq!(out, Value::Int(7));
     }
 

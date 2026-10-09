@@ -1734,7 +1734,7 @@ mod tests {
         });
         rt.run_frame(0);
         let e = rt.client_entity(0).unwrap();
-        rt.start_thread_for_test(e, "look", 0);
+        rt.start_thread_for_test(e, "look");
         rt.run_frame(50);
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
         assert_eq!(rt.client_field(0, "seen").as_deref(), Some("90"));

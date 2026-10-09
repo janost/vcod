@@ -1262,6 +1262,31 @@ crates/gsc/tests/fixtures/semantics/client-probes/probe_entnum.gsc`. Retail,
 `d_350 303`, `e_400 300`, `f_450 304`; the deleted entity read `isdefined` 1
 at +0, +50 and +100 and 0 at +150; `movedone 3650 3800`.
 
+## probe_concnum
+
+`grenadeExplosionEffect`'s two entity numbers, for
+`docs/research/cod11-combat.md` 13.5. No client needed:
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PORT=29941 SECS=12 \
+    tools/run_probe.sh client-probes/probe_concnum mp_carentan
+```
+
+Retail, 2026-10-09: `a 1050 299`, `b 1050 302`, then one spawn a frame
+303..309, 300 at +400, 310..315, 301 at +750, 316 on. Against ours the
+table is `grenade_explosion_effect_takes_a_temp_and_a_concussion_number`
+(`crates/server/src/game/script.rs`).
+
+## probe_pushorder
+
+The area-tree order a mover's push leaves two players in, for
+`docs/research/cod11-movers.md` 12. mp_carentan under dm rules with two
+`--probe-team allies` clients; the recipe is in the header of
+`crates/server/tests/fixtures/movers/mp_carentan-dm-pushorder.txt`, the
+2026-10-09 run, which `crates/server/tests/push_order_ab.rs` replays. Both
+players go down in the slab's path, slot 0 then slot 1, and a flat
+`radiusDamage` after each `movey` reads the walk off the `cb` lines.
+
 ## probe_linkto2
 
 `linkTo`'s second round on mp_carentan. Once an allied player has spawned it
@@ -1303,4 +1328,39 @@ COD_LNXDED_HOME=<absolute, no '+'> PORT=29671 PROBE_SECS=55 \
     tools/run_probe.sh client-probes/probe_trigwait mp_carentan
 # second shell, about 10 s later:
 cargo run -p vcod -- --net-probe 127.0.0.1:29671 --probe-team allies --probe-secs 40
+```
+
+## probe_startclock
+
+The script clock from load (`docs/research/cod11-gsc-language.md`, "The
+script clock"). No client needed. Logs `getTime` at the gametype's `main`
+and at `Callback_StartGameType`, then a `wait 0.05` loop, a `wait 1` pair, a
+`wait 0` and a `wait 0.1` / `wait 0.2` pair started from the callback. The
+2026-10-09 retail run on mp_carentan:
+
+```
+PROBE main 0
+PROBE start 0
+PROBE wait0 100
+PROBE tick 0 100
+PROBE tick 1 200
+PROBE wait01 200
+PROBE tick 2 200
+PROBE tick 3 300
+PROBE tick 4 300
+PROBE tick 5 350
+PROBE wait02 350
+PROBE tick 6 400
+...
+PROBE tick 11 650
+PROBE wait1 1050
+PROBE wait1b 2050
+```
+
+`crates/server/src/server.rs`'s `the_script_clock_matches_probe_startclock`
+replays it on ours.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PORT=29931 SECS=12 \
+    tools/run_probe.sh client-probes/probe_startclock mp_carentan
 ```

@@ -900,11 +900,7 @@ fn push_mover(
         .filter_map(|(i, c)| Some((i, c.as_mut()?.sim.as_mut()?)))
         .collect();
     let before: Vec<glam::Vec3> = sims.iter().map(|(_, s)| s.ps.origin).collect();
-    if crate::push::push(step, &mut sims, collision) {
-        rt.push_items(step);
-    } else {
-        rt.stall_mover(step);
-    }
+    rt.push_mover(step, &mut sims, collision);
     for ((slot, sim), was) in sims.iter().zip(before) {
         if sim.ps.origin != was {
             rt.set_client_origin(*slot, sim.origin());
@@ -7219,6 +7215,67 @@ mod tests {
             stale(&sv.configstrings).is_empty(),
             "the server's own copy is a frame behind the script at slots {:?}",
             stale(&sv.configstrings)
+        );
+    }
+
+    /// `probe_startclock` on retail: the script clock starts on the load's
+    /// `level.time`, the settle frames walk it 100 ms at a time, and a thread
+    /// due at a frame's `level.time` runs the frame after
+    /// (docs/research/cod11-gsc-language.md, "The script clock").
+    #[test]
+    fn the_script_clock_matches_probe_startclock() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let now = Instant::now();
+        let mut sv = Server::new(
+            ServerConfig {
+                gametype: "probe_startclock".into(),
+                ..cfg()
+            },
+            now,
+        );
+        sv.overlay_script(
+            "maps/mp/gametypes/probe_startclock",
+            include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_startclock.gsc"),
+        );
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        sv.spawn_server("mp_carentan").expect("the map load failed");
+        for _ in 0..36 {
+            sv.tick(now);
+        }
+        let mut log: Vec<String> = sv
+            .script_log()
+            .iter()
+            .map(|l| l.trim().to_string())
+            .collect();
+        // The `wait 0.05` loop's 6..10 rows add nothing past its 5th.
+        log.retain(|l| {
+            !matches!(
+                l.as_str(),
+                "PROBE tick 7 450" | "PROBE tick 8 500" | "PROBE tick 9 550" | "PROBE tick 10 600"
+            )
+        });
+        assert_eq!(
+            log,
+            [
+                "PROBE main 0",
+                "PROBE start 0",
+                "PROBE wait0 100",
+                "PROBE tick 0 100",
+                "PROBE tick 1 200",
+                "PROBE wait01 200",
+                "PROBE tick 2 200",
+                "PROBE tick 3 300",
+                "PROBE tick 4 300",
+                "PROBE tick 5 350",
+                "PROBE wait02 350",
+                "PROBE tick 6 400",
+                "PROBE tick 11 650",
+                "PROBE wait1 1050",
+                "PROBE wait1b 2050",
+            ]
         );
     }
 
