@@ -339,9 +339,9 @@ fn bullet_mod(rifle_bullet: bool) -> (&'static str, i32) {
 /// (`ClientEvents` reads the snapped `s.pos.trBase`), then the eye height and
 /// lean, then each component truncated again (combat doc 2.1).
 pub fn muzzle_point(ps: &PlayerState) -> Vec3 {
-    // `PlayerState::view`'s offset, added to the snapped origin.
-    let right = Vec3::new(ps.yaw.sin(), -ps.yaw.cos(), 0.0);
-    (ps.origin.trunc() + Vec3::Z * ps.view_height() + right * ps.lean).trunc()
+    // `G_AddLean`, the offset `PlayerState::view` adds, on the snapped origin.
+    let lean = vcod_common::pmove::aim::lean_offset(ps.yaw, ps.lean);
+    (ps.origin.trunc() + Vec3::Z * ps.view_height() + lean).trunc()
 }
 
 /// A player's shot: from the eye along the view with spread, against the

@@ -10,7 +10,7 @@ pub const Z_FAR: f32 = 60000.0;
 
 /// (forward, right, up) for a yaw/pitch pair. Z-up, yaw 0 = +X, so right is
 /// -Y at rest. No roll, since the fire trace and impact billboards must not
-/// tilt with a lean.
+/// tilt with the view's roll.
 pub fn basis(yaw: f32, pitch: f32) -> (Vec3, Vec3, Vec3) {
     let forward = Vec3::new(
         pitch.cos() * yaw.cos(),
@@ -41,7 +41,8 @@ pub fn perspective(fov_x: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
     )
 }
 
-/// Positive roll (leaning right) rotates the world counterclockwise, as CoD
+/// Positive roll (the wire's `viewangles[2]`, which only the kick moves; a
+/// lean never rolls the view) rotates the world counterclockwise, as CoD
 /// does. `fov_x` is horizontal.
 pub fn view_proj_from(pos: Vec3, yaw: f32, pitch: f32, roll: f32, fov_x: f32, aspect: f32) -> Mat4 {
     let (forward, _, _) = basis(yaw, pitch);
@@ -224,9 +225,9 @@ mod tests {
         assert!(ndc.x.abs() < 0.01 && ndc.y.abs() < 0.01);
     }
 
-    /// The one lean sign nobody can eyeball in a test run.
+    /// The one roll sign nobody can eyeball in a test run.
     #[test]
-    fn leaning_right_rolls_the_world_counterclockwise() {
+    fn positive_roll_turns_the_world_counterclockwise() {
         let ndc = |vp: Mat4, p: Vec3| {
             let c = vp * p.extend(1.0);
             c / c.w
@@ -238,7 +239,7 @@ mod tests {
         );
         assert!(ndc(flat, Vec3::new(1000.0, 0.0, 100.0)).y > 0.0, "+Z is up");
 
-        let lean_right = view_proj_from(
+        let rolled = view_proj_from(
             Vec3::ZERO,
             0.0,
             0.0,
@@ -246,10 +247,10 @@ mod tests {
             DEFAULT_FOV_DEG,
             16.0 / 9.0,
         );
-        let above = ndc(lean_right, Vec3::new(1000.0, 0.0, 100.0));
+        let above = ndc(rolled, Vec3::new(1000.0, 0.0, 100.0));
         assert!(
             above.x < 0.0 && above.y > 0.0,
-            "leaning right should swing the point above the centre to the left, got {above}"
+            "a positive roll should swing the point above the centre to the left, got {above}"
         );
     }
 

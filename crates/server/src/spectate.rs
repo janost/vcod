@@ -1489,7 +1489,7 @@ impl ClientSim {
             angles,
             // The entity's copy, which the controllers read (combat doc 16.4).
             slope: BodySlope {
-                lean: self.ps.lean / vcod_common::pmove::LEAN_MAX,
+                lean: self.ps.lean,
                 torso_height: body.torso_height,
                 torso_pitch: body.torso_pitch,
                 waist_pitch: body.waist_pitch,
@@ -1549,13 +1549,12 @@ impl ClientSim {
         self.aim
     }
 
-    /// The point a snapshot is built from: the origin lifted by the current
-    /// view height. `SV_BuildClientSnapshot` (0x808f288) adds the playerstate's
-    /// view height to `origin[2]` before it looks the leaf up, so a client
-    /// standing on a floor is tested from its eyes and not from its feet.
+    /// The point a snapshot is built from: the eye. `SV_BuildClientSnapshot`
+    /// adds the playerstate's view height to `origin[2]` (0x808f288) and
+    /// `AddLeanToPosition` with the lean (0x808f2d4) before it looks the leaf
+    /// up, so a client is tested from where it sees.
     pub fn eye_origin(&self) -> [f32; 3] {
-        let o = self.ps.origin;
-        [o[0], o[1], o[2] + self.ps.view_height()]
+        self.ps.view().eye.into()
     }
 
     /// What other clients are sent about this one. Retail sends a client no
@@ -1603,10 +1602,7 @@ impl ClientSim {
         // The lean the other client draws, the same -1..1 the playerstate
         // carries. Without it a leaning player stands straight to everyone
         // else.
-        set(
-            "leanf",
-            (self.ps.lean / vcod_common::pmove::LEAN_MAX).to_bits() as i32,
-        );
+        set("leanf", self.ps.lean.to_bits() as i32);
         // How the prone body bends over the ground (mantle doc, "The ground
         // samples").
         let body = self.entity_prone_body(command_time);
@@ -1780,7 +1776,7 @@ impl ClientSim {
             set("movementDir", self.ps.movement_dir & 0xff);
             set("viewHeightLerpDown", i32::from(self.ps.view_lerp_down));
             // -1..1, left negative, the same convention retail sends.
-            set("leanf", (self.ps.lean / pmove::LEAN_MAX).to_bits() as i32);
+            set("leanf", self.ps.lean.to_bits() as i32);
             set("serverCursorHint", self.cursor_hint & 0xff);
             set(
                 "serverCursorHintString",
@@ -2571,24 +2567,6 @@ mod tests {
         }
         assert!(sim.ps.view_height_settled());
         assert_eq!(lerp_time(&sim), 0, "the stamp clears when the eye settles");
-    }
-
-    /// `leanf` is a fraction of `LEAN_MAX`, left negative, the convention the
-    /// retail server sends. The value itself is spawn-dependent (the lean is
-    /// clamped against nearby geometry), so `playerstate_motion_ab` cannot
-    /// diff it and this pins the mapping instead.
-    #[test]
-    fn leanf_goes_out_as_a_signed_fraction_of_lean_max() {
-        let p = &PROTOCOL_V1;
-        let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
-        sim.become_player([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
-        let leanf =
-            |sim: &ClientSim| f32::from_bits(sim.to_wire(p, 0, 0).field_i32(p, "leanf") as u32);
-        assert_eq!(leanf(&sim), 0.0);
-        sim.ps.lean = -pmove::LEAN_MAX;
-        assert_eq!(leanf(&sim), -1.0, "a full left lean is -1");
-        sim.ps.lean = pmove::LEAN_MAX / 2.0;
-        assert_eq!(leanf(&sim), 0.5, "a half right lean is +0.5");
     }
 
     /// One field of the retail player capture the `playerstate_ab` gate diffs

@@ -535,7 +535,17 @@ VERIFIED, `CG_ConfigStringModified` @ `0x3002c6b0`: index 8 jumps to
 mid-map CS 8 update registers the newly marked items' weapons (the walk
 reaches `CG_RegisterWeapon` `0x30034cf0` through `0x30036080`). INFERRED,
 from the compares at `0x3002c70a`-`0x3002c927`: CS 7 has no case there,
-so the weapon table is read only at the gamestate. vcod re-runs its
+so the weapon table is read only at the gamestate. VERIFIED: the cgame's
+weapon setup (`0x3000ef10`) parses configstring 7 out of its gamestate copy
+(string data `0x301ce0a0`, offset slot `0x301cc0bc`) when syscall 199 says
+the weapon memory is not already loaded; it is called from the gamestate's
+init (`0x3002310b`) and from `CG_MapRestart` (`0x3002ca91`), the latter
+only behind a non-zero `sv_running` (`0x301d1fd8`, stored from the cvar
+at `0x30020652`) after syscall 200 releases the memory.
+INFERRED: a client of a remote server builds its weapon table once per
+gamestate, and a mid-map `d 7` changes nothing until the next map load.
+vcod builds `LivePhase::weapons` at the gamestate and ignores a
+`ConfigstringChanged(7)`. vcod re-runs its
 viewmodel prewarm on each CS 8 update (`prewarm_viewmodels`,
 `crates/client/src/main.rs`); rigs already cached cost a lookup, and parsed
 weapon files, models and clips are shared by name across rigs
