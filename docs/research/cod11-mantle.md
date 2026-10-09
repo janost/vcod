@@ -457,8 +457,8 @@ flags, and `PlayerState::prone_body` holds the three outputs.
 `PlayerState::entity_prone_body` is the entity's copy, which the server
 sends and poses its hit bodies with; the playerstate fields go out as they
 are and `predict::from_wire` reads them back. Not modelled: the debug
-drawing under `g_debugProneCheck`, and the refusal event 141 with `pm_flags`
-0x8000 from `PM_UpdatePronePitch`.
+drawing under `g_debugProneCheck`. `PM_UpdatePronePitch`'s refusal is
+"Prone Blocked".
 
 ### The body swing and the yaw cap, `PM_UpdateViewAngles` (0x32d7c)
 
@@ -547,7 +547,7 @@ toward a target by at most `70 * frametime` degrees a frame and is folded by
 n)` and `PitchForYawOnNormal(viewangles[1], n)` with `n` the ground trace's
 plane normal while `pml.groundPlane` is set, and 0 otherwise. The airborne
 branch also runs `BG_CheckProne` and raises event 141 with `pm_flags` 0x8000
-on a refusal ("Prone Blocked"); no capture has shown either.
+on a refusal ("Prone Blocked", measured there).
 
 `PitchForYawOnNormal` (0x3d274): VERIFIED, the constants: pi/180 (double at
 0x72a10), -180.0 and pi (doubles at 0x72a20, 0x72a28), 360.0 (0x72a30), and
@@ -608,10 +608,9 @@ and its three sets are `orb $0x80, 0xd(ps)` at 0x3196b, 0x331c4 and
   (`groundEntityNum` 1023) whose `BG_CheckProne` refuses, with event 141.
 
 The client's "Prone Blocked" notice reads the bit
-(`cod11-hud-protocol.md`, "Stance"). vcod's pmove raises it on the first
-two (`PlayerState::prone_blocked`), the server writes it and the predictor
-carries it. Not modelled: the airborne refusal and the events 140 and 141
-that go with the refusals.
+(`cod11-hud-protocol.md`, "Stance"). vcod's pmove raises it on all three
+(`PlayerState::prone_blocked`), the server writes it and the predictor
+carries it.
 
 VERIFIED live, 2026-10-09: `--save-motion` against `tools/run_server.sh
 mp_pavlov` (full-branch cmds), whose spawn refused the `prone` pose: every
@@ -622,6 +621,70 @@ bit and event 140 come with every refused cmd. The committed
 and no 0x8000, because its held prone went out compact and decoded as
 released after the first cmd; `playerstate_motion_ab` names those two
 poses in its gaps.
+
+### The forced-stance events
+
+The ids: VERIFIED, `tools/re/evtab.py` on `cgame_mp_x86.dll`: 140
+`EV_STANCE_FORCE_STAND`, 141 `EV_STANCE_FORCE_CROUCH`, 142
+`EV_STANCE_FORCE_PRONE`. VERIFIED, `game.mp.i386.so`: `PM_CheckDuck`
+(0x316f4) pushes 0x8c, 0x8d or 0x8e for
+`BG_AddPredictableEventToPlayerstate` at 0x31762, 0x318b9, 0x31991, 0x31afb
+and 0x31b73; `PM_UpdatePronePitch` pushes 0x8d at 0x3344d. INFERRED, from
+the branches into each, with `wbuttons` read at `pm+0x9`:
+
+- `pm_type` 4 (0x31705-0x31767): a spectator's prone key (`wbuttons` 0x40)
+  is cleared from the cmd and 140 raised.
+- `pm_flags` 0x10, the ladder (0x3189c-0x318be): a crouch or prone key
+  (0xc0) is cleared from the cmd and 140 raised; the arms below then see
+  neither key. `pm_flags` 0x4000 skips every arm (0x31893); vcod has no
+  writer of that bit.
+- prone held, not yet prone, `BG_CheckProne` refuses (0x31963-0x31996):
+  0x8000, the dive bit cleared, then 141 with `pm_flags` 2 (the crouch
+  latch) and 140 without.
+- crouch held while prone (0x319a4-0x31a02): a box trace at the origin
+  with `maxs[2]` 50.0 (rodata 0x70be0); clear, and prone gives way to the
+  crouch (0x31ace); blocked, and 142 (0x31ae4).
+- neither held while prone (0x31a1f-0x31ac8): the trace at `ps+0x338`, the
+  standing height, then at 50; the first clear one stands (`pm_flags &=
+  ~3`, 0x31a77) or crouches; with neither, 142.
+- neither held while crouched (0x31b02-0x31b73): the standing trace; clear
+  clears `pm_flags` 2, blocked raises 141.
+- the airborne refusal in `PM_UpdatePronePitch`: 141 and 0x8000, and the
+  body stays prone.
+
+Every arm above except the spectator's and the ladder's skips its event
+when `wbuttons` 0x2 is set (0x31975, 0x31ae9, 0x31b65). VERIFIED,
+CoDMP.exe's stance writer (0x40ae90): it sets 0x2 with the stance bit when
+the stance comes from the held `+prone` or `+movedown` key rather than from
+`cl_stance`, and clears it otherwise. INFERRED: a refusal only tells a
+client to change a stance the client keeps in `cl_stance`.
+
+VERIFIED, `cgame_mp_x86.dll`, the entity event switch: cases 0x8c, 0x8d and
+0x8e print `Event %s just for client %i was sent to other clients` when
+`es.clientNum` is not the local client, and otherwise, while the vmCvar at
+0x301d8f00 (`cl_stanceTemp`, cvar table entry at file offset 0x74f60) reads
+0, call syscall 10 on the vmCvar at 0x301a64c0 (`cl_stance`, entry 0x74f50)
+with "0", "1" or "2" (0x3001df6d). INFERRED: the event sets the client's
+stance to stand, crouch or prone, which its next cmd carries (CoDMP.exe
+0x40ae90 reads `cl_stance` 1 as crouch and 2 as prone).
+
+VERIFIED live, 2026-10-09: `client-probes/probe_pronedrop` on
+`tools/run_probe.sh mp_carentan` with a `--probe-fall --probe-fall-prone 90`
+client, which holds prone on every cmd. Lifted 100 units over the street at
+(900 1680), with the wall to the south inside the body's reach, every
+airborne snapshot read `pm_flags` 0x48001 and a ring of 141s (sequence 3 to
+30 over the 0.5 s fall); the landing snapshot read 0x40001. Lifted at (900
+1930), in the open, the fall read 0x40001 and raised nothing. The
+spectator's first snapshot, the prone key already held, read `pm_type` 4
+with 140 in the ring. `vcod-server` with the same probe reads the same on
+all three.
+
+vcod: `pmove::update_stance` is the arms above and `update_prone_pitch` the
+airborne one; `PmInput::stance_held` is `wbuttons` 0x2; `ClientSim::step`
+raises the spectator's 140. The playing client sets its wanted stance off
+its own client's 140-142 (`play::events::forced_stance`), and the offline
+walk mode turns its prone toggle off on 140 or 141. Not modelled:
+`cl_stanceTemp`, which vcod's client has no binding for.
 
 ### The landing damp
 
@@ -787,9 +850,9 @@ Still apart, and not modelled:
 - a prone player wedged airborne against the `clip_nosight` brush behind
   the mound's crest, where the capture's last three presses ended; the gate
   stops at 84000 for that reason;
-- event 141, `pm_flags` 0x400 and the airborne 0x8000 refusal (0x8000 on a
-  refused press or swing is modelled since, "Prone Blocked"; the ground
-  samples, the revert and the three body fields are "The ground samples").
+- `pm_flags` 0x400 (event 141 and the airborne 0x8000 refusal are modelled
+  since, "Prone Blocked"; the ground samples, the revert and the three body
+  fields are "The ground samples").
 
 ### Why it matters to a server
 
@@ -1558,9 +1621,19 @@ neither half of the tail runs. INFERRED: the entry gate's early returns
 to the epilogue at 0x35865, past the check. vcod ports the check and the
 revert in `step_slide_move` ("The ground samples").
 
-Not ported, and not read past its shape: past 0x3579c a third block, gated on
-a step of more than 3 units and on being on the ground, scales
-`min(|step| / 2, 4)` by the 1.25 at 0x70f18.
+Past 0x3579c a third block. VERIFIED, the constants 1.25 and 7.0 (rodata
+0x70f18, 0x70f1c) and the calls to `PM_ShouldMakeFootsteps` (0x357ba) and
+`PM_FootstepEvent` (0x3585c). INFERRED, from 0x3579c-0x3585c: with the
+clamped step (-16..24) past 3 either way, `groundEntityNum` not 1023 and
+`PM_ShouldMakeFootsteps` true, `bobCycle` becomes
+`trunc(bobCycle + min(|step| / 2, 4) * 1.25 + 7.0) & 0xff`, and
+`PM_FootstepEvent(old, new, 1)` lands a footstep when that crosses a quarter
+of the cycle. INFERRED, from `PM_ShouldMakeFootsteps` (0x3221c): true for a
+body whose effective stance is standing (`PM_GetEffectiveStance`'s rules,
+off `pm_flags` 1 and 2, `viewHeightLerpTarget`, `viewHeightLerpTime` and
+`viewHeightLerpDown` against the prone and crouch eye heights at ps+0x33c
+and ps+0x340), without `pm_flags` 0x80. vcod: `step_view`'s tail,
+`footsteps_audible`. No capture has isolated it.
 
 **The consumer.** VERIFIED: `cgame_mp_x86.dll` handles 143 inside the event
 switch of the function at 0x3001dc10, which reads and writes two floats at
@@ -1912,8 +1985,8 @@ Status after the pmove work landed on this branch:
    took. SHIPPED - `EV_STEP_VIEW` (143) with the rounded, clamped and biased
    step as its parm, and the post-step velocity scale, both under "The step
    event and the velocity scale", and the `PM_VerifyPronePosition` revert
-   that gates them ("The ground samples"). NOT ported from that tail: the
-   third block past 0x3579c. The snap's gate is
+   that gates them ("The ground samples"), and the third block past 0x3579c
+   ("The step event and the velocity scale"). The snap's gate is
    retail's, the ground state taken before the move. A velocity re-test
    that once stood in for a waterjump exclusion refused the snap to every
    walker rubbing a wall on a slope ("The ground snap"); 1.1 MP has no
