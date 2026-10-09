@@ -1438,6 +1438,34 @@ impl Server {
         }
     }
 
+    /// `g_password` as the game module reads it: the running level's table,
+    /// or the `--set` that the first load will stamp. Not latched.
+    fn game_password(&self) -> String {
+        match self.script.as_ref() {
+            Some(rt) => rt.cvars().get("g_password").to_string(),
+            None => self.pending_cvar("g_password", ""),
+        }
+    }
+
+    /// `getinfo`/`getstatus`'s `pswrd`: 1 for any non-empty `g_password`,
+    /// `none` included (0x808c3ae, 0x808bf23).
+    fn pswrd(&self) -> u8 {
+        u8::from(!self.game_password().is_empty())
+    }
+
+    /// `ClientConnect`'s password test (game.mp.i386.so 0x425da): an empty
+    /// or `none` `g_password` lets anyone in, otherwise the userinfo's
+    /// `password` must match it case-sensitively. Bots are exempt, as a
+    /// retail test client's `ip` reads `localhost`
+    /// (docs/research/cod11-server-handshake.md, "g_password").
+    fn password_denied(&self, userinfo: &str, is_bot: bool) -> bool {
+        let pw = self.game_password();
+        !is_bot
+            && !pw.is_empty()
+            && !pw.eq_ignore_ascii_case("none")
+            && info_value_for_key(userinfo, "password").unwrap_or("") != pw
+    }
+
     /// `SVC_Info` (cod_lnxded 0x808c1ac). Key order is retail's;
     /// `minPing`/`maxPing`/`game` only appear when the matching cvar is set.
     fn svc_info(&mut self, from: SocketAddr, challenge: &str) {
@@ -1451,14 +1479,15 @@ impl Server {
             .set("gametype", self.live_gametype())
             .set("pure", 0)
             .set("sv_allowAnonymous", 0)
-            .set("pswrd", 0);
+            .set("pswrd", self.pswrd());
         self.send_oob(from, &format!("infoResponse\n{i}"));
     }
 
     /// `SVC_Status` (0x808bd50).
     fn svc_status(&mut self, from: SocketAddr, challenge: &str) {
         let mut i = configstrings::serverinfo(&self.live_cfg());
-        i.set("challenge", challenge_arg(challenge)).set("pswrd", 0);
+        i.set("challenge", challenge_arg(challenge))
+            .set("pswrd", self.pswrd());
         let mut lines = String::new();
         for slot in 0..self.clients.len() {
             let Some(c) = self.clients[slot].as_ref() else {
@@ -1593,54 +1622,53 @@ impl Server {
             return;
         };
         self.challenges[ci].connected = true;
-        let slot = match self
+        let reconnect = self
             .clients
             .iter()
-            .position(|c| c.as_ref().is_some_and(same_peer))
-        {
-            Some(i) => {
-                // Retail hands the slot to any challenge issued to this ip, so
-                // a neighbour behind the same NAT who knows the qport can take
-                // over a live player. Only the slot's own challenge (the
-                // client's connect retry) may replace a client still heard
-                // from; a silent slot (crash, lost disconnect) is reclaimable.
-                let c = self.clients[i].as_ref().unwrap();
-                if c.netchan.challenge != challenge
-                    && now.duration_since(c.last_packet) < RECONNECT_LIMIT
-                {
-                    log::info!(
-                        "{from}: connect with a foreign challenge refused, client {i} is live"
-                    );
-                    return;
-                }
-                log::info!("{from}: reconnect");
-                // Whoever held the slot is gone, so its script state has to
-                // be torn down here: `check_timeouts` never reaches it once
-                // the new `Client` overwrites the slot with a fresh
-                // `last_packet`.
-                if let Some(rt) = self.script.as_mut() {
-                    rt.push_client_event(ClientEvent::Disconnect(i));
-                }
-                i
+            .position(|c| c.as_ref().is_some_and(same_peer));
+        if let Some(i) = reconnect {
+            // Retail hands the slot to any challenge issued to this ip, so
+            // a neighbour behind the same NAT who knows the qport can take
+            // over a live player. Only the slot's own challenge (the
+            // client's connect retry) may replace a client still heard
+            // from; a silent slot (crash, lost disconnect) is reclaimable.
+            let c = self.clients[i].as_ref().unwrap();
+            if c.netchan.challenge != challenge
+                && now.duration_since(c.last_packet) < RECONNECT_LIMIT
+            {
+                log::info!("{from}: connect with a foreign challenge refused, client {i} is live");
+                return;
             }
-            // A zombie of this peer is a reconnect into its own slot; the
-            // game saw it leave at the drop, so there is nothing to tear down.
-            None => match self
-                .zombies
+        }
+        // A zombie of this peer is a reconnect into its own slot; the game
+        // saw it leave at the drop, so there is nothing to tear down.
+        let Some(slot) = reconnect.or_else(|| {
+            self.zombies
                 .iter()
                 .position(|c| c.as_ref().is_some_and(same_peer))
                 .or_else(|| self.free_slot())
-            {
-                Some(i) => {
-                    self.zombies[i] = None;
-                    i
-                }
-                None => {
-                    self.send_oob(from, "error\nEXE_SERVERISFULL");
-                    return;
-                }
-            },
+        }) else {
+            self.send_oob(from, "error\nEXE_SERVERISFULL");
+            return;
         };
+        // `ClientConnect`'s verdict, after the engine's own checks
+        // (0x8085baa); a denied connect leaves the slot as it was.
+        if self.password_denied(&userinfo, false) {
+            log::debug!("Game rejected a connection: GAME_INVALIDPASSWORD.");
+            self.send_oob(from, "error\nGAME_INVALIDPASSWORD");
+            return;
+        }
+        if reconnect.is_some() {
+            log::info!("{from}: reconnect");
+            // Whoever held the slot is gone, so its script state has to be
+            // torn down here: `check_timeouts` never reaches it once the new
+            // `Client` overwrites the slot with a fresh `last_packet`.
+            if let Some(rt) = self.script.as_mut() {
+                rt.push_client_event(ClientEvent::Disconnect(slot));
+            }
+        } else {
+            self.zombies[slot] = None;
+        }
         // `Info_SetValueForKey(userinfo, "ip", NET_AdrToString(from))`
         // (0x8085498, key at 0x80d43da): any `ip` the client sent goes, the real one is last.
         let userinfo = format!(
@@ -3614,7 +3642,15 @@ impl Server {
         self.rebuild_baselines();
         // Step 22, after the settle frames and the baselines: `ClientConnect`
         // again for everyone still on a netchan, then back to `CS_CONNECTED`.
+        // A denial drops the client (0x808a76f).
         for slot in 0..self.clients.len() {
+            let Some(c) = self.clients[slot].as_ref() else {
+                continue;
+            };
+            if self.password_denied(&c.userinfo, c.is_bot) {
+                self.drop_client(slot, "GAME_INVALIDPASSWORD");
+                continue;
+            }
             let Some(c) = self.clients[slot].as_mut() else {
                 continue;
             };
@@ -3772,7 +3808,15 @@ impl Server {
             self.send_server_command(slot, "n");
             // That guard can drop the slot; a client that is gone has no
             // `ClientConnect` to run and no world to enter.
-            if self.clients[slot].is_none() {
+            let Some(c) = self.clients[slot].as_ref() else {
+                continue;
+            };
+            // A denial drops the client (0x8083f99).
+            if self.password_denied(&c.userinfo, c.is_bot) {
+                self.drop_client(slot, "GAME_INVALIDPASSWORD");
+                self.print(&format!(
+                    "SV_MapRestart_f: dropped client {slot} - denied!\n"
+                ));
                 continue;
             }
             if let Some(rt) = self.script.as_mut() {
@@ -6819,6 +6863,41 @@ mod tests {
         assert!(sv.take_fatal().is_none(), "the failure was reported twice");
     }
 
+    /// A `g_password` set while a client is on is checked again by the
+    /// `ClientConnect` both level boundaries re-run; retail drops the client
+    /// with `w "GAME_INVALIDPASSWORD"` (handshake doc, "g_password").
+    #[test]
+    fn a_new_g_password_drops_clients_at_the_next_restart_or_map() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let fs = Rc::new(fs);
+        for spawn in [false, true] {
+            let now = Instant::now();
+            let mut sv = Server::new(cfg(), now);
+            sv.load_scripts(fs.clone()).expect("load the scripts");
+            active(&mut sv, now);
+            sv.console_set("g_password", "secret");
+            sv.take_outgoing();
+            sv.handle_packet(addr(7), &oob("getinfo x"), now);
+            let (_, _, rest) = reply(&mut sv);
+            assert_eq!(
+                info_value_for_key(&String::from_utf8_lossy(&rest), "pswrd"),
+                Some("1"),
+                "g_password is live, not latched"
+            );
+            if spawn {
+                sv.spawn_server("mp_carentan").expect("the map load failed");
+            } else {
+                sv.map_restart().expect("the restart failed");
+            }
+            assert!(sv.clients[0].is_none(), "spawn {spawn}: the client stayed");
+            let z = sv.zombies[0].as_ref().expect("a zombie");
+            let at = z.netchan.reliable_sequence as usize & (MAX_RELIABLE_COMMANDS - 1);
+            assert_eq!(z.netchan.reliable[at], "w \"GAME_INVALIDPASSWORD\"");
+        }
+    }
     /// Doc section 4 step 11: `SV_ClientEnterWorld` runs only for a client
     /// that reads `CS_ACTIVE`. A `CS_PRIMED` one keeps its state through
     /// the restart and is promoted by its own next message instead (4.4),
@@ -7019,6 +7098,73 @@ mod tests {
             ("error".to_string(), "EXE_SERVERISFULL".to_string())
         );
         assert_eq!(sv.client_count(), 1);
+    }
+
+    fn connect_with(
+        sv: &mut Server,
+        from: SocketAddr,
+        extra: &str,
+        now: Instant,
+    ) -> (String, String) {
+        let challenge = challenge_for(sv, from, now);
+        let ui = format!(
+            "\\name\\vcod{extra}\\protocol\\{}\\qport\\{QPORT}\\challenge\\{challenge}",
+            PROTOCOL_V1.version
+        );
+        sv.handle_packet(from, &build_connect(&ui), now);
+        reply_text(sv)
+    }
+
+    /// Retail 1.1d with `g_password secret` (handshake doc, "g_password"):
+    /// no password, a wrong one and a wrong case are refused before a slot
+    /// is taken; the right one connects.
+    #[test]
+    fn g_password_gates_the_connect() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.set_cvar("g_password", "secret");
+        let denied = ("error".to_string(), "GAME_INVALIDPASSWORD".to_string());
+        for (i, extra) in ["", "\\password\\wrong", "\\password\\Secret"]
+            .iter()
+            .enumerate()
+        {
+            assert_eq!(
+                connect_with(&mut sv, addr(5 + i as u16), extra, now),
+                denied,
+                "{extra:?}"
+            );
+        }
+        assert_eq!(sv.client_count(), 0);
+        let ok = connect_with(&mut sv, addr(9), "\\password\\secret", now);
+        assert_eq!(ok.0, "connectResponse");
+        assert_eq!(sv.client_count(), 1);
+    }
+
+    /// `none` still reads `pswrd 1` but lets anyone in; an empty value is 0.
+    #[test]
+    fn pswrd_reports_any_g_password_and_none_admits_everyone() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let pswrd = |sv: &mut Server, query: &str| {
+            sv.handle_packet(addr(5), &oob(&format!("{query} x")), now);
+            let (_, _, rest) = reply(sv);
+            let text = String::from_utf8_lossy(&rest).to_string();
+            info_value_for_key(text.lines().next().unwrap_or(""), "pswrd").map(str::to_string)
+        };
+        for (value, flag) in [("", "0"), ("secret", "1"), ("none", "1")] {
+            sv.set_cvar("g_password", value);
+            assert_eq!(
+                pswrd(&mut sv, "getinfo").as_deref(),
+                Some(flag),
+                "{value:?}"
+            );
+            assert_eq!(
+                pswrd(&mut sv, "getstatus").as_deref(),
+                Some(flag),
+                "{value:?}"
+            );
+        }
+        assert_eq!(connect_with(&mut sv, addr(6), "", now).0, "connectResponse");
     }
 
     #[test]
