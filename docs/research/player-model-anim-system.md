@@ -87,7 +87,7 @@ G_DObjSetControlTagAngles(obj, ?, "back_up",  &a)
 G_DObjSetControlTagAngles(obj, ?, "pelvis",   &a)
 ```
 
-using `AngleSubtract` / `AnglesSubtract` / `AngleNormalize180` / `GetLeanFraction`. Weight constants in `.rodata` at `0x6efa8..`: `0.5, 0.25, 50.0, 0.925, 1.5, 1.8, 2.5, 0.075, -1.2, 0.3, 0.1, 0.2, 0.8, -0.2, 0.4, -0.6`. The per-bone mapping of these constants is UNVERIFIED (not decoded).
+using `AngleSubtract` / `AnglesSubtract` / `AngleNormalize180` / `GetLeanFraction`, plus `neck` and `head` after `back_up`. Weight constants in `.rodata` at `0x6efa8..`: `0.5, 0.25, 50.0, 0.925, 1.5, 1.8, 2.5, 0.075, -1.2, 0.3, 0.1, 0.2, 0.8, -0.2, 0.4, -0.6, 0.7, -0.3`. The pitch half (the eased torso pitch, its split over `back_*`, `neck`, `head` and `pelvis`, and the model-space axis a control rotation turns about) is decoded in `cod11-combat.md` 16.3. The yaw and lean halves are not decoded.
 
 Inputs are all transmitted in entityState: `fTorsoPitch` (232), `fWaistPitch` (236), `fTorsoHeight` (228), `leanf` (212), `animMovetype` (224, 4 bits).
 

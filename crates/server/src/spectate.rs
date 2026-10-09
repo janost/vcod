@@ -4,8 +4,9 @@ use crate::game::host::SimOp;
 use glam::Vec3;
 use vcod_common::movetrace::{Body, CONTENTS_BODY, CONTENTS_CORPSE, MoveWorld};
 use vcod_common::net::flags::{
-    EF_CROUCH, EF_MOUNTED_DUCK, EF_MOUNTED_PRONE, EF_MOUNTED_STAND, EF_PRONE, PMF_BACKWARDS_RUN,
-    PMF_DUCKED, PMF_JUMP_HELD, PMF_OWN_VIEW, PMF_PRONE, PMF_PRONE_DIVE, PMF_RESPAWNED,
+    EF_CROUCH, EF_DEAD, EF_MOUNTED_DUCK, EF_MOUNTED_PRONE, EF_MOUNTED_STAND, EF_PRONE,
+    PMF_BACKWARDS_RUN, PMF_DUCKED, PMF_JUMP_HELD, PMF_OWN_VIEW, PMF_PRONE, PMF_PRONE_DIVE,
+    PMF_RESPAWNED,
 };
 pub use vcod_common::net::flags::{
     EF_TELEPORT_BIT, PM_DEAD, PM_DEAD_LINKED, PM_INTERMISSION, PM_NORMAL_LINKED, PM_SPECTATOR,
@@ -1368,22 +1369,28 @@ impl ClientSim {
     }
 
     /// `ClientEndFrame`'s `BG_UpdatePlayerDObj` and `BG_PlayerAnimation`:
-    /// the models, the two anim indices with the phase each started at, and
-    /// the aim the spine layer bends by, as the frame ends them.
-    ///
-    /// The waist pitch is 0 and the torso pitch is the client's own view
-    /// pitch. Retail splits the two across `fWaistPitch` and `fTorsoPitch`
-    /// with constants that are not decoded
-    /// (`docs/research/player-model-anim-system.md`), and this server sends
-    /// neither field, so there is nothing better to read.
-    pub fn commit_pose(&mut self) {
+    /// the models, the two anim indices with the phase each started at, the
+    /// view pitch the controllers read and the torso pitch easing after it
+    /// over `frametime_ms` (`docs/research/cod11-combat.md` 16.3).
+    pub fn commit_pose(&mut self, frametime_ms: i32) {
+        let view_pitch = self.view_angles[0];
+        let mounted = self.mounted_on.is_some();
+        let mut swing = self.pose.swing;
+        swing.step(
+            view_pitch,
+            frametime_ms,
+            self.dead || mounted || self.ps.on_ladder,
+        );
         self.pose = crate::game::combat::BodyPose {
             assembly: self.assembly.clone(),
             legs: self.anim.legs(),
             torso: self.anim.torso(),
             legs_start_ms: self.anim.legs_start_ms(),
             torso_start_ms: self.anim.torso_start_ms(),
-            torso_pitch: self.ps.pitch.to_degrees(),
+            view_pitch,
+            swing,
+            prone: self.ps.stance == pmove::Stance::Prone,
+            mounted,
             lean: self.ps.lean / vcod_common::pmove::LEAN_MAX,
         };
     }
@@ -1470,7 +1477,12 @@ impl ClientSim {
         };
         set("eType", ET_PLAYER);
         set("clientNum", slot as i32);
-        set("eFlags", self.eflags());
+        let dead = if self.wire_pm_type() > PM_INTERMISSION {
+            EF_DEAD
+        } else {
+            0
+        };
+        set("eFlags", self.eflags() | dead);
         // Packed at link time: docs/research/cod11-player-clip.md.
         set("solid", self.linked_solid);
         set("legsAnim", self.anim.legs());
@@ -1514,9 +1526,16 @@ impl ClientSim {
                 self.ps.velocity[axis].to_bits() as i32,
             );
         }
-        // The body yaw only: a player entity carries no pitch, which is what
-        // the waist and head fields are for.
-        set("apos.trBase[1]", self.ps.yaw.to_degrees().to_bits() as i32);
+        // `ps.viewangles` whole, truncated to degrees the way
+        // `BG_PlayerStateToEntityState` snaps it (0x2ccb4..0x2cd41): the
+        // drawing client turns the body by the yaw and eases the spine after
+        // the pitch (combat doc 16.3).
+        for (axis, a) in self.view_angles.iter().enumerate() {
+            set(
+                &format!("apos.trBase[{axis}]"),
+                (*a as i32 as f32).to_bits() as i32,
+            );
+        }
         // The legs' heading off the view, retail's `ps.movementDir` verbatim
         // (`BG_PlayerStateToEntityStateExtrapolate` @0x2d06d). Without it a
         // strafing player runs sideways with its legs pointing forward.
