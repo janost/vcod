@@ -401,7 +401,8 @@ off the branches:
 - vcod draws the main menu, the browser and its popups (sections 6-11),
   the options set (section 14), the quit popup and the error popup from the
   stock files with their layout, the main menu again over a game (section
-  13), and refuses every other menu with a console line. A button whose
+  13), the Mods menu (section 17), and refuses every other menu with a
+  console line. A button whose
   script would close its own menu and then open a refused one is refused
   whole, so `Start New Server` leaves the main menu up.
 - Ping pacing (32 `getinfo`s in flight, a 1.5 s timeout, 5 s for the master)
@@ -411,7 +412,7 @@ off the branches:
   aligned) or half of it (centred); an owner draw with no label draws at
   `textalignx` whatever its alignment. INFERRED from the RTCW lineage, and
   the screenshots match the stock layout by eye.
-- Not done: create server, mods, the CD key popup, the game type filter
+- Not done: create server, the CD key popup, the game type filter
   (`UI_JOINGAMETYPE` always prints `EXE_ALL`), `EXE_REFRESHTIME` and
   `ui_lastServerRefresh_*` (the line reads vcod's own count once a refresh
   ends), the Internet list's cache in `servercache.dat`, the scroll bar, the
@@ -814,11 +815,84 @@ them as a spectator for 10-25 s each.
   directory (`Pk3Fs::open_layered`) at the gamestate, before the download
   check; downloads land in either directory and never overwrite a file.
   Leaving the server drops the layer, which retail does not.
-- Paks are matched by name, not checksum, so a same-named pak of another
-  version counts as present.
-- The front end's menus are read once at start-up, so a mod's replacement
-  main menu (`BO7MEDX-UI`) does not show; script menus, `hud.menu` items,
-  sounds, strings and models come off the layered path.
+- Paks are matched by checksum since 2026-10-09, with retail's
+  `<name>.%08x.pk3` file name when a same-named pak is in the way, and a
+  pure server's `sv_paks` limits the search path
+  (docs/research/cod11-server-handshake.md, "Pak checksums and pure
+  servers").
+- A server's `fs_game` rebuilds the front end off the new search path at
+  the gamestate, so a mod's replacement menus are what Esc opens in that
+  game. vcod still reads its fixed list of menu files, not the mod's
+  `ui_mp/menus.txt`, so a mod menu under a new file name stays unread.
 - Script menus run the front end's preprocessor (`#include` read off the
   search path, object-like `#define`s), so `visible MENU_TRUE` and
   `#define`d responses resolve. Function-like macros are not expanded.
+
+## 17. The Mods menu
+
+Sources: `ui_mp/mods.menu` and `ui_mp/main.menu` in `pak0.pk3`,
+`ui_mp_x86.dll` 1.1 (base `0x40000000`) and `CoDMP.exe` 1.1. Each claim
+carries its label.
+
+### The menu
+
+- `mods.menu` defines `mods_menu`: `onOpen { hide grpfinish; hide accept;
+  uiScript loadMods }`, `onEsc { close mods_menu; open main }`, a list box
+  `modlist` (`feeder FEEDER_MODS`, 9 in `menudef.h`; `elementheight 20`;
+  `action { show accept }`; `doubleClick { play "mouse_click"; uiScript
+  RunMod }`) and a hidden `@MENU_LAUNCH` button `accept` whose action is
+  `uiScript RunMod`. VERIFIED (asset).
+- `main.menu`'s `@MENU_MODS` button runs `open mods_menu; close
+  options_multi` and has no `cvarTest`, so it shows in a game too. VERIFIED
+  (asset).
+- `UI_RunMenuScript` (`0x4000a4a0`): `LoadMods` (`0x4000ab0a`) calls
+  `UI_LoadMods` (`0x40009e10`); `RunMod` (`0x4000ab6a`) sets `fs_game` to the
+  selected entry's directory and appends `vid_restart;`; `Quake3`
+  (`0x4000abca`) sets `fs_game` to `""` and appends `vid_restart;`. No stock
+  menu calls `Quake3`. VERIFIED (asm).
+- `UI_LoadMods` asks `trap_FS_GetFileList("$modlist", "", buf, 0x800)` and
+  keeps at most 64 `name\0description\0` pairs. The feeder's text is the
+  description when it is not empty, else the directory. VERIFIED (asm).
+
+### The engine
+
+- `FS_GetModList` (`0x43b030`, reached through `$modlist` at `0x5644d8`):
+  the subdirectories of `fs_basepath` and `fs_cdpath`, without duplicates,
+  `main` and `.`, that hold at least one `.pk3` in the base, CD or home
+  path; the description is the first 48 bytes of `<dir>/description.txt`,
+  else the directory name. VERIFIED (strings and the `fread` size);
+  INFERRED (the loop).
+- `fs_game` is `CVAR_SYSTEMINFO | CVAR_INIT` (0x18) everywhere it is
+  registered. A console `set` refuses it (`%s is write protected.`), but
+  the UI's `trap_Cvar_Set` and `CL_SystemInfoChanged` pass `force`.
+  VERIFIED (asm).
+- `vid_restart` (`CL_Vid_Restart_f`, `0x40fbe0`) refuses with `Listen
+  server cannot video restart.` while a local server runs, shuts the cgame
+  and the UI module down, restarts the filesystem when `fs_game` changed
+  (`FS_Restart` `0x42d2b0`, which reads `default_mp.cfg` off the new path
+  and, unless the game is the last one it ran, `config_mp.cfg`), restarts
+  the renderer and loads the UI again (`CL_InitUI` `0x418f10`), so the
+  menus are read off the mod's paks. VERIFIED (strings and calls);
+  INFERRED (the order's effect).
+- `FS_Startup` adds `main` and then `fs_game`, the later directory searched
+  first, so a mod's `ui_mp/*.menu` replaces the stock file by name. A mod's
+  `ui_mp_x86.dll` inside a pk3 is written out beside it and loaded
+  (`Sys_LoadDll` `0x4633a0`). INFERRED (structure).
+- A remote connect reloads the UI too: `CL_DownloadsComplete` (`0x40ffb0`)
+  shuts it down and starts it again with the hunk users. INFERRED (calls).
+
+### vcod
+
+- `mods_menu` opens from the stock button, lists `vcod_common::pk3::mod_list`
+  (the install's directories other than `main` and `--mod-dir` with a pk3,
+  sorted by name, at most 64) and draws each row's description or name.
+  A click selects and shows Launch; Launch or a double click switches.
+- The switch sets the player's `fs_game`, reopens the search path with the
+  mod over the base directory, rebuilds the whole front end off it and
+  opens the new main menu, as `vid_restart` brings retail's back. The game
+  must be left first; retail allows the switch in a game.
+- A server that names no `fs_game` keeps the player's mod; one that names
+  another replaces it for the connection, and leaving goes back to the
+  player's.
+- vcod has no UI DLL, so a mod's `ui_mp_x86.dll` does nothing; only its
+  menu files count.

@@ -104,6 +104,38 @@ pub struct ServerConfig {
     pub bots_shoot: bool,
 }
 
+/// What `SV_VerifyPaks_f` (cod_lnxded 0x808674c) checks a `cp` against: the
+/// pure checksums of the paks holding the two client DLLs and of every
+/// non-localized pak (`FS_LoadedPakPureChecksums`), keyed with the level's
+/// `checksumFeed` (docs/research/cod11-server-handshake.md, "Pak checksums").
+struct PureCheck {
+    cgame: Option<i32>,
+    ui: Option<i32>,
+    loaded: Vec<i32>,
+    feed: i32,
+}
+
+impl PureCheck {
+    fn new(fs: &vcod_common::pk3::Pk3Fs, feed: i32) -> Self {
+        let dll = |name: &str| fs.source_pak(name).map(|p| p.pure_checksum(feed));
+        PureCheck {
+            cgame: dll("cgame_mp_x86.dll"),
+            ui: dll("ui_mp_x86.dll"),
+            loaded: fs
+                .paks()
+                .filter(|p| !p.localized)
+                .map(|p| p.pure_checksum(feed))
+                .collect(),
+            feed,
+        }
+    }
+
+    fn verify(&self, cmd: &str) -> bool {
+        let args: Vec<&str> = cmd.split_whitespace().collect();
+        vcod_common::pak_checksum::verify_pure(&args, self.cgame, self.ui, &self.loaded, self.feed)
+    }
+}
+
 /// `challenge_t`. Entries past `CHALLENGE_TTL` go on the next insert; the
 /// oldest slot is recycled when the table is still full.
 struct Challenge {
@@ -982,6 +1014,11 @@ pub struct Server {
     /// The paks, kept past `load_scripts` because a shot loads the victim's
     /// models to trace against. `None` on a host with none.
     fs: Option<Rc<vcod_common::pk3::Pk3Fs>>,
+    /// The pak cvars of the mounted search path, systeminfo's lists.
+    paks: configstrings::PakLists,
+    /// The pure checksums a `cp` is checked against, keyed with this
+    /// level's `checksumFeed`; `None` until a level loads.
+    pure_check: Option<PureCheck>,
     /// The grafted player skeletons those shots trace against, built on first
     /// use (`crate::game::hitrig`).
     hit_rigs: crate::game::hitrig::HitRigs,
@@ -1265,8 +1302,20 @@ impl Server {
         let server_id = 0x10;
         let fall = FallHeights::default();
         let mut sv = Server {
-            configstrings: configstrings::static_configstrings(&cfg, server_id, fall, false),
-            sent_configstrings: configstrings::static_configstrings(&cfg, server_id, fall, false),
+            configstrings: configstrings::static_configstrings(
+                &cfg,
+                server_id,
+                fall,
+                false,
+                &Default::default(),
+            ),
+            sent_configstrings: configstrings::static_configstrings(
+                &cfg,
+                server_id,
+                fall,
+                false,
+                &Default::default(),
+            ),
             clients: (0..cfg.max_clients).map(|_| None).collect(),
             zombies: (0..cfg.max_clients).map(|_| None).collect(),
             cfg,
@@ -1297,6 +1346,8 @@ impl Server {
             pending_script_commands: Vec::new(),
             hitlocs: crate::game::combat::HitLocTable::default(),
             fs: None,
+            paks: Default::default(),
+            pure_check: None,
             hit_rigs: Default::default(),
             weapon_changes: Vec::new(),
             console: console::Console::new(),
@@ -1502,7 +1553,7 @@ impl Server {
             .set("clients", public_clients)
             .set("sv_maxclients", self.cfg.max_clients as i32 - private)
             .set("gametype", self.live_gametype())
-            .set("pure", 0)
+            .set("pure", u8::from(self.paks.pure))
             .set("sv_allowAnonymous", 0)
             .set("pswrd", self.pswrd());
         self.send_oob(from, &format!("infoResponse\n{i}"));
@@ -1826,7 +1877,14 @@ impl Server {
         c.accept(&m, now);
         c.addr = from; // NAT may move the port; the qport is the identity
         self.packet_seq += 1;
+        let mut commands_done = false;
         for op in ops {
+            if !commands_done && matches!(op, ClientOp::Move(_)) {
+                commands_done = true;
+                if !self.pure_after_commands(slot) {
+                    return;
+                }
+            }
             match op {
                 ClientOp::Command { seq, text } => {
                     if !self.client_command(slot, seq, text) {
@@ -1835,6 +1893,9 @@ impl Server {
                 }
                 ClientOp::Move(last) => self.user_move(slot, last),
             }
+        }
+        if !commands_done {
+            self.pure_after_commands(slot);
         }
     }
 
@@ -1945,7 +2006,18 @@ impl Server {
             }
             c.next_reliable_ms = self.sv_time_ms.wrapping_add(FLOOD_WINDOW_MS);
         }
-        let engine_command = matches!(word, "disconnect" | "userinfo");
+        let engine_command = matches!(
+            word,
+            "disconnect"
+                | "userinfo"
+                | "cp"
+                | "vdr"
+                | "download"
+                | "nextdl"
+                | "stopdl"
+                | "donedl"
+                | "retransdl"
+        );
         if !client_ok && !engine_command {
             c.last_client_command = seq;
             c.netchan.last_client_command_string = s;
@@ -1955,6 +2027,62 @@ impl Server {
             "disconnect" => {
                 self.drop_client(slot, "EXE_DISCONNECTED");
                 return false;
+            }
+            // `SV_VerifyPaks_f` and `SV_ResetPureClient_f`, run whatever
+            // `sv_pure` says; only the drops read it.
+            "cp" => {
+                let ok = self.pure_check.as_ref().is_some_and(|p| p.verify(trimmed));
+                if let Some(c) = self.clients[slot].as_mut() {
+                    c.pure = if ok {
+                        crate::client::Pure::Authentic
+                    } else {
+                        crate::client::Pure::Unpure
+                    };
+                }
+            }
+            "vdr" => {
+                if let Some(c) = self.clients[slot].as_mut() {
+                    c.pure = crate::client::Pure::Unchecked;
+                }
+            }
+            // The download ucmds (cod_lnxded 0x8087a64, 0x8086168, 0x8087960,
+            // 0x80879fc, 0x8087a2c).
+            "download" => {
+                let name = args.split_whitespace().next().unwrap_or("");
+                if let Some(c) = self.clients[slot].as_mut() {
+                    c.download = Some(crate::download::ServerDownload::new(name));
+                }
+            }
+            "nextdl" => {
+                let block = args.trim().parse::<i32>().unwrap_or(0);
+                let now = self.sv_time_ms;
+                let Some(c) = self.clients[slot].as_mut() else {
+                    return false;
+                };
+                use crate::download::NextDl;
+                match c.download.as_mut().map(|d| d.next_dl(block, now)) {
+                    Some(NextDl::Completed) => c.download = None,
+                    Some(NextDl::Acked) | None => {}
+                    Some(NextDl::Broken) => {
+                        self.drop_client(slot, "broken download");
+                        return false;
+                    }
+                }
+            }
+            "stopdl" => {
+                if let Some(c) = self.clients[slot].as_mut() {
+                    c.download = None;
+                }
+            }
+            "donedl" => self.send_gamestate(slot),
+            "retransdl" => {
+                let block = args.trim().parse::<i32>().unwrap_or(0);
+                if let Some(d) = self.clients[slot]
+                    .as_mut()
+                    .and_then(|c| c.download.as_mut())
+                {
+                    d.retransmit(block);
+                }
             }
             // The entity's `.name` is not updated with it: script sees the
             // connect-time name and a rename goes stale there, which stage
@@ -2048,6 +2176,16 @@ impl Server {
             let first = cmds[0];
             self.enter_world(slot, Some(&first));
         }
+        // `SV_UserMove` (0x8086fa4) drops a client a pure server has had no
+        // `cp` from, after the entry and before any cmd runs.
+        if self.paks.pure
+            && self.clients[slot]
+                .as_ref()
+                .is_some_and(|c| !c.is_bot && c.pure == crate::client::Pure::Unchecked)
+        {
+            self.drop_client(slot, "EXE_CANNOTVALIDATEPURECLIENT");
+            return;
+        }
         let packet = self.packet_seq;
         let acked = self.ack_time_ms.unwrap_or(self.sv_time_ms);
         let Some(c) = self.clients[slot].as_mut() else {
@@ -2058,6 +2196,20 @@ impl Server {
             .extend(cmds.into_iter().map(|cmd| QueuedCmd { packet, cmd }));
         let excess = c.pending.len().saturating_sub(MAX_PENDING_CMDS);
         c.pending.drain(..excess);
+    }
+
+    /// `SV_ExecuteClientMessage` (0x80872ec) once a message's client
+    /// commands ran: a pure server drops a client whose `cp` failed. False
+    /// when it did.
+    fn pure_after_commands(&mut self, slot: usize) -> bool {
+        let unpure = self.paks.pure
+            && self.clients[slot]
+                .as_ref()
+                .is_some_and(|c| c.pure == crate::client::Pure::Unpure);
+        if unpure {
+            self.drop_client(slot, "EXE_UNPURECLIENTDETECTED");
+        }
+        !unpure
     }
 
     /// `SV_SendClientGameState`.
@@ -2494,6 +2646,56 @@ impl Server {
             && seq - m.reliable_ack < MAX_RELIABLE_COMMANDS as i32
         {
             z.reliable_ack = m.reliable_ack;
+        }
+    }
+
+    /// `SV_WriteDownloadToClient` (0x8086290) for every client with a
+    /// download, in a message of its own: a downloading client is still
+    /// primed and gets no snapshot. Only paks this server mounts and lists in
+    /// `sv_referencedPakNames` go out; retail serves any file of the name.
+    fn send_downloads(&mut self) {
+        let allow = self
+            .level_cvar("sv_allowDownload")
+            .is_none_or(|v| v.trim().parse::<i32>().unwrap_or(0) != 0);
+        let pure = self.paks.pure;
+        let dedicated = self.dedicated;
+        let now = self.sv_time_ms;
+        let fs = self.fs.clone();
+        let open = |name: &str| -> Result<Vec<u8>, crate::download::Refusal> {
+            use crate::download::Refusal;
+            let stem = name.strip_suffix(".pk3").unwrap_or(name);
+            if vcod_common::net::download::is_stock_pak(stem) {
+                return Err(Refusal::GamePak);
+            }
+            if !allow {
+                return Err(Refusal::Disabled { pure });
+            }
+            fs.as_deref()
+                .and_then(|fs| {
+                    fs.paks()
+                        .find(|p| p.qualified_name().eq_ignore_ascii_case(stem))
+                })
+                .and_then(|p| std::fs::read(&p.path).ok())
+                .filter(|b| !b.is_empty())
+                .ok_or(Refusal::NotFound)
+        };
+        for c in self.clients.iter_mut().flatten() {
+            if c.download.is_none() {
+                continue;
+            }
+            let budget = crate::download::blocks_per_message(c.rate(dedicated), 50);
+            let mut w = MsgWriter::new(&self.huff);
+            write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
+            c.reliable_sent = c.netchan.reliable_sequence as i32;
+            if let Some(dl) = c.download.as_mut()
+                && !dl.write(&mut w, now, budget, open)
+            {
+                c.download = None;
+            }
+            let sent = c
+                .netchan
+                .transmit(c.last_client_command, &w.into_ops(), &self.huff);
+            self.outbox.extend(sent.into_iter().map(|p| (c.addr, p)));
         }
     }
 
@@ -3420,6 +3622,14 @@ impl Server {
             cvars.get("sv_maxclients").to_string(),
         ));
         self.fs = Some(fs.clone());
+        // `SV_SpawnServer` step 23. `sv_pure` reads the `--set` override;
+        // vcod defaults it to 0 where retail's default is 1.
+        let pure = cvars.get("sv_pure").trim().parse::<i32>().unwrap_or(0) != 0;
+        self.paks = configstrings::PakLists::new(pure, fs.paks());
+        if let Some(cs0) = self.configstrings.get_mut(0) {
+            *cs0 = configstrings::with_sv_pure(cs0, pure);
+        }
+        self.pure_check = Some(PureCheck::new(&fs, self.checksum_feed));
         if !restart {
             self.anims = match vcod_common::animtree::PlayerAnims::load(&fs) {
                 Ok(a) => Some(Rc::new(a)),
@@ -3546,7 +3756,8 @@ impl Server {
     /// does not hold.
     fn serverinfo(&self) -> Info {
         let mut i = configstrings::serverinfo(&self.live_cfg());
-        i.set("sv_privateClients", self.private_clients());
+        i.set("sv_privateClients", self.private_clients())
+            .set("sv_pure", u8::from(self.paks.pure));
         i
     }
 
@@ -3583,7 +3794,8 @@ impl Server {
             max: atof(cvars.get("bg_fallDamageMaxHeight")),
         };
         let info =
-            configstrings::systeminfo(self.server_id, self.fall_heights, self.cheats).to_string();
+            configstrings::systeminfo(self.server_id, self.fall_heights, self.cheats, &self.paks)
+                .to_string();
         if let Some(slot) = rt.host.configstrings.get_mut(1) {
             slot.clone_from(&info);
         }
@@ -3668,6 +3880,7 @@ impl Server {
             self.server_id,
             self.fall_heights,
             self.cheats,
+            &self.paks,
         );
         self.configstrings[CS_SERVERINFO] = self.serverinfo().to_string();
         // Step 19. Past the teardown: a failure here leaves no level.
@@ -3804,6 +4017,7 @@ impl Server {
             self.server_id,
             self.fall_heights,
             self.cheats,
+            &self.paks,
         )
         .into_iter()
         .enumerate()
@@ -5244,6 +5458,7 @@ impl Server {
 
         // Every entity built once, then culled and written per client.
         self.send_snapshots(&moved, wall_ms);
+        self.send_downloads();
         self.send_zombies();
         // `SV_Frame`'s last step (0x808d258).
         let mut resolve = self.resolver;
@@ -7353,6 +7568,52 @@ mod tests {
             server_commands(&mut nc, &pkt, &huff),
             vec!["w \"EXE_LOSTRELIABLECOMMANDS\"".to_string()]
         );
+    }
+
+    /// A pure server with made-up pak checksums, and an entered client's
+    /// first move after the commands `cmds` gives for the level's
+    /// `checksumFeed`.
+    fn pure_server_after(cmds: impl Fn(i32) -> Vec<String>) -> Server {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.paks.pure = true;
+        sv.pure_check = Some(PureCheck {
+            cgame: Some(11),
+            ui: Some(22),
+            loaded: vec![5, 6],
+            feed: sv.checksum_feed,
+        });
+        let mut nc = active(&mut sv, now);
+        let cmds = cmds(sv.checksum_feed);
+        if !cmds.is_empty() {
+            let cmds: Vec<&str> = cmds.iter().map(String::as_str).collect();
+            pipelined(&mut sv, &mut nc, &cmds, now);
+        }
+        if sv.client_count() == 1 {
+            let huff = Huffman::new();
+            let ack = nc.incoming_sequence as i32;
+            let ops = move_ops(sv.checksum_feed, ack, NULL_USERCMD);
+            let pkt = nc
+                .build_out(i32::from(sv.server_id), ack, 0, &ops, &huff)
+                .unwrap();
+            sv.handle_packet(addr(5), &pkt, now);
+        }
+        sv
+    }
+
+    #[test]
+    fn a_pure_server_keeps_only_clients_whose_cp_verifies() {
+        use vcod_common::pak_checksum::pure_command;
+        let good = |feed| vec![pure_command(Some(11), Some(22), &[6], feed)];
+        assert_eq!(pure_server_after(good).client_count(), 1);
+        // No `cp` before the first move: `EXE_CANNOTVALIDATEPURECLIENT`.
+        assert_eq!(pure_server_after(|_| Vec::new()).client_count(), 0);
+        // A pak the server lacks: `EXE_UNPURECLIENTDETECTED`.
+        let bad = |feed| vec![pure_command(Some(11), Some(22), &[7], feed)];
+        assert_eq!(pure_server_after(bad).client_count(), 0);
+        // `vdr` forgets a good one.
+        let reset = |feed| vec![pure_command(Some(11), Some(22), &[6], feed), "vdr".into()];
+        assert_eq!(pure_server_after(reset).client_count(), 0);
     }
 
     /// One client command per sequence, all in one message.
