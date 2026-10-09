@@ -158,17 +158,28 @@ impl BodyQueue {
     }
 
     /// The think `cloneplayer` arms: 250 ms after a body is born its
-    /// `eFlags` bit 0x800 goes out (`.so` 0x456DC). `ScriptRuntime::run_frame`
-    /// runs it beside the object table's thinks, which is where `G_RunFrame`
-    /// runs the clone's.
-    pub fn run_thinks(&mut self, now_ms: i32, p: &Protocol) {
+    /// `eFlags` bit 0x800 goes out (`.so` 0x456DC).
+    /// `ScriptRuntime::run_entity_pass` runs it on the body's own number.
+    pub fn run_think(&mut self, number: u32, now_ms: i32, p: &Protocol) {
         let Some(index) = EntityState::field_index(p, "eFlags") else {
             return;
         };
-        for body in self.slots.iter_mut().flatten() {
-            if now_ms.wrapping_sub(body.born_ms) >= CORPSE_FRESH_MS {
-                body.state.fields[index] &= !EFLAGS_CORPSE_FRESH;
-            }
+        let Some(body) = number
+            .checked_sub(BODY_FIRST)
+            .and_then(|i| self.slots.get_mut(i as usize))
+            .and_then(Option::as_mut)
+        else {
+            return;
+        };
+        if now_ms.wrapping_sub(body.born_ms) >= CORPSE_FRESH_MS {
+            body.state.fields[index] &= !EFLAGS_CORPSE_FRESH;
+        }
+    }
+
+    /// [`BodyQueue::run_think`] for all eight.
+    pub fn run_thinks(&mut self, now_ms: i32, p: &Protocol) {
+        for i in 0..BODY_QUEUE_SIZE as u32 {
+            self.run_think(BODY_FIRST + i, now_ms, p);
         }
     }
 

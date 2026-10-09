@@ -19,6 +19,9 @@ use vcod_gsc::{Atom, Cx, EntId, ErrorKind, Host, Target, Value};
 
 /// `ENTITYNUM_NONE`, the entity number an unattached objective record and an
 /// unowned HUD element both carry.
+/// `G_ExplodeMissile`'s concussion entity's life past the blast (`.rodata`
+/// 0x75b48, 500.0).
+const CONCUSSIVE_LIFE_MS: i32 = 500;
 pub const ENTITYNUM_NONE: i32 = vcod_common::net::protocol::ENTITYNUM_NONE as i32;
 
 /// A cleared level objective record: what `objective_add` starts from and
@@ -324,10 +327,11 @@ pub struct GameHost {
     /// `setarchive`'s flag: whether the engine keeps a frame archive for
     /// the killcam (`crate::archive`).
     pub archive_on: bool,
-    /// `(entity, event, args)` for every `"touch"` and `"trigger"` the item
-    /// pass raised since the last script frame, notified at its start the
-    /// way `trigger_fires` are.
-    pub item_notifies: Vec<(EntId, &'static str, Vec<Value>)>,
+    /// `(entity, event, args)` for every `"touch"` and `"trigger"` the touch
+    /// pass raised and every `movedone`/`rotatedone` the entity pass raised
+    /// since the last script frame, notified at its start the way
+    /// `trigger_fires` are.
+    pub engine_notifies: Vec<(EntId, &'static str, Vec<Value>)>,
     /// Each client's `ps.grenadeTimeLeft`, mirrored in by
     /// `Server::replay_moves` with the entity states, which is the last read
     /// of it before a kill this tick: what a death drops
@@ -428,10 +432,10 @@ pub struct GameHost {
     /// right after `item_pass`, and releases a freed gun queued for its
     /// gunner, drained in `ClientEndFrame`.
     pub turret_ops: Vec<crate::game::turret::TurretOp>,
-    /// The events raised this frame, put on the wire as temp entities and
-    /// dropped by the snapshot build: retail frees a `G_TempEntity` the
-    /// frame after it is sent.
-    pub temp_entities: Vec<crate::game::temp_entity::TempEntity>,
+    /// Every live temp entity, oldest first: each holds the object-table
+    /// number `G_TempEntity` took from `G_Spawn` and rides every snapshot
+    /// until the entity pass frees it (`GameHost::run_temp_entity`).
+    pub temp_entities: Vec<crate::game::temp_entity::LiveTemp>,
     /// The eight corpse entities `cloneplayer` fills
     /// (`crate::game::bodies`).
     pub bodies: crate::game::bodies::BodyQueue,
@@ -442,8 +446,6 @@ pub struct GameHost {
     /// `linkTo` records of every linked entity that is not a client
     /// (`crate::game::link`).
     pub links: crate::game::link::Links,
-    /// This frame's brush model moves, for the server's push pass.
-    pub mover_steps: Vec<crate::game::mover::Step>,
     /// The map's triggers. Host-side beside the object table for the reason
     /// `missiles` is: retail's own state lives on the `gentity_t`, ours in a
     /// table the object model does not have to carry.
@@ -846,7 +848,7 @@ impl GameHost {
             trigger_fires: Vec::new(),
             client_old_buttons: vec![0; MAX_CLIENTS],
             archive_on: false,
-            item_notifies: Vec::new(),
+            engine_notifies: Vec::new(),
             client_grenade_ms: vec![0; MAX_CLIENTS],
             client_height: vec![vcod_common::pmove::HEIGHT_STAND; MAX_CLIENTS],
             client_link_origin: vec![[0.0; 3]; MAX_CLIENTS],
@@ -876,7 +878,6 @@ impl GameHost {
             missiles: crate::game::missile::Missiles::default(),
             movers: crate::game::mover::Movers::default(),
             links: crate::game::link::Links::default(),
-            mover_steps: Vec::new(),
             triggers: crate::game::trigger::Triggers::default(),
             model_bounds: Vec::new(),
             model_brushes: Vec::new(),
@@ -987,6 +988,7 @@ impl GameHost {
     /// brushes out of the clip and a trigger out of the touch pass, so the
     /// three have one entry point here rather than three call sites each.
     pub fn free_entity(&mut self, id: EntId) {
+        self.temp_entities.retain(|t| t.id != id);
         // `G_FreeTurret` (turrets doc 8): a manned gun lets its gunner go
         // before the record goes; the sim half waits for `ClientEndFrame`.
         if let Some(mut rec) = self.turrets.remove(&id)
@@ -1010,40 +1012,103 @@ impl GameHost {
         self.movers.forget(id);
         self.links.forget(id);
         self.ents.free(id);
+        // `G_FreeEntity` lets the children go where they stand
+        // (0x669f1..0x66a9e), so a child later in the entity pass is never
+        // re-anchored on a freed parent.
+        crate::game::link::prune(self);
     }
 
-    /// `G_RunFrame`'s think pass, with every due `ThinkFn::Free` routed
-    /// through `free_entity`. The `delete` builtin and an evicted drop both
-    /// schedule the free, so this is the path a deleted trigger's row is
-    /// dropped on.
+    /// Every due think at once, each `ThinkFn::Free` routed through
+    /// `free_entity`. The `delete` builtin and an evicted drop both schedule
+    /// the free, so this is the path a deleted trigger's row is dropped on.
+    /// The server runs [`GameHost::run_entity_think`] on each entity's turn
+    /// instead; this is for tests and callers with no entity pass.
     pub fn run_entity_thinks(&mut self, _cx: &mut Cx, now_ms: i32) {
         for (id, think) in self.ents.run_thinks(now_ms) {
-            match think {
-                ThinkFn::Free => self.free_entity(id),
-                ThinkFn::ClearOwner | ThinkFn::RespawnItem => {}
-            }
+            self.finish_think(id, think);
         }
     }
 
-    /// `turret_think` (0x5328c, turrets doc 9) for every gun nobody mans:
-    /// the loop sound runs out, the firing bit clears and the barrel walks
-    /// home. A manned gun's frame is `ScriptRuntime::turret_think_client`.
-    pub fn run_turret_thinks(&mut self) {
+    /// `G_TempEntity` (0x67938): the event takes its number from `G_Spawn`
+    /// (0x67947), so it shares the free list with every script spawn
+    /// (combat doc 14.7, "Entity numbers"). Dropped when the table is full.
+    pub fn add_temp_entity(&mut self, cx: &mut Cx, te: crate::game::temp_entity::TempEntity) {
+        match self.ents.spawn(cx) {
+            Ok(id) => self.temp_entities.push(crate::game::temp_entity::LiveTemp {
+                id,
+                born_ms: self.level_time_ms,
+                te,
+            }),
+            Err(e) => log::warn!("temp entity {} dropped: {e:?}", te.event),
+        }
+    }
+
+    /// `G_RunEntity`'s `freeAfterEvent` arm (0x502f9..0x50363) for `id`, on
+    /// its turn: a temp entity is freed once `level.time` is more than 300
+    /// ms past its event, and runs nothing else either way. Returns whether
+    /// `id` is a temp entity.
+    pub fn run_temp_entity(&mut self, id: EntId, now_ms: i32) -> bool {
+        let Some(t) = self.temp_entities.iter().find(|t| t.id == id) else {
+            return false;
+        };
+        if now_ms.wrapping_sub(t.born_ms) > crate::game::temp_entity::EVENT_VALID_MS {
+            self.free_entity(id);
+        }
+        true
+    }
+
+    /// `G_RunThink` for `id` on its turn in the entity pass.
+    pub fn run_entity_think(&mut self, id: EntId, now_ms: i32) {
+        if let Some(think) = self.ents.run_think(id, now_ms) {
+            self.finish_think(id, think);
+        }
+    }
+
+    fn finish_think(&mut self, id: EntId, think: ThinkFn) {
+        match think {
+            ThinkFn::Free => self.free_entity(id),
+            ThinkFn::ClearOwner | ThinkFn::RespawnItem | ThinkFn::Concussive(_) => {}
+        }
+    }
+
+    /// The second entity `G_ExplodeMissile` spawns after its blast
+    /// (0x53f6f): unlinked and never sent, it holds a number off the free
+    /// list until `Concussive_think` frees it, 700 ms on (combat doc 13.2,
+    /// 14.7 "Entity numbers").
+    pub fn spawn_concussive(&mut self, cx: &mut Cx) {
+        use crate::game::entity::CONCUSSIVE_THINK_MS;
+        let Ok(id) = self.ents.spawn(cx) else {
+            return;
+        };
+        let now = self.level_time_ms;
+        self.ents.schedule(
+            id,
+            ThinkFn::Concussive(now + CONCUSSIVE_LIFE_MS),
+            now + CONCUSSIVE_THINK_MS,
+        );
+    }
+
+    /// `turret_think` (0x5328c, turrets doc 9) for a gun nobody mans, on its
+    /// turn in the entity pass: the loop sound runs out, the firing bit
+    /// clears and the barrel walks home. A manned gun's frame is
+    /// `ScriptRuntime::turret_think_client`.
+    pub fn run_turret_think(&mut self, id: EntId) {
         use crate::game::turret::{loop_tick, slew_home, sound_indices};
-        for (id, rec) in self.turrets.iter_mut() {
-            if rec.owner.is_some() {
-                continue;
-            }
-            let (loop_index, stop_index) = sound_indices(rec, &self.configstrings);
-            let (loop_sound, stop) = loop_tick(rec, loop_index);
-            rec.firing = false;
-            slew_home(rec);
-            if let Some(ent) = self.ents.get_mut(*id) {
-                ent.loop_sound = loop_sound;
-                if stop {
-                    ent.events
-                        .add(crate::game::script::EV_SOUND_ALIAS, stop_index);
-                }
+        let Some(rec) = self.turrets.get_mut(&id) else {
+            return;
+        };
+        if rec.owner.is_some() {
+            return;
+        }
+        let (loop_index, stop_index) = sound_indices(rec, &self.configstrings);
+        let (loop_sound, stop) = loop_tick(rec, loop_index);
+        rec.firing = false;
+        slew_home(rec);
+        if let Some(ent) = self.ents.get_mut(id) {
+            ent.loop_sound = loop_sound;
+            if stop {
+                ent.events
+                    .add(crate::game::script::EV_SOUND_ALIAS, stop_index);
             }
         }
     }

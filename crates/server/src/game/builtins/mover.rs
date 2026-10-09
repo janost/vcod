@@ -318,10 +318,11 @@ mod tests {
             )
             .unwrap();
 
-            let mut done = Vec::new();
+            // The threads read each frame ahead of its entity pass, and a
+            // notify the pass raises reaches them on the next frame.
+            let mut done = crate::game::mover::run(&mut host, cx);
             for frame in 22..=45 {
                 host.level_time_ms = frame * 50;
-                done.extend(crate::game::mover::run(&mut host, cx));
                 let x = field_vec(&mut host, cx, e, "origin").x;
                 let want = (100.0 + 0.5 * (frame - 22) as f32 * 50.0).min(600.0);
                 assert!(
@@ -335,6 +336,7 @@ mod tests {
                     "movedone at level time {}",
                     frame * 50
                 );
+                done.extend(crate::game::mover::run(&mut host, cx));
             }
             assert_eq!(done.len(), 1, "one movedone: {done:?}");
             assert_eq!(done[0].event, crate::game::mover::MOVEDONE);

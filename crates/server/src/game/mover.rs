@@ -214,17 +214,6 @@ impl Movers {
         Some((at(&m.pos), at(&m.apos)))
     }
 
-    /// A push the step asked for was blocked: the mover holds this frame
-    /// where it was, every trajectory a frame later, and its clip goes back
-    /// to `step.from`.
-    pub fn stall(&mut self, step: &Step) {
-        if let Some(m) = self.rows.get_mut(&step.ent) {
-            m.pos.stall();
-            m.apos.stall();
-            m.clip = Some(step.from);
-        }
-    }
-
     /// `moveto` and the three axis verbs, which differ only in how the
     /// caller builds `dest` (movers doc, section 3: the axis verbs take a
     /// delta, `moveto` a destination).
@@ -293,18 +282,18 @@ impl Movers {
     }
 }
 
-/// One frame of every mover: retire the segments whose duration has elapsed,
-/// write the evaluated origin and angles back onto each entity, and hand back
-/// the notifies owed.
+/// `G_RunMover` for one entity on its turn in the entity pass: retire the
+/// segments whose duration has elapsed, write the origin and angles at the
+/// level time back onto the entity, move a brush model's clip, and hand
+/// back the notifies owed and the push the clip's move asks for.
 ///
-/// It runs one server frame behind the trajectory, which is measured rather
-/// than chosen: retail's `moveto((600,0,100), 1)` called at level time 1050
-/// put `trTime` 1050 on the wire and yet `getorigin()` still read the start
-/// origin at 1100 and the first moved value at 1150, and `movedone` came at
-/// 2100 rather than 2050. So what script sees is the trajectory evaluated at
-/// the previous frame, and the wire carries the frame script has not caught
-/// up to. Both halves of the capture agree on it
-/// (docs/research/cod11-movers.md, section 8).
+/// The pass runs after the frame's threads, so script reads this frame's
+/// result on the next one: retail's `moveto((600,0,100), 1)` called at level
+/// time 1050 put `trTime` 1050 on the wire and yet `getorigin()` still read
+/// the start origin at 1100 and the first moved value at 1150, and
+/// `movedone` came at 2100 rather than 2050, raised on the 2050 pass and
+/// run by the next frame's threads (docs/research/cod11-movers.md, section
+/// 8; combat doc 14.7, "Entity numbers").
 ///
 /// The write-back is what the capture shows retail doing -- `getorigin()` and
 /// `.angles` both read the interpolated value on every frame of a move -- and
@@ -312,71 +301,110 @@ impl Movers {
 /// pass, `getorigin` and the wire build all go on reading the entity's own
 /// fields. Angles are normalized into 0..360 the way the script side reads
 /// them; the wire keeps the raw value (movers doc, section 8).
-pub fn run(host: &mut GameHost, cx: &mut vcod_gsc::Cx) -> Vec<Done> {
+pub fn run_one(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> (Vec<Done>, Option<Step>) {
     let level_ms = host.level_time_ms;
-    let now_ms = level_ms - crate::server::FRAME_MS;
-    let mut movers = std::mem::take(&mut host.movers);
-    movers.rows.retain(|id, _| host.ents.get(*id).is_some());
-
     let mut done = Vec::new();
-    let mut ids: Vec<EntId> = movers.rows.keys().copied().collect();
-    ids.sort_by_key(|i| i.0);
-    for id in ids {
-        let m = movers.rows.get_mut(&id).expect("just listed");
-        // `G_RunMover` reaches `G_MoverTeam` only off a moving trajectory
-        // (0x57666..0x57670).
-        let moving = [&m.pos, &m.apos]
-            .iter()
-            .any(|p| p.started && p.current.tr_type != TR_STATIONARY);
-        for plan in [&mut m.pos, &mut m.apos] {
-            if let Some(e) = plan.advance(now_ms) {
-                done.push(Done { ent: id, event: e });
-            }
-        }
-        let norm = |a: f32| a.rem_euclid(360.0);
-        let origin = m.pos.current.evaluate(now_ms);
-        let angles = m.apos.current.evaluate(now_ms);
-        let fields = [
-            (m.pos.started, "origin", [origin.x, origin.y, origin.z]),
-            (
-                m.apos.started,
-                "angles",
-                [norm(angles.x), norm(angles.y), norm(angles.z)],
-            ),
-        ];
-        for (started, name, v) in fields {
-            if !started {
-                continue;
-            }
-            let atom = cx.intern_folded(name);
-            let _ = host.write_field(cx, id, atom, vcod_gsc::Value::Vector(v));
-        }
-        clip_step(host, cx, id, m, level_ms);
-        // `G_MoverPush`'s relink of the pusher where it now is (0x553ae).
-        if moving {
-            let field = |host: &mut GameHost, cx: &mut vcod_gsc::Cx, name: &str| {
-                let atom = cx.intern_folded(name);
-                match host.get_field(cx, id, atom) {
-                    vcod_gsc::Value::Vector(v) => Vec3::from(v),
-                    _ => Vec3::ZERO,
-                }
-            };
-            let origin = if m.pos.started {
-                m.pos.at(level_ms)
-            } else {
-                field(host, cx, "origin")
-            };
-            let angles = if m.apos.started {
-                m.apos.at(level_ms)
-            } else {
-                field(host, cx, "angles")
-            };
-            host.link_entity_at(cx, id, Some((origin.into(), angles.into())));
+    let Some(mut m) = host.movers.rows.remove(&id) else {
+        return (done, None);
+    };
+    if host.ents.get(id).is_none() {
+        return (done, None);
+    }
+    // `G_RunMover` reaches `G_MoverTeam` only off a moving trajectory
+    // (0x57666..0x57670).
+    let moving = [&m.pos, &m.apos]
+        .iter()
+        .any(|p| p.started && p.current.tr_type != TR_STATIONARY);
+    for plan in [&mut m.pos, &mut m.apos] {
+        if let Some(e) = plan.advance(level_ms) {
+            done.push(Done { ent: id, event: e });
         }
     }
+    let norm = |a: f32| a.rem_euclid(360.0);
+    let origin = m.pos.current.evaluate(level_ms);
+    let angles = m.apos.current.evaluate(level_ms);
+    let fields = [
+        (m.pos.started, "origin", [origin.x, origin.y, origin.z]),
+        (
+            m.apos.started,
+            "angles",
+            [norm(angles.x), norm(angles.y), norm(angles.z)],
+        ),
+    ];
+    for (started, name, v) in fields {
+        if !started {
+            continue;
+        }
+        let atom = cx.intern_folded(name);
+        let _ = host.write_field(cx, id, atom, vcod_gsc::Value::Vector(v));
+    }
+    let step = clip_step(host, cx, id, &mut m, level_ms);
+    // `G_MoverPush`'s relink of the pusher where it now is (0x553ae).
+    if moving {
+        let (origin, angles) = pose(host, cx, id);
+        host.link_entity_at(cx, id, Some((origin.into(), angles.into())));
+    }
+    host.movers.rows.insert(id, m);
+    (done, step)
+}
 
-    host.movers = movers;
-    done
+/// [`run_one`] for every mover by entity number, the pushes dropped: the
+/// tests' stand-in for the entity pass.
+pub fn run(host: &mut GameHost, cx: &mut vcod_gsc::Cx) -> Vec<Done> {
+    let mut ids: Vec<EntId> = host.movers.rows.keys().copied().collect();
+    ids.sort_by_key(|i| i.0);
+    ids.into_iter()
+        .flat_map(|id| run_one(host, cx, id).0)
+        .collect()
+}
+
+/// Whether `id` has a mover row, which is what puts it on `G_RunMover`'s arm.
+pub fn is_mover(host: &GameHost, id: EntId) -> bool {
+    host.movers.rows.contains_key(&id)
+}
+
+/// The push `step` asked for was blocked: `G_MoverTeam` puts the mover back
+/// where it was, its fields and its clip, and every trajectory runs a frame
+/// later (movers doc, section 12).
+pub fn stall(host: &mut GameHost, cx: &mut vcod_gsc::Cx, step: &Step) {
+    let Some(m) = host.movers.rows.get_mut(&step.ent) else {
+        return;
+    };
+    m.pos.stall();
+    m.apos.stall();
+    m.clip = Some(step.from);
+    let (pos, apos) = (m.pos.started, m.apos.started);
+    if let Some(world) = &host.world {
+        world
+            .collision
+            .set_model_pose(step.model, step.from.0, step.from.1);
+    }
+    let (o, a) = step.from;
+    let a = Vec3::new(
+        a.x.rem_euclid(360.0),
+        a.y.rem_euclid(360.0),
+        a.z.rem_euclid(360.0),
+    );
+    for (started, name, v) in [(pos, "origin", o), (apos, "angles", a)] {
+        if started {
+            let atom = cx.intern_folded(name);
+            let _ = host.write_field(cx, step.ent, atom, vcod_gsc::Value::Vector(v.into()));
+        }
+    }
+    let (origin, angles) = pose(host, cx, step.ent);
+    host.link_entity_at(cx, step.ent, Some((origin.into(), angles.into())));
+}
+
+/// The entity's `origin` and `angles` fields.
+fn pose(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> (Vec3, Vec3) {
+    let mut field = |name: &str| {
+        let atom = cx.intern_folded(name);
+        match host.get_field(cx, id, atom) {
+            vcod_gsc::Value::Vector(v) => Vec3::from(v),
+            _ => Vec3::ZERO,
+        }
+    };
+    (field("origin"), field("angles"))
 }
 
 /// A brush model mover's clip, moved to where its plans have it at the
@@ -384,13 +412,15 @@ pub fn run(host: &mut GameHost, cx: &mut vcod_gsc::Cx) -> Vec<Done> {
 /// `G_MoverTeam`'s clock: the entity pass runs after the script frame, so
 /// the clip is a frame ahead of the `getorigin()` above (movers doc,
 /// sections 8 and 11).
-fn clip_step(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId, m: &mut Mover, level_ms: i32) {
-    let Some(model) = submodel(host, id) else {
-        return;
-    };
-    let Some(world) = host.world.clone() else {
-        return;
-    };
+fn clip_step(
+    host: &mut GameHost,
+    cx: &mut vcod_gsc::Cx,
+    id: EntId,
+    m: &mut Mover,
+    level_ms: i32,
+) -> Option<Step> {
+    let model = submodel(host, id)?;
+    let world = host.world.clone()?;
     let field = |host: &mut GameHost, cx: &mut vcod_gsc::Cx, name: &str| {
         let atom = cx.intern_folded(name);
         match host.get_field(cx, id, atom) {
@@ -412,19 +442,19 @@ fn clip_step(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId, m: &mut Move
         .unwrap_or_else(|| at(m, level_ms - crate::server::FRAME_MS));
     m.clip = Some(to);
     if from == to {
-        return;
+        return None;
     }
     world.collision.set_model_pose(model, to.0, to.1);
     if !world.collision.model_linked(model) {
-        return;
+        return None;
     }
-    host.mover_steps.push(Step {
+    Some(Step {
         ent: id,
         number: id.0,
         model,
         from,
         to,
-    });
+    })
 }
 
 /// The `N` of an entity whose BSP `model` key is `"*N"`, N > 0.

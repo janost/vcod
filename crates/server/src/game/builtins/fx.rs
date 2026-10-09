@@ -52,7 +52,7 @@ pub fn load_fx(
 /// so without this event a scripted explosion is silent as well as unseen.
 pub fn play_fx(
     host: &mut GameHost,
-    _cx: &mut Cx,
+    cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
@@ -77,18 +77,21 @@ pub fn play_fx(
         Some(_) => return Err(ErrorKind::BadType("playFX's forward must be a vector")),
         None => (EV_PLAY_FX, 0),
     };
-    host.temp_entities.push(TempEntity {
-        event,
-        parm: id & 0xff,
-        surf_type: 0,
-        other: 0,
-        attacker: 0,
-        weapon: 0,
-        client_num: 0,
-        scale,
-        origin: *origin,
-        scope: Scope::Pvs,
-    });
+    host.add_temp_entity(
+        cx,
+        TempEntity {
+            event,
+            parm: id & 0xff,
+            surf_type: 0,
+            other: 0,
+            attacker: 0,
+            weapon: 0,
+            client_num: 0,
+            scale,
+            origin: *origin,
+            scope: Scope::Pvs,
+        },
+    );
     Ok(Value::Undefined)
 }
 
@@ -155,6 +158,7 @@ mod tests {
         let [plain, dir] = &host.temp_entities[..] else {
             panic!("two events, not {}", host.temp_entities.len());
         };
+        let (plain, dir) = (&plain.te, &dir.te);
         assert_eq!((plain.event, plain.parm, plain.scale), (EV_PLAY_FX, 3, 0));
         assert_eq!(plain.origin, [10.0, 20.0, 30.0]);
         assert_eq!(plain.scope, Scope::Pvs);

@@ -315,6 +315,7 @@ pub fn probe(
     });
     let mut join = JoinProbe::new(team, weapon);
     let mut wrote_playerstate = false;
+    let mut combat_died = false;
     let mut motion = MotionProbe::default();
     let mut combat = if save_grenade {
         CombatProbe::grenade()
@@ -1066,6 +1067,26 @@ pub fn probe(
             bump_target.step(now, s);
         }
 
+        // The combat script steps only while alive and cannot resume from a
+        // respawn elsewhere, and stock gametypes without `scr_forcerespawn`
+        // never respawn a probe that presses nothing: a death (its own frag,
+        // or another client on a stock dm) used to idle out the run as
+        // "raise --probe-secs".
+        if save_combat
+            && combat.running()
+            && let Some(s) = client.snapshots().newest()
+            && s.ps.field_i32(&net::protocol::PROTOCOL_V1, "pm_type") == PM_DEAD
+        {
+            println!(
+                "no combat fixture: died on step {} of {} ({}); the script cannot resume from a respawn",
+                combat.idx + 1,
+                combat.steps.len(),
+                combat.steps[combat.idx.min(combat.steps.len() - 1)].label
+            );
+            combat_died = true;
+            break;
+        }
+
         // A refused weapon reopens the same menu, which the probe answers
         // once and then ignores, so a sent answer is not an accepted one; the
         // playerstate is what tells a spawn from a still-spectating client.
@@ -1271,7 +1292,7 @@ pub fn probe(
             overwrite,
         )?;
     }
-    if save_combat && !wrote_playerstate {
+    if save_combat && !wrote_playerstate && !combat_died {
         println!(
             "no combat fixture: the run ended on step {} of {} after {secs}s; raise --probe-secs",
             combat.idx + 1,

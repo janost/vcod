@@ -170,16 +170,15 @@ fn probe_ents_matches_retail() {
 /// callback suspends, so it needs `start_thread` plus stepped frames rather
 /// than `probe_ents`' single `call_now` — the same fallback
 /// `crates/gsc/tests/semantics_ab.rs::run_probe` uses for a probe built
-/// around `wait`. Each stepped frame runs the entity think pass before the
-/// VM step, the order `ScriptRuntime::run_frame` uses, so a deferred
+/// around `wait`. Each stepped frame runs the VM step before the entity
+/// think pass, the order `ScriptRuntime::run_frame` uses, so a deferred
 /// `delete()` frees on the same schedule production code would.
 ///
 /// This only bounds `DELETE_DEFER_MS`, it does not pin it: the 50 ms frame
-/// step and the 150 ms `wait`s mean any defer in (0, 150] ms frees each
-/// deleted entity in time to match retail's post-wait counts, so this test
-/// would pass unchanged at 1, 50 or 150 too. The exact 100 ms figure rests
-/// on the disassembly citation in `DELETE_DEFER_MS`'s own comment, not on
-/// this test.
+/// step and the 150 ms `wait`s mean a range of defers frees each deleted
+/// entity in time to match retail's post-wait counts. `probe_entnum` pins
+/// 100 (`a_delete_s_free_runs_after_the_threads_of_its_frame` in
+/// `crate::game::script`).
 #[test]
 fn probe_delete_matches_retail() {
     let Some(fs) = vcod_common::testing::game_fs() else {
@@ -226,10 +225,10 @@ fn probe_delete_matches_retail() {
     for frame in 1..=12 {
         let now_ms = frame * 50;
         host.level_time_ms = now_ms;
-        vm.with_cx(|cx| host.run_entity_thinks(cx, now_ms));
         if let Some(e) = vm.run_frame(&mut host, now_ms).into_iter().next() {
             panic!("probe_delete Callback_StartGameType errored: {e:?}");
         }
+        vm.with_cx(|cx| host.run_entity_thinks(cx, now_ms));
     }
 
     assert_eq!(host.script_log, retail_probe_lines("probe_delete"));
@@ -273,7 +272,7 @@ fn probe_not_string_matches_retail() {
 }
 
 /// Runs `name`'s `main` and then its `Callback_StartGameType` on a bare
-/// `GameHost`, stepping 50 ms frames with the entity think pass ahead of
+/// `GameHost`, stepping 50 ms frames with the entity think pass after
 /// each, the order `probe_delete_matches_retail` uses. The callback goes
 /// through `call_now` first, since that is the path that returns an error
 /// the probe dies on before its first `wait`, and is rerun fresh through
@@ -301,10 +300,10 @@ fn run_stale_probe(name: &str) -> (Vec<String>, bool) {
         for frame in 1..=12 {
             let now_ms = frame * 50;
             host.level_time_ms = now_ms;
-            vm.with_cx(|cx| host.run_entity_thinks(cx, now_ms));
             if let Some(e) = vm.run_frame(&mut host, now_ms).into_iter().next() {
                 died.get_or_insert(e.kind);
             }
+            vm.with_cx(|cx| host.run_entity_thinks(cx, now_ms));
         }
         (host.script_log, died)
     };

@@ -124,6 +124,23 @@ pub struct EntityPass {
     next: u32,
     /// Every entity that has had its `G_RunEntity` this frame (0x502cb).
     ran: HashSet<EntId>,
+    /// Each linked client's slot and parent, for `G_RunClient`'s turn.
+    client_links: Vec<(usize, EntId)>,
+}
+
+/// A turn of the entity pass that needs the client sims, which
+/// `Server::tick` holds: the pass returns it and is called again for the
+/// next turn.
+pub enum PassStop {
+    /// A grenade went off on its turn (`G_RunMissile`); walk the blast.
+    Blast(crate::game::missile::Explosion),
+    /// A brush model mover moved on its turn (`G_MoverTeam`): push the
+    /// bodies in its way, then [`ScriptRuntime::push_items`] or
+    /// [`ScriptRuntime::stall_mover`].
+    Push(crate::game::mover::Step),
+    /// `G_RunClient` (0x40660) for a linked client, its parent already run:
+    /// re-anchor it.
+    Client(usize),
 }
 
 pub struct ScriptRuntime {
@@ -497,10 +514,10 @@ impl ScriptRuntime {
             };
             let item = e.item.is_some();
             self.host
-                .item_notifies
+                .engine_notifies
                 .push((id, "touch", vec![Value::Entity(client)]));
             self.host
-                .item_notifies
+                .engine_notifies
                 .push((client, "touch", vec![Value::Entity(id)]));
             if item {
                 let host = &mut self.host;
@@ -515,12 +532,13 @@ impl ScriptRuntime {
             if !fire.fired() {
                 continue;
             }
+            // `Touch_Multi` arms the free off `level.time`, which inside a
+            // cmd is still the last frame's.
             if fire == crate::game::trigger::Fire::Spent {
-                self.host.ents.schedule(
-                    id,
-                    crate::game::entity::ThinkFn::Free,
-                    now_ms + crate::game::trigger::SPENT_FREE_MS,
-                );
+                let at = self.host.level_time_ms + crate::game::trigger::SPENT_FREE_MS;
+                self.host
+                    .ents
+                    .schedule(id, crate::game::entity::ThinkFn::Free, at);
             }
             let hurt = self
                 .host
@@ -593,7 +611,7 @@ impl ScriptRuntime {
             }
             match crate::game::item::activate_ent(host, cx, slot, eye, view) {
                 Some(Activate::Item(id)) => {
-                    host.item_notifies
+                    host.engine_notifies
                         .push((id, "touch", vec![Value::Entity(client)]));
                     crate::game::item::touch(host, cx, id, slot, false);
                 }
@@ -860,19 +878,18 @@ impl ScriptRuntime {
         std::mem::take(&mut self.host.client_link_ops)
     }
 
-    /// This frame's brush model moves (`crate::game::mover::Step`).
-    pub fn take_mover_steps(&mut self) -> Vec<crate::game::mover::Step> {
-        std::mem::take(&mut self.host.mover_steps)
+    /// `G_ExplodeMissile`'s tail, after its blast walk
+    /// (`GameHost::spawn_concussive`).
+    pub fn spawn_concussive(&mut self) {
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| host.spawn_concussive(cx));
     }
 
     /// The push `step` asked for was blocked: the mover holds a frame.
     pub fn stall_mover(&mut self, step: &crate::game::mover::Step) {
-        self.host.movers.stall(step);
-        if let Some(world) = &self.host.world {
-            world
-                .collision
-                .set_model_pose(step.model, step.from.0, step.from.1);
-        }
+        let host = &mut self.host;
+        self.vm
+            .with_cx(|cx| crate::game::mover::stall(host, cx, step));
     }
 
     /// The items' half of the push `step` asked for, once the players'
@@ -1804,14 +1821,11 @@ impl ScriptRuntime {
         &self.host.configstrings
     }
 
-    /// The events raised this frame, still queued.
-    pub fn temp_entities(&self) -> &[crate::game::temp_entity::TempEntity] {
-        &self.host.temp_entities
-    }
-
-    /// Queues one event for the next snapshot build.
+    /// `G_TempEntity`: raises one event on a temp entity of its own
+    /// (`GameHost::add_temp_entity`).
     pub fn push_temp_entity(&mut self, te: crate::game::temp_entity::TempEntity) {
-        self.host.temp_entities.push(te);
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| host.add_temp_entity(cx, te));
     }
 
     /// `GameHost::placed_script_models`, for a blast the sim side charges.
@@ -1845,11 +1859,11 @@ impl ScriptRuntime {
         }
     }
 
-    /// The same list, drained. A temp entity lives for one frame, so the
-    /// snapshot build takes them rather than reading them
-    /// (`crate::game::temp_entity`).
-    pub fn take_temp_entities(&mut self) -> Vec<crate::game::temp_entity::TempEntity> {
-        std::mem::take(&mut self.host.temp_entities)
+    /// Every live temp entity and its number, for the snapshot build.
+    pub fn temp_entities(
+        &self,
+    ) -> impl Iterator<Item = (u32, &crate::game::temp_entity::TempEntity)> {
+        self.host.temp_entities.iter().map(|t| (t.id.0, &t.te))
     }
 
     /// `Attack::Throw`: the grenade a release put in the air. `now_ms` is
@@ -1945,21 +1959,25 @@ impl ScriptRuntime {
 
     /// One server frame of script with no clients to trace a missile
     /// against: [`ScriptRuntime::run_threads`], then the whole entity pass.
-    /// The blasts it sets off go unwalked; `Server::tick` runs the halves
-    /// itself.
+    /// The blasts it sets off go unwalked and its movers push no one;
+    /// `Server::tick` runs the halves itself.
     pub fn run_frame(&mut self, now_ms: i32) {
         self.run_threads(now_ms);
         let world = self.host.world.clone();
         let collision = world.as_deref().map(|w| &w.collision);
-        let mut pass = self.begin_entity_pass();
-        while self
-            .run_entity_pass(&mut pass, collision, &[], now_ms)
-            .is_some()
-        {}
+        let mut pass = self.begin_entity_pass(Vec::new());
+        while let Some(stop) = self.run_entity_pass(&mut pass, collision, &[], now_ms) {
+            match stop {
+                // No bodies to block a mover: its push always goes through.
+                PassStop::Push(step) => self.push_items(&step),
+                PassStop::Blast(_) => self.spawn_concussive(),
+                PassStop::Client(_) => {}
+            }
+        }
     }
 
     /// `G_RunFrame` up to its entity loop: the packet pass, `level.time`,
-    /// the touch and item notifies, thinks, movers and the thread pass.
+    /// the touch, item and mover notifies, and the thread pass.
     pub fn run_threads(&mut self, now_ms: i32) {
         // The packet pass, on the clock the netcode raised its events with:
         // retail runs `ClientBegin`, `ClientCommand` and `ClientDisconnect`
@@ -1987,14 +2005,14 @@ impl ScriptRuntime {
             log::warn!("script error: {e:?}");
         }
         self.host.level_time_ms = now_ms;
-        // The item pass's notifies, on this frame's clock, and their waiters
-        // run here, ahead of every `wait` this frame brings due
-        // (docs/research/cod11-items.md, 13.1). Any other thread already
-        // `Runnable` runs here with them; a frame with no item notify skips
-        // the pass.
-        let item_notifies = std::mem::take(&mut self.host.item_notifies);
-        if !item_notifies.is_empty() {
-            for (id, event, args) in item_notifies {
+        // The last entity pass's mover notifies and the touch pass's, on this
+        // frame's clock, and their waiters run here, ahead of every `wait`
+        // this frame brings due (docs/research/cod11-items.md, 13.1; combat
+        // doc 14.7, "Entity numbers"). Any other thread already `Runnable`
+        // runs here with them; a frame with no such notify skips the pass.
+        let engine_notifies = std::mem::take(&mut self.host.engine_notifies);
+        if !engine_notifies.is_empty() {
+            for (id, event, args) in engine_notifies {
                 if self.host.ents.get(id).is_some() {
                     let event = self.vm.with_cx(|cx| cx.intern_folded(event));
                     self.vm.notify(Target::Entity(id), event, &args);
@@ -2015,58 +2033,62 @@ impl ScriptRuntime {
                     .notify(Target::Entity(id), event, &[Value::Entity(other)]);
             }
         }
-        // Thinks before threads: `G_RunFrame` runs the entity pass first, so
-        // a script reading `getEntArray` in the same frame sees the freed
-        // entity already gone. Whether retail really orders it this way is
-        // what `probe_delete`'s post-wait count measures.
-        let host = &mut self.host;
-        self.vm.with_cx(|cx| host.run_entity_thinks(cx, now_ms));
-        self.host.run_turret_thinks();
-        // The body queue is not in the object table, so its own think -- the
-        // 250 ms `eFlags` 0x800 clear -- runs beside the table's.
-        self.host
-            .bodies
-            .run_thinks(now_ms, &vcod_common::net::protocol::PROTOCOL_V1);
-        // The movers belong to the same entity pass: retail integrates them
-        // in `G_RunFrame` ahead of the thread pass, so a thread parked on
-        // `movedone` wakes on the frame the motion ended rather than the one
-        // after (`crate::game::mover`).
-        let host = &mut self.host;
-        let done = self.vm.with_cx(|cx| crate::game::mover::run(host, cx));
-        for d in done {
-            let event = self.vm.with_cx(|cx| cx.intern_folded(d.event));
-            self.vm.notify(Target::Entity(d.ent), event, &[]);
-        }
         for e in self.vm.run_frame(&mut self.host, now_ms) {
             log::warn!("script error: {e:?}");
         }
     }
 
     /// The start of `G_RunFrame`'s entity loop (0x50912), after the threads
-    /// and every client write they made.
-    pub fn begin_entity_pass(&mut self) -> EntityPass {
+    /// and every client write they made. `client_links` is each linked
+    /// client's slot and parent.
+    pub fn begin_entity_pass(&mut self, client_links: Vec<(usize, EntId)>) -> EntityPass {
         crate::game::link::prune(&mut self.host);
         EntityPass {
             next: 0,
             ran: HashSet::new(),
+            client_links,
         }
     }
 
     /// `G_RunFrame`'s entity loop (0x50930..0x50975): `G_RunEntity` once per
-    /// in-use entity by number, its link parent first, so items, links and
-    /// missiles interleave the way retail's do (combat doc 14.7). Returns at
-    /// each blast, which the caller walks before calling again; `None` once
-    /// the loop is past the last entity. An entity spawned on the way runs
-    /// this frame when its number is still ahead of the loop.
+    /// in-use entity by number, its link parent first, so items, links,
+    /// movers, missiles, thinks and linked clients interleave the way
+    /// retail's do (combat doc 14.7). Returns at each turn that needs the
+    /// client sims ([`PassStop`]), which the caller handles before calling
+    /// again; `None` once the loop is past the last entity. An entity spawned
+    /// on the way runs this frame when its number is still ahead of the loop.
     pub fn run_entity_pass(
         &mut self,
         pass: &mut EntityPass,
         world: Option<&vcod_common::collision::CollisionWorld>,
         sims: &[(usize, &crate::spectate::ClientSim)],
         now_ms: i32,
-    ) -> Option<crate::game::missile::Explosion> {
+    ) -> Option<PassStop> {
+        use crate::game::bodies::{BODY_FIRST, BODY_QUEUE_SIZE};
         while pass.next < self.host.ents.num_entities() {
-            let Some(id) = self.host.ents.handle(pass.next) else {
+            let n = pass.next;
+            // `G_RunClient`'s arm (0x50422), for the one case it does work
+            // in: a linked client, re-anchored by the caller.
+            if let Some(&(slot, parent)) = pass.client_links.iter().find(|(s, _)| *s == n as usize)
+            {
+                if pass.ran.insert(parent)
+                    && let Some(x) = self.run_entity(&pass.ran, parent, world, sims, now_ms)
+                {
+                    return Some(x);
+                }
+                pass.next += 1;
+                return Some(PassStop::Client(slot));
+            }
+            // The body queue is not in the object table; a corpse's only
+            // work is its think.
+            if (BODY_FIRST..BODY_FIRST + BODY_QUEUE_SIZE as u32).contains(&n) {
+                self.host
+                    .bodies
+                    .run_think(n, now_ms, &vcod_common::net::protocol::PROTOCOL_V1);
+                pass.next += 1;
+                continue;
+            }
+            let Some(id) = self.host.ents.handle(n) else {
                 pass.next += 1;
                 continue;
             };
@@ -2089,9 +2111,10 @@ impl ScriptRuntime {
         None
     }
 
-    /// One `G_RunEntity` (0x502bc) for the arms vcod runs in the loop: a
-    /// missile (0x50375), a link (0x50392, and `G_RunMover`'s 0x57623) and an
-    /// item (0x503f5). Movers, thinks and clients run elsewhere.
+    /// One `G_RunEntity` (0x502bc): a temp entity's free once its event has
+    /// aged out (0x502f9..0x5031d), then the first arm the entity takes: a
+    /// missile (0x50375), a link (0x50392, and `G_RunMover`'s 0x57623), a
+    /// mover (0x5040e) or an item (0x503f5), and its think after.
     fn run_entity(
         &mut self,
         ran: &HashSet<EntId>,
@@ -2099,7 +2122,7 @@ impl ScriptRuntime {
         world: Option<&vcod_common::collision::CollisionWorld>,
         sims: &[(usize, &crate::spectate::ClientSim)],
         now_ms: i32,
-    ) -> Option<crate::game::missile::Explosion> {
+    ) -> Option<PassStop> {
         use crate::game::missile::Turn;
         let host = &mut self.host;
         match host.missiles.run_one(id, world, sims, now_ms) {
@@ -2109,7 +2132,7 @@ impl ScriptRuntime {
             }
             Some(Turn::Exploded(x)) => {
                 host.missiles.sync_origin(&mut host.ents, id);
-                return Some(x);
+                return Some(PassStop::Blast(x));
             }
             Some(Turn::Freed) => {
                 host.free_entity(id);
@@ -2117,14 +2140,29 @@ impl ScriptRuntime {
             }
             None => {}
         }
+        if host.run_temp_entity(id, now_ms) {
+            return None;
+        }
         // A parent that has not had its turn is where script left it.
         let fresh = host.links.get(id).is_some_and(|l| ran.contains(&l.parent));
-        self.vm.with_cx(|cx| {
-            if !crate::game::link::run_linked(host, cx, id, fresh) {
-                crate::game::item::run_item(host, cx, id, now_ms);
+        let (done, step) = self.vm.with_cx(|cx| {
+            if crate::game::link::run_linked(host, cx, id, fresh) {
+                return (Vec::new(), None);
             }
+            if crate::game::mover::is_mover(host, id) {
+                return crate::game::mover::run_one(host, cx, id);
+            }
+            crate::game::item::run_item(host, cx, id, now_ms);
+            (Vec::new(), None)
         });
-        None
+        // `G_RunThink`, which every arm past the missile's ends on.
+        host.run_entity_think(id, now_ms);
+        host.run_turret_think(id);
+        // Raised inside the pass, run by the next frame's threads.
+        for d in done {
+            host.engine_notifies.push((d.ent, d.event, Vec::new()));
+        }
+        step.map(PassStop::Push)
     }
 
     /// What the bots read off stock `sd.gsc` this frame
@@ -2569,7 +2607,6 @@ mod tests {
         assert_eq!(n(&mut rt), after_one, "the packet pass stepped the loop");
     }
 
-    /// `run_thinks` still runs ahead of the frame's thread pass, which is
     /// `probe_delete`'s measurement: an entity deleted in one frame is out of
     /// `getEntArray` for a thread that wakes past the deferred free, and
     /// still in it for one that looks before. The packet pass ahead of both
@@ -2591,6 +2628,50 @@ mod tests {
             rt.run_frame(frame * 50);
         }
         assert_eq!(rt.level_field("later"), Value::Int(0));
+    }
+
+    /// `probe_entnum` on retail: the free a `delete()` schedules 100 ms out
+    /// runs in that frame's entity pass, after the frame's threads, so a
+    /// thread woken on it still reads the entity (combat doc 14.7, "Entity
+    /// numbers").
+    #[test]
+    fn a_delete_s_free_runs_after_the_threads_of_its_frame() {
+        let mut rt = ScriptRuntime::for_test(
+            "main() { wait 0.05; e = spawn(\"script_origin\", (0, 0, 0)); e delete(); \
+             wait 0.1; level.at100 = isdefined(e); \
+             wait 0.05; level.at150 = isdefined(e); }",
+        );
+        for frame in 1..=5 {
+            rt.run_frame(frame * 50);
+        }
+        assert_eq!(rt.level_field("at100"), Value::Int(1));
+        assert_eq!(rt.level_field("at150"), Value::Int(0));
+    }
+
+    /// `probe_entnum` on retail: a `playFx` temp entity takes the next
+    /// number off `G_Spawn` between two script spawns, and goes to the tail
+    /// of the free list on the first entity pass more than 300 ms past its
+    /// event, so the spawn on the frame after that reuses it.
+    #[test]
+    fn a_temp_entity_takes_a_spawn_number_and_frees_it_past_300_ms() {
+        let mut rt = ScriptRuntime::for_test(
+            "num(e) { return e getEntityNumber(); } \
+             main() { a = spawn(\"script_origin\", (0, 0, 0)); playfx(1, (0, 0, 0)); \
+             b = spawn(\"script_origin\", (0, 0, 0)); level.a = num(a); level.b = num(b); \
+             wait 0.3; level.c = num(spawn(\"script_origin\", (0, 0, 0))); \
+             wait 0.05; level.d = num(spawn(\"script_origin\", (0, 0, 0))); \
+             wait 0.05; level.e = num(spawn(\"script_origin\", (0, 0, 0))); }",
+        );
+        for frame in 1..=8 {
+            rt.run_frame(frame * 50);
+        }
+        let n = |rt: &mut ScriptRuntime, k: &str| match rt.level_field(k) {
+            Value::Int(n) => n,
+            other => panic!("{k}: {other:?}"),
+        };
+        let a = n(&mut rt, "a");
+        let got: Vec<i32> = ["b", "c", "d", "e"].map(|k| n(&mut rt, k) - a).to_vec();
+        assert_eq!(got, [2, 3, 4, 1]);
     }
 
     /// Both closures load into one `Vm` through one `Loader`, which is what
@@ -3788,13 +3869,18 @@ mod tests {
         assert_eq!(state.clip, 15);
         assert_eq!(rt.entity_origin_of(drop), Some([40.0, 0.0, 30.0]));
         let client = rt.client_entity(0).unwrap();
-        assert!(rt.host.item_notifies.iter().any(|(id, ev, args)| *id == pf
-            && *ev == "trigger"
-            && args == &vec![Value::Entity(client), Value::Entity(drop)]));
+        assert!(
+            rt.host
+                .engine_notifies
+                .iter()
+                .any(|(id, ev, args)| *id == pf
+                    && *ev == "trigger"
+                    && args == &vec![Value::Entity(client), Value::Entity(drop)])
+        );
         // `Cmd_Activate_f` notifies the item alone, never the player.
         assert!(
             !rt.host
-                .item_notifies
+                .engine_notifies
                 .iter()
                 .any(|(id, ev, _)| *id == client && *ev == "touch")
         );
