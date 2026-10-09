@@ -5,14 +5,12 @@ use crate::hud::scope;
 use crate::renderer::VmDraw;
 use crate::viewmodel::{self, ViewWeapon, ViewmodelMotion};
 use glam::Vec3;
-use std::sync::Arc;
 use vcod_common::net::msg;
 use vcod_common::net::protocol::{CS_MODELS_V1, ENTITYNUM_NONE, Protocol};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::predict::Predicted;
 use vcod_common::pmove::weapon::NUM_AMMO;
 use vcod_common::weapon::{self, SightDirection, ViewAnimClock, WeaponAnim, WeaponDef};
-use vcod_common::xmodel::XModel;
 
 /// The playerstate fields the viewmodel reads, from the prediction when there
 /// is one, else from the newest snapshot.
@@ -163,7 +161,7 @@ impl OnlineView {
         fs: &Pk3Fs,
         configstrings: &[String],
         ps: &ViewPs,
-    ) -> Option<Arc<[XModel]>> {
+    ) -> Option<viewmodel::ViewModels> {
         let names = rig_names(configstrings, ps.weapon, ps.viewmodel_index);
         if let Some(built) = &self.built_for
             && built.as_ref().map(RigKey::names) == names

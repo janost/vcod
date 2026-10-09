@@ -26,7 +26,16 @@ pub struct ViewWeapon {
 /// and parsing them again. A failed load is remembered too.
 #[derive(Default)]
 pub struct RigCache {
-    rigs: HashMap<(String, Option<String>), Option<(Arc<[xmodel::XModel]>, Option<ViewWeapon>)>>,
+    /// Keyed by (weapon file, hands override).
+    rigs: HashMap<(String, Option<String>), Option<CachedRig>>,
+}
+
+/// Hands then gun, shared between the cache and whoever draws them.
+pub type ViewModels = Arc<[xmodel::XModel]>;
+
+struct CachedRig {
+    models: ViewModels,
+    rig: Option<ViewWeapon>,
 }
 
 impl RigCache {
@@ -37,14 +46,19 @@ impl RigCache {
         fs: &Pk3Fs,
         name: &str,
         hands_model: Option<&str>,
-    ) -> Option<(Arc<[xmodel::XModel]>, Option<Box<ViewWeapon>>)> {
+    ) -> Option<(ViewModels, Option<Box<ViewWeapon>>)> {
         let key = (name.to_string(), hands_model.map(str::to_string));
         let entry = self.rigs.entry(key).or_insert_with(|| {
-            load_view_weapon(fs, name, hands_model)
-                .map(|(models, rig)| (models.into(), rig.map(|r| *r)))
+            load_view_weapon(fs, name, hands_model).map(|(models, rig)| CachedRig {
+                models: models.into(),
+                rig: rig.map(|r| *r),
+            })
         });
-        let (models, rig) = entry.as_ref()?;
-        Some((models.clone(), rig.as_ref().map(|r| Box::new(r.fresh()))))
+        let cached = entry.as_ref()?;
+        Some((
+            cached.models.clone(),
+            cached.rig.as_ref().map(|r| Box::new(r.fresh())),
+        ))
     }
 
     /// A download reopened the search path; a pak may replace a model or a
