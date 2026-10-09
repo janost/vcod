@@ -77,9 +77,12 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
   same events retail reads.
 - **Plays.** Move, jump, crouch, prone, lean, fire, aim down the sight,
   reload, melee, use, switch weapons, on retail's default binds. A usercmd
-  goes out every 8 ms, like a 125 fps retail client.
+  is built every 8 ms, like a 125 fps retail client, and they go out at
+  retail's `cl_maxpackets` 30 with `cl_packetdup` 1 off the LAN.
 - Predicts your movement by replaying unacknowledged cmds through the same
   step the server runs. A correction eases out over 100 ms.
+- Draws and stamps cmds on retail's client clock, which slews a millisecond
+  or two per snapshot instead of stepping on jitter; `cl_timeNudge` works.
 - First-person weapon with your team's hands, sight zoom at the weapon's FOV,
   sniper scope overlay that follows the sway and the hit kick, and your own
   fire, reload and footstep sounds played off the prediction.
