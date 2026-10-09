@@ -11,13 +11,9 @@
 //! - `0..63`: client slots (`crate::game::entity::ObjectTable::spawn_client`).
 //! - `64..71`: the body queue, retail's own numbers
 //!   (`crate::game::bodies`, `docs/research/cod11-combat.md` section 5.2).
-//! - `72..`: map and script entities, from `entity::FIRST_MAP_ENTITY` up.
-//! - `958..1021`: temp entities, walked by a rolling cursor
-//!   (`crate::game::temp_entity`). Retail's `G_TempEntity` takes whatever
-//!   free slot it finds instead; vcod reserves a block at the top so a
-//!   one-frame event can never take a number the object table is about to
-//!   hand out. A map whose script spawns past 958 would collide, which no
-//!   stock map comes near.
+//! - `72..`: map and script entities and temp entities, from
+//!   `entity::FIRST_MAP_ENTITY` up, off `G_Spawn`'s free list
+//!   (`crate::game::temp_entity`).
 //! - `1022`: `ENTITYNUM_WORLD`, `1023`: `ENTITYNUM_NONE`.
 //!
 //! Bodies and temp entities are appended by `crate::server`, not here: the

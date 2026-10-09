@@ -1214,7 +1214,8 @@ const GAPS: &[(&str, &str)] = &[
     ("[strafe] eventSequence t=395", FOOTSTEP),
     ("[strafe] event t=39500: ours only (6, 0, ", FOOTSTEP),
     ("[strafe] event t=39600: retail only (6, 0, ", FOOTSTEP),
-    ("[strafe] event t=40000: ours only (6, 0, ", FOOTSTEP),
+    ("[strafe] event t=39950: ours only (6, 0, ", FOOTSTEP),
+    ("[strafe] eventSequence t=39950", FOOTSTEP),
     ("[strafe] eventSequence t=40000", FOOTSTEP),
     ("[refused] eventSequence t=4", FOOTSTEP),
 ];
@@ -1231,7 +1232,7 @@ const ENTRY_POINT: &str = "the wounding round enters the target's body a truncat
     the two joins do not put at the same time; not the turret";
 const FOOTSTEP: &str = "footstep phase: bobCycle is not in the capture and the join leaves \
     each side its own, so the strafe's first footstep falls two frames apart, and ours raises a \
-    second one at 40000 where retail raises none before the strafe ends; the eventSequence rows \
+    second one at 39950, a step-up's push of the cycle ahead of it, where retail raises none before the strafe ends; the eventSequence rows \
     past it are that one event";
 
 const ORIGIN_EPS: f32 = 0.25;

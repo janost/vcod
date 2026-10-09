@@ -333,6 +333,30 @@ The mound run is the same with `probe_spot mound`, `--probe-prone 270` and
 `crates/server/tests/fixtures/playerstate/mp_carentan-dm-slope-8ms-prone-<spot>.txt`,
 named `dm` because retail runs the probe as gametype `probe_prone`.
 
+## probe_pronedrop
+
+The airborne prone refusal's server half. Under `probe_teleport 1` it lifts
+each spawned allied player 100 units over the mp_carentan street, facing
+north, four times 6 s apart: at (900 1680), where the wall to the south
+leaves the body no room, and at (900 1930), in the open. It logs `PROBE lift
+<time> <origin>`. The client half is `--probe-fall` with `--probe-fall-prone
+90`, which holds prone at world yaw 90 on every cmd and prints the `FALL`
+line per airborne snapshot with `pm_flags` and the event ring. Writes no
+fixture; `docs/research/cod11-mantle.md`, "The forced-stance events", has
+the readings.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PORT=<p> PROBE_SECS=70 \
+    tools/run_probe.sh client-probes/probe_pronedrop mp_carentan +set probe_teleport 1
+# second shell, about 10 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:<p> --probe-team allies --probe-fall \
+    --probe-fall-prone 90 --probe-secs 50
+```
+
+Against ours: `vcod-server mp_carentan --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_pronedrop.gsc --set
+probe_teleport=1`.
+
 ## probe_fall
 
 The landing stun and fall damage measurement's server half. Under
@@ -1202,6 +1226,23 @@ this frame and +/-8 when it still sits on the last frame's. Retail,
 2026-10-09: every `MOD_GRENADE_SPLASH` walk read 0 for the children numbered
 below the grenade and 8 for the ones above it (grenades 170, 180, 243), and
 every `MOD_FALLING` callback 0 for all.
+
+## probe_entnum
+
+Entity numbers and where the entity pass sits against the threads, for
+`docs/research/cod11-combat.md` 14.7 ("The pass runs after the threads",
+"Entity numbers"). No client needed:
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PORT=29921 SECS=12 \
+    tools/run_probe.sh client-probes/probe_entnum mp_carentan
+```
+
+Against ours: `vcod-server mp_carentan --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_entnum.gsc`. Retail,
+2026-10-09: `a 1050 299`, `b 1050 301` (the `playFx` took 300), `c_300 302`,
+`d_350 303`, `e_400 300`, `f_450 304`; the deleted entity read `isdefined` 1
+at +0, +50 and +100 and 0 at +150; `movedone 3650 3800`.
 
 ## probe_linkto2
 

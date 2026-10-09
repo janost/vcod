@@ -1,33 +1,28 @@
-//! Temp entities: one entity that exists for a single frame to carry an
-//! event to clients. Retail's `G_TempEntity` allocates a gentity, sets
-//! `s.eType = ET_EVENTS + event` and frees it the frame after, so nothing
-//! ever compares one frame's number against the next's
-//! (`docs/research/cod11-hud-protocol.md` section 1 for the obituary, which
-//! is the first of them vcod raises).
+//! Temp entities: an entity that carries one event to clients. Retail's
+//! `G_TempEntity` (0x67938) takes a number from `G_Spawn`, sets
+//! `s.eType = ET_EVENTS + event`, and `G_RunEntity` frees it once
+//! `level.time` is more than [`EVENT_VALID_MS`] past the event; it rides
+//! every snapshot until then (`docs/research/cod11-combat.md` 14.7,
+//! "Entity numbers"; `docs/research/cod11-hud-protocol.md` section 1 for the
+//! obituary, which is the first of them vcod raised).
 
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::{ENTITYNUM_WORLD, Protocol};
+use vcod_common::net::protocol::Protocol;
+use vcod_gsc::EntId;
 
 pub use vcod_common::net::events::ET_EVENTS;
 
-/// The first entity number a temp entity takes. The 64 numbers below
-/// `ENTITYNUM_WORLD` are reused every frame; the split of the whole range is
-/// documented in `crate::game::wire`.
-pub const TEMP_FIRST: u32 = ENTITYNUM_WORLD - TEMP_COUNT;
-/// How many temp entities one frame can carry.
-pub const TEMP_COUNT: u32 = 64;
+/// `G_RunEntity`'s 300 (0x50309): a `freeAfterEvent` entity is freed on the
+/// first turn more than this past its `eventTime`.
+pub const EVENT_VALID_MS: i32 = 300;
 
-/// The block sits below `ENTITYNUM_WORLD` and clear of both the body queue
-/// and the map entities, so a temp entity's number can never be read as one
-/// of those. `crate::game::wire` documents the whole split.
-const _: () = {
-    assert!(TEMP_FIRST == 958);
-    assert!(TEMP_FIRST + TEMP_COUNT <= ENTITYNUM_WORLD);
-    assert!(
-        TEMP_FIRST > crate::game::bodies::BODY_FIRST + crate::game::bodies::BODY_QUEUE_SIZE as u32
-    );
-    assert!(TEMP_FIRST > crate::game::entity::FIRST_MAP_ENTITY);
-};
+/// A temp entity between its `G_TempEntity` and its free: the number the
+/// object table gave it and the level time it was raised at.
+pub struct LiveTemp {
+    pub id: EntId,
+    pub born_ms: i32,
+    pub te: TempEntity,
+}
 
 /// Who a temp entity is sent to. Retail spells this in `r.svFlags`:
 /// `SVF_BROADCAST` (8) sends to everyone regardless of PVS, and the
@@ -97,23 +92,6 @@ pub fn build(te: &TempEntity, number: u32, p: &Protocol) -> EntityState {
         );
     }
     e
-}
-
-/// The number the `i`th temp entity of a frame takes, counting from the
-/// frame's starting cursor. The cursor rolls rather than resetting to
-/// `TEMP_FIRST` every frame because the client keys a fired event entity on
-/// `(eType, eventParm)` per entity number and only forgets a number once it
-/// leaves the snapshot (`vcod_common::net::events::EventTracker`): two
-/// obituaries in adjacent frames with the same weapon would otherwise land
-/// on one number with an identical key, and the second would be dropped as
-/// already fired.
-pub fn number_at(cursor: u32, i: usize) -> u32 {
-    TEMP_FIRST + (cursor + i as u32) % TEMP_COUNT
-}
-
-/// The cursor the next frame starts from, `count` entities on.
-pub fn advance(cursor: u32, count: usize) -> u32 {
-    (cursor + count as u32) % TEMP_COUNT
 }
 
 /// Whether a snapshot whose `ps.clientNum` is `client_num` may carry this
@@ -211,27 +189,5 @@ mod tests {
         assert!(!visible_to(&te, 0));
         assert!(visible_to(&te, 2));
         assert!(visible_to(&flesh_hit(), 0));
-    }
-
-    /// The cursor rolls, so two adjacent frames never put an event on the
-    /// same number, and it wraps inside the 64-number block.
-    #[test]
-    fn the_cursor_rolls_and_wraps_inside_the_block() {
-        assert_eq!(number_at(0, 0), TEMP_FIRST);
-        assert_eq!(number_at(0, 3), TEMP_FIRST + 3);
-        assert_eq!(advance(0, 3), 3);
-        // Two frames of one event each take two different numbers.
-        let first = number_at(0, 0);
-        assert_ne!(number_at(advance(0, 1), 0), first);
-        // The block is 64 wide and the cursor wraps back onto its start.
-        assert_eq!(number_at(63, 1), TEMP_FIRST);
-        assert_eq!(advance(63, 1), 0);
-        assert_eq!(advance(60, 8), 4);
-        // A full frame of 64 lands on every number of the block exactly once.
-        let numbers: std::collections::BTreeSet<u32> =
-            (0..TEMP_COUNT as usize).map(|i| number_at(37, i)).collect();
-        assert_eq!(numbers.len(), TEMP_COUNT as usize);
-        assert_eq!(*numbers.first().unwrap(), TEMP_FIRST);
-        assert_eq!(*numbers.last().unwrap(), TEMP_FIRST + TEMP_COUNT - 1);
     }
 }

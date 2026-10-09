@@ -778,7 +778,7 @@ fn census<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<String> {
 }
 
 #[test]
-fn the_item_notifies_match_retail_on_mp_carentan() {
+fn the_engine_notifies_match_retail_on_mp_carentan() {
     let Some(mut rig) = rig() else { return };
     let cap = parse(&read(CLIENT));
     let retail_text = read(SCRIPT);

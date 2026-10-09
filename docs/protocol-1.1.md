@@ -523,18 +523,15 @@ The entity numbers vcod hands out, one label each:
   index advanced `& 7` (`docs/research/cod11-combat.md` section 5.2).
 - Map and script entities run from 72 up. VERIFIED: `G_InitGame` sets
   `level.num_entities` to 72 whatever `sv_maxclients` is.
-- Temp entities take 958..1021, the 64 numbers below `ENTITYNUM_WORLD`.
-  VERIFIED as vcod's own choice; retail instead gives a temp entity whatever
-  free slot `G_TempEntity` finds.
-- The block is walked by a rolling cursor, so an event repeated in adjacent
-  frames never lands on one number twice. VERIFIED as vcod's own choice, and
-  it is forced by the receiving side: a client keys a fired event entity on
+- Temp entities take their numbers off the same free list as script
+  spawns, and ride every snapshot until the entity pass frees them more than
+  300 ms past their event. VERIFIED: `G_TempEntity` (0x67938) calls
+  `G_Spawn` (0x67947), and `client-probes/probe_entnum` on retail put a
+  `playFx` between two spawns' numbers (`docs/research/cod11-combat.md`
+  14.7, "Entity numbers"). A client keys a fired event entity on
   `(eType, eventParm)` per number and forgets a number only once it leaves
-  the snapshot, so the second of two identical events on one number reads as
-  already fired.
-
-That a temp-entity number may differ from retail's is INFERRED: nothing on
-either side of the wire compares one frame's against the next's.
+  the snapshot; a freed number is out of the snapshot of the frame that
+  frees it, so its next event reads as new.
 
 ### svc_serverCommand (5)
 
@@ -586,7 +583,7 @@ short chunkLen        ; 0 = EOF
 byte  data[chunkLen]
 ```
 
-Ack each accepted block with a reliable `nextdl <block>`; the server's send window retransmits until acked. A zero-length block ends the file. `stopdl` aborts, and a final `donedl` makes the server re-send the gamestate. **Divergence from RTCW, #7.** `MAX_DOWNLOAD_BLKSIZE` is 8192, not RTCW's 2048 (observed live on public servers; a 2048 cap rejects their blocks). The 1.1d Linux server itself sends 2048-byte blocks (`docs/research/cod11-server-handshake.md`, "Serving a download"), so a client takes anything up to 8192. Download rate is governed by `sv_dl_maxRate`, and one message can carry several blocks. Stock paks (`main/pak0`..`pak9`, `localized_*`) are refused server-side.
+Ack each accepted block with a reliable `nextdl <block>`; the server's send window retransmits until acked. A zero-length block ends the file. `stopdl` aborts, and a final `donedl` makes the server re-send the gamestate. **Divergence from RTCW, #7.** `MAX_DOWNLOAD_BLKSIZE` is 8192, not RTCW's 2048 (observed live on public servers; a 2048 cap rejects their blocks). The 1.1d Linux server itself sends 2048-byte blocks (`docs/research/cod11-server-handshake.md`, "Serving a download"), so a client takes anything up to 8192. There is no `sv_dl_maxRate`: 1.1d fills each message with the client's rate over one snapshot interval and sends it at the client's `nextSnapshotTime`, one fragment per frame (`docs/research/cod11-server-handshake.md`, "Message pacing"), so one message can carry several blocks. Stock paks (`main/pak0`..`pak9`, `localized_*`) are refused server-side.
 
 ## Delta field encoding
 
@@ -902,6 +899,7 @@ Which bit means which key. Measured 2026-09-01 by logging `buttons`, `wbuttons` 
 | lean left | `wbuttons` | `0x10` |
 | lean right | `wbuttons` | `0x20` |
 | reload | `wbuttons` | `0x08` |
+| stance from a held `+prone` / `+movedown` | `wbuttons` | `0x02`, beside the stance bit (CoDMP.exe `0x40ae90`; `cod11-mantle.md`, "The forced-stance events") |
 | fire | `buttons` | `0x01` |
 | ads | `buttons` | `0x10` |
 | melee | `buttons` | `0x20` |

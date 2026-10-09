@@ -40,7 +40,7 @@ instead of leaving the fact in a commit message.
 
 | Subsystem | Doc |
 |---|---|
-| Handshake, configstrings, rcon, heartbeat, zombies, pings, rate, bans, `g_password`, private slots | `cod11-server-handshake.md` (Housekeeping section) |
+| Handshake, configstrings, rcon, heartbeat, zombies, pings, rate, bans, `g_password`, private slots, ping limits, message pacing, downloads | `cod11-server-handshake.md` (Housekeeping section) |
 | Map change, `map_restart`, `sv_serverid`, rotation | `cod11-map-cycle.md` |
 | Shots, damage, death, grenades, blasts, hit locations, shot timing | `cod11-combat.md` |
 | Movement, stances, constants | `cod11-mantle.md`, `bsp-ibsp59-format.md` (Movement constants) |
@@ -59,7 +59,7 @@ instead of leaving the fact in a commit message.
 | Chat, quick chat | `cod11-chat.md`, `cod11-quick-chat.md` |
 | Bots | `bot-navigation.md` (its Build times set the census floors), `bot-objectives.md` |
 | Player models, anims, formats | `player-model-anim-system.md`, `xmodel-v14-format.md`, `xanim-v14-format.md` |
-| Shader scripts, light grid, prop lighting | `cod11-shader-scripts.md`, `cod11-light-grid-and-leaf-lights.md` |
+| Shader scripts, light grid, prop and entity lighting | `cod11-shader-scripts.md`, `cod11-light-grid-and-leaf-lights.md` |
 | Gamma, overbright, `r_intensity` | `cod11-gamma.md` |
 
 ### Evidence labels
@@ -225,9 +225,10 @@ comments at each step cite the section that measured it. The shape: console
 lines (a `map` reloads first), timeouts, bots, pings, clock; every packet's
 cmds in arrival order, each one a `ClientThink_real` with its shots traced and
 their callbacks run inside the cmd (`cod11-combat.md` 16); menu responses,
-the script threads; spawns, weapon, link and sim ops, mover push; the
-entity pass, items, links and missiles one entity at a time by number, each
-blast walked on its grenade's turn (14.7); every
+the script threads; spawns, weapon, link and sim ops; the entity pass,
+items, links, movers, missiles, thinks, temp entity frees and linked clients
+one entity at a time by number, each blast walked on its grenade's turn and
+each mover's push on its own (14.7); every
 slot's end frame, then per slot the aim trace, `commit_pose` and
 that slot's turret, whose rounds deliver inside its turn; outgoing commands,
 snapshots, zombies, heartbeat.
@@ -271,6 +272,10 @@ dropped, so test such a builtin through `ScriptRuntime`.
   `level.time`, and the entering cmd seeds `commandTime` inside that window.
 - Server commands queue until the next snapshot and squash like
   `SV_AddServerCommand` (rule in `docs/protocol-1.1.md`).
+- The frame loop sends a fragmented snapshot or download message one
+  fragment per tick, as retail does, and an off-LAN client waits out its
+  rate between messages. A test that reads one tick's packets sees only the
+  first fragment of a big message.
 - A pure server drops a client that enters the world without a valid `cp`
   (pak checksums keyed with the gamestate's `checksumFeed`). Extra
   arguments to `tools/run_server.sh` land after `+map`, so `+set sv_pure 1`
@@ -340,6 +345,11 @@ dropped, so test such a builtin through `ScriptRuntime`.
   `radiusDamage` builtin.
 - The body queue is eight entities at 64..71 with no timer; a corpse lives
   until its slot is reused.
+- A temp entity takes its number from `G_Spawn`'s first-in-first-out free
+  list like a script `spawn`, rides every snapshot, and is freed on the
+  first entity pass more than 300 ms past its event (combat doc 14.7,
+  "Entity numbers"). Engine notifies raised in the entity pass (`movedone`)
+  wake their waiters on the next frame's threads.
 - A `clipOnly` weapon (the frag) has no reserve entry on the wire.
 - An item's `count` of 0 means unset; a drop writes -1 for empty.
 - A `trigger_lookat` is never touched; it fires off `ClientEndFrame`'s aim

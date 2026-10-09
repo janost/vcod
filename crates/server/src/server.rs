@@ -142,6 +142,11 @@ struct Challenge {
     addr: SocketAddr,
     challenge: i32,
     time: Instant,
+    /// When the last `challengeResponse` went out (`pingTime`, +0x1c).
+    ping_time: Instant,
+    /// The first connect's `svs.time - pingTime`, kept for its retries
+    /// (+0x24, 0 until then).
+    ping: Option<i32>,
     connected: bool,
 }
 
@@ -853,6 +858,60 @@ fn apply_callback_ops(
     mirror_vitals_of(sim, rt, slot);
 }
 
+/// `G_RunClient` (0x40660) for a linked client on its turn in the entity
+/// pass: its origin is the parent's plus the offset it linked at, turned by
+/// the parent's angles (`G_SetFixedLink`'s mode 2), and a held walk input
+/// moves it not at all; then the relink (0x40713). The parent has had its
+/// own turn (movers doc, section 13). Its velocity is whatever it linked
+/// with: retail's plant capture holds 184,27 across the abort's two linked
+/// seconds and 0 under 92 forward cmds (object-model doc 23.2). A parent
+/// that is gone releases the link: `sd.gsc`'s plant success never unlinks,
+/// the bombzone's `delete()` is what frees the record. This tick's per-cmd
+/// touch passes already ran at the last frame's anchor, as retail's do.
+fn run_client_link(rt: &mut script::ScriptRuntime, slot: usize, sim: &mut ClientSim) {
+    let Some(link) = sim.link_to else {
+        return;
+    };
+    match rt.link_anchor(link.parent) {
+        Some((p, angles)) => {
+            let [f, l, u] = vcod_common::pmove::aim::angles_to_axis(angles).map(glam::Vec3::from);
+            let [x, y, z] = link.offset;
+            sim.ps.origin = glam::Vec3::from(p) + f * x + l * y + u * z;
+            sim.ps.velocity = link.velocity.into();
+            rt.set_client_origin(slot, sim.origin());
+            link_client(rt, slot, sim);
+        }
+        None => sim.link_to = None,
+    }
+}
+
+/// A brush model mover's push on its turn in the entity pass: it carries its
+/// riders and shoves the bodies and items in its way, or holds a frame when
+/// a body fits nowhere (`G_MoverTeam`; movers doc, section 12).
+fn push_mover(
+    clients: &mut [Option<Client>],
+    rt: &mut script::ScriptRuntime,
+    step: &crate::game::mover::Step,
+    collision: &vcod_common::collision::CollisionWorld,
+) {
+    let mut sims: Vec<(usize, &mut ClientSim)> = clients
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(i, c)| Some((i, c.as_mut()?.sim.as_mut()?)))
+        .collect();
+    let before: Vec<glam::Vec3> = sims.iter().map(|(_, s)| s.ps.origin).collect();
+    if crate::push::push(step, &mut sims, collision) {
+        rt.push_items(step);
+    } else {
+        rt.stall_mover(step);
+    }
+    for ((slot, sim), was) in sims.iter().zip(before) {
+        if sim.ps.origin != was {
+            rt.set_client_origin(*slot, sim.origin());
+        }
+    }
+}
+
 /// `ClientThink_real`'s link after a cmd's move and its shots, at the
 /// snapped origin with the contents the last end frame wrote (combat doc
 /// 14.1, 14.7).
@@ -963,10 +1022,6 @@ pub struct Server {
     /// Scripted entities driving the packet-entity path; `None` when
     /// `cfg.test_entities` is 0.
     test_entities: Option<TestEntities>,
-    /// Where in the temp-entity block the next frame's events start. It
-    /// rolls rather than resetting, so an event repeated in adjacent frames
-    /// never lands on one number twice (`crate::game::temp_entity`).
-    temp_cursor: u32,
     /// Wall clock of the previous tick, for the trace's send-interval column.
     last_tick: Option<Instant>,
     /// The map script; `None` until `load_scripts` succeeds. `tick` steps it
@@ -1255,6 +1310,23 @@ fn remove_info_key(info: &str, key: &str) -> String {
     out
 }
 
+/// `SV_WriteDownloadToClient`'s blocks for `c`'s transfer, if it has one:
+/// as many as the rate carries in a snapshot interval. A refusal ends it.
+fn write_download(
+    c: &mut Client,
+    w: &mut MsgWriter,
+    now: i32,
+    rate: i32,
+    open: &impl Fn(&str) -> Result<Vec<u8>, crate::download::Refusal>,
+) {
+    let budget = crate::download::blocks_per_message(rate, FRAME_MS);
+    if let Some(dl) = c.download.as_mut()
+        && !dl.write(w, now, budget, open)
+    {
+        c.download = None;
+    }
+}
+
 /// One message off a client the snapshot pass does not build for: its
 /// unacked server commands and its last frame repeated under the new
 /// sequence. The packets come back for the caller to address.
@@ -1283,6 +1355,7 @@ fn resend_last_frame(
         snapshot::write(&mut w, proto, base, &frame, baselines);
         c.record_frame(frame);
     }
+    c.unsent.clear();
     c.netchan
         .transmit(c.last_client_command, &w.into_ops(), huff)
 }
@@ -1331,7 +1404,6 @@ impl Server {
             sv_time_ms: 0,
             baselines: HashMap::new(),
             test_entities: None,
-            temp_cursor: 0,
             last_tick: None,
             script: None,
             anims: None,
@@ -1513,6 +1585,11 @@ impl Server {
         crate::game::builtins::cvar::atoi(&self.live_cvar("sv_privateClients", "0"))
     }
 
+    /// A cvar read as `->integer`.
+    fn live_int_cvar(&self, name: &str) -> i32 {
+        crate::game::builtins::cvar::atoi(&self.live_cvar(name, "0"))
+    }
+
     /// `getinfo`/`getstatus`'s `pswrd`: 1 for any non-empty `g_password`,
     /// `none` included (0x808c3ae, 0x808bf23).
     fn pswrd(&self) -> u8 {
@@ -1548,13 +1625,23 @@ impl Server {
         let mut i = Info::new();
         i.set("challenge", challenge_arg(challenge))
             .set("protocol", PROTOCOL_V1.version)
-            .set("hostname", &self.cfg.hostname)
+            .set(
+                "hostname",
+                self.live_cvar("sv_hostname", &self.cfg.hostname),
+            )
             .set("mapname", &self.cfg.map)
             .set("clients", public_clients)
             .set("sv_maxclients", self.cfg.max_clients as i32 - private)
             .set("gametype", self.live_gametype())
-            .set("pure", u8::from(self.paks.pure))
-            .set("sv_allowAnonymous", 0)
+            .set("pure", u8::from(self.paks.pure));
+        // `->integer`, each key only when non-zero (0x808c318, 0x808c344).
+        for (key, cvar) in [("minPing", "sv_minPing"), ("maxPing", "sv_maxPing")] {
+            let v = self.live_int_cvar(cvar);
+            if v != 0 {
+                i.set(key, v);
+            }
+        }
+        i.set("sv_allowAnonymous", self.live_int_cvar("sv_allowAnonymous"))
             .set("pswrd", self.pswrd());
         self.send_oob(from, &format!("infoResponse\n{i}"));
     }
@@ -1630,6 +1717,7 @@ impl Server {
         {
             Some(c) => {
                 c.time = now;
+                c.ping_time = now;
                 c.challenge
             }
             None => {
@@ -1640,6 +1728,8 @@ impl Server {
                     addr: from,
                     challenge,
                     time: now,
+                    ping_time: now,
+                    ping: None,
                     connected: false,
                 };
                 if self.challenges.len() < MAX_CHALLENGES {
@@ -1697,7 +1787,28 @@ impl Server {
             self.send_oob(from, "error\nEXE_BAD_CHALLENGE");
             return;
         };
-        self.challenges[ci].connected = true;
+        let ch = &mut self.challenges[ci];
+        ch.connected = true;
+        let ping = *ch
+            .ping
+            .get_or_insert(now.saturating_duration_since(ch.ping_time).as_millis() as i32);
+        log::debug!("Client {ci} connecting with {ping} challenge ping");
+        // Off the LAN only, against `->value`; 0 turns each test off
+        // (0x80857ee..0x80858a4).
+        if !crate::client::is_lan(from.ip()) {
+            let min = crate::game::builtins::cvar::atof(&self.live_cvar("sv_minPing", "0"));
+            let max = crate::game::builtins::cvar::atof(&self.live_cvar("sv_maxPing", "0"));
+            if min != 0.0 && (ping as f32) < min {
+                log::debug!("Client {ci} rejected on a too low ping");
+                self.send_oob(from, "error\nEXE_ERR_HIGH_PING_ONLY");
+                return;
+            }
+            if max != 0.0 && (ping as f32) > max {
+                log::debug!("Client {ci} rejected on a too high ping: {ping}");
+                self.send_oob(from, "error\nEXE_ERR_LOW_PING_ONLY");
+                return;
+            }
+        }
         let reconnect = self
             .clients
             .iter()
@@ -1773,6 +1884,8 @@ impl Server {
         if let Some(rt) = self.script.as_mut() {
             rt.push_client_event(ClientEvent::Connect { slot, name });
         }
+        // A taken connect clears the stored ping (0x8085c16).
+        self.challenges[ci].ping = None;
         self.send_oob(from, "connectResponse");
         // The first client, or the last the server holds (0x8085cd3).
         let count = self.client_count();
@@ -2241,6 +2354,8 @@ impl Server {
             return;
         }
         c.stamp_sent(c.netchan.outgoing_sequence, self.sv_time_ms);
+        // Whole, ahead of any fragments still queued, which it supersedes.
+        c.unsent.clear();
         for pkt in c.netchan.transmit(c.last_client_command, &ops, &self.huff) {
             self.outbox.push((c.addr, pkt));
         }
@@ -2649,19 +2764,21 @@ impl Server {
         }
     }
 
-    /// `SV_WriteDownloadToClient` (0x8086290) for every client with a
-    /// download, in a message of its own: a downloading client is still
-    /// primed and gets no snapshot. Only paks this server mounts and lists in
-    /// `sv_referencedPakNames` go out; retail serves any file of the name.
-    fn send_downloads(&mut self) {
+    /// What `SV_WriteDownloadToClient` (0x8086290) opens a download with:
+    /// the bytes, or the refusal. Only paks this server mounts and lists in
+    /// `sv_referencedPakNames` go out. Retail's `FS_SV_FOpenFileRead`
+    /// opens any path under its game directories, `..` included, so a
+    /// `download main/server.cfg` hands out the rcon password there
+    /// (docs/research/cod11-server-handshake.md, "Serving a download").
+    fn download_opener(
+        &self,
+    ) -> impl Fn(&str) -> Result<Vec<u8>, crate::download::Refusal> + use<> {
         let allow = self
             .level_cvar("sv_allowDownload")
             .is_none_or(|v| v.trim().parse::<i32>().unwrap_or(0) != 0);
         let pure = self.paks.pure;
-        let dedicated = self.dedicated;
-        let now = self.sv_time_ms;
         let fs = self.fs.clone();
-        let open = |name: &str| -> Result<Vec<u8>, crate::download::Refusal> {
+        move |name: &str| {
             use crate::download::Refusal;
             let stem = name.strip_suffix(".pk3").unwrap_or(name);
             if vcod_common::net::download::is_stock_pak(stem) {
@@ -2678,24 +2795,41 @@ impl Server {
                 .and_then(|p| std::fs::read(&p.path).ok())
                 .filter(|b| !b.is_empty())
                 .ok_or(Refusal::NotFound)
-        };
+        }
+    }
+
+    /// `SV_SendClientSnapshot` (0x808f844) for a client that is downloading
+    /// and not in the world: retail writes the server commands and the
+    /// snapshot only for an active client (or a zombie), so the message is
+    /// the header and the download blocks. It goes out when the client's
+    /// `nextSnapshotTime` comes round, as every message does
+    /// ([`Client::pace`]); a client in the world gets its blocks after its
+    /// snapshot in [`Self::send_snapshots`].
+    fn send_downloads(&mut self) {
+        let open = self.download_opener();
+        let max_rate = self.live_int_cvar("sv_maxRate");
+        let (dedicated, now) = (self.dedicated, self.sv_time_ms);
         for c in self.clients.iter_mut().flatten() {
+            if c.sim.is_some() || c.is_bot || now < c.next_message_ms {
+                continue;
+            }
+            let rate = c.send_rate(dedicated, max_rate);
+            if let Some(pkt) = c.next_fragment(now, rate) {
+                self.outbox.push((c.addr, pkt));
+                continue;
+            }
             if c.download.is_none() {
                 continue;
             }
-            let budget = crate::download::blocks_per_message(c.rate(dedicated), 50);
             let mut w = MsgWriter::new(&self.huff);
-            write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
-            c.reliable_sent = c.netchan.reliable_sequence as i32;
-            if let Some(dl) = c.download.as_mut()
-                && !dl.write(&mut w, now, budget, open)
-            {
-                c.download = None;
-            }
+            write_download(c, &mut w, now, rate, &open);
             let sent = c
                 .netchan
                 .transmit(c.last_client_command, &w.into_ops(), &self.huff);
-            self.outbox.extend(sent.into_iter().map(|p| (c.addr, p)));
+            c.pace(now, sent.iter().map(Vec::len).sum(), rate, FRAME_MS);
+            if let Some(pkt) = c.first_packet(sent) {
+                self.outbox.push((c.addr, pkt));
+            }
         }
     }
 
@@ -3787,13 +3921,36 @@ impl Server {
         }
     }
 
-    /// `Cvar_InfoString(CVAR_SERVERINFO)` with the live cvars the config
-    /// does not hold.
+    /// `Cvar_InfoString(CVAR_SERVERINFO)`: the running level's table, so a
+    /// script `setCvar` of a serverinfo cvar shows as a console write does.
+    /// With no level, the config and the `--set`s the first load stamps.
+    /// `sv_pure` is the one the paks were listed under.
     fn serverinfo(&self) -> Info {
-        let mut i = configstrings::serverinfo(&self.live_cfg());
-        i.set("sv_privateClients", self.private_clients())
-            .set("sv_pure", u8::from(self.paks.pure));
+        let mut i = match self.script.as_ref() {
+            Some(rt) => {
+                let mut i = Info::new();
+                for (k, v) in rt.cvars().info_pairs(crate::cvars::flag::SERVERINFO) {
+                    i.set(k, v);
+                }
+                i
+            }
+            None => {
+                let mut i = configstrings::serverinfo(&self.live_cfg());
+                i.set("sv_privateClients", self.private_clients());
+                i
+            }
+        };
+        i.set("sv_pure", u8::from(self.paks.pure));
         i
+    }
+
+    /// `SV_Frame`'s `cvar_modifiedFlags & CVAR_SERVERINFO` test, as a
+    /// compare: whatever wrote a serverinfo cvar this frame, configstring 0
+    /// follows before the snapshots go out.
+    fn flush_serverinfo(&mut self) {
+        if self.configstrings.first() != Some(&self.serverinfo().to_string()) {
+            self.refresh_serverinfo();
+        }
     }
 
     /// `SV_Frame`'s cvar flush, the serverinfo half: a write to a cvar the
@@ -4963,8 +5120,8 @@ impl Server {
             // state: applying a full clip every frame would make the weapon
             // bottomless.
             apply_weapon_ops(&mut self.clients, rt, &weapons);
-            // `linkTo` and `unlink`, before the re-anchor below so a link
-            // made this frame is already pinned on this frame's wire: both
+            // `linkTo` and `unlink`, before the entity pass re-anchors so a
+            // link made this frame is already pinned on this frame's wire: both
             // retail captures read the new `pm_type` on the next snapshot
             // after the cmd (object-model doc, 23.2).
             for (slot, op) in rt.take_link_ops() {
@@ -4987,38 +5144,6 @@ impl Server {
                     crate::game::host::LinkOp::Unlink => None,
                 };
             }
-            // `G_RunClient`'s re-anchor: a linked client's origin is the
-            // parent's plus the offset it linked at, turned by the parent's
-            // angles (`G_SetFixedLink`'s mode 2), and a held walk input
-            // moves it not at all. The parent is read where it is this
-            // frame, since retail runs it first (movers doc, section 13). Its velocity is whatever it linked with:
-            // retail's plant capture holds 184,27 across the abort's two
-            // linked seconds and 0 under 92 forward cmds (23.2). A parent
-            // that is gone releases the link: `sd.gsc`'s plant success never
-            // unlinks, the bombzone's `delete()` is what frees the record.
-            for (slot, c) in self.clients.iter_mut().enumerate() {
-                let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) else {
-                    continue;
-                };
-                let Some(link) = sim.link_to else { continue };
-                match rt.link_anchor(link.parent) {
-                    Some((p, angles)) => {
-                        let [f, l, u] =
-                            vcod_common::pmove::aim::angles_to_axis(angles).map(glam::Vec3::from);
-                        let [x, y, z] = link.offset;
-                        sim.ps.origin = glam::Vec3::from(p) + f * x + l * y + u * z;
-                        sim.ps.velocity = link.velocity.into();
-                        // The mirror loop above ran before the re-anchor, so
-                        // script's copy is written again here. The anchor is
-                        // end-of-tick, where retail's is ahead of
-                        // `ClientThink`, so this tick's per-cmd touch passes
-                        // already ran at the un-anchored origins; the wire
-                        // carries the anchored one either way.
-                        rt.set_client_origin(slot, sim.origin());
-                    }
-                    None => sim.link_to = None,
-                }
-            }
             // What script did to each sim, applied once, then the health
             // mirror and the frame's damage feedback, in that order:
             // `P_DamageFeedback` reads the health the hit left.
@@ -5031,44 +5156,22 @@ impl Server {
                 &mut self.rng,
                 self.sv_time_ms,
             );
-            // The movers' half of the entity pass: each brush model that
-            // moved this frame carries its riders and shoves the bodies and
-            // items in its way, or holds a frame when a body fits nowhere
-            // (`G_MoverTeam`; movers doc, section 12). After the script's
-            // own `setOrigin`s, which retail's threads run before the pass.
-            if let Some(world) = self.world.as_ref() {
-                for step in rt.take_mover_steps() {
-                    let mut sims: Vec<(usize, &mut crate::spectate::ClientSim)> = self
-                        .clients
-                        .iter_mut()
-                        .enumerate()
-                        .filter_map(|(i, c)| Some((i, c.as_mut()?.sim.as_mut()?)))
-                        .collect();
-                    let before: Vec<glam::Vec3> = sims.iter().map(|(_, s)| s.ps.origin).collect();
-                    if crate::push::push(&step, &mut sims, &world.collision) {
-                        rt.push_items(&step);
-                    } else {
-                        rt.stall_mover(&step);
-                    }
-                    for ((slot, sim), was) in sims.iter().zip(before) {
-                        if sim.ps.origin != was {
-                            rt.set_client_origin(*slot, sim.origin());
-                        }
-                    }
-                }
-            }
-            // `G_RunFrame`'s entity loop: items, links and missiles one
-            // entity at a time by number (combat doc 14.7), after the frame's
-            // threads and every client move they made (spawns, `setOrigin`s,
-            // links, mover pushes), so a thread reads a grenade's last-frame
-            // origin, the flight is traced past the bodies where script put
-            // them, and a blast walk meets this frame's links of every entity
-            // numbered below the grenade (14.7, 16.2). A grenade thrown on
-            // this tick was spawned inside its cmd on the last frame's
-            // `level.time`, so it has already flown a frame by the time the
-            // snapshot goes out (combat doc 11.4). Each blast is walked on
-            // its missile's turn, one victim's callback before the next
-            // victim is measured (14.1, 14.5).
+            // `G_RunFrame`'s entity loop: items, links, movers, missiles,
+            // thinks and linked clients one entity at a time by number
+            // (combat doc 14.7), after the frame's threads and every client
+            // move they made (spawns, `setOrigin`s, links), so a thread reads
+            // a grenade's or a mover's last-frame origin, the flight is
+            // traced past the bodies where script put them, and a blast walk
+            // meets this frame's turn of every entity numbered below the
+            // grenade (14.7, 16.2). A grenade thrown on this tick was spawned
+            // inside its cmd on the last frame's `level.time`, so it has
+            // already flown a frame by the time the snapshot goes out (combat
+            // doc 11.4). Each blast is walked on its missile's turn, one
+            // victim's callback before the next victim is measured (14.1,
+            // 14.5); each brush model's move pushes its riders and the bodies
+            // in its way on its turn, or holds a frame when a body fits
+            // nowhere (`G_MoverTeam`; movers doc, section 12); a linked client
+            // is re-anchored on its own turn, after its parent's.
             self.pending_explosions.clear();
             let collision = self.world.as_ref().map(|w| &w.collision);
             let mut bones = match (self.fs.as_deref(), self.anims.as_deref()) {
@@ -5080,12 +5183,6 @@ impl Server {
                 }),
                 _ => None,
             };
-            let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
-                .clients
-                .iter()
-                .enumerate()
-                .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
-                .collect();
             // Where a callback earlier in the walk set a client down: its
             // link moved off the one its last cmd made (`setOrigin` relinks
             // at once, combat doc 14.7), and the walk measures it there.
@@ -5115,14 +5212,53 @@ impl Server {
                     }
                     v
                 };
-            let mut pass = rt.begin_entity_pass();
-            while let Some(x) = rt.run_entity_pass(&mut pass, collision, &sims, self.sv_time_ms) {
+            let client_links: Vec<(usize, vcod_gsc::EntId)> = self
+                .clients
+                .iter()
+                .enumerate()
+                .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?.link_to?.parent)))
+                .collect();
+            let mut pass = rt.begin_entity_pass(client_links);
+            loop {
+                let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
+                    .clients
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
+                    .collect();
+                let Some(stop) = rt.run_entity_pass(&mut pass, collision, &sims, self.sv_time_ms)
+                else {
+                    break;
+                };
+                let x = match stop {
+                    script::PassStop::Blast(x) => x,
+                    script::PassStop::Push(step) => {
+                        drop(sims);
+                        if let Some(world) = self.world.as_ref() {
+                            push_mover(&mut self.clients, rt, &step, &world.collision);
+                        }
+                        continue;
+                    }
+                    script::PassStop::Client(slot) => {
+                        drop(sims);
+                        if let Some(sim) = self
+                            .clients
+                            .get_mut(slot)
+                            .and_then(Option::as_mut)
+                            .and_then(|c| c.sim.as_mut())
+                        {
+                            run_client_link(rt, slot, sim);
+                        }
+                        continue;
+                    }
+                };
                 self.bot_noises.push(crate::bots::Noise {
                     at: (x.at + glam::Vec3::Z * 40.0).into(),
                     source: x.owner,
                     radius: crate::bots::HEAR_BLAST,
                 });
                 let Some(def) = weapons.get(x.weapon as usize) else {
+                    rt.spawn_concussive();
                     self.pending_explosions.push(x);
                     continue;
                 };
@@ -5206,6 +5342,7 @@ impl Server {
                         }
                     }
                 }
+                rt.spawn_concussive();
                 self.pending_explosions.push(x);
             }
             // What the blasts' callbacks did to the sims, as above.
@@ -5449,6 +5586,7 @@ impl Server {
             }
         }
         self.refresh_fall_heights();
+        self.flush_serverinfo();
         // `trap_SendConsoleCommand`'s `EXEC_APPEND`: what a builtin queued
         // this frame runs at the top of the next tick, never mid-frame.
         self.console.extend(console_lines);
@@ -6263,24 +6401,17 @@ impl Server {
             entities.extend(rt.bodies().entities());
         }
 
-        // Every event the script raised this frame, as one-frame entities
-        // out of the reserved block. Draining them here is what frees them,
-        // the way retail frees a `G_TempEntity` the frame after it is sent.
-        let temps = self
+        // Every live temp entity, at the number `G_TempEntity` took for it,
+        // on every snapshot until the entity pass frees it.
+        let (temps, temp_states): (Vec<temp_entity::Scope>, Vec<(u32, msg::EntityState)>) = self
             .script
-            .as_mut()
-            .map_or_else(Vec::new, |rt| rt.take_temp_entities());
-        let cursor = self.temp_cursor;
-        let temp_states: Vec<(u32, msg::EntityState)> = temps
-            .iter()
-            .take(temp_entity::TEMP_COUNT as usize)
-            .enumerate()
-            .map(|(i, te)| {
-                let n = temp_entity::number_at(cursor, i);
-                (n, temp_entity::build(te, n, self.proto))
+            .as_ref()
+            .map(|rt| {
+                rt.temp_entities()
+                    .map(|(n, te)| (te.scope, (n, temp_entity::build(te, n, self.proto))))
+                    .unzip()
             })
-            .collect();
-        self.temp_cursor = temp_entity::advance(cursor, temp_states.len());
+            .unwrap_or_default();
 
         // What every snapshot this frame takes its entities from, and what
         // the archive keeps of the frame. A missile carries `SVF_BROADCAST`
@@ -6292,9 +6423,9 @@ impl Server {
         let live = crate::archive::WorldFrame {
             culled,
             temps: temps
-                .iter()
+                .into_iter()
                 .zip(temp_states)
-                .map(|(te, (_, e))| (te.scope, Rc::new(e)))
+                .map(|(scope, (_, e))| (scope, Rc::new(e)))
                 .collect(),
             broadcast: self.script.as_ref().map_or_else(BTreeMap::new, |rt| {
                 rt.missiles()
@@ -6392,6 +6523,8 @@ impl Server {
             })
             .collect();
 
+        let open = self.download_opener();
+        let max_rate = self.live_int_cvar("sv_maxRate");
         for (slot, follow_frame) in follow_frames.iter().enumerate() {
             let follow_frame = follow_frame.as_ref();
             let Some(c) = self.clients[slot].as_mut() else {
@@ -6400,6 +6533,20 @@ impl Server {
             // No socket to write to; the bot's slot still counts toward the
             // roster and entity lists the real clients are sent.
             if c.is_bot {
+                continue;
+            }
+            if c.sim.is_none() {
+                continue;
+            }
+            // `SV_SendClientMessages` (0x809045c) skips a client until its
+            // `nextSnapshotTime`, and a turn with fragments left sends the
+            // next one instead of a snapshot.
+            if self.sv_time_ms < c.next_message_ms {
+                continue;
+            }
+            let rate = c.send_rate(self.dedicated, max_rate);
+            if let Some(pkt) = c.next_fragment(self.sv_time_ms, rate) {
+                self.outbox.push((c.addr, pkt));
                 continue;
             }
             let Some(sim) = c.sim.as_ref() else {
@@ -6491,6 +6638,7 @@ impl Server {
             w.write_byte(snapshot::SVC_SNAPSHOT);
             snapshot::write(&mut w, self.proto, base.as_ref(), &frame, &self.baselines);
             c.record_frame(frame);
+            write_download(c, &mut w, self.sv_time_ms, rate, &open);
 
             let ops = w.into_ops();
 
@@ -6537,7 +6685,14 @@ cmds {processed} span {span} queued {queued} ack {} behind {ack_behind} {base_de
                 );
             }
             c.stamp_sent(message_num, self.sv_time_ms);
-            for pkt in c.netchan.transmit(c.last_client_command, &ops, &self.huff) {
+            let sent = c.netchan.transmit(c.last_client_command, &ops, &self.huff);
+            c.pace(
+                self.sv_time_ms,
+                sent.iter().map(Vec::len).sum(),
+                rate,
+                FRAME_MS,
+            );
+            if let Some(pkt) = c.first_packet(sent) {
                 self.outbox.push((c.addr, pkt));
             }
         }
@@ -6900,6 +7055,36 @@ mod tests {
             "serverinfo: {:?}",
             sv.configstring(0)
         );
+    }
+
+    /// A script `setCvar` of a serverinfo cvar reaches configstring 0 and
+    /// `getinfo` by the next frame, as retail's `SV_Frame` flush makes it
+    /// (`sv_privateClients 12` on 8 slots read `sv_maxclients -4` live; 4
+    /// slots here).
+    #[test]
+    fn a_script_write_of_a_serverinfo_cvar_reaches_configstring_0() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test(
+                "main() { wait 0.1; setCvar(\"sv_privateClients\", \"12\"); setCvar(\"sv_hostname\", \"scripted\"); }",
+            ),
+        );
+        sv.tick(now);
+        assert!(sv.configstring(0).contains("\\sv_privateClients\\0"));
+        for _ in 0..4 {
+            sv.tick(now);
+        }
+        let cs0 = sv.configstring(0).to_string();
+        assert_eq!(info_value_for_key(&cs0, "sv_privateClients"), Some("12"));
+        assert_eq!(info_value_for_key(&cs0, "sv_hostname"), Some("scripted"));
+        sv.take_outgoing();
+        sv.handle_packet(addr(20), &oob("getinfo x"), now);
+        let (_, _, rest) = reply(&mut sv);
+        let info = String::from_utf8_lossy(&rest).to_string();
+        assert_eq!(info_value_for_key(&info, "sv_maxclients"), Some("-8"));
+        assert_eq!(info_value_for_key(&info, "hostname"), Some("scripted"));
     }
 
     /// `SV_SetConfigstring` broadcasts a slot the running level changed to
@@ -7412,6 +7597,48 @@ mod tests {
         );
         sv.handle_packet(from, &build_connect(&ui), now);
         reply_text(sv)
+    }
+
+    /// `sv_minPing` / `sv_maxPing` against the challenge ping, off the LAN
+    /// only, and the two `getinfo` keys that appear while either is set
+    /// (handshake doc, "Ping limits").
+    #[test]
+    fn ping_limits_refuse_a_connect_off_the_lan() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.set_cvar("sv_minPing", "100");
+        sv.set_cvar("sv_maxPing", "250");
+        let wan = SocketAddr::from(([203, 0, 113, 7], 27960));
+        let connect_after = |sv: &mut Server, from, ms| {
+            let challenge = challenge_for(sv, from, now);
+            let ui = format!(
+                "\\name\\vcod\\protocol\\{}\\qport\\{QPORT}\\challenge\\{challenge}",
+                PROTOCOL_V1.version
+            );
+            sv.handle_packet(from, &build_connect(&ui), now + Duration::from_millis(ms));
+            reply_text(sv)
+        };
+        assert_eq!(
+            connect_after(&mut sv, wan, 50),
+            ("error".into(), "EXE_ERR_HIGH_PING_ONLY".into())
+        );
+        assert_eq!(
+            connect_after(&mut sv, addr(9), 50).0,
+            "connectResponse",
+            "a LAN client skips both tests"
+        );
+        sv.handle_packet(addr(20), &oob("getinfo x"), now);
+        let (_, _, rest) = reply(&mut sv);
+        let info = String::from_utf8_lossy(&rest).to_string();
+        assert_eq!(info_value_for_key(&info, "minPing"), Some("100"));
+        assert_eq!(info_value_for_key(&info, "maxPing"), Some("250"));
+        let wan2 = SocketAddr::from(([203, 0, 113, 8], 27960));
+        assert_eq!(
+            connect_after(&mut sv, wan2, 400),
+            ("error".into(), "EXE_ERR_LOW_PING_ONLY".into())
+        );
+        let wan3 = SocketAddr::from(([203, 0, 113, 9], 27960));
+        assert_eq!(connect_after(&mut sv, wan3, 150).0, "connectResponse");
     }
 
     /// Retail 1.1d with `sv_privateClients 2` (handshake doc, "Private

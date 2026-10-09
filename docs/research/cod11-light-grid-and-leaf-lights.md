@@ -1,6 +1,7 @@
 # Static-model lighting: lights, leaf lists and the light-visibility grid (lumps 19, 30, 32)
 
-How CoD 1.1 MP lights `misc_model` props, and the BSP data it reads.
+How CoD 1.1 MP lights `misc_model` props and entity models, and the BSP
+data it reads.
 Evidence is `CoDMP.exe` 1.1 (image base `0x00400000`, virtual addresses),
 read in the Ghidra export and the `objdump` disassembly, and the stock
 paks. Each claim carries its own label. An earlier version of this doc said
@@ -300,19 +301,16 @@ lightingPrecalc` (mp_carentan 62 against 49, mp_brecourt 66 against 60).
 - INFERRED: GL lighting gives a dynamic light `max(0, N . L) * diffuse /
   (d^2 + 0.001)` per vertex: at an intensity of 800 (the grenade's
   `Light`), one framebuffer unit at 100 units, a quarter at 200.
-- INFERRED: entity models take the same pick through 0x4b7320 and 0x4b7290
-  (the grid sample at the lighting origin, then 0x4b69f0 with the scene's
-  lights).
+- Entity models take the same pick every frame (section 13).
 
-vcod (`vs_prop` in `shader.wgsl`, `dlight_term` in `dynamic_model.wgsl`):
+vcod (`vs_prop` in `shader.wgsl`):
 
 - A prop vertex of a `lightingDiffuse` skin (vertex alpha 255) adds every
   fx light within twice its radius by the formula above to its baked
   colour, clamped at 1, then doubles for the display. The fx `Light`
   block's size stands in for the intensity (INFERRED: the efx renderer's
-  call is not traced). The dynamic light does not push a baked light out of
-  the eight slots.
-- Entity models keep their fixed key light and add the same term.
+  call is not traced). On a prop the dynamic light does not push a baked
+  light out of the eight slots; on an entity model it does (section 13).
 - The world keeps vcod's own fx-light falloff; retail's world dlights
   (0x4b59f0's bits) are not ported.
 
@@ -333,4 +331,88 @@ vcod (`vs_prop` in `shader.wgsl`, `dlight_term` in `dynamic_model.wgsl`):
   of radius 16 under the player, its grey level faded with the height. Value 2 is the renderer's stencil path (`"<stencil shadow>"`).
 - So retail's default draws no blob shadow under players. vcod draws none
   and does not read `cg_shadows`.
+
+## 13. Entity models
+
+- VERIFIED, 0x4b7320's disassembly: it runs once per refEntity per frame
+  (it returns when the byte at `+0xa1` is set and sets it), takes the
+  lighting origin from `+0x0c` when bit 7 of the byte at `+0x04` is set
+  (Q3's `RF_LIGHTING_ORIGIN`, 0x80) and from `+0x44` (the origin)
+  otherwise, and calls 0x4b7290. With `cg_shadows` 2 (cvar pointer
+  0x16c36f8, name at 0x557b80) it also stores a direction at `+0xa4`, read
+  by nothing else in this section.
+- VERIFIED, 0x4b7290's disassembly: with a map loaded (0x16c4d54), leaf
+  lights present (`world+0x98`) and `r_entFullbright` 0 (0x16c39e4, name at
+  0x557dfc, default "0") it calls 0x4b6210 on the origin (section 6) and
+  then 0x4b69f0 with the scene (section 11); otherwise it stores a light
+  count of 0 at `+0xcc`.
+- VERIFIED: 0x4b69f0 appends each scene light within twice its intensity
+  after the leaf's lights and before the sky lights, weight 1 (the loop
+  over `scene+0x160` / `+0x164` writing at `param_4 + n * 4`), then sorts
+  all candidates into eight slots (section 6). So a dynamic light pushes
+  the weakest map light out of an entity's eight. The sky lights are built
+  per entity, at `+0x19c` and `+0x224`.
+- INFERRED, 0x50e3e0's call at 0x50e81c: the xmodel entity add calls
+  0x4b7320 for every entity model it draws.
+- VERIFIED, 0x4d64e0 (called from the surface draw at 0x4d696c and
+  0x4d6adb when the material's `+0x54` has a bit of 0x18 set): it sets
+  `GL_LIGHT_MODEL_AMBIENT` (0xb53) to `sky * skyFactor + worldAmbient`
+  (`world+0xf8` times the entity's `+0x110`, plus `world+0xd8`), loads the
+  matrix at 0x16c5408 through the pointer at 0x16c4020 when it has lights,
+  and calls 0x4d63a0 per light. 0x4d63a0 sets `GL_AMBIENT` and
+  `GL_DIFFUSE` to the light's `+0x14` and `+0x24` times its weight,
+  `GL_SPECULAR` `+0x34`, `GL_POSITION` `+0x44` (w at `+0x50`),
+  `GL_SPOT_DIRECTION` `+0x54`, `GL_SPOT_EXPONENT` `+0x6c`,
+  `GL_SPOT_CUTOFF` `+0x70` and the three attenuations `+0x60..+0x68`.
+- INFERRED: the loaded matrix is the world view, so light positions are in
+  world space, and the call through 0x16c3d00 on `0x4000 + i` for every
+  slot past the count is `glDisable`.
+- VERIFIED, the GL init at 0x4b2bf7..0x4b2c6f: light model ambient (0, 0,
+  0, 1), local viewer 0, two-sided 0; the material's ambient and diffuse
+  (0x1602, both sides) are (1, 1, 1, 1), its specular and emission (0, 0, 0,
+  1) and its shininess 0.
+- VERIFIED: 0x4d64e0 raises the ambient to `[0x16c55b0] *
+  r_entMinLight` (0x16c37c0, name at 0x557de8, default ".15") by its
+  luminance when bit 0x20 of the refEntity's `+0x04` is set.
+- INFERRED: 0x16c55b0 is `identityLight`, and none of the cgame
+  refEntities in the table below sets bit 0x20.
+- INFERRED, so an entity model's vertex is GL's fixed-function colour:
+  `ambient + sum over lights of atten * spot * (weight * ambient_i +
+  max(0, N . L) * weight * diffuse_i)`, clamped to 0..1, times the
+  texture, and the display doubles it (`cod11-gamma.md` section 5). A
+  directional light has `atten` 1; a positional one `1 / (c + l d + q
+  d^2)`. GL's spot test is `dot(-L, spot direction) >= cos(cutoff)`, while
+  the static vertex pass (section 8) tests `dot(L, +0x54)`: with the same
+  `+0x54` the two disagree in sign, so a cone light lights static models
+  in its cone and entity models on its back side. vcod keeps both as
+  retail sets them.
+
+The lighting origins the cgame (`cgame_mp_x86.dll`) sets, VERIFIED from
+the refEntity stores before each `0x3d` (add refEntity) trap:
+
+| Draw | renderfx | Lighting origin |
+|---|---|---|
+| Player (`ET_PLAYER`, 0x30028210) and corpse (`ET_CORPSE`, 0x30028400) | `0x80`, plus 2 for one's own body | lerped origin, z plus the next state's `fTorsoHeight` (centity `+0x1d4`) plus 12 when `eFlags` has 0x40 (prone, float at 0x300693fc), 20 with 0x20 (crouch, 0x30069448), 32 otherwise (0x30069408) |
+| Turret (`ET_TURRET`, 0x3001b2e0) | `0x80` | origin, z plus 32 (0x30069408) |
+| View weapon (0x30036cf0) | `0x8c` | playerstate origin (`+0x14`), z plus `viewHeightCurrent` (`+0xd0`) |
+| Item (0x3001adb0) | 0 | the origin |
+| General and script mover (0x3001ab50, 0x3001b710) | 0x80 only with `eFlags` 0x10000 (0x3001aaa0) | then the centity's `+0x210`, else the origin |
+
+INFERRED: centity `+0xf0` starts the next entity state (its `eFlags` at
+`+0xf8`), so `+0x1d4` is that state's `fTorsoHeight` (offset 228).
+
+vcod (`StaticLighting::entity_lights`, `client/src/entity_light.rs`,
+`gl_lighting` in `dynamic_model.wgsl` and `viewmodel.wgsl`):
+
+- The renderer keeps the map's `StaticLighting` after the props are lit,
+  so entity samples share the props' cache. Each frame every distinct
+  lighting origin is picked once (a player's parts share one) with the
+  fx lights as scene lights, and the vertex shader applies the GL formula
+  above per vertex. The viewmodel's lights are moved into view space.
+- The `eFlags` 0x10000 lighting origin of general entities is not ported;
+  they light at their origin. Every entity skin is treated as lit; the
+  0x18 material bit is not traced (section 11).
+- A map without leaf lights draws entity models at `identityLight`.
+- VERIFIED, vcod measurement 2026-10-09 (release build): 2.8 us per pick
+  on mp_carentan's open ground, cache misses included.
 

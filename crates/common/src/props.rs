@@ -212,12 +212,13 @@ fn load_model(fs: &Pk3Fs, name: &str) -> Option<xmodel::XModel> {
 }
 
 /// Bakes every placed prop into world geometry, one batch per skin,
-/// lit from the map's lights.
-pub fn build(fs: &Pk3Fs, bsp: &Bsp) -> Props {
-    build_with(fs, &bsp.entities, Some(StaticLighting::new(bsp)))
+/// lit from the map's lights. `lighting` keeps the grid samples it filled,
+/// which entity models go on to share.
+pub fn build(fs: &Pk3Fs, bsp: &Bsp, lighting: &mut StaticLighting) -> Props {
+    build_with(fs, &bsp.entities, Some(lighting))
 }
 
-fn build_with(fs: &Pk3Fs, entities: &str, mut lighting: Option<StaticLighting>) -> Props {
+fn build_with(fs: &Pk3Fs, entities: &str, mut lighting: Option<&mut StaticLighting>) -> Props {
     let placements = placements(entities);
     let mut gens: HashMap<String, SkinGen> = HashMap::new();
     // (placement, vertex range, gen) per surface, and the normal each
@@ -755,7 +756,7 @@ mod tests {
             return;
         };
         let bsp = bsp::parse(&data).unwrap();
-        let props = build(&fs, &bsp);
+        let props = build(&fs, &bsp, &mut StaticLighting::new(&bsp));
         assert!(props.verts.len() > 10_000, "{}", props.verts.len());
         assert!(!props.batches.is_empty());
         let total: u32 = props.batches.iter().map(|b| b.index_count).sum();
@@ -803,7 +804,7 @@ mod tests {
             return;
         };
         let bsp = bsp::parse(&fs.read(&path).unwrap()).unwrap();
-        let props = build(&fs, &bsp);
+        let props = build(&fs, &bsp, &mut StaticLighting::new(&bsp));
         let colors: std::collections::HashSet<[u8; 4]> =
             props.verts.iter().map(|v| v.color).collect();
         // one tint per placement would give a few hundred at most

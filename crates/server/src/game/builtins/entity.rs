@@ -17,8 +17,8 @@ use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
 /// G_FreeEntity` with `nextthink = level.time + 100` rather than freeing on
 /// the spot (docs/research/cod11-gsc-object-model.md section 14, from
 /// disassembly). `probe_delete`'s capture is consistent with a defer
-/// somewhere in (0, 150] ms but does not pin 100 specifically; see the note
-/// on `probe_delete_matches_retail` in `crates/server/tests/semantics_ents.rs`.
+/// somewhere in (0, 150] ms; `probe_entnum`'s pins 100
+/// (docs/research/cod11-combat.md 14.7, "The pass runs after the threads").
 const DELETE_DEFER_MS: i32 = 100;
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;

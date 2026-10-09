@@ -141,14 +141,17 @@ fn every_verb_matches_the_retail_trace_frame_for_frame() {
             let e = spawn_mover(&mut host, cx);
             host.level_time_ms = call_ms;
             call(&mut host, cx, e, verb);
+            vcod_server::game::mover::run(&mut host, cx);
 
+            // Each frame's sample is read by the threads, ahead of that
+            // frame's entity pass.
             for s in &samples[1..] {
                 host.level_time_ms = s.ms;
-                vcod_server::game::mover::run(&mut host, cx);
                 let (o, a) = read(&mut host, cx, e);
                 if let Some(d) = differs(phase, s, o, a) {
                     diffs.push(d);
                 }
+                vcod_server::game::mover::run(&mut host, cx);
             }
         });
     }
@@ -183,18 +186,19 @@ fn a_second_rotateyaw_continues_from_where_the_first_stopped() {
         let e = spawn_mover(&mut host, cx);
         host.level_time_ms = call_ms;
         call(&mut host, cx, e, Verb::RotateYaw(90.0, 1.0));
+        vcod_server::game::mover::run(&mut host, cx);
         let second = call_ms + 1500;
 
         for s in &samples[1..] {
             host.level_time_ms = s.ms;
-            if s.ms == second {
-                call(&mut host, cx, e, Verb::RotateYaw(90.0, 1.0));
-            }
-            vcod_server::game::mover::run(&mut host, cx);
             let (o, a) = read(&mut host, cx, e);
             if let Some(d) = differs("rotateyaw_twice", s, o, a) {
                 diffs.push(d);
             }
+            if s.ms == second {
+                call(&mut host, cx, e, Verb::RotateYaw(90.0, 1.0));
+            }
+            vcod_server::game::mover::run(&mut host, cx);
         }
     });
 
@@ -208,7 +212,9 @@ fn a_second_rotateyaw_continues_from_where_the_first_stopped() {
 
 /// The completion notifies land on the frames retail logged them on. Retail's
 /// `PROBE done` lines carry the level time, which is one frame past the end
-/// of the trajectory (movers doc, section 8).
+/// of the trajectory: the entity pass raises the notify on the frame the
+/// trajectory ends and the next frame's threads run its waiter (movers doc,
+/// section 8).
 #[test]
 fn the_completion_notifies_land_on_retails_frames() {
     let text = std::fs::read_to_string(FIXTURE).unwrap_or_else(|e| panic!("read {FIXTURE}: {e}"));
@@ -234,11 +240,13 @@ fn the_completion_notifies_land_on_retails_frames() {
             host.level_time_ms = call_ms;
             call(&mut host, cx, e, verb);
 
+            // A notify the entity pass raises wakes its waiter on the next
+            // frame's threads.
             let mut seen = None;
-            for f in 1..=120 {
+            for f in 0..=120 {
                 host.level_time_ms = call_ms + f * FRAME_MS;
                 for d in vcod_server::game::mover::run(&mut host, cx) {
-                    seen.get_or_insert((d.event, host.level_time_ms));
+                    seen.get_or_insert((d.event, host.level_time_ms + FRAME_MS));
                 }
             }
             assert_eq!(

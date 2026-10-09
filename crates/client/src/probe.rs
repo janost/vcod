@@ -101,6 +101,8 @@ pub struct Save {
     pub fall: bool,
     /// `--probe-fall-walk`: the world yaw `--probe-fall` walks at.
     pub fall_walk: Option<f32>,
+    /// `--probe-fall-prone`: the world yaw `--probe-fall` lies prone at.
+    pub fall_prone: Option<f32>,
     /// `--probe-pitch-flip`: the view pitch every other 400 ms window holds.
     pub pitch_flip: Option<f32>,
     /// `--probe-ride`: print every snapshot's movement fields, no fixture.
@@ -227,6 +229,7 @@ pub fn probe(
         killcam_skip_ms,
         fall: probe_fall,
         fall_walk,
+        fall_prone,
         pitch_flip,
         ride: probe_ride,
         items: probe_items,
@@ -312,6 +315,7 @@ pub fn probe(
     });
     let mut join = JoinProbe::new(team, weapon);
     let mut wrote_playerstate = false;
+    let mut combat_died = false;
     let mut motion = MotionProbe::default();
     let mut combat = if save_grenade {
         CombatProbe::grenade()
@@ -753,6 +757,12 @@ pub fn probe(
                 }
                 last_pitch = Some((s.message_num, p));
             }
+        } else if let Some(yaw) = fall_prone.filter(|_| client.state() == NetState::Active) {
+            // Held as a retail client holds `cl_stance` 2, whatever the
+            // server forces: a refusal repeats on every cmd.
+            cmd.wbuttons |= net::msg::WBUTTON_PRONE;
+            cmd.up = -127;
+            cmd.angles[1] = deg_to_short(yaw);
         } else if let Some(yaw) = fall_walk.filter(|_| client.state() == NetState::Active) {
             // Absolute: `send_frame` takes `delta_angles` off.
             cmd.forward = 127;
@@ -772,7 +782,14 @@ pub fn probe(
         // byte only travels in the full usercmd branch, which a `wbuttons`,
         // `upmove` or `weapon` change forces (docs/protocol-1.1.md).
         cmd.weapon = weapon_switch.unwrap_or(ps_weapon);
-        let sent = client.send_frame(&cmd);
+        // A retail client stays `CA_CONNECTED` until its downloads end and
+        // creates no usercmds before `CA_PRIMED`, so nothing enters the
+        // world mid-download.
+        let sent = if download.as_ref().is_some_and(DownloadProbe::holds_cmds) {
+            None
+        } else {
+            client.send_frame(&cmd)
+        };
         if let Some(c) = sent {
             if probe_fall {
                 fall.record_cmd(c.server_time, fall_walk.map(|_| c.angles[1]));
@@ -1050,6 +1067,26 @@ pub fn probe(
             bump_target.step(now, s);
         }
 
+        // The combat script steps only while alive and cannot resume from a
+        // respawn elsewhere, and stock gametypes without `scr_forcerespawn`
+        // never respawn a probe that presses nothing: a death (its own frag,
+        // or another client on a stock dm) used to idle out the run as
+        // "raise --probe-secs".
+        if save_combat
+            && combat.running()
+            && let Some(s) = client.snapshots().newest()
+            && s.ps.field_i32(&net::protocol::PROTOCOL_V1, "pm_type") == PM_DEAD
+        {
+            println!(
+                "no combat fixture: died on step {} of {} ({}); the script cannot resume from a respawn",
+                combat.idx + 1,
+                combat.steps.len(),
+                combat.steps[combat.idx.min(combat.steps.len() - 1)].label
+            );
+            combat_died = true;
+            break;
+        }
+
         // A refused weapon reopens the same menu, which the probe answers
         // once and then ignores, so a sent answer is not an accepted one; the
         // playerstate is what tells a spawn from a still-spectating client.
@@ -1255,7 +1292,7 @@ pub fn probe(
             overwrite,
         )?;
     }
-    if save_combat && !wrote_playerstate {
+    if save_combat && !wrote_playerstate && !combat_died {
         println!(
             "no combat fixture: the run ended on step {} of {} after {secs}s; raise --probe-secs",
             combat.idx + 1,
@@ -1704,6 +1741,12 @@ impl DownloadProbe {
             expected: std::collections::HashMap::new(),
             done: false,
         }
+    }
+
+    /// From the gamestate until the downloads are over and the next
+    /// gamestate is in.
+    fn holds_cmds(&self) -> bool {
+        self.loader.is_some() && !self.done
     }
 
     fn step(

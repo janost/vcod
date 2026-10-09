@@ -4058,7 +4058,10 @@ list below. INFERRED: the ordering and the conditions in it.
   (`.rodata 0x75B48`). VERIFIED: `Concussive_think` re-arms itself every 100
   ms and swaps its own `think` for `G_FreeEntity` once `level.time` passes
   `+0x274`. INFERRED: a concussion field lives 500 ms past the blast; nothing
-  read here says what reads it.
+  read here says what reads it. VERIFIED: no link call follows its spawn
+  (0x53f6f..0x53fcb) and `Concussive_think` has none. INFERRED: it never
+  reaches the wire, and what it costs is an entity number for 700 ms (14.7,
+  "Entity numbers").
 
 ### 13.3 What is not on this path
 
@@ -4906,14 +4909,90 @@ the pass split by kind read 0 for all 40 in every walk; with the one pass,
 9/31, 17/23 and 17/23 split as retail's, at grenades 170, 179 and 180 (ours
 hands out free numbers in another order).
 
-vcod: `ScriptRuntime::run_entity_pass` is the loop for the arms ours runs in
-it: a missile (`Missiles::run_one`), a link (`link::run_linked`) and an item
-(`item::run_item`), each entity once a frame, its link parent first. It
-returns at each blast; `Server::tick` walks it and calls the pass again from
-the next number. Movers, thinks and the body queue still run ahead of the
-threads in `run_threads`, and a client's link is re-anchored in
-`Server::tick` before the pass. `a_blast_meets_the_links_below_its_grenade_s_number_only`
+vcod: `ScriptRuntime::run_entity_pass` is the loop: a temp entity's free
+(below), a missile (`Missiles::run_one`), a link (`link::run_linked`), a
+mover (`mover::run_one`), an item (`item::run_item`), then the entity's
+think (`GameHost::run_entity_think`) and an unmanned turret's
+(`GameHost::run_turret_think`); the body queue's think on its numbers
+64..71; and on a linked client's number, after its parent's turn, the
+`G_RunClient` re-anchor and relink. Each entity runs once a frame, its link
+parent first. The loop returns at each turn that needs the client sims (a
+blast, a mover's push, a linked client), which `Server::tick` handles before
+calling it again from the same place.
+`a_blast_meets_the_links_below_its_grenade_s_number_only`
 (`crates/server/tests/combat.rs`) is the probe's two-client form.
+
+**The pass runs after the threads.** VERIFIED, `client-probes/probe_entnum`
+on retail, 2026-10-09, mp_carentan, no client: a `script_origin` spawned and
+`delete()`d at 2500 read `isdefined` 1 at 2500, 2550 and 2600 and 0 at 2650.
+The `delete` method (0x5da14) arms `G_FreeEntity` 100 ms out
+(cod11-gsc-object-model.md section 14). VERIFIED, `game.mp.i386.so`:
+`G_RunEntity`'s think arm (0x50430..0x5046f) fires a think whose
+`nextthink` (`+0x1fc`) is positive and not past `level.time`. INFERRED, off
+those: the think came due on the 2600 frame and ran in that frame's entity
+pass, after the thread that read 1 on it; the pass sits past `Scr_SetTime`
+(0x5070c), which wakes the frame's waits; and the defer is 100 ms, since 50
+would have read 0 at 2600 and 150 would have read 1 at 2650. VERIFIED, the same run: a
+`script_model` given `moveto((0, 0, 100), 0.1)` at 3650 woke its
+`waittill("movedone")` at 3800. INFERRED: `G_RunMover` raised the notify on
+the 3750 pass, the frame the trajectory ended, and the waiter ran on the
+next frame's threads, which is the one-frame lag cod11-movers.md section 8
+measured. Before this, vcod ran thinks and movers ahead of the threads,
+with the mover's fields evaluated a frame back to fake the lag; the same
+probe against it read `isdefined` 0 a frame early (2550, the delete at
+2450).
+
+#### Entity numbers
+
+VERIFIED, `game.mp.i386.so`: `G_Spawn` (0x667e0) pops the head of a free
+list at `level+0x10` (0x668c8..0x668e1), the next link at `ent+0x304`,
+clearing the tail `level+0x14` when the list empties, and otherwise takes
+`level.num_entities` (`level+0xc`) and increments it (0x6688b..0x668a3),
+with a `G_Error` once that reaches 0x3fe and nothing is free (0x667f7,
+0x66883). No `freetime` is read: Q3's "not reused for a second" rule is not
+in this module. VERIFIED: `G_FreeEntity` (0x66948) zeroes the entity
+(0x66b97), and when its number is above 0x47 (0x66bae) appends it to the
+tail (0x66bb3..0x66bd8), the body queue never. VERIFIED: `G_TempEntity`
+(0x67938) gets its entity from `G_Spawn` (0x67947). VERIFIED,
+`G_RunEntity`: when `level.time - ent+0x180` (`eventTime`) is above 300
+(0x50309) and `ent+0x184` (`freeAfterEvent`) is set it calls
+`G_FreeEntity` (0x5031d), and a set `freeAfterEvent` returns before any arm
+(0x5035c). INFERRED: the free list is first in, first out, and every temp
+entity, a bullet impact, a `playFx`, an obituary, a teleport's pair, takes a
+number from the same list as a script `spawn`, holds it on the wire until
+the first pass more than 300 ms past its event and then goes to the back of
+the queue.
+
+VERIFIED, `probe_entnum` on retail, the same run: `a` spawned 299, the
+`playFx` after it took 300, and `b` after that 301; spawns at +300 and +350
+from the event took 302 and 303, the one at +400 took 300 and the one at
++450 304. INFERRED: the temp entity was freed on the +350 pass, the first
+whose `level.time - eventTime` is above 300, behind the threads that took
+303. That is why the blast probe's third grenade was 243 on retail: the
+numbers its frames' temp entities cycled through were ahead of it on the
+queue. VERIFIED, `client-probes/probe_entfree` (a scratch probe, not kept)
+on retail and on `vcod-server`, stock dm on mp_carentan: 40 spawns one second
+in took 170..180, 182, 243, 245, 246, 252, 258, then 299 up, on both: the
+numbers dm's `_gameobjects` deletes at the start, in the order the pass freed
+them. INFERRED, off that list and 13.2's concussion entity: the blast probe's
+first grenade took 170, the eight children 171..178, its concussion entity
+179, the second grenade 180, its concussion entity 182, and the third
+grenade 243. vcod had kept temp entities in a block of its own at 958..1021,
+one frame each, spawned no concussion entity, and gave the three 170, 179
+and 180; with both ported, `probe_blastlink` against `vcod-server` reads
+170, 180 and 243 and the 9/31, 17/23, 17/23 splits retail read.
+
+vcod: `ObjectTable::spawn` and `free` are the free list.
+`GameHost::add_temp_entity` takes a number from `spawn` for each event, the
+snapshot build sends every live temp entity at its number each frame, and
+`GameHost::run_temp_entity` frees it on its turn of the pass.
+`GameHost::spawn_concussive` is 13.2's concussion entity, spawned after each
+blast walk and freed by `ThinkFn::Concussive`.
+`a_temp_entity_takes_a_spawn_number_and_frees_it_past_300_ms` and
+`a_delete_s_free_runs_after_the_threads_of_its_frame`
+(`crates/server/src/game/script.rs`) are the probe's two halves; against
+`vcod-server` it now reads as retail does, 50 ms earlier throughout (ours
+wakes the `wait 1` after `Callback_StartGameType` at 1000, retail at 1050).
 
 **Other callers.** VERIFIED: `trap_EntitiesInBox` is also called by
 `G_TouchTriggers` (`0x3f925`, mask `0x405c0008`), `G_GetActivateEnt`
@@ -5413,11 +5492,35 @@ truncating. INFERRED: **the view kick is in the usercmd angles**, so the
 server's `PM_UpdateViewAngles`, its aim block and every later shot see it,
 the client's prediction draws it, and it is never added to `cl.viewangles`
 itself: as it centres, the view comes back to where the mouse left it.
-The roll third rides `cmd.angles[2]` the same way. VERIFIED, `0x30028a70`
-zeroes both vectors and the gun spring (`0x3020cb94`-`0x3020cba8`); it is
-called at `0x300300cd` and `0x3003037f`; INFERRED: a new playerstate (the
-`ps+0x114` or `clientNum` compare at `0x300300a4`) and the first snapshot,
-so a respawn starts unkicked.
+The roll third rides `cmd.angles[2]` the same way.
+
+**How the kick reaches the screen.** VERIFIED, the only references to
+`kickAngles` (`0x3020cb38`) are the clears at `0x30028af8` and
+`0x30033d7d`-`0x30033d91`, `CG_KickAngles`' own `0x300328d7` and the push
+at `0x30033ec1`: the cgame never adds it to the drawn view. VERIFIED,
+`CG_CalcViewValues` (my name, `0x300333b0`) copies the predicted
+playerstate's `viewangles` (`0x3020721c`-`0x30207224`, `ps+0xc0`) into
+`refdefViewAngles` (`0x302095cc`-`0x302095d4`) at `0x300334fa`-`0x30033527`,
+the roll included, and the intermission arm does the same at
+`0x30033413`-`0x3003343b`; `CG_OffsetFirstPersonView` (my name,
+`0x30032ae0`) then adds the three components of the offset `0x30012cb0`
+returns (`0x30032b6a`-`0x30032b9c`). INFERRED: the kick's roll reaches the
+screen through prediction, as `PM_UpdateViewAngles` writes
+`viewangles[2]` from `cmd.angles[2] + delta_angles[2]` like the other two
+axes (`docs/protocol-1.1.md`, "View angles").
+
+**The reset.** VERIFIED, `0x30028a70` zeroes both vectors and the gun
+spring (`0x3020cb94`-`0x3020cba8`) and stamps the weapon name. Its callers:
+the first-snapshot setup at `0x3003037f`, and `CG_TransitionSnapshot` (my
+name) at `0x300300cd`. INFERRED, the transition's branches
+(`0x3002ffda`-`0x300300be`): the call is taken when `0x30207154` is set or
+the new snapshot's `stats[5]` (snapshot `+0x114`, the spawn count) or
+`clientNum` (`+0xb8`) differs from the old one's. Under `pm_flags & 0x50000`
+an `eFlags` 0x8 flip with the same pair takes the other arm
+(`0x30030033`-`0x30030082`), which re-copies the playerstate and zeroes
+`0x3020948c`-`0x30209494` but does not reach `0x30028a70`. So a respawn
+(a new spawn count) and a new followed client start unkicked, and the
+spawn flip on its own clears nothing here.
 
 **The gun spring on the client.** VERIFIED, cgame `0x30012a60` is
 `0x39e14`'s twin, with the per-axis step factored into `0x30012910`
@@ -5458,8 +5561,13 @@ the fire draw and the RNG, and steps the spring
 the drawn view, truncating the kick's units on their own (at most one unit
 off retail's single truncation). The gun kick turns the viewmodel about the
 eye and reaches the scope through `AimInput::gun_kick`; the server passes
-zero. The drawn view carries no roll in play mode, so the roll third reaches
-the cmd and not the screen.
+zero. The drawn view takes its roll from the cmd angles plus
+`delta_angles` (`own_view` in `crates/client/src/main.rs`), as the
+predicted `viewangles[2]`; a mounted gun's view keeps roll 0.
+`OnlineView::track_spawn` clears the kick on a new `(clientNum, stats[5])`
+off the newest snapshot, `OnlineView::new_gamestate` at each map load, and
+a frame with no drawable playerstate (dead, or not in the world) clears it
+too, which retail does not; nothing is drawn or aimed in those frames.
 
 ---
 
@@ -6049,8 +6157,9 @@ with `weaponstate` 3). The tdm hit target capture's line 80 is one of these
 (turrets doc 12.4). Turrets doc 12.4's gunner reads 0xC418 on every held
 frame and 0xC018 once the trigger is up, which this rule gives too.
 
-vcod: `spectate::attack_flag` per cmd in `ClientSim::step` (a live player
-only, `PMF_RESPAWNED` clear), on `ClientSim::attacking`; `eflags()` ORs it
-with the gunner's own `firing`. GAP: a dead body (`pm_type` 6) passes the
-`pm_type` test in retail; ours clears the bit for it. Its weapon is 0 after
-the first dead cmd, so only that cmd could differ.
+vcod: `spectate::attack_flag` per cmd in `ClientSim::step` (any `pm_type`
+but the intermission, `PMF_RESPAWNED` clear), on `ClientSim::attacking`;
+`eflags()` ORs it with the gunner's own `firing`. A dead body (`pm_type` 6)
+passes the `pm_type` test, so its first cmd, which still holds the weapon,
+can set the bit; the dead arm then zeroes the weapon and the next cmd
+clears it. Not measured live.

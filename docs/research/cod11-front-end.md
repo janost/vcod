@@ -23,6 +23,26 @@ functions whose shape they share. vcod's implementation is
   `ui_mp/single_player.menu`, `ui_mp/serverinfo.menu`,
   `ui_mp/createfavorite.menu`, `ui_mp/filter.menu`, two more popups and the
   five `settings_<gametype>.menu`. VERIFIED (the file in `pak0.pk3`).
+- `UI_LoadMenus` (`ui_mp_x86.dll` `0x400085b0`) reads the list named by
+  `ui_menuFiles` (vmCvar row at `0x40036c9c`: default `ui_mp/menus.txt`,
+  flags 0). A missing list prints `^3menu file not found: %s, using
+  default` and falls back to `ui_mp/menus.txt`; that one missing too is
+  fatal (`^1default menu file not found: ui_mp/menus.txt, unable to
+  continue!`). VERIFIED (strings `0x4002f1a8`, `0x4002f160`, their xrefs
+  at `0x400085e9`, `0x4000860c`).
+- The list is read token by token until a bare `}`: a `loadmenu` token
+  hands the following `{ ... }` block to `0x40008480`, which loads each
+  file name in it until its `}`, and any other token (the opening `{`) is
+  skipped. A `loadmenu` not followed by `{` ends the list. Then it prints
+  `UI menu load time = %d milli seconds`. VERIFIED (asm: the `0x7d` test
+  at `0x4000864e`, the `loadmenu` compare at `0x40008653`). Each name is
+  first tried under a path built from `cl_language` (strings `%s%s/`,
+  `cl_language` at `0x4002f1d4`, `0x4002f1dc`), then as given; INFERRED,
+  and stock English paks hold no such path.
+- Stock `menus.txt` names three files no 1.1 pak ships:
+  `ui/options_view.menu`, `ui/options_defaults.menu` and
+  `ui_mp/in_rec_restart.menu`; each costs a `^1menu file not found`
+  line. VERIFIED (pak listings).
 - The `ui/` files (`quit.menu`, `error.menu`, `options*.menu`) ship in
   `localized_english_pak0.pk3`, not `pak0.pk3`. `ui_mp/in_rec_restart.menu`,
   which `menus.txt` names, is in neither. VERIFIED (pak listings).
@@ -398,13 +418,19 @@ off the branches:
 
 ## 12. vcod's front end
 
-- vcod draws the main menu, the browser and its popups (sections 6-11),
+- vcod loads the menu files `ui_mp/menus.txt` names off the search path,
+  in its order, so a mod's own list and menus replace the stock ones
+  (`vcod_common::ui_menu::menu_list`). It does not read `ui_menuFiles`.
+- It draws the main menu, the browser and its popups (sections 6-11),
   the options set (section 14), the quit popup and the error popup from the
   stock files with their layout, the main menu again over a game (section
-  13), the Mods menu (section 17), and refuses every other menu with a
-  console line. A button whose
-  script would close its own menu and then open a refused one is refused
-  whole, so `Start New Server` leaves the main menu up.
+  13) and the Mods menu (section 17). The stock menus it cannot run yet
+  (create server, CD key, single player, the gametype settings, the
+  credits and driver info pages, the language and record restarts,
+  `multi_menu`, `Connect`, `auconfirm`) are refused with a console line;
+  any other menu the list loaded opens, a mod's included. A button whose
+  script would close its own menu and then open a refused or unknown one
+  is refused whole, so `Start New Server` leaves the main menu up.
 - Ping pacing (32 `getinfo`s in flight, a 1.5 s timeout, 5 s for the master)
   is vcod's own; retail's numbers were not measured.
 - Text is placed as RTCW's `Item_SetTextExtents` does: baseline at
@@ -654,12 +680,14 @@ multis, 16 yes/nos, 6 sliders and one edit field. VERIFIED (counted).
   read every frame), and `r_mode` / `r_fullscreen`, which `vid_restart`
   and start-up apply to the window (Q3's mode table; borderless full
   screen), and `r_gamma`, read every frame and applied as retail's gamma
-  ramp in a final pass (`cod11-gamma.md`). `cg_drawCrosshair` and
+  ramp in a final pass, and `r_ignorehwgamma`, latched at start-up and
+  `vid_restart`, which moves `r_gamma` into the TGA and JPG textures at
+  each map load (`cod11-gamma.md` section 4). `cg_drawCrosshair` and
   `cg_drawStatus` gate the HUD as the cgame does (`cod11-hud-protocol.md`,
   "Which views draw it"). vcod registers `r_mode` -1 (its own window size) and
   `r_fullscreen` 0 instead of retail's 3 and 1.
 - Stored but inert (archived, so a choice survives): `cl_freelook`,
-  `m_filter`, the texture, picmip, `r_ignorehwgamma`, LOD, dynamic light,
+  `m_filter`, the texture, picmip, LOD, dynamic light,
   swap interval and NVIDIA fog cvars,
   `mss_khz`, `mss_3d_provider`, `cg_marks`, `cg_brass`, `cg_blood`,
   and the Multiplayer Options' Show Compass (`cg_drawCompass`) and Team
@@ -822,8 +850,7 @@ them as a spectator for 10-25 s each.
   servers").
 - A server's `fs_game` rebuilds the front end off the new search path at
   the gamestate, so a mod's replacement menus are what Esc opens in that
-  game. vcod still reads its fixed list of menu files, not the mod's
-  `ui_mp/menus.txt`, so a mod menu under a new file name stays unread.
+  game, and a mod's `ui_mp/menus.txt` decides which files load.
 - Script menus run the front end's preprocessor (`#include` read off the
   search path, object-like `#define`s), so `visible MENU_TRUE` and
   `#define`d responses resolve. Function-like macros are not expanded.
@@ -880,6 +907,16 @@ carries its label.
   (`Sys_LoadDll` `0x4633a0`). INFERRED (structure).
 - A remote connect reloads the UI too: `CL_DownloadsComplete` (`0x40ffb0`)
   shuts it down and starts it again with the hunk users. INFERRED (calls).
+- In a game `vid_restart` keeps the connection. With no local server it
+  restarts the filesystem when `fs_game` was modified or the checksum
+  feed changed (`FS_Restart` called at `0x40fd66`, so a pure server's list still applies), loads
+  the UI again, and when the state is past challenging and not 7 or 8
+  (`0x40fda5`..`0x40fdaf`) runs `CL_InitCGame` (`0x4049c0`) and
+  `CL_SendPureChecksums` (`0x40fac0`). So switching mods from the in-game
+  main menu reloads the menus and the cgame's assets under the new mod and
+  re-sends `cp`; a pure server that does not list the mod's paks keeps
+  them out of the search path. VERIFIED (calls); INFERRED (the state
+  numbering, which is CoD's own).
 
 ### vcod
 
@@ -889,8 +926,13 @@ carries its label.
   A click selects and shows Launch; Launch or a double click switches.
 - The switch sets the player's `fs_game`, reopens the search path with the
   mod over the base directory, rebuilds the whole front end off it and
-  opens the new main menu, as `vid_restart` brings retail's back. The game
-  must be left first; retail allows the switch in a game.
+  opens the new main menu, as `vid_restart` brings retail's back.
+- In a game the switch keeps the connection: the search path reopens under
+  the server's pure list, the renderer's shaders, the HUD, sounds, effects
+  and viewmodels reload, the front end is rebuilt closed and the game has
+  the mouse again, and a live map sends `cp` once more. The map's world
+  geometry stays as loaded. The next gamestate puts a server's own
+  `fs_game` back.
 - A server that names no `fs_game` keeps the player's mod; one that names
   another replaces it for the connection, and leaving goes back to the
   player's.

@@ -241,7 +241,15 @@ pub enum ThinkFn {
     /// `crate::game::item::run_items` inside the item's own `G_RunItem`, not
     /// by [`ObjectTable::run_thinks`] (docs/research/cod11-items.md 14).
     RespawnItem,
+    /// `Concussive_think` (0x54808): re-arms 100 ms on until `level.time`
+    /// passes the stored end, then swaps itself for `G_FreeEntity` 100 ms
+    /// on (combat doc 13.2). It does nothing else.
+    Concussive(i32),
 }
+
+/// `Concussive_think`'s re-arm and the first think `G_ExplodeMissile` arms
+/// (0x54833, 0x53fa8).
+pub const CONCUSSIVE_THINK_MS: i32 = 100;
 
 pub struct ObjectTable {
     ents: Vec<Option<GEntity>>,
@@ -561,45 +569,52 @@ impl ObjectTable {
         }
     }
 
-    /// `G_RunFrame`'s think pass: fire every entity whose `nextthink` has
-    /// come due. Collect first, then act: a think that frees its entity
-    /// would otherwise invalidate the walk.
-    ///
-    /// Returns the thinks the table cannot run itself: `ThinkFn::Free`, so
-    /// the caller can route each through `GameHost::free_entity`, which is
-    /// the only place the host's own per-entity tables (the trigger row) are
-    /// dropped. `Missiles::run` has the same shape for the same reason. A
-    /// `ThinkFn::RespawnItem` is left armed for the item pass.
+    /// Every due think at once, by entity number: [`ObjectTable::run_think`]
+    /// over the table. The server runs each entity's on its own turn in the
+    /// entity pass; this is for callers with no pass to run.
     #[must_use]
     pub fn run_thinks(&mut self, now_ms: i32) -> Vec<(EntId, ThinkFn)> {
-        let due: Vec<(EntId, ThinkFn)> = self
-            .ents
-            .iter()
-            .enumerate()
-            .filter_map(|(i, e)| {
-                let e = e.as_ref()?;
-                let think = e.think.filter(|t| *t != ThinkFn::RespawnItem)?;
-                // Retail's `nextthink` of 0 is "no think", not "due now".
-                (e.nextthink != 0 && e.nextthink <= now_ms)
-                    .then_some((EntId(i as u32, self.ent_gens[i]), think))
-            })
-            .collect();
-        let mut left = Vec::new();
-        for (id, think) in due {
-            if let Some(e) = self.get_mut(id) {
-                e.think = None;
-                e.nextthink = 0;
-            }
-            match think {
-                ThinkFn::Free | ThinkFn::RespawnItem => left.push((id, think)),
-                ThinkFn::ClearOwner => {
-                    if let Some(item) = self.get_mut(id).and_then(|e| e.item.as_mut()) {
-                        item.owner = None;
-                    }
+        let ids: Vec<EntId> = self.iter_inuse().map(|(id, _)| id).collect();
+        ids.into_iter()
+            .filter_map(|id| Some((id, self.run_think(id, now_ms)?)))
+            .collect()
+    }
+
+    /// `G_RunThink` for one entity: fire its think once `nextthink` has come
+    /// due, clearing it first so it fires once.
+    ///
+    /// Returns the think the table cannot run itself: `ThinkFn::Free`, so
+    /// the caller can route it through `GameHost::free_entity`, which is the
+    /// only place the host's own per-entity tables (the trigger row) are
+    /// dropped. A `ThinkFn::RespawnItem` is left armed for the item pass.
+    #[must_use]
+    pub fn run_think(&mut self, id: EntId, now_ms: i32) -> Option<ThinkFn> {
+        let e = self.get_mut(id)?;
+        let think = e.think.filter(|t| *t != ThinkFn::RespawnItem)?;
+        // Retail's `nextthink` of 0 is "no think", not "due now".
+        if e.nextthink == 0 || e.nextthink > now_ms {
+            return None;
+        }
+        e.think = None;
+        e.nextthink = 0;
+        match think {
+            ThinkFn::Free | ThinkFn::RespawnItem => Some(think),
+            ThinkFn::ClearOwner => {
+                if let Some(item) = e.item.as_mut() {
+                    item.owner = None;
                 }
+                None
+            }
+            ThinkFn::Concussive(end_ms) => {
+                e.think = Some(if now_ms > end_ms {
+                    ThinkFn::Free
+                } else {
+                    think
+                });
+                e.nextthink = now_ms + CONCUSSIVE_THINK_MS;
+                None
             }
         }
-        left
     }
 
     /// Whether `id` carries its slot's current generation. The world's stays
@@ -816,6 +831,22 @@ mod tests {
         // The number is back on the free list, so the next spawn reuses it.
         let next = vm.with_cx(|cx| ents.spawn(cx).unwrap());
         assert_eq!(next.0, id.0);
+    }
+
+    /// `Concussive_think` re-arms every 100 ms until `level.time` passes
+    /// the end, then hands the entity to `G_FreeEntity` 100 ms on: a blast
+    /// at 0 holds its number until 700.
+    #[test]
+    fn a_concussive_entity_is_freed_700_ms_after_its_blast() {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut ents = ObjectTable::new();
+        let id = vm.with_cx(|cx| ents.spawn(cx).unwrap());
+        ents.schedule(id, ThinkFn::Concussive(500), CONCUSSIVE_THINK_MS);
+        for t in (100..=600).step_by(100) {
+            assert_eq!(ents.run_think(id, t), None, "at {t}");
+        }
+        assert_eq!(ents.run_think(id, 650), None, "the free is due at 700");
+        assert_eq!(ents.run_think(id, 700), Some(ThinkFn::Free));
     }
 
     /// A think fires once. Retail clears `nextthink` when it runs, so a

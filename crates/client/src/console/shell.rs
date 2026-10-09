@@ -261,6 +261,9 @@ impl Shell {
         // cgame's cvar table row at 0x30075420: default "0.2", CVAR_CHEAT,
         // read by the body's yaw swings (docs/research/cod11-combat.md 16.4).
         s.register("bg_swingSpeed", "0.2", CHEAT);
+        // cgame's row at 0x30074c10: default "0", archived; gates the
+        // weapon-select binds (docs/research/cod11-hud-protocol.md).
+        s.register("cg_weaponCycleDelay", "0", ARCHIVE);
         // CL_Init (CoDMP.exe 0x411e60): the send rate and the clock's
         // nudge (docs/protocol-1.1.md, "The client's clock").
         s.register("cl_maxpackets", "30", ARCHIVE);
