@@ -575,6 +575,21 @@ else a spot it remembers or heard, section 4), `Roam`, or `Away(threat)`
   plans for 200 ticks (10 s); when no path goes round it, the plan takes it
   anyway. Stuck before the first node, the bot is left 20 ticks to its own
   unstick.
+- A ladder's ends are passed by their own rules (`Follower::rising`,
+  `Follower::climbing`). Its head, the node a climb of more than a jump
+  leads to, is passed only standing on the ground: from the rungs, or in
+  the air over the lip, a body that turns for the next node lets go of the
+  ladder. Its foot is passed only within 8 units (the walk-on proof's
+  `ARRIVE`), never by being nearer the next node, unless the foot stands
+  square in front of the rungs (`NavGraph::face_ahead`: inside the
+  face's span along it, within 48 across); such a foot is passed within
+  the usual 24. From a square foot the waypoint handed out is the point
+  on the face straight ahead of the foot, at the head's height, until the
+  body is within a step of the head's floor: the climb that found the
+  head ran from the foot square into the face (`rung`), and a run at the
+  head itself from a few units aside grabs the rungs at their edge. A foot
+  off to the side is a flood walk that met the ladder, and keeps the
+  heading at the head its walk proved.
 - VERIFIED (measured, `mp_rocket` `sd`, 2 bots, shoot off, seed 1): an
   attacker guarding the planted bomb stood at the foot of the stairs down to
   it, on the graph's edge, and the defender behind him gave up and planned
@@ -658,6 +673,48 @@ at 7 and -64; the heading avoided hazards, not drops. Seed 1's 24
 were a bot on the ship beam's slope under its top node (2172.9, 418.2,
 -31.875), seed 15's 18 a bot under a stair to z 104 at (2151, -236, 56).
 
+On a ladder with the waypoint more than a step above, the climb faces
+square into the face (`nav::climb_yaw`, off `ps.ladder_normal`) and
+strafes along it, up to move key 64, toward the climb's line: the foot's
+place along the face when the path came up from a square foot
+(`Follower::climb_line`), else the middle of the rungs
+(`NavGraph::ladder_middle`). Level with the waypoint it heads at it, so a
+ledge beside the rungs is stepped onto facing it.
+
+VERIFIED (measured 2026-10-09, `mp_ship` `dm`, 6 bots, shoot off, 4000
+ticks, the detector below, each traced tick by tick):
+- The mast hatch, ladder plate x 3711-3712, y 43-69, z 760-992, in a hole
+  in the platform at 992 about 33 units across: bots climbed to 994 on the
+  rungs, passed the head (3705, 62, 992) and the next node from there,
+  turned west for the platform node (3648, 71, 994), let go of the rungs
+  and fell down the shaft to the deck at 760, again and again (seed 19,
+  tick 895 on). With the head passed only on the ground, the body goes
+  over the plate's top facing the rungs, lands on it at (3701.7, 64.2),
+  and walks on along the platform.
+- The ladder at x 3792-3793, y 53-77 (304 to 623): a flood foot at
+  (3814, 33, 304), 20 units south of the rungs, was passed from 18 off;
+  the run at the head from there pinned the body at (3799, 37) beside the
+  ladder, under the deck.
+- The ladder at x 3353-3354, y 496-520 (56 to 352): the head (3323, 481)
+  lies south-west of the foot (3370, 508). A run at the head drifts south
+  along the face and grabs at y 495, the ladder's edge, where the climb
+  pins at z 281.9 under a spar. The graph's own walk from the foot toward
+  the head arrives from y 504 to 516 and falls or blocks from 500 and 495.
+- On the mast the same: a body that grabbed at y 68.1 pinned at z 808.9,
+  the spar the climb at a third of the rate used to stop under; one at
+  y 53.5 climbed past it.
+- A climb strafing to the rungs' middle (y 56 on the mast) landed on the
+  plate at y 57, where the walk west across the hole falls; the head was
+  found from the foot's line, y 62 to 64, where it arrives. Hence the
+  foot's line, not the middle, where there is one.
+
+The crossing from the mast's plate to the platform is marginal: a walk
+from (3705, 62) or (3701.7, 64.2) to (3680, 71, 994) arrives, one from
+(3699.2, 57.2) or (3705, 56) falls, and the edges to (3648, 32, 994) fall
+from all four. A bot whose plan starts at a head while it is still on the
+rungs passes it there and can still fall back down the shaft; this is
+most of what is left below.
+
 A random heading is never one with a hazard 64 units along it
 (`BotView::hazard_ahead`, one flag per 45-degree octant), nor, standing
 on the ground off a ladder, one with a drop deeper than a jump (39) within
@@ -688,6 +745,42 @@ stair descents at a run included):
 | before | 43 0 70 3 3 0 0 19 = 138 | 0 0 11 4 0 0 13 0 = 28 | 40 |
 | drops never taken | 28 943 0 8 1 286 0 19 0 = 2 284 | 1 129 11 17 3 13 2 248 0 553 = 3 974 | 13 |
 | shipped | 0 0 16 8 3 0 0 17 = 44 | 0 17 11 3 17 10 0 0 = 58 | 19 |
+
+A cornered bot still keeps off a drop that hurts: the probe reports the
+drop's depth, and one past the default `bg_fallDamageMinHeight` (256)
+stays shunned. VERIFIED (measured, seed 5 with the climb changes above):
+a bot cornered at the ladder at x 2206-2230 (y -150, z 234-314) took its
+heading west along the floor at 216 and ran off its end at x 2010 to the
+hull at -64, 280 below. A run down a stair can still leave the ground at
+its top and land a storey down: the deck test
+(`bots_on_mp_ship_unstick_without_walking_off_the_deck`) counts a fall
+only where the graph's way back is longer than twice the flat distance
+plus 128. The original deck lip fall, (3285.5, -448.5, 56) to
+(3247.4, -390.3, -63.9), has a 167-unit way back and is not counted:
+the probe prevents it, but it was never a trap.
+
+VERIFIED (measured 2026-10-09, the detector below, `mp_ship` `dm`, 6
+bots, shoot off, 4000 ticks, release build): bot-ticks stalled, before
+the ladder changes and after.
+
+| | seeds 1 to 63 odd | seeds 65 to 127 odd |
+|---|---|---|
+| before | 210 | 274 |
+| after | 50 | 265 |
+
+In the second set before, the stall spells were on the ladders at
+x 3354 (7), x 3793 (4), the crow's nest at x 4960 (2) and the mast (4),
+and in the hull corridor at (3825, -800, -64) (2 seeds). After, the
+ladders at x 3354 and 3793 have none in either set and the crow's nest
+one, in the first; the mast has 2 in the first set and 7 in the second,
+and the hull corridor (seed 95, 50 bot-ticks in both builds) is
+untouched. On other maps,
+seeds 1 to 11: `mp_depot` 176 to 106, `mp_pavlov` 117 to 47, `mp_harbor`
+0 and 0. A run diverges from its first changed waypoint, so a seed's
+count moves by chance as well as by cause, and a 32-seed total by tens.
+
+The detector is `crates/server/examples/ship_stalls.rs` (`MAP=`, `TICKS=`,
+`TRACE=<slot>:<from>:<to>` prints a bot's every tick with its waypoint).
 
 The probe costs 16 us a bot a tick in release (8 octants, up to five
 capsule traces each). `tests/bots.rs`,

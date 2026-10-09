@@ -3126,14 +3126,20 @@ impl Server {
                     .as_ref()
                     .and_then(|c| c.sim.as_ref())
                     .map(|sim| sim.ps);
-                let still = ps.as_ref().is_some_and(crate::nav::ready_to_leap);
+                let body = crate::nav::Footing {
+                    still: ps.as_ref().is_some_and(crate::nav::ready_to_leap),
+                    on_ground: ps.as_ref().is_some_and(|ps| ps.on_ground),
+                };
                 // The generator alone, so the world stays readable.
                 let rng = &mut self.rng;
                 let mut rand = || rand_from(rng);
                 let at = view.origin;
                 let world = self.world.as_ref().map(|w| &w.collision);
                 view.waypoint =
-                    follower.waypoint(&g, world, goal, at, still, &mut budget, &mut rand);
+                    follower.waypoint(&g, world, goal, at, body, &mut budget, &mut rand);
+                if let Some(p) = follower.climb_line(&g) {
+                    view.ladder_middle = Some(p.into());
+                }
                 view.jump = follower.jumping(&g);
                 view.leap = follower.leaping(&g);
                 view.stop = follower.holding(&g);
@@ -3346,16 +3352,23 @@ impl Server {
             }),
             drop_ahead: std::array::from_fn(|i| {
                 let standing = sim.ps.on_ground && !sim.ps.on_ladder;
-                standing
-                    && self.world.as_ref().is_some_and(|w| {
-                        let (s, c) = (i as f32 * 45.0).to_radians().sin_cos();
-                        let dir = glam::Vec3::new(c, s, 0.0);
-                        let look = crate::bots::HAZARD_LOOK;
-                        crate::nav::drop_ahead(&w.collision, sim.ps.origin, dir, look)
-                    })
+                let world = self.world.as_ref().filter(|_| standing);
+                world.and_then(|w| {
+                    let (s, c) = (i as f32 * 45.0).to_radians().sin_cos();
+                    let dir = glam::Vec3::new(c, s, 0.0);
+                    let look = crate::bots::HAZARD_LOOK;
+                    crate::nav::drop_ahead(&w.collision, sim.ps.origin, dir, look)
+                })
             }),
             linked: sim.link_to.is_some(),
             on_ladder: sim.ps.on_ladder,
+            ladder_normal: sim.ps.ladder_normal.into(),
+            ladder_middle: self
+                .nav
+                .as_ref()
+                .filter(|_| sim.ps.on_ladder)
+                .and_then(|g| g.ladder_middle(sim.ps.origin))
+                .map(Into::into),
             on_ground: sim.ps.on_ground,
             jump: false,
             leap: false,
@@ -3621,6 +3634,16 @@ impl Server {
             },
             unsticking: self.bots.get(&slot).is_some_and(|b| b.unsticking()),
         })
+    }
+
+    /// Test-facing: a bot's current waypoint node and the next, as points.
+    pub fn bot_waypoints(&self, slot: usize) -> (Option<[f32; 3]>, Option<[f32; 3]>) {
+        let (Some(g), Some(f)) = (self.nav.as_ref(), self.bot_paths.get(&slot)) else {
+            return (None, None);
+        };
+        let at = |n: Option<u32>| n.map(|n| g.nodes[n as usize].into());
+        let (a, b) = f.current();
+        (at(a), at(b))
     }
 
     /// Test-facing: the script team value a bot landed in.

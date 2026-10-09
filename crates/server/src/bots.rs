@@ -131,10 +131,11 @@ pub struct BotView {
     /// minefield or `trigger_hurt` [`HAZARD_LOOK`] units that way. A wander
     /// heading keeps out of them; the graph already does.
     pub hazard_ahead: [bool; 8],
-    /// Per octant as [`Self::hazard_ahead`], a drop deeper than a jump
-    /// within [`HAZARD_LOOK`] that way, before a wall (`nav::drop_ahead`);
-    /// all clear off the ground. A wander heading keeps off them too.
-    pub drop_ahead: [bool; 8],
+    /// Per octant as [`Self::hazard_ahead`], the depth of a drop deeper
+    /// than a jump within [`HAZARD_LOOK`] that way, before a wall
+    /// (`nav::drop_ahead`); all clear off the ground. A wander heading keeps
+    /// off them too, and off one that hurts even when cornered.
+    pub drop_ahead: [Option<f32>; 8],
     /// The loudest gunfire or blast another player made last tick within
     /// earshot ([`loudest`]), chest high.
     pub noise: Option<[f32; 3]>,
@@ -143,6 +144,11 @@ pub struct BotView {
     pub linked: bool,
     /// `ps.on_ladder`: the climb looks up, as the graph's walks did.
     pub on_ladder: bool,
+    /// `ps.ladder_normal`: a climb faces into it (`nav::climb_yaw`).
+    pub ladder_normal: [f32; 3],
+    /// On a ladder, the middle of the rungs level with the body
+    /// (`nav::NavGraph::ladder_middle`): a climb strafes toward it.
+    pub ladder_middle: Option<[f32; 2]>,
     /// `ps.on_ground`.
     pub on_ground: bool,
     /// The way to [`Self::waypoint`] is a jump edge: jump where the body
@@ -1162,7 +1168,11 @@ impl Bot {
                 }
                 (0.0, self.heading, 0)
             }
-            Some(w) if self.unstick_ticks == 0 => self.steer(view, w),
+            Some(w) if self.unstick_ticks == 0 => {
+                let (pitch, yaw, forward, right) = self.steer(view, w);
+                cmd.right = right;
+                (pitch, yaw, forward)
+            }
             // On a ladder with no way to steer, or pinned on it: down.
             // The heading is nothing to a body on a ladder, and the level
             // view of a wander climbs at a third of the rate, which held
@@ -1309,7 +1319,7 @@ impl Bot {
     /// is climbed looking up; one well below, or below while on a ladder, is
     /// backed toward facing away, creeping at the lip. That is how the
     /// graph's walks proved the edge (`crate::nav`).
-    fn steer(&mut self, view: &BotView, to: [f32; 3]) -> (f32, f32, i8) {
+    fn steer(&mut self, view: &BotView, to: [f32; 3]) -> (f32, f32, i8, i8) {
         let from = view.origin;
         let yaw = (to[1] - from[1]).atan2(to[0] - from[0]).to_degrees();
         let dz = to[2] - from[2];
@@ -1317,13 +1327,28 @@ impl Bot {
             let flat = (to[0] - from[0]).hypot(to[1] - from[1]);
             let forward = crate::nav::back_move(flat, view.on_ladder);
             let yaw = self.creep.hold(forward, yaw_diff(yaw + 180.0, 0.0));
-            return (-crate::nav::LADDER_PITCH, yaw, forward);
+            return (-crate::nav::LADDER_PITCH, yaw, forward, 0);
         }
         self.creep.hold(127, yaw);
-        if dz > CLIMB_HEIGHT || view.on_ladder {
-            (-crate::nav::LADDER_PITCH, yaw, 127)
+        if view.on_ladder && dz > vcod_common::pmove::STEPSIZE {
+            // Square into the face, strafing toward the climb's line, until
+            // level with the waypoint: a ledge beside the rungs is stepped
+            // onto facing it.
+            let yaw = crate::nav::climb_yaw(view.ladder_normal.into()).unwrap_or(yaw);
+            let right = view.ladder_middle.map_or(0, |m| {
+                let (s, c) = yaw.to_radians().sin_cos();
+                let off = (m[0] - from[0]) * s - (m[1] - from[1]) * c;
+                if off.abs() < LADDER_CENTRED {
+                    0
+                } else {
+                    (off * 16.0).clamp(-64.0, 64.0) as i8
+                }
+            });
+            (-crate::nav::LADDER_PITCH, yaw, 127, right)
+        } else if dz > CLIMB_HEIGHT || view.on_ladder {
+            (-crate::nav::LADDER_PITCH, yaw, 127, 0)
         } else {
-            (0.0, yaw, 127)
+            (0.0, yaw, 127, 0)
         }
     }
 
@@ -1544,8 +1569,10 @@ impl Bot {
     fn shuns(&self, view: &BotView, yaw: f32) -> bool {
         let o = octant(yaw);
         let below = |w: [f32; 3]| w[2] < view.origin[2] - vcod_common::pmove::JUMP_HEIGHT;
-        let drops = self.unstick_tries < CORNERED && !view.waypoint.is_some_and(below);
-        view.hazard_ahead[o] || (drops && view.drop_ahead[o])
+        let path_drops = view.waypoint.is_some_and(below);
+        let shun =
+            |depth: f32| !path_drops && (self.unstick_tries < CORNERED || depth > FALL_HURTS);
+        view.hazard_ahead[o] || view.drop_ahead[o].is_some_and(shun)
     }
 
     /// The body moves toward a drop it shuns, whatever its heading: one
@@ -1606,6 +1633,12 @@ pub fn octant(yaw: f32) -> usize {
     ((yaw.rem_euclid(360.0) + 22.5) / 45.0) as usize % 8
 }
 
+/// A cornered bot still keeps off a drop this deep: past
+/// `bg_fallDamageMinHeight` the fall hurts. mp_ship's 280 off the 216
+/// floor at x 2010 took a bot's health with it (section 3).
+const FALL_HURTS: f32 = 256.0;
+/// A climb this near the middle of the rungs along the face stops strafing.
+const LADDER_CENTRED: f32 = 2.0;
 /// Ticks a stuck bot spends on a random heading before its waypoint again.
 const UNSTICK_TICKS: u32 = 15;
 /// Unstick spells that start within [`CORNER`] units of the one before;
@@ -1767,10 +1800,12 @@ mod tests {
             grenade: Some(6),
             waypoint: None,
             hazard_ahead: [false; 8],
-            drop_ahead: [false; 8],
+            drop_ahead: [None; 8],
             noise: None,
             linked: false,
             on_ladder: false,
+            ladder_normal: [0.0; 3],
+            ladder_middle: None,
             on_ground: true,
             jump: false,
             leap: false,
@@ -2505,6 +2540,28 @@ mod tests {
         );
     }
 
+    /// Up a ladder the climb faces square into it, whatever the waypoint's
+    /// bearing, and strafes toward the middle of the rungs.
+    #[test]
+    fn a_climb_faces_the_ladder_and_strafes_to_its_middle() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.on_ladder = true;
+        v.ladder_normal = [-1.0, 0.0, 0.0];
+        v.waypoint = Some([40.0, -60.0, 300.0]);
+        v.ladder_middle = Some([v.origin[0], v.origin[1] - 8.0]);
+        let cmd = bot.think(&v);
+        assert_eq!(cmd.angles[1], deg_short(0.0), "square into the face");
+        assert_eq!(cmd.forward, 127);
+        assert!(
+            cmd.right > 0,
+            "facing +x, the middle at -y is to the right: {}",
+            cmd.right
+        );
+        v.ladder_middle = Some([v.origin[0], v.origin[1]]);
+        assert_eq!(bot.think(&v).right, 0, "centred");
+    }
+
     #[test]
     fn a_bot_on_a_ladder_with_no_waypoint_or_pinned_climbs_down() {
         let mut bot = Bot::new("allies", false, 1);
@@ -2568,8 +2625,8 @@ mod tests {
             let mut v = view();
             v.waypoint = Some([0.0, 100.0, 64.0]);
             // A drop everywhere but +y (octant 2), a minefield at -y.
-            v.drop_ahead = [true; 8];
-            v.drop_ahead[2] = false;
+            v.drop_ahead = [Some(100.0); 8];
+            v.drop_ahead[2] = None;
             v.hazard_ahead[6] = true;
             let unstuck = (0..25).find(|_| {
                 bot.think(&v);
@@ -2578,14 +2635,14 @@ mod tests {
             assert!(unstuck.is_some(), "seed {seed}: never unstuck");
             assert_eq!(octant(bot.heading), 2, "seed {seed}: {}", bot.heading);
             // Boxed in by drops: off the hazard still.
-            v.drop_ahead = [true; 8];
+            v.drop_ahead = [Some(100.0); 8];
             bot.pick_heading(&v);
             assert_ne!(octant(bot.heading), 6, "seed {seed}: into the minefield");
             // A drop turns up ahead mid-spell: the next tick picks again.
-            v.drop_ahead = [false; 8];
+            v.drop_ahead = [None; 8];
             v.hazard_ahead = [false; 8];
             bot.heading = 90.0;
-            v.drop_ahead[2] = true;
+            v.drop_ahead[2] = Some(100.0);
             bot.think(&v);
             assert_ne!(octant(bot.heading), 2, "seed {seed}: kept walking off");
         }
@@ -2602,8 +2659,8 @@ mod tests {
             let mut v = view();
             v.waypoint = Some([0.0, 100.0, 64.0]);
             // +y (octant 2) is the wall it is pinned against.
-            v.drop_ahead = [true; 8];
-            v.drop_ahead[2] = false;
+            v.drop_ahead = [Some(100.0); 8];
+            v.drop_ahead[2] = None;
             let mut spells = Vec::new();
             for _ in 0..200 {
                 bot.think(&v);
@@ -2621,6 +2678,20 @@ mod tests {
             dropped += usize::from(spells[first..].iter().any(|o| *o != 2));
         }
         assert!(dropped > 10, "only {dropped} of 19 seeds took a drop out");
+        // A drop that hurts stays off even cornered.
+        for seed in 1..20 {
+            let mut bot = Bot::new("allies", false, seed);
+            let mut v = view();
+            v.waypoint = Some([0.0, 100.0, 64.0]);
+            v.drop_ahead = [Some(f32::INFINITY); 8];
+            v.drop_ahead[2] = None;
+            for _ in 0..200 {
+                bot.think(&v);
+                if bot.unstick_ticks == UNSTICK_TICKS - 1 {
+                    assert_eq!(octant(bot.heading), 2, "seed {seed}: off a deep drop");
+                }
+            }
+        }
     }
 
     #[test]

@@ -376,7 +376,10 @@ fn bots_on_mp_ships_ladders_keep_climbing() {
 /// mp_ship, seed 5: a bot pinned on the deck lip at (3288, -455, 56) took
 /// its random unstick heading off the deck to the hull 50 below (tick 1671
 /// before the drop probe). No unstick spell that starts on the ground off
-/// a ladder ends more than a jump below where it started.
+/// a ladder lands more than a jump below where it started, on a floor the
+/// graph does not walk straight back up from. A run down a stair can
+/// leave the ground at its top and land a storey down; the stair walks
+/// back.
 #[test]
 #[ignore = "runs 6 bots on mp_ship for 90 s of game time, ~1 min; run with --ignored"]
 fn bots_on_mp_ship_unstick_without_walking_off_the_deck() {
@@ -394,7 +397,8 @@ fn bots_on_mp_ship_unstick_without_walking_off_the_deck() {
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     // Per slot, where the spell under way started, when it started on the
-    // ground off a ladder and has touched no ladder since.
+    // ground off a ladder and has touched no ladder since; it is judged
+    // where the body first stands once the spell is over.
     let mut spell: [Option<[f32; 3]>; 8] = [None; 8];
     let mut was = [false; 8];
     for tick in 0..1800 {
@@ -408,16 +412,70 @@ fn bots_on_mp_ship_unstick_without_walking_off_the_deck() {
                 spell[slot] = (b.on_ground && !b.on_ladder).then_some(b.origin);
             }
             was[slot] = b.unsticking;
-            if !b.unsticking || b.on_ladder {
+            if b.on_ladder {
                 spell[slot] = None;
             }
-            if let Some(from) = spell[slot] {
-                assert!(
-                    b.origin[2] > from[2] - vcod_common::pmove::JUMP_HEIGHT,
-                    "tick {tick}: bot {slot} fell from {from:?} to {:?} on its unstick heading",
-                    b.origin
-                );
+            let Some(from) = spell[slot].filter(|_| !b.unsticking && b.on_ground) else {
+                continue;
+            };
+            spell[slot] = None;
+            if b.origin[2] > from[2] - vcod_common::pmove::JUMP_HEIGHT {
+                continue;
             }
+            let flat = (b.origin[0] - from[0]).hypot(b.origin[1] - from[1]);
+            let back = sv.test_nav_route(b.origin, from);
+            assert!(
+                back.is_some_and(|r| r < 2.0 * flat + 128.0),
+                "tick {tick}: bot {slot} fell from {from:?} to {:?} on its unstick heading, \
+                 route back {back:?}",
+                b.origin
+            );
+        }
+    }
+}
+
+/// mp_ship, seed 19: a bot climbed the mast ladder at (3696, 57) to the
+/// hatch at 992, turned on the rungs for the platform node 47 units west,
+/// let go of them and fell back down the shaft, again and again (tick
+/// 1169 before the fix). No bot stays 12 s within 150 units of one spot.
+#[test]
+#[ignore = "runs 6 bots on mp_ship for 65 s of game time, ~1 min; run with --ignored"]
+fn bots_on_mp_ship_get_off_the_mast_ladder() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_ship").unwrap()).unwrap())
+        .expect("parse the bsp");
+    let mut now = Instant::now();
+    let mut cfg = cfg(6, false, "dm");
+    cfg.map = "mp_ship".into();
+    let mut sv = vcod_server::Server::new(cfg, now);
+    sv.test_seed_rng(19);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let mut hist: [std::collections::VecDeque<[f32; 3]>; 8] = Default::default();
+    for tick in 0..1300 {
+        run(&mut sv, &mut now, 1);
+        for slot in sv.bot_slots() {
+            let h = &mut hist[slot];
+            let Some(b) = sv.bot_body(slot).filter(|b| b.playing) else {
+                h.clear();
+                continue;
+            };
+            h.push_back(b.origin);
+            if h.len() > 240 {
+                h.pop_front();
+            }
+            let first = h[0];
+            let near = |p: &[f32; 3]| {
+                (0..3).map(|i| (p[i] - first[i]).powi(2)).sum::<f32>() < 150.0 * 150.0
+            };
+            assert!(
+                h.len() < 240 || !h.iter().all(near),
+                "tick {tick}: bot {slot} 12 s round {first:?}, now at {:?}",
+                b.origin
+            );
         }
     }
 }
