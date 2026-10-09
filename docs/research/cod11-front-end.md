@@ -5,7 +5,8 @@ query behind the list. Sources: the stock menu files in the 1.1 paks
 (`pak0.pk3`, `localized_english_pak0.pk3`), `ui_mp_x86.dll` 1.1 (image base
 `0x40000000`), `CoDMP.exe` 1.1 (image base `0x00400000`; md5s in
 `cod11-events-and-fx.md`), and live captures against
-`codmaster.activision.com` and the retail 1.1d server on 2026-10-08.
+`codmaster.activision.com` and the retail 1.1d server on 2026-10-08 and
+2026-10-09.
 Addresses are virtual; function names are mine, after the Quake III
 functions whose shape they share. vcod's implementation is
 `crates/client/src/frontend/`, `crates/common/src/ui_menu.rs` and
@@ -185,16 +186,223 @@ off the branches:
   in the list among the master's 50, and `JoinServer` on it connected and
   loaded the map. VERIFIED 2026-10-08.
 
-## 6. vcod's front end
+## 6. Sources and the display list
 
-- vcod draws the main menu, the browser, the options set (section 8), the
-  quit popup and the error popup from the stock files with their layout,
-  the main menu again over a game (section 7), and refuses every other menu
-  with a console line. A button whose script would close its own menu and
-  then open a refused one is refused whole, so `Start New Server` leaves the
-  main menu up.
-- `New Favorite` (`open createfavorite_popmenu`) opens the console with
-  `connect ` typed, which is the LAN and favourite path.
+- `ui_netSource` picks the list: 0 Local, 1 Internet, 2 Favorites. The
+  `UI_NETSOURCE` owner draw prints `EXE_LOCAL`, `EXE_INTERNET` or
+  `EXE_FAVORITES` from the pointer table at `0x40036ad8`. VERIFIED (the
+  table's three pointers). The cvar is archived with default `0` (cvar
+  table entry at `0x40036c8c`: name `0x4002f710`, default `"0"`, flags 1),
+  so a first run opens the browser on Local. VERIFIED. A retail
+  `config_mp.cfg` carries `seta ui_netSource "0"` and the four
+  `ui_browserShow*` cvars at `"1"`. VERIFIED (the file).
+- `UI_NetSource_HandleKey` (`0x40009b90`) steps the source up on keys 200,
+  `0xd` and `0xbf` and down on 201, wraps it to 0..2, rebuilds the display
+  list, starts a refresh unless the new source is Internet (`cmp` against 1
+  before the call to `0x4000ea90`), and writes `ui_netSource`. INFERRED off
+  the branches; that 200 and 201 are the mouse buttons is INFERRED from the
+  click handling.
+- `UpdateFilter` (compared at `0x4000ac82`), which `joinserver`'s `onOpen`
+  runs, starts a refresh only when the source is Local (`test eax,eax` on
+  `0x401c146c` at `0x4000ac97`), then rebuilds the display list. INFERRED.
+- The refresh starter (`0x4000ea90`) first stores the date in
+  `ui_lastServerRefresh_%i` (`0x4002f000`) as `%s %i, %i   %i:%02i` with the
+  month from `EXE_MONTH_ABV_*`, then sends `localservers` for source 0
+  (`0x4000eb5b`) and gives it 1000 ms (`DAT_401ea684 = now + 1000`), or
+  5000 ms and `globalservers` for source 1; source 2 sends nothing. VERIFIED
+  for the strings; the timings are INFERRED off the stores.
+- `UI_SERVERREFRESHDATE` (`0x40008fc5`): while a refresh runs it prints
+  `EXE_WAITINGFORMASTERSERVERRESPONSE` when `LAN_GetServerCount` (trap
+  `0x4f`) is negative, else `EXE_GETTINGINFOFORSERVERS` with that count, the
+  source's list length (`0x4000905d`..`0x4000906e`); after it, `EXE_REFRESHTIME`
+  with `ui_lastServerRefresh_<source>` (`0x400090fa`..`0x4000913b`).
+  INFERRED off the branches.
+- `UI_BuildServerDisplayList` (`0x4000b800`) lists a server only if the
+  engine has it visible and its ping is above 0, except on Favorites, which
+  lists every entry (`0x4000b957`). Then, in order (INFERRED off the
+  branches, each skip a `LAN_MarkServerVisible(source, n, 0)`, trap `0x52`):
+  an `addr` of `000.000.000.000` (`0x4002e76c`) is dropped;
+  `ui_browserShowEmpty` 0 drops `clients` 0 (`0x4000b9d4`);
+  `ui_browserShowFull` 0 drops `clients` equal to `sv_maxclients`
+  (`0x4000b9f5`); `ui_browserShowPassword` 0 drops `pswrd` non-zero
+  (`0x4000ba2d`); `ui_browserShowNoPassword` 0 drops `pswrd` 0
+  (`0x4000ba65`); then the game type filter (`gametype` against the
+  `ui_joinGameType` entry) and the game filter (`game`; its table at
+  `0x4002d700` holds only `EXE_ALL`). The four `ui_browserShow*` vmCvars
+  are at `0x401c3980`, `0x401ef3c0`, `0x401efcc0`, `0x401c3860` (table
+  entries `0x40036ddc`, `0x40036dcc`, `0x40036dec`, `0x40036dfc`), all
+  archived with default `"1"`. VERIFIED (the table).
+- The display flags: `UI_SHOW_FAVORITESERVERS` (4) shows an item only on
+  Favorites and `UI_SHOW_NOTFAVORITESERVERS` (`0x1000`) only off it
+  (`0x40009780`, the `& 4` and `& 0x1000` tests against `ui_netSource`).
+  INFERRED. `joinserver.menu`'s `addFavorite` button carries the second flag
+  but is `visible 0` and nothing shows it, so retail's browser has no Add to
+  Favorites button; `delfavorite` (flag 4, `visible 1`) and `createFavorite`
+  (`showCvar { "2" }` on `ui_netSource`) are the favourites controls.
+  VERIFIED (the file); that a `visible 0` item stays hidden is INFERRED from
+  the RTCW lineage.
+
+## 7. Local servers (`localservers`)
+
+- `CL_LocalServers_f` (CoDMP.exe `0x413710`, registered at `0x428840` with
+  the string `localservers`) prints `Scanning for servers on the local
+  network...` (`0x5661b0`), zeroes the Local count (`0x155f400`) and its
+  128 `0xb8`-byte entries from `0x155f404`, all but the `int` at `+0xac`
+  (the loop at `0x413750` saves and restores it), then sends
+  `\xff\xff\xff\xffgetinfo xxx` (`0x5661a0`) through `NET_SendPacket`
+  (`0x4493e0`) to a netadr of type 3 (`NA_BROADCAST`, stored at
+  `0x4137ac`) on port `htons(0x7120 + j)` for `j` 0..3 (`0x413792`,
+  `cmp ebp,4`), in two rounds (`mov [esp+0x10],2`, `dec`/`jne` at
+  `0x413872`). VERIFIED (the string, the port base and both loop counts).
+  So eight packets: 28960, 28961, 28962, 28963, twice. That `NA_BROADCAST`
+  goes to `255.255.255.255` is INFERRED from the Q3 lineage
+  (`NetadrToSockadr`); the socket has `SO_BROADCAST` (the
+  `UDP_OpenSocket: setsockopt SO_BROADCAST` warning string). VERIFIED for
+  the string.
+- Live, 2026-10-09, in a network namespace whose only interface is a dummy
+  (this host's firewall drops a broadcast's local copy): one
+  `getinfo xxx` broadcast to `255.255.255.255:29661` and `:29662` was
+  answered by the retail 1.1d server and by vcod-server, each with its usual
+  `infoResponse`; the retail one, started with `g_password secret`, sent
+  `pswrd\1`. VERIFIED by capture (`lan_scan_live` in
+  `crates/client/src/frontend/browser.rs` reran it on vcod's own scan).
+- vcod: a Local refresh broadcasts the eight packets, lists every address
+  that answers within 1000 ms (capped at 128), with the time from the
+  broadcast as its ping. Retail adds broadcast answers in
+  `CL_ServerInfoPacket` and pings them afterwards; the ping vcod shows is its
+  own simplification.
+
+## 8. Favourites (`servercache.dat`)
+
+- `LAN_LoadCachedServers` (CoDMP.exe `0x417490`) reads `servercache.dat`:
+  three `int` counts (Internet at `0x1565004`, favourites at `0x15c400c`,
+  a third at `0x15c1008`), then an `int` size that must be `0x64c00`, then
+  `0x5c000` bytes of Internet entries (`0x1565008`), `0x5c00` of favourites
+  (`0x15c4010`) and `0x3000` more (`0x15c100c`); a wrong size zeroes the
+  counts. `LAN_SaveServersToCache` (`0x417570`) writes the same seven
+  fields. VERIFIED. So the file is 16 + `0x64c00` = 412688 bytes; the one
+  in a 1.1 install, beside `CoDMP.exe`, is that size with all counts 0.
+  VERIFIED (the file). The Local list is never cached. VERIFIED (not among
+  the fields). That the third block is the master's address list (2048 of
+  six bytes) is INFERRED from its size.
+- An entry is `0xb8` bytes. `LAN_GetServerInfo` (`0x417a10`) reads it
+  into an info string with the keys `hostname`, `mapname`, `clients`,
+  `sv_maxclients`, `ping`, `minping`, `maxping`, `game`, `gametype`,
+  `nettype`, `addr`, `sv_allowAnonymous` and `pswrd` (string refs
+  `0x5663d0`..`0x566378`). VERIFIED. Which offset feeds which key, read off
+  the load order, is INFERRED: a 20-byte netadr (`int` type, 4 is
+  `NA_IP` and 2 loopback per `NET_AdrToString` `0x449150`; IP at +4; port
+  big-endian at +18), `hostname` at `0x14`, `mapname` `0x34`, `game`
+  `0x54`, `nettype` `0x74`, `gametype` `0x78` (32-byte strings), then
+  `int`s `clients` `0x98`, `sv_maxclients` `0x9c`, `minping` `0xa0`,
+  `maxping` `0xa4`, `ping` `0xa8`, `sv_allowAnonymous` `0xb0`, `pswrd`
+  `0xb4`. `LAN_ResetPings` (`0x417600`) writes -1 at `0xa8`; `LAN_AddServer`
+  sets 1 at `0xac`, the visible flag. INFERRED.
+- The UI reaches the lists through traps (the `0x40036030` syscall
+  pointer): `0x55` load the cache and `0x56` save it (CoDMP.exe dispatch
+  `0x418314`, cases at `0x4187a0`, `0x4187ac`); the UI calls load from its
+  init (`0x40007c30`) and save from its shutdown (`0x40007c20`). VERIFIED
+  for the jump table cases and the call sites. So retail writes the file
+  when the UI shuts down, not on each change.
+- `LAN_AddServer` (trap `0x57`, `0x417640`): -1 when the list is full (128
+  for favourites), -2 when `NET_StringToAdr` (`0x449690`) fails, 0 when the
+  address is already listed (`NET_CompareAdr` `0x449230`), else copies the
+  address and the name (`strncpy` of `0x1f` bytes) and returns 1. INFERRED
+  off the branches. `LAN_RemoveServer` (trap `0x58`, `0x4177d0`) parses
+  the address and closes the gap with `0xb8`-byte moves. INFERRED.
+- The UI's favourite scripts (`UI_RunMenuScript`, VERIFIED for the string
+  compares): `addFavorite` (`0x4000b01b`) acts off Favorites only, reads the
+  selected server's `hostname` and `addr` (`0x4002e8c0`, `0x4002e8b8`) and
+  adds them; `deleteFavorite` (`0x4000b0af`) acts on Favorites only and
+  removes the selected server's `addr` when non-empty; `createFavorite`
+  (`0x4000b13c`) acts on Favorites only and adds `ui_favoriteName` and
+  `ui_favoriteAddress` (`0x4002e888`, `0x4002e874`). The add (`0x4000a4a0`)
+  checks, in order: an empty name sets `ui_favorite_message` to
+  `@EXE_FAVORITENAMEEMPTY`, an empty address `@EXE_FAVORITEADDRESSEMPTY`;
+  then `LAN_AddServer(2, ...)`'s 0, -1, -2 and 1 give `@EXE_FAVORITEINLIST`,
+  `@EXE_FAVORITELISTFULL`, `@EXE_BADSERVERADDRESS` and
+  `@EXE_FAVORITEADDED`; each also prints the localized text with `%s\n`
+  (`0x4002ede4`). VERIFIED: the strings and their pushes. INFERRED: the
+  order of the checks.
+  `fav_message_popmenu` shows `ui_favorite_message` as its text.
+- vcod reads the favourites block at start and writes it back after every
+  add and delete and at the end of a Favorites refresh, keeping every other
+  byte of an existing file; with none it writes a 412688-byte file whose
+  Internet and address lists are empty. An entry vcod cannot address (IPX,
+  loopback) is kept as read. A reply's hostname, map, counts and ping go
+  into the entry, as `CL_SetServerInfo` updates every list holding the
+  address (INFERRED from the Q3 lineage).
+
+## 9. Password popup
+
+- `password_popmenu` is an `ITEM_TYPE_EDITFIELD` on cvar `password`,
+  `maxchars 12`, and an OK button that only closes the popup. VERIFIED
+  (`ui_mp/password.menu`). CoDMP.exe registers `password` with flags 2
+  (`CVAR_USERINFO`) and default `""` (push at `0x4123ea`, between
+  `cl_anonymous` and `cg_predictItems`). VERIFIED. vcod sends it as
+  `\password\<value>` after `cg_predictItems`, the newest-first cvar walk's
+  place (INFERRED from the registration order), and leaves the key out when
+  empty.
+- Live, 2026-10-09, retail 1.1d with `g_password secret`: vcod's
+  `NetClient` with no password and with `wrong` was dropped with
+  `GAME_INVALIDPASSWORD` (the `game_mp_x86.dll` string at `0x5b780`); with
+  `secret` it got the gamestate and went active. VERIFIED by capture.
+- vcod-server answers `pswrd 0` and does not check `g_password`.
+
+## 10. Server info popup
+
+- `serverinfo_popmenu`'s `onOpen` and Refresh run `uiScript ServerStatus`
+  (compared at `0x4000acc0`), which copies the selected server's address
+  (trap `0x50`) and rebuilds the status. VERIFIED for the compare. The list
+  is `FEEDER_SERVERSTATUS` (13), `notselectable`, `elementheight 16`, four
+  columns at 2, 60, 110, 155 capped at 20, 10, 10 and 25 characters.
+  VERIFIED (`ui_mp/serverinfo.menu`).
+- The engine sends `getstatus` with no argument (CoDMP.exe push of
+  `0x566250` at `0x4133eb`), resent every `cl_serverStatusResendTime`
+  (registered at default `"750"`, `0x566938`). VERIFIED. The UI gives up
+  after `ui_serverStatusTimeOut` (default `"7000"`, table entry
+  `0x40036e0c`). VERIFIED for the default; its use is INFERRED.
+- `UI_GetServerStatusInfo` (`0x4000bcc0`) builds rows of four strings: the
+  first `address` with the address in the last column, then one row per
+  serverinfo pair (key first, value last), then, under 125 rows, a blank
+  row, a header of `@EXE_SV_INFO_NUM`, `_SCORE`, `_PING`, `_NAME`, and one
+  row per player: its index (`%d`), score and ping (split at spaces) and the
+  rest of the line, quotes included; at most 128 rows. INFERRED off the
+  loop. `UI_SortServerStatusInfo` (`0x4000bbb0`) then walks the table at
+  `0x40036ec8` (key, label, yes/no flag: `sv_hostname`, `address`, `pswrd`
+  (yes/no), `gamename`, `g_gametype`, `sv_pure` (yes/no), `mapname`,
+  `shortversion`, `protocol`, `sv_maxping`, `sv_minping`, `sv_maxrate`,
+  `sv_floodprotect`, `sv_allowanonymous`, `sv_maxclients`,
+  `sv_privateclients`; VERIFIED), and for every row whose second column is
+  empty and whose key matches, case-insensitively, swaps its key and value
+  into the next row from the top, puts the label in the key column, and for
+  a yes/no key prints `@EXE_YES` or `@EXE_NO` by the value's `atol`.
+  INFERRED off the loop.
+
+## 11. Filter and favourite popups
+
+- `filter_popmenu` holds five `ITEM_TYPE_YESNO` items on
+  `ui_browserShowEmpty`, `ui_browserShowFull`, `ui_browserShowPassword`,
+  `ui_browserShowNoPassword` and `ui_browserShowTourney` (the last
+  `visible 0`), and OK closes it. VERIFIED (`ui_mp/filter.menu`). A yes/no
+  item draws `EXE_YES` or `EXE_NO` (pushed at `0x4001491b`,
+  `0x40014922`). VERIFIED for the pushes. The filters apply at the next
+  display list build (section 6).
+- `createfavorite_popmenu` has two edit fields, `ui_favoriteName` and
+  `ui_favoriteAddress` (`maxchars 30`), and OK runs `uiScript
+  CreateFavorite`, closes the popup and opens `fav_message_popmenu`.
+  VERIFIED (`ui_mp/createfavorite.menu`).
+- vcod's popups use the options screens' edit field and yes/no item
+  (section 14).
+
+## 12. vcod's front end
+
+- vcod draws the main menu, the browser and its popups (sections 6-11),
+  the options set (section 14), the quit popup and the error popup from the
+  stock files with their layout, the main menu again over a game (section
+  13), and refuses every other menu with a console line. A button whose
+  script would close its own menu and then open a refused one is refused
+  whole, so `Start New Server` leaves the main menu up.
 - Ping pacing (32 `getinfo`s in flight, a 1.5 s timeout, 5 s for the master)
   is vcod's own; retail's numbers were not measured.
 - Text is placed as RTCW's `Item_SetTextExtents` does: baseline at
@@ -202,12 +410,14 @@ off the branches:
   aligned) or half of it (centred); an owner draw with no label draws at
   `textalignx` whatever its alignment. INFERRED from the RTCW lineage, and
   the screenshots match the stock layout by eye.
-- Not done: create server, mods, the CD key popup, password, server
-  info, filters, favourites storage, LAN scanning (`localservers`), the
-  scroll bar, the menu cursor image, keyboard focus on buttons,
-  `focusColor`'s pulse and the map preview.
+- Not done: create server, mods, the CD key popup, the game type filter
+  (`UI_JOINGAMETYPE` always prints `EXE_ALL`), `EXE_REFRESHTIME` and
+  `ui_lastServerRefresh_*` (the line reads vcod's own count once a refresh
+  ends), the Internet list's cache in `servercache.dat`, the scroll bar, the
+  menu cursor image, keyboard focus on buttons, `focusColor`'s pulse and the
+  map preview.
 
-## 7. Esc in a game
+## 13. Esc in a game
 
 ### The client's key handler
 
@@ -310,7 +520,7 @@ unknown `g_scriptMainMenu` opens nothing: `0x400134b0` looks the name up
   Back to Game closes the last one. Usercmds keep going out with no keys
   held, and no bind fires while the menu has the keys.
 
-## 8. The options screens
+## 14. The options screens
 
 ### Files and layout
 

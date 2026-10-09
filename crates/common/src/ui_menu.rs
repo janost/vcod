@@ -28,8 +28,9 @@ pub const WINDOW_STYLE_SHADER: i32 = 3;
 pub const ITEM_ALIGN_CENTER: i32 = 1;
 pub const ITEM_ALIGN_RIGHT: i32 = 2;
 
-/// `FEEDER_SERVERS`.
+/// `FEEDER_*` from `ui_mp/menudef.h`.
 pub const FEEDER_SERVERS: i32 = 2;
+pub const FEEDER_SERVERSTATUS: i32 = 13;
 
 /// One `columns` entry of a list box: x offset, width and the character cap.
 #[derive(Debug, Clone, Copy, PartialEq)]

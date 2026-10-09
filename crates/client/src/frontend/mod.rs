@@ -1,44 +1,64 @@
 //! Contains routines ported from the RTCW-MP GPL source, Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company.
 //! See NOTICE.
 //!
-//! The front end: the stock main menu, server browser, options screens,
-//! quit and error popups drawn from their `.menu` files and driven by mouse
-//! and keys, as the UI module does while no game is up, and the main menu
-//! again over a game with `cl_ingame` 1 (docs/research/cod11-front-end.md).
+//! The front end: the stock main menu, server browser and its popups
+//! (password, server info, filter, favourites), options screens, quit and
+//! error popups drawn from their `.menu` files and driven by mouse and keys,
+//! as the UI module does while no game is up, and the main menu again over a
+//! game with `cl_ingame` 1 (docs/research/cod11-front-end.md).
 //! Menus vcod cannot run yet (create server, mods) are refused with a console
 //! line instead of drawing screens whose controls do nothing.
 
 pub mod browser;
 mod options;
+mod status;
 
+use std::collections::HashMap;
 use std::net::SocketAddrV4;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use vcod_common::localize::Localized;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::ui_menu::{
-    self, FEEDER_SERVERS, ITEM_ALIGN_CENTER, ITEM_ALIGN_RIGHT, ITEM_TYPE_LISTBOX, ITEM_TYPE_MULTI,
-    ITEM_TYPE_OWNERDRAW, ITEM_TYPE_SLIDER, UiItem, UiMenu, WINDOW_STYLE_FILLED,
-    WINDOW_STYLE_SHADER,
+    self, FEEDER_SERVERS, FEEDER_SERVERSTATUS, ITEM_ALIGN_CENTER, ITEM_ALIGN_RIGHT,
+    ITEM_TYPE_LISTBOX, ITEM_TYPE_MULTI, ITEM_TYPE_OWNERDRAW, ITEM_TYPE_SLIDER, UiItem, UiMenu,
+    WINDOW_STYLE_FILLED, WINDOW_STYLE_SHADER,
 };
 use winit::keyboard::KeyCode;
 
 use crate::console::shell::Shell;
 use crate::hud::HudQuad;
 use crate::hud::font::{self, Slot, UiFonts};
-use browser::{Browser, Status};
+use browser::{AddFavorite, Browser, Filter, Source, Status};
+use status::StatusQuery;
 
 /// The files `ui_mp/menus.txt` loads that hold the menus vcod drives.
-const MENU_FILES: [&str; 4] = [
+const MENU_FILES: [&str; 8] = [
     "ui_mp/main.menu",
     "ui_mp/joinserver.menu",
+    "ui_mp/password.menu",
+    "ui_mp/serverinfo.menu",
+    "ui_mp/createfavorite.menu",
+    "ui_mp/filter.menu",
     "ui/quit.menu",
     "ui/error.menu",
 ];
 
 /// Menus `open` may show, with [`options::MENUS`]. Anything else is refused
 /// with a console line.
-const SUPPORTED: [&str; 4] = ["main", "joinserver", "quit_popmenu", "error_popmenu"];
+const SUPPORTED: [&str; 10] = [
+    "main",
+    "joinserver",
+    "password_popmenu",
+    "serverinfo_popmenu",
+    "createfavorite_popmenu",
+    "filter_popmenu",
+    "del_fav_popmenu",
+    "fav_message_popmenu",
+    "quit_popmenu",
+    "error_popmenu",
+];
 
 fn supported(name: &str) -> bool {
     SUPPORTED
@@ -47,16 +67,26 @@ fn supported(name: &str) -> bool {
         .any(|s| s.eq_ignore_ascii_case(name))
 }
 
-/// The browser's "New Favorite" popup; vcod hands that job to the console.
-const FAVORITE_MENU: &str = "createfavorite_popmenu";
-
 /// `ownerdraw` ids from `ui_mp/menudef.h`.
 const UI_NETSOURCE: i32 = 220;
 const UI_SERVERREFRESHDATE: i32 = 247;
 const UI_JOINGAMETYPE: i32 = 253;
-/// `ui_mp/menudef.h`'s `UI_SHOW_FAVORITESERVERS`: shown only while the
-/// source is Favorites, which vcod's browser never is.
+/// `ui_mp/menudef.h`'s `UI_SHOW_FAVORITESERVERS` and
+/// `UI_SHOW_NOTFAVORITESERVERS`: shown only while the source is, or is not,
+/// Favorites (ui_mp_x86.dll 0x40009780).
 const UI_SHOW_FAVORITESERVERS: i32 = 0x4;
+const UI_SHOW_NOTFAVORITESERVERS: i32 = 0x1000;
+
+/// The shell cvars the browser's scripts read, copied each frame.
+const UI_CVARS: [&str; 7] = [
+    "ui_netSource",
+    "ui_browserShowFull",
+    "ui_browserShowEmpty",
+    "ui_browserShowPassword",
+    "ui_browserShowNoPassword",
+    "ui_favoriteName",
+    "ui_favoriteAddress",
+];
 
 /// Q3's `SCROLLBAR_SIZE`, which a list row's highlight stops short of.
 const SCROLLBAR_SIZE: f32 = 16.0;
@@ -69,8 +99,6 @@ pub enum UiEffect {
     Command(String),
     /// A sound alias played on the viewer.
     Sound(String),
-    /// Open the console with this text in its field.
-    ConsoleInput(String),
     /// `execOnCvarIntValue` / `execOnCvarFloatValue`: run `command` when
     /// `cvar` holds `value` (compared as integers when `int`). Read when the
     /// effect runs, after the commands queued before it.
@@ -124,6 +152,12 @@ pub struct Ui {
     /// `cl_ingame`: the menus are up over a game, not the disconnected
     /// front end.
     in_game: bool,
+    /// `ui_favorite_message`, which `fav_message_popmenu` shows.
+    fav_message: String,
+    /// The server info popup's `getstatus`.
+    status: Option<StatusQuery>,
+    /// [`UI_CVARS`] as the shell had them last frame (lower-case names).
+    cvars: HashMap<String, String>,
 }
 
 impl Ui {
@@ -166,7 +200,16 @@ impl Ui {
             error: String::new(),
             options: options::State::default(),
             in_game: false,
+            fav_message: String::new(),
+            status: None,
+            cvars: HashMap::new(),
         }
+    }
+
+    /// Favourites live in `path` (`servercache.dat`, beside `CoDMP.exe`).
+    pub fn with_server_cache(mut self, path: PathBuf) -> Ui {
+        self.browser = Browser::with_cache(path);
+        self
     }
 
     /// Whether a menu is up and taking input.
@@ -194,6 +237,7 @@ impl Ui {
         self.open.clear();
         self.hover = None;
         self.options.clear();
+        self.status = None;
         self.browser.stop();
         self.in_game = false;
     }
@@ -207,8 +251,49 @@ impl Ui {
         self.open_menu("error_popmenu", out);
     }
 
-    pub fn frame(&mut self, now: Instant) {
+    /// Once a frame while a menu is up: reads the browser's cvars and runs
+    /// the network queries.
+    pub fn frame(&mut self, now: Instant, shell: &Shell) {
+        self.cvars = UI_CVARS
+            .iter()
+            .map(|n| {
+                (
+                    n.to_ascii_lowercase(),
+                    shell.cvar(n).unwrap_or("").to_string(),
+                )
+            })
+            .collect();
+        let on = |n: &str| self.ui_cvar(n).trim().parse::<f32>().unwrap_or(0.0) != 0.0;
+        self.browser.filter = Filter {
+            show_full: on("ui_browserShowFull"),
+            show_empty: on("ui_browserShowEmpty"),
+            show_password: on("ui_browserShowPassword"),
+            show_no_password: on("ui_browserShowNoPassword"),
+        };
+        // A console `set` or the config picked another source.
+        let source = Source::from_cvar(&self.ui_cvar("ui_netSource"));
+        if source != self.browser.source {
+            self.browser.stop();
+            self.browser.source = source;
+            self.browser.status = Status::Idle;
+            self.selected = None;
+            self.list_top = 0;
+        }
         self.browser.poll(now);
+        if let Some(q) = &mut self.status {
+            q.poll(now);
+        }
+    }
+
+    /// A [`UI_CVARS`] value: this input's write, else last frame's.
+    fn ui_cvar(&self, name: &str) -> String {
+        if let Some(v) = self.options.pending(name) {
+            return v.to_string();
+        }
+        self.cvars
+            .get(&name.to_ascii_lowercase())
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn find(&self, name: &str) -> Option<usize> {
@@ -218,10 +303,6 @@ impl Ui {
     }
 
     fn open_menu(&mut self, name: &str, out: &mut Vec<UiEffect>) {
-        if name.eq_ignore_ascii_case(FAVORITE_MENU) {
-            out.push(UiEffect::ConsoleInput("connect ".into()));
-            return;
-        }
         let Some(m) = self.find(name).filter(|_| supported(name)) else {
             crate::console::log::print(&format!("The {name} menu is not in vcod yet."));
             return;
@@ -308,6 +389,42 @@ impl Ui {
             }
             "refreshfilter" => self.browser.requery(),
             "stoprefresh" | "closejoin" => self.browser.stop(),
+            // `UpdateFilter` refreshes a Local list on its own (ui_mp_x86.dll
+            // 0x4000ac92); the filter itself applies at every draw.
+            "updatefilter" => {
+                if self.browser.source == Source::Local {
+                    self.browser.refresh();
+                }
+            }
+            "serverstatus" => {
+                self.status = self
+                    .selected
+                    .map(|addr| StatusQuery::start(addr, Instant::now()));
+            }
+            "addfavorite" if self.browser.source != Source::Favorites => {
+                let rows = self.browser.rows();
+                let picked = self
+                    .selected
+                    .and_then(|a| rows.iter().find(|s| s.addr == a));
+                let (name, addr) = picked.map_or((String::new(), String::new()), |s| {
+                    let name = s
+                        .info
+                        .as_ref()
+                        .map_or(String::new(), |i| i.hostname.clone());
+                    (name, s.addr.to_string())
+                });
+                self.add_favorite(&name, &addr);
+            }
+            "createfavorite" if self.browser.source == Source::Favorites => {
+                let name = self.ui_cvar("ui_favoriteName");
+                let addr = self.ui_cvar("ui_favoriteAddress");
+                self.add_favorite(&name, &addr);
+            }
+            "deletefavorite" if self.browser.source == Source::Favorites => {
+                if let Some(addr) = self.selected.take() {
+                    self.browser.remove_favorite(addr);
+                }
+            }
             "serversort" => {
                 self.browser.sort = args.get(1).and_then(|c| c.parse().ok());
             }
@@ -334,10 +451,29 @@ impl Ui {
                     self.set_cvar("m_pitch", pitch, out);
                 }
             }
-            // Filters and the rate picker's refresh have nothing to update.
-            "updatefilter" | "update" => {}
+            // The rate picker's refresh has nothing to update.
+            "update" => {}
             other => log::debug!("ui: no UI script {other}"),
         }
+    }
+
+    /// The favourite checks `addFavorite` and `createFavorite` share
+    /// (ui_mp_x86.dll 0x4000a4a0), leaving the outcome in
+    /// `ui_favorite_message`.
+    fn add_favorite(&mut self, name: &str, addr: &str) {
+        let key = if name.is_empty() {
+            "@EXE_FAVORITENAMEEMPTY"
+        } else if addr.is_empty() {
+            "@EXE_FAVORITEADDRESSEMPTY"
+        } else {
+            match self.browser.add_favorite(name, addr) {
+                AddFavorite::InList => "@EXE_FAVORITEINLIST",
+                AddFavorite::Full => "@EXE_FAVORITELISTFULL",
+                AddFavorite::BadAddress => "@EXE_BADSERVERADDRESS",
+                AddFavorite::Added => "@EXE_FAVORITEADDED",
+            }
+        };
+        self.fav_message = key.to_string();
     }
 
     /// The first menu `script` opens that vcod cannot show. A button whose
@@ -348,14 +484,16 @@ impl Ui {
             .into_iter()
             .filter(|c| c.len() > 1 && c[0].eq_ignore_ascii_case("open"))
             .map(|c| c[1].clone())
-            .find(|name| !name.eq_ignore_ascii_case(FAVORITE_MENU) && !supported(name))
+            .find(|name| !supported(name))
     }
 
     /// Whether `item` of `menu` is drawn and can take the mouse.
     fn shown(&self, menu: usize, i: usize, shell: &Shell) -> bool {
         let item = &self.menus[menu].items[i];
+        let favorites = self.browser.source == Source::Favorites;
         self.state[menu][i].visible
-            && item.ownerdraw_flag & UI_SHOW_FAVORITESERVERS == 0
+            && (item.ownerdraw_flag & UI_SHOW_FAVORITESERVERS == 0 || favorites)
+            && (item.ownerdraw_flag & UI_SHOW_NOTFAVORITESERVERS == 0 || !favorites)
             && item.gate.as_ref().is_none_or(|g| {
                 let v = self.cvar(&g.cvar, shell);
                 g.passes(v.as_deref())
@@ -435,6 +573,14 @@ impl Ui {
         if let Some(name) = self.refused(&item.action) {
             crate::console::log::print(&format!("The {name} menu is not in vcod yet."));
             return out;
+        }
+        if item.ownerdraw == UI_NETSOURCE {
+            // `UI_NetSource_HandleKey`, then the item's action.
+            let next = self.browser.source.next();
+            self.browser.set_source(next);
+            self.selected = None;
+            self.list_top = 0;
+            self.set_cvar("ui_netSource", &(next as i32).to_string(), &mut out);
         }
         if self.option_click(top, i, shell, &mut out) {
             self.run(top, &item.action, &mut out);
@@ -539,19 +685,25 @@ impl Ui {
                     self.server_list(&p, item, &mut out);
                     continue;
                 }
+                if item.kind == ITEM_TYPE_LISTBOX && item.feeder == Some(FEEDER_SERVERSTATUS) {
+                    self.status_list(&p, item, loc, &mut out);
+                    continue;
+                }
                 let label = if !item.text.is_empty() {
                     loc.translate(&item.text).into_owned()
                 } else if let Some(cvar) = &item.cvar
                     && item.kind != ITEM_TYPE_MULTI
                 {
-                    self.cvar(cvar, shell).unwrap_or_default()
+                    // `ui_favorite_message` holds a localized key.
+                    let v = self.cvar(cvar, shell).unwrap_or_default();
+                    loc.translate(&v).into_owned()
                 } else {
                     String::new()
                 };
                 let value = match item.ownerdraw {
                     UI_NETSOURCE => Some(fill(
                         &loc.translate("@EXE_NETSOURCE"),
-                        &[&loc.translate("@EXE_INTERNET")],
+                        &[&loc.translate(Source::NAMES[self.browser.source as usize])],
                     )),
                     UI_SERVERREFRESHDATE => Some(self.refresh_text(loc)),
                     UI_JOINGAMETYPE => Some(loc.translate("@EXE_ALL").into_owned()),
@@ -601,8 +753,9 @@ impl Ui {
         out
     }
 
-    /// `UI_SERVERREFRESHDATE`'s line: the refresh's progress, then the
-    /// count when it is done.
+    /// `UI_SERVERREFRESHDATE`'s line: the refresh's progress with the
+    /// source's list length (ui_mp_x86.dll 0x4000904d), then the count when
+    /// it is done.
     fn refresh_text(&self, loc: &Localized) -> String {
         let (total, answered) = self.browser.counts();
         match self.browser.status {
@@ -612,7 +765,7 @@ impl Ui {
                 .into_owned(),
             Status::Pinging => fill(
                 &loc.translate("@EXE_GETTINGINFOFORSERVERS"),
-                &[&(total - answered).to_string()],
+                &[&total.to_string()],
             ),
             Status::Done => {
                 let players: u32 = self
@@ -625,6 +778,30 @@ impl Ui {
                 format!("{answered} servers listed in browser with {players} players.")
             }
             Status::Failed => "No response from the master server.".into(),
+        }
+    }
+
+    /// `Item_ListBox_Paint` for `FEEDER_SERVERSTATUS`: the server info
+    /// popup's rows, not selectable; a cell holding a localized key prints
+    /// its text.
+    fn status_list(&self, p: &Painter, item: &UiItem, loc: &Localized, out: &mut Vec<HudQuad>) {
+        let Some(q) = &self.status else { return };
+        let [x, y0, _, _] = item.rect;
+        let (x, mut y) = (x + 1.0, y0 + 1.0);
+        let eh = item.element_height.max(1.0);
+        for row in q.rows.iter().take(visible_rows(item)) {
+            for (col, cell) in item.columns.iter().zip(row) {
+                let text = truncate_visible(&loc.translate(cell), col.max_chars);
+                p.text(
+                    &text,
+                    x + 4.0 + col.pos + item.text_align_x,
+                    y + eh + item.text_align_y,
+                    item.text_scale,
+                    item.fore,
+                    out,
+                );
+            }
+            y += eh;
         }
     }
 
@@ -672,6 +849,7 @@ impl Ui {
         match name.to_ascii_lowercase().as_str() {
             "cl_ingame" => Some(if self.in_game { "1" } else { "0" }.into()),
             "com_errormessage" => Some(self.error.clone()),
+            "ui_favorite_message" => Some(self.fav_message.clone()),
             "shortversion" => Some(concat!("vcod ", env!("CARGO_PKG_VERSION")).into()),
             "ui_multiplayer" | "cl_languagesavailable" => Some("1".into()),
             "ui_mousepitch" => Some(
@@ -874,9 +1052,12 @@ impl Painter<'_> {
 mod tests {
     use super::*;
 
+    /// A `Ui` whose Local refresh broadcasts nowhere.
     fn ui() -> Option<Ui> {
         let fs = vcod_common::testing::game_fs()?;
-        Some(Ui::new(&fs))
+        let mut ui = Ui::new(&fs);
+        ui.browser.lan_targets.clear();
+        Some(ui)
     }
 
     fn click_item(ui: &mut Ui, menu: &str, text: &str, shell: &Shell) -> Vec<UiEffect> {
@@ -992,6 +1173,109 @@ mod tests {
         assert_eq!(quads[0].texture, "ui_mp/assets/main_back_top_mp.tga");
         assert_eq!(quads[0].verts[2], [1280.0, 640.0]);
         assert!(quads.len() > 50, "button text drawn: {}", quads.len());
+    }
+
+    /// Applies the `set` commands a menu sent, as the app does.
+    fn apply(shell: &mut Shell, out: &[UiEffect]) {
+        for e in out {
+            if let UiEffect::Command(line) = e {
+                shell.execute(line);
+            }
+        }
+    }
+
+    fn top_name(ui: &Ui) -> &str {
+        &ui.menus[*ui.open.last().unwrap()].name
+    }
+
+    fn click_at(ui: &mut Ui, m: usize, i: usize, shell: &mut Shell) {
+        let r = ui.menus[m].items[i].rect;
+        ui.mouse_move(r[0] + 2.0, r[1] + 2.0, 640.0, 480.0, shell);
+        assert_eq!(ui.hover, Some((m, i)));
+        let out = ui.click(Instant::now(), shell);
+        apply(shell, &out);
+        ui.frame(Instant::now(), shell);
+    }
+
+    fn click_named(ui: &mut Ui, menu: &str, name: &str, shell: &mut Shell) {
+        let m = ui.find(menu).unwrap();
+        let i = (0..ui.menus[m].items.len())
+            .find(|&i| ui.menus[m].items[i].name == name && ui.shown(m, i, shell))
+            .unwrap_or_else(|| panic!("{name}"));
+        click_at(ui, m, i, shell);
+    }
+
+    fn type_text(ui: &mut Ui, text: &str, shell: &mut Shell) {
+        let out = ui.edit_key(KeyCode::KeyA, Some(text), shell);
+        apply(shell, &out);
+        ui.edit_key(KeyCode::Enter, None, shell);
+    }
+
+    #[test]
+    fn a_new_favourite_is_typed_in_and_listed() {
+        let Some(ui) = ui() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = ui.with_server_cache(dir.path().join("servercache.dat"));
+        ui.browser.lan_targets.clear();
+        let mut shell = Shell::new();
+        ui.frame(Instant::now(), &shell);
+        ui.open_menu("joinserver", &mut Vec::new());
+        // Local, then Internet, then Favorites; New Favorite shows on the last.
+        click_named(&mut ui, "joinserver", "sourcefield", &mut shell);
+        assert_eq!(ui.browser.source, Source::Internet);
+        click_named(&mut ui, "joinserver", "sourcefield", &mut shell);
+        assert_eq!(shell.cvar("ui_netSource"), Some("2"));
+        click_named(&mut ui, "joinserver", "createFavorite", &mut shell);
+        assert_eq!(top_name(&ui), "createfavorite_popmenu");
+        let m = ui.find("createfavorite_popmenu").unwrap();
+        let fields: Vec<usize> = (0..ui.menus[m].items.len())
+            .filter(|&i| ui.menus[m].items[i].kind == ui_menu::ITEM_TYPE_EDITFIELD)
+            .collect();
+        for (&i, text) in fields.iter().zip(["Home", "10.0.0.7:29661"]) {
+            click_at(&mut ui, m, i, &mut shell);
+            type_text(&mut ui, text, &mut shell);
+        }
+        assert_eq!(shell.cvar("ui_favoriteAddress"), Some("10.0.0.7:29661"));
+        ui.frame(Instant::now(), &shell);
+        click_named(&mut ui, "createfavorite_popmenu", "yes", &mut shell);
+        assert_eq!(top_name(&ui), "fav_message_popmenu");
+        assert_eq!(ui.fav_message, "@EXE_FAVORITEADDED");
+        let rows: Vec<String> = ui
+            .browser
+            .rows()
+            .iter()
+            .map(|s| s.addr.to_string())
+            .collect();
+        assert_eq!(rows, ["10.0.0.7:29661"]);
+    }
+
+    #[test]
+    fn the_password_and_filter_popups_set_their_cvars() {
+        let Some(mut ui) = ui() else { return };
+        let mut shell = Shell::new();
+        ui.frame(Instant::now(), &shell);
+        ui.open_menu("joinserver", &mut Vec::new());
+        click_named(&mut ui, "joinserver", "passwordenter", &mut shell);
+        assert_eq!(top_name(&ui), "password_popmenu");
+        click_named(&mut ui, "password_popmenu", "passwordEntry", &mut shell);
+        type_text(&mut ui, "letmein_and_more", &mut shell);
+        // `maxchars 12`.
+        assert_eq!(shell.cvar("password"), Some("letmein_and_"));
+        assert_eq!(shell.userinfo().password, "letmein_and_");
+        click_named(&mut ui, "password_popmenu", "yes", &mut shell);
+        assert_eq!(top_name(&ui), "joinserver");
+
+        click_named(&mut ui, "joinserver", "filterServers", &mut shell);
+        assert_eq!(top_name(&ui), "filter_popmenu");
+        let m = ui.find("filter_popmenu").unwrap();
+        let i = ui.menus[m]
+            .items
+            .iter()
+            .position(|i| i.cvar.as_deref() == Some("ui_browserShowEmpty"))
+            .unwrap();
+        click_at(&mut ui, m, i, &mut shell);
+        assert_eq!(shell.cvar("ui_browserShowEmpty"), Some("0"));
+        assert!(!ui.browser.filter.show_empty);
     }
 
     #[test]

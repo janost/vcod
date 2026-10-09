@@ -30,7 +30,7 @@ the console or a message field holds the keys.
 INFERRED: while that bit is set the key handler routes keys to the console
 field instead of the binds, which is what stops game input. Escape with the
 console up does not close it: in game the handler opens the menu under it
-and the console stays down (`cod11-front-end.md` section 7). vcod does the
+and the console stays down (`cod11-front-end.md` section 13). vcod does the
 same in a game; with no game up its Escape still closes the console.
 
 ## 2. Entering a line
@@ -189,4 +189,4 @@ never throttles a capture.
 
 The options screens' cvars (`mss_volume`, `r_mode`, `r_fullscreen` and the
 inert ones), `setfromcvar`, `exec` and `vid_restart` are in
-`cod11-front-end.md`, section 8.
+`cod11-front-end.md`, section 14.

@@ -54,9 +54,13 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
 ### Client
 
 - Opens on the stock main menu and server browser, drawn from the game's own
-  `ui_mp/*.menu` files. The browser lists what `codmaster.activision.com`
-  knows, pings it, sorts by column and joins on double-click. Losing the
-  server drops you back on the menu with the reason in the stock error popup.
+  `ui_mp/*.menu` files. The browser's three sources are retail's: Local
+  (a `getinfo` broadcast to ports 28960-28963), Internet (what
+  `codmaster.activision.com` knows) and Favorites (kept in `servercache.dat`
+  beside `CoDMP.exe`, the file retail uses). It pings, filters, sorts by
+  column, joins on double-click, and runs the stock password, server info,
+  filter and favourite popups. Losing the server drops you back on the menu
+  with the reason in the stock error popup.
   In a game, Esc opens the script menu and its Main Menu tab the stock
   in-game main menu (Back to Game, Disconnect).
 - The stock Options and Multiplayer Options screens: rebind keys, mouse
@@ -153,13 +157,13 @@ squinting at a screen.
 
 Retail does a lot more than this list. These are the gaps you'll hit first.
 
-**Front end.** Main menu, browser, options, quit and error popups work. On
-the options screens only binds, sensitivity, invert mouse, name, rate,
-volume, video mode and full screen take effect; texture, lighting, gamma,
-HUD, crosshair, sound quality and language settings are stored but ignored.
-Start New Server, Mods, CD key and the browser's password, info and filter
-popups print "not in vcod yet". No favourites or LAN scan: type `connect` in
-the console.
+**Front end.** Main menu, browser and its popups, options, quit and error
+popups work. On the options screens only binds, sensitivity, invert mouse,
+name, rate, volume, video mode and full screen take effect; texture,
+lighting, gamma, HUD, crosshair, sound quality and language settings are
+stored but ignored. Start New Server, Mods and CD key print "not in vcod
+yet". The browser's game type filter, map preview and refresh date are
+missing.
 
 **Client**
 
@@ -394,15 +398,18 @@ Anything else goes to the server while connected (`callvote`, `kill`,
 `name`, `cl_run`, `sensitivity`, `m_yaw`, `m_pitch`, `cg_fov`
 (cheat-protected, so 80 unless the server runs `sv_cheats 1`), `rate`
 (25000; retail's first-run 5000 starves snapshots), `snaps`,
-`scr_conspeed`, `mss_volume`, and `r_mode` / `r_fullscreen` (applied at
-start and by `vid_restart`). `exec <file>` runs a config from the paks or
-`main/`. Binds only act while connected.
+`scr_conspeed`, `mss_volume`, `r_mode` / `r_fullscreen` (applied at start
+and by `vid_restart`), `password` and the browser's `ui_netSource` and
+`ui_browserShow*`. `exec <file>` runs a config from the paks or `main/`.
+Binds only act while connected.
 
 ### Main menu and browser
 
 Mouse to pick, double-click or Enter to join, wheel or Page Up / Down to
-scroll, Esc to go back. On a bind, click or Enter, then press the new key
-(Esc cancels, Backspace clears); a third key replaces both of the old ones.
+scroll, Esc to go back. Click Source to cycle Local, Internet and Favorites.
+On a bind, click or Enter, then press the new key (Esc cancels, Backspace
+clears); a third key replaces both of the old ones. Click a text field to
+type into it; Enter, Tab or Esc finishes.
 
 ### Everywhere
 

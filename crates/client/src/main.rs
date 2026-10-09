@@ -991,7 +991,8 @@ fn main() -> Result<()> {
     fx::registry::init(&fs);
 
     let console = console::Console::new(&fs);
-    let ui = frontend::Ui::new(&fs);
+    // Retail keeps the favourites beside CoDMP.exe; vcod shares the file.
+    let ui = frontend::Ui::new(&fs).with_server_cache(args.game_dir.join("servercache.dat"));
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
@@ -1565,12 +1566,6 @@ impl App {
                     self.apply(event_loop, effects);
                 }
                 UiEffect::Sound(alias) => self.audio.play_local(&self.fs, &alias),
-                UiEffect::ConsoleInput(text) => {
-                    if !self.console.open {
-                        self.toggle_console();
-                    }
-                    self.console.set_input(&text);
-                }
                 UiEffect::ExecOnCvar {
                     cvar,
                     value,
@@ -1865,7 +1860,7 @@ impl App {
     }
 
     /// Esc in a game with nothing else holding the keys, as `CL_KeyEvent`
-    /// does it (docs/research/cod11-front-end.md section 7): once the game
+    /// does it (docs/research/cod11-front-end.md section 13): once the game
     /// is live the `g_scriptMainMenu` script menu (vcod falls back to the
     /// in-game main menu when the server named none), before that the main
     /// menu. The game keeps running; the mouse goes to the menu.
@@ -3380,7 +3375,7 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if self.ui.active() {
-                    self.ui.frame(now);
+                    self.ui.frame(now, &self.shell);
                     let (w, h) = r.screen_size();
                     hud_quads.extend(self.ui.build(w, h, &self.localized, &self.shell));
                 }
