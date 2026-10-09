@@ -498,7 +498,7 @@ VERIFIED, `game.mp.i386.so`: the bit's only clear is `PmoveSingle`'s
 and its three sets are `orb $0x80, 0xd(ps)` at 0x3196b, 0x331c4 and
 0x33461. INFERRED, from the branches into each:
 
-- 0x3196b, `PM_CheckDuck`: the cmd holds prone (`wbuttons` 0x40), the
+- 0x3196b, `PM_CheckDuck` (VERIFIED live, below): the cmd holds prone (`wbuttons` 0x40), the
   player is not already prone (`pm_flags` 1) and `BG_CheckProne`
   (call at 0x31947) refuses. The same arm clears the dive bit 0x4 and, unless
   `wbuttons` 0x2 is set, raises event 141 for a ducked player (`pm_flags` 2)
@@ -514,8 +514,17 @@ The client's "Prone Blocked" notice reads the bit
 (`cod11-hud-protocol.md`, "Stance"). vcod's pmove raises it on the first
 two (`PlayerState::prone_blocked`), the server writes it and the predictor
 carries it. Not modelled: the airborne refusal and the events 140 and 141
-that go with the refusals. No capture has shown the bit; the stance captures
-all took their prone.
+that go with the refusals.
+
+VERIFIED live, 2026-10-09: `--save-motion` against `tools/run_server.sh
+mp_pavlov` (full-branch cmds), whose spawn refused the `prone` pose: every
+snapshot of the 3 s hold read `pm_flags` 0x48000, eFlags 16 and eye 60, and
+the pose ended at `eventSequence` 181 with all four ring slots 140. So the
+bit and event 140 come with every refused cmd. The committed
+`mp_pavlov-dm-motion.txt` (2026-09-02) refused the same pose with one 140
+and no 0x8000, because its held prone went out compact and decoded as
+released after the first cmd; `playerstate_motion_ab` names those two
+poses in its gaps.
 
 ### The landing damp
 

@@ -109,7 +109,16 @@ const ANIM_GAPS: &[(&str, &str)] = &[];
 const PM_FLAG_GAPS: &[(&str, &str, i32, &str)] = &[
     ("mp_carentan", "jump_takeoff", 0x8, HELD_JUMP_WENT_COMPACT),
     ("mp_pavlov", "jump_takeoff", 0x8, HELD_JUMP_WENT_COMPACT),
+    ("mp_pavlov", "prone", 0x8000, HELD_PRONE_WENT_COMPACT),
+    ("mp_pavlov", "prone_yaw_60", 0x8000, HELD_PRONE_WENT_COMPACT),
 ];
+/// Retail refused pavlov's prone at the capture's spawn and so did the
+/// replay, but the held prone bit went out compact after the first cmd and
+/// decoded off the standing playerstate's base as released: one event 140
+/// in the whole pose and no `pm_flags` 0x8000. A full-branch run on
+/// 2026-10-09 refused the same way with 0x8000 on every snapshot and 140 on
+/// every cmd (docs/research/cod11-mantle.md, "Prone Blocked").
+const HELD_PRONE_WENT_COMPACT: &str = "held prone decoded as released";
 /// Both captures predate the full-branch usercmd writer (2026-09-02 against
 /// 60c66a8's 2026-09-05), so the held jump's second cmd went out compact and
 /// retail decoded its `up` off the playerstate-built base, which is 0
