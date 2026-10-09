@@ -301,6 +301,16 @@ struct Args {
     /// The stun-slide capture walks 315 into the street's south wall.
     #[arg(long, value_name = "YAW", requires = "probe_fall")]
     probe_fall_walk: Option<f32>,
+    /// With `--probe-fall`: hold prone on every cmd at this world yaw, the
+    /// client half of `client-probes/probe_pronedrop` (the airborne prone
+    /// refusal, docs/research/cod11-mantle.md, "Prone Blocked").
+    #[arg(
+        long,
+        value_name = "YAW",
+        requires = "probe_fall",
+        conflicts_with = "probe_fall_walk"
+    )]
+    probe_fall_prone: Option<f32>,
     /// With `--net-probe` and `--probe-team`: stand at world yaw 0 and hold
     /// this view pitch in alternate 400 ms windows (0 between), printing a
     /// `PITCH` line per snapshot whose pitch moved. The target half of
@@ -826,6 +836,7 @@ fn main() -> Result<()> {
                 killcam_skip_ms: args.probe_killcam_skip_ms,
                 fall: args.probe_fall,
                 fall_walk: args.probe_fall_walk,
+                fall_prone: args.probe_fall_prone,
                 pitch_flip: args.probe_pitch_flip,
                 ride: args.probe_ride,
                 items: args.probe_items,
@@ -3259,6 +3270,11 @@ impl ApplicationHandler for App {
                                             }
                                             let empty = input.weapon_select().is_none()
                                                 && newest.ps.field_i32(p, "weapon") == 0;
+                                            if let Some(s) =
+                                                play::events::forced_stance(&ev, client_num)
+                                            {
+                                                input.force_stance(s);
+                                            }
                                             if let Some(w) = play::events::pickup_selects(
                                                 &ev,
                                                 ctx.view_body,
@@ -3438,6 +3454,15 @@ impl ApplicationHandler for App {
                         (input.forward, input.right) = keys.axes();
                         let mw = MoveWorld::bare(world);
                         for ev in pmove::pmove(ps, input, &mw, dt, &[]) {
+                            // A refused prone toggles the key back off, as
+                            // retail's `cl_stance` would be.
+                            if matches!(
+                                ev.event,
+                                net::event_ids::EV_STANCE_FORCE_STAND
+                                    | net::event_ids::EV_STANCE_FORCE_CROUCH
+                            ) {
+                                input.prone = false;
+                            }
                             self.audio.on_game_event(
                                 &self.fs,
                                 &net::events::GameEvent {
