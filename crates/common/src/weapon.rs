@@ -256,12 +256,24 @@ pub struct AimDef {
     pub gun_kick_speed_max: [f32; 2],
     pub gun_kick_speed_decay: [f32; 2],
     pub gun_kick_static_decay: [f32; 2],
+    /// `[hip, ads]` ranges a shot draws the gun spring's pitch and yaw
+    /// speed from, degrees a second (combat doc, 15.7).
+    pub gun_kick_pitch: [[f32; 2]; 2],
+    pub gun_kick_yaw: [[f32; 2]; 2],
+    /// `[hip, ads]` ranges a shot draws the view kick's pitch and yaw speed
+    /// from, and the speed it centres at (combat doc, 15.7).
+    pub view_kick_pitch: [[f32; 2]; 2],
+    pub view_kick_yaw: [[f32; 2]; 2],
+    pub view_kick_center_speed: [f32; 2],
 }
 
 impl AimDef {
     pub fn from_map(map: &HashMap<String, String>) -> AimDef {
         let f = |key: &str| parse_num(map, key, 0.0f32);
         let pair = |key: &str| [f(key), f(&format!("ads{}", capitalize(key)))];
+        let range = |key: &str| {
+            ["hip", "ads"].map(|pre| [f(&format!("{pre}{key}Min")), f(&format!("{pre}{key}Max"))])
+        };
         let rot = |stance: &str| {
             [
                 f(&format!("{stance}RotP")),
@@ -297,6 +309,11 @@ impl AimDef {
             gun_kick_speed_max: [f("hipGunKickSpeedMax"), f("adsGunKickSpeedMax")],
             gun_kick_speed_decay: [f("hipGunKickSpeedDecay"), f("adsGunKickSpeedDecay")],
             gun_kick_static_decay: [f("hipGunKickStaticDecay"), f("adsGunKickStaticDecay")],
+            gun_kick_pitch: range("GunKickPitch"),
+            gun_kick_yaw: range("GunKickYaw"),
+            view_kick_pitch: range("ViewKickPitch"),
+            view_kick_yaw: range("ViewKickYaw"),
+            view_kick_center_speed: [f("hipViewKickCenterSpeed"), f("adsViewKickCenterSpeed")],
         }
     }
 }
@@ -1094,6 +1111,25 @@ mod tests {
         assert_eq!(s.proj_explosion, None);
         assert!(s.rifle_bullet && !s.clip_only);
         assert_eq!(WeaponDef::from_map(&map).sounds, s);
+    }
+
+    /// The recoil keys of two stock files as `pak0.pk3` spells them
+    /// (combat doc 15.7): `[hip, ads]`, each `[min, max]`.
+    #[test]
+    fn retail_kick_keys() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let a = load(&fs, "m1carbine_mp").unwrap().aim;
+        assert_eq!(a.view_kick_pitch, [[40.0, 40.0], [30.0, 45.0]]);
+        assert_eq!(a.view_kick_yaw, [[-15.0, 15.0], [-10.0, 30.0]]);
+        assert_eq!(a.view_kick_center_speed, [800.0, 800.0]);
+        assert_eq!(a.gun_kick_pitch, [[-30.0, -35.0], [-60.0, -60.0]]);
+        assert_eq!(a.gun_kick_yaw, [[-2.0, 18.0], [-40.0, 40.0]]);
+        let a = load(&fs, "thompson_mp").unwrap().aim;
+        assert_eq!(a.view_kick_pitch, [[75.0, 80.0], [60.0, 70.0]]);
+        assert_eq!(a.view_kick_center_speed, [2900.0, 2000.0]);
+        assert_eq!(a.gun_kick_yaw, [[-2.0, 18.0], [-60.0, 90.0]]);
     }
 
     #[test]

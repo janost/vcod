@@ -206,6 +206,9 @@ pub struct PlayInput {
     /// so slow motion still turns.
     mouse_rest: [f32; 2],
     pub cl_run: ClRun,
+    /// The view kick, degrees per axis, wire convention
+    /// (`play::recoil::Recoil::view_kick`).
+    pub kick: [f32; 3],
 }
 
 impl PlayInput {
@@ -260,8 +263,12 @@ impl PlayInput {
         }
     }
 
-    pub fn raw_angles(&self) -> [i32; 3] {
-        self.raw_angles
+    /// The angles a cmd carries: `CL_FinishMove` (CoDMP.exe `0x40b6b7`)
+    /// sends `ANGLE2SHORT(cl.viewangles + kick)` truncated, so the server
+    /// aims the shot where the kicked view points (combat doc, 15.7). The
+    /// kick is truncated on its own here, a unit off retail's at most.
+    pub fn cmd_angles(&self) -> [i32; 3] {
+        std::array::from_fn(|i| self.raw_angles[i] + (self.kick[i] * SHORT_PER_DEG) as i32)
     }
 
     fn resolve_pending(&mut self, held: &Held) {
@@ -345,7 +352,7 @@ impl PlayInput {
             buttons,
             wbuttons,
             weapon,
-            angles: self.raw_angles,
+            angles: self.cmd_angles(),
             forward: axis(
                 self.down.contains(&Action::Forward),
                 self.down.contains(&Action::Back),
@@ -500,6 +507,21 @@ mod tests {
         assert_ne!(yaw, 0);
     }
 
+    /// The kick rides the cmd on top of the mouse's angles and leaves the
+    /// mouse's own untouched, so the view returns as the kick centres.
+    #[test]
+    fn the_view_kick_rides_the_cmd_angles() {
+        let mut i = PlayInput::default();
+        i.mouse([0.0, 45.0]);
+        let base = i.build(100, &held(10)).angles;
+        i.kick = [-1.0, 0.5, 0.0];
+        let kicked = i.build(150, &held(10)).angles;
+        assert_eq!(kicked[0] - base[0], -182, "one degree up, truncated");
+        assert_eq!(kicked[1] - base[1], 91);
+        i.kick = [0.0; 3];
+        assert_eq!(i.build(200, &held(10)).angles, base);
+    }
+
     #[test]
     fn slow_mouse_motion_accumulates() {
         // 0.01 counts is a third of a short unit, which truncated per event
@@ -510,7 +532,7 @@ mod tests {
             i.mouse(look.degrees(0.01, -0.01, 1.0, false));
         }
         let per_1000 = 10.0 * 0.11 * SHORT_PER_DEG;
-        let [pitch, yaw, _] = i.raw_angles();
+        let [pitch, yaw, _] = i.cmd_angles();
         assert!((yaw as f32 + per_1000).abs() <= 1.0, "yaw {yaw}");
         assert!((pitch as f32 + per_1000).abs() <= 1.0, "pitch {pitch}");
     }
