@@ -228,6 +228,12 @@ impl PoseBuffer {
         self.locals[bone].1 = rot;
     }
 
+    /// Replaces the local translation and rotation outright, as a local tag
+    /// does.
+    pub fn set_local(&mut self, bone: usize, pos: Vec3, rot: Quat) {
+        self.locals[bone] = (pos, rot);
+    }
+
     /// Rotation keys replace the local rotation; translation keys are offsets
     /// from the bind local, not absolutes. An unkeyed channel keeps its local.
     /// docs/research/xanim-v14-format.md, "Sampling and the translation-key gotcha".

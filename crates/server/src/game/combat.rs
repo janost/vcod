@@ -620,23 +620,23 @@ pub struct BodyPose {
     pub torso: i32,
     pub legs_start_ms: i32,
     pub torso_start_ms: i32,
-    /// `ps.viewangles[0]` as the end frame copied it, engine degrees.
-    pub view_pitch: f32,
-    /// The eased torso pitch the end frame's swing left (section 16.3).
-    pub swing: vcod_common::playerpose::PitchSwing,
-    pub prone: bool,
-    /// A mounted gunner runs no controllers.
-    pub mounted: bool,
-    /// A fraction of full lean.
-    pub lean: f32,
+    /// What the end frame copied into the record, and the swings it left
+    /// (`docs/research/cod11-combat.md` 16.3, 16.4).
+    pub input: vcod_common::playerpose::BodyInput,
+    pub angles: vcod_common::playerpose::BodyAngles,
+    pub slope: vcod_common::playerpose::BodySlope,
+    /// A gunner's legs blend, the turret placement's leaves.
+    pub turret_leaves: Option<Vec<(usize, f32)>>,
 }
 
 impl BodyPose {
     pub fn pose_inputs<'a>(
-        &self,
+        &'a self,
         anims: &'a PlayerAnims,
         now_ms: i32,
     ) -> vcod_common::playerpose::PoseInputs<'a> {
+        let mounted = self.input.eflags & vcod_common::net::flags::EF_MOUNTED != 0;
+        let dead = self.input.eflags & vcod_common::net::flags::EF_DEAD != 0;
         vcod_common::playerpose::PoseInputs {
             anims,
             legs: self.legs,
@@ -644,19 +644,21 @@ impl BodyPose {
             legs_start_ms: self.legs_start_ms,
             torso_start_ms: self.torso_start_ms,
             now_ms,
-            // Up positive, the sign this server has always descended by.
-            group_pitch: -self.view_pitch,
-            // This server sends no `fTorsoPitch`/`fWaistPitch`.
-            aim: (!self.mounted).then(|| {
-                vcod_common::playerpose::AimPitch::new(
-                    self.view_pitch,
-                    &self.swing,
-                    self.prone,
-                    0.0,
-                    0.0,
-                )
-            }),
-            lean: self.lean,
+            // Down positive, as `descend_aim` reads it; only a gunner with no
+            // placement blend descends an aim group.
+            group_pitch: vcod_common::pmove::aim::angle_normalize_180(self.input.view[0]),
+            turret_leaves: self.turret_leaves.as_deref().filter(|_| mounted),
+            // A dead body's `tag_origin` takes the legs' world yaw, not its
+            // yaw off the view, which this pose's frame would turn twice.
+            controllers: (!dead)
+                .then(|| {
+                    vcod_common::playerpose::Controllers::new(
+                        &self.angles,
+                        &self.input,
+                        &self.slope,
+                    )
+                })
+                .flatten(),
         }
     }
 }
@@ -1322,6 +1324,14 @@ mod tests {
         sim
     }
 
+    /// End frames enough for a body standing at its yaw to have swung its
+    /// legs and torso onto it, as the retail captures' bodies had.
+    fn settle(sim: &mut ClientSim) {
+        for _ in 0..20 {
+            sim.commit_pose(50, None);
+        }
+    }
+
     fn zero_spread_carbine() -> WeaponDef {
         let mut m = HashMap::new();
         m.insert("damage".to_string(), "45".to_string());
@@ -1397,7 +1407,7 @@ mod tests {
             &[],
             &mut 1u64,
         );
-        b.commit_pose(50);
+        settle(&mut b);
         let mut rigs = HitRigs::default();
         let mut ctx = BoneTraceCtx {
             fs: &fs,
@@ -1445,7 +1455,7 @@ mod tests {
         b.ps.stance = vcod_common::pmove::Stance::Crouch;
         let idle = vcod_common::net::msg::NULL_USERCMD;
         b.update_anims(&inputs, &idle, 0, &[], &mut 1u64);
-        b.commit_pose(50);
+        settle(&mut b);
         b.ps.stance = vcod_common::pmove::Stance::Stand;
         b.update_anims(&inputs, &idle, 50, &[], &mut 1u64);
         let body = b.hit_body(1).expect("a live body");
@@ -1478,7 +1488,7 @@ mod tests {
             trace_at(30.0, &body).is_some(),
             "the crouched body is there"
         );
-        b.commit_pose(50);
+        settle(&mut b);
         let stood = b.hit_body(1).expect("a live body");
         assert_eq!(
             trace_at(64.0, &stood),
@@ -2094,7 +2104,7 @@ mod tests {
             let back_feet = Vec3::new(bx, by, -31.99) + shift;
             let mut back = new_for_test(back_feet.into(), 225.0);
             back.assembly = stock_assembly();
-            back.commit_pose(50);
+            settle(&mut back);
             let mut bodies = vec![back.hit_body(1).expect("a live body")];
             if let Some(yaw) = yaw {
                 let mut front = new_for_test(front_feet.into(), yaw);
@@ -2112,7 +2122,7 @@ mod tests {
                     &[],
                     &mut 1u64,
                 );
-                front.commit_pose(50);
+                settle(&mut front);
                 bodies.push(front.hit_body(0).expect("a live body"));
             }
             let victim = BlastVictim {
