@@ -213,9 +213,10 @@ retail's `SV_Frame` / `ClientThink_real` / `ClientEndFrame` order, and the
 comments at each step cite the section that measured it. The shape: console
 lines (a `map` reloads first), timeouts, bots, pings, clock; every packet's
 cmds in arrival order, each one a `ClientThink_real` with its shots traced and
-their callbacks run inside the cmd (`cod11-combat.md` 16); missiles, menu
-responses, blasts, the script frame; spawns, weapon, link and sim ops, mover
-push; every slot's end frame, then per slot the aim trace, `commit_pose` and
+their callbacks run inside the cmd (`cod11-combat.md` 16); menu responses,
+the script frame; spawns, weapon, link and sim ops, mover push; missiles and
+their blasts, which meet the links this frame's threads made (14.7); every
+slot's end frame, then per slot the aim trace, `commit_pose` and
 that slot's turret, whose rounds deliver inside its turn; outgoing commands,
 snapshots, zombies, heartbeat.
 
