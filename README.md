@@ -92,6 +92,8 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
 - First-person weapon with your team's hands, sight zoom at the weapon's FOV,
   sniper scope overlay that follows the sway and the hit kick, and your own
   fire, reload and footstep sounds played off the prediction.
+- Fire recoil off the weapon file's view and gun kick keys: the view kick
+  rides your cmd angles, as retail's does, and springs back to centre.
 - Mounted MG42s with their fire anim and flash; on the gun the view rides
   `tag_player` and the crosshair turns into the gun's reticle.
 - The HUD the stock `hud.menu` lays out: crosshair that opens with spread,
@@ -214,11 +216,10 @@ missing.
 **Rendering and sound**
 
 - Props are lit per vertex from the map's lights and its light-visibility
-  grid at load, as retail does, but without the dynamic lights retail adds
-  on a prop's first draw
+  grid at load, as retail does. Dynamic lights add on top with retail's
+  falloff instead of competing for a prop's eight light slots. Players and
+  other entity models still use a fixed key light, not the light grid
   ([cod11-light-grid-and-leaf-lights.md](docs/research/cod11-light-grid-and-leaf-lights.md)).
-- Shadow-decal props draw as depth-biased decals on the ground. Retail
-  registers no `shadow_*` model as a static model.
 - Only the ocean's `deformVertexes wave` moves; the other forms parse and do
   nothing. NV/ATI hardware-path stages are dropped, as retail did on cards
   without them. `$dlight` and the ship's deckflag have no file behind them,
@@ -333,6 +334,8 @@ vcod-server mp_carentan --port 28960 --hostname "my server" --gametype tdm
 - `--set rconPassword=<pw>` turns rcon on.
 - `--set g_password=<pw>` makes the server private, checked as retail does
   at connect, `map_restart` and map change.
+- `--set sv_privateClients=N --set sv_privatePassword=<pw>` reserves the
+  first N slots for clients that send that password, as retail does.
 - `dedicated` defaults to 1, not retail's 2, so dev runs stay off the master
   list. `--set dedicated=2` heartbeats `codmaster.activision.com` every three
   minutes and sends a flatline on Ctrl-C or `quit`.

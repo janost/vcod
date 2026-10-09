@@ -472,6 +472,8 @@ pub struct EntityScene {
     shake: MsvcRand,
     /// The last pass's `render_time`: `cg.frametime` for the pitch swing.
     last_render_ms: Option<i32>,
+    /// `bg_swingSpeed`, which the caller keeps in step with the console.
+    pub swing_speed: f32,
     pub stats: SceneStats,
 }
 
@@ -526,6 +528,7 @@ impl EntityScene {
             turret_anims: HashMap::new(),
             shake: MsvcRand::default(),
             last_render_ms: None,
+            swing_speed: BG_SWING_SPEED,
             stats: SceneStats::default(),
         }
     }
@@ -936,6 +939,7 @@ pub fn build_instances(
         turret_anims,
         shake,
         last_render_ms,
+        swing_speed,
         stats,
     } = scene;
     let frametime_ms = last_render_ms.map_or(0, |t| (render_time - t).max(0));
@@ -1254,7 +1258,7 @@ pub fn build_instances(
                             eflags,
                             legs: anims.record(st.legs.index()),
                         };
-                        st.body.step(&input, frametime_ms, BG_SWING_SPEED);
+                        st.body.step(&input, frametime_ms, *swing_speed);
                         st.body.update_conditions(&input);
                         let slope = BodySlope {
                             lean,

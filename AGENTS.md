@@ -40,7 +40,7 @@ instead of leaving the fact in a commit message.
 
 | Subsystem | Doc |
 |---|---|
-| Handshake, configstrings, rcon, heartbeat, zombies, pings, rate, bans, `g_password` | `cod11-server-handshake.md` (Housekeeping section) |
+| Handshake, configstrings, rcon, heartbeat, zombies, pings, rate, bans, `g_password`, private slots | `cod11-server-handshake.md` (Housekeeping section) |
 | Map change, `map_restart`, `sv_serverid`, rotation | `cod11-map-cycle.md` |
 | Shots, damage, death, grenades, blasts, hit locations, shot timing | `cod11-combat.md` |
 | Movement, stances, constants | `cod11-mantle.md`, `bsp-ibsp59-format.md` (Movement constants) |
@@ -275,7 +275,8 @@ dropped, so test such a builtin through `ScriptRuntime`.
   test a pure server.
 - Cvars: every `L` cvar latches until the next load, so a latched
   `g_gametype` must not reach serverinfo early. `devmap` sets `sv_cheats 1`
-  after the load and `map` sets it back. An OOB `disconnect` is ignored.
+  after the load and `map` sets it back. The server ignores an OOB
+  `disconnect`; a client honours one only after 3 s without a packet.
 
 ### Map cycle
 

@@ -410,7 +410,7 @@ Where each failure points:
 | the client disconnects right after the gamestate with another error | the configstring table in `crates/server/src/configstrings.rs` |
 | no `connectResponse` | `parse_connect` (`crates/common/src/net/connectionless.rs`) |
 
-## Housekeeping: master heartbeat, rcon, zombie slots
+## Housekeeping: master heartbeat, rcon, zombie slots, private slots
 
 Measured 2026-10-07 against `cod_lnxded` (1.1d) with `tools/run_server.sh`
 on a spare port, a UDP listener standing in for the master, `vcod
@@ -873,6 +873,76 @@ the two usage dumps.
   unmatched command prints `bad connectionless packet from %s:\n%s\n`.
   VERIFIED (read off the decompile of 0x808c63c). A client leaves through the
   netchan `disconnect` command. vcod ignores it the same way.
+- The server never sends one either; the rule that matters is the
+  client's. `CL_DisconnectPacket` (CoDMP.exe 0x410620) returns unless the
+  client state at 0x155f2c0 is non-zero (0 is disconnected; 3 is set at
+  `connectResponse`, 0x410c7b), unless the packet came from the server's
+  address (`NET_CompareAdr` 0x449230 against 0x15ef028), and unless
+  `cls.realtime` (0x155f3e0) minus `clc.lastPacketTime` (0x15ce868) is at
+  least 3000 (`cmp eax,0xbb8; jl` at 0x410663). Only then does it call
+  `Com_Error(1, "EXE_SERVER_DISCONNECTED")`. INFERRED.
+- `clc.lastPacketTime` is written at three places: `connectResponse`
+  (0x410c85), every sequenced packet from the server's address while the
+  state is at least 3, ahead of `Netchan_Process` (0x4110b1, so a packet
+  the netchan then rejects still counts), and demo playback (0x40eac4).
+  Connectionless packets never write it. INFERRED. So a forged
+  `disconnect` cannot cut a link the server is still feeding, and one
+  arriving while challenging reads a stale or zero stamp and drops at once.
+- vcod's client (`NetClient::handle_oob`, `crates/common/src/net/mod.rs`)
+  applies the same guard and stamps at the same two live points. A real
+  CoDMP.exe was not run against it: nothing on the wire sends this packet.
+
+### Private slots (`SV_DirectConnect` 0x8085498)
+
+Measured 2026-10-09 against `cod_lnxded` (1.1d) on a spare port with
+`sv_maxclients 8`, `+set sv_privateClients 2 +set sv_privatePassword pp`,
+a throwaway example on `NetClient` joining clients with chosen `password`
+userinfo values one after another, and `rcon status` for the slots.
+
+- `sv_privateClients` is registered default `"0"` with flags 4
+  (`CVAR_SERVERINFO`), `sv_privatePassword` default `""` with flags 0x100
+  (`Cvar_Get` 0x806ea34 called with the names pushed at 0x808a9cf and
+  0x808ab7d, in `SV_Init`). VERIFIED. Both are live: an rcon
+  change governed the next connect and the next `getinfo`. VERIFIED by
+  capture.
+- The reconnect search runs first and is unchanged: a connect from an
+  address and qport (or port) that already holds a slot, live or zombie,
+  takes that slot back whatever its password. VERIFIED by capture: a
+  client in private slot 0 that reconnected from the same qport without a
+  password got slot 0 again.
+- A new client: `Info_ValueForKey(userinfo, "password")` (key at
+  0x80d44e3) is compared with `sv_privatePassword` by `strcmp`
+  (0x8085a26). Equal starts the free-slot search at 0, otherwise at
+  `sv_privateClients->integer` (0x8085a36). The search takes the first slot
+  whose state is 0, so a zombie is not free. None found sends
+  `error\nEXE_SERVERISFULL` (0x80d44ec) and prints `Rejected a
+  connection.` (0x80d4503) at developer level. INFERRED. There is no Q3
+  local-address fallback for bots. VERIFIED by capture: with the two
+  private slots free, six passwordless clients took slots 2..7 and a
+  seventh got `error\nEXE_SERVERISFULL`; a client with `pp` then got slot 0,
+  the next slot 1, the third `EXE_SERVERISFULL`. A `password wrong` client
+  searches like a passwordless one.
+- An empty `sv_privatePassword` equals the empty value a client without a
+  `password` key reads, so such a client searches from 0. VERIFIED by
+  capture: after rcon `sv_privatePassword ""`, a passwordless client got
+  slot 1 (slot 0 held) and a `password wrong` one slot 2. Private slots
+  therefore bite only with a non-empty private password.
+- `password` is the same key `g_password` reads, so a private client on a
+  passworded server needs the two to be equal. INFERRED.
+- `SVC_Info` (0x808c1ac) counts `clients` over the slots from
+  `sv_privateClients` up with state above 1, and sends `sv_maxclients` as
+  `sv_maxclients - sv_privateClients`, unclamped. VERIFIED by capture:
+  `clients 6 sv_maxclients 6` with six public and two private clients in;
+  `sv_privateClients 12` read `sv_maxclients -4`. `getstatus` lists every
+  player and carries `sv_privateClients` in its serverinfo. VERIFIED by
+  capture.
+- `SV_AddTestClient` searches from slot 0 (0x8087548), so test clients
+  ignore the private slots. INFERRED. vcod's bots do the same.
+- vcod: `svc_direct_connect` keeps its reconnect and zombie arms and
+  searches a new client's slot from `Server::private_clients` unless the
+  `password` matches; `svc_info` and the serverinfo string follow the
+  cvars live. The same scenario on vcod-server gave the same slots, the
+  same two refusals and the same `getinfo`.
 
 ### `g_password` (`ClientConnect`, game.mp.i386.so 0x4246c)
 

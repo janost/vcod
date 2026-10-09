@@ -5153,7 +5153,8 @@ condition. The output starts at zero and each term adds.
   and out of the frame. INFERRED: nothing in the game module ever kicks the
   spring, so on a server it reads zero for the whole of a life and the
   helper adds nothing; the kick a retail client sees after its own shot is
-  the cgame's copy of the same state and never reaches the server's aim.
+  the cgame's copy of the same state and never reaches the server's aim
+  (15.7).
 - Last, `out[0] = AngleSubtract(out[0], frame+0x44)` and `out[1] =
   AngleSubtract(out[1], frame+0x48)`, the sway angles of 15.3.
 
@@ -5281,6 +5282,134 @@ angles as well as the bytes); `Attack::Shot`, `Swing` and `Throw` carry the
 aim, and `bullet_fire`, `melee_fire` and `throw_velocity` fire along it.
 Left out on purpose: the gun-kick spring (zero on a server), `eFlags 0xc000`
 (no mounted MG), and the shellshock scale (client-side).
+
+### 15.7 The fire recoil: the view kick and the gun kick
+
+A shot by the client's own body kicks two things, both in the cgame and
+neither in the game module: the view, which the engine adds to the usercmd
+angles, and the gun spring of 15.2, which only moves the drawn gun and the
+scope. Neither reads the stance.
+
+**The keys.** VERIFIED, the field table at `0x7C9A0` in `game.mp.i386.so`
+(section 0): `adsGunKickPitchMin/Max` `0x350`/`0x354`, `adsGunKickYawMin/Max`
+`0x358`/`0x35c`, `adsViewKickPitchMin/Max` `0x370`/`0x374`,
+`adsViewKickYawMin/Max` `0x378`/`0x37c`, `adsViewKickCenterSpeed` `0x380`,
+`hipGunKickPitchMin/Max` `0x390`/`0x394`, `hipGunKickYawMin/Max`
+`0x398`/`0x39c`, `hipViewKickPitchMin/Max` `0x3b0`/`0x3b4`,
+`hipViewKickYawMin/Max` `0x3b8`/`0x3bc`, `hipViewKickCenterSpeed` `0x3c0`,
+all type 6 (float). The spring's own keys are 15.2's.
+
+**`CG_WeaponFireRecoil` (my name, cgame `0x30038850`).** VERIFIED, the
+reads and constants: the weapon def is `0x30209484`, which `0x300299d6`
+loads as `weaponDefs[0x3020720c]`, and the fraction is `0x30207214`; the
+predicted playerstate sits at `0x3020715c` (pushed at `0x30033dff`), so
+the two are its `weapon` (`+0xb0`) and `fWeaponPosFrac` (`+0xb8`).
+INFERRED, the conditions:
+
+1. The view kick picks the `ads` pair when the fraction equals 1.0 exactly
+   (`0x30038864`), the `hip` pair otherwise. `pitch = Min + random() *
+   (Max - Min)` off `ViewKickPitch`, then `yaw` the same off
+   `ViewKickYaw`; `random()` is MSVC's `rand` (`0x3004b189`, the
+   `0x343fd`/`0x269ec3` LCG on the thread's seed, top 15 bits) times
+   `1/32768` (`0x300693b4`). VERIFIED, the stores at `0x30038935`-`0x30038940`:
+   `kickAVel = { -pitch, yaw, yaw * -0.5 }` (`0x300693b0` is -0.5),
+   **assigned**, so a second shot replaces the speed and does not add.
+2. The gun kick picks the `ads` pair when the fraction is above 0
+   (`0x30038946`), the `hip` pair otherwise, and draws a pitch then a yaw
+   the same way off `GunKickPitch` and `GunKickYaw`; both are **added** to
+   the spring's speeds (`0x3020cba0`, `0x3020cba4`, at `0x30038a05`).
+
+The draw order is view pitch, view yaw, gun pitch, gun yaw.
+
+**Who calls it.** VERIFIED, `CG_FireWeapon` (`0x30038b70`, the sound doc's
+section 8) calls it at `0x30038bd2` when `snap->ps.pm_flags & 0x50000` is
+set (`0x30038bbf`) and the event's entity number equals
+`snap->ps.clientNum` (`0x30038bca`). INFERRED: so only a shot by the body the
+view rides kicks, own (0x40000) or followed (0x10000); a mounted MG's
+`EV_FIRE_WEAPON_MG42` rides the turret's entity (`cod11-turrets.md`) and
+never kicks. The quad-barrel events run `CG_FireWeapon` twice (the sound
+doc's event table), so they kick twice.
+
+**`CG_KickAngles` (my name, cgame `0x300328b0`).** VERIFIED, the
+constants: `kickAngles` is `0x3020cb38`, `kickAVel` `0x3020cb2c`, both three
+floats; the frame (`0x30207144`, integer ms) is cut into slices of at most
+5 ms, each `ft = slice * 0.001` (`0x300693c0`); the centring speed is
+`adsViewKickCenterSpeed` when the fraction is above 0.5 (`0x3006930c`),
+`hipViewKickCenterSpeed` otherwise, and 2400 (`0x300693ec`) when `weapon`
+is 0; the return factor is 0.06 (`0x300693e8`); the clamp is 10 degrees
+(`0x30069350`, a double; `0x300693e4`/`0x300693e0` are ±10). INFERRED, per
+axis and slice:
+
+1. Nothing when both the angle and its speed are 0.
+2. With the angle non-zero, `speed += -sign(angle) * center * ft`.
+3. `change = ft * speed`, times 0.06 when it points back toward the centre
+   (`change * angle < 0`).
+4. When `angle + change` would cross the centre, both go to 0. Otherwise
+   the angle takes it; at exactly 0 the speed is zeroed, and past ±10 the
+   angle sits at the clamp with the speed zeroed.
+
+INFERRED: this is RTCW's `CG_KickAngles` with the step cut from 20 ms to 5 and the
+recoil-pitch half removed.
+
+**Where it runs.** VERIFIED, `CG_DrawActiveFrame` (my name): at `0x30033d4f`
+it calls `CG_KickAngles` when `snap->ps.pm_flags & 0x40000` is set, and
+otherwise zeroes both vectors (`0x30033d5f`-`0x30033d91`); at `0x30033ec1` it
+hands `kickAngles` to the engine through syscall `0x56`. VERIFIED, CoDMP.exe:
+the cgame syscall switch copies the three floats to `0x0143a994` (case
+`0x56`), and `CL_FinishMove` (my name, `0x0040b690`) writes each cmd angle as
+`ftol((cl.viewangles[i] + kick[i]) * 182.044)` (`0x00568f68`, 65536/360;
+`0x0040b6b7`-`0x0040b711`) masked to 16 bits, `_ftol2` (`0x00538be0`)
+truncating. INFERRED: **the view kick is in the usercmd angles**, so the
+server's `PM_UpdateViewAngles`, its aim block and every later shot see it,
+the client's prediction draws it, and it is never added to `cl.viewangles`
+itself: as it centres, the view comes back to where the mouse left it.
+The roll third rides `cmd.angles[2]` the same way. VERIFIED, `0x30028a70`
+zeroes both vectors and the gun spring (`0x3020cb94`-`0x3020cba8`); it is
+called at `0x300300cd` and `0x3003037f`; INFERRED: a new playerstate (the
+`ps+0x114` or `clientNum` compare at `0x300300a4`) and the first snapshot,
+so a respawn starts unkicked.
+
+**The gun spring on the client.** VERIFIED, cgame `0x30012a60` is
+`0x39e14`'s twin, with the per-axis step factored into `0x30012910`
+`(dt, max, accel, speedMax, speedDecay, staticDecay)`, angle in `edx`,
+speed in `ecx`; `0x300373a3`-`0x300373ce` hand it the frame as `cg.frametime
+* 0.001` seconds and the state `0x3020cb94` (angles) and `0x3020cba0`
+(speeds), copied back at `0x3003755c`. VERIFIED, the constants: substeps of
+0.005 s (`0x30069608`, a double; `0x3ba3d70a` the float); settle under 0.25
+degrees (`0x30069430`) and 1 degree a second (`0x30069328`). INFERRED, the
+order, per axis and substep: settled (both zeroed, the axis reports done)
+when `|angle| < 0.25` and `|speed| < 1`; else `angle += dt * speed`,
+clamped to `±gunMax*` with an outward speed zeroed; `speed -= dt * accel`
+while the angle is positive, `+=` while negative; `speed -= dt * speed *
+speedDecay`; then `staticDecay * dt` toward 0 without crossing; then the
+speed clamped to `±speedMax`. The loop stops once both axes report done.
+The whole helper, step and add, runs only for an `aimDownSight` weapon
+(`0x30012a79`), so a grenade or a weapon without a sight has no gun kick.
+
+VERIFIED, off `pak0.pk3`: `m1carbine_mp` reads `hipViewKickPitchMin/Max`
+40/40, `hipViewKickYawMin/Max` -15/15, `hipViewKickCenterSpeed` 800,
+`adsViewKickPitch` 30..45, `adsViewKickYaw` -10..30,
+`adsViewKickCenterSpeed` 800, `hipGunKickPitch` -30..-35, `hipGunKickYaw`
+-2..18, `adsGunKickPitch` -60..-60, `adsGunKickYaw` -40..40, `gunMaxPitch`
+and `gunMaxYaw` 5. INFERRED, worked: a hip carbine shot sets the pitch
+speed to -40 degrees a second; 800 a second squared stops it after 50 ms
+with the view about 1.1 degrees up, and the return at 6% of the speed
+brings it back to the centre about 0.2 s later.
+
+Not measured against a running retail client: the kick is client-side and
+non-deterministic, and a capture of a retail client's cmd angles needs a
+retail client. A retail-client capture of `cmd.angles` around a shot is
+the open check.
+
+**As implemented.** `crates/client/src/play/recoil.rs` holds the view kick,
+the fire draw and the RNG, and steps the spring
+(`vcod_common::pmove::aim::GunKick`) once per drawn frame from
+`OnlineView::frame`; `PlayInput::cmd_angles` adds the kick to the cmd and
+the drawn view, truncating the kick's units on their own (at most one unit
+off retail's single truncation). The gun kick turns the viewmodel about the
+eye and reaches the scope through `AimInput::gun_kick`; the server passes
+zero. The drawn view carries no roll in play mode, so the roll third reaches
+the cmd and not the screen.
 
 ---
 
@@ -5701,7 +5830,14 @@ An idle one sets the torso's two only while `firing`.
 
 **Torso yaw.** VERIFIED, 0x2b100..0x2b189, `BG_SwingAngles(dest, 0, clamp,
 bg_swingSpeed, ...)`. The speed is the cvar's value (`bg_swingSpeed + 8`,
-default 0.2 in `crates/server/src/cvars/registry.rs`). Destination and
+default 0.2 in `crates/server/src/cvars/registry.rs`). cgame registers its
+own copy: the cvar table row at 0x30075420 is the vmCvar 0x301d94a0, name
+`bg_swingSpeed`, default `"0.2"`, flags 0x200 (`CVAR_CHEAT`). VERIFIED. The
+server's is cheat protected too: an rcon `bg_swingSpeed 1` on retail
+printed `bg_swingSpeed is cheat protected.` VERIFIED by capture
+(2026-10-09). vcod reads the level's value once per end frame
+(`Server::tick`, into `commit_pose`) and the client's console value each
+drawn frame (`EntityScene::swing_speed`). Destination and
 clamp by case, first match:
 
 | case | destination | clamp |

@@ -1413,14 +1413,16 @@ impl ClientSim {
     /// `ClientEndFrame`'s `BG_UpdatePlayerDObj` and `BG_PlayerAnimation`:
     /// the models, the two anim indices with the phase each started at, and
     /// the record the controllers read, its swings stepped over
-    /// `frametime_ms` (`docs/research/cod11-combat.md` 16.3, 16.4). `anims`
+    /// `frametime_ms` at `bg_swingSpeed` (`docs/research/cod11-combat.md`
+    /// 16.3, 16.4). `anims`
     /// gives the legs anim's record; without it no anim is a strafe one.
     pub fn commit_pose(
         &mut self,
         frametime_ms: i32,
+        swing_speed: f32,
         anims: Option<&vcod_common::animtree::PlayerAnims>,
     ) {
-        use vcod_common::playerpose::{BG_SWING_SPEED, BodyInput, BodySlope};
+        use vcod_common::playerpose::{BodyInput, BodySlope};
         let legs = self.anim.legs();
         let input = BodyInput {
             view: self.view_angles,
@@ -1432,7 +1434,7 @@ impl ClientSim {
         // Pmove writes the movetype condition each cmd, ahead of the end
         // frame's updater; the anim's own record lands after it.
         angles.movetype = self.movetype.bit();
-        angles.step(&input, frametime_ms, BG_SWING_SPEED);
+        angles.step(&input, frametime_ms, swing_speed);
         angles.update_conditions(&input);
         self.pose = crate::game::combat::BodyPose {
             assembly: self.assembly.clone(),
@@ -1492,6 +1494,8 @@ impl ClientSim {
             msec: msec.min(200),
             now_ms,
             kick: self.kick,
+            // Retail's server never kicks the spring (combat doc 15.2).
+            gun_kick: [0.0; 2],
         };
         self.aim = pmove::aim::aim_angles(&self.ps, &mut self.aim_state, &input);
     }

@@ -711,16 +711,17 @@ there:
   part.
 - An OOB `disconnect`. VERIFIED (`0x410620`..`0x410676`): the handler
   calls `Com_Error(1, "EXE_SERVER_DISCONNECTED")`. INFERRED, off its
-  compares: only while connected, from the server's address, and when the
-  clock at `0x155f3e0` is at least 3000 ms past the stamp at `0x15ce868`;
-  after Q3's `CL_DisconnectPacket`, the stamp is the last packet's time.
+  compares: only while the client state at `0x155f2c0` is not 0, from the
+  server's address, and when the clock at `0x155f3e0` is at least 3000 ms
+  past the stamp at `0x15ce868`. What writes the stamp is in the handshake
+  doc, "Out-of-band `disconnect`".
 
 vcod: `NetClient` emits `Dropped` with the reason in that form (`w <arg>`
 becomes `EXE_SERVERDISCONNECTREASON\x14<arg>`, which
 `Localized::message` resolves the same way), and the client runs
 `Localized::message` over every reason before the popup, so its own English
-reasons pass through. vcod drops on an OOB `disconnect` at once, without
-the 3 s guard. Where a message mixes a known key with an unknown one,
+reasons pass through. vcod honours an OOB `disconnect` under the same 3 s
+guard (handshake doc, "Out-of-band `disconnect`"). Where a message mixes a known key with an unknown one,
 vcod shows the known part translated; retail shows the whole raw. vcod-server sends `EXE_SERVER_IS_DIFFERENT_VER 1.1` with a
 space, not `\x15`, so that reason shows unlocalized.
 
