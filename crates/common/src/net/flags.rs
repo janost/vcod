@@ -66,6 +66,8 @@ pub const PMF_PRONE: i32 = 0x1;
 pub const PMF_DUCKED: i32 = 0x2;
 /// The prone dive (`pmove::PlayerState::prone_dive`).
 pub const PMF_PRONE_DIVE: i32 = 0x4;
+/// A refused prone press or swing (`pmove::PlayerState::prone_blocked`).
+pub const PMF_PRONE_BLOCKED: i32 = 0x8000;
 /// Held jump, retail's 0x8 (set @0x2ec34, cleared @0x34135); the capture reads
 /// `pm_flags` 0x40008 on the first airborne frame.
 pub const PMF_JUMP_HELD: i32 = 0x8;

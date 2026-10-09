@@ -1029,6 +1029,7 @@ fn main() -> Result<()> {
         render_ms: 0.0,
         fx_ms: 0.0,
         look_zoom: (1.0, false),
+        baked_gamma: None,
         hud,
         hud_ms: 0.0,
         localized,
@@ -1072,6 +1073,14 @@ fn gamma_cvar(shell: &mut console::shell::Shell) -> f32 {
     } else {
         g
     }
+}
+
+/// With `r_ignorehwgamma 1` retail has no device ramp and bakes `r_gamma`
+/// into textures as they load, so a change waits for `vid_restart`
+/// (docs/research/cod11-gamma.md). vcod keeps its final pass with the gamma
+/// latched here.
+fn baked_gamma(shell: &mut console::shell::Shell) -> Option<f32> {
+    (shell.cvar_f32("r_ignorehwgamma") != 0.0).then(|| gamma_cvar(shell))
 }
 
 /// `r_mode`'s size (Q3's mode table, which the stock video mode list picks
@@ -1350,6 +1359,7 @@ fn loading_frame(
             cvar: &|_| None,
             bound_key: &|_| None,
             draw: hud::DrawToggles::default(),
+            weapon_select: None,
         };
         *hud_quads = hud.build(&f);
     }
@@ -1504,6 +1514,10 @@ struct App {
     /// Last frame's fov over `cg_fov` and whether the view rides a mounted
     /// gun: the mouse's sensitivity scale ([`play::input::MouseLook`]).
     look_zoom: (f32, bool),
+    /// `r_ignorehwgamma` as of the last window start or `vid_restart`
+    /// (retail latches it): `Some` holds the `r_gamma` retail would have
+    /// baked into its textures then, `None` is the live device ramp.
+    baked_gamma: Option<f32>,
     hud: Option<hud::Hud>,
     hud_ms: f32,
     /// Menu labels; empty outside `--connect`.
@@ -1793,6 +1807,7 @@ impl App {
                 }
                 Effect::Exec(file) => self.exec_file(event_loop, &file),
                 Effect::VidRestart => {
+                    self.baked_gamma = baked_gamma(&mut self.shell);
                     if let Some(w) = &self.window {
                         let (size, fullscreen) = video_mode(&self.shell);
                         w.set_fullscreen(
@@ -2111,6 +2126,7 @@ impl ApplicationHandler for App {
             .with_title(&self.title)
             .with_inner_size(winit::dpi::LogicalSize::new(1600.0, 900.0));
         let (size, fullscreen) = video_mode(&self.shell);
+        self.baked_gamma = baked_gamma(&mut self.shell);
         if let Some(size) = size {
             attrs = attrs.with_inner_size(size);
         }
@@ -2440,8 +2456,13 @@ impl ApplicationHandler for App {
                 self.audio
                     .set_master_volume(self.shell.cvar_f32("mss_volume"));
                 let gamma = gamma_cvar(&mut self.shell);
+                let fullscreen = self
+                    .window
+                    .as_ref()
+                    .is_some_and(|w| w.fullscreen().is_some());
+                let overbright = gamma::overbright_bits(fullscreen, self.baked_gamma.is_none());
                 let Some(r) = &mut self.renderer else { return };
-                r.set_gamma(gamma);
+                r.set_gamma(self.baked_gamma.unwrap_or(gamma), overbright);
                 let aspect = r.aspect();
                 // Set inside the online arm where `self` is borrowed out
                 // field-by-field; acted on once the borrows end.
@@ -2813,6 +2834,17 @@ impl ApplicationHandler for App {
                                                 let feed =
                                                     net.gamestate().map_or(0, |g| g.checksum_feed);
                                                 net.send_reliable(&self.fs.pure_command(feed));
+                                                let t0 = Instant::now();
+                                                let rigs =
+                                                    view.prewarm(&self.fs, net.configstrings());
+                                                for models in &rigs {
+                                                    r.preload_viewmodel(&self.fs, models);
+                                                }
+                                                log::info!(
+                                                    "viewmodels: {} rigs preloaded in {:.0} ms",
+                                                    rigs.len(),
+                                                    t0.elapsed().as_secs_f64() * 1000.0
+                                                );
                                             }
                                             Err(e) => fatal = Some(e),
                                         }
@@ -3150,6 +3182,9 @@ impl ApplicationHandler for App {
                                             status: self.shell.cvar_f32("cg_drawStatus") as i32
                                                 != 0,
                                         },
+                                        weapon_select: input
+                                            .weapon_select()
+                                            .filter(|_| local_player),
                                     };
 
                                     // Events use the newest snapshot, not the interpolation
@@ -3221,6 +3256,18 @@ impl ApplicationHandler for App {
                                             }
                                             if let Some(hud) = &mut self.hud {
                                                 hud.on_game_event(&ev, &hud_frame);
+                                            }
+                                            let empty = input.weapon_select().is_none()
+                                                && newest.ps.field_i32(p, "weapon") == 0;
+                                            if let Some(w) = play::events::pickup_selects(
+                                                &ev,
+                                                ctx.view_body,
+                                                empty,
+                                            ) {
+                                                input.select(w);
+                                                if let Some(hud) = &mut self.hud {
+                                                    hud.weapon_selected();
+                                                }
                                             }
                                             self.audio.on_game_event(
                                                 &self.fs,
