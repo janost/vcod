@@ -60,7 +60,7 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
   beside `CoDMP.exe`, the file retail uses). It pings, filters, sorts by
   column, joins on double-click, and runs the stock password, server info,
   filter and favourite popups. Losing the server drops you back on the menu
-  with the reason in the stock error popup.
+  with the localized reason in the stock error popup.
   In a game, Esc opens the script menu and its Main Menu tab the stock
   in-game main menu (Back to Game, Disconnect).
 - The stock Options and Multiplayer Options screens: rebind keys, mouse
@@ -162,9 +162,9 @@ Retail does a lot more than this list. These are the gaps you'll hit first.
 
 **Front end.** Main menu, browser and its popups, options, quit and error
 popups work. On the options screens only binds, sensitivity, invert mouse,
-name, rate, volume, video mode and full screen take effect; texture,
-lighting, gamma, HUD, crosshair, sound quality and language settings are
-stored but ignored. Start New Server, Mods and CD key print "not in vcod
+name, rate, volume, video mode, full screen and the crosshair and HUD
+toggles take effect; texture, lighting, gamma, sound quality and language
+settings are stored but ignored. Start New Server, Mods and CD key print "not in vcod
 yet". The browser's game type filter, map preview and refresh date are
 missing.
 

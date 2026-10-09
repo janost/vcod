@@ -94,7 +94,7 @@ impl MapLoader {
         for ev in events {
             if let NetEvent::Dropped(why) = ev {
                 self.state = State::Done;
-                return Action::Failed(format!("disconnected: {why}"));
+                return Action::Failed(why.clone());
             }
         }
         match self.state {
