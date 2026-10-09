@@ -19,6 +19,9 @@ use vcod_common::weapon::WeaponDef;
 
 /// `cg_errordecay`: how long a correction takes to ease out.
 const ERROR_DECAY_MS: f64 = 100.0;
+/// A correction no longer than this is not eased (`CG_PredictPlayerState`'s
+/// 0.1 at cgame 0x3006953c).
+const MISS_EPSILON: f32 = 0.1;
 /// A correction longer than this is drawn at once.
 const SNAP_DISTANCE: f32 = 256.0;
 /// `eFlags` capsule bit; the client clips only capsule entities.
@@ -163,8 +166,11 @@ pub struct Predictor {
     /// The teleport bit of the snapshot last predicted from.
     teleport: Option<bool>,
     error: Vec3,
-    /// Local ms the error was last added to.
+    /// Local ms the error eases from: the frame before the one it was last
+    /// added on, retail's `cg.oldTime`.
     error_ms: f64,
+    /// The last predicted frame's local ms.
+    frame_ms: Option<f64>,
     /// The error still drawn on the last frame, `None` when it was not
     /// predicted.
     drawn_error: Option<f32>,
@@ -241,6 +247,7 @@ impl Predictor {
         ));
         let error = self.error * self.decay(now_ms);
         self.drawn_error = Some(error.length());
+        self.frame_ms = Some(now_ms);
         let newest = f64::from(pred.command_time);
         let t = match self.drawn {
             Some((t, at)) => t + (now_ms - at),
@@ -329,9 +336,9 @@ impl Predictor {
             self.max_correction = self.max_correction.max(delta.length());
             if delta.length() > SNAP_DISTANCE {
                 self.error = Vec3::ZERO;
-            } else if delta != Vec3::ZERO {
+            } else if delta.length() > MISS_EPSILON {
                 self.error = self.error * self.decay(now_ms) + delta;
-                self.error_ms = now_ms;
+                self.error_ms = self.frame_ms.unwrap_or(now_ms);
             }
         }
         self.replay = Some(r);
@@ -364,6 +371,7 @@ impl Predictor {
         self.last = None;
         self.error = Vec3::ZERO;
         self.drawn_error = None;
+        self.frame_ms = None;
     }
 
     /// The share of the error still drawn at `now_ms`, 1 down to 0.
@@ -733,7 +741,10 @@ mod tests {
         let (drawn, predicted) = corrected(300.0, false);
         assert_eq!(drawn, predicted, "past 256 units snaps");
         let (drawn, _) = corrected(100.0, false);
-        assert_eq!(drawn, 0.0, "under 256 units without a flip eases");
+        assert!(
+            (drawn - 16.0).abs() < 1e-3,
+            "under 256 units without a flip eases: {drawn}"
+        );
     }
 
     #[test]
@@ -752,8 +763,10 @@ mod tests {
                 .origin
                 .x
         };
-        assert_eq!(at(&mut pr, 16.0), 0.0, "the correction starts fully eased");
-        assert!((at(&mut pr, 66.0) - 5.0).abs() < 1e-4);
+        // The ease runs from the frame before the correction, retail's
+        // `cg.oldTime`, so its first frame is 16 ms into it.
+        assert!((at(&mut pr, 16.0) - 1.6).abs() < 1e-4);
+        assert!((at(&mut pr, 66.0) - 6.6).abs() < 1e-4);
         assert!((at(&mut pr, 116.0) - 10.0).abs() < 1e-4);
         assert_eq!(at(&mut pr, 500.0), 10.0);
     }
