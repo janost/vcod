@@ -840,6 +840,57 @@ the two usage dumps.
   VERIFIED (read off the decompile of 0x808c63c). A client leaves through the
   netchan `disconnect` command. vcod ignores it the same way.
 
+### `g_password` (`ClientConnect`, game.mp.i386.so 0x4246c)
+
+Measured 2026-10-09 against `cod_lnxded` (1.1d) on a spare port with
+`+set g_password secret`, a throwaway connectionless client (getinfo,
+getstatus, getchallenge, a Huffman `connect` with a chosen userinfo) and
+`vcod --net-probe` for the level-boundary drops.
+
+- The check lives in the game module, not the engine. `ClientConnect`
+  reads the userinfo's `ip` (key at 0x730a4) and skips the test when it is
+  `localhost` (0x730a7). Otherwise it reads `password` (0x730cf) and denies
+  when `g_password` is non-empty, is not `none` (0x730d8, `Q_stricmp`, so
+  any case) and differs from the userinfo value by `strcmp`. The denial
+  frees the entity and returns `GAME_INVALIDPASSWORD` (0x730dd). INFERRED
+  from 0x425da..0x42666 (calls resolved with `tools/re/annotate_func.py`).
+  There is no bot or first-time parameter, unlike Q3's.
+- `SV_DirectConnect` puts `ip localhost` into the userinfo only when
+  `NET_IsLocalAddress` (0x8080ed8: address type 0 or 2, bot or loopback)
+  holds, else the address string (0x80858d3 and 0x808576c). A test client
+  (`SV_AddTestClient`, zeroed address at 0x80875cf) is therefore exempt;
+  a UDP client on 127.0.0.1 is not. INFERRED. VERIFIED by capture: a
+  connect from 127.0.0.1 without a password, and one carrying its own
+  `\ip\localhost`, were both refused.
+- A refused connect gets the OOB `error\nGAME_INVALIDPASSWORD` (format
+  `error\n%s` at 0x80d42c5, sent at 0x8085bd2) and the slot is freed; the
+  server prints `Game rejected a connection: %s.` at developer level. The
+  game verdict comes after the engine's own checks (challenge, ping,
+  `sv_privatePassword`, `EXE_SERVERISFULL`). INFERRED from 0x8085baa..
+  0x8085bf2. VERIFIED by capture: no `password` key, `wrong` and `Secret`
+  each got exactly `error\nGAME_INVALIDPASSWORD`; `secret` got
+  `connectResponse`.
+- `g_password` is registered with flags 0 (`dump_cvars.py`), so it is live:
+  an rcon `g_password` change showed in the next `getinfo` and governed the
+  next connect with no map load. VERIFIED by capture.
+- `getinfo` and `getstatus` send `pswrd 1` when `Cvar_VariableString
+  ("g_password")` is non-empty, `0` otherwise (0x808c3ae, 0x808bf23).
+  VERIFIED by capture: `secret` and `none` both read `pswrd 1`, `""` read
+  `pswrd 0`. `none` reads as passworded in the browser yet admits a connect
+  with no password. VERIFIED by capture.
+- `SV_MapRestart_f` (0x8083f8f) and `SV_SpawnServer` (0x808a765) run
+  `ClientConnect` again for every client on the server, and a denial goes
+  through `SV_DropClient` with the same string. VERIFIED by capture: a
+  probe joined with `g_password ""`, rcon set `secret`, and both
+  `map_restart` and `map mp_harbor` dropped it with `w
+  "GAME_INVALIDPASSWORD"`; the restart also printed `SV_MapRestart_f:
+  dropped client 3 - denied!` per client.
+- vcod (`Server::password_denied` in `crates/server/src/server.rs`) reads
+  `g_password` from the level's cvar table and runs the same test in
+  `svc_direct_connect` after the full-server check, and at both level
+  boundaries before the script's reconnect. vcod's bots are exempt, as
+  retail's test clients are.
+
 ## Raw captures
 
 Two of them are in the repo now:
