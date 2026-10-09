@@ -249,6 +249,8 @@ pub struct PlayerAnims {
     /// (`animscript::AnimState::event`); a name the paks carry no clip for is
     /// not in here and holds nothing.
     lengths: HashMap<String, u32>,
+    /// Each state anim's record flags (`AnimScript::anim_records`).
+    records: HashMap<String, crate::animscript::AnimRecord>,
 }
 
 impl PlayerAnims {
@@ -267,9 +269,11 @@ impl PlayerAnims {
                 Some((name.clone(), crate::xanim::duration_ms(name, &data).ok()?))
             })
             .collect();
+        let records = script.anim_records();
         Ok(PlayerAnims {
             tree,
             index,
+            records,
             script,
             lengths,
         })
@@ -283,6 +287,15 @@ impl PlayerAnims {
 
     pub fn name(&self, wire: i32) -> Option<&str> {
         self.index.name(&self.tree, wire)
+    }
+
+    /// The record flags of the anim a wire value plays; default for an anim
+    /// no state names.
+    pub fn record(&self, wire: i32) -> crate::animscript::AnimRecord {
+        self.name(wire)
+            .and_then(|n| self.records.get(&n.to_ascii_lowercase()))
+            .copied()
+            .unwrap_or_default()
     }
 
     /// The wire value for an anim name, or `None` when the tree has no such

@@ -359,8 +359,10 @@ dropped, so test such a builtin through `ScriptRuntime`.
 - A non-player entity rotates through `AnglesToAxis`: positive pitch is nose
   down.
 - A control bone (`back_*`, `neck`, `head`, `pelvis`) turns about the model's
-  axes, not its own; about its own Y the body leans sideways. The torso pitch
-  eases after the view on both server and client (combat doc 16.3).
+  axes, not its own; about its own Y the body leans sideways. The torso pitch,
+  torso yaw and legs yaw swing after the view on both server and client, and
+  `tag_origin`'s local tag turns the body by the legs' yaw off the view, so a
+  test that poses a turned body must step it to settle (combat doc 16.3, 16.4).
 - The 24/30/32 pt fonts span two or three atlas pages per glyph, named in the
   `.dat`. HUD colours are display values, linearised once in the HUD pass.
 - Effect shaders live in `fxshaders/` in `pak5.pk3`. Some map paths have a

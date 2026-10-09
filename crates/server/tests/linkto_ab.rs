@@ -39,10 +39,10 @@ const TOL: f32 = 0.02;
 /// How far a child on a player's bone may sit from retail's.
 const TAG_TOL: f32 = 3.0;
 
-/// The frames after `setPlayerAngles((0, 180, 0))`: retail's body swings
-/// round and back over three frames (the tag's yaw reads 179, 270, 45, 22),
-/// ours turns only its entity axis for the one frame (movers doc, 15).
-const TAG_GAPS: &[(&str, f32)] = &[("pl_turn", 10.0)];
+/// How far the hand tag's yaw may sit from retail's through the body's
+/// swing: ours reads about 2 degrees over it on every frame, the idle clip's
+/// own offset.
+const TAG_YAW_TOL: f32 = 4.0;
 
 /// Known divergences, `(phase, tolerance)`, each naming the movers doc
 /// section that explains it.
@@ -273,8 +273,8 @@ fn linked_entities_follow_their_parents_like_retail() {
         for (k, ((rk, rv), (_, ov))) in rows.iter().zip(o).enumerate() {
             // The player phases: a child on a tag rides a bone of the posed
             // body, which ours poses a few degrees off retail's (combat doc,
-            // 3), so its origin is held to `TAG_TOL` and its angles not at
-            // all; the entity-frame links are held to the unit.
+            // 3), so its origin is held to `TAG_TOL` and its angles only
+            // through the turn; the entity-frame links are held to the unit.
             let tagged = match (phase.starts_with("pl_"), rk.as_str()) {
                 (true, "f") => Some(4),
                 (true, "h") => Some(0),
@@ -284,15 +284,23 @@ fn linked_entities_follow_their_parents_like_retail() {
                 Some(i) => {
                     let t = diff(&rv[i..i + 1], &ov[i..i + 1]);
                     tag_worst = tag_worst.max(t);
-                    let tol = TAG_GAPS
-                        .iter()
-                        .find(|g| g.0 == phase)
-                        .map_or(TAG_TOL, |g| g.1);
-                    if t > tol {
+                    if t > TAG_TOL {
                         bad.push(format!(
                             "{phase} {k} tag: retail {:?} ours {:?}",
                             rv[i], ov[i]
                         ));
+                    }
+                    // `tag_weapon_right`'s yaw after `setPlayerAngles((0,
+                    // 180, 0))` is the legs swinging round and back (179,
+                    // 270, 45, 22 ...), the one angle held (combat doc 16.4).
+                    if *phase == "pl_turn" && rk == "h" {
+                        let off = (rv[1][1] - ov[1][1] + 540.0).rem_euclid(360.0) - 180.0;
+                        if off.abs() > TAG_YAW_TOL {
+                            bad.push(format!(
+                                "{phase} {k} tag yaw: retail {} ours {}",
+                                rv[1][1], ov[1][1]
+                            ));
+                        }
                     }
                     let rest = |v: &[[f32; 3]]| -> Vec<[f32; 3]> {
                         v.iter()

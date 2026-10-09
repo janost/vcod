@@ -77,17 +77,7 @@ Player-anim coverage: 254 `pb_`/`pl_`/`pt_` files. `pb_*` splits 1/78/116 across
 
 ## Legs/torso split and aim layer
 
-One skeleton, two anims. `pl_*`/`pt_*` clips only key their own bones, so applying legs then torso on one pose buffer reproduces the split. Aim pitch/lean is then distributed over named spine control bones by `BG_Player_DoControllers` (`game.mp.i386.so 0x2b7f8`):
-
-```
-G_DObjSetLocalTag(obj, ?, "tag_origin", angles)
-G_DObjSetControlTagAngles(obj, ?, "back_low", &a)
-G_DObjSetControlTagAngles(obj, ?, "back_mid", &a)
-G_DObjSetControlTagAngles(obj, ?, "back_up",  &a)
-G_DObjSetControlTagAngles(obj, ?, "pelvis",   &a)
-```
-
-using `AngleSubtract` / `AnglesSubtract` / `AngleNormalize180` / `GetLeanFraction`, plus `neck` and `head` after `back_up`. Weight constants in `.rodata` at `0x6efa8..`: `0.5, 0.25, 50.0, 0.925, 1.5, 1.8, 2.5, 0.075, -1.2, 0.3, 0.1, 0.2, 0.8, -0.2, 0.4, -0.6, 0.7, -0.3`. The pitch half (the eased torso pitch, its split over `back_*`, `neck`, `head` and `pelvis`, and the model-space axis a control rotation turns about) is decoded in `cod11-combat.md` 16.3. The yaw and lean halves are not decoded.
+One skeleton, two anims. `pl_*`/`pt_*` clips only key their own bones, so applying legs then torso on one pose buffer reproduces the split. `BG_Player_DoControllers` (`game.mp.i386.so 0x2b7f8`) then sets a local tag on `tag_origin` (the legs' yaw off the view, the lean's roll and shift, the prone slope) and control angles on `pelvis`, `back_low`, `back_mid`, `back_up`, `neck` and `head`. Its inputs are the three swings `BG_PlayerAnimation`'s angle updater (0x2af78) keeps in the client's record: legs yaw, torso yaw and torso pitch. All of it is decoded in `cod11-combat.md` 16.3 (pitch, the control axis) and 16.4 (yaw, lean, `tag_origin`, the anim record's movetype and strafe flags). vcod: `vcod_common::playerpose::{BodyAngles, Controllers, apply_controllers}`, shared by the server's locational pose and the client's draw.
 
 Inputs are all transmitted in entityState: `fTorsoPitch` (232), `fWaistPitch` (236), `fTorsoHeight` (228), `leanf` (212), `animMovetype` (224, 4 bits).
 
