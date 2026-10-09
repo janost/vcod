@@ -20,6 +20,7 @@ use vcod_common::playerpose::{AimPitch, PitchSwing, apply_aim, clip_name};
 use vcod_common::pmove::movers::SnapshotMovers;
 use vcod_common::skeleton::{AnimBinding, PoseBuffer, Skeleton};
 use vcod_common::turretpose::{GunnerPlacement, angles_quat, place_gunner, tag_weapon_local};
+use vcod_common::weapon_table::STATIC_ITEMS;
 use vcod_common::xanim::{self, XAnim};
 use vcod_common::xmodel::{self, XModel};
 
@@ -1333,6 +1334,19 @@ pub fn build_instances(
                 });
             }
             EntityVisual::Item(index) => {
+                // Ammo and health rows (65-69) carry their own world model; a
+                // mod's dropped health pack is one.
+                if let Some((.., model)) = STATIC_ITEMS.iter().find(|(i, ..)| *i == index as usize)
+                {
+                    if let Some(handle) = resolve_model(model_cache, renderer, fs, model) {
+                        out.push(DynamicModelInstance {
+                            model: handle,
+                            transform,
+                            bones: None,
+                        });
+                    }
+                    continue;
+                }
                 let Some(name) = weapon_name_for_index(&weapon_names, index as i32) else {
                     if warned_items.insert(format!("oob:{index}")) {
                         log::warn!(

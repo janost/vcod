@@ -7,6 +7,29 @@
 use crate::pk3::Pk3Fs;
 use crate::weapon::WeaponDef;
 
+/// The only classnames `bg_itemlist` (`game.mp.i386.so` `.data` 0x7b9d8)
+/// carries compiled into the binary, indices 65-69, each with the world model at its record's +0x8. Indices
+/// 1-64 are `emptyitem_"wNN"` placeholders whose model fields are the empty
+/// string; a weapon's real classname and models reach its slot at runtime
+/// from the mounted paks' weapon files, so a weapon's index comes from
+/// configstring 7 and its models from the weapon file
+/// (`crates/server/src/items.rs`). All five rows carry a null +0xc.
+pub const STATIC_ITEMS: &[(usize, &str, &str)] = &[
+    (
+        65,
+        "item_ammo_stielhandgranate_open",
+        "xmodel/ammo_stielhandgranate1",
+    ),
+    (
+        66,
+        "item_ammo_stielhandgranate_closed",
+        "xmodel/ammo_stielhandgranate2",
+    ),
+    (67, "item_health_small", "xmodel/health_small"),
+    (68, "item_health", "xmodel/health_medium"),
+    (69, "item_health_large", "xmodel/health_large"),
+];
+
 /// Index 0 `None`, then one entry per space-separated configstring 7 name in
 /// wire order, indexed by [`assign_indices`]. A file that fails to load
 /// leaves its slot `None`.
