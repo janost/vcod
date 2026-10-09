@@ -276,7 +276,9 @@ it, all of which are branch conditions. Later tasks and sections cite these as
     state word is set to 2, `CS_CONNECTED`.
 23. The pure-server pak cvars: `sv_paks`, `sv_pakNames`, `sv_referencedPaks`
     and `sv_referencedPakNames` (`0x808a7a5..0x808a891`, names at `0x80d5526`,
-    `0x80d556e`, `0x80d557a`, `0x80d558c`).
+    `0x80d556e`, `0x80d557a`, `0x80d558c`). What each holds is in
+    docs/research/cod11-server-handshake.md, "Pak checksums and pure
+    servers".
 24. `SV_SetConfigstring(1, Cvar_InfoString(CVAR_SYSTEMINFO))` at `0x808a8c9`
     and `SV_SetConfigstring(0, Cvar_InfoString(CVAR_SERVERINFO))` at
     `0x808a8e1`, each clearing its own bit of the modified-flags word at

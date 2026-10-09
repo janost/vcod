@@ -106,8 +106,21 @@ fn supersedes(new: &str, old: &str) -> bool {
     }
 }
 
+/// `cl->pureAuthentic`: what the last `cp` proved (`SV_VerifyPaks_f`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Pure {
+    /// No `cp` since the connect or the last `vdr`.
+    #[default]
+    Unchecked,
+    Authentic,
+    Unpure,
+}
+
 pub struct Client {
     pub addr: SocketAddr,
+    pub pure: Pure,
+    /// The pak being sent, from `download` until it ends.
+    pub download: Option<crate::download::ServerDownload>,
     pub netchan: ServerNetchan,
     pub userinfo: String,
     pub name: String,
@@ -172,6 +185,8 @@ impl Client {
         );
         Client {
             addr,
+            pure: Pure::Unchecked,
+            download: None,
             netchan: ServerNetchan::new(qport, challenge),
             userinfo,
             name,
@@ -347,14 +362,10 @@ impl Client {
     }
 }
 
-/// `Sys_IsLANAddress` (0x80c72f8) compares against the host's own
-/// interface addresses by class; this takes loopback and the private ranges
-/// instead.
+/// `Sys_IsLANAddress` (0x80c72f8): the address shares its class's network
+/// part with one of the host's own.
 pub(crate) fn is_lan(ip: std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
-        std::net::IpAddr::V6(v6) => v6.is_loopback(),
-    }
+    vcod_common::net::lan::is_lan(ip)
 }
 
 /// `strtol(s, 0, 10)` saturated to `i32`: leading blanks and a sign, then
