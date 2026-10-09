@@ -6049,8 +6049,9 @@ with `weaponstate` 3). The tdm hit target capture's line 80 is one of these
 (turrets doc 12.4). Turrets doc 12.4's gunner reads 0xC418 on every held
 frame and 0xC018 once the trigger is up, which this rule gives too.
 
-vcod: `spectate::attack_flag` per cmd in `ClientSim::step` (a live player
-only, `PMF_RESPAWNED` clear), on `ClientSim::attacking`; `eflags()` ORs it
-with the gunner's own `firing`. GAP: a dead body (`pm_type` 6) passes the
-`pm_type` test in retail; ours clears the bit for it. Its weapon is 0 after
-the first dead cmd, so only that cmd could differ.
+vcod: `spectate::attack_flag` per cmd in `ClientSim::step` (any `pm_type`
+but the intermission, `PMF_RESPAWNED` clear), on `ClientSim::attacking`;
+`eflags()` ORs it with the gunner's own `firing`. A dead body (`pm_type` 6)
+passes the `pm_type` test, so its first cmd, which still holds the weapon,
+can set the bit; the dead arm then zeroes the weapon and the next cmd
+clears it. Not measured live.
