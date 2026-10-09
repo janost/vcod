@@ -1939,16 +1939,59 @@ impl App {
 
     /// The Mods menu's `RunMod` (and `Quake3` with `None`): `fs_game` and a
     /// `vid_restart`, which brings the main menu back up off the mod's
-    /// paks. Refused in a game.
+    /// paks. In a game, `vid_restart` keeps the connection: the search path
+    /// reopens under the server's pure list, the UI reloads closed and the
+    /// cgame half sends `cp` again (CoDMP.exe 0x40fbe0,
+    /// docs/research/cod11-front-end.md section 17).
     fn run_mod(&mut self, game: Option<String>) {
-        if matches!(self.mode, Mode::Online { .. }) {
-            console::log::print("Disconnect before switching mods.");
-            return;
-        }
         log::info!("fs_game {}", game.as_deref().unwrap_or("(none)"));
         self.user_fs_game = game.clone();
-        self.switch_fs_game(game);
-        self.enter_menu(None);
+        if !matches!(self.mode, Mode::Online { .. }) {
+            self.switch_fs_game(game);
+            self.enter_menu(None);
+            return;
+        }
+        if game != self.fs_game {
+            self.fs_game = game;
+            let (base, game) = search_dirs(&self.game_dir, &self.mod_dir, &self.fs_game);
+            if let Err(e) = reopen_fs(
+                &base,
+                game.as_deref(),
+                self.fs_pure.as_deref(),
+                &mut self.fs,
+                &mut self.localized,
+                &mut self.menus,
+                &mut self.hud,
+                &mut self.audio,
+                &mut self.fx,
+                &mut self.quick_chat,
+            ) {
+                self.disconnect(Some(format!("cannot reopen {}: {e:#}", base.display())));
+                return;
+            }
+            if let Some(r) = &mut self.renderer {
+                r.reopen(&self.fs);
+            }
+        }
+        self.ui = new_ui(&self.fs, &self.game_dir, &self.mod_dir);
+        self.after_menu();
+        if let Mode::Online {
+            net,
+            view,
+            phase,
+            menu_view,
+            ..
+        } = &mut self.mode
+        {
+            *menu_view = None;
+            view.reopen();
+            // `CL_InitCGame` and `CL_SendPureChecksums` run only past
+            // `CA_LOADING`; before that the load sends `cp` itself.
+            if matches!(phase, Phase::Live(_)) {
+                let feed = net.gamestate().map_or(0, |g| g.checksum_feed);
+                net.send_reliable(&self.fs.pure_command(feed));
+            }
+        }
     }
 
     /// Drops the map, its sounds and effects, between servers.

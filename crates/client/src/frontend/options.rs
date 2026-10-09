@@ -16,41 +16,6 @@ use super::{Painter, Ui, UiEffect};
 use crate::console::shell::Shell;
 use crate::hud::HudQuad;
 
-/// The options set from `ui_mp/menus.txt` that vcod loads.
-pub(super) const MENU_FILES: [&str; 13] = [
-    "ui_mp/options.menu",
-    "ui/options_look.menu",
-    "ui/options_move.menu",
-    "ui/options_shoot.menu",
-    "ui/options_misc.menu",
-    "ui/options_graphics.menu",
-    "ui/options_sound.menu",
-    "ui/options_performance.menu",
-    "ui/options_control_defaults.menu",
-    "ui/options_graphics_defaults.menu",
-    "ui_mp/options_multi.menu",
-    "ui_mp/vid_restart.menu",
-    "ui/snd_restart.menu",
-];
-
-/// The menus those files define that `open` may show.
-pub(super) const MENUS: [&str; 14] = [
-    "options_menu",
-    "options_look",
-    "options_move",
-    "options_shoot",
-    "options_misc",
-    "options_graphics",
-    "options_sound",
-    "options_performance",
-    "options_control_defaults",
-    "options_graphics_defaults",
-    "options_multi",
-    "vid_restart_popmenu",
-    "vid_restart_popmenu_listen",
-    "snd_restart_popmenu",
-];
-
 /// `g_bindings` (`ui_mp_x86.dll` 0x40036130, 50 records of 24 bytes): the
 /// only commands a bind item can change. Any other shows as unbound.
 const BIND_COMMANDS: [&str; 50] = [
