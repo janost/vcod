@@ -349,6 +349,9 @@ dropped, so test such a builtin through `ScriptRuntime`.
   sits at the feet.
 - A non-player entity rotates through `AnglesToAxis`: positive pitch is nose
   down.
+- A control bone (`back_*`, `neck`, `head`, `pelvis`) turns about the model's
+  axes, not its own; about its own Y the body leans sideways. The torso pitch
+  eases after the view on both server and client (combat doc 16.3).
 - The 24/30/32 pt fonts span two or three atlas pages per glyph, named in the
   `.dat`. HUD colours are display values, linearised once in the HUD pass.
 - Effect shaders live in `fxshaders/` in `pak5.pk3`. Some map paths have a
