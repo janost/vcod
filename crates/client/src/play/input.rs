@@ -260,6 +260,18 @@ impl PlayInput {
         }
     }
 
+    /// The switch in flight, retail's `cg.weaponSelect` while it differs
+    /// from the playerstate's weapon.
+    pub fn weapon_select(&self) -> Option<u8> {
+        self.pending_weapon
+    }
+
+    /// Selects `weapon` as a bind would; the cmd carries it from the next
+    /// build while the playerstate holds it.
+    pub fn select(&mut self, weapon: u8) {
+        self.pending_weapon = Some(weapon);
+    }
+
     pub fn raw_angles(&self) -> [i32; 3] {
         self.raw_angles
     }

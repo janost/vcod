@@ -1327,6 +1327,7 @@ fn loading_frame(
             cvar: &|_| None,
             bound_key: &|_| None,
             draw: hud::DrawToggles::default(),
+            weapon_select: None,
         };
         *hud_quads = hud.build(&f);
     }
@@ -3074,6 +3075,9 @@ impl ApplicationHandler for App {
                                             status: self.shell.cvar_f32("cg_drawStatus") as i32
                                                 != 0,
                                         },
+                                        weapon_select: input
+                                            .weapon_select()
+                                            .filter(|_| local_player),
                                     };
 
                                     // Events use the newest snapshot, not the interpolation
@@ -3135,6 +3139,18 @@ impl ApplicationHandler for App {
                                             self.ev_seen += 1;
                                             if let Some(hud) = &mut self.hud {
                                                 hud.on_game_event(&ev, &hud_frame);
+                                            }
+                                            let empty = input.weapon_select().is_none()
+                                                && newest.ps.field_i32(p, "weapon") == 0;
+                                            if let Some(w) = play::events::pickup_selects(
+                                                &ev,
+                                                ctx.view_body,
+                                                empty,
+                                            ) {
+                                                input.select(w);
+                                                if let Some(hud) = &mut self.hud {
+                                                    hud.weapon_selected();
+                                                }
                                             }
                                             self.audio.on_game_event(
                                                 &self.fs,
