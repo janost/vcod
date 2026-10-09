@@ -393,7 +393,8 @@ silent bomb.
 Events 140 to 143 (`EV_STANCE_FORCE_*`, `EV_STEP_VIEW`) and 149 are single-client:
 the cgame prints
 `"Event %s just for client %i was sent to other clients"` when
-`es.clientNum != cg.clientNum`.
+`es.clientNum != cg.clientNum`. 140-142 set `cl_stance` to 0, 1 or 2
+(`cod11-mantle.md`, "The forced-stance events").
 
 ---
 

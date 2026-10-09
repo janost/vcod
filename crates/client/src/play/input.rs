@@ -246,6 +246,12 @@ impl PlayInput {
         }
     }
 
+    /// The stance an `EV_STANCE_FORCE_*` sets, retail cgame's write of
+    /// `cl_stance` (0x3001df6d).
+    pub fn force_stance(&mut self, stance: Stance) {
+        self.wanted_stance = stance;
+    }
+
     /// Lets go of every held key, for a grab release or focus loss. The
     /// stance and a pending switch stay: neither is a held key.
     pub fn release_all(&mut self) {
@@ -659,6 +665,18 @@ mod tests {
         };
         let c = i.build(108, &stood);
         assert_eq!(c.wbuttons & msg::WBUTTON_CROUCH, 0);
+    }
+
+    /// A refused prone: the server's stance never moved, so only the event
+    /// takes the client off the key it keeps asking with.
+    #[test]
+    fn a_forced_stance_replaces_the_wanted_one() {
+        let mut i = PlayInput::default();
+        i.key(Action::Prone, true);
+        assert_ne!(i.build(100, &held(10)).wbuttons & msg::WBUTTON_PRONE, 0);
+        i.force_stance(Stance::Stand);
+        let c = i.build(108, &held(10));
+        assert_eq!(c.wbuttons & (msg::WBUTTON_PRONE | msg::WBUTTON_CROUCH), 0);
     }
 
     #[test]

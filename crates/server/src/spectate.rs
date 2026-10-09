@@ -34,6 +34,7 @@ const SPAWN_THINK_MS: f32 = 100.0;
 /// `docs/research/cod11-events-and-fx.md`.
 use vcod_common::net::event_ids::EV_PLAYER_TELEPORT_IN;
 use vcod_common::net::event_ids::EV_PLAYER_TELEPORT_OUT;
+use vcod_common::net::event_ids::EV_STANCE_FORCE_STAND;
 use vcod_common::net::flags::EF_FIRING;
 /// `pingPlayer`'s bit (docs/research/cod11-hud-protocol.md, "Compass
 /// friendlies").
@@ -937,9 +938,10 @@ impl ClientSim {
         // `pers.cmd` takes every cmd, ahead of the dead and intermission returns.
         self.last_cmd_angles = cmd.angles;
         // `PmoveSingle` clears the bit on every cmd and sets it again ahead
-        // of the move and the weapon, off the state the cmd starts from.
-        self.attacking = self.pm_type == PmType::Normal
-            && !self.pm_dead
+        // of the move and the weapon, off the state the cmd starts from. Its
+        // only `pm_type` test is against 5, so a dead body's first cmd, which
+        // still holds the weapon, can set it.
+        self.attacking = self.pm_type != PmType::Intermission
             && !self.respawned
             && attack_flag(&self.ps, cmd.buttons, weapons);
         // A dead player's view is frozen and its body falls and slides;
@@ -981,6 +983,11 @@ impl ClientSim {
                     r.moved = true;
                 }
                 self.view_angles = cmd::apply_view(&mut self.ps, cmd.angles, self.delta_angles);
+                // `PM_CheckDuck`'s `pm_type` 4 arm (0x31749-0x31767) takes a
+                // prone key off a spectator's cmd and tells it to stand.
+                if self.pm_type == PmType::Spectator && cmd.wbuttons & msg::WBUTTON_PRONE != 0 {
+                    self.ring.add(EV_STANCE_FORCE_STAND, 0);
+                }
                 pmove::spectator_move(
                     &mut self.ps,
                     f32::from(cmd.forward) / 127.0,
@@ -3234,6 +3241,37 @@ mod tests {
         assert!(!attack_flag(&ps, attack | msg::BUTTON_TALK, &weapons));
         ps.ammoclip[3] = 0;
         assert!(!attack_flag(&ps, attack, &weapons));
+    }
+
+    /// `PmoveSingle`'s only `pm_type` test for the bit is against 5, so a
+    /// dead body's first cmd, which still holds the weapon, sets it; the
+    /// dead arm takes the weapon away, and the next cmd clears it.
+    #[test]
+    fn a_dead_body_s_first_cmd_keeps_the_fire_bit() {
+        use vcod_common::pmove::weapon::WEAPON_READY;
+        let weapons = vec![
+            None,
+            Some(WeaponDef {
+                clip_index: 3,
+                ..WeaponDef::default()
+            }),
+        ];
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.become_player([0.0; 3], 0.0, [0; 3]);
+        sim.step(&NULL_USERCMD, 0.008, None, &weapons);
+        sim.ps.weapon = 1;
+        sim.ps.ammoclip[3] = 5;
+        sim.ps.weaponstate = WEAPON_READY;
+        sim.die();
+        sim.pm_dead = true;
+        let fire = UserCmd {
+            buttons: msg::BUTTON_ATTACK,
+            ..NULL_USERCMD
+        };
+        sim.step(&fire, 0.008, None, &weapons);
+        assert!(sim.attacking);
+        sim.step(&fire, 0.008, None, &weapons);
+        assert!(!sim.attacking);
     }
 
     /// The bit rides the entity and the playerstate both, off the last cmd

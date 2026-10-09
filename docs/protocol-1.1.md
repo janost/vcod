@@ -902,6 +902,7 @@ Which bit means which key. Measured 2026-09-01 by logging `buttons`, `wbuttons` 
 | lean left | `wbuttons` | `0x10` |
 | lean right | `wbuttons` | `0x20` |
 | reload | `wbuttons` | `0x08` |
+| stance from a held `+prone` / `+movedown` | `wbuttons` | `0x02`, beside the stance bit (CoDMP.exe `0x40ae90`; `cod11-mantle.md`, "The forced-stance events") |
 | fire | `buttons` | `0x01` |
 | ads | `buttons` | `0x10` |
 | melee | `buttons` | `0x20` |

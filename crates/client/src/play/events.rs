@@ -6,6 +6,8 @@
 use vcod_common::net::events::{EVENT_RING, GameEvent};
 use vcod_common::pmove::predict::Predicted;
 
+use super::input::Stance;
+
 /// How many sequences back a played event is remembered: Q3's
 /// `MAX_PREDICTED_EVENTS`. Divides 256, so `seq % REMEMBERED` survives the wrap.
 const REMEMBERED: usize = 16;
@@ -120,6 +122,24 @@ pub fn pickup_selects(
     (pickup && ours && nothing_selected && (1..=64).contains(&ev.parm)).then_some(ev.parm as u8)
 }
 
+/// The stance an `EV_STANCE_FORCE_*` puts the client in: retail cgame's
+/// handler (0x3001df6d) sets `cl_stance` to 0, 1 or 2 for an event of its
+/// own client while `cl_stanceTemp` is 0, and ignores another client's.
+pub fn forced_stance(ev: &GameEvent, own_client: i32) -> Option<Stance> {
+    use vcod_common::net::event_ids::{
+        EV_STANCE_FORCE_CROUCH, EV_STANCE_FORCE_PRONE, EV_STANCE_FORCE_STAND,
+    };
+    if ev.client_num != own_client {
+        return None;
+    }
+    match ev.event {
+        EV_STANCE_FORCE_STAND => Some(Stance::Stand),
+        EV_STANCE_FORCE_CROUCH => Some(Stance::Crouch),
+        EV_STANCE_FORCE_PRONE => Some(Stance::Prone),
+        _ => None,
+    }
+}
+
 /// A predicted ring event in the form the snapshot drain gives the
 /// playerstate ring's (`EventTracker::drain`).
 pub fn game_event(pred: &Predicted, client_num: i32, event: i32, parm: i32) -> GameEvent {
@@ -172,6 +192,41 @@ mod tests {
         assert_eq!(pickup_selects(&ev(EV_ITEM_PICKUP, 6, 3), None, true), None);
         assert_eq!(pickup_selects(&ev(FIRE, 6, 3), me, true), None);
     }
+    /// Retail cgame's `cl_stance` write (0x3001df6d): our own client's
+    /// forced-stance events set the stance, another client's do nothing.
+    #[test]
+    fn a_forced_stance_event_sets_our_stance() {
+        use vcod_common::net::event_ids::{
+            EV_STANCE_FORCE_CROUCH, EV_STANCE_FORCE_PRONE, EV_STANCE_FORCE_STAND,
+        };
+        let ev = |event: i32, client_num: i32| GameEvent {
+            event,
+            parm: 0,
+            entity_num: u32::MAX,
+            client_num,
+            weapon: 0,
+            surf_type: 0,
+            pos: [0.0; 3],
+            dir: [0.0; 3],
+            other_entity_num: u32::MAX,
+            attacker_entity_num: -1,
+        };
+        assert_eq!(
+            forced_stance(&ev(EV_STANCE_FORCE_STAND, 2), 2),
+            Some(Stance::Stand)
+        );
+        assert_eq!(
+            forced_stance(&ev(EV_STANCE_FORCE_CROUCH, 2), 2),
+            Some(Stance::Crouch)
+        );
+        assert_eq!(
+            forced_stance(&ev(EV_STANCE_FORCE_PRONE, 2), 2),
+            Some(Stance::Prone)
+        );
+        assert_eq!(forced_stance(&ev(EV_STANCE_FORCE_CROUCH, 5), 2), None);
+        assert_eq!(forced_stance(&ev(FIRE, 2), 2), None);
+    }
+
     const FOOTSTEP: i32 = 1;
 
     fn tracking(at: i32) -> PredictedEvents {

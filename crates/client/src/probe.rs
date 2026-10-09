@@ -101,6 +101,8 @@ pub struct Save {
     pub fall: bool,
     /// `--probe-fall-walk`: the world yaw `--probe-fall` walks at.
     pub fall_walk: Option<f32>,
+    /// `--probe-fall-prone`: the world yaw `--probe-fall` lies prone at.
+    pub fall_prone: Option<f32>,
     /// `--probe-pitch-flip`: the view pitch every other 400 ms window holds.
     pub pitch_flip: Option<f32>,
     /// `--probe-ride`: print every snapshot's movement fields, no fixture.
@@ -227,6 +229,7 @@ pub fn probe(
         killcam_skip_ms,
         fall: probe_fall,
         fall_walk,
+        fall_prone,
         pitch_flip,
         ride: probe_ride,
         items: probe_items,
@@ -753,6 +756,12 @@ pub fn probe(
                 }
                 last_pitch = Some((s.message_num, p));
             }
+        } else if let Some(yaw) = fall_prone.filter(|_| client.state() == NetState::Active) {
+            // Held as a retail client holds `cl_stance` 2, whatever the
+            // server forces: a refusal repeats on every cmd.
+            cmd.wbuttons |= net::msg::WBUTTON_PRONE;
+            cmd.up = -127;
+            cmd.angles[1] = deg_to_short(yaw);
         } else if let Some(yaw) = fall_walk.filter(|_| client.state() == NetState::Active) {
             // Absolute: `send_frame` takes `delta_angles` off.
             cmd.forward = 127;
