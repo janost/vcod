@@ -302,6 +302,33 @@ lightingPrecalc` (mp_carentan 62 against 49, mp_brecourt 66 against 60).
   (d^2 + 0.001)` per vertex: at an intensity of 800 (the grenade's
   `Light`), one framebuffer unit at 100 units, a quarter at 200.
 - Entity models take the same pick every frame (section 13).
+- VERIFIED, the callers of `re.AddLightToScene` (refexport `+0x4c`, the
+  table copied to 0x1432860 at 0x411ab6; arguments origin, intensity, r,
+  g, b):
+  - The efx `Light` element's draw at 0x490625 (vtable 0x559f64; slot 5,
+    0x490970, returns 0xb, the `light` block id) passes its interpolated
+    size as the intensity: 0x4906a0 writes `sizeStart * p + sizeEnd * (1 -
+    p)` to `+0xb8` (start `+0xdc`, end `+0xe0`), and 0x4907f0 lerps the
+    `rgb` curve into the colour at `+0x48..+0x50`. So the efx block's size
+    is the intensity.
+  - cgame trap 0x42 (dispatch at 0x402db5), from two places in
+    `cgame_mp_x86.dll`: every entity's `constantLight` (0x3001af20:
+    intensity `(cl >> 24) * 4`, each low byte / 255, at the lerped origin),
+    and a missile's `projectileDLight` (0x3001b4c1 through 0x30030fa0;
+    weaponInfo `+0x12c` from weaponDef `+0x334`). Stock `panzerfaust_mp`
+    says `projectileDLight 200`. INFERRED: the cgame never writes the
+    colour at weaponInfo `+0x130..+0x138`, so that light is black and
+    still takes a slot.
+  - The UI trap 0x1e (0x4185b9), not in game.
+- VERIFIED, stock `.efx` census: 71 files carry one `Light` each (muzzle
+  flashes, grenade and mortar blasts, cannon impacts). A muzzle flash
+  lives 100 ms at size 210 to 190 (random), `grenade2.efx` 100 ms at size
+  800, both linear to 0. INFERRED: a frame holds about one light per gun
+  fired in the last 100 ms plus one per blast, so the 32 cap binds only
+  in heavy fights.
+- VERIFIED: there is no additive scene light; refexport `+0x54`
+  (0x4e9c10, cgame trap 0x43) adds a corona ("added corona with invalid
+  id", 0x20 per frame), and its cgame wrapper 0x30030ff0 has no callers.
 
 vcod (`vs_prop` in `shader.wgsl`):
 
@@ -311,8 +338,12 @@ vcod (`vs_prop` in `shader.wgsl`):
   block's size stands in for the intensity (INFERRED: the efx renderer's
   call is not traced). On a prop the dynamic light does not push a baked
   light out of the eight slots; on an entity model it does (section 13).
-- The world keeps vcod's own fx-light falloff; retail's world dlights
-  (0x4b59f0's bits) are not ported.
+- The world keeps vcod's own fx-light falloff over the 8 fx lights nearest
+  the camera; retail's world dlights (0x4b59f0's bits) are not ported.
+- The scene light list is the first 32 fx lights in spawn order
+  (`fx::sim::MAX_SCENE_LIGHTS`), as retail's queue keeps the first 32
+  added; entity picks see all of them. The panzerfaust's black light and
+  `constantLight` are not added.
 
 ## 12. Shadows
 
@@ -398,6 +429,27 @@ the refEntity stores before each `0x3d` (add refEntity) trap:
 | Item (0x3001adb0) | 0 | the origin |
 | General and script mover (0x3001ab50, 0x3001b710) | 0x80 only with `eFlags` 0x10000 (0x3001aaa0) | then the centity's `+0x210`, else the origin |
 
+The `eFlags` 0x10000 lighting origin:
+
+- VERIFIED, 0x3001aaa0: with 0x10000 in the current state's `eFlags`
+  (centity `+0x8`) and `+0x210..+0x218` equal to `vec3_origin`
+  (0x300608e8), it copies the lerped origin (`+0x1f8`) there, then stores
+  `+0x210` at refEntity `+0x0c` and sets renderfx 0x80. Without the bit it
+  zeroes `+0x210`. VERIFIED: 0x3001d090 writes `+0x1f8` and `+0x204` as
+  `prev + (next - prev) * frameInterpolation`, so they are the lerped
+  origin and angles.
+- VERIFIED: 0x3002f840 copies the next state over the current and zeroes
+  `+0x210`. INFERRED: it is `CG_ResetEntity`, run when the entity was not
+  in the last snapshot or `eFlags` 0x8 toggled; so the lighting origin
+  freezes at the first drawn frame's position until a reset.
+- VERIFIED: the only setter in `game.mp.i386.so` is `fire_rocket` (`or
+  BYTE PTR [edi+0xa], 0x1` at 0x54683, beside `s.eType = 4` at 0x5467c).
+  A rocket in flight draws through the missile path 0x3001b3f0, which never
+  calls 0x3001aaa0, and `G_ExplodeMissile` sets `eType` 0 (0x53e24) with
+  `EF_NODRAW` 0x100 (0x53e2b), on which 0x3001ab50 returns at once.
+  INFERRED: so the branch never runs on stock content, and vcod leaves it
+  out.
+
 INFERRED: centity `+0xf0` starts the next entity state (its `eFlags` at
 `+0xf8`), so `+0x1d4` is that state's `fTorsoHeight` (offset 228).
 
@@ -409,10 +461,54 @@ vcod (`StaticLighting::entity_lights`, `client/src/entity_light.rs`,
   lighting origin is picked once (a player's parts share one) with the
   fx lights as scene lights, and the vertex shader applies the GL formula
   above per vertex. The viewmodel's lights are moved into view space.
-- The `eFlags` 0x10000 lighting origin of general entities is not ported;
-  they light at their origin. Every entity skin is treated as lit; the
-  0x18 material bit is not traced (section 11).
+- The `eFlags` 0x10000 lighting origin is not ported (above: no stock
+  entity reaches it). Every entity skin is lit and draws one stage; the
+  materials retail leaves unlit (below) are a follow-up, since their
+  stages also blend.
+- The light set's colours are rescaled from `identityLight` 0.5 to the
+  current one before GL's clamp (`cod11-gamma.md` section 4).
 - A map without leaf lights draws entity models at `identityLight`.
 - VERIFIED, vcod measurement 2026-10-09 (release build): 2.8 us per pick
   on mp_carentan's open ground, cache misses included.
+
+Which materials take GL lighting (the material word at `+0x54`; the
+shader under construction sits at 0x11e6778, stages from 0x11e6920 at a
+stride of 0x688, each with flags at `+0`, rgbGen `+0x664`, alphaGen
+`+0x67c`, constant colour `+0x680`, GL state `+0x684`):
+
+- VERIFIED: the `rgbGen` parse in 0x4f8390 sets GL state bit 0x100000
+  (`GL_LIGHTING`, section 5 of `cod11-gamma.md`) only for
+  `lightingAmbient` (0x547bf4, gen 9 at 0x4f8dc0) and `lightingDiffuse`
+  (0x547be4, gen 10 at 0x4f8de7), per stage.
+- VERIFIED: the finishing pass 0x4fb0f0 (called from 0x4fba30 at
+  0x4fbdb2) ORs 0x60008 into a gen-9 stage's flags and 0x60010 into a
+  gen-10 stage's, then sets `+0x54` to the OR of every stage's flags. So
+  a material carries 0x8 or 0x10 when any stage is gen 9 or 10; mixing
+  them warns "uses more than one of rgbGen lightingAmbient,
+  lightingDiffuse, and lightingSpecular" (1.1 has no `lightingSpecular`
+  keyword). INFERRED: every consumer tests `& 0x18` together (0x4d6966,
+  0x4d6ad5, 0x5053ba, 0x5054c9, 0x50e605), so the two bits mean the same.
+- VERIFIED: the implicit model skin (0x4fc440, case -1) writes gen 10,
+  stage state 0x100100 and stage flags 0x10. INFERRED: the same finish
+  runs after it (calls at 0x4fc7f7, 0x4fc7fc), so the material gets 0x10.
+- VERIFIED: the xmodel entity add 0x50e3e0 runs the light pick (0x4b7320
+  at 0x50e81c) only when some surface's material has `+0x54 & 0x18`.
+- VERIFIED: a static model's skin gets an unlit `?name` copy (0x4fcc70,
+  from the load 0x504200) with 0x18 and 0x100000 cleared, only when every
+  stage's gen is 1, 2, 10, 0xb or 0xc (0x4fcb40).
+- VERIFIED, `shadertypes/model/*.stype` census (53 files): 50 stages say
+  `lightingDiffuse`, 8 `constLighting` (the four `objective*` types), 5
+  `wave` (`pickup` and others, as an additive second stage), 2
+  `identityLighting` (`cloth_light`, `glass_light`), 1 `lightingPrecalc`
+  (`foliage_detail`); no `lightingAmbient`. So `objective` and `pickup`
+  are lit, and `objective_incomplete`, `cloth_light`, `glass_light` and
+  `foliage_detail` are not.
+- VERIFIED: a stage without stage flag 0x10000 draws with one colour
+  (`glColor4ubv` in the stage loops at 0x50bd60 and 0x50b560): its
+  `+0x680`, which is `identityLightByte` for `identityLighting`, 0xff for
+  `identity`, the constant times `identityLight` for `constLighting`
+  (0x4f8e65) and raw for `const`; `lightingPrecalc` (0xb) reads the
+  entity's `+0x6c` (0x50becf-0x50bede), the field `rgbGen entity` reads
+  (0x514ac0), so on a cgame entity its shaderRGBA. `vertex` goes through
+  0x4ffa60 instead.
 
