@@ -147,6 +147,8 @@ pub struct UiMenu {
     pub rect: Rect,
     pub fullscreen: bool,
     pub popup: bool,
+    /// `visible`: the cgame paints only visible `hud.menu` menus.
+    pub visible: bool,
     pub focus_color: [f32; 4],
     pub on_open: Vec<String>,
     pub on_close: Vec<String>,
@@ -256,6 +258,10 @@ fn parse_menu(body: &[String]) -> UiMenu {
             "popup" => {
                 menu.popup = true;
                 i += 1;
+            }
+            "visible" => {
+                menu.visible = num(body.get(i + 1)) != 0.0;
+                i += 2;
             }
             "focuscolor" => {
                 menu.focus_color = nums::<4>(body, i);

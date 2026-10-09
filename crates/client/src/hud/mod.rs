@@ -5,6 +5,7 @@ pub mod chat;
 pub mod font;
 pub mod friends;
 pub mod hudelem;
+pub mod hudmenu;
 pub mod killfeed;
 pub mod menu;
 pub mod messages;
@@ -68,6 +69,8 @@ pub struct Hud {
     /// so it is tried once.
     kill_icons: HashMap<i32, Option<(String, bool)>>,
     player: PlayerHud,
+    /// A mod's own `hud.menu` items.
+    hud_menu: hudmenu::HudMenu,
     pub unknown: u64,
 }
 
@@ -114,6 +117,9 @@ pub struct HudFrame<'a> {
     /// The `weapon` of the gun `ps` rides, the entity `viewlocked_entNum`
     /// names, which picks the mounted reticle.
     pub turret_weapon: Option<usize>,
+    /// A client cvar: a server `v`, else the 140/204 mirror. Mod `hud.menu`
+    /// items read it.
+    pub cvar: &'a dyn Fn(&str) -> Option<String>,
 }
 
 impl Hud {
@@ -128,16 +134,18 @@ impl Hud {
             scoreboard: Scoreboard::new(),
             kill_icons: HashMap::new(),
             player: PlayerHud::default(),
+            hud_menu: hudmenu::HudMenu::load(fs),
             unknown: 0,
         })
     }
 
-    /// A download reopened the search path: reload the fonts, and drop the
-    /// kill icons read out of the old weapon files. A font the new paks do
+    /// A download reopened the search path: reload the fonts and `hud.menu`,
+    /// and drop the kill icons read out of the old weapon files. A font the new paks do
     /// not parse keeps the old one.
     pub fn reopen(&mut self, fs: &Pk3Fs) -> Result<(), String> {
         self.fonts = UiFonts::load(fs)?;
         self.kill_icons.clear();
+        self.hud_menu = hudmenu::HudMenu::load(fs);
         Ok(())
     }
 
@@ -259,6 +267,9 @@ impl Hud {
                 };
                 self.player
                     .build(&view, &cx, f.server_time, screen, &mut out);
+                // `Menu_PaintAll` paints the rest of hud.menu over the native items.
+                self.hud_menu
+                    .build(&self.fonts, screen, f.localized, f.cvar, &mut out);
             }
             None => self.player.hidden(),
         }
@@ -514,6 +525,7 @@ mod tests {
             fov: 80.0,
             entity_origin: &|_| None,
             turret_weapon: None,
+            cvar: &|_| None,
         }
     }
 

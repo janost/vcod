@@ -1316,6 +1316,7 @@ fn loading_frame(
             fov: camera::DEFAULT_FOV_DEG,
             entity_origin: &|_| None,
             turret_weapon: None,
+            cvar: &|_| None,
         };
         *hud_quads = hud.build(&f);
     }
@@ -2991,6 +2992,8 @@ impl ApplicationHandler for App {
                                         let w = s.entities.get(&num)?.field_i32(p, "weapon");
                                         usize::try_from(w).ok()
                                     });
+                                    let client_cvar =
+                                        |c: &str| join.cvars.get(c, net.configstrings());
                                     let hud_frame = hud::HudFrame {
                                         now: time,
                                         screen_w,
@@ -3020,6 +3023,7 @@ impl ApplicationHandler for App {
                                         fov,
                                         entity_origin: &entity_origin,
                                         turret_weapon,
+                                        cvar: &client_cvar,
                                     };
 
                                     // Events use the newest snapshot, not the interpolation
