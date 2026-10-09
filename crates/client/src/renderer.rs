@@ -2799,9 +2799,10 @@ impl Renderer {
         self.gamma.resize(&self.device, w, h);
     }
 
-    /// `r_gamma`, already clamped to retail's range; applied from the next frame.
-    pub fn set_gamma(&mut self, gamma: f32) {
-        self.gamma.set_gamma(&self.queue, gamma);
+    /// `r_gamma`, already clamped to retail's range, and retail's overbright
+    /// bits (`gamma::overbright_bits`); applied from the next frame.
+    pub fn set_gamma(&mut self, gamma: f32, overbright: u32) {
+        self.gamma.set_gamma(&self.queue, gamma, overbright);
     }
 
     /// For a lost or outdated swapchain.

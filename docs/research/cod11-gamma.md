@@ -91,6 +91,16 @@ VERIFIED (strings and calls).
   VERIFIED (the multiplies). Their full effect on the frame is not
   traced here.
 
+- Lightmaps: VERIFIED, the lightmap loader `0x4d9fa0` (it names each page
+  `*lightmap%d`) runs every texel of each 512x512 page through `0x4d9f30`,
+  which calls `0x4d9af0` per texel and sets alpha 255. `0x4d9af0` shifts
+  each of r, g and b left by `1 - overbrightBits` and, when any of them
+  passes 255, scales all three by `255 / max` (integer divides), keeping the
+  hue. INFERRED: it is Q3's `R_ColorShiftLightingBytes` with
+  `r_mapOverBrightBits` fixed at 1, so full screen loads lightmaps as they
+  are and windowed doubles them at load. VERIFIED: with no lightmap data the
+  pages are filled with `identityLightByte` (`0x16c55b4`).
+
 So with defaults in full screen (`r_overBrightBits 1`), the framebuffer
 holds half-bright lighting and the ramp doubles it after gamma:
 `display = min(255, round(255 * (fb/255)^(1/g)) << 1)`. Windowed, or with
@@ -99,28 +109,52 @@ holds half-bright lighting and the ramp doubles it after gamma:
 `vid_restart`, which is why the menu moves the slider). INFERRED (from
 steps 1, 5 and 7 and `0x4eaa90`).
 
+INFERRED, from the above: windowed with device gamma, the ramp still loads
+(step 7 tests only device gamma) but unshifted, so `r_gamma` stays live and
+the framebuffer byte is the display byte. A lightmapped texel then shows
+`texture * shifted lightmap`, where full screen shows
+`min(255, 2 * texture * lightmap)`: the two agree until a lightmap channel
+passes 127, past which windowed keeps the lightmap's hue and full screen
+clamps per channel after the multiply. `identityLighting`,
+`rgbGen vertex` and the other `identityLight`-scaled terms are halved in
+the full-screen framebuffer and doubled back by the ramp, so they show the
+same in both; stages with no `identityLight` term (`identity`,
+`exactVertex`, `const`) show twice as bright full screen as windowed, up to
+the clamp.
+
 ## 4. What vcod does
 
 vcod's world shading already carries the one overbright bit (the x2 on
 lightmaps in `shader.wgsl`), so its frame at gamma 1 stands for retail's
-full-screen display at gamma 1. `crates/client/src/gamma.rs` builds
-retail's table (`ramp`, step 5, shift 1) into a 256-entry texture; when
-`r_gamma` is not 1 the frame renders offscreen and `gamma.wgsl` maps each
-channel's display byte `e` through table entry `e/2` (linear between
-entries) onto the swapchain, in sRGB-encoded values. At gamma 1 the pass is
-skipped, since the table is then the identity on vcod's frame. `r_gamma`
-is read every frame and clamped to 0.5..3 with the write-back of step 4,
-so the slider is live as in retail.
+display at gamma 1. `crates/client/src/gamma.rs` turns retail's table into
+a 256-entry texture indexed by the frame's own byte `e`
+(`display_table`): with retail's `overbrightBits` 1 (`overbright_bits`:
+full screen and device gamma) entry `e` is the shifted ramp's entry `e/2`,
+odd bytes the mean of the two around it; with 0 (windowed, or
+`r_ignorehwgamma 1`) it is the unshifted ramp's entry `e`, since the
+framebuffer byte is then the display byte. When the table is not the
+identity the frame renders offscreen and `gamma.wgsl` maps each channel
+through it onto the swapchain, in sRGB-encoded values. At gamma 1 both
+tables are the identity and the pass is skipped. `r_gamma` is read every
+frame and clamped to 0.5..3 with the write-back of step 4, so the slider is
+live as in retail; the full-screen test reads the window's state each
+frame. With `r_ignorehwgamma 1`, read at start-up and on `vid_restart`,
+vcod applies the `r_gamma` of that moment until the next `vid_restart`,
+which is when retail's baked textures would pick a change up.
 
 Divergences:
 
-- vcod always models full screen with `r_overBrightBits 1`. Retail
-  windowed has no overbright doubling; vcod does not change its lighting
-  for windowed play, `r_overBrightBits` or `r_ignorehwgamma`.
-- `r_ignorehwgamma 1` does not move gamma into texture load; the slider
-  stays live through the same pass.
-- vcod's frame clamps at retail framebuffer byte 127.5 (its display
-  white). Below gamma 1 retail shows framebuffer bytes above that as
-  distinct brighter shades; vcod caps them at the table entry for 127.5
-  (about 128 at gamma 0.5).
+- vcod's lighting does not follow `overbrightBits`: windowed, it keeps the
+  full-screen x2 on the lightmap product instead of retail's hue-keeping
+  shift at load, and draws `identity`-style stages at the windowed
+  brightness either way (`cod11-light-grid-and-leaf-lights.md` for the
+  `identityLight` terms).
+- `r_ignorehwgamma 1` maps the finished frame through the ramp; retail
+  maps each texture (lightmaps included) through it before they multiply.
+- Full screen, vcod's frame clamps at retail framebuffer byte 127.5 (its
+  display white). Below gamma 1 retail shows framebuffer bytes above that
+  as distinct brighter shades; vcod caps them at the table entry for 127.5
+  (about 127 at gamma 0.5). Windowed has no such loss. Closing it needs a
+  scene target with headroom above 1.0 for every pass.
+- `r_overBrightBits` is not registered; vcod uses its default 1.
 - `r_intensity` is not applied (no stock menu sets it).

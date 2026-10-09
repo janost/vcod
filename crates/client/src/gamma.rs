@@ -3,9 +3,30 @@
 //! the same table in a final pass. Formula, clamps and addresses:
 //! docs/research/cod11-gamma.md.
 
-/// Retail's ramp shift with `r_overBrightBits 1` in full screen; vcod's
-/// lighting already bakes this one bit into the frame.
-const OVERBRIGHT_BITS: u32 = 1;
+/// Retail's `overbrightBits` (0x4f0780): `r_overBrightBits` (1, latched)
+/// in full screen with device gamma, 0 windowed or with `r_ignorehwgamma 1`.
+pub fn overbright_bits(fullscreen: bool, hw_gamma: bool) -> u32 {
+    u32::from(fullscreen && hw_gamma)
+}
+
+/// What retail shows for each byte of vcod's frame, which already carries
+/// one overbright bit: with the bit, retail's framebuffer byte is `e / 2`
+/// and goes through the shifted ramp (odd bytes interpolated); without it,
+/// the framebuffer byte is `e` itself and the ramp is not shifted.
+pub fn display_table(gamma: f32, overbright: u32) -> [u8; 256] {
+    let r = ramp(gamma, overbright.min(1));
+    let mut t = [0u8; 256];
+    for (e, out) in t.iter_mut().enumerate() {
+        *out = if overbright == 0 {
+            r[e]
+        } else if e % 2 == 0 {
+            r[e / 2]
+        } else {
+            (u16::from(r[e / 2]) + u16::from(r[e / 2 + 1])).div_ceil(2) as u8
+        };
+    }
+    t
+}
 
 /// Retail's `r_gamma` clamp: values outside are written back to the cvar.
 pub const GAMMA_MIN: f32 = 0.5;
@@ -40,7 +61,10 @@ pub struct GammaPass {
     format: wgpu::TextureFormat,
     scene_view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
-    gamma: f32,
+    /// What the ramp texture holds, `(gamma, overbright bits)`.
+    built: (f32, u32),
+    /// The table is the identity, so the pass is skipped.
+    identity: bool,
 }
 
 impl GammaPass {
@@ -134,7 +158,8 @@ impl GammaPass {
             format,
             scene_view,
             bind_group,
-            gamma: 1.0,
+            built: (1.0, 1),
+            identity: true,
         }
     }
 
@@ -149,16 +174,18 @@ impl GammaPass {
         );
     }
 
-    /// Rebuilds the ramp when `gamma` changed; retail rebuilds it on the
-    /// frame after `r_gamma` is modified.
-    pub fn set_gamma(&mut self, queue: &wgpu::Queue, gamma: f32) {
-        if gamma == self.gamma {
+    /// Rebuilds the table when `gamma` or the overbright bits changed;
+    /// retail rebuilds it on the frame after `r_gamma` is modified.
+    pub fn set_gamma(&mut self, queue: &wgpu::Queue, gamma: f32, overbright: u32) {
+        if (gamma, overbright) == self.built {
             return;
         }
-        self.gamma = gamma;
+        self.built = (gamma, overbright);
+        let table = display_table(gamma, overbright);
+        self.identity = table.iter().enumerate().all(|(i, &v)| usize::from(v) == i);
         queue.write_texture(
             self.ramp_tex.as_image_copy(),
-            &ramp(gamma, OVERBRIGHT_BITS),
+            &table,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(256),
@@ -174,7 +201,7 @@ impl GammaPass {
 
     /// The frame renders here instead of the swapchain while this is set.
     pub fn active(&self) -> bool {
-        self.gamma != 1.0
+        !self.identity
     }
 
     pub fn scene_view(&self) -> &wgpu::TextureView {
@@ -287,6 +314,34 @@ mod tests {
                 .iter()
                 .enumerate()
                 .all(|(i, &v)| v as usize == i)
+        );
+    }
+
+    /// Gamma 1 is the identity on vcod's frame either way, so the pass is
+    /// skipped full screen and windowed.
+    #[test]
+    fn gamma_one_display_table_is_the_identity() {
+        for ob in [0, 1] {
+            let t = display_table(1.0, ob);
+            assert!(t.iter().enumerate().all(|(i, &v)| v as usize == i), "{ob}");
+        }
+    }
+
+    /// Below gamma 1, full screen loses everything above framebuffer byte
+    /// 127 to vcod's 8-bit frame, and windowed keeps its whole range: there
+    /// the framebuffer is the display.
+    #[test]
+    fn windowed_gamma_maps_the_frame_byte_itself() {
+        let windowed = display_table(0.5, overbright_bits(false, true));
+        assert_eq!(windowed, ramp(0.5, 0));
+        assert_eq!(windowed[255], 255);
+        assert_eq!(display_table(0.5, overbright_bits(true, false)), windowed);
+        let full = display_table(0.5, overbright_bits(true, true));
+        // Display byte 200 is framebuffer byte 100: ramp(0.5, 1)[100] = 78.
+        assert_eq!(full[200], 78);
+        assert!(
+            full[255] < 130,
+            "vcod's white is retail's framebuffer 127.5"
         );
     }
 
