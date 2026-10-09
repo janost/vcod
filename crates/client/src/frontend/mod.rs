@@ -1,14 +1,15 @@
 //! Contains routines ported from the RTCW-MP GPL source, Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company.
 //! See NOTICE.
 //!
-//! The front end: the stock main menu, server browser, quit and error popups
-//! drawn from their `.menu` files and driven by mouse and Esc, as the UI
-//! module does while no game is up, and the main menu again over a game with
-//! `cl_ingame` 1 (docs/research/cod11-front-end.md).
-//! Menus vcod cannot run yet (options, create server, mods) are refused with
-//! a console line instead of drawing screens whose controls do nothing.
+//! The front end: the stock main menu, server browser, options screens,
+//! quit and error popups drawn from their `.menu` files and driven by mouse
+//! and keys, as the UI module does while no game is up, and the main menu
+//! again over a game with `cl_ingame` 1 (docs/research/cod11-front-end.md).
+//! Menus vcod cannot run yet (create server, mods) are refused with a console
+//! line instead of drawing screens whose controls do nothing.
 
 pub mod browser;
+mod options;
 
 use std::net::SocketAddrV4;
 use std::time::{Duration, Instant};
@@ -17,7 +18,8 @@ use vcod_common::localize::Localized;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::ui_menu::{
     self, FEEDER_SERVERS, ITEM_ALIGN_CENTER, ITEM_ALIGN_RIGHT, ITEM_TYPE_LISTBOX, ITEM_TYPE_MULTI,
-    UiItem, UiMenu, WINDOW_STYLE_FILLED, WINDOW_STYLE_SHADER,
+    ITEM_TYPE_OWNERDRAW, ITEM_TYPE_SLIDER, UiItem, UiMenu, WINDOW_STYLE_FILLED,
+    WINDOW_STYLE_SHADER,
 };
 use winit::keyboard::KeyCode;
 
@@ -34,8 +36,16 @@ const MENU_FILES: [&str; 4] = [
     "ui/error.menu",
 ];
 
-/// Menus `open` may show. Anything else is refused with a console line.
+/// Menus `open` may show, with [`options::MENUS`]. Anything else is refused
+/// with a console line.
 const SUPPORTED: [&str; 4] = ["main", "joinserver", "quit_popmenu", "error_popmenu"];
+
+fn supported(name: &str) -> bool {
+    SUPPORTED
+        .iter()
+        .chain(&options::MENUS)
+        .any(|s| s.eq_ignore_ascii_case(name))
+}
 
 /// The browser's "New Favorite" popup; vcod hands that job to the console.
 const FAVORITE_MENU: &str = "createfavorite_popmenu";
@@ -61,6 +71,27 @@ pub enum UiEffect {
     Sound(String),
     /// Open the console with this text in its field.
     ConsoleInput(String),
+    /// `execOnCvarIntValue` / `execOnCvarFloatValue`: run `command` when
+    /// `cvar` holds `value` (compared as integers when `int`). Read when the
+    /// effect runs, after the commands queued before it.
+    ExecOnCvar {
+        cvar: String,
+        value: f32,
+        int: bool,
+        command: String,
+    },
+}
+
+impl UiEffect {
+    /// Whether an `ExecOnCvar`'s test passes on `current`.
+    pub fn cvar_matches(current: &str, value: f32, int: bool) -> bool {
+        let cur = current.trim().parse::<f32>().unwrap_or(0.0);
+        if int {
+            cur as i32 == value as i32
+        } else {
+            cur == value
+        }
+    }
 }
 
 /// An item's runtime state: `show`/`hide` and `setitemcolor` change it.
@@ -79,8 +110,9 @@ pub struct Ui {
     fonts: Option<UiFonts>,
     /// Mouse position on the 640x480 grid.
     cursor: [f32; 2],
-    /// Item under the mouse in the top menu.
-    hover: Option<usize>,
+    /// Item under the mouse, as (menu, item): the top menu's, or one of an
+    /// open menu below it that no popup covers.
+    hover: Option<(usize, usize)>,
     pub browser: Browser,
     selected: Option<SocketAddrV4>,
     /// First list row drawn.
@@ -88,6 +120,7 @@ pub struct Ui {
     last_click: Option<(Instant, SocketAddrV4)>,
     /// `com_errorMessage`, which `error_popmenu` shows.
     error: String,
+    options: options::State,
     /// `cl_ingame`: the menus are up over a game, not the disconnected
     /// front end.
     in_game: bool,
@@ -97,7 +130,7 @@ impl Ui {
     pub fn new(fs: &Pk3Fs) -> Ui {
         let read = |p: &str| fs.read(p).map(|b| String::from_utf8_lossy(&b).into_owned());
         let mut menus = Vec::new();
-        for path in MENU_FILES {
+        for path in MENU_FILES.iter().chain(&options::MENU_FILES) {
             match read(path) {
                 Some(text) => menus.extend(ui_menu::parse_file(&text, &read)),
                 None => log::warn!("ui: no {path}"),
@@ -131,6 +164,7 @@ impl Ui {
             list_top: 0,
             last_click: None,
             error: String::new(),
+            options: options::State::default(),
             in_game: false,
         }
     }
@@ -159,6 +193,7 @@ impl Ui {
     pub fn close_all(&mut self) {
         self.open.clear();
         self.hover = None;
+        self.options.clear();
         self.browser.stop();
         self.in_game = false;
     }
@@ -187,8 +222,7 @@ impl Ui {
             out.push(UiEffect::ConsoleInput("connect ".into()));
             return;
         }
-        let supported = SUPPORTED.iter().any(|s| s.eq_ignore_ascii_case(name));
-        let Some(m) = self.find(name).filter(|_| supported) else {
+        let Some(m) = self.find(name).filter(|_| supported(name)) else {
             crate::console::log::print(&format!("The {name} menu is not in vcod yet."));
             return;
         };
@@ -206,6 +240,7 @@ impl Ui {
         }
         self.open.retain(|&o| o != m);
         self.hover = None;
+        self.options.forget(m);
         let script = self.menus[m].on_close.clone();
         self.run(m, &script, out);
     }
@@ -243,8 +278,18 @@ impl Ui {
                     }
                 }
                 "exec" => out.push(UiEffect::Command(arg(1).to_string())),
-                "setcvar" => out.push(UiEffect::Command(format!("set {} \"{}\"", arg(1), arg(2)))),
+                "setcvar" => self.set_cvar(arg(1), arg(2), out),
                 "uiscript" => self.ui_script(&cmd[1..], out),
+                // `execOnCvarIntValue <cvar> <n> <command>` and its float
+                // twin: the command runs when the cvar holds that value.
+                "execoncvarintvalue" | "execoncvarfloatvalue" => out.push(UiEffect::ExecOnCvar {
+                    cvar: arg(1).to_string(),
+                    value: arg(2).trim().parse().unwrap_or(0.0),
+                    int: cmd[0].eq_ignore_ascii_case("execoncvarintvalue"),
+                    command: arg(3).to_string(),
+                }),
+                // Fades are cosmetic; vcod shows the item as it is.
+                "fadein" | "fadeout" => {}
                 // `main`'s Esc and Back to Game; inert with no game up.
                 "ingameclose" if self.in_game => self.close_menu(arg(1), out),
                 _ => {}
@@ -273,6 +318,22 @@ impl Ui {
             }
             "quit" => out.push(UiEffect::Command("quit".into())),
             "clearerror" => self.error.clear(),
+            // vcod reads binds straight from the console, so there is
+            // nothing to load; one language is all vcod reads.
+            "loadcontrols" | "getlanguage" | "verifylanguage" => {}
+            // `update ui_mousePitch` (0x4000a377): m_pitch 0.022, negated
+            // when the toggle is on.
+            "update"
+                if args
+                    .get(1)
+                    .is_some_and(|a| a.eq_ignore_ascii_case("ui_mousePitch")) =>
+            {
+                if let Some(v) = self.options.pending("ui_mousePitch") {
+                    let on = v.trim().parse::<f32>().unwrap_or(0.0) != 0.0;
+                    let pitch = if on { "-0.022" } else { "0.022" };
+                    self.set_cvar("m_pitch", pitch, out);
+                }
+            }
             // Filters and the rate picker's refresh have nothing to update.
             "updatefilter" | "update" => {}
             other => log::debug!("ui: no UI script {other}"),
@@ -287,10 +348,7 @@ impl Ui {
             .into_iter()
             .filter(|c| c.len() > 1 && c[0].eq_ignore_ascii_case("open"))
             .map(|c| c[1].clone())
-            .find(|name| {
-                !name.eq_ignore_ascii_case(FAVORITE_MENU)
-                    && !SUPPORTED.iter().any(|s| s.eq_ignore_ascii_case(name))
-            })
+            .find(|name| !name.eq_ignore_ascii_case(FAVORITE_MENU) && !supported(name))
     }
 
     /// Whether `item` of `menu` is drawn and can take the mouse.
@@ -308,32 +366,50 @@ impl Ui {
     /// `mouseExit` and `mouseEnter` scripts as the hovered item changes.
     pub fn mouse_move(&mut self, x: f32, y: f32, w: f32, h: f32, shell: &Shell) -> Vec<UiEffect> {
         let mut out = Vec::new();
+        self.options.new_input();
         self.cursor = [x * 640.0 / w, y * 480.0 / h];
-        let Some(&top) = self.open.last() else {
-            return out;
-        };
-        let hit = (0..self.menus[top].items.len()).find(|&i| {
-            let item = &self.menus[top].items[i];
-            !item.decoration && self.shown(top, i, shell) && contains(item.rect, self.cursor)
-        });
+        self.drag_to(shell, &mut out);
+        let hit = self.hit(shell);
         if hit != self.hover {
-            if let Some(old) = self.hover {
-                let s = self.menus[top].items[old].mouse_exit.clone();
-                self.run(top, &s, &mut out);
+            if let Some((m, old)) = self.hover {
+                let s = self.menus[m].items[old].mouse_exit.clone();
+                self.run(m, &s, &mut out);
             }
             self.hover = hit;
-            if let Some(new) = hit {
-                let s = self.menus[top].items[new].mouse_enter.clone();
-                self.run(top, &s, &mut out);
+            if let Some((m, new)) = hit {
+                let s = self.menus[m].items[new].mouse_enter.clone();
+                self.run(m, &s, &mut out);
             }
         }
         out
     }
 
+    /// The item under the cursor: the top menu's first, then those of the
+    /// menus under it down to the first popup, as `Menus_HandleOOBClick`
+    /// passes a click outside the focused menu to the one it lands on.
+    fn hit(&self, shell: &Shell) -> Option<(usize, usize)> {
+        for &m in self.open.iter().rev() {
+            let found = (0..self.menus[m].items.len()).find(|&i| {
+                let item = &self.menus[m].items[i];
+                !item.decoration && self.shown(m, i, shell) && contains(item.rect, self.cursor)
+            });
+            if let Some(i) = found {
+                return Some((m, i));
+            }
+            if self.menus[m].popup {
+                break;
+            }
+        }
+        None
+    }
+
     /// A left click at the last mouse position.
     pub fn click(&mut self, now: Instant, shell: &Shell) -> Vec<UiEffect> {
         let mut out = Vec::new();
-        let (Some(&top), Some(i)) = (self.open.last(), self.hover) else {
+        self.options.new_input();
+        // A click ends an edit, then acts as a click.
+        self.options.editing = None;
+        let Some((top, i)) = self.hover else {
             return out;
         };
         let item = self.menus[top].items[i].clone();
@@ -360,20 +436,9 @@ impl Ui {
             crate::console::log::print(&format!("The {name} menu is not in vcod yet."));
             return out;
         }
-        if item.kind == ITEM_TYPE_MULTI
-            && !item.float_list.is_empty()
-            && let Some(cvar) = &item.cvar
-        {
-            // `Item_Multi_HandleKey`: step to the entry after the current one.
-            let cur = self.cvar(cvar, shell).and_then(|v| v.parse::<f32>().ok());
-            let at = item.float_list.iter().position(|(_, v)| Some(*v) == cur);
-            let next = at.map_or(0, |p| (p + 1) % item.float_list.len());
-            out.push(UiEffect::Command(format!(
-                "set {cvar} {}",
-                item.float_list[next].1
-            )));
+        if self.option_click(top, i, shell, &mut out) {
+            self.run(top, &item.action, &mut out);
         }
-        self.run(top, &item.action, &mut out);
         out
     }
 
@@ -382,6 +447,7 @@ impl Ui {
     /// not the menu's.
     pub fn key(&mut self, code: KeyCode) -> (bool, Vec<UiEffect>) {
         let mut out = Vec::new();
+        self.options.new_input();
         let Some(&top) = self.open.last() else {
             return (false, out);
         };
@@ -407,6 +473,7 @@ impl Ui {
                 self.selected = rows.get(next).copied();
                 self.keep_visible(next, top);
             }
+            KeyCode::Enter | KeyCode::NumpadEnter if self.enter_on_bind() => {}
             KeyCode::PageUp if has_list => self.scroll(true),
             KeyCode::PageDown if has_list => self.scroll(false),
             KeyCode::Enter | KeyCode::NumpadEnter if has_list && self.selected.is_some() => {
@@ -456,14 +523,13 @@ impl Ui {
         };
         for &m in &self.open {
             let menu = &self.menus[m];
-            let top = Some(&m) == self.open.last();
             for (i, item) in menu.items.iter().enumerate() {
                 if !self.shown(m, i, shell) {
                     continue;
                 }
                 let st = &self.state[m][i];
                 p.window(item, st, &mut out);
-                let focused = top && self.hover == Some(i);
+                let focused = self.hover == Some((m, i));
                 let color = if focused && !item.decoration && item.kind != ITEM_TYPE_LISTBOX {
                     menu.focus_color
                 } else {
@@ -489,15 +555,7 @@ impl Ui {
                     )),
                     UI_SERVERREFRESHDATE => Some(self.refresh_text(loc)),
                     UI_JOINGAMETYPE => Some(loc.translate("@EXE_ALL").into_owned()),
-                    _ if item.kind == ITEM_TYPE_MULTI => item.cvar.as_ref().map(|c| {
-                        let v = self.cvar(c, shell).unwrap_or_default();
-                        let f = v.parse::<f32>().ok();
-                        item.float_list
-                            .iter()
-                            .find(|(_, x)| Some(*x) == f)
-                            .map_or(v, |(l, _)| loc.translate(l).into_owned())
-                    }),
-                    _ => None,
+                    _ => self.option_value(m, i, loc, shell),
                 };
                 // `Item_SetTextExtents`: the label at `textalignx`, moved
                 // left by its width (right) or half of it (centre); an owner
@@ -507,7 +565,7 @@ impl Ui {
                 let label_w = p.width(&label, item.text_scale);
                 let value_w = value
                     .as_ref()
-                    .filter(|_| item.kind != ITEM_TYPE_MULTI)
+                    .filter(|_| item.kind == ITEM_TYPE_OWNERDRAW)
                     .map_or(0.0, |v| p.width(v, item.text_scale));
                 // An owner draw with no label draws at `textalignx` whatever
                 // its alignment (`UI_OwnerDraw`'s `rect.x + text_x`).
@@ -523,6 +581,9 @@ impl Ui {
                 }
                 if !label.is_empty() {
                     p.text(&label, left, y, item.text_scale, color, &mut out);
+                }
+                if item.kind == ITEM_TYPE_SLIDER {
+                    self.slider_quads(&p, (m, i), item, &label, color, shell, &mut out);
                 }
                 if let Some(v) = value {
                     let gap = if label.is_empty() { 0.0 } else { 8.0 };
@@ -600,12 +661,27 @@ impl Ui {
 impl Ui {
     /// The cvars a menu reads: `cl_ingame` is whether the menus are up over
     /// a game, `shortversion` is vcod's, `com_errorMessage` the last error,
-    /// the rest are the console's.
+    /// `ui_multiplayer` 1 (this is the MP UI), `cl_languagesavailable` 1
+    /// (vcod reads English only), `ui_mousePitch` on when `m_pitch` is
+    /// negative (as the UI sets it at load), anything this input set, then
+    /// the console's.
     fn cvar(&self, name: &str, shell: &Shell) -> Option<String> {
+        if let Some(v) = self.options.pending(name) {
+            return Some(v.to_string());
+        }
         match name.to_ascii_lowercase().as_str() {
             "cl_ingame" => Some(if self.in_game { "1" } else { "0" }.into()),
             "com_errormessage" => Some(self.error.clone()),
             "shortversion" => Some(concat!("vcod ", env!("CARGO_PKG_VERSION")).into()),
+            "ui_multiplayer" | "cl_languagesavailable" => Some("1".into()),
+            "ui_mousepitch" => Some(
+                if shell.cvar_f32("m_pitch") < 0.0 {
+                    "1"
+                } else {
+                    "0"
+                }
+                .into(),
+            ),
             _ => shell.cvar(name).map(str::to_string),
         }
     }
@@ -812,7 +888,7 @@ mod tests {
             .unwrap();
         let r = ui.menus[m].items[i].rect;
         ui.mouse_move(r[0] + 2.0, r[1] + 2.0, 640.0, 480.0, shell);
-        assert_eq!(ui.hover, Some(i), "{text}");
+        assert_eq!(ui.hover, Some((m, i)), "{text}");
         ui.click(Instant::now(), shell)
     }
 
@@ -902,7 +978,7 @@ mod tests {
         let shell = Shell::new();
         let mut out = Vec::new();
         ui.open_main(&mut out);
-        click_item(&mut ui, "main", "@MENU_OPTIONS", &shell);
+        click_item(&mut ui, "main", "@MENU_START_NEW_SERVER", &shell);
         assert_eq!(ui.open.len(), 1);
         assert_eq!(ui.menus[ui.open[0]].name, "main");
     }

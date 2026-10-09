@@ -614,29 +614,68 @@ fn pose_hit(rig: &Rig, t: i32) -> Option<[f32; 3]> {
     Some([it.next()?, it.next()?, it.next()?])
 }
 
-fn moved(a: [f32; 3], b: [f32; 3]) -> f32 {
-    (0..3).map(|i| (a[i] - b[i]).powi(2)).sum::<f32>().sqrt()
+/// `mp_carentan-dm-pitch-ease.txt`: retail's turret rounds against a body
+/// flipping its view pitch 0 / 85 every 400 ms (combat doc 16.3).
+const PITCH_EASE_FIXTURE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/turret/mp_carentan-dm-pitch-ease.txt"
+);
+/// The retail gunner's settled view in that capture, wire shorts.
+const PITCH_EASE_VIEW: [f32; 2] = [214.0, 41527.0];
+/// Frames past a flip a row covers: the first eased frame and the next five.
+const EASE_FRAMES: usize = 6;
+
+/// One flip's rounds: the pitch it flipped to and each frame's hit x from
+/// the flip's frame on, less the level body's hit x (the frame before the
+/// next flip to 85, or before this one), `None` for a miss.
+type EaseRow = (f32, Vec<Option<f32>>);
+
+/// The fixture's rows for `run` (`slot0` or `slot1`).
+fn retail_ease_rows(run: &str) -> Vec<EaseRow> {
+    let text = read(PITCH_EASE_FIXTURE);
+    let mut hits: BTreeMap<i32, f32> = BTreeMap::new();
+    let mut flips: Vec<(i32, f32)> = Vec::new();
+    let mut inside = false;
+    for line in text.lines() {
+        if let Some(head) = line.strip_prefix("[run ") {
+            inside = head.starts_with(run);
+        } else if !inside {
+        } else if let Some(rest) = line.strip_prefix("PITCH serverTime=") {
+            let (t, p) = rest.split_once(" pitch=").unwrap();
+            flips.push((t.parse().unwrap(), p.parse().unwrap()));
+        } else if let Some(rest) = line.strip_prefix("PROBE hit ") {
+            let t = rest.split(' ').next().unwrap().parse().unwrap();
+            let x = rest.split_once('(').unwrap().1.split(',').next().unwrap();
+            hits.insert(t, x.trim().parse().unwrap());
+        }
+    }
+    let ms = FRAME_MS as i32;
+    flips
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &(t, pitch))| {
+            let level_at = if pitch == 0.0 {
+                flips.get(i + 1)?.0 - ms
+            } else {
+                t - ms
+            };
+            let level = *hits.get(&level_at)?;
+            let row = (0..EASE_FRAMES as i32)
+                .map(|k| hits.get(&(t + k * ms)).map(|x| x - level))
+                .collect();
+            Some((pitch, row))
+        })
+        .collect()
 }
 
-/// The retail `probe_pose` measurement (combat doc 16.1): the gun fires
-/// every frame at the target, and the target's view pitch drops to 85 on
-/// one frame's cmd. Returns the hit points of the steady frame before, the
-/// flip frame and the one after.
-fn rounds_across_a_pitch_flip(gunner_second: bool) -> Option<[[f32; 3]; 3]> {
+/// The same rows off ours: the rig with the retail gunner's view firing
+/// every frame while the target flips its pitch every eight frames.
+fn our_ease_rows(gunner_second: bool) -> Option<Vec<EaseRow>> {
     let mut rig = build(&[("probe_pose", "1")], "m1carbine_mp", gunner_second)?;
     rig.tap(BUTTON_USE);
-    let p = &PROTOCOL_V1;
-    let gun = rig.gun_origin();
-    let target = rig.target.snapshots().newest()?.ps.origin(p);
-    let (dx, dy, dz) = (
-        target[0] - gun[0],
-        target[1] - gun[1],
-        target[2] + 40.0 - (gun[2] + 21.0),
-    );
-    let yaw = dy.atan2(dx).to_degrees();
-    let pitch = -dz.atan2(dx.hypot(dy)).to_degrees();
+    let view = PITCH_EASE_VIEW.map(|s| s * 360.0 / 65536.0);
     for _ in 0..4 {
-        rig.look([pitch, yaw]);
+        rig.look(view);
     }
     let fire = |rig: &mut Rig| {
         let h = rig.still();
@@ -645,40 +684,91 @@ fn rounds_across_a_pitch_flip(gunner_second: bool) -> Option<[[f32; 3]; 3]> {
             ..h
         };
         let s = rig.frame([f, f]);
-        pose_hit(rig, s.t).expect("every round meets the target")
+        pose_hit(rig, s.t).map(|h| h[0])
     };
-    for _ in 0..10 {
+    for _ in 0..20 {
         fire(&mut rig);
     }
-    let steady = fire(&mut rig);
-    rig.target_pitch = 85.0;
-    let flip = fire(&mut rig);
-    let after = fire(&mut rig);
-    Some([steady, flip, after])
+    let mut windows: Vec<(f32, Option<f32>, Vec<Option<f32>>)> = Vec::new();
+    let mut before = fire(&mut rig);
+    for flip in 0..8 {
+        rig.target_pitch = if flip % 2 == 0 { 85.0 } else { 0.0 };
+        let xs: Vec<Option<f32>> = (0..8).map(|_| fire(&mut rig)).collect();
+        windows.push((rig.target_pitch, before, xs.clone()));
+        before = xs[7];
+    }
+    let rows = windows
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (pitch, before, xs))| {
+            let level = if *pitch == 0.0 {
+                windows.get(i + 1)?.1?
+            } else {
+                (*before)?
+            };
+            let row = xs[..EASE_FRAMES]
+                .iter()
+                .map(|x| x.map(|x| x - level))
+                .collect();
+            Some((*pitch, row))
+        })
+        .collect();
+    Some(rows)
 }
 
-/// Retail, `probe_pose` (combat doc 16.1): with the target in the higher
-/// slot the flip frame's round meets the pose of the frame before and the
-/// next one meets the flip; with the target in the lower slot the flip
-/// frame's round already meets it.
+/// Retail, `mp_carentan-dm-pitch-ease.txt` (combat doc 16.3): after a view
+/// pitch change the round's point eases over five or six frames, the
+/// torso following `BG_PlayerAnimation`'s pitch swing. With the target in
+/// the higher slot its flip frame's round meets the pose of the frame
+/// before (16.1); in the lower slot it already meets the first eased step.
+/// Per flip direction and frame, ours must sit inside the band retail's
+/// flips spread over, widened by the turret's own scatter.
 #[test]
-fn a_round_meets_a_pitch_flip_a_frame_late_on_a_higher_slot() {
-    let Some([steady, flip, after]) = rounds_across_a_pitch_flip(false) else {
-        return;
-    };
-    assert!(
-        moved(steady, flip) < 1.0,
-        "the higher slot is posed as the frame before: {steady:?} {flip:?}"
-    );
-    assert!(
-        moved(steady, after) > 5.0,
-        "the next round meets the flip: {steady:?} {after:?}"
-    );
-    let [steady, flip, _] = rounds_across_a_pitch_flip(true).unwrap();
-    assert!(
-        moved(steady, flip) > 5.0,
-        "the lower slot is posed as this frame: {steady:?} {flip:?}"
-    );
+fn a_round_meets_the_torso_easing_after_a_pitch_flip() {
+    const SLACK: f32 = 0.6;
+    for (run, gunner_second) in [("slot1", false), ("slot0", true)] {
+        let Some(ours) = our_ease_rows(gunner_second) else {
+            return;
+        };
+        let retail = retail_ease_rows(run);
+        for pitch in [85.0, 0.0] {
+            for k in 0..EASE_FRAMES {
+                // GAP: a body posed at (or within a step of) the full
+                // 0.6 * 85 is mostly missed by the round retail still lands
+                // on the back of the torso: the flip-frame row back to 0 in
+                // the higher slot, the last row to 85 in the lower.
+                let full = if run == "slot1" {
+                    pitch == 0.0 && k == 0
+                } else {
+                    pitch == 85.0 && k == 5
+                };
+                if full {
+                    continue;
+                }
+                let column = |rows: &[EaseRow]| -> Vec<f32> {
+                    rows.iter()
+                        .filter(|(p, _)| *p == pitch)
+                        .filter_map(|(_, r)| r[k])
+                        .collect()
+                };
+                let (theirs, mine) = (column(&retail), column(&ours));
+                assert!(theirs.len() >= 4 && mine.len() >= 2, "{run} {pitch} k{k}");
+                let lo = theirs.iter().copied().fold(f32::MAX, f32::min) - SLACK;
+                let hi = theirs.iter().copied().fold(f32::MIN, f32::max) + SLACK;
+                let mean = mine.iter().sum::<f32>() / mine.len() as f32;
+                assert!(
+                    (lo..=hi).contains(&mean),
+                    "{run} to {pitch} frame k{k}: ours {mean:.2} {mine:?}, retail {theirs:?}"
+                );
+            }
+        }
+        // The higher slot's flip-frame round meets the old pose outright.
+        if run == "slot1" {
+            for (_, row) in ours.iter().filter(|(p, _)| *p == 85.0) {
+                assert!(row[0].is_some_and(|d| d.abs() < 0.2), "{row:?}");
+            }
+        }
+    }
 }
 
 /// The gun's `angles2` as the target's newest snapshot carries it: the

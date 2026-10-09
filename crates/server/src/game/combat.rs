@@ -620,8 +620,13 @@ pub struct BodyPose {
     pub torso: i32,
     pub legs_start_ms: i32,
     pub torso_start_ms: i32,
-    /// Degrees.
-    pub torso_pitch: f32,
+    /// `ps.viewangles[0]` as the end frame copied it, engine degrees.
+    pub view_pitch: f32,
+    /// The eased torso pitch the end frame's swing left (section 16.3).
+    pub swing: vcod_common::playerpose::PitchSwing,
+    pub prone: bool,
+    /// A mounted gunner runs no controllers.
+    pub mounted: bool,
     /// A fraction of full lean.
     pub lean: f32,
 }
@@ -639,8 +644,18 @@ impl BodyPose {
             legs_start_ms: self.legs_start_ms,
             torso_start_ms: self.torso_start_ms,
             now_ms,
-            torso_pitch: self.torso_pitch,
-            waist_pitch: 0.0,
+            // Up positive, the sign this server has always descended by.
+            group_pitch: -self.view_pitch,
+            // This server sends no `fTorsoPitch`/`fWaistPitch`.
+            aim: (!self.mounted).then(|| {
+                vcod_common::playerpose::AimPitch::new(
+                    self.view_pitch,
+                    &self.swing,
+                    self.prone,
+                    0.0,
+                    0.0,
+                )
+            }),
             lean: self.lean,
         }
     }
@@ -1382,7 +1397,7 @@ mod tests {
             &[],
             &mut 1u64,
         );
-        b.commit_pose();
+        b.commit_pose(50);
         let mut rigs = HitRigs::default();
         let mut ctx = BoneTraceCtx {
             fs: &fs,
@@ -1430,7 +1445,7 @@ mod tests {
         b.ps.stance = vcod_common::pmove::Stance::Crouch;
         let idle = vcod_common::net::msg::NULL_USERCMD;
         b.update_anims(&inputs, &idle, 0, &[], &mut 1u64);
-        b.commit_pose();
+        b.commit_pose(50);
         b.ps.stance = vcod_common::pmove::Stance::Stand;
         b.update_anims(&inputs, &idle, 50, &[], &mut 1u64);
         let body = b.hit_body(1).expect("a live body");
@@ -1463,7 +1478,7 @@ mod tests {
             trace_at(30.0, &body).is_some(),
             "the crouched body is there"
         );
-        b.commit_pose();
+        b.commit_pose(50);
         let stood = b.hit_body(1).expect("a live body");
         assert_eq!(
             trace_at(64.0, &stood),
@@ -2079,7 +2094,7 @@ mod tests {
             let back_feet = Vec3::new(bx, by, -31.99) + shift;
             let mut back = new_for_test(back_feet.into(), 225.0);
             back.assembly = stock_assembly();
-            back.commit_pose();
+            back.commit_pose(50);
             let mut bodies = vec![back.hit_body(1).expect("a live body")];
             if let Some(yaw) = yaw {
                 let mut front = new_for_test(front_feet.into(), yaw);
@@ -2097,7 +2112,7 @@ mod tests {
                     &[],
                     &mut 1u64,
                 );
-                front.commit_pose();
+                front.commit_pose(50);
                 bodies.push(front.hit_body(0).expect("a live body"));
             }
             let victim = BlastVictim {

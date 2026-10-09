@@ -1,0 +1,653 @@
+# Retail CoD 1.1d dedicated server: turret rounds against a body whose view pitch flips.
+# map mp_carentan, gametype probe_turret with probe_teleport 1 and probe_pose 1; 2026-10-09.
+# Three shells per run, the gsc probe first:
+#   COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=100 \
+#       tools/run_probe.sh client-probes/probe_turret mp_carentan +set probe_teleport 1 +set probe_pose 1
+#   vcod --net-probe 127.0.0.1:28970 --probe-team axis --probe-pitch-flip 85 --probe-secs 70
+#   vcod --net-probe 127.0.0.1:28970 --save-turret --probe-turret-target-ms 8000 --capture-tag <tag> --probe-secs 60
+# Run slot0 starts the target shell first (target client 0, gunner 1); run slot1 starts the
+# gunner first (gunner 0, target 1). The gunner holds the trigger 8 s at the target, its view
+# settled at shorts (214, 41527) (read off run slot1's turret capture, not committed); the
+# target holds world yaw 0 and view pitch 85 and 0 in alternate 400 ms windows.
+# PITCH lines are the target's: the serverTime of the first snapshot that read a new pitch.
+# PROBE hit lines are probe_turret's pose_damage: gettime(), the victim, location, damage, point.
+[run slot0 target=0]
+PITCH serverTime=9650 pitch=0.00
+PITCH serverTime=10050 pitch=85.00
+PITCH serverTime=10450 pitch=0.00
+PITCH serverTime=10850 pitch=85.00
+PITCH serverTime=11250 pitch=0.00
+PITCH serverTime=11650 pitch=85.00
+PITCH serverTime=12050 pitch=0.00
+PITCH serverTime=12450 pitch=85.00
+PITCH serverTime=12850 pitch=0.00
+PITCH serverTime=13250 pitch=85.00
+PITCH serverTime=13650 pitch=0.00
+PITCH serverTime=14050 pitch=85.00
+PITCH serverTime=14450 pitch=0.00
+PITCH serverTime=14850 pitch=85.00
+PITCH serverTime=15250 pitch=0.00
+PITCH serverTime=15650 pitch=85.00
+PITCH serverTime=16050 pitch=0.00
+PITCH serverTime=16450 pitch=85.00
+PITCH serverTime=16850 pitch=0.00
+PITCH serverTime=17250 pitch=85.00
+PITCH serverTime=17650 pitch=0.00
+PITCH serverTime=18050 pitch=85.00
+PITCH serverTime=18450 pitch=0.00
+PITCH serverTime=18850 pitch=85.00
+PITCH serverTime=19250 pitch=0.00
+PITCH serverTime=19650 pitch=85.00
+PITCH serverTime=20050 pitch=0.00
+PITCH serverTime=20450 pitch=85.00
+PITCH serverTime=20850 pitch=0.00
+PITCH serverTime=21250 pitch=85.00
+PITCH serverTime=21650 pitch=0.00
+PITCH serverTime=22050 pitch=85.00
+PITCH serverTime=22450 pitch=0.00
+PITCH serverTime=22850 pitch=85.00
+PITCH serverTime=23250 pitch=0.00
+PITCH serverTime=23650 pitch=85.00
+PITCH serverTime=24050 pitch=0.00
+PITCH serverTime=24450 pitch=85.00
+PITCH serverTime=24850 pitch=0.00
+PITCH serverTime=25250 pitch=85.00
+PITCH serverTime=25650 pitch=0.00
+PITCH serverTime=26050 pitch=85.00
+PITCH serverTime=26450 pitch=0.00
+PITCH serverTime=26850 pitch=85.00
+PITCH serverTime=27250 pitch=0.00
+PITCH serverTime=27650 pitch=85.00
+PITCH serverTime=28050 pitch=0.00
+PITCH serverTime=28450 pitch=85.00
+PITCH serverTime=28850 pitch=0.00
+PITCH serverTime=29250 pitch=85.00
+PITCH serverTime=29650 pitch=0.00
+PITCH serverTime=30050 pitch=85.00
+PITCH serverTime=30450 pitch=0.00
+PITCH serverTime=30850 pitch=85.00
+PITCH serverTime=31250 pitch=0.00
+PITCH serverTime=31650 pitch=85.00
+PITCH serverTime=32050 pitch=0.00
+PITCH serverTime=32450 pitch=85.00
+PITCH serverTime=32850 pitch=0.00
+PITCH serverTime=33250 pitch=85.00
+PITCH serverTime=33650 pitch=0.00
+PITCH serverTime=34050 pitch=85.00
+PITCH serverTime=34450 pitch=0.00
+PITCH serverTime=34850 pitch=85.00
+PITCH serverTime=35250 pitch=0.00
+PITCH serverTime=35650 pitch=85.00
+PITCH serverTime=36050 pitch=0.00
+PITCH serverTime=36450 pitch=85.00
+PITCH serverTime=36850 pitch=0.00
+PITCH serverTime=37250 pitch=85.00
+PITCH serverTime=37650 pitch=0.00
+PITCH serverTime=38050 pitch=85.00
+PITCH serverTime=38450 pitch=0.00
+PITCH serverTime=38850 pitch=85.00
+PITCH serverTime=39250 pitch=0.00
+PITCH serverTime=39650 pitch=85.00
+PITCH serverTime=40050 pitch=0.00
+PITCH serverTime=40450 pitch=85.00
+PITCH serverTime=40850 pitch=0.00
+PITCH serverTime=41250 pitch=85.00
+PITCH serverTime=41650 pitch=0.00
+PITCH serverTime=42050 pitch=85.00
+PITCH serverTime=42450 pitch=0.00
+PITCH serverTime=42850 pitch=85.00
+PITCH serverTime=43250 pitch=0.00
+PITCH serverTime=43650 pitch=85.00
+PITCH serverTime=44050 pitch=0.00
+PITCH serverTime=44450 pitch=85.00
+PITCH serverTime=44850 pitch=0.00
+PITCH serverTime=45250 pitch=85.00
+PITCH serverTime=45650 pitch=0.00
+PITCH serverTime=46050 pitch=85.00
+PITCH serverTime=46450 pitch=0.00
+PITCH serverTime=46850 pitch=85.00
+PITCH serverTime=47250 pitch=0.00
+PITCH serverTime=47650 pitch=85.00
+PITCH serverTime=48050 pitch=0.00
+PITCH serverTime=48450 pitch=85.00
+PITCH serverTime=48850 pitch=0.00
+PITCH serverTime=49250 pitch=85.00
+PITCH serverTime=49650 pitch=0.00
+PITCH serverTime=50050 pitch=85.00
+PITCH serverTime=50450 pitch=0.00
+PITCH serverTime=50850 pitch=85.00
+PITCH serverTime=51250 pitch=0.00
+PITCH serverTime=51650 pitch=85.00
+PITCH serverTime=52050 pitch=0.00
+PITCH serverTime=52450 pitch=85.00
+PITCH serverTime=52850 pitch=0.00
+PITCH serverTime=53250 pitch=85.00
+PITCH serverTime=53650 pitch=0.00
+PITCH serverTime=54050 pitch=85.00
+PITCH serverTime=54450 pitch=0.00
+PITCH serverTime=54850 pitch=85.00
+PITCH serverTime=55250 pitch=0.00
+PITCH serverTime=55650 pitch=85.00
+PITCH serverTime=56050 pitch=0.00
+PITCH serverTime=56450 pitch=85.00
+PITCH serverTime=56850 pitch=0.00
+PITCH serverTime=57250 pitch=85.00
+PITCH serverTime=57650 pitch=0.00
+PITCH serverTime=58050 pitch=85.00
+PITCH serverTime=58450 pitch=0.00
+PITCH serverTime=58850 pitch=85.00
+PITCH serverTime=59250 pitch=0.00
+PITCH serverTime=59650 pitch=85.00
+PITCH serverTime=60050 pitch=0.00
+PITCH serverTime=60450 pitch=85.00
+PITCH serverTime=60850 pitch=0.00
+PITCH serverTime=61250 pitch=85.00
+PITCH serverTime=61650 pitch=0.00
+PITCH serverTime=62050 pitch=85.00
+PITCH serverTime=62450 pitch=0.00
+PITCH serverTime=62850 pitch=85.00
+PITCH serverTime=63250 pitch=0.00
+PITCH serverTime=63650 pitch=85.00
+PITCH serverTime=64050 pitch=0.00
+PITCH serverTime=64450 pitch=85.00
+PITCH serverTime=64850 pitch=0.00
+PITCH serverTime=65250 pitch=85.00
+PITCH serverTime=65650 pitch=0.00
+PITCH serverTime=66050 pitch=85.00
+PITCH serverTime=66450 pitch=0.00
+PITCH serverTime=66850 pitch=85.00
+PITCH serverTime=67250 pitch=0.00
+PITCH serverTime=67650 pitch=85.00
+PITCH serverTime=68050 pitch=0.00
+PITCH serverTime=68450 pitch=85.00
+PITCH serverTime=68850 pitch=0.00
+PITCH serverTime=69250 pitch=85.00
+PITCH serverTime=69650 pitch=0.00
+PITCH serverTime=70050 pitch=85.00
+PITCH serverTime=70450 pitch=0.00
+PITCH serverTime=70850 pitch=85.00
+PITCH serverTime=71250 pitch=0.00
+PITCH serverTime=71650 pitch=85.00
+PITCH serverTime=72050 pitch=0.00
+PITCH serverTime=72450 pitch=85.00
+PITCH serverTime=72850 pitch=0.00
+PITCH serverTime=73250 pitch=85.00
+PITCH serverTime=73650 pitch=0.00
+PITCH serverTime=74050 pitch=85.00
+PITCH serverTime=74450 pitch=0.00
+PITCH serverTime=74850 pitch=85.00
+PITCH serverTime=75250 pitch=0.00
+PITCH serverTime=75650 pitch=85.00
+PITCH serverTime=76050 pitch=0.00
+PITCH serverTime=76450 pitch=85.00
+PITCH serverTime=76850 pitch=0.00
+PITCH serverTime=77250 pitch=85.00
+PITCH serverTime=77650 pitch=0.00
+PITCH serverTime=78050 pitch=85.00
+PITCH serverTime=78450 pitch=0.00
+PITCH serverTime=78850 pitch=85.00
+PROBE hit 25050 0 torso_upper 53 (1525.22, 1605.30, 22.87)
+PROBE hit 25100 0 torso_upper 53 (1518.65, 1612.64, 22.89)
+PROBE hit 25150 0 torso_upper 53 (1517.94, 1613.37, 22.90)
+PROBE hit 25200 0 torso_upper 53 (1517.79, 1613.37, 22.89)
+PROBE hit 25250 0 torso_upper 53 (1517.12, 1612.67, 22.87)
+PROBE hit 25300 0 torso_upper 53 (1513.92, 1609.10, 22.78)
+PROBE hit 25350 0 torso_upper 53 (1512.26, 1607.25, 22.72)
+PROBE hit 25400 0 torso_upper 53 (1511.48, 1606.38, 22.70)
+PROBE hit 25450 0 torso_upper 53 (1511.03, 1605.88, 22.69)
+PROBE hit 25500 0 torso_upper 53 (1510.79, 1605.62, 22.68)
+PROBE hit 25550 0 torso_upper 53 (1510.83, 1605.65, 22.68)
+PROBE hit 25600 0 torso_upper 53 (1510.88, 1605.72, 22.68)
+PROBE hit 25650 0 torso_upper 53 (1514.85, 1610.13, 22.80)
+PROBE hit 25700 0 torso_upper 53 (1518.13, 1613.79, 22.90)
+PROBE hit 25750 0 torso_upper 53 (1519.09, 1614.87, 22.93)
+PROBE hit 25800 0 torso_upper 53 (1518.39, 1614.08, 22.91)
+PROBE hit 25850 0 torso_upper 53 (1517.84, 1613.47, 22.90)
+PROBE hit 25900 0 torso_upper 53 (1517.31, 1612.88, 22.88)
+PROBE hit 25950 0 torso_upper 53 (1517.24, 1612.80, 22.88)
+PROBE hit 26000 0 torso_upper 53 (1517.21, 1612.77, 22.88)
+PROBE hit 26050 0 torso_upper 53 (1518.08, 1613.74, 22.90)
+PROBE hit 26100 0 torso_upper 53 (1515.11, 1610.42, 22.81)
+PROBE hit 26150 0 torso_upper 53 (1513.59, 1608.74, 22.77)
+PROBE hit 26200 0 torso_upper 53 (1512.78, 1607.83, 22.74)
+PROBE hit 26250 0 torso_upper 53 (1512.21, 1607.19, 22.72)
+PROBE hit 26300 0 torso_upper 53 (1511.69, 1606.61, 22.71)
+PROBE hit 26350 0 torso_upper 53 (1511.66, 1606.58, 22.71)
+PROBE hit 26400 0 torso_upper 53 (1511.67, 1606.60, 22.71)
+PROBE hit 26450 0 torso_upper 53 (1514.97, 1610.27, 22.81)
+PROBE hit 26500 0 torso_upper 53 (1517.72, 1613.33, 22.89)
+PROBE hit 26550 0 torso_upper 53 (1518.83, 1614.58, 22.93)
+PROBE hit 26600 0 torso_upper 53 (1518.11, 1613.78, 22.90)
+PROBE hit 26650 0 torso_upper 53 (1517.56, 1613.16, 22.89)
+PROBE hit 26700 0 torso_upper 53 (1517.04, 1612.58, 22.87)
+PROBE hit 26750 0 torso_upper 53 (1517.01, 1612.54, 22.87)
+PROBE hit 26800 0 torso_upper 53 (1517.02, 1612.56, 22.87)
+PROBE hit 26850 0 torso_upper 53 (1518.25, 1613.93, 22.91)
+PROBE hit 26900 0 torso_upper 53 (1515.15, 1610.47, 22.81)
+PROBE hit 26950 0 torso_upper 53 (1513.41, 1608.54, 22.76)
+PROBE hit 27000 0 torso_upper 53 (1512.42, 1607.42, 22.73)
+PROBE hit 27050 0 torso_upper 53 (1511.64, 1606.56, 22.71)
+PROBE hit 27100 0 torso_upper 53 (1511.02, 1605.87, 22.69)
+PROBE hit 27150 0 torso_upper 53 (1510.90, 1605.74, 22.68)
+PROBE hit 27200 0 torso_upper 53 (1510.79, 1605.61, 22.68)
+PROBE hit 27250 0 torso_upper 53 (1514.99, 1610.30, 22.81)
+PROBE hit 27300 0 torso_upper 53 (1519.09, 1614.87, 22.93)
+PROBE hit 27350 0 torso_upper 53 (1518.93, 1614.69, 22.93)
+PROBE hit 27400 0 torso_upper 53 (1518.30, 1613.98, 22.91)
+PROBE hit 27450 0 torso_upper 53 (1517.84, 1613.47, 22.90)
+PROBE hit 27500 0 torso_upper 53 (1517.45, 1613.03, 22.88)
+PROBE hit 27550 0 torso_upper 53 (1517.46, 1613.05, 22.88)
+PROBE hit 27600 0 torso_upper 53 (1517.51, 1613.10, 22.89)
+PROBE hit 27650 0 torso_upper 53 (1519.73, 1615.58, 22.95)
+PROBE hit 27700 0 torso_upper 53 (1518.58, 1614.30, 22.92)
+PROBE hit 28050 0 torso_upper 53 (1518.57, 1614.28, 22.92)
+PROBE hit 28100 0 torso_upper 53 (1519.71, 1615.56, 22.95)
+PROBE hit 28150 0 torso_upper 53 (1518.91, 1614.67, 22.93)
+PROBE hit 28200 0 torso_upper 53 (1518.42, 1614.12, 22.91)
+PROBE hit 28250 0 torso_upper 53 (1518.02, 1613.68, 22.90)
+PROBE hit 28300 0 torso_upper 53 (1517.64, 1613.25, 22.89)
+PROBE hit 28350 0 torso_upper 53 (1517.58, 1613.19, 22.89)
+PROBE hit 28400 0 torso_upper 53 (1517.56, 1613.15, 22.89)
+PROBE hit 28450 0 torso_upper 53 (1519.55, 1615.38, 22.95)
+PROBE hit 28500 0 torso_upper 53 (1518.50, 1614.21, 22.92)
+PROBE hit 28550 0 torso_upper 53 (1509.75, 1604.45, 22.65)
+PROBE hit 28850 0 torso_upper 53 (1513.07, 1608.15, 22.75)
+PROBE hit 28900 0 torso_upper 53 (1515.72, 1611.11, 22.83)
+PROBE hit 28950 0 torso_upper 53 (1518.07, 1613.73, 22.90)
+PROBE hit 29000 0 torso_upper 53 (1519.05, 1614.82, 22.93)
+PROBE hit 29050 0 torso_upper 53 (1518.50, 1614.21, 22.92)
+PROBE hit 29100 0 torso_upper 53 (1517.98, 1613.63, 22.90)
+PROBE hit 29150 0 torso_upper 53 (1517.95, 1613.59, 22.90)
+PROBE hit 29200 0 torso_upper 53 (1517.95, 1613.59, 22.90)
+PROBE hit 29250 0 torso_upper 53 (1515.84, 1611.24, 22.83)
+PROBE hit 29300 0 torso_upper 53 (1513.27, 1608.38, 22.76)
+PROBE hit 29350 0 torso_upper 53 (1512.30, 1607.30, 22.73)
+PROBE hit 29400 0 torso_upper 53 (1511.90, 1606.85, 22.71)
+PROBE hit 29450 0 torso_upper 53 (1511.68, 1606.60, 22.71)
+PROBE hit 29500 0 torso_upper 53 (1510.61, 1605.41, 22.67)
+PROBE hit 29550 0 torso_upper 53 (1510.61, 1605.41, 22.67)
+PROBE hit 29600 0 torso_upper 53 (1510.59, 1605.39, 22.67)
+PROBE hit 29650 0 torso_upper 53 (1513.25, 1608.35, 22.75)
+PROBE hit 29700 0 torso_upper 53 (1515.71, 1611.10, 22.83)
+PROBE hit 29750 0 torso_upper 53 (1517.99, 1613.64, 22.90)
+PROBE hit 29800 0 torso_upper 53 (1519.28, 1615.08, 22.94)
+PROBE hit 29850 0 torso_upper 53 (1518.71, 1614.44, 22.92)
+PROBE hit 29900 0 torso_upper 53 (1518.15, 1613.82, 22.91)
+PROBE hit 29950 0 torso_upper 53 (1518.11, 1613.77, 22.90)
+PROBE hit 30000 0 torso_upper 53 (1518.10, 1613.76, 22.90)
+PROBE hit 30050 0 torso_upper 53 (1515.99, 1611.41, 22.84)
+PROBE hit 30100 0 torso_upper 53 (1513.46, 1608.59, 22.76)
+PROBE hit 30150 0 torso_upper 53 (1512.45, 1607.46, 22.73)
+PROBE hit 30200 0 torso_upper 53 (1512.03, 1606.99, 22.72)
+PROBE hit 30250 0 torso_upper 53 (1511.78, 1606.72, 22.71)
+PROBE hit 30300 0 torso_upper 53 (1510.70, 1605.51, 22.68)
+PROBE hit 30350 0 torso_upper 53 (1510.68, 1605.48, 22.68)
+PROBE hit 30400 0 torso_upper 53 (1510.68, 1605.48, 22.68)
+PROBE hit 30450 0 torso_upper 53 (1513.32, 1608.43, 22.76)
+PROBE hit 30500 0 torso_upper 53 (1515.79, 1611.18, 22.83)
+PROBE hit 30550 0 torso_upper 53 (1518.09, 1613.75, 22.90)
+PROBE hit 30600 0 torso_upper 53 (1519.27, 1615.06, 22.94)
+PROBE hit 30650 0 torso_upper 53 (1518.70, 1614.43, 22.92)
+PROBE hit 30700 0 torso_upper 53 (1518.15, 1613.82, 22.91)
+PROBE hit 30750 0 torso_upper 53 (1518.11, 1613.77, 22.90)
+PROBE hit 30800 0 torso_upper 53 (1518.09, 1613.75, 22.90)
+PROBE hit 30850 0 torso_upper 53 (1516.02, 1611.44, 22.84)
+PROBE hit 30900 0 torso_upper 53 (1513.42, 1608.55, 22.76)
+PROBE hit 30950 0 torso_upper 53 (1512.40, 1607.41, 22.73)
+PROBE hit 31000 0 torso_upper 53 (1511.95, 1606.90, 22.71)
+PROBE hit 31050 0 torso_upper 53 (1511.68, 1606.60, 22.71)
+PROBE hit 31100 0 torso_upper 53 (1510.50, 1605.29, 22.67)
+PROBE hit 31150 0 torso_upper 53 (1510.43, 1605.21, 22.67)
+PROBE hit 31200 0 torso_upper 53 (1510.41, 1605.19, 22.67)
+PROBE hit 31250 0 torso_upper 53 (1513.16, 1608.25, 22.75)
+PROBE hit 31300 0 torso_upper 53 (1515.68, 1611.06, 22.83)
+PROBE hit 31350 0 torso_upper 53 (1518.08, 1613.74, 22.90)
+PROBE hit 31400 0 torso_upper 53 (1518.98, 1614.74, 22.93)
+PROBE hit 31450 0 torso_upper 53 (1518.34, 1614.03, 22.91)
+PROBE hit 31500 0 torso_upper 53 (1517.76, 1613.38, 22.89)
+PROBE hit 31550 0 torso_upper 53 (1517.65, 1613.26, 22.89)
+PROBE hit 31600 0 torso_upper 53 (1517.57, 1613.17, 22.89)
+PROBE hit 31650 0 torso_upper 53 (1518.32, 1614.01, 22.91)
+PROBE hit 31700 0 torso_upper 53 (1514.72, 1609.99, 22.80)
+PROBE hit 31750 0 torso_upper 53 (1512.90, 1607.97, 22.74)
+PROBE hit 31800 0 torso_upper 53 (1511.96, 1606.91, 22.72)
+PROBE hit 31850 0 torso_upper 53 (1511.29, 1606.16, 22.69)
+PROBE hit 31900 0 torso_upper 53 (1510.94, 1605.78, 22.68)
+PROBE hit 31950 0 torso_upper 53 (1511.01, 1605.85, 22.69)
+PROBE hit 32000 0 torso_upper 53 (1511.09, 1605.94, 22.69)
+PROBE hit 32050 0 torso_upper 53 (1514.87, 1610.16, 22.80)
+PROBE hit 32100 0 torso_upper 53 (1517.98, 1613.63, 22.90)
+PROBE hit 32150 0 torso_upper 53 (1519.11, 1614.88, 22.93)
+PROBE hit 32200 0 torso_upper 53 (1518.37, 1614.06, 22.91)
+PROBE hit 32250 0 torso_upper 53 (1517.79, 1613.41, 22.89)
+PROBE hit 32300 0 torso_upper 53 (1517.23, 1612.79, 22.88)
+PROBE hit 32350 0 torso_upper 53 (1517.16, 1612.71, 22.87)
+PROBE hit 32400 0 torso_upper 53 (1517.13, 1612.67, 22.87)
+PROBE hit 32450 0 torso_upper 53 (1518.06, 1613.71, 22.90)
+PROBE hit 32500 0 torso_upper 53 (1515.13, 1610.45, 22.81)
+PROBE hit 32550 0 torso_upper 53 (1513.63, 1608.78, 22.77)
+PROBE hit 32600 0 torso_upper 53 (1512.83, 1607.89, 22.74)
+PROBE hit 32650 0 torso_upper 53 (1512.25, 1607.24, 22.72)
+PROBE hit 32700 0 torso_upper 53 (1511.72, 1606.64, 22.71)
+PROBE hit 32750 0 torso_upper 53 (1511.68, 1606.60, 22.71)
+PROBE hit 32800 0 torso_upper 53 (1511.66, 1606.58, 22.71)
+PROBE hit 32850 0 torso_upper 53 (1514.97, 1610.27, 22.81)
+PROBE hit 32900 0 torso_upper 53 (1517.76, 1613.39, 22.89)
+PROBE hit 32950 0 torso_upper 53 (1518.83, 1614.58, 22.93)
+[run slot1 target=1]
+PITCH serverTime=11950 pitch=0.00
+PITCH serverTime=12350 pitch=85.00
+PITCH serverTime=12750 pitch=0.00
+PITCH serverTime=13150 pitch=85.00
+PITCH serverTime=13550 pitch=0.00
+PITCH serverTime=13950 pitch=85.00
+PITCH serverTime=14350 pitch=0.00
+PITCH serverTime=14750 pitch=85.00
+PITCH serverTime=15150 pitch=0.00
+PITCH serverTime=15550 pitch=85.00
+PITCH serverTime=15950 pitch=0.00
+PITCH serverTime=16350 pitch=85.00
+PITCH serverTime=16750 pitch=0.00
+PITCH serverTime=17150 pitch=85.00
+PITCH serverTime=17550 pitch=0.00
+PITCH serverTime=17950 pitch=85.00
+PITCH serverTime=18350 pitch=0.00
+PITCH serverTime=18750 pitch=85.00
+PITCH serverTime=19150 pitch=0.00
+PITCH serverTime=19550 pitch=85.00
+PITCH serverTime=19950 pitch=0.00
+PITCH serverTime=20350 pitch=85.00
+PITCH serverTime=20750 pitch=0.00
+PITCH serverTime=21150 pitch=85.00
+PITCH serverTime=21550 pitch=0.00
+PITCH serverTime=21950 pitch=85.00
+PITCH serverTime=22350 pitch=0.00
+PITCH serverTime=22750 pitch=85.00
+PITCH serverTime=23150 pitch=0.00
+PITCH serverTime=23550 pitch=85.00
+PITCH serverTime=23950 pitch=0.00
+PITCH serverTime=24350 pitch=85.00
+PITCH serverTime=24750 pitch=0.00
+PITCH serverTime=25150 pitch=85.00
+PITCH serverTime=25550 pitch=0.00
+PITCH serverTime=25950 pitch=85.00
+PITCH serverTime=26350 pitch=0.00
+PITCH serverTime=26750 pitch=85.00
+PITCH serverTime=27150 pitch=0.00
+PITCH serverTime=27550 pitch=85.00
+PITCH serverTime=27950 pitch=0.00
+PITCH serverTime=28350 pitch=85.00
+PITCH serverTime=28750 pitch=0.00
+PITCH serverTime=29150 pitch=85.00
+PITCH serverTime=29550 pitch=0.00
+PITCH serverTime=29950 pitch=85.00
+PITCH serverTime=30350 pitch=0.00
+PITCH serverTime=30750 pitch=85.00
+PITCH serverTime=31150 pitch=0.00
+PITCH serverTime=31550 pitch=85.00
+PITCH serverTime=31950 pitch=0.00
+PITCH serverTime=32350 pitch=85.00
+PITCH serverTime=32750 pitch=0.00
+PITCH serverTime=33150 pitch=85.00
+PITCH serverTime=33550 pitch=0.00
+PITCH serverTime=33950 pitch=85.00
+PITCH serverTime=34350 pitch=0.00
+PITCH serverTime=34750 pitch=85.00
+PITCH serverTime=35150 pitch=0.00
+PITCH serverTime=35550 pitch=85.00
+PITCH serverTime=35950 pitch=0.00
+PITCH serverTime=36350 pitch=85.00
+PITCH serverTime=36750 pitch=0.00
+PITCH serverTime=37150 pitch=85.00
+PITCH serverTime=37550 pitch=0.00
+PITCH serverTime=37950 pitch=85.00
+PITCH serverTime=38350 pitch=0.00
+PITCH serverTime=38750 pitch=85.00
+PITCH serverTime=39150 pitch=0.00
+PITCH serverTime=39550 pitch=85.00
+PITCH serverTime=39950 pitch=0.00
+PITCH serverTime=40350 pitch=85.00
+PITCH serverTime=40750 pitch=0.00
+PITCH serverTime=41150 pitch=85.00
+PITCH serverTime=41550 pitch=0.00
+PITCH serverTime=41950 pitch=85.00
+PITCH serverTime=42350 pitch=0.00
+PITCH serverTime=42750 pitch=85.00
+PITCH serverTime=43150 pitch=0.00
+PITCH serverTime=43550 pitch=85.00
+PITCH serverTime=43950 pitch=0.00
+PITCH serverTime=44350 pitch=85.00
+PITCH serverTime=44750 pitch=0.00
+PITCH serverTime=45150 pitch=85.00
+PITCH serverTime=45550 pitch=0.00
+PITCH serverTime=45950 pitch=85.00
+PITCH serverTime=46350 pitch=0.00
+PITCH serverTime=46750 pitch=85.00
+PITCH serverTime=47150 pitch=0.00
+PITCH serverTime=47550 pitch=85.00
+PITCH serverTime=47950 pitch=0.00
+PITCH serverTime=48350 pitch=85.00
+PITCH serverTime=48750 pitch=0.00
+PITCH serverTime=49150 pitch=85.00
+PITCH serverTime=49550 pitch=0.00
+PITCH serverTime=49950 pitch=85.00
+PITCH serverTime=50350 pitch=0.00
+PITCH serverTime=50750 pitch=85.00
+PITCH serverTime=51150 pitch=0.00
+PITCH serverTime=51550 pitch=85.00
+PITCH serverTime=51950 pitch=0.00
+PITCH serverTime=52350 pitch=85.00
+PITCH serverTime=52750 pitch=0.00
+PITCH serverTime=53150 pitch=85.00
+PITCH serverTime=53550 pitch=0.00
+PITCH serverTime=53950 pitch=85.00
+PITCH serverTime=54350 pitch=0.00
+PITCH serverTime=54750 pitch=85.00
+PITCH serverTime=55150 pitch=0.00
+PITCH serverTime=55550 pitch=85.00
+PITCH serverTime=55950 pitch=0.00
+PITCH serverTime=56350 pitch=85.00
+PITCH serverTime=56750 pitch=0.00
+PITCH serverTime=57150 pitch=85.00
+PITCH serverTime=57550 pitch=0.00
+PITCH serverTime=57950 pitch=85.00
+PITCH serverTime=58350 pitch=0.00
+PITCH serverTime=58750 pitch=85.00
+PITCH serverTime=59150 pitch=0.00
+PITCH serverTime=59550 pitch=85.00
+PITCH serverTime=59950 pitch=0.00
+PITCH serverTime=60350 pitch=85.00
+PITCH serverTime=60750 pitch=0.00
+PITCH serverTime=61150 pitch=85.00
+PITCH serverTime=61550 pitch=0.00
+PITCH serverTime=61950 pitch=85.00
+PITCH serverTime=62350 pitch=0.00
+PITCH serverTime=62750 pitch=85.00
+PITCH serverTime=63150 pitch=0.00
+PITCH serverTime=63550 pitch=85.00
+PITCH serverTime=63950 pitch=0.00
+PITCH serverTime=64350 pitch=85.00
+PITCH serverTime=64750 pitch=0.00
+PITCH serverTime=65150 pitch=85.00
+PITCH serverTime=65550 pitch=0.00
+PITCH serverTime=65950 pitch=85.00
+PITCH serverTime=66350 pitch=0.00
+PITCH serverTime=66750 pitch=85.00
+PITCH serverTime=67150 pitch=0.00
+PITCH serverTime=67550 pitch=85.00
+PITCH serverTime=67950 pitch=0.00
+PITCH serverTime=68350 pitch=85.00
+PITCH serverTime=68750 pitch=0.00
+PITCH serverTime=69150 pitch=85.00
+PITCH serverTime=69550 pitch=0.00
+PITCH serverTime=69950 pitch=85.00
+PITCH serverTime=70350 pitch=0.00
+PITCH serverTime=70750 pitch=85.00
+PITCH serverTime=71150 pitch=0.00
+PITCH serverTime=71550 pitch=85.00
+PITCH serverTime=71950 pitch=0.00
+PITCH serverTime=72350 pitch=85.00
+PITCH serverTime=72750 pitch=0.00
+PITCH serverTime=73150 pitch=85.00
+PITCH serverTime=73550 pitch=0.00
+PITCH serverTime=73950 pitch=85.00
+PITCH serverTime=74350 pitch=0.00
+PITCH serverTime=74750 pitch=85.00
+PITCH serverTime=75150 pitch=0.00
+PITCH serverTime=75550 pitch=85.00
+PITCH serverTime=75950 pitch=0.00
+PITCH serverTime=76350 pitch=85.00
+PITCH serverTime=76750 pitch=0.00
+PITCH serverTime=77150 pitch=85.00
+PITCH serverTime=77550 pitch=0.00
+PITCH serverTime=77950 pitch=85.00
+PITCH serverTime=78350 pitch=0.00
+PITCH serverTime=78750 pitch=85.00
+PITCH serverTime=79150 pitch=0.00
+PITCH serverTime=79550 pitch=85.00
+PITCH serverTime=79950 pitch=0.00
+PITCH serverTime=80350 pitch=85.00
+PITCH serverTime=80750 pitch=0.00
+PITCH serverTime=81150 pitch=85.00
+PROBE hit 23150 1 head 90 (1526.07, 1606.32, 22.90)
+PROBE hit 23200 1 torso_upper 53 (1519.55, 1613.66, 22.92)
+PROBE hit 23250 1 torso_upper 53 (1519.55, 1615.17, 22.95)
+PROBE hit 23300 1 torso_upper 53 (1519.12, 1614.86, 22.93)
+PROBE hit 23350 1 torso_upper 53 (1518.45, 1614.15, 22.91)
+PROBE hit 23400 1 torso_upper 53 (1517.96, 1613.60, 22.90)
+PROBE hit 23450 1 torso_upper 53 (1517.50, 1613.10, 22.89)
+PROBE hit 23500 1 torso_upper 53 (1517.51, 1613.10, 22.89)
+PROBE hit 23550 1 torso_upper 53 (1517.55, 1613.14, 22.89)
+PROBE hit 23600 1 torso_upper 53 (1519.96, 1615.84, 22.96)
+PROBE hit 23650 1 torso_upper 53 (1518.81, 1614.55, 22.93)
+PROBE hit 23700 1 torso_upper 53 (1513.57, 1608.71, 22.76)
+PROBE hit 24000 1 torso_upper 53 (1518.80, 1614.54, 22.93)
+PROBE hit 24050 1 torso_upper 53 (1519.95, 1615.83, 22.96)
+PROBE hit 24100 1 torso_upper 53 (1519.16, 1614.94, 22.94)
+PROBE hit 24150 1 torso_upper 53 (1518.67, 1614.40, 22.92)
+PROBE hit 24200 1 torso_upper 53 (1518.29, 1613.97, 22.91)
+PROBE hit 24250 1 torso_upper 53 (1517.91, 1613.55, 22.90)
+PROBE hit 24300 1 torso_upper 53 (1517.86, 1613.49, 22.90)
+PROBE hit 24350 1 torso_upper 53 (1517.83, 1613.46, 22.90)
+PROBE hit 24400 1 torso_upper 53 (1519.75, 1615.60, 22.95)
+PROBE hit 24450 1 torso_upper 53 (1518.64, 1614.37, 22.92)
+PROBE hit 24500 1 torso_upper 53 (1519.12, 1614.90, 22.94)
+PROBE hit 24800 1 torso_upper 53 (1514.09, 1609.29, 22.78)
+PROBE hit 24850 1 torso_upper 53 (1517.29, 1612.86, 22.88)
+PROBE hit 24900 1 torso_upper 53 (1519.73, 1615.58, 22.95)
+PROBE hit 24950 1 torso_upper 53 (1519.13, 1614.91, 22.94)
+PROBE hit 25000 1 torso_upper 53 (1518.62, 1614.35, 22.92)
+PROBE hit 25050 1 torso_upper 53 (1518.11, 1613.77, 22.90)
+PROBE hit 25100 1 torso_upper 53 (1518.07, 1613.73, 22.90)
+PROBE hit 25150 1 torso_upper 53 (1518.08, 1613.73, 22.90)
+PROBE hit 25200 1 torso_upper 53 (1516.41, 1611.88, 22.85)
+PROBE hit 25250 1 torso_upper 53 (1513.71, 1608.87, 22.77)
+PROBE hit 25300 1 torso_upper 53 (1512.68, 1607.72, 22.74)
+PROBE hit 25350 1 torso_upper 53 (1512.25, 1607.24, 22.72)
+PROBE hit 25400 1 torso_upper 53 (1511.99, 1606.95, 22.72)
+PROBE hit 25450 1 torso_upper 53 (1510.99, 1605.84, 22.69)
+PROBE hit 25500 1 torso_upper 53 (1511.01, 1605.86, 22.69)
+PROBE hit 25550 1 torso_upper 53 (1511.06, 1605.91, 22.69)
+PROBE hit 25600 1 torso_upper 53 (1513.74, 1608.90, 22.77)
+PROBE hit 25650 1 torso_upper 53 (1516.33, 1611.79, 22.85)
+PROBE hit 25700 1 torso_upper 53 (1518.63, 1614.35, 22.92)
+PROBE hit 25750 1 torso_upper 53 (1519.42, 1615.24, 22.94)
+PROBE hit 25800 1 torso_upper 53 (1518.85, 1614.60, 22.93)
+PROBE hit 25850 1 torso_upper 53 (1518.30, 1613.99, 22.91)
+PROBE hit 25900 1 torso_upper 53 (1518.26, 1613.94, 22.91)
+PROBE hit 25950 1 torso_upper 53 (1518.26, 1613.93, 22.91)
+PROBE hit 26000 1 torso_upper 53 (1516.51, 1611.99, 22.85)
+PROBE hit 26050 1 torso_upper 53 (1513.89, 1609.06, 22.77)
+PROBE hit 26100 1 torso_upper 53 (1512.87, 1607.93, 22.74)
+PROBE hit 26150 1 torso_upper 53 (1512.44, 1607.44, 22.73)
+PROBE hit 26200 1 torso_upper 53 (1512.16, 1607.14, 22.72)
+PROBE hit 26250 1 torso_upper 53 (1511.19, 1606.06, 22.69)
+PROBE hit 26300 1 torso_upper 53 (1511.16, 1606.03, 22.69)
+PROBE hit 26350 1 torso_upper 53 (1511.17, 1606.03, 22.69)
+PROBE hit 26400 1 torso_upper 53 (1513.76, 1608.92, 22.77)
+PROBE hit 26450 1 torso_upper 53 (1516.31, 1611.77, 22.85)
+PROBE hit 26500 1 torso_upper 53 (1518.65, 1614.37, 22.92)
+PROBE hit 26550 1 torso_upper 53 (1519.41, 1615.23, 22.94)
+PROBE hit 26600 1 torso_upper 53 (1518.84, 1614.59, 22.93)
+PROBE hit 26650 1 torso_upper 53 (1518.29, 1613.98, 22.91)
+PROBE hit 26700 1 torso_upper 53 (1518.25, 1613.93, 22.91)
+PROBE hit 26750 1 torso_upper 53 (1518.25, 1613.93, 22.91)
+PROBE hit 26800 1 torso_upper 53 (1516.61, 1612.10, 22.86)
+PROBE hit 26850 1 torso_upper 53 (1513.89, 1609.07, 22.77)
+PROBE hit 26900 1 torso_upper 53 (1512.84, 1607.90, 22.74)
+PROBE hit 26950 1 torso_upper 53 (1512.38, 1607.39, 22.73)
+PROBE hit 27000 1 torso_upper 53 (1512.10, 1607.07, 22.72)
+PROBE hit 27050 1 torso_upper 53 (1511.10, 1605.95, 22.69)
+PROBE hit 27100 1 torso_upper 53 (1511.03, 1605.88, 22.69)
+PROBE hit 27150 1 torso_upper 53 (1511.00, 1605.84, 22.69)
+PROBE hit 27200 1 torso_upper 53 (1513.65, 1608.80, 22.77)
+PROBE hit 27250 1 torso_upper 53 (1516.19, 1611.64, 22.85)
+PROBE hit 27300 1 torso_upper 53 (1518.62, 1614.34, 22.92)
+PROBE hit 27350 1 torso_upper 53 (1519.18, 1614.97, 22.94)
+PROBE hit 27400 1 torso_upper 53 (1518.62, 1614.35, 22.92)
+PROBE hit 27450 1 torso_upper 53 (1518.08, 1613.73, 22.90)
+PROBE hit 27500 1 torso_upper 53 (1517.99, 1613.64, 22.90)
+PROBE hit 27550 1 torso_upper 53 (1517.91, 1613.55, 22.90)
+PROBE hit 27600 1 torso_upper 53 (1517.80, 1613.42, 22.89)
+PROBE hit 27650 1 torso_upper 53 (1514.70, 1609.97, 22.80)
+PROBE hit 27700 1 torso_upper 53 (1512.98, 1608.06, 22.75)
+PROBE hit 27750 1 torso_upper 53 (1512.17, 1607.15, 22.72)
+PROBE hit 27800 1 torso_upper 53 (1511.58, 1606.49, 22.70)
+PROBE hit 27850 1 torso_upper 53 (1511.17, 1606.04, 22.69)
+PROBE hit 27900 1 torso_upper 53 (1511.20, 1606.07, 22.69)
+PROBE hit 27950 1 torso_upper 53 (1511.26, 1606.13, 22.69)
+PROBE hit 28000 1 torso_upper 53 (1515.59, 1610.96, 22.83)
+PROBE hit 28050 1 torso_upper 53 (1518.79, 1614.53, 22.93)
+PROBE hit 28100 1 torso_upper 53 (1519.25, 1615.04, 22.94)
+PROBE hit 28150 1 torso_upper 53 (1518.54, 1614.25, 22.92)
+PROBE hit 28200 1 torso_upper 53 (1517.99, 1613.64, 22.90)
+PROBE hit 28250 1 torso_upper 53 (1517.46, 1613.04, 22.88)
+PROBE hit 28300 1 torso_upper 53 (1517.39, 1612.96, 22.88)
+PROBE hit 28350 1 torso_upper 53 (1517.35, 1612.93, 22.88)
+PROBE hit 28400 1 torso_upper 53 (1518.70, 1614.43, 22.92)
+PROBE hit 28450 1 torso_upper 53 (1515.76, 1611.15, 22.83)
+PROBE hit 28500 1 torso_upper 53 (1514.20, 1609.41, 22.78)
+PROBE hit 28550 1 torso_upper 53 (1513.36, 1608.48, 22.76)
+PROBE hit 28600 1 torso_upper 53 (1512.76, 1607.81, 22.74)
+PROBE hit 28650 1 torso_upper 53 (1512.23, 1607.21, 22.72)
+PROBE hit 28700 1 torso_upper 53 (1512.20, 1607.18, 22.72)
+PROBE hit 28750 1 torso_upper 53 (1512.21, 1607.19, 22.72)
+PROBE hit 28800 1 torso_upper 53 (1515.60, 1610.97, 22.83)
+PROBE hit 28850 1 torso_upper 53 (1518.30, 1613.99, 22.91)
+PROBE hit 28900 1 torso_upper 53 (1518.98, 1614.75, 22.93)
+PROBE hit 28950 1 torso_upper 53 (1518.26, 1613.94, 22.91)
+PROBE hit 29000 1 torso_upper 53 (1517.71, 1613.32, 22.89)
+PROBE hit 29050 1 torso_upper 53 (1517.18, 1612.74, 22.88)
+PROBE hit 29100 1 torso_upper 53 (1517.15, 1612.70, 22.87)
+PROBE hit 29150 1 torso_upper 53 (1517.17, 1612.72, 22.88)
+PROBE hit 29200 1 torso_upper 53 (1518.88, 1614.63, 22.93)
+PROBE hit 29250 1 torso_upper 53 (1515.83, 1611.23, 22.83)
+PROBE hit 29300 1 torso_upper 53 (1514.06, 1609.26, 22.78)
+PROBE hit 29350 1 torso_upper 53 (1513.04, 1608.12, 22.75)
+PROBE hit 29400 1 torso_upper 53 (1512.25, 1607.24, 22.72)
+PROBE hit 29450 1 torso_upper 53 (1511.48, 1606.38, 22.70)
+PROBE hit 29500 1 torso_upper 53 (1511.31, 1606.18, 22.70)
+PROBE hit 29550 1 torso_upper 53 (1511.17, 1606.03, 22.69)
+PROBE hit 29600 1 torso_upper 53 (1515.82, 1611.22, 22.83)
+PROBE hit 29650 1 torso_upper 53 (1519.88, 1615.75, 22.96)
+PROBE hit 29700 1 torso_upper 53 (1519.10, 1614.88, 22.93)
+PROBE hit 29750 1 torso_upper 53 (1518.47, 1614.17, 22.92)
+PROBE hit 29800 1 torso_upper 53 (1518.01, 1613.66, 22.90)
+PROBE hit 29850 1 torso_upper 53 (1517.62, 1613.23, 22.89)
+PROBE hit 29900 1 torso_upper 53 (1517.64, 1613.25, 22.89)
+PROBE hit 29950 1 torso_upper 53 (1517.69, 1613.30, 22.89)
+PROBE hit 30000 1 torso_upper 53 (1519.92, 1615.80, 22.96)
+PROBE hit 30050 1 torso_upper 53 (1518.78, 1614.52, 22.92)
+PROBE hit 30100 1 torso_upper 53 (1519.27, 1615.07, 22.94)
+PROBE hit 30400 1 torso_upper 53 (1518.78, 1614.52, 22.92)
+PROBE hit 30450 1 torso_upper 53 (1519.92, 1615.79, 22.96)
+PROBE hit 30500 1 torso_upper 53 (1519.12, 1614.89, 22.94)
+PROBE hit 30550 1 torso_upper 53 (1518.62, 1614.34, 22.92)
+PROBE hit 30600 1 torso_upper 53 (1518.22, 1613.90, 22.91)
+PROBE hit 30650 1 torso_upper 53 (1517.83, 1613.46, 22.90)
+PROBE hit 30700 1 torso_upper 53 (1517.77, 1613.40, 22.89)
+PROBE hit 30750 1 torso_upper 53 (1517.75, 1613.37, 22.89)
+PROBE hit 30800 1 torso_upper 53 (1519.74, 1615.60, 22.95)
+PROBE hit 30850 1 torso_upper 53 (1518.69, 1614.42, 22.92)
+PROBE hit 30900 1 torso_upper 53 (1511.68, 1606.60, 22.71)
+PROBE hit 30950 1 torso_upper 53 (1510.10, 1604.84, 22.66)

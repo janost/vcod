@@ -898,8 +898,8 @@ puts the type back each frame; ours produced the same rows and wire before
 this round, so `crate::game::item::run_items` is unchanged.
 
 vcod: `crate::game::link::enable` is `enableLinkTo` (the link bit is
-`link::has_link_bit`), and the touch pass gives an enabled
-`trigger_multiple` no `wait` gate. `linkTo` takes a turret; the record
+`link::has_link_bit`), and the touch pass never spends an enabled
+`trigger_multiple` (section 17). `linkTo` takes a turret; the record
 reads the gun's own pose, so the barrel and gunner follow, and
 `TurretRecord::angle_set` keeps `apos.trType` 0 after the unlink.
 `link::model_changed`, from the `setModel` builtin on an entity that is not
@@ -908,3 +908,69 @@ replays the probe: every row matches to 0.06 (the player stood 0.04 higher
 on ours), the notify frames match, and the turret's and the mid-air item's
 wire types and bases match per snapshot. Not done: `attach` and `detach`
 re-resolve tags on retail, but ours resolves a tag only in the main model.
+
+## 17. `Touch_Multi`'s `wait`: a free, never a gate
+
+The evidence is a paired capture against the retail 1.1d Linux server,
+2026-10-09: `crates/server/tests/fixtures/movers/mp_carentan-dm-trigwait.txt`
+from `crates/gsc/tests/fixtures/semantics/client-probes/probe_trigwait.gsc`.
+No stock MP map gives a trigger a `wait` key and `wait` is a gsc keyword, so a
+script cannot write the field; the capture ran on mp_carentan with four
+same-length entity lump edits (the fixture's header), served from a pk3 in
+the server's homepath. Addresses are `game.mp.i386.so`.
+
+VERIFIED: `SP_trigger_multiple` (0x64c50) reads `wait` into `ent+0x268` with
+the default `"0.5"` (strings at 0x79944 and 0x79940, `G_SpawnFloat` at
+0x64c6e) and `random` into `ent+0x26c` with the default `"0"` (0x7994b,
+0x79949), and installs `Touch_Multi` and `Use_Multi` (0x64cdd, 0x64ce7).
+VERIFIED: `SP_trigger_once` (0x65c0c) stores the float at `.rodata` 0x79ad8,
+-1.0, into `ent+0x268` (0x65c16) and installs the same two functions.
+
+VERIFIED, `Touch_Multi` (0x65a18): with the script system active it raises
+the `"trigger"` notify, at once through `Scr_Notify` (0x65a5a) when the
+pending queue at `level+0x29ec` holds 256 entries and otherwise queued there
+(0x65a68..0x65a96), before any test of `wait`. It then stores the toucher at
+`ent+0x25c` (0x65a9c) and returns when the think is `Think_GeneralLink`
+(0x65aa2) or `nextthink` is non-zero (0x65ab2). Otherwise, with `wait` above
+0 (the compare at 0x65abf..0x65acf) it installs `multi_wait` and sets
+`nextthink` to `level.time + (wait + random * crandom) * 1000`
+(0x65ad1..0x65b28); with `wait` not above 0 it clears the touch function
+`ent+0x20c` (0x65b30), sets `nextthink = level.time + 100` (0x65b3f) and
+installs `G_FreeEntity` (0x65b48). VERIFIED, `multi_wait` (0x65870) only
+zeroes `nextthink`. `multi_trigger` (0x65884) and `Use_Multi` (0x6594c) carry
+the same arm without the notify. VERIFIED, `G_TouchTriggers` (0x3fa22..0x3fa8b)
+raises the two `"touch"` notifies on every contact and calls the touch
+function only when `ent+0x20c` is non-null. INFERRED, off those branches: a
+positive `wait` gates nothing a script sees, since `nextthink` gates only the
+arm itself; a `wait` not above 0, which every `trigger_once` has, lets the
+first touch notify and then frees the trigger two frames on; a trigger whose
+think is `Think_GeneralLink` is never spent.
+
+VERIFIED, off the capture (the client sent about three cmds a frame):
+
+- bombzone_A, `"wait" "5"`: three notifies a frame (two to four on a few
+  frames) for all 20 frames it sat on the player.
+- bombzone_B, `"wait" "0"`: one notify, on the frame after the origin write
+  (offset 50). `isdefined` reads 1 at offsets 0, 50 and 100 and 0 from 150,
+  and the `trigger_multiple` + `trigger_once` count drops from 4 to 3 on the
+  same frame.
+- auto1, `"wait" "-1"` after `enableLinkTo` with no parent: notifies on every
+  frame, never freed.
+- auto2 as a `trigger_once`: one notify at offset 50, freed at 150 like
+  bombzone_B.
+
+INFERRED, off the notify landing at offset 50: the touch ran in the cmds
+between the frames at offsets 0 and 50, at `level.time` = offset 0, so its
+`nextthink` is offset 100 and `G_FreeEntity` ran in that frame's entity pass
+(`G_RunEntity`, 0x502bc, called from `G_RunFrame` at 0x50955) after the
+frame's timed waits had already read the trigger as defined: `G_RunFrame`
+calls `Scr_SetTime` (0x5070c) ahead of that entity loop.
+
+vcod: `crate::game::trigger::Triggers::fire` returns `Fire::Spent` for the
+touch that spends a `trigger_multiple` with `wait` not above 0 or any
+`trigger_once`, and the touch pass schedules the free `SPENT_FREE_MS` out.
+`crate::game::spawn` stores 500 for a `trigger_multiple` with no `wait` key
+and -1000 for every `trigger_once`. `random` is read by nothing.
+`crates/server/tests/linkto_ab.rs` (`touch_multi_spends_a_trigger_like_retail`)
+replays the capture on the same patched lump: the entity numbers, every
+frame's `isdefined` and count, and the notify frames all match.

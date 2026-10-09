@@ -674,8 +674,25 @@ the two usage dumps.
   the second one a configstring 1 update followed while `sv_cheats` queried
   0. `devmap` on the running map took the restart path, printed the game
   module's `==== RestartGame ====` banner block, and was followed by a
-  configstring 1 update. VERIFIED. vcod prints no `G_InitGame` banner on a
-  restart.
+  configstring 1 update. VERIFIED.
+- The restart banner. `map_restart`, `map_restart 1`, `map_restart 5`,
+  `map <the running map>` and `devmap <the running map>` over rcon each
+  answered with one packet, the same 165 bytes with and without a client
+  connected: `print\n==== RestartGame ====\n------- Game Initialization
+  -------\ngamename: main\ngamedate: Nov 13 2003\n0 teams with 0
+  entities\n-----------------------------------\n`. VERIFIED (2026-10-09,
+  mp_carentan dm). `==== RestartGame ====` is `G_ShutdownGame`'s (0x4feaa,
+  string 0x75665); the next three lines are `G_InitGame`'s (0x4fb2e,
+  0x4fb40, 0x4fb55), with `main` (0x75430) and `Nov 13 2003` (0x7541b)
+  compiled in; the team line is `G_FindTeams`' (0x4faff, format 0x75480),
+  and the closing dashes are `G_InitGame`'s (0x4fe40, string 0x75640),
+  printed after `G_SpawnEntitiesFromString` and ahead of `Scr_InitSystem`
+  and the gametype load. VERIFIED. `fast_restart` answered an empty
+  `print\n`. VERIFIED. vcod prints the block as one string ahead of the
+  script load (`RESTART_GAME_BANNER`), with the team count fixed at 0: no
+  stock MP map has a `team` key. A fresh `map` load's reply on retail is the
+  engine's server and filesystem init around the same `G_InitGame` block;
+  vcod prints nothing for it.
 - `quit` gets no rcon reply: `Com_Quit_f` exits inside the redirect, before
   it is flushed. VERIFIED (no packet came back).
 

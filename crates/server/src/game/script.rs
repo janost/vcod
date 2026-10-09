@@ -122,10 +122,6 @@ pub struct ScriptRuntime {
     pub(crate) host: GameHost,
     entry: String,
     gametype_entry: String,
-    /// Draws the `wait`/`random` gate's random half (`Triggers::fire`), one
-    /// xorshift64* state per map load so a rerun of the same seed reproduces
-    /// the same firing pattern.
-    rng: u64,
 }
 
 impl ScriptRuntime {
@@ -144,7 +140,6 @@ impl ScriptRuntime {
         world: Option<Rc<crate::world::World>>,
         weapons: Rc<crate::weapons::WeaponTable>,
         now_ms: i32,
-        rng_seed: u64,
         carry: Carry,
     ) -> anyhow::Result<ScriptRuntime> {
         Self::load_from(
@@ -157,7 +152,6 @@ impl ScriptRuntime {
             world,
             weapons,
             now_ms,
-            rng_seed,
             carry,
         )
     }
@@ -177,7 +171,6 @@ impl ScriptRuntime {
         world: Option<Rc<crate::world::World>>,
         weapons: Rc<crate::weapons::WeaponTable>,
         now_ms: i32,
-        rng_seed: u64,
         carry: Carry,
     ) -> anyhow::Result<ScriptRuntime> {
         let entry = format!("maps/mp/{map}");
@@ -252,7 +245,6 @@ impl ScriptRuntime {
             host,
             entry,
             gametype_entry,
-            rng: rng_seed,
         };
         rt.start_bootstrap(now_ms)?;
         Ok(rt)
@@ -509,23 +501,17 @@ impl ScriptRuntime {
             }
             // `Touch_Multi` skips its wait arm on a trigger whose think is
             // `enableLinkTo`'s `Think_GeneralLink` (0x65aa2).
-            let linked_multi = self.host.links.is_enabled(id)
-                && self
-                    .host
-                    .triggers
-                    .get(id)
-                    .is_some_and(|t| t.kind == crate::game::trigger::TriggerKind::Multiple);
-            let rng = &mut self.rng;
-            let fired = linked_multi
-                || self.host.triggers.fire(id, now_ms, &mut |n| {
-                    if n <= 0 {
-                        0
-                    } else {
-                        crate::game::host::rand_int(rng) % n
-                    }
-                });
-            if !fired {
+            let linked = self.host.links.is_enabled(id);
+            let fire = self.host.triggers.fire(id, now_ms, linked);
+            if !fire.fired() {
                 continue;
+            }
+            if fire == crate::game::trigger::Fire::Spent {
+                self.host.ents.schedule(
+                    id,
+                    crate::game::entity::ThinkFn::Free,
+                    now_ms + crate::game::trigger::SPENT_FREE_MS,
+                );
             }
             let hurt = self
                 .host
@@ -1014,7 +1000,7 @@ impl ScriptRuntime {
             .with_cx(|cx| crate::game::trigger::aim_trace(host, cx, slot, eye, aim, rifle, now_ms));
         self.host.client_lookat[slot] = hit;
         if let Some(id) = hit
-            && self.host.triggers.fire(id, now_ms, &mut |_| 0)
+            && self.host.triggers.fire(id, now_ms, false).fired()
         {
             self.host.trigger_fires.push((id, client));
         }
@@ -1901,6 +1887,7 @@ impl ScriptRuntime {
         for id in &frame.freed {
             host.free_entity(*id);
         }
+        host.missiles.sync_origins(&mut host.ents);
         frame
     }
 
@@ -2335,9 +2322,6 @@ impl ScriptRuntime {
             host,
             entry: path.to_string(),
             gametype_entry: String::new(),
-            // Fixed, not drawn: a test's `fire` gate must reproduce the same
-            // draw on every run.
-            rng: 0x5eed_5eed_5eed_5eed,
         };
         let main = rt.vm.func_ref(&rt.entry, "main");
         rt.vm.start_thread(&mut rt.host, 0, main, None, vec![]);
@@ -2479,10 +2463,6 @@ mod tests {
         assert_eq!(rt.host.client_ammo[0].clip[3], 2, "slot 1's op leaked");
     }
 
-    /// Any nonzero value works (`xorshift`'s only constraint); these tests
-    /// never touch a trigger, so the draw itself is never observed.
-    const TEST_RNG_SEED: u64 = 1;
-
     /// The packet pass runs the threads the netcode's events woke and
     /// nothing else: it carries no deadline wake of its own, so a `wait 0`
     /// waits for the frame's pass. There it comes due at once and resumes
@@ -2545,7 +2525,6 @@ mod tests {
             None,
             Rc::new(crate::weapons::WeaponTable::empty()),
             0,
-            TEST_RNG_SEED,
             Carry::default(),
         );
         assert!(rt.is_ok(), "{:?}", rt.err());
@@ -2578,7 +2557,6 @@ mod tests {
             Some(world.clone()),
             Rc::new(crate::weapons::WeaponTable::empty()),
             0,
-            TEST_RNG_SEED,
             Carry::default(),
         )
         .expect("load mp_depot on sd");
@@ -2609,7 +2587,6 @@ mod tests {
             Some(world),
             Rc::new(crate::weapons::WeaponTable::empty()),
             0,
-            TEST_RNG_SEED,
             Carry::default(),
         )
         .expect("load mp_carentan on sd");
@@ -2658,7 +2635,6 @@ mod tests {
             None,
             Rc::new(crate::weapons::WeaponTable::empty()),
             0,
-            TEST_RNG_SEED,
             Carry::default(),
         )
         .expect("load mp_pavlov on dm");
@@ -2702,7 +2678,6 @@ mod tests {
             None,
             Rc::new(crate::weapons::WeaponTable::empty()),
             0,
-            TEST_RNG_SEED,
             Carry::default(),
         );
         let Err(err) = err else {
@@ -3011,8 +2986,7 @@ mod tests {
             zone,
             crate::game::trigger::TriggerKind::Multiple,
             crate::game::trigger::TriggerShape::boxed([-64.0, -64.0, 0.0], [64.0, 64.0, 64.0]),
-            0,
-            0,
+            crate::game::trigger::MULTIPLE_DEFAULT_WAIT_MS,
         );
         rt.link_trigger_for_test(zone);
         rt.start_thread_for_test(zone, "trigger_think", 0);
@@ -3089,8 +3063,7 @@ mod tests {
             zone,
             crate::game::trigger::TriggerKind::Multiple,
             crate::game::trigger::TriggerShape::boxed([-64.0, -64.0, 0.0], [64.0, 64.0, 64.0]),
-            0,
-            0,
+            crate::game::trigger::MULTIPLE_DEFAULT_WAIT_MS,
         );
         rt.link_trigger_for_test(zone);
         rt.start_thread_for_test(zone, "trigger_think", 0);
@@ -3117,7 +3090,6 @@ mod tests {
             zone,
             crate::game::trigger::TriggerKind::LookAt,
             crate::game::trigger::TriggerShape::boxed([-8.0, -8.0, 0.0], [8.0, 8.0, 16.0]),
-            0,
             0,
         );
         rt.link_trigger_for_test(zone);
@@ -3148,7 +3120,6 @@ mod tests {
             zone,
             crate::game::trigger::TriggerKind::LookAt,
             crate::game::trigger::TriggerShape::boxed([-20.0, -20.0, 40.0], [20.0, 20.0, 80.0]),
-            0,
             0,
         );
         rt.link_trigger_for_test(zone);
@@ -3205,7 +3176,6 @@ mod tests {
             crate::game::trigger::TriggerKind::LookAt,
             crate::game::trigger::TriggerShape::boxed([-20.0, -20.0, 40.0], [20.0, 20.0, 80.0]),
             0,
-            0,
         );
         rt.link_trigger_for_test(zone);
         rt.set_level_field_for_test("zone", Value::Entity(zone));
@@ -3259,8 +3229,7 @@ mod tests {
             zone,
             crate::game::trigger::TriggerKind::Multiple,
             crate::game::trigger::TriggerShape::boxed([-64.0, -64.0, 0.0], [64.0, 64.0, 64.0]),
-            0,
-            0,
+            crate::game::trigger::MULTIPLE_DEFAULT_WAIT_MS,
         );
         rt.link_trigger_for_test(zone);
         rt.start_thread_for_test(zone, "trigger_think", 0);
@@ -3314,8 +3283,7 @@ mod tests {
             zone,
             crate::game::trigger::TriggerKind::Multiple,
             crate::game::trigger::TriggerShape::boxed([-64.0, -64.0, 0.0], [64.0, 64.0, 64.0]),
-            0,
-            0,
+            crate::game::trigger::MULTIPLE_DEFAULT_WAIT_MS,
         );
         rt.link_trigger_for_test(zone);
         rt.start_thread_for_test(zone, "trigger_think", 0);
@@ -3423,7 +3391,6 @@ mod tests {
             pickup,
             crate::game::trigger::TriggerKind::Use,
             crate::game::trigger::TriggerShape::boxed([-8.0, -8.0, -8.0], [8.0, 8.0, 8.0]),
-            0,
             0,
         );
         rt.link_trigger_for_test(pickup);

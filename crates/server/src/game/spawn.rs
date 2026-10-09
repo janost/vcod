@@ -264,12 +264,12 @@ fn trigger_hurt_sound(block: &std::collections::HashMap<String, String>) -> Stri
 
 /// A trigger's shape is its submodel's (`"model" "*N"`) -- the box for the
 /// cheap reject and the model number the exact test takes its brushes from --
-/// and its `wait` and `random` keys are seconds on the wire. A trigger with no
+/// and its `wait` key is seconds on the wire. A trigger with no
 /// brush model, or one naming a model the BSP has no bounds for, is registered
 /// with a zero box and no model: it then touches nothing, which is what
 /// retail's unset `r.mins`/`r.maxs` do.
 ///
-/// A `trigger_hurt` takes neither key: its cadence, damage and damage flags
+/// A `trigger_hurt` takes no `wait`: its cadence, damage and damage flags
 /// come from `dmg` and `spawnflags` instead, which `Triggers::register_hurt`
 /// documents.
 fn register_trigger(
@@ -291,11 +291,11 @@ fn register_trigger(
         maxs: bounds.1,
         model,
     };
-    let secs_ms = |key: &str| -> i32 {
+    let secs_ms = |key: &str, default: i32| -> i32 {
         block
             .get(key)
             .and_then(|v| v.trim().parse::<f32>().ok())
-            .map_or(0, |s| (s * 1000.0) as i32)
+            .map_or(default, |s| (s * 1000.0) as i32)
     };
     let int_key = |key: &str, default: i32| -> i32 {
         block
@@ -313,8 +313,15 @@ fn register_trigger(
         );
         return;
     }
-    host.triggers
-        .register(id, kind, shape, secs_ms("wait"), secs_ms("random"));
+    // Only `Touch_Multi` reads `wait` (movers doc 17); `random` is read by
+    // nothing a script can see.
+    use crate::game::trigger::{MULTIPLE_DEFAULT_WAIT_MS, ONCE_WAIT_MS, TriggerKind};
+    let wait_ms = match kind {
+        TriggerKind::Multiple => secs_ms("wait", MULTIPLE_DEFAULT_WAIT_MS),
+        TriggerKind::Once => ONCE_WAIT_MS,
+        _ => 0,
+    };
+    host.triggers.register(id, kind, shape, wait_ms);
 }
 
 /// `G_SpawnTurret` (0x52c84), reached from `SP_turret` for `misc_mg42` and
@@ -1400,7 +1407,7 @@ mod tests {
                 &mut host,
                 cx,
                 "{\n\"classname\" \"worldspawn\"\n}\n\
-                 {\n\"classname\" \"trigger_multiple\"\n\"model\" \"*1\"\n\"wait\" \"0.5\"\n}\n\
+                 {\n\"classname\" \"trigger_multiple\"\n\"model\" \"*1\"\n\"wait\" \"2\"\n}\n\
                  {\n\"classname\" \"script_model\"\n\"model\" \"xmodel/barrels\"\n}\n\
                  {\n\"classname\" \"trigger_hurt\"\n\"model\" \"*2\"\n}\n",
             )
@@ -1416,7 +1423,7 @@ mod tests {
             ]
         );
         let (_, first) = host.triggers.iter().next().unwrap();
-        assert_eq!(first.wait_ms, 500, "the wait key is seconds on the wire");
+        assert_eq!(first.wait_ms, 2000, "the wait key is seconds on the wire");
         assert_eq!(first.shape.mins, [-16.0, -16.0, 0.0], "submodel 1's box");
         assert_eq!(
             first.shape.model,
