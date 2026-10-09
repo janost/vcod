@@ -654,12 +654,14 @@ multis, 16 yes/nos, 6 sliders and one edit field. VERIFIED (counted).
   read every frame), and `r_mode` / `r_fullscreen`, which `vid_restart`
   and start-up apply to the window (Q3's mode table; borderless full
   screen), and `r_gamma`, read every frame and applied as retail's gamma
-  ramp in a final pass (`cod11-gamma.md`). `cg_drawCrosshair` and
+  ramp in a final pass, and `r_ignorehwgamma`, latched at start-up and
+  `vid_restart`, which moves `r_gamma` into the TGA and JPG textures at
+  each map load (`cod11-gamma.md` section 4). `cg_drawCrosshair` and
   `cg_drawStatus` gate the HUD as the cgame does (`cod11-hud-protocol.md`,
   "Which views draw it"). vcod registers `r_mode` -1 (its own window size) and
   `r_fullscreen` 0 instead of retail's 3 and 1.
 - Stored but inert (archived, so a choice survives): `cl_freelook`,
-  `m_filter`, the texture, picmip, `r_ignorehwgamma`, LOD, dynamic light,
+  `m_filter`, the texture, picmip, LOD, dynamic light,
   swap interval and NVIDIA fog cvars,
   `mss_khz`, `mss_3d_provider`, `cg_marks`, `cg_brass`, `cg_blood`,
   and the Multiplayer Options' Show Compass (`cg_drawCompass`) and Team

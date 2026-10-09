@@ -1040,7 +1040,7 @@ fn main() -> Result<()> {
         render_ms: 0.0,
         fx_ms: 0.0,
         look_zoom: (1.0, false),
-        baked_gamma: None,
+        ignore_hw_gamma: false,
         hud,
         hud_ms: 0.0,
         localized,
@@ -1086,12 +1086,16 @@ fn gamma_cvar(shell: &mut console::shell::Shell) -> f32 {
     }
 }
 
-/// With `r_ignorehwgamma 1` retail has no device ramp and bakes `r_gamma`
-/// into textures as they load, so a change waits for `vid_restart`
-/// (docs/research/cod11-gamma.md). vcod keeps its final pass with the gamma
-/// latched here.
-fn baked_gamma(shell: &mut console::shell::Shell) -> Option<f32> {
-    (shell.cvar_f32("r_ignorehwgamma") != 0.0).then(|| gamma_cvar(shell))
+/// `r_ignorehwgamma`, latched: with 1 retail has no device ramp and bakes
+/// `r_gamma` into textures as they load (docs/research/cod11-gamma.md).
+fn ignore_hw_gamma(shell: &console::shell::Shell) -> bool {
+    shell.cvar_f32("r_ignorehwgamma") != 0.0
+}
+
+/// The texture gamma the next world load bakes in: `r_gamma` of that
+/// moment with `r_ignorehwgamma 1`, none with the device ramp.
+fn image_gamma(shell: &mut console::shell::Shell, ignore_hw: bool) -> Option<f32> {
+    ignore_hw.then(|| gamma_cvar(shell))
 }
 
 /// `r_mode`'s size (Q3's mode table, which the stock video mode list picks
@@ -1137,22 +1141,48 @@ fn online_mode(
     }
 }
 
-/// The camera's (yaw, pitch) in radians for our own playerstate: the raw cmd
-/// angles plus `delta_angles`, which is the view the server builds
+/// The camera's (yaw, pitch, roll) in radians for our own playerstate: the
+/// raw cmd angles plus `delta_angles`, which is the view the server builds
 /// (docs/protocol-1.1.md, "View angles"). Wire pitch is down-positive, the
-/// camera's up-positive. Pitch is drawn clamped at retail's limit; the cmd
-/// still carries the raw angle.
-fn own_view(raw: [i32; 3], delta: [i32; 3]) -> (f32, f32) {
+/// camera's up-positive; roll keeps the wire's sign (positive tilts the head
+/// right). Pitch is drawn clamped at retail's limit; the cmd still carries
+/// the raw angle.
+fn own_view(raw: [i32; 3], delta: [i32; 3]) -> (f32, f32, f32) {
     let short = |i: usize| raw[i].wrapping_add(delta[i]) as i16;
     let deg = |s: i16| s as f32 * 360.0 / 65536.0;
     let pitch = short(0).clamp(-PITCH_CLAMP_SHORT, PITCH_CLAMP_SHORT);
-    (deg(short(1)).to_radians(), -deg(pitch).to_radians())
+    (
+        deg(short(1)).to_radians(),
+        -deg(pitch).to_radians(),
+        deg(short(2)).to_radians(),
+    )
 }
 
 /// Retail's view pitch clamp, 87.9 degrees in short units
 /// (docs/research/cod11-gsc-object-model.md, the defender fixture's
 /// `viewangles[0]`).
 const PITCH_CLAMP_SHORT: i16 = 16000;
+
+/// Loads every viewmodel rig configstring 8 registers and uploads its
+/// models, at the map load and on each CS 8 change; rigs already cached
+/// cost a lookup.
+fn prewarm_viewmodels(
+    view: &mut play::view::OnlineView,
+    r: &mut renderer::Renderer,
+    fs: &Pk3Fs,
+    configstrings: &[String],
+) {
+    let t0 = Instant::now();
+    let rigs = view.prewarm(fs, configstrings);
+    for models in &rigs {
+        r.preload_viewmodel(fs, models);
+    }
+    log::info!(
+        "viewmodels: {} rigs preloaded in {:.0} ms",
+        rigs.len(),
+        t0.elapsed().as_secs_f64() * 1000.0
+    );
+}
 
 /// Synthetic muzzle for playerState-ring fire events (`entity_num ==
 /// u32::MAX` in `net::events`): the ridden body is `skip_num`, never drawn,
@@ -1526,9 +1556,9 @@ struct App {
     /// gun: the mouse's sensitivity scale ([`play::input::MouseLook`]).
     look_zoom: (f32, bool),
     /// `r_ignorehwgamma` as of the last window start or `vid_restart`
-    /// (retail latches it): `Some` holds the `r_gamma` retail would have
-    /// baked into its textures then, `None` is the live device ramp.
-    baked_gamma: Option<f32>,
+    /// (retail latches it): textures bake `r_gamma` at each world load and
+    /// the frame pass only clamps.
+    ignore_hw_gamma: bool,
     hud: Option<hud::Hud>,
     hud_ms: f32,
     /// Menu labels; empty outside `--connect`.
@@ -1769,15 +1799,25 @@ impl App {
                 }
                 Effect::Impulse(action) => {
                     if let Mode::Online { input, .. } = &mut self.mode {
+                        let select = matches!(
+                            action,
+                            play::input::Action::Slot(_)
+                                | play::input::Action::NextWeapon
+                                | play::input::Action::PrevWeapon
+                        );
+                        // `cg_weaponCycleDelay` (cgame 0x30038096): a select
+                        // inside the delay from the name's stamp does nothing.
+                        let now = (Instant::now() - self.start).as_secs_f32();
+                        let delay = self.shell.cvar_f32("cg_weaponCycleDelay") as i32;
+                        if select
+                            && let Some(hud) = &self.hud
+                            && !hud.weapon_cycle_allowed(now, delay)
+                        {
+                            continue;
+                        }
                         input.key(action, true);
                         input.key(action, false);
-                        if let (
-                            play::input::Action::Slot(_)
-                            | play::input::Action::NextWeapon
-                            | play::input::Action::PrevWeapon,
-                            Some(hud),
-                        ) = (action, &mut self.hud)
-                        {
+                        if let (true, Some(hud)) = (select, &mut self.hud) {
                             hud.weapon_selected();
                         }
                     }
@@ -1818,7 +1858,7 @@ impl App {
                 }
                 Effect::Exec(file) => self.exec_file(event_loop, &file),
                 Effect::VidRestart => {
-                    self.baked_gamma = baked_gamma(&mut self.shell);
+                    self.ignore_hw_gamma = ignore_hw_gamma(&self.shell);
                     if let Some(w) = &self.window {
                         let (size, fullscreen) = video_mode(&self.shell);
                         w.set_fullscreen(
@@ -2137,7 +2177,7 @@ impl ApplicationHandler for App {
             .with_title(&self.title)
             .with_inner_size(winit::dpi::LogicalSize::new(1600.0, 900.0));
         let (size, fullscreen) = video_mode(&self.shell);
-        self.baked_gamma = baked_gamma(&mut self.shell);
+        self.ignore_hw_gamma = ignore_hw_gamma(&self.shell);
         if let Some(size) = size {
             attrs = attrs.with_inner_size(size);
         }
@@ -2155,6 +2195,7 @@ impl ApplicationHandler for App {
         };
         match Renderer::new(window.clone(), &self.fs) {
             Ok(mut r) => {
+                r.set_image_gamma(image_gamma(&mut self.shell, self.ignore_hw_gamma));
                 if let Some(w) = &self.world
                     && let Err(e) = r.load_world(&w.bsp, &self.fs)
                 {
@@ -2471,9 +2512,9 @@ impl ApplicationHandler for App {
                     .window
                     .as_ref()
                     .is_some_and(|w| w.fullscreen().is_some());
-                let overbright = gamma::overbright_bits(fullscreen, self.baked_gamma.is_none());
+                let overbright = gamma::overbright_bits(fullscreen, !self.ignore_hw_gamma);
                 let Some(r) = &mut self.renderer else { return };
-                r.set_gamma(self.baked_gamma.unwrap_or(gamma), overbright);
+                r.set_gamma(if self.ignore_hw_gamma { 1.0 } else { gamma }, overbright);
                 let aspect = r.aspect();
                 // Set inside the online arm where `self` is borrowed out
                 // field-by-field; acted on once the borrows end.
@@ -2563,6 +2604,13 @@ impl ApplicationHandler for App {
                                         &self.fs,
                                         net::info_value_for_key(net.configstring(3), "n"),
                                     );
+                                }
+                                // `CG_ConfigStringModified` re-runs
+                                // `CG_RegisterItems` on CS 8 (cgame 0x3002c70a).
+                                net::NetEvent::ConfigstringChanged(8)
+                                    if matches!(phase, Phase::Live(_)) =>
+                                {
+                                    prewarm_viewmodels(view, r, &self.fs, net.configstrings());
                                 }
                                 net::NetEvent::ConfigstringChanged(7) => {
                                     if let Phase::Live(live) = phase {
@@ -2827,6 +2875,10 @@ impl ApplicationHandler for App {
                                     }
                                     loading::Action::FinishDownloads => net.finish_downloads(),
                                     loading::Action::Ready => {
+                                        r.set_image_gamma(image_gamma(
+                                            &mut self.shell,
+                                            self.ignore_hw_gamma,
+                                        ));
                                         match load_map(
                                             &map,
                                             net,
@@ -2845,17 +2897,13 @@ impl ApplicationHandler for App {
                                                 let feed =
                                                     net.gamestate().map_or(0, |g| g.checksum_feed);
                                                 net.send_reliable(&self.fs.pure_command(feed));
-                                                let t0 = Instant::now();
-                                                let rigs =
-                                                    view.prewarm(&self.fs, net.configstrings());
-                                                for models in &rigs {
-                                                    r.preload_viewmodel(&self.fs, models);
-                                                }
-                                                log::info!(
-                                                    "viewmodels: {} rigs preloaded in {:.0} ms",
-                                                    rigs.len(),
-                                                    t0.elapsed().as_secs_f64() * 1000.0
+                                                prewarm_viewmodels(
+                                                    view,
+                                                    r,
+                                                    &self.fs,
+                                                    net.configstrings(),
                                                 );
+                                                view.new_gamestate();
                                             }
                                             Err(e) => fatal = Some(e),
                                         }
@@ -3044,6 +3092,12 @@ impl ApplicationHandler for App {
                                     if let Some(v) = &predicted {
                                         cam.pos = v.origin + Vec3::Z * v.view_height;
                                     }
+                                    if let Some(s) = net.snapshots().newest() {
+                                        view.track_spawn((
+                                            s.ps.field_i32(p, "clientNum"),
+                                            s.ps.arrays.stats[5],
+                                        ));
+                                    }
                                     // A followed player's view weapon, zoom and scope
                                     // come off the snapshot, as retail draws them.
                                     let view_ps = net.snapshots().newest().and_then(|s| {
@@ -3073,6 +3127,9 @@ impl ApplicationHandler for App {
                                     // Next frame's cmds carry this kick, as
                                     // `CL_FinishMove` reads last frame's syscall 0x56.
                                     input.kick = view.view_kick();
+                                    // `CG_CalcViewValues` draws the predicted
+                                    // `viewangles[2]`, the kick's roll included.
+                                    let mut view_roll = 0.0;
                                     if !snapshot_view {
                                         let delta = match &predicted {
                                             Some(v) => v.delta_angles,
@@ -3081,7 +3138,8 @@ impl ApplicationHandler for App {
                                                     .map(|name| s.ps.field_i32(p, name))
                                             }),
                                         };
-                                        (cam.yaw, cam.pitch) = own_view(input.cmd_angles(), delta);
+                                        (cam.yaw, cam.pitch, view_roll) =
+                                            own_view(input.cmd_angles(), delta);
                                     }
                                     // On a mounted gun the view rides the gun's
                                     // `tag_player` and barrel, not the cmd's angles
@@ -3089,6 +3147,7 @@ impl ApplicationHandler for App {
                                     if let Some(eye) = &turret_eye {
                                         cam.pos = eye.pos;
                                         (cam.yaw, cam.pitch) = eye.view();
+                                        view_roll = 0.0;
                                     }
 
                                     let (cam_forward, cam_right, cam_up) =
@@ -3386,7 +3445,7 @@ impl ApplicationHandler for App {
 
                                     renderer::Frame {
                                         view_proj: camera::view_proj_from(
-                                            cam.pos, cam.yaw, cam.pitch, 0.0, fov, aspect,
+                                            cam.pos, cam.yaw, cam.pitch, view_roll, fov, aspect,
                                         ),
                                         eye: cam.pos,
                                         fwd: cam_forward,
@@ -3995,7 +4054,7 @@ mod tests {
         // 90 degrees of yaw from delta alone, 45 more from the mouse; wire
         // pitch 10 degrees down reads as the camera looking down.
         let quarter = 16384;
-        let (yaw, pitch) = own_view([1820, quarter / 2, 0], [0, quarter, 0]);
+        let (yaw, pitch, _) = own_view([1820, quarter / 2, 0], [0, quarter, 0]);
         assert!(
             (yaw.to_degrees() - 135.0).abs() < 0.01,
             "yaw {}",
@@ -4007,17 +4066,31 @@ mod tests {
             pitch.to_degrees()
         );
         // A delta sent as the unsigned 16-bit value wraps like a signed one.
-        let (yaw, _) = own_view([0, 0, 0], [0, 65536 - quarter, 0]);
+        let (yaw, _, _) = own_view([0, 0, 0], [0, 65536 - quarter, 0]);
         assert!((yaw.to_degrees() + 90.0).abs() < 0.01);
         // Past straight down draws at the clamp, either way.
         for raw_pitch in [quarter - 100, 20_000, -20_000] {
-            let (_, pitch) = own_view([raw_pitch, 0, 0], [0; 3]);
+            let (_, pitch, _) = own_view([raw_pitch, 0, 0], [0; 3]);
             assert!(
                 (pitch.to_degrees().abs() - 87.89).abs() < 0.01,
                 "pitch {}",
                 pitch.to_degrees()
             );
         }
+    }
+
+    /// The view kick's roll rides cmd.angles[2] into the drawn roll, with
+    /// the wire's sign.
+    #[test]
+    fn own_view_draws_the_kick_roll() {
+        let mut input = play::input::PlayInput::default();
+        input.kick = [0.0, 4.0, -2.0];
+        let (_, _, roll) = own_view(input.cmd_angles(), [0, 0, 0]);
+        assert!(
+            (roll.to_degrees() + 2.0).abs() < 0.01,
+            "roll {}",
+            roll.to_degrees()
+        );
     }
 
     #[test]

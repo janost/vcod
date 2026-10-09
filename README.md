@@ -93,7 +93,8 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
   sniper scope overlay that follows the sway and the hit kick, and your own
   fire, reload and footstep sounds played off the prediction.
 - Fire recoil off the weapon file's view and gun kick keys: the view kick
-  rides your cmd angles, as retail's does, and springs back to centre.
+  rides your cmd angles, as retail's does, rolls the view with it, springs
+  back to centre and clears on a respawn.
 - Mounted MG42s with their fire anim and flash; on the gun the view rides
   `tag_player` and the crosshair turns into the gun's reticle.
 - The HUD the stock `hud.menu` lays out: crosshair that opens with spread,

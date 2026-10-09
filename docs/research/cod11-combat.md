@@ -5413,11 +5413,35 @@ truncating. INFERRED: **the view kick is in the usercmd angles**, so the
 server's `PM_UpdateViewAngles`, its aim block and every later shot see it,
 the client's prediction draws it, and it is never added to `cl.viewangles`
 itself: as it centres, the view comes back to where the mouse left it.
-The roll third rides `cmd.angles[2]` the same way. VERIFIED, `0x30028a70`
-zeroes both vectors and the gun spring (`0x3020cb94`-`0x3020cba8`); it is
-called at `0x300300cd` and `0x3003037f`; INFERRED: a new playerstate (the
-`ps+0x114` or `clientNum` compare at `0x300300a4`) and the first snapshot,
-so a respawn starts unkicked.
+The roll third rides `cmd.angles[2]` the same way.
+
+**How the kick reaches the screen.** VERIFIED, the only references to
+`kickAngles` (`0x3020cb38`) are the clears at `0x30028af8` and
+`0x30033d7d`-`0x30033d91`, `CG_KickAngles`' own `0x300328d7` and the push
+at `0x30033ec1`: the cgame never adds it to the drawn view. VERIFIED,
+`CG_CalcViewValues` (my name, `0x300333b0`) copies the predicted
+playerstate's `viewangles` (`0x3020721c`-`0x30207224`, `ps+0xc0`) into
+`refdefViewAngles` (`0x302095cc`-`0x302095d4`) at `0x300334fa`-`0x30033527`,
+the roll included, and the intermission arm does the same at
+`0x30033413`-`0x3003343b`; `CG_OffsetFirstPersonView` (my name,
+`0x30032ae0`) then adds the three components of the offset `0x30012cb0`
+returns (`0x30032b6a`-`0x30032b9c`). INFERRED: the kick's roll reaches the
+screen through prediction, as `PM_UpdateViewAngles` writes
+`viewangles[2]` from `cmd.angles[2] + delta_angles[2]` like the other two
+axes (`docs/protocol-1.1.md`, "View angles").
+
+**The reset.** VERIFIED, `0x30028a70` zeroes both vectors and the gun
+spring (`0x3020cb94`-`0x3020cba8`) and stamps the weapon name. Its callers:
+the first-snapshot setup at `0x3003037f`, and `CG_TransitionSnapshot` (my
+name) at `0x300300cd`. INFERRED, the transition's branches
+(`0x3002ffda`-`0x300300be`): the call is taken when `0x30207154` is set or
+the new snapshot's `stats[5]` (snapshot `+0x114`, the spawn count) or
+`clientNum` (`+0xb8`) differs from the old one's. Under `pm_flags & 0x50000`
+an `eFlags` 0x8 flip with the same pair takes the other arm
+(`0x30030033`-`0x30030082`), which re-copies the playerstate and zeroes
+`0x3020948c`-`0x30209494` but does not reach `0x30028a70`. So a respawn
+(a new spawn count) and a new followed client start unkicked, and the
+spawn flip on its own clears nothing here.
 
 **The gun spring on the client.** VERIFIED, cgame `0x30012a60` is
 `0x39e14`'s twin, with the per-axis step factored into `0x30012910`
@@ -5458,8 +5482,13 @@ the fire draw and the RNG, and steps the spring
 the drawn view, truncating the kick's units on their own (at most one unit
 off retail's single truncation). The gun kick turns the viewmodel about the
 eye and reaches the scope through `AimInput::gun_kick`; the server passes
-zero. The drawn view carries no roll in play mode, so the roll third reaches
-the cmd and not the screen.
+zero. The drawn view takes its roll from the cmd angles plus
+`delta_angles` (`own_view` in `crates/client/src/main.rs`), as the
+predicted `viewangles[2]`; a mounted gun's view keeps roll 0.
+`OnlineView::track_spawn` clears the kick on a new `(clientNum, stats[5])`
+off the newest snapshot, `OnlineView::new_gamestate` at each map load, and
+a frame with no drawable playerstate (dead, or not in the world) clears it
+too, which retail does not; nothing is drawn or aimed in those frames.
 
 ---
 
