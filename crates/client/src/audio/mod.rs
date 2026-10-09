@@ -164,6 +164,11 @@ impl AudioSystem {
         self.manager.is_some()
     }
 
+    /// `mss_volume`, linear 0..1; live voices pick it up on their next step.
+    pub fn set_master_volume(&mut self, v: f32) {
+        self.master_volume = v.clamp(0.0, 1.0);
+    }
+
     /// New map. Refilters the aliases by loadspec and drops everything keyed
     /// to the old table.
     pub fn on_gamestate(&mut self, map: &str) {
