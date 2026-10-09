@@ -25,6 +25,9 @@ pub const PM_DEAD_LINKED: i32 = 7;
 /// a crouch latch rather than a stance bit: prone entered from a crouch reads
 /// 0x40003 and prone entered from standing 0x40001, which is why
 /// `PlayerState::ducked` carries it.
+/// A player entity whose `pm_type` reads above 5, dead or dead and linked:
+/// `BG_PlayerStateToEntityState` sets and clears it (0x2cda6..0x2cdb2).
+pub const EF_DEAD: i32 = 0x1;
 pub const EF_CROUCH: i32 = 0x20;
 pub const EF_PRONE: i32 = 0x40;
 /// The per-spawn toggle: every spawn flips it, a spectator's and the

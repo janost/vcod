@@ -122,6 +122,21 @@ measured).
   of 193 spawns in one component (178 before), `mp_brecourt` 161 (159),
   `mp_dawnville` 176 (174) and `mp_rocket` 141 (136), measured before the
 patch grid moved `mp_brecourt` back to 159.
+- A walk node to node (the walk back, the ladders' links and the leaps)
+  arrives only on the target node's floor: within 8 units of its height
+  as well as of its spot. The bound was `Z_MERGE`, 40, until 2026-10-09.
+  VERIFIED (measured, `mp_ship`): the hull has a diagonal beam, 32 units
+  over the floor, from about (2152, 384) to (2232, 520), with nodes on its
+  top at z -31.875. Its sides slope down to an edge 16 under the top, and a
+  body stands on that edge at z -47.875 (on the brush's axial bevel). The
+  walk back from that edge (2208.5, 444.7) to the top node
+  (2172.9, 418.2) falls straight on. Aimed 8 units aside, it came to rest
+  on the edge at (2183.3, 407.6, -47.87), 16 under the node, and that
+  proved the edge. Bots followed it to that spot and stalled there; it is
+  the one the 2026-10-08 follow-up reported. The 8-unit bound takes 4
+  (`mp_brecourt`) to 38 (`mp_ship`) edges off each stock graph. Node counts
+  and the spawn census are unchanged (VERIFIED, measured with the
+  `nav_build` example).
 - New nodes stay within 512 units of the spawns' bounding box. Past it lies
   scenery: `mp_hurtgen`'s forest added 10 000 nodes.
 - Walks run on every core, a layer at a time, handed out one node at a time;
@@ -503,7 +518,10 @@ else a spot it remembers or heard, section 4), `Roam`, or `Away(threat)`
   from the floor below.
 - A waypoint is passed within 24 units horizontally, or once the bot is nearer
   the next node than the waypoint is, either only within 48 units of its
-  height: a ladder's head stands right above its foot. A waypoint four grid
+  height: a ladder's head stands right above its foot. A node the next edge
+  drops more than a step (18) from is passed only within 8 of its height,
+  a jump's top within 16: the drop was proved from the node, not from beside
+  or under it. A waypoint four grid
   steps away means the bot left the path: plan again. Forty ticks without
   closing on a waypoint, height counted with the flat distance so a climb
   closes in, drop the path, and the edge the bot was on stays out of its
@@ -535,11 +553,30 @@ run, and bots took 60 s up the hold ladder at 0.4 units a tick, slowed
 onto the leap's foot at its head. With the climb down alone, seed 1 still
 had 1 501 bot-ticks within 150 units of where the bot stood 12 s before,
 all on the hold ladder; with both, seeds 1-4 had 7 to 59, none on a ladder
-(`tests/bots.rs`, `bots_on_mp_ships_ladders_keep_climbing`). The 59 are a
-bot on `mp_ship`'s hull floor at (2180, 407, -45) against a diagonal beam
-whose top at z -31.875 carries nodes: it passes the beam-top waypoint from
-the beam's side, within 48 of its height, and the drop beyond is not where
-the graph proved it. A random heading is never one with a
+(`tests/bots.rs`, `bots_on_mp_ships_ladders_keep_climbing`). The 59 were a
+bot at (2180, 407, -45) against `mp_ship`'s hull beam, on the edge an
+edge of the graph wrongly led to (section 2, "The flood"). VERIFIED
+(measured 2026-10-09, same detector, seeds 1 to 15 odd: the server ORs a
+seed with 1, so 2 runs as 3), bot-ticks kept within 150 units of where
+the bot stood 12 s before, beam area (x 2080-2280, y 350-560, z under -20)
+in brackets:
+
+| seeds 1 3 5 7 9 11 13 15 | total | beam |
+|---|---|---|
+| before | 58 19 6 7 51 16 0 3 = 160 | 56 + 37 = 93 |
+| node floors within 8 | 3 19 35 139 13 11 6 13 = 239 | 0 |
+| and the drop pass | 1 5 49 14 0 25 0 59 = 153 | 4 |
+
+A run diverges from the first changed waypoint on, so the totals off the
+beam move by chance as much as by cause. Seed 7's 139 with the floors alone
+were one bot that passed a node at z 664 from 42 under it, then headed for
+the drop beyond, to z 480; the drop pass took that to 14. With both, the rest are seed 15's 59, a
+bot at (5832, 561, 56) that passed a node 20 above it and headed for the
+stair beyond, seed 5's 49, a bot climbing a ladder and dropping back
+near (5350, -100), and seed 11's 4, a bot on the floor heading for the
+beam's edge node (2208.5, 444.7, -47.875). Seed 3's 19 before were a bot at
+a ladder's foot at (1486, -160, 8) whose stuck count kept restarting. A
+random heading is never one with a
 hazard 64 units along it (`BotView::hazard_ahead`, one flag per 45-degree
 octant), and a bot wandering up to one picks again. Engaging an enemy overrides all of it.
 In S&D the objective names the point and can hold the bot still

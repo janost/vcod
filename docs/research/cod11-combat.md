@@ -5422,9 +5422,9 @@ What still differs, each INFERRED from 16.1 and not measured:
   retail runs them as they arrive, on the previous frame's `level.time`
   (15.6's 50 ms). Their relative order is the same.
 
-What differs, measured: ours poses the new view pitch whole at the end frame
-that copies it, where retail eases into it over four to six frames
-(`probe_pose`, below).
+The pitch the pose bends the spine by eases after the view the way retail's
+does (16.3); before 2026-10-09 ours posed the new view pitch whole at the end
+frame that copied it.
 
 **A turret round inside its gunner's end frame.** VERIFIED,
 `game.mp.i386.so`: `G_RunFrame`'s slot loop (0x50ab0..0x50add) calls
@@ -5461,14 +5461,14 @@ with it in slot 0, 18 of 18 had already moved at k0. INFERRED: a round meets
 a higher slot posed as its last end frame left it and a lower slot posed as
 this frame's, 16.1's reading. VERIFIED, the same rows: the point eases over
 four to six frames after a change rather than stepping, so the pitch the
-controllers bend the spine by is smoothed between end frames; where that
-smoothing lives is not read out here.
+controllers bend the spine by is smoothed between end frames; 16.3 reads
+where.
 
 Ours does the same: each gunner's rounds are traced inside its own turn,
 right after its `commit_pose`, meeting a lower slot's new pose and a higher
 slot's last-frame one (pinned by
 `a_round_meets_a_higher_slots_last_pose_and_a_lower_slots_new_one` and
-`a_round_meets_a_pitch_flip_a_frame_late_on_a_higher_slot`,
+`a_round_meets_the_torso_easing_after_a_pitch_flip`,
 `crates/server/tests/turret_ab.rs`; the same `probe_pose` run against
 `vcod-server` switched hit location at k+1 with the target in slot 1 and at
 k0 with it in slot 0), and delivered there by
@@ -5518,3 +5518,104 @@ parms, the damage feedback and `torsoAnim`, and
 `a_player_killed_earlier_in_the_frame_stops_no_later_round`
 (`crates/server/tests/combat.rs`), and
 `a_damage_knockback_slides_free_of_friction` (`vcod_common::pmove`).
+
+### 16.3 The torso pitch eases after the view
+
+**The swing.** VERIFIED, `game.mp.i386.so`: `BG_PlayerAnimation` (0x2c1f4)
+calls the angle updater 0x2af78 first, and its last call (0x2b317) is
+`BG_SwingAngles` (0x2ae00) on the pitch: destination the record's
+`viewangles[0]` (`+0x3e4`, `ClientEndFrame`'s copy at 0x41288) less 360
+when above 180.0 (0x6ef60, 0x6ef64), times 0.6 (0x6ef68); swing tolerance
+0, clamp 45.0 (0x6ef54), speed 0.15 (0x6ef6c, which Ghidra labels as a
+function); the angle at record `+0x3b4` and its swinging flag at `+0x3b8`.
+VERIFIED: the destination is 0 instead when `eFlags & 1` (dead), `eFlags &
+0xc000` (mounted) or the record's movetype condition (`+0x410`, condition 3
+of the name block at 0x6e424) has bit 16 or 17 set, which the movetype name
+block at 0x6e260 makes `climbup` and `climbdown`.
+
+VERIFIED, `BG_SwingAngles` (0x2ae00) is Q3's `CG_SwingAngles` with a new
+step scale: it starts swinging when `AngleSubtract(angle, dest)` leaves
+`±tolerance`; the step is `frametime * scale * speed` toward the
+destination with `scale = max(|AngleSubtract(dest, angle)| * 0.05, 0.5)`
+(0x6ef40, 0x6ef44), stopping on it when the step would pass it; the angle
+goes through `AngleMod`; then it is clamped to `dest ∓ (clamp - 1)` when
+more than `clamp` away. VERIFIED: the frametime is the int at `bg + 8`
+(0x2aea9), which `G_RunFrame` (0x50478) writes as `levelTime - previous
+levelTime`, 50 ms at `sv_fps` 20. INFERRED, from the arithmetic: a flip from
+0 to 85 moves the torso pitch 19.1, 12.0, 7.5, 4.7, 2.9, 3.75 and 1.1
+degrees over seven end frames, and 85 back to 0 the same steps the other
+way.
+
+VERIFIED, `cgame_mp_x86.dll`: `CG_PlayerAnimation` (my name, 0x30004e40)
+calls the same updater (0x300040e0) whose pitch call passes 0.6
+(0x30069508), the 180 / 360 fold (0x30069370, 0x30069374), clamp 45
+(immediate 0x42340000) and speed 0.15 (immediate 0x3e19999a) to the same
+swing (0x30003ec0, scale constants 0.05 at 0x3006945c and 0.5 at
+0x3006930c), stepping by `cg.frametime` (0x300f0318). VERIFIED: the input
+pitch is the entity's lerped `apos` pitch, copied into the record at
+0x3001d090 for an `eType` 1 entity, and `BG_PlayerStateToEntityState`
+(`game.mp.i386.so` 0x2ccb4..0x2cd41) writes `ps.viewangles` whole into
+`apos.trBase`, truncated to whole degrees on both of `ClientEndFrame`'s
+arms (snap argument 1 at 0x41179 and 0x4118a). VERIFIED, a retail snapshot
+of the target in this section's capture: `apos base [85.0,0.0,0.0]`.
+
+**The split.** VERIFIED, `BG_Player_DoControllers` (0x2b7f8), off its
+`.rodata`: for a body not mounted (it returns at once on `eFlags & 0xc000`,
+0x2b804), with `P` the swing angle and `V` the view pitch, it bends
+`back_low` by `0.2 P` (0x6efd4), `back_mid` by `0.3 P` (0x6efcc), `back_up`
+by `0.5 P` (0x6efa8), `neck` (0x6ef95) by `0.3 (V - P)` and `head`
+(0x6ef9a) by `0.7 (V - P)` (0x6efe8). Prone (`eFlags & 0x40`) first scales
+`P` by 0.5 when positive and 0.25 otherwise (0x6efa8, 0x6efac), then bends
+`back_up` by all of it and `back_low` and `back_mid` by none. Either way
+`back_low` adds `AngleSubtract(fTorsoPitch, fWaistPitch)` and `pelvis`
+takes `AngleSubtract(fWaistPitch, fTorsoPitch)` when either is non-zero
+(`ent+0xe8`, `+0xec`). INFERRED: `cgame_mp_x86.dll` 0x30004710 carries the
+same tag sequence and constants (0.2 at 0x300693d4, 0.7 at 0x300694f0, 0.5,
+0.3), not traced line by line.
+
+**The axis.** VERIFIED, `G_DObjSetControlTagAngles` (0x7721c): the control
+quaternion is `yaw ⊗ pitch ⊗ roll` from `YawToQuaternion` (z),
+`PitchToQuaternion` (y) and `RollToQuaternion` (x), half-angle π/360
+(0x72b58). VERIFIED, `cod_lnxded`: game syscall 0x7f (0x080c5050) sets the
+bone's bit in both the RotTrans and the control mask; `G_DObjCalcPose`
+(game 0x67314) runs the anim calc (syscall 0x6f, 0x080bcef8), then the
+controller hook, then the skeleton calc (0x70, 0x080c337c), whose rotation
+pass takes a control bone's world rotation as the control quaternion times
+the parent's world rotation, against parent times local for any other
+bone. INFERRED: a control rotation replaces the bone's local rotation and
+turns it about the model's axes, so pitch tips about the model's left axis
+whatever the bone's own frame; `CoDMP.exe` 0x00481780 has the same two
+product branches, operand order not resolved. In USAirborne3's frames a
+turn about `back_up`'s own Y leans the body sideways, which is what ours
+did before this.
+
+**Measured.** VERIFIED, `crates/server/tests/fixtures/turret/
+mp_carentan-dm-pitch-ease.txt`, retail, 2026-10-09: 16.2's `probe_pose`
+recipe twice, the target in slot 0 and in slot 1, 8 s of rounds each. Per
+flip to 85, the round's x less the level body's (k0 the frame whose snapshot
+first read the new pitch), the range over the run's complete flips, and
+ours from the same view and flips (a dash is a miss):
+
+| target slot | | k0 | k+1 | k+2 | k+3 | k+4 | k+5 |
+|---|---|---|---|---|---|---|---|
+| 1 | retail, 6 flips | -0.08..0.02 | -1.75..1.73 | -4.37..-1.32 | -5.41..-3.09 | -5.87..-4.03 | -6.41..-4.63 |
+| 1 | ours | 0.00 | -2.10 | -4.70 | -5.67 | -6.08 | -6.32 |
+| 0 | retail, 8 flips | -2.11..1.23 | -4.68..-1.87 | -5.69..-3.50 | -6.31..-4.30 | -6.76..-4.88 | -7.59..-5.41 |
+| 0 | ours | -2.12 | -4.69 | -5.66 | -6.07 | -6.30 | - |
+
+INFERRED: the higher slot's flip-frame round meets the old pose (16.1) and
+then the point follows the swing's steps, the lower slot one frame ahead;
+some flips of either run first step 1.3 to 1.7 the other way, which ours
+also does on some flips: the neck and head take what the torso has not yet,
+and where the round lands then depends on the gunner's scatter.
+
+Ours: `vcod_common::playerpose::{PitchSwing, AimPitch, apply_aim}`, run
+by `ClientSim::commit_pose` (a 50 ms step per end frame) and by the client
+per drawn player per rendered frame, off the `apos` pitch the server now
+sends whole and truncated. `a_round_meets_the_torso_easing_after_a_pitch_flip`
+(`crates/server/tests/turret_ab.rs`) replays the capture's view and flips
+and holds ours inside retail's per-frame spread, within 0.6 units. GAP: a
+body at or a step short of the full `0.6 * 85` is mostly missed by the round
+that retail lands about 1 unit further back on the torso; the gate skips the
+two frames posed there.
+

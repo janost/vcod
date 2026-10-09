@@ -362,26 +362,50 @@ impl TerrainPart {
     /// that ends above a flat partition's face is never clipped by it
     /// (docs/research/cod11-player-clip.md 8.12).
     pub(crate) fn touches(&self, sw: &CapsuleSweep) -> bool {
-        let off = [0.0, 0.0, r(d(sw.half_height) - d(sw.radius))];
-        (0..3).all(|i| {
-            let (a, b) = if sw.end[i] > sw.start[i] {
-                (sw.start[i], sw.end[i])
-            } else {
-                (sw.end[i], sw.start[i])
-            };
-            let reach = d(off[i]).abs();
-            let lo = r(d(a) - reach - d(sw.radius));
-            let hi = r(d(b) + reach + d(sw.radius));
-            self.hi[i] >= lo && self.lo[i] <= hi
-        })
+        let reach = r(d(sw.half_height) - d(sw.radius));
+        capsule_bounds_meet(self.lo, self.hi, sw.start, sw.end, reach, sw.radius)
     }
 
     /// The same test for a point trace, whose bounds are its segment's
     /// (0x8056640-0x80566ee). The point arm's further segment tests in
     /// 0x8054c48 are not ported.
     pub(crate) fn touches_segment(&self, start: [f32; 3], end: [f32; 3]) -> bool {
-        (0..3).all(|i| self.hi[i] >= start[i].min(end[i]) && self.lo[i] <= start[i].max(end[i]))
+        segment_bounds_meet(self.lo, self.hi, start, end)
     }
+}
+
+/// 0x8054c48 for a capsule: whether the box `lo..hi` meets the trace's
+/// bounds, `CM_BoxTrace`'s centre-shifted `start` and `end` widened by
+/// `reach`, the sphere offset, on z and by `radius` on every axis.
+pub(crate) fn capsule_bounds_meet(
+    lo: [f32; 3],
+    hi: [f32; 3],
+    start: [f32; 3],
+    end: [f32; 3],
+    reach: f32,
+    radius: f32,
+) -> bool {
+    (0..3).all(|i| {
+        let (a, b) = if end[i] > start[i] {
+            (start[i], end[i])
+        } else {
+            (end[i], start[i])
+        };
+        let reach = if i == 2 { d(reach).abs() } else { 0.0 };
+        let l = r(d(a) - reach - d(radius));
+        let h = r(d(b) + reach + d(radius));
+        hi[i] >= l && lo[i] <= h
+    })
+}
+
+/// 0x8054c48 for a point trace: the box against the segment's own.
+pub(crate) fn segment_bounds_meet(
+    lo: [f32; 3],
+    hi: [f32; 3],
+    start: [f32; 3],
+    end: [f32; 3],
+) -> bool {
+    (0..3).all(|i| hi[i] >= start[i].min(end[i]) && lo[i] <= start[i].max(end[i]))
 }
 
 impl Terrain {

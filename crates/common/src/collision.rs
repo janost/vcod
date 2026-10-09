@@ -500,8 +500,10 @@ fn expand_brush(planes: &[(Vec3, f32)], radius: f32, out: &mut Vec<(Vec3, f32)>)
 /// leaf walk (`cod_lnxded` 0x8055608): a point takes the patch's point
 /// clip, anything else its capsule; a trace that does not move is a
 /// position test (`CM_PositionTestInPatchCollide`), the only way a patch
-/// reads `startsolid`. A hit replaces the trace's only when it is strictly
-/// closer, retail's `enterFrac < tw->trace.fraction`.
+/// reads `startsolid`. A moving trace reaches the clip only when its bounds
+/// meet the patch's box, the grid's grown by a unit (0x8054c48 at
+/// 0x80556e9). A hit replaces the trace's only when it is strictly closer,
+/// retail's `enterFrac < tw->trace.fraction`.
 fn clip_patch(
     trace: &mut Trace,
     start: Vec3,
@@ -528,10 +530,18 @@ fn clip_patch(
         }
         return;
     }
-    let Some(hit) = patch
-        .collide
-        .trace(s.to_array(), e.to_array(), sweep, trace.fraction)
-    else {
+    let (lo, hi) = (patch.collide.mins, patch.collide.maxs);
+    let (s, e) = (s.to_array(), e.to_array());
+    let meets = match sweep {
+        Sweep::Point => crate::terrain::segment_bounds_meet(lo, hi, s, e),
+        Sweep::Capsule { radius, offset } => {
+            crate::terrain::capsule_bounds_meet(lo, hi, s, e, offset, radius)
+        }
+    };
+    if !meets {
+        return;
+    }
+    let Some(hit) = patch.collide.trace(s, e, sweep, trace.fraction) else {
         return;
     };
     trace.fraction = hit.fraction;
@@ -3461,6 +3471,52 @@ mod tests {
         assert!(movement.fraction < 1.0, "players are stopped: {movement:?}");
         let shot = world.shot_trace(start, end);
         assert_eq!(shot.fraction, 1.0, "bullets pass playerclip-only geometry");
+    }
+
+    /// A patch collides by its curve, not its control points: a 64 x 64
+    /// arch whose middle control row stands 64 up peaks at 32, and its box
+    /// (what the leaf walk culls by) is the subdivided grid's grown by a
+    /// unit, not the control points' (`cod_lnxded` 0x804e26d-0x804e314).
+    #[test]
+    fn a_curved_patch_collides_and_is_culled_by_its_curve() {
+        let mut bsp = synthetic_bsp(&[("textures/test/solid", CONTENTS_SOLID, 0)], &[]);
+        bsp.collision_verts = (0..3)
+            .flat_map(|j| {
+                (0..3).map(move |i| [i as f32 * 32.0, j as f32 * 32.0, (i % 2) as f32 * 64.0])
+            })
+            .collect();
+        bsp.patches.push(crate::bsp::PatchPart {
+            material: 0,
+            width: 3,
+            height: 3,
+            tolerance: 4,
+            first_vert: 0,
+        });
+        let world = CollisionWorld::build(&bsp, &[]);
+        let box_ = &world.patches[0].collide;
+        assert_eq!((box_.mins, box_.maxs), ([-1.0; 3], [65.0, 65.0, 33.0]));
+
+        // A shot down the crown stops on it, one that ends 1.5 over it never
+        // reaches the clip, and a player walks over it with his feet above.
+        let shot = world.shot_trace(Vec3::new(32.0, 32.0, 60.0), Vec3::new(32.0, 32.0, 20.0));
+        assert!((shot.endpos.z - 32.125).abs() < 0.01, "{shot:?}");
+        let short = world.shot_trace(Vec3::new(32.0, 32.0, 60.0), Vec3::new(32.0, 32.0, 33.5));
+        assert_eq!(short.fraction, 1.0);
+        let (mins, maxs) = (Vec3::new(-15.0, -15.0, 0.0), Vec3::new(15.0, 15.0, 70.0));
+        let over = world.box_trace(
+            Vec3::new(-40.0, 32.0, 34.0),
+            Vec3::new(104.0, 32.0, 34.0),
+            mins,
+            maxs,
+        );
+        assert_eq!(over.fraction, 1.0, "{over:?}");
+        let into = world.box_trace(
+            Vec3::new(-40.0, 32.0, 20.0),
+            Vec3::new(104.0, 32.0, 20.0),
+            mins,
+            maxs,
+        );
+        assert!(into.fraction < 1.0, "{into:?}");
     }
 
     #[test]
