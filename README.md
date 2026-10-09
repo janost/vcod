@@ -62,16 +62,20 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
   filter and favourite popups. Losing the server drops you back on the menu
   with the localized reason in the stock error popup.
   In a game, Esc opens the script menu and its Main Menu tab the stock
-  in-game main menu (Back to Game, Disconnect).
+  in-game main menu (Back to Game, Disconnect). The stock Mods menu lists
+  the mod directories beside `main/` and switches to one, the mod's own
+  menus included.
 - The stock Options and Multiplayer Options screens: rebind keys, mouse
   sensitivity and invert, player name, rate, master volume, video mode and
   full screen. Choices land in the console's binds and cvars and persist in
   `vcod_mp.cfg`; settings vcod has no use for are kept but do nothing.
 - Joins a 1.1 server (`--connect` or the browser): handshake, Huffman,
   netchan, delta snapshots, and pak downloads for whatever the server has and
-  you don't. Modded servers work too: a server's `fs_game` layers its mod
-  directory over `main/`, its `cl_allowDownload` decides whether to
-  download, and a mod's script menus and `hud.menu` text show up.
+  you don't, matched by checksum as retail does. Pure servers take its pak
+  checksums. Modded servers work too: a server's `fs_game` layers its mod
+  directory over `main/` and swaps in the mod's menus, its
+  `cl_allowDownload` decides whether to download, and a mod's script menus
+  and `hud.menu` text show up.
 - Answers the stock team and weapon menus as a keyboard list built from
   their `.menu` files, or straight from `--team` and `--weapon`.
 - **Spectates.** Every player is an assembled, animated soldier. Kill feed,
@@ -135,6 +139,9 @@ for my test suite.
 - Spectator follow and the killcam, replayed from a ring of archived frames.
 - rcon with retail's commands and replies, bans, the master heartbeat,
   zombie slots and retail-measured pings.
+- Publishes retail's pak lists and checksums in the systeminfo, serves the
+  paks it lists to clients that lack them, and with `--set sv_pure=1`
+  checks each client's pak checksums the way a pure retail server does.
 - `--bots` adds bots that join through the stock menus and roam a nav graph
   built from pmove runs, ladders and jumps. They play the objectives: S&D
   plants and defuses, Retrieval carries and escorts, Behind Enemy Lines
@@ -166,7 +173,7 @@ Retail does a lot more than this list. These are the gaps you'll hit first.
 popups work. On the options screens only binds, sensitivity, invert mouse,
 name, rate, volume, video mode, full screen, brightness and the crosshair
 and HUD toggles take effect; texture, lighting, sound quality and language
-settings are stored but ignored. Start New Server, Mods and CD key print "not in vcod
+settings are stored but ignored. Start New Server and CD key print "not in vcod
 yet". The browser's game type filter, map preview and refresh date are
 missing.
 
@@ -176,9 +183,10 @@ missing.
   to it.
 - Prediction carries you on a moving brush model but not its rotation.
   Neither does retail's.
-- On a modded server the mod's own main menu and browser don't replace
-  vcod's, and paks are matched by name where retail compares checksums
-  ([cod11-front-end.md](docs/research/cod11-front-end.md) section 16).
+- A mod's menus count only under the stock file names: its own
+  `ui_mp/menus.txt` list and its UI DLL are ignored. Switching mods needs
+  you out of the game first
+  ([cod11-front-end.md](docs/research/cod11-front-end.md) sections 16-17).
 
 **Server**
 
@@ -188,6 +196,9 @@ missing.
 - A brush model that turned and turned back keeps a sliver of yaw on retail
   and drifts its riders about 0.02 units a frame. vcod's comes back to zero.
   Yes, I'm calling that a bug in retail.
+- `sv_pure` defaults to 0 where retail's default is 1, and a client may
+  download only the paks the server lists, where retail serves any file of
+  the name.
 - rcon runs `map`, `devmap`, `map_restart`, `map_rotate`, `status`,
   `clientkick`, `kick`, `banUser`, `banClient`, `dumpuser`, `serverinfo`,
   `systeminfo`, `say`, `set`, `seta`, `cvarlist`, cvar queries, `heartbeat`,
@@ -236,8 +247,9 @@ missing.
 ## Requirements
 
 - A purchased copy of Call of Duty (2003) with patch 1.1. This repo has no
-  game data. Patch 1.5 ships the same `pak0-4.pk3`, so a 1.5 install works as
-  the asset source; the netcode is 1.1 only.
+  game data. Patch 1.5 ships the same `pak1-4.pk3` and a different
+  `pak0.pk3`; a 1.5 install works as the asset source, but its `pak0` is
+  not on a pure 1.1 server's list. The netcode is 1.1 only.
 - Rust 1.90 or newer.
 - For the client, a GPU with BC (DXT) texture compression. wgpu picks a
   backend; `WGPU_BACKEND=vulkan|gl|dx12|metal` narrows it. The server needs
