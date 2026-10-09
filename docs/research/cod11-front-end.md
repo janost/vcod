@@ -703,6 +703,10 @@ them as a spectator for 10-25 s each.
 - Localized-string configstrings (1245..) on modded servers hold literal
   text (`"Press ^1FIRE ^7to vote"`), not table keys; the client prints a
   key the table lacks as itself. VERIFIED (configstrings).
+- Two CoDaM servers had `ET_ITEM` entities with `index` 68, the
+  `item_health` row of `bg_itemlist` (`cod11-items.md`), which stock maps
+  never place: mod health drops. vcod draws rows 65-69 with their world
+  models. VERIFIED (snapshots, 199.247.2.228:28960, 167.235.192.175:23120).
 - 141.95.34.204:28960 answered `connect` with two OOB `print`s
   (`^5https://codservers.net`) and sent `connectResponse` 4 s after the
   challenge. VERIFIED (live).
