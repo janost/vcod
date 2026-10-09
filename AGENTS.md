@@ -272,10 +272,10 @@ dropped, so test such a builtin through `ScriptRuntime`.
   `level.time`, and the entering cmd seeds `commandTime` inside that window.
 - Server commands queue until the next snapshot and squash like
   `SV_AddServerCommand` (rule in `docs/protocol-1.1.md`).
-- The frame loop sends a fragmented snapshot or download message one
-  fragment per tick, as retail does, and an off-LAN client waits out its
-  rate between messages. A test that reads one tick's packets sees only the
-  first fragment of a big message.
+- The frame loop sends a fragmented snapshot, download or gamestate
+  message one fragment per tick, as retail does, and an off-LAN client
+  waits out its rate and its `snaps` interval between messages. A test that
+  reads one tick's packets sees only the first fragment of a big message.
 - A pure server drops a client that enters the world without a valid `cp`
   (pak checksums keyed with the gamestate's `checksumFeed`). Extra
   arguments to `tools/run_server.sh` land after `+map`, so `+set sv_pure 1`
