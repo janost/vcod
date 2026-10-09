@@ -1117,6 +1117,21 @@ vcod reads both cvars as integers each frame (`hud::DrawToggles`):
 `cg_drawCrosshair 0` drops the weapon crosshair and the mounted reticle,
 `cg_drawStatus 0` the native HUD, the cursor hint and the hudelems.
 
+The Multiplayer Options page (`ui_mp/options_multi.menu`) also offers Show
+Compass (`cg_drawCompass`, Off/On) and Team Overlay (`cg_drawteamoverlay`,
+Off/Short/Long). VERIFIED, CoDMP.exe's client cvar block: it registers
+`cg_drawCompass` default `"1"` (`0x5685e4`) and `cg_drawTeamOverlay`
+default `"2"` (`0x5685c4`), both flags 1, and discards the returned
+pointers. VERIFIED: the string `cg_drawCompass` is in none of
+`cgame_mp_x86.dll`, `ui_mp_x86.dll` or any stock menu but that one, and
+the exe's decompilation names it only at the registration. VERIFIED: the
+cgame's row for `cg_drawTeamOverlay` (`0x30074ef0`, binding `0x301ad060`,
+default `"2"`, flags 1) is the only reference to that `vmCvar_t`; no
+instruction loads `0x301ad060`..`0x301ad06f`. INFERRED: both options are
+inert in 1.1 MP, so the compass always draws and there is no team overlay.
+vcod registers both at retail's defaults so the menu's choice is kept, and
+reads neither.
+
 ### Crosshair
 
 INFERRED, off `0x30016760` and `0x3000fa50`: the hip spread in degrees is
@@ -1388,11 +1403,29 @@ new spawn count (`docs/protocol-1.1.md`, `stats[5]`) or a new followed
 client. VERIFIED: the name and the backdrop show the selection's weapon
 (`0x301cbb0c`) when it is held, else the playerstate's.
 
+VERIFIED, `0x3001da80` (Q3's `CG_ItemPickup`, item index in `eax`):
+it stores the item at `0x3020c914` and `cg.time` at `0x3020c918` and
+`0x3020c91c`, then, for a weapon row while the selection is 0, stamps the
+name and sets `cg_weaponSelect` to the row's weapon (`+0x4`, through
+`"%i"`). VERIFIED: its one caller (`0x3001e0ff`) is the event switch's arm
+for 146, 147 and 148 (`EV_ITEM_PICKUP`, `_QUIET`, `EV_AMMO_PICKUP`), taken
+when the snapshot playerstate's `pm_flags` has `0x50000` and the event's
+entity is its `clientNum`. VERIFIED: nothing else references `0x3020c914`
+or `0x3020c91c`, and the only other store to `0x3020c918` is a clear at
+`0x3002ca9d`. INFERRED: 1.1 keeps Q3's pickup bookkeeping but draws no
+pickup notice from it; the pickup's only visible effects are the weapon
+name and the autoswitch out of empty hands.
+
 vcod stamps on a change of `(clientNum, stats[5])`, the first playerstate
 included, on every weapon-select bind (`weaponslot`, `weapnext`,
-`weapprev`) and on the `a` command, and fades the name and its backdrop
-with that rule (`WeaponNameFade`). It names the playerstate's weapon, not
-the pending selection, and skips the pickup stamp.
+`weapprev`), on the `a` command and on a weapon pickup with nothing
+selected (no switch pending and `ps.weapon` 0), which also selects the
+weapon (`play::events::pickup_selects`). It fades the name and its
+backdrop with that rule (`WeaponNameFade`), and names the pending switch
+while the playerstate holds it, else the playerstate's weapon
+(`PlayerView::name_weapon`). vcod's selection is the switch in flight, so
+it equals the playerstate's weapon once the switch lands, where retail's
+`cg.weaponSelect` stays put.
 
 ### Weapon mode icon
 
@@ -1478,9 +1511,10 @@ degrees a millisecond, three blinks in the 1.5 s.
 
 vcod prints both off the same stamp as the flash (`stance_hints`,
 `ProneBlocked`), the key text through the console's binds
-(`Shell::key_text`), and reads `0x8000` off the snapshot's `pm_flags`, which
-its predictor does not model. All three draw before the icon, as retail's
-do.
+(`Shell::key_text`), and reads `0x8000` off the predicted playerstate while
+predicting, else off the snapshot's `pm_flags`. Its pmove raises the bit as
+retail's does (`cod11-mantle.md`, "Prone Blocked"). All three draw before
+the icon, as retail's do.
 INFERRED: the notice, the hints and the flash all live in the stance owner
 draw, and the compass spring in the compass one, so `cg_drawStatus` 0
 hides them and freezes their stamps and the spring; the weapon name's

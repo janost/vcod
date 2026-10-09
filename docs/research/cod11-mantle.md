@@ -450,7 +450,7 @@ toward a target by at most `70 * frametime` degrees a frame and is folded by
 n)` and `PitchForYawOnNormal(viewangles[1], n)` with `n` the ground trace's
 plane normal while `pml.groundPlane` is set, and 0 otherwise. The airborne
 branch also runs `BG_CheckProne` and raises event 141 with `pm_flags` 0x8000
-on a refusal; no capture has shown either.
+on a refusal ("Prone Blocked"); no capture has shown either.
 
 `PitchForYawOnNormal` (0x3d274): VERIFIED, the constants: pi/180 (double at
 0x72a10), -180.0 and pi (doubles at 0x72a20, 0x72a28), 360.0 (0x72a30), and
@@ -490,6 +490,32 @@ VERIFIED live, the street capture's forward press at `commandTime` 69991:
 `pm_flags` 0x40005, and the eye from 60 to 11 in about 300 ms against the
 still press's 550. The backward press dives the same way; the sideways press
 does not.
+
+### Prone Blocked, `pm_flags` 0x8000
+
+VERIFIED, `game.mp.i386.so`: the bit's only clear is `PmoveSingle`'s
+`andb $0x7f, 0xd(ps)` at 0x33e5a, ahead of everything else the move does,
+and its three sets are `orb $0x80, 0xd(ps)` at 0x3196b, 0x331c4 and
+0x33461. INFERRED, from the branches into each:
+
+- 0x3196b, `PM_CheckDuck`: the cmd holds prone (`wbuttons` 0x40), the
+  player is not already prone (`pm_flags` 1) and `BG_CheckProne`
+  (call at 0x31947) refuses. The same arm clears the dive bit 0x4 and, unless
+  `wbuttons` 0x2 is set, raises event 141 for a ducked player (`pm_flags` 2)
+  and 140 otherwise. So every cmd that keeps asking for a refused prone
+  carries the bit.
+- 0x331c4, `PM_UpdateViewAngles`: the body's swing candidate is refused and
+  the delta measured before the swing is past `bg_prone_yawcap + 0.1`
+  (0x70c90).
+- 0x33461, `PM_UpdatePronePitch`: a prone player off the ground
+  (`groundEntityNum` 1023) whose `BG_CheckProne` refuses, with event 141.
+
+The client's "Prone Blocked" notice reads the bit
+(`cod11-hud-protocol.md`, "Stance"). vcod's pmove raises it on the first
+two (`PlayerState::prone_blocked`), the server writes it and the predictor
+carries it. Not modelled: the airborne refusal and the events 140 and 141
+that go with the refusals. No capture has shown the bit; the stance captures
+all took their prone.
 
 ### The landing damp
 
@@ -657,7 +683,8 @@ Still apart, and not modelled:
   stops at 84000 for that reason;
 - the ground samples of `BG_CheckProneValid` past its first trace, the
   prone-position revert after a step (`PM_VerifyPronePosition`, port note 5),
-  event 141 and `pm_flags` 0x8000 and 0x400, and `fTorsoHeight`,
+  event 141 and `pm_flags` 0x400 (0x8000 is modelled since, "Prone
+  Blocked"), and `fTorsoHeight`,
   `fTorsoPitch` and `fWaistPitch`.
 
 ### Why it matters to a server

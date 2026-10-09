@@ -660,7 +660,10 @@ multis, 16 yes/nos, 6 sliders and one edit field. VERIFIED (counted).
 - Stored but inert (archived, so a choice survives): `cl_freelook`,
   `m_filter`, the texture, picmip, `r_ignorehwgamma`, LOD, dynamic light,
   swap interval and NVIDIA fog cvars,
-  `mss_khz`, `mss_3d_provider`, `cg_marks`, `cg_brass`, `cg_blood`.
+  `mss_khz`, `mss_3d_provider`, `cg_marks`, `cg_brass`, `cg_blood`,
+  and the Multiplayer Options' Show Compass (`cg_drawCompass`) and Team
+  Overlay (`cg_drawTeamOverlay`), which retail does not read either
+  (`cod11-hud-protocol.md`, "Which views draw it").
   `snd_restart` and `setRecommended` are unknown commands. Binds to
   commands vcod lacks (`+lookup`, `+strafe`, `mp_QuickMessage`,
   `screenshotJPEG`, the stance toggles) are stored and print `Unknown

@@ -166,7 +166,8 @@ Retail does a lot more than this list. These are the gaps you'll hit first.
 popups work. On the options screens only binds, sensitivity, invert mouse,
 name, rate, volume, video mode, full screen, brightness and the crosshair
 and HUD toggles take effect; texture, lighting, sound quality and language
-settings are stored but ignored. Start New Server, Mods and CD key print "not in vcod
+settings are stored but ignored. Show Compass and Team Overlay do nothing,
+as in retail 1.1. Start New Server, Mods and CD key print "not in vcod
 yet". The browser's game type filter, map preview and refresh date are
 missing.
 
