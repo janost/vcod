@@ -241,6 +241,11 @@ impl Hud {
         });
     }
 
+    /// The gun-kick spring's angles for this frame's scope aim.
+    pub fn set_gun_kick(&mut self, kick: [f32; 2]) {
+        self.player.gun.gun_kick = kick;
+    }
+
     /// CS7 index to the weapon file's `(killIcon, wideKillIcon)`, cached hit
     /// or miss. Same 1-based convention as `entities::resolve_held_weapon`.
     fn weapon_kill_icon(
