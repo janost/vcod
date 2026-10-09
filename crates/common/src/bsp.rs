@@ -16,6 +16,8 @@ const LUMP_DRAWVERTS: usize = 7;
 const LUMP_DRAWINDICES: usize = 8;
 const LUMP_MODELS: usize = 27;
 const LUMP_ENTITIES: usize = 29;
+const LUMP_LIGHTS: usize = 30;
+const LUMP_LIGHT_VIS: usize = 32;
 const LUMP_CULL_GROUPS: usize = 9;
 const LUMP_CULL_INDICES: usize = 10;
 const LUMP_PORTAL_VERTS: usize = 11;
@@ -26,6 +28,7 @@ const LUMP_OCCLUDER_INDICES: usize = 15;
 const LUMP_AABB_NODES: usize = 16;
 const LUMP_CELLS: usize = 17;
 const LUMP_PORTALS: usize = 18;
+const LUMP_LIGHT_INDICES: usize = 19;
 const LUMP_NODES: usize = 20;
 const LUMP_LEAFS: usize = 21;
 const LUMP_PVS: usize = 28;
@@ -259,6 +262,17 @@ pub struct Bsp {
     pub patches: Vec<PatchPart>,
     pub collision_verts: Vec<[f32; 3]>,
     pub collision_indices: Vec<u16>,
+    /// Lump 19: indices into `lights`, per leaf through `leaf_lights`. A
+    /// leaf's list may open with a negative entry, the sky flag.
+    pub light_indices: Vec<i16>,
+    /// Per leaf, index-aligned with `leafs`: (first, count) into
+    /// `light_indices` (leaf record bytes 28 and 32).
+    pub leaf_lights: Vec<(u32, u32)>,
+    /// Lump 30, 72-byte records as raw words; decoded per light type in
+    /// `static_light.rs`.
+    pub lights: Vec<[u32; 18]>,
+    /// Lump 32, the precomputed light visibility cache, raw.
+    pub light_vis: Vec<u8>,
 }
 
 impl Bsp {
@@ -832,7 +846,28 @@ pub fn parse(data: &[u8]) -> Result<Bsp> {
         cluster: le_i32(b, 0),
         cell: le_i32(b, 24),
     })?;
+    let leaf_lights = lump(data, &dir, LUMP_LEAFS)?
+        .as_chunks::<36>()
+        .0
+        .iter()
+        .map(|b| (le_u32(b, 28), le_u32(b, 32)))
+        .collect();
     let pvs = parse_pvs(lump(data, &dir, LUMP_PVS)?)?;
+    // Lighting lumps parse leniently: a bad one costs prop lighting, not
+    // the map.
+    let light_indices = lump(data, &dir, LUMP_LIGHT_INDICES)?
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| i16::from_le_bytes(*b))
+        .collect();
+    let lights = lump(data, &dir, LUMP_LIGHTS)?
+        .as_chunks::<72>()
+        .0
+        .iter()
+        .map(|b| std::array::from_fn(|i| le_u32(b, i * 4)))
+        .collect();
+    let light_vis = lump(data, &dir, LUMP_LIGHT_VIS)?.to_vec();
     let collision_verts = records(
         lump(data, &dir, LUMP_COLLISION_VERTS)?,
         12,
@@ -1040,6 +1075,10 @@ pub fn parse(data: &[u8]) -> Result<Bsp> {
         patches,
         collision_verts,
         collision_indices,
+        light_indices,
+        leaf_lights,
+        lights,
+        light_vis,
     })
 }
 
