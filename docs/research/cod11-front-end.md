@@ -347,7 +347,8 @@ off the branches:
   `NetClient` with no password and with `wrong` was dropped with
   `GAME_INVALIDPASSWORD` (the `game_mp_x86.dll` string at `0x5b780`); with
   `secret` it got the gamestate and went active. VERIFIED by capture.
-- vcod-server answers `pswrd 0` and does not check `g_password`.
+- vcod-server reports `pswrd` and checks `g_password` as retail does
+  (`cod11-server-handshake.md`, "`g_password`").
 
 ## 10. Server info popup
 
