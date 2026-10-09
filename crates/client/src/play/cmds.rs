@@ -53,16 +53,22 @@ impl CmdClock {
     }
 }
 
+/// `cl_maxpackets`' clamp and `cl_packetdup`'s (CoDMP.exe 0x40b940 and
+/// 0x40ba50).
+pub const MAX_PACKETS: (i32, i32) = (15, 100);
+pub const MAX_PACKET_DUP: i32 = 5;
+
 /// The outgoing cmd history: a capped backup for prediction's replay
-/// ([`CmdRing::since`]) plus the previous-packet-plus-new packing every CoD
-/// client sends (`docs/protocol-1.1.md`, "Client to server message body"),
-/// so a dropped packet's cmds ride the next one.
+/// ([`CmdRing::since`]) and the packets it went out in, so each packet also
+/// carries the cmds of the `cl_packetdup` packets before it and a dropped
+/// packet's cmds ride the next one (`CL_WritePacket`, CoDMP.exe 0x40ba50;
+/// docs/protocol-1.1.md, "The client's send rate").
 #[derive(Default)]
 pub struct CmdRing {
     backup: VecDeque<UserCmd>,
-    /// The `new` cmds handed to the last [`CmdRing::packet`] call, repeated
-    /// ahead of the next one.
-    last_new: Vec<UserCmd>,
+    /// Per packet sent, newest last: its local ms and the time of the newest
+    /// cmd it carried (retail's `outPackets[]`).
+    sent: VecDeque<(i32, i32)>,
 }
 
 impl CmdRing {
@@ -73,24 +79,35 @@ impl CmdRing {
         self.backup.push_back(cmd);
     }
 
-    /// Pushes `new` onto the backup ring and returns the previous packet's
-    /// cmds followed by `new`, at most [`MAX_MOVE_CMDS`] with the most recent
-    /// kept.
-    pub fn packet(&mut self, new: &[UserCmd]) -> Vec<UserCmd> {
-        for &cmd in new {
-            self.push(cmd);
-        }
-        let mut packet: Vec<UserCmd> = self
-            .last_new
-            .iter()
-            .copied()
-            .chain(new.iter().copied())
-            .collect();
+    /// `CL_ReadyToSendPacket` (CoDMP.exe 0x40b940): a LAN server gets every
+    /// frame's packet, anything else one per `1000 / cl_maxpackets` ms.
+    pub fn packet_due(&self, realtime: i32, lan: bool, max_packets: i32) -> bool {
+        let Some(&(last, _)) = self.sent.back() else {
+            return true;
+        };
+        let (lo, hi) = MAX_PACKETS;
+        lan || realtime - last >= 1000 / max_packets.clamp(lo, hi)
+    }
+
+    /// The cmds the packet sent at `realtime` carries: every one past the
+    /// newest of the packet `dup` before the last, at most [`MAX_MOVE_CMDS`]
+    /// with the most recent kept.
+    pub fn packet(&mut self, realtime: i32, dup: i32) -> Vec<UserCmd> {
+        let dup = dup.clamp(0, MAX_PACKET_DUP) as usize;
+        let after = self
+            .sent
+            .len()
+            .checked_sub(dup + 1)
+            .map_or(i32::MIN, |i| self.sent[i].1);
+        let mut packet: Vec<UserCmd> = self.since(after).copied().collect();
         if packet.len() > MAX_MOVE_CMDS {
-            let excess = packet.len() - MAX_MOVE_CMDS;
-            packet.drain(0..excess);
+            packet.drain(0..packet.len() - MAX_MOVE_CMDS);
         }
-        self.last_new = new.to_vec();
+        let newest = self.backup.back().map_or(after, |c| c.server_time);
+        if self.sent.len() > MAX_PACKET_DUP as usize {
+            self.sent.pop_front();
+        }
+        self.sent.push_back((realtime, newest));
         packet
     }
 
@@ -103,7 +120,7 @@ impl CmdRing {
 
     pub fn clear(&mut self) {
         self.backup.clear();
-        self.last_new.clear();
+        self.sent.clear();
     }
 }
 
@@ -151,24 +168,40 @@ mod tests {
         }
     }
 
+    fn times(p: &[UserCmd]) -> Vec<i32> {
+        p.iter().map(|c| c.server_time).collect()
+    }
+
     #[test]
     fn packet_repeats_the_previous_packets_cmds() {
         let mut r = CmdRing::default();
-        let p1 = r.packet(&[cmd(8), cmd(16)]);
-        assert_eq!(
-            p1.iter().map(|c| c.server_time).collect::<Vec<_>>(),
-            vec![8, 16]
-        );
-        let p2 = r.packet(&[cmd(24)]);
-        assert_eq!(
-            p2.iter().map(|c| c.server_time).collect::<Vec<_>>(),
-            vec![8, 16, 24]
-        );
-        let p3 = r.packet(&[cmd(32)]);
-        assert_eq!(
-            p3.iter().map(|c| c.server_time).collect::<Vec<_>>(),
-            vec![24, 32]
-        );
+        r.push(cmd(8));
+        r.push(cmd(16));
+        assert_eq!(times(&r.packet(0, 1)), vec![8, 16]);
+        r.push(cmd(24));
+        assert_eq!(times(&r.packet(33, 1)), vec![8, 16, 24]);
+        r.push(cmd(32));
+        assert_eq!(times(&r.packet(66, 1)), vec![24, 32]);
+        // No new cmd: the last packet's go again.
+        assert_eq!(times(&r.packet(99, 1)), vec![32]);
+        r.push(cmd(40));
+        assert_eq!(times(&r.packet(132, 0)), vec![40]);
+        r.push(cmd(48));
+        assert_eq!(times(&r.packet(165, 2)), vec![40, 48]);
+    }
+
+    #[test]
+    fn packets_wait_for_maxpackets_off_the_lan() {
+        let mut r = CmdRing::default();
+        assert!(r.packet_due(0, false, 30));
+        r.packet(0, 1);
+        assert!(!r.packet_due(32, false, 30));
+        assert!(r.packet_due(33, false, 30));
+        assert!(r.packet_due(1, true, 30));
+        // Clamped to 15..=100.
+        assert!(r.packet_due(10, false, 1000));
+        assert!(!r.packet_due(65, false, 1));
+        assert!(r.packet_due(66, false, 1));
     }
 
     #[test]

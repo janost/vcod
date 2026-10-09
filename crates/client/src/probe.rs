@@ -512,7 +512,7 @@ pub fn probe(
                 }
                 NetEvent::Print(t) => print!("print: {t}"),
                 NetEvent::Dropped(r) => {
-                    println!("dropped: {r}");
+                    println!("dropped: {}", escape_ctl(&r));
                     return finish_probe(client, save_fixture, save_snapshots);
                 }
                 NetEvent::ConfigstringChanged(i) => {
