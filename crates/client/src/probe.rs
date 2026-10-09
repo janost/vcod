@@ -781,7 +781,14 @@ pub fn probe(
         // byte only travels in the full usercmd branch, which a `wbuttons`,
         // `upmove` or `weapon` change forces (docs/protocol-1.1.md).
         cmd.weapon = weapon_switch.unwrap_or(ps_weapon);
-        let sent = client.send_frame(&cmd);
+        // A retail client stays `CA_CONNECTED` until its downloads end and
+        // creates no usercmds before `CA_PRIMED`, so nothing enters the
+        // world mid-download.
+        let sent = if download.as_ref().is_some_and(DownloadProbe::holds_cmds) {
+            None
+        } else {
+            client.send_frame(&cmd)
+        };
         if let Some(c) = sent {
             if probe_fall {
                 fall.record_cmd(c.server_time, fall_walk.map(|_| c.angles[1]));
@@ -1713,6 +1720,12 @@ impl DownloadProbe {
             expected: std::collections::HashMap::new(),
             done: false,
         }
+    }
+
+    /// From the gamestate until the downloads are over and the next
+    /// gamestate is in.
+    fn holds_cmds(&self) -> bool {
+        self.loader.is_some() && !self.done
     }
 
     fn step(

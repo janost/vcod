@@ -35,40 +35,36 @@ use crate::hud::font::{self, Slot, UiFonts};
 use browser::{AddFavorite, Browser, Filter, Source, Status};
 use status::StatusQuery;
 
-/// The files `ui_mp/menus.txt` loads that hold the menus vcod drives.
-const MENU_FILES: [&str; 9] = [
-    "ui_mp/main.menu",
-    "ui_mp/mods.menu",
-    "ui_mp/joinserver.menu",
-    "ui_mp/password.menu",
-    "ui_mp/serverinfo.menu",
-    "ui_mp/createfavorite.menu",
-    "ui_mp/filter.menu",
-    "ui/quit.menu",
-    "ui/error.menu",
+/// `ui_menuFiles`' default (`ui_mp_x86.dll` 0x40036c9c): the menu list the
+/// UI loads, which a mod replaces by shipping its own.
+const MENU_LIST: &str = "ui_mp/menus.txt";
+
+/// The stock menus vcod cannot run yet; `open` refuses them with a console
+/// line instead of drawing controls that do nothing. Any other menu the
+/// list loads, a mod's included, opens.
+const UNSUPPORTED: [&str; 18] = [
+    "single_popmenu",
+    "options_driverinfo",
+    "options_credits",
+    "language_restart_popmenu",
+    "rec_restart_popmenu",
+    "multi_menu",
+    "createserver",
+    "createserver_maps",
+    "createserver_op",
+    "cdkey_menu",
+    "connect",
+    "single_player_menu",
+    "auconfirm",
+    "settings_dm",
+    "settings_tdm",
+    "settings_sd",
+    "settings_re",
+    "settings_bel",
 ];
 
-/// Menus `open` may show, with [`options::MENUS`]. Anything else is refused
-/// with a console line.
-const SUPPORTED: [&str; 11] = [
-    "main",
-    "mods_menu",
-    "joinserver",
-    "password_popmenu",
-    "serverinfo_popmenu",
-    "createfavorite_popmenu",
-    "filter_popmenu",
-    "del_fav_popmenu",
-    "fav_message_popmenu",
-    "quit_popmenu",
-    "error_popmenu",
-];
-
-fn supported(name: &str) -> bool {
-    SUPPORTED
-        .iter()
-        .chain(&options::MENUS)
-        .any(|s| s.eq_ignore_ascii_case(name))
+fn unsupported(name: &str) -> bool {
+    UNSUPPORTED.iter().any(|s| s.eq_ignore_ascii_case(name))
 }
 
 /// `ownerdraw` ids from `ui_mp/menudef.h`.
@@ -178,10 +174,15 @@ impl Ui {
     pub fn new(fs: &Pk3Fs) -> Ui {
         let read = |p: &str| fs.read(p).map(|b| String::from_utf8_lossy(&b).into_owned());
         let mut menus = Vec::new();
-        for path in MENU_FILES.iter().chain(&options::MENU_FILES) {
+        let files = read(MENU_LIST).map_or_else(Vec::new, |t| ui_menu::menu_list(&t));
+        if files.is_empty() {
+            log::warn!("ui: no menus in {MENU_LIST}");
+        }
+        for path in &files {
             match read(path) {
                 Some(text) => menus.extend(ui_menu::parse_file(&text, &read)),
-                None => log::warn!("ui: no {path}"),
+                // Stock `menus.txt` names three files no pak ships.
+                None => log::debug!("ui: menu file not found: {path}"),
             }
         }
         let state = menus
@@ -327,7 +328,7 @@ impl Ui {
     }
 
     fn open_menu(&mut self, name: &str, out: &mut Vec<UiEffect>) {
-        let Some(m) = self.find(name).filter(|_| supported(name)) else {
+        let Some(m) = self.find(name).filter(|_| !unsupported(name)) else {
             crate::console::log::print(&format!("The {name} menu is not in vcod yet."));
             return;
         };
@@ -525,7 +526,7 @@ impl Ui {
             .into_iter()
             .filter(|c| c.len() > 1 && c[0].eq_ignore_ascii_case("open"))
             .map(|c| c[1].clone())
-            .find(|name| !supported(name))
+            .find(|name| unsupported(name) || self.find(name).is_none())
     }
 
     /// Whether `item` of `menu` is drawn and can take the mouse.
@@ -1255,6 +1256,39 @@ mod tests {
         click_item(&mut ui, "main", "@MENU_START_NEW_SERVER", &shell);
         assert_eq!(ui.open.len(), 1);
         assert_eq!(ui.menus[ui.open[0]].name, "main");
+    }
+
+    #[test]
+    fn a_mods_menu_list_loads_and_opens_its_own_menus() {
+        if vcod_common::testing::game_fs().is_none() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let mut w = zip::ZipWriter::new(std::fs::File::create(root.path().join("z.pk3")).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        w.start_file("ui_mp/menus.txt", opts).unwrap();
+        std::io::Write::write_all(
+            &mut w,
+            br#"{ loadMenu { "ui_mp/main.menu" } loadMenu { "ui_mp/zmenu.menu" } }"#,
+        )
+        .unwrap();
+        w.start_file("ui_mp/zmenu.menu", opts).unwrap();
+        std::io::Write::write_all(
+            &mut w,
+            br#"{ menuDef { name "zmenu" rect 0 0 640 480 onOpen { exec "zmod_opened" } } }"#,
+        )
+        .unwrap();
+        w.finish().unwrap();
+        let base = vcod_common::testing::game_dir().join("main");
+        let fs = Pk3Fs::open_layered(&base, Some(root.path())).unwrap();
+        let mut ui = Ui::new(&fs);
+        // Only what the mod's list names: the stock browser is gone.
+        assert!(ui.find("joinserver").is_none());
+        assert!(ui.find("main").is_some());
+        let mut out = Vec::new();
+        ui.open_menu("zmenu", &mut out);
+        assert_eq!(top_name(&ui), "zmenu");
+        assert_eq!(out, [UiEffect::Command("zmod_opened".into())]);
     }
 
     #[test]

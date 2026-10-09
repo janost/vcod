@@ -240,6 +240,16 @@ impl Cvars {
         }
     }
 
+    /// `Cvar_InfoString(bit)`: every cvar carrying `bit` as `(name,
+    /// value)`, case-folded order, empty values left out as
+    /// `Info_SetValueForKey` leaves them.
+    pub fn info_pairs(&self, bit: u16) -> impl Iterator<Item = (&str, &str)> {
+        self.vars
+            .values()
+            .filter(move |c| c.flags & bit != 0 && !c.value.is_empty())
+            .map(|c| (c.name.as_str(), c.value.as_str()))
+    }
+
     pub fn flags(&self, name: &str) -> Option<u16> {
         self.vars.get(&name.to_ascii_lowercase()).map(|c| c.flags)
     }

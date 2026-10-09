@@ -222,6 +222,38 @@ pub fn parse_file(text: &str, include: &dyn Fn(&str) -> Option<String>) -> Vec<U
     menus
 }
 
+/// `ui_mp/menus.txt`'s file names in order, as `UI_LoadMenus`
+/// (`ui_mp_x86.dll` 0x400085b0) reads a menu list: tokens up to the first
+/// bare `}`, each `loadMenu { ... }` block naming one or more files, other
+/// tokens skipped (docs/research/cod11-front-end.md, section 1).
+pub fn menu_list(text: &str) -> Vec<String> {
+    let tokens = expand(text, &|_| None);
+    let mut files = Vec::new();
+    let mut i = 0;
+    while let Some(t) = tokens.get(i) {
+        if t == "}" {
+            break;
+        }
+        i += 1;
+        if !t.eq_ignore_ascii_case("loadMenu") {
+            continue;
+        }
+        // A `loadMenu` without its block ends the list.
+        if tokens.get(i).map(String::as_str) != Some("{") {
+            break;
+        }
+        i += 1;
+        while let Some(f) = tokens.get(i) {
+            i += 1;
+            if f == "}" {
+                break;
+            }
+            files.push(f.clone());
+        }
+    }
+    files
+}
+
 /// Q3's `atof`/`atoi` plus the `0x` hex `menudef.h` uses for flags.
 fn num(t: Option<&String>) -> f32 {
     let Some(t) = t else { return 0.0 };
@@ -683,5 +715,22 @@ mod tests {
                 "4",
                 "set r_lodscale 4;set r_lodbias -200"
             ]));
+    }
+
+    #[test]
+    fn menu_list_reads_load_menu_blocks_to_the_closing_brace() {
+        let text = r#"// multiplayer menu defs
+{
+    loadMenu { "ui_mp/main.menu" }
+    loadMenu { "ui/quit.menu" "ui/error.menu" }	//TEMP
+    something
+}
+    loadMenu { "ui_mp/after.menu" }
+"#;
+        assert_eq!(
+            menu_list(text),
+            ["ui_mp/main.menu", "ui/quit.menu", "ui/error.menu"]
+        );
+        assert!(menu_list("{ loadMenu \"x.menu\" }").is_empty());
     }
 }

@@ -170,6 +170,12 @@ pub struct Client {
     pub ping_ring: [(i32, i32); SV_PACKET_BACKUP],
     /// `cl->ping`, `SV_CalcPings`' average over [`Self::ping_ring`].
     pub ping: i32,
+    /// `nextSnapshotTime`: no message goes out before this server time
+    /// ([`Self::pace`]).
+    pub next_message_ms: i32,
+    /// `netchan.unsentFragments`: the rest of a fragmented message, one
+    /// packet per frame turn ([`Self::next_fragment`]).
+    pub unsent: std::collections::VecDeque<Vec<u8>>,
 }
 
 impl Client {
@@ -195,6 +201,8 @@ impl Client {
             last_packet: now,
             last_connect: now,
             last_client_command: 0,
+            next_message_ms: 0,
+            unsent: std::collections::VecDeque::new(),
             next_reliable_ms: 0,
             reliable_ack: 0,
             reliable_sent: 0,
@@ -351,6 +359,57 @@ impl Client {
         }
     }
 
+    /// The rate a message is paced and filled by: [`Self::rate`] under a
+    /// non-zero `sv_maxRate`, which reads 1000 at the least (0x808f7a5).
+    pub fn send_rate(&self, dedicated: i32, max_rate: i32) -> i32 {
+        let rate = self.rate(dedicated);
+        if max_rate == 0 {
+            rate
+        } else {
+            rate.min(max_rate.max(1000))
+        }
+    }
+
+    /// `SV_SendMessageToClient`'s `nextSnapshotTime` (0x808f680) after a
+    /// message of `bytes`: the next frame for a LAN client, else the time
+    /// the rate needs to carry it (capped at 1500 bytes, plus 48 of
+    /// headers) and never under the snapshot interval. A client that is
+    /// neither in the world nor downloading waits a second.
+    pub fn pace(&mut self, sv_time_ms: i32, bytes: usize, rate: i32, snapshot_ms: i32) {
+        if is_lan(self.addr.ip()) {
+            // Retail's `svs.time - 1`: due whatever the clock does next.
+            self.next_message_ms = i32::MIN;
+            return;
+        }
+        let msec = ((bytes.min(1500) as i32 + 48) * 1000 / rate.max(1)).max(snapshot_ms);
+        let mut next = sv_time_ms + msec;
+        if self.state != ClientState::Active && self.download.is_none() {
+            next = next.max(sv_time_ms + 1000);
+        }
+        self.next_message_ms = next;
+    }
+
+    /// `SV_SendMessageToClient`'s send: the first packet of a message goes
+    /// out now, a fragmented message's others wait in [`Self::unsent`].
+    pub fn first_packet(&mut self, mut packets: Vec<Vec<u8>>) -> Option<Vec<u8>> {
+        if packets.is_empty() {
+            return None;
+        }
+        let first = packets.remove(0);
+        self.unsent = packets.into();
+        Some(first)
+    }
+
+    /// `SV_SendClientMessages`' fragment turn (0x809045c): the next unsent
+    /// packet, paced by the bytes left at the rate with no LAN shortcut and
+    /// no snapshot floor.
+    pub fn next_fragment(&mut self, sv_time_ms: i32, rate: i32) -> Option<Vec<u8>> {
+        let left: usize = self.unsent.iter().map(Vec::len).sum();
+        let pkt = self.unsent.pop_front()?;
+        self.next_message_ms = sv_time_ms + (left.min(1500) as i32 + 48) * 1000 / rate.max(1);
+        Some(pkt)
+    }
+
     /// Commits a message that passed every check: the netchan sequence, the
     /// acks and the timeout clock. The address is the caller's call, see
     /// `Server::handle_client_packet`.
@@ -435,6 +494,36 @@ mod tests {
     /// `SV_UserinfoChanged`'s rate: 99999 for a LAN client below
     /// `dedicated 2` (what retail's `status` printed for a loopback probe),
     /// else clamped, 5000 when empty.
+    #[test]
+    fn a_message_waits_out_the_rate_off_the_lan() {
+        let now = Instant::now();
+        let wan = SocketAddr::from(([203, 0, 113, 7], 27960));
+        let mut c = Client::new(wan, 1, 2, "\\rate\\5000".into(), now);
+        c.state = ClientState::Active;
+        // 452 + 48 bytes at 5000 B/s is 100 ms, past the 50 ms interval.
+        c.pace(1000, 452, c.send_rate(1, 0), 50);
+        assert_eq!(c.next_message_ms, 1100);
+        // A small message keeps the snapshot interval.
+        c.pace(1000, 100, c.send_rate(1, 0), 50);
+        assert_eq!(c.next_message_ms, 1050);
+        // `sv_maxRate` caps the rate, never under 1000.
+        assert_eq!(c.send_rate(1, 3000), 3000);
+        assert_eq!(c.send_rate(1, 10), 1000);
+        // Not in the world and not downloading: a second.
+        c.state = ClientState::Primed;
+        c.pace(1000, 100, 5000, 50);
+        assert_eq!(c.next_message_ms, 2000);
+        let mut lan = Client::new(
+            SocketAddr::from(([127, 0, 0, 1], 1)),
+            1,
+            2,
+            String::new(),
+            now,
+        );
+        lan.pace(1000, 1400, 1000, 50);
+        assert!(lan.next_message_ms <= 1000);
+    }
+
     #[test]
     fn rate_is_clamped_as_retail_does() {
         let mut c = active();

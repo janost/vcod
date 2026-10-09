@@ -586,7 +586,7 @@ short chunkLen        ; 0 = EOF
 byte  data[chunkLen]
 ```
 
-Ack each accepted block with a reliable `nextdl <block>`; the server's send window retransmits until acked. A zero-length block ends the file. `stopdl` aborts, and a final `donedl` makes the server re-send the gamestate. **Divergence from RTCW, #7.** `MAX_DOWNLOAD_BLKSIZE` is 8192, not RTCW's 2048 (observed live on public servers; a 2048 cap rejects their blocks). The 1.1d Linux server itself sends 2048-byte blocks (`docs/research/cod11-server-handshake.md`, "Serving a download"), so a client takes anything up to 8192. Download rate is governed by `sv_dl_maxRate`, and one message can carry several blocks. Stock paks (`main/pak0`..`pak9`, `localized_*`) are refused server-side.
+Ack each accepted block with a reliable `nextdl <block>`; the server's send window retransmits until acked. A zero-length block ends the file. `stopdl` aborts, and a final `donedl` makes the server re-send the gamestate. **Divergence from RTCW, #7.** `MAX_DOWNLOAD_BLKSIZE` is 8192, not RTCW's 2048 (observed live on public servers; a 2048 cap rejects their blocks). The 1.1d Linux server itself sends 2048-byte blocks (`docs/research/cod11-server-handshake.md`, "Serving a download"), so a client takes anything up to 8192. There is no `sv_dl_maxRate`: 1.1d fills each message with the client's rate over one snapshot interval and sends it at the client's `nextSnapshotTime`, one fragment per frame (`docs/research/cod11-server-handshake.md`, "Message pacing"), so one message can carry several blocks. Stock paks (`main/pak0`..`pak9`, `localized_*`) are refused server-side.
 
 ## Delta field encoding
 
