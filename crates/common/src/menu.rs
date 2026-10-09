@@ -221,8 +221,16 @@ fn parse_item(tokens: &[String]) -> (MenuItem, Option<String>) {
     (item, background)
 }
 
+/// [`parse_with`] with no `#include`s resolved.
 pub fn parse(text: &str) -> Menu {
-    let tokens = tokenize(text);
+    parse_with(text, &|_| Some(String::new()))
+}
+
+/// One script menu, after the preprocessor: `include` reads an `#include`d
+/// file, so a mod's `visible MENU_TRUE` or `#define`d response resolves as
+/// retail's precompiler resolves it.
+pub fn parse_with(text: &str, include: &dyn Fn(&str) -> Option<String>) -> Menu {
+    let tokens = crate::ui_menu::expand(text, include);
     let mut menu = Menu::default();
     let Some(def_pos) = tokens.iter().position(|t| t == "menuDef") else {
         return menu;
@@ -353,6 +361,31 @@ mod tests {
         assert!(!gate.passes(Some("0")));
         assert!(gate.passes(Some("1")));
         assert!(gate.passes(None));
+    }
+
+    #[test]
+    fn defines_and_includes_expand_before_parsing() {
+        // A mod menu built the way the stock UI menus are, with `menudef.h`
+        // constants and its own macros.
+        let text = r#"
+#include "ui_mp/menudef.h"
+#define RIFLE_RESPONSE "kar98k_mp"
+{ menuDef { name "mod_weapons"
+    itemDef { name "a" visible MENU_TRUE text "Kar98k" action { scriptMenuResponse RIFLE_RESPONSE; } }
+    execKey "1" { scriptMenuResponse RIFLE_RESPONSE; }
+} }"#;
+        let include =
+            |p: &str| (p == "ui_mp/menudef.h").then(|| "#define MENU_TRUE 1\n".to_string());
+        let m = parse_with(text, &include);
+        assert_eq!(m.items.len(), 1);
+        assert!(m.items[0].visible);
+        assert_eq!(m.items[0].response.as_deref(), Some("kar98k_mp"));
+        assert_eq!(
+            m.exec_keys,
+            vec![("1".to_string(), "kar98k_mp".to_string())]
+        );
+        // Without the header `MENU_TRUE` stays a word, which reads as hidden.
+        assert!(!parse(text).items[0].visible);
     }
 
     #[test]

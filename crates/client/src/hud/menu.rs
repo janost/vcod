@@ -211,9 +211,11 @@ impl MenuCache {
     pub fn get(&mut self, fs: &Pk3Fs, name: &str) -> Option<&Menu> {
         if !self.cache.contains_key(name) {
             let path = format!("ui_mp/scriptmenus/{name}.menu");
-            let parsed = fs
-                .read(&path)
-                .map(|bytes| vcod_common::menu::parse(&String::from_utf8_lossy(&bytes)));
+            let parsed = fs.read(&path).map(|bytes| {
+                let include =
+                    |p: &str| fs.read(p).map(|b| String::from_utf8_lossy(&b).into_owned());
+                vcod_common::menu::parse_with(&String::from_utf8_lossy(&bytes), &include)
+            });
             if parsed.is_none() {
                 log::warn!("menu: no script menu at {path}");
             }
