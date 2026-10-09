@@ -4557,7 +4557,8 @@ reached, as 14.5's same-frame rows read.
 
 The same probe's fourth client throws grenades (`--save-grenade`), and the
 three stand round each grenade in flight; the first victim of each grenade
-walk sets the other two out of reach. VERIFIED, retail: three walks, each
+walk sets the other two out of reach. VERIFIED, retail, with the probe's
+first glue (60 units round the grenade in its own plane): three walks, each
 logged its first victim (slot 2, 99, 66 and 66 damage) and no other.
 INFERRED: a grenade's walk measures each victim on its turn as the builtin's
 does, which is the one `G_RadiusDamage` both reach (14.1).
@@ -4588,10 +4589,9 @@ every builtin row above as retail did;
 (`crates/server/src/game/builtins/combat.rs`) replays them, and
 `a_grenade_walk_meets_a_victim_where_an_earlier_callback_moved_it`
 (`crates/server/tests/combat.rs`) the grenade case, which before the change
-reached the parked victim at the spot it had left. The grenade half of the
-probe does not run the same on ours: a missile's script `origin` reads
-`(0, 0, 0)`, so the three stand round the origin of the map, and the thrower's
-grenades went off beside it, where retail's flew clear.
+reached the parked victim at the spot it had left. The probe's grenade half
+was reworked on 2026-10-09 to measure the walk's link order; 14.7, "The
+frame's links before the walk", has that run on both servers.
 
 ### 14.6 Turrets, and the other entities with `takedamage`
 
@@ -4818,6 +4818,52 @@ last. 14.5's rows follow the same way: line 1's slot 0 straddles the split
 and slot 1 is wholly below it, so 0 is walked first whatever the
 `setOrigin` order; line 2's two straddle it and were set down 3 then 2, so 2
 comes first until `player_die` puts 3 at the head.
+
+**The frame's links before the walk.** VERIFIED, `game.mp.i386.so`, the
+call sites in `G_RunFrame` (0x50478): the touch queue's
+`Scr_RunCurrentThreads` at 0x50653, `Scr_SetTime` at 0x5070c, and the
+entity loop at 0x50930..0x50975, which calls `G_RunEntity` (0x502bc) at
+0x50955 for every in-use entity (and at 0x50949 for its link parent first);
+`G_RunEntity` calls `G_RunMissile` for `eType` 4 at 0x50375. INFERRED, off
+that instruction order and no jump back from the loop: a grenade's flight
+and its blast run after the frame's script threads, so a thread reads the
+grenade's last-frame origin and every `setOrigin` a thread makes that frame
+has relinked its player before the walk.
+
+VERIFIED, `client-probes/probe_blastmove`'s grenade half on retail,
+2026-10-09, three clients and a `--save-grenade` thrower under dm on
+mp_carentan: while a grenade is live the thrower is parked out of reach and
+a thread sets the three down every frame side by side over the grenade's
+`origin`, at (0, -32, 60), (0, 0, 60) and (0, 32, 60) for slots 0, 1 and 2,
+in slot order on a frame whose `getTime()` is a multiple of 100 and in
+reverse on the others. The first victim of each walk:
+
+| walk at | this frame's last link | last frame's last link | first victim |
+|---|---|---|---|
+| 62350 | 0 | 2 | 0 |
+| 72400 | 2 | 0 | 2 |
+| 81050 | 0 | 2 | 0 |
+
+INFERRED, from the rows: the three sit in one node (their 128-unit squares
+are 64 units apart) and the walk starts at the player this frame's thread
+linked last, so the blast went off after that thread's links. The same probe
+against `vcod-server` with the missile pass ahead of the script frame took
+the last frame's (55800: 0, 65850: 2, 74550: 2, each the other parity's
+last link); with the pass moved behind it, this frame's (53200: 2, 59750: 0,
+68300: 2). A middle build that ran the pass after the threads but before
+their `setOrigin`s reached the sims traced the flight against the bodies
+where the last frame left them: the thrower's first grenade bounced off slot
+1, set down over the thrower the frame before, at `trDelta`
+(0, -120.5, -10.1), an eighth of the throw, where retail's flew on at 960
+(`--save-grenade` captures of both, kept out of the fixtures).
+
+vcod: `Server::tick` runs the missile pass and the grenade walks after
+`ScriptRuntime::run_frame` and every client write the frame's threads
+queued (spawns, `setOrigin`s, `linkTo` re-anchors, mover pushes), then
+applies what the walks' callbacks queued. `run_frame`'s item and link passes
+still run ahead of the missiles, where retail interleaves all three by
+entity number. `a_grenade_walk_meets_this_frame_s_script_links_first`
+(`crates/server/tests/combat.rs`) is the two-client form of the probe.
 
 **Other callers.** VERIFIED: `trap_EntitiesInBox` is also called by
 `G_TouchTriggers` (`0x3f925`, mask `0x405c0008`), `G_GetActivateEnt`
