@@ -313,14 +313,40 @@ that fits nowhere is relinked where it was without stalling the mover.
 `G_TryPushingEntity` writes `0x3ff` to the ground of anything it moves off
 another ground or leaves in place, which `G_RunItem` drops from.
 
-VERIFIED, then: every kept entity is unlinked (`0x55561`), handed to
-`G_TryPushingEntity` in list order (`0x555c8`) and relinked when that returns
-1 (`0x555e1`). On a 0, an `eType` 3 entity is relinked and skipped
-(`0x555d4`); otherwise a pusher whose `pos.trType` or `apos.trType` is 4,
-`TR_SINE`, calls `G_Damage(check, pusher, pusher, 0, 0, 99999, 0, 0x13, 0)`
-(`0x55617`) and goes on, and any other stores the entity through its fourth
-argument and returns 0 (`0x55621`). INFERRED: no scriptent verb writes
-`TR_SINE` (section 9), so a blocked script mover never crushes.
+VERIFIED, the list box (`0x550f0`..`0x5530a`): the pusher's `r.absmin` and
+`r.absmax` when its `r.currentAngles` and `amove` are all zero, else a cube of
+`RadiusFromBounds(r.mins, r.maxs)` about `r.currentOrigin`, both before the
+move, then stretched along `move` on each axis (added to the max side when
+positive, to the min side otherwise; the sign test at `0x552e8`).
+
+VERIFIED, then, in this order: the filter loop (`0x553d4`..`0x5553c`) copies
+every kept entity number into a second array; a loop unlinks every kept
+entity (`0x55550`..`0x55570`, the call at `0x55561`); a loop hands each, in
+list order, to `G_TryPushingEntity` (`0x555c8`) after storing it and its
+`r.currentOrigin` at `pushed_p` (`0x55598`..`0x555bb`) and relinks it when
+that returns 1 (`0x555e1`). On a 0, an `eType` 3 entity is relinked and
+skipped (`0x555d4`); otherwise a pusher whose `pos.trType` or `apos.trType`
+is 4, `TR_SINE`, calls `G_Damage(check, pusher, pusher, 0, 0, 99999, 0,
+0x13, 0)` (`0x55617`) and goes on with the entity still unlinked, and any
+other stores the entity through its fourth argument and returns 0 (`0x55621`)
+straight to the epilogue. Only when the list runs out does a last loop link
+every kept entity again in list order (`0x55650`..`0x55670`, the call at
+`0x55661`) and return 1. VERIFIED: nothing in `0x550f0`..`0x553ae` stores
+through `pushed`, so the pusher itself is not on the undo list. INFERRED: a
+push turns the kept entities round in their node's list, each relink
+prepending it (combat doc 14.7); the last loop finds each in the node it
+already sits in and keeps its place; and a blocked push leaves the blocker and
+every kept entity listed after it out of the tree until something links them
+(a player's next cmd).
+
+VERIFIED, off a paired capture against the retail 1.1d Linux server,
+mp_carentan under a `dm`-shaped probe with two clients, 2026-10-09:
+`crates/server/tests/fixtures/movers/mp_carentan-dm-pushorder.txt` (the
+server's `PROBE` lines from `client-probes/probe_pushorder.gsc`). Two players
+set down in the slab's path, slot 0 then slot 1, are walked 1 then 0 by a
+flat `radiusDamage`; after each `movey` that pushes both the walk turns round
+(0 then 1, then 1 then 0, then 0 then 1), and a `movey` away from them leaves
+it as it was.
 
 VERIFIED, `G_TryPushingEntity` (`0x54930`): it returns 0 when the pusher's
 `eFlags` carry 0x04000000 (byte `+0xb` bit 4, `0x54942`) and the entity's
@@ -344,12 +370,13 @@ RTCW's jitter, `z` 0 then ±4, `x` ±4, `y` ±4, in that nesting; a player is
 15 wide, so it reaches 4 and no further.
 
 VERIFIED, `G_MoverTeam` again: on a 0 from the push it walks the `pushed`
-records back (`0x55744`-`0x557ef`), restoring `r.currentOrigin`,
+records back, newest first (`0x55744`-`0x557ef`), restoring `r.currentOrigin`,
 `s.pos.trBase`, a client's `ps.origin` and subtracting
-`ANGLE2SHORT(record yaw)` from `ps.delta_angles[1]` (`0x557b3`); then for
-each team part adds `level.time - level.previousTime` to `pos.trTime` and
-`apos.trTime` (`0x5580f`, `0x55821`) and re-evaluates both (`0x55838`,
-`0x55851`); then calls `ent+0x208` if set (`0x55881`). `InitScriptMover`
+`ANGLE2SHORT(record yaw)` from `ps.delta_angles[1]` (`0x557b3`), and links
+each (`0x557de`); then for each team part adds `level.time -
+level.previousTime` to `pos.trTime` and `apos.trTime` (`0x5580f`, `0x55821`),
+re-evaluates both (`0x55838`, `0x55851`) and links it (`0x5585d`); then calls
+`ent+0x208` if set (`0x55881`). `InitScriptMover`
 (`0x60214`) writes `Reached_ScriptMover` to `ent+0x204` (`0x60364`) and
 nothing to `ent+0x208`. INFERRED: a blocked script mover holds where it was,
 one frame per blocked frame, with no callback, and its `movedone` comes that
@@ -383,13 +410,19 @@ VERIFIED, off the capture:
   origin by about 0.0005 degrees a frame. INFERRED: `amove` is never quite 0
   for an entity whose `r.currentAngles` came back off a rotate.
 
-vcod: `crate::push` runs the push over the players on the mover's turn in
-the entity pass (combat doc 14.7), after the frame's script, in slot order, with `G_TryPushingEntity`'s jitter and its keep-in-place
-fallback, and stalls the mover when one fits nowhere. When it does not stall,
-`crate::game::item::push_items` runs the same test over the items not taken,
-under each item's push mask, in entity order. A blocked push leaves every
-item where it was; retail would put back the ones listed ahead of the
-blocker but keep their ground at `0x3ff`, which vcod does not model. Its candidate test is
+vcod: `mover::run_one` unlinks a moving mover, lists `G_MoverPush`'s box
+with `AreaTree::entities_in_box` into `Step::listed` and links it again.
+`crate::push::push` runs on the mover's turn in the entity pass (combat doc
+14.7), after the frame's script: it keeps the listed players and items in
+list order, unlinks them all, pushes and relinks each on its turn
+(`G_TryPushingEntity`'s jitter and keep-in-place fallback for a player, a
+player linked unsnapped at the spot), links them all again, and on a player
+that fits nowhere walks its records back, relinks those, leaves the rest
+unlinked and stalls the mover. A player listed after the one being pushed is
+out of the tree and blocks nothing, as in retail. A player is moved from
+`ps.origin`: VERIFIED, vcod measurement against the ride fixture, a push from
+the truncated link origin lost the fraction retail's pushed player keeps
+(`push_y` frame 8, y 2427.6 against our 2428.8). Its candidate test is
 a box, as retail's; its position test is our capsule plus a sweep from where
 the body stood that passes through the pusher, because a zero-length capsule
 is never `startsolid` under terrain and without the sweep the lowered slab
@@ -397,8 +430,9 @@ pushed the player through the ground. VERIFIED, vcod measurement against
 the same fixture: a capsule candidate test met the plank 4.8 units of slab
 travel later than retail's box did. The residual yaw is not
 modelled, and the `TR_SINE` crush has no verb that reaches it.
-`crates/server/tests/ride_ab.rs` is the gate for players and
-`crates/server/tests/push_ab.rs` for items.
+`crates/server/tests/ride_ab.rs` is the gate for players,
+`crates/server/tests/push_ab.rs` for items and
+`crates/server/tests/push_order_ab.rs` for the tree order.
 
 ## 13. A player linked to a mover
 

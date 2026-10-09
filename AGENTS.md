@@ -389,7 +389,12 @@ dropped, so test such a builtin through `ScriptRuntime`.
   `tag_origin`'s local tag turns the body by the legs' yaw off the view, so a
   test that poses a turned body must step it to settle (combat doc 16.3, 16.4).
 - The 24/30/32 pt fonts span two or three atlas pages per glyph, named in the
-  `.dat`. HUD colours are display values, linearised once in the HUD pass.
+  `.dat`. HUD colours are display values, scaled into the framebuffer by
+  the material's gen (`colour_scale`) in the HUD pass.
+- The scene target holds retail's framebuffer bytes: textures upload
+  without sRGB decode and blends run in byte space. The overbright x2 lives
+  only in the gamma pass's ramp, so a pass that draws a display value
+  scales it by `identityLight` (0.5 full screen, 1 windowed) first.
 - Effect shaders live in `fxshaders/` in `pak5.pk3`. Some map paths have a
   leading slash.
 - The asphalt sound alias suffix is `asphault`, and vcod uses that spelling on

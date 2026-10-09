@@ -900,11 +900,7 @@ fn push_mover(
         .filter_map(|(i, c)| Some((i, c.as_mut()?.sim.as_mut()?)))
         .collect();
     let before: Vec<glam::Vec3> = sims.iter().map(|(_, s)| s.ps.origin).collect();
-    if crate::push::push(step, &mut sims, collision) {
-        rt.push_items(step);
-    } else {
-        rt.stall_mover(step);
-    }
+    rt.push_mover(step, &mut sims, collision);
     for ((slot, sim), was) in sims.iter().zip(before) {
         if sim.ps.origin != was {
             rt.set_client_origin(*slot, sim.origin());

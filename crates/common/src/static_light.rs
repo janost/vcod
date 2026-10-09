@@ -8,8 +8,9 @@ use crate::bsp::{self, Bsp};
 use crate::collision::CollisionWorld;
 use glam::Vec3;
 
-/// One overbright bit, as `renderer.rs` assumes: light colours load
-/// pre-halved and the display doubles them back.
+/// One overbright bit, retail's full-screen default: light colours load
+/// pre-halved and the display doubles them back. The renderer rescales to
+/// the current `identityLight` (windowed 1).
 const IDENTITY_LIGHT: f32 = 0.5;
 /// `1 << r_overBrightBits`, the intensity scale the light sort uses.
 const OVERBRIGHT_SCALE: f32 = 2.0;
