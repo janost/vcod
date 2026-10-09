@@ -1151,6 +1151,9 @@ pub const BUTTON_TALK: u8 = 0x02;
 pub const BUTTON_ADS: u8 = 0x10;
 pub const BUTTON_MELEE: u8 = 0x20;
 pub const BUTTON_USE: u8 = 0x40;
+/// The stance bit below comes from a held `+prone` / `+movedown`, not from
+/// `cl_stance` (CoDMP.exe 0x40ae90).
+pub const WBUTTON_STANCE_HELD: u8 = 0x02;
 pub const WBUTTON_RELOAD: u8 = 0x08;
 pub const WBUTTON_LEAN_LEFT: u8 = 0x10;
 pub const WBUTTON_LEAN_RIGHT: u8 = 0x20;
