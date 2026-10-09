@@ -183,6 +183,7 @@ impl NavGraph {
                 dirs.map(|(dx, dy)| self.step(world, n, (cx + dx, cy + dy)))
             });
             let mut next = Vec::new();
+            let mut recheck = Vec::new();
             for (&(n, dirs), ends) in jobs.iter().zip(ends) {
                 let (cx, cy) = self.column(self.nodes[n as usize]);
                 for (&(dx, dy), to) in dirs.iter().zip(ends) {
@@ -191,6 +192,12 @@ impl NavGraph {
                     };
                     let c = (cx + dx, cy + dy);
                     let m = match self.find(c, to.z) {
+                        // A rest off the column's node's floor proves no
+                        // edge to it: walk to the node itself.
+                        Some(m) if (self.nodes[m as usize].z - to.z).abs() >= ARRIVE => {
+                            recheck.push((n, m, c, to, jumped));
+                            continue;
+                        }
                         Some(m) => m,
                         None if self.nodes.len() < MAX_NODES
                             && inside(to)
@@ -204,6 +211,28 @@ impl NavGraph {
                     };
                     self.link_as(n, m, jumped);
                 }
+            }
+            let walked = par_map(&recheck, |&(n, m, ..)| {
+                let to = self.nodes[m as usize];
+                let from = self.nodes[n as usize];
+                walk_to(world, &self.ladder_boxes, from, to.truncate(), Some(to.z))
+            });
+            for (&(n, m, c, to, jumped), w) in recheck.iter().zip(walked) {
+                if let Some((_, jumped)) = w {
+                    self.link_as(n, m, jumped);
+                    continue;
+                }
+                // Then the rest is a floor of its own.
+                let m = match self.find(c, to.z) {
+                    Some(m) if (self.nodes[m as usize].z - to.z).abs() < ARRIVE => m,
+                    _ if self.nodes.len() < MAX_NODES && inside(to) && !hazard(hazards, to) => {
+                        let m = self.add(c, to);
+                        next.push(m);
+                        m
+                    }
+                    _ => continue,
+                };
+                self.link_as(n, m, jumped);
             }
             if !frontier.is_empty() {
                 late.push_back(frontier);
@@ -526,12 +555,15 @@ impl NavGraph {
         n
     }
 
+    /// Column `c`'s node nearest height `z`, within [`Z_MERGE`].
     fn find(&self, c: (i32, i32), z: f32) -> Option<u32> {
+        let dz = |n: u32| (self.nodes[n as usize].z - z).abs();
         self.columns
             .get(&c)?
             .iter()
             .copied()
-            .find(|&n| (self.nodes[n as usize].z - z).abs() < Z_MERGE)
+            .filter(|&n| dz(n) < Z_MERGE)
+            .min_by(|&a, &b| dz(a).total_cmp(&dz(b)))
     }
 
     pub fn len(&self) -> usize {
@@ -809,6 +841,9 @@ const JUMP_PASS: f32 = 16.0;
 /// A node the next edge drops more than a step from counts as reached only
 /// within this of its height (bot-navigation.md, section 3).
 const DROP_PASS: f32 = 8.0;
+/// Within this of a waypoint flat, a walk on that fails from where the bot
+/// stands fails from the node ([`Follower::edge_holds`]).
+const ON_NODE: f32 = 12.0;
 /// A roam goal is picked at least this far away when it can be.
 const ROAM_MIN: f32 = 1000.0;
 /// A seen enemy has to move this far off the planned destination before the
@@ -924,7 +959,8 @@ impl Follower {
             // foot the node is in reach flat and the jump not yet made.
             // So is a node a drop leaves from: from under it the drop is
             // not where the graph proved it.
-            let rise = if self.jumping(g) {
+            let jump = self.jumping(g);
+            let rise = if jump {
                 JUMP_PASS
             } else if self.dropping(g) {
                 DROP_PASS
@@ -935,8 +971,14 @@ impl Follower {
             // proved from a standstill there.
             let foot = self.holding(g);
             let w = g.nodes[w as usize];
-            let level = (w.z - here.z).abs() < rise;
+            // From under it, only from its floor: a ladder's head is passed
+            // standing at its lip, not from the rungs a storey down.
+            let below = rise.min(vcod_common::pmove::STEPSIZE);
+            let level = here.z > w.z - below && here.z < w.z + rise;
+            // Nor is a jump's top cut past: a body still in the air beside
+            // it is nearer the next node too, and falls back to the foot.
             let past = !foot
+                && !jump
                 && self.path.get(self.next + 1).is_some_and(|&n| {
                     let n = g.nodes[n as usize];
                     flat(n) < (n - w).truncate().length()
@@ -952,6 +994,17 @@ impl Follower {
                 self.avoid.push((edge.0, edge.1, self.clock + AVOID_TICKS));
                 self.reset();
                 return None;
+            }
+            if level && (reached || past) && !foot && !self.edge_holds(world, here, g) {
+                // The walk on was proved from the node, and fails from here:
+                // close in on the node first, and from on it, round the edge.
+                if flat(w) < ON_NODE {
+                    let edge = (self.path[self.next], self.path[self.next + 1]);
+                    self.avoid.push((edge.0, edge.1, self.clock + AVOID_TICKS));
+                    self.reset();
+                    return None;
+                }
+                break;
             }
             if level && (reached || past) {
                 self.next += 1;
@@ -1083,6 +1136,30 @@ impl Follower {
         let top = g.nodes[top as usize];
         matches!(
             walk_as(world, at, top.truncate(), Some(top.z), Gait::Leap),
+            Walked::Arrived(..)
+        )
+    }
+
+    /// Whether the walk from the current waypoint to the next arrives run
+    /// from `at`: the graph proved it from the node, and over a hull beam's
+    /// slope a body a few units aside slides back. A climb or a drop
+    /// steeper than a jump is taken as proved (a ladder, a back down), and
+    /// so is a walk from off the node's floor (a body on a ladder under its
+    /// head) or without a world.
+    fn edge_holds(&self, world: Option<&CollisionWorld>, at: Vec3, g: &NavGraph) -> bool {
+        let (Some(world), Some(&a), Some(&b)) = (
+            world,
+            self.path.get(self.next),
+            self.path.get(self.next + 1),
+        ) else {
+            return true;
+        };
+        let (a, b) = (g.nodes[a as usize], g.nodes[b as usize]);
+        if (b.z - a.z).abs() > vcod_common::pmove::JUMP_HEIGHT || (at.z - a.z).abs() > ARRIVE {
+            return true;
+        }
+        matches!(
+            walk_as(world, at, b.truncate(), Some(b.z), Gait::Forward),
             Walked::Arrived(..)
         )
     }
@@ -1586,11 +1663,22 @@ fn walk(
     from: Vec3,
     target: glam::Vec2,
 ) -> Option<(Vec3, bool)> {
+    walk_to(world, ladders, from, target, None)
+}
+
+/// [`walk`], arriving only on `floor` when given.
+fn walk_to(
+    world: &CollisionWorld,
+    ladders: &[(Vec3, Vec3)],
+    from: Vec3,
+    target: glam::Vec2,
+    floor: Option<f32>,
+) -> Option<(Vec3, bool)> {
     for gait in [Gait::Forward, Gait::Backward, Gait::Creep] {
         if gait == Gait::Creep && !ladder_near(ladders, from) {
             return None;
         }
-        match walk_as(world, from, target, None, gait) {
+        match walk_as(world, from, target, floor, gait) {
             Walked::Arrived(p, jumped) => return Some((p, jumped)),
             Walked::Blocked => return None,
             Walked::Fell => {}
@@ -1712,6 +1800,24 @@ fn walk_as(
             }
             return Walked::Arrived(ps.origin, jumped);
         }
+        // Right under a floor more than a step up, the jump a bot makes
+        // there (`jump_cue`): re-aimed at a point overhead, the run only
+        // jitters and never stalls.
+        if gait == Gait::Forward
+            && !jumped
+            && ps.on_ground
+            && floor.is_some_and(|f| f - ps.origin.z > vcod_common::pmove::STEPSIZE)
+            && target.distance(ps.origin.truncate()) < JUMP_UNDER
+            && jump_clear(world, &ps, target)
+        {
+            jumped = true;
+            jump = true;
+            fell_before_jump = fell;
+            stalled = 0;
+            let rest = run_ticks(target.distance(ps.origin.truncate()));
+            budget = budget.max(tick + JUMP_TICKS + rest);
+            continue;
+        }
         // A climb is slower than a run and straight up, so the budget
         // stretches while it goes on, with the run still left past the top,
         // and progress is the height gained.
@@ -1809,15 +1915,21 @@ pub fn lip_ahead(world: &CollisionWorld, ps: &PlayerState) -> bool {
 }
 
 /// Whether a jump from where `ps` stands could clear what pins it: room
-/// overhead for the jump's height, and from there room ahead toward
-/// `target`. A wall to the ceiling fails it, which keeps a jump off the
-/// walks that end at one.
+/// ahead toward `target` at the top of the jump, or under a ceiling lower
+/// than the jump's height, as high as the body rises. A wall to the
+/// ceiling fails it, which keeps a jump off the walks that end at one.
 fn jump_clear(world: &CollisionWorld, ps: &PlayerState, target: glam::Vec2) -> bool {
     let (mins, maxs) = (ps.mins(), ps.maxs());
-    let top = ps.origin + Vec3::Z * vcod_common::pmove::JUMP_HEIGHT;
-    if world.box_trace(ps.origin, top, mins, maxs).fraction < 1.0 {
+    let up = world.box_trace(
+        ps.origin,
+        ps.origin + Vec3::Z * vcod_common::pmove::JUMP_HEIGHT,
+        mins,
+        maxs,
+    );
+    if up.startsolid {
         return false;
     }
+    let top = up.endpos;
     let dir = (target - ps.origin.truncate())
         .normalize_or_zero()
         .extend(0.0);
@@ -2303,6 +2415,76 @@ mod tests {
         assert_eq!(at([2.0, 0.0, -32.0]), Some([-48.0, 0.0, -64.0]));
     }
 
+    /// A body in the air beside a jump's top is nearer the next node than
+    /// the top is, and still not on it.
+    #[test]
+    fn a_jumps_top_is_not_cut_past_in_the_air() {
+        let mut g = NavGraph::from_parts(
+            vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(32.0, 0.0, 36.0),
+                Vec3::new(32.0, 64.0, 36.0),
+            ],
+            vec![vec![1], vec![0, 2], vec![1]],
+        );
+        g.jumps.insert((0, 1));
+        let mut f = Follower::default();
+        let goal = crate::bots::Goal::To([32.0, 64.0, 36.0]);
+        let mut budget = 100;
+        let mut at = |p: [f32; 3]| f.waypoint(&g, None, goal, p, false, &mut budget, &mut || 0);
+        assert_eq!(at([0.0, 0.0, 0.0]), Some([32.0, 0.0, 36.0]));
+        // 25 flat from the top, 15 under it, mid-jump.
+        assert_eq!(at([20.0, 22.0, 30.0]), Some([32.0, 0.0, 36.0]));
+        assert_eq!(at([32.0, 2.0, 36.0]), Some([32.0, 64.0, 36.0]));
+    }
+
+    /// mp_ship's hull beam: from its edge node a walk over the beam to the
+    /// floor beyond arrives, from 16 units north along the edge it slides
+    /// back off the slope. A bot that passed the node there stalled 120
+    /// ticks.
+    #[test]
+    fn a_walk_on_proved_from_the_node_is_proved_again_from_the_body() {
+        let Some(world) = map_world("mp_ship") else {
+            return;
+        };
+        let w = &world.collision;
+        let edge = Vec3::new(2247.1, 511.2, -47.875);
+        let beyond = Vec3::new(2203.5, 511.4, -63.875);
+        let g = NavGraph::from_parts(vec![edge, beyond], vec![vec![1], vec![0]]);
+        let mut f = Follower::default();
+        let goal = crate::bots::Goal::To(beyond.into());
+        let mut budget = 100;
+        let mut at =
+            |p: Vec3| f.waypoint(&g, Some(w), goal, p.into(), false, &mut budget, &mut || 0);
+        // In reach of the edge node along the ledge, but the walk on slides
+        // back from here: close in on the node.
+        let along = Vec3::new(2256.2498, 523.75616, -47.87189);
+        assert!(!matches!(
+            walk_as(w, along, beyond.truncate(), Some(beyond.z), Gait::Forward),
+            Walked::Arrived(..)
+        ));
+        assert_eq!(at(along), Some(edge.into()));
+        assert_eq!(at(edge), Some(beyond.into()));
+    }
+
+    /// mp_depot by (-64, 352): a body run off a ledge at z 12 comes to rest
+    /// on a step's corner at z 3, right under a floor at z 27 and under a
+    /// ceiling 37 over the feet. A flood walk resting there was merged into
+    /// the floor's node until 2026-10-09; the walk to the node itself jumps.
+    #[test]
+    fn a_walk_jumps_onto_a_floor_right_overhead_under_a_ceiling() {
+        let Some(world) = map_world("mp_depot") else {
+            return;
+        };
+        let w = &world.collision;
+        let from = Vec3::new(-28.519163, 352.00345, 12.125);
+        let node = Vec3::new(-64.23049, 352.02036, 27.125);
+        let free = walk_as(w, from, node.truncate(), None, Gait::Forward);
+        assert!(matches!(free, Walked::Arrived(p, false) if (p.z - 3.125).abs() < 0.5));
+        let on = walk_as(w, from, node.truncate(), Some(node.z), Gait::Forward);
+        assert!(matches!(on, Walked::Arrived(p, true) if (p.z - node.z).abs() < 0.5));
+    }
+
     #[test]
     fn a_follower_climbs_to_a_head_above_its_foot() {
         let g = NavGraph::from_parts(
@@ -2318,8 +2500,9 @@ mod tests {
         let mut budget = 100;
         let mut at = [0.0, 0.0, 0.0];
         // 2.5 units a tick, the climb rate looking up, until the head's
-        // floor is in reach.
-        while at[2] <= 152.0 {
+        // floor is a step off: from further down the rungs the next node
+        // is no way on.
+        while at[2] <= 182.0 {
             let w = f.waypoint(&g, None, goal, at, true, &mut budget, &mut || 0);
             assert_eq!(w, Some([10.0, 0.0, 200.0]), "at z {}", at[2]);
             at[2] += 2.5;
