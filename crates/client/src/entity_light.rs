@@ -41,10 +41,14 @@ const _: () = assert!(std::mem::size_of::<GpuLightSet>() == 656);
 /// Packs a pick, folding each weight into the light's colours as 0x4d63a0
 /// does. `to_view` moves positions and directions into the space the
 /// shader lights in (the viewmodel's view space); `None` keeps world space.
-pub fn pack(l: &EntityLights, to_view: Option<Mat4>) -> GpuLightSet {
+/// The pick's colours carry identityLight 0.5; `identity_light` rescales
+/// them to the current one, ahead of GL's clamp.
+pub fn pack(l: &EntityLights, to_view: Option<Mat4>, identity_light: f32) -> GpuLightSet {
     let m = to_view.unwrap_or(Mat4::IDENTITY);
+    let k = identity_light / 0.5;
+    let amb = l.ambient * k;
     let mut set = GpuLightSet {
-        ambient: [l.ambient.x, l.ambient.y, l.ambient.z, 0.0],
+        ambient: [amb.x, amb.y, amb.z, 0.0],
         ..GpuLightSet::default()
     };
     let n = l.lights.len().min(MAX_ENT_LIGHTS);
@@ -60,8 +64,8 @@ pub fn pack(l: &EntityLights, to_view: Option<Mat4>) -> GpuLightSet {
         } else {
             light.spot_cutoff.to_radians().cos()
         };
-        let d = light.diffuse * *w;
-        let a = light.ambient * *w;
+        let d = light.diffuse * *w * k;
+        let a = light.ambient * *w * k;
         *g = GpuLight {
             pos: pos.to_array(),
             diffuse: [d.x, d.y, d.z, light.spot_exponent],
@@ -73,8 +77,8 @@ pub fn pack(l: &EntityLights, to_view: Option<Mat4>) -> GpuLightSet {
     set
 }
 
-/// The fx `Light` blocks as scene lights; the block's size stands in for
-/// `RE_AddLightToScene`'s intensity (not traced).
+/// The fx `Light` blocks as scene lights; the block's size is
+/// `RE_AddLightToScene`'s intensity (the efx light draw, 0x490625).
 pub fn scene_lights(lights: &[FxLight]) -> Vec<SceneLight> {
     lights
         .iter()
@@ -99,7 +103,7 @@ mod tests {
             lights: vec![(l, 0.5)],
         };
         let to_view = Mat4::from_translation(Vec3::new(-10.0, 0.0, 0.0));
-        let set = pack(&lights, Some(to_view));
+        let set = pack(&lights, Some(to_view), 0.5);
         assert_eq!(set.ambient, [0.25, 0.25, 0.25, 1.0]);
         assert_eq!(set.lights[0].pos, [0.0, 0.0, 0.0, 1.0]);
         // 0.5 * 64 / 32 * 0.5
@@ -107,5 +111,8 @@ mod tests {
         assert_eq!(set.lights[0].ambient[3], -2.0);
         assert_eq!(set.lights[0].atten, [0.001, 0.0, 1.0, 0.0]);
         assert_eq!(set.lights[1], GpuLight::default());
+        // windowed (identityLight 1) doubles every colour
+        let w = pack(&lights, None, 1.0);
+        assert_eq!((w.ambient[0], w.lights[0].diffuse[0]), (0.5, 1.0));
     }
 }

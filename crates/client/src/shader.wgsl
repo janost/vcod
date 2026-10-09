@@ -1,6 +1,7 @@
 struct Camera {
     view_proj: mat4x4<f32>,
-    time_pad: vec4<f32>, // .x = seconds since start; yzw reserved
+    // .x seconds since start; .y identityLight (0.5 full screen, 1 windowed)
+    time_pad: vec4<f32>,
     // xyz view origin; w fog mode: 0 off, 1 GL_EXP, 2 GL_LINEAR (configstring 12)
     eye_fog_mode: vec4<f32>,
     // rgb fog colour, a density (GL_EXP)
@@ -61,12 +62,12 @@ const F_BUNDLE0_VECTOR: u32 = 64u;
 const F_BUNDLE1_VECTOR: u32 = 128u;
 const F_EYE_OFFSET: u32 = 256u;
 const F_SKY: u32 = 512u;
-// rgbGen vertex: vertex rgb halved by identityLight (overbright)
+// rgbGen vertex: vertex rgb scaled by identityLight
 const F_VERTEX_HALF: u32 = 1024u;
 // deformVertexes wave: displace along the vertex normal
 const F_DEFORM_WAVE: u32 = 2048u;
-// framebuffer colour that retail's gamma ramp doubles on display
-const F_OVERBRIGHT: u32 = 4096u;
+// identityLighting, constLighting, wave: the tint rgb scales by identityLight
+const F_TINT_LIGHT: u32 = 4096u;
 // glAlphaFunc thresholds are 128/255 for both LT128 and GE128.
 const ATEST128: f32 = 0.5019607843137255;
 
@@ -181,6 +182,16 @@ fn vs_stage(in: VsIn) -> VsOut {
     return out;
 }
 
+// Retail's lightmap bytes (0x4d9af0 at load): raw with an overbright bit;
+// without one, doubled and scaled back by the brightest channel, keeping hue.
+fn lightmap_shift(c: vec3<f32>) -> vec3<f32> {
+    if (camera.time_pad.y < 1.0) {
+        return c;
+    }
+    let v = c * 2.0;
+    return v / max(1.0, max(v.r, max(v.g, v.b)));
+}
+
 // Retail's dynamic lights on a lit model vertex, in framebuffer units:
 // RE_AddLightToScene (0x4e9b00) builds a point light with diffuse
 // identityLight * r^2 / 32 * rgb, no ambient and attenuation 1 / (d^2 + 0.001),
@@ -195,18 +206,20 @@ fn dlight_term(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
         let d2 = dot(to, to);
         if (d2 > 4.0 * l.w * l.w) { continue; }
         let lambert = max(dot(n, to * inverseSqrt(max(d2, 1e-6))), 0.0);
-        sum += fx_lights.color[i].rgb * (0.5 * l.w * l.w / 32.0 * lambert / (d2 + 0.001));
+        sum += fx_lights.color[i].rgb
+            * (camera.time_pad.y * l.w * l.w / 32.0 * lambert / (d2 + 0.001));
     }
     return sum;
 }
 
-// Static props: the baked vertex colour is a framebuffer value. Vertex alpha
-// marks a `lightingDiffuse` skin, the only kind retail relights while a
-// dynamic light is near (0x505260); the sum clamps like GL lighting does.
+// Static props: the baked vertex colour is a framebuffer value at
+// identityLight 0.5, rescaled to the current one. Vertex alpha marks a
+// `lightingDiffuse` skin, the only kind retail relights while a dynamic
+// light is near (0x505260); the sum clamps like GL lighting does.
 @vertex
 fn vs_prop(in: VsIn) -> VsOut {
     var out = map_vertex(in);
-    var rgb = in.color.rgb;
+    var rgb = min(in.color.rgb * (2.0 * camera.time_pad.y), vec3(1.0));
     if (in.color.a > 0.5) {
         rgb = min(rgb + dlight_term(in.pos, normalize(in.normal)), vec3(1.0));
     }
@@ -251,8 +264,8 @@ fn apply_fog(rgb: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
 fn shade(in: VsOut, albedo: vec4<f32>) -> vec3<f32> {
     // Lightmapped surfaces have white vertex color; vertex-lit surfaces get a
     // white 1x1 lightmap bound instead. Multiplying all three covers both.
-    let light = textureSample(t_lightmap, s_lightmap, in.lm_uv).rgb;
-    return albedo.rgb * (light * in.color.rgb * 2.0 + fx_light_term(in.world_pos));
+    let light = lightmap_shift(textureSample(t_lightmap, s_lightmap, in.lm_uv).rgb);
+    return albedo.rgb * (light * in.color.rgb + fx_light_term(in.world_pos) * camera.time_pad.y);
 }
 
 @fragment
@@ -262,12 +275,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(apply_fog(shade(in, albedo), in.world_pos), 1.0);
 }
 
-// Props: x2 for the display doubling of retail's gamma ramp, no lightmap.
+// Props: texture times the vertex colour, no lightmap.
 @fragment
 fn fs_prop(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = textureSample(t_diffuse, s_diffuse, in.uv);
     if (albedo.a < 0.5) { discard; }
-    return vec4<f32>(apply_fog(albedo.rgb * in.color.rgb * 2.0, in.world_pos), 1.0);
+    return vec4<f32>(apply_fog(albedo.rgb * in.color.rgb, in.world_pos), 1.0);
 }
 
 // Alpha-to-coverage: sampled alpha drives MSAA coverage for antialiased cutout edges.
@@ -300,36 +313,37 @@ fn alphafunc_pass(a: f32) -> bool {
 
 // Authored shader-script stage: multiply up to two bundles, tint and vertex
 // colour per flags, discard by alphaFunc. A $lightmap bundle carries the same
-// x2 overbright and fx-light term as shade(), so a staged surface matches the
+// shift and fx-light term as shade(), so a staged surface matches the
 // implicit-path surface it is coplanar with (terrain overlays over base ground).
 @fragment
 fn fs_stage(in: VsOut) -> @location(0) vec4<f32> {
     var c0: vec4<f32>;
     if ((stage.flags & F_BUNDLE0_LIGHTMAP) != 0u) {
         let lm = textureSample(t_lightmap, s_lightmap, in.uv);
-        c0 = vec4<f32>(lm.rgb * 2.0 + fx_light_term(in.world_pos), lm.a);
+        c0 = vec4<f32>(lightmap_shift(lm.rgb) + fx_light_term(in.world_pos) * camera.time_pad.y, lm.a);
     } else {
         c0 = textureSample(t_diffuse, s_diffuse, in.uv);
     }
     var c1: vec4<f32>;
     if ((stage.flags & F_BUNDLE1_LIGHTMAP) != 0u) {
         let lm = textureSample(t_lightmap, s_lightmap, in.uv1);
-        c1 = vec4<f32>(lm.rgb * 2.0 + fx_light_term(in.world_pos), lm.a);
+        c1 = vec4<f32>(lightmap_shift(lm.rgb) + fx_light_term(in.world_pos) * camera.time_pad.y, lm.a);
     } else {
         // white (or the lightmap page) is bound when bundle 1 has no image
         c1 = textureSample(t_bundle1, s_diffuse, in.uv1);
     }
 
-    var col = c0 * c1 * vec4<f32>(stage.tint.rgb, 1.0);
+    var tint = stage.tint.rgb;
+    if ((stage.flags & F_TINT_LIGHT) != 0u) {
+        tint = tint * camera.time_pad.y;
+    }
+    var col = c0 * c1 * vec4<f32>(tint, 1.0);
     if ((stage.flags & F_VERTEX_RGB) != 0u) {
         var vrgb = in.color.rgb;
         if ((stage.flags & F_VERTEX_HALF) != 0u) {
-            vrgb = vrgb * 0.5;
+            vrgb = vrgb * camera.time_pad.y;
         }
         col = vec4<f32>(col.rgb * vrgb, col.a);
-    }
-    if ((stage.flags & F_OVERBRIGHT) != 0u) {
-        col = vec4<f32>(col.rgb * 2.0, col.a);
     }
     col.a = c0.a * c1.a * stage.tint.a;
     if ((stage.flags & F_VERTEX_ALPHA) != 0u) {

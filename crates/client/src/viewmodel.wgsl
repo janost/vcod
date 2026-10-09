@@ -91,6 +91,5 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let tex = textureSample(t_diffuse, s_diffuse, in.uv);
     // same alpha-test threshold as the map's masked materials
     if (tex.a < 0.5) { discard; }
-    // the display doubles the framebuffer
-    return vec4<f32>(tex.rgb * in.light * 2.0, 1.0);
+    return vec4<f32>(tex.rgb * in.light, 1.0);
 }

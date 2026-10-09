@@ -1,5 +1,6 @@
 // World-space fx quads: depth-tested, never writing depth. Per-vertex rgba
-// multiplies the texture. `fs_main` is straight alpha, `fs_additive` is
+// multiplies the texture; `Renderer::set_fx_quads` has already scaled it by
+// the material's gen. `fs_main` is straight alpha, `fs_additive` is
 // `GL_ONE GL_ONE` for glow materials (`assets::Shaders::additive`).
 
 // Same uniform as shader.wgsl; the fog fields are documented there.
