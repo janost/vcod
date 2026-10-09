@@ -1,0 +1,74 @@
+# Retail CoD 1.1d dedicated server: the area-tree order a brush model's push leaves two players in.
+# map mp_carentan, gametype dm (served as probe_pushorder), two clients joined allies, 2026-10-09.
+# Two shells, the gsc probe first, then the clients:
+#   COD_LNXDED_HOME=<absolute, no '+'> PORT=29941 SECS=60 \
+#       tools/run_probe.sh client-probes/probe_pushorder mp_carentan
+#   # about 8 s later:
+#   for t in allies allies; do
+#       cargo run -p vcod -- --net-probe 127.0.0.1:29941 --probe-team $t --probe-secs 48 &
+#       sleep 2
+#   done
+# The server's PROBE lines, as tools/run_probe.sh printed them.
+PROBE bz 177
+PROBE placed 0 (-250.00, 2430.00, -31.87)
+PROBE placed 1 (-215.00, 2430.00, -31.87)
+PROBE blast placed
+PROBE cb 1 20
+PROBE cb 0 13
+PROBE push one 15450
+PROBE f_one_15450 0 (-250.00, 2430.00, -31.87)
+PROBE f_one_15450 1 (-215.00, 2430.00, -31.87)
+PROBE f_one_15500 0 (-250.00, 2430.00, -31.87)
+PROBE f_one_15500 1 (-215.00, 2430.00, -31.87)
+PROBE f_one_15550 0 (-250.00, 2422.00, -31.87)
+PROBE f_one_15550 1 (-215.00, 2422.00, -31.87)
+PROBE f_one_15600 0 (-250.00, 2422.00, -31.87)
+PROBE f_one_15600 1 (-215.00, 2422.00, -31.87)
+PROBE one 0 (-250.00, 2422.00, -31.87)
+PROBE one 1 (-215.00, 2422.00, -31.87)
+PROBE blast one
+PROBE cb 0 13
+PROBE cb 1 20
+PROBE push two 16650
+PROBE f_two_16650 0 (-250.00, 2422.00, -31.87)
+PROBE f_two_16650 1 (-215.00, 2422.00, -31.87)
+PROBE f_two_16700 0 (-250.00, 2422.00, -31.87)
+PROBE f_two_16700 1 (-215.00, 2422.00, -31.87)
+PROBE f_two_16750 0 (-250.00, 2418.00, -31.87)
+PROBE f_two_16750 1 (-215.00, 2422.00, -31.87)
+PROBE f_two_16800 0 (-250.00, 2414.00, -31.87)
+PROBE f_two_16800 1 (-215.00, 2418.00, -31.87)
+PROBE two 0 (-250.00, 2414.00, -31.87)
+PROBE two 1 (-215.00, 2418.00, -31.87)
+PROBE blast two
+PROBE cb 1 20
+PROBE cb 0 13
+PROBE push three 17850
+PROBE f_three_17850 0 (-250.00, 2414.00, -31.87)
+PROBE f_three_17850 1 (-215.00, 2418.00, -31.87)
+PROBE f_three_17900 0 (-250.00, 2414.00, -31.87)
+PROBE f_three_17900 1 (-215.00, 2418.00, -31.87)
+PROBE f_three_17950 0 (-250.00, 2410.00, -31.87)
+PROBE f_three_17950 1 (-215.00, 2414.00, -31.87)
+PROBE f_three_18000 0 (-250.00, 2406.00, -31.87)
+PROBE f_three_18000 1 (-215.00, 2410.00, -31.87)
+PROBE three 0 (-250.00, 2402.00, -31.87)
+PROBE three 1 (-215.00, 2406.00, -31.87)
+PROBE blast three
+PROBE cb 0 13
+PROBE cb 1 20
+PROBE push back 19050
+PROBE f_back_19050 0 (-250.00, 2402.00, -31.87)
+PROBE f_back_19050 1 (-215.00, 2406.00, -31.87)
+PROBE f_back_19100 0 (-250.00, 2402.00, -31.87)
+PROBE f_back_19100 1 (-215.00, 2406.00, -31.87)
+PROBE f_back_19150 0 (-250.00, 2402.00, -31.87)
+PROBE f_back_19150 1 (-215.00, 2406.00, -31.87)
+PROBE f_back_19200 0 (-250.00, 2402.00, -31.87)
+PROBE f_back_19200 1 (-215.00, 2406.00, -31.87)
+PROBE back 0 (-250.00, 2402.00, -31.87)
+PROBE back 1 (-215.00, 2406.00, -31.87)
+PROBE blast back
+PROBE cb 0 20
+PROBE cb 1 20
+PROBE done

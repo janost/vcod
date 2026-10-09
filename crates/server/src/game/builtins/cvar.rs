@@ -154,10 +154,9 @@ pub fn make_cvar_server_info(
     Ok(Value::Undefined)
 }
 
-/// `getTime()`: the level clock in milliseconds, the same units
-/// `run_frame`'s `now_ms` carries throughout the host. Retail's own units
-/// are unmeasured -- `probe_cvar` only established that the value is
-/// non-negative -- so this is the reading chosen, not a measurement.
+/// `getTime()`: `level.time` in milliseconds (0x5d088), not the script
+/// clock a `wait` counts from (docs/research/cod11-gsc-language.md, "The
+/// script clock").
 pub fn get_time(
     host: &mut GameHost,
     _cx: &mut Cx,

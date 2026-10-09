@@ -146,7 +146,7 @@ fn probe_ents_matches_retail() {
     // `main` only stores the callbacks; the engine calls
     // `level.callbackStartGameType` itself, so the test does too.
     let main = vm.func_ref(&path, "main");
-    vm.call_now(&mut host, 0, main, None, Vec::new())
+    vm.call_now(&mut host, main, None, Vec::new())
         .unwrap_or_else(|e| panic!("probe_ents main errored: {e:?}"));
 
     let level = vm.level_id();
@@ -157,7 +157,7 @@ fn probe_ents_matches_retail() {
     let Value::Function(callback) = callback else {
         panic!("level.callbackStartGameType is {callback:?}, not a function");
     };
-    vm.call_now(&mut host, 0, callback, None, Vec::new())
+    vm.call_now(&mut host, callback, None, Vec::new())
         .unwrap_or_else(|e| panic!("Callback_StartGameType errored: {e:?}"));
 
     assert_eq!(host.script_log, retail_probe_lines("probe_ents"));
@@ -209,7 +209,7 @@ fn probe_delete_matches_retail() {
     // `main` only stores the callbacks; the engine calls
     // `level.callbackStartGameType` itself, so the test does too.
     let main = vm.func_ref(&path, "main");
-    vm.call_now(&mut host, 0, main, None, Vec::new())
+    vm.call_now(&mut host, main, None, Vec::new())
         .unwrap_or_else(|e| panic!("probe_delete main errored: {e:?}"));
 
     let level = vm.level_id();
@@ -221,7 +221,7 @@ fn probe_delete_matches_retail() {
         panic!("level.callbackStartGameType is {callback:?}, not a function");
     };
 
-    vm.start_thread(&mut host, 0, callback, None, Vec::new());
+    vm.start_thread(&mut host, callback, None, Vec::new());
     for frame in 1..=12 {
         let now_ms = frame * 50;
         host.level_time_ms = now_ms;
@@ -242,7 +242,7 @@ fn probe_delete_matches_retail() {
 fn probe_cvar_matches_retail() {
     let (mut vm, main) = install("probe_cvar");
     let mut host = GameHost::new(vec![String::new(); 2048]);
-    vm.call_now(&mut host, 0, main, None, Vec::new())
+    vm.call_now(&mut host, main, None, Vec::new())
         .unwrap_or_else(|e| panic!("probe_cvar main errored: {e:?}"));
 
     assert_eq!(host.script_log, retail_probe_lines("probe_cvar"));
@@ -265,7 +265,7 @@ fn probe_not_string_matches_retail() {
     let (mut vm, main) = install("probe_not_string");
     let mut host = GameHost::new(vec![String::new(); 2048]);
     host.cvars.set("scr_allow_fg42", "0");
-    vm.call_now(&mut host, 0, main, None, Vec::new())
+    vm.call_now(&mut host, main, None, Vec::new())
         .unwrap_or_else(|e| panic!("probe_not_string main errored: {e:?}"));
 
     assert_eq!(host.script_log, retail_probe_lines("probe_not_string"));
@@ -281,7 +281,7 @@ fn run_stale_probe(name: &str) -> (Vec<String>, bool) {
     let run = |threaded: bool| {
         let (mut vm, main) = install(name);
         let mut host = GameHost::new(vec![String::new(); 2048]);
-        vm.call_now(&mut host, 0, main, None, Vec::new())
+        vm.call_now(&mut host, main, None, Vec::new())
             .unwrap_or_else(|e| panic!("{name} main errored: {e:?}"));
         let level = vm.level_id();
         let callback = vm.with_cx(|cx| {
@@ -292,11 +292,11 @@ fn run_stale_probe(name: &str) -> (Vec<String>, bool) {
             panic!("level.callbackStartGameType is {callback:?}, not a function");
         };
         if !threaded {
-            let r = vm.call_now(&mut host, 0, callback, None, Vec::new());
+            let r = vm.call_now(&mut host, callback, None, Vec::new());
             return (host.script_log, r.err().map(|e| e.kind));
         }
         let mut died = None;
-        vm.start_thread(&mut host, 0, callback, None, Vec::new());
+        vm.start_thread(&mut host, callback, None, Vec::new());
         for frame in 1..=12 {
             let now_ms = frame * 50;
             host.level_time_ms = now_ms;

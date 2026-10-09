@@ -227,7 +227,7 @@ mod tests {
         let fns = vcod_gsc::compile::compile_file(&ast, "test", vm.interner_mut()).unwrap();
         vm.install(fns).unwrap();
         let f = vm.func_ref("test", "main");
-        vm.call_now(&mut host, 0, f, None, Vec::new()).unwrap();
+        vm.call_now(&mut host, f, None, Vec::new()).unwrap();
 
         assert_eq!(host.0.into_inner(), "0.333333");
     }

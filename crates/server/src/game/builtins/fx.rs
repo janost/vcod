@@ -18,6 +18,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("loadfx", load_fx),
     ("playfx", play_fx),
     ("playfxontag", play_fx_on_tag),
+    ("grenadeexplosioneffect", grenade_explosion_effect),
 ];
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
@@ -92,6 +93,51 @@ pub fn play_fx(
             scope: Scope::Pvs,
         },
     );
+    Ok(Value::Undefined)
+}
+
+/// `grenadeExplosionEffect(origin)` (`.so` 0x5aea4, combat doc 13.4): an
+/// `EV_GRENADE_EXPLODE` temp entity a unit above `origin` with an up
+/// `eventParm` and the surface 16 units under `origin`, then
+/// `Concussive_fx`'s entity (0x54840), each a number off `G_Spawn`. No stock
+/// script calls it.
+pub fn grenade_explosion_effect(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let Some(Value::Vector(origin)) = args.first() else {
+        return Err(ErrorKind::BadType("grenadeExplosionEffect takes an origin"));
+    };
+    let at = glam::Vec3::from(*origin) + glam::Vec3::Z;
+    // `trap_Trace(at, 0, 0, at - 17 z, ENTITYNUM_NONE, 0x11)` (0x5af43,
+    // the 17.0 at rodata 0x778ec); no water test, unlike `G_ExplodeMissile`.
+    let surf_type = host.world.as_ref().map_or(0, |w| {
+        let down = w.collision.point_trace(
+            at,
+            at - glam::Vec3::Z * 17.0,
+            vcod_common::collision::MASK_MISSILE,
+            false,
+        );
+        vcod_common::collision::sound_material(down.surface_flags)
+    });
+    host.add_temp_entity(
+        cx,
+        TempEntity {
+            event: vcod_common::net::event_ids::EV_GRENADE_EXPLODE,
+            parm: vcod_common::net::events::dir_to_byte([0.0, 0.0, 1.0]),
+            surf_type,
+            other: 0,
+            attacker: 0,
+            weapon: 0,
+            client_num: 0,
+            scale: 0,
+            origin: at.to_array(),
+            scope: Scope::Pvs,
+        },
+    );
+    host.spawn_concussive(cx);
     Ok(Value::Undefined)
 }
 

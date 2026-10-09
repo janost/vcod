@@ -11,8 +11,9 @@
 //! extended precision: at a few million milliseconds an f32 argument has
 //! lost the fractional part that decides the phase.
 
-use super::{LEAN_MAX, PlayerState, SPEED_RUN, Stance};
+use super::{PlayerState, SPEED_RUN, Stance};
 use crate::weapon::{AimDef, WeaponDef};
+use glam::Vec3;
 
 /// `client+0x2278..0x22a8`: what the block keeps between cmds. The gun-kick
 /// springs at `+0x22ac` are left out: nothing in the server module ever
@@ -191,11 +192,38 @@ pub fn angle_subtract(a: f32, b: f32) -> f32 {
     d
 }
 
-/// `GetLeanFraction` (`0x7ba64`): `(2 - |f|) * f`, the ease every kick
+/// `GetLeanFraction` (`0x6ba64`): `(2 - |f|) * f`, the ease every kick
 /// curve and the lean roll go through.
 pub fn lean_fraction(f: f32) -> f32 {
     (2.0 - f.abs()) * f
 }
+
+/// `UnGetLeanFraction` (`0x6ba80`): `1 - sqrt(1 - f)`, the inverse of
+/// [`lean_fraction`] over 0..1.
+pub fn unget_lean_fraction(f: f32) -> f32 {
+    1.0 - (1.0 - f).sqrt()
+}
+
+/// What `AddLeanToPosition` (`0x6ba9c`) adds to an eye for a lean of `leanf`
+/// at `yaw` radians: `lean_fraction(leanf) * 20` along the right vector of
+/// `(0, yaw, lean_fraction(leanf) * 16)` degrees. The roll only tips the
+/// offset down; nothing rolls the view (docs/research/bsp-ibsp59-format.md,
+/// "Lean").
+pub fn lean_offset(yaw: f32, leanf: f32) -> Vec3 {
+    if leanf == 0.0 {
+        return Vec3::ZERO;
+    }
+    let f = lean_fraction(leanf);
+    let roll = (f * LEAN_ROLL_SCALE).to_radians();
+    let right = Vec3::new(roll.cos() * yaw.sin(), -roll.cos() * yaw.cos(), -roll.sin());
+    right * (f * LEAN_DIST_SCALE)
+}
+
+/// `AddLeanToPosition`'s roll and distance scales at every caller
+/// (`G_AddLean` rodata 0x73130/0x7312c, `PM_UpdateLean` 0x70c68/0x70c64, the
+/// cgame's view at 0x30032dc9, the server's snapshot origin at 0x808f2a9).
+const LEAN_ROLL_SCALE: f32 = 16.0;
+const LEAN_DIST_SCALE: f32 = 20.0;
 
 /// The lerp step the sway takes: `k` of the distance, when the distance is
 /// over 0.001 and the step does not overshoot; the target outright
@@ -475,9 +503,8 @@ fn weapon_angles(
 ) -> [f32; 3] {
     let aim = &def.aim;
     let mut out = [0.0f32; 3];
-    let leanf = ps.lean / LEAN_MAX;
-    if leanf != 0.0 {
-        out[2] -= 2.0 * lean_fraction(leanf);
+    if ps.lean != 0.0 {
+        out[2] -= 2.0 * lean_fraction(ps.lean);
     }
     if def.aim_down_sight {
         out[0] += ps.weapon_pos_frac * aim.ads_aim_pitch;

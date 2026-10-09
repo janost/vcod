@@ -267,6 +267,10 @@ impl Shell {
         // cgame's row at 0x30074c10: default "0", archived; gates the
         // weapon-select binds (docs/research/cod11-hud-protocol.md).
         s.register("cg_weaponCycleDelay", "0", ARCHIVE);
+        // CoDMP.exe 0x4120e6 and cgame's row at file 0x74f60: default "0",
+        // CVAR_TEMP. Non-zero keeps the forced-stance events off `cl_stance`
+        // (docs/research/cod11-mantle.md, "The forced-stance events").
+        s.register("cl_stanceTemp", "0", 0);
         // CL_Init (CoDMP.exe 0x411e60): the send rate and the clock's
         // nudge (docs/protocol-1.1.md, "The client's clock").
         s.register("cl_maxpackets", "30", ARCHIVE);
@@ -916,6 +920,7 @@ mod tests {
                 "cl_maxpackets",
                 "cl_packetdup",
                 "cl_run",
+                "cl_stanceTemp",
                 "cl_timeNudge"
             ]
         );

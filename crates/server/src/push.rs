@@ -2,11 +2,13 @@
 //! the players and items on it and in its way
 //! (docs/research/cod11-movers.md, section 12).
 
+use crate::game::host::GameHost;
 use crate::game::mover::Step;
 use crate::spectate::ClientSim;
 use glam::Vec3;
 use vcod_common::collision::{CollisionWorld, MASK_PLAYERSOLID};
 use vcod_common::movetrace::{Body, CONTENTS_BODY, MoveWorld};
+use vcod_gsc::Cx;
 
 /// `G_TryPushingEntity`'s jitter step, and its reach is half the body's
 /// width (`maxs.x * 0.5`, rodata 0x75bf8 and 0x75c08).
@@ -14,76 +16,187 @@ const JITTER_INC: f32 = 4.0;
 /// `ANGLE2SHORT`'s factor (rodata 0x75bf4).
 use vcod_common::pmove::cmd::ANGLE2SHORT;
 
-/// One push to undo if a later body blocks the mover: `G_MoverTeam` puts
-/// every pushed body back before it stalls.
-struct Pushed {
-    slot: usize,
-    origin: Vec3,
-    delta_yaw: i32,
+/// One push to undo if a later entity blocks the mover: `G_MoverTeam` puts
+/// every record back and relinks it (0x55744..0x557ef).
+enum Pushed {
+    Client {
+        slot: usize,
+        origin: Vec3,
+        delta_yaw: i32,
+    },
+    Item {
+        id: vcod_gsc::EntId,
+        origin: Vec3,
+    },
 }
 
-/// Moves every player `step` carries or shoves, in slot order. `false` when
-/// one fits nowhere; every body pushed before it is back where it was, and
-/// the caller stalls the mover.
-pub fn push(step: &Step, sims: &mut [(usize, &mut ClientSim)], world: &CollisionWorld) -> bool {
+/// One entity `G_MoverPush` keeps off its list.
+enum Kept {
+    /// An index into `sims`.
+    Client(usize),
+    Item(vcod_gsc::EntId, ItemBody),
+}
+
+/// `G_MoverPush` (0x550f0) over `step.listed`, players and items in one
+/// area-tree order: every kept entity is unlinked first (0x55561), each is
+/// pushed and relinked on its turn (0x555e1), and the whole list is linked
+/// again at the end (0x55661). `false` when a player fits nowhere: every
+/// entity pushed before it is back where it was and relinked, it and the
+/// rest of the list stay unlinked, and the caller stalls the mover
+/// (docs/research/cod11-movers.md, section 12).
+pub fn push(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    step: &Step,
+    sims: &mut [(usize, &mut ClientSim)],
+    world: &CollisionWorld,
+) -> bool {
     let amove = step.to.1 - step.from.1;
     let yaw_short = (amove.y * ANGLE2SHORT) as i32 & 0xffff;
 
-    // The list is taken once, against the mover where it now is: a body
-    // standing on it, or one its brushes now overlap.
-    let list: Vec<usize> = (0..sims.len())
-        .filter(|&i| {
-            let sim = &*sims[i].1;
-            if !sim.linked() || sim.contents & CONTENTS_BODY == 0 || sim.link_to.is_some() {
-                return false;
+    // The list is filtered once, against the mover where it now is.
+    let kept: Vec<Kept> = step
+        .listed
+        .iter()
+        .filter_map(|&n| {
+            if let Some(i) = sims.iter().position(|(s, _)| *s as u32 == n) {
+                return listed_client(step, sims[i].1, world).then_some(Kept::Client(i));
             }
-            let o = sim.ps.origin;
-            sim.ps.ground_entity_num() == step.number
-                || world
-                    .model_box_trace(
-                        step.model,
-                        o,
-                        o,
-                        sim.ps.mins(),
-                        sim.ps.maxs(),
-                        MASK_PLAYERSOLID,
-                    )
-                    .startsolid
+            let id = host.ents.handle(n)?;
+            let body = crate::game::item::push_body(host, cx, id)?;
+            item_in_way(step, &body, world).then_some(Kept::Item(id, body))
+        })
+        .collect();
+    let number = |k: &Kept, sims: &[(usize, &mut ClientSim)]| match k {
+        Kept::Client(i) => sims[*i].0 as u32,
+        Kept::Item(id, _) => id.0,
+    };
+    for k in &kept {
+        host.area.unlink(number(k, sims));
+    }
+    // A kept player is out of the tree until its turn relinks it, so it
+    // blocks nobody listed ahead of it.
+    let mut out: Vec<usize> = kept
+        .iter()
+        .filter_map(|k| match k {
+            Kept::Client(i) => Some(*i),
+            Kept::Item(..) => None,
         })
         .collect();
 
     let mut pushed: Vec<Pushed> = Vec::new();
-    for i in list {
-        let old = sims[i].1.ps.origin;
-        let target = carried(step, old);
-        match try_push(i, sims, world, step.model, target) {
-            Some(Fit::Stays) => sims[i].1.ps.on_ground = false,
-            Some(Fit::At(at)) => {
-                let (slot, sim) = &mut sims[i];
-                // Pushed off whatever else it stood on.
-                if sim.ps.ground_entity_num() != step.number {
-                    sim.ps.on_ground = false;
+    for k in &kept {
+        match k {
+            Kept::Item(id, body) => {
+                let fit = fit_item(step, body, world);
+                if let Some(ItemPush::At(_)) = fit {
+                    pushed.push(Pushed::Item {
+                        id: *id,
+                        origin: body.origin,
+                    });
                 }
-                pushed.push(Pushed {
-                    slot: *slot,
-                    origin: old,
-                    delta_yaw: sim.delta_angles()[1],
-                });
-                sim.ps.origin = at;
-                sim.turn_delta_yaw(yaw_short);
+                // One that fits nowhere is relinked where it is (0x555d4).
+                crate::game::item::place_pushed(host, cx, *id, step, fit);
             }
-            None => {
-                for p in pushed.iter().rev() {
-                    if let Some((_, sim)) = sims.iter_mut().find(|(s, _)| *s == p.slot) {
-                        sim.ps.origin = p.origin;
-                        sim.set_delta_yaw(p.delta_yaw);
+            Kept::Client(i) => {
+                let i = *i;
+                out.retain(|&o| o != i);
+                let bodies: Vec<Body> = sims
+                    .iter()
+                    .enumerate()
+                    .filter(|(o, _)| *o != i && !out.contains(o))
+                    .filter_map(|(_, (s, o))| o.body(*s as u32))
+                    .collect();
+                let old = sims[i].1.ps.origin;
+                let Some(fit) = try_push(step, sims[i].0, sims[i].1, &bodies, world) else {
+                    undo(host, cx, sims, &pushed);
+                    return false;
+                };
+                let (slot, sim) = &mut sims[i];
+                match fit {
+                    Fit::Stays => sim.ps.on_ground = false,
+                    Fit::At(at) => {
+                        // Pushed off whatever else it stood on.
+                        if sim.ps.ground_entity_num() != step.number {
+                            sim.ps.on_ground = false;
+                        }
+                        pushed.push(Pushed::Client {
+                            slot: *slot,
+                            origin: old,
+                            delta_yaw: sim.delta_angles()[1],
+                        });
+                        sim.pushed_to(at);
+                        sim.turn_delta_yaw(yaw_short);
                     }
                 }
-                return false;
+                link_client(host, *slot, sim);
             }
         }
     }
+    for k in &kept {
+        match k {
+            Kept::Client(i) => link_client(host, sims[*i].0, sims[*i].1),
+            Kept::Item(id, _) => host.link_entity(cx, *id),
+        }
+    }
     true
+}
+
+/// `G_TryPushingEntity`'s `trap_LinkEntity` of a pushed player, at
+/// `r.currentOrigin`, unsnapped.
+fn link_client(host: &mut GameHost, slot: usize, sim: &ClientSim) {
+    host.link_client(
+        slot,
+        sim.link_origin().into(),
+        (sim.ps.mins().into(), sim.ps.maxs().into()),
+        sim.contents as i32,
+        true,
+    );
+}
+
+/// `G_MoverTeam`'s walk back over the records, newest first: each entity
+/// back where it was pushed from, a player's yaw delta
+/// back, and a relink.
+fn undo(host: &mut GameHost, cx: &mut Cx, sims: &mut [(usize, &mut ClientSim)], pushed: &[Pushed]) {
+    for p in pushed.iter().rev() {
+        match p {
+            Pushed::Client {
+                slot,
+                origin,
+                delta_yaw,
+            } => {
+                if let Some((_, sim)) = sims.iter_mut().find(|(s, _)| s == slot) {
+                    sim.pushed_to(*origin);
+                    sim.set_delta_yaw(*delta_yaw);
+                    link_client(host, *slot, sim);
+                }
+            }
+            // Its ground stays `ENTITYNUM_NONE` (0x557b6 restores no ground).
+            Pushed::Item { id, origin } => {
+                crate::game::item::restore_pushed(host, cx, *id, *origin);
+            }
+        }
+    }
+}
+
+/// Whether `G_MoverPush` keeps a listed player: one standing on the mover,
+/// or one whose box the mover's brushes now overlap (0x55405, 0x554ee).
+fn listed_client(step: &Step, sim: &ClientSim, world: &CollisionWorld) -> bool {
+    if !sim.linked() || sim.contents & CONTENTS_BODY == 0 || sim.link_to.is_some() {
+        return false;
+    }
+    let o = sim.ps.origin;
+    sim.ps.ground_entity_num() == step.number
+        || world
+            .model_box_trace(
+                step.model,
+                o,
+                o,
+                sim.ps.mins(),
+                sim.ps.maxs(),
+                MASK_PLAYERSOLID,
+            )
+            .startsolid
 }
 
 /// Where the mover's move and turn take a point: moved, then turned about the
@@ -127,20 +240,21 @@ pub enum ItemPush {
     Dropped,
 }
 
-/// `G_MoverPush`'s test and `G_TryPushingEntity` for one item: `None` when
-/// the item is not in the mover's way, or is and fits nowhere, and stays put.
-/// An item is 2 units wide, under the jitter's reach, so the only fallback is
-/// its own spot.
-pub fn push_item(step: &Step, item: &ItemBody, world: &CollisionWorld) -> Option<ItemPush> {
+/// `G_MoverPush`'s test for one listed item: it stands on the mover, or its
+/// box at its origin meets the mover's brushes under its own push mask.
+pub fn item_in_way(step: &Step, item: &ItemBody, world: &CollisionWorld) -> bool {
     let here = item.origin;
-    let on = item.ground == step.number as i32;
-    if !on
-        && !world
+    item.ground == step.number as i32
+        || world
             .model_box_trace(step.model, here, here, item.mins, item.maxs, item.mask)
             .startsolid
-    {
-        return None;
-    }
+}
+
+/// `G_TryPushingEntity` for an item in the way: `None` when it fits
+/// nowhere. An item is 2 units wide, under the jitter's reach, so the only
+/// fallback is its own spot.
+pub fn fit_item(step: &Step, item: &ItemBody, world: &CollisionWorld) -> Option<ItemPush> {
+    let here = item.origin;
     // The sweep is the players' (see `try_push`): a zero-length box is
     // never inside terrain.
     let clear = |p: Vec3| {
@@ -169,25 +283,24 @@ enum Fit {
     Stays,
 }
 
-/// Where `sims[i]` can go: `target`, the first clear jitter around it in
+/// Where a player can go: the carried spot, the first clear jitter around it in
 /// `G_TryPushingEntity`'s order, or its own spot. `None` when the mover has
 /// nowhere to put it.
 fn try_push(
-    i: usize,
-    sims: &[(usize, &mut ClientSim)],
+    step: &Step,
+    slot: usize,
+    sim: &ClientSim,
+    bodies: &[Body],
     world: &CollisionWorld,
-    pusher: usize,
-    target: Vec3,
 ) -> Option<Fit> {
-    let (slot, sim) = (sims[i].0, &*sims[i].1);
     let (mins, maxs) = (sim.ps.mins(), sim.ps.maxs());
-    let bodies: Vec<Body> = sims
-        .iter()
-        .filter(|(s, _)| *s != slot)
-        .filter_map(|(s, o)| o.body(*s as u32))
-        .collect();
-    let mw = MoveWorld::new(world, &bodies, slot as u32);
+    let mw = MoveWorld::new(world, bodies, slot as u32);
+    // `G_TryPushingEntity` moves `r.currentOrigin` (0x54956); the ride
+    // capture keeps `ps.origin`'s fraction through every push, so that is
+    // what it reads.
     let here = sim.ps.origin;
+    let target = carried(step, here);
+    let pusher = step.model;
     // Retail's test is one `trap_Trace` at the spot (game.mp 0x54b3b). Ours
     // also sweeps there from where the body stood, past the pusher it may
     // start inside: a zero-length capsule is never `startsolid` under

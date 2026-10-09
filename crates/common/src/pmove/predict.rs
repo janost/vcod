@@ -80,7 +80,7 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
     if ps.on_ground {
         ps.ground_entity = ground;
     }
-    ps.lean = float("leanf") * super::LEAN_MAX;
+    ps.lean = float("leanf");
     ps.prone_direction = float("proneDirection");
     ps.prone_direction_pitch = float("proneDirectionPitch");
     ps.prone_torso_pitch = float("proneTorsoPitch");

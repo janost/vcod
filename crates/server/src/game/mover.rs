@@ -169,7 +169,7 @@ struct Mover {
 /// One frame's move of a brush model mover, for the server to push players
 /// with: `G_MoverPush`'s `move` and `amove` are `to - from`
 /// (docs/research/cod11-movers.md, section 12).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Step {
     pub ent: EntId,
     /// The entity number a player standing on the brushes reads as ground.
@@ -178,6 +178,9 @@ pub struct Step {
     pub model: usize,
     pub from: (Vec3, Vec3),
     pub to: (Vec3, Vec3),
+    /// `trap_EntitiesInBox(.., 0x2000180)` over the swept move, taken with
+    /// the pusher unlinked: the push's candidates in area-tree order.
+    pub listed: Vec<u32>,
 }
 
 /// One notify the integrator owes script this frame.
@@ -338,9 +341,16 @@ pub fn run_one(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> (Vec<Do
         let atom = cx.intern_folded(name);
         let _ = host.write_field(cx, id, atom, vcod_gsc::Value::Vector(v));
     }
-    let step = clip_step(host, cx, id, &mut m, level_ms);
-    // `G_MoverPush`'s relink of the pusher where it now is (0x553ae).
+    let mut step = clip_step(host, cx, id, &mut m, level_ms);
+    // `G_MoverPush` unlinks the pusher (0x55315), lists what the move
+    // sweeps (0x5533c) and links it where it now is (0x553ae), so a moving
+    // mover goes to the head of its node's list every frame.
     if moving {
+        let swept = step.as_ref().and_then(|s| swept_box(host, s));
+        host.area.unlink(id.0);
+        if let (Some(s), Some((mins, maxs))) = (step.as_mut(), swept) {
+            s.listed = host.area.entities_in_box(mins, maxs, PUSH_LIST_MASK);
+        }
         let (origin, angles) = pose(host, cx, id);
         host.link_entity_at(cx, id, Some((origin.into(), angles.into())));
     }
@@ -393,6 +403,35 @@ pub fn stall(host: &mut GameHost, cx: &mut vcod_gsc::Cx, step: &Step) {
     }
     let (origin, angles) = pose(host, cx, step.ent);
     host.link_entity_at(cx, step.ent, Some((origin.into(), angles.into())));
+}
+
+/// `G_MoverPush`'s `trap_EntitiesInBox` mask (0x5531d): a live player's
+/// `0x2000000`, an item's `0x100` and `0x80`.
+const PUSH_LIST_MASK: i32 = 0x2000180;
+
+/// `G_MoverPush`'s list box (0x550f0..0x5530a): the pusher's last link box,
+/// or a cube of `RadiusFromBounds` about its origin when its angles or
+/// `amove` are not all zero, stretched along `move` on each axis.
+fn swept_box(host: &GameHost, step: &Step) -> Option<([f32; 3], [f32; 3])> {
+    let mv = step.to.0 - step.from.0;
+    let amove = step.to.1 - step.from.1;
+    let (mut mins, mut maxs) = if step.from.1 == Vec3::ZERO && amove == Vec3::ZERO {
+        let link = host.area.last_link(step.number)?;
+        (Vec3::from(link.absmin), Vec3::from(link.absmax))
+    } else {
+        let shape = host.ents.get(step.ent)?.link?;
+        let (lo, hi) = (Vec3::from(shape.mins), Vec3::from(shape.maxs));
+        let r = lo.abs().max(hi.abs()).length();
+        (step.from.0 - Vec3::splat(r), step.from.0 + Vec3::splat(r))
+    };
+    for i in 0..3 {
+        if mv[i] > 0.0 {
+            maxs[i] += mv[i];
+        } else {
+            mins[i] += mv[i];
+        }
+    }
+    Some((mins.to_array(), maxs.to_array()))
 }
 
 /// The entity's `origin` and `angles` fields.
@@ -454,6 +493,7 @@ fn clip_step(
         model,
         from,
         to,
+        listed: Vec::new(),
     })
 }
 
