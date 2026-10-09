@@ -91,6 +91,23 @@ VERIFIED (strings and calls).
   VERIFIED (the multiplies). Their full effect on the frame is not
   traced here.
 
+- Which uploads the texture gamma reaches. VERIFIED: `0x4eaa90` starts
+  with `cmp [esp+0xc], 0x1908` (`0x4eaa91`) and returns unless its format
+  argument is `GL_RGBA`. VERIFIED: the image loader passes the image's own
+  format to `0x4ec730` (`0x4eecd1`, `0x4eed00`), and that format is
+  `GL_RGBA` or one of `0x83f0`..`0x83f3` (the S3TC formats; the checks at
+  `0x4eec7d`-`0x4eec94`, next to "heightToNormal not valid for DDS
+  textures" at `0x54b77c`). So DDS images upload compressed and the texture
+  gamma never touches them; it reaches TGA and JPG images only. INFERRED
+  (the S3TC names are GL's enum values).
+- VERIFIED: the upload routine `0x4ebf20` calls `0x4eaa90` at `0x4ec124`
+  only on its resample or mipmap path. When the picmipped size equals the
+  image's size (`0x4ec004`, `0x4ec00e`) and flag bit 0 is clear
+  (`0x4ec018`-`0x4ec023`), it uploads straight through `0x4ebdc0` at
+  `0x4ec03c` and skips the gamma. INFERRED: flag bit 0 is "mipmap", from
+  the "image '%s' requested mipmaps, but they aren't available" string
+  (`0x54b7b4`) pushed when `bl & 1` is set at `0x4eec5c`. So 2D images at
+  their native size keep their bytes.
 - Lightmaps: VERIFIED, the lightmap loader `0x4d9fa0` (it names each page
   `*lightmap%d`) runs every texel of each 512x512 page through `0x4d9f30`,
   which calls `0x4d9af0` per texel and sets alpha 255. `0x4d9af0` shifts
@@ -99,15 +116,23 @@ VERIFIED (strings and calls).
   hue. INFERRED: it is Q3's `R_ColorShiftLightingBytes` with
   `r_mapOverBrightBits` fixed at 1, so full screen loads lightmaps as they
   are and windowed doubles them at load. VERIFIED: with no lightmap data the
-  pages are filled with `identityLightByte` (`0x16c55b4`).
+  pages are filled with `identityLightByte` (`0x16c55b4`). VERIFIED: each
+  page is created by `0x4ec310(0xde1, w, h, 0x38, 3)` (pushes at
+  `0x4da19d`-`0x4da1a3`) and uploaded by `0x4ec490(data, 0xde1, 0x1908)`
+  (`0x4da1b3`-`0x4da1c4`). INFERRED: flags `0x38` have bit 0 clear, so a
+  page at its native size takes the fast path above and the texture gamma
+  never reaches lightmaps.
 
 So with defaults in full screen (`r_overBrightBits 1`), the framebuffer
 holds half-bright lighting and the ramp doubles it after gamma:
 `display = min(255, round(255 * (fb/255)^(1/g)) << 1)`. Windowed, or with
 `r_ignorehwgamma 1`, `overbrightBits` is 0: no doubling, and with
-`r_ignorehwgamma 1` the gamma is baked into textures at load (latched until
-`vid_restart`, which is why the menu moves the slider). INFERRED (from
-steps 1, 5 and 7 and `0x4eaa90`).
+`r_ignorehwgamma 1` the gamma is baked into TGA and JPG textures at load
+(picked up again whenever images reload, which is every map load and
+`vid_restart`; the menu moves the slider to the System group for that
+reason). INFERRED (from steps 1, 5 and 7 and `0x4eaa90`; that a map load
+reloads every image is Q3's `RE_Shutdown(qfalse)` on map change and not
+traced in CoDMP.exe).
 
 INFERRED, from the above: windowed with device gamma, the ramp still loads
 (step 7 tests only device gamma) but unshifted, so `r_gamma` stays live and
@@ -127,20 +152,39 @@ the clamp.
 vcod's frame holds retail's full-screen displayed colour, the framebuffer
 doubled by the ramp's one overbright bit; section 5 says where that x2
 lands. So its frame at gamma 1 stands for retail's display at gamma 1.
-`crates/client/src/gamma.rs` turns retail's table into a 256-entry texture
-indexed by the frame's own byte `e` (`display_table`): with retail's
-`overbrightBits` 1 (`overbright_bits`: full screen and device gamma) entry
-`e` is the shifted ramp's entry `e/2`, odd bytes the mean of the two around
-it; with 0 (windowed, or `r_ignorehwgamma 1`) it is the unshifted ramp's
-entry `e`, since the framebuffer byte is then the display byte. When the
-table is not the identity the frame renders offscreen and `gamma.wgsl` maps
-each channel through it onto the swapchain, in sRGB-encoded values. At
-gamma 1 both tables are the identity and the pass is skipped. `r_gamma` is
-read every frame and clamped to 0.5..3 with the write-back of step 4, so the
-slider is live as in retail; the full-screen test reads the window's state
-each frame. With `r_ignorehwgamma 1`, read at start-up and on
-`vid_restart`, vcod applies the `r_gamma` of that moment until the next
-`vid_restart`, which is when retail's baked textures would pick a change up.
+Every pass draws into an `Rgba16Float` scene target
+(`renderer::SCENE_FORMAT`), so a doubled colour keeps retail's framebuffer
+range up to 2.0 (retail's framebuffer 1.0) instead of clipping at the
+display's white, and blends see the unclipped value as retail's
+framebuffer does. `gamma.wgsl` then maps every frame onto the swapchain
+through a 512-entry table indexed by the frame's sRGB-encoded value
+`e = k / 255`, `k` in 0..512 (`crate::gamma::display_table`):
+
+- `overbrightBits` 1 (full screen with device gamma,
+  `gamma::overbright_bits`): entry `k` is the shifted ramp's entry `k/2`,
+  odd entries the mean of the two around it. Below gamma 1 the values over
+  1.0 show as retail's framebuffer bytes 128..255 do, as distinct shades.
+- `overbrightBits` 0 (windowed, or `r_ignorehwgamma 1`): entry `k` is the
+  unshifted ramp's entry `min(k, 255)`; the framebuffer byte is the display
+  byte, and retail's framebuffer clamps at 1.0.
+
+At gamma 1 both tables are the identity up to 1.0 and clamp above it.
+`r_gamma` is read every frame and clamped to 0.5..3 with the write-back of
+step 4, so the slider is live as in retail; the full-screen test reads the
+window's state each frame. The stage tint (`rgbGen`/`alphaGen` wave and
+const) is clamped to 0..1, the colour bytes retail writes, since the float
+target no longer clamps it.
+
+`r_ignorehwgamma` is read at start-up and on `vid_restart` (latched). While
+it is 1 the frame pass runs the gamma 1 table, and each world load reads
+`r_gamma` and maps every uncompressed (TGA, JPG) image's rgb through the
+unshifted ramp before upload (`gamma::bake_image`): material images,
+shader-stage images, prop and model skins and fx sprites. DDS images, the
+dlight blob, lightmaps and HUD images keep their bytes, as in retail.
+
+Memory and cost: the 4x MSAA colour target is 8 bytes a sample instead of
+4 (about 66 MB at 1920x1080 against 33 MB), plus an 8-byte-a-pixel resolve
+target, and the full-screen pass now runs every frame at gamma 1 too.
 
 Divergences:
 
@@ -148,13 +192,14 @@ Divergences:
   full-screen x2 of section 5 instead of retail's hue-keeping lightmap
   shift at load, and so draws `identity`, `exactVertex` and `const` stages
   at the full-screen brightness, twice retail's windowed one.
-- `r_ignorehwgamma 1` maps the finished frame through the ramp; retail
-  maps each texture (lightmaps included) through it before they multiply.
-- Full screen, vcod's frame clamps at retail framebuffer byte 127.5 (its
-  display white). Below gamma 1 retail shows framebuffer bytes above that
-  as distinct brighter shades; vcod caps them at the table entry for 127.5
-  (about 127 at gamma 0.5). Windowed has no such loss. Closing it needs a
-  scene target with headroom above 1.0 for every pass.
+- The x2 rides each draw in linear space, and the float target never clamps
+  at retail's framebuffer 1.0 (vcod 2.0 encoded): a filter over additive
+  stages that passed it multiplies the unclamped sum.
+- `r_ignorehwgamma 1` bakes on every RGBA image the paths above load; retail
+  skips images uploaded at their native size without mipmaps (section 3),
+  which covers shaders marked `nomipmaps`. A `vid_restart` does not reload
+  the world, so a gamma change waits for the next map load, where retail's
+  `vid_restart` reloads every image.
 - `r_overBrightBits` is not registered; vcod uses its default 1.
 - `r_intensity` is not applied (no stock menu sets it).
 
@@ -163,12 +208,10 @@ Divergences:
 What retail writes to the framebuffer per `rgbGen`, before the ramp
 doubles it:
 
-- VERIFIED, `0x4d9af0` and its only caller `0x4d9f30` (a 512 x 512 loop
-  over a lightmap page): lightmap texels shift left by `1 - overbrightBits`
-  and rescale to the brightest channel when one passes 255, Q3's
-  `R_ColorShiftLightingBytes` with `mapOverBrightBits` fixed at 1. With
-  one overbright bit the shift is 0, so lightmaps reach the framebuffer
-  raw.
+- Lightmaps: the shift at load in section 3 (`0x4d9af0`, called only from
+  `0x4d9f30`, a 512 x 512 loop over a page). With one overbright bit the
+  shift is 0, so lightmaps reach the framebuffer raw. INFERRED (from that
+  section).
 - VERIFIED, the colour switch at `0x4ffa60` (Q3's `RB_CalcColors`, keyed
   on the stage's gen at `+0x664`; the gen numbers are in
   `cod11-light-grid-and-leaf-lights.md` section 9): identity (2) writes
@@ -201,11 +244,10 @@ vcod does the doubling per draw instead of in a final pass:
   x2 for the whole chain. Before this, `identityLighting`, `constLighting`,
   `vertex` and `wave` stages on surfaces with no lightmap drew at half
   retail's brightness.
-- Doubling per draw clamps at the display's 1.0, which is retail's
-  framebuffer 0.5: blends over a bright background and filter stages over
-  a doubled base can differ from retail where retail's framebuffer
-  stayed under 1.0 and the display clipped. A float scene target with one
-  final x2 would remove that; it changes every pass, HUD included.
+- Doubling per draw no longer clamps at the display's 1.0 (retail's
+  framebuffer 0.5): the float scene target of section 4 keeps the value up
+  to the final pass, so a blend over a bright background sees what
+  retail's framebuffer held.
 - Effects (`fx.wgsl`), the sky farbox, entity models and the HUD keep
   their own scales; how retail colours those is not traced here.
 

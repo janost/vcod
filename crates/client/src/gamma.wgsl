@@ -1,6 +1,7 @@
 // r_gamma: retail's hardware gamma ramp as a final pass (crate::gamma).
-// The table is indexed by the frame's own byte; `display_table` folds the
-// overbright bit's e/2 indexing into it.
+// The float scene holds values up to 2.0 (encoded); the 512-entry table is
+// indexed by value * 255 and `display_table` folds the overbright bit's e/2
+// indexing into it.
 @group(0) @binding(0) var scene: texture_2d<f32>;
 @group(0) @binding(1) var ramp: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
@@ -27,13 +28,13 @@ fn to_linear(c: vec3<f32>) -> vec3<f32> {
 }
 
 fn lookup(v: f32) -> f32 {
-    let u = (v * 255.0 + 0.5) / 256.0;
+    let u = (v * 255.0 + 0.5) / 512.0;
     return textureSampleLevel(ramp, samp, vec2<f32>(u, 0.5), 0.0).r;
 }
 
 @fragment
 fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
-    var c = textureLoad(scene, vec2<i32>(pos.xy), 0).rgb;
+    var c = max(textureLoad(scene, vec2<i32>(pos.xy), 0).rgb, vec3<f32>(0.0));
     if (SRGB) {
         c = to_srgb(c);
     }
