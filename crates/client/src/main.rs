@@ -3,6 +3,7 @@ mod camera;
 mod clock_probe;
 mod console;
 mod entities;
+mod entity_light;
 mod frontend;
 mod fx;
 mod gamma;
@@ -1375,6 +1376,7 @@ fn loading_frame(
         ),
         eye: Vec3::ZERO,
         fwd: camera::basis(0.0, 0.0).0,
+        up: Vec3::Z,
         time: now,
         cull,
         hud_lines: vec![text],
@@ -2483,6 +2485,7 @@ impl ApplicationHandler for App {
                             ),
                             eye: Vec3::ZERO,
                             fwd: camera::basis(0.0, 0.0).0,
+                            up: Vec3::Z,
                             time,
                             cull,
                             hud_lines: Vec::new(),
@@ -2510,6 +2513,7 @@ impl ApplicationHandler for App {
                                 view_proj: cam.view_proj(aspect),
                                 eye: cam.pos,
                                 fwd: cam_forward,
+                                up: Vec3::Z,
                                 time,
                                 cull,
                                 hud_lines: Vec::new(),
@@ -3374,6 +3378,7 @@ impl ApplicationHandler for App {
                                         ),
                                         eye: cam.pos,
                                         fwd: cam_forward,
+                                        up: Vec3::Z,
                                         time,
                                         cull,
                                         hud_lines: Vec::new(),
@@ -3653,6 +3658,7 @@ impl ApplicationHandler for App {
                                 ),
                                 eye: v.eye,
                                 fwd: camera::basis(v.yaw, v.pitch).0,
+                                up: camera::up_hint(v.yaw, v.pitch, v.roll),
                                 time,
                                 cull,
                                 hud_lines: vec![format!(
@@ -3665,6 +3671,7 @@ impl ApplicationHandler for App {
                             },
                             (!scoped).then(|| renderer::VmDraw {
                                 transform: motion.transform(),
+                                light_origin: ps.origin + Vec3::Z * ps.view_height(),
                                 fov_x: fov,
                                 bone_sets,
                             }),

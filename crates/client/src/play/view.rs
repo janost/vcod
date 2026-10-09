@@ -29,6 +29,9 @@ pub struct ViewPs {
     /// `pm_flags`' view bits: 0x40000 the client's own view, 0x10000 a
     /// follow (`play::recoil`).
     pub pm_flags: i32,
+    /// `origin` raised by `viewHeightCurrent`: the viewmodel's lighting
+    /// origin.
+    pub eye: Vec3,
 }
 
 /// `pm_type` at intermission.
@@ -48,6 +51,7 @@ impl ViewPs {
             pm_type: pred.pm_type,
             mounted: pred.ps.mounted.is_some(),
             pm_flags: recoil::PMF_OWN_VIEW,
+            eye: pred.ps.origin + Vec3::Z * pred.ps.view_height(),
         }
     }
 
@@ -64,6 +68,11 @@ impl ViewPs {
             pm_type: ps.field_i32(p, "pm_type"),
             mounted: ps.field_i32(p, "eFlags") & 0xc000 != 0,
             pm_flags: ps.field_i32(p, "pm_flags"),
+            eye: Vec3::new(
+                f("origin[0]"),
+                f("origin[1]"),
+                f("origin[2]") + f("viewHeightCurrent"),
+            ),
         }
     }
 }
@@ -378,6 +387,7 @@ impl OnlineView {
         (
             Some(VmDraw {
                 transform,
+                light_origin: ps.eye,
                 fov_x: fov,
                 bone_sets,
             }),
@@ -424,6 +434,7 @@ mod tests {
             pm_type: 0,
             mounted: false,
             pm_flags: recoil::PMF_OWN_VIEW,
+            eye: Vec3::ZERO,
         }
     }
 
