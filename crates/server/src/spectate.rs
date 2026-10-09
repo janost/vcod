@@ -5,8 +5,8 @@ use glam::Vec3;
 use vcod_common::movetrace::{Body, CONTENTS_BODY, CONTENTS_CORPSE, MoveWorld};
 use vcod_common::net::flags::{
     EF_CROUCH, EF_DEAD, EF_MOUNTED_DUCK, EF_MOUNTED_PRONE, EF_MOUNTED_STAND, EF_PRONE,
-    PMF_BACKWARDS_RUN, PMF_DUCKED, PMF_JUMP_HELD, PMF_OWN_VIEW, PMF_PRONE, PMF_PRONE_DIVE,
-    PMF_RESPAWNED,
+    PMF_BACKWARDS_RUN, PMF_DUCKED, PMF_JUMP_HELD, PMF_OWN_VIEW, PMF_PRONE, PMF_PRONE_BLOCKED,
+    PMF_PRONE_DIVE, PMF_RESPAWNED,
 };
 pub use vcod_common::net::flags::{
     EF_TELEPORT_BIT, PM_DEAD, PM_DEAD_LINKED, PM_INTERMISSION, PM_NORMAL_LINKED, PM_SPECTATOR,
@@ -1655,6 +1655,11 @@ impl ClientSim {
                     PMF_PRONE_DIVE
                 } else {
                     0
+                }
+                | if self.ps.prone_blocked {
+                    PMF_PRONE_BLOCKED
+                } else {
+                    0
                 };
             let jump_held = if self.ps.jump_latched {
                 PMF_JUMP_HELD
@@ -3111,6 +3116,19 @@ mod tests {
         assert_eq!(sim.to_wire(p, 0, 0).field_i32(p, "eFlags") & 0xC000, 0x8000);
         sim.mounted_on = Some((298, TurretStance::Prone));
         assert_eq!(sim.to_wire(p, 0, 0).field_i32(p, "eFlags") & 0xC000, 0x4000);
+    }
+
+    /// A refused prone press reaches the wire as `pm_flags` 0x8000, which
+    /// the client's "Prone Blocked" notice reads.
+    #[test]
+    fn a_refused_prone_writes_pm_flags_0x8000() {
+        let p = &PROTOCOL_V1;
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.become_player([0.0; 3], 0.0, [0; 3]);
+        let pm_flags = |sim: &ClientSim| sim.to_wire(p, 0, 0).field_i32(p, "pm_flags");
+        assert_eq!(pm_flags(&sim) & PMF_PRONE_BLOCKED, 0);
+        sim.ps.prone_blocked = true;
+        assert_eq!(pm_flags(&sim) & PMF_PRONE_BLOCKED, PMF_PRONE_BLOCKED);
     }
 
     /// `BG_PlayerStateToEntityState` copies `ps.eFlags` whole, stance bits
