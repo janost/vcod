@@ -1092,6 +1092,31 @@ compass. vcod draws it on those terms, off the snapshot's playerstate
 without prediction while following, and rebases the hit-direction
 feedback when the playerstate's `clientNum` changes.
 
+VERIFIED, the cgame's cvar table rows (`{vmCvar_t *, name, default,
+flags}`): `cg_drawStatus` at `0x30074a44` binds `0x301d9ec0` and
+`cg_drawCrosshair` at `0x30074aa4` binds `0x301d9020`, both default `"1"`
+with flags 1 (archive). INFERRED, from Q3's `vmCvar_t` layout: each
+`integer` sits at `+0xc`, `0x301d9ecc` and `0x301d902c`. VERIFIED, the
+cgame's loads of `0x301d9ecc`: `0x3001887c` and `0x300188a0` in the 2D pass,
+and `0x30026bb0`, the first instruction of `CG_OwnerDraw`. VERIFIED, the
+loads of `0x301d902c`: `0x30016613` (the turret reticle `0x30016610`),
+`0x30016827` (the crosshair `0x30016760`) and `0x30016f70`.
+
+INFERRED, off the branches after those loads: `CG_OwnerDraw` returns at
+once on `cg_drawStatus` 0, so with the 2D pass's two tests `cg_drawStatus 0`
+hides every owner draw (health, ammo, weapon name, stance, compass, cursor
+hint), the `hud.menu` pass and the hudelems, and leaves the crosshair, the
+scope overlay, the hit-direction icons, the chat and the obituaries.
+INFERRED, same: `0x30016760` returns on `cg_drawCrosshair` 0 after the scope
+overlay's call, `0x30016610` draws only when it is not 0, and `0x30016f70`
+returns only when it is negative. INFERRED, off `0x30016f70`'s test of
+`cg_drawCrosshairNames` (`0x301e0bec`) and its name lookup: that function
+draws the name of the player under the crosshair, which vcod does not draw.
+
+vcod reads both cvars as integers each frame (`hud::DrawToggles`):
+`cg_drawCrosshair 0` drops the weapon crosshair and the mounted reticle,
+`cg_drawStatus 0` the native HUD, the cursor hint and the hudelems.
+
 ### Crosshair
 
 INFERRED, off `0x30016760` and `0x3000fa50`: the hip spread in degrees is
@@ -1456,6 +1481,10 @@ vcod prints both off the same stamp as the flash (`stance_hints`,
 (`Shell::key_text`), and reads `0x8000` off the snapshot's `pm_flags`, which
 its predictor does not model. All three draw before the icon, as retail's
 do.
+INFERRED: the notice, the hints and the flash all live in the stance owner
+draw, and the compass spring in the compass one, so `cg_drawStatus` 0
+hides them and freezes their stamps and the spring; the weapon name's
+stamp is set outside the draw and keeps running. vcod does the same.
 
 vcod reads the icon and the flash off `pm_flags`' two bits, the replay's
 while predicting. Its first frame counts as a change, as the -1 start

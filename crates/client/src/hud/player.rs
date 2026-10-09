@@ -84,6 +84,7 @@ pub struct Context<'a> {
     pub entity_origin: &'a dyn Fn(i32) -> Option<[f32; 3]>,
     /// The key text a command is bound to, `None` while unbound.
     pub bound_key: &'a dyn Fn(&str) -> Option<String>,
+    pub draw: super::DrawToggles,
 }
 
 /// The state the native HUD keeps across frames.
@@ -143,41 +144,51 @@ impl PlayerHud {
             scope::build(def, at, screen, out);
         }
 
-        let north = cx
-            .configstrings
-            .get(CS_NORTHYAW)
-            .and_then(|s| s.trim().parse::<f32>().ok())
-            .unwrap_or(0.0);
-        self.friends.feed(now, p.friends.iter().copied());
-        let face_yaw = self.compass_spring.step(p.view_yaw - north, now);
-        compass(p, cx, face_yaw, &mut self.friends, now, &v, out);
-        if let Some(alpha) = self.prone_blocked.step(p.prone_blocked, now) {
-            prone_blocked(cx, alpha, &v, out);
-        }
-        let bits = (p.spread_stance.prone, p.spread_stance.ducked);
-        let flash = self.stance.step(bits, now);
-        if let Some(alpha) = self.stance.hint_alpha(now) {
-            stance_hints(bits, cx, alpha, &v, out);
-        }
-        stance(bits, flash, &v, out);
-        let frac = health_fraction(p.health, p.max_health);
-        let lag = self.health_lag.step(p.client_num, frac, now);
-        health(frac, lag, &v, out);
+        // `cg_drawStatus` gates the `hud.menu` pass and every owner draw
+        // (0x30026bb0); `cg_drawCrosshair` only the reticles. The weapon
+        // name's stamp is set outside the draw, as retail's respawn and
+        // weapon select set it.
         let name_alpha = self.weapon_name.step((p.client_num, p.spawn_count), now);
-        if let Some(def) = p.weapon {
-            weapon_info(def, p, cx, name_alpha, &v, out);
-            if p.alive && p.eflags & EF_MOUNTED == 0 {
-                crosshair(def, p, raising, &v, out);
+        if cx.draw.status {
+            let north = cx
+                .configstrings
+                .get(CS_NORTHYAW)
+                .and_then(|s| s.trim().parse::<f32>().ok())
+                .unwrap_or(0.0);
+            self.friends.feed(now, p.friends.iter().copied());
+            let face_yaw = self.compass_spring.step(p.view_yaw - north, now);
+            compass(p, cx, face_yaw, &mut self.friends, now, &v, out);
+            // The stance owner draw runs the notice, the hints and the flash.
+            if let Some(alpha) = self.prone_blocked.step(p.prone_blocked, now) {
+                prone_blocked(cx, alpha, &v, out);
+            }
+            let bits = (p.spread_stance.prone, p.spread_stance.ducked);
+            let flash = self.stance.step(bits, now);
+            if let Some(alpha) = self.stance.hint_alpha(now) {
+                stance_hints(bits, cx, alpha, &v, out);
+            }
+            stance(bits, flash, &v, out);
+            let frac = health_fraction(p.health, p.max_health);
+            let lag = self.health_lag.step(p.client_num, frac, now);
+            health(frac, lag, &v, out);
+            if let Some(def) = p.weapon {
+                weapon_info(def, p, cx, name_alpha, &v, out);
             }
         }
-        // Mounted, the gun's reticle replaces the weapon's, carried weapon or not.
-        if p.alive
-            && p.eflags & EF_MOUNTED != 0
-            && let Some(def) = p.turret
-        {
-            turret_reticle(def, &v, out);
+        if cx.draw.crosshair && p.alive {
+            if p.eflags & EF_MOUNTED == 0 {
+                if let Some(def) = p.weapon {
+                    crosshair(def, p, raising, &v, out);
+                }
+            } else if let Some(def) = p.turret {
+                // Mounted, the gun's reticle replaces the weapon's, carried
+                // weapon or not.
+                turret_reticle(def, &v, out);
+            }
         }
-        cursor_hint(p, cx, now, &v, out);
+        if cx.draw.status {
+            cursor_hint(p, cx, now, &v, out);
+        }
         // `cg_hudDamageIconInScope` 0.
         if scoped.is_none() {
             self.damage.build(p.view_yaw, now, &v, out);
@@ -1172,6 +1183,7 @@ mod tests {
             font: &font,
             entity_origin: &origin,
             bound_key: &|_| None,
+            draw: Default::default(),
         };
         let def = carbine();
         let arms = |eflags: i32| {
@@ -1190,6 +1202,44 @@ mod tests {
         assert_eq!(arms(0xC000), 0);
     }
 
+    /// `cg_drawCrosshair` 0 drops the reticle and nothing else;
+    /// `cg_drawStatus` 0 keeps it.
+    #[test]
+    fn draw_toggles_split_the_crosshair_from_the_status_hud() {
+        let font = test_font();
+        let ammo = [0i16; 64];
+        let cs = vec![String::new(); 2048];
+        let origin = |_: i32| None;
+        let def = carbine();
+        let p = PlayerView {
+            weapon: Some(&def),
+            ..view(&ammo, &[])
+        };
+        let draw = |crosshair: bool, status: bool| {
+            let cx = Context {
+                weapons: &[],
+                configstrings: &cs,
+                loc: &Localized::default(),
+                font: &font,
+                entity_origin: &origin,
+                bound_key: &|_| None,
+                draw: super::super::DrawToggles { crosshair, status },
+            };
+            let mut out = Vec::new();
+            PlayerHud::default().build(&p, &cx, 0, (640.0, 480.0), &mut out);
+            let arms = out
+                .iter()
+                .filter(|q| Some(&q.texture) == def.reticle_side.as_ref())
+                .count();
+            (arms, out.len() - arms)
+        };
+        let (arms, rest) = draw(true, true);
+        assert_eq!(arms, 4);
+        assert!(rest > 0);
+        assert_eq!(draw(false, true), (0, rest));
+        assert_eq!(draw(true, false), (4, 0));
+    }
+
     /// Down a settled scope the overlay is drawn first, under the menu HUD,
     /// and neither the crosshair nor a fresh hit's icon is drawn over it.
     #[test]
@@ -1205,6 +1255,7 @@ mod tests {
             font: &font,
             entity_origin: &origin,
             bound_key: &|_| None,
+            draw: Default::default(),
         };
         let def = WeaponDef {
             aim_down_sight: true,
@@ -1250,6 +1301,7 @@ mod tests {
             font: &font,
             entity_origin: &origin,
             bound_key: &|_| None,
+            draw: Default::default(),
         };
         let mg = WeaponDef {
             reticle_center: Some("gfx/reticle/mg42_cross.tga".into()),
@@ -1314,6 +1366,7 @@ mod tests {
             font: &font,
             entity_origin: &origin,
             bound_key: &|_| None,
+            draw: Default::default(),
         };
         let mut out = Vec::new();
         let v = Virtual::new((640.0, 480.0));
@@ -1453,6 +1506,7 @@ mod tests {
             font: &font,
             entity_origin: &origin,
             bound_key: &|_| None,
+            draw: Default::default(),
         };
         let def = carbine();
         let p = PlayerView {
@@ -1562,6 +1616,7 @@ mod tests {
             font: &font,
             entity_origin: &origin,
             bound_key: &|_| None,
+            draw: Default::default(),
         };
         let icons = |def: &WeaponDef| {
             let p = PlayerView {
@@ -1600,6 +1655,7 @@ mod tests {
             font: &font,
             entity_origin: &origin,
             bound_key: &|_| None,
+            draw: Default::default(),
         };
         let def = carbine();
         let p = PlayerView {
@@ -1633,6 +1689,7 @@ mod tests {
             font: &font,
             entity_origin: &origin,
             bound_key: &|_| None,
+            draw: Default::default(),
         };
         let p = PlayerView {
             health: 50,
