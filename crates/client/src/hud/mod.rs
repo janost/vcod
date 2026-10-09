@@ -202,6 +202,14 @@ impl Hud {
         self.player.weapon_name.select();
     }
 
+    /// Whether a weapon-select bind at `now` (seconds, the HUD's clock) is
+    /// past `cg_weaponCycleDelay` ms from the weapon name's stamp.
+    pub fn weapon_cycle_allowed(&self, now: f32, delay_ms: i32) -> bool {
+        self.player
+            .weapon_name
+            .cycle_allowed((now * 1000.0) as i32, delay_ms)
+    }
+
     /// A new gamestate: CS 7 indices and the scoreboard change, chat does not.
     pub fn on_gamestate(&mut self) {
         self.kill_icons.clear();
