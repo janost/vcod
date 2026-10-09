@@ -44,12 +44,9 @@ impl Vm {
     /// Starts a new thread running `func` from its first instruction and
     /// returns its id. The function must already be installed. Runs the
     /// thread immediately, to its own suspend/return/error, before
-    /// returning -- see `spawn`. `now_ms` is the caller's own clock
-    /// reading (matching `run_frame`'s parameter of the same name) and
-    /// sets `self.now_ms` before the immediate run, so a `wait` the new
-    /// thread's first instructions hit resolves against the real clock
-    /// even when called before the first `run_frame` -- e.g. a host
-    /// starting level-load threads at startup, ahead of the frame loop.
+    /// returning -- see `spawn`. A `wait` the new thread's first
+    /// instructions hit counts from the script clock ([`Vm::time`]), which
+    /// between frames is the last frame's `level.time`, not the caller's.
     ///
     /// The returned `ThreadId` can already refer to a finished, errored,
     /// or killed thread by the time this returns: the immediate run can
@@ -62,12 +59,10 @@ impl Vm {
     pub fn start_thread(
         &mut self,
         host: &mut dyn Host,
-        now_ms: i32,
         func: FuncRef,
         recv: Option<Target>,
         args: Vec<Value>,
     ) -> ThreadId {
-        self.now_ms = now_ms;
         let f = self
             .functions
             .get(&func)
@@ -288,7 +283,9 @@ impl Vm {
                 }
             }
             Ok(Step::Suspend(Suspend::Wait { seconds })) => {
-                let delay_ms = (seconds.max(0.0) * 1000.0) as i32;
+                // Rounded half up, as retail's `wait` does
+                // (docs/research/cod11-gsc-language.md, "The script clock").
+                let delay_ms = (seconds.max(0.0) * 1000.0 + 0.5) as i32;
                 let deadline = self.now_ms + delay_ms;
                 let seq = self.queue_seq();
                 if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
@@ -365,14 +362,33 @@ impl Vm {
         seq
     }
 
-    /// Runs one server frame: every thread whose `wait` has come due, and
-    /// every thread a notify woke, one at a time until none is left
-    /// (`Vm::step_runnable`). The errors are collected and returned rather
+    /// The script clock: the `level.time` of the last frame
+    /// [`Vm::run_frame`] ran, or what [`Vm::set_time`] set.
+    pub fn time(&self) -> i32 {
+        self.now_ms
+    }
+
+    /// `Scr_InitSystem`'s clock: a level starts the script clock on its own
+    /// `level.time`, before the gametype's `main` runs.
+    pub fn set_time(&mut self, ms: i32) {
+        self.now_ms = ms;
+    }
+
+    /// One server frame's threads, the way `G_RunFrame` runs them
+    /// (docs/research/cod11-gsc-language.md, "The script clock"): whatever
+    /// is due on the clock the last frame left, then the clock walks up to
+    /// `level_ms`, each thread due before it running on its own due time,
+    /// so a `wait` it takes counts from there. A thread due at `level_ms`
+    /// itself waits for the next frame. A thread a notify woke runs on the
+    /// clock of the moment. The errors are collected and returned rather
     /// than propagated, so one bad thread never stops the rest of the
     /// server.
-    pub fn run_frame(&mut self, host: &mut dyn Host, now_ms: i32) -> Vec<ScriptError> {
-        self.now_ms = now_ms;
-        self.step_runnable(host, true)
+    pub fn run_frame(&mut self, host: &mut dyn Host, level_ms: i32) -> Vec<ScriptError> {
+        let errors = self.step_runnable(host, Some(level_ms));
+        // `Scr_SetTime` leaves the clock on `level.time` whether or not it
+        // walked forward.
+        self.now_ms = level_ms;
+        errors
     }
 
     /// [`Vm::run_frame`] without the waits: steps the threads a notify woke
@@ -381,10 +397,10 @@ impl Vm {
     ///
     /// This is the caller's packet pass -- the host has just started or
     /// notified something outside the frame and wants those threads run to
-    /// their next suspend on the clock it happened at, which is what retail's
+    /// their next suspend on the script clock, which is what retail's
     /// `SV_ExecuteClientMessage` callbacks get
     /// (docs/research/cod11-map-cycle.md, 8.3).
-    pub fn run_runnable(&mut self, host: &mut dyn Host, now_ms: i32) -> Vec<ScriptError> {
+    pub fn run_runnable(&mut self, host: &mut dyn Host) -> Vec<ScriptError> {
         if !self
             .threads
             .iter()
@@ -392,8 +408,7 @@ impl Vm {
         {
             return Vec::new();
         }
-        self.now_ms = now_ms;
-        self.step_runnable(host, false)
+        self.step_runnable(host, None)
     }
 
     /// The pick both passes share, measured against retail by
@@ -403,33 +418,37 @@ impl Vm {
     /// is due now and queued last, so it resumes at once, ahead of every
     /// other thread due this frame; a notify's waiters are queued newest
     /// first, so they resume in start order after the notifier's step.
-    /// `frame` is the frame's own pass. The packet pass takes woken threads
+    /// `frame` is the frame's own pass and its `level.time`. The packet
+    /// pass takes woken threads
     /// only, in start order: the callbacks of several clients' packets and
     /// the waiters their notifies woke are all woken before it runs, where
     /// retail runs each packet's to completion in arrival order, so no pick
     /// among them is retail's, and start order is the one the connect and
     /// menu gates were taken with.
-    fn step_runnable(&mut self, host: &mut dyn Host, frame: bool) -> Vec<ScriptError> {
+    fn step_runnable(&mut self, host: &mut dyn Host, frame: Option<i32>) -> Vec<ScriptError> {
         let mut errors = Vec::new();
         let mut steps = 0;
-        let now = self.now_ms;
         while steps < Self::MAX_THREADS_PER_FRAME {
+            let now = self.now_ms;
             let next = self
                 .threads
                 .iter()
-                .filter_map(|t| match t.state {
-                    ThreadState::Runnable if frame => Some((now, Reverse(t.seq), t.id)),
+                .filter_map(|t| match (&t.state, frame) {
+                    (ThreadState::Runnable, Some(_)) => Some((now, Reverse(t.seq), t.id)),
                     // The packet pass keeps start order (see the doc comment).
-                    ThreadState::Runnable => Some((now, Reverse(0), t.id)),
-                    ThreadState::WaitingUntil(d) if frame && d <= now => {
-                        Some((d, Reverse(t.seq), t.id))
+                    (ThreadState::Runnable, None) => Some((now, Reverse(0), t.id)),
+                    // Due on the clock already or before `level.time`; one
+                    // due on `level.time` itself waits a frame.
+                    (&ThreadState::WaitingUntil(d), Some(level)) if d <= now || d < level => {
+                        Some((d.max(now), Reverse(t.seq), t.id))
                     }
                     _ => None,
                 })
                 .min();
-            let Some((_, _, tid)) = next else {
+            let Some((at, _, tid)) = next else {
                 return errors;
             };
+            self.now_ms = at;
             if let Some(t) = self.threads.iter_mut().find(|t| t.id == tid) {
                 t.state = ThreadState::Runnable;
             }
@@ -452,23 +471,14 @@ impl Vm {
     /// independent thread (`spawn`), and that thread's own `wait` is not
     /// an error -- it's an ordinary suspend, resolved into a
     /// `WaitingUntil` deadline the same way `run_frame`/`start_thread`
-    /// would. `now_ms` (matching their parameter of the same name) is
-    /// what that deadline is computed against; without it (before this
-    /// existed, `self.now_ms` stayed whatever the default or the last
-    /// `run_frame` call left it at) a thread spawned from inside a
-    /// `call_now`-driven script -- e.g. a host's `CodeCallback_
-    /// PlayerConnect`-style callback threading off a waiting worker --
-    /// could fire its wait on the very next `run_frame` instead of after
-    /// the real delay.
+    /// would, counted from the script clock ([`Vm::time`]).
     pub fn call_now(
         &mut self,
         host: &mut dyn Host,
-        now_ms: i32,
         func: FuncRef,
         recv: Option<Target>,
         args: Vec<Value>,
     ) -> Result<Value, ScriptError> {
-        self.now_ms = now_ms;
         let f = self
             .functions
             .get(&func)
@@ -554,7 +564,7 @@ mod tests {
         let mut vm = vm_with(r#"main() { double("not an int"); }"#);
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, None, vec![]);
+        vm.start_thread(&mut host, f, None, vec![]);
         assert_eq!(vm.aborts().len(), 1, "the dead thread is recorded");
         let e = &vm.aborts()[0];
         assert_eq!(e.kind, ErrorKind::BadType("double wants an int"));
@@ -573,7 +583,7 @@ mod tests {
         let f = vm.func_ref("test/script", "main");
         let n = Vm::MAX_RECORDED_ABORTS + 44;
         for _ in 0..n {
-            vm.start_thread(&mut host, 0, f, None, vec![]);
+            vm.start_thread(&mut host, f, None, vec![]);
         }
         assert_eq!(vm.aborts().len(), Vm::MAX_RECORDED_ABORTS);
         assert_eq!(vm.abort_count() as usize, n);
@@ -584,19 +594,19 @@ mod tests {
         let mut vm = vm_with(r#"main() { wait 0.1; done(); }"#);
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, None, vec![]);
+        vm.start_thread(&mut host, f, None, vec![]);
 
         vm.run_frame(&mut host, 0);
         assert!(!host.calls.iter().any(|(n, _)| n == "done"), "not yet");
-        vm.run_frame(&mut host, 50);
-        assert!(
-            !host.calls.iter().any(|(n, _)| n == "done"),
-            "still not yet"
-        );
         vm.run_frame(&mut host, 100);
         assert!(
+            !host.calls.iter().any(|(n, _)| n == "done"),
+            "due at 100, which runs the frame after"
+        );
+        vm.run_frame(&mut host, 150);
+        assert!(
             host.calls.iter().any(|(n, _)| n == "done"),
-            "resumed at 100 ms"
+            "resumed on the 150 frame"
         );
         assert_eq!(vm.thread_count(), 0, "and the thread finished");
     }
@@ -608,7 +618,7 @@ mod tests {
         );
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(4, 0))), vec![]);
+        vm.start_thread(&mut host, f, Some(Target::Entity(EntId(4, 0))), vec![]);
         vm.run_frame(&mut host, 0);
 
         let menu = vm.interner_mut().intern_exact("team_americangerman");
@@ -626,7 +636,7 @@ mod tests {
         let mut vm = vm_with(r#"main() { self waittill("e"); done(); }"#);
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1, 0))), vec![]);
+        vm.start_thread(&mut host, f, Some(Target::Entity(EntId(1, 0))), vec![]);
         vm.run_frame(&mut host, 0);
 
         let ev = vm.interner_mut().intern_folded("e");
@@ -641,7 +651,7 @@ mod tests {
         let mut vm = vm_with(r#"main() { self endon("death"); wait 1; done(); }"#);
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(7, 0))), vec![]);
+        vm.start_thread(&mut host, f, Some(Target::Entity(EntId(7, 0))), vec![]);
         vm.run_frame(&mut host, 0);
         assert_eq!(vm.thread_count(), 1);
 
@@ -671,23 +681,11 @@ mod tests {
         let mut host = TestHost::default();
         let waiter = vm.func_ref("test/script", "main");
         let pump = vm.func_ref("test/script", "pump");
-        vm.start_thread(
-            &mut host,
-            0,
-            waiter,
-            Some(Target::Entity(EntId(3, 0))),
-            vec![],
-        );
+        vm.start_thread(&mut host, waiter, Some(Target::Entity(EntId(3, 0))), vec![]);
         vm.run_frame(&mut host, 0);
         assert_eq!(vm.thread_count(), 1, "waiting");
 
-        vm.start_thread(
-            &mut host,
-            50,
-            pump,
-            Some(Target::Entity(EntId(3, 0))),
-            vec![],
-        );
+        vm.start_thread(&mut host, pump, Some(Target::Entity(EntId(3, 0))), vec![]);
         vm.run_frame(&mut host, 50);
         assert!(host.calls.iter().any(|(n, _)| n == "done"), "woken");
     }
@@ -706,20 +704,8 @@ mod tests {
         let mut host = TestHost::default();
         let waiter = vm.func_ref("test/script", "waiter");
         let dier = vm.func_ref("test/script", "dier");
-        vm.start_thread(
-            &mut host,
-            0,
-            waiter,
-            Some(Target::Entity(EntId(5, 0))),
-            vec![],
-        );
-        vm.start_thread(
-            &mut host,
-            0,
-            dier,
-            Some(Target::Entity(EntId(5, 0))),
-            vec![],
-        );
+        vm.start_thread(&mut host, waiter, Some(Target::Entity(EntId(5, 0))), vec![]);
+        vm.start_thread(&mut host, dier, Some(Target::Entity(EntId(5, 0))), vec![]);
         vm.run_frame(&mut host, 0);
         assert_eq!(vm.thread_count(), 2);
 
@@ -741,14 +727,14 @@ mod tests {
         );
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, None, vec![]);
+        vm.start_thread(&mut host, f, None, vec![]);
         vm.run_frame(&mut host, 0);
         assert!(
             host.calls.iter().any(|(n, _)| n == "parent_done"),
             "caller did not block"
         );
         assert!(!host.calls.iter().any(|(n, _)| n == "child_done"));
-        vm.run_frame(&mut host, 100);
+        vm.run_frame(&mut host, 150);
         assert!(host.calls.iter().any(|(n, _)| n == "child_done"));
     }
 
@@ -764,7 +750,7 @@ mod tests {
         vm.set_budget(10_000);
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, None, vec![]);
+        vm.start_thread(&mut host, f, None, vec![]);
         let errs = vm.run_frame(&mut host, 0);
         assert_eq!(errs.len(), 1);
         assert!(matches!(errs[0].kind, crate::vm::ErrorKind::Budget));
@@ -786,7 +772,7 @@ mod tests {
         vm.set_budget(10_000);
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, None, vec![]);
+        vm.start_thread(&mut host, f, None, vec![]);
         let errs = vm.run_frame(&mut host, 0);
         assert_eq!(errs.len(), 1);
         assert!(matches!(errs[0].kind, crate::vm::ErrorKind::Budget));
@@ -804,7 +790,7 @@ mod tests {
         );
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, None, vec![]);
+        vm.start_thread(&mut host, f, None, vec![]);
         let errs = vm.run_frame(&mut host, 0);
         assert_eq!(errs.len(), 1);
         assert!(host.calls.iter().any(|(n, _)| n == "ok"));
@@ -819,8 +805,8 @@ mod tests {
         let mut host = TestHost::default();
         let fa = vm.func_ref("test/script", "a");
         let fb = vm.func_ref("test/script", "b");
-        vm.start_thread(&mut host, 0, fa, Some(Target::Entity(EntId(1, 0))), vec![]);
-        vm.start_thread(&mut host, 0, fb, Some(Target::Entity(EntId(1, 0))), vec![]);
+        vm.start_thread(&mut host, fa, Some(Target::Entity(EntId(1, 0))), vec![]);
+        vm.start_thread(&mut host, fb, Some(Target::Entity(EntId(1, 0))), vec![]);
         vm.run_frame(&mut host, 0);
         let ev = vm.interner_mut().intern_folded("e");
         vm.notify(EntId(1, 0), ev, &[]);
@@ -859,7 +845,7 @@ mod tests {
         );
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1, 0))), vec![]);
+        vm.start_thread(&mut host, f, Some(Target::Entity(EntId(1, 0))), vec![]);
         // Neither wake runs inline (a notify never reenters the VM): one
         // frame steps `getNotetrack` past its wait to fire "reply", the
         // next steps `main` past its own wait to run `got()`. Nothing in
@@ -897,9 +883,9 @@ mod tests {
         // three are `WaitingUntil` before `run_frame` ever runs; the
         // interesting part (the in-script kill) happens on their *second*
         // step, driven by `run_frame`'s own watermark walk.
-        vm.start_thread(&mut host, 0, victim, None, vec![]);
-        vm.start_thread(&mut host, 0, killer, None, vec![]);
-        vm.start_thread(&mut host, 0, witness, None, vec![]);
+        vm.start_thread(&mut host, victim, None, vec![]);
+        vm.start_thread(&mut host, killer, None, vec![]);
+        vm.start_thread(&mut host, witness, None, vec![]);
 
         vm.run_frame(&mut host, 0);
         assert!(
@@ -922,9 +908,9 @@ mod tests {
         let mut host = TestHost::default();
         let waiter = vm.func_ref("test/script", "waiter");
         let notifier = vm.func_ref("test/script", "notifier");
-        vm.start_thread(&mut host, 0, waiter, None, vec![]);
-        vm.start_thread(&mut host, 0, notifier, None, vec![]);
-        vm.run_frame(&mut host, 1000);
+        vm.start_thread(&mut host, waiter, None, vec![]);
+        vm.start_thread(&mut host, notifier, None, vec![]);
+        vm.run_frame(&mut host, 1050);
         assert!(
             host.calls.iter().any(|(n, _)| n == "seen"),
             "the waiter was left for the next pass"
@@ -939,15 +925,16 @@ mod tests {
         let mut vm = vm_with(r#"f() { wait 1; wait 0; seen(); }"#);
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "f");
-        vm.start_thread(&mut host, 0, f, None, vec![]);
-        vm.run_frame(&mut host, 1000);
+        vm.start_thread(&mut host, f, None, vec![]);
+        vm.run_frame(&mut host, 1050);
         assert!(host.calls.iter().any(|(n, _)| n == "seen"));
 
         let mut vm = vm_with(r#"g() { wait 0; seen(); }"#);
         let mut host = TestHost::default();
         let g = vm.func_ref("test/script", "g");
-        vm.start_thread(&mut host, 1000, g, None, vec![]);
-        vm.run_runnable(&mut host, 1000);
+        vm.set_time(1000);
+        vm.start_thread(&mut host, g, None, vec![]);
+        vm.run_runnable(&mut host);
         assert!(host.calls.is_empty(), "the packet pass ran the wait 0");
         vm.run_frame(&mut host, 1050);
         assert!(host.calls.iter().any(|(n, _)| n == "seen"));
@@ -969,7 +956,7 @@ mod tests {
         let mut vm = vm_with("main() { thread main(); }");
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, None, vec![]);
+        vm.start_thread(&mut host, f, None, vec![]);
         assert_eq!(vm.thread_count(), 1);
         vm.run_frame(&mut host, 0);
         assert_eq!(vm.thread_count(), 1, "still bounded after another pass");
@@ -994,7 +981,7 @@ mod tests {
         );
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1, 0))), vec![]);
+        vm.start_thread(&mut host, f, Some(Target::Entity(EntId(1, 0))), vec![]);
         assert_eq!(
             vm.thread_count(),
             0,
@@ -1014,7 +1001,7 @@ mod tests {
         let mut vm = vm_with(r#"main() { double("no"); }"#);
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, None, vec![]);
+        vm.start_thread(&mut host, f, None, vec![]);
         assert_eq!(
             vm.thread_count(),
             0,
@@ -1034,10 +1021,10 @@ mod tests {
         let mut vm = vm_with("main() { helper(); done(); } helper() { wait 1; }");
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, None, vec![]);
+        vm.start_thread(&mut host, f, None, vec![]);
         vm.run_frame(&mut host, 0);
         assert!(!host.calls.iter().any(|(n, _)| n == "done"), "not yet");
-        vm.run_frame(&mut host, 1000);
+        vm.run_frame(&mut host, 1050);
         assert!(host.calls.iter().any(|(n, _)| n == "done"), "resumed");
         assert_eq!(vm.thread_count(), 0);
     }
@@ -1057,14 +1044,14 @@ mod tests {
         );
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, None, vec![]);
+        vm.start_thread(&mut host, f, None, vec![]);
         vm.run_frame(&mut host, 0);
         assert!(
             !host.calls.iter().any(|(n, _)| n == "seen"),
             "still waiting"
         );
 
-        vm.run_frame(&mut host, 1000);
+        vm.run_frame(&mut host, 1050);
         let seen = host
             .calls
             .iter()
@@ -1092,12 +1079,12 @@ mod tests {
         let mut host = TestHost::default();
         let waiter = vm.func_ref("test/script", "waiter");
         let pump = vm.func_ref("test/script", "pump");
-        vm.start_thread(&mut host, 0, waiter, None, vec![Value::Int(1)]);
-        vm.start_thread(&mut host, 0, waiter, None, vec![Value::Int(2)]);
+        vm.start_thread(&mut host, waiter, None, vec![Value::Int(1)]);
+        vm.start_thread(&mut host, waiter, None, vec![Value::Int(2)]);
         vm.run_frame(&mut host, 0);
         assert_eq!(vm.thread_count(), 2, "both waiting");
 
-        vm.start_thread(&mut host, 0, pump, None, vec![]);
+        vm.start_thread(&mut host, pump, None, vec![]);
         vm.run_frame(&mut host, 0);
 
         let seen: Vec<Value> = host
@@ -1132,23 +1119,11 @@ mod tests {
         let mut host = TestHost::default();
         let waiter = vm.func_ref("test/script", "waiter");
         let pump = vm.func_ref("test/script", "pump");
-        vm.start_thread(
-            &mut host,
-            0,
-            waiter,
-            Some(Target::Entity(EntId(1, 0))),
-            vec![],
-        );
+        vm.start_thread(&mut host, waiter, Some(Target::Entity(EntId(1, 0))), vec![]);
         vm.run_frame(&mut host, 0);
         assert_eq!(vm.thread_count(), 1, "waiting on the first tick");
 
-        vm.start_thread(
-            &mut host,
-            0,
-            pump,
-            Some(Target::Entity(EntId(1, 0))),
-            vec![],
-        );
+        vm.start_thread(&mut host, pump, Some(Target::Entity(EntId(1, 0))), vec![]);
         vm.run_frame(&mut host, 0);
 
         let seen: Vec<Value> = host
@@ -1182,7 +1157,7 @@ mod tests {
         );
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1, 0))), vec![]);
+        vm.start_thread(&mut host, f, Some(Target::Entity(EntId(1, 0))), vec![]);
 
         assert_eq!(vm.thread_count(), 1, "its own notify killed it");
         assert!(host.calls.iter().any(|(n, _)| n == "sideeffecta"));
@@ -1223,7 +1198,7 @@ mod tests {
         );
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1, 0))), vec![]);
+        vm.start_thread(&mut host, f, Some(Target::Entity(EntId(1, 0))), vec![]);
 
         assert_eq!(vm.thread_count(), 0, "killed by its own endon mid-step");
         assert!(host.calls.iter().any(|(n, _)| n == "sideeffecta"));
@@ -1247,50 +1222,64 @@ mod tests {
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
         let spin = vm.func_ref("test/script", "spin");
-        vm.start_thread(&mut host, 0, main, None, vec![]);
-        vm.start_thread(&mut host, 0, spin, None, vec![]);
-        vm.run_frame(&mut host, 50);
+        vm.start_thread(&mut host, main, None, vec![]);
+        vm.start_thread(&mut host, spin, None, vec![]);
+        vm.run_frame(&mut host, 100);
         assert!(!host.calls.iter().any(|(n, _)| n == "done"));
         assert_eq!(vm.thread_count(), 2);
     }
 
-    /// The `now_ms = 0` every other `start_thread` test in this suite
-    /// passes can't distinguish "the fix is present" from "the fix was
-    /// reverted": `Vm::now_ms` already defaults to `0`, so a reverted
-    /// `self.now_ms = now_ms;` and a working one behave identically at
-    /// that value. This test uses a clock that isn't the default: `main`
-    /// threads `f`, whose own `wait 1` (1000 ms) must deadline against
-    /// `5_000`, not `0` -- `run_frame(&mut host, 5_000)` (right after
-    /// `start_thread`, same clock reading) must not fire it, only
-    /// `run_frame(&mut host, 6_000)` should.
+    /// A level's script clock starts on its `level.time` (`set_time`), and
+    /// a thread due at a frame's `level.time` runs the frame after
+    /// (`probe_startclock`: a `wait 1` from `Callback_StartGameType` at 0
+    /// wakes at 1050). `f`'s `wait 1` taken at 5_000 is due at 6_000, so
+    /// the 6_000 frame leaves it and the 6_050 one runs it.
     #[test]
-    fn start_thread_threads_a_wait_against_its_own_now_ms_not_zero() {
+    fn a_wait_counts_from_the_script_clock_and_wakes_after_its_due_frame() {
         let mut vm = vm_with("main() { thread f(); } f() { wait 1; done(); }");
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 5_000, f, None, vec![]);
+        vm.set_time(5_000);
+        vm.start_thread(&mut host, f, None, vec![]);
         assert_eq!(vm.thread_count(), 1, "f is alive, waiting on its own wait");
 
         vm.run_frame(&mut host, 5_000);
+        vm.run_frame(&mut host, 6_000);
         assert!(
             !host.calls.iter().any(|(n, _)| n == "done"),
-            "not due yet -- 6_000, not 1_000"
+            "due at 6_000, which runs the frame after"
         );
-        vm.run_frame(&mut host, 6_000);
+        vm.run_frame(&mut host, 6_050);
         assert!(host.calls.iter().any(|(n, _)| n == "done"), "due now");
+    }
+
+    /// `probe_startclock`'s settle frames: frames 100 ms apart walk the
+    /// clock through every 50 ms step, and a thread resumed on its due
+    /// time counts its next `wait` from there, so a `wait 0.05` loop
+    /// started at 0 logs 100, 200, 200, 300, 300, then one per 50 ms frame.
+    #[test]
+    fn a_frame_walks_the_clock_through_each_due_time() {
+        let mut vm = vm_with("f() { for (;;) { wait 0.05; tick(); } }");
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "f");
+        vm.start_thread(&mut host, f, None, vec![]);
+        let mut seen = Vec::new();
+        for level in [100, 200, 300, 350, 400] {
+            let before = host.calls.len();
+            vm.run_frame(&mut host, level);
+            seen.extend(std::iter::repeat_n(level, host.calls.len() - before));
+        }
+        assert_eq!(seen, [100, 200, 200, 300, 300, 350, 400]);
     }
 
     /// A thread spawned by a `call_now`-driven script (a host callback
     /// like `CodeCallback_PlayerConnect`, say) is a real, independent
     /// thread, not the throwaway one-shot stack `call_now` itself runs
     /// on -- its own `wait` is an ordinary suspend, not an immediate-call
-    /// error, and has to resolve against `call_now`'s caller's clock
-    /// reading, not always 0. `f`'s `wait 1` (1000 ms) taken during
-    /// `main`'s `call_now`-driven run at `now_ms = 5_000` must deadline at
-    /// 6_000, not 1_000: a `run_frame` at 5_000 (right after) must not
-    /// fire it, and one at 6_000 must.
+    /// error, and counts from the script clock. `f`'s `wait 1` taken at
+    /// 5_000 is due at 6_000 and runs on the frame after it.
     #[test]
-    fn call_now_threads_a_wait_against_its_own_now_ms_not_zero() {
+    fn call_now_threads_a_wait_against_the_script_clock() {
         let ast =
             crate::parse::parse_file("main() { thread f(); } f() { wait 1; done(); }").unwrap();
         let mut vm = Vm::new();
@@ -1298,15 +1287,16 @@ mod tests {
         vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
-        vm.call_now(&mut host, 5_000, main, None, vec![]).unwrap();
+        vm.set_time(5_000);
+        vm.call_now(&mut host, main, None, vec![]).unwrap();
         assert_eq!(vm.thread_count(), 1, "f is alive, waiting on its own wait");
 
-        vm.run_frame(&mut host, 5_000);
+        vm.run_frame(&mut host, 6_000);
         assert!(
             !host.calls.iter().any(|(n, _)| n == "done"),
             "not due yet -- 6_000, not 1_000"
         );
-        vm.run_frame(&mut host, 6_000);
+        vm.run_frame(&mut host, 6_050);
         assert!(host.calls.iter().any(|(n, _)| n == "done"), "due now");
     }
 
@@ -1423,10 +1413,10 @@ mod tests {
         );
         let mut host = SpawnHost::default();
         let main = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, main, None, vec![]);
+        vm.start_thread(&mut host, main, None, vec![]);
         assert_eq!(level_string(&mut vm, "seen"), "dead");
         assert_eq!(level_string(&mut vm, "state"), "dead");
-        vm.run_frame(&mut host, 1000);
+        vm.run_frame(&mut host, 1050);
         assert_eq!(level_string(&mut vm, "state"), "buried");
     }
 
@@ -1441,7 +1431,7 @@ mod tests {
         );
         let mut host = SpawnHost::default();
         let main = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, main, None, vec![]);
+        vm.start_thread(&mut host, main, None, vec![]);
         assert_eq!(level_string(&mut vm, "seen"), "1:dead 2:dead ");
         assert_eq!(vm.aborts().len(), 1, "the missing function is recorded");
     }
@@ -1457,7 +1447,7 @@ mod tests {
         );
         let mut host = SpawnHost::default();
         let main = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, main, None, vec![]);
+        vm.start_thread(&mut host, main, None, vec![]);
         assert_eq!(level_string(&mut vm, "seen"), "1239");
     }
 
@@ -1471,7 +1461,7 @@ mod tests {
         let mut vm = vm_with("main() { level again(); } bomb() { level again(); }");
         let mut host = SpawnHost::default();
         let main = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, main, None, vec![]);
+        vm.start_thread(&mut host, main, None, vec![]);
         assert!(
             vm.thread_count() > 0,
             "the capped spawn is left runnable for the next pass"
@@ -1487,7 +1477,7 @@ mod tests {
         let mut vm = vm_with(r#"main() { level spawnmissing(); level.seen = "ran on"; }"#);
         let mut host = SpawnHost::default();
         let main = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, main, None, vec![]);
+        vm.start_thread(&mut host, main, None, vec![]);
         assert_eq!(vm.aborts().len(), 1);
         let described = vm.describe(&vm.aborts()[0]);
         assert!(described.contains("nosuchthing"), "{described}");

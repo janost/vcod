@@ -4991,8 +4991,8 @@ blast walk and freed by `ThinkFn::Concussive`.
 `a_temp_entity_takes_a_spawn_number_and_frees_it_past_300_ms` and
 `a_delete_s_free_runs_after_the_threads_of_its_frame`
 (`crates/server/src/game/script.rs`) are the probe's two halves; against
-`vcod-server` it now reads as retail does, 50 ms earlier throughout (ours
-wakes the `wait 1` after `Callback_StartGameType` at 1000, retail at 1050).
+`vcod-server` it reads line for line as retail does, times included
+(`cod11-gsc-language.md`, "The script clock").
 
 **Other callers.** VERIFIED: `trap_EntitiesInBox` is also called by
 `G_TouchTriggers` (`0x3f925`, mask `0x405c0008`), `G_GetActivateEnt`
