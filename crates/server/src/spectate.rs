@@ -864,6 +864,13 @@ impl ClientSim {
         self.linked_unsnapped = true;
     }
 
+    /// `G_TryPushingEntity`'s or `G_MoverTeam`'s write of `ps.origin`, which
+    /// it links at unsnapped (docs/research/cod11-movers.md, section 12).
+    pub fn pushed_to(&mut self, origin: Vec3) {
+        self.ps.origin = origin;
+        self.linked_unsnapped = true;
+    }
+
     /// `SetClientViewAngle` (0x41e30): the view becomes `angles` (degrees,
     /// wire convention) and `delta_angles` is rewritten so the last cmd's
     /// angles land on it. Retail's prone arm, which clamps the angles to the
