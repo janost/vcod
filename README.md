@@ -60,7 +60,7 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
   beside `CoDMP.exe`, the file retail uses). It pings, filters, sorts by
   column, joins on double-click, and runs the stock password, server info,
   filter and favourite popups. Losing the server drops you back on the menu
-  with the reason in the stock error popup.
+  with the localized reason in the stock error popup.
   In a game, Esc opens the script menu and its Main Menu tab the stock
   in-game main menu (Back to Game, Disconnect).
 - The stock Options and Multiplayer Options screens: rebind keys, mouse
@@ -77,9 +77,12 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
   same events retail reads.
 - **Plays.** Move, jump, crouch, prone, lean, fire, aim down the sight,
   reload, melee, use, switch weapons, on retail's default binds. A usercmd
-  goes out every 8 ms, like a 125 fps retail client.
+  is built every 8 ms, like a 125 fps retail client, and they go out at
+  retail's `cl_maxpackets` 30 with `cl_packetdup` 1 off the LAN.
 - Predicts your movement by replaying unacknowledged cmds through the same
   step the server runs. A correction eases out over 100 ms.
+- Draws and stamps cmds on retail's client clock, which slews a millisecond
+  or two per snapshot instead of stepping on jitter; `cl_timeNudge` works.
 - First-person weapon with your team's hands, sight zoom at the weapon's FOV,
   sniper scope overlay that follows the sway and the hit kick, and your own
   fire, reload and footstep sounds played off the prediction.
@@ -159,9 +162,9 @@ Retail does a lot more than this list. These are the gaps you'll hit first.
 
 **Front end.** Main menu, browser and its popups, options, quit and error
 popups work. On the options screens only binds, sensitivity, invert mouse,
-name, rate, volume, video mode and full screen take effect; texture,
-lighting, gamma, HUD, crosshair, sound quality and language settings are
-stored but ignored. Start New Server, Mods and CD key print "not in vcod
+name, rate, volume, video mode, full screen and the crosshair and HUD
+toggles take effect; texture, lighting, gamma, sound quality and language
+settings are stored but ignored. Start New Server, Mods and CD key print "not in vcod
 yet". The browser's game type filter, map preview and refresh date are
 missing.
 
@@ -311,6 +314,8 @@ vcod-server mp_carentan --port 28960 --hostname "my server" --gametype tdm
 - `--set NAME=VALUE` is retail's `+set`, repeatable:
   `--set scr_friendlyfire=1`, `--set sv_mapRotation="..."`.
 - `--set rconPassword=<pw>` turns rcon on.
+- `--set g_password=<pw>` makes the server private, checked as retail does
+  at connect, `map_restart` and map change.
 - `dedicated` defaults to 1, not retail's 2, so dev runs stay off the master
   list. `--set dedicated=2` heartbeats `codmaster.activision.com` every three
   minutes and sends a flatline on Ctrl-C or `quit`.

@@ -1,5 +1,6 @@
 mod audio;
 mod camera;
+mod clock_probe;
 mod console;
 mod entities;
 mod frontend;
@@ -327,6 +328,13 @@ struct Args {
     /// fixture.
     #[arg(long)]
     probe_compass: bool,
+    /// With `--net-probe`: stay a quiet spectator and print a `CLOCK` line a
+    /// second, the client clock's lag behind the newest snapshot, how often
+    /// it ran past it and how evenly it stepped, beside the same for the
+    /// clock it replaced (`OLD`). `--probe-cmd-ms` is the frame time;
+    /// `VCOD_NETSIM` adds a bad link. Writes no fixture.
+    #[arg(long)]
+    probe_clock: bool,
     /// With `--net-probe` and `--probe-team`: the scripted gametype capture.
     /// Presses use as the gsc probe's `setClientCvar("probe_use", ...)` says
     /// (`tap`, `hold`, `0`), keeps the view the server set, sends `score`
@@ -461,7 +469,8 @@ struct LivePhase {
     events: net::events::EventTracker,
     /// Our own ring's events already played off the prediction.
     predicted_events: play::events::PredictedEvents,
-    clock: ServerClock,
+    /// `cl.serverTime`: entities, the HUD and the cmds run on it.
+    clock: play::clock::ServerClock,
     last_loop_snap: Option<u32>,
     /// Last frame's `entity_pos`, what prediction clips (docs/research/cod11-player-clip.md).
     drawn_pos: HashMap<u32, Vec3>,
@@ -480,7 +489,7 @@ fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp, net: &net::NetClient<net::UdpTransport
         scene: entities::EntityScene::new(),
         events: net::events::EventTracker::new(),
         predicted_events: play::events::PredictedEvents::default(),
-        clock: ServerClock::new(),
+        clock: play::clock::ServerClock::default(),
         last_loop_snap: None,
         drawn_pos: HashMap::new(),
     }))
@@ -588,45 +597,6 @@ impl WalkKeys {
     }
 }
 
-/// Render this far behind the newest snapshot so a straddling pair is always
-/// buffered; tolerates one dropped snapshot at 20 Hz.
-const INTERP_DELAY_MS: i32 = 100;
-
-/// Server now = newest snapshot time plus wall time since it was first seen,
-/// so interpolation sweeps between 20 Hz snapshots instead of stepping. A new
-/// snapshot re-anchors: continuous when on schedule, a snap after a long gap.
-/// One per live map, so a new gamestate starts it afresh.
-struct ServerClock {
-    /// (newest snapshot server time, local ms it was first seen).
-    anchor: Option<(i32, f64)>,
-    /// The last time returned; a late snapshot re-anchors behind it.
-    drawn: i32,
-}
-
-impl ServerClock {
-    fn new() -> Self {
-        Self {
-            anchor: None,
-            drawn: i32::MIN,
-        }
-    }
-
-    /// Server time to interpolate at; `local_ms` is a monotonic wall clock.
-    /// Never below a time already returned: the clock holds until a late
-    /// snapshot's anchor catches up rather than stepping entities and the
-    /// HUD's timers back.
-    fn render_time(&mut self, local_ms: f64, newest: i32) -> i32 {
-        match self.anchor {
-            Some((t, _)) if t == newest => {}
-            _ => self.anchor = Some((newest, local_ms)),
-        }
-        let (anchor_time, anchor_local) = self.anchor.unwrap();
-        let server_now = anchor_time as f64 + (local_ms - anchor_local);
-        self.drawn = self.drawn.max((server_now - INTERP_DELAY_MS as f64) as i32);
-        self.drawn
-    }
-}
-
 /// F3 overlay text, top line first. A free function because the caller holds
 /// the renderer borrowed out of `App`.
 #[allow(clippy::too_many_arguments)]
@@ -725,6 +695,7 @@ fn hud_lines(
             net,
             cam,
             predictor,
+            phase,
             ..
         } => {
             lines.push(cam_line("online", cam.pos, cam.yaw, cam.pitch));
@@ -740,6 +711,19 @@ fn hud_lines(
                 net.state(),
                 net.packet_drops()
             ));
+            if let (Phase::Live(live), Some(snap)) = (phase, net.snapshots().newest()) {
+                let c = &live.clock;
+                let st = c.stats;
+                lines.push(format!(
+                    "clock: behind {:3}  reset {} fast {} +{} -{}  extrap {}",
+                    snap.server_time - c.server_time(),
+                    st.resets,
+                    st.fast,
+                    st.ahead,
+                    st.back,
+                    st.extrapolated
+                ));
+            }
             if let Some(snap) = net.snapshots().newest() {
                 lines.push(format!(
                     "snap: ents {}  players {}  age {:3} ms",
@@ -777,6 +761,11 @@ fn main() -> Result<()> {
 
     let dir = args.game_dir.join(&args.mod_dir);
 
+    if let Some(addr) = &args.net_probe
+        && args.probe_clock
+    {
+        return clock_probe::run(addr, args.probe_secs, args.probe_cmd_ms);
+    }
     if let Some(addr) = &args.net_probe {
         // Sound cue resolution needs the game data, the wire-level prints do
         // not, so a failed open only costs the audio line.
@@ -1278,6 +1267,7 @@ fn loading_frame(
             fov: camera::DEFAULT_FOV_DEG,
             entity_origin: &|_| None,
             turret_weapon: None,
+            draw: hud::DrawToggles::default(),
         };
         *hud_quads = hud.build(&f);
     }
@@ -1773,11 +1763,14 @@ impl App {
 
     /// Leaves the server (`CL_Disconnect`) for the main menu, with
     /// `reason` in the error popup when the server or the load is what
-    /// ended it.
+    /// ended it. `Com_Error` localizes the reason as a message before it
+    /// reaches `com_errorMessage` (CoDMP.exe 0x435a40,
+    /// docs/research/cod11-front-end.md section 15).
     fn disconnect(&mut self, reason: Option<String>) {
         if let Mode::Online { net, .. } = &mut self.mode {
             net.disconnect();
         }
+        let reason = reason.map(|r| self.localized.message(&r));
         if let Some(reason) = &reason {
             log::error!("{reason}");
         }
@@ -2373,9 +2366,7 @@ impl ApplicationHandler for App {
                                     self.audio.play_local(&self.fs, "player_talk");
                                 }
                                 net::NetEvent::Print(s) => console::log::print(s),
-                                net::NetEvent::Dropped(why) => {
-                                    fatal = Some(anyhow!("disconnected: {why}"))
-                                }
+                                net::NetEvent::Dropped(why) => fatal = Some(anyhow!("{why}")),
                                 // Map ambient; each round restart re-sends it
                                 // with a new fade deadline, which is ignored.
                                 net::NetEvent::ConfigstringChanged(3) => {
@@ -2490,7 +2481,18 @@ impl ApplicationHandler for App {
                             && !gamestate_ready
                             && net.state() == net::NetState::Active
                         {
-                            let times = cmd_clock.due(net.server_clock_ms());
+                            let realtime = local_ms as i32;
+                            // Before the first snapshot there is no clock yet;
+                            // the entering cmd goes out on the gamestate's.
+                            let server_now = match (&mut *phase, net.snapshots().newest()) {
+                                (Phase::Live(live), Some(s)) => {
+                                    let nudge = self.shell.cvar_f32("cl_timeNudge") as i32;
+                                    live.clock.update(realtime, s.server_time, nudge);
+                                    live.clock.cmd_time(s.server_time)
+                                }
+                                _ => net.server_clock_ms(),
+                            };
+                            let times = cmd_clock.due(server_now);
                             if !times.is_empty() {
                                 let held = net.snapshots().newest().map_or_else(
                                     play::input::Held::default,
@@ -2503,9 +2505,15 @@ impl ApplicationHandler for App {
                                 );
                                 input.cl_run =
                                     play::input::ClRun(self.shell.cvar_f32("cl_run") as i32);
-                                let new: Vec<_> =
-                                    times.iter().map(|&t| input.build(t, &held)).collect();
-                                net.send_cmds(&ring.packet(&new));
+                                for &t in &times {
+                                    ring.push(input.build(t, &held));
+                                }
+                            }
+                            let lan = net.transport().is_lan();
+                            let max_packets = self.shell.cvar_f32("cl_maxpackets") as i32;
+                            if ring.packet_due(realtime, lan, max_packets) {
+                                let dup = self.shell.cvar_f32("cl_packetdup") as i32;
+                                net.send_cmds(&ring.packet(realtime, dup));
                             }
                         }
 
@@ -2686,7 +2694,8 @@ impl ApplicationHandler for App {
                                     let render_time = net
                                         .snapshots()
                                         .newest()
-                                        .map(|s| clock.render_time(local_ms, s.server_time));
+                                        .and(clock.delta())
+                                        .map(|_| clock.server_time());
                                     if let Some(render_time) = render_time
                                         && let Some((a, b)) =
                                             net.snapshots().two_for_time(render_time)
@@ -2910,6 +2919,13 @@ impl ApplicationHandler for App {
                                         fov,
                                         entity_origin: &entity_origin,
                                         turret_weapon,
+                                        draw: hud::DrawToggles {
+                                            crosshair: self.shell.cvar_f32("cg_drawCrosshair")
+                                                as i32
+                                                != 0,
+                                            status: self.shell.cvar_f32("cg_drawStatus") as i32
+                                                != 0,
+                                        },
                                     };
 
                                     // Events use the newest snapshot, not the interpolation
@@ -3657,21 +3673,6 @@ mod tests {
         }
     }
 
-    /// Snapshots arrive at 20 Hz and the window redraws at 60 Hz, so render
-    /// time must advance every frame, not per snapshot.
-    #[test]
-    fn interp_clock_advances_between_snapshots() {
-        let mut clock = ServerClock::new();
-        let t0 = clock.render_time(0.0, 10_000);
-        let t1 = clock.render_time(16.0, 10_000);
-        let t2 = clock.render_time(32.0, 10_000);
-        let t3 = clock.render_time(48.0, 10_000);
-        assert!(
-            t0 < t1 && t1 < t2 && t2 < t3,
-            "render time froze between snapshots: {t0} {t1} {t2} {t3}"
-        );
-    }
-
     #[test]
     fn own_view_adds_delta_angles_and_flips_pitch() {
         // 90 degrees of yaw from delta alone, 45 more from the mouse; wire
@@ -3711,47 +3712,5 @@ mod tests {
         let (pos, dir) = view_muzzle(cam_pos, forward, right, up);
         assert_eq!(pos, Vec3::new(120.0, 204.0, 297.0));
         assert_eq!(dir, forward);
-    }
-
-    /// A snapshot arriving on schedule must not lurch the render time by an
-    /// interval.
-    #[test]
-    fn interp_clock_is_continuous_across_arrival() {
-        let mut clock = ServerClock::new();
-        clock.render_time(0.0, 10_000);
-        let before = clock.render_time(48.0, 10_000);
-        let after = clock.render_time(50.0, 10_050);
-        assert!(
-            (after - before).abs() <= 8,
-            "render time jumped across the snapshot seam: {before} -> {after}"
-        );
-    }
-
-    /// A snapshot arriving late re-anchors behind the time already drawn; the
-    /// clock holds there instead of stepping back.
-    #[test]
-    fn interp_clock_never_runs_backwards() {
-        let mut clock = ServerClock::new();
-        clock.render_time(0.0, 10_000);
-        let before = clock.render_time(70.0, 10_000);
-        let after = clock.render_time(70.0, 10_050);
-        let later = clock.render_time(100.0, 10_050);
-        assert!(
-            before <= after && after <= later,
-            "render time ran backwards: {before} -> {after} -> {later}"
-        );
-    }
-
-    /// A long gap (tab-out, map change) re-pegs instead of interpolating across it.
-    #[test]
-    fn interp_clock_repegs_on_large_jump() {
-        let mut clock = ServerClock::new();
-        clock.render_time(0.0, 10_000);
-        clock.render_time(16.0, 10_000);
-        let rt = clock.render_time(30_016.0, 40_000);
-        assert!(
-            (rt - (40_000 - INTERP_DELAY_MS)).abs() <= 4,
-            "clock did not re-peg after a large jump: {rt}"
-        );
     }
 }

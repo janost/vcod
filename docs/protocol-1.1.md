@@ -29,9 +29,9 @@ Handshake:
 1. Client sends `getchallenge`.
 2. Server sends `challengeResponse <challenge>`. The 1.1 binary carries both `challengeResponse %i` and `challengeResponse %i %i` format strings. Only the first integer is the challenge, so ignore anything after it.
 3. Client sends `connect "<userinfo>"`. The userinfo is Huffman-compressed (see below), not plaintext. The command word `connect ` stays in the clear so the server can match on it before decompressing. Everything from the opening `"` onward, byte 12 of the packet, is compressed.
-4. Server replies `connectResponse`, or `error\n<reason>` (for example `EXE_SERVER_IS_DIFFERENT_VER 1.1` if the userinfo is malformed or the protocol key is wrong).
+4. Server replies `connectResponse`, or `error\n<reason>` (for example `EXE_SERVER_IS_DIFFERENT_VER\x151.1` if the userinfo is malformed or the protocol key is wrong).
 
-The reject tokens, verbatim from the binary, are localized keys the client looks up: `EXE_SERVER_IS_DIFFERENT_VER` (followed by ` 1.1` on the wire), `EXE_BAD_CHALLENGE` and `EXE_SERVERISFULL` (no underscores) go out at connect time as OOB `error\n<TOKEN>`. `EXE_LOSTRELIABLECOMMANDS`, `EXE_DISCONNECTED` and `EXE_TIMEDOUT` are the drop reasons; a connected client gets those in the `w` server command (see svc_serverCommand below). `connectResponse` carries no arguments. The gamestate is sent on the client's first netchan message, because the fresh slot has `gamestateMessageNum = -1` and its `serverId` (0) mismatches (`SV_ExecuteClientMessage`, cod_lnxded `0x80872ec`).
+The reject tokens, verbatim from the binary, are localized keys the client looks up: `EXE_SERVER_IS_DIFFERENT_VER` (followed by `\x15`, the version and a newline: format `error\nEXE_SERVER_IS_DIFFERENT_VER\x15%s\n` at file offset 574208 of `cod_lnxded`, VERIFIED; the client splits key from argument on `\x15`, `docs/research/cod11-front-end.md` section 15), `EXE_BAD_CHALLENGE` and `EXE_SERVERISFULL` (no underscores) go out at connect time as OOB `error\n<TOKEN>`. `EXE_LOSTRELIABLECOMMANDS`, `EXE_DISCONNECTED` and `EXE_TIMEDOUT` are the drop reasons; a connected client gets those in the `w` server command (see svc_serverCommand below). `connectResponse` carries no arguments. The gamestate is sent on the client's first netchan message, because the fresh slot has `gamestateMessageNum = -1` and its `serverId` (0) mismatches (`SV_ExecuteClientMessage`, cod_lnxded `0x80872ec`).
 
 `rcon <password> <command>` answers in `print\n<text>` packets, and a `dedicated 2` server sends the master `heartbeat COD-1\n` every 180 s and `heartbeat flatline\n` on the way down. Both, and the `CS_ZOMBIE` window a dropped client gets, are measured in `docs/research/cod11-server-handshake.md`, "Housekeeping". The password cvar is `rconPassword`, not Q3's `rcon_password`.
 
@@ -1026,10 +1026,22 @@ replaying from the wrong base, and a correction a new snapshot brings is
 eased out over 100 ms. Retail's cgame registers the cvar for that as
 `cg_errordecay` with default `"100"`: the cvar-table entry at
 `cgame_mp_x86.dll` `0x30074e04` points at the name string at `0x30064434`
-and the default string at `0x30064990`. VERIFIED. The ease is linear over
-those milliseconds, as Q3's `CG_CalcViewValues` scales the error. INFERRED
-from the lineage. A new error is added to what is left of the one being
-eased, as Q3's `CG_PredictPlayerState` does. INFERRED from the lineage. The
+and the default string at `0x30064990`. VERIFIED. Its `vmCvar_t` is at
+`0x301e1f00` (the dword before the table entry), so its value is
+`0x301e1f08` and its integer `0x301e1f0c`. VERIFIED. In
+`CG_PredictPlayerState` (cgame `0x300294f0`) a correction counts only when
+its length exceeds the float at `0x3006953c`, 0.1 (the compare at
+`0x300297ed`). VERIFIED, the constant and the compare. What is left of the
+old error is scaled by `(cg_errordecay - (cg.time - errorTime)) /
+cg_errordecay`, floored at 0, the new correction added on, and `errorTime`
+set to the dword at `0x3020714c` (the store at `0x300298ea`), the one after
+`cg.time`'s `0x30207148`, which is `cg.oldTime`. INFERRED, the scaling off
+control flow and the two names off Q3's `cg_t` order. The view
+(`0x300333b0`) adds the error times the same factor and drops it once the
+factor leaves (0, 1). INFERRED off control flow. So the ease starts a frame
+in, not at full strength; vcod does the same with local ms in place of
+`cg.time`, which the clock below keeps within a couple of ms of each other.
+The
 equivalence gate is `crates/server/tests/predict_ab.rs`: it steps the
 server's `ClientSim` and the predictor side by side through the wire codec
 and compares the fields prediction draws from.
@@ -1122,6 +1134,96 @@ The general shape is worth naming, because two vcod bugs came out of it: **a fie
 VERIFIED live 2026-08-28 against the retail 1.1 client, both directions of the experiment. vcod's server clamped `commandTime` up to `serverTime - sv_fps_interval`, which put it 11-24 ms past the newest cmd it had simulated on 100% of 801 traced frames; retail rendered smooth movement with a view that juddered at snapshot rate, because position is predicted while the view angles were being reset from the stale snapshot 20 times a second. Reporting the true last-simulated cmd time made `commandTime - last_simulated` exactly 0 on all 446 frames of the confirming trace and the judder went away.
 
 The lead (`serverTime - commandTime`) is a consequence, not a target: it is however far behind the client's own clock runs. The committed captures, taken with vcod's probe against the retail server, show 0-34 ms (mean 16); a retail client against vcod's server shows 63-74 ms, because a retail client deliberately runs its `serverTime` estimate behind so it always has frames to interpolate between. Clamping the lead to hide that difference is what caused the bug. `crates/common/examples/snapshot_timing.rs` prints the capture side of this; `vcod-server --trace` prints the live side.
+
+### The client's clock
+
+Retail draws everything, and stamps every usercmd, at one time: `cl.serverTime`.
+`CL_SetCGameTime` (CoDMP.exe `0x404d60`) sets it each frame to `cls.realtime
++ cl.serverTimeDelta - cl_timeNudge`, with the nudge clamped to +-30 and the
+result never below last frame's. VERIFIED off the decompile: realtime at
+`0x155f3e0`, the delta at `0x1434a70`, the time at `0x1434a64`, the floor at
+`0x1434a68`, `cl_timeNudge` at `0x1617308`. It is the time the cgame draws at
+(`vmMain(3, cl.serverTime, ...)` at `0x404bc0`) and the time `CL_FinishMove`
+(`0x40b690`) stamps a cmd with, capped at the newest snapshot's serverTime
+plus 5000. VERIFIED.
+
+A frame whose `realtime + delta` reaches the newest snapshot's serverTime
+minus 5 sets `cl.extrapolatedSnapshot` (`0x1434a74`). VERIFIED. When
+snapshots arrived since the last frame, `CL_AdjustTimeDelta` (`0x404bf0`)
+compares the delta with the newest snapshot's (`snap.serverTime -
+realtime`): more than 500 ms apart resets the delta to it and the time to
+the snapshot's (printing `<RESET> ` under `cl_showTimeDelta`), more than
+100 averages the two (`<FAST> `), and anything closer moves it by 2 ms back
+when the flag is set, clearing it, else 1 ms forward. VERIFIED, the
+thresholds 0x1f5 and 0x65 and the +1/-2. That slow path runs only at
+`com_timescale` 0 or 1. VERIFIED. `CL_FirstSnapshot` (`0x404d00`) seeds the
+delta from the first snapshot, and runs again when a snapshot's time goes
+below the last frame's (`0x1434a6c`) outside a demo. VERIFIED. All of it is
+Q3's `cl_cgame.c` with the RESET and FAST constants unchanged.
+
+The clock settles where a third of the snapshot intervals touch the newest
+snapshot minus 5: each one costs 2 ms and each clean one gains 1. Interpolation
+runs between the two newest snapshots, 25-30 ms behind the newest on
+average at 20 snapshots a second, and the few frames that run past the newest
+draw players where it put them. INFERRED from the rule; measured below.
+
+vcod's client runs the same clock (`crates/client/src/play/clock.rs`) for
+entities, the HUD and the cmd clock; `cl_timeNudge` is registered `"0"`,
+`CVAR_TEMP` (0x100) as `CL_Init` (`0x411e60`) has it. VERIFIED, the
+registration. Until 2026-10-09 it drew 100 ms behind the newest snapshot,
+re-anchoring on every arrival (an early one stepped the view forward, a late
+one froze it), and stamped cmds off the newest snapshot plus elapsed time.
+
+Measured 2026-10-09 with `vcod --net-probe ADDR --probe-clock --probe-cmd-ms
+8` (frame time 8 ms), which runs both clocks on the same arrivals. "Behind"
+is newest snapshot time minus the drawn time, min/mean/max ms; "past" the
+frames drawn at or past the newest snapshot; "held" the frames the drawn time
+did not move; "jerk" the mean and largest |drawn step - local step| in ms.
+
+| Link | Snapshot gaps | Clock | Behind | Past | Held | Jerk |
+|---|---|---|---|---|---|---|
+| retail 1.1d, loopback, 30 s | 50.0 +-4.6, max 74 | retail | -43/26.7/57 | 2.4% | 0% | 0.23/2 |
+| | | old vcod | 37/79.0/100 | 0% | 0.9% | 0.57/26 |
+| retail 1.1d, `VCOD_NETSIM=ping=100,jitter=20,loss=2`, 60 s | 51.0 +-12.1, max 141, 23 lost | retail | -86/27.9/70 | 5.0% | 0% | 0.23/2 |
+| | | old vcod | -33/77.2/100 | 0.1% | 4.9% | 1.34/26 |
+| vcod-server (debug build), same netsim, 60 s | 51.5 +-14.2, max 134, 35 lost | retail | -70/28.5/85 | 6.1% | 0% | 0.22/2 |
+| | | old vcod | -26/76.2/100 | 0.2% | 4.7% | 1.38/40 |
+| public TDM server over the internet, 40 s | 50.8 +-13.9, max 167, 13 lost | retail | -159/26.2/107 | 5.7% | 0% | 0.24/53 |
+| | | old vcod | -59/76.4/100 | 0.2% | 3.9% | 1.07/122 |
+
+VERIFIED, those runs. The public server's one 53 ms step is a FAST adjust
+right after the connect.
+
+### The client's send rate
+
+`CL_ReadyToSendPacket` (CoDMP.exe `0x40b940`) sends a packet every frame
+when `0x464be0` passes the server address, and otherwise one per `1000 /
+cl_maxpackets` ms, `cl_maxpackets` clamped to 15..100 with default `"30"`,
+archived. VERIFIED, the clamp strings at `0x568564`/`0x568550` and the
+registration in `CL_Init` (`0x411e60`). `0x464be0` is `Sys_IsLANAddress`:
+it passes loopback, `127.0.0.1` and addresses matching the table at
+`0x8e3c78`, the host's interfaces. INFERRED off control flow and Q3's
+function. Cmds are still built every frame; a
+packet carries every cmd since the one sent `cl_packetdup` packets before the
+last (`CL_WritePacket`, `0x40ba50`: `cl.cmdNumber -
+outPackets[(outgoingSequence - cl_packetdup - 1) & 31].p_cmdNumber`, at most
+32 with the `MAX_PACKET_USERCMDS` print), `cl_packetdup` clamped to 0..5,
+default `"1"`, archived. VERIFIED. So a single lost packet loses nothing and
+two in a row lose the first one's new cmds.
+
+vcod's client does the same (`crates/client/src/play/cmds.rs`, `CmdRing`),
+with loopback and RFC 1918 addresses standing in for the interface match, as
+its server does. It sent a packet every frame to every server before
+2026-10-09.
+
+### Simulating a bad link
+
+`VCOD_NETSIM="ping=100,jitter=20,loss=2"` in the client's environment
+delays every datagram it sends or receives by half the ping, plus or minus
+half the jitter, and drops `loss` percent in each direction
+(`crates/common/src/net/netsim.rs`). Datagrams keep their order. It applies
+to `vcod --connect` and `--net-probe` alike, and makes the server count as
+off the LAN for the send rate.
 
 ## Constants worth having
 

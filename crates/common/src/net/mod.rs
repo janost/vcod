@@ -14,6 +14,7 @@ pub mod huffman;
 pub mod master;
 pub mod msg;
 pub mod netchan;
+pub mod netsim;
 pub mod protocol;
 pub mod server_cache;
 pub use protocol::{CS_FOG_V1, FogParams};
@@ -58,23 +59,75 @@ pub trait Transport {
     fn send(&mut self, data: &[u8]);
 }
 
-pub struct UdpTransport(UdpSocket);
+pub struct UdpTransport {
+    sock: UdpSocket,
+    /// `VCOD_NETSIM`'s bad network, when set ([`netsim`]).
+    sim: Option<netsim::NetSim>,
+    lan: bool,
+}
 
 impl UdpTransport {
     pub fn connect(addr: &str) -> anyhow::Result<Self> {
         let sock = UdpSocket::bind("0.0.0.0:0")?;
         sock.connect(addr)?;
         sock.set_nonblocking(true)?;
-        Ok(UdpTransport(sock))
+        let sim = netsim::NetSimConfig::from_env().map(|cfg| {
+            log::info!("VCOD_NETSIM: {cfg:?}");
+            let seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(1, |d| d.as_nanos() as u64);
+            netsim::NetSim::new(cfg, seed)
+        });
+        // Retail's `Sys_IsLANAddress` (CoDMP.exe 0x464be0) as far as vcod
+        // tells it: loopback or an RFC 1918 address. A simulated network is
+        // never one.
+        let lan = sim.is_none()
+            && match sock.peer_addr()?.ip() {
+                std::net::IpAddr::V4(ip) => ip.is_loopback() || ip.is_private(),
+                ip => ip.is_loopback(),
+            };
+        Ok(UdpTransport { sock, sim, lan })
+    }
+
+    /// Puts the simulator's due outgoing datagrams on the wire.
+    fn flush(&mut self, now: Instant) {
+        if let Some(sim) = &mut self.sim {
+            while let Some(d) = sim.take_outgoing(now) {
+                let _ = self.sock.send(&d);
+            }
+        }
+    }
+
+    /// Whether the server is on this machine or a private network.
+    pub fn is_lan(&self) -> bool {
+        self.lan
     }
 }
 
 impl Transport for UdpTransport {
     fn try_recv(&mut self, buf: &mut [u8]) -> Option<usize> {
-        self.0.recv(buf).ok()
+        let Some(sim) = &mut self.sim else {
+            return self.sock.recv(buf).ok();
+        };
+        let now = Instant::now();
+        while let Ok(n) = self.sock.recv(buf) {
+            sim.arrive(now, &buf[..n]);
+        }
+        let d = sim.take_incoming(now);
+        self.flush(now);
+        let d = d?;
+        let n = d.len().min(buf.len());
+        buf[..n].copy_from_slice(&d[..n]);
+        Some(n)
     }
     fn send(&mut self, data: &[u8]) {
-        let _ = self.0.send(data);
+        let Some(sim) = &mut self.sim else {
+            let _ = self.sock.send(data);
+            return;
+        };
+        let now = Instant::now();
+        sim.depart(now, data);
+        self.flush(now);
     }
 }
 
@@ -97,6 +150,10 @@ pub enum NetEvent {
         team: bool,
     },
     Print(String),
+    /// The session ended. The reason is in `SEH_LocalizeTextMessage` form
+    /// (`Localized::message` turns it into text): a server's
+    /// `EXE_`/`GAME_` key, a `\x14`/`\x15` message, or vcod's own English,
+    /// which passes through.
     Dropped(String),
     /// Changed via the `d` serverCommand.
     ConfigstringChanged(usize),
@@ -260,6 +317,10 @@ impl<T: Transport> NetClient<T> {
         c.tries = 1;
         c.last_send = now;
         c
+    }
+
+    pub fn transport(&self) -> &T {
+        &self.transport
     }
 
     pub fn state(&self) -> NetState {
@@ -627,11 +688,14 @@ impl<T: Transport> NetClient<T> {
                 self.connect_deadline = self.now + GAMESTATE_TIMEOUT;
                 self.last_send = self.now - GAMESTATE_POKE; // poke immediately
             }
-            "disconnect" => self.drop("server refused the connection"),
+            // CoDMP.exe 0x410620; retail also ignores one inside 3 s of the
+            // last packet.
+            "disconnect" => self.drop("EXE_SERVER_DISCONNECTED"),
             // A rejected connect is `error\n<reason>`; surface the reason instead
-            // of stalling to the connect timeout.
+            // of stalling to the connect timeout. CoDMP.exe 0x410e41 localizes
+            // it as a message (`EXE_SERVER_IS_DIFFERENT_VER\x151.1`).
             "error" => {
-                let reason = strip_colors(String::from_utf8_lossy(rest).trim());
+                let reason = strip_colors_keep_markers(String::from_utf8_lossy(rest).trim());
                 self.drop(if reason.is_empty() {
                     "server rejected the connection"
                 } else {
@@ -854,12 +918,17 @@ impl<T: Transport> NetClient<T> {
 
         let tokens = tokenize(&cmd);
         match tokens.first().map(String::as_str) {
-            // Drop notice, SV_DropClient cod_lnxded 0x8085cf4; the reason is a
-            // localized key (EXE_TIMEDOUT).
-            Some("w") => {
-                let reason = tokens.get(1).map_or("dropped", |s| s.as_str());
-                self.drop(&strip_colors(reason));
-            }
+            // Drop notice, SV_DropClient cod_lnxded 0x8085cf4. CoDMP.exe
+            // 0x40168b: a bare `w` is `EXE_SERVER_DISCONNECTED`, a reason
+            // (a key such as EXE_TIMEDOUT, or text) fills
+            // `EXE_SERVERDISCONNECTREASON`'s `%s`.
+            Some("w") => match tokens.get(1) {
+                Some(reason) => self.drop(&format!(
+                    "EXE_SERVERDISCONNECTREASON\u{14}{}",
+                    strip_colors(reason)
+                )),
+                None => self.drop("EXE_SERVER_DISCONNECTED"),
+            },
             // Q3's spelling; no CoD server sends it.
             Some("disconnect") => self.drop("server closed the connection"),
             // `h` chat, `i` team chat (G_Say, docs/research/cod11-chat.md).
@@ -1024,11 +1093,23 @@ pub fn com_hash_key(s: &str, maxlen: usize) -> i32 {
 /// Strip `^N` colour codes and control characters (a hostile server could put
 /// ANSI escapes in chat/print text bound for the terminal); tab survives.
 pub fn strip_colors(s: &str) -> String {
+    strip(s, false)
+}
+
+/// [`strip_colors`], keeping the localization markers `\x14`..`\x16` of a
+/// message bound for `Localized::message`.
+fn strip_colors_keep_markers(s: &str) -> String {
+    strip(s, true)
+}
+
+fn strip(s: &str, markers: bool) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '^' && chars.peek().is_some_and(|n| n.is_ascii_digit()) {
             chars.next();
+        } else if markers && ('\u{14}'..='\u{16}').contains(&c) {
+            out.push(c);
         } else if c.is_control() && c != '\t' {
             // dropped
         } else {
@@ -1787,13 +1868,13 @@ mod tests {
         let mut c = NetClient::start(FakeTransport::default(), t0);
         c.transport
             .incoming
-            .push_back(oob("error", "\nEXE_SERVER_IS_DIFFERENT_VER 1.1"));
+            .push_back(oob("error", "\nEXE_SERVER_IS_DIFFERENT_VER\u{15}1.1\n"));
         let ev = c.pump_at(t0);
         assert_eq!(c.state(), NetState::Disconnected);
         assert_eq!(
             ev.first(),
             Some(&NetEvent::Dropped(
-                "EXE_SERVER_IS_DIFFERENT_VER 1.1".to_string()
+                "EXE_SERVER_IS_DIFFERENT_VER\u{15}1.1".to_string()
             ))
         );
     }
@@ -1933,9 +2014,17 @@ mod tests {
         c.handle_server_command(1, "w \"^1EXE_TIMEDOUT\"".to_string());
         assert_eq!(
             c.events,
-            vec![NetEvent::Dropped("EXE_TIMEDOUT".to_string())]
+            vec![NetEvent::Dropped(
+                "EXE_SERVERDISCONNECTREASON\u{14}EXE_TIMEDOUT".to_string()
+            )]
         );
         assert_eq!(c.state(), NetState::Disconnected);
+        let mut c = NetClient::start(FakeTransport::default(), t0);
+        c.handle_server_command(1, "w".to_string());
+        assert_eq!(
+            c.events,
+            vec![NetEvent::Dropped("EXE_SERVER_DISCONNECTED".to_string())]
+        );
     }
 
     #[test]
