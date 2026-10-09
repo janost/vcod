@@ -36,6 +36,11 @@ const FIXTURE: &str = "tests/fixtures/netchan/mp_carentan-dm-mapchange.txt";
 /// its own fraction of one on retail's side.
 const ORDER_TOL_MS: i64 = 100;
 
+/// The frames a gamestate's later fragments take, one per frame: six
+/// fragments' worth (docs/research/cod11-server-handshake.md, "The gamestate
+/// goes out fragmented").
+const GAMESTATE_FRAGMENT_MS: i64 = 5 * 50;
+
 /// The `wait 10` in `dm.gsc`'s `endMap`, which both sides count off the same
 /// script clock. Five frames of slack for the frame each side happens to land
 /// on plus the probe's pump: retail's two are 10133 and 10017 ms.
@@ -317,15 +322,16 @@ fn a_dm_map_end_and_rotation_match_retail() {
     // The one interval that is a recorded divergence rather than a match:
     // retail sleeps 250 ms in `SV_SpawnServer` and its client fetches the
     // gamestate with its next message (1493 ms here); ours neither sleeps nor
-    // waits on more than the settle frames. Bounded so ours cannot silently
-    // become the slower of the two.
+    // waits on more than the settle frames. Both send the gamestate one
+    // fragment per frame, which takes a few frames to land. Bounded so ours
+    // cannot silently become the slower of the two.
     let (r_fetch, o_fetch) = (
         r.gap("loadingnewmap", "gamestate"),
         o.gap("loadingnewmap", "gamestate"),
     );
     assert!(
-        (0..=ORDER_TOL_MS).contains(&o_fetch),
-        "the gamestate is {o_fetch} ms after the notice here, past the one frame it \
+        (0..=ORDER_TOL_MS + GAMESTATE_FRAGMENT_MS).contains(&o_fetch),
+        "the gamestate is {o_fetch} ms after the notice here, past the frames it \
          should take. Retail's is {r_fetch} ms because it sleeps 250 ms inside \
          `SV_SpawnServer` and then waits for the client's next message; ours does \
          neither, so the client's very next message brings it."

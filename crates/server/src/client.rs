@@ -359,6 +359,17 @@ impl Client {
         }
     }
 
+    /// `cl->snapshotMsec` as `SV_UserinfoChanged` sets it (0x8086cad..0x8086d44):
+    /// 50 when `snaps` is empty or missing, else 1000 over `snaps` clamped
+    /// to 1..30. It floors an off-LAN client's message interval and sizes a
+    /// download message.
+    pub fn snapshot_msec(&self) -> i32 {
+        match vcod_common::net::info_value_for_key(&self.userinfo, "snaps") {
+            None | Some("") => 50,
+            Some(s) => 1000 / atoi(s).clamp(1, 30),
+        }
+    }
+
     /// The rate a message is paced and filled by: [`Self::rate`] under a
     /// non-zero `sv_maxRate`, which reads 1000 at the least (0x808f7a5).
     pub fn send_rate(&self, dedicated: i32, max_rate: i32) -> i32 {
@@ -538,6 +549,25 @@ mod tests {
         }
         c.userinfo = String::new();
         assert_eq!(c.rate(1), 5000);
+    }
+
+    #[test]
+    fn snaps_sets_the_snapshot_interval_as_retail_does() {
+        let mut c = active();
+        for (snaps, want) in [
+            ("20", 50),
+            ("30", 33),
+            ("10", 100),
+            ("100", 33),
+            ("0", 1000),
+            ("abc", 1000),
+            ("", 50),
+        ] {
+            c.userinfo = format!("\\rate\\25000\\snaps\\{snaps}");
+            assert_eq!(c.snapshot_msec(), want, "{snaps:?}");
+        }
+        c.userinfo = "\\rate\\25000".into();
+        assert_eq!(c.snapshot_msec(), 50);
     }
 
     /// What the next message would carry, oldest first.

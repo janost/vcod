@@ -41,8 +41,9 @@ const TAG_TOL: f32 = 3.0;
 
 /// How far the hand tag's yaw may sit from retail's through the body's
 /// swing: ours reads about 2 degrees over it on every frame, the idle clip's
-/// own offset.
-const TAG_YAW_TOL: f32 = 4.0;
+/// own offset, and up to 4 under at the swing's end (`pl_turn` 31), which
+/// moves with the frame the client enters on.
+const TAG_YAW_TOL: f32 = 4.5;
 
 /// Known divergences, `(phase, tolerance)`, each naming the movers doc
 /// section that explains it.

@@ -39,6 +39,21 @@ functions whose shape they share. vcod's implementation is
   first tried under a path built from `cl_language` (strings `%s%s/`,
   `cl_language` at `0x4002f1d4`, `0x4002f1dc`), then as given; INFERRED,
   and stock English paks hold no such path.
+- `_UI_Init` (0x4000d310, `vmMain` case 1 at `0x400076be`) sets
+  `ui_menuFiles` back to `ui_mp/menus.txt` (`trap_Cvar_Set` at
+  `0x4000d324`) before it reads the cvar at `0x4000d624`. So the UI always
+  starts off the stock name, whatever a config set. It then loads
+  `ui_mp/ingame.txt` with the reset argument 0 (`0x4000d64c`). VERIFIED
+  (asm).
+- `ui_load` (string `0x4002fafc`, `UI_ConsoleCommand` at `0x40006d55`)
+  runs `UI_Load` (0x400086c0). It copies the name (field `+0x20`) of the
+  menu `0x40016970` returns, reads `ui_menuFiles` (empty reads
+  `ui_mp/menus.txt`), reloads that list with the reset argument 1, then
+  calls `0x40010660` and `0x400134b0` with the saved name. VERIFIED (asm).
+  INFERRED, from the shape it shares with Team Arena's `UI_Load`:
+  `0x40016970` is `Menu_GetFocused` and the two calls are `Menus_CloseAll`
+  and `Menus_ActivateByName`, so the focused menu comes back open off the
+  new files and `ingame.txt` is not reloaded.
 - Stock `menus.txt` names three files no 1.1 pak ships:
   `ui/options_view.menu`, `ui/options_defaults.menu` and
   `ui_mp/in_rec_restart.menu`; each costs a `^1menu file not found`
@@ -420,7 +435,10 @@ off the branches:
 
 - vcod loads the menu files `ui_mp/menus.txt` names off the search path,
   in its order, so a mod's own list and menus replace the stock ones
-  (`vcod_common::ui_menu::menu_list`). It does not read `ui_menuFiles`.
+  (`vcod_common::ui_menu::menu_list`). `ui_load` reloads off the list
+  `ui_menuFiles` names (a missing one falls back with retail's warning)
+  and reopens the focused menu. A front-end restart sets the cvar back to
+  its default, as `_UI_Init` does. vcod has no `ingame.txt` menus.
 - It draws the main menu, the browser and its popups (sections 6-11),
   the options set (section 14), the quit popup and the error popup from the
   stock files with their layout, the main menu again over a game (section

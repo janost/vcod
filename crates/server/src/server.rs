@@ -81,6 +81,11 @@ const BOT_PLAN_BUDGET: u32 = 4000;
 type ReObjCarried = (crate::bots::ReObjView, Option<usize>, i32);
 /// The tick pace (`1000 / sv_fps`), also the dt floor a fresh sim starts from.
 pub(crate) const FRAME_MS: i32 = 50;
+
+/// `SV_SendClientGameState`'s message buffer (`MSG_Init` at 0x8085fa7):
+/// the plain bytes a gamestate can fill (cod11-server-handshake.md,
+/// "The gamestate goes out fragmented").
+const MAX_GAMESTATE_BYTES: usize = 0x4000;
 /// Retail's `MAX_CLIENTS`. Client slots index a 6-bit wire field
 /// (clientState entries; `ps.clientNum` gets 8), so more than 64 would
 /// collide silently.
@@ -1315,7 +1320,7 @@ fn write_download(
     rate: i32,
     open: &impl Fn(&str) -> Result<Vec<u8>, crate::download::Refusal>,
 ) {
-    let budget = crate::download::blocks_per_message(rate, FRAME_MS);
+    let budget = crate::download::blocks_per_message(rate, c.snapshot_msec());
     if let Some(dl) = c.download.as_mut()
         && !dl.write(w, now, budget, open)
     {
@@ -2324,6 +2329,7 @@ impl Server {
     /// `SV_SendClientGameState`.
     fn send_gamestate(&mut self, slot: usize) {
         let is_bot = self.clients[slot].as_ref().is_some_and(|c| c.is_bot);
+        let (dedicated, max_rate) = (self.dedicated, self.live_int_cvar("sv_maxRate"));
         let Some(c) = self.clients[slot].as_mut() else {
             return;
         };
@@ -2345,14 +2351,28 @@ impl Server {
         gamestate::write(&mut w, self.proto, &gs);
         let ops = w.into_ops();
         log::info!("client {slot}: gamestate, {} bytes", ops.len());
+        if ops.len() > MAX_GAMESTATE_BYTES {
+            // Retail's message buffer would cut it here, unchecked.
+            log::warn!(
+                "client {slot}: gamestate is {} bytes, past retail's {MAX_GAMESTATE_BYTES}",
+                ops.len()
+            );
+        }
         // A bot pulls its own gamestate in step_bots and reads nothing back.
         if is_bot {
             return;
         }
+        // The fragments left of an earlier message all go first, in this
+        // turn (0x8085f34).
+        self.outbox
+            .extend(c.unsent.drain(..).map(|pkt| (c.addr, pkt)));
         c.stamp_sent(c.netchan.outgoing_sequence, self.sv_time_ms);
-        // Whole, ahead of any fragments still queued, which it supersedes.
-        c.unsent.clear();
-        for pkt in c.netchan.transmit(c.last_client_command, &ops, &self.huff) {
+        let rate = c.send_rate(dedicated, max_rate);
+        let sent = c.netchan.transmit(c.last_client_command, &ops, &self.huff);
+        let msec = c.snapshot_msec();
+        c.pace(self.sv_time_ms, sent.iter().map(Vec::len).sum(), rate, msec);
+        // The first fragment now, the rest one per turn as any message's.
+        if let Some(pkt) = c.first_packet(sent) {
             self.outbox.push((c.addr, pkt));
         }
     }
@@ -2822,7 +2842,8 @@ impl Server {
             let sent = c
                 .netchan
                 .transmit(c.last_client_command, &w.into_ops(), &self.huff);
-            c.pace(now, sent.iter().map(Vec::len).sum(), rate, FRAME_MS);
+            let msec = c.snapshot_msec();
+            c.pace(now, sent.iter().map(Vec::len).sum(), rate, msec);
             if let Some(pkt) = c.first_packet(sent) {
                 self.outbox.push((c.addr, pkt));
             }
@@ -6682,12 +6703,8 @@ cmds {processed} span {span} queued {queued} ack {} behind {ack_behind} {base_de
             }
             c.stamp_sent(message_num, self.sv_time_ms);
             let sent = c.netchan.transmit(c.last_client_command, &ops, &self.huff);
-            c.pace(
-                self.sv_time_ms,
-                sent.iter().map(Vec::len).sum(),
-                rate,
-                FRAME_MS,
-            );
+            let msec = c.snapshot_msec();
+            c.pace(self.sv_time_ms, sent.iter().map(Vec::len).sum(), rate, msec);
             if let Some(pkt) = c.first_packet(sent) {
                 self.outbox.push((c.addr, pkt));
             }
@@ -8366,6 +8383,12 @@ mod tests {
         for (_, pkt) in sv.take_outgoing() {
             let _ = nc.process_in(&pkt, &huff).unwrap();
         }
+        // The gamestate's later fragments, which ticks would send one a turn.
+        for c in sv.clients.iter_mut().flatten() {
+            for pkt in c.unsent.drain(..) {
+                let _ = nc.process_in(&pkt, &huff).unwrap();
+            }
+        }
         let ack = nc.incoming_sequence as i32;
         sv.handle_packet(
             addr(5),
@@ -8373,6 +8396,47 @@ mod tests {
             now,
         );
         nc
+    }
+
+    /// `SV_SendClientGameState` (0x8085eec): fragments left of an earlier
+    /// message go first, all at once; the gamestate's first fragment follows
+    /// and the rest go one per frame, as retail sent a loopback probe
+    /// (cod11-server-handshake.md, "The gamestate goes out fragmented").
+    #[test]
+    fn the_gamestate_goes_out_one_fragment_per_frame() {
+        let huff = Huffman::new();
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        // Enough configstrings to pass one fragment.
+        for i in 0..40 {
+            sv.configstrings[vcod_common::net::protocol::CS_SOUNDS + 1 + i] =
+                format!("sound/misc/{i:03}_{}", "x".repeat(40));
+        }
+        let mut nc = connected(&mut sv, addr(5), now);
+        let stale = vec![vec![1u8; 8], vec![2u8; 8]];
+        sv.clients[0].as_mut().unwrap().unsent = stale.clone().into();
+        let pkt = nc.build_out(0, 0, 0, &ack_ops(), &huff).unwrap();
+        sv.handle_packet(addr(5), &pkt, now);
+        let out: Vec<Vec<u8>> = sv.take_outgoing().into_iter().map(|(_, p)| p).collect();
+        assert_eq!(
+            out.len(),
+            3,
+            "the stale fragments, then one of the gamestate"
+        );
+        assert_eq!(out[..2], stale[..]);
+        let fragment = |p: &[u8]| u32::from_le_bytes(p[..4].try_into().unwrap()) & (1 << 31) != 0;
+        assert!(fragment(&out[2]));
+        let mut whole = nc.process_in(&out[2], &huff).unwrap();
+        let mut frames = 0;
+        while whole.is_none() {
+            sv.tick(now + Duration::from_millis(50 * (frames + 1)));
+            let out = sv.take_outgoing();
+            assert_eq!(out.len(), 1, "one fragment a frame");
+            whole = nc.process_in(&out[0].1, &huff).unwrap();
+            frames += 1;
+        }
+        assert!(frames >= 1);
+        assert!(sv.clients[0].as_ref().unwrap().unsent.is_empty());
     }
 
     /// `active` plus the first usercmd, which is what puts a client in the

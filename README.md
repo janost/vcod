@@ -146,7 +146,8 @@ for my test suite.
   paks it lists to clients that lack them at retail's pace, and with `--set
   sv_pure=1` checks each client's pak checksums the way a pure retail server
   does. `sv_minPing`/`sv_maxPing` refuse off-LAN clients by challenge ping,
-  and an off-LAN client's messages wait out its rate.
+  and an off-LAN client's messages wait out its rate and `snaps`. Big
+  messages, the gamestate included, go one fragment per frame.
 - `--bots` adds bots that join through the stock menus and roam a nav graph
   built from pmove runs, ladders and jumps. They play the objectives: S&D
   plants and defuses, Retrieval carries and escorts, Behind Enemy Lines
@@ -434,7 +435,8 @@ Anything else goes to the server while connected (`callvote`, `kill`,
 (25000; retail's first-run 5000 starves snapshots), `snaps`,
 `scr_conspeed`, `mss_volume`, `r_mode` / `r_fullscreen` (applied at start
 and by `vid_restart`), `password` and the browser's `ui_netSource` and
-`ui_browserShow*`. `exec <file>` runs a config from the paks or `main/`.
+`ui_browserShow*`. `exec <file>` runs a config from the paks or `main/`,
+and `ui_load` reloads the menus off the list `ui_menuFiles` names.
 Binds only act while connected.
 
 ### Main menu and browser

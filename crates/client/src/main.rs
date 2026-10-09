@@ -1685,6 +1685,13 @@ impl App {
         !self.console.open && self.ui.active()
     }
 
+    /// `_UI_Init` again: a fresh front end off the search path, with
+    /// `ui_menuFiles` set back to its default first (0x4000d324).
+    fn restart_ui(&mut self) {
+        self.shell.execute("set ui_menuFiles ui_mp/menus.txt");
+        self.ui = new_ui(&self.fs, &self.game_dir, &self.mod_dir);
+    }
+
     /// The main menu, or the error popup over it when `error` says why the
     /// game ended. Its music and clicks use the `menu` loadspec's aliases.
     fn enter_menu(&mut self, error: Option<&str>) {
@@ -1863,6 +1870,12 @@ impl App {
                     }
                 }
                 Effect::Exec(file) => self.exec_file(event_loop, &file),
+                Effect::UiLoad => {
+                    let list = self.shell.cvar("ui_menuFiles").unwrap_or("").to_string();
+                    let mut out = Vec::new();
+                    self.ui.reload(&self.fs, &list, &mut out);
+                    self.ui_pending.extend(out);
+                }
                 Effect::VidRestart => {
                     self.ignore_hw_gamma = ignore_hw_gamma(&self.shell);
                     if let Some(w) = &self.window {
@@ -1988,7 +2001,7 @@ impl App {
                 if let Some(r) = &mut self.renderer {
                     r.reopen(&self.fs);
                 }
-                self.ui = new_ui(&self.fs, &self.game_dir, &self.mod_dir);
+                self.restart_ui();
             }
             Err(e) => log::error!("cannot reopen {}: {e:#}", base.display()),
         }
@@ -2030,7 +2043,7 @@ impl App {
                 r.reopen(&self.fs);
             }
         }
-        self.ui = new_ui(&self.fs, &self.game_dir, &self.mod_dir);
+        self.restart_ui();
         self.after_menu();
         if let Mode::Online {
             net,
@@ -2788,6 +2801,7 @@ impl ApplicationHandler for App {
                                         *menu_view = None;
                                         r.reopen(&self.fs);
                                         view.reopen();
+                                        self.shell.execute("set ui_menuFiles ui_mp/menus.txt");
                                         self.ui = new_ui(&self.fs, &self.game_dir, &self.mod_dir);
                                     }
                                     Err(e) => fatal = Some(e),
