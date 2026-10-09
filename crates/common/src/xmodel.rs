@@ -6,6 +6,7 @@ use anyhow::{Result, anyhow, ensure};
 use glam::{DMat3, DVec3, Quat, Vec3};
 use std::collections::HashMap;
 
+#[derive(Clone)]
 pub struct XModel {
     /// LOD0 name, used only in diagnostics.
     pub lod: String,
@@ -21,6 +22,7 @@ pub struct XModel {
 /// does (solid 0x1, lamp glass 0x10; tree canopies and signs carry 0), and
 /// `flags` carries the sound material in bits 20-24.
 /// docs/research/xmodel-v14-format.md, "Collision block".
+#[derive(Clone)]
 pub struct CollSurf {
     pub contents: u32,
     pub flags: u32,
@@ -30,6 +32,7 @@ pub struct CollSurf {
     pub bounds: (Vec3, Vec3),
 }
 
+#[derive(Clone)]
 pub struct Surface {
     pub verts: Vec<VmVert>,
     pub indices: Vec<u16>,
@@ -51,6 +54,7 @@ pub struct VmVert {
 /// `pos`/`rot` are the world bind the mesh is skinned against; `local_*` the
 /// unbaked local, after the viewhands zeroing. On viewhands `pos` is the bind
 /// the mesh implies, not the composition of the zeroed locals.
+#[derive(Clone)]
 pub struct Bone {
     pub name: String,
     pub parent: i32,

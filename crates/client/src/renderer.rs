@@ -5,6 +5,7 @@ use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 use crate::camera::{Z_FAR, Z_NEAR};
+use crate::entity_light::{self, GpuLightSet};
 use crate::fx::sim::{FxLight, FxQuad, MAX_LIGHTS};
 use crate::gamma::GammaPass;
 use crate::hud::HudQuad;
@@ -20,6 +21,7 @@ use vcod_common::shader::{
     AlphaFunc, AlphaGen, BlendFactor, DrawClass, ImageRef, RgbGen, SORT_BLEND0, SORT_DECAL, Shader,
     ShaderLib, SunFile, bundle_affine, bundle_turb, has_animated_tcmods, wave_value,
 };
+use vcod_common::static_light::{SceneLight, StaticLighting};
 use vcod_common::vis::{Frustum, Visible, WorldVis};
 use vcod_common::xmodel::{self, VmVert};
 
@@ -30,6 +32,10 @@ const _: () = assert!(std::mem::size_of::<VmVert>() == 52);
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const MSAA_SAMPLES: u32 = 4;
+/// Every pass draws into this; the gamma pass maps it onto the swapchain.
+/// Float so the per-draw overbright x2 keeps retail's framebuffer range
+/// above the display's white (docs/research/cod11-gamma.md, section 4).
+pub const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// `Camera` in shader.wgsl: proj, time, eye/fog tail, view forward, model.
 const CAMERA_FLOATS: usize = 52;
 const CAMERA_BYTES: u64 = (CAMERA_FLOATS * 4) as u64;
@@ -41,8 +47,8 @@ pub const VM_NEAR: f32 = 0.1;
 const VM_FAR: f32 = 500.0;
 /// Depth-range fraction the viewmodel is squeezed into, so the world cannot poke through it.
 const VM_DEPTH_RANGE: f32 = 0.3;
-/// `proj` (64) + `model` (64) + `light_dir` (16), std140-compatible as is.
-const VM_UNIFORM_SIZE: u64 = 144;
+/// `proj` (64) + `model` (64) + the light set (656), std140-compatible as is.
+const VM_UNIFORM_SIZE: u64 = 128 + std::mem::size_of::<GpuLightSet>() as u64;
 /// Matches `array<mat4x4<f32>, 64>` in viewmodel.wgsl.
 const VM_BONE_COUNT: usize = 64;
 const VM_BONE_BUF_SIZE: u64 = (VM_BONE_COUNT * 64) as u64;
@@ -282,6 +288,8 @@ pub struct DynamicModelInstance {
     pub model: ModelHandle,
     pub transform: glam::Mat4,
     pub bones: Option<Vec<glam::Mat4>>,
+    /// Where the light grid is sampled: the refEntity's lighting origin.
+    pub light_origin: glam::Vec3,
 }
 
 /// Per-instance vertex data. `bone_base` 0 is the shared identity block.
@@ -290,7 +298,9 @@ pub struct DynamicModelInstance {
 pub struct InstanceRaw {
     pub transform: [f32; 16],
     pub bone_base: u32,
-    pub _pad: [u32; 3],
+    /// Index into the frame's light sets.
+    pub light_set: u32,
+    pub _pad: [u32; 2],
 }
 
 // The instance vertex layout below hardcodes this stride.
@@ -328,7 +338,8 @@ pub fn pack_instances(
         raw.push(InstanceRaw {
             transform,
             bone_base,
-            _pad: [0; 3],
+            light_set: 0,
+            _pad: [0; 2],
         });
     }
     (raw, mats)
@@ -338,6 +349,9 @@ pub fn pack_instances(
 /// that model's GPU buffer as it was.
 pub struct VmDraw {
     pub transform: glam::Mat4,
+    /// World-space lighting origin: the eye, `ps.origin` plus
+    /// `viewHeightCurrent` (cgame 0x30036cf0).
+    pub light_origin: glam::Vec3,
     /// Horizontal degrees, the world view's own.
     pub fov_x: f32,
     pub bone_sets: Vec<Vec<glam::Mat4>>,
@@ -350,6 +364,9 @@ pub struct Frame {
     /// Unit view forward. Fog depth is measured along it (eye-space Z),
     /// matching retail without GL_NV_fog_distance.
     pub fwd: glam::Vec3,
+    /// The view matrix's up (`camera::up_hint`); with `fwd` it takes world
+    /// lights into the viewmodel's view space.
+    pub up: glam::Vec3,
     /// Seconds since start; drives tcMod and wave animation in the stage shaders.
     pub time: f32,
     pub cull: CullMode,
@@ -650,7 +667,9 @@ fn stage_params(shader: &Shader, idx: usize, t: f32) -> Option<StageParams> {
             let tb1 = b1.map_or([0.0; 4], |b| bundle_turb(&b.tcmods, t));
             [tb0[0], tb0[1], tb1[0], tb1[1]]
         },
-        tint: [rgb[0], rgb[1], rgb[2], alpha],
+        // Retail writes these as colour bytes; the float scene target no
+        // longer clamps them, so an overshooting wave must be clamped here.
+        tint: [rgb[0], rgb[1], rgb[2], alpha].map(|c| c.clamp(0.0, 1.0)),
         flags,
         _pad: [0; 3],
         vec0_s: [0.0; 4],
@@ -847,7 +866,7 @@ fn stage_bind_groups(
     lm_view: Option<&wgpu::TextureView>,
     diffuse_sampler: &wgpu::Sampler,
     lightmap_sampler: &wgpu::Sampler,
-    bundle_views: &mut HashMap<String, wgpu::TextureView>,
+    bundle_views: &mut BundleViews,
     st: &vcod_common::shader::Stage,
 ) -> (AnimFrames, AnimFrames) {
     let b0 = &st.bundles[0];
@@ -986,6 +1005,14 @@ struct DynamicPass {
     instances: Vec<(usize, InstanceRaw)>,
     /// Written to `bone_buf` in [`Renderer::render`].
     bone_mats: Vec<[f32; 16]>,
+    /// Per instance, where its lights are picked.
+    light_origins: Vec<glam::Vec3>,
+    /// One `GpuLightSet` per distinct lighting origin this frame.
+    light_buf: wgpu::Buffer,
+    /// The map's light grid; `None` with no map.
+    lighting: Option<StaticLighting>,
+    /// This frame's fx lights, for the entity pick.
+    scene_lights: Vec<SceneLight>,
 }
 
 /// Everything built from one map: buffers, material bind groups, batches,
@@ -1114,7 +1141,7 @@ fn build_sky_box(
     format: wgpu::TextureFormat,
     fs: &Pk3Fs,
     camera_layout: &wgpu::BindGroupLayout,
-    bundle_views: &mut HashMap<String, wgpu::TextureView>,
+    bundle_views: &mut BundleViews,
     white_view: &wgpu::TextureView,
     env: &str,
     sh_name: &str,
@@ -1303,7 +1330,7 @@ fn build_sun_sprite(
     format: wgpu::TextureFormat,
     fs: &Pk3Fs,
     camera_layout: &wgpu::BindGroupLayout,
-    bundle_views: &mut HashMap<String, wgpu::TextureView>,
+    bundle_views: &mut BundleViews,
     sprite: &str,
     dir: [f32; 3],
     size_deg: f32,
@@ -1481,6 +1508,9 @@ pub struct Renderer {
     hud: HudTextPass,
     hud_pass: HudPass,
     gamma: GammaPass,
+    /// The texture gamma table images load through (`gamma::bake_image`),
+    /// set before a world load while `r_ignorehwgamma` is 1.
+    image_gamma: Option<[u8; 256]>,
     /// Kept past map load so later inline submodels resolve `textures/...`
     /// names the same way the world did.
     shaders: assets::Shaders,
@@ -1561,7 +1591,7 @@ impl Renderer {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
-        let msaa_view = create_msaa_view(&device, format, width, height);
+        let msaa_view = create_msaa_view(&device, SCENE_FORMAT, width, height);
         let depth_view = create_depth_view(&device, width, height);
 
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1747,7 +1777,7 @@ impl Renderer {
                     entry_point: Some(fs_entry),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format,
+                        format: SCENE_FORMAT,
                         blend,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -1902,11 +1932,12 @@ impl Renderer {
                     })
                 })
             });
-        let vm_pass = create_vm_pass(&device, format);
-        let dynamic = create_dynamic_pass(&device, format, &camera_layout, &vm_pass.skin_layout);
-        let fx = create_fx_pass(&device, format, &camera_layout, &vm_pass.skin_layout);
-        let hud = create_hud_text_pass(&device, &queue, format);
-        let hud_pass = create_hud_pass(&device, format);
+        let vm_pass = create_vm_pass(&device, SCENE_FORMAT);
+        let dynamic =
+            create_dynamic_pass(&device, SCENE_FORMAT, &camera_layout, &vm_pass.skin_layout);
+        let fx = create_fx_pass(&device, SCENE_FORMAT, &camera_layout, &vm_pass.skin_layout);
+        let hud = create_hud_text_pass(&device, &queue, SCENE_FORMAT);
+        let hud_pass = create_hud_pass(&device, SCENE_FORMAT);
         let gamma = GammaPass::new(&device, format, width, height);
 
         let lib = ShaderLib::load(fs);
@@ -1942,6 +1973,7 @@ impl Renderer {
             hud,
             hud_pass,
             gamma,
+            image_gamma: None,
             hud_quad_cap_warned: false,
             shaders,
             shader_lib: lib,
@@ -2017,7 +2049,9 @@ impl Renderer {
         if batches.is_empty() {
             bail!("map has no drawable surfaces");
         }
-        let props = props::build(fs, bsp);
+        let mut lighting = StaticLighting::new(bsp);
+        let props = props::build(fs, bsp, &mut lighting);
+        self.dynamic.lighting = Some(lighting);
         let prop_first_index = indices.len() as u32;
         let prop_first_vertex = bsp.verts.len() as u32;
         indices.extend(props.indices.iter().map(|i| i + prop_first_vertex));
@@ -2060,12 +2094,13 @@ impl Renderer {
                 continue;
             }
             let name = &bsp.materials[batch.material as usize].name;
-            let img = assets::load_material_image(fs, &shaders, name);
+            let mut img = assets::load_material_image(fs, &shaders, name);
             if is_fallback(&img, &fallback_px) {
                 fallbacks += 1;
             } else {
                 loaded += 1;
             }
+            crate::gamma::bake_image(&mut img, self.image_gamma.as_ref());
             material_views.insert(batch.material, upload_image(device, queue, name, &img));
         }
 
@@ -2145,7 +2180,8 @@ impl Renderer {
         let mut skin_cache: HashMap<&str, usize> = HashMap::new();
         for batch in &props.batches {
             let idx = *skin_cache.entry(batch.skin.as_str()).or_insert_with(|| {
-                let img = assets::load_skin_image(fs, &batch.skin);
+                let mut img = assets::load_skin_image(fs, &batch.skin);
+                crate::gamma::bake_image(&mut img, self.image_gamma.as_ref());
                 let view = upload_image(device, queue, &batch.skin, &img);
                 bind_groups.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("prop skin bind group"),
@@ -2238,7 +2274,10 @@ impl Renderer {
         let mut stage_batches: Vec<StageBatch> = Vec::new();
         let mut stages_of_batch: Vec<Vec<u32>> = vec![Vec::new(); batches.len()];
         let mut animated: Vec<(Shader, usize, u32)> = Vec::new();
-        let mut bundle_views: HashMap<String, wgpu::TextureView> = HashMap::new();
+        let mut bundle_views = BundleViews {
+            views: HashMap::new(),
+            table: self.image_gamma.as_ref(),
+        };
         // once per material, not per batch: a material can hold several batches
         let dropped_stages: usize = bsp
             .materials
@@ -2337,7 +2376,7 @@ impl Renderer {
                     farbox = Some(build_sky_box(
                         device,
                         queue,
-                        self.config.format,
+                        SCENE_FORMAT,
                         fs,
                         &self.camera_layout,
                         &mut bundle_views,
@@ -2438,7 +2477,7 @@ impl Renderer {
                             sun = build_sun_sprite(
                                 device,
                                 queue,
-                                self.config.format,
+                                SCENE_FORMAT,
                                 fs,
                                 &self.camera_layout,
                                 &mut bundle_views,
@@ -2572,6 +2611,8 @@ impl Renderer {
         self.dynamic.models.clear();
         self.dynamic.instances.clear();
         self.dynamic.bone_mats.clear();
+        self.dynamic.light_origins.clear();
+        self.dynamic.lighting = None;
         self.vis_counts = VisCounts::default();
     }
 
@@ -2604,6 +2645,7 @@ impl Renderer {
                     fs,
                     self.shaders.image_map(),
                     &quad.shader,
+                    self.image_gamma.as_ref(),
                 );
                 self.fx.textures.insert(quad.shader.clone(), bg);
             }
@@ -2631,6 +2673,7 @@ impl Renderer {
 
     /// The sim already truncates to `MAX_LIGHTS`; an empty slice zeroes every slot.
     pub fn set_fx_lights(&mut self, lights: &[FxLight]) {
+        self.dynamic.scene_lights = entity_light::scene_lights(lights);
         let uniform = FxLightsUniform::from_lights(lights);
         self.queue
             .write_buffer(&self.fx_lights_buf, 0, bytemuck::bytes_of(&uniform));
@@ -2738,7 +2781,11 @@ impl Renderer {
             &self.vm_pass,
             &m.surfaces,
             &m.materials,
-            &|skin| assets::load_skin_image(fs, skin),
+            &|skin| {
+                let mut img = assets::load_skin_image(fs, skin);
+                crate::gamma::bake_image(&mut img, self.image_gamma.as_ref());
+                img
+            },
         ) else {
             log::warn!("viewmodel {}: no drawable surfaces, skipping it", m.lod);
             return None;
@@ -2762,7 +2809,11 @@ impl Renderer {
             vm,
             &model.surfaces,
             &model.materials,
-            &|skin| assets::load_skin_image(fs, skin),
+            &|skin| {
+                let mut img = assets::load_skin_image(fs, skin);
+                crate::gamma::bake_image(&mut img, self.image_gamma.as_ref());
+                img
+            },
         )?;
         self.dynamic.models.push(uploaded);
         Some(ModelHandle(self.dynamic.models.len() - 1))
@@ -2775,6 +2826,7 @@ impl Renderer {
 
         let mut model_idxs = Vec::with_capacity(instances.len());
         let mut items = Vec::with_capacity(instances.len());
+        let mut origins = Vec::with_capacity(instances.len());
         for inst in instances {
             if model_idxs.len() == MAX_DYNAMIC_INSTANCES {
                 OVERFLOW_WARNED.call_once(|| {
@@ -2789,11 +2841,33 @@ impl Renderer {
                 continue;
             }
             model_idxs.push(idx);
+            origins.push(inst.light_origin);
             items.push((idx, inst.transform.to_cols_array(), inst.bones.as_deref()));
         }
         let (raw, bone_mats) = pack_instances(&items);
         self.dynamic.instances = model_idxs.into_iter().zip(raw).collect();
         self.dynamic.bone_mats = bone_mats;
+        self.dynamic.light_origins = origins;
+    }
+
+    /// Picks each instance's lights (one pick per distinct origin, so a
+    /// player's parts share one) and points its `light_set` at them.
+    fn pick_entity_lights(&mut self) -> Vec<GpuLightSet> {
+        let d = &mut self.dynamic;
+        let Some(lighting) = d.lighting.as_mut() else {
+            return vec![GpuLightSet::default()];
+        };
+        let mut sets = Vec::new();
+        let mut seen: HashMap<[u32; 3], u32> = HashMap::new();
+        for ((_, raw), origin) in d.instances.iter_mut().zip(&d.light_origins) {
+            let key = origin.to_array().map(f32::to_bits);
+            raw.light_set = *seen.entry(key).or_insert_with(|| {
+                let l = lighting.entity_lights(*origin, &d.scene_lights);
+                sets.push(entity_light::pack(&l, None));
+                sets.len() as u32 - 1
+            });
+        }
+        sets
     }
 
     pub fn resize(&mut self, w: u32, h: u32) {
@@ -2803,7 +2877,7 @@ impl Renderer {
         self.config.width = w;
         self.config.height = h;
         self.surface.configure(&self.device, &self.config);
-        self.msaa_view = create_msaa_view(&self.device, self.config.format, w, h);
+        self.msaa_view = create_msaa_view(&self.device, SCENE_FORMAT, w, h);
         self.depth_view = create_depth_view(&self.device, w, h);
         self.gamma.resize(&self.device, w, h);
     }
@@ -2812,6 +2886,12 @@ impl Renderer {
     /// bits (`gamma::overbright_bits`); applied from the next frame.
     pub fn set_gamma(&mut self, gamma: f32, overbright: u32) {
         self.gamma.set_gamma(&self.queue, gamma, overbright);
+    }
+
+    /// The `r_gamma` textures bake in from the next `load_world` (retail
+    /// reloads every image per map), or `None` with device gamma.
+    pub fn set_image_gamma(&mut self, gamma: Option<f32>) {
+        self.image_gamma = gamma.map(|g| crate::gamma::ramp(g, 0));
     }
 
     /// For a lost or outdated swapchain.
@@ -3138,6 +3218,9 @@ impl Renderer {
         };
         // Instance i draws from slot i of instance_buf.
         if !self.dynamic.instances.is_empty() {
+            let sets = self.pick_entity_lights();
+            self.queue
+                .write_buffer(&self.dynamic.light_buf, 0, bytemuck::cast_slice(&sets));
             let raw: Vec<InstanceRaw> = self.dynamic.instances.iter().map(|(_, r)| *r).collect();
             self.queue
                 .write_buffer(&self.dynamic.instance_buf, 0, bytemuck::cast_slice(&raw));
@@ -3149,11 +3232,24 @@ impl Renderer {
         }
         let draw_vm = match &vm {
             Some(draw) if !self.vm_pass.models.is_empty() => {
+                let to_view = glam::camera::rh::view::look_to_mat4(frame.eye, frame.fwd, frame.up);
+                let lights = match self.dynamic.lighting.as_mut() {
+                    Some(l) => {
+                        let picked = l.entity_lights(draw.light_origin, &self.dynamic.scene_lights);
+                        entity_light::pack(&picked, Some(to_view))
+                    }
+                    None => GpuLightSet::default(),
+                };
                 let uniform = vm_uniform(draw.transform, draw.fov_x, self.aspect());
                 self.queue.write_buffer(
                     &self.vm_pass.uniform_buf,
                     0,
                     bytemuck::cast_slice(&uniform),
+                );
+                self.queue.write_buffer(
+                    &self.vm_pass.uniform_buf,
+                    128,
+                    bytemuck::bytes_of(&lights),
                 );
                 for (i, model) in self.vm_pass.models.iter().enumerate() {
                     let Some(bones) = draw.bone_sets.get(i) else {
@@ -3218,11 +3314,7 @@ impl Renderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.msaa_view,
                     depth_slice: None,
-                    resolve_target: Some(if self.gamma.active() {
-                        self.gamma.scene_view()
-                    } else {
-                        &view
-                    }),
+                    resolve_target: Some(self.gamma.scene_view()),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear),
                         // only the resolved single-sample image is needed
@@ -3485,9 +3577,7 @@ impl Renderer {
                 pass.draw_indexed(0..(hud_quads * 6) as u32, 0, 0..1);
             }
         }
-        if self.gamma.active() {
-            self.gamma.draw(&mut encoder, &view);
-        }
+        self.gamma.draw(&mut encoder, &view);
         self.queue.submit([encoder.finish()]);
         self.queue.present(surface_tex);
     }
@@ -3716,6 +3806,7 @@ fn resolve_fx_path(
 /// `upload_image` handles both RGBA sprites and BC `.dds` mip chains (many
 /// effect textures are DXT5). Unresolvable names warn once; the caller
 /// caches the `None`.
+#[allow(clippy::too_many_arguments)]
 fn resolve_fx_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -3724,12 +3815,14 @@ fn resolve_fx_texture(
     fs: &Pk3Fs,
     shader_images: &HashMap<String, String>,
     name: &str,
+    table: Option<&[u8; 256]>,
 ) -> Option<wgpu::BindGroup> {
     let Some(path) = resolve_fx_path(shader_images, fs, name) else {
         log::warn!("fx shader {name:?}: no texture found for it, dropping its quads");
         return None;
     };
-    let img = assets::load_path_image(fs, &path);
+    let mut img = assets::load_path_image(fs, &path);
+    crate::gamma::bake_image(&mut img, table);
     let view = upload_image(device, queue, name, &img);
     Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some(name),
@@ -4108,8 +4201,7 @@ fn create_vm_pass(device: &wgpu::Device, format: wgpu::TextureFormat) -> VmPass 
         label: Some("viewmodel uniform layout"),
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
-            // light_dir is read in the fragment stage
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            visibility: wgpu::ShaderStages::VERTEX,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
@@ -4273,18 +4365,20 @@ fn create_dynamic_pass(
     });
 
     // Worst case: every instance skinned at the cap, plus the identity block.
+    let storage = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::VERTEX,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    };
+    // Binding 1 holds the frame's light sets.
     let bone_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("dynamic bone layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }],
+        entries: &[storage(0), storage(1)],
     });
     let bone_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("dynamic bone matrices"),
@@ -4292,13 +4386,25 @@ fn create_dynamic_pass(
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
+    let light_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("dynamic light sets"),
+        size: MAX_DYNAMIC_INSTANCES as u64 * std::mem::size_of::<GpuLightSet>() as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
     let bone_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("dynamic bone bind group"),
         layout: &bone_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: bone_buf.as_entire_binding(),
-        }],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: bone_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: light_buf.as_entire_binding(),
+            },
+        ],
     });
 
     let shader = device.create_shader_module(wgpu::include_wgsl!("dynamic_model.wgsl"));
@@ -4327,7 +4433,7 @@ fn create_dynamic_pass(
                     ],
                 }),
                 // `InstanceRaw`: the transform's four columns, then
-                // bone_base; the padding needs no attribute.
+                // bone_base and light_set; the padding needs no attribute.
                 Some(wgpu::VertexBufferLayout {
                     array_stride: DYNAMIC_INSTANCE_STRIDE,
                     step_mode: wgpu::VertexStepMode::Instance,
@@ -4337,6 +4443,7 @@ fn create_dynamic_pass(
                         7 => Float32x4,
                         8 => Float32x4,
                         9 => Uint32,
+                        10 => Uint32,
                     ],
                 }),
             ],
@@ -4382,18 +4489,19 @@ fn create_dynamic_pass(
         models: Vec::new(),
         instances: Vec::new(),
         bone_mats: Vec::new(),
+        light_origins: Vec::new(),
+        light_buf,
+        lighting: None,
+        scene_lights: Vec::new(),
     }
 }
 
-/// The models are unlit; the fixed key light stands in for the engine's light grid.
-fn vm_uniform(model: glam::Mat4, fov_x: f32, aspect: f32) -> [f32; 36] {
+/// The projection and motion transform; the light set follows at 128.
+fn vm_uniform(model: glam::Mat4, fov_x: f32, aspect: f32) -> [f32; 32] {
     let proj = crate::camera::perspective(fov_x, aspect, VM_NEAR, VM_FAR);
-    // upper-left key light, view space
-    let light = glam::Vec4::new(-0.4, 0.8, 0.4, 0.0).normalize();
-    let mut out = [0.0f32; 36];
+    let mut out = [0.0f32; 32];
     out[..16].copy_from_slice(&proj.to_cols_array());
     out[16..32].copy_from_slice(&model.to_cols_array());
-    out[32..].copy_from_slice(&light.to_array());
     out
 }
 
@@ -4592,13 +4700,13 @@ fn upload_bundle_view(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     fs: &Pk3Fs,
-    cache: &mut HashMap<String, wgpu::TextureView>,
+    cache: &mut BundleViews,
     path: &str,
 ) -> wgpu::TextureView {
-    if let Some(v) = cache.get(path) {
+    if let Some(v) = cache.views.get(path) {
         return v.clone();
     }
-    let img = if path == "$dlight" {
+    let mut img = if path == "$dlight" {
         // engine-generated light blob, never a file on disk (research doc §8)
         assets::dlight_blob()
     } else if path == "textures/battleship/deckflag_np.tga" {
@@ -4613,9 +4721,21 @@ fn upload_bundle_view(
             }
         }
     };
+    // Retail generates the blob unmipped at its native size, which skips
+    // the texture gamma (docs/research/cod11-gamma.md, section 3).
+    if path != "$dlight" {
+        crate::gamma::bake_image(&mut img, cache.table);
+    }
     let v = upload_image(device, queue, path, &img);
-    cache.insert(path.to_string(), v.clone());
+    cache.views.insert(path.to_string(), v.clone());
     v
+}
+
+/// Shader-stage images uploaded during one world load, and the texture
+/// gamma they load through (`r_ignorehwgamma 1`, `gamma::bake_image`).
+struct BundleViews<'a> {
+    views: HashMap<String, wgpu::TextureView>,
+    table: Option<&'a [u8; 256]>,
 }
 
 fn fallback_pixels() -> Vec<u8> {

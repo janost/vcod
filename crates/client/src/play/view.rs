@@ -29,6 +29,9 @@ pub struct ViewPs {
     /// `pm_flags`' view bits: 0x40000 the client's own view, 0x10000 a
     /// follow (`play::recoil`).
     pub pm_flags: i32,
+    /// `origin` raised by `viewHeightCurrent`: the viewmodel's lighting
+    /// origin.
+    pub eye: Vec3,
 }
 
 /// `pm_type` at intermission.
@@ -48,6 +51,7 @@ impl ViewPs {
             pm_type: pred.pm_type,
             mounted: pred.ps.mounted.is_some(),
             pm_flags: recoil::PMF_OWN_VIEW,
+            eye: pred.ps.origin + Vec3::Z * pred.ps.view_height(),
         }
     }
 
@@ -64,6 +68,11 @@ impl ViewPs {
             pm_type: ps.field_i32(p, "pm_type"),
             mounted: ps.field_i32(p, "eFlags") & 0xc000 != 0,
             pm_flags: ps.field_i32(p, "pm_flags"),
+            eye: Vec3::new(
+                f("origin[0]"),
+                f("origin[1]"),
+                f("origin[2]") + f("viewHeightCurrent"),
+            ),
         }
     }
 }
@@ -181,6 +190,8 @@ pub struct OnlineView {
     /// A scope overlay is up, which hides the gun and its flash.
     scoped: bool,
     recoil: Recoil,
+    /// The newest snapshot's `(clientNum, stats[5])`.
+    spawn: Option<(i32, i32)>,
     /// `now_ms` of the last frame, whole milliseconds.
     last_ms: Option<i64>,
 }
@@ -247,6 +258,22 @@ impl OnlineView {
         {
             self.recoil.fire(def, ps.ads_frac);
         }
+    }
+
+    /// The newest snapshot's `(clientNum, stats[5])`: a new client or spawn
+    /// count clears both kicks, as the snapshot transition's call to
+    /// `0x30028a70` (`0x300300cd`) does on a respawn or a new followed body.
+    pub fn track_spawn(&mut self, spawn: (i32, i32)) {
+        if self.spawn.replace(spawn).is_some_and(|old| old != spawn) {
+            self.recoil.reset();
+        }
+    }
+
+    /// A map load: the first snapshot's setup clears both kicks too
+    /// (`0x3003037f`).
+    pub fn new_gamestate(&mut self) {
+        self.spawn = None;
+        self.recoil.reset();
     }
 
     /// The view kick for the cmd angles and the drawn view, degrees, wire
@@ -378,6 +405,7 @@ impl OnlineView {
         (
             Some(VmDraw {
                 transform,
+                light_origin: ps.eye,
                 fov_x: fov,
                 bone_sets,
             }),
@@ -424,6 +452,7 @@ mod tests {
             pm_type: 0,
             mounted: false,
             pm_flags: recoil::PMF_OWN_VIEW,
+            eye: Vec3::ZERO,
         }
     }
 
@@ -491,6 +520,34 @@ mod tests {
         assert_eq!(view.built_for, built);
         view.sync_rig(&fs, &cs, &ps(2, 82));
         assert_ne!(view.built_for, built);
+    }
+
+    /// A new spawn count or followed client clears the kick; the same pair
+    /// leaves it running.
+    #[test]
+    fn a_respawn_clears_the_kick() {
+        let mut view = OnlineView::default();
+        let mut def = WeaponDef::default();
+        def.aim.view_kick_pitch = [[40.0; 2]; 2];
+        let kicked = |view: &mut OnlineView| {
+            view.recoil.fire(&def, 0.0);
+            view.recoil.step(5, None, 0.0, true);
+            assert_ne!(view.view_kick(), [0.0; 3]);
+        };
+        view.track_spawn((0, 1));
+        kicked(&mut view);
+        let kick = view.view_kick();
+        view.track_spawn((0, 1));
+        assert_eq!(view.view_kick(), kick, "same life");
+        view.track_spawn((0, 2));
+        assert_eq!(view.view_kick(), [0.0; 3], "respawn");
+        assert_eq!(view.gun_kick(), [0.0; 2]);
+        kicked(&mut view);
+        view.track_spawn((3, 2));
+        assert_eq!(view.view_kick(), [0.0; 3], "a new followed client");
+        kicked(&mut view);
+        view.new_gamestate();
+        assert_eq!(view.view_kick(), [0.0; 3], "map load");
     }
 
     #[test]

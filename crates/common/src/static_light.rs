@@ -7,7 +7,6 @@
 use crate::bsp::{self, Bsp};
 use crate::collision::CollisionWorld;
 use glam::Vec3;
-use std::cell::OnceCell;
 
 /// One overbright bit, as `renderer.rs` assumes: light colours load
 /// pre-halved and the display doubles them back.
@@ -125,6 +124,25 @@ impl Light {
             }
         }
         i / denom
+    }
+
+    /// A scene light as `RE_AddLightToScene` (0x4e9b00) records it: kind 2,
+    /// `intensity^2 / 32` as its key intensity, no ambient, falloff
+    /// `1 / (0.001 + d^2)`.
+    pub fn dynamic(origin: Vec3, color: Vec3, intensity: f32) -> Light {
+        let i = intensity * intensity / 32.0;
+        Light {
+            kind: 2,
+            intensity: i,
+            ambient: Vec3::ZERO,
+            diffuse: color * (IDENTITY_LIGHT * i),
+            origin,
+            directional: false,
+            spot_dir: Vec3::ZERO,
+            atten: [0.001, 0.0, 1.0],
+            spot_exponent: 0.0,
+            spot_cutoff: NO_CONE,
+        }
     }
 
     fn sky(ambient: f32, diffuse: f32, up: f32, sky: Vec3, intensity: f32) -> Light {
@@ -305,9 +323,26 @@ pub struct ModelLights {
     pub sky: f32,
 }
 
+/// What GL lighting draws an entity model with (0x4d64e0): the light
+/// model's ambient and up to eight weighted lights.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EntityLights {
+    pub ambient: Vec3,
+    pub lights: Vec<(Light, f32)>,
+}
+
+/// A scene light (an fx `Light`) for the entity pick: position, colour,
+/// intensity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SceneLight {
+    pub origin: Vec3,
+    pub color: Vec3,
+    pub intensity: f32,
+}
+
 /// What a leaf contributes: its light ids and whether it sees the sky
 /// (its list opened with a negative index).
-fn leaf_lights(bsp: &Bsp, leaf: usize) -> (Vec<usize>, bool) {
+fn leaf_lights(bsp: &LeafTree, leaf: usize) -> (Vec<usize>, bool) {
     let Some(&(first, count)) = bsp.leaf_lights.get(leaf) else {
         return (Vec::new(), false);
     };
@@ -328,9 +363,31 @@ fn leaf_lights(bsp: &Bsp, leaf: usize) -> (Vec<usize>, bool) {
     (ids, sky)
 }
 
+/// The BSP tree and leaf light lists, copied out of the map so the
+/// lighting outlives the parse.
+struct LeafTree {
+    planes: Vec<bsp::Plane>,
+    nodes: Vec<bsp::Node>,
+    leafs: Vec<bsp::Leaf>,
+    light_indices: Vec<i16>,
+    leaf_lights: Vec<(u32, u32)>,
+}
+
+impl LeafTree {
+    fn of(bsp: &Bsp) -> LeafTree {
+        LeafTree {
+            planes: bsp.planes.clone(),
+            nodes: bsp.nodes.clone(),
+            leafs: bsp.leafs.clone(),
+            light_indices: bsp.light_indices.clone(),
+            leaf_lights: bsp.leaf_lights.clone(),
+        }
+    }
+}
+
 /// The leaf `p` falls in, walking from node 0; a point on a plane takes
 /// the back child (0x50b390).
-fn leaf_index(bsp: &Bsp, p: Vec3) -> Option<usize> {
+fn leaf_index(bsp: &LeafTree, p: Vec3) -> Option<usize> {
     let mut i: i32 = 0;
     for _ in 0..=bsp.nodes.len() {
         if i < 0 {
@@ -344,22 +401,24 @@ fn leaf_index(bsp: &Bsp, p: Vec3) -> Option<usize> {
     None
 }
 
-/// Everything static-model lighting reads from a map, plus the cache it
-/// fills as models are lit.
-pub struct StaticLighting<'a> {
-    bsp: &'a Bsp,
+/// Everything model lighting reads from a map, plus the cache it fills as
+/// models are lit. Static models light through it once at load, entity
+/// models every frame; both share the cache, as in retail.
+pub struct StaticLighting {
+    bsp: LeafTree,
     world: WorldLight,
     lights: Vec<Light>,
     /// The kind-1 light; the last one wins, as in the loader.
     sun: Option<usize>,
     cache: VisCache,
-    /// Built on the first cache miss: world brushes only.
-    collision: OnceCell<CollisionWorld>,
+    /// What a cache miss traces through: world brushes only. `None` on a
+    /// map without leaf lights, which never samples.
+    collision: Option<CollisionWorld>,
     pub misses: usize,
 }
 
-impl<'a> StaticLighting<'a> {
-    pub fn new(bsp: &'a Bsp) -> Self {
+impl StaticLighting {
+    pub fn new(bsp: &Bsp) -> Self {
         let world = WorldLight::parse(&bsp.entities);
         let lights: Vec<Light> = bsp
             .lights
@@ -368,12 +427,12 @@ impl<'a> StaticLighting<'a> {
             .collect();
         let sun = lights.iter().rposition(|l| l.kind == 1);
         StaticLighting {
-            bsp,
+            bsp: LeafTree::of(bsp),
             world,
             lights,
             sun,
             cache: VisCache::from_lump(&bsp.light_vis),
-            collision: OnceCell::new(),
+            collision: (!bsp.light_indices.is_empty()).then(|| CollisionWorld::build(bsp, &[])),
             misses: 0,
         }
     }
@@ -387,12 +446,32 @@ impl<'a> StaticLighting<'a> {
     /// picks its lights (0x4b69f0).
     pub fn model_lights(&mut self, center: Vec3) -> ModelLights {
         let (ids, weights, sky) = self.sample(center);
-        self.select(center, &ids, &weights, sky)
+        self.select(center, &ids, &weights, &[], sky)
+    }
+
+    /// An entity model's lights for this frame (0x4b7320 -> 0x4b7290): the
+    /// grid sample at its lighting origin, then the pick with every scene
+    /// light within twice its intensity competing for the eight slots.
+    /// A map without leaf lights draws entities unlit at `identityLight`.
+    pub fn entity_lights(&mut self, origin: Vec3, scene: &[SceneLight]) -> EntityLights {
+        if !self.lit() {
+            return EntityLights {
+                ambient: Vec3::splat(IDENTITY_LIGHT),
+                lights: Vec::new(),
+            };
+        }
+        let near = scene_candidates(origin, scene);
+        let (ids, weights, sky) = self.sample(origin);
+        let m = self.select(origin, &ids, &weights, &near, sky);
+        EntityLights {
+            ambient: self.world.sky * m.sky + self.world.ambient,
+            lights: m.lights,
+        }
     }
 
     fn sample(&mut self, center: Vec3) -> (Vec<usize>, Vec<f32>, f32) {
         let none = (Vec::new(), Vec::new(), 0.0);
-        let Some(leaf) = leaf_index(self.bsp, center) else {
+        let Some(leaf) = leaf_index(&self.bsp, center) else {
             return none;
         };
         let Some(cluster) = self.bsp.leafs.get(leaf).map(|l| l.cluster) else {
@@ -404,7 +483,7 @@ impl<'a> StaticLighting<'a> {
                 None => none,
             };
         }
-        let (ids, sees_sky) = leaf_lights(self.bsp, leaf);
+        let (ids, sees_sky) = leaf_lights(&self.bsp, leaf);
         if ids.is_empty() && !sees_sky {
             return none;
         }
@@ -421,13 +500,14 @@ impl<'a> StaticLighting<'a> {
             let (x, y, z) = (cx + bx as i32, cy + by as i32, cz + bz as i32);
             let slot = {
                 let lights = &self.lights;
-                let collision = &self.collision;
-                let bsp = self.bsp;
+                let Some(world) = self.collision.as_ref() else {
+                    continue;
+                };
+                let bsp = &self.bsp;
                 let misses = &mut self.misses;
                 let ids = &ids;
                 self.cache.lookup(x, y, z, cluster, || {
                     *misses += 1;
-                    let world = collision.get_or_init(|| CollisionWorld::build(bsp, &[]));
                     trace_sample(
                         world,
                         bsp,
@@ -470,11 +550,20 @@ impl<'a> StaticLighting<'a> {
         (ids, weights, sky)
     }
 
-    fn select(&self, center: Vec3, ids: &[usize], weights: &[f32], sky: f32) -> ModelLights {
+    /// `scene` lights join after the leaf's, weight 1, ahead of the sky's.
+    fn select(
+        &self,
+        center: Vec3,
+        ids: &[usize],
+        weights: &[f32],
+        scene: &[Light],
+        sky: f32,
+    ) -> ModelLights {
         let mut cands: Vec<(Light, f32)> = ids
             .iter()
             .zip(weights)
             .map(|(&i, &w)| (self.lights[i], w))
+            .chain(scene.iter().map(|&l| (l, 1.0)))
             .collect();
         let mut sky_left = sky;
         let world = &self.world;
@@ -536,6 +625,19 @@ impl<'a> StaticLighting<'a> {
     }
 }
 
+/// The scene lights that reach a model at `origin`: within twice their
+/// intensity (0x4b69f0, 0x569080 being 4.0).
+fn scene_candidates(origin: Vec3, scene: &[SceneLight]) -> Vec<Light> {
+    scene
+        .iter()
+        .filter(|l| {
+            l.intensity > 0.0
+                && (origin - l.origin).length_squared() <= 4.0 * l.intensity * l.intensity
+        })
+        .map(|l| Light::dynamic(l.origin, l.color, l.intensity))
+        .collect()
+}
+
 /// `identityLight` as a byte (`__ftol` truncates).
 pub fn identity_byte() -> u8 {
     (IDENTITY_LIGHT * 255.0) as u8
@@ -592,7 +694,7 @@ fn shade_vertex(world: &WorldLight, m: &ModelLights, p: Vec3, n: Vec3) -> [u8; 4
 /// centre sees it, then one ray per light and the sky fan.
 fn trace_sample(
     world: &CollisionWorld,
-    bsp: &Bsp,
+    bsp: &LeafTree,
     point: Vec3,
     center: Vec3,
     ids: &[usize],
@@ -791,10 +893,86 @@ mod tests {
             .collect();
         let ids: Vec<usize> = (0..10).collect();
         let weights = vec![1.0; 10];
-        let m = s.select(Vec3::ZERO, &ids, &weights, 0.0);
+        let m = s.select(Vec3::ZERO, &ids, &weights, &[], 0.0);
         assert_eq!(m.lights.len(), MAX_ENT_LIGHTS);
         let xs: Vec<f32> = m.lights.iter().map(|(l, _)| l.origin.x).collect();
         assert_eq!(xs, [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0]);
+    }
+
+    #[test]
+    fn a_scene_light_competes_for_the_eight_slots() {
+        let bsp = crate::vis::two_cell_world();
+        let mut s = StaticLighting::new(&bsp);
+        s.lights = (0..8)
+            .map(|i| point_light(Vec3::new(i as f32 * 10.0 + 10.0, 0.0, 0.0), 1000.0))
+            .collect();
+        let ids: Vec<usize> = (0..8).collect();
+        let weights = vec![1.0; 8];
+        let scene = [
+            // a grenade's 800 at 20 units outranks every map light
+            SceneLight {
+                origin: Vec3::new(0.0, 20.0, 0.0),
+                color: Vec3::ONE,
+                intensity: 800.0,
+            },
+            // 10 units short of twice its intensity away
+            SceneLight {
+                origin: Vec3::new(0.0, -210.0, 0.0),
+                color: Vec3::ONE,
+                intensity: 100.0,
+            },
+        ];
+        let near = scene_candidates(Vec3::ZERO, &scene);
+        assert_eq!(near.len(), 1);
+        let m = s.select(Vec3::ZERO, &ids, &weights, &near, 0.0);
+        assert_eq!(m.lights.len(), MAX_ENT_LIGHTS);
+        assert_eq!(m.lights[0].0.kind, 2);
+        assert_eq!(m.lights[0].0.atten, [0.001, 0.0, 1.0]);
+        // the farthest map light lost its slot
+        let xs: Vec<f32> = m.lights[1..].iter().map(|(l, _)| l.origin.x).collect();
+        assert_eq!(xs, [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0]);
+    }
+
+    #[test]
+    fn entities_on_an_unlit_map_take_identity_light() {
+        let bsp = crate::vis::two_cell_world();
+        let mut s = StaticLighting::new(&bsp);
+        assert!(!s.lit());
+        let l = s.entity_lights(Vec3::ZERO, &[]);
+        assert_eq!(l.ambient, Vec3::splat(0.5));
+        assert!(l.lights.is_empty());
+    }
+
+    /// Release-build cost of the per-frame pick, and that a player on
+    /// mp_carentan's open ground gets the sky pair and the sun.
+    #[test]
+    fn carentan_entity_pick() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let Some(path) = fs.resolve_map("mp_carentan") else {
+            return;
+        };
+        let bsp = bsp::parse(&fs.read(&path).unwrap()).unwrap();
+        let Some((origin, _)) = bsp::find_spawn(&bsp.entities) else {
+            return;
+        };
+        let mut s = StaticLighting::new(&bsp);
+        let at = Vec3::from_array(origin) + Vec3::Z * 32.0;
+        let l = s.entity_lights(at, &[]);
+        assert!(!l.lights.is_empty(), "no lights at {at}");
+        assert!(l.lights.len() <= MAX_ENT_LIGHTS);
+        let t = std::time::Instant::now();
+        let n = 2000;
+        for i in 0..n {
+            let p = at + Vec3::new((i % 40) as f32 * 4.0, (i / 40) as f32 * 4.0, 0.0);
+            std::hint::black_box(s.entity_lights(p, &[]));
+        }
+        eprintln!(
+            "entity pick: {:.2} us each, {} traced samples",
+            t.elapsed().as_secs_f64() * 1e6 / n as f64,
+            s.misses
+        );
     }
 
     #[test]
