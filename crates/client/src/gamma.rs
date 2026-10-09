@@ -1,6 +1,6 @@
 //! `r_gamma` (the options Brightness slider). Retail loads a 256-entry
-//! hardware gamma ramp; vcod draws the frame offscreen and maps it through
-//! the same table in a final pass. Formula, clamps and addresses:
+//! hardware gamma ramp; vcod draws the frame into a float target and maps
+//! it through the same table in a final pass. Formula, clamps and addresses:
 //! docs/research/cod11-gamma.md.
 
 /// Retail's `overbrightBits` (0x4f0780): `r_overBrightBits` (1, latched)
@@ -9,20 +9,26 @@ pub fn overbright_bits(fullscreen: bool, hw_gamma: bool) -> u32 {
     u32::from(fullscreen && hw_gamma)
 }
 
-/// What retail shows for each byte of vcod's frame, which already carries
-/// one overbright bit: with the bit, retail's framebuffer byte is `e / 2`
-/// and goes through the shifted ramp (odd bytes interpolated); without it,
-/// the framebuffer byte is `e` itself and the ramp is not shifted.
-pub fn display_table(gamma: f32, overbright: u32) -> [u8; 256] {
+/// Entries in [`display_table`]: vcod's frame values 0..2 in steps of
+/// 1/255, the float scene target's headroom over the display's white.
+pub const TABLE_LEN: usize = 512;
+
+/// What retail shows for vcod frame value `k / 255` (sRGB-encoded), which
+/// already carries one overbright bit: with the bit, retail's framebuffer
+/// byte is `k / 2` and goes through the shifted ramp (odd entries
+/// interpolated), so values up to 2.0 stay distinct below gamma 1; without
+/// it, the framebuffer byte is `k` itself, clamped at 255, and the ramp is
+/// not shifted.
+pub fn display_table(gamma: f32, overbright: u32) -> [u8; TABLE_LEN] {
     let r = ramp(gamma, overbright.min(1));
-    let mut t = [0u8; 256];
-    for (e, out) in t.iter_mut().enumerate() {
+    let mut t = [0u8; TABLE_LEN];
+    for (k, out) in t.iter_mut().enumerate() {
         *out = if overbright == 0 {
-            r[e]
-        } else if e % 2 == 0 {
-            r[e / 2]
+            r[k.min(255)]
+        } else if k % 2 == 0 || k / 2 == 255 {
+            r[k / 2]
         } else {
-            (u16::from(r[e / 2]) + u16::from(r[e / 2 + 1])).div_ceil(2) as u8
+            (u16::from(r[k / 2]) + u16::from(r[k / 2 + 1])).div_ceil(2) as u8
         };
     }
     t
@@ -49,25 +55,40 @@ pub fn ramp(gamma: f32, shift: u32) -> [u8; 256] {
     t
 }
 
-/// Offscreen frame target and the pass that maps it through the ramp onto
-/// the swapchain. Skipped at gamma 1, where the ramp is the identity on
-/// vcod's frame.
+/// Retail's texture gamma with `r_ignorehwgamma 1` (CoDMP.exe 0x4eaa90,
+/// Q3's `R_LightScaleTexture`): with no device gamma, every rgb byte of an
+/// uncompressed RGBA upload goes through the unshifted gamma table (the
+/// intensity table first, the identity at `r_intensity 1`). DDS uploads are
+/// compressed and keep their bytes. `None` leaves the image alone.
+pub fn bake_image(img: &mut vcod_common::assets::Image, table: Option<&[u8; 256]>) {
+    let (Some(t), vcod_common::assets::ImageData::Rgba8(px)) = (table, &mut img.data) else {
+        return;
+    };
+    for texel in px.as_chunks_mut::<4>().0 {
+        for c in &mut texel[..3] {
+            *c = t[usize::from(*c)];
+        }
+    }
+}
+
+/// The float scene target and the pass that maps it through the ramp onto
+/// the swapchain, every frame: at gamma 1 the table still clamps the
+/// headroom at the display's white.
 pub struct GammaPass {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     ramp_tex: wgpu::Texture,
     ramp_view: wgpu::TextureView,
-    format: wgpu::TextureFormat,
     scene_view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
-    /// What the ramp texture holds, `(gamma, overbright bits)`.
-    built: (f32, u32),
-    /// The table is the identity, so the pass is skipped.
-    identity: bool,
+    /// What the ramp texture holds, `(gamma, overbright bits)`; `None`
+    /// until the first `set_gamma`.
+    built: Option<(f32, u32)>,
 }
 
 impl GammaPass {
+    /// `format` is the swapchain's; the scene target is `SCENE_FORMAT`.
     pub fn new(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
@@ -98,7 +119,7 @@ impl GammaPass {
         let ramp_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("gamma ramp"),
             size: wgpu::Extent3d {
-                width: 256,
+                width: TABLE_LEN as u32,
                 height: 1,
                 depth_or_array_layers: 1,
             },
@@ -147,7 +168,7 @@ impl GammaPass {
             cache: None,
         });
 
-        let scene_view = create_scene_view(device, format, width, height);
+        let scene_view = create_scene_view(device, width, height);
         let bind_group = create_bind_group(device, &layout, &scene_view, &ramp_view, &sampler);
         GammaPass {
             pipeline,
@@ -155,16 +176,14 @@ impl GammaPass {
             sampler,
             ramp_tex,
             ramp_view,
-            format,
             scene_view,
             bind_group,
-            built: (1.0, 1),
-            identity: true,
+            built: None,
         }
     }
 
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        self.scene_view = create_scene_view(device, self.format, width, height);
+        self.scene_view = create_scene_view(device, width, height);
         self.bind_group = create_bind_group(
             device,
             &self.layout,
@@ -177,33 +196,28 @@ impl GammaPass {
     /// Rebuilds the table when `gamma` or the overbright bits changed;
     /// retail rebuilds it on the frame after `r_gamma` is modified.
     pub fn set_gamma(&mut self, queue: &wgpu::Queue, gamma: f32, overbright: u32) {
-        if (gamma, overbright) == self.built {
+        if Some((gamma, overbright)) == self.built {
             return;
         }
-        self.built = (gamma, overbright);
+        self.built = Some((gamma, overbright));
         let table = display_table(gamma, overbright);
-        self.identity = table.iter().enumerate().all(|(i, &v)| usize::from(v) == i);
         queue.write_texture(
             self.ramp_tex.as_image_copy(),
             &table,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(256),
+                bytes_per_row: Some(TABLE_LEN as u32),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
-                width: 256,
+                width: TABLE_LEN as u32,
                 height: 1,
                 depth_or_array_layers: 1,
             },
         );
     }
 
-    /// The frame renders here instead of the swapchain while this is set.
-    pub fn active(&self) -> bool {
-        !self.identity
-    }
-
+    /// Where the frame's MSAA target resolves.
     pub fn scene_view(&self) -> &wgpu::TextureView {
         &self.scene_view
     }
@@ -245,12 +259,7 @@ fn texture_entry(binding: u32, filterable: bool) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-fn create_scene_view(
-    device: &wgpu::Device,
-    format: wgpu::TextureFormat,
-    width: u32,
-    height: u32,
-) -> wgpu::TextureView {
+fn create_scene_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
     device
         .create_texture(&wgpu::TextureDescriptor {
             label: Some("gamma scene"),
@@ -262,7 +271,7 @@ fn create_scene_view(
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format,
+            format: crate::renderer::SCENE_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         })
@@ -317,32 +326,66 @@ mod tests {
         );
     }
 
-    /// Gamma 1 is the identity on vcod's frame either way, so the pass is
-    /// skipped full screen and windowed.
+    /// Gamma 1 is the identity on vcod's frame up to the display's white
+    /// and clamps the headroom above it, full screen and windowed.
     #[test]
-    fn gamma_one_display_table_is_the_identity() {
+    fn gamma_one_display_table_clamps_at_white() {
         for ob in [0, 1] {
             let t = display_table(1.0, ob);
-            assert!(t.iter().enumerate().all(|(i, &v)| v as usize == i), "{ob}");
+            assert!(
+                t.iter()
+                    .enumerate()
+                    .all(|(k, &v)| usize::from(v) == k.min(255)),
+                "{ob}"
+            );
         }
     }
 
-    /// Below gamma 1, full screen loses everything above framebuffer byte
-    /// 127 to vcod's 8-bit frame, and windowed keeps its whole range: there
-    /// the framebuffer is the display.
+    /// Below gamma 1, full screen shows the frame's headroom: retail's
+    /// framebuffer bytes above 127 stay distinct shades up to frame value
+    /// 2.0. Windowed the framebuffer is the display, so the table clamps
+    /// at 1.0.
     #[test]
-    fn windowed_gamma_maps_the_frame_byte_itself() {
+    fn gamma_below_one_keeps_full_screen_headroom() {
         let windowed = display_table(0.5, overbright_bits(false, true));
-        assert_eq!(windowed, ramp(0.5, 0));
-        assert_eq!(windowed[255], 255);
+        assert_eq!(windowed[..256], ramp(0.5, 0));
+        assert!(windowed[256..].iter().all(|&v| v == 255));
         assert_eq!(display_table(0.5, overbright_bits(true, false)), windowed);
         let full = display_table(0.5, overbright_bits(true, true));
-        // Display byte 200 is framebuffer byte 100: ramp(0.5, 1)[100] = 78.
+        // Frame 200 is framebuffer byte 100: ramp(0.5, 1)[100] = 78.
         assert_eq!(full[200], 78);
-        assert!(
-            full[255] < 130,
-            "vcod's white is retail's framebuffer 127.5"
-        );
+        // Frame 1.0 is framebuffer 127.5, which retail shows well below white.
+        assert!(full[255] < 130);
+        // Frame 300 and 350 are framebuffer 150 and 175: 88 << 1, 120 << 1.
+        assert_eq!((full[300], full[350]), (176, 240));
+        assert_eq!(full[510], 255);
+    }
+
+    /// The bake maps rgb of RGBA images only, never alpha or a DDS chain.
+    #[test]
+    fn bake_maps_rgba_colour_only() {
+        use vcod_common::assets::{Image, ImageData, TextureFormat};
+        let t = ramp(2.0, 0);
+        let mut img = Image {
+            width: 1,
+            height: 1,
+            data: ImageData::Rgba8(vec![16, 64, 255, 16]),
+        };
+        bake_image(&mut img, Some(&t));
+        let ImageData::Rgba8(px) = &img.data else {
+            unreachable!()
+        };
+        assert_eq!(px, &[t[16], t[64], 255, 16]);
+        let mut dds = Image {
+            width: 4,
+            height: 4,
+            data: ImageData::Bc {
+                format: TextureFormat::Bc1RgbaUnormSrgb,
+                mips: vec![vec![16; 8]],
+            },
+        };
+        bake_image(&mut dds, Some(&t));
+        assert!(matches!(&dds.data, ImageData::Bc { mips, .. } if mips[0] == vec![16; 8]));
     }
 
     /// Hand-computed rows of retail's formula.

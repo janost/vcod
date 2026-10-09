@@ -32,6 +32,10 @@ const _: () = assert!(std::mem::size_of::<VmVert>() == 52);
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const MSAA_SAMPLES: u32 = 4;
+/// Every pass draws into this; the gamma pass maps it onto the swapchain.
+/// Float so the per-draw overbright x2 keeps retail's framebuffer range
+/// above the display's white (docs/research/cod11-gamma.md, section 4).
+pub const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// `Camera` in shader.wgsl: proj, time, eye/fog tail, view forward, model.
 const CAMERA_FLOATS: usize = 52;
 const CAMERA_BYTES: u64 = (CAMERA_FLOATS * 4) as u64;
@@ -663,7 +667,9 @@ fn stage_params(shader: &Shader, idx: usize, t: f32) -> Option<StageParams> {
             let tb1 = b1.map_or([0.0; 4], |b| bundle_turb(&b.tcmods, t));
             [tb0[0], tb0[1], tb1[0], tb1[1]]
         },
-        tint: [rgb[0], rgb[1], rgb[2], alpha],
+        // Retail writes these as colour bytes; the float scene target no
+        // longer clamps them, so an overshooting wave must be clamped here.
+        tint: [rgb[0], rgb[1], rgb[2], alpha].map(|c| c.clamp(0.0, 1.0)),
         flags,
         _pad: [0; 3],
         vec0_s: [0.0; 4],
@@ -860,7 +866,7 @@ fn stage_bind_groups(
     lm_view: Option<&wgpu::TextureView>,
     diffuse_sampler: &wgpu::Sampler,
     lightmap_sampler: &wgpu::Sampler,
-    bundle_views: &mut HashMap<String, wgpu::TextureView>,
+    bundle_views: &mut BundleViews,
     st: &vcod_common::shader::Stage,
 ) -> (AnimFrames, AnimFrames) {
     let b0 = &st.bundles[0];
@@ -1135,7 +1141,7 @@ fn build_sky_box(
     format: wgpu::TextureFormat,
     fs: &Pk3Fs,
     camera_layout: &wgpu::BindGroupLayout,
-    bundle_views: &mut HashMap<String, wgpu::TextureView>,
+    bundle_views: &mut BundleViews,
     white_view: &wgpu::TextureView,
     env: &str,
     sh_name: &str,
@@ -1324,7 +1330,7 @@ fn build_sun_sprite(
     format: wgpu::TextureFormat,
     fs: &Pk3Fs,
     camera_layout: &wgpu::BindGroupLayout,
-    bundle_views: &mut HashMap<String, wgpu::TextureView>,
+    bundle_views: &mut BundleViews,
     sprite: &str,
     dir: [f32; 3],
     size_deg: f32,
@@ -1502,6 +1508,9 @@ pub struct Renderer {
     hud: HudTextPass,
     hud_pass: HudPass,
     gamma: GammaPass,
+    /// The texture gamma table images load through (`gamma::bake_image`),
+    /// set before a world load while `r_ignorehwgamma` is 1.
+    image_gamma: Option<[u8; 256]>,
     /// Kept past map load so later inline submodels resolve `textures/...`
     /// names the same way the world did.
     shaders: assets::Shaders,
@@ -1582,7 +1591,7 @@ impl Renderer {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
-        let msaa_view = create_msaa_view(&device, format, width, height);
+        let msaa_view = create_msaa_view(&device, SCENE_FORMAT, width, height);
         let depth_view = create_depth_view(&device, width, height);
 
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1768,7 +1777,7 @@ impl Renderer {
                     entry_point: Some(fs_entry),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format,
+                        format: SCENE_FORMAT,
                         blend,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -1923,11 +1932,12 @@ impl Renderer {
                     })
                 })
             });
-        let vm_pass = create_vm_pass(&device, format);
-        let dynamic = create_dynamic_pass(&device, format, &camera_layout, &vm_pass.skin_layout);
-        let fx = create_fx_pass(&device, format, &camera_layout, &vm_pass.skin_layout);
-        let hud = create_hud_text_pass(&device, &queue, format);
-        let hud_pass = create_hud_pass(&device, format);
+        let vm_pass = create_vm_pass(&device, SCENE_FORMAT);
+        let dynamic =
+            create_dynamic_pass(&device, SCENE_FORMAT, &camera_layout, &vm_pass.skin_layout);
+        let fx = create_fx_pass(&device, SCENE_FORMAT, &camera_layout, &vm_pass.skin_layout);
+        let hud = create_hud_text_pass(&device, &queue, SCENE_FORMAT);
+        let hud_pass = create_hud_pass(&device, SCENE_FORMAT);
         let gamma = GammaPass::new(&device, format, width, height);
 
         let lib = ShaderLib::load(fs);
@@ -1963,6 +1973,7 @@ impl Renderer {
             hud,
             hud_pass,
             gamma,
+            image_gamma: None,
             hud_quad_cap_warned: false,
             shaders,
             shader_lib: lib,
@@ -2083,12 +2094,13 @@ impl Renderer {
                 continue;
             }
             let name = &bsp.materials[batch.material as usize].name;
-            let img = assets::load_material_image(fs, &shaders, name);
+            let mut img = assets::load_material_image(fs, &shaders, name);
             if is_fallback(&img, &fallback_px) {
                 fallbacks += 1;
             } else {
                 loaded += 1;
             }
+            crate::gamma::bake_image(&mut img, self.image_gamma.as_ref());
             material_views.insert(batch.material, upload_image(device, queue, name, &img));
         }
 
@@ -2168,7 +2180,8 @@ impl Renderer {
         let mut skin_cache: HashMap<&str, usize> = HashMap::new();
         for batch in &props.batches {
             let idx = *skin_cache.entry(batch.skin.as_str()).or_insert_with(|| {
-                let img = assets::load_skin_image(fs, &batch.skin);
+                let mut img = assets::load_skin_image(fs, &batch.skin);
+                crate::gamma::bake_image(&mut img, self.image_gamma.as_ref());
                 let view = upload_image(device, queue, &batch.skin, &img);
                 bind_groups.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("prop skin bind group"),
@@ -2261,7 +2274,10 @@ impl Renderer {
         let mut stage_batches: Vec<StageBatch> = Vec::new();
         let mut stages_of_batch: Vec<Vec<u32>> = vec![Vec::new(); batches.len()];
         let mut animated: Vec<(Shader, usize, u32)> = Vec::new();
-        let mut bundle_views: HashMap<String, wgpu::TextureView> = HashMap::new();
+        let mut bundle_views = BundleViews {
+            views: HashMap::new(),
+            table: self.image_gamma.as_ref(),
+        };
         // once per material, not per batch: a material can hold several batches
         let dropped_stages: usize = bsp
             .materials
@@ -2360,7 +2376,7 @@ impl Renderer {
                     farbox = Some(build_sky_box(
                         device,
                         queue,
-                        self.config.format,
+                        SCENE_FORMAT,
                         fs,
                         &self.camera_layout,
                         &mut bundle_views,
@@ -2461,7 +2477,7 @@ impl Renderer {
                             sun = build_sun_sprite(
                                 device,
                                 queue,
-                                self.config.format,
+                                SCENE_FORMAT,
                                 fs,
                                 &self.camera_layout,
                                 &mut bundle_views,
@@ -2629,6 +2645,7 @@ impl Renderer {
                     fs,
                     self.shaders.image_map(),
                     &quad.shader,
+                    self.image_gamma.as_ref(),
                 );
                 self.fx.textures.insert(quad.shader.clone(), bg);
             }
@@ -2764,7 +2781,11 @@ impl Renderer {
             &self.vm_pass,
             &m.surfaces,
             &m.materials,
-            &|skin| assets::load_skin_image(fs, skin),
+            &|skin| {
+                let mut img = assets::load_skin_image(fs, skin);
+                crate::gamma::bake_image(&mut img, self.image_gamma.as_ref());
+                img
+            },
         ) else {
             log::warn!("viewmodel {}: no drawable surfaces, skipping it", m.lod);
             return None;
@@ -2788,7 +2809,11 @@ impl Renderer {
             vm,
             &model.surfaces,
             &model.materials,
-            &|skin| assets::load_skin_image(fs, skin),
+            &|skin| {
+                let mut img = assets::load_skin_image(fs, skin);
+                crate::gamma::bake_image(&mut img, self.image_gamma.as_ref());
+                img
+            },
         )?;
         self.dynamic.models.push(uploaded);
         Some(ModelHandle(self.dynamic.models.len() - 1))
@@ -2852,7 +2877,7 @@ impl Renderer {
         self.config.width = w;
         self.config.height = h;
         self.surface.configure(&self.device, &self.config);
-        self.msaa_view = create_msaa_view(&self.device, self.config.format, w, h);
+        self.msaa_view = create_msaa_view(&self.device, SCENE_FORMAT, w, h);
         self.depth_view = create_depth_view(&self.device, w, h);
         self.gamma.resize(&self.device, w, h);
     }
@@ -2861,6 +2886,12 @@ impl Renderer {
     /// bits (`gamma::overbright_bits`); applied from the next frame.
     pub fn set_gamma(&mut self, gamma: f32, overbright: u32) {
         self.gamma.set_gamma(&self.queue, gamma, overbright);
+    }
+
+    /// The `r_gamma` textures bake in from the next `load_world` (retail
+    /// reloads every image per map), or `None` with device gamma.
+    pub fn set_image_gamma(&mut self, gamma: Option<f32>) {
+        self.image_gamma = gamma.map(|g| crate::gamma::ramp(g, 0));
     }
 
     /// For a lost or outdated swapchain.
@@ -3283,11 +3314,7 @@ impl Renderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.msaa_view,
                     depth_slice: None,
-                    resolve_target: Some(if self.gamma.active() {
-                        self.gamma.scene_view()
-                    } else {
-                        &view
-                    }),
+                    resolve_target: Some(self.gamma.scene_view()),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear),
                         // only the resolved single-sample image is needed
@@ -3550,9 +3577,7 @@ impl Renderer {
                 pass.draw_indexed(0..(hud_quads * 6) as u32, 0, 0..1);
             }
         }
-        if self.gamma.active() {
-            self.gamma.draw(&mut encoder, &view);
-        }
+        self.gamma.draw(&mut encoder, &view);
         self.queue.submit([encoder.finish()]);
         self.queue.present(surface_tex);
     }
@@ -3781,6 +3806,7 @@ fn resolve_fx_path(
 /// `upload_image` handles both RGBA sprites and BC `.dds` mip chains (many
 /// effect textures are DXT5). Unresolvable names warn once; the caller
 /// caches the `None`.
+#[allow(clippy::too_many_arguments)]
 fn resolve_fx_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -3789,12 +3815,14 @@ fn resolve_fx_texture(
     fs: &Pk3Fs,
     shader_images: &HashMap<String, String>,
     name: &str,
+    table: Option<&[u8; 256]>,
 ) -> Option<wgpu::BindGroup> {
     let Some(path) = resolve_fx_path(shader_images, fs, name) else {
         log::warn!("fx shader {name:?}: no texture found for it, dropping its quads");
         return None;
     };
-    let img = assets::load_path_image(fs, &path);
+    let mut img = assets::load_path_image(fs, &path);
+    crate::gamma::bake_image(&mut img, table);
     let view = upload_image(device, queue, name, &img);
     Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some(name),
@@ -4672,13 +4700,13 @@ fn upload_bundle_view(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     fs: &Pk3Fs,
-    cache: &mut HashMap<String, wgpu::TextureView>,
+    cache: &mut BundleViews,
     path: &str,
 ) -> wgpu::TextureView {
-    if let Some(v) = cache.get(path) {
+    if let Some(v) = cache.views.get(path) {
         return v.clone();
     }
-    let img = if path == "$dlight" {
+    let mut img = if path == "$dlight" {
         // engine-generated light blob, never a file on disk (research doc §8)
         assets::dlight_blob()
     } else if path == "textures/battleship/deckflag_np.tga" {
@@ -4693,9 +4721,21 @@ fn upload_bundle_view(
             }
         }
     };
+    // Retail generates the blob unmipped at its native size, which skips
+    // the texture gamma (docs/research/cod11-gamma.md, section 3).
+    if path != "$dlight" {
+        crate::gamma::bake_image(&mut img, cache.table);
+    }
     let v = upload_image(device, queue, path, &img);
-    cache.insert(path.to_string(), v.clone());
+    cache.views.insert(path.to_string(), v.clone());
     v
+}
+
+/// Shader-stage images uploaded during one world load, and the texture
+/// gamma they load through (`r_ignorehwgamma 1`, `gamma::bake_image`).
+struct BundleViews<'a> {
+    views: HashMap<String, wgpu::TextureView>,
+    table: Option<&'a [u8; 256]>,
 }
 
 fn fallback_pixels() -> Vec<u8> {
