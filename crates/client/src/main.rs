@@ -2742,7 +2742,20 @@ impl ApplicationHandler for App {
                                             self.window.as_deref(),
                                             &mut self.title,
                                         ) {
-                                            Ok(next) => *phase = next,
+                                            Ok(next) => {
+                                                *phase = next;
+                                                let t0 = Instant::now();
+                                                let rigs =
+                                                    view.prewarm(&self.fs, net.configstrings());
+                                                for models in &rigs {
+                                                    r.preload_viewmodel(&self.fs, models);
+                                                }
+                                                log::info!(
+                                                    "viewmodels: {} rigs preloaded in {:.0} ms",
+                                                    rigs.len(),
+                                                    t0.elapsed().as_secs_f64() * 1000.0
+                                                );
+                                            }
                                             Err(e) => fatal = Some(e),
                                         }
                                     }

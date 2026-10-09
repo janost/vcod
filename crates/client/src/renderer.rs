@@ -2697,34 +2697,46 @@ impl Renderer {
 
     /// Slice order is draw order (hands, then the gun). Replaces anything set before.
     pub fn set_viewmodel(&mut self, fs: &Pk3Fs, models: &[xmodel::XModel]) {
-        let mut uploaded = Vec::with_capacity(models.len());
-        for m in models {
-            let key = vm_cache_key(m);
-            if let Some(hit) = self.vm_pass.cache.get(&key) {
-                uploaded.push(hit.clone());
-                continue;
-            }
-            let Some(model) = upload_vm_model(
-                &self.device,
-                &self.queue,
-                &self.vm_pass,
-                &m.surfaces,
-                &m.materials,
-                &|skin| assets::load_skin_image(fs, skin),
-            ) else {
-                log::warn!("viewmodel {}: no drawable surfaces, skipping it", m.lod);
-                continue;
-            };
-            let model = Rc::new(model);
-            self.vm_pass.cache.insert(key, model.clone());
-            uploaded.push(model);
-        }
+        let uploaded: Vec<_> = models
+            .iter()
+            .filter_map(|m| self.vm_upload(fs, m))
+            .collect();
         let surfaces: usize = uploaded.iter().map(|m| m.surfaces.len()).sum();
         println!(
             "viewmodel: {} models, {surfaces} drawn surfaces",
             uploaded.len()
         );
         self.vm_pass.models = uploaded;
+    }
+
+    /// Uploads viewmodel parts into the cache without drawing them, so a
+    /// later `set_viewmodel` of the same parts uploads nothing.
+    pub fn preload_viewmodel(&mut self, fs: &Pk3Fs, models: &[xmodel::XModel]) {
+        for m in models {
+            self.vm_upload(fs, m);
+        }
+    }
+
+    /// A viewmodel part's upload, out of the cache after the first time.
+    fn vm_upload(&mut self, fs: &Pk3Fs, m: &xmodel::XModel) -> Option<Rc<VmModel>> {
+        let key = vm_cache_key(m);
+        if let Some(hit) = self.vm_pass.cache.get(&key) {
+            return Some(hit.clone());
+        }
+        let Some(model) = upload_vm_model(
+            &self.device,
+            &self.queue,
+            &self.vm_pass,
+            &m.surfaces,
+            &m.materials,
+            &|skin| assets::load_skin_image(fs, skin),
+        ) else {
+            log::warn!("viewmodel {}: no drawable surfaces, skipping it", m.lod);
+            return None;
+        };
+        let model = Rc::new(model);
+        self.vm_pass.cache.insert(key, model.clone());
+        Some(model)
     }
 
     /// Same upload as the viewmodel (bind pose baked into the mesh); an

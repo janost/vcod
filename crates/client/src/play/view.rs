@@ -91,6 +91,43 @@ fn rig_names(
     Some((name, hands))
 }
 
+/// The items configstring 8 marks registered, retail's
+/// `CG_RegisterItems` walk (cgame 0x30036150): item `i` is bit `i & 3` of
+/// the hex digit at `i >> 2`, items 1..0x46.
+fn registered_items(cs8: &str) -> impl Iterator<Item = usize> + '_ {
+    let digits = cs8.as_bytes();
+    (1..0x46).filter(move |&i| {
+        let d = digits.get(i >> 2).and_then(|&c| (c as char).to_digit(16));
+        d.is_some_and(|d| d & 1 << (i & 3) != 0)
+    })
+}
+
+/// Every (weapon file, hands) pair a rig can be asked for on this map: each
+/// weapon item configstring 8 registers (items 1..=64 are configstring 7's
+/// weapons), with each hands model the configstrings precache. Retail
+/// registers those weapons' models at the gamestate (`CG_RegisterItemVisuals`
+/// 0x30036080 calling `CG_RegisterWeapon` 0x30034cf0 for a weapon row).
+fn prewarm_names(configstrings: &[String]) -> Vec<(&str, Option<&str>)> {
+    let cs = |i: usize| configstrings.get(i).map(String::as_str).unwrap_or("");
+    let weapons: Vec<&str> = cs(7).split(' ').filter(|s| !s.is_empty()).collect();
+    let mut hands: Vec<Option<&str>> = configstrings
+        .iter()
+        .skip(CS_MODELS_V1)
+        .take(256)
+        .map(String::as_str)
+        .filter(|m| m.contains("viewmodel_hands"))
+        .map(Some)
+        .collect();
+    if hands.is_empty() {
+        hands.push(None);
+    }
+    registered_items(cs(8))
+        .filter(|&i| i <= 64)
+        .filter_map(|i| weapons.get(i - 1).copied())
+        .flat_map(|w| hands.iter().map(move |&h| (w, h)))
+        .collect()
+}
+
 impl RigKey {
     fn names(&self) -> (&str, Option<&str>) {
         (&self.weapon, self.hands.as_deref())
@@ -181,6 +218,16 @@ impl OnlineView {
         }
         self.rig = rig;
         self.rig.is_some().then_some(models)
+    }
+
+    /// Loads every rig this map can ask for into the cache, so the first
+    /// switch to a weapon does not stall on reading it. Returns the models
+    /// for the renderer to upload.
+    pub fn prewarm(&mut self, fs: &Pk3Fs, configstrings: &[String]) -> Vec<viewmodel::ViewModels> {
+        prewarm_names(configstrings)
+            .into_iter()
+            .filter_map(|(weapon, hands)| Some(self.rigs.load(fs, weapon, hands)?.0))
+            .collect()
     }
 
     /// Whether last frame's sight put a scope overlay up.
@@ -340,6 +387,23 @@ mod tests {
     }
 
     #[test]
+    fn prewarm_names_every_registered_weapon_with_every_hands_model() {
+        let mut cs = configstrings();
+        // Items 0, 1 and 3 (the colt is not registered), and 68, health.
+        cs[8] = "b00000000000000001".to_string();
+        assert_eq!(registered_items(&cs[8]).collect::<Vec<_>>(), [1, 3, 68]);
+        assert_eq!(
+            prewarm_names(&cs),
+            [
+                ("m1carbine_mp", Some("xmodel/viewmodel_hands_russian")),
+                ("m1carbine_mp", Some("xmodel/viewmodel_hands_us")),
+                ("mosin_nagant_mp", Some("xmodel/viewmodel_hands_russian")),
+                ("mosin_nagant_mp", Some("xmodel/viewmodel_hands_us")),
+            ]
+        );
+    }
+
+    #[test]
     fn weapon_zero_draws_nothing() {
         let cs = configstrings();
         assert_eq!(rig_names(&cs, 0, 82), None);
@@ -443,6 +507,24 @@ mod tests {
         }
         view.flash = None;
         assert!(view.muzzle(eye, basis).is_none());
+    }
+
+    /// The gamestate's prewarm leaves the first switch a cache hit: the rig
+    /// `sync_rig` builds shares the prewarmed models.
+    #[test]
+    fn prewarmed_rigs_serve_the_first_switch() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let mut cs = configstrings();
+        cs[8] = "e".to_string(); // items 1..=3
+        let mut view = OnlineView::default();
+        let t0 = std::time::Instant::now();
+        let rigs = view.prewarm(&fs, &cs);
+        eprintln!("prewarm: {} rigs in {:?}", rigs.len(), t0.elapsed());
+        assert_eq!(rigs.len(), 6, "three weapons with two hands each");
+        let colt_us = view.sync_rig(&fs, &cs, &ps(2, 82)).expect("colt rig");
+        assert!(rigs.iter().any(|m| std::sync::Arc::ptr_eq(m, &colt_us)));
     }
 
     /// The real carbine with the US hands, driven through a hip shot and a
