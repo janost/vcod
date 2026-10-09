@@ -200,9 +200,12 @@ missing.
 
 **Rendering and sound**
 
-- Props get one colour from the compiler's `lightingPrecalc` tint; retail
-  samples the light grid per vertex.
-- Shadow-decal props draw as depth-biased decals on the ground.
+- Props are lit per vertex from the map's lights and its light-visibility
+  grid at load, as retail does, but without the dynamic lights retail adds
+  on a prop's first draw
+  ([cod11-light-grid-and-leaf-lights.md](docs/research/cod11-light-grid-and-leaf-lights.md)).
+- Shadow-decal props draw as depth-biased decals on the ground. Retail
+  registers no `shadow_*` model as a static model.
 - Only the ocean's `deformVertexes wave` moves; the other forms parse and do
   nothing. NV/ATI hardware-path stages are dropped, as retail did on cards
   without them. `$dlight` and the ship's deckflag have no file behind them,

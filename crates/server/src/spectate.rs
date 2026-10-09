@@ -171,6 +171,13 @@ pub struct ClientSim {
     /// for movement and leaves it alone when both axes are zero
     /// (`game.mp.i386.so` 0x32504).
     strafing: Option<vcod_common::animscript::Side>,
+    /// The movetype `update_anims` last selected by: pmove's write of the
+    /// record's `movetype` condition, which the end frame's angle updater
+    /// reads (combat doc 16.4).
+    movetype: vcod_common::animscript::Movetype,
+    /// The turret placement's leaf blend for the gun this client mans,
+    /// which its legs pose by while mounted.
+    pub gunner_leaves: Option<Vec<(usize, f32)>>,
     /// A jump impulse taken since the last `update_anims`, so a tick that ran
     /// several moves still raises the event. Leaving the ground is not enough:
     /// a ledge and a ladder do that without a jump.
@@ -398,6 +405,8 @@ impl ClientSim {
             anim: Default::default(),
             was_airborne: false,
             strafing: None,
+            movetype: Default::default(),
+            gunner_leaves: None,
             jumped: false,
             jump_time: 0,
             land_anim: false,
@@ -740,6 +749,38 @@ impl ClientSim {
             | if self.friend_ping { EF_FRIEND_PING } else { 0 }
     }
 
+    /// `ps.eFlags`: [`Self::eflags`] and, on a live player's word only, the
+    /// stance bits; a spectator and the intermission camera carry the base
+    /// and the teleport bit alone.
+    fn ps_eflags(&self) -> i32 {
+        if self.pm_type != PmType::Normal {
+            return self.eflags();
+        }
+        self.eflags()
+            | match self.ps.stance {
+                pmove::Stance::Stand => 0,
+                pmove::Stance::Crouch => EF_CROUCH,
+                pmove::Stance::Prone => EF_PRONE,
+            }
+    }
+
+    /// The entity's `eFlags`: `BG_PlayerStateToEntityState` copies
+    /// `ps.eFlags` whole (0x2cd8b), then sets 0x1 on `pm_type > 5`
+    /// (0x2cda6) and 0x200 on the sight flag, `pm_flags` 0x20 (0x2cdb6).
+    fn entity_eflags(&self) -> i32 {
+        let dead = if self.wire_pm_type() > PM_INTERMISSION {
+            EF_DEAD
+        } else {
+            0
+        };
+        let ads = if self.ps.ads_active {
+            vcod_common::playerpose::EF_ADS
+        } else {
+            0
+        };
+        self.ps_eflags() | dead | ads
+    }
+
     /// `SpectatorThink`'s button half (`game.mp.i386.so` 0x3fab8) for one
     /// cmd whose buttons are `buttons`, after the previous cmd's `prev`:
     /// either edge of the sight bit ends a free follow, an attack press cycles
@@ -1032,6 +1073,7 @@ impl ClientSim {
             (pmove::Stance::Stand, true, true) => Movetype::RunBk,
             (pmove::Stance::Stand, true, false) => Movetype::Run,
         };
+        self.movetype = movetype;
         let conditions = Conditions {
             movetype,
             weapon: inputs.weapon.to_ascii_lowercase(),
@@ -1369,29 +1411,45 @@ impl ClientSim {
     }
 
     /// `ClientEndFrame`'s `BG_UpdatePlayerDObj` and `BG_PlayerAnimation`:
-    /// the models, the two anim indices with the phase each started at, the
-    /// view pitch the controllers read and the torso pitch easing after it
-    /// over `frametime_ms` (`docs/research/cod11-combat.md` 16.3).
-    pub fn commit_pose(&mut self, frametime_ms: i32) {
-        let view_pitch = self.view_angles[0];
-        let mounted = self.mounted_on.is_some();
-        let mut swing = self.pose.swing;
-        swing.step(
-            view_pitch,
-            frametime_ms,
-            self.dead || mounted || self.ps.on_ladder,
-        );
+    /// the models, the two anim indices with the phase each started at, and
+    /// the record the controllers read, its swings stepped over
+    /// `frametime_ms` (`docs/research/cod11-combat.md` 16.3, 16.4). `anims`
+    /// gives the legs anim's record; without it no anim is a strafe one.
+    pub fn commit_pose(
+        &mut self,
+        frametime_ms: i32,
+        anims: Option<&vcod_common::animtree::PlayerAnims>,
+    ) {
+        use vcod_common::playerpose::{BG_SWING_SPEED, BodyInput, BodySlope};
+        let legs = self.anim.legs();
+        let input = BodyInput {
+            view: self.view_angles,
+            movement_dir: self.ps.movement_dir as f32,
+            eflags: self.entity_eflags(),
+            legs: anims.map(|a| a.record(legs)).unwrap_or_default(),
+        };
+        let mut angles = self.pose.angles;
+        // Pmove writes the movetype condition each cmd, ahead of the end
+        // frame's updater; the anim's own record lands after it.
+        angles.movetype = self.movetype.bit();
+        angles.step(&input, frametime_ms, BG_SWING_SPEED);
+        angles.update_conditions(&input);
         self.pose = crate::game::combat::BodyPose {
             assembly: self.assembly.clone(),
-            legs: self.anim.legs(),
+            legs,
             torso: self.anim.torso(),
             legs_start_ms: self.anim.legs_start_ms(),
             torso_start_ms: self.anim.torso_start_ms(),
-            view_pitch,
-            swing,
-            prone: self.ps.stance == pmove::Stance::Prone,
-            mounted,
-            lean: self.ps.lean / vcod_common::pmove::LEAN_MAX,
+            input,
+            angles,
+            // `fTorsoHeight`, `fTorsoPitch` and `fWaistPitch` come from
+            // `BG_CheckProneValid`'s ground samples, which pmove does not
+            // model, so they stay 0 as this server sends them.
+            slope: BodySlope {
+                lean: self.ps.lean / vcod_common::pmove::LEAN_MAX,
+                ..Default::default()
+            },
+            turret_leaves: self.gunner_leaves.clone(),
         };
     }
 
@@ -1477,12 +1535,7 @@ impl ClientSim {
         };
         set("eType", ET_PLAYER);
         set("clientNum", slot as i32);
-        let dead = if self.wire_pm_type() > PM_INTERMISSION {
-            EF_DEAD
-        } else {
-            0
-        };
-        set("eFlags", self.eflags() | dead);
+        set("eFlags", self.entity_eflags());
         // Packed at link time: docs/research/cod11-player-clip.md.
         set("solid", self.linked_solid);
         set("legsAnim", self.anim.legs());
@@ -1557,17 +1610,7 @@ impl ClientSim {
         );
         // Mode-dependent.
         set("pm_type", self.wire_pm_type());
-        // The stance bits ride only on a live player's word; a spectator and
-        // the intermission camera carry the base and the teleport bit alone.
-        let stance_eflags = match self.ps.stance {
-            pmove::Stance::Stand => 0,
-            pmove::Stance::Crouch => EF_CROUCH,
-            pmove::Stance::Prone => EF_PRONE,
-        };
-        set(
-            "eFlags",
-            self.eflags() | if player { stance_eflags } else { 0 },
-        );
+        set("eFlags", self.ps_eflags());
         set(
             "speed",
             if player {
@@ -3068,6 +3111,21 @@ mod tests {
         assert_eq!(sim.to_wire(p, 0, 0).field_i32(p, "eFlags") & 0xC000, 0x8000);
         sim.mounted_on = Some((298, TurretStance::Prone));
         assert_eq!(sim.to_wire(p, 0, 0).field_i32(p, "eFlags") & 0xC000, 0x4000);
+    }
+
+    /// `BG_PlayerStateToEntityState` copies `ps.eFlags` whole, stance bits
+    /// included, and adds 0x200 for the sight flag on the entity alone
+    /// (combat doc 16.4): the drawing client's torso yaw reads both.
+    #[test]
+    fn the_entity_carries_the_stance_bits_and_the_sight_flag() {
+        let p = &PROTOCOL_V1;
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.become_player([0.0; 3], 0.0, [0; 3]);
+        sim.ps.stance = pmove::Stance::Crouch;
+        sim.ps.ads_active = true;
+        let e = sim.to_entity(p, 3, 0).field_i32(p, "eFlags");
+        assert_eq!(e & (EF_CROUCH | vcod_common::playerpose::EF_ADS), 0x220);
+        assert_eq!(sim.to_wire(p, 0, 0).field_i32(p, "eFlags") & 0x200, 0);
     }
 
     /// `ClientSpawn`'s memset: the capture's first trace, a fresh spawn,

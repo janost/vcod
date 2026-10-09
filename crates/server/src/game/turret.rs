@@ -424,6 +424,7 @@ pub fn release_sim(
     }
     let temps = sim.teleport_player(slot, origin, sim.view_angles());
     sim.mounted_on = None;
+    sim.gunner_leaves = None;
     sim.ps.mounted = None;
     sim.viewlocked = 0;
     sim.viewlocked_ent = ENTITYNUM_NONE;

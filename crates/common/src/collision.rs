@@ -2030,6 +2030,10 @@ pub fn submodel_test_world(entities: &str, submodels: &[([f32; 3], [f32; 3])]) -
             patches: vec![],
             collision_verts: vec![],
             collision_indices: vec![],
+            light_indices: vec![],
+            leaf_lights: vec![],
+            lights: vec![],
+            light_vis: vec![],
             pvs: None,
         },
         &[],
@@ -2177,6 +2181,10 @@ fn synthetic_bsp(
         patches: vec![],
         collision_verts: vec![],
         collision_indices: vec![],
+        light_indices: vec![],
+        leaf_lights: vec![],
+        lights: vec![],
+        light_vis: vec![],
         pvs: None,
     }
 }
@@ -2385,6 +2393,10 @@ mod tests {
             patches: vec![],
             collision_verts: vec![],
             collision_indices: vec![],
+            light_indices: vec![],
+            leaf_lights: vec![],
+            lights: vec![],
+            light_vis: vec![],
             pvs: None,
         };
         push_tri_patches(
@@ -2532,6 +2544,10 @@ mod tests {
             patches: vec![],
             collision_verts: vec![],
             collision_indices: vec![],
+            light_indices: vec![],
+            leaf_lights: vec![],
+            lights: vec![],
+            light_vis: vec![],
             pvs: None,
         };
         push_tri_patches(&mut bsp, &tris, 0);
@@ -2963,6 +2979,10 @@ mod tests {
             patches: vec![],
             collision_verts: vec![],
             collision_indices: vec![],
+            light_indices: vec![],
+            leaf_lights: vec![],
+            lights: vec![],
+            light_vis: vec![],
             pvs: None,
         }
     }
@@ -3126,6 +3146,10 @@ mod tests {
             patches: vec![],
             collision_verts: vec![],
             collision_indices: vec![],
+            light_indices: vec![],
+            leaf_lights: vec![],
+            lights: vec![],
+            light_vis: vec![],
             pvs: None,
         }
     }
@@ -3206,6 +3230,10 @@ mod tests {
             patches: vec![],
             collision_verts: vec![],
             collision_indices: vec![],
+            light_indices: vec![],
+            leaf_lights: vec![],
+            lights: vec![],
+            light_vis: vec![],
             pvs: None,
         }
     }
@@ -3421,6 +3449,10 @@ mod tests {
             patches: vec![],
             collision_verts: vec![],
             collision_indices: vec![],
+            light_indices: vec![],
+            leaf_lights: vec![],
+            lights: vec![],
+            light_vis: vec![],
             pvs: None,
         };
         for (mat, tri) in tris {

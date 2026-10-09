@@ -139,6 +139,32 @@ impl AnimScript {
             .any(|a| a.turret && a.name == name)
     }
 
+    /// What `BG_ParseCommands` (`game.mp.i386.so` 0x28650) folds into the
+    /// anim record of every legs or both line under a state's movetype
+    /// block: the block's bit in `movetypes` (`+0x54`, 0x287f1) and, under
+    /// a `strafing left` or `right` clause, `strafe` (`+0x50` 0x10 or 0x20,
+    /// 0x286e4 and 0x2885a). Event blocks and torso lines add nothing.
+    pub fn anim_records(&self) -> HashMap<String, AnimRecord> {
+        let mut out: HashMap<String, AnimRecord> = HashMap::new();
+        for blocks in self.states.values() {
+            for block in blocks {
+                let bit = movetype_bit(&block.name);
+                for c in &block.clauses {
+                    let strafe = c.conditions.iter().any(|k| {
+                        k.kind == CondKind::Strafing
+                            && k.values.iter().any(|v| v == "left" || v == "right")
+                    });
+                    for a in &c.legs {
+                        let r = out.entry(a.name.clone()).or_default();
+                        r.movetypes |= bit;
+                        r.strafe |= strafe;
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Every anim name an `EVENTS` block names. These are the ones whose own
     /// length matters: an event clause without a `duration` holds its channel
     /// for the clip's length ([`AnimState::event`]).
@@ -375,6 +401,53 @@ impl Movetype {
             Movetype::ClimbDown => "climbdown",
         }
     }
+}
+
+/// A movetype's bit in the record's condition word: its index in the name
+/// block at `game.mp.i386.so` 0x6e260, which is stored in reverse with
+/// `** UNUSED **` at 0 (player-model-anim-system.md, "How retail picks the
+/// movetype"). 0 for a name the block does not carry.
+pub fn movetype_bit(name: &str) -> u32 {
+    const NAMES: [&str; 17] = [
+        "idle",
+        "idlecr",
+        "idleprone",
+        "walk",
+        "walkbk",
+        "walkcr",
+        "walkcrbk",
+        "walkprone",
+        "walkpronebk",
+        "run",
+        "runbk",
+        "runcr",
+        "runcrbk",
+        "turnright",
+        "turnleft",
+        "climbup",
+        "climbdown",
+    ];
+    NAMES
+        .iter()
+        .position(|n| n.eq_ignore_ascii_case(name))
+        .map_or(0, |i| 1 << (i + 1))
+}
+
+impl Movetype {
+    /// [`movetype_bit`] of this movetype.
+    pub fn bit(self) -> u32 {
+        movetype_bit(self.name())
+    }
+}
+
+/// The two words of an anim's record the body's angle updater reads
+/// ([`AnimScript::anim_records`]).
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+pub struct AnimRecord {
+    /// Bit `1 << n` for each movetype `n` whose block plays it.
+    pub movetypes: u32,
+    /// Played under a `strafing left` or `right` clause.
+    pub strafe: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -834,6 +907,22 @@ land
         assert!(!s.is_turret_anim("pb_stand_alert"));
         let idle = &s.state("combat").unwrap()[0];
         assert_eq!(idle.clauses[0].legs[0].duration_ms, Some(50));
+    }
+
+    /// The anim record's movetype bits and strafe flag: idle is bit 1, run
+    /// bit 10, a `strafing` clause marks its anim, and an event line marks
+    /// nothing.
+    #[test]
+    fn anim_records_carry_the_movetype_bits_and_the_strafe_flag() {
+        let r = AnimScript::parse(SAMPLE).unwrap().anim_records();
+        assert_eq!(r["pb_stand_alert"].movetypes, 1 << 1);
+        assert!(!r["pb_stand_alert"].strafe);
+        assert_eq!(r["pb_combatrun_left_loop"].movetypes, 1 << 10);
+        assert!(r["pb_combatrun_left_loop"].strafe);
+        assert!(!r["pb_combatrun_forward_loop"].strafe);
+        assert!(!r.contains_key("pb_runjump_land"));
+        assert_eq!(movetype_bit("climbdown"), 1 << 17);
+        assert_eq!(Movetype::IdleCr.bit(), 1 << 2);
     }
 
     /// A clause may list more than one anim line per channel (death and melee

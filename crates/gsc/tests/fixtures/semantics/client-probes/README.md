@@ -1167,8 +1167,13 @@ kill          cb 1, cb kill_inner 0 50, cb kill_inner 2 50, cbdone 1,
 
 The grenade half logs `PROBE gcb first <time> <entity> <iDamage> <origin>`
 for the first victim of each grenade walk, which parks the other two, and
-`PROBE gcb later ...` for any victim after it. Retail logged three `first`
-lines and no `later` one.
+`PROBE gcb later ...` for any victim after it. While a grenade is live the
+thrower waits out of reach and the three float side by side 60 units over
+it, linked in slot order on a frame whose time is a multiple of 100 and in
+reverse on the others, so the first victim names the frame whose links the
+walk met. Retail, 2026-10-09: `first 62350 0`, `first 72400 2`,
+`first 81050 0`, no `later`: this frame's last link each time (combat doc
+14.7).
 
 ## probe_linkto2
 

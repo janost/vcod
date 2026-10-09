@@ -2003,7 +2003,7 @@ impl Renderer {
         if batches.is_empty() {
             bail!("map has no drawable surfaces");
         }
-        let props = props::build(fs, &bsp.entities);
+        let props = props::build(fs, bsp);
         let prop_first_index = indices.len() as u32;
         let prop_first_vertex = bsp.verts.len() as u32;
         indices.extend(props.indices.iter().map(|i| i + prop_first_vertex));

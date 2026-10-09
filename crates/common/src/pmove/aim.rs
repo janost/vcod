@@ -89,7 +89,7 @@ pub fn angle_subtract(a: f32, b: f32) -> f32 {
 
 /// `GetLeanFraction` (`0x7ba64`): `(2 - |f|) * f`, the ease every kick
 /// curve and the lean roll go through.
-fn lean_fraction(f: f32) -> f32 {
+pub fn lean_fraction(f: f32) -> f32 {
     (2.0 - f.abs()) * f
 }
 
