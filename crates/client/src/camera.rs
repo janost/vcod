@@ -45,9 +45,14 @@ pub fn perspective(fov_x: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
 /// does. `fov_x` is horizontal.
 pub fn view_proj_from(pos: Vec3, yaw: f32, pitch: f32, roll: f32, fov_x: f32, aspect: f32) -> Mat4 {
     let (forward, _, _) = basis(yaw, pitch);
-    let up = Quat::from_axis_angle(forward, roll) * Vec3::Z;
     perspective(fov_x, aspect, Z_NEAR, Z_FAR)
-        * glam::camera::rh::view::look_to_mat4(pos, forward, up)
+        * glam::camera::rh::view::look_to_mat4(pos, forward, up_hint(yaw, pitch, roll))
+}
+
+/// World up turned by `roll` about the view forward: the up the view
+/// matrix is built with.
+pub fn up_hint(yaw: f32, pitch: f32, roll: f32) -> Vec3 {
+    Quat::from_axis_angle(basis(yaw, pitch).0, roll) * Vec3::Z
 }
 
 /// Wrap an angle in degrees to `[-180, 180)`.

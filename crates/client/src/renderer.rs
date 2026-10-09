@@ -5,6 +5,7 @@ use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 use crate::camera::{Z_FAR, Z_NEAR};
+use crate::entity_light::{self, GpuLightSet};
 use crate::fx::sim::{FxLight, FxQuad, MAX_LIGHTS};
 use crate::gamma::GammaPass;
 use crate::hud::HudQuad;
@@ -20,6 +21,7 @@ use vcod_common::shader::{
     AlphaFunc, AlphaGen, BlendFactor, DrawClass, ImageRef, RgbGen, SORT_BLEND0, SORT_DECAL, Shader,
     ShaderLib, SunFile, bundle_affine, bundle_turb, has_animated_tcmods, wave_value,
 };
+use vcod_common::static_light::{SceneLight, StaticLighting};
 use vcod_common::vis::{Frustum, Visible, WorldVis};
 use vcod_common::xmodel::{self, VmVert};
 
@@ -45,8 +47,8 @@ pub const VM_NEAR: f32 = 0.1;
 const VM_FAR: f32 = 500.0;
 /// Depth-range fraction the viewmodel is squeezed into, so the world cannot poke through it.
 const VM_DEPTH_RANGE: f32 = 0.3;
-/// `proj` (64) + `model` (64) + `light_dir` (16), std140-compatible as is.
-const VM_UNIFORM_SIZE: u64 = 144;
+/// `proj` (64) + `model` (64) + the light set (656), std140-compatible as is.
+const VM_UNIFORM_SIZE: u64 = 128 + std::mem::size_of::<GpuLightSet>() as u64;
 /// Matches `array<mat4x4<f32>, 64>` in viewmodel.wgsl.
 const VM_BONE_COUNT: usize = 64;
 const VM_BONE_BUF_SIZE: u64 = (VM_BONE_COUNT * 64) as u64;
@@ -286,6 +288,8 @@ pub struct DynamicModelInstance {
     pub model: ModelHandle,
     pub transform: glam::Mat4,
     pub bones: Option<Vec<glam::Mat4>>,
+    /// Where the light grid is sampled: the refEntity's lighting origin.
+    pub light_origin: glam::Vec3,
 }
 
 /// Per-instance vertex data. `bone_base` 0 is the shared identity block.
@@ -294,7 +298,9 @@ pub struct DynamicModelInstance {
 pub struct InstanceRaw {
     pub transform: [f32; 16],
     pub bone_base: u32,
-    pub _pad: [u32; 3],
+    /// Index into the frame's light sets.
+    pub light_set: u32,
+    pub _pad: [u32; 2],
 }
 
 // The instance vertex layout below hardcodes this stride.
@@ -332,7 +338,8 @@ pub fn pack_instances(
         raw.push(InstanceRaw {
             transform,
             bone_base,
-            _pad: [0; 3],
+            light_set: 0,
+            _pad: [0; 2],
         });
     }
     (raw, mats)
@@ -342,6 +349,9 @@ pub fn pack_instances(
 /// that model's GPU buffer as it was.
 pub struct VmDraw {
     pub transform: glam::Mat4,
+    /// World-space lighting origin: the eye, `ps.origin` plus
+    /// `viewHeightCurrent` (cgame 0x30036cf0).
+    pub light_origin: glam::Vec3,
     /// Horizontal degrees, the world view's own.
     pub fov_x: f32,
     pub bone_sets: Vec<Vec<glam::Mat4>>,
@@ -354,6 +364,9 @@ pub struct Frame {
     /// Unit view forward. Fog depth is measured along it (eye-space Z),
     /// matching retail without GL_NV_fog_distance.
     pub fwd: glam::Vec3,
+    /// The view matrix's up (`camera::up_hint`); with `fwd` it takes world
+    /// lights into the viewmodel's view space.
+    pub up: glam::Vec3,
     /// Seconds since start; drives tcMod and wave animation in the stage shaders.
     pub time: f32,
     pub cull: CullMode,
@@ -992,6 +1005,14 @@ struct DynamicPass {
     instances: Vec<(usize, InstanceRaw)>,
     /// Written to `bone_buf` in [`Renderer::render`].
     bone_mats: Vec<[f32; 16]>,
+    /// Per instance, where its lights are picked.
+    light_origins: Vec<glam::Vec3>,
+    /// One `GpuLightSet` per distinct lighting origin this frame.
+    light_buf: wgpu::Buffer,
+    /// The map's light grid; `None` with no map.
+    lighting: Option<StaticLighting>,
+    /// This frame's fx lights, for the entity pick.
+    scene_lights: Vec<SceneLight>,
 }
 
 /// Everything built from one map: buffers, material bind groups, batches,
@@ -2028,7 +2049,9 @@ impl Renderer {
         if batches.is_empty() {
             bail!("map has no drawable surfaces");
         }
-        let props = props::build(fs, bsp);
+        let mut lighting = StaticLighting::new(bsp);
+        let props = props::build(fs, bsp, &mut lighting);
+        self.dynamic.lighting = Some(lighting);
         let prop_first_index = indices.len() as u32;
         let prop_first_vertex = bsp.verts.len() as u32;
         indices.extend(props.indices.iter().map(|i| i + prop_first_vertex));
@@ -2588,6 +2611,8 @@ impl Renderer {
         self.dynamic.models.clear();
         self.dynamic.instances.clear();
         self.dynamic.bone_mats.clear();
+        self.dynamic.light_origins.clear();
+        self.dynamic.lighting = None;
         self.vis_counts = VisCounts::default();
     }
 
@@ -2648,6 +2673,7 @@ impl Renderer {
 
     /// The sim already truncates to `MAX_LIGHTS`; an empty slice zeroes every slot.
     pub fn set_fx_lights(&mut self, lights: &[FxLight]) {
+        self.dynamic.scene_lights = entity_light::scene_lights(lights);
         let uniform = FxLightsUniform::from_lights(lights);
         self.queue
             .write_buffer(&self.fx_lights_buf, 0, bytemuck::bytes_of(&uniform));
@@ -2800,6 +2826,7 @@ impl Renderer {
 
         let mut model_idxs = Vec::with_capacity(instances.len());
         let mut items = Vec::with_capacity(instances.len());
+        let mut origins = Vec::with_capacity(instances.len());
         for inst in instances {
             if model_idxs.len() == MAX_DYNAMIC_INSTANCES {
                 OVERFLOW_WARNED.call_once(|| {
@@ -2814,11 +2841,33 @@ impl Renderer {
                 continue;
             }
             model_idxs.push(idx);
+            origins.push(inst.light_origin);
             items.push((idx, inst.transform.to_cols_array(), inst.bones.as_deref()));
         }
         let (raw, bone_mats) = pack_instances(&items);
         self.dynamic.instances = model_idxs.into_iter().zip(raw).collect();
         self.dynamic.bone_mats = bone_mats;
+        self.dynamic.light_origins = origins;
+    }
+
+    /// Picks each instance's lights (one pick per distinct origin, so a
+    /// player's parts share one) and points its `light_set` at them.
+    fn pick_entity_lights(&mut self) -> Vec<GpuLightSet> {
+        let d = &mut self.dynamic;
+        let Some(lighting) = d.lighting.as_mut() else {
+            return vec![GpuLightSet::default()];
+        };
+        let mut sets = Vec::new();
+        let mut seen: HashMap<[u32; 3], u32> = HashMap::new();
+        for ((_, raw), origin) in d.instances.iter_mut().zip(&d.light_origins) {
+            let key = origin.to_array().map(f32::to_bits);
+            raw.light_set = *seen.entry(key).or_insert_with(|| {
+                let l = lighting.entity_lights(*origin, &d.scene_lights);
+                sets.push(entity_light::pack(&l, None));
+                sets.len() as u32 - 1
+            });
+        }
+        sets
     }
 
     pub fn resize(&mut self, w: u32, h: u32) {
@@ -3169,6 +3218,9 @@ impl Renderer {
         };
         // Instance i draws from slot i of instance_buf.
         if !self.dynamic.instances.is_empty() {
+            let sets = self.pick_entity_lights();
+            self.queue
+                .write_buffer(&self.dynamic.light_buf, 0, bytemuck::cast_slice(&sets));
             let raw: Vec<InstanceRaw> = self.dynamic.instances.iter().map(|(_, r)| *r).collect();
             self.queue
                 .write_buffer(&self.dynamic.instance_buf, 0, bytemuck::cast_slice(&raw));
@@ -3180,11 +3232,24 @@ impl Renderer {
         }
         let draw_vm = match &vm {
             Some(draw) if !self.vm_pass.models.is_empty() => {
+                let to_view = glam::camera::rh::view::look_to_mat4(frame.eye, frame.fwd, frame.up);
+                let lights = match self.dynamic.lighting.as_mut() {
+                    Some(l) => {
+                        let picked = l.entity_lights(draw.light_origin, &self.dynamic.scene_lights);
+                        entity_light::pack(&picked, Some(to_view))
+                    }
+                    None => GpuLightSet::default(),
+                };
                 let uniform = vm_uniform(draw.transform, draw.fov_x, self.aspect());
                 self.queue.write_buffer(
                     &self.vm_pass.uniform_buf,
                     0,
                     bytemuck::cast_slice(&uniform),
+                );
+                self.queue.write_buffer(
+                    &self.vm_pass.uniform_buf,
+                    128,
+                    bytemuck::bytes_of(&lights),
                 );
                 for (i, model) in self.vm_pass.models.iter().enumerate() {
                     let Some(bones) = draw.bone_sets.get(i) else {
@@ -4136,8 +4201,7 @@ fn create_vm_pass(device: &wgpu::Device, format: wgpu::TextureFormat) -> VmPass 
         label: Some("viewmodel uniform layout"),
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
-            // light_dir is read in the fragment stage
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            visibility: wgpu::ShaderStages::VERTEX,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
@@ -4301,18 +4365,20 @@ fn create_dynamic_pass(
     });
 
     // Worst case: every instance skinned at the cap, plus the identity block.
+    let storage = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::VERTEX,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    };
+    // Binding 1 holds the frame's light sets.
     let bone_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("dynamic bone layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }],
+        entries: &[storage(0), storage(1)],
     });
     let bone_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("dynamic bone matrices"),
@@ -4320,13 +4386,25 @@ fn create_dynamic_pass(
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
+    let light_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("dynamic light sets"),
+        size: MAX_DYNAMIC_INSTANCES as u64 * std::mem::size_of::<GpuLightSet>() as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
     let bone_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("dynamic bone bind group"),
         layout: &bone_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: bone_buf.as_entire_binding(),
-        }],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: bone_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: light_buf.as_entire_binding(),
+            },
+        ],
     });
 
     let shader = device.create_shader_module(wgpu::include_wgsl!("dynamic_model.wgsl"));
@@ -4355,7 +4433,7 @@ fn create_dynamic_pass(
                     ],
                 }),
                 // `InstanceRaw`: the transform's four columns, then
-                // bone_base; the padding needs no attribute.
+                // bone_base and light_set; the padding needs no attribute.
                 Some(wgpu::VertexBufferLayout {
                     array_stride: DYNAMIC_INSTANCE_STRIDE,
                     step_mode: wgpu::VertexStepMode::Instance,
@@ -4365,6 +4443,7 @@ fn create_dynamic_pass(
                         7 => Float32x4,
                         8 => Float32x4,
                         9 => Uint32,
+                        10 => Uint32,
                     ],
                 }),
             ],
@@ -4410,18 +4489,19 @@ fn create_dynamic_pass(
         models: Vec::new(),
         instances: Vec::new(),
         bone_mats: Vec::new(),
+        light_origins: Vec::new(),
+        light_buf,
+        lighting: None,
+        scene_lights: Vec::new(),
     }
 }
 
-/// The models are unlit; the fixed key light stands in for the engine's light grid.
-fn vm_uniform(model: glam::Mat4, fov_x: f32, aspect: f32) -> [f32; 36] {
+/// The projection and motion transform; the light set follows at 128.
+fn vm_uniform(model: glam::Mat4, fov_x: f32, aspect: f32) -> [f32; 32] {
     let proj = crate::camera::perspective(fov_x, aspect, VM_NEAR, VM_FAR);
-    // upper-left key light, view space
-    let light = glam::Vec4::new(-0.4, 0.8, 0.4, 0.0).normalize();
-    let mut out = [0.0f32; 36];
+    let mut out = [0.0f32; 32];
     out[..16].copy_from_slice(&proj.to_cols_array());
     out[16..32].copy_from_slice(&model.to_cols_array());
-    out[32..].copy_from_slice(&light.to_array());
     out
 }
 

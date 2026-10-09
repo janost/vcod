@@ -10,7 +10,7 @@ use std::rc::Rc;
 use vcod_common::animtree::PlayerAnims;
 use vcod_common::collision::MASK_PLAYERSOLID;
 use vcod_common::movetrace::MoveWorld;
-use vcod_common::net::flags::EF_DEAD;
+use vcod_common::net::flags::{EF_CROUCH, EF_DEAD, EF_PRONE};
 use vcod_common::net::msg::{ClientState, EntityState};
 use vcod_common::net::protocol::{CS_MODELS_V1, CS_TAGS_V1, Protocol};
 use vcod_common::net::snapshot::Snapshot;
@@ -752,6 +752,29 @@ struct LerpFrom<'a> {
     movers: SnapshotMovers,
 }
 
+/// Where an entity model samples the light grid (`RF_LIGHTING_ORIGIN`). A
+/// player or corpse is lit at its lerped origin raised by `fTorsoHeight`
+/// and 32 standing, 20 crouched, 12 prone (cgame 0x30028210, 0x30028400);
+/// a turret 32 above its origin (0x3001b2e0); anything else at the drawn
+/// origin (cod11-light-grid-and-leaf-lights.md, section 13).
+fn light_origin(etype: i32, ent: &EntityState, p: &Protocol, lerped: Vec3, drawn: Vec3) -> Vec3 {
+    match etype {
+        ET_PLAYER | ET_CORPSE => {
+            let eflags = ent.field_i32(p, "eFlags");
+            let stance = if eflags & EF_PRONE != 0 {
+                12.0
+            } else if eflags & EF_CROUCH != 0 {
+                20.0
+            } else {
+                32.0
+            };
+            lerped + Vec3::Z * (ent.field_f32(p, "fTorsoHeight") + stance)
+        }
+        ET_TURRET => lerped + Vec3::Z * 32.0,
+        _ => drawn,
+    }
+}
+
 /// An entity's origin and `[pitch, yaw, roll]` at `render_time`, after
 /// `CG_CalcEntityLerpPositions` (cgame 0x3001d210). A `pos` of
 /// `TR_INTERPOLATE`, or a player's `TR_LINEAR_STOP`, lerps both from the
@@ -1072,6 +1095,7 @@ pub fn build_instances(
         }
         entity_pos.insert(num, pos);
         let transform = Mat4::from_rotation_translation(rot, pos);
+        let light_origin = light_origin(etype, ent, p, snap_pos, pos);
 
         match visual {
             EntityVisual::Player {
@@ -1311,6 +1335,7 @@ pub fn build_instances(
                         model: handle,
                         transform,
                         bones: Some(st.pose.skin_matrices(&assembly.skeleton, m)),
+                        light_origin,
                     });
                 }
             }
@@ -1322,6 +1347,7 @@ pub fn build_instances(
                     model: handle,
                     transform,
                     bones: None,
+                    light_origin,
                 });
             }
             EntityVisual::Missile(index) => {
@@ -1340,6 +1366,7 @@ pub fn build_instances(
                     model: handle,
                     transform,
                     bones: None,
+                    light_origin,
                 });
             }
             EntityVisual::Item(index) => {
@@ -1351,6 +1378,7 @@ pub fn build_instances(
                             model: handle,
                             transform,
                             bones: None,
+                            light_origin,
                         });
                     }
                     continue;
@@ -1382,6 +1410,7 @@ pub fn build_instances(
                     model: handle,
                     transform,
                     bones: None,
+                    light_origin,
                 });
             }
             EntityVisual::Submodel(n) => {
@@ -1489,6 +1518,7 @@ pub fn build_instances(
                     model: rig.handle,
                     transform,
                     bones: Some(pose.skin_matrices(&rig.skeleton, 0)),
+                    light_origin,
                 });
             }
             EntityVisual::None => unreachable!("skipped above"),

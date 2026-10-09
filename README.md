@@ -219,8 +219,9 @@ missing.
 
 - Props are lit per vertex from the map's lights and its light-visibility
   grid at load, as retail does. Dynamic lights add on top with retail's
-  falloff instead of competing for a prop's eight light slots. Players and
-  other entity models still use a fixed key light, not the light grid
+  falloff instead of competing for a prop's eight light slots. Players,
+  other entity models and the viewmodel pick their eight lights from the
+  grid every frame, fx lights among them
   ([cod11-light-grid-and-leaf-lights.md](docs/research/cod11-light-grid-and-leaf-lights.md)).
 - Only the ocean's `deformVertexes wave` moves; the other forms parse and do
   nothing. NV/ATI hardware-path stages are dropped, as retail did on cards
