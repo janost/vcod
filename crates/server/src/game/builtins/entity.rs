@@ -1375,8 +1375,7 @@ mod tests {
                     [-100.0, -100.0, 0.0],
                     [100.0, 100.0, 64.0],
                 ),
-                0,
-                0,
+                crate::game::trigger::MULTIPLE_DEFAULT_WAIT_MS,
             );
             host.link_trigger(cx, zone);
 

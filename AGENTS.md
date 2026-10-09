@@ -13,7 +13,7 @@ answer goes into a research doc with the bytes.
 | Crate | Package | Owns |
 |---|---|---|
 | `crates/common` | `vcod-common` | formats (bsp, xmodel, xanim, shader, pk3, menus), collision, vis, pmove, weapons, animscript, `net/` (the 1.1 protocol both ways, plus the master query) |
-| `crates/client` | `vcod` | window, renderer, HUD, fx, audio, `console/` (drop-down console, cvars, binds), `frontend/` (stock main menu, server browser), `play/` (join, input, cmd clock, prediction), `probe.rs` |
+| `crates/client` | `vcod` | window, renderer, HUD, fx, audio, `console/` (drop-down console, cvars, binds), `frontend/` (stock main menu, server browser, options screens), `play/` (join, input, cmd clock, prediction), `probe.rs` |
 | `crates/server` | `vcod-server` | `server.rs` (tick), `spectate.rs` (usercmds in, playerstate out), `game/` (script host, combat, entities, links), `bots.rs` + `nav.rs`, `rcon.rs`, `console.rs`, `cvars/`, `bans.rs`, `master.rs` (heartbeat), `area.rs` |
 | `crates/gsc` | `vcod-gsc` | the `.gsc` compiler and VM (`vm/interp.rs`, `vm/sched.rs`) that runs Activision's stock gametype and map scripts |
 
@@ -55,7 +55,7 @@ instead of leaving the fact in a commit message.
 | `re` / `bel` gametypes | `cod11-gametypes-re-bel.md` |
 | Spectator follow, killcam | `cod11-spectator-follow.md` |
 | Client console, binds, `vcod_mp.cfg` | `cod11-console.md` |
-| Main menu, server browser | `cod11-front-end.md` |
+| Main menu, server browser, options screens | `cod11-front-end.md` |
 | Chat, quick chat | `cod11-chat.md`, `cod11-quick-chat.md` |
 | Bots | `bot-navigation.md` (its Build times set the census floors), `bot-objectives.md` |
 | Player models, anims, formats | `player-model-anim-system.md`, `xmodel-v14-format.md`, `xanim-v14-format.md` |

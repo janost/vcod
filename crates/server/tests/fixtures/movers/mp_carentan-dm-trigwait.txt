@@ -1,0 +1,246 @@
+# Retail CoD 1.1d dedicated server: Touch_Multi's wait arm.
+# map mp_carentan with its entity lump patched (same length, every offset
+# kept): bombzone_A "wait" "5", bombzone_B "wait" "0", auto1 (*7) "wait" "-1",
+# auto2 (*10) turned into a trigger_once. The patched bsp went into a
+# zzz_trigwait.pk3 in the server's homepath; linkto_ab.rs's `trigwait_bsp`
+# applies the same four replacements. Gametype dm, served as probe_trigwait,
+# one client joined allies. Two shells, the gsc probe first, then the client
+# about 10 s later:
+#   COD_LNXDED_HOME=<absolute, no '+'> PORT=29671 PROBE_SECS=55 \
+#       tools/run_probe.sh client-probes/probe_trigwait mp_carentan
+#   cargo run -p vcod -- --net-probe 127.0.0.1:29671 --probe-team allies --probe-secs 40
+# probe_trigwait.gsc moves one trigger at a time onto the parked player by an
+# origin write for 20 frames: w5 (bombzone_A), w0 (bombzone_B), wlink (auto1
+# after enableLinkTo, no parent), once (auto2). It ends on enableLinkTo on a
+# script_origin, whose fatal is the last measurement.
+# docs/research/cod11-movers.md, section 17, is what it measured.
+#   PROBE f <targetname> <num> <classname>
+#   PROBE d <phase> <time> <isdefined> <trigger_multiple + trigger_once count>
+#   PROBE n <phase> <time> <toucher>                  every "trigger" notify
+# The client sent about three cmds a server frame, so a frame the player
+# touched a trigger on carries up to three n lines.
+PROBE f bombzone_A 176 trigger_multiple
+PROBE f bombzone_B 171 trigger_multiple
+PROBE f auto1 179 trigger_multiple
+PROBE f auto2 246 trigger_once
+PROBE at w5 13650
+PROBE d w5 13650 1 4
+PROBE n w5 13700 0
+PROBE d w5 13700 1 4
+PROBE n w5 13700 0
+PROBE n w5 13700 0
+PROBE n w5 13750 0
+PROBE d w5 13750 1 4
+PROBE n w5 13750 0
+PROBE n w5 13750 0
+PROBE n w5 13800 0
+PROBE d w5 13800 1 4
+PROBE n w5 13800 0
+PROBE n w5 13800 0
+PROBE n w5 13850 0
+PROBE d w5 13850 1 4
+PROBE n w5 13850 0
+PROBE n w5 13850 0
+PROBE n w5 13900 0
+PROBE d w5 13900 1 4
+PROBE n w5 13900 0
+PROBE n w5 13900 0
+PROBE n w5 13950 0
+PROBE d w5 13950 1 4
+PROBE n w5 13950 0
+PROBE n w5 13950 0
+PROBE n w5 14000 0
+PROBE d w5 14000 1 4
+PROBE n w5 14000 0
+PROBE n w5 14000 0
+PROBE n w5 14050 0
+PROBE d w5 14050 1 4
+PROBE n w5 14050 0
+PROBE n w5 14050 0
+PROBE n w5 14100 0
+PROBE d w5 14100 1 4
+PROBE n w5 14100 0
+PROBE n w5 14100 0
+PROBE n w5 14150 0
+PROBE d w5 14150 1 4
+PROBE n w5 14150 0
+PROBE n w5 14150 0
+PROBE n w5 14200 0
+PROBE d w5 14200 1 4
+PROBE n w5 14200 0
+PROBE n w5 14200 0
+PROBE n w5 14200 0
+PROBE n w5 14250 0
+PROBE d w5 14250 1 4
+PROBE n w5 14250 0
+PROBE n w5 14300 0
+PROBE d w5 14300 1 4
+PROBE n w5 14300 0
+PROBE n w5 14300 0
+PROBE n w5 14300 0
+PROBE n w5 14350 0
+PROBE d w5 14350 1 4
+PROBE n w5 14350 0
+PROBE n w5 14350 0
+PROBE n w5 14400 0
+PROBE d w5 14400 1 4
+PROBE n w5 14400 0
+PROBE n w5 14400 0
+PROBE n w5 14450 0
+PROBE d w5 14450 1 4
+PROBE n w5 14450 0
+PROBE n w5 14450 0
+PROBE n w5 14500 0
+PROBE d w5 14500 1 4
+PROBE n w5 14500 0
+PROBE n w5 14500 0
+PROBE n w5 14550 0
+PROBE d w5 14550 1 4
+PROBE n w5 14550 0
+PROBE n w5 14550 0
+PROBE n w5 14600 0
+PROBE d w5 14600 1 4
+PROBE n w5 14600 0
+PROBE n w5 14600 0
+PROBE n w5 14650 0
+PROBE n w5 14650 0
+PROBE n w5 14650 0
+PROBE at w0 15150
+PROBE d w0 15150 1 4
+PROBE n w0 15200 0
+PROBE d w0 15200 1 4
+PROBE d w0 15250 1 4
+PROBE d w0 15300 0 3
+PROBE d w0 15350 0 3
+PROBE d w0 15400 0 3
+PROBE d w0 15450 0 3
+PROBE d w0 15500 0 3
+PROBE d w0 15550 0 3
+PROBE d w0 15600 0 3
+PROBE d w0 15650 0 3
+PROBE d w0 15700 0 3
+PROBE d w0 15750 0 3
+PROBE d w0 15800 0 3
+PROBE d w0 15850 0 3
+PROBE d w0 15900 0 3
+PROBE d w0 15950 0 3
+PROBE d w0 16000 0 3
+PROBE d w0 16050 0 3
+PROBE d w0 16100 0 3
+PROBE at wlink 16650
+PROBE d wlink 16650 1 3
+PROBE n wlink 16700 0
+PROBE d wlink 16700 1 3
+PROBE n wlink 16700 0
+PROBE n wlink 16700 0
+PROBE n wlink 16750 0
+PROBE d wlink 16750 1 3
+PROBE n wlink 16750 0
+PROBE n wlink 16750 0
+PROBE n wlink 16800 0
+PROBE d wlink 16800 1 3
+PROBE n wlink 16800 0
+PROBE n wlink 16800 0
+PROBE n wlink 16850 0
+PROBE d wlink 16850 1 3
+PROBE n wlink 16850 0
+PROBE n wlink 16850 0
+PROBE n wlink 16900 0
+PROBE d wlink 16900 1 3
+PROBE n wlink 16900 0
+PROBE n wlink 16900 0
+PROBE n wlink 16950 0
+PROBE d wlink 16950 1 3
+PROBE n wlink 16950 0
+PROBE n wlink 16950 0
+PROBE n wlink 17000 0
+PROBE d wlink 17000 1 3
+PROBE n wlink 17000 0
+PROBE n wlink 17000 0
+PROBE n wlink 17050 0
+PROBE d wlink 17050 1 3
+PROBE n wlink 17050 0
+PROBE n wlink 17050 0
+PROBE n wlink 17100 0
+PROBE d wlink 17100 1 3
+PROBE n wlink 17100 0
+PROBE n wlink 17100 0
+PROBE n wlink 17150 0
+PROBE d wlink 17150 1 3
+PROBE n wlink 17150 0
+PROBE n wlink 17150 0
+PROBE n wlink 17200 0
+PROBE d wlink 17200 1 3
+PROBE n wlink 17200 0
+PROBE n wlink 17200 0
+PROBE n wlink 17200 0
+PROBE n wlink 17250 0
+PROBE d wlink 17250 1 3
+PROBE n wlink 17250 0
+PROBE n wlink 17300 0
+PROBE d wlink 17300 1 3
+PROBE n wlink 17300 0
+PROBE n wlink 17300 0
+PROBE n wlink 17300 0
+PROBE n wlink 17350 0
+PROBE d wlink 17350 1 3
+PROBE n wlink 17350 0
+PROBE n wlink 17400 0
+PROBE d wlink 17400 1 3
+PROBE n wlink 17400 0
+PROBE n wlink 17400 0
+PROBE n wlink 17450 0
+PROBE d wlink 17450 1 3
+PROBE n wlink 17450 0
+PROBE n wlink 17450 0
+PROBE n wlink 17500 0
+PROBE d wlink 17500 1 3
+PROBE n wlink 17500 0
+PROBE n wlink 17500 0
+PROBE n wlink 17550 0
+PROBE d wlink 17550 1 3
+PROBE n wlink 17550 0
+PROBE n wlink 17550 0
+PROBE n wlink 17600 0
+PROBE d wlink 17600 1 3
+PROBE n wlink 17600 0
+PROBE n wlink 17600 0
+PROBE n wlink 17650 0
+PROBE n wlink 17650 0
+PROBE n wlink 17650 0
+PROBE at once 18150
+PROBE d once 18150 1 3
+PROBE n once 18200 0
+PROBE d once 18200 1 3
+PROBE d once 18250 1 3
+PROBE d once 18300 0 2
+PROBE d once 18350 0 2
+PROBE d once 18400 0 2
+PROBE d once 18450 0 2
+PROBE d once 18500 0 2
+PROBE d once 18550 0 2
+PROBE d once 18600 0 2
+PROBE d once 18650 0 2
+PROBE d once 18700 0 2
+PROBE d once 18750 0 2
+PROBE d once 18800 0 2
+PROBE d once 18850 0 2
+PROBE d once 18900 0 2
+PROBE d once 18950 0 2
+PROBE d once 19000 0 2
+PROBE d once 19050 0 2
+PROBE d once 19100 0 2
+PROBE at end 19650
+PROBE_FATAL
+PROBE_ERR ******* script runtime error *******
+PROBE_ERR entity already has linkTo enabled: (file 'maps\mp\gametypes\probe_trigwait.gsc', line 102)
+PROBE_ERR  s enableLinkTo();
+PROBE_ERR  *
+PROBE_ERR called from:
+PROBE_ERR (file 'maps\mp\gametypes\probe_trigwait.gsc', line 98)
+PROBE_ERR  run(trig[3], "once", at);
+PROBE_ERR  *
+PROBE_ERR ************************************
+PROBE_ERR ERROR: script runtime error
+PROBE_ERR (see console for details)
+PROBE_ERR ********************

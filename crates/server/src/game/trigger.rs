@@ -48,13 +48,17 @@ impl TriggerShape {
 pub struct Trigger {
     pub kind: TriggerKind,
     pub shape: TriggerShape,
-    /// The refire window in milliseconds: the `wait` and `random` keys for
-    /// every kind but `Hurt`, where `register_hurt` puts the touch cadence
-    /// here instead. Both 0 means no gate.
+    /// The `wait` key in milliseconds on a `trigger_multiple` (default 500)
+    /// or `trigger_once` (always -1000), which only decides whether the first
+    /// touch spends the trigger (movers doc 17). On a `Hurt`, the touch
+    /// cadence `register_hurt` puts here. 0 on the other kinds.
     pub wait_ms: i32,
-    pub random_ms: i32,
-    /// Level-clock time this may fire again.
+    /// Level-clock time a `Hurt` may fire again.
     pub next_fire_ms: i32,
+    /// A `trigger_multiple` or `trigger_once` whose `wait` was not above 0
+    /// has fired: `Touch_Multi` cleared its touch function and its free is
+    /// scheduled.
+    pub spent: bool,
     /// What a touch takes off the toucher, and the damage flags it takes it
     /// with. Both 0 on every kind but `Hurt`.
     pub damage: i32,
@@ -103,22 +107,15 @@ pub const HINT_ACTIVATE: i32 = 2;
 pub const MOD_TRIGGER_HURT: &str = "MOD_TRIGGER_HURT";
 
 impl Triggers {
-    pub fn register(
-        &mut self,
-        id: EntId,
-        kind: TriggerKind,
-        shape: TriggerShape,
-        wait_ms: i32,
-        random_ms: i32,
-    ) {
+    pub fn register(&mut self, id: EntId, kind: TriggerKind, shape: TriggerShape, wait_ms: i32) {
         self.rows.insert(
             id,
             Trigger {
                 kind,
                 shape,
                 wait_ms,
-                random_ms,
                 next_fire_ms: 0,
+                spent: false,
                 damage: 0,
                 dflags: 0,
                 cursor_hint: if kind == TriggerKind::Use {
@@ -133,7 +130,7 @@ impl Triggers {
 
     /// A `trigger_hurt`, whose damage, flags and cadence come from
     /// `SP_trigger_hurt` (0x64ef8) and `hurt_touch` (0x64dc4) rather than from
-    /// the `wait`/`random` keys the other kinds take; the cadence rides
+    /// the `wait` key `Touch_Multi` reads; the cadence rides
     /// `wait_ms` because retail's timestamp gates its notify too
     /// (docs/research/cod11-gsc-object-model.md 8.1).
     ///
@@ -146,7 +143,7 @@ impl Triggers {
         } else {
             HURT_SLOW_INTERVAL_MS
         };
-        self.register(id, TriggerKind::Hurt, shape, wait_ms, 0);
+        self.register(id, TriggerKind::Hurt, shape, wait_ms);
         if let Some(t) = self.rows.get_mut(&id) {
             t.damage = damage;
             t.dflags = if spawnflags & HURT_NO_PROTECTION == 0 {
@@ -181,29 +178,65 @@ impl Triggers {
         self.rows.is_empty()
     }
 
-    /// Whether a touch fires, arming the next window from `wait_ms` and
-    /// `random_ms`. An ungated trigger (both 0) fires on every touch; a
-    /// gated one refuses until the window elapses; a `trigger_once` arms a
-    /// window that never elapses, so it fires exactly once.
-    pub fn fire(&mut self, id: EntId, now_ms: i32, rng: &mut impl FnMut(i32) -> i32) -> bool {
+    /// Whether a touch fires the `"trigger"` notify, and whether it was the
+    /// last one. `Touch_Multi` (0x65a18) notifies on every touch and only
+    /// then looks at `wait`: above 0 it arms a think nothing reads, not
+    /// above 0 it clears the touch function and frees the entity 100 ms on,
+    /// and a trigger whose think is `enableLinkTo`'s (`linked`) skips both
+    /// (movers doc 17). A `Hurt` keeps `hurt_touch`'s timestamp gate. A
+    /// lookat fires every time it is aimed at (`G_Trigger` gates nothing).
+    pub fn fire(&mut self, id: EntId, now_ms: i32, linked: bool) -> Fire {
         let Some(t) = self.rows.get_mut(&id) else {
-            return false;
+            return Fire::Refused;
         };
-        if now_ms < t.next_fire_ms {
-            return false;
+        match t.kind {
+            TriggerKind::Multiple | TriggerKind::Once => {
+                if t.spent {
+                    Fire::Refused
+                } else if linked || t.wait_ms > 0 {
+                    Fire::Fired
+                } else {
+                    t.spent = true;
+                    Fire::Spent
+                }
+            }
+            TriggerKind::Hurt => {
+                if now_ms < t.next_fire_ms {
+                    return Fire::Refused;
+                }
+                t.next_fire_ms = now_ms + t.wait_ms;
+                Fire::Fired
+            }
+            TriggerKind::LookAt | TriggerKind::Use | TriggerKind::Damage => Fire::Fired,
         }
-        t.next_fire_ms = match t.kind {
-            // Ours latches the window shut where the spec's 3.6 says retail
-            // frees the entity. Whether it does is unmeasured, so a
-            // `getEntArray` sees a fired `trigger_once` here and may not on
-            // retail; nothing is invented until that is measured.
-            TriggerKind::Once => i32::MAX,
-            _ if t.wait_ms == 0 && t.random_ms == 0 => now_ms,
-            _ => now_ms + t.wait_ms + rng(t.random_ms),
-        };
-        true
     }
 }
+
+/// What [`Triggers::fire`] made of a touch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fire {
+    Refused,
+    Fired,
+    /// Fired, and the trigger is spent: the caller schedules its free
+    /// [`SPENT_FREE_MS`] out.
+    Spent,
+}
+
+impl Fire {
+    pub fn fired(self) -> bool {
+        self != Fire::Refused
+    }
+}
+
+/// `Touch_Multi`'s `nextthink = level.time + 100` ahead of `G_FreeEntity`
+/// (0x65b3f).
+pub const SPENT_FREE_MS: i32 = 100;
+
+/// `SP_trigger_multiple`'s `G_SpawnFloat("wait", "0.5")` (0x64c6e) in
+/// milliseconds, and the -1 `SP_trigger_once` stores (0x65c16, `.rodata`
+/// 0x79ad8).
+pub const MULTIPLE_DEFAULT_WAIT_MS: i32 = 500;
+pub const ONCE_WAIT_MS: i32 = -1000;
 
 pub fn kind_of(classname: &str) -> Option<TriggerKind> {
     Some(match classname {
@@ -639,8 +672,8 @@ mod tests {
             kind: TriggerKind::Multiple,
             shape: TriggerShape::boxed([-16.0, -16.0, 0.0], [16.0, 16.0, 72.0]),
             wait_ms: 0,
-            random_ms: 0,
             next_fire_ms: 0,
+            spent: false,
             damage: 0,
             dflags: 0,
             cursor_hint: 0,
@@ -663,7 +696,6 @@ mod tests {
             id,
             TriggerKind::Hurt,
             TriggerShape::boxed([-8.0; 3], [8.0; 3]),
-            0,
             0,
         );
         assert_eq!(ts.len(), 1);
@@ -689,8 +721,7 @@ mod tests {
                     id,
                     TriggerKind::Multiple,
                     TriggerShape::boxed([-8.0; 3], [8.0; 3]),
-                    0,
-                    0,
+                    crate::game::trigger::MULTIPLE_DEFAULT_WAIT_MS,
                 );
                 host.link_trigger(cx, id);
                 id
@@ -715,7 +746,7 @@ mod tests {
                 host.set_field(cx, id, origin, Value::Vector([0.0, 0.0, 4.0]))
                     .unwrap();
                 host.triggers
-                    .register(id, kind, TriggerShape::boxed([-8.0; 3], [8.0; 3]), 0, 0);
+                    .register(id, kind, TriggerShape::boxed([-8.0; 3], [8.0; 3]), 0);
                 host.link_trigger(cx, id);
                 id
             };
@@ -725,36 +756,28 @@ mod tests {
         });
     }
 
-    /// `wait` gates a `trigger_multiple`: the first touch fires, touches
-    /// inside the window do not, and the one after it does. `random` widens
-    /// the window by up to its own value.
+    /// `Touch_Multi`'s `wait` never gates the notify: above 0 every touch
+    /// fires, not above 0 (and on every `trigger_once`) the first touch fires
+    /// and spends the trigger, and an `enableLinkTo` trigger is never spent
+    /// (movers doc 17, probe_trigwait).
     #[test]
-    fn wait_gates_a_multiple_and_random_widens_it() {
+    fn wait_spends_a_trigger_and_never_gates_its_notify() {
         let mut ts = Triggers::default();
-        let id = EntId(72, 0);
-        ts.register(
-            id,
-            TriggerKind::Multiple,
-            TriggerShape::boxed([-8.0; 3], [8.0; 3]),
-            500,
-            0,
-        );
-        let mut zero = |_: i32| 0;
-        assert!(ts.fire(id, 1000, &mut zero), "first touch fires");
-        assert!(!ts.fire(id, 1400, &mut zero), "inside the 500 ms window");
-        assert!(ts.fire(id, 1500, &mut zero), "the window has passed");
-
-        let mut half = |n: i32| n / 2;
-        ts.register(
-            id,
-            TriggerKind::Multiple,
-            TriggerShape::boxed([-8.0; 3], [8.0; 3]),
-            500,
-            400,
-        );
-        assert!(ts.fire(id, 0, &mut half));
-        assert!(!ts.fire(id, 690, &mut half), "500 + 400/2 is 700");
-        assert!(ts.fire(id, 700, &mut half));
+        let shape = TriggerShape::boxed([-8.0; 3], [8.0; 3]);
+        let (w5, w0, once, linked) = (EntId(72, 0), EntId(73, 0), EntId(74, 0), EntId(75, 0));
+        ts.register(w5, TriggerKind::Multiple, shape, 5000);
+        ts.register(w0, TriggerKind::Multiple, shape, 0);
+        ts.register(once, TriggerKind::Once, shape, ONCE_WAIT_MS);
+        ts.register(linked, TriggerKind::Multiple, shape, -1000);
+        for t in [0, 0, 50, 100, 150] {
+            assert_eq!(ts.fire(w5, t, false), Fire::Fired, "w5 at {t}");
+            assert_eq!(ts.fire(linked, t, true), Fire::Fired, "linked at {t}");
+        }
+        for id in [w0, once] {
+            assert_eq!(ts.fire(id, 0, false), Fire::Spent);
+            assert_eq!(ts.fire(id, 0, false), Fire::Refused);
+            assert_eq!(ts.fire(id, 100_000, false), Fire::Refused);
+        }
     }
 
     /// The two spellings of the hurt mod agree. `MOD_TRIGGER_HURT` is the
@@ -764,45 +787,6 @@ mod tests {
     #[test]
     fn the_hurt_mod_name_matches_the_means_of_death_table() {
         assert_eq!(crate::game::combat::MOD_NAMES[23], MOD_TRIGGER_HURT);
-    }
-
-    /// A `trigger_once` fires once and then never again, however long the
-    /// toucher stands in it.
-    #[test]
-    fn a_once_trigger_fires_once() {
-        let mut ts = Triggers::default();
-        let id = EntId(73, 0);
-        ts.register(
-            id,
-            TriggerKind::Once,
-            TriggerShape::boxed([-8.0; 3], [8.0; 3]),
-            0,
-            0,
-        );
-        let mut zero = |_: i32| 0;
-        assert!(ts.fire(id, 0, &mut zero));
-        assert!(!ts.fire(id, 1, &mut zero));
-        assert!(!ts.fire(id, 100_000, &mut zero));
-    }
-
-    /// With neither key set, every touch fires: that is what a bombzone does,
-    /// and `bombzone_think` relies on being notified every pass while the
-    /// player stands in it.
-    #[test]
-    fn no_wait_key_fires_every_touch() {
-        let mut ts = Triggers::default();
-        let id = EntId(74, 0);
-        ts.register(
-            id,
-            TriggerKind::Multiple,
-            TriggerShape::boxed([-8.0; 3], [8.0; 3]),
-            0,
-            0,
-        );
-        let mut zero = |_: i32| 0;
-        for t in [0, 50, 100, 150] {
-            assert!(ts.fire(id, t, &mut zero), "touch at {t}");
-        }
     }
 
     /// A trigger's own box for the test to register, with its model's
@@ -843,8 +827,7 @@ mod tests {
                 maxs: [256.0, 256.0, 128.0],
                 model: Some(1),
             },
-            0,
-            0,
+            crate::game::trigger::MULTIPLE_DEFAULT_WAIT_MS,
         );
         host.link_trigger(cx, zone);
         zone
@@ -940,7 +923,6 @@ mod tests {
                     model: Some(MODEL as u32),
                 },
                 0,
-                0,
             );
             host.link_trigger(cx, zone);
             let at = |host: &mut GameHost, cx: &mut Cx, p: [f32; 3]| touched(host, cx, p);
@@ -1022,7 +1004,6 @@ mod tests {
                     kind,
                     TriggerShape::boxed([-20.0, -20.0, 0.0], [20.0, 20.0, 80.0]),
                     0,
-                    0,
                 );
                 host.link_trigger(cx, id);
                 id
@@ -1061,7 +1042,6 @@ mod tests {
                 id,
                 TriggerKind::LookAt,
                 TriggerShape::boxed([-20.0, -20.0, 0.0], [20.0, 20.0, 80.0]),
-                0,
                 0,
             );
             host.link_trigger(cx, id);
@@ -1125,7 +1105,7 @@ mod tests {
                 host.set_field(cx, id, origin, Value::Vector([0.0; 3]))
                     .unwrap();
                 host.triggers
-                    .register(id, kind, TriggerShape::boxed([-8.0; 3], [8.0; 3]), 0, 0);
+                    .register(id, kind, TriggerShape::boxed([-8.0; 3], [8.0; 3]), 0);
                 host.link_trigger(cx, id);
                 id
             };
@@ -1168,8 +1148,7 @@ mod tests {
                 id,
                 TriggerKind::Multiple,
                 TriggerShape::boxed([-8.0; 3], [8.0; 3]),
-                0,
-                0,
+                crate::game::trigger::MULTIPLE_DEFAULT_WAIT_MS,
             );
             host.link_trigger(cx, id);
             host.free_entity(id);

@@ -476,6 +476,7 @@ impl Missiles {
         {
             e.engine[slot] = Value::String(cx.intern_exact("grenade"));
         }
+        set_script_origin(ents, id, origin);
         let mut angles = vectoangles(velocity);
         angles.x = normalize_360(angles.x - LAUNCH_PITCH_LEAD);
         let tumble = Vec3::new(
@@ -551,6 +552,15 @@ impl Missiles {
         frame
     }
 
+    /// Every live missile's `r.currentOrigin` into its script `origin`, as
+    /// `G_RunMissile` leaves it each frame (its stores at 0x54206 and 0x542e6
+    /// are to `ent+0x13c`, the `origin` field's z).
+    pub fn sync_origins(&self, ents: &mut ObjectTable) {
+        for m in &self.live {
+            set_script_origin(ents, m.id, m.origin);
+        }
+    }
+
     /// The live missiles, by entity number, for the snapshot build. They are
     /// `SVF_BROADCAST` (11.1), so the caller adds them past its own PVS cull.
     pub fn entities<'a>(
@@ -573,6 +583,16 @@ impl Missiles {
     /// `flrand(lo, hi)`, off this pool's own state.
     fn flrand(&mut self, lo: f32, hi: f32) -> f32 {
         lo + (hi - lo) * crate::game::host::rand_unit(&mut self.rng)
+    }
+}
+
+/// What a script reads as a missile's `origin`.
+fn set_script_origin(ents: &mut ObjectTable, id: EntId, origin: Vec3) {
+    if let crate::game::fields::Route::Engine { slot, .. } =
+        crate::game::fields::route_entity("origin")
+        && let Some(e) = ents.get_mut(id)
+    {
+        e.engine[slot] = Value::Vector(origin.to_array());
     }
 }
 
@@ -668,6 +688,29 @@ mod tests {
             m.traj.base.z
         );
         assert_eq!(m.apos.tr_type, TR_STATIONARY, "the tumble stopped too");
+    }
+
+    /// A script reads a grenade's `origin` where the missile pass left it:
+    /// at the muzzle on the frame it is thrown, along its flight after.
+    #[test]
+    fn a_grenades_script_origin_follows_its_flight() {
+        let (mut vm, mut host) = crate::game::testing::fixture();
+        let mut ms = Missiles::default();
+        let start = Vec3::new(0.0, 0.0, 64.0);
+        let id = armed(&mut ms, &mut host, &mut vm, start, Vec3::X * 300.0, 0);
+        use vcod_gsc::Host;
+        let read = |host: &mut crate::game::host::GameHost, vm: &mut vcod_gsc::Vm| {
+            vm.with_cx(|cx| {
+                let f = cx.intern_folded("origin");
+                host.get_field(cx, id, f)
+            })
+        };
+        assert_eq!(read(&mut host, &mut vm), Value::Vector(start.to_array()));
+        ms.run(None, &[], 500);
+        ms.sync_origins(&mut host.ents);
+        let flown = ms.missiles()[0].origin;
+        assert!(flown.x > 100.0, "it flew to {flown}");
+        assert_eq!(read(&mut host, &mut vm), Value::Vector(flown.to_array()));
     }
 
     /// The launch tumble is drawn, not fixed: `flrand` runs off the pool's
