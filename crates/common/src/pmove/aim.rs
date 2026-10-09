@@ -16,7 +16,9 @@ use crate::weapon::{AimDef, WeaponDef};
 
 /// `client+0x2278..0x22a8`: what the block keeps between cmds. The gun-kick
 /// springs at `+0x22ac` are left out: nothing in the server module ever
-/// kicks them, so on a server they hold zero for the whole of a life.
+/// kicks them, so on a server they hold zero for the whole of a life. The
+/// cgame's copy is [`GunKick`], which the client steps and hands in through
+/// [`AimInput::gun_kick`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AimState {
     /// `ps.viewangles` the sway last saw (`+0x2278`).
@@ -55,6 +57,108 @@ pub struct AimInput<'a> {
     /// `level.time`.
     pub now_ms: i32,
     pub kick: DamageKick,
+    /// The gun-kick spring's pitch and yaw ([`GunKick::angles`]), added to
+    /// the gun of an `aimDownSight` weapon. Zero on a server.
+    pub gun_kick: [f32; 2],
+}
+
+/// The gun-kick spring (game `0x39e14`, cgame `0x30012a60`; combat doc
+/// 15.7): a shot adds to the speeds, and each axis springs back to centre.
+/// Pitch and yaw in degrees, speeds in degrees a second.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GunKick {
+    pub angles: [f32; 2],
+    pub speed: [f32; 2],
+}
+
+impl GunKick {
+    /// `CG_WeaponFireRecoil`'s gun half (`0x30038850`): adds to the speeds.
+    pub fn kick(&mut self, pitch: f32, yaw: f32) {
+        self.speed[0] += pitch;
+        self.speed[1] += yaw;
+    }
+
+    /// Steps the spring `secs` in 5 ms substeps, the four keys blended hip
+    /// to sight by `frac` and `gunMaxPitch`/`gunMaxYaw` as the clamps. A
+    /// weapon without `aimDownSight` is never stepped.
+    pub fn step(&mut self, def: &WeaponDef, frac: f32, secs: f32) {
+        if !def.aim_down_sight {
+            return;
+        }
+        let a = &def.aim;
+        let blend = |k: [f32; 2]| k[0] + (k[1] - k[0]) * frac;
+        let accel = blend(a.gun_kick_accel);
+        let speed_max = blend(a.gun_kick_speed_max);
+        let speed_decay = blend(a.gun_kick_speed_decay);
+        let static_decay = blend(a.gun_kick_static_decay);
+        let max = [a.gun_max_pitch, a.gun_max_yaw];
+        let mut left = secs;
+        while left > 0.0 {
+            let dt = if left > 0.005 { 0.005 } else { left };
+            left = if left > 0.005 { left - 0.005 } else { 0.0 };
+            let mut settled = true;
+            for ((angle, speed), max) in self.angles.iter_mut().zip(&mut self.speed).zip(max) {
+                settled &= spring_axis(
+                    angle,
+                    speed,
+                    dt,
+                    max,
+                    accel,
+                    speed_max,
+                    speed_decay,
+                    static_decay,
+                );
+            }
+            if settled {
+                break;
+            }
+        }
+    }
+}
+
+/// One axis of the spring (cgame `0x30012910`). True, with both zeroed,
+/// once the angle is under 0.25 and the speed under 1.
+#[allow(clippy::too_many_arguments)]
+fn spring_axis(
+    angle: &mut f32,
+    speed: &mut f32,
+    dt: f32,
+    max: f32,
+    accel: f32,
+    speed_max: f32,
+    speed_decay: f32,
+    static_decay: f32,
+) -> bool {
+    if angle.abs() < 0.25 && speed.abs() < 1.0 {
+        *angle = 0.0;
+        *speed = 0.0;
+        return true;
+    }
+    *angle += dt * *speed;
+    if *angle > max {
+        *angle = max;
+        if *speed > 0.0 {
+            *speed = 0.0;
+        }
+    } else if *angle < -max {
+        *angle = -max;
+        if *speed < 0.0 {
+            *speed = 0.0;
+        }
+    }
+    if *angle > 0.0 {
+        *speed -= dt * accel;
+    } else if *angle < 0.0 {
+        *speed += dt * accel;
+    }
+    *speed -= dt * *speed * speed_decay;
+    if *speed > 0.0 {
+        *speed = (*speed - dt * static_decay).max(0.0);
+    } else {
+        *speed = (*speed + dt * static_decay).min(0.0);
+    }
+    *speed = speed.clamp(-speed_max, speed_max);
+    false
 }
 
 const PI64: f64 = std::f64::consts::PI;
@@ -383,6 +487,10 @@ fn weapon_angles(
     idle(ps, aim, def.aim_down_sight, st, input.now_ms, dt, &mut out);
     walk_bob(ps, def, spd, &mut out);
     gun_damage_kick(ps, aim, &input.kick, input.now_ms, &mut out);
+    if def.aim_down_sight {
+        out[0] += input.gun_kick[0];
+        out[1] += input.gun_kick[1];
+    }
     out[0] = angle_subtract(out[0], st.sway_angles[0]);
     out[1] = angle_subtract(out[1], st.sway_angles[1]);
     out
@@ -552,6 +660,7 @@ mod tests {
             msec: 50,
             now_ms,
             kick: DamageKick::default(),
+            gun_kick: [0.0; 2],
         }
     }
 
@@ -652,6 +761,7 @@ mod tests {
             msec: 50,
             now_ms: 1000,
             kick: DamageKick::default(),
+            gun_kick: [0.0; 2],
         };
         assert_eq!(aim_angles(&ps, &mut st, &input), [5.0, 6.0]);
         assert_eq!(st, AimState::default());
