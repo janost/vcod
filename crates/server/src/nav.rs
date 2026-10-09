@@ -180,7 +180,12 @@ impl NavGraph {
                 .collect();
             let ends = par_map(&jobs, |&(n, dirs)| {
                 let (cx, cy) = self.column(self.nodes[n as usize]);
-                dirs.map(|(dx, dy)| self.step(world, n, (cx + dx, cy + dy)))
+                // A rest on a ladder's top is no node: only its exits lead
+                // on from there (`link_ladders`).
+                dirs.map(|(dx, dy)| {
+                    self.step(world, n, (cx + dx, cy + dy))
+                        .filter(|&(p, _)| !perched(world, p))
+                })
             });
             let mut next = Vec::new();
             let mut recheck = Vec::new();
@@ -424,10 +429,13 @@ impl NavGraph {
                 [(lo, hi, axis), (lo, hi, -axis)]
             })
             .collect();
-        let rungs = par_map(&faces, |&(lo, hi, n)| rung(world, lo, hi, n));
+        let rungs = par_map(&faces, |&(lo, hi, n)| {
+            rung(world, lo, hi, n).map(|r| (r, ladder_exits(world, r.1, n)))
+        });
         let mut ends = Vec::new();
         let safe = |r: &(Vec3, Vec3, bool, bool)| !hazard(hazards, r.0) && !hazard(hazards, r.1);
-        for (foot, head, up, down) in rungs.into_iter().flatten().filter(safe) {
+        for ((foot, head, up, down), exits) in rungs.into_iter().flatten().filter(|(r, _)| safe(r))
+        {
             let f = self.add(self.column(foot), foot);
             let h = self.add(self.column(head), head);
             if up {
@@ -436,7 +444,21 @@ impl NavGraph {
             if down {
                 self.link(h, f);
             }
-            ends.extend([f, h]);
+            ends.push(f);
+            // A head perched on the ladder's top leads only to the floor
+            // its exits walked to: the walks across a hatch from the perch
+            // arrive or fall by a few units (bot-navigation.md, "Ladders").
+            if exits.is_empty() {
+                ends.push(h);
+            }
+            for (exit, back) in exits.into_iter().filter(|&(e, _)| !hazard(hazards, e)) {
+                let e = self.add(self.column(exit), exit);
+                self.link(h, e);
+                if back {
+                    self.link(e, h);
+                }
+                ends.push(e);
+            }
         }
         // Each end to the nodes on its floor around it, each way walked.
         let mut jobs = Vec::new();
@@ -1186,7 +1208,10 @@ impl Follower {
     /// slope a body a few units aside slides back. A climb or a drop
     /// steeper than a jump is taken as proved (a ladder, a back down), and
     /// so is a walk from off the node's floor (a body on a ladder under its
-    /// head) or without a world.
+    /// head) or without a world. Off a jump edge the walk has to arrive
+    /// without one: the bot jumps only on the graph's jump edges, and a
+    /// body a few units aside of a hull beam's end pins on it where the
+    /// walk from the node slides past (bot-navigation.md section 3).
     fn edge_holds(&self, world: Option<&CollisionWorld>, at: Vec3, g: &NavGraph) -> bool {
         let (Some(world), Some(&a), Some(&b)) = (
             world,
@@ -1195,14 +1220,15 @@ impl Follower {
         ) else {
             return true;
         };
+        let jump = g.jumps.contains(&(a, b));
         let (a, b) = (g.nodes[a as usize], g.nodes[b as usize]);
         if (b.z - a.z).abs() > vcod_common::pmove::JUMP_HEIGHT || (at.z - a.z).abs() > ARRIVE {
             return true;
         }
-        matches!(
-            walk_as(world, at, b.truncate(), Some(b.z), Gait::Forward),
-            Walked::Arrived(..)
-        )
+        match walk_as(world, at, b.truncate(), Some(b.z), Gait::Forward) {
+            Walked::Arrived(_, jumped) => jump || !jumped,
+            _ => false,
+        }
     }
 
     /// Test-facing: the current waypoint's node and the one after it.
@@ -1677,6 +1703,57 @@ fn rung(world: &CollisionWorld, lo: Vec3, hi: Vec3, n: Vec3) -> Option<(Vec3, Ve
     (up || down).then_some((foot, head, up, down))
 }
 
+/// Whether a body standing at `p` stands on a ladder brush's top with no
+/// other ground under its middle: mp_ship's ladder plates come up through
+/// hatches, and a body pinned at the top stands on the plate's 1-unit edge
+/// over the hole.
+fn perched(world: &CollisionWorld, p: Vec3) -> bool {
+    let ps = PlayerState::spawn(p, 0.0);
+    let t = world.box_trace(p + Vec3::Z, p - Vec3::Z, ps.mins(), ps.maxs());
+    t.fraction < 1.0
+        && t.surface_flags & vcod_common::collision::SURF_LADDER != 0
+        && !footed(world, p)
+}
+
+/// Whether a body standing at `p` has ground right under its middle, not
+/// a ladder's: the floor beside a hatch, not the hole's rim.
+fn footed(world: &CollisionWorld, p: Vec3) -> bool {
+    let down = p - Vec3::Z * vcod_common::pmove::STEPSIZE;
+    let t = world.point_trace(p + Vec3::Z, down, MASK_PLAYERSOLID, false);
+    t.fraction < 1.0 && t.surface_flags & vcod_common::collision::SURF_LADDER == 0
+}
+
+/// Where a [`perched`] ladder head walks off along the face, either way,
+/// onto its own floor with ground under its middle ([`footed`]): `(exit, back)`,
+/// `back` when the walk from the exit to the head arrives too. Empty for a
+/// head that is not perched or has no such floor beside it.
+fn ladder_exits(world: &CollisionWorld, head: Vec3, n: Vec3) -> Vec<(Vec3, bool)> {
+    if !perched(world, head) {
+        return Vec::new();
+    }
+    let side = glam::Vec2::new(-n.y, n.x);
+    [side, -side]
+        .into_iter()
+        .filter_map(|dir| {
+            EXIT_STEPS.iter().find_map(|&d| {
+                let to = head.truncate() + dir * d;
+                match walk_as(world, head, to, Some(head.z), Gait::Forward) {
+                    Walked::Arrived(p, false) if footed(world, p) => Some(p),
+                    _ => None,
+                }
+            })
+        })
+        .filter(|&p| !under_ground(world, p))
+        .map(|p| {
+            let back = walk_as(world, p, head.truncate(), Some(head.z), Gait::Forward);
+            (p, matches!(back, Walked::Arrived(_, false)))
+        })
+        .collect()
+}
+
+/// How far along the face a perched head's exit is looked for.
+const EXIT_STEPS: [f32; 3] = [24.0, 32.0, 48.0];
+
 /// Heights, 16 units apart from the ladder's bottom, a foot's drop is
 /// tried from.
 const FOOT_TRIES: usize = 6;
@@ -1690,6 +1767,9 @@ pub(crate) fn hazard(hazards: &[BrushHull], p: Vec3) -> bool {
     !hazards.is_empty() && box_contacts_hulls(p + Vec3::Z * half.z, half, Vec3::ZERO, hazards)
 }
 
+/// A wall whose normal meets a heading under this cosine (against it, more
+/// than 45 degrees off square) is slid along, not stopped at.
+const GRAZE: f32 = std::f32::consts::FRAC_1_SQRT_2;
 /// How far apart along a heading [`drop_ahead`] feels for the floor.
 const DROP_SAMPLE: f32 = 16.0;
 
@@ -1705,7 +1785,18 @@ pub(crate) fn drop_ahead(world: &CollisionWorld, p: Vec3, dir: Vec3, look: f32) 
     let mins = Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0);
     let maxs = Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height());
     let up = p + Vec3::Z * STEPSIZE;
-    let t = world.box_trace(up, up + dir * look, mins, maxs - Vec3::Z * STEPSIZE);
+    let sweep = |dir: Vec3| world.box_trace(up, up + dir * look, mins, maxs - Vec3::Z * STEPSIZE);
+    let mut t = sweep(dir);
+    let mut dir = dir;
+    // Against a wall the heading only grazes, the body slides along it:
+    // feel along the slide instead (mp_ship's wall at (6111, -304, 97),
+    // whose foot drops 41 to the deck).
+    let n = t.normal.truncate().extend(0.0);
+    let slide = dir - n * dir.dot(n);
+    if t.fraction * look < DROP_SAMPLE && dir.dot(n) > -GRAZE && slide.length() > 0.1 {
+        dir = slide.normalize();
+        t = sweep(dir);
+    }
     if t.startsolid || t.allsolid {
         return None;
     }
@@ -3081,6 +3172,20 @@ mod tests {
         Some(crate::world::World::from_bsp(&bsp, Some(&fs)))
     }
 
+    /// mp_ship, seed 5: a bot against the slanted wall at (6111, -304, 97)
+    /// headed south slid along it and off the ledge 41 units to the deck.
+    /// The sweep due south touches the wall at once; the slide finds it.
+    #[test]
+    fn a_drop_ahead_is_felt_along_a_wall_it_slides_on() {
+        let Some(world) = map_world("mp_ship") else {
+            return;
+        };
+        let at = Vec3::new(6095.754, -303.89618, 97.125);
+        let depth = drop_ahead(&world.collision, at, -Vec3::Y, 64.0);
+        assert!(depth.is_some_and(|d| (d - 41.0).abs() < 1.0), "{depth:?}");
+        assert_eq!(drop_ahead(&world.collision, at, Vec3::Y, 64.0), None);
+    }
+
     /// mp_ship's deck lip at (3285.5, -448.5, 56.125), where seed 5's
     /// unstick heading walked a bot off to the hull floor at -64: the deck
     /// runs on east and north, the drop lies west and south.
@@ -3145,6 +3250,54 @@ mod tests {
             out.is_some_and(|(p, jumped)| p.z < 360.0 && jumped),
             "out of the boat: {out:?}"
         );
+    }
+
+    /// mp_ship's hull corridor at (3825, -800, -64): a beam's end stands
+    /// across the line from 3 units north of the node at (3837, -805). A
+    /// run from there pins on it and arrives only by jumping, which a bot
+    /// does only on a jump edge, so the edge does not hold from there.
+    #[test]
+    fn an_edge_that_needs_a_jump_from_aside_does_not_hold() {
+        let Some(world) = map_world("mp_ship") else {
+            return;
+        };
+        let w = &world.collision;
+        let a = Vec3::new(3837.1023, -804.9357, -63.875);
+        let b = Vec3::new(3879.2532, -799.9733, -63.875);
+        let mut g = NavGraph::from_parts(vec![a, b], vec![vec![1], vec![]]);
+        let f = Follower {
+            path: vec![0, 1],
+            ..Follower::default()
+        };
+        let aside = Vec3::new(3822.0, -802.0, -63.875);
+        assert!(f.edge_holds(Some(w), a, &g), "from the node");
+        assert!(!f.edge_holds(Some(w), aside, &g), "3 units north");
+        g.jumps.insert((0, 1));
+        assert!(f.edge_holds(Some(w), aside, &g), "on a jump edge");
+    }
+
+    /// mp_ship's mast hatch: the climb's head stands on the ladder plate's
+    /// 1-unit top over the hole, and the hatch's floor lies either side of
+    /// the plate along the face. The mast's own top has none.
+    #[test]
+    fn a_head_perched_on_a_ladder_plate_exits_along_the_face() {
+        let Some(world) = map_world("mp_ship") else {
+            return;
+        };
+        let w = &world.collision;
+        let hatch = Vec3::new(3704.8699, 56.0, 992.125);
+        assert!(perched(w, hatch));
+        let exits = ladder_exits(w, hatch, -Vec3::X);
+        assert_eq!(exits.len(), 2, "{exits:?}");
+        for (p, back) in exits {
+            assert!(back && footed(w, p) && (p.z - hatch.z).abs() < 1.0, "{p}");
+            assert!((p.y - hatch.y).abs() > 24.0, "{p}");
+        }
+        let mast = Vec3::new(3675.0, -101.12528, 1145.126);
+        assert!(perched(w, mast) && ladder_exits(w, mast, -Vec3::Y).is_empty());
+        // A head on a deck is no perch.
+        let deck = Vec3::new(3751.1277, 65.0, 616.125);
+        assert!(!perched(w, deck) && ladder_exits(w, deck, Vec3::X).is_empty());
     }
 
     /// mp_ship's hull beam: a body stands on its side's edge 16 under the
