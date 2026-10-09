@@ -110,7 +110,7 @@ fn install(name: &str) -> Result<(Vm, FuncRef), String> {
 fn run_probe(name: &str) -> Result<Run, String> {
     let (mut vm, main) = install(name)?;
     let mut host = ProbeHost::default();
-    match vm.call_now(&mut host, 0, main, None, Vec::new()) {
+    match vm.call_now(&mut host, main, None, Vec::new()) {
         Ok(_) => Ok(Run {
             lines: host.lines,
             error: None,
@@ -120,7 +120,7 @@ fn run_probe(name: &str) -> Result<Run, String> {
             let (mut vm, main) = install(name)?;
             let mut host = ProbeHost::default();
             let mut error = None;
-            vm.start_thread(&mut host, 0, main, None, Vec::new());
+            vm.start_thread(&mut host, main, None, Vec::new());
             for frame in 1..=200 {
                 for e in vm.run_frame(&mut host, frame * 50) {
                     if error.is_none() {

@@ -595,6 +595,56 @@ pick there reordered the two gate clients' joins and moved their spawn
 points, so what retail does when several clients' packets land in one frame
 is the open question.
 
+**The script clock.** The VM keeps its own clock, separate from
+`level.time`, and a frame's threads run on it a frame behind.
+
+- VERIFIED: `getTime` (`game.mp.i386.so` 0x5d088, entry 17 of the
+  `functions` table) pushes `level.time` (`level+0x1e8`) through
+  `Scr_AddInt` and nothing else, so it reads milliseconds of `level.time`.
+- VERIFIED: `G_InitGame` writes its first argument to `level.time` and
+  `level.startTime` (`level+0x1e8`, `+0x1f4`, at 0x4fc6d and 0x4fc72) and
+  later passes `level.time` to `Scr_InitSystem` (0x4fe4a..0x4fe58), ahead of
+  `Scr_LoadGameType`, `Scr_LoadLevel` and `Scr_StartupGameType`.
+- VERIFIED: `cod_lnxded` 0x80a97ec stores its second argument, masked to 24
+  bits, into 0x82f594c, the word the `wait` opcode below adds to. INFERRED
+  (the game module reaches the engine through a pointer table, and this is
+  the only two-argument writer of that word): 0x80a97ec is `Scr_InitSystem`
+  and 0x82f594c is the VM clock.
+- VERIFIED: `G_RunFrame` (0x50478) writes `level.time` first, calls
+  `Scr_RunCurrentThreads` at 0x50653 (reached whether or not its touch
+  notify list at `level+0x29ec` is empty), again at 0x506d0 inside the DObj
+  loop, then `Scr_SetTime(level.time)` at 0x5070c, ahead of the entity loop.
+- VERIFIED: in `cod_lnxded`, 0x80aa3d0 walks the VM clock up to its
+  argument one millisecond at a time, running the threads queued on each
+  millisecond before stepping past it, and stops on the argument without
+  running its queue; 0x80aa470 runs the queue of the current millisecond
+  only. INFERRED (call order against `G_RunFrame`'s): those are
+  `Scr_SetTime` and `Scr_RunCurrentThreads`.
+- VERIFIED: the `wait` opcode (`cod_lnxded` 0x80a4dbb..0x80a4e3e) queues the
+  thread on `(int)(seconds * 1000 + 0.5) + clock`, masked to 24 bits, and
+  errors on a negative wait and on one of 16777 s or more (`0x80d7fe4`).
+
+INFERRED from those: a level's script clock starts on its own `level.time`;
+in `G_RunFrame(L)` the threads due on the clock the last frame left run
+first, then every thread due before `L` runs on its own due time, and one
+due at `L` itself waits for the next frame. A `wait` taken by a thread the
+frame resumed counts from that thread's due time. Between frames the clock
+reads the last frame's `level.time`, so a client callback's `wait` counts
+from there.
+
+VERIFIED (`client-probes/probe_startclock`, retail on `mp_carentan`,
+2026-10-09): `main` and `Callback_StartGameType` both read `getTime` 0, a
+`wait 1` taken in the callback wakes at 1050 and the next `wait 1` at 2050,
+a `wait 0` at 100, and a `wait 0.05` loop logs 100, 200, 200, 300, 300,
+350, 400 and every 50 ms after: the three 100 ms settle frames
+(`cod11-map-cycle.md` 3, step 20) each run two 50 ms steps of the loop. A
+`wait 0.1` then `wait 0.2` logs 200 and 350.
+
+vcod's `Vm::run_frame` walks the clock the same way and `Vm::set_time` is
+`Scr_InitSystem`; `ScriptRuntime::load_from` sets it to the load's
+`level.time` before the gametype's `main`. Neither the 24-bit wrap
+(about 4.7 hours of `level.time`) nor the 16777 s cap is modelled.
+
 **A receiver-less call keeps the caller's `self`, VERIFIED (`probe_self`).**
 A plain `f()`, a `[[ptr]]()` and a `thread f()` all inherit the calling
 frame's `self`, and the callee reads the caller's fields off it. This is what
@@ -688,8 +738,8 @@ read an unset or non-numeric cvar as `0`, and take a numeric prefix where
 there is one: `getCvarInt("12abc")` is `12`, which Rust's own `parse`
 rejects. Cvar names are case-insensitive, `probe_MixedCase` and
 `probe_mixedcase` reading back one value. `randomInt(1)` never returns `1`,
-so the bound is exclusive. `getTime` is non-negative and its units are
-**not** measured, only its sign.
+so the bound is exclusive. `getTime` is non-negative; its units are
+milliseconds of `level.time` ("The script clock" below).
 
 **`delete()` defers the free, VERIFIED (`probe_delete`).** The entity stays
 in `getEntArray` and in its count immediately after `delete()`, a spawn

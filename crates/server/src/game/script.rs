@@ -271,6 +271,9 @@ impl ScriptRuntime {
             entry,
             gametype_entry,
         };
+        // `G_InitGame` hands `Scr_InitSystem` the level's own `level.time`
+        // (docs/research/cod11-gsc-language.md, "The script clock").
+        rt.vm.set_time(now_ms);
         rt.start_bootstrap(now_ms)?;
         Ok(rt)
     }
@@ -335,7 +338,7 @@ impl ScriptRuntime {
         // ahead of `run_frame`, and a `cloneplayer` or a think they schedule
         // on the previous frame's clock lands a frame in the past.
         self.host.level_time_ms = now_ms;
-        self.vm.start_thread(&mut self.host, now_ms, f, recv, args);
+        self.vm.start_thread(&mut self.host, f, recv, args);
         Ok(())
     }
 
@@ -2005,7 +2008,7 @@ impl ScriptRuntime {
         for ev in std::mem::take(&mut self.host.client_events) {
             self.dispatch_client_event(ev, packet_ms);
         }
-        for e in self.vm.run_runnable(&mut self.host, packet_ms) {
+        for e in self.vm.run_runnable(&mut self.host) {
             log::warn!("script error: {e:?}");
         }
         self.host.level_time_ms = now_ms;
@@ -2022,7 +2025,7 @@ impl ScriptRuntime {
                     self.vm.notify(Target::Entity(id), event, &args);
                 }
             }
-            for e in self.vm.run_runnable(&mut self.host, now_ms) {
+            for e in self.vm.run_runnable(&mut self.host) {
                 log::warn!("script error: {e:?}");
             }
         }
@@ -2451,7 +2454,7 @@ impl ScriptRuntime {
             gametype_entry: String::new(),
         };
         let main = rt.vm.func_ref(&rt.entry, "main");
-        rt.vm.start_thread(&mut rt.host, 0, main, None, vec![]);
+        rt.vm.start_thread(&mut rt.host, main, None, vec![]);
         rt
     }
 
@@ -2518,10 +2521,10 @@ impl ScriptRuntime {
     }
 
     /// Start `name` as a thread on `ent`, the way a script's `thread` does.
-    pub fn start_thread_for_test(&mut self, ent: EntId, name: &str, now_ms: i32) {
+    pub fn start_thread_for_test(&mut self, ent: EntId, name: &str) {
         let f = self.vm.func_ref(&self.entry, name);
         self.vm
-            .start_thread(&mut self.host, now_ms, f, Some(Target::Entity(ent)), vec![]);
+            .start_thread(&mut self.host, f, Some(Target::Entity(ent)), vec![]);
     }
 
     /// Set a test client's health and max health, the way a spawn does.
@@ -2607,7 +2610,7 @@ mod tests {
         rt.run_frame(50);
         let after_one = n(&mut rt);
         assert!(after_one > 1, "{after_one}");
-        rt.vm.run_runnable(&mut rt.host, 50);
+        rt.vm.run_runnable(&mut rt.host);
         assert_eq!(n(&mut rt), after_one, "the packet pass stepped the loop");
     }
 
@@ -2660,13 +2663,15 @@ mod tests {
     fn a_temp_entity_takes_a_spawn_number_and_frees_it_past_300_ms() {
         let mut rt = ScriptRuntime::for_test(
             "num(e) { return e getEntityNumber(); } \
-             main() { a = spawn(\"script_origin\", (0, 0, 0)); playfx(1, (0, 0, 0)); \
+             main() { wait 0.05; a = spawn(\"script_origin\", (0, 0, 0)); playfx(1, (0, 0, 0)); \
              b = spawn(\"script_origin\", (0, 0, 0)); level.a = num(a); level.b = num(b); \
              wait 0.3; level.c = num(spawn(\"script_origin\", (0, 0, 0))); \
              wait 0.05; level.d = num(spawn(\"script_origin\", (0, 0, 0))); \
              wait 0.05; level.e = num(spawn(\"script_origin\", (0, 0, 0))); }",
         );
-        for frame in 1..=8 {
+        // From a frame's thread pass, as the probe's spawns were: there the
+        // script clock runs a frame behind `level.time`.
+        for frame in 1..=10 {
             rt.run_frame(frame * 50);
         }
         let n = |rt: &mut ScriptRuntime, k: &str| match rt.level_field(k) {
@@ -2687,11 +2692,12 @@ mod tests {
     fn grenade_explosion_effect_takes_a_temp_and_a_concussion_number() {
         let mut rt = ScriptRuntime::for_test(
             "n(a) { return (spawn(\"script_origin\", (0, 0, 0)) getEntityNumber()) - a; } \
-             main() { a = spawn(\"script_origin\", (0, 0, 0)) getEntityNumber(); \
+             main() { wait 0.05; a = spawn(\"script_origin\", (0, 0, 0)) getEntityNumber(); \
              grenadeexplosioneffect((0, 0, 0)); level.s = \"\" + n(a); \
              for (i = 1; i <= 16; i++) { wait 0.05; level.s = level.s + \" \" + n(a); } }",
         );
-        for frame in 1..=20 {
+        // From a frame's thread pass, as the probe's calls were (after `wait 1`).
+        for frame in 1..=21 {
             rt.run_frame(frame * 50);
         }
         // Retail: the spawn after the call 3, the +400 one the temp's 1,
@@ -2789,7 +2795,7 @@ mod tests {
              level.charge = p.origin; objective_add(0, \"current\", p.origin); }",
         );
         let planter = rt.spawn_map_entity_for_test([-192.8, 2457.1, -21.9]);
-        rt.start_thread_for_test(planter, "plant", 0);
+        rt.start_thread_for_test(planter, "plant");
         rt.run_frame(50);
         assert_eq!(rt.aborts(), Vec::<String>::new());
         let Value::Vector(charge) = rt.level_field("charge") else {
@@ -3183,7 +3189,7 @@ mod tests {
             crate::game::trigger::MULTIPLE_DEFAULT_WAIT_MS,
         );
         rt.link_trigger_for_test(zone);
-        rt.start_thread_for_test(zone, "trigger_think", 0);
+        rt.start_thread_for_test(zone, "trigger_think");
         rt.run_frame(0);
 
         let player = rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
@@ -3233,8 +3239,8 @@ mod tests {
         assert_eq!(o.objectives[0].laid, Some([100.0, 0.0, 0.0]));
         let dead = rt.spawn_client_for_test(0, [0.0; 3]);
         let live = rt.spawn_client_for_test(1, [0.0; 3]);
-        rt.start_thread_for_test(dead, "stale", 50);
-        rt.start_thread_for_test(live, "carry", 50);
+        rt.start_thread_for_test(dead, "stale");
+        rt.start_thread_for_test(live, "carry");
         rt.run_frame(50);
         assert_eq!(rt.level_field("stale"), Value::Int(1));
         let o = rt.re_objectives(4);
@@ -3260,7 +3266,7 @@ mod tests {
             crate::game::trigger::MULTIPLE_DEFAULT_WAIT_MS,
         );
         rt.link_trigger_for_test(zone);
-        rt.start_thread_for_test(zone, "trigger_think", 0);
+        rt.start_thread_for_test(zone, "trigger_think");
         rt.run_frame(0);
         rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
         rt.set_client_state_for_test(0, "playing");
@@ -3287,7 +3293,7 @@ mod tests {
             0,
         );
         rt.link_trigger_for_test(zone);
-        rt.start_thread_for_test(zone, "trigger_think", 0);
+        rt.start_thread_for_test(zone, "trigger_think");
         rt.run_frame(0);
         rt.spawn_client_for_test(0, [0.9, 0.0, 0.0]);
         rt.set_client_state_for_test(0, "playing");
@@ -3318,7 +3324,7 @@ mod tests {
         );
         rt.link_trigger_for_test(zone);
         rt.set_level_field_for_test("zone", Value::Entity(zone));
-        rt.start_thread_for_test(zone, "trigger_think", 0);
+        rt.start_thread_for_test(zone, "trigger_think");
         rt.run_frame(0);
 
         let player = rt.spawn_client_for_test(0, [0.0, 0.0, 0.0]);
@@ -3330,7 +3336,7 @@ mod tests {
         rt.run_frame(50);
         assert_eq!(rt.level_field("hits"), Value::Int(1), "one notify");
         assert_eq!(rt.level_field("who"), Value::Entity(player));
-        rt.start_thread_for_test(player, "check", 50);
+        rt.start_thread_for_test(player, "check");
         rt.run_frame(100);
         assert_eq!(rt.level_field("looking"), Value::Int(1));
 
@@ -3339,7 +3345,7 @@ mod tests {
         rt.aim_lookat(0, 150);
         rt.run_frame(150);
         assert_eq!(rt.level_field("hits"), Value::Int(1));
-        rt.start_thread_for_test(player, "check", 150);
+        rt.start_thread_for_test(player, "check");
         rt.run_frame(200);
         assert_eq!(rt.level_field("looking"), Value::Int(0));
 
@@ -3373,7 +3379,7 @@ mod tests {
         );
         rt.link_trigger_for_test(zone);
         rt.set_level_field_for_test("zone", Value::Entity(zone));
-        rt.start_thread_for_test(zone, "trigger_think", 0);
+        rt.start_thread_for_test(zone, "trigger_think");
         rt.run_frame(0);
         let player = rt.spawn_client_for_test(0, [0.0, 0.0, 0.0]);
         rt.set_client_state_for_test(0, "playing");
@@ -3392,7 +3398,7 @@ mod tests {
         rt.aim_lookat(0, 50);
         rt.run_frame(50);
         assert_eq!(rt.level_field("hits"), Value::Int(0), "the body blocks");
-        rt.start_thread_for_test(player, "check", 50);
+        rt.start_thread_for_test(player, "check");
         rt.run_frame(100);
         assert_eq!(rt.level_field("looking"), Value::Int(0));
 
@@ -3400,7 +3406,7 @@ mod tests {
         rt.aim_lookat(0, 150);
         rt.run_frame(150);
         assert_eq!(rt.level_field("hits"), Value::Int(1), "moved aside");
-        rt.start_thread_for_test(player, "check", 150);
+        rt.start_thread_for_test(player, "check");
         rt.run_frame(200);
         assert_eq!(rt.level_field("looking"), Value::Int(1));
     }
@@ -3426,7 +3432,7 @@ mod tests {
             crate::game::trigger::MULTIPLE_DEFAULT_WAIT_MS,
         );
         rt.link_trigger_for_test(zone);
-        rt.start_thread_for_test(zone, "trigger_think", 0);
+        rt.start_thread_for_test(zone, "trigger_think");
         rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
         rt.set_client_state_for_test(0, "playing");
         rt.touch_triggers(0, 0);
@@ -3434,7 +3440,7 @@ mod tests {
         assert_eq!(rt.level_field("hits"), Value::Int(1), "the row fires first");
 
         // `delete()` defers the free by `DELETE_DEFER_MS`; 200 is past it.
-        rt.start_thread_for_test(zone, "remove", 0);
+        rt.start_thread_for_test(zone, "remove");
         rt.run_frame(0);
         rt.run_frame(200);
 
@@ -3480,7 +3486,7 @@ mod tests {
             crate::game::trigger::MULTIPLE_DEFAULT_WAIT_MS,
         );
         rt.link_trigger_for_test(zone);
-        rt.start_thread_for_test(zone, "trigger_think", 0);
+        rt.start_thread_for_test(zone, "trigger_think");
         rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
         rt.run_frame(0);
 
@@ -3588,7 +3594,7 @@ mod tests {
             0,
         );
         rt.link_trigger_for_test(pickup);
-        rt.start_thread_for_test(pickup, "trigger_think", 0);
+        rt.start_thread_for_test(pickup, "trigger_think");
         rt.run_frame(0);
         let use_key = vcod_common::net::msg::BUTTON_USE;
 
@@ -3605,7 +3611,7 @@ mod tests {
         assert_eq!(rt.level_field("hits"), Value::Int(1), "aimed at it");
 
         assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), (2, Some(-1)));
-        rt.start_thread_for_test(pickup, "hint", 100);
+        rt.start_thread_for_test(pickup, "hint");
         let slot = rt
             .cursor_hint_pass(0, EYE, AT_ITEM)
             .1
@@ -3614,7 +3620,7 @@ mod tests {
             rt.host.configstrings[1212 + slot as usize],
             "RE_PRESS_TO_PICKUP_GENERIC\u{15}"
         );
-        rt.start_thread_for_test(pickup, "unhint", 100);
+        rt.start_thread_for_test(pickup, "unhint");
         assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), (2, Some(-1)));
     }
 
@@ -3658,17 +3664,17 @@ mod tests {
                 host.get_field(cx, p, f)
             })
         };
-        rt.start_thread_for_test(a, "plant", 0);
+        rt.start_thread_for_test(a, "plant");
         let Value::Entity(first) = bar(&mut rt, a) else {
             panic!("no bar for the first attempt");
         };
-        rt.start_thread_for_test(a, "abort", 0);
-        rt.start_thread_for_test(b, "plant", 0);
+        rt.start_thread_for_test(a, "abort");
+        rt.start_thread_for_test(b, "plant");
         let Value::Entity(b_bar) = bar(&mut rt, b) else {
             panic!("no bar for the second attacker");
         };
         assert_eq!(b_bar.0, first.0, "the second bar did not reuse the record");
-        rt.start_thread_for_test(a, "plant", 0);
+        rt.start_thread_for_test(a, "plant");
         assert_eq!(rt.aborts(), Vec::<String>::new());
 
         let Value::Entity(a_bar) = bar(&mut rt, a) else {
@@ -4105,15 +4111,18 @@ mod tests {
         );
         rt.host.client_vitals[0].health = 50;
         let id = rt.place_item("item_health", [0.0, 0.0, 1.0], 0);
-        rt.start_thread_for_test(id, "watch", 0);
-        cmd(&mut rt, 0, 0, [0.0, 0.0, 60.0], DOWN);
+        rt.start_thread_for_test(id, "watch");
+        // The loop's first `wait` from the load falls due on the first
+        // frame and runs on the second; from there it polls every frame.
         rt.run_frame(50);
+        cmd(&mut rt, 0, 0, [0.0, 0.0, 60.0], DOWN);
         rt.run_frame(100);
+        rt.run_frame(150);
         let seen: Vec<&String> = rt
             .script_log()
             .iter()
             .filter(|l| l.starts_with("seen"))
             .collect();
-        assert_eq!(seen, vec!["seen 50"]);
+        assert_eq!(seen, vec!["seen 100"]);
     }
 }

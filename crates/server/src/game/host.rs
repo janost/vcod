@@ -1698,7 +1698,7 @@ mod tests {
         let fns = vcod_gsc::compile::compile_file(&ast, "test", vm.interner_mut()).unwrap();
         vm.install(fns).unwrap();
         let f = vm.func_ref("test", "main");
-        vm.call_now(&mut host, 0, f, None, Vec::new()).unwrap();
+        vm.call_now(&mut host, f, None, Vec::new()).unwrap();
 
         assert_eq!(host.configstrings[12], "0 6000 1 0.8 0.8 0.8 0");
         assert_eq!(host.configstrings[3], "n\\ambient_mp_pavlov\\t\\0");
@@ -1713,7 +1713,7 @@ mod tests {
         let fns = vcod_gsc::compile::compile_file(&ast, "test", vm.interner_mut()).unwrap();
         vm.install(fns).unwrap();
         let f = vm.func_ref("test", "main");
-        vm.call_now(&mut host, 0, f, None, Vec::new())
+        vm.call_now(&mut host, f, None, Vec::new())
             .map(|_| host)
             .map_err(|e| e.kind)
     }
@@ -1767,7 +1767,7 @@ mod tests {
             let fns = vcod_gsc::compile::compile_file(&ast, "test", vm.interner_mut()).unwrap();
             vm.install(fns).unwrap();
             let f = vm.func_ref("test", "main");
-            let err = vm.call_now(&mut host, 0, f, None, Vec::new()).err();
+            let err = vm.call_now(&mut host, f, None, Vec::new()).err();
             assert!(
                 !matches!(
                     err.map(|e| e.kind),

@@ -371,6 +371,10 @@ dropped, so test such a builtin through `ScriptRuntime`.
   starts with `setTimerUp(0)`.
 - Threads due in one frame resume newest-queued first; `wait 0` resumes at
   once; a notify's waiters run after the notifier's step, in start order.
+- The script clock is not `level.time`: a thread due at a frame's
+  `level.time` runs the frame after, so a `wait 1` from
+  `Callback_StartGameType` at 0 wakes at 1050. Between frames the clock is
+  the last frame's `level.time`; `Vm::set_time` starts it at a load.
 - A thread's own `notify` doesn't fire its own `endon`.
 
 ### Assets, rendering, sound

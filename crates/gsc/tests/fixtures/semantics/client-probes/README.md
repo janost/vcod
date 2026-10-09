@@ -1311,3 +1311,38 @@ COD_LNXDED_HOME=<absolute, no '+'> PORT=29671 PROBE_SECS=55 \
 # second shell, about 10 s later:
 cargo run -p vcod -- --net-probe 127.0.0.1:29671 --probe-team allies --probe-secs 40
 ```
+
+## probe_startclock
+
+The script clock from load (`docs/research/cod11-gsc-language.md`, "The
+script clock"). No client needed. Logs `getTime` at the gametype's `main`
+and at `Callback_StartGameType`, then a `wait 0.05` loop, a `wait 1` pair, a
+`wait 0` and a `wait 0.1` / `wait 0.2` pair started from the callback. The
+2026-10-09 retail run on mp_carentan:
+
+```
+PROBE main 0
+PROBE start 0
+PROBE wait0 100
+PROBE tick 0 100
+PROBE tick 1 200
+PROBE wait01 200
+PROBE tick 2 200
+PROBE tick 3 300
+PROBE tick 4 300
+PROBE tick 5 350
+PROBE wait02 350
+PROBE tick 6 400
+...
+PROBE tick 11 650
+PROBE wait1 1050
+PROBE wait1b 2050
+```
+
+`crates/server/src/server.rs`'s `the_script_clock_matches_probe_startclock`
+replays it on ours.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PORT=29931 SECS=12 \
+    tools/run_probe.sh client-probes/probe_startclock mp_carentan
+```
