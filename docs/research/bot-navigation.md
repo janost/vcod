@@ -651,15 +651,48 @@ two rows, not in "before"):
   992 from 25 under it and headed for the next node across the deck from
   the rungs.
 
-Left: seed 5's 69 are a bot that tips off the ladder at (3280, -460) onto
+Seed 5's 69 were a bot that tips off the ladder at (3280, -460) onto
 the deck at 56, is pinned 10 ticks at x 3288 short of the next node, and
-takes the random unstick heading off the deck's west edge to the hull
-floor 120 below; a random heading avoids hazards, not drops. Seed 1's 24
-are a bot on the ship beam's slope under its top node (2172.9, 418.2,
+takes the random unstick heading off the deck's lip to the hull floor
+at 7 and -64; the heading avoided hazards, not drops. Seed 1's 24
+were a bot on the ship beam's slope under its top node (2172.9, 418.2,
 -31.875), seed 15's 18 a bot under a stair to z 104 at (2151, -236, 56).
-A random heading is never one with a
-hazard 64 units along it (`BotView::hazard_ahead`, one flag per 45-degree
-octant), and a bot wandering up to one picks again. Engaging an enemy overrides all of it.
+
+A random heading is never one with a hazard 64 units along it
+(`BotView::hazard_ahead`, one flag per 45-degree octant), nor, standing
+on the ground off a ladder, one with a drop deeper than a jump (39) within
+64 units before a wall (`BotView::drop_ahead`, `nav::drop_ahead`). The
+probe sweeps the standing capsule a step up along the octant, then feels
+for the floor every 16 units with the capsule, each floor against the one
+before, so a stair down is no drop and a body overhanging a lip is held by
+it. A heading is picked first with no drop in its octant or either
+neighbour (a heading into a wall slides along it: on the deck, heading 297
+slid the bot south along the wall at x 3288 and off), then with none in
+its own octant, then off hazards alone. A wandering bot picks again when a
+drop turns up in its heading's octant or in its velocity's. Two cases take
+the drop anyway: a waypoint more than a jump below (the path drops there),
+and a bot cornered, its third unstick spell in a row starting within 96
+units of the one before. VERIFIED (measured, seed 27 of the table
+below): without the second, a bot on the 8-unit rim at (4223, 345, 276) beside the deck
+220 below, under the ramps to its waypoint at z 349, paced the rim for
+2 248 bot-ticks; the drop is its only way out. Engaging an enemy overrides
+all of it.
+
+VERIFIED (measured 2026-10-09, the same detector, 6 bots, `dm`, shoot
+off, 4000 ticks, release build; "falls" are unstick spells that start on
+the ground off a ladder and end 48 or more below where they started,
+stair descents at a run included):
+
+| | seeds 1 3 5 7 9 11 13 15 | seeds 17 to 31 odd | falls, all 16 |
+|---|---|---|---|
+| before | 43 0 70 3 3 0 0 19 = 138 | 0 0 11 4 0 0 13 0 = 28 | 40 |
+| drops never taken | 28 943 0 8 1 286 0 19 0 = 2 284 | 1 129 11 17 3 13 2 248 0 553 = 3 974 | 13 |
+| shipped | 0 0 16 8 3 0 0 17 = 44 | 0 17 11 3 17 10 0 0 = 58 | 19 |
+
+The probe costs 16 us a bot a tick in release (8 octants, up to five
+capsule traces each). `tests/bots.rs`,
+`bots_on_mp_ship_unstick_without_walking_off_the_deck`, replays seed 5
+to tick 1800 and fails at tick 1671 without the probe.
 In S&D the objective names the point and can hold the bot still
 (`bot-objectives.md`); a bot standing at its objective or linked by the
 script is never counted as stuck.

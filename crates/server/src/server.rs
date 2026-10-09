@@ -2964,6 +2964,16 @@ impl Server {
                     crate::nav::hazard(&w.hazards, sim.ps.origin + ahead)
                 })
             }),
+            drop_ahead: std::array::from_fn(|i| {
+                let standing = sim.ps.on_ground && !sim.ps.on_ladder;
+                standing
+                    && self.world.as_ref().is_some_and(|w| {
+                        let (s, c) = (i as f32 * 45.0).to_radians().sin_cos();
+                        let dir = glam::Vec3::new(c, s, 0.0);
+                        let look = crate::bots::HAZARD_LOOK;
+                        crate::nav::drop_ahead(&w.collision, sim.ps.origin, dir, look)
+                    })
+            }),
             linked: sim.link_to.is_some(),
             on_ladder: sim.ps.on_ladder,
             on_ground: sim.ps.on_ground,
@@ -3221,6 +3231,7 @@ impl Server {
         Some(crate::bots::BotBody {
             origin: sim.ps.origin.into(),
             on_ladder: sim.ps.on_ladder,
+            on_ground: sim.ps.on_ground,
             playing: sim.pm_type == crate::spectate::PmType::Normal && !sim.dead,
             dead: sim.dead,
             health: sim.health,
@@ -3228,6 +3239,7 @@ impl Server {
                 let d = self.weapon_table.get(sim.ps.weapon as usize);
                 d.map_or(-1, |d| sim.ps.ammoclip[d.clip_index])
             },
+            unsticking: self.bots.get(&slot).is_some_and(|b| b.unsticking()),
         })
     }
 
