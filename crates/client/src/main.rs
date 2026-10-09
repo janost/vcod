@@ -502,6 +502,10 @@ fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp, net: &net::NetClient<net::UdpTransport
     }
     Phase::Live(Box::new(LivePhase {
         world,
+        // Read once per gamestate: the cgame parses configstring 7 in its
+        // weapon setup (0x3000ef10) and `CG_ConfigStringModified` has no
+        // case for it (docs/research/cod11-hud-protocol.md, after the
+        // configstring table).
         weapons: vcod_common::weapon_table::from_configstring(fs, net.configstring(7)),
         scene: entities::EntityScene::new(),
         events: net::events::EventTracker::new(),
@@ -1681,6 +1685,13 @@ impl App {
         !self.console.open && self.ui.active()
     }
 
+    /// `_UI_Init` again: a fresh front end off the search path, with
+    /// `ui_menuFiles` set back to its default first (0x4000d324).
+    fn restart_ui(&mut self) {
+        self.shell.execute("set ui_menuFiles ui_mp/menus.txt");
+        self.ui = new_ui(&self.fs, &self.game_dir, &self.mod_dir);
+    }
+
     /// The main menu, or the error popup over it when `error` says why the
     /// game ended. Its music and clicks use the `menu` loadspec's aliases.
     fn enter_menu(&mut self, error: Option<&str>) {
@@ -1859,6 +1870,12 @@ impl App {
                     }
                 }
                 Effect::Exec(file) => self.exec_file(event_loop, &file),
+                Effect::UiLoad => {
+                    let list = self.shell.cvar("ui_menuFiles").unwrap_or("").to_string();
+                    let mut out = Vec::new();
+                    self.ui.reload(&self.fs, &list, &mut out);
+                    self.ui_pending.extend(out);
+                }
                 Effect::VidRestart => {
                     self.ignore_hw_gamma = ignore_hw_gamma(&self.shell);
                     if let Some(w) = &self.window {
@@ -1984,7 +2001,7 @@ impl App {
                 if let Some(r) = &mut self.renderer {
                     r.reopen(&self.fs);
                 }
-                self.ui = new_ui(&self.fs, &self.game_dir, &self.mod_dir);
+                self.restart_ui();
             }
             Err(e) => log::error!("cannot reopen {}: {e:#}", base.display()),
         }
@@ -2026,7 +2043,7 @@ impl App {
                 r.reopen(&self.fs);
             }
         }
-        self.ui = new_ui(&self.fs, &self.game_dir, &self.mod_dir);
+        self.restart_ui();
         self.after_menu();
         if let Mode::Online {
             net,
@@ -2659,14 +2676,6 @@ impl ApplicationHandler for App {
                                 {
                                     prewarm_viewmodels(view, r, &self.fs, net.configstrings());
                                 }
-                                net::NetEvent::ConfigstringChanged(7) => {
-                                    if let Phase::Live(live) = phase {
-                                        live.weapons = vcod_common::weapon_table::from_configstring(
-                                            &self.fs,
-                                            net.configstring(7),
-                                        );
-                                    }
-                                }
                                 // `j/k/l` is quick chat; `s <idx>` is the announcer.
                                 net::NetEvent::ServerCommand(tokens) => {
                                     if tokens.first().is_some_and(|t| t == "n") {
@@ -2792,6 +2801,7 @@ impl ApplicationHandler for App {
                                         *menu_view = None;
                                         r.reopen(&self.fs);
                                         view.reopen();
+                                        self.shell.execute("set ui_menuFiles ui_mp/menus.txt");
                                         self.ui = new_ui(&self.fs, &self.game_dir, &self.mod_dir);
                                     }
                                     Err(e) => fatal = Some(e),
@@ -3044,6 +3054,9 @@ impl ApplicationHandler for App {
                                     let mut entity_pos: HashMap<u32, Vec3> = HashMap::new();
                                     let mut heads: HashMap<u32, Vec3> = HashMap::new();
                                     let mut turret_eye = None;
+                                    // The drawn `leanf`; the intermission view
+                                    // takes none (cgame 0x30033413).
+                                    let mut view_lean = 0.0;
 
                                     let render_time = net
                                         .snapshots()
@@ -3102,6 +3115,12 @@ impl ApplicationHandler for App {
                                         let vh = a.ps.field_f32(p, "viewHeightCurrent") * (1.0 - f)
                                             + b.ps.field_f32(p, "viewHeightCurrent") * f;
                                         cam.pos = pos + Vec3::Z * vh;
+                                        // `CG_InterpolatePlayerState` lerps `leanf`
+                                        // too (cgame 0x3002936a).
+                                        if pm_type != 5 {
+                                            view_lean = a.ps.field_f32(p, "leanf") * (1.0 - f)
+                                                + b.ps.field_f32(p, "leanf") * f;
+                                        }
                                         if snapshot_view {
                                             let va_a = a.ps.viewangles(p);
                                             let va_b = b.ps.viewangles(p);
@@ -3138,6 +3157,7 @@ impl ApplicationHandler for App {
                                     drawn_pos.clone_from(&entity_pos);
                                     if let Some(v) = &predicted {
                                         cam.pos = v.origin + Vec3::Z * v.view_height;
+                                        view_lean = v.pred.ps.lean;
                                     }
                                     if let Some(s) = net.snapshots().newest() {
                                         view.track_spawn((
@@ -3188,6 +3208,10 @@ impl ApplicationHandler for App {
                                         (cam.yaw, cam.pitch, view_roll) =
                                             own_view(input.cmd_angles(), delta);
                                     }
+                                    // `CG_OffsetFirstPersonView` ends on
+                                    // `AddLeanToPosition` (cgame 0x30032dda): a lean
+                                    // moves the eye and rolls nothing.
+                                    cam.pos += pmove::aim::lean_offset(cam.yaw, view_lean);
                                     // On a mounted gun the view rides the gun's
                                     // `tag_player` and barrel, not the cmd's angles
                                     // (docs/research/cod11-turrets.md section 14).
@@ -3376,9 +3400,11 @@ impl ApplicationHandler for App {
                                             }
                                             let empty = input.weapon_select().is_none()
                                                 && newest.ps.field_i32(p, "weapon") == 0;
-                                            if let Some(s) =
-                                                play::events::forced_stance(&ev, client_num)
-                                            {
+                                            if let Some(s) = play::events::forced_stance(
+                                                &ev,
+                                                client_num,
+                                                self.shell.cvar_f32("cl_stanceTemp") as i32 != 0,
+                                            ) {
                                                 input.force_stance(s);
                                             }
                                             if let Some(w) = play::events::pickup_selects(
@@ -3781,11 +3807,11 @@ impl ApplicationHandler for App {
                         (
                             renderer::Frame {
                                 view_proj: camera::view_proj_from(
-                                    v.eye, v.yaw, v.pitch, v.roll, fov, aspect,
+                                    v.eye, v.yaw, v.pitch, 0.0, fov, aspect,
                                 ),
                                 eye: v.eye,
                                 fwd: camera::basis(v.yaw, v.pitch).0,
-                                up: camera::up_hint(v.yaw, v.pitch, v.roll),
+                                up: camera::up_hint(v.yaw, v.pitch, 0.0),
                                 time,
                                 cull,
                                 hud_lines: vec![format!(

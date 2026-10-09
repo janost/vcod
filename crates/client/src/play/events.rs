@@ -124,12 +124,13 @@ pub fn pickup_selects(
 
 /// The stance an `EV_STANCE_FORCE_*` puts the client in: retail cgame's
 /// handler (0x3001df6d) sets `cl_stance` to 0, 1 or 2 for an event of its
-/// own client while `cl_stanceTemp` is 0, and ignores another client's.
-pub fn forced_stance(ev: &GameEvent, own_client: i32) -> Option<Stance> {
+/// own client while `cl_stanceTemp` is 0 (`stance_temp` false), and ignores
+/// another client's.
+pub fn forced_stance(ev: &GameEvent, own_client: i32, stance_temp: bool) -> Option<Stance> {
     use vcod_common::net::event_ids::{
         EV_STANCE_FORCE_CROUCH, EV_STANCE_FORCE_PRONE, EV_STANCE_FORCE_STAND,
     };
-    if ev.client_num != own_client {
+    if ev.client_num != own_client || stance_temp {
         return None;
     }
     match ev.event {
@@ -212,19 +213,24 @@ mod tests {
             attacker_entity_num: -1,
         };
         assert_eq!(
-            forced_stance(&ev(EV_STANCE_FORCE_STAND, 2), 2),
+            forced_stance(&ev(EV_STANCE_FORCE_STAND, 2), 2, false),
             Some(Stance::Stand)
         );
         assert_eq!(
-            forced_stance(&ev(EV_STANCE_FORCE_CROUCH, 2), 2),
+            forced_stance(&ev(EV_STANCE_FORCE_CROUCH, 2), 2, false),
             Some(Stance::Crouch)
         );
         assert_eq!(
-            forced_stance(&ev(EV_STANCE_FORCE_PRONE, 2), 2),
+            forced_stance(&ev(EV_STANCE_FORCE_PRONE, 2), 2, false),
             Some(Stance::Prone)
         );
-        assert_eq!(forced_stance(&ev(EV_STANCE_FORCE_CROUCH, 5), 2), None);
-        assert_eq!(forced_stance(&ev(FIRE, 2), 2), None);
+        assert_eq!(
+            forced_stance(&ev(EV_STANCE_FORCE_CROUCH, 5), 2, false),
+            None
+        );
+        assert_eq!(forced_stance(&ev(FIRE, 2), 2, false), None);
+        // `cl_stanceTemp` non-zero leaves `cl_stance` alone (0x3001dee5).
+        assert_eq!(forced_stance(&ev(EV_STANCE_FORCE_CROUCH, 2), 2, true), None);
     }
 
     const FOOTSTEP: i32 = 1;

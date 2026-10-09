@@ -189,4 +189,5 @@ never throttles a capture.
 
 The options screens' cvars (`mss_volume`, `r_mode`, `r_fullscreen` and the
 inert ones), `setfromcvar`, `exec` and `vid_restart` are in
-`cod11-front-end.md`, section 14.
+`cod11-front-end.md`, section 14; `ui_load` and `ui_menuFiles` in its
+section 1.

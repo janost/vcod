@@ -272,10 +272,10 @@ dropped, so test such a builtin through `ScriptRuntime`.
   `level.time`, and the entering cmd seeds `commandTime` inside that window.
 - Server commands queue until the next snapshot and squash like
   `SV_AddServerCommand` (rule in `docs/protocol-1.1.md`).
-- The frame loop sends a fragmented snapshot or download message one
-  fragment per tick, as retail does, and an off-LAN client waits out its
-  rate between messages. A test that reads one tick's packets sees only the
-  first fragment of a big message.
+- The frame loop sends a fragmented snapshot, download or gamestate
+  message one fragment per tick, as retail does, and an off-LAN client
+  waits out its rate and its `snaps` interval between messages. A test that
+  reads one tick's packets sees only the first fragment of a big message.
 - A pure server drops a client that enters the world without a valid `cp`
   (pak checksums keyed with the gamestate's `checksumFeed`). Extra
   arguments to `tools/run_server.sh` land after `+map`, so `+set sv_pure 1`
@@ -371,6 +371,10 @@ dropped, so test such a builtin through `ScriptRuntime`.
   starts with `setTimerUp(0)`.
 - Threads due in one frame resume newest-queued first; `wait 0` resumes at
   once; a notify's waiters run after the notifier's step, in start order.
+- The script clock is not `level.time`: a thread due at a frame's
+  `level.time` runs the frame after, so a `wait 1` from
+  `Callback_StartGameType` at 0 wakes at 1050. Between frames the clock is
+  the last frame's `level.time`; `Vm::set_time` starts it at a load.
 - A thread's own `notify` doesn't fire its own `endon`.
 
 ### Assets, rendering, sound

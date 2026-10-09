@@ -1022,9 +1022,65 @@ userinfo values one after another, and `rcon status` for the slots.
   (the LAN rate, 99999, over 50 ms) and a message every 200-300 ms, one
   fragment per frame. VERIFIED (capture, 2026-10-09, on a loaded host).
 - vcod: `Client::pace`, `Client::first_packet` and `Client::next_fragment`
-  follow these rules for the snapshot and download messages built in the
-  frame loop. The gamestate still goes out whole, ahead of any fragment
-  left over, which it replaces.
+  follow these rules for every message: the snapshot and download messages
+  built in the frame loop and the gamestate (next section).
+
+### The gamestate goes out fragmented (`SV_SendClientGameState` 0x8085eec)
+
+- It first sends every fragment left of an earlier message, in a loop of
+  `Netchan_TransmitNextFragment` (0x808dcf8, called at `0x8085f34`) until
+  `unsentFragments` clears. They all go in that one call. VERIFIED (code).
+- It builds the gamestate in a 16384-byte message buffer (`MSG_Init(...,
+  0x4000)` at `0x8085fa7`). The write helpers (`MSG_WriteByte` 0x807f090,
+  `MSG_WriteData` 0x807eef0) set the buffer's overflowed flag and drop the
+  write when it is full. VERIFIED (code). The function never reads that
+  flag before sending. VERIFIED (asm, `0x8085eec..0x8086168`). INFERRED:
+  a gamestate past 16384 plain bytes reaches the client cut short, with
+  no `svc_EOF`.
+- It sends through `SV_SendMessageToClient` (0x808f680) like any message,
+  so `nextSnapshotTime` follows "Message pacing" above. The client is
+  `CS_PRIMED` by then, so off the LAN, and not downloading, the second
+  fragment waits at least a second. VERIFIED (code). INFERRED: off the LAN
+  the gamestate takes a second plus the rate's pace per later fragment.
+- `Netchan_Transmit` (0x8080320) raises a `Com_Error` past 16384 bytes
+  (`Netchan_Transmit: length = %i`, `0x80d3000`). Below 1300 bytes
+  (`cmp 0x514`) a message goes in one packet. Otherwise it keeps the whole
+  message as unsent fragments and sends the first one now. VERIFIED (code).
+- Live, 2026-10-09: a loopback `vcod --net-probe` against 1.1d on
+  `mp_carentan` got its gamestate as six fragments under one sequence
+  (5 x 1300 + 645). The first came on the `connect` reply's heels, and
+  the rest came 41, 56, 47, 48 and 51 ms apart, one per server frame.
+  Before the gamestate the client got one 9-byte message, the
+  `CS_CONNECTED` frame. VERIFIED (capture, a logging UDP relay between
+  the probe and the server).
+- vcod: `Server::send_gamestate` flushes the old fragments, sends the
+  gamestate's first fragment and paces the client. The frame loop sends
+  the rest one per turn. Against vcod-server, the same probe got the
+  6718-byte gamestate as five fragments, one per frame. VERIFIED (capture,
+  same relay). vcod logs a warning past 16384 plain bytes and sends the
+  gamestate whole.
+
+### `snaps` (`SV_UserinfoChanged` 0x8086ab4)
+
+- `snapshotMsec` (client field `0x528a8`) is 50 when the userinfo's
+  `snaps` is empty or missing. Otherwise it is `1000 / snaps`, with
+  `snaps` read by `strtol` and clamped to 1..30, so `snaps 30` gives 33,
+  `0` or junk gives 1000, and anything past 30 gives 33. VERIFIED (asm
+  `0x8086cad..0x8086d44`: the `cmp $0x1e` at `0x8086d20`, the 50 at
+  `0x8086d44`).
+- Two readers. `SV_SendMessageToClient` uses it to floor an off-LAN
+  client's interval (`0x808f7d8`). `SV_WriteDownloadToClient` uses it to
+  size a message at `rate * snapshotMsec / 1000 / 2048 + 1` blocks
+  (`imul` at `0x80865d9`). A LAN client's interval ignores it. VERIFIED
+  (code).
+- Live, 2026-10-09: a loopback probe downloading `bonneville.pk3` from
+  1.1d (LAN rate 99999) got download messages of 11394-11496 bytes with
+  `snaps 10`, which is five blocks, and of 4541-4572 bytes with `snaps
+  30`, which is two. vcod-server sent the same message sizes byte for
+  byte under both values. VERIFIED (capture, relay, a scratch build of
+  the probe that took `snaps` from the environment).
+- vcod: `Client::snapshot_msec` reads it the same way. The pace and the
+  download block count use it.
 
 ### `g_password` (`ClientConnect`, game.mp.i386.so 0x4246c)
 

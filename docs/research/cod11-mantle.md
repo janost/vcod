@@ -636,8 +636,8 @@ the branches into each, with `wbuttons` read at `pm+0x9`:
   is cleared from the cmd and 140 raised.
 - `pm_flags` 0x10, the ladder (0x3189c-0x318be): a crouch or prone key
   (0xc0) is cleared from the cmd and 140 raised; the arms below then see
-  neither key. `pm_flags` 0x4000 skips every arm (0x31893); vcod has no
-  writer of that bit.
+  neither key. `pm_flags` 0x4000 skips every arm (0x31893); nothing in 1.1
+  MP sets that bit (below).
 - prone held, not yet prone, `BG_CheckProne` refuses (0x31963-0x31996):
   0x8000, the dive bit cleared, then 141 with `pm_flags` 2 (the crouch
   latch) and 140 without.
@@ -683,8 +683,50 @@ vcod: `pmove::update_stance` is the arms above and `update_prone_pitch` the
 airborne one; `PmInput::stance_held` is `wbuttons` 0x2; `ClientSim::step`
 raises the spectator's 140. The playing client sets its wanted stance off
 its own client's 140-142 (`play::events::forced_stance`), and the offline
-walk mode turns its prone toggle off on 140 or 141. Not modelled:
-`cl_stanceTemp`, which vcod's client has no binding for.
+walk mode turns its prone toggle off on 140 or 141.
+
+`cl_stanceTemp`. VERIFIED: CoDMP.exe registers it at 0x4120e6 and the
+cgame's cvar table at file offset 0x74f60, both with default "0" and flags
+0x100 (`CVAR_TEMP`); the string appears once in each module and not at all
+in ui_mp_x86.dll; CoDMP.exe has no read of its cvar pointer (0x142f5f0)
+past the store; the only cgame reads of its value (0x301d8f0c) are the
+three event arms above (0x3001dee5, 0x3001df20, 0x3001df5b). The stock
+configs set it to "0" (`configure_mp.cfg`, `safemode_mp.cfg`). INFERRED: it
+is a user switch that, set non-zero, stops the forced-stance events from
+moving `cl_stance`, and no stock code sets it. vcod registers it with that
+default and `forced_stance` honours it.
+
+### `pm_flags` 0x4000
+
+VERIFIED, `game.mp.i386.so`, its readers: `PmoveSingle` tests it at
+0x33e38 and under it stores 0 to the cmd's `buttons` and three move bytes
+and masks `wbuttons` with 0xc2 (0x33e3e-0x33e4e); `PM_CheckDuck` tests it at
+0x31893, `PM_UpdateLean` at 0x32ae4 and the weapon select at 0x389ae; the
+cgame's weapon-cycle binds test it on the predicted playerstate
+(cgame_mp_x86.dll 0x30037fa3, 0x30038079). INFERRED, off the branches:
+under it the stance arms are skipped, the lean keys ignored, a held weapon
+kept and the cycle binds refused, which makes it a controls freeze.
+
+VERIFIED: no instruction in the module sets it; objdump shows no `or` of
+0x4000 into any word and no `or` of 0x40 into `ps+0xd`. INFERRED, from a
+search of the two engine decompiles for `| 0x4000` stores: neither engine
+sets it on a playerstate. VERIFIED: `freezeControls` (0x456ec,
+`player_methods` entry 30 in `tools/re/dump_builtins.py`) checks that its
+receiver is a player, calls `Scr_GetBool` and stores the result at
+`client+0x21e0`; no other instruction in the module carries the
+displacement 0x21e0. INFERRED: nothing reads the stored flag.
+
+VERIFIED live, 2026-10-09: `client-probes/probe_freeze` on
+`tools/run_probe.sh mp_carentan` (port 29951) calls `freezecontrols(true)`
+on the joining player on its first frame alive (`PROBE freeze 12250 vcod`),
+and a `--net-probe --save-motion` client then held each motion pose. Every
+pose read as an unfrozen player's: `leanf` -1 and 1 under the lean keys,
+`pm_flags` 0x40002 crouched, 0x40005 diving prone, `bobCycle` moving on the
+runs and 0x40008 on the jump; no `pm_flags` 0x4000 in any snapshot.
+INFERRED: `freezeControls` is a single-player builtin left registered in
+MP, where it does nothing, and the freeze bit's readers are code shared with
+single player. vcod: `freezeControls` is accepted and does nothing; pmove
+has no 0x4000 arm, since no server sends the bit.
 
 ### The landing damp
 

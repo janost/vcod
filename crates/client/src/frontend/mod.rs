@@ -39,6 +39,43 @@ use status::StatusQuery;
 /// UI loads, which a mod replaces by shipping its own.
 const MENU_LIST: &str = "ui_mp/menus.txt";
 
+/// `UI_LoadMenus` (`ui_mp_x86.dll` 0x400085b0): the menus the list at
+/// `list` names, in order, and each item's starting state. A missing list
+/// falls back to [`MENU_LIST`] with retail's warning.
+fn load_menus(fs: &Pk3Fs, list: &str) -> (Vec<UiMenu>, Vec<Vec<ItemState>>) {
+    let read = |p: &str| fs.read(p).map(|b| String::from_utf8_lossy(&b).into_owned());
+    let text = read(list).or_else(|| {
+        crate::console::log::print(&format!("^3menu file not found: {list}, using default"));
+        read(MENU_LIST)
+    });
+    let files = text.map_or_else(Vec::new, |t| ui_menu::menu_list(&t));
+    if files.is_empty() {
+        log::warn!("ui: no menus in {list}");
+    }
+    let mut menus = Vec::new();
+    for path in &files {
+        match read(path) {
+            Some(text) => menus.extend(ui_menu::parse_file(&text, &read)),
+            // Stock `menus.txt` names three files no pak ships.
+            None => log::debug!("ui: menu file not found: {path}"),
+        }
+    }
+    let state = menus
+        .iter()
+        .map(|m: &UiMenu| {
+            m.items
+                .iter()
+                .map(|i| ItemState {
+                    visible: i.visible,
+                    back: i.back,
+                    border_color: i.border_color,
+                })
+                .collect()
+        })
+        .collect();
+    (menus, state)
+}
+
 /// The stock menus vcod cannot run yet; `open` refuses them with a console
 /// line instead of drawing controls that do nothing. Any other menu the
 /// list loads, a mod's included, opens.
@@ -171,33 +208,10 @@ pub struct Ui {
 }
 
 impl Ui {
+    /// `_UI_Init` sets `ui_menuFiles` back to its default before reading
+    /// it (0x4000d324), so the UI always starts off [`MENU_LIST`].
     pub fn new(fs: &Pk3Fs) -> Ui {
-        let read = |p: &str| fs.read(p).map(|b| String::from_utf8_lossy(&b).into_owned());
-        let mut menus = Vec::new();
-        let files = read(MENU_LIST).map_or_else(Vec::new, |t| ui_menu::menu_list(&t));
-        if files.is_empty() {
-            log::warn!("ui: no menus in {MENU_LIST}");
-        }
-        for path in &files {
-            match read(path) {
-                Some(text) => menus.extend(ui_menu::parse_file(&text, &read)),
-                // Stock `menus.txt` names three files no pak ships.
-                None => log::debug!("ui: menu file not found: {path}"),
-            }
-        }
-        let state = menus
-            .iter()
-            .map(|m| {
-                m.items
-                    .iter()
-                    .map(|i| ItemState {
-                        visible: i.visible,
-                        back: i.back,
-                        border_color: i.border_color,
-                    })
-                    .collect()
-            })
-            .collect();
+        let (menus, state) = load_menus(fs, MENU_LIST);
         let fonts = UiFonts::load(fs)
             .map_err(|e| log::warn!("ui: {e}, drawing no text"))
             .ok();
@@ -255,6 +269,21 @@ impl Ui {
         self.open.clear();
         self.in_game = true;
         self.open_menu("main", out);
+    }
+
+    /// `ui_load` (`UI_Load`, 0x400086c0): reload the menus off the list
+    /// `ui_menuFiles` names, close them all and reopen the one that had
+    /// focus.
+    pub fn reload(&mut self, fs: &Pk3Fs, list: &str, out: &mut Vec<UiEffect>) {
+        let focused = self.open.last().map(|&m| self.menus[m].name.clone());
+        let list = if list.is_empty() { MENU_LIST } else { list };
+        (self.menus, self.state) = load_menus(fs, list);
+        self.open.clear();
+        self.hover = None;
+        self.options.clear();
+        if let Some(name) = focused {
+            self.open_menu(&name, out);
+        }
     }
 
     /// Everything closes when a game starts.
@@ -1289,6 +1318,42 @@ mod tests {
         ui.open_menu("zmenu", &mut out);
         assert_eq!(top_name(&ui), "zmenu");
         assert_eq!(out, [UiEffect::Command("zmod_opened".into())]);
+    }
+
+    /// `ui_load` reads the list `ui_menuFiles` names, falls back to the stock
+    /// list when it is missing, and reopens the menu that had focus.
+    #[test]
+    fn ui_load_reloads_off_the_named_list_and_reopens_the_focused_menu() {
+        let mut fs = Pk3Fs::empty();
+        let menu = |name: &str, opened: &str| {
+            format!(
+                r#"{{ menuDef {{ name "{name}" rect 0 0 640 480 onOpen {{ exec "{opened}" }} }} }}"#
+            )
+            .into_bytes()
+        };
+        fs.overlay(
+            "ui_mp/menus.txt",
+            br#"{ loadMenu { "ui_mp/a.menu" } }"#.to_vec(),
+        );
+        fs.overlay("ui_mp/a.menu", menu("a", "stock_a"));
+        fs.overlay(
+            "ui_mp/alt.txt",
+            br#"{ loadMenu { "ui_mp/a2.menu" "ui_mp/b.menu" } }"#.to_vec(),
+        );
+        fs.overlay("ui_mp/a2.menu", menu("a", "alt_a"));
+        fs.overlay("ui_mp/b.menu", menu("b", "alt_b"));
+        let mut ui = Ui::new(&fs);
+        assert!(ui.find("b").is_none());
+        ui.open_menu("a", &mut Vec::new());
+        let mut out = Vec::new();
+        ui.reload(&fs, "ui_mp/alt.txt", &mut out);
+        assert!(ui.find("b").is_some());
+        assert_eq!(top_name(&ui), "a");
+        assert_eq!(out, [UiEffect::Command("alt_a".into())]);
+        out.clear();
+        ui.reload(&fs, "ui_mp/missing.txt", &mut out);
+        assert!(ui.find("b").is_none(), "back on the stock list");
+        assert_eq!(out, [UiEffect::Command("stock_a".into())]);
     }
 
     #[test]
