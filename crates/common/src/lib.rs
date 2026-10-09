@@ -12,6 +12,7 @@ pub mod menu;
 pub mod mesh;
 pub mod movetrace;
 pub mod net;
+pub mod pak_checksum;
 pub mod patch;
 pub mod pk3;
 pub mod playerpose;

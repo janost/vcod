@@ -30,6 +30,7 @@ pub const ITEM_ALIGN_RIGHT: i32 = 2;
 
 /// `FEEDER_*` from `ui_mp/menudef.h`.
 pub const FEEDER_SERVERS: i32 = 2;
+pub const FEEDER_MODS: i32 = 9;
 pub const FEEDER_SERVERSTATUS: i32 = 13;
 
 /// One `columns` entry of a list box: x offset, width and the character cap.

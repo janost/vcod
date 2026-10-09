@@ -5,6 +5,7 @@
 use crate::server::ServerConfig;
 use vcod_common::net::connectionless::Info;
 use vcod_common::net::protocol::{CS_LEVEL_START_TIME, CS_SERVERINFO, CS_SYSTEMINFO, PROTOCOL_V1};
+use vcod_common::pk3::PakInfo;
 use vcod_common::pmove::FallHeights;
 use vcod_gsc::ErrorKind;
 
@@ -60,23 +61,109 @@ pub fn serverinfo(cfg: &ServerConfig) -> Info {
     i
 }
 
-/// `Cvar_InfoString_Big(CVAR_SYSTEMINFO)`, capture cs 1, minus the pak lists.
-/// Must stay under `MAX_INFO_STRING` with `sv_serverid` intact; the overflow
-/// is in docs/research/cod11-server-handshake.md, "Configstring 1, systeminfo".
-/// The fall bounds are the cvars' current values, which a client predicts
-/// its landings with; `cheats` is `sv_cheats`, which `devmap` sets.
-pub fn systeminfo(server_id: u8, fall: FallHeights, cheats: bool) -> Info {
-    let mut i = Info::new();
-    i.set("bg_fallDamageMaxHeight", fall.max)
-        .set("bg_fallDamageMinHeight", fall.min)
-        .set("g_synchronousClients", 0)
-        .set("pmove_fixed", 0)
-        .set("pmove_msec", 8)
-        .set("sv_cheats", u8::from(cheats))
-        .set("sv_pure", 0)
-        .set("sv_serverid", server_id)
-        .set("timescale", 1);
-    i
+/// The four pak cvars `SV_SpawnServer` sets (docs/research/cod11-map-cycle.md,
+/// section 3 step 23), as lists so the systeminfo can trim them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PakLists {
+    /// `sv_pure`; without it `sv_paks` and `sv_pakNames` are empty.
+    pub pure: bool,
+    /// `FS_LoadedPakChecksums` / `FS_LoadedPakNames`: every non-localized
+    /// pak, checksum and bare name.
+    pub paks: Vec<(i32, String)>,
+    /// `FS_ReferencedPakChecksums` / `FS_ReferencedPakNames`: every pak,
+    /// localized ones included, checksum and `<game>/<name>`.
+    pub referenced: Vec<(i32, String)>,
+}
+
+impl PakLists {
+    /// The lists for the search path `paks` (highest priority first).
+    pub fn new<'a>(pure: bool, paks: impl IntoIterator<Item = &'a PakInfo>) -> Self {
+        let mut lists = PakLists {
+            pure,
+            ..PakLists::default()
+        };
+        for p in paks {
+            if pure && !p.localized {
+                lists.paks.push((p.checksum, p.name.clone()));
+            }
+            lists.referenced.push((p.checksum, p.qualified_name()));
+        }
+        lists
+    }
+}
+
+/// `"%i "` per checksum, names joined by single spaces: the lists' shape on
+/// the wire, trailing space included.
+fn sums_and_names(list: &[(i32, String)]) -> (String, String) {
+    let sums = list.iter().map(|(c, _)| format!("{c} ")).collect();
+    let names = list
+        .iter()
+        .map(|(_, n)| n.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    (sums, names)
+}
+
+/// A serverinfo string with its `sv_pure` value replaced in place.
+pub fn with_sv_pure(info: &str, pure: bool) -> String {
+    let key = "\\sv_pure\\";
+    let Some(at) = info.find(key) else {
+        return info.to_string();
+    };
+    let start = at + key.len();
+    let end = info[start..].find('\\').map_or(info.len(), |e| start + e);
+    format!("{}{}{}", &info[..start], u8::from(pure), &info[end..])
+}
+
+/// `MAX_INFO_STRING` less the terminator.
+const MAX_INFO_CHARS: usize = 1023;
+
+/// `Cvar_InfoString_Big(CVAR_SYSTEMINFO)`, capture cs 1. The fall bounds are
+/// the cvars' current values, which a client predicts its landings with;
+/// `cheats` is `sv_cheats`, which `devmap` sets. An empty pak list leaves its
+/// key out, as an empty cvar does.
+///
+/// Retail overflows `MAX_INFO_STRING` with enough paks and loses
+/// `sv_serverid` off the end (docs/research/cod11-server-handshake.md,
+/// "Configstring 1, systeminfo"); vcod drops paks off the ends of the lists
+/// instead, the referenced pair first.
+pub fn systeminfo(server_id: u8, fall: FallHeights, cheats: bool, paks: &PakLists) -> Info {
+    let mut paks = paks.clone();
+    let mut warned = false;
+    loop {
+        let (sums, names) = sums_and_names(&paks.paks);
+        let (ref_sums, ref_names) = sums_and_names(&paks.referenced);
+        let mut i = Info::new();
+        i.set("bg_fallDamageMaxHeight", fall.max)
+            .set("bg_fallDamageMinHeight", fall.min)
+            .set("g_synchronousClients", 0)
+            .set("pmove_fixed", 0)
+            .set("pmove_msec", 8)
+            .set("sv_cheats", u8::from(cheats));
+        if !names.is_empty() {
+            i.set("sv_pakNames", names).set("sv_paks", sums);
+        }
+        i.set("sv_pure", u8::from(paks.pure));
+        if !ref_names.is_empty() {
+            i.set("sv_referencedPakNames", ref_names)
+                .set("sv_referencedPaks", ref_sums);
+        }
+        i.set("sv_serverid", server_id).set("timescale", 1);
+        if i.to_string().len() <= MAX_INFO_CHARS
+            || (paks.referenced.is_empty() && paks.paks.is_empty())
+        {
+            return i;
+        }
+        if !warned {
+            log::warn!("systeminfo over {MAX_INFO_CHARS} chars: trimming the pak lists");
+            warned = true;
+        }
+        if paks.referenced.len() >= paks.paks.len() {
+            paks.referenced.pop();
+        } else {
+            paks.paks.pop();
+        }
+    }
 }
 
 /// The full 2048-slot table for a fresh map.
@@ -85,12 +172,15 @@ pub fn static_configstrings(
     server_id: u8,
     fall: FallHeights,
     cheats: bool,
+    paks: &PakLists,
 ) -> Vec<String> {
     let mut cs = vec![String::new(); PROTOCOL_V1.max_configstrings];
     // Names an out-of-range literal instead of a bare index panic.
     debug_assert!(STATIC.iter().all(|&(i, _)| i < cs.len()));
-    cs[CS_SERVERINFO] = serverinfo(cfg).to_string();
-    cs[CS_SYSTEMINFO] = systeminfo(server_id, fall, cheats).to_string();
+    cs[CS_SERVERINFO] = serverinfo(cfg)
+        .set("sv_pure", u8::from(paks.pure))
+        .to_string();
+    cs[CS_SYSTEMINFO] = systeminfo(server_id, fall, cheats, paks).to_string();
     for &(i, s) in STATIC {
         cs[i] = s.to_string();
     }
@@ -311,6 +401,79 @@ pub fn script_menu_name(cs: &[String], index: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pak(name: &str, game: &str, checksum: i32) -> PakInfo {
+        PakInfo {
+            path: format!("{game}/{name}.pk3").into(),
+            game: game.into(),
+            name: name.into(),
+            localized: name.starts_with("localized_"),
+            checksum,
+            crcs: Vec::new(),
+        }
+    }
+
+    /// The pak half of the retail capture under `sv_pure 1` (2026-10-09,
+    /// 1.1d on a stock 1.1 install, docs/research/cod11-server-handshake.md,
+    /// "Pak checksums"), trimmed to three paks.
+    #[test]
+    fn systeminfo_carries_the_pak_lists_as_retail_does() {
+        let paks = [
+            pak("pak6", "main", 1_252_304_247),
+            pak("pak5", "main", 77_111_478),
+            pak("localized_english_pak1", "main", -961_133_319),
+        ];
+        let fall = FallHeights::default();
+        let pure = systeminfo(0x10, fall, false, &PakLists::new(true, &paks)).to_string();
+        assert!(pure.contains(
+            "\\sv_cheats\\0\\sv_pakNames\\pak6 pak5\\sv_paks\\1252304247 77111478 \\sv_pure\\1\
+             \\sv_referencedPakNames\\main/pak6 main/pak5 main/localized_english_pak1\
+             \\sv_referencedPaks\\1252304247 77111478 -961133319 \\sv_serverid\\16\\timescale\\1"
+        ));
+        // `sv_pure 0` empties the loaded pair, which leaves the info string.
+        let impure = systeminfo(0x10, fall, false, &PakLists::new(false, &paks)).to_string();
+        assert!(!impure.contains("sv_paks") && !impure.contains("sv_pakNames"));
+        assert!(impure.contains("\\sv_pure\\0\\sv_referencedPakNames\\main/pak6"));
+    }
+
+    /// Too many paks for `MAX_INFO_STRING` cost paks, never `sv_serverid`.
+    #[test]
+    fn systeminfo_trims_paks_to_keep_the_server_id() {
+        let paks: Vec<PakInfo> = (0..60)
+            .map(|i| {
+                pak(
+                    &format!("zzz_some_long_map_pak_{i}"),
+                    "main",
+                    -1_000_000_000 - i,
+                )
+            })
+            .collect();
+        let info = systeminfo(
+            0x10,
+            FallHeights::default(),
+            false,
+            &PakLists::new(true, &paks),
+        )
+        .to_string();
+        assert!(info.len() <= MAX_INFO_CHARS, "{}", info.len());
+        assert!(info.ends_with("\\sv_serverid\\16\\timescale\\1"));
+        let names = vcod_common::net::info_value_for_key(&info, "sv_referencedPakNames").unwrap();
+        let sums = vcod_common::net::info_value_for_key(&info, "sv_referencedPaks").unwrap();
+        assert_eq!(
+            names.split_whitespace().count(),
+            sums.split_whitespace().count()
+        );
+        assert!(names.starts_with("main/zzz_some_long_map_pak_0 "));
+    }
+
+    #[test]
+    fn sv_pure_is_replaced_in_place() {
+        assert_eq!(
+            with_sv_pure("\\sv_privateClients\\0\\sv_pure\\0", true),
+            "\\sv_privateClients\\0\\sv_pure\\1"
+        );
+        assert_eq!(with_sv_pure("\\a\\b", true), "\\a\\b");
+    }
 
     /// Intern-or-append, mirroring `G_ModelIndex` and its siblings: the same
     /// name twice is one slot, a new name takes the next

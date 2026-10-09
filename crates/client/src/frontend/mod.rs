@@ -6,8 +6,10 @@
 //! error popups drawn from their `.menu` files and driven by mouse and keys,
 //! as the UI module does while no game is up, and the main menu again over a
 //! game with `cl_ingame` 1 (docs/research/cod11-front-end.md).
-//! Menus vcod cannot run yet (create server, mods) are refused with a console
-//! line instead of drawing screens whose controls do nothing.
+//! The Mods menu lists the mod directories and switches `fs_game`, which
+//! rebuilds the UI off the new search path. Menus vcod cannot run yet
+//! (create server) are refused with a console line instead of drawing
+//! screens whose controls do nothing.
 
 pub mod browser;
 mod options;
@@ -21,7 +23,7 @@ use std::time::{Duration, Instant};
 use vcod_common::localize::Localized;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::ui_menu::{
-    self, FEEDER_SERVERS, FEEDER_SERVERSTATUS, ITEM_ALIGN_CENTER, ITEM_ALIGN_RIGHT,
+    self, FEEDER_MODS, FEEDER_SERVERS, FEEDER_SERVERSTATUS, ITEM_ALIGN_CENTER, ITEM_ALIGN_RIGHT,
     ITEM_TYPE_LISTBOX, ITEM_TYPE_MULTI, ITEM_TYPE_OWNERDRAW, ITEM_TYPE_SLIDER, UiItem, UiMenu,
     WINDOW_STYLE_FILLED, WINDOW_STYLE_SHADER,
 };
@@ -34,8 +36,9 @@ use browser::{AddFavorite, Browser, Filter, Source, Status};
 use status::StatusQuery;
 
 /// The files `ui_mp/menus.txt` loads that hold the menus vcod drives.
-const MENU_FILES: [&str; 8] = [
+const MENU_FILES: [&str; 9] = [
     "ui_mp/main.menu",
+    "ui_mp/mods.menu",
     "ui_mp/joinserver.menu",
     "ui_mp/password.menu",
     "ui_mp/serverinfo.menu",
@@ -47,8 +50,9 @@ const MENU_FILES: [&str; 8] = [
 
 /// Menus `open` may show, with [`options::MENUS`]. Anything else is refused
 /// with a console line.
-const SUPPORTED: [&str; 10] = [
+const SUPPORTED: [&str; 11] = [
     "main",
+    "mods_menu",
     "joinserver",
     "password_popmenu",
     "serverinfo_popmenu",
@@ -99,6 +103,9 @@ pub enum UiEffect {
     Command(String),
     /// A sound alias played on the viewer.
     Sound(String),
+    /// `RunMod`'s `fs_game` and `vid_restart`: switch to this mod
+    /// directory, or back to the base game with `None` (`Quake3`).
+    RunMod(Option<String>),
     /// `execOnCvarIntValue` / `execOnCvarFloatValue`: run `command` when
     /// `cvar` holds `value` (compared as integers when `int`). Read when the
     /// effect runs, after the commands queued before it.
@@ -158,6 +165,13 @@ pub struct Ui {
     status: Option<StatusQuery>,
     /// [`UI_CVARS`] as the shell had them last frame (lower-case names).
     cvars: HashMap<String, String>,
+    /// The install root and the base game directory the Mods menu lists
+    /// beside; `None` lists nothing.
+    mod_root: Option<(PathBuf, String)>,
+    /// `LoadMods`' list and the selected row.
+    mods: Vec<vcod_common::pk3::ModEntry>,
+    mod_selected: Option<usize>,
+    last_mod_click: Option<(Instant, usize)>,
 }
 
 impl Ui {
@@ -203,7 +217,17 @@ impl Ui {
             fav_message: String::new(),
             status: None,
             cvars: HashMap::new(),
+            mod_root: None,
+            mods: Vec::new(),
+            mod_selected: None,
+            last_mod_click: None,
         }
+    }
+
+    /// The Mods menu lists the directories of `game_dir` beside `base`.
+    pub fn with_mod_root(mut self, game_dir: PathBuf, base: String) -> Ui {
+        self.mod_root = Some((game_dir, base));
+        self
     }
 
     /// Favourites live in `path` (`servercache.dat`, beside `CoDMP.exe`).
@@ -434,6 +458,23 @@ impl Ui {
                 }
             }
             "quit" => out.push(UiEffect::Command("quit".into())),
+            // `UI_LoadMods` (ui_mp_x86.dll 0x40009e10), at most 64.
+            "loadmods" => {
+                self.mods = self
+                    .mod_root
+                    .as_ref()
+                    .map(|(dir, base)| vcod_common::pk3::mod_list(dir, base))
+                    .unwrap_or_default();
+                self.mods.truncate(64);
+                self.mod_selected = None;
+            }
+            "runmod" => {
+                if let Some(m) = self.mod_selected.and_then(|i| self.mods.get(i)) {
+                    out.push(UiEffect::RunMod(Some(m.dir.clone())));
+                }
+            }
+            // The base game again; no stock menu calls it.
+            "quake3" => out.push(UiEffect::RunMod(None)),
             "clearerror" => self.error.clear(),
             // vcod reads binds straight from the console, so there is
             // nothing to load; one language is all vcod reads.
@@ -551,6 +592,23 @@ impl Ui {
             return out;
         };
         let item = self.menus[top].items[i].clone();
+        if item.kind == ITEM_TYPE_LISTBOX && item.feeder == Some(FEEDER_MODS) {
+            let row = ((self.cursor[1] - item.rect[1] - 1.0) / item.element_height.max(1.0)).floor()
+                as usize;
+            if row < self.mods.len() {
+                let double = self
+                    .last_mod_click
+                    .is_some_and(|(t, r)| r == row && now - t < DOUBLE_CLICK);
+                self.mod_selected = Some(row);
+                self.last_mod_click = Some((now, row));
+                self.run(top, &item.action, &mut out);
+                if double {
+                    self.last_mod_click = None;
+                    self.run(top, &item.double_click, &mut out);
+                }
+            }
+            return out;
+        }
         if item.kind == ITEM_TYPE_LISTBOX && item.feeder == Some(FEEDER_SERVERS) {
             let row = ((self.cursor[1] - item.rect[1] - 1.0) / item.element_height.max(1.0)).floor()
                 as usize
@@ -689,6 +747,10 @@ impl Ui {
                     self.status_list(&p, item, loc, &mut out);
                     continue;
                 }
+                if item.kind == ITEM_TYPE_LISTBOX && item.feeder == Some(FEEDER_MODS) {
+                    self.mod_rows(&p, item, &mut out);
+                    continue;
+                }
                 let label = if !item.text.is_empty() {
                     loc.translate(&item.text).into_owned()
                 } else if let Some(cvar) = &item.cvar
@@ -798,6 +860,37 @@ impl Ui {
                     y + eh + item.text_align_y,
                     item.text_scale,
                     item.fore,
+                    out,
+                );
+            }
+            y += eh;
+        }
+    }
+
+    /// `Item_ListBox_Paint` for `FEEDER_MODS`: each mod's description, or
+    /// its directory when it has none (ui_mp_x86.dll 0x4000caa9).
+    fn mod_rows(&self, p: &Painter, item: &UiItem, out: &mut Vec<HudQuad>) {
+        let [x, y0, w, _] = item.rect;
+        let (x, mut y) = (x + 1.0, y0 + 1.0);
+        let eh = item.element_height.max(1.0);
+        for (i, m) in self.mods.iter().enumerate().take(visible_rows(item)) {
+            let text = if m.description.is_empty() {
+                &m.dir
+            } else {
+                &m.description
+            };
+            p.text(
+                text,
+                x + 4.0 + item.text_align_x,
+                y + eh + item.text_align_y,
+                item.text_scale,
+                item.fore,
+                out,
+            );
+            if self.mod_selected == Some(i) {
+                p.fill(
+                    [x, y, w - SCROLLBAR_SIZE - 4.0, eh - 1.0],
+                    item.outline_color,
                     out,
                 );
             }
@@ -1162,6 +1255,42 @@ mod tests {
         click_item(&mut ui, "main", "@MENU_START_NEW_SERVER", &shell);
         assert_eq!(ui.open.len(), 1);
         assert_eq!(ui.menus[ui.open[0]].name, "main");
+    }
+
+    #[test]
+    fn the_mods_menu_lists_mod_dirs_and_runs_the_picked_one() {
+        let Some(ui) = ui() else { return };
+        let root = tempfile::tempdir().unwrap();
+        let zmod = root.path().join("zmod");
+        std::fs::create_dir_all(&zmod).unwrap();
+        let mut w = zip::ZipWriter::new(std::fs::File::create(zmod.join("z.pk3")).unwrap());
+        w.start_file("a.txt", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        w.finish().unwrap();
+        std::fs::write(zmod.join("description.txt"), "Zombies").unwrap();
+        let mut ui = ui.with_mod_root(root.path().to_path_buf(), "main".into());
+        let mut shell = Shell::new();
+        ui.open_main(&mut Vec::new());
+        click_item(&mut ui, "main", "@MENU_MODS", &shell);
+        assert_eq!(top_name(&ui), "mods_menu");
+        assert_eq!(ui.mods.len(), 1, "loadMods ran on open");
+        let quads = ui.build(640.0, 480.0, &Localized::default(), &shell);
+        assert!(!quads.is_empty());
+        // A click picks the row and shows Launch; Launch runs the mod.
+        click_named(&mut ui, "mods_menu", "modlist", &mut shell);
+        assert_eq!(ui.mod_selected, Some(0));
+        let m = ui.find("mods_menu").unwrap();
+        let accept = (0..ui.menus[m].items.len())
+            .find(|&i| ui.menus[m].items[i].name == "accept")
+            .unwrap();
+        assert!(ui.shown(m, accept, &shell));
+        let r = ui.menus[m].items[accept].rect;
+        ui.mouse_move(r[0] + 2.0, r[1] + 2.0, 640.0, 480.0, &shell);
+        let out = ui.click(Instant::now(), &shell);
+        assert!(
+            out.contains(&UiEffect::RunMod(Some("zmod".into()))),
+            "{out:?}"
+        );
     }
 
     #[test]
