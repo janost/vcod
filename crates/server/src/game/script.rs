@@ -134,9 +134,8 @@ pub struct EntityPass {
 pub enum PassStop {
     /// A grenade went off on its turn (`G_RunMissile`); walk the blast.
     Blast(crate::game::missile::Explosion),
-    /// A brush model mover moved on its turn (`G_MoverTeam`): push the
-    /// bodies in its way, then [`ScriptRuntime::push_items`] or
-    /// [`ScriptRuntime::stall_mover`].
+    /// A brush model mover moved on its turn (`G_MoverTeam`): push what it
+    /// listed ([`ScriptRuntime::push_mover`]).
     Push(crate::game::mover::Step),
     /// `G_RunClient` (0x40660) for a linked client, its parent already run:
     /// re-anchor it.
@@ -885,19 +884,20 @@ impl ScriptRuntime {
         self.vm.with_cx(|cx| host.spawn_concussive(cx));
     }
 
-    /// The push `step` asked for was blocked: the mover holds a frame.
-    pub fn stall_mover(&mut self, step: &crate::game::mover::Step) {
+    /// `G_MoverPush` over the players in `sims` and the items `step`
+    /// listed (`crate::push::push`); a blocked push holds the mover a frame.
+    pub fn push_mover(
+        &mut self,
+        step: &crate::game::mover::Step,
+        sims: &mut [(usize, &mut crate::spectate::ClientSim)],
+        world: &vcod_common::collision::CollisionWorld,
+    ) {
         let host = &mut self.host;
-        self.vm
-            .with_cx(|cx| crate::game::mover::stall(host, cx, step));
-    }
-
-    /// The items' half of the push `step` asked for, once the players'
-    /// half has not stalled it (`crate::game::item::push_items`).
-    pub fn push_items(&mut self, step: &crate::game::mover::Step) {
-        let host = &mut self.host;
-        self.vm
-            .with_cx(|cx| crate::game::item::push_items(host, cx, step));
+        self.vm.with_cx(|cx| {
+            if !crate::push::push(host, cx, step, sims, world) {
+                crate::game::mover::stall(host, cx, step);
+            }
+        });
     }
 
     /// Where a link parent is this frame, origin and angles, `None` once it
@@ -1969,7 +1969,11 @@ impl ScriptRuntime {
         while let Some(stop) = self.run_entity_pass(&mut pass, collision, &[], now_ms) {
             match stop {
                 // No bodies to block a mover: its push always goes through.
-                PassStop::Push(step) => self.push_items(&step),
+                PassStop::Push(step) => {
+                    if let Some(c) = collision {
+                        self.push_mover(&step, &mut [], c);
+                    }
+                }
                 PassStop::Blast(_) => self.spawn_concussive(),
                 PassStop::Client(_) => {}
             }
@@ -2672,6 +2676,30 @@ mod tests {
         let a = n(&mut rt, "a");
         let got: Vec<i32> = ["b", "c", "d", "e"].map(|k| n(&mut rt, k) - a).to_vec();
         assert_eq!(got, [2, 3, 4, 1]);
+    }
+
+    /// `probe_concnum` on retail: `grenadeExplosionEffect` takes two numbers
+    /// off `G_Spawn`, the temp entity's and `Concussive_fx`'s. The first
+    /// comes back on the +350 pass and the second on the +700 one, so of
+    /// one spawn a frame after the call, the +400 one and the +750 one reuse
+    /// them (combat doc 13.4).
+    #[test]
+    fn grenade_explosion_effect_takes_a_temp_and_a_concussion_number() {
+        let mut rt = ScriptRuntime::for_test(
+            "n(a) { return (spawn(\"script_origin\", (0, 0, 0)) getEntityNumber()) - a; } \
+             main() { a = spawn(\"script_origin\", (0, 0, 0)) getEntityNumber(); \
+             grenadeexplosioneffect((0, 0, 0)); level.s = \"\" + n(a); \
+             for (i = 1; i <= 16; i++) { wait 0.05; level.s = level.s + \" \" + n(a); } }",
+        );
+        for frame in 1..=20 {
+            rt.run_frame(frame * 50);
+        }
+        // Retail: the spawn after the call 3, the +400 one the temp's 1,
+        // the +750 one the concussion's 2.
+        assert_eq!(
+            rt.level_field_str("s"),
+            "3 4 5 6 7 8 9 10 1 11 12 13 14 15 16 2 17"
+        );
     }
 
     /// Both closures load into one `Vm` through one `Loader`, which is what
