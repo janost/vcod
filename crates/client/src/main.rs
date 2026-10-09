@@ -2862,6 +2862,7 @@ impl ApplicationHandler for App {
                                             client_num as u32,
                                             drawn_pos,
                                         );
+                                        scene.swing_speed = self.shell.cvar_f32("bg_swingSpeed");
                                         let built = entities::build_instances(
                                             scene,
                                             (a, b, f),

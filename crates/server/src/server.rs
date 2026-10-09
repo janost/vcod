@@ -31,7 +31,7 @@ use vcod_common::net::msg::{
     NULL_USERCMD, UserCmd, read_delta_usercmd,
 };
 use vcod_common::net::netchan::{ClientMessage, MAX_RELIABLE_COMMANDS, ServerNetchan};
-use vcod_common::net::protocol::{PROTOCOL_V1, Protocol};
+use vcod_common::net::protocol::{CS_SERVERINFO, PROTOCOL_V1, Protocol};
 use vcod_common::net::{com_hash_key, info_value_for_key, snapshot};
 use vcod_common::pmove::FallHeights;
 
@@ -1441,10 +1441,25 @@ impl Server {
     /// `g_password` as the game module reads it: the running level's table,
     /// or the `--set` that the first load will stamp. Not latched.
     fn game_password(&self) -> String {
+        self.live_cvar("g_password", "")
+    }
+
+    /// A cvar as the engine or the game reads it at this moment: the running
+    /// level's table, else the `--set` the first load will stamp, else
+    /// `default`.
+    fn live_cvar(&self, name: &str, default: &str) -> String {
         match self.script.as_ref() {
-            Some(rt) => rt.cvars().get("g_password").to_string(),
-            None => self.pending_cvar("g_password", ""),
+            Some(rt) => rt.cvars().get(name).to_string(),
+            None => self.pending_cvar(name, default),
         }
+    }
+
+    /// `sv_privateClients` read as `->integer`: the slots below it are
+    /// reserved for a client whose userinfo `password` is
+    /// `sv_privatePassword` (docs/research/cod11-server-handshake.md,
+    /// "Private slots").
+    fn private_clients(&self) -> i32 {
+        crate::game::builtins::cvar::atoi(&self.live_cvar("sv_privateClients", "0"))
     }
 
     /// `getinfo`/`getstatus`'s `pswrd`: 1 for any non-empty `g_password`,
@@ -1468,14 +1483,24 @@ impl Server {
 
     /// `SVC_Info` (cod_lnxded 0x808c1ac). Key order is retail's;
     /// `minPing`/`maxPing`/`game` only appear when the matching cvar is set.
+    /// The private slots are left out of both counts: `clients` counts the
+    /// occupied slots from `sv_privateClients` up, `sv_maxclients` is the
+    /// rest.
     fn svc_info(&mut self, from: SocketAddr, challenge: &str) {
+        let private = self.private_clients();
+        let public_clients = self
+            .clients
+            .iter()
+            .skip(private.max(0) as usize)
+            .flatten()
+            .count();
         let mut i = Info::new();
         i.set("challenge", challenge_arg(challenge))
             .set("protocol", PROTOCOL_V1.version)
             .set("hostname", &self.cfg.hostname)
             .set("mapname", &self.cfg.map)
-            .set("clients", self.client_count())
-            .set("sv_maxclients", self.cfg.max_clients)
+            .set("clients", public_clients)
+            .set("sv_maxclients", self.cfg.max_clients as i32 - private)
             .set("gametype", self.live_gametype())
             .set("pure", 0)
             .set("sv_allowAnonymous", 0)
@@ -1485,7 +1510,7 @@ impl Server {
 
     /// `SVC_Status` (0x808bd50).
     fn svc_status(&mut self, from: SocketAddr, challenge: &str) {
-        let mut i = configstrings::serverinfo(&self.live_cfg());
+        let mut i = self.serverinfo();
         i.set("challenge", challenge_arg(challenge))
             .set("pswrd", self.pswrd());
         let mut lines = String::new();
@@ -1646,8 +1671,21 @@ impl Server {
             self.zombies
                 .iter()
                 .position(|c| c.as_ref().is_some_and(same_peer))
-                .or_else(|| self.free_slot())
+                .or_else(|| {
+                    // A new client: a matching `sv_privatePassword` (an
+                    // empty one matches an absent `password`) searches from
+                    // slot 0, anyone else from `sv_privateClients` (0x8085a03).
+                    let private_pw = self.live_cvar("sv_privatePassword", "");
+                    let start =
+                        if info_value_for_key(&userinfo, "password").unwrap_or("") == private_pw {
+                            0
+                        } else {
+                            self.private_clients().max(0) as usize
+                        };
+                    self.free_slot_from(start)
+                })
         }) else {
+            log::debug!("Rejected a connection.");
             self.send_oob(from, "error\nEXE_SERVERISFULL");
             return;
         };
@@ -1694,7 +1732,13 @@ impl Server {
 
     /// A slot neither a client nor a zombie holds.
     fn free_slot(&self) -> Option<usize> {
-        (0..self.clients.len()).find(|&i| self.clients[i].is_none() && self.zombies[i].is_none())
+        self.free_slot_from(0)
+    }
+
+    /// The first free slot at `start` or above.
+    fn free_slot_from(&self, start: usize) -> Option<usize> {
+        (start..self.clients.len())
+            .find(|&i| self.clients[i].is_none() && self.zombies[i].is_none())
     }
 
     /// The netchan half of `SV_PacketEvent`, then `SV_ExecuteClientMessage`.
@@ -3493,8 +3537,17 @@ impl Server {
                 self.cfg.hostname = value.to_string();
                 self.refresh_serverinfo();
             }
+            "sv_privateclients" => self.refresh_serverinfo(),
             _ => {}
         }
+    }
+
+    /// `Cvar_InfoString(CVAR_SERVERINFO)` with the live cvars the config
+    /// does not hold.
+    fn serverinfo(&self) -> Info {
+        let mut i = configstrings::serverinfo(&self.live_cfg());
+        i.set("sv_privateClients", self.private_clients());
+        i
     }
 
     /// `SV_Frame`'s cvar flush, the serverinfo half: a write to a cvar the
@@ -3504,7 +3557,7 @@ impl Server {
     /// script owns its own copy between level loads and `tick` reads that one
     /// back over this one every frame.
     fn refresh_serverinfo(&mut self) {
-        let info = configstrings::serverinfo(&self.live_cfg()).to_string();
+        let info = self.serverinfo().to_string();
         if let Some(slot) = self.configstrings.get_mut(0) {
             *slot = info.clone();
         }
@@ -3616,6 +3669,7 @@ impl Server {
             self.fall_heights,
             self.cheats,
         );
+        self.configstrings[CS_SERVERINFO] = self.serverinfo().to_string();
         // Step 19. Past the teardown: a failure here leaves no level.
         self.load_scripts_with(fs, false, carry, save_persist)
             .map_err(LoadFailure::Fatal)?;
@@ -3758,6 +3812,7 @@ impl Server {
                 self.configstrings[i] = s;
             }
         }
+        self.configstrings[CS_SERVERINFO] = self.serverinfo().to_string();
         // Step 7: `SV_RestartGameProgs(savePersist)`. Past the teardown: the
         // outgoing level's script is gone and a failure here leaves none.
         self.print(RESTART_GAME_BANNER);
@@ -5042,6 +5097,8 @@ impl Server {
             // right there, so they meet a lower slot's new pose and a higher
             // slot's last-frame one, and a higher slot's turn sees what the
             // callback did (combat doc 16.1, 16.2).
+            // `bg_swingSpeed` is a vmCvar the game refreshes every frame.
+            let swing_speed = crate::game::builtins::cvar::atof(rt.cvars().get("bg_swingSpeed"));
             for slot in 0..self.clients.len() {
                 let Some(c) = self.clients[slot].as_mut() else {
                     continue;
@@ -5072,7 +5129,7 @@ impl Server {
                 // `BG_PlayerAnimation` (0x41486) runs after this slot's
                 // aim trace: a higher slot's trace meets this frame's
                 // pose, a lower one's met the last (combat doc 16.1).
-                sim.commit_pose(FRAME_MS, self.anims.as_deref());
+                sim.commit_pose(FRAME_MS, swing_speed, self.anims.as_deref());
                 rt.set_client_body(slot, sim.hit_body(slot));
                 rt.set_client_dobj(slot, sim.dobj(slot));
                 rt.apply_turret_releases(slot, sim);
@@ -7113,6 +7170,68 @@ mod tests {
         );
         sv.handle_packet(from, &build_connect(&ui), now);
         reply_text(sv)
+    }
+
+    /// Retail 1.1d with `sv_privateClients 2` (handshake doc, "Private
+    /// slots"): a client without `sv_privatePassword` searches from slot 2,
+    /// one with it from 0, a reconnect keeps its slot either way, and an
+    /// empty private password matches a client that sends none.
+    #[test]
+    fn private_slots_take_the_private_password() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.set_cvar("sv_privateClients", "2");
+        sv.set_cvar("sv_privatePassword", "pp");
+        let slot_of = |sv: &Server, from: SocketAddr| {
+            sv.clients
+                .iter()
+                .position(|c| c.as_ref().is_some_and(|c| c.addr == from))
+        };
+        // One ip each: the reply limiter would refuse a sixth challenge to one.
+        let addr = |n: u8| SocketAddr::from(([10, 0, 1, n], 28960));
+        let full = ("error".to_string(), "EXE_SERVERISFULL".to_string());
+        for (n, extra, slot) in [(5, "", 2), (6, "\\password\\wrong", 3)] {
+            assert_eq!(
+                connect_with(&mut sv, addr(n), extra, now).0,
+                "connectResponse"
+            );
+            assert_eq!(slot_of(&sv, addr(n)), Some(slot));
+        }
+        assert_eq!(connect_with(&mut sv, addr(7), "", now), full);
+        assert_eq!(
+            connect_with(&mut sv, addr(8), "\\password\\pp", now).0,
+            "connectResponse"
+        );
+        assert_eq!(slot_of(&sv, addr(8)), Some(0));
+
+        let browser = addr(20);
+        sv.handle_packet(browser, &oob("getinfo x"), now);
+        let (_, _, rest) = reply(&mut sv);
+        let info = String::from_utf8_lossy(&rest).to_string();
+        assert_eq!(info_value_for_key(&info, "clients"), Some("2"));
+        assert_eq!(info_value_for_key(&info, "sv_maxclients"), Some("2"));
+        sv.handle_packet(browser, &oob("getstatus x"), now);
+        let (_, _, rest) = reply(&mut sv);
+        let status = String::from_utf8_lossy(&rest).to_string();
+        let serverinfo = status.lines().next().unwrap_or("");
+        assert_eq!(
+            info_value_for_key(serverinfo, "sv_privateClients"),
+            Some("2")
+        );
+
+        let later = now + RECONNECT_LIMIT + Duration::from_secs(1);
+        assert_eq!(
+            connect_with(&mut sv, addr(8), "", later).0,
+            "connectResponse"
+        );
+        assert_eq!(slot_of(&sv, addr(8)), Some(0), "a reconnect keeps its slot");
+
+        sv.set_cvar("sv_privatePassword", "");
+        assert_eq!(
+            connect_with(&mut sv, addr(9), "", later).0,
+            "connectResponse"
+        );
+        assert_eq!(slot_of(&sv, addr(9)), Some(1));
     }
 
     /// Retail 1.1d with `g_password secret` (handshake doc, "g_password"):
