@@ -127,6 +127,13 @@ check.
   started, aliases not found, cues past `dist_max`, cues refused by a full
   pool, voices stolen. The `vis` line reads `vis: <mode> cells n/m soups a/b
   tris c/d props p/q occ o h X.XXms` (occluders built, portals they hid).
+  The `clock` line reads `clock: behind N  reset N fast N +N -N  extrap N`:
+  newest snapshot time minus the drawn time, then `CL_AdjustTimeDelta`'s
+  resets, fast and slow adjusts and the frames that reached the newest
+  snapshot (docs/protocol-1.1.md, "The client's clock").
+- `VCOD_NETSIM="ping=100,jitter=20,loss=2"` gives the client a bad link
+  without root; `vcod --net-probe ADDR --probe-clock` measures the clock on
+  one.
 - F4 cycles culling `on -> locked -> off`; `locked` freezes the visible set so
   you can fly out and inspect it.
 - Pre-existing noise: a few `vkAcquireNextImageKHR` fence validation errors

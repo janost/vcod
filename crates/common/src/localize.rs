@@ -205,4 +205,35 @@ mod tests {
         assert_eq!(l.get("MPMENU_1_AMERICAN"), Some("1. American"));
         assert!(l.get("MPMENU_1_M1A1_CARBINE").is_some());
     }
+
+    /// The drop reasons `NetClient` hands on, through the stock tables:
+    /// `w <key>`, a bare `w`, an OOB `error` message and vcod's own text.
+    #[test]
+    fn stock_tables_localize_drop_reasons() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let l = Localized::load(&fs);
+        let cases = [
+            (
+                "EXE_SERVERDISCONNECTREASON\u{14}EXE_TIMEDOUT",
+                "Server Disconnected - Timed out",
+            ),
+            (
+                "EXE_SERVERDISCONNECTREASON\u{14}kicked by admin",
+                "Server Disconnected - kicked by admin",
+            ),
+            ("EXE_SERVER_DISCONNECTED", "Server Disconnected"),
+            ("GAME_INVALIDPASSWORD", "Invalid Password."),
+            ("EXE_SERVERISFULL", "Server is full."),
+            (
+                "EXE_SERVER_IS_DIFFERENT_VER\u{15}1.1",
+                "Server is a different version:\n1.1",
+            ),
+            ("server timed out", "server timed out"),
+        ];
+        for (wire, text) in cases {
+            assert_eq!(l.message(wire), text, "{wire:?}");
+        }
+    }
 }
