@@ -226,6 +226,28 @@ pass after the flood (`NavGraph::link_ladders`) handles them on their own.
   off. Without them `mp_depot` loses the 1 600 nodes of its roofs at z 192
   to 300 and no spawn; across the twelve maps the creep was 5 to 25% of a
   build's pmove ticks.
+- A head can be perched on the ladder's own top: the body stands on the
+  ladder brush with no other ground under its middle (`nav::perched`: the
+  standing box's ground is a `SURF_LADDER` surface and a point trace a
+  step down from the middle finds none other). Such a head links only to
+  its foot and to its exits: the first spot 24, 32 or 48 units along the
+  face, either way, that a walk from the head reaches with ground under
+  its middle (`nav::ladder_exits`), linked back where the walk back
+  arrives. It is not flooded from or walked to from the floor around it,
+  and the flood takes no node where a walk comes to rest perched.
+  VERIFIED (measured, 2026-10-09, `mp_ship`, point traces and walks): the
+  mast hatch's plate (x 3711-3712, y 43-69, top 992) stands in a hole in
+  the platform at x 3676-3711, y 37-77, against a wall at x 3720; the
+  climb's head is (3704.9, 56, 992.1) on the plate's 1-unit top, and the
+  flood made a second node at (3705, 62) where a walk toward the column
+  centre (3712, 64) pinned on the wall within 8 units. Both crossed the
+  hole to the platform by walks that arrived or fell by a few units. The
+  exits are (3704.9, 27.5) and (3704.9, 84.5), on the floor south and
+  north of the hole, both linked back. The crow's nest head (4963.9, 64,
+  1219.1) gets exits at y 35.5 and 92.5. The mast's top (3675, -101,
+  1145.1) is perched with no floor along the face and keeps its old
+  links; the hold ladder's head (4332, -87.1, 615.1) stands on a lip, not
+  the ladder, and is not perched.
 - After the ladder pass the flood goes on from the ladders' ends, so a floor
   reached only by a ladder is flooded like any other. Before, a rung's ends
   were walked to and from the nodes within two columns and no further.
@@ -439,6 +461,15 @@ every map: no trace changed its answer.
   where a bot runs forward and never backs (section 3). Trying the back
   only near a ladder or after a forward run that fell more than 64 cost
   `mp_ship` 2 spawns and `mp_chateau` 1 (VERIFIED, measured), so it stays.
+
+Perched ladder heads (2026-10-09; section 2, "Ladders"). VERIFIED
+(measured, same example, before and after on one machine): spawns in one
+component unchanged on all twelve maps (`nav_census` passes at the
+floors). Nodes and edges move only where a walk came to rest perched:
+`mp_depot` 11451 / 80007 to 11438 / 79752, `mp_powcamp` 6226 / 43140 to
+6222 / 43105, `mp_railyard` 12109 / 87257 to 12104 / 87212, `mp_ship`
+14147 / 96389 to 14139 / 96255; the other eight are identical. Build
+times moved within the load noise (`mp_ship` 3693 to 3320 ms).
 
 - VERIFIED (measured): an early single-threaded build of `mp_carentan`, before
   the diagonal shortcut and the stall cutoff, took 10.6 s. `perf` puts 80% of
@@ -713,7 +744,8 @@ from (3705, 62) or (3701.7, 64.2) to (3680, 71, 994) arrives, one from
 (3699.2, 57.2) or (3705, 56) falls, and the edges to (3648, 32, 994) fall
 from all four. A bot whose plan starts at a head while it is still on the
 rungs passes it there and can still fall back down the shaft; this is
-most of what is left below.
+most of what is left below. Since 2026-10-09 the graph no longer crosses
+there (section 2, "Ladders": perched heads).
 
 A random heading is never one with a hazard 64 units along it
 (`BotView::hazard_ahead`, one flag per 45-degree octant), nor, standing
@@ -778,6 +810,45 @@ untouched. On other maps,
 seeds 1 to 11: `mp_depot` 176 to 106, `mp_pavlov` 117 to 47, `mp_harbor`
 0 and 0. A run diverges from its first changed waypoint, so a seed's
 count moves by chance as well as by cause, and a 32-seed total by tens.
+
+VERIFIED (measured 2026-10-09, same detector and settings, release
+build): bot-ticks stalled before and after the perched heads above, the
+hull corridor's edge check and the drop probe's slide (below), with the
+stall spells that sat at the mast hatch (on the rungs at x 3696 or on the
+deck under it), in the hull corridor at (3825, -800, -64) and at the hold
+ladder's head (x 4315-4360, y -110 to -80).
+
+| | seeds 1 to 63 odd | 65 to 127 odd | 129 to 191 odd | total | mast / hull / hold spells |
+|---|---|---|---|---|---|
+| before | 50 | 265 | 199 | 514 | 16 / 6 / 0 |
+| after | 81 | 246 | 136 | 463 | 0 / 0 / 4 |
+
+- Hull corridor. VERIFIED (measured, seed 95 traced tick by tick, box
+  traces and walks): two hull beam patches (104 and 106)
+  run along y -800 at the floor, 22 units high, and the end of patch 106
+  stands at x 3840 for y -802 but clears a body at y -805. The node at
+  (3837.1, -804.9) walks to (3879.3, -800) without a jump. The bot passed
+  that node 3 units north of it at (3822, -802), headed on, and pinned
+  on the beam's end at x 3824.9 for every try. From there the walk does
+  arrive, but only by jumping, and `Follower::edge_holds` took any
+  arrival as proof. Now a walk that needed a jump proves only a jump
+  edge, so the bot closes in on the node first
+  (`nav::tests::an_edge_that_needs_a_jump_from_aside_does_not_hold`).
+- The drop probe's sweep stopped at once against a wall the heading
+  only grazes, so it saw no drop where the body slides along the wall
+  and off. Against a wall less than 45 degrees off the heading, within
+  the first 16 units, it now feels along the slide. VERIFIED (measured,
+  seed 5 with the graph change): a bot at (6095.8, -303.9, 97.1) against
+  brush 316 (normal (-0.98, 0.21)) took heading south, slid off the ledge
+  and fell 41 units to the deck at 56; the probe due south read nothing
+  and reads 41 now (`nav::tests::a_drop_ahead_is_felt_along_a_wall_it_slides_on`).
+- The hold ladder's head (4332, -87.1, 615.1) is new in this table.
+  VERIFIED (measured, seed 149 traced, walks from the head): a bot
+  that climbs it and is planned on by the jump edge to (4322, -158, 641),
+  whose walk from the head falls (from the node itself too), turns back for the
+  foot, ends 4 units east of the head at (4335.9, -87.1), where the creep
+  down falls (from x 4332 it arrives), and pins there while its unstick
+  headings run into the wall. Not fixed.
 
 The detector is `crates/server/examples/ship_stalls.rs` (`MAP=`, `TICKS=`,
 `TRACE=<slot>:<from>:<to>` prints a bot's every tick with its waypoint).
