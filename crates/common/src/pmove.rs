@@ -231,6 +231,7 @@ pub const LAND_ANIM_SPEED: f32 = -220.0;
 /// which the client smooths the eye over
 /// (docs/research/cod11-mantle.md, "The step event and the velocity scale").
 use crate::net::event_ids::EV_STEP_VIEW;
+use crate::net::event_ids::{EV_STANCE_FORCE_CROUCH, EV_STANCE_FORCE_PRONE, EV_STANCE_FORCE_STAND};
 /// Step below which retail raises nothing (double @0x70f08).
 const STEP_VIEW_EPS: f32 = 0.5;
 /// Clamp and bias the rounded step takes before it becomes the parm
@@ -668,6 +669,22 @@ impl PlayerState {
         self.view_lerp_ms.map_or(0, |ms| server_time - ms)
     }
 
+    /// `PM_GetEffectiveStance` (0x34554): the stance the eye is in or
+    /// easing towards, so a body still rising out of prone counts as prone.
+    fn effective_stance(&self) -> Stance {
+        let lerping = self.view_lerp_ms.is_some();
+        if self.stance == Stance::Prone
+            || self.view_lerp_target == VIEW_PRONE
+            || (lerping && self.view_lerp_target == VIEW_CROUCH && !self.view_lerp_down)
+        {
+            Stance::Prone
+        } else if self.ducked || (lerping && self.view_lerp_target == VIEW_CROUCH) {
+            Stance::Crouch
+        } else {
+            Stance::Stand
+        }
+    }
+
     /// `BG_PlayerStateToEntityState`'s prone body (0x2cdd3..0x2cec4): the
     /// playerstate's, folded through `AngleNormalize180` and scaled by how far
     /// the eye's leg into or out of prone has run, for a body whose effective
@@ -722,6 +739,9 @@ pub struct PmInput {
     pub jump: bool,
     pub crouch: bool, // held
     pub prone: bool,  // toggled state, main.rs owns the toggle
+    /// `wbuttons` 0x2: the stance comes from a held `+prone` or `+movedown`
+    /// rather than `cl_stance`, so a refusal forces nothing on the client.
+    pub stance_held: bool,
     pub walk_slow: bool,
     pub lean_left: bool,
     pub lean_right: bool,
@@ -827,7 +847,7 @@ pub fn pmove(
     // `PM_UpdateViewAngles` runs ahead of the stance (`PmoveSingle` 0x340fc),
     // so the prone clamps read last frame's stance and pitches.
     update_prone_view(ps, input, world, dt);
-    update_stance(ps, input, world, dt);
+    update_stance(ps, input, world, dt, &mut events);
     update_lean(ps, input, world, dt);
     set_water_level(ps, world);
     ground_trace(ps, world, MASK_PLAYERSOLID);
@@ -839,7 +859,7 @@ pub fn pmove(
     // the walk reads the ADS flag this frame just set.
     ps.walking = walking_flag(ps, input);
     // Then `PM_UpdatePronePitch` (0x342dd), off this frame's ground plane.
-    update_prone_pitch(ps, world, dt);
+    update_prone_pitch(ps, world, dt, &mut events);
     // retail checks ladders right after the first ground trace; the check
     // reads `pm_time` before `PM_DropTimers` (0x342f4, 0x342f9)
     let ladder = check_ladder_move(ps, input, world);
@@ -924,7 +944,7 @@ fn linked_move(
         weapons.get(ps.weapon as usize).and_then(Option::as_ref),
     );
     ps.walking = walking_flag(ps, input);
-    update_stance(ps, input, world, dt);
+    update_stance(ps, input, world, dt, events);
     drop_knockback(ps, dt);
     weapon::pm_weapon(ps, input, weapons, (dt * 1000.0).round() as i32, events);
     ps.last_cmd_angles = input.angles;
@@ -1346,53 +1366,98 @@ pub fn spectator_move(ps: &mut PlayerState, forward: f32, right: f32, up: f32, d
     ps.origin += ps.velocity * dt;
 }
 
-/// Standing back up needs headroom for the taller bbox.
-fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, dt: f32) {
+/// `PM_CheckDuck`'s stance arms (0x31840-0x31b80): a prone press the body
+/// does not fit in is refused, and a rise without headroom stays down. Each
+/// refusal tells the client which stance to fall back to through
+/// `EV_STANCE_FORCE_*`, unless the cmd's stance came from a held key
+/// (docs/research/cod11-mantle.md, "Prone Blocked").
+fn update_stance(
+    ps: &mut PlayerState,
+    input: &PmInput,
+    world: &MoveWorld,
+    dt: f32,
+    events: &mut Vec<PmEvent>,
+) {
     let before = ps.stance;
-    let mut desired = if input.prone {
-        Stance::Prone
-    } else if input.crouch {
-        Stance::Crouch
-    } else {
-        Stance::Stand
+    let (mut crouch, mut prone) = (input.crouch, input.prone);
+    // 0x318a0: a climber's stance keys are taken off the cmd, announced
+    // whether held or not.
+    if ps.on_ladder && (crouch || prone) {
+        (crouch, prone) = (false, false);
+        push_event(events, EV_STANCE_FORCE_STAND);
+    }
+    let force = |events: &mut Vec<PmEvent>, event: i32| {
+        if !input.stance_held {
+            push_event(events, event);
+        }
     };
-    // Retail refuses a prone the body does not fit in, which is why a player
-    // facing a wall stays standing.
-    let entering_prone = desired == Stance::Prone && before != Stance::Prone;
-    if entering_prone {
-        let q = ProneQuery {
-            origin: ps.origin,
-            yaw_deg: ps.yaw.to_degrees(),
-            entry: true,
-            ground: ps.on_ground,
-        };
-        match check_prone(world, q) {
-            Some(body) => ps.prone_body = body,
-            None => {
-                desired = before;
-                // `PM_CheckDuck` 0x3196b, on every cmd the held press is refused.
-                ps.prone_blocked = true;
+    let (origin, mins) = (ps.origin, ps.mins());
+    let fits = |height: f32| {
+        let maxs = Vec3::new(HALF_WIDTH, HALF_WIDTH, height);
+        !world
+            .box_trace(origin, origin, mins, maxs, MASK_PLAYERSOLID)
+            .startsolid
+    };
+    if prone {
+        if before != Stance::Prone {
+            let q = ProneQuery {
+                origin: ps.origin,
+                yaw_deg: ps.yaw.to_degrees(),
+                entry: true,
+                ground: ps.on_ground,
+            };
+            match check_prone(world, q) {
+                Some(body) => {
+                    ps.prone_body = body;
+                    ps.stance = Stance::Prone;
+                    enter_prone(ps, input, world);
+                }
+                // 0x3196b: every cmd that keeps asking is refused again.
+                None => {
+                    ps.prone_blocked = true;
+                    ps.prone_dive = false;
+                    let event = if ps.ducked {
+                        EV_STANCE_FORCE_CROUCH
+                    } else {
+                        EV_STANCE_FORCE_STAND
+                    };
+                    force(events, event);
+                }
             }
         }
-    }
-    // The dive flag lives as long as the prone key is held (`PM_CheckDuck`
-    // 0x316f4 clears it on every other arm).
-    if !input.prone || desired != Stance::Prone {
-        ps.prone_dive = false;
-    }
-    if desired.height() <= ps.stance.height() {
-        ps.stance = desired;
-        if entering_prone && desired == Stance::Prone {
-            enter_prone(ps, input, world);
-        }
     } else {
-        let maxs = Vec3::new(HALF_WIDTH, HALF_WIDTH, desired.height());
-        let t = world.box_trace(ps.origin, ps.origin, ps.mins(), maxs, MASK_PLAYERSOLID);
-        if !t.startsolid {
-            ps.stance = desired;
+        // The dive flag lives as long as the prone key is held (0x319a6,
+        // 0x31a13).
+        ps.prone_dive = false;
+        match (before, crouch) {
+            (Stance::Prone, true) => {
+                if fits(HEIGHT_CROUCH) {
+                    ps.stance = Stance::Crouch;
+                } else {
+                    force(events, EV_STANCE_FORCE_PRONE);
+                }
+            }
+            (_, true) => ps.stance = Stance::Crouch,
+            // A prone player who lets go stands if it can, else crouches.
+            (Stance::Prone, false) => {
+                if fits(HEIGHT_STAND) {
+                    ps.stance = Stance::Stand;
+                } else if fits(HEIGHT_CROUCH) {
+                    ps.stance = Stance::Crouch;
+                } else {
+                    force(events, EV_STANCE_FORCE_PRONE);
+                }
+            }
+            (Stance::Crouch, false) => {
+                if fits(HEIGHT_STAND) {
+                    ps.stance = Stance::Stand;
+                } else {
+                    force(events, EV_STANCE_FORCE_CROUCH);
+                }
+            }
+            (Stance::Stand, false) => {}
         }
     }
-
     if ps.stance != before {
         match ps.stance {
             Stance::Crouch => ps.ducked = true,
@@ -1402,6 +1467,10 @@ fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, dt: f
     }
     // The bbox snaps; the eye eases.
     view_height_adjust(ps, (dt * 1000.0).round() as i32);
+}
+
+fn push_event(events: &mut Vec<PmEvent>, event: i32) {
+    events.push(PmEvent { event, parm: 0 });
 }
 
 /// Retail's `PM_ViewHeightAdjust` (0x309d8), called at the end of
@@ -1882,9 +1951,9 @@ fn update_prone_view(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, d
 /// `PM_UpdatePronePitch` (0x3338c): both prone pitches ease toward the
 /// ground's pitch under the body and under the view, or toward level with no
 /// ground plane under the player. Airborne it checks the fit and flattens the
-/// body. Not modelled: its airborne refusal (0x33434), which raises event 141
-/// and `pm_flags` 0x8000.
-fn update_prone_pitch(ps: &mut PlayerState, world: &MoveWorld, dt: f32) {
+/// body, or refuses it (0x33434-0x33461): `pm_flags` 0x8000 and a forced
+/// crouch for the client, while the body stays prone.
+fn update_prone_pitch(ps: &mut PlayerState, world: &MoveWorld, dt: f32, events: &mut Vec<PmEvent>) {
     if ps.stance != Stance::Prone {
         return;
     }
@@ -1895,8 +1964,12 @@ fn update_prone_pitch(ps: &mut PlayerState, world: &MoveWorld, dt: f32) {
             entry: false,
             ground: false,
         };
-        if let Some(body) = check_prone(world, q) {
-            ps.prone_body = body;
+        match check_prone(world, q) {
+            Some(body) => ps.prone_body = body,
+            None => {
+                push_event(events, EV_STANCE_FORCE_CROUCH);
+                ps.prone_blocked = true;
+            }
         }
     }
     let rate = PRONE_PITCH_DEG_PER_SEC * dt;
@@ -2964,12 +3037,28 @@ fn step_view(
     if units == 0 {
         return;
     }
+    let units = units.clamp(STEP_VIEW_MIN, STEP_VIEW_MAX);
     events.push(PmEvent {
         event: EV_STEP_VIEW,
-        parm: units.clamp(STEP_VIEW_MIN, STEP_VIEW_MAX) + STEP_VIEW_BIAS,
+        parm: units + STEP_VIEW_BIAS,
     });
     ps.velocity *=
         STEP_SCALE_BASE + STEP_SCALE_GAIN * (1.0 - (ps.origin.z - start_z).abs() / step_size);
+    // 0x3579c-0x3585c: a step of more than 3 on the ground pushes the bob
+    // cycle on by 7 plus 1.25 per two units (at most 4), truncated, and
+    // may land a footstep.
+    if units.abs() > 3 && ps.on_ground && footsteps_audible(ps) {
+        let old = ps.bob_cycle;
+        let push = (units.abs() / 2).min(4) as f32 * 1.25 + 7.0;
+        ps.bob_cycle = ((f32::from(old) + push) as i32 & 0xff) as u8;
+        ground_step_event(ps, old, ps.bob_cycle, false, true, events);
+    }
+}
+
+/// `PM_ShouldMakeFootsteps` (0x3221c): upright by the eye's stance and not
+/// walking the sight (`pm_flags` 0x80).
+fn footsteps_audible(ps: &PlayerState) -> bool {
+    ps.effective_stance() == Stance::Stand && !ps.walking
 }
 
 #[cfg(test)]
@@ -4123,6 +4212,191 @@ mod tests {
             "the body faces the view, at {}",
             ps.prone_direction
         );
+    }
+
+    fn stance_events(ps: &mut PlayerState, input: &PmInput, w: &MoveWorld, n: usize) -> Vec<i32> {
+        let mut out = Vec::new();
+        for _ in 0..n {
+            for e in pmove(ps, input, w, 1.0 / 125.0, &[]) {
+                if (EV_STANCE_FORCE_STAND..=EV_STANCE_FORCE_PRONE).contains(&e.event) {
+                    out.push(e.event);
+                }
+            }
+        }
+        out
+    }
+
+    /// `PM_CheckDuck` 0x3196b-0x31996: every refused prone cmd tells the
+    /// client to stand, or to crouch when it came from a crouch, unless the
+    /// stance rides a held key (`wbuttons` 0x2).
+    #[test]
+    fn a_refused_prone_forces_the_stance_it_came_from() {
+        let w = crate::collision::test_world(&[(
+            Vec3::new(-40.0, -30.0, -8.0),
+            Vec3::new(-20.0, 30.0, 72.0),
+        )]);
+        let w = MoveWorld::bare(&w);
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 20);
+        let prone = PmInput {
+            prone: true,
+            ..Default::default()
+        };
+        let got = stance_events(&mut ps, &prone, &w, 3);
+        assert_eq!(got, [EV_STANCE_FORCE_STAND; 3], "one per refused cmd");
+        assert_eq!(ps.stance, Stance::Stand);
+
+        let held = PmInput {
+            stance_held: true,
+            ..prone
+        };
+        assert!(stance_events(&mut ps, &held, &w, 3).is_empty());
+        assert!(ps.prone_blocked, "a held key is refused all the same");
+
+        let crouch = PmInput {
+            crouch: true,
+            ..Default::default()
+        };
+        tick(&mut ps, &crouch, &w, 5);
+        let got = stance_events(&mut ps, &prone, &w, 1);
+        assert_eq!(got, [EV_STANCE_FORCE_CROUCH]);
+        assert_eq!(ps.stance, Stance::Crouch);
+    }
+
+    /// `PM_CheckDuck`'s rising arms (0x319a4-0x31b78): a prone player let go
+    /// under a crouch-high ceiling crouches; with no room for that either it
+    /// stays prone and is told so (142); a crouch under a ceiling it cannot
+    /// stand in stays and is told so (141).
+    #[test]
+    fn a_rise_without_headroom_stays_down_and_says_so() {
+        let w = crate::collision::test_world(&[
+            // Room to crouch, not to stand.
+            (
+                Vec3::new(200.0, -100.0, 55.0),
+                Vec3::new(400.0, 100.0, 120.0),
+            ),
+            // Room to lie only.
+            (
+                Vec3::new(600.0, -100.0, 40.0),
+                Vec3::new(800.0, 100.0, 120.0),
+            ),
+        ]);
+        let w = MoveWorld::bare(&w);
+        let prone = PmInput {
+            prone: true,
+            ..Default::default()
+        };
+        let crouch = PmInput {
+            crouch: true,
+            ..Default::default()
+        };
+        let lie_down_at = |x: f32| {
+            let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+            tick(&mut ps, &PmInput::default(), &w, 20);
+            tick(&mut ps, &prone, &w, 20);
+            assert_eq!(ps.stance, Stance::Prone);
+            // Off the floor's face, which a zero-length trace reads as solid.
+            ps.origin = Vec3::new(x, 0.0, 0.125);
+            ps
+        };
+
+        let mut ps = lie_down_at(700.0);
+        assert_eq!(
+            stance_events(&mut ps, &crouch, &w, 1),
+            [EV_STANCE_FORCE_PRONE]
+        );
+        assert_eq!(
+            stance_events(&mut ps, &PmInput::default(), &w, 1),
+            [EV_STANCE_FORCE_PRONE]
+        );
+        assert_eq!(ps.stance, Stance::Prone);
+
+        let mut ps = lie_down_at(300.0);
+        assert!(stance_events(&mut ps, &PmInput::default(), &w, 1).is_empty());
+        assert_eq!(ps.stance, Stance::Crouch, "no room to stand: crouch");
+        assert_eq!(
+            stance_events(&mut ps, &PmInput::default(), &w, 1),
+            [EV_STANCE_FORCE_CROUCH]
+        );
+        assert_eq!(ps.stance, Stance::Crouch);
+    }
+
+    /// `PM_UpdatePronePitch`'s airborne arm (0x33434-0x33461): a prone body
+    /// in the air that no longer fits raises `pm_flags` 0x8000 and event
+    /// 141, and stays prone.
+    #[test]
+    fn an_airborne_prone_body_that_does_not_fit_forces_a_crouch() {
+        let w = crate::collision::test_world(&[(
+            Vec3::new(-40.0, 470.0, 50.0),
+            Vec3::new(-20.0, 530.0, 300.0),
+        )]);
+        let w = MoveWorld::bare(&w);
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        let prone = PmInput {
+            prone: true,
+            ..Default::default()
+        };
+        tick(&mut ps, &PmInput::default(), &w, 20);
+        tick(&mut ps, &prone, &w, 20);
+        assert_eq!(ps.stance, Stance::Prone);
+        assert!(stance_events(&mut ps, &prone, &w, 1).is_empty());
+
+        ps.origin = Vec3::new(0.0, 500.0, 100.0);
+        ps.on_ground = false;
+        assert_eq!(
+            stance_events(&mut ps, &prone, &w, 1),
+            [EV_STANCE_FORCE_CROUCH]
+        );
+        assert!(ps.prone_blocked);
+        assert_eq!(ps.stance, Stance::Prone);
+    }
+
+    /// `PM_CheckDuck` 0x3189c-0x318be: on a ladder the stance keys are taken
+    /// off the cmd and the client is told to stand.
+    #[test]
+    fn a_climber_s_stance_keys_force_a_stand() {
+        let w = flat();
+        let w = MoveWorld::bare(&w);
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 20);
+        ps.on_ladder = true;
+        let crouch = PmInput {
+            crouch: true,
+            stance_held: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            stance_events(&mut ps, &crouch, &w, 1),
+            [EV_STANCE_FORCE_STAND]
+        );
+        assert_eq!(ps.stance, Stance::Stand);
+    }
+
+    /// `PM_StepSlideMove`'s last block (0x3579c-0x3585c): a grounded step of
+    /// more than 3 units pushes the bob cycle on by 7 + 1.25 * min(step / 2,
+    /// 4), and a step across a quarter of the cycle lands a footstep. A
+    /// crouched body is not audible and keeps its cycle.
+    #[test]
+    fn a_step_up_pushes_the_bob_cycle() {
+        let mat = 5;
+        let stepped = |ducked: bool, bob: u8| {
+            let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 8.0), 0.0);
+            ps.on_ground = true;
+            ps.ducked = ducked;
+            ps.bob_cycle = bob;
+            ps.ground_surface_flags = mat << 20;
+            let mut events = Vec::new();
+            step_view(&mut ps, &mut events, 0.0, 0.0, STEPSIZE);
+            (ps.bob_cycle, events)
+        };
+        let (bob, events) = stepped(false, 60);
+        assert_eq!(bob, 60 + 12);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].event, EV_FOOTSTEP_RUN_BASE + mat as i32);
+        let (bob, events) = stepped(false, 0);
+        assert_eq!((bob, events.len()), (12, 1), "no quarter crossed");
+        let (bob, _) = stepped(true, 60);
+        assert_eq!(bob, 60);
     }
 
     /// `BG_CheckProneValid`'s ground samples: a chest on a 4-unit slab and
