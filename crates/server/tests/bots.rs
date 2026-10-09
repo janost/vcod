@@ -372,3 +372,52 @@ fn bots_on_mp_ships_ladders_keep_climbing() {
     }
     assert!(climbs >= 3, "only {climbs} ladder grabs");
 }
+
+/// mp_ship, seed 5: a bot pinned on the deck lip at (3288, -455, 56) took
+/// its random unstick heading off the deck to the hull 50 below (tick 1671
+/// before the drop probe). No unstick spell that starts on the ground off
+/// a ladder ends more than a jump below where it started.
+#[test]
+#[ignore = "runs 6 bots on mp_ship for 90 s of game time, ~1 min; run with --ignored"]
+fn bots_on_mp_ship_unstick_without_walking_off_the_deck() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map("mp_ship").unwrap()).unwrap())
+        .expect("parse the bsp");
+    let mut now = Instant::now();
+    let mut cfg = cfg(6, false, "dm");
+    cfg.map = "mp_ship".into();
+    let mut sv = vcod_server::Server::new(cfg, now);
+    sv.test_seed_rng(5);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    // Per slot, where the spell under way started, when it started on the
+    // ground off a ladder and has touched no ladder since.
+    let mut spell: [Option<[f32; 3]>; 8] = [None; 8];
+    let mut was = [false; 8];
+    for tick in 0..1800 {
+        run(&mut sv, &mut now, 1);
+        for slot in sv.bot_slots() {
+            let Some(b) = sv.bot_body(slot).filter(|b| b.playing) else {
+                spell[slot] = None;
+                continue;
+            };
+            if b.unsticking && !was[slot] {
+                spell[slot] = (b.on_ground && !b.on_ladder).then_some(b.origin);
+            }
+            was[slot] = b.unsticking;
+            if !b.unsticking || b.on_ladder {
+                spell[slot] = None;
+            }
+            if let Some(from) = spell[slot] {
+                assert!(
+                    b.origin[2] > from[2] - vcod_common::pmove::JUMP_HEIGHT,
+                    "tick {tick}: bot {slot} fell from {from:?} to {:?} on its unstick heading",
+                    b.origin
+                );
+            }
+        }
+    }
+}
