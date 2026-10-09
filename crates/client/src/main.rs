@@ -5,6 +5,7 @@ mod console;
 mod entities;
 mod frontend;
 mod fx;
+mod gamma;
 mod head_icon;
 mod hud;
 mod hud_text;
@@ -1048,6 +1049,21 @@ fn main() -> Result<()> {
 /// written the same way (`Shell::config_text`).
 const CONFIG_FILE: &str = "vcod_mp.cfg";
 
+/// `r_gamma` in retail's 0.5..3 range; an out-of-range value is written
+/// back to the cvar, as retail's ramp rebuild does (docs/research/cod11-gamma.md).
+fn gamma_cvar(shell: &mut console::shell::Shell) -> f32 {
+    let g = shell.cvar_f32("r_gamma");
+    if g < gamma::GAMMA_MIN {
+        shell.execute("set r_gamma 0.5");
+        gamma::GAMMA_MIN
+    } else if g > gamma::GAMMA_MAX {
+        shell.execute("set r_gamma 3.0");
+        gamma::GAMMA_MAX
+    } else {
+        g
+    }
+}
+
 /// `r_mode`'s size (Q3's mode table, which the stock video mode list picks
 /// from; -1 keeps the window's own) and whether `r_fullscreen` is on.
 fn video_mode(shell: &console::shell::Shell) -> (Option<winit::dpi::PhysicalSize<u32>>, bool) {
@@ -1309,6 +1325,7 @@ fn loading_frame(
             entity_origin: &|_| None,
             turret_weapon: None,
             cvar: &|_| None,
+            bound_key: &|_| None,
             draw: hud::DrawToggles::default(),
         };
         *hud_quads = hud.build(&f);
@@ -1701,6 +1718,15 @@ impl App {
                     if let Mode::Online { input, .. } = &mut self.mode {
                         input.key(action, true);
                         input.key(action, false);
+                        if let (
+                            play::input::Action::Slot(_)
+                            | play::input::Action::NextWeapon
+                            | play::input::Action::PrevWeapon,
+                            Some(hud),
+                        ) = (action, &mut self.hud)
+                        {
+                            hud.weapon_selected();
+                        }
                     }
                 }
                 // The server never pushes scores: send `score` on the down
@@ -2359,7 +2385,9 @@ impl ApplicationHandler for App {
                 let cull = self.cull_mode;
                 self.audio
                     .set_master_volume(self.shell.cvar_f32("mss_volume"));
+                let gamma = gamma_cvar(&mut self.shell);
                 let Some(r) = &mut self.renderer else { return };
+                r.set_gamma(gamma);
                 let aspect = r.aspect();
                 // Set inside the online arm where `self` is borrowed out
                 // field-by-field; acted on once the borrows end.
@@ -3038,6 +3066,7 @@ impl ApplicationHandler for App {
                                         entity_origin: &entity_origin,
                                         turret_weapon,
                                         cvar: &client_cvar,
+                                        bound_key: &|cmd| self.shell.key_text(cmd, &self.localized),
                                         draw: hud::DrawToggles {
                                             crosshair: self.shell.cvar_f32("cg_drawCrosshair")
                                                 as i32

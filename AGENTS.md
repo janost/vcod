@@ -60,6 +60,7 @@ instead of leaving the fact in a commit message.
 | Bots | `bot-navigation.md` (its Build times set the census floors), `bot-objectives.md` |
 | Player models, anims, formats | `player-model-anim-system.md`, `xmodel-v14-format.md`, `xanim-v14-format.md` |
 | Shader scripts, light grid, prop lighting | `cod11-shader-scripts.md`, `cod11-light-grid-and-leaf-lights.md` |
+| Gamma, overbright, `r_intensity` | `cod11-gamma.md` |
 
 ### Evidence labels
 

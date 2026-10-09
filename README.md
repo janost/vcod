@@ -164,8 +164,8 @@ Retail does a lot more than this list. These are the gaps you'll hit first.
 
 **Front end.** Main menu, browser and its popups, options, quit and error
 popups work. On the options screens only binds, sensitivity, invert mouse,
-name, rate, volume, video mode, full screen and the crosshair and HUD
-toggles take effect; texture, lighting, gamma, sound quality and language
+name, rate, volume, video mode, full screen, brightness and the crosshair
+and HUD toggles take effect; texture, lighting, sound quality and language
 settings are stored but ignored. Start New Server, Mods and CD key print "not in vcod
 yet". The browser's game type filter, map preview and refresh date are
 missing.
@@ -174,9 +174,6 @@ missing.
 
 - Protocol 1 (patch 1.1) only. 1.5 and United Offensive servers won't talk
   to it.
-- The HUD skips a few retail touches: compass spring, stance key hints, the
-  weapon name timing out, hit icon jitter
-  ([cod11-hud-protocol.md](docs/research/cod11-hud-protocol.md) section 9).
 - Prediction carries you on a moving brush model but not its rotation.
   Neither does retail's.
 - On a modded server the mod's own main menu and browser don't replace

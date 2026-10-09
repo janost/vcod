@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 
+use vcod_common::localize::Localized;
 use vcod_common::net::Userinfo;
 
 use crate::play::input::Action;
@@ -185,9 +186,10 @@ pub const DEFAULT_BINDS: &[(&str, &str)] = &[
 /// The archived cvars the stock options screens set beyond the ones above,
 /// at the defaults CoDMP.exe and cgame register them with
 /// (docs/research/cod11-front-end.md, section 14), so a choice made there
-/// survives a restart. Only `mss_volume`, `r_mode` and `r_fullscreen` drive
-/// anything; vcod's window starts at its own size and windowed, so `r_mode`
-/// -1 and `r_fullscreen` 0 stand in for retail's 3 and 1.
+/// survives a restart. Only `mss_volume`, `r_mode`, `r_fullscreen`,
+/// `r_gamma`, `cg_drawCrosshair` and `cg_drawStatus` drive anything;
+/// vcod's window starts at its own size and windowed, so `r_mode` -1 and
+/// `r_fullscreen` 0 stand in for retail's 3 and 1.
 const MENU_CVARS: &[(&str, &str)] = &[
     ("mss_volume", "0.8"),
     ("mss_khz", "44"),
@@ -348,6 +350,23 @@ impl Shell {
             .collect();
         keys.sort_by_key(|k| keys::number(k));
         keys
+    }
+
+    /// The cgame's key text for `cmd` (0x30046940): its first key's name,
+    /// or the first two joined by `KEY_OR`, names through `KEY_*`. `None`
+    /// while nothing is bound to it.
+    pub fn key_text(&self, cmd: &str, loc: &Localized) -> Option<String> {
+        let name = |k: &str| loc.get(&format!("KEY_{k}")).unwrap_or(k).to_string();
+        match self.keys_bound_to(cmd).as_slice() {
+            [] => None,
+            [a] => Some(name(a)),
+            [a, b, ..] => Some(format!(
+                "{} {} {}",
+                name(a),
+                loc.translate("@KEY_OR"),
+                name(b)
+            )),
+        }
     }
 
     /// Runs `text`: commands split on `;` and newlines outside quotes, as
@@ -902,6 +921,20 @@ mod tests {
             s.keys_bound_to("+FORWARD"),
             ["SPACE", "W", "UPARROW", "MOUSE2"]
         );
+    }
+
+    #[test]
+    fn key_text_names_the_first_two_keys() {
+        let mut loc = Localized::default();
+        loc.parse_into(
+            "key",
+            "REFERENCE SPACE\nLANG_ENGLISH \"Space\"\nREFERENCE OR\nLANG_ENGLISH \"or\"\n",
+        );
+        let mut s = Shell::new();
+        assert_eq!(s.key_text("+gostand", &loc).as_deref(), Some("Space"));
+        assert_eq!(s.key_text("toggleprone", &loc), None);
+        s.execute("bind Z +gostand; bind X +gostand");
+        assert_eq!(s.key_text("+gostand", &loc).as_deref(), Some("Space or X"));
     }
 
     #[test]
