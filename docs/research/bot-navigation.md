@@ -137,6 +137,32 @@ patch grid moved `mp_brecourt` back to 159.
   (`mp_brecourt`) to 38 (`mp_ship`) edges off each stock graph. Node counts
   and the spawn census are unchanged (VERIFIED, measured with the
   `nav_build` example).
+- A flood walk that comes to rest in a column whose node stands 8 to 40
+  units off its height (inside `Z_MERGE`, the node it merges into) proves
+  nothing about that node: the walk is run again node to node, onto the
+  node's floor (all three gaits, as the flood's own walk). Where that
+  fails too, the rest becomes a node of its own and floods on, and a
+  column lookup takes its nearest node in height. Until 2026-10-09 such a
+  rest was merged into the column's node and linked. VERIFIED (measured,
+  2026-10-09, each case walked with a temporary trace of `walk_as`):
+  - `mp_ship`: the walk from the hull floor (2272, 513, -63.875) toward
+    the column of the beam-top node (2236.4, 512.0, -31.875) came to rest
+    on the beam's edge at -47.875 (the beam is in "A walk node to node"
+    below), and the edge it made sent bots onto the slope (seed 1, 16
+    bot-ticks).
+  - `mp_chateau`: a floor at z 260.125 by (-129, 1520), between nodes at
+    236 and 291 in the same columns, never had a node; arrivals on it
+    were merged into both. Its own nodes keep the spawn at (-55, 1179)
+    in the main component (112 of 113, as before).
+  - `mp_depot`: the run from (-28.5, 352.0, 12.125) off a ledge to the
+    node at (-64.2, 352.0, 27.125) lands on a step's corner at 3.125,
+    right under it, and was merged into it; the spawns at (-125, 494) had
+    no other way in. The node-to-node walk jumps there ("Jumps").
+  The stock graphs gain 0.1 to 0.9% nodes and 0.2 to 1.0% edges, every
+  census count is unchanged (`mp_ship` 14 065 to 14 147 nodes, 95 495 to
+  96 389 edges), and a build runs 1.2% (`mp_hurtgen`) to 4.7%
+  (`mp_depot`) more instructions (VERIFIED, `nav_build` example, `perf
+  stat -e instructions:u`).
 - New nodes stay within 512 units of the spawns' bounding box. Past it lies
   scenery: `mp_hurtgen`'s forest added 10 000 nodes.
 - Walks run on every core, a layer at a time, handed out one node at a time;
@@ -251,9 +277,20 @@ over the 18-unit step. Two kinds of edge use it, kept in
   jumped onto the step 5 ticks earlier was refused the jump by the
   cooldown, and one resting 4 units nearer the lip than the node left the
   ground on the first tick of the run, before it had the pace to cross.
+- A pinned walk jumps under a ceiling lower than the jump's 39 units too:
+  `jump_clear` looks for room ahead at the height the body rises to, not
+  at the full jump's. A floor-bound walk (node to node) also jumps where
+  it stands within 16 units flat under its target floor more than a step
+  up, the cue a bot on a jump edge jumps on: aimed at a point overhead,
+  the run jitters a few units a tick and never counts as pinned.
+  VERIFIED (measured, `mp_depot`, 2026-10-09): on the step's corner at
+  (-63.9, 352, 3.125) a ceiling stops a jump 2.25 units short of 39, and
+  the jump lands on the floor at 27.125 the next tick
+  (`nav::tests::a_walk_jumps_onto_a_floor_right_overhead_under_a_ceiling`).
 - A jump edge's top counts as reached only within 16 units of its height,
-  where any other waypoint passes within 48: from the foot of a 32-unit
-  ledge the top is in reach flat.
+  where any other waypoint passes from up to 48 above or a step below it:
+  from the foot of a 32-unit ledge the top is in reach flat. It is never
+  cut past (section 3).
 - With both, `mp_depot` `re` (2 bots, seed 7) picks the documents up at
   tick 814 and delivers them 224 ticks later (`tests/bot_objectives.rs`).
 
@@ -517,11 +554,21 @@ else a spot it remembers or heard, section 4), `Roam`, or `Away(threat)`
   off its edge at them, and spent the rest of the round walking at them
   from the floor below.
 - A waypoint is passed within 24 units horizontally, or once the bot is nearer
-  the next node than the waypoint is, either only within 48 units of its
-  height: a ladder's head stands right above its foot. A node the next edge
-  drops more than a step (18) from is passed only within 8 of its height,
+  the next node than the waypoint is, either only from 48 units above it to
+  a step (18) below it: a ladder's head stands right above its foot, and
+  from the rungs under the lip the next node is no way on. A node the next
+  edge drops more than a step from is passed only within 8 of its height,
   a jump's top within 16: the drop was proved from the node, not from beside
-  or under it. A waypoint four grid
+  or under it. A jump's top is never passed by being nearer the next node:
+  a body still in the air beside the top is that too, and falls back to
+  the foot. A pass also runs the walk on from where the body stands, onto
+  the next node's floor (`Follower::edge_holds`; not on a climb or drop
+  steeper than a jump, nor from more than 8 off the waypoint's height, as
+  on a ladder under its head): the graph proved the edge from the node,
+  and a body up to 24 units off it can meet what the node's walk did not.
+  Where that walk fails the bot heads on at the waypoint, and within 12
+  units of it flat takes the edge out of its plans as a stuck one. A
+  waypoint four grid
   steps away means the bot left the path: plan again. Forty ticks without
   closing on a waypoint, height counted with the flat distance so a climb
   closes in, drop the path, and the edge the bot was on stays out of its
@@ -575,8 +622,42 @@ bot at (5832, 561, 56) that passed a node 20 above it and headed for the
 stair beyond, seed 5's 49, a bot climbing a ladder and dropping back
 near (5350, -100), and seed 11's 4, a bot on the floor heading for the
 beam's edge node (2208.5, 444.7, -47.875). Seed 3's 19 before were a bot at
-a ladder's foot at (1486, -160, 8) whose stuck count kept restarting. A
-random heading is never one with a
+a ladder's foot at (1486, -160, 8) whose stuck count kept restarting.
+
+VERIFIED (measured 2026-10-09, the same 6 bots, `dm`, shoot off, 4000
+ticks; a bot-tick counts when every position of the bot over the 12 s
+before it lies within 150 units of the first, so a bot that walks off
+and comes back is not counted, unlike the table above, whose detector
+was not kept): bot-ticks stalled on `mp_ship`, release build (the test
+profile gives the same counts).
+
+| | seeds 1 3 5 7 9 11 13 15 | total | seeds 17 to 31 odd |
+|---|---|---|---|
+| before | 70 31 82 2 41 35 94 20 | 375 | 172 |
+| after | 40 0 69 3 2 0 0 19 | 133 | 27 |
+
+The fixes, each from a stall traced tick by tick (a run diverges from
+its first changed waypoint, so most turned up in the runs between the
+two rows, not in "before"):
+- Seed 5 before, (3347, -150, 616), and seed 9 at the same spot: the jump
+  from the deck at 616 to a ledge at 652 by (3360, -90). The bot passed
+  the top in the air, nearer the next node, and fell back to the deck.
+- Seed 15 before, (2214.8, 446.0, -47.9), and two later runs at
+  (2229, 480, -47.9) and (2251, -388, -47.9): a bot on a hull beam's edge
+  ledge beside the edge node, heading over the beam on the walk the node
+  proved, sliding back off the slope. A later run also followed the
+  flood's merged edge onto a beam's top (section 2, "The flood").
+- A later run on the mast ladder at (3696, 56): bots passed its head at
+  992 from 25 under it and headed for the next node across the deck from
+  the rungs.
+
+Left: seed 5's 69 are a bot that tips off the ladder at (3280, -460) onto
+the deck at 56, is pinned 10 ticks at x 3288 short of the next node, and
+takes the random unstick heading off the deck's west edge to the hull
+floor 120 below; a random heading avoids hazards, not drops. Seed 1's 24
+are a bot on the ship beam's slope under its top node (2172.9, 418.2,
+-31.875), seed 15's 18 a bot under a stair to z 104 at (2151, -236, 56).
+A random heading is never one with a
 hazard 64 units along it (`BotView::hazard_ahead`, one flag per 45-degree
 octant), and a bot wandering up to one picks again. Engaging an enemy overrides all of it.
 In S&D the objective names the point and can hold the bot still
