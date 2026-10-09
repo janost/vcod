@@ -765,7 +765,6 @@ impl GameHost {
                 angles: glam::Vec3::ZERO,
                 scale: glam::Vec3::ONE,
                 precalc: glam::Vec3::ONE,
-                shadow_decal: false,
             };
             let mut out = Vec::new();
             vcod_common::props::placed_collision_tris(&at_rest, &model, &mut out);

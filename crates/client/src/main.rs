@@ -2896,6 +2896,7 @@ impl ApplicationHandler for App {
                                             client_num as u32,
                                             drawn_pos,
                                         );
+                                        scene.swing_speed = self.shell.cvar_f32("bg_swingSpeed");
                                         let built = entities::build_instances(
                                             scene,
                                             (a, b, f),
@@ -2988,6 +2989,9 @@ impl ApplicationHandler for App {
                                     self.look_zoom =
                                         (fov / cg_fov, view_ps.as_ref().is_some_and(|v| v.mounted));
                                     vm = vm_draw;
+                                    // Next frame's cmds carry this kick, as
+                                    // `CL_FinishMove` reads last frame's syscall 0x56.
+                                    input.kick = view.view_kick();
                                     if !snapshot_view {
                                         let delta = match &predicted {
                                             Some(v) => v.delta_angles,
@@ -2996,7 +3000,7 @@ impl ApplicationHandler for App {
                                                     .map(|name| s.ps.field_i32(p, name))
                                             }),
                                         };
-                                        (cam.yaw, cam.pitch) = own_view(input.raw_angles(), delta);
+                                        (cam.yaw, cam.pitch) = own_view(input.cmd_angles(), delta);
                                     }
                                     // On a mounted gun the view rides the gun's
                                     // `tag_player` and barrel, not the cmd's angles
@@ -3170,6 +3174,16 @@ impl ApplicationHandler for App {
                                         }
                                         for ev in evs {
                                             self.ev_seen += 1;
+                                            // `CG_FireWeapon` kicks only for the
+                                            // view's own body (`0x30038bc8`).
+                                            if (ev.entity_num == u32::MAX
+                                                || ev.entity_num == ps_client as u32)
+                                                && let Some(ps) = &view_ps
+                                            {
+                                                for _ in 0..play::recoil::fire_calls(ev.event) {
+                                                    view.fire(weapons, ps);
+                                                }
+                                            }
                                             if let Some(hud) = &mut self.hud {
                                                 hud.on_game_event(&ev, &hud_frame);
                                             }
@@ -3278,6 +3292,7 @@ impl ApplicationHandler for App {
                                     self.fx_ms = fx_t0.elapsed().as_secs_f32() * 1000.0;
 
                                     if let Some(hud) = &mut self.hud {
+                                        hud.set_gun_kick(view.gun_kick());
                                         let hud_t0 = Instant::now();
                                         hud_quads = hud.build(&hud_frame);
                                         self.hud_ms = hud_t0.elapsed().as_secs_f32() * 1000.0;

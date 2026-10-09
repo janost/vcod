@@ -75,7 +75,6 @@ const _: () = assert!(std::mem::size_of::<FxVert>() == 36);
 enum Pass {
     Opaque,
     Prop,
-    PropDecal,
     Layer,
     Overlay,
     Stage,
@@ -142,7 +141,7 @@ struct FrameDraw {
 /// decal slot, see-through blends, back-to-front blends from `eye`,
 /// additives. Sky soups are never in `draws`.
 fn order_draws(w: &WorldGpu, draws: &[DrawRange], eye: glam::Vec3, out: &mut Vec<FrameDraw>) {
-    let mut legacy: [Vec<u32>; 5] = Default::default();
+    let mut legacy: [Vec<u32>; 4] = Default::default();
     let mut bands: [Vec<(u32, u32)>; 5] = Default::default();
     for (di, d) in draws.iter().enumerate() {
         match w.batch_draws[d.batch as usize].pass {
@@ -173,7 +172,7 @@ fn order_draws(w: &WorldGpu, draws: &[DrawRange], eye: glam::Vec3, out: &mut Vec
             src: di,
         });
     }
-    for pass in [Pass::Prop, Pass::PropDecal, Pass::Layer, Pass::Overlay] {
+    for pass in [Pass::Prop, Pass::Layer, Pass::Overlay] {
         for &di in &legacy[pass as usize] {
             out.push(FrameDraw {
                 kind: DrawRef::Legacy(pass),
@@ -550,6 +549,9 @@ pub const STAGE_FLAG_VERTEX_RGB_HALF: u32 = 1024;
 /// deformVertexes wave: displace vertices along their normals by
 /// StageParams.wave = [base, amp, phase + t * rate, spread].
 pub const STAGE_FLAG_DEFORM_WAVE: u32 = 2048;
+/// The stage's colour is a framebuffer value that retail's gamma ramp
+/// doubles on display: fs_stage multiplies its rgb by 2 (see [`overbright`]).
+pub const STAGE_FLAG_OVERBRIGHT: u32 = 4096;
 
 /// Per-stage draw parameters, one dynamic-offset slot per stage batch. WGSL
 /// mirror is `StageParams` in shader.wgsl; byte offsets:
@@ -672,8 +674,36 @@ fn stage_params(shader: &Shader, idx: usize, t: f32) -> Option<StageParams> {
         flags |= STAGE_FLAG_DEFORM_WAVE;
         p.wave = [w.base, w.amp, w.phase + t * w.freq, *spread];
     }
+    if overbright(shader, idx) {
+        flags |= STAGE_FLAG_OVERBRIGHT;
+    }
     p.flags = flags;
     Some(p)
+}
+
+/// Whether stage `idx` takes the display doubling itself. vcod's frame holds
+/// retail's displayed colour, which is the framebuffer doubled by the gamma
+/// ramp (docs/research/cod11-gamma.md, section 5). A `$lightmap` bundle
+/// already carries that x2, and so does a later lightmap stage that
+/// multiplies the framebuffer; a stage that multiplies the framebuffer
+/// itself (source factor zero or dst colour) scales what is already there.
+fn overbright(shader: &Shader, idx: usize) -> bool {
+    let multiplies = |st: &vcod_common::shader::Stage| {
+        matches!(
+            st.blend,
+            Some((BlendFactor::Zero | BlendFactor::DstColor, _))
+        )
+    };
+    let lightmapped =
+        |st: &vcod_common::shader::Stage| st.bundles.iter().any(|b| b.image == ImageRef::Lightmap);
+    let Some(st) = shader.stages.get(idx) else {
+        return false;
+    };
+    !lightmapped(st)
+        && !multiplies(st)
+        && !shader.stages[idx + 1..]
+            .iter()
+            .any(|later| multiplies(later) && lightmapped(later))
 }
 
 /// A frame-indexed set of bind groups: one per animMap frame, or a single
@@ -1421,7 +1451,6 @@ pub struct Renderer {
     depth_view: wgpu::TextureView,
     pipeline: wgpu::RenderPipeline,
     prop_pipeline: wgpu::RenderPipeline,
-    prop_decal_pipeline: wgpu::RenderPipeline,
     layer_pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
     /// `[variant][two_sided][bias]`; built at startup so shader.wgsl validates
@@ -1549,10 +1578,11 @@ impl Renderer {
                     count: None,
                 },
                 // Fx lights. The fx pass shares this layout without declaring
-                // binding 1 in fx.wgsl, which wgpu allows.
+                // binding 1 in fx.wgsl, which wgpu allows. Props light
+                // per vertex from them.
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -1767,31 +1797,16 @@ impl Renderer {
         // Props take the opaque alpha-test path: `*_masked` skins are cutouts
         // on real geometry, not coplanar decals, so no overlay depth bias.
         // Unculled like the viewmodel (xmodel winding), and foliage cross
-        // planes need both sides anyway. Shadow-decal props go through
-        // `prop_decal_pipeline` instead.
+        // planes need both sides anyway.
         let prop_pipeline = make_pipeline(
             "prop pipeline",
             &pipeline_layout,
-            "vs_main",
+            "vs_prop",
             Default::default(),
-            "fs_main",
+            "fs_prop",
             false,
             None,
             true,
-            None,
-        );
-        // Coplanar shadow decals (`shadow_*` / `*_shadow`) pull toward the
-        // viewer and alpha-blend, so they sit on the ground instead of
-        // z-fighting against it.
-        let prop_decal_pipeline = make_pipeline(
-            "prop decal pipeline",
-            &pipeline_layout,
-            "vs_main",
-            bias,
-            "fs_prop_decal",
-            false,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-            false,
             None,
         );
         // Blend layers alpha-blend over the base ground by vertex alpha. No
@@ -1904,7 +1919,6 @@ impl Renderer {
             depth_view,
             pipeline,
             prop_pipeline,
-            prop_decal_pipeline,
             layer_pipeline,
             overlay_pipeline,
             stage_pipelines,
@@ -2159,21 +2173,16 @@ impl Renderer {
             });
             batch_draws.push(DrawCall {
                 bind_group: idx,
-                pass: if batch.shadow_decal {
-                    Pass::PropDecal
-                } else {
-                    Pass::Prop
-                },
+                pass: Pass::Prop,
             });
         }
 
         let count = |p: Pass| batch_draws.iter().filter(|d| d.pass == p).count();
         println!(
-            "{} batches ({} opaque, {} prop, {} prop decal, {} layer, {} overlay), {} draw indices, {} vertices",
+            "{} batches ({} opaque, {} prop, {} layer, {} overlay), {} draw indices, {} vertices",
             batch_draws.len(),
             count(Pass::Opaque),
             count(Pass::Prop),
-            count(Pass::PropDecal),
             count(Pass::Layer),
             count(Pass::Overlay),
             indices.len(),
@@ -3328,7 +3337,6 @@ impl Renderer {
                                     pass.set_pipeline(match want {
                                         Pass::Opaque => &self.pipeline,
                                         Pass::Prop => &self.prop_pipeline,
-                                        Pass::PropDecal => &self.prop_decal_pipeline,
                                         Pass::Layer => &self.layer_pipeline,
                                         Pass::Overlay => &self.overlay_pipeline,
                                         Pass::Stage => continue,
@@ -4999,6 +5007,7 @@ mod tests {
                 | STAGE_FLAG_VERTEX_RGB
                 | STAGE_FLAG_VERTEX_RGB_HALF
                 | STAGE_FLAG_VERTEX_ALPHA
+                | STAGE_FLAG_OVERBRIGHT
         );
         assert_eq!(p.vec0_s, [1.0, 0.0, 0.0, 0.0]);
         assert_eq!(p.vec0_t, [0.0, 1.0, 0.0, 0.0]);
@@ -5052,7 +5061,7 @@ mod tests {
         assert_eq!(p.tint[1], rv * 0.5);
         assert_eq!(p.tint[2], rv * 0.5);
         assert!((p.tint[3] - av).abs() < 1e-6 && (av - 0.25).abs() < 1e-6);
-        assert_eq!(p.flags, 0);
+        assert_eq!(p.flags, STAGE_FLAG_OVERBRIGHT);
     }
 
     #[test]
@@ -5081,7 +5090,8 @@ mod tests {
             // ExactVertex routes through the vertex-colour flag like Vertex
             assert_eq!(
                 p.flags,
-                u32::from(rgb == RgbGen::ExactVertex) * STAGE_FLAG_VERTEX_RGB
+                (u32::from(rgb == RgbGen::ExactVertex) * STAGE_FLAG_VERTEX_RGB)
+                    | STAGE_FLAG_OVERBRIGHT
             );
         }
     }
@@ -5119,6 +5129,87 @@ mod tests {
         }
     }
 
+    /// The display doubling lands once per colour that reaches the screen:
+    /// on a blended or additive stage, on the base of a texture-only chain,
+    /// and not where a `$lightmap` (x2 already) or a filter stage carries it.
+    #[test]
+    fn overbright_doubles_each_framebuffer_colour_once() {
+        let stage = |image: ImageRef, blend: Option<(BlendFactor, BlendFactor)>| Stage {
+            bundles: vec![Bundle {
+                image,
+                anim: None,
+                clamp: false,
+                tcmods: vec![],
+                vector: None,
+            }],
+            blend,
+            depth_write: None,
+            alpha_func: None,
+            rgb_gen: RgbGen::IdentityLighting,
+            alpha_gen: AlphaGen::Identity,
+        };
+        let tex = || ImageRef::Path("a".into());
+        let filter = Some((BlendFactor::DstColor, BlendFactor::Zero));
+        let add = Some((BlendFactor::One, BlendFactor::One));
+        let blend = Some((BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha));
+        let flags = |stages: Vec<Stage>| -> Vec<bool> {
+            let sh = Shader {
+                name: "test/ob".into(),
+                stages,
+                ..Default::default()
+            };
+            (0..sh.stages.len())
+                .map(|i| stage_params(&sh, i, 0.0).unwrap().flags & STAGE_FLAG_OVERBRIGHT != 0)
+                .collect()
+        };
+        // texture, then the lightmap multiplies the framebuffer
+        assert_eq!(
+            flags(vec![
+                stage(tex(), None),
+                stage(ImageRef::Lightmap, filter.clone())
+            ]),
+            [false, false]
+        );
+        // lightmap first, the texture multiplies it, a glow adds on top
+        assert_eq!(
+            flags(vec![
+                stage(ImageRef::Lightmap, None),
+                stage(tex(), filter),
+                stage(tex(), add),
+            ]),
+            [false, false, true]
+        );
+        // a vertex-lit surface's single stage and a blended decal
+        assert_eq!(flags(vec![stage(tex(), None)]), [true]);
+        assert_eq!(flags(vec![stage(tex(), blend)]), [true]);
+    }
+
+    /// Every WGSL module parses and validates, so a shader edit fails here
+    /// instead of at pipeline creation.
+    #[test]
+    fn wgsl_modules_validate() {
+        use wgpu::naga;
+        for (name, src) in [
+            ("shader", include_str!("shader.wgsl")),
+            ("dynamic_model", include_str!("dynamic_model.wgsl")),
+            ("viewmodel", include_str!("viewmodel.wgsl")),
+            ("fx", include_str!("fx.wgsl")),
+            ("sky", include_str!("sky.wgsl")),
+            ("gamma", include_str!("gamma.wgsl")),
+            ("hud", include_str!("hud.wgsl")),
+            ("hud_text", include_str!("hud_text.wgsl")),
+        ] {
+            let module = naga::front::wgsl::parse_str(src)
+                .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::default(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
+        }
+    }
+
     #[test]
     fn stage_params_single_bundle_leaves_slot_one_neutral() {
         let sh = Shader {
@@ -5140,7 +5231,7 @@ mod tests {
             ..Default::default()
         };
         let p = stage_params(&sh, 0, 1.0).unwrap();
-        assert_eq!(p.flags, STAGE_FLAG_ALPHAFUNC_LT128);
+        assert_eq!(p.flags, STAGE_FLAG_ALPHAFUNC_LT128 | STAGE_FLAG_OVERBRIGHT);
         assert_eq!(p.uv1, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
         assert_eq!(p.turb01[2..], [0.0, 0.0]);
         assert_eq!(p.vec1_s, [0.0; 4]);

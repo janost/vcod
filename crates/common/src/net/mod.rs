@@ -49,6 +49,8 @@ const CONNECT_RESEND: Duration = Duration::from_secs(2);
 const CONNECT_TRIES: u32 = 5;
 const GAMESTATE_POKE: Duration = Duration::from_millis(200);
 const GAMESTATE_TIMEOUT: Duration = Duration::from_secs(20);
+/// `CL_DisconnectPacket`'s guard (CoDMP.exe 0x410663, `cmp eax,0xbb8`).
+const DISCONNECT_GUARD: Duration = Duration::from_millis(3000);
 /// Snapshot silence that drops an active connection.
 const ACTIVE_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -234,6 +236,10 @@ pub struct NetClient<T: Transport> {
     last_send: Instant,
     connect_deadline: Instant,
     last_snapshot: Instant,
+    /// `clc.lastPacketTime` (CoDMP.exe 0x15ce868): stamped at
+    /// `connectResponse` and by every sequenced packet once connected. `None`
+    /// before the first, which retail's zeroed stamp reads as long ago.
+    last_packet: Option<Instant>,
     /// Last OOB `print` during the handshake; the rejection reason if the
     /// connect stalls.
     handshake_print: Option<String>,
@@ -305,6 +311,7 @@ impl<T: Transport> NetClient<T> {
             last_send: now,
             connect_deadline: now + GAMESTATE_TIMEOUT,
             last_snapshot: now,
+            last_packet: None,
             handshake_print: None,
             download: None,
             stopdl_sent: false,
@@ -653,6 +660,8 @@ impl<T: Transport> NetClient<T> {
         ) {
             return;
         }
+        // CoDMP.exe 0x4110b1, ahead of the netchan's own checks.
+        self.last_packet = Some(self.now);
         match self.netchan.process_in(pkt, &self.huff) {
             Ok(Some(msg)) => self.handle_message(&msg),
             Ok(None) => {}
@@ -685,12 +694,22 @@ impl<T: Transport> NetClient<T> {
             }
             "connectResponse" if self.state == NetState::Connecting => {
                 self.state = NetState::LoadingGamestate;
+                self.last_packet = Some(self.now);
                 self.connect_deadline = self.now + GAMESTATE_TIMEOUT;
                 self.last_send = self.now - GAMESTATE_POKE; // poke immediately
             }
-            // CoDMP.exe 0x410620; retail also ignores one inside 3 s of the
-            // last packet.
-            "disconnect" => self.drop("EXE_SERVER_DISCONNECTED"),
+            // `CL_DisconnectPacket` (CoDMP.exe 0x410620): honoured only
+            // while connecting or connected, and only once the server has
+            // been silent for 3 s, so a forged one cannot cut a live link.
+            "disconnect"
+                if self.state != NetState::Disconnected
+                    && self
+                        .last_packet
+                        .is_none_or(|t| self.now.duration_since(t) >= DISCONNECT_GUARD) =>
+            {
+                self.drop("EXE_SERVER_DISCONNECTED")
+            }
+            "disconnect" => log::debug!("oob disconnect inside the 3 s guard, ignored"),
             // A rejected connect is `error\n<reason>`; surface the reason instead
             // of stalling to the connect timeout. CoDMP.exe 0x410e41 localizes
             // it as a message (`EXE_SERVER_IS_DIFFERENT_VER\x151.1`).
@@ -1877,6 +1896,43 @@ mod tests {
                 "EXE_SERVER_IS_DIFFERENT_VER\u{15}1.1".to_string()
             ))
         );
+    }
+
+    /// `CL_DisconnectPacket` drops only once the server has been silent for
+    /// 3 s since `connectResponse` or its last sequenced packet.
+    #[test]
+    fn oob_disconnect_waits_out_the_guard() {
+        let t0 = Instant::now();
+        let mut c = NetClient::start(FakeTransport::default(), t0);
+        c.transport
+            .incoming
+            .push_back(oob("challengeResponse", " 42"));
+        c.pump_at(t0);
+        c.transport.incoming.push_back(oob("connectResponse", ""));
+        c.pump_at(t0);
+        c.transport.incoming.push_back(oob("disconnect", ""));
+        let ev = c.pump_at(t0 + Duration::from_millis(2999));
+        assert_eq!(c.state(), NetState::LoadingGamestate);
+        assert!(!ev.iter().any(|e| matches!(e, NetEvent::Dropped(_))));
+        // Any sequenced packet restarts it, before the netchan's checks.
+        c.transport.incoming.push_back(vec![9, 0, 0, 0, 0, 0, 0, 0]);
+        c.pump_at(t0 + Duration::from_millis(2000));
+        c.transport.incoming.push_back(oob("disconnect", ""));
+        c.pump_at(t0 + Duration::from_millis(4999));
+        assert_eq!(c.state(), NetState::LoadingGamestate);
+        c.transport.incoming.push_back(oob("disconnect", ""));
+        let ev = c.pump_at(t0 + Duration::from_millis(5000));
+        assert_eq!(c.state(), NetState::Disconnected);
+        assert_eq!(
+            ev.first(),
+            Some(&NetEvent::Dropped("EXE_SERVER_DISCONNECTED".to_string()))
+        );
+
+        // Before `connectResponse` nothing has stamped the clock.
+        let mut c = NetClient::start(FakeTransport::default(), t0);
+        c.transport.incoming.push_back(oob("disconnect", ""));
+        c.pump_at(t0);
+        assert_eq!(c.state(), NetState::Disconnected);
     }
 
     #[test]

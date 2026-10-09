@@ -1,10 +1,11 @@
 //! The playing client's own first-person weapon: the rig for `ps.weapon`
 //! with the hands `ps.viewmodelIndex` names, posed from `ps.weapAnim`.
 
+use super::recoil::{self, Recoil};
 use crate::hud::scope;
 use crate::renderer::VmDraw;
 use crate::viewmodel::{self, ViewWeapon, ViewmodelMotion};
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 use vcod_common::net::msg;
 use vcod_common::net::protocol::{CS_MODELS_V1, ENTITYNUM_NONE, Protocol};
 use vcod_common::pk3::Pk3Fs;
@@ -25,6 +26,9 @@ pub struct ViewPs {
     pub pm_type: i32,
     /// On a mounted gun: `eFlags & 0xc000` on the wire.
     pub mounted: bool,
+    /// `pm_flags`' view bits: 0x40000 the client's own view, 0x10000 a
+    /// follow (`play::recoil`).
+    pub pm_flags: i32,
 }
 
 /// `pm_type` at intermission.
@@ -43,6 +47,7 @@ impl ViewPs {
             on_ground: pred.ps.on_ground,
             pm_type: pred.pm_type,
             mounted: pred.ps.mounted.is_some(),
+            pm_flags: recoil::PMF_OWN_VIEW,
         }
     }
 
@@ -58,6 +63,7 @@ impl ViewPs {
             on_ground: ps.field_i32(p, "groundEntityNum") as u32 != ENTITYNUM_NONE,
             pm_type: ps.field_i32(p, "pm_type"),
             mounted: ps.field_i32(p, "eFlags") & 0xc000 != 0,
+            pm_flags: ps.field_i32(p, "pm_flags"),
         }
     }
 }
@@ -174,6 +180,9 @@ pub struct OnlineView {
     flash: Option<(Vec3, Vec3)>,
     /// A scope overlay is up, which hides the gun and its flash.
     scoped: bool,
+    recoil: Recoil,
+    /// `now_ms` of the last frame, whole milliseconds.
+    last_ms: Option<i64>,
 }
 
 impl OnlineView {
@@ -230,6 +239,27 @@ impl OnlineView {
             .collect()
     }
 
+    /// A shot by the body the view rides: `CG_FireWeapon`'s recoil call
+    /// (`0x30038bd2`), made under `pm_flags` 0x50000, own view or a follow.
+    pub fn fire(&mut self, weapons: &[Option<WeaponDef>], ps: &ViewPs) {
+        if let Some(def) = weapons.get(usize::from(ps.weapon)).and_then(Option::as_ref)
+            && ps.pm_flags & recoil::PMF_VIEW_BODY != 0
+        {
+            self.recoil.fire(def, ps.ads_frac);
+        }
+    }
+
+    /// The view kick for the cmd angles and the drawn view, degrees, wire
+    /// convention.
+    pub fn view_kick(&self) -> [f32; 3] {
+        self.recoil.view_kick()
+    }
+
+    /// The gun spring's pitch and yaw, degrees, wire convention.
+    pub fn gun_kick(&self) -> [f32; 2] {
+        self.recoil.gun_kick()
+    }
+
     /// Whether last frame's sight put a scope overlay up.
     pub fn scoped(&self) -> bool {
         self.scoped
@@ -250,6 +280,21 @@ impl OnlineView {
         let mouse = std::mem::take(&mut self.mouse);
         self.flash = None;
         let held = ps.and_then(|ps| weapons.get(usize::from(ps.weapon))?.as_ref());
+        let ms = now_ms as i64;
+        let frametime = self
+            .last_ms
+            .map_or(0, |last| (ms - last).clamp(0, 1000) as i32);
+        self.last_ms = Some(ms);
+        match ps {
+            Some(ps) => self.recoil.step(
+                frametime,
+                held,
+                ps.ads_frac,
+                ps.pm_flags & recoil::PMF_OWN_VIEW != 0,
+            ),
+            // Dead or not in the world: the next life starts unkicked.
+            None => self.recoil.reset(),
+        }
         let mut zooming_in = false;
         let fov = ps.map_or(cg_fov, |ps| {
             zooming_in = self.sight.step(held, ps.ads_frac);
@@ -312,7 +357,12 @@ impl OnlineView {
         };
         self.motion
             .update(dt, ground_speed, ps.on_ground, mouse.0, mouse.1, damp);
-        let transform = self.motion.transform();
+        // The gun spring turns the gun about the eye: wire pitch is nose
+        // down, wire yaw to the left.
+        let [kick_pitch, kick_yaw] = self.recoil.gun_kick();
+        let transform = Mat4::from_rotation_y(kick_yaw.to_radians())
+            * Mat4::from_rotation_x(-kick_pitch.to_radians())
+            * self.motion.transform();
         self.flash = w.skeleton.bone_index("tag_flash").map(|bi| {
             let (pos, rot) = w.pose.bone_world(&w.skeleton, bi);
             (
@@ -373,6 +423,7 @@ mod tests {
             on_ground: true,
             pm_type: 0,
             mounted: false,
+            pm_flags: recoil::PMF_OWN_VIEW,
         }
     }
 

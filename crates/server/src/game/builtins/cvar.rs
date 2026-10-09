@@ -29,7 +29,7 @@ pub fn lookup(folded: &str) -> Option<Builtin> {
 
 /// C `atoi`: the longest numeric prefix, 0 when there is none. Rust's
 /// `parse` rejects `"12abc"`, which retail reads as 12.
-fn atoi(s: &str) -> i32 {
+pub(crate) fn atoi(s: &str) -> i32 {
     let s = s.trim_start();
     let end = s
         .char_indices()
