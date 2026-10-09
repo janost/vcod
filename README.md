@@ -169,9 +169,6 @@ missing.
 
 - Protocol 1 (patch 1.1) only. 1.5 and United Offensive servers won't talk
   to it.
-- The HUD skips a few retail touches: compass spring, stance key hints, the
-  weapon name timing out, hit icon jitter
-  ([cod11-hud-protocol.md](docs/research/cod11-hud-protocol.md) section 9).
 - Prediction carries you on a moving brush model but not its rotation.
   Neither does retail's.
 

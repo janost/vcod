@@ -1336,9 +1336,38 @@ strings: `0x3006526c`, `0x30063148` and `0x3006567c`. INFERRED, off
 player holds instead. vcod prints the weapon's own.
 
 INFERRED, off the guard both `0x30023c30` and `0x30023d50` open with: the
-name and its backdrop draw only while `0x30019a30` returns a colour, which
-it does for 1800 ms (`0x708`) from the stamp at `0x3020c920` and fades
-over the last 100. vcod draws them always.
+name and its backdrop draw only while `0x30019a30` returns a colour.
+VERIFIED, `0x30019a30` (`ecx` the length, `edx` the start): it returns null
+when the start is 0 or `cg.time - start` is not below the length; otherwise
+white with alpha 1, or `left * 0.01` (`0x300693f4`) when `left`, the length
+less the time since the start, is below 100, times the global at
+`0x301e14e8`, `cg_hudAlpha` (record `0x30074ae0`, default `"1.0"`).
+VERIFIED: both callers pass 1800 (`0x708`) and the stamp at `0x3020c920`.
+
+VERIFIED, the seven stores to `0x3020c920`, each of `cg.time`
+(`0x30207148`): `0x30037f28` in the weapon select `0x30037f20`, which the
+`a` server command calls (`0x3002e139`); `0x300380a2` and `0x3003811c`, the
+two weapon-cycle commands, and `0x30038342`, the weapon slot command, each
+only when `cg.time` less the stamp is at least `cg_weaponCycleDelay`
+(record `0x30074c10`, integer at `0x301df9ec`, default `"0"`);
+`0x30028aa3` in `0x30028a70`; `0x3001dabc` in `0x3001da80`, an item pickup
+event for a weapon (row type 1 at `0x30076310`) while the selection
+(`0x301cbb0c`) is 0; and `0x300387fa`, the cycle's fallback, when it leaves
+the selection unheld and non-zero. VERIFIED: `0x30028a70` is reached from
+the two first-snapshot setups (`jmp` at `0x3002fa8f`, `call` at
+`0x3003037f`) and from the snapshot transition's `call` at `0x300300cd`,
+taken when `0x30207154` is set or the new snapshot's `stats[5]` (snapshot
+`+0x114`) or `clientNum` (`+0xb8`) differs from the old one's
+(`0x30030009`..`0x300300b8`). INFERRED: that is Q3's `CG_Respawn`, run on a
+new spawn count (`docs/protocol-1.1.md`, `stats[5]`) or a new followed
+client. VERIFIED: the name and the backdrop show the selection's weapon
+(`0x301cbb0c`) when it is held, else the playerstate's.
+
+vcod stamps on a change of `(clientNum, stats[5])`, the first playerstate
+included, on every weapon-select bind (`weaponslot`, `weapnext`,
+`weapprev`) and on the `a` command, and fades the name and its backdrop
+with that rule (`WeaponNameFade`). It names the playerstate's weapon, not
+the pending selection, and skips the pickup stamp.
 
 ### Weapon mode icon
 
@@ -1377,11 +1406,56 @@ cvars `cg_hudStanceFlash_r`, `_g`, `_b` at 1.0, 1.0, 0.3 (values at
 the icon in that colour, each lane clamped to 0..1, at alpha
 `(stored + 1000 - now) * 0.001 * 0.8`. VERIFIED: pak0's
 `configure_mp.cfg` and `safemode_mp.cfg` set `cg_hudStanceHintPrints` 1.
-INFERRED: a stock install runs with it on, which vcod assumes. The same
-function prints the `CGAME_STANCEHINT_*` key hints for 3 s from the stored
-time and a prone-blocked notice off `pm_flags` `0x8000`; vcod draws
-neither. VERIFIED: the icon's x adds `(cg_hudCompassSize - 1) * 112`
-(`0x30069738`), 0 at the default.
+INFERRED: a stock install runs with it on, which vcod assumes. VERIFIED: the
+icon's x adds `(cg_hudCompassSize - 1) * 112` (`0x30069738`), 0 at the
+default.
+
+VERIFIED, the key hints (`0x300240e8`..`0x30024589`): while `cg.time` is
+below the stored time plus 3000 (`0xbb8`), the function fills three
+4-by-6 tables of command names on the stack, one per stance, and the labels
+`CGAME_STANCEHINT_JUMP`, `_STAND`, `_CROUCH`, `_PRONE` (`0x30063238`,
+`0x30063220`, `0x30063208`, `0x300631f0`). Read out of the stores, row by
+row (jump, stand, crouch, prone):
+
+| Stance | Jump | Stand | Crouch | Prone |
+|---|---|---|---|---|
+| standing (`[esp+0x114]`) | `+gostand`, `+moveup` | | `gocrouch`, `togglecrouch`, `lowerstance`, `+movedown` | `goprone`, `+prone` |
+| crouched (`[esp+0xb4]`, bit 2) | | `+gostand`, `raisestance`, `+moveup` | | `goprone`, `lowerstance`, `toggleprone`, `+prone` |
+| prone (`[esp+0x54]`, bit 1) | | `+gostand`, `toggleprone` | `gocrouch`, `togglecrouch`, `raisestance`, `+movedown`, `+moveup` | |
+
+VERIFIED: it refreshes the binding table (`0x30046590`, the 50 `{command,
+..., key1, key2}` rows from `0x3006f150`, each key the first two key numbers
+whose binding matches case-insensitively, `0x300464e0`), then for each row
+keeps the first command `0x30046810` reports bound (key1 not -1) and counts
+the rows kept. The first baseline is the rect's `y + h * 0.5 - 1.5`
+(`0x3006930c`, `0x300693ac`), moved down by half a text height
+(trap `0x35` at the item's font and scale) for one row and up by half a
+height plus 1.5 for three; each kept row prints at the rect's right edge
+(`x + w`, with the compass-size shift) the localized label formatted with
+`0x30046940`'s key text, and the next baseline moves down a height plus
+1.5. VERIFIED, `0x30046940`: the key text is `KEY_UNBOUND` with no key, the
+first key's name, and with two `"%s %s"` of `KEY_OR` and the second's name
+appended. VERIFIED: the colour is the item's forecolor with alpha 1 below
+the stored time plus 2000 (`0x7d0`) and `(stored + 3000 - now) * 0.001`
+after. VERIFIED, pak `localized_english_pak1.pk3`'s `cgame.str`: the four
+labels read `Press [%s] to jump`, `to stand`, `to crouch`, `to go prone`.
+INFERRED: with the stock binds (Space `+gostand`, C `gocrouch`, Ctrl
+`goprone`) a standing player sees three lines, one crouched or prone two.
+
+VERIFIED, the prone-blocked notice (`0x30023ff5`..`0x300240e5`): when the
+predicted playerstate's `pm_flags` has `0x8000` and the static at
+`0x3007498c` is below `cg.time`, it becomes `cg.time + 1500` (`0x5dc`);
+while it is ahead, `CGAME_PRONE_BLOCKED` (`0x30063250`, "Prone Blocked") is
+printed centred on x 320 (`0x300695e4`, less half the text width) at y 270
+(`0x43870000`) with alpha `|sin((until - now) * 0.00066667 * 540 * pi /
+180)|` (`0x30069734`, `0x30069730`, `0x300693a8`, `0x30069494`): 0.36
+degrees a millisecond, three blinks in the 1.5 s.
+
+vcod prints both off the same stamp as the flash (`stance_hints`,
+`ProneBlocked`), the key text through the console's binds
+(`Shell::key_text`), and reads `0x8000` off the snapshot's `pm_flags`, which
+its predictor does not model. All three draw before the icon, as retail's
+do.
 
 vcod reads the icon and the flash off `pm_flags`' two bits, the replay's
 while predicting. Its first frame counts as a change, as the -1 start
@@ -1395,7 +1469,40 @@ draws its items in file order, so the highlight is under the face.
 
 INFERRED, off `0x30024800` and `0x30019bd0`: the back and face turn by the view
 yaw less `northyaw` (configstring 11), smoothed by a spring; the highlight and
-the needle do not turn (`0x30025120`). vcod turns the face without the spring.
+the needle do not turn (`0x30025120`).
+
+INFERRED: both 84 items call the spring each frame, and the second call
+finds no time passed. VERIFIED, the spring, `0x30019bd0`, which
+`0x30024800` calls ahead of its draw: the target is `SHORT2ANGLE(ANGLE2SHORT(
+viewangles[YAW] (0x302095d0) - northyaw (0x3020d09c)) & 0xffff)`
+(`0x30069380` 182.04445, `0x3006937c` 360/65536, through the truncating
+`_ftol` at `0x3005a890`). With the last time at `0x300eef2c` ahead of
+`cg.time`, or more than 500 ms (`0x300694b8`) behind, it stores the time,
+sets the drawn yaw (`0x3020d0a0`) to the target and the speed
+(`0x3020d0a4`) to 0. Otherwise it stores the time, takes `delta =
+AngleSubtract(drawn, target)` (`0x3003c310`, into -180..180) and walks the
+elapsed time in steps of at most 5 ms, `dt` the step times 0.001
+(`0x300693c0`): when `|delta| < 0.25` and `|speed| < 1.0` (doubles
+`0x30069430`, `0x30069328`) it snaps to the target and speed 0 and returns;
+else `delta` becomes `vel * dt + delta` wrapped through `ANGLE2SHORT` into
+0..360 and less 360 above 180 (`0x30069370`, `0x30069374`); the speed loses
+`dt * 1000` (`0x30069478`) when `delta > 0` and gains it when `delta < 0`;
+it loses `2 * speed * dt`; then, with the speed above 0, it loses `speed *
+dt * 3.5` (`0x300694c4`) when `delta > 0` and `dt`, and becomes 0 if that
+took it below 0; with the speed at or below 0 the mirror image, `delta < 0`
+and `+ dt`; a speed it did not zero is clamped to ±30000 (`0x300694c0`,
+`0x300694bc`). After the last step the drawn yaw is the wrapped `delta +
+target`. VERIFIED: `0x30024800` hands that yaw to the turned pic call
+`0x30019330`.
+
+VERIFIED: the pointer yaw at `0x3020d0a8`, which the friendlies and the
+objectives turn by, comes from a second spring at `0x30019f00` that runs
+only when `cg_hudCompassSpringyPointers` (record `0x30074b30`, integer at
+`0x301da46c`) is set, and is the view yaw otherwise; the cvar table's
+default is `"0"` and pak0's `configure_mp.cfg` and `safemode_mp.cfg` set
+it 0. INFERRED: at stock settings the face swings and settles while the
+pointers track the view. vcod runs the face spring (`CompassSpring`) on
+the HUD clock and turns the pointers by the view yaw.
 
 INFERRED, off `0x30024d20`: only objectives in state 4 are drawn; the target
 is the objective's origin, or its entity's when `entNum` is not `0x3ff`; the
@@ -1572,8 +1679,11 @@ non-zero count is a hit, which is the increment the server makes
 
 INFERRED, off `0x300287f0`: yaw and pitch both 255 add no icon; otherwise the
 oldest of eight slots takes the time and `damageYaw / 255 * 360` plus a random
-jitter of up to 10 degrees either way. VERIFIED: the jitter's constants are
-`0x30069448` (20.0) and `0x30069330` (32768.0). vcod leaves the jitter out.
+jitter of up to 10 degrees either way. VERIFIED, `0x300287f0`..: the slot's
+yaw is `SHORT2ANGLE(ANGLE2SHORT((rand() / 32768.0 - 0.5) * 20.0 + yaw))`,
+`rand` at `0x3004b189`, the constants `0x30069330` (32768.0), `0x3006930c`
+(0.5), `0x30069448` (20.0), `0x30069380` and `0x3006937c`. vcod draws it
+with MSVC's `rand` sequence from its own seed.
 
 INFERRED, off `0x300172f0`: each slot younger than `cg_hudDamageIconTime` draws
 `hudHitDirection` over `(-64, 32)` to `(64, 96)` about the screen centre,
@@ -1586,10 +1696,9 @@ behind. VERIFIED: the centre is `0x300695e4` (320.0) and `0x300695e0`
 
 | Retail piece | Where | vcod |
 |---|---|---|
-| Stance hint prints, prone-blocked notice | `0x30023f50` | not drawn |
-| Weapon name timing out 1.8 s after its stamp | `0x30023c30`, `0x30019a30` | always drawn |
 | The packed out-of-view teammate's lean offset | `0x3003f4e0` | left out |
-| Compass spring, damage-icon jitter, `adsAimPitch`, shared ammo caps | above | left out, each noted above |
+| The weapon name of a pending selection, the pickup stamp | `0x30023c30`, `0x3001da80` | the playerstate's weapon, no pickup stamp |
+| `adsAimPitch`, shared ammo caps | above | left out, each noted above |
 
 ---
 

@@ -1278,6 +1278,7 @@ fn loading_frame(
             fov: camera::DEFAULT_FOV_DEG,
             entity_origin: &|_| None,
             turret_weapon: None,
+            bound_key: &|_| None,
         };
         *hud_quads = hud.build(&f);
     }
@@ -1665,6 +1666,15 @@ impl App {
                     if let Mode::Online { input, .. } = &mut self.mode {
                         input.key(action, true);
                         input.key(action, false);
+                        if let (
+                            play::input::Action::Slot(_)
+                            | play::input::Action::NextWeapon
+                            | play::input::Action::PrevWeapon,
+                            Some(hud),
+                        ) = (action, &mut self.hud)
+                        {
+                            hud.weapon_selected();
+                        }
                     }
                 }
                 // The server never pushes scores: send `score` on the down
@@ -2910,6 +2920,7 @@ impl ApplicationHandler for App {
                                         fov,
                                         entity_origin: &entity_origin,
                                         turret_weapon,
+                                        bound_key: &|cmd| self.shell.key_text(cmd, &self.localized),
                                     };
 
                                     // Events use the newest snapshot, not the interpolation

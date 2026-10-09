@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 
+use vcod_common::localize::Localized;
 use vcod_common::net::Userinfo;
 
 use crate::play::input::Action;
@@ -340,6 +341,23 @@ impl Shell {
             .collect();
         keys.sort_by_key(|k| keys::number(k));
         keys
+    }
+
+    /// The cgame's key text for `cmd` (0x30046940): its first key's name,
+    /// or the first two joined by `KEY_OR`, names through `KEY_*`. `None`
+    /// while nothing is bound to it.
+    pub fn key_text(&self, cmd: &str, loc: &Localized) -> Option<String> {
+        let name = |k: &str| loc.get(&format!("KEY_{k}")).unwrap_or(k).to_string();
+        match self.keys_bound_to(cmd).as_slice() {
+            [] => None,
+            [a] => Some(name(a)),
+            [a, b, ..] => Some(format!(
+                "{} {} {}",
+                name(a),
+                loc.translate("@KEY_OR"),
+                name(b)
+            )),
+        }
     }
 
     /// Runs `text`: commands split on `;` and newlines outside quotes, as
@@ -884,6 +902,20 @@ mod tests {
             s.keys_bound_to("+FORWARD"),
             ["SPACE", "W", "UPARROW", "MOUSE2"]
         );
+    }
+
+    #[test]
+    fn key_text_names_the_first_two_keys() {
+        let mut loc = Localized::default();
+        loc.parse_into(
+            "key",
+            "REFERENCE SPACE\nLANG_ENGLISH \"Space\"\nREFERENCE OR\nLANG_ENGLISH \"or\"\n",
+        );
+        let mut s = Shell::new();
+        assert_eq!(s.key_text("+gostand", &loc).as_deref(), Some("Space"));
+        assert_eq!(s.key_text("toggleprone", &loc), None);
+        s.execute("bind Z +gostand; bind X +gostand");
+        assert_eq!(s.key_text("+gostand", &loc).as_deref(), Some("Space or X"));
     }
 
     #[test]

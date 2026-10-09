@@ -114,6 +114,8 @@ pub struct HudFrame<'a> {
     /// The `weapon` of the gun `ps` rides, the entity `viewlocked_entNum`
     /// names, which picks the mounted reticle.
     pub turret_weapon: Option<usize>,
+    /// The key text a command is bound to, `None` while unbound.
+    pub bound_key: &'a dyn Fn(&str) -> Option<String>,
 }
 
 impl Hud {
@@ -152,6 +154,7 @@ impl Hud {
                 self.scoreboard.on_server_command(tokens);
                 let text = || bind_keys(&loc.message(tokens.get(1).map_or("", String::as_str)));
                 match tokens.first().map(String::as_str) {
+                    Some("a") => self.weapon_selected(),
                     Some("e" | "f") => self.game_messages.push(&text(), now_ms),
                     Some("c" | "g") => self.bold_messages.push(&text(), now_ms),
                     _ => {}
@@ -159,6 +162,11 @@ impl Hud {
             }
             _ => {}
         }
+    }
+
+    /// A weapon-select bind ran: the weapon name shows again.
+    pub fn weapon_selected(&mut self) {
+        self.player.weapon_name.select();
     }
 
     /// A new gamestate: CS 7 indices and the scoreboard change, chat does not.
@@ -256,6 +264,7 @@ impl Hud {
                     loc: f.localized,
                     font: &self.fonts.normal,
                     entity_origin: f.entity_origin,
+                    bound_key: f.bound_key,
                 };
                 self.player
                     .build(&view, &cx, f.server_time, screen, &mut out);
@@ -474,6 +483,8 @@ fn player_view<'a>(
             pitch: int("damagePitch"),
             count: int("damageCount"),
         },
+        spawn_count: ps.arrays.stats[5],
+        prone_blocked: int("pm_flags") & 0x8000 != 0,
     }
 }
 
@@ -514,6 +525,7 @@ mod tests {
             fov: 80.0,
             entity_origin: &|_| None,
             turret_weapon: None,
+            bound_key: &|_| None,
         }
     }
 
