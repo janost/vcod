@@ -1,12 +1,6 @@
 //! Q3-style bitmap font loader and CPU text layout for the HUD.
-//! File layout: docs/research/cod11-hud-protocol.md, section 6. Q3's `top`
-//! slot (+4) holds the glyph width here, so there is no vertical bearing;
-//! baseline alignment uses `height` against `Font::max_height`.
-//!
-//! Gotcha: lowercase p/v/w/x/y draw as their uppercase shapes. The five
-//! records point at distinct UV rects, but the shipped atlas art in those
-//! cells is the uppercase letterform (1.1 and 1.5 pak5, sizes 12/16/24).
-//! The parser is faithful; there is no correct art to substitute.
+//! File layout: docs/research/cod11-hud-protocol.md, section 6. A glyph's
+//! quad top sits `top` (+8) above the baseline, so descenders hang below it.
 
 use super::HudQuad;
 use vcod_common::pk3::Pk3Fs;
@@ -19,9 +13,8 @@ pub struct Glyph {
     /// +4, px. Q3's `top` slot; not a vertical bearing.
     #[allow(dead_code)]
     pub width: i32,
-    /// +8, always `height + 1`.
-    #[allow(dead_code)]
-    pub height_f: f32,
+    /// +8, baseline to glyph top, px. `height - top` is the descent.
+    pub top: f32,
     /// +12, horizontal bearing, design units.
     pub bearing: f32,
     /// +16, horizontal advance, design units.
@@ -44,8 +37,8 @@ pub struct Font {
     pub glyph_scale: f32,
     /// Newline advance, design units (the second header float).
     pub line_advance: f32,
-    /// Max `height` over 0x20..=0x7e. A quad top at `(max_height - height) * s`
-    /// puts every glyph bottom on one baseline, since `image_height == height`.
+    /// Max `height` over 0x20..=0x7e. A line's baseline sits `max_height`
+    /// below its top-left y, as retail's text callers place it.
     pub max_height: i32,
     pub page: String, // "fonts/fontImage_0_<size>"
     /// Every atlas image the glyphs use, [`Font::page`] first.
@@ -108,7 +101,7 @@ pub fn parse_font_dat(bytes: &[u8], size: u32) -> Result<Font, String> {
         glyphs.push(Glyph {
             height: i32_at(o),
             width: i32_at(o + 4),
-            height_f: f32_at(o + 8),
+            top: f32_at(o + 8),
             bearing: f32_at(o + 12),
             advance: f32_at(o + 16),
             image_width: i32_at(o + 20),
@@ -320,7 +313,7 @@ pub fn layout(
             let w = g.image_width as f32 * s;
             let h = g.image_height as f32 * s;
             let gx = cursor + g.bearing * s;
-            let gy = y + (font.max_height - g.height) as f32 * s;
+            let gy = y + (font.max_height as f32 - g.top) * s;
 
             push_quad(
                 out,
@@ -367,7 +360,7 @@ pub fn layout_fixed(
             let w = g.image_width as f32 * s;
             let h = g.image_height as f32 * s;
             let gx = cursor + (cell - g.advance * s) * 0.5 + g.bearing * s;
-            let gy = y + (font.max_height - g.height) as f32 * s;
+            let gy = y + (font.max_height as f32 - g.top) * s;
             push_quad(
                 out,
                 gx + 1.0,
@@ -403,7 +396,7 @@ pub fn layout_cells(
         for c in seg.chars() {
             let g = &font.glyphs[glyph_index(c)];
             let gx = cursor + (cell - g.advance * s) * 0.5 + g.bearing * s;
-            let gy = y + (font.max_height - g.height) as f32 * s;
+            let gy = y + (font.max_height as f32 - g.top) * s;
             let (w, h) = (g.image_width as f32 * s, g.image_height as f32 * s);
             push_quad(out, gx, gy, w, h, g, seg_color, font.glyph_page(g));
             cursor += cell;
@@ -496,20 +489,23 @@ mod tests {
     }
 
     #[test]
-    fn lowercase_uv_rects_differ_from_uppercase() {
-        // The p/v/y defect is in the atlas art (module doc), not the parser;
-        // two records collapsing onto one rect would be a parser regression.
+    fn descenders_hang_below_the_baseline() {
+        // 'p' and 'P' share a height in the 16 pt file; only `top` (9 vs 12)
+        // tells the descender, and bottom-aligning on `height` drew 'p' as 'P'.
         let Some(fs) = vcod_common::testing::game_fs() else {
             return;
         };
         let f = load_font(&fs, 16).unwrap();
-        for (lo, up) in [('p', 'P'), ('v', 'V'), ('y', 'Y')] {
-            let l = &f.glyphs[lo as usize];
-            let u = &f.glyphs[up as usize];
-            assert_ne!(
-                (l.s, l.t, l.s2, l.t2),
-                (u.s, u.t, u.s2, u.t2),
-                "{lo:?}/{up:?} UV rects unexpectedly identical"
+        let bottom = |text: &str| {
+            let mut out = Vec::new();
+            layout(&f, text, 0.0, 0.0, 1.0, COLORS[7], &mut out);
+            out[1].verts[2][1]
+        };
+        let s = f.glyph_scale * f.unit_scale();
+        for lo in ["p", "y", "g", "q", ","] {
+            assert!(
+                (bottom(lo) - bottom("P") - 3.0 * s).abs() < 1e-3,
+                "{lo:?} should end 3 units below 'P'"
             );
         }
     }

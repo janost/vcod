@@ -451,7 +451,7 @@ pub(crate) mod tests {
         let g = Glyph {
             height: 10,
             width: 8,
-            height_f: 11.0,
+            top: 10.0,
             bearing: 0.0,
             advance: 8.0,
             image_width: 8,

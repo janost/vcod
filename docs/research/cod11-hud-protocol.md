@@ -720,7 +720,7 @@ The field types differ from Q3 even though the layout does not. Decoded from
 |---|---|---|---|---|---|---|
 | 0 | int | 0 | 11 | 12 | 2 | glyph height in px (= `(t2-t)*256`) |
 | 4 | int | 0 | 12 | 4 | 4 | glyph width in px (= `(s2-s)*256`) |
-| 8 | float | 1.0 | 12.0 | 13.0 | 3.0 | always height + 1 |
+| 8 | float | 1.0 | 12.0 | 13.0 | 3.0 | `top`: baseline to glyph top, px |
 | 12 | float | 0.0 | -0.333 | +0.333 | +1.0 | horizontal bearing, scales with font size |
 | 16 | float | 3.859 | 10.667 | 4.667 | 4.333 | advance / xSkip |
 | 20 | int | 0 | 12 | 4 | 4 | `imageWidth` (duplicates +4) |
@@ -730,9 +730,18 @@ The field types differ from Q3 even though the layout does not. Decoded from
 | 48..79 | char[32] | `fonts/fontImage_0_16.tga` | | | | shader name |
 
 So Q3's `height/top/bottom/pitch/xSkip/imageWidth/imageHeight` block became
-`height / width / (height+1) / bearing / advance / imageWidth / imageHeight`,
+`height / width / top / bearing / advance / imageWidth / imageHeight`,
 with three of the seven promoted from `int` to `float`. The `s/t/s2/t2/glyph/
 shaderName` tail is unchanged from Q3.
+
+`top` is `height + 1` only on glyphs that end on the baseline. VERIFIED
+(1.1 `pak5.pk3` `fontImage_16.dat`): `P` reads height 11, top 12; `p`, `y`,
+`g` and `q` read height 11, top 9; `,` height 5, top 3; `Q` height 14, top 12.
+VERIFIED, `CoDMP.exe`: the text renderer `0x004d7d60` draws each glyph quad
+at `y - scale * glyph[+8]`, `y` being the baseline it is passed, with
+`imageWidth` and `imageHeight` (+20, +24) as its size. A renderer that
+bottom-aligns glyphs on `height` lifts every descender to the baseline and
+draws `p` as `P`, `y` as `Y` and `g` as `8`.
 
 The shader name is per glyph, and the bigger fonts span several atlas
 images. VERIFIED (1.1 `pak5.pk3`, the +48 names over all 256 records):
