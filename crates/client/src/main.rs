@@ -1278,6 +1278,7 @@ fn loading_frame(
             fov: camera::DEFAULT_FOV_DEG,
             entity_origin: &|_| None,
             turret_weapon: None,
+            draw: hud::DrawToggles::default(),
         };
         *hud_quads = hud.build(&f);
     }
@@ -2911,6 +2912,13 @@ impl ApplicationHandler for App {
                                         fov,
                                         entity_origin: &entity_origin,
                                         turret_weapon,
+                                        draw: hud::DrawToggles {
+                                            crosshair: self.shell.cvar_f32("cg_drawCrosshair")
+                                                as i32
+                                                != 0,
+                                            status: self.shell.cvar_f32("cg_drawStatus") as i32
+                                                != 0,
+                                        },
                                     };
 
                                     // Events use the newest snapshot, not the interpolation
