@@ -532,6 +532,8 @@ enum Mode {
         reserve: u32,
         /// Digit press latched until the next redraw loads that slot.
         switch_to: Option<usize>,
+        /// Rigs already loaded, so switching back to a weapon is a lookup.
+        rigs: viewmodel::RigCache,
         /// Raw counts since the last frame, drained into the sway once per redraw.
         mouse_delta: (f32, f32),
         /// Press edges latched until the next redraw; `ads_held`/`fire_held` are level.
@@ -910,13 +912,14 @@ fn main() -> Result<()> {
         None
     };
 
+    let mut rigs = viewmodel::RigCache::default();
     let (viewmodel, view_weapon) = if args.walk && local.is_some() {
-        viewmodel::load_view_weapon(&fs, "kar98k_mp").unwrap_or_else(|| {
+        rigs.load(&fs, "kar98k_mp", None).unwrap_or_else(|| {
             log::warn!("no viewmodel; walking without one");
-            (Vec::new(), None)
+            (Arc::from([]), None)
         })
     } else {
-        (Vec::new(), None)
+        (Arc::from([]), None)
     };
 
     let hud = if net_client.is_some() {
@@ -958,7 +961,7 @@ fn main() -> Result<()> {
         let ambient = format!("ambient_{map}");
         audio.set_ambient(&fs, Some(&ambient));
         let mode = if args.walk {
-            walk_mode(&map, &bsp, &fs, view_weapon)?
+            walk_mode(&map, &bsp, &fs, view_weapon, rigs)?
         } else {
             Mode::Fly(match bsp::find_spawn(&bsp.entities) {
                 Some((origin, yaw)) => FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw),
@@ -1325,6 +1328,7 @@ fn walk_mode(
     bsp: &bsp::Bsp,
     fs: &Pk3Fs,
     view_weapon: Option<Box<viewmodel::ViewWeapon>>,
+    rigs: viewmodel::RigCache,
 ) -> Result<Mode> {
     let Some((origin, yaw)) = bsp::find_spawn(&bsp.entities) else {
         bail!("map {map} has no player spawn; run without --walk to fly");
@@ -1370,6 +1374,7 @@ fn walk_mode(
         weapon_slot: start_slot,
         reserve,
         switch_to: None,
+        rigs,
         mouse_delta: (0.0, 0.0),
         fire_edge: false,
         fire_held: false,
@@ -1399,7 +1404,7 @@ struct App {
     /// captures it again.
     grab_before_console: bool,
     mode: Mode,
-    viewmodel: Vec<xmodel::XModel>,
+    viewmodel: Arc<[xmodel::XModel]>,
     /// Fly-mode keys; walk keeps its own in `Mode::Walk`.
     input: InputState,
     window: Option<Arc<Window>>,
@@ -3096,6 +3101,7 @@ impl ApplicationHandler for App {
                         weapon_slot,
                         reserve,
                         switch_to,
+                        rigs,
                         mouse_delta,
                         fire_edge,
                         fire_held,
@@ -3114,9 +3120,16 @@ impl ApplicationHandler for App {
                             && slot < WALK_LOADOUT.len()
                         {
                             let name = WALK_LOADOUT[slot];
-                            match viewmodel::load_view_weapon(&self.fs, name) {
+                            let t0 = Instant::now();
+                            match rigs.load(&self.fs, name, None) {
                                 Some((models, vw)) => {
+                                    let t1 = Instant::now();
                                     r.set_viewmodel(&self.fs, &models);
+                                    log::debug!(
+                                        "switch to {name}: rig {:.2} ms, upload {:.2} ms",
+                                        (t1 - t0).as_secs_f64() * 1e3,
+                                        t1.elapsed().as_secs_f64() * 1e3
+                                    );
                                     *reserve = vw.as_ref().map_or(0, |w| w.def.start_ammo);
                                     self.viewmodel = models;
                                     *view_weapon = vw;
