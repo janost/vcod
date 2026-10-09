@@ -26,17 +26,35 @@ pub struct Pk3Fs {
     overlay: HashMap<String, Vec<u8>>,
 }
 
+/// The `.pk3`s directly in `dir`, in name order, the order their entries override.
+fn pk3s_in(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut archives: Vec<PathBuf> = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pk3")))
+        .collect();
+    archives.sort();
+    Ok(archives)
+}
+
 impl Pk3Fs {
     pub fn open(mod_dir: &Path) -> Result<Self> {
-        let mut archives: Vec<PathBuf> = std::fs::read_dir(mod_dir)
-            .with_context(|| format!("cannot read mod dir {}", mod_dir.display()))?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pk3")))
-            .collect();
-        archives.sort();
+        Self::open_layered(mod_dir, None)
+    }
+
+    /// `base`'s paks, then `game`'s on top of them: the search path a
+    /// systeminfo `fs_game` gives (docs/research/cod11-front-end.md, section
+    /// 16). A `game` directory that does not exist yet adds nothing.
+    pub fn open_layered(base: &Path, game: Option<&Path>) -> Result<Self> {
+        let mut archives =
+            pk3s_in(base).with_context(|| format!("cannot read mod dir {}", base.display()))?;
+        if let Some(game) = game.filter(|g| g.is_dir()) {
+            archives.extend(
+                pk3s_in(game).with_context(|| format!("cannot read mod dir {}", game.display()))?,
+            );
+        }
         if archives.is_empty() {
-            bail!("no .pk3 archives found in {}", mod_dir.display());
+            bail!("no .pk3 archives found in {}", base.display());
         }
         let mut index = HashMap::new();
         let mut alias_index = HashMap::new();
@@ -66,7 +84,7 @@ impl Pk3Fs {
         }
         let archives = readable;
         if archives.is_empty() {
-            bail!("no readable .pk3 archives in {}", mod_dir.display());
+            bail!("no readable .pk3 archives in {}", base.display());
         }
         Ok(Self {
             archives,
@@ -230,6 +248,26 @@ mod tests {
         let fs = Pk3Fs::open(dir.path()).unwrap();
         assert_eq!(fs.read("maps/mp/MP_TEST.bsp").unwrap(), b"data");
         assert!(fs.read("maps/mp/missing.bsp").is_none());
+    }
+
+    #[test]
+    fn a_game_dir_overrides_the_base_whatever_the_pak_names() {
+        let root = tempfile::tempdir().unwrap();
+        let (main, game) = (root.path().join("main"), root.path().join("mymod"));
+        std::fs::create_dir_all(&main).unwrap();
+        std::fs::create_dir_all(&game).unwrap();
+        make_pk3(
+            &main,
+            "zzz_late.pk3",
+            &[("a.txt", "main"), ("b.txt", "main")],
+        );
+        make_pk3(&game, "aaa_early.pk3", &[("a.txt", "mod")]);
+        let fs = Pk3Fs::open_layered(&main, Some(&game)).unwrap();
+        assert_eq!(fs.read("a.txt").unwrap(), b"mod");
+        assert_eq!(fs.read("b.txt").unwrap(), b"main");
+        let missing = root.path().join("nothere");
+        let fs = Pk3Fs::open_layered(&main, Some(&missing)).unwrap();
+        assert_eq!(fs.read("a.txt").unwrap(), b"main");
     }
 
     #[test]

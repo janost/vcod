@@ -36,9 +36,10 @@ pub enum Action {
 const STALL: Duration = Duration::from_secs(30);
 /// How long to wait for the re-sent gamestate after `donedl`.
 const REGAMESTATE: Duration = Duration::from_secs(10);
-/// Referenced paks fetched per map. All of them are wanted, not just the one
-/// that carries the .bsp; the cap only bounds what a hostile server can make
-/// the client pull in one connect.
+/// Referenced paks fetched per map once the map resolves. All of them are
+/// wanted, not just the one that carries the .bsp, and retail fetches them
+/// all; the cap only bounds what a server can make the client pull in one
+/// connect. Until the map resolves the loader keeps going down the list.
 const MAX_CANDIDATES: usize = 8;
 
 enum State {
@@ -66,8 +67,7 @@ pub struct MapLoader {
 impl MapLoader {
     /// `candidates` are `(remote name, local path)` pairs the server
     /// references and the client lacks, in the order to try them.
-    pub fn new(map: String, mut candidates: Vec<(String, PathBuf)>) -> Self {
-        candidates.truncate(MAX_CANDIDATES);
+    pub fn new(map: String, candidates: Vec<(String, PathBuf)>) -> Self {
         MapLoader {
             map,
             candidates,
@@ -102,7 +102,12 @@ impl MapLoader {
                 // Every referenced pak the client lacks, not just the one that
                 // resolves the map: the mod pak holds the skins, models and
                 // sounds the map's own pak does not.
-                if let Some((remote, dest)) = self.candidates.get(self.next).cloned() {
+                if let Some((remote, dest)) = self
+                    .candidates
+                    .get(self.next)
+                    .filter(|_| self.next < MAX_CANDIDATES || !map_resolves)
+                    .cloned()
+                {
                     let idx = self.next;
                     self.next += 1;
                     self.state = State::Downloading {
@@ -114,7 +119,10 @@ impl MapLoader {
                 }
                 if !map_resolves {
                     self.state = State::Done;
-                    return Action::Failed(format!("map {} is not on the server", self.map));
+                    return Action::Failed(format!(
+                        "map {} is in none of your paks or the server's downloads",
+                        self.map
+                    ));
                 }
                 if self.downloaded > 0 {
                     self.state = State::AwaitGamestate { since: now };
@@ -150,7 +158,7 @@ impl MapLoader {
                 }
                 Action::Wait(Some(Progress {
                     pak: idx + 1,
-                    paks: self.candidates.len(),
+                    paks: self.candidates.len().min(MAX_CANDIDATES.max(idx + 1)),
                     received: got,
                     size,
                 }))
@@ -298,6 +306,30 @@ mod tests {
         );
         let done = [NetEvent::DownloadComplete("main/zzz_1.pk3".into())];
         assert_eq!(l.step(&done, None, true, t0), Action::Reopen);
+        assert_eq!(l.step(&[], None, true, t0), Action::FinishDownloads);
+    }
+
+    /// The cap stops the downloads once the map resolves, never before.
+    #[test]
+    fn the_cap_waits_for_the_map() {
+        let t0 = Instant::now();
+        let n = MAX_CANDIDATES + 2;
+        let mut l = MapLoader::new("mp_x".into(), cands(n));
+        for i in 0..n {
+            let remote = format!("main/zzz_{i}.pk3");
+            assert!(matches!(
+                l.step(&[], None, false, t0),
+                Action::BeginDownload { remote: r, .. } if r == remote
+            ));
+            let done = [NetEvent::DownloadComplete(remote)];
+            assert_eq!(l.step(&done, None, false, t0), Action::Reopen);
+        }
+        let mut l = MapLoader::new("mp_x".into(), cands(n));
+        for i in 0..MAX_CANDIDATES {
+            l.step(&[], None, true, t0);
+            let done = [NetEvent::DownloadComplete(format!("main/zzz_{i}.pk3"))];
+            assert_eq!(l.step(&done, None, true, t0), Action::Reopen);
+        }
         assert_eq!(l.step(&[], None, true, t0), Action::FinishDownloads);
     }
 

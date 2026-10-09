@@ -69,7 +69,9 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
   `vcod_mp.cfg`; settings vcod has no use for are kept but do nothing.
 - Joins a 1.1 server (`--connect` or the browser): handshake, Huffman,
   netchan, delta snapshots, and pak downloads for whatever the server has and
-  you don't.
+  you don't. Modded servers work too: a server's `fs_game` layers its mod
+  directory over `main/`, its `cl_allowDownload` decides whether to
+  download, and a mod's script menus and `hud.menu` text show up.
 - Answers the stock team and weapon menus as a keyboard list built from
   their `.menu` files, or straight from `--team` and `--weapon`.
 - **Spectates.** Every player is an assembled, animated soldier. Kill feed,
@@ -174,6 +176,9 @@ missing.
   to it.
 - Prediction carries you on a moving brush model but not its rotation.
   Neither does retail's.
+- On a modded server the mod's own main menu and browser don't replace
+  vcod's, and paks are matched by name where retail compares checksums
+  ([cod11-front-end.md](docs/research/cod11-front-end.md) section 16).
 
 **Server**
 

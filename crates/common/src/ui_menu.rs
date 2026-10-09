@@ -147,6 +147,8 @@ pub struct UiMenu {
     pub rect: Rect,
     pub fullscreen: bool,
     pub popup: bool,
+    /// `visible`: the cgame paints only visible `hud.menu` menus.
+    pub visible: bool,
     pub focus_color: [f32; 4],
     pub on_open: Vec<String>,
     pub on_close: Vec<String>,
@@ -176,10 +178,10 @@ fn preprocess(
                 _ => log::warn!("ui: cannot include {path}"),
             }
         } else if let Some(rest) = trimmed.strip_prefix("#define") {
-            let body = rest.split("//").next().unwrap_or("");
-            let mut words = body.split_whitespace();
+            // Tokenized like the file, so a quoted body is one token.
+            let mut words = tokenize(rest).into_iter();
             if let Some(name) = words.next() {
-                defines.insert(name.to_string(), words.map(str::to_string).collect());
+                defines.insert(name, words.collect());
             }
         } else if !trimmed.starts_with('#') {
             out.push_str(line);
@@ -189,17 +191,23 @@ fn preprocess(
     out
 }
 
-/// Every `menuDef` in `text`. `include` reads an `#include`d file.
-pub fn parse_file(text: &str, include: &dyn Fn(&str) -> Option<String>) -> Vec<UiMenu> {
+/// `text` as tokens after the preprocessor: `#include`s inlined through
+/// `include`, and every token a `#define` names replaced by its body.
+pub(crate) fn expand(text: &str, include: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
     let mut defines = HashMap::new();
     let text = preprocess(text, include, &mut defines, 0);
-    let tokens: Vec<String> = tokenize(&text)
+    tokenize(&text)
         .into_iter()
         .flat_map(|t| match defines.get(&t) {
             Some(v) => v.clone(),
             None => vec![t],
         })
-        .collect();
+        .collect()
+}
+
+/// Every `menuDef` in `text`. `include` reads an `#include`d file.
+pub fn parse_file(text: &str, include: &dyn Fn(&str) -> Option<String>) -> Vec<UiMenu> {
+    let tokens = expand(text, include);
     let mut menus = Vec::new();
     let mut i = 0;
     while i < tokens.len() {
@@ -250,6 +258,10 @@ fn parse_menu(body: &[String]) -> UiMenu {
             "popup" => {
                 menu.popup = true;
                 i += 1;
+            }
+            "visible" => {
+                menu.visible = num(body.get(i + 1)) != 0.0;
+                i += 2;
             }
             "focuscolor" => {
                 menu.focus_color = nums::<4>(body, i);

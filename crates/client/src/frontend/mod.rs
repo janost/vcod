@@ -926,14 +926,14 @@ fn truncate_visible(text: &str, n: usize) -> String {
 
 /// Draws on the 640x480 grid stretched over the window, as the UI module
 /// does.
-struct Painter<'a> {
-    sx: f32,
-    sy: f32,
-    fonts: Option<&'a UiFonts>,
+pub(crate) struct Painter<'a> {
+    pub(crate) sx: f32,
+    pub(crate) sy: f32,
+    pub(crate) fonts: Option<&'a UiFonts>,
 }
 
 impl Painter<'_> {
-    fn quad(&self, r: [f32; 4], rgba: [f32; 4], texture: &str, out: &mut Vec<HudQuad>) {
+    pub(crate) fn quad(&self, r: [f32; 4], rgba: [f32; 4], texture: &str, out: &mut Vec<HudQuad>) {
         let (x, y, w, h) = (
             r[0] * self.sx,
             r[1] * self.sy,
@@ -948,7 +948,7 @@ impl Painter<'_> {
         });
     }
 
-    fn fill(&self, r: [f32; 4], rgba: [f32; 4], out: &mut Vec<HudQuad>) {
+    pub(crate) fn fill(&self, r: [f32; 4], rgba: [f32; 4], out: &mut Vec<HudQuad>) {
         if rgba[3] > 0.0 {
             self.quad(r, rgba, "white", out);
         }
@@ -1019,13 +1019,13 @@ impl Painter<'_> {
     }
 
     /// Width on the 640 grid.
-    fn width(&self, text: &str, scale: f32) -> f32 {
+    pub(crate) fn width(&self, text: &str, scale: f32) -> f32 {
         self.font(scale)
             .map_or(0.0, |f| font::measure(f, text, scale / f.unit_scale()))
     }
 
     /// `text` with its baseline at grid `(x, y)`.
-    fn text(
+    pub(crate) fn text(
         &self,
         text: &str,
         x: f32,

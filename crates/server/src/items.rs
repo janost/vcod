@@ -8,32 +8,10 @@
 
 use crate::configstrings::WEAPON_LIST;
 use vcod_common::pk3::Pk3Fs;
+use vcod_common::weapon_table::STATIC_ITEMS;
 
 /// `bg_numItems` (`.rodata` 0x70804).
 pub const NUM_ITEMS: usize = 70;
-
-/// The only classnames `bg_itemlist` carries compiled into the binary,
-/// indices 65-69, each with the world model at its record's +0x8. Indices
-/// 1-64 are `emptyitem_"wNN"` placeholders whose model fields are the empty
-/// string; a weapon's real classname and models reach its slot at runtime
-/// from the mounted paks' weapon files, so `item_index` derives a weapon's
-/// index from `WEAPON_LIST` (R1) and `item_models` reads its models from
-/// the weapon file. All five rows carry a null +0xc.
-const STATIC_ITEMS: &[(usize, &str, &str)] = &[
-    (
-        65,
-        "item_ammo_stielhandgranate_open",
-        "xmodel/ammo_stielhandgranate1",
-    ),
-    (
-        66,
-        "item_ammo_stielhandgranate_closed",
-        "xmodel/ammo_stielhandgranate2",
-    ),
-    (67, "item_health_small", "xmodel/health_small"),
-    (68, "item_health", "xmodel/health_medium"),
-    (69, "item_health_large", "xmodel/health_large"),
-];
 
 /// `BG_FindItem` (0x2e214) is a `strcmp`, so the lookup is case-sensitive;
 /// an unmatched name returns `None`, same as retail's miss.

@@ -24,24 +24,57 @@ pub fn is_stock_pak(name: &str) -> bool {
              Some(d) if d.len() == 1 && d.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// Validate a server-supplied pak name into `<mod_dir>/<file>.pk3`. The name
-/// gets joined onto a local directory, so traversal and odd characters are
-/// rejected, and the directory must be the client's active mod dir so a server
-/// cannot drop files anywhere else under the install.
-pub fn safe_rel_path(name: &str, mod_dir: &str) -> Option<PathBuf> {
+/// A directory or file name a server may name: ASCII letters, digits, `_`,
+/// `-` and `.`, not empty and not hidden, so it cannot climb out of its parent.
+fn safe_name(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with('.')
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.')
+}
+
+/// Validate a server-supplied pak name into `<dir>/<file>.pk3`. The name gets
+/// joined onto a local directory, so traversal and odd characters are
+/// rejected, and the directory must be one of `dirs` (the client's base dir
+/// and the connection's `fs_game`) so a server cannot drop files anywhere
+/// else under the install.
+pub fn safe_rel_path(name: &str, dirs: &[&str]) -> Option<PathBuf> {
     let (dir, file) = name.split_once('/')?;
-    if dir != mod_dir {
-        return None;
-    }
-    let ok = !file.is_empty()
-        && !file.starts_with('.')
-        && file
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.');
-    if !ok {
+    if !dirs.contains(&dir) || !safe_name(file) {
         return None;
     }
     Some(PathBuf::from(dir).join(format!("{file}.pk3")))
+}
+
+/// The systeminfo's `fs_game`, which `CL_SystemInfoChanged` sets on the
+/// client (docs/research/cod11-front-end.md, section 16). `None` when unset,
+/// when it names `base` itself, or when it is not a plain directory name.
+pub fn fs_game(systeminfo: &str, base: &str) -> Option<String> {
+    let v = super::info_value_for_key(systeminfo, "fs_game")?;
+    (safe_name(v) && !v.eq_ignore_ascii_case(base)).then(|| v.to_string())
+}
+
+/// The systeminfo's `cl_allowDownload`, which the server forces on the
+/// client; `None` when the server leaves it to the client.
+pub fn server_allows_download(systeminfo: &str) -> Option<bool> {
+    super::info_value_for_key(systeminfo, "cl_allowDownload")
+        .map(|v| v.trim().parse::<i32>().unwrap_or(0) != 0)
+}
+
+/// Referenced non-stock paks `exists` (given the relative path) reports
+/// missing, `name.pk3` each: what retail's "You are missing some files"
+/// warning lists when it may not download them.
+pub fn missing_paks(
+    systeminfo: &str,
+    dirs: &[&str],
+    exists: impl Fn(&Path) -> bool,
+) -> Vec<String> {
+    referenced_pak_names(systeminfo)
+        .into_iter()
+        .filter(|n| !is_stock_pak(n))
+        .filter(|n| safe_rel_path(n, dirs).is_none_or(|rel| !exists(&rel)))
+        .map(|n| format!("{n}.pk3"))
+        .collect()
 }
 
 /// Referenced paks worth downloading for `map`, most likely first: stock,
@@ -50,29 +83,35 @@ pub fn safe_rel_path(name: &str, mod_dir: &str) -> Option<PathBuf> {
 pub fn candidates_for_map(
     systeminfo: &str,
     map: &str,
-    mod_dir: &str,
+    dirs: &[&str],
     exists: impl Fn(&Path) -> bool,
 ) -> Vec<String> {
     // Pak names rarely match the map exactly (`main/n_dufresne` holds
-    // `dufresne_final`), so match on a shared `_`-separated token.
+    // `dufresne_final`, `main/BunkerCourt2AvsG` holds `BunkerCourt2_A_vs_G`),
+    // so match on a shared `_`-separated token or on the names with their
+    // separators dropped.
     let map = map.to_lowercase();
     let map_tokens: Vec<&str> = map.split('_').filter(|t| t.len() >= 4).collect();
+    let squash = |s: &str| s.replace(['_', '-'], "");
+    let map_flat = squash(map.strip_prefix("mp_").unwrap_or(&map));
     let mut like_map = Vec::new();
     let mut rest = Vec::new();
     for name in referenced_pak_names(systeminfo) {
         if is_stock_pak(&name) {
             continue;
         }
-        let Some(rel) = safe_rel_path(&name, mod_dir) else {
+        let Some(rel) = safe_rel_path(&name, dirs) else {
             continue;
         };
         if exists(&rel) {
             continue;
         }
         let base = name.rsplit('/').next().unwrap_or(&name).to_lowercase();
+        let base_flat = squash(&base);
         if base
             .split('_')
             .any(|t| t.len() >= 4 && map_tokens.contains(&t))
+            || (map_flat.len() >= 4 && base_flat.contains(&map_flat))
         {
             like_map.push(name);
         } else {
@@ -194,24 +233,63 @@ mod tests {
     #[test]
     fn safe_rel_path_accepts_normal_names() {
         assert_eq!(
-            safe_rel_path("main/bellicourt_v1_1", "main"),
+            safe_rel_path("main/bellicourt_v1_1", &["main"]),
             Some(PathBuf::from("main/bellicourt_v1_1.pk3"))
         );
         assert_eq!(
-            safe_rel_path("main/z1.2map", "main"),
+            safe_rel_path("main/z1.2map", &["main"]),
             Some(PathBuf::from("main/z1.2map.pk3"))
         );
         assert_eq!(
-            safe_rel_path("uo/foo", "uo"),
+            safe_rel_path("uo/foo", &["uo"]),
             Some(PathBuf::from("uo/foo.pk3"))
         );
     }
 
     #[test]
-    fn safe_rel_path_only_writes_into_the_active_mod_dir() {
-        assert_eq!(safe_rel_path("uo/foo", "main"), None);
-        assert_eq!(safe_rel_path("Main/foo", "main"), None);
-        assert_eq!(safe_rel_path("mainx/foo", "main"), None);
+    fn safe_rel_path_only_writes_into_the_base_and_game_dirs() {
+        assert_eq!(safe_rel_path("uo/foo", &["main"]), None);
+        assert_eq!(safe_rel_path("Main/foo", &["main"]), None);
+        assert_eq!(safe_rel_path("mainx/foo", &["main"]), None);
+        assert_eq!(
+            safe_rel_path("genesis/zzz_revive", &["main", "genesis"]),
+            Some(PathBuf::from("genesis/zzz_revive.pk3"))
+        );
+    }
+
+    // Seen live on 199.247.2.228:28960 and 63.176.159.145:28960, trimmed.
+    const MOD_SYSTEMINFO: &str = "\\cl_allowDownload\\0\\fs_game\\genesis\\sv_referencedPakNames\\\
+         genesis/zzz_revive main/pak6 main/zzz_mosinfix main/localized_english_pak0";
+
+    #[test]
+    fn fs_game_names_a_plain_directory_other_than_the_base() {
+        assert_eq!(fs_game(MOD_SYSTEMINFO, "main").as_deref(), Some("genesis"));
+        assert_eq!(
+            fs_game("\\fs_game\\BO7MEDX-MOD", "main").as_deref(),
+            Some("BO7MEDX-MOD")
+        );
+        for v in ["", "main", "Main", "..", "../x", "a/b", ".hidden"] {
+            assert_eq!(fs_game(&format!("\\fs_game\\{v}"), "main"), None, "{v:?}");
+        }
+        assert_eq!(fs_game(SYSTEMINFO, "main"), None);
+    }
+
+    #[test]
+    fn the_server_can_force_downloads_either_way() {
+        assert_eq!(server_allows_download(MOD_SYSTEMINFO), Some(false));
+        assert_eq!(server_allows_download("\\cl_allowDownload\\1"), Some(true));
+        assert_eq!(server_allows_download(SYSTEMINFO), None);
+    }
+
+    #[test]
+    fn missing_paks_lists_what_is_absent_in_either_dir() {
+        let got = missing_paks(MOD_SYSTEMINFO, &["main", "genesis"], |rel| {
+            rel == Path::new("main/zzz_mosinfix.pk3")
+        });
+        assert_eq!(got, vec!["genesis/zzz_revive.pk3"]);
+        // A directory the client won't write to is missing however it's named.
+        let got = missing_paks(MOD_SYSTEMINFO, &["main"], |_| true);
+        assert_eq!(got, vec!["genesis/zzz_revive.pk3"]);
     }
 
     #[test]
@@ -230,7 +308,7 @@ mod tests {
             "",
         ] {
             assert_eq!(
-                safe_rel_path(bad, "main"),
+                safe_rel_path(bad, &["main"]),
                 None,
                 "{bad:?} should be rejected"
             );
@@ -239,7 +317,7 @@ mod tests {
 
     #[test]
     fn candidates_prefer_the_map_pak_and_skip_stock_and_present() {
-        let got = candidates_for_map(SYSTEMINFO, "mp_bellicourt_v1_1", "main", |rel| {
+        let got = candidates_for_map(SYSTEMINFO, "mp_bellicourt_v1_1", &["main"], |rel| {
             rel == Path::new("main/farm.pk3")
         });
         assert_eq!(
@@ -252,11 +330,21 @@ mod tests {
     fn candidates_match_on_shared_name_tokens() {
         // Seen live: map `dufresne_final` ships in `main/n_dufresne`.
         let info = "\\sv_referencedPakNames\\main/zzz_zfunmod main/n_degaulle main/n_dufresne";
-        let got = candidates_for_map(info, "dufresne_final", "main", |_| false);
+        let got = candidates_for_map(info, "dufresne_final", &["main"], |_| false);
         assert_eq!(
             got,
             vec!["main/n_dufresne", "main/zzz_zfunmod", "main/n_degaulle"]
         );
+    }
+
+    #[test]
+    fn candidates_match_on_names_without_separators() {
+        // Seen live on 167.235.192.175:23120.
+        let info = "\\sv_referencedPakNames\\main/zzz_zfunmod main/farm main/BunkerCourt2AvsG";
+        let got = candidates_for_map(info, "BunkerCourt2_A_vs_G", &["main"], |_| false);
+        assert_eq!(got[0], "main/BunkerCourt2AvsG");
+        let got = candidates_for_map(info, "mp_farm", &["main"], |_| false);
+        assert_eq!(got[0], "main/farm");
     }
 
     #[test]
