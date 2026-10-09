@@ -927,9 +927,20 @@ trace's, computed as above (`TerrainPart::touches`; a point trace takes its
 segment's box, `touches_segment`). VERIFIED, vcod measurement 2026-10-08:
 `fall_ab` gates both corpse heights unmasked, the walk capture's -39.92 and
 every row of the second run (the -39.963 and -39.964 rows included). Not
-ported: the point arm's further tests in 0x8054c48 (0x8054d0f-0x8054e66),
-and the same bounds test for patches, whose records take their bounds from
-the patch branch of `CM_LoadMap` (not read).
+ported: the point arm's further tests in 0x8054c48 (0x8054d0f-0x8054e66).
+
+VERIFIED, `cod_lnxded`, a patch record's bounds: the patch branch of
+`CM_LoadMap` hands the same `record + 0xc` to `CM_GeneratePatchCollide`
+(call at 0x804b36c), which clears them (0x804e26d, `ClearBounds`), adds
+every point of the subdivided grid (0x804e2b2, `AddPointToBounds`), and
+after `CM_PatchCollideFromGrid` takes 1 off each min and adds 1 to each max
+(0x804e2ed-0x804e314). The box is the curve's grid, not the control
+points': a bulge whose middle control row stands 64 up has its box top at
+33. vcod: `PatchCollide::generate` keeps that box and `clip_patch` runs the
+same bounds test before a moving trace's clip (the position test has none:
+0x8054648 calls 0x804f49c without it). INFERRED: the test never changes a
+patch clip, since the box's unit of padding is wider than the clip's 0.125
+and every facet carries its axial bevels; it saves the facet walk.
 
 ### 8.13 The second walk run's first drop
 
@@ -1313,8 +1324,9 @@ The gates:
     the capsule's top 0.28 short; with the capsule's top below z 42 the
     same trace stopped at 1231.156. Retail collides model 0 through its
     brushes and lump 24 alone ("Terrain is a swept sphere, a patch is a
-    facet" in `cod11-mantle.md`), so `CollisionWorld::build` now keeps a
-    render soup triangle only inside some patch's control-point box.
+    facet" in `cod11-mantle.md`), so `CollisionWorld::build` kept a
+    render soup triangle only inside some patch's control-point box until
+    2026-10-07, when the patches' own facets replaced the soups.
     VERIFIED, vcod measurement 2026-10-07, with patches built as retail
     builds them (`bsp-ibsp59-format.md`, "Patch collision") and
     `PM_ClipVelocity` rounded as retail rounds it (8.9): the rest reads

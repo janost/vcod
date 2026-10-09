@@ -284,8 +284,9 @@ dropped, so test such a builtin through `ScriptRuntime`.
 - The player is a capsule. A box sits `15 tan` higher on every grade.
 - The ground trace runs origin ±0.25; a test that places a player exactly on
   a face lands allsolid and stuck. Place it 0.125 up.
-- A render soup stands in for a patch only inside its control-point box; a
-  brush face's soup is no collision.
+- No render soup collides: model 0 clips through its brushes and lump 24
+  (terrain partitions, patch facet grids). A patch's box is its subdivided
+  grid grown by a unit, not its control points.
 - Static props and 0x2080 kerb brushes clip bullets, blasts, missiles and
   items, never a moving player. `shot_trace`, `missile_trace` and
   `item_trace` see props, `box_trace` does not.
