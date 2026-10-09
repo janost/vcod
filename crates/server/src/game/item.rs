@@ -262,17 +262,28 @@ pub fn run_items(host: &mut GameHost, cx: &mut Cx, now_ms: i32) {
     let ids: Vec<EntId> = host
         .ents
         .iter_inuse()
-        // A linked item takes the runner's link arm instead (0x50385).
-        .filter(|(id, e)| e.item.is_some() && !host.links.contains(*id))
+        .filter(|(_, e)| e.item.is_some())
         .map(|(id, _)| id)
         .collect();
+    for id in ids {
+        run_item(host, cx, id, now_ms);
+    }
+}
+
+/// [`run_items`] for one entity, on its turn in `G_RunFrame`'s entity loop.
+/// Returns whether `id` is an item this arm ran.
+pub fn run_item(host: &mut GameHost, cx: &mut Cx, id: EntId, now_ms: i32) -> bool {
+    // A linked item takes the runner's link arm instead (0x50385).
+    if host.links.contains(id) {
+        return false;
+    }
+    let Some(mut st) = host.ents.get(id).and_then(|e| e.item) else {
+        return false;
+    };
     let world = host.world.clone();
     let origin_atom = cx.intern_folded("origin");
     let angles_atom = cx.intern_folded("angles");
-    for id in ids {
-        let Some(mut st) = host.ents.get(id).and_then(|e| e.item) else {
-            continue;
-        };
+    {
         st.nodraw = st.taken;
         if st.ground == ENTITYNUM_NONE as i32 && st.pos.is_none_or(|p| p.tr_type != TR_GRAVITY) {
             let base = st
@@ -317,7 +328,7 @@ pub fn run_items(host: &mut GameHost, cx: &mut Cx, now_ms: i32) {
                 }
                 Ran::NoDrop => {
                     host.free_entity(id);
-                    continue;
+                    return true;
                 }
             }
         }
@@ -339,6 +350,7 @@ pub fn run_items(host: &mut GameHost, cx: &mut Cx, now_ms: i32) {
             link(host, cx, id, CONTENTS_RESPAWNED);
         }
     }
+    true
 }
 
 /// A mover's push over the items (`crate::push::push_item`), in entity

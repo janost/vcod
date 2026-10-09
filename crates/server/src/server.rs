@@ -4565,7 +4565,7 @@ impl Server {
                 }
             }
             mirror_roster(&self.clients, rt);
-            rt.run_frame(self.sv_time_ms);
+            rt.run_threads(self.sv_time_ms);
             // `self spawn(origin, angles)` moves the sim, which no builtin
             // can reach; this is where the queue lands. Before the weapons,
             // because a spawn resets the whole playerstate and would wipe the
@@ -4753,40 +4753,19 @@ impl Server {
                     }
                 }
             }
-            // One `G_RunMissile` each, in `G_RunFrame`'s entity pass: after
-            // the frame's threads and every client move they made (spawns,
-            // `setOrigin`s, links, mover pushes), so a thread reads a
-            // grenade's last-frame origin, the flight is traced past the
-            // bodies where script put them, and the blast walk meets this
-            // frame's links (combat doc 14.7, 16.2). A grenade thrown on this
-            // tick was spawned inside its cmd on the last frame's
+            // `G_RunFrame`'s entity loop: items, links and missiles one
+            // entity at a time by number (combat doc 14.7), after the frame's
+            // threads and every client move they made (spawns, `setOrigin`s,
+            // links, mover pushes), so a thread reads a grenade's last-frame
+            // origin, the flight is traced past the bodies where script put
+            // them, and a blast walk meets this frame's links of every entity
+            // numbered below the grenade (14.7, 16.2). A grenade thrown on
+            // this tick was spawned inside its cmd on the last frame's
             // `level.time`, so it has already flown a frame by the time the
-            // snapshot goes out (combat doc 11.4).
-            let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
-                .clients
-                .iter()
-                .enumerate()
-                .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
-                .collect();
-            let frame = rt.run_missiles(
-                self.world.as_ref().map(|w| &w.collision),
-                &sims,
-                self.sv_time_ms,
-            );
-            for te in frame.temp {
-                rt.push_temp_entity(te);
-            }
-            // What the radius damage pass charges, on this same frame.
-            self.pending_explosions = frame.exploded;
-            self.bot_noises
-                .extend(self.pending_explosions.iter().map(|x| crate::bots::Noise {
-                    at: (x.at + glam::Vec3::Z * 40.0).into(),
-                    source: x.owner,
-                    radius: crate::bots::HEAR_BLAST,
-                }));
-            // Each blast's walk, so a grenade damages on the frame it goes
-            // off (combat doc, 14.1), one victim's callback before the next
-            // victim is measured (14.5).
+            // snapshot goes out (combat doc 11.4). Each blast is walked on
+            // its missile's turn, one victim's callback before the next
+            // victim is measured (14.1, 14.5).
+            self.pending_explosions.clear();
             let collision = self.world.as_ref().map(|w| &w.collision);
             let mut bones = match (self.fs.as_deref(), self.anims.as_deref()) {
                 (Some(fs), Some(anims)) => Some(crate::game::combat::BoneTraceCtx {
@@ -4832,8 +4811,15 @@ impl Server {
                     }
                     v
                 };
-            for x in &self.pending_explosions {
+            let mut pass = rt.begin_entity_pass();
+            while let Some(x) = rt.run_entity_pass(&mut pass, collision, &sims, self.sv_time_ms) {
+                self.bot_noises.push(crate::bots::Noise {
+                    at: (x.at + glam::Vec3::Z * 40.0).into(),
+                    source: x.owner,
+                    radius: crate::bots::HEAR_BLAST,
+                });
                 let Some(def) = weapons.get(x.weapon as usize) else {
+                        self.pending_explosions.push(x);
                     continue;
                 };
                 let blast = crate::game::combat::Blast::new(
@@ -4916,6 +4902,7 @@ impl Server {
                         }
                     }
                 }
+                            self.pending_explosions.push(x);
             }
             // What the blasts' callbacks did to the sims, as above.
             mirror_weapons(&mut self.clients, rt);
