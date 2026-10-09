@@ -93,7 +93,8 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
   sniper scope overlay that follows the sway and the hit kick, and your own
   fire, reload and footstep sounds played off the prediction.
 - Fire recoil off the weapon file's view and gun kick keys: the view kick
-  rides your cmd angles, as retail's does, and springs back to centre.
+  rides your cmd angles, as retail's does, rolls the view with it, springs
+  back to centre and clears on a respawn.
 - Mounted MG42s with their fire anim and flash; on the gun the view rides
   `tag_player` and the crosshair turns into the gun's reticle.
 - The HUD the stock `hud.menu` lays out: crosshair that opens with spread,
@@ -218,8 +219,9 @@ missing.
 
 - Props are lit per vertex from the map's lights and its light-visibility
   grid at load, as retail does. Dynamic lights add on top with retail's
-  falloff instead of competing for a prop's eight light slots. Players and
-  other entity models still use a fixed key light, not the light grid
+  falloff instead of competing for a prop's eight light slots. Players,
+  other entity models and the viewmodel pick their eight lights from the
+  grid every frame, fx lights among them
   ([cod11-light-grid-and-leaf-lights.md](docs/research/cod11-light-grid-and-leaf-lights.md)).
 - Only the ocean's `deformVertexes wave` moves; the other forms parse and do
   nothing. NV/ATI hardware-path stages are dropped, as retail did on cards

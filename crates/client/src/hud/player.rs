@@ -431,6 +431,14 @@ impl WeaponNameFade {
         self.selected = true;
     }
 
+    /// The weapon-select binds' gate (0x30038096, 0x30038110, 0x3003832f):
+    /// `cg.time` less the stamp at least `cg_weaponCycleDelay`. A select
+    /// not yet stamped counts as stamped now.
+    pub fn cycle_allowed(&self, now: i32, delay_ms: i32) -> bool {
+        let stamp = if self.selected { Some(now) } else { self.stamp };
+        stamp.is_none_or(|s| now - s >= delay_ms)
+    }
+
     /// The name's alpha this frame for the drawn `(clientNum, stats[5])`.
     pub fn step(&mut self, spawn: (i32, i32), now: i32) -> Option<f32> {
         if self.spawn.replace(spawn) != Some(spawn) || std::mem::take(&mut self.selected) {
@@ -1504,6 +1512,23 @@ mod tests {
         // A respawn, and a new followed client.
         assert_eq!(w.step((0, 2), 16_000), Some(1.0));
         assert_eq!(w.step((3, 2), 20_000), Some(1.0));
+    }
+
+    /// `cg_weaponCycleDelay` counts from the name's stamp, a pending select
+    /// included; 0 never refuses.
+    #[test]
+    fn the_cycle_delay_counts_from_the_name_stamp() {
+        let mut w = WeaponNameFade::default();
+        assert!(w.cycle_allowed(0, 500), "never stamped");
+        w.step((0, 1), 10_000);
+        assert!(!w.cycle_allowed(10_499, 500));
+        assert!(w.cycle_allowed(10_500, 500));
+        w.select();
+        assert!(
+            !w.cycle_allowed(11_000, 500),
+            "stamped by the pending select"
+        );
+        assert!(w.cycle_allowed(11_000, 0));
     }
 
     #[test]

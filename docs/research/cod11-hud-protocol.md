@@ -530,6 +530,17 @@ climbing (5: 117 to 129, 6: 126 to 153 over 90 s). All 42 `d` commands in that
 window went to index 5 (13 times), 6 (28 times) or 0 (once); nothing else
 changed mid-round.
 
+VERIFIED, `CG_ConfigStringModified` @ `0x3002c6b0`: index 8 jumps to
+`0x30036150` (`0x3002c70a`), the same item walk the gamestate runs, so a
+mid-map CS 8 update registers the newly marked items' weapons (the walk
+reaches `CG_RegisterWeapon` `0x30034cf0` through `0x30036080`). INFERRED,
+from the compares at `0x3002c70a`-`0x3002c927`: CS 7 has no case there,
+so the weapon table is read only at the gamestate. vcod re-runs its
+viewmodel prewarm on each CS 8 update (`prewarm_viewmodels`,
+`crates/client/src/main.rs`); rigs already cached cost a lookup, and parsed
+weapon files, models and clips are shared by name across rigs
+(`viewmodel::RigCache`).
+
 ### Which team score is which
 
 `setteamscore` (`.so` `0x5b9dc`):

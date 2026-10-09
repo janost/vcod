@@ -1,5 +1,6 @@
-// Snapshot entities: GPU-skinned xmodel instances in world space. Unlit; a
-// fixed key light stands in for the engine's light grid.
+// Snapshot entities: GPU-skinned xmodel instances in world space, lit per
+// vertex by their light set as retail's GL lighting does
+// (cod11-light-grid-and-leaf-lights.md, section 13).
 
 struct Camera {
     view_proj: mat4x4<f32>,
@@ -15,23 +16,63 @@ struct Camera {
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 
-struct FxLights {
-    pos_radius: array<vec4<f32>, 8>,
-    color: array<vec4<f32>, 8>,
-}
-@group(0) @binding(1) var<uniform> fx_lights: FxLights;
-
 @group(1) @binding(0) var t_diffuse: texture_2d<f32>;
 @group(1) @binding(1) var s_diffuse: sampler;
 // All instances' bone matrices, world space. Slot 0 is the shared identity
 // block (bind pose).
 @group(2) @binding(0) var<storage, read> bones: array<mat4x4<f32>>;
 
+// One GL light; `entity_light::GpuLight`.
+struct EntLight {
+    pos: vec4<f32>,      // w 0: xyz is the unit vector towards the light
+    diffuse: vec4<f32>,  // w spot exponent
+    ambient: vec4<f32>,  // w cosine of the spot cutoff, below -1 for none
+    atten: vec4<f32>,    // constant, linear, quadratic
+    spot_dir: vec4<f32>,
+};
+struct LightSet {
+    ambient: vec4<f32>,  // light model ambient; w the light count
+    lights: array<EntLight, 8>,
+};
+// The frame's light sets; an instance names its own.
+@group(2) @binding(1) var<storage, read> light_sets: array<LightSet>;
+
+// GL_LIGHTING's vertex colour: the light model ambient plus each light's
+// attenuated ambient and diffuse, clamped to 1. White material, no
+// specular, one-sided.
+fn gl_lighting(ls: LightSet, p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+    var c = ls.ambient.rgb;
+    let count = min(u32(ls.ambient.w), 8u);
+    for (var i = 0u; i < count; i++) {
+        let l = ls.lights[i];
+        var to_l = l.pos.xyz;
+        var att = 1.0;
+        if (l.pos.w != 0.0) {
+            let v = l.pos.xyz - p;
+            let d = length(v);
+            to_l = v / max(d, 1e-6);
+            att = 1.0 / (l.atten.x + (l.atten.y + l.atten.z * d) * d);
+            if (l.ambient.w >= -1.0) {
+                let s = dot(-to_l, normalize(l.spot_dir.xyz));
+                if (s < l.ambient.w) {
+                    att = 0.0;
+                } else if (l.diffuse.w > 0.0) {
+                    att *= pow(max(s, 0.0), l.diffuse.w);
+                }
+            }
+        }
+        c += att * (l.ambient.rgb + max(dot(n, to_l), 0.0) * l.diffuse.rgb);
+    }
+    return clamp(c, vec3(0.0), vec3(1.0));
+}
+
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) world_pos: vec3<f32>,
+    // GL's vertex colour, framebuffer units
+    @location(3) light: vec3<f32>,
 };
 
 @vertex
@@ -46,6 +87,7 @@ fn vs_main(
     @location(7) m2: vec4<f32>,
     @location(8) m3: vec4<f32>,
     @location(9) bone_base: u32,
+    @location(10) light_set: u32,
 ) -> VsOut {
     let model = mat4x4<f32>(m0, m1, m2, m3);
     var p = vec4<f32>(0.0);
@@ -63,24 +105,8 @@ fn vs_main(
     out.normal = (model * vec4<f32>(n, 0.0)).xyz;
     out.uv = uv;
     out.world_pos = world.xyz;
+    out.light = gl_lighting(light_sets[light_set], world.xyz, normalize(out.normal));
     return out;
-}
-
-// Retail's dynamic lights on a lit model, in framebuffer units; same
-// function as `dlight_term` in shader.wgsl (cod11-light-grid-and-leaf-lights.md,
-// section 11).
-fn dlight_term(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
-    var sum = vec3(0.0);
-    for (var i = 0u; i < 8u; i++) {
-        let l = fx_lights.pos_radius[i];
-        if (l.w <= 0.0) { continue; }
-        let to = l.xyz - p;
-        let d2 = dot(to, to);
-        if (d2 > 4.0 * l.w * l.w) { continue; }
-        let lambert = max(dot(n, to * inverseSqrt(max(d2, 1e-6))), 0.0);
-        sum += fx_lights.color[i].rgb * (0.5 * l.w * l.w / 32.0 * lambert / (d2 + 0.001));
-    }
-    return sum;
 }
 
 // glFog GL_EXP / GL_LINEAR factors (see shader.wgsl); depth along the view
@@ -103,12 +129,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let tex = textureSample(t_diffuse, s_diffuse, in.uv);
     // same alpha-test threshold as the map's masked materials
     if (tex.a < 0.5) { discard; }
-    let n = normalize(in.normal);
-    let light = normalize(vec3<f32>(-0.4, -0.3, 0.9));
-    let half_lambert = max(dot(n, light), 0.0) * 0.5 + 0.5;
-    // the key light stands for a displayed value: half of it in framebuffer
-    // units, plus the dynamic lights, clamped like GL lighting, then doubled
-    let lit = min(half_lambert * 0.5 + dlight_term(in.world_pos, n), vec3(1.0)) * 2.0;
-    let rgb = tex.rgb * lit;
+    // the display doubles the framebuffer
+    let rgb = tex.rgb * in.light * 2.0;
     return vec4<f32>(mix(rgb, camera.fog_color_density.rgb, fog_amount(in.world_pos)), 1.0);
 }
