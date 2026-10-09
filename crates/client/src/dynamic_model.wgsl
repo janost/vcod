@@ -66,15 +66,19 @@ fn vs_main(
     return out;
 }
 
-// Quadratic falloff to zero at the radius; zero-radius slots are unused.
-fn fx_light_term(world_pos: vec3<f32>) -> vec3<f32> {
+// Retail's dynamic lights on a lit model, in framebuffer units; same
+// function as `dlight_term` in shader.wgsl (cod11-light-grid-and-leaf-lights.md,
+// section 11).
+fn dlight_term(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     var sum = vec3(0.0);
     for (var i = 0u; i < 8u; i++) {
         let l = fx_lights.pos_radius[i];
         if (l.w <= 0.0) { continue; }
-        let d = distance(world_pos, l.xyz);
-        let a = clamp(1.0 - d / l.w, 0.0, 1.0);
-        sum += fx_lights.color[i].rgb * a * a;
+        let to = l.xyz - p;
+        let d2 = dot(to, to);
+        if (d2 > 4.0 * l.w * l.w) { continue; }
+        let lambert = max(dot(n, to * inverseSqrt(max(d2, 1e-6))), 0.0);
+        sum += fx_lights.color[i].rgb * (0.5 * l.w * l.w / 32.0 * lambert / (d2 + 0.001));
     }
     return sum;
 }
@@ -102,6 +106,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let n = normalize(in.normal);
     let light = normalize(vec3<f32>(-0.4, -0.3, 0.9));
     let half_lambert = max(dot(n, light), 0.0) * 0.5 + 0.5;
-    let rgb = tex.rgb * (half_lambert + fx_light_term(in.world_pos));
+    // the key light stands for a displayed value: half of it in framebuffer
+    // units, plus the dynamic lights, clamped like GL lighting, then doubled
+    let lit = min(half_lambert * 0.5 + dlight_term(in.world_pos, n), vec3(1.0)) * 2.0;
+    let rgb = tex.rgb * lit;
     return vec4<f32>(mix(rgb, camera.fog_color_density.rgb, fog_amount(in.world_pos)), 1.0);
 }

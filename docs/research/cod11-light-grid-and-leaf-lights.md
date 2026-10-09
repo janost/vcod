@@ -17,7 +17,8 @@ grid readers below were missed.
   0x54d2fc) and registers the model through 0x504a20.
 - INFERRED: 0x4dbae0 skips any model whose name starts `xmodel/shadow_`
   (a branch on `strnicmp` against that 14-byte prefix), so retail registers
-  no static model for those names. vcod still draws them as decals.
+  no static model for those names and never draws them. vcod skips them too
+  (`props::is_unregistered`). Section 12 has the rest.
 - VERIFIED: 0x504a20 stores the previous head of the list at 0x14072ec in
   `record+0x9c` and the record as the new head. INFERRED: 0x5050a0 walks
   that list from its head calling 0x504cc0 on each, so models are lit in
@@ -251,10 +252,10 @@ normal taken through the scaled axis and renormalised by 0x42db90
   overbright bit (`identityLight` 0.5, as `renderer.rs` assumes), in reverse
   entity order so misses fill the cache in retail's order. The bounds centre
   is the AABB of the baked LOD-0 vertices.
-- Dynamic lights in the scene at the first draw are not added.
+- Dynamic lights add per vertex on top of the baked colour (section 11).
 - Misses trace through a `CollisionWorld` built from the world brushes
   alone, with no static models, the first time a sample is missing.
-- Shadow decals (`shadow_*`, `*_shadow`) keep the full-scale precalc tint.
+- `shadow_*` placements are not drawn (section 12).
 
 VERIFIED, vcod measurement 2026-10-09 (release build, all 12 stock maps):
 most models find all eight corners in lump 32 (mp_carentan 425 of 592,
@@ -265,3 +266,71 @@ trace the same misses. Lighting mp_carentan's 592 models, 844 traced
 samples included, takes about 0.5 s; there is no per-frame cost. The mean
 vertex byte over all prop vertices lands near `identityLight *
 lightingPrecalc` (mp_carentan 62 against 49, mp_brecourt 66 against 60).
+
+## 11. Dynamic lights on models
+
+- VERIFIED, `RE_AddLightToScene` at 0x4e9b00 (the refexport slot stored at
+  0x4b4b64): it returns without a renderer, with 32 lights queued already,
+  or with an intensity at or below 0. Otherwise it fills a 0x88-byte record
+  at `0x80000 + n * 0x88` in the scene buffer: type 2, the colour raw at
+  +0x04, `intensity^2 / 32` at +0x10 (0x568ea0 is 1/32), ambient 0, diffuse
+  `identityLight * intensity^2 / 32 * colour` at +0x24, the origin at
+  +0x44, w 1, constant falloff 0.001 (0x3a83126f), linear 0, quadratic 1,
+  cone 180 degrees (none), and the intensity itself at +0x74.
+- VERIFIED: `RE_RenderScene` (0x4e9cb0) publishes the frame's lights twice
+  from `r_dynamiclight` (0x16c3868, default "1" at 0x5685e4): the count at
+  0x16c5798 (the scene's +0x160, with the array at +0x164) is zero when the
+  cvar is 0, and the count at 0x16c5794 is zero unless the cvar is 1.
+  INFERRED: 0x16c5794 feeds the world's dlight bits (0x4b59f0) and
+  0x16c5798 the model light pick, so `r_dynamiclight 2` lights models only.
+- VERIFIED, 0x4b69f0 before the sky lights: each scene light whose squared
+  distance to the model's lighting origin is at most `4 * intensity^2`
+  (0x569080 is 4.0), so within twice its intensity, joins the candidates
+  with weight 1 and sets the model's `+0xa0` flag. It then competes for the eight slots like any other
+  light (section 6).
+- VERIFIED, the static-model draw at 0x505260: a surface with no cached
+  colours calls the light pick (0x4b7450) and builds the cache (0x4e57e0)
+  only when `+0xa0` is clear. A cached surface whose material has bit
+  0x18 set at `+0x54` calls the pick again and draws its uncached
+  surface when a dynamic light reached the model. INFERRED: a prop near a
+  dynamic light is relit each frame through the GL lighting path
+  (`cod11-gamma.md` section 5) with the dynamic light among its eight, and
+  goes back to its cache once the light is gone; which materials carry
+  bit 0x18 is not traced, vcod takes it to be the `lightingDiffuse` skins.
+- INFERRED: GL lighting gives a dynamic light `max(0, N . L) * diffuse /
+  (d^2 + 0.001)` per vertex: at an intensity of 800 (the grenade's
+  `Light`), one framebuffer unit at 100 units, a quarter at 200.
+- INFERRED: entity models take the same pick through 0x4b7320 and 0x4b7290
+  (the grid sample at the lighting origin, then 0x4b69f0 with the scene's
+  lights).
+
+vcod (`vs_prop` in `shader.wgsl`, `dlight_term` in `dynamic_model.wgsl`):
+
+- A prop vertex of a `lightingDiffuse` skin (vertex alpha 255) adds every
+  fx light within twice its radius by the formula above to its baked
+  colour, clamped at 1, then doubles for the display. The fx `Light`
+  block's size stands in for the intensity (INFERRED: the efx renderer's
+  call is not traced). The dynamic light does not push a baked light out of
+  the eight slots.
+- Entity models keep their fixed key light and add the same term.
+- The world keeps vcod's own fx-light falloff; retail's world dlights
+  (0x4b59f0's bits) are not ported.
+
+## 12. Shadows
+
+- VERIFIED: the stock MP maps place no `xmodel/shadow_*` model. The 23
+  `shadow_*` xmodels in `pak0.pk3` (trees, shrubs, `shadow_crate`) only
+  serve the map compiler's lightmap shadows, and 0x4dbae0 drops their
+  placements (section 1). `mp_powcamp` and `mp_rocket` carry the world
+  shader `textures/common/shadow`, drawn as world geometry.
+- VERIFIED: `cg_shadows` is registered by the renderer's cvar block
+  (0x4b3300, `"0"` at 0x56871c, flags 0x201) and by the cgame (`cgame_mp_x86.dll`
+  table entry at 0x30074a24: vmCvar 0x301d9380, default `"0"`, flags 0x201).
+- INFERRED, the cgame's player shadow 0x30027630: with `cg_shadows` 0 it
+  returns at once. At 1 it traces down from the player and, unless bit 1
+  of the entity's word at +8 (`eFlags` in Q3's layout) is set, drops the
+  `markShadow` shader (registered through 0x30030b70) as a temporary mark
+  of radius 16 under the player, its grey level faded with the height. Value 2 is the renderer's stencil path (`"<stencil shadow>"`).
+- So retail's default draws no blob shadow under players. vcod draws none
+  and does not read `cg_shadows`.
+
