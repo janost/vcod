@@ -253,6 +253,10 @@ pub struct ClientSim {
     /// `ps.eFlags` 0x400, on a frame the gun this client mans fired (turrets
     /// doc 12.4).
     pub firing: bool,
+    /// `ps.eFlags` 0x400 as `PmoveSingle` writes it every cmd: attack held
+    /// with the weapon ready or firing and a loaded clip ([`attack_flag`];
+    /// combat doc 16.5).
+    pub attacking: bool,
     /// `eFlags` 0x80000, `pingPlayer`'s chat flash on teammates' compasses,
     /// held until the stamp the builtin left (`GameHost::client_ping_until`).
     pub ping: bool,
@@ -437,6 +441,7 @@ impl ClientSim {
             gunfx: 0,
             mounted_on: None,
             firing: false,
+            attacking: false,
             ping: false,
             compass_friend: 0,
             last_friend: 0,
@@ -606,6 +611,7 @@ impl ClientSim {
         self.gunfx = 0;
         self.mounted_on = None;
         self.firing = false;
+        self.attacking = false;
         // The memset again; nothing after it in `ClientSpawn` rewrites them.
         self.compass_friend = 0;
         self.last_friend = 0;
@@ -744,7 +750,11 @@ impl ClientSim {
             } else {
                 0
             }
-            | if self.firing { EF_FIRING } else { 0 }
+            | if self.firing || self.attacking {
+                EF_FIRING
+            } else {
+                0
+            }
             | if self.ping { EF_PING } else { 0 }
             | if self.friend_ping { EF_FRIEND_PING } else { 0 }
     }
@@ -915,6 +925,12 @@ impl ClientSim {
     ) -> Vec<PmEvent> {
         // `pers.cmd` takes every cmd, ahead of the dead and intermission returns.
         self.last_cmd_angles = cmd.angles;
+        // `PmoveSingle` clears the bit on every cmd and sets it again ahead
+        // of the move and the weapon, off the state the cmd starts from.
+        self.attacking = self.pm_type == PmType::Normal
+            && !self.pm_dead
+            && !self.respawned
+            && attack_flag(&self.ps, cmd.buttons, weapons);
         // A dead player's view is frozen and its body falls and slides;
         // nothing it presses reaches the mover or the weapon (combat doc,
         // 1.12 and 6, the `pm_type > 5` returns).
@@ -1900,6 +1916,22 @@ fn vec_to_angles(v: Vec3) -> (f32, f32) {
         pitch += 360.0;
     }
     (pitch, yaw)
+}
+
+/// `PmoveSingle`'s `eFlags` 0x400 (game.mp.i386.so 0x33fa0..0x33fdf): the
+/// attack bit without the talk bit, `weaponstate` ready or firing, and
+/// `PM_WeaponAmmoAvailable` (0x3abe8), the clip the held weapon loads from.
+/// The caller adds the `pm_type` and `PMF_RESPAWNED` gates.
+pub fn attack_flag(ps: &pmove::PlayerState, buttons: u8, weapons: &[Option<WeaponDef>]) -> bool {
+    use vcod_common::pmove::weapon::{WEAPON_FIRING, WEAPON_READY};
+    buttons & msg::BUTTON_ATTACK != 0
+        && buttons & msg::BUTTON_TALK == 0
+        && matches!(ps.weaponstate, WEAPON_READY | WEAPON_FIRING)
+        && weapons
+            .get(ps.weapon as usize)
+            .and_then(Option::as_ref)
+            .and_then(|d| ps.ammoclip.get(d.clip_index))
+            .is_some_and(|&c| c != 0)
 }
 
 #[cfg(test)]
@@ -3126,6 +3158,57 @@ mod tests {
         let e = sim.to_entity(p, 3, 0).field_i32(p, "eFlags");
         assert_eq!(e & (EF_CROUCH | vcod_common::playerpose::EF_ADS), 0x220);
         assert_eq!(sim.to_wire(p, 0, 0).field_i32(p, "eFlags") & 0x200, 0);
+    }
+
+    /// `PmoveSingle`'s 0x400 (combat doc 16.5): the attack bit with the
+    /// weapon ready or firing and a loaded clip, never with the talk bit.
+    #[test]
+    fn the_fire_bit_needs_the_trigger_a_ready_weapon_and_a_clip() {
+        use vcod_common::pmove::weapon::{WEAPON_FIRING, WEAPON_READY, WEAPON_RELOADING};
+        let weapons = vec![
+            None,
+            Some(WeaponDef {
+                clip_index: 3,
+                ..WeaponDef::default()
+            }),
+        ];
+        let mut ps = pmove::PlayerState::spawn(glam::Vec3::ZERO, 0.0);
+        ps.weapon = 1;
+        ps.ammoclip[3] = 5;
+        let attack = msg::BUTTON_ATTACK;
+        for (state, want) in [
+            (WEAPON_READY, true),
+            (WEAPON_FIRING, true),
+            (WEAPON_RELOADING, false),
+        ] {
+            ps.weaponstate = state;
+            assert_eq!(attack_flag(&ps, attack, &weapons), want, "state {state}");
+        }
+        ps.weaponstate = WEAPON_READY;
+        assert!(!attack_flag(&ps, 0, &weapons));
+        assert!(!attack_flag(&ps, attack | msg::BUTTON_TALK, &weapons));
+        ps.ammoclip[3] = 0;
+        assert!(!attack_flag(&ps, attack, &weapons));
+    }
+
+    /// The bit rides the entity and the playerstate both, off the last cmd
+    /// of the frame.
+    #[test]
+    fn a_held_trigger_sets_the_fire_bit_on_the_wire() {
+        let p = &PROTOCOL_V1;
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.become_player([0.0; 3], 0.0, [0; 3]);
+        sim.attacking = true;
+        assert_eq!(
+            sim.to_entity(p, 3, 0).field_i32(p, "eFlags") & EF_FIRING,
+            EF_FIRING
+        );
+        assert_eq!(
+            sim.to_wire(p, 0, 0).field_i32(p, "eFlags") & EF_FIRING,
+            EF_FIRING
+        );
+        sim.become_player([0.0; 3], 0.0, [0; 3]);
+        assert_eq!(sim.to_wire(p, 0, 0).field_i32(p, "eFlags") & EF_FIRING, 0);
     }
 
     /// `ClientSpawn`'s memset: the capture's first trace, a fresh spawn,
