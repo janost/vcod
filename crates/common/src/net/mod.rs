@@ -14,6 +14,7 @@ pub mod huffman;
 pub mod master;
 pub mod msg;
 pub mod netchan;
+pub mod netsim;
 pub mod protocol;
 pub mod server_cache;
 pub use protocol::{CS_FOG_V1, FogParams};
@@ -58,23 +59,75 @@ pub trait Transport {
     fn send(&mut self, data: &[u8]);
 }
 
-pub struct UdpTransport(UdpSocket);
+pub struct UdpTransport {
+    sock: UdpSocket,
+    /// `VCOD_NETSIM`'s bad network, when set ([`netsim`]).
+    sim: Option<netsim::NetSim>,
+    lan: bool,
+}
 
 impl UdpTransport {
     pub fn connect(addr: &str) -> anyhow::Result<Self> {
         let sock = UdpSocket::bind("0.0.0.0:0")?;
         sock.connect(addr)?;
         sock.set_nonblocking(true)?;
-        Ok(UdpTransport(sock))
+        let sim = netsim::NetSimConfig::from_env().map(|cfg| {
+            log::info!("VCOD_NETSIM: {cfg:?}");
+            let seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(1, |d| d.as_nanos() as u64);
+            netsim::NetSim::new(cfg, seed)
+        });
+        // Retail's `Sys_IsLANAddress` (CoDMP.exe 0x464be0) as far as vcod
+        // tells it: loopback or an RFC 1918 address. A simulated network is
+        // never one.
+        let lan = sim.is_none()
+            && match sock.peer_addr()?.ip() {
+                std::net::IpAddr::V4(ip) => ip.is_loopback() || ip.is_private(),
+                ip => ip.is_loopback(),
+            };
+        Ok(UdpTransport { sock, sim, lan })
+    }
+
+    /// Puts the simulator's due outgoing datagrams on the wire.
+    fn flush(&mut self, now: Instant) {
+        if let Some(sim) = &mut self.sim {
+            while let Some(d) = sim.take_outgoing(now) {
+                let _ = self.sock.send(&d);
+            }
+        }
+    }
+
+    /// Whether the server is on this machine or a private network.
+    pub fn is_lan(&self) -> bool {
+        self.lan
     }
 }
 
 impl Transport for UdpTransport {
     fn try_recv(&mut self, buf: &mut [u8]) -> Option<usize> {
-        self.0.recv(buf).ok()
+        let Some(sim) = &mut self.sim else {
+            return self.sock.recv(buf).ok();
+        };
+        let now = Instant::now();
+        while let Ok(n) = self.sock.recv(buf) {
+            sim.arrive(now, &buf[..n]);
+        }
+        let d = sim.take_incoming(now);
+        self.flush(now);
+        let d = d?;
+        let n = d.len().min(buf.len());
+        buf[..n].copy_from_slice(&d[..n]);
+        Some(n)
     }
     fn send(&mut self, data: &[u8]) {
-        let _ = self.0.send(data);
+        let Some(sim) = &mut self.sim else {
+            let _ = self.sock.send(data);
+            return;
+        };
+        let now = Instant::now();
+        sim.depart(now, data);
+        self.flush(now);
     }
 }
 
@@ -260,6 +313,10 @@ impl<T: Transport> NetClient<T> {
         c.tries = 1;
         c.last_send = now;
         c
+    }
+
+    pub fn transport(&self) -> &T {
+        &self.transport
     }
 
     pub fn state(&self) -> NetState {
