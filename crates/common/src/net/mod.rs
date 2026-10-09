@@ -49,6 +49,9 @@ const MAX_PACKETS_PER_PUMP: usize = 256;
 const CONNECT_RESEND: Duration = Duration::from_secs(2);
 const CONNECT_TRIES: u32 = 5;
 const GAMESTATE_POKE: Duration = Duration::from_millis(200);
+/// `CL_ReadyToSendPacket` (CoDMP.exe 0x40b940) sends at most one packet per
+/// 50 ms while a download runs, whatever the LAN or `cl_maxpackets` say.
+const DOWNLOAD_POKE: Duration = Duration::from_millis(50);
 const GAMESTATE_TIMEOUT: Duration = Duration::from_secs(20);
 /// `CL_DisconnectPacket`'s guard (CoDMP.exe 0x410663, `cmp eax,0xbb8`).
 const DISCONNECT_GUARD: Duration = Duration::from_millis(3000);
@@ -622,9 +625,9 @@ impl<T: Transport> NetClient<T> {
                 if self.now.duration_since(self.last_snapshot) >= ACTIVE_TIMEOUT {
                     self.drop("server timed out");
                 } else if self.download.is_some()
-                    && self.now.duration_since(self.last_send) >= GAMESTATE_POKE
+                    && self.now.duration_since(self.last_send) >= DOWNLOAD_POKE
                 {
-                    // Keep reliable resends flowing during a download; no render
+                    // The acks and reliable resends of a download; no render
                     // loop is sending frames yet.
                     self.send_message(&[]);
                     self.last_send = self.now;
@@ -840,6 +843,7 @@ impl<T: Transport> NetClient<T> {
             }
         }
         let chunk = r.read_short();
+        log::trace!("download block {block}, {chunk} bytes");
         if !(0..=MAX_DOWNLOAD_BLKSIZE as i16).contains(&chunk) {
             self.drop(&format!("bad download block size {chunk}"));
             return Err(());

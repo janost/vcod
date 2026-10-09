@@ -63,8 +63,8 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
   with the localized reason in the stock error popup.
   In a game, Esc opens the script menu and its Main Menu tab the stock
   in-game main menu (Back to Game, Disconnect). The stock Mods menu lists
-  the mod directories beside `main/` and switches to one, the mod's own
-  menus included.
+  the mod directories beside `main/` and switches to one, in a game too,
+  and the menus load from the mod's own `ui_mp/menus.txt`.
 - The stock Options and Multiplayer Options screens: rebind keys, mouse
   sensitivity and invert, player name, rate, master volume, video mode and
   full screen. Choices land in the console's binds and cvars and persist in
@@ -143,8 +143,10 @@ for my test suite.
 - rcon with retail's commands and replies, bans, the master heartbeat,
   zombie slots and retail-measured pings.
 - Publishes retail's pak lists and checksums in the systeminfo, serves the
-  paks it lists to clients that lack them, and with `--set sv_pure=1`
-  checks each client's pak checksums the way a pure retail server does.
+  paks it lists to clients that lack them at retail's pace, and with `--set
+  sv_pure=1` checks each client's pak checksums the way a pure retail server
+  does. `sv_minPing`/`sv_maxPing` refuse off-LAN clients by challenge ping,
+  and an off-LAN client's messages wait out its rate.
 - `--bots` adds bots that join through the stock menus and roam a nav graph
   built from pmove runs, ladders and jumps. They play the objectives: S&D
   plants and defuses, Retrieval carries and escorts, Behind Enemy Lines
@@ -187,10 +189,9 @@ missing.
   to it.
 - Prediction carries you on a moving brush model but not its rotation.
   Neither does retail's.
-- A mod's menus count only under the stock file names: its own
-  `ui_mp/menus.txt` list and its UI DLL are ignored. Switching mods needs
-  you out of the game first
+- A mod's UI DLL is ignored; only its menu files count
   ([cod11-front-end.md](docs/research/cod11-front-end.md) sections 16-17).
+  Switching mods in a game keeps the loaded map's geometry.
 
 **Server**
 
@@ -201,8 +202,8 @@ missing.
   and drifts its riders about 0.02 units a frame. vcod's comes back to zero.
   Yes, I'm calling that a bug in retail.
 - `sv_pure` defaults to 0 where retail's default is 1, and a client may
-  download only the paks the server lists, where retail serves any file of
-  the name.
+  download only the paks the server lists. Retail serves any file under its
+  directories, `..` included, so I'm keeping that one on purpose.
 - rcon runs `map`, `devmap`, `map_restart`, `map_rotate`, `status`,
   `clientkick`, `kick`, `banUser`, `banClient`, `dumpuser`, `serverinfo`,
   `systeminfo`, `say`, `set`, `seta`, `cvarlist`, cvar queries, `heartbeat`,

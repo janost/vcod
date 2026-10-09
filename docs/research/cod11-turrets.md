@@ -1495,7 +1495,9 @@ What it lets through, each a `GAPS` line in the gate:
   lines 1495-1496, event 6 on the playerstate ring), 39600 on retail.
   INFERRED: `bobCycle` is not in the capture and the join leaves each side
   its own, which is where the phase comes from. Ours raises a second
-  footstep at 40000, where VERIFIED (fixture line 1530 and every `!trace`
+  footstep at 39950 (40000 before the step-up's push of the cycle,
+  `cod11-mantle.md` "The step event and the velocity scale", moved it a
+  frame earlier), where VERIFIED (fixture line 1530 and every `!trace`
   after it, `eventSequence` 6) retail raises none before the strafe ends;
   INFERRED, the same phase. The `eventSequence` rows past it are that one
   event.

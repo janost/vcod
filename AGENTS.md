@@ -40,7 +40,7 @@ instead of leaving the fact in a commit message.
 
 | Subsystem | Doc |
 |---|---|
-| Handshake, configstrings, rcon, heartbeat, zombies, pings, rate, bans, `g_password`, private slots | `cod11-server-handshake.md` (Housekeeping section) |
+| Handshake, configstrings, rcon, heartbeat, zombies, pings, rate, bans, `g_password`, private slots, ping limits, message pacing, downloads | `cod11-server-handshake.md` (Housekeeping section) |
 | Map change, `map_restart`, `sv_serverid`, rotation | `cod11-map-cycle.md` |
 | Shots, damage, death, grenades, blasts, hit locations, shot timing | `cod11-combat.md` |
 | Movement, stances, constants | `cod11-mantle.md`, `bsp-ibsp59-format.md` (Movement constants) |
@@ -270,6 +270,10 @@ dropped, so test such a builtin through `ScriptRuntime`.
   `level.time`, and the entering cmd seeds `commandTime` inside that window.
 - Server commands queue until the next snapshot and squash like
   `SV_AddServerCommand` (rule in `docs/protocol-1.1.md`).
+- The frame loop sends a fragmented snapshot or download message one
+  fragment per tick, as retail does, and an off-LAN client waits out its
+  rate between messages. A test that reads one tick's packets sees only the
+  first fragment of a big message.
 - A pure server drops a client that enters the world without a valid `cp`
   (pak checksums keyed with the gamestate's `checksumFeed`). Extra
   arguments to `tools/run_server.sh` land after `+map`, so `+set sv_pure 1`
