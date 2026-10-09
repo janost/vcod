@@ -311,6 +311,8 @@ vcod-server mp_carentan --port 28960 --hostname "my server" --gametype tdm
 - `--set NAME=VALUE` is retail's `+set`, repeatable:
   `--set scr_friendlyfire=1`, `--set sv_mapRotation="..."`.
 - `--set rconPassword=<pw>` turns rcon on.
+- `--set g_password=<pw>` makes the server private, checked as retail does
+  at connect, `map_restart` and map change.
 - `dedicated` defaults to 1, not retail's 2, so dev runs stay off the master
   list. `--set dedicated=2` heartbeats `codmaster.activision.com` every three
   minutes and sends a flatline on Ctrl-C or `quit`.
