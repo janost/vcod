@@ -867,7 +867,10 @@ mod tests {
     fn completion_covers_commands_and_cvars() {
         let s = Shell::new();
         assert_eq!(s.complete("unb"), ["unbind", "unbindall"]);
-        assert_eq!(s.complete("CL_"), ["cl_freelook", "cl_run"]);
+        assert_eq!(
+            s.complete("CL_"),
+            ["cl_allowDownload", "cl_freelook", "cl_run"]
+        );
         assert!(s.complete("zzz").is_empty());
     }
 

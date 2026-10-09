@@ -87,9 +87,13 @@ pub fn candidates_for_map(
     exists: impl Fn(&Path) -> bool,
 ) -> Vec<String> {
     // Pak names rarely match the map exactly (`main/n_dufresne` holds
-    // `dufresne_final`), so match on a shared `_`-separated token.
+    // `dufresne_final`, `main/BunkerCourt2AvsG` holds `BunkerCourt2_A_vs_G`),
+    // so match on a shared `_`-separated token or on the names with their
+    // separators dropped.
     let map = map.to_lowercase();
     let map_tokens: Vec<&str> = map.split('_').filter(|t| t.len() >= 4).collect();
+    let squash = |s: &str| s.replace(['_', '-'], "");
+    let map_flat = squash(map.strip_prefix("mp_").unwrap_or(&map));
     let mut like_map = Vec::new();
     let mut rest = Vec::new();
     for name in referenced_pak_names(systeminfo) {
@@ -103,9 +107,11 @@ pub fn candidates_for_map(
             continue;
         }
         let base = name.rsplit('/').next().unwrap_or(&name).to_lowercase();
+        let base_flat = squash(&base);
         if base
             .split('_')
             .any(|t| t.len() >= 4 && map_tokens.contains(&t))
+            || (map_flat.len() >= 4 && base_flat.contains(&map_flat))
         {
             like_map.push(name);
         } else {
@@ -329,6 +335,16 @@ mod tests {
             got,
             vec!["main/n_dufresne", "main/zzz_zfunmod", "main/n_degaulle"]
         );
+    }
+
+    #[test]
+    fn candidates_match_on_names_without_separators() {
+        // Seen live on 167.235.192.175:23120.
+        let info = "\\sv_referencedPakNames\\main/zzz_zfunmod main/farm main/BunkerCourt2AvsG";
+        let got = candidates_for_map(info, "BunkerCourt2_A_vs_G", &["main"], |_| false);
+        assert_eq!(got[0], "main/BunkerCourt2AvsG");
+        let got = candidates_for_map(info, "mp_farm", &["main"], |_| false);
+        assert_eq!(got[0], "main/farm");
     }
 
     #[test]
