@@ -46,6 +46,8 @@ pub enum Effect {
     Exec(String),
     /// `vid_restart`: apply `r_mode` and `r_fullscreen` to the window.
     VidRestart,
+    /// `ui_load`: reload the menus off `ui_menuFiles`.
+    UiLoad,
 }
 
 /// One cvar. `archive` is retail's `CVAR_ARCHIVE`: written to the config.
@@ -117,6 +119,7 @@ const COMMANDS: &[&str] = &[
     "toggle",
     "toggleconsole",
     "unbind",
+    "ui_load",
     "unbindall",
     "vid_restart",
     "weapnext",
@@ -278,6 +281,9 @@ impl Shell {
         // The browser's cvars, archived, with ui_mp_x86.dll's defaults
         // (cvar table at 0x40036c8c..0x40036dfc).
         s.register("ui_netSource", "0", ARCHIVE);
+        // The menu list `ui_load` reads, not archived (vmCvar row at
+        // 0x40036c9c).
+        s.register("ui_menuFiles", "ui_mp/menus.txt", 0);
         for name in [
             "ui_browserShowFull",
             "ui_browserShowEmpty",
@@ -509,6 +515,7 @@ impl Shell {
                 None => print(out, "exec <filename> : execute a script file".into()),
             },
             "vid_restart" => out.push(Effect::VidRestart),
+            "ui_load" => out.push(Effect::UiLoad),
             "cvarlist" => {
                 let prefix = arg(1).map(str::to_ascii_lowercase);
                 let mut n = 0;

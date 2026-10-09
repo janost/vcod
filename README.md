@@ -430,7 +430,8 @@ Anything else goes to the server while connected (`callvote`, `kill`,
 (25000; retail's first-run 5000 starves snapshots), `snaps`,
 `scr_conspeed`, `mss_volume`, `r_mode` / `r_fullscreen` (applied at start
 and by `vid_restart`), `password` and the browser's `ui_netSource` and
-`ui_browserShow*`. `exec <file>` runs a config from the paks or `main/`.
+`ui_browserShow*`. `exec <file>` runs a config from the paks or `main/`,
+and `ui_load` reloads the menus off the list `ui_menuFiles` names.
 Binds only act while connected.
 
 ### Main menu and browser
