@@ -131,6 +131,10 @@ pub struct BotView {
     /// minefield or `trigger_hurt` [`HAZARD_LOOK`] units that way. A wander
     /// heading keeps out of them; the graph already does.
     pub hazard_ahead: [bool; 8],
+    /// Per octant as [`Self::hazard_ahead`], a drop deeper than a jump
+    /// within [`HAZARD_LOOK`] that way, before a wall (`nav::drop_ahead`);
+    /// all clear off the ground. A wander heading keeps off them too.
+    pub drop_ahead: [bool; 8],
     /// The loudest gunfire or blast another player made last tick within
     /// earshot ([`loudest`]), chest high.
     pub noise: Option<[f32; 3]>,
@@ -313,10 +317,13 @@ pub(crate) fn loudest(noises: &[Noise], listener: usize, at: [f32; 3]) -> Option
 pub struct BotBody {
     pub origin: [f32; 3],
     pub on_ladder: bool,
+    pub on_ground: bool,
     pub playing: bool,
     pub dead: bool,
     pub health: i32,
     pub clip: i16,
+    /// On the random heading a stuck bot takes, waypoint or not.
+    pub unsticking: bool,
 }
 
 pub struct Bot {
@@ -344,6 +351,10 @@ pub struct Bot {
     stall_ticks: u32,
     /// Ticks left on a wander heading taken to get unstuck, waypoint or not.
     unstick_ticks: u32,
+    /// Where the last unstick spell started, and how many in a row started
+    /// within [`CORNER`] of the one before.
+    unstick_at: [f32; 3],
+    unstick_tries: u32,
     /// Ticks until the trigger may go down again: a semi-auto's tap spacing,
     /// an automatic's pause between bursts.
     fire_cooldown: u32,
@@ -520,6 +531,8 @@ impl Bot {
             stall_origin: [0.0; 3],
             stall_ticks: 0,
             unstick_ticks: 0,
+            unstick_at: [f32::INFINITY; 3],
+            unstick_tries: 0,
             fire_cooldown: 0,
             burst_ticks: 0,
             target: None,
@@ -1121,6 +1134,11 @@ impl Bot {
             self.unstick_ticks = 0;
         } else if self.stall_ticks >= 10 {
             if dist_sq(view.origin, self.stall_origin) < 15.0 * 15.0 {
+                // Stuck again where the last spell started: a pocket a drop
+                // is the only way out of (mp_ship's rim at (4223, 345, 276)).
+                let again = dist_sq(view.origin, self.unstick_at) < CORNER * CORNER;
+                self.unstick_tries = if again { self.unstick_tries + 1 } else { 0 };
+                self.unstick_at = view.origin;
                 self.pick_heading(view);
                 self.unstick_ticks = UNSTICK_TICKS;
             } else {
@@ -1155,7 +1173,10 @@ impl Bot {
             }
             _ => {
                 self.unstick_ticks = self.unstick_ticks.saturating_sub(1);
-                if self.heading_ticks == 0 || view.hazard_ahead[octant(self.heading)] {
+                if self.heading_ticks == 0
+                    || self.shuns(view, self.heading)
+                    || self.sliding_off(view)
+                {
                     self.pick_heading(view);
                 } else {
                     self.heading_ticks -= 1;
@@ -1489,19 +1510,49 @@ impl Bot {
         if n == 0 { 0 } else { self.rand() as u32 % n }
     }
 
+    /// On the random heading a stuck bot takes ([`BotBody::unsticking`]).
+    pub fn unsticking(&self) -> bool {
+        self.unstick_ticks > 0
+    }
+
     /// A fresh wander heading, and a new stall baseline to measure it by.
     fn pick_heading(&mut self, view: &BotView) {
         self.heading = (self.rand() % 360) as f32;
-        // Turned a step at a time off a hazard; boxed in, it goes anyway.
-        for _ in 0..8 {
-            if !view.hazard_ahead[octant(self.heading)] {
-                break;
-            }
-            self.heading = (self.heading + 45.0) % 360.0;
-        }
+        // Turned a step at a time off a hazard or a drop, beside the
+        // heading too where it can (a heading into a wall slides along it:
+        // on mp_ship's deck one 30 degrees off the drop slid a bot off it),
+        // then off a hazard alone; boxed in by hazards, it goes anyway.
+        let start = self.heading;
+        let turn = |ok: &dyn Fn(f32) -> bool| {
+            (0..8)
+                .map(|i| (start + 45.0 * i as f32) % 360.0)
+                .find(|h| ok(*h))
+        };
+        let wide = |h: f32| [-45.0, 0.0, 45.0].iter().all(|d| !self.shuns(view, h + d));
+        self.heading = turn(&wide)
+            .or_else(|| turn(&|h| !self.shuns(view, h)))
+            .or_else(|| turn(&|h| !view.hazard_ahead[octant(h)]))
+            .unwrap_or(start);
         self.heading_ticks = 40 + (self.rand() % 40) as u32;
         self.stall_origin = view.origin;
         self.stall_ticks = 0;
+    }
+
+    /// A hazard, or a drop, lies along `yaw`'s octant. A drop is fine to
+    /// a cornered bot, and to one whose path drops: its waypoint lies more
+    /// than a jump below.
+    fn shuns(&self, view: &BotView, yaw: f32) -> bool {
+        let o = octant(yaw);
+        let below = |w: [f32; 3]| w[2] < view.origin[2] - vcod_common::pmove::JUMP_HEIGHT;
+        let drops = self.unstick_tries < CORNERED && !view.waypoint.is_some_and(below);
+        view.hazard_ahead[o] || (drops && view.drop_ahead[o])
+    }
+
+    /// The body moves toward a drop it shuns, whatever its heading: one
+    /// pushed into a wall slides along it.
+    fn sliding_off(&self, view: &BotView) -> bool {
+        let [x, y, _] = view.velocity;
+        x.hypot(y) > 1.0 && self.shuns(view, y.atan2(x).to_degrees())
     }
 
     fn think_grenade(&mut self, view: &BotView, mut cmd: UserCmd) -> UserCmd {
@@ -1557,6 +1608,10 @@ pub fn octant(yaw: f32) -> usize {
 
 /// Ticks a stuck bot spends on a random heading before its waypoint again.
 const UNSTICK_TICKS: u32 = 15;
+/// Unstick spells that start within [`CORNER`] units of the one before;
+/// from this many on, the bot is cornered and a drop is a way out.
+const CORNERED: u32 = 3;
+const CORNER: f32 = 96.0;
 /// Inside this of a leap's foot, flat, the run slows in proportion.
 const LEAP_SLOW: f32 = 48.0;
 /// A waypoint this far above the feet is up a ladder: look up, where
@@ -1712,6 +1767,7 @@ mod tests {
             grenade: Some(6),
             waypoint: None,
             hazard_ahead: [false; 8],
+            drop_ahead: [false; 8],
             noise: None,
             linked: false,
             on_ladder: false,
@@ -2500,6 +2556,71 @@ mod tests {
             bot.think(&v);
         }
         assert_eq!(bot.think(&v).angles[1], toward, "and goes back to it after");
+    }
+
+    /// A bot pinned by a deck's edge takes its unstick heading along the
+    /// deck, never off it, and turns off a drop it walks up to. Seed 5 on
+    /// mp_ship walked one off the deck at (3288, -460, 56) to the hull.
+    #[test]
+    fn a_stuck_bot_unsticks_away_from_a_drop() {
+        for seed in 1..20 {
+            let mut bot = Bot::new("allies", false, seed);
+            let mut v = view();
+            v.waypoint = Some([0.0, 100.0, 64.0]);
+            // A drop everywhere but +y (octant 2), a minefield at -y.
+            v.drop_ahead = [true; 8];
+            v.drop_ahead[2] = false;
+            v.hazard_ahead[6] = true;
+            let unstuck = (0..25).find(|_| {
+                bot.think(&v);
+                bot.unsticking()
+            });
+            assert!(unstuck.is_some(), "seed {seed}: never unstuck");
+            assert_eq!(octant(bot.heading), 2, "seed {seed}: {}", bot.heading);
+            // Boxed in by drops: off the hazard still.
+            v.drop_ahead = [true; 8];
+            bot.pick_heading(&v);
+            assert_ne!(octant(bot.heading), 6, "seed {seed}: into the minefield");
+            // A drop turns up ahead mid-spell: the next tick picks again.
+            v.drop_ahead = [false; 8];
+            v.hazard_ahead = [false; 8];
+            bot.heading = 90.0;
+            v.drop_ahead[2] = true;
+            bot.think(&v);
+            assert_ne!(octant(bot.heading), 2, "seed {seed}: kept walking off");
+        }
+    }
+
+    /// Stuck spell after spell in one spot with only drops open (mp_ship's
+    /// rim at (4223, 345, 276), under a ramp), a bot is cornered and takes
+    /// a drop out.
+    #[test]
+    fn a_cornered_bot_takes_a_drop_out() {
+        let mut dropped = 0;
+        for seed in 1..20 {
+            let mut bot = Bot::new("allies", false, seed);
+            let mut v = view();
+            v.waypoint = Some([0.0, 100.0, 64.0]);
+            // +y (octant 2) is the wall it is pinned against.
+            v.drop_ahead = [true; 8];
+            v.drop_ahead[2] = false;
+            let mut spells = Vec::new();
+            for _ in 0..200 {
+                bot.think(&v);
+                // A spell starts at UNSTICK_TICKS and its first tick spends one.
+                if bot.unstick_ticks == UNSTICK_TICKS - 1 {
+                    spells.push(octant(bot.heading));
+                }
+            }
+            let first = CORNERED as usize;
+            assert!(spells.len() > first, "seed {seed}: {spells:?}");
+            assert!(
+                spells[..first].iter().all(|o| *o == 2),
+                "seed {seed}: {spells:?}"
+            );
+            dropped += usize::from(spells[first..].iter().any(|o| *o != 2));
+        }
+        assert!(dropped > 10, "only {dropped} of 19 seeds took a drop out");
     }
 
     #[test]

@@ -1551,6 +1551,41 @@ pub(crate) fn hazard(hazards: &[BrushHull], p: Vec3) -> bool {
     !hazards.is_empty() && box_contacts_hulls(p + Vec3::Z * half.z, half, Vec3::ZERO, hazards)
 }
 
+/// How far apart along a heading [`drop_ahead`] feels for the floor.
+const DROP_SAMPLE: f32 = 16.0;
+
+/// Whether a body standing at `p`, walking `look` units along the flat unit
+/// vector `dir`, meets a drop deeper than a jump (one it cannot come back
+/// up) before a wall stops it. Floors are felt every [`DROP_SAMPLE`], each
+/// against the one before, so a stair down is no drop. Each is felt with
+/// the standing capsule: one standing on a lip it overhangs is held by it.
+pub(crate) fn drop_ahead(world: &CollisionWorld, p: Vec3, dir: Vec3, look: f32) -> bool {
+    use vcod_common::pmove::{HALF_WIDTH, JUMP_HEIGHT, STEPSIZE, Stance};
+    let mins = Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0);
+    let maxs = Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height());
+    let up = p + Vec3::Z * STEPSIZE;
+    let t = world.box_trace(up, up + dir * look, mins, maxs - Vec3::Z * STEPSIZE);
+    if t.startsolid || t.allsolid {
+        return false;
+    }
+    let reach = t.fraction * look;
+    let mut floor = p.z;
+    let mut d = DROP_SAMPLE;
+    while d <= reach {
+        let at = (p + dir * d).truncate().extend(floor + STEPSIZE);
+        let t = world.box_trace(at, at - Vec3::Z * (STEPSIZE + JUMP_HEIGHT), mins, maxs);
+        if t.startsolid {
+            return false;
+        }
+        if t.fraction >= 1.0 {
+            return true;
+        }
+        floor = t.endpos.z;
+        d += DROP_SAMPLE;
+    }
+    false
+}
+
 /// Idle cmds until a body dropped at `p` stands on something; `None` when it
 /// falls out of the world or never lands.
 fn settle(world: &CollisionWorld, p: Vec3, yaw: f32) -> Option<Vec3> {
@@ -2686,6 +2721,25 @@ mod tests {
         let entry = fs.resolve_map(map)?;
         let bsp = vcod_common::bsp::parse(&fs.read(&entry).unwrap()).unwrap();
         Some(crate::world::World::from_bsp(&bsp, Some(&fs)))
+    }
+
+    /// mp_ship's deck lip at (3285.5, -448.5, 56.125), where seed 5's
+    /// unstick heading walked a bot off to the hull floor at -64: the deck
+    /// runs on east and north, the drop lies west and south.
+    #[test]
+    fn a_drop_ahead_is_felt_off_a_decks_lip() {
+        let Some(world) = map_world("mp_ship") else {
+            return;
+        };
+        let lip = Vec3::new(3285.5413, -448.488, 56.125);
+        let drops: Vec<bool> = (0..8)
+            .map(|i| {
+                let (s, c) = (i as f32 * 45.0f32).to_radians().sin_cos();
+                drop_ahead(&world.collision, lip, Vec3::new(c, s, 0.0), 64.0)
+            })
+            .collect();
+        assert_eq!((drops[0], drops[2]), (false, false), "{drops:?}");
+        assert_eq!((drops[4], drops[6]), (true, true), "{drops:?}");
     }
 
     /// mp_depot's documents lie on a crate top at z 148 across a gap from a
