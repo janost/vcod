@@ -1287,6 +1287,24 @@ The area-tree order a mover's push leaves two players in, for
 players go down in the slab's path, slot 0 then slot 1, and a flat
 `radiusDamage` after each `movey` reads the walk off the `cb` lines.
 
+## probe_sine
+
+Whether script reaches a `TR_SINE` mover, for
+`docs/research/cod11-movers.md` 12 ("`TR_SINE` and the crush arm"). No
+client needed:
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PORT=30051 SECS=12 \
+    tools/run_probe.sh client-probes/probe_sine mp_carentan
+```
+
+Retail, 2026-10-10: `spawn("func_bobbing", ...)` and `spawn("func_pendulum",
+...)` both return live entities (299 and 300) that move, the bobbing's z
+reading 31.90 at 1100; the PROBE lines end at `f 4000` and the console's tail
+reads `ERROR: Reached_BinaryMover: bad moverState`. A run that spawned them
+at 2050 ended on the same frame. Nothing on ours replays it: vcod spawns both
+as inert entities.
+
 ## probe_linkto2
 
 `linkTo`'s second round on mp_carentan. Once an allied player has spawned it
