@@ -288,6 +288,9 @@ impl Shell {
         // The menu list `ui_load` reads, not archived (vmCvar row at
         // 0x40036c9c).
         s.register("ui_menuFiles", "ui_mp/menus.txt", 0);
+        // CoDMP.exe 0x4a99b0: "0", archived and latched. The UI reads it
+        // when it loads a menu file (docs/research/cod11-front-end.md, 1).
+        s.register("cl_language", "0", ARCHIVE);
         for name in [
             "ui_browserShowFull",
             "ui_browserShowEmpty",

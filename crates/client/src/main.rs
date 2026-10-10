@@ -1006,8 +1006,9 @@ fn main() -> Result<()> {
     fx::registry::init(&fs);
 
     let console = console::Console::new(&fs);
+    let language = shell.cvar("cl_language").unwrap_or("").to_string();
     // Retail keeps the favourites beside CoDMP.exe; vcod shares the file.
-    let ui = new_ui(&fs, &args.game_dir, &args.mod_dir);
+    let ui = new_ui(&fs, &args.game_dir, &args.mod_dir, &language);
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
@@ -1049,7 +1050,7 @@ fn main() -> Result<()> {
         hud,
         hud_ms: 0.0,
         localized,
-        menus: hud::menu::MenuCache::default(),
+        menus: hud::menu::MenuCache::new(&language),
         audio,
         quick_chat: quick_chat::QuickChat::new(0x51ee),
         ui,
@@ -1263,8 +1264,8 @@ fn start_loading(
 
 /// The front end off `fs`, with the favourites file and the Mods menu's
 /// directory listing under `game_dir`.
-fn new_ui(fs: &Pk3Fs, game_dir: &std::path::Path, mod_dir: &str) -> frontend::Ui {
-    frontend::Ui::new(fs)
+fn new_ui(fs: &Pk3Fs, game_dir: &std::path::Path, mod_dir: &str, language: &str) -> frontend::Ui {
+    frontend::Ui::new(fs, language)
         .with_server_cache(game_dir.join("servercache.dat"))
         .with_mod_root(game_dir.to_path_buf(), mod_dir.to_string())
 }
@@ -1314,7 +1315,7 @@ fn reopen_fs(
 ) -> Result<()> {
     *fs = Pk3Fs::open_search(base, game, pure)?;
     *localized = vcod_common::localize::Localized::load(fs);
-    *menus = hud::menu::MenuCache::default();
+    menus.clear();
     match hud {
         Some(h) => {
             if let Err(e) = h.reopen(fs) {
@@ -1689,7 +1690,12 @@ impl App {
     /// `ui_menuFiles` set back to its default first (0x4000d324).
     fn restart_ui(&mut self) {
         self.shell.execute("set ui_menuFiles ui_mp/menus.txt");
-        self.ui = new_ui(&self.fs, &self.game_dir, &self.mod_dir);
+        self.ui = new_ui(
+            &self.fs,
+            &self.game_dir,
+            &self.mod_dir,
+            self.shell.cvar("cl_language").unwrap_or(""),
+        );
     }
 
     /// The main menu, or the error popup over it when `error` says why the
@@ -1873,7 +1879,8 @@ impl App {
                 Effect::UiLoad => {
                     let list = self.shell.cvar("ui_menuFiles").unwrap_or("").to_string();
                     let mut out = Vec::new();
-                    self.ui.reload(&self.fs, &list, &mut out);
+                    let language = self.shell.cvar("cl_language").unwrap_or("").to_string();
+                    self.ui.reload(&self.fs, &list, &language, &mut out);
                     self.ui_pending.extend(out);
                 }
                 Effect::VidRestart => {
@@ -2802,7 +2809,12 @@ impl ApplicationHandler for App {
                                         r.reopen(&self.fs);
                                         view.reopen();
                                         self.shell.execute("set ui_menuFiles ui_mp/menus.txt");
-                                        self.ui = new_ui(&self.fs, &self.game_dir, &self.mod_dir);
+                                        self.ui = new_ui(
+                                            &self.fs,
+                                            &self.game_dir,
+                                            &self.mod_dir,
+                                            self.shell.cvar("cl_language").unwrap_or(""),
+                                        );
                                     }
                                     Err(e) => fatal = Some(e),
                                 }

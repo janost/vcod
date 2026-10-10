@@ -513,7 +513,7 @@ mod tests {
 
     fn ui() -> Option<(Ui, Localized)> {
         let fs = vcod_common::testing::game_fs()?;
-        Some((Ui::new(&fs), Localized::load(&fs)))
+        Some((Ui::new(&fs, "0"), Localized::load(&fs)))
     }
 
     /// Runs the console commands a menu asked for, as `main.rs` does.

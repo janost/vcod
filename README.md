@@ -64,7 +64,8 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
   In a game, Esc opens the script menu and its Main Menu tab the stock
   in-game main menu (Back to Game, Disconnect). The stock Mods menu lists
   the mod directories beside `main/` and switches to one, in a game too,
-  and the menus load from the mod's own `ui_mp/menus.txt`.
+  and the menus load from the mod's own `ui_mp/menus.txt` and
+  `ui_mp/ingame.txt`, each file tried under `cl_language`'s directory first.
 - The stock Options and Multiplayer Options screens: rebind keys, mouse
   sensitivity and invert, player name, rate, master volume, video mode and
   full screen. Choices land in the console's binds and cvars and persist in
@@ -147,7 +148,9 @@ for my test suite.
   sv_pure=1` checks each client's pak checksums the way a pure retail server
   does. `sv_minPing`/`sv_maxPing` refuse off-LAN clients by challenge ping,
   and an off-LAN client's messages wait out its rate and `snaps`. Big
-  messages, the gamestate included, go one fragment per frame.
+  messages, the gamestate included, go one fragment per frame, and a client
+  not yet in the world gets retail's bare keepalive (every frame on a LAN,
+  a second apart off it).
 - `--bots` adds bots that join through the stock menus and roam a nav graph
   built from pmove runs, ladders and jumps. They play the objectives: S&D
   plants and defuses, Retrieval carries and escorts, Behind Enemy Lines
