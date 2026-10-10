@@ -374,7 +374,12 @@ dropped, so test such a builtin through `ScriptRuntime`.
 - The script clock is not `level.time`: a thread due at a frame's
   `level.time` runs the frame after, so a `wait 1` from
   `Callback_StartGameType` at 0 wakes at 1050. Between frames the clock is
-  the last frame's `level.time`; `Vm::set_time` starts it at a load.
+  the last frame's `level.time`; `Vm::set_time` starts it at a load. It is
+  24-bit (`CLOCK_MASK`, wraps about 4.7 h into server uptime), and `wait`
+  refuses a negative wait and one of 16777 s or more.
+- A callback a cmd raises (damage, fall, `kill`) runs before the frame and
+  reads the last frame's `getTime()`; nothing on that path may advance
+  `host.level_time_ms`.
 - A thread's own `notify` doesn't fire its own `endon`.
 
 ### Assets, rendering, sound

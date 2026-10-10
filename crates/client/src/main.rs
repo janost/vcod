@@ -4,6 +4,7 @@ mod clock_probe;
 mod console;
 mod entities;
 mod entity_light;
+mod entity_material;
 mod frontend;
 mod fx;
 mod gamma;
@@ -3105,6 +3106,7 @@ impl ApplicationHandler for App {
                                         heads = built.heads;
                                         turret_eye = built.turret_eye;
                                         r.set_submodels(&built.submodels);
+                                        r.set_entity_lights(built.scene_lights);
                                         // Over 512 u is a teleport, not motion.
                                         let pos = if oa.distance(ob) > 512.0 {
                                             ob

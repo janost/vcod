@@ -1382,21 +1382,18 @@ mod tests {
             dead: false,
             takedamage: true,
         };
-        rt.deliver_hits(
-            vec![Hit {
-                victim: 0,
-                attacker: 1,
-                inflictor: None,
-                damage: 45,
-                dflags: 0,
-                mod_: "MOD_RIFLE_BULLET",
-                weapon: "m1carbine_mp".into(),
-                point: [0.0; 3],
-                dir: [1.0, 0.0, 0.0],
-                hitloc: "torso_upper",
-            }],
-            50,
-        );
+        rt.deliver_hits(vec![Hit {
+            victim: 0,
+            attacker: 1,
+            inflictor: None,
+            damage: 45,
+            dflags: 0,
+            mod_: "MOD_RIFLE_BULLET",
+            weapon: "m1carbine_mp".into(),
+            point: [0.0; 3],
+            dir: [1.0, 0.0, 0.0],
+            hitloc: "torso_upper",
+        }]);
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
         assert_eq!(rt.client_field(0, "buried").as_deref(), Some("yes"));
     }

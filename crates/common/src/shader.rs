@@ -87,6 +87,12 @@ pub enum RgbGen {
     Const([f32; 3]),
     ConstLighting([f32; 3]),
     Wave(Wave),
+    /// `lightingDiffuse` (gen 10) and `lightingAmbient` (gen 9): GL lighting
+    /// from the light grid, model skins only (cod11-light-grid-and-leaf-lights.md,
+    /// section 13).
+    LightingDiffuse,
+    /// `lightingPrecalc` (gen 0xb): the entity's `shaderRGBA` on a model.
+    LightingPrecalc,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -961,6 +967,14 @@ fn apply_gen(
         }
         "identitylighting" if rgb => {
             sb.rgb_gen = Some(RgbGen::IdentityLighting);
+            1
+        }
+        "lightingdiffuse" | "lightingambient" if rgb => {
+            sb.rgb_gen = Some(RgbGen::LightingDiffuse);
+            1
+        }
+        "lightingprecalc" if rgb => {
+            sb.rgb_gen = Some(RgbGen::LightingPrecalc);
             1
         }
         "const" | "constant" | "constlighting" if rgb => {

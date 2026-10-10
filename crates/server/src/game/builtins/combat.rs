@@ -914,7 +914,7 @@ mod tests {
                 dead: false,
                 takedamage: true,
             };
-            rt.deliver_hits(vec![hit(53)], 50);
+            rt.deliver_hits(vec![hit(53)]);
         }
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
         assert_eq!(
@@ -940,7 +940,7 @@ mod tests {
             dead: false,
             takedamage: true,
         };
-        rt.deliver_hits(vec![hit(45)], 50);
+        rt.deliver_hits(vec![hit(45)]);
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
         assert_eq!(rt.client_field(0, "seen").as_deref(), Some("dead"));
         assert_eq!(
@@ -983,7 +983,7 @@ mod tests {
             dead: false,
             takedamage: true,
         };
-        rt.deliver_hits(vec![hit(67)], 50);
+        rt.deliver_hits(vec![hit(67)]);
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
         assert_eq!(rt.client_vitals(0).health, 33);
         assert!(!rt.client_vitals(0).dead);
@@ -996,10 +996,10 @@ mod tests {
         let ops = rt.take_sim_ops();
         assert!(matches!(ops[0].1, SimOp::Damaged { fatal: false, .. }));
 
-        rt.deliver_hits(vec![hit(67)], 100);
+        rt.deliver_hits(vec![hit(67)]);
         assert!(rt.client_vitals(0).dead);
         assert_eq!(rt.client_vitals(0).health, 0);
-        rt.deliver_hits(vec![hit(67)], 100);
+        rt.deliver_hits(vec![hit(67)]);
         assert_eq!(rt.client_vitals(0).health, -67);
         let ops = rt.take_sim_ops();
         assert!(matches!(
@@ -1009,12 +1009,12 @@ mod tests {
                 (_, SimOp::Damaged { fatal: false, .. })
             ]
         ));
-        rt.deliver_hits(vec![hit(2000)], 100);
+        rt.deliver_hits(vec![hit(2000)]);
         assert_eq!(rt.client_vitals(0).health, -999, "clamped");
         rt.take_sim_ops();
         // The dead arm of its end frame.
         rt.set_client_takedamage(0, false);
-        rt.deliver_hits(vec![hit(67)], 150);
+        rt.deliver_hits(vec![hit(67)]);
         assert!(rt.take_sim_ops().is_empty(), "nothing reached it");
         assert_eq!(rt.client_vitals(0).health, -999);
     }
