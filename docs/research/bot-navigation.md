@@ -482,6 +482,11 @@ floors). Nodes and edges move only where a walk came to rest perched:
 14147 / 96389 to 14139 / 96255; the other eight are identical. Build
 times moved within the load noise (`mp_ship` 3693 to 3320 ms).
 
+No leap from a ladder head (2026-10-10; section 2, "Jumps"). VERIFIED
+(measured): `mp_ship` 14139 / 96255 to 14139 / 96254, its leaps 138 to
+137; `nav_census` passes at the floors on all twelve maps. I did not
+count the other maps' edges.
+
 - VERIFIED (measured): an early single-threaded build of `mp_carentan`, before
   the diagonal shortcut and the stall cutoff, took 10.6 s. `perf` puts 80% of
   the build in `CollisionWorld::trace_node`.
