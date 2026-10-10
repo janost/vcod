@@ -2,6 +2,7 @@
 //! the players and items on it and in its way
 //! (docs/research/cod11-movers.md, section 12).
 
+use crate::area::Link;
 use crate::game::host::GameHost;
 use crate::game::mover::Step;
 use crate::spectate::ClientSim;
@@ -59,12 +60,13 @@ pub fn push(
         .listed
         .iter()
         .filter_map(|&n| {
+            let link = host.area.last_link(n);
             if let Some(i) = sims.iter().position(|(s, _)| *s as u32 == n) {
-                return listed_client(step, sims[i].1, world).then_some(Kept::Client(i));
+                return listed_client(step, sims[i].1, link, world).then_some(Kept::Client(i));
             }
             let id = host.ents.handle(n)?;
             let body = crate::game::item::push_body(host, cx, id)?;
-            item_in_way(step, &body, world).then_some(Kept::Item(id, body))
+            item_in_way(step, &body, link, world).then_some(Kept::Item(id, body))
         })
         .collect();
     let number = |k: &Kept, sims: &[(usize, &mut ClientSim)]| match k {
@@ -179,24 +181,36 @@ fn undo(host: &mut GameHost, cx: &mut Cx, sims: &mut [(usize, &mut ClientSim)], 
     }
 }
 
+/// `G_MoverPush`'s box test (0x5540e..0x5548f): a listed entity whose link
+/// box misses the pusher's moved box is dropped before its trace. Boxes that
+/// only touch miss.
+fn overlaps_moved(step: &Step, link: Option<Link>) -> bool {
+    let (Some((mins, maxs)), Some(l)) = (step.moved_box, link) else {
+        return false;
+    };
+    (0..3).all(|i| l.absmin[i] < maxs[i] && l.absmax[i] > mins[i])
+}
+
 /// Whether `G_MoverPush` keeps a listed player: one standing on the mover,
-/// or one whose box the mover's brushes now overlap (0x55405, 0x554ee).
-fn listed_client(step: &Step, sim: &ClientSim, world: &CollisionWorld) -> bool {
+/// or one whose box the mover's brushes now overlap (0x55405, 0x5540e,
+/// 0x554ee).
+fn listed_client(step: &Step, sim: &ClientSim, link: Option<Link>, world: &CollisionWorld) -> bool {
     if !sim.linked() || sim.contents & CONTENTS_BODY == 0 || sim.link_to.is_some() {
         return false;
     }
     let o = sim.ps.origin;
     sim.ps.ground_entity_num() == step.number
-        || world
-            .model_box_trace(
-                step.model,
-                o,
-                o,
-                sim.ps.mins(),
-                sim.ps.maxs(),
-                MASK_PLAYERSOLID,
-            )
-            .startsolid
+        || overlaps_moved(step, link)
+            && world
+                .model_box_trace(
+                    step.model,
+                    o,
+                    o,
+                    sim.ps.mins(),
+                    sim.ps.maxs(),
+                    MASK_PLAYERSOLID,
+                )
+                .startsolid
 }
 
 /// Where the mover's move and turn take a point: moved, then turned about the
@@ -241,13 +255,15 @@ pub enum ItemPush {
 }
 
 /// `G_MoverPush`'s test for one listed item: it stands on the mover, or its
-/// box at its origin meets the mover's brushes under its own push mask.
-pub fn item_in_way(step: &Step, item: &ItemBody, world: &CollisionWorld) -> bool {
+/// link box overlaps the mover's moved box and its box at its origin meets
+/// the mover's brushes under its own push mask.
+fn item_in_way(step: &Step, item: &ItemBody, link: Option<Link>, world: &CollisionWorld) -> bool {
     let here = item.origin;
     item.ground == step.number as i32
-        || world
-            .model_box_trace(step.model, here, here, item.mins, item.maxs, item.mask)
-            .startsolid
+        || overlaps_moved(step, link)
+            && world
+                .model_box_trace(step.model, here, here, item.mins, item.maxs, item.mask)
+                .startsolid
 }
 
 /// `G_TryPushingEntity` for an item in the way: `None` when it fits
@@ -343,4 +359,46 @@ fn try_push(
         }
     }
     clear(here).then_some(Fit::Stays)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn step(moved: (Vec3, Vec3)) -> Step {
+        Step {
+            ent: vcod_gsc::EntId(100, 0),
+            number: 100,
+            model: 1,
+            from: (Vec3::ZERO, Vec3::ZERO),
+            to: (Vec3::X, Vec3::ZERO),
+            listed: vec![1],
+            moved_box: Some(moved),
+        }
+    }
+
+    /// `G_MoverPush` skips a listed entity whose link box only touches the
+    /// pusher's moved box (`absmin >= maxs` or `absmax <= mins` on any axis,
+    /// 0x5540e..0x5548f), and keeps one that overlaps it by any amount.
+    #[test]
+    fn the_box_test_drops_a_box_that_only_touches() {
+        let s = step((Vec3::new(0.0, 0.0, 0.0), Vec3::new(64.0, 64.0, 8.0)));
+        let player = |x: f32| {
+            Some(Link::boxed(
+                [x, 32.0, 8.0],
+                [-15.0, -15.0, 0.0],
+                [15.0, 15.0, 70.0],
+                0x2000000,
+            ))
+        };
+        // absmin.x = 80 - 15 - 1 = 64: touching the max face.
+        assert!(!overlaps_moved(&s, player(80.0)));
+        assert!(overlaps_moved(&s, player(79.9)));
+        // absmax.x = -16 + 15 + 1 = 0: touching the min face.
+        assert!(!overlaps_moved(&s, player(-16.0)));
+        assert!(overlaps_moved(&s, player(-15.9)));
+        // Standing on the top face: absmin.z = 8 + 0 - 1 = 7 overlaps.
+        assert!(overlaps_moved(&s, player(32.0)));
+        assert!(!overlaps_moved(&s, None));
+    }
 }

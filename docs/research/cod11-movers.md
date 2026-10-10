@@ -429,10 +429,81 @@ is never `startsolid` under terrain and without the sweep the lowered slab
 pushed the player through the ground. VERIFIED, vcod measurement against
 the same fixture: a capsule candidate test met the plank 4.8 units of slab
 travel later than retail's box did. The residual yaw is not
-modelled, and the `TR_SINE` crush has no verb that reaches it.
+modelled, and neither is the `TR_SINE` crush (below).
 `crates/server/tests/ride_ab.rs` is the gate for players,
 `crates/server/tests/push_ab.rs` for items and
 `crates/server/tests/push_order_ab.rs` for the tree order.
+
+### The box test
+
+VERIFIED, `0x550f0`..`0x5530a`: besides the list box the function keeps a
+second box, the pusher's box where the move takes it. Unrotated, it is
+`r.absmin + move` and `r.absmax + move` (`0x55260`..`0x5527c`, stored at
+`ebp-0xc` and `ebp-0x18`); otherwise `r.currentOrigin + move` less and plus
+the `RadiusFromBounds` radius (`0x551d0`..`0x551f0`, same slots). Both are
+taken before the pusher moves and relinks.
+
+VERIFIED, `0x5540e`..`0x5548f`, after the ground test and before the trace:
+a listed entity is dropped when, on any axis, its `r.absmin` (`+0x11c`) is
+not below the moved box's max (`fcomp`, `and ah,0x45`, `dec ah`,
+`cmp ah,0x40`, `jb` to the loop's `continue` at `0x55532`) or its `r.absmax`
+(`+0x128`) is not above the moved box's min (`and ah,0x5`, `je` to the same
+place). INFERRED: Q3's `G_MoverPush` test, boxes that only touch missing.
+INFERRED: both are link boxes grown a unit a side (`SV_LinkEntity`,
+`Link::boxed` in `crates/server/src/area.rs`), so the test never drops an
+entity the pusher's brushes overlap; it only saves traces.
+
+vcod: `mover::push_boxes` keeps the moved box on `Step::moved_box`, and
+`crate::push` runs the test off each listed entity's last link box between
+the ground test and the trace, for players and items alike.
+`push::tests::the_box_test_drops_a_box_that_only_touches` pins the
+comparisons; with the test forced to drop everything,
+`push_order_ab` fails, so it is on the path the gates run.
+
+### `TR_SINE` and the crush arm
+
+VERIFIED, every immediate store `mov DWORD PTR [reg+0xc],0x4` or
+`[reg+0x30],0x4` in game.mp's `.text` (an `objdump` scan): two, `SP_func_pendulum` writing
+`apos.trType` at `0x57110` and `SP_func_bobbing` writing `pos.trType` at
+`0x584c4`. VERIFIED, a scan of every `.bsp` and `.gsc` in the 1.1 install's
+`pak*.pk3`, single-player maps included: none contains `func_bobbing` or
+`func_pendulum`. VERIFIED, script reaches both anyway: `spawn(classname,
+origin)` (`0x5d268`) calls `G_CallSpawnEntity` (`0x5d2f1`), which walks the
+`spawns` table (`0x61861`), and both classnames are in it
+(`docs/research/cod11-gsc-object-model.md` 8).
+
+VERIFIED, off two retail runs of `client-probes/probe_sine.gsc` (mp_carentan,
+no client, 2026-10-10): `spawn("func_bobbing", (0, 0, 100))` returns a live
+entity with `.model` `""`, and its `origin` swings as `32 sin(2 pi t / 4000)`
+about z 0 (31.90 at 1100, -31.90 at 3100), the spawn origin unused; the
+`func_pendulum` beside it swings its roll (18.85 at 1100). Spawned at 1050
+in one run and 2050 in the other, the server went down both times on the
+frame after the 4000 line with `ERROR: Reached_BinaryMover: bad moverState`.
+
+VERIFIED: `InitMover` stores `Reached_BinaryMover` at `ent+0x204`
+(`0x565da`), and `G_MoverTeam`, for each team part, calls `ent+0x204` when
+`pos.trType` is not 0 and `level.time >= pos.trTime + pos.trDuration`
+(`0x558a0`..`0x558c2`), the same for `apos` (`0x558c7`..`0x558e9`).
+INFERRED: a bobbing's `pos.trTime` is its phase times its period, 0 by
+default, so `Reached_BinaryMover` sees a mover state no `SP_func_bobbing`
+set and drops the map once the level clock passes one period; a bobbing
+spawned later than that drops it on its first entity pass.
+
+VERIFIED, `cod_lnxded` syscall 0x21 (`trap_SetBrushModel`, game.mp
+`0x63724`), the case at `0x8088360` off the switch table at `0x80d4eac`:
+it reads the inline model number at `ent+0x8c`, writes `r.mins`/`r.maxs`
+from its bounds, `r.bmodel` 1 (`+0xfc`) and `r.contents` -1 (`+0x118`),
+then links. INFERRED: a script-spawned bobbing has no `*N` key and carries
+inline model 0, so before the drop it is a moving copy of the world's
+brushes; whether it pushes or crushes anything in that window is not
+measured.
+
+INFERRED, then: the crush arm (`0x555f0`..`0x55617`) is reachable only
+through an entity that drops the server within one period of the level
+clock, from a classname no stock map or script uses. vcod spawns
+`func_bobbing` and `func_pendulum` as inert entities
+(`crate::game::spawn::SPAWN_CLASSNAMES`) and models neither the sine
+movers, the drop nor the crush.
 
 ## 13. A player linked to a mover
 
