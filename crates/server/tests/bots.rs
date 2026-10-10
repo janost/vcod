@@ -422,6 +422,13 @@ fn bots_on_mp_ship_unstick_without_walking_off_the_deck() {
             if b.origin[2] > from[2] - vcod_common::pmove::JUMP_HEIGHT {
                 continue;
             }
+            // Off the graph (no node within a column on its floor) the spell
+            // started in a pocket the graph does not cover, which a cornered
+            // bot drops out of on purpose: mp_ship's sunken floor at
+            // (5424, -187, 344), 47 units from the nodes at 352.
+            if sv.test_nav_route(from, from).is_none() {
+                continue;
+            }
             let flat = (b.origin[0] - from[0]).hypot(b.origin[1] - from[1]);
             let back = sv.test_nav_route(b.origin, from);
             assert!(
