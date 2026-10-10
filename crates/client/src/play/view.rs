@@ -1,6 +1,7 @@
 //! The playing client's own first-person weapon: the rig for `ps.weapon`
 //! with the hands `ps.viewmodelIndex` names, posed from `ps.weapAnim`.
 
+use super::quake::{Quake, Quakes};
 use super::recoil::{self, Recoil};
 use crate::hud::scope;
 use crate::renderer::VmDraw;
@@ -9,6 +10,7 @@ use glam::{Mat4, Vec3};
 use vcod_common::net::msg;
 use vcod_common::net::protocol::{CS_MODELS_V1, ENTITYNUM_NONE, Protocol};
 use vcod_common::pk3::Pk3Fs;
+use vcod_common::pmove::aim;
 use vcod_common::pmove::predict::Predicted;
 use vcod_common::pmove::weapon::NUM_AMMO;
 use vcod_common::weapon::{self, SightDirection, ViewAnimClock, WeaponAnim, WeaponDef};
@@ -20,6 +22,8 @@ pub struct ViewPs {
     pub viewmodel_index: i32,
     pub weap_anim: i32,
     pub ads_frac: f32,
+    /// `leanf`, -1 (left) to 1 (right).
+    pub lean: f32,
     pub ammoclip: [i16; NUM_AMMO],
     pub velocity: Vec3,
     pub on_ground: bool,
@@ -45,6 +49,7 @@ impl ViewPs {
             viewmodel_index,
             weap_anim: pred.ps.weap_anim,
             ads_frac: pred.ps.weapon_pos_frac,
+            lean: pred.ps.lean,
             ammoclip: pred.ps.ammoclip,
             velocity: pred.ps.velocity,
             on_ground: pred.ps.on_ground,
@@ -62,6 +67,7 @@ impl ViewPs {
             viewmodel_index: ps.field_i32(p, "viewmodelIndex"),
             weap_anim: ps.field_i32(p, "weapAnim"),
             ads_frac: f("fWeaponPosFrac"),
+            lean: f("leanf"),
             ammoclip: ps.arrays.ammoclip,
             velocity: Vec3::new(f("velocity[0]"), f("velocity[1]"), f("velocity[2]")),
             on_ground: ps.field_i32(p, "groundEntityNum") as u32 != ENTITYNUM_NONE,
@@ -172,6 +178,28 @@ fn clip_time(anim: WeaponAnim, ms: f64, frac: f32, clip_secs: f32) -> (f32, bool
     }
 }
 
+/// The lean's own term in the viewmodel's position (cgame `0x30036990`,
+/// combat doc 15.5): `(1 - fWeaponPosFrac) * f * 1.6` units along the right
+/// vector of `(0, 0, f * -2)`, `f` being `GetLeanFraction(leanf)`. View
+/// space, X right and Y up.
+fn lean_offset(leanf: f32, frac: f32) -> Vec3 {
+    if leanf == 0.0 || frac >= 1.0 {
+        return Vec3::ZERO;
+    }
+    let f = aim::lean_fraction(leanf);
+    let d = (1.0 - frac) * f * 1.6;
+    // `AngleVectors`' right of a pure roll is (0, -cos, -sin) in
+    // (forward, left, up).
+    let (sr, cr) = (f * -2.0).to_radians().sin_cos();
+    Vec3::new(cr * d, -sr * d, 0.0)
+}
+
+/// The lean's roll on the gun, wire degrees: `BG_CalculateWeaponAngles`'
+/// first term (cgame `0x30012c01`-`0x30012c37`), sighted or not.
+fn lean_roll(leanf: f32) -> f32 {
+    -2.0 * aim::lean_fraction(leanf)
+}
+
 #[derive(Default)]
 pub struct OnlineView {
     /// What the current rig was built for; `Some` with no rig when that
@@ -194,6 +222,7 @@ pub struct OnlineView {
     spawn: Option<(i32, i32)>,
     /// `now_ms` of the last frame, whole milliseconds.
     last_ms: Option<i64>,
+    quakes: Quakes,
 }
 
 impl OnlineView {
@@ -274,6 +303,18 @@ impl OnlineView {
     pub fn new_gamestate(&mut self) {
         self.spawn = None;
         self.recoil.reset();
+        self.quakes.reset();
+    }
+
+    /// An `EV_EARTHQUAKE` or `EV_FIRE_WEAPON_MG42` arrived (`play::quake`);
+    /// `now_ms` is the render clock, `eye` the drawn view's.
+    pub fn start_quake(&mut self, q: Quake, now_ms: i32, eye: Vec3) {
+        self.quakes.start(q, now_ms, eye);
+    }
+
+    /// The quake shake on this frame's view, wire degrees.
+    pub fn shake(&mut self, now_ms: i32, eye: Vec3) -> [f32; 3] {
+        self.quakes.shake(now_ms, eye)
     }
 
     /// The view kick for the cmd angles and the drawn view, degrees, wire
@@ -384,11 +425,14 @@ impl OnlineView {
         };
         self.motion
             .update(dt, ground_speed, ps.on_ground, mouse.0, mouse.1, damp);
-        // The gun spring turns the gun about the eye: wire pitch is nose
-        // down, wire yaw to the left.
+        // The gun spring and the lean roll turn the gun about the eye, in
+        // `AnglesToAxis` order: wire pitch is nose down, wire yaw to the
+        // left, wire roll right side down.
         let [kick_pitch, kick_yaw] = self.recoil.gun_kick();
-        let transform = Mat4::from_rotation_y(kick_yaw.to_radians())
+        let transform = Mat4::from_translation(lean_offset(ps.lean, frac))
+            * Mat4::from_rotation_y(kick_yaw.to_radians())
             * Mat4::from_rotation_x(-kick_pitch.to_radians())
+            * Mat4::from_rotation_z(-lean_roll(ps.lean).to_radians())
             * self.motion.transform();
         self.flash = w.skeleton.bone_index("tag_flash").map(|bi| {
             let (pos, rot) = w.pose.bone_world(&w.skeleton, bi);
@@ -446,6 +490,7 @@ mod tests {
             viewmodel_index,
             weap_anim: 0,
             ads_frac: 0.0,
+            lean: 0.0,
             ammoclip: [0; NUM_AMMO],
             velocity: Vec3::ZERO,
             on_ground: true,
@@ -548,6 +593,25 @@ mod tests {
         kicked(&mut view);
         view.new_gamestate();
         assert_eq!(view.view_kick(), [0.0; 3], "map load");
+    }
+
+    /// A full lean right moves the gun 1.6 units right and a little up at
+    /// the hip and rolls it 2 degrees; the sight takes the offset away but
+    /// not the roll.
+    #[test]
+    fn the_lean_moves_and_rolls_the_gun() {
+        let at_hip = lean_offset(1.0, 0.0);
+        assert!((at_hip.x - 1.6 * 2f32.to_radians().cos()).abs() < 1e-6);
+        assert!((at_hip.y - 1.6 * 2f32.to_radians().sin()).abs() < 1e-6);
+        assert_eq!(at_hip.z, 0.0);
+        let left = lean_offset(-1.0, 0.0);
+        assert!((left.x + at_hip.x).abs() < 1e-6 && (left.y - at_hip.y).abs() < 1e-6);
+        // GetLeanFraction(0.5) = 0.75, halved again by the sight.
+        assert!((lean_offset(0.5, 0.5).x - 0.6 * 1.5f32.to_radians().cos()).abs() < 1e-6);
+        assert_eq!(lean_offset(1.0, 1.0), Vec3::ZERO);
+        assert_eq!(lean_offset(0.0, 0.0), Vec3::ZERO);
+        assert_eq!(lean_roll(1.0), -2.0);
+        assert_eq!(lean_roll(-0.5), 1.5);
     }
 
     #[test]

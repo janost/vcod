@@ -526,21 +526,32 @@ fn weapon_angles(
 /// `BG_CalculateViewAngles` (`0x3a930`): the damage kick on the view
 /// (`0x3a2d4`), 100 ms up and 400 down, halved down the sight except on a
 /// scope, and the sight's own walk bob (`0x3a3c4`) by `adsViewBobMult`.
-fn view_angles(ps: &PlayerState, def: &WeaponDef, input: &AimInput, spd: f32) -> [f32; 3] {
+/// The cgame adds the same two to the drawn view (`0x30012cb0` and
+/// `0x30012dc0`, combat doc 15.5). Degrees, wire convention; `def` is
+/// `ps.weapon`'s file, `None` reading as one with neither key set.
+pub fn view_angles(
+    ps: &PlayerState,
+    def: Option<&WeaponDef>,
+    kick: &DamageKick,
+    now_ms: i32,
+) -> [f32; 3] {
     let mut out = [0.0f32; 3];
     let frac = ps.weapon_pos_frac;
-    let kick = &input.kick;
     if kick.time_ms != 0 {
         let mut f = 1.0 - frac * 0.5;
-        if frac > 0.0 && def.aim.ads_overlay_reticle {
+        if frac > 0.0 && def.is_some_and(|d| d.aim.ads_overlay_reticle) {
             f *= frac * 0.5 + 1.0;
         }
-        if let Some(g) = kick_envelope(input.now_ms - kick.time_ms, 100.0, 400.0) {
+        if let Some(g) = kick_envelope(now_ms - kick.time_ms, 100.0, 400.0) {
             out[0] += g * f * kick.pitch;
             out[2] += g * f * kick.side;
         }
     }
+    let Some(def) = def else {
+        return out;
+    };
     if frac != 0.0 && def.ads_view_bob_mult != 0.0 {
+        let spd = speed(ps);
         let cycle = bob_cycle(ps, false);
         let a = (spd * bob_stance_mult(ps)).min(45.0);
         let k = frac * def.ads_view_bob_mult;
@@ -608,7 +619,7 @@ pub fn aim_angles(ps: &PlayerState, st: &mut AimState, input: &AimInput) -> [f32
     let Some(def) = input.def else {
         return [input.view[0], input.view[1]];
     };
-    let vk = view_angles(ps, def, input, speed(ps));
+    let vk = view_angles(ps, Some(def), &input.kick, input.now_ms);
     let mut aim = input.view;
     for (a, v) in aim.iter_mut().zip(&vk) {
         *a += v;
@@ -792,5 +803,32 @@ mod tests {
         };
         assert_eq!(aim_angles(&ps, &mut st, &input), [5.0, 6.0]);
         assert_eq!(st, AimState::default());
+    }
+
+    /// The view kick eases up over 100 ms and down over 400, in full at the
+    /// hip, halved down an iron sight and three quarters down a scope.
+    #[test]
+    fn the_view_kick_envelope_and_sight_factors() {
+        let kick = DamageKick {
+            time_ms: 1000,
+            pitch: -10.0,
+            side: 4.0,
+        };
+        let hip = still(0.0);
+        let at = |ps: &PlayerState, def: Option<&WeaponDef>, t: i32| view_angles(ps, def, &kick, t);
+        assert_eq!(at(&hip, None, 1000), [0.0; 3]);
+        // GetLeanFraction(0.5) = 0.75 halfway up.
+        assert_eq!(at(&hip, None, 1050), [-7.5, 0.0, 3.0]);
+        assert_eq!(at(&hip, None, 1100), [-10.0, 0.0, 4.0]);
+        // Halfway down: 1 - GetLeanFraction(0.5).
+        assert_eq!(at(&hip, None, 1300), [-2.5, 0.0, 1.0]);
+        assert_eq!(at(&hip, None, 1500), [0.0; 3]);
+        assert_eq!(at(&hip, None, 9000), [0.0; 3]);
+        let sighted = still(1.0);
+        assert_eq!(at(&sighted, None, 1100), [-5.0, 0.0, 2.0]);
+        let scope = sniper();
+        assert_eq!(at(&sighted, Some(&scope), 1100), [-7.5, 0.0, 3.0]);
+        let never = DamageKick::default();
+        assert_eq!(view_angles(&hip, None, &never, 50), [0.0; 3]);
     }
 }
