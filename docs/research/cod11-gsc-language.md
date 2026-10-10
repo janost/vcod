@@ -642,8 +642,77 @@ a `wait 0` at 100, and a `wait 0.05` loop logs 100, 200, 200, 300, 300,
 
 vcod's `Vm::run_frame` walks the clock the same way and `Vm::set_time` is
 `Scr_InitSystem`; `ScriptRuntime::load_from` sets it to the load's
-`level.time` before the gametype's `main`. Neither the 24-bit wrap
-(about 4.7 hours of `level.time`) nor the 16777 s cap is modelled.
+`level.time` before the gametype's `main`.
+
+**The clock is 24-bit.** Every store to it is masked:
+
+- VERIFIED: `Scr_InitSystem` (`cod_lnxded` 0x80a97ec) stores
+  `arg & 0xffffff` (`and` at 0x80a9822). `Scr_SetTime` (0x80aa3d0) masks
+  its argument first (0x80aa3da), and its walk masks each step
+  (`inc`/`and $0xffffff` at 0x80aa451..0x80aa457).
+- VERIFIED: the `wait` opcode adds the clock to the rounded milliseconds at
+  0x80a4e15..0x80a4e1b and clears the sum's high byte (`movb $0x0,
+  -0x39(%ebp)` at 0x80a4e1e, the top byte of the int at `-0x3c`), so a
+  deadline is 24-bit too. The rounding is `(seconds * 1000.0f + 0.5f)`
+  (0x80a4ded, 0x80a4df3; floats at 0x80d7fe8 and 0x80d7fec) stored by
+  `fistpl` under a truncating control word (`or $0xc00` at 0x80a4e03).
+- VERIFIED: `Scr_SetTime` subtracts the clock from the masked target and
+  takes the `jle` at 0x80aa3ea when the difference is not positive: it
+  then stores the target as the clock (0x80aa462) and runs nothing.
+- VERIFIED: the two refusals come before the rounding. A wait that is
+  negative or unordered against 0 (`fcom`, `and $0x5,%ah`, `jne` at
+  0x80a4dc6..0x80a4dd3) errors with `negative wait of %g is not allowed`
+  (0x80d7c80); otherwise one not below 16777.0 (`fcoms 0x80d7fe4`,
+  `and $0x45,%ah; cmp $0x1,%ah` at 0x80a4dd9..0x80a4de7) errors with `wait
+  of %.0f seconds is too long` (0x80d7c40). Both go through the
+  runtime-error path at 0x80aa158, which on retail ends the server.
+- VERIFIED: `svs.time` (0x83b67a4) has no store in `cod_lnxded` other than
+  the `addl $0x64` settle steps (0x8083f40, 0x808a650) and the frame loop's
+  `add` (0x808d1ab), and a load hands it to `G_InitGame` as `level.time`
+  (`cod11-map-cycle.md` 3, step 19). INFERRED from those: `level.time`
+  carries across map changes for the life of the server process, so the
+  wrap comes 16,777,216 ms (about 4.7 hours) into a server's uptime, not
+  into one level. The engine's own time-wrap restart
+  (`EXE_SERVERRESTARTTIMEWRAP`, 0x80d5c8d) tests `svs.time > 0x70000000`
+  (0x808ced4), far later.
+
+INFERRED from those: on the frame whose `level.time` crosses a multiple of
+2^24, the masked target is behind the clock, so `Scr_SetTime` jumps the
+clock there and runs only what `Scr_RunCurrentThreads` ran, the queue of
+the clock's own millisecond. A thread due between the old clock and 2^24,
+or below the new masked target, is not run until a later walk crosses its
+due time again, about 4.7 hours on. A thread due on the target itself runs
+the next frame as usual, and every later deadline counts on the wrapped
+clock. `getTime` is unaffected: it reads `level.time`, not the clock.
+
+vcod's `Vm` keeps the clock and every deadline under `CLOCK_MASK`, and
+`run_frame` picks a waiting thread only when it is due on the clock or
+strictly between the clock and the masked target, which is the jump above.
+The `Wait` opcode refuses a negative (or NaN) wait and one of 16777 s or
+more with retail's two messages; as with every runtime error (section 10),
+ours aborts the thread where retail ends the server.
+
+**`getTime` in a callback a cmd raises reads the last frame's
+`level.time`.** VERIFIED (`client-probes/probe_fall`, retail on
+`mp_carentan`, 2026-10-06, `crates/server/tests/fixtures/playerstate/
+mp_carentan-dm-fall-damage.txt`): every `PROBE damage <t>` line the wrapped
+damage callback logged names a `t` whose snapshot still carries the health
+the callback found (`t=19650 ... health=100` against `PROBE damage 19650
+... health 100`), and the snapshot 50 ms later is the first with the health
+it left (`t=19700 ... health=77`, `ct=19683`). The same holds for all five
+landings in that capture and in the `-cvars`, `-corpse` and
+`-walk-corpse` captures. INFERRED, off that and the packet order in
+`cod11-combat.md` 16.1: `ClientThink_real` runs the landing cmd between
+`G_RunFrame`s, and `getTime` (`level.time`) still reads the frame before.
+A shot's, a `trigger_hurt`'s and a `kill` command's callbacks run from the
+same place, so they read it too; a blast's (entity pass) and a turret
+round's (`ClientEndFrame`) run inside the frame and read that frame's.
+
+vcod runs a cmd's callbacks inside `Server::replay_moves`, after the tick
+has advanced its own clock, so `ScriptRuntime` leaves `host.level_time_ms`
+on the last frame's value until `run_threads` writes the new one; nothing
+on the callback path sets it. `fall_ab`'s `check_damage_clock` holds both
+sides to the snapshot rule above.
 
 **A receiver-less call keeps the caller's `self`, VERIFIED (`probe_self`).**
 A plain `f()`, a `[[ptr]]()` and a `thread f()` all inherit the calling

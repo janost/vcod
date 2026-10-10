@@ -60,6 +60,10 @@ pub(crate) enum Suspend {
     },
 }
 
+/// The first `wait` retail refuses as too long (`cod_lnxded` 0x80d7fe4): a
+/// longer one would overrun the 24-bit script clock.
+const MAX_WAIT_SECONDS: f32 = 16777.0;
+
 /// Converts an Int or Float value to `f32`; any other value has no numeric
 /// reading.
 fn to_f32(v: Value) -> Option<f32> {
@@ -944,6 +948,22 @@ impl Vm {
                     let s = pop!();
                     let seconds = to_f32(s)
                         .ok_or_else(|| err(ErrorKind::BadType("wait needs a number of seconds")))?;
+                    // Retail's two refusals, in its order: a negative wait
+                    // (NaN included), then one the 24-bit clock cannot
+                    // hold (docs/research/cod11-gsc-language.md, "The
+                    // script clock").
+                    if seconds.is_nan() || seconds < 0.0 {
+                        return Err(err(ErrorKind::Custom(format!(
+                            "negative wait of {} is not allowed",
+                            crate::value::format_g(seconds)
+                        ))));
+                    }
+                    if seconds >= MAX_WAIT_SECONDS {
+                        return Err(err(ErrorKind::Custom(format!(
+                            "wait of {:.0} seconds is too long",
+                            seconds
+                        ))));
+                    }
                     return Ok(Step::Suspend(Suspend::Wait { seconds }));
                 }
                 Op::WaitTill { binds } => {

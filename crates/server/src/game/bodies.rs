@@ -71,8 +71,8 @@ const PLACE_FIELDS: [&str; 14] = [
 pub struct Body {
     pub state: EntityState,
     pub born_ms: i32,
-    /// The client slot the body was cloned from, taken by the one
-    /// `refresh_newborn` the frame it was born.
+    /// The client slot the body was cloned from, taken by the first
+    /// `refresh_newborn` after its birth.
     source: Option<usize>,
 }
 
@@ -99,9 +99,9 @@ impl BodyQueue {
 
     /// Clones the dying player's entity state into the next slot and returns
     /// the body's entity number. `source` is the client slot the server
-    /// refreshes the body from once, at the build of the frame it was born,
-    /// so a death animation the script raised after this call still lands on
-    /// the corpse.
+    /// refreshes the body from once, at the first snapshot build after its
+    /// birth, so a death animation the script raised after this call still
+    /// lands on the corpse.
     pub fn push(
         &mut self,
         state: EntityState,
@@ -122,26 +122,24 @@ impl BodyQueue {
         number
     }
 
-    /// Re-reads every body born this frame from its source client's sim,
-    /// keeping the place and facing it was cloned with.
+    /// Re-reads every body born since the last call from its source
+    /// client's sim, keeping the place and facing it was cloned with. A
+    /// body cloned inside a cmd's callback was born on the last frame's
+    /// `level.time`, so the source, not the stamp, marks it new.
     pub fn refresh_newborn(
         &mut self,
-        now_ms: i32,
         mut from_sim: impl FnMut(usize) -> Option<EntityState>,
         collision: Option<&CollisionWorld>,
         p: &Protocol,
     ) {
         for (i, slot) in self.slots.iter_mut().enumerate() {
             let Some(body) = slot else { continue };
-            if body.born_ms != now_ms {
-                continue;
-            }
             if let Some(fresh) = body.source.take().and_then(&mut from_sim) {
                 let mut state = clone_of(
                     &fresh,
                     BODY_FIRST + i as u32,
                     self.toggles[i],
-                    now_ms,
+                    body.born_ms,
                     collision,
                     p,
                 );
@@ -370,9 +368,9 @@ mod tests {
         assert_eq!(first & EFLAGS_CORPSE_FRESH, EFLAGS_CORPSE_FRESH);
     }
 
-    /// A body born this frame is re-read from its source client's sim once,
-    /// so a death animation raised after the clone still reaches the wire.
-    /// A body born earlier is left alone.
+    /// A new body is re-read from its source client's sim once, so a death
+    /// animation raised after the clone still reaches the wire. A body
+    /// already refreshed is left alone.
     #[test]
     fn refresh_newborn_takes_the_sims_anims_once() {
         let p = &PROTOCOL_V1;
@@ -382,7 +380,7 @@ mod tests {
         fresh.fields[EntityState::field_index(p, "legsAnim").unwrap()] = 18;
         let number = q.entities().next().unwrap().0;
 
-        q.refresh_newborn(1000, |slot| (slot == 4).then(|| fresh.clone()), None, p);
+        q.refresh_newborn(|slot| (slot == 4).then(|| fresh.clone()), None, p);
         let (n, body) = q.entities().next().unwrap();
         assert_eq!(n, number, "the refresh keeps the body's own number");
         assert_eq!(body.number, number);
@@ -391,7 +389,7 @@ mod tests {
 
         // The source is spent: a later frame does not re-read it.
         fresh.fields[EntityState::field_index(p, "legsAnim").unwrap()] = 999;
-        q.refresh_newborn(1000, |_| Some(fresh.clone()), None, p);
+        q.refresh_newborn(|_| Some(fresh.clone()), None, p);
         assert_eq!(q.entities().next().unwrap().1.field_i32(p, "legsAnim"), 18);
     }
 
@@ -414,7 +412,7 @@ mod tests {
         set(&mut released, "pos.trBase[1]", 0.0);
         set(&mut released, "apos.trBase[1]", 229.0);
         released.fields[EntityState::field_index(p, "legsAnim").unwrap()] = 18;
-        q.refresh_newborn(1000, |_| Some(released.clone()), None, p);
+        q.refresh_newborn(|_| Some(released.clone()), None, p);
         let body = q.entities().next().unwrap().1;
         assert_eq!(body.origin(p)[..2], [32.0, 16.0]);
         assert_eq!(body.field_f32(p, "apos.trBase[1]"), 90.0);
