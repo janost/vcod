@@ -334,11 +334,22 @@ impl NavGraph {
     /// 32 units over a step, a 32-unit gap between them. Every node up to two
     /// columns off and between a step and a jump higher, that three edges
     /// don't already reach, is run at from a standstill with a jump at the
-    /// lip ([`Gait::Leap`]).
+    /// lip ([`Gait::Leap`]). A ladder's head is no foot: a body comes to
+    /// rest there where the climb tips it over, a few units off the spot
+    /// the leap would be proved from (mp_ship's hold ladder, section 2
+    /// "Jumps").
     fn link_leaps(&mut self, world: &CollisionWorld) {
         use vcod_common::pmove::{JUMP_HEIGHT, STEPSIZE};
+        let mut heads: HashSet<u32> = HashSet::new();
+        for (a, out) in self.edges.iter().enumerate() {
+            let z = self.nodes[a].z + JUMP_HEIGHT;
+            heads.extend(out.iter().filter(|&&b| self.nodes[b as usize].z > z));
+        }
         let mut jobs = Vec::new();
         for (a, &p) in self.nodes.iter().enumerate() {
+            if heads.contains(&(a as u32)) {
+                continue;
+            }
             let (cx, cy) = self.column(p);
             let mut near: Option<HashSet<u32>> = None;
             for dx in -2..=2i32 {
@@ -1825,6 +1836,21 @@ pub(crate) fn drop_ahead(world: &CollisionWorld, p: Vec3, dir: Vec3, look: f32) 
     None
 }
 
+/// How near a wall [`wall_ahead`] calls a heading blocked.
+const WALL_NEAR: f32 = 4.0;
+
+/// Whether a body standing at `p` meets a wall within [`WALL_NEAR`] along
+/// the flat unit vector `dir`, square enough that it pins rather than
+/// slides ([`GRAZE`]). [`drop_ahead`] reads such a heading as no drop.
+pub(crate) fn wall_ahead(world: &CollisionWorld, p: Vec3, dir: Vec3) -> bool {
+    use vcod_common::pmove::{HALF_WIDTH, STEPSIZE, Stance};
+    let mins = Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0);
+    let maxs = Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height() - STEPSIZE);
+    let up = p + Vec3::Z * STEPSIZE;
+    let t = world.box_trace(up, up + dir * WALL_NEAR, mins, maxs);
+    t.startsolid || (t.fraction < 1.0 && dir.dot(t.normal.truncate().extend(0.0)) <= -GRAZE)
+}
+
 /// Idle cmds until a body dropped at `p` stands on something; `None` when it
 /// falls out of the world or never lands.
 fn settle(world: &CollisionWorld, p: Vec3, yaw: f32) -> Option<Vec3> {
@@ -3298,6 +3324,32 @@ mod tests {
         // A head on a deck is no perch.
         let deck = Vec3::new(3751.1277, 65.0, 616.125);
         assert!(!perched(w, deck) && ladder_exits(w, deck, Vec3::X).is_empty());
+    }
+
+    /// mp_ship's hold ladder: its head stands on a lip over the shaft. A
+    /// leap from the head to the ledge at 641 arrives, but a climb tips the
+    /// body onto the lip 4 units south of it, and from there the leap
+    /// falls. A ladder's head is no leap's foot.
+    #[test]
+    fn a_ladder_head_is_no_leaps_foot() {
+        let Some(world) = map_world("mp_ship") else {
+            return;
+        };
+        let w = &world.collision;
+        let foot = Vec3::new(4332.0, -94.0, 56.125);
+        let head = Vec3::new(4332.0, -87.12833, 615.125);
+        let top = Vec3::new(4322.311, -158.08282, 641.125);
+        let leap = |from: Vec3| walk_as(w, from, top.truncate(), Some(top.z), Gait::Leap);
+        assert!(matches!(leap(head), Walked::Arrived(_, true)));
+        let tipped = Vec3::new(4333.2227, -91.545074, 615.125);
+        assert!(matches!(leap(tipped), Walked::Fell));
+        let mut g = NavGraph::from_parts(vec![foot, head, top], vec![vec![1], vec![0], vec![]]);
+        g.link_leaps(w);
+        assert!(g.leaps.is_empty(), "{:?}", g.leaps);
+        // Not reached by the climb, the same spot is a foot.
+        let mut g = NavGraph::from_parts(vec![foot, head, top], vec![vec![], vec![0], vec![]]);
+        g.link_leaps(w);
+        assert!(g.leaps.contains(&(1, 2)), "{:?}", g.leaps);
     }
 
     /// mp_ship's hull beam: a body stands on its side's edge 16 under the

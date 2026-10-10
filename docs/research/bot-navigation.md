@@ -288,6 +288,17 @@ over the 18-unit step. Two kinds of edge use it, kept in
   The flood walks one column, so it never tried the step to the crate. A
   leap from the step at (-1820, -609) lands on the crate; a forward walk
   falls.
+- A ladder's head is never a leap's foot: a node some edge climbs to more
+  than a jump. A bot arrives there off the rungs and comes to rest where
+  the climb tips it over, not where the head was measured. VERIFIED
+  (measured 2026-10-10, `mp_ship`, walks): the hold ladder's head
+  (4332, -87.1, 615.1) stands on the ladder brush's 8-unit lip over the
+  shaft, and its leap to the ledge (4322.3, -158.1, 641.1) arrives from
+  the head. A climb in seed 149 tipped the bot onto the lip at
+  (4333.2, -91.5), and from there the leap falls. From 4 units off the
+  head it falls to the south and arrives to the north and west. Of
+  `mp_ship`'s 138 leaps this was the only one from a ladder head
+  (`nav::tests::a_ladder_head_is_no_leaps_foot`).
 - A bot comes to rest on a leap's foot first: the follower holds the foot
   as its waypoint until the body is within 12 units of it flat, on the
   ground, under 2 units a tick, with the jump off its 500 ms cooldown
@@ -757,7 +768,11 @@ before, so a stair down is no drop and a body overhanging a lip is held by
 it. A heading is picked first with no drop in its octant or either
 neighbour (a heading into a wall slides along it: on the deck, heading 297
 slid the bot south along the wall at x 3288 and off), then with none in
-its own octant, then off hazards alone. A wandering bot picks again when a
+its own octant, then off hazards alone. In the first two tiers a heading
+whose octant pins the body on a wall within 4 units comes after every
+open one (`BotView::wall_ahead`, `nav::wall_ahead`: the capsule swept a
+step up, the wall less than 45 degrees off square): the drop probe reads
+such a heading as no drop, though it goes nowhere. A wandering bot picks again when a
 drop turns up in its heading's octant or in its velocity's. Two cases take
 the drop anyway: a waypoint more than a jump below (the path drops there),
 and a bot cornered, its third unstick spell in a row starting within 96
@@ -843,12 +858,59 @@ ladder's head (x 4315-4360, y -110 to -80).
   and fell 41 units to the deck at 56; the probe due south read nothing
   and reads 41 now (`nav::tests::a_drop_ahead_is_felt_along_a_wall_it_slides_on`).
 - The hold ladder's head (4332, -87.1, 615.1) is new in this table.
-  VERIFIED (measured, seed 149 traced, walks from the head): a bot
-  that climbs it and is planned on by the jump edge to (4322, -158, 641),
-  whose walk from the head falls (from the node itself too), turns back for the
-  foot, ends 4 units east of the head at (4335.9, -87.1), where the creep
-  down falls (from x 4332 it arrives), and pins there while its unstick
-  headings run into the wall. Not fixed.
+  See below.
+
+VERIFIED (measured 2026-10-10, seed 149 traced tick by tick with the
+bot's cmds, walks and box traces): the hold ladder's head stall.
+
+- The head stands on the ladder brush's lip (y -80 to -72, top 615.1)
+  over the shaft, which runs down to 56 from y -80 to about -130; the
+  floor at 600 lies west, south and east of it. The climb tipped the bot
+  onto the lip at (4333.2, -91.5). The next edge was the leap to the
+  ledge at (4322.3, -158.1, 641.1). It arrives from the head node but
+  falls from there, so the follower took the edge out and planned down
+  the ladder. The note of 2026-10-09 had this the wrong way round: the
+  leap arrives from the node itself, and the creep down arrives from
+  (4335.9, -87.1) too.
+- Backing down, the bot met a second bot on the floor at
+  (4347.7, -110.5, 600) whose box overlapped its own. Its creep, move key
+  15, slid it south-west at 0.35 units a tick instead of over the lip.
+  Ten ticks inside 15 units started an unstick spell.
+- At (4335.9, -87.1) the octants east, north-east, north and north-west
+  pin the body at once on the wall and the ladder plate, south-west to
+  south-east drop into the shaft, and west is open for 16 units. The
+  spell took a heading into the wall, which the drop probe reads as no
+  drop. Ten ticks later, still inside the circle, the stall check picked
+  again and set the spell back to 15 ticks, so it never ended. The
+  follower meanwhile handed out waypoints a walk away on the floor at
+  600, which the bot never steered for: 160 bot-ticks to the end of the
+  run.
+
+Three changes: a ladder's head is no leap's foot (section 2, "Jumps");
+headings into a wall rank last (above); and a stall inside a spell picks
+a new heading without restarting the spell, so the waypoint gets its
+turn when the spell ends (`bots::tests::a_pinned_spell_hands_back_to_the_waypoint`).
+Each spell also drops the held creep heading, which belongs to where the
+creep began. VERIFIED (measured 2026-10-10, same detector and settings,
+release build, 192 seeds; "hold" counts spells at x 4315-4360,
+y -110 to -80, "x 3808" spells on the ladder at x 3792, y 53-77):
+
+| | 1-63 odd | 65-127 | 129-191 | 193-255 | 257-319 | 321-383 | total | spells | hold | x 3808 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| before | 81 | 246 | 136 | 112 | 56 | 167 | 798 | 59 | 4 | 2 |
+| without the spell change | 285 | 91 | 58 | 57 | 56 | 311 | 858 | 51 | 0 | 2 |
+| all three | 132 | 112 | 84 | 75 | 141 | 140 | 684 | 54 | 0 | 9 |
+
+- Without the spell change, seed 55 had 203 bot-ticks at the head of the
+  ladder at x 3354: a bot at (3360.1, 496.1, 352.1) spent 175 ticks in
+  one chained spell while its waypoint changed under it.
+- The ladder at x 3808 (y 59 to 67, z 340 to 556) took 9 spells with all
+  three changes, against 2 in each of the other rows. Each is a climb
+  pinned on the rungs between z 520 and 560 and backed down by its
+  spells. In seeds 39, 123, 257, 327 and 377 no bot was stalled inside a
+  spell on that ladder or at (3347, 250, 616) before the stall. The runs
+  diverge on the first changed tick, so I read these as chance, not
+  cause. Why the climb pins there is open.
 
 The detector is `crates/server/examples/ship_stalls.rs` (`MAP=`, `TICKS=`,
 `TRACE=<slot>:<from>:<to>` prints a bot's every tick with its waypoint).

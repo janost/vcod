@@ -136,6 +136,10 @@ pub struct BotView {
     /// (`nav::drop_ahead`); all clear off the ground. A wander heading keeps
     /// off them too, and off one that hurts even when cornered.
     pub drop_ahead: [Option<f32>; 8],
+    /// Per octant, a wall the standing body pins on at once that way
+    /// (`nav::wall_ahead`), which the drop probe reads as no drop; all
+    /// clear off the ground. A wander heading takes one last.
+    pub wall_ahead: [bool; 8],
     /// The loudest gunfire or blast another player made last tick within
     /// earshot ([`loudest`]), chest high.
     pub noise: Option<[f32; 3]>,
@@ -1140,13 +1144,21 @@ impl Bot {
             self.unstick_ticks = 0;
         } else if self.stall_ticks >= 10 {
             if dist_sq(view.origin, self.stall_origin) < 15.0 * 15.0 {
-                // Stuck again where the last spell started: a pocket a drop
-                // is the only way out of (mp_ship's rim at (4223, 345, 276)).
-                let again = dist_sq(view.origin, self.unstick_at) < CORNER * CORNER;
-                self.unstick_tries = if again { self.unstick_tries + 1 } else { 0 };
-                self.unstick_at = view.origin;
+                // Pinned mid-spell: another heading, but the spell still
+                // ends on time. Chained spells never handed the body back
+                // to its waypoint (mp_ship's hold ladder head).
+                if self.unstick_ticks == 0 {
+                    // Stuck again where the last spell started: a pocket a
+                    // drop is the only way out of (mp_ship's rim at (4223,
+                    // 345, 276)).
+                    let again = dist_sq(view.origin, self.unstick_at) < CORNER * CORNER;
+                    self.unstick_tries = if again { self.unstick_tries + 1 } else { 0 };
+                    self.unstick_at = view.origin;
+                    self.unstick_ticks = UNSTICK_TICKS;
+                    // A creep's held heading belongs to where it began.
+                    self.creep = Default::default();
+                }
                 self.pick_heading(view);
-                self.unstick_ticks = UNSTICK_TICKS;
             } else {
                 self.stall_origin = view.origin;
                 self.stall_ticks = 0;
@@ -1546,7 +1558,9 @@ impl Bot {
         // Turned a step at a time off a hazard or a drop, beside the
         // heading too where it can (a heading into a wall slides along it:
         // on mp_ship's deck one 30 degrees off the drop slid a bot off it),
-        // then off a hazard alone; boxed in by hazards, it goes anyway.
+        // then off a hazard alone; boxed in by hazards, it goes anyway. A
+        // heading into a wall goes nowhere, and reads as no drop, so it
+        // comes after every open one (mp_ship's hold ladder head).
         let start = self.heading;
         let turn = |ok: &dyn Fn(f32) -> bool| {
             (0..8)
@@ -1554,7 +1568,10 @@ impl Bot {
                 .find(|h| ok(*h))
         };
         let wide = |h: f32| [-45.0, 0.0, 45.0].iter().all(|d| !self.shuns(view, h + d));
-        self.heading = turn(&wide)
+        let open = |h: f32| !view.wall_ahead[octant(h)];
+        self.heading = turn(&|h| open(h) && wide(h))
+            .or_else(|| turn(&|h| open(h) && !self.shuns(view, h)))
+            .or_else(|| turn(&wide))
             .or_else(|| turn(&|h| !self.shuns(view, h)))
             .or_else(|| turn(&|h| !view.hazard_ahead[octant(h)]))
             .unwrap_or(start);
@@ -1801,6 +1818,7 @@ mod tests {
             waypoint: None,
             hazard_ahead: [false; 8],
             drop_ahead: [None; 8],
+            wall_ahead: [false; 8],
             noise: None,
             linked: false,
             on_ladder: false,
@@ -2692,6 +2710,54 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// mp_ship's hold ladder head, seed 149: walls north and east, the
+    /// shaft south. A heading into a wall reads as no drop, and the bot
+    /// stood pinned on one spell after spell; the open one west comes
+    /// first.
+    #[test]
+    fn a_stuck_bot_takes_a_heading_into_a_wall_last() {
+        for seed in 1..20 {
+            let mut bot = Bot::new("allies", false, seed);
+            let mut v = view();
+            v.wall_ahead = [true, true, true, true, false, false, false, true];
+            v.drop_ahead = [
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(500.0),
+                Some(500.0),
+                Some(500.0),
+            ];
+            bot.pick_heading(&v);
+            assert_eq!(octant(bot.heading), 4, "seed {seed}: {}", bot.heading);
+            // Walled in but for drops: a wall it is.
+            v.wall_ahead[4] = true;
+            bot.pick_heading(&v);
+            assert!(octant(bot.heading) < 5, "seed {seed}: {}", bot.heading);
+        }
+    }
+
+    /// Pinned through a spell, the bot picks a new heading but the spell
+    /// still ends on time and the waypoint gets its turn. Chained spells
+    /// held one on mp_ship's hold ladder head for the rest of the run
+    /// while its waypoint lay a walk away.
+    #[test]
+    fn a_pinned_spell_hands_back_to_the_waypoint() {
+        let mut bot = Bot::new("allies", false, 1);
+        let mut v = view();
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        let toward = bot.think(&v).angles[1];
+        let start = (0..25).find(|_| {
+            bot.think(&v);
+            bot.unsticking()
+        });
+        assert!(start.is_some(), "never unstuck");
+        let back = (0..UNSTICK_TICKS + 1).any(|_| bot.think(&v).angles[1] == toward);
+        assert!(back, "spell after spell, never the waypoint");
     }
 
     #[test]

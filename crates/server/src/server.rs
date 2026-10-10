@@ -3377,6 +3377,14 @@ impl Server {
                     crate::nav::drop_ahead(&w.collision, sim.ps.origin, dir, look)
                 })
             }),
+            wall_ahead: std::array::from_fn(|i| {
+                let standing = sim.ps.on_ground && !sim.ps.on_ladder;
+                self.world.as_ref().filter(|_| standing).is_some_and(|w| {
+                    let (s, c) = (i as f32 * 45.0).to_radians().sin_cos();
+                    let dir = glam::Vec3::new(c, s, 0.0);
+                    crate::nav::wall_ahead(&w.collision, sim.ps.origin, dir)
+                })
+            }),
             linked: sim.link_to.is_some(),
             on_ladder: sim.ps.on_ladder,
             ladder_normal: sim.ps.ladder_normal.into(),
