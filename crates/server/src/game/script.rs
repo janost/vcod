@@ -274,7 +274,7 @@ impl ScriptRuntime {
         // `G_InitGame` hands `Scr_InitSystem` the level's own `level.time`
         // (docs/research/cod11-gsc-language.md, "The script clock").
         rt.vm.set_time(now_ms);
-        rt.start_bootstrap(now_ms)?;
+        rt.start_bootstrap()?;
         Ok(rt)
     }
 
@@ -292,17 +292,17 @@ impl ScriptRuntime {
     /// `start_thread` steps the new thread to its first suspend before
     /// returning, which the same probe measured, so the tables are complete
     /// when `load` returns.
-    fn start_bootstrap(&mut self, now_ms: i32) -> anyhow::Result<()> {
+    fn start_bootstrap(&mut self) -> anyhow::Result<()> {
         let gametype_entry = self.gametype_entry.clone();
-        self.start(&gametype_entry, "main", None, now_ms)?;
+        self.start(&gametype_entry, "main", None)?;
 
         let entry = self.entry.clone();
-        self.start(&entry, "main", None, now_ms)?;
+        self.start(&entry, "main", None)?;
 
         // `CodeCallback_StartGameType` is defined in `_callbacksetup`, not in
         // the gametype script; it guards on `level.gametypestarted` and then
         // calls `level.callbackStartGameType`.
-        self.start(CALLBACK_SETUP, "CodeCallback_StartGameType", None, now_ms)
+        self.start(CALLBACK_SETUP, "CodeCallback_StartGameType", None)
     }
 
     /// Starts one entry point as a thread with `recv` as its `self`, checking
@@ -310,14 +310,8 @@ impl ScriptRuntime {
     /// not, and `--gametype` is user input, so a gametype script that loads
     /// but defines no `main` (or never pulls in `_callbacksetup`) has to fail
     /// the way a missing file does: an error `main.rs` exits on, not a panic.
-    fn start(
-        &mut self,
-        path: &str,
-        name: &str,
-        recv: Option<Target>,
-        now_ms: i32,
-    ) -> anyhow::Result<()> {
-        self.start_with_args(path, name, recv, vec![], now_ms)
+    fn start(&mut self, path: &str, name: &str, recv: Option<Target>) -> anyhow::Result<()> {
+        self.start_with_args(path, name, recv, vec![])
     }
 
     /// `start` with the arguments the entry point takes.
@@ -327,17 +321,11 @@ impl ScriptRuntime {
         name: &str,
         recv: Option<Target>,
         args: Vec<Value>,
-        now_ms: i32,
     ) -> anyhow::Result<()> {
         let f = self.vm.func_ref(path, name);
         if !self.vm.has_function(f) {
             anyhow::bail!("{path}.gsc defines no {name}()");
         }
-        // The thread runs here, before the caller continues, so the level
-        // clock has to be this frame's already: the damage callbacks start
-        // ahead of `run_frame`, and a `cloneplayer` or a think they schedule
-        // on the previous frame's clock lands a frame in the past.
-        self.host.level_time_ms = now_ms;
         self.vm.start_thread(&mut self.host, f, recv, args);
         Ok(())
     }
@@ -350,7 +338,7 @@ impl ScriptRuntime {
     /// rides the wire. A hit on a slot with no entity, or from one, is
     /// dropped: there is nobody to call and nobody to name. So is one on a
     /// victim without `takedamage`, `G_Damage`'s first test (4.2 step 1).
-    pub fn deliver_hits(&mut self, hits: Vec<crate::game::combat::Hit>, now_ms: i32) {
+    pub fn deliver_hits(&mut self, hits: Vec<crate::game::combat::Hit>) {
         for hit in hits {
             if !self.client_vitals(hit.victim).takedamage {
                 continue;
@@ -384,7 +372,6 @@ impl ScriptRuntime {
                 "CodeCallback_PlayerDamage",
                 Some(Target::Entity(victim)),
                 args,
-                now_ms,
             ) {
                 log::error!("gsc: {e:#}");
             }
@@ -404,7 +391,6 @@ impl ScriptRuntime {
         damage: i32,
         dflags: i32,
         mod_: &str,
-        now_ms: i32,
     ) {
         if !self.client_vitals(victim_slot).takedamage {
             return;
@@ -435,7 +421,6 @@ impl ScriptRuntime {
             "CodeCallback_PlayerDamage",
             Some(Target::Entity(victim)),
             args,
-            now_ms,
         ) {
             log::error!("gsc: {e:#}");
         }
@@ -445,7 +430,7 @@ impl ScriptRuntime {
     /// inflictor, attacker, direction or point, means `MOD_FALLING` and hit
     /// location 0, which the damage callback reads as four undefined
     /// arguments, weapon `"none"` and hit location `"none"` (8.10).
-    pub fn deliver_fall(&mut self, victim_slot: usize, damage: i32, now_ms: i32) {
+    pub fn deliver_fall(&mut self, victim_slot: usize, damage: i32) {
         let Some(victim) = self.client_entity(victim_slot) else {
             return;
         };
@@ -468,7 +453,6 @@ impl ScriptRuntime {
             "CodeCallback_PlayerDamage",
             Some(Target::Entity(victim)),
             args,
-            now_ms,
         ) {
             log::error!("gsc: {e:#}");
         }
@@ -556,7 +540,6 @@ impl ScriptRuntime {
                     damage,
                     dflags,
                     crate::game::trigger::MOD_TRIGGER_HURT,
-                    now_ms,
                 );
             }
         }
@@ -835,7 +818,7 @@ impl ScriptRuntime {
     /// `MOD_SUICIDE` -- but started as a thread rather than spawned, since
     /// nothing is waiting on it. A dead or spectating client is ignored, the
     /// way the builtin ignores a dead one. Returns whether the kill ran.
-    pub fn kill_client(&mut self, slot: usize, now_ms: i32) -> bool {
+    pub fn kill_client(&mut self, slot: usize) -> bool {
         let Some(id) = self.client_entity(slot) else {
             return false;
         };
@@ -860,7 +843,6 @@ impl ScriptRuntime {
             "CodeCallback_PlayerKilled",
             Some(Target::Entity(id)),
             args,
-            now_ms,
         ) {
             log::error!("gsc: {e:#}");
         }
@@ -1631,8 +1613,8 @@ impl ScriptRuntime {
     /// so this is a first connect as far as script is concerned. It runs
     /// rather than queues, because retail runs it inside the spawn, after the
     /// settle frames of step 20.
-    pub fn reconnect_client(&mut self, slot: usize, name: String, now_ms: i32) {
-        self.dispatch_client_event(ClientEvent::Connect { slot, name }, now_ms);
+    pub fn reconnect_client(&mut self, slot: usize, name: String) {
+        self.dispatch_client_event(ClientEvent::Connect { slot, name });
     }
 
     /// `game[]` lifted for the next level, and every client's `pers[]` with
@@ -1682,7 +1664,7 @@ impl ScriptRuntime {
     /// One queued client event. A callback the closure does not define is
     /// logged and skipped: a gametype without one is still a serving map,
     /// the same reading `load`'s missing-builtin pre-scan takes.
-    fn dispatch_client_event(&mut self, ev: ClientEvent, now_ms: i32) {
+    fn dispatch_client_event(&mut self, ev: ClientEvent) {
         match ev {
             ClientEvent::Connect { slot, name } => {
                 // The slot's `gclient_t` starts clean, so a reconnect into a
@@ -1728,7 +1710,7 @@ impl ScriptRuntime {
                 if let Err(e) = set {
                     log::error!("client {slot}: name not set: {e:?}");
                 }
-                self.start_callback("CodeCallback_PlayerConnect", id, now_ms);
+                self.start_callback("CodeCallback_PlayerConnect", id);
             }
             ClientEvent::Begin(slot) => {
                 let Some(id) = self.client_entity(slot) else {
@@ -1754,7 +1736,7 @@ impl ScriptRuntime {
                 // The callback runs first: it reads `self`, and freeing the
                 // slot ahead of it would hand it a dead entity.
                 if let Some(id) = self.client_entity(slot) {
-                    self.start_callback("CodeCallback_PlayerDisconnect", id, now_ms);
+                    self.start_callback("CodeCallback_PlayerDisconnect", id);
                     // Whatever was still running on the player dies with
                     // it: a dead player's `waitRespawnButton` polled a
                     // freed entity otherwise (`Vm::kill_threads_of`).
@@ -1776,8 +1758,8 @@ impl ScriptRuntime {
     }
 
     /// One `_callbacksetup` entry point on a client's entity.
-    fn start_callback(&mut self, name: &str, id: EntId, now_ms: i32) {
-        if let Err(e) = self.start(CALLBACK_SETUP, name, Some(Target::Entity(id)), now_ms) {
+    fn start_callback(&mut self, name: &str, id: EntId) {
+        if let Err(e) = self.start(CALLBACK_SETUP, name, Some(Target::Entity(id))) {
             log::error!("gsc: {e:#}");
         }
     }
@@ -2004,9 +1986,8 @@ impl ScriptRuntime {
         // Client events in the order the netcode raised them: a `Begin`
         // drained ahead of its own `Connect` finds no thread parked on the
         // notify and strands the client silently.
-        let packet_ms = self.host.level_time_ms;
         for ev in std::mem::take(&mut self.host.client_events) {
-            self.dispatch_client_event(ev, packet_ms);
+            self.dispatch_client_event(ev);
         }
         for e in self.vm.run_runnable(&mut self.host) {
             log::warn!("script error: {e:?}");
@@ -2924,7 +2905,7 @@ mod tests {
         }
 
         let mut before = ScriptRuntime::for_test_at(CALLBACK_SETUP, &src("axis"));
-        before.reconnect_client(0, "vcod".into(), 50);
+        before.reconnect_client(0, "vcod".into());
         assert_eq!(before.client_pers(0, "team").as_deref(), Some("axis"));
         // Something only the first level wrote, to show what does not carry.
         before.host.client_vitals[0].health = 42;
@@ -2932,7 +2913,7 @@ mod tests {
 
         let mut after = ScriptRuntime::for_test_at(CALLBACK_SETUP, &src("allies"));
         after.host.pers_carry = carry.pers;
-        after.reconnect_client(0, "vcod".into(), 50);
+        after.reconnect_client(0, "vcod".into());
         assert_eq!(
             after.client_pers(0, "team").as_deref(),
             Some("axis"),
@@ -2946,7 +2927,7 @@ mod tests {
         // The carry is spent by the connect that took it, so the next one
         // starts empty -- which is every connect but a persisting
         // boundary's.
-        after.reconnect_client(0, "vcod".into(), 100);
+        after.reconnect_client(0, "vcod".into());
         assert_eq!(after.client_pers(0, "team").as_deref(), Some("allies"));
     }
 
@@ -2969,7 +2950,7 @@ mod tests {
         }
 
         let mut before = ScriptRuntime::for_test_at(CALLBACK_SETUP, &src("axis"));
-        before.reconnect_client(0, "vcod".into(), 50);
+        before.reconnect_client(0, "vcod".into());
         assert_eq!(before.client_pers(0, "team").as_deref(), Some("axis"));
         let carry = before.take_carry();
 
@@ -2980,7 +2961,7 @@ mod tests {
         after.push_client_event(ClientEvent::Disconnect(0));
         after.run_frame(50);
 
-        after.reconnect_client(0, "stranger".into(), 100);
+        after.reconnect_client(0, "stranger".into());
         assert_eq!(
             after.client_pers(0, "team").as_deref(),
             Some("allies"),
