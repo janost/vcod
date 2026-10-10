@@ -6,6 +6,7 @@ use wgpu::util::DeviceExt;
 
 use crate::camera::{Z_FAR, Z_NEAR};
 use crate::entity_light::{self, GpuLightSet};
+use crate::entity_material::{ENT_STAGE_STRIDE, EntStageDraw, EntityMaterials};
 use crate::fx::sim::{FxLight, FxQuad, MAX_LIGHTS};
 use crate::gamma::GammaPass;
 use crate::hud::HudQuad;
@@ -30,8 +31,8 @@ const _: () = assert!(std::mem::size_of::<DrawVert>() == 44);
 // Ditto the viewmodel vertex stride.
 const _: () = assert!(std::mem::size_of::<VmVert>() == 52);
 
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-const MSAA_SAMPLES: u32 = 4;
+pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+pub(crate) const MSAA_SAMPLES: u32 = 4;
 /// Every pass draws retail's framebuffer bytes into this, blending and
 /// clamping in the same byte space; the gamma pass maps it onto the
 /// swapchain (docs/research/cod11-gamma.md, section 4).
@@ -274,7 +275,7 @@ fn vm_cache_key(m: &xmodel::XModel) -> String {
 /// Each player is 4-7 part instances, so 32 players plus corpses and dropped
 /// weapons land at 200-280.
 const MAX_DYNAMIC_INSTANCES: usize = 512;
-const DYNAMIC_INSTANCE_STRIDE: u64 = 80;
+pub(crate) const DYNAMIC_INSTANCE_STRIDE: u64 = 80;
 /// Unskinned instances point at a shared identity block of this many matrices.
 pub const MAX_INSTANCE_BONES: usize = 128;
 
@@ -569,6 +570,9 @@ pub const STAGE_FLAG_DEFORM_WAVE: u32 = 2048;
 /// The tint rgb scales by identityLight, which the camera uniform carries:
 /// `identityLighting`, `constLighting` and `wave` (0x4ffa60).
 pub const STAGE_FLAG_TINT_LIGHT: u32 = 4096;
+/// `lightingDiffuse`: the entity pass lights the stage from its light set
+/// (`dynamic_model.wgsl`); the world draws it as `identityLighting`.
+pub const STAGE_FLAG_LIT: u32 = 8192;
 
 /// Per-stage draw parameters, one dynamic-offset slot per stage batch. WGSL
 /// mirror is `StageParams` in shader.wgsl; byte offsets:
@@ -596,14 +600,14 @@ pub struct StageParams {
 }
 
 const _: () = assert!(std::mem::size_of::<StageParams>() == 192);
-const STAGE_PARAMS_SIZE: u64 = std::mem::size_of::<StageParams>() as u64;
+pub(crate) const STAGE_PARAMS_SIZE: u64 = std::mem::size_of::<StageParams>() as u64;
 
 const UV_AFFINE_IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
 /// Evaluates one stage's draw parameters at time `t`: bundle affines/turb,
 /// tint from rgbGen/alphaGen, and the flag bits the WGSL reads. `None` when
 /// `idx` is out of range or the stage has no bundles.
-fn stage_params(shader: &Shader, idx: usize, t: f32) -> Option<StageParams> {
+pub(crate) fn stage_params(shader: &Shader, idx: usize, t: f32) -> Option<StageParams> {
     let st = shader.stages.get(idx)?;
     let b0 = st.bundles.first()?;
     let b1 = st.bundles.get(1);
@@ -632,6 +636,9 @@ fn stage_params(shader: &Shader, idx: usize, t: f32) -> Option<StageParams> {
         RgbGen::ExactVertex => flags |= STAGE_FLAG_VERTEX_RGB,
         RgbGen::Identity => {}
         RgbGen::IdentityLighting => flags |= STAGE_FLAG_TINT_LIGHT,
+        RgbGen::LightingDiffuse => flags |= STAGE_FLAG_TINT_LIGHT | STAGE_FLAG_LIT,
+        // the entity's shaderRGBA, which no stock entity material reads
+        RgbGen::LightingPrecalc => {}
         RgbGen::Const(c) => rgb = *c,
         RgbGen::ConstLighting(c) => {
             flags |= STAGE_FLAG_TINT_LIGHT;
@@ -806,7 +813,7 @@ fn stage_draw_facts(sh: &Shader, idx: usize) -> Option<(StageVariant, bool, bool
 }
 
 /// Whether the stage's params change over time and need per-frame rewrites.
-fn stage_animated(sh: &Shader, idx: usize) -> bool {
+pub(crate) fn stage_animated(sh: &Shader, idx: usize) -> bool {
     let Some(st) = sh.stages.get(idx) else {
         return false;
     };
@@ -959,14 +966,13 @@ struct HudPass {
 /// drawn with per-instance transforms streamed through one instance-step
 /// vertex buffer.
 struct DynamicPass {
-    pipeline: wgpu::RenderPipeline,
     instance_buf: wgpu::Buffer,
     /// Identity block first, then each skinned instance's bone set. Sized
     /// for every instance at the cap.
     bone_buf: wgpu::Buffer,
     bone_bg: wgpu::BindGroup,
     /// Indexed by [`ModelHandle`]; never shrinks.
-    models: Vec<VmModel>,
+    models: Vec<DynModel>,
     /// `(model index, packed instance)`; position here is the slot in `instance_buf`.
     instances: Vec<(usize, InstanceRaw)>,
     /// Written to `bone_buf` in [`Renderer::render`].
@@ -979,6 +985,18 @@ struct DynamicPass {
     lighting: Option<StaticLighting>,
     /// This frame's fx lights, for the entity pick.
     scene_lights: Vec<SceneLight>,
+    /// The cgame's own scene lights this frame (`constantLight`,
+    /// `projectileDLight`), queued after the fx lights.
+    entity_scene_lights: Vec<SceneLight>,
+    materials: EntityMaterials,
+}
+
+/// A dynamic model and, per drawn surface, its material's stages.
+struct DynModel {
+    vm: VmModel,
+    stages: Vec<Rc<[EntStageDraw]>>,
+    /// Some surface takes the light grid; an unlit model skips the pick.
+    lit: bool,
 }
 
 /// Everything built from one map: buffers, material bind groups, batches,
@@ -1903,7 +1921,7 @@ impl Renderer {
             });
         let vm_pass = create_vm_pass(&device, SCENE_FORMAT);
         let dynamic =
-            create_dynamic_pass(&device, SCENE_FORMAT, &camera_layout, &vm_pass.skin_layout);
+            create_dynamic_pass(&device, SCENE_FORMAT, &camera_layout, &vm_pass, &white_view);
         let fx = create_fx_pass(&device, SCENE_FORMAT, &camera_layout, &vm_pass.skin_layout);
         let hud = create_hud_text_pass(&device, &queue, SCENE_FORMAT);
         let hud_pass = create_hud_pass(&device, SCENE_FORMAT);
@@ -2583,6 +2601,8 @@ impl Renderer {
         self.dynamic.bone_mats.clear();
         self.dynamic.light_origins.clear();
         self.dynamic.lighting = None;
+        self.dynamic.materials.clear();
+        self.dynamic.entity_scene_lights.clear();
         self.vis_counts = VisCounts::default();
     }
 
@@ -2641,6 +2661,12 @@ impl Renderer {
         self.queue
             .write_buffer(&self.fx.vertex_buf, 0, bytemuck::cast_slice(&verts));
         self.fx.runs = runs;
+    }
+
+    /// The cgame's scene lights for this frame (`entities::BuiltScene`);
+    /// entity picks see them after the fx lights.
+    pub fn set_entity_lights(&mut self, lights: Vec<SceneLight>) {
+        self.dynamic.entity_scene_lights = lights;
     }
 
     /// The frame's scene lights (at most `MAX_SCENE_LIGHTS`), nearest the
@@ -2792,7 +2818,30 @@ impl Renderer {
                 img
             },
         )?;
-        self.dynamic.models.push(uploaded);
+        // the surfaces `upload_vm_model` kept, in its order
+        let mut lit = false;
+        let mut stages = Vec::new();
+        for surf in &model.surfaces {
+            if surf.verts.is_empty() || surf.indices.is_empty() {
+                continue;
+            }
+            let skin = model
+                .materials
+                .get(surf.material)
+                .map(String::as_str)
+                .unwrap_or_default();
+            let (st, l) = self
+                .dynamic
+                .materials
+                .stages(&self.device, &self.queue, fs, skin);
+            lit |= l;
+            stages.push(st);
+        }
+        self.dynamic.models.push(DynModel {
+            vm: uploaded,
+            stages,
+            lit,
+        });
         Some(ModelHandle(self.dynamic.models.len() - 1))
     }
 
@@ -2834,15 +2883,26 @@ impl Renderer {
         let Some(lighting) = d.lighting.as_mut() else {
             return vec![GpuLightSet::default()];
         };
+        let mut scene = d.scene_lights.clone();
+        scene.extend_from_slice(&d.entity_scene_lights);
+        scene.truncate(crate::fx::sim::MAX_SCENE_LIGHTS);
         let mut sets = Vec::new();
         let mut seen: HashMap<[u32; 3], u32> = HashMap::new();
-        for ((_, raw), origin) in d.instances.iter_mut().zip(&d.light_origins) {
+        for ((model, raw), origin) in d.instances.iter_mut().zip(&d.light_origins) {
+            // retail picks only for a model with a lit surface (0x50e3e0)
+            if !d.models[*model].lit {
+                raw.light_set = 0;
+                continue;
+            }
             let key = origin.to_array().map(f32::to_bits);
             raw.light_set = *seen.entry(key).or_insert_with(|| {
-                let l = lighting.entity_lights(*origin, &d.scene_lights);
+                let l = lighting.entity_lights(*origin, &scene);
                 sets.push(entity_light::pack(&l, None, self.identity_light));
                 sets.len() as u32 - 1
             });
+        }
+        if sets.is_empty() {
+            sets.push(GpuLightSet::default());
         }
         sets
     }
@@ -3204,6 +3264,16 @@ impl Renderer {
         };
         // Instance i draws from slot i of instance_buf.
         if !self.dynamic.instances.is_empty() {
+            let m = &self.dynamic.materials;
+            for (sh, si, slot) in &m.animated {
+                if let Some(p) = stage_params(sh, *si, frame.time) {
+                    self.queue.write_buffer(
+                        &m.params_buf,
+                        u64::from(*slot) * ENT_STAGE_STRIDE,
+                        bytemuck::bytes_of(&p),
+                    );
+                }
+            }
             let sets = self.pick_entity_lights();
             self.queue
                 .write_buffer(&self.dynamic.light_buf, 0, bytemuck::cast_slice(&sets));
@@ -3453,30 +3523,59 @@ impl Renderer {
                 pass.set_bind_group(0, &self.camera_bg, &[]);
             }
 
-            // Live entities draw after the world so they depth-test against it.
+            // Live entities draw after the world so they depth-test against
+            // it: every opaque first stage, then the blended stages over them.
             if !self.dynamic.instances.is_empty() {
                 let dynamic = &self.dynamic;
-                pass.set_pipeline(&dynamic.pipeline);
+                let mats = &dynamic.materials;
                 pass.set_bind_group(0, &self.camera_bg, &[]);
                 pass.set_bind_group(2, &dynamic.bone_bg, &[]);
-                for (i, (model_idx, _)) in dynamic.instances.iter().enumerate() {
-                    let model = &dynamic.models[*model_idx];
-                    let off = i as u64 * DYNAMIC_INSTANCE_STRIDE;
-                    pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
-                    pass.set_vertex_buffer(
-                        1,
-                        dynamic
-                            .instance_buf
-                            .slice(off..off + DYNAMIC_INSTANCE_STRIDE),
-                    );
-                    pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint16);
-                    for s in &model.surfaces {
-                        pass.set_bind_group(1, &model.bind_groups[s.bind_group], &[]);
-                        pass.draw_indexed(
-                            s.first_index..s.first_index + s.index_count,
-                            s.base_vertex,
-                            0..1,
+                let mut bound = None;
+                for blended in [false, true] {
+                    for (i, (model_idx, _)) in dynamic.instances.iter().enumerate() {
+                        let model = &dynamic.models[*model_idx];
+                        let vm = &model.vm;
+                        let off = i as u64 * DYNAMIC_INSTANCE_STRIDE;
+                        pass.set_vertex_buffer(0, vm.vertex_buf.slice(..));
+                        pass.set_vertex_buffer(
+                            1,
+                            dynamic
+                                .instance_buf
+                                .slice(off..off + DYNAMIC_INSTANCE_STRIDE),
                         );
+                        pass.set_index_buffer(vm.index_buf.slice(..), wgpu::IndexFormat::Uint16);
+                        for (s, stages) in vm.surfaces.iter().zip(&model.stages) {
+                            for (k, st) in stages.iter().enumerate() {
+                                let opaque_base =
+                                    k == 0 && mats.pipelines[st.pipeline].0.0.is_none();
+                                if opaque_base == blended {
+                                    continue;
+                                }
+                                if bound != Some(st.pipeline) {
+                                    pass.set_pipeline(&mats.pipelines[st.pipeline].1);
+                                    bound = Some(st.pipeline);
+                                }
+                                pass.set_bind_group(
+                                    1,
+                                    if st.white {
+                                        &mats.white_bg
+                                    } else {
+                                        &vm.bind_groups[s.bind_group]
+                                    },
+                                    &[],
+                                );
+                                pass.set_bind_group(
+                                    3,
+                                    &mats.params_bg,
+                                    &[(u64::from(st.slot) * ENT_STAGE_STRIDE) as u32],
+                                );
+                                pass.draw_indexed(
+                                    s.first_index..s.first_index + s.index_count,
+                                    s.base_vertex,
+                                    0..1,
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -4345,12 +4444,14 @@ fn create_vm_pass(device: &wgpu::Device, format: wgpu::TextureFormat) -> VmPass 
 
 /// Group 0 is the camera, group 1 the viewmodel skin layout (the uploaded
 /// models' bind groups are built against it), group 2 the bone storage
-/// buffer. Vertex buffer 1 is instance-step `InstanceRaw`.
+/// buffer, group 3 the stage's `StageParams`. Vertex buffer 1 is
+/// instance-step `InstanceRaw`.
 fn create_dynamic_pass(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
     camera_layout: &wgpu::BindGroupLayout,
-    skin_layout: &wgpu::BindGroupLayout,
+    vm: &VmPass,
+    white_view: &wgpu::TextureView,
 ) -> DynamicPass {
     let instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("dynamic instance transforms"),
@@ -4402,82 +4503,17 @@ fn create_dynamic_pass(
         ],
     });
 
-    let shader = device.create_shader_module(wgpu::include_wgsl!("dynamic_model.wgsl"));
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("dynamic pipeline layout"),
-        bind_group_layouts: &[Some(camera_layout), Some(skin_layout), Some(&bone_layout)],
-        immediate_size: 0,
-    });
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("dynamic model pipeline"),
-        layout: Some(&layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            compilation_options: Default::default(),
-            buffers: &[
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<VmVert>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x3, // pos
-                        1 => Float32x3, // normal
-                        2 => Float32x2, // uv
-                        3 => Uint8x4,   // bone_indices
-                        4 => Float32x4, // bone_weights
-                    ],
-                }),
-                // `InstanceRaw`: the transform's four columns, then
-                // bone_base and light_set; the padding needs no attribute.
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: DYNAMIC_INSTANCE_STRIDE,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &wgpu::vertex_attr_array![
-                        5 => Float32x4,
-                        6 => Float32x4,
-                        7 => Float32x4,
-                        8 => Float32x4,
-                        9 => Uint32,
-                        10 => Uint32,
-                    ],
-                }),
-            ],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            // xmodel winding, same as the viewmodel; cull nothing.
-            front_face: wgpu::FrontFace::Cw,
-            cull_mode: None,
-            ..Default::default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: DEPTH_FORMAT,
-            depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
-            stencil: Default::default(),
-            bias: Default::default(),
-        }),
-        multisample: wgpu::MultisampleState {
-            count: MSAA_SAMPLES,
-            mask: !0,
-            alpha_to_coverage_enabled: false,
-        },
-        multiview_mask: None,
-        cache: None,
-    });
+    let materials = EntityMaterials::new(
+        device,
+        format,
+        camera_layout,
+        &vm.skin_layout,
+        &bone_layout,
+        &vm.sampler,
+        white_view,
+    );
 
     DynamicPass {
-        pipeline,
         instance_buf,
         bone_buf,
         bone_bg,
@@ -4488,6 +4524,8 @@ fn create_dynamic_pass(
         light_buf,
         lighting: None,
         scene_lights: Vec::new(),
+        entity_scene_lights: Vec::new(),
+        materials,
     }
 }
 

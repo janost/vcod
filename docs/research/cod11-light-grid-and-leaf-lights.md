@@ -296,8 +296,9 @@ lightingPrecalc` (mp_carentan 62 against 49, mp_brecourt 66 against 60).
   surface when a dynamic light reached the model. INFERRED: a prop near a
   dynamic light is relit each frame through the GL lighting path
   (`cod11-gamma.md` section 5) with the dynamic light among its eight, and
-  goes back to its cache once the light is gone; which materials carry
-  bit 0x18 is not traced, vcod takes it to be the `lightingDiffuse` skins.
+  goes back to its cache once the light is gone. The materials that carry
+  bit 0x18 are those with a `lightingDiffuse` or `lightingAmbient` stage
+  (section 13).
 - INFERRED: GL lighting gives a dynamic light `max(0, N . L) * diffuse /
   (d^2 + 0.001)` per vertex: at an intensity of 800 (the grenade's
   `Light`), one framebuffer unit at 100 units, a quarter at 200.
@@ -342,8 +343,21 @@ vcod (`vs_prop` in `shader.wgsl`):
   the camera; retail's world dlights (0x4b59f0's bits) are not ported.
 - The scene light list is the first 32 fx lights in spawn order
   (`fx::sim::MAX_SCENE_LIGHTS`), as retail's queue keeps the first 32
-  added; entity picks see all of them. The panzerfaust's black light and
-  `constantLight` are not added.
+  added; entity picks see all of them, then the cgame's own lights
+  (`entities::BuiltScene::scene_lights`), cut at 32 together. INFERRED:
+  the order between the efx lights and the cgame's is not traced; vcod
+  puts the fx lights first.
+- The cgame's lights: every entity's `constantLight` at its lerped origin
+  (`entities::constant_light`), and a drawn missile's `projectileDLight`
+  in black. VERIFIED: 0x3001d5f0 calls 0x3001af20 for every packet entity
+  before the `eType` switch, so an entity with no model adds its light
+  too; the colour scale at 0x30069420 is 1/255 (0.0039215688).
+- VERIFIED: the string `constantLight` is in neither `game_mp_x86.dll` nor
+  `game.mp.i386.so`, and `SP_light` (0x53204) only calls `G_FreeEntity`.
+  INFERRED: so no script field reaches the field and stock content never
+  sets it; only the panzerfaust's light is live. vcod adds the cgame's
+  lights to the entity pick only, not to the world's fx-light term, where
+  a black light would add nothing.
 
 ## 12. Shadows
 
@@ -462,9 +476,19 @@ vcod (`StaticLighting::entity_lights`, `client/src/entity_light.rs`,
   fx lights as scene lights, and the vertex shader applies the GL formula
   above per vertex. The viewmodel's lights are moved into view space.
 - The `eFlags` 0x10000 lighting origin is not ported (above: no stock
-  entity reaches it). Every entity skin is lit and draws one stage; the
-  materials retail leaves unlit (below) are a follow-up, since their
-  stages also blend.
+  entity reaches it).
+- Each entity skin draws its material's stages (`entity_material.rs`, the
+  `stype` parsed by the world's stage parser): a `lightingDiffuse` stage
+  takes the light set, any other stage its `rgbGen` colour (`constLighting`
+  and `wave` scaled by `identityLight`, as `stage_params` does for the
+  world), `alphaGen` and `alphaFunc` apply, and a blended stage draws with
+  its own blend pair. Every instance's opaque first stages draw first,
+  then the blended stages of all of them. A model with no lit stage skips
+  the pick.
+- vcod drops `tcGen environment` stages (`metal_env`, `wood_env`: the
+  grenades, the staff car); the texture stage they leave draws opaque.
+  `depthFunc equal` (the `*_masked` objective and pickup types) draws with
+  `LessEqual`. `lightingPrecalc` draws white: no stock entity skin uses it.
 - The light set's colours are rescaled from `identityLight` 0.5 to the
   current one before GL's clamp (`cod11-gamma.md` section 4).
 - A map without leaf lights draws entity models at `identityLight`.
@@ -503,6 +527,22 @@ stride of 0x688, each with flags at `+0`, rgbGen `+0x664`, alphaGen
   (`foliage_detail`); no `lightingAmbient`. So `objective` and `pickup`
   are lit, and `objective_incomplete`, `cloth_light`, `glass_light` and
   `foliage_detail` are not.
+- VERIFIED, the GL state setter 0x4d57b0: bits 0x70000000 are the alpha
+  test (0x10000000 `GL_GREATER` 0, 0x20000000 `GL_LESS` 0.5, 0x40000000
+  `GL_GEQUAL` 0.5), 0x100 the depth mask, 0x20000 `GL_EQUAL` and 0x40000
+  `GL_ALWAYS` depth (`GL_LEQUAL` otherwise). So the implicit model skin
+  (state 0x100100) writes depth with no alpha test.
+- VERIFIED, `xmodel/*` in the stock paks: the snapshot entities that carry
+  multi-stage or unlit skins are the health packs and grenade crates
+  (`pickup`), the S&D bomb and the objective props (`objective`,
+  `objective_masked`, `objective_incomplete`), and the lamps and lights
+  (`glass_light`, `cloth_light`). Player and weapon skins are `body`,
+  `metal`, `flesh`, `cloth`, `wood` (one lit stage), `flesh_masked` (lit,
+  `blendfunc blend` with `depthWrite`, 101 skins), `cloth_masked` and
+  `metal_masked` (lit, `alphaFunc GE128`), and `metal_env`.
+- INFERRED: a model surface draws every stage of its material in order,
+  as Q3's stage iterator does; the per-stage loops at 0x50bd60 and
+  0x50b560 are not traced further.
 - VERIFIED: a stage without stage flag 0x10000 draws with one colour
   (`glColor4ubv` in the stage loops at 0x50bd60 and 0x50b560): its
   `+0x680`, which is `identityLightByte` for `identityLighting`, 0xff for
