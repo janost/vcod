@@ -440,9 +440,9 @@ VERIFIED, symbols and calls in `game.mp.i386.so` (file addresses):
   `leanf` between snapshots (0x3002936a). VERIFIED: the refdef's roll
   (0x302095d4) is written only by the copies of the predicted
   `viewangles[2]` (0x3003343b, 0x30033527), the add of the offset
-  0x30012cb0 returns (0x30032b9c) and the add at 0x30018057. INFERRED, off
-  their inputs: 0x30012cb0 is the damage kick and 0x30017f00 the earthquake
-  shake. INFERRED: **a lean moves the eye and never rolls the view**; the
+  0x30012cb0 returns (0x30032b9c) and the add at 0x30018057: the damage
+  kick and the earthquake shake (`cod11-combat.md` 17.1, 17.2). INFERRED:
+  **a lean moves the eye and never rolls the view**; the
   roll in `AddLeanToPosition` only tips the offset down. VERIFIED, 0x30033413:
   the intermission arm (`pm_type` 5) copies the view and skips
   `CG_OffsetFirstPersonView`.
@@ -450,6 +450,5 @@ VERIFIED, symbols and calls in `game.mp.i386.so` (file addresses):
 vcod: `pmove::update_lean` is the function above, `pmove::aim::lean_offset`
 is `AddLeanToPosition` with 16 and 20, and `PlayerState::view`,
 `combat::muzzle_point`, `ClientSim::eye_origin` and the playing client's
-camera all add it. The walk mode draws no lean roll. Not modelled: the
-viewmodel's own lean offset (cgame 0x30036990, `(1 - fWeaponPosFrac) *
-f * 1.6` along a right vector rolled `f * -2` degrees).
+camera all add it. The walk mode draws no lean roll. The viewmodel's own
+lean offset and roll are `cod11-combat.md` 17.3.

@@ -3210,6 +3210,25 @@ impl ApplicationHandler for App {
                                         (cam.yaw, cam.pitch, view_roll) =
                                             own_view(input.cmd_angles(), delta);
                                     }
+                                    // `CG_OffsetFirstPersonView` (cgame 0x30032b58)
+                                    // first adds the damage kick and the sight's
+                                    // bob; the intermission arm skips it.
+                                    if pm_type != 5
+                                        && let (Some(hud), Some(s)) =
+                                            (&mut self.hud, net.snapshots().newest())
+                                    {
+                                        let own = pmove::predict::predictable(pm_type);
+                                        let [kp, ky, kr] = hud.view_kick(
+                                            p,
+                                            &s.ps,
+                                            predicted.as_ref().filter(|_| own).map(|v| &v.pred),
+                                            render_time.unwrap_or(0),
+                                            weapons,
+                                        );
+                                        cam.pitch -= kp.to_radians();
+                                        cam.yaw += ky.to_radians();
+                                        view_roll += kr.to_radians();
+                                    }
                                     // `CG_OffsetFirstPersonView` ends on
                                     // `AddLeanToPosition` (cgame 0x30032dda): a lean
                                     // moves the eye and rolls nothing.
@@ -3221,6 +3240,14 @@ impl ApplicationHandler for App {
                                         cam.pos = eye.pos;
                                         (cam.yaw, cam.pitch) = eye.view();
                                         view_roll = 0.0;
+                                    }
+                                    // The quake shakes whatever view that left
+                                    // (cgame 0x30033da9, after `CG_CalcViewValues`).
+                                    if let Some(now) = render_time {
+                                        let [sp, sy, sr] = view.shake(now, cam.pos);
+                                        cam.pitch -= sp.to_radians();
+                                        cam.yaw += sy.to_radians();
+                                        view_roll += sr.to_radians();
                                     }
 
                                     let (cam_forward, cam_right, cam_up) =
@@ -3396,6 +3423,21 @@ impl ApplicationHandler for App {
                                                 for _ in 0..play::recoil::fire_calls(ev.event) {
                                                     view.fire(weapons, ps);
                                                 }
+                                            }
+                                            // At the event body's drawn origin; ours
+                                            // is never in `entity_pos`.
+                                            let body = entity_pos
+                                                .get(&ev.entity_num)
+                                                .copied()
+                                                .unwrap_or(Vec3::from(ev.pos));
+                                            if let Some(q) = play::quake::from_event(
+                                                p,
+                                                &ev,
+                                                newest.entities.get(&ev.entity_num),
+                                                body,
+                                            ) && let Some(now) = render_time
+                                            {
+                                                view.start_quake(q, now, cam.pos);
                                             }
                                             if let Some(hud) = &mut self.hud {
                                                 hud.on_game_event(&ev, &hud_frame);

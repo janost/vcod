@@ -8,5 +8,6 @@ pub mod events;
 pub mod input;
 pub mod join;
 pub mod predict;
+pub mod quake;
 pub mod recoil;
 pub mod view;

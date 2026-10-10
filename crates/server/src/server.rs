@@ -9980,6 +9980,7 @@ mod tests {
             scale: 0,
             origin: FOLLOW_P1,
             scope,
+            quake: None,
         };
         rig.sv.test_push_temp_entity(te(176, Scope::Only(1)));
         rig.sv.test_push_temp_entity(te(174, Scope::AllBut(1)));

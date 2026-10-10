@@ -317,6 +317,7 @@ pub fn obituary(
             client_num: 0,
             scale: 0,
             scope: Scope::Broadcast,
+            quake: None,
         },
     );
     Ok(Value::Undefined)

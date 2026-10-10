@@ -386,7 +386,7 @@ silent bomb.
 | `EV_ITEM_PICKUP` (146) / `EV_AMMO_PICKUP` (148) | `es.eventParm` is the weapon index (1..69) |
 | reload / raise / putaway (151 to 158, 162) | `es.weapon` indexes the weapon table (stride 0x198) |
 | `EV_MELEE_HIT` (166) | `es.otherEntityNum` (116) is the sound emitter |
-| `EV_EARTHQUAKE` (195) | `es.angles2[0]` = scale, `es.time` = duration ms, `es.angles2[1]` = radius (`CG_EntityPreEvent` case `0xc3`) |
+| `EV_EARTHQUAKE` (195) | `es.angles2[0]` = scale, `es.time` = duration ms, `es.angles2[1]` = radius (`CG_EntityPreEvent` case `0xc3`); `EV_FIRE_WEAPON_MG42` (168) starts a fixed one too. The shake: `cod11-combat.md` 17.2 |
 | `EV_RAILTRAIL` (185) | `es.pos.trBase` = start, `es.origin2` = end, `es.attackerEntityNum` (120) = shooter, `es.dmgFlags` (220) = 2. Debug only (`g_debugBullets`). |
 | `EV_OBITUARY` (201) | handler `0x3001d6c0`; field usage not decoded, out of scope for effects |
 
