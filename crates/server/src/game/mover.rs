@@ -181,6 +181,9 @@ pub struct Step {
     /// `trap_EntitiesInBox(.., 0x2000180)` over the swept move, taken with
     /// the pusher unlinked: the push's candidates in area-tree order.
     pub listed: Vec<u32>,
+    /// The pusher's box where it now is, which a listed entity's own link
+    /// box must overlap before its trace runs (`G_MoverPush`, 0x5540e).
+    pub moved_box: Option<(Vec3, Vec3)>,
 }
 
 /// One notify the integrator owes script this frame.
@@ -346,10 +349,13 @@ pub fn run_one(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> (Vec<Do
     // sweeps (0x5533c) and links it where it now is (0x553ae), so a moving
     // mover goes to the head of its node's list every frame.
     if moving {
-        let swept = step.as_ref().and_then(|s| swept_box(host, s));
+        let boxes = step.as_ref().and_then(|s| push_boxes(host, s));
         host.area.unlink(id.0);
-        if let (Some(s), Some((mins, maxs))) = (step.as_mut(), swept) {
-            s.listed = host.area.entities_in_box(mins, maxs, PUSH_LIST_MASK);
+        if let (Some(s), Some((swept, moved))) = (step.as_mut(), boxes) {
+            s.listed =
+                host.area
+                    .entities_in_box(swept.0.to_array(), swept.1.to_array(), PUSH_LIST_MASK);
+            s.moved_box = Some(moved);
         }
         let (origin, angles) = pose(host, cx, id);
         host.link_entity_at(cx, id, Some((origin.into(), angles.into())));
@@ -409,13 +415,13 @@ pub fn stall(host: &mut GameHost, cx: &mut vcod_gsc::Cx, step: &Step) {
 /// `0x2000000`, an item's `0x100` and `0x80`.
 const PUSH_LIST_MASK: i32 = 0x2000180;
 
-/// `G_MoverPush`'s list box (0x550f0..0x5530a): the pusher's last link box,
-/// or a cube of `RadiusFromBounds` about its origin when its angles or
-/// `amove` are not all zero, stretched along `move` on each axis.
-fn swept_box(host: &GameHost, step: &Step) -> Option<([f32; 3], [f32; 3])> {
-    let mv = step.to.0 - step.from.0;
+/// `G_MoverPush`'s two boxes (0x550f0..0x5530a), `(swept, moved)`: the
+/// pusher's last link box, or a cube of `RadiusFromBounds` about its origin
+/// when its angles or `amove` are not all zero; `moved` is that box plus
+/// `move`, `swept` the box stretched along `move` on each axis.
+fn push_boxes(host: &GameHost, step: &Step) -> Option<((Vec3, Vec3), (Vec3, Vec3))> {
     let amove = step.to.1 - step.from.1;
-    let (mut mins, mut maxs) = if step.from.1 == Vec3::ZERO && amove == Vec3::ZERO {
+    let here = if step.from.1 == Vec3::ZERO && amove == Vec3::ZERO {
         let link = host.area.last_link(step.number)?;
         (Vec3::from(link.absmin), Vec3::from(link.absmax))
     } else {
@@ -424,14 +430,21 @@ fn swept_box(host: &GameHost, step: &Step) -> Option<([f32; 3], [f32; 3])> {
         let r = lo.abs().max(hi.abs()).length();
         (step.from.0 - Vec3::splat(r), step.from.0 + Vec3::splat(r))
     };
+    Some(boxes_from(here, step.to.0 - step.from.0))
+}
+
+/// [`push_boxes`] off the pusher's box before the move.
+fn boxes_from((mins, maxs): (Vec3, Vec3), mv: Vec3) -> ((Vec3, Vec3), (Vec3, Vec3)) {
+    let (mut lo, mut hi) = (mins, maxs);
+    // The sign test at 0x552e8: a positive move grows the max side.
     for i in 0..3 {
         if mv[i] > 0.0 {
-            maxs[i] += mv[i];
+            hi[i] += mv[i];
         } else {
-            mins[i] += mv[i];
+            lo[i] += mv[i];
         }
     }
-    Some((mins.to_array(), maxs.to_array()))
+    ((lo, hi), (mins + mv, maxs + mv))
 }
 
 /// The entity's `origin` and `angles` fields.
@@ -494,6 +507,7 @@ fn clip_step(
         from,
         to,
         listed: Vec::new(),
+        moved_box: None,
     })
 }
 
@@ -713,5 +727,22 @@ mod tests {
         assert_eq!(row.pos.advance(3000), Some(MOVEDONE));
         assert_eq!(row.pos.current.tr_type, TR_GRAVITY);
         assert!((row.pos.current.evaluate(3500).z + 3750.0).abs() < 0.01);
+    }
+
+    /// `G_MoverPush`'s boxes for an unrotated pusher: the list box grows
+    /// only on the side `move` points to, the test box is shifted whole
+    /// (0x55260..0x5530a).
+    #[test]
+    fn push_boxes_stretch_and_shift_along_the_move() {
+        let here = (Vec3::new(-1.0, -1.0, -1.0), Vec3::new(11.0, 11.0, 11.0));
+        let ((lo, hi), (mlo, mhi)) = boxes_from(here, Vec3::new(5.0, -3.0, 0.0));
+        assert_eq!(
+            (lo, hi),
+            (Vec3::new(-1.0, -4.0, -1.0), Vec3::new(16.0, 11.0, 11.0))
+        );
+        assert_eq!(
+            (mlo, mhi),
+            (Vec3::new(4.0, -4.0, -1.0), Vec3::new(16.0, 8.0, 11.0))
+        );
     }
 }
