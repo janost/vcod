@@ -6,7 +6,7 @@
 use crate::configstrings::CsRange;
 use crate::game::builtins::entity::entity_receiver;
 use crate::game::host::GameHost;
-use crate::game::temp_entity::{Scope, TempEntity};
+use crate::game::temp_entity::{Quake, Scope, TempEntity};
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
 pub use vcod_common::net::event_ids::EV_PLAY_FX;
@@ -19,6 +19,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("playfx", play_fx),
     ("playfxontag", play_fx_on_tag),
     ("grenadeexplosioneffect", grenade_explosion_effect),
+    ("earthquake", earthquake),
 ];
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
@@ -91,6 +92,52 @@ pub fn play_fx(
             scale,
             origin: *origin,
             scope: Scope::Pvs,
+            quake: None,
+        },
+    );
+    Ok(Value::Undefined)
+}
+
+/// `earthquake(scale, duration, source, radius)` (`.so` 0x5f3d8): an
+/// `EV_EARTHQUAKE` temp entity at `source` carrying the scale, the
+/// duration in ms (`duration * 1000 + 0.5`, truncated) and the radius,
+/// which the client shakes its view by (`play::quake`). Nothing is
+/// checked; the client drops a scale that is not positive.
+pub fn earthquake(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let num = |i: usize| match args.get(i) {
+        Some(Value::Int(n)) => Ok(*n as f32),
+        Some(Value::Float(f)) => Ok(*f),
+        _ => Err(ErrorKind::BadType(
+            "earthquake takes a scale, a duration, an origin and a radius",
+        )),
+    };
+    let (scale, duration, radius) = (num(0)?, num(1)?, num(3)?);
+    let Some(Value::Vector(origin)) = args.get(2) else {
+        return Err(ErrorKind::BadType("earthquake's source must be a vector"));
+    };
+    host.add_temp_entity(
+        cx,
+        TempEntity {
+            event: vcod_common::net::event_ids::EV_EARTHQUAKE,
+            parm: 0,
+            surf_type: 0,
+            other: 0,
+            attacker: 0,
+            weapon: 0,
+            client_num: 0,
+            scale: 0,
+            origin: *origin,
+            scope: Scope::Pvs,
+            quake: Some(Quake {
+                scale,
+                duration_ms: (duration * 1000.0 + 0.5) as i32,
+                radius,
+            }),
         },
     );
     Ok(Value::Undefined)
@@ -135,6 +182,7 @@ pub fn grenade_explosion_effect(
             scale: 0,
             origin: at.to_array(),
             scope: Scope::Pvs,
+            quake: None,
         },
     );
     host.spawn_concussive(cx);
@@ -210,5 +258,38 @@ mod tests {
         assert_eq!(plain.scope, Scope::Pvs);
         let up = vcod_common::net::events::dir_to_byte([0.0, 0.0, 1.0]);
         assert_eq!((dir.event, dir.parm, dir.scale), (EV_PLAY_FX_DIR, 3, up));
+    }
+
+    /// `earthquake` is a temp entity at the source carrying the scale, the
+    /// duration rounded to whole ms and the radius, and its wire state puts
+    /// them in `angles2[0]`, `time` and `angles2[1]`.
+    #[test]
+    fn earthquake_raises_its_event_with_the_three_fields() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let at = Value::Vector([1.0, 2.0, 3.0]);
+            let args = [Value::Float(0.3), Value::Float(0.0026), at, Value::Int(850)];
+            earthquake(&mut host, cx, None, &args).unwrap();
+            assert!(earthquake(&mut host, cx, None, &args[..3]).is_err());
+        });
+        let [quake] = &host.temp_entities[..] else {
+            panic!("one event, not {}", host.temp_entities.len());
+        };
+        let te = &quake.te;
+        assert_eq!(te.event, vcod_common::net::event_ids::EV_EARTHQUAKE);
+        assert_eq!(te.origin, [1.0, 2.0, 3.0]);
+        assert_eq!(
+            te.quake,
+            Some(Quake {
+                scale: 0.3,
+                duration_ms: 3,
+                radius: 850.0
+            })
+        );
+        let p = &vcod_common::net::protocol::PROTOCOL_V1;
+        let es = crate::game::temp_entity::build(te, 70, p);
+        assert_eq!(es.field_f32(p, "angles2[0]"), 0.3);
+        assert_eq!(es.field_i32(p, "time"), 3);
+        assert_eq!(es.field_f32(p, "angles2[1]"), 850.0);
     }
 }
