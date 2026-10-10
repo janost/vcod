@@ -254,6 +254,56 @@ pub fn menu_list(text: &str) -> Vec<String> {
     files
 }
 
+/// `cl_language`'s names by index (CoDMP.exe table at 0x571b30, read through
+/// UI syscall 2 at 0x4a9a00; an index past the table reads `english`).
+const LANGUAGES: [&str; 14] = [
+    "english",
+    "french",
+    "german",
+    "italian",
+    "spanish",
+    "british",
+    "russian",
+    "polish",
+    "korean",
+    "taiwanese",
+    "japanese",
+    "chinese",
+    "thai",
+    "leet",
+];
+
+/// The path the UI tries before a menu file's own (`ui_mp_x86.dll`
+/// 0x400084f7..0x40008566 for a list's files, 0x400083d6 for a script
+/// menu): `<dir>/<language>/<file>` when `cl_language` reads non-zero
+/// through `atoi`, else none. English is 0, so stock installs never try it
+/// (docs/research/cod11-front-end.md, section 1).
+pub fn localized_menu_path(path: &str, cl_language: &str) -> Option<String> {
+    let t = cl_language.trim_start();
+    let (neg, digits) = match t.as_bytes().first() {
+        Some(b'-') => (true, &t[1..]),
+        Some(b'+') => (false, &t[1..]),
+        _ => (false, t),
+    };
+    let n = digits
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .fold(0i32, |n, d| {
+            n.wrapping_mul(10).wrapping_add(i32::from(d - b'0'))
+        });
+    let index = if neg { n.wrapping_neg() } else { n };
+    if index == 0 {
+        return None;
+    }
+    let language = usize::try_from(index)
+        .ok()
+        .and_then(|i| LANGUAGES.get(i))
+        .unwrap_or(&LANGUAGES[0]);
+    let split = path.rfind('/').map_or(0, |i| i + 1);
+    let (dir, file) = path.split_at(split);
+    Some(format!("{dir}{language}/{file}"))
+}
+
 /// Q3's `atof`/`atoi` plus the `0x` hex `menudef.h` uses for flags.
 fn num(t: Option<&String>) -> f32 {
     let Some(t) = t else { return 0.0 };
@@ -732,5 +782,23 @@ mod tests {
             ["ui_mp/main.menu", "ui/quit.menu", "ui/error.menu"]
         );
         assert!(menu_list("{ loadMenu \"x.menu\" }").is_empty());
+    }
+
+    #[test]
+    fn a_menu_is_tried_under_the_language_directory_first() {
+        assert_eq!(localized_menu_path("ui_mp/main.menu", "0"), None);
+        assert_eq!(localized_menu_path("ui_mp/main.menu", ""), None);
+        assert_eq!(
+            localized_menu_path("ui_mp/main.menu", "2"),
+            Some("ui_mp/german/main.menu".into())
+        );
+        assert_eq!(
+            localized_menu_path("ui_mp/scriptmenus/team_american.menu", " 1x"),
+            Some("ui_mp/scriptmenus/french/team_american.menu".into())
+        );
+        assert_eq!(
+            localized_menu_path("main.menu", "99"),
+            Some("english/main.menu".into())
+        );
     }
 }
