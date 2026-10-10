@@ -200,18 +200,36 @@ pub fn sync(
 }
 
 /// One parsed menu per stock name, lazily loaded from
-/// `ui_mp/scriptmenus/<name>.menu`; a missing file caches as `None` so a
+/// `ui_mp/scriptmenus/<name>.menu`, tried under `cl_language`'s directory
+/// first (ui_mp_x86.dll 0x40008330); a missing file caches as `None` so a
 /// server naming a bad menu is only tried, and warned about, once.
 #[derive(Default)]
 pub struct MenuCache {
     cache: HashMap<String, Option<Menu>>,
+    language: String,
 }
 
 impl MenuCache {
+    /// An empty cache for `cl_language`'s value.
+    pub fn new(language: &str) -> MenuCache {
+        MenuCache {
+            cache: HashMap::new(),
+            language: language.to_string(),
+        }
+    }
+
+    /// Forgets every parsed menu, for a new search path.
+    pub fn clear(&mut self) {
+        self.cache.clear();
+    }
+
     pub fn get(&mut self, fs: &Pk3Fs, name: &str) -> Option<&Menu> {
         if !self.cache.contains_key(name) {
             let path = format!("ui_mp/scriptmenus/{name}.menu");
-            let parsed = fs.read(&path).map(|bytes| {
+            let bytes = vcod_common::ui_menu::localized_menu_path(&path, &self.language)
+                .and_then(|p| fs.read(&p))
+                .or_else(|| fs.read(&path));
+            let parsed = bytes.map(|bytes| {
                 let include =
                     |p: &str| fs.read(p).map(|b| String::from_utf8_lossy(&b).into_owned());
                 vcod_common::menu::parse_with(&String::from_utf8_lossy(&bytes), &include)

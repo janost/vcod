@@ -35,10 +35,25 @@ functions whose shape they share. vcod's implementation is
   file name in it until its `}`, and any other token (the opening `{`) is
   skipped. A `loadmenu` not followed by `{` ends the list. Then it prints
   `UI menu load time = %d milli seconds`. VERIFIED (asm: the `0x7d` test
-  at `0x4000864e`, the `loadmenu` compare at `0x40008653`). Each name is
-  first tried under a path built from `cl_language` (strings `%s%s/`,
-  `cl_language` at `0x4002f1d4`, `0x4002f1dc`), then as given; INFERRED,
-  and stock English paks hold no such path.
+  at `0x4000864e`, the `loadmenu` compare at `0x40008653`).
+- Each name is first tried under a path built from `cl_language`, then as
+  given (`0x400084f7..0x40008566`). VERIFIED (asm): `atoi` (0x40019b68)
+  of the cvar; non-zero takes UI syscall 2 (CoDMP.exe 0x4a9a00), which
+  returns the language name from the table at 0x571b30 (`english`,
+  `french`, `german`, `italian`, `spanish`, `british`, `russian`,
+  `polish`, `korean`, `taiwanese`, `japanese`, `chinese`, `thai`, `leet`;
+  an index of 14 or more reads `english`). The path is the name's
+  directory with its trailing `/` (0x400058b0), the language and `/`
+  (`%s%s/` at `0x4002f1d4`), then the file name (0x40005870), so
+  `ui_mp/main.menu` under 2 is `ui_mp/german/main.menu`. When that load
+  (0x40008240) fails the name loads as given. `cl_language` is registered
+  `"0"`, flags `0x21` (CoDMP.exe 0x4a99b0), and English is 0, so a stock
+  install never tries the localized path. VERIFIED. A script menu
+  (`ui_mp/scriptmenus/<name>.menu`, 0x40008330) goes through the same two
+  tries (`0x400083d6..0x4000844d`). VERIFIED (asm).
+- `UI_LoadMenus`' second argument, when non-zero, zeroes the menu count
+  (0x40018ac0 stores 0 to 0x401bf400, the count `Menus_FindByName` reads
+  at 0x40010561) before the list loads; 0 appends. VERIFIED (asm).
 - `_UI_Init` (0x4000d310, `vmMain` case 1 at `0x400076be`) sets
   `ui_menuFiles` back to `ui_mp/menus.txt` (`trap_Cvar_Set` at
   `0x4000d324`) before it reads the cvar at `0x4000d624`. So the UI always
@@ -438,7 +453,13 @@ off the branches:
   (`vcod_common::ui_menu::menu_list`). `ui_load` reloads off the list
   `ui_menuFiles` names (a missing one falls back with retail's warning)
   and reopens the focused menu. A front-end restart sets the cvar back to
-  its default, as `_UI_Init` does. vcod has no `ingame.txt` menus.
+  its default, as `_UI_Init` does. A start or restart adds
+  `ui_mp/ingame.txt`'s menus after the first list's, and `ui_load` drops
+  them, as retail's reset does. Every menu file and script menu is tried
+  under `cl_language`'s directory first (registered `"0"`, archived; vcod
+  does not latch it, and reads it when the front end or the script menu
+  cache is built). Nothing opens `quickmessage` yet: vcod has no
+  `mp_QuickMessage` command (section 14).
 - It draws the main menu, the browser and its popups (sections 6-11),
   the options set (section 14), the quit popup and the error popup from the
   stock files with their layout, the main menu again over a game (section
@@ -533,8 +554,12 @@ unknown `g_scriptMainMenu` opens nothing: `0x400134b0` looks the name up
 
 ### The menus it reaches
 
-- `ui_mp/ingame.txt` lists `ui_mp/ingame.menu` and five more `ingame_*`
-  files; none of them is in any 1.1 pak. VERIFIED (pak listings).
+- `ui_mp/ingame.txt` (`pak0.pk3`) lists `ui_mp/ingame.menu` and five more
+  `ingame_*` files, none of them in any 1.1 pak, then
+  `ui_mp/wm_quickmessage.menu`, which `pak0.pk3` ships: menuDef
+  `quickmessage`, `UI_SetActiveMenu` case 8, whose `execKey` 1-3 close it
+  and open the `quickcommands`, `quickstatements` and `quickresponses`
+  script menus. VERIFIED (pak listings, the files).
   `menus.txt` is the list the UI loads.
 - Every stock team and weapon script menu carries a `button_mainmenu` tab,
   `@MPMENU_MAIN_MENU`, whose action is `play "mouse_click"; close <self>;

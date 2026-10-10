@@ -33,6 +33,21 @@ pub struct DamageFeedback {
     pub count: i32,
 }
 
+impl DamageFeedback {
+    pub fn from_ps(
+        p: &vcod_common::net::protocol::Protocol,
+        ps: &vcod_common::net::msg::PlayerState,
+    ) -> DamageFeedback {
+        let int = |name: &str| ps.field_i32(p, name);
+        DamageFeedback {
+            event: int("damageEvent"),
+            yaw: int("damageYaw"),
+            pitch: int("damagePitch"),
+            count: int("damageCount"),
+        }
+    }
+}
+
 /// What the native HUD reads off the playerstate being drawn.
 pub struct PlayerView<'a> {
     pub client_num: i32,

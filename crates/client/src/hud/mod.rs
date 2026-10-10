@@ -291,16 +291,7 @@ impl Hud {
             Some(ps) => {
                 let friends = compass_friends(ps, f);
                 let mut view = player_view(ps, &friends, f);
-                // The replay at its own clock, or a followed player's
-                // snapshot at the render clock: retail runs the sway on
-                // whichever playerstate it draws.
-                let (gun_ps, gun_ms) = match f.predicted {
-                    Some(pred) => (pred.ps, pred.command_time),
-                    None => (
-                        vcod_common::pmove::predict::from_wire(f.protocol, ps, None).ps,
-                        f.server_time,
-                    ),
-                };
+                let (gun_ps, gun_ms) = gun_clock(f.protocol, ps, f.predicted, f.server_time);
                 let gun = &mut self.player.gun;
                 gun.feed(view.client_num, view.damage, &gun_ps, gun_ms);
                 view.gun_angles = gun.step(view.weapon, &gun_ps, gun_ms);
@@ -417,6 +408,57 @@ pub fn bind_keys(text: &str) -> String {
 /// a follower's copy of its target included, draws the menu HUD.
 fn draws_native_hud(pm_type: i32) -> bool {
     !matches!(pm_type, 4 | 5)
+}
+
+/// The playerstate the gun's aim and the damage kick run on, and its clock:
+/// the replay at its own clock, or a followed player's snapshot at the
+/// render clock. Retail runs both on whichever playerstate it draws.
+fn gun_clock(
+    p: &Protocol,
+    ps: &PlayerState,
+    predicted: Option<&Predicted>,
+    server_time: i32,
+) -> (vcod_common::pmove::PlayerState, i32) {
+    match predicted {
+        Some(pred) => (pred.ps, pred.command_time),
+        None => (
+            vcod_common::pmove::predict::from_wire(p, ps, None).ps,
+            server_time,
+        ),
+    }
+}
+
+impl Hud {
+    /// The damage kick and the sight's walk bob on the drawn view, wire
+    /// degrees: `CG_OffsetFirstPersonView`'s first adds (cgame
+    /// `0x30032b58`-`0x30032b9c`, combat doc 15.5). `ps` is the newest
+    /// snapshot's, `predicted` the replay when it is ours. Feeds a new
+    /// `damageEvent` first, so the view kicks on the frame the hit arrives;
+    /// `build`'s feed of the same event then does nothing.
+    pub fn view_kick(
+        &mut self,
+        p: &Protocol,
+        ps: &PlayerState,
+        predicted: Option<&Predicted>,
+        server_time: i32,
+        weapons: &[Option<WeaponDef>],
+    ) -> [f32; 3] {
+        if !draws_native_hud(ps.field_i32(p, "pm_type")) {
+            return [0.0; 3];
+        }
+        let (gun_ps, gun_ms) = gun_clock(p, ps, predicted, server_time);
+        let gun = &mut self.player.gun;
+        gun.feed(
+            ps.field_i32(p, "clientNum"),
+            DamageFeedback::from_ps(p, ps),
+            &gun_ps,
+            gun_ms,
+        );
+        let def = weapons
+            .get(usize::from(gun_ps.weapon))
+            .and_then(Option::as_ref);
+        vcod_common::pmove::aim::view_angles(&gun_ps, def, &gun.kick(), gun_ms)
+    }
 }
 
 /// The teammates of `ps`'s client the snapshot shows, live `ET_PLAYER`
@@ -539,12 +581,7 @@ fn player_view<'a>(
         cursor_hint: int("serverCursorHint"),
         // Playerstate fields arrive unsigned; retail's -1 is 255.
         cursor_hint_string: i32::from(int("serverCursorHintString") as u8 as i8),
-        damage: DamageFeedback {
-            event: int("damageEvent"),
-            yaw: int("damageYaw"),
-            pitch: int("damagePitch"),
-            count: int("damageCount"),
-        },
+        damage: DamageFeedback::from_ps(f.protocol, ps),
         spawn_count: ps.arrays.stats[5],
         // The cgame reads it off the playerstate it predicts.
         prone_blocked: f

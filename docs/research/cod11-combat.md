@@ -6196,3 +6196,144 @@ but the intermission, `PMF_RESPAWNED` clear), on `ClientSim::attacking`;
 passes the `pm_type` test, so its first cmd, which still holds the weapon,
 can set the bit; the dead arm then zeroes the weapon and the next cmd
 clears it. Not measured live.
+
+---
+
+## 17. What a hit, a quake and a lean do to the drawn view
+
+The client's side of section 6's kick, the `earthquake` builtin and the
+lean's own term in the viewmodel. Module `cgame_mp_x86.dll` unless named.
+
+### 17.1 The damage kick on the view
+
+VERIFIED, `CG_OffsetFirstPersonView` (my name, `0x30032ae0`) at
+`0x30032af7`-`0x30032b54` builds a frame of `{ps 0x3020715c, [0x3020c9a8]
+- [0x30209228] or 0 when [0x3020c9a8] is 0, [0x30207148] - [0x30209228],
+[0x3020c9e4], [0x3020c9e8], [0x3020c9f0]}` on a zeroed output and calls
+`0x30012cb0` (`0x30032b58`) and `0x30012dc0` (`0x30032b65`); `0x30032b6a`-
+`0x30032b9c` add the output to `refdefViewAngles` (`0x302095cc`-`0x302095d4`).
+VERIFIED, the function returns at `0x30032af1` when the snapshot's
+`pm_type` (`[0x301e2164] + 0x10`) is 5.
+
+VERIFIED, `0x30012cb0`, the constants `0x30069304` 1.0, `0x30069308` 2.0,
+`0x3006930c` 0.5, `0x30069310` 0.0, `0x30069524` 100.0, `0x30069520`
+0.0025 and `0x300693f4` 0.01, and the reads `ps+0xb8` (`fWeaponPosFrac`)
+and `weaponDefs[ps+0xb0]+0x228` (`adsOverlayReticle`). INFERRED, off its
+branches: it is the game's `0x3a2d4` (15.4) with the rise as `dt * 0.01`
+and the fall as `(dt - 100) * 0.0025`; nothing on a zero stamp, `f = 1 -
+frac * 0.5`, times `frac * 0.5 + 1` with the fraction non-zero on a scope,
+`out[0] += g * f * [0x3020c9e4]`, `out[2] += g * f * [0x3020c9e8]`. The
+game tests `frac > 0` where the cgame tests `frac != 0`; the fraction is
+never negative. INFERRED: `0x30012dc0` is the game's `0x3a3c4`, the sight's
+own walk bob; it reads `eFlags & 0xc000`, `ps+0xb8`, `adsViewBobMult`
+(`+0x238`) and `bobCycle` (`ps+8`) as 15.4 lists. The two kick angles and
+the stamp are `0x300287f0`'s (`cod11-hud-protocol.md`, "Scope overlay"),
+the same the gun's kick reads, so the view and the gun kick off one hit.
+
+INFERRED: the kick's pitch tips the view along the hit and its roll across
+it; it is never added to a cmd, so it moves the picture and not the aim
+(the server keeps its own copy, section 6 step 7 and 8, for the aim block).
+
+vcod: `pmove::aim::view_angles`, which the server's aim block and the play
+camera share. `Hud::view_kick` feeds a new `damageEvent` into the gun's
+tracker first, then evaluates on the playerstate the HUD draws (the replay
+at its `commandTime`, a followed player's snapshot at the render clock),
+and the camera adds the result before the lean offset, skipping the
+intermission. A followed player's view kicks too: `CG_OffsetFirstPersonView`
+runs on whichever playerstate is drawn.
+
+### 17.2 The earthquake
+
+VERIFIED, game.mp `0x5f3d8` (`functions[76]`, `earthquake`):
+`Scr_GetFloat(0)` (scale), `Scr_GetFloat(1) * 1000.0 + 0.5` (`.rodata
+0x78b04`, `0x78b08`) stored through `fistp` with the control word's
+rounding set to truncate (`0x5f40c`-`0x5f41e`), `Scr_GetVector(2)`,
+`Scr_GetFloat(3)` (radius), then `G_TempEntity(origin, 0xc3)` with
+`s+0x68` (`angles2[0]`) the scale, `s+0x54` (`time`) the ms and `s+0x6c`
+(`angles2[1]`) the radius. Nothing is range-checked. VERIFIED, `EV_EARTHQUAKE`
+is 195 (`cod11-events-and-fx.md`).
+
+VERIFIED, live, 2026-10-10: `probe_quake` (client-probes) on the retail
+1.1d server, dm on mp_carentan, one `--net-probe --probe-team allies`
+client; `earthquake(0.3, 2.5, origin, 850)` arrives as `angles2 [0.3,
+850.0, 0.0] time 2500`, `earthquake(0.05, 0.0026, origin, 100)` as
+`angles2 [0.05, 100.0, 0.0] time 3`, origins truncated (`144.12` reads
+144). The run on `vcod-server` reads the same, entity numbers included.
+
+VERIFIED, `CG_EntityPreEvent` has two calls to `0x30017dd0(scale, ms,
+radius)` with `ecx` the entity's `lerpOrigin` (`cent+0x1f8`): case `0xc3`
+(`EV_EARTHQUAKE`, `0x3001e99f`) passes `cent+0x158`, `+0x144` and `+0x15c`
+(`currentState` at `cent+0xf0`, so `angles2[0]`, `time` and `angles2[1]`),
+and case `0xa8` (`EV_FIRE_WEAPON_MG42`, `0x3001e936`) passes 0.05
+(`0x3d4ccccd`), 100 and 100.0 (`0x42c80000`) before falling into the
+fire-weapon arm. A mounted MG shakes the view a little within 100 units
+of the gun on every shot.
+
+VERIFIED, the slots: four of 0x24 bytes at `0x3020cff4` (start time, scale,
+duration as a float, radius, origin, then two computed floats at `+0x1c`
+and `+0x20`), and the phase at `0x3020d084`. `0x30017d40` (slot in `esi`):
+`dt = cg.time - start`, 0 when negative or not under the duration;
+otherwise `d = 1 - Distance(refdef.vieworg, origin) / radius` and `s =
+scale * (1 - dt / duration)`, `+0x20 = s`, `+0x1c = d * s`, or `d / s`
+when `d` is negative (`0x30017db2`), and it returns 1. `0x30017dd0`
+returns at once for a scale that is not above 0 (`0x30017dd7`), fills a
+slot on the stack at `cg.time` and runs `0x30017d40` on it, then takes the
+first slot whose start is past `cg.time` or whose start plus duration is
+not, else the slot with the smallest `+0x1c` below the new one's, else
+drops it (`0x30017e30`-`0x30017eeb`).
+
+VERIFIED, `0x30017f00`, constants `0x300694e0` 1/600, `0x300694dc` 8 PI,
+`0x300694d4` 15 PI, `0x300694d0` 12 PI, `0x300694d8` 18.0, `0x30069468`
+16.0, `0x300693e4` 10.0, `0x300693b4` 1/32768, `0x300693a8` PI: `t =
+cg.time * (1/600)` as a float; the live slot with the largest `+0x1c` above
+0 gives `c` and its `+0x20` gives `s`; with `c` not above 0 the phase is
+redrawn as `(rand() / 32768 * 2 - 1) * PI` and nothing shakes; otherwise
+`c` is capped at 1 and `refdefViewAngles` take `sin(t * 8PI + phase) * c *
+s * 18` on pitch, `sin(t * 15PI + phase) * c * s * 16` on yaw and `sin(t *
+12PI + phase) * c * s * 10` on roll, periods of 150, 80 and 100 ms.
+VERIFIED, a floor at `0x3020d088` would replace `c` and `s` both, but its
+only store is a zero (`0x3001bdf1`, `ebp` cleared at `0x3001bd1d`).
+INFERRED: the amplitude goes as the scale squared; `earthquake(0.3, ...)`
+at its source starts at 1.6 degrees of pitch, the MG's at most 0.045.
+
+VERIFIED, the call site `0x30033da9`: after `CG_CalcViewValues` (`0x30033d9b`,
+which runs `CG_OffsetFirstPersonView`), behind a test of `0x301e2150` being
+0, then `AnglesToAxis` rebuilds `refdef.viewaxis` (`0x30033db8`). INFERRED:
+`0x301e2150` is the stereo or view-mode argument `CG_DrawActiveFrame`
+stores (`0x300339ce`), 0 in normal play; the shake applies to every view,
+the intermission and a turret's included, and the viewmodel, drawn off
+the shaken axis, moves with it.
+
+vcod: `play::quake`, owned by `play::view::OnlineView`; the event loop
+starts a quake at the render clock and the drawn eye, using the event
+body's drawn origin, and the camera adds the shake after the turret
+override. Differences: the event is handled after the frame's camera, so
+the shake starts a frame later than retail's pre-event; `start` recomputes
+each slot's strength instead of reading the one stored by the last shake;
+the phase's `rand()` is an msvcrt-shaped LCG with its own seed. The
+server's `earthquake` builtin is `game::builtins::fx::earthquake`.
+
+### 17.3 The lean in the viewmodel
+
+VERIFIED, `0x30036990` (output in `eax`, called at `0x300372c1` by the
+viewmodel's `0x300371f0`), constants `0x30069674` 1.6, `0x30069678` -2.0,
+`0x30069390` PI/180, `0x300693f0` -1.0: with the predicted `leanf`
+(`0x3020719c`, `ps+0x40`) non-zero and `fWeaponPosFrac` (`0x30207214`)
+under 1, `f = (2 - |leanf|) * leanf`, `d = (1 - frac) * f * 1.6`, and the
+output takes `d` times `AngleVectors`' right vector of `(0, 0, f * -2)`,
+which is `(0, -cos r, -sin r)`. VERIFIED, `0x30036840` turns the output
+into the world as `vieworg + x * forward - y * right + z * up` off
+`refdefViewAngles`, so the frame is (forward, left, up). INFERRED: a full
+lean right moves the gun 1.6 units right and 0.056 up relative to the eye,
+on top of the eye's own 19.2 (`bsp-ibsp59-format.md`, "Lean"), and none
+once the sight is fully up.
+
+VERIFIED, the gun's angles: `0x30012bf0` (15.5) opens with `out[2] =
+GetLeanFraction(leanf) * -2.0` (`0x30012c01`-`0x30012c37`), the game's
+first term in 15.2, and `0x300371f0` composes the gun's axis from those
+angles and the view's (`0x30037480`-`0x300374aa`). INFERRED: the gun rolls
+2 degrees against the lean at full lean, sighted or not.
+
+vcod: `play::view::lean_offset` and `lean_roll` in `OnlineView::frame`'s
+transform. The rest of `0x300371f0`'s weapon angles (movement tilt, idle,
+bob, turn sway) are still vcod's `ViewmodelMotion`, not retail's.

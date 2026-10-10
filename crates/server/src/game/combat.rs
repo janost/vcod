@@ -515,6 +515,7 @@ fn fire_round(
                         client_num: 0,
                         scale: 0,
                         scope: Scope::Broadcast,
+                        quake: None,
                     }));
                 }
                 if world.is_none_or(|w| w.hit_contents(&t) & CONTENTS_GLASS == 0) {
@@ -566,6 +567,7 @@ pub fn flesh_impacts(
         scale: byte,
         origin: point,
         scope: Scope::AllBut(victim),
+        quake: None,
     };
     let client = TempEntity {
         event: client,
@@ -573,6 +575,7 @@ pub fn flesh_impacts(
         scale: 0,
         client_num: victim as i32,
         scope: Scope::Only(victim),
+        quake: None,
         ..base
     };
     [base, client]
@@ -822,6 +825,7 @@ pub fn melee_fire(
                         client_num: 0,
                         scale: 0,
                         scope: Scope::Broadcast,
+                        quake: None,
                     }),
                     Effect::Hit(Hit {
                         victim: slot,
@@ -852,6 +856,7 @@ pub fn melee_fire(
                 client_num: 0,
                 scale: 0,
                 scope: Scope::Broadcast,
+                quake: None,
             })],
         },
         Traced::Nothing => ShotResult {
@@ -866,6 +871,7 @@ pub fn melee_fire(
                 client_num: 0,
                 scale: 0,
                 scope: Scope::Broadcast,
+                quake: None,
             })],
         },
     }

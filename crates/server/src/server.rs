@@ -2814,14 +2814,16 @@ impl Server {
         }
     }
 
-    /// `SV_SendClientSnapshot` (0x808f844) for a client that is downloading
-    /// and not in the world: retail writes the server commands and the
-    /// snapshot only for an active client (or a zombie), so the message is
-    /// the header and the download blocks. It goes out when the client's
+    /// `SV_SendClientSnapshot` (0x808f844) for a client not in the world:
+    /// retail writes the server commands and the snapshot only for an
+    /// active client (or a zombie), so the message is the header and the
+    /// download blocks, or the bare header (9 bytes on the wire) for a
+    /// client that is not downloading. It goes out when the client's
     /// `nextSnapshotTime` comes round, as every message does
-    /// ([`Client::pace`]); a client in the world gets its blocks after its
-    /// snapshot in [`Self::send_snapshots`].
-    fn send_downloads(&mut self) {
+    /// ([`Client::pace`]: every frame on a LAN, else at least a second
+    /// apart while not downloading); a client in the world gets its blocks
+    /// after its snapshot in [`Self::send_snapshots`].
+    fn send_unentered(&mut self) {
         let open = self.download_opener();
         let max_rate = self.live_int_cvar("sv_maxRate");
         let (dedicated, now) = (self.dedicated, self.sv_time_ms);
@@ -2834,11 +2836,9 @@ impl Server {
                 self.outbox.push((c.addr, pkt));
                 continue;
             }
-            if c.download.is_none() {
-                continue;
-            }
             let mut w = MsgWriter::new(&self.huff);
             write_download(c, &mut w, now, rate, &open);
+            c.stamp_sent(c.netchan.outgoing_sequence, now);
             let sent = c
                 .netchan
                 .transmit(c.last_client_command, &w.into_ops(), &self.huff);
@@ -4974,6 +4974,9 @@ impl Server {
             return;
         };
         c.state = ClientState::Active;
+        // The first snapshot goes this frame, not after the primed client's
+        // 1 s keepalive interval (0x80877d8).
+        c.next_message_ms = self.sv_time_ms;
         c.sim = Some(ClientSim::spectator(spawn.0, spawn.1, cmd_angles));
         // The entering cmd is not simulated: retail's execute loop skips
         // every cmd at or before `lastUsercmd`, which entry has just set to
@@ -5648,7 +5651,7 @@ impl Server {
 
         // Every entity built once, then culled and written per client.
         self.send_snapshots(&moved, wall_ms);
-        self.send_downloads();
+        self.send_unentered();
         self.send_zombies();
         // `SV_Frame`'s last step (0x808d258).
         let mut resolve = self.resolver;
@@ -7589,6 +7592,7 @@ mod tests {
         );
         let nc = connected(&mut sv, addr(5), now);
         sv.tick(now);
+        sv.take_outgoing();
         let gone = |sv: &mut Server| sv.script.as_mut().unwrap().level_field("gone");
         assert_eq!(gone(&mut sv), vcod_gsc::Value::Int(0));
 
@@ -8403,6 +8407,44 @@ mod tests {
             now,
         );
         nc
+    }
+
+    /// Off the LAN a primed client gets a bare message a second apart, and
+    /// entering the world makes it due at once (0x80877d8 sets
+    /// `nextSnapshotTime` to `svs.time`): live, retail answered the entering
+    /// cmd 15 ms later (cod11-server-handshake.md, "Clients not in the
+    /// world").
+    #[test]
+    fn entering_the_world_cuts_the_primed_keepalive_short() {
+        let huff = Huffman::new();
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let wan = SocketAddr::from(([203, 0, 113, 9], 27960));
+        let mut nc = connected(&mut sv, wan, now);
+        let pkt = nc.build_out(0, 0, 0, &ack_ops(), &huff).unwrap();
+        sv.handle_packet(wan, &pkt, now);
+        sv.take_outgoing();
+        sv.clients[0].as_mut().unwrap().unsent.clear();
+        let mut bare = Vec::new();
+        for i in 0..21 {
+            sv.tick(now + Duration::from_millis(50 * i));
+            bare.extend(sv.take_outgoing().into_iter().map(|_| i));
+        }
+        assert_eq!(bare, [19], "one keepalive, a second after the gamestate");
+        let t = now + Duration::from_millis(1100);
+        let ack = nc.incoming_sequence as i32;
+        let ops = move_ops(sv.checksum_feed, ack, NULL_USERCMD);
+        let pkt = nc
+            .build_out(i32::from(sv.server_id), ack, 0, &ops, &huff)
+            .unwrap();
+        sv.handle_packet(wan, &pkt, t);
+        assert_eq!(sv.clients[0].as_ref().unwrap().state, ClientState::Active);
+        sv.tick(t);
+        assert_eq!(
+            sv.take_outgoing().len(),
+            1,
+            "the first snapshot goes at once"
+        );
     }
 
     /// `SV_SendClientGameState` (0x8085eec): fragments left of an earlier
@@ -9754,16 +9796,30 @@ mod tests {
     }
 
     #[test]
-    fn an_unacked_client_gets_no_snapshots() {
+    fn a_client_before_its_gamestate_gets_bare_messages() {
+        // `SV_SendClientMessages` (0x809045c): a `CS_CONNECTED` client gets
+        // the header and `svc_EOF`, 9 bytes, every frame on a LAN and a
+        // second apart off it (0x808f817).
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
-        let _nc = connected(&mut sv, addr(5), now);
-        sv.take_outgoing(); // drop the gamestate frames
-        sv.tick(now);
-        assert!(
-            sv.take_outgoing().is_empty(),
-            "nothing before the gamestate is acked"
-        );
+        let wan = SocketAddr::from(([203, 0, 113, 9], 27960));
+        let mut lan_nc = connected(&mut sv, addr(5), now);
+        let mut wan_nc = connected(&mut sv, wan, now);
+        let huff = Huffman::new();
+        let (mut lan_n, mut wan_n) = (0, 0);
+        for i in 0..22 {
+            sv.tick(now + Duration::from_millis(50 * i));
+            for (to, pkt) in sv.take_outgoing() {
+                assert_eq!(pkt.len(), 9, "a bare message");
+                let nc = if to == wan { &mut wan_nc } else { &mut lan_nc };
+                let msg = nc.process_in(&pkt, &huff).unwrap().unwrap();
+                let mut r = MsgReader::new(&msg[4..], &huff);
+                assert_eq!(r.read_byte(), msg::SVC_EOF, "no commands, no snapshot");
+                *if to == wan { &mut wan_n } else { &mut lan_n } += 1;
+            }
+        }
+        assert_eq!(lan_n, 22);
+        assert_eq!(wan_n, 2, "a keepalive at 0 and at 1000 ms");
     }
 
     /// A spectator in slot 0 on a real netchan and two players put straight
@@ -9988,6 +10044,7 @@ mod tests {
             scale: 0,
             origin: FOLLOW_P1,
             scope,
+            quake: None,
         };
         rig.sv.test_push_temp_entity(te(176, Scope::Only(1)));
         rig.sv.test_push_temp_entity(te(174, Scope::AllBut(1)));

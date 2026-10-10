@@ -21,6 +21,7 @@ use vcod_common::playerpose::{
 };
 use vcod_common::pmove::movers::SnapshotMovers;
 use vcod_common::skeleton::{AnimBinding, PoseBuffer, Skeleton};
+use vcod_common::static_light::SceneLight;
 use vcod_common::turretpose::{GunnerPlacement, angles_quat, place_gunner, tag_weapon_local};
 use vcod_common::weapon_table::STATIC_ITEMS;
 use vcod_common::xanim::{self, XAnim};
@@ -740,6 +741,23 @@ pub struct BuiltScene {
     /// Inline models drawn this frame with their entity's pose, the identity
     /// for one where the map put it ([`Renderer::set_submodels`]).
     pub submodels: Vec<(usize, Mat4)>,
+    /// The cgame's scene lights in entity order: `constantLight` and a
+    /// missile's `projectileDLight` ([`Renderer::set_entity_lights`]).
+    pub scene_lights: Vec<SceneLight>,
+}
+
+/// An entity's `constantLight` as `CG_AddCEntity` (0x3001af20) adds it:
+/// intensity the top byte times 4, red, green, blue the low bytes / 255.
+pub fn constant_light(cl: u32, origin: Vec3) -> Option<SceneLight> {
+    (cl != 0).then(|| SceneLight {
+        origin,
+        color: Vec3::new(
+            (cl & 0xff) as f32,
+            (cl >> 8 & 0xff) as f32,
+            (cl >> 16 & 0xff) as f32,
+        ) / 255.0,
+        intensity: ((cl >> 24) * 4) as f32,
+    })
 }
 
 /// Entity numbers below this are clients (`MAX_CLIENTS`).
@@ -990,6 +1008,7 @@ pub fn build_instances(
     let mut heads: HashMap<u32, Vec3> = HashMap::new();
     let mut turret_eye = None;
     let mut submodels = Vec::new();
+    let mut scene_lights = Vec::new();
     let ps_int = |name: &str| b.ps.field_i32(p, name);
     let ridden = turret::ridden(
         ps_int("eFlags"),
@@ -1051,12 +1070,20 @@ pub fn build_instances(
                 visual = st.visual.clone();
             }
         }
+        // every entity's constantLight, drawn or not (0x3001d5f0)
+        let cl = ent.field_i32(p, "constantLight") as u32;
+        if cl == 0 && matches!(visual, EntityVisual::None) {
+            continue;
+        }
+        let (mut pos, angles) = lerp_pos_angles(num, ent, &from, f, render_time, p);
+        if let Some(l) = constant_light(cl, pos).filter(|l| l.origin.is_finite()) {
+            scene_lights.push(l);
+        }
         if matches!(visual, EntityVisual::None) {
             continue;
         }
 
         let prev = a.entities.get(&num);
-        let (mut pos, angles) = lerp_pos_angles(num, ent, &from, f, render_time, p);
         if !pos.is_finite() || !angles.is_finite() {
             continue; // never feed a NaN transform to the GPU
         }
@@ -1362,6 +1389,15 @@ pub fn build_instances(
                 let Some(handle) = resolve_model(model_cache, renderer, fs, &model) else {
                     continue;
                 };
+                // the panzerfaust's: black (weaponInfo `+0x130` is never
+                // written) but it takes a scene light slot
+                if def.projectile_dlight != 0.0 {
+                    scene_lights.push(SceneLight {
+                        origin: pos,
+                        color: Vec3::ZERO,
+                        intensity: def.projectile_dlight,
+                    });
+                }
                 out.push(DynamicModelInstance {
                     model: handle,
                     transform,
@@ -1545,6 +1581,7 @@ pub fn build_instances(
         heads,
         turret_eye,
         submodels,
+        scene_lights,
     }
 }
 
@@ -1552,6 +1589,15 @@ pub fn build_instances(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn constant_light_unpacks_intensity_and_colour_bytes() {
+        assert!(constant_light(0, Vec3::ZERO).is_none());
+        let l = constant_light(0x32ff_8000, Vec3::X).unwrap();
+        assert_eq!(l.intensity, 200.0);
+        assert_eq!(l.color, Vec3::new(0.0, 128.0 / 255.0, 1.0));
+        assert_eq!(l.origin, Vec3::X);
+    }
     use vcod_common::net::msg::{ClientState, EntityState};
     use vcod_common::net::protocol::{CS_MODELS_V1, CS_TAGS_V1, PROTOCOL_V1};
 

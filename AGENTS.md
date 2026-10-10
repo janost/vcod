@@ -276,6 +276,8 @@ dropped, so test such a builtin through `ScriptRuntime`.
   message one fragment per tick, as retail does, and an off-LAN client
   waits out its rate and its `snaps` interval between messages. A test that
   reads one tick's packets sees only the first fragment of a big message.
+  A client not in the world gets a 9-byte bare message on each turn (every
+  tick on a LAN, 1 s apart off it), so such a test drains those too.
 - A pure server drops a client that enters the world without a valid `cp`
   (pak checksums keyed with the gamestate's `checksumFeed`). Extra
   arguments to `tools/run_server.sh` land after `+map`, so `+set sv_pure 1`

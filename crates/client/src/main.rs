@@ -4,6 +4,7 @@ mod clock_probe;
 mod console;
 mod entities;
 mod entity_light;
+mod entity_material;
 mod frontend;
 mod fx;
 mod gamma;
@@ -1006,8 +1007,9 @@ fn main() -> Result<()> {
     fx::registry::init(&fs);
 
     let console = console::Console::new(&fs);
+    let language = shell.cvar("cl_language").unwrap_or("").to_string();
     // Retail keeps the favourites beside CoDMP.exe; vcod shares the file.
-    let ui = new_ui(&fs, &args.game_dir, &args.mod_dir);
+    let ui = new_ui(&fs, &args.game_dir, &args.mod_dir, &language);
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
@@ -1049,7 +1051,7 @@ fn main() -> Result<()> {
         hud,
         hud_ms: 0.0,
         localized,
-        menus: hud::menu::MenuCache::default(),
+        menus: hud::menu::MenuCache::new(&language),
         audio,
         quick_chat: quick_chat::QuickChat::new(0x51ee),
         ui,
@@ -1263,8 +1265,8 @@ fn start_loading(
 
 /// The front end off `fs`, with the favourites file and the Mods menu's
 /// directory listing under `game_dir`.
-fn new_ui(fs: &Pk3Fs, game_dir: &std::path::Path, mod_dir: &str) -> frontend::Ui {
-    frontend::Ui::new(fs)
+fn new_ui(fs: &Pk3Fs, game_dir: &std::path::Path, mod_dir: &str, language: &str) -> frontend::Ui {
+    frontend::Ui::new(fs, language)
         .with_server_cache(game_dir.join("servercache.dat"))
         .with_mod_root(game_dir.to_path_buf(), mod_dir.to_string())
 }
@@ -1314,7 +1316,7 @@ fn reopen_fs(
 ) -> Result<()> {
     *fs = Pk3Fs::open_search(base, game, pure)?;
     *localized = vcod_common::localize::Localized::load(fs);
-    *menus = hud::menu::MenuCache::default();
+    menus.clear();
     match hud {
         Some(h) => {
             if let Err(e) = h.reopen(fs) {
@@ -1689,7 +1691,12 @@ impl App {
     /// `ui_menuFiles` set back to its default first (0x4000d324).
     fn restart_ui(&mut self) {
         self.shell.execute("set ui_menuFiles ui_mp/menus.txt");
-        self.ui = new_ui(&self.fs, &self.game_dir, &self.mod_dir);
+        self.ui = new_ui(
+            &self.fs,
+            &self.game_dir,
+            &self.mod_dir,
+            self.shell.cvar("cl_language").unwrap_or(""),
+        );
     }
 
     /// The main menu, or the error popup over it when `error` says why the
@@ -1873,7 +1880,8 @@ impl App {
                 Effect::UiLoad => {
                     let list = self.shell.cvar("ui_menuFiles").unwrap_or("").to_string();
                     let mut out = Vec::new();
-                    self.ui.reload(&self.fs, &list, &mut out);
+                    let language = self.shell.cvar("cl_language").unwrap_or("").to_string();
+                    self.ui.reload(&self.fs, &list, &language, &mut out);
                     self.ui_pending.extend(out);
                 }
                 Effect::VidRestart => {
@@ -2802,7 +2810,12 @@ impl ApplicationHandler for App {
                                         r.reopen(&self.fs);
                                         view.reopen();
                                         self.shell.execute("set ui_menuFiles ui_mp/menus.txt");
-                                        self.ui = new_ui(&self.fs, &self.game_dir, &self.mod_dir);
+                                        self.ui = new_ui(
+                                            &self.fs,
+                                            &self.game_dir,
+                                            &self.mod_dir,
+                                            self.shell.cvar("cl_language").unwrap_or(""),
+                                        );
                                     }
                                     Err(e) => fatal = Some(e),
                                 }
@@ -3105,6 +3118,7 @@ impl ApplicationHandler for App {
                                         heads = built.heads;
                                         turret_eye = built.turret_eye;
                                         r.set_submodels(&built.submodels);
+                                        r.set_entity_lights(built.scene_lights);
                                         // Over 512 u is a teleport, not motion.
                                         let pos = if oa.distance(ob) > 512.0 {
                                             ob
@@ -3208,6 +3222,25 @@ impl ApplicationHandler for App {
                                         (cam.yaw, cam.pitch, view_roll) =
                                             own_view(input.cmd_angles(), delta);
                                     }
+                                    // `CG_OffsetFirstPersonView` (cgame 0x30032b58)
+                                    // first adds the damage kick and the sight's
+                                    // bob; the intermission arm skips it.
+                                    if pm_type != 5
+                                        && let (Some(hud), Some(s)) =
+                                            (&mut self.hud, net.snapshots().newest())
+                                    {
+                                        let own = pmove::predict::predictable(pm_type);
+                                        let [kp, ky, kr] = hud.view_kick(
+                                            p,
+                                            &s.ps,
+                                            predicted.as_ref().filter(|_| own).map(|v| &v.pred),
+                                            render_time.unwrap_or(0),
+                                            weapons,
+                                        );
+                                        cam.pitch -= kp.to_radians();
+                                        cam.yaw += ky.to_radians();
+                                        view_roll += kr.to_radians();
+                                    }
                                     // `CG_OffsetFirstPersonView` ends on
                                     // `AddLeanToPosition` (cgame 0x30032dda): a lean
                                     // moves the eye and rolls nothing.
@@ -3219,6 +3252,14 @@ impl ApplicationHandler for App {
                                         cam.pos = eye.pos;
                                         (cam.yaw, cam.pitch) = eye.view();
                                         view_roll = 0.0;
+                                    }
+                                    // The quake shakes whatever view that left
+                                    // (cgame 0x30033da9, after `CG_CalcViewValues`).
+                                    if let Some(now) = render_time {
+                                        let [sp, sy, sr] = view.shake(now, cam.pos);
+                                        cam.pitch -= sp.to_radians();
+                                        cam.yaw += sy.to_radians();
+                                        view_roll += sr.to_radians();
                                     }
 
                                     let (cam_forward, cam_right, cam_up) =
@@ -3394,6 +3435,21 @@ impl ApplicationHandler for App {
                                                 for _ in 0..play::recoil::fire_calls(ev.event) {
                                                     view.fire(weapons, ps);
                                                 }
+                                            }
+                                            // At the event body's drawn origin; ours
+                                            // is never in `entity_pos`.
+                                            let body = entity_pos
+                                                .get(&ev.entity_num)
+                                                .copied()
+                                                .unwrap_or(Vec3::from(ev.pos));
+                                            if let Some(q) = play::quake::from_event(
+                                                p,
+                                                &ev,
+                                                newest.entities.get(&ev.entity_num),
+                                                body,
+                                            ) && let Some(now) = render_time
+                                            {
+                                                view.start_quake(q, now, cam.pos);
                                             }
                                             if let Some(hud) = &mut self.hud {
                                                 hud.on_game_event(&ev, &hud_frame);

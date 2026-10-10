@@ -1552,6 +1552,21 @@ impl ProbeWatch {
                     self.first_miss.get_or_insert(cue.alias);
                 }
             }
+            if ev.event == vcod_common::net::event_ids::EV_EARTHQUAKE
+                && let Some(es) = s.entities.get(&ev.entity_num)
+            {
+                println!(
+                    "EV_EARTHQUAKE entity {} angles2 {:?} time {} at {}",
+                    ev.entity_num,
+                    [
+                        es.field_f32(p, "angles2[0]"),
+                        es.field_f32(p, "angles2[1]"),
+                        es.field_f32(p, "angles2[2]"),
+                    ],
+                    es.field_i32(p, "time"),
+                    vec_str(ev.pos),
+                );
+            }
             if ev.event != crate::fx::registry::EV_SOUND_ALIAS {
                 continue;
             }

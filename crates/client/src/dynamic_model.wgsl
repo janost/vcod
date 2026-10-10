@@ -1,5 +1,6 @@
-// Snapshot entities: GPU-skinned xmodel instances in world space, lit per
-// vertex by their light set as retail's GL lighting does
+// Snapshot entities: GPU-skinned xmodel instances in world space. A
+// material stage is lit per vertex by its light set as retail's GL lighting
+// does, or draws its constant or wave colour
 // (cod11-light-grid-and-leaf-lights.md, section 13).
 
 struct Camera {
@@ -36,6 +37,26 @@ struct LightSet {
 };
 // The frame's light sets; an instance names its own.
 @group(2) @binding(1) var<storage, read> light_sets: array<LightSet>;
+
+// The stage's `renderer::StageParams`; only the fields read here are named.
+struct StageParams {
+    uv0: mat3x2<f32>,
+    uv1: mat3x2<f32>,
+    turb01: vec4<f32>,
+    // rgbGen colour and alphaGen value
+    tint: vec4<f32>,
+    flags: u32,
+};
+@group(3) @binding(0) var<uniform> stage: StageParams;
+
+const F_AF_GT0: u32 = 16u;
+const F_AF_LT128: u32 = 32u;
+const F_AF_GE128: u32 = 48u;
+// identityLighting, constLighting, wave: the tint scales by identityLight
+const F_TINT_LIGHT: u32 = 4096u;
+// lightingDiffuse: GL lighting from the light set
+const F_LIT: u32 = 8192u;
+const ATEST128: f32 = 0.5019607843137255;
 
 // GL_LIGHTING's vertex colour: the light model ambient plus each light's
 // attenuated ambient and diffuse, clamped to 1. White material, no
@@ -103,7 +124,7 @@ fn vs_main(
     out.clip = camera.view_proj * world;
     // rotation + translation, so the upper 3x3 is valid for the normal
     out.normal = (model * vec4<f32>(n, 0.0)).xyz;
-    out.uv = uv;
+    out.uv = stage.uv0 * vec3<f32>(uv, 1.0);
     out.world_pos = world.xyz;
     out.light = gl_lighting(light_sets[light_set], world.xyz, normalize(out.normal));
     return out;
@@ -124,11 +145,34 @@ fn fog_amount(world_pos: vec3<f32>) -> f32 {
     return clamp((d - camera.fog_range.x) / span, 0.0, 1.0);
 }
 
+// alphaFunc decode, as shader.wgsl's; GE128 carries both low bits.
+fn alphafunc_pass(a: f32) -> bool {
+    if ((stage.flags & F_AF_GE128) == F_AF_GE128) {
+        return a >= ATEST128;
+    }
+    if ((stage.flags & F_AF_LT128) != 0u) {
+        return a < ATEST128;
+    }
+    if ((stage.flags & F_AF_GT0) != 0u) {
+        return a > 0.0;
+    }
+    return true;
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let tex = textureSample(t_diffuse, s_diffuse, in.uv);
-    // same alpha-test threshold as the map's masked materials
-    if (tex.a < 0.5) { discard; }
-    let rgb = tex.rgb * in.light;
-    return vec4<f32>(mix(rgb, camera.fog_color_density.rgb, fog_amount(in.world_pos)), 1.0);
+    var c: vec3<f32>;
+    if ((stage.flags & F_LIT) != 0u) {
+        c = in.light;
+    } else {
+        c = stage.tint.rgb;
+        if ((stage.flags & F_TINT_LIGHT) != 0u) {
+            c = c * camera.time_pad.y;
+        }
+    }
+    let a = tex.a * stage.tint.a;
+    if (!alphafunc_pass(a)) { discard; }
+    let rgb = tex.rgb * c;
+    return vec4<f32>(mix(rgb, camera.fog_color_density.rgb, fog_amount(in.world_pos)), a);
 }

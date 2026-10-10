@@ -64,7 +64,8 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
   In a game, Esc opens the script menu and its Main Menu tab the stock
   in-game main menu (Back to Game, Disconnect). The stock Mods menu lists
   the mod directories beside `main/` and switches to one, in a game too,
-  and the menus load from the mod's own `ui_mp/menus.txt`.
+  and the menus load from the mod's own `ui_mp/menus.txt` and
+  `ui_mp/ingame.txt`, each file tried under `cl_language`'s directory first.
 - The stock Options and Multiplayer Options screens: rebind keys, mouse
   sensitivity and invert, player name, rate, master volume, video mode and
   full screen. Choices land in the console's binds and cvars and persist in
@@ -95,6 +96,8 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
 - Fire recoil off the weapon file's view and gun kick keys: the view kick
   rides your cmd angles, as retail's does, rolls the view with it, springs
   back to centre and clears on a respawn.
+- A hit kicks the view along its direction, and a script `earthquake` or a
+  mounted MG's fire shakes it, with retail's curves.
 - Mounted MG42s with their fire anim and flash; on the gun the view rides
   `tag_player` and the crosshair turns into the gun's reticle.
 - The HUD the stock `hud.menu` lays out: crosshair that opens with spread,
@@ -147,7 +150,9 @@ for my test suite.
   sv_pure=1` checks each client's pak checksums the way a pure retail server
   does. `sv_minPing`/`sv_maxPing` refuse off-LAN clients by challenge ping,
   and an off-LAN client's messages wait out its rate and `snaps`. Big
-  messages, the gamestate included, go one fragment per frame.
+  messages, the gamestate included, go one fragment per frame, and a client
+  not yet in the world gets retail's bare keepalive (every frame on a LAN,
+  a second apart off it).
 - `--bots` adds bots that join through the stock menus and roam a nav graph
   built from pmove runs, ladders and jumps. They play the objectives: S&D
   plants and defuses, Retrieval carries and escorts, Behind Enemy Lines
@@ -223,13 +228,16 @@ missing.
   grid at load, as retail does. Dynamic lights add on top with retail's
   falloff instead of competing for a prop's eight light slots. Players,
   other entity models and the viewmodel pick their eight lights from the
-  grid every frame, fx lights among them
+  grid every frame, fx lights and the panzerfaust's black rocket light
+  among them
   ([cod11-light-grid-and-leaf-lights.md](docs/research/cod11-light-grid-and-leaf-lights.md)).
 - The frame holds retail's framebuffer bytes and the gamma ramp doubles
   it once at the end, as retail's hardware ramp did; windowed it draws
   as retail's windowed mode does, with no doubling and lightmaps shifted
   at load ([cod11-gamma.md](docs/research/cod11-gamma.md)). Entity models
-  draw only their first stage, lit, whatever their material says.
+  draw every stage of their material (pickup glow, objective pulse), but
+  environment-mapped stages (grenades, the staff car) are dropped and the
+  viewmodel still draws one lit stage.
 - Only the ocean's `deformVertexes wave` moves; the other forms parse and do
   nothing. NV/ATI hardware-path stages are dropped, as retail did on cards
   without them. `$dlight` and the ship's deckflag have no file behind them,

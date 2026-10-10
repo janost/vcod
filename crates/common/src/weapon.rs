@@ -464,6 +464,9 @@ pub struct WeaponDef {
     pub projectile_speed_up: f32,
     /// `xmodel/` stripped, as `world_model` is.
     pub projectile_model: Option<String>,
+    /// The flying projectile's scene light intensity; 0 adds none (cgame
+    /// 0x3001b4c1, cod11-light-grid-and-leaf-lights.md section 11).
+    pub projectile_dlight: f32,
     pub proj_impact_explode: bool,
     pub max_ammo: u32,
     /// `clipOnly`: the weapon has no reserve at all, so a give writes only
@@ -772,6 +775,7 @@ impl WeaponDef {
             projectile_speed_up: parse_num(map, "projectileSpeedUp", 0.0),
             projectile_model: opt_str(map, "projectileModel")
                 .map(|m| m.strip_prefix("xmodel/").unwrap_or(&m).to_string()),
+            projectile_dlight: parse_num::<i32>(map, "projectileDLight", 0) as f32,
             proj_impact_explode: parse_bool(map, "projImpactExplode", false),
             max_ammo: parse_num(map, "maxAmmo", 0),
             clip_only: parse_bool(map, "clipOnly", false),
@@ -1168,6 +1172,8 @@ mod tests {
         let pf = load(&fs, "panzerfaust_mp").unwrap();
         assert_eq!((pf.drop_ammo_min, pf.drop_ammo_max), (0, 0));
         assert!(pf.clip_only);
+        assert_eq!(pf.projectile_dlight, 200.0);
+        assert_eq!(frag.projectile_dlight, 0.0);
     }
 
     /// The keys the native HUD reads, off the shipped files.

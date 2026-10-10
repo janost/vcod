@@ -1025,6 +1025,51 @@ userinfo values one after another, and `rcon status` for the slots.
   follow these rules for every message: the snapshot and download messages
   built in the frame loop and the gamestate (next section).
 
+### Clients not in the world: the bare message and the 1 s keepalive
+
+- `SV_SendClientMessages` (0x809045c) walks every slot whose state is not
+  `CS_FREE` (`cmpl $0x0,(%ebx)` at `0x80904a0`), so a
+  `CS_CONNECTED` or `CS_PRIMED` client gets a message on each of its turns.
+  VERIFIED (code).
+- For such a client `SV_SendClientSnapshot` (0x808f844) writes neither
+  server commands nor a snapshot (state tests at `0x808f855` and `0x808f8a1`
+  pass only 4 and 1), then the download, then `svc_EOF`. With no download
+  the message is the 4-byte sequence, the 4-byte reliable acknowledge and
+  one compressed `svc_EOF` byte: 9 bytes. VERIFIED (code).
+- `SV_SendMessageToClient` (0x808f680) floors a client that is not
+  `CS_ACTIVE` and not downloading (byte `+0x10a64`) at `svs.time + 1000`
+  (`0x808f806..0x808f824`). A LAN client takes the `svs.time - 1` branch
+  first and gets a message every frame. VERIFIED (asm).
+- Every switch to `CS_ACTIVE` sets `nextSnapshotTime` to `svs.time`:
+  `SV_ClientEnterWorld` (0x80877d8, store at `0x8087838`), the entering cmd
+  in `SV_UserMove` (0x8086fa4, the store decompiled at its `CS_PRIMED`
+  branch), the restart path of `SV_ExecuteClientMessage` (0x80872ec) and
+  the bot add (0x808753c). `SV_DirectConnect` (0x8085498) does the same at
+  connect. VERIFIED (code). So the first snapshot goes on the next frame,
+  not after the keepalive interval.
+- Live, 2026-10-10, 1.1d on `mp_carentan` with a logging relay that dropped
+  the probe's sequenced packets for 3-3.5 s after `connectResponse` and
+  again after the first gamestate fragment, so the client sat in
+  `CS_CONNECTED` and then `CS_PRIMED`. VERIFIED (capture):
+  - Loopback: a 9-byte message every 46-51 ms in both states, 63 of them
+    before the gamestate.
+  - Off the LAN (client 198.51.100.2, server 203.0.113.1, joined by a veth
+    pair across two network namespaces): 9-byte messages 995-1003 ms apart
+    while connected; the gamestate's second fragment 976 ms after the
+    first, the rest 98-102 ms apart (the rate); one 9-byte message 51 ms
+    after the last fragment, then 9-byte messages 1000 ms apart while
+    primed. The entering cmd got its first snapshot 15 ms later.
+- vcod: `Server::send_unentered` sends every connected or primed client its
+  fragment, its download blocks or the bare message on its turn, paced by
+  `Client::pace`; `enter_world` makes the client due at once. Against
+  vcod-server the same two captures matched: 9-byte messages each frame on
+  loopback; off the LAN 1000 ms apart in both states, the second gamestate
+  fragment 926 ms after the first (vcod answers the packet at the next tick
+  start, retail between frames; both add 1000 to the last frame's time),
+  and the first snapshot one tick after the entering cmd. VERIFIED
+  (capture, same relay). Before this change vcod sent a client neither,
+  and off the LAN the first snapshot waited out the primed interval.
+
 ### The gamestate goes out fragmented (`SV_SendClientGameState` 0x8085eec)
 
 - It first sends every fragment left of an earlier message, in a loop of
