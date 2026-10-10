@@ -14,13 +14,19 @@ use super::{ErrorKind, Host, ScriptError, Target, Vm};
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct ThreadId(pub u32);
 
+/// The script clock and every `wait` deadline are 24-bit: they wrap every
+/// 16,777,216 ms of `level.time`, about 4.7 hours
+/// (docs/research/cod11-gsc-language.md, "The script clock").
+pub const CLOCK_MASK: i32 = 0x00ff_ffff;
+
 // `Thread`/`ThreadState` are `pub(crate)`, not `pub`: `Vm` never hands one
 // out (only a `ThreadId`, to name a thread without exposing its innards),
 // so nothing outside this crate can obtain one to act on.
 #[derive(Debug)]
 pub(crate) enum ThreadState {
     Runnable,
-    /// Server milliseconds at which this thread becomes runnable again.
+    /// The script clock reading ([`CLOCK_MASK`]-wrapped) at which this
+    /// thread becomes runnable again.
     WaitingUntil(i32),
     WaitingNotify {
         target: Target,
@@ -283,10 +289,12 @@ impl Vm {
                 }
             }
             Ok(Step::Suspend(Suspend::Wait { seconds })) => {
-                // Rounded half up, as retail's `wait` does
-                // (docs/research/cod11-gsc-language.md, "The script clock").
-                let delay_ms = (seconds.max(0.0) * 1000.0 + 0.5) as i32;
-                let deadline = self.now_ms + delay_ms;
+                // Rounded half up on the x87's wider product, as retail's
+                // `wait` does (docs/research/cod11-gsc-language.md, "The
+                // script clock"); the opcode has already refused a negative
+                // wait and one past the 24-bit range.
+                let delay_ms = (f64::from(seconds) * 1000.0 + 0.5) as i32;
+                let deadline = (self.now_ms + delay_ms) & CLOCK_MASK;
                 let seq = self.queue_seq();
                 if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
                     self.threads[idx].frames = frames;
@@ -363,7 +371,8 @@ impl Vm {
     }
 
     /// The script clock: the `level.time` of the last frame
-    /// [`Vm::run_frame`] ran, or what [`Vm::set_time`] set.
+    /// [`Vm::run_frame`] ran, or what [`Vm::set_time`] set, wrapped to 24
+    /// bits.
     pub fn time(&self) -> i32 {
         self.now_ms
     }
@@ -371,7 +380,7 @@ impl Vm {
     /// `Scr_InitSystem`'s clock: a level starts the script clock on its own
     /// `level.time`, before the gametype's `main` runs.
     pub fn set_time(&mut self, ms: i32) {
-        self.now_ms = ms;
+        self.now_ms = ms & CLOCK_MASK;
     }
 
     /// One server frame's threads, the way `G_RunFrame` runs them
@@ -383,11 +392,16 @@ impl Vm {
     /// clock of the moment. The errors are collected and returned rather
     /// than propagated, so one bad thread never stops the rest of the
     /// server.
+    ///
+    /// The clock is 24-bit. On the frame `level.time` wraps it the walk's
+    /// target is behind the clock, so the clock jumps there and only the
+    /// current millisecond's threads run: one due in the gap waits until a
+    /// later walk crosses its due time, hours on, as on retail.
     pub fn run_frame(&mut self, host: &mut dyn Host, level_ms: i32) -> Vec<ScriptError> {
-        let errors = self.step_runnable(host, Some(level_ms));
+        let errors = self.step_runnable(host, Some(level_ms & CLOCK_MASK));
         // `Scr_SetTime` leaves the clock on `level.time` whether or not it
         // walked forward.
-        self.now_ms = level_ms;
+        self.now_ms = level_ms & CLOCK_MASK;
         errors
     }
 
@@ -437,10 +451,13 @@ impl Vm {
                     (ThreadState::Runnable, Some(_)) => Some((now, Reverse(t.seq), t.id)),
                     // The packet pass keeps start order (see the doc comment).
                     (ThreadState::Runnable, None) => Some((now, Reverse(0), t.id)),
-                    // Due on the clock already or before `level.time`; one
-                    // due on `level.time` itself waits a frame.
-                    (&ThreadState::WaitingUntil(d), Some(level)) if d <= now || d < level => {
-                        Some((d.max(now), Reverse(t.seq), t.id))
+                    // Due on the clock or between it and `level.time`; one
+                    // due on `level.time` itself waits a frame, and one
+                    // behind the clock waits for it to come round again.
+                    (&ThreadState::WaitingUntil(d), Some(level))
+                        if d == now || (now < d && d < level) =>
+                    {
+                        Some((d, Reverse(t.seq), t.id))
                     }
                     _ => None,
                 })
@@ -1270,6 +1287,78 @@ mod tests {
             seen.extend(std::iter::repeat_n(level, host.calls.len() - before));
         }
         assert_eq!(seen, [100, 200, 200, 300, 300, 350, 400]);
+    }
+
+    /// The frame `level.time` crosses 2^24 ms: the walk's target lands
+    /// behind the 24-bit clock, so the clock jumps to it and a thread due in
+    /// the gap (16,777,210 here, and 9, the masked 16,777,225) waits for a
+    /// later walk to cross it, hours on. A `wait 0.05` due on the target
+    /// itself runs the frame after, and its next one counts on the wrapped
+    /// clock.
+    #[test]
+    fn the_wrap_frame_strands_the_threads_due_in_its_gap() {
+        const WRAP: i32 = 1 << 24;
+        let mut vm = vm_with(
+            "a() { wait 0.01; gap(); } b() { wait 0.025; gap(); } \
+             c() { wait 0.05; tick(); wait 0.05; tick(); }",
+        );
+        let mut host = TestHost::default();
+        vm.set_time(WRAP - 16);
+        assert_eq!(vm.time(), WRAP - 16);
+        for name in ["a", "b", "c"] {
+            let f = vm.func_ref("test/script", name);
+            vm.start_thread(&mut host, f, None, vec![]);
+        }
+        let count = |host: &TestHost, n: &str| host.calls.iter().filter(|(c, _)| c == n).count();
+        vm.run_frame(&mut host, WRAP + 34);
+        assert_eq!(vm.time(), 34);
+        assert_eq!((count(&host, "gap"), count(&host, "tick")), (0, 0));
+        for level in [WRAP + 84, WRAP + 134, WRAP + 184] {
+            vm.run_frame(&mut host, level);
+        }
+        assert_eq!(
+            count(&host, "gap"),
+            0,
+            "stranded until the clock comes round"
+        );
+        assert_eq!(count(&host, "tick"), 2);
+        // Each runs when a walk next crosses its due time: 16,777,210 at the
+        // end of this turn, 9 only once the clock has wrapped again.
+        vm.run_frame(&mut host, 2 * WRAP - 1);
+        assert_eq!(count(&host, "gap"), 1);
+        vm.run_frame(&mut host, 2 * WRAP + 5);
+        assert_eq!(count(&host, "gap"), 1);
+        vm.run_frame(&mut host, 2 * WRAP + 55);
+        assert_eq!(count(&host, "gap"), 2);
+    }
+
+    /// `wait` refuses what retail's opcode refuses: a negative wait and one
+    /// of 16777 s or more, past what the 24-bit clock holds.
+    #[test]
+    fn wait_refuses_negative_and_overlong_waits() {
+        for (src, msg) in [
+            (
+                "main() { wait -0.5; }",
+                "negative wait of -0.5 is not allowed",
+            ),
+            (
+                "main() { wait 16777; }",
+                "wait of 16777 seconds is too long",
+            ),
+        ] {
+            let mut vm = vm_with(src);
+            let mut host = TestHost::default();
+            let f = vm.func_ref("test/script", "main");
+            vm.start_thread(&mut host, f, None, vec![]);
+            assert_eq!(vm.aborts().len(), 1, "{src}");
+            assert_eq!(vm.aborts()[0].kind, ErrorKind::Custom(msg.into()));
+        }
+        let mut vm = vm_with("main() { wait 16776.999; done(); }");
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, f, None, vec![]);
+        assert!(vm.aborts().is_empty());
+        assert_eq!(vm.thread_count(), 1);
     }
 
     /// A thread spawned by a `call_now`-driven script (a host callback

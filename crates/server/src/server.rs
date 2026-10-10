@@ -421,11 +421,11 @@ fn apply_sim_op(
 /// An attack's effects in the order it raised them: an impact goes on the
 /// wire and a hit runs the damage callback there and then, so the flesh pair
 /// a leg's callback raises numbers below the next leg's wall impact.
-fn apply_effects(rt: &mut script::ScriptRuntime, effects: Vec<Effect>, now_ms: i32) {
+fn apply_effects(rt: &mut script::ScriptRuntime, effects: Vec<Effect>) {
     for e in effects {
         match e {
             Effect::Impact(te) => rt.push_temp_entity(te),
-            Effect::Hit(h) => rt.deliver_hits(vec![h], now_ms),
+            Effect::Hit(h) => rt.deliver_hits(vec![h]),
         }
     }
 }
@@ -460,7 +460,7 @@ fn deliver_turret_rounds(
         })
         .collect();
     mirror_roster(clients, rt);
-    apply_effects(rt, effects, now_ms);
+    apply_effects(rt, effects);
     mirror_weapons(clients, rt);
     apply_weapon_ops(clients, rt, weapons);
     apply_sim_ops(clients, rt, anims, weapons, rng, now_ms);
@@ -4133,7 +4133,7 @@ impl Server {
             let name = c.name.clone();
             c.reset_for_level();
             if let Some(rt) = self.script.as_mut() {
-                rt.reconnect_client(slot, name, self.sv_time_ms);
+                rt.reconnect_client(slot, name);
             }
         }
         self.last_spawn_tick = Some(self.sv_time_ms);
@@ -4298,7 +4298,7 @@ impl Server {
                 continue;
             }
             if let Some(rt) = self.script.as_mut() {
-                rt.reconnect_client(slot, name, self.sv_time_ms);
+                rt.reconnect_client(slot, name);
             }
             if was_active {
                 // The sim `enter_world` builds carries a clear
@@ -5341,7 +5341,7 @@ impl Server {
                             if let Some(hit) =
                                 blast.hit(&v, collision, &models, &bodies, bones.as_mut())
                             {
-                                rt.deliver_hits(vec![hit], self.sv_time_ms);
+                                rt.deliver_hits(vec![hit]);
                             }
                         }
                         BlastCandidate::Entity(id) => {
@@ -6082,7 +6082,7 @@ impl Server {
         let st = c.last_processed_st;
         let Some(sim) = c.sim.as_mut() else { return };
         mirror_for_callback(rt, sim, proto, slot, st);
-        if !rt.kill_client(slot, now_ms) {
+        if !rt.kill_client(slot) {
             return;
         }
         apply_callback_ops(
@@ -6173,7 +6173,7 @@ impl Server {
             self.hitlocs.multiplier("none"),
         );
         mirror_for_callback(rt, sim, proto, slot, st);
-        rt.deliver_fall(slot, damage, now_ms);
+        rt.deliver_fall(slot, damage);
         apply_callback_ops(
             rt,
             sim,
@@ -6295,7 +6295,7 @@ impl Server {
             let st = c.last_processed_st;
             let Some(sim) = c.sim.as_mut() else { continue };
             mirror_for_callback(rt, sim, proto, victim, st);
-            rt.deliver_hits(vec![hit], now_ms);
+            rt.deliver_hits(vec![hit]);
             apply_callback_ops(
                 rt,
                 sim,
@@ -6398,19 +6398,18 @@ impl Server {
             })
             .collect();
 
-        // A body born this frame is re-read from its source client's sim
-        // once, here: the script clones the player before it raises the
-        // death animation, so the state the clone copied is a frame stale
-        // (`crate::game::bodies`). Then the queue's corpses join the map's
+        // A body born since the last build is re-read from its source
+        // client's sim once, here: the script clones the player before it
+        // raises the death animation, so the state the clone copied is a
+        // frame stale (`crate::game::bodies`). Then the queue's corpses join the map's
         // entities; they are culled per client like anything else.
-        let (now, proto) = (self.sv_time_ms, self.proto);
+        let proto = self.proto;
         let collision = self.world.as_ref().map(|w| &w.collision);
         let clients = &self.clients;
         if let Some(rt) = self.script.as_mut() {
             // Straight off the sim, not `client_entities`: the source is
             // dead by now and has no entity there.
             rt.bodies_mut().refresh_newborn(
-                now,
                 |slot| {
                     let c = clients.get(slot)?.as_ref()?;
                     Some(c.sim.as_ref()?.to_entity(proto, slot, c.last_processed_st))
@@ -10037,6 +10036,7 @@ mod tests {
             scale: 0,
             origin: FOLLOW_P1,
             scope,
+            quake: None,
         };
         rig.sv.test_push_temp_entity(te(176, Scope::Only(1)));
         rig.sv.test_push_temp_entity(te(174, Scope::AllBut(1)));

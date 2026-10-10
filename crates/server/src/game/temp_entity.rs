@@ -64,6 +64,18 @@ pub struct TempEntity {
     pub scale: i32,
     pub origin: [f32; 3],
     pub scope: Scope,
+    /// `EV_EARTHQUAKE`'s own three fields.
+    pub quake: Option<Quake>,
+}
+
+/// What the `earthquake` builtin (0x5f3d8) writes past `G_TempEntity`:
+/// `angles2[0]` the scale, `time` the duration in ms, `angles2[1]` the
+/// radius.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Quake {
+    pub scale: f32,
+    pub duration_ms: i32,
+    pub radius: f32,
 }
 
 /// The entity state one temp entity puts on the wire at `number`. The origin
@@ -85,6 +97,11 @@ pub fn build(te: &TempEntity, number: u32, p: &Protocol) -> EntityState {
     set("weapon", te.weapon);
     set("clientNum", te.client_num);
     set("_union.scale", te.scale);
+    if let Some(q) = te.quake {
+        set("angles2[0]", q.scale.to_bits() as i32);
+        set("time", q.duration_ms);
+        set("angles2[1]", q.radius.to_bits() as i32);
+    }
     for (axis, v) in te.origin.iter().enumerate() {
         set(
             &format!("pos.trBase[{axis}]"),
@@ -131,6 +148,7 @@ mod tests {
             client_num: 0,
             scale: 0,
             scope: Scope::Broadcast,
+            quake: None,
         }
     }
 
@@ -147,6 +165,7 @@ mod tests {
             client_num: 0,
             scale: 0,
             scope: Scope::Broadcast,
+            quake: None,
         };
         let p = &PROTOCOL_V1;
         let e = build(&te, 900, p);
@@ -174,6 +193,7 @@ mod tests {
     fn scope_all_but_hides_from_one_client() {
         let te = TempEntity {
             scope: Scope::AllBut(2),
+            quake: None,
             ..flesh_hit()
         };
         assert!(visible_to(&te, 0));
@@ -184,6 +204,7 @@ mod tests {
     fn scope_only_reaches_one_client() {
         let te = TempEntity {
             scope: Scope::Only(2),
+            quake: None,
             ..flesh_hit()
         };
         assert!(!visible_to(&te, 0));

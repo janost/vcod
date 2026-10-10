@@ -375,6 +375,25 @@ COD_LNXDED_HOME=<absolute, no '+'> PORT=<p> PROBE_SECS=75 \
 cargo run -p vcod -- --net-probe 127.0.0.1:<p> --save-motion
 ```
 
+## probe_quake
+
+`earthquake`'s wire fields, for `docs/research/cod11-combat.md` 17.2. Every
+player alive gets `earthquake(0.3, 2.5, origin, 850)` at its own origin
+every 2 s and `earthquake(0.05, 0.0026, origin, 100)` a frame later, logged
+as `PROBE quake`. A plain `--net-probe` prints an `EV_EARTHQUAKE` line per
+event with the temp entity's `angles2` and `time`.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PORT=<p> PROBE_SECS=35 \
+    tools/run_probe.sh client-probes/probe_quake mp_carentan
+# second shell, about 8 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:<p> --probe-team allies --probe-secs 20
+```
+
+Retail, 2026-10-10: `angles2 [0.3, 850.0, 0.0] time 2500` and `angles2
+[0.05, 100.0, 0.0] time 3`, the origin truncated. `vcod-server mp_carentan
+--gametype-script .../probe_quake.gsc` reads the same.
+
 ## probe_fall
 
 The landing stun and fall damage measurement's server half. Under

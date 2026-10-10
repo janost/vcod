@@ -96,6 +96,8 @@ If you want to play Call of Duty, play Call of Duty. If you want to watch a
 - Fire recoil off the weapon file's view and gun kick keys: the view kick
   rides your cmd angles, as retail's does, rolls the view with it, springs
   back to centre and clears on a respawn.
+- A hit kicks the view along its direction, and a script `earthquake` or a
+  mounted MG's fire shakes it, with retail's curves.
 - Mounted MG42s with their fire anim and flash; on the gun the view rides
   `tag_player` and the crosshair turns into the gun's reticle.
 - The HUD the stock `hud.menu` lays out: crosshair that opens with spread,
@@ -226,13 +228,16 @@ missing.
   grid at load, as retail does. Dynamic lights add on top with retail's
   falloff instead of competing for a prop's eight light slots. Players,
   other entity models and the viewmodel pick their eight lights from the
-  grid every frame, fx lights among them
+  grid every frame, fx lights and the panzerfaust's black rocket light
+  among them
   ([cod11-light-grid-and-leaf-lights.md](docs/research/cod11-light-grid-and-leaf-lights.md)).
 - The frame holds retail's framebuffer bytes and the gamma ramp doubles
   it once at the end, as retail's hardware ramp did; windowed it draws
   as retail's windowed mode does, with no doubling and lightmaps shifted
   at load ([cod11-gamma.md](docs/research/cod11-gamma.md)). Entity models
-  draw only their first stage, lit, whatever their material says.
+  draw every stage of their material (pickup glow, objective pulse), but
+  environment-mapped stages (grenades, the staff car) are dropped and the
+  viewmodel still draws one lit stage.
 - Only the ocean's `deformVertexes wave` moves; the other forms parse and do
   nothing. NV/ATI hardware-path stages are dropped, as retail did on cards
   without them. `$dlight` and the ship's deckflag have no file behind them,

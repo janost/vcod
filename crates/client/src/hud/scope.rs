@@ -46,6 +46,11 @@ pub struct GunAim {
 }
 
 impl GunAim {
+    /// The last hit's kick, which the view reads too (`Hud::view_kick`).
+    pub fn kick(&self) -> DamageKick {
+        self.kick
+    }
+
     /// `CG_DamageFeedback`'s kick half (`0x300287f0`, hud doc "Scope
     /// overlay"): a changed `damageEvent` with a non-zero `damageCount` on
     /// the same client kicks the gun from `now_ms`, along `ps`'s view.

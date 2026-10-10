@@ -322,6 +322,43 @@ fn check_damage(side: &str, probe: &[String], pains: &[i32]) -> Vec<String> {
     diffs
 }
 
+/// The clock a damage callback reads: `getTime()` in it is the last frame's
+/// `level.time`, since the landing cmd runs between frames
+/// (docs/research/cod11-gsc-language.md, "The script clock"). So the
+/// snapshot stamped with the callback's time (or the last one before it)
+/// still carries the health it found, and the next one the health it left.
+fn check_damage_clock<'a>(
+    side: &str,
+    probe: &[String],
+    falls: impl Iterator<Item = &'a FallLine>,
+) -> Vec<String> {
+    let health: BTreeMap<i32, i32> = falls
+        .map(|f| (f.t, tail_field(&f.rest, "health=").parse().unwrap()))
+        .collect();
+    let mut diffs = Vec::new();
+    for (i, hit) in probe.iter().enumerate() {
+        if !hit.starts_with("PROBE damage ") {
+            continue;
+        }
+        let t: i32 = hit.split_whitespace().nth(2).unwrap().parse().unwrap();
+        let after = probe[i + 1..]
+            .iter()
+            .find(|n| n.starts_with("PROBE damaged "))
+            .expect("a damaged line after every damage line");
+        let (before, left) = (num_after(hit, "health"), num_after(after, "health"));
+        // A capture that prints only the snapshots that moved may skip `t`.
+        let at = health.range(..=t).next_back().map(|(_, &h)| h);
+        let next = health.range(t + 1..).next().map(|(&t, &h)| (t, h));
+        if at != Some(before) || next.map(|(_, h)| h) != Some(left) {
+            diffs.push(format!(
+                "{side}: damage callback at {t} found health {before} and left {left}; \
+                 the snapshot at or before {t} has {at:?}, the next {next:?}"
+            ));
+        }
+    }
+    diffs
+}
+
 struct Ours {
     probe: Vec<String>,
     /// Every snapshot's `FALL` line, keyed by server time.
@@ -663,6 +700,12 @@ fn gate(fixture: &str, sets: &[(&str, &str)], walk: Option<f32>, hitch: Option<H
     }
     diffs.extend(check_damage("retail", &retail.probe, &retail_events.pains));
     diffs.extend(check_damage("ours", &ours.probe, &ours_events.pains));
+    diffs.extend(check_damage_clock(
+        "retail",
+        &retail.probe,
+        retail.falls.iter(),
+    ));
+    diffs.extend(check_damage_clock("ours", &ours.probe, ours.falls.values()));
     for (side, ev) in [("retail", &retail_events), ("ours", &ours_events)] {
         if ev.ev_pain != 0 {
             diffs.push(format!("{side}: {} EV_PAIN on a fall", ev.ev_pain));

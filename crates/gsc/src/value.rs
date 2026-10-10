@@ -78,7 +78,7 @@ pub fn format_number(v: Value, interner: &Interner) -> Option<String> {
 /// C's `%g` with the default precision of 6, the exponent form included:
 /// `1e-05`, `1.23457e+06` (`probe_concat_exp`). The mantissa rounds to six
 /// significant digits before the exponent is chosen, so 999999.5 is `1e+06`.
-fn format_g(f: f32) -> String {
+pub(crate) fn format_g(f: f32) -> String {
     if !f.is_finite() {
         return format!("{f}");
     }
