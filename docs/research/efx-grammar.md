@@ -2,7 +2,7 @@
 
 A census of every `.efx` file in the stock 1.5 `main/pak*.pk3` set, then the 1.1 engine's reading of the keys (the R sections). The assets match 1.1's (`cod11-events-and-fx.md` section 8, "the events doc" below). vcod's parser is `crates/client/src/fx/efx.rs`, its simulation `crates/client/src/fx/sim.rs`.
 
-Claims are VERIFIED (occurrence counts over the stock paks, a named file, or a read of the 1.1 binaries) unless they carry their own INFERRED label. Addresses without a module prefix are `CoDMP.exe` 1.1 VAs.
+Claims are VERIFIED (occurrence counts over the stock paks, a named file, or a read of the 1.1 binaries) unless labelled otherwise. Addresses without a module prefix are `CoDMP.exe` 1.1 VAs.
 
 ## 0. Corpus
 
