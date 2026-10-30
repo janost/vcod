@@ -1,34 +1,29 @@
 # CoD 1.1 MP: mounted MGs
 
-How a `misc_mg42` works on a stock 1.1 MP server: where the maps place them,
-what the weapon file feeds, what the spawn builds, how the use key mounts a
-player, what pmove does to a mounted player, the per-frame aim, fire and loop
-sound, how the body is put on the gun, what lets go, what the unmanned barrel
-does, which anims play and how a kill is credited.
+How a `misc_mg42` works on a stock 1.1 MP server: map placement, the weapon
+file, the spawn, the use-key mount, mounted pmove, the per-frame aim, fire and
+loop sound, body placement, release, the unmanned barrel, anims and kill
+credit.
 
-Evidence rules as everywhere in this directory. This document carries no
-document-level default: every claim carries its own label. VERIFIED is a byte
-read out of the module, an asset or a committed capture (an immediate, a
+No document-level default: every claim carries its own label. VERIFIED is a
+byte read out of the module, an asset or a committed capture (an immediate, a
 relocation, a string, a store at an offset, a table entry). INFERRED is
-anything read off control flow, which includes the order of two stores and
-every branch condition, and anything that says what a field means. Section
-12 reads the retail capture of a mount on mp_carentan; the earlier sections
-point there where the capture bears on a claim.
+anything read off control flow (store order, branch conditions) and anything
+that says what a field means. Section 12 reads the retail capture of a mount
+on mp_carentan.
 
-Module: `game.mp.i386.so`, the 1.1d Linux dedicated server's MP game module.
-Addresses are the module's own VAs as `nm -D`, `objdump` and
-`python3 tools/re/annotate_func.py <elf> <symbol|0xaddr>` print them. A Ghidra
-export that loads the module at +0x10000 shows each function 0x10000 higher
-(`turret_use` 0x52a9c reads `00062a9c` there). The module is
-position-independent, so a call or data reference is only readable with its
-relocation resolved; `annotate_func.py` does that. Six statics carry no
-dynamic symbol: 0x51488 (the fire parameters), 0x515a8 (body placement),
-0x5201c (aim), 0x521d4 (the mounted frame), 0x52880 (the arc test) and 0x524cc
-(the unmanned slew); the names here describe what the bytes do.
+Module: `game.mp.i386.so` (1.1d Linux dedicated server, MP game). Addresses
+are the module's own VAs as `nm -D`, `objdump` and
+`python3 tools/re/annotate_func.py <elf> <symbol|0xaddr>` print them; a Ghidra
+export loaded at +0x10000 shows each 0x10000 higher (`turret_use` 0x52a9c is
+`00062a9c` there). The module is PIC, so calls and data references need their
+relocations resolved (`annotate_func.py` does it). Six statics have no dynamic
+symbol and are named here by what they do: 0x51488 (fire parameters), 0x515a8
+(body placement), 0x5201c (aim), 0x521d4 (mounted frame), 0x52880 (arc test),
+0x524cc (unmanned slew).
 
-Offsets used throughout. `ent` is a gentity (stride 0x314), `cl = ent+0x158`
-is its client, the playerstate sits at `cl+0`, and `rec = ent+0x15c` is a
-turret's record.
+Offsets: `ent` is a gentity (stride 0x314), `cl = ent+0x158` its client
+(playerstate at `cl+0`), `rec = ent+0x15c` a turret's record.
 
 | offset | meaning | evidence |
 |---|---|---|
@@ -57,14 +52,13 @@ turret's record.
 | `cl+0x20d0` | `sessionstate` | VERIFIED, `cod11-map-cycle.md`; the name is INFERRED |
 | `cl+0x21e8` | the last cmd's buttons byte | VERIFIED, `cod11-gsc-object-model.md` 23.5 |
 
-The turret record: 32 of them, 0x40 bytes each, array at 0xaa180. VERIFIED:
-`G_SpawnTurret` holds the base `0xaa180`, a stride of 0x40, a compare of a
-record's first dword against zero, a bound of 0x20, `Com_Error(1,
-"G_SpawnTurret: max number of turrets (%d) exceeded")` (string 0x75960, call
-0x52cc3) and `__bzero(rec, 0x40)` (0x52cd1). INFERRED: it scans for the first
-free record, clears it, and a 33rd turret is a fatal error. VERIFIED:
-`G_InitTurrets` (0x53034) zeroes the 32 first dwords, and `G_InitGame` calls
-it (0x4fe18).
+The turret record: 32 records of 0x40 bytes at 0xaa180. VERIFIED:
+`G_SpawnTurret` holds the base `0xaa180`, stride 0x40, a compare of a record's
+first dword against zero, a bound of 0x20, `Com_Error(1, "G_SpawnTurret: max
+number of turrets (%d) exceeded")` (string 0x75960, call 0x52cc3) and
+`__bzero(rec, 0x40)` (0x52cd1). INFERRED: it takes the first free record and
+clears it; a 33rd turret is fatal. VERIFIED: `G_InitTurrets` (0x53034) zeroes
+the 32 first dwords, called from `G_InitGame` (0x4fe18).
 
 | off | written by | meaning | evidence |
 |---|---|---|---|
@@ -83,11 +77,11 @@ it (0x4fe18).
 ## 1. Placements
 
 VERIFIED, the entity lump of every `maps/MP/*.bsp` in pak4 and pak5: ten
-mounted guns on six maps, every one `classname misc_mg42`, `model
-xmodel/mg42_bipod`, `weaponinfo mg42_bipod_stand_mp`, plus `origin`, `angles`
-and on all but one `export`. No map uses `misc_turret`. No map sets
-`leftarc`, `rightarc`, `toparc`, `bottomarc`, `damage`, `health`,
-`targetname`, `target`, `spawnflags` or any `script_*` key on a turret.
+mounted guns on six maps, each `classname misc_mg42`, `model
+xmodel/mg42_bipod`, `weaponinfo mg42_bipod_stand_mp`, `origin`, `angles`, and
+on all but one `export`. No map uses `misc_turret`. No map sets `leftarc`,
+`rightarc`, `toparc`, `bottomarc`, `damage`, `health`, `targetname`,
+`target`, `spawnflags` or any `script_*` key on a turret.
 
 | map | lump index | origin | angles |
 |---|---|---|---|
@@ -104,44 +98,40 @@ and on all but one `export`. No map uses `misc_turret`. No map sets
 
 VERIFIED, same lumps: chateau, depot, harbor, pavlov, powcamp and ship have
 none. The `script_model`s carrying `xmodel/turret_flak88_static_*` (brecourt,
-carentan, harbor, hurtgen) are bombzone and exploder props, and the
+carentan, harbor, hurtgen) are bombzone and exploder props; the
 `xmodel/ship_*_turret` models on mp_ship are `misc_model`s.
 
-**The lump index is not the entity number.** VERIFIED, the committed retail
-capture `crates/server/tests/fixtures/entities/mp_carentan-dm.txt`: carentan's
-two `eType` 11 entities are **297** (`pos.trBase` -500 1896 175, yaw 295,
-`angles2[0]` -63) and **298** (1712 1830 8, yaw 229, `angles2[0]` -72), with
-`index` 58 and `weapon` 16 on both, in samples 2, 3 and 4 of that file
-(fixture lines 242-261, 373-392, 504-523). Samples 0 and 1 carry neither: the
-probe stood where the PVS culls them. So the gun a
-probe mounts on carentan at 1712 1830 8 goes on the wire as entity 298, and
-`viewlocked_entNum` and `otherEntityNum` read 298, not 855. An earlier survey
-and the first version of the design spec called the two turrets #853 and
-#855, which are their positions in the entity lump.
+**The lump index is not the entity number.** VERIFIED, retail capture
+`crates/server/tests/fixtures/entities/mp_carentan-dm.txt`: carentan's two
+`eType` 11 entities are **297** (`pos.trBase` -500 1896 175, yaw 295,
+`angles2[0]` -63) and **298** (1712 1830 8, yaw 229, `angles2[0]` -72), both
+`index` 58 and `weapon` 16, in samples 2, 3 and 4 (fixture lines 242-261,
+373-392, 504-523); samples 0 and 1 carry neither (PVS-culled). So the gun at
+1712 1830 8 goes on the wire as 298, and `viewlocked_entNum` and
+`otherEntityNum` read 298, not 855 (its lump position).
 
-VERIFIED, a case-insensitive grep of every `maps/MP/*.gsc` and
-`maps/MP/gametypes/*.gsc` in the stock paks for `turret`, `mg42`, `misc_mg`,
-`usable`, `weaponinfo`, `mounted`, `useby`: no match. VERIFIED,
+VERIFIED, a case-insensitive grep of every stock `maps/MP/*.gsc` and
+`maps/MP/gametypes/*.gsc` for `turret`, `mg42`, `misc_mg`, `usable`,
+`weaponinfo`, `mounted`, `useby`: no match. VERIFIED,
 `tools/re/dump_builtins.py` over the five MP builtin tables: no turret method
 (`setTurretTargetVec` and the rest are SP). VERIFIED: `_teams.gsc`
 `restrictPlacedWeapons` (line 463) deletes only `mpweapon_*` classnames.
-INFERRED: the whole feature is engine code, and no stock cvar or script turns
-a mounted gun off.
+INFERRED: the feature is all engine code, and no stock cvar or script turns a
+mounted gun off.
 
 ## 2. The weapon file
 
-VERIFIED, `weapons/mp/mg42_bipod_stand_mp` (pak0), the keys a turret reads:
+VERIFIED, `weapons/mp/mg42_bipod_stand_mp` (pak0), keys a turret reads:
 `weaponClass turret`, `weaponType bullet`, `stance stand`, `damage 60`,
 `leftArc 45`, `rightArc 45`, `topArc 40`, `bottomArc 40`, `fireTime 0.05`,
 `loopFireSound weap_mg42_loop`, `stopFireSound weap_mg42_cooldown`,
-`animHorRotateInc 15`, `useHintString CGAME_USEMG42`. VERIFIED, the keys
-nothing in the turret code reads: `accuracy 0.5`, `horTurnSpeed 40`,
-`vertTurnSpeed 40`, `convergenceTime 1.5`, `maxRange 0`,
-`playerPositionDist 46`, `rifleBullet 1`, `script mg42/stand`, `idleAnim
-standMG42gun_aim_foward`, `fireAnim standMG42gun_fire_foward`,
-`viewFlashEffect`, `worldFlashEffect`, `reticleCenter`, `killIcon
-gfx/hud/hud@death_mg42.tga`. VERIFIED: the file has no ammo, clip, overheat,
-`worldModel`, `viewModel` or `reloadTime` key.
+`animHorRotateInc 15`, `useHintString CGAME_USEMG42`. VERIFIED, keys the
+turret code never reads: `accuracy 0.5`, `horTurnSpeed 40`, `vertTurnSpeed 40`,
+`convergenceTime 1.5`, `maxRange 0`, `playerPositionDist 46`, `rifleBullet 1`,
+`script mg42/stand`, `idleAnim standMG42gun_aim_foward`, `fireAnim
+standMG42gun_fire_foward`, `viewFlashEffect`, `worldFlashEffect`,
+`reticleCenter`, `killIcon gfx/hud/hud@death_mg42.tga`. VERIFIED: no ammo,
+clip, overheat, `worldModel`, `viewModel` or `reloadTime` key.
 
 VERIFIED, the duck and prone files ship in pak0 and are in configstring 7
 (`cod11-server-handshake.md`): `mg42_bipod_duck_mp` is the stand file with
@@ -151,7 +141,7 @@ prone`, arcs 45/45/20/20, `animHorRotateInc 20`, `horTurnSpeed 20`,
 anims. No stock map places either (section 1).
 
 VERIFIED, the weapon field table's `{name, offset, type}` records
-(0x7c994..0x7d534; type codes in `cod11-combat.md`), for the fields above:
+(0x7c994..0x7d534; type codes in `cod11-combat.md`):
 
 | key | def offset | type |
 |---|---|---|
@@ -170,24 +160,23 @@ VERIFIED, the weapon field table's `{name, offset, type}` records
 | `useHintString` | `+0x408` | 0 |
 | `script` | `+0x410` | 0 |
 
-INFERRED: `fireTime` is held in milliseconds, so the stock gun's reads 50
+INFERRED: `fireTime` is held in ms, so the stock gun's reads 50
 (`cod11-combat.md`, the type-7 reading).
 
-VERIFIED: `BG_SetupWeaponInfo` (0x36674) holds a load of `def->useHintString`
-(0x369e0) and a test of its first byte (0x369e6), a call to
-`G_GetHintStringIndex(def+0x40c, def->useHintString)` (0x369f5), a test of
-its return (0x369fd) and `Com_Error(1, "Too many different hintstring values
-on weapons. Max allowed is %i different strings", 0x20)` (string 0x72360,
-call 0x36a0d). INFERRED: the call runs for every weapon whose
-`useHintString` is non-empty, and a zero return is the fatal error.
-INFERRED: `def+0x40c` holds the slot in the
-32-entry hint-string range at configstring 1212 (`cod11-gsc-object-model.md`,
-the hint-string paragraph), so the stock turret's is slot 0. VERIFIED:
-retail's carentan configstring 1212 reads `CGAME_USEMG42`
-(`cod11-server-handshake.md`).
+VERIFIED: `BG_SetupWeaponInfo` (0x36674) loads `def->useHintString`
+(0x369e0), tests its first byte (0x369e6), calls
+`G_GetHintStringIndex(def+0x40c, def->useHintString)` (0x369f5), tests the
+return (0x369fd) and holds `Com_Error(1, "Too many different hintstring values
+on weapons. Max allowed is %i different strings", 0x20)` (string 0x72360, call
+0x36a0d). INFERRED: the call runs for every weapon with a non-empty
+`useHintString`, and a zero return is fatal. INFERRED: `def+0x40c` holds the
+slot in the 32-entry hint-string range at configstring 1212
+(`cod11-gsc-object-model.md`, the hint-string paragraph), so the stock
+turret's is slot 0. VERIFIED: retail carentan's configstring 1212 reads
+`CGAME_USEMG42` (`cod11-server-handshake.md`).
 
 VERIFIED, `soundaliases/iw_sound.csv` (pak1): `weap_mg42_loop` names
-`weapons/mg42/mg42_loop02.wav` and loops, and `weap_mg42_cooldown` names
+`weapons/mg42/mg42_loop02.wav` and loops; `weap_mg42_cooldown` names
 `weapons/mg42/mg42_cooldown.wav`; each has two rows split on the map
 (`! Pavlov` / `pavlov`). VERIFIED: those are carentan's configstrings 526 and
 527 (`cod11-server-handshake.md`). VERIFIED,
@@ -197,10 +186,10 @@ the MG42"`.
 ## 3. Spawn
 
 VERIFIED, `spawns` (0x7eb30): `misc_mg42` and `misc_turret` both name
-`SP_turret` (0x533b0). VERIFIED: `SP_turret` calls `G_SpawnString("weaponinfo",
-"", &s)`, holds `Com_Error(1, "no weaponinfo specified for turret")` (string
-0x75a40) and calls `G_SpawnTurret(ent, s)`. INFERRED: a turret without the key
-is a fatal map-load error.
+`SP_turret` (0x533b0), which calls `G_SpawnString("weaponinfo", "", &s)`,
+holds `Com_Error(1, "no weaponinfo specified for turret")` (string 0x75a40)
+and calls `G_SpawnTurret(ent, s)`. INFERRED: a turret without the key is a
+fatal map-load error.
 
 VERIFIED, `G_SpawnTurret` (0x52c84), the stores and calls:
 
@@ -208,17 +197,15 @@ VERIFIED, `G_SpawnTurret` (0x52c84), the stores and calls:
 - `s.weapon = BG_GetWeaponIndex(weaponinfo)` (0x52cec), with
   `Com_Error(1, "bad weaponinfo '%s' specified for turret")` (0x759a0);
 - `BG_GetInfoForWeapon` (0x52d21), a compare of `level+0x1c` against 0
-  (0x52d2b), `IsItemRegistered` (0x52d3e) and `Scr_Error` on `"turret '%s'
+  (0x52d2b), `IsItemRegistered` (0x52d3e), `Scr_Error` on `"turret '%s'
   not precached"` (0x759ca, 0x52d5f), and `RegisterItem(weapon, 1)`
   (0x52d73);
 - `rec+0x8 = 0`, `rec+0x20 = def->stance`, `rec+0x24 = -1`, `rec+0x28 = 0`
-  (0x52d78..0x52d8f), stores of `G_SoundAliasIndex` on `def+0xa0` and
-  `def+0xa4` into the two alias bytes, and stores of 0 into the same bytes
-  (0x52db1..0x52de4);
+  (0x52d78..0x52d8f), `G_SoundAliasIndex` of `def+0xa0` and `def+0xa4` into
+  the two alias bytes, and stores of 0 into the same bytes (0x52db1..0x52de4);
 - `G_SpawnFloat` on `rightarc` (0x759e5), `leftarc` (0x759ee), `toparc`
-  (0x759f6) and `bottomarc` (0x759fd), each with the empty default
-  (0x759e4), and loads of the weapon file's `rightArc`, `leftArc`, `topArc`
-  and `bottomArc`;
+  (0x759f6) and `bottomarc` (0x759fd), each with the empty default (0x759e4),
+  and loads of the weapon file's four arcs;
 - a compare of `health` (`ent+0x230`) against 0 (0x52ee7) and a store of 100
   (0x52ef0);
 - `G_SpawnInt("damage", "0", &ent->dmg)` (key 0x75a09, 0x52f0e), a store of
@@ -235,124 +222,112 @@ VERIFIED, `G_SpawnTurret` (0x52c84), the stores and calls:
 
 VERIFIED, the arc arithmetic (0x52e0e..0x52edc): yaw min `= min(-rightarc,
 0)`, yaw max `= max(leftarc, 0)`, pitch min `= min(-toparc, 0)`, pitch max `=
-max(bottomarc, 0)`. So the stock gun's record reads yaw -45..45 and pitch
--40..40. INFERRED: positive yaw is to the left and positive pitch is down,
-the engine's usual convention, which is why `leftarc` and `bottomarc` are the
-maxima.
+max(bottomarc, 0)`, so the stock gun reads yaw -45..45 and pitch -40..40.
+INFERRED: positive yaw is left and positive pitch is down, which is why
+`leftarc` and `bottomarc` are the maxima.
 
-INFERRED: the order of the list is the order the function runs in; each
-alias byte is 0 when its weapon-file string is empty; the precache
-`Scr_Error` is reached only when `level+0x1c` is zero (outside the map load,
-a script spawn) and the item is not registered; each arc key falls back to
-the weapon file when absent; a zero `health` becomes 100; the `damage` key
-overrides the weapon file only when present and a negative `dmg` becomes 0;
-and the model comes from the map's `model` key through the
-generic spawn parse, since neither function sets one; the capture's `index`
-58 is `xmodel/mg42_bipod` (`docs/protocol-1.1.md`). INFERRED: nothing
-installs a `die` or `pain` callback, so a turret has health 100 and
-`takedamage` 1 and nothing happens when damage reaches it; `takedamage` acts
-only as a usability gate (section 4).
+INFERRED: the list runs in order; each alias byte is 0 when its weapon-file
+string is empty; the precache `Scr_Error` fires only when `level+0x1c` is zero
+(a script spawn after the load) and the item is not registered; each arc key
+falls back to the weapon file when absent; a zero `health` becomes 100; the
+`damage` key overrides the weapon file only when present, and a negative `dmg`
+becomes 0; the model comes from the map's `model` key through the generic
+spawn parse (the capture's `index` 58 is `xmodel/mg42_bipod`,
+`docs/protocol-1.1.md`). INFERRED: nothing installs a `die` or `pain`
+callback, so damage reaching a turret does nothing; `takedamage` acts only as
+a usability gate (section 4).
 
 VERIFIED: `turret_think_init` (0x5268c) and the rest-pitch sweep are in
 `docs/protocol-1.1.md`, "A turret's `angles2[0]` is where its barrel came to
-rest"; they are not repeated here.
+rest".
 
 ## 4. Mount
 
 ### 4.1 The use key
 
-VERIFIED: `ClientThink_real` holds a `test cl+0x21f0, 0x40` at 0x4063e and a
-call to `Cmd_Activate_f(ent)` at 0x4064e, and `cl+0x21f0` is written from
+VERIFIED: `ClientThink_real` holds `test cl+0x21f0, 0x40` at 0x4063e and a
+call to `Cmd_Activate_f(ent)` at 0x4064e; `cl+0x21f0` is written from
 `cmd.buttons & ~oldButtons` (`cod11-items.md` section 1). INFERRED: the call
-is taken only on the use bit's rising edge. INFERRED: a mount happens inside
-the cmd that pressed use, after that cmd's touch pass, and not at the end of
-the server frame.
+runs on the use bit's rising edge, so a mount happens inside the cmd that
+pressed use, after that cmd's touch pass, not at frame end.
 
 VERIFIED, `Cmd_Activate_f` (0x48468):
 
-- a call to `Scr_IsSystemActive(1)` at 0x4847e and a test of its return;
+- `Scr_IsSystemActive(1)` at 0x4847e and a test of its return;
 - a compare of the player's busy byte against 0 at 0x4848e, a test of
-  `ps.eFlags` byte 1 against 0xc0 (0x4849d), stores of 2 (0x484a6) and of 0
+  `ps.eFlags` byte 1 against 0xc0 (0x4849d), stores of 2 (0x484a6) and 0
   (0x484b0) into the busy byte, and a `jmp` at 0x484bc;
 - `G_CheckForCursorHints(player)` (0x484c5) and a compare of `cl+0x3b8`
   against 0x3ff (0x484d3);
 - a load of `g_entities[cl+0x3b8]` (0x484e2..0x484ef); classname compares
-  against the `func_door` and `func_door_rotating` constants and a call to
-  `G_TryDoor`, a compare against `trigger_use` and a `"trigger"` notify, an
-  `eType` compare against 3 (the item arm), an `eType` compare against 11 at
-  0x485b0, `G_IsTurretUsable(turret, player)` at 0x485ba, and the call through
+  against `func_door` and `func_door_rotating` with a call to `G_TryDoor`, a
+  compare against `trigger_use` with a `"trigger"` notify, an `eType` compare
+  against 3 (the item arm), an `eType` compare against 11 at 0x485b0,
+  `G_IsTurretUsable(turret, player)` at 0x485ba, and the call through
   `turret->use(turret, player, player)` at 0x485d6.
 
-INFERRED: `Scr_IsSystemActive` returning 0 ends the function; a non-zero busy
-byte takes the 2-or-0 store and the `jmp` at 0x484bc leaves the function;
-otherwise the cursor scan runs and a 0x3ff candidate ends it; the candidate
-is then tested against each arm in the order listed. INFERRED: a use press
-while mounted does nothing but request the dismount
-(busy byte 2, acted on by the next mounted frame, section 8), and runs no
-cursor scan, no pickup and no door; a busy byte left on a player who is not
-mounted is simply cleared. INFERRED: an `eType` 11 candidate that fails
-`G_IsTurretUsable` does nothing, and one that passes is mounted with no script
-notify, since the turret arm jumps straight to the `use` call.
+INFERRED: a 0 from `Scr_IsSystemActive` ends the function; a non-zero busy
+byte takes the 2-or-0 store and leaves through the `jmp`; otherwise the cursor
+scan runs, a 0x3ff candidate ends it, and the candidate is tested against
+each arm in order. INFERRED: a use press while mounted only requests the
+dismount (busy byte 2, acted on by the next mounted frame, section 8), with no
+cursor scan, pickup or door; a busy byte left on an unmounted player is
+cleared. INFERRED: an `eType` 11 candidate that fails `G_IsTurretUsable` does
+nothing; one that passes is mounted with no script notify.
 
-The candidate is the item scan's: `G_GetActivateEnt`'s box, 128-unit
-distance to the entity's bounds centre, 0.76 cosine and first clear trace
-(`cod11-items.md` 2.1). VERIFIED there. INFERRED: a turret enters that scan
-through its `r.contents` 0x200000 bit, and its bounds centre sits 28 units
-above its origin.
+The candidate is the item scan's: `G_GetActivateEnt`'s box, 128 units to the
+entity's bounds centre, 0.76 cosine, first clear trace (`cod11-items.md` 2.1).
+VERIFIED there. INFERRED: a turret enters that scan through its `r.contents`
+0x200000 bit, and its bounds centre sits 28 units above its origin.
 
 ### 4.2 `G_IsTurretUsable` (0x5314c)
 
-VERIFIED, the tests in the function: turret busy byte against 0 (0x53159),
-`rec` against null (0x53162), `takedamage` against 0 (0x5316b), the call to
-0x52880 (0x53179) and its return against 0, the player's
-`ps.grenadeTimeLeft` against 0 (0x53188) and `ps.groundEntityNum` against
-0x3ff (0x5318e). INFERRED: usable means nobody on the gun, a live record,
-`takedamage` set, inside the arc test, no frag in hand and standing on
-something.
+VERIFIED, the tests: turret busy byte against 0 (0x53159), `rec` against null
+(0x53162), `takedamage` against 0 (0x5316b), the call to 0x52880 (0x53179)
+and its return against 0, `ps.grenadeTimeLeft` against 0 (0x53188) and
+`ps.groundEntityNum` against 0x3ff (0x5318e). INFERRED: usable means nobody on
+the gun, a live record, `takedamage` set, inside the arc test, no frag in hand
+and standing on something.
 
-VERIFIED, 0x52880: it reads the turret's yaw (`ent+0x144`), `rec+0x10` and
+VERIFIED, 0x52880: reads the turret's yaw (`ent+0x144`), `rec+0x10` and
 `rec+0x18`; takes `half = (|yawMax| + |yawMin|) * 0.5` (rodata 0x75934 = 0.5);
-calls `AngleNormalize180(yaw + yawMin + half)`, `YawVectors` on the result and
+calls `AngleNormalize180(yaw + yawMin + half)`, `YawVectors` on it and
 `VectorNormalize` on the forward vector; normalises
 `(turret.origin - player.origin)` with z zeroed (`r.currentOrigin`, 0x528e8
-and 0x528fa); calls `Q_acos` on the dot product; multiplies by 180.0 (0x75938)
-and divides by pi (double 0x75940); and compares the result against `half`
-(0x5295a). INFERRED: it returns true when the angle is at most `half` (and on
-a NaN, which the `and ah, 0x45` compare lets through). INFERRED: the player
-must stand behind the gun, inside a cone about the centre of its yaw arc as
-seen from the gun, horizontally; for the stock gun that is 45 degrees either
-side of the gun's own yaw. There is no distance test here; the distance is
-the scan's.
+and 0x528fa); `Q_acos` of the dot product, times 180.0 (0x75938), divided by
+pi (double 0x75940); compares against `half` (0x5295a). INFERRED: true when
+the angle is at most `half` (and on a NaN, which `and ah, 0x45` lets through):
+the player must stand behind the gun inside a horizontal cone about its yaw
+arc's centre, 45 degrees either side for the stock gun. No distance test here;
+the distance is the scan's.
 
 ### 4.3 The cursor hint
 
-VERIFIED, `G_CheckForCursorHints` (0x4f59c), the turret arm: an `eType` 11
-compare at 0x4f6e2, `G_IsTurretUsable` at 0x4f6ef, a `je` at 0x4f6f9 whose
-target operand is 0x4f870 (the loop increment), `mov edi, 6` at 0x4f714, a
-test of `*def->useHintString` (0x4f70e, 0x4f71c) and a load of `def+0x40c`
-into the hint-string register (0x4f734). INFERRED: a false return takes the
-`je`, so an unusable turret is skipped for the next candidate; a usable one
-hints 6, `HINT_MG42` (slot 6 of `hintStrings`, `cod11-gsc-object-model.md`),
-with the weapon's hint-string slot.
+VERIFIED, `G_CheckForCursorHints` (0x4f59c), the turret arm: `eType` 11
+compare at 0x4f6e2, `G_IsTurretUsable` at 0x4f6ef, a `je` at 0x4f6f9 to
+0x4f870 (the loop increment), `mov edi, 6` at 0x4f714, a test of
+`*def->useHintString` (0x4f70e, 0x4f71c) and a load of `def+0x40c` into the
+hint-string register (0x4f734). INFERRED: an unusable turret is skipped for
+the next candidate; a usable one hints 6, `HINT_MG42` (slot 6 of
+`hintStrings`, `cod11-gsc-object-model.md`), with the weapon's hint-string
+slot.
 
 VERIFIED: the function stores 0 into `cl+0x384` (0x4f5ba), 0 into `cl+0x388`
-(0x4f5c4) and 0x3ff into `cl+0x3b8` (0x4f5ce), compares the player's `health`
-against 0 (0x4f5d7) and its busy byte against 0 (0x4f5e4), and stores -1 into
+(0x4f5c4) and 0x3ff into `cl+0x3b8` (0x4f5ce), compares `health` against 0
+(0x4f5d7) and the busy byte against 0 (0x4f5e4), and stores -1 into
 `serverCursorHintString` at 0x4f603 (`cod11-items.md` 2.3). INFERRED: the
-three stores run on every call, and a player with health at or below 0 or a
-non-zero busy byte leaves before the -1 store. INFERRED: a mounted player
-reads `serverCursorHint` 0 every frame and keeps whatever
-`serverCursorHintString` held when it mounted, which is the turret's own slot
-0. VERIFIED on the wire: 12.10.
+three stores run every call, and a player with health at or below 0 or a
+non-zero busy byte leaves before the -1 store, so a mounted player reads
+`serverCursorHint` 0 every frame and keeps the `serverCursorHintString` it
+had at mount (the turret's slot 0). VERIFIED on the wire: 12.10.
 
 INFERRED, from the loop at 0x4f870: when every candidate is an unusable
-turret, the loop ends with `cl+0x3b8` naming the last one and the hint 0, and
-the use key's own `G_IsTurretUsable` refuses it again.
+turret, the loop ends with `cl+0x3b8` naming the last one and hint 0, and the
+use key's own `G_IsTurretUsable` refuses it again.
 
 ### 4.4 `turret_use` (0x52a9c): what a mount writes
 
-VERIFIED, the stores (arguments: turret, player, activator; the player is the
-second):
+VERIFIED, the stores (arguments: turret, player, activator):
 
 - player and turret busy byte 1 (0x52ab1, 0x52ab8);
 - turret `r.ownerNum` = the player's number (0x52ac4);
@@ -361,11 +336,11 @@ second):
 - `rec+0x4 |= 0x800` (0x52aee);
 - `rec+0x2c..0x34` = the player's `r.currentOrigin` (0x52af8..0x52b0a);
 - player `s.otherEntityNum` = the turret's number (0x52b0f);
-- tests of `pm_flags & 1` (0x52b1b) and `pm_flags & 2` (0x52b28), and
-  stores of 2, 1 and 0 into `rec+0x24` (0x52b1f, 0x52b2c, 0x52b35);
+- tests of `pm_flags & 1` (0x52b1b) and `pm_flags & 2` (0x52b28), and stores
+  of 2, 1 and 0 into `rec+0x24` (0x52b1f, 0x52b2c, 0x52b35);
 - `ps.eFlags` byte 1: `|= 0x40` with `&= 0x7f` (0x52b4d, 0x52b5a), `|= 0x80`
-  with `&= 0xbf` (0x52b71, 0x52b7e) and `|= 0xc0` (0x52b90), and compares
-  of `rec+0x20` against 2 (0x52b3f) and 1 (0x52b63);
+  with `&= 0xbf` (0x52b71, 0x52b7e) and `|= 0xc0` (0x52b90), with compares of
+  `rec+0x20` against 2 (0x52b3f) and 1 (0x52b63);
 - turret `+0x28c..0x294` = its `r.currentAngles` (0x52bae..0x52bc6);
 - `angles2[i]` for i = 0, 1 = `AngleSubtract(ps.viewangles[i],
   r.currentAngles[i])` (0x52c07), stored (0x52c0c); compares against
@@ -374,18 +349,18 @@ second):
 - `SetClientViewAngle(player, (angles2[0] + pitch, angles2[1] + yaw, 0))`
   (0x52c75).
 
-INFERRED: the stores run in the order listed; each clamp store happens only
-past its bound; the saved stance is prone 2, crouch 1, stand 0; a prone gun
-sets `eFlags` 0x4000, a duck gun 0x8000 and a stand gun 0xC000; the barrel is
-put where the player is looking, clamped to the arcs, and the view is snapped
-to the barrel even when nothing was clamped, since no compare sits in front of
-the `SetClientViewAngle` call. The mount writes no 15-degree rate limit (that
-is the per-frame step, section 6.2) and leaves `angles2[2]` alone.
+INFERRED: the stores run in order; each clamp store happens only past its
+bound; the saved stance is prone 2, crouch 1, stand 0; a prone gun sets
+`eFlags` 0x4000, a duck gun 0x8000, a stand gun 0xC000; the barrel goes where
+the player looks, clamped to the arcs, and the view snaps to the barrel even
+unclamped (no compare guards the `SetClientViewAngle` call). The mount writes
+no 15-degree rate limit (the per-frame step does, 6.2) and leaves
+`angles2[2]` alone.
 
 VERIFIED, absence in the function's 0x1e8 bytes: no store to `ps.weapon`,
 `ps.pm_type` or `ps.pm_flags`. INFERRED: the carried weapon stays in
-`ps.weapon` for the whole mount and the turret's weapon lives only in its own
-`s.weapon`; `pm_type` stays 0 (`PM_NORMAL`).
+`ps.weapon` for the whole mount, the turret's weapon lives only in its
+`s.weapon`, and `pm_type` stays 0 (`PM_NORMAL`).
 
 VERIFIED: `useby` (entity method 11, 0x5d774) notifies `"trigger"` and calls
 `ent->use(ent, player, player)` with no `G_IsTurretUsable` call. INFERRED:
@@ -394,29 +369,28 @@ script can force a mount; no stock script does (section 1).
 ## 5. Mounted pmove
 
 VERIFIED, `PmoveSingle`, the `pm_type` 0 arm (0x341b5..0x34276): an `eFlags &
-0xC000` test, `groundEntityNum = 0x3ff`, two pml fields zeroed, and calls to
+0xC000` test, `groundEntityNum = 0x3ff`, two pml fields zeroed, calls to
 `PM_UpdateAimDownSightFlag`, `PM_UpdatePlayerWalkingFlag`, 0x316f4, 0x32a44
-and 0x322c8, and a `jmp` whose target is the function's tail. INFERRED: the
-arm is taken on a mounted bit and skips the rest of the move. INFERRED: a
-mounted player does not move, has no friction, fires no weapon and reads as
-airborne to pmove, while view angles are still updated earlier in
-`PmoveSingle`.
+and 0x322c8, and a `jmp` to the function's tail. INFERRED: the arm is taken on
+a mounted bit and skips the rest of the move: a mounted player does not move,
+has no friction, fires no weapon and reads airborne to pmove; view angles are
+still updated earlier in `PmoveSingle`.
 
-VERIFIED, 0x316f4 (the stance step), from the Ghidra body at `000416f4`: an
-`eFlags & 0xC000` test, compares against 0x4000 and 0x8000, and the `pm_flags`
-writes `|= 1` with `&= ~2`, `|= 2` with `&= ~1`, and `&= ~3`. INFERRED: 0x4000
-takes the first pair, 0x8000 the second and 0xC000 the third: pmove puts the
-player's stance to the gun's, and a stand gun reads `pm_flags` with neither
-bit, whatever stance the player mounted from.
+VERIFIED, 0x316f4 (the stance step; Ghidra body `000416f4`): an `eFlags &
+0xC000` test, compares against 0x4000 and 0x8000, and the `pm_flags` writes
+`|= 1` with `&= ~2`, `|= 2` with `&= ~1`, and `&= ~3`. INFERRED: 0x4000 takes
+the first pair, 0x8000 the second, 0xC000 the third: pmove sets the stance to
+the gun's, and a stand gun clears both bits whatever stance the player mounted
+from.
 
 VERIFIED: `PM_Weapon` (0x390e0) holds an `eFlags & 0xC000` test
-(`cod11-combat.md` 1.12). INFERRED: the function returns on it, so no
-weapon state, switch, reload or fire event comes out of pmove while mounted.
+(`cod11-combat.md` 1.12). INFERRED: it returns on it, so no weapon state,
+switch, reload or fire event comes out of pmove while mounted.
 
 VERIFIED, `PM_UpdateViewAngles`: one `eFlags & 0xC000` test (0x32f87) and no
-load of any turret record or arc. INFERRED: the test skips the prone yaw cap
-and nothing more, and the arcs are held only by the game module's
-`SetClientViewAngle` in the aim step (section 6.2). VERIFIED: `PM_UpdateLean`
+load of a turret record or arc. INFERRED: the test skips the prone yaw cap and
+nothing more; the arcs are held only by the game module's
+`SetClientViewAngle` in the aim step (6.2). VERIFIED: `PM_UpdateLean`
 (0x32b10) tests the same mask. INFERRED: it forces the lean input to 0.
 
 VERIFIED: `FireWeapon` and `FireWeaponMelee` test `eFlags & 0xC000` and the
@@ -450,8 +424,6 @@ matches that snapshot's `angles2`.
 
 ### 6.2 Aim (0x5201c)
 
-Re-read with `annotate_func.py` for this document.
-
 VERIFIED, the stores: `ps.viewlocked = 1` (0x5203f), `ps.viewlocked_entNum`
 = the turret (0x52051), `ps.gunfx = 0` (0x52065).
 
@@ -482,9 +454,6 @@ inside the arcs and within 15 degrees of the barrel is left to the client's
 own prediction. VERIFIED on the wire: 12.3.
 
 ### 6.3 Fire (0x521d4)
-
-Re-read with `annotate_func.py` for this document, which found the two
-refinements marked below.
 
 VERIFIED, at 0x521fd..0x5224d: `BG_GetInfoForWeapon(s.weapon)` (0x5220a),
 `ps.viewlocked = 1` (0x52217), `turret s.eFlags &= ~0x400` (0x52221),
@@ -605,8 +574,7 @@ INFERRED, frame by frame from the last shot (timer 150 after the fire block):
 that frame and the next read `loopSound` = `weap_mg42_loop`'s index; the third
 reads `loopSound` 0 and carries one `EV_SOUND_ALIAS` for `weap_mg42_cooldown`
 on the turret. So the loop is on the wire for two snapshots counting the last
-shot's frame, not 150 ms past it as a first reading put it, and the cooldown
-event comes 100 ms after the last shot. VERIFIED, 12.4: the capture shows
+shot's frame, and the cooldown event comes 100 ms after the last shot. VERIFIED, 12.4: the capture shows
 those three frames exactly. INFERRED: the release zeroes the timer
 and `loopSound` (section 8), so a release mid-burst cuts the loop with no
 cooldown event, and the same countdown in `turret_think` (section 9) has
@@ -631,9 +599,8 @@ call 0x51f8d); stores to `ps.origin[2]` (0x51f1b, 0x51fb3);
 
 ### 7.1 The reads and stores
 
-Re-read with `annotate_func.py` over 0x515a8..0x5201b for this section. `ent`
-is the player, `tur` the turret, `ci` the player's `bgs` client info
-(`bgs + clientNum * 0x448`). Each item carries its own labels.
+Range 0x515a8..0x5201b. `ent` is the player, `tur` the turret, `ci` the
+player's `bgs` client info (`bgs + clientNum * 0x448`).
 
 - VERIFIED: a compare of the word at `ci+0x9ba78` against 0 (0x515c7), a
   compare of the pointer at `ci+0x9ba7c` against null (0x515d4) and a test of
@@ -751,19 +718,18 @@ which key a second translation at frame 5, (-15.99, 5.62) against (-15.33,
   lies between the gun's height and that spot; a clear trace leaves the
   player's own height. Nothing here puts the player on the floor: the z is
   the height the player mounted at, which pmove left on the ground, and the
-  mounted pmove arm moves nothing (section 5). vcod's port does the same.
+  mounted pmove arm moves nothing (section 5). vcod's port
+  (`crates/server/src/game/turret.rs`) does the same.
 
 VERIFIED, the replay: `every_captured_gunner_origin_replays`
 (`crates/server/src/game/turret.rs`) runs vcod's port of 7.2 over the gun's
 `angles2` and the gunner's origin of all 260 mounted snapshots on a turret
 anim in the 12.2 capture, both tables and every snapshot between, through
-mp_carentan's collision: horizontal residual max 0.099 units, mean 0.049.
-The fixture prints one decimal, so that is its rounding. Walking the
-children in file order instead misses by up to 3.0 (mean 1.8). The test
-feeds the captured origin in, so its z says nothing about the trace; the
-same test feeds each snapshot again from 16 units under the floor, and the
-trace lifts every one onto mp_carentan's floor at -23.875, the capture's
--23.9.
+mp_carentan's collision: horizontal residual max 0.099 units, mean 0.049
+(the fixture's one-decimal rounding). File-order children miss by up to 3.0
+(mean 1.8). The captured z is fed in, so the trace is checked separately:
+each snapshot fed again from 16 units under the floor lifts onto
+mp_carentan's floor at -23.875 (capture: -23.9).
 
 Not determined:
 
@@ -879,8 +845,7 @@ the builtin is otherwise the vector read followed by `SetClientViewAngle`.
 INFERRED, from the store order above: a prone player's `angles` read
 back after `setPlayerAngles` are the cone's held angles, not the
 script's. vcod's builtin holds them through the host's mirror of the
-cone (`pmove::ProneCone`, set at each cmd and by `spawn`) since
-2026-10-19. INFERRED: the cone `SetClientViewAngle` reads is the live
+cone (`pmove::ProneCone`, set at each cmd and by `spawn`). INFERRED: the cone `SetClientViewAngle` reads is the live
 playerstate's (`ps.pm_flags & 1`, the `eFlags` byte at +0x81 & 0xc0,
 `ps+0x368`, `ps+0x370`, 0x41e30), and of the player methods in the 1.1d,
 1.5b and UO tables (`tools/re/dump_builtins.py`) only `spawn` moves any of
@@ -919,15 +884,15 @@ The triggers:
   `a_gunner_spawned_off_the_gun_reads_retail_s_origin`). The angles the
   script reads there (1.1d `(0, 0, 0)`, UO `(0, -41, 0)` for a spawn at
   yaw 319) are the think's view (cod11-gametypes-re-bel.md 8.6), which the
-  same gate holds too. VERIFIED, the 2026-10-20 retakes of both fixtures
-  (with the gunner's cmds and `ct=`): a frame later the script reads
+  same gate holds too. VERIFIED, the retakes of both fixtures (with the
+  gunner's cmds and `ct=`): a frame later the script reads
   `(1764.48, 1890.38, 1.02)` on both servers, the frame having run the
   probe's two cmds 16 and 32 ms past the spawn (1.1d `ct` 11682 after the
   spawn's 11650, UO 12382 after 12350); the cmd stamped on the spawn's own
   time ran on neither. The yaw is the last of them (1.1d -147, UO -141).
   The same gate sends ours those two cmds as far past its own spawn and
-  reads the same text. The rig's own 25 and 50 ms cmds fell 50 ms and
-  read -1.01, which was the rig, not the server (VERIFIED, replay).
+  reads the same text (VERIFIED, replay; cmds at 25 and 50 ms fall 50 ms
+  and read -1.01).
 - INFERRED, from the call sites: deleting the turret. `G_FreeEntity` calls
   `G_FreeTurret` (0x66b6f), which releases any gunner and clears the record.
 
@@ -997,7 +962,7 @@ unmanned frame takes this branch.
 VERIFIED: `turret_controller` (0x53348) hands (`angles2[0]`, `angles2[1]`, 0)
 to `G_DObjSetControlTagAngles` for `tag_aim` and `tag_aim_animated`, and
 (`angles2[2]`, 0, 0) for `tag_flash` (`docs/protocol-1.1.md`). VERIFIED,
-0x524cc re-read with `annotate_func.py` for section 12: an add of
+0x524cc: an add of
 `angles2[2]` into `angles2[0]` with its store (0x524eb..0x524f4); a
 two-pass loop holding a multiply by 0.05, an `AngleSubtract` call, compares
 against the limit and its negation, and an add stored back into each
@@ -1089,7 +1054,7 @@ the `D;` line names the gunner's carried weapon where the `K;` line names
 
 ## 12. What the capture measured
 
-The retail capture is two committed files, both from one run on 2026-09-25:
+The retail capture is two committed files from one run:
 `crates/server/tests/fixtures/turret/mp_carentan-dm-turret.txt` (the
 `--save-turret` gunner's side, "fixture line N" below) and
 `mp_carentan-dm-turret-script.txt` beside it (the server's `PROBE`, `D;` and
@@ -1206,9 +1171,9 @@ INFERRED: the body turns with the barrel's yaw but is no rigid offset: it
 sits 46 to 49.5 behind and 2.4 to 6.8 left across the yaw arc, and pitch
 pulls it in toward the gun in both directions, to 39.6 at full up and 40.3 at
 full down. That is the shape of the blended `standMG42_aim` leaves: section
-7.2 replays both tables and every snapshot between them to 0.1. The other mounted snapshots (the mount-phase drift,
-the flick, fire and the crouch remount) fall between the table's rows and
-are all in the fixture.
+7.2 replays both tables and every snapshot between them to 0.1. The other
+mounted snapshots (mount-phase drift, flick, fire, crouch remount) fall
+between the table's rows and are in the fixture.
 
 ### 12.3 The arcs, the view and the 15-degree step (D3)
 
@@ -1367,9 +1332,8 @@ frame, independently: yaw reaches 0 on a 1.6-degree step while pitch still
 takes 10.
 
 VERIFIED: `angles2[2]` reads 0.0 on all 99 `!turret` lines, the 14 slewing
-ones included. INFERRED: that is section 9's re-reading of 0x524cc, where the
-carried part stays 0 when both clamps are 10, and not the flash tilt an
-earlier reading of this document expected while the barrel slewed.
+ones included. INFERRED: that is section 9's reading of 0x524cc: the carried
+part stays 0 when both clamps are 10, so the slew never tilts the flash.
 
 ### 12.9 The gunner's anims (D9)
 
@@ -1432,1089 +1396,694 @@ one the probe's cmds asked for.
 The mounted frame is `ScriptRuntime::turret_think_client` over
 `game::turret`'s `aim`, `fire_tick`, `loop_tick` and `muzzle`, run once per
 server frame for every gunner after the cursor hint, last in the server's
-`ClientEndFrame` pass. A use press splits the client's cmds for the tick:
-the ones after it run once the touch pass has mounted it (13.1). Body
-placement (section 7) runs between the aim and the fire: `vcod_common::turretpose::place_gunner` from the gunner's legs
-anim, then the trace down onto the map's collision, then the origin and the
-body's yaw mirrored to script.
+`ClientEndFrame` pass. A use press splits the client's cmds for the tick: the
+ones after it run once the touch pass has mounted it (13.1). Body placement
+(section 7) runs between the aim and the fire:
+`vcod_common::turretpose::place_gunner` from the gunner's legs anim, the trace
+down onto the map's collision, then the origin and body yaw mirrored to
+script.
 
 The release (section 8) is `game::turret::release` on the record and
-`release_sim` on the gunner, reached from four places:
+`release_sim` on the gunner, reached from:
 
-- `turret_think_client` releases instead of running the frame when the busy
-  byte is not 1 or the gunner is dead or not playing. The use key's busy 2 is
-  set in the cmd's own item pass, ahead of the touch pass's `pm_type` gate.
-  INFERRED, section 4.1: `Cmd_Activate_f` has no `pm_type` gate of its own.
-- a gunner a lower slot's round killed reaches that release on its own turn
-  of the same pass, since the round's callback runs inside the shooter's turn
-  (`cod11-combat.md` 16.2). One a higher slot's round killed keeps the gun
+- `turret_think_client`, instead of the frame, when the busy byte is not 1 or
+  the gunner is dead or not playing. The use key's busy 2 is set in the cmd's
+  own item pass, ahead of the touch pass's `pm_type` gate. INFERRED, 4.1:
+  `Cmd_Activate_f` has no `pm_type` gate of its own.
+- a gunner a lower slot's round killed: released on its own turn of the same
+  pass, since the round's callback runs inside the shooter's turn
+  (`cod11-combat.md` 16.2); one a higher slot's round killed keeps the gun
   until its next frame's turn. INFERRED, 6.1 and 8: retail's
   `turret_think_client` runs inside each gunner's own `ClientEndFrame` and
   `player_die` (0x49a48) calls no release.
-- a spawn the script queued releases before the sim is reset, and keeps the
-  teleport's temp entities only for a spawn into play, the `sessionstate`
-  the script set ahead of it.
-- `GameHost::free_entity` releases the record of a manned gun and queues the
-  gunner's half, which lands in the same frame's `ClientEndFrame` pass.
-- a disconnect frees the record's owner and busy byte only.
+- a spawn the script queued: releases before the sim is reset, and keeps the
+  teleport's temp entities only for a spawn into play (the `sessionstate` the
+  script set ahead of it).
+- `GameHost::free_entity` on a manned gun: releases the record and queues the
+  gunner's half, applied in the same frame's `ClientEndFrame` pass.
+- a disconnect: frees the record's owner and busy byte only.
 
-A level boundary builds the script runtime and every sim afresh, a
-`map_restart` included, so no mount survives one. The unowned think
-(section 9) runs for every gun nobody mans right after the entity thinks, so
-a released barrel starts home on the frame after its release, as 12.8
-measured. A corpse cloned off a gunner killed on the gun is re-read from the
-sim at the snapshot build, after the death frame's release, so it reaches the
-wire without the mounted bits; the re-read keeps the place and facing the
-clone took, since the release teleports the dead player back to its mount
-spot. INFERRED: retail's clone copies `ps.eFlags`
-(`cod11-combat.md`, the `cloneplayer` table) before that frame's
-`ClientEndFrame` releases, so a retail corpse of a gunner killed by `kill`
-may carry 0xC000; no capture covers it.
+A level boundary (a `map_restart` included) rebuilds the script runtime and
+every sim, so no mount survives one. The unowned think (section 9) runs for
+every unmanned gun right after the entity thinks, so a released barrel starts
+home the frame after its release (12.8). A corpse cloned off a gunner killed
+on the gun is re-read from the sim at the snapshot build, after the death
+frame's release, so it goes out without the mounted bits but keeps the
+clone's place and facing (the release teleports the dead player back to the
+mount spot). INFERRED: retail's clone copies `ps.eFlags` (`cod11-combat.md`,
+the `cloneplayer` table) before that frame's `ClientEndFrame` releases, so a
+retail corpse of a gunner killed by `kill` may carry 0xC000; no capture covers
+it.
 
-- The placement's trace sees the world's brushes and terrain only.
-  INFERRED, from the skip-entity argument 7.1 reads: retail's `trap_Trace`
-  also clips entities. The yaw goes to script as the whole of `angles`, pitch
-  and roll 0. INFERRED, from the `AxisToAngles` call 7.1 reads on the gun's
-  axis times the body's: retail carries a tilted gun's pitch and roll there
-  too.
+Where vcod differs or chooses:
+
+- The placement's trace sees world brushes and terrain only. INFERRED, from
+  the skip-entity argument 7.1 reads: retail's `trap_Trace` also clips
+  entities. Script `angles` gets the yaw only, pitch and roll 0. INFERRED,
+  from 7.1's `AxisToAngles` on the gun's axis times the body's: retail carries
+  a tilted gun's pitch and roll there.
 - The muzzle takes `tag_flash`'s distance from `tag_player` with both tags
   turned by the barrel about their own pivots, `tag_aim` and
   `tag_aim_animated` (13.8).
-- The round is traced and its hits handed to the damage callback in the frame
-  it was fired (12.5), after that frame's script frame. What the callback
-  leaves (sim ops, weapon ops, health) is applied a second time there. A
-  victim numbered above its gunner takes its damage feedback that frame and
-  one numbered below on the next, which is 12.5's INFERRED reading of the
-  `ClientEndFrame` order. The victim's `EV_DEATH` and entity state reach the
-  wire on the round's own snapshot either way, since entity states here are
-  built at snapshot time rather than copied at each client's end frame.
-- The damage callback is handed the gunner's carried weapon and the killing
-  arm of `finishPlayerDamage` swaps in the gun's (section 11, 12.6).
-- INFERRED: the callback's `eInflictor` is the gunner, not the gun. 12.6's
-  `D;` line names `m1carbine_mp`, `cod11-combat.md` 4.2 step 5 passes
-  `inflictor->s.weapon` on, and the gun's `s.weapon` is
-  `mg42_bipod_stand_mp` (section 11), so the inflictor `G_Damage` saw was
-  not the gun, whatever `Bullet_Fire` was handed at 0x522f1.
-- A round goes on through each player it hits at half damage, the same as
-  a carried rifle's (`cod11-combat.md` 2.4, step 5), so the second impact
-  12.5 shows on the world behind the target is raised here too; 13.1's
-  replay reads it at retail's (1248, 1308) and (1248, 1312).
+- The round is traced and its hits delivered in the frame it was fired
+  (12.5), after that frame's script frame; what the callback leaves (sim ops,
+  weapon ops, health) is applied a second time there. A victim numbered above
+  its gunner takes its damage feedback that frame, one below on the next
+  (12.5's INFERRED `ClientEndFrame` order). Its `EV_DEATH` and entity state
+  reach the round's own snapshot either way.
+- The damage callback gets the gunner's carried weapon; the killing arm of
+  `finishPlayerDamage` swaps in the gun's (section 11, 12.6).
+- INFERRED: on 1.1 the callback's `eInflictor` is the gunner, not the gun:
+  12.6's `D;` names `m1carbine_mp`, `cod11-combat.md` 4.2 step 5 passes
+  `inflictor->s.weapon` on, and the gun's `s.weapon` is `mg42_bipod_stand_mp`.
+  UO passes the gun (section 11).
+- A round goes on through each player it hits at half damage, as a carried
+  rifle's (`cod11-combat.md` 2.4 step 5), so 12.5's second impact on the
+  world behind the target is raised; the replay reads it at retail's (1248,
+  1308) and (1248, 1312).
 - The hit-location product is taken wider than a float before the
-  truncation, as the x87 takes it: `60 * 0.9` reads 53 as in 12.6, where a float
-  product rounds to 54 first.
-- A gun with no `stopFireSound` keeps its loop on through the frame the
-  timer runs out, as section 6.4's `je` past the clear reads.
+  truncation, as the x87 does: `60 * 0.9` reads 53 (12.6); a float product
+  rounds to 54 first.
+- A gun with no `stopFireSound` keeps its loop through the frame the timer
+  runs out (6.4's `je` past the clear).
 - INFERRED: every gunner's aim and fire run in `turret_think_client` before
   any gunner's round is traced, so two gunners in each other's arc can both
-  fire in the same frame. Retail traces and delivers each gunner's hit
-  inside that gunner's own `ClientEndFrame` pass instead, so its second
-  gunner traced is already dead before its own shot runs; a frame like that
-  can end in a mutual kill here that retail's per-client order forecloses.
+  fire in one frame and kill each other. Retail traces and delivers each hit
+  inside that gunner's own `ClientEndFrame`, so the second gunner is already
+  dead before his shot.
 - The hit trace poses a gunner in the view-yaw frame `place_gunner` wrote
-  that frame. INFERRED, from the `AxisToAngles` call 7.1 reads: retail's
-  placement carries the body yaw off the gun's own axis instead, which
-  diverges from the view yaw by up to roughly 45 degrees at the arc's
-  edges; unmeasured, no capture pins which pose a live round is traced
-  against.
-- The gunner's `ps.eFlags` bit 0x400 (`EF_FIRING`) comes from two places on
-  ours: `fire_tick`'s shot and `PmoveSingle`'s trigger bit (combat doc
-  16.5), which holds for every cmd with attack held, the gunner's own weapon
-  ready and its clip loaded. INFERRED and unmeasured: whether retail's ever
-  separates from the gun's own shot for a gunner whose own weapon is empty.
-- The turret pass's damage callback (`apply_effects`, one `deliver_hits` per hit, in round order) runs after the tick's
-  one `take_link_ops` drain, so a `linkTo`/`unlink` or a client spawn its
-  script notify queues waits for the next tick's drain rather than reaching
-  this frame's wire.
-- `activate_ent` drops an unusable turret before the trace pass that would
-  otherwise clip it against the world, where retail's use/hint loop traces
-  every candidate first and only then steps past one `G_IsTurretUsable`
-  refuses (`crates/server/src/game/item.rs`).
+  that frame. INFERRED, from 7.1's `AxisToAngles`: retail's body yaw comes off
+  the gun's axis instead, up to about 45 degrees off the view yaw at the arc
+  edges; no capture pins which pose a live round meets.
+- The gunner's `ps.eFlags` 0x400 (`EF_FIRING`) comes from `fire_tick`'s shot
+  and from `PmoveSingle`'s trigger bit (combat doc 16.5), set for every cmd
+  with attack held, his own weapon ready and its clip loaded. INFERRED,
+  unmeasured: whether retail's ever differs from the gun's shot for a gunner
+  whose own weapon is empty.
+- The turret pass's damage callback (`apply_effects`, one `deliver_hits` per
+  hit, in round order) runs after the tick's one `take_link_ops` drain, so a
+  `linkTo`/`unlink` or client spawn its script queues waits for the next
+  tick.
+- `activate_ent` drops an unusable turret before the trace pass, where
+  retail's use/hint loop traces every candidate first and then steps past
+  one `G_IsTurretUsable` refuses (`crates/server/src/game/item.rs`).
 
 ### 13.1 The replay against the capture
 
-`crates/server/tests/turret_ab.rs` replays the fixture's cmds on ours and
+`crates/server/tests/turret_ab.rs` replays a turret capture's cmds on ours and
 compares every `!trace` and `!turret` field, the drained events and the
-impacts, snapshot by snapshot; `TURRET_REPORT=1` prints every row. How it
-pairs the two:
+impacts, snapshot by snapshot (`TURRET_REPORT=1` prints every row). The 12
+capture (`-turret.txt`) and its 1.5/UO twins are no longer replayed; they stay
+committed as evidence, and the later captures that log the target's spawn,
+stamps and `ct=` carry the gates (13.3, 13.4). Pairing rules:
 
-- Our frame that ran the cmds stamped in `[T - 50, T)` pairs with retail's
-  snapshot `T` (12.1). The two cmds 12.1 names as late, 24736 and 30148, go
-  to the frame after.
-- Each cmd goes out as the view retail's server built from it: its wire
-  angles plus `delta_angles` of retail's snapshot `T - 50`. `delta_angles`
-  and the gunner's own `eventSequence` are compared as their change from the
-  first pair, since the join leaves each side its own offset.
+- Every cmd runs on the frame its snapshot's `ct=` names (`frame_of`). On
+  captures without `ct=` the rule is 12.1's: our frame that ran the cmds
+  stamped in `[T - 50, T)` pairs with retail's snapshot `T`.
+- Each cmd goes out as the view retail's server built from it: wire angles
+  plus `delta_angles` of retail's snapshot `T - 50`. `delta_angles` and the
+  gunner's `eventSequence` are compared as their change from the first pair,
+  since each join has its own offset.
 - The rig numbers the clients as retail did, target 0 and gunner 1, so the
-  victim is numbered below its gunner on both (12.5).
-- Ours starts at retail's settled spot, to the fixture's 0.1 print.
-  VERIFIED: the `PROBE place` line reads y 1860.19 (script line 32) and
-  every pre-mount trace 1860.5 (fixture lines 42-90). INFERRED: retail's
-  landing from the placement ended 0.31 units off the spot, and no line of
-  the capture says why; our landing stays on the spot. Every
-  release teleports back to the mount spot, so the offset would ride through
-  every later phase.
-- Origins are compared to 0.25 units, `viewangles` to the print plus one
-  `ANGLE2SHORT` step, `angles2` to the print plus 0.01 degrees, the rest
-  exactly, impacts included: both sides truncate them to whole units.
+  victim is numbered below its gunner (12.5).
+- Ours starts at retail's settled spot, the first `!trace`'s `exact=`
+  (`Capture::start`) where the capture prints one.
+- Tolerances: origins 0.25 units, `viewangles` the print plus one
+  `ANGLE2SHORT` step, `angles2` the print plus 0.01 degrees, the rest exact,
+  impacts included (both sides truncate them to whole units).
 
-What the replay found, fixed: the stand mount's first snapshot, 24800, kept
-the spot, `groundEntityNum` 1022 and `pb_stand_alert` on ours, where
-VERIFIED (fixture line 93) retail reads 1023, the placed origin and
-`legsAnim` 32, `standMG42_aim`. All of a tick's pmove steps ran before the
-per-cmd use pass, so the cmds after the use cmd ran unmounted. A client's
-cmds after a use press now wait for the touch pass and run in a second
-round, so the mount lands inside the use cmd as 12.1 reads, and the rig's
-`the_first_locked_snapshot_is_already_placed` pins it. The crouch mount,
-where the use cmd was the frame's last, still keeps the stance for a frame
-on both, and the gate compares those rows with no `GAPS` line.
+Traps the replay found, fixed in the code:
 
-Also fixed: `G_TempEntity`'s truncation (section 8) now
-applies to every temp entity at the wire (`temp_entity::build`), so the
-fire phase's twenty impacts read retail's (1648, 1492, -31); the landing
-ladder reads the fall height and the land anim is gated on the landing speed
-and the legs timer (`cod11-sound-system.md`, "Landing"), so a release's
-one-unit drop lands in silence and keeps `pb_stand_alert`, as both releases
-read.
+- The stand mount's first snapshot (24800) must already be placed: VERIFIED,
+  fixture line 93, retail reads `groundEntityNum` 1023, the placed origin and
+  `legsAnim` 32. A client's cmds after a use press wait for the touch pass and
+  run in a second round, so the mount lands inside the use cmd
+  (`the_first_locked_snapshot_is_already_placed`). The crouch mount, whose use
+  cmd was the frame's last, keeps the stance a frame on both.
+- `G_TempEntity`'s truncation (section 8) applies to every temp entity at the
+  wire (`temp_entity::build`), so the fire phase's twenty impacts read
+  retail's (1648, 1492, -31).
+- The landing ladder reads the fall height and the land anim is gated on
+  landing speed and the legs timer (`cod11-sound-system.md`, "Landing"), so a
+  release's one-unit drop lands silent and keeps `pb_stand_alert`.
+- A client's entity goes out as its own end-frame turn copied it (13.3), so
+  the kill snapshot carries the victim's `EV_PAIN` (parm 47) from the round
+  before, on 1.1, 1.5 and UO.
+- The leaf walk's partition bounds test (`cod11-player-clip.md` 8.12) lands
+  the crouch release's drop on retail's ground at 38900.
+- `PM_Footsteps` scales the cycle by speed over full speed and truncates it
+  (`cod15-movement.md` 5, "Footsteps"), so the strafe's footstep events match.
+- The strafe's step up the sandbags (retail `EV_STEP_VIEW` parm 139, ours
+  once 142) and the slide down the 52-degree face are unmounted pmove;
+  `cod11-mantle.md`, "The step-up stops a unit short" and "A steep plane still
+  steers the fall", hold the two ports.
 
-What it lets through, each a `GAPS` line in the gate:
-
-- The kill snapshot, 34950: VERIFIED (12.5), retail's carries the victim's
-  entity with the `EV_PAIN` (parm 47) the round before raised; INFERRED
-  (12.5), copied in the victim's own `ClientEndFrame` ahead of the gunner's.
-  Closed 2026-10-17, VERIFIED, vcod measurement: `turret_ab` matches the
-  kill snapshot's events on all three captures (1.1, 1.5, UO) once a
-  client's entity goes out as its own end frame copied it (13.3).
-- The wounding round's impact at 34900 enters a truncation step off
-  retail's (ours 1517, 1611; VERIFIED retail 1518, 1612 at line 1057). It
-  moves with the spawns: ours read (1517, 1611), then (1518, 1611) once the
-  spawn's own think ran each client up to the frame's clock, and (1517,
-  1611) again once that think's move picked the idle on the spawn frame
-  (`cod11-spectator-follow.md` 13). INFERRED: the pose the round meets is
-  the idle's phase, which runs from each side's own join. VERIFIED,
-  `mp_carentan-dm-turret-victim.txt` line 1080 as committed in 102ecab0
-  (the 2026-10-17 run): a second retail run of the same recipe put that
-  round at (1517, 1611), ours; VERIFIED, the 2026-10-19 run now under that
-  name, line 1083: a third, the same. The gate's legs toggle
-  is compared as its change from the first sample for the same reason.
-- The killing round's impact at 34950: ours (1515, 1610), VERIFIED retail
-  (1514, 1609) at fixture line 1068. The target the round before knocked
-  back has moved for however much of its own cmd clock retail's frame ran,
-  and the target is the other client, whose clock this capture does not
-  carry. 13.3 measures it, and the replay that follows it matches the
-  round. The row stays in this capture's gate for want of that clock;
-  13.4 closes it on a capture that logs it.
-- The crouch release's one-unit drop: at 38900 ours reads grounded 0.2 above
-  the floor (z -23.66), where VERIFIED (fixture lines 1431 and 1436) retail reads
-  `groundEntityNum` 1023 at the same printed height and 1022 at -23.9 on the
-  next snapshot; the hint and the legs follow
-  the ground. The stand release lands on the same snapshot on both, and the
-  capture holds one of each. Ours then stays 0.21 above the floor, inside the
-  origin tolerance. Closed 2026-10-08: VERIFIED, vcod measurement, with the
-  leaf walk's partition bounds test ported (`cod11-player-clip.md` 8.12)
-  `turret_ab` matches the ground, hint, hint string and legs rows at 38900.
-- The strafe's footsteps were a phase off retail's: ours raised the first
-  at 39500 and a second at 39950, where VERIFIED (fixture lines 1495-1496
-  and 1530, event 6 and `eventSequence` 6) retail raises one at 39600 and
-  none after it before the strafe ends. Closed 2026-10-13: VERIFIED, vcod
-  measurement, `turret_ab` matches every event and `eventSequence` row of
-  the strafe and the refusal once `PM_Footsteps` scales the cycle by the
-  speed over the full speed and truncates it (`cod15-movement.md` 5,
-  "Footsteps"; the cause was the cadence, not the join's phase).
-
-The strafe also slid along the nest wall into the sandbags at 39800, where
-VERIFIED (fixture lines 1512-1513) retail steps up with `EV_STEP_VIEW` parm
-139, 11 units, and ours raised 142, 14 units, with every origin after it off
-by up to 5 units. That was unmounted pmove, not the turret, and two ports
-closed it; what they are is in `cod11-mantle.md`, "The step-up stops a unit
-short" and "A steep plane still steers the fall". The step, the slide down
-the 52-degree face, the landing and every origin of the strafe and refused
-phases now match.
-
-The kill credit matches as well: after the replay, ours logs the same `D;`
-and `K;` records as script lines 33-34 once the client numbers and names are
-dropped, `m1carbine_mp` on the wound and `mg42_bipod_stand_mp` on the kill,
-53 and `torso_upper` on both. Since 2026-10-18 the gate on this capture is
-gone (13.4) and the `-spawn` gates compare the credit instead.
+The kill credit matches: ours logs the same `D;` and `K;` records as script
+lines 33-34 with client numbers and names dropped (`m1carbine_mp` on the
+wound, `mg42_bipod_stand_mp` on the kill, 53 and `torso_upper` on both). The
+`-spawn` gates (13.4) compare it.
 
 ### 13.2 The live run against ours
 
-A second run of the same recipe, live rather than replayed, taken again on
-2026-09-25 after the round-split fix landed: `vcod-server` on mp_carentan
-(port 28990, `--gametype-script client-probes/probe_turret.gsc
---set probe_teleport=1`), the axis client second
-(`--net-probe 127.0.0.1:28990 --probe-team axis --probe-secs 180`), the
-gunner client third (`--net-probe 127.0.0.1:28990 --save-turret
---probe-secs 170`). It overwrote the committed `mp_carentan-dm-turret.txt`;
-that capture moved to a scratch copy (the pre-fix run stays in another
-for comparison) and `git checkout` restored the
-fixture directory, `git status` clean afterward.
+A live run of the recipe against `vcod-server` on mp_carentan
+(`--gametype-script client-probes/probe_turret.gsc --set probe_teleport=1`,
+axis client then `--save-turret` gunner, as in 12), not committed.
 
-VERIFIED, D1: the use cmd (`buttons=64`) reaches the server and the very
-next snapshot already reads `viewlocked=1`, `viewlocked_entNum=298` and
-`eFlags=49176` (0xC018), matching retail's own first-mounted values --
-unchanged from the pre-fix run. VERIFIED: body placement now lands one
-frame later instead of two -- the scratch copy's line 88 is the use
-cmd (`st=36216`), line 93 (`serverTime=36250`, the very next snapshot)
-already reads `viewlocked=1` but keeps `groundEntityNum` 1022, the
-pre-mount origin and `legsAnim` 634, and line 97 (`serverTime=36300`, one
-50 ms frame later) reads 1023, the placed origin and `legsAnim` 32.
+VERIFIED, D1: the snapshot after the use cmd (`buttons=64`) reads
+`viewlocked=1`, `viewlocked_entNum=298`, `eFlags=49176` (0xC018), retail's
+first-mounted values. The placement landed one frame later (use cmd
+`st=36216`; 36250 still `groundEntityNum` 1022, pre-mount origin, `legsAnim`
+634; 36300 reads 1023, placed origin, `legsAnim` 32). INFERRED: no cmd landed
+in the mount's second round (the use tap was the tick's only cmd), so the
+anim and the placement wait for the next tick's cmd. Retail shows the same
+shape on 12.1's crouch mount, where the use cmd was the frame's last: a
+same-frame placement needs a second cmd in the frame on both servers.
+VERIFIED: our crouch mount reproduces 12.1's crouch fields (first frame
+`eFlags=49200` with crouch, `groundEntityNum` 1022; next `pm_flags` 262144,
+`eFlags=49168`, 1023, placed origin).
 
-INFERRED: the round split closed the first of the two gap ticks the pre-fix
-run showed (12.1's `pb_stand_alert` mismatch, fixed per 13.1); the second
-cause 13.1 already named for that run -- "a tick that ran no cmd at all...
-with no mounted pmove step the anim stays unmounted, and retail's placement
-needs one too" -- still applies here and is now the whole of the gap: no cmd
-lands in the round that mounts the gun (the use tap is the only cmd that
-tick; the next cmd the client had already queued arrives too late over the
-wire to fall into that tick's second round), so `update_anims` cannot pick
-the mounted pose until the following tick's own cmd runs, and
-`turret_think_client`'s placement reads that same lagging `legs_anim()`.
+VERIFIED, the rest against section 12:
 
-INFERRED: this is not a regression from 13.1's replay result -- the replay
-feeds every post-use cmd at once, so its second round always has one to run
-in the same tick and places same-frame; a live client sending at the
-probe's default ~16 ms only sometimes has a second cmd queued by the time
-the mount's tick runs, and this capture is the case where it did not.
-
-INFERRED, correcting the claim below against 12.1: retail's own capture
-does not show a same-frame placement across the board. 12.1's crouch mount
-(VERIFIED there, lines 1368 vs 1373) already carries this same
-one-tick-old-pose shape, for the reason 12.1 itself gives: that use cmd was
-the frame's last, so no further pmove step ran behind it that frame. Only
-retail's *stand* mount avoids it, because extra cmds happened to run in the
-same frame after that particular use tap. So a 125 fps client's tighter cmd
-spacing makes a same-frame placement more likely, not certain, and 12.1's
-own crouch capture is the counter-example already in this document.
-
-VERIFIED: the crouch mount on ours reproduces that native one-tick shape
-rather than adding to it, on this run or the last -- the first mounted
-frame already reads `eFlags=49200` (0xC030) with the crouch held and
-`groundEntityNum` 1022, and the next reads `pm_flags` 262144, `eFlags=49168`
-(0xC010), `groundEntityNum` 1023 and the placed origin, field for field what
-12.1 reads for retail's crouch mount.
-
-VERIFIED, D3: `angles2[1]` clamps at exactly -45.0/45.0 and `angles2[0]` at
-exactly -40.0/40.0 through the sweep, the same arc as section 2's stock
-file and 12.3's capture.
-
-VERIFIED, D4: the fire phase writes one `EV_FIRE_WEAPON_MG42` (168) on the
-gun's ring every 50 ms frame, `viewlocked=2`, gun `eFlags=1032` (0x408),
-`loopSound=2`, gunner `ps.eFlags=50200` (0xC418) and `legsAnim` 33/545
-throughout, and all twenty impacts of the fire phase land at (1648, 1492,
--31), retail's own value from 12.4 -- the `G_TempEntity` truncation fix
-13.1 already logged holds on a fresh capture. The loop clears two frames
-after the last shot and the cooldown (`EV_SOUND_ALIAS` parm 3, cs 527)
-plays on the frame after that, the same two-frame shape 12.4 reads.
-
-VERIFIED, D5/D6: the target phase's two hitting rounds land at (1517,
-1611) and (1516, 1612), each about a unit off retail's (1518, 1612) --
-the truncation-step difference 13.1 already attributes to where the round
-enters the posed bone box, reproduced here rather than newly found. The kill's `EV_OBITUARY`
-(201) rides the same snapshot as the killing round's fire event, as 12.5
-reads; the wounding round's `EV_PAIN` on the victim's own entity does not
-reach the gunner's snapshot, the entity-state-at-snapshot gap 13.1 already
-lists. The server's own log carries
-`D;0;axis;vcod;1;allies;vcod;m1carbine_mp;53;MOD_RIFLE_BULLET;torso_upper`
-and
-`K;0;;vcod;1;;vcod;mg42_bipod_stand_mp;53;MOD_RIFLE_BULLET;torso_upper`,
-identical to script lines 33-34 once the two runs' shared client numbers
-and name are set aside.
-
-VERIFIED, D7: the release snapshot reads `viewlocked=0`,
-`viewlocked_entNum=1023`, `eFlags=16` (0xC018 losing 0xC000 and the
-teleport bit) and the origin one unit above the pre-mount spot, carrying
-`EV_PLAYER_TELEPORT_OUT` (200), `EV_PLAYER_TELEPORT_IN` (199) and
-`EV_STANCE_FORCE_STAND` (140) -- the same fields and events 12.7 reads on
-retail's stand release. The crouch release reads the same shape with
-`EV_STANCE_FORCE_CROUCH` (141) in place of the stand event and `eFlags` 48
-losing to 16, matching 12.7's crouch-release reading too.
-
-VERIFIED, D8: the unowned barrel steps (-10, 0), (-20, 0) ... (-70, 0),
-(-72, 0), one 10-degree step a frame, starting the frame after the
-release -- the same table 12.8 reads off retail.
-
-VERIFIED, D9: `torsoAnim` stays 0 throughout; `legsAnim` carries 33/545
-through the fire snapshots and 32/544 (the same anim, the 512 toggle bit
-differing run to run) everywhere else mounted, matching 12.9's reading
-that the mounted clause distinguishes only fire from aim.
-
-VERIFIED, D10: the hint reads `6:0:0` standing off the gun, `0:0:0` on
-every mounted snapshot including the release snapshot, and `6:0:0` again
-the frame after -- 12.10's reading reproduced.
-
-VERIFIED: the run's own notes carry the same shape as retail's --
-`# BROKEN strafe passed 100 units at bearing 49.1`,
-`# refused bearing=53.1 dist=118.8`, `# BROKEN refused tap at dist=118.8`,
-`# REFUSED ok` against retail's 50.5/56.2/126.9/ok -- the refused mount
-still refuses and the strafe still exhausts its 100-unit cap before
-clearing the arc, with the exact bearings differing the way 13.1's
-capsule-vs-box clip difference already predicts for that phase.
-
-No mismatch outside the `GAPS` list 13.1 already carries turned up in this
-run: every divergence found here is one of the six already named there,
-measured a second time on a fresh capture rather than a new finding. D1's
-one-tick lock-to-placement gap is not a seventh: 13.1 already named its
-cause (a tick with no cmd to run) as the half of the old two-tick gap the
-round split does not touch, and this run is that half on its own, not a
-regression from it.
+| check | ours |
+|---|---|
+| D3 arcs | `angles2[1]` clamps at -45.0/45.0, `angles2[0]` at -40.0/40.0 |
+| D4 fire | one `EV_FIRE_WEAPON_MG42` (168) a frame, `viewlocked=2`, gun `eFlags=1032`, `loopSound=2`, gunner `ps.eFlags=50200`, `legsAnim` 33/545; twenty impacts at (1648, 1492, -31); loop clears two frames after the last shot, cooldown (`EV_SOUND_ALIAS` parm 3, cs 527) on the next |
+| D5/D6 hits | (1517, 1611) and (1516, 1612) against retail's (1518, 1612), the idle-phase step 13.4 closes; `EV_OBITUARY` (201) on the killing round's snapshot; `D;`/`K;` lines identical to script lines 33-34 |
+| D7 release | `viewlocked=0`, `viewlocked_entNum=1023`, `eFlags=16`, one unit above the mount spot, 200, 199 and 140; crouch release 141, `eFlags` 48 to 16 |
+| D8 slew | (-10, 0) ... (-70, 0), (-72, 0), from the frame after the release |
+| D9 anims | `torsoAnim` 0; `legsAnim` 33/545 firing, 32/544 otherwise |
+| D10 hint | `6:0:0` off the gun, `0:0:0` mounted and on the release snapshot, `6:0:0` after |
+| notes | `# BROKEN strafe passed 100 units at bearing 49.1`, `# refused bearing=53.1 dist=118.8`, `# REFUSED ok` (retail 50.5/56.2/126.9) |
 
 ### 13.3 The target's clock
 
 `--save-turret` writes a `!victim` line per fire and target snapshot: the
 other player's `pos.trTime`, `pos.trBase`, `pos.trDelta`, legs and torso
-anims, `eFlags`, `solid` and `eventSequence`. Three runs of the 13.1
-recipe on 2026-10-17 carry it: `mp_carentan-dm-turret-victim.txt` (1.1d,
-replaced on 2026-10-19 by a run that also prints the start at full
-precision; the old one is in git at 102ecab0), `-victim-15.txt` (1.5b) and
-`-victim-uo.txt` (UO 1.51b), each a `--capture-tag` run beside the
-`--probe-team axis` client.
+anims, `eFlags`, `solid` and `eventSequence`. Captures carrying it, each a
+`--capture-tag` run beside the `--probe-team axis` client:
+`mp_carentan-dm-turret-victim.txt` (1.1d, full-precision start; an older
+run is in git at 102ecab0), `-victim-15.txt` (1.5b), `-victim-uo.txt` (UO
+1.51b), and `-victim-ct.txt` (1.1d, `ct=` on every `!trace`, server log
+`-victim-ct-script.txt`).
 
-- VERIFIED, the 2026-10-17 `-victim.txt` (102ecab0) lines 1078 and 1089:
-  the target's `pos.trTime` reads 31932 on the wounding snapshot (31950) and 31998 on the kill
-  snapshot (32000), so retail's kill frame ran 66 ms of the target's cmds,
-  not 50; every earlier target snapshot reads its time less 18. Line 1089:
-  `trBase` (1512, 1600, -31), three units back along the ray from the
-  (1515, 1603) of every earlier line, `trDelta` (-30, -33, 0), `legsAnim`
-  94 (`pb_combatrun_forward_loop`) and `solid` 0. The kill's impact
-  (line 1092) is (1514, 1609), the first capture's to the unit.
+- VERIFIED, 102ecab0's `-victim.txt` lines 1078 and 1089: the target's
+  `pos.trTime` reads 31932 on the wounding snapshot (31950) and 31998 on the
+  kill snapshot (32000), so retail's kill frame ran 66 ms of the target's
+  cmds, not 50; every earlier target snapshot reads its time less 18. Line
+  1089: `trBase` (1512, 1600, -31), three units back along the ray from the
+  (1515, 1603) of every earlier line, `trDelta` (-30, -33, 0), `legsAnim` 94
+  (`pb_combatrun_forward_loop`), `solid` 0. The kill's impact (line 1092) is
+  (1514, 1609), the 12 capture's to the unit.
 - VERIFIED, `-victim-15.txt` lines 1065 and 1076 and `-victim-uo.txt` lines
-  1021 and 1031: there the kill frame ran 50 ms of the target's cmds,
-  `trBase` (1513, 1601), `trDelta` (-36, -40, 0), the run anim, `solid` 0.
-  1.5b's kill impact (line 1079) is (1516, 1611), which is where ours put
-  the first 1.5 capture's.
+  1021 and 1031: the kill frame ran 50 ms of the target's cmds, `trBase`
+  (1513, 1601), `trDelta` (-36, -40, 0), the run anim, `solid` 0. 1.5b's kill
+  impact (line 1079) is (1516, 1611).
 - VERIFIED, all three wound snapshots: `trDelta` reads (0, 0, 0) on the
-  snapshot of the round that knocked the target back, and the knockback
-  shows only on the next. INFERRED: the entity state is the copy the
-  target's own `ClientEndFrame` made (`BG_PlayerStateToEntityState`, combat
-  doc 5.4), ahead of the gunner's turn, and `finishPlayerDamage`'s velocity
-  goes into the playerstate only. The kill snapshot's `solid` 0 is
-  `player_die`'s relink as a corpse (combat doc 5.1, step 13).
+  snapshot of the round that knocked the target back; the knockback shows on
+  the next. INFERRED: the entity state is the copy the target's own
+  `ClientEndFrame` made (`BG_PlayerStateToEntityState`, combat doc 5.4), ahead
+  of the gunner's turn, and `finishPlayerDamage`'s velocity goes into the
+  playerstate only. The kill snapshot's `solid` 0 is `player_die`'s relink as
+  a corpse (combat doc 5.1, step 13).
 
-vcod: `ClientSim::end_frame_entity` keeps the entity state each client's
-own end-frame turn built, and the frame's snapshots send that copy; a client
-a higher slot killed after its turn still goes out on it, `solid` 0. The
-rig's target sends three cmds a frame, as the net probe does, or on a
-`-victim` capture the cmds its `pos.trTime` names, one every 16 ms back to
-the last snapshot's (INFERRED, the probe's `--probe-cmd-ms`).
-`turret_ab`'s three `the_victim_capture_matches_*` gates diff every phase
-of those captures, the target's entity included: the killing round matches
-on 1.1, and 1.5 and UO each keep one impact a truncation step off along
-the same ray with the target's entity matching to the unit (the wound on
-1.5, the kill on UO; the idle phase, as the wounding round in 13.1).
+vcod: `ClientSim::end_frame_entity` keeps the entity state each client's own
+end-frame turn built, and the frame's snapshots send that copy; a client a
+higher slot killed after its turn still goes out on it, `solid` 0. The rig's
+target sends three cmds a frame, as the net probe does, or on a `-victim`
+capture the cmds its `pos.trTime` names, one every 16 ms back to the last
+snapshot's (INFERRED, the probe's `--probe-cmd-ms`).
 
-The other phases, measured 2026-10-17 (`turret_ab.rs` `TURRET_REPORT=1`):
+Cmd timing, VERIFIED off the captures:
 
-- VERIFIED, the sweep: a snapshot may already show a cmd stamped at or
-  past its own time. `-victim-15.txt` 23550 and 23750 read pitch -32 and
-  -8, the view of the first of two cmds stamped 23550 (sent at probe ms
-  5284) and of the first 23750 (5483); `-victim-uo.txt` 20650 reads yaw
-  145, cmd 20651's (1077), and 25150 pitch 4, the first 25150's (5576).
-  `-victim-15.txt` 20000 reads -141, cmd 19969's, so 19985 (1733) had not
-  run yet. INFERRED: the probe sends one cmd a message
-  (`Connection::send_frame`), and a snapshot shows every cmd that reached
-  the server before its frame, whatever the stamp says; the stamp rule of
-  12.1 is the usual case of that. The gates list them (`EARLY_VICTIM_15`,
-  `EARLY_VICTIM_UO` by send ms, since the probe repeats a stamp, and
-  `LATE_VICTIM_15`); ours then matches every sweep snapshot.
-- VERIFIED, UO's strafe at 34800: retail's body moved 10.5 units since
-  34750 and 2.9 by 34850, ours 7.4 and 6.0. The first of two cmds stamped
-  34800 (15229) ran before frame 34800; listed, ours matches.
-- 1.5b's strafe step (the 142 against retail's 139, VERIFIED at 33900):
-  not the step. Ours ran 0.2 units further along +y than retail from
-  33750, the frame the body meets clip brush 7 (`clip_nosight_dirt`, face
-  normal (0.9965, 0.0838, 0)), and so came onto the sandbags' 52-degree
-  face further up. INFERRED: cmd 33700 (15446) reached retail's server
-  behind 33716, which then ran from 33682, and `SV_UserMove` (1.5b
-  `cod_lnxded` 0x808cade, the `cmdCount` strings) skips a cmd stamped at
-  or below the last one run. Dropped, ours matches 33750 to 0.02 and the
-  step raises 139 at retail's origin. The landing at 34050 is the same
-  shape with 34016 behind 34032; of the cmds near it only that drop leaves
-  no row (34000's leaves 0.17 units and a legs anim). These two rest on
-  the fit alone: no capture logs what order the server received cmds in.
-- 1.1d, the refused phase: closed, the gate's start was off. After the
-  step at 36900 (parm 142, ours the same) the fall down the face drifted
-  ours along -x, at least 0.05 off by 37000 and 0.16 by the landing at
-  37050, while y stayed within print; the 0.256 at 37350 was that drift
-  where the print rounds it past the gate's 0.25. No cmd early, late or
-  dropped reproduces it (each of 36866..37084 shifted, each of
-  36383..36900 dropped), and the 1.5b and UO falls down the same face
-  match. The cause is the rebase (see the last item).
-  - VERIFIED, 1.1d disassembly: the air move is not the difference.
-    `PM_AirMove` (0x2f03c) runs `PM_Friction`, then `PM_CmdScale`
-    (0x2e5bc: `ps.speed * max / (127 * total)`, times
-    `walkSpeedScale` (ps+0x34c) under `pm_flags` 0x80 and
-    `runSpeedScale` (ps+0x350) otherwise). Then comes the accelerate
-    inline: `max(wishspeed, 100)` (0x708ec) times the frame time,
-    capped at the lack, divided by `ps.friction` (ps+0x37c, always 1)
-    under a ground entity. Last are the overbounce clip on
-    `pml.groundPlane` (0x2f1d3) and `PM_StepSlideMove(1)`. vcod's
-    `air_move` is that.
-  - VERIFIED, ours: x moves by the accelerate alone, since the face's
-    normal is (0, 0.789, 0.614) (brush 6's bevel, which the step's down
-    pass lands on at its +x end). The drift is one velocity snap. The
-    step cmd (36884) lands 13.92 above its start, and the step's speed
-    scale (0x35761: `0.2 + 0.8 (1 - dz / 18)`, the 0.2 being 0x3e4ccccc
-    at 0x70f14) takes vx from -35.44 to -13.516. That snaps to -14.
-  - INFERRED, from the prints: the snapshots after the step read about
-    1 unit/s less in x on retail (0.06 to 0.16 over 66 to 166 ms), so
-    retail snapped -13. That needs a landing at least 0.0102 higher on the
-    bevel, or a walk velocity 0.12% slower into the step. The 0.1 prints
-    cannot tell the two apart.
-  - VERIFIED, live (retail 1.1d, 2026-10-18, fixture
-    `mp_carentan-dm-turret-full.txt`, the probe's `!trace` now carrying
-    `exact=` and `velocity=`): the same strafe, a different run. It
-    steps 7 onto the face (parm 135) and falls down it, and ours lands
-    on retail's origin to the bit on every snapshot from the strafe on
-    (`the_fall_off_the_sandbags_matches_retail_to_the_bit`). So the step
-    scale, the air move and the slide down the face are retail's.
-  - VERIFIED, ours, 2026-10-19: the 142 step's rounding edge is the
-    gunner's start. Retail's placement on `-victim.txt` landed at
-    (1737.9, 1857.8) printed, 2.4 short of the spot ours lands on, so
-    the gate moves ours to the print, and the dismount puts the gunner
-    back on that spot before the strafe. The print hides up to 0.05 per
-    axis. Over that cell, from y 1857.8 ours steps to z -11.4273 and the
-    step scale leaves vx at -13.52, which snaps to -14: the drift. From y
-    1857.79 down (1857.795 at x 1737.94; x matters little) the step
-    lands at -11.3887, 0.04 higher, vx snaps to -13 and every row of the
-    capture matches, the 37350 landing included. Retail's gunner stood
-    in that band. The gate starts ours in its middle, (1737.9, 1857.77)
-    (`START_VICTIM`), and lists no gap. The constraint comes from this
-    one row: no other snapshot of the capture tells the cell's points
-    apart.
-  - VERIFIED, live (retail 1.1d, 2026-10-19, the recipe rerun with
-    `exact=` on every `!trace`; it replaced `-victim.txt`, server log
-    `-victim-script.txt`): retail's placement landed at (1737.9427,
-    1857.7877, -23.870617), line 46, inside the band the fit named. The
-    gate now starts ours at the first `!trace`'s `exact=`
-    (`Capture::start`, read by `parse`; `-full.txt` takes it too and still
-    matches to the bit) and `START_VICTIM` is gone.
-  - VERIFIED, ours: on this run the 0.1 print start passes too, though
-    its strafe steps 142 again (parm 142 on its `strafe` event).
-  - VERIFIED, the same run: the kill (25600, line 1095) hits the knocked
-    back target at (1515, 1610). Ours from a clock of its own put it at
-    y 1611.043, a truncation step on along the ray; on retail's level
-    clock (`rig_aligned` off the log's `PROBE place 0 ... 8950`) it lands
-    at 1610.89 and the row matches. INFERRED: the target's run clip
-    (`legsAnim` 94 on line 1092) starts at a phase off the level time
-    (`animclock`), so the pose the round meets needs retail's clock, as
-    the `-spawn` gates (13.4) already replay. The sweep's 16450 (line
-    194) reads yaw -157, the first of two cmds stamped 16450 (sent at
-    probe ms 1571); listed as `EARLY_VICTIM`, every row matched. Without
-    `ct=` nothing else tells that cmd's frame (see the next item), so
-    since 2026-10-20 the gate on this run diffs only the phases from the
-    dismount on (`AFTER_DISMOUNT`), which hold the 142 step and the fall.
-  - VERIFIED, live (retail 1.1d, 2026-10-20, port 34201, the recipe rerun
-    with `ct=` on every `!trace`: `-victim-ct.txt` and its server log
-    `-victim-ct-script.txt`): the placement landed on the spot,
-    `exact=` (1738.2423, 1860.1884, -23.874968) on line 47 (the spot
-    the gsc prints, (1738.24, 1860.19)), the target at 9500 and the
-    gunner at 12750 (`PROBE place`, script lines 26 and 28). Its strafe
-    steps 139 (parm 139 on line 1532) and falls down the face. The two cmds
-    stamped 24950 (sent at probe ms 9237 and 9253, lines 847-848) both
-    ran in frame 24950 (`ct=` 24950, line 849), as 16450 did on the
-    2026-10-19 run. Of the cmds stamped at a snapshot's own time that
-    `ct=` shows, a repeated stamp ran there 7 times out of 8 in this run
-    and none of the 328 single stamps did; 1.1d's `-spawn.txt` ran both
-    of its 2 pairs there, 1.5b's `-spawn-15.txt` neither of its 2 and
-    UO's `-spawn-uo.txt` 6 of 10 (and one single), so the stamp alone
-    cannot place one (a count over the `ct=` captures' `!cmd` and
-    `!trace` lines).
-  - vcod: `the_victim_capture_matches_retail_on_mp_carentan` replays
-    `-victim-ct.txt` with every cmd on the frame `ct=` names
-    (`frame_of`) and each one sent at its own stamp (`Rig::aligned`; the
-    gate first sent the gunner's cmds on our clock, which stamped those
-    two 24949), and lists no gap: every phase matches, the `ct` row
-    included.
+- A snapshot may show a cmd stamped at or past its own time.
+  `-victim-15.txt` 23550 and 23750 read pitch -32 and -8, the first of two
+  cmds stamped 23550 (sent at probe ms 5284) and of the first 23750 (5483);
+  `-victim-uo.txt` 20650 reads yaw 145, cmd 20651's (1077), and 25150 pitch
+  4, the first 25150's (5576). `-victim-15.txt` 20000 reads -141, cmd
+  19969's, so 19985 (1733) had not run. INFERRED: the probe sends one cmd a
+  message (`Connection::send_frame`), and a snapshot shows every cmd that
+  reached the server before its frame; 12.1's stamp rule is the usual case.
+- UO's strafe at 34800: retail's body moved 10.5 units since 34750 and 2.9 by
+  34850 (ours, on the stamp rule, 7.4 and 6.0): the first of two cmds stamped
+  34800 (15229) ran before frame 34800.
+- 1.5b's strafe step (142 against retail's 139 at 33900): ours ran 0.2 units
+  further along +y from 33750, the frame the body meets clip brush 7
+  (`clip_nosight_dirt`, normal (0.9965, 0.0838, 0)). INFERRED: cmd 33700
+  (15446) reached retail behind 33716, and `SV_UserMove` (1.5b `cod_lnxded`
+  0x808cade, the `cmdCount` strings) skips a cmd stamped at or below the last
+  one run. Dropped, ours matches 33750 to 0.02 and steps 139 at retail's
+  origin. The landing at 34050 is the same shape with 34016 behind 34032.
+  Both rest on the fit: no capture logs receive order.
+- `ct=` (`-victim-ct.txt`, placement `exact=` (1738.2423, 1860.1884,
+  -23.874968) line 47, target placed at 9500 and gunner at 12750, script
+  lines 26 and 28): its strafe steps 139 (line 1532). The two cmds stamped
+  24950 (probe ms 9237 and 9253, lines 847-848) both ran in frame 24950
+  (`ct=` 24950, line 849). A repeated stamp ran at its snapshot's own time 7
+  times out of 8 in this run and none of the 328 single stamps did; 1.1d's
+  `-spawn.txt` ran both of its 2 pairs there, 1.5b's `-spawn-15.txt` neither
+  of its 2, UO's `-spawn-uo.txt` 6 of 10 (and one single), so the stamp alone
+  cannot place a cmd (count over the `ct=` captures' `!cmd` and `!trace`
+  lines).
+
+The 1.1d step down the sandbags, VERIFIED:
+
+- `PM_AirMove` (0x2f03c): `PM_Friction`, then `PM_CmdScale` (0x2e5bc:
+  `ps.speed * max / (127 * total)`, times `walkSpeedScale` (ps+0x34c) under
+  `pm_flags` 0x80, else `runSpeedScale` (ps+0x350)), the inline accelerate
+  (`max(wishspeed, 100)` (0x708ec) times frame time, capped at the lack,
+  divided by `ps.friction` (ps+0x37c, always 1) under a ground entity), the
+  overbounce clip on `pml.groundPlane` (0x2f1d3) and `PM_StepSlideMove(1)`.
+  vcod's `air_move` is that.
+- The step's speed scale (0x35761: `0.2 + 0.8 (1 - dz / 18)`, 0.2 =
+  0x3e4ccccc at 0x70f14) on the 142 step: the step cmd (36884) lands 13.92
+  above its start and vx goes -35.44 to -13.516, snapped to -14. The face's
+  normal is (0, 0.789, 0.614) (brush 6's bevel). Retail snapped -13 on the
+  older `-victim.txt`: from y 1857.79 down (1857.795 at x 1737.94) the step
+  lands at -11.3887, 0.04 higher, and vx snaps to -13. Retail's placement
+  there landed at (1737.9427, 1857.7877, -23.870617), inside that band, so
+  the start must be the `exact=` one.
+- `mp_carentan-dm-turret-full.txt` (1.1d, `exact=` and `velocity=` on every
+  `!trace`) steps 7 onto the face (parm 135) and falls down it; ours matches
+  every snapshot to the bit
+  (`the_fall_off_the_sandbags_matches_retail_to_the_bit`).
+- The 1.1d kill on `-victim.txt` (25600, line 1095) hits the knocked-back
+  target at (1515, 1610); ours on its own clock reads y 1611.043, on retail's
+  level clock (`rig_aligned` off `PROBE place 0 ... 8950`) 1610.89. INFERRED:
+  the target's run clip (`legsAnim` 94, line 1092) starts at a phase off the
+  level time (`animclock`), so the pose the round meets needs retail's clock.
+
+vcod's gates on these: `the_victim_capture_matches_retail_on_mp_carentan`
+replays `-victim-ct.txt`, every cmd on its `ct=` frame and sent at its own
+stamp (`Rig::aligned`), with no gap. `the_142_step_off_the_sandbags_matches_retail`
+replays `-victim.txt` from its exact start on retail's level clock and diffs
+the phases from the dismount on (`AFTER_DISMOUNT`), which hold the 142 step
+and the fall. `-victim-15.txt` and `-victim-uo.txt` are not replayed (13.4).
 
 ### 13.4 The target's spawn and cmds
 
-Three more runs of the recipe, each a `--capture-tag` run whose target is
-`--probe-team axis --probe-fall` (its stdout logs every cmd stamp it sent,
-`CMDS`, and its own playerstate, `FALL`) and whose gsc appends `getTime()`
-to each `PROBE place` line: `mp_carentan-dm-turret-spawn.txt` (1.1d),
-`-spawn-15.txt` (1.5b) and `-spawn-uo.txt` (UO 1.51b), each with a
-`-script.txt` (the server log) and a `-target.txt` (the target's `CMDS`
-and `FALL` lines) beside it. The first takes were on 2026-10-17; all three
-were retaken on 2026-10-20 with the gunner's `!trace` lines carrying `ct=`
-(below), the UO one with `probe_spawnlog 1`. The measurements in 13.4 to
-13.7 that name a `-spawn` capture's times were made on the 2026-10-17
-takes (in the tree up to a78fced2) unless they say otherwise.
+Three runs whose target is `--probe-team axis --probe-fall` (stdout logs
+every cmd stamp, `CMDS`, and its own playerstate, `FALL`) and whose gsc
+appends `getTime()` to each `PROBE place` line:
+`mp_carentan-dm-turret-spawn.txt` (1.1d), `-spawn-15.txt` (1.5b) and
+`-spawn-uo.txt` (UO 1.51b), each with a `-script.txt` (server log) and a
+`-target.txt` (`CMDS` and `FALL`). The committed takes carry `ct=` on the
+gunner's `!trace` lines; the UO one sets `probe_spawnlog 1`. Times below
+are from the earlier takes (in the tree up to a78fced2) unless stated.
 
-- VERIFIED, `-spawn-target.txt` lines 9-10: the target reads `pm_type` 4
-  and health 0 at 11050 and stands at the placed spot with health 100 at
-  11150, the time `-spawn-script.txt` line 25 gives the placement; `FALL`
-  prints on every health change, so the spawn and the placement share the
-  frame. The same holds at 11300 on 1.5b (line 25) and 11950 on UO (line
-  30).
+- VERIFIED, `-spawn-target.txt` lines 9-10: the target reads `pm_type` 4 and
+  health 0 at 11050 and stands at the placed spot with health 100 at 11150,
+  the placement's time (`-spawn-script.txt` line 25); `FALL` prints on every
+  health change, so spawn and placement share the frame. Same at 11300 on
+  1.5b (line 25) and 11950 on UO (line 30).
 - VERIFIED, `-spawn-target.txt` lines 11-18: the target falls from the
   placement on its own 16-17 ms cmds, lands at `commandTime` 11482 with
-  `legsAnim` 99 (the `land` event's anim, `player-model-anim-system.md`)
-  at 11500, and idles (634) by 11650.
-  vcod measurement on the first take: our join's 50 ms cmds landed it a
-  frame off with no land anim, so its idle ran from another time than
-  retail's.
+  `legsAnim` 99 (the `land` event's anim, `player-model-anim-system.md`) at
+  11500, and idles (634) by 11650. A join sending 50 ms cmds lands a frame
+  off with no land anim, so its idle runs from another time.
 - VERIFIED, `-spawn-target.txt` lines 38-39: the wound shows on 30350
-  (`pm_time` 50, `pm_flags` 0x40200, health 47) and the kill on 30400.
-  1.5b: 29950 and 30000 (`-spawn-15-target.txt` lines 36-37); UO: 31100
-  and 31150 (`-spawn-uo-target.txt` lines 37-38).
-- VERIFIED, `-spawn-uo-script.txt` line 28 (`PROBE spawnat`): the UO
-  retake's target spawned at (192, 1280, 0.13), yaw -135, and stands at
-  the placed spot with velocity 0 (`-spawn-uo-target.txt` line 10).
-  `spawn_gate` pins that spawn, as `hit_gate` does. vcod measurement: an
-  earlier UO retake without `probe_spawnlog` (not kept) read velocity
-  (5, 5) at the placement and its target stood 1.7 units off the spot
-  when the rounds met him; ours, spawned elsewhere, stood on it. A spawn
-  point that is not flat leaves the target a drift.
+  (`pm_time` 50, `pm_flags` 0x40200, health 47), the kill on 30400. 1.5b:
+  29950 and 30000 (`-spawn-15-target.txt` lines 36-37); UO: 31100 and 31150
+  (`-spawn-uo-target.txt` lines 37-38).
+- VERIFIED, `-spawn-uo-script.txt` line 28 (`PROBE spawnat`): the UO target
+  spawned at (192, 1280, 0.13), yaw -135, and stands at the placed spot with
+  velocity 0 (`-spawn-uo-target.txt` line 10). `spawn_gate` pins that spawn,
+  as `hit_gate` does: a spawn point that is not flat leaves the target a
+  drift (an unlogged take read velocity (5, 5) and stood 1.7 off the spot).
+- VERIFIED, `ct=`: each `!trace` logs the snapshot's `commandTime`, the stamp
+  of the last cmd its frame ran. Against "the first snapshot past its stamp",
+  1.1d's 24798, 24899, 29033, 34184 and 36384 ran a frame late and the first
+  of each pair stamped 26400 and 32000 a frame early; 1.5b's 19933, 20049,
+  26332, 27332, 30386, 30434, 31848, 35399 and 35949 late; UO's 20198, 22682,
+  22783, 24949, 30149 and 33348 late and the first of each pair stamped
+  25200, 30300 and 31200 early. A cmd stamped at or below one already run
+  runs on neither server. `ct=` cannot tell a cmd overtaken by a later one
+  (13.3's 1.5b strafe) from one that ran.
+- VERIFIED, `-spawn-uo.txt`: UO's turret round rolls `g_tracerChanceLMG` on
+  each player hit (`uo_turret_round`, `coduo-diff.md` 21): a tracer on the
+  wound at 31100, none on the kill at 31150.
 
 vcod: `turret_ab`'s `rig_aligned` runs our server alone until the target's
 placement lands on retail's `PROBE place` time, sends the target's cmds at
-the stamps its `CMDS` lines list from its join on (`common::join_pair_stamped`,
-`Rig::target_cmds`), holds until our clock is retail's, and from there
-replays every frame at the level time of the retail snapshot it pairs
-with, the gunner's cmds on their own stamps. `spawn_gate` diffs every
-phase and the target's playerstate against its `FALL` lines on the
-snapshots that carry its entity.
-
-- vcod measurement: on 1.1d and 1.5b every row matches, the wounding and
-  the killing rounds' impacts included, which the earlier captures kept as
-  `ENTRY_POINT` and `KILLING_ROUND` rows for want of the spawn time and
-  the stamps. A retake of an earlier capture with both logged is a
-  `-spawn` capture, so since 2026-10-18 `turret_ab` no longer replays
-  `-turret.txt`, `-turret-15.txt`, `-turret-uo.txt`, `-victim-15.txt` or
-  `-victim-uo.txt`; they stay committed as the evidence 12, 13.1 and 13.3
-  cite. `-victim.txt` keeps a gate for the 1.1d fall of 13.3; since
-  2026-10-19 it is a third run, with its server log, replayed on retail's
-  level clock from its exact start, and `-victim-ct.txt` (2026-10-20)
-  holds the whole recipe with `ct=` (13.3). Before the target's
-  stamps were replayed the 1.1d kill was (1516, 1612) against retail's (1516, 1611); our entry point was 1612.054
-  in y.
-- vcod measurement: on UO the wound matches and the kill enters at x
-  1513.0006 against retail's 1512 after truncation, with the target's
-  entity and playerstate matching retail's at the kill, until the pose
-  fix of 13.7 put it on 1512. It was the pose, not the trace's arithmetic
-  (13.5): UO's target idles a frame ahead (13.6, 13.7).
-- VERIFIED, the gunner's own cmds on the first takes, read off each
-  snapshot's view: a cmd stamped a ms past the snapshot time and followed
-  by one stamped a ms below it ran before that snapshot (1.1d 21551, UO
-  22101 and 22551), and the one below never showed; 1.5b's 21184 and 21234
-  and UO's strafe 36284 reached the server a frame late. The gates listed
-  them by fit (`EARLY_SPAWN*`, `LATE_SPAWN*`).
-- VERIFIED, the retakes' `ct=`: each `!trace` logs the snapshot's
-  `commandTime`, the stamp of the last cmd its frame ran, so a cmd shows
-  first in the first snapshot whose `ct=` reaches its stamp. Against the
-  rule "the first snapshot past its stamp", 1.1d's 24798, 24899, 29033,
-  34184 and 36384 ran a frame late, and the first of each pair stamped
-  26400 and 32000 a frame early (`ct=` 26400 at 26400). 1.5b's 19933,
-  20049, 26332, 27332, 30386, 30434, 31848, 35399 and 35949 ran late. UO's
-  20198, 22682, 22783, 24949, 30149 and 33348 ran late and the first of
-  each pair stamped 25200, 30300 and 31200 early. A cmd stamped at or
-  below one already run lands in that frame and runs on neither server.
-  vcod: `turret_ab`'s `frame_of` places every cmd off `ct=` and the gate
-  diffs ours' `commandTime` against it on every snapshot, so no list is
-  left; on all three servers every frame ran the same last cmd as
-  retail's. `ct=` cannot tell a cmd overtaken by a later one (13.3's 1.5b
-  strafe) from one that ran: both sit below the later stamp.
-- VERIFIED, `-spawn-uo.txt`: UO's turret round rolls `g_tracerChanceLMG`
-  on each player hit (`uo_turret_round`, `coduo-diff.md` 21). The first
-  take drew a tracer on both hits; the retake on the wound at 31100 and
-  not on the kill at 31150. Ours rolls off its own seed, so `spawn_gate`
-  hands a UO replay retail's outcomes, one per hit in order
-  (`Server::pin_tracer_rolls`); the draw still runs, so later draws stay
-  where they were.
+its `CMDS` stamps from its join on (`common::join_pair_stamped`,
+`Rig::target_cmds`), holds until our clock is retail's, then replays every
+frame at the level time of its paired retail snapshot, the gunner's cmds on
+their own stamps and `ct=` frames (`frame_of`; ours' `commandTime` is diffed
+against `ct=` on every snapshot). `spawn_gate` diffs every phase and the
+target's playerstate against its `FALL` lines, and hands a UO replay
+retail's tracer outcomes one per hit (`Server::pin_tracer_rolls`; the draw
+still runs, so later draws stay put). VERIFIED, vcod measurement:
+`the_spawn_capture_matches_{retail,15b,uo}_on_mp_carentan` match every row,
+both hitting rounds' impacts included, with no gap.
 
 ### 13.5 The hit point to the last bit
 
-The `-spawn-uo` row is a whole unit apart only after truncation, so a
-fourth run of the recipe on 2026-10-17 logs each hit's point and
-direction with `probe_hitlog 1`. It is `mp_carentan-dm-turret-hitfine-uo.txt`
-with its `-script.txt` and `-target.txt`. `probe_turret.gsc` wraps
-`level.callbackPlayerDamage` and prints each component as whole,
-thousandths and the rest. The engine has no `int()`, so the gsc takes the
-whole part by halving steps (`whole`), each subtraction exact.
+`mp_carentan-dm-turret-hitfine-uo.txt` (with `-script.txt` and
+`-target.txt`, `probe_hitlog 1`) logs each hit's point and direction:
+`probe_turret.gsc` wraps `level.callbackPlayerDamage` and prints each
+component as whole, thousandths and the rest (no `int()` in the engine, so
+`whole` takes the integer part by exact halving steps).
 
 - VERIFIED, `-hitfine-uo-script.txt`: the wound at 30150 enters
-  `torso_upper` at (1519.957764, 1612.592651, 22.911320) and the kill
-  at 30200 at (1513.656006, 1608.460938, 22.762277), both for 53.
-- vcod measurement (`the_hitlog_capture_matches_uo_on_mp_carentan`,
-  `TURRET_REPORT=1`): every wire row of the capture matches. Ours enters
-  the same bone (`bip01 l clavicle`, `torso_upper`) at (-0.0029, -0.0035,
-  -0.0001) off retail's on the wound and (+0.0367, +0.0413, +0.0011) on
-  the kill. Each difference lies almost along the round, so the box face
-  sits elsewhere and the ray does not. The directions agree to 6e-8.
-  13.7 finds the cause and closes the row.
+  `torso_upper` at (1519.957764, 1612.592651, 22.911320), the kill at 30200
+  at (1513.656006, 1608.460938, 22.762277), both for 53.
 - VERIFIED, the locational bone trace in each build
   (`SV_LocationalTraceModel`, cod11-combat.md 3.1): 1.1d `cod_lnxded`
   0x80c4564 (18 float stores), 1.5b `cod_lnxded` 0x80d2000 and UO
   `coduo_lnxded` 0x80c7394 (29 each). 1.5b and UO move each point through
-  helpers that store each difference and each product sum: into the bone's
-  frame at 1.5b 0x80d1f56 and UO 0x80c72ea, the sphere centre out of it at
-  UO 0x80c723e. Each slab distance `(p - plane) * sign` and each
+  helpers that store each difference and product sum: into the bone's frame
+  at 1.5b 0x80d1f56 and UO 0x80c72ea, the sphere centre out of it at UO
+  0x80c723e. Each slab distance `(p - plane) * sign` and each
   `d1 / (d1 - d2)` is stored too.
-- vcod measurement: the `-spawn-uo` kill replayed through that slab form
-  enters at x 1513.000610 with every store rounded to f32 and 1513.000637
-  with none. `bonetrace.rs` gives 1513.000610. The stores move the entry
-  by 3e-5, against the 0.003 to 0.05 the pose is off, so the trace's
-  arithmetic cannot close the row. vcod has since ported it
-  (cod11-combat.md 3.1, "The arithmetic on 1.5 and UO"). VERIFIED, vcod
-  measurement (`TURRET_REPORT=1`, 2026-10-19): the `-spawnlog` wound at
-  30250 went from (0, -0.000122, -0.0000019) off retail's to its bits;
-  every other hit row reads as before, the knockback-frame kills 0.001 to
-  0.009 off.
-- vcod measurement: on the kill frame ours poses legs 157 starting that
-  frame at weight 0 over 1-2 idle clips (the knockback's first frame).
-  Moving our pose clock 1 to 40 ms either way moves the kill's entry
-  further from retail's, never onto it. INFERRED: the difference is in
-  the pose's inputs on 1.5's and UO's eased controllers or the clip blend,
-  not in the clock. No script builtin reads a bone on 1.1d, 1.5b or UO
-  (VERIFIED, `strings`: none of the three game modules names a `getTagOrigin`), and a linked
-  marker reads the pose a frame late. A grid of traces in the damage
-  callback reads the pose the round met (13.6).
+- vcod measurement: those stores move an entry by about 3e-5 (the
+  `-spawn-uo` kill: x 1513.000610 stored, 1513.000637 not), far under the
+  0.003 to 0.05 pose error 13.6 and 13.7 closed. vcod ports them
+  (cod11-combat.md 3.1, "The arithmetic on 1.5 and UO"). No script builtin
+  reads a bone on 1.1d, 1.5b or UO (VERIFIED, `strings`: no game module names
+  a `getTagOrigin`), so the hit grids of 13.6 read the pose a round met.
+- vcod: `the_hitlog_capture_matches_uo_on_mp_carentan` holds every wire row
+  and each hit point (13.8).
 
 ### 13.6 The pose a round meets: hit grids
 
-Three more runs of the recipe on 2026-10-17 set `probe_hitgrid 1`:
-inside the damage callback, before the stock callback lands the hit,
-`probe_turret.gsc` casts a 9 by 9 grid of `bulletTrace`s (hitCharacters
-on) along the round, 1.5 units apart across it and centred on its point,
-and logs each cell's distance to the body as `fine1` prints it. The
-callback runs inside the round's delivery, so the grid reads the pose the
-round met. The runs are `mp_carentan-dm-turret-hitgrid.txt` (1.1d),
-`-hitgrid-15.txt` (1.5b) and `-hitgrid-uo.txt` (UO 1.51b), each with its
-`-script.txt` and `-target.txt` (recipe in the `-script` headers, ports
-32752). In each the wound lands on the target's idle and the kill on the
-next frame, the first of the knockback (legs 157 on that frame's end
-frame, at weight 0).
+`probe_hitgrid 1`: inside the damage callback, before the stock callback
+lands the hit, `probe_turret.gsc` casts a 9 by 9 grid of `bulletTrace`s
+(hitCharacters on) along the round, 1.5 units apart and centred on its point,
+and logs each cell's distance to the body as `fine1` prints it, so the grid
+reads the pose the round met. Captures: `mp_carentan-dm-turret-hitgrid.txt`
+(1.1d), `-hitgrid-15.txt` (1.5b), `-hitgrid-uo.txt` (UO 1.51b), each with
+`-script.txt` (recipe in its header) and `-target.txt`. The wound lands on
+the target's idle, the kill on the next frame, the knockback's first (legs
+157 on that frame's end frame, weight 0).
 
-- vcod measurement, before the fix below (`TURRET_REPORT=1`): on 1.5b
-  every cell of both grids sits within 0.08 of retail's along its ray, most
-  within 0.002. On 1.1d the same, but for the cells on the head model's
-  own `bip01 head` box, all 0.118 further on ours. On UO the wound's cells
-  ran 0.25 to -0.25 across the grid, a turn of the torso of about 2.5
-  degrees, and the kill's entry sat 0.63 nearer the gun.
-- vcod measurement: moving ours' pose clock 50 ms later put every UO wound
-  cell on retail's to 0.004; 50 ms earlier or later on 1.1d or 1.5b moved
-  theirs off by up to 0.5. So UO's idle on the target runs a frame ahead
-  of ours, and 1.1d's and 1.5b's do not. Starting only the target's first
-  legs clip after his spawn a frame early (its clock at the spawn frame's
-  `level.time` less a frame) puts the UO wound's cells within 0.004 and
-  the kill's within 0.031; the `-hitfine-uo` capture's points within
-  0.0001 and 0.004; and the `-spawn-uo` kill on retail's 1512.
+- vcod measurement: UO's idle on the target runs a frame ahead of ours, and
+  1.1d's and 1.5b's do not. Moving the pose clock 50 ms later put every UO
+  wound cell on retail's to 0.004; the same shift on 1.1d or 1.5b moved cells
+  off by up to 0.5. 13.7 has the cause.
 - VERIFIED, `game.mp.uo.i386.so` `ClientSpawn` (0x54df4): after the
   `gclient_t` memset it runs `ClientEndFrame` (whose `G_UpdateClientInfo`,
   0x52c81, frees and rebuilds the DObj when the models change, then runs
   `BG_PlayerAnimation`), then `ClientThink_real` on the last cmd, then
-  `BG_PlayerStateToEntityState`. 1.5b's (0x4c9a8) runs the same three.
+  `BG_PlayerStateToEntityState`; 1.5b's (0x4c9a8) runs the same three.
   VERIFIED, the legs setter (UO 0x2ce5f): a still clip gets no
-  `XAnimSetTime`; only a movement clip whose weight reads 0 does. INFERRED:
-  the node's time runs from wherever the tree started it, so on UO the
-  idle's clock starts with the DObj the spawn builds, a frame before the
-  idle takes weight; why 1.5b, with the same `ClientSpawn`, does not is not
-  read.
-- vcod measurement: that shift does not hold elsewhere. In
-  `vehicle_armor_ab` (UO, mp_cassino) both clients spawn the same way, on
-  idle 697 at 19350, and with the shift two of its silhouette gates fail
-  (one cell 0.28 off, one ray missing the gunner) where without it they
-  pass. The shift holds; it failed there because ours posed the
-  script trace at the frame's own time, which the shift alone leaves a
-  frame off on those bodies (13.7). The fall and the early join are not
-  the cause: the `-hitgrid-uo-ground` and `-hitgrid-uo-spawn2` reruns
-  (13.7) show the same frame ahead.
-- VERIFIED, the 1.1d head cells: `xmodelalias/head_axis.gsc` names twenty
-  heads, `basehead_axis_a_01..10` on `xmodelparts/basehead_axis11` and
+  `XAnimSetTime`; only a movement clip whose weight reads 0 does.
+- VERIFIED, 1.1d head cells: `xmodelalias/head_axis.gsc` names twenty heads,
+  `basehead_axis_a_01..10` on `xmodelparts/basehead_axis11` and
   `basehead_axis_b_01..10` on `basehead_axis21`, and the character script
-  attaches a random one. Ours drew a `b` head where retail's grid reads
-  `basehead_axis11`'s boxes: with an `a` head every head cell matches to
-  0.002. `probe_turret.gsc` now logs the target's attachments at each
-  placement (`PROBE models`), and `probe_head <model>` swaps his head
-  first, which the 1.1d gate sets.
-- vcod measurement: on 1.1d (with the head pinned) and 1.5b every grid
-  cell sits within 0.08 of retail's and every hit point within 0.002, and
-  so does UO's with the shift above in place. The kill frame's cells read
-  0.001 to 0.08 off where the wound's read under 0.004 on every server.
-- vcod measurement, 2026-10-18 (`TURRET_REPORT=1`, each grid laid out
-  9 by 9): on the kill frame the cells drift smoothly across the grid,
-  about 3e-4 of a unit per 1.5-unit cell (a turn of about 2e-4 radians),
-  -0.002..0.006 on 1.1d, -0.003..0.004 on 1.5b, -0.009..0.003 on UO; the
-  0.01 to 0.08 cells are rays that graze a box edge, where that turn
-  moves the entry most. INFERRED: the body is turned about a hundredth of
-  a degree off retail's on the knockback's first frame, the frame its legs
-  take clip 157 at weight 0, the same on all three; which input turns it
-  is not found.
-- vcod measurement, 2026-10-21 (`TURRET_REPORT=1`): with the legs and
-  torso ramps starting a node at 0 from `0.001 * goal` (13.9, "The
-  weights across frames") the kill lands on retail's bits on
-  `-hitgrid-15`, `-hitgrid-uo-spawn2` and `-hitgrid-uo-ground`, and sits
-  2e-6 off on `-hitfine-uo` (30200), 1.7e-4 off on `-hitgrid-uo` and on
-  1.1d's `-hitgrid` (30450). Every grid cell is within 0.0011 of retail's
-  on 1.1d and within 7e-5 on 1.5b and UO. INFERRED: the turn was clip 157
-  at weight 0 where retail's setter had raised it to 0.001.
-- vcod: `turret_ab`'s `hit_gate` replays each capture as `spawn_gate` does
-  and holds the target's playerstate, each hit's point (to the bit, 13.8)
-  and each grid cell (`GRID_NEAR`, 0.005) to retail's; the gunner's own rows are the
-  `-spawn` gates'.
+  attaches a random one. Retail's grid reads `basehead_axis11`'s boxes.
+  `probe_turret.gsc` logs the target's attachments at each placement
+  (`PROBE models`), and `probe_head <model>` swaps his head first, which the
+  1.1d gate sets (`HEAD_HITGRID`).
+- vcod measurement: with the legs and torso ramps starting a node at 0 from
+  `0.001 * goal` (13.9, "The weights across frames") the kill lands on
+  retail's bits on `-hitgrid-15`, `-hitgrid-uo-spawn2` and
+  `-hitgrid-uo-ground`, 2e-6 off on `-hitfine-uo` (30200), 1.7e-4 off on
+  `-hitgrid-uo` and on 1.1d's `-hitgrid` (30450). Every grid cell is within
+  0.0011 of retail's on 1.1d and 7e-5 on 1.5b and UO. INFERRED: the earlier
+  hundredth-of-a-degree turn on the knockback frame was clip 157 at weight 0
+  where retail's setter had raised it to 0.001.
+
+vcod: `turret_ab`'s `hit_gate` replays each capture as `spawn_gate` does and
+holds the target's playerstate, each hit's point (`HIT_NEAR`, 0.001; 13.8)
+and each grid cell (`GRID_NEAR`, 0.005) to retail's; the knockback kills are
+listed as `KNOCKBACK_GAP`. The gunner's own rows are the `-spawn` gates'.
 
 ### 13.7 The frame ahead: UO's spawn DObj and the script trace
 
-What 13.6 left open, read 2026-10-17. Addresses are module VAs as
-`annotate_func.py` prints them.
-
 - VERIFIED, `G_RunFrame`'s calls: 1.1d calls `Scr_RunCurrentThreads` at
-  0x50653, `G_DObjUpdateServerTime` at 0x506ed, after the second thread
+  0x50653 and `G_DObjUpdateServerTime` at 0x506ed, after the second thread
   pass at 0x506d0. 1.5b has one thread pass, at 0x50821, then
-  `G_XAnimUpdate` at 0x50840. UO's are at 0x59e4d and 0x59e6c.
-  INFERRED: on 1.5b and UO every script thread, a `bulletTrace` in a
-  damage callback included, reads the players' DObjs at the last frame's
-  anim time. On 1.1d the second pass reads them at the frame's own.
-- VERIFIED, UO `G_DObjUpdate` (0x77df9): for an entity with a client
-  (`cmp [ent+0x160],0` at 0x77e12) it calls `G_UpdateClientInfo` (0x77e21),
-  which rebuilds the DObj when the models changed (`G_SafeDObjFree`) and
-  runs `BG_UpdatePlayerDObj` and `BG_PlayerAnimation`. 1.5b's
-  `G_DObjUpdate` (0x6b71c) does nothing for a client. INFERRED: the stock
-  `spawnPlayer`'s `setModel` and `attach` calls (`_teams::model`, after
-  the `spawn`) rebuild a UO player's DObj and set its clips inside the
-  thread. `G_XAnimUpdate` then advances them a frame before the end frame
-  that 1.1d and 1.5b start them on. On 1.5b the end frame's
-  `G_UpdateClientInfo` sees the new models, frees the DObj and starts
-  fresh.
-- vcod measurement: together the two account for 13.6's frame ahead and
-  for the seat-change switch in `coduo-vehicles.md` 13 ("Back from the
-  gunner's seat"). A UO spawn's clips run a frame ahead, and a script
-  trace poses a frame behind, so the two cancel for clips the spawn set.
-  Before a seat change, every pose a script trace reads comes from the
-  spawn's clips. After one, the seat's clips start on an end frame and the
-  trace reads them a frame back. That is why `vehicle_armor_ab`'s bodies
-  matched with neither rule and broke with only the first (13.6).
-- vcod: a UO spawn sets `ClientSim::dobj_ahead`, and the next end frame
-  starts its clips a frame early (`commit_pose`). On 1.5 and UO,
-  `bulletTrace` poses bodies at `GameHost::dobj_time_ms`, which the thread
-  pass leaves at the last frame. 1.1d's do too: its first pass runs
-  before `G_DObjUpdateServerTime` (0x506ed) and poses the last frame, its
-  second the frame's own. VERIFIED, vcod measurement (`leanhit_ab`,
-  cod11-combat.md 3.6): with the net probe's framed cmds both 1.1d
-  captures match posed at the last frame and miss 15 to 22 cells posed
-  at the frame's own, so there is no 1.1d exception to explain. With both, every UO cell of the
-  `-hitgrid-uo` grids, the `-hitfine-uo` points and the `-spawn-uo` kill
-  match retail's (`GAPS_SPAWN_UO`, `GAPS_HITFINE_UO`, `GAPS_HITGRID_UO`
-  removed), and so do `vehicle_armor_ab`'s phase-3 silhouettes at a
-  quarter unit (`SILHOUETTE_GAPS` removed).
-- Two more runs of the recipe on 2026-10-17 test 13.6's candidates. Both
-  set `probe_spawnlog 1`, which logs the level time of the stock
-  `spawned` notify (`PROBE spawned`) and the spawn point at the
-  placement (`PROBE spawnat`). One is a plain rerun,
-  `mp_carentan-dm-turret-hitgrid-uo-spawn2.txt`. The other,
-  `-hitgrid-uo-ground.txt`, also sets `probe_ground 1`, which places the
-  target 0.125 over the ground under the spot instead of 40 units above it.
-  Each comes with its `-script.txt` and `-target.txt` (ports 32791-32792).
-  VERIFIED, `-script.txt`: on both runs the spawn and the placement share
-  a frame (11200), at spawn point (1872, 928) facing -180. VERIFIED,
-  `-target.txt`: the grounded target drops 1.1 units, with no land event.
-- vcod measurement: with the spawn point pinned, every grid cell and hit
-  point of both runs matches retail's within the gates' 0.1 and 0.02. So
-  the fall is not the cause, and the frame ahead holds with or without
-  it. An earlier pair of these runs, whose spawn point was not logged,
-  had the target spawn on a slope: retail's think there left a y velocity
-  of 1 that drifted him 0.33 units by the landing, and ours, spawned
-  elsewhere, did not. That is why the gates pin the spawn
-  (`Capture::target_spawn`). The rig's joins answer the team menu a frame
-  before the placement, where retail's probe spawned in the placement's
-  frame; the pose does not depend on it.
+  `G_XAnimUpdate` at 0x50840; UO's are at 0x59e4d and 0x59e6c. INFERRED: on
+  1.5b and UO every script thread, a `bulletTrace` in a damage callback
+  included, reads the players' DObjs at the last frame's anim time; on 1.1d
+  the first pass reads the last frame and the second the frame's own.
+- VERIFIED, UO `G_DObjUpdate` (0x77df9): for an entity with a client (`cmp
+  [ent+0x160],0` at 0x77e12) it calls `G_UpdateClientInfo` (0x77e21), which
+  rebuilds the DObj when the models changed (`G_SafeDObjFree`) and runs
+  `BG_UpdatePlayerDObj` and `BG_PlayerAnimation`. 1.5b's `G_DObjUpdate`
+  (0x6b71c) does nothing for a client. INFERRED: the stock `spawnPlayer`'s
+  `setModel` and `attach` (`_teams::model`, after the `spawn`) rebuild a UO
+  player's DObj and set its clips inside the thread, and `G_XAnimUpdate`
+  advances them a frame before the end frame that 1.1d and 1.5b start them
+  on.
+- INFERRED: a UO spawn's clips run a frame ahead and a script trace poses a
+  frame behind, so the two cancel for clips the spawn set; after a seat
+  change the seat's clips start on an end frame and the trace reads them a
+  frame back (`coduo-vehicles.md` 13, "Back from the gunner's seat"). That is
+  why `vehicle_armor_ab`'s bodies needed both rules.
+- vcod: a UO spawn sets `ClientSim::dobj_ahead`, and the next end frame starts
+  its clips a frame early (`commit_pose`). `bulletTrace` poses bodies at
+  `GameHost::dobj_time_ms`, which the thread pass leaves at the last frame, on
+  1.1d too. VERIFIED, vcod measurement (`leanhit_ab`, cod11-combat.md 3.6):
+  with the net probe's framed cmds both 1.1d captures match posed at the last
+  frame and miss 15 to 22 cells posed at the frame's own. With both rules
+  every UO cell of the `-hitgrid-uo` grids, the `-hitfine-uo` points, the
+  `-spawn-uo` kill and `vehicle_armor_ab`'s phase-3 silhouettes (a quarter
+  unit) match with no gap.
+- Two more UO runs with `probe_spawnlog 1` (logs the stock `spawned`
+  notify's time, `PROBE spawned`, and the spawn point, `PROBE spawnat`):
+  `mp_carentan-dm-turret-hitgrid-uo-spawn2.txt` (plain rerun) and
+  `-hitgrid-uo-ground.txt` (`probe_ground 1`: target placed 0.125 over the
+  ground instead of 40 above), each with `-script.txt` and `-target.txt`.
+  VERIFIED, `-script.txt`: on both the spawn and placement share frame 11200,
+  spawn point (1872, 928) facing -180. VERIFIED, `-target.txt`: the grounded
+  target drops 1.1 units with no land event. vcod measurement: with the spawn
+  point pinned (`Capture::target_spawn`) every cell and hit point of both
+  matches, so the fall is not the cause of the frame ahead. A spawn on a slope
+  leaves a drift (an unlogged pair: y velocity 1, 0.33 units by the landing),
+  which is why the gates pin the spawn.
 
 ### 13.8 The muzzle and the round's end on 1.5 and UO
 
-What was left of `turret_ab`'s `HIT_NEAR` once the prone strike put the
-end point on retail's bits (cod11-combat.md 3.1, "The prone strike on
-mp_carentan"): on every capture the wound landed on retail's point or a
-float step off it, and each kill on the knockback's first frame 0.0005 to
-0.015 off (13.6). Read 2026-10-20 under gdb on retail UO 1.51b, three runs
-of the `-hitfine-uo` recipe (13.5) on port 34231, each run's capture
-replayed on ours. Scripts and dumps are in the gitignored `tmp/` of the
-branch's worktree. Breakpoints: the locational trace (`coduo_lnxded`
-0x80c7394, the world start and end of its caller's clip), after it
-(0x809aa78, the fraction) and after the end point (0x809ab53); in the game
-module, after the fire's muzzle stores (0x5aa90).
+Read under gdb on retail UO 1.51b, three runs of the `-hitfine-uo` recipe
+(13.5), each replayed on ours. Breakpoints: the locational trace
+(`coduo_lnxded` 0x80c7394, its caller's world start and end), after it
+(0x809aa78, the fraction), after the end point (0x809ab53), and in the game
+module after the fire's muzzle stores (0x5aa90).
 
-- VERIFIED, `game.mp.uo.i386.so` `BG_Bullet_Endpos` (0x3011c): the range is
-  10000.0 (0x461c4000, stored at 0x3012e), not 1.1d's and 1.5b's 8192
-  (1.5b `Bullet_Endpos` 0x6de56 stores 0x46000000). Each end component is
+- VERIFIED, `game.mp.uo.i386.so` `BG_Bullet_Endpos` (0x3011c): range 10000.0
+  (0x461c4000, stored at 0x3012e), not 1.1d's and 1.5b's 8192 (1.5b
+  `Bullet_Endpos` 0x6de56 stores 0x46000000). Each end component is
   `muzzle + forward * 10000` with the product on the x87 stack (0x30189),
-  then the spread terms. Its callers are `Bullet_Fire` (0x7a8d5) and
+  then the spread terms. Callers: `Bullet_Fire` (0x7a8d5) and
   `Weapon_ArtilleryStrike_Fire` (0x7b77e). `Bullet_Fire` is called by the
-  turret's fire (0x5ab94), `FireWeapon` (0x7be48) and three sites among
-  the `CMD_VEH_*` turret commands (0x8f44c, 0x8fb8d, 0x900c3).
-- VERIFIED, gdb: the clip's end is that sum to the bit. On the first run
-  ours traced from the same muzzle to 8192, and its hit point came out a
-  float step off in y. Retail's start, end and fraction give retail's
-  point in the one-rounding form (cod11-combat.md 3.1).
+  turret's fire (0x5ab94), `FireWeapon` (0x7be48) and three `CMD_VEH_*`
+  turret commands (0x8f44c, 0x8fb8d, 0x900c3).
+- VERIFIED, gdb: the clip's end is that sum to the bit; retail's start, end
+  and fraction give retail's point in the one-rounding form
+  (cod11-combat.md 3.1).
 - VERIFIED, the fire's aim on 1.5b (0x51193) and UO (0x5a99a):
-  `AngleVectors` reads the turret entity's 0x68 plus 0x144 (UO 0x148),
-  each sum stored, roll 0. 1.1d reads the gunner's `ps.viewangles`
-  (6.3). VERIFIED, gdb: on UO 0x68 is `angles2` and 0x148 the gun's own
-  angles ((9.997559, 30.002686, 0) and (0, 229, 0) on one shot). The
-  forward it gives is the round's direction and the muzzle's. vcod's
-  forward from the gunner's view read 4 float steps off in x.
-- VERIFIED, gdb: `tag_player`'s world origin matches ours to a step in z,
-  but `|tag_flash - tag_player|` reads 53.80326 and 53.80867 on two
-  aims, where ours is the bind pose's 53.80957. So ours' muzzle sits
-  about 0.006 further along the aim. VERIFIED, `xmodel/mg42_bipod`'s
-  bones: `tag_player` hangs off `tag_aim` (under `tag_dummy`), and
-  `tag_flash` off `tag_aim_animated`, `mg01`, `bi_base` and `tag_pivot`.
-  The two chains pivot on different points, so the reach changes with
-  the aim. VERIFIED, `turret_controller` (1.1d `game.mp.i386.so` 0x63348,
-  UO 0x6c5e9): `G_DObjSetControlTagAngles` on `tag_aim` and
-  `tag_aim_animated` with (`angles2[0]`, `angles2[1]`, 0), then on
-  `tag_flash` with (`angles2[2]`, 0, 0). INFERRED: the server's DObj plays
-  no anim on the gun, so both chains sit at their bind and a control
-  replaces the bone's local turn in model space (cod11-combat.md 16.3);
-  `tag_aim_animated`'s bind world turn is 0.001 degrees of pitch, so
-  `tag_flash` lands on `tag_aim_animated + R(flash - tag_aim_animated)` and
-  `tag_player` on `tag_aim + R(player - tag_aim)`, one barrel turn `R`
-  about two pivots 0.04 apart. VERIFIED (vcod, `mg42_bipod` from the paks):
-  that pose gives 53.803272 at the gdb aim (9.997559, 30.002686) and the
-  bind's 53.80957 at (0, 0), so retail's 53.80326 is that aim's reach to
-  1.2e-5 (`turret::muzzle`, unit test
-  `the_muzzle_reach_moves_with_the_barrel`).
-- vcod measurement (`turret_ab`, `TURRET_REPORT=1`): with the range and
-  the aim, every first-frame wound of the 1.5b and UO captures but two
-  landed on retail's bits. The two (`-hitfine-uo` 30150 and
-  `-hitgrid-uo-ground` 30350) and 1.1d's `-hitgrid` 30400 were a float
-  step off, along the round, from the bind reach. With `tag_flash` posed
-  about `tag_aim_animated` (above) all three land on retail's bits, and
-  every other first-frame wound of the 1.1d, 1.5b and UO captures stays
-  on them. Each knockback kill stays as 13.6 leaves it (0.0005 to 0.013).
+  `AngleVectors` reads the turret entity's 0x68 plus 0x144 (UO 0x148), each
+  sum stored, roll 0; 1.1d reads the gunner's `ps.viewangles` (6.3).
+  VERIFIED, gdb: on UO 0x68 is `angles2` and 0x148 the gun's own angles
+  ((9.997559, 30.002686, 0) and (0, 229, 0) on one shot). That forward is the
+  round's direction and the muzzle's; the gunner's view forward reads 4 float
+  steps off in x.
+- VERIFIED, gdb: `tag_player`'s world origin matches ours to a step in z, but
+  `|tag_flash - tag_player|` reads 53.80326 and 53.80867 on two aims against
+  the bind pose's 53.80957. VERIFIED, `xmodel/mg42_bipod`'s bones:
+  `tag_player` hangs off `tag_aim` (under `tag_dummy`), `tag_flash` off
+  `tag_aim_animated`, `mg01`, `bi_base` and `tag_pivot`. VERIFIED,
+  `turret_controller` (1.1d `game.mp.i386.so` 0x63348, UO 0x6c5e9):
+  `G_DObjSetControlTagAngles` on `tag_aim` and `tag_aim_animated` with
+  (`angles2[0]`, `angles2[1]`, 0), then on `tag_flash` with (`angles2[2]`,
+  0, 0). INFERRED: the server's DObj plays no anim on the gun, so both chains
+  sit at their bind and a control replaces the bone's local turn in model
+  space (cod11-combat.md 16.3); `tag_aim_animated`'s bind world turn is 0.001
+  degrees of pitch, so `tag_flash` lands on `tag_aim_animated + R(flash -
+  tag_aim_animated)` and `tag_player` on `tag_aim + R(player - tag_aim)`, one
+  barrel turn `R` about two pivots 0.04 apart. VERIFIED (vcod, `mg42_bipod`
+  from the paks): that pose gives 53.803272 at the gdb aim (9.997559,
+  30.002686) and 53.80957 at (0, 0), retail's 53.80326 to 1.2e-5
+  (`turret::muzzle`, `the_muzzle_reach_moves_with_the_barrel`).
+- vcod measurement (`turret_ab`, `TURRET_REPORT=1`): with the range, the aim
+  and the posed reach every first-frame wound of the 1.1d, 1.5b and UO
+  captures lands on retail's bits; each knockback kill stays as 13.6 leaves
+  it.
 
 vcod: `combat::bullet_range` (`UO_BULLET_RANGE` on UO), `combat::bullet_end`,
-`turret::AimRule::fire_angles`, `turret::muzzle`. `turret_ab`'s hit rows
-must be retail's to the bit. Each gate names the rows it tolerates
-(`KNOCKBACK_GAP`), and those stay within `HIT_NEAR` (0.001).
+`turret::AimRule::fire_angles`, `turret::muzzle`. `turret_ab`'s hit rows must
+be retail's to the bit; each gate names the rows it tolerates
+(`KNOCKBACK_GAP`), which stay within `HIT_NEAR` (0.001).
 
 ### 13.9 The gunner's own pose: the sync group's time and the blend out
 
 The fire and aim groups are sync nodes (`standMG42_fire` `loopsync`,
 `standMG42_aim` `nonloopsync`, section 10). VERIFIED, 1.5b `cod_lnxded`
 0x80c84f0 and UO `coduo_lnxded` 0x80bd884, the arm for a node whose flags
-carry a sync bit: the node steps its own time by `dtime` times the
-weighted mean 0x80c639e (UO 0x80bb732) returns times its rate, wraps a
-`loopsync` node by 1 and stops a `nonloopsync` one at 1, then copies the
-time into every descendant (UO 0x80bd7e4). VERIFIED, 1.5b disassembly
-0x80c86dc..0x80c86f8: the product `mean * rate * dtime` is stored as a
-float (`fstps 0xc(%ebp)`) before the sum with the old time is stored.
-VERIFIED, 0x80c639e: over the children in order, one with weight and a
-non-zero mean of its own adds its weight to one stored float sum and
-`mean * frequency * rate` to another; the quotient is stored, 0 with no
+carry a sync bit: the node steps its own time by `dtime` times the weighted
+mean 0x80c639e (UO 0x80bb732) returns times its rate, wraps a `loopsync` node
+by 1 and stops a `nonloopsync` one at 1, then copies the time into every
+descendant (UO 0x80bd7e4). VERIFIED, 1.5b 0x80c86dc..0x80c86f8: the product
+`mean * rate * dtime` is stored as a float (`fstps 0xc(%ebp)`) before the sum
+with the old time is stored. VERIFIED, 0x80c639e: over the children in order,
+one with weight and a non-zero mean adds its weight to one stored float sum
+and `mean * frequency * rate` to another; the quotient is stored, 0 with no
 child counted; a leaf returns its frequency. VERIFIED, `pakuo00.pk3` and
-1.1's paks (vcod's xanim reader): every `pb_*MG42gunner_fire_*` leaf has
-five frames at 30 fps, frequency 6, looping; the aim leaves one frame,
-frequency 0. So the fire group's time runs at 6 a second, a float step
-off where the stored sums round (two leaves at 0.9995 and 0.0005 give
-5.9999995).
+1.1's paks: every `pb_*MG42gunner_fire_*` leaf has five frames at 30 fps,
+frequency 6, looping; the aim leaves one frame, frequency 0. So the fire
+group's time runs at 6 a second, a float step off where the stored sums round
+(leaves at 0.9995 and 0.0005 give 5.9999995).
 
 VERIFIED, game.mp.uo 0x6ac06 (the placement): its first
-`trap_XAnimClearTreeGoalWeightsStrict` takes the legs anim's node, then
-it sets the goal weights of that node's rows and leaves at rate 1.0.
-INFERRED: a group the legs leave (aim to fire as the trigger goes down,
-fire to aim as it comes up) keeps the leaf weights its last placement
-set while the anim setter fades it out, since nothing else touches them.
+`trap_XAnimClearTreeGoalWeightsStrict` takes the legs anim's node, then it
+sets the goal weights of that node's rows and leaves at rate 1.0. INFERRED: a
+group the legs leave (aim to fire as the trigger goes down, fire to aim as it
+comes up) keeps the leaf weights its last placement set while the anim setter
+fades it out.
 
-vcod: `turretpose::GunnerPlacement` carries the group (`node`), its
-mean frequency (`frequency`, `turretpose::sync_mean` over the rows and
-their leaves) and `looping`; the placement hands them to
-`ClientSim::set_gunner_blend`, which puts the frequency on the legs
-clock's current clip (`ChannelClock::set_sync_frequency`, stepped with
-the stored increment), and keeps the group last left with its leaves
-(`gunner_left`). `playerpose::pose_player` poses each legs layer: the
-current one by the placement's rows and leaves, a turret group fading
-out by the rows it was left with (`PoseInputs::turret_left`), any other
-clip as itself; under `node_time` (1.5 and UO) every leaf samples its
-group's node time. The client draws with the current group's rows only,
-without the rows the search walks past (below).
+vcod: `turretpose::GunnerPlacement` carries the group (`node`), its mean
+frequency (`frequency`, `turretpose::sync_mean` over the rows and leaves) and
+`looping`; the placement hands them to `ClientSim::set_gunner_blend`, which
+puts the frequency on the legs clock's current clip
+(`ChannelClock::set_sync_frequency`, stepped with the stored increment) and
+keeps the group last left with its leaves (`gunner_left`).
+`playerpose::pose_player` poses each legs layer: the current one by the
+placement's rows and leaves, a fading turret group by the rows it was left
+with (`PoseInputs::turret_left`), any other clip as itself; under `node_time`
+(1.5 and UO) every leaf samples its group's node time. The client draws with
+the current group's rows only, without the rows the search walks past.
 
 #### The captures
 
-VERIFIED live, 2026-10-20: `mp_carentan-dm-turret-gungrid-uo.txt` (UO
-1.51b) and `-gungrid-15.txt` (1.5b), each with `-script.txt` and
-`-target.txt`: the 13.6 hit-grid recipe with `probe_gungrid 1`, which
-casts, on every frame the gunner stands off his placement spot, a 5 by 5
-grid of `bulletTrace`s through his back along the gun's base forward
-(rows 30..54 over his origin, 6 apart) and logs each cell's distance to
-him (`probe_turret.gsc` gungrid). `turret_ab`'s
-`the_gunner_grid_capture_matches_*` replay them on retail's clock and
-hold every cell on a mounted frame within `GUNGRID_NEAR` (0.0005). A first
-1.5b take had a 200 ms client stall at 27600 and a second the gunner off
-the gun by 4.8 at the first snapshot; both were discarded (the captures
-are the third).
+VERIFIED live: `mp_carentan-dm-turret-gungrid-uo.txt` (UO 1.51b) and
+`-gungrid-15.txt` (1.5b), each with `-script.txt` and `-target.txt`: the 13.6
+recipe with `probe_gungrid 1`, which casts, on every frame the gunner stands
+off his placement spot, a 5 by 5 grid of `bulletTrace`s through his back
+along the gun's base forward (rows 30..54 over his origin, 6 apart) and logs
+each cell's distance to him. `turret_ab`'s
+`the_gunner_grid_capture_matches_{uo,15b}_on_mp_carentan` replay them on
+retail's clock and hold every mounted cell within `GUNGRID_NEAR` (0.0005)
+with no gap.
 
-vcod measurement, UO: before the change every cell of the fire phase
-sat within 0.01 of retail's but the three frames after the aim-to-fire
-change (2.6 to 8.8 off) and the three after fire-to-aim in the target
-phase (0.2 to 2.2); the mount's eight frames were 9 to 24 off. With the
-blend out on the group's own leaves the fire and target phases are
-within 0.02 throughout, and the mount 1 to 10 (the idle's phase, below). Shifting the fire
-leaves' node time by 0.02 (a third of a frame's step) puts fire-phase
-cells 0.27 off and by 0.05 2.2 off, so the leaves' time is retail's
-to well under a step. At the grid's resolution the node time and the
-old seconds read alike: every fire leaf has frequency 6, so the mean
-differs from 6 only in the last bit and `time * 5` frames tracks
-`seconds * 30`.
+vcod measurement, UO: shifting the fire leaves' node time by 0.02 (a third
+of a frame's step) puts fire-phase cells 0.27 off and by 0.05 2.2 off, so the
+leaves' time is retail's to well under a step. Node time and seconds read
+alike at this resolution: every fire leaf has frequency 6, so `time * 5`
+frames tracks `seconds * 30`.
 
 #### The mount: the idle the blend fades out
 
-VERIFIED, game.mp.uo 0x6b0e6..0x6b70c (the placement's second pass,
-Ghidra's addresses, 0x10000 over the file's): each row and leaf goal
-goes to `trap_XAnimSetGoalWeight` with a blend time of `1 / (1000 /
-level.frametime * |weight - goal|)` (constants 1.0 at 0xb1578, 1000.0 at
-0xb157c, `level+0x1f4`), or 0 when that rate is 0 (0.0 at 0xb1574), and
-rate 1.0. VERIFIED, 1.1d `cod_lnxded` 0x080bd674 (1.5b 0x80cb20e, UO 0x80c05a2): the setter keeps
-`|goal - weight| * time` as the node's remaining time, sets the weight
-to the goal under 0.001, and raises a weight of 0 to `0.001 * goal`.
-INFERRED: the remaining time is one frame, so every leaf (from
-`0.001 * goal`) is on its goal at the next step, and the walk
-normalizes the group to its own weight (cod11-combat.md 3.1), so the
-leaves' first weights move no bone. What blends is the group's node
-against the clip it replaces, over the setter's blend.
+VERIFIED, game.mp.uo 0x6b0e6..0x6b70c (the placement's second pass, Ghidra
+addresses, 0x10000 over the file's): each row and leaf goal goes to
+`trap_XAnimSetGoalWeight` with a blend time of `1 / (1000 / level.frametime *
+|weight - goal|)` (1.0 at 0xb1578, 1000.0 at 0xb157c, `level+0x1f4`), or 0
+when that rate is 0 (0.0 at 0xb1574), rate 1.0. VERIFIED, 1.1d `cod_lnxded`
+0x080bd674 (1.5b 0x80cb20e, UO 0x80c05a2): the setter keeps `|goal - weight|
+* time` as the node's remaining time, sets the weight to the goal under
+0.001, and raises a weight of 0 to `0.001 * goal`. INFERRED: the remaining
+time is one frame, so every leaf is on its goal at the next step, and the
+walk normalizes the group to its own weight (cod11-combat.md 3.1), so the
+leaves' first weights move no bone; what blends is the group's node against
+the clip it replaces.
 
-vcod measurement, UO: every cell of the eight mount frames sat 1 to 10
-off, ours farther along the ray, in proportion to the weight left on
-the idle (`pb_stand_alert`, frequency 0.1596): 1.6 on the frame before
-the blend, 0.2 on its last. Shifting the idle's node time by +0.25
-put the whole mount within 0.06. The cause was the rig, not the
-blend: our gunner joined with the target (placed at 11450 where
-retail's `PROBE place 1` reads 16550; the recipe starts him 5 s after
-the target), and his random spawn on a slope sent the spawn think's
-first anim to `pb_crouch_walk_forward_unarmed` for 350 ms, so his idle
-started at 16900 with the toggle off (wire 185) where retail's first
-snapshot reads 697. VERIFIED, both captures' first `!trace`: `legsAnim`
-697 on UO and 634 on 1.5b, the idle with the toggle set, one anim set
-since the spawn. `gungrid_gate` now joins the gunner when retail's did
-(`rig_aligned`'s gunner place, `common::join_pair_staggered`) and pins
-his spawn to the probe's spot on the ground (`GUNNER_SPAWN`; retail's
-pick is not logged): our first snapshot reads 697, the idle's node time
-0.5745 at 20100, and every mount frame but one cell is within 0.1 on
-both servers (UO 20450 cell 14 0.28, 1.5b 19050 cell 18 0.10 and 19100
-cell 14 0.28, the edge cells below).
+VERIFIED, both captures' first `!trace`: `legsAnim` 697 on UO and 634 on
+1.5b, the idle with the toggle set, one anim set since the spawn. The gunner
+must join when retail's did: `gungrid_gate` joins him at retail's `PROBE
+place 1` time (`rig_aligned`'s gunner place, `common::join_pair_staggered`)
+and pins his spawn to the probe's spot on the ground (`GUNNER_SPAWN`;
+retail's pick is not logged). A gunner joined with the target and spawned on
+a slope ran `pb_crouch_walk_forward_unarmed` for 350 ms from the spawn think
+and started his idle off retail's phase, 1 to 10 units off on every mount
+cell.
 
 #### The rows
 
-VERIFIED, `coduo_lnxded` 0x80bdbdc (the tree walk, cod11-combat.md 3.1,
-"The pose on 1.5 and UO"): a node with two or more weighted children
-walks each into a buffer and a nested one scales its rotation sum to its
-own weight (`weight / sqrt(|q|^2)`) before its parent sums it. The
-turret group (`standMG42_aim`, `standMG42_fire`) is such a node over its
-rows, and each row over its column pair. INFERRED: a row's two leaves
-are normalized to the row's weight before the rows blend, which a flat
-sum of the leaves at their products of weights does not do once the two
-rows' column pairs sum to different lengths.
+VERIFIED, `coduo_lnxded` 0x80bdbdc (the tree walk, cod11-combat.md 3.1, "The
+pose on 1.5 and UO"): a node with two or more weighted children walks each
+into a buffer, and a nested one scales its rotation sum to its own weight
+(`weight / sqrt(|q|^2)`) before its parent sums it. The turret group
+(`standMG42_aim`, `standMG42_fire`) is such a node over its rows, each row
+over its column pair. INFERRED: a row's two leaves are normalized to the
+row's weight before the rows blend, which a flat sum of leaves at their
+products of weights does not do once two rows' column pairs sum to different
+lengths.
 
 VERIFIED, game.mp.uo 0x6ac06 (1.5b game.mp 0x61389, the same calls): the
-search's first pass sets, for every row it walks, the row's goal weight
-to 1.0 and its column pair's to `1 - f` and `f` (the `f` leaf only when
-`f` is not 0), each at goal time 1.0 (`trap_XAnimSetGoalWeight`, UO
-syscall 100, `coduo_lnxded` 0x80c1072 into 0x80c05a2), before the
-second `trap_XAnimClearTreeGoalWeightsStrict` and the second pass.
-VERIFIED, 0x80c05a2: the goal goes to `+0x1c` of the node's half, the
-remaining time `|goal - weight| * time` to `+0x18`; under 0.001
-(0x80ea444, the float 0.001) the weight takes the goal and the time 0,
-otherwise a weight of 0 is raised to `0.001 * goal` (`+0x20`).
-VERIFIED, syscall 0x58 (0x80bfdca, each descendant through 0x80bfc22):
-the strict clear zeroes goal, time and weight only of a node
-0x80bfbdc reads inactive; a weighted one keeps its weight and gets goal
-0 at the time given (0 here). INFERRED: a row the search walked past and
-did not keep (every row before the pair it blends, every row but the
-last when no row reaches the target) is raised from 0 to 0.001, its
-leaves to `0.001 * (1 - f)` and `0.001 * f`, and the second pass touches
-none of them, so they stand beside the blend. The rows walked first are
-`15up` then `level` (engine child order, 7.2): a placement that blends
-`level` and `15down` keeps `15up` at 0.001; one that breaks on `15up`
-walks past nothing.
+search's first pass sets, for every row it walks, the row's goal weight to
+1.0 and its column pair's to `1 - f` and `f` (the `f` leaf only when `f` is
+not 0), each at goal time 1.0 (`trap_XAnimSetGoalWeight`, UO syscall 100,
+`coduo_lnxded` 0x80c1072 into 0x80c05a2), before the second
+`trap_XAnimClearTreeGoalWeightsStrict` and the second pass. VERIFIED,
+0x80c05a2: the goal goes to `+0x1c` of the node's half, the remaining time
+`|goal - weight| * time` to `+0x18`; under 0.001 (0x80ea444) the weight takes
+the goal and the time 0, otherwise a weight of 0 is raised to `0.001 * goal`
+(`+0x20`). VERIFIED, syscall 0x58 (0x80bfdca, each descendant through
+0x80bfc22): the strict clear zeroes goal, time and weight only of a node
+0x80bfbdc reads inactive; a weighted one keeps its weight and gets goal 0 at
+the time given (0 here). INFERRED: a row the search walked past and did not
+keep (every row before the blended pair, every row but the last when none
+reaches the target) is raised from 0 to 0.001, its leaves to `0.001 * (1 -
+f)` and `0.001 * f`, and the second pass touches none of them, so they stand
+beside the blend. Rows are walked `15up` then `level` (engine child order,
+7.2): a placement blending `level` and `15down` keeps `15up` at 0.001; one
+that breaks on `15up` walks past nothing.
 
 vcod: `GunnerPlacement::rows` (each row's weight and its leaves', engine
-order), `passed` (the rows walked past, at the first pass's goals) and
-`walked` (both sets' row nodes); `pose_player` hands the group to the
-walk as a node over row nodes (`skeleton::Blend`,
-`PoseBuffer::blend_tree`). On 1.5 and UO the rows posed are the carried
-weights below.
-
-vcod measurement (`TURRET_REPORT=1`): before either change every frame
-on two rows sat 0.01 to 0.03 off, frames on `15up` alone exact. The
-nested walk alone halved most of those; with the passed row at 0.001
-every frame of the yaw rest, the target phase and the pitch rest is
-retail's to under 0.0005 on both servers, and the right-arc cell (row
-42, 12 right, 37.2635 on both servers) misses `bip01 r finger22` as
-retail's does: ours had grazed the box's `z` face, at most 0.018 deep
-along a ray nearly parallel to it, a pose 0.02 off moved it. The crouch
-re-mount (UO up to 1.7 off before, 1.5b 0.27) sits within 0.021 and the
-mount's frames within 0.05, every frame of both captures within 0.05
-but one cell.
+order), `passed` (rows walked past, at the first pass's goals) and `walked`
+(both sets' row nodes); `pose_player` hands the group to the walk as a node
+over row nodes (`skeleton::Blend`, `PoseBuffer::blend_tree`). On 1.5 and UO
+the rows posed are the carried weights below. vcod measurement
+(`TURRET_REPORT=1`): with the nested walk and the passed row the right-arc
+cell (row 42, 12 right, 37.2635 on both servers) misses `bip01 r finger22`
+as retail's does; a pose 0.02 off grazes the box's `z` face.
 
 #### The weights across frames
 
 VERIFIED, game.mp.uo (symbols): `G_RunFrame` (0x69c21) runs
-`Scr_RunCurrentThreads`, then `G_XAnimUpdate` (0x69983), then the entity
-pass and each client's `ClientEndFrame`, whose `turret_think_client`
-reaches the placement (0x6bb49 into 0x6ac06). `G_XAnimUpdate` calls
-`trap_DObjInitServerTime` (syscall 0x71) on every entity with a DObj,
-then `G_DObjUpdateServerTime` (0x70), each with `0.001 *
-level.frametime`.
+`Scr_RunCurrentThreads`, then `G_XAnimUpdate` (0x69983), then the entity pass
+and each client's `ClientEndFrame`, whose `turret_think_client` reaches the
+placement (0x6bb49 into 0x6ac06). `G_XAnimUpdate` calls
+`trap_DObjInitServerTime` (syscall 0x71) on every entity with a DObj, then
+`G_DObjUpdateServerTime` (0x70), each with `0.001 * level.frametime`.
 
-VERIFIED, `coduo_lnxded`: syscall 0x71 is 0x808eb63 into 0x80bf11c and
-the weight step 0x80bcc1e on the node record's second half (`+0x34` goal
-time, `+0x38` goal, `+0x3c` weight; every caller of 0x80c0c82, which
-picks the half, passes 1). The step copies the time to the old time, then
-lands the weight on the goal and zeroes the goal time when the goal time
-is under the step plus 0.001 (0x80ea1d4), else adds `(goal - weight) *
-dt / goalTime`, raises a weight under 1e-6 (0x80ea1d8) to `0.001 *
-goal`, and takes `dt` off the goal time. It recurses into the children
-of a node with weight or goal; under a node with neither, 0x80bca32 lands
-each descendant on its goal at once and frees those left at 0. VERIFIED,
-1.5b `cod_lnxded` 0x80c788a and 1.1d 0x80bb130: the same step. VERIFIED,
-0x80bef88 (`trap_XAnimGetWeight`, syscall 0x6c) reads the weight and
-0x80be810 (`trap_XAnimCalcAbsDelta` 0x65 through 0x80bf696, which sets
-0x84561a0) the goal; the tree walk 0x80bdbdc reads the weight. VERIFIED,
-0x80bfc22 under the strict clear: a node counts as active when every
-ancestor has weight (0x80bfa7c) and it has weight with a weighted leaf at
-or below it (0x80bfafc). VERIFIED, 0x80c1072: a goal under 0.001
-(0x80ea578) is taken as 0.
+VERIFIED, `coduo_lnxded`: syscall 0x71 is 0x808eb63 into 0x80bf11c and the
+weight step 0x80bcc1e on the node record's second half (`+0x34` goal time,
+`+0x38` goal, `+0x3c` weight; every caller of 0x80c0c82, which picks the
+half, passes 1). The step copies the time to the old time, then lands the
+weight on the goal and zeroes the goal time when the goal time is under the
+step plus 0.001 (0x80ea1d4), else adds `(goal - weight) * dt / goalTime`,
+raises a weight under 1e-6 (0x80ea1d8) to `0.001 * goal`, and takes `dt` off
+the goal time. It recurses into the children of a node with weight or goal;
+under a node with neither, 0x80bca32 lands each descendant on its goal at
+once and frees those left at 0. VERIFIED, 1.5b `cod_lnxded` 0x80c788a and
+1.1d 0x80bb130: the same step. VERIFIED, 0x80bef88 (`trap_XAnimGetWeight`,
+syscall 0x6c) reads the weight and 0x80be810 (`trap_XAnimCalcAbsDelta` 0x65
+through 0x80bf696, which sets 0x84561a0) the goal; the tree walk 0x80bdbdc
+reads the weight. VERIFIED, 0x80bfc22 under the strict clear: a node counts
+as active when every ancestor has weight (0x80bfa7c) and it has weight with
+a weighted leaf at or below it (0x80bfafc). VERIFIED, 0x80c1072: a goal under
+0.001 (0x80ea578) is taken as 0.
 
-INFERRED, off those: the placement's search and the gunner's origin read
-the goals, and a trace reads the weights. The second pass's goal time is
-one frame, so the next step lands every kept node on its goal; the
-strict clear sends every other node to 0 at once. Until that step, so
-for every trace in the next frame's thread pass and cmds, a kept row or
-leaf reads the goal the last placement but one gave it, a row or leaf
-the placement added reads `0.001` times its first pass's goal, and one
-it dropped keeps its weight. A group the legs leave keeps its rows at
-their goals through every later step, and the DObj keeps them past a
-dismount, so a re-mount on the same life finds them.
+INFERRED, off those: the placement's search and the gunner's origin read the
+goals, a trace reads the weights. The second pass's goal time is one frame,
+so the next step lands every kept node on its goal; the strict clear sends
+every other node to 0 at once. Until that step (every trace in the next
+frame's thread pass and cmds) a kept row or leaf reads the goal the last
+placement but one gave it, one the placement added reads `0.001` times its
+first pass's goal, and one it dropped keeps its weight. A group the legs
+leave keeps its rows at their goals through every later step, and the DObj
+keeps them past a dismount, so a re-mount on the same life finds them.
 
-The legs and torso anims' own setter does the same (1.1d 0x080bd674,
-1.5b 0x80cb20e, UO 0x80c05a2): a node at 0 starts its ramp at `0.001 *
-goal`, its goal time the whole distance's (cod11-movers.md 15, "The
-weight ramp"). INFERRED: a body traced before the next step reads a clip
-just set at 0.001, not 0.
+The legs and torso anims' own setter does the same (1.1d 0x080bd674, 1.5b
+0x80cb20e, UO 0x80c05a2): a node at 0 starts its ramp at `0.001 * goal`, its
+goal time the whole distance's (cod11-movers.md 15, "The weight ramp").
+INFERRED: a body traced before the next step reads a clip just set at 0.001,
+not 0.
 
-vcod: `turretpose::GunnerTree` holds a 1.5 or UO gunner's rows and
-leaves as the anim info does: `GunnerTree::place` runs the strict clear,
-the first pass, the strict clear and the second pass on
-`GunnerPlacement::walked`, `GunnerTree::step` the weight step.
-`ClientSim::set_gunner_blend` places and hands the pose the result at
-once; `commit_pose` steps at each end frame, ahead of the placement. The
-tree lives until the next spawn (INFERRED, off UO's `G_DObjUpdate`
-rebuilding the DObj when the spawn sets the model, 13.7). 1.1d's gunner
-keeps the placement's rows as before. `animclock`'s `Ramp::raised` starts
-a node at 0 from `0.001 * goal`. `pose_player` matches the current and
-the left turret group to legs layers by node: on a group's first frame
-its layer reads weight 0 and drops out, and the layer before it (the
-idle at the mount, the aim group at the first shot) poses as itself.
-
-vcod measurement, 2026-10-21 (`TURRET_REPORT=1`, both gunner-grid
-captures): before, 20 UO frames and 22 1.5b frames had a cell past 0.005,
-up to 0.049 (UO 33700, the crouch re-mount) and 0.12 (1.5b 20200 cell
-5); the mount's frames 0.01 to 0.04, each row or column change 0.007 to
-0.036. The node match and the carried rows alone left the mount's frames
-and the group changes at 0.008 to 0.039; the setter's 0.001 start on the
-legs ramp put every cell but the re-mount's first frame (UO 0.0063)
-within 0.005; keeping the rows past the dismount put every cell of both
-captures within 0.0001 (UO 5.7e-5, 1.5b 8.4e-5). `turret_ab` holds the
-gunner grids to `GUNGRID_NEAR` (0.0005) with no gap.
+vcod: `turretpose::GunnerTree` holds a 1.5 or UO gunner's rows and leaves as
+the anim info does: `GunnerTree::place` runs the strict clear, the first
+pass, the strict clear and the second pass on `GunnerPlacement::walked`;
+`GunnerTree::step` is the weight step. `ClientSim::set_gunner_blend` places
+and hands the pose the result at once; `commit_pose` steps at each end frame,
+ahead of the placement. The tree lives until the next spawn (INFERRED, off
+UO's `G_DObjUpdate` rebuilding the DObj when the spawn sets the model, 13.7).
+1.1d's gunner keeps the placement's rows. `animclock`'s `Ramp::raised` starts
+a node at 0 from `0.001 * goal`. `pose_player` matches the current and the
+left turret group to legs layers by node: on a group's first frame its layer
+reads weight 0 and drops out, and the layer before it (the idle at the
+mount, the aim group at the first shot) poses as itself. vcod measurement
+(`TURRET_REPORT=1`, both gunner-grid captures): every cell within 0.0001 (UO
+5.7e-5, 1.5b 8.4e-5).
 
 ## 14. The client
 
@@ -2974,18 +2543,18 @@ instead.
 
 ### 14.8 The 1.5 and UO replay
 
-`turret_ab`'s `the_mount_sweep_fire_and_release_match_15b_on_mp_carentan`
-and `..._uo_on_mp_carentan` replay `mp_carentan-dm-turret-15.txt` and
-`-uo.txt` (14.3) through the whole server, as section 13.1 replays the
-1.1 capture: the same probe gametype, the cmds and the diff, on a
-protocol 6 server over a 1.5 `main/` and a protocol 22 one over UO's
-`uo/` (`COD_DIR` at a UO install runs both). What the replay found:
+`mp_carentan-dm-turret-15.txt` and `-uo.txt` (14.3) were replayed through
+the whole server on protocol 6 and 22, as 13.1 describes. Those whole-server
+replays are retired (13.4): `turret_ab`'s
+`the_1_5_and_uo_barrels_follow_the_clamped_view` replays their views through
+`turret::aim`, and the `-spawn-15`/`-spawn-uo`, hit-grid and gunner-grid
+gates (13.4 to 13.9) cover the rest on both protocols. What the replay found:
 
-- vcod: `defs::Defs::of` gave a protocol 6 server 1.1's tables, whose
-  `proto` is protocol 1, so every reader of `host.defs.proto` (the aim
-  rule, `TurretRecord::wire_arcs`, the `playSound` broadcast) ran 1.1's
-  branch on 1.5: the barrel stepped 15 degrees a frame and the view was
-  forced onto it, 160 `delta_angles` rows. `defs::V15` carries protocol 6.
+- Trap: every reader of `host.defs.proto` (the aim rule,
+  `TurretRecord::wire_arcs`, the `playSound` broadcast) must see protocol 6
+  on a 1.5 server. `defs::Defs::of` once handed it 1.1's tables, and the
+  barrel stepped 15 degrees a frame with the view forced onto it.
+  `defs::V15` carries protocol 6.
 - VERIFIED decompile, 1.5 `game.mp.i386.so` `PmoveSingle` 0x37eb7: the
   mounted arm (an `eFlags & 0xc000` test, `groundEntityNum = 0x3ff`)
   calls `PM_UpdateAimDownSightFlag`, `PM_UpdatePlayerWalkingFlag`, then
@@ -3018,17 +2587,12 @@ protocol 6 server over a 1.5 `main/` and a protocol 22 one over UO's
   the gun; the rig starts ours on retail's spot.
 - UO's 16-bit `delta_angles[0]` changes above its width on the crouched
   remount (the capture's 65632 is 96 with bit 16 set by the decoder,
-  `msg::above_width`); the diff compares the low 16 bits.
-
-Rows left, each in the gate's `GAPS_15` / `GAPS_UO`: the killing round's
-impact (13.1's `KILLING_ROUND`; 13.3 measures the target's clock that
-decides it). The kill snapshot's `EV_PAIN` row closed with 13.3's end-frame
-copy. VERIFIED live: the target
-phase's first round on 1.5, at 30000, lands at (1144 1098 9), on the
-gun's ray at the view's 1.2 degrees down, where ours used to stop at
-(1388 1413 17) on lump 24 patches 136 and 133. VERIFIED, retail
-`bulletTrace` along that segment: 1.1d stops on patch 136 too, and 1.5b
-and UO 1.51b pass through a crack along its facet seam, which 1.5b's
-build of the patch code leaves and 1.1d's does not. vcod builds the
-patches that way on a 1.5 and a UO server and the row is gone
-(`bsp-ibsp59-format.md`, "Patch collision on 1.5 and UO").
+  `above_width` in `crates/common/src/net/codec.rs`); a diff compares the
+  low 16 bits.
+- VERIFIED live: the target phase's first round on 1.5, at 30000, lands at
+  (1144 1098 9), on the gun's ray at the view's 1.2 degrees down. VERIFIED,
+  retail `bulletTrace` along that segment: 1.1d stops on lump 24 patch 136
+  (1388 1413 17), and 1.5b and UO 1.51b pass through a crack along its facet
+  seam, which 1.5b's build of the patch code leaves and 1.1d's does not.
+  vcod builds the patches that way on a 1.5 and a UO server
+  (`bsp-ibsp59-format.md`, "Patch collision on 1.5 and UO").
