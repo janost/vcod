@@ -1507,17 +1507,14 @@ would have found room above the brush never runs.
 
 vcod: `correct_all_solid` in `crates/common/src/pmove.rs` is
 `PM_CorrectAllSolid`, called from `ground_trace` on an allsolid trace, and
-`step_slide_move` keeps retail's gate and revert for a start in solid,
-where it used to step out of one. `a_player_set_down_inside_a_brush_stays_there`
-pins both arms, and `probe_blastloop` against `vcod-server` reads -31.00 for
+`step_slide_move` keeps retail's gate and revert for a start in solid (it
+does not step out). `a_player_set_down_inside_a_brush_stays_there` pins
+both arms, and `probe_blastloop` against `vcod-server` reads -31.00 for
 that player. `ground_trace` runs from 0.25 above the origin to 0.25 below
-it, as the first bullet has it. It used to start at the origin, where a
-box resting exactly on a face started solid and took the (0, 0, 1) nudge
-and the drop back, 0.125 above the face. INFERRED: no retail player rests
-exactly on a face, since a spawn sits 0.125 up and a slide stops 0.125
-short, so the change shows only in vcod's tests that set a box down on a
-face; one of them (`a_rebuild_mid_stand_up_from_prone_keeps_the_eye_lerp`)
-now sets its player 0.125 up, the way a spawn does.
+it. INFERRED: no retail player rests exactly on a face (a spawn sits 0.125
+up, a slide stops 0.125 short), so a test that sets a box down exactly on a
+face starts solid and is nudged; such tests set the player 0.125 up, as a
+spawn does (`a_rebuild_mid_stand_up_from_prone_keeps_the_eye_lerp`).
 
 ### A start in solid on the ground trace
 
@@ -1558,8 +1555,8 @@ along y on a `script_origin` and unlinks him at (902.21, 2019.36,
 (0, -0.071, 0.997)). For 20 s retail reads `groundEntityNum` 1023, the
 body creeping on at air accel with `velocity.z` near 0 (the slide's
 traces start in solid and clip against the face), until the script's
-prone and stand-up bring it out at ct 65444. vcod stood him on the face
-and walked him at full speed: 405 of the run's snapshots were off. vcod:
+prone and stand-up bring it out at ct 65444. Standing him on the face
+walks him at full speed and puts 405 of the run's snapshots off. vcod:
 `ground_trace` in `crates/common/src/pmove.rs` retraces and leaves the
 ground as above, and takes the mounted reach; `predict_ab`'s
 `predictor_replays_retail_slope_runs_uo` replays the run exactly and
@@ -1588,23 +1585,17 @@ of its plane list. INFERRED: on a steep plane the fall is clipped onto the
 plane before the move and the plane is one of the slide's planes from the
 start, Q3's "slide along the steep plane"; neither depends on `walking`.
 
-vcod read `walking` (`on_ground`) for both and clipped nothing in the air.
-VERIFIED, vcod measurement (`turret_ab.rs` with `TURRET_REPORT=1`, the step
-above already ported): the slide down the face and the snapshots up to the
-landing at 39950 matched to print precision either way, and from the
-landing on ours ran ahead of retail along the face's own direction, y, by
-0.29 at 39950 growing to 1.1 where the refused phase came to rest
-(retail (1678.6, 1952.4), ours (1678.61, 1953.50)), with x within 0.04
-throughout; and ours' landing raised event 29 where retail's raised 6
-(fixture line 1526). With `PM_AirMove`'s clip and `PM_SlideMove` reading
-`groundPlane`, every strafe and refused row of the gate matches, the
-landing event included. VERIFIED, vcod measurement (the gates' printed
-summaries, both changes against neither): the `bump_ab.rs` phases read the
-same; of
-the four `playerstate_slope_ab.rs` captures the 25 ms route's rebased p95
-dxy went from 0.004 to 0.001 with the step, and the prone mound's free run
-from median dxy 0.176, max 19.79 to 0.163, 19.49; every other statistic
-of the four is unchanged.
+vcod: `PM_AirMove`'s clip and `PM_SlideMove` read `groundPlane`, not
+`walking`. VERIFIED, vcod measurement (`turret_ab.rs` with
+`TURRET_REPORT=1`): every strafe and refused row of the gate matches, the
+landing event included. Reading `walking` for both, with no air clip,
+runs ahead of retail along the face's direction (y) from the landing at
+39950, 0.29 growing to 1.1 where the refused phase rests (retail (1678.6,
+1952.4), ours (1678.61, 1953.50)), and raises landing event 29 where
+retail raised 6 (fixture line 1526). The same change moved the 25 ms
+route's rebased p95 dxy in `playerstate_slope_ab.rs` from 0.004 to 0.001
+and the prone mound's free run from median 0.176, max 19.79 to 0.163,
+19.49; `bump_ab.rs` and the other statistics did not move.
 
 ### The slide's same-plane test
 
@@ -1617,16 +1608,13 @@ listed (0x34b89). 1.5b's (0x28d7d) loads its 0.999 from 0x75b80
 (0x291e4) and UO's (`game.mp.uo.i386.so` 0x2e563) from 0x9ba40
 (0x2ead8), both keeping the dot on the stack. Q3's 0.99 is not CoD's.
 
-VERIFIED, vcod measurement (`moves_ab.rs`, `MOVES_EXACT=1`, 2026-10-18):
-under 0.999 the same-plane band 0.99..0.999 is a ground plane against a
-terrain or patch facet a few degrees off it (mp_carentan's slope
-captures, dots 0.9961-0.9989). The switch moves the 1.1 moves capture
-from 1217 to 1218 of 1222 bit-exact origins, the springfield run from
-1218 to 1220, 1.5's moves from 1220 to 1222, UO's sprint from 896 to
-897, and lowers no count at the 1.1 or the UO install. An earlier note
-had 0.999 breaking captures; at master 0f3ce28e and at fa9c8114 (before
-the stored terrain clip) neither install's `moves_ab` loses a snapshot
-with it. vcod: `slide_move`,
+VERIFIED, vcod measurement (`moves_ab.rs`, `MOVES_EXACT=1`): the band
+0.99..0.999 is a ground plane against a terrain or patch facet a few
+degrees off it (mp_carentan's slope captures, dots 0.9961-0.9989). 0.999
+over 0.99 moves the 1.1 moves capture from 1217 to 1218 of 1222 bit-exact
+origins, the springfield run from 1218 to 1220, 1.5's moves from 1220 to
+1222, UO's sprint from 896 to 897, and lowers no count at either install.
+vcod: `slide_move`,
 `pmove::tests::a_shallow_ramp_met_from_the_floor_is_a_new_plane`.
 
 ### What the collider does to a walker on a terrain seam
@@ -1638,30 +1626,27 @@ retail's terrain collision is not read, and the numbers are from
 VERIFIED: a box resting on one facet of a terrain mesh is inside the
 neighbouring facet's box-expanded slab wherever the two meet at a convex
 seam, by half the box width times the grade change, and beside an 8-unit
-kerb it is inside the kerb top's slab. The soup clip used to read a start
-inside a slab as `allsolid` the way `CM_TraceThroughBrush` reads a start
-inside a brush, so the 0.25-unit ground trace failed on the seam and the
-9-unit snap did nothing there. Q3's patch facets never report a start as
-solid (`CM_TraceThroughPatchCollide`, `cm_patch.c`), and the soup clip was
-changed to do the same. Since 2026-10-07 no soup collides: terrain is the
-sphere sweep below and a patch is retail's own facet grid
-(`bsp-ibsp59-format.md`, "Patch collision").
+kerb it is inside the kerb top's slab. A clip that reads a start inside a
+slab as `allsolid` (as `CM_TraceThroughBrush` does a brush) fails the
+0.25-unit ground trace on the seam; Q3's patch facets never report a start
+as solid (`CM_TraceThroughPatchCollide`, `cm_patch.c`). No render soup
+collides in vcod now: terrain is the sphere sweep below and a patch is
+retail's own facet grid (`bsp-ibsp59-format.md`, "Patch collision").
 
-VERIFIED: a box touching two surfaces clips both at fraction 0, and the one
-reported used to be whichever the BVH walk reached first, so the ground trace
-and the snap trace at the same origin could name different normals; the
-kickoff test then read a seam bevel's normal where the snap had clipped the
-velocity into the facet's. The contact reported is now the one with the
-largest unclamped enter fraction, which the two traces agree on.
+VERIFIED: a box touching two surfaces clips both at fraction 0. Reporting
+whichever the BVH walk reached first lets the ground trace and the snap
+trace at one origin name different normals, so the kickoff test reads a
+seam bevel's normal where the snap clipped into the facet's. vcod reports
+the contact with the largest unclamped enter fraction, which both agree on.
 
 VERIFIED: walked offline at 8 ms with the sight held from 300 sloped spots
 around `mp_carentan`'s deathmatch spawns, up and down each, the walks that
 left the ground with walkable floor inside 18 units below went from 101 to
 53 of 600, and every remaining one is a ledge, a prop or a fall of more than
 the snap's 9 units. VERIFIED: the same walks at 16 and 25 ms count the same
-way, so the cmd rate is not the trigger. Those counts were taken with the
-box sweep this section describes; the capsule ("The player is a capsule")
-replaced it the same day and the seam rules above still apply to it. VERIFIED: `--probe-slope` against
+way, so the cmd rate is not the trigger. Those counts were taken with a box
+sweep; the capsule ("The player is a capsule") replaced it and the seam
+rules still apply. VERIFIED: `--probe-slope` against
 the retail server on open ground reads `groundEntityNum` 1022 on all 1464
 snapshots and no sight reversal at 8 ms and at 25 ms, and against a
 staircase at 25 ms reads 27 airborne snapshots and 13 reversals, so retail
@@ -1669,16 +1654,15 @@ itself drops a walker pushing against steps.
 
 ### The player is a capsule
 
-Where retail's origin sits on a grade, and why vcod's sat a unit higher.
-Found by replaying retail's own cmd stream on vcod's mover from retail's
-own state at every snapshot (`crates/server/tests/playerstate_slope_ab.rs`,
-the rebased run): on the 3.3-degree street at mp_carentan (799, 1800-1900)
-ours landed 1.08 units above retail on every snapshot, on the 4-degree grade
-at (1190-1218, 2047-2073) 1.07, at the kerb at (1672, 928) retail stepped
-down with its centre 15 units past the kerb's straight edge where ours kept
-its corner on the kerb's diagonal edge for 7 more, and along the diagonal
-wall brush at (-568, 2088)-(-444, 1964) retail slid with its centre 15.1 to
-16.3 from the face where a box's corner would have been 5 units inside it.
+Where retail's origin sits on a grade. Replaying retail's cmd stream on a
+box mover from retail's state at every snapshot
+(`crates/server/tests/playerstate_slope_ab.rs`, rebased) lands 1.08 units
+above retail on mp_carentan's 3.3-degree street (799, 1800-1900) and 1.07
+on the 4-degree grade (1190-1218, 2047-2073); at the kerb at (1672, 928)
+retail steps down with its centre 15 units past the straight edge where a
+box's corner holds the diagonal edge 7 more; along the diagonal wall brush
+at (-568, 2088)-(-444, 1964) retail slides with its centre 15.1 to 16.3
+from the face, where a box's corner would be 5 units inside it.
 
 VERIFIED: `ClientThink_real` (game.mp.i386.so) stores `trap_TraceCapsule`
 into the pmove's three trace slots, `pm+0xe8`, `pm+0xec` and `pm+0xf0`
@@ -1702,12 +1686,11 @@ plane of normal `n` with its feet at `h + r (1 / n.z - 1)` above the point
 height `h`, which is 0.045 on the 4-degree grade; retail's origins there
 match vcod's *point* trace of the same mesh to within 0.03 (y 1899.57:
 retail -35.76, point -35.759; y 1840.50: retail -38.44, point -38.46), and
-a box rests at `h + r tan`, the 1.05 vcod carried. At the kerb the capsule's
-footprint releases the straight edge with the centre 15 past it and is
-16.3 from the diagonal edge there, so it drops where retail did (the
-`run4` capture, `commandTime` 285441, `EV_STEP_VIEW` -7 at x 1656-1661);
-a box's corner holds the diagonal until the centre is 21.2 past the straight
-edge, x 1650, which is where vcod dropped.
+a box rests at `h + r tan`, 1.05. At the kerb the capsule's footprint
+releases the straight edge with the centre 15 past it and is 16.3 from the
+diagonal edge there, so it drops where retail did (the `run4` capture,
+`commandTime` 285441, `EV_STEP_VIEW` -7 at x 1656-1661); a box's corner
+holds the diagonal until the centre is 21.2 past the straight edge, x 1650.
 
 vcod: `collision.rs` sweeps every brush as that capsule, `Capsule::of` on
 the trace box, with its planes pushed out by the radius, Q3's sphere arm of
@@ -1717,21 +1700,18 @@ the bullet sweep is unchanged.
 
 What the replay measured, rebased on retail's state at every snapshot
 (`playerstate_slope_ab.rs`, the two committed captures, 1463 and 1469
-snapshots). VERIFIED: with the box sweep, the 190 wish speed and the
-unconditional down pass, the 8 ms capture read |dz| up to 8.0 and 1.08 on
-every snapshot of the 3.3-degree street, dxy up to 5.9, with 9 ground
-disagreements; with the wish speed fixed and the capsule on every prim as
-a Q3 facet polyhedron, |dz| read p50 0, p95 0.006, p99 0.10, max 0.96 (the
-foot of a kerb ramp at (1241, 2069)), dxy p50 0.02, p95 0.14, max 5.9,
-and the 25 ms capture |dz| p95 0 with one 18.5 row, dxy p95 0.30, max 4.5,
-69 ground disagreements. VERIFIED, after the three rules below went in:
-the 8 ms capture reads |dz| p95 0.005, p99 0.026, max 0.129, dxy p95
-0.130, p99 0.178, max 2.9, 2 rows past a unit; the 25 ms one |dz| 0 on
-every row, dxy p95 0.146, p99 0.449, max 4.5, 12 rows past a unit; no
-ground disagreement on either. What the velocity snap and the walk's accel
-floor did to these numbers is under "The walk's accel floor". The 4.5 row
-is one 50 ms interval of motion at 90 units/s beside a diagonal post brush
-at (-776, 2000), a cmd's worth, and is not chased.
+snapshots). VERIFIED, with the capsule and the three rules below: the 8 ms
+capture reads |dz| p95 0.005, p99 0.026, max 0.129, dxy p95 0.130, p99
+0.178, max 2.9, 2 rows past a unit; the 25 ms one |dz| 0 on every row, dxy
+p95 0.146, p99 0.449, max 4.5, 12 rows past a unit; no ground disagreement
+on either. For scale, the box sweep with a 190 wish speed and an
+unconditional down pass read the 8 ms capture at |dz| up to 8.0, dxy up to
+5.9 and 9 ground disagreements; the capsule on every prim as a Q3 facet
+polyhedron, |dz| max 0.96 (a kerb ramp foot at (1241, 2069)) and 69 ground
+disagreements on the 25 ms one. The velocity snap and the accel floor's
+effect is under "The walk's accel floor". The 4.5 row is one 50 ms
+interval at 90 units/s beside a diagonal post brush at (-776, 2000), a
+cmd's worth, and is not chased.
 
 ### Static models are clipped as a segment
 
@@ -1785,8 +1765,8 @@ bit, enter the clip beside the SOLID and PLAYERCLIP ones, and a world-model
 render soup lying on a pane's faces does not: mp_depot draws a pane's outer
 face with a lump-0 entry whose contents are 0x1, where the brush's own word
 is 0x8000010, and retail's round goes on through it
-(`cod11-combat.md` 2.4). The bounce parm a prop carries is now the
-surface's own (21 on the crate stack), which `missile_ab` compares.
+(`cod11-combat.md` 2.4). The bounce parm a prop carries is the surface's
+own (21 on the crate stack), which `missile_ab` compares.
 
 ### Terrain is a swept sphere, a patch is a facet
 
@@ -1856,9 +1836,9 @@ prone checks read the same flag off the same trace.
 
 ### The terrain clip's arithmetic
 
-All in `cod_lnxded`, read 2026-10-07 to close `fall_ab`'s last-digit rows.
-Each function runs on the x87; "stored" below is a float store, anything
-else stays on the 80-bit stack.
+All in `cod_lnxded` (what `fall_ab`'s last digits rest on). Each function
+runs on the x87; "stored" below is a float store, anything else stays on
+the 80-bit stack.
 
 VERIFIED, `CM_GenerateTerrainCollide` (0x8051b30), per partition:
 
@@ -2003,9 +1983,9 @@ under the radius) are tested. Terrain is one-sided here as in the sweep: a
 capsule wholly under a face is not inside it.
 
 vcod: `Terrain::position_test`, which `CollisionWorld::clip_terrain` runs
-for a capsule trace whose start is its end. Before 2026-10-12 such a trace
-went down the sweep, whose `d_s - d_e <= 0` skip let no zero-length capsule
-read `startsolid` in terrain. VERIFIED, vcod measurement against
+for a capsule trace whose start is its end; the sweep's `d_s - d_e <= 0`
+skip would let no zero-length capsule read `startsolid` in terrain.
+VERIFIED, vcod measurement against
 `crates/server/tests/fixtures/movers/mp_carentan-dm-worldcopy.txt`: a
 world copy's terrain floor rising under a player and a health pack moves
 both on retail's frame with the test, a frame late without it
@@ -2026,15 +2006,15 @@ hand `_gameobjects::main` an `allowed` list of their own name, `sd.gsc:123`
 adds `bombzone` and `blocker`, and `_gameobjects.gsc` `delete()`s every
 entity with a `script_gameobjectname` outside the list, so under `dm` both
 of carentan's bombzone brush models (5 and 6) are gone before the first
-client walks. The `clip_metal` box at (-196..-139, 2496..2606) the earlier
-reading listed is model 5, the other bombzone. VERIFIED: the `clip_nosight`
-world brush 4254 the same reading put retail inside is a sloped roof clip
-whose bounding box holds the point and whose planes do not (side 9 puts
-(-597, 1832, 144) 26 units outside); it was a bounding-box reading.
+client walks. The `clip_metal` box at (-196..-139, 2496..2606) is model 5,
+the other bombzone. VERIFIED: the `clip_nosight` world brush 4254 is a
+sloped roof clip whose bounding box holds (-597, 1832, 144) and whose
+planes do not (side 9 puts it 26 units outside).
 
 `delete()` is not the only script that takes a submodel out. VERIFIED:
-`SP_script_brushmodel` is three calls and one store -- `trap_SetBrushModel`,
-`InitScriptMover`, `self+0x118 = 1`, `trap_LinkEntity` -- with no other
+`SP_script_brushmodel` is three calls and one store (`trap_SetBrushModel`,
+`InitScriptMover`, `self+0x118 = 1`, `trap_LinkEntity`) with no other
+
 instruction in the function, and `+0x118` is `r.contents`
 (`docs/research/cod11-combat.md`, section 13). INFERRED, from that being
 the whole body: the spawn function reads no `script_exploder` key and gives
@@ -2191,9 +2171,7 @@ velocity along the wish is not above 0 (0x2f14b); 0x2f159-0x2f16e take
 the larger of 100.0 and the wish speed, 0x2f16e-0x2f174 multiply it by
 the frame time (`pm_airaccelerate`'s 1.0 folded away), and it is capped
 at the lack, divided by `ps.friction` with a ground entity (0x2f18e) and
-capped again; each component is rounded once (0x2f1b0-0x2f1c5). An earlier
-read of this paragraph had the air accelerate without the floor, off the
-missing 0x70908 reference. In the air a wish under 100 comes only off the
+capped again; each component is rounded once (0x2f1b0-0x2f1c5). In the air a wish under 100 comes only off the
 walk scale: the sight drops off the ground (`PM_UpdateAimDownSightFlag`),
 so it is the walk key, or 1.5's lean (`cod15-movement.md` 7). vcod:
 `pmove::air_accelerate`
@@ -2204,7 +2182,7 @@ rest reads `vel` -8, -18, -32, -42, -56 and -63 per axis on consecutive
 snapshots, 2 per axis per 8 ms cmd, where the unfloored rate less the
 100-floored friction's 4.4 leaves 1.46 per axis and the floored one 1.98.
 
-VERIFIED, vcod measurement (2026-09-23, `playerstate_slope_ab.rs` with
+VERIFIED, vcod measurement (`playerstate_slope_ab.rs` with
 `SLOPE_REPORT=1`, rebased on retail's state at every snapshot):
 
 | | 8 ms dxy p95 / p99 | 25 ms dxy p95 / p99 | 8 ms free-run dxy median |
@@ -2221,9 +2199,9 @@ the missing floor's 1.46 per cmd into a whole 1 where retail rounds 1.98 to
 2. With both, the free run, which never rebases, stays within 0.024 of
 retail for half the 1463 snapshots of the 8 ms route.
 
-The friction's own floor stays the flat 100 of 0x2e500 (`PM_STOPSPEED`).
-vcod scaled it by stance until this floor was found, because without it a
-crawl's 4.33 gain per frame lost to that friction's 4.40.
+The friction's own floor stays the flat 100 of 0x2e500 (`PM_STOPSPEED`),
+not scaled by stance: without the accel floor a crawl's 4.33 gain per frame
+would lose to that friction's 4.40.
 
 ### The ground clip keeps the speed
 
@@ -2251,7 +2229,7 @@ the push at crouch/jump 70633 the walker lands under the knockback timer at
 reads `vel=-186,8,0` with up and forward released. A mover that clipped
 without the rescale read `-93,4,0` there and 4.75 units short; with it the
 row, and prone/land's likewise, match to 0.000. VERIFIED, vcod measurement
-(2026-09-27, `playerstate_slope_ab.rs` with `SLOPE_REPORT=1`): the rescale
+(`playerstate_slope_ab.rs` with `SLOPE_REPORT=1`): the rescale
 takes the 8 ms route's free-run median dxy from 0.024 to 0.021 and its rows
 past a unit from 2 to 1, the prone street's free-run median from 0.021 to
 0.010, and moves nothing on the 25 ms route.
@@ -2314,19 +2292,16 @@ and mp_neuville), of mp_stalingrad or mp_tigertown, or of any single-player
 map in 1.1's `pak[0-9].pk3` carries 0x2, and no `.shader` file in any pak
 declares `surfaceparm slick`. INFERRED: the arm never fires on stock
 content, so it was ported from the binary alone and is unmeasured against
-retail. Open: a brush hit in vcod takes the brush's lump-4 material flags,
-where the impact evidence in `cod11-combat.md` points at the hit side's
-(INFERRED there); a custom map slicking one face of a brush would differ.
+retail. A brush hit reports the struck side's material (lump 3), so a
+custom map slicking one face of a brush reads slick on that face only.
 
 ## The wish speed
 
-What a cmd asks the mover for, per frame. Found by replaying retail's own
-cmd stream on vcod's mover (`crates/server/tests/playerstate_slope_ab.rs`):
-the sight-held route walk of every `--save-slope` capture settles at 63 per
-axis on a diagonal, 89.7 units/s, where vcod wished 190, and the ADS
-capture's plain walk at 224 (`mp_carentan-dm-ads.txt`, `walk`: velocity
--4, 224 on the 2026-10-19 recapture, -5, 224 on the 2026-10-17 one, 163, 154
-before). Neither is `g_speed`.
+What a cmd asks the mover for, per frame. VERIFIED, captures: the
+sight-held route walk of every `--save-slope` capture settles at 63 per
+axis on a diagonal, 89.7 units/s, and the ADS capture's plain walk at 224
+(`mp_carentan-dm-ads.txt`, `walk`: velocity -4, 224). Neither is
+`g_speed`'s 190.
 
 VERIFIED: `PM_WalkMove` (0x2f258) calls the cmd scale at 0x2e690 with a
 copy of the cmd (0x2f2bf), and `PM_AirMove` (0x2f03c) calls the one at
@@ -2383,9 +2358,9 @@ VERIFIED live, `mp_carentan-dm-slope-8ms-turns-1.1.txt` at `commandTime`
 its 1.5 units/s only on the undiluted wish of 190 (`PM_Accelerate` at
 `pm_airaccelerate` 1, 1.52 an 8 ms cmd). The stance
 bit puts nothing into the wish: the probe's cmds hold `upmove` 0 while
-prone, and the scale reads the cmd's byte, not the stance. vcod read a
-held stance key as `upmove` 127 until 2026-10-17, a wish of 134 and a slide
-3 units a second slower (`moves_ab.rs`'s `GAPS`, the 1.1 turns rows).
+prone, and the scale reads the cmd's byte, not the stance. Reading a held
+stance key as `upmove` 127 gives a wish of 134 and a slide 3 units a second
+slower (the 1.1 turns rows of `moves_ab.rs`).
 
 The walk flag. VERIFIED: `PM_UpdatePlayerWalkingFlag` (0x33694) clears
 `pm_flags` 0x80 first (0x3369d) and sets it (0x336dd) when `pm_type` is 5 or
@@ -2444,8 +2419,9 @@ waterlevel * frametime` (0x2e54b-0x2e56b); the fall damage, halved at
 level 2 (`cod11-player-clip.md` 8.3); and `PM_CrashLand`, which returns at
 level 3.
 
-vcod: `pmove.rs` dropped its RTCW port of the swim and the water jump on
-2026-10-06, and `air_move` runs `friction` first, as `PM_AirMove` does.
+vcod: `pmove.rs` has no swim and no water jump, and `air_move` runs
+`friction` first, as `PM_AirMove` does.
+
 
 ## State reference (observed pm_flags bits, internal ps+0xC)
 
@@ -2494,48 +2470,37 @@ step 18/10.
 
 ## Port notes (for crates/common/src/pmove.rs)
 
-Status after the pmove work landed on this branch:
+What `crates/common/src/pmove.rs` ports from this doc:
 
-1. SHIPPED - `PM_CheckJump` ("Jumps"): standing only, 500 ms cooldown,
-   held-key latch, `vz = sqrt(78 * gravity)` with the horizontal kept,
-   `fJumpOriginZ` and the jump's step, `EV_JUMP_*` and the spread kick. The
-   stance-dependent 34/24 jump shipped before it was the prone dive's.
-2. SHIPPED - friction 5.5, accelerate 9, stopspeed 100, stance accelerates
-   12 ducked / 19 prone, and the walk's accel floor of 100 ("The walk's
-   accel floor"). The stance-scaled stopspeed vcod carried until 2026-09-23
-   stood in for that floor and is gone.
-3. SHIPPED, with a correction to this document: step height is 10 while
-   PRONE - the chooser @0x35034 tests pm_flags bit 0x1, not ladder state as
-   this section previously claimed. vcod implements prone.
-4. SHIPPED - ladder detection/movement: brush flag 0x8, probe reach 30/8,
-   probe bbox shrunk 6 horizontally from 8 above the feet, no prone grab,
-   `-vLadderVec` stick-with-wall direction when airborne, the climb wish at
-   0.5 scale with the inline floored accelerate and no friction, the 16.0
-   sideways bleed without a strafe key (2026-10-12, `ladder_ab.rs`), the 300 ms
-   re-grab lock after a jump, the PM_Jump push-off body (`sqrt(78*g)` then
-   x0.75 vertical, flattened-reflection horizontal reset to exactly 128), and
-   the wall glue (negative-magnitude K*vLadderVec by climb-rate sign).
-   NOT ported: the +/-75 degree yaw lock (its ps+0x7C consumer is unverified)
-   and climb anim events (walk mode has no event consumer yet). vcod models
-   jumpTime as a dt-advanced ms counter instead of cmd.serverTime.
-5. SHIPPED - the ground snap of "Step-up and steep slopes": the down pass
-   runs on every grounded frame and reaches `stepSize * 0.5` past the step it
-   took. SHIPPED - `EV_STEP_VIEW` (143) with the rounded, clamped and biased
-   step as its parm, and the post-step velocity scale, both under "The step
-   event and the velocity scale", and the `PM_VerifyPronePosition` revert
-   that gates them ("The ground samples"), and the third block past 0x3579c
-   ("The step event and the velocity scale"). The snap's gate is
-   retail's, the ground state taken before the move. A velocity re-test
-   that once stood in for a waterjump exclusion refused the snap to every
-   walker rubbing a wall on a slope ("The ground snap"); 1.1 MP has no
-   water jump ("Water"). The airborne arm's one exception
-   (`pm_flags & 0x10` with `velocity[2] > 0`, 0x350F5-0x35112) is not taken
-   either: vcod returns for every airborne player. That is a no-op today,
-   since the snap is 0 on a ladder anyway, and it would only matter if the
-   step-up half were ever wanted on a climb. The two collider artefacts that
-   dropped a walker at terrain seams and beside kerbs, and their fixes, are
+1. `PM_CheckJump` ("Jumps"): standing only, 500 ms cooldown, held-key
+   latch, `vz = sqrt(78 * gravity)` with the horizontal kept, `fJumpOriginZ`
+   and the jump's step, `EV_JUMP_*` and the spread kick. The 34/24 block is
+   the prone dive, not a jump.
+2. Friction 5.5, accelerate 9, stopspeed 100 (flat, not stance-scaled),
+   stance accelerates 12 ducked / 19 prone, and the walk's accel floor of
+   100 ("The walk's accel floor").
+3. Step height 18, 10 while prone (the chooser at 0x35034 tests `pm_flags`
+   0x1, not ladder state).
+4. Ladders: brush flag 0x8, probe reach 30/8, probe box shrunk 6
+   horizontally from 8 above the feet, no prone grab, `-vLadderVec` when
+   airborne, the climb wish at 0.5 scale with the inline floored accelerate
+   and no friction, the 16.0 sideways bleed without a strafe key
+   (`ladder_ab.rs`), the 300 ms re-grab lock after a jump, the push-off
+   (`sqrt(78*g)` then x0.75 vertical, flattened-reflection horizontal reset
+   to exactly 128), the wall glue, the ±75 `movementDir` lock
+   (`LADDER_MOVEMENT_DIR_CAP`), the view cap (`cap_ladder_yaw`) and the
+   climb anims (`playerpose`, `MOVETYPE_CLIMB`). `jumpTime` is a ms counter
+   advanced by the frame time (`PlayerState::since_jump_ms`), not
+   `cmd.serverTime`.
+5. The ground snap of "Step-up and steep slopes": the down pass on every
+   grounded frame, reaching `stepSize * 0.5` past the step;
+   `EV_STEP_VIEW` (143) with the rounded, clamped and biased step as its
+   parm, the post-step velocity scale and the footstep block past 0x3579c
+   ("The step event and the velocity scale"); the
+   `PM_VerifyPronePosition` revert ("The ground samples"). The entry gate
+   is retail's, airborne arm included (a rising climber, and on 1.5 one
+   not blocked too). The collider rules for terrain seams and kerbs are
    under "What the collider does to a walker on a terrain seam".
-6. Stands as the negative result: no mantle exists in retail 1.1. If
-   ledge-climbing is wanted as a feature it would be a vcod extension with
-   no retail counterpart - decide its constants, don't dig for them in the
-   binary.
+6. No mantle exists in retail 1.1. Ledge-climbing would be a vcod
+   extension with no retail counterpart: choose its constants, don't dig
+   for them in the binary.
