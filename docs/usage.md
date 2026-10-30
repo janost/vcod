@@ -1,314 +1,213 @@
 # Using vcod
 
-Command lines, controls, the console and the menus. The README's
-[How to play](../README.md#how-to-play) is the short version.
+Command lines, controls, the console and the menus, for all four games.
+New here: [getting-started.md](getting-started.md) has the install layout,
+a quick start per game and recipes. Bots: [bots.md](bots.md). What each
+game supports: [docs/features/](features/) ([CoD1](features/cod1.md),
+[UO](features/uo.md), [CoD2](features/cod2.md), [CoD4](features/cod4.md)).
 
-## The closest thing to a game
+- [Install and game](#install-and-game)
+- [Client](#client)
+- [CD keys](#cd-keys)
+- [Server](#server)
+- [Controls](#controls), [console](#console), [window](#window-and-fullscreen), [menus](#main-menu-and-browser)
+- Per game: [CoD 1.1 and 1.5](#cod-11-and-15), [United Offensive](#united-offensive), [CoD2](#cod2), [CoD4](#cod4)
+- [Debug and developer modes](#debug-and-developer-modes)
 
-```
-vcod-server mp_carentan --bots 4 --bots-shoot
-vcod --connect 127.0.0.1:28960
-```
+## Install and game
 
-Pick a team, pick a weapon, go get shot by a bot.
+Both binaries share these flags.
+
+| Flag | Does |
+|---|---|
+| `--game-dir <dir>` | The install. Default: `$COD_DIR`, else the executable's directory. |
+| `--game cod1\|cod2\|cod4` | The install's game. Default: detected. `zone/` or `iw3mp.exe` is CoD4, `main/iw_*.iwd` or `CoD2MP_s.exe` CoD2, anything else CoD1. |
+| `--mod-dir uo` | United Offensive: `uo/` searched over the `main/` beside it, as UO does. Default `main`. |
+| `--vanilla` | CoD1 and UO: only the patch's stock paks (`pak0`..`pak8` on 1.1, `pak0`..`pakf` on 1.5, UO's `pakuo*` and `uomappack00`, and their `localized_*` paks). Every other pk3 in `main/` and `uo/` is ignored. |
+
+`COD_DIR` is the only variable the binaries read. `COD2_DIR` and
+`COD4_DIR` point tests and tools at those installs.
+
+With `--vanilla` the client downloads nothing: a server on a non-stock
+map fails the load with a popup naming its paks, and one that only adds
+files plays with the stock ones. `fs_game` is ignored (the Mods menu
+lists none), Start New Server starts a `--vanilla` server, `vc_vanilla`
+reads 1 and the start-up log says `(vanilla)`. The server's `--vanilla`
+lists only stock paks in `sv_paks` and `sv_referencedPakNames`, will not
+load a third-party map and refuses `--set fs_game`.
 
 ## Client
 
-```
-vcod                                   # main menu and server browser
-vcod mp_pavlov                         # fly
-vcod mp_pavlov --walk                  # walk, offline
-vcod --list                            # every .bsp in the search path
-vcod --connect <ip:port> --team axis --weapon kar98k_mp
-```
+| Command | Does |
+|---|---|
+| `vcod` | Main menu and server browser, in the install's game. |
+| `vcod --connect <ip:port>` | Join through the server's menus. |
+| `vcod <map>` | Fly around a map offline. Map names are case-insensitive. |
+| `vcod --list` | CoD1: every `.bsp` in the search path. |
 
-- The map name is case-insensitive.
-- `--team <allies|axis|autoassign|spectator>` and `--weapon <file>` answer
-  the menus without showing them, for `--connect` and every console
-  `connect`. If the menu refuses the weapon, you pick by hand.
-- `--mod-dir uo` searches United Offensive's `uo/` over the `main/` beside
-  it, as UO itself does, so `vcod --game-dir <UO install> --mod-dir uo
-  --connect <ip:port> --team spectator` watches a UO server and
-  `vcod mp_cassino --game-dir <UO install> --mod-dir uo` flies its maps.
-  The client plays only servers of its install's game: with `--mod-dir uo`
-  it refuses a 1.1 or 1.5 server, without it a UO one, and says which
-  flag to use.
-- `--game cod1|cod2|cod4` names the install's game; without it the game dir
-  decides (`zone/` or `iw3mp.exe` is CoD4, `main/iw_*.iwd` or
-  `CoD2MP_s.exe` CoD2, anything else CoD1). On a CoD2 install the client
-  flies (`vcod <map>`: world and static models, the sky cube, the
-  lightmapped phong surfaces lit by their normal, specular and detail
-  maps, the sun, the map script's `setExpFog` or `setCullFog` on what
-  its fogged technique fogs (radial, the sky clear), and the console in
-  CoD2's fonts, models lit by the light grid's probe and the sun per
-  vertex; no effects, no dynamic shadows, no normal or specular maps on
-  models), spectates a CoD2 1.3 server, pure or not (`vcod --connect
-  ip:port`: the server's team and weapon menus, or free flight through usercmds, the server's entity models,
-  brush models, posed player bodies, the server's fog, the events'
-  sounds and effects, the looping effects and the level's ambient;
-  `--team allies|axis|autoassign`
-  and `--weapon <name>` (e.g. `thompson_mp`) join and play, predicted,
-  through CoD2's binds, X or Esc's menu choosing another weapon for the
-  next spawn;
-  a map change loads the new map) and probes one headless (`vcod
-  --net-probe ip:port --probe-secs N`, `--probe-team` / `--probe-weapon`
-  to join and play a 16 s scripted loop of moves, a jump, a crouch, shots,
-  the sight and a weapon switch, prints a line a second, with what the
-  scene built, the sound cues and effects started and the prediction's
-  corrections, and fails on a parse error or a drop;
-  `VCOD_COD2_RECORD=<dir>/<name>` records the run as `<name>.dm_1`).
-  `vcod --game cod2 --probe-demo <file.dm_1> [--probe-timedemo]` plays a
-  CoD2 demo headless and prints what it parsed and drew. Bare `vcod --game cod2` opens CoD2's stock main menu; its
-  browser lists LAN servers, `master.cod.pm`'s CoD2 list (protocol 118)
-  and favourites and joins one, Start New Server runs `vcod-server --game cod2` beside
-  `vcod`, and Esc in a game opens the server's `ingame` menu.
-  Every other mode exits with an error. On a CoD4 1.7 install (`zone/`
-  beside `main/`) bare `vcod` opens 1.7's main menu from the `ui_mp` zone
-  (mouse, arrows, Tab, Enter, Esc): Start New Server runs `vcod-server
-  --game cod4` beside `vcod` and, with Dedicated No, joins it; Join Game
-  lists LAN servers (Source: Local), favourites and, on Refresh List,
-  `master.cod.pm`'s CoD4 list, and joins the one picked (Password sets
-  its password; CoD4x servers stay out of the lists unless
-  `ui_browserShowCoD4x` is 1, vcod's own cvar); Mods runs a `mods/<dir>` mod; Options and Controls set
-  the options and binds vcod has; Select Profile creates, deletes and
-  loads a profile in `players/profiles/` (the first start asks for one;
-  the active profile's `vcod_mp.cfg` is the config, its `vcod_mpdata` the
-  stats a join sends, stored plain and written back as they change;
-  retail's `mpdata` is left alone); Quit quits;
-  `connect ip:port` on the console joins a server, Esc or `disconnect`
-  on the connect screen calls the join off, and leaving it comes back to
-  the menu (docs/research/cod4-front-end.md).
-  `vcod <map> --game cod4` flies the stock map
-  `zone/english/<map>.ff`; `vcod --game cod4 --capture <file>` replays a
-  `cod4_probe` capture (`crates/cod4/tests/fixtures/net/play-1.7-*.txt`),
-  `vcod --game cod4 --connect ip:port` joins a 1.7 server through its
-  team and class menus, drawn as the zones give them (the mouse or the
-  arrows and Tab move the focus, a click or Enter picks, Esc runs the
-  menu's `onEsc` or, with none up, the server's `g_scriptMainMenu`: the
-  team menu, then the in-game `class` menu after a team pick; a menu vcod
-  cannot evaluate is a numbered list, 1-9 pick), or on their own with `--team allies|axis|autoassign|spectator`
-  and `--class assault_mp,0` (`specops_mp,0`, `heavygunner_mp,0`,
-  `demolitions_mp,0`, `sniper_mp,0`, `customN,0`), and
-  `--net-probe ip:port --game cod4 [--team T] [--class C]` does it
-  headless, a line a second, printing the menus the server opens and the
-  spawn (a playing team takes `assault_mp,0` unless `--class` says
-  otherwise); every other CoD4 mode exits with an error. `--fs-game
-  mods/<name>` loads a CoD4 map under a mod (its `mod.ff` and iwds over
-  the stock ones); a joined server's `fs_game` wins over it. A map
-  `zone/<language>/` lacks loads from `usermaps/<map>/<map>.ff`; under a
-  mod that directory's iwds load too. Joining (and `--net-probe`)
-  downloads the mod and usermap files the server references and the
-  install lacks into the install, at the server's path; with the
-  `cl_allowDownload` cvar at 0 (`vcod_mp.cfg`) the join is refused
-  instead.
-  `vcod-server <map> --game cod4 --game-dir <CoD4 install>` hosts a 1.7
-  level (`war` unless `--gametype` or `--set g_gametype=` says
-  otherwise, the `--set` winning): it loads the map's zone and the
-  five common ones, runs `default_mp.cfg` out of its iwds
-  under the `--set`s and the gametype's scripts, answers `getinfo`, `getstatus` and
-  `rcon` (`--set rcon_password=...`; `status`, `serverinfo`, `systeminfo`,
-  `dumpuser`, `say`, `tell`, `clientkick`, `kick` (`kick all`),
-  `onlykick`, `tempBanClient`, `tempBanUser`, `banUser`, `banClient`,
-  `unbanUser`, `heartbeat`, `killserver`, `set`, `setu`, `toggle`,
-  `togglep`, `reset`, `setfromdvar`, `vstr`, `exec`, `cmdlist`, and
-  `map`, `devmap`, `map_restart`, `fast_restart` and `map_rotate` with
-  `sv_mapRotation`, which `server_map.cfg` fills with the stock maps), and
-  takes the stats and the pure `cp` as retail does (`--set sv_pure=0`
-  turns the check off). A client answers the team and class menus,
-  spawns with its class's loadout, plays, and calls and casts votes
-  (`--set g_allowVote=0` turns them off); a match that ends rotates to
-  the next map. `--bots <n> [--bots-shoot]` adds bots
-  ([docs/bots.md](bots.md#cod4)), and rcon's `addbot`, `removebot` (or
-  `kickbot`), `listbots` and the `vc_bot_*` cvars manage them as on CoD1.
-  It heartbeats only with `--set dedicated=2` and a master in `--set
-  sv_master1=host[:port]`. It writes `games_mp.log` to
-  `<home>/main/` (`<home>/<fs_game>/` under a mod), the home path the
-  `--game-dir` unless `--set fs_homepath=` says otherwise; `--set g_log=`
-  empty turns it off, `--set g_logSync=1` flushes every line, and `--set
-  g_inactivity=<secs>` drops a player idle that long.
-  `vcod-server <map> --game cod2` hosts a CoD2 1.3 map: it runs the
-  stock gametype script, answers `getinfo`, `getstatus` and `rcon`
-  (`--set rcon_password=...`; `status`, `kick`, `clientkick`, `tell`,
-  `say`, `dumpuser`), runs the cheat commands under `--set sv_cheats=1`,
-  checks the pure `cp` (`--set sv_pure=0`
-  turns it off), takes `--set g_password=`, `sv_privateClients` with
-  `sv_privatePassword`, `sv_minPing` / `sv_maxPing`, `sv_maxRate`,
-  `sv_timeout` and `sv_floodProtect` as retail does, serves a non-stock
-  iwd in its `main/` to a client that lacks it (`sv_allowDownload`, on by
-  default; `sv_wwwDownload=1` with `sv_wwwBaseURL` redirects instead),
-  and takes clients through the team and weapon menus to
-  a spawn; players move, see each other and fight (shots, grenades,
-  deaths and respawns). `--set g_gametype=` picks any stock gametype,
-  `--gametype-script <file>` runs one off disk as on CoD1, and rcon's
-  `map`, `map_restart`, `fast_restart` and `map_rotate` (with
-  `sv_mapRotation`) change the level. `--bots <n> [--bots-shoot]` adds
-  bots that play every stock gametype there ([docs/bots.md](bots.md#cod2)),
-  and rcon's `addbot`, `removebot` (or `kickbot`), `listbots` and the
-  `vc_bot_*` cvars manage them as on CoD1.
-- `--vanilla` loads only the stock retail paks of the install's patch
-  (`pak0`..`pak8` on 1.1, `pak0`..`pakf` on 1.5, UO's `pakuo*` and its
-  `uomappack00` too, and their `localized_*` paks) and ignores every other
-  pk3 in `main/` and `uo/`: third-party maps, `zzz_*` mods, downloads. It
-  downloads nothing: a server whose map is not stock fails the load with a
-  popup naming the server's paks, and on one that only adds files the
-  client plays with the stock ones. It ignores `fs_game` (the Mods menu
-  lists none), and Start New Server starts a `--vanilla` server. The
-  read-only `vc_vanilla` cvar reads 1, and the start-up log line says
-  `(vanilla)`.
-- `--debug-overlay` (or F3) shows frame, draw, vis, net and audio counters.
-- `--rtx-on` turns on every beyond-retail extra for one run (`vc_bicubic`,
-  `vc_bloom`, `vc_shadows`, `vc_ssao`, `vc_sunShafts`, `vc_softParticles`,
-  `vc_hdr`, `vc_grade`, `vc_vignette`, `vc_grain`) without saving them to
-  the config. Despite the name, no rays were harmed.
-- `--no-audio` runs silent; `--volume <0..1>` sets the master volume
-  (`mss_volume`, default 0.8, also on the Sound screen).
-- `--window WxH` opens a window of that size for the run, over `r_mode`
-  and `r_fullscreen` (a `vid_restart` keeps it), and sets no cvar, so the
-  saved config's mode is untouched.
-- `--net-probe <ip:port>` is the headless probe client; `vcod --help`
-  documents its modes.
+| Flag | Does |
+|---|---|
+| `--team <allies\|axis\|autoassign\|spectator>` | Answer the team menu without showing it, for `--connect` and every console `connect`. |
+| `--weapon <file>` | CoD1, UO, CoD2: answer the weapon menu, e.g. `kar98k_mp`. If the menu refuses it, you pick by hand. |
+| `--class <response>` | CoD4: answer the class menu, e.g. `assault_mp,0`. |
+| `--fs-game mods/<name>` | CoD4: load a map under a mod. A joined server's `fs_game` wins. |
+| `--debug-overlay` | Start with the F3 overlay up. |
+| `--rtx-on` | Turn on every beyond-retail extra for this run, unsaved: `vc_bicubic`, `vc_bloom`, `vc_shadows`, `vc_ssao`, `vc_sunShafts`, `vc_softParticles`, `vc_hdr`, `vc_grade`, `vc_vignette`, `vc_grain`. No rays are traced. |
+| `--no-audio` | Run silent. |
+| `--volume <0..1>` | Master volume (`mss_volume`, default 0.8, kept in the config). |
+| `--window WxH` | A window of that size for this run, over `r_mode` and `r_fullscreen` (a `vid_restart` keeps it). Sets no cvar. |
+| `--exec "<line>"` | A console line to run once the window is up. Repeatable, in order. |
+| `--exec-in-game "<line>"` | As `--exec`, after the first frame that draws a game: `--connect ADDR --exec-in-game "record x"` records from the join. |
+| `--exec-after "<secs> <line>"` | A queue of console lines, each `secs` after the one before. |
 
-### CD keys
+Start New Server in the menu runs `vcod-server` from beside `vcod` and
+joins it; build both. The client stops that server when it exits. vcod
+has no listen server.
 
-Many public servers check CD keys. Such a server answers the challenge with `needcdkey` until its authorize server has seen your key, and vcod then shows the game's own "key not valid" or "awaiting key authorization" message instead of joining.
+## CD keys
+
+Many public servers check CD keys. Until the game's authorize server has
+seen your key, such a server answers `needcdkey` and vcod shows the
+game's own "key not valid" or "awaiting key authorization" message.
 
 Give vcod the key one of two ways:
 
-- `VCOD_CDKEY="XXXX-XXXX-XXXX-XXXX"`: the key's 16 characters (dashes, spaces and case don't matter; anything past the 16th is ignored). It is used for whichever game the install is.
-- CoD 1.1 and 1.5 only: the retail file `main/codkey` in the install directory, which the 1.1 installer writes. 1.5, UO, CoD2 and CoD4 keep the key in the Windows registry, which vcod does not read, so use the env var there.
+- `VCOD_CDKEY="XXXX-XXXX-XXXX-XXXX"`: the key's 16 characters (dashes,
+  spaces and case don't matter; anything past the 16th is ignored), for
+  whichever game the install is.
+- CoD 1.1 and 1.5 only: the retail file `main/codkey`, which the 1.1
+  installer writes. 1.5, UO, CoD2 and CoD4 keep the key in the Windows
+  registry, which vcod does not read; use the variable there.
 
-A server that checks no keys (a LAN server, vcod-server, most local retail servers) joins without one. vcod sends what the retail client sends, the key and, on CoD2 and CoD4, its MD5 hash, to the same authorize host (`codauthorize`, `coduoauthorize`, `cod2master` or `cod4master.activision.com`) before each challenge to a server off the LAN. It never logs, prints or stores the key.
+With a key set, before each challenge to a server off the LAN, vcod sends
+what the retail client sends to the game's authorize host:
+
+| Game | Host | Sent |
+|---|---|---|
+| CoD 1.1, 1.5 | `codauthorize.activision.com:20500` | the key |
+| UO | `coduoauthorize.activision.com:20600` | the key |
+| CoD2 | `cod2master.activision.com:20700` | the key and its MD5 |
+| CoD4 | `cod4master.activision.com:20800` | the key and its MD5 |
+
+Without a key nothing is sent. vcod never logs, prints or stores the key.
+A server that checks no keys (LAN, vcod-server, most local retail
+servers) joins without one. vcod-server checks no keys.
 
 ## Server
 
 ```
-vcod-server mp_carentan --port 28960 --hostname "my server" --gametype tdm
+vcod-server <map> [--port 28960] [--hostname vcod] [--max-clients 8] [--gametype <gt>]
 ```
 
-- Binds `0.0.0.0` and answers `getstatus` from anyone, like retail. Keep it
-  on a LAN or behind a firewall you control.
-- `--gametype` picks the script under `maps/mp/gametypes/` (default `dm`);
-  `--max-clients` sets `sv_maxclients` (default 8).
-- `--set NAME=VALUE` is retail's `+set`, repeatable:
-  `--set scr_friendlyfire=1`, `--set sv_mapRotation="..."`. Each is set
-  once, before the scripts load; one written after the map
-  (`vcod-server mp_carentan --set ...`) runs again once the level is up,
-  as retail's `+map x +set ...` does, so it outranks a script's load-time
-  `setCvar`. A later level never puts it back.
-- `--set fs_game=<dir>` runs a mod: its directory's paks go over `main/`,
-  and clients are told to load it, as retail's `+set fs_game`.
-  Under `--game cod4` it takes `mods/<name>`: the mod's `mod.ff` loads
-  after the common zones, its iwds go over `main/`'s (a usermap's
-  between them), the weapon files come off them, and configstrings 0 and
-  1 name it as retail's 1.7 server does. A client lacking the mod's
-  iwds or `mod.ff` downloads them (`sv_allowDownload`, on by default;
-  `sv_wwwDownload=1` with `sv_wwwBaseURL` redirects).
-- `--vanilla` loads only the stock retail paks, as the client's does, so
-  `sv_paks` and `sv_referencedPakNames` name stock paks alone and a
-  third-party map does not load. It refuses `--set fs_game`.
-- `--set rconPassword=<pw>` turns rcon on. Under `--game cod2` and
-  `--game cod4` it sets their `rcon_password`.
-- It writes retail's `games_mp.log` to `<home>/main/` (`<home>/uo/` on
-  UO, `<home>/<fs_game>/` under a mod), the home path being `--game-dir`
-  unless `--set fs_homepath=` says otherwise; `--set g_log=` empty turns
-  it off and `--set g_logSync=1` flushes every line. `--game cod2` does
-  the same.
-- `--ban-file <path>` keeps `banUser`/`banClient` bans across runs in
-  retail's `ban.txt` shape, a guid and the cleaned name a line; an off-LAN
-  client's guid is its IPv4 address as a signed integer (on CoD4, the
-  client's GUID). A file in vcod's
-  older `<ip> <name>` shape is rewritten into guid lines the first time
-  the server opens it, after a copy of the old file is kept as `<path>.old`.
-- `--set g_password=<pw>` makes the server private, checked as retail does
-  at connect, `map_restart` and map change.
-- `--set sv_privateClients=N --set sv_privatePassword=<pw>` reserves the
-  first N slots for clients that send that password, as retail does.
-- `--set scr_motd="..."` is the message of the day players read: on the
-  team menu (1.1) or the server info screen before it (1.5, UO), in vcod
-  and in the retail clients. `g_motd` reaches the client as configstring
-  14 (UO 15), which no retail client draws, so it shows nowhere.
-- `dedicated` defaults to 1, not retail's 2, so dev runs stay off the master
-  list. `--set dedicated=2` heartbeats `master.cod.pm` (port 20510, 20610
-  on UO, 20710 with `--game cod2`, which has no `sv_master` cvars) every
-  three minutes and sends a flatline on Ctrl-C or `quit`, at most one
-  packet a second to a master host.
-- `--bots <n>` adds `n` bots in real client slots. The nav graph builds on
-  its own thread on the first tick (a second or two on big maps); bots
-  wander until it's ready. `--bots-shoot` lets them fight; without it
-  `--bots` sets `vc_bot_shoot 0`. See [Bots](#bots) for managing them
-  while the server runs.
-- On a patch 1.5 install the server speaks 1.5 (protocol 6) and takes only
-  1.5 clients; with `--mod-dir uo` on a UO install it speaks UO (protocol
-  22). `--set protocol=1`, `6` or `22` overrides the install.
-- `--gametype-script <file>` runs a gametype from disk instead of the paks.
-- `--script-dir <dir>` (CoD4) reads the loose `.gsc` files under `<dir>`
-  over the zones' scripts each level, as retail reads a mod's (a map's
-  `maps/mp/<map>.gsc`, say).
-- `--test-entities <n>` adds invisible entities that move on the wire, to
-  exercise the entity encoding.
-- `--trace` logs every snapshot per client (its `wall` gap since the last
-  tick beside the `frames` that tick ran), and once 20 frames have run the
-  loop's ticks and frames, the slowest tick and how far the loop fell
-  behind its schedule (20 Hz; CoD4's `sv_fps`).
+| Flag | Does |
+|---|---|
+| `--port <n>` | UDP port, default 28960. Binds `0.0.0.0`. |
+| `--hostname <name>` | `sv_hostname`, default `vcod`. |
+| `--max-clients <n>` | `sv_maxclients`, default 8, at most 64. Bots count. |
+| `--gametype <gt>` | The script under `maps/mp/gametypes/`. Default `dm` (CoD4 `war`). |
+| `--set NAME=VALUE` | Retail's `+set`, repeatable. |
+| `--bots <n>`, `--bots-shoot` | Start with `n` bots; without `--bots-shoot` they never fire ([bots.md](bots.md)). |
+| `--ban-file <path>` | Keep `banUser`/`banClient` bans across runs. |
+| `--gametype-script <file>` | CoD1, UO, CoD2: run a gametype from disk instead of the paks. |
+| `--script-dir <dir>` | CoD4: loose `.gsc` files read over the zones' scripts each level, as retail reads a mod's. |
+| `--vanilla` | See [Install and game](#install-and-game). |
+
+The server answers `getstatus` from anyone, as retail does. Keep it on a
+LAN or behind a firewall you control. There is no stdin console: admin
+goes through rcon.
+
+### `--set`
+
+Each `--set` is applied once, before the scripts load. One written after
+the map (`vcod-server mp_carentan --set ...`) runs again once the level
+is up, as retail's `+map x +set ...` does, so it outranks a script's
+load-time `setCvar`. A later level never puts it back.
+
+Common ones:
+
+| Cvar | Does |
+|---|---|
+| `rconPassword` | Turns rcon on (refused until set). CoD2 and CoD4 call it `rcon_password`; either name works. |
+| `g_password` | Private server, checked at connect, `map_restart` and map change. |
+| `sv_privateClients`, `sv_privatePassword` | Reserve the first N slots for clients that send that password. |
+| `sv_mapRotation` | The map cycle `map_rotate` walks. |
+| `fs_game` | Run a mod: its paks go over `main/` and clients are told to load it. CoD4: `mods/<name>` (below). |
+| `dedicated` | 1 by default (retail's is 2), so dev runs stay off the master list. 2 sends heartbeats (below). |
+| `protocol` | CoD1: `1`, `6` or `22` overrides the install's protocol. |
+| `g_log`, `g_logSync` | `games_mp.log` (below): empty `g_log` turns it off, `g_logSync 1` flushes every line. |
+| `fs_homepath` | Where the log goes. Default the `--game-dir`. |
+| `sv_allowDownload` | On by default: serve the server's non-stock paks to a client that lacks them. `sv_wwwDownload 1` with `sv_wwwBaseURL` redirects instead. |
+| `sv_pure` | CoD2, CoD4: 0 turns the pure `cp` check off. |
+
+### Log
+
+`games_mp.log`, retail's format, goes to `<home>/main/` (`<home>/uo/` on
+UO, `<home>/<fs_game>/` under a mod), `<home>` being `--game-dir` unless
+`fs_homepath` says otherwise. All four games write it.
+
+### Master server
+
+At `dedicated 2` the server sends a heartbeat to `master.cod.pm` every
+three minutes, at most one packet a second to a master host:
+
+| Game | Master |
+|---|---|
+| CoD1 | `master.cod.pm:20510` |
+| UO | `master.cod.pm:20610` |
+| CoD2 | `master.cod.pm:20710` |
+| CoD4 | only to the host in `sv_master1` (port 20810 if none given) |
+
+CoD1, UO and CoD2 send a flatline on Ctrl-C or `quit`.
+
+### Bans
+
+`--ban-file` keeps bans in retail's `ban.txt` shape: a guid and the
+cleaned name a line. An off-LAN client's guid is its IPv4 address as a
+signed integer (CoD4: the client's GUID). A file in vcod's older
+`<ip> <name>` shape is rewritten into guid lines the first time the
+server opens it, after a copy is kept as `<path>.old`. Without
+`--ban-file` a ban lasts until the process exits.
+
+### rcon
+
+From any client's console (`rcon <command>` after `rconPassword <pw>`,
+or `rcon login <pw>` on CoD2 and CoD4) or a retail one.
+
+| Game | Commands |
+|---|---|
+| all | `status`, `serverinfo`, `systeminfo`, `dumpuser`, `say`, `kick`, `clientkick`, `banUser`, `banClient`, `unbanUser`, `tempBanUser`, `tempBanClient`, `map`, `devmap`, `map_restart`, `map_rotate`, `set`, `seta`, `heartbeat`, `quit`, `addbot`, `removebot`, `listbots` |
+| CoD1, UO | `killserver`, `cvarlist`, `gamecompletestatus`, `scriptusage`, `stringusage`, `setdrawfriend`, `setfriendlyfire`, `setkillcam`, a bare cvar name to read it |
+| CoD2 | `tell`, `onlykick`, `fast_restart`, `sets`, `kickbot`, a bare cvar name |
+| CoD4 | `tell`, `onlykick` (`kick all` too), `fast_restart`, `killserver`, `sets`, `setu`, `toggle`, `togglep`, `reset`, `setfromdvar`, `vstr`, `exec`, `wait`, `writeconfig`, `dvar_bool`, `dvar_int`, `dvar_float`, `setdvartotime`, `touchfile`, `cmdlist`, `kickbot` |
+
+`devmap` sets `sv_cheats 1` after the load and `map` sets it back.
 
 ### Bots
 
-The full guide, with the minimum player count, team balance and slots,
-is [bots.md](bots.md).
+`--bots <n> [--bots-shoot]`, rcon's `addbot`, `removebot` and
+`listbots`, and the `vc_bot_*` cvars (`vc_bot_minplayers`,
+`vc_bot_autobalance`, `vc_bot_shoot`, `vc_bot_names`, `vc_bot_skill`,
+`vc_bot_vehicles`, UO only) work alike on all four games. The guide is
+[bots.md](bots.md).
 
-Bots are a vcod extension; retail has none. Each joins like a client,
-through the stock team and weapon menus, named `[BOT] <name>` from a pool
-of 120 (`crates/server/src/botmgmt.rs`), never two alike. Manage them over
-rcon (`--set rconPassword=<pw>`):
+### Other cvars
 
-| Command | Does |
-|---|---|
-| `addbot [allies\|axis\|auto] [count] [skill N]` | Adds `count` bots (1). `auto`, the default, deals them by balance; a named team pins them there. `skill N` (0-3) fixes their skill level, which `vc_bot_skill` then leaves alone. |
-| `removebot [name\|all\|count]` | Removes one bot by name (`[BOT] ` optional), all of them, or `count` (1), lowest score first. |
-| `listbots` | Slot, team, score, skill level and name of each bot, then the counts and cvars. |
-
-The `set`/`seta` cvars below apply within half a second, over rcon or
-as `--set`:
-
-| Cvar | Default | Does |
-|---|---|---|
-| `vc_bot_minplayers` | 0 | Keeps at least this many players, topping up with bots. A human counts once he picks a team; one joining takes a bot's place (off the larger team) and one leaving brings it back. 0 is off. |
-| `vc_bot_autobalance` | 1 | In team gametypes (all but `dm` and `bel`) bots join the smaller team and move so the teams differ by at most one. A bot moves only while dead or spectating; humans and pinned bots never move. |
-| `vc_bot_shoot` | 1 | 0 leaves the bots walking the map without fighting. |
-| `vc_bot_names` | 1 | 0 names new bots `bot<slot>`. |
-| `vc_bot_skill` | 1 | Skill level 0-3 (easy, normal, hard, expert) of every bot `addbot ... skill` didn't set: reaction time, turn rate, aim error, memory and hearing. |
-| `vc_bot_vehicles` | 1 | United Offensive: 0 stops bots getting into vehicles. |
-
-Bots never take a private slot (`sv_privateClients`). `addbot` can fill
-the public slots; the floor leaves one free for a joining human.
-`removebot` lowers the count `addbot` and `--bots` asked for, but
-`vc_bot_minplayers` still tops the server up to its floor.
-
-```
-rcon addbot 4
-rcon addbot axis 2
-rcon set vc_bot_minplayers 8
-rcon removebot NadeSpammer
-rcon listbots
-```
+- `scr_motd` is the message of the day: on the team menu (1.1) or the
+  server info screen before it (1.5, UO), in vcod and the retail clients.
+  `g_motd` reaches the client as configstring 14 (UO 15), which no retail
+  client draws.
+- `sv_maxclients` is latched: `rcon set sv_maxclients 32` then `rcon
+  map_restart`.
 
 ## Controls
 
 Click to capture the mouse, Esc to release it.
 
-### Fly mode
-
-| Input | Action |
-|---|---|
-| W / A / S / D | Move |
-| Space / Ctrl | Up / down |
-| Shift | Speed boost |
-| Scroll | Fly speed |
-
 ### Playing
 
-The stock `config_mp.cfg` binds, with the sight on the right mouse button as
-`+speed`. `bind MOUSE2 "toggle cl_run"` makes the sight a toggle.
+The stock `config_mp.cfg` binds, the sight on the right mouse button as
+`+speed`. `bind MOUSE2 "toggle cl_run"` makes the sight a toggle. CoD2
+and CoD4 use their own games' default binds.
 
 | Input | Action |
 |---|---|
@@ -329,116 +228,23 @@ The stock `config_mp.cfg` binds, with the sight on the right mouse button as
 | M | Script menu: team, or weapon once you have a team |
 | Esc | Script menu, as retail; its Main Menu tab opens the main menu (Back to Game, Disconnect, Quit) |
 
-A script menu works as in CoD: the cursor shows, the item under it takes
-the focus, a click or its digit picks it, Tab and the arrows step the
-focus, Esc closes every script menu, and the stock menu sounds play. A
-menu keeps the mouse captured and moves its cursor by the mouse's motion,
-as CoD does; in a window the console lets the pointer go. The
-quick message menus leave the mouse and every key but their digits on the
-game. The main menu takes the mouse; Esc or Back to Game
-returns to the game. As a spectator, Space rises and C sinks; as on retail,
-E (lean right) sinks at 512 and Q (lean left) rises at 256.
+A script menu works as in the game: the cursor shows, the item under it
+takes the focus, a click or its digit picks it, Tab and the arrows step
+the focus, Esc closes every script menu, and the stock menu sounds play.
+A menu keeps the mouse captured and moves its cursor by the mouse's
+motion; in a window the console lets the pointer go. The quick message
+menus leave the mouse and every key but their digits on the game. As a
+spectator, Space rises and C sinks; as on retail, E (lean right) sinks at
+512 and Q (lean left) rises at 256.
 
-### Walk mode
+### Fly mode
 
 | Input | Action |
 |---|---|
 | W / A / S / D | Move |
-| Space | Jump (no autohop) |
-| Ctrl | Crouch (held) |
-| Z | Toggle prone |
-| Q / E | Lean |
-| Shift | Slow walk |
-| LMB / RMB | Fire / aim down sights |
-| R | Reload |
-| 1-7 | colt, thompson, mp40, mp44, enfield, kar98k, scoped kar98k |
-
-### Console
-
-`` ` `` or `~` toggles it; while it's down the game gets no keys. Up / Down
-walk history, Tab completes, Page Up / Page Down scroll. In game, a line
-without a leading `/` or `\` is chat, as in retail. `;` separates commands.
-
-| Command | Does |
-|---|---|
-| `connect <ip:port>`, `disconnect`, `reconnect`, `quit` | What they say |
-| `say`, `say_team` | Chat |
-| `cmd <text>` | Send a raw client command |
-| `rcon <command>` | Run a server console command with `rconPassword`; goes to the connected server, else to `rconAddress` (`ip[:port]`, port 28960 by default). The reply prints in the console |
-| `rcon login <password>`, `rcon logout`, `rcon host <ip[:port]>` (CoD2, CoD4) | CoD2 1.3 and CoD4 1.7 have no `rconPassword` or `rconAddress`: log in once, then `rcon <command>` goes to the server joined, else to the host. The server's password is `rcon_password` (`--set rcon_password=...`; vcod-server also takes `rconPassword`) |
-| `bind`, `unbind`, `unbindall`, `bindlist` | Binds |
-| `set`, `seta`, `toggle`, `<cvar> [value]` | Cvars; `seta` also saves |
-| `cvarlist`, `cmdlist`, `echo`, `clear` | The usual |
-| `record [name]`, `stoprecord` | Record a demo to `demos/` in the game directory |
-| `demo <name>` | Play one back; `.dm_1`, `.dm_2` or `.dm_3`, found without the extension. On CoD1 `timedemo 1` times it (CoD2 and CoD4 take `timedemo <name>`, next row), `cl_freezeDemo 1` pauses it, `nextdemo` holds a command to run when it ends |
-| `timedemo <name>` (CoD2, CoD4) | On a CoD2 or CoD4 install `timedemo` is a command, as retail's: it plays `<name>.dm_1` 50 ms a frame and prints the frame count and fps. CoD4's demos live in `main/demos/`, and `timedemo 1` there looks for `demos/1.dm_1`, as 1.7 does |
-
-Anything else goes to the server while connected (`callvote`, `kill`,
-`follownext`). Bindable commands and key names are retail's (`+attack`,
-`+speed`, `weaponslot pistol`, `MOUSE1`, `MWHEELUP`). The client cvars are
-`name`, `cl_run`, `sensitivity`, `m_yaw`, `m_pitch`, `m_filter`,
-`cl_freelook` (0 moves with the mouse's vertical motion unless `+mlook` is
-held; `m_forward`, and `m_side` under `+strafe`), `cg_fov`
-(cheat-protected, so 80 unless the server runs `sv_cheats 1`), `rate`
-(25000; retail's first-run 5000 starves snapshots), `snaps`,
-`scr_conspeed`, `mss_volume`, `r_mode` / `r_fullscreen` (applied at start
-and by `vid_restart`, which also reloads the menus closed; see
-[Window and fullscreen](#window-and-fullscreen)), `com_maxfps`
-(retail's frame cap, `timedemo` included: `1000 / com_maxfps` whole ms a frame; vcod defaults to 0, no cap past vsync, where retail defaults to 85, about 90 fps),
-`password`, `rconPassword` and `rconAddress` (neither saved), and the browser's `ui_netSource`,
-`ui_joinGametype` and `ui_browserShow*`. `exec <file>` runs a config from the paks or `main/`,
-and `ui_load` reloads the menus off the list `ui_menuFiles` names.
-A config an older vcod wrote loads with each cvar still at an old vcod default (`r_aaSamples 4`, `name vcod`) reset to the current one; any other value stays, and to keep an old default, set it again (`set r_aaSamples 4`).
-Binds only act while connected.
-
-### Window and fullscreen
-
-- `r_fullscreen 0` is a window, `1` a borderless window over the monitor
-  the window is on, at the desktop's resolution, `2` exclusive fullscreen:
-  the monitor switches to its mode closest to the `r_mode` size (the
-  desktop's size when `r_mode` names none). Wayland has no exclusive
-  mode, so `2` is borderless there. Alt+Enter flips between windowed and
-  `1` and runs `vid_restart`.
-- `r_mode` picks retail's 13 sizes (0 is 320x240, 3 640x480, 6 1024x768,
-  11 856x480, 12 1920x1200). `r_mode -1` takes `r_customwidth` x
-  `r_customheight`, or keeps the window's own size while either is 0,
-  vcod's default: `r_customwidth 3440; r_customheight 1440; r_mode -1;
-  vid_restart` asks for a 21:9 window or, with `r_fullscreen 2`, that mode.
-- `r_aaSamples` is the scene's MSAA, 1 (none) or 4 (any value above 1),
-  latched to `vid_restart`. The default is retail's 1 in every game
-  (until 2026-10-29 CoD1's was 4); an old config's 4 loads as 1.
-  Blended smoke costs about four times the fill at 4.
-- `vc_widescreen 1` (default) draws a window wider than 4:3 Hor+: `cg_fov`
-  and the zoom fovs are a 4:3 view's width, so 16:9 at `cg_fov 80` is
-  about 96 degrees wide and 21:9 about 111, as tall as 4:3, and the HUD's
-  side pieces sit at the window's edges. `vc_widescreen 0` keeps retail's
-  horizontal fov (a wider window sees less above and below) and the whole
-  HUD in the centred 4:3 box. Menus draw in that box either way.
-
-- CoD4: `r_aspectRatio` (`auto`, `standard`, `wide 16:10`, `wide 16:9`;
-  `vid_restart`) is the aspect the view is drawn at and stretched over
-  the window, as 1.7 draws it. On an ultrawide display `vc_windowAspect 1`
-  draws at the window's own aspect instead, wider at the sides, the HUD
-  unstretched with its compass, score and weapon info at the screen's
-  edges, the scoreboard centred and the XP bar across the bottom.
-
-### Main menu and browser
-
-Mouse to pick, double-click or Enter to join, the arrows, Home, End and
-Page Up / Down with the cursor over the list to move the selection, the wheel or the scroll bar to
-scroll, Esc to go back. The wheel scrolling a list is vcod's; CoD's wheel
-scrolls none. Tab and the arrows no list takes move the menu's focus for
-as long as the key is down, as CoD's do. Held keys do not repeat in a
-menu, except typing and Backspace in a text field. Enter and the middle
-button act on the item under the cursor, as CoD's do. Click Source to cycle Local, Internet and Favorites, and Game Type
-to cycle All and the installed game types; right-click steps either back.
-On a bind, click or Enter, then press the new key (Esc cancels, Backspace
-clears); a third key replaces both of the old ones. Click a text field to
-type into it; Enter or Esc finishes, Tab and the up and down arrows move
-to the next field. In Start New Server, click Game
-Type to cycle it (right-click goes back); the map list scrolls with its bar,
-and with the cursor over it the arrows, Home, End and Page Up / Down move
-the selection. The Mods list works the same way.
+| Space / Ctrl | Up / down |
+| Shift | Speed boost |
+| Scroll | Fly speed |
 
 ### Everywhere
 
@@ -447,3 +253,237 @@ the selection. The Mods list works the same way.
 | `` ` `` / ~ | Console |
 | F3 | Debug overlay |
 | F4 | Culling: on, locked, off |
+| Alt+Enter | Windowed / borderless fullscreen |
+
+## Console
+
+`` ` `` or `~` toggles it; while it's down the game gets no keys. Up /
+Down walk history, Tab completes, Page Up / Page Down scroll. In game, a
+line without a leading `/` or `\` is chat, as in retail. `;` separates
+commands.
+
+| Command | Does |
+|---|---|
+| `connect <ip:port>`, `disconnect`, `reconnect`, `quit` | What they say |
+| `say`, `say_team` | Chat |
+| `cmd <text>` | Send a raw client command |
+| `rcon <command>` | CoD1, UO: run a server command with `rconPassword`, on the connected server, else on `rconAddress` (`ip[:port]`, port 28960 by default). The reply prints in the console |
+| `rcon login <pw>`, `rcon logout`, `rcon host <ip[:port]>` | CoD2, CoD4: these have no `rconPassword` or `rconAddress`. Log in once; then `rcon <command>` goes to the server joined, else to the host |
+| `bind`, `unbind`, `unbindall`, `bindlist` | Binds |
+| `set`, `seta`, `toggle`, `<cvar> [value]` | Cvars; `seta` also saves |
+| `cvarlist`, `cmdlist`, `echo`, `clear` | The usual |
+| `exec <file>` | Run a config from the paks or `main/` |
+| `ui_load` | Reload the menus off the list `ui_menuFiles` names |
+| `record [name]`, `stoprecord` | Record a demo to `demos/` in the game directory (the mod's first) |
+| `demo <name>` | Play one back (`.dm_1`, `.dm_2` or `.dm_3`, found without the extension). `cl_freezeDemo 1` pauses it; `nextdemo` holds a command to run at its end |
+| `timedemo` | CoD1, UO: `set timedemo 1` before `demo` times it. CoD2, CoD4: `timedemo <name>` is a command, as retail's: it plays `<name>.dm_1` 50 ms a frame and prints the frame count and fps |
+
+Anything else goes to the server while connected (`callvote`, `kill`,
+`follownext`). Bindable commands and key names are retail's (`+attack`,
+`+speed`, `weaponslot pistol`, `MOUSE1`, `MWHEELUP`). Binds act only
+while connected.
+
+Client cvars:
+
+| Cvar | Notes |
+|---|---|
+| `name`, `cl_run`, `sensitivity`, `m_yaw`, `m_pitch`, `m_filter`, `m_forward`, `m_side` | As retail |
+| `cl_freelook` | 0 moves with the mouse's vertical motion unless `+mlook` is held (`m_forward`; `m_side` under `+strafe`) |
+| `cg_fov` | Cheat-protected: 80 unless the server runs `sv_cheats 1` |
+| `rate`, `snaps` | `rate` defaults to 25000; retail's first-run 5000 starves snapshots |
+| `com_maxfps` | Retail's frame cap, `timedemo` included (`1000 / com_maxfps` whole ms a frame). vcod's default is 0, no cap past vsync; retail's is 85 |
+| `scr_conspeed`, `mss_volume` | Console slide speed, master volume |
+| `r_mode`, `r_fullscreen`, `r_aaSamples`, `vc_widescreen` | [Window and fullscreen](#window-and-fullscreen) |
+| `password`, `rconPassword`, `rconAddress` | The last two are not saved |
+| `ui_netSource`, `ui_joinGametype`, `ui_browserShow*` | The browser's filters |
+
+The config is `vcod_mp.cfg` (CoD1 and UO in `main/` or `uo/`, CoD2 and
+CoD4 in the active profile). A config an older vcod wrote loads with
+each cvar still at an old vcod default (`r_aaSamples 4`, `name vcod`)
+reset to the current one; any other value stays. To keep an old
+default, set it again (`set r_aaSamples 4`).
+
+## Window and fullscreen
+
+- `r_fullscreen 0` is a window, `1` a borderless window over the monitor
+  the window is on, at the desktop's resolution, `2` exclusive
+  fullscreen at the monitor mode closest to the `r_mode` size (the
+  desktop's size when `r_mode` names none). Wayland has no exclusive
+  mode, so `2` is borderless there. Alt+Enter flips between windowed and
+  `1` and runs `vid_restart`.
+- `r_mode` picks retail's 13 sizes (0 is 320x240, 3 640x480, 6 1024x768,
+  11 856x480, 12 1920x1200). `r_mode -1` takes `r_customwidth` x
+  `r_customheight`, or keeps the window's own size while either is 0
+  (the default). `r_customwidth 3440; r_customheight 1440; r_mode -1;
+  vid_restart` asks for a 21:9 window or, with `r_fullscreen 2`, that
+  mode.
+- `vid_restart` applies `r_mode` and `r_fullscreen` and reloads the
+  menus closed.
+- `r_aaSamples` is the scene's MSAA, 1 (none, the default) or 4 (any
+  value above 1), latched to `vid_restart`. Blended smoke costs about
+  four times the fill at 4.
+- `vc_widescreen 1` (default) draws a window wider than 4:3 Hor+:
+  `cg_fov` and the zoom fovs are a 4:3 view's width, so 16:9 at
+  `cg_fov 80` is about 96 degrees wide and 21:9 about 111, and the HUD's
+  side pieces sit at the window's edges. `vc_widescreen 0` keeps
+  retail's horizontal fov and the whole HUD in the centred 4:3 box.
+  Menus draw in that box either way.
+- CoD4 instead: `r_aspectRatio` (`auto`, `standard`, `wide 16:10`,
+  `wide 16:9`; `vid_restart`) is the aspect the view is drawn at and
+  stretched over the window, as 1.7 does. `vc_windowAspect 1` draws at
+  the window's own aspect, for ultrawide displays: wider at the sides,
+  the HUD unstretched with its compass, score and weapon info at the
+  screen's edges.
+
+## Main menu and browser
+
+- Mouse to pick, double-click or Enter to join. With the cursor over a
+  list, the arrows, Home, End and Page Up / Down move the selection; the
+  wheel or the scroll bar scrolls it (the wheel is vcod's; the games'
+  wheel scrolls no list).
+- Tab and the arrows no list takes move the menu's focus while the key
+  is down. Held keys do not repeat, except typing and Backspace in a text
+  field. Enter and the middle button act on the item under the cursor.
+- Esc goes back.
+- Click Source to cycle Local, Internet and Favorites, and Game Type to
+  cycle All and the installed game types; right-click steps either back.
+  Internet lists `master.cod.pm`'s servers for the install's game.
+- A bind: click or Enter, then press the new key (Esc cancels, Backspace
+  clears); a third key replaces both old ones.
+- A text field: click to type; Enter or Esc finishes, Tab and the up and
+  down arrows move to the next field.
+- Start New Server: click Game Type to cycle it (right-click goes back);
+  the map list and the Mods list scroll and select as a server list does.
+
+## Per game
+
+### CoD 1.1 and 1.5
+
+- The client joins 1.1 (protocol 1) and 1.5 (protocol 6) servers. It
+  connects with its install's protocol and switches when refused.
+- A 1.5 install works as the client's asset source for 1.1 servers, but
+  its `pak0` differs from 1.1's, so a pure 1.1 server drops it.
+- The server speaks its install's protocol only: 1.1, or 1.5 when
+  `main/pak0.pk3` is 1.5's. `--set protocol=` overrides it.
+- Bots, rcon and the cvars above all apply.
+
+### United Offensive
+
+- Add `--mod-dir uo` to every command, with `--game-dir` (or `COD_DIR`)
+  at the install that holds 1.5's `main/` and UO's `uo/`.
+- `vcod --mod-dir uo` opens UO's menu; `vcod mp_cassino --mod-dir uo`
+  flies a UO map; `--connect` plays a UO server, vehicles included.
+- A UO client refuses 1.1 and 1.5 servers, and a 1.1 or 1.5 client a UO
+  one, each naming the flag to use.
+- `vcod-server <map> --mod-dir uo` speaks UO (protocol 22) and runs UO's
+  gametypes (`ctf`, `dom`, `hq`, `bas` beside the 1.5 ones) and vehicles.
+  `vc_bot_vehicles 0` keeps bots out of vehicles.
+
+### CoD2
+
+Client:
+
+- Bare `vcod` opens CoD2's stock main menu. Its browser lists LAN
+  servers, `master.cod.pm`'s CoD2 list (protocol 118) and favourites.
+  Start New Server runs `vcod-server --game cod2`. Esc in a game opens
+  the server's `ingame` menu.
+- `vcod --connect ip:port` joins a CoD2 1.3 server, pure or not, through
+  its team and weapon menus, or spectates. `--team` and `--weapon`
+  (e.g. `thompson_mp`) answer them. X or Esc's menu picks another weapon
+  for the next spawn. A map change loads the new map.
+- `vcod <map>` flies a map.
+- Other modes (`--walk`, `--list`) exit with an error.
+
+Server (`vcod-server <map> --game cod2`, or a CoD2 install):
+
+- Runs the stock gametype scripts (`--gametype` or `--set g_gametype=`;
+  `--gametype-script` as on CoD1). Players join through the team and
+  weapon menus, move, fight, chat and vote.
+- Checks the pure `cp` (`sv_pure 0` turns it off). Takes `g_password`,
+  `sv_privateClients` with `sv_privatePassword`, `sv_minPing`,
+  `sv_maxPing`, `sv_maxRate`, `sv_timeout` and `sv_floodProtect` as
+  retail does.
+- Serves a non-stock iwd in its `main/` to a client that lacks it.
+- Runs the cheat commands under `sv_cheats 1`.
+- Bots play every stock gametype ([bots.md](bots.md#cod2)).
+
+### CoD4
+
+Client:
+
+- Bare `vcod` opens 1.7's main menu from the `ui_mp` zone (mouse,
+  arrows, Tab, Enter, Esc). The first start asks for a profile.
+  - Start New Server runs `vcod-server --game cod4` and, with Dedicated
+    No, joins it.
+  - Join Game lists LAN servers (Source: Local), favourites and, on
+    Refresh List, `master.cod.pm`'s CoD4 list. Password sets a server's
+    password. CoD4x servers stay out of the lists unless
+    `ui_browserShowCoD4x` is 1 (vcod's own cvar).
+  - Mods runs a `mods/<dir>` mod. Options and Controls set the options
+    and binds vcod has.
+  - Select Profile creates, deletes and loads a profile in
+    `players/profiles/`. The active profile's `vcod_mp.cfg` is the
+    config, its `vcod_mpdata` the stats a join sends, stored plain and
+    written back as they change. Retail's `mpdata` is left alone.
+  - `connect ip:port` on the console joins a server. Esc or `disconnect`
+    on the connect screen calls the join off.
+- `vcod --connect ip:port` joins a 1.7 server through its team and class
+  menus, drawn as the zones give them. The mouse or the arrows and Tab
+  move the focus, a click or Enter picks, Esc runs the menu's `onEsc` or,
+  with none up, the server's `g_scriptMainMenu`. A menu vcod cannot
+  evaluate shows as a numbered list (1-9 pick). `--team` and `--class`
+  answer them unseen.
+- `vcod <map>` flies `zone/english/<map>.ff`. A map missing from
+  `zone/<language>/` loads from `usermaps/<map>/<map>.ff`; under a mod
+  that directory's iwds load too.
+- Joining downloads the mod and usermap files the server references and
+  the install lacks, into the install at the server's path. With
+  `cl_allowDownload 0` the join is refused instead.
+- Other modes exit with an error.
+
+Server (`vcod-server <map> --game cod4`, or a CoD4 install):
+
+- Loads the map's zone and the five common ones, runs `default_mp.cfg`
+  from the iwds under the `--set`s, then the gametype's scripts (`war`
+  unless `--gametype` or `--set g_gametype=` says otherwise; the `--set`
+  wins).
+- Takes the stats and the pure `cp` as retail does (`sv_pure 0` turns
+  the check off).
+- Clients answer the team and class menus, spawn with their class's
+  loadout, play, and call and cast votes (`g_allowVote 0` turns votes
+  off). A match that ends rotates to the next map; `server_map.cfg`
+  fills `sv_mapRotation` with the stock maps.
+- `fs_game mods/<name>`: the mod's `mod.ff` loads after the common zones,
+  its iwds go over `main/`'s (a usermap's between them), and
+  configstrings 0 and 1 name it, as retail does. A client lacking the
+  mod's files downloads them.
+- `g_inactivity <secs>` drops a player idle that long.
+- Bots: [bots.md](bots.md#cod4).
+
+## Debug and developer modes
+
+- `vcod <map> --walk` (CoD1): an early offline walk mode. WASD, Space
+  jump, Ctrl crouch, Z prone, Q / E lean, Shift slow walk, mouse fire and
+  sight, R reload, 1-7 pick a weapon.
+- `vcod --net-probe <ip:port>` is a headless client that joins, prints a
+  line a second and writes captures. `vcod --help` documents its modes.
+  `--probe-secs` sets how long it stays (default 65). On CoD2
+  `--probe-team` / `--probe-weapon` make it join and play a scripted
+  loop; `VCOD_COD2_RECORD=<dir>/<name>` records the run as
+  `<name>.dm_1`. On CoD4 `--team` and `--class` make it join.
+- `vcod --game cod2 --probe-demo <file.dm_1> [--probe-timedemo]` plays a
+  CoD2 demo headless and prints what it parsed and drew.
+- `vcod --game cod4 --capture <file>` replays a `cod4_probe` capture
+  (`crates/cod4/tests/fixtures/net/play-1.7-*.txt`) on its own clock.
+- F3 (`--debug-overlay`) shows frame, draw, vis, net and audio counters;
+  F4 cycles culling on, locked (the visible set frozen) and off.
+- `VCOD_NETSIM="ping=100,jitter=20,loss=2"` gives the client a bad link.
+- `VCOD_FRAME_PROFILE=<path>` writes each frame's CPU and GPU time by
+  stage.
+- Server: `--trace` logs every snapshot per client and a per-second tick
+  summary; `--test-entities <n>` adds invisible moving entities to
+  exercise the entity encoding; `VCOD_TICK_TRACE=<path>` writes the
+  tick's step log; `VCOD_TICK_PROFILE_MS=<ms>` logs every tick slower
+  than that.
+- `RUST_LOG` sets the log level (default `info`); `WGPU_BACKEND` narrows
+  the graphics backend.
