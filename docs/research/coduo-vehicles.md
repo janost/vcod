@@ -121,12 +121,12 @@ The server reads each seat's stored cmd in the vehicle think, which
 `G_VehicleClientThink` (0x8b0ce) runs for every driven vehicle from
 `G_RunFrame`, 50 ms apart (VERIFIED decompile):
 
-| Seat | Function | What it reads (VERIFIED decompile unless noted) |
+| Seat | Function | What it reads |
 |---|---|---|
-| Driver, moves | 0x87cd3 | `forwardmove`, `rightmove`, `upmove` of the last cmd; skipped while popped out or within 150 ms of a collision. Only signs count: forward accelerates toward 0.8 `maxSpeed`, back toward half that, `rightmove` steers, a tank with `upmove > 0` turns its hull toward the view yaw at up to `rotRate`. A reversing tank's steer is negated; one with no turret span (SU-152, Elefant) treats a held sight as `upmove` 127. Clears `eFlags` 0x200000 on a tank or under `upmove > 0`, sets it otherwise. |
-| Driver, turret | 0x85b32 | View pitch and yaw in the hull's frame, stepped at `turretRotRate * 0.05` a think, held inside the file's spans; out on `angles2[0]`, `angles2[1]`. Stock rates: Panzer IV and T-34 30, Sherman 32, Flak 88 20 (VERIFIED, the files). The spans bind the gun, never the view. |
-| Driver, fire | 0x86c57 | `buttons` 0x1 fires the main gun (`turret_fire`), 0x20 the alternate (`turret_alt_fire`), each on its own timer; aimed along the view from `tag_chasecam`, or `tag_aimdownbarrel` sighted. No turret: 0x1 sounds the horn (INFERRED). |
-| Gunner | 0x86285, 0x871a6 | View pitch and yaw in the hull's frame at `turretGunnerRotRate` (stock 360) inside the gunner spans; pitch on `angles2[2]`, yaw on `origin2[1]` relative to the turret; 0x1 fires (`turret_gunner_fire`). |
+| Driver, moves | 0x87cd3 | `forwardmove`, `rightmove`, `upmove` of the last cmd; skipped while popped out or within 150 ms of a collision. Only signs count: forward accelerates toward 0.8 `maxSpeed`, back toward half that, `rightmove` steers, a tank with `upmove > 0` turns its hull toward the view yaw at up to `rotRate`. A reversing tank's steer is negated; one with no turret span (SU-152, Elefant) treats a held sight as `upmove` 127. Clears `eFlags` 0x200000 on a tank or under `upmove > 0`, sets it otherwise (VERIFIED decompile). |
+| Driver, turret | 0x85b32 | View pitch and yaw in the hull's frame, stepped at `turretRotRate * 0.05` a think, held inside the file's spans; out on `angles2[0]`, `angles2[1]` (VERIFIED decompile). Stock rates: Panzer IV and T-34 30, Sherman 32, Flak 88 20 (VERIFIED, the files). The spans bind the gun, never the view. |
+| Driver, fire | 0x86c57 | `buttons` 0x1 fires the main gun (`turret_fire`), 0x20 the alternate (`turret_alt_fire`), each on its own timer; aimed along the view from `tag_chasecam`, or `tag_aimdownbarrel` sighted (VERIFIED decompile). No turret: 0x1 sounds the horn (INFERRED). |
+| Gunner | 0x86285, 0x871a6 | View pitch and yaw in the hull's frame at `turretGunnerRotRate` (stock 360) inside the gunner spans; pitch on `angles2[2]`, yaw on `origin2[1]` relative to the turret; 0x1 fires (`turret_gunner_fire`) (VERIFIED decompile). |
 | Passengers | | Nothing to the vehicle; the four-wheel's seat 3 fires its own weapon through `PM_Weapon` (section 3). |
 
 In the capture (VERIFIED,
@@ -736,7 +736,7 @@ into `eType` 13 `script_vehicle_corpse`; no stock MP script calls it
     `r.ownerNum` (the vehicle) under 0x810011, arrives or stops on the
     vehicle.
   - Trap: the yaw alone with three heights put mp_peaks' jeep exit 10
-    above retail's; vcod now lands on retail's spot (VERIFIED,
+    above retail's; vcod lands on retail's spot (VERIFIED,
     `vehicle_ab`). The six vectors at 0xa6660 are the collision probes'
     (section 12), not the dismount's (VERIFIED, every reference;
     `coduo-diff.md` 9 had them here).
@@ -885,12 +885,14 @@ the seat's view stood up to 0.84° off retail's on the change's snapshot.
 
 - `G_RunClient` (0x41dfc) puts a linked player in `pm_type` 1, 7 dead
   (VERIFIED decompile).
-- `ClientEndFrame` (0x42f59) (VERIFIED decompile unless noted):
+- `ClientEndFrame` (0x42f59):
   - `vehMotion` 1 under 20 units/s of the hull's forward speed, else 2
     forward, 3 back; the entity's `surfType` is `vehPos | vehType << 3 |
-    vehMotion << 6`, its `otherEntityNum` the vehicle.
+    vehMotion << 6`, its `otherEntityNum` the vehicle (VERIFIED
+    decompile).
   - `G_PlayerVehiclePositionAndBlend` (0x9048f) puts `ps.origin` at the
-    seat tag plus `BG_GetVehiclePosOffset` in the tag's axes.
+    seat tag plus `BG_GetVehiclePosOffset` in the tag's axes (VERIFIED
+    decompile).
   - Then the plain `BG_PlayerStateToEntityState` (0x20a35) with the snap
     on: `pos.trType` and `apos.trType` 1, `pos.trBase` the origin
     truncated (`fldcw` with `| 0xc00` at 0x20ab0), `apos.trBase` the view,
@@ -1294,24 +1296,24 @@ trace").
   shove's pose: 1.67 in all against 2.95 (VERIFIED, `vehicle_ram_ab`'s
   former `SECOND_SHOVE_GAP`).
 
-  Ruled out (VERIFIED unless noted):
+  Ruled out:
   - the probe's box (-24,-24,-1)..(24,24,10) and `vehCheckSolidOffsets`
-    (decompile, .data 0xa6660);
+    (VERIFIED decompile, .data 0xa6660);
   - the info fields the probe reads: `suspensionTravel` +0x88, `stepsize`
-    +0x390, front and back distances +0x394 and +0x398 (the field table at
+    +0x390, front and back distances +0x394 and +0x398 (VERIFIED, the field table at
     .data 0xaea68);
   - `CM_TransformedBoxTrace` (coduo_lnxded 0x805b19a): the box symmetric
     about its centre and axial in the model's frame, the rotation
-    `AngleVectors` with the right axis negated, as vcod's (decompile);
+    `AngleVectors` with the right axis negated, as vcod's (VERIFIED decompile);
   - the brush clip's box arm (0x8058f0a) and `trap_Trace` passing no
-    capsule (syscall 0x25 calls `SV_Trace` 0x809afc9 with 0) (decompile);
-  - the collmap pairing: mp_kharkov has one Horch collmap, `*40` (the BSP);
+    capsule (syscall 0x25 calls `SV_Trace` 0x809afc9 with 0) (VERIFIED decompile);
+  - the collmap pairing: mp_kharkov has one Horch collmap, `*40` (VERIFIED, the BSP);
   - the pass rules: `SV_ClipMoveToEntity` (0x809a594) skips only the pass
-    entity, what it owns and what its owner owns (decompile);
+    entity, what it owns and what its owner owns (VERIFIED decompile);
   - the entity area tree: `SV_Trace` walks it (0x805e8e5) on the box's
     centre with its half size plus a unit, and a vehicle is filed under
     its xmodel's bounds (`svFlags` 4), for the Horch a ±113.6 cube that
-    holds the probe's end, so the walk reaches it (decompile).
+    holds the probe's end, so the walk reaches it (VERIFIED decompile).
 
   Two replays reproduce retail's second shove exactly, speeds included:
   the tank's probes ignoring the Horch, or the Horch already being the
@@ -1678,28 +1680,30 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   `*-blast-tank-frag-uo.txt`, `*-blast-jeep-rocket-uo.txt`,
   `*-blast-jeep-frag-uo.txt` and the `*-uo-blasttank`, `*-uo-fragtank`,
   `*-uo-blastjeep`, `*-uo-fragjeep` snapshot pairs; recipes in their
-  headers) (VERIFIED, live):
+  headers):
   - A bazooka round on the Panzer IV: 500 on its flank, 329 on its front,
     1000 on its rear (1000 times the side, front and rear scales, no
     falloff at 200 to 300), `MOD_PROJECTILE`, attacker the shooter,
     inflictor the rocket; the explode is 186, `eFlags` 0x210000, type 2,
     weapon 5, surface 13 (metal). The third takes the tank under the
     script's 2000 health buffer and `_tankdrive_gmi` kills it inside the
-    notify: the probe's waiter, woken by the same notify, reads -999.
+    notify: the probe's waiter, woken by the same notify, reads -999
+    (VERIFIED, live).
   - On the Willys: 899 on its flank (1000 times the f32 0.9, truncated),
     which kills it; its wreck's `radiusDamage(origin + (0, 0, 25), 300,
     80, 0)` reaches the shooter 245 units off for 11 `MOD_EXPLOSIVE` 10.6 s
     later, after `setContents(0)`. A round 150 off its flank charges
-    nothing: the splash is under 100.
+    nothing: the splash is under 100 (VERIFIED, live).
   - Frags: 60 by the tank's flank (120 × 0.5), 60 on its deck, 120 under
     the jeep's body (× the under scale 2), 51 and 60 by it; those further
     off charge nothing (under 100 before the scale). The explodes are 185
     with `eFlags` 0x100 and no vehicle bit. The deck frag rests on the hull
     at z 51.7 (its ground the tank) and its explode's down trace (mask
-    0x11) meets nothing: surface 0, parm 0, the splash point 10 up.
+    0x11) meets nothing: surface 0, parm 0, the splash point 10 up
+    (VERIFIED, live).
   - The bazooka's hip spread (7°) draws on each server, so its contacts
     repeat neither between two retail runs nor against ours; the amounts
-    do.
+    do (VERIFIED, live).
 
   `vehicle_blast_ab` replays all four: notifies, the shooter's own blasts
   and the explodes match field for field, a rocket's aim within its spread
@@ -1769,14 +1773,14 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   140 units off the flank holds its trigger on him. The gsc aims at the
   height where a `bulletTrace` (mask 0x2802031 and `bulletPriorityMap`, as
   `Bullet_Fire_Extended`'s, builtin 0x6b145) from the shooter's eye meets
-  the rider first; its damage callback only logs. (VERIFIED capture:)
+  the rider first; its damage callback only logs.
   - Panzer IV driver: 0 callbacks in two 12 s stints, though the trace met
     his body at 6 to 8 of 16 heights. Gunner: 1 callback in one run, 10 in
     another, the trace meeting him at 2 or 3 heights. On foot before and
-    after: about 10 a second.
-  - Willys: driver 1, gunner 4, passenger 11.
+    after: about 10 a second (VERIFIED capture).
+  - Willys: driver 1, gunner 4, passenger 11 (VERIFIED capture).
   - Traces toward the seated rider that miss him stop on the tank, entity
-    186, at fraction 0.69 to 0.83.
+    186, at fraction 0.69 to 0.83 (VERIFIED capture).
   - The retail probe client (`--probe-uo-weapon hold`) sends 60 Hz cmds
     (cod15-movement.md 6) holding the view it saw at its placement,
     rebased on each snapshot's `delta_angles`, while the gsc's
@@ -2610,10 +2614,10 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
 
 ### 15.1 Wheel and tread dust
 
-The vehicle DObj callback (uo cgame 0x30020540, `coduo-diff.md` 9) plays
+The vehicle DObj callback (UO cgame 0x30020540, `coduo-diff.md` 9) plays
 the only effects a vehicle makes on its own. Neither vehicle file carries
 an effect key (`vehicles/panzerIV_mp`, `vehicles/willyjeep_mp`, VERIFIED,
-the files), and the cgame registers twelve at load into the table at
+the files); the cgame registers twelve at load into the table at
 0x3044cac0 (0x3002c82c..0x3002c920, VERIFIED disassembly):
 
 | Slot | Tank (`surfType` not 1) | Slot | Four-wheel |
@@ -2624,54 +2628,52 @@ the files), and the cgame registers twelve at load into the table at
 | 4 | `mp_tanktread_rock` | 10 | `mp_jeepwheel_rock` |
 | 5, 6 | `mp_tanktread_snow` | 11, 12 | `mp_jeepwheel_snow` |
 
-For each of the six `tag_wheel_*` (front left, front right, back left,
-back right, middle left, middle right; pointers 0x300851ac..0x300851c0,
-VERIFIED bytes) the model has, the callback (VERIFIED decompile
+For each of the six `tag_wheel_*` the model has (front left, front right,
+back left, back right, middle left, middle right; pointers
+0x300851ac..0x300851c0, VERIFIED bytes), the callback (VERIFIED decompile
 0x30020d42..0x30021323; constants VERIFIED bytes):
 
-- traces the world (syscall 0x26, mask 0x211, then the entity clip
-  0x300350d0 skipping the vehicle) from 40 (0x3007c284) above the wheel
-  along the vehicle's up to `time2 / 1000 + 16` (0x3007bd94, 0x3007bf00)
-  below it, and goes on only when `cg_vehicletrails` (registered `"1"`,
-  flags 1, at 0x30085d60, its integer at 0x304582ac) is set and the
-  fraction is under 1.0 (0x3007bce0);
-- keeps the wheel's last play in cent+0x23c (12 bytes a wheel). Zero
-  there takes this position and plays nothing; more than 200
-  (0x3007bf44) away does the same; 32 (0x3007bdd0) or less plays
-  nothing and keeps the mark; otherwise the mark moves here and the
-  wheel plays;
-- picks the slot by the trace's material (`surfaceFlags >> 20 & 0x1f`):
-  dirt 6 → 3, grass 10 → 1, gravel 11 and rock 17 → 4, ice 12 → 5, sand
-  18 → 2, snow 19 → 6, any other none; a four-wheel adds 6;
-- on a four-wheel, for a front wheel or a travel against the vehicle's
-  forward, lowers the spot 10 (0x3007bda4) in world z; otherwise raises
-  it by `rand() / 32768 * 8` (0x3007bd10, 0x3007be08);
-- plays the slot's effect (syscall 0xe8) at the spot along the
-  normalized travel since the last mark, negated and each axis scaled by
-  `rand() / 32768 * 0.5 + 0.25` (0x3007bce8, 0x3007be58).
+1. Traces the world (syscall 0x26, mask 0x211, then the entity clip
+   0x300350d0 skipping the vehicle) from 40 (0x3007c284) above the wheel
+   along the vehicle's up to `time2 / 1000 + 16` (0x3007bd94, 0x3007bf00)
+   below it. It goes on only when `cg_vehicletrails` (registered `"1"`,
+   flags 1, at 0x30085d60, its integer at 0x304582ac) is set and the
+   fraction is under 1.0 (0x3007bce0).
+2. Keeps the wheel's last play in cent+0x23c (12 bytes a wheel). Zero
+   there: take this position, play nothing. More than 200 (0x3007bf44)
+   away: the same. 32 (0x3007bdd0) or less: play nothing, keep the mark.
+   Otherwise the mark moves here and the wheel plays.
+3. Picks the slot by the trace's material (`surfaceFlags >> 20 & 0x1f`):
+   dirt 6 → 3, grass 10 → 1, gravel 11 and rock 17 → 4, ice 12 → 5, sand
+   18 → 2, snow 19 → 6, any other none; a four-wheel adds 6.
+4. On a four-wheel, for a front wheel or travel against the vehicle's
+   forward, lowers the spot 10 (0x3007bda4) in world z; otherwise raises
+   it by `rand() / 32768 * 8` (0x3007bd10, 0x3007be08).
+5. Plays the slot's effect (syscall 0xe8) at the spot along the normalized
+   travel since the last mark, negated, each axis scaled by `rand() /
+   32768 * 0.5 + 0.25` (0x3007bce8, 0x3007be58).
 
-vcod keeps each mark until a level load, as retail does. `cg_entities`
-is 1024 records of 0x288 bytes at 0x3048c6e0, and the callback's
-`lea 0x23c(%ebx)` (0x30020d18) is the only reference to the marks. The
-only clear that covers them is the `rep stos` of all 0x28800 dwords at
-0x3002df4d. The two other loops over the array (0x3003c9f0,
-0x3003d360) zero +0x1e8 alone (VERIFIED disassembly). That 0x3002df30 is
-the cgame's load-time clear is INFERRED: it zeroes four other large
-blocks with the array and touches no single entity. The
-spot is the wheel as the suspension trace placed it, at most
-`time2 / 1000` (under 0.03 units on the stock vehicles) from the tag
-(INFERRED, section 9 of `coduo-diff.md`).
+The marks last until a level load. `cg_entities` is 1024 records of 0x288
+bytes at 0x3048c6e0, and the callback's `lea 0x23c(%ebx)` (0x30020d18) is
+the only reference to the marks. The only clear that covers them is the
+`rep stos` of all 0x28800 dwords at 0x3002df4d; the two other loops over
+the array (0x3003c9f0, 0x3003d360) zero +0x1e8 alone (VERIFIED
+disassembly). That 0x3002df30 is the cgame's load-time clear is INFERRED:
+it zeroes four other large blocks with the array and touches no single
+entity. vcod keeps each mark until a level load. The spot is the wheel as
+the suspension trace placed it, at most `time2 / 1000` (under 0.03 units
+on the stock vehicles) from the tag (INFERRED, `coduo-diff.md` 9).
 
-The entity clip (0x300350d0) walks the solid list 0x30035030 builds
-(every snapshot entity with a `solid`, triggers apart) and clips a brush
-model (`solid` 0xffffff) as `CM_InlineModel(s.index)` (syscall 0x21) at
-the centity's lerped origin and angles, testing no contents; the pass
-entity is the vehicle itself (VERIFIED decompile). A vehicle's `index`
-is its collmap (section 10.3), so a wheel over another vehicle reads that
+The entity clip (0x300350d0) walks the solid list 0x30035030 builds (every
+snapshot entity with a `solid`, triggers apart) and clips a brush model
+(`solid` 0xffffff) as `CM_InlineModel(s.index)` (syscall 0x21) at the
+centity's lerped origin and angles, testing no contents; the pass entity
+is the vehicle itself (VERIFIED decompile). A vehicle's `index` is its
+collmap (section 10.3), so a wheel over another vehicle reads that
 vehicle's collmap, whose brushes carry the vehicle clip 0x200 the mask
 holds.
 
-`fx::vehicle_trails` is the port: `entities::BuiltScene::vehicle_wheels`
+vcod's port is `fx::vehicle_trails`. `entities::BuiltScene::vehicle_wheels`
 carries each drawn vehicle's posed wheel tags and its collmap at its drawn
 origin and angles; the live frame puts each vehicle's own copy of its
 collmap there (`place_collmaps`), traces the client's world under mask
@@ -2679,34 +2681,38 @@ collmap there (`place_collmaps`), traces the client's world under mask
 (`wheel_trace`), and spawns each play as a directed effect. The client's
 `SnapshotMovers` gives every UO vehicle its own copy too
 (`CollisionWorld::set_model_instance`), so prediction and the vehicle
-round's second trace meet each tank of a model, not the last placed. The direction's per-axis scale
-leaves it off unit length; vcod's spawn normalizes it, and whether
-CoDUOMP.exe's 0xe8 does is not checked (INFERRED, no CoDUOMP.exe here).
+round's second trace meet each tank of a model, not the last placed. The
+direction's per-axis scale leaves it off unit length; vcod's spawn
+normalizes it, and whether CoDUOMP.exe's 0xe8 does is not checked
+(INFERRED, CoDUOMP.exe not read).
 `the_uo_driver_captures_throw_dust_off_the_ground_they_cross` replays
 `*-uo-tank.bin` over mp_cassino and `*-uo-jeep.bin` over mp_peaks: 191
-tread plays, all `mp_tanktread_rock` (the square's cobblestone, rock),
-and 179 wheel plays, all `mp_jeepwheel_snow`, from the driven vehicle
-only (VERIFIED, replay; the parked tanks throw none). Every table effect
-is in the UO paks and parses.
+tread plays, all `mp_tanktread_rock` (the square's cobblestone), and 179
+wheel plays, all `mp_jeepwheel_snow`, from the driven vehicle only
+(VERIFIED, replay; the parked tanks throw none). Every table effect is in
+the UO paks and parses.
 
 ### 15.2 A vehicle's death
 
-No engine code draws a death: `_tankdrive_gmi::init_tank` threads
-`_tankeffects_gmi::tank_death`, which on the vehicle's `death` notify
-plays `fx/explosions/vehicles/t34_mp_n/1st_exp_v2.efx` on `tag_origin`,
-raises `earthquake(0.25, 3, origin, 1050)`, loops
-`fx/explosions/vehicles/t34_mp_n/burn_smoke.efx` (`playLoopedFx`, 1 s)
-and the `distantfire` alias, then on `allow_explode` (`tank_respawn`,
-`self.delay` = `g_vehicleBurnTime` 10 s on) deletes the loop, plays
-`2nd_exp.efx` on `tag_origin`, waits 0.5 s, clears its contents, runs
-`radiusDamage(origin + (0, 0, 25), 300, 150, 10)` and deletes itself.
+No engine code draws a death. `_tankdrive_gmi::init_tank` threads
+`_tankeffects_gmi::tank_death`, which on the vehicle's `death` notify:
+
+1. plays `fx/explosions/vehicles/t34_mp_n/1st_exp_v2.efx` on
+   `tag_origin`, raises `earthquake(0.25, 3, origin, 1050)`, loops
+   `fx/explosions/vehicles/t34_mp_n/burn_smoke.efx` (`playLoopedFx`, 1 s)
+   and the `distantfire` alias;
+2. on `allow_explode` (`tank_respawn`, `self.delay` = `g_vehicleBurnTime`,
+   10 s on) deletes the loop and plays `2nd_exp.efx` on `tag_origin`;
+3. waits 0.5 s, clears its contents, runs `radiusDamage(origin + (0, 0,
+   25), 300, 150, 10)` and deletes itself.
+
 The `deathmodel` swap is commented out (VERIFIED, the scripts in
 `pakuo0*.pk3`). The four tank types share these effects.
 
-`client-probes/probe_vehwreck` kills mp_cassino's first Panzer IV with
-the stock self-destruct's `dodamage(10000, origin + (0, 0, 1), self,
-self, "MOD_EXPLOSIVE")`. On retail UO 1.51b (VERIFIED, live,
-`*-uo-wreck.bin`, entity 186, kill at 33300):
+`client-probes/probe_vehwreck` kills mp_cassino's first Panzer IV with the
+stock self-destruct's `dodamage(10000, origin + (0, 0, 1), self, self,
+"MOD_EXPLOSIVE")`. On retail UO 1.51b (VERIFIED, live, `*-uo-wreck.bin`,
+entity 186, kill at 33300):
 
 | Time | Wire |
 |---|---|
@@ -2716,28 +2722,30 @@ self, "MOD_EXPLOSIVE")`. On retail UO 1.51b (VERIFIED, live,
 | 43800 | the tank gone, never `eType` 13 and on its live model throughout |
 | 53300 | its `spawnDuplicate` in as entity 160 |
 
-The 43400 sound is the duplicate's first think. `spawnDuplicate` at
+**The 43400 sound** is the duplicate's first think. `spawnDuplicate` at
 43300 places it where the burning tank still stands, and
 `wait_for_safe_respawn` unlinks it at once. `Scr_Vehicle_Init` settles it
 at 43350 and `Scr_Vehicle_Think` steps it at 43400 (section 10.4). 0x827ab
-gates its probes on `r.bmodel` (`ent+0x104`), not on `r.linked`
-(`ent+0xf4`): `SV_SetBrushModel` (`coduo_lnxded` 0x0808e247) stores
-`bmodel` 1 at +0x104 between the bounds at +0x108..+0x11c and contents
--1 at +0x120, and `SV_UnlinkEntity` (0x08099d49) clears +0xf4 (VERIFIED
-decompile). An unlinked vehicle with a collmap therefore still probes.
-The first think's settle fails the "nothing moved" test, and the broad
-box at origin + 24 starts inside the old tank. 0x827ab then plays
-`impactSnd` through `G_PlaySoundAliasAtPoint` at the hit plus
-`2500 * (1 - impact)` up, `svFlags |= 8`, under its own 1 s clock and the
-stuck clock's 200 ms (VERIFIED decompile, 0x827ab's tail). The duplicate
-has no speed, so the impact is near 0, and that puts the sound 2506 above
-the tank (VERIFIED, capture). vcod-server sends it from the same temp
-entity number (165), time and position (VERIFIED,
-`vehicle_wreck_ab::the_wrecks_duplicate_plays_its_impact_sound`).
-`the_uo_wreck_capture_blows_the_tank_up_twice_and_burns_between`
-drives the capture through the client's resolver, `play::quake` and
-`fx::looped`: both blasts on `tag_origin`, the 3 s shake and the burn
-from 33300 then every whole second to 43000, as `CG_FX`'s timer steps
+gates its probes on `r.bmodel` (`ent+0x104`), not `r.linked` (`ent+0xf4`):
+`SV_SetBrushModel` (`coduo_lnxded` 0x0808e247) stores `bmodel` 1 at +0x104
+between the bounds at +0x108..+0x11c and contents -1 at +0x120, and
+`SV_UnlinkEntity` (0x08099d49) clears +0xf4 (VERIFIED decompile). So an
+unlinked vehicle with a collmap still probes. The first think's settle
+fails the "nothing moved" test, and the broad box at origin + 24 starts
+inside the old tank. 0x827ab then plays `impactSnd` through
+`G_PlaySoundAliasAtPoint` at the hit plus `2500 * (1 - impact)` up,
+`svFlags |= 8`, under its own 1 s clock and the stuck clock's 200 ms
+(VERIFIED decompile, 0x827ab's tail). The duplicate has no speed, so the
+impact is near 0 and the sound lands 2506 above the tank (VERIFIED,
+capture). vcod-server sends it from the same temp entity number (165),
+time and position (VERIFIED,
+`vehicle_wreck_ab::the_wrecks_duplicate_plays_its_impact_sound`); gating
+on `r.linked`, or committing the settled pose at init and stepping in the
+same think, loses or advances it.
+`the_uo_wreck_capture_blows_the_tank_up_twice_and_burns_between` drives
+the capture through the client's resolver, `play::quake` and
+`fx::looped`: both blasts on `tag_origin`, the 3 s shake and the burn from
+33300 then every whole second to 43000, as `CG_FX`'s timer steps
 (VERIFIED, replay). Recipe:
 
     COD_VERSION=uo COD_DIR=<1.5 main + UO uo> PORT=31621 PROBE_SECS=75 \
@@ -2745,12 +2753,12 @@ from 33300 then every whole second to 43000, as `CG_FX`'s timer steps
     vcod --game-dir <UO install> --mod-dir uo --net-probe 127.0.0.1:31621 \
         --probe-team axis --save-snapshots --capture-tag uo-wreck --probe-secs 50
 
-The duplicate does not take that think unhurt. Its stuck clock is 0
-from the spawn's memset, so the strike also runs section 12's stuck
-kill: `client-probes/probe_vehdupe` (no client; the first Panzer IV
-dies at 2050 and its duplicate, entity 160, appears at 12100) logs at
-12200 a `damage` of 329999 (999999 times the hit side's scale),
-attacker 160, dir (0, 0, -1), point 0.88 under its origin,
+**The duplicate's stuck kill.** The duplicate does not take that think
+unhurt. Its stuck clock is 0 from the spawn's memset, so the strike also
+runs section 12's stuck kill. `client-probes/probe_vehdupe` (no client;
+the first Panzer IV dies at 2050 and its duplicate, entity 160, appears at
+12100) logs at 12200 a `damage` of 329999 (999999 times the hit side's
+scale), attacker 160, dir (0, 0, -1), point 0.88 under its origin,
 `MOD_COLLISION`, then `death`, and `health` -999 on every frame after
 (VERIFIED, retail UO 1.51b, fixture
 `crates/server/tests/fixtures/vehicles/mp_cassino-tank-dupe-uo.txt`).
@@ -2761,32 +2769,35 @@ waiter ahead of the `damage` one, though `G_Damage` notifies `damage`
 first (VERIFIED, the fixture). INFERRED, from that order and
 `cod11-gsc-language.md` ("Engine notifies and the trigger queue",
 `probe_touchorder`): both notifies only wake their waiters during the
-vehicle's think, and `G_RunFrame`'s `Scr_RunCurrentThreads` runs the
-last woken first. vcod raises the entity pass's notifies ahead of the
-trigger queue's first round, which runs them under the frame pass's
-pick (since 2026-10-17); `vehicle_wreck_ab::
-the_wrecks_duplicate_takes_the_stuck_kill` compares the lines in order
-(VERIFIED, replay, 2026-10-20).
+vehicle's think, and `G_RunFrame`'s `Scr_RunCurrentThreads` runs the last
+woken first. vcod raises the entity pass's notifies ahead of the trigger
+queue's first round, which runs them under the frame pass's pick;
+`vehicle_wreck_ab::the_wrecks_duplicate_takes_the_stuck_kill` compares
+the lines in order (VERIFIED, replay, 2026-10-20).
 
-The same probe on vcod-server (`--gametype-script`) sent the same
-events, entities and times, but for the duplicate's `vehicle_impact`
-(VERIFIED, live, 2026-10-15). vcod gated the probes on `r.linked`, and it
-committed the settled pose at init and stepped in the same think, so the
-sound would have come 50 ms early. Both are fixed. Its earthquake sent the duration in 1.1's
-`time`; UO's builtin (game.mp.uo `.so` 0x6d8dd, ghidra 0x7d8dd) stores
-`(int)(1000 * duration + 0.5)` as a float in `angles2[2]` (VERIFIED
-decompile), and vcod-server now does under protocol 22.
+**The earthquake.** UO's builtin (game.mp.uo `.so` 0x6d8dd, ghidra
+0x7d8dd) stores `(int)(1000 * duration + 0.5)` as a float in `angles2[2]`
+(VERIFIED decompile), not 1.1's `time`; vcod-server does under protocol
+22. The same probe on vcod-server (`--gametype-script`) sends the same
+events, entities and times (VERIFIED, live, 2026-10-15, and the gates
+above).
+
+**The player's trBase.** A player's entity goes out with `pos.trBase`
+truncated to whole units: `BG_PlayerStateToEntityState` (0x20a35) snaps
+it under a `| 0xc00` control word (`fldcw` at 0x20ab0) (VERIFIED
+disassembly, section 11.4), and vcod-server sends the
+truncated base.
 
 ### 15.3 The seat view
 
-`CG_VehicleView`'s motion on the eye, the gunner's sway and firing
-shake, is section 5's and drawn. The only other view write in a seat is
-0x30040580's: after its trap 0xf7 it stores `-(int at 0x30483218) *
-360 / 65536` (0x3007bd5c) into 0x304832b4 (0x3004073c..0x3004078e,
-VERIFIED disassembly). Taking `cg.predictedPlayerState` to start at
-0x304831b8, as its `eFlags` at +0x90 and `fWeaponPosFrac` at +0xec do,
-those are `delta_angles[2]` and `viewangles[2]`: the view's roll set
-against the roll delta, which no seat change turns, so 0 (INFERRED).
-vcod writes no roll. The turret view (0x30041550, `eFlags` 0x6000) has a
-sway and firing kick of its own off the turret weapon's file; that is a
-turret's, not a vehicle's: coduo-diff.md 19, "The turret view".
+`CG_VehicleView`'s motion on the eye, the gunner's sway and firing shake,
+is section 5's and drawn. The only other view write in a seat is
+0x30040580's: after its trap 0xf7 it stores `-(int at 0x30483218) * 360 /
+65536` (0x3007bd5c) into 0x304832b4 (0x3004073c..0x3004078e, VERIFIED
+disassembly). Taking `cg.predictedPlayerState` to start at 0x304831b8, as
+its `eFlags` at +0x90 and `fWeaponPosFrac` at +0xec do, those are
+`delta_angles[2]` and `viewangles[2]`: the view's roll set against the
+roll delta, which no seat change turns, so 0 (INFERRED). vcod writes no
+roll. The turret view (0x30041550, `eFlags` 0x6000) has a sway and firing
+kick of its own off the turret weapon's file; that is a turret's, not a
+vehicle's: coduo-diff.md 19, "The turret view".
