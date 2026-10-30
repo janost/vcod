@@ -1,86 +1,51 @@
 # CoD 1.1 mantling and the pmove ledge mechanics that actually exist
 
-**Verdict up front: CoD 1.1 multiplayer has no mantle.** No ledge-detection probe,
-no climb impulse, no mantle flag, no mantle anim path exists in the server-side
-pmove. The mechanic the task brief describes does not appear in any 1.1 module.
-What does exist is a ladder system (probe + climb + push-off), a stance-dependent
-jump, an 18-unit step-up, and a steep-slope slide - together they produce every
-"climb onto a ledge" behaviour a player sees in game. This document maps those
-mechanics with addresses so nobody searches for mantle again, and ends with
-port notes for `crates/common/src/pmove.rs`.
+**CoD 1.1 multiplayer has no mantle.** The server pmove has no ledge probe,
+climb impulse, mantle flag or mantle anim path. Climbing onto a ledge comes
+from four other mechanics: ladders (probe, climb, push-off), a stance-gated
+jump, an 18-unit step-up and the steep-slope slide. This doc maps them with
+addresses and ends with port notes for `crates/common/src/pmove.rs`.
 
-Everything below is INFERRED from static analysis of the binaries unless marked
-otherwise; nothing here was verified against live server behaviour.
+Document default: a claim with no label is INFERRED from static analysis of
+the binaries. Claims read off a live capture or out of a binary carry their
+own VERIFIED label.
 
 ## Sources
 
-Primary evidence is the retail 1.1d Linux dedicated server's game module,
-`private/server/main/game.mp.i386.so` (md5 `de8947beb6f86fbfb46f5adfaab3d3ed`,
-ELF32 i386). Its `.dynsym` exports every internal `PM_*`/`BG_*` function name
-and most globals (`pm`, `pml`, the `pm_*` tuning floats), which makes it the
-highest-signal CoD 1.1 game-module source available; `game_mp_x86.dll` is
-stripped and MSVC-compiled. The first LOAD segment maps at vaddr 0, so text and
-rodata VAs equal file offsets; `.data` VAs are file offset + 0x1000.
-
-Cross-checks to the Windows module used by other research docs:
-`main/game_mp_x86.dll` 1.1 (md5 `25e2fcfe02ca0c46f4e9ad2530d50691`) carries the
-same constant pool - e.g. the pair `39.0`/`78.0` sits adjacent in its rodata at
-file offsets `0x5fa90`/`0x5fa94`, matching the Linux jump code - but instruction
-patterns differ enough (GCC vs MSVC) that byte-level matches fail. Function-level
-findings are stated against the Linux binary only.
-
-Struct layouts come from the disassembly itself, cross-checked against the
-CoDExtended `shared.h` playerState/usercmd definitions
-(CoDExtended's `src/shared.h`). Warning for future readers:
-CoDExtended offsets match the *internal* server struct, while netfield-table
-offsets (see `nf_mp.txt`, `docs/protocol-1.1.md`) index a different layout -
-e.g. `groundEntityNum` lives at ps+0x54 internally (the code writes 1023 there)
-but at wire offset 124. Never mix the two.
-
-Disassembly: `objdump` of the .so. Call
-targets in that listing need the `.rel.text` PC32 relocations resolved manually;
-relocation entries also carry names for data references (`pml`, `pm`,
-`bg_ladder_yawcap`, ...).
+- `private/server/main/game.mp.i386.so`, the retail 1.1d Linux server's game
+  module (md5 `de8947beb6f86fbfb46f5adfaab3d3ed`, ELF32 i386). Its `.dynsym`
+  exports every `PM_*`/`BG_*` name and most globals (`pm`, `pml`, the `pm_*`
+  tunables). The first LOAD segment maps at vaddr 0: text and rodata VAs equal
+  file offsets; `.data` VAs are file offset + 0x1000. Function-level findings
+  are stated against this binary only.
+- `main/game_mp_x86.dll` 1.1 (md5 `25e2fcfe02ca0c46f4e9ad2530d50691`, stripped,
+  MSVC) carries the same constant pool (the `39.0`/`78.0` pair sits adjacent
+  at file offsets `0x5fa90`/`0x5fa94`, matching the Linux jump code); byte
+  patterns differ too much for function matches.
+- Struct layouts: the disassembly, cross-checked against CoDExtended's
+  `src/shared.h` playerState/usercmd. Those offsets are the *internal*
+  struct; netfield-table offsets (`nf_mp.txt`, `docs/protocol-1.1.md`) index
+  a different layout (`groundEntityNum` is ps+0x54 internally, where the code
+  writes 1023, and wire offset 124). Never mix the two.
+- Disassembly: `objdump` of the .so; call targets need the `.rel.text` PC32
+  relocations resolved (`tools/re/annotate_func.py`); relocations also name
+  data references (`pml`, `pm`, `bg_ladder_yawcap`, ...).
 
 ## Search log: where mantle was looked for and what was found instead
 
-The brief's hypothesis - mantle logic inside game_mp's compiled-in bg_pmove near
-the waterjump/ladder dispatch - is correct about *location* and wrong about
-*existence*. What I searched:
+Mantle would sit in game_mp's compiled-in bg_pmove near the ladder dispatch.
+Nothing is there:
 
-- **Symbols.** The full `.dynsym` export list (1004 functions) contains no
-  function or data symbol matching mantle/climb/vault/ledge beyond the ladder
-  set (`PM_LadderMove`, `pm_ladderScale`, `pm_ladderPushOff`,
-  `pm_ladderJumpTime`, `pm_ladderfriction`). Every pmove tunable is enumerated
-  below under "Tunables"; none is mantle-related.
-- **Strings.** `strings` over `game.mp.i386.so`, both `game_mp_x86.dll`s
-  (1.1/1.5), `cgame_mp_x86.dll` 1.1, `CoDMP.exe`, `CoDSP.exe`, `cgamex86.dll`
-  1.1/1.5: zero hits for "mantl" in all of them. "climb" hits only as anim
-  state tokens (`CLIMBUP`, `CLIMBDOWN`, `CLIMBMOUNT`, `CLIMBDISMOUNT`) in the
-  `mp/playeranim.script` token table shared with AI animation parsing.
-- **Decompilations** (`cgame_mp_x86.dll` 1.1, `cgamex86.dll` 1.1 and 1.5,
-  `CoDMP.exe`; the two `cgamex86.dll` are singleplayer, not game_mp): no climb/mantle-labelled references. cgame_mp knows exactly one
-  ladder string, `"hintLadder"` (use-button hint).
-- **Trace sites.** Every indirect call through the four trace hooks in
-  `pmove_t` (`pm+0xE8` trace, `+0xEC`, `+0xF0`, `+0xF4`, read via
-  `PM_SlideMove` at 0x34988) inside the pmove region 0x2E400-0x35000 was
-  inspected. They implement: `PM_CorrectAllSolid` (fn at 0x30214, see "A start
-  inside a solid"), ground trace +
-  slope/water categorisation (fn at 0x30474), three sight-trace checks (fn at
-  0x30778), stance-change headroom probes plus jump plus ground snap (fn at
-  0x316F4), the prone debug visualiser gated on `g_debugProneCheck` (code at
-  0x32FA1), and ladder detection (fn at 0x336E8). None probes forward-then-up
-  over a ledge; the geometry of each is summarised below.
-- **Anim selection.** `mp/playeranim.script` (in pak4.pk3, extracted) defines
-  `climbup`/`climbdown` movement types mapping to `pb_climbup`/`pb_climbdown`.
-  In the binary these are MOVETYPE condition values 16 and 17 (name table at
-  .data 0x7A3E0..0x7A470: UNUSED..TURNLEFT=15, CLIMBUP, CLIMBDOWN), selected
-  only in one branch, decoded under "Ladders" below. There is no second
-  selection site that could serve a mantle.
+| Searched | Result |
+|---|---|
+| `.dynsym` (1004 functions) | No mantle/climb/vault/ledge symbol beyond the ladder set (`PM_LadderMove`, `pm_ladderScale`, `pm_ladderPushOff`, `pm_ladderJumpTime`, `pm_ladderfriction`). No tunable under "Tunables" is mantle-related. |
+| `strings` over `game.mp.i386.so`, both `game_mp_x86.dll`s (1.1/1.5), `cgame_mp_x86.dll` 1.1, `CoDMP.exe`, `CoDSP.exe`, `cgamex86.dll` 1.1/1.5 | No "mantl". "climb" only as anim tokens (`CLIMBUP`, `CLIMBDOWN`, `CLIMBMOUNT`, `CLIMBDISMOUNT`) in the `mp/playeranim.script` token table shared with AI anim parsing. |
+| Decompilations of `cgame_mp_x86.dll` 1.1, `cgamex86.dll` 1.1/1.5 (single-player), `CoDMP.exe` | No climb/mantle references. cgame_mp's one ladder string is `"hintLadder"` (use hint). |
+| Every indirect call through `pmove_t`'s four trace hooks (`pm+0xE8`, `+0xEC`, `+0xF0`, `+0xF4`, read via `PM_SlideMove` at 0x34988) in the pmove region 0x2E400-0x35000 | `PM_CorrectAllSolid` (0x30214, "A start inside a solid"); ground trace and slope/water categorisation (0x30474); three sight traces (0x30778); stance headroom probes, jump and ground snap (0x316F4); the `g_debugProneCheck` visualiser (0x32FA1); ladder detection (0x336E8). None probes forward then up over a ledge. |
+| Anim selection | `mp/playeranim.script` (pak4.pk3) maps `climbup`/`climbdown` to `pb_climbup`/`pb_climbdown`: MOVETYPE values 16 and 17 (name table at .data 0x7A3E0..0x7A470: UNUSED..TURNLEFT=15, CLIMBUP, CLIMBDOWN), selected in one branch only ("Ladders"). |
 
-Negative result is high-confidence: the server module is authoritative for
-movement, its pmove region is fully mapped, and nothing in it boosts or
-teleports a player over a ledge except ladders.
+The server module is authoritative for movement and its pmove region is fully
+mapped: nothing in it lifts a player over a ledge except ladders.
 
 ## Frame flow of the normal-move path
 
@@ -92,7 +57,7 @@ runs, in order:
 |---|---|---|
 | pre | fn 0x30778 | pre-move bookkeeping |
 | | saves old water level into pml | drives EV_WATER_TOUCH/LEAVE at frame end (events 144/145, fired at 0x3435F/0x3438B) |
-| | fn 0x316F4 | spectator bbox setup, stance transitions, viewheight lerp, the prone dive (read as the ground jump until 2026-09-27, "Jumps"), ground snap |
+| | fn 0x316F4 | spectator bbox setup, stance transitions, viewheight lerp, the prone dive ("Going prone"), ground snap |
 | | fn 0x30474 | ground trace, walking/steep-slope categorisation, landing events |
 | | `PM_UpdateAimDownSightFlag` etc. | weapon/stance updates, then `PM_UpdatePronePitch` (0x342dd) |
 | | fn 0x336E8 | **ladder probe**, sets/clears `PMF_LADDER` + `vLadderVec` |
@@ -102,9 +67,7 @@ runs, in order:
 
 Both movers are Q3-shaped: wishdir from cmd and yaw, wishspeed from the cmd
 scale ("The wish speed" below), accelerate (`pm_accelerate` = 9.0 ground /
-1.0 air), then `PM_StepSlideMove(gravity)`. An earlier read of this table
-had the two movers swapped and 0x2F258 down as a steep-slope mover:
-VERIFIED, 0x2F258 opens with a call to 0x2eb98 whose non-zero return goes to
+1.0 air), then `PM_StepSlideMove(gravity)`. VERIFIED, 0x2F258 opens with a call to 0x2eb98 whose non-zero return goes to
 0x2F03C (0x2f26a), Q3's `PM_CheckJump` then `PM_AirMove` at the top of
 `PM_WalkMove` ("Jumps"), and the dispatch tests `pml+0x2c` (0x34312), the `walking`
 slot of the `pml_t` layout the rest of this module matches.
@@ -160,14 +123,9 @@ one rises 34 (`a_125_fps_jump_goes_higher` in `pmove.rs`).
 
 ## Jumps
 
-Read out of `game.mp.i386.so` on 2026-09-27 with `tools/re/annotate_func.py`.
-Every jump a player takes, off the ground or off a ladder, is one function,
-`PM_CheckJump` at 0x2eb98. Two earlier reads of this section were wrong
-about it: the block at 0x31cc0 that it called the ground jump is the prone
-dive ("Going prone", under "Prone"), and 0x2eb98 was down as a push-off
-reached from a ladder and a steep-slope mover only, where the "steep-slope
-mover" 0x2f258 is `PM_WalkMove` ("Frame flow"). The dive's heights 34 and 24
-were what vcod jumped at until the 2026-09-27 port.
+Every jump, off the ground or off a ladder, is `PM_CheckJump` at 0x2eb98.
+Trap: the block at 0x31cc0 (heights 34 and 24) is the prone dive ("Going
+prone"), not a ground jump.
 
 ### Who calls it
 
@@ -263,9 +221,7 @@ is scaled by 0.75 (0x2ec72, rodata 0x708d0); a flattened copy of
 and x and y alone scale by `pm_ladderPushOff` 128.0 (0x2ed5a, 0x7082c);
 `pm_flags` 0x10 is cleared (0x2ed7a). INFERRED: only a ladder push-off
 resets the horizontal velocity, to exactly 128 along the forward reflected
-off a wall the player faces, or along the plain forward otherwise. An
-earlier read had "off a ladder, along the horizontal forward" as the ground
-case; it is the not-facing arm of the ladder block.
+off a wall the player faces, or along the plain forward otherwise.
 
 VERIFIED: 0x2ed80 tests 0x10 again right after that clear and picks event
 0x53 on it (0x2ed86). INFERRED: unreachable.
@@ -278,8 +234,6 @@ is 0 and `+ 0x46` otherwise (0x2ed90-0x2eda8), handed to
 `BG_AddPredictableEventToPlayerstate` (0x2edb9), which returns without
 writing on event 0 (0x2e31e). VERIFIED, on the wire: the carentan capture's
 takeoff adds event 75 and pavlov's 74, `EV_JUMP_*` on materials 5 and 4.
-An earlier read in `cod11-sound-system.md` said the ground jump emits no
-event.
 
 VERIFIED: `aimSpreadScale` (ps+0x3d8) takes 64.0 (0x708dc), capped at 255.0
 (0x708e0), at 0x2edc6-0x2edf3; `BG_AnimScriptEvent(ps, 3, 0, 1)` or `(ps, 4,
@@ -340,19 +294,15 @@ at one cmd a 50 ms frame the landing frame starts at -210, short of the
 
 ## Prone: the fit check, the body swing and the yaw cap
 
-Read out of `game.mp.i386.so` on 2026-09-01 with
-`tools/re/annotate_func.py`, which resolves the PIC relocations; without
-them every call in this code disassembles as a placeholder and every
-tunable as `ds:0xc`. Cvar defaults are the retail server's own console
-output (`bg_prone_yawcap` and friends, dedicated server, stock config).
-
-Three mechanisms, and vcod had none of them.
+Read with `tools/re/annotate_func.py` (without its PIC relocations every
+call is a placeholder and every tunable `ds:0xc`). Cvar defaults are the
+retail dedicated server's console output, stock config.
 
 ### The fit check, `BG_CheckProneValid` (0x2d428)
 
-`BG_CheckProne` (0x2e358) is a 98-byte forwarder to it, and the engine
-calls the pair to ask "can a body lie here facing this yaw". Signature, from
-the forwarder and the call site at 0x33174:
+`BG_CheckProne` (0x2e358) is a 98-byte forwarder to it: "can a body lie
+here facing this yaw". Signature, from the forwarder and the call site at
+0x33174:
 
     BG_CheckProneValid(ignoreEnt, origin, halfWidth, 30.0, yaw,
                        &outDir, &outPitchA, &outPitchB, ..., trace, mask...)
@@ -364,22 +314,18 @@ flag is clear (0x2d4c2, 0x2d4d2).
 
 The first and decisive trace (0x2d57a-0x2d664): a box of mins `(-6,-6,-6)` to
 maxs `(6,6,6)` swept from the origin **54 units along yaw - 180 degrees**,
-that is, straight backwards from the facing (constants at rodata 0x70174,
-0x70178, 0x7017c, 0x70180). That is the space the body needs behind you when
-you lie down, and it is why standing with your back to a wall refuses the
-prone. The traces that follow sample the ground along the body and write
-`fTorsoHeight`, `fTorsoPitch` and `fWaistPitch` ("The ground samples",
-below; an earlier reading of this section had them writing the two prone
-pitches, which `PM_UpdatePronePitch` owns).
+straight backwards (constants at rodata 0x70174, 0x70178, 0x7017c,
+0x70180): the room the body needs behind the player, so a back to a wall
+refuses prone. The traces that follow sample the ground along the body and
+write `fTorsoHeight`, `fTorsoPitch` and `fWaistPitch` ("The ground
+samples"), not the two prone pitches, which `PM_UpdatePronePitch` owns.
 
-VERIFIED live 2026-09-01, independently of the disassembly: the same input
-held for the same three seconds went prone at one spawn and was refused at
-another on the same map.
+VERIFIED live: the same input held three seconds went prone at one spawn
+and was refused at another on the same map.
 
 ### The ground samples
 
-Read 2026-10-09 with `tools/re/annotate_func.py` over 0x2d428..0x2e212.
-Rodata, VERIFIED: 10.0 (0x7016c), 0.7 (0x70170), -6.0 and 6.0 (0x70174,
+Range 0x2d428..0x2e212. Rodata, VERIFIED: 10.0 (0x7016c), 0.7 (0x70170), -6.0 and 6.0 (0x70174,
 0x70178), 180.0 (0x7017c), 54.0 (0x70180), 2.0 (0x70184), 24.0 (0x70188),
 22.0 (0x7018c), 60.0 (0x70190), 2.5 (0x70194), -0.75 (0x70198), 30.0
 (0x7019c), 0.5 (0x701a0), 1.5 (0x701a4), -50.0 (0x701a8), 70.0 (0x701ac),
@@ -461,7 +407,7 @@ kerb; the mound's pitches reach 19.3 degrees. Replayed on ours
 (`playerstate_slope_ab`, rebased): the street on retail's to the printed
 hundredth on every row, the mound `fTorsoHeight` within 0.0001 and both
 pitches within 0.11 degrees, where our terrain trace names the other of two
-facets (one row). The revert below changed no row of either capture.
+facets (one row).
 
 `PM_VerifyPronePosition` is "Step-up and steep slopes" ("The step event and
 the velocity scale"): a prone move past the entry gate that no longer fits
@@ -513,8 +459,7 @@ writers in the module are this function and the static prone-entry routine
 around 0x31c60, which also writes both pitch fields through
 `PitchForYawOnNormal` and `AngleDelta`.
 
-What the section above leaves out, read on 2026-09-27 with
-`tools/re/annotate_func.py` and measured with the prone crawl capture below:
+Further details, measured with the prone crawl captures below:
 
 - **The body also swings while the player moves.** INFERRED, from the branch
   at 0x330c0: inside the soft edge the swing still runs when the usercmd's
@@ -527,9 +472,9 @@ What the section above leaves out, read on 2026-09-27 with
   from 0x3306d-0x3307b and 0x331c8-0x33265: the excess pushed into
   `delta_angles[1]` is computed from the delta taken before the swing, and the
   view is then set to `AngleNormalize360(proneDirection -/+ bg_prone_yawcap)`
-  off the direction the swing just stored at 0x33193. A server that measured
-  the excess after the swing pushed `delta_angles` short by one frame's swing
-  and read 0.88 degrees off retail's on the capture's cap.
+  off the direction the swing just stored at 0x33193. Measuring the excess
+  after the swing pushes `delta_angles` short by one frame's swing (0.88
+  degrees off retail's on the capture's cap).
 - **The pitch cap.** VERIFIED: the constants 45.0 and -45.0 at rodata
   0x70c94 and 0x70c98, loaded at 0x332a7 and 0x332be; the push lands in
   `delta_angles[0]` at 0x33311 and the view is rebuilt off `ps+0x370` at
@@ -549,10 +494,10 @@ What the section above leaves out, read on 2026-09-27 with
   below a float delta's. `PM_SetMovementDir`'s prone arm reads
   `(int)AngleDelta(proneDirection, viewangles[1])` the same way (0x2e9aa), so
   a view on the cap reads `movementDir` 84, not 85. VERIFIED, vcod
-  measurement (2026-10-13, `moves_ab.rs`, the turns captures): with the folds
-  the cap's `delta_angles[1]` matches retail on all 24 snapshots of the 1.1
-  turn past the cap (one short off each before) and `movementDir` on the 8
-  (6 on 1.5) it read 85.
+  measurement (`moves_ab.rs`, the turns captures): with the folds the cap's
+  `delta_angles[1]` matches retail on all 24 snapshots of the 1.1 turn past
+  the cap (one short off each without) and `movementDir` on the 8 (6 on
+  1.5) it read 85.
 - **The fit trace starts at 24.** VERIFIED: every caller passes 30.0 as the
   height (0x70bdc, 0x70c8c, 0x70c9c, 0x70d20) and the function subtracts the
   6.0 half box (0x70178) from it before adding the origin's z. INFERRED, from
@@ -621,21 +566,21 @@ the same way through MSVC's `_ftol` (0x3005a890); its callers pass the
 float difference, as 1.5 does. VERIFIED, disassembly.
 
 The call sites, read off the relocations (1.1d) and the call targets (1.5b,
-UO), and what vcod runs at each (2026-10-18):
+UO), and what vcod runs at each:
 
 | Site | 1.1d | 1.5b / UO | vcod |
 |---|---|---|---|
 | `PM_SetMovementDir` | 0x2e9ab, 0x2eaec, 0x2eb2f | in 0x1f48f / 0x23f62 | shorts (`aim::angle_normalize_180`) |
-| Going prone, the torso clamp | 0x31ed7 | in 0x232c4 / 0x27e16 | shorts since 2026-10-18 (`enter_prone`) |
-| Ladder yaw cap, `bg_ladder_yawcap` | 0x32ed0, 0x32f68 | `PM_UpdateViewAngles` (`Accurate`) | modelled since 2026-10-19 (`cap_ladder_yaw`) |
+| Going prone, the torso clamp | 0x31ed7 | in 0x232c4 / 0x27e16 | shorts (`enter_prone`) |
+| Ladder yaw cap, `bg_ladder_yawcap` | 0x32ed0, 0x32f68 | `PM_UpdateViewAngles` (`Accurate`) | modelled (`cap_ladder_yaw`) |
 | Prone yaw delta | 0x3306e, 0x3307c | swing fit 0x25ff5 and `PM_UpdateViewAngles` | shorts |
-| Prone yaw placed | 0x33266 (`AngleNormalize360`) | `Accurate` | shorts in 0..360 since 2026-10-18 on 1.1 |
-| Prone pitch cap delta | 0x33295, 0x332a3 | `PM_UpdateViewAngles` | shorts since 2026-10-18 (`cap_prone_pitch`) |
-| Prone pitch placed | 0x33346 (`AngleNormalize180`) | `Accurate` | shorts on 1.1 since 2026-10-18 |
-| `PM_UpdatePronePitch` | 0x334e3, 0x335e0, 0x33577, 0x33674 | 0x26fc8, 0x270fc, `Accurate` | shorts (1.5 and UO's difference since 2026-10-18) |
-| `PM_LadderMove` legs | 0x33daa | `PM_LadderMove` | shorts since 2026-10-18 (`ladder_move`) |
-| UO seat arcs | | UO `PM_UpdateViewAngles` | shorts since 2026-10-18 (`cmd::clamp_view`) |
-| `SetClientViewAngle` prone arm | 0x41e83..0x4203c | 0x3bf08 / 0x44301 | modelled since 2026-10-18 (`prone_view_angle`) |
+| Prone yaw placed | 0x33266 (`AngleNormalize360`) | `Accurate` | shorts in 0..360 on 1.1 |
+| Prone pitch cap delta | 0x33295, 0x332a3 | `PM_UpdateViewAngles` | shorts (`cap_prone_pitch`) |
+| Prone pitch placed | 0x33346 (`AngleNormalize180`) | `Accurate` | shorts on 1.1 |
+| `PM_UpdatePronePitch` | 0x334e3, 0x335e0, 0x33577, 0x33674 | 0x26fc8, 0x270fc, `Accurate` | shorts (1.5 and UO: the difference) |
+| `PM_LadderMove` legs | 0x33daa | `PM_LadderMove` | shorts (`ladder_move`) |
+| UO seat arcs | | UO `PM_UpdateViewAngles` | shorts (`cmd::clamp_view`) |
+| `SetClientViewAngle` prone arm | 0x41e83..0x4203c | 0x3bf08 / 0x44301 | modelled (`prone_view_angle`) |
 | `BG_PlayerStateToEntityState(Extrapolate)` | 0x2ce76, 0x2ce9a, 0x2d3c8, 0x2d3ec | same | shorts (`angle_normalize180`) |
 | `BG_CheckProneValid` | 0x2e1a3, 0x2e1f8 | same | shorts |
 | `BG_Player_DoControllers` | 0x2b87c | | shorts (`playerpose`) |
@@ -644,9 +589,9 @@ UO), and what vcod runs at each (2026-10-18):
 | turret use cone | 0x528c2 | | shorts (`turret.rs`) |
 | `G_MissileLandAngles`, `fire_grenade` | 0x53707.., 0x54585 | same | the missile's angles (cod11-combat.md) |
 
-VERIFIED, the addresses; the table's "1.5b / UO" function names come from
-the Ghidra exports of the 1.5b and UO game modules, whose static
-functions are unnamed. VERIFIED live (2026-10-18, `playerstate_slope_ab`,
+VERIFIED, the addresses; the "1.5b / UO" function names come from Ghidra
+exports of those modules, whose static functions are unnamed. VERIFIED live
+(`playerstate_slope_ab`,
 the two prone crawls `mp_carentan-dm-slope-8ms-prone-street.txt` and
 `-mound.txt`): with the view yaw placed by a float, our view sat up to
 0.0055 degrees (one short) off retail's on the snapshots where the cap
@@ -733,16 +678,16 @@ the body by the end point's rounding even on flat ground. vcod:
 
 VERIFIED, vcod measurement (`predict_ab`'s
 `predictor_replays_retail_slope_runs` over every 1.1d slope capture that
-logs `wire=`, 2026-10-20): before the two, the moves capture's prone dive
-at `commandTime` 48443-48485 came out 1-4 ulps off retail's z in the air
-(a C model of the fall with the end point off a 30-unit box reproduces
-ours, with a box of half height 22-34.5 retail's bits), the moves,
-speedgrav, springfield and deadlink runs held 4, 2, 2 and 1 such snapshots,
-and the kerb run's lie-down from a crouch at 30541 kept -7.875002 where
-retail lands on -7.875. With both, all 16 captures replay to the bit,
-and so do the two prone crawls recaptured with `wire=` the same day
-(`mp_carentan-dm-slope-8ms-prone-{street,mound}-1.1.txt`, 1610 snapshots
-each), which without them sit 5 and 6 snapshots off.
+logs `wire=`): with both, all 16 captures replay to the bit, and so do the
+two prone crawls (`mp_carentan-dm-slope-8ms-prone-{street,mound}-1.1.txt`,
+1610 snapshots each). Without them the moves capture's prone dive
+(`commandTime` 48443-48485) lands 1-4 ulps off retail's z in the air (a C
+model of the fall off a 30-unit box reproduces that; a box of half height
+22-34.5 gives retail's bits), the moves, speedgrav, springfield and
+deadlink runs miss 4, 2, 2 and 1 snapshots, the kerb run's lie-down from a
+crouch at 30541 keeps -7.875002 against retail's -7.875, and the crawls
+miss 5 and 6.
+
 
 ### Prone Blocked, `pm_flags` 0x8000
 
@@ -768,15 +713,15 @@ The client's "Prone Blocked" notice reads the bit
 (`PlayerState::prone_blocked`), the server writes it and the predictor
 carries it.
 
-VERIFIED live, 2026-10-09: `--save-motion` against `tools/run_server.sh
-mp_pavlov` (full-branch cmds), whose spawn refused the `prone` pose: every
-snapshot of the 3 s hold read `pm_flags` 0x48000, eFlags 16 and eye 60, and
-the pose ended at `eventSequence` 181 with all four ring slots 140. So the
-bit and event 140 come with every refused cmd. The committed
-`mp_pavlov-dm-motion.txt` (2026-09-02) refused the same pose with one 140
-and no 0x8000, because its held prone went out compact and decoded as
-released after the first cmd; `playerstate_motion_ab` names those two
-poses in its gaps.
+VERIFIED live: `--save-motion` against `tools/run_server.sh mp_pavlov`
+(full-branch cmds), whose spawn refused the `prone` pose: every snapshot of
+the 3 s hold read `pm_flags` 0x48000, eFlags 16 and eye 60, and the pose
+ended at `eventSequence` 181 with all four ring slots 140. So the bit and
+event 140 come with every refused cmd. The committed
+`mp_pavlov-dm-motion.txt` refused the same pose with one 140 and no 0x8000
+(its held prone went out compact and decoded as released after the first
+cmd, the pre-2026-09-02 probe artifact); `playerstate_motion_ab` names those
+two poses in its gaps.
 
 ### The forced-stance events
 
@@ -824,7 +769,7 @@ with "0", "1" or "2" (0x3001df6d). INFERRED: the event sets the client's
 stance to stand, crouch or prone, which its next cmd carries (CoDMP.exe
 0x40ae90 reads `cl_stance` 1 as crouch and 2 as prone).
 
-VERIFIED live, 2026-10-09: `client-probes/probe_pronedrop` on
+VERIFIED live: `client-probes/probe_pronedrop` on
 `tools/run_probe.sh mp_carentan` with a `--probe-fall --probe-fall-prone 90`
 client, which holds prone on every cmd. Lifted 100 units over the street at
 (900 1680), with the wall to the south inside the body's reach, every
@@ -835,7 +780,7 @@ spectator's first snapshot, the prone key already held, read `pm_type` 4
 with 140 in the ring. `vcod-server` with the same probe reads the same on
 all three.
 
-VERIFIED live, 2026-10-20: `client-probes/probe_rise` with a
+VERIFIED live: `client-probes/probe_rise` with a
 `--probe-uo-weapon direct --probe-cmd-ms 50` client, whose inputs the gsc
 sets (fixtures `mp_carentan-dm-slope-50ms-rise-1.1.txt` and
 `mp_ship-dm-slope-50ms-rise-1.1.txt` in `crates/server/tests/fixtures/playerstate/`).
@@ -853,7 +798,7 @@ and each with 0x2 all raised 140 on every cmd and left the body standing.
 `rise_ab` holds `vcod-server` to each phase's settled `pm_flags`,
 `eFlags`, eye target and event ids.
 
-VERIFIED live, 2026-10-20: the same probe and client on 1.5b and UO 1.51b
+VERIFIED live: the same probe and client on 1.5b and UO 1.51b
 (`COD_VERSION=1.5` / `uo tools/run_probe.sh`; fixtures
 `mp_carentan-dm-slope-50ms-rise-1.5.txt`, `-rise-uo.txt`,
 `mp_ship-dm-slope-50ms-rise-1.5.txt` and `-rise-uo.txt`, same directory).
@@ -888,17 +833,16 @@ default and `forced_stance` honours it.
 
 ### Prone under a setOrigin hold
 
-The question came from `probe_istouching`'s first layout (2026-10-20): a
-client set by `setOrigin` every frame at (844 3480 -23.75), mp_carentan's
-tdm spawn at (844 3480 -8), crouched and then held prone. UO kept him
-crouched for the whole 2 s, and 1.1d and 1.5b laid him down.
+Layout: `probe_istouching`'s client set by `setOrigin` every frame at (844
+3480 -23.75), mp_carentan's tdm spawn at (844 3480 -8), crouched, then
+holding prone. In its first runs UO kept him crouched for 2 s while 1.1d and
+1.5b laid him down.
 
-VERIFIED, retail, 2026-10-21: I reran that layout on UO 1.51b and 1.1d,
-with the same 60 Hz cmds and no `--probe-cmd-ms`. UO's snapshots flipped
-`pm_flags` between 0x48002 and 0x40002 for the whole prone hold. That is a
-refusal (Prone Blocked, above) on every other frame. The view read yaw 135,
-the angle the tdm spawn gave him. `client-probes/probe_pronecrouch` then
-held the same spot facing 180 and facing 135, on all three servers:
+VERIFIED, retail, 60 Hz cmds, no `--probe-cmd-ms`: UO's snapshots flipped
+`pm_flags` between 0x48002 and 0x40002 for the whole prone hold, a refusal
+(Prone Blocked, above) every other frame, with view yaw 135 from the tdm
+spawn. `client-probes/probe_pronecrouch` then held the same spot facing 180
+and facing 135, on all three servers:
 
 - Facing 180, the crouch-then-prone press lies down on 1.1d, 1.5b and UO.
 - Facing 135, all three refuse it, held or standing on the ground. The
@@ -924,13 +868,12 @@ grounded cmd on all three.
 On probe_legs' flat floor (932 -376 -151.875), crouch then prone lies
 down at once on all three, with `up` 0 or -127 (VERIFIED, same probe).
 
-`pronecrouch_ab` replays each capture's cmds on the side of a frame
-retail ran them on (`ProbeHold::ran`). It holds ours to every snapshot's
-`pm_flags & 3`, height and events, with no gap rows on 1.1d, 1.5b or UO,
-and it passed without any pmove change. One thing to watch: the probe's
-first `setOrigin` drop of a unit lands at -151.64139 on three of four retail
-runs and at -151.875 on the fourth, depending on how the cmds split it. A
-replay has to send the captured cmds from before the drop, so the probe
+`pronecrouch_ab` replays each capture's cmds on the side of a frame retail
+ran them on (`ProbeHold::ran`) and holds ours to every snapshot's
+`pm_flags & 3`, height and events, no gap rows on 1.1d, 1.5b or UO. Trap:
+the probe's first `setOrigin` drop of a unit lands at -151.64139 on three of
+four retail runs and at -151.875 on the fourth, by how the cmds split it,
+so a replay sends the captured cmds from before the drop and the probe
 waits 4 s before it moves the player.
 
 ### `pm_flags` 0x4000
@@ -953,7 +896,7 @@ receiver is a player, calls `Scr_GetBool` and stores the result at
 `client+0x21e0`; no other instruction in the module carries the
 displacement 0x21e0. INFERRED: nothing reads the stored flag.
 
-VERIFIED live, 2026-10-09: `client-probes/probe_freeze` on
+VERIFIED live: `client-probes/probe_freeze` on
 `tools/run_probe.sh mp_carentan` (port 29951) calls `freezecontrols(true)`
 on the joining player on its first frame alive (`PROBE freeze 12250 vcod`),
 and a `--net-probe --save-motion` client then held each motion pose. Every
@@ -978,9 +921,8 @@ multiplier instead, and a slick or fatal one the same 0.67
 
 ### The eye through a stance change
 
-Read out of `game.mp.i386.so` on 2026-09-27 with
-`tools/re/annotate_func.py`. The function at 0x309d8 has no symbol; this
-doc calls it `PM_ViewHeightAdjust`. Field offsets are CoDExtended's
+The function at 0x309d8 has no symbol; this doc calls it
+`PM_ViewHeightAdjust`. Field offsets are CoDExtended's
 `shared.h`: `viewHeightTarget` ps+0xcc (int), `viewHeightCurrent` ps+0xd0
 (float), `viewHeightLerpTime` ps+0xd4, `viewHeightLerpTarget` ps+0xd8,
 `viewHeightLerpDown` ps+0xdc, and the prone, crouch and standing heights at
@@ -1046,8 +988,7 @@ VERIFIED live, the street capture's sideways prone press, first cmd at
 leg down to crouch, 58.5 - 19/26 * 2.5), 41.5 at 81094 (percent 90), then
 38.909092 at 81135, 27 ms into a 400 ms leg to prone stamped at 81108
 (percent 6, 40 - 6/11 * 2), 15.8 at 81293 (percent 46) and 17.95 at 81394
-(percent 71). That is the dip the section below used to list as not
-modelled. The dive's 300 ms is its 100 and 200 ms legs.
+(percent 71). The dive's 300 ms is its 100 and 200 ms legs.
 
 The walk scale. VERIFIED, 0x2e7a1-0x2e7f0: reads of `pm_flags` 0x1,
 `viewHeightLerpTarget` against the prone height, `viewHeightLerpTime`,
@@ -1089,11 +1030,10 @@ same legs for the hip cone (`cod11-combat.md` 2.1). `PlayerState::view_lerp_ms` 
 - viewHeightLerpTime`; the server and the predictor turn it into the wire
 stamp. The prone captures do not record the three lerp fields, so the gate
 carries our own leg across each rebase and holds the eye to retail's `vh`
-instead. VERIFIED, vcod measurement (2026-09-27, `playerstate_slope_ab.rs`
-with `SLOPE_REPORT=1`, rebased): the street's max dxy went from 2.736 to
-0.429, its p99 from 0.233 to 0.048 and its rows past a unit from 1 to 0;
-the mound (0.522, none past a unit) and the two route captures did not
-move; the eye matches retail's printed `vh` on all 2851 prone rows.
+instead. VERIFIED, vcod measurement (`playerstate_slope_ab.rs` with
+`SLOPE_REPORT=1`, rebased): the street's max dxy 0.429 (2.736 without the
+port), p99 0.048, no row past a unit; the mound 0.522, none past a unit;
+the eye matches retail's printed `vh` on all 2851 prone rows.
 
 ### What the prone crawl capture measured
 
@@ -1109,37 +1049,31 @@ street is the 4-degree street at (900 1930), the mound the 19-degree terrain
 at (-224 60). `playerstate_slope_ab.rs` replays the cmds on our mover,
 rebased on retail's state at every snapshot.
 
-VERIFIED, against the mover before this section's fixes: each dive read up
-to 10.7 units off retail, `proneDirection` stood still through 99 of
-retail's 172 swinging snapshots, the view pitch read 39.1 degrees off on the
-street and 48.7 on the mound where retail's cap held it, and the yaw cap's
-`delta_angles[1]` 0.88 off. Each of those is a correction a retail client
-predicting its own prone movement takes from the server, which is the
-"twitches sometimes when proning" of the hand check. After them: origin
-|dz| at most 0.17 on the mound up to `commandTime` 84000, no row past a
-unit on either spot (the last, 2.7 units on a sideways prone press, went
-with the walk scale's blend, "The eye through a stance change"),
-`proneDirection` within 0.5 degrees, both pitches within 1.42, the view and
-`delta_angles` within one 16-bit step and the eye on retail's.
+VERIFIED, vcod measurement: origin |dz| at most 0.17 on the mound up to
+`commandTime` 84000, no row past a unit on either spot, `proneDirection`
+within 0.5 degrees, both pitches within 1.42, the view and `delta_angles`
+within one 16-bit step and the eye on retail's. A mover without the
+swing, the caps and the dive reads each dive up to 10.7 units off,
+`proneDirection` still through 99 of retail's 172 swinging snapshots, the
+view pitch 39.1 degrees off on the street and 48.7 on the mound, and the
+yaw cap's `delta_angles[1]` 0.88 off: corrections a predicting client takes
+from the server as prone twitches.
 
-Still apart, and not modelled:
+Still apart, not modelled:
 
 - which of two terrain facets the ground trace names under a crawl, 1.4
   degrees of prone pitch on the mound;
 - a prone player wedged airborne against the `clip_nosight` brush behind
   the mound's crest, where the capture's last three presses ended; the gate
   stops at 84000 for that reason;
-- `pm_flags` 0x400 (event 141 and the airborne 0x8000 refusal are modelled
-  since, "Prone Blocked"; the ground samples, the revert and the three body
-  fields are "The ground samples").
+- `pm_flags` 0x400.
 
 ### Why it matters to a server
 
 All three are `bg_`/`PM_` code, so a retail client predicts them. A server
-that does none of them disagrees with its own clients every frame a player is
-prone: the client swings the body and clamps the view locally, the server's
-snapshot says otherwise, and the view is yanked on going prone and blocked
-when crawling. That is the shape of the bug this section was written for.
+without them disagrees with its clients every prone frame: the client swings
+the body and clamps the view locally, the snapshot says otherwise, and the
+view is yanked on going prone and blocked when crawling.
 
 Because the refusal depends on where a player spawns, the A/B gate
 `crates/server/tests/playerstate_motion_ab.rs` skips a prone pose retail
@@ -1155,8 +1089,9 @@ refused rather than pinning it, and fails if a capture refuses every one.
 3. Direction: `-vLadderVec` if already on a ladder and airborne (sticking with
    the wall you left), else the horizontal forward.
 4. Gates: clears `PMF_LADDER` first; skip when within `pm_ladderJumpTime` =
-   300 ms (int at rodata 0x70830; bytes 2c 01 00 00 - an earlier read of
-   this file said 299) of `ps.jumpTime` (compare 0x12B at 0x33822);
+   300 ms (int at rodata 0x70830, bytes 2c 01 00 00) of `ps.jumpTime`
+   (compare 0x12B at 0x33822);
+
    while walking additionally require `forwardmove > 0`.
 5. Geometry: box trace from origin, mins/maxs taken from `pm->mins/maxs`
    (which PmoveSingle refreshes each frame from `ps.mins/maxs`, ps+0x324/0x330)
@@ -1166,14 +1101,13 @@ refused rather than pinning it, and fails if a capture refuses every one.
    0x3383d-0x33894); trace length = distance from step 2 along the
    direction (trace call at 0x338F4). Before the trace, a body whose
    `PM_GetEffectiveStance` reads 1 (prone, 0x337b0-0x33805) never takes a
-   ladder, and `pm_type > 5` leaves the ground (0x33782-0x337a5). An
-   earlier read of this file had the top lowered by the probe distance
-   and the floor at the feet; vcod carried that, and an RTCW guard that
-   took a far airborne hit only behind a confirming back trace and a 200
-   push into the wall, until 2026-10-12. VERIFIED, the crow's nest capture
-   under "Over the top" below: with the old box the replay lets go of the
-   rungs at the wrong height and misses retail by up to 15.7 units; the
-   hold ladder capture matches either way.
+   ladder, and `pm_type > 5` leaves the ground (0x33782-0x337a5). Trap:
+   RTCW's box (top lowered by the probe distance, floor at the feet) and its
+   guard (a far airborne hit taken only behind a back trace and a 200 push
+   into the wall) are not CoD's. VERIFIED, the crow's nest capture under
+   "Over the top": with that box the replay lets go of the rungs at the
+   wrong height and misses retail by up to 15.7 units; the hold ladder
+   capture matches either way.
 6. Accept when the trace hits (`fraction < 1`) **and** the hit surface flags
    have bit 0x8 set (Q3's `SURF_LADDER` value; test of the trace_t surfaceFlags
    byte at 0x33908). Store the plane normal into `ps.vLadderVec` (ps+0x58) and
@@ -1230,44 +1164,34 @@ So ladders are brushes flagged at the material level, not entities.
   past `forward.z` 0.15 (about 8.6 degrees up) at 95; the climb's sign flips
   at `forward.z` -0.25 (14.5 degrees down). VERIFIED, `client-probes/
   probe_ladder` with `--probe-ladder 90 --save-ladder` on `tools/run_probe.sh
-  mp_ship` (`crates/server/tests/fixtures/playerstate/mp_ship-dm-ladder.txt`,
-  2026-10-12): the wire velocity settles at 59 level, 95 at 45 up, -95 at 60
+  mp_ship` (`crates/server/tests/fixtures/playerstate/mp_ship-dm-ladder.txt`): the wire velocity settles at 59 level, 95 at 45 up, -95 at 60
   down, -59 backing at a level view (the frame's `SnapVector`), 18 at 10
   down; a 400 ms strafe settles at 38 sideways and the release bleeds it to
   0 in under 300 ms; a release of the forward key stops the climb within a
   frame or two. `crates/server/tests/ladder_ab.rs` replays every cmd through
   `pmove` and matches every snapshot's origin and velocity, free-running per
-  phase. VERIFIED, the same gate on vcod before 2026-10-12, which ran
-  `PM_Friction` with a 16 ladder term on the whole velocity before the
-  accelerate: up to 191 units behind retail by the top of the free run, 32
-  units/s level.
+  phase. VERIFIED, the same gate: running `PM_Friction` with a 16 ladder
+  term on the whole velocity before the accelerate (RTCW's shape) falls up
+  to 191 units behind retail by the top of the free run, 32 units/s level.
 - 1.5 and UO. VERIFIED, the same probe and script on `COD_VERSION=1.5` and
   `COD_VERSION=uo tools/run_probe.sh mp_ship` (`mp_ship-dm-ladder-1.5.txt`,
-  `mp_ship-dm-ladder-uo.txt`, 2026-10-15): the same settled rates phase for
-  phase (59, 95, -95, -59, 38 sideways, 18 at 10 down; UO's up-and-across
-  reads -26 sideways where 1.1 and 1.5 read -27, a different cmd phase).
-  `ladder_ab.rs` replays each under its own `MoveRules` and matches every
-  snapshot within 0.0002. VERIFIED, vcod measurement, 2026-10-18: that
-  0.0002 was the replay world's arithmetic; with the collision world on
-  1.5b's and UO's stored floats (`Arith::Stored`, as their servers set
-  it) every row of all five captures matches retail's origin and
-  velocity to the bit except five phases a float step or three off: two
-  1.1d climb rows, 1.5b's first `down-back` frame, and UO's body pressing
-  into the deck's `clipplayer` brush at the top. VERIFIED, vcod
-  measurement, 2026-10-20: all five closed, and `ladder_ab` has no
-  tolerance left. The 1.1d and 1.5b rows came from the ladder move's
-  rounding ("The ladder move's arithmetic" below). The UO rows were the
-  gate's: it replayed UO's cmds against 1.1's weapon table, where weapon
-  12 is not UO's `enfield_mp`, so the deck walk took another
-  `moveSpeedScale` (34.30 units/s into the brush on a 17 ms frame where
-  retail's set-back implies about 33.3). VERIFIED, vcod
-  measurement: the 1.5 capture
-  replayed under 1.1's rules misses by 0.84 units and 275 units/s at the
-  top (`up-top`), the step off the rungs (`cod15-movement.md` 5).
+  `mp_ship-dm-ladder-uo.txt`): the same settled rates phase for phase (59,
+  95, -95, -59, 38 sideways, 18 at 10 down; UO's up-and-across reads -26
+  sideways where 1.1 and 1.5 read -27, a different cmd phase).
+  VERIFIED, vcod measurement: `ladder_ab.rs` replays each under its own
+  `MoveRules`, the collision world on 1.5b's and UO's stored floats
+  (`Arith::Stored`, as their servers set it), and matches every row of all
+  five captures to the bit, no tolerance. What the last float steps took:
+  the ladder move's rounding ("The ladder move's arithmetic") for two 1.1d
+  climb rows and 1.5b's first `down-back` frame, and UO's own weapon table
+  for UO's deck walk (weapon 12 is UO's `enfield_mp`, not 1.1's; the wrong
+  `moveSpeedScale` walks 34.30 units/s into the `clipplayer` brush on a
+  17 ms frame against retail's 33.3). The 1.5 capture replayed under 1.1's
+  rules misses by 0.84 units and 275 units/s at the top (`up-top`), the
+  step off the rungs (`cod15-movement.md` 5).
 - Over the top. VERIFIED, `--save-ladder climb` with `probe_spot` at the
   foot of mp_ship's crow's nest ladder (4959, 64, 693), yaw 0, looking 45
-  up (`mp_ship-dm-ladder-crowsnest-climb.txt`, 2026-10-12, cmds 16 to 18
-  ms): the flag drops at 1211.5 with the floor at 1219.125, the body rises
+  up (`mp_ship-dm-ladder-crowsnest-climb.txt`, cmds 16 to 18 ms): the flag drops at 1211.5 with the floor at 1219.125, the body rises
   to 1217.0 and falls back onto the rungs, climbs again and is in on the
   cmd from 1203.5 at 17 ms, at x 4963.1 with 171 units/s along x; the
   hold ladder's run went over on its first try at 11 ms cmds. `ladder_ab.rs`
@@ -1282,27 +1206,23 @@ So ladders are brushes flagged at the material level, not entities.
   it falls: a fixed 10 ms frame bobs under the crow's nest for good, a
   fixed 16.7 ms frame under the hold's lip, and frames that vary as a
   client's do get over within a few tries.
-- Wall glue, misread earlier as a backwards hop: while NOT walking - i.e.
-  airborne on the ladder (the gate at @0x33CF1 runs it only when the static
-  pml_t's walking flag is zero), the
-  velocity's component along the ladder plane is stripped and then
-  K * vLadderVec is ADDED with K selected between **-500.0** (@0x70CD4) and
-  **-250.0** (@0x70CD8) by the SIGN of the climb-rate slot
-  (`forwardmove*0.5*upscale*cmdScale + sidemove*0.2*cmdScale*right.z`, where
-  right.z is compile-time zeroed @0x339c6): positive climb rate glues at
-  -500, otherwise -250 (selector @0x33D2E-0x33D43, applied before the step
-  slide). The constants are negative - this presses you INTO the wall while
-  climbing or hanging, it never hops off. Read off the code: the sign is the
-  wish's own `z` (`[ebp-0x10]`, 0x33d38), not the cmd's.
-- Yaw lock: `AngleDelta(vectoyaw(vLadderVec), viewYaw)` clamped to ±75 degrees
-  (the immediate 0x4b at 0x33dd1, 0x33dda) is stored to ps+0x7C (a
-  movement-direction field; exact client-side use unverified). An earlier
-  read of this file tied the 75 to `bg_ladder_yawcap`; that cvar (vmCvar at
-  .bss 0x16e9c0) is read only at 0x32e96, 0x32ed6, 0x32f4e and 0x32f58, the
-  view cap below, and registered at 0x7e2a8. VERIFIED, `.rel.text`
-  relocations.
-- Leaving a ladder fires event 0x90 (EV_WATER_TOUCH per the EV table - the
-  pairing looks odd; flagged unverified).
+- Wall glue (not a backwards hop): only while not walking, airborne on the
+  ladder (gate at 0x33CF1 on pml's walking flag), the velocity's component
+  along the ladder plane is stripped and `K * vLadderVec` added, K
+  **-500.0** (0x70CD4) when the climb rate is positive, else **-250.0**
+  (0x70CD8) (selector 0x33D2E-0x33D43, before the step slide). The climb
+  rate is the wish's own `z` (`[ebp-0x10]`, 0x33d38): `forwardmove * 0.5 *
+  upscale * cmdScale` plus `sidemove * 0.2 * cmdScale * right.z`, right.z
+  zeroed at 0x339c6. The constants are negative: this presses the body into
+  the wall while climbing or hanging.
+- Yaw lock: `AngleDelta(vectoyaw(vLadderVec), viewYaw)` clamped to ±75
+  degrees (immediate 0x4b at 0x33dd1, 0x33dda) is stored to ps+0x7C (a
+  movement-direction field; client-side use unverified). The 75 is not
+  `bg_ladder_yawcap`: VERIFIED, `.rel.text` relocations, that cvar (vmCvar
+  at .bss 0x16e9c0) is read only at 0x32e96, 0x32ed6, 0x32f4e and 0x32f58,
+  the view cap below, and registered at 0x7e2a8.
+- Leaving a ladder fires event 0x90 (EV_WATER_TOUCH in the EV table; the
+  pairing is unverified).
 
 ### The ladder move's arithmetic
 
@@ -1323,10 +1243,9 @@ Where `PM_LadderMove` rounds, read off `objdump -d` of each module (1.1d
   all stay on the stack. Each velocity component is rounded once, at its
   `fstp`.
 - VERIFIED, `objdump` and vcod measurement: a level climb's wish is
-  127 x float(0.3125 x 190/127). That is exactly 59.375. Rounding the
-  scale to a float first, as vcod did, gives 59.375004. The extra 4e-6
-  units/s was the one float step two of 1.1d's climb rows missed by
-  (`ladder_ab`, ct 8720 and 21188).
+  127 x float(0.3125 x 190/127), exactly 59.375. Rounding the scale to a
+  float first gives 59.375004, the float step two of 1.1d's climb rows
+  miss by (`ladder_ab`, ct 8720 and 21188).
 - 1.5b and UO store every variable, and their two functions are the same
   code (UO reads `vLadderVec` at ps+0x5c, not 0x58). INFERRED, off the
   instruction order: `PM_CmdScale` (1.5 0x1eec9) returns a stored float.
@@ -1339,9 +1258,8 @@ Where `PM_LadderMove` rounds, read off `objdump -d` of each module (1.1d
   (.rodata 0x75644). The side bleed stores `d`, `d * frametime *
   pm_ladderfriction` (16.0, .rodata 0x7565c) and `d - f`, and takes its
   unit step through a sign helper (0x28b8a). The glue stores its `d`.
-  VERIFIED, `ladder_ab`: 1.5b's first `down-back` frame (ct 16932) missed
-  by a float step under vcod's old unstored version, and matches with
-  this one.
+  VERIFIED, `ladder_ab`: 1.5b's first `down-back` frame (ct 16932) misses
+  by a float step unstored and matches stored.
 
 ### The ladder yaw cap
 
@@ -1369,7 +1287,7 @@ resolved: 1.1d 0x32e7d-0x32f75, 1.5b 0x26270-0x263ca, UO 0x2b535-0x2b6a5.
   grid, 0..360) and `AngleNormalize360Accurate` on 1.5b (0x263a4, 0x263c5)
   and UO (0x2b67e, 0x2b69f). VERIFIED.
 
-Measured 2026-10-19 (VERIFIED, `--probe-ladder 90 --save-ladder turn`
+Measured (VERIFIED, `--probe-ladder 90 --save-ladder turn`
 under `client-probes/probe_ladder` on mp_ship's hold ladder, facing 90:
 `crates/server/tests/fixtures/playerstate/mp_ship-dm-ladder-turn.txt`,
 `-turn-1.5.txt`, `-turn-uo.txt`): hanging off the ground with the view
@@ -1392,18 +1310,15 @@ three captures through `cmd::player_step`: `delta_angles[1]`, the view
 yaw and the origin match at every snapshot, rebased and free-running per
 phase.
 
-What it does to bots (2026-10-19): a push-off used to jump facing out
-from the face, 180 off the rungs, which the cap turns 80 degrees on the
-jump's frame, and `PM_CheckJump` jumps along the view; it now jumps
-facing the face, which the jump reflects straight out
-(bot-navigation.md). The graph's walks send their angles net of the
-`delta_angles` they start each tick with, as a bot does, so a push holds
-a walk's view on the cap rather than turning the rest of it. Graph
-digests against the build without the cap, 1.1 stock maps (VERIFIED,
-`--example nav_build`): mp_depot one
-node and three edges fewer, mp_railyard one edge fewer, mp_harbor and
-mp_ship as many nodes and edges with a different digest, the rest the
-same; walks that face away on the rungs now turn as retail's body does.
+Bots: a push-off jumps facing the face, which the jump reflects straight
+out (bot-navigation.md); facing out from the face, 180 off the rungs, the
+cap would turn the view 80 degrees on the jump's frame and `PM_CheckJump`
+jumps along the view. The graph's walks send their angles net of the
+`delta_angles` they start each tick with, as a bot does, so a push holds a
+walk's view on the cap. Graph digests against a build without the cap, 1.1
+stock maps (VERIFIED, `--example nav_build`): mp_depot one node and three
+edges fewer, mp_railyard one edge fewer, mp_harbor and mp_ship as many
+nodes and edges with a different digest, the rest the same.
 
 **Animation**: the movement-anim update (fn 0x322C8) selects, when airborne on
 a ladder and outside the 300 ms post-jump lockout, MOVETYPE CLIMBUP (value 16)
@@ -1418,19 +1333,16 @@ only place those values are ever produced - there is no non-ladder route to
 ## Step-up and steep slopes
 
 - `PM_StepSlideMove` (exported, 0x34FBC): step height 18 units, reduced to 10
-  while PRONE (constants 18.0/10.0 at 0x70EEC/0x70EE8; the chooser at 0x35045
-  tests pm_flags bit 0x1 = PRONE - an earlier read of this file said
-  walking && !on-ladder, contradicted by its own bytes). Uses `ps.fJumpOriginZ` (compared ±0.001) as
-  part of the step decision ("The jump's step", under "Jumps").
+  while prone (constants 18.0/10.0 at 0x70EEC/0x70EE8; the chooser at
+  0x35045 tests `pm_flags` 0x1, prone). Uses `ps.fJumpOriginZ` (compared
+  ±0.001) in the step decision ("The jump's step", under "Jumps").
 - The ground-trace function (0x30474) classifies the ground contact: impact
   velocity along the normal > 10 leaves the ground and fires the JUMP/JUMPBK
   anim events; normal.z >= 0.7 marks walking; anything flatter keeps
   `groundPlane` and clears `walking` ("A steep plane still steers the
-  fall", below). An earlier read of this file called pml+0x2C a steep-slope
-  flag and 0x2F258 a steep-slope mover; pml+0x2C is `walking` and 0x2F258 is
-  `PM_WalkMove` ("The walk's accel floor"). VERIFIED: the ladder probe's
-  30/8 choice (0x33700-0x33711) tests pml+0x2C at 0x33706. INFERRED: the
-  "steep-slope flag" under "Ladders" is `walking`.
+  fall", below). pml+0x2C is `walking` and 0x2F258 is `PM_WalkMove` ("The
+  walk's accel floor"), not a steep-slope flag and mover. VERIFIED: the
+  ladder probe's 30/8 choice (0x33700-0x33711) tests pml+0x2C at 0x33706.
 - Stance changes trace headroom with the new bbox at the current origin
   (probes at 0x319ED/0x31A65/0x31AC3/0x31B47) and fire EV_STANCE_FORCE_*
   (140/141/142) when forced; viewheight lerps run through
@@ -1467,10 +1379,8 @@ VERIFIED: at 0x35380 the trace fraction is compared against 1.0; the
 the extra half step pulls the player onto whatever is under it and is not
 itself a fall.
 
-An earlier read of this file inferred from the reach that the down pass is
-what keeps a walker on the ground at a crest. It is not, and vcod snapped a
-walker onto every floor within 9 units on every grounded frame on that
-reading until 2026-09-07. VERIFIED: at 0x35166 the slide's return value is
+Trap: the down pass is not what keeps a walker on the ground at a crest.
+VERIFIED: at 0x35166 the slide's return value is
 tested and an unobstructed slide jumps to 0x352a0, past the up trace and
 the second slide, so an unobstructed grounded frame runs only the down
 trace (0x352c0-0x35335, with `stepUp` still 0) and then the revert test at
@@ -1480,9 +1390,9 @@ the plain slide's origin and velocity. VERIFIED by capture
 (`crates/server/tests/fixtures/playerstate/mp_carentan-dm-slope-8ms-run3.txt`,
 `commandTime` 256091): walking off a 4-degree grade onto a floor 8 units
 lower, retail keeps `origin[2]` -23.875 for that cmd and falls under gravity
-over the next three snapshots (-24.83, -27.69, -32.45), where vcod's
-unconditional pass put it 8 units down in one 9 ms cmd, on the ground and
-with the step's speed scale applied. INFERRED: the down pass therefore
+over the next three snapshots (-24.83, -27.69, -32.45); an unconditional
+snap puts it 8 units down in one 9 ms cmd, on the ground and with the
+step's speed scale applied. INFERRED: the down pass therefore
 survives only after a step-up that gained horizontal distance, which is
 what the `stepUp + 9` reach is for, and a walker on a crest at a
 high-fps client's cmd rate stays grounded because its rise per cmd is under
@@ -1494,15 +1404,11 @@ at 0x352a4 and `stepUp` against zero at 0x352a8-0x352ba (`fldz`, `fld
 [ebp-0xc0]`, `fucompp`), skipping to 0x353f7 only when both are clear.
 INFERRED: the velocity is never read on that path, so a grounded frame takes
 the down pass whatever its velocity is, including one a wall or a seam bevel
-just redirected into the ground plane. vcod used to re-run the ground
-trace's kickoff test (`velocity.z > 0 && velocity . normal > 10`) against the
-current velocity before it snapped, and a walker rubbing a wall while
-climbing a slope, whose slide keeps the climb's upward component and loses
-the forward one, failed that test every frame: the snap was refused, the
-ground trace after the move read the same test and dropped the player, and
-the sight ramp reversed with it. That gate is gone with the unconditional
-pass, and so is the waterjump exclusion that outlived it: 1.1 MP has no
-water jump ("Water").
+just redirected into the ground plane. Trap: re-running the ground trace's
+kickoff test (`velocity.z > 0 && velocity . normal > 10`) before the snap
+drops a walker rubbing a wall up a slope (the slide keeps the climb's
+upward component), and the sight ramp reverses with it. 1.1 MP has no
+water jump to exclude either ("Water").
 
 VERIFIED: at 0x3533a a 16-bit word at +0x28 of the down trace is compared
 against 0x3f, and the at-or-below arm (0x35341-0x35377) writes the origin
@@ -1522,9 +1428,8 @@ the flat slide's state from before any down pass, so a reverted step ends
 the move unsnapped and the ground trace after it decides; and since the
 0.001 is on the plain slide's side, a step whose slide got exactly as far as
 the plain one is reverted too. vcod's `step_slide_move` runs the same
-test on every frame now, with `STEP_REVERT_EPS` the 0.001; until 2026-09-07
-it compared squared horizontal lengths, only after a step-up, and let an
-unobstructed frame keep its down pass.
+test on every frame, `STEP_REVERT_EPS` the 0.001 (not squared lengths,
+and not only after a step-up).
 
 ### The step-up stops a unit short
 
@@ -1559,7 +1464,8 @@ it.
 
 ### A start inside a solid
 
-VERIFIED, `client-probes/probe_blastloop` on retail, 2026-10-05: a player
+VERIFIED, `client-probes/probe_blastloop` on retail: a player
+
 the `setOrigin` method set down at (-246.8, 2473.1, -32) read
 (-246.80, 2473.10, -31.00) a second later, its client sending cmds with no
 movement, where the others set down at z -32 nearby settled at -31.87. Its
