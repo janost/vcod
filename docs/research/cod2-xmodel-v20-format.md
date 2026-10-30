@@ -178,7 +178,7 @@ else:
 
 - VERIFIED (census): `|normal · tangent| <= 0.001` everywhere. `cross(normal, tangent) · binormal` is positive on 2366079 vertices and negative on 1605478, so the handedness is per vertex and must be read, not derived.
 - VERIFIED (census): 7050 distinct colours; (255,255,255,255) on 1962058 vertices, greys with alpha 255 on most of the rest, and alpha 0 on 16492.
-- VERIFIED (census): `tile_mode` is 0 on 4187 surfaces, all with UVs inside 0..1; 1 on 247, all slightly outside (-0.05..1.05) on one axis or both; 2 on 1949, mostly well outside (some by more than 1e6, garbage UVs on surfaces whose material presumably does not sample them). That 0 is clamp and 2 is wrap is INFERRED from those ranges; no reader was found in the renderer functions checked. vcod samples with wrap, as for v14.
+- VERIFIED (census): `tile_mode` is 0 on 4187 surfaces, all with UVs inside 0..1; 1 on 247, all slightly outside (-0.05..1.05) on one axis or both; 2 on 1949, mostly well outside (some by more than 1e6, garbage UVs on surfaces whose material presumably does not sample them). That 0 is clamp and 2 is wrap is INFERRED from those ranges; no reader was found in the renderer functions checked. vcod parses `tile_mode` and uses it nowhere.
 - UVs are used raw, no v-flip, as v14.
 
 ### Winding
