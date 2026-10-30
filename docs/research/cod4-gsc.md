@@ -64,7 +64,7 @@ no table. VERIFIED (census run). The three additions:
 
 The VM takes CoD2's rules (`VmProfile::COD4` is `COD2` with the dialect
 swapped): newest waiter first, kill mid-step, thread returns. INFERRED,
-unmeasured on 1.7 (M5).
+unmeasured on 1.7.
 
 ## 2. The builtin tables
 
