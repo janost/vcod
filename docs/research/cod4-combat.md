@@ -106,7 +106,7 @@ reloading, `weapAnim` 2 and 0x202 alternating its toggle on each shot,
   (`mantleState.flags` 0x10). INFERRED. The empty hand's aim
   spread drops a whole 255 a step: the mantle capture's `aimSpreadScale`
   reads 0 at 48850, the cmd after its weapon went to 0. VERIFIED live.
-  `cod4_moves_ab`'s `mantle` rows now replay armed with every weapon word
+  `cod4_moves_ab`'s `mantle` rows replay armed with every weapon word
   exact. VERIFIED (the gate).
 
 `cod4_moves_ab`'s `shooter` rows replay the shooter's own cmds from the
@@ -437,8 +437,7 @@ the constants. The algebra between them is INFERRED.
   tenth argument, `level.time` less the shot's time. INFERRED;
   the stock `_callbacksetup.gsc` takes ten and the killed callback nine
   (`timeOffset`, `deathAnimDuration`). VERIFIED.
-- The stock weapon files' numbers (`weapon_dump` over `common_mp.ff`,
-  2026-10-25), damage / `minDamage` / `maxDamageRange`..`minDamageRange`:
+- The stock weapon files' numbers (`weapon_dump` over `common_mp.ff`), damage / `minDamage` / `maxDamageRange`..`minDamageRange`:
   the M16, AK-47, G3, MP44 40/30 1500..2000; the M4 and G36C 30/20
   1500..2000; the M14 50/40; the MP5 and AK-74u 40/20 750..1000; the P90
   and Uzi 30/20 750..1000; the Skorpion 50/20 200..400; the SAW 30/30, the
@@ -568,12 +567,13 @@ frame, ahead of the items); before, every corpse kept it for life and
 a client reset replayed its death anim (cod4-player-anims.md 9).
 `self suicide()` (`PlayerCmd_Suicide`) zeroes the health and runs
 `player_die` with the client as inflictor and attacker, 100000 damage and
-`MOD_SUICIDE` (12), so it draws a death anim as any death does. INFERRED. vcod-server ran CoD1's `suicide` there, which drew none, and the
-corpse the killed callback cloned kept the live body's idle
-(`pb_stand_alert`): a standing body with empty hands that no player
-collides with, on every team or spectator switch of a live player (the
-stock menus kill him that way). VERIFIED (`damage_soak`'s transitions,
-whose corpses now all play a `*death*` clip).
+`MOD_SUICIDE` (12), so it draws a death anim as any death does. INFERRED.
+vcod-server's CoD4 `suicide` does the same; `damage_soak`'s transitions'
+corpses all play a `*death*` clip. VERIFIED. Trap: CoD1's `suicide` draws
+none, and the cloned corpse keeps the live body's idle (`pb_stand_alert`),
+a standing body with empty hands that no player collides with, on every
+team or spectator switch of a live player (the stock menus kill him that
+way).
 
 The death's torso. `player_die` runs `BG_AnimScriptEvent(ps, 1, 0, 1)`
 (0x80b1c00..0x80b1c21: the death event, not continuing, forced), and
@@ -607,11 +607,10 @@ run. VERIFIED live. The kill capture's target took its first
 round in one frame and died the next: the cmd between ran the flinch
 (the `flinch_*` movetypes' torso line, 0x308) after the 47950 snapshot
 went out, so the wire never showed it, and the death flipped it to 0.
-INFERRED from the table's first row. vcod-server drew the death's
-choices once a frame at `ClientEndFrame`, before that cmd, and flipped
-the stale 0 to 0x200 (the gate's only GAP); it now draws them again after
-every cmd (`Cod4Level::think`), and `cod4::combat_ab` matches with no
-GAPS. VERIFIED (the gate). `anim_census::a_death_flips_the_torso_toggle_it_finds`
+INFERRED from the table's first row. vcod-server draws the death's
+choices after every cmd (`Cod4Level::think`), and `cod4::combat_ab`
+matches with no GAPS. VERIFIED (the gate). Drawn once a frame at
+`ClientEndFrame`, before that cmd, they flip the stale 0 to 0x200. `anim_census::a_death_flips_the_torso_toggle_it_finds`
 holds the table's pairs.
 
 The corpse run's recipe:
@@ -686,9 +685,8 @@ client's 0x94.
   CoD2's yaw turn, INFERRED on 1.7), then the anim update that starts a new
   legs anim at 0. `cod4::combat_ab::
   the_corpse_drifts_on_its_death_anim_as_on_retail` holds the corpse's
-  rounded `pos.trBase` path to retail's, live and in the killcam.
-  Before, the clone was set down where a box trace under it met the
-  floor and never moved.
+  rounded `pos.trBase` path to retail's, live and in the killcam (a
+  clone set down where a box trace under it meets the floor never moves).
 
 ## 6. The dropped weapon
 
@@ -759,8 +757,8 @@ array at +0x1c04, 0xa0 apart), then +0x89c (0x81797bc..0x81798aa).
 VERIFIED (the instructions). Without it the follower's `commandTime` sits
 seconds behind its own cmds and the client's `CG_DrawDisconnect`
 (`iw3mp.exe` 0x42f930, cod4-hud.md 14) draws Connection Interrupted for
-the whole killcam: 260 of 265 frames in vcod's live gate before the fix,
-none after. vcod: `level::shift_archived`; `cod4_combat_ab` compares the
+the whole killcam: 260 of 265 frames in vcod's live gate without the
+shift, none with it. vcod: `level::shift_archived`; `cod4_combat_ab` compares the
 killcam's first `commandTime`; live gate
 `cod4_live_killcam_draws_no_interrupt_and_the_use_key_skips_it`.
 
@@ -771,10 +769,9 @@ client+0x3094); `attackButtonPressed` (0x80a9aae) tests 0x1 and
 `adsButtonPressed` (0x80a9a14) 0x800. VERIFIED (the code). A follower's
 `SpectatorThink` stores its cmd's buttons there. INFERRED, not yet
 confirmed on 1.7.
-vcod read CoD1's last-cmd word for those three, which a follower's cmds
-never reached, so F never skipped; they now read the CoD4 words
-(`builtins::cod4_script`), and the live gate's press ends the killcam a
-frame later.
+vcod reads the CoD4 words for the three (`builtins::cod4_script`), and
+the live gate's press ends the killcam a frame later. CoD1's last-cmd
+word, which a follower's cmds never reach, never skips.
 
 ## 8. `cod4_combat_ab`
 
@@ -886,11 +883,10 @@ The wall at 67150 is static model 1901 of mp_crash's clip map, an
 parm). The map zone names that xmodel only (`,fx_me_brick_01`, a
 reference to an asset another zone holds); common_mp holds it, with one
 collision surface of 12 triangles. VERIFIED (the zones). mp_crash places
-219 of them. vcod built the clip map from the map zone alone and walked
-common_mp without its collision triangles, so the bricks clipped nothing
-and the frag flew past the wall; `ClipMap::from_zones` now takes a comma
-model from the zones loaded before the map's, and every walk keeps an
-xmodel's collision (`XModel::coll`).
+219 of them. `ClipMap::from_zones` takes a comma model from the zones
+loaded before the map's, and every walk keeps an xmodel's collision
+(`XModel::coll`). From the map zone alone the bricks clip nothing and
+the frag flies past the wall.
 
 The arithmetic, VERIFIED (the disassembly):
 
@@ -1108,12 +1104,11 @@ everyone (`pm_flags` 0x800) for `postRoundTime`, then puts everyone in
 the intermission (`pm_type` 5) and, 30 s on (`scr_intermission_time`),
 calls `exitLevel(false)`. INFERRED (the script). That queues
 `map_rotate`, which spawns the rotation's next map or restarts the level
-(cod4-map-cycle.md 3); before vcod-server ran it the level stayed in its
-intermission for good. On ours a 1-minute `scr_war_timelimit` match now
+(cod4-map-cycle.md 3). On ours a 1-minute `scr_war_timelimit` match
 rotates and both players hurt each other on the next level. VERIFIED
-(`cod4_damage_survives_the_time_limit` and `..._restarted`).
-`war`'s default limit is 10 minutes (`scr_war_timelimit`), so a
-playtest of that length reaches it.
+(`cod4_damage_survives_the_time_limit` and `..._restarted`). `war`'s
+default limit is 10 minutes (`scr_war_timelimit`), so any session of
+that length reaches it.
 
 ### 10.8 The flashbang and the concussion grenade
 
@@ -1283,16 +1278,15 @@ disassembly, the gate).
   attacker from argument 4 when `Scr_GetNumParam() > 4` and its type is
   not undefined, else the world entity (0x84bbd78); the means of death
   from argument 5, else 14 (`MOD_EXPLOSIVE`); the weapon from argument 6,
-  else -1. VERIFIED (the disassembly). vcod's CoD4 level
-  ran CoD1's builtin, which drops every argument past the fourth, so the
-  `sd` and `sab` bombs (`visuals[0] radiusDamage(..., player)`) and a
-  destructible car's blast (`self.damageOwner`) killed as the world, and
-  the stock `Callback_PlayerKilled` (`attacker.classname`, line 4787)
-  errored on each such death. VERIFIED (the map sweep,
-  `cod4-map-sweep.md`). It now takes the attacker and the method's
-  inflictor; the means of death and weapon arguments are still not read
-  (no stock call passes them). VERIFIED
-  (`cod4::gametype_tests::a_bomb_blast_credits_its_attacker`).
+  else -1. VERIFIED (the disassembly). vcod's CoD4 level takes the
+  attacker and the method's inflictor; the means of death and weapon
+  arguments are not read (no stock call passes them). VERIFIED
+  (`cod4::gametype_tests::a_bomb_blast_credits_its_attacker`). Trap:
+  CoD1's builtin drops every argument past the fourth, so the `sd` and
+  `sab` bombs (`visuals[0] radiusDamage(..., player)`) and a destructible
+  car's blast (`self.damageOwner`) kill as the world, and the stock
+  `Callback_PlayerKilled` (`attacker.classname`, line 4787) errors on
+  each such death. VERIFIED (the map sweep, `cod4-map-sweep.md`).
 - `weaponClass(name)` (0x80bd81a) pushes `"none"` (0x8209e27) when the
   name's index (0x80a2182, a lookup that returns 0 for a name it lacks)
   is 0, and the class name of the weapon's `weapClass` (offset 0x130)
@@ -1312,7 +1306,7 @@ pose off those anims.
 
 - Rockets fly and explode; their flight has no retail capture to gate on.
 - The live grenade's pickup and throw back and the use key's weapon swap
-  work in play (playtest 2026-10-27); no retail capture gates them.
+  work in play (a hand check); no retail capture gates them.
 - The terrain triangle normal's last bit.
 - A prone death's torso (5): the corpse run's prone life stood when shot.
 - The corpse's drag rides the yaw turn's shape off CoD2; a death anim
@@ -1351,8 +1345,8 @@ on the `damage` notify alone, counting their own health per part.
   cone that gets through and stops tracing there, nothing when none does
   (the five tries from 0x80b2bfa, each clear one jumping to 0x80b2f46,
   which returns 1). VERIFIED (the disassembly).
-  `missile::LineScore` holds both; a sedan or barrel next to a frag took
-  a third a line in vcod before.
+  `missile::LineScore` holds both (scored as a client, a sedan or barrel
+  next to a frag takes only a third a line).
 - vcod: a frag's or rocket's blast meets such an entity by its model's
   collision surfaces' bounds (`Cod4HostState::model_coll`), unturned,
   and takes the arm above with empty names
@@ -1366,8 +1360,8 @@ on the `damage` notify alone, counting their own health per part.
   walk damages the cars about it through the same entity arm. VERIFIED
   (the script).
 - With rounds stopping at the cars, six-bot `bot_match` (`dm` and
-  `war`, mp_backlot and mp_carentan, 6 000 ticks, seeds 1-12 summed,
-  2026-10-26) killed 1 982 against 2 266 and hit 7 687 rounds against
+  `war`, mp_backlot and mp_carentan, 6 000 ticks, seeds 1-12 summed)
+  killed 1 982 against 2 266 and hit 7 687 rounds against
   8 596, mp_backlot `dm` most (612 to 470), with no script error and
   suicides alike (16 against 17): the bots' sight took no car into
   account and they fired into cars between them and their enemy. With
@@ -1413,9 +1407,9 @@ on the `damage` notify alone, counting their own health per part.
   death, the points within 0.02 units and the directions within 1e-4
   (`cod4::shot_aim_ab::rounds_go_through_a_sedan_as_on_retail`; the
   residue is the gsc's placement off `anglesToRight` below the log's
-  thousandth). VERIFIED (the gate). Before, a round stopped at the car's
-  bounds and the notify named no part, so the window never broke on its
-  own and no round reached the target.
+  thousandth). VERIFIED (the gate). Trap: a round stopped at the car's
+  bounds names no part in the notify, so the window never breaks on its
+  own and no round reaches the target.
 - `SP_script_model` (0x809b8e2, the spawn table's `script_model` row at
   rodata 0x821fa18) sets 4 in the byte at +0xf6 (0x809b95d,
   `svFlags |= 4`) and contents 0x2080
