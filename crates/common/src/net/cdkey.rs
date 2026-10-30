@@ -140,6 +140,15 @@ pub fn authorizes(server: SocketAddr) -> bool {
     !super::lan::is_lan(server.ip())
 }
 
+/// [`authorizes`] against a fixed address list instead of this host's.
+#[cfg(test)]
+fn authorizes_with(server: SocketAddr, locals: &[std::net::Ipv4Addr]) -> bool {
+    match server.ip() {
+        std::net::IpAddr::V4(v4) => !super::lan::is_lan_with(v4, locals),
+        std::net::IpAddr::V6(v6) => !v6.is_loopback(),
+    }
+}
+
 /// Sends `key`'s `getKeyAuthorize` to `game`'s authorize server, on a
 /// thread so the name lookup never holds up the join. Nothing for a LAN
 /// `server`.
@@ -280,9 +289,17 @@ mod tests {
 
     #[test]
     fn lan_servers_are_not_authorized() {
+        // A host on 192.168.1.5: its block is the LAN, wherever the test runs.
+        let locals = ["127.0.0.1".parse().unwrap(), "192.168.1.5".parse().unwrap()];
         assert!(!authorizes("127.0.0.1:28960".parse().unwrap()));
-        assert!(!authorizes("192.168.1.20:28960".parse().unwrap()));
-        assert!(authorizes("203.0.113.7:28960".parse().unwrap()));
+        assert!(!authorizes_with(
+            "192.168.1.20:28960".parse().unwrap(),
+            &locals
+        ));
+        assert!(authorizes_with(
+            "203.0.113.7:28960".parse().unwrap(),
+            &locals
+        ));
     }
 
     #[test]
