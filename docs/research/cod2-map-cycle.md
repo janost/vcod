@@ -1,8 +1,8 @@
 # CoD2 1.3 map cycle: map change, restarts, rotation, the gametypes' level ends
 
-How a CoD2 1.3 server changes and restarts its level, and how the stock
-gametypes end a round or a map, read off `cod2_lnxded` 1.3 (addresses are
-its own) and checked against retail captures. CoD1's counterpart is
+How a CoD2 1.3 server changes and restarts its level and how the stock
+gametypes end a round or a map. Addresses are `cod2_lnxded` 1.3's;
+behaviour is checked against retail captures. CoD1's counterpart is
 `cod11-map-cycle.md`; the wire side of a map change is
 `cod2-protocol.md` 1.8 and 1.9.
 
@@ -107,7 +107,7 @@ file; retail's dm sent `cg_objectiveText` with 50, section 2).
 
 ## 2. Retail captures
 
-2026-10-22, retail `cod2_lnxded` 1.3 (`sv_pure 1`, `sv_maxclients 8`) on
+Retail `cod2_lnxded` 1.3 (`sv_pure 1`, `sv_maxclients 8`) on
 mp_toujane inside `unshare -rn`, two `vcod --net-probe <addr> --game cod2
 --probe-team allies|axis` clients with `RUST_LOG=vcod::play::cod2=debug`
 (the client logs every server command, each gamestate and each
@@ -133,7 +133,7 @@ live, each line:
 - sd: with one player a team, `MP_MATCHSTARTING`, 7.0 s later `H 0`,
   `G 0` (`resetScores`), 0.1 s later the restart: `d 13`, `d 3`, `d 12`,
   `H 0`, `G 0`, `n`, `d 1`.
-- 2026-10-23, the same server on tdm mp_toujane with one `spectate
+- The same server on tdm mp_toujane with one `spectate
   --join` client, rcon `map mp_carentan`, `fast_restart`, `map_restart`:
   after each gamestate and after the `B`, the client's first commands
   were `t 4` (`serverinfo_tdm`) with `g_scriptMainMenu "ingame"` and
@@ -173,7 +173,7 @@ live recipe against vcod-server gave the same ids, the same 300 ms steps,
 the tdm `loadingnewmap` 10.2 s after the intermission and the sd restart
 7.0 s after `MP_MATCHSTARTING`.
 
-What section 2's comparison found and how vcod now matches it:
+Retail rules section 2 exposed, and vcod's match for each:
 
 - `SV_SetConfigstring` (0x8092780) sends a changed slot to every client
   past `CS_CONNECTED` at once, as `SV_GameSendServerCommand` sends a
