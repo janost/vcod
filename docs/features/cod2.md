@@ -1,8 +1,9 @@
 # Call of Duty 2
 
 vcod plays and hosts Call of Duty 2, patch 1.3 (protocol 118). It needs a
-CoD2 install: `main/` with the stock `iw_*.iwd` files. Point `COD2_DIR`
-or `--game-dir` at it. The game is detected from `main/iw_*.iwd` or
+CoD2 install: `main/` with the stock `iw_*.iwd` files. Put the binaries
+in it, or point `--game-dir` or `COD_DIR` at it (`COD2_DIR` is only for
+tests and tools). The game is detected from `main/iw_*.iwd` or
 `CoD2MP_s.exe`; `--game cod2` forces it. How to run each mode is in
 [usage.md](../usage.md).
 
@@ -284,11 +285,12 @@ stock content. Most need `COD2_DIR` and pass vacuously without it.
 
 ## Missing compared to retail
 
-Ranked by how much a player notices.
+Ranked by how much a player notices, worst first.
 
 1. **Voice chat.** Neither the client nor the server carries voice. The
    scoreboard's voice column stays empty and there is no mute list
-   ([cod2-hud.md](../research/cod2-hud.md) 12).
+   ([cod2-hud.md](../research/cod2-hud.md) 12). Shout across the room,
+   as LAN parties always did.
 2. **Muzzle flashes and brass.** The view weapon draws no flash or shell
    eject of its own: its `tag_flash` and `tag_brass` are not posed.
    Another player's flash plays 24 units ahead of his eye, not on his
@@ -298,7 +300,8 @@ Ranked by how much a player notices.
    angles use vcod's own random draws, so rounds do not land where
    retail's would for the same cmds
    ([cod2-combat.md](../research/cod2-combat.md) 9.3).
-4. **Rockets fly true.** `fire_rocket`'s destabilization is not modelled.
+4. **Rockets fly true.** `fire_rocket`'s destabilization is not modelled,
+   so vcod's bazookas are more accurate than they have any right to be.
    `Weapon_Melee`'s hit triggers are not either; the melee's 64-unit
    reach is inferred (cod2-combat.md 8).
 5. **PunkBuster and CD key checks.** vcod runs no PunkBuster. vcod-server

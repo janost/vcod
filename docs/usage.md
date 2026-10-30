@@ -1,8 +1,8 @@
 # Using vcod
 
 Command lines, controls, the console and the menus, for all four games.
-New here: [getting-started.md](getting-started.md) has the install layout,
-a quick start per game and recipes. Bots: [bots.md](bots.md). What each
+New here: [getting-started.md](getting-started.md) is shorter, with the
+install layout, a quick start per game and recipes. Bots: [bots.md](bots.md). What each
 game supports: [docs/features/](features/) ([CoD1](features/cod1.md),
 [UO](features/uo.md), [CoD2](features/cod2.md), [CoD4](features/cod4.md)).
 
@@ -66,7 +66,7 @@ has no listen server.
 
 ## CD keys
 
-Many public servers check CD keys. Until the game's authorize server has
+Many public servers check CD keys, so dig out the jewel case. Until the game's authorize server has
 seen your key, such a server answers `needcdkey` and vcod shows the
 game's own "key not valid" or "awaiting key authorization" message.
 
@@ -114,7 +114,7 @@ vcod-server <map> [--port 28960] [--hostname vcod] [--max-clients 8] [--gametype
 
 The server answers `getstatus` from anyone, as retail does. Keep it on a
 LAN or behind a firewall you control. There is no stdin console: admin
-goes through rcon.
+goes through rcon, so set `rconPassword` before you need it.
 
 ### `--set`
 
@@ -339,8 +339,8 @@ default, set it again (`set r_aaSamples 4`).
 
 - Mouse to pick, double-click or Enter to join. With the cursor over a
   list, the arrows, Home, End and Page Up / Down move the selection; the
-  wheel or the scroll bar scrolls it (the wheel is vcod's; the games'
-  wheel scrolls no list).
+  wheel or the scroll bar scrolls it. The wheel is vcod's: the games'
+  wheel scrolls no list, and I wasn't going to copy that.
 - Tab and the arrows no list takes move the menu's focus while the key
   is down. Held keys do not repeat, except typing and Backspace in a text
   field. Enter and the middle button act on the item under the cursor.

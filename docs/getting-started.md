@@ -3,7 +3,8 @@
 vcod is a client (`vcod`) and a dedicated server (`vcod-server`) for four
 games: Call of Duty 1.1 and 1.5, United Offensive 1.51, Call of Duty 2 1.3
 and Call of Duty 4 1.7. Both binaries read the game's own files from a
-retail install. Every flag, cvar and command is in [usage.md](usage.md);
+retail install, so you need to own the game: vcod ships no game files
+and never will. Every flag, cvar and command is in [usage.md](usage.md);
 bots are in [bots.md](bots.md).
 
 ## Point vcod at the install
@@ -108,6 +109,8 @@ vcod-server mp_carentan --gametype sd --hostname "my server" --max-clients 20 \
   `--set rconPassword=` sets it too.
 - The server answers `getstatus` from anyone. Open the UDP port on your
   firewall and nothing else.
+- There's no anti-cheat. A public server runs on the honour system, and
+  you know how that goes.
 
 ### Add and remove bots
 

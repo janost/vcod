@@ -2,7 +2,7 @@
 
 vcod-server can fill a server with bots in all four games: CoD 1.1 and
 1.5, United Offensive, CoD2 1.3 and CoD4 1.7. Retail has none, so
-everything here is vcod's own. A bot is a real client: it takes a slot,
+everything here is vcod's own, faults included. A bot is a real client: it takes a slot,
 joins through the stock menus, and shows in the scoreboard and in
 `status` like anyone else. Retail clients see bots as ordinary players.
 
@@ -107,7 +107,8 @@ long it remembers a lost enemy, how far it hears and how wide it sees
   bolt rifle's back-off, a lie-down at range) and remembers a lost enemy
   and a heard shot longer.
 - The levels change only these numbers. Routes, objective play and
-  choices are the same at every level.
+  choices are the same at every level: an expert is faster and sharper,
+  not smarter.
 - `vc_bot_skill` changes every bot without its own level at once,
   mid-fight included. To mix levels, give each `addbot` its own:
 
@@ -178,7 +179,7 @@ game's own `ClientThink` and pmove, the path a human's cmd takes.
 
 `think` reads the view and nothing else. It cannot move the body, see
 through a wall or skip a physics rule, so a player could do anything a
-bot does with the same keys. The view holds:
+bot does with the same keys. If one kills you, it earned it. The view holds:
 
 - the bot's own state (health, ammo, weapons, stance, ground, ladder)
 - the enemies a line-of-sight trace reaches inside its sight cone
@@ -263,7 +264,7 @@ CoD4's `MANTLE_RESTS` and `PARTS_MATES_FLAT`).
 
 ### How a change is judged
 
-Retail has no bots, so there is nothing to compare against. A behaviour
+Retail has no bots, so for once there's no oracle. A behaviour
 change runs `bot_match` on the same seeds before and after and lands
 only when stalls drop and kills hold:
 
@@ -329,7 +330,8 @@ Cannot:
   menu and the bots play on.
 - Bots never vote and are not counted as voters, so one player's
   `callvote` plus his own yes passes on a server full of bots
-  ([cod2-protocol.md](research/cod2-protocol.md) 3.4.2).
+  ([cod2-protocol.md](research/cod2-protocol.md) 3.4.2). Democracy, of a
+  kind.
 - Movement: the graph floods CoD2's collision (`SURF_LADDER` brushes as
   ladders) under 1.5's movement rules, which CoD2's starts from. It keeps
   no leap from a standstill. Every node is tried for a mantle in eight
@@ -365,7 +367,7 @@ round 0.23 for SMGs and automatic rifles, 0.31 semi-automatics, 0.36 to
 0.37 bolt and scoped rifles; each skill level kills more than the one
 below and an expert side takes 70 to 84% of a `tdm`'s kills. Accuracy
 does not rise with the level: on CoD2's sights the gun's spread and kick
-are most of a miss. Full tables and the earlier runs:
+are most of a miss. Blame the gun. Full tables and the earlier runs:
 [research/bot-measurements-cod2-cod4.md](research/bot-measurements-cod2-cod4.md).
 
 ### CoD4
