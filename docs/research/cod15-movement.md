@@ -1,60 +1,66 @@
 # CoD 1.5 movement against 1.1
 
-What patch 1.5 changed in the movement a client predicts, measured on the
-1.5b server and read out of its game module. `cod15-protocol-diff.md` covers
-the wire; this covers `bg_pmove` and the weapon machine. The short answer:
-1.5 adds a jump penalty, drops the prone dive, steps the eye one stance at a
-time with the body's stance following the eye, halves a standing lean, and
-touches a handful of step, ladder and weapon details. Pmove's tunables did
-not move.
+What patch 1.5 changed in client-predicted movement (`bg_pmove` and the
+weapon machine), measured on the 1.5b server and read out of its game
+module. `cod15-protocol-diff.md` covers the wire. In short, 1.5:
+
+- adds a jump penalty;
+- drops the prone dive;
+- steps the eye one stance at a time, the body's stance following the eye;
+- halves a standing lean;
+- changes a few step, ladder and weapon details.
+
+Pmove's tunables did not move.
+
+Contents: sources, captures, 1 function map, 2 jump penalty, 3 stance and
+eye, 4 lean, view and prone body, 5 ground, step, ladder, landing (with
+`ps.speed`, the fly move, `ps.gravity`), 6 weapons and view, 7 stored
+floats, 8 the Windows clients, unchanged, what vcod does.
 
 ## Sources and conventions
 
-The binaries are `cod15-protocol-diff.md`'s: 1.1d and 1.5b
-`game.mp.i386.so`, 1.1 and 1.5 `cgame_mp_x86.dll`. Addresses are `nm`
-addresses of the game module unless a cgame VA (0x30000000 base) is named;
-Ghidra's import of either module sits 0x10000 higher. Method: the Ghidra
-exports of both modules, paired function by function through `PmoveSingle`'s
+Binaries as in `cod15-protocol-diff.md`: 1.1d and 1.5b `game.mp.i386.so`,
+1.1 and 1.5 `cgame_mp_x86.dll`. Addresses are game module `nm` addresses
+unless a cgame VA (base 0x30000000) is named; Ghidra's import of either
+module sits 0x10000 higher. Functions were paired through `PmoveSingle`'s
 call order (1.1 0x33dfc, 1.5 0x27eb7), with `tools/re/annotate_func.py`
-resolving each call and constant, and the two captures below.
+resolving calls and constants, and checked against the captures below.
 
-1.5's module is an unoptimised build with every function a frame of its own,
-so 1.1's inlined helpers are separate functions there; a different shape is
-not a different behaviour. Every claim carries its own label. VERIFIED
-means read out of a binary or a capture. INFERRED means read off control
-flow.
+1.5's module is an unoptimised build, one frame per function, so 1.1's
+inlined helpers are separate functions there. A different shape is not a
+different behaviour. Every claim carries its own label: VERIFIED is read
+out of a binary or a capture, INFERRED is read off control flow.
 
 ## The captures
 
 `crates/server/tests/fixtures/playerstate/mp_carentan-dm-slope-8ms-moves-1.1.txt`
-and `...-moves-1.5.txt`: one script (`moves_script` in
-`crates/client/src/probe.rs`, `--probe-moves`) run on the street placement
-of `client-probes/probe_prone` against `tools/run_probe.sh` on each server,
-cmds every 8 ms, every snapshot's whole decoded playerstate logged. Dated
-2026-10-13. What they show, all VERIFIED:
+and `...-moves-1.5.txt`: `moves_script` (`crates/client/src/probe.rs`,
+`--probe-moves`) on the street placement of `client-probes/probe_prone`,
+run against `tools/run_probe.sh` on each server, cmds every 8 ms, every
+snapshot's decoded playerstate logged. They show, all VERIFIED:
 
-- 1.5 sets `pm_flags` 0x2000 at a jump's takeoff and keeps it for about
-  1.8 s after the landing (`pm_time` 1765 on the first snapshot after the
+- 1.5 sets `pm_flags` 0x2000 at a jump's takeoff and keeps it about 1.8 s
+  past the landing (`pm_time` 1765 on the first snapshot after the
   landing frame).
 - A jump from rest peaks 39.3 to 40.8 up on both (125 fps cmds). Pressed
-  about 900 ms after the previous takeoff, 1.5's peaks 16.6 to 18.1 up, four
-  times over, standing and running; 1.1's peak 40.0 to 41.1.
+  about 900 ms after the previous takeoff, 1.5's peaks 16.6 to 18.1 up
+  (four times, standing and running); 1.1's 40.0 to 41.1.
 - `fJumpPeak` on 1.5 is the takeoff height and stays after the landing; on
   1.1 it is the takeoff plus 39 and reads 0 on the ground.
-- The prone press while running forward or backward lifts 1.1's body
-  (`pm_flags` 0x4, vz 200) and not 1.5's.
-- From standing, 1.5's `viewHeightTarget` steps 60, 40, 11 with `eFlags`
-  reading crouch until the second step, about 200 ms in; 1.1's goes
+- A prone press while running forward or backward lifts 1.1's body
+  (`pm_flags` 0x4, vz 200), not 1.5's.
+- From standing, 1.5's `viewHeightTarget` steps 60, 40, 11, `eFlags`
+  reading crouch until the second step (about 200 ms in); 1.1's goes
   straight to 11 with `eFlags` prone at once.
 - Prone entry on 1.5 sets 0x2000 with `pm_time` 1800 (less the cmd).
 
-`...-turns-1.1.txt` and `...-turns-1.5.txt` (2026-10-13): `turns_script`
-(`--probe-turns`) from the same placement facing world yaw 90, a crawl back
-until the legs near the kerb, quarter turns each way there, a crawl with the
-view swinging, a turn past the yaw cap, then a run, lean runs, a lean
-strafe, a sighted walk and a leaning crouch walk. VERIFIED from them: 1.5
-reads `pm_flags` 0x8000 on 29 snapshots of the quarter turns, where its
-`delta_angles[1]` moves with no cap involved (the view pull of section 4).
+`...-turns-1.1.txt` and `...-turns-1.5.txt`: `turns_script`
+(`--probe-turns`) from the same placement facing world yaw 90: a crawl
+back until the legs near the kerb, quarter turns each way, a crawl with
+the view swinging, a turn past the yaw cap, then a run, lean runs, a lean
+strafe, a sighted walk and a leaning crouch walk. VERIFIED: 1.5 reads
+`pm_flags` 0x8000 on 29 snapshots of the quarter turns, where its
+`delta_angles[1]` moves with no cap involved (the view pull, section 4).
 
 `crates/server/tests/moves_ab.rs` replays all four through the client's
 predictor, each under its own rules, and the 1.5 captures under 1.1's to
@@ -89,210 +95,221 @@ Symbols and call sites VERIFIED. The pairing is INFERRED from call order.
 
 ## 2. The jump penalty
 
-1.5's 0x2000 rides `pm_time`, the timer 1.1's knockback (0x100) and damage
-knockback (0x200) use. In 1.1 the bit is set only by `PM_CrashLand`
-(0x2ffab-0x2ffe0, `fJumpOriginZ` non-zero, `pm_time` 200), after the ground
-trace has zeroed `fJumpOriginZ` (0x305c8), so it never fires (INFERRED);
-1.5 removed that block (VERIFIED by absence).
+1.5's 0x2000 rides `pm_time`, the timer of 1.1's knockback (0x100) and
+damage knockback (0x200). In 1.1 only `PM_CrashLand` sets the bit
+(0x2ffab-0x2ffe0, `fJumpOriginZ` non-zero, `pm_time` 200), after the
+ground trace has zeroed `fJumpOriginZ` (0x305c8), so it never fires
+(INFERRED). 1.5 removed that block (VERIFIED by absence).
 
-- The takeoff (0x1f882), called by `PM_CheckJump` with 39.0 (immediate at
+- Takeoff (0x1f882), called by `PM_CheckJump` with 39.0 (immediate at
   0x1fa4e): `v2 = (float)(gravity * (h + h))`; with 0x2000 set and
-  `pm_time <= 1800` (cmp 0x708 at 0x1f906) `v2 /= curve(pm_time)` (0x1f917);
-  `vz = sqrt(v2)` (0x1f92c); `pm_flags |= 0x2008` (0x1f94b); `pm_time = 0`
-  (0x1f95d); `fJumpOriginZ = origin.z` (0x1f97b), the takeoff and not
-  1.1's takeoff plus 39. VERIFIED.
-- The curve (0x1ea52 for the jump, 0x1e9f1 for friction, one formula with
-  its own rodata each): `t * 1.5 * 0.00058823527 + 1.0` up to t = 1699
-  (cmp 0x6a3), 2.5 above (rodata 0x7566c..0x75678, copies at
+  `pm_time <= 1800` (cmp 0x708 at 0x1f906), `v2 /= curve(pm_time)`
+  (0x1f917); `vz = sqrt(v2)` (0x1f92c); `pm_flags |= 0x2008` (0x1f94b);
+  `pm_time = 0` (0x1f95d); `fJumpOriginZ = origin.z` (0x1f97b), the
+  takeoff, not 1.1's takeoff plus 39. VERIFIED.
+- Curve (0x1ea52 for the jump, 0x1e9f1 for friction, one formula with its
+  own rodata each): `t * 1.5 * 0.00058823527 + 1.0` up to t = 1699 (cmp
+  0x6a3), 2.5 above (rodata 0x7566c..0x75678, copies at
   0x7567c..0x75688). 1 at 0, 2.5 from 1700 on. VERIFIED.
-- The landing, at the top of `PM_WalkMove` before `PM_CheckJump`: with
-  0x2000 set, `pm_time > 1800` (a landing stun) clears 0x2000 and
-  `fJumpOriginZ` and scales the velocity by 0.65 (0x20076, 0x2009a, rodata
-  0x756e8); `pm_time == 0` (the first walking frame after a jump) sets
-  `pm_time` 1800 and scales by 0.65 when `origin.z < fJumpOriginZ + 18`
-  (0x756ec, 0x20169), else `pm_time` 1200 and scales by 0.5 (0x201e2,
-  0x756f0). All three velocity components. The constants VERIFIED. The
-  order INFERRED.
-- `PM_Friction`'s ground control: 0x100 still multiplies by 0.3; otherwise
-  0x2000 with `pm_time <= 1800` multiplies by the curve (0x1ec14..0x1ec30).
-  VERIFIED.
+- Landing, at the top of `PM_WalkMove` before `PM_CheckJump`, with 0x2000
+  set. The constants VERIFIED, the order INFERRED:
+
+  | Condition | Effect |
+  |---|---|
+  | `pm_time > 1800` (a landing stun) | clear 0x2000 and `fJumpOriginZ`, velocity x 0.65 (0x20076, 0x2009a, rodata 0x756e8) |
+  | `pm_time == 0` (first walking frame after a jump), `origin.z < fJumpOriginZ + 18` (0x756ec, 0x20169) | `pm_time` 1800, velocity x 0.65 |
+  | `pm_time == 0`, otherwise | `pm_time` 1200, velocity x 0.5 (0x201e2, 0x756f0) |
+
+  All three velocity components scale.
+- `PM_Friction`'s ground control: 0x100 still multiplies by 0.3;
+  otherwise 0x2000 with `pm_time <= 1800` multiplies by the curve
+  (0x1ec14..0x1ec30). VERIFIED.
 - `PM_DropTimers` is 1.1's: it clears 0x100, 0x200 and 0x2000 when the
   timer runs out (mask 0xffffdcff at 0x25b3e) and leaves `fJumpOriginZ`.
   VERIFIED.
-- Also cleared, with `fJumpOriginZ`: by the ground trace's steep branch
-  (0x220f5, 0x22107), by a failed `PM_CorrectAllSolid` (0x219ec), and by
-  `PM_StepSlideMove` on a ladder and for an airborne body whose penalty
-  timer runs (0x2997f-0x299b2, 0x299dd). The stores VERIFIED. The
+- Also cleared with `fJumpOriginZ` by the ground trace's steep branch
+  (0x220f5, 0x22107), a failed `PM_CorrectAllSolid` (0x219ec), and
+  `PM_StepSlideMove` on a ladder or for an airborne body whose penalty
+  timer runs (0x2997f-0x299b2, 0x299dd). The stores VERIFIED, the
   conditions INFERRED.
 - Prone entry arms it: `PM_CheckDuck` sets 0x2000 and `pm_time` 1800 when
   the eye target steps to the prone height (0x24037, 0x24049). VERIFIED.
 
-Worked at gravity 800 (INFERRED from the formula, matched by the capture):
-an unpenalised jump takes off at 249.8 and rises 39; at `pm_time` 1800 at
-158.0 and 15.6; at 1200 at 174.1 and 18.9. Friction after a landing starts
-at 2.5 times 1.1's and falls back to 1.1's over 1.7 s.
+At gravity 800 (INFERRED from the formula, matched by the capture): an
+unpenalised jump takes off at 249.8 and rises 39; at `pm_time` 1800 at
+158.0 and 15.6; at 1200 at 174.1 and 18.9. Friction after a landing
+starts at 2.5 times 1.1's and falls back to 1.1's over 1.7 s.
 
 The penalty never reaches the accel, the wish speed or the cmd scale (no
-read in 0x1ed62, 0x1f08b, 0x1eec9; VERIFIED by absence). Because it runs on
-`pm_time`, `PM_SlideMove`'s tail (a running timer hands the primal velocity
-back) now applies for 1.2-1.8 s after every jump's landing (INFERRED).
-The airborne clear above takes 0x2000 off and leaves `pm_time` running,
-so a body that walks off a ledge inside the penalty falls with the timer
-on and no flag, and its velocity into a wall survives the slide. VERIFIED
-(retail UO 1.51b, `mp_streets-dm-slope-8ms-crouchjump-streets.txt`: off
+read in 0x1ed62, 0x1f08b, 0x1eec9; VERIFIED by absence). Because it runs
+on `pm_time`, `PM_SlideMove`'s tail (a running timer hands the primal
+velocity back) now applies for 1.2-1.8 s after every landing (INFERRED).
+The airborne clear takes 0x2000 off and leaves `pm_time` running, so a
+body that walks off a ledge inside the penalty falls with the timer on
+and no flag, and its velocity into a wall survives the slide. VERIFIED,
+retail UO 1.51b, `mp_streets-dm-slope-8ms-crouchjump-streets.txt`: off
 the sill at ct 21548 `pm_flags` lose 0x2000, `pm_time` 792 counts on, and
-the body falls down the wall at x 233.13 keeping `velocity[0]` -146).
-The predictor's `from_wire` keeps a 1.5 or UO `pm_time` with no flag for
-that reason; 1.1's still means nothing without 0x100 or 0x200.
+the body falls down the wall at x 233.13 keeping `velocity[0]` -146. So
+the predictor's `from_wire` keeps a 1.5 or UO `pm_time` with no flag;
+1.1's still means nothing without 0x100 or 0x200.
 
 ## 3. Stance and the eye
 
-1.5's body stance is the eye's target, `viewHeightTarget` (ps+0xcc), not the
-flags.
+1.5's body stance is the eye's target, `viewHeightTarget` (ps+0xcc), not
+the flags.
 
 - `PM_GetEffectiveStance` (0x1e9a5): crouch when the target is the crouch
   view height, prone when it is the prone one, else standing. 1.1's mixed
-  the flags with the lerp's target, time and direction. VERIFIED. The jump,
-  the walk accel and scale, the ladder check, the footsteps, the lean and
-  `BG_PlayerStateToEntityState` read it (INFERRED from the callers).
-- `PM_CheckDuck` still sets `pm_flags` 0x1 and 0x2 from the keys with 1.1's
-  traces and events, with these changes (VERIFIED unless marked):
+  the flags with the lerp's target, time and direction. VERIFIED. The
+  jump, the walk accel and scale, the ladder check, the footsteps, the
+  lean and `BG_PlayerStateToEntityState` read it (INFERRED from the
+  callers).
+- `PM_CheckDuck` still sets `pm_flags` 0x1 and 0x2 from the keys with
+  1.1's traces and events. Changes (VERIFIED unless marked):
   - every stance trace masks bodies out (`tracemask & ~0x2000000`, 0x23a18
     and six more), so another player no longer blocks a rise;
-  - an airborne press on a body not already prone is dropped without a
-    flag, an 0x8000 or an event (0x237d6, 0x23921);
-  - a prone fit clears 0x2 (0x2390c), and so does every cmd that holds
-    prone, so 0x1 and 0x2 never stand together;
+  - an airborne press on a body not already prone is dropped with no
+    flag, 0x8000 or event (0x237d6, 0x23921);
+  - a prone fit clears 0x2 (0x2390c), as does every cmd that holds prone,
+    so 0x1 and 0x2 never stand together;
   - no dive: no write of 0x4, no `sqrt`, no vz (by absence);
-  - `BG_CheckProne` takes a body length, 60 here (0x237e3), the same body
-    as 1.1's fixed 54 plus the 6 of the box.
-- Then the target steps, only while no leg of the eye runs
-  (`viewHeightLerpTime == 0`, 0x23e3c): prone asked, standing target to
-  the crouch, any other non-prone target to prone (arming the penalty
-  above); prone not asked, a prone target to the crouch, otherwise crouch
-  or stand by 0x2. VERIFIED.
-- The box and `eFlags` 0x20/0x40 follow the effective stance after the step
-  (0x24155..0x241ce): 30 prone, 50 crouched, 70 standing. VERIFIED.
+  - `BG_CheckProne` takes a body length, 60 here (0x237e3): 1.1's fixed
+    54 plus the box's 6.
+- The target steps only while no leg of the eye runs
+  (`viewHeightLerpTime == 0`, 0x23e3c). Prone asked: a standing target
+  goes to crouch, any other non-prone target to prone (arming the
+  penalty). Prone not asked: a prone target goes to crouch, otherwise
+  crouch or stand by 0x2. VERIFIED.
+- The box and `eFlags` 0x20/0x40 follow the effective stance after the
+  step (0x24155..0x241ce): 30 prone, 50 crouched, 70 standing. VERIFIED.
 - `PM_ViewHeightAdjust`'s curves are 1.1's byte for byte (1.5 .data
-  0x814a0, 0x81520, 0x815a0, 0x81680; VERIFIED). The lengths come from
-  `PM_GetViewHeightLerpTime` (0x223a6) with the cvars gone: 400 into prone,
-  200 down to the crouch (1.1: 150), 400 up to the crouch, 200 to standing
-  (VERIFIED immediates). Since the target only moves between legs, 1.1's
-  turn back mid-leg is dead code for a live player, and stand to prone is
-  two legs with the second starting on the cmd after the first ends
-  (INFERRED). The capture's `viewHeightLerpTime` agrees (VERIFIED).
+  0x814a0, 0x81520, 0x815a0, 0x81680; VERIFIED). The leg lengths come
+  from `PM_GetViewHeightLerpTime` (0x223a6), the cvars gone (VERIFIED
+  immediates):
 
-Consequences: a crouch tap runs the full 200 ms down and 400 up; standing to
-prone the box is 50 and `eFlags` read crouch for the first leg, and a rise
-from prone keeps the 50 box for the 400 ms leg (INFERRED).
+  | Leg | 1.5 ms | 1.1 ms |
+  |---|---|---|
+  | into prone | 400 | |
+  | down to crouch | 200 | 150 |
+  | up to crouch | 400 | |
+  | to standing | 200 | |
+
+  Since the target moves only between legs, 1.1's mid-leg turn back is
+  dead code for a live player, and stand to prone is two legs, the second
+  starting on the cmd after the first ends (INFERRED). The capture's
+  `viewHeightLerpTime` agrees (VERIFIED).
+
+So a crouch tap runs the full 200 ms down and 400 up; from standing to
+prone the box is 50 and `eFlags` read crouch for the first leg, and a
+rise from prone keeps the 50 box for the 400 ms leg (INFERRED).
 
 A mounted player runs the same `PM_CheckDuck` (`PmoveSingle`'s mounted
-arm calls 0x332c4; UO's calls 0x37e16), its flags set to the gun's
-stance, so the target and `eFlags` step to the gun's stance on the
-mount (VERIFIED decompile and live, `cod11-turrets.md` 14.8).
+arm calls 0x332c4; UO's calls 0x37e16) with its flags set to the gun's
+stance, so the target and `eFlags` step to the gun's stance on the mount
+(VERIFIED decompile and live, `cod11-turrets.md` 14.8).
 
 ## 4. Lean, view and prone body
 
-- `PM_UpdateLean`: the scale is 0.25 with a prone effective stance and 0.5
+- `PM_UpdateLean`: scale 0.25 with a prone effective stance, 0.5
   otherwise, standing included (0x25ce0..0x25cf5, immediates 0x3e800000
   and 0x3f000000; VERIFIED), so a standing lean tops out at half 1.1's.
   Ramp times 350/280 are 1.1's (0x75a60/0x75a64). The wall trace now runs
   for a linked player too (VERIFIED by absence of 1.1's 0x32c63 skip).
 - `PM_CmdScale`: a lean counts as the walk, `walkSpeedScale` in place of
-  `runSpeedScale * leanSpeedScale` on the ground (the same 0.4 with stock
-  values) and newly in the air and on a ladder (0x1eec9). VERIFIED.
-- `PM_UpdateViewAngles` (0x26118), the prone branch. The soft edge is
-  always on (1.1's `bg_prone_softyawedge` default). VERIFIED. The order,
-  INFERRED from the control flow, with `d = AngleDelta(proneDirection,
-  view)` folded through the shorts (`AngleNormalize360` 0x36a3c multiplies
-  the float by the float 182.04445 on the x87 stack and truncates):
-  - the swing: past the soft edge, or moving with `d` non-zero, the
-    candidate is 1.1's (55 a second, rodata 0x75a8c, or the view when one
-    frame covers it). While the candidate does not fit, it walks a degree
-    at a time back toward the old heading (`|delta| > 1`, double 1.0 at
-    0x75a90); within a degree it jumps to the old heading, marks a refusal
-    and tries once more, and a failure there skips to the cap. A fitting
-    candidate is taken only when a 45-unit body (immediate 0x42340000) fits
-    along both the view and the candidate, else a refusal;
-  - the fit (0x25ff5): `f = |AngleDelta(yaw, view)| / 240` (rodata
-    0x75a68), the body tried along `AngleNormalize360Accurate(yaw - (1 - f)
-    * AngleDelta(yaw, view))` with length `60 (1 - f) + 45 f` (0x75a74,
+  `runSpeedScale * leanSpeedScale` on the ground (0.4 either way with
+  stock values) and newly in the air and on a ladder (0x1eec9). VERIFIED.
+- `PM_UpdateViewAngles` (0x26118), prone branch. The soft edge is always
+  on (1.1's `bg_prone_softyawedge` default). VERIFIED. The order is
+  INFERRED from control flow, with `d = AngleDelta(proneDirection, view)`
+  folded through the shorts (`AngleNormalize360` 0x36a3c multiplies the
+  float by the float 182.04445 on the x87 stack and truncates):
+  - swing: past the soft edge, or moving with `d` non-zero, the candidate
+    is 1.1's (55 a second, rodata 0x75a8c, or the view when one frame
+    covers it). While the candidate does not fit, it walks a degree at a
+    time back toward the old heading (`|delta| > 1`, double 1.0 at
+    0x75a90). Within a degree it jumps to the old heading, marks a
+    refusal and tries once more; a failure there skips to the cap. A
+    fitting candidate is taken only when a 45-unit body (immediate
+    0x42340000) fits along both the view and the candidate, else a
+    refusal;
+  - fit (0x25ff5): `f = |AngleDelta(yaw, view)| / 240` (rodata 0x75a68),
+    the body tried along `AngleNormalize360Accurate(yaw - (1 - f) *
+    AngleDelta(yaw, view))` with length `60 (1 - f) + 45 f` (0x75a74,
     0x75a70), writing the prone body on a fit;
-  - the pull: with the view still off the heading, while the 45-unit body
+  - pull: with the view still off the heading, while the 45-unit body
     along the heading or the fit there fails, the view turns toward the
-    body a degree at a time (the full remainder within a degree), each turn
-    pushed into `delta_angles[1]` and marked a refusal; the heading itself
+    body a degree at a time (the full remainder within a degree), each
+    turn pushed into `delta_angles[1]` and marked a refusal; the heading
     moves by the new `d` whenever the 45-unit test failed;
-  - the cap: 1.1's 85, measured on the last `d` and placing the view off
-    the new heading;
-  - a refusal sets 0x8000, and when the final view is within a degree of
-    the view before the cmd and on the same side as the cmd's own view,
-    0.98 of that degree is added back (rodata 0x75a98).
-  The constants and calls VERIFIED. VERIFIED, vcod measurement (2026-10-13,
-  `moves_ab.rs`): the turns capture's `proneDirection`, view and
+  - cap: 1.1's 85, measured on the last `d`, placing the view off the new
+    heading;
+  - a refusal sets 0x8000. When the final view is within a degree of the
+    view before the cmd and on the same side as the cmd's own view, 0.98
+    of that degree is added back (rodata 0x75a98).
+
+  The constants and calls VERIFIED. VERIFIED, vcod measurement
+  (`moves_ab.rs`): the turns capture's `proneDirection`, view and
   `delta_angles[1]` match on all 1100 snapshots, the 29 with 0x8000
-  included; under 1.1's rules 54 `proneDirection` and 140 `delta_angles[1]`
-  rows miss.
+  included; under 1.1's rules 54 `proneDirection` and 140
+  `delta_angles[1]` rows miss.
 - `BG_CheckProneValid` (0x1cf58): the body length is an argument (60 from
-  every caller but the swing; the sweep is the length less 6 and the bent
+  every caller but the swing; the sweep is the length less 6, the bent
   reach the length less 30). A sample landing on a plane with normal.z <
   0.7 refuses outright, ground or not (0x1d842, 0x1dd86, 0x1def4, rodata
-  0x74f88). A blocked bent-leg sweep from the hips tries once more from the
-  hit 18 units up (rodata 0x74fb0). An off-ground caller with a clear sweep
-  still runs the ground samples and writes the body they give; a sample
-  that misses lays it flat and accepts, as 1.1's early return did. The
-  constants and trace counts VERIFIED. The order INFERRED.
+  0x74f88). A blocked bent-leg sweep from the hips tries once more from
+  the hit 18 units up (rodata 0x74fb0). An off-ground caller with a clear
+  sweep still runs the ground samples and writes the body they give; a
+  sample that misses lays it flat and accepts, as 1.1's early return did.
+  The constants and trace counts VERIFIED, the order INFERRED.
 - `PM_UpdatePronePitch` is 1.1's in effect (VERIFIED constants).
 
 ### The airborne prone body
 
 VERIFIED, `game.mp.i386.so` 1.5b: `PM_UpdatePronePitch` (0x26d80) calls
 `BG_CheckProne` (0x26ed6) only when `groundEntityNum` (ps `+0x54`) is
-0x3ff, and hands it `fTorsoHeight`, `fTorsoPitch` and `fWaistPitch` (ps
-`+0x3c4`, `+0x3c8`, `+0x3cc`) to write. INFERRED, from the order: the call
+0x3ff, handing it `fTorsoHeight`, `fTorsoPitch` and `fWaistPitch` (ps
+`+0x3c4`, `+0x3c8`, `+0x3cc`) to write. INFERRED from the order: the call
 runs at the cmd's start, so it samples the ground under the origin the
-previous cmd left. An off-ground caller with a clear sweep still runs the
-ground samples (above), so a prone body that drops writes the chest
-height and pitches it reads from mid-air, and nothing rewrites them once
-it lands and lies still.
+previous cmd left. With the off-ground ground samples above, a prone body
+that drops writes the chest height and pitches it reads mid-air, and
+nothing rewrites them once it lands and lies still.
 
-VERIFIED, live (retail 1.5b and UO 1.51b, 2026-10-16,
-`client-probes/probe_pronebones`, fixtures in
-`crates/server/tests/fixtures/pronebones/`): a prone body dropped from
-`setorigin`'s raised unit onto mp_carentan's flat spot (1435.88, 2675.88)
-lands at z -23.875 with `fTorsoHeight` -0.1341343 on both servers, where
-the ground under him gives about 0. Its last airborne cmd started 50 ms
-into the fall at -23.740 (the snapshot before the landing), and -17.8745
-(the chest sample's hit) - (-23.740) - 6 is -0.1345. The same drop timed
-16, 16, 18 ms from a cmd on the placement's frame (the first placement
-after a spawn) leaves -0.3521347: the cmd that starts at -23.5225. On
-mp_carentan's mound the drop is longer and the body slides on landing,
-so the slide's own checks rewrite the pitches (-0.536, -13.760, -12.524
-on both). On 1.1 an off-ground caller gets the flat body, so 1.1's lies
-flat after any drop (cod11-mantle.md, "The fit check").
+VERIFIED, live (retail 1.5b and UO 1.51b, `client-probes/probe_pronebones`,
+fixtures in `crates/server/tests/fixtures/pronebones/`): a prone body
+dropped from `setorigin`'s raised unit onto mp_carentan's flat spot
+(1435.88, 2675.88) lands at z -23.875 with `fTorsoHeight` -0.1341343 on
+both servers, where the ground gives about 0. Its last airborne cmd
+started 50 ms into the fall at -23.740 (the snapshot before the
+landing), and -17.8745 (the chest sample's hit) - (-23.740) - 6 is
+-0.1345. The same drop timed 16, 16, 18 ms from a cmd on the placement's
+frame (the first placement after a spawn) leaves -0.3521347: the cmd
+that starts at -23.5225. On mp_carentan's mound the drop is longer and
+the body slides on landing, so the slide's own checks rewrite the
+pitches (-0.536, -13.760, -12.524 on both). On 1.1 an off-ground caller
+gets the flat body, so 1.1's lies flat after any drop (cod11-mantle.md,
+"The fit check").
 
-VERIFIED, same runs: the net probe's cmds run 16, 16 and 18 ms apart, the
-last on each server frame's time, and that one arrives after the frame has
-run (the snapshot's `commandTime` on the placement's frame is the frame's
-time less 18). vcod reproduces each wire body above to the float when its
-gate's cmds follow that cadence (`ProbeHold::framed`,
+VERIFIED, same runs: the net probe's cmds run 16, 16 and 18 ms apart,
+the last on each server frame's time, and that one arrives after the
+frame has run (the snapshot's `commandTime` on the placement's frame is
+the frame's time less 18). vcod reproduces each wire body above to the
+float when its gate's cmds follow that cadence (`ProbeHold::framed`,
 `pronepose_ab`), and misses by up to 0.3 units on an even 16 ms one. A
-retail run with a 2 ms cmd inside the drop lands with another body; so
-does one whose first lie-down took a heading off the view (`proneDirection`
--45 where the client held 270), which the fixtures exclude: that heading is
-the spawn point's yaw, below.
+retail run with a 2 ms cmd inside the drop lands with another body, and
+so does one whose first lie-down took a heading off the view
+(`proneDirection` -45 where the client held 270); the fixtures exclude
+both. That heading is the spawn point's yaw (below).
 
-VERIFIED, `fTorsoHeight`'s arithmetic (`BG_CheckProneValid`'s last
-step, 1.1d `game.mp.i386.so` 0x2e14c, 1.5b 0x1e589, UO game.mp.uo
-0x22ecf): the chest sample's z less the origin's z less 6 is one x87
-expression stored once, the difference never rounded on its own.
-VERIFIED, live (gdb on 1.5b and UO, 2026-10-20, the `fstps` at that
-store): the chest sample on mp_carentan's flat spot is
--17.874535 (0xc18eff0c) on both servers, and the stored body off an
-origin at -22.885998 is -0.98853683, where rounding the difference first
-gives -0.9885349; the flat lie-down at spawn on mp_carentan reads
-0.0004427433 on the wire, not 0.00044250488. vcod: `pmove::check_prone`
-takes the difference in `f64`.
+VERIFIED, `fTorsoHeight`'s arithmetic (`BG_CheckProneValid`'s last step,
+1.1d `game.mp.i386.so` 0x2e14c, 1.5b 0x1e589, UO game.mp.uo 0x22ecf): the
+chest sample's z less the origin's z less 6 is one x87 expression stored
+once, the difference never rounded on its own. VERIFIED, live (gdb on
+1.5b and UO, the `fstps` at that store): the chest sample on
+mp_carentan's flat spot is -17.874535 (0xc18eff0c) on both servers, and
+the stored body off an origin at -22.885998 is -0.98853683, where
+rounding the difference first gives -0.9885349; the flat lie-down at
+spawn on mp_carentan reads 0.0004427433 on the wire, not 0.00044250488.
+vcod: `pmove::check_prone` takes the difference in `f64`.
 
 ### The spawn's lie-down
 
@@ -301,83 +318,88 @@ VERIFIED, `game.mp.i386.so` 1.5b `ClientSpawn` (0x3c9a8): after the
 (`trap_GetUsercmd`, 0x3cce6), sets the view with `SetClientViewAngle`
 (0x3ceac), stamps `pers.cmd.serverTime` with `level.time` (0x3cefe), sets
 `commandTime` to `level.time - 100` and runs `ClientThink_real` on
-`pers.cmd` (0x3cf35). UO 1.51b's (0x44df4) is the same: `trap_GetUsercmd`
-at 0x45162, `ClientThink_real` at 0x45409. 1.1d's runs a zeroed cmd
-(`memset` of 0x18 bytes at 0x42a2f) whose angles are the negated
-`delta_angles` (cod11-combat.md, 9.2). INFERRED: on 1.5 and UO the spawn's
-100 ms think runs the client's held keys and stance at the spawn's view.
+`pers.cmd` (0x3cf35). UO 1.51b's (0x44df4) is the same:
+`trap_GetUsercmd` at 0x45162, `ClientThink_real` at 0x45409. 1.1d's runs
+a zeroed cmd (`memset` of 0x18 bytes at 0x42a2f) whose angles are the
+negated `delta_angles` (cod11-combat.md, 9.2). INFERRED: on 1.5 and UO
+the spawn's 100 ms think runs the client's held keys and stance at the
+spawn's view.
 
-VERIFIED, `game.mp.i386.so` 1.5b: `PmoveSingle` calls `PM_CheckDuck`
-(0x28814) before the ground trace (0x28819), and `PM_CheckDuck` drops a
-prone press while `groundEntityNum` (ps `+0x54`) is 0x3ff (0x237d6). The
-memset leaves it 0. INFERRED: the think's first step takes the press even
-for a spawn point above the ground.
+VERIFIED, 1.5b: `PmoveSingle` calls `PM_CheckDuck` (0x28814) before the
+ground trace (0x28819), and `PM_CheckDuck` drops a prone press while
+`groundEntityNum` (ps `+0x54`) is 0x3ff (0x237d6). The memset leaves it
+0. INFERRED: the think's first step takes the press even for a spawn
+point above the ground.
 
-VERIFIED, live (retail 1.1d, 1.5b, UO 1.51b, 2026-10-16,
-`client-probes/probe_pronebones` with `probe_spawn_yaw 315`, two runs each,
-fixtures `crates/server/tests/fixtures/pronebones/mp_brecourt-spawn315*.txt`):
-a client holding prone at world yaw 270 is `spawn`ed on mp_brecourt's spot
-at yaw 315 and turned to 270 on the same frame. On 1.5 and UO the spawn's
-snapshot is already prone (`pm_flags` 0x40001) with `proneDirection` -45,
-and the heading stays -45 for the rest of the run with the view 45 off it.
-The eye's prone leg steps 166 ms after the spawn (`pm_time` 1784 on the
-snapshot 200 ms in). INFERRED: the view inside the soft edge and no move,
-nothing swings the heading; the crouch leg started at the end of the
-think's first 66 ms step. On 1.1 the spawn's snapshot
-stands (`pm_flags` 0x40000) and the next cmd lies down along 270 (-90). A
-dm spawn point's yaw is what the brecourt runs above lay down along.
+VERIFIED, live (retail 1.1d, 1.5b, UO 1.51b, `client-probes/probe_pronebones`
+with `probe_spawn_yaw 315`, two runs each, fixtures
+`crates/server/tests/fixtures/pronebones/mp_brecourt-spawn315*.txt`): a
+client holding prone at world yaw 270 is `spawn`ed on mp_brecourt's spot
+at yaw 315 and turned to 270 on the same frame.
+
+- 1.5 and UO: the spawn's snapshot is already prone (`pm_flags` 0x40001)
+  with `proneDirection` -45, and the heading stays -45 for the rest of
+  the run with the view 45 off it. The eye's prone leg steps 166 ms after
+  the spawn (`pm_time` 1784 on the snapshot 200 ms in). INFERRED: with
+  the view inside the soft edge and no move, nothing swings the heading;
+  the crouch leg started at the end of the think's first 66 ms step.
+- 1.1: the spawn's snapshot stands (`pm_flags` 0x40000) and the next cmd
+  lies down along 270 (-90).
+
+A dm spawn point's yaw is what those brecourt runs lay down along.
 
 VERIFIED, same runs: through the crouch leg the legs play the crouch idle
-(`pb_crouch_alert_unarmed`), then the prone one: 1.5's `PM_Footsteps`
+(`pb_crouch_alert_unarmed`), then the prone one. 1.5's `PM_Footsteps`
 calls `PM_GetEffectiveStance` (0x24c46), so the anim's stance is the
 stepped eye target (section 3). 1.1's run reads `pb_crouch_alert_unarmed`
 for one snapshot too: 1.1's `PM_Footsteps` picks its idles off
 `viewHeightLerpTarget` alone (player-model-anim-system.md, "How retail
 picks the movetype", "The stance").
 
-VERIFIED, `game.mp.i386.so` 1.5b `ClientSpawn`: every conditional jump
-in it lands at or before 0x3cc41, and none lies between there and the
-`ClientThink_real` call (0x3cf35); UO's last lands at 0x450bd, before its
-call at 0x45409. INFERRED: a spectator's spawn thinks on the last cmd as a
-player's does.
-VERIFIED, live (retail 1.1d, 1.5b and UO 1.51b, 2026-10-16,
-`client-probes/probe_specspawn` beside `--probe-edge spec-fly`, fixtures
+VERIFIED, 1.5b `ClientSpawn`: every conditional jump in it lands at or
+before 0x3cc41, none between there and the `ClientThink_real` call
+(0x3cf35); UO's last lands at 0x450bd, before its call at 0x45409.
+INFERRED: a spectator's spawn thinks on the last cmd as a player's does.
+VERIFIED, live (retail 1.1d, 1.5b and UO 1.51b, `client-probes/probe_specspawn`
+beside `--probe-edge spec-fly`, fixtures
 `crates/server/tests/fixtures/specspawn/mp_carentan*.txt`): a spectator
 holding forward, `spawn`ed again as a spectator at (-224, 60, 200) facing
 0, reads (-200.402, 60, 200) in the spawn frame's snapshot on 1.5 and UO
-(100 ms of flight on his last cmd, five spawns each) and (-224, 60, 200) on
-1.1. The script's own read of `self.origin` straight after the `spawn`
-gives the same. INFERRED from the call order above: `ClientThink_real`
-returns inside `ClientSpawn`, which the builtin (1.1d 0x455cc) calls before
-it returns to the script.
+(100 ms of flight on his last cmd, five spawns each) and (-224, 60, 200)
+on 1.1. The script's own read of `self.origin` straight after the `spawn`
+gives the same. INFERRED from the call order: `ClientThink_real` returns
+inside `ClientSpawn`, which the builtin (1.1d 0x455cc) calls before it
+returns to the script.
 
-vcod: the sim moves in the frame's spawn pass, after the spawning thread,
-so the `spawn` builtin runs the same think on a fresh sim (the client's
-last cmd mirrored into `GameHost::client_last_cmd`) and writes and links
-that origin; `specspawn_ab` holds the `PROBE spec` lines to retail's.
+vcod:
 
-vcod: `ClientSim::spawn_cmd` runs the client's last cmd under 1.5's and
-UO's rules, a 1.5 spawn starts with the body on the ground, and
-`update_anims` takes 1.5's stance off the eye target. `pronepose_ab`'s
-three `a_spawn_lies_down_on_its_own_yaw_*` gates hold the heading, the
-prone body and every bone to retail's; `specspawn_ab` holds the spectator's
-spawn frame.
+- The sim moves in the frame's spawn pass, after the spawning thread, so
+  the `spawn` builtin runs the same think on a fresh sim (the client's
+  last cmd mirrored into `GameHost::client_last_cmd`) and writes and
+  links that origin.
+- `ClientSim::spawn_cmd` runs the client's last cmd under 1.5's and UO's
+  rules, a 1.5 spawn starts with the body on the ground, and
+  `update_anims` takes 1.5's stance off the eye target.
+- Gates: `pronepose_ab`'s three `a_spawn_lies_down_on_its_own_yaw_*`
+  hold the heading, the prone body and every bone to retail's;
+  `specspawn_ab` holds the spectator's spawn frame and the `PROBE spec`
+  lines.
 
-The think on a slope, standing. VERIFIED, live (retail UO 1.51b,
-2026-10-19, `client-probes/probe_leanhit`, fixture
+**The think on a slope, standing.** VERIFIED, live (retail UO 1.51b,
+`client-probes/probe_leanhit`, fixture
 `crates/server/tests/fixtures/leanhit/mp_carentan-leanhit-cmds-uo.txt`
 and the target probe's raw log): the shooter spawned standing on the tdm
 point (976, -792, -2.04889) facing 180, his last cmd a spectator's with
-no keys and no buttons, and the spawn frame's snapshot carried his
-`trDelta` as (6, 3, -1).
+no keys or buttons, and the spawn frame's snapshot carried his `trDelta`
+as (6, 3, -1).
 
 VERIFIED, `client-probes/probe_placebits` on all three Linux servers
-(2026-10-19, `crates/server/tests/fixtures/spawnpoints/placebits-retail.txt`):
+(`crates/server/tests/fixtures/spawnpoints/placebits-retail.txt`):
 `placeSpawnpoint` leaves that point (entity 92) at -(2 + 820224 / 2^24)
 on 1.5b and UO and -(2 + 819968 / 2^24) on 1.1d; every other mp_carentan
 tdm point is the same float on all three. The drop ends on a terrain edge
 (triangle 1526's first edge, normal about (0.207, 0.186, 0.961)), and
-1.5b and UO sweep it on their own build's edge frame: VERIFIED,
+1.5b and UO sweep it on their own build's edge frame. VERIFIED,
 `coduo_lnxded` 0x805403e's edge loop normalizes the edge with
 `VectorNormalize` (0x8066755) and takes its `u` from
 `PerpendicularVector` (0x80676b4), whose `ProjectPointOnPlane`
@@ -387,41 +409,41 @@ tdm point is the same float on all three. The drop ends on a terrain edge
 component). 1.1d's keeps those on the stack (section 7).
 
 The spawn think's first 66 ms step falls from rest, and a fall from rest
-moves exactly half its end velocity: the tail's clamp (section 7) is a
-tie that the start height's last bits settle. VERIFIED, vcod measurement:
-from the placed float the clamp takes the move and leaves -26, the second
-step lands on triangle 1526's neighbour (normal about (0.120, 0.063,
-0.991)) at -53.2 and the clip leaves (6, 3, -1), as retail; from
-`f32(-2.04889)`, the fixture's `%g` print, the clamp does not take it, the
-landing is at -80.2 and the clip leaves (10, 5, -1). VERIFIED, vcod
-measurement (the tail's stores emulated over the 42 floats that print as
--2.04889): 20 take the clamp.
+moves exactly half its end velocity, so the tail's clamp (section 7) is a
+tie the start height's last bits settle. VERIFIED, vcod measurement: from
+the placed float the clamp takes the move and leaves -26, the second step
+lands on triangle 1526's neighbour (normal about (0.120, 0.063, 0.991))
+at -53.2 and the clip leaves (6, 3, -1), as retail. From `f32(-2.04889)`,
+the fixture's `%g` print, the clamp does not take it, the landing is at
+-80.2 and the clip leaves (10, 5, -1). VERIFIED, vcod measurement (the
+tail's stores emulated over the 42 floats that print as -2.04889): 20
+take the clamp.
 
 vcod: `Terrain` keeps a second set of edge records built 1.5b's and UO's
 way (`edges_v22`), which the stored edge sweep reads, and a test's spawn
 pin takes the origin of the one entity its `%g` print rounds from
 (`client_spawn`'s `pinned_spot`). `placespawn_ab`'s three
 `placespawnpoint_*_to_the_bit` gates hold every stock map's spawnpoints
-to retail's float but the rows cod11-gsc-object-model.md 16.2 lists, and `leanhit_ab`'s UO `-cmds` replay holds the shooter's
-eye with no offset. The 1.5b `-cmds` run's target spawned on the same
-point but lay down in the think, so no capture shows a standing 1.5b
-think on a slope.
+to retail's float except the rows cod11-gsc-object-model.md 16.2 lists,
+and `leanhit_ab`'s UO `-cmds` replay holds the shooter's eye with no
+offset. The 1.5b `-cmds` run's target spawned on the same point but lay
+down in the think, so no capture shows a standing 1.5b think on a slope.
 
-The framed cadence elsewhere. VERIFIED, vcod measurement (2026-10-16,
-`ProbeHold::framed` forced on for every `ProbeHold` user): `scriptmodel_ab`,
-`vehicle_ram_ab` and `vehicle_shell_ab` pass either way at both installs;
-at the UO install `vehicle_hits_ab` loses one test and `vehicle_armor_ab`
-two (a pistol round that hits a seat on retail misses on ours); at 1.1
-`scriptmodel_ab`'s prone rest on a grade fails. INFERRED: a gate's cadence
-has to be the one its capture's `CMDS` lines show, so `framed` stays a
-per-gate choice: on for a capture taken with the fall probe's 16/16/18
-cmds whose result rides an airborne cmd's start, off for the vehicle
-probes' 16 ms holds. VERIFIED, live (1.5b and UO 1.51b, 2026-10-17, the
-`--probe-uo-weapon throw` thrower's cmd times logged): that mode's cmds
-also run 16 or 17 ms apart from each snapshot's time (12000, 12016,
-12032 before the 12050 frame), so `scriptmodel_ab`'s 1.5 and UO thrower
-takes `framed`, which lands him on retail's float after the script's
-`setOrigin` (cod11-combat.md 2.1, "The thrower's slide").
+**The framed cadence elsewhere.** VERIFIED, vcod measurement
+(`ProbeHold::framed` forced on for every `ProbeHold` user):
+`scriptmodel_ab`, `vehicle_ram_ab` and `vehicle_shell_ab` pass either way
+at both installs; at the UO install `vehicle_hits_ab` loses one test and
+`vehicle_armor_ab` two (a pistol round that hits a seat on retail misses
+on ours); at 1.1 `scriptmodel_ab`'s prone rest on a grade fails.
+INFERRED: a gate's cadence has to be the one its capture's `CMDS` lines
+show, so `framed` stays a per-gate choice: on for a capture taken with
+the fall probe's 16/16/18 cmds whose result rides an airborne cmd's
+start, off for the vehicle probes' 16 ms holds. VERIFIED, live (1.5b and
+UO 1.51b, the `--probe-uo-weapon throw` thrower's cmd times logged): that
+mode's cmds also run 16 or 17 ms apart from each snapshot's time (12000,
+12016, 12032 before the 12050 frame), so `scriptmodel_ab`'s 1.5 and UO
+thrower takes `framed`, which lands him on retail's float after the
+script's `setOrigin` (cod11-combat.md 2.1, "The thrower's slide").
 
 ## 5. Ground, step, ladder, landing
 
