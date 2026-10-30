@@ -135,8 +135,8 @@ not yet confirmed on 1.7.
   0x4073d3), before the weapon attach and the cached-weapon compare
   (0x4073f9). VERIFIED (the instructions). The server keeps sending the
   held weapon in `weapon`; vcod drops it in `body_view`
-  (`cod4_live_a_gunner_holds_no_weapon_of_his_own`). A bot on mp_backlot's
-  SAW was drawn with his own rifle beside the gun (playtest 2026-10-26).
+  (`cod4_live_a_gunner_holds_no_weapon_of_his_own`). Without that a
+  gunner on mp_backlot's SAW is drawn with his own rifle beside the gun.
 - `body_mp_usmc_assault`'s `tag_weapon_right` (parent `j_wrist_ri`),
   `tag_weapon_left` (parent `j_wrist_le`) and `tag_weapon_chest` (parent
   `j_spine4`) share one bind spot, (10.5, -28.5, 38.9) in model space,
@@ -153,22 +153,21 @@ not yet confirmed on 1.7.
   client info: `G_UpdateClientInfo` calls `G_TagIndex` on each
   attachment's tag inside the frame, so the `d` for a new tag
   (`tag_inhand` for the bomb, `tag_stowed_back` for a stowed RPG) goes
-  out ahead of the first snapshot that names it. INFERRED. vcod-server
-  built the roster after the
-  frame's configstring flush, so the client saw `attachTagIndex` one
-  snapshot before its string and grafted `prop_suitcase_bomb` and
-  `weapon_rpg*_stow` by their root (`tag_weapon`) for that frame (the
-  map sweep's 15 pairs); the roster's tag writes now flush before the
-  messages. VERIFIED (`cod4_live_a_new_attachment_tag_arrives_with_its_snapshot`).
-  1.7's `ClientEndFrame` (`cod4_lnxded` 0x80a68b8) runs that update
+  out ahead of the first snapshot that names it. INFERRED.
+- vcod-server flushes the roster's tag writes before the messages.
+  Built after the frame's configstring flush, the client saw
+  `attachTagIndex` one snapshot before its string and grafted
+  `prop_suitcase_bomb` and `weapon_rpg*_stow` by their root
+  (`tag_weapon`) for that frame (the map sweep's 15 pairs). VERIFIED
+  (`cod4_live_a_new_attachment_tag_arrives_with_its_snapshot`).
+- 1.7's `ClientEndFrame` (`cod4_lnxded` 0x80a68b8) runs that update
   inlined (the six-slot loop at 0x80a69db, the tag lookup at 0x80a6a4d)
   ahead of its session checks (0x80a6b0d, 0x80a6b20), so a spectating or
   intermission client's tags take their index too, where CoD1 indexes
   only a playing or dead one. INFERRED (disassembly control flow). vcod's
   `client_attachments` indexes for every CoD4 client
-  (`cod4::gametype_tests::a_spectators_new_attachment_tag_takes_its_index`);
-  the sweep's last stowed-RPG graft (mp_shipment `dom`) came after the
-  roster fix, which is where this one was found.
+  (`cod4::gametype_tests::a_spectators_new_attachment_tag_takes_its_index`;
+  without it the sweep showed a stowed-RPG graft on mp_shipment `dom`).
   The scripts attach the bomb on `tag_inhand` and the stowed weapons on
   `tag_stowed_back`, and the model's root bone rides that tag. INFERRED
   (the stock `.gsc`, the CoD2 graft rule above).
@@ -269,19 +268,20 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   viewHeightLerpTime) / PM_GetViewHeightLerpTime`, 0x80560a2, clamped
   to 0..1, `1 - f` on a lerp up; 1 with no lerp) (0x8052cc1..0x8052d5f).
   VERIFIED. No capture lies prone or leans yet. vcod-server's
-  `player_entity` sends all three; before it sent the yaw alone, whole,
-  so others saw neither the aim's pitch nor the lean.
+  `player_entity` sends all three (with the yaw alone, others see
+  neither the aim's pitch nor the lean).
 - The walk replay's body yaw matches retail on all 789 rows, and the idle
-  teammate's on all 789 (`cod4::wire_ab`, which compares both). The 31
-  turning rows where retail's yaw read a short past the truncated integer
-  (-122.99194 where `(int)` gives -123's -122.99744) were the writer's
-  half-short rounding (cod4-pmove.md 8): -123 goes out as `(int)(-22391.47
-  + 0.5)`, -22390. The teammate's -134.99451 is -135 the same way; vcod
-  had its spawn view off the spot's yaw by `delta_angles` held in shorts,
-  CoD2's rule, where 1.7's `SetClientViewAngle` holds the float the view
-  less the cmd's angles, wrapped to -180..180 (INFERRED), so its view read
-  -134.99449 and went out -134.
-  VERIFIED (the gate).
+  teammate's on all 789 (`cod4::wire_ab`, which compares both). VERIFIED
+  (the gate).
+- The 31 turning rows where retail's yaw reads a short past the truncated
+  integer (-122.99194 where `(int)` gives -123's -122.99744) are the
+  writer's half-short rounding (cod4-pmove.md 8): -123 goes out as
+  `(int)(-22391.47 + 0.5)`, -22390. The teammate's -134.99451 is -135 the
+  same way. VERIFIED (the gate).
+- 1.7's `SetClientViewAngle` holds `delta_angles` as the float view less
+  the cmd's angles, wrapped to -180..180. INFERRED. Trap: CoD2's rule
+  (`delta_angles` in shorts) puts the spawn view off the spot's yaw, so
+  the view reads -134.99449 and goes out -134.
 - The client's controllers are `BG_Player_DoControllersInternal`
   (`cod4_lnxded` 0x804cf90; it skips a gunner, `eFlags & 0x300` at
   0x804cfa2, and the torso pitch on a climb, movetype bits 0xc0000 at
@@ -308,20 +308,18 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   into `BG_SwingAngles` with clamp 45 and speed 0.15 (0x804c7ad).
   VERIFIED. It holds it level for a dead body (`eFlags` 0x20000), a
   gunner (0x300), a climb (movetype 0xc0000) or a mantle as the only
-  flag (`eFlags == 0x8000`, 0x804ced7). VERIFIED. CoD2's 0.6 ran here
-  before: with no `back_up` the spine showed 0.3 of the aim, seen in play as
-  "looking straight up shows a slight upward aim". At twice the view
-  the spine's `back_low` and `back_mid` take the whole view pitch and
-  the neck and head turn back by it.
+  flag (`eFlags == 0x8000`, 0x804ced7). VERIFIED. At twice the view the
+  spine's `back_low` and `back_mid` take the whole view pitch and the
+  neck and head turn back by it. Trap: CoD2's 0.6 factor here, with no
+  `back_up`, shows only 0.3 of the aim on the spine (looking straight up
+  reads as a slight upward aim).
 - The cgame lerps a player's `leanf` and `movementDir` between the two
   snapshots with its angles, each difference wrapped through `floor`
-  (`CG_InterpolateEntityPosition`). INFERRED.
-  vcod took the newest snapshot's, so the controls' targets jumped at
-  20 Hz and the roll and the `tag_origin` shift moved in stops (a
-  choppy lean with sliding feet seen in play). The shift moves the whole
-  body, feet included, on retail too (`DObjSetLocalTag` on bone 0,
-  INFERRED).
-  `a_watched_body_aims_and_leans` poses the spectator capture's walker
+  (`CG_InterpolateEntityPosition`). INFERRED. vcod lerps them too; the
+  newest snapshot's alone makes the controls' targets jump at 20 Hz, a
+  choppy lean with sliding feet. The shift moves the whole body, feet
+  included, on retail too (`DObjSetLocalTag` on bone 0, INFERRED).
+- `a_watched_body_aims_and_leans` poses the spectator capture's walker
   with 45 degrees down and up and half a lean either way: the head drops
   9 and moves 9 forward aiming down, moves 13 back aiming up, and moves
   13 to the side it leans to. VERIFIED (the test). That the bend looks
@@ -339,21 +337,20 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   client, and keeps its own tree. Nothing else writes the slot, so a
   corpse keeps the models it was copied with. INFERRED
   (`CG_ResetEntity`, `CG_CopyCorpseInfo`).
-- vcod took a corpse's models off its client's live client state every
-  frame, and a change of them reset the body: the stock class scripts
-  attach and detach the stowed C4, RPG and rifle (`weapon_c4_mp` on
-  `tag_stowed_hip_rear`, `weapon_rpg7_stow` and `weapon_m16gr_sp` on
-  `tag_stowed_back`) as the client respawns and switches weapons, and
-  each change stood the corpse up and replayed its fall while the fresh
-  bit, which vcod-server never cleared, said to play it from the top. A
-  bots `war` on mp_crash showed it on most corpses. VERIFIED (live, a
-  spectator beside eight bots). `play::cod4_players` now copies a
-  corpse's models at its reset and keeps them, and takes the live body
-  over only for a fresh one; the server clears the bit at
-  `deathAnimDuration` (cod4-combat.md 5).
+- `play::cod4_players` copies a corpse's models at its reset and keeps
+  them, and takes the live body over only for a fresh one; the server
+  clears the fresh bit at `deathAnimDuration` (cod4-combat.md 5).
   `cod4_live_corpses_keep_their_models_and_go_stale` holds both over a
-  45 s bots match (VERIFIED, the test; it fails with either half
-  reverted). That no corpse stands up again is pending a human's look.
+  45 s bots match and fails with either half reverted. VERIFIED (the
+  test).
+- Trap: a corpse that reads its client's live models every frame resets
+  on each change. The stock class scripts attach and detach the stowed
+  C4, RPG and rifle (`weapon_c4_mp` on `tag_stowed_hip_rear`,
+  `weapon_rpg7_stow` and `weapon_m16gr_sp` on `tag_stowed_back`) as the
+  client respawns and switches weapons, and with the fresh bit left set
+  each change stands the corpse up and replays its fall. A bots `war` on
+  mp_crash showed it on most corpses. VERIFIED (live, a spectator beside
+  eight bots). That no corpse stands up again is pending a human's look.
 
 ## 10. The ragdoll
 
@@ -523,25 +520,23 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   `[esi+0x44]`). VERIFIED (disassembly). That the test is per body and
   on the squared speeds is INFERRED (ODE's
   `dBodySetAutoDisableLinearThreshold`).
-- What vcod did, measured live (`cod4_live_ragdolls_hold_still_once_down`:
-  six held bots on mp_crash killed on open floor, a spectator posing
-  them through `Cod4Players`, the client at 4 ms and at 100 ms frames).
-  VERIFIED (the test, ours):
+- Two traps, measured live on the earlier solver
+  (`cod4_live_ragdolls_hold_still_once_down`: six held bots on mp_crash
+  killed on open floor, a spectator posing them through `Cod4Players`,
+  the client at 4 ms and at 100 ms frames). VERIFIED (the test, ours):
   - A bone without mirrored children (the lower spine, the neck, the
-    arms and legs) was carried from step to step by the shortest turn
-    of its axis. A turn carried that way picks up the solid angle its
-    axis sweeps, so a neck swinging about while the body fell twisted
-    about itself: 22 to 180 degrees against the upper spine at 4 ms, 0
-    to 41 at 100 ms, where 1.7 stops it at 30. On the ground the small
-    swings of a resting bone kept turning it: up to 17 degrees with every
-    point within a unit of where it lay. The head is drawn under the
-    neck bone, so it spun.
-  - A body slid and turned on the floor while slower than 20 units a
-    second: with the twist fixed (below), in the 900 ms before it slept
-    two of five at 4 ms moved 7 units and turned 13 degrees. Its points lost speed to friction only
-    in the collision pass, and the constraint passes after it moved them
-    along the floor again.
-- The fix: a bone under a parent takes the parent's frame turned by the
+    arms and legs) carried from step to step by the shortest turn of its
+    axis picks up the solid angle its axis sweeps. A neck swinging while
+    the body fell twisted 22 to 180 degrees against the upper spine at
+    4 ms, 0 to 41 at 100 ms, where 1.7 stops it at 30. On the ground a
+    resting bone's small swings kept turning it, up to 17 degrees with
+    every point within a unit of where it lay. The head is drawn under
+    the neck bone, so it spun.
+  - With friction only in the collision pass, the constraint passes
+    after it slide the points along the floor again: with the twist
+    fixed, two of five bodies at 4 ms moved 7 units and turned 13
+    degrees in the 900 ms before they slept.
+- The rule now: a bone under a parent takes the parent's frame turned by the
   shortest turn from its axis at the start (in the parent's frame) to
   its axis now, times its start frame in the parent's, so its twist
   against the parent stays the death anim's whatever path its axis
