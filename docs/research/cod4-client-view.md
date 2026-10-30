@@ -68,17 +68,16 @@ off (sections 1-3). Our own body is predicted through
   keeps the cmd's view as `Cod4Session::view` (`cl.viewangles` plus the
   newest `delta_angles`, moved by each change of it) and adds the
   mouse's turn to it each frame; the camera takes the scene's view.
-  Before, the camera was the mouse's own: past the limit it climbed to
-  its 89 between snapshots and each push threw it back to 85 (the
-  jump at the edge seen in play).
-  `cod4_live_pitch_held_past_the_limit_stays_at_the_limit` holds the
+  Trap: a camera that is the mouse's own climbs past the limit to its 89
+  between snapshots and each push throws it back to 85, a jump at the
+  edge. `cod4_live_pitch_held_past_the_limit_stays_at_the_limit` holds the
   drawn view at 85 and -85 frame for frame. VERIFIED (the test).
 - No distance cuts a lerp. The playerstate starts over (the older one
   replaced by the newer) when the teleport bit 2 of `eFlags` toggles, the
   view's `clientNum` changes or `stats[4]` does; an entity starts over
   when its own bit 2 toggles or it was not in the older snapshot
-  (`CG_ResetEntity`). INFERRED (`CG_SetNextSnap`).
-  vcod's cut at 256 units is gone.
+  (`CG_ResetEntity`). INFERRED (`CG_SetNextSnap`). vcod cuts the same
+  way and has no distance cut.
 - Every cut in the three play captures is one of those. VERIFIED (the
   gate):
   - `walk`: snapshot 29, the team pick, the view turns to the idle
@@ -114,7 +113,7 @@ sent a move message every 90 to 100 ms, so the server ran its cmds on
 every other snapshot and `ps.commandTime` and the origin advance in
 pairs (snapshots 53-104 of `walk`). VERIFIED. Retail would draw that
 the same way with prediction off; with it, its own pmove fills the gap,
-as vcod's does now (section 5).
+as vcod's does (section 5).
 
 ## 4. The view weapon
 
@@ -186,9 +185,9 @@ and `walker_draws_its_view_weapon`; the zones' census is
   `CG_RegisterWeapon` sets the tags' bits in the view DObj's
   `hidePartBits`, and the renderer skips a surface whose `partBits` meet
   them. INFERRED (`CG_RegisterWeapon`, `R_SkinXModel`). vcod builds each weapon's gun without those surfaces
-  (`vcod_cod4::anim::model_hiding`); before it did, a plain MP5 drew the
+  (`vcod_cod4::anim::model_hiding`); without that, a plain MP5 draws the
   ACOG over its iron sight and the plain W1200 the reflex sight. VERIFIED
-  (the live playtest's screenshots).
+  (screenshots of a live session).
 - During a melee (`weapAnim`, toggle off, 8 or 9: nodes 7 and 8, the
   `viewmodel_M4m203_knife_melee_*` clips) the weapon's `knifeModel` is
   grafted at the hands' `tag_knife_attach`, and dropped once `weapAnim`
@@ -225,9 +224,9 @@ and `walker_draws_its_view_weapon`; the zones' census is
 - The fov is `CG_GetViewFov`'s: `cg_fov`, the sight's `adsZoomFov`
   eased in over the raise's last `adsZoomInFrac` (out over
   `adsZoomOutFrac`), 55 on a turret, 90 at the intermission. INFERRED.
-- Left out: the damage kick, the gun recoil
-  (`BG_WeaponFireRecoil`), the landing dip and the shellshock's sway
-  scale. Predicted, `xyspeed`, `bobCycle`, the eye's height and lerp,
+- The damage kick, the gun recoil (`BG_WeaponFireRecoil`) and the
+  landing dip come in through `play::cod4_kick` (section 14). Left out:
+  the shellshock's sway scale. Predicted, `xyspeed`, `bobCycle`, the eye's height and lerp,
   `leanf`, `pm_flags` and `eFlags` are the predicted state's (section 5);
   unpredicted, `xyspeed` is the lerped playerstate velocity's.
 
@@ -262,7 +261,7 @@ pending a human's look.
   writes (2m, 1.2(m - 0.2), 1.2(m - 0.2), 1.2m). VERIFIED (the
   technique's bytecode, disassembled with `tools/re/d3d9dis.py`).
   Drawn with the model's coordinates instead, the opaque DXT1 dot map
-  tiled three white dots over a black lens. VERIFIED (the playtest).
+  tiled three white dots over a black lens. VERIFIED (a live session).
 - vcod's `viewmodel.wgsl` draws the dot as the shaders do but without
   the detail map (one texture a stage), and blends (SrcAlpha,
   InvSrcAlpha) with the colour divided by its alpha, so the dot's faint
@@ -296,9 +295,9 @@ pending a human's look.
   carry both keys with both fractions 0.05, so the gun goes once the
   lerp passes 0.9505. The M16 carries neither. VERIFIED (`common_mp.ff`,
   `cod4_viewmodel`'s `a_scoped_rifle_hides_its_gun_under_the_overlay`).
-- vcod drew the gun under the overlay before C4-105. Its scope model
-  (lens and tube) filled the overlay's clear centre a few units from the
-  eye, under the view model's depth of field: on mp_crash 0 of 4096
+- vcod hides the gun the same way. Drawn under the overlay, its scope
+  model (lens and tube) fills the overlay's clear centre a few units from
+  the eye, under the view model's depth of field: on mp_crash 0 of 4096
   centre pixels matched the bare view, mean brightness 46 against 152.
   With the gun hidden, 3899 of 4096 match, 150 against 152 (the rest is
   the reticle's lines). VERIFIED
@@ -458,8 +457,8 @@ That the predicted view looks right on screen is pending a human's look.
   nothing: `CG_InterpolatePlayerState` lerps the two snapshots'
   `viewangles` and `delta_angles` the short way round. INFERRED (`CG_PredictPlayerState`, `CG_InterpolatePlayerState`).
 - vcod replays a capture as live (section 5), and a capture's cmds come
-  16 to 100 ms apart, so the frame's own cmd took the view of the next
-  cmd and the view turned in those steps. The frame's cmd now eases its
+  16 to 100 ms apart; a frame's own cmd taking the next cmd's view turns
+  the view in those steps. So the frame's cmd eases its
   angles from the cmd before it to the next by the frame's time between
   them, each the short way round in shorts (`play::cod4::eased_cmd`). A
   gap over 250 ms, or a turn faster than 0.36 degrees a ms (a scripted
@@ -734,9 +733,9 @@ cod4-effects.md and cod4-sound.md.
   helicopter's posed one.
 - A helicopter's shots flash on its posed `tag_flash` and eject on its
   `tag_brass` (`Cod4Client::draw` adds both to the frame's weapon tags,
-  as it does a mounted gun's). Before, no tag was kept for it and the
-  flash fell back to 56 units over the origin, by the rotor, pointing
-  up: the playtest's flash out of the rotor. On the retail capture the
+  as it does a mounted gun's). With no tag kept the flash falls back to
+  56 units over the origin, by the rotor, pointing up. On the retail
+  capture the
   posed `vehicle_cobra_helicopter_fly`'s `tag_flash` sits 194 units ahead
   of its origin and 185 under it, its forward 0.86 along the body's.
   VERIFIED (`retail_hardpoint_capture_draws_and_poses_the_vehicles`,
@@ -752,8 +751,9 @@ cod4-effects.md and cod4-sound.md.
   offscreen frame with the helicopter in it, stages 2, 1 and 0 smoking,
   the crash's and the airstrike's effects and sounds). VERIFIED (the
   tests, ours).
-- Left out: the helicopter's compass entry here (cod4_radar), the wash's
-  and smoke's lighting and the rotor blur's look, which a human checks.
+- The helicopter's compass entry is `cod4_radar`'s (cod4-hud.md 15.7).
+  Left out: the wash's and smoke's lighting and the rotor blur's look,
+  which a human checks.
 
 ## 12. The depth of field
 
@@ -886,16 +886,16 @@ What the cgame does for our own view while we man a gun (`eFlags`
 - vcod poses our own gun off the drawn view, puts the eye on its
   `tag_player` posed so, jitters the view as above, and hands the gun's
   `tag_flash` to the effects as the view's flash tag, so the flash and
-  the tracer leave the barrel in front of the eye. Before, the flash had
-  no tag to ride and played 56 over the gun's origin (the smoke over the
-  head), and an `EV_FIRE_WEAPON_MG42` drew no client-side round.
-  VERIFIED (ours, the test).
+  the tracer leave the barrel in front of the eye (with no tag to ride
+  the flash plays 56 over the gun's origin, the smoke over the head), and
+  an `EV_FIRE_WEAPON_MG42` draws a client-side round. VERIFIED (ours, the
+  test).
 - The map zone's `weapon_saw_mg_setup` (mp_backlot, mp_carentan) names
   `,mc/mtl_weapon_saw`, a stub; the material whole, its
   `mc_l_sm_r0c0s0` techset and `weapon_saw_col`, is in `common_mp`.
-  vcod took the stub and drew the gun black; an entity model's stub
-  material now comes from the zone that holds it whole
-  (`cod4_fly::add_whole_material`). VERIFIED (the zones).
+  An entity model's stub material comes from the zone that holds it
+  whole (`cod4_fly::add_whole_material`); the stub alone draws the gun
+  black. VERIFIED (the zones).
 - vcod poses every gun with its weapon's `idleAnim` and
   `fireAnim`, decoded for a `weapClass` 7 weapon
   (`cod4_fly::WeaponModels::gun_anims`), before the controllers turn
@@ -903,12 +903,13 @@ What the cgame does for our own view while we man a gun (`eFlags`
   another while its `lerp.eFlags` 0x40 is on, set at full weight over
   0.1 s (the float at 0x6b72dc pushed at 0x432dc8, VERIFIED), the clip
   restarting from its first frame when it becomes the goal (vcod's).
-  Before, every gun stood still in its bind pose. `cod4_live_saw_gunner_view`
+  `cod4_live_saw_gunner_view`
   runs a spectator beside the gunner who poses gun 393 so and sees the
   fire anim take over while it fires, move its bones against the
   controllers-only pose, and give way to the idle after. VERIFIED (ours).
   That it looks right is pending a hand check.
 - Left out: the jitter riding into our own gun's pose.
+
 ## 14. The kicks: recoil, the damage kick, the landing dip
 
 Code: `crates/client/src/play/cod4_kick.rs` (state and steps), the
@@ -1060,6 +1061,6 @@ jump and a drop off a roof (the eye and the gun dip).
 - vcod: `Drawn::part_bits` is the newer snapshot's `partBits`;
   `Cod4Client::handle` uploads a model once for each set of hidden parts
   that takes a surface off it (`cod4_fly::Parts`, each entity model's
-  surfaces' bits off `vcod_cod4::anim::model_parts`). Before, every
-  sedan drew both glass pairs over each other, inside and out
+  surfaces' bits off `vcod_cod4::anim::model_parts`). Without it every
+  sedan draws both glass pairs over each other, inside and out
   (cod4-client-perf.md 15).
