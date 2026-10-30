@@ -181,14 +181,15 @@ the script VM, which depends on nothing else here.
 
 ## Some numbers, for fun
 
-As of mid-October 2026:
+As of the end of October 2026:
 
-- about 270,000 lines of Rust,
-- about 3,000 tests,
-- about 450,000 words of protocol and research notes, twice the length of
-  Moby-Dick with a worse plot, except the twist where grenade cooking
+- about 630,000 lines of Rust, for four games that shipped in less,
+- about 5,600 tests, and 91 of them replay a retail capture and refuse to
+  pass until vcod agrees with it,
+- close to a million words of protocol and research notes, four and a half
+  Moby-Dicks with a worse plot, except the twist where grenade cooking
   turned out not to exist until United Offensive,
-- one asphalt footstep restored.
+- one asphalt footstep restored, typo and all.
 
 ## Why
 
