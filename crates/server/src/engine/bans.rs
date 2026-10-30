@@ -331,8 +331,10 @@ mod tests {
 
     #[test]
     fn a_lan_client_has_no_guid() {
+        // CoD1's LAN test reads the host's own addresses, so only CoD2's
+        // fixed private blocks are checked here.
+        assert_eq!(guid_of(Lan::Cod2, "192.168.1.5:28960".parse().unwrap()), 0);
         for lan in [Lan::Cod1, Lan::Cod2] {
-            assert_eq!(guid_of(lan, "192.168.1.5:28960".parse().unwrap()), 0);
             assert_eq!(guid_of(lan, "127.0.0.1:28960".parse().unwrap()), 0);
             assert_eq!(
                 guid_of(lan, "203.0.113.7:28960".parse().unwrap()),
