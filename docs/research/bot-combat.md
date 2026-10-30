@@ -1,58 +1,67 @@
 # Bot combat and the match harness
 
 How well vcod's bots fight, and how a change to them is measured. Retail
-Call of Duty has no bots, so nothing here is checked against a retail
-binary: the yardstick is vcod's own seeded matches. The brain is
-`crates/server/src/bots.rs`; how bots move is in `bot-navigation.md`, how
-they play objectives in `bot-objectives.md`.
+has no bots, so nothing here is checked against a retail binary: the
+yardstick is vcod's own seeded matches. The brain is
+`crates/server/src/bots.rs`; movement is in `bot-navigation.md`,
+objectives in `bot-objectives.md`.
+
+Contents: 1 the harness, 2 baseline, 3 skill levels, 4 cover and lean,
+5 retreat, 6 one table of every arm, 7 team spread, 8 target choice and
+sight, 9 aim and footwork, 10 varied peeks and hunts, 11 the walking
+view, 12 frags, 13 broken fights, 14-17 CoD2 bots (guns, tick order,
+pmove walks, the pass's rules and mp_ship's ladders).
 
 ## 1. The harness
 
 `cargo run --release -p vcod-server --example bot_match [seed...]` runs one
-in-process match per map and seed (default 1..=8) with every bot's fire
-on, on the stock gametype scripts, until the script calls `exitLevel` or
-`TICKS` (12000, ten minutes of 50 ms ticks) run out. `JOBS` (4) matches
-run at once; the nav graph is built once and shared. It is the one bot
-measuring tool: the per-feature examples that came before it
-(`team_tally`, `cover_ab`, `bot_fights`) are folded in, and a new
-measure goes in it too. A match is deterministic in its
-seed: the same seed on the same build prints the same lines. The example
+in-process match per map and seed (default 1..=8), every bot firing, on
+the stock gametype scripts, until the script calls `exitLevel` or `TICKS`
+(12000, ten minutes of 50 ms ticks) run out. `JOBS` (4) matches run at
+once; the nav graph is built once and shared. It is the one bot measuring
+tool (`team_tally`, `cover_ab` and `bot_fights` are folded in); a new
+measure goes in it. A match is deterministic in its seed. The example
 passes `2 * seed + 1` to `Server::test_seed_rng`, which sets the low bit
 itself, so neighbouring seeds don't replay one match.
 
-Knobs: `MAPS=` a comma list (`MAP=` too; mp_carentan), `GAMETYPE=`
-(tdm), `BOTS=` (6), `TICKS=`, `JOBS=`, `SET=name=value,...` (any cvar,
-e.g. `scr_tdm_timelimit=5`), `UO=1` (a United Offensive server:
-`COD_DIR` at a UO install), `VERBOSE=1` (every kill line).
-`AXIS_SKILL=` / `ALLIES_SKILL=` add the `BOTS` through `addbot <side> <n>
-skill <level>`, half a side; `SKILLS=a,b,...` adds one bot per entry by
-balance (for `dm`). Without them the bots join as `--bots` does, at
-`vc_bot_skill`.
+Knobs:
 
-Feature arms: `COVER=` (section 4, `Server::test_bot_cover`), `RETREAT=`
-(section 5, `test_bot_retreat`), `TEAMPLAY=` (`bot-objectives.md` 9,
-`test_bot_team_play`: off, a bot ranks by slot, every attacker keeps by
-an `re` carrier, nobody covers a planter, plans pay no crowd cost, a
-carrier fights as any bot and every noise draws the bot, the brain
-before team play; section 7) and `AWARE=` (section 8, `test_bot_aware`:
-off, a bot sees all round, fights the nearest enemy in sight, pays the
-full reaction and error on every switch and ignores hits from out of
-sight), `FOOTWORK=` (section 9, `test_bot_footwork`: off, a bot
-stands still on its sights, never backs off and never lies down) and
-`WARY=` (section 10, `test_bot_wary`: off, a bot peeks from a
-spot the one way, peeks on through the 3 s hold, and walks onto a lost
-enemy's spot until it forgets it) each take `all`
-(the default), `none`, `axis`, `allies` or `alt` (axis on odd seeds,
-allies on even, so the map's own asymmetry cancels over an even seed
-count). A default arm never calls its hook, so an all-default run plays
-the stock game bit for bit (checked: seeds 1 and 2 print the lines of
-the harness before the arms). `dm` has no sides: only `all` and `none`
-mean anything there. With an arm one-sided the totals add a row per
-arm, named by the one-sided features on for it (`control` for none),
-and the wins and actions by arm.
+| Knob | Default | Effect |
+|---|---|---|
+| `MAPS=` (`MAP=`) | mp_carentan | comma list |
+| `GAMETYPE=` | tdm | |
+| `BOTS=` | 6 | |
+| `TICKS=`, `JOBS=` | 12000, 4 | |
+| `SET=name=value,...` | | any cvar, e.g. `scr_tdm_timelimit=5` |
+| `UO=1` | | a United Offensive server (`COD_DIR` at a UO install) |
+| `VERBOSE=1` | | every kill line |
+| `AXIS_SKILL=` / `ALLIES_SKILL=` | | add the `BOTS` through `addbot <side> <n> skill <level>`, half a side |
+| `SKILLS=a,b,...` | | one bot per entry, by balance (for `dm`) |
 
-Everything it counts comes off the script's `logPrint` lines, the same
-`games_mp.log` lines a retail server writes:
+Without a skill knob the bots join as `--bots` does, at `vc_bot_skill`.
+
+Feature arms, each `all` (default), `none`, `axis`, `allies` or `alt`
+(axis on odd seeds, allies on even, so the map's asymmetry cancels over
+an even seed count). Off means:
+
+| Arm | Section | Hook | Off |
+|---|---|---|---|
+| `COVER=` | 4 | `Server::test_bot_cover` | no cover spots |
+| `RETREAT=` | 5 | `test_bot_retreat` | no retreat |
+| `TEAMPLAY=` | `bot-objectives.md` 9, section 7 | `test_bot_team_play` | a bot ranks by slot, every attacker keeps by an `re` carrier, nobody covers a planter, plans pay no crowd cost, a carrier fights as any bot, every noise draws the bot |
+| `AWARE=` | 8 | `test_bot_aware` | sees all round, fights the nearest enemy in sight, pays full reaction and error on every switch, ignores hits from out of sight |
+| `FOOTWORK=` | 9 | `test_bot_footwork` | stands still on its sights, never backs off, never lies down |
+| `WARY=` | 10 | `test_bot_wary` | peeks from a spot the one way, peeks on through the 3 s hold, walks onto a lost enemy's spot until it forgets it |
+
+A default arm never calls its hook, so an all-default run plays the stock
+game bit for bit (checked: seeds 1 and 2 print the lines of the harness
+before the arms). `dm` has no sides: only `all` and `none` mean anything.
+With an arm one-sided the totals add a row per arm, named by the
+one-sided features on for it (`control` for none), and the wins and
+actions by arm.
+
+Everything it counts comes off the script's `logPrint` lines (the
+`games_mp.log` lines a retail server writes) or the bot bodies:
 
 | Column | From | Meaning |
 |---|---|---|
@@ -62,75 +71,78 @@ Everything it counts comes off the script's `logPrint` lines, the same
 | wins | `W;` | The winning team per line: one per round in `sd` and `re`, one per match in the others (`dm` names the player). |
 | score | `getTeamScore` | Axis and allies at the end (before `exitLevel` zeroes them). Rounds won in `sd` and `re`. |
 | actions | `A;` | Objective actions by team: `bomb_plant`, `bomb_defuse`, `re_pickup`, `re_capture`, UO's `ctf_take` and kin. |
-| stalled, held | bodies | Bot-ticks whose last 12 s lie within 150 units of the first, as `ship_stalls` counts them (playing, bipod up; a bipod down clears the window). `held` is those whose bot held still on purpose on any tick of the 12 s (`BotBody::holds`): engaged, on a held cover spot, retreating or at the retreat's cover, in a vehicle seat or holding the hull for crew, or on its objective (a plant or defuse under way, the script holding the body, or standing at its objective: a guard ring, a site, the HQ radio; `BotBody::on_objective`). `stalled` is the rest. A hunt's vantage is no hold: arriving drops the recall and the bot walks on. Before 2026-10-21 `stalled` was the two summed. Until the nav recheck the same day `held` read the tick alone, so the up to 12 s a fight's spot stayed in the window after the fight read `stalled`: on `mp_depot` `dm` seeds 1..=8 (6 bots, 12 000 ticks) 485 such bot-ticks, every one within 12 s of a held tick, and 0 with the window rule (VERIFIED, measured, master 028799bf, `ship_stalls` `SHOOT=1` and its `ago` column, bot-navigation.md section 3). |
+| stalled, held | bodies | Bot-ticks whose last 12 s lie within 150 units of the first, as `ship_stalls` counts them (playing, bipod up; a bipod down clears the window). `held` is those whose bot held still on purpose on any tick of the 12 s (`BotBody::holds`): engaged, on a held cover spot, retreating or at the retreat's cover, in a vehicle seat or holding the hull for crew, or on its objective (a plant or defuse under way, the script holding the body, or standing at a guard ring, a site, the HQ radio; `BotBody::on_objective`). `stalled` is the rest. A hunt's vantage is no hold: arriving drops the recall and the bot walks on. |
 | ended | `exitLevel` | Matches that reached their end inside `TICKS`. |
 | life | bodies | Mean life: bot-ticks playing over the lives they made up (a life still running at the end is left out). |
 | wounds, dead in 5 s | bodies | A life's first tick under 50 health while `BotBody::engaged`, and the share of those whose bot died within 5 s. |
 | retreats hurt, dry | bodies | `BotBody::retreating` going from 0 to 1 (hurt) or 2 (dry): retreats started (section 5). |
 | cover hold, lean | `bot_cover_state` | Bot-ticks playing on a held cover spot, and with `ps.lean` off zero (section 4). |
-| answered | `D;`, bodies | Of the hits a bot takes from an enemy (one per attacker until it is answered or 1 s passes), the share it answers within 1 s: a tick after the hit's with `BotBody::firing` and that attacker as `BotBody::target`. Fire at someone else does not count; a bot killed inside the second has not answered. Printed with the hit count. |
+| answered | `D;`, bodies | Of the hits a bot takes from an enemy (one per attacker until answered or 1 s passes), the share it answers within 1 s: a tick after the hit's with `BotBody::firing` and that attacker as `BotBody::target`. Fire at someone else does not count; a bot killed inside the second has not answered. Printed with the hit count. |
 | blindsided | `K;`, bodies | Of a bot's deaths to an enemy, the share whose killer was never its `BotBody::target` that life, reaction delay included. Printed with the death count. |
-| mate, packed | bodies | How close a team keeps. Each bot-tick playing with a teammate playing adds its distance to the nearest one (3D, units): `mate` is the mean. `packed` is the share of those bot-ticks with two or more teammates within 400 units, the bot and two others in one room. Bots only; a corpse or spectator is left out. `dm` has no teammates and prints 0. |
+| mate, packed | bodies | Each bot-tick playing with a teammate playing adds its 3D distance to the nearest one: `mate` is the mean. `packed` is the share of those bot-ticks with two or more teammates within 400 units. Bots only. `dm` prints 0. |
 | grenades thrown | bodies | Frags let go (`BotBody::throws`, counted at the release; a throw put back is not one). |
-| grenade hits, kills | `D;`, `K;` | Lines with means of death `MOD_GRENADE_SPLASH` on another player, by the thrower; kills are the `K;` ones. A frag that kills its own thrower is a suicide. |
-| own, team | `K;` | Of the `MOD_GRENADE_SPLASH` kills, those of the thrower himself (also in `suicides`) and those of a teammate (also in `teamkills`). A cook dropped by a dying thrower counts as his. |
+| grenade hits, kills | `D;`, `K;` | Lines with `MOD_GRENADE_SPLASH` on another player, by the thrower; kills are the `K;` ones. A frag that kills its own thrower is a suicide. |
+| own, team | `K;` | Of the `MOD_GRENADE_SPLASH` kills, those of the thrower himself (also in `suicides`) and of a teammate (also in `teamkills`). A cook dropped by a dying thrower counts as his. |
 | engagements, clip at start | bodies | `BotBody::engaged` going from off to on with a bullet weapon in hand, and the mean of its clip over its `clipSize` on that tick. |
-| shots | bodies | Rounds fired: each tick's drop in the held clip while the weapon stays the same bullet gun (`weaponType bullet`, `BotBody::gun`). Grenades, rockets and a mounted MG's rounds are not counted. |
-| hits | `D;`, `K;` | Lines on another player whose means of death is a bullet (`MOD_RIFLE_BULLET`, `MOD_PISTOL_BULLET`, `MOD_HEAD_SHOT`). A mounted MG's hits land here too; bots seldom use one. |
+| shots | bodies | Rounds fired: each tick's drop in the held clip while the weapon stays the same bullet gun (`weaponType bullet`, `BotBody::gun`). Grenades, rockets and mounted MG rounds are not counted. |
+| hits | `D;`, `K;` | Lines on another player with a bullet means of death (`MOD_RIFLE_BULLET`, `MOD_PISTOL_BULLET`, `MOD_HEAD_SHOT`). Mounted MG hits land here too. |
 | accuracy | | Hits over shots. |
-| sight to shot | bodies | From a tick whose `BotBody::target` comes up with none the tick before (the reaction delay included) to the first tick that fires a round while that target is still the one tracked, in ms; mean and median. A switch from one target straight to another starts no count. "Fired on" is the share of those acquisitions that got a round before the target went (died, hid past `forget_ticks`, or the bot died). |
-| peeks, re-peeks, dead in 2 s | `bot_tactics` | A peek is a held cover spot's body going from hidden (or walking to the spot) to showing: standing, leaning or leaning crouched (`Bot::tactics`, counted in `cover_keys`). A re-peek is one from the spot (within 12 units) and the pose (stance and lean side) of the bot's peek before it this life. Each is printed with the share whose bot died within 2 s of it (the body's first dead tick, any cause). |
-| hunts, dead in 2 s | `bot_tactics`, bodies | A hunt that reached where it was headed: a seen enemy's lost spot, or with `Bot::wary` the vantage over it (section 10), within `ARRIVE_RADIUS`. A spot dropped on memory or the hunt's budget is no arrival. Printed with the share dead within 2 s of the arrival. |
-| fights, target down, bot down, broken, over 10 s, re-engaged | bodies | A fight is a bot's ticks with `BotBody::target` on one slot, merged across gaps under 1 s (another target in between included). It ends with the target down (dead or off the field, by anyone), the bot down, or broken off: neither, and the target not tracked for 1 s. `over 10 s` counts fights whose first and last tracked ticks lie 10 s or more apart. A re-engagement is a fight on the target of one the bot broke off within the last 10 s, both still in the lives they fought in; printed with its share of the broken fights (section 13). |
-| walking ticks, turn mean, snaps | bodies | The walking view (section 11). A bot-tick counts when `BotBody::walking` holds on it and the tick before: playing, on the ground, off the rungs, steering at its waypoint with no unstick spell, and no target tracked (`Bot::engaged` false). `turn mean` is the mean of the view's yaw change over those ticks in degrees (wrapped to ±180); `snaps` counts the ticks it turned more than 30 degrees, and their share of the walking ticks. |
+| sight to shot | bodies | From a tick whose `BotBody::target` comes up with none the tick before (reaction delay included) to the first tick that fires a round at that same target, in ms; mean and median. A switch from one target straight to another starts no count. "Fired on" is the share of acquisitions that got a round before the target went (died, hid past `forget_ticks`, or the bot died). |
+| peeks, re-peeks, dead in 2 s | `bot_tactics` | A peek is a held cover spot's body going from hidden (or walking to the spot) to showing: standing, leaning or leaning crouched (`Bot::tactics`, counted in `cover_keys`). A re-peek is one from the spot (within 12 units) and pose (stance and lean side) of the bot's peek before it this life. Each printed with the share whose bot died within 2 s (first dead tick, any cause). |
+| hunts, dead in 2 s | `bot_tactics`, bodies | A hunt that reached where it was headed: a seen enemy's lost spot, or with `Bot::wary` the vantage over it (section 10), within `ARRIVE_RADIUS`. A spot dropped on memory or the hunt's budget is no arrival. Printed with the share dead within 2 s of arriving. |
+| fights, target down, bot down, broken, over 10 s, re-engaged | bodies | A fight is a bot's ticks with `BotBody::target` on one slot, merged across gaps under 1 s (another target in between included). It ends with the target down (dead or off the field, by anyone), the bot down, or broken off: neither, and the target untracked for 1 s. `over 10 s` counts fights whose first and last tracked ticks lie 10 s or more apart. A re-engagement is a fight on the target of one the bot broke off within the last 10 s, both still in the lives they fought in; printed with its share of the broken fights (section 13). |
+| walking ticks, turn mean, snaps | bodies | The walking view (section 11). A bot-tick counts when `BotBody::walking` holds on it and the tick before: playing, on the ground, off the rungs, steering at its waypoint with no unstick spell, no target tracked (`Bot::engaged` false). `turn mean` is the mean yaw change over those ticks in degrees (wrapped to ±180); `snaps` counts ticks that turned more than 30 degrees, with their share. |
 
-Each match prints one line, then the totals by team, by skill level and,
-with an arm one-sided, by arm; with several maps a block per map comes
-first. Each row prints seven lines: the log's columns, the bodies', the aim,
-the grenades and the clip, the peeks and hunts, the walking view, then the
-fights.
+Each match prints one line, then the totals by team, by skill and (arm
+one-sided) by arm; with several maps a block per map comes first. Each
+row prints seven lines: the log's columns, the bodies', the aim, the
+grenades and the clip, the peeks and hunts, the walking view, the fights.
 
 A change to bot behaviour reports its before and after on the same seeds,
 map and gametype, in this doc's section for it.
 
 `DIGEST=1` adds a line per match, `digest <map> <gametype> seed <s>
-ticks <n> <hex>`: an FNV-1a 64 folded after every tick over each bot
-slot in order, its last cmd that ran (time, every button byte, stance
-and lean included, weapon, angles, moves) and its
-playerstate origin and velocity (by their bits), health and weapon.
-`DIGEST=<N>` also prints the running hash every `N` ticks as
-`digest@<tick> ...`. It reads and draws nothing, so the other lines
-are those of a run without it. A refactor meant to move no bot prints
-the same digests before and after; when they part, the first
-`digest@` line that differs names the window of `N` ticks where a bot
-first did something else, which a short match catches long before the
-counts move. Its value is only comparable between runs of the same
-map, gametype, seed, `BOTS` and knobs; `JOBS` does not change it.
+ticks <n> <hex>`: an FNV-1a 64 folded after every tick over each bot slot
+in order: its last cmd that ran (time, every button byte, stance and lean
+included, weapon, angles, moves) and its playerstate origin and velocity
+(by their bits), health and weapon. `DIGEST=<N>` also prints the running
+hash every `N` ticks as `digest@<tick> ...`. It reads and draws nothing,
+so the other lines are unchanged. A refactor meant to move no bot prints
+the same digests; when they part, the first differing `digest@` line
+names the `N`-tick window where a bot first did something else. Only
+comparable between runs of the same map, gametype, seed, `BOTS` and
+knobs; `JOBS` does not change it.
 
-`NETDIGEST=<N>` adds a second hash, `net@<tick>` and `net <map> ...`
-lines, over every datagram the server sent each tick (address, length,
-bytes, in send order). It joins one observer client that never picks a
-team, at a non-LAN address so the rate and `snaps` pacing run, so it
-changes the match: its `digest` lines compare only with other
-`NETDIGEST` runs. A CoD2 server under it runs `svs.time` on the frame
-clock (`Cod2Server::test_frame_clock`), since the wall clock keys the
-challenge and so every netchan byte. `NETDUMP=<dir>` writes the
-datagrams themselves, to find the bytes behind a `net@` window that
-parted. `VCOD_TICK_TRACE=<dir>` writes each match's tick step log
-(`vcod_server::tick_trace`, one line per `SV_Frame` step and the slot it
-ran for), whose first differing line names a step that moved.
+`NETDIGEST=<N>` adds a hash over every datagram the server sent each tick
+(address, length, bytes, in send order) as `net@<tick>` and `net <map>
+...` lines. It joins one observer client that never picks a team, at a
+non-LAN address so rate and `snaps` pacing run; that changes the match, so
+its `digest` lines compare only with other `NETDIGEST` runs. A CoD2 server
+under it runs `svs.time` on the frame clock (`Cod2Server::test_frame_clock`),
+since the wall clock keys the challenge and so every netchan byte.
+`NETDUMP=<dir>` writes the datagrams. `VCOD_TICK_TRACE=<dir>` writes each
+match's tick step log (`vcod_server::tick_trace`, one line per `SV_Frame`
+step and its slot); the first differing line names the step that moved.
 
-The split (2026-10-21). VERIFIED (measured, release `bot_match`,
-`COD_DIR` at 1.1, master 3135508b with the split, normal skill): `tdm`
-12 bots seeds 1..=4, stalled / held: mp_carentan 925 / 16 428,
-mp_harbor 605 / 10 330, mp_depot 1 340 / 36 393, mp_brecourt 322 /
-7 074, total 3 192 / 70 225. `dm` 10 bots seeds 1..=4: mp_carentan
-852 / 10 687, mp_harbor 498 / 6 024, mp_depot 598 / 9 786, total
-1 948 / 26 497. The largest single match, mp_depot `tdm` seed 2, is
-528 / 20 574. VERIFIED (measured, the same runs): 96% of the old column
-(`tdm`) and 93% (`dm`) was bots holding on purpose. INFERRED: the
-before and afters in sections 6.6, 10.1 and 11 that cite it moved mostly
-through holds.
+History of the stall column: before 2026-10-21 `stalled` was stalled plus
+held. Until the nav recheck the same day `held` read the tick alone, so up
+to 12 s after a fight read `stalled`: on `mp_depot` `dm` seeds 1..=8 (6
+bots, 12 000 ticks) 485 such bot-ticks, every one within 12 s of a held
+tick, 0 with the window rule. VERIFIED (measured, master 028799bf,
+`ship_stalls` `SHOOT=1` and its `ago` column, bot-navigation.md section 3).
+
+The split, stalled / held. VERIFIED (measured, release `bot_match`,
+`COD_DIR` at 1.1, master 3135508b, normal skill):
+
+| Run | mp_carentan | mp_harbor | mp_depot | mp_brecourt | Total |
+|---|---|---|---|---|---|
+| `tdm` 12 bots, seeds 1..=4 | 925 / 16 428 | 605 / 10 330 | 1 340 / 36 393 | 322 / 7 074 | 3 192 / 70 225 |
+| `dm` 10 bots, seeds 1..=4 | 852 / 10 687 | 498 / 6 024 | 598 / 9 786 | | 1 948 / 26 497 |
+
+The largest single match, mp_depot `tdm` seed 2, is 528 / 20 574.
+VERIFIED (measured, same runs): 96% (`tdm`) and 93% (`dm`) of the old
+column was bots holding on purpose. INFERRED: the before and afters in
+6.6, 10.1 and 11 that cite the old column moved mostly through holds.
 
 ## 2. Baseline
 
@@ -142,17 +154,16 @@ six bots, seeds 1..=8, 12000 ticks, none ended):
 | allies | 644 | 568 | 87952 | 1603 / 250 |
 | axis | 568 | 644 | 82955 | 1889 / 0 |
 
-1212 kills over 80 minutes of play, 88 stalled bot-ticks. No suicides and
-no team kills.
+1212 kills over 80 minutes of play, 88 stalled bot-ticks, no suicides, no
+team kills.
 
 ## 3. Skill levels
 
 `vc_bot_skill` (0-3, default 1) and `addbot ... skill N` pick one of four
-presets of `bots::Skill` (`bots/skill.rs`). Level 1 is `Skill::default()`,
-field for field (`the_default_level_is_the_default_skill`), and its hearing
-scale of 1.0 multiplies a noise's radius exactly, so a default server plays
-bit for bit as before: section 2's eight matches print the same lines on
-the skill branch, before and after merging master.
+presets of `bots::Skill` (`bots/skill.rs`). Level 1 is `Skill::default()`
+field for field (`the_default_level_is_the_default_skill`); its hearing
+scale of 1.0 multiplies a noise's radius exactly, so a default server
+plays as before the presets (section 2's matches print the same lines).
 
 | Field | 0 easy | 1 normal | 2 hard | 3 expert |
 |---|---|---|---|---|
@@ -170,26 +181,25 @@ the skill branch, before and after merging master.
 | sight cone for a new target, degrees across | 100 | 120 | 140 | 160 |
 | walking view's turn per tick, degrees (section 11) | 18 | 24 | 30 | 36 |
 
-Normal's reaction (5 + 6), error start (48) and decay (0.88) changed with
-section 9; the measurements below are from before it.
+The measurements in this section predate section 9, when normal's
+reaction was 5 + 6, its error start 48 and its decay 0.88.
 
 The miss is `(error + across * track_lag) * (1 + range / error_range) *
 moving`, `across` the target's speed across the line and `moving` `1 +
-(error_moving - 1) * (speed / 190)^2` (section 9). Until section 9 the
-trigger only went down while the gun's line passed within `HIT_RADIUS`
-(10 units) of the target's chest (`Bot::trigger`), so the error floor set
-the range a bot could fire at at all: `floor * (1 + range / error_range) *
-moving < 10`. It still sets where the trigger goes down every tick; past
-it the trigger goes down by chance. A first easy preset with a floor of 10 never met it: in
-`dm` its bots scored 26 kills to 518 deaths over eight matches and stood
-in fights without firing (3566 stalled bot-ticks in an all-easy `tdm`
-against the baseline's 88). The floor of 5 lets an easy bot fire standing
-inside 900 units and almost never on the move.
+(error_moving - 1) * (speed / 190)^2` (section 9). The trigger goes down
+every tick while the gun's line passes within `HIT_RADIUS` (10 units) of
+the target's chest (`Bot::trigger`); past that, by chance (before section 9
+only inside it). So the floor sets the range of sure fire: `floor * (1 +
+range / error_range) * moving < 10`. Trap: an easy floor of 10 never met
+it; in `dm` its bots scored 26 kills to 518 deaths over eight matches, and
+an all-easy `tdm` stalled 3566 bot-ticks against the baseline's 88. The
+floor of 5 lets an easy bot fire standing inside 900 units and almost
+never on the move.
 
-Measured with `bot_match`, mp_carentan, seeds 1..=8, 12000 ticks:
+Measured with `bot_match`, mp_carentan, seeds 1..=8, 12000 ticks.
 
-Mixed `dm`, eight bots, two per level (`GAMETYPE=dm SKILLS=0,1,2,3,0,1,2,3`;
-all eight matches ended at the score limit):
+Mixed `dm`, eight bots, two per level (`GAMETYPE=dm
+SKILLS=0,1,2,3,0,1,2,3`; all eight ended at the score limit):
 
 | Level | Kills | Deaths | K/D | Damage | TTK median ms |
 |---|---|---|---|---|---|
@@ -198,11 +208,11 @@ all eight matches ended at the score limit):
 | 2 | 605 | 345 | 1.75 | 74568 | 400 |
 | 3 | 678 | 302 | 2.25 | 93670 | 250 |
 
-The same on mp_depot: 0.31, 0.62, 1.50, 2.37.
+The same on mp_depot: K/D 0.31, 0.62, 1.50, 2.37.
 
 `tdm` three against three, one side at a level against normal, both ways
-round to cancel the side bias (allies lead axis 644 to 568 at equal skill,
-section 2). Kills of the side at the level, to the normal side's:
+round (allies lead axis 644 to 568 at equal skill, section 2). Kills of
+the side at the level, to the normal side's:
 
 | Level | As axis | As allies |
 |---|---|---|
@@ -210,15 +220,14 @@ section 2). Kills of the side at the level, to the normal side's:
 | 2 | 800 : 346 | 793 : 309 |
 | 3 | 799 : 268 | 800 : 209 |
 
-At one level for all six (`SET=vc_bot_skill=N`), total kills in the 80
+All six at one level (`SET=vc_bot_skill=N`), total kills in the 80
 minutes: 1044 at 0, 1212 at 1, 1245 at 2, 1367 at 3; stalled bot-ticks
-364, 88, 95, 38 (levels 2 and 3 ran on the branch before its master
-merge, which leaves level 1's lines unchanged).
+364, 88, 95, 38.
 
-Hard and expert sit close in `dm` because both react and settle faster than
-a fight lasts; the gap shows head to head against normal (3 : 1 kills at
-hard, 3.4 : 1 at expert). Nothing here is tuned against a human. How a
-level feels to play against is pending a hand check.
+Hard and expert sit close in `dm` because both react and settle faster
+than a fight lasts; the gap shows head to head against normal (3 : 1
+kills at hard, 3.4 : 1 at expert). Nothing here is tuned against a human;
+how a level feels to play against is pending a hand check.
 
 ## 4. Cover and lean
 
@@ -295,94 +304,77 @@ first cut's score, which its walk dominated.
 
 ### 4.5 Measured
 
-`cargo run --release -p vcod-server --example cover_ab [seed...]`: `tdm`,
-8 fighting bots, 6000 ticks (5 minutes) a seed, one team with cover and
-one without, the sides swapped every other seed. Deaths of each side;
-fewer is better. `OFF=1` turns cover off on both sides. Over 20 seeds the
-per-seed difference has a standard deviation of 12 to 14 deaths, so a
-total difference under about 60 is noise.
-
-The `bot_match` harness (section 1) was not on master when this was
-written; these runs are `cover_ab`'s own, an example since folded into
-`bot_match` (`COVER=alt` is its side swap; its seeds passed straight to
-`test_seed_rng`, so seeds 2k and 2k+1 played one match). Section 6
+Measured with `cover_ab`, since folded into `bot_match` (`COVER=alt` is
+its side swap; its seeds went straight to `test_seed_rng`, so seeds 2k and
+2k+1 played one match). `tdm`, 8 fighting bots, 6000 ticks a seed, one
+team with cover and one without, sides swapped every other seed. Over 20
+seeds the per-seed difference has a standard deviation of 12 to 14
+deaths, so a total difference under about 60 is noise. Section 6
 re-measures on `bot_match`.
 
-| run (mp_carentan unless named, seeds 1-20) | cover side deaths | other side deaths |
+| Run (mp_carentan unless named, seeds 1-20) | Cover side deaths | Other side deaths |
 |---|---|---|
 | cover off on both sides | 1141 | 1152 |
-| first cut: 192-unit reach, full-speed walk, aim from the upright eye | 1079 | 957 |
-| the aim fix of 4.4 alone | 1114 | 903 |
-| 128-unit reach, own spot first, eased walk | 1027 | 1055 |
-| the same, lean spots only | 1027 | 1035 |
-| the same, crouch-and-stand spots only | 1092 | 1220 |
 | shipped: a stand spot before a lean | 987 | 1050 |
 | shipped, mp_dawnville | 813 | 887 |
 
 - VERIFIED (measured, the rows above): the shipped cover side dies 6%
-  fewer times on mp_carentan and 8% on mp_dawnville, winning 12 and 13
-  of 20 seeds. Pooled over both maps the mean per-seed gain is 3.4
-  deaths at a standard error of about 2.2: a small gain, not a proven
-  one.
-- VERIFIED (measured): crouch-and-stand spots alone gained more (1092
-  to 1220, 14 seeds of 20) and lean spots alone broke even.
-- INFERRED: a leaned body shows its head and the threat's sight then
-  aims there (`aim_point` falls back to the eye when the chest is
-  hidden), so a lean trades body exposure for headshots; behind a low
-  wall the bot drops out of sight on every reload and the threat's
-  target lapses after a second (`Skill::forget_ticks`) while the bot's
-  own does not.
-- VERIFIED (measured, the walk counted per tick, seed 3, 3000 ticks):
-  with a 192-unit reach 1447 of the 2176 ticks holding a spot (66%) were
-  spent walking to it, at `Skill::error_moving` and mostly off the
-  sights. With the 128-unit reach, the body's own spot first and the
-  eased walk, 3538 of 6321 (56%).
-- VERIFIED (measured, rows 4 and later): fewer deaths overall than with
-  cover off (2037 against 2293): fights from cover last longer.
-
-A run that walks to the spot only while the weapon is busy (reload
-behind cover, fight in the open otherwise) scored 1045 to 1091, inside
-the noise of the shipped rule, so the simpler rule stayed.
+  fewer times on mp_carentan and 8% on mp_dawnville, winning 12 and 13 of
+  20 seeds. Pooled, the mean per-seed gain is 3.4 deaths at a standard
+  error of about 2.2: small, not proven.
+- VERIFIED (measured): fewer deaths overall than with cover off (2037
+  against 2293): fights from cover last longer.
+- Rejected variants (cover side / other side deaths, same seeds): first
+  cut with a 192-unit reach, full-speed walk and upright-eye aim 1079 /
+  957; 4.4's aim fix alone 1114 / 903; 128-unit reach, own spot first,
+  eased walk 1027 / 1055; lean spots only 1027 / 1035; stand spots only
+  1092 / 1220; walk to the spot only while the weapon is busy 1045 / 1091
+  (inside the noise, so the simpler rule stayed). VERIFIED (measured).
+- VERIFIED (measured, seed 3, 3000 ticks): with the 192-unit reach 1447 of
+  2176 ticks holding a spot (66%) were spent walking to it, at
+  `Skill::error_moving` and mostly off the sights; with 128 units, own
+  spot first and the eased walk, 3538 of 6321 (56%).
+- INFERRED: a leaned body shows its head and the threat aims there
+  (`aim_point` falls back to the eye when the chest is hidden), so a lean
+  trades body exposure for headshots; behind a low wall the bot drops out
+  of sight on every reload and the threat's target lapses after
+  `Skill::forget_ticks` while the bot's own does not.
 
 ## 5. Retreat
 
-A bot in a fight breaks contact when it is hurt or its clip runs dry, then
-reloads, waits and plays on (`crates/server/src/bots/retreat.rs`). Retail
-has no bots, so none of this is measured against retail; the numbers are
-from `--example bot_fights` (below), since folded into `bot_match`
-(`RETREAT=`, and its wound columns). The baseline, skill and cover
-tables above predate the retreat (on by default since this section);
-section 6 re-measures all of them on `bot_match`.
+A bot in a fight breaks contact when it is hurt or its clip runs dry,
+then reloads, waits and plays on (`crates/server/src/bots/retreat.rs`).
+On by default; `RETREAT=` in `bot_match`.
 
 - Hurt: health under 50% of the most (`HURT_PCT`) with an enemy in
-  sight, once per wound (`Bot::hurt_at`): a bot that held its cover fights
-  on at that health until it is hit again, or healed past it. 1.1, 1.5 and
+  sight, once per wound (`Bot::hurt_at`): a bot that held its cover
+  fights on at that health until hit again or healed past it. 1.1, 1.5 and
   UO have no health regeneration; a health pack is the only way back up.
 - Dry: the clip at 0 with rounds in the reserve, an enemy in sight and no
   switch under way at the end of the think, so a pistol draw
-  (`Bot::sidearm`) comes first. It ends once the clip holds a round and the
-  weapon is idle, or the reserve is gone. Once per dry clip (`Bot::dry_had`,
-  cleared when the clip holds a round or the reserve is gone): one that
-  found no cover reloads where it stands, as 6.4 explains.
+  (`Bot::sidearm`) comes first. It ends once the clip holds a round and
+  the weapon is idle, or the reserve is gone. Once per dry clip
+  (`Bot::dry_had`, cleared when the clip holds a round or the reserve is
+  gone): one that found no cover reloads where it stands (trap in 6.4).
 - Cover (`cover_spot`): the nearest graph node by path from the body,
-  within 1200 units of path and 300 nodes tested (the graph's nodes sit a
-  few tens of units apart: on mp_carentan, mp_harbor and mp_depot the
-  first hidden node took a median 7 tests and at most 205), whose standing
-  eye and chest the threat's eye cannot see by `shot_trace` (props
-  included), nearer the bot than the threat and over 200 units from it.
-  The threat's eye is the enemy's `ps.view().eye` as last seen. The cover
-  found is kept while it stays hidden from the threat's eye; otherwise it
-  is searched again. No cover found ends the retreat: the bot fights on.
+  within 1200 units of path and 300 nodes tested (on mp_carentan,
+  mp_harbor and mp_depot the first hidden node took a median 7 tests, at
+  most 205), whose standing eye and chest the threat's eye cannot see by
+  `shot_trace` (props included), nearer the bot than the threat and over
+  200 units from it. The threat's eye is the enemy's `ps.view().eye` as
+  last seen. The cover is kept while it stays hidden from that eye, else
+  searched again. No cover ends the retreat: the bot fights on.
 - On the way the keys follow the path (`rekey` off the path's yaw) while
-  the view and the trigger stay on the enemy, sights up. At the cover the
+  the view and trigger stay on the enemy, sights up. At the cover the
   body stands still (no unstick spell), crouches with nothing in sight,
-  tops the clip up and turns to where the threat was. A hurt bot holds 3 s
-  (`HOLD_TICKS`), less with a health pack near; no retreat runs past 10 s.
+  tops the clip up and turns to where the threat was. A hurt bot holds
+  3 s (`HOLD_TICKS`), less with a health pack near; no retreat runs past
+  10 s.
 - Health packs: a bot under 70% (`HEAL_PCT`) with nothing in sight walks
-  to the nearest `item_health*` lying within 1200 units across and 200 up
-  or down (`ScriptRuntime::health_items`; stock `dm`, `tdm` and `sd` drop
-  one on every death, `dropHealth`, cod11-items.md).
-- Duties a retreat or a health detour never breaks (`duty_bound`): a plant
+  to the nearest `item_health*` within 1200 units across and 200 up or
+  down (`ScriptRuntime::health_items`; stock `dm`, `tdm` and `sd` drop one
+  on every death, `dropHealth`, cod11-items.md).
+- Duties a retreat or health detour never breaks (`duty_bound`): a plant
   or defuse under way, an `re` objective carried, a UO `ctf` flag carried,
   a defuse against the clock (S&D's planted bomb, a charge on a `bas`
   defender's base), and a body inside the `dom` flag zone or `hq` radio
@@ -394,67 +386,37 @@ section 6 re-measures all of them on `bot_match`.
 
 ### Measured (2026-10-20)
 
-`cargo run --release -p vcod-server --example bot_fights`: 8 bots, `tdm`,
-3000 ticks (2.5 min) a match, mp_carentan, mp_harbor, mp_depot and
-mp_brecourt, 16 seeds each (64 matches a row), 1.1. In a symmetric match
-every kill is someone's death, so one side runs the retreat and the other
-does not; `none` is master's brain (the retreat off is the old code path).
-"Wounds" counts a life's first tick under 50 health while engaged, and
-the share of those dead within 5 s. A changed brain moves every later
-draw, so each match diverges whole: across seed sets the same side's K/D
-swung by 0.15 with nothing changed but the other side's brain.
-
-| Seeds | Retreat on | allies K/D | axis K/D | allies wounds dead in 5 s | axis wounds dead in 5 s |
-|---|---|---|---|---|---|
-| 101-116 | none | 1.06 | 0.94 | 80% | 87% |
-| 101-116 | allies | 1.13 | 0.88 | 71% | 86% |
-| 101-116 | axis | 1.07 | 0.93 | 79% | 77% |
-| 117-132 | none | 1.13 | 0.88 | 78% | 85% |
-| 117-132 | allies | 0.99 | 1.01 | 73% | 85% |
-| 117-132 | axis | 0.96 | 1.04 | 81% | 77% |
-
-United Offensive (`UO=1`), mp_cassino and mp_kursk, seeds 1-8, 16 matches
-a row:
-
-| Retreat on | allies K/D | axis K/D | allies wounds dead in 5 s | axis wounds dead in 5 s |
-|---|---|---|---|---|
-| none | 1.08 | 0.91 | 83% | 86% |
-| allies | 1.00 | 0.99 | 73% | 78% |
-| axis | 1.03 | 0.97 | 72% | 77% |
+Measured with `bot_fights` (since folded into `bot_match`): 8 bots, `tdm`,
+3000 ticks, mp_carentan, mp_harbor, mp_depot, mp_brecourt, 16 seeds each,
+one side retreating. VERIFIED (measured):
 
 - A wounded bot running the retreat dies within 5 s 5 to 10 points less
-  often, on all six runs. On 1.1 the untreated side's share stays within
-  3 points; on UO it fell 8 to 11 too, perhaps because an enemy backing
-  off finishes fewer wounded (a guess; 16 matches, about 180 wounds a
-  side).
-- K/D: the treated side's ratio against `none`, both sides and both seed
-  sets in one geometric mean, is 1.02 on 1.1 and 0.99 on UO: no change
-  within the noise.
-- Variants, seeds 101-116, the treated side's K/D against `none`: the
-  sights dropped while backing off, allies 1.03 and axis 0.93 (geometric
-  mean 0.98; the default keeps them up); a hurt retreat only past 400
-  units, 1.02 and 0.92 (0.97); the dry retreat and the health packs with no
-  hurt retreat, 1.07 and 0.95 (1.01, wounds dead in 5 s unchanged at 78%
-  and 86%).
-- Retreats in 64 matches with one side on: 1150 to 1440 hurt and 40 to
-  100 dry starts, of which 28 to 32% reach the cover; the rest die on the
-  way, or the retreat ends first (a dry clip refilled, or no cover left
-  from a threat that moved).
+  often, on all six 1.1 runs (seeds 101-116 and 117-132, each side) and
+  on UO (mp_cassino, mp_kursk, seeds 1-8: 83% / 86% with none, 72-73%
+  for the retreating side).
+- K/D of the treated side against `none`, geometric mean: 1.02 on 1.1,
+  0.99 on UO, inside the noise (the same side's K/D swung 0.15 across seed
+  sets with only the other side's brain changed).
+- Rejected variants (treated side's K/D against `none`, seeds 101-116,
+  allies / axis / geometric mean): sights dropped while backing off 1.03 /
+  0.93 / 0.98; hurt retreat only past 400 units 1.02 / 0.92 / 0.97; dry
+  retreat and health packs without the hurt retreat 1.07 / 0.95 / 1.01.
+- 1150 to 1440 hurt and 40 to 100 dry starts in 64 matches with one side
+  on; 28 to 32% reach the cover. The rest die on the way, or the retreat
+  ends first (a dry clip refilled, or no cover left from a moved threat).
 
 ## 6. One table on `bot_match` (2026-10-21)
 
-Sections 2 to 5 and `bot-objectives.md` 9 were measured on four
-different tools with different seeds, bot counts and lengths, so their
-numbers do not compare. These rows are all `bot_match` at one tip
-(branch `test/bot-harness-unify` off master c8c3fd1f), 8 bots, 6000
-ticks (5 min) a match, 1.1 unless named. Retail has no bots: every
-number is ours.
+Sections 2 to 5 and `bot-objectives.md` 9 were measured on four tools with
+different seeds, bot counts and lengths; these rows are all `bot_match` at
+one tip (master c8c3fd1f plus the harness unification), 8 bots, 6000
+ticks a match, 1.1 unless named.
 
 Each arm leaves the other features at their default, on for both sides
-(`COVER=alt` runs the retreat on both sides). "Margin" is the arm
-side's score less the other's per match, mean and standard error: the
-symmetric rows give the same figure for the `alt` split with nothing
-different between the sides, the noise floor.
+(`COVER=alt` runs the retreat on both sides). "Margin" is the arm side's
+score less the other's per match, mean and standard error; the symmetric
+rows give the same figure for the `alt` split with nothing different, the
+noise floor.
 
 ### 6.1 `tdm`, mp_carentan, mp_harbor, mp_depot, mp_brecourt, seeds 1..=16 (64 matches a row)
 
@@ -478,41 +440,32 @@ VERIFIED (measured, ours, `bot_match`, 2026-10-21):
 | `TEAMPLAY=alt`, answering one side | teamplay | 2313 | 2607 | 0.89 | 25.2 | 1860 | 76% | 2065 | -4.5 +- 1.2 |
 | | control | 2603 | 2314 | 1.12 | 27.9 | 1717 | 72% | 1399 | |
 
-The last three rows came later, on branch `feat/bot-spread` (section 7),
-where the stock run before the change gave 5265 kills and lives of
-24.9 s (the dry-start fix below). In 1.1 `tdm` team play is only the
-noise answering, so `TEAMPLAY=alt` pits it against the old rule.
+The last three rows came later (section 7's branch), where the stock run
+before the change gave 5265 kills and 24.9 s lives (after 6.4's dry-start
+fix). In 1.1 `tdm` team play is only the noise answering, so
+`TEAMPLAY=alt` pits it against the old rule. The skill row sums
+`AXIS_SKILL=2` on seeds 1..=8 and `ALLIES_SKILL=2` on 9..=16. The `AWARE`
+row is a later tip whose `AWARE=none` run prints 5265 kills.
 
-The skill row is two runs: `AXIS_SKILL=2` on seeds 1..=8 and
-`ALLIES_SKILL=2` on 9..=16 (the other side at 1), summed. The `AWARE`
-row is a later tip (branch `feat/bot-awareness`), whose `AWARE=none` run
-prints 5265 kills, the stock run's figure after the dry-retreat fix below.
-
-- VERIFIED (measured, the table): skill is the one large effect: a hard side outscores a normal one 2.2
-  to 1, as section 3's three-a-side runs found (2.3 to 2.6).
-- VERIFIED (measured, the table): cover alone and the retreat alone move no score: both margins sit
-  inside one standard error, as small as the stock run's null split.
-  Section 4.5's 6% (one map, 20 seeds, the retreat not yet in) does not
-  show here.
-- VERIFIED (measured, the table): the retreat does what it was built for and nothing more: a wounded bot
-  running it dies within 5 s 72% of the time against 82%, with K/D
-  unchanged (section 5 found the same).
-- VERIFIED (measured, the table): together on one side they gave +3.5 a match, 1.8 standard errors, and
-  the lowest share of wounded deaths against the highest (74% against
-  85%). 6.2 repeats the three arms on a second seed set.
+- VERIFIED (measured, the table): skill is the one large effect: a hard
+  side outscores a normal one 2.2 to 1 (section 3 found 2.3 to 2.6).
+- VERIFIED (measured, the table): cover alone and the retreat alone move
+  no score: both margins sit inside one standard error. Section 4.5's 6%
+  does not show here.
+- VERIFIED (measured, the table): the retreat cuts wounded deaths within
+  5 s from 82% to 72%, K/D unchanged.
+- VERIFIED (measured, the table): together on one side they gave +3.5 a
+  match (1.8 standard errors) and wounded deaths 74% against 85%.
 - VERIFIED (measured, the table): both features on everywhere make the
-  game slower: 21% fewer kills than with both off, lives 24.8 s against
-  19.5 s, and the `stalled` count nearly eightfold (104718 bot-ticks
-  against 13666). INFERRED: the extra stalls are bots holding a cover
-  spot or a retreat's cover on purpose, so read `stalled` against a run
-  with the same features on.
+  game slower: 21% fewer kills than both off, lives 24.8 s against
+  19.5 s, and the old `stalled` column (holds included) nearly eightfold
+  (104718 bot-ticks against 13666). INFERRED: the extra are bots holding
+  cover or a retreat's cover on purpose.
 
 ### 6.2 The arms again, seeds 17..=32
 
-The same three `alt` runs as 6.1 on fresh seeds (64 matches a row), and
-the two sets pooled (128 matches).
-
-VERIFIED (measured, ours, `bot_match`, 2026-10-21):
+6.1's three `alt` runs on fresh seeds (64 matches a row), and both sets
+pooled (128 matches). VERIFIED (measured, ours, `bot_match`, 2026-10-21):
 
 | Run | Side | Kills | Deaths | K/D | Dead in 5 s | Margin | Pooled margin |
 |---|---|---|---|---|---|---|---|
@@ -523,21 +476,19 @@ VERIFIED (measured, ours, `bot_match`, 2026-10-21):
 | `COVER=alt RETREAT=alt` | both on | 3026 | 2894 | 1.05 | 74% | +2.1 +- 1.7 | +2.8 +- 1.3 |
 | | control | 2891 | 3027 | 0.96 | 82% | | |
 
-- VERIFIED (measured, the table): pooled, cover and the retreat
-  together give a side about 2.8 kills a match more than the other
-  (some 2 standard errors, K/D 1.05 to 1.08); each alone stays within
-  one standard error of nothing. Both are on by default, so the shipped
-  game has the pair.
-- VERIFIED (measured, both tables): the retreat cuts the share of
-  wounded bots dead within 5 s by 8 to 10 points in all four runs.
+- VERIFIED (measured, the table): pooled, cover and the retreat together
+  give a side about 2.8 kills a match (some 2 standard errors, K/D 1.05 to
+  1.08); each alone stays within one standard error of nothing. Both are
+  on by default.
+- VERIFIED (measured, both tables): the retreat cuts wounded deaths
+  within 5 s by 8 to 10 points in all four runs.
 
 ### 6.3 Team play: `sd` and `re` on the ten 1.1 maps that run both, seeds 1..=6 (60 matches a row)
 
-`bot-objectives.md` 9's table compared two builds with `team_tally`;
-`TEAMPLAY=` now switches the same rules per side inside one build, the
-retreat and cover on for everyone. The attackers are, per map, the team
-that plants or picks up (axis on mp_pavlov in `sd`, on mp_dawnville and
-mp_railyard in `re`; allies elsewhere). Wins are rounds.
+`TEAMPLAY=` switches `bot-objectives.md` 9's rules per side in one build,
+retreat and cover on for everyone. The attackers are the team that plants
+or picks up (axis on mp_pavlov in `sd`, on mp_dawnville and mp_railyard in
+`re`; allies elsewhere). Wins are rounds.
 
 VERIFIED (measured, ours, `bot_match`, 2026-10-21):
 
@@ -548,22 +499,20 @@ VERIFIED (measured, ours, `bot_match`, 2026-10-21):
 | `re TEAMPLAY=none` | 142 | 197 | 42% | 233 | 25 | 363031 |
 | `re TEAMPLAY=all` | 137 | 194 | 41% | 219 | 46 | 346276 |
 
-With `TEAMPLAY=alt` (team play on one side, attack or defence by seed)
-the team-play side took 168 `sd` rounds to the other's 116 and 179 `re`
-rounds to 157.
+With `TEAMPLAY=alt` the team-play side took 168 `sd` rounds to 116 and
+179 `re` rounds to 157.
 
-- VERIFIED (measured, the table): `sd`: team play lifts the attackers from 37% to 61% of rounds, the
-  one-site rule as `bot-objectives.md` 9 found (47% to 62% there, a
-  build without cover or the retreat).
-- VERIFIED (measured, the table): `re`: captures nearly double (25 to
-  46), as there (9 to 18), but the attackers' round share does not move.
-  INFERRED: most rounds end on the clock or in a wipe, not a capture.
+- VERIFIED (measured, the table): `sd`: team play lifts the attackers from
+  37% to 61% of rounds (`bot-objectives.md` 9 found 47% to 62% without
+  cover or retreat).
+- VERIFIED (measured, the table): `re`: captures nearly double (25 to 46;
+  there 9 to 18), but the attackers' round share does not move.
+  INFERRED: most rounds end on the clock or a wipe, not a capture.
 
 ### 6.4 United Offensive: `tdm`, mp_cassino and mp_kursk, seeds 1..=8 (16 matches a row)
 
-`UO=1`, `COD_DIR` at a UO install.
-
-VERIFIED (measured, ours, `bot_match`, 2026-10-21):
+`UO=1`, `COD_DIR` at a UO install. VERIFIED (measured, ours,
+`bot_match`, 2026-10-21; before the dry-start fix below):
 
 | Run | Side | Kills | Deaths | K/D | Life s | Wounds | Dead in 5 s | Margin |
 |---|---|---|---|---|---|---|---|---|
@@ -574,73 +523,57 @@ VERIFIED (measured, ours, `bot_match`, 2026-10-21):
 | `RETREAT=alt` | retreat | 341 | 306 | 1.11 | 44.1 | 207 | 71% | +3.0 +- 3.0 |
 | | control | 281 | 354 | 0.79 | 37.7 | 237 | 84% | |
 
-- VERIFIED (measured, the table): kills and deaths differ here by
-  suicides and team kills; sixteen matches leave every margin within
-  about one standard error of nothing; the retreat's share of wounded
-  deaths falls 13 points, as on 1.1.
-- VERIFIED (measured, the table's runs): UO's axis bots started three to
-  four times the dry retreats its allies did (958 against 292 in the
-  stock run; 1.1's two sides start 112 and 149), nearly all of them on
-  mp_kursk (axis 942, allies 278; mp_cassino 18 and 26). Logging each
-  start showed one dry clip starting a retreat every other tick through
-  its whole reload (`busy_ms` 2400, 2300, ... 30): a retreat that found no
-  cover ended on its next tick (`cover_spot` `None`), and the tick after
-  that started it again on the same clip, re-running the cover search.
-  mp_kursk is open ground, so a reload there rarely finds cover, and the
-  axis carry the 5-round kar98k (423 of the 1264 logged starts), the
-  gewehr43 (259) and the luger (147).
-- VERIFIED (measured, same command and seeds, 2026-10-21): with one dry
-  retreat per clip (section 5) the dry starts fall to axis 69, allies 48
-  (mp_kursk 51 and 22; mp_cassino's 18 and 26 unchanged, and its
-  matches identical line for line). Kills, deaths and lives move inside
-  the noise (mp_kursk 93 kills to 99): a retreat with no cover never
-  changed the keys (`retreat_keys` returns on `None`), so the flapping
-  cost counts and cover searches, not play. The axis side's remaining
-  1.4x is its weapons: of the 69 axis starts, 28 were on the kar98k
-  (5 rounds) and 14 on the luger, against the allies' 71-round ppsh on
-  mp_kursk. No weapon or ammo read was wrong: the logged `clipSize`s
-  match the weapon files in the `pakuo` paks (kar98k 5, gewehr43 10).
-- VERIFIED (measured, 6.1's stock run again with the fix): 1.1's dry
-  starts go from 261 to 241 (allies 116, axis 125); kills 5237 to 5265,
-  lives 24.8 s to 24.7 s. 1.1's four maps nearly always had cover, so
-  little flapped there. The tables above predate the fix.
+- VERIFIED (measured, the table): kills and deaths differ by suicides and
+  team kills; every margin is within about one standard error of nothing;
+  the retreat's wounded deaths fall 13 points, as on 1.1.
+- Trap, fixed: a dry retreat that found no cover ended on its next tick
+  (`cover_spot` `None`) and restarted the tick after on the same clip,
+  re-running the cover search every other tick through a reload. On open
+  mp_kursk UO's axis (5-round kar98k, gewehr43, luger) started 958 dry
+  retreats to the allies' 292 (1.1: 112 and 149). With one dry retreat
+  per clip (`Bot::dry_had`, section 5): axis 69, allies 48 (mp_kursk 51
+  and 22; mp_cassino 18 and 26 unchanged, its matches identical line for
+  line); kills and lives inside the noise, since a retreat with no cover
+  never changed the keys (`retreat_keys` returns on `None`). The axis's
+  remaining 1.4x is its weapons (28 of 69 starts on the kar98k, 14 on the
+  luger, against the allies' 71-round ppsh); the logged `clipSize`s match
+  the `pakuo` weapon files (kar98k 5, gewehr43 10). On 1.1 dry starts go
+  261 to 241, kills 5237 to 5265, lives 24.8 s to 24.7 s. VERIFIED
+  (measured, same commands and seeds, 2026-10-21).
 
 ### 6.5 Grenades and the tactical reload (2026-10-21)
 
-`bot_match` 1.1 (`COD_DIR` at the 1.1 install), seeds 1..=4, 12000 ticks:
-`tdm` on mp_carentan, mp_harbor, mp_depot and mp_brecourt with 12 bots
-(16 matches, every one ended on the score), `dm` on mp_carentan,
-mp_harbor and mp_depot with 10 (12 matches, none ended). Before is the
-harness commit, after the branch tip.
-
-What changed (`Bot::throw_spot`, `Bot::think_cook`, `bots::notices_frag`,
+The rules (`Bot::throw_spot`, `Bot::think_cook`, `bots::notices_frag`,
 `Server::lob_probe`):
 
-- A throw no longer goes at an enemy the gun can hit. It goes at one in
-  sight no round has gone at for 1.5 s (`COVER_THROW_TICKS`: behind cover,
-  or never lined up), or at the spot a seen enemy was lost at 0.2 to 3 s
-  ago, if he was slower than 100 units/s then (`LOST_STILL`), 250 to 600
-  units off, from a body under 60 units/s with its eye settled. The 1-in-4
-  roll is gone and the cooldown is 10 s (was 20).
+- A throw goes at an enemy in sight no round has gone at for 1.5 s
+  (`COVER_THROW_TICKS`: behind cover, or never lined up), or at the spot a
+  seen enemy was lost at 0.2 to 3 s ago if he was slower than 100 units/s
+  then (`LOST_STILL`), 250 to 600 units off, from a body under 60 units/s
+  with its eye settled. Never at an enemy the gun can hit. Cooldown 10 s.
 - `lob_probe` finds no lob while a live teammate stands within the frag's
   `explosionRadius` of the target.
-- A throw under way follows the enemy it started at, and a lost spot's
-  throw follows nobody: one held for one enemy went at another who came
+- A throw under way follows the enemy it started at; a lost spot's throw
+  follows nobody. Trap: one held for one enemy went at another who came
   into sight in the hold, released on the old view, and killed its
   thrower.
-- A 1.1 or 1.5 frag (no `cookOffHold`) still without a clear lob, or with
-  the view off it, once the 16-tick wait is out is put back: the cmd that
-  lets the trigger go asks for the rifle, and the switch cancels the
-  pullback with the clip unspent (`cod11-combat.md` 1.14). A UO frag,
-  its fuse running, is still let go.
-- Another's frag is run from only once noticed: in a clear line and
-  within 60 degrees of the view's yaw, or within 150 units. A bot's own
-  is always run from.
+- A 1.1 or 1.5 frag (no `cookOffHold`) with no clear lob, or the view off
+  it, when the 16-tick wait is out is put back: the cmd that lets the
+  trigger go asks for the rifle, and the switch cancels the pullback with
+  the clip unspent (`cod11-combat.md` 1.14). A UO frag, its fuse running,
+  is let go.
+- Another's frag is run from only once noticed: in a clear line within 60
+  degrees of the view's yaw, or within 150 units. A bot's own is always
+  run from.
 - A clip under half reloads once no enemy has been in sight for 1 s
-  (`QUIET_RELOAD_TICKS`), retreat or not (before, only a dry clip did
-  outside a retreat); not the pistol, which goes back by then.
+  (`QUIET_RELOAD_TICKS`), retreat or not; not the pistol, which goes back
+  by then.
 
-VERIFIED (measured, ours, `bot_match`, 2026-10-21):
+Before (the harness commit: a 1-in-4 roll, 20 s cooldown, throws at any
+enemy) and after. `bot_match` 1.1, seeds 1..=4, 12000 ticks: `tdm` on
+mp_carentan, mp_harbor, mp_depot, mp_brecourt with 12 bots (16 matches,
+all ended), `dm` on mp_carentan, mp_harbor, mp_depot with 10 (12, none
+ended). VERIFIED (measured, ours, `bot_match`, 2026-10-21):
 
 | Run | Kills | Suicides | Life s | TTK mean / median ms | Wounds | Dead in 5 s | Retreats dry | Stalled | Thrown | Hits | Grenade kills | Clip at start |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -650,60 +583,56 @@ VERIFIED (measured, ours, `bot_match`, 2026-10-21):
 | `dm` after | 3163 | 0 | 19.7 | 1335 / 300 | 2376 | 75% | 75 | 45452 | 1052 | 9 | 0 | 93% |
 
 - VERIFIED (measured, the table): a `tdm` frag hits someone 7.4% of the
-  time against 2.0%, with a third of the throws; grenade kills stay
-  rare (7 of 3001). Dry retreats fall by 40% in both gametypes, and the
-  clip a fight starts on rises 2 to 3 points.
-- VERIFIED (measured, ours, the same `dm` seeds on mp_carentan and
-  mp_harbor, each throw and probe logged): with only the new targets, 7
-  of 10 grenade kills were the thrower's own. All seven released with no
-  clear lob after the wait: one held for an enemy who left while another
-  came into sight; the rest started on the run or crouched, slid or
-  stood up through the switch to a spot where a wall stopped every lob,
-  and the hold let go into it. With the rules above, none.
-- VERIFIED (measured, ours, `tdm` before the noticing rule): run from
-  wherever it lay, no frag killed anyone: 718 thrown, 0 grenade kills.
+  time against 2.0%, with a third of the throws; grenade kills stay rare
+  (7 of 3001). Dry retreats fall 40% in both gametypes; the clip a fight
+  starts on rises 2 to 3 points.
+- VERIFIED (measured, same `dm` seeds on mp_carentan and mp_harbor, each
+  throw and probe logged): with only the new targets, 7 of 10 grenade
+  kills were the thrower's own, all released with no clear lob after the
+  wait (the target swap above, or a body that moved through the switch
+  to where a wall stopped every lob). With the put-back rule, none.
+- VERIFIED (measured, `tdm` before the noticing rule): frags run from
+  wherever they lay killed nobody: 718 thrown, 0 grenade kills.
 - `dm` frags still hit almost nobody (9 of 1052). INFERRED: with no
-  teams every enemy in sight is a candidate, so a throw at one is in
-  front of him and he notices it.
-- `tdm`'s `stalled` count rises 24% while `dm`'s holds. INFERRED: bots
-  stand through a throw's switch and hold, and through a reload they
-  did not do before; read it against this row, not the older tables.
+  teams every enemy in sight is a candidate, so a throw lands in front of
+  him and he notices it.
+- `tdm`'s `stalled` rises 24% while `dm`'s holds. INFERRED: bots stand
+  through a throw's switch and hold, and through quiet reloads.
 
-A probed lob is flown on to its burst (2026-10-21). `Server::lob_probe`
-takes a lob only when the frag, flown by the missile code from the release
-to the end of its fuse (`Missiles::predict_flight`: `Missile::step` against
-the world, no bodies or models), stays farther than its `explosionRadius`
+The lob probe flies the frag to its burst. `Server::lob_probe` takes a lob
+only when the frag, flown by the missile code from the release to the end
+of its fuse (`Missiles::predict_flight`: `Missile::step` against the
+world, no bodies or models), stays farther than its `explosionRadius`
 from the thrower's box at every frame the fuse can end on: from
 `COOK_MOST_MS` (2250 ms) short of the full fuse for a UO cook, at the full
-fuse elsewhere. The arc check alone ends at the first contact. Section
-12 replaced the arc check with the flight to the burst.
+fuse elsewhere. Section 12 replaced the old arc check (which ended at the
+first contact) with this.
 
-- VERIFIED (measured, ours, release, stock UO paks, `ship_stalls` with a
-  per-tick dump, seed 19 `tdm` on 2180b31d): a stick grenade lobbed from
-  (2583, -925, 0) at an enemy 550 off met a wall about 310 out, past the
-  arc check's 60 per cent, came back and rolled to (2558, -1126, 2); the
-  wounded thrower ran from it to (2518, -791, 4), 337 off, and died of its
-  9 points.
+- VERIFIED (measured, ours, release, stock UO paks, `ship_stalls` per-tick
+  dump, seed 19 `tdm` on 2180b31d): with the arc check, a stick grenade
+  lobbed from (2583, -925, 0) at an enemy 550 off met a wall about 310
+  out, past the check's 60 per cent, came back and rolled to (2558,
+  -1126, 2); the wounded thrower ran to (2518, -791, 4), 337 off, and
+  died of its 9 points.
 - VERIFIED (`weapons/mp/stielhandgranate_mp` in `pakuo04.pk3`):
   `explosionRadius 350`, `explosionInnerDamage 120`,
   `explosionOuterDamage 5`, `fuseTime 4`.
 - VERIFIED (measured, ours, release, stock UO paks, burst test off and
-  on): `ship_stalls` with `UO=1 MAP=mp_cassino GAMETYPE=tdm SHOOT=1
-  TICKS=1800` over seeds 1 to 63 odd, own frags 1 to 0, frag kills 4 to
-  3, kills 502 to 507; `bot_match` with `UO=1
-  MAPS=mp_cassino,mp_kursk BOTS=10` over seeds 1 to 8, thrown 176 to 151,
-  hits 74 to 46, grenade kills 7 to 5, kills 1613 to 1586. Its `suicides`
-  (43 and 47) counts every self-kill and is not split by cause.
+  on): `ship_stalls` `UO=1 MAP=mp_cassino GAMETYPE=tdm SHOOT=1 TICKS=1800`
+  seeds 1 to 63 odd: own frags 1 to 0, frag kills 4 to 3, kills 502 to
+  507. `bot_match` `UO=1 MAPS=mp_cassino,mp_kursk BOTS=10` seeds 1 to 8:
+  thrown 176 to 151, hits 74 to 46, grenade kills 7 to 5, kills 1613 to
+  1586; `suicides` (43 and 47) counts every self-kill, not split by cause.
 
 ### 6.6 Aim and footwork: `tdm` and `dm`, 12 and 10 bots (2026-10-21)
 
 Section 9's change, before (master d82876e1) and after on the same seeds.
 `tdm`: mp_carentan, mp_harbor, mp_depot, mp_brecourt, `BOTS=12`, seeds
-1..=8 (32 matches a row, every one ended at the score limit). `dm`:
-mp_carentan, mp_harbor, mp_depot, `BOTS=10`, seeds 1..=4 (12 matches, none
-ended). "Sight" is sight to shot, mean / median ms; "fired" the share of
-acquisitions fired on (section 1). Stalled is per 1000 match ticks.
-Stalled here is the column before 2026-10-21, holds included (section 1).
+1..=8 (32 matches a row, all ended at the score limit). `dm`: mp_carentan,
+mp_harbor, mp_depot, `BOTS=10`, seeds 1..=4 (12 matches, none ended).
+"Sight" is sight to shot, mean / median ms; "fired" the share of
+acquisitions fired on. Stalled is per 1000 match ticks, the old column
+with holds (section 1).
 
 VERIFIED (measured, ours, `bot_match`, 2026-10-21):
 
@@ -715,8 +644,8 @@ VERIFIED (measured, ours, `bot_match`, 2026-10-21):
 | `dm` after | 3237 | | 19.2 | 2440 | 72% | 1487 | 27289 | 32.1% | 1185 / 850 | 66% | 367 |
 | `dm` after, `FOOTWORK=none` | 3284 | | 19.0 | 2478 | 73% | 1542 | 27366 | 32.6% | 1192 / 850 | 68% | 318 |
 
-`FOOTWORK=alt`, `tdm` as above (32 matches). Margin as in 6.1, the
-footwork side's score less the other's per match:
+`FOOTWORK=alt`, `tdm` as above (32 matches); margin is the footwork
+side's score less the other's per match:
 
 | Run | Side | Kills | Deaths | K/D | Life s | Dead in 5 s | Accuracy | Sight ms | Margin |
 |---|---|---|---|---|---|---|---|---|---|
@@ -728,30 +657,30 @@ footwork side's score less the other's per match:
 | | control | 2981 | 2817 | 1.06 | 22.7 | 72% | 37.9% | 1024 / 800 | |
 
 - VERIFIED (measured, the tables): sight to shot falls from a median
-  1450 ms to 750 ms in `tdm` and 1900 to 850 in `dm`, and a fresh target
-  is fired on two thirds more often (19% to 32% in `tdm`). Accuracy falls
-  from 70% to 37%: rounds go out before the aim settles, and an
-  automatic fires twice the rounds for the same kills.
-- VERIFIED (measured, the tables): kills, lives, TTK and the share of
-  wounded bots dead within 5 s move a few percent; the score stays even
-  between the teams (allies less axis +3.2 +- 3.6 a match after, +1.2 +-
-  3.4 before). With every weapon class given one reach of 3 the allies
-  led by +6.8 +- 4.1, so the class reaches are not what tilts it.
+  1450 ms to 750 ms in `tdm` and 1900 to 850 in `dm`; a fresh target is
+  fired on two thirds more often (19% to 32% in `tdm`). Accuracy falls
+  from 70% to 37%: rounds go out before the aim settles, and an automatic
+  fires twice the rounds for the same kills.
+- VERIFIED (measured, the tables): kills, lives, TTK and wounded deaths
+  move a few percent; the teams stay even (allies less axis +3.2 +- 3.6 a
+  match after, +1.2 +- 3.4 before). With every weapon class given one
+  reach of 3 the allies led by +6.8 +- 4.1, so the class reaches do not
+  tilt it.
 - VERIFIED (measured, the tables): the footwork side gives up 3 kills a
-  match, inside one standard error; standing still is no longer clearly
-  better. With the moving error linear in speed it gave up 5. Neither
-  back-off nor prone alone accounts for the gap (-6.2 +- 4.2 without the
-  back-off, -4.8 +- 3.7 without prone, both on the linear build).
+  match, inside one standard error; with the moving error linear in speed
+  it gave up 5. Neither back-off nor prone alone accounts for the gap
+  (-6.2 +- 4.2 without the back-off, -4.8 +- 3.7 without prone, both on
+  the linear build).
 - VERIFIED (measured, the merged tip with team spread, grenades and
-  awareness, `tdm` seeds 1..=4, 16 matches): 2899 kills, allies k/d
-  1.09, life 26.5 s, 74% of wounded dead in 5 s, TTK mean 1803 ms,
-  accuracy 32.6%, sight to shot 960 / 750 ms with 56% of acquisitions
-  fired on, 95% of hits turned on and 45% answered, 10% of deaths
-  blindsided, stalled 514 per 1000 ticks.
+  awareness, `tdm` seeds 1..=4, 16 matches): 2899 kills, allies K/D 1.09,
+  life 26.5 s, 74% of wounded dead in 5 s, TTK mean 1803 ms, accuracy
+  32.6%, sight to shot 960 / 750 ms with 56% fired on, 95% of hits turned
+  on and 45% answered, 10% of deaths blindsided, stalled 514 per 1000
+  ticks.
 - VERIFIED (measured): `stalled` rises a fifth in `tdm`; cover holds rise
-  by a quarter (921k to 1150k bot-ticks) and dry retreats from 193 to 507.
-  INFERRED: twice the rounds empty twice the clips, and a dry clip holds
-  a cover spot to reload (section 5).
+  a quarter (921k to 1150k bot-ticks) and dry retreats 193 to 507.
+  INFERRED: twice the rounds empty twice the clips, and a dry clip holds a
+  cover spot to reload (section 5).
 
 ## 7. A side spread over the map (2026-10-21)
 
@@ -873,12 +802,10 @@ mp_depot, mp_dawnville, seeds 1..=6 (30 matches a row):
   at a fight instead of a side.
 ## 8. Target choice and sight (2026-10-21)
 
-Before this, `Server::bot_enemy` handed a bot the nearest enemy within
-`SHOOT_RANGE` whose chest or eye its eye line reached, all round, picked
-afresh every `ENEMY_REFRESH_MS` (100); `Bot::track` gave every change of
-slot the full reaction delay and `error_start`, and a hit told the brain
-nothing. A bot between two enemies at like range swapped targets, paying
-the delay each time, and one shot from out of sight ignored it.
+Before (`AWARE=none`): the nearest enemy in line of sight within
+`SHOOT_RANGE`, all round, picked afresh every `ENEMY_REFRESH_MS` (100),
+full reaction and `error_start` on every slot change, hits ignored; a bot
+between two enemies swapped targets and paid the delay each time.
 
 Now (`crates/server/src/bots.rs`, `server.rs`, `spectate.rs`):
 
@@ -985,12 +912,10 @@ VERIFIED (measured, ours, `bot_match`, 2026-10-21): `AWARE=alt`, `tdm`,
 `Bot::engage`, `Bot::trigger` and `Bot::footwork` in
 `crates/server/src/bots.rs`; measured in 6.6.
 
-Before this, the aim error only shrank with time on the target, and the
-trigger waited until the gun's miss fell inside the 10-unit cone: a bot
-paused about a second on a fresh target, then hit nearly every round.
-A target's movement added nothing, so strafing did not help against a
-settled bot, and a bot on its sights never moved: the x1.75 error while
-moving cost more than anything moving bought.
+Before: the error only shrank with time on target and the trigger waited
+for the 10-unit cone, so a bot paused about a second on a fresh target
+and then hit nearly every round; target motion added nothing, and a
+sighted bot never moved.
 
 ### 9.1 The miss
 
@@ -1058,37 +983,30 @@ stands still, never backs off and never lies down.
 ### 9.4 What the UO bot gates found
 
 VERIFIED (measured, ours, `tests/bots.rs` ignored tests at a stock UO
-install, 2026-10-21). Before master's `fix/uo-bot-pins`, this change
-made `four_shooting_uo_bots_end_a_bas_round` (mp_foy, seed 7) die of its
-own panzerschreck off `Bot::think_armor`, and
-`uo_tdm_games_that_stalled_or_never_sprinted` stall seeds 25 and 33 at
-mp_cassino's axis roof pin, (4939, -1410, 280). That fix's muzzle check
-clears the first. Merged with it, team spread and awareness, two pinned
-games still stall, both passing on master alone:
+install, 2026-10-21). This change routed bots into follower pins, all
+since fixed (bot-objectives.md 10.6, bot-navigation.md "Jumps", "A goal
+that flickers"):
 
-- Seed 25: the same roof pin. The bot, standing and not engaged, keys
-  forward at 115 toward the waypoint (4896, -1384, 280) and bounces
-  between (4939, -1410) and (4957, -1405) for the whole window, never
-  jumping and never at rest long enough for `Follower::rest_jump_fails`.
-- Seed 17: on the steps at (1440, -700..-725) the waypoint flips each
-  time the body crosses a step, between (1440, -725, 13) and (1440, -669,
-  56) or (1441, -761, 25), and the bot walks back and forth over it.
-
-Both are the follower's; the new fights only route bots into them. Both
-are fixed on `fix/uo-bot-pins2` (bot-objectives.md 10.6, bot-navigation.md
-"Jumps", "A goal that flickers"): seed 25 by a replan on landing under a
-level edge, seed 17 by a plan parked for a goal that comes back. Seed 17's
-cause is the goal, not the node pick: an enemy seen for a tick or two from
-the step flipped `Bot::goal` and back, and each replan began at the node
-behind the body.
+- `four_shooting_uo_bots_end_a_bas_round` (mp_foy, seed 7) died of its own
+  panzerschreck off `Bot::think_armor`: fixed by the muzzle check.
+- `uo_tdm_games_that_stalled_or_never_sprinted` seed 25 (and 33): on
+  mp_cassino's axis roof pin (4939, -1410, 280) the bot, not engaged,
+  keyed forward at 115 toward (4896, -1384, 280) and bounced between
+  (4939, -1410) and (4957, -1405), never jumping and never at rest long
+  enough for `Follower::rest_jump_fails`. Fixed by a replan on landing
+  under a level edge.
+- Seed 17: on the steps at (1440, -700..-725) the waypoint flipped each
+  time the body crossed a step, between (1440, -725, 13) and (1440, -669,
+  56) or (1441, -761, 25). The cause was the goal: an enemy seen for a
+  tick or two flipped `Bot::goal` and back, and each replan began at the
+  node behind the body. Fixed by a plan parked for a goal that comes
+  back.
 
 ## 10. Peeks and hunts that vary (2026-10-21)
 
-Before this a bot at a cover spot showed itself the one way the spot
-offered, each time it came back from a reload, and peeked on for 3 s
-once the threat left sight. It then walked onto the spot where it had
-lost the enemy (`Bot::recall`, led by half a second of his velocity)
-until it got there or its memory (`Skill::memory_ticks`) ran out.
+Before (`WARY=none`): one peek pose per spot, a 3 s peek after the threat
+left sight, then a walk onto the lost spot (`Bot::recall`, led by half a
+second of his velocity) until arrival or `Skill::memory_ticks`.
 
 Now, with `Bot::wary` on (the default; `WARY=` and
 `Server::test_bot_wary` turn it off):
@@ -1119,14 +1037,13 @@ Now, with `Bot::wary` on (the default; `WARY=` and
   so a grenade at the lost spot and `bel`'s hunted bots read it as
   before.
 
-Two cuts did not ship. Holding a spot through alternate spells hidden
-and peeking (draws of 6-15 and 10-19 ticks at level 1) lost a `WARY=alt`
-side 159 kills against the control's 3031 over 32 matches (10 wins to 17),
-and with the hunt on too, 2931 to 3007. INFERRED: a bot hidden behind its
-cover does not see the threat come back, so the threat gets the first
-shot. A vantage 96 to 320 units off the spot gave as many kills as the
-control (3007 to 2980) but 11.4% of its 3199 arrivals died within 2 s,
-against 8.3% of the control's 931 arrivals at the spot.
+Rejected cuts, VERIFIED (measured, `WARY=alt`, 32 matches): alternate
+hidden and peeking spells (6-15 and 10-19 ticks at level 1) lost the wary
+side 159 kills against the control's 3031 (10 wins to 17), 2931 to 3007
+with the hunt on too; INFERRED: a hidden bot does not see the threat come
+back. A vantage 96 to 320 units off the spot matched the control's kills
+(3007 to 2980) but 11.4% of its 3199 arrivals died within 2 s, against
+8.3% of the control's 931.
 
 ### 10.1 Before and after
 
@@ -1176,22 +1093,16 @@ VERIFIED (measured, ours, `bot_match`, 2026-10-21): `WARY=alt`, `tdm`,
   vantage makes the bots harder to predict without making them score
   more.
 - VERIFIED (measured, release, stock UO paks): the shipped cut passes
-  `tests/bots.rs` and `tests/bot_vehicles.rs` at 1.1 and UO. With the
-  96 to 320 unit vantage `uo_tdm_games_that_stalled_or_never_sprinted`
-  failed seeds 13 and 19.
-  Each stalls a bot for 12 s on mp_cassino's roof, (4890..4990,
-  -1320..-1440, 256..303), routed toward the drop edge from (4990, -1440,
-  303) to (5040, -1490, 48) with no recall, cover hold, target or hunt.
-  Each half on alone fails one seed: the cover half seed 19, the same
-  roof; the hunt half seed 13, at (720, -1467, 92) with its waypoint at
-  (-192, -384). All off, the test passed. INFERRED: follower stalls the
-  changed draws reach, not this feature. VERIFIED (measured, release,
-  stock UO paks): merged with section 9's aim and footwork and the
-  follower's landing replans, the 96 to 320 unit cut passes the test,
-  both halves on and each alone. A lone bot placed at each stall spot
-  with the goal it had reaches that goal within 30 s on both the old and
-  the new follower, so the pins needed the whole game's state, and
-  whether the follower fixes cover them stays open.
+  `tests/bots.rs` and `tests/bot_vehicles.rs` at 1.1 and UO. The 96 to
+  320 unit vantage once failed `uo_tdm_games_that_stalled_or_never_sprinted`
+  seeds 13 and 19 (a bot stalled 12 s on mp_cassino's roof, (4890..4990,
+  -1320..-1440, 256..303), routed to the drop edge (4990, -1440, 303) to
+  (5040, -1490, 48); seed 13 at (720, -1467, 92), waypoint (-192, -384)).
+  Merged with section 9 and the follower's landing replans it passes,
+  both halves on and each alone. INFERRED: follower stalls the changed
+  draws reached. A lone bot placed at each stall spot with its goal
+  reached it within 30 s on the old and new follower, so the pins needed
+  the whole game's state.
 
 ## 11. The walking view and string-pulling (2026-10-21)
 
@@ -1246,18 +1157,15 @@ bot walks on both sides of, and the view takes the path at once. Without
 the hand-back (the build before 11.4) they were 818 (0.10%), 889
 (0.10%) and 412 (0.08%), at the cost 11.4 measures.
 
-Per map, `tdm` seeds 1-4 then 5-8, stalled: mp_carentan 31 133 / 22 209
-and 33 031 / 25 534, mp_harbor 9 858 / 10 730 and 8 894 / 14 347,
-mp_depot 14 592 / 21 736 and 18 333 / 20 589, mp_brecourt 7 568 / 8 224
-and 10 411 / 8 667. mp_depot's accuracy 31.9 / 30.8% and 30.6 / 28.7%.
-Kills move inside what the two seed sets differ by. `tdm` life is a
-second shorter in both sets (28.5 / 26.7, 27.9 / 26.9 s), `dm`'s level;
-not looked into.
-
-Taken apart before 11.4 on mp_depot and mp_harbor `tdm` seeds 1-4
-(VERIFIED, measured, temporary switches since removed): stalled 14 592 /
-9 858 before, 24 480 / 9 230 with the turn limit alone, 17 763 / 11 475
-with the pull alone, 28 947 / 13 428 with both.
+Per map, `tdm` seeds 1-4 then 5-8, stalled before / after: mp_carentan
+31 133 / 22 209 and 33 031 / 25 534, mp_harbor 9 858 / 10 730 and
+8 894 / 14 347, mp_depot 14 592 / 21 736 and 18 333 / 20 589, mp_brecourt
+7 568 / 8 224 and 10 411 / 8 667; mp_depot's accuracy 31.9 / 30.8% and
+30.6 / 28.7%. Kills move inside the seed sets' spread; `tdm` life is a
+second shorter in both sets, `dm`'s level (not looked into). Without
+11.4, mp_depot / mp_harbor seeds 1-4 stalled 14 592 / 9 858 before,
+24 480 / 9 230 with the turn limit alone, 17 763 / 11 475 with the pull
+alone, 28 947 / 13 428 with both (VERIFIED, measured, temporary switches).
 
 ### 11.3 The rocket test
 
@@ -1287,35 +1195,23 @@ unheld, it never does (no ground, or the line blocked).
 
 ### 11.4 The hand-back
 
-Before it, the turn limit doubled mp_depot's `tdm` stalls (above). The
-stall column counts a bot holding cover as stalled, so I traced where
-they sat. VERIFIED (measured, temporary per-tick dumps in `bot_match`,
-mp_depot `tdm` 12 bots, seeds 3 and 5, master then the build without
-11.4): the stalled bot-ticks were 6 342 and 21 294; engaged and on a
-held cover spot 4 459 and 16 567, with the view within 10 degrees of
-the target on 69% and 81% of the targeted ones; walking 459 and 617. So
-no bot walked into a fight facing its path. Engaged bot-ticks rose
-84 685 to 115 317, mostly at 600 to 1000 units (26 759 to 42 535), both
-sides on cover 50.6 to 56.2% of them.
+Trap: without the hand-back the turn limit doubled mp_depot's `tdm`
+stalls. VERIFIED (measured, per-tick dumps, mp_depot `tdm` 12 bots, seeds
+3 and 5, master then the build without 11.4): stalled bot-ticks 6 342 to
+21 294, of them engaged on a held cover spot 4 459 to 16 567 (view within
+10 degrees of the target on 69% and 81%), walking 459 to 617. Engaged
+bot-ticks rose 84 685 to 115 317, mostly at 600 to 1000 units. Seed 5
+then seed 3: fights 744 to 1 171 and 963 to 1 007; target down 40 to 28%
+and 39 to 35%; the same pair again within 10 s 189 to 416 and 226 to 299.
+INFERRED: after a peek, recall look or fight let go, the view came back to
+the path at the walking rate, so the bot leaving cover saw the same enemy
+again, dug back in, and the two traded rounds from cover at range.
 
-The fights themselves (a bot on one target, gaps under a second), seed
-5 then seed 3: 744 to 1 171 and 963 to 1 007 fights; those ending with
-the target down 40 to 28% and 39 to 35%; those over 10 s 18 to 33 and 14
-to 20. The same pair fighting again within 10 s of the last, 189 to 416
-and 226 to 299, more often with the view already within 30 degrees of
-the target at the first tick. INFERRED (read off that and the code): a
-peek, a recall look or a fight let go, and the view came back round to
-the path from the threat at the walking rate, so the bot leaving its
-cover saw the same enemy again, dug back in, and the two traded rounds
-from cover at range. Where the snap had turned it away, it walked on.
-
-With the hand-back, the same dumps (VERIFIED, measured): stalled 3 240
-on seed 3 and 5 386 on seed 5 (master 2 895 and 3 447, without the
-hand-back 9 345 and 11 949); seed 5's fights over 10 s 21 (master 18)
-and those ending with the target down 33% (master 40%, without 28%). The
-same pair again within 10 s is still 385 and 405 against master's 226
-and 189; section 13 measures it on eight seeds, where it does not rise.
-Without the hand-back
+With the hand-back (VERIFIED, measured, same dumps): stalled 3 240 and
+5 386 (master 2 895 and 3 447); seed 5's target down 33% (master 40%).
+The same pair again within 10 s still read 385 and 405 against master's
+226 and 189; section 13 measures it on eight seeds, where it does not
+rise. Without the hand-back
 `bots::tests::the_walking_view_takes_the_path_at_once_after_a_fight`
 fails.
 
@@ -1330,9 +1226,8 @@ Before is the branch's base (3135508b), after the branch tip. Over the
 
 ### 12.1 Why they missed
 
-I dumped every release, every live frag's spawn and every
-`MOD_GRENADE_SPLASH` blast with the bodies around it from `bot_match`
-(temporary, since removed).
+From temporary `bot_match` dumps of every release, live frag spawn and
+`MOD_GRENADE_SPLASH` blast with the bodies around it:
 
 - VERIFIED (measured, ours, mp_harbor `tdm` seed 1): of 31 releases, 1
   frag left the hand. The 1.1 hold ran 6 to 13 ticks from the tick
@@ -1357,8 +1252,8 @@ I dumped every release, every live frag's spawn and every
   thrower within 60 degrees and fighting him took 81.5 damage a throw
   (20 throws), one facing him and fighting another 69.5 (11), one
   facing away 26.9 (10). INFERRED: a frag off a high lob comes down
-  from above, and an enemy dug in against the thrower stays put, so I
-  added no rule on where the enemy looks.
+  from above, and an enemy dug in against the thrower stays put, so there
+  is no rule on where the enemy looks.
 
 ### 12.2 What changed
 
@@ -1441,31 +1336,22 @@ VERIFIED (measured, ours, `bot_match`, 2026-10-21):
   `tdm` ends on the score limit, so frags take kills from the guns:
   102 of 2963.
 - VERIFIED (measured, the kill lines): UO's suicides rise 35 to 59 on
-  seeds 1..=8, none of them a frag: `MOD_SUICIDE` (the bot's `kill`
-  when dry or wedged) 21 to 44, spread over seven mp_cassino seeds, the
-  rest vehicle blasts and crushes. On seeds 9..=16 `MOD_SUICIDE` is 33
-  against 32. VERIFIED (measured, a dump of each `kill` on an earlier
-  build of the branch, seeds 1..=8): 30 of 33 were the dry rule, every
-  one with a frag and a pistol in the kit and nothing loaded. VERIFIED
-  (measured, ours, a per-tick ammo dump of one bot, mp_cassino seed 2):
-  the dry bots spawn with every weapon at 0 rounds, the sniper rifle,
-  the pistol, the frag and the binoculars alike (ticks 1758 and 2422;
-  the spawns at 2008 and 2179 got 5+25, 8+8 and 1), and the dry rule
-  kills them 200 ticks on; no script runtime error is logged. Of the
-  `MOD_SUICIDE`s, those under 300 ticks after the victim's last death
-  (a life dry from its spawn) are 14 before and 36 after on seeds
-  1..=8, 26 and 27 on seeds 9..=16. The zero-ammo spawn was a server
-  bug, fixed on 2026-10-21 (below).
+  seeds 1..=8, none a frag: `MOD_SUICIDE` (the bot's `kill` when dry or
+  wedged) 21 to 44 over seven mp_cassino seeds, the rest vehicle blasts
+  and crushes; on seeds 9..=16 33 against 32. VERIFIED (measured, a dump
+  of each `kill` and a per-tick ammo dump): 30 of 33 were the dry rule,
+  on bots that spawned with every weapon at 0 rounds, a server bug fixed
+  below.
 
-The zero-ammo spawn: a vehicle round delivered between the script
-threads and the spawn pass applied every slot's queued weapon ops, the
-spawning bot's loadout among them, to the old life's playerstate, and
-the spawn pass then emptied the ammo arrays (`cod11-gsc-object-model.md`
-20, "The spawn's memset and the weapon op queue"). INFERRED, off the
-code: nothing in the path is a bot's, so a human spawning in such a
-frame came up dry too. VERIFIED (measured, ours, `bot_match`, UO `tdm`
-with 10 bots, seeds 1..=8, the fix's base 028799bf with and without the
-fix, the kill lines):
+The zero-ammo spawn (fixed 2026-10-21): a vehicle round delivered between
+the script threads and the spawn pass applied every slot's queued weapon
+ops, the spawning bot's loadout among them, to the old life's
+playerstate, and the spawn pass then emptied the ammo arrays
+(`cod11-gsc-object-model.md` 20, "The spawn's memset and the weapon op
+queue"). INFERRED, off the code: nothing in the path is a bot's, so a
+human spawning in such a frame came up dry too. VERIFIED (measured, ours,
+`bot_match`, UO `tdm` with 10 bots, seeds 1..=8, base 028799bf with and
+without the fix, the kill lines):
 
 | Run | Kills on mp_cassino | Suicides on mp_cassino | `MOD_SUICIDE` mp_cassino / mp_kursk |
 |---|---|---|---|
@@ -1494,11 +1380,8 @@ world).
 
 ## 13. Fights broken off and taken up again (2026-10-21)
 
-11.4 left one finding open: on mp_depot `tdm` seeds 3 and 5 the same pair
-fought again within 10 s more often after the walking view (226 and 189
-to 385 and 405), and fewer fights ended with the target down. `bot_match`
-now counts it (section 1's fights row); this section measures it, traces
-it, and records the fix that did not ship.
+Follows 11.4's mp_depot reading (the same pair again within 10 s, 226 and
+189 to 385 and 405). `bot_match` counts it (section 1's fights row).
 
 ### 13.1 Measured
 
@@ -1632,20 +1515,22 @@ after the mount: 68 mounts for 78 s on the guns.
 
 ## 15. CoD2 bots on CoD1's tick order (2026-10-23)
 
-CoD2's bots used to run the shared driver (`bots::driver::step`) at five
-points of their own (bot-navigation.md 3). The three ordering points went
-first: the noises heard ahead of the frame's reads, the hunt's vantage
-after the retreat's cover, the lob probed after the drop probe. Then the
-two route consts were turned on one at a time: `YIELDS` (ladder and path
-yields, `team::crowd`, blocked nodes), after the yields stopped counting a
-CoD2 body killed this frame as a teammate, and `PMOVE_PROBES` (lip, push
-off the rungs, unpin, stepping CoD1's pmove on `bots::cod2::move_ps`'s
-body under the graph's rules, no new pmove needed).
+CoD2's bots run the shared driver (`bots::driver::step`) in CoD1's order
+(bot-navigation.md 3): the noises heard ahead of the frame's reads, the
+hunt's vantage after the retreat's cover, the lob probed after the drop
+probe. The yields no longer count a CoD2 body killed this frame as a
+teammate. VERIFIED (measured): with the order move and that fix every
+wide and gate line was byte-identical to the base, `DIGEST=250`
+included; no bot pass on these seeds fell between a kill and the
+victim's end frame.
 
-Wide run: `GAME=cod2 TICKS=12000 bot_match`, seeds 1..=8, mp_toujane,
-mp_carentan, mp_dawnville, mp_burgundy, a process per match, summed (32
-matches a gametype). Gate run: the `bm2_tdm` set (seeds 1..=4, 6000
-ticks, mp_dawnville, mp_carentan, mp_toujane).
+The two route consts stay off for CoD2 (`crates/server/src/cod2/bots.rs`:
+`YIELDS` and `PMOVE_PROBES` false), so the two games share one order but
+not one route. Measured with `GAME=cod2 TICKS=12000 bot_match`, seeds
+1..=8, mp_toujane, mp_carentan, mp_dawnville, mp_burgundy, a process per
+match, summed (32 matches a gametype; "wide"), and the `bm2_tdm` gate set
+(seeds 1..=4, 6000 ticks, mp_dawnville, mp_carentan, mp_toujane).
+VERIFIED (measured, ours, release):
 
 | | kills | hits / rounds | acc | stalled | held | ladder | mantles | retreats | smokes |
 |---|---|---|---|---|---|---|---|---|---|
@@ -1653,45 +1538,34 @@ ticks, mp_dawnville, mp_carentan, mp_toujane).
 | tdm wide, `YIELDS` | 4171 | 6240 / 33487 | 0.186 | 2783 | 78426 | 4837 | 1727 | 2917 | 380 |
 | tdm wide, `PMOVE_PROBES` | 4231 | 6414 / 33799 | 0.190 | 1700 | 76242 | 3810 | 1683 | 2937 | 356 |
 | dm wide, base | 4361 | 6627 / 36433 | 0.182 | 112 | 81737 | 3994 | 1350 | 3058 | 430 |
-| dm wide, `YIELDS` | 4339 | 6595 / 36479 | 0.181 | 112 | 81389 | 4250 | 1333 | 3051 | 429 |
-| dm wide, `PMOVE_PROBES` | 4343 | 6449 / 36292 | 0.178 | 199 | 79484 | 3919 | 1336 | 3056 | 432 |
 | `bm2_tdm`, base | 758 | 1091 / 5771 | 0.189 | 169 | 12665 | 1110 | 331 | 506 | 75 |
 | `bm2_tdm`, `PMOVE_PROBES` | 740 | 1076 / 5460 | 0.197 | 842 | 12406 | 1079 | 320 | 462 | 79 |
 
-- The order move and the dead-body yield fix: every wide and gate line
-  byte-identical to the base, `DIGEST=250` included (`dg2`). No bot pass
-  on these seeds fell between a kill and the victim's end frame.
-- `YIELDS`: tdm stalls up 73% for the same kills. On the 6000-tick tdm
-  set of four maps and four seeds they went from 169 to 491. Reverted.
-- `PMOVE_PROBES`: the push off the rungs cuts ladder ticks by a quarter
-  in tdm, but stalls rise in every sum: two gate seeds that never stalled
-  stall now (mp_toujane 3 for 408 ticks, mp_dawnville 4 for 225), and dm
-  seed 4 on mp_carentan for 128. Reverted; those seeds are where to look
-  first.
-
-Both consts stay off for CoD2, so the two games share one order but not
-one route.
+- `YIELDS` (ladder and path yields, `team::crowd`, blocked nodes): tdm
+  stalls up 73% for the same kills (169 to 491 on the 6000-tick four-map
+  set); dm unchanged.
+- `PMOVE_PROBES` (lip, push off the rungs, unpin, stepping CoD1's pmove on
+  `bots::cod2::move_ps`'s body under the graph's rules): ladder ticks down
+  a quarter in tdm, but stalls rise in every sum; two gate seeds that
+  never stalled stall (mp_toujane 3 for 408 ticks, mp_dawnville 4 for
+  225), and dm seed 4 on mp_carentan for 128. Where to look first if it
+  is tried again.
 
 ## 16. The CoD2 graph walked under CoD2's pmove (2026-10-24)
 
 CoD2's graph is flooded and proved under 1.5's rules
-(`bots::cod2::GRAPH_RULES`), while its bots move by CoD2's pmove. I put a
-seam in the walks (`nav::WalkStep`, `nav::with_step`, bot-navigation.md
-2, "Other rules") and a CoD2 step behind it (`bots::cod2::Cod2Walk`):
-each walk's body is a CoD2 playerstate stepped by
-`vcod_cod2::pmove::player_step` over the level's `Rules`, the cmd through
-`to_cmd2`, read back into the CoD1 body the walk tests. Two arms: the
-graph alone under CoD2 (`graph`), and the graph plus the follower's walks
-in the bots' pass (the rest-jump test and the re-proofs) under the
-graph's step and rules (`graph + follower`; then those ran under 1.1's,
-section 17). CoD1 and UO are untouched: the seam's commit leaves
-every `mg-v2/bots1` gate byte-identical (the `bm11*`, `bmuo*`, `dg11`,
-`dguo*`, `nav11`, `navuo`, `nav_census11`, `it_*` and `lib_bots` files,
-the last but for the base's two new tests in its filtered count).
+(`bots::cod2::GRAPH_RULES`), while its bots move by CoD2's pmove. A seam
+in the walks (`nav::WalkStep`, `nav::with_step`, bot-navigation.md 2,
+"Other rules") takes a CoD2 step (`bots::cod2::Cod2Walk`): each walk's
+body is a CoD2 playerstate stepped by `vcod_cod2::pmove::player_step` over
+the level's `Rules`, the cmd through `to_cmd2`, read back into the CoD1
+body the walk tests. It is off: `Cod2Bots::nav_tick` hands the build no
+step, and `Cod2Walk` stays one argument from on. The seam left every CoD1
+and UO gate byte-identical.
 
-Graph sizes (VERIFIED, measured, ours, release, the `<map> seed 1:
-graph` line of `bot_match GAME=cod2 GAMETYPE=tdm`): nodes, edges and
-mantle edges.
+Graph sizes, nodes / edges / mantle edges (VERIFIED, measured, ours,
+release, the `<map> seed 1: graph` line of `bot_match GAME=cod2
+GAMETYPE=tdm`):
 
 | map | 1.5's rules | CoD2's pmove |
 |---|---|---|
@@ -1700,49 +1574,28 @@ mantle edges.
 | mp_dawnville | 9700 / 69989 / 369 | 9727 / 70088 / 361 |
 | mp_burgundy | 7353 / 52897 / 357 | 7352 / 52675 / 369 |
 
-The build costs the same: a one-tick `bot_match` run, the build
-included, took 2154 / 2159 ms (mp_toujane, 1.5's / CoD2's), 1919 / 1780,
-1522 / 1526 and 1606 / 1698, on a box at load 100.
+The build costs the same: a one-tick `bot_match`, build included, took
+2154 / 2159 ms (mp_toujane, 1.5's / CoD2's), 1919 / 1780, 1522 / 1526 and
+1606 / 1698.
 
-Wide run as in section 15 (VERIFIED, measured, ours, release; seeds
-1..=8, four maps, `TICKS=12000`, a process per map and gametype, summed
-over 32 matches; the gate sets as the `mg-v2/bots1` baselines run them).
-Kills per death
-stays at 0.99-1.00 in every arm: the bots only kill each other.
-
-| | kills | hits / rounds | acc | stalled | held | ladder | mantles |
-|---|---|---|---|---|---|---|---|
-| tdm, base | 4171 | 6047 / 33103 | 0.183 | 1608 | 68918 | 5193 | 1676 |
-| tdm, graph | 4282 | 6527 / 33770 | 0.193 | 1740 | 81977 | 6085 | 1610 |
-| tdm, graph + follower | 4252 | 6527 / 34340 | 0.190 | 2087 | 80268 | 5098 | 1712 |
-| dm, base | 4361 | 6627 / 36433 | 0.182 | 112 | 81737 | 3994 | 1350 |
-| dm, graph | 4278 | 6527 / 36735 | 0.178 | 656 | 77986 | 4230 | 1306 |
-| dm, graph + follower | 4334 | 6415 / 36710 | 0.175 | 29 | 75163 | 3585 | 1336 |
-| `bm2_tdm`, base | 758 | 1091 / 5771 | 0.189 | 169 | 12665 | 1110 | 331 |
-| `bm2_tdm`, graph + follower | 751 | 1136 / 5681 | 0.200 | 966 | 12591 | 1244 | 345 |
-| `bm2_dm_skills`, base | 593 | 914 / 4857 | 0.188 | 5 | 5881 | 1089 | 202 |
-| `bm2_dm_skills`, graph + follower | 572 | 921 / 4966 | 0.185 | 0 | 9801 | 711 | 172 |
-
-- The base lines reproduce section 15's to the tick.
-- Stalls rise in both arms' sums (1720 to 2396 and to 2116), as lumps
-  on single seeds rather than everywhere: `graph + follower` stalls
-  mp_carentan tdm seed 3 for 815 ticks (12 before) and mp_toujane tdm
-  for 1100 over six seeds (579 over four before), while mp_dawnville tdm
-  falls from 740 to 70. The carentan stall is bots pacing round (755,
-  1800..1890, 8), beside the mantle edges down to the yard at z -40.
-  The two graphs hold the same nodes and mantle edges there, and the
-  `graph` arm stalls that seed 17 ticks, so the follower's walks under
-  the new step moved it. Not looked into further.
-- Reverted: `Cod2Bots::nav_tick` hands the build no step, and the bots'
-  pass stays as it was. `Cod2Walk` stays, one argument from on.
+Why off, VERIFIED (measured, ours, release, section 15's wide run; K/D
+0.99-1.00 in every arm): the graph under CoD2 alone (`graph`) and with the
+follower's walks under it too (`graph + follower`) moved kills within the
+seeds' spread (tdm 4171 to 4282 and 4252, dm 4361 to 4278 and 4334) and
+raised stalls in lumps on single seeds: `graph + follower` stalled
+mp_carentan tdm seed 3 for 815 ticks (12 before), bots pacing round (755,
+1800..1890, 8) beside the mantle edges down to the yard at z -40, and
+`bm2_tdm` 169 to 966. The two graphs hold the same nodes and mantle edges
+there, and `graph` stalls that seed 17 ticks, so the follower's walks
+under the new step moved it.
 
 ## 17. CoD2's bot pass under the graph's rules (2026-10-24)
 
-Two bugs in what CoD2's follower walks and reads:
+Two bugs, fixed:
 
 1. `Cod2Server::step_bots` ran the driver outside any `nav::with_rules`,
-   so the walks the pass runs (`Follower::rest_jump_fails`, the
-   re-proofs) stepped under 1.1's rules while the graph was proved under
+   so the pass's walks (`Follower::rest_jump_fails`, the re-proofs)
+   stepped under 1.1's rules while the graph was proved under
    `bots::cod2::GRAPH_RULES` (1.5's). The pass now runs under the graph's
    `NavGraph::moving` (rules and step), `GRAPH_RULES` until the graph
    lands, as `engine::tick` runs CoD1's under the server's rules
@@ -1753,184 +1606,105 @@ Two bugs in what CoD2's follower walks and reads:
    `pm_time` into 1.5's `jump_penalty` and `knockback_ms`, with
    `jump_origin_z`, as `Cod2Walk` maps them (`fix2`, on top of `fix1`).
 
-Then the two switches left off in sections 15 and 16, each on top of
-both fixes: `PMOVE_PROBES` on (`probes`), and the graph built and walked
-by `Cod2Walk` (`walk`, section 16's `graph + follower`).
-
-Runs as in section 15 (VERIFIED, measured, ours, release; wide: seeds
-1..=8, four maps, `TICKS=12000`, a process per map and gametype, 32
-matches a gametype; gate sets as `mg-v2/bots1` runs them, `bm2_tdm` 12
-matches, `bm2_dm_skills` 8). Base is section 16's base.
+VERIFIED (measured, ours, release; section 15's runs; `bm2_tdm` 12
+matches, `bm2_dm_skills` 8):
 
 | | kills | hits / rounds | acc | stalled | held | ladder | mantles | retreats |
 |---|---|---|---|---|---|---|---|---|
 | tdm wide, base | 4171 | 6047 / 33103 | 0.183 | 1608 | 68918 | 5193 | 1676 | 2876 |
-| tdm wide, fix1 | 4196 | 6166 / 32678 | 0.189 | 2408 | 65674 | 4061 | 1784 | 2922 |
 | tdm wide, fix2 | 4177 | 6205 / 32764 | 0.189 | 2515 | 66370 | 5212 | 1812 | 2888 |
-| tdm wide, probes | 4202 | 6252 / 33308 | 0.188 | 3179 | 77273 | 4575 | 1751 | 2921 |
-| tdm wide, walk | 4187 | 6487 / 33207 | 0.195 | 1746 | 79316 | 8359 | 1770 | 2994 |
 | dm wide, base | 4361 | 6627 / 36433 | 0.182 | 112 | 81737 | 3994 | 1350 | 3058 |
-| dm wide, fix1 | 4315 | 6638 / 36527 | 0.182 | 71 | 84494 | 4132 | 1328 | 3068 |
 | dm wide, fix2 | 4303 | 6576 / 36512 | 0.180 | 148 | 86512 | 4335 | 1302 | 3003 |
-| dm wide, probes | 4287 | 6441 / 36490 | 0.177 | 140 | 81418 | 4407 | 1351 | 3080 |
-| dm wide, walk | 4333 | 6375 / 37330 | 0.171 | 20 | 78350 | 3159 | 1319 | 2968 |
 | `bm2_tdm`, base | 758 | 1091 / 5771 | 0.189 | 169 | 12665 | 1110 | 331 | 506 |
-| `bm2_tdm`, fix1 | 751 | 1105 / 5735 | 0.193 | 47 | 10286 | 1342 | 355 | 495 |
 | `bm2_tdm`, fix2 | 751 | 1036 / 5181 | 0.200 | 46 | 10054 | 1016 | 351 | 457 |
-| `bm2_tdm`, probes | 746 | 1045 / 5408 | 0.193 | 1028 | 12353 | 730 | 307 | 449 |
-| `bm2_tdm`, walk | 765 | 1112 / 5649 | 0.197 | 567 | 12994 | 1554 | 340 | 470 |
 | `bm2_dm_skills`, base | 593 | 914 / 4857 | 0.188 | 5 | 5881 | 1089 | 202 | 405 |
-| `bm2_dm_skills`, fix1 | 577 | 886 / 4922 | 0.180 | 5 | 8618 | 966 | 169 | 395 |
 | `bm2_dm_skills`, fix2 | 570 | 882 / 5082 | 0.174 | 5 | 9264 | 891 | 179 | 399 |
-| `bm2_dm_skills`, probes | 588 | 940 / 4788 | 0.196 | 22 | 8372 | 776 | 187 | 406 |
-| `bm2_dm_skills`, walk | 578 | 932 / 4984 | 0.187 | 0 | 8785 | 665 | 177 | 420 |
 
-Wide tdm stalls by map (burgundy, carentan, dawnville, toujane): base
-0 / 289 / 740 / 579, fix1 31 / 422 / 740 / 1215, fix2 56 / 352 / 609 /
-1498, probes 0 / 1106 / 459 / 1614, walk 13 / 501 / 130 / 1102.
-
-- Both fixes stay: they make the follower walk and wait as the graph
-  was proved. Kills hold (tdm +6, dm -58 of 4361, within the seeds'
-  spread). Wide tdm stalls rise (1608 to 2515), nearly all on
-  mp_toujane, where seeds 3 and 4 that never stalled now stall 151 and
-  241 ticks; the gate sets' stalls fall (174 to 51). Not looked into
-  further; mp_toujane tdm is where to look first.
-- `probes`: stalls up again in tdm wide (+26%) and the tdm gate (46 to
-  1028), kills flat. Stays off.
-- `walk`: the lowest wide stalls of every arm (tdm 1746, dm 20), kills
-  +10 and +30 on fix2, but the tdm gate's stalls go 46 to 567 (one
-  mp_carentan seed for 474) and tdm ladder ticks rise 60%. Mixed, not a
-  clear win, so it stays off; mp_carentan's yard (section 16) is still
-  where its stalls lump.
+- Both fixes stay: the follower walks and waits as the graph was proved.
+  Kills hold. Wide tdm stalls rose (by map, burgundy / carentan /
+  dawnville / toujane: 0 / 289 / 740 / 579 to 56 / 352 / 609 / 1498),
+  nearly all on mp_toujane seeds 3 and 4; 17.1 took them down.
+- On top of both, `PMOVE_PROBES` (tdm wide stalls 3179, `bm2_tdm` 1028,
+  kills flat) and `Cod2Walk` (`walk`: wide stalls tdm 1746, dm 20, kills
+  +10 and +30, but `bm2_tdm` 46 to 567, one mp_carentan seed for 474,
+  ladder ticks +60%) both stay off.
 
 ### 17.1 Looks on a mantle edge and the slow onto a stop (2026-10-24)
 
-Two fixes in the brain, measured on top of section 17's `fix2` (VERIFIED,
-measured, ours, release; same runs and seeds as above; `base` reproduces
-`fix2`'s rows exactly):
+Three brain fixes on top of section 17's `fix2`:
 
 1. `mantle`: on a CoD2 mantle edge (`BotView::mantle`, off
    `nav::Follower::mantling`) neither the recall look nor `face_hurt`
    turns the view. CoD2's pmove offers the mantle only to a view facing
-   the wall (INFERRED: `find_surface`, `vcod_cod2::pmove::mantle`,
-   traces along the view's forward), so a bot that
-   turned toward a remembered enemy at mp_toujane's yard wall (400-560,
-   1563, 4) backed off the edge and gave it up. `cover_unseen` is left
-   alone: a held spot walks its own keys straight to the spot, not the
-   path's edge. CoD1 and UO graphs carry no mantle edge, and their gates
-   (`bm11*`, `bmuo*`, `dg11`, `dguo*`, `nav*`, `it_*`) match the base
-   byte for byte.
-2. `stop`: the slow onto a leap's foot or a held node (`Follower::holding`)
-   set the forward key along the view. Under a recall look the view is off
-   the path and the keys were turned to keep it, so the slow walked the
-   body away from its stop. That is `mantle`'s mp_carentan rise: seed 3 of
-   `bm2_tdm` ran a bot's path to node (736, 1881, 8) with a held edge on,
-   the recall look turned the view to (928, 1523), and the slow's +127
-   ground the bot into the corner at (761, 1799, 8) for 335 ticks
-   (INFERRED from a per-tick trace of the bot's cmd and view: `stop`
-   set, view yaw -62, keys 127 / -31, waypoint at yaw 106). The bug
-   predates `mantle`; `mantle` moved seed 3's trajectory onto it. The
-   slow now scales both turned keys under a recall look.
-3. `dead`: an edge the follower gets stuck on again while it is still
-   avoided goes on a dead list that the fallback plan also leaves out until
-   it expires (`nav::Follower::avoid_edge`). Before, a plan with no way
-   round an avoided edge went through it again however often it failed.
-   This is what raised UO's stalls under `stop`; see the notes below the
-   table.
+   the wall (INFERRED: `find_surface`, `vcod_cod2::pmove::mantle`, traces
+   along the view's forward), so a bot that turned toward a remembered
+   enemy at mp_toujane's yard wall (400-560, 1563, 4) backed off the edge.
+   `cover_unseen` is left alone: a held spot walks its own keys straight
+   to the spot. CoD1 and UO graphs carry no mantle edge, and their gates
+   match the base byte for byte.
+2. `stop`: the slow onto a leap's foot or a held node
+   (`Follower::holding`) set the forward key along the view; under a
+   recall look the view is off the path and the keys were turned to keep
+   it, so the slow walked the body away from its stop. Seed 3 of
+   `bm2_tdm` ran a bot to node (736, 1881, 8), the recall look turned the
+   view to (928, 1523), and the slow's +127 ground it into the corner at
+   (761, 1799, 8) for 335 ticks (INFERRED from a per-tick trace: view yaw
+   -62, keys 127 / -31, waypoint at yaw 106). The slow now scales both
+   turned keys under a recall look. Skipping the recall look while
+   slowing instead did as well on CoD2 (tdm wide stalls 113) but raised
+   CoD1's (5736 to 12014). VERIFIED (measured).
+3. `dead`: an edge the follower gets stuck on again while still avoided
+   goes on a dead list that the fallback plan also leaves out until it
+   expires (`nav::Follower::avoid_edge`). Before, a plan with no way round
+   an avoided edge went through it again however often it failed.
+
+VERIFIED (measured, ours, release; same runs, `base` = `fix2`):
 
 | | kills | hits / rounds | acc | stalled | held | ladder | mantles | retreats |
 |---|---|---|---|---|---|---|---|---|
 | tdm wide, base | 4177 | 6205 / 32764 | 0.189 | 2515 | 66370 | 5212 | 1812 | 2888 |
-| tdm wide, mantle | 4175 | 6313 / 33735 | 0.187 | 914 | 72440 | 4118 | 1720 | 2932 |
-| tdm wide, stop | 4248 | 6429 / 33219 | 0.194 | 0 | 72924 | 4677 | 1870 | 3009 |
-| dm wide, base | 4303 | 6576 / 36512 | 0.180 | 148 | 86512 | 4335 | 1302 | 3003 |
-| dm wide, mantle | 4307 | 6541 / 37092 | 0.176 | 68 | 78925 | 4960 | 1446 | 3035 |
-| dm wide, stop | 4333 | 6600 / 37446 | 0.176 | 50 | 81788 | 4138 | 1429 | 3076 |
-| `bm2_tdm`, base | 751 | 1036 / 5181 | 0.200 | 46 | 10054 | 1016 | 351 | 457 |
-| `bm2_tdm`, mantle | 757 | 1110 / 5813 | 0.191 | 335 | 11461 | 1370 | 373 | 492 |
-| `bm2_tdm`, stop | 748 | 1166 / 5523 | 0.211 | 0 | 11242 | 1246 | 419 | 507 |
-| `bm2_dm_skills`, base | 570 | 882 / 5082 | 0.174 | 5 | 9264 | 891 | 179 | 399 |
-| `bm2_dm_skills`, mantle | 569 | 921 / 5011 | 0.184 | 25 | 7199 | 906 | 191 | 412 |
-| `bm2_dm_skills`, stop | 557 | 873 / 4959 | 0.176 | 0 | 9037 | 734 | 212 | 398 |
 | tdm wide, dead | 4270 | 6442 / 33245 | 0.194 | 149 | 75102 | 4883 | 1874 | 3014 |
+| dm wide, base | 4303 | 6576 / 36512 | 0.180 | 148 | 86512 | 4335 | 1302 | 3003 |
 | dm wide, dead | 4333 | 6545 / 37299 | 0.175 | 50 | 80615 | 4037 | 1429 | 3066 |
+| `bm2_tdm`, base | 751 | 1036 / 5181 | 0.200 | 46 | 10054 | 1016 | 351 | 457 |
 | `bm2_tdm`, dead | 744 | 1145 / 5421 | 0.211 | 0 | 11041 | 1286 | 427 | 502 |
+| `bm2_dm_skills`, base | 570 | 882 / 5082 | 0.174 | 5 | 9264 | 891 | 179 | 399 |
 | `bm2_dm_skills`, dead | 564 | 894 / 5057 | 0.177 | 0 | 9164 | 842 | 209 | 409 |
 
-Stalls by map (burgundy, carentan, dawnville, toujane): tdm wide base 56
-/ 352 / 609 / 1498, mantle 0 / 351 / 0 / 563, stop 0 / 0 / 0 / 0; dm
-wide base 8 / 140 / 0 / 0, mantle 0 / 68 / 0 / 0, stop 0 / 0 / 0 / 50;
-`bm2_tdm` (carentan, dawnville, toujane) base 0 / 33 / 13, mantle 335 /
-0 / 0, stop 0 / 0 / 0.
-
-- `mantle` alone takes wide tdm stalls down 64% (dawnville to 0) with
-  kills flat, but raises `bm2_tdm` to 335, all the carentan corner above.
-- `stop` takes every set's stalls to 0 but dm wide's 50: one run at
-  mp_toujane's long mantle (1180, 1860, 70), the edge longer than
-  `OFF_PATH_STEPS` spacings that `Follower::follow`'s off-path check
-  clears (left as it is; exempting it grew the roof stall site). Kills
-  rise in the wide sets (+71, +30) and dip in the gate sets (-3, -13).
-- `dead` leaves CoD2 where `stop` had it but for tdm wide's 149, one
-  run on mp_toujane.
-- `stop` and `dead` are in the shared brain and move CoD1 and UO. Summed
-  over the gate sets (ours, release, a local gate script's sets),
-  base / stop / dead: CoD1's 12 `bm11*` sets kills 12144 / 12236 /
+- Steps: `mantle` alone cut tdm wide stalls 2515 to 914 (dawnville to 0)
+  but raised `bm2_tdm` to 335 (the carentan corner); `stop` took every
+  set to 0 but dm wide's 50, one run at mp_toujane's long mantle (1180,
+  1860, 70), an edge longer than the `OFF_PATH_STEPS` spacings that
+  `Follower::follow`'s off-path check clears (left as is; exempting it
+  grew the roof stall site). `dead` leaves CoD2 where `stop` had it but
+  for tdm wide's 149, one run on mp_toujane.
+- `stop` and `dead` are in the shared brain and move CoD1 and UO. Gate
+  sums, base / stop / dead: CoD1's 12 `bm11*` sets kills 12144 / 12236 /
   12238, stalls 5736 / 4636 / 4892; UO's five `bmuo*` sets kills 2963 /
-  2868 / 2844, stalls 969 / 1687 / 2782. `nav*` match the base, the
-  ignored `bots.rs` tests pass at both installs, and `dg*` move with the
-  play.
-- VERIFIED (measured, per seed): nearly every stall in those sets is on
-  mp_ship (UO base 819 of 969, stop 1669 of 1687), and a set's sum is a
-  few lumps, one bot held for 300 to 3000 ticks. Four seeds a map cannot
-  separate the arms, so mp_ship ran alone on more seeds:
-
-| mp_ship, seeds | | kills | stalled | off the rungs (slalom in) | slalom | seeds with a stall |
-|---|---|---|---|---|---|---|
-| UO tdm, 1-48 | base | 3906 | 4768 | 2281 | 0 | 31 |
-| | stop | 3863 | 3890 | 2444 | 601 | 21 |
-| | dead | 3880 | 5434 | 1319 | 0 | 13 |
-| UO tdm, skills 0 against 3, 1-28 | base | 2100 | 1649 | 671 | 0 | 9 |
-| | stop | 2085 | 11567 | 9316 | 8624 | 13 |
-| | dead | 2030 | 2965 | 887 | 2 | 11 |
-| 1.1 tdm, 1-48 | base | 4329 | 11053 | | | 24 |
-| | stop | 4312 | 3073 | | | 17 |
-| | dead | 4334 | 3960 | | | 19 |
-
-- VERIFIED (measured, a per-tick trace of the bot's cmd, view and
-  follower): UO's rise under `stop` is the deck slalom on mp_ship at
-  (3549..3581, -38..135, 352), nodes 2946, 3846, 5293, 6229, 6697 and
-  4494, each edge held (`Follower::holding`). No bot entered it under
-  the base in 56 matches; under `stop`, recall-looking bots slow onto
-  each held node as they should and get in. The way out, 6697 (3581,
-  89) to 4494 (3552, 135), arrives only with the graph's running start
-  along the edge: the same walk from rest on the node, or from (3572,
-  94), pins at y 96.9 against the wall at y 112 (`walk_with`, UO rules,
-  `Arith::Stored`). The follower avoided the edge, found no way round,
-  planned through it again from rest, failed again, and so on: one bot
-  of seed 15 for 8624 ticks, its plans' goals changing all the while.
-  INFERRED (`Bot::think`'s stall check): each hold sets `BotView::stop`,
-  which restarts the bot's own stall circle, so no unstick spell broke
-  the loop either. With `dead` the
-  slalom costs 0 and 2 stall ticks in the two UO runs above.
-- VERIFIED (measured, same traces): what stays is mostly bots held on or
-  at a ladder with their keys on and neither the stall circle nor the
-  follower's `STUCK_TICKS` noticing: `dead`'s UO 48-seed run has 2353
-  ticks of seed 46 at (3808, 65, 492) on the rungs, the gates' biggest
-  lumps (`bmuo_cover_alt` seed 1, 1909; `bm11_cover_alt` seed 2, 3141)
-  are a bot at the hold ladder's foot (3280, -449, -61) under its head at
-  56, and the base's UO run has 2487 rung ticks of its own. No dead edge
-  was on in any of them. Section 17.2 fixes both.
-- Skipping the recall look while slowing onto a stop, instead of scaling
-  the keys, did as well on CoD2 (tdm wide stalls 113) but raised CoD1's
-  stalls too (5736 to 12014), so the keys scale.
+  2868 / 2844, stalls 969 / 1687 / 2782. Nearly every stall is on mp_ship
+  (UO base 819 of 969), a few lumps of one bot held 300 to 3000 ticks;
+  17.2's mp_ship runs separate the arms.
+- Trap (`stop` without `dead`), VERIFIED (measured, per-tick trace): the
+  deck slalom on mp_ship at (3549..3581, -38..135, 352), nodes 2946, 3846,
+  5293, 6229, 6697 and 4494, each edge held. Recall-looking bots now slow
+  onto each held node and get in. The way out, 6697 (3581, 89) to 4494
+  (3552, 135), works only with the graph's running start along the edge;
+  from rest on the node, or from (3572, 94), it pins at y 96.9 against
+  the wall at y 112 (`walk_with`, UO rules, `Arith::Stored`). The follower
+  avoided the edge, found no way round, planned through it again from
+  rest, and so on: one bot of UO skills seed 15 for 8624 ticks. INFERRED
+  (`Bot::think`'s stall check): each hold sets `BotView::stop`, which
+  restarts the stall circle, so no unstick spell broke the loop. With
+  `dead` the slalom costs 0 and 2 stall ticks in 17.2's two UO runs.
+- What stayed is bots held on or at a ladder with their keys on and
+  neither the stall circle nor `STUCK_TICKS` noticing; 17.2 fixes both.
 
 ### 17.2 Bots frozen on or at mp_ship's ladders (2026-10-24)
 
 Section 17.1's leftover: bots held on or at a ladder with their keys on,
 with neither `Bot::think`'s stall circle nor the follower's `STUCK_TICKS`
 firing. Two causes, each read off a per-tick trace of the bot's cmd,
-view, stage and follower (VERIFIED, measured, ours, release; the debug
-patch is not committed):
+view, stage and follower (VERIFIED, measured, ours, release):
 
 1. `throw`: a grenade throw started on the rungs, or at a ladder's foot
    as the body grabbed it. The rungs hold `ps.weapon` at 0, so
@@ -1974,7 +1748,7 @@ code):
 | | throw | 4328 | 2767 | 17 |
 | | rungs | 4388 | 493 | 11 |
 
-The gate sets (a local gate script's), kills / stalls, with
+The gate sets, kills / stalls, with
 section 17's base (b2d7c818, before 17.1) for reference:
 
 | | b2d7c818 | base | throw | rungs |
