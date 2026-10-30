@@ -592,10 +592,9 @@ script writes it: the client field table registers `deaths` at offset 8420 =
 `0x20e4` and `score` at 8416 = `0x20e0`, the token 2 source
 (`cod11-gsc-object-model.md`, the client field dump). INFERRED: `SortRanks`'s
 use of it as the ascending tiebreak after score is therefore "fewer deaths
-ranks higher", not the Q3 `pers.enterTime` tiebreak this section used to
-read into the slot. A retail client renders it in the scoreboard's deaths
-column, which is where a hand check on 2026-09-03 saw the minutes vcod used
-to send.
+ranks higher", not Q3's `pers.enterTime` tiebreak. A retail client
+renders it in the scoreboard's deaths column (a hand check saw minutes there
+when vcod sent the Q3 reading).
 
 ### 3.1 How the cgame draws the board
 
@@ -2616,8 +2615,8 @@ tall would be wide, which at 4:3 is retail's `640 / fov_x`
 | # | Claim | Check that settles it |
 |---|---|---|
 | 1 | `killIcon<Mod>` material names bind to `gfx/hud/death_<mod>.dds` (section 2). No stock pk3 entry carries the name; the mapping is by name correspondence only. | Run the stock 1.1 MP client, take a melee death, screenshot the killfeed. |
-| 2 | Scores token 4 is the Q3 `pers.enterTime` slot; unit unknown, and the field has no write site in the stock server module (section 3). | Log a real `b` line from a `score` request and compare token 4 against a known join time. |
-| 3 | Resolved: the `b` grammar. The 2026-08-24 live sweep held the Tab scoreboard against a populated server and confirmed it on screen (section 3). No raw wire dump was kept, so token 4's unit (item 2) is still open. | n/a |
+| 2 | Resolved: scores token 4 is `deaths`, written by script (section 3). | n/a |
+| 3 | Resolved: the `b` grammar, confirmed on screen against a populated server's Tab scoreboard (section 3). | n/a |
 | 4 | Resolved: the hudelem transport is the playerstate's array block 5, filled per client by `HudElem_UpdateClient` (section 5, "How a hudelem reaches the client"), and what the cgame draws from it is section 8. | n/a |
 | 5 | The second font header float's id-internal field name (section 6). Its use is settled. | Nothing downstream depends on it. |
 | 6 | Whether the stock client's own status header shows the same CS-5/6-vs-`b` transient disagreement observed live (section 5). vcod's header prefers the `b` reply once one has arrived. | Compare the stock client's header text to its own Tab scoreboard in the same frame against a server showing a fresh score change; not yet done. |

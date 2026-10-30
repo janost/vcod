@@ -27,11 +27,10 @@ cod_lnxded +set dedicated 1 +set fs_basepath <game install> \
 
 Defaults left alone: `sv_hostname` `CoDHost`, `g_gametype` `dm`.
 
-These captures ran with `sv_pure 1`, the retail default; at capture time the
-script did not set it. That is what overflowed configstring 1 past
-`MAX_INFO_STRING` (the trap below). The script now sets `+set sv_pure 0`, so a
-rerun will not reproduce the truncation. Nothing else in this capture depends
-on `sv_pure`, so I did not re-run it.
+These captures ran with `sv_pure 1`, the retail default, which overflowed
+configstring 1 past `MAX_INFO_STRING` (the trap below). The script now sets
+`+set sv_pure 0`, so a rerun will not reproduce the truncation; nothing else
+in the capture depends on `sv_pure`.
 
 The connectionless probe was
 
@@ -65,7 +64,7 @@ infoResponse\n\challenge\xyz\protocol\1\hostname\CoDHost\mapname\mp_pavlov\clien
 ```
 
 Key order is fixed and is *not* the serverinfo cvar order: the server builds
-this string itself (`SV_Info`, `cod_lnxded` `0x808c1ac`). `challenge` echoes my
+this string itself (`SV_Info`, `cod_lnxded` `0x808c1ac`). `challenge` echoes the
 argument ("The challenge key" below has what the line read and the info
 string do to it, and its absence without one). `protocol` is **1**. `gametype` is the short name, not
 `g_gametype`'s key. `pure` and `pswrd` are `0`/`1` flags, not cvar names.
@@ -115,14 +114,11 @@ map runs: `-1111288375`, `-3172718`, `219667770`, `-1225130010`.
 `svc_gamestate` (2)** on both maps. No `svc_serverCommand` precedes it, and the
 probe logged no server command at all during the run.
 
-That is a divergence from the committed capture in
-`crates/common/tests/fixtures/net/gamestate.bin`, which was taken from a
-populated public server and does begin with `svc_serverCommand 0 ""` before
-`svc_gamestate`. So the leading empty command is not part of the handshake the
-stock server emits; the parser has to accept both, which
-`gamestate::parse` already does. Whether the public server's leading command
-comes from its mod (CoDaM) or from a reliable command queued before the
-gamestate is not established here.
+The committed `crates/common/tests/fixtures/net/gamestate.bin`, from a
+populated modded (CoDaM) server, does begin with `svc_serverCommand 0 ""`
+before `svc_gamestate`, so the leading empty command is not part of the stock
+handshake; `gamestate::parse` accepts both. Whether it comes from the mod or
+from a reliable command queued before the gamestate is not established.
 
 `serverCommandSequence` is 0. `clientNum` is 0 (first free slot).
 
@@ -152,8 +148,7 @@ The empty `mp_carentan` index set is **identical** to the committed populated
 gamestate table depends on players being present: 5 and 6 (team scores) and
 15..18 (vote) are unset in both, and arrive later as `d <index> <text>`
 configstring updates. 14 (MOTD, `g_motd` empty), 44+ (locations), 108..139
-(attachment tag names) and 1100..1115 (shellshock) are unset in every capture I
-have.
+(attachment tag names) and 1100..1115 (shellshock) are unset in every capture.
 
 ### Configstring 0, serverinfo
 
@@ -178,10 +173,9 @@ Identical on both maps, 1023 bytes:
 Elided at each `[...]`: the 28 non-stock pak names (map downloads) and their
 checksums, in the same order in each list.
 
-**This one is a trap, and the capture is why I know.** It stops mid-list
-inside `sv_referencedPakNames` at exactly 1023 characters, and it carries **no
-`sv_serverid`**, so the client reads a serverId of 0 for the whole session. The
-install I captured against holds 34 pk3s in `main` (the stock paks plus map
+**Trap.** It stops mid-list inside `sv_referencedPakNames` at exactly 1023
+characters and carries **no `sv_serverid`**, so the client reads a serverId
+of 0 for the whole session. The captured install holds 34 pk3s in `main` (the stock paks plus map
 downloads from public servers), and with `sv_pure 1` the server writes
 `sv_pakNames`, `sv_paks` and `sv_referencedPakNames` for all of them into a
 `MAX_INFO_STRING` (1024) buffer. Keys are written in name order, so
@@ -818,15 +812,15 @@ zombies or for clients not yet in the world.
     runs on the next frame's `getTime()`, after the callback; a `wait
     0.05` the callback started runs a frame after that. VERIFIED
     (capture).
-- vcod, before 2026-10-18: the drop queued the disconnect for the next
-  frame's packet pass, so a timeout's line went out a message after the
-  notice, and nothing notified `menuresponse`. Now `Server::drop_client`
-  runs `ScriptRuntime::client_disconnect` inside the drop, after the
+- vcod: `Server::drop_client` runs `ScriptRuntime::client_disconnect` inside the drop, after the
   notice on 1.1 and before it on 1.5 and UO, with the slot already out
   of `clients`, and sends its commands and configstrings at once; the
   notify's waiters run in the next frame's first pass (`Vm::notify`), and
   the disconnect sets `ranks_dirty`. The same three runs against
-  vcod-server print the same lines and the same message layout.
+  vcod-server print the same lines and the same message layout. Trap:
+  queueing the disconnect for the next frame's packet pass sends a
+  timeout's line a message after the notice and never notifies
+  `menuresponse`.
   `a_timed_out_clients_callback_lines_go_out_with_its_drop_notice`,
   `a_drop_notifies_menuresponse_for_the_next_frame` and
   `a_dropped_client_stops_its_followers_on_1_5` pin it.
@@ -903,11 +897,11 @@ free, past `sv_reconnectlimit`, prints `%s:reconnect` and takes that slot.
   snapshot, a frame after the packet that entered the client. The waiter
   runs in the next frame's thread pass, as the other engine notifies do.
   VERIFIED (capture).
-- vcod, before 2026-10-18: the waiter ran in the packet pass, a frame
-  (50 ms) earlier. Now `ClientEvent::Begin` notifies through
+- vcod: `ClientEvent::Begin` notifies through
   `Vm::notify` and sets `ranks_dirty`, as `ClientConnect`'s
   closing `CalculateRanks` (0x42677) does. Ours prints the first
-  snapshot's `serverTime` too. `the_begin_waiter_runs_on_the_next_frames_clock`
+  snapshot's `serverTime` too, where a waiter run in the packet pass reads
+  a frame (50 ms) early. `the_begin_waiter_runs_on_the_next_frames_clock`
   pins it.
 
 ### Console commands over rcon
@@ -1403,9 +1397,8 @@ cod_lnxded 1.5b, read from the asm.
   `getchallenge` (`Server::temp_ban_slot`, `engine::bans::TempBans`,
   shared with CoD2, whose table is the same). The print and the
   `rejected connection` line carry that stand-in; the script's `getGuid`
-  stays 0. The table is stamped on the game clock, as retail's is; before
-  2026-10-23 vcod stamped the unscaled one, so a ban aged through a match
-  timeout.
+  stays 0. The table is stamped on the game clock, as retail's is (the
+  unscaled clock would age a ban through a match timeout).
 
 ### 1.5 permanent bans (`banUser` 0x8087f73, `banClient` 0x8087fc7, `unbanUser` 0x808801b)
 
@@ -1471,9 +1464,8 @@ holds on UO.
   checked at `getchallenge` before the temporary bans with retail's
   print and refusal, and `unbanUser` gives retail's three replies, an
   empty one standing for no file. A ban appended after a last line with
-  no line end runs into it, as on retail. Until 2026-10-23 vcod kept its
-  own `<ip> <name>` lines and ended such a line before appending; a file
-  in that shape is rewritten into guid lines when the server opens it.
+  no line end runs into it, as on retail. A file of vcod's old `<ip>
+  <name>` lines is rewritten into guid lines when the server opens it.
 
 ### Shutdown (`SV_Shutdown` 0x808ad8c)
 
@@ -1802,12 +1794,9 @@ stride, the writes).
 - vcod: `engine::challenge::Challenges` is the table for both servers,
   timed on `svs_time_ms()` (CoD1) and `svs.time` (CoD2); the draw is
   CoD1's `(rand() << 16) ^ rand() ^ sv_time_ms` (the game clock, 1.5's
-  0x83ccd84), CoD2's the same on `svs.time`. Until 2026-10-23 CoD1's
-  dropped a slot 60 s after it was last asked for, refreshed `time` on
-  every ask, matched a connect on the IP alone, released on drop by IP
-  and challenge, and measured the ping on `Instant`; CoD2's grew a list
-  that `swap_remove`d the oldest. A connect from a port other than the
-  one the challenge went to is now refused, as on retail.
+  0x83ccd84), CoD2's the same on `svs.time`. A connect matches on
+  address and port, so one from a port other than the one the challenge
+  went to is refused, as on retail.
 
 ### Message pacing (`SV_SendClientMessages` 0x809045c)
 
@@ -1899,23 +1888,19 @@ stride, the writes).
   fragment 926 ms after the first (vcod answers the packet at the next tick
   start, retail between frames; both add 1000 to the last frame's time),
   and the first snapshot one tick after the entering cmd. VERIFIED
-  (capture, same relay). Before this change vcod sent a client neither,
-  and off the LAN the first snapshot waited out the primed interval.
+  (capture, same relay).
 - Live, 2026-10-18, `--probe-edge watch` joining 1.1d on loopback:
   the gamestate is message 1 and the first
   snapshot message 2, since retail handles the connect and the client's
   first message as they arrive, between frames, and the client answers
-  each before the next frame. VERIFIED (capture). vcod-server read
-  packets only at a tick's start and sent the tick's output at its end,
-  so its `connectResponse` left after the frame had already sent the new
-  client a bare message 1, and the gamestate was 2 and the first snapshot
-  3. `vcod-server`'s loop now handles a packet that arrives between ticks
-  at once and sends what it answers; the same probe against it reads
-  gamestate 1, first snapshot 2. VERIFIED (capture, 2026-10-18).
-- vcod, 2026-10-19: a packet the loop finds queued at a tick's start (it
-  came in while the last tick overran its slot) is answered there, before
-  the tick runs, rather than with the tick's output; the between-ticks
-  path already sent at once. VERIFIED, `cod_lnxded` decompile: retail's
+  each before the next frame. VERIFIED (capture). `vcod-server`'s loop
+  handles a packet that arrives between ticks at once and sends what it
+  answers; the same probe against it reads gamestate 1, first snapshot 2.
+  VERIFIED (capture). Reading packets only at a tick's start and sending
+  at its end makes the gamestate message 2 and the first snapshot 3.
+- vcod: a packet the loop finds queued at a tick's start (it came in while
+  the last tick overran its slot) is answered there, before the tick runs,
+  not with the tick's output. VERIFIED, `cod_lnxded` decompile: retail's
   `Com_EventLoop` runs every queued packet's handler ahead of `SV_Frame`
   (the read schedule above), and `NET_SendPacket` (0x8080d28) writes the
   socket inside the handler: a loopback address goes to the loopback ring,
@@ -2453,7 +2438,7 @@ server logged each connect, VERIFIED.
 
 ## Raw captures
 
-Two of them are in the repo now:
+In the repo:
 `crates/server/tests/fixtures/configstrings/mp_{pavlov,carentan}-dm.txt` are
 the whole non-empty table off a retail `dm` server, one `<index> <value>` per
 line, and `crates/server/tests/configstrings_ab.rs` diffs our table against
@@ -2471,8 +2456,7 @@ capturing homepath holds. Both are in `configstrings_ab.rs`'s
 what the server writes there instead. A re-capture that changes those two
 lines is not a regression.
 
-The rest I kept locally; they are not in the repo. Regenerate them with the
-commands above. What I captured on 2026-08-25, per map: the three
+Not in the repo (regenerate with the commands above), per map: the three
 connectionless replies, the full `RUST_LOG=debug` probe log, the `cs[i] = ...`
 lines on their own, and the raw gamestate message from `--save-snapshots`,
 which leaves the committed fixture alone.

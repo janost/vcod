@@ -118,8 +118,8 @@ the frame the duration elapses, on the entity itself.
 ## 8. Script-visible state while a mover runs
 
 VERIFIED. `getorigin()` returns the interpolated position on every frame of a
-move, and `.angles` reads the interpolated angles on every frame of a rotate
-— the field is written back, not left at the value it had when the verb was
+move, and `.angles` reads the interpolated angles on every frame of a rotate:
+the field is written back, not left at the value it had when the verb was
 called. `.angles` is normalized: after `rotatevelocity` turned a full 360 it
 read `(0, 0, 0)` while the wire carried 360 (section 9). INFERRED, off
 section 12's "The residual yaw": that is `Reached_ScriptMover`'s
@@ -616,10 +616,9 @@ VERIFIED, the same probe and link, 2026-10-20, the `--probe-ride` client
 logging its cmds and the `commandTime` of every snapshot it parsed
 (`crates/server/tests/fixtures/movers/mp_carentan-dm-crush.txt`): the slab
 slips nine times in the 8 s (72 to 54), and the `moveto` at the teleport
-reads 52. The client logs every snapshot because two that land in one
-pass of its loop used to log only the newer: the first 2026-10-20 run lost
-25 of 240 between lift and done, and a replay reads a lost snapshot's
-frame as one with no cmd.
+reads 52. The client logs every snapshot, two landing in one pass of its
+loop included: logging only the newer lost 25 of 240 between lift and
+done, and a replay reads a lost snapshot's frame as one with no cmd.
 
 vcod: the move verbs write the start into `origin` and link
 (`builtins::mover::linked`, `mover::verb_linked`), and a blocked push
@@ -1320,12 +1319,11 @@ the child's `origin` and `angles`, relinks it, poses a brush model's clip
 and forgets any mover plan; the wire sends a linked entity `TR_INTERPOLATE`.
 A player's bone is the hit rig's pose (`link::client_bone`), a script
 model's its bind pose. The bone is held in model space and placed by the
-player entity's `angles`, once: until 2026-10-15 vcod turned it by the
-body's yaw and then by `angles` again, which no gate saw because every
-probe's player faced world yaw 0. UO's `vehicle_ab`
-`the_jeep_driver_s_bones_follow_retail_s` (a driver facing 165) caught it:
-every bone sat the view yaw round the feet from retail's (VERIFIED,
-replay). `crates/server/tests/linkto_ab.rs` replays the probe:
+player entity's `angles`, once. Trap: turning it by the body's yaw and
+then by `angles` again passes every probe whose player faces world yaw 0;
+UO's `vehicle_ab` `the_jeep_driver_s_bones_follow_retail_s` (a driver
+facing 165) catches it, every bone the view yaw round the feet from
+retail's (VERIFIED, replay). `crates/server/tests/linkto_ab.rs` replays the probe:
 every non-player row matches to 0.02, the yaw residual of section 12
 included, the player's entity-frame links match
 to 0.02, and the bone-linked children follow the body's swing after
@@ -1687,11 +1685,10 @@ the floor under it. No snapshot shows a fall from the spawn point.
 INFERRED: the spawn's end frame sets the idle and nothing restarts it
 until the run, as on 1.1.
 
-VERIFIED, vcod measurement, `legs_ab`: ours used to pin the spawn at the
-lump's origin (z 176 at (426, 2158), 0 at (720, -32)), so its body fell
-and set the idle up to 150 ms late. Pinned at the placed height, with
+VERIFIED, vcod measurement, `legs_ab`: pinned at the placed height, with
 the idle set on retail's spawn snapshot, both logged walks match every
-row, settle included (`a_body_settling_from_a_logged_spawn_is_posed_like_retail_on_uo`).
+row (pinned at the lump's origin, z 176 at (426, 2158) and 0 at (720,
+-32), the body falls and sets the idle up to 150 ms late), settle included (`a_body_settling_from_a_logged_spawn_is_posed_like_retail_on_uo`).
 The captures that start at the placement are dated from the
 placement's message: message 5 gives 8500 for the 1.5b walk, 8800 for
 the 1.5b stop and go and 10100 for the UO walk, each the one frame on
@@ -1834,8 +1831,7 @@ render_time, snapshot_ms: newest snapshot }`, the newer snapshot's
 `pos.trBase` and `eFlags`. INFERRED: the `ci` lerp frames sit in the
 cgame's static client and body queue arrays and nothing on the draw path
 clears them, so they outlive any stretch the body is unseen; vcod keeps the
-pair for the cgame's life too (until 2026-10-18 it dropped it after 5 s
-unseen). INFERRED, off 0x3001bd00 stepping only the newest snapshot's
+pair for the cgame's life too. INFERRED, off 0x3001bd00 stepping only the newest snapshot's
 entities and the per-`ci` XAnim tree (0x30005180 allocates one per client
 and per body queue slot with syscall 0x83, and the DObj create at
 0x30004eb0 hands it the slot's tree): a body's clips and weights stand
@@ -1892,7 +1888,7 @@ the same stamp and poses every bone of the body, `tag_weapon_right`
 included; marks linked to the body read the trace's last-frame pose in
 that frame's entity pass on 1.1d, 1.5b and UO. `bulletTrace` and the
 script `radiusDamage` walk take and stamp each bone through
-`dobj_posed`, and since 2026-10-19 so do the engine's own traces
+`dobj_posed`, and so do the engine's own traces
 (below).
 
 VERIFIED, `cod_lnxded`: 0x0808c870 bumps the same stamp (0x0833df04) on
@@ -2758,10 +2754,10 @@ the corpse would stay at -7.78 for those cmds.
 vcod: `crate::push::push` returns the players a sine mover could not place
 instead of stalling it, `ScriptRuntime::push_mover` hands each `G_Damage`
 through `deliver_world_hit` before the end-of-period test, and the mover
-moves on. `deliver_world_hit` passed the callback a zero point and
-direction, defined, until 2026-10-20: the gametype then kept the
-knockback, and the corpse held at -7.78 for one frame and sank 0.13 on an
-18 ms cmd a frame late. It passes both undefined now.
+moves on. `deliver_world_hit` passes the callback point and direction
+undefined; a defined zero pair makes the gametype keep the knockback, and
+the corpse holds at -7.78 for one frame and sinks 0.13 on an 18 ms cmd a
+frame late.
 `a_sine_mover_crushes_what_it_cannot_push_like_retail` replays the
 capture's cmds (dead included) and holds every line exact.
 
@@ -3025,10 +3021,10 @@ right) are the only server-side turn: a posed submodel and a world copy,
 `push::carried`, a linked client's offset (`run_client_link`, the
 `linkTo` offset builtin), `link::Frame::from_pose`, the turret muzzle
 and rest sweep, the stored body frame, the damage kick, the follow stop
-spot and the UO vehicle code. The game-module callers used to round every
-product to a float (`pmove::aim::angles_to_axis`,
-`spawn::angles_to_axis`); VERIFIED, vcod measurement 2026-10-21: moving
-them onto the stored rounding moved no row of `movers_ab`, `push_ab`,
+spot and the UO vehicle code. The game-module callers
+(`pmove::aim::angles_to_axis`, `spawn::angles_to_axis`) take the stored
+rounding too; VERIFIED, vcod measurement: rounding every product to a
+float instead moves no row of `movers_ab`, `push_ab`,
 `push_candidate_ab`, `push_order_ab`, `worldcopy_ab`, `ride_ab`,
 `sine_ab`, `linkto_ab`, `turret_ab`, `scriptmodel_ab` or the vehicle
 gates at the 1.1 and UO installs. pmove's own turns are below.
@@ -3097,19 +3093,18 @@ move world's `Arith`, so the client predictor (`Arith::Msvc`) takes the
 cgame's rounding; `PlayerState::view` and `combat::muzzle_point_in` take
 the rules' server. `aim::angles_to_axis` (the aim block) and
 `aim::add_muzzle_bob` are the servers'; the client draws through
-`aim::angles_to_axis_msvc` and `aim::eye_bob` the cgame's. Before this
-`aim::angles_to_axis` rounded every product to a float and its radians
-to Rust's `to_radians`, and the lean, the prone sweep and the mount probe
-took float sines of float radians.
+`aim::angles_to_axis_msvc` and `aim::eye_bob` the cgame's.
 
-VERIFIED, vcod measurement 2026-10-21, before and after on the same
-tree at the 1.1 and UO installs: of `predict_ab`, `moves_ab`,
+VERIFIED, vcod measurement at the 1.1 and UO installs, against float
+products, Rust's `to_radians` and float sines of float radians (the lean,
+the prone sweep, the mount probe): of `predict_ab`, `moves_ab`,
 `moveshot_ab`, `legs_ab`, `turret_ab`, `leanhit_ab` and the fourteen
 `vehicle*_ab` gates only `leanhit_ab`'s round directions moved. Its
 leaning rounds (`t_left`, `t_crouch_left`, `t_prone_left`, `t_back`) sat
-4 to 9 ten-millionths off retail's print on one axis and now match it to
-the print, so `DIR_NEAR` went from 2e-5 to 3e-7; at 3e-7 the old turn
-missed 7 rounds at the 1.1 install and 8 at UO. `nav_census` printed the
+4 to 9 ten-millionths off retail's print on one axis under the float turn
+and match it to the print with this one, so `DIR_NEAR` is 3e-7 (from
+2e-5); at 3e-7 the float turn misses 7 rounds at the 1.1 install and 8 at
+UO. `nav_census` printed the
 same lines at both installs. The client's
 `the_windows_build_draws_no_new_correction` counts did not move (1.5
 moves 44, turns 14, UO autofire 0, sprint 126 with 98 past 0.1, 1.1
