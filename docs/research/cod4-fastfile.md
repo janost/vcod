@@ -486,7 +486,7 @@ read and dropped) and checks: the last body ends on the last inflated
 byte; every block's end (the temp block's peak plus 16) equals its
 `blockSize`; every header slot holds an asset of its listed type; no
 offset token is left unresolved. All 85 zones pass, in 3.5 s on four
-threads. VERIFIED (2026-10-24).
+threads. VERIFIED.
 
 `walk_spots` walks mp_crash and code_post_gfx_mp with the bulk data kept.
 VERIFIED (2026-10-24):
