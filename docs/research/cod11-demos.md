@@ -2,9 +2,8 @@
 
 What the retail client writes into a demo and how it plays one back, read
 out of `CoDMP.exe` 1.1 (image base `0x00400000`, md5 in
-`cod11-events-and-fx.md`), `CoDMP15.exe` 1.5 and `CoDUOMP.exe` 1.51. The
-function names are mine, after the Quake III functions whose shape they
-share. vcod's implementation is `crates/common/src/net/demo.rs` (the
+`cod11-events-and-fx.md`), `CoDMP15.exe` 1.5 and `CoDUOMP.exe` 1.51.
+Function names follow the Quake III functions of the same shape. vcod's implementation is `crates/common/src/net/demo.rs` (the
 format), `NetClient::start_recording` / `play_demo` / `pump_demo` in
 `crates/common/src/net/mod.rs` (the record and the read), and
 `crates/client/src/play/demos.rs` (file names, the automatic demo).
@@ -192,8 +191,8 @@ gamestate in `crates/common/tests/fixtures/net/snapshots.bin` acks 1
 `clc.reliableSequence - clc.reliableAcknowledge` on `int`s, so that
 negative gap is no overflow (VERIFIED, the GPL source). vcod's
 `NetClient::send_reliable` compares the gap signed for that reason: an
-unsigned one wrapped and dropped the playback with `reliable command
-overflow` on the `cp` after the load, before a frame drew
+unsigned compare wraps and drops the playback with `reliable command
+overflow` on the `cp` after the load, before a frame draws
 (`a_demo_ack_past_the_sequence_is_no_overflow`). CoDMP.exe's own compare
 has not been located (its overflow error string is not in the image).
 
@@ -299,9 +298,9 @@ the two commands on a 1.5 or UO server.
 ## 7. Not done
 
 - `cl_avidemo` and `cl_forceavidemo`: vcod takes no screenshots.
-- A demo written by a retail client has not been played in vcod, nor a
-  vcod one in a retail client: no retail client was run. The
-  format checks are vcod against itself (`crates/server/tests/demos.rs`)
+- Untested across clients: no retail client demo has been played in vcod,
+  nor a vcod demo in a retail client. The format checks are vcod against
+  itself (`crates/server/tests/demos.rs`)
   and the retail server's own messages played as a demo
   (`a_demo_of_retail_messages_plays_every_frame`).
 
