@@ -1,6 +1,5 @@
-//! The engine side of a CoD4 1.7 server (protocol 6 of `Game::Cod4`), its
-//! first milestone: a bare level a retail
-//! client joins as a spectator. The handshake (challenge, connect, the seven
+//! The engine side of a CoD4 1.7 server (protocol 6 of `Game::Cod4`). The
+//! handshake (challenge, connect, the seven
 //! stats packets, the gamestate, the pure check) and the snapshots follow
 //! docs/research/cod4-handshake.md; the frame order is 1.7's `SV_Frame`
 //! (cod4-server-frame.md) through [`Cod4Game`]'s constants.

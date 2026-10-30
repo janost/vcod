@@ -25,8 +25,8 @@ struct Args {
     /// Which game the install is: cod1, cod2 or cod4. Defaults to what the
     /// game dir holds. cod2 runs its own engine (`vcod_server::cod2`):
     /// players join, move, fight, chat and vote, rcon admins them, and the
-    /// maps cycle. cod4 runs a bare 1.7 level (`vcod_server::cod4`): no
-    /// script, clients join and float as spectators.
+    /// maps cycle. cod4 runs a 1.7 level (`vcod_server::cod4`) the same
+    /// way: the stock gametype scripts, pmove, combat, bots and the cycle.
     #[arg(long)]
     game: Option<vcod_common::game::Game>,
     /// UDP port
@@ -321,7 +321,7 @@ fn cod2_server(args: Args) -> Result<(vcod_server::cod2::Cod2Server, Net)> {
     Ok((server, (sock, packets)))
 }
 
-/// `--game cod4`: a bare CoD4 1.7 level (`vcod_server::cod4`) over the
+/// `--game cod4`: a CoD4 1.7 level (`vcod_server::cod4`) over the
 /// install's zones and iwds, listening.
 fn cod4_server(args: Args) -> Result<(vcod_server::cod4::Cod4Server, Net)> {
     let install = vcod_cod4::install::Install::at(&args.game_dir)
