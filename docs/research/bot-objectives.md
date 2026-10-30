@@ -2215,20 +2215,13 @@ fixes in) matches the before arm's kills, levels and stalls on every
 `sd`, `sab` and `koth` run, and picked the bomb up 2 to 10 times a map
 and took 1 to 4 `dom` flags in passing.
 
-| gametype | map | pickups | plants | defuses | explodes | captures | levels ended (by the bomb) | kills | stalled bot-ticks |
-|---|---|---|---|---|---|---|---|---|---|
-| sd | mp_backlot | 0 → 13 | 0 → 8 | 0 → 3 | 0 → 3 | 0 → 0 | 8 → 10 (6) | 35 → 37 | 3 → 127 |
-| sd | mp_crash | 0 → 10 | 0 → 5 | 0 → 1 | 0 → 2 | 0 → 0 | 9 → 6 (3) | 34 → 21 | 954 → 3571 |
-| sd | mp_strike | 0 → 10 | 0 → 4 | 0 → 0 | 0 → 2 | 0 → 0 | 9 → 6 (2) | 40 → 25 | 0 → 4142 |
-| sab | mp_backlot | 0 → 12 | 0 → 5 | 0 → 3 | 0 → 2 | 0 → 0 | 0 → 2 (2) | 48 → 41 | 0 → 0 |
-| sab | mp_crash | 0 → 22 | 0 → 4 | 0 → 2 | 0 → 2 | 0 → 0 | 0 → 2 (2) | 56 → 73 | 644 → 707 |
-| sab | mp_strike | 0 → 11 | 0 → 5 | 0 → 2 | 0 → 3 | 0 → 0 | 0 → 3 (3) | 73 → 53 | 0 → 80 |
-| dom | mp_backlot | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 29 | 0 → 0 | 45 → 59 | 0 → 0 |
-| dom | mp_crash | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 28 | 0 → 0 | 60 → 116 | 4112 → 0 |
-| dom | mp_strike | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 33 | 0 → 0 | 75 → 81 | 0 → 0 |
-| koth | mp_backlot | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 7 | 0 → 0 | 48 → 49 | 0 → 0 |
-| koth | mp_crash | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 1 | 0 → 0 | 52 → 93 | 8581 → 981 |
-| koth | mp_strike | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 8 | 0 → 0 | 75 → 40 | 1423 → 1268 |
+Before, every objective count was 0. After, summed over mp_backlot,
+mp_crash and mp_strike (VERIFIED, measured): `sd` 33 pickups, 17 plants,
+4 defuses, 7 explodes, 11 of 22 levels ended by the bomb; `sab` 45
+pickups, 14 plants, 7 defuses, 7 explodes, 7 levels ended, all by the
+bomb (none before); `dom` 29, 28 and 33 captures; `koth` 7, 1 and 8
+captures. Stalls rose in `sd` (mp_crash 954 to 3571, mp_strike 0 to
+4142), resolved in 12.4. 12.4's table carries the per-map counts forward.
 
 - `sd`: every map plants and the bomb blows up or is defused; 6 of 10
   levels on mp_backlot, 3 of 6 on mp_crash and 2 of 6 on mp_strike end
@@ -2315,23 +2308,7 @@ shooting bots, `TICKS=6000`, seeds 1 and 2 summed, 2026-10-25). The
 after arm counts no follower as playing, so its playing bot-ticks drop
 where the dead wait (`sd`, `koth`) and its stalls with them.
 
-| gametype | map | kills | hits / rounds | throws | stalled bot-ticks | objective actions |
-|---|---|---|---|---|---|---|
-| war | mp_backlot | 66 → 73 | 258/1001 → 261/983 | 0 → 33 | 0 → 0 | |
-| war | mp_crash | 67 → 78 | 256/896 → 291/1286 | 0 → 32 | 968 → 938 | |
-| war | mp_strike | 67 → 75 | 228/880 → 295/1018 | 0 → 17 | 4 → 21 | |
-| sd | mp_backlot | 31 → 41 | 114/576 → 132/333 | 2 → 8 | 291 → 32 | plants 8 → 7, defuses 3 → 3 |
-| sd | mp_crash | 14 → 29 | 51/136 → 109/248 | 0 → 9 | 9267 → 595 | plants 1 → 5, defuses 1 → 2 |
-| sd | mp_strike | 32 → 34 | 108/765 → 110/448 | 0 → 16 | 386 → 68 | plants 6 → 7, defuses 1 → 4 |
-| sab | mp_backlot | 68 → 71 | 269/918 → 245/759 | 0 → 24 | 0 → 0 | plants 3 → 4, explodes 1 → 2 |
-| sab | mp_crash | 79 → 64 | 259/837 → 247/749 | 0 → 17 | 256 → 0 | plants 5 → 3, explodes 1 → 2 |
-| sab | mp_strike | 59 → 52 | 251/833 → 213/724 | 0 → 16 | 0 → 7 | plants 6 → 3, explodes 3 → 2 |
-| dom | mp_backlot | 71 → 66 | 284/1105 → 228/733 | 0 → 19 | 54 → 0 | captures 41 → 40 |
-| dom | mp_crash | 108 → 117 | 373/1095 → 380/1067 | 0 → 36 | 1772 → 332 | captures 27 → 28 |
-| dom | mp_strike | 88 → 82 | 305/1126 → 235/1164 | 0 → 18 | 0 → 0 | captures 28 → 31 |
-| koth | mp_backlot | 47 → 42 | 161/452 → 171/477 | 0 → 9 | 0 → 0 | captures 7 → 8 |
-| koth | mp_crash | 86 → 15 | 326/672 → 50/123 | 0 → 2 | 575 → 851 | captures 1 → 7 |
-| koth | mp_strike | 40 → 21 | 125/295 → 85/248 | 0 → 6 | 275 → 0 | captures 7 → 8 |
+Per-map table (91bcd359 to this change) superseded by 12.5's; VERIFIED (measured) headlines: throws 0 to 2 a map before, 6 to 36 after; `sd` mp_crash 9267 stalled bot-ticks to 595; `koth` mp_crash captures 1 to 7.
 
 - Frags fly on every map (0 to 2 a map before, 6 to 36 after).
 - `sd` mp_crash: 9267 stalled bot-ticks to 595 and twice the kills.
@@ -2393,23 +2370,7 @@ stalled sample's spot, `pm_flags`, ground and mantle state):
 Before is d9584100, after is this change; `bot_match` as 12.3 (six
 shooting bots, `TICKS=6000`, seeds 1 and 2 summed, 2026-10-25):
 
-| gametype | map | kills | suicides | hits / rounds | throws | stalled bot-ticks | objective actions |
-|---|---|---|---|---|---|---|---|
-| war | mp_backlot | 78 → 74 | 0 → 1 | 290/875 → 292/1117 | 33 → 26 | 8 → 0 |  |
-| war | mp_crash | 73 → 69 | 0 → 0 | 310/1027 → 303/1683 | 24 → 24 | 2577 → 57 |  |
-| war | mp_strike | 71 → 74 | 0 → 0 | 279/836 → 268/975 | 16 → 30 | 820 → 0 |  |
-| sd | mp_backlot | 38 → 36 | 0 → 0 | 136/346 → 133/328 | 9 → 11 | 269 → 0 | plant 8 → 7, defuse 6 → 5 |
-| sd | mp_crash | 24 → 24 | 1 → 0 | 78/206 → 74/163 | 10 → 14 | 646 → 946 | plant 6 → 6, defuse 3 → 3 |
-| sd | mp_strike | 37 → 34 | 0 → 0 | 125/341 → 123/528 | 18 → 15 | 40 → 67 | plant 8 → 7, defuse 6 → 2 |
-| sab | mp_backlot | 59 → 60 | 7 → 3 | 232/791 → 238/761 | 18 → 26 | 0 → 0 | plant 3 → 5, defuse 2 → 4, explode 1 → 1 |
-| sab | mp_crash | 87 → 87 | 4 → 1 | 278/697 → 279/695 | 27 → 30 | 715 → 0 | plant 4 → 5, defuse 4 → 5 |
-| sab | mp_strike | 63 → 85 | 4 → 0 | 208/704 → 272/745 | 12 → 14 | 0 → 13 | plant 3 → 6, defuse 1 → 6, explode 2 → 0 |
-| dom | mp_backlot | 65 → 69 | 1 → 2 | 222/776 → 237/862 | 21 → 23 | 0 → 0 | capture 39 → 44 |
-| dom | mp_crash | 117 → 121 | 0 → 1 | 408/1197 → 442/1219 | 26 → 29 | 0 → 0 | capture 31 → 28 |
-| dom | mp_strike | 76 → 87 | 2 → 1 | 254/952 → 284/961 | 23 → 15 | 0 → 0 | capture 34 → 31 |
-| koth | mp_backlot | 32 → 32 | 0 → 1 | 103/236 → 97/230 | 10 → 11 | 9 → 0 | capture 9 → 8 |
-| koth | mp_crash | 41 → 31 | 1 → 0 | 161/390 → 131/312 | 12 → 2 | 3105 → 569 | capture 6 → 8 |
-| koth | mp_strike | 30 → 34 | 0 → 0 | 124/345 → 144/350 | 5 → 3 | 0 → 0 | capture 8 → 7 |
+Per-map table (d9584100 to this change) superseded by 12.6's; VERIFIED (measured) headlines: `war` mp_crash 2577 stalled bot-ticks to 57, `koth` mp_crash 3105 to 569, `sab` mp_crash 715 to 0, `war` mp_strike 820 to 0; `sab` suicides 15 to 4 over the three maps.
 
 - `war` mp_crash 2577 stalled bot-ticks to 57, `koth` mp_crash 3105 to
   569, `sab` mp_crash 715 to 0, `war` mp_strike 820 to 0 (mp_crash's
@@ -2475,26 +2436,7 @@ without it (the others, where nothing is frozen in play), after is this
 change; six shooting bots, `TICKS=6000`, seeds 1 and 2 summed,
 2026-10-26:
 
-| gametype | map | kills | hits / rounds | mantles climbed | stalled bot-ticks | objective actions |
-|---|---|---|---|---|---|---|
-| war | mp_backlot | 88 → 90 | 347/1388 → 344/1351 | 101 → 99 | 0 → 0 |  |
-| war | mp_crash | 66 → 93 | 274/1637 → 369/1236 | 138 → 79 | 8 → 0 |  |
-| war | mp_strike | 75 → 77 | 288/1006 → 308/1880 | 144 → 97 | 0 → 0 |  |
-| dm | mp_backlot | 97 → 95 | 403/1725 → 386/1532 | 92 → 77 | 0 → 0 |  |
-| dm | mp_crash | 120 → 106 | 440/1567 → 437/1493 | 107 → 125 | 0 → 0 |  |
-| dm | mp_strike | 115 → 116 | 394/1660 → 414/1812 | 75 → 65 | 0 → 0 |  |
-| sd | mp_backlot | 36 → 38 | 133/328 → 135/368 | 110 → 109 | 0 → 0 | pickup 12 → 16, plant 7 → 9, defuse 5 → 4 |
-| sd | mp_crash | 24 → 24 | 74/163 → 90/181 | 108 → 107 | 801 → 25 | pickup 11 → 11, plant 6 → 7, defuse 3 → 4 |
-| sd | mp_strike | 34 → 40 | 123/528 → 133/487 | 44 → 44 | 0 → 0 | pickup 13 → 11, plant 7 → 8, defuse 2 → 5 |
-| sab | mp_backlot | 55 → 51 | 207/803 → 193/735 | 84 → 81 | 0 → 0 | pickup 13 → 10, plant 3 → 4, defuse 1 → 1, explode 2 → 3 |
-| sab | mp_crash | 84 → 64 | 300/811 → 213/610 | 120 → 94 | 0 → 0 | pickup 29 → 22, plant 6 → 4, defuse 6 → 2, explode 0 → 2 |
-| sab | mp_strike | 50 → 73 | 195/695 → 271/827 | 73 → 83 | 0 → 0 | pickup 9 → 19, plant 5 → 6, defuse 1 → 3, explode 4 → 2 |
-| dom | mp_backlot | 82 → 81 | 288/1126 → 304/854 | 173 → 86 | 0 → 0 | capture 37 → 40 |
-| dom | mp_crash | 154 → 170 | 505/1466 → 561/1672 | 134 → 88 | 0 → 0 | capture 31 → 31 |
-| dom | mp_strike | 102 → 101 | 372/1526 → 351/1579 | 146 → 132 | 0 → 0 | capture 27 → 36 |
-| koth | mp_backlot | 11 → 30 | 40/71 → 97/297 | 60 → 57 | 5 → 74 | capture 8 → 8 |
-| koth | mp_crash | 24 → 19 | 95/242 → 71/206 | 40 → 47 | 630 → 0 | capture 6 → 6 |
-| koth | mp_strike | 25 → 35 | 89/253 → 138/497 | 62 → 65 | 227 → 2 | capture 8 → 7 |
+Per-map table (71a62e20 to this change, `war`, `dm`, `sd`, `sab`, `dom`, `koth` on mp_backlot, mp_crash, mp_strike) superseded by 12.7's; VERIFIED (measured) headlines: `sd` mp_crash 801 stalled bot-ticks to 25, `koth` mp_crash 630 to 0, mp_strike 227 to 2, mp_backlot 5 to 74; mantles climbed fell on most maps (mp_crash `war` 138 to 79).
 
 - `war` kills 229 to 260 over seeds 1 and 2, 268 to 269 over 3 and 4;
   `dm` 332 to 317, 316 to 301 and, over seeds 5 to 8, 647 to 641: 2.8%
@@ -2539,26 +2481,7 @@ b7630cbb, six shooting bots, `TICKS=6000`, seeds 1 and 2:
   a gun on another floor (docs/bots.md, "CoD4") for `war` and `dm`;
   after is both rules:
 
-| gametype | map | kills | hits / rounds | stalled bot-ticks | objective actions |
-|---|---|---|---|---|---|
-| sd | mp_backlot | 39 → 39 | 136/389 → 136/389 | 0 → 0 | pickup 17 → 17, plant 8 → 8, defuse 4 → 4 |
-| sd | mp_crash | 23 → 24 | 89/183 → 82/176 | 25 → 25 | pickup 11 → 13, plant 7 → 8, defuse 4 → 5 |
-| sd | mp_strike | 39 → 38 | 129/479 → 128/472 | 0 → 0 | pickup 11 → 12, plant 8 → 8, defuse 5 → 4 |
-| sab | mp_backlot | 51 → 56 | 193/735 → 207/576 | 0 → 0 | pickup 10 → 15, plant 4 → 3, defuse 1 → 1, explode 3 → 2 |
-| sab | mp_crash | 64 → 73 | 213/610 → 238/685 | 0 → 0 | pickup 22 → 22, plant 4 → 5, defuse 2 → 4, explode 2 → 1 |
-| sab | mp_strike | 73 → 75 | 271/827 → 259/813 | 0 → 0 | pickup 19 → 20, plant 6 → 5, defuse 3 → 3, explode 2 → 2 |
-| dom | mp_backlot | 81 → 87 | 304/854 → 305/939 | 0 → 0 | capture 40 → 44 |
-| dom | mp_crash | 170 → 168 | 561/1672 → 580/1705 | 0 → 0 | capture 31 → 29 |
-| dom | mp_strike | 101 → 109 | 351/1579 → 360/1381 | 0 → 0 | capture 36 → 34 |
-| koth | mp_backlot | 43 → 31 | 157/439 → 104/307 | 74 → 0 | capture 7 → 7 |
-| koth | mp_crash | 19 → 18 | 71/206 → 68/198 | 0 → 0 | capture 6 → 6 |
-| koth | mp_strike | 35 → 21 | 138/497 → 82/354 | 31 → 0 | capture 7 → 7 |
-| war | mp_backlot | 82 → 85 | 338/1196 → 334/1248 | 0 → 0 |  |
-| war | mp_crash | 105 → 86 | 406/1297 → 384/1301 | 0 → 52 |  |
-| war | mp_strike | 77 → 85 | 308/1880 → 313/1377 | 0 → 0 |  |
-| dm | mp_backlot | 98 → 98 | 340/1218 → 340/1218 | 0 → 0 |  |
-| dm | mp_crash | 102 → 102 | 410/1522 → 410/1522 | 0 → 0 |  |
-| dm | mp_strike | 115 → 115 | 407/1776 → 407/1776 | 0 → 0 |  |
+Per-map table (b7630cbb to both rules) superseded by 12.8's; VERIFIED (measured) headlines: `koth` mp_backlot 74 stalled bot-ticks to 0, mp_strike 31 to 0; `war` mp_crash 0 to 52; `dm` unchanged.
 
 - `dm` does not move (no teammates). The first rule fired 14 times over
   three `war` mp_crash seeds, yet any firing sends a match down another
@@ -2608,23 +2531,7 @@ follower's path per tick) on 8e1d545d:
 Six shooting bots, `TICKS=6000`, default limits, seeds 1 and 2 summed,
 2026-10-27; before is 8e1d545d, after is both changes:
 
-| gametype | map | kills | hits / rounds | stalled bot-ticks | mantles climbed | objective actions |
-|---|---|---|---|---|---|---|
-| sd | mp_crash | 25 → 27 | 85/174 → 82/215 | 25 → 0 | 117 → 128 | pickup 13 → 13, plant 9 → 8, defuse 6 → 4 |
-| sd | mp_shipment | 53 → 47 | 170/356 → 163/408 | 0 → 0 | 27 → 38 | pickup 19 → 23, plant 10 → 11, defuse 7 → 6 |
-| sd | mp_strike | 38 → 38 | 128/472 → 126/529 | 0 → 0 | 46 → 38 | pickup 12 → 14, plant 8 → 7, defuse 4 → 4 |
-| sab | mp_crash | 62 → 83 | 217/704 → 257/851 | 13 → 60 | 87 → 135 | pickup 18 → 31, plant 4 → 5, defuse 1 → 4, explode 2 → 0 |
-| sab | mp_shipment | 79 → 83 | 254/669 → 277/770 | 0 → 0 | 29 → 46 | pickup 22 → 22, plant 9 → 6, defuse 5 → 3, explode 3 → 3 |
-| sab | mp_strike | 57 → 55 | 202/767 → 206/734 | 0 → 0 | 84 → 84 | pickup 12 → 16, plant 6 → 5, defuse 3 → 3, explode 3 → 2 |
-| koth | mp_crash | 75 → 82 | 234/535 → 301/683 | 17 → 78 | 105 → 97 | capture 8 → 8 |
-| koth | mp_shipment | 169 → 282 | 576/1486 → 905/1936 | 3177 → 0 | 0 → 0 | capture 8 → 5 |
-| koth | mp_strike | 78 → 74 | 272/1034 → 276/730 | 0 → 0 | 99 → 112 | capture 9 → 10 |
-| dom | mp_crash | 149 → 152 | 477/1451 → 521/1494 | 0 → 0 | 145 → 125 | capture 32 → 32 |
-| dom | mp_shipment | 150 → 192 | 484/1279 → 645/1475 | 3219 → 0 | 0 → 0 | capture 23 → 70 |
-| dom | mp_strike | 87 → 96 | 308/1539 → 337/1397 | 0 → 0 | 131 → 144 | capture 34 → 33 |
-| war | mp_crash | 95 → 98 | 364/1375 → 349/1354 | 0 → 0 | 58 → 120 | |
-| war | mp_shipment | 202 → 202 | 740/1685 → 740/1685 | 0 → 0 | 0 → 0 | |
-| war | mp_strike | 82 → 85 | 307/1057 → 312/1143 | 0 → 0 | 134 → 127 | |
+Per-map table (8e1d545d to both changes, 15 pairs) superseded by 12.9's census; VERIFIED (measured) headlines: `koth` mp_shipment 3177 stalled bot-ticks to 0 (kills 169 to 282), `dom` mp_shipment 3219 to 0 (captures 23 to 70), `sd` mp_crash 25 to 0.
 
 - 1401 kills to 1596, 6476 stalled bot-ticks to 138. mp_shipment's
   `koth` and `dom` carry most of both: the bots now meet in the yard's
@@ -2824,15 +2731,7 @@ default stays CoD1's walks.
 The census of 12.9 on seeds 1 to 6 (630 matches a setting), CoD1's
 walks against `VC_NAV_COD4=1`, 2026-10-27. VERIFIED (the runs):
 
-| seed | kills | stalled bot-ticks |
-|---|---|---|
-| 1 | 4402 → 4202 | 3003 → 824 |
-| 2 | 4272 → 4420 | 1603 → 2431 |
-| 3 | 4298 → 4367 | 2208 → 2589 |
-| 4 | 4331 → 4369 | 2631 → 3199 |
-| 5 | 4296 → 4298 | 1623 → 1500 |
-| 6 | 4267 → 4313 | 1715 → 2616 |
-| all | 25866 → 25969 | 12783 → 13159 |
+Over seeds 1 to 6, all: kills 25866 → 25969, stalled bot-ticks 12783 → 13159 (VERIFIED, measured; per-seed rows dropped).
 
 - One setting's kills move by 50 a seed (standard deviation over the six
   seeds); the two settings' per-seed difference by 117. The walk's kills
@@ -2844,7 +2743,7 @@ walks against `VC_NAV_COD4=1`, 2026-10-27. VERIFIED (the runs):
 
 ### 12.13 Holding the plan through the jump penalty, not kept
 
-S-C4-45's reading of mp_killhouse `koth` (12.12) traced again per tick
+The reading of mp_killhouse `koth` (12.12) traced again per tick
 on seed 1 with the follower's plan, its avoided edges and each reset's
 call site, 2026-10-27. INFERRED (the trace):
 
@@ -2871,15 +2770,7 @@ a teammate for `mates_in_way` and gives no way. The census of 12.12
 The base arm reproduced 12.12's default column to the match. VERIFIED
 (the runs):
 
-| seed | kills | stalled bot-ticks |
-|---|---|---|
-| 1 | 4402 → 4381 | 3003 → 4270 |
-| 2 | 4272 → 4296 | 1603 → 2282 |
-| 3 | 4298 → 4269 | 2208 → 1456 |
-| 4 | 4331 → 4369 | 2631 → 2569 |
-| 5 | 4296 → 4286 | 1623 → 1726 |
-| 6 | 4267 → 4236 | 1715 → 2314 |
-| all | 25866 → 25837 | 12783 → 14617 |
+Over seeds 1 to 6, all: kills 25866 → 25837, stalled bot-ticks 12783 → 14617 (VERIFIED, measured; per-seed rows dropped).
 
 - Kills hold: the per-seed difference's standard deviation is 29, the
   total 0.1% down. Stalls rise 14%. `koth` mp_killhouse 1526 → 2693
@@ -2932,15 +2823,7 @@ The census of 12.12 (630 matches a setting, CoD1's walks, `VC_NAV_COD4`
 off), the same tip with and without the change, 2026-10-28. VERIFIED (the
 runs):
 
-| seed | kills | stalled bot-ticks |
-|---|---|---|
-| 1 | 4279 → 4236 | 2528 → 1760 |
-| 2 | 4257 → 4308 | 2163 → 2027 |
-| 3 | 4202 → 4199 | 2739 → 2570 |
-| 4 | 4137 → 4143 | 2538 → 1553 |
-| 5 | 4219 → 4230 | 1779 → 1803 |
-| 6 | 4269 → 4191 | 2435 → 2098 |
-| all | 25363 → 25307 | 14182 → 11811 |
+Over seeds 1 to 6, all: kills 25363 → 25307, stalled bot-ticks 14182 → 11811 (VERIFIED, measured; per-seed rows dropped).
 
 - Stalls fall 17%, kills by 0.2% (the per-seed difference's standard
   deviation is 45). `koth` mp_killhouse 1707 → 20 (per seed 644, 13, 0,
@@ -3016,15 +2899,7 @@ The census of 12.12 (630 matches a setting, CoD1's walks, `VC_NAV_COD4`
 off), 12.14's after column against the three changes, 2026-10-28.
 VERIFIED (the runs):
 
-| seed | kills | stalled bot-ticks |
-|---|---|---|
-| 1 | 4236 → 4308 | 1760 → 296 |
-| 2 | 4308 → 4255 | 2027 → 478 |
-| 3 | 4199 → 4244 | 2570 → 1218 |
-| 4 | 4143 → 4259 | 1553 → 463 |
-| 5 | 4230 → 4252 | 1803 → 1215 |
-| 6 | 4191 → 4213 | 2098 → 602 |
-| all | 25307 → 25531 | 11811 → 4272 |
+Over seeds 1 to 6, all: kills 25307 → 25531, stalled bot-ticks 11811 → 4272 (VERIFIED, measured; per-seed rows dropped).
 
 - Stalls fall 64%, kills rise 0.9% (the per-seed difference's standard
   deviation is 57). By gametype, stalls: `war` 859 → 185, `sd` 949 →
@@ -3088,15 +2963,7 @@ The census of 12.12 (630 matches a setting, CoD1's walks, `VC_NAV_COD4`
 off), the same tip with and without the three changes, 2026-10-29.
 VERIFIED (the runs):
 
-| seed | kills | stalled bot-ticks |
-|---|---|---|
-| 1 | 4303 → 4416 | 296 → 369 |
-| 2 | 4263 → 4299 | 473 → 214 |
-| 3 | 4249 → 4410 | 1218 → 134 |
-| 4 | 4242 → 4353 | 493 → 220 |
-| 5 | 4263 → 4211 | 1215 → 934 |
-| 6 | 4239 → 4238 | 664 → 160 |
-| all | 25559 → 25927 | 4359 → 2031 |
+Over seeds 1 to 6, all: kills 25559 → 25927, stalled bot-ticks 4359 → 2031 (VERIFIED, measured; per-seed rows dropped).
 
 - Stalls fall 53%, kills rise 1.4% (the per-seed difference's standard
   deviation is 81). By gametype, stalls: `war` 185 → 232, `sd` 394 →
