@@ -1194,7 +1194,7 @@ order.
 the throw (11.3), truncates the leaned eye per component.
 
 **Measured, the leaned muzzle.** `mp_carentan-tdm-lean.txt` (`--save-lean`,
-2026-10-11, 1.1d, axis, `kar98k_sniper_mp`): seven scoped shots standing
+1.1d, axis, `kar98k_sniper_mp`): seven scoped shots standing
 still at a wall 270-550 units out along wire yaw 54, level, leaning left
 twice, right twice, level again and crouched leaning left. With the sway of
 15.6 taken off the view, the impact sits off the ray through the unleaned
@@ -1248,7 +1248,7 @@ byte +0x2e is set. The floor is 8 (0xb5f90). VERIFIED. INFERRED: byte
 `FireWeapon` (0x8bd05) and `FireWeaponMelee` (0x8bef7) call it as 1.5's
 do. VERIFIED.
 
-**Measured.** `mp_carentan-scriptmodel-throw-1.5.txt` (2026-10-17, 1.5b,
+**Measured.** `mp_carentan-scriptmodel-throw-1.5.txt` (1.5b,
 the prone part with the thrower's origin logged every frame of his first
 second and as each frag shows): the thrower slid from the site to
 (1368.0339, 2608.136, -23.874777) and both frags leave from (1368.034,
@@ -1257,19 +1257,18 @@ truncated. VERIFIED (capture). The earlier
 `mp_carentan-scriptmodel-prone-1.5.txt` throws left from (1368, 2608,
 36.148) on the same site, so that thrower's feet stood at -23.852 (where
 1.1d's point is 37.0); INFERRED, off the rule. UO's
-`mp_carentan-scriptmodel-throw-uo.txt` (1.51b, 2026-10-17): the thrower
-slid to (1368.204, 2608.102, -23.874743) and both frags leave from z bits
-0x42108044, the float of his z plus 60. VERIFIED (capture). The capture
-it replaced read the thrower at (1368, 2608, -23.875) and its frags at z
-0x42108002, 36.125 and two float steps; INFERRED: his z was -23.874992,
-which six significant digits print as -23.875, since the replacement's
-frags leave on the float of his z plus 60.
+`mp_carentan-scriptmodel-throw-uo.txt` (1.51b): the thrower slid to
+(1368.204, 2608.102, -23.874743) and both frags leave from z bits
+0x42108044, the float of his z plus 60. VERIFIED (capture). An older UO take
+read the thrower at (1368, 2608, -23.875) and its frags at z 0x42108002,
+36.125 and two float steps. INFERRED: his z was -23.874992, which six
+significant digits print as -23.875.
 
 **The thrower's slide.** VERIFIED, `game.mp.i386.so` 1.5b player
 `setOrigin` (0x3e148) and UO 1.51b's (0x467a4): unlink, `ps.origin` set
 to the argument, z plus the rodata constant, `eFlags` 0x8 flipped,
 `BG_PlayerStateToEntityState`, `r.currentOrigin` copied, link. Neither
-writes `ps.velocity`. VERIFIED, live (1.5b and UO 1.51b, 2026-10-17,
+writes `ps.velocity`. VERIFIED, live (1.5b and UO 1.51b,
 `client-probes/probe_scriptmodel` prone part, eight 1.5b and ten UO
 runs, the thrower probe's snapshots logged with velocity and
 `commandTime` and its cmd times): a thrower `spawn`ed on 1.5b's tdm
@@ -1289,9 +1288,8 @@ still (1.5b's (1080, 3488), UO's (1800, 2696) and others) puts him at
 velocity carried through `setOrigin`; how far it carries rides the
 client's cmd times against the frame, and which spawn the clock-seeded
 pick took (`cod11-map-cycle.md` 4.8). Ours' 1.5 and UO pmove match it to
-the float: the earlier 0.25 (1.5) and 0.35 (UO) against retail's 0.14
-and none were the gate's even 16 ms cmds running 48 ms into the first
-frame, and a different spawn on UO.
+the float when the replay sends the probe's cmd times (even 16 ms cmds run
+48 ms into the first frame and slide 0.25 and 0.35 units off).
 
 **As implemented.** `combat::muzzle_point_in` takes the 1.5 path for
 `MoveRules::V1_5` and `Uo` (`aim::add_muzzle_bob` for the bob at the game
@@ -1306,7 +1304,7 @@ retail's float, and both frags leave from retail's point bit for bit.
 The prone-back gates pin the thrower the same way, to the spawn their
 capture's `PROBE shooter` line implies.
 
-**Measured moving, leaning, seated and on the bipod.** 2026-10-17, four
+**Measured moving, leaning, seated and on the bipod.** Four
 `--save-slope` captures on retail with the weapon's spread and gun kick
 zeroed in the server's homepath (`common::STEADY_WEAPON`), so each round
 leaves along the view and its impact on a wall 1090 units out reads the
@@ -1356,9 +1354,8 @@ over the grade, which the slope its later strafes cross puts at about
 before the fall's step met the face, so nothing slid. VERIFIED (UO
 capture, first `!snap`); the ground height INFERRED from the strafe rows.
 Where a fall ends that way rides the cmd times against the frame, and
-the captures log no cmd before the script's first. VERIFIED, `moveshot_ab`
-2026-10-18: with ours' wait sending one cmd a frame, as the gate did, the
-body lands on the face and slides to (900, 1929.7953, -43.13387), which
+the captures log no cmd before the script's first. VERIFIED, `moveshot_ab`:
+with ours' wait sending one cmd a frame, the body lands on the face and slides to (900, 1929.7953, -43.13387), which
 put one UO round a unit off on two axes; sending the net probe's
 `--probe-cmd-ms 8` cadence instead (the probe's loop sends a cmd every
 iteration from its first snapshot), ours rests between (900, 1929.945,
@@ -1372,7 +1369,7 @@ Ours stayed at -23.75 with one cmd a frame: `setOrigin`'s z lift puts the
 body 1.125 over the floor, and one 50 ms step of the fall ends at
 -23.75, inside the ground trace's reach, where nothing moves it again.
 With the probe's 8 ms cmds ours rests on retail's -23.874996 to the bit.
-VERIFIED (`moveshot_ab` 2026-10-18, both cadences); the mechanism
+VERIFIED (`moveshot_ab`, both cadences); the mechanism
 INFERRED from the arithmetic. The UO throw's two float steps above (36.125 plus
 two ulps) are that z: -23.874996 + 60. INFERRED.
 
@@ -1392,16 +1389,15 @@ reads it as its blend. INFERRED: on all three servers a shot reads
 the scale the last end frame left, so a hip shot's own `hipSpreadFireAdd`
 (1.5, step 8) widens only the next shot and a hit's feedback add the
 frame after it. VERIFIED, `snapshots-uo-bazooka-draw.bin` with gdb on the
-same run (2026-10-21): the shooter's `aimSpreadScale` reads 0 on every
+same run: the shooter's `aimSpreadScale` reads 0 on every
 snapshot before the shot and 91.8 on the shot's own, and the rocket left
 at a spread of 7.0, `bazooka_mp`'s `hipSpreadStandMin` (its
 `hipSpreadMax` 12, `hipSpreadFireAdd` 0.4): the scale the shot read was
-0. vcod read the post-add scale until 2026-10-21 (9.0 here); it
-keeps the end frame's in `ClientSim::spread_frac`.
+0 (the post-add scale would give 9.0). vcod keeps the end frame's in
+`ClientSim::spread_frac`.
 
 `BG_GetMinSpreadForWeapon` `0x37114`, read with `tools/re/annotate_func.py`
-on 2026-09-27 (field names as in `cod11-mantle.md`, "The eye through a
-stance change"). VERIFIED: it compares `viewHeightCurrent` (ps+0xD0, float)
+(field names as in `cod11-mantle.md`, "The eye through a stance change"). VERIFIED: it compares `viewHeightCurrent` (ps+0xD0, float)
 against `viewHeightLerpTarget` (ps+0xD8, loaded as an int) at `0x37140` and
 `viewHeightLerpTime` (ps+0xD4) against 0 at `0x3714c`, and its first path
 tests `pm_flags & 1` and `& 2` and loads `hipSpreadProneMin` (weapon def
@@ -1524,12 +1520,11 @@ both fixture weapons spell `hipSpreadTurnAdd 0`. Both retail motion captures
 agree -- 255.0 at every pose with a movement axis, standing, crouched or
 prone, and 0.0 at every pose without one.
 
-The `--save-ads` captures (1.13) put numbers on the rest, the carbine's
-re-measured on its 2026-10-19 recapture. VERIFIED: a hip shot from the
+The `--save-ads` captures (1.13) put numbers on the rest. VERIFIED: a hip shot from the
 carbine reads 162.18 on the first snapshot after it, 16 ms into a decay from
 `hipSpreadFireAdd` 0.7 times 255, and then 78.54, 60.18, 0, at the decay of
 4 times 255 a second; the mosin's reads 241.74,
-one 16 ms cmd of decay off 255 (255 on the 2026-10-17 capture), and comes
+one 16 ms cmd of decay off 255 (255 on an older take), and comes
 down 41.44 a full step. A walk climbs 51 a full step on the carbine
 (the add of 8 less the decay of 4, times 255, times the frame) to 255 in
 278 ms, and stopping brings it down 51 a step to 0 in 244. A shot down the
@@ -1550,7 +1545,7 @@ non-zero `cmd.forwardmove`/`rightmove` word, or a `weaponstate` of 10 or 11
 store at `PM_Weapon` 0x30643 (immediate 0x437f0000). That store is where the
 swing's 255 of 1.10's `melee_tap` comes from, and it holds a crawling prone
 body's cone open where the move term alone would leave it a frame short.
-VERIFIED, vcod measurement (2026-10-13, `moves_ab.rs`): the one
+VERIFIED, vcod measurement (`moves_ab.rs`): the one
 `aimSpreadScale` miss of each moves capture, the prone press while running,
 closes with it (`pmove::weapon::open_cone_on_prone_move`).
 
@@ -1599,8 +1594,8 @@ kept past their `fst` copies (0x6913f, 0x69144), and each component of
 blend `min + (max - min) * scale` stays on the x87 stack into
 `spread * pi / 180` (0x68ecb..0x68f26), then `fptan` (0x68f3a), the
 double and the float (0x68f3e, 0x68f44), and each component rounded once
-(0x68fe5..0x68fed). VERIFIED, gdb on the retail 1.1d server (2026-10-21,
-`--save-combat` with its kar98k on mp_carentan; dprintfs at 0x68f1e,
+(0x68fe5..0x68fed). VERIFIED, gdb on the retail 1.1d server
+(`--save-combat` with its kar98k on mp_carentan; dprintfs at 0x68f1e,
 0x68f6a and 0x68ff0): three standing rounds at spread 2.0, a crouched one
 at 1.6 and a prone one at 1.324, each at scale 0, read the tangent's
 float, `gunrandom`'s pair, the frame and the end point, which
@@ -1613,8 +1608,8 @@ and UO `BG_Bullet_Endpos` (0x3011c): `tan` (libm, double) of
 (0x30150), `k = tan * range` stored (0x30159), `x * k` and `y * k` stored
 (0x30174, 0x3017d), and the end point stored after each of its three adds:
 `forward * range + muzzle` (0x30193), then `+ right * x'` (0x301da), then
-`+ up * y'` (0x30225). VERIFIED, gdb on retail UO 1.51b (2026-10-21,
-`probe_uofx` with its kar98k, three hip rounds at spread 2.0): `k`
+`+ up * y'` (0x30225). VERIFIED, gdb on retail UO 1.51b
+(`probe_uofx` with its kar98k, three hip rounds at spread 2.0): `k`
 0x43ae9a96 and the three end points, which
 `combat::a_uo_rounds_spread_lands_on_retails_bits` holds to the bit.
 VERIFIED, UO `AngleVectors` (0x3b068): each angle times the double
@@ -1764,7 +1759,7 @@ reaches raises its own 173/174 by step 2 and a second player takes `damage /
 2` through its own location multiplier by step 4, for as long as the halving
 leaves a positive damage.
 
-Measured on retail, 2026-09-27: `client-probes/probe_passthru` (its section
+Measured on retail: `client-probes/probe_passthru` (its section
 in that directory's README) on mp_carentan stood two `--probe-target` clients
 100 units apart on one line and a `--save-hit --probe-sweep` shooter with the
 carbine (`damage` 45) 200 units in front of the first, and logged every damage
@@ -1776,7 +1771,7 @@ is `(int)(22 * 1.5)`, the 45 halved and then put through the back player's own
 multiplier. VERIFIED, the shooter's drained events for that frame: a 174 with
 `surfType` 7 at (1122 -376 -90) and another at (1229 -377 -85), and a 174 with
 `surfType` 10 at (3941 -406 24), on the world behind both. VERIFIED, the
-same day's one-target run of `cod11-events-and-fx.md` section 2: every hit put
+one-target run of `cod11-events-and-fx.md` section 2: every hit put
 a world 174 behind the target in the hit's own snapshot beside the flesh copy,
 the first at (1925 -413 -119) behind a flesh hit at (1122 -376 -91). The turret
 capture shows the same behind its target (`cod11-turrets.md` 12.5).
@@ -1790,17 +1785,15 @@ meets any other surface (its impact), nothing, or a halving to 0.
 VERIFIED, the same probe run against ours (`vcod-server mp_carentan
 --gametype-script .../probe_passthru.gsc --set probe_teleport=1`): at 39550
 the front player took 67 at `head` and the back one 33 at `head` in one frame,
-with a world 174 behind them; and the turret gate's two world impacts behind
-its target now read retail's (1248 1308) and (1248 1312) to the unit
-(`cod11-turrets.md` 13.1). VERIFIED, the two runs' 33600 and 39550 frames:
-retail's flesh 174s took entities 176 and 178 and its wall 174 took 180,
-where ours then put the wall 174 at 960 and the flesh ones at 961 and 963,
-because ours traced every leg of a round and ran the damage callbacks later,
-where retail runs a leg's callback before it traces the next leg.
+with a world 174 behind them; the turret gate's two world impacts behind its
+target read retail's (1248 1308) and (1248 1312) to the unit
+(`cod11-turrets.md` 13.1). VERIFIED, retail's 33600 frame: the flesh 174s
+took entities 176 and 178 and the wall 174 took 180, so a leg's callback
+(and the flesh copy `finishPlayerDamage` raises) runs before the next leg is
+traced.
 
-`fire_round` still traces every leg first, but returns what the round did as
-one ordered list of impacts and hits, and the server applies it in that
-order: an impact goes on the wire, a hit runs `CodeCallback_PlayerDamage` on
+`fire_round` traces every leg first but returns what the round did as one
+ordered list of impacts and hits, and the server applies it in that order: an impact goes on the wire, a hit runs `CodeCallback_PlayerDamage` on
 the spot, so the flesh pair `finishPlayerDamage` raises numbers between the
 leg's impacts the way retail's does. The turret pass applies its rounds the
 same way. INFERRED: tracing ahead changes nothing else within a round. The
@@ -1811,7 +1804,7 @@ inside the cmd that fired the round, before the next cmd of any client runs,
 which is where retail's `FireWeapon` runs (16): a player one round kills is
 out of the way of every later round of the frame.
 
-Glass, measured on retail, 2026-09-27: `client-probes/probe_glass` (its
+Glass, measured on retail: `client-probes/probe_glass` (its
 section in that directory's README) on mp_depot stood a `--probe-target`
 client 76 units behind the pane brush at x -772..-764 (lump 4 brush 434,
 material `glass@window2a` 0x8000010) and a `--save-hit --probe-sweep`
@@ -1843,12 +1836,11 @@ INFERRED: a pane passes rounds and stays.
 vcod follows step 3: `CollisionWorld::hit_contents` reads the contents word
 off the prim a trace stopped on, glass brushes (contents 0x10 without SOLID)
 enter the clip, and `fire_round` goes on past one from the nudged point.
-VERIFIED, the same probe run against ours on the same day: the target took
-180 at `head` and 107 at `torso_upper` through the pane, the pane's 173
-numbered below the flesh one. Ours reported the brush material's surface
-flags for every face, so its pane impacts read `surfType` 9 where retail's
-caulk face reads 0; its traces now report the struck side's (2026-10-15,
-not rerun against this probe). One difference remains: a round meeting glass at
+VERIFIED, the same probe against ours: the target took 180 at `head` and 107
+at `torso_upper` through the pane, the pane's 173 numbered below the flesh
+one. Traces report the struck side's surface flags (a brush-material read
+gives the pane `surfType` 9 where retail's caulk face reads 0; not rerun
+against this probe since). One difference remains: a round meeting glass at
 under 0.125 of its normal is not nudged, so each later leg starts where the
 last stopped and meets the pane again at fraction 0 until the depth runs out:
 13 impacts on the pane and nothing behind it. INFERRED from step 3 and Q3's
@@ -1883,7 +1875,7 @@ tests `trace.surfaceFlags & 0x10` (0x687a9) and the fraction against 1.0
 entity and the damage; UO's `Weapon_Melee` (0x7a524) takes the same two
 tests (0x7a609, 0x7a620) and the `takedamage` (+0x17d) test at 0x7a6c7.
 INFERRED: a swing at nothing or at the sky spawns no event. VERIFIED, live
-(2026-10-17, `client-probes/probe_skyshot` air part,
+(`client-probes/probe_skyshot` air part,
 `fixtures/missiles/mp_carentan-skyshot-air.txt` on 1.1d and `-air-uo.txt`
 on UO 1.51b): three swings into open air (`weaponstate` 10 then 11) put no
 temp entity on the wire; the same swings 80 degrees down at the floor
@@ -1894,9 +1886,7 @@ script model raises 167 naming the model and takes it 71, 73 and 73 as
 `MOD_MELEE` with the M1 carbine. INFERRED, off the mask (0x2802031, the
 bullet's): a swing strikes a shootable grenade's box as a round does. vcod
 ports all four (`a_swing_damages_what_takes_damage`,
-`crates/server/tests/missile_edge_ab.rs`); before 2026-10-17 its swing at
-nothing raised a 167 at the reach's end, a model took no damage and a
-satchel was swung through. One gap stands: the floor swing's truncated
+`crates/server/tests/missile_edge_ab.rs`). One gap stands: the floor swing's truncated
 event origin reads x 1375 on ours and 1374 on retail, y 2615 on both, from
 (1368, 2608.1) facing yaw 45; the start or the aim is a fraction of a unit
 off ours in a way that capture cannot pin (`FLOOR_POS_GAP`).
@@ -1964,8 +1954,7 @@ VERIFIED, the stock `maps/` scripts in `pak0..pak9`: all three `["normal"]`
 reads are in `maps/mp/_utility.gsc` `getPlant`, each handed to
 `orientToNormal`.
 
-VERIFIED, live (retail 1.1d, mp_carentan, 2026-10-15,
-`client-probes/probe_surfside`): five hits on the tops of rock, caulk and
+VERIFIED, live (retail 1.1d, mp_carentan, `client-probes/probe_surfside`): five hits on the tops of rock, caulk and
 wood brushes all read `surfacetype` `"default"`. On a
 dedicated server `trap_SurfaceTypeToName` lands in the null renderer's
 stub, which returns `"default"` whatever it is asked (`cod_lnxded`
@@ -2006,7 +1995,7 @@ commands on a script_model entity"` (`0x78d00`), and their only writes of
 branches: the print is the `script_model` arm and the write sits on the
 `script_brushmodel` arm only. VERIFIED: `ScrCmd_Hide` (`0x5dcac`) writes
 nothing but an OR of 0x10 into `ent+0x17d` (`0x5dcdf`). VERIFIED, live
-(retail 1.1d mp_carentan and UO 1.51b mp_peaks, 2026-10-15,
+(retail 1.1d mp_carentan and UO 1.51b mp_peaks,
 `client-probes/probe_scriptmodel`, fixtures in
 `crates/server/tests/fixtures/scriptmodel/`): a spawned
 `xmodel/barrel_black1` stops a `bulletTrace` at the same fraction (0.190383,
@@ -2059,8 +2048,8 @@ posed bone's frame (`coduo-vehicles.md` 13). `CanDamage` clips the same
 set (14.4). A round on a script model draws its impact and ends; it runs
 `G_Damage` only on a UO model `setTakeDamage` armed. A swing's miss names
 the model as `otherEntityNum`. A deleted model leaves the set at once,
-with its unlink (`game.mp.i386.so` 0x5da81; the slot's reuse waits); vcod
-kept clipping it until the slot freed. `scriptmodel_ab` replays both
+with its unlink (`game.mp.i386.so` 0x5da81; the slot's reuse waits), not
+when the slot frees. `scriptmodel_ab` replays both
 probe parts (the trace on 1.1d and UO, the rounds on UO).
 
 **The whole-model bounds reject.** VERIFIED, decompile: the bounds the
@@ -2085,7 +2074,7 @@ under a hundredth), and UO adds many single-player rigs whose bounds are
 zero. INFERRED: on every other model the cube, whatever the
 yaw, holds the whole collision mesh, so the reject only saves work there.
 
-VERIFIED, live (retail 1.1d, 1.5b and UO 1.51b, mp_carentan, 2026-10-20,
+VERIFIED, live (retail 1.1d, 1.5b and UO 1.51b, mp_carentan,
 `client-probes/probe_modelbounds`, fixtures
 `mp_carentan-scriptmodel-bounds{,-1.5,-uo}.txt`, recipe in each header):
 level `bulletTrace`s across a `vehicle_car` 200 above the first tdm spawn
@@ -2102,8 +2091,7 @@ with) for a script model and a UO vehicle, and `PlacedModel::clip` runs
 triangle. `model_bounds_ab` replays the probe on 1.1d, 1.5b and UO, every
 row to 1e-5.
 
-VERIFIED, live (retail 1.1d, mp_carentan, 2026-10-16, `probe_scriptmodel`'s
-pair parts, `+set probe_part rounds|grenade|blast`, fixtures
+VERIFIED, live (retail 1.1d, mp_carentan, `probe_scriptmodel`'s pair parts, `+set probe_part rounds|grenade|blast`, fixtures
 `mp_carentan-scriptmodel-{rounds,grenade,blast}.txt`; recipe in each
 header): with an axis player 256 units off an allies `--probe-uo-weapon
 aim` Thompson and a barrel 26 units in front of him, no round reached him
@@ -2124,7 +2112,7 @@ shelter matched as they stood; the barrel bounce matches every frame to
 player behind, which is what 12.4's "The bounce off a player" is about.
 
 VERIFIED, retail `bulletTrace` along the same segments on 1.1d and 1.5b
-(`client-probes/probe_patchseams`, 2026-10-16): the two servers stop a
+(`client-probes/probe_patchseams`): the two servers stop a
 round on a curved patch at different points of its facet seams, because
 1.5b's and UO's engine build rounds where 1.1d's does not. A round on a
 1.5 or UO server clips patches and terrain in that build's arithmetic
@@ -2142,14 +2130,14 @@ when a body or model lowers the fraction (0x8099b18, 3.1, "The
 arithmetic on 1.5 and UO"); otherwise the end point stays
 `CM_BoxTrace`'s (`collision::cm_endpos`, `cod15-movement.md` 7). The
 box path's own rewrite (0x809a44d..0x809a4d4) is never reached by a
-locational trace. VERIFIED, live (retail 1.5b and UO 1.51b,
-2026-10-20, gdb on `BG_CheckProneValid`'s `fTorsoHeight` store,
+locational trace. VERIFIED, live (retail 1.5b and UO 1.51b, gdb on
+`BG_CheckProneValid`'s `fTorsoHeight` store,
 1.5b game.mp 0x1e589, UO 0x22ecf): `probe_scriptmodel`'s prone target,
 put on `ground_at` + 0.125 by `setorigin`, starts his drop at z
 -22.749998 (0xc1b5ffff) on both servers, where a lerp rounding the
-product and the sum apart gives -22.75. vcod's builtin lerped; it now
-reads the trace's `endpos` for the world and keeps
-`combat::trace_point` for a script model or a body.
+product and the sum apart gives -22.75. vcod's builtin reads the trace's
+`endpos` for the world and keeps `combat::trace_point` for a script model or
+a body.
 
 ---
 
