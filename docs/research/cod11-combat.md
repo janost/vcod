@@ -6684,8 +6684,9 @@ VERIFIED, `game.mp.uo.i386.so`: UO's `fire_rocket` (0x5fc74) stores
 `trType` 2 (0x5fde6) and a 15000 ms think, `Weapon_RocketLauncher_Fire`
 (0x7b3da) leaves it, and `Weapon_Artillery_Fire` (0x7b594), a vehicle main
 gun's fire, rewrites it to 5 (0x7b6c8). VERIFIED, live (retail UO 1.51b, `mp_carentan-skyshot-rocket-uo.txt`): a player's bazooka round
-reads `trType` 2 and climbs an even 137 a frame. vcod flies a player's UO
-rocket on `trType` 2 and a vehicle main gun's on 5.
+reads `trType` 2 and climbs an even 137 a frame; vcod flies it the same
+(`a_uo_missile_flies_through_the_sky`). A vehicle main gun's arc is
+`coduo-vehicles.md` 13.
 
 ### 13.7 A missile whose thrower left
 
@@ -7120,12 +7121,12 @@ number a third time. VERIFIED: its `throw_down` pain frame reads
 `aimSpreadScale` 94.00 off a counter that was 0. INFERRED: section 6's step
 5 adds `damage * 100 / maxHealth` there, so retail charged 94, which is what
 the falloff gives at the 78 units the replay measured between the blast and
-the thrower. VERIFIED: the 2026-10-17 and 2026-10-19 recaptures' thrower takes no damage,
-so it no longer carries that frame.
+the thrower. VERIFIED: the later takes' thrower takes no damage, so they
+carry no such frame.
 
 ### 14.4 What stops a blast, measured
 
-Two client probes, run 2026-09-26 against the retail 1.1d server and against
+Two client probes, run against the retail 1.1d server and against
 `vcod-server` with four `--net-probe --probe-team` clients each (allies, axis,
 allies, axis), `sd` rules on mp_carentan. The recipe and the raw lines are in
 `crates/gsc/tests/fixtures/semantics/client-probes/README.md`.
@@ -7150,9 +7151,9 @@ fuse:
 | 40 above client 0's feet | 0: 20 | 0: 20, 2: 13, 3: 6 | 0: 20, 2: 6, 3: 6 | 0: 20 |
 | the fuse | none, all four at 100 | 0 killed, 1944 | none | none |
 
-The three vcod columns are the server with the world alone in `CanDamage`,
-with the script models added, and with the player bodies added as well,
-which is the one this section describes; the last was run on 2026-09-27.
+The three vcod columns are builds with the world alone in `CanDamage`, with
+the script models added, and with the player bodies added as well; the last
+is vcod's current rule.
 INFERRED, off the blast sitting inside client 0's box: client 0's bones stop
 the probes from clients 2 and 3 on the fourth row, which is the shielding the
 `probe_blastbody` rows below measure directly. INFERRED, off the first, third and fifth
@@ -7172,7 +7173,7 @@ each, and last `suicide()`s it and blasts over its corpse. Each yaw row logs
 client 0's `angles` and both origins as they read before the blast. Client 0
 is the allied probe, which joins with `m1carbine_mp`.
 
-VERIFIED, two retail runs on 2026-09-27, the `D;` records for client 1,
+VERIFIED, two retail runs, the `D;` records for client 1,
 beside what `a_body_in_the_line_shields_a_blast_the_way_the_retail_probe_measured`
 (`crates/server/src/game/combat.rs`) reads for the same geometry with client 0
 posed as an idle carbine player at the yaw its `angles` read:
@@ -7220,7 +7221,7 @@ client, so a `setOrigin` earlier in the frame moves the body.
 The replay column above holds at every anim phase the test pose was tried
 at but one: at yaw 135 one of nine phases reads 6 where retail read none,
 since the body's yaw and its pose decide which probes the bones cross.
-VERIFIED, the same probe against `vcod-server` on 2026-09-27: client 1 took
+VERIFIED, the same probe against `vcod-server`: client 1 took
 13 shielded, 20 unshielded, 13 on each of the eight yaw rows, whose `angles`
 all read 0 there too, and 20 behind the corpse.
 
@@ -7346,10 +7347,10 @@ every builtin row above as retail did;
 `a_callback_reaches_the_rest_of_its_walk`
 (`crates/server/src/game/builtins/combat.rs`) replays them, and
 `a_grenade_walk_meets_a_victim_where_an_earlier_callback_moved_it`
-(`crates/server/tests/combat.rs`) the grenade case, which before the change
-reached the parked victim at the spot it had left. The probe's grenade half
-was reworked on 2026-10-09 to measure the walk's link order; 14.7, "The
-frame's links before the walk", has that run on both servers.
+(`crates/server/tests/combat.rs`) the grenade case (the trap: reaching the
+parked victim at the spot it left). The probe's grenade half measures the
+walk's link order; 14.7, "The frame's links before the walk", has that run
+on both servers.
 
 ### 14.6 Turrets, and the other entities with `takedamage`
 
@@ -7394,7 +7395,7 @@ turret: `r.bmodel` 0, so the distance is origin to origin, and `CanDamage`'s
 no-client arm, the box midpoint 28 above the origin and four points 15 off
 it on x and y, any one clear for the whole falloff.
 
-VERIFIED, `client-probes/probe_victims` on retail, 2026-10-06: carentan's
+VERIFIED, `client-probes/probe_victims` on retail: carentan's
 `misc_mg42`s, entities 297 and 298, read `health` 100. Three flat-60
 `radiusDamage`s 70 units from 298 with 1000-health slot 1 inside the radius
 too logged, per blast, slot 1's callback, the line after the builtin, then
@@ -7870,7 +7871,7 @@ frame hands the queue out one trigger per entity a round with
 `Scr_RunCurrentThreads` after each round, which is why the `f` pair comes
 once a cmd while a `"touch"`, notified in the cmd to a waiter that has not
 run again by the next one, comes once a frame (`cod11-gsc-language.md`,
-"Engine notifies and the trigger queue"). VERIFIED, a 2026-10-17 rerun
+"Engine notifies and the trigger queue"). VERIFIED, a rerun
 (`crates/server/tests/fixtures/touchorder/mp_pavlov.txt`): every frame of a
 phase repeats the first's `t`, `mt` and `pt` lines after its first `f` pair.
 
@@ -8091,11 +8092,11 @@ face's normal sits at `+0x10` (`DirToByte(trace + 0x10)` reads it); every
 shell's walk ran with start and end the same point, `dmg` 1000 and mod 5
 (`MOD_PROJECTILE`) for a panzerschreck. So the shell's walk tests its
 contact point alone: a `trigger_damage` fires only when the shell strikes
-inside its brushes. Before 2026-10-18 vcod read `trace + 4` as the normal
-and walked from the contact to near the world origin.
+inside its brushes. Trap: `trace + 4` read as the normal walks from the
+contact to near the world origin.
 
 **Measured.** VERIFIED, `client-probes/probe_dmgtrig.gsc` on retail UO
-1.51b, mp_uo_stanjel, 2026-10-18 (`crates/server/tests/dmgtrig_ab.rs`):
+1.51b, mp_uo_stanjel (`crates/server/tests/dmgtrig_ab.rs`):
 every bush reads `health` 32000; a `radiusDamage` notifies `"damage"` with
 the full charge, `MOD_EXPLOSIVE` and the world, and `health` reads 32000
 on the builtin's next line; a charge over the health adds `"death"` ahead
