@@ -334,8 +334,7 @@ client.
   `cg.scoresTop` (0x79e620) with 1 at 0x449739 and, at 1, drops the `y`
   `CG_DrawScoreboard_ListColumnHeaders` (0x447f40) returns (`fstp st(0)`
   at 0x4497c3); scrolled, the list starts below them (0x4497b1 keeps it).
-  VERIFIED (the code). vcod used to start the list below the headers
-  always.
+  VERIFIED (the code). vcod does the same.
 - Every banner and row is a line: the board's per-line check
   counts and skips the lines above `scoresTop`, and the first that would
   end past the backdrop's foot (its top + 435 - 20) sets
@@ -389,10 +388,9 @@ client.
   0x44a0a3); `cg_ScoresPing_MaxBars` and `_Interval` ints and the four
   colours archived (flags 1). VERIFIED. So a bare
   `cg_scoreboardPingGraph 1` at the console sets it (`Dvar_Command`).
-  vcod's shell had not registered the name, so the line went to the
-  server as an unknown command and the board never drew the bars; the
-  CoD4 shell now registers these seven
-  (`Shell::register_cod4_options`).
+  vcod's CoD4 shell registers these seven
+  (`Shell::register_cod4_options`); unregistered, the line goes to the
+  server as an unknown command and the board never draws the bars.
 - `cg_scoreboardPingText` (bool, flags 0, default 1, 0x44a05f, pointer
   0x8c9de0) picks the column table: 1 the nine columns at 0x6be490, 0 the
   eight at 0x6be410 without the ping (0x448b82, the headers at 0x447fa1).
@@ -496,9 +494,9 @@ client.
   the corner. Not centred: the first row's top is the corner plus
   `clipSize / 20` less 2. VERIFIED (disassembly).
 - vcod draws kinds 1 to 5; an alt weapon's clip (the walk keeps no
-  `altWeapon`) is not drawn. The low-clip flash is section 15. Before,
-  vcod drew the clip as a count, which sat under the frag icon, and
-  then the belt as one column of `clipSize` links 2 apart.
+  `altWeapon`) is not drawn. The low-clip flash is section 15. (A clip
+  drawn as a count sits under the frag icon; a belt drawn as one column
+  of `clipSize` links 2 apart is not 1.7's.)
 - The gate `cod4_hud::tests::kill_capture_draws_the_targets_weapon_info`
   reads ` 60`, `M16A4`, the frag and stun grenade icons and `1`, `1`,
   and the clip as the magazine's 30 bullets touching none of the other
@@ -512,9 +510,8 @@ client.
   0x794474 whose `clientNum` 0x794550 the event code compares) has bit 2
   (VERIFIED, the disassembly). A follower's playerstate carries
   `otherFlags` 0xa on retail (cod4-gsc.md 7, VERIFIED live). So vcod's
-  hidden compass and ammo while following match 1.7; the 2026-10-26
-  playtest's note that 1.7 shows them is not what the binary does, and a
-  look at a retail client following someone is pending.
+  hidden compass and ammo while following match 1.7 as the binary reads.
+  A look at a retail client following someone is pending.
 
 ## 10. The compass's pointers
 
@@ -1229,13 +1226,12 @@ VERIFIED (the dump). What each owner draw does is INFERRED
   (`G_GivePlayerWeapon`, INFERRED). vcod-server keeps them in
   the client's loadout and copies it into `ps` at the end frame; a
   client packet's cmds each copy `ps` back into the loadout after their
-  move. A streak kill landing inside a packet's first cmd gave
-  `airstrike_mp` and slot 4 in the loadout, and the packet's next cmd
-  moved off the old `ps` and copied the old weapons back: the slot named
-  a weapon not held, so the `dpad` drew nothing and the key did nothing,
-  at random, as often as the kill fell short of a packet's last cmd. The
-  loadout now goes into `ps` ahead of each cmd's move. VERIFIED (ours:
-  the live gate's second earn failed so without it and passes with it).
+  move, and the loadout goes into `ps` ahead of each cmd's move. VERIFIED
+  (ours: the live gate's second earn fails without it). Without that a
+  streak kill landing inside a packet's first cmd gives `airstrike_mp`
+  and slot 4 in the loadout, and the packet's next cmd moves off the old
+  `ps` and copies the old weapons back: the slot names a weapon not held,
+  so the `dpad` draws nothing and the key does nothing.
 - Gates: `walk_capture_draws_the_action_slots` (the goggles, the
   launcher's icon and `  2`, `[N]` and `[5]` with 1.7's binds), and
   `cod4_live_uav_hardpoint_shows_on_the_dpad_and_pings_the_enemy` below.
@@ -1339,7 +1335,7 @@ VERIFIED (the dump). What each owner draw does is INFERRED
   an unused airstrike is gone once the helicopter replaces it (the
   `giveHardpointItem` test above). VERIFIED (the `_hardpoints.gsc`
   rawfile). Both are the stock script running on vcod-server as on
-  retail (playtest 2026-10-26).
+  retail.
 - Gates: `cod4_live_three_kills_earn_the_airstrike_and_call_it_in` and
   `cod4_live_five_kills_earn_the_helicopter_and_call_it_in`
   (`play::cod4`, the `streak_kill` fixture gsc: no killcam,
@@ -1523,13 +1519,12 @@ VERIFIED (the dump). What each owner draw does is INFERRED
   a key of `localized_code_post_gfx_mp`; each map's minimap image
   (`compass_map_mp_crash`, `compass_map_mp_backlot`) is in that map's
   own zone, not in `common_mp` (which holds `compass_map_default`).
-  VERIFIED (`HudAssets::load_zones` per zone). vcod drew the item's
-  text through the server-message path, which does not read a leading
-  `@`, so the key showed raw; and the HUD kept the zones it loaded for
-  the first map, so after a rotation the next map's minimap had no image
-  and the full map and compass drew empty. It now localizes an `@KEY`
-  item text (`Cod4Hud::menu_text`) and loads the zones again when the
-  map changes. VERIFIED (the gates below, ours).
+  VERIFIED (`HudAssets::load_zones` per zone). vcod localizes an `@KEY`
+  item text (`Cod4Hud::menu_text`; the server-message path reads no
+  leading `@` and shows the key raw) and loads the zones again when the
+  map changes (else after a rotation the next map's minimap has no image
+  and the full map and compass draw empty). VERIFIED (the gates below,
+  ours).
 - Gates: `play::cod4::tests::cod4_live_airstrike_picks_its_spot_on_the_full_map`
   (vcod-server's war: the stock `giveHardpointItem("airstrike_mp")`, its
   slot pressed, the minimap, the selector and the border draw, the
@@ -1559,7 +1554,7 @@ and each client's `clientState_t.perks` (`cgs.clientinfo[n].perks`,
 | Dead Silence, `quieter` (8) | the `q` footstep, landing and gear set; off the compass's footstep pings | the stepping entity's `clientinfo.perks` bit 8 (0x435de9, 0x428fcc) | steps done (cod4-sound.md 4); the pings are off by default (15.3) |
 | Eavesdrop, `parabolic` (9) | the talker list draws an enemy talker with `perk_parabolicIcon` (`specialty_parabolic`) instead of `voice_on`; the server relays enemy voice within `perk_parabolicRadius` | `nextSnap->ps.perks` bit 9 (0x443eaf..0x443ebb) | done: the talker list draws it (cod4-voice.md 4) |
 | Bomb Squad, `detectexplosive` (11) | nothing in the engine: `_weapons.gsc` spawns a `trigger_radius` (512 by 256) under each enemy claymore and C4, and a player with the perk who touches one gets one of four `waypoint_bombsquad` client hudelems over it | the script's `detectExplosives` | done: the waypoints draw (16.2) |
-| Martyrdom, Last Stand, Stopping Power, Juggernaut, Sonic Boom, Bandolier, Overkill, Frag x3, the grenade and inventory perks | the server's damage, death and loadout | the server's copy | the server's (S-C4-18) |
+| Martyrdom, Last Stand, Stopping Power, Juggernaut, Sonic Boom, Bandolier, Overkill, Frag x3, the grenade and inventory perks | the server's damage, death and loadout | the server's copy | the server's (cod4-combat.md) |
 
 That no string in `iw3mp.exe` names `bombsquad`, `detectexplosive` but
 the perk table, is VERIFIED (strings). The other rows' 1.7 reads are
@@ -1673,9 +1668,9 @@ is INFERRED.
   from the player's. INFERRED (`PlayerCmd_ClonePlayer`).
   vcod-server reads it off the corpse's `pos.trBase`, where the clone
   set it down (cod4-combat.md 5): the engine's entity slot is never
-  written for a body. Before, `body.origin` read `(0, 0, 0)` and every
-  death raised its icon at `(0, 0, 54)`, over the middle of the map
-  (playtest 2026-10-27). VERIFIED (vcod-server, the gate below).
+  written for a body. Read off the entity slot, `body.origin` is `(0, 0,
+  0)` and every death raises its icon at `(0, 0, 54)`, over the middle of
+  the map. VERIFIED (vcod-server, the gate below).
 - Gate: `play::cod4::tests::cod4_live_a_teammates_death_icon_sits_over_his_corpse`
   (two allies on vcod-server's `war`, the teammate's `suicide`; the icon
   over where he stood, 54 over the floor under him, drawn as a sprite).
@@ -1994,14 +1989,14 @@ cod4-gsc.md 9.1.
   not the drawn `" " + name`'s, both in the font handle the owner draw
   was handed (`ebx`, the caller's), the one it then draws with.
   VERIFIED. That the caller picks that font at the screen's placement,
-  as every vcod owner draw does, is INFERRED. vcod measured on the
-  640x480 grid's font up to the 2026-10-26 playtest: past 1080p the
-  draw takes a bigger font with other advances, and the text ran into
-  the name (`Press F to swap for<name>`). With a text alone: text then icon in one row,
+  as every vcod owner draw does, is INFERRED. Trap: measured on the
+  640x480 grid's font, past 1080p the draw takes a bigger font with
+  other advances, and the text runs into the name (`Press F to swap
+  for<name>`). With a text alone: text then icon in one row,
   both centred; with an icon alone, the icon centred on the item. The
   shapes are INFERRED from `CG_DrawCursorhint`
   where the branches past 0x443700 were not read.
-- vcod-server's hint pass (S-C4-25) sends `cursorHint`,
+- vcod-server's hint pass sends `cursorHint`,
   `cursorHintString` and `cursorHintEntIndex` in each snapshot; the gate
   reads `PLATFORM_THROWBACKGRENADE` with the bound frag key and the
   frag's `hudIcon` to its right, a 40-unit square on the
@@ -2019,7 +2014,7 @@ cod4-gsc.md 9.1.
   `pm_type` 7 and hint 0 with the string -1 and entity 317 kept, until
   the respawn at 51000 clears both. VERIFIED (the capture). So the pass
   runs on a dead player's end frame too. INFERRED (the capture). vcod-server's
-  dead end frame now runs it (`level::player_end_frame`), and
+  dead end frame runs it (`level::player_end_frame`), and
   `cod4::planefx_ab` holds the four words across the death to retail's.
   VERIFIED (the gate, ours).
 
@@ -2163,9 +2158,9 @@ gates: `play::cod4`'s `cod4_live_bars_board_and_hints_draw_from_their_menus`
   0x53c0b3, `fld1` into s0 or t0), then draws from the same corner
   through 0x45b8d0. VERIFIED (the instructions). So a trailing team's
   backdrop is the picture upside down over -63..1, still round the team
-  icon; vcod drew it from y upward, a backdrop's height above the icon
-  (playtest 2026-10-26), and now flips it in `cod4_menu::window`
-  (`cod4_live_trailing_score_bars_flip_the_backdrop_in_place`). The
+  icon. vcod flips it in `cod4_menu::window`
+  (`cod4_live_trailing_score_bars_flip_the_backdrop_in_place`); unflipped
+  it draws a backdrop's height above the icon. The
   team-coloured sliver at each row's left, under the score's first
   digit, is the `scorebar_<team>` fill, `76 * score / ui_scorelimit`
   wide: 8 units at 80 of war's 750. VERIFIED (the `rectW` expression).
@@ -2197,10 +2192,9 @@ gates: `play::cod4`'s `cod4_live_bars_board_and_hints_draw_from_their_menus`
   and `H` (0x44c3ac) at allies'. VERIFIED (the instructions). The client
   asks for `score` only while the board draws (`CG_UpdateScores`, INFERRED), so between boards the bars run on `G` and `H`,
   which `setTeamScore` and `updateScores` send (cod4-gsc.md).
-  vcod's HUD read `team( score )` off the last `b` alone: the top bar
-  said "Tied 0 - 0" through a match until Tab was held (playtest
-  2026-10-27). It now keeps `cg.teamScores` as the cgame does
-  (`Cod4Hud::team_scores`). Gate:
+  vcod's HUD keeps `cg.teamScores` as the cgame does
+  (`Cod4Hud::team_scores`); read off the last `b` alone, the top bar says
+  "Tied 0 - 0" through a match until Tab is held. Gate:
   `play::cod4::tests::cod4_live_a_kill_moves_the_team_scores_without_the_board`
   (the enemy's kill moves axis's score to 10 with no `score` reply).
   VERIFIED (vcod-server).
