@@ -1,85 +1,83 @@
 # CoD4 1.7: what vcod-server's CoD4 side still lacks
 
-A ranked list of what a retail 1.7 dedicated server (`cod4_lnxded`) does
-that `vcod-server --game cod4` lacks or fakes. Sources: the CoD4 server
-paragraph of `docs/features.md`, the open sections of the `cod4-*.md`
-docs, the builtin handlers in `game/builtins/cod4*.rs` against the stock
-scripts' calls, the console commands 1.7 registers (their strings in
-`cod4_lnxded`) against `cod4::oob`'s `exec`, and the dvars 1.7 reads
-against what `cod4/` and `game/cod4/` read. Audited 2026-10-26 at
-b5311fc8. Each line: what, where it would live, size (S under an hour, M
-a few hours, L a day or more). The client's list is `cod4-gaps.md`.
+What a retail 1.7 dedicated server (`cod4_lnxded`) does that `vcod-server
+--game cod4` lacks or fakes, ranked. The player-facing summary is
+`docs/features/cod4.md`; the client's list is `cod4-gaps.md`. Sources:
+the open sections of the `cod4-*.md` docs, the builtin handlers in
+`game/builtins/cod4*.rs` against the stock scripts' calls, the console
+commands 1.7 registers (their strings in `cod4_lnxded`) against
+`cod4::oob`'s `exec`, and the dvars 1.7 reads against what `cod4/` and
+`game/cod4/` read. First audit 2026-10-26 at b5311fc8; rechecked against
+the code 2026-10-30. Sizes: S under an hour, M a few hours, L a day or
+more.
 
 ## Fixed
 
-- `setStat` sent nothing to the client: 1.7's `SV_SetClientStat` sends a
-  changed stat as the reliable `N <index> <value>`, and the client stores
-  it in its profile. Both sides now do, with `GScr_SetStat`'s index and
-  byte checks (cod4-gsc.md, "The stats, the loadout, the perks").
-- `status` printed a score of 0, no separator line, no `^7` after the
-  name, a left-aligned GUID and a ping capped at 999; `getstatus` a score
-  of 0. Both read the script's `score` now (cod4-handshake.md 14).
-- The console's `say` and `tell` were unknown commands; `kick` with no
-  name printed nothing and `kick all` kicked nobody (14).
-- `banUser`, `banClient` and `unbanUser` were unknown and a permanently
-  banned GUID could connect: `ban.txt` is kept (`--ban-file`) and read at
-  the `getchallenge` (14).
-- `games_mp.log` was never written: `g_log`, `g_logSync`, `logPrint`,
-  the engine's own lines and `getGuid` (which returned 0) now follow 1.7
-  ("games_mp.log" below).
-- `g_inactivity` kicked nobody ("g_inactivity" below).
-- The console lacked `dumpuser`, `killserver`, `heartbeat`, the dvar
-  commands, `vstr`, `exec`, `wait` and `cmdlist`, and `kick` did not ban
-  briefly as 1.7's does (cod4-handshake.md 14.1).
-- Rounds, throws and rockets left from the plain eye along the view the
-  cmd ended on: 1.7's leave from the eye with its walk bob and lean, along
-  the angles the last cmd's aim block left (the sway, the movement tilt,
-  the idle drift, the gun spring), cod4-combat.md 3.2.
-- A round stopped at a damageable script model's bounds and passed
-  through brush models: 1.7's meets the model's collision triangles
-  (hidden parts skipped, the part named in the notify) and brush models,
-  and goes on past either at the damage left (cod4-combat.md 13.1).
-  Glass needs nothing beyond `Bullet_FireExtended`'s contents bit
-  (13.2).
-- A hit player's next rounds left along the angles they would have
-  without the hit: 1.7's aim block eases in `P_DamageFeedback`'s damage
-  kick (cod4-combat.md 3.2), and so does ours, in the client's
-  prediction too.
-- Rounds passed through script models not open to damage and through
-  attached models: 1.7's meet every solid script model's collision and
-  its attachments' whatever their ignoreCollision, and `notSolid` /
-  `solid` write a script model's contents (cod4-combat.md 13.1); the
-  client's own rounds meet the script models as well.
-  `setPlayerAngles` turned no player's view; it sets the view and
-  `delta_angles` now.
-- `getStat` refused nothing and `setStat` lacked the receiver and
-  `developer_script` refusals (cod4-gsc.md, "The stats, the loadout, the
-  perks").
-- `status`'s `lastmsg` read the wall clock since the last packet; it is
-  `svs.time` less `lastPacketTime` now (cod4-handshake.md 14).
-- Entity numbers differed from retail's: CoD4's `delete()` frees inside
-  the call, so the free list keeps the scripts' delete order
-  (cod4-combat.md 14).
-- `sv_fps` was fixed at 20; the server now reads it every frame as 1.7
-  does (cod4-server-frame.md 8).
-- Off the LAN (cod4-handshake.md 15, a retail run in two namespaces):
-  the bans answered the connect where 1.7's answer the `getchallenge`;
-  `sv_minPing` / `sv_maxPing` were never read; a client out of the world
-  was paced by its rate alone where 1.7 waits a second (the gamestate's
-  second fragment 336 ms after the first against retail's 957). All
-  three follow 1.7 now. The `requeststats` exchange after a map change
-  matched retail's packet for packet. Retail's authorize round trip
-  stays out on purpose: with its authorize server silent, 1.7 answers no
-  off-LAN challenge for its first 20 minutes, then each after 7 s.
-- The client's profile stats did not outlive the process: `vcod` now
-  keeps the profile's stats in a plain file of its own
-  (cod4-netfields.md, "The stats file").
+- `setStat` sends a changed stat as 1.7's reliable `N <index> <value>`
+  (`SV_SetClientStat`), with `GScr_SetStat`'s index and byte checks;
+  `getStat` and `setStat` refuse as 1.7's do, receiver and
+  `developer_script` included (cod4-gsc.md, "The stats, the loadout, the
+  perks"). The client keeps the profile's stats in a plain file of its
+  own (cod4-netfields.md, "The stats file").
+- `status` and `getstatus` read the script's `score`; `status` has the
+  separator line, the `^7` after the name, a right-aligned GUID, pings
+  past 999, and `lastmsg` as `svs.time` less `lastPacketTime`
+  (cod4-handshake.md 14).
+- The console: `say`, `tell`, `kick` with no name and `kick all`,
+  `kick`'s brief ban, `banUser`, `banClient`, `unbanUser` with
+  `ban.txt` (`--ban-file`) read at the `getchallenge`, `dumpuser`,
+  `killserver`, `heartbeat`, the dvar commands, `vstr`, `exec`, `wait`,
+  `cmdlist` (14, 14.1).
+- `games_mp.log`: `g_log`, `g_logSync`, `logPrint`, the engine's own
+  lines and `getGuid` ("games_mp.log" below).
+- `g_inactivity` warns and drops ("g_inactivity" below).
+- Rounds, throws and rockets leave from the eye with its walk bob and
+  lean, along the angles the last cmd's aim block left: sway, movement
+  tilt, idle drift, gun spring, and `P_DamageFeedback`'s damage kick, in
+  the client's prediction too (cod4-combat.md 3.2).
+- Rounds meet every solid script model's collision triangles and its
+  attachments' (hidden parts skipped, the part named in the notify) and
+  brush models, and go on past them at the damage left; `notSolid` and
+  `solid` write a script model's contents; glass needs only
+  `Bullet_FireExtended`'s contents bit (cod4-combat.md 13.1, 13.2). The
+  stock destructible cars and barrels break under rounds and blasts
+  (13, `game::cod4::entity_damage`).
+- `setPlayerAngles` sets the view and `delta_angles`.
+- Entity numbers follow retail's: `delete()` frees inside the call, so
+  the free list keeps the scripts' delete order (cod4-combat.md 14).
+- `sv_fps` is read every frame (cod4-server-frame.md 8).
+- Off the LAN (cod4-handshake.md 15): bans answer the `getchallenge`;
+  `sv_minPing` / `sv_maxPing` are read; a client out of the world waits
+  a second between messages as on 1.7 (the gamestate's second fragment
+  went 336 ms after the first, against retail's 957). `requeststats`
+  after a map change matched retail packet for packet.
 
 ## Ranked
 
-Nothing left from the 2026-10-26 audit. Open from the off-LAN run
-(cod4-handshake.md 15): why retail counted its own public address as off
-the LAN; S to measure.
+Open, by how much a player notices.
+
+1. The authorize round trip stays out on purpose: with its authorize
+   server silent, 1.7 answers no off-LAN challenge for its first 20
+   minutes, then each after 7 s; vcod-server answers at once and an
+   off-LAN client's address stands in for its ban guid
+   (cod4-handshake.md 15).
+2. The mantle movetypes of the anim script (`BG_AnimScriptAnimation`
+   with the clip's slot plus 21, 0x80515ef) and the over clip's jump
+   event: other clients see no mantle anim (cod4-pmove.md 17.5,
+   `pmove::anim`). M.
+3. The helicopter's flight runs no move trace and no touch, and its model
+   collision traces at the bind pose (cod4-gsc.md 3.2, `game::cod4::vehicle`).
+   M.
+4. No retail capture gates a rocket's flight, the live grenade's throw
+   back, a prone death's torso or a `killcamentity` killcam
+   (cod4-combat.md 12). S each to capture.
+5. The touch pass after the move and a free spectator's flight have no
+   A/B against retail yet (cod4-pmove.md 15.2). S.
+6. The off-LAN snapshot rate above 20 (cod4-server-frame.md), and why
+   retail counted its own public address as off the LAN
+   (cod4-handshake.md 15). S to measure.
+7. No default master: `sv_master1` is empty, so `dedicated 2`
+   heartbeats only a master the operator names (`cod4::oob`).
 
 ## The retail run
 
@@ -166,12 +164,6 @@ and `bravo` (a spectator); the console commands went over rcon, then
 - vcod (`Cod4Level::inactivity_timer`) runs the timer for the network
   clients' cmds only, so its bots, like retail's, are never timed.
 
-## Owned elsewhere
-
-- Bots and destructibles (script model damage): S-C4-29. Voice chat:
-  C4-80. Hardpoints and their sounds: C4-55. GL grenade, battle chatter,
-  spectate type 1: S-C4-24.
-
 ## Not gaps
 
 - PunkBuster: `sv_punkbuster` reads 0 and no `pb_sv_*` command runs.
@@ -181,3 +173,8 @@ and `bravo` (a spectator); the console commands went over rcon, then
   handler (cod4-gsc.md 3.1); the ones that return a constant
   (`getAssignedTeam`, `buttonPressed`, `sendRanks` and kin) do so on 1.7
   too, VERIFIED there.
+- A `physicsLaunch`ed part stays where it stood on the server: 1.7's
+  `BG_EvaluateTrajectory` (0x80536ba) reads `TR_PHYSICS` at `trBase`
+  too. VERIFIED (cod4-gsc.md 3.2). The retail client flies it off the
+  launch's contact and force. INFERRED. The client's side is
+  `cod4-gaps.md`'s.
