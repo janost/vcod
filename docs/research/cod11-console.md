@@ -1,11 +1,10 @@
 # The client console (CoD 1.1 MP)
 
-What the retail client's drop-down console does and how it looks, read out
-of `CoDMP.exe` 1.1 (image base `0x00400000`, md5 in
-`cod11-events-and-fx.md`) and pak4's `scripts/gfx.shader`. Addresses are
-virtual. The function names are mine, after the Quake III functions whose
-shape they share; `CoDMP.exe` has no symbols. Floats are read out of
-`.rdata` at the address given. vcod's implementation is
+The retail client's drop-down console, read out of `CoDMP.exe` 1.1 (image
+base `0x00400000`, md5 in `cod11-events-and-fx.md`) and pak4's
+`scripts/gfx.shader`. Addresses are virtual. `CoDMP.exe` has no symbols;
+function names follow the Quake III functions of the same shape. Floats
+are read out of `.rdata` at the address given. vcod's implementation is
 `crates/client/src/console/`.
 
 ## 1. Toggle and focus
@@ -17,21 +16,21 @@ Beside it the same function registers `messagemode`, `messagemode2`,
 (default `"3"`, the string at `0x568730`), `con_debug` and `con_restricted`
 (VERIFIED).
 
-The key handler at `0x40dc30` (my `CL_KeyEvent`) compares the key number
+The key handler at `0x40dc30` (`CL_KeyEvent`) compares the key number
 against `0x60` (`` ` ``) and `0x7e` (`~`) ahead of the bind lookup and calls
 `0x4083a0` on a press of either (VERIFIED, the two compares and the call at
-the top of the function). So both keys open the console whatever they are
-bound to; the stock `config_mp.cfg` binds both to `toggleconsole` as well.
+the top of the function). Both keys open the console whatever they are
+bound to; the stock `config_mp.cfg` also binds both to `toggleconsole`.
 INFERRED, off the branch order: an auto-repeat of either key is dropped while
 the console or a message field holds the keys.
 
 `0x4083a0` clears the input field and flips bit 1 of the key-catcher word
 `0x155f2c4` (VERIFIED, the 64-dword clear of `0x142f65c` and the `xor 1`).
 INFERRED: while that bit is set the key handler routes keys to the console
-field instead of the binds, which is what stops game input. Escape with the
-console up does not close it: in game the handler opens the menu under it
-and the console stays down (`cod11-front-end.md` section 13). vcod does the
-same in a game; with no game up its Escape still closes the console.
+field instead of the binds, which stops game input. Escape with the console
+up does not close it: in game the handler opens the menu under it and the
+console stays down (`cod11-front-end.md` section 13). vcod matches in a
+game; with no game up its Escape closes the console.
 
 ## 2. Entering a line
 
@@ -44,9 +43,8 @@ keypad Enter `0xbf`):
 - INFERRED, off the branches at `0x40d22b`..`0x40d2b7`: a line with a leading
   `\` or `/` runs as a command without that character; in game (`cls.state`
   at `0x155f2c0` equal to 6) any other non-empty line runs as
-  `cmd say <line>` (the string `cmd say ` at `0x5679b4`), which is chat; an
-  empty line does nothing. Out of game, every line is a command, because of
-  the rewrite above.
+  `cmd say <line>` (chat; the string `cmd say ` at `0x5679b4`); an empty
+  line does nothing. Out of game the rewrite makes every line a command.
 - VERIFIED: history is a 32-entry ring (`& 0x1f` on the index at
   `0x40d2cd`), each entry a copy of the 0x47-dword field record; the field
   text is 256 bytes (the 0x40-dword clears).
@@ -55,7 +53,7 @@ Tab (key 9) calls `0x40ce80` (VERIFIED, the compare and call), which is the
 completion. INFERRED from the `    %s\n` format at `0x5679d4` beside it: a
 prefix with several matches lists them, four spaces in.
 
-The rest is Q3's shape and vcod follows it: an unknown command is forwarded
+The rest is Q3's shape, and vcod follows it: an unknown command is forwarded
 to the server while connected, except a `+` or `-` one, and prints
 `Unknown command "%s"` (VERIFIED, the string) otherwise. `Not connected to a
 server.` and `usage: connect [server]` are VERIFIED strings; which command
@@ -63,13 +61,13 @@ prints which is INFERRED from Q3.
 
 ## 3. Drawing
 
-`0x40a1e0` (my `Con_DrawConsole`) draws through `0x409f30` (my
-`Con_DrawSolidConsole`) with the fraction 1.0 when the client state word
+`0x40a1e0` (`Con_DrawConsole`) draws through `0x409f30`
+(`Con_DrawSolidConsole`) with the fraction 1.0 when the client state word
 `0x155f2c0` is 0 and the key catcher has neither bit 2 nor bit 8 set, and
 with the sliding fraction `0x142ef60` otherwise (VERIFIED, the `0x3f800000`
-argument and the two state compares). INFERRED: state 0 is disconnected, so
-with no menu up a disconnected client shows a full-screen console. vcod
-shows it whenever there is neither a map nor a server.
+argument and the two state compares). INFERRED: state 0 is disconnected,
+so with no menu up a disconnected client shows a full-screen console. vcod
+shows it full-screen whenever there is neither a map nor a server.
 
 The slide, at `0x40a260` (VERIFIED, the arithmetic): the target is 0.5 while
 key-catcher bit 1 is set and 0 otherwise, and the fraction moves toward it
@@ -97,13 +95,13 @@ at the target. With the default 3 the console is fully down in 1/6 s.
   add 16.0 (`0x568ec8`) to the row's y. `0x416aa0` also passes a cell of
   `640 / w * 8` (`0x568ef4` is 8.0), so a row is laid out one glyph per
   8-pixel cell. Handle 5 is `consoleFont`, `fontImage_18`
-  (`cod11-hud-protocol.md`, section 8, "Font slots"). INFERRED: the y the
-  text call receives is the baseline, as in Q3's UI text, and the scale
-  times the font's own `glyphScale` is its size in window pixels, since the
-  coordinates were converted from pixels to the 640x480 grid first.
+  (`cod11-hud-protocol.md`, section 8, "Font slots"). INFERRED: the text
+  call's y is the baseline, as in Q3's UI text, and the scale times the
+  font's `glyphScale` is its size in window pixels, since the coordinates
+  were converted from pixels to the 640x480 grid first.
 - VERIFIED, pak5's `fonts/fontImage_18.dat`: every printable glyph is an
-  8x16 image with a `glyphScale` of 3, so a third of it fills an 8x16 pixel
-  cell: the console's font is a fixed 8x16 one.
+  8x16 image with a `glyphScale` of 3, so the console font is a fixed 8x16
+  pixel cell.
 - VERIFIED, the integer arithmetic: with `lines` the console's height in
   pixels, the version string sits at x `w - len * 8`, row y `lines - 18`;
   the input line's row is `lines - 32`; the scrollback's first row is
@@ -127,18 +125,17 @@ short twin at `0x567a34`..`0x5682ec`. The config writer's formats are
 `unbindall` (`0x5678c0`); a cvar is printed as `"%s" is:"%s^7"
 default:"%s^7"` (`0x56225c`) and `cvarlist` ends on `%i total cvars`.
 
-VERIFIED: the key handler formats `-%s %i %i` on a key-up whose bind starts
-with `+` and queues it (the call at the top of the release branch of
-`0x40dc30`). So a `+` command gets its `-` twin on release.
+VERIFIED: on a key-up whose bind starts with `+`, the key handler formats
+`-%s %i %i` and queues it (the call at the top of the release branch of
+`0x40dc30`), so a `+` command gets its `-` twin on release.
 
 VERIFIED: `cl_run` is registered at `0x411e60` with the default
 `"1"` (`0x5685e4`) and flag `0x100`. The `+speed` handler loads the button
 record at `0x87a100` (`0x40a8a1`); its `active` word is `0x87a110`. The
 usercmd builder sets `buttons` bit `0x10`, ads, when `cl_run`'s integer
 equals that `active` word and clears it otherwise (`0x40aefb`..`0x40af0e` and
-again at `0x40b130`). So `+speed` is the ads key, held to aim at the default,
-and `toggle cl_run` turns it into a toggle. vcod mirrors this in
-`play::input::ClRun`.
+again at `0x40b130`). So `+speed` is the ads key, held to aim by default;
+`toggle cl_run` makes it a toggle. vcod: `play::input::ClRun`.
 
 ## 5. Client cvars: mouse, fov, rate and snaps
 
@@ -148,9 +145,9 @@ address given and the flags word: `sensitivity` `"5"` (0x5686b0) flags 1,
 `m_filter` `"0"` flags 1, the userinfo `name` `"Unknown Soldier"` flags 3,
 `rate` (0x5667b4) `"5000"` (0x5667bc) flags 3 and `snaps` `"20"`
 (0x5667b0) flags 3.
-VERIFIED: the `name` row's push is at 0x41236b, and 1.5's and UO's
-`CL_Init` register `name` (1.5 0x5a2e60, UO 0x59381c) `"Unknown Soldier"`
-flags 3 the same. vcod's shell defaults `name` to it.
+VERIFIED: the `name` row's push is at 0x41236b; 1.5's and UO's `CL_Init`
+register `name` (1.5 0x5a2e60, UO 0x59381c) `"Unknown Soldier"` flags 3
+too. vcod's shell defaults `name` to it.
 
 VERIFIED: the flag bits are Q3's. `Cvar_Set2` (0x439650) prints `%s is read
 only.` on 0x40, `%s is write protected.` on 0x10 and `%s is cheat
@@ -207,10 +204,10 @@ it and, while `cl_freelook` is 0, stores `-(delta_angles[PITCH] *
 decompilations).
 
 vcod: `play::input::MouseAccum` keeps the two slots and `App::mouse_frame`
-takes them once a frame; `MouseLook::moves` splits the motion, and
-`PlayInput` adds the move counts to the next cmd built, as vcod builds
-cmds on its own clock rather than one a frame. `-mlook` levels the pitch
-over the newest snapshot's `delta_angles`.
+takes them once a frame. `MouseLook::moves` splits the motion, and
+`PlayInput` adds the move counts to the next cmd built (vcod builds cmds on
+its own clock, not one a frame). `-mlook` levels the pitch over the newest
+snapshot's `delta_angles`.
 
 VERIFIED, cgame: the fov function (0x30032e20) ends by storing `fov_x /
 cg_fov` (0x30032fe2, into 0x3020b5f4), and the frame passes it to trap 0x55
@@ -218,14 +215,14 @@ cg_fov` (0x30032fe2, into 0x3020b5f4), and the frame passes it to trap 0x55
 0x3020d5c0 when that is not 1. VERIFIED: that factor is the shellshock's
 mouse scale; 0x3002f5b0 writes it off the active shock's record (`+0x70`)
 and resets it to 1 when no shock runs (`cod11-shellshock.md`, "Mouse").
-vcod multiplies it into the fov ratio (`main.rs`, `look_zoom`).
+vcod multiplies it into the fov ratio (`main.rs`, `App::look_zoom`).
 
-So the default turn is 5 x 0.022 = 0.11 degrees a count, the same both ways,
-and a sight that zooms to half the fov halves it. vcod's
-`play::input::MouseLook` and `console::shell` carry these. vcod keeps its
-own default `name`. The client's userinfo carries `rate` and `snaps` from the
-cvars and resends on a change. The probes keep 25000, so a retail server
-never throttles a capture.
+The default turn is 5 x 0.022 = 0.11 degrees a count both ways, and a sight
+that zooms to half the fov halves it. vcod's `play::input::MouseLook` and
+`console::shell` carry these. vcod's own `rate` default is 25000, not
+retail's 5000 (section 8); `snaps` is 20. The userinfo carries both from
+the cvars and resends on a change. The probes keep 25000, so a retail
+server never throttles a capture.
 
 The options screens' cvars (`mss_volume`, `r_mode`, `r_fullscreen` and the
 inert ones), `setfromcvar`, `exec` and `vid_restart` are in
@@ -234,7 +231,7 @@ section 1.
 
 ## 6. The talk button
 
-VERIFIED, `0x40b600` (my `CL_CmdButtons`, called from the cmd builder
+VERIFIED, `0x40b600` (`CL_CmdButtons`, called from the cmd builder
 `0x40b720`): after the key buttons it ORs `buttons` 0x2 (`BUTTON_TALK`)
 when the key-catcher word `0x155f2c4` is non-zero and
 `cl_bypassMouseInput` (the cvar pointer at `0x142f604`) reads 0 as an
@@ -286,8 +283,8 @@ its disassembly:
   (0x5673f4), the password, then for each argument from argv 1 a space
   (0x568a9c) and the argument, wrapped in `"` when it is empty or holds a
   byte at or below 0x20 (0x40f926..0x40f9cd). VERIFIED. So the line is
-  rebuilt from its tokens, not sent as typed, the way the server rebuilds
-  it again (`cod11-server-handshake.md`, "rcon").
+  rebuilt from its tokens, not sent as typed, as the server rebuilds it
+  again (`cod11-server-handshake.md`, "rcon").
 - A message that reaches 0x400 bytes prints `rcon command too long\n`
   (0x5673dc) and sends nothing (0x40f9d3). VERIFIED.
 - With `cls.state` (0x155f2c0) at 3 or more it sends to the connection's
@@ -333,12 +330,12 @@ those games (`Session::login_rcon`).
 
 ## 8. vcod's config stamp
 
-`vcod_mp.cfg` archives every `CVAR_ARCHIVE` cvar at its value, so a
-value written while vcod's default was something else outlives the
-change: an install vcod ran on before kept `r_aaSamples 4` after the
-default became retail's 1 (cod11-client-perf.md 4, cod4-client-perf.md
-19), and CoD2 kept `r_vc_depthprepass 0` from the opt-in builds
-(cod2-client-perf.md 12, now unarchived and its line dropped).
+`vcod_mp.cfg` archives every `CVAR_ARCHIVE` cvar at its value, so a value
+written under an older vcod default outlives a default change. An existing
+install kept `r_aaSamples 4` after the default became retail's 1
+(cod11-client-perf.md 4, cod4-client-perf.md 19); CoD2 kept
+`r_vc_depthprepass 0` from the opt-in builds (cod2-client-perf.md 12; that
+cvar is no longer archived).
 
 vcod writes `vc_cfgVersion`, an archived cvar of its own, into the
 config (`console::shell::CONFIG_VERSION`). A config whose first line is
@@ -347,19 +344,19 @@ vcod's header and that has no stamp reads as stamp 0; any other file,
 is reset. Once the config ran and the late cvars registered
 (`r_aaSamples`, CoD2's and CoD4's options), `Shell::upgrade_config`
 puts each `STALE_DEFAULTS` row past the stamp back to the cvar's current
-default when the cvar holds that row's old value, then writes the
-config with the stamp moved. A value the player picked stays, and so
-does one set again after the upgrade.
+default when the cvar holds that row's old value, then writes the config
+with the new stamp. A value the player picked stays, as does one set again
+after the upgrade.
 
 | Stamp | Cvar | Old vcod default | Games | Now |
 |---|---|---|---|---|
-| 1 | `r_aaSamples` | 4 (CoD1 and UO until 68d97193, CoD4 until 36372025) | CoD1, CoD4 | 1 |
-| 1 | `name` | `vcod` (until f5635f70) | all | `Unknown Soldier` |
+| 1 | `r_aaSamples` | 4 | CoD1, CoD4 | 1 |
+| 1 | `name` | `vcod` | all | `Unknown Soldier` |
 
 The rows are vcod's own defaults. An old default that was retail's
 has no row: `com_maxfps` 85 (vcod's for a day, then 0), `rate` 5000
 (then 25000), `r_picmip` 1, `r_picmip2` 2 and `r_swapInterval` 0 (then
-0, 0 and 1). The audit took every archived cvar in `console/shell.rs`
-and each default `git log` shows it registered with; nothing else in
-the client registers an archived cvar. A default change to an archived
-cvar adds a row and bumps `CONFIG_VERSION`.
+0, 0 and 1). The rows cover every archived cvar in `console/shell.rs`
+against each default it was ever registered with; nothing else in the
+client registers an archived cvar. A default change to an archived cvar
+adds a row and bumps `CONFIG_VERSION`.

@@ -1,54 +1,50 @@
 # Static-model lighting: lights, leaf lists and the light-visibility grid (lumps 19, 30, 32)
 
 How CoD 1.1 MP lights `misc_model` props and entity models, and the BSP
-data it reads.
-Evidence is `CoDMP.exe` 1.1 (image base `0x00400000`, virtual addresses),
-read in the Ghidra export and the `objdump` disassembly, and the stock
-paks. Each claim carries its own label. An earlier version of this doc said
-lump 30 held 48-byte lights, that nothing in MP read lump 32, and that props
-were lit by their `lightingPrecalc` tint alone. All three were wrong: the
-48-byte loader it cited (0x4db240) is the lump-27 model loader, and the
-grid readers below were missed.
+data it reads. Evidence: `CoDMP.exe` 1.1 (image base `0x00400000`,
+virtual addresses) and the stock paks. Each claim carries its own label.
+Trap: 0x4db240 is the lump-27 model loader (48-byte records), not a lump-30
+light loader; lump 30 holds 72-byte lights, MP does read lump 32, and props
+are not lit by their `lightingPrecalc` tint alone.
 
 ## 1. When retail lights a static model
 
-- VERIFIED: the entity pass of `LoadMap` hands each `misc_model` to 0x4dbae0,
+- VERIFIED: `LoadMap`'s entity pass hands each `misc_model` to 0x4dbae0,
   which reads `origin`, `model`, `angle`/`angles`, `modelscale_vec` (else
   `modelscale`) and `lightingPrecalc` (default `"1 1 1"`, string at
   0x54d2fc) and registers the model through 0x504a20.
 - INFERRED: 0x4dbae0 skips any model whose name starts `xmodel/shadow_`
   (a branch on `strnicmp` against that 14-byte prefix), so retail registers
-  no static model for those names and never draws them. vcod skips them too
-  (`props::is_unregistered`). Section 12 has the rest.
-- VERIFIED: 0x504a20 stores the previous head of the list at 0x14072ec in
-  `record+0x9c` and the record as the new head. INFERRED: 0x5050a0 walks
-  that list from its head calling 0x504cc0 on each, so models are lit in
-  reverse entity order.
+  and draws no static model for those names. vcod skips them too
+  (`props::is_unregistered`). See section 12.
+- VERIFIED: 0x504a20 stores the previous list head at 0x14072ec in
+  `record+0x9c` and makes the record the new head. INFERRED: 0x5050a0
+  walks that list from its head calling 0x504cc0 on each, so models are lit
+  in reverse entity order.
 - VERIFIED: 0x504cc0 stores `(mins + maxs) * 0.5` of the placed model's
   bounds at `draw+0xc` and passes it to 0x4b6210, whose outputs land at
-  `draw+0xb8` (light count), `draw+0xbc` (sky factor), `draw+0xc0` (weights)
-  and `draw+0x184` (light pointers). INFERRED: the bounds from 0x5029d0 are
-  the AABB of every vertex taken through the scaled axis (its loop over the
-  posed vertices).
+  `draw+0xb8` (light count), `draw+0xbc` (sky factor), `draw+0xc0`
+  (weights) and `draw+0x184` (light pointers). INFERRED (its loop over the
+  posed vertices): the bounds from 0x5029d0 are the AABB of every vertex
+  taken through the scaled axis.
 - VERIFIED: the same function stores `identityLight * c * 255` of each
-  `lightingPrecalc` channel, clamped to 0..255, through 0x538be0 into the
-  bytes at `draw+0x6c` (0x504ea7). 0x538be0 is MSVC's truncating
-  `__ftol2`.
-- INFERRED: lighting therefore happens once at load. The light pick
-  (0x4b7450, section 6) runs the first time a static-model surface is built
-  into the surface cache (`r_smc_enable`, 0x505260 calling 0x4e57e0), off the
-  data 0x504cc0 stored.
+  `lightingPrecalc` channel, clamped to 0..255, through 0x538be0 (MSVC's
+  truncating `__ftol2`) into the bytes at `draw+0x6c` (0x504ea7).
+- INFERRED: lighting happens once, at load. The light pick (0x4b7450,
+  section 6) runs off the data 0x504cc0 stored, the first time a
+  static-model surface is built into the surface cache (`r_smc_enable`,
+  0x505260 calling 0x4e57e0).
 
 ## 2. Lump 30: 72-byte light records
 
-- VERIFIED: `LoadMap` calls `R_LoadLights` (0x4db620) at 0x4dd380 with
-  the lump-30 header, next to the "Loading lights..." print; the function
+- VERIFIED: `LoadMap` calls `R_LoadLights` (0x4db620) at 0x4dd380 with the
+  lump-30 header, next to the "Loading lights..." print. The function
   references "R_LoadLights: funny lump size" (0x54d3f8), divides the length
-  by 0x48 and allocates 0x88 bytes per runtime light. INFERRED: a length
-  not divisible by 0x48 is a fatal error (the branch to that print).
+  by 0x48 and allocates 0x88 bytes per runtime light. INFERRED (the branch
+  to that print): a length not divisible by 0x48 is fatal.
 - VERIFIED, stock census of the 12 MP maps: types 1 (12, one per map), 4
-  (462), 5 (35, mp_powcamp) and 7 (13: mp_railyard, mp_powcamp, mp_harbor,
-  mp_chateau).
+  (462), 5 (35, mp_powcamp) and 7 (13: mp_railyard, mp_powcamp,
+  mp_harbor, mp_chateau).
 
 File record, 18 words (VERIFIED from the loader's reads):
 
@@ -79,13 +75,16 @@ Runtime record (0x88 bytes), VERIFIED from 0x4db620's stores:
 | +0x6c | cone exponent |
 | +0x70 | cone half-angle in degrees, `acos(word) * 57.2958`; 180 is no cone |
 
-Per type (INFERRED, the switch on the type in 0x4db620): 1, the sun: ambient 0, diffuse
-from the worldspawn (section 3), luminance recomputed from it, direction
-words 7..9, w 0, constant 1; the loader keeps a pointer to it at
-`world+0x114` (the last type-1 light wins). 2: quadratic 1. 3: linear from
-word 10. 4: quadratic word 10, constant word 11. 5: quadratic 1, cone from
-`acos(word 10)` (0x4db8d8), exponent word 11. 7: quadratic word 10, constant
-word 11, cone from `acos(word 12)` (0x4db927), exponent word 13.
+Per type, INFERRED (the switch on the type in 0x4db620):
+
+| Type | Set-up |
+|---|---|
+| 1, the sun | ambient 0, diffuse from the worldspawn (section 3), luminance recomputed from it, direction words 7..9, w 0, constant 1; the loader keeps a pointer at `world+0x114` (the last type-1 light wins) |
+| 2 | quadratic 1 |
+| 3 | linear from word 10 |
+| 4 | quadratic word 10, constant word 11 |
+| 5 | quadratic 1, cone from `acos(word 10)` (0x4db8d8), exponent word 11 |
+| 7 | quadratic word 10, constant word 11, cone from `acos(word 12)` (0x4db927), exponent word 13 |
 
 ## 3. Worldspawn keys
 
@@ -93,16 +92,16 @@ INFERRED, from the first block of the entity pass at 0x4dbf50 (strings
 0x54d28c..0x54d1c8 compared case-insensitively, stores at 0x11a31c0 to
 0x11a31f0, `world` being 0x11a30e8):
 
-- `ambient` (default 0; above 2.0 it warns "ambient too big" and scales by
-  4/255), `_color` (normalised), `diffuseFraction` (default 0.5), `suncolor`
-  (normalised), `sundiffusecolor` (normalised; `suncolor` when absent),
-  `sunlight` (default 1), `sundirection`.
+- Keys: `ambient` (default 0; above 2.0 it warns "ambient too big" and
+  scales by 4/255), `_color` (normalised), `diffuseFraction` (default
+  0.5), `suncolor` (normalised), `sundiffusecolor` (normalised; `suncolor`
+  when absent), `sunlight` (default 1), `sundirection`.
 - World ambient (`world+0xd8`): `identityLight * ambient * _color` when
   both are non-zero, else 0.
 - With `t = (sunlight - ambient) * identityLight`: the sun light's diffuse
-  (`world+0xe8`) is `suncolor * (1 - diffuseFraction) * t`, and the sky
-  colour (`world+0xf8`) is `sundiffusecolor * diffuseFraction * t`, its
-  luminance at `world+0x108`.
+  (`world+0xe8`) is `suncolor * (1 - diffuseFraction) * t`; the sky colour
+  (`world+0xf8`) is `sundiffusecolor * diffuseFraction * t`, its luminance
+  at `world+0x108`.
 
 ## 4. Lump 19 and the leaf's light list
 
@@ -112,104 +111,109 @@ INFERRED, from the first block of the entity pass at 0x4dbf50 (strings
   count is non-zero and the first lump-19 entry is negative it steps past
   that entry and sets `leaf+0x10` to 1, and "R_LoadNodesAndLeafs: too many
   lights in leaf" (0x54d421) fires above 15 lights.
-- INFERRED: `leaf+0x10` means the leaf sees the sky: only the sky sampling
+- INFERRED: `leaf+0x10` means the leaf sees the sky. Only the sky sampling
   (0x4b4ff0) and the sky factor's 0.25 floor (0x4b6210) read it.
-- INFERRED: the point-to-leaf walk is 0x50b390, where `dot(p, normal) -
-  dist <= 0` takes the back child.
+- INFERRED: the point-to-leaf walk is 0x50b390; `dot(p, normal) - dist <=
+  0` takes the back child.
 
 ## 5. Lump 32: the light-visibility cache
 
 - VERIFIED: 0x4b7c00 compares the length with 0x300000 and copies into a
-  table at 0x0ca28d0 of 262144 eight-byte slots (key, state, sun, mask), read
-  as 8192 buckets of 32 by 0x4b5420. Each file slot is 12 bytes: `u32 key`,
-  `u8 state`, five sun bytes, a pad byte, `u16 mask`; the copy takes the sun
-  byte at `4 + r_diffuseSunSteps`. INFERRED: the five sun bytes are the
-  samples for one to five steps.
+  table at 0x0ca28d0 of 262144 eight-byte slots (key, state, sun, mask),
+  read as 8192 buckets of 32 by 0x4b5420. A file slot is 12 bytes:
+  `u32 key`, `u8 state`, five sun bytes, a pad byte, `u16 mask`. The copy
+  takes the sun byte at `4 + r_diffuseSunSteps`. INFERRED: the five sun
+  bytes are the samples for one to five steps.
 - VERIFIED, mp_carentan census: 37644 used slots, 32513 with state 1 and
   5131 with state 2; the sun bytes top out at 2, 8, 18, 32, 50, twice the
   square of the step count.
-- VERIFIED, the arithmetic in 0x4b5420: the key is `((x & 0x3ff) | (y << 10)) << 12 |
-  (cluster & 0xfff)` and the bucket `(rev(z) + y * 0xc41 - x * 0xc3d) &
-  0x1fff`, `rev` reversing the bits inside each byte (0x4b4de0). x, y, z are
-  grid indices, `cluster` the cluster of the model centre's leaf.
-- VERIFIED: every sampled mp_carentan slot I tested (5369, a seventh of
-  them) fits its bucket with some z in the map's range under that hash.
+- VERIFIED, the arithmetic in 0x4b5420: key
+  `((x & 0x3ff) | (y << 10)) << 12 | (cluster & 0xfff)`, bucket
+  `(rev(z) + y * 0xc41 - x * 0xc3d) & 0x1fff`, `rev` reversing the bits
+  inside each byte (0x4b4de0). x, y, z are grid indices, `cluster` the
+  cluster of the model centre's leaf.
+- VERIFIED: every sampled mp_carentan slot tested (5369, a seventh of
+  them) fits its bucket under that hash with some z in the map's range.
 - INFERRED, 0x4b5420's control flow: a lookup scans its bucket; an empty
-  slot or a full bucket is a miss. A full bucket shifts its 31 first slots down one
-  (`memmove` of 0xf8 bytes) and the new sample takes slot 0. A miss traces
-  (section 7) and stores the result. The lookup returns the mask for state
-  1 and -1 otherwise, and the sun byte either way.
+  slot or a full bucket is a miss. A full bucket shifts its first 31 slots
+  down one (`memmove` of 0xf8 bytes) and the new sample takes slot 0. A
+  miss traces (section 7) and stores the result. The lookup returns the
+  mask for state 1 and -1 otherwise, and the sun byte either way.
 
 ## 6. Sampling and picking lights
 
-VERIFIED: the grid constants below are the floats at 0x5690fc (-131072),
+VERIFIED: the grid constants are the floats at 0x5690fc (-131072),
 0x568ea0 (1/32) and 0x569174 (1/64).
 
 INFERRED, 0x4b6210's control flow on the model centre `p`:
 
 - A centre in a leaf with cluster < 0 gets the sun alone, weight 1, sky
   factor 1. A leaf with no lights and no sky flag gets nothing.
-- Grid cells are 32 x 32 x 64 from (-131072, -131072, -131072): `x =
-  fistp(p.x + 131072 - 0.5) >> 5` and `frac = (p.x + 131072) / 32 - x`;
+- Grid cells are 32 x 32 x 64 from (-131072, -131072, -131072):
+  `x = fistp(p.x + 131072 - 0.5) >> 5`, `frac = (p.x + 131072) / 32 - x`;
   z uses `>> 6` and 1/64.
 - The eight corners carry trilinear weights. A corner whose lookup returns
-  a mask adds its weight to a running total, `weight * sun * 0.5 / steps^2`
-  to the sky factor (`steps` is `r_diffuseSunSteps`), and its weight to each
-  leaf light whose bit is set.
+  a mask adds its weight to a running total, `weight * sun * 0.5 /
+  steps^2` to the sky factor (`steps` is `r_diffuseSunSteps`), and its
+  weight to each leaf light whose bit is set.
 - A total under 0.98 and above 0 scales the sky factor and every light
-  weight by `1 / total`, except the sun's, which gains `1 - total` instead.
-  A sky-flag leaf floors the sky factor at 0.25.
+  weight by `1 / total`, except the sun's, which gains `1 - total`
+  instead. A sky-flag leaf floors the sky factor at 0.25.
 
-INFERRED, the control flow of 0x4b69f0 as 0x4b7450 calls it with the stored
-lights and weights (and the scene's dynamic lights):
+INFERRED, the control flow of 0x4b69f0 as 0x4b7450 calls it with the
+stored lights and weights (and the scene's dynamic lights):
 
-- With a non-zero sky factor, sky luminance and `r_diffuseSunQuality`: at
-  quality 1, or with more than `r_maxEntLights` lights, one directional
-  light from above (direction (0, 0, 1)) with ambient and diffuse each half
-  the sky colour. Otherwise two: ambient 0.75 and diffuse 0.25 of the sky
-  from above, and diffuse -0.25 of it from below (direction (0, 0, -1)) with
-  luminance -0.25 of the sky's. Both take the sky factor as weight; the factor left for the
-  vertex pass becomes 0.
+- With a non-zero sky factor, sky luminance and `r_diffuseSunQuality`:
+  at quality 1, or with more than `r_maxEntLights` lights, one directional
+  light from above (direction (0, 0, 1)), ambient and diffuse each half the
+  sky colour. Otherwise two: ambient 0.75 and diffuse 0.25 of the sky from
+  above, and diffuse -0.25 of it from below (direction (0, 0, -1)) with
+  luminance -0.25 of the sky's. Both take the sky factor as weight; the
+  factor left for the vertex pass becomes 0.
 - Each weighted light gets a key: 1e19 for a negative luminance, else
   `luminance * 2^r_overBrightBits / (c + l d + q d^2) * weight` at the
   centre (0x4b5e30; no falloff for a directional light), plus
   `2^r_overBrightBits * skyLuminance * skyFactor` for types 1 and 8. Keys
-  below `r_minEntLightIntensity` drop; the rest go into a list of at most 8
-  sorted strongest first, a new key ahead of an equal one, a ninth pushing
-  the weakest out.
+  below `r_minEntLightIntensity` drop. The rest go into a list of at most
+  8, strongest first, a new key ahead of an equal one, a ninth pushing the
+  weakest out.
 - 0x4b5ed0 folds lights past `r_maxEntLights` into one; with both at 8 it
   never runs for a static model.
 
-Cvar defaults, VERIFIED from the registration strings; the clamps are
-INFERRED from 0x4b4d10 and 0x4f0780:
-`r_maxEntLights` "8" (clamped to at least quality + 1 and at most the GL
-light count), `r_diffuseSunSteps` "3" (1..5), `r_diffuseSunQuality` "2"
-(0..2), `r_minEntLightIntensity` "0.02", `r_overBrightBits` "1" (forced to 0
-without hardware gamma).
+Cvar defaults VERIFIED from the registration strings; clamps INFERRED from
+0x4b4d10 and 0x4f0780:
+
+| Cvar | Default | Clamp |
+|---|---|---|
+| `r_maxEntLights` | "8" | at least quality + 1, at most the GL light count |
+| `r_diffuseSunSteps` | "3" | 1..5 |
+| `r_diffuseSunQuality` | "2" | 0..2 |
+| `r_minEntLightIntensity` | "0.02" | |
+| `r_overBrightBits` | "1" | forced to 0 without hardware gamma |
 
 ## 7. A missed sample
 
-INFERRED, 0x4b5190's control flow, run at the grid point `g = ((x - 4096) * 32, (y - 4096)
-* 32, (z - 2048) * 64)`:
+INFERRED, 0x4b5190's control flow, run at the grid point
+`g = ((x - 4096) * 32, (y - 4096) * 32, (z - 2048) * 64)`:
 
-- State 2 when `g`'s leaf has cluster < 0 or when a trace from `g` nudged
-  0.01 towards the model centre to the centre is blocked (0x426130, mask
+- State 2 when `g`'s leaf has cluster < 0, or when a trace to the model
+  centre from `g` nudged 0.01 towards it is blocked (0x426130, mask
   0x2001).
-- Otherwise state 1, and for leaf light `i` bit `i`: a directional light
-  is seen when the ray from `g + dir * 0.1` to `g + dir * 32768` leaves
-  without starting solid and either runs its full length or hits a
-  `SURF_SKY` (4) surface (0x4b4f20); a positional light when the ray from
-  `g` nudged 0.1 towards it reaches it (0x4b4f90).
-- For a sky-flag leaf (0x4b4ff0): a `steps x steps` fan of rays from `g` up
-  0.1 to `g + (dx, dy, 32768)`, `dx` and `dy` spaced 32768 apart (16384 above
-  3 steps) and centred; each that gets out adds 2 to the sun byte and sets
-  mask bit 0x8000.
+- Otherwise state 1, and for leaf light `i`, bit `i`. A directional light
+  is seen when the ray from `g + dir * 0.1` to `g + dir * 32768` does not
+  start solid and either runs its full length or hits a `SURF_SKY` (4)
+  surface (0x4b4f20). A positional light is seen when the ray from `g`
+  nudged 0.1 towards it reaches it (0x4b4f90).
+- A sky-flag leaf (0x4b4ff0): a `steps x steps` fan of rays from `g` up
+  0.1 to `g + (dx, dy, 32768)`, `dx` and `dy` spaced 32768 apart (16384
+  above 3 steps) and centred. Each that gets out adds 2 to the sun byte and
+  sets mask bit 0x8000.
 
 ## 8. The vertex colour
 
-INFERRED, 0x4e5210's control flow, called per vertex by the surface cache's
-`lightingDiffuse` case (0x4e57e0, case 10) with the world position and the
-normal taken through the scaled axis and renormalised by 0x42db90
+INFERRED, 0x4e5210's control flow. The surface cache's `lightingDiffuse`
+case (0x4e57e0, case 10) calls it per vertex with the world position and
+the normal taken through the scaled axis and renormalised by 0x42db90
 (`VectorNormalize`):
 
 - A map with no lump-19 entries (`world+0x118` zero) colours every vertex
@@ -217,138 +221,159 @@ normal taken through the scaled axis and renormalised by 0x42db90
 - Otherwise `colour = sky * skyFactor + worldAmbient`, plus per picked
   light `(max(0, N . L) * diffuse + ambient) * atten`. A directional light
   uses its stored direction and `atten = weight`. A positional light uses
-  the unit vector to it and `atten = weight / ((d q + l) d + c)`; with a
+  the unit vector to it and `atten = weight / ((d q + l) d + c)`. With a
   cone, the cosine between that vector and the cone axis must exceed the
-  sine table entry `(cutoff + 90) * 1024 / 360` (a quantised cosine) and
-  then multiplies in `exponent` times, else `atten` is 0.
+  sine table entry `(cutoff + 90) * 1024 / 360` (a quantised cosine) and is
+  then multiplied in `exponent` times; else `atten` is 0.
 - Each channel is `fistp(colour * 255)` clamped to 0..255.
 
 ## 9. Which stage gets which colour
 
-- VERIFIED, the string loads and stores at 0x4f8c69-0x4f8e34: the `rgbGen`
-  keywords map to stage values
-  wave 8, const and constLighting 0xc, identity 2, identityLighting 1,
-  entity 3, oneMinusEntity 4, vertex 6, exactVertex 5, lightingAmbient 9,
-  lightingDiffuse 10, oneMinusVertex 7, lightingPrecalc 0xb.
+- VERIFIED, the string loads and stores at 0x4f8c69-0x4f8e34: the
+  `rgbGen` keywords map to stage values
+
+  | Keyword | Value |
+  |---|---|
+  | identityLighting | 1 |
+  | identity | 2 |
+  | entity | 3 |
+  | oneMinusEntity | 4 |
+  | exactVertex | 5 |
+  | vertex | 6 |
+  | oneMinusVertex | 7 |
+  | wave | 8 |
+  | lightingAmbient | 9 |
+  | lightingDiffuse | 10 |
+  | lightingPrecalc | 0xb |
+  | const, constLighting | 0xc |
+
 - INFERRED: a prop skin named `type@name` loads the template
-  `shadertypes/model/<type>.stype` (0x4fc0c0 builds `@model/<type>`); a skin
-  with no `@` and no script gets an implicit stage with `rgbGen
+  `shadertypes/model/<type>.stype` (0x4fc0c0 builds `@model/<type>`). A
+  skin with no `@` and no script gets an implicit stage with `rgbGen
   lightingDiffuse` (0x4fc440 stores 10 in its -1 "model skin" case).
 - VERIFIED, stock `shadertypes/model/*.stype`: 50 stages say
   `lightingDiffuse`; `foliage_detail` says `lightingPrecalc`; `cloth_light`
   and `glass_light` `identityLighting`; the two `objective_incomplete`
   types `constLighting`.
 - INFERRED, 0x4e57e0's switch: the surface cache colours case 1 with the
-  `identityLight` byte, case 0xb with the stored precalc bytes and case 0xc
+  `identityLight` byte, case 0xb with the stored precalc bytes, case 0xc
   with the stage constant.
 - INFERRED: `radialNormals` (0x547048), which four foliage types carry, is
   matched and its line skipped (0x4fab30).
 
 ## 10. vcod
 
-`crates/common/src/static_light.rs` ports sections 2 to 8 and
+`crates/common/src/static_light.rs` ports sections 2 to 8;
 `props::build` applies section 9:
 
 - Lighting is computed at map load with retail's defaults and one
-  overbright bit (`identityLight` 0.5, as `renderer.rs` assumes), in reverse
-  entity order so misses fill the cache in retail's order. The bounds centre
-  is the AABB of the baked LOD-0 vertices.
+  overbright bit (`identityLight` 0.5, as `renderer.rs` assumes), in
+  reverse entity order so misses fill the cache in retail's order. The
+  bounds centre is the AABB of the baked LOD-0 vertices.
 - Dynamic lights add per vertex on top of the baked colour (section 11).
 - Misses trace through a `CollisionWorld` built from the world brushes
-  alone, with no static models, the first time a sample is missing.
+  alone, no static models, the first time a sample is missing.
 - `shadow_*` placements are not drawn (section 12).
 
-VERIFIED, vcod measurement 2026-10-09 (release build, all 12 stock maps):
-most models find all eight corners in lump 32 (mp_carentan 425 of 592,
-mp_chateau 858 of 883); partial misses come in fours, one z layer, or with
+VERIFIED, vcod measurement (release build, all 12 stock maps): most
+models find all eight corners in lump 32 (mp_carentan 425 of 592,
+mp_chateau 858 of 883). Partial misses come in fours, one z layer, or with
 the centre one x cell over. INFERRED: the compile sampled a slightly
-different centre for those, or a different version of the map; retail would
-trace the same misses. Lighting mp_carentan's 592 models, 844 traced
-samples included, takes about 0.5 s; there is no per-frame cost. The mean
+different centre for those, or a different version of the map; retail
+would trace the same misses. Lighting mp_carentan's 592 models, 844 traced
+samples included, takes about 0.5 s, with no per-frame cost. The mean
 vertex byte over all prop vertices lands near `identityLight *
 lightingPrecalc` (mp_carentan 62 against 49, mp_brecourt 66 against 60).
 
 ## 11. Dynamic lights on models
 
-- VERIFIED, `RE_AddLightToScene` at 0x4e9b00 (the refexport slot stored at
-  0x4b4b64): it returns without a renderer, with 32 lights queued already,
-  or with an intensity at or below 0. Otherwise it fills a 0x88-byte record
-  at `0x80000 + n * 0x88` in the scene buffer: type 2, the colour raw at
-  +0x04, `intensity^2 / 32` at +0x10 (0x568ea0 is 1/32), ambient 0, diffuse
-  `identityLight * intensity^2 / 32 * colour` at +0x24, the origin at
-  +0x44, w 1, constant falloff 0.001 (0x3a83126f), linear 0, quadratic 1,
-  cone 180 degrees (none), and the intensity itself at +0x74.
+- VERIFIED, `RE_AddLightToScene` at 0x4e9b00 (refexport slot stored at
+  0x4b4b64): it returns without a renderer, with 32 lights already queued,
+  or with an intensity at or below 0. Otherwise it fills a 0x88-byte
+  record at `0x80000 + n * 0x88` in the scene buffer:
+
+  | Field | Value |
+  |---|---|
+  | type | 2 |
+  | +0x04 | the colour, raw |
+  | +0x10 | `intensity^2 / 32` (0x568ea0 is 1/32) |
+  | ambient | 0 |
+  | +0x24 (diffuse) | `identityLight * intensity^2 / 32 * colour` |
+  | +0x44 | the origin, w 1 |
+  | falloff | constant 0.001 (0x3a83126f), linear 0, quadratic 1 |
+  | cone | 180 degrees (none) |
+  | +0x74 | the intensity |
+
 - VERIFIED: `RE_RenderScene` (0x4e9cb0) publishes the frame's lights twice
-  from `r_dynamiclight` (0x16c3868, default "1" at 0x5685e4): the count at
-  0x16c5798 (the scene's +0x160, with the array at +0x164) is zero when the
-  cvar is 0, and the count at 0x16c5794 is zero unless the cvar is 1.
-  INFERRED: 0x16c5794 feeds the world's dlight bits (0x4b59f0) and
-  0x16c5798 the model light pick, so `r_dynamiclight 2` lights models only.
-- VERIFIED, 0x4b69f0 before the sky lights: each scene light whose squared
-  distance to the model's lighting origin is at most `4 * intensity^2`
-  (0x569080 is 4.0), so within twice its intensity, joins the candidates
-  with weight 1 and sets the model's `+0xa0` flag. It then competes for the eight slots like any other
-  light (section 6).
+  from `r_dynamiclight` (0x16c3868, default "1" at 0x5685e4). The count at
+  0x16c5798 (the scene's +0x160, array at +0x164) is zero when the cvar is
+  0; the count at 0x16c5794 is zero unless the cvar is 1. INFERRED:
+  0x16c5794 feeds the world's dlight bits (0x4b59f0) and 0x16c5798 the
+  model light pick, so `r_dynamiclight 2` lights models only.
+- VERIFIED, 0x4b69f0 before the sky lights: each scene light whose
+  squared distance to the model's lighting origin is at most
+  `4 * intensity^2` (0x569080 is 4.0), so within twice its intensity,
+  joins the candidates with weight 1 and sets the model's `+0xa0` flag. It
+  then competes for the eight slots like any other light (section 6).
 - VERIFIED, the static-model draw at 0x505260: a surface with no cached
   colours calls the light pick (0x4b7450) and builds the cache (0x4e57e0)
-  only when `+0xa0` is clear. A cached surface whose material has bit
-  0x18 set at `+0x54` calls the pick again and draws its uncached
-  surface when a dynamic light reached the model. INFERRED: a prop near a
-  dynamic light is relit each frame through the GL lighting path
-  (`cod11-gamma.md` section 5) with the dynamic light among its eight, and
-  goes back to its cache once the light is gone. The materials that carry
-  bit 0x18 are those with a `lightingDiffuse` or `lightingAmbient` stage
-  (section 13).
-- INFERRED: GL lighting gives a dynamic light `max(0, N . L) * diffuse /
-  (d^2 + 0.001)` per vertex: at an intensity of 800 (the grenade's
-  `Light`), one framebuffer unit at 100 units, a quarter at 200.
+  only when `+0xa0` is clear. A cached surface whose material has bit 0x18
+  set at `+0x54` calls the pick again and draws its uncached surface when a
+  dynamic light reached the model. INFERRED: a prop near a dynamic light is
+  relit each frame through the GL lighting path (`cod11-gamma.md` section
+  5) with the dynamic light among its eight, and goes back to its cache
+  once the light is gone. The materials with bit 0x18 are those with a
+  `lightingDiffuse` or `lightingAmbient` stage (section 13).
+- INFERRED: GL lighting gives a dynamic light
+  `max(0, N . L) * diffuse / (d^2 + 0.001)` per vertex: at intensity 800
+  (the grenade's `Light`), one framebuffer unit at 100 units, a quarter at
+  200.
 - Entity models take the same pick every frame (section 13).
 - VERIFIED, the callers of `re.AddLightToScene` (refexport `+0x4c`, the
   table copied to 0x1432860 at 0x411ab6; arguments origin, intensity, r,
   g, b):
   - The efx `Light` element's draw at 0x490625 (vtable 0x559f64; slot 5,
     0x490970, returns 0xb, the `light` block id) passes its interpolated
-    size as the intensity: 0x4906a0 writes `sizeStart * p + sizeEnd * (1 -
-    p)` to `+0xb8` (start `+0xdc`, end `+0xe0`), and 0x4907f0 lerps the
-    `rgb` curve into the colour at `+0x48..+0x50`. So the efx block's size
-    is the intensity.
+    size as the intensity. 0x4906a0 writes
+    `sizeStart * p + sizeEnd * (1 - p)` to `+0xb8` (start `+0xdc`, end
+    `+0xe0`), and 0x4907f0 lerps the `rgb` curve into the colour at
+    `+0x48..+0x50`. So the efx block's size is the intensity.
   - cgame trap 0x42 (dispatch at 0x402db5), from two places in
     `cgame_mp_x86.dll`: every entity's `constantLight` (0x3001af20:
-    intensity `(cl >> 24) * 4`, each low byte / 255, at the lerped origin),
-    and a missile's `projectileDLight` (0x3001b4c1 through 0x30030fa0;
-    weaponInfo `+0x12c` from weaponDef `+0x334`). Stock `panzerfaust_mp`
-    says `projectileDLight 200`. INFERRED: the cgame never writes the
-    colour at weaponInfo `+0x130..+0x138`, so that light is black and
-    still takes a slot.
+    intensity `(cl >> 24) * 4`, each low byte / 255, at the lerped
+    origin), and a missile's `projectileDLight` (0x3001b4c1 through
+    0x30030fa0; weaponInfo `+0x12c` from weaponDef `+0x334`). Stock
+    `panzerfaust_mp` says `projectileDLight 200`. INFERRED: the cgame never
+    writes the colour at weaponInfo `+0x130..+0x138`, so that light is
+    black and still takes a slot.
   - The UI trap 0x1e (0x4185b9), not in game.
 - VERIFIED, stock `.efx` census: 71 files carry one `Light` each (muzzle
   flashes, grenade and mortar blasts, cannon impacts). A muzzle flash
   lives 100 ms at size 210 to 190 (random), `grenade2.efx` 100 ms at size
   800, both linear to 0. INFERRED: a frame holds about one light per gun
-  fired in the last 100 ms plus one per blast, so the 32 cap binds only
-  in heavy fights.
-- VERIFIED: there is no additive scene light; refexport `+0x54`
+  fired in the last 100 ms plus one per blast, so the 32 cap binds only in
+  heavy fights.
+- VERIFIED: there is no additive scene light. Refexport `+0x54`
   (0x4e9c10, cgame trap 0x43) adds a corona ("added corona with invalid
   id", 0x20 per frame), and its cgame wrapper 0x30030ff0 has no callers.
 
 vcod (`vs_prop` in `shader.wgsl`):
 
 - A prop vertex of a `lightingDiffuse` skin (vertex alpha 255) adds every
-  fx light within twice its radius by the formula above to its baked
+  fx light within twice its radius, by the formula above, to its baked
   colour, clamped at 1, then doubles for the display. The fx `Light`
   block's size stands in for the intensity (INFERRED: the efx renderer's
   call is not traced). On a prop the dynamic light does not push a baked
   light out of the eight slots; on an entity model it does (section 13).
 - The world takes the dlight pass with every scene light, fx and cgame
-  ones alike, as the projection of 0x4ff690 over the soups each light
-  reaches (`cod11-shader-scripts.md` section 3). Before 2026-10-12 it
-  added vcod's own falloff from the 8 fx lights nearest the camera.
+  alike, as the projection of 0x4ff690 over the soups each light reaches
+  (`cod11-shader-scripts.md` section 3).
 - The scene light list is the first 32 fx lights in spawn order
   (`fx::sim::MAX_SCENE_LIGHTS`), as retail's queue keeps the first 32
-  added; entity picks see all of them, then the cgame's own lights
+  added. Entity picks see all of them, then the cgame's own lights
   (`entities::BuiltScene::scene_lights`), cut at 32 together. INFERRED:
-  the order between the efx lights and the cgame's is not traced; vcod
-  puts the fx lights first.
+  the order between the efx lights and the cgame's is not traced; vcod puts
+  the fx lights first.
 - The cgame's lights: every entity's `constantLight` at its lerped origin
   (`entities::constant_light`), and a drawn missile's `projectileDLight`
   in black. VERIFIED: 0x3001d5f0 calls 0x3001af20 for every packet entity
@@ -356,10 +381,10 @@ vcod (`vs_prop` in `shader.wgsl`):
   too; the colour scale at 0x30069420 is 1/255 (0.0039215688).
 - VERIFIED: the string `constantLight` is in neither `game_mp_x86.dll` nor
   `game.mp.i386.so`, and `SP_light` (0x53204) only calls `G_FreeEntity`.
-  INFERRED: so no script field reaches the field and stock content never
-  sets it; only the panzerfaust's light is live. vcod adds the cgame's
-  lights to the entity pick and to the world's dlight pass. VERIFIED,
-  0x4ffa60 under the copy's `rgbGen identity` (0x4fc440, 0x4fb3c0;
+  INFERRED: no script field reaches the field and stock content never sets
+  it; only the panzerfaust's light is live. vcod adds the cgame's lights to
+  the entity pick and to the world's dlight pass. VERIFIED, 0x4ffa60 under
+  the copy's `rgbGen identity` (0x4fc440, 0x4fb3c0;
   `cod11-shader-scripts.md` section 3): on a lightmapped surface the pass
   ignores a light's colour, so the black rocket light still brightens the
   walls it passes; under `dlightshader` it adds nothing.
@@ -372,51 +397,50 @@ vcod (`vs_prop` in `shader.wgsl`):
   placements (section 1). `mp_powcamp` and `mp_rocket` carry the world
   shader `textures/common/shadow`, drawn as world geometry.
 - VERIFIED: `cg_shadows` is registered by the renderer's cvar block
-  (0x4b3300, `"0"` at 0x56871c, flags 0x201) and by the cgame (`cgame_mp_x86.dll`
-  table entry at 0x30074a24: vmCvar 0x301d9380, default `"0"`, flags 0x201).
-- VERIFIED, the cgame's player shadow 0x30027630 (traced in
-  `cod11-events-and-fx.md` section 9.7): with `cg_shadows` 0 it returns at
-  once; at 1 it drops the `markShadow` shader as a temporary mark of
-  radius 16 under a live player. Value 2 is the renderer's stencil path
-  (`"<stencil shadow>"`).
+  (0x4b3300, `"0"` at 0x56871c, flags 0x201) and by the cgame
+  (`cgame_mp_x86.dll` table entry at 0x30074a24: vmCvar 0x301d9380,
+  default `"0"`, flags 0x201).
+- VERIFIED, the cgame's player shadow 0x30027630 (`cod11-events-and-fx.md`
+  section 9.7): with `cg_shadows` 0 it returns at once; at 1 it drops the
+  `markShadow` shader as a temporary mark of radius 16 under a live
+  player. Value 2 is the renderer's stencil path (`"<stencil shadow>"`).
 - So retail's default draws no blob shadow under players. vcod reads
-  `cg_shadows` and places the blob at 1
-  (`cod11-events-and-fx.md` section 9.7).
+  `cg_shadows` and places the blob at 1 (`cod11-events-and-fx.md` section
+  9.7).
 
 ### vcod's `vc_shadows` (beyond retail)
 
 `vc_shadows 1` (`crates/client/src/shadows.rs`, `shadow_cast.wgsl`,
-`shadow_mask.wgsl`) is vcod's own and has no retail counterpart; the
-facts it reads are labelled, the design is not a claim about retail.
+`shadow_mask.wgsl`) is vcod's own, with no retail counterpart. The facts
+it reads are labelled; the design is not a claim about retail.
 
-- VERIFIED, vcod measurement 2026-10-12 (`static_light::tests::stock_suns`):
-  every stock 1.1 map has one kind-1 light (section 2) pointing up,
-  `z` 0.41 (mp_dawnville) to 0.91 (mp_rocket). The sun's diffuse luminance
-  against sky plus ambient (section 3) ranges from 0.059 / 0.229
-  (mp_hurtgen) to 0.351 / 0.225 (mp_dawnville); mp_carentan is 0.212 /
-  0.217.
-- The sun is the kind-1 light's direction (words 7..9); its share of a
-  sunlit point is `r n.L / (r n.L + 1)` and a shadowed pixel is
-  multiplied by one minus that share (`shadows::sun_ratio`). Before
-  2026-10-12 `r` was the worldspawn split's sun luminance over sky plus
-  ambient (section 3), which keeps 59 % on mp_carentan flat ground. The
-  lightmaps disagree (next bullet), so `r` is now the value that keeps
-  the map's measured part on flat ground at the sun's elevation, clamped
-  to keep at least 25 %. A 1024-unit square with its own measured keep
-  (the table after next) uses that one instead, bilinear between square
-  centres (`shadows::keep_texels`, an R8 texture of 128 x 128 squares
-  read by the mask and the receivers); elsewhere the map's keep holds.
-  The worldspawn ratio stands in until the measurement (a thread started
-  the first frame `vc_shadows` is on: 16384 samples through the brushes,
-  30-950 ms on the measuring machine) finishes, and for a map it fails on.
-- VERIFIED, vcod measurement 2026-10-12 (`static_light::sun_keep`, the
-  ignored test `stock_sun_keep`): the lightmap texel under the centroid of
-  every lightmapped triangle facing within 18 degrees of straight up,
-  kept when a point trace (mask 0x2001, the light cache's) 1 unit above it
-  reaches the sky straight up, split by whether one towards the sun does;
-  median luminance of the stored bytes per side. Props in the trace,
-  40000 triangles at most (brushes only, 4096 at most, as the client
-  runs it, in brackets):
+- VERIFIED, vcod measurement (`static_light::tests::stock_suns`): every
+  stock 1.1 map has one kind-1 light (section 2) pointing up, `z` 0.41
+  (mp_dawnville) to 0.91 (mp_rocket). The sun's diffuse luminance against
+  sky plus ambient (section 3) ranges from 0.059 / 0.229 (mp_hurtgen) to
+  0.351 / 0.225 (mp_dawnville); mp_carentan is 0.212 / 0.217.
+- The sun is the kind-1 light's direction (words 7..9). Its share of a
+  sunlit point is `r n.L / (r n.L + 1)`, and a shadowed pixel is
+  multiplied by one minus that share (`shadows::sun_ratio`). `r` is the
+  value that keeps the map's measured part (next bullet) on flat ground at
+  the sun's elevation, clamped to keep at least 25 %. Trap: the worldspawn
+  split's sun luminance over sky plus ambient (section 3) keeps 59 % on
+  mp_carentan flat ground, and the lightmaps disagree. A 1024-unit square
+  with its own measured keep (the table after next) uses that one,
+  bilinear between square centres (`shadows::keep_texels`, an R8 texture
+  of 128 x 128 squares read by the mask and the receivers); elsewhere the
+  map's keep holds. The worldspawn ratio stands in until the measurement
+  finishes (a thread started the first frame `vc_shadows` is on: 16384
+  samples through the brushes, 30-950 ms on the measuring machine), and on
+  a map it fails on.
+- VERIFIED, vcod measurement (`static_light::sun_keep`, the ignored test
+  `stock_sun_keep`): the lightmap texel under the centroid of every
+  lightmapped triangle facing within 18 degrees of straight up, kept when
+  a point trace (mask 0x2001, the light cache's) 1 unit above it reaches
+  the sky straight up, split by whether one towards the sun does; median
+  luminance of the stored bytes per side. Props in the trace, 40000
+  triangles at most (in brackets: brushes only, 4096 at most, as the
+  client runs it):
 
   | map | lit | shadowed | keep | (brushes only) | worldspawn split |
   |---|---|---|---|---|---|
@@ -433,22 +457,22 @@ facts it reads are labelled, the design is not a claim about retail.
   | mp_rocket | 0.405 | 0.234 | 0.578 | (0.440) | 0.733 |
   | mp_ship | 0.376 | 0.203 | 0.542 | (0.549) | 0.671 |
 
-  mp_bocage did not resolve in this install. The brushes-only run had
-  under 30 shadowed samples on mp_hurtgen and mp_rocket, and mp_powcamp
-  and mp_chateau have little sunlit ground, which the brackets show. On
-  ten of twelve maps the baked shade is darker than the worldspawn split
-  predicts, by 0.09 to 0.26 of the lit value, and no single factor maps
-  one onto the other (mp_carentan's sun counts 1.6 times its split,
-  mp_depot's 2.6 times). INFERRED: the compiler weighs the sun against
-  the sky by rules section 3's keys do not show.
-- VERIFIED, vcod measurement 2026-10-12 (the ignored test
+  mp_bocage was not measured. The brushes-only run had under 30 shadowed
+  samples on mp_hurtgen and mp_rocket, and mp_powcamp and mp_chateau have
+  little sunlit ground, which the brackets show. On ten of twelve maps the
+  baked shade is darker than the worldspawn split predicts, by 0.09 to
+  0.26 of the lit value, and no single factor maps one onto the other
+  (mp_carentan's sun counts 1.6 times its split, mp_depot's 2.6 times).
+  INFERRED: the compiler weighs the sun against the sky by rules section
+  3's keys do not show.
+- VERIFIED, vcod measurement (ignored test
   `static_light::tests::regional_sun_keep`, same samples and traces, props
-  in): the keep per 1024-unit square of the map, for squares with at
-  least 32 samples on each side (`RegionKeep::MIN_SAMPLES`), against the
-  whole map's. The noise column halves each square's samples (alternate
-  samples, at least 32 a side in each half) and compares the two halves'
-  keeps; the last column is the client's run (brushes only, 16384
-  samples) against the props-in one, per square known to both:
+  in): the keep per 1024-unit square, for squares with at least 32 samples
+  on each side (`RegionKeep::MIN_SAMPLES`), against the whole map's. The
+  halves column splits each square's samples (alternate samples, at least
+  32 a side in each half) and compares the two halves' keeps. The last
+  column is the client's run (brushes only, 16384 samples) against the
+  props-in one, per square known to both:
 
   | map | squares known | square keep | mean \|square - map\| | squares off by > 0.1 | halves: squares, mean \|a - b\| | brushes only: squares, mean \|diff\| |
   |---|---|---|---|---|---|---|
@@ -467,30 +491,29 @@ facts it reads are labelled, the design is not a claim about retail.
 
   Where a map has squares to compare, they differ from the map's keep by
   two to ten times what two halves of one square differ by, so the spread
-  is the map's and not the sampling's. With 16 samples a side instead of
-  32, mp_chateau's halves differed by 0.165 against a spread of 0.203, so
-  the floor is 32. mp_hurtgen and mp_powcamp, whose shaded ground is
-  mostly not open to the sky, keep no square, and mp_rocket one: there
-  the whole map's keep stands. INFERRED: a square's keep follows how much
-  sky and other light reach its ground besides the sun (open fields keep
-  less in the shade than streets between houses).
+  is the map's, not the sampling's. With 16 samples a side instead of 32,
+  mp_chateau's halves differed by 0.165 against a spread of 0.203, so the
+  floor is 32. mp_hurtgen and mp_powcamp, whose shaded ground is mostly
+  not open to the sky, keep no square, and mp_rocket one; there the whole
+  map's keep stands. INFERRED: a square's keep follows how much sky and
+  other light reach its ground besides the sun (open fields keep less in
+  the shade than streets between houses).
 - Casters: snapshot entities through their first depth-writing stage,
-  alpha-tested as drawn, every brush model drawn off its spawn pose, and
+  alpha-tested as drawn; every brush model, drawn off its spawn pose; and
   every world or prop surface whose shader deforms its vertices
-  (`deformVertexes wave` or `flap`): it casts in the dynamic layer each
+  (`deformVertexes wave` or `flap`), which casts in the dynamic layer each
   frame through its first depth-writing stage, deformed as the main pass
   deforms it (`shadow_cut.wgsl`'s `vs_cut_stage`), and not in the static
-  layer.
-  The viewmodel does not cast. Receivers: every opaque pixel, read back
-  from the scene depth after the last draw sorting up to decal (so
-  polygon-offset layers and impact marks darken with their surface), at
-  the same split as `vc_ssao` and before its multiply, before the dlight
-  pass, anything blended and `vc_bloom`'s blur.
+  layer. The viewmodel does not cast.
+- Receivers: every opaque pixel, read back from the scene depth after the
+  last draw sorting up to decal (so polygon-offset layers and impact marks
+  darken with their surface). That is the same split as `vc_ssao`, before
+  its multiply, the dlight pass, anything blended and `vc_bloom`'s blur.
 - Surfaces drawn after that split: a world or entity stage whose shader
   sorts past decal and whose blend lays its own colour (none, `blend`,
   `GL_ONE GL_ONE_MINUS_SRC_ALPHA`) multiplies its colour, before fog, by
-  the same factor the mask would give a pixel at its own position, its
-  normal from the position's screen derivatives (world) or the vertex
+  the factor the mask would give a pixel at its own position. Its normal
+  comes from the position's screen derivatives (world) or the vertex
   normal (entity) (`STAGE_FLAG_SUN_SHADOW`, `shadow_receive.wgsl`, read
   through the camera group). What shows through it was masked at its own
   depth. Additive stages (destination factor one) add light and stay; a
@@ -498,130 +521,130 @@ facts it reads are labelled, the design is not a claim about retail.
   behind, already masked, and stays. Effects and the viewmodel stay.
 - The world's sun shadows are already in the lightmaps, so the map
   carries a second layer, the static world (opaque soups, props and every
-  submodel at its spawn pose), and a pixel darkens only where that layer
-  sees the sun and the dynamic layer does not. This geometry test stands
-  in for "sunlit per its lightmap": indoor points and points already in a
-  baked shadow keep their light. A moved door's baked spawn-pose shadow
-  stays, as it does in retail.
-- Both layers alpha-test a caster whose surface cuts in the main pass:
-  an implicit soup, prop or `*_masked` overlay whose top mip has a texel
-  under alpha 128 (`assets::has_cutout_alpha`) discards below half, and
-  a scripted surface casts through its first depth-writing stage and that
-  stage's `alphaFunc`, bundle 0 on its `uv0` transform. Decals, layers,
-  surfaces sorted past opaque and scripted surfaces with no depth-writing
-  stage do not cast, nor do a prop whose `type@` template sorts past
-  opaque (`glass_blend_*`, `cloth_blend`, `foliage_blend`: vcod's prop
-  pass draws them opaque with a cutout, the template blends) or a world
-  surface with `surfaceparm water` (mp_ship's ocean, sort 3, which also
-  waves off the pose a cached layer holds). Without the test foliage cards, fences and grilles
-  cast solid blocks, the static layer reads the ground under them as
-  shadowed, and a player in the sun gaps of a tree's baked shadow gets no
-  cast shadow.
-- One 2048-texel orthographic window, 1.5 units a texel, centred 768
-  units ahead of the eye and snapped to a 192-unit grid in light space,
-  fading out over its outer fifth. One map instead of cascades: a dynamic
-  caster's shadow matters within engagement range. Depth spans the
-  world's bounds along the sun. The texel grid holds still in the world,
-  so the static layer never redraws what it already holds: it is a
-  separate 2560-texel map that wraps (a texel's spot is its grid
-  coordinate modulo the side) and aims to hold the window plus 256 texels
-  (384 units) on every side. It draws at most one strip a frame of about
-  16 x 2560 texels (`BUDGET`), on the side nearest the eye of those the
-  window still lacks, else of those short of the margin. After a load, a
-  teleport, a change of casters, or when it no longer holds the 256
-  texels (384 units) around the eye, it starts over with the 512 texels
-  (768 units) around the eye alone and fills in from there (about 100
-  frames to the whole window, 160 to the margin). The mask and the
-  receivers leave a point the layer does not hold yet unshadowed, so a
-  far cast shadow appears a moment after a teleport. The mask reads the
-  static layer through a repeating sampler at the window's offset in it.
+  submodel at its spawn pose). A pixel darkens only where that layer sees
+  the sun and the dynamic layer does not. This geometry test stands in for
+  "sunlit per its lightmap": indoor points and points already in a baked
+  shadow keep their light. A moved door's baked spawn-pose shadow stays,
+  as in retail.
+- Both layers alpha-test a caster whose surface cuts in the main pass. An
+  implicit soup, prop or `*_masked` overlay whose top mip has a texel
+  under alpha 128 (`assets::has_cutout_alpha`) discards below half. A
+  scripted surface casts through its first depth-writing stage and that
+  stage's `alphaFunc`, bundle 0 on its `uv0` transform. These do not cast:
+  decals, layers, surfaces sorted past opaque, scripted surfaces with no
+  depth-writing stage, a prop whose `type@` template sorts past opaque
+  (`glass_blend_*`, `cloth_blend`, `foliage_blend`: vcod's prop pass draws
+  them opaque with a cutout, the template blends), and a world surface
+  with `surfaceparm water` (mp_ship's ocean, sort 3, which also waves off
+  the pose a cached layer holds). Without the test, foliage cards, fences
+  and grilles cast solid blocks, the static layer reads the ground under
+  them as shadowed, and a player in the sun gaps of a tree's baked shadow
+  gets no cast shadow.
+- Projection: one 2048-texel orthographic window, 1.5 units a texel,
+  centred 768 units ahead of the eye, snapped to a 192-unit grid in light
+  space, fading out over its outer fifth. One map instead of cascades: a
+  dynamic caster's shadow matters within engagement range. Depth spans the
+  world's bounds along the sun.
+- Static layer: the texel grid holds still in the world, so the static
+  layer never redraws what it already holds. It is a separate 2560-texel
+  map that wraps (a texel's spot is its grid coordinate modulo the side)
+  and aims to hold the window plus 256 texels (384 units) on every side.
+  It draws at most one strip a frame of about 16 x 2560 texels (`BUDGET`),
+  on the side nearest the eye of those the window still lacks, else of
+  those short of the margin. After a load, a teleport, a change of
+  casters, or when it no longer holds the 256 texels (384 units) around
+  the eye, it starts over with the 512 texels (768 units) around the eye
+  and fills in from there (about 100 frames to the whole window, 160 to
+  the margin). The mask and the receivers leave a point the layer does not
+  hold yet unshadowed, so a far cast shadow appears a moment after a
+  teleport. The mask reads the static layer through a repeating sampler at
+  the window's offset in it.
 - PCF: 3 x 3 bilinear compare taps on the static layer, 5 x 5 on the
   dynamic one; five probe taps skip the rest where no dynamic caster is
   near. Receivers move 3 units along the normal rebuilt from the depth
-  buffer and 1 unit towards the sun against acne.
-- VERIFIED, vcod measurement 2026-10-12: mp_carentan, 8 bots, a
-  spectator at the stock spectator spawn, 1280 x 800, release build, on
-  an integrated GPU shared with other jobs (load
-  average 10 to 40): the dynamic layer 0.5-0.8 ms of GPU time with
-  530-630 caster surfaces, the mask 0.85-1.3 ms, a static redraw 1.3 ms
-  (83k of 108k caster triangles after the cell cull; 4.1 ms without the
-  cull, under heavier load), CPU 0.3-0.5 ms a frame. The F3 `shadow:` line shows these live
-  when the adapter has timestamp queries.
-- VERIFIED, vcod measurement 2026-10-12 (alpha-tested casters): mp_carentan
-  has 28 implicit cutout caster batches (29k of 110k static caster
-  triangles; none scripted), led by the props `foliage_masked@spikeybush*`
-  (17k), `tree1_detail1` (4k) and `metal_masked@wire_single` (1.4k). Same
-  box, a spectator near the heavy tree at (-256 -208 113), the static
-  layer redrawn every frame for the sample, ~300 frames a run, two runs
-  each: a static redraw takes a median 1.0-1.4 ms with every caster solid
-  and 6.2-6.3 ms with the cutouts tested (10-12k cut triangles drawn),
-  3.5-3.6 ms with the spiky bushes left out. The dynamic layer and the
-  mask did not change (0.3 and 0.5-1.0 ms).
-- VERIFIED, vcod measurement 2026-10-12 (static redraw by slices): same
-  box under heavier load (load average 35 to 60), 1280 x 800, a fly
-  camera driven 400 units/s back and forth over 2400 units, 45 s runs,
-  the GPU time of every timed static redraw logged. Redrawing the whole
-  window at each 192-unit step, as before: mp_carentan median 12.9-13.6
-  ms, p90 21 ms, worst 39 ms; mp_hurtgen (361k caster triangles, 117k
-  alpha-tested) median 18.2 ms, p90 23 ms, worst 42 ms. By slices:
-  mp_carentan median 0.20-0.24 ms, p90 0.43-0.46 ms, worst 0.7-0.9 ms;
-  mp_hurtgen median 0.05-0.18 ms, p90 0.59 ms, worst 1.25-1.4 ms; about
-  300 slices a run. The one exception is the strip drawn at once when
-  the camera moves off before the margin has refilled after a load (2.5
-  to 4 ms here). Of the slice's cost most is alpha-tested fragments:
-  halving the slice from 32 texels halved the worst case, and the cell
-  side the casters are culled by (1024, 512, 256 units) moved it little.
-  At one pose on mp_carentan, the static layer filled by slices after a
-  1500-unit flight, the one drawn fresh there and the earlier
-  whole-window layer agree (a debug mask that tints what the static
-  layer shadows: at most 20 of 1.3M pixels differ, by at most 6 of 255).
-- VERIFIED, vcod measurement 2026-10-12 (start-overs in strips): same
-  box (load average 6 to 35), fly mode, `--rtx-on`. The static layer
-  forced to start over every 30 frames at the spawn: drawing the whole
-  window, mp_carentan median 11.7-13.3 ms, p90 13.5-16.2, worst 32;
-  mp_hurtgen median 15.8 ms, p90 17.4, worst 52. Drawing the square
-  around the eye: mp_carentan median 1.2-1.6 ms, worst 3.2; mp_hurtgen
-  median 0.9-1.0 ms, worst 2.4-2.8. The fly camera driven 400 units/s
-  over 2400 units with a start-over every 300 frames: the strips after
-  a whole-window start-over reached 6.7 ms (mp_carentan) and 5.8 ms
-  (mp_hurtgen) when the window outran a margin not yet refilled; by the
-  budget the worst strip is 1.1-1.5 ms and 0.9-1.2 ms, the start-overs
-  1.1-3.7 ms. Sampling the alpha-tested casters' texture two mips down
-  (`textureSampleBias` 2) changed no whole-window redraw beyond the
-  run-to-run spread (mp_carentan 11.0-11.8 against 11.8-11.9 ms,
-  mp_hurtgen 16.8-17.8 against 15.4 ms), so the cutout path stays as
-  the main pass samples it.
+  buffer and 1 unit towards the sun, against acne.
+- VERIFIED, vcod measurement: mp_carentan, 8 bots, a spectator at the
+  stock spectator spawn, 1280 x 800, release build, an integrated GPU
+  shared with other jobs (load average 10 to 40). Dynamic layer 0.5-0.8 ms
+  of GPU time with 530-630 caster surfaces, mask 0.85-1.3 ms, a static
+  redraw 1.3 ms (83k of 108k caster triangles after the cell cull; 4.1 ms
+  without the cull, under heavier load), CPU 0.3-0.5 ms a frame. The F3
+  `shadow:` line shows these live when the adapter has timestamp queries.
+- VERIFIED, vcod measurement (alpha-tested casters): mp_carentan has 28
+  implicit cutout caster batches (29k of 110k static caster triangles;
+  none scripted), led by the props `foliage_masked@spikeybush*` (17k),
+  `tree1_detail1` (4k) and `metal_masked@wire_single` (1.4k). Same box, a
+  spectator near the heavy tree at (-256 -208 113), the static layer
+  redrawn every frame for the sample, ~300 frames a run, two runs each: a
+  static redraw takes a median 1.0-1.4 ms with every caster solid,
+  6.2-6.3 ms with the cutouts tested (10-12k cut triangles drawn),
+  3.5-3.6 ms with the spiky bushes left out. The dynamic layer and the mask
+  did not change (0.3 and 0.5-1.0 ms).
+- VERIFIED, vcod measurement (static redraw by slices): same box under
+  heavier load (load average 35 to 60), 1280 x 800, a fly camera driven
+  400 units/s back and forth over 2400 units, 45 s runs, the GPU time of
+  every timed static redraw logged.
 
-- VERIFIED, vcod census 2026-10-12 over the twelve stock maps above and
-  the stock shader lib: the only casters with a vertex deform are the
-  `shipflag_np` (mp_ship) and `shipflag2_np` (mp_powcamp) prop skins
-  (flap, alpha-tested) and mp_ship's ocean (wave, 1919 triangles, now not
-  casting). Every placed autosprite skin is `light_sprite` (sort 19,
-  additive), which casts nothing. The two flags cast in the dynamic layer,
-  waving (the Casters bullet); before 2026-10-12 they cast frozen at rest
-  in the static layer. mp_ship's flag at (5296 64 1792) shadows the sea
-  off the ship's side (a screenshot pair 0.7 s apart shows the patch
-  change shape).
+  | Redraw | Map | Median ms | p90 ms | Worst ms |
+  |---|---|---|---|---|
+  | whole window each 192-unit step | mp_carentan | 12.9-13.6 | 21 | 39 |
+  | whole window each 192-unit step | mp_hurtgen (361k caster triangles, 117k alpha-tested) | 18.2 | 23 | 42 |
+  | slices | mp_carentan | 0.20-0.24 | 0.43-0.46 | 0.7-0.9 |
+  | slices | mp_hurtgen | 0.05-0.18 | 0.59 | 1.25-1.4 |
+
+  About 300 slices a run. The exception is the strip drawn at once when
+  the camera moves off before the margin has refilled after a load (2.5
+  to 4 ms). Most of a slice's cost is alpha-tested fragments: halving the
+  slice from 32 texels halved the worst case, and the cell side the
+  casters are culled by (1024, 512, 256 units) moved it little. At one pose
+  on mp_carentan, the static layer filled by slices after a 1500-unit
+  flight, the one drawn fresh there and a whole-window layer agree (a debug
+  mask that tints what the static layer shadows: at most 20 of 1.3M pixels
+  differ, by at most 6 of 255).
+- VERIFIED, vcod measurement (start-overs in strips): same box (load
+  average 6 to 35), fly mode, `--rtx-on`. The static layer forced to start
+  over every 30 frames at the spawn: drawing the whole window, mp_carentan
+  median 11.7-13.3 ms, p90 13.5-16.2, worst 32; mp_hurtgen median 15.8 ms,
+  p90 17.4, worst 52. Drawing the square around the eye: mp_carentan
+  median 1.2-1.6 ms, worst 3.2; mp_hurtgen median 0.9-1.0 ms, worst
+  2.4-2.8. The fly camera driven 400 units/s over 2400 units with a
+  start-over every 300 frames: the strips after a whole-window start-over
+  reached 6.7 ms (mp_carentan) and 5.8 ms (mp_hurtgen) when the window
+  outran a margin not yet refilled. Under the budget the worst strip is
+  1.1-1.5 ms and 0.9-1.2 ms, the start-overs 1.1-3.7 ms. Sampling the
+  alpha-tested casters' texture two mips down (`textureSampleBias` 2)
+  changed no whole-window redraw beyond the run-to-run spread (mp_carentan
+  11.0-11.8 against 11.8-11.9 ms, mp_hurtgen 16.8-17.8 against 15.4 ms),
+  so the cutout path samples as the main pass does.
+- VERIFIED, vcod census over the twelve stock maps above and the stock
+  shader lib: the only casters with a vertex deform are the `shipflag_np`
+  (mp_ship) and `shipflag2_np` (mp_powcamp) prop skins (flap,
+  alpha-tested) and mp_ship's ocean (wave, 1919 triangles, not casting).
+  Every placed autosprite skin is `light_sprite` (sort 19, additive),
+  which casts nothing. The two flags cast in the dynamic layer, waving
+  (the Casters bullet). Trap: in the static layer they cast frozen at
+  rest. mp_ship's flag at (5296 64 1792) shadows the sea off the ship's
+  side (a screenshot pair 0.7 s apart shows the patch change shape).
 - VERIFIED, same census: no stock map draws a world soup whose material
   names `shadow` or `shdw`, and no entity line names either. The
   `treeshdw_*` and `shdw_*` skins belong to the compiler-only `shadow_*`
-  xmodels whose placements the loader drops (section 1, `props.rs`), so
-  no fake tree-shadow decal stacks with a cast shadow on a stock map.
+  xmodels whose placements the loader drops (section 1, `props.rs`), so no
+  fake tree-shadow decal stacks with a cast shadow on a stock map.
 
 ## 13. Entity models
 
 - VERIFIED, 0x4b7320's disassembly: it runs once per refEntity per frame
-  (it returns when the byte at `+0xa1` is set and sets it), takes the
+  (it returns when the byte at `+0xa1` is set, and sets it). It takes the
   lighting origin from `+0x0c` when bit 7 of the byte at `+0x04` is set
-  (Q3's `RF_LIGHTING_ORIGIN`, 0x80) and from `+0x44` (the origin)
-  otherwise, and calls 0x4b7290. With `cg_shadows` 2 (cvar pointer
-  0x16c36f8, name at 0x557b80) it also stores a direction at `+0xa4`, read
-  by nothing else in this section.
+  (Q3's `RF_LIGHTING_ORIGIN`, 0x80), else from `+0x44` (the origin), and
+  calls 0x4b7290. With `cg_shadows` 2 (cvar pointer 0x16c36f8, name at
+  0x557b80) it also stores a direction at `+0xa4`, read by nothing else in
+  this section.
 - VERIFIED, 0x4b7290's disassembly: with a map loaded (0x16c4d54), leaf
-  lights present (`world+0x98`) and `r_entFullbright` 0 (0x16c39e4, name at
-  0x557dfc, default "0") it calls 0x4b6210 on the origin (section 6) and
-  then 0x4b69f0 with the scene (section 11); otherwise it stores a light
-  count of 0 at `+0xcc`.
+  lights present (`world+0x98`) and `r_entFullbright` 0 (0x16c39e4, name
+  at 0x557dfc, default "0") it calls 0x4b6210 on the origin (section 6)
+  and then 0x4b69f0 with the scene (section 11); otherwise it stores a
+  light count of 0 at `+0xcc`.
 - VERIFIED: 0x4b69f0 appends each scene light within twice its intensity
   after the leaf's lights and before the sky lights, weight 1 (the loop
   over `scene+0x160` / `+0x164` writing at `param_4 + n * 4`), then sorts
@@ -645,23 +668,23 @@ facts it reads are labelled, the design is not a claim about retail.
   slot past the count is `glDisable`.
 - VERIFIED, the GL init at 0x4b2bf7..0x4b2c6f: light model ambient (0, 0,
   0, 1), local viewer 0, two-sided 0; the material's ambient and diffuse
-  (0x1602, both sides) are (1, 1, 1, 1), its specular and emission (0, 0, 0,
-  1) and its shininess 0.
-- VERIFIED: 0x4d64e0 raises the ambient to `[0x16c55b0] *
-  r_entMinLight` (0x16c37c0, name at 0x557de8, default ".15") by its
-  luminance when bit 0x20 of the refEntity's `+0x04` is set.
+  (0x1602, both sides) are (1, 1, 1, 1), its specular and emission (0, 0,
+  0, 1) and its shininess 0.
+- VERIFIED: 0x4d64e0 raises the ambient to `[0x16c55b0] * r_entMinLight`
+  (0x16c37c0, name at 0x557de8, default ".15") by its luminance when bit
+  0x20 of the refEntity's `+0x04` is set.
 - INFERRED: 0x16c55b0 is `identityLight`, and none of the cgame
   refEntities in the table below sets bit 0x20.
-- INFERRED, so an entity model's vertex is GL's fixed-function colour:
+- INFERRED: an entity model's vertex is GL's fixed-function colour,
   `ambient + sum over lights of atten * spot * (weight * ambient_i +
   max(0, N . L) * weight * diffuse_i)`, clamped to 0..1, times the
-  texture, and the display doubles it (`cod11-gamma.md` section 5). A
-  directional light has `atten` 1; a positional one `1 / (c + l d + q
-  d^2)`. GL's spot test is `dot(-L, spot direction) >= cos(cutoff)`, while
-  the static vertex pass (section 8) tests `dot(L, +0x54)`: with the same
-  `+0x54` the two disagree in sign, so a cone light lights static models
-  in its cone and entity models on its back side. vcod keeps both as
-  retail sets them.
+  texture; the display doubles it (`cod11-gamma.md` section 5). A
+  directional light has `atten` 1, a positional one
+  `1 / (c + l d + q d^2)`. GL's spot test is
+  `dot(-L, spot direction) >= cos(cutoff)`, while the static vertex pass
+  (section 8) tests `dot(L, +0x54)`. With the same `+0x54` the two disagree
+  in sign, so a cone light lights static models in its cone and entity
+  models on its back side. vcod keeps both as retail sets them.
 
 The lighting origins the cgame (`cgame_mp_x86.dll`) sets, VERIFIED from
 the refEntity stores before each `0x3d` (add refEntity) trap:
@@ -687,13 +710,13 @@ The `eFlags` 0x10000 lighting origin:
   `+0x210`. INFERRED: it is `CG_ResetEntity`, run when the entity was not
   in the last snapshot or `eFlags` 0x8 toggled; so the lighting origin
   freezes at the first drawn frame's position until a reset.
-- VERIFIED: the only setter in `game.mp.i386.so` is `fire_rocket` (`or
-  BYTE PTR [edi+0xa], 0x1` at 0x54683, beside `s.eType = 4` at 0x5467c).
-  A rocket in flight draws through the missile path 0x3001b3f0, which never
-  calls 0x3001aaa0, and `G_ExplodeMissile` sets `eType` 0 (0x53e24) with
-  `EF_NODRAW` 0x100 (0x53e2b), on which 0x3001ab50 returns at once.
-  INFERRED: so the branch never runs on stock content, and vcod leaves it
-  out.
+- VERIFIED: the only setter in `game.mp.i386.so` is `fire_rocket`
+  (`or BYTE PTR [edi+0xa], 0x1` at 0x54683, beside `s.eType = 4` at
+  0x5467c). A rocket in flight draws through the missile path 0x3001b3f0,
+  which never calls 0x3001aaa0, and `G_ExplodeMissile` sets `eType` 0
+  (0x53e24) with `EF_NODRAW` 0x100 (0x53e2b), on which 0x3001ab50 returns
+  at once. INFERRED: the branch never runs on stock content, and vcod
+  leaves it out.
 
 INFERRED: centity `+0xf0` starts the next entity state (its `eFlags` at
 `+0xf8`), so `+0x1d4` is that state's `fTorsoHeight` (offset 228).
@@ -703,55 +726,57 @@ vcod (`StaticLighting::entity_lights`, `client/src/entity_light.rs`,
 
 - The renderer keeps the map's `StaticLighting` after the props are lit,
   so entity samples share the props' cache. Each frame every distinct
-  lighting origin is picked once (a player's parts share one) with the
-  fx lights as scene lights, and the vertex shader applies the GL formula
-  above per vertex. The viewmodel's lights are moved into view space.
-- The `eFlags` 0x10000 lighting origin is not ported (above: no stock
-  entity reaches it).
+  lighting origin (`entities.rs` `light_origin`, the table above) is
+  picked once (a player's parts share one) with the fx lights as scene
+  lights, and the vertex shader applies the GL formula above per vertex.
+  The viewmodel's lights are moved into view space.
+- The `eFlags` 0x10000 lighting origin is not ported (no stock entity
+  reaches it).
 - Each entity skin draws its material's stages (`entity_material.rs`, the
-  `stype` parsed by the world's stage parser): a `lightingDiffuse` stage
-  takes the light set, any other stage its `rgbGen` colour (`constLighting`
-  and `wave` scaled by `identityLight`, as `stage_params` does for the
-  world), `alphaGen` and `alphaFunc` apply, and a blended stage draws with
-  its own blend pair and depth test. A surface draws its stages back to
-  back, and the surfaces sort among the world's by material sort
-  (`cod11-shader-scripts.md` §5). A model with no lit stage skips the
+  `stype` parsed by the world's stage parser). A `lightingDiffuse` stage
+  takes the light set; any other stage its `rgbGen` colour
+  (`constLighting` and `wave` scaled by `identityLight`, as `stage_params`
+  does for the world). `alphaGen` and `alphaFunc` apply, and a blended
+  stage draws with its own blend pair and depth test. A surface draws its
+  stages back to back, and the surfaces sort among the world's by material
+  sort (`cod11-shader-scripts.md` §5). A model with no lit stage skips the
   pick.
 - `tcGen environment` (`metal_env`, `wood_env`: the British and Russian
-  grenades, the staff car, the Peugeots and the train engine) reflects the view in the entity's
-  frame and draws its environment map under the skin, whose alpha picks
-  between them (`GL_ONE_MINUS_SRC_ALPHA GL_SRC_ALPHA`). `depthFunc equal`
-  (`objective_masked`, `pickup_masked`) keeps their glow stages on the
-  pixels the alpha-tested base wrote. `lightingPrecalc` draws white: no
-  stock entity skin uses it.
+  grenades, the staff car, the Peugeots and the train engine) reflects the
+  view in the entity's frame and draws its environment map under the skin,
+  whose alpha picks between them (`GL_ONE_MINUS_SRC_ALPHA GL_SRC_ALPHA`).
+  `depthFunc equal` (`objective_masked`, `pickup_masked`) keeps their glow
+  stages on the pixels the alpha-tested base wrote. `lightingPrecalc` draws
+  white: no stock entity skin uses it.
 - The viewmodel draws through the same stages (`EntPass::View`), lit from
   its view-space light set. VERIFIED, the stock `xmodel/viewmodel_*`
   skins: `viewmodel@`, `viewhands@` and `metal@`, each one opaque
-  `lightingDiffuse` stage with no `alphaFunc`, so the viewmodel no longer
-  alpha-tests at 0.5 as vcod's old fixed pass did.
+  `lightingDiffuse` stage with no `alphaFunc`, so the viewmodel does not
+  alpha-test.
 - The light set's colours are rescaled from `identityLight` 0.5 to the
-  current one before GL's clamp (`cod11-gamma.md` section 4).
+  current one before GL's clamp (`entity_light::pack`, `cod11-gamma.md`
+  section 4).
 - A map without leaf lights draws entity models at `identityLight`.
-- VERIFIED, vcod measurement 2026-10-09 (release build): 2.8 us per pick
-  on mp_carentan's open ground, cache misses included.
+- VERIFIED, vcod measurement (release build): 2.8 us per pick on
+  mp_carentan's open ground, cache misses included.
 
-Which materials take GL lighting (the material word at `+0x54`; the
-shader under construction sits at 0x11e6778, stages from 0x11e6920 at a
-stride of 0x688, each with flags at `+0`, rgbGen `+0x664`, alphaGen
-`+0x67c`, constant colour `+0x680`, GL state `+0x684`):
+Which materials take GL lighting (the material word at `+0x54`; the shader
+under construction sits at 0x11e6778, stages from 0x11e6920 at a stride of
+0x688, each with flags at `+0`, rgbGen `+0x664`, alphaGen `+0x67c`,
+constant colour `+0x680`, GL state `+0x684`):
 
 - VERIFIED: the `rgbGen` parse in 0x4f8390 sets GL state bit 0x100000
-  (`GL_LIGHTING`, section 5 of `cod11-gamma.md`) only for
-  `lightingAmbient` (0x547bf4, gen 9 at 0x4f8dc0) and `lightingDiffuse`
-  (0x547be4, gen 10 at 0x4f8de7), per stage.
+  (`GL_LIGHTING`, `cod11-gamma.md` section 5) only for `lightingAmbient`
+  (0x547bf4, gen 9 at 0x4f8dc0) and `lightingDiffuse` (0x547be4, gen 10 at
+  0x4f8de7), per stage.
 - VERIFIED: the finishing pass 0x4fb0f0 (called from 0x4fba30 at
   0x4fbdb2) ORs 0x60008 into a gen-9 stage's flags and 0x60010 into a
-  gen-10 stage's, then sets `+0x54` to the OR of every stage's flags. So
-  a material carries 0x8 or 0x10 when any stage is gen 9 or 10; mixing
-  them warns "uses more than one of rgbGen lightingAmbient,
-  lightingDiffuse, and lightingSpecular" (1.1 has no `lightingSpecular`
-  keyword). INFERRED: every consumer tests `& 0x18` together (0x4d6966,
-  0x4d6ad5, 0x5053ba, 0x5054c9, 0x50e605), so the two bits mean the same.
+  gen-10 stage's, then sets `+0x54` to the OR of every stage's flags. So a
+  material carries 0x8 or 0x10 when any stage is gen 9 or 10. Mixing them
+  warns "uses more than one of rgbGen lightingAmbient, lightingDiffuse, and
+  lightingSpecular" (1.1 has no `lightingSpecular` keyword). INFERRED:
+  every consumer tests `& 0x18` together (0x4d6966, 0x4d6ad5, 0x5053ba,
+  0x5054c9, 0x50e605), so the two bits mean the same.
 - VERIFIED: the implicit model skin (0x4fc440, case -1) writes gen 10,
   stage state 0x100100 and stage flags 0x10. INFERRED: the same finish
   runs after it (calls at 0x4fc7f7, 0x4fc7fc), so the material gets 0x10.
@@ -772,7 +797,7 @@ stride of 0x688, each with flags at `+0`, rgbGen `+0x664`, alphaGen
   `GL_GEQUAL` 0.5), 0x100 the depth mask, 0x20000 `GL_EQUAL` and 0x40000
   `GL_ALWAYS` depth (`GL_LEQUAL` otherwise). So the implicit model skin
   (state 0x100100) writes depth with no alpha test.
-- VERIFIED, `xmodel/*` in the stock paks: the snapshot entities that carry
+- VERIFIED, `xmodel/*` in the stock paks: the snapshot entities with
   multi-stage or unlit skins are the health packs and grenade crates
   (`pickup`), the S&D bomb and the objective props (`objective`,
   `objective_masked`, `objective_incomplete`), and the lamps and lights
@@ -784,11 +809,10 @@ stride of 0x688, each with flags at `+0`, rgbGen `+0x664`, alphaGen
   as Q3's stage iterator does; the per-stage loops at 0x50bd60 and
   0x50b560 are not traced further.
 - VERIFIED: a stage without stage flag 0x10000 draws with one colour
-  (`glColor4ubv` in the stage loops at 0x50bd60 and 0x50b560): its
-  `+0x680`, which is `identityLightByte` for `identityLighting`, 0xff for
+  (`glColor4ubv` in the stage loops at 0x50bd60 and 0x50b560), its
+  `+0x680`: `identityLightByte` for `identityLighting`, 0xff for
   `identity`, the constant times `identityLight` for `constLighting`
-  (0x4f8e65) and raw for `const`; `lightingPrecalc` (0xb) reads the
-  entity's `+0x6c` (0x50becf-0x50bede), the field `rgbGen entity` reads
-  (0x514ac0), so on a cgame entity its shaderRGBA. `vertex` goes through
-  0x4ffa60 instead.
-
+  (0x4f8e65), raw for `const`. `lightingPrecalc` (0xb) reads the entity's
+  `+0x6c` (0x50becf-0x50bede), the field `rgbGen entity` reads (0x514ac0),
+  so on a cgame entity its shaderRGBA. `vertex` goes through 0x4ffa60
+  instead.

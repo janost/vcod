@@ -1,8 +1,7 @@
 # CoD 1.1 event table and effect mapping
 
-Everything below is read out of CoD 1.1 binaries and stock assets. Where a claim
-could not be settled from the binaries it is marked `UNVERIFIED` with the live
-check that would settle it.
+Read out of CoD 1.1 binaries and stock assets. A claim the binaries could not
+settle is marked `UNVERIFIED` with the live check that would settle it.
 
 ## Read this first: the root `cgamex86.dll` is the wrong module
 
@@ -17,13 +16,13 @@ The two enums agree on ids 0 to 172 and diverge from 173 up: SP has
 `EV_SOUND_ALIAS_NOTIFY` at 173 and `EV_GRENADE_SUICIDE` at 197; MP has neither
 and instead appends `EV_DROPWEAPON`, `EV_ITEM_RESPAWN`, `EV_ITEM_POP`,
 `EV_PLAYER_TELEPORT_IN/OUT`, `EV_OBITUARY` at 196 to 201. Every impact and
-explosion event sits above 172, so using the SP table would put every combat
-event off by one.
+explosion event sits above 172, so the SP table puts every combat event off
+by one.
 
-vcod is a multiplayer spectator client, so `main/cgame_mp_x86.dll` is the
-authority and this document uses it. The 202-entry table is confirmed
-byte-for-byte identical in all four MP modules plus the Linux dedicated server's
-game module, which is what puts the numbers on the wire.
+vcod is a multiplayer client, so `main/cgame_mp_x86.dll` is the authority
+here. The 202-entry table is byte-for-byte identical in all four MP modules
+and the Linux dedicated server's game module, which puts the numbers on the
+wire.
 
 ### Evidence sources
 
@@ -39,9 +38,8 @@ game module, which is what puts the numbers on the wire.
 
 Addresses are virtual, image base `0x30000000` for the cgame DLLs,
 `0x20000000` for the game DLLs, `0x00400000` for `CoDMP.exe`, file-relative for
-the Linux `.so`. Decompilation is Ghidra 12 headless (`analyzeHeadless`);
-`tools/re/ExportDecomp.java` dumps every function with a name and address
-marker.
+the Linux `.so`. Decompilations come from `tools/re/ExportDecomp.java`
+(Ghidra headless), which dumps every function with a name and address marker.
 
 The two entry points everything hangs off:
 
@@ -86,8 +84,7 @@ sand, snow, water, wood, asphalt`):
 So `EV_FOOTSTEP_RUN_DEFAULT = 1`, `EV_FOOTSTEP_RUN_ASPHALT = 23`,
 `EV_JUMP_DEFAULT = 70`, `EV_LANDING_PAIN_ASPHALT = 138`. `CG_EntityEvent`'s
 range ladder uses exactly these boundaries (`< 0x18`, `< 0x2f`, `< 0x46`,
-`< 0x5d`, `< 0x74`, `< 0x8b`), which is independent confirmation of the group
-sizes.
+`< 0x5d`, `< 0x74`, `< 0x8b`), which confirms the group sizes.
 
 ids 139 to 201 in full:
 
@@ -116,13 +113,13 @@ ids 139 to 201 in full:
 | 199 | `EV_PLAYER_TELEPORT_IN` | 200 | `EV_PLAYER_TELEPORT_OUT` | 201 | `EV_OBITUARY` |
 
 The switch covers ids 139 to 201 (`lea eax,[edi-0x8b]; cmp eax,0x3e`). Six of
-them land on the `"Unknown event: '%s'"` warning at `0x3001e703`, i.e. the retail
-MP client does nothing with them (walked the jump table at `0x3001e72c` through
-the index byte table at `0x3001e7dc`): `EV_BULLET_TRACER` (171),
+them land on the `"Unknown event: '%s'"` warning at `0x3001e703`, so the retail
+MP client does nothing with them (the jump table at `0x3001e72c` through the
+index byte table at `0x3001e7dc`): `EV_BULLET_TRACER` (171),
 `EV_MOLOTOV_EXPLODE` (181), `EV_MOLOTOV_EXPLODE_NOMARKS` (182),
 `EV_CUSTOM_EXPLODE` (183), `EV_CUSTOM_EXPLODE_NOMARKS` (184), `EV_BULLET` (186).
-Another ten reach a bare `break`, i.e. handled only in `CG_EntityPreEvent` or
-not at all: 150, 165, 167, 173, 174, 175, 176, 187, 188, 195.
+Another ten reach a bare `break` (handled only in `CG_EntityPreEvent` or not
+at all): 150, 165, 167, 173, 174, 175, 176, 187, 188, 195.
 
 ### How an event id reaches the client
 
@@ -169,8 +166,8 @@ Two paths, both in `cgame_mp_x86.dll`:
   is never sent in flight; it enters the snapshot already exploded, `eType`
   0 with `eventSequence` 1 (VERIFIED, `*-uo-tank.bin` entity 164 at 31100,
   and vcod-server's shell into the wall ahead of mp_cassino's Panzer IV).
-  `net::events::EventTracker` follows the rule; it used to skip every
-  entering ring, and a tank shell fired at close range drew no explosion.
+  `net::events::EventTracker` follows the rule. Skipping every entering
+  ring drops the explosion of a tank shell fired at close range.
 
 `centity_t` is 0x228 (552) bytes, array base `0x3020db98 - 0x20`;
 `currentState` at +0, `nextState` at +0xf0, `lerpOrigin` at +0x1f8.
@@ -203,7 +200,7 @@ vcod's decoded field names apply directly. The ones that matter here:
 
 Offset 216 is named `_union.scale` in the `cod_lnxded` table and `scale` in
 `CoDMP.exe`. For impact and explosion events it carries a second direction
-byte, not a scale. vcod's parser already decodes it under the name `scale`.
+byte, not a scale. vcod's parser decodes it under the name `scale`.
 
 Per event, source (`game.mp.i386.so`) and consumer (`cgame_mp_x86.dll`):
 
@@ -312,7 +309,7 @@ that. A follow-spectator's `ps.clientNum` is the followed player's (section
 7), so INFERRED: whoever follows the victim receives the victim's 175/176 and
 not the 173/174 copy.
 
-VERIFIED live, 2026-09-27, the retail 1.1d server running
+VERIFIED live, the retail 1.1d server running
 `client-probes/probe_bump` as the gametype with `+set probe_teleport 1`, a
 `--probe-target` client and a `--save-hit --probe-sweep` client placed 200
 units apart, both printing every 173 to 176 they drained:
@@ -329,19 +326,17 @@ units apart, both printing every 173 to 176 they drained:
   `self.spectatorclient` to the attacker's number and `self.archivetime` to
   the delay plus 7. INFERRED: a killcam frame is the killer's archived
   playerstate, so its `ps.clientNum` is the killer's and the `0x2000` test
-  lets the plain copy through. This is the
-  delivery rule keyed on the frame's `ps.clientNum` and not on the slot the
-  snapshot goes to.
+  lets the plain copy through. The delivery rule keys on the frame's
+  `ps.clientNum`, not on the slot the snapshot goes to.
 - A second run with `--probe-melee` on both halves, target in slot 1: each
   swing that landed (`D;` lines with `MOD_MELEE`) put a 174 with `surfType` 7
   and `eventParm` 111 or 112 in the swinger's snapshot beside the `EV_MELEE_HIT`,
   and a 176 with `clientNum` 1 in the victim's.
 
-VERIFIED live (2026-08-24, a public TDM server, 100s capture during active
-combat, taken by a free-flying spectator): 175/176 never arrived while 173
-with `surfType == 7` appeared 38 times. A free spectator's `ps.clientNum` is
-its own, so this matches the delivery rule above; it does not show that the
-events are unused. vcod resolves 175/176 in play mode and while following,
+VERIFIED live (a public TDM server, 100 s capture during combat by a
+free-flying spectator): 175/176 never arrived while 173 with `surfType == 7`
+appeared 38 times. A free spectator's `ps.clientNum` is its own, so this
+matches the delivery rule; it does not show the events are unused. vcod resolves 175/176 in play mode and while following,
 through the same path as 173/174 minus the impact effect
 (`crates/client/src/fx/registry.rs`, `crates/client/src/audio/cues.rs`).
 vcod's server raises the pair in `finishPlayerDamage`
@@ -426,7 +421,7 @@ configstring number.
   before any wait statements in the gametype or level script, or on an
   already loaded effect`) on a 0 id with the word clear (0x5efa7..0x5efbc).
 - VERIFIED, `crates/gsc/tests/fixtures/semantics/probe_loadfx_wait.gsc` on
-  retail 1.1d (2026-10-13): after one `wait 0.05` an effect `main` loaded
+  retail 1.1d: after one `wait 0.05` an effect `main` loaded
   comes back 1, spelt in another case too, and a new one kills the server
   with `effect "fx/smoke/chimneysmoke.efx" not precached`. INFERRED: the
   first `Scr_Error` ends the call, so the 0x77980 message is never seen.
@@ -471,8 +466,8 @@ The server half is `playLoopedFx`, `functions[68]` at `game.mp.i386.so`
   `angles2[1]` (`+0x6c`) = the delay in ms as a float, `trap_LinkEntity`,
   and `Scr_AddEntity` returns the entity.
 
-The client half is `CG_AddCEntity` case 10 (the `eType` switch in cgame 0x3001d5f0,
-`FUN_3001cf20` at 0x3001cf20, my name `CG_FX`):
+The client half is `CG_AddCEntity` case 10 (the `eType` switch in cgame
+0x3001d5f0, calling 0x3001cf20, named `CG_FX` here):
 
 - VERIFIED: the period is `_ftol(es.angles2[1])` (0x3001cf37, `_ftol` at
   0x3005a890) and the last play time lives at `cent+0x21c`. When
@@ -483,8 +478,8 @@ The client half is `CG_AddCEntity` case 10 (the `eType` switch in cgame 0x3001d5
   grep of the module's disassembly for `+0x21c]`: nothing else in cgame writes that
   slot, so the timer outlives the entity and starts from 0 for a slot
   never used. INFERRED, off the loop's `jg` at 0x3001cf68: a zero period
-  never leaves it, so retail's client hangs. vcod plays the effect every
-  frame instead (`fx::looped`), on purpose: a divergence, not a port.
+  never leaves it, so retail's client hangs. vcod deliberately plays the
+  effect every frame instead (`fx::looped`).
 - VERIFIED: with `angles2[0]` non-zero the play goes ahead only while
   `angles2[0]^2` exceeds the squared distance from `lerpOrigin`
   (`cent+0x1f8`) to `cg.refdef.vieworg` (0x30207170); the timer has
@@ -514,7 +509,7 @@ arguments, not an entity method:
   (0x5b3b0). `G_FindConfigstringIndex` (0x66e30) scans `i` from 1 while
   `i < max` with `strcasecmp`, so the pairs sit at 845..1099 and the
   event carries `i`.
-- VERIFIED, cgame 0x3001db80 (`CG_PlayFxOnTag`, my name): the
+- VERIFIED, cgame 0x3001db80 (named `CG_PlayFxOnTag` here): the
   configstring is `0x34c + parm`, bounds-checked against 0..0x7ff with
   `"CG_ConfigString: bad index: %i"`; the effect handle is read from
   `0x301d20bc + (c0 * 10 + c1) * 4` with `c0`, `c1` the two leading
@@ -543,7 +538,7 @@ arguments, not an entity method:
   times a 0x40-byte bone matrix out of the entity's DObj. INFERRED, off its
   test of the bone index against 0: a bone of -1 gets the entity's frame
   alone.
-- VERIFIED, 0x3001d090 (`CG_InterpolateEntityPosition`, my name, reached from
+- VERIFIED, 0x3001d090 (named `CG_InterpolateEntityPosition` here, reached from
   0x3001d210 for a `pos.trType` 1 entity and for a `trType` 3 one under
   64): for `eType` 1 it copies the lerped angles into the client info
   (`ci+0x3e4`) and zeroes `lerpAngles` pitch and roll (`cent+0x204`,
@@ -599,7 +594,7 @@ is posed on the tag as it stands the frame it falls due (`Particle::repose`,
 ### On the wire, measured
 
 VERIFIED, `crates/server/tests/fixtures/gametypes/mp_carentan-playfx-fx.txt`
-and `-log.txt` (2026-10-13, retail 1.1d, `client-probes/probe_playfx.gsc`,
+and `-log.txt` (retail 1.1d, `client-probes/probe_playfx.gsc`,
 one allied `vcod --net-probe --save-scripted fx`), each effect seen in the
 snapshot of the frame its script step ran:
 
@@ -618,8 +613,8 @@ snapshot of the frame its script step ran:
 - `delete()` of a looped effect: gone from the snapshot of the frame of the
   call, not 100 ms later when the slot is freed. VERIFIED, the method at
   0x5da14 calls `trap_UnlinkEntity` (0x5da81) before arming the free
-  (`cod11-gsc-object-model.md` 14); this is the first capture of that
-  unlink on the wire.
+  (`cod11-gsc-object-model.md` 14); this capture shows that unlink on the
+  wire.
 
 `crates/server/tests/fx_ab.rs` replays the probe on ours and compares
 every `!fx` line, each timed from the step before it.
@@ -822,9 +817,8 @@ server-side, and adds its own `projExplosionEffect` on top for
   captures through the event drain and the resolver, one explode played and
   one effect resolved per missile; `play::loopback::each_thrown_frag_explodes_once`
   throws two frags on vcod-server through the client's input and drain and
-  plays two explodes. A doubled effect is not why vcod's frag flash read
-  too bright and white (2026-10-21); the flash's shape and fade were, see
-  `efx-grammar.md` R4, "`nonUniformScale` and `size2`, in detail" and "A
+  plays two explodes. A frag flash that reads too bright and white is not a
+  doubled effect; see the flash's shape and fade in `efx-grammar.md` R4, "`nonUniformScale` and `size2`, in detail" and "A
   sprite's vertex colour".
 
 `CG_BulletHitWall` @ `0x30039640` picks the small pair of handle tables
@@ -875,8 +869,8 @@ array with `1..63`, i.e. the `.efx` path is `configstring(780 + id)`.
 
 ### 5d. Ejecting brass: `CG_EjectBrass` (`0x30038a30`)
 
-My name for the function; the cgame prints none of its own. It takes the
-entity's `cent` and the event id.
+The name is vcod's; the cgame prints none for it. It takes the entity's
+`cent` and the event id.
 
 - VERIFIED, cgame 0x30038a30: the function reads `DAT_301d896c` first,
   then `cent[1]` (`es.eType`) against 11 and `cent[0x32]` (`es.weapon`)
@@ -974,9 +968,9 @@ distance along the shot. `CG_SpawnTracer` allocates a local entity with type 2
 whose linear trajectory starts at the muzzle and moves at `cg_tracerSpeed`,
 back-dates its start by up to half a frame, and lives until that point is
 `cg_tracerlength` short of the impact; `CG_AddLocalEntities` draws the streak
-from the trajectory point forward. Earlier I had `0x30039340` labelled
-`CG_BloodSpray`, and then read it as the setup for every tracer. The formulas
-and addresses for both branches are in `docs/research/efx-grammar.md`, R8.
+from the trajectory point forward. `0x30039340` is not `CG_BloodSpray` and
+not a setup shared by every tracer. The formulas and addresses for both
+branches are in `docs/research/efx-grammar.md`, R8.
 The tracer is drawn with the shader `gfx/misc/tracer`
 (registered in `CG_RegisterGraphics` @ `0x30020da0`, handle stored at
 `0x301d5abc`). Cvars: `cg_tracerchance` (value at `0x301df448`),
@@ -993,11 +987,9 @@ follow-spectator never sees the followed player's. vcod applies the same test
 `ps.clientNum` (section 2), and INFERRED, the shooter of the round is never the
 player it hit, since a bullet trace skips its own shooter.
 
-Practical consequence for vcod: to draw tracers, hook `EV_BULLET_HIT_*`, take
-`es.otherEntityNum` as the shooter, resolve that entity's muzzle
-(`tag_flash` on its held weapon, which the held-weapon assembly already
-places), and draw a streak from there to `es.pos.trBase`, gated on a
-tracer-chance roll.
+vcod draws tracers off `EV_BULLET_HIT_*`: `es.otherEntityNum` is the
+shooter, the streak runs from that entity's muzzle to `es.pos.trBase`, gated
+on a tracer-chance roll (`fx::registry`; the start point is below).
 
 ### Where a round starts: `CG_CalcMuzzlePoint`
 
@@ -1039,8 +1031,8 @@ bipod), the point moves along a vector 0x3004a200 builds, scaled by the
 float at 0x3007c190, before the lean. INFERRED: that is the server's
 19-unit bipod offset (`cod11-combat.md` 2.1); the vector and the constant
 were not read. None of the three adds the walk bob or the 8-unit floor
-the 1.5 and UO servers' `CalcMuzzlePoint` add (`cod11-combat.md` 2.1):
-the 2026-10-16 server muzzle change has no client counterpart.
+the 1.5 and UO servers' `CalcMuzzlePoint` add (`cod11-combat.md` 2.1), so
+the server's muzzle has no client counterpart.
 
 The rest of the shot's client side is tags in all three: the flash on
 `tag_flash` of the viewmodel or the world weapon (5b), the case on
@@ -1068,8 +1060,8 @@ not the tag (not modelled).
 
 ## 7. Detecting spectator-follow state in `playerState`
 
-Confirmed: `ps.clientNum != our own client number` means we are following
-someone. The server side of the follow (buttons, cycle, let-go, disconnect,
+VERIFIED: `ps.clientNum` differing from the client's own number means it is
+following someone. The server side of the follow (buttons, cycle, let-go, disconnect,
 live measurements) is `cod11-spectator-follow.md`.
 
 `SpectatorClientEndFrame` @ `game.mp.i386.so 0x40760` is the whole story. When
@@ -1084,8 +1076,8 @@ when `spectatorClient >= 0` or clears it otherwise.
 Because the whole playerState is copied, `ps.clientNum` (offset 172, 8 bits)
 becomes the followed player's client number, and `ps.origin`, `viewangles`,
 `weapon`, `weaponstate`, `legsAnim`/`torsoAnim` and everything else describe the
-followed player too. In free-fly spectate the copy does not happen and
-`ps.clientNum` stays our own.
+followed player too. In free-fly spectate there is no copy and `ps.clientNum`
+stays the client's own.
 
 Flag summary, all from setters/testers in the server:
 
@@ -1095,15 +1087,14 @@ Flag summary, all from setters/testers in the server:
 | `0x020000` | a forced follow (script `spectatorclient >= 0`) as against free cycling | set/cleared on `spectatorClient >= 0`, `0x40903`/`0x408fd`. The preservation across the ps copy at `0x408c1` is an `eFlags` `0x20000`, not this bit |
 | `0x040000` | live in-game player | set in `ClientEndFrame` `0x40fb0`, cleared for spectators `0x407b7`; `GetFollowPlayerState` `0x415dc` refuses to copy a player who does not have it |
 
-The client's own recurring test,
-`(ps.pm_flags & 0x50000) != 0 && es.number == ps.clientNum`, therefore reads as
-"the view is attached to a player body (either mine, `0x40000`, or one I am
-following, `0x10000`) and this event came from that body". That is the
+The client's recurring test, `(ps.pm_flags & 0x50000) != 0 && es.number ==
+ps.clientNum`, reads as "the view rides a player body (its own, `0x40000`, or
+a followed one, `0x10000`) and this event came from that body": the
 first-person suppression case.
 
-vcod already knows its own client number from the connect handshake, so:
+With the client's own number from the connect handshake:
 
-- `ps.clientNum != our_client_num` -> following that client. Confirmed.
+- `ps.clientNum != own_client_num` -> following that client.
 - `(ps.pm_flags & 0x010000) != 0` -> spectator view of any kind.
 - `(ps.pm_flags & 0x020000) != 0` -> following a specific client rather than
   free-flying.
@@ -1126,21 +1117,20 @@ across every multiplayer module checked:
 | `main/game_mp_x86.dll` | 1.5 | `0x20070d70` | 202 | yes |
 | `game.mp.i386.so` | 1.1d Linux | `0x0007b6a8` | 202 | yes |
 
-Only the table's address moved. The surrounding machinery is unchanged too: the
+Only the table's address moved. The surrounding machinery is unchanged: the
 1.5 MP cgame carries the same nine CSV impact-type keys
 (`bullet_small_normal` ... `molotov_explode_reflect`), the same
 `viewFlashEffect`/`worldFlashEffect` weapon keys and the same `tag_flash` tag,
 and the 1.5 install ships the same `fx/iw_impacts.csv` in `main/pak5.pk3`.
 
 The single-player modules also agree between 1.1 and 1.5 (198 entries, identical
-order, table at `0x30067f20` in both `cgamex86.dll` files). As established
-at the top, the SP enum is a different enum and must not be used.
+order, table at `0x30067f20` in both `cgamex86.dll` files). The SP enum is a
+different enum (see the top).
 
-A constants module written against 1.1 MP will therefore work unchanged against
-1.5 MP. The two things that do differ per version and were not surveyed here
-are the netfield tables (already handled by `crates/common/src/net/protocol.rs`
-being version-parameterised) and the syscall numbers, which are internal to the
-retail DLLs and irrelevant to vcod.
+1.1 MP event constants hold unchanged for 1.5 MP. What differs per version
+and is not surveyed here: the netfield tables (version-parameterised in
+`crates/common/src/net/protocol.rs`) and the syscall numbers, internal to the
+retail DLLs.
 
 ---
 
@@ -1229,9 +1219,8 @@ mark. Addresses are `cgame_mp_x86.dll` 1.1 unless they say `CoDMP.exe`.
   caller (0x3002778d); section 9.7.
 - vcod (`marks::Mark::rgba_at`, `mark_pass`): the faded alpha reaches the
   screen through the mark shader's `alphaGen vertex`, which its `rgbGen
-  vertex` implies (cod11-shader-scripts.md section 3). Before 2026-10-21
-  the parse missed that, and a scripted mark stayed opaque until it was
-  freed.
+  vertex` implies (cod11-shader-scripts.md section 3). A parse that misses
+  that leaves a scripted mark opaque until it is freed.
 
 ### 9.4 `R_MarkFragments` (`CoDMP.exe` 0x4e8db0)
 
@@ -1464,8 +1453,8 @@ sets `cg_weaponSelect` to the playerstate's weapon, `cl_stance` 0 and
 
 vcod's client runs its part on `n` and `B` (`play::join::is_map_restart`):
 `FxSystem::clear` (live particles, lights and pending decals),
-`Renderer::clear_marks`, `AudioSystem::stop_all` and the ambient from CS
-3, beside the script menu rearm it already did. The cvar resets go to the
+`Renderer::clear_marks`, `AudioSystem::stop_all`, the ambient from CS 3 and
+the script menu rearm. The cvar resets go to the
 `v` cvars (`ClientCvars::on_map_restart`: the scoreboard's objective text
 empties), `cl_run` and the input's stance, which stands. The HUD
 (`Hud::on_map_restart`) drops the centre print, the complaint, the vote
@@ -1473,7 +1462,7 @@ lines (`Vote::on_map_restart`), a held scoreboard, the weapon strip's
 scales and clock, the hit icons and the flash. The view, the input and
 the HUD forget the spawn count (`OnlineView::map_restart`,
 `PlayInput::map_restart`, `Hud::spawn`), so the next snapshot runs the
-respawn reset as `cg.mapRestart` makes retail's. vcod has no local
+respawn reset, as `cg.mapRestart` does on retail. vcod has no local
 entities and no third person view; `fx::flame` keeps its chunks, as UO's
 does. The cursor hint draws straight off the playerstate in vcod, with
 no fade to clear.
@@ -1489,9 +1478,7 @@ the weapon name's stamp (`WeaponNameFade`).
 
 ## Open items
 
-None. The one claim this section used to hold, whether a follow-spectator
-receives `EV_BULLET_HIT_CLIENT_SMALL/LARGE` (175/176) for the player being
-followed, is settled from the engine binary in section 2: the single-client
-test compares against the snapshot's `ps.clientNum`, not the client slot. The
-earlier reading, that the 2026-08-24 capture meant vcod could ignore 175/176,
-came from a free-flying spectator, which that rule never sends them to.
+None. Whether a follow-spectator receives 175/176 for the followed player is
+settled in section 2: the single-client test compares the snapshot's
+`ps.clientNum`, not the client slot. A free-flying spectator's capture never
+shows them.

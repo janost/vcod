@@ -2,12 +2,12 @@
 
 How the vcod client spends a frame on a CoD1 1.1 or United Offensive
 server, measured with `tools/cod4_perf.sh` (`GAME=cod1` / `GAME=uo`), and
-what was cut. Everything here is vcod's own code measured on one machine,
-not a retail fact; no binary address is involved. The numbers are from a
-lavapipe (llvmpipe) adapter, so the GPU columns are CPU rasterization:
-they rank the GPU work, they are not a real card's milliseconds. The
-renderer's own notes are in the CoD4 doc (`cod4-client-perf.md`, whose
-section 1 describes the profile's stages and GPU groups).
+what was cut. Sections 1 to 3 measure vcod's own code on one machine; the
+retail facts in sections 4 to 6 carry addresses and labels. Unless a row
+says "real card", numbers come from a lavapipe (llvmpipe) adapter, so the
+GPU columns are CPU rasterization: they rank the GPU work and are not a
+real card's milliseconds. The profile's stages and GPU groups are in
+`cod4-client-perf.md` section 1.
 
 ## 1. The tool on CoD1
 
@@ -32,9 +32,9 @@ section 1 describes the profile's stages and GPU groups).
 (or `GAME=uo COD_DIR=<UO install> GAMETYPE=tdm ... mp_cassino`) runs
 vcod-server with 12 shooting bots and the client joined as a spectator,
 which on CoD1 and UO stands still at the map's spectator spot: the view
-is fixed (the same triangles and soups in every frame), so a run is an
-A/B of the scene, not of where a followed bot looks. `SESSION=1` runs on
-the desktop's own GPU, as on CoD4.
+is fixed (the same triangles and soups every frame), so a run is an A/B of
+the scene, not of where a followed bot looks. `SESSION=1` runs on the
+desktop's own GPU, as on CoD4.
 
 ## 2. Before and after (640x452, 4x MSAA, 12 bots, 25 s, the first 5 s after the join dropped)
 
@@ -57,27 +57,26 @@ map, two rounds for mp_carentan and mp_cassino. Stage ms are mean / p50.
 (Draw counts move with the bots in view; the spectator's triangles do
 not: 64118 on mp_carentan, 26647 on mp_cassino, 58901 on mp_depot.)
 
-1. `bodies`: a drawn CoD1 or UO body posed through `PoseBuffer::new`,
-   which keeps the 1.5/UO engine records and walks them on every blend,
-   though only the 1.5 and UO servers' bone traces read them. The client
-   now poses through `playerpose::pose_player_drawn` and
-   `PoseBuffer::drawn` (`cod4-client-perf.md` 7, item 1), the turret rigs
-   too, and composes a body's bone worlds once for its head, flash and
-   brass tags and every model's skin, where each attached model
-   (`skin_matrices`) and tag (`bone_world`) composed them again. bodies'
-   p50 falls by a quarter to a third.
+1. `bodies`: a drawn body posed through `PoseBuffer::new` kept the 1.5/UO
+   engine records and walked them on every blend, though only the 1.5 and
+   UO servers' bone traces read them. The client poses through
+   `playerpose::pose_player_drawn` and `PoseBuffer::drawn`
+   (`cod4-client-perf.md` 7, item 1), turret rigs included, and composes a
+   body's bone worlds once for its head, flash and brass tags and every
+   model's skin, where each attached model (`skin_matrices`) and tag
+   (`bone_world`) composed them again. `bodies` p50 falls by a quarter to a
+   third.
 2. `cull`: `WorldVis::visible`'s walk built a cell's occluder volumes on
    every visit, and the walk revisits cells (mp_carentan's spectator spot
    visits its 22 cells 137 times). The volumes depend on the cell and the
-   eye alone, so each is now built once a walk. mp_depot, whose cells
+   eye alone, so each is built once a walk. mp_depot, whose cells
    carry occluders, cuts 0.34 -> 0.26 ms; mp_carentan has none and stays.
    Over a sweep of 25,000 views on mp_carentan, mp_harbor, mp_brecourt and
    mp_depot the visible soups, cells and walk stats hash the same before
    and after; the sweep's mp_depot cost fell 0.186 -> 0.123 ms a view.
-3. What C4-91 cut elsewhere already applies: CoD1 and UO entity surfaces
-   draw through the same `upload_vm_model` and `ent_run`, so a run of one
-   instance's surfaces on one skin is one draw, and the per-pass GPU
-   stamps run on this path too.
+3. CoD1 and UO entity surfaces draw through CoD4's `upload_vm_model` and
+   `ent_run`, so a run of one instance's surfaces on one skin is one draw,
+   and the per-pass GPU stamps run on this path too.
 
 Pixel output: the frame digest (`frame_digest.rs`: the view, every
 dynamic model's transform and bone matrices, HUD, sound, effects) of the
@@ -129,8 +128,8 @@ lavapipe at 1280 x 772, 12 shooting bots, 30 s with the first 10 dropped,
   `wglChoosePixelFormatARB` string sits only in the GL entry point names
   and their error lines, and no decompiled function calls it. VERIFIED
   (the decompile and strings).
-- vcod's CoD1 default was 4. It is now retail's 1 in every game
-  (`Shell::register_aa_samples`). An unstamped vcod config's
+- vcod's default is retail's 1 in every game (`Shell::register_aa_samples`;
+  it was 4 on CoD1). An unstamped vcod config's
   `seta r_aaSamples "4"` loads as 1; any other value it holds stays
   (cod11-console.md 8). VERIFIED (ours).
 - The level shift: polygon edges alias as retail's do; a pixel inside a
@@ -138,15 +137,15 @@ lavapipe at 1280 x 772, 12 shooting bots, 30 s with the first 10 dropped,
 
 ### The depth prepass
 
-- `r_vc_depthprepass` (cod4-client-perf.md 12) was on in every game. On
-  CoD1 its world half takes nothing (only CoD2's and CoD4's lit draws
-  qualify, `takes_prepass`), so it drew only the entities' first stages,
-  86 to 107 a frame on mp_carentan and 5 to 15 on mp_cassino, then drew
-  them again under EQUAL. VERIFIED (ours, the profile's `prepass`).
-- Retail has none, and vcod's is now off by default on CoD1 and UO
-  (`Shell::register_depth_prepass`), on as before for CoD2 and CoD4.
-  Since cod2-client-perf.md 12 it is not archived and a config's value
-  is dropped at start. VERIFIED (ours).
+- `r_vc_depthprepass` (cod4-client-perf.md 12) on CoD1 takes no world
+  draws (only CoD2's and CoD4's lit draws qualify, `takes_prepass`), so it
+  drew only the entities' first stages, 86 to 107 a frame on mp_carentan
+  and 5 to 15 on mp_cassino, then drew them again under EQUAL. VERIFIED
+  (ours, the profile's `prepass`).
+- Retail has none. vcod's is off by default on CoD1 and UO
+  (`Shell::register_depth_prepass`), on for CoD2 and CoD4. It is not
+  archived (cod2-client-perf.md 12); a config's value is dropped at
+  start. VERIFIED (ours).
 - The bytes are the same either way:
   `cod1_identity_ramp_frame_matches_the_gamma_pass_and_the_prepass`
   (`pipeline_check.rs`) draws mp_carentan with a body, an effect, a mark
@@ -183,22 +182,22 @@ lavapipe at 1280 x 772, 12 shooting bots, 30 s with the first 10 dropped,
   pass stays there. INFERRED (cod11-gamma.md 4).
 - Windowed at `r_gamma` 1 (vcod's default, `r_fullscreen` 0) the ramp is
   the identity, and a frame with no post pass, bloom, shafts, `vc_ssao`
-  or `vc_shadows` now resolves the scene and draws the 2D straight into
+  or `vc_shadows` resolves the scene and draws the 2D straight into
   the swapchain (`scene_direct` in `Renderer::render`), as section 30 of
   cod4-client-perf.md did for the post pass. The test above compares the
   frames with and without the gamma pass, byte for byte. VERIFIED
   (lavapipe).
 - It needs the swapchain in `Rgba8Unorm`. Lavapipe's Wayland surface
   lists `Bgra8UnormSrgb, Bgra8Unorm, Rgb10a2Unorm, Rgba16Unorm,
-  Rgba16Float` (the client now logs the list and its pick at start), so
+  Rgba16Float` (the client logs the list and its pick at start), so
   these runs keep the pass: `gpu.gamma` reads 3.9 to 4.7 ms in every run
   here, a fifth of mp_cassino's GPU frame. VERIFIED (lavapipe). Whether a
   real card's surface lists `Rgba8Unorm` is the pending check below.
 
 ### Before and after
 
-`base` is d69188a6, `new` this branch; aa is `r_aaSamples`, pp the
-prepass; one row per run, repeated runs comma-separated, means / p50 in
+`base` is the build before these changes, `new` the build with them; aa is
+`r_aaSamples`, pp the prepass; one row per run, repeated runs comma-separated, means / p50 in
 ms. VERIFIED (lavapipe).
 
 | Map | Build | aa | pp | wall | `gpu.opaque` | `gpu.gamma` | draws | prepass | bind groups |
@@ -235,27 +234,26 @@ mp_carentan) is not where the time goes. INFERRED.
 
 ### Pending on a real card
 
-On the real card, windowed, from a checkout of this branch built with
-`cargo build --release -p vcod -p vcod-server`:
+On a real card, windowed, from a release build (`cargo build --release -p
+vcod -p vcod-server`):
 
 `SESSION=1 GAME=uo COD_DIR=<UO install> GAMETYPE=tdm tools/cod4_perf.sh /tmp/p16 mp_cassino 30 --exec-in-game "set r_gamma 1"`
 
 `/tmp/p16/client.log`'s `swapchain` line says whether the surface took
-`Rgba8Unorm` (then `gpu.gamma` reads near 0). A config from before this
-change held `r_aaSamples 4`, which loads as 1 now (cod11-console.md 8),
-and `r_vc_depthprepass 1`, which no config sets now. Compare `gpu.opaque` and fps with section 3's run.
-Pending.
+`Rgba8Unorm` (then `gpu.gamma` reads near 0). An old config's `r_aaSamples
+4` loads as 1 (cod11-console.md 8); no config sets `r_vc_depthprepass`.
+Compare `gpu.opaque` and fps with section 3's run. Pending.
 
 ## 5. Fill per pixel against retail (P27)
 
 On a real card at 1600 x 900 vcod's mp_carentan spectator frame
 was GPU-bound (`gpu.opaque` 1.51 of 1.64 ms, 570 fps), where retail
 1.1 under Wine ran about 700 fps at 2048 x 1536: about twice vcod's
-cost per pixel. VERIFIED (real-card runs, bundle 10b339d0).
+cost per pixel. VERIFIED (real-card runs).
 
 ### Where the main pass's fragments go
 
-`tools/cod4_perf.py` now prints the `p` lines' means as a `frags` row
+`tools/cod4_perf.py` prints the `p` lines' means as a `frags` row
 (`VCOD_FRAG_STATS`, or the profile on) and their sum over the window's
 pixels; CoD1's static models count apart as `props`
 (`frame_prof::Frag::Props`, `Renderer::is_prop_draw`). mp_carentan's
@@ -292,10 +290,10 @@ matches retail; the excess was the count. INFERRED.
   `shadertypes/model/*.stype` in pak0-6); UO's `*_cullnone*`,
   `cloth_maskcullnone`, `foliage_blend2` and the propellers do.
   VERIFIED (the paks).
-- vcod drew every prop with culling off (`prop_pipeline`, "foliage
-  cross planes need both sides"). It now culls a prop whose skin's
-  template is not `cull none` (`prop_skin_two_sided`), on CoD1 and UO
-  only. An xmodel's faces wind opposite to the map's, so the cull is
+- vcod culls a prop whose skin's template is not `cull none`
+  (`prop_skin_two_sided`), on CoD1 and UO only. Drawing every prop with
+  culling off (the old `prop_pipeline`) draws inner foliage faces retail
+  does not. An xmodel's faces wind opposite to the map's, so the cull is
   `Face::Front`. A scripted skin (`skins/` block) keeps the stage path
   and its two sides. VERIFIED (ours).
 - Frames: 26 views (each map's intermission spot and spawns at four
@@ -305,15 +303,14 @@ matches retail; the excess was the count. INFERRED.
   foliage and branches seen through the cut, which retail does not
   draw. `Face::Back` instead differed by up to 23296 pixels, whole
   props missing. VERIFIED (a scratch test over `Renderer::headless`).
-  The shift is toward retail; a hand check should still compare a tree on
-  mp_carentan with retail (pending).
+  Pending: a hand check of a tree on mp_carentan against retail.
 
 ### The alpha test where nothing is cut
 
 `fs_main` and `fs_prop` discard under alpha 0.5, which keeps a GPU
 from writing depth before the shader runs. A CoD1 world or prop image
 none of whose uploaded levels holds alpha under 128 (opaque world types
-are forced to 255 at load) now draws through `fs_main_solid` /
+are forced to 255 at load) draws through `fs_main_solid` /
 `fs_prop_solid`, the same colour with no discard (`Pass::Solid`,
 `Pass::Prop { solid }`, `uploads_cutout`); a sample filtered from
 texels all at 128 or more never falls under 0.5, so no pixel changes.
@@ -349,20 +346,18 @@ only within a round. VERIFIED (ours).
   (as P10/P15 did for CoD2 and CoD4) would not touch the fill. INFERRED.
 - Texture formats: the `.dds` images upload as their own BC blocks and
   the rest as RGBA8 at `r_texturebits` 0, retail's default (0x4b3300);
-  `cod11-front-end.md`'s defaults and `prepare`'s 16-bit path
-  already follow retail. Not a gap. INFERRED.
+  `cod11-front-end.md`'s defaults and `prepare`'s 16-bit path follow
+  retail. INFERRED.
 - The gamma pass: 0.12 ms on a real card, kept (section 4).
 - Entity draws (306): CPU work on a GPU-bound frame; not this item.
 
 ### Pending on a real card
 
-From a build of this branch (`cargo build --release -p vcod -p
-vcod-server`):
+From a release build (`cargo build --release -p vcod -p vcod-server`):
 
 `SESSION=1 GAME=cod1 COD_DIR=<1.1 install> tools/cod4_perf.sh /tmp/p27 mp_carentan 30`
 
-and compare fps, `gpu.opaque` and the new `frags` row with the 570 fps
-run. A card that keeps early depth without the discard shows it in
+and compare fps, `gpu.opaque` and the `frags` row with the 570 fps run. A card that keeps early depth without the discard shows it in
 `gpu.opaque` beyond the prop cut. Pending.
 
 ## 6. The props' fill at mp_carentan's spectator spot (P29)

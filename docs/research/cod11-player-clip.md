@@ -3,20 +3,18 @@
 How a live player blocks another on a stock 1.1 MP server: which trace masks
 see a player, what contents a player carries in each state, how the server's
 trace clips one capsule against another, when the entity's box is linked and
-how it is packed into the wire `solid`, how the client's prediction clips the
-same players, and `StuckInClient`, the end-frame push that separates two
-players found inside each other, and the landing stun that shares the push's
-timer (section 8). Sections 8.9, 9 and 10 read the retail captures;
-section 11 is what vcod does and section 12 where it differs. Section 13
-covers 1.5's and UO's `PM_trace`, the touch list both patches notify, and
-1.5's push.
+packed into the wire `solid`, how the client's prediction clips the same
+players, `StuckInClient` (the end-frame push that separates two players found
+inside each other), and the landing stun that shares the push's timer
+(section 8). Sections 8.9, 9 and 10 read the retail captures; section 11 is
+what vcod does and section 12 where it differs. Section 13 covers 1.5's and
+UO's `PM_trace`, the touch list both patches notify, and 1.5's push.
 
-Evidence rules as everywhere in this directory. This document carries no
-document-level default: every claim carries its own label. VERIFIED is a byte
-read out of a module or a committed capture (an immediate, a relocation, a
-string, a store at an offset, a fixture line). INFERRED is anything read off
-control flow, which includes the order of two stores and every branch
-condition, and anything that says what a field means.
+No document-level default label: every claim carries its own. VERIFIED is a
+byte read out of a module or a committed capture (an immediate, a relocation,
+a string, a store at an offset, a fixture line). INFERRED is anything read off
+control flow, including the order of two stores, every branch condition, and
+what a field means.
 
 Modules:
 
@@ -24,15 +22,15 @@ Modules:
   Addresses are its own VAs as `nm -D`, `objdump` and
   `python3 tools/re/annotate_func.py <elf> <symbol|0xaddr>` print them; a
   Ghidra export at +0x10000 shows each one 0x10000 higher. The module is
-  position-independent, so a call or a data reference is readable only with
-  its relocation resolved, which `annotate_func.py` does. `PM_Jump` (0x2eb98),
+  position-independent: a call or data reference reads only with its
+  relocation resolved, which `annotate_func.py` does. `PM_Jump` (0x2eb98),
   `PM_Friction` (0x2e460), `PM_WalkMove` (0x2f258) and `PM_DropTimers`
-  (0x32a44) carry no dynamic symbol; the names describe what the bytes do.
+  (0x32a44) have no dynamic symbol; the names describe what the bytes do.
 - `cod_lnxded`, the 1.1d dedicated engine, stripped, absolute addresses.
 - `cgame_mp_x86.dll` 1.1, image base 0x30000000.
 
-Offsets used throughout, in the game module. `ent` is a gentity (stride
-0x314), `cl = ent+0x158` its client, the playerstate at `cl+0`.
+Offsets, in the game module. `ent` is a gentity (stride 0x314), `cl =
+ent+0x158` its client, the playerstate at `cl+0`.
 
 | offset | meaning | evidence |
 |---|---|---|
@@ -59,9 +57,9 @@ Contents bits: `CONTENTS_BODY` 0x2000000, `CONTENTS_CORPSE` 0x4000000,
 
 VERIFIED: `ClientThink_real` (0x3fee0) stores 0x2810011 into `pm.tracemask`
 at 0x400a4 and 0x810011 at 0x40098. INFERRED, off the `jle` at 0x40096: the
-first for `pm_type <= 5`, the second above, so a live player's move is
-stopped by bodies and a dead one's is not. VERIFIED: `ClientSpawn` stores
-0x2810011 into `ent+0x190` (0x42732).
+first for `pm_type <= 5`, the second above, so bodies stop a live player's
+move and not a dead one's. VERIFIED: `ClientSpawn` stores 0x2810011 into
+`ent+0x190` (0x42732).
 
 VERIFIED: the cgame's pmove setup stores 0x2810011 and 0x810011 into
 `pm+0x34` (0x30029569-0x30029590) and masks 0x2000000 and 0x10000 out of it
@@ -81,29 +79,30 @@ with `MASK_SPECTATOR`, the same 0x800011.
 
 VERIFIED, 1.1d `PmoveSingle`: the dispatch's `pm_type - 1` table at
 `.rodata` 0x70ce8 sends 5 to 0x34456, the function's exit past every move,
-and `PM_UpdateViewAngles` returns on 5 at once (0x32d91); the only state
-the cmd changes is `commandTime` (0x34074). The intermission's think on the
-server runs no `Pmove` at all, so its snapshots hold `commandTime`. 7 takes
-the table's 0x34220, the linked arm 1 also takes (ground 1023, no move,
-`PM_Weapon`), not the dead move. VERIFIED, cgame 1.1 `CG_CalcViewValues`
-(0x300333f2): at `pm_type` 5 the view is `ps.origin` and `ps.viewangles`,
-no eye height, though retail's intermission snapshot carries
-`viewHeightCurrent` 60 and `viewHeightTarget` 60 (the spawn's standing
-eye, `mp_carentan-dm-slope-8ms-states-1.1.txt`).
+and `PM_UpdateViewAngles` returns on 5 at once (0x32d91); the cmd changes
+only `commandTime` (0x34074). The server's intermission think runs no
+`Pmove`, so its snapshots hold `commandTime`. 7 takes the table's 0x34220,
+the linked arm 1 also takes (ground 1023, no move, `PM_Weapon`), not the
+dead move. VERIFIED, cgame 1.1 `CG_CalcViewValues` (0x300333f2): at
+`pm_type` 5 the view is `ps.origin` and `ps.viewangles`, no eye height,
+though retail's intermission snapshot carries `viewHeightCurrent` 60 and
+`viewHeightTarget` 60 (the spawn's standing eye,
+`mp_carentan-dm-slope-8ms-states-1.1.txt`).
 
-VERIFIED, retail captures through the predictor (`predict_ab`, each
-snapshot rebuilt through `from_wire` and the capture's cmds run to the
-next, origin, velocity and `viewHeightCurrent` compared bit for bit,
-2026-10-19): 1.1d's `client-probes/probe_states` spectator spell, 439 of 439
-(372 moving, flown into the roofs and walls over the street and dived onto
-it), its corpse killed running, 79 of 79 (each creeping down the street's
-grade), its intermission, 630 of 630; UO's `probe_uostates` spectator 79 of
-79 and corpse 59 of 59. The UO corpse took a fix: a 1.5 or UO corpse
-killed inside a jump penalty still drops off the ground every frame,
-because `PM_CheckLadderMove`'s timer return there wants `pm_flags` 0x300
-too (UO `FUN_0003c9a6`'s opening test, 1.5 `FUN_00037330`'s); vcod's dead
-move had kept 1.1's bare `pm_time` test and held 29 of the 59 snapshots
-still.
+VERIFIED, retail captures through the predictor (`predict_ab`: each snapshot
+rebuilt through `from_wire`, the capture's cmds run to the next, origin,
+velocity and `viewHeightCurrent` compared bit for bit):
+
+| capture | spectator | corpse | intermission |
+|---|---|---|---|
+| 1.1d `client-probes/probe_states` | 439 of 439 (372 moving, flown into the roofs and walls over the street and dived onto it) | 79 of 79, killed running, each creeping down the street's grade | 630 of 630 |
+| UO `probe_uostates` | 79 of 79 | 59 of 59 | |
+
+A 1.5 or UO corpse killed inside a jump penalty still drops off the ground
+every frame, because `PM_CheckLadderMove`'s timer return there wants
+`pm_flags` 0x300 too (UO `FUN_0003c9a6`'s opening test, 1.5
+`FUN_00037330`'s). The trap: under 1.1's bare `pm_time` test the dead move
+holds 29 of UO's 59 snapshots still.
 
 VERIFIED, the linked corpse's arm on all three servers: 1.5b's
 `PmoveSingle` table (`.rodata` 0x75ae8, GOT-relative) sends 1 and 7 to
@@ -112,43 +111,39 @@ VERIFIED, the linked corpse's arm on all three servers: 1.5b's
 `PM_UpdateLean`, whose wall clamp skips on `pm_type == 1` alone,
 0x32c63) and `PM_CheckDuck` (0x316f4) takes its `pm_type > 5` arm, the
 dead bounds and `deadViewHeight` with the flat-rate eye. VERIFIED live
-(2026-10-19, `client-probes/probe_deadlink` on 1.1d, port 33481,
+(`client-probes/probe_deadlink` on 1.1d,
 `mp_carentan-dm-slope-8ms-deadlink-1.1.txt`): a body linked to a
 `script_origin` mid diagonal run and killed half a second later keeps
-velocity (159, -159, 0) for 24 s of `pm_type` 7, reads
-`groundEntityNum` 1023 throughout and only its eye moves, 60 to 8.
-vcod: `pmove::dead_linked_move`, which `cmd::dead_step` takes when
-`ps.linked` is set, on the server and in the predictor;
-`predictor_holds_retail_linked_corpse_1_1` matches 481 of 481 snapshots
-bit for bit (6 differed while vcod drew 7 off the snapshot, and the dead
-move would have stopped the velocity). VERIFIED live on 1.5b and UO the same
-way (2026-10-19, `probe_deadlink` with `COD_VERSION=1.5` and `uo`,
-ports 33571 and 33572, `mp_carentan-dm-slope-8ms-deadlink-1.5.txt` and
-`-uo.txt`): the corpse keeps (13, -157, 0) on 1.5b and (17, -199, 0) on
-UO, `groundEntityNum` 1023, for 24 s of `pm_type` 7, its eye 60 to 8.
-`predictor_holds_retail_linked_corpse_1_5` matches 479 of 479 snapshots
-and `_uo` 475 of 475 bit for bit, with no change to vcod's arm.
+velocity (159, -159, 0) for 24 s of `pm_type` 7, reads `groundEntityNum`
+1023 throughout, and only its eye moves, 60 to 8. VERIFIED live on 1.5b and
+UO the same way (`probe_deadlink` with `COD_VERSION=1.5` and `uo`,
+`mp_carentan-dm-slope-8ms-deadlink-1.5.txt` and `-uo.txt`): the corpse keeps
+(13, -157, 0) on 1.5b and (17, -199, 0) on UO, `groundEntityNum` 1023, for
+24 s of `pm_type` 7, its eye 60 to 8. vcod: `pmove::dead_linked_move`, which
+`cmd::dead_step` takes when `ps.linked` is set, on the server and in the
+predictor. Bit for bit: `predictor_holds_retail_linked_corpse_1_1` 481 of
+481 snapshots, `predictor_holds_retail_linked_corpse_1_5` 479 of 479, `_uo` 475 of 475. Drawing 7 off the
+snapshot differs on 6 of 1.1's, and the dead move would stop the velocity.
 
 VERIFIED, UO `PmoveSingle` (0x3d530, decompile): its head runs ahead of
 the `pm_type` dispatch for every type, a corpse included. It calls
 `PM_AdjustAimSpreadScale` (0x45dcb) on `ps.weapon`'s def ahead of
-`PM_UpdateViewAngles`, and a def whose `hipSpreadDecayRate` reads 0
-takes a decay of 1.0 with no frame scaling (combat doc 2.1), so once the
-dead `PM_Weapon` arm has left weapon 0 the cone empties on the next cmd.
-After `PM_UpdateViewAngles` it sets `pm_flags` 0x40 on a cmd whose
-`forwardmove` is under 0 and clears it on one whose `forwardmove` is
-over 0 or whose `rightmove` is not 0, and only then zeroes a dead body's
-move bytes (`pm_type > 5`). VERIFIED, captures: on all three servers a
-corpse whose client backs up carries 0x40 (`-deadlink-1.1.txt`,
-`-deadlink-1.5.txt` and `-deadlink-uo.txt` 20 dead snapshots each,
-`-states-1.5.txt` 70 of 80), and every dead snapshot's cone reads 255 or
-0. INFERRED: 1.1d's and 1.5b's heads are UO's in this, from those rows.
-vcod ran neither for a corpse; `cmd::dead_step` now runs both, on the
-server and in the predictor, and `retail_state_rows` compares the cone
-and the flag on dead rows (1 or 2 rows per capture failed before).
+`PM_UpdateViewAngles`, and a def whose `hipSpreadDecayRate` reads 0 takes a
+decay of 1.0 with no frame scaling (combat doc 2.1), so once the dead
+`PM_Weapon` arm has left weapon 0 the cone empties on the next cmd. After
+`PM_UpdateViewAngles` it sets `pm_flags` 0x40 on a cmd whose `forwardmove`
+is under 0 and clears it on one whose `forwardmove` is over 0 or whose
+`rightmove` is not 0, and only then zeroes a dead body's move bytes
+(`pm_type > 5`). VERIFIED, captures: on all three servers a corpse whose
+client backs up carries 0x40 (`-deadlink-1.1.txt`, `-deadlink-1.5.txt` and
+`-deadlink-uo.txt` 20 dead snapshots each, `-states-1.5.txt` 70 of 80), and
+every dead snapshot's cone reads 255 or 0. INFERRED: 1.1d's and 1.5b's heads
+are UO's in this, from those rows. vcod: `cmd::dead_step` runs both on the
+server and in the predictor, and `retail_state_rows` compares the cone and
+the flag on dead rows (without them 1 or 2 rows per capture fail).
 
-VERIFIED, retail 1.5b through the predictor the same way (2026-10-19,
-`mp_carentan-dm-slope-8ms-states-1.5.txt`, `probe_states` with
+VERIFIED, retail 1.5b through the predictor the same way
+(`mp_carentan-dm-slope-8ms-states-1.5.txt`, `probe_states` with
 `+set probe_suicide_wait 10.5`): the spectator spell 439 of 439 (311
 moving), the corpse 79 of 79, its intermission 698 of 698. That take kills
 the body prone, 1475 ms into the stance change's `pm_time` with 0x2000
@@ -161,11 +156,12 @@ unpredicted, 0 mismatches.
 VERIFIED: `BG_CheckProneValid` (0x2d428) traces with 0x810011 and 0x820011
 (0x2d4c2, 0x2d4d2), neither holding 0x2000000; `PM_UpdateLean` (0x32ac8)
 traces with 0x2810011 (0x32d07). INFERRED: the prone fit ignores players and
-a lean is cut short by one.
+a player cuts a lean short.
 
-Of the bits above 0x20000 only 0x800000 and 0x2000000 are in a mask, and no
-stock material carries either (`bsp-ibsp59-format.md`); so against the map
-the live and dead masks clip the same brushes. INFERRED, from that census.
+INFERRED, from the census in `bsp-ibsp59-format.md`: of the bits above
+0x20000 only 0x800000 and 0x2000000 are in a mask, and no stock material
+carries either, so against the map the live and dead masks clip the same
+brushes.
 
 ### 1.2 `r.contents` by state
 
@@ -186,10 +182,10 @@ VERIFIED: `G_SetClientContents` (0x414f8) compares noclip, ufo and
 (0x4151f) or 0x2000000 (0x41530); `ClientSpawn` calls it (reloc 0x4274f).
 INFERRED: it is the end frame's rule applied once at spawn.
 
-INFERRED: `player_die`'s CORPSE is overwritten with 0 by the dead player's
-next end frame, since the dead arm at 0x40ffc stores unconditionally. So a
-freshly dead player is outside both masks for the rest of the frame it died
-in, and outside every mask after it. A body-queue clone carries contents 0
+INFERRED: the dead player's next end frame overwrites `player_die`'s CORPSE
+with 0, since the dead arm at 0x40ffc stores unconditionally. So a freshly
+dead player is outside both masks for the rest of the frame it died in, and
+outside every mask after it. A body-queue clone carries contents 0
 (`cod11-combat.md` 5.2).
 
 ## 2. The server's trace
@@ -200,10 +196,10 @@ VERIFIED: trap 35 (`trap_TraceCapsule`, the case at `cod_lnxded`
 0x8088234) calls `SV_Trace` (0x80916f4) with its capsule argument 1
 (`cod11-mantle.md`, "The player is a capsule"). VERIFIED: a non-point trace
 walks the entities through 0x805a6d8 into the clip at 0x8090f18, which
-compares `mask & contents`, the pass entity and `ent+0x14c` against the pass
+compares `mask & contents`, the pass entity, and `ent+0x14c` against the pass
 entity and its owner, and holds no team compare. INFERRED: an entity is
-skipped when the mask misses its contents, when it is the mover, or when it
-is owned by the mover or by the mover's owner; teammates block each other.
+skipped when the mask misses its contents, when it is the mover, or when the
+mover or the mover's owner owns it; teammates block each other.
 
 VERIFIED: `CM_TempBoxModel` (0x804baf8) tests `svFlags & 0x200` and holds
 the handle 0x1fe, and `ClientConnect` stores 0x200 into every client's
@@ -213,15 +209,15 @@ the trace's capsule flag is set, so a player is traced as a capsule.
 
 INFERRED, off `SV_Trace`'s branch on the world trace's fraction: the entity
 pass is skipped when the world trace comes back at fraction 0, so a mover
-already stopped by the map is never reported as hitting a player.
+the map already stopped is never reported as hitting a player.
 
 ### 2.2 Capsule through capsule
 
-The Minkowski sum of two upright capsules is an upright capsule with the
-summed radius and the summed half heights, so the sweep is the mover's
-centre against that capsule: a cylinder over the straight span and a sphere
-at each end. INFERRED, the geometry of Q3's `CM_TraceCapsuleThroughCapsule`,
-which the retail primitives below fill in.
+INFERRED, the geometry of Q3's `CM_TraceCapsuleThroughCapsule`, which the
+retail primitives below fill in: the Minkowski sum of two upright capsules is
+an upright capsule with the summed radius and summed half heights, so the
+sweep is the mover's centre against that capsule, a cylinder over the
+straight span and a sphere at each end.
 
 The sphere primitive is `cod_lnxded` 0x8055794, the cylinder 0x8055980, the
 dispatcher 0x8055c04. VERIFIED: the floats at 0x80cd424 and 0x80cd428 read
@@ -230,37 +226,36 @@ sequence, for both primitives (the cylinder in the plane, the sphere in
 three dimensions), with `rel` the start less the centre and `R` the summed
 radius:
 
-- a start with `|rel|^2 - R^2 <= 0` is startsolid, fraction 0, with the
-  normal `rel`;
-- a move with `rel . delta >= 0` (not closing) or a negative discriminant
-  is not clipped at all;
+- a start with `|rel|^2 - R^2 <= 0` is startsolid, fraction 0, normal `rel`;
+- a move with `rel . delta >= 0` (not closing) or a negative discriminant is
+  not clipped;
 - the hit fraction is the entry root less a 0.125 backoff along the start
   normal, `f = (-b - sqrt(b^2 - a c)) / a + 0.125 |rel| / b`, clamped to 0
   after the `< fraction` test;
 - the reported normal is `rel` normalized at the start point, not at the
   contact;
-- the cylinder is allsolid when the end lies inside its z-span, whatever
-  its xy, and a hit counts only when the raw root's z lies inside that span.
+- the cylinder is allsolid when the end lies inside its z-span, whatever its
+  xy, and a hit counts only when the raw root's z lies inside that span.
 
-That is not Q3's shape. Q3 pads the quadratic's radius by `RADIUS_EPSILON`
-(1.0), skips a move whose segment clears `radius + SURFACE_CLIP_EPSILON`,
-and takes the normal at the contact; its cylinder runs only on a move with
-an xy delta. INFERRED, from Quake III Arena `code/qcommon/cm_trace.c`. The
-bump capture decides between the two: section 9.1's 30.125 stop and section
-9.2's 30.02 to 30.08 glances fit retail's backoff, and Q3's pad held a
-glancing walker at 30.10 to 30.18 (section 11).
+INFERRED, from Quake III Arena `code/qcommon/cm_trace.c`: Q3 differs. It pads
+the quadratic's radius by `RADIUS_EPSILON` (1.0), skips a move whose segment
+clears `radius + SURFACE_CLIP_EPSILON`, takes the normal at the contact, and
+runs its cylinder only on a move with an xy delta. The bump capture decides:
+section 9.1's 30.125 stop and section 9.2's 30.02 to 30.08 glances fit
+retail's backoff, and Q3's pad holds a glancing walker at 30.10 to 30.18
+(section 11).
 
 INFERRED: the 0.5 at 0x80cd42c is the dispatcher's half height. The
 dispatcher picks which of the two spheres and the cylinder to trace from the
-z relation of the two capsules; its branch conditions were not read in full.
+z relation of the two capsules; its branch conditions are not read in full.
 
 ### 2.4 The capsule sweep's rounding on 1.1d
 
 VERIFIED, `cod_lnxded` 1.1d `CM_TransformedBoxTrace` (0x80568d8): the
 mover's box is made symmetric, its offset `(mins + maxs) * 0.5` stored, and
 the start and end shifted by it and then by the body's origin, each sum
-stored as a float, so the sweep runs in the body's frame. VERIFIED, the
-same function: the mover's capsule radius is `min(maxs.x, maxs.z)` of the
+stored as a float, so the sweep runs in the body's frame. VERIFIED, the same
+function: the mover's capsule radius is `min(maxs.x, maxs.z)` of the
 symmetric box, its half height `maxs.z`, its sphere offset the difference,
 stored. VERIFIED, `CM_Trace` (0x8056310): the delta is the end less the
 start, stored, and its squared length stored at `tw+0x24`. VERIFIED, the
@@ -271,19 +266,19 @@ stored.
 INFERRED, from the instruction sequence of the sphere (0x8055794): `rel`,
 its squared length, the dot with the delta and the discriminant stay on the
 x87 stack; the summed radius squared is stored (0x80557d2), and so is the
-raw root `(-b - sqrt(disc)) / a` (0x8055903) before the 0.125 backoff,
-`0.125 |rel| / b` with `|rel|` the stored length `VectorNormalize2`
+raw root `(-b - sqrt(disc)) / a` (0x8055903) before the 0.125 backoff;
+`0.125 |rel| / b`, with `|rel|` the stored length `VectorNormalize2`
 (0x8065bc8) returns, is added on the stack. The sum is compared with the
 fraction and stored. INFERRED, the cylinder (0x8055980) the same, except
 that the summed radius squared and `a` (the squared xy delta) stay on the
 stack, and its z test reads `start.z + (f - backoff) * delta.z`, the root
 recovered from the sum.
 
-VERIFIED, `bump_ab` on `mp_carentan-dm-bump-walker.txt`: in f32 world coordinates vcod's sweep landed one
-to four ulps off retail on six of the bump capture's rows (the stand jump's
-fall onto the target, a crouched head-on stop, a prone glance); in the
-body's frame with these roundings every row reads retail's bits.
-`movetrace::kept` is the port, run under `Arith::Kept` only: 1.5b's and
+VERIFIED, `bump_ab` on `mp_carentan-dm-bump-walker.txt`: a sweep in f32 world
+coordinates lands one to four ulps off retail on six of the bump capture's
+rows (the stand jump's fall onto the target, a crouched head-on stop, a prone
+glance); in the body's frame with these roundings every row reads retail's
+bits. `movetrace::kept` is the port, run under `Arith::Kept` only: 1.5b's and
 UO's stored builds and the Windows cgames keep the f32 world-frame sweep,
 not read.
 
@@ -295,7 +290,7 @@ VERIFIED: `PM_StepSlideMove` (0x34fbc) compares the down trace's
 lands on an entity below 64, a client, the move restores the plain slide's
 origin and velocity and returns, with no revert test, no ground snap and no
 step event. So a walker pressed into a prone player is not stepped onto its
-top sphere. Section 9.1's prone head-on rows are the capture of it.
+top sphere. Section 9.1's prone head-on rows capture it.
 
 ## 3. Bounds and the link
 
@@ -307,7 +302,7 @@ copies `pm.mins`/`pm.maxs` into them (0x40539-0x40569) and calls
 VERIFIED: the stance constants at 0x316f4 read a crouched `maxs.z` of 50
 (0x70be0) and a prone one of 30 (0x70bdc).
 
-INFERRED: the box starts at the feet (`mins.z` 0) and its top follows the
+INFERRED: the box starts at the feet (`mins.z` 0), its top follows the
 stance, and every cmd relinks the player once, after its whole `Pmove` chop
 and ahead of `G_TouchTriggers` (0x405b3).
 
@@ -332,8 +327,8 @@ VERIFIED, `SV_LinkEntity` (`cod_lnxded` 0x80908b0):
   zero) and compared against 1 and 255.
 
 INFERRED, the branches: a brush model packs 0xffffff, an entity whose
-contents hold neither 0x2000000 nor 0x1 packs 0, and anything else packs
-the three bytes, each clamped to `[1, 255]`.
+contents hold neither 0x2000000 nor 0x1 packs 0, and anything else packs the
+three bytes, each clamped to `[1, 255]`.
 
 So a player's feet box, `mins.z` 0, packs `zd` 1: the clamp, not the box,
 puts the byte there. A client decoding `mins.z = -zd` puts the box's floor
@@ -341,8 +336,8 @@ one unit below the feet (section 5).
 
 VERIFIED, the bump capture (`mp_carentan-dm-bump-walker.txt`, first at
 lines 27, 2644 and 4815): the target's `solid` reads 6684943 standing,
-5374223 crouched and 4063503 prone. Those are `(maxs.z + 32) << 16 | 1 << 8
-| 15` for `maxs.z` 70, 50 and 30.
+5374223 crouched and 4063503 prone, which are `(maxs.z + 32) << 16 | 1 << 8 |
+15` for `maxs.z` 70, 50 and 30.
 
 ### 4.2 When it is written
 
@@ -411,8 +406,8 @@ and cleared at 0x40f11 (the intermission arm), in `IntermissionClientEndFrame`
 writes it. INFERRED, from the branches around 0x40fb0: it is set for a
 connected client in `sessionState` 0 or 1, playing or dead, so it reads "this
 client owns its view", and it is clear on a spectator, an intermission
-client and a client still connecting. VERIFIED: every `!snap` line of the three
-bump walker fixtures carries 0x40000 in `pm_flags` (sections 9 and 10).
+client and a client still connecting. VERIFIED: every `!snap` line of the
+three bump walker fixtures carries 0x40000 in `pm_flags` (sections 9 and 10).
 
 `StuckInClient` (0x40934). VERIFIED: it tests byte `cl+0xe` bit 0x4 on self
 (0x40949) and compares contents against 0x4000000 (0x4096d); in the loop it
@@ -432,23 +427,23 @@ connecting, in any slot, turns `StuckInClient` off for every player on the
 server. Section 10.3 is the capture.
 
 1.5b and UO pass over such a slot instead. VERIFIED, 1.5b
-`game.mp.i386.so` `StuckInClient` (0x3a449): the scan's own-view test on
-the other slot (`and eax,0x20000` at 0x3a50e, 1.5's own-view bit) and its
+`game.mp.i386.so` `StuckInClient` (0x3a449): the scan's own-view test on the
+other slot (`and eax,0x20000` at 0x3a50e, 1.5's own-view bit) and its
 `sessionState` test (`+0x20cc`, 0x3a525) both branch to the loop's
 increment at 0x3aaac, as do the in-use, self, health and contents tests.
 VERIFIED, UO `game.mp.uo.i386.so` `StuckInClient` (0x4258c): the same
 shape (own view 0x80000 at 0x42651, `sessionState` `+0x4504` at 0x42668,
 increment at 0x42c03), plus one more skip: a partner whose `s.eFlags`
 carries 0x100000 (`and eax,0x100000` at 0x426ce), UO's `EF_IN_VEHICLE`
-(`coduo-diff.md` 9). INFERRED: on 1.5 and UO a spectator turns nothing
-off, and a seated UO player is nobody's partner. VERIFIED, off the 1.5b
-and UO runs of `probe_pushcand` (`cod11-movers.md` 12, "The candidate
-trace"): with a spectator connected, two players `setOrigin`ed onto one
-spot are shoved apart on the next end frame, both velocities 190 long.
+(`coduo-diff.md` 9). INFERRED: on 1.5 and UO a spectator turns nothing off,
+and a seated UO player is nobody's partner. VERIFIED, off the 1.5b and UO
+runs of `probe_pushcand` (`cod11-movers.md` 12, "The candidate trace"): with
+a spectator connected, two players `setOrigin`ed onto one spot are shoved
+apart on the next end frame, both velocities 190 long.
 
 vcod: `game::stuck::stuck_in_client` takes `StuckRules::V1_1` on protocol
-1 and `StuckRules::V1_5` on 1.5 and UO; `StuckView::seated` is the
-vehicle skip.
+1 and `StuckRules::V1_5` on 1.5 and UO; `StuckView::seated` is the vehicle
+skip.
 
 ### 6.3 Overlap
 
@@ -478,10 +473,10 @@ VERIFIED, 1.5b rodata 0x77b68..0x77b78 reads -1.0, 2^31, 1.0, 0.0 and
 0x3a842 is `fild` of `rand()`, divided by 2^31, doubled (`fld st(0)`,
 `faddp`) and less 1.0, added to the difference on the x87 stack before
 its store. INFERRED: so on 1.5 and UO each `j = rand() / 2^30 - 1`, in
-[-1, 1): two stacked players part in any direction, where 1.1's push
-always points them into one quadrant. The speed test reads `sqrt` of the
-horizontal velocity above 0.0 where 1.1 tests for a non-zero component,
-the same set of cases.
+[-1, 1): two stacked players part in any direction, where 1.1's push always
+points them into one quadrant. The speed test reads `sqrt` of the
+horizontal velocity above 0.0 where 1.1 tests for a non-zero component, the
+same set of cases.
 
 VERIFIED: `ClientEndFrame` stores `ps.speed` at 0x41100. INFERRED: the
 store runs ahead of the `StuckInClient` call and writes `(int)g_speed`.
@@ -512,7 +507,7 @@ until the 0.
 
 ## 8. The landing stun
 
-Read out of `game.mp.i386.so` on 2026-10-05 with `tools/re/annotate_func.py`.
+Read out of `game.mp.i386.so` with `tools/re/annotate_func.py`.
 `PM_CrashLand` (0x2fd68) has no symbol. Offsets beyond the table at the top:
 `pm+0xd9` is `pm->waterlevel` (`cod11-mantle.md`, "The wish speed"),
 `pm+0x38` the debug level, `ps+0x3c` `gravity`, `ps+0x1c` `origin[2]`,
@@ -552,7 +547,7 @@ VERIFIED: the two bounds are the cvars `bg_fallDamageMinHeight` and
 systeminfo configstring carries 480 and 256
 (`crates/server/tests/fixtures/configstrings/mp_carentan-dm.txt`).
 
-The compares and stores below are VERIFIED at the addresses given. The
+The compares and stores below are VERIFIED at the addresses given; the
 branch each one is read as is INFERRED:
 
 - max <= min or min < 0 prints `bg_fallDamageMaxHeight and
@@ -587,7 +582,7 @@ sets no timer. Otherwise:
 
 Both arms then call `BG_AddPredictableEventToPlayerstate(0x74 + material,
 damage, ps)` (0x30102-0x30123), the material being bits 20-24 of the ground
-surface flags or 0 under flag 0x2000 (0x30109-0x3011c). 0x74 is 116,
+surface flags, or 0 under flag 0x2000 (0x30109-0x3011c). 0x74 is 116,
 `EV_LANDING_PAIN_*` (`cod11-events-and-fx.md`).
 
 INFERRED, from the arithmetic: damage 1 stuns 535 ms at 0.4895; the
@@ -602,15 +597,15 @@ VERIFIED, the readers in the pmove range (0x2c000-0x3b000): of `pm_flags`
 0x100, `PM_WalkMove` (0x2f4d8) and `PM_Friction` (0x2e51c), section 7; of
 `pm_time`, `PM_CheckLadderMove` (0x336f6, returning at 0x3393f), the end of
 `PM_SlideMove` (0x34f83) and `PM_DropTimers` (0x32a50). `PM_CheckJump`
-(0x2ebbb-0x2ebca) tests `pm_flags` 0x800, 0x2000 and 0x1 and not 0x100.
+(0x2ebbb-0x2ebca) tests `pm_flags` 0x800, 0x2000 and 0x1, not 0x100.
 `PmoveSingle` calls `PM_CheckLadderMove` at 0x342f4, before `PM_DropTimers`
 at 0x342f9.
 
-INFERRED, what a stunned player gets: a quarter of the walk acceleration and
-0.3 of the ground friction's control term, for as long as the timer runs; no
-ladder check at all, which leaves last frame's `PMF_LADDER` (0x10) as it
-was, since the early return comes before step 4 of `cod11-mantle.md`'s
-"Ladders" clears it; and the jump stays available.
+INFERRED, what a stunned player gets while the timer runs: a quarter of the
+walk acceleration and 0.3 of the ground friction's control term; no ladder
+check, which leaves last frame's `PMF_LADDER` (0x10) as it was, since the
+early return comes before step 4 of `cod11-mantle.md`'s "Ladders" clears it;
+and the jump stays available.
 
 VERIFIED: `PM_SlideMove` copies the velocity into a local at 0x347d4-0x347e7,
 replaces its z with the gravity-applied end velocity at 0x34838, and at
@@ -623,29 +618,26 @@ unchanged. VERIFIED: the only `pm_time` stores in the pmove range are
 0x2ffd7 (8.7), 0x300af (8.4) and `PM_DropTimers` (0x32a66, 0x32a72); there
 is no water-jump timer.
 
-VERIFIED, one run on 2026-10-06 against the retail 1.1d server:
-`probe_fall` with a `--probe-fall-walk 315` client, which holds forward at
-world yaw 315 on every cmd, so each stunned landing walks the player
-diagonally into the street's south wall, whose plane the player's origin
-meets at y 1815.128
+VERIFIED, a retail 1.1d run: `probe_fall` with a `--probe-fall-walk 315`
+client, which holds forward at world yaw 315 on every cmd, so each stunned
+landing walks the player diagonally into the street's south wall, whose
+plane the player's origin meets at y 1815.128
 (`crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall-walk.txt`).
 Rows under the stun read the player on that plane with a velocity into it:
 `ct=19967 origin=1026.589,1815.128,-39.875 vel=157,-152,0 ...
 pm_flags=0x40100 pm_time=573` (line 213), and further along, where the
 street rises, `ct=20536 ... vel=160,-157,10 ... pm_time=4`; the next row,
 `ct=20566`, has `pm_time` 0 and reads `vel=169,0,11` on the same plane.
-VERIFIED, vcod measurement the same day: without the restore ours read
-`vel=149,0,0` on the wall under the stun; with it, every stunned row's
-velocity, `pm_time` and `commandTime` match retail's.
-INFERRED: the velocity survives the wire because `PmoveSingle`'s tail
-(0x34398) only replaces a velocity at least twice the move, and a 45-degree
-slide moves 0.71 of it.
+VERIFIED, vcod: without the restore ours reads `vel=149,0,0` on the wall
+under the stun; with it, every stunned row's velocity, `pm_time` and
+`commandTime` match retail's. INFERRED: the velocity survives the wire
+because `PmoveSingle`'s tail (0x34398) only replaces a velocity at least
+twice the move, and a 45-degree slide moves 0.71 of it.
 
-VERIFIED, one run on 2026-10-09 against the retail 1.1d server, a hit's
-timer (`pm_flags` 0x200, combat doc 16.1) instead of the landing's:
-`client-probes/probe_slide` sets the same walker down at (960 1830), 15
-units north of that wall, and 0.3 s on sets off a `radiusDamage` beside it
-with `maxDamage` equal to `minDamage`
+VERIFIED, a retail 1.1d run with a hit's timer (`pm_flags` 0x200, combat doc
+16.1) instead of the landing's: `client-probes/probe_slide` sets the same
+walker down at (960 1830), 15 units north of that wall, and 0.3 s on sets off
+a `radiusDamage` beside it with `maxDamage` equal to `minDamage`
 (`crates/server/tests/fixtures/playerstate/mp_carentan-dm-slide-hit.txt`).
 A 200 blast from 40 north pushes the standing player into the wall at 240
 (knockback 60, timer 120), and the rows under the timer read it on the
@@ -662,8 +654,8 @@ the same for either timer bit, as 0x34f83 tests `pm_time` alone. The row
 after that one, `ct=26749 vel=193,-9,0 pm_time=3` (line 190), ran a 67 ms
 cmd as a 66 ms and a 1 ms step, both still under the timer; INFERRED: its
 velocity is the tail's (0x34398) replacement off the 1 ms step's move, not a
-clip. VERIFIED, vcod measurement the same day: ours matches every row past
-the first trial, and with the restore skipped under 0x200 36 rows differ
+clip. VERIFIED, vcod: ours matches every row past the first trial; with the
+restore skipped under 0x200, 36 rows differ
 (`fall_ab::a_hit_slide_along_a_wall_keeps_its_velocity_as_retail_does`).
 Section 10.4 is `StuckInClient`'s 0x100 push into a wall.
 
@@ -687,17 +679,17 @@ VERIFIED, 0x2ffb3-0x2ffe0: when `|fJumpOriginZ| > 0.001`, `pm_time` 200 and
 zeroed that field before the only call, so the arm never arms
 (`cod11-mantle.md`, "Jumps").
 
-Re-read on 2026-10-06 with `tools/re/annotate_func.py`. VERIFIED, the
-setters: in a full `objdump -d` of `game.mp.i386.so` the only instruction
-that ORs the bit in as an immediate is `or BYTE PTR [eax+0xd],0x20` at
-0x2ffe0; no other `or` or `mov` takes the immediate 0x2000 into a register
-or a `pm_flags`-shaped operand (the one `mov` of 0x2000, at 0x4276b, writes
-`[esi+0x17c]`), and `PM_DropTimers` clears it (0x32a44). VERIFIED, the path: the branches into
-0x30687, 0x30685 and 0x306e0, the blocks that lead to the call at 0x30721,
-are at 0x305d5, 0x305e9, 0x30615 and 0x30695, all after the store at
-0x305c8, and the store sits on the fall-through from 0x305b4, the trace
-that hit something. INFERRED: no frame reaches `PM_CrashLand` with
-`fJumpOriginZ` set, so retail never carries 0x2000.
+VERIFIED, the setters: in a full `objdump -d` of `game.mp.i386.so` the only
+instruction that ORs the bit in as an immediate is `or BYTE PTR
+[eax+0xd],0x20` at 0x2ffe0; no other `or` or `mov` takes the immediate 0x2000
+into a register or a `pm_flags`-shaped operand (the one `mov` of 0x2000, at
+0x4276b, writes `[esi+0x17c]`), and `PM_DropTimers` clears it (0x32a44).
+VERIFIED, the path: the branches into 0x30687, 0x30685 and 0x306e0, the
+blocks that lead to the call at 0x30721, are at 0x305d5, 0x305e9, 0x30615
+and 0x30695, all after the store at 0x305c8, and the store sits on the
+fall-through from 0x305b4, the trace that hit something. INFERRED: no frame
+reaches `PM_CrashLand` with `fJumpOriginZ` set, so retail never carries
+0x2000.
 
 VERIFIED, the readers of the bit in the pmove range (0x2c000-0x3b000):
 `PM_CheckJump` at 0x2ebc3 (`cod11-mantle.md`, "The gates") and
@@ -710,30 +702,34 @@ without `pm_flags` 0x200 (0x2e4fb); the control is the speed, at least 100
 (rodata 0x70868); `pm_flags` 0x100 multiplies it by 0.3 (0x2e51c-0x2e523),
 and only when 0x100 is clear does 0x2000 double it (`fadd st,st` at
 0x2e537); then 5.5 (0x70870) and `frametime`. INFERRED: a landing lockout
-would have stopped a player twice as fast and refused a jump for 200 ms;
-with the arm dead neither happens. vcod models neither the flag nor its two
-readers.
+would stop a player twice as fast and refuse a jump for 200 ms; with the arm
+dead neither happens. vcod's 1.1 rules model neither the flag nor its two
+readers (1.5's `pm_flags` 0x2000 is its jump penalty, `cod15-movement.md`).
 
-Re-read on 2026-10-08. VERIFIED, `annotate_func.py` on the ground trace
-(0x30474): the store at 0x305c8 follows the `jne` at 0x305b4, which skips
-the no-hit call to fn 0x3037c on a trace fraction other than 1.0, and every
-path to the call at 0x30721 passes through it; the call is the only entry
-to `PM_CrashLand`. VERIFIED, on the wire, the bump walker's three jump
-landings, each the first grounded snapshot of its phase
-(`mp_carentan-dm-bump-walker.txt`): stand/jump ct 39682 `pm_flags` 0x40008
-`pm_time` 0; crouch/jump ct 70832 0x40108 and 101; prone/jump ct 97632
-0x40108 and 151. The two timed ones are `StuckInClient`'s 300 from the push
-at 70633 and 97483 run down by the frames since; an armed lockout would
-have overwritten `pm_time` with 200. VERIFIED: of the 16205 `pm_flags`
-values in the committed fixtures under `crates/*/tests/fixtures`, none
-carries 0x2000. `bump_ab.rs`'s
+VERIFIED, `annotate_func.py` on the ground trace (0x30474): the store at
+0x305c8 follows the `jne` at 0x305b4, which skips the no-hit call to fn
+0x3037c on a trace fraction other than 1.0, and every path to the call at
+0x30721 passes through it; the call is the only entry to `PM_CrashLand`.
+VERIFIED, on the wire, the bump walker's three jump landings, each the first
+grounded snapshot of its phase (`mp_carentan-dm-bump-walker.txt`):
+
+| landing | ct | `pm_flags` | `pm_time` |
+|---|---|---|---|
+| stand/jump | 39682 | 0x40008 | 0 |
+| crouch/jump | 70832 | 0x40108 | 101 |
+| prone/jump | 97632 | 0x40108 | 151 |
+
+The two timed ones are `StuckInClient`'s 300 from the push at 70633 and 97483
+run down by the frames since; an armed lockout would have overwritten
+`pm_time` with 200. VERIFIED: of the 16205 `pm_flags` values in the committed
+fixtures under `crates/*/tests/fixtures`, none carries 0x2000. `bump_ab.rs`'s
 `no_jump_landing_arms_the_0x2000_lockout` holds the three landings.
 INFERRED: porting the arm would add a branch no retail frame takes; vcod
 leaves it out.
 
 ### 8.8 The game half
 
-Read out of `game.mp.i386.so` on 2026-10-05 with `tools/re/annotate_func.py`.
+Read out of `game.mp.i386.so` with `tools/re/annotate_func.py`.
 
 VERIFIED, `ClientEvents` (0x3fd24): the loop takes events 0x74 to 0x8a
 (`cmp eax,0x16` at 0x3fec0 on `event - 0x74`) into the fall arm. The arm
@@ -774,9 +770,9 @@ the shipped table's `none` multiplier of 1. 8.10 measured all of it.
 
 ### 8.9 What retail measured
 
-One run on 2026-10-05 against the retail 1.1d server: `probe_fall` dropped a
-`--probe-fall` client (16 ms cmds) onto the mp_carentan street, a 4-degree
-grade at (900 1930), from five heights (recipe in
+A retail 1.1d run: `probe_fall` dropped a `--probe-fall` client (16 ms cmds)
+onto the mp_carentan street, a 4-degree grade at (900 1930), from five
+heights (recipe in
 `crates/gsc/tests/fixtures/semantics/client-probes/README.md`). Both halves'
 lines are `crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall.txt`,
 which no gate reads. VERIFIED, each the first grounded snapshot after the
@@ -792,35 +788,33 @@ drop (fixture line in the first column):
 
 VERIFIED: after the 300 drop `pm_time` falls by each snapshot's
 `commandTime` step, to 2 at ct 27038 (line 74), and reads 0 with 0x100 gone
-at 27066 (line 75).
-INFERRED: `35 * 41 + 500` is 1935 and 1918 is that less one 17 ms cmd; 1983
-is 2000 less one; 1290 is 1340 less 50 ms, so the 300 drop landed 50 ms
-before its first grounded snapshot. The fatal fall carries no timer, as 8.4
-reads. Health drops by 23, 40 and 78 where the parm says 24, 41 and 79: 8.8's
-`parm * 0.01` in single precision lands just under the whole number, which
-the truncation then loses.
+at 27066 (line 75). INFERRED: `35 * 41 + 500` is 1935 and 1918 is that less
+one 17 ms cmd; 1983 is 2000 less one; 1290 is 1340 less 50 ms, so the 300
+drop landed 50 ms before its first grounded snapshot. The fatal fall carries
+no timer, as 8.4 reads. Health drops by 23, 40 and 78 where the parm says
+24, 41 and 79: 8.8's `parm * 0.01` in single precision lands just under the
+whole number, which the truncation then loses.
 
-VERIFIED, vcod measurement the same day: our pmove dropping the same falls
-onto flat ground reads parms 18, 24, 42 and 78 at 16 ms frames and 18, 25,
-44 and 81 at 17 ms. The velocity multiplier is not visible in this run: each
-landing was vertical, and the next walk frame's ground clip zeroes a
-vertical velocity whatever it was scaled to.
+VERIFIED, vcod: our pmove dropping the same falls onto flat ground reads
+parms 18, 24, 42 and 78 at 16 ms frames and 18, 25, 44 and 81 at 17 ms. The
+velocity multiplier is not visible in this run: each landing was vertical,
+and the next walk frame's ground clip zeroes a vertical velocity whatever it
+was scaled to.
 
 The parm is a function of the cmd lengths, and retail's fall is ours given
-the same lengths. VERIFIED, the two 2026-10-06 runs of 8.10, whose client
-logged the `serverTime` of every cmd it sent (the fixtures' `CMDS` lines):
-stepping each airborne snapshot's `origin[2]` and `velocity[2]` through the
-cmds between it and the next one, with gravity 800, the averaged-velocity
-move and the round-to-nearest velocity snap, reproduces every later airborne
-snapshot's velocity exactly and its height to the third printed decimal.
-VERIFIED: the same 340 unit drop landed parm 40 in the first 2026-10-05
-run, 43 in the second (the fixtures' previous revision) and 43 and 42 on
-2026-10-06; the stock-bounds parms of the two 2026-10-05 runs, 25, 40, 77,
-43, against ours at a fixed 16, 17, 17 ms cadence, 25, 44, 80, 44, were
-cadence, not physics. INFERRED: the snap keeps 13 of a 16 ms cmd's 12.8 of
-gravity and 14 of a 17 ms cmd's 13.6, but 14 of an 18 ms cmd's 14.4 and 26
-of a 33 ms cmd's 26.4, so a client whose cmds run 16 and 17 ms gains impact
-speed over the fall and one with odd lengths in between gains less or loses.
+the same lengths. VERIFIED, the two runs of 8.10, whose client logged the
+`serverTime` of every cmd it sent (the fixtures' `CMDS` lines): stepping each
+airborne snapshot's `origin[2]` and `velocity[2]` through the cmds between it
+and the next, with gravity 800, the averaged-velocity move and the
+round-to-nearest velocity snap, reproduces every later airborne snapshot's
+velocity exactly and its height to the third printed decimal. VERIFIED: the
+same 340 unit drop landed parm 40 in one run and 43, 43 and 42 in three
+others; the stock-bounds parms of two runs, 25, 40, 77, 43, against ours at a
+fixed 16, 17, 17 ms cadence, 25, 44, 80, 44, were cadence, not physics.
+INFERRED: the snap keeps 13 of a 16 ms cmd's 12.8 of gravity and 14 of a
+17 ms cmd's 13.6, but 14 of an 18 ms cmd's 14.4 and 26 of a 33 ms cmd's
+26.4, so a client whose cmds run 16 and 17 ms gains impact speed over the
+fall and one with odd lengths in between gains less or loses.
 
 VERIFIED, the roundings the move takes, all on the x87 with a float store at
 the end of each expression:
@@ -842,13 +836,12 @@ the end of each expression:
   is rounded.
 
 INFERRED: each is a single rounding of the exact value, which `pmove.rs`
-gets by computing in `f64` and storing to `f32`. VERIFIED, vcod
-measurement 2026-10-06: with `msec / 1000` in place of the float
-thousandth, one row of the wider-bounds run (`ct` 22135) read a height
-0.001 above retail's. VERIFIED: `PM_SlideMove` reloads the averaged
-velocity from the playerstate for the end point (`time_left` at 0x3491c
-times ps+0x20 at 0x34922), so no unrounded register value carries into
-it. VERIFIED, vcod measurement 2026-10-07: the corpse rests on terrain
+gets by computing in `f64` and storing to `f32`. VERIFIED, vcod: with
+`msec / 1000` in place of the float thousandth, one row of the wider-bounds
+run (`ct` 22135) reads a height 0.001 above retail's. VERIFIED:
+`PM_SlideMove` reloads the averaged velocity from the playerstate for the end
+point (`time_left` at 0x3491c times ps+0x20 at 0x34922), so no unrounded
+register value carries into it. VERIFIED, vcod: the corpse rests on terrain
 triangle 2838 of `mp_carentan` (normal `(0, -0.0712, 0.9975)`), no patch.
 
 VERIFIED, the rest of the move's roundings, all in `game.mp.i386.so`:
@@ -876,25 +869,24 @@ VERIFIED, the rest of the move's roundings, all in `game.mp.i386.so`:
 - The trace's end point is `CM_BoxTrace`'s (`cod11-mantle.md`, "The
   terrain clip's arithmetic").
 
-VERIFIED, vcod measurement 2026-10-07: with `CM_BoxTrace`'s end point
-alone, both free-fall rows (`ct` 21789 and 21985) and the corpse run's
-three free-fall rows close; a clear move's end point is `start + delta`
-with `delta` taken between the box-centre-shifted points, and the 35-unit
-shift rounds the start whenever it crosses a power of two. With the
-terrain clip, the brush clip, the slide, the friction and the walk ported
-as above, every row of all four `fall_ab` fixtures matches retail to the
-printed thousandth: the corpse's nine terrain rows, the south wall's
-1815.128 rows and the pillar jitter included. Each was ruled in by
-measurement: the terrain port closed the corpse rows and left the walk's
-jitter phase three drops off retail's; the slide's float order and
-`MAX_CLIP_PLANES` brought the jitter's runs onto retail's but held a
-landed state retail never reads; the walk's wish and accelerate order
-closed that and the wall rows. INFERRED, from the slide's trace: the
-1815.128 rows are a cmd that ends drifting 0.0025 off the wall at the
-overclip's 0.159, and retail's 1815.125 rows are a cmd whose clip against
-the ground and then the wall turns the dot with the ground plane negative,
-which sends the velocity along the crease of the two, with no y; the sign
-of that dot is the last bit of the walk's velocity.
+VERIFIED, vcod: with `CM_BoxTrace`'s end point alone, both free-fall rows
+(`ct` 21789 and 21985) and the corpse run's three free-fall rows close; a
+clear move's end point is `start + delta` with `delta` taken between the
+box-centre-shifted points, and the 35-unit shift rounds the start whenever
+it crosses a power of two. With the terrain clip, the brush clip, the slide,
+the friction and the walk ported as above, every row of all four `fall_ab`
+fixtures matches retail to the printed thousandth: the corpse's nine terrain
+rows, the south wall's 1815.128 rows and the pillar jitter included. Each
+port is needed: the terrain port alone closes the corpse rows and leaves the
+walk's jitter phase three drops off retail's; the slide's float order and
+`MAX_CLIP_PLANES` bring the jitter's runs onto retail's but hold a landed
+state retail never reads; the walk's wish and accelerate order close that and
+the wall rows. INFERRED, from the slide's trace: the 1815.128 rows are a cmd
+that ends drifting 0.0025 off the wall at the overclip's 0.159, and retail's
+1815.125 rows are a cmd whose clip against the ground and then the wall turns
+the dot with the ground plane negative, which sends the velocity along the
+crease of the two, with no y; the sign of that dot is the last bit of the
+walk's velocity.
 
 VERIFIED: the first frame of a drop from rest takes the tail of
 `PmoveSingle` (0x34398-0x3443d): it moves `400 * t^2` while its end
@@ -907,17 +899,15 @@ given: each drop's first snapshot reads 263.000 for `(900, 1930, 262)`.
 
 ### 8.10 What retail measured of the damage
 
-Two runs on 2026-10-05 against the retail 1.1d server, with the probe
-extended: a sixth drop at `maxhealth` 200 ahead of the fatal one, and the
-damage and killed callbacks wrapped to log their arguments (recipe in
-`client-probes/README.md`, `probe_fall`). The first ran at the stock bounds,
-the second under `+set bg_fallDamageMinHeight 200 +set bg_fallDamageMaxHeight
-1000`. Both were taken again on 2026-10-06 with the client logging every
-cmd's `serverTime` (8.9), and the second pair replaced the first in
-`crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall-damage.txt` and
-`mp_carentan-dm-fall-damage-cvars.txt`, which `crates/server/tests/fall_ab.rs`
-gates. The figures below are the 2026-10-06 pair's; the callback lines read
-the same in all four runs.
+Retail 1.1d runs with the probe extended: a sixth drop at `maxhealth` 200
+ahead of the fatal one, and the damage and killed callbacks wrapped to log
+their arguments (recipe in `client-probes/README.md`, `probe_fall`). One ran
+at the stock bounds, one under `+set bg_fallDamageMinHeight 200 +set
+bg_fallDamageMaxHeight 1000`, with the client logging every cmd's
+`serverTime` (8.9): `crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall-damage.txt`
+and `mp_carentan-dm-fall-damage-cvars.txt`, which
+`crates/server/tests/fall_ab.rs` gates. An earlier pair without the cmd log
+read the same callback lines.
 
 VERIFIED, the damage callback's arguments on every landing of both runs:
 `inflictor undefined attacker undefined ... dflags 0 mod MOD_FALLING weapon
@@ -958,9 +948,8 @@ despite flag 0x200, and `PM_CrashLand` reads them live.
 
 ### 8.11 A corpse's frame
 
-VERIFIED, one run on 2026-10-06 against the retail 1.1d server:
-`probe_fall` at the stock bounds with a client that prints a `FALL` line
-for every snapshot that moves a corpse
+VERIFIED, a retail 1.1d run: `probe_fall` at the stock bounds with a client
+that prints a `FALL` line for every snapshot that moves a corpse
 (`crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall-corpse.txt`).
 The fatal drop lands at y 1927.943 with `vel=0,-25,-2`. From the next
 snapshot on, the body creeps down the street's grade for the rest of the
@@ -991,25 +980,23 @@ clips that against the slope, and the closing ground trace lands it, on
 every frame. The body moves `0.5 * g * t^2` along the grade per cmd, about
 0.007 units at 16 ms on the street's 4-degree slope, whatever its
 velocity. The landing's height is a few thousandths of a unit, under the 4
-units any landing event needs. That was the whole of the old "corpse
-rest" gap: ours stopped the body the frame after the death, 3 units up the
-grade.
+units any landing event needs. A dead move that stops the body instead
+leaves it 3 units up the grade.
 
 vcod: `pmove::dead_move` runs the same order: ground trace, the dead
 friction, the ladder check's drop of the ground (skipped under a running
 `pm_time`), the air move, the closing trace and its crash land.
 `pmove::air_move` opens with `friction`, as `PM_AirMove` does; off the
-ground only its sub-unit stop and the water term apply. VERIFIED, vcod
-measurement 2026-10-06: `fall_ab` replays the run's cmd timeline and
-matches every `FALL` row past the second drop to the printed thousandth,
-the slide included. The two older runs' corpse `after` lines, which the
-gate used to mask, match too.
+ground only its sub-unit stop and the water term apply. VERIFIED, vcod:
+`fall_ab` replays the run's cmd timeline and matches every `FALL` row past
+the second drop to the printed thousandth, the slide included, and the two
+older runs' corpse `after` lines.
 
 VERIFIED, the run's cmd log: the client's clock stepped back once, sending
 54757 and then 54750, and the server drops the second (`SV_UserMove`'s
-`<=` test, docs/protocol-1.1.md). `fall_ab` used to sort the logged cmds,
-which ran 54750 first and left the corpse 0.006 units up the grade for the
-rest of the run. It replays them in the order they were sent now.
+`<=` test, docs/protocol-1.1.md). `fall_ab` replays the cmds in the order
+they were sent; sorted, 54750 runs first and leaves the corpse 0.006 units up
+the grade for the rest of the run.
 
 ### 8.12 The walk capture's corpse: a stalled frame
 
@@ -1028,7 +1015,7 @@ the table in docs/protocol-1.1.md, "How long a cmd is simulated for").
 52150 is 51950 + 200.
 
 INFERRED, from those numbers: the server stalled after its frame at 51950.
-Every cmd the client sent up to 52914 ran on `level.time` 51950: the
+Every cmd the client sent up to 52914 ran on `level.time` 51950, the
 landing and the death among them, which is why both read 51950; the first
 cmd past 52150 ran clamped to 52150; every later one had a span of 0 and
 returned. The server then caught up to 53950 with no packets between, and
@@ -1046,22 +1033,19 @@ corpse frames (the arrears past a second are dropped), which slide the body
 along the south wall to rest.
 
 VERIFIED: the capture shows no corpse row after 53950 because the client
-that took it predates the probe's corpse key: the fixture landed in
-2a1dcd0, the key in `FallProbe::observe` in a72829a.
+that took it predates the probe's corpse key in `FallProbe::observe`.
 
 vcod: `replay_moves` applies both clamps on the last frame's clock, and
 `fall_ab` replays the stall as `WALK_HITCH`: every cmd sent before the
 53950 snapshot goes in the frame after 51950, in packets of at most 32,
-and nothing runs until 53950. VERIFIED, vcod measurement 2026-10-08: the
-53950 row matches to the printed thousandth, `vel=134,-134,0` and
-`commandTime` included, and the corpse rests at `(1034.139, 1815.130)`,
-the `after` line's x and y.
+and nothing runs until 53950. VERIFIED, vcod: the 53950 row matches to the
+printed thousandth, `vel=134,-134,0` and `commandTime` included, and the
+corpse rests at `(1034.139, 1815.130)`, the `after` line's x and y.
 
-Open, the corpse's height. VERIFIED, the `after` line reads z -39.92 where
-ours rests at -39.875, on `mp_carentan` terrain triangle 2486, whose face
-is at z -40 (a live player rests at -39.875 on it in both servers).
-VERIFIED, a second retail run of the same probe and client on 2026-10-08,
-with no stall
+The corpse's height. VERIFIED, the `after` line reads z -39.92 on
+`mp_carentan` terrain triangle 2486, whose face is at z -40 and on which a
+live player rests at -39.875 in both servers.
+VERIFIED, a second retail run of the same probe and client, with no stall
 (`crates/server/tests/fixtures/playerstate/mp_carentan-dm-fall-walk-corpse.txt`):
 the fatal landing reads z -39.862 at t 50800, and every corpse row from
 t 50850 on reads -39.963 or -39.964, sliding at 48 and then at rest. The
@@ -1096,17 +1080,17 @@ clip's 0.125 pad is not in it.
 
 INFERRED, from those: on a flat partition (its max z the face itself) a
 fall whose capsule bottom ends above the face has `bounds[0].z` above the
-partition's max and never reaches the clip, so it falls the full frame;
-on a slope the partition's bounds span the move and the clip runs as
-before, which is why the 8.11 corpse matched.
+partition's max and never reaches the clip, so it falls the full frame; on
+a slope the partition's bounds span the move and the clip runs as before,
+which is why the 8.11 corpse matched.
 
 vcod: `TerrainPart` keeps the partition's point bounds and
 `CollisionWorld::clip_terrain` skips a partition whose bounds miss the
 trace's, computed as above (`TerrainPart::touches`; a point trace takes its
-segment's box, `touches_segment`). VERIFIED, vcod measurement 2026-10-08:
-`fall_ab` gates both corpse heights unmasked, the walk capture's -39.92 and
-every row of the second run (the -39.963 and -39.964 rows included). Not
-ported: the point arm's further tests in 0x8054c48 (0x8054d0f-0x8054e66).
+segment's box, `touches_segment`). VERIFIED, vcod: `fall_ab` gates both
+corpse heights unmasked, the walk capture's -39.92 and every row of the
+second run (the -39.963 and -39.964 rows included). Not ported: the point
+arm's further tests in 0x8054c48 (0x8054d0f-0x8054e66).
 
 VERIFIED, `cod_lnxded`, a patch record's bounds: the patch branch of
 `CM_LoadMap` hands the same `record + 0xc` to `CM_GeneratePatchCollide`
@@ -1143,33 +1127,32 @@ the yaw word of the client's last cmd, so the words that follow depend on
 the word in flight at the teleport. The yaw words were not what differed
 between the two runs.
 
-vcod, `fall_ab`: ours used to walk at an absolute 315 until our first drop,
-on our own spawn's `delta_angles`. Our first teleport then set a
-`delta_angles` 8192 off retail's, the replayed first-drop words walked the
-player south into another corner (960.875, 1663.125), and it reached the
-second drop at rest with x at 0. Before the first drop ours now stands still
-on the yaw word retail sent last before its own (8192 in both fixtures), so
-the teleport sets retail's `delta_angles`, and the first drop's replay ends
-in retail's rest at the wall. VERIFIED, vcod measurement 2026-10-08: every
-row of the second run from the second drop on matches, -1 at t 17650
-included; the 10-06 walk run is unchanged.
+vcod, `fall_ab`: before the first drop ours stands still on the yaw word
+retail sent last before its own (8192 in both fixtures), so the teleport sets
+retail's `delta_angles`, and the first drop's replay ends in retail's rest at
+the wall. The trap: walking at an absolute 315 until the first drop, on our
+own spawn's `delta_angles`, sets a `delta_angles` 8192 off retail's at the
+teleport; the replayed first-drop words then walk the player south into
+another corner (960.875, 1663.125), and it reaches the second drop at rest
+with x at 0. VERIFIED, vcod: every row of the second run from the second
+drop on matches, -1 at t 17650 included; the first walk run is unchanged.
 
 ## 9. What the bump capture measured
 
-The capture is two committed files from one run on 2026-09-25:
+The capture is two committed files from one retail run:
 `crates/server/tests/fixtures/playerstate/mp_carentan-dm-bump-walker.txt`
 (the `--save-bump` walker's side, "walker line N" below) and
 `mp_carentan-dm-bump-script.txt` beside it (the server's `PROBE` lines). The
 recipe is in the header and in `client-probes/README.md`, `probe_bump`.
-Retail names the gametype `probe_bump`; the files are named `dm` because
-the probe runs `dm::main`. Client 0 is the `--probe-bump-target` axis
-player on a flat brush floor at (1132, -376, -151.875); client 1 the walker,
-placed 200 units behind it along -x, both facing +x (`PROBE place` lines).
-The target stands, crouches and lies prone in turn; the walker runs the same
-script against each stance: a head-on walk, a glance 20 units right of the
-line, and a jump from rest 40 units from the target's centre, forward and up
-held until it lands. The jump runs in all three stances because a lowered
-target is the only one a jump could clear.
+Retail names the gametype `probe_bump`; the files are named `dm` because the
+probe runs `dm::main`. Client 0 is the `--probe-bump-target` axis player on a
+flat brush floor at (1132, -376, -151.875); client 1 the walker, placed 200
+units behind it along -x, both facing +x (`PROBE place` lines). The target
+stands, crouches and lies prone in turn; the walker runs the same script
+against each stance: a head-on walk, a glance 20 units right of the line,
+and a jump from rest 40 units from the target's centre, forward and up held
+until it lands. The jump runs in all three stances because a lowered target
+is the only one a jump could clear.
 
 Distances below are the walker's origin to the target's on the floor plane.
 
@@ -1185,8 +1168,8 @@ VERIFIED, the last row of each head-on phase:
 
 VERIFIED: the crouch and prone walks drifted a few units sideways while
 pressing in (y -380.05 and -370.45 on those rows), at the same distance.
-INFERRED: the stop is the summed radius 30 plus the 0.125 backoff of
-section 2.2 in every stance, and stance changes nothing in xy.
+INFERRED: the stop is the summed radius 30 plus section 2.2's 0.125 backoff
+in every stance, and stance changes nothing in xy.
 
 VERIFIED: the prone head-on phase reads `groundEntityNum` 1022 and z
 -151.875 on every row (walker lines 4921-5085). INFERRED: a walk into a
@@ -1223,11 +1206,11 @@ as `groundEntityNum`; each lands on 1022, and the probe wrote a `# BROKEN
   walker landed 64.2 and 53.3 from the target (lines 3665, 5852).
 
 INFERRED: once the walker's rounded bottom passed over the lowered target's
-rounded top at under 30 in the plane, `StuckInClient`'s cylinder test of
-section 6.3, which ignores the rounding, read the two as overlapping and
+rounded top at under 30 in the plane, `StuckInClient`'s cylinder test
+(section 6.3), which ignores the rounding, read the two as overlapping and
 threw the walker off before it could land. A player at rest on a head would
-be inside that cylinder too, since the z test is inclusive, so retail
-pushes it off rather than letting it stand there.
+be inside that cylinder too, since the z test is inclusive, so retail pushes
+it off rather than letting it stand there.
 
 ### 9.4 The replay against the capture
 
@@ -1237,13 +1220,14 @@ retail's state at every snapshot, the `playerstate_slope_ab.rs` shape.
 `BUMP_REPORT=1` prints every row and `BUMP_TRACE=<ct>` prints ours cmd by
 cmd into that clock.
 
-VERIFIED, as run on 2026-09-25: ours stops at 30.1255, 30.1257 and 30.1256
-head-on and passes at 30.0276, 30.0764 and 30.0183 on the glance, and 1484
-rebased rows outside the gate's `GAPS` match retail to 0.000 in both z and
-xy with no ground disagreement.
+VERIFIED: ours stops at 30.1255, 30.1257 and 30.1256 head-on and passes at
+30.0276, 30.0764 and 30.0183 on the glance, and the 1484 rebased rows
+outside the nine jump rows below match retail to 0.000 in both z and xy with
+no ground disagreement. `GAPS` is empty.
 
-`GAPS` held nine rows until 2026-09-27, all from a jump. VERIFIED, the
-measured size of each before the jump port:
+Nine jump rows needed the jump port (`PM_CheckJump`, the jump's step and the
+walk's speed-keeping ground clip, `cod11-mantle.md`, "Jumps" and "The ground
+clip keeps the speed"). VERIFIED, their size without it:
 
 | kind | rows (phase, `commandTime`) | measured |
 |---|---|---|
@@ -1251,11 +1235,8 @@ measured size of each before the jump port:
 | `AIR_STEP` | stand/jump 39483, 39533 | dxy 0.093, 0.103 |
 | `REJUMP` | stand/jump 39682, stand/land 39732, crouch/land 70882, prone/land 97666 | dz 3.754, 10.664, 10.667 (dxy 4.12), 7.473 (dxy 2.78) |
 
-VERIFIED, as run on 2026-09-27: with `PM_CheckJump`, the jump's step and
-the walk's speed-keeping ground clip ported (`cod11-mantle.md`, "Jumps" and
-"The ground clip keeps the speed"), every one of the nine reads 0.000 in
-both the free and the rebased run and `GAPS` is empty. What each was is
-section 12.
+VERIFIED, with the port: all nine read 0.000 in both the free and the
+rebased run. Section 12 says what each was.
 
 ## 10. What the overlap captures measured
 
@@ -1303,10 +1284,10 @@ VERIFIED: the spectator run's `PROBE place` lines number the target 1 and
 the walker 2 (overlap-spectator-script lines 22-23); slot 0 is the plain
 `--net-probe`, which never answers the team menu. VERIFIED: across all 681
 snapshots of `-overlap-spectator-walker.txt`, `pm_time` reads 0,
-`target_solid` reads
-6684943, and the script file carries no `BUMPT !snap` line. VERIFIED: the
-walker's origin reads 932,-376,-151.875 on 679 of them, the target's
-`pos.trBase` 932,-376,-150 on 440, forward cmds from 29.2 s included.
+`target_solid` reads 6684943, and the script file carries no `BUMPT !snap`
+line. VERIFIED: the walker's origin reads 932,-376,-151.875 on 679 of them,
+the target's `pos.trBase` 932,-376,-150 on 440, forward cmds from 29.2 s
+included.
 
 INFERRED: slot 0 held no 0x40000, so every `StuckInClient` scan returned 0
 at it (section 6.2). The pair stayed inside each other for the rest of the
@@ -1320,57 +1301,55 @@ The same pair under `+set probe_bump_spot wall`: the walker stands at
 (-56, 448, 0.25) on mp_carentan, 8.875 short of the caulk wall of brush
 2201 at y 471.875, with open floor along +x to a second wall at x 71.875.
 The files are `mp_carentan-dm-bump-overlap-wall-walker.txt` and
-`-overlap-wall-script.txt` (2026-10-17).
+`-overlap-wall-script.txt`.
 
 VERIFIED (`PROBE overlap 35200 0 1`; walker lines at ct 35182-35599): the
-still walker takes (140.89, 127.47) with `pm_time` 300, reaches the wall
-at y 456.873 on the second snapshot after and slides along +x. While the
-timer runs its velocity keeps the y the wall stops (117, 108, 99, 91, 84
-on consecutive snapshots, x and y shrinking by the same factor, about
-0.92 a snapshot), and the first snapshot with `pm_time` 0 carries y 0
-(ct 35532, velocity (79, 0, 0)). INFERRED: under 0x100 the slide's restore of the start
+still walker takes (140.89, 127.47) with `pm_time` 300, reaches the wall at
+y 456.873 on the second snapshot after and slides along +x. While the timer
+runs its velocity keeps the y the wall stops (117, 108, 99, 91, 84 on
+consecutive snapshots, x and y shrinking by the same factor, about 0.92 a
+snapshot), and the first snapshot with `pm_time` 0 carries y 0 (ct 35532,
+velocity (79, 0, 0)). INFERRED: under 0x100 the slide's restore of the start
 velocity (section 7) hands the into-wall part back every frame, the
-quartered friction wears both parts down alike, and the first frame
-without the timer clips it away.
+quartered friction wears both parts down alike, and the first frame without
+the timer clips it away.
 
 VERIFIED (`PROBE overlap 53200 0 1`; ct 53183-53682): with the walker
 walking +x into the corner of the two walls at (56.874, 456.873), the push
 (114.01, 151.99) leaves velocity (0, 0, 0) from the next snapshot on, the
-body never moves, and `pm_time` reads 300 on four snapshots running
-before it counts down: the target, pushed back into the walker each end
-frame, kept overlapping. INFERRED: a push into both planes of a crease
-leaves nothing for the restore to hand back.
+body never moves, and `pm_time` reads 300 on four snapshots running before
+it counts down: the target, pushed back into the walker each end frame, kept
+overlapping. INFERRED: a push into both planes of a crease leaves nothing for
+the restore to hand back.
 
-VERIFIED, vcod measurement the same day
-(`stuck_ab::a_pushed_player_slides_along_a_wall_as_retail_does`): every
-snapshot pair no push wrote between, rebased on retail's state and run
+VERIFIED, vcod (`stuck_ab::a_pushed_player_slides_along_a_wall_as_retail_does`):
+every snapshot pair no push wrote between, rebased on retail's state and run
 through our pmove cmd for cmd, lands on retail's origin, velocity and
 `pm_time` (674 pairs, 13 under the timer, 6 of them along the wall). The
 push's direction rides `rand()`, so the gate replays pmove only.
 
 ## 11. As implemented
 
-The shared layer is `crates/common/src/movetrace.rs`. `Body` is a player
-box at its feet with its contents; `Body::pack_solid` and `Body::from_solid`
-are section 4.1's packing and section 5's decode. `MoveWorld` is the map
-plus a body list and a pass entity: `box_trace` runs the world trace,
-returns it at fraction 0, and otherwise clips every body whose contents the
-mask admits and that is not the pass entity, keeping the nearest hit and
-reporting the body's entity number, so `groundEntityNum` can name a player.
-The mask filters bodies only; the world half clips `MASK_PLAYERSOLID`'s
-brushes whatever the mask, which section 1.1's census makes the same thing.
-`point_contents` stays map-only. `MoveWorld::bare` has no bodies and is what
-every caller without players uses.
+The shared layer is `crates/common/src/movetrace.rs`. `Body` is a player box
+at its feet with its contents; `Body::pack_solid` and `Body::from_solid` are
+section 4.1's packing and section 5's decode. `MoveWorld` is the map plus a
+body list and a pass entity: `box_trace` runs the world trace, returns it at
+fraction 0, and otherwise clips every body whose contents the mask admits and
+that is not the pass entity, keeping the nearest hit and reporting the body's
+entity number, so `groundEntityNum` can name a player. The mask filters
+bodies only; the world half clips `MASK_PLAYERSOLID`'s brushes whatever the
+mask, which section 1.1's census makes the same thing. `point_contents` stays
+map-only. `MoveWorld::bare` has no bodies and is what every caller without
+players uses.
 
 The body clip is section 2.2's two primitives (`trace_cylinder`,
 `trace_sphere`, `backed_off_root`) with `BODY_RADIUS_EPS` 0.125 as the
 backoff. It runs the cylinder and both end spheres on every move and keeps
-the nearest, rather than the dispatcher's pick. The first port was Q3's
-shape: its radius pad held a glancing walker at 30.14, 30.18 and 30.10 and
-its xy gate skipped the cylinder on a vertical move, which let a falling
-walker sink into a standing body; and before section 2.3's rule the step
-put a walker on a prone target's top sphere, 12.7 high. `bump_ab.rs` found
-all three.
+the nearest, rather than the dispatcher's pick. `bump_ab.rs` catches the
+three traps: Q3's radius pad holds a glancing walker at 30.14, 30.18 and
+30.10; Q3's xy gate skips the cylinder on a vertical move and lets a falling
+walker sink into a standing body; and a step without section 2.3's rule puts
+a walker on a prone target's top sphere, 12.7 high.
 
 pmove (`crates/common/src/pmove.rs`) takes the mask at each call site:
 0x2810011 (`MASK_PLAYERSOLID`) for a live move and a lean, 0x810011
@@ -1386,10 +1365,11 @@ multiplier, the 0.67 arms and both events with their parms. It runs straight
 after the final ground trace, ahead of the water level and the footsteps,
 and `dead_move` runs it too with damage 0 and returns the land event.
 `check_ladder_move` returns last frame's ladder while the timer runs, and
-runs ahead of the timer's drop.
+runs ahead of the timer's drop. `slide_move` hands back its starting
+velocity, with the gravity end velocity for z, whenever `knockback_ms` runs
+(8.5).
 
-The server (`crates/server/src/spectate.rs`, `server.rs`,
-`game/stuck.rs`):
+The server (`crates/server/src/spectate.rs`, `server.rs`, `game/stuck.rs`):
 
 - `ClientSim.contents` is `r.contents`: BODY at a spawn into play, 0 at any
   other spawn, rewritten by `update_contents` at each end frame (BODY while
@@ -1416,21 +1396,21 @@ The server (`crates/server/src/spectate.rs`, `server.rs`,
   rebuilt at that slot, so a partner marked CORPSE earlier in the loop is
   seen with it. A push writes both velocities and `knockback_ms` 300 on both
   and marks self CORPSE; nothing relinks there. The jitter's `rand()` is the
-  top 31 bits of the server's xorshift.
+  top 31 bits of the server's xorshift, or glibc's `rand()` once a gate pins
+  it (`Server::pin_stuck_rand`, 13.4).
 
 The client (`crates/client/src/play/predict.rs`, `main.rs`): the predictor
 lands with `FallHeights::from_systeminfo` of configstring 1, reread at each
-gamestate and each change. `solid_bodies`
-builds the body list from the newest snapshot, skipping the own client,
-`solid` 0, `solid` 0xffffff (a brush model, which
-`vcod_common::pmove::movers` clips instead, `docs/research/cod11-movers.md`
-section 14) and `eType` 3, and logging and skipping a solid entity without
-`eFlags` 0x10. Contents are BODY for `eType` 1 and 0x1 otherwise. The origin
-is where the renderer drew the entity on the previous frame
-(`LivePhase.drawn_pos`), else its `trBase`. The predictor keeps its last
-replay only while the snapshot playerstate, the body list and the snapshot's
-brush models are unchanged; any body that moved costs a full replay that
-frame.
+gamestate and each change. `solid_bodies` builds the body list from the
+newest snapshot, skipping the own client, `solid` 0, `solid` 0xffffff (a
+brush model, which `vcod_common::pmove::movers` clips instead,
+`docs/research/cod11-movers.md` section 14) and `eType` 3, and logging (at
+debug) and skipping a solid entity without `eFlags` 0x10. Contents are BODY
+for `eType` 1 and 0x1 otherwise. The origin is where the renderer drew the
+entity on the previous frame (`LivePhase.drawn_pos`), else its `trBase`. The
+predictor keeps its last replay only while the snapshot playerstate, the body
+list and the snapshot's brush models are unchanged; any body that moved costs
+a full replay that frame.
 
 The gates:
 
@@ -1448,7 +1428,7 @@ The gates:
   the jitter band with the higher slot writing last, the target's `solid` 0
   exactly on the snapshots after a push, the push-frame counts (2 still, 4
   walking), and no push beside a spectator. It also runs `stuck_in_client`
-  at every snapshot of the bump capture and it fires at exactly
+  at every snapshot of the bump capture, and it fires at exactly
   `commandTime` 70633 and 97483, retail's two. `STUCK_REPORT=1` prints the
   first frames of each overlap;
 - `crates/server/tests/predict_ab.rs`'s
@@ -1472,121 +1452,115 @@ The gates:
 
 ## 12. Divergences and not modelled
 
-- **The jump port**, closed 2026-09-27. The three kinds of row `GAPS`
-  held (section 9.4) were pmove differences a jump into the target exposed,
-  none a clipping one.
+Closed, kept for the traps they name:
+
+- **The jump port** (section 9.4). The three kinds of `GAPS` row were pmove
+  differences a jump into the target exposed, none a clipping one.
   - `TAKEOFF`, dz 0.54 to 0.55 on each jump's first row. VERIFIED: the
     retail walker's first airborne row (walker line 1077) has risen 7.808
-    from the floor with `pm_flags` 262152 (0x40008). Ours took the prone
-    dive's 233.2 (`cod11-mantle.md`, "Jumps"); it now takes `PM_CheckJump`'s
-    `sqrt(g * 78)`, 249.8.
-  - `AIR_STEP`, dxy 0.093 and 0.103 at stand/jump 39483 and 39533. Ours
-    stepped the blocked airborne move over the standing target's shoulder
-    and came down 30.01 from it; retail holds the side at 30.1248. Ours now
-    steps in the air only under the jump's origin (`cod11-mantle.md`, "The
-    jump's step"), and the free run, which carries the origin from its own
-    takeoff, holds the side too.
+    from the floor with `pm_flags` 262152 (0x40008). The prone dive's 233.2
+    (`cod11-mantle.md`, "Jumps") misses it; `PM_CheckJump`'s
+    `sqrt(g * 78)`, 249.8, matches.
+  - `AIR_STEP`, dxy 0.093 and 0.103 at stand/jump 39483 and 39533. A step of
+    the blocked airborne move over the standing target's shoulder comes down
+    30.01 from it; retail holds the side at 30.1248. Ours steps in the air
+    only under the jump's origin (`cod11-mantle.md`, "The jump's step"), and
+    the free run, which carries the origin from its own takeoff, holds the
+    side too.
   - `REJUMP`, dz 3.754 to 10.667. VERIFIED: at stand/jump `commandTime`
     39682 (walker line 1125) the retail walker is on the ground with
     `pm_flags` 0x40008 and every cmd up to that clock holds up 127, and the
-    next row (line 1131) is still on the ground. Ours jumped again off the
-    landing; it now keeps the latch. The crouch and prone landings then still
-    missed by 4.75 and 3.17 in xy: both land while the push's knockback
-    timer runs, with the fall still in the velocity on the grounded frame
-    (crouch/jump 70832 reads `vel=-111,4,-175` on ground 1022), and retail's
-    walk turns that into ground speed (`cod11-mantle.md`, "The ground clip
-    keeps the speed").
+    next row (line 1131) is still on the ground. Ours keeps the latch rather
+    than jumping again off the landing. The crouch and prone landings then
+    need retail's ground clip, without which they miss by 4.75 and 3.17 in
+    xy: both land while the push's knockback timer runs, with the fall still
+    in the velocity on the grounded frame (crouch/jump 70832 reads
+    `vel=-111,4,-175` on ground 1022), and retail's walk turns that into
+    ground speed (`cod11-mantle.md`, "The ground clip keeps the speed").
+- **Arrival order.** VERIFIED: `SV_UserMove`'s per-cmd loop calls 0x8092158
+  at 0x80872cb with the pointer at 0x80e30c4, 7 and the client's slot index.
+  INFERRED: that is the game VM's `ClientThink`, run per cmd as each client's
+  packet is parsed, so clients' moves interleave in packet arrival order and
+  a later packet moves against an earlier one's new position.
+  `replay_moves` runs the cmds in the order the server executed their
+  packets (`cod11-combat.md` 16.2), not in slot order.
+- **A `trigger_hurt` kill during the move pass.** VERIFIED: retail's
+  `player_die` writes CORPSE at 0x49c28. INFERRED: it does so at the kill, so
+  a retail victim stops blocking within the frame. The callback's ops reach
+  the sim straight after that cmd's touch pass; landing `dead` only at
+  `mirror_vitals` after the script frame leaves the victim blocking later
+  movers in that tick. A stock map's only `trigger_hurt` is the kill volume
+  under the floor.
+- **The landing stun** (section 8), with the slide's timer restore (8.5),
+  fall damage, the two cvars and a dead player's landing (8.8, 8.10).
+  VERIFIED: `PmoveSingle`'s jump table (rodata 0x70ce8) sends `pm_type` 6 to
+  0x34274 and on to the default arm, whose ground traces at 0x342ce and
+  0x34327 reach `PM_CrashLand`; `dead_move` lands through it.
+  - **The landing parm** (8.9). It depends on the cmd lengths: a fixed 16,
+    17, 17 ms cadence reads high against a capture whose cmds were not that.
+    On retail's own cmd timeline ours lands every parm of both runs, with
+    the frametime, the gravity average and the move's end point rounded as
+    retail rounds them.
+  - **A corpse's rest after the fatal fall** (8.11). A corpse never rests on
+    a grade: it falls and lands every frame.
+  - **The walk capture's corner** (8.9). VERIFIED: walking 315 after each
+    stun ends against a pillar at x 1240-1260, y 1786-1806: `mp_carentan`
+    patches 70 and 71 up to z 42 and the caulk brush 1656 from 42 to 48.
+    Retail's player rests at x 1231.15 with `groundEntityNum` flipping
+    between 1022 and 1023 and `velocity` reading `0,0,1`, `-1,0,0` or
+    `0,0,3`. INFERRED: 1231.15 is where the border plane through patch 71's
+    points `(1246, 1806, -28)` and `(1247, 1804, 32)`, grown by the radius,
+    stops a capsule at the sphere's height, and that plane's normal,
+    `(-0.99986, 0, 0.0167)`, has the rise that lifts the player off the
+    ground on each push. VERIFIED, vcod: clipping the render soup of brush
+    1656's faces as facets too rests the player at 1230.875 on 1022 at
+    `0,0,0`, because their axial bevel at x 1246, grown by the radius, holds
+    the capsule's top 0.28 short; with the capsule's top below z 42 the same
+    trace stops at 1231.156. Retail collides model 0 through its brushes and
+    lump 24 alone ("Terrain is a swept sphere, a patch is a facet" in
+    `cod11-mantle.md`), and `CollisionWorld::build` clips the patches' own
+    facets, built as retail builds them (`bsp-ibsp59-format.md`, "Patch
+    collision"), not the soups. VERIFIED, vcod, with that and
+    `PM_ClipVelocity` rounded as retail rounds it (8.9): the rest reads
+    retail's two states to the printed thousandth, lifted at `(1231.152,
+    1815.125, -26.263)` on 1023 at `0,0,1` and landed at `(1231.146,
+    1815.125, -26.285)` on 1022 at `-1,0,0` (the soup clip has the lifted one
+    at -26.266). With the trace end point, the terrain and brush clips, the
+    slide and the walk rounded as retail rounds them, ours holds the lifted
+    state for retail's runs and every row of the capture matches, the south
+    wall's 1815.128 rows and the jitter's air frames included; `fall_ab`
+    gates them row by row.
+  - **The walk capture's corpse** (8.12). The capture's server stalled at
+    the fatal landing: `ClientThink_real`'s 200 ms clamp held `commandTime`
+    at 52150 and the dead player walked on until the end frame. `fall_ab`
+    replays the stall and compares every row past the fatal drop. The
+    corpse's sink below a live player's rest on flat terrain is the leaf
+    walk's partition bounds test, ported; the corpse's height is gated in
+    both walk runs.
+
+Open:
+
+- **`eType` other than 1** ends `ClientEvents` (0x3fec9) with the events
+  behind it unprocessed; vcod fires every event a cmd raised. No stock path
+  lands a player whose entity is not a player.
 - **The dispatcher's primitive choice** (`cod_lnxded` 0x8055c04) is not
   ported: ours traces the cylinder and both spheres and keeps the nearest.
   The two agree on every row of the bump capture; no capture covers a
   vertical landing on a body, since retail never let one happen (section
   9.3), and no gate covers geometry where the two could differ.
-- **Arrival order**, closed 2026-09-27. VERIFIED: `SV_UserMove`'s per-cmd
-  loop calls 0x8092158 at 0x80872cb with the pointer at 0x80e30c4, 7 and the
-  client's slot index. INFERRED: that is the game VM's `ClientThink`, run per
-  cmd as each client's packet is parsed, so clients' moves interleave in
-  packet arrival order and a later packet moves against an earlier one's new
-  position. `replay_moves` ran each client's queued cmds in slot order; it
-  now runs them in the order the server executed their packets
-  (`cod11-combat.md` 16.2).
-- **A `trigger_hurt` kill during the move pass**, closed 2026-09-27. It ran
-  the damage callback inside that cmd's touch pass, but the sim's `dead`, and
-  with it the CORPSE contents, landed only at `mirror_vitals` after the
-  script frame, so the victim still blocked later movers in that tick.
-  VERIFIED: retail's `player_die` writes CORPSE at 0x49c28. INFERRED: it
-  does so at the kill, so a retail victim stops blocking within the frame.
-  The callback's ops now reach the sim straight after that touch pass. A
-  stock map's only `trigger_hurt` is the kill volume under the floor.
-- **The landing stun**, closed 2026-10-05 (section 8). What it left open:
-  - **The slide's timer restore** (8.5), closed 2026-10-06: `slide_move`
-    hands back its starting velocity, with the gravity end velocity for z,
-    whenever `knockback_ms` runs. `fall_ab`'s walk capture measured it.
-  - **The walk capture's corner**, explained 2026-10-06. VERIFIED: walking
-    315 after each stun ends against a pillar at x 1240-1260, y 1786-1806:
-    `mp_carentan` patches 70 and 71 up to z 42 and the caulk brush 1656
-    from 42 to 48. Retail's player rests at x 1231.15 with
-    `groundEntityNum` flipping between 1022 and 1023 and `velocity`
-    reading `0,0,1`, `-1,0,0` or `0,0,3`. INFERRED: 1231.15 is where the
-    border plane through patch 71's points `(1246, 1806, -28)` and `(1247,
-    1804, 32)`, grown by the radius, stops a capsule at the sphere's
-    height, and that plane's normal, `(-0.99986, 0, 0.0167)`, has the rise
-    that lifts the player off the ground on each push. VERIFIED, vcod
-    measurement 2026-10-06: ours rested at 1230.875 on 1022 at `0,0,0`
-    because the render soup of brush 1656's faces was clipped as facets
-    as well, and their axial bevel at x 1246, grown by the radius, held
-    the capsule's top 0.28 short; with the capsule's top below z 42 the
-    same trace stopped at 1231.156. Retail collides model 0 through its
-    brushes and lump 24 alone ("Terrain is a swept sphere, a patch is a
-    facet" in `cod11-mantle.md`), so `CollisionWorld::build` kept a
-    render soup triangle only inside some patch's control-point box until
-    2026-10-07, when the patches' own facets replaced the soups.
-    VERIFIED, vcod measurement 2026-10-07, with patches built as retail
-    builds them (`bsp-ibsp59-format.md`, "Patch collision") and
-    `PM_ClipVelocity` rounded as retail rounds it (8.9): the rest reads
-    retail's two states to the printed thousandth, lifted at `(1231.152,
-    1815.125, -26.263)` on 1023 at `0,0,1` and landed at `(1231.146,
-    1815.125, -26.285)` on 1022 at `-1,0,0`; the soup clip had the lifted
-    one at -26.266. Closed 2026-10-07 (8.9): with the trace end point, the
-    terrain and brush clips, the slide and the walk rounded as retail
-    rounds them, ours holds the lifted state for retail's runs and every
-    row of the capture matches, the south wall's 1815.128 rows and the
-    jitter's air frames included; `fall_ab` gates them row by row.
-  - **The walk capture's corpse**, closed 2026-10-08 (8.12). The
-    capture's server stalled at the fatal landing: `ClientThink_real`'s
-    200 ms clamp held `commandTime` at 52150 and the dead player walked on
-    until the end frame. `fall_ab` replays the stall and compares every row
-    past the fatal drop. The corpse's sink below a live player's rest on
-    flat terrain is the leaf walk's partition bounds test, now ported; the
-    corpse's height is gated in both walk runs.
-  - **Fall damage, the two cvars and a dead player's landing**, closed
-    2026-10-05 (8.8, 8.10). VERIFIED: `PmoveSingle`'s jump table (rodata
-    0x70ce8) sends `pm_type` 6 to 0x34274 and on to the default arm, whose
-    ground traces at 0x342ce and 0x34327 reach `PM_CrashLand`; `dead_move`
-    now lands through it. What is left:
-    - **The landing parm ran high**, closed 2026-10-06 (8.9). Ours ran a
-      fixed 16, 17, 17 ms cadence against a capture whose cmds were not
-      that; on retail's own cmd timeline ours lands every parm of both runs.
-      `pmove.rs` now takes the frametime, the gravity average and the move's
-      end point with retail's roundings.
-    - **A corpse's rest after the fatal fall**, closed 2026-10-06 (8.11).
-      A corpse never rests on a grade: it falls and lands every frame.
-    - **`eType` other than 1** ends `ClientEvents` (0x3fec9) with the
-      events behind it unprocessed; vcod fires every event a cmd raised.
-      No stock path lands a player whose entity is not a player.
 - **A client that sends no cmds** keeps the `solid` of its last link. That
   is retail's rule too (section 4.2), not a divergence; the same holds for
   a client at intermission, whose contents go 0 without a relink.
-- **The spectator's clear** at `pm_type` 4 is
-  `MASK_SPECTATOR`.
+- **The spectator's clear** at `pm_type` 4 is `MASK_SPECTATOR`.
 - **The packing clamp.** VERIFIED: retail clamps all three bytes to `[1,
   255]` (section 4.1). `Body::pack_solid` clamps `zd` to `[1, 255]` and `zu`
   to `[0, 255]` and passes `x` through. No player box reaches the
   difference.
-- **Noclip and ufo** have no contents arm: vcod-server has no such player
-  state.
-- **Other solid entities.** Clipping a player against anything but a capsule
-  player is not modelled: the predictor logs and skips a solid entity
-  without `eFlags` 0x10, and no mover pushes a player.
+- **Noclip and ufo** have no contents arm: the CoD1 server has no such player
+  state (CoD2's level has `noclip` and `ufo`).
+- **Other solid entities.** The predictor's body list holds capsule players
+  only: it logs and skips a solid entity without `eFlags` 0x10, and brush
+  models clip through `pmove::movers` instead (`cod11-movers.md` 14).
 
 ## 13. A move that starts in a body, the touch list, 1.5's push
 
@@ -1597,15 +1571,15 @@ base 0x30000000.
 
 ### 13.1 `PM_trace` on 1.5 and UO
 
-VERIFIED: 1.5b `PM_trace` (0x1e738) calls `pm->trace` (`pm+0xec`) with
-its caller's arguments; when the result's `startsolid` (byte `trace+0x2f`)
-is set and its contents (`trace+0x20`) hold 0x2000000, it calls
-`PM_AddTouchEnt` with the trace's `entityNum` (u16 `trace+0x28`), clears
-0x2000000 from `pm->tracemask` (`pm+0x34`) and calls `pm->trace` again
-with its mask argument less 0x2000000. UO's (0x23174) is the same through
-`pm+0x104`. VERIFIED: 1.1d exports no `PM_trace`; its `PM_SlideMove`
-(0x347c0) calls `pm->trace` (`pm[0x3a]`) itself. VERIFIED: the 1.5 cgame's
-copy is 0x30007950 and UO's 0x30008280, the same test and clear.
+VERIFIED: 1.5b `PM_trace` (0x1e738) calls `pm->trace` (`pm+0xec`) with its
+caller's arguments; when the result's `startsolid` (byte `trace+0x2f`) is set
+and its contents (`trace+0x20`) hold 0x2000000, it calls `PM_AddTouchEnt`
+with the trace's `entityNum` (u16 `trace+0x28`), clears 0x2000000 from
+`pm->tracemask` (`pm+0x34`) and calls `pm->trace` again with its mask
+argument less 0x2000000. UO's (0x23174) is the same through `pm+0x104`.
+VERIFIED: 1.1d exports no `PM_trace`; its `PM_SlideMove` (0x347c0) calls
+`pm->trace` (`pm[0x3a]`) itself. VERIFIED: the 1.5 cgame's copy is
+0x30007950 and UO's 0x30008280, the same test and clear.
 
 INFERRED: the cleared mask holds for the rest of the `Pmove`, every chopped
 step included: `pm` lives across `Pmove`'s loop and nothing in pmove sets
@@ -1623,10 +1597,10 @@ passes `tracemask & 0xfdfeffff` and 0x25816 passes 2. VERIFIED:
 missed-ground probe sees no bodies either, and the lean always does.
 
 VERIFIED: `PM_AddTouchEnt` (1.1d 0x3466c, 1.5b 0x1e857, UO 0x23293) skips
-entity 0x3fe (the world), a full list (count `pm+0x3c`, `pm+0x54` on UO,
-at 32) and an entity already listed. VERIFIED: `PM_SlideMove` adds the
-trace's entity after each bump that stopped short of fraction 1 (1.1d's
-call follows the fraction-1 break; 1.5b's at 0x28d7d likewise).
+entity 0x3fe (the world), a full list (count `pm+0x3c`, `pm+0x54` on UO, at
+32) and an entity already listed. VERIFIED: `PM_SlideMove` adds the trace's
+entity after each bump that stopped short of fraction 1 (1.1d's call follows
+the fraction-1 break; 1.5b's at 0x28d7d likewise).
 
 ### 13.2 `ClientImpacts`
 
@@ -1635,18 +1609,18 @@ VERIFIED: `ClientImpacts` (1.1d 0x3f780, 1.5b 0x38574, UO 0x3f9ba) walks
 system active, notifies `scr_const+0x90` on the client with the entity
 (`Scr_AddEntity(other)`, `Scr_Notify(client, ...)`) and then on the entity
 with the client, then calls the entity's touch function and the client's
-where set. VERIFIED live below: the notify is `"touch"`. INFERRED: a
-client entity's touch function is null, so between players only the two
-notifies run.
+where set. VERIFIED live below: the notify is `"touch"`. INFERRED: a client
+entity's touch function is null, so between players only the two notifies
+run.
 
 ### 13.3 What the captures measured
 
 `client-probes/probe_spawnbody` on mp_carentan's flat brush floor
 (1132, -376, -151.875), fixtures
 `crates/server/tests/fixtures/playerstate/mp_carentan-dm-spawnbody-1.1.txt`,
-`-1.5.txt` and `-uo.txt`, 2026-10-20: the host stands on the spot facing
-+x and the spawner is `spawn`ed at an x offset off it with forward held
-or not, and the gsc logs the origin the spawn's think left.
+`-1.5.txt` and `-uo.txt`: the host stands on the spot facing +x, the spawner
+is `spawn`ed at an x offset off it with forward held or not, and the gsc logs
+the origin the spawn's think left.
 
 VERIFIED, 1.5b and UO alike, every run of each trial:
 
@@ -1662,17 +1636,17 @@ host's line first. VERIFIED, 1.1d: every think leaves the spot as spawned
 and no spawn notifies a touch.
 
 INFERRED: the 1.5 think runs the held key (cod15-movement.md 4, "The
-spawn's lie-down"), so `inside_out` and `inside_through` start 8 inside
-the host and walk the same 12.549 either way, through him: `PM_trace`
-dropped the bodies on the think's first trace. `outside_in` starts 31 off
-and stops 30.127 short of the host's centre, the body clip's backoff
-(section 2.2): the think's traces meet the other players. Its touch is
-the slide's; the inside trials' are `PM_trace`'s.
+spawn's lie-down"), so `inside_out` and `inside_through` start 8 inside the
+host and walk the same 12.549 either way, through him: `PM_trace` dropped
+the bodies on the think's first trace. `outside_in` starts 31 off and stops
+30.127 short of the host's centre, the body clip's backoff (section 2.2):
+the think's traces meet the other players. Its touch is the slide's; the
+inside trials' are `PM_trace`'s.
 
-VERIFIED, all three: the spawner put 60 behind the host and walked into
-him on his own cmds stops at x 1101.874512 (once 1101.87439 on 1.5b), and
-both players log a `"touch"` from the other on every frame he pushes,
-eight frames a walk (one UO walk nine), the host's line first. INFERRED: 1.1d's
+VERIFIED, all three: the spawner put 60 behind the host and walked into him
+on his own cmds stops at x 1101.874512 (once 1101.87439 on 1.5b), and both
+players log a `"touch"` from the other on every frame he pushes, eight frames
+a walk (one UO walk nine), the host's line first. INFERRED: 1.1d's
 `ClientImpacts` runs the slide's touches as 1.5's does.
 
 ### 13.4 1.5's `StuckInClient`
@@ -1685,32 +1659,31 @@ jitter is `rand() / D + rand() / D - C` on one `rand()`, with `D` = 2^31
 VERIFIED (`mp_carentan-dm-bump-overlap-spectator-15-walker.txt` and
 `-script.txt`, 1.5b, a plain `--net-probe` holding slot 0): the first
 snapshot after `PROBE overlap 35900` gives the still walker velocity
-(133.40303, -135.29092) with `pm_time` 300 and the target the reverse;
-the target's `solid` reads 0 on the next two. INFERRED: the push fired
-beside the spectator, and its direction from a zero separation,
-(-0.702, 0.712) as `normalize(j)` of the target's side, has `jx < 0 <
-jy`, which 1.1d's (-3, -1] cannot draw. Both players then read CORPSE, so
-no cmd after a push starts inside a BODY: the push, not `PM_trace`,
-separates two playing players a script put together. INFERRED: what reaches
-`PM_trace` on a live server is a move that starts in a body inside one
-frame, before the end frame's push: the spawn's think above, or a cmd
-after a callback that moved a player.
+(133.40303, -135.29092) with `pm_time` 300 and the target the reverse; the
+target's `solid` reads 0 on the next two. INFERRED: the push fired beside
+the spectator, and its direction from a zero separation, (-0.702, 0.712) as
+`normalize(j)` of the target's side, has `jx < 0 < jy`, which 1.1d's (-3, -1]
+cannot draw. Both players then read CORPSE, so no cmd after a push starts
+inside a BODY: the push, not `PM_trace`, separates two playing players a
+script put together. INFERRED: what reaches `PM_trace` on a live server is a
+move that starts in a body inside one frame, before the end frame's push:
+the spawn's think above, or a cmd after a callback that moved a player.
 
 The direction to the bit. VERIFIED, 1.1d `StuckInClient`: the jitter is
-`fild` of `rand()` times -2^-31 (0x72d30), doubled, less `fld1` and plus
-the separation on the x87 stack, stored as a float (0x40ce9..0x40d35);
+`fild` of `rand()` times -2^-31 (0x72d30), doubled, less `fld1` and plus the
+separation on the x87 stack, stored as a float (0x40ce9..0x40d35);
 `VectorNormalize2D` (0x3d938) sums the squares and takes `fsqrt` on the
-stack, stores only the length, and multiplies each component by `1 /
-length` on the stack before its store. VERIFIED, 1.5b: the sum is stored
-the same way (0x3a86c..0x3a8bb); its `VectorNormalize2D` (0x33028) stores
-the squared length as a float, takes `sqrt` in double, stores the length,
-stores `1.0 / length` (0x3307d..0x33086) and multiplies each component by
-that float. VERIFIED: the velocity is the stored direction times `fild`
-of `ps.speed` (0x3a925), one rounding on all three.
+stack, stores only the length, and multiplies each component by `1 / length`
+on the stack before its store. VERIFIED, 1.5b: the sum is stored the same way
+(0x3a86c..0x3a8bb); its `VectorNormalize2D` (0x33028) stores the squared
+length as a float, takes `sqrt` in double, stores the length, stores
+`1.0 / length` (0x3307d..0x33086) and multiplies each component by that
+float. VERIFIED: the velocity is the stored direction times `fild` of
+`ps.speed` (0x3a925), one rounding on all three.
 
-VERIFIED, by replay: glibc's `rand()` seeded `srand(s)` gives every
-velocity of a push the captures logged with an exact position, to the
-bit, under the formula above, at draws past `k`:
+VERIFIED, by replay: glibc's `rand()` seeded `srand(s)` gives every velocity
+of a push the captures logged with an exact position, to the bit, under the
+formula above, at draws past `k`:
 
 | Capture | Module | `s` | `k` | Pushes |
 |---|---|---|---|---|
@@ -1718,37 +1691,36 @@ bit, under the formula above, at draws past `k`:
 | `movers/mp_carentan-dm-pushcand-1.5.txt` | 1.5b | 428 | 8 | 17750, 20950 (17800 to its print) |
 | `movers/mp_carentan-dm-pushcand-uo.txt` | UO | 439 | 8 | 18100, 21300 (18150 to its print) |
 
-Each push frame draws four, two per slot of the pair, lower slot first,
-and nothing else draws between the pushes. The search tried every `s` in
-[0, 20000) over its first 2^18 draws for each 1.5 and UO capture's two
-exact pushes on draws in order, and found one seed each. For 1.1d it
-tried `s` in [0, 100000) for the first push alone within 5000 draws:
-some forty seeds fit somewhere, only 631 at a draw under 100, and the
-five later pushes then fit it on consecutive draws. INFERRED: the seed is
-`G_InitGame`'s `srand(Com_Milliseconds())` (map-cycle doc 4.8), 428 to
-631 ms into the server's life, and the draws before the first push are
-the joins' challenges, two per client, plus two.
+Each push frame draws four, two per slot of the pair, lower slot first, and
+nothing else draws between the pushes. The search tried every `s` in
+[0, 20000) over its first 2^18 draws for each 1.5 and UO capture's two exact
+pushes on draws in order, and found one seed each. For 1.1d it tried `s` in
+[0, 100000) for the first push alone within 5000 draws: some forty seeds fit
+somewhere, only 631 at a draw under 100, and the five later pushes then fit
+it on consecutive draws. INFERRED: the seed is `G_InitGame`'s
+`srand(Com_Milliseconds())` (map-cycle doc 4.8), 428 to 631 ms into the
+server's life, and the draws before the first push are the joins'
+challenges, two per client, plus two.
 
 ### 13.5 As implemented
 
 `movetrace::Pm` is one `Pmove`'s state: the dropped mask and the touch
 list. The server's cmd loop, the predictor and the spawn's think
 (`ClientSim::spawn_move`) make one per cmd and hand it to each step's
-`MoveWorld` (`in_pmove`). `MoveWorld::pm_trace` is `PM_trace`;
-`pmove.rs` routes the callers of 13.1 through it under 1.5 and UO rules
-and `PM_GroundTraceMissed`'s two traces through `pm_mask`. `slide_move`
-lists every entity it bumps on all three. `GameHost::impacts` is
-`ClientImpacts`: the cmd loop raises its notifies after the touch pass
-and ahead of the use key (`ClientThink_real` 0x40614), the `spawn`
-builtin inside the call. The spawn's think moves among the other live
-players (`GameHost::move_bodies`). `spawnbody_ab.rs` holds every trial's origin
-and touches against the three captures; `stuck_ab.rs` holds 13.4's
-capture. `game::stuck`'s unit tests replay 13.4's pushes from their
-seeds (`vcod_common::rng::GlibcRand`), and `push_candidate_ab` the 1.5
-and UO captures through the server (`Server::pin_stuck_rand`).
+`MoveWorld` (`in_pmove`). `MoveWorld::pm_trace` is `PM_trace`; `pmove.rs`
+routes the callers of 13.1 through it under 1.5 and UO rules and
+`PM_GroundTraceMissed`'s two traces through `pm_mask`. `slide_move` lists
+every entity it bumps on all three. `GameHost::impacts` is `ClientImpacts`:
+the cmd loop raises its notifies after the touch pass and ahead of the use
+key (`ClientThink_real` 0x40614), the `spawn` builtin inside the call. The
+spawn's think moves among the other live players (`GameHost::move_bodies`).
+`spawnbody_ab.rs` holds every trial's origin and touches against the three
+captures; `stuck_ab.rs` holds 13.4's capture. `game::stuck`'s unit tests
+replay 13.4's pushes from their seeds (`vcod_common::rng::GlibcRand`), and
+`push_candidate_ab` the 1.5 and UO captures through the server
+(`Server::pin_stuck_rand`).
 
-Not modelled: an entity's own touch function from `ClientImpacts` (none
-on a player); a body
-`StuckInClient` marked CORPSE still reads as a body to the spawn's think
-(`move_bodies`), and that think sees the other players where the tick's
-moves left them, not where a script moved them since.
+Not modelled: an entity's own touch function from `ClientImpacts` (none on a
+player); a body `StuckInClient` marked CORPSE still reads as a body to the
+spawn's think (`move_bodies`), and that think sees the other players where
+the tick's moves left them, not where a script moved them since.
