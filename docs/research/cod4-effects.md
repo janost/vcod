@@ -71,15 +71,15 @@ Flag 0x2 puts `spawnOrigin` in the effect's axes: `FX_GetSpawnOrigin`
 entries 6..8) over the element's ranges at +0x38..+0x4c, then `test
 [elemDef], 2` either turns it through the effect's frame (0x4a5a00) or
 adds it to the frame's origin (+0x10) as it stands, in the world's axes.
-VERIFIED (the instructions). vcod turned every offset through the
-effect's axes; one without 0x2 now spawns as CoD2's `cheapOrgCalc` does
-(`cod4_fx::primitive`). mp_backlot's `weather/hawk` (flags 0x11000040,
-an oriented sprite of `gfx_hawk`, offset (0, -500..1000, 1000..1500),
-placed at (496.7, 63.3, 275.5) on angles (270, 0, 0)) wheeled at z 275.45
-through a building that way, the offset's z on world -x; it now flies
-1275 to 1710 units up. VERIFIED (the zone; the gate
-`cod4_fx::tests::backlot_hawks_circle_over_the_town`, which fails with the
-old frame). That it looks as retail's is pending a human's look.
+VERIFIED (the instructions). vcod spawns an element without 0x2 as
+CoD2's `cheapOrgCalc` does (`cod4_fx::primitive`). Trap: turning every
+offset through the effect's axes wheels mp_backlot's `weather/hawk`
+(flags 0x11000040, an oriented sprite of `gfx_hawk`, offset (0,
+-500..1000, 1000..1500), placed at (496.7, 63.3, 275.5) on angles (270,
+0, 0)) at z 275.45 through a building, the offset's z on world -x; read
+right it flies 1275 to 1710 units up. VERIFIED (the zone; the gate
+`cod4_fx::tests::backlot_hawks_circle_over_the_town`, which fails with
+the turned frame). That it looks as retail's is pending a human's look.
 
 Other flags, INFERRED: 0x4 frustum-culled spawn; 0x30 the spawn
 offset (0x10 sphere, 0x20 cylinder); 0xc0 what the element moves with
@@ -167,8 +167,8 @@ negative or past the amplitude, only when the amplitude is set
   sizes, `nonUniformScale` and `useLength` on. mp_cargoship's
   `weather/rain_mp_cargoship` element 0 is a cloud of
   `cloud_snowflake01` at size (1.5, 150) and scale 1000 (VERIFIED, the
-  zone); vcod drew it as a 1.5-unit cube of 150-unit flakes, the giant
-  white discs of the 2026-10-26 playtest. The gate
+  zone); read as CoD2's sizes it draws as a 1.5-unit cube of 150-unit
+  flakes, giant white discs. The gate
   `cod4_fx::tests::cargoship_rain_clouds_are_thin_streaks_in_a_wide_cube`
   holds the conversion; how the rain looks beside retail's is pending a
   human's look.
@@ -419,8 +419,9 @@ does the same, so the explode plays.
   (the double -64 at 0x70bd70, 0x457fe4..0x458011) and within 140 of its
   line (0x70bbe8), the sound 16 back (0x70b1f8). The constants are
   VERIFIED (the bytes). The three tests are INFERRED (the branches at
-  0x457fde, 0x458011 and 0x4580a2). vcod tested `end + 64` up to 2026-10-30, so an eye just
-  past the hit heard a whizby retail never plays.
+  0x457fde, 0x458011 and 0x4580a2). vcod tests the same; a test of
+  `end + 64` plays a whizby to an eye just past the hit, which retail
+  never does.
 - vcod traces each bullet shot (`impactType` 1 to 4) against the clip
   map's brushes, terrain and static models (`cod4_fx::client_bullet`):
   the drawn view's own (its playerstate's ring or its client's entity)
@@ -668,7 +669,7 @@ does the same, so the explode plays.
   11082, 11150) was the harness, not the prediction: its spawn and
   settle loops ran no scene, so no ring was kept (`ps_ring` `None`), and
   the first scene, on the burst's first frame, took the predicted ring
-  with that round in it as its baseline. `walk_snapshot` now seeds a
+  with that round in it as its baseline. `walk_snapshot` seeds a
   predicted view's missing ring from the snapshot's, as
   `CG_PredictPlayerState` compares against the `predictedPlayerState`
   it kept, which a client that predicts every frame never lacks.
@@ -774,12 +775,12 @@ material names a state for. VERIFIED (bytecode):
 
 - The effects' own sets carry no `mc_` prefix (`effect_zfeather_add_nofog`)
   and spell `mc_effect`'s grammar: `vcod_cod4::techset::classify` reads
-  them so. Before, they read as unclassified and not premultiplied, so
-  the fx pass drew every additive effect's (One, One), which reads no
-  source alpha (`fx_stage_rgba`), and fogged the `_nofog` ones: an
-  element's alpha curve never faded its sparks, glows or flames.
-  INFERRED (vcod's fx pass). Now a premultiplying set's One draws as
-  SrcAlpha, as the world's do (cod4-world.md 8.1). VERIFIED (the gate
+  them so, and a premultiplying set's One draws as SrcAlpha, as the
+  world's do (cod4-world.md 8.1). Read as unclassified and not
+  premultiplied, the fx pass draws every additive effect's (One, One),
+  which reads no source alpha (`fx_stage_rgba`), and fogs the `_nofog`
+  ones: an element's alpha curve never fades its sparks, glows or
+  flames. INFERRED (vcod's fx pass). VERIFIED (the gate
   `weapon_view::weapon_and_effect_materials_premultiply_as_their_shaders`
   holds every blended weapon, effect and mark material's class to the
   table; a shader not in it fails).
@@ -799,8 +800,8 @@ material names a state for. VERIFIED (bytecode):
   model sets' light (cod4-world.md 10), the zfeather sets' feather, the
   three (InvDestColor, One) materials the fx pass draws as a plain add
   (`gfx_fire_ball_atlas_sa`, `gfx_fire_ball_atlas_z60`,
-  `gfx_spotlight_beam`); the distortion elements, which `cod4_fx` left
-  out, now draw through the scene copy (17). VERIFIED (the gate).
+  `gfx_spotlight_beam`); the distortion elements draw through the scene
+  copy (17). VERIFIED (the gate).
 
 ## 14. The depth feather (`zfeather`)
 
@@ -944,8 +945,8 @@ material names a state for. VERIFIED (bytecode):
 - vcod: `cod4_fx::trail_falloff` reads a falloff set's three constants
   into `TrailDef::falloff`, and `Trail::quads` applies the shader's
   factor to each quad at its centre, off the mean of its four corners'
-  normals (an `FxQuad` has one colour). Before, the RPG's trail drew its
-  four cuts whole from every side: the playtest's wide flat sheets.
+  normals (an `FxQuad` has one colour). Without it the RPG's trail draws
+  its four cuts whole from every side, as wide flat sheets.
   Gates: `fx::cod4_trail::tests::a_falloff_ribbon_fades_edge_on`, and
   `rpg_trail_drops_a_section_every_split_distance_on_its_tag`, whose
   side view has its flat cut at alpha 0 and its upright one drawn.
@@ -1068,11 +1069,11 @@ MSAA) read GPU scene 227 ms with `r_distortion` 1 and 249 ms with 0, the
 same triangles: the copy and its draws sit inside the run-to-run noise
 there (the bots move). VERIFIED (our runs); a real GPU is not measured.
 
-## 18. What 1.7 culls and fades, from one view (P18)
+## 18. What 1.7 culls and fades, from one view
 
-The playtest by mp_crash's intact red sedan (`setviewpos -279 1396 233
--15 28`) read retail with no smoke there and vcod with mp_crash's
-createfx smoke, mist and fire over the town (cod4-client-perf.md 20).
+At mp_crash's intact red sedan (`setviewpos -279 1396 233 -15 28`)
+retail draws no smoke, and vcod drew mp_crash's createfx smoke, mist and
+fire over the town (cod4-client-perf.md 20).
 What 1.7 does with an effect element between its spawn and its pixels,
 read off iw3mp.exe:
 
@@ -1123,7 +1124,7 @@ read off iw3mp.exe:
   callers (0x4038af, 0x42de13, 0x42e09d) lie outside the effect spawn
   and draw code, so it fades nothing an effect draws. INFERRED.
 
-vcod did the range test only. It now does the frustum test too
+vcod runs the range test, the frustum test
 (`fx::sim::Frustum`, set each frame by `Cod4Client::pump` from the eye
 and the last drawn view's fov and aspect; CoD2's frame sets none) and
 the distance fade (`fx::cod2::Live::distance_fade` on the quad's and
@@ -1141,7 +1142,7 @@ At the sedan spot (`--example fx_ranges -- mp_crash -279 1396 233 -15
 | `smoke/battlefield_smokebank_S`, 1253 and 1438 | 0, fog wisps, fade in 2000 + 500 | spawns, alpha whole |
 
 So the smoke column over the town is the nearest fire's element 2,
-which 1.7 draws at 9% and vcod drew whole. Everything else vcod draws
+which 1.7 draws at 9% and vcod, with the range test alone, drew whole. Everything else vcod draws
 there 1.7 draws too: the dust spirals and hallway smoke (no fades, no
 0x4), the fires' flares and flames. `cod4_fx::tests::
 crash_fire_smoke_fades_with_distance_and_spawns_in_view` runs mp_crash's
@@ -1151,7 +1152,7 @@ its alpha (at most 0.036 over 5 sprites), and none with the view turned
 out). `renderer::cod4_worldfx_live::cod4_live_crash_sedan_spot_fades_the_fire_smoke`
 holds the same on the live session, a `setviewpos` to the spot turned to
 yaw -56 (the fire 1177 units off; five smoke sprites at alpha 0.001 to
-0.040). VERIFIED (the test, ours). At the playtest's yaw -15 that fire
+0.040). VERIFIED (the test, ours). At the first view's yaw -15 that fire
 sits on the frustum's edge: inside at 16:9 and cg_fov 65 (41 degrees
 off the view against a half fov of 40.4 and the radius's 3.9), outside
 at the live harness's 5:3. The setviewpos drops the player to the
