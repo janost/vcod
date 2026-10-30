@@ -1205,42 +1205,40 @@ trace").
 - `Scr_Vehicle_Think` (0x8c7cc) is every vehicle's think, a fixed 50 ms
   step. A driven one (`ent+0x17e` 2) steps once a server frame from
   `G_VehicleClientThink` (0x8b0ce), after every client's cmds and before
-  every `ClientEndFrame`; any other on its own think (VERIFIED
-  decompile).
+  every `ClientEndFrame`; any other on its own think (VERIFIED decompile).
 - The input is the driver's `pers.cmd`, the last cmd that ran: a cmd
   repeating the last one's `serverTime` never runs and never drives
   (VERIFIED, the tank drive capture at 29750).
-- The motion (0x87cd3 and its callees, the slide 0x8036e, the suspension
+- The motion (0x87cd3 and callees: the slide 0x8036e, the suspension
   0x81331, the collision probes 0x827ab), the turret and gunner aim
   (0x85b32, 0x86285), the sway pack (0x86735), the steer and the track
-  clock (0x86a29, 0x86aa1) are `crates/server/src/game/vehicle/physics.rs`,
-  each formula with its constants there. Two facts the replay forced: the
-  yaw passes `AngleNormalize180`'s 16-bit truncation every step (VERIFIED
-  disassembly 0x3dc9e), and terrain meets the hull's half box as a
-  capsule of its half width (VERIFIED, replay: the min-radius capsule
-  lands the Panzer 0.63 low on the first slope).
+  clock (0x86a29, 0x86aa1) live in `crates/server/src/game/vehicle/physics.rs`,
+  each formula with its constants. Two facts the replay forced: the yaw
+  passes `AngleNormalize180`'s 16-bit truncation every step (VERIFIED
+  disassembly 0x3dc9e), and terrain meets the hull's half box as a capsule
+  of its half width (VERIFIED, replay: the min-radius capsule lands the
+  Panzer 0.63 low on the first slope).
 - **The sway pack's last bit.** 0x86735 builds the jolt's angle as a
-  double, `phase * pi / 180` with `pi` and 180 loaded as doubles
-  (`fldl` at 0x867a8 and 0x867b0, rodata 0xa6c60 and 0xa6c68), so a
-  half turn's sine is 1.2e-16, not the -8.7e-8 an f32 `pi` gives; the
-  sine is stored as an f32 (VERIFIED disassembly). The pack then sums
-  `127 + 127 * deg / 30` on the x87 stack and stores it as a double
-  before `floor` (0x86864..0x86920, 127 and 30 as floats at 0xa6c78 and
-  0xa6c7c), so a sway a hair under 0 packs 126 where an f32 sum rounds
-  to 127 (VERIFIED disassembly). The two sit on the body's `tag_body`
-  pose, so the seat tag and every rider's origin ride them: vcod packed
-  in f32 with an f32 `pi`, and the tank seats replay's driver missed
-  retail by up to 0.39 on 2 snapshots (msg 305, 352: our roll byte 127,
-  retail's 126) and 0.47 on 7 others once the pack alone was fixed. With
-  both, the tank seats, drive and gun replays hold the rider's origin
+  double, `phase * pi / 180` with `pi` and 180 loaded as doubles (`fldl` at
+  0x867a8 and 0x867b0, rodata 0xa6c60 and 0xa6c68), so a half turn's sine
+  is 1.2e-16, not the -8.7e-8 an f32 `pi` gives; the sine is stored as an
+  f32 (VERIFIED disassembly). The pack sums `127 + 127 * deg / 30` on the
+  x87 stack and stores it as a double before `floor` (0x86864..0x86920, 127
+  and 30 as floats at 0xa6c78 and 0xa6c7c), so a sway a hair under 0 packs
+  126 where an f32 sum rounds to 127 (VERIFIED disassembly). Both sit on
+  the body's `tag_body` pose, so the seat tag and every rider's origin ride
+  them. Packed in f32 with an f32 `pi`, the tank seats replay's driver
+  missed retail by up to 0.39 on 2 snapshots (msg 305, 352: roll byte 127
+  vs retail's 126), and by 0.47 on 7 others with the pack alone fixed.
+  With both, the tank seats, drive and gun replays hold the rider's origin
   to 0.01 on every snapshot (VERIFIED, `vehicle_ab`).
 - The probes and the slide meet vehicle clip brushes (contents 0x200),
-  which only the vehicle clipmask 0x201 holds: where retail's tank
-  bounced at mp_cassino's slope the brush is one (VERIFIED, replay; vcod's
-  collision world now keeps such brushes, unmet by every other mask).
+  which only the vehicle clipmask 0x201 holds: where retail's tank bounced
+  at mp_cassino's slope the brush is one (VERIFIED, replay). vcod's
+  collision world keeps such brushes, unmet by every other mask.
 - **Another vehicle.** The probes' mask holds 0x800000, so another
   vehicle's collmap stops them; when what they struck is a
-  `script_vehicle` (scr_const 0x82) 0x827ab pushes it (VERIFIED
+  `script_vehicle` (scr_const 0x82), 0x827ab pushes it (VERIFIED
   decompile, constants at 0xa6b78..0xa6c2c):
   - unless its sway kick still runs (`rec+0x2b0` not 0) it is kicked
     (0x7d492) toward its origin from ours, scale `clamp(2 impact, 0.2,
@@ -1250,262 +1248,285 @@ trace").
     gains `k * share` along the line from us to it, capped at its
     `maxSpeed`;
   - not moving away from it (`(its origin - ours) . our velocity >= 0`,
-    0x84341), one no faster-topped than us takes `min(|its velocity -
+    0x84341): one no faster-topped than us takes `min(|its velocity -
     ours|, our maxSpeed / 2)` off ours along that line when our velocity
     points at it, and the soft bounce is skipped; a faster-topped one
     zeroes ours (0x84361 to 0x848d6). Moving away leaves ours alone
-    (VERIFIED disassembly; vcod had the zeroing on the moving-away side
-    until 2026-10-15).
-  The kick (0x839aa, on the other record) and the velocity (0x83ddd,
-  0x83fb9, 0x84195, again 0x8423f..0x84281) are written on the other
-  record at once (VERIFIED disassembly), so a retry pass that strikes it
-  again in the same think reads the first push: the kick still runs, and
-  a velocity under the share gains it again. vcod's step hands the kick
-  and the velocity to the parent, which writes them on the other record
-  (`physics::VehiclePush`), and a later hit in the same step starts from
-  the earlier push.
-- The struck vehicle moves on its own think, which runs in the entity
-  pass ahead of `G_VehicleClientThink`'s driven steps, so it first moves
-  the frame after the hit (VERIFIED, the ram capture below: the Horch's
-  speed falls 424 to 113 at 24250, the tank first moves at 24300). That
-  first think moves it the whole pushed velocity: the push writes `rec+0xe8`
-  but not the local velocity the step's target reads, which a parked tank
-  last wrote as 0, so no brake runs; each think after loses the tank's
-  `accel` (12.55 mph, 220.9 units/s^2, 11.04 a think) (INFERRED, the
-  formulas above against the capture: the two hits move it 1.115 then
-  0.555, and 0.934 then 0.382, 22.3 and 18.7 units/s, `k * share` with
-  `k` 37.5 and `share` 0.59 and 0.5). Measured, retail UO 1.51b,
-  `client-probes/probe_vehicle_ram` (`--probe-vehicle ram`, fixture
-  `mp_kharkov-jeep-ram-uo.txt`): mp_kharkov's second Horch driven 6 s at
-  the Panzer IV parked 680 ahead glances off it twice (yaw 35 to 74) and
-  shoves it 2.95 units, two thinks a hit (VERIFIED, capture). vcod ran
-  every vehicle's think in slot order after the entity pass, so the tank
-  moved in the hit's own frame; it now runs the undriven thinks on their
-  entity-pass turns (`think::run_undriven`, "The think's turn" below).
-  Ours now moves the tank on retail's thinks and lands
-  the first shove on retail's pose to 0.01 (-722.47, 7985.67) (VERIFIED,
-  `vehicle_ram_ab`, which holds the tank's pose to 0.02 and its speed to
-  0.01 on every think between the hits).
-- **The second shove.** A recapture with the tank's `speed` on each line
-  (2026-10-15, `mp_kharkov-jeep-ram-uo.txt`) repeats the first capture's
-  poses and shows the tank's think after the second hit starting from
-  the whole pushed velocity: speed 18.745, then 7.699, moving 0.93 then
-  0.38 (VERIFIED, capture). On ours that think's back-left probe (3)
-  strikes the Horch's right side at fraction 0.976 (the box's end 2.6
-  units inside brush 22245's -y face, the Horch at yaw 58.93, pitch
-  3.77), the restore puts back the velocity the last think committed (0,
-  the push wrote only `s`), and ours ends on the first shove's pose: 1.67
-  in all against 2.95 (VERIFIED, `vehicle_ram_ab`'s former
-  `SECOND_SHOVE_GAP`; closed below).
-  Ruled out:
+    (VERIFIED disassembly). Trap: putting the zeroing on the moving-away
+    side.
+
+  The kick (0x839aa) and the velocity (0x83ddd, 0x83fb9, 0x84195, again
+  0x8423f..0x84281) are written on the other record at once (VERIFIED
+  disassembly), so a retry pass that strikes it again in the same think
+  reads the first push: the kick still runs, and a velocity under the
+  share gains it again. vcod's step hands the kick and velocity to the
+  parent, which writes them on the other record (`physics::VehiclePush`);
+  a later hit in the same step starts from the earlier push.
+- The struck vehicle moves on its own think, in the entity pass ahead of
+  `G_VehicleClientThink`'s driven steps, so it first moves the frame after
+  the hit (VERIFIED, the ram capture below: the Horch's speed falls 424 to
+  113 at 24250, the tank first moves at 24300). That first think moves it
+  the whole pushed velocity: the push writes `rec+0xe8` but not the local
+  velocity the step's target reads, which a parked tank last wrote as 0,
+  so no brake runs. Each later think loses the tank's `accel` (12.55 mph,
+  220.9 units/s², 11.04 a think) (INFERRED, the formulas against the
+  capture: the two hits move it 1.115 then 0.555, and 0.934 then 0.382,
+  22.3 and 18.7 units/s, `k * share` with `k` 37.5 and `share` 0.59 and
+  0.5). Measured on retail UO 1.51b, `client-probes/probe_vehicle_ram`
+  (`--probe-vehicle ram`, fixture `mp_kharkov-jeep-ram-uo.txt`):
+  mp_kharkov's second Horch driven 6 s at the Panzer IV parked 680 ahead
+  glances off it twice (yaw 35 to 74) and shoves it 2.95 units, two thinks
+  a hit (VERIFIED, capture). vcod runs the undriven thinks on their
+  entity-pass turns (`think::run_undriven`, "The think's turn" below),
+  moves the tank on retail's thinks and lands the first shove on retail's
+  pose to 0.01 (-722.47, 7985.67) (VERIFIED, `vehicle_ram_ab`, which holds
+  the tank's pose to 0.02 and its speed to 0.01 on every think between the
+  hits).
+- **The second shove.** Closed. A recapture with the tank's `speed` on
+  each line (2026-10-15, `mp_kharkov-jeep-ram-uo.txt`) repeats the first
+  capture's poses and shows the tank's think after the second hit starting
+  from the whole pushed velocity: speed 18.745, then 7.699, moving 0.93
+  then 0.38 (VERIFIED, capture). Without the fix below, that think's
+  back-left probe (3) on ours strikes the Horch's right side at fraction
+  0.976 (the box's end 2.6 units inside brush 22245's -y face, the Horch
+  at yaw 58.93, pitch 3.77), the restore puts back the velocity the last
+  think committed (0, the push wrote only `s`), and ours ends on the first
+  shove's pose: 1.67 in all against 2.95 (VERIFIED, `vehicle_ram_ab`'s
+  former `SECOND_SHOVE_GAP`).
+
+  Ruled out (VERIFIED unless noted):
   - the probe's box (-24,-24,-1)..(24,24,10) and `vehCheckSolidOffsets`
-    (VERIFIED decompile, .data 0xa6660);
-  - the info fields the probe reads, `suspensionTravel` +0x88, `stepsize`
-    +0x390, the front and back distances +0x394 and +0x398 (VERIFIED,
-    the field table at .data 0xaea68);
+    (decompile, .data 0xa6660);
+  - the info fields the probe reads: `suspensionTravel` +0x88, `stepsize`
+    +0x390, front and back distances +0x394 and +0x398 (the field table at
+    .data 0xaea68);
   - `CM_TransformedBoxTrace` (coduo_lnxded 0x805b19a): the box symmetric
     about its centre and axial in the model's frame, the rotation
-    `AngleVectors` with the right axis negated, as vcod's (VERIFIED
-    decompile);
+    `AngleVectors` with the right axis negated, as vcod's (decompile);
   - the brush clip's box arm (0x8058f0a) and `trap_Trace` passing no
-    capsule (syscall 0x25 calls `SV_Trace` 0x809afc9 with 0) (VERIFIED
-    decompile);
-  - the collmap pairing: mp_kharkov has one Horch collmap, `*40`
-    (VERIFIED, the BSP);
+    capsule (syscall 0x25 calls `SV_Trace` 0x809afc9 with 0) (decompile);
+  - the collmap pairing: mp_kharkov has one Horch collmap, `*40` (the BSP);
   - the pass rules: `SV_ClipMoveToEntity` (0x809a594) skips only the pass
-    entity, what it owns and what its owner owns (VERIFIED decompile);
+    entity, what it owns and what its owner owns (decompile);
   - the entity area tree: `SV_Trace` walks it (0x805e8e5) on the box's
     centre with its half size plus a unit, and a vehicle is filed under
-    its xmodel's bounds (`svFlags` 4), for the Horch a +-113.6 cube that
-    holds the probe's end, so the walk reaches it (VERIFIED decompile).
+    its xmodel's bounds (`svFlags` 4), for the Horch a ±113.6 cube that
+    holds the probe's end, so the walk reaches it (decompile).
+
   Two replays reproduce retail's second shove exactly, speeds included:
   the tank's probes ignoring the Horch, or the Horch already being the
-  tank's last struck entity (`rec+0x3d0`), so that the strike reads as
-  the tank moving away from it (`dot <= 0`, 0x827ab's `bVar4`) (VERIFIED,
-  replay). The second needs a probe run between the hits that ours
-  skips: with the early-out (seat 1 empty and the pose equal to the
-  committed one) disabled, ours' tank strikes the Horch on the think
-  before the second hit and the second shove lands, but its think in the
-  first hit's frame then strikes the approaching Horch too and the first
-  shove ends 0.41 short (VERIFIED, replay).
-  Retail's tank runs them because its pose never settles after the first
-  shove. `probe_vehicle_ram` with `+set probe_fine 1` logs the struck
-  tank's pose off its placement pose, scaled so a float's last bit shows
-  (`PROBE c`). From the placement (20300) to the first hit (26250) the
-  delta is 0. After the first shove the x and y stop at 26400 (1.52686,
-  0.67334), but z keeps flipping by one ulp (1.5e-5 at z -135.3):
-  -0.0210876 and -0.0211029 on alternate thinks from 26450 to 26750,
-  while the speed reads 0 from 26550 (VERIFIED, retail UO 1.51b, port
-  31792, 2026-10-15; the speeds repeat both earlier captures). The
-  suspension (0x81331) rebuilds an undriven vehicle's z from its wheel
-  traces each think, starting them from the last z, so a last-bit change
-  in a trace's end feeds the next think; at the spawn's whole-unit
-  origin it holds still. A pose that differs from the committed one
-  fails 0x827ab's early-out, so the probes run on those thinks, strike
-  the approaching Horch and leave it in `rec+0x3d0` (INFERRED, the
-  decompile against the capture). vcod's suspension lands on a fixed
-  point there (z -135.30846, 1 to 2 ulps off retail's pair), so its tank
-  skips them. Replaying ours with the early-out off for the tank once it
-  has left its spawn pose reproduces retail exactly: the total shove
-  2.9504983 and the speeds 18.745, 7.69916, 3.03935e-07, 2.71178e-14,
-  1.74685e-21 after the second hit, with the first shove unchanged
-  (VERIFIED, replay).
-  The wheels stand on terrain (mp_kharkov triangles 6504 to 6506, one of
-  them sloped), and United Offensive's engine clips a point trace against
-  terrain in code that stores every intermediate as a float. VERIFIED,
+  tank's last struck entity (`rec+0x3d0`), so the strike reads as the tank
+  moving away from it (`dot <= 0`, 0x827ab's `bVar4`) (VERIFIED, replay).
+  The second needs a probe run between the hits. With the early-out (seat
+  1 empty and the pose equal to the committed one) disabled, ours strikes
+  the Horch on the think before the second hit and the second shove lands,
+  but its think in the first hit's frame also strikes the approaching
+  Horch and the first shove ends 0.41 short (VERIFIED, replay).
+
+  Retail's tank runs the probes because its pose never settles after the
+  first shove. `probe_vehicle_ram` with `+set probe_fine 1` logs the
+  struck tank's pose off its placement pose, scaled so a float's last bit
+  shows (`PROBE c`). From the placement (20300) to the first hit (26250)
+  the delta is 0. After the first shove x and y stop at 26400 (1.52686,
+  0.67334), but z flips by one ulp (1.5e-5 at z -135.3): -0.0210876 and
+  -0.0211029 on alternate thinks from 26450 to 26750, while the speed
+  reads 0 from 26550 (VERIFIED, retail UO 1.51b, 2026-10-15; the speeds
+  repeat both earlier captures). The suspension (0x81331) rebuilds an
+  undriven vehicle's z from its wheel traces each think, starting from the
+  last z, so a last-bit change in a trace's end feeds the next think; at
+  the spawn's whole-unit origin it holds still. A pose that differs from
+  the committed one fails 0x827ab's early-out, so the probes run on those
+  thinks, strike the approaching Horch and leave it in `rec+0x3d0`
+  (INFERRED, the decompile against the capture). An `f32` suspension lands
+  on a fixed point (z -135.30846, 1 to 2 ulps off retail's pair) and skips
+  them. Replaying with the early-out off once the tank has left its spawn
+  pose reproduces retail exactly: total shove 2.9504983, speeds 18.745,
+  7.69916, 3.03935e-07, 2.71178e-14, 1.74685e-21 after the second hit,
+  first shove unchanged (VERIFIED, replay).
+
+  The cause is terrain. The wheels stand on mp_kharkov triangles 6504 to
+  6506 (one sloped), and UO's engine clips a point trace against terrain
+  in code that stores every intermediate as a float. VERIFIED,
   `coduo_lnxded` disassembly: the point clip (0x8055595, reached from
   0x8056ff5 when the trace is a point, `tw+0xc0`) computes per triangle
-  `d2 = end . n - dist` and `d1 = start . n - dist`, each stored
-  (`fstp` at 0x8055625 and 0x80556ab); it goes on when `d2 < 0` and `d1 >
-  0`, stores `f = (d1 - 0.125) / (d1 - d2)` (0x80556d1, 0.125 at
-  .rodata 0x80dc918) and compares it with the trace's fraction (`tw+0xc4`),
-  stores `t = d1 / (d1 - d2)` and the point `delta * t + start` per axis
-  (`tw+0x18` the delta), then the two barycentric distances `p . u - ud`
-  and `p . v - vd`, each stored, against -0.001 and 1.001 (0x80dc91c,
-  0x80dc920), their sum on the stack against 1.001; a pass writes `f` and
-  the normal (0x8055867..0x80558c7). The records come from 0x805403e
+  `d2 = end . n - dist` and `d1 = start . n - dist`, each stored (`fstp`
+  at 0x8055625, 0x80556ab). It goes on when `d2 < 0` and `d1 > 0`, stores
+  `f = (d1 - 0.125) / (d1 - d2)` (0x80556d1, 0.125 at .rodata 0x80dc918)
+  and compares it with the trace's fraction (`tw+0xc4`), stores `t = d1 /
+  (d1 - d2)` and the point `delta * t + start` per axis (`tw+0x18` the
+  delta), then the two barycentric distances `p . u - ud` and `p . v -
+  vd`, each stored, against -0.001 and 1.001 (0x80dc91c, 0x80dc920), their
+  sum on the stack against 1.001; a pass writes `f` and the normal
+  (0x8055867..0x80558c7). The records come from 0x805403e
   (`PlaneFromPoints` 0x806a964 at 0x80547b8: `(p2 - p0) x (p1 - p0)`
   through `CrossProduct` 0x80666b1 and `VectorNormalize` 0x8066755, whose
-  squared length, root and reciprocal are each stored; then both edges
-  stored, normalized, their cosine and `1 / (1 - cos^2)` stored, each
-  scaled component stored, `u = e1 - cos e2` and `v = e2 - cos e1` stored
-  and scaled by the stack's reciprocal of the edge's length, every
-  distance a stored dot product with `p0`). 1.1d's terrain point clip
-  (`cod_lnxded` 0x8052894) keeps the same values on the stack instead.
-  vcod clipped a point against terrain in plain `f32` with a normal it
-  recomputed, so a wheel's end landed on the face where the start's last
-  bit said nothing. With `Terrain::point_clip_stored` (the records built the
-  same way at load, `PointPlanes::v22`), which the collision world takes
-  for every point trace on a United Offensive server, and on a 1.5
-  one, whose 0x8055763 is the same code (`CollisionWorld::set_arith`,
-  `bsp-ibsp59-format.md`, "Patch collision on 1.5 and UO"), the parked tank's z keeps
-  moving by a last bit after the first shove, its probes run between the
-  hits, and the second shove lands: ours' tank ends 2.9504983 from its
-  spawn as retail's does, every think's pose to 0.02 and speed to 0.01
-  through both hits (VERIFIED, `vehicle_ram_ab`, 2026-10-16). The gap is
-  closed.
+  squared length, root and reciprocal are each stored; both edges stored,
+  normalized, their cosine and `1 / (1 - cos^2)` stored, each scaled
+  component stored, `u = e1 - cos e2` and `v = e2 - cos e1` stored and
+  scaled by the stack's reciprocal of the edge's length, every distance a
+  stored dot product with `p0`). 1.1d's terrain point clip (`cod_lnxded`
+  0x8052894) keeps the same values on the stack.
+
+  vcod clips points against terrain with `Terrain::point_clip_stored` (the
+  records built the same way at load, `PointPlanes::v22`) for every point
+  trace on a UO server and on a 1.5 one, whose 0x8055763 is the same code
+  (`CollisionWorld::set_arith`, `bsp-ibsp59-format.md`, "Patch collision
+  on 1.5 and UO"). With it the parked tank's z keeps moving by a last bit
+  after the first shove, its probes run between the hits, and the second
+  shove lands: the tank ends 2.9504983 from its spawn as retail's does,
+  every think's pose to 0.02 and speed to 0.01 through both hits
+  (VERIFIED, `vehicle_ram_ab`, 2026-10-16). A plain `f32` clip with a
+  recomputed normal put a wheel's end on the face where the start's last
+  bit said nothing.
 - **The think's turn.** `G_RunFrame`'s entity loop (game.mp.uo 0x69c21)
   calls `G_RunEntity` (0x69a35) once per in-use entity by number, its link
-  parent first. A vehicle is not a missile (4), an item (3), a mover (5,
-  8) or a client, so its arm is `G_RunThink` (0x69862): when `nextthink`
+  parent first. A vehicle is not a missile (4), item (3), mover (5, 8) or
+  client, so its arm is `G_RunThink` (0x69862): when `nextthink`
   (`ent+0x20c`) is positive and not past `level.time` it is zeroed and
   `Scr_Vehicle_Think` called (VERIFIED decompile). The think returns at
   once for a driven vehicle (`ent+0x17e` 2) while the flag at .bss
   0xbe954 is 0, setting `nextthink` to `level.time`; otherwise it steps
-  and sets `nextthink` to `level.time + 50` (VERIFIED decompile,
-  0x8c7cc). `G_VehicleClientThink` (0x9b0ce) sets that flag, walks the
-  64 vehicle pool records (.bss 0xe43c0, stride 0x3ec, entity number at
-  +0x228) in order and `G_RunThink`s each driven one, then clears it
-  (VERIFIED decompile). So an undriven vehicle steps on its own turn in
-  the entity pass, among the missiles, movers and links by number, and
-  a driven one after the loop in pool order. A model linked to a parked
-  tank follows the tank's shove in the same frame: `probe_vehicle_ram`
-  with `+set probe_link 1` spawns a script_model 100 over the struck
-  tank (entity 437, the tank 187), links it, and logs its origin each
-  frame (`PROBE l`); on every frame the tank moves (first at 19800, the
-  same shoves as the capture above, speeds 21.10, 10.47, then 18.745,
-  7.69916) the model's x and y move with it in that frame (VERIFIED,
-  retail UO 1.51b, port 34421, 2026-10-20, fixture
-  `mp_kharkov-jeep-ram-link-uo.txt`). vcod ran the undriven thinks after
-  the pass, so the model trailed the tank by a frame (-724.0 against
-  retail's -722.98, 50 ms past the first hit); `run_entity` now runs
+  and sets `nextthink` to `level.time + 50` (VERIFIED decompile, 0x8c7cc).
+  `G_VehicleClientThink` (0x9b0ce) sets that flag, walks the 64 pool
+  records (.bss 0xe43c0, stride 0x3ec, entity number at +0x228) in order,
+  `G_RunThink`s each driven one, then clears it (VERIFIED decompile). So
+  an undriven vehicle steps on its own turn in the entity pass, among the
+  missiles, movers and links by number, and a driven one after the loop in
+  pool order.
+
+  A model linked to a parked tank follows the tank's shove in the same
+  frame. `probe_vehicle_ram` with `+set probe_link 1` spawns a
+  script_model 100 over the struck tank (entity 437, the tank 187), links
+  it and logs its origin each frame (`PROBE l`). On every frame the tank
+  moves (first at 19800, the same shoves as above, speeds 21.10, 10.47,
+  then 18.745, 7.69916) the model's x and y move with it in that frame
+  (VERIFIED, retail UO 1.51b, 2026-10-20, fixture
+  `mp_kharkov-jeep-ram-link-uo.txt`). vcod's `run_entity` runs
   `think::run_undriven` on the vehicle's turn, and `vehicle_ram_ab`'s
   `a_model_linked_to_a_shoved_tank_moves_on_the_tanks_frame` holds the
-  model to 0.02 on every frame from 200 ms before the first hit to a
-  second past the second. The seat ops (a dead rider's exit) and the
-  run-over knock (`VEH_PlayerCollision`) an undriven think queues still
-  apply in vcod after `G_VehicleClientThink`, with the driven ones';
-  retail's think calls `VEH_UnlinkPlayer` for a dead rider itself, first
-  thing after the driven check (VERIFIED decompile, 0x8c7cc). No capture
-  tells the two apart yet.
+  model to 0.02 on every frame from 200 ms before the first hit to a second
+  past the second. Run after the pass, the model trailed by a frame
+  (-724.0 vs retail's -722.98, 50 ms past the first hit).
+
+  Open: the seat ops (a dead rider's exit) and the run-over knock
+  (`VEH_PlayerCollision`) an undriven think queues still apply in vcod
+  after `G_VehicleClientThink`, with the driven ones'. Retail's think calls
+  `VEH_UnlinkPlayer` for a dead rider itself, first thing after the driven
+  check (VERIFIED decompile, 0x8c7cc). No capture tells the two apart yet.
 - **Self-damage.** 0x827ab's tail runs two `G_Damage`s on the vehicle
-  itself, inflictor and attacker the vehicle, dir the hit's normal, point
+  itself: inflictor and attacker the vehicle, dir the hit's normal, point
   the hit, dflags 0, `MOD_COLLISION` (0x18), hit location 2 (VERIFIED
   disassembly 0x856b8..0x857e2):
-  - under `g_vehicleEnableCollisionDamage` (registered 0), when the hit
-    drove into the surface past 0.5 (`into`, -0x160), `trunc(2 (impact -
+  - Under `g_vehicleEnableCollisionDamage` (registered 0), when the hit
+    drove into the surface past 0.5 (`into`, -0x160): `trunc(2 (impact -
     0.5) * collisionDamage)` (`fistp` under 0xc00, 0x8571b). `impact` is
-    capped at 0.5 (0xa6ba4) a few lines up, so the amount is never above
-    0, and `G_Damage`'s generic arm lifts it to 1: a collision costs 1
-    health (VERIFIED disassembly and bytes; INFERRED that nothing between
-    the cap and the damage raises `impact`, read off the decompile);
-  - with the stuck clock (`rec+0x3d8`) more than 7000 ms old, 999999
-    (0xf423f), and the clock set 99999 ms ahead (0x857dd). The think
-    resets the clock to `level.time` whenever the last hit (`rec+0x3dc`)
-    is over a second old (0x9c9ac in the decompile's numbering, `.so`
-    0x8c9ac), after 0x827ab, and `G_SpawnVehicle`'s memset leaves both
-    0, so a hit on a vehicle's first think takes the kill; every later
-    think starts from a clock its predecessor reset (VERIFIED decompile).
+    capped at 0.5 (0xa6ba4) a few lines up, so the amount is never above 0,
+    and `G_Damage`'s generic arm lifts it to 1: a collision costs 1 health
+    (VERIFIED disassembly and bytes; INFERRED that nothing between the cap
+    and the damage raises `impact`, read off the decompile).
+  - With the stuck clock (`rec+0x3d8`) more than 7000 ms old: 999999
+    (0xf423f), and the clock set 99999 ms ahead (0x857dd). The think resets
+    the clock to `level.time` whenever the last hit (`rec+0x3dc`) is over a
+    second old (0x9c9ac in the decompile's numbering, `.so` 0x8c9ac),
+    after 0x827ab. `G_SpawnVehicle`'s memset leaves both 0, so a hit on a
+    vehicle's first think takes the kill; every later think starts from a
+    clock its predecessor reset (VERIFIED decompile).
+
   `G_IsVehicleImmune` (0x8b893) lets `MOD_COLLISION` through, and
   `G_Damage` (0x4fedb) needs `takedamage`, which the spawn (0x7c935) sets
   (VERIFIED decompile). vcod-server runs both from `think::self_damage`
-  inside the think, ahead of the readers and the sounds, and a death runs
+  inside the think, ahead of the readers and the sounds; a death runs
   `Scr_Vehicle_Die` there, as the die callback does.
-- Sounds, 0x87480 with `G_SetSoundBlend` (0x5a6a9): B1 the idle pair and
-  B2 the engine pair crossfaded by the step's blend while a driver runs
-  the engine (B2 also quiet with B1 present and the blend 0, or driverless
-  under 0.1 units/s, 0.1 double at 0xa6d30); `loopSound` the turret spin
-  alias while it turns, its stop alias once as it stops; B3 and B4 each
-  MG's loop held 200 ms past a round, its cooldown alias as the hold runs
-  out. A blend goes out with `eventParm` and `scale` the aliases and
-  `angles2[1]` the crossfade, unlinked when both aliases are 0 (VERIFIED
+- **Sounds**, 0x87480 with `G_SetSoundBlend` (0x5a6a9) (VERIFIED
   decompile; VERIFIED capture: the crew Panzer's 187 on 17/18 and 188 on
-  19/20).
+  19/20):
+  - B1 the idle pair and B2 the engine pair, crossfaded by the step's
+    blend while a driver runs the engine (B2 also quiet with B1 present and
+    the blend 0, or driverless under 0.1 units/s, 0.1 double at 0xa6d30);
+  - `loopSound` the turret spin alias while it turns, its stop alias once
+    as it stops;
+  - B3 and B4 each MG's loop, held 200 ms past a round, its cooldown alias
+    as the hold runs out.
+
+  A blend goes out with `eventParm` and `scale` the aliases and
+  `angles2[1]` the crossfade, unlinked when both aliases are 0.
 
 ## 13. Guns, heat and damage
 
-- The driver's reader (0x86c57), with a turret weapon, `capturing` 0:
-  `s.weapon` the turret weapon; main timer `< 1` with `buttons & 1`
-  notifies `turret_fire`, else 50 off; the alt timer 50 off every think,
-  `< 1` with `buttons & 0x20` notifies `turret_alt_fire`; the aim point
-  10240 along the view from `tag_chasecam` (`tag_aimdownbarrel` sighted),
-  stopped by a locational trace under 0x2091 (no vehicle, no body) passing
-  the driver, stored at `rec+0x28c`; a `trap_Trace` between the flash and
-  barrel tags that hits sets `rec+0x270`, the straight shot (VERIFIED
-  decompile). The reader runs in the vehicle's think, after the frame's
-  threads, so a gsc `setPlayerAngles` on the driver turns the aim, and a
-  script's `fireTurret` bends toward the point the last think stored
-  (VERIFIED, the shell capture below: the round bent 5 down and 2 across
-  toward the Elefant where the cmd's own view pointed behind the tank).
-  vcod's think stores the point (`Vehicle::aim_point`) and the barrel
-  flag (`Vehicle::barrel_blocked`, the barrel test below). The gunner's
+Contents, by paragraph name (code cites these): the readers and fire
+calls; "Inside the call, and only with a driver"; "The bend's
+arithmetic"; "The guns' spread"; "The shell's bits"; heat; `G_Damage` on
+a vehicle; "The driver's feedback"; "A blast on a hull"; "The firing
+vehicle's own splash"; "A frag's splash on a hull"; "Measured, rockets and
+frags"; "The hull's clip, surface by surface"; "The rider's pose"; "The
+broad phase"; "The silhouette" (with "The tank driver", "Back from the
+gunner's seat", "The driver's idle", "The tank driver's link offset",
+"The glide back", "Two runs that part", "The glides on the jeep", "The
+weapon-swap frame", "The angle updater on a rider", "The tank driver's
+idle", "Retail's spawn point", "The shooter's trigger"); "The inflictor
+swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
+
+- **The readers.** The driver's reader (0x86c57), with a turret weapon
+  and `capturing` 0 (VERIFIED decompile):
+  - `s.weapon` the turret weapon;
+  - main timer `< 1` with `buttons & 1` notifies `turret_fire`, else 50
+    off; the alt timer 50 off every think, `< 1` with `buttons & 0x20`
+    notifies `turret_alt_fire`;
+  - the aim point 10240 along the view from `tag_chasecam`
+    (`tag_aimdownbarrel` sighted), stopped by a locational trace under
+    0x2091 (no vehicle, no body) passing the driver, stored at
+    `rec+0x28c`;
+  - a `trap_Trace` between the flash and barrel tags that hits sets
+    `rec+0x270`, the straight shot.
+
+  The reader runs in the vehicle's think, after the frame's threads, so a
+  gsc `setPlayerAngles` on the driver turns the aim, and a script's
+  `fireTurret` bends toward the point the last think stored (VERIFIED, the
+  shell capture below: the round bent 5 down and 2 across toward the
+  Elefant where the cmd's own view pointed behind the tank). vcod's think
+  stores the point (`fire::aim_point`) and the barrel flag
+  (`barrel_blocked`, "The barrel test" below). The gunner's reader
   (0x871a6) notifies `turret_gunner_fire` the same way (VERIFIED
   decompile). The scripts fire on the next frame's threads.
-- `fireTurret` (0x8ee02): from `tag_flash`, the barrel's forward bent
-  toward the aim point by at most 5° pitch, 2° yaw; a bullet weapon's
-  spread `minSpread + rand * maxSpread`; a projectile weapon goes through
-  `Weapon_Artillery_Fire` (0x7b594) to `fire_rocket` (0x5fc74), `trType`
-  5 (z falls 400 t²), the speed truncated per axis, the driver credited
-  through the vehicle, `MOD_PROJECTILE` direct and `_SPLASH` around;
-  event 163 on the vehicle, the hull jolted 0.75 back along `tag_barrel`,
-  the timer `fireTime` (VERIFIED decompile). `fireAltTurret` (0x8f57e)
-  fires from `tag_altfire` (164) and `fireGunner` (0x8fc7a) along
-  `tag_secondary_flash` (165); both refuse while overheated, add
-  `fireHeat` and hold their loop 200 ms (VERIFIED decompile).
+- **The fire calls.** `fireTurret` (0x8ee02): from `tag_flash`, the
+  barrel's forward bent toward the aim point by at most 5° pitch, 2° yaw.
+  A bullet weapon's spread is `minSpread + rand * maxSpread`; a projectile
+  weapon goes through `Weapon_Artillery_Fire` (0x7b594) to `fire_rocket`
+  (0x5fc74): `trType` 5 (z falls 400 t²), speed truncated per axis, the
+  driver credited through the vehicle, `MOD_PROJECTILE` direct and
+  `_SPLASH` around. Then event 163 on the vehicle, the hull jolted 0.75
+  back along `tag_barrel`, the timer `fireTime` (VERIFIED decompile).
+  `fireAltTurret` (0x8f57e) fires from `tag_altfire` (164) and
+  `fireGunner` (0x8fc7a) along `tag_secondary_flash` (165); both refuse
+  while overheated, add `fireHeat` and hold their loop 200 ms (VERIFIED
+  decompile).
 - **Inside the call, and only with a driver.** `fireTurret` compares the
-  vehicle record's `+0x3a0` with 0x3ff (0x8ee8a) and on a match jumps to
-  its epilogue (0x8f574), past every fire (VERIFIED disassembly).
-  INFERRED: `+0x3a0` is the driver's number. VERIFIED, live capture
-  (`client-probes/probe_shellfuse`, `cod11-combat.md` 13.7): on an empty
-  Panzer IV it spawns no `rocket`, and with a driver the shell is listed
-  by `getEntArray("rocket", "classname")` on the calling thread's next
-  instruction. vcod: a shell gun fires in the builtin
-  (`vehicle::fire::launch_shell`); a bullet gun's round still waits for
-  the server's trace after the threads. Before 2026-10-21 a shell waited
-  too.
-- **The bend's arithmetic.** `fireTurret` (0x8f0fe..0x8f2ae) takes the
-  aim point less `tag_flash`'s origin, each component stored, through
-  the stored `VectorNormalize` (0x3a1c3); `vectoangles` (0x3aded) of the
-  tag's forward and of that; `AnglesSubtract` (0x3dc11) of the two,
-  pitch clamped to [-5, 5] and yaw to [-2, 2] (f32 at rodata 0xa79cc,
-  0xa79d0, 0xa79d4, 0xa79d8), roll 0; `AnglesSubtract` of the tag's
-  angles and the clamped pair, which wraps the yaw back into
-  [-180, 180]; and `AngleVectors` (0x3b068) of the result for the
-  forward (VERIFIED disassembly). `fireAltTurret` runs the same chain off
-  `tag_altfire` with its own copy of the four limits (0xa79e4..0xa79f0)
-  (VERIFIED decompile and bytes). The bend is skipped where the vehicle's
-  `r.ownerNum` (+0x154) is 0x3ff, the barrel is blocked (`rec+0x270`),
-  or the main gun has two barrels (VERIFIED disassembly, 0x8f0ce..0x8f0f8).
+  record's `+0x3a0` with 0x3ff (0x8ee8a) and on a match jumps to its
+  epilogue (0x8f574), past every fire (VERIFIED disassembly). INFERRED:
+  `+0x3a0` is the driver's number. VERIFIED, live capture
+  (`client-probes/probe_shellfuse`, `cod11-combat.md` 13.7): an empty
+  Panzer IV spawns no `rocket`; with a driver the shell is listed by
+  `getEntArray("rocket", "classname")` on the calling thread's next
+  instruction. vcod fires a shell gun in the builtin
+  (`vehicle::fire::launch_shell`); a bullet gun's round still waits for the
+  server's trace after the threads.
+- **The bend's arithmetic.** `fireTurret` (0x8f0fe..0x8f2ae) (VERIFIED
+  disassembly):
+  1. the aim point less `tag_flash`'s origin, each component stored,
+     through the stored `VectorNormalize` (0x3a1c3);
+  2. `vectoangles` (0x3aded) of the tag's forward and of that;
+  3. `AnglesSubtract` (0x3dc11) of the two, pitch clamped to [-5, 5] and
+     yaw to [-2, 2] (f32 at rodata 0xa79cc, 0xa79d0, 0xa79d4, 0xa79d8),
+     roll 0;
+  4. `AnglesSubtract` of the tag's angles and the clamped pair, which wraps
+     the yaw back into [-180, 180];
+  5. `AngleVectors` (0x3b068) of the result for the forward.
+
+  `fireAltTurret` runs the same chain off `tag_altfire` with its own copy
+  of the four limits (0xa79e4..0xa79f0) (VERIFIED decompile and bytes). The
+  bend is skipped where the vehicle's `r.ownerNum` (+0x154) is 0x3ff, the
+  barrel is blocked (`rec+0x270`), or the main gun has two barrels
+  (VERIFIED disassembly, 0x8f0ce..0x8f0f8).
 - **The guns' spread.** All three fire calls hand the round the flash
   tag's frame: the bent (or straight) forward, the tag's `axis[1]` (its
   left) where the spread reads its right, its `axis[2]`, and the muzzle
@@ -1518,63 +1539,69 @@ trace").
   projectile weapon goes to `Weapon_Artillery_Fire(vehicle, 0.0, frame)`
   (0x8f459..0x8f471), the bazooka's function with spread 0 and `trType`
   rewritten to 5 (0x7b6c8): `tan(0)` makes `k` 0, `gunrandom` (0x399e0)
-  still draws its two `rand()`, the point is `forward * 16` stored plus
-  two zero offsets, then the stored `VectorNormalize`, and `fire_rocket`
+  still draws its two `rand()`, the point is `forward * 16` stored plus two
+  zero offsets, then the stored `VectorNormalize`, and `fire_rocket`
   normalizes it again (VERIFIED disassembly, 0x7b594..0x7b6c8).
 - **The shell's bits.** VERIFIED, gdb on retail UO 1.51b (2026-10-21,
   `client-probes/probe_vehicle_shell` on mp_kharkov with
   `probe_vehicletype panzeriv_mp`, the driver `--probe-vehicle sit`;
   dprintfs at 0x8f0ce, 0x8f145, 0x8f17a, 0x8f19c, 0x8f288, 0x8f2b3,
-  0x8f459, 0x7b5e6, 0x7b681, 0x7b6cf). All three shells: the tag's
-  forward (-0.9721, -0.0983, -0.2129), the aim point
-  (-1472.85, 6193.82, -62.38), the bend's angles (12.29, 185.77) and
-  (43.47, 182.98), their difference (-31.18, 2.80) clamped to (-5, 2),
-  the bent angles (17.29, -176.23), the forward
-  (-0.95273, -0.06282, -0.29724). `k` reads 0, and each shell's own
-  `gunrandom` pair leaves the point at 16 times the forward, the
-  direction on the forward's bits and `trDelta` (-9527, -628, -2972), the
-  forward times 10000 truncated. vcod-server runs the chain in
-  `vehicle::fire::bend` and `prepare` (`combat::rocket_dir`, spread 0,
-  `gunrandom` drawn), on those bits to the last one
+  0x8f459, 0x7b5e6, 0x7b681, 0x7b6cf). All three shells read:
+
+  | Value | Bits |
+  |---|---|
+  | tag forward | (-0.9721, -0.0983, -0.2129) |
+  | aim point | (-1472.85, 6193.82, -62.38) |
+  | the bend's angles | (12.29, 185.77) and (43.47, 182.98) |
+  | difference, clamped | (-31.18, 2.80) to (-5, 2) |
+  | bent angles | (17.29, -176.23) |
+  | bent forward | (-0.95273, -0.06282, -0.29724) |
+  | `k` | 0 |
+  | `trDelta` | (-9527, -628, -2972), the forward × 10000 truncated |
+
+  Each shell's own `gunrandom` pair leaves the point at 16 times the
+  forward and the direction on the forward's bits. vcod-server runs the
+  chain in `vehicle::fire::bend` and `prepare` (`combat::rocket_dir`,
+  spread 0, `gunrandom` drawn) on those bits to the last one
   (`vehicle::fire::a_uo_tank_shell_leaves_on_retails_bits`). In
   `vehicle_shell_ab`'s replay ours poses the tag a few ulps off retail's
-  (forward y 0xbdc941d5 against 0xbdc941b0, muzzle z 0x40e2db70 against
-  0x40e2db6a), so its bent forward's y sits 0x1f ulps off and its z one
-  (VERIFIED, replay): the pose, not the chain. The capture cannot hold
-  the shell's `trDelta`: it strikes the Elefant inside its first frame
-  and is only ever sent exploded, stationary (VERIFIED, capture). Until
-  2026-10-21 it bent through f32 `atan2` and a `%` wrap, left the yaw
-  unwrapped and fired the shell along the bent forward with one
-  normalize; its MG rounds took a disc of their own around the tag's
-  right, not `BG_Bullet_Endpos`.
-- A vehicle round's event parm is its weapon with bit 7 set unless it
-  struck a player: the round raises no impact of its own because its
-  inflictor (the vehicle) is not its attacker (VERIFIED decompile, 0x7a920;
-  VERIFIED capture: 164 parm 0x9b, 165 parm 0xa0).
-- Heat: overheat at 1.0, recovery at 0.5 or under (0xa6d14, 0xa7590),
-  checked before the cooling by `cooldownRate` each think; 208 on the
-  vehicle (the alt gun's not on a four-wheel); the gunner's overheat
+  (forward y 0xbdc941d5 vs 0xbdc941b0, muzzle z 0x40e2db70 vs 0x40e2db6a),
+  so its bent forward's y sits 0x1f ulps off and its z one (VERIFIED,
+  replay): the pose, not the chain. The capture cannot hold the shell's
+  `trDelta`: it strikes the Elefant inside its first frame and is only
+  ever sent exploded, stationary (VERIFIED, capture). Traps: an f32
+  `atan2` with a `%` wrap, an unwrapped yaw, a single normalize, or an MG
+  disc around the tag's right instead of `BG_Bullet_Endpos` all miss
+  these bits.
+- **A round's event parm** is its weapon with bit 7 set unless it struck a
+  player: the round raises no impact of its own because its inflictor
+  (the vehicle) is not its attacker (VERIFIED decompile, 0x7a920; VERIFIED
+  capture: 164 parm 0x9b, 165 parm 0xa0).
+- **Heat.** Overheat at 1.0, recovery at 0.5 or under (0xa6d14, 0xa7590),
+  checked before the cooling by `cooldownRate` each think; event 208 on
+  the vehicle (the alt gun's not on a four-wheel). The gunner's overheat
   writes `animMovetype` 1 and its recovery 0, over the seat mask, sets
-  `pm_flags` 0x800000 on the gunner and notifies `overheating` every
-  think (VERIFIED decompile; VERIFIED capture: 49 rounds, 208, the mask
-  6 → 1 → 0, recovery 2550 ms on).
-- `G_Damage` (0x4fedb) on a vehicle: `G_IsVehicleImmune` (0x8b893)
-  (bullets need `bulletDamage`, grenades `grenadeDamage`, projectiles and
-  artillery `projectileDamage`; water, explosive and collision always
-  land; every other means never does); a blast under 100 dropped;
-  `Scr_Vehicle_DamageScale` (0x8ccad) by the hit's side, 0.7 of a blend
-  for splash, `dmgScaleBullet` on bullets; then `damage (amount,
-  attacker, dir, point, mod, inflictor)` and at 0 `death` and
-  `Scr_Vehicle_Die`; else `Scr_Vehicle_Pain` (0x8d1ca) jolts the hull
-  when the attacker holds a grenade or a launcher, the means is
-  `MOD_EXPLOSIVE` or the damage tops 200 (VERIFIED decompile).
-- **The driver's feedback.** `Scr_Vehicle_Pain` (0x8d1ca), after the
-  jolt, hands the damage to the vehicle's driver: when `otherEntityNum`
-  (`es+0x74`) is under `level.maxclients` and names a client whose
-  `connected` (`client+0x4520`) is 2, it adds the scaled damage (≥ 1) to
+  `pm_flags` 0x800000 on the gunner and notifies `overheating` every think
+  (VERIFIED decompile; VERIFIED capture: 49 rounds, 208, the mask 6 → 1 →
+  0, recovery 2550 ms on).
+- **`G_Damage` on a vehicle** (0x4fedb) (VERIFIED decompile):
+  1. `G_IsVehicleImmune` (0x8b893): bullets need `bulletDamage`, grenades
+     `grenadeDamage`, projectiles and artillery `projectileDamage`; water,
+     explosive and collision always land; every other means never does.
+  2. A blast under 100 is dropped.
+  3. `Scr_Vehicle_DamageScale` (0x8ccad) by the hit's side, 0.7 of a blend
+     for splash, `dmgScaleBullet` on bullets.
+  4. `damage (amount, attacker, dir, point, mod, inflictor)`; at 0 `death`
+     and `Scr_Vehicle_Die`; else `Scr_Vehicle_Pain` (0x8d1ca) jolts the
+     hull when the attacker holds a grenade or a launcher, the means is
+     `MOD_EXPLOSIVE` or the damage tops 200.
+- **The driver's feedback.** `Scr_Vehicle_Pain` (0x8d1ca), after the jolt,
+  hands the damage to the driver. When `otherEntityNum` (`es+0x74`) is
+  under `level.maxclients` and names a client whose `connected`
+  (`client+0x4520`) is 2, it adds the scaled damage (≥ 1) to
   `damage_blood` (`client+0x4658`) and sets `damage_from`
   (`client+0x465c`) to the vehicle's `r.currentOrigin` (+0x13c) less the
-  point, unnormalised, with the no-direction flag (`client+0x4668`) 0; a
+  point, unnormalised, with the no-direction flag (`client+0x4668`) 0. A
   vehicle that is its own attacker stores the point and sets the flag 1,
   which `P_DamageFeedback` turns into yaw and pitch 255 (VERIFIED
   decompile, `game.mp.uo` 0x8d1ca; `G_Damage` 0x4fedb calls pain as
@@ -1584,65 +1611,64 @@ trace").
   cone and `EV_PAIN` 100. The tank captures' main gun shots read this on
   the driver: `damageCount` 44 on the seats capture, 30 on the drive
   (VERIFIED, capture). vcod-server queues the same feedback
-  (`SimOp::VehiclePain`) and matches the event, its parm,
-  `damageEvent` and both counts (VERIFIED, `vehicle_ab` replay). It
-  charged 43 and 38 until the splash took retail's measure, below.
-- **A blast on a hull.** `G_RadiusDamage` (game.mp.uo 0x5098b) measures
-  an entity with `r.bmodel` (+0x104) to its `r.absmin`/`r.absmax`
-  (+0x124, +0x130) on each axis, and one that also has a vehicle record
-  (+0x164) to that box drawn in by three quarters of `r.mins`/`r.maxs`
-  (+0x108, +0x114): `absmin - 0.75 mins` to `absmax - 0.75 maxs`
-  (VERIFIED decompile). `VEH_SetupCollmap`'s `SetBrushModel` makes a paired vehicle a brush
-  model, so UO's `SV_LinkEntity` (`coduo_lnxded` 0x8099dee) files it,
-  once any angle is set, under a cube of `RadiusFromBounds` (0x806a0c3)
-  of the collmap's bounds about `r.currentOrigin`, grown a unit
-  (VERIFIED decompile). `CanDamage` probes about the box's middle, the origin. The direction
-  `G_Damage` gets is `r.currentOrigin` less the blast lifted 24, which
-  it normalizes for the `damage` notify and the pain's jolt (VERIFIED
-  decompile, 0x5098b and 0x4fedb). `Scr_Vehicle_DamageScale` (0x8ccad)
-  measures the point against the record's physics pose (`rec+0xb8`, its
-  angles at `rec+0xd0`) through `AnglesToAxis` of all three angles, the
-  hull's pitch and roll included (VERIFIED decompile). vcod links a
-  paired vehicle as a brush model (`LinkKind::Vehicle`), measures the
-  blast as above (`EntityVictim::vehicle_link`) and scales on the
-  record's pose; on the two tank captures the own shell's splash then
-  charges 189 x 0.233 = 44 and 134 x 0.231 = 30, retail's counts
-  (VERIFIED, `vehicle_ab` replay). Measured axially on the file's box
-  from the origin it charged 43 and 38. The scale
-  times the damage is truncated (`fistp` under a 0xc00 control word,
-  0x4ffbf..0x4ffd1) and a result under 1 is lifted to 1 (VERIFIED
-  disassembly; the jeep's rear 18.75 reads 18 in the hits capture below).
-  The generic tail takes the damage off `health` for every classname but
-  `misc_mg42` and `misc_turret` (scr_const 0x4e, 0x50), so a vehicle's
-  health falls; the stock scripts set 2900 and refund friendly fire
-  (VERIFIED decompile and script).
+  (`SimOp::VehiclePain`) and matches the event, its parm, `damageEvent`
+  and both counts (VERIFIED, `vehicle_ab` replay), given the splash
+  measure below.
+- **A blast on a hull.** `G_RadiusDamage` (game.mp.uo 0x5098b) measures an
+  entity with `r.bmodel` (+0x104) to its `r.absmin`/`r.absmax` (+0x124,
+  +0x130) on each axis, and one that also has a vehicle record (+0x164) to
+  that box drawn in by three quarters of `r.mins`/`r.maxs` (+0x108,
+  +0x114): `absmin - 0.75 mins` to `absmax - 0.75 maxs` (VERIFIED
+  decompile). `VEH_SetupCollmap`'s `SetBrushModel` makes a paired vehicle
+  a brush model, so UO's `SV_LinkEntity` (`coduo_lnxded` 0x8099dee) files
+  it, once any angle is set, under a cube of `RadiusFromBounds`
+  (0x806a0c3) of the collmap's bounds about `r.currentOrigin`, grown a
+  unit (VERIFIED decompile). `CanDamage` probes about the box's middle,
+  the origin. The direction `G_Damage` gets is `r.currentOrigin` less the
+  blast lifted 24, normalized for the `damage` notify and the pain's jolt
+  (VERIFIED decompile, 0x5098b and 0x4fedb). `Scr_Vehicle_DamageScale`
+  (0x8ccad) measures the point against the record's physics pose
+  (`rec+0xb8`, angles at `rec+0xd0`) through `AnglesToAxis` of all three
+  angles, the hull's pitch and roll included (VERIFIED decompile).
+
+  vcod links a paired vehicle as a brush model (`LinkKind::Vehicle`),
+  measures the blast as above (`EntityVictim::vehicle_link`) and scales on
+  the record's pose. On the two tank captures the own shell's splash
+  charges 189 × 0.233 = 44 and 134 × 0.231 = 30, retail's counts
+  (VERIFIED, `vehicle_ab` replay); measured axially on the file's box from
+  the origin it charged 43 and 38. The scale times the damage is truncated
+  (`fistp` under a 0xc00 control word, 0x4ffbf..0x4ffd1) and a result
+  under 1 is lifted to 1 (VERIFIED disassembly; the jeep's rear 18.75
+  reads 18 in the hits capture below). The generic tail takes the damage
+  off `health` for every classname but `misc_mg42` and `misc_turret`
+  (scr_const 0x4e, 0x50), so a vehicle's health falls; the stock scripts
+  set 2900 and refund friendly fire (VERIFIED decompile and script).
 - **The firing vehicle's own splash.** `G_MissileImpact` (0x5db67) hands
   the struck entity to `G_RadiusDamage` as the one to skip (call at
   0x5e1ae, after the direct `G_Damage` at 0x5ded6), and `G_RadiusDamage`
-  (0x5098b) skips only that entity and those without `takedamage`: no
-  test of the attacker or the inflictor (VERIFIED decompile and
-  disassembly). VERIFIED, live capture (retail UO 1.51b, 2026-10-21,
+  (0x5098b) skips only that entity and those without `takedamage`: no test
+  of the attacker or the inflictor (VERIFIED decompile and disassembly).
+  VERIFIED, live capture (retail UO 1.51b, 2026-10-21,
   `client-probes/probe_vehicle_shell` on mp_kharkov, fixture
   `crates/server/tests/fixtures/vehicles/mp_kharkov-tank-shell-uo.txt`):
   each of the Panzer IV's three shells strikes the Elefant 276 units off,
-  about 200 from the Panzer's origin, and the Panzer's own `damage`
-  notify reads 70 `MOD_PROJECTILE_SPLASH`, attacker 0 (the driver),
-  inflictor 162 (itself), in the same frame and logged ahead of the
-  Elefant's 279 `MOD_PROJECTILE`. vcod charges the same 70 in the same
-  order (`vehicle_shell_ab`). The notify's point, the blast 4 off the
-  struck face, reads (-1417.37, 6198.68, 1.10) on retail and
-  (-1417.64, 6197.88, 0.40) on ours; the direct hit's point is retail's to
-  the hundredth (VERIFIED, replay). Not measured: whether the struck
-  face's normal or the trace's start puts it there; the gate holds the
-  point to 4 units.
-- **A frag's splash on a hull.** `Scr_Vehicle_DamageScale` (0x9ccad)
-  takes `MOD_GRENADE_SPLASH` (4) through its own arm: the scale is the
-  inflictor's weapon's `vehiclescale` (weapon info `+0x4ac`, read off the
-  grenade's `s.weapon` through `BG_GetInfoForWeapon`) when it is above
-  0, else 1, times `dmgScaleUnder` / 100 when the point sits under half
-  the hull's height plus 10 and within 0.8 `r.maxs[1]` of the origin
-  (VERIFIED decompile). `G_Damage` (0x5fedb) passes it the attacker and
-  the inflictor in that order; `G_ExplodeMissile` (0x6e2b5) hands
+  about 200 from the Panzer's origin, and the Panzer's own `damage` notify
+  reads 70 `MOD_PROJECTILE_SPLASH`, attacker 0 (the driver), inflictor 162
+  (itself), in the same frame and logged ahead of the Elefant's 279
+  `MOD_PROJECTILE`. vcod charges the same 70 in the same order
+  (`vehicle_shell_ab`). The notify's point, the blast 4 off the struck
+  face, reads (-1417.37, 6198.68, 1.10) on retail and (-1417.64, 6197.88,
+  0.40) on ours; the direct hit's point is retail's to the hundredth
+  (VERIFIED, replay). Not measured: whether the struck face's normal or
+  the trace's start puts it there; the gate holds the point to 4 units.
+- **A frag's splash on a hull.** `Scr_Vehicle_DamageScale` (0x9ccad) takes
+  `MOD_GRENADE_SPLASH` (4) through its own arm: the scale is the
+  inflictor's weapon's `vehiclescale` (weapon info `+0x4ac`, off the
+  grenade's `s.weapon` through `BG_GetInfoForWeapon`) when above 0, else
+  1, times `dmgScaleUnder` / 100 when the point sits under half the hull's
+  height plus 10 and within 0.8 `r.maxs[1]` of the origin (VERIFIED
+  decompile). `G_Damage` (0x5fedb) passes it the attacker and the
+  inflictor in that order; `G_ExplodeMissile` (0x6e2b5) hands
   `G_RadiusDamage` the grenade as the inflictor (VERIFIED decompile). The
   stock frags carry `vehiclescale 0.5` (`fraggrenade_mp`,
   `stielhandgranate_mp`, VERIFIED, the files). A grenade's fuse explode
@@ -1652,50 +1678,48 @@ trace").
   `*-blast-tank-frag-uo.txt`, `*-blast-jeep-rocket-uo.txt`,
   `*-blast-jeep-frag-uo.txt` and the `*-uo-blasttank`, `*-uo-fragtank`,
   `*-uo-blastjeep`, `*-uo-fragjeep` snapshot pairs; recipes in their
-  headers):
+  headers) (VERIFIED, live):
   - A bazooka round on the Panzer IV: 500 on its flank, 329 on its front,
     1000 on its rear (1000 times the side, front and rear scales, no
     falloff at 200 to 300), `MOD_PROJECTILE`, attacker the shooter,
     inflictor the rocket; the explode is 186, `eFlags` 0x210000, type 2,
     weapon 5, surface 13 (metal). The third takes the tank under the
     script's 2000 health buffer and `_tankdrive_gmi` kills it inside the
-    notify: the probe's waiter, woken by the same notify, reads -999
-    (VERIFIED, live).
+    notify: the probe's waiter, woken by the same notify, reads -999.
   - On the Willys: 899 on its flank (1000 times the f32 0.9, truncated),
     which kills it; its wreck's `radiusDamage(origin + (0, 0, 25), 300,
-    80, 0)` reaches the shooter 245 units off for 11 `MOD_EXPLOSIVE`
-    10.6 s later, after `setContents(0)`. A round 150 off its flank
-    charges nothing: the splash is under 100 (VERIFIED, live).
-  - Frags: 60 by the tank's flank (120 times 0.5), 60 on its deck, 120
-    under the jeep's body (times the under scale 2), 51 and 60 by it;
-    those that land further off charge nothing (under 100 before the
-    scale). The explodes are 185 with `eFlags` 0x100 and no vehicle bit
-    (VERIFIED, live).
-    The deck frag rests on the hull at z 51.7 (its ground the tank) and
-    its explode's down trace (mask 0x11) meets nothing: surface 0, parm
-    0, the splash point 10 up (VERIFIED, live).
-  - The bazooka's hip spread (7 degrees) draws on each server, so its
-    contacts repeat neither between two retail runs nor against ours;
-    the amounts do (VERIFIED, live).
-  `vehicle_blast_ab` replays all four on ours: notifies, the shooter's own
-  blasts and the explodes match field for field, a rocket's aim within
-  its spread (VERIFIED, replay). Three fixes closed it: the frag's
-  `vehiclescale` (ours charged 120 by the flank), a wreck with no
-  contents meeting no trace (the entity clip skips one whose `r.contents`
-  meet none of the mask, `coduo_lnxded` 0x809a72a, VERIFIED decompile;
-  ours' posed hull still stopped the wreck's blast), and the hull's
-  clip a surface at a time (below). At mp_cassino's spot 300
-  ahead of the tank, (4376, -1979), the placed shooter slides 65 to 90
-  units down the slope before the press (two runs, two slides; VERIFIED,
-  live), off the ground by the ground trace's start in solid
-  (cod11-mantle.md, "A start in solid on the ground trace"). Where he
-  stops rides the split of his cmds: on the probe's even 16 ms cmds ours
-  stops 31 units from retail's spot, on retail's own cmd times (the
-  capture's `CMDS` lines, the clocks aligned) on it to the hundredth
-  (VERIFIED, replay). The gate flies each bazooka round on retail's
-  `trDelta`, rebuilt from its direct hit's direction and the
+    80, 0)` reaches the shooter 245 units off for 11 `MOD_EXPLOSIVE` 10.6 s
+    later, after `setContents(0)`. A round 150 off its flank charges
+    nothing: the splash is under 100.
+  - Frags: 60 by the tank's flank (120 × 0.5), 60 on its deck, 120 under
+    the jeep's body (× the under scale 2), 51 and 60 by it; those further
+    off charge nothing (under 100 before the scale). The explodes are 185
+    with `eFlags` 0x100 and no vehicle bit. The deck frag rests on the hull
+    at z 51.7 (its ground the tank) and its explode's down trace (mask
+    0x11) meets nothing: surface 0, parm 0, the splash point 10 up.
+  - The bazooka's hip spread (7°) draws on each server, so its contacts
+    repeat neither between two retail runs nor against ours; the amounts
+    do.
+
+  `vehicle_blast_ab` replays all four: notifies, the shooter's own blasts
+  and the explodes match field for field, a rocket's aim within its spread
+  (VERIFIED, replay). It rests on three rules: the frag's `vehiclescale`
+  (without it ours charged 120 by the flank); a wreck with no contents
+  meets no trace (the entity clip skips one whose `r.contents` meet none
+  of the mask, `coduo_lnxded` 0x809a72a, VERIFIED decompile; else the
+  posed hull stops the wreck's blast); and the hull's clip a surface at a
+  time (below). At mp_cassino's spot 300 ahead of the tank, (4376, -1979),
+  the placed shooter slides 65 to 90 units down the slope before the press
+  (two runs, two slides; VERIFIED, live), off the ground by the ground
+  trace's start in solid (cod11-mantle.md, "A start in solid on the ground
+  trace"). Where he stops rides the split of his cmds: on the probe's even
+  16 ms cmds ours stops 31 units from retail's spot; on retail's own cmd
+  times (the capture's `CMDS` lines, clocks aligned) on it to the
+  hundredth (VERIFIED, replay). The gate flies each bazooka round on
+  retail's `trDelta`, rebuilt from its direct hit's direction and the
   `projectileSpeed`, so the contacts sit within a unit of retail's
   (INFERRED: the direction is logged to two decimals).
+
 - **The hull's clip, surface by surface.** The DObj clip (`coduo_lnxded`
   0x80c7be8 over each model, 0x80c4892 over its surfaces) moves the
   segment into each surface's bone frame and tries the surface only when
