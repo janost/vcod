@@ -7,7 +7,7 @@ query behind the list. Sources: the stock menu files in the 1.1 paks
 `cod11-events-and-fx.md`), and live captures against
 `codmaster.activision.com` and the retail 1.1d server on 2026-10-08 and
 2026-10-09.
-Addresses are virtual; function names are mine, after the Quake III
+Addresses are virtual; unexported function names are this doc's, after the Quake III
 functions whose shape they share. vcod's implementation is
 `crates/client/src/frontend/`, `crates/common/src/ui_menu.rs` and
 `crates/common/src/net/master.rs`.
@@ -761,7 +761,7 @@ unknown `g_scriptMainMenu` opens nothing: `0x400134b0` looks the name up
   order). No stock script calls `openMenuNoMouse`. VERIFIED (the pak
   scripts). VERIFIED (decompile of 0x454b4): its body is `openMenu`'s
   with the other format, and vcod-server has both builtins
-  (`builtins::client::open_menu_no_mouse`, since 2026-10-20).
+  (`builtins::client::open_menu_no_mouse`).
 - `UI_Refresh` (`vmMain` case 5, `0x40007b20`) paints the menus and then
   the cursor shader (`0x401e1f9c`) 32 by 32 at the cursor less 16 when
   the menu count (`0x400189a0` answers `0x401bf400`) is not 0, after
@@ -1519,8 +1519,8 @@ vertex lighting.
   retail; a dialog or quick-chat line playing at the restart ends instead
   of resuming.
 - vcod registers `r_picmip` 0, `r_picmip2` 0 and `r_swapInterval` 1, the
-  top row of `configure_mp.csv`, instead of the registered 1, 2 and 0. A
-  `vcod_mp.cfg` written before 2026-10-12 carries 1 and 2.
+  top row of `configure_mp.csv`, instead of the registered 1, 2 and 0. An
+  older `vcod_mp.cfg` may still carry 1 and 2.
 - `r_lodscale` / `r_lodbias` (Model Detail) feed the xmodel LOD pick
   every frame, as `RE_RenderScene` reads them (`xmodel-v14-format.md`,
   "LOD selection").
@@ -1709,7 +1709,7 @@ them as a spectator for 10-25 s each.
   land in either directory and never overwrite a file. A disconnect
   leaves the cvar, so the server's mod stays after it, as on retail; only
   the pure list is dropped.
-- Paks are matched by checksum since 2026-10-09, with retail's
+- Paks are matched by checksum, with retail's
   `<name>.%08x.pk3` file name when a same-named pak is in the way, and a
   pure server's `sv_paks` limits the search path
   (docs/research/cod11-server-handshake.md, "Pak checksums and pure
