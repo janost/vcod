@@ -3454,7 +3454,7 @@ INFERRED, from the weapon test and 4.2's step 5: the pair follows the weapon
 the callback was handed, not the means of death, so a melee hit with a rifle
 raises it beside `EV_MELEE_HIT`, a turret round raises it off the gunner's
 weapon, and a grenade's blast, whose inflictor carries the frag, raises
-none. VERIFIED live for melee, 2026-09-27 (events-and-fx doc section 2): each
+none. VERIFIED live for melee (events-and-fx doc section 2): each
 landed swing put a 174 with `surfType` 7 in the swinger's snapshot and a 176
 in the victim's. INFERRED from the callback being the only site: a hit the
 gametype's `Callback_PlayerDamage` refuses before calling
@@ -3530,9 +3530,8 @@ list below. INFERRED: the numbering and every condition in it.
 5. When `client->ps.grenadeTimeLeft` is non-zero, `fire_grenade` from
    `self->r.currentOrigin` with z raised by 40.0 (`.rodata 0x743ec`), with a
    velocity built from three `rand()` calls and 160.0 (`.rodata 0x743e8`).
-   Section 11.3 reads that arithmetic out in full; it is not the isotropic
-   direction this step used to call it. Whether that origin is snapped is
-   5.5.
+   Section 11.3 reads that arithmetic out in full (not isotropic). Whether
+   that origin is snapped is 5.5.
 6. `BG_AnimScriptEvent(client, 1, 0, 1)`.
 7. `G_AddEvent(self, 0xBD, 0)`. VERIFIED: `0xBD` is 189, `EV_DEATH`, and its
    event parm is the literal 0.
@@ -3569,15 +3568,13 @@ list below. INFERRED: the numbering and every condition in it.
     no spawn writes, so the map's origin, and `Cmd_Kill_f`, which passes
     `self` three times (0x49608..0x4960a), reads his own yaw.
     vcod: `builtins::combat::dead_yaw` on the entities, through
-    `builtins::math::vectoyaw`; until 2026-10-19 it faced the attacker
-    even when that was the victim (a zero vector, so 0) and read the view
-    yaw for a world death (`a_death_faces_what_player_die_reads`).
+    `builtins::math::vectoyaw` (`a_death_faces_what_player_die_reads`).
 12. `client->ps.viewangles` takes `self->angles`. INFERRED: those are
     (0, view yaw, 0), which `ClientThink_real`'s tail writes after every
     cmd (`cod11-gametypes-re-bel.md` 8.6), so the corpse's view loses its
     pitch. VERIFIED on UO (`player_die` 0x5f972, the same stores, and
     `coduo-vehicles.md` 11.7's capture, 24.999 to 0). vcod:
-    `ClientSim::die`; it kept the pitch until 2026-10-19.
+    `ClientSim::die`.
 13. `self->s.loopSound = 0`, `trap_UnlinkEntity`, `self+0x114 = 30.0`
     (`.rodata 0x743f0`), `trap_LinkEntity`. INFERRED: `self+0x114` is the
     bounding box's `maxs[2]`, since it sits three floats past `self+0x108` and
@@ -3625,8 +3622,8 @@ method (`0x45358`, entry 26 of `player_methods` at `0x733dc`, per
   `suicide()` on an sd player logged
   `K;0;allies;vcod;0;allies;vcod;none;100000;MOD_SUICIDE;none`
   (`crates/gsc/tests/fixtures/semantics/client-probes/README.md`,
-  `probe_bomb and probe_blastbody`). The `probe_glass` run of 2026-09-27,
-  whose `--probe-target` sends `kill` every 45 s, logged
+  `probe_bomb and probe_blastbody`). The `probe_glass` run, whose
+  `--probe-target` sends `kill` every 45 s, logged
   `K;0;;vcod;0;;vcod;none;100000;MOD_SUICIDE;none` at 0:22 and 1:07.
 
 **A suicide that stays playing.** `player_die` writes no `pm_type` (step
@@ -3635,23 +3632,22 @@ list above) and `ClientEndFrame` writes 6 only off `sessionState == 1`
 beside it (5.4 below). INFERRED, off those stores: a killed callback that
 leaves `sessionstate` at `playing` leaves a body at health 0 that the end
 frame treats as alive. VERIFIED live, `client-probes/probe_suicide` on
-retail mp_harbor 2026-10-17 (recipe in that directory's README): after
+retail mp_harbor (recipe in that directory's README): after
 `suicide()` slot 1's own `pm_type` stayed 0 and its `viewHeightCurrent` 60,
 and slot 0's snapshot kept carrying slot 1, `eFlags` unchanged, for the
 3 s the session stayed `playing`; the frame the script wrote `dead`,
 slot 1 read `pm_type` 6, its eye started down (51.18, 42, 33, ... 8), and
-it left slot 0's snapshot. The 2026-10-07 `probe_compass` run saw the same
+it left slot 0's snapshot. The `probe_compass` run saw the same
 `pm_type` 0 then 6 (`cod11-hud-protocol.md` 9). INFERRED, UO's
 `ClientEndFrame` (`game.mp.uo.i386.so`, Ghidra output): the same compares
 of `sessionState` against 3, 2 and 1 pick the arm, and only the 1 arm
 stores 6 (7 linked) with the same `svFlags` and `takedamage` writes, so UO
 keeps a playing suicide at `pm_type` 0 too; not run live there.
 
-vcod keyed the dead arm on the health instead and sent `pm_type` 6 and no
-entity at the suicide. VERIFIED, ours before the fix:
-`a_suicide_that_stays_playing_keeps_pm_type_0`
-(`crates/server/tests/suicide_playing.rs`) failed. Fixed: the end frame
-reads the session (`ClientSim::session`, set in the end-frame loop): only
+vcod: the end frame keys the dead arm on the session, not the health
+(`ClientSim::session`, set in the end-frame loop;
+`a_suicide_that_stays_playing_keeps_pm_type_0`,
+`crates/server/tests/suicide_playing.rs`): only
 `playing` keeps the body on the wire with contents, `dead` alone writes
 `pm_type` 6, and a sim no script client backs keeps the health rule. The
 death's own relink as a corpse (step 13) clears `solid` until the body's
@@ -3766,8 +3762,8 @@ also shows the clone's `eFlags` carry neither `EF_DEAD` (`0x1`) nor
 the bits `BG_PlayerStateToEntityState` adds to the entity's word only.
 VERIFIED (capture).
 The same probe against vcod-server: the clone appeared at 19200 and lost
-`0x800` at 19400, the same 200 ms. Before 2026-10-11 it read `0x819`, the
-dying entity's `EF_DEAD` copied in. VERIFIED (capture).
+`0x800` at 19400, the same 200 ms, with no `EF_DEAD` copied in. VERIFIED
+(capture).
 
 A death in the entity pass, `client-probes/probe_corpseblast` on
 mp_carentan dm, one client on 1 health dropping a frag at his own feet
@@ -3961,7 +3957,7 @@ first frame it exists.
 
 ### 5.4 The dead player's own entity leaves the wire
 
-Live, 2026-09-05 (mp_carentan tdm, one probe shooting a teammate with
+Live (mp_carentan tdm, one probe shooting a teammate with
 `scr_friendlyfire 1`): the victim's `ET_PLAYER` entity is in the shooter's
 snapshot on every frame up to the one that carries the kill, absent from
 the one after it and from every frame of the dead wait, and back on the
@@ -4089,12 +4085,10 @@ now reads of the shooter: VERIFIED, `player_die`'s two `vectoyaw` arms
 subtract `self+0x134..0x13c` from `ent+0x134..0x13c` of the inflictor or
 attacker (`0x49c40..0x49c5e`, `0x49c74..0x49c98`). INFERRED: 5.1 step 11
 takes the attacker's snapped origin when the attacker is inside its own cmd.
-Both
-drops read the `origin` field:
-`drop_cooking_grenade` (`crates/server/src/game/builtins/combat.rs`) used to
-read the mirrored entity state's `trBase`, which is `ps.origin` and was
-unsnapped on the `trigger_hurt` path too, and `item::launch_weapon` already
-read the field. Pinned by `a_player_killed_mid_cook_drops_a_live_grenade`
+Both drops read the `origin` field (`drop_cooking_grenade` in
+`crates/server/src/game/builtins/combat.rs`, and `item::launch_weapon`; the
+mirrored entity state's `trBase` is `ps.origin`, unsnapped on the
+`trigger_hurt` path). Pinned by `a_player_killed_mid_cook_drops_a_live_grenade`
 (`crates/server/tests/combat.rs`), which stands the player off the unit grid
 and holds the `kill` drop to the unsnapped origin plus 40, and
 `a_trigger_hurt_death_drops_and_clones_at_the_snapped_origin`
@@ -4102,10 +4096,10 @@ and holds the `kill` drop to the unsnapped origin plus 40, and
 weapon and corpse to the truncated one. `cloneplayer` places the body at the
 `origin` field, as retail's `G_SetOrigin(body, self->r.currentOrigin)` (5.2)
 does, so a `trigger_hurt` corpse lies at the truncated origin and a bullet's
-at the unsnapped one. Not modelled: fall damage, so the second snapped path
-does not exist here; the weapon drop's tag trace and flight
-(`cod11-items.md` 11), so the snap moves the weapon's start and not much
-else.
+at the unsnapped one. Fall damage (`fall_damage`, `deliver_fall` in
+`crates/server/src/server/cod1_think.rs`) and the weapon drop's tag sweep
+(`item::launch_weapon`, `cod11-items.md` 11) are modelled; no capture checks
+either against a snapped origin.
 
 ### 5.6 A spawn leaves `health` alone
 
@@ -4119,7 +4113,7 @@ INFERRED: a spawn in any of the three modes keeps whatever health the entity
 held, and only the gametype's own `self.health = self.maxhealth` (`sd.gsc`'s
 `spawnPlayer`) refills it; `spawnSpectator` writes none.
 
-VERIFIED, `client-probes/probe_victims` on retail, 2026-10-06: a playing
+VERIFIED, `client-probes/probe_victims` on retail: a playing
 client given `health` 37 read 37 after `sd::spawnSpectator()` and 37 again
 half a second later; given 41 and spawned with `sessionstate` `"playing"`
 through a bare `self spawn(origin, angles)`, it read 41 with `maxhealth` 100,
@@ -4147,7 +4141,7 @@ normalized velocity by it. INFERRED: this is Quake III Arena's
 at `0x34312` picks the walk move by, and the drop is per frame, not per
 second, so a corpse slides less the faster its client sends cmds.
 
-VERIFIED, `client-probes/probe_victims` on retail, 2026-10-06: a flat 200
+VERIFIED, `client-probes/probe_victims` on retail: a flat 200
 `radiusDamage` killed 100-health slot 0 at `(-226, 2424, -31.79)` and took
 200 off 1000-health slot 1 at `(-269, 2381, -31.99)` behind it, on the same
 line from the blast at `(-176.8, 2473.1, 7)`; both took the same 60-point
@@ -4317,8 +4311,8 @@ The captures are `client-probes/probe_hurtfall` under `probe_use` and
 
 #### The model-0 touch, `life`, and `useBy` on the other entities
 
-The captures are 2026-10-21 on retail 1.1d, 1.5b and UO 1.51b, ports
-34761-34770 (`crates/server/tests/fixtures/triggers/`, each with a `-1.5`
+The captures are on retail 1.1d, 1.5b and UO 1.51b, ports 34761-34770
+(`crates/server/tests/fixtures/triggers/`, each with a `-1.5`
 and a `-uo` twin, recipes in their headers). VERIFIED: all three servers
 logged the same lines but for the times.
 
@@ -4370,8 +4364,8 @@ which arms `misc_spawner_think` 100 ms on) at 0x534d8.
 #### `useBy` on a gun, a sine mover and a `misc_spawner`
 
 The captures are `client-probes/probe_useby` under `probe_sine`,
-`probe_spawner` and `probe_turret`, 2026-10-21 on retail 1.1d, 1.5b and UO
-1.51b, ports 34771-34780 (`crates/server/tests/fixtures/triggers/`
+`probe_spawner` and `probe_turret`, on retail 1.1d, 1.5b and UO 1.51b,
+ports 34771-34780 (`crates/server/tests/fixtures/triggers/`
 `mp_carentan-dm-usesine.txt`, `-usespawner.txt` and `-useturret.txt`, each
 with a `-1.5` and a `-uo` twin, recipes in their headers). Addresses below
 are the modules' `nm` and `objdump` ones (1.1d `game.mp.i386.so`, 1.5b's,
@@ -4482,9 +4476,9 @@ script `spawn` of a `trigger_multiple` or
 `wait` 500 or -1000. `crates/server/tests/hurtfall_ab.rs` replays the
 thirty-six captures (on UO's write, the lines before the abort; the
 spawner's climbs pinned to the draws its frames read back to, its
-landings rested where retail's did). The first 1.5b write capture's body
-drifted 0.16 sideways in its first 50 ms of fall; a rerun of the same
-recipe (port 34770) fell straight, as ours does, and replaced it. No stock
+landings rested where retail's did; the 1.5b write capture is a rerun on
+port 34770, as an earlier take drifted 0.16 sideways in its first 50 ms of
+fall). No stock
 MP map gives a hurt spawnflag 1 or a `life` key (VERIFIED, entity lumps).
 
 ---
