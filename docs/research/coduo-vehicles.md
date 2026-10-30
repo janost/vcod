@@ -2333,48 +2333,47 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   client whose entity `eFlags` has 0x100000 and whose `vehPos`
   (`client+0x614`) is not 3, it takes `g_entities[r.ownerNum]`, his
   vehicle (VERIFIED disassembly). Only the vehicle guns fire a seat 1 or 2
-  rider's rounds, and vcod already names the vehicle there
+  rider's rounds, and vcod names the vehicle there
   (`server::vehicle_fire`); a seat 3 passenger's own rounds name him.
-- **The barrel test.** The driver's reader (0x86c57, its
-  `trap_Trace` at 0x870e9) traces from `tag_barrel` to `tag_flash`
-  (rec `+0x308`, `+0x324`) with no box, passing the vehicle, under the
-  vehicle's clipmask less `CONTENTS_BODY`. When it is clear it runs the
-  aim's locational trace; when it meets anything it sets `rec+0x270` and
-  keeps the far point. `Scr_Vehicle_Think` clears the flag (0x8ca55).
-  With it set `fireTurret` (0x8f33c), `fireAltTurret` (0x8fa79) and
-  `fireGunner` (0x8ffaf) bend nothing and start the round at their flash
-  less `rec+0x26c` along it, the `tag_flash` to `tag_barrel` distance
-  `Scr_Vehicle_Init` measured (0x8c6e6) (VERIFIED disassembly). vcod
-  ports it (`fire::aim_point`, `fire::prepare`), measuring the distance on
-  the current pose.
+- **The barrel test.** The driver's reader (0x86c57, its `trap_Trace` at
+  0x870e9) traces from `tag_barrel` to `tag_flash` (rec `+0x308`,
+  `+0x324`) with no box, passing the vehicle, under the vehicle's clipmask
+  less `CONTENTS_BODY`. Clear, it runs the aim's locational trace; meeting
+  anything, it sets `rec+0x270` and keeps the far point.
+  `Scr_Vehicle_Think` clears the flag (0x8ca55). With it set `fireTurret`
+  (0x8f33c), `fireAltTurret` (0x8fa79) and `fireGunner` (0x8ffaf) bend
+  nothing and start the round at their flash less `rec+0x26c` along it,
+  the `tag_flash` to `tag_barrel` distance `Scr_Vehicle_Init` measured
+  (0x8c6e6) (VERIFIED disassembly). vcod ports it (`fire::aim_point`,
+  `fire::prepare`), measuring the distance on the current pose.
 - **A hull stops rounds.** `SV_ClipMoveToEntity` (`coduo_lnxded`
   0x809a72a) sends a locational trace on an entity with a DObj and
   `svFlags & 6` to the model arm: the model's collision contents against
   the mask (0x80c7d32), its bounds (0x80c6b36), vmMain 15 posing the
   entity, then 0x80c7be8, which walks every part's collision surfaces
   (0x80c4892), each in its bone's posed frame, a one-sided segment test
-  per triangle (VERIFIED decompile). A vehicle has `svFlags` 4 and contents
-  0xa00000, which every bullet (0x2802031), missile (0x2802091) and blast
-  probe (0x802091) mask meets, so the Panzer's turret surfaces stop rounds
-  where the turret points. The result carries the entity's own contents
-  (no glass, so the round ends), the struck surface's flags (13, metal, on
-  the stock hulls) and hit location 0 (VERIFIED decompile). The trace's
+  per triangle (VERIFIED decompile). A vehicle has `svFlags` 4 and
+  contents 0xa00000, which every bullet (0x2802031), missile (0x2802091)
+  and blast probe (0x802091) mask meets, so the Panzer's turret surfaces
+  stop rounds where the turret points. The result carries the entity's own
+  contents (no glass, so the round ends), the struck surface's flags (13,
+  metal, on the stock hulls) and hit location 0 (VERIFIED decompile). The
   pass rule skips the pass entity, what it owns and what its owner owns
   (0x809a72a): a vehicle's own round (`fireTurret` passes the vehicle)
   skips its hull and riders, owned by it; a rider's own round skips the
   other riders but not the hull.
-- On a hull `Bullet_Fire_Extended` draws the shooter's impact (178 with
-  the surface, the weapon and the reflection) and runs `G_Damage` on the
-  vehicle with the leg's falloff damage, the shot's forward and the hit
-  point (`coduo-diff.md` 21) (VERIFIED decompile). Measured, retail UO
-  1.51b, `client-probes/probe_vehicle_hits` (fixtures
-  `*-jeep-hits-{side,front,rear}-uo.txt`, `mp_cassino-tank-hits-side-uo.txt`):
-  a `thompson_mp` 250 off an empty Willys's flank lands 22 a round (50 at
-  `dmgScaleSide` 90 and `dmgScaleBullet` 50, truncated), 25 from the
-  front, 18 from behind (18.75 truncated), `MOD_PISTOL_BULLET`, the
-  shooter as both attacker and inflictor; a Panzer IV stops the
-  `bulletTrace` and the rounds on its side and takes none (`bulletDamage`
-  0) (VERIFIED, live). vcod poses the hull per bone
+- **Bullets on a hull.** `Bullet_Fire_Extended` draws the shooter's impact
+  (178 with the surface, the weapon and the reflection) and runs
+  `G_Damage` on the vehicle with the leg's falloff damage, the shot's
+  forward and the hit point (`coduo-diff.md` 21) (VERIFIED decompile).
+  Measured, retail UO 1.51b, `client-probes/probe_vehicle_hits` (fixtures
+  `*-jeep-hits-{side,front,rear}-uo.txt`,
+  `mp_cassino-tank-hits-side-uo.txt`) (VERIFIED, live): a `thompson_mp` 250
+  off an empty Willys's flank lands 22 a round (50 at `dmgScaleSide` 90 and
+  `dmgScaleBullet` 50, truncated), 25 from the front, 18 from behind (18.75
+  truncated), `MOD_PISTOL_BULLET`, the shooter as both attacker and
+  inflictor; a Panzer IV stops the `bulletTrace` and the rounds on its side
+  and takes none (`bulletDamage` 0). vcod poses the hull per bone
   (`vehiclepose::posed_collision`) for every shot, swing, missile step and
   blast probe, and `vehicle_hits_ab` matches all four within a fifth of
   retail's notify count with retail's amounts.
@@ -2382,33 +2381,33 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   struck entity that takes damage: `Damage_Falloff` of the shell's flight
   distance, truncated (0x5de9d), the flight velocity as the direction, the
   contact as the point, dflags 0, the shell's means of death, the driver
-  as the attacker and the vehicle as the inflictor for a vehicle's shell;
-  the splash then skips that entity; the explode is 186, not 185, when the
+  as the attacker and the vehicle as the inflictor for a vehicle's shell.
+  The splash then skips that entity. The explode is 186, not 185, when the
   trace named a player or a bone (`trace+42`, a hull's surface), with
   0x100000 on a vehicle (VERIFIED decompile). Measured, retail UO 1.51b,
   `client-probes/probe_vehicle_shell` on mp_kharkov (fixtures
-  `mp_kharkov-tank-shell-uo.txt`, `*-uo-shellveh.bin`): a Panzer IV's
-  three shells on the Elefant 276 units off each give it one notify, 279
+  `mp_kharkov-tank-shell-uo.txt`, `*-uo-shellveh.bin`): a Panzer IV's three
+  shells on the Elefant 276 units off each give it one notify, 279
   `MOD_PROJECTILE` (700 through its side scale), attacker the driver,
   inflictor the tank, and an explode 186 with `eFlags` 0x100000 on metal
   (13) (VERIFIED, live). `vehicle_shell_ab` matches every field.
-- `VEH_PlayerCollision` (0x8213f): a body a probe strikes is knocked away
-  and, at most every 500 ms, takes `150 min(speed / 400, 1)` under
-  `MOD_CRUSH_JEEP` or `MOD_CRUSH_TANK`, the driver the attacker (VERIFIED
-  decompile). The 500 ms runs off `client+0x4728`, which every strike past
-  it restarts: `VEH_PlayerDamage` (0x81ffd) runs on 0 damage too (a
-  vehicle moving away from him), through the damage callback (VERIFIED
-  decompile). Then, unless `ps.pm_flags` has 1, the vehicle file's
-  `vehicle_hit_person` alias (`info+0x33b`) plays at the body's
+- **A strike on a body.** `VEH_PlayerCollision` (0x8213f): a body a probe
+  strikes is knocked away and, at most every 500 ms, takes `150 min(speed
+  / 400, 1)` under `MOD_CRUSH_JEEP` or `MOD_CRUSH_TANK`, the driver the
+  attacker (VERIFIED decompile). The 500 ms runs off `client+0x4728`,
+  which every strike past it restarts: `VEH_PlayerDamage` (0x81ffd) runs
+  on 0 damage too (a vehicle moving away from him), through the damage
+  callback (VERIFIED decompile). Then, unless `ps.pm_flags` has 1, the
+  file's `vehicle_hit_person` alias (`info+0x33b`) plays at the body's
   `r.currentOrigin`, `1500 (1 - min(speed / 400, 1))` up, broadcast
   (`svFlags |= 8`) (VERIFIED decompile, constants 0xa6b68 0.0, 0xa6b70
-  1500.0 and 0xa6b50 1.0). Bit 1 is the prone stance: a prone body's
-  strike plays no sound (VERIFIED, the run-over captures of 11.6).
+  1500.0 and 0xa6b50 1.0). Bit 1 is the prone stance: a prone body's strike
+  plays no sound (VERIFIED, the run-over captures of 11.6).
 
 ## 14. What vcod-server does, and what it measured
 
 - **Code.** `crate::game::vehicle` (`info`, `physics`, `seat`, `think`,
-  `fire`) and `game::builtins::vehicle` (the 31 methods but the five
+  `fire`, `die`) and `game::builtins::vehicle` (the 31 methods but the five
   path ones, `precacheVehicle`, `getNumVehicles`, `doDamage`,
   `doDamageMod`, `spawnDuplicate`, `linkIntoWorld`, `unlinkFromWorld`,
   `verifyPosition`, `clearVehiclePosition`). A tank shell is a
@@ -2417,105 +2416,98 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   `gamestate-uo.bin` (vehicles included: models, aliases, effects, hint
   strings, configstring 8), and the dm tanks' baselines 176 and 181 field
   by field (VERIFIED).
-- **`vehicle_ab`.** Two new retail captures, `--probe-vehicle drive
+- **`vehicle_ab`.** Two retail captures, `--probe-vehicle drive
   --save-slope` (`mp_cassino-tdm-slope-8ms-tank-drive-uo.txt`, a Panzer
-  IV, `mp_peaks-tdm-slope-8ms-jeep-drive-uo.txt`, a Willys; each
-  snapshot line carries the vehicle's whole entity state), and the seat
-  capture of section 8. The replay boards the same vehicle on ours
-  through the probe gametype and the use key, sends the capture's cmds on
-  our clock (rebased once a seat from retail's `delta_angles` onto ours,
-  and `nextvehslot` where the capture's seat changes) and diffs every
-  snapshot. The vehicle's state matches retail on every field and every
-  snapshot of both drives: pose, sway bytes, turret, steer, track clock,
-  seat mask, events (the main gun, the coaxial MG, the turret's stop
-  alias), `loopSound`. The rider matches in seat, view, pm flags, legs
-  and origin, the exits' rise and fall included since the cmds after an
-  exit run linked (11.2), and in velocity, the weapon state and the cone
-  (VERIFIED, replay), the pitch clamp's and the jeep passenger's arcs'
-  per-cmd `delta_angles` pushes included: they move ours cmd for cmd as
-  they moved retail's (VERIFIED, replay; until 2026-10-17 the replay
-  rebased every cmd on our newest `delta_angles`, which put each push a
-  snapshot apart and opened the cone on the jump, 9 tolerated rows).
-  The replay sends `nextvehslot` in its own packet ahead of the held run
-  of cmds that ends the change's frame (11.3), and every seat change's
-  view and cone match (VERIFIED, replay; the three rows it tolerated
-  until 2026-10-17 were the server running the cycle on arrival).
-  The driver's feedback from the tank's own shell matches (13, "A blast
-  on a hull"). `delta_angles` is not compared: its absolute value
-  rides the replaying client's own cmd angles. The jeep driver's legs
-  in the four snapshots after the exit read `pb_stand_alert` (185) on
-  retail, airborne: UO's `PM_Footsteps` (0x297e4) returns early for an
-  airborne body only when `pm_type` is not 1, and takes the stance's idle
-  arm for `pm_type` 1, so the exit's linked cmds stand the rider up
-  (VERIFIED decompile; 1.5's 0x24ae8 has the same test, 1.1's 0x322c8
-  returns for any airborne body). vcod kept the seat's
-  `vehicleJeepDriverIdle` (94) until the landing; it now selects the idle
-  for a linked player under 1.5's and UO's rules (VERIFIED, replay).
+  IV; `mp_peaks-tdm-slope-8ms-jeep-drive-uo.txt`, a Willys; each snapshot
+  line carries the vehicle's whole entity state), and the seat captures of
+  section 8. The replay boards the same vehicle on ours through the probe
+  gametype and the use key, sends the capture's cmds on our clock (rebased
+  once a seat from retail's `delta_angles` onto ours, with `nextvehslot`
+  where the capture's seat changes) and diffs every snapshot (VERIFIED,
+  replay):
+  - The vehicle matches on every field and snapshot of both drives: pose,
+    sway bytes, turret, steer, track clock, seat mask, events (main gun,
+    coaxial MG, the turret's stop alias), `loopSound`.
+  - The rider matches in seat, view, pm flags, legs, origin (the exits'
+    rise and fall included, since the cmds after an exit run linked,
+    11.2), velocity, weapon state and cone, the pitch clamp's and the jeep
+    passenger's arcs' per-cmd `delta_angles` pushes included. Trap:
+    rebasing every cmd on the newest `delta_angles` puts each push a
+    snapshot apart and opens the cone on the jump.
+  - The replay sends `nextvehslot` in its own packet ahead of the held run
+    of cmds that ends the change's frame (11.3); every seat change's view
+    and cone match.
+  - The driver's feedback from the tank's own shell matches (13, "A blast
+    on a hull"). `delta_angles` itself is not compared: its absolute value
+    rides the replaying client's own cmd angles.
+  - The jeep driver's legs in the four snapshots after the exit read
+    `pb_stand_alert` (185) on retail, airborne. UO's `PM_Footsteps`
+    (0x297e4) returns early for an airborne body only when `pm_type` is not
+    1, and takes the stance's idle arm for `pm_type` 1, so the exit's
+    linked cmds stand the rider up (VERIFIED decompile; 1.5's 0x24ae8 has
+    the same test, 1.1's 0x322c8 returns for any airborne body). vcod
+    selects the idle for a linked player under 1.5's and UO's rules
+    (VERIFIED, replay).
 - **`vehicle_drive_ab`** replays the step alone on the collision world
   against the two drive captures. Run free from the first snapshot it
   matches retail on every compared field through both drives, the clip
-  brush bounces included, the hull yaw, turret yaw, sway bytes and track
-  clock bit for bit (VERIFIED, replay). Anchored, each frame stepped from
-  retail's wire pose with the free run's state for what the wire does not
-  carry (vertical velocity, the sway's velocities, a hit's lockout and
-  bounce), it matches every row too, with no gaps (VERIFIED, replay). The
-  gate used to rebuild that state off the snapshots' displacement, which
-  the crest, the clip brush bounces and the probe hits broke; those were
-  the rebase's misses, not the step's.
+  brush bounces included, hull yaw, turret yaw, sway bytes and track clock
+  bit for bit (VERIFIED, replay). Anchored (each frame stepped from
+  retail's wire pose, with the free run's state for what the wire does not
+  carry: vertical velocity, the sway's velocities, a hit's lockout and
+  bounce), it matches every row too, with no gaps (VERIFIED, replay).
+  Rebuilding that state off the snapshots' displacement breaks on the
+  crest, the clip brush bounces and the probe hits.
 - **`vehicle_fire_ab`.** The Panzer IV's guns on ours against
   `*-uo-tank.bin` (VERIFIED, replay and capture):
-  - Retail's two main-gun shells explode as 185 on `eType` 0 with type 6
-    in `es.scale`, weapon 42 (`panzeriv_turret_mp`), `eFlags` 0x8000 and
-    no vehicle bit. The second, fired at 31100, is first sent already
-    exploded (entity 164, `eventSequence` 1): it struck within its first
-    step. So is ours, fired from the probe's seat into the wall 500 units
-    ahead. The client plays that explode only because retail's
-    `CG_ResetEntity` replays an entering missile's or general entity's
-    ring from 0 (`cod11-events-and-fx.md` 1, "An entity that enters the
-    snapshot"); vcod's tracker skipped it, which was the hand test's tank
-    shell with sound off the fire event and no explosion.
+  - Retail's two main-gun shells explode as 185 on `eType` 0 with type 6 in
+    `es.scale`, weapon 42 (`panzeriv_turret_mp`), `eFlags` 0x8000 and no
+    vehicle bit. The second, fired at 31100, is first sent already exploded
+    (entity 164, `eventSequence` 1): it struck within its first step. So is
+    ours, fired from the probe's seat into the wall 500 units ahead. The
+    client plays that explode only because retail's `CG_ResetEntity`
+    replays an entering missile's or general entity's ring from 0
+    (`cod11-events-and-fx.md` 1, "An entity that enters the snapshot"); a
+    tracker that skips it plays the fire sound with no explosion.
   - Along retail's first shell's line (its in-flight `trBase` to its
     explode) ours stops on the face retail's struck, (3363.5, -2709.9, 89)
     on mp_cassino, with retail's normal (byte 32) and surface (16,
-    plaster). That face is a plaster side of a caulk brush, and vcod read
-    the brush's caulk (0) until its traces took the struck side's own
-    material (`bsp-ibsp59-format.md`, lump 3): retail drew
-    `tank_plaster.efx` where vcod's client would have drawn
-    `tank_generic.efx`.
+    plaster). That face is a plaster side of a caulk brush; the trace takes
+    the struck side's material (`bsp-ibsp59-format.md`, lump 3), so the
+    client draws `tank_plaster.efx`, not `tank_generic.efx`.
   - The coaxial (164) and gunner (165) rounds that strike no player carry
     their weapon with bit 7, `0x9b` and `0xa0` on both sides, and neither
     side sends a bullet-hit temp entity for them: the client traces them
     (`fx::client_bullet`, coduo-diff.md 19).
   - A shell on a vehicle: `G_MissileImpact` (game.mp.uo 0x6db67) ors
     0x100000 into the explode's `eFlags` when the struck entity's `eType`
-    is 12 (VERIFIED decompile), which turns the client to the impact
-    row's `vehicle` column. vcod's shell names the entity its trace
-    stopped on (a vehicle's collmap names its vehicle) and the entity pass
-    marks the explode when that is a live vehicle: `vehicle_shell_ab`
-    (a shell) and `vehicle_blast_ab` (a bazooka round) match retail's 186
-    with 0x100000 (section 13).
-  - The landing surface off the tank (section 7) was the same per-side
+    is 12 (VERIFIED decompile), which turns the client to the impact row's
+    `vehicle` column. vcod's shell names the entity its trace stopped on (a
+    vehicle's collmap names its vehicle) and the entity pass marks the
+    explode when that is a live vehicle: `vehicle_shell_ab` (a shell) and
+    `vehicle_blast_ab` (a bazooka round) match retail's 186 with 0x100000
+    (section 13).
+  - The landing surface off the tank (section 7) is the same per-side
     material.
 - **Riders.** Every damage path into a player's callback goes through
-  `Vehicles::occupant_damage`, the rider branch above: shots, swings,
-  blasts, the `radiusDamage` walk, crushes, shells, `doDamage`. A bot
-  never picks a tank's driver as its enemy, since no client is sent his
-  body. `vehicle_armor_ab` replays the probe on ours: under the hold
+  `Vehicles::occupant_damage`, the rider branch of section 13: shots,
+  swings, blasts, the `radiusDamage` walk, crushes, shells, `doDamage`. A
+  bot never picks a tank's driver as its enemy, since no client is sent
+  his body. `vehicle_armor_ab` replays the probe on ours: under the hold
   stream the tank driver's two stints take no round and every other seat
-  some; under the sweep each seat's rounds by height within retail's,
-  and the driver's and gunner's silhouettes ray for ray (section 13,
-  VERIFIED, replay).
-- **Rockets and frags.** Section 13's measured blasts
-  (`vehicle_blast_ab`).
+  some; under the sweep each seat's rounds by height are within retail's,
+  and the silhouettes match ray for ray (section 13, VERIFIED, replay).
+- **Rockets and frags.** Section 13's measured blasts (`vehicle_blast_ab`).
 - **Hulls, shells, pushes.** Section 13's hull (`vehicle_hits_ab`,
   `vehicle_armor_ab` with the probe client's cmd stream), shell
   (`vehicle_shell_ab`) and section 12's push (`vehicle_ram_ab`).
-- **Not done.** The path methods; `closespeed` and
-  `harc` read 0.
+- **Not done.** The path methods (`attachPath` .. `resumeSpeed`; no stock
+  MP script uses them); the script fields `closespeed` and `harc` read 0
+  (the physics honours them when set, but nothing sets them).
 - **The seat blend's ramp.** `G_PlayerVehiclePositionAndBlend` (0x9048f)
   clears the legs anim's tree with `trap_XAnimClearTreeGoalWeightsStrict`
-  and blend time 0, then sets each goal weight at the rate `1 / (10 |weight
-  - goal|)` (0xa7b28 is 10.0, the weight read back with
+  and blend time 0, then sets each goal weight at the rate `1 / (10
+  |weight - goal|)` (0xa7b28 is 10.0, the weight read back with
   `trap_XAnimGetWeight` just before), and the group node's goal 1 the same
   way (VERIFIED decompile, file bytes). The setter stores `|goal - weight|`
   times the rate as the goal time (`cod11-movers.md` 15, "The weight
@@ -2525,91 +2517,94 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   setter and the step). A node just entered is no exception: its leaves
   were zero, so each rises from a thousandth of its goal over the same
   100 ms (0x080c05a2 raises a zero weight to `0.001 * goal` after storing
-  the goal time) and a steer change on the next frame ramps from about
+  the goal time), and a steer change on the next frame ramps from about
   half of each (INFERRED, off the setter).
-  The node a legs change leaves keeps its leaves' goals: UO's legs setter
-  (game.mp.uo 0x2ce5f) clears the old anim with
-  `trap_XAnimClearGoalWeight` (0x84c62, syscall 0x57), which
-  `coduo_lnxded`'s dispatcher sends to 0x080bfc22, the node alone; the
-  recursive clear 0x080bfd0c is reached only from syscalls 0x56 and 0x58
-  (`trap_XAnimClearTreeGoalWeights`, `...Strict`) (VERIFIED decompile).
-  The weight step 0x080bcc1e descends into a node's children only while
-  its weight or goal is non-zero; once both read 0 it runs 0x080bca32 on
-  each child instead, which sets the weight to the goal and the goal time
-  to 0 and frees a leaf whose weight, goal and other half's weight and
-  goal all read 0 (VERIFIED decompile). The time step skips a node with
-  no weight (`cod11-combat.md` 3.1). So once the old legs node fades out
-  its seat leaves sit on their last goals with their times stopped where
-  the last weighted step left them, and a return to that legs anim, any
-  time later, ramps the leaves from those goals and steps the times on
-  from there (INFERRED, off those).
-  The walk normalizes a node's weighted children (`cod11-movers.md` 15,
-  "Torso over legs", read on 1.1's `cod_lnxded` 0x080bbea8), so only the
-  leaves' shares count, however small the weights (INFERRED for UO).
-  `playerpose::SeatRamp` keeps the server's weights across end frames,
-  the node last left's with them (`SeatRamp::fade_held` stills it), and
-  `layer_clips` normalizes the leaves under the legs layer's weight. It
-  matters only to a four-wheel's driver and passenger, whose middle and
-  end children share the steer.
+  - The node a legs change leaves keeps its leaves' goals. UO's legs setter
+    (game.mp.uo 0x2ce5f) clears the old anim with
+    `trap_XAnimClearGoalWeight` (0x84c62, syscall 0x57), which
+    `coduo_lnxded`'s dispatcher sends to 0x080bfc22, the node alone; the
+    recursive clear 0x080bfd0c is reached only from syscalls 0x56 and 0x58
+    (`trap_XAnimClearTreeGoalWeights`, `...Strict`) (VERIFIED decompile).
+  - The weight step 0x080bcc1e descends into a node's children only while
+    its weight or goal is non-zero; once both read 0 it runs 0x080bca32 on
+    each child instead, which sets the weight to the goal and the goal time
+    to 0 and frees a leaf whose weight, goal and other half's weight and
+    goal all read 0 (VERIFIED decompile). The time step skips a node with
+    no weight (`cod11-combat.md` 3.1). So once the old legs node fades out
+    its seat leaves sit on their last goals with their times stopped where
+    the last weighted step left them, and a return to that legs anim, any
+    time later, ramps the leaves from those goals and steps the times on
+    from there (INFERRED, off those).
+  - The walk normalizes a node's weighted children (`cod11-movers.md` 15,
+    "Torso over legs", read on 1.1's `cod_lnxded` 0x080bbea8), so only the
+    leaves' shares count, however small the weights (INFERRED for UO).
+  - vcod: `playerpose::SeatRamp` keeps the server's weights across end
+    frames, the node last left's with them (`SeatRamp::fade_held` stills
+    it), and `layer_clips` normalizes the leaves under the legs layer's
+    weight. It matters only to a four-wheel's driver and passenger, whose
+    middle and end children share the steer.
+
   Measured on retail UO 1.51b, 2026-10-15 (fixtures
   `vehicles/mp_peaks-jeep-bones-uo.txt` and
   `playerstate/mp_peaks-tdm-slope-8ms-jeep-bones-uo.txt`, recipe in the
-  first's header): `client-probes/probe_vehicle` with `probe_bones 1`
-  links a `script_origin` to five of client 0's bones (both hands, head,
-  `bip01 spine2`, left foot; UO has no `getTagOrigin`) and logs them every
-  frame while a `--probe-vehicle drive` client drives the Willys. The
-  legs anim toggles between `vehicleJeepDriverDriving` and
-  `vehicleJeepDriverIdle` every 200 to 300 ms through the swings and
-  sits on one for seconds between them (VERIFIED, replay).
-  `vehicle_ab`'s `the_jeep_driver_s_bones_follow_retail_s` replays the
-  drive on ours: past the links' first frame the 2170 samples sit within
-  retail's print (0.01) but one at 0.02 (17550, a hand), mean 0.000
-  (VERIFIED, replay, 2026-10-21). Each part was measured by taking it
-  out (VERIFIED, replay): a node entered at its goals with nothing of
-  the node left kept read 0.55 at 25150, the hands after the legs return
-  to the idle node they left five seconds earlier, and so did dropping a
-  faded node's leaves (0.54); keeping them with their leaf times running
-  read 0.10 (29300, head and `spine2` through the toggles); the ramps
-  from a thousandth without the normalization read 3.81. Before any of
-  this, without the 100 ms ramp, the frames after each steer change read
-  up to 0.9 off (VERIFIED, replay, 2026-10-20).
+  first's header): `client-probes/probe_vehicle` with `probe_bones 1` links
+  a `script_origin` to five of client 0's bones (both hands, head, `bip01
+  spine2`, left foot; UO has no `getTagOrigin`) and logs them every frame
+  while a `--probe-vehicle drive` client drives the Willys. The legs anim
+  toggles between `vehicleJeepDriverDriving` and `vehicleJeepDriverIdle`
+  every 200 to 300 ms through the swings and sits on one for seconds
+  between them (VERIFIED, replay). `vehicle_ab`'s
+  `the_jeep_driver_s_bones_follow_retail_s` replays the drive on ours: past
+  the links' first frame the 2170 samples sit within retail's print (0.01)
+  but one at 0.02 (17550, a hand), mean 0.000 (VERIFIED, replay,
+  2026-10-21). Each part was measured by taking it out (VERIFIED, replay):
+
+  | Removed | Worst |
+  |---|---|
+  | the left node's kept leaves (entered at its goals) | 0.55 at 25150 (hands, after the legs return to the idle node left 5 s earlier) |
+  | a faded node's leaves dropped | 0.54 |
+  | leaves kept with their times running | 0.10 at 29300 (head, `spine2`) |
+  | normalization (ramps from a thousandth) | 3.81 |
+  | the 100 ms ramp | 0.9 in the frames after each steer change |
 - **The controllers.** 1.5 and UO ease every body's controls toward their
-  targets; 1.1 sets them. game.mp.uo's `BG_Player_DoControllers`
-  (0x1f2fe) and 1.5b's (`game.mp.i386.so` 1.5b, 0x1ad71) compute the
-  targets (0x1e761, 0x1a389), then step each of the six spine controls
-  and `tag_origin`'s angles through 0x1f107 (1.5b 0x1ab82) by at most
-  `0.36 * bg.frametime` degrees a component, toward the target with no
-  wrap, and `tag_origin`'s translation through `BG_LerpOffset` (0x1f1e7,
-  1.5b 0x1ac62) by at most `0.1 * bg.frametime` units along the line,
-  into the client info's `+0x408..+0x468` (1.5b `+0x3fc..+0x45c`)
-  (VERIFIED decompile; 0.36 and 0.1 at `.rodata` 0x9974c and 0x99750,
-  1.5b 0x73dcc and 0x73dd0, VERIFIED file bytes). `bg.frametime` is
-  `level.frametime`, set in `G_RunFrame` (0x59c21) (VERIFIED decompile).
-  The cgames do the same per drawn frame on `cg.frametime`: uo 0x30005730
-  through 0x300055b0 and 0x30005670 (0.36 at `0x3007c06c`, 0.1 at
-  `0x3007bf6c`), 1.5 0x300051c0 through 0x30005040 and 0x30005100 (0.36 at
-  `0x3006b8c0`, 0.1 at `0x3006b7a8`) (VERIFIED decompile and file bytes).
-  1.1's (0x2b7f8) sets them outright.
+  targets; 1.1 sets them. game.mp.uo's `BG_Player_DoControllers` (0x1f2fe)
+  and 1.5b's (`game.mp.i386.so` 1.5b, 0x1ad71) compute the targets
+  (0x1e761, 0x1a389), then step each of the six spine controls and
+  `tag_origin`'s angles through 0x1f107 (1.5b 0x1ab82) by at most `0.36 *
+  bg.frametime` degrees a component, toward the target with no wrap, and
+  `tag_origin`'s translation through `BG_LerpOffset` (0x1f1e7, 1.5b
+  0x1ac62) by at most `0.1 * bg.frametime` units along the line, into the
+  client info's `+0x408..+0x468` (1.5b `+0x3fc..+0x45c`) (VERIFIED
+  decompile; 0.36 and 0.1 at `.rodata` 0x9974c and 0x99750, 1.5b 0x73dcc
+  and 0x73dd0, VERIFIED file bytes). `bg.frametime` is `level.frametime`,
+  set in `G_RunFrame` (0x59c21) (VERIFIED decompile). The cgames do the
+  same per drawn frame on `cg.frametime`: UO 0x30005730 through 0x300055b0
+  and 0x30005670 (0.36 at `0x3007c06c`, 0.1 at `0x3007bf6c`), 1.5
+  0x300051c0 through 0x30005040 and 0x30005100 (0.36 at `0x3006b8c0`, 0.1
+  at `0x3006b7a8`) (VERIFIED decompile and file bytes). 1.1's (0x2b7f8)
+  sets them outright.
+
   The targets also differ from 1.1's (VERIFIED decompile, constants
-  VERIFIED file bytes, the same in both modules): the lean's roll is
-  scaled 0.8 standing and 1.5 crouched leaning right, 1.25 leaning left
-  (1.1: 1 standing, 1.5 and 1.8 crouched); the shift is `-2.5 f` in every
-  stance (1.1: 1, 1.5, 2.5); prone, the torso's twist `T1` moves
-  `tag_origin` by `(-24 (1 - cos T1), -12 sin T1)` and, when `f sin T1 >
-  0`, `16 (1 - cos T1) (-f)` more to the side. A mounted body: 1.1's hook
-  runs nothing, 1.5's aims every control at 0 (`eFlags & 0xc000`, the
-  `memset` arm of 0x1a389), UO's computes them as on foot (0x1e761 tests
-  only the rider bit).
-  The hook runs inside `G_DObjCalcPose`, on the frame's first pose of the
-  body: a locational trace or a tag lookup (`cod11-combat.md` 3,
-  "What poses the entity"). vcod-server steps the controls once an end
-  frame in `ClientSim::commit_pose` (`playerpose::Controllers::ease_toward`,
-  `BodyPose::eased`); a body no trace or lookup posed for a while has
-  stale controls on retail and settled ones on ours (INFERRED). The
-  client steps them each drawn frame (`entities::EntityAnim::controls`).
-  The bone capture above does not tell the easing from setting the
-  controls outright: the driver's view moved under 18 degrees a frame
-  and both read the same (VERIFIED, replay); no capture measures it yet.
+  VERIFIED file bytes, the same in both modules):
+
+  | Target | 1.5 and UO | 1.1 |
+  |---|---|---|
+  | lean roll scale | 0.8 standing; crouched 1.5 right, 1.25 left | 1 standing; 1.5 and 1.8 crouched |
+  | shift | `-2.5 f` in every stance | 1, 1.5, 2.5 |
+  | prone `tag_origin` | the torso's twist `T1` moves it `(-24 (1 - cos T1), -12 sin T1)`, and when `f sin T1 > 0` `16 (1 - cos T1) (-f)` more to the side | |
+  | mounted body | 1.5 aims every control at 0 (`eFlags & 0xc000`, the `memset` arm of 0x1a389); UO computes them as on foot (0x1e761 tests only the rider bit) | the hook runs nothing |
+
+  The hook runs inside `G_DObjCalcPose`, on a build of the body: a
+  locational trace or a tag lookup (`cod11-combat.md` 3, "What poses the
+  entity"). vcod-server eases the controls a step on each such build
+  (`combat::DobjStamps`, `playerpose::Controllers::ease_toward`), and the
+  last build's controls go to the record at the slot's next end frame
+  (`ClientSim::keep_eased`), so a body nothing traces keeps its controls,
+  as on retail (section 13, "The glide back"). The client steps them each
+  drawn frame (`entities::EntityAnim`). The jeep bone capture above does
+  not tell easing from setting: the driver's view moved under 18° a frame
+  and both read the same (VERIFIED, replay); the tank glide's head
+  (section 13) does.
 
 ## 15. Vehicle effects: wheel dust and a vehicle's death
 
