@@ -698,489 +698,281 @@ first everywhere.
 
 ### 7.2 The brain
 
-- **ctf.** The carrier makes for the carried flag's goal, and waits
-  inside it while his own flag is away. His own flag lying out is
-  returned by a touch: a defender goes for it, and so does an attacker
-  within 1000 units or one whose team's carrier is out. A defender stands
-  by his flag at home, or by the goal its carrier needs while it is
-  carried. An attacker takes the other flag, at home or lying out, else
-  escorts the teammate carrying it.
+- **ctf.** The carrier makes for the carried flag's goal, and waits inside it
+  while his own flag is away. His own flag lying out is returned by a touch: a
+  defender goes for it, and so does an attacker within 1000 units or one whose
+  team's carrier is out. A defender stands by his flag at home, or by the goal
+  its carrier needs while it is carried. An attacker takes the other flag, at
+  home or lying out, else escorts the teammate carrying it.
 - **dom.** A bot sets out for a flag its team does not hold, the rank-th
-  nearest, keeps it until its team holds it, and stands inside the zone
-  (8 units in) looking about. With every flag held it guards one by
-  rank.
-- **hq.** Neutral or the other team's radio: stand within its radius
-  less 16 and 34 up or down. Its own team's: guard it.
-  None up: wait by the next one's marker.
-- **bas.** An attacker takes the other side's alive bases by rank. A
-  breached one with no charge on it is planted: walk within 112 of the
-  objective model, rest the view on the trigger's middle, hold use
-  15.5 s (S&D's defuse, section 3, with its reach and hold as
-  parameters, the close-in over a weapon lying by the charge included).
-  A charged one is guarded from within 250 units of the
-  charge, in its room or the bunker over it, the way any defuser has to
-  come, while `countdowntime` reads more than 20 s; then from outside the
-  blast, 520 to 670 units off, the bot leaving the room by the graph's
-  flee (`Goal::Away`). Guarded from outside the blast all along, every
-  plant was defused unseen once each side had a defender. Any bot inside
-  the 500-unit blast of a charge about to go (its own side's in the last
-  20 s, the other side's once a defuse could no longer finish) flees it
-  before anything else but a live frag, fight or no fight: in a fight
-  the gun stays on the enemy and the keys run the graph's way out, turned
-  to the aimed view, with no sight and no bipod (`rekey`). With the fight
-  steering the keys, a planter and a defender shot it out in the charge
-  room and both died in the blast (seed 5, four times a round). No bot
-  starts for a defuse that the charge's clock, less the straight-line
-  run at 190 units/s, leaves no 10.5 s for: one held use inside the
-  blast to the end. A defender
-  keeps the charge room of a breached base of its side's, the only way
-  a plant comes; with none breached it attacks with the rest, since a
-  standing base needs no guard. With a charge of its side's ticking on
-  the other side's base it holds that charge's room beside the planter
-  instead: one on one, the defender in its own room won most fights and
-  defused. It does the same once its side has breached the other side's
-  last base, charged or not: called only by the charge, it came from its
-  own base across the map after the planter had died and the charge was
-  defused, and seed 23's last base took 20 min. A defender that does not shoot (`--bots-shoot` off) stops no
-  plant from the room, and with a defender a side every plant was
-  defused the moment it was down, for good: it attacks with the rest
-  and defuses only a charge it is within 2000 units of, and a side's two such bots split over
-  the other side's bases by rank (shooting, both take the same one), so
-  two charges can tick at once on a side with one bot left to defuse. When
-  it still ran home to defuse from anywhere, it was back in time for every
-  plant (about 38 s of a 60 s fuse on mp_foy), and with a base left a
-  side the round looped on defuses for good (seeds 17 and 19, 64 to 68
-  defuses in 29 min). Each side defuses a charge on one of
-  its bases (10.5 s): a defender that shoots, and any other bot within
-  2000 units of it. An attacker goes for the next of the other side's bases after
-  each of its deaths, off the defender that killed it. A standing base
-  is breached with rockets (below); bots ride no tank.
-- **The breach.** An attacker with no loaded rocket launcher carried
-  (`BotView::rocket`: `weaponClass rocketlauncher`, clip or reserve, the
-  one in hand first, else any) walks to the nearest launcher lying about
-  with a round left (`BasView::launchers`, off
-  `ScriptRuntime::weapon_items`) and taps use
-  on it, the retrieval pickup's tap (section 4.2): walking over a weapon
-  it does not carry takes nothing (`cod11-items.md` 1). With both
-  primary slots full the pickup's swap drops the weapon in hand, or
-  slot 1's with the pistol out, never the pistol (`cod11-items.md` 5,
-  case 2 and 4), so the bot draws the primary it would rather lose
-  before it taps (`Bot::swap_out`, `BotView::primaries`): an empty one
-  before a loaded one, then one of the kind it fetches, then not the
-  gun it fights with; with a slot free it draws nothing. Before
-  2026-10-20 only an empty launcher was drawn, and a bot fetching with
-  its gun out traded the gun. When the rocket read only
-  the first launcher held, an empty bazooka beside a loaded panzerschreck
-  read as none, and with its gun out at each tap one bot traded the gun,
-  then launcher after launcher, for five minutes with no breach (mp_foy,
-  shooting, seed 15). It passes over a launcher within
-  300 units of a standing base of the other side's, which lies in that
-  bunker behind its walls. With one in hand it walks to a breach stand:
-  the server picks, once per base and graph (`Server::breach_stands`), a
-  graph node in each of 16 sectors round the base, 400 to 1000 units off
-  (nearest 600), from whose standing eye a rocket strikes the base's
-  model or bursts within 64 units of its origin (`breach_aim`, the
-  world's missile trace and the meshes of the script models and
-  vehicles within 1564 units of a base, under the missile's clipmask). The bot takes the stand nearest its own side's
-  nearest base, and the next one after 2 s there with no shot. Wherever
-  the live check (`Server::breach_shot`, from its own muzzle, 400 to 1500
-  off) finds a shot, it stops, draws the launcher, rests the view on the
-  aim, fires and reloads, until the launcher is dry; then it fetches
-  another. A visible enemy comes first with shoot on. No rocket goes at
-  a player: with an enemy in sight the gun, else the pistol, comes out
-  over the launcher, and the breach draws it again. A 320-unit floor on
-  the range still left a bot killed by its own splash in most four-bot
-  rounds. Nor does a breach rocket go while another player's box
-  crosses its line, or where it would burst within 320 units of the
-  muzzle (`BREACH_CLEAR`; the base's mesh reaches toward the shooter),
-  nor where a rocket along the edge of the sighted spread cone (4
-  degrees, `adsSpread` of the bazooka and panzerschreck; the
-  panzerfaust's is 3.5) meets anything within those 320 units
-  (`spread_clear`, eight rays). With the line's middle alone, a bot on
-  mp_foy was killed now and then by a rocket the spread carried into
-  the cover by its stand; on mp_italy one fired twice from the stand by
-  the allied spawn into the Sherman (`script_vehicle` at (-3043, -2347,
-  -40), 190 units on and 1290 from the base, outside the 1200 the
-  models were taken within then) and died of the second.
-  Those checks hold only while the cone is at its sighted floor, so the
-  round also waits for `aimSpreadScale` to come back to 0
-  (`BotView::spread_scale`): a turn during the sights' raise adds to it
-  (`adjust_aim_spread_scale` adds nothing once `fWeaponPosFrac` is 1, and
-  the decay takes a few frames). VERIFIED (measured, ours, release, UO
-  install, the four-bot shooting gate, mp_kursk seed 11 on 85b67024):
-  the axis bot at the stand (778, -10551, 392) turned about 7 degrees
-  with its sights half up, fired 3 ticks after they were up, and the
+  nearest, keeps it until its team holds it, and stands inside the zone (8
+  units in) looking about. With every flag held it guards one by rank.
+- **hq.** Neutral or the other team's radio: stand within its radius less 16
+  and 34 up or down. Its own team's: guard it. None up: wait by the next one's
+  marker.
+- **bas, the plant.** An attacker takes the other side's alive bases by rank,
+  and after each death the next one, off the defender that killed it. A
+  breached base with no charge is planted: walk within 112 of the objective
+  model, rest the view on the trigger's middle, hold use 15.5 s (S&D's defuse,
+  section 3, with reach and hold as parameters, the close-in over a weapon
+  lying by the charge included).
+- **bas, the planted charge.** Guarded from within 250 units (its room or the
+  bunker over it, the way a defuser comes) while `countdowntime` reads more
+  than 20 s, then from 520 to 670 off, outside the blast, the bot leaving by
+  the graph's flee (`Goal::Away`). Trap: guarded from outside the blast all
+  along, every plant was defused unseen once each side had a defender.
+- **bas, the blast.** Any bot inside the 500-unit blast of a charge about to
+  go (its own side's in the last 20 s, the other side's once a defuse can no
+  longer finish) flees it before anything but a live frag, fight or not: the
+  gun stays on the enemy and the keys run the graph's way out, turned to the
+  aimed view, no sight, no bipod (`rekey`). Trap: with the fight steering the
+  keys, a planter and a defender shot it out in the charge room and both died
+  in the blast (seed 5, four times a round).
+- **bas, the defuse.** Each side defuses a charge on its bases (10.5 s): a
+  defender that shoots, and any other bot within 2000 units. No bot starts one
+  that the clock, less the straight-line run at 190 units/s, leaves no 10.5 s
+  for.
+- **bas, the defender.** It keeps the charge room of a breached base of its
+  side's, the only way a plant comes; with none breached it attacks with the
+  rest. With its side's charge ticking on the other side's base it holds that
+  charge's room beside the planter instead (one on one, the defender in its
+  own room won most fights and defused), and the same once its side has
+  breached the other side's last base, charged or not. Trap: called only by
+  the charge, it crossed the map after the planter had died and the charge was
+  defused; seed 23's last base took 20 min.
+- **bas, a defender that does not shoot** (`--bots-shoot` off) stops no plant
+  from the room, so it attacks with the rest and defuses only a charge within
+  2000 units; a side's two such bots split over the other side's bases by rank
+  (shooting, both take the same one), so two charges can tick on a side with
+  one bot left. A bot that does not shoot cannot stop a defuse once the
+  defuser reaches the trigger: the hold ends only on release, a death or 155
+  units (`BaseAssault_bomb_think` 3210), and on mp_foy's axis charge room a
+  body in the lookat's line found no free floor (the table runs to about 20
+  units of the defender's spot). Trap: running home to defuse from anywhere,
+  it was back for every plant (about 38 s of a 60 s fuse on mp_foy), and the
+  round looped on defuses (seeds 17 and 19, 64 to 68 in 29 min).
+- A standing base is breached with rockets (below). A bot in a tank (section 10)
+  lays its gun on players and vehicles, not bases.
+
+The breach:
+
+- An attacker with no loaded rocket launcher (`BotView::rocket`: `weaponClass
+  rocketlauncher`, clip or reserve, the one in hand first, else any) walks to
+  the nearest launcher lying about with a round left (`BasView::launchers`,
+  off `ScriptRuntime::weapon_items`) and taps use on it, the retrieval
+  pickup's tap (section 4.2): walking over a weapon it does not carry takes
+  nothing (`cod11-items.md` 1). It passes over one within 300 units of a
+  standing base of the other side's (inside that bunker's walls).
+- With both primary slots full the pickup drops the weapon in hand, or slot
+  1's with the pistol out, never the pistol (`cod11-items.md` 5, cases 2 and
+  4). So the bot first draws the primary it would rather lose
+  (`Bot::swap_out`, `BotView::primaries`): an empty one before a loaded one,
+  then one of the kind it fetches, then not the gun it fights with; with a
+  slot free it draws nothing. Trap: reading only the first launcher held, an
+  empty bazooka beside a loaded panzerschreck read as none, and a bot with its
+  gun out traded the gun, then launcher after launcher, for five minutes with
+  no breach (mp_foy, shooting, seed 15).
+- With a launcher in hand it walks to a breach stand. `Server::breach_stands`
+  picks once per base and graph a node in each of 16 sectors round the base,
+  400 to 1000 units off (nearest 600), from whose standing eye a rocket
+  strikes the base's model or bursts within 64 units of its origin
+  (`breach_aim`: the world's missile trace and the meshes of script models and
+  vehicles within 1564 units of a base, under the missile's clipmask). The bot
+  takes the stand nearest its own side's nearest base, and the next one after
+  2 s there with no shot.
+- Wherever `Server::breach_shot` (from its muzzle, 400 to 1500 off) finds a
+  shot, it stops, draws the launcher, rests the view on the aim, fires and
+  reloads until the launcher is dry, then fetches another. With shoot on a
+  visible enemy comes first: the gun, else the pistol, comes out over the
+  launcher, and no rocket goes at a player.
+- No breach rocket goes while another player's box crosses its line, where it
+  would burst within 320 units of the muzzle (`BREACH_CLEAR`; the base's mesh
+  reaches toward the shooter), or where a ray along the edge of the sighted
+  spread cone (eight rays, 4 degrees, the bazooka's and panzerschreck's
+  `adsSpread`; the panzerfaust's 3.5) meets anything within 320
+  (`spread_clear`). Trap: a 320-unit range floor alone left a bot killed by
+  its own splash in most four-bot rounds; the line's middle alone let the
+  spread carry a rocket into the cover by the stand on mp_foy, and on mp_italy
+  a bot fired twice into the Sherman (`script_vehicle` at (-3043, -2347, -40),
+  190 units on, 1290 from the base, outside the 1200 the models were then
+  taken within) and died of the second.
+- Those checks hold only at the sighted floor, so the shot also waits for
+  `aimSpreadScale` to return to 0 (`BotView::spread_scale`): a turn while the
+  sights rise adds to it (`adjust_aim_spread_scale` adds nothing once
+  `fWeaponPosFrac` is 1, and the decay takes a few frames). VERIFIED
+  (measured, ours, release, UO install, four-bot shooting gate, mp_kursk seed
+  11 on 85b67024): the axis bot at the stand (778, -10551, 392) turned about 7
+  degrees with its sights half up, fired 3 ticks after they were up, and the
   rocket left along (-0.916, -0.420, -0.010) against the aim's (-0.953,
-  -0.303, 0.011), 7 degrees off where `spread_clear` clears 4, and its
-  splash killed it (72, `MOD_PROJECTILE_SPLASH`, tick 15068).
+  -0.303, 0.011), 7 degrees off where `spread_clear` clears 4; its splash
+  killed it (72, `MOD_PROJECTILE_SPLASH`, tick 15068).
   (`bots::tests::a_bas_attacker_with_a_rocket_walks_to_a_stand_and_fires`.)
-  A bot with both its weapons spent draws the gun it still has; one
-  with no round anywhere first fetches the nearest weapon lying within
-  1500 units, a gun or launcher with a round in its clip or its
-  reserve (`BasView::guns`, `DRY_FETCH`; `ScriptRuntime::weapon_items`
-  reads a drop empty only when its count and clip both hold -1,
-  `cod11-items.md` 8; before 2026-10-20 an empty clip alone read as
-  empty, and a drop with only a reserve was passed over), and uses `kill` after 10 s only with
-  none in reach or once that fetch is given up. Every shoot-on `kill` in
-  six mp_foy rounds was a dry one, and two were a planter dry in its
-  charge's room whose charge was then defused (seeds 1 and 7). A
-  shooting bot with only a rocket left (no gun, the pistol dry) that
-  has given up on an enemy it could not fire at (section 3, the futile
-  enemy) fetches a gun lying within 800 units, never a launcher
-  (`Bot::unarmed`, `ARMS_FETCH`). On mp_foy seed 23 an allied planter
-  and the axis defender, each with a loaded launcher and a dry pistol,
-  stood side by side in a charge room for 5 min: eight plants, seven
-  defuses, no shot. With the full 1500-unit reach the walk to the gun
-  cost seeds 7 and 11 a minute and more. A
-  launcher or gun the body has come no 32 units nearer in 20 s (a node
+
+Out of rounds:
+
+- A bot with both weapons spent draws the gun it still has. With no round
+  anywhere it fetches the nearest weapon lying within 1500 units with a round
+  in clip or reserve (`BasView::guns`, `DRY_FETCH`;
+  `ScriptRuntime::weapon_items` reads a drop empty only when count and clip
+  both hold -1, `cod11-items.md` 8; a clip-only test passed over reserve-only
+  drops), and uses `kill` after 10 s only with none in reach or once that
+  fetch is given up. Every shoot-on `kill` in six mp_foy rounds was a dry one;
+  two were a planter dry in its charge room whose charge was then defused
+  (seeds 1 and 7).
+- A shooting bot with only a rocket left (no gun, pistol dry) that gave up on
+  an enemy it could not fire at (section 3, the futile enemy) fetches a gun,
+  never a launcher, within 800 units (`Bot::unarmed`, `ARMS_FETCH`). Trap: on
+  mp_foy seed 23 an allied planter and the axis defender, each with a loaded
+  launcher and a dry pistol, stood in one charge room for 5 min: eight plants,
+  seven defuses, no shot. The full 1500-unit reach cost seeds 7 and 11 a
+  minute and more.
+- A launcher or gun the body has come no 32 units nearer to in 20 s (a node
   over it, or a tap that takes nothing) is passed over for a minute.
-- The way into a breached base opens only when its walls go, after the
-  graph was built. The server builds the graph without the `rubble`
-  brushes (`World::rubble`; out of the way except over a dead base) and
-  rebuilds it, on its own thread, over the brushes the script has linked
-  and unlinked since, once that count (`GameHost::brush_links`, bumped
-  by `delete`, `notSolid` and `solid` on a brush model) has held still
-  2 s (`Server::relink_nav`); the cache keys on which submodels clip, so
-  a restart that puts the same walls back finds the old graph. The flood
-  reaches 512 units past every bas entity as well as past the spawns
-  (`World::nav_cover`): mp_italy's western axis bunker (-4556 3760) lay
-  outside the spawns' margin, the graph stopped at x -4603 in its
-  bunker, and its charge room had no node. An allied attacker stood over
-  the breached base for good, and with the four-bot shoot-off seed 11
-  the round looped on 47 defuses at the other side's last base. The
-  ignored census `every_bas_charge_room_is_on_the_graph` in
-  `tests/nav_census.rs` checks all thirty stock charges. Two
-  engine fixes were needed on the way: a brush model's clip now follows
-  a bare `origin` write (the rubble's lift; only movers and `linkTo`
-  posed it before), and a respawned brush entity links its model again
-  (a restart's walls).
+- An LMG bot whose target's pitch lies past 45 degrees does not deploy, or
+  breaks the bipod down, as for a target past the yaw cap, and draws the
+  pistol when it has a round
+  (`bots::tests::an_lmg_target_past_the_pitch_clamp_breaks_the_bipod_down`). A
+  deployed LMG's view stops 45 degrees from level (`PM_UpdateViewAngles`,
+  coduo-movement.md 7). A prone deploy measures the clamp from the torso's
+  pitch, which the brain does not read; it uses level. VERIFIED (measured,
+  ours, master 447d904f, mp_foy seed 21, `BAS_TRACE=1 BAS_TRACE_EVERY=20`):
+  before it, a planter in the charge room at (3530, -4832, -169) and a
+  defender in the bunker over it (3611 to 3642, -4705, 14), 170 to 260 apart
+  across the hole, both deployed, fired 75 MG34 and 59 .30 cal rounds into the
+  hole's lip (the rounds left under the line, inside the 2-degree trigger
+  cone), drew no `D;` line, hid from each other by the futile-enemy rule, and
+  the defender defused all three plants (ticks 7385 to 11596).
+
+The graph over a breached base:
+
+- The way into a breached base opens only when its walls go. The server builds
+  the graph without the `rubble` brushes (`World::rubble`; out of the way
+  except over a dead base) and rebuilds it on its own thread over the brushes
+  the script has linked and unlinked once that count (`GameHost::brush_links`,
+  bumped by `delete`, `notSolid` and `solid` on a brush model) holds still 2 s
+  (`Server::relink_nav`). The cache keys on which submodels clip, so a restart
+  that puts the walls back finds the old graph.
+- The flood reaches 512 units past every bas entity as well as the spawns
+  (`World::nav_cover`). Trap: mp_italy's western axis bunker (-4556 3760) lay
+  outside the spawns' margin, the graph stopped at x -4603, its charge room
+  had no node, and the four-bot shoot-off seed 11 looped on 47 defuses. The
+  ignored census `every_bas_charge_room_is_on_the_graph`
+  (`tests/nav_census.rs`) checks all thirty stock charges.
+- Engine rules this needed: a brush model's clip follows a bare `origin` write
+  (the rubble's lift), and a respawned brush entity links its model again (a
+  restart's walls).
+
+Assets:
 
 - VERIFIED (`pakuo00.pk3` `weapons/mp/bazooka_mp`, `panzerschreck_mp`,
-  `panzerfaust_mp`): `weaponType projectile`, `weaponClass
-  rocketlauncher`, `damage 1000`, `explosionRadius 256` with 100 inner
-  and 10 outer, `clipSize 1`; the bazooka and the panzerschreck
-  `maxAmmo 3` and `reloadTime 6` with no `reloadEmptyTime` (their dry
-  reload takes `reloadTime`, `cod11-combat.md` 1.7), the panzerfaust one
-  round. `scr_bas_basehealth` defaults to 24500, "700 tank shell * 35"
-  (`bas.gsc` 351): 25 direct rockets a base. VERIFIED (mp_foy's entity
-  lump): 32 `mpweapon_bazooka`, `_panzerschreck` and `_panzerfaust`
-  lie about, most with `wait 15` (a few 25, some none); six are
-  `script_gameobjectname bas` with `count 3`, one per base about 145
-  units from its origin beside its rocket crate, inside its bunker.
-- INFERRED (ours, `GameHost::shot_models`): a rocket strikes a base's
-  script model mesh before it reaches the origin, so the breach rides the
-  direct `G_Damage` on a `takedamage` model (`cod11-combat.md`, the shell
-  direct hits); before that fix the struck base was also the splash's
-  ignore and took nothing.
+  `panzerfaust_mp`): `weaponType projectile`, `weaponClass rocketlauncher`,
+  `damage 1000`, `explosionRadius 256` with 100 inner and 10 outer, `clipSize
+  1`; the bazooka and the panzerschreck `maxAmmo 3` and `reloadTime 6` with no
+  `reloadEmptyTime` (their dry reload takes `reloadTime`, `cod11-combat.md`
+  1.7), the panzerfaust one round. `scr_bas_basehealth` defaults to 24500,
+  "700 tank shell * 35" (`bas.gsc` 351): 25 direct rockets a base.
+- VERIFIED (mp_foy's entity lump): 32 `mpweapon_bazooka`, `_panzerschreck` and
+  `_panzerfaust` lie about, most with `wait 15` (a few 25, some none); six are
+  `script_gameobjectname bas` with `count 3`, one per base about 145 units
+  from its origin beside its rocket crate, inside its bunker.
+- INFERRED (ours, `GameHost::shot_models`): a rocket strikes a base's script
+  model mesh before it reaches the origin, so the breach rides the direct
+  `G_Damage` on a `takedamage` model (`cod11-combat.md`, the shell direct
+  hits).
 
-VERIFIED (measured, ours, 2026-10-15, release, UO rules, 2 bots, seed 7,
-`tests/bot_objectives.rs`, after gtend's gametype endings merged): `ctf`
-on mp_cassino with shoot on, a flag taken at tick 1351 and captured 1342
-ticks later, after a kill dropped the other flag and it went home (with
-shoot off both bots take a flag and wait in their goals for good); `dom`
-on mp_cassino with shoot off, the first flag at tick 843 and 4 more
-turned in the 60 s after; `hq` on mp_cassino with shoot on, a radio held
-at tick 1102 (with shoot off the two bots contest it for good); `bas` on
-mp_foy with shoot off and `scr_bas_basehealth 0`, a charge planted at
-tick 2020 on the axis hq, down the stair once the graph had the walls
-out, and gone off 1199 ticks later with the lone defender at the other
-side's bases. No script abort in any.
+Measured: ours, release, UO install, `scr_bas_basehealth 3000` for the `bas`
+gates in `tests/bots.rs` (`uo_bots_breach_bases_until_a_bas_round_ends`, two
+bots, shoot off; `four_uo_bots_end_a_bas_round_without_shooting`;
+`four_shooting_uo_bots_end_a_bas_round`).
 
-VERIFIED (measured, ours, 2026-10-17, release, UO rules, seed 7,
-`scr_bas_basehealth 3000`, three direct rockets a base, gate
-`uo_bots_breach_bases_until_a_bas_round_ends` in `tests/bots.rs`): two
-bots, shoot off, on mp_foy: the first base breached at tick 2329, five
-breached and four charges gone off, and the round over by its bases at
-tick 13539 (11.3 min). With four bots (a defender a side) and shoot off
-the first breach came at 2329 too, but every plant after the first was
-defused by the other side's defender for the rest of a 33-minute run;
-with shoot on, two breaches and one charge in 29 minutes, the attackers
-dying on the way. Before the reload fix (`cod11-combat.md`, the reload begin in section 1) a bot
-fired one rocket and stood for good on a launcher that never reloaded;
-before the shell direct hit (missiles2) a rocket struck the base's
-model and took it nothing.
+- The other gametypes (2026-10-15, two bots, seed 7,
+  `tests/bot_objectives.rs`): `ctf` on mp_cassino with shoot on, a flag taken
+  at tick 1351 and captured 1342 ticks later (shoot off, both bots take a flag
+  and wait in their goals for good); `dom` on mp_cassino, shoot off, the first
+  flag at tick 843 and 4 more in the 60 s after; `hq` on mp_cassino with shoot
+  on, a radio held at tick 1102 (shoot off, the two contest it for good). No
+  script abort. VERIFIED (measured).
+- Current numbers (2026-10-20, master a5c81855 against the weapon rules above,
+  the four-bot shooting gate, all five maps, seeds 1 to 11 odd), VERIFIED
+  (measured): all 60 runs end on their bases. After: mp_foy 10359 to 14239,
+  mp_italy 9979 to 15059, mp_kursk 11339 to 16299, mp_ponyri 10379 to 16939,
+  mp_rhinevalley 9879 to 14219, mean 12496 (before 12032). Every swap pickup
+  logged (61 before, 56 after) dropped an empty weapon, and no plant or defuse
+  settled on a cursor hint: the gun-for-gun trade and the swap at a charge did
+  not come up, and rest on unit tests. What moved runs is the launcher list no
+  longer fetching an empty launcher: on mp_rhinevalley seed 5 an allied bot
+  with an empty bazooka had tapped another empty one three times, then an
+  unreachable one at (1938, -2254, 2017) three times; without that it reached
+  the fight earlier and the allies' third breach waited on the axis sniper's
+  kills (8234 to 12953, before 8012). The old list alone restores master's
+  ticks on mp_rhinevalley seeds 1 and 5 (10179, 10039).
+- Shoot off and two bots (2026-10-18, master 7256c89c, seeds 1 to 11 odd, all
+  five maps): every run ends on its bases, shoot off 6179 to 9559
+  (mp_rhinevalley seed 7 slowest), two bots 9519 to 12539; no shoot-off run
+  defuses a charge. VERIFIED (measured).
+- Superseded rounds, one line each:
+  - 2026-10-15: `bas` on mp_foy, two bots, shoot off, `scr_bas_basehealth 0`:
+    a charge at tick 2020 on the axis hq, gone off 1199 ticks later. VERIFIED
+    (measured).
+  - 2026-10-17, first breach gates: two bots shoot off ended at 13539; four
+    shoot off defused every plant after the first for 33 min; shooting over
+    seeds 1 to 23 odd ended at 11059 to 29459. Before the reload fix a bot
+    fired one rocket and stood on a launcher that never reloaded; before the
+    shell direct hit a base took nothing. VERIFIED (measured).
+  - 2026-10-17, before the defuse split: four bots shoot off, seeds 3 and 7,
+    planted 97 and 113 times and defused nearly all for 29 min; after, seed 5
+    still looped (the second bot called home 67 times); the shooting seed 7
+    stood twenty minutes before the futile-enemy rule. VERIFIED (measured).
+  - 2026-10-18, before the near-only defuse, the clock rule, the blast keys
+    and the backing: shoot off looped on seeds 17 and 19 (64 to 68 defuses);
+    after, shoot off 6459 to 7559 with no defuse, shoot on 8559 to 20059. The
+    planter's guard alone (8 s) ended one seed in eight. VERIFIED (measured).
+  - 2026-10-18, before the nav cover, the `delete` notify
+    (cod11-gsc-object-model.md 14), the dry fetch and the rocket read:
+    mp_italy shoot off seed 11 looped on 47 defuses, mp_foy shooting seed 11
+    hit a `_spawnlogic::Player_WaitForDeath` script error; after, all 96 runs
+    ended. VERIFIED (measured).
+  - 2026-10-18, the gun fetch at 800: mp_foy shooting seeds 1 to 23 odd 9899
+    to 17779, mean 12972 (master 13517), seed 23 14979; on master 35198659 two
+    of 36 runs moved. VERIFIED (measured).
+  - 2026-10-19, the LMG pitch rule against master 447d904f: 27 of 36 runs on
+    the same tick, mean 12452 to 12176. The four slower runs, traced with the
+    rule's clamp toggled to 90 degrees, part at the first round one run fires
+    and the other does not, not by the rule. VERIFIED (measured).
+  - 2026-10-19, the pit rule (bot-navigation.md section 3) on ee4c0d0b: 36
+    runs end, mean 11590; the rule fired on none (a first form without the
+    spawn test fired on mp_italy seed 5). VERIFIED (measured).
+  - 2026-10-19, one generator per bot (section 8), submodel ladders and the
+    closed breach cone, on c05581d6: 36 runs end, none with an own-rocket
+    kill, mean 12143 (before the cone fix mp_kursk 11 ended at 19799 on one).
+    VERIFIED (measured).
+- Runs part on luck. INFERRED (code: `ClientSim::fire_recoil` takes
+  `rand_from(&mut self.rng)` per round in `Server::replay_moves`): every round
+  fired moves the shared spread and recoil draws after it, as on retail, so
+  two runs part at the first round one fires and the other does not. Since
+  2026-10-19 bot choices draw off each bot's own generator (section 8, "One
+  generator per bot").
+- mp_kursk seed 5's slow stretch (master 7256c89c, ticks 10303 to 15142; 12413
+  to 18055 on 447d904f): both sides down to a breached last base, all four
+  bots crossing toward each other's and fighting in the open between (2500,
+  -4000) and (3700, -9700) (18 kills on 447d904f, none in a charge room); not
+  a room held against attacker after attacker. VERIFIED (measured).
 
-VERIFIED (measured, ours, 2026-10-17, same setup, the rules above):
-gate `four_shooting_uo_bots_end_a_bas_round`, four bots shooting, over
-`BOTS_SEED` 1 to 23 odd (the seed is made odd, so 1 to 8 is four
-runs), the round over by its bases on every seed, at ticks 11059 to
-29459 (9 to 25 min; seed 7 at 21539), four to five bases gone off and
-none to four defuses a round; seed 17 also had a bot killed by its own
-breach rocket, which the sighted spread (4 degrees) still carries into cover
-by the stand now and then. The two-bot gate, shoot off: over at tick
-12099, five gone off, none defused.
+Rejected (ours, shooting gate):
 
-VERIFIED (measured, ours, 2026-10-18, release, UO install, same setup,
-`BOTS_SEED` 1 to 23 odd, twelve runs a gate): before the rules above
-(defuse only from near without shooting, no defuse the clock cannot
-let finish, keys out of a blast through a fight, backing the attack on
-the last base) the four-bot shoot-off gate looped on defuses on seeds
-17 and 19 (64 to 68 defuses, never over) and ended the rest at ticks
-6979 to 12959; shoot on ended at 8739 to 21759. After: shoot off ends
-every seed at 6459 to 7559 with no defuse, shoot on at 8559 to 20059
-(mean 13700 against 13000 before; the slowest seed 14700 ticks short
-of the 34800-tick gate where it was 13000 short). Seed 5 traced before
-the blast rule lost a bot to a charge four times a round; intermediate, with the near-only defuse alone, shoot on
-seed 23 took 31999 ticks: its allied defender came across the map to
-the last axis base only once the charge was down and the planter dead,
-twice. The two-bot gate: over at tick 11079, five gone off.
-With the planter's guard alone (8 s, outside-the-blast before), one
-seed in eight ended; the rest stalled on defuses, a bot standing at a
-launcher it could not take, a dry defender, or a bot killing itself
-with its own rocket.
-
-VERIFIED (measured, ours, 2026-10-18, release, UO install,
-`scr_bas_basehealth 3000`, gates `uo_bots_breach_bases_until_a_bas_round_ends`,
-`four_uo_bots_end_a_bas_round_without_shooting` and
-`four_shooting_uo_bots_end_a_bas_round` over `BOTS_SEED` 1 to 11 odd on
-mp_italy, mp_kursk, mp_ponyri and mp_rhinevalley, mp_foy's shooting gate
-1 to 23 odd): before the nav cover, the `delete` notify (cod11-gsc-object-model.md
-14), the dry fetch and the rocket read above, mp_italy's four-bot
-shoot-off seed 11 looped on 47 defuses at the allied last base while an
-allied attacker stood over the western axis bunker; mp_foy's shooting
-seed 11 stopped on a `_spawnlogic::Player_WaitForDeath` script error;
-mp_foy shooting ended at 10259 to 21859 (mean 14571), mp_italy shooting
-at 10919 to 18499. After, all 96 runs end on
-their bases: mp_foy shooting 9939 to 16659 (mean 11921, eleven of twelve
-under 12800), shoot off 6419 to 6959, two bots 9839 to 13059; mp_italy
-shooting 10259 to 12979, shoot off 6399 to 7259, two bots 10039 to 12539;
-mp_kursk shooting 9939 to 21099 (seeds 3 and 5: the last base's room
-held against attacker after attacker, and 26 deaths in the open on seed
-5; before, 9399 to 15779 on other seeds), shoot off 6859 to 7079, two
-bots 9739 to 10419; mp_ponyri shooting 10659 to 13719, shoot off 6179
-to 6979, two bots 10279 to 10959; mp_rhinevalley shooting 9319 to
-11559, shoot off 6839 to 7979, two bots 9499 to 10219. No shoot-off run
-defused a charge.
-
-VERIFIED (measured, ours, 2026-10-18, release, UO install, master
-7256c89c, same setup and the same three gates over `BOTS_SEED` 1 to 11
-odd on all five maps, 90 runs): every run ends on its bases. Shooting:
-mp_foy 9939 to 16659, mp_italy 10259 to 12979, mp_kursk 8479 to 15379,
-mp_ponyri 10659 to 12899, mp_rhinevalley 9339 to 12359. Shoot off: 6179
-to 9559 (mp_rhinevalley seed 7 the slowest). Two bots: 9519 to 12539.
-mp_kursk shooting over 13 to 23 odd: 9939 to 12279. The collision
-changes merged since the numbers above reshuffled the seeds: mp_kursk
-seed 3 now ends at 8479, and seed 5 at 15379. Seed 5's slow stretch
-(ticks 10303 to 15142, both sides down to a breached last base) is not a
-room held against one attacker after another. The allied planter
-planted alone, while its backing teammate was still fighting at its own
-base. Both axis bots came home, killed it and defused. After that all
-four bots crossed the map toward each other's last base, and seven
-deaths between ticks 11548 and 13942, between (2900, -5300) and (2800,
--10400), decided it. Only three kills in the round were a defender's
-near its own base (`bas_defend`).
-
-Rejected regroup rules for a planter going for the other side's last
-base, breached (VERIFIED, measured, ours, mp_kursk shooting, seeds 1 to
-11 odd):
-- A planter waits 600 to 750 units off the charge, for up to 30 s, for a
-  live teammate farther out. Slower: seed 7 went 11679 to 12039 and seed
-  11 10119 to 10719. On seed 5 an allied planter waited by the axis
-  spawn and was killed by the bots spawning there.
-- The same wait, but only for a teammate that has come 64 units nearer
-  in the last 3 s. Seed 1 went 10879 to 18979. On master the axis
-  breacher killed the allied defender (tick 9027) and planted at 9437.
-  With the wait it stopped short of the room, and the defender killed
-  both axis attackers there (8812 and 8846). Seed 5 went to 15839.
-- The same, but only once the bot's last life ended within 1000 units of
-  that charge. All 36 shooting runs (five maps, seeds 1 to 11, and
-  mp_kursk 13 to 23) ended on the same tick as on master.
-
-INFERRED: a plant made at once, before the defender is back in its
-room, wins more than it loses. On these seeds no attacker reached a held room one at a
-time, so nothing was merged.
-
-Rejected rules for the endgame, both sides down to one breached base
-(VERIFIED, measured, ours, 2026-10-18, release, UO install, master
-1080e30d, `four_shooting_uo_bots_end_a_bas_round`, seeds 1 to 11 odd on
-all five maps; master as above, mp_foy 13 to 23 odd at 13119, 9899,
-17639, 11319, 12639 and 23559):
-- The defender stays home once both last bases are breached: no
-  backing, charged or not. mp_kursk seed 5 went 15379 to 25039 and seed
-  7 never ended (12 defuses in 29 min); mp_foy seed 1 went 17779 to
-  19399 and mp_italy seed 1 12979 to 13379.
-- In that endgame the defender backs a ticking charge only, not the
-  other side's last base uncharged. mp_kursk seed 5 went to 26199,
-  mp_foy seed 1 to 19399, mp_italy seed 5 11619 to 13059.
-- A planter of the other side's last base waits outside the blast (520
-  to 670 off) while the other side has two alive and no teammate is
-  within 300 units of its own distance to the charge. mp_kursk seed 5
-  went to 21459 and seed 9 9839 to 23279; seeds 1, 7 and 11 lost 380 to
-  1640 ticks, mp_foy seeds 5 and 9 about 1000 each.
-- None of the three moved mp_foy seed 23, whose slow stretch is not
-  that endgame. From tick 5335 to 11861 an allied planter and the axis
-  defender each held only a loaded launcher, both pistols dry, and
-  stood 100 to 300 units apart in the charge room of the axis base at
-  (-2502, 2264), each hidden from the other for 30 s after 10 s
-  without a shot (the futile-enemy rule): eight plants, seven defuses,
-  no kill. The gun
-  fetch above ends it at 14979.
-
-VERIFIED (measured, ours, 2026-10-18, release, UO install, the gun
-fetch above, same gate): mp_foy shooting over seeds 1 to 23 odd ends at
-9899 to 17779, mean 12972 (master 9899 to 23559, mean 13517): seed 23 at
-14979, seed 7 at 13459 (master 12819), seed 11 at 11659 (9939), seed 17
-at 17319 (17639), the rest on master's tick. With the 1500-unit reach
-seed 7 took 16779 and seed 11 12059. mp_italy, mp_kursk, mp_ponyri and
-mp_rhinevalley (1 to 11 odd, mp_kursk to 23) end on master's tick at
-the 1500-unit reach, so at 800 too. The shoot-off gate on mp_foy and
-mp_kursk, seeds 1 and 5, ends on master's tick; the two-bot gate there
-at 10039 to 11779.
-On master 35198659 (after the mp_ship follow-up's nav changes, which
-reshuffled every seed: mp_kursk seed 5 22199, mp_foy seed 23 16739)
-the fetch changed two of 36 shooting runs (all five maps 1 to 11 odd,
-mp_foy to 23): mp_foy seed 1 10919 to 13419 and seed 13 17419 to
-13559; mean 12562 to 12524. Seed 23's stand-off no longer arises there.
-
-The two slow seeds at master 447d904f (VERIFIED, measured, ours,
-2026-10-19, release, UO install, same gate, `BAS_TRACE=1
-BAS_TRACE_EVERY=20`, which prints each bot's clip, engagement and
-waypoint and the script log's `D;` lines):
-- mp_foy seed 21 (19819): from tick 7385 to 11596 the axis planter
-  planted the allied base at (3497, -4774) three times and the allied
-  defender defused all three. Each time the two met with the planter
-  in the charge room at (3530, -4832, -169) and the defender in the
-  bunker over it at (3611 to 3642, -4705, 14), 170 to 260 units off,
-  across the hole between the floors, both holding an LMG. The one
-  below fired its MG34 up at 46 to 59 degrees, the one above its .30
-  cal down, deployed: a deployed LMG's view stops 45 degrees from level
-  (`PM_UpdateViewAngles`, coduo-movement.md 7), so the rounds left
-  under the line, inside the 2-degree trigger cone at that range, and
-  went into the hole's lip. 75 MG34 rounds, then 59 .30 cal rounds,
-  and pistol fire, drew no `D;` line. With the trigger idle 10 s the
-  futile-enemy rule hid each from the other, the planter left the room
-  at 20 s, and the defender walked down and defused. Now an LMG bot
-  whose target's pitch lies past 45 does not deploy, or breaks the
-  bipod down, the way a target past the yaw cap does, and the pistol
-  comes out when it has a round
-  (`bots::tests::an_lmg_target_past_the_pitch_clamp_breaks_the_bipod_down`).
-  A prone deploy measures the clamp from the torso's pitch, which the
-  brain does not read; it uses level.
-- mp_kursk seed 5 (22199): both sides were down to a breached last
-  base from tick 12413, and nobody planted until 18055. All four bots
-  crossed the map toward the other side's last base and met between
-  (2500, -4000) and (3700, -9700): 18 kills in that stretch, nine a
-  side, none in a charge room. It is the stretch of 10-18 above (then
-  ticks 10303 to 15142, seven deaths), longer on this seed. The
-  rejected endgame rules above are the rules for it. The pitch rule
-  does not touch it.
-
-Shooting gate, master 447d904f against the pitch rule (VERIFIED,
-measured, same setup, all five maps 1 to 11 odd, mp_foy to 23): 27 of
-36 runs end on the same tick. mp_foy seed 21 19819 to 14139, seed 11
-17579 to 11439, 13 13559 to 11779, 17 13779 to 12139, 23 12819 to
-12339; mp_kursk 1 14459 to 12179. Slower: mp_foy 7 14579 to 17519, 15
-9799 to 12199, 5 11139 to 12839; mp_italy 1 12979 to 13979 (runs that
-parted, not traced). Mean 12452 to 12176, mp_foy's 13749 to 13026 with
-its slowest 19819 to 17519; the slowest run is still mp_kursk 5.
-
-The four slower runs on master ee4c0d0b (VERIFIED, measured, ours,
-release, UO install, same gate, `BAS_TRACE=1 BAS_TRACE_EVERY=20`, the
-pitch rule on and, through a temporary toggle, with its clamp at 90
-degrees, i.e. off): mp_foy seed 5 13939 on, 14879 off; seed 7 11339
-both; seed 15 15619 on, 11559 off; mp_italy seed 1 10539 both. Seeds 7
-and italy 1 no longer meet the rule at all, and seed 5 is faster with
-it. Seed 15's two runs agree to tick 2640 and part by 2660: the allied
-bot at (3018, 2933, 39), firing its LMG (clip 64 at tick 2600, 49 at
-2640), had an axis bot at (2859 to 2920, 2816 to 2865, 214), 40 to 54
-degrees up. With the rule the MG stops at 46 rounds left and the
-pistol is out by 2700; without it 11 more rounds go at the clamp. Neither run
-draws a `D;` line from that fight (the next is a frag at 2775). By tick
-2697 the off run's axis breacher, 11 000 units away at (-3348, -6626,
-172), has breached the allied base at (-2020, -7256, 185) and the on
-run's has not. INFERRED (code: `ClientSim::fire_recoil` takes
-`rand_from(&mut self.rng)` per round in `Server::replay_moves`, and the
-bot pass draws `rand_from` on the same generator): every round fired
-moves every later draw of every bot, so the runs part at the first
-round one fires and the other does not, and the gap after that is the
-seed's luck, not the rule's. Since 2026-10-19 the bot pass draws off
-each bot's own generator (section 8, "One generator per bot"), so a bot's
-choice no longer moves another's draws; a round fired still moves the
-shared spread and recoil draws after it, as on retail, so two runs still
-part at the first round one fires and the other does not.
-
-The bas sweep on the pit rule (bot-navigation.md section 3; VERIFIED,
-measured, ours, release, UO install, this branch on ee4c0d0b, the same
-gate over all five maps 1 to 11 odd and mp_foy to 23, 36 runs): all end
-on their bases. mp_foy
-10119 to 16639 (1 11819, 3 10119, 5 13939, 7 11339, 9 10559, 11 11099,
-13 13879, 15 15619, 17 13719, 19 10939, 21 16639, 23 10579); mp_italy
-9139 to 14759 (1 10539, 3 10019, 5 12959, 7 10439, 9 9139, 11 14759);
-mp_kursk 9679 to 15379 (1 9919, 3 10799, 5 9679, 7 15379, 9 13439, 11
-10679); mp_ponyri 10679 to 13099 (1 13099, 3 11039, 5 11539, 7 12579,
-9 10679, 11 11259); mp_rhinevalley 7899 to 11779 (1 9819, 3 10199, 5
-7899, 7 11779, 9 9479, 11 9859). The pit rule fired on none of them
-(an env-gated log line on every pit tick); a first form without the
-spawn test fired on mp_italy seed 5 only, at the allied bunker. Mean
-11590; the slowest run is mp_foy 21 (16639), and mp_kursk 5 now ends at
-9679.
-
-The same sweep on one generator per bot (section 8), the submodel
-ladders (bot-navigation.md section 2) and the breach's closed cone
-(VERIFIED, measured, ours, release, UO install, branch
-fix/bots-per-bot-rng on c05581d6, 36 runs): all end on their bases, none
-with an own-rocket kill. mp_foy 8219 to 19039 (1 13039, 3 11259, 5
-13419, 7 12599, 9 10359, 11 11259, 13 12159, 15 19039, 17 12519, 19
-10299, 21 8219, 23 12879); mp_italy 10659 to 15059 (1 12779, 3 15059, 5
-10659, 7 13279, 9 11559, 11 13099); mp_kursk 10779 to 13619 (1 11839, 3
-13619, 5 10919, 7 13599, 9 10879, 11 10779); mp_ponyri 11059 to 13919 (1
-11519, 3 11059, 5 11259, 7 11919, 9 13919, 11 11619); mp_rhinevalley
-10039 to 14019 (1 14019, 3 10039, 5 11799, 7 11739, 9 11499, 11 11659).
-Mean 12143. Every seed draws anew, so a run's ticks against the table
-above are the reshuffle, not a speed change. Before the cone fix the
-same branch's sweep had mp_kursk 11 end at 19799 with the own-rocket
-kill of section 7.2 and the other 35 pass (mean 12541 over the 35).
-
-The weapon rules of 2026-10-20 (the draw before a tap, reserve drops,
-the charge press close-in; VERIFIED, measured, ours, release, UO
-install, master a5c81855 against branch fix/bots-bas-weapons, the
-four-bot shooting gate, all five maps, seeds 1 to 11 odd, 30 runs
-each): all 60 end on their bases. Before, mp_foy 10359 to 14239,
-mp_italy 9979 to 15059, mp_kursk 10399 to 16259, mp_ponyri 10379 to
-13819, mp_rhinevalley 9979 to 11779, mean 12032; after, 10359 to 14239,
-9979 to 15059, 11339 to 16299, 10379 to 16939, 9879 to 14219, mean
-12496. A logged count of every swap pickup (taken, dropped, the rounds
-of each) found 61 swaps before and 56 after, every one dropping an
-empty weapon, and no plant or defuse settled on a weapon's cursor hint
-in either sweep: the gun-for-gun trade and the bas swap at a charge
-did not come up on these seeds, and their rules rest on unit tests.
-What moved runs is the launcher list: an empty launcher (count and clip
-both -1) is no longer fetched. On mp_rhinevalley seed 5 an allied bot
-holding an empty bazooka tapped another empty bazooka three times (a
-grab of no ammo for a weapon held), then the unreachable one at
-(1938, -2254, 2017) three times; without the first it reached the
-fight earlier, and the allies' third breach waited on the axis
-sniper's kills (8234 to 12953) where before it came at 8012. Toggling
-the old list back alone restores master's ticks on mp_rhinevalley
-seeds 1 and 5 (10179, 10039).
-
-VERIFIED (measured, ours, 2026-10-17, release, UO install,
-`scr_bas_basehealth 3000`, the rules above): before this round's
-changes, four bots with shoot off on mp_foy, seeds 3 and 7, planted 97
-and 113 times and defused all but one or two, for 29 minutes. Two bots
-with shoot off, seed 7, ended the round on mp_italy (tick 21579),
-mp_kursk (10579), mp_ponyri (13679) and mp_rhinevalley (10539); nothing
-stalled there. After them, gate
-`four_uo_bots_end_a_bas_round_without_shooting`, seeds 1, 3, 7, 9, 11:
-over at ticks 13919, 11439, 10799, 8979 and 6979, four or five bases
-gone off, up to eight defuses; mp_italy 10639, mp_kursk 7479 (seed 7).
-Seed 5 still never ends: with one base breached a side, each side's
-second bot was called home to defuse before it breached its standing
-target, 67 times. Without the split the same rules failed seed 7 that
-way instead. Nothing a bot that does not shoot can do stops a defuse
-once the defuser reaches the trigger: the hold ends only on release, a
-death, or 155 units (`BaseAssault_bomb_think` 3210), and a body in the
-lookat's line found no free floor on mp_foy's axis charge room, whose
-table runs to about 20 units of where its defender stood.
-`four_shooting_uo_bots_end_a_bas_round` on mp_foy, seeds 1, 3, 5, 7:
-17959, 32759, 12939 and 18839 (seed 3 within two minutes of the gate's
-29), no own-rocket kill; seeds 9 and 11 at 14019 and 14259. Shooting,
-seed 7, on the other maps (`BAS_MAP`): mp_italy 26179 (seed 3, 24439),
-mp_kursk 19999, mp_ponyri 12799, mp_rhinevalley 12419. The two-bot
-gate, seeds 1, 3, 5, 7: 11719, 22138, 10419, 11199. Before the
-futile-enemy rule the shooting seed 7 stood twenty minutes with both
-sides' last bases breached, an LMG bot facing a dry-pistol one; before
-the backing rule seed 5 ran out its 29 minutes on six defuses.
+- Regroup for a planter of the other side's breached last base (mp_kursk,
+  seeds 1 to 11 odd): waiting 600 to 750 off the charge up to 30 s for a
+  teammate farther out (slower; seed 5's planter waited by the axis spawn and
+  died); the same only for a teammate 64 units nearer in 3 s (seed 1 10879 to
+  18979); the same only after a life ending within 1000 of the charge (all 36
+  runs on master's tick). VERIFIED (measured). INFERRED: a plant made at once,
+  before the defender is back, wins more than it loses.
+- Endgame rules, both sides down to one breached base (master 1080e30d, five
+  maps, seeds 1 to 11 odd): the defender stays home (mp_kursk seed 7 never
+  ended, 12 defuses in 29 min); it backs only a ticking charge (mp_kursk seed
+  5 to 26199); a planter waits outside the blast while the other side has two
+  alive and no teammate is near (mp_kursk seed 9 9839 to 23279). VERIFIED
+  (measured).
 
 ## 8. Bot management
 
@@ -1463,20 +1255,21 @@ out.
 
 ### 10.6 Measured
 
-`cargo run --release -p vcod-server --example bot_vehicles [seed...]`
-with `COD_DIR` at a UO install plays one game with `vc_bot_vehicles 0` and
-one with 1 per seed (six shooting bots, `tdm` on mp_cassino, 3 min of game
-time; `MAP=`, `GAMETYPE=`, `BOTS=`, `TICKS=` change that, `ON_ONLY=1`
-skips the games with vehicles off, `VEH_LOG=1` prints the crush and
-rocket lines) and prints the kills, those off a vehicle's guns
-(`*turret*`, `*gunner*`), the `D;` lines off the guns, the crush `D;`
-lines on the driver's own team with their damage and those on the other,
-the rockets fired on foot at vehicles, the vehicles gone, the boardings,
-the bot-ticks seated and the units the driven vehicles went.
-`Server::test_seed_rng` keeps the seed's low bit set (`seed | 1`), so
-seeds 2k and 2k+1 play one game.
+`cargo run --release -p vcod-server --example bot_vehicles [seed...]` with
+`COD_DIR` at a UO install plays one game with `vc_bot_vehicles 0` and one with
+1 per seed (six shooting bots, `tdm` on mp_cassino, 3 min; `MAP=`,
+`GAMETYPE=`, `BOTS=`, `TICKS=` change that, `ON_ONLY=1` skips the vehicles-off
+games, `VEH_LOG=1` prints the crush and rocket lines). It prints kills, kills
+off a vehicle's guns (`*turret*`, `*gunner*`) and their `D;` lines, the crush
+`D;` lines on the driver's own team (with damage) and the other's, rockets
+fired on foot at vehicles, vehicles gone, boardings, bot-ticks seated and
+units driven. `Server::test_seed_rng` keeps the seed's low bit set (`seed |
+1`), so seeds 2k and 2k+1 play one game.
 
-First measurement (2026-10-20, the first vehicle round's code):
+The runs are ours, release, on the stock UO paks.
+
+Vehicles off against on (2026-10-20, the first vehicle round). VERIFIED
+(measured):
 
 | seed | vehicles | kills | off the guns | boardings | bot-ticks seated | units driven |
 |---|---|---|---|---|---|---|
@@ -1489,16 +1282,15 @@ First measurement (2026-10-20, the first vehicle round's code):
 | 7 | off | 39 | 0 | 0 | 0 | 0 |
 | 7 | on | 30 | 12 | 6 | 6925 | 21216 |
 
-With vehicles on, a third of the bots' time is spent seated (21600
-bot-ticks a game) and the tanks' guns score about 40 per cent of the
-kills, but the game has about 30 per cent fewer kills: a tank's driver is
-out of every round's reach (coduo-vehicles.md 13) and a tank is slow to
-lay its gun. The `bas` gates on mp_foy (`tests/bots.rs`) end their rounds
-on their bases with 9 to 18 boardings.
+With vehicles on a third of the bots' time is seated (of 21600 bot-ticks a
+game) and the tanks' guns take about 40 per cent of the kills, but a game has
+about 30 per cent fewer: a tank's driver is out of every round's reach
+(coduo-vehicles.md 13) and a tank is slow to lay its gun. INFERRED. The `bas`
+gates on mp_foy (`tests/bots.rs`) end on their bases with 9 to 18 boardings.
+VERIFIED (measured).
 
-Second (2026-10-21, on master's later bots), vehicles on, the seven
-distinct games of seeds 1 to 12, before and after the crowd rule, the
-lead and the armor fights:
+The crowd rule, the lead and the armor fights (2026-10-21, vehicles on, the
+seven games of seeds 1 to 12). VERIFIED (measured):
 
 | | kills | off the guns | gun hits | team crush hits | their damage | boardings | bot-ticks seated |
 |---|---|---|---|---|---|---|---|
@@ -1506,38 +1298,35 @@ lead and the armor fights:
 | crowd rule only | 159 | 64 | 82 | 17 | 119 | 70 | 43579 |
 | after | 167 | 58 | 71 | 13 | 74 | 67 | 45886 |
 
-The team crush damage falls by three quarters: what is left is mostly
-1-point bumps of a teammate walking into a hull. Kills and gun kills move
-within the spread between runs: the crowd rule alone, which leaves the
-guns as they were, scored 64 gun kills against 73. One seed (4)
-carries a third of the gun kills either way. Leading the gun did not
-score better in any form: over the twelve seeds (seven games) with the
-crowd rule and armor off, the gun kills were 73 aimed at the body, 69 led
-by flight and by the 100 ms the enemy view lags, 50 led by the flight
-alone, 41 with a shell's 400 t² fall (coduo-vehicles.md 13) lifted out of
-the aim too, and 47 with the flight lead aimed 40 under the chest. A
-tank's shell bursts with a 200-unit splash and flies 10000 units/s
-(VERIFIED, `weapons/mp/PanzerIV_turret_mp` in the UO paks:
-`explosionRadius 200`, `projectileSpeed 10000`), so its lead is under 60
-units at 3000; the MG is hitscan (`mg42_turret_mp`, `weaponType bullet`,
-VERIFIED, same paks). vcod keeps the flight lead, which a rocket
-at 2800 units/s on a moving hull needs (a second's flight at 2800 is 200
-units at a jeep's 200 units/s), and leaves the fall and the lag out.
+- Team crush damage falls by three quarters; what is left is mostly 1-point
+  bumps of a teammate walking into a hull. Kills and gun kills move within the
+  run-to-run spread (the crowd rule alone, guns untouched, gave 64 against
+  73), and seed 4 carries a third of the gun kills either way. VERIFIED
+  (measured).
+- No lead scored better. Over the twelve seeds with the crowd rule and armor
+  off, gun kills were 73 aimed at the body, 69 led by flight and the 100 ms
+  enemy view lag, 50 by flight alone, 41 with a shell's 400 t² fall
+  (coduo-vehicles.md 13) also lifted out, 47 with the flight lead aimed 40
+  under the chest. VERIFIED (measured).
+- A tank shell bursts with a 200-unit splash at 10000 units/s, so its lead is
+  under 60 units at 3000; the MG is hitscan. VERIFIED
+  (`weapons/mp/PanzerIV_turret_mp`: `explosionRadius 200`, `projectileSpeed
+  10000`; `mg42_turret_mp`: `weaponType bullet`; UO paks). vcod keeps the
+  flight lead, which a 2800 units/s rocket on a moving hull needs (a second's
+  flight is 200 units at a jeep's 200 units/s), and leaves the fall and the
+  lag out.
+- No bot picks a launcher from the weapon menus, so in `tdm` no rocket goes at
+  a vehicle. On mp_foy `bas` (`MAP=mp_foy GAMETYPE=bas BOTS=8 TICKS=6000`,
+  seeds 1, 2, 4), where bots fetch launchers to breach, two rockets went at
+  enemy vehicles in three games. VERIFIED (measured).
+  `tests/bot_vehicles.rs`'s `a_bot_fires_rockets_at_an_enemy_tank`: a bot with
+  a bazooka behind a tank an enemy bot drives fires 1 s after it is set down,
+  and the tank burns out 11 s on.
 
-No bot picks a launcher from the weapon menus, so in `tdm` no rocket goes
-at a vehicle. On mp_foy's `bas` (`MAP=mp_foy GAMETYPE=bas BOTS=8
-TICKS=6000`, seeds 1, 2, 4), where bots fetch launchers to breach, two
-rockets went at enemy vehicles in three games. `tests/bot_vehicles.rs`'s
-`a_bot_fires_rockets_at_an_enemy_tank` sets a bot with a bazooka behind a
-tank an enemy bot drives: the first rocket goes 1 s after it is set down
-and the tank burns out 11 s on.
-
-Third (2026-10-21), the stuck drivers, seeds 1 to 13 odd (seven games),
-3 min each: the stall read off the speed against the rules in 10.3, the
-example's `stuck_kills` (`Server::test_stuck_kills`) and `stuck_drivers`
-(a driver neither fighting nor waiting for crew whose seat stayed within
-150 units of one spot for 12 s, the `uo_bots_fight_and_sprint_in_tdm`
-rule):
+Stuck drivers (2026-10-21, seeds 1 to 13 odd, 3 min each; `stuck_kills` is
+`Server::test_stuck_kills`, `stuck_drivers` a driver neither fighting nor
+waiting for crew whose seat stayed within 150 units of one spot for 12 s, the
+`uo_bots_fight_and_sprint_in_tdm` rule). VERIFIED (measured):
 
 | | stuck kills | stuck drivers | kills | boardings | bot-ticks seated |
 |---|---|---|---|---|---|
@@ -1545,147 +1334,123 @@ rule):
 | contact, ground-made and turn stalls, 10 s headway | 1 | 1 | 197 | 58 | 27905 |
 | 10.3's rules, on master's later bots | 0 | 2 | 187 | 71 | 31542 |
 
-The middle row's stuck kill is seed 5's Sherman sliding into a wall on
-the slope at (2190, -2278, 40) after both riders got out. Riders give up
-a struggling hull sooner, so fewer bot-ticks are spent seated. The last
-row's two 12 s spells (seeds 9 and 11) are not traced. Each stuck kill
-before killed its riders with the tank as attacker, the stock tdm 815
-error `uo_bots_fight_and_sprint_in_tdm` failed on. That gate plays with
-vehicles on again and passes seeds 1 to 15.
+The middle row's stuck kill is seed 5's Sherman sliding into a wall on the
+slope at (2190, -2278, 40) after both riders got out. Riders give up a
+struggling hull sooner, so fewer bot-ticks are seated. The last row's two 12 s
+spells (seeds 9 and 11) are not traced. Each earlier stuck kill killed its
+riders with the tank as attacker, the stock tdm 815 error
+`uo_bots_fight_and_sprint_in_tdm` failed on; that gate plays with vehicles on
+again. VERIFIED (measured).
 
-Fourth (2026-10-21), that gate over odd seeds, vehicles on and off
-(`vc_bot_vehicles 0`), release, VERIFIED (measured):
+That gate over odd seeds, vehicles on and off (2026-10-21). VERIFIED
+(measured):
 
 | | on, 1 to 49 | off, 1 to 49 | on, 51 to 63 | off, 51 to 63 |
 |---|---|---|---|---|
 | c8c3fd1f | 17, 19, 33, 45 fail | 1, 13, 19, 31, 33 fail | | |
 | f47dafed | 29, 45 fail | none fail | 63 fails | none fail |
 
-Before: 17 the ledge under a jump edge (bot-navigation.md "Jumps"), 19,
-33 and 13 too few sprint legs (bot-navigation.md section 4, "Pre-aim"),
-45 the gunner's wait (10.4), 1 a plan from across a wall
-(bot-navigation.md section 3), 31 a stall the later games no longer
-reach. On the way, 15 and 25 failed on 10.7's lost exit and the stale
-headway anchor (10.3). After: 29 is a bot on mp_cassino's roofs at
-(4850 to 4950, -1290 to -1440, 256 to 303), a chain of 24-unit jump
-edges each waited on for UO's jump penalty, one jump bouncing back off
-the step; seed 45 on c8c3fd1f stalled at the same roofs. 45 is a tank
-driven back and forth over 350 units near (-150, -400) whose ground made
-from the anchor reached 300 on each reversal, then the driver's walk in
-the same spot. 63 is a bot's own frag. Not traced further.
-`uo_tdm_games_that_stalled_or_never_sprinted` replays seeds 43, 17, 13,
-19, 25 and 33 with vehicles and 1 and 31 without.
+- On c8c3fd1f (superseded): 17 a ledge under a jump edge (bot-navigation.md
+  "Jumps"), 13, 19 and 33 too few sprint legs (bot-navigation.md 4,
+  "Pre-aim"), 45 the gunner's wait (10.4), 1 a plan across a wall
+  (bot-navigation.md 3); 15 and 25 failed on the way on 10.7's lost exit and
+  the stale headway anchor (10.3). INFERRED (the traces).
+- On f47dafed: 29 a bot on mp_cassino's roofs (4850 to 4950, -1290 to -1440,
+  256 to 303), a chain of 24-unit jump edges each waited on for UO's jump
+  penalty, one jump bouncing off the step (seed 45 stalled there on c8c3fd1f
+  too). 45 a tank driven back and forth over 350 units near (-150, -400), its
+  ground made from the anchor reaching 300 each reversal, then the driver's
+  walk in the same spot. 63 a bot's own frag. INFERRED (the stall lines); not
+  traced further.
+- `uo_tdm_games_that_stalled_or_never_sprinted` replays seeds 43, 17, 13, 19,
+  25 and 33 with vehicles and 1 and 31 without.
+- Superseded: with `bot-combat.md` 8's sight cone and target choice alone,
+  seeds 1 and 19 pinned bot 0 on the roofs below from its spawn (4938, -1317, 256)
+  for 12 s; with the grenade rules (`bot-combat.md` 6.5) and the noise
+  answering (section 9, `bot-combat.md` 7) seed 1 passes and seed 13 is the
+  game starved of sprint legs (331 bot-ticks on them, 330 sprinted). VERIFIED
+  (measured).
 
-VERIFIED (measured, release, stock UO paks, 2026-10-21): with the sight
-cone and target choice of `bot-combat.md` 8 alone, seeds 1 and 19 pinned
-bot 0 on the same roofs, from its spawn at (4938, -1317, 256): no enemy,
-no hit, keys held at the waypoint (4896, -1384, 280) from (4938 to
-4957, -1405 to -1428) for 12 s. With those beside the grenade rules
-(`bot-combat.md` 6.5) and the noise answering (section 9, `bot-combat.md` 7), seed 1 passes and
-seed 19's game ends on a bot's own frag; seed 13, the other game pre-aim
-starved of sprint legs, takes its place (331 bot-ticks on sprint legs,
-330 sprinted, the fewest of seeds 3, 5, 7, 13, 21 and 23).
+The roofs, traced (`ship_stalls` with `UO=1 MAP=mp_cassino GAMETYPE=tdm
+SHOOT=1 TICKS=1800`, per-tick dumps of the follower, edges from `nav_build`'s
+`NEAR=` with `EDGES=1`). Each fault is a walk the graph proves that the bot's
+own run does not reproduce. VERIFIED (measured, seed 17's bot 3 on 973e0e94):
 
-The roofs, traced. VERIFIED (measured, ours, release, stock UO paks,
-2026-10-21; `ship_stalls` with `UO=1 MAP=mp_cassino GAMETYPE=tdm SHOOT=1
-TICKS=1800` and a temporary per-tick dump of seed 17's bot 3 on 973e0e94,
-the edges from `nav_build`'s `NEAR=` with `EDGES=1`): the 12 s spell holds
-two faults, each a way the graph's walk proves that the bot's own run
-does not reproduce.
+- The jump edge from (4992, -1338, 295) to (4938, -1393, 303) crosses a trench
+  at 256. The graph's walk (`as_a_bot`, with the walks' running start) lands
+  it; from rest on the foot the same walk falls into the trench (both under
+  UO's rules). A bot waiting out UO's jump penalty at rest
+  (`Follower::jump_wait`) set off from rest, dropped in, and jumped at the
+  roof's face 47 over it until the follower planned round (seed 17 on
+  973e0e94, ticks 1544 to 1596). Now a bot held for a jump walks it again from
+  the wait's spot at rest, once per edge (`Follower::rest_jump_fails`), and
+  plans round one that does not land from there; an edge already avoided had
+  no way round and is waited on as before.
+- The dent at (4942 to 4954, -1404 to -1422, 280) stands 23 under the roof
+  round it (box drops on a 6-unit grid), more than a step, and no 48-unit grid
+  point falls in it, so it has no node. The walk from (4938, -1393, 303) to
+  (4991, -1440, 303) crosses its corner, and the bot dropped in (tick 1702).
+  No walk leaves without a jump, so `NavGraph::nearest_walkable` fell back to
+  (4896, -1384, 280), behind the dent's west wall, and the bot pressed at it
+  until the 12 s ran out (ticks 1708 to 1745, at (4938.8, -1410.0, 280.1)).
+  Now, once no plain walk arrives, `NavGraph::walkable_start` tries a bot's
+  walk from rest up to each of the nearest few nodes more than a step over the
+  body, and a plan from one reached with a jump runs that leg as a jump edge
+  (`Follower::jumping`), penalty wait included.
+  `a_uo_bot_in_mp_cassinos_roof_dent_jumps_out` (`tests/bots.rs`) sets a bot
+  in the dent at two spots: on 973e0e94 it held for all 15 s, now it is out of
+  both.
+- In `Follower::follow`, a landing after a tick off the ground and rungs, more
+  than a step under both ends of a level non-jump edge, drops the plan, avoids
+  the edge and plans again from `walkable_start`; every stuck replan and the
+  unstick spell (`Follower::stuck`) start there too. Trap, VERIFIED (measured,
+  seed 25 on 6b2ab6d1): a 23-unit fall into the dent, short of `FELL_BELOW`'s
+  48, replanned from `NavGraph::nearest`, the node behind the wall, which
+  `off_floor` passed as level; the bot pressed it (keys forward 115, between
+  (4938.8, -1410.0) and (4957.1, -1405.5)) until the stuck timeout's replan
+  jumped it out at tick 782. Now it lands at 671 and is out at 676.
 
-- The jump edge from the roof at (4992, -1338, 295) to (4938, -1393, 303)
-  crosses a trench at 256 between the two roofs. The graph's walk (a
-  bot's, `as_a_bot`, with the walks' running start) lands it; the same
-  walk from rest on the foot runs into the trench and falls (both walked
-  under UO's rules). A bot that jumped onto that roof waits out UO's jump
-  penalty at rest on the foot (`Follower::jump_wait`, bot-navigation.md
-  "Jumps"), sets off from rest, drops into the trench and jumps at the
-  roof's face 47 over it until the follower plans round the edge (ticks
-  1544 to 1596). Now a bot held for a jump walks it again from the wait's
-  spot at rest, once per edge (`Follower::rest_jump_fails`), and plans
-  round one that does not land from there; an edge already avoided had no
-  way round and is waited on as before.
-- The dent in the roof at (4942 to 4954, -1404 to -1422, 280): a box set
-  down anywhere in it stands 23 under the roof round it (box drops on a
-  6-unit grid), more than a step, and no point of the 48-unit grid falls
-  in it, so it has no node. The walk from (4938, -1393, 303) to (4991,
-  -1440, 303) crosses its corner; the bot, passing the first node 8 units
-  off it, dropped in (tick 1702). From inside no walk reaches a node
-  without a jump, so `NavGraph::nearest_walkable` fell back to the nearest
-  node, (4896, -1384, 280), behind the dent's west wall, and the bot
-  pressed at it, ran an unstick spell and pressed again until the 12 s ran
-  out (ticks 1708 to 1745, pinned at (4938.8, -1410.0, 280.1)). Now
-  `NavGraph::walkable_start` tries, once no plain walk arrives, a bot's
-  walk from rest up to each of the nearest few nodes more than a step over
-  the body, and a plan from one it reaches with a jump runs that first leg
-  as a jump edge (`Follower::jumping`), its penalty wait included.
-  `tests/bots.rs`'s `a_uo_bot_in_mp_cassinos_roof_dent_jumps_out` sets a
-  bot down in the dent at two spots: on 973e0e94 it held at (4938.8,
-  -1410.0) for all 15 s, now it is out of both.
+After, over seeds 1 to 63 odd. VERIFIED (measured): on 973e0e94 seed 17 was
+the only stall in the roofs' box (4800 to 5000, -1200 to -1500); on 2180b31d
+with both fixes none stalls there, and `uo_bots_fight_and_sprint_in_tdm`
+passes `SEED=17` and seeds 1, 19, 21, 25, 27, 33, 51. With the follower's
+landing rule (6b2ab6d1 against its branch tip) stalled bot-ticks went 5789 to
+5366, the stall at (4957, -1405, 280) and seed 17's on the stair at (1440,
+-710) (bot-navigation.md "Jumps", "A goal that flickers") gone; one new stall
+in the box (seed 13, bot 5 at (4859, -1258, 256)) is `engaged` throughout, a
+fight the gates do not count, and the gate passes `SEED=25` and `SEED=17`.
+Neither fix touches the graph build.
 
-After, VERIFIED (measured, the same detector, seeds 1 to 63 odd): on
-973e0e94 seed 17 was the only stall in the roofs' box (4800 to 5000, -1200
-to -1500); on 2180b31d with both fixes no seed stalls there, and
-`uo_bots_fight_and_sprint_in_tdm` passes `SEED=17` and seeds 1, 19, 21,
-25, 27, 33 and 51. Neither fix touches the graph build. A build with the
-dent's fix alone stalled seed 59 in the same box: a bot turning onto the
-jump edge from (4899, -1296, 256) to (4896, -1337, 280) still carried its
-190 units/s away from the top, which `Bot::think`'s jump cue reads as
-pinned (under 2 units a tick of closing pace), and jumped 17 short of the
-step with no pace on and fell back (INFERRED from the per-tick dump: the
-jump key on the second cmd after the waypoint changed, at 93 then 8
-units/s). A cue that left out a tick whose closing pace still gained moved
-every game and raised the 32 games' stalled bot-ticks from 5917 to 7024,
-two of its stalls in this box (VERIFIED, measured); it was dropped.
+Rejected: a jump cue that skipped a tick whose closing pace still gained. A
+build with the dent's fix alone stalled seed 59 in the box: a bot turning onto
+the jump edge from (4899, -1296, 256) to (4896, -1337, 280) still carried its
+190 units/s away from the top, which `Bot::think`'s cue reads as pinned (under
+2 units a tick of closing pace), and jumped 17 short with no pace on (INFERRED
+from the per-tick dump: the jump key on the second cmd after the waypoint
+changed, at 93 then 8 units/s). The cue moved every game and raised the 32
+games' stalled bot-ticks from 5917 to 7024, two of its stalls in the box, so
+it was dropped. VERIFIED (measured).
 
-Seed 25 on `feat/bot-aim-footwork` (6b2ab6d1), the dent again. VERIFIED
-(measured, ours, release, stock UO paks, `ship_stalls` with a per-tick
-dump of bot 1's follower): the bot ran the level edge from (4938, -1393,
-303) to (4991, -1440, 303), dropped off its side into the dent at tick
-667 and landed at 280. No rule caught it: the fall was 23, short of
-`FELL_BELOW`'s 48, and the next plan, after the follower's stuck timeout,
-started at `NavGraph::nearest`, (4896, -1384, 280). That node is level
-with the dent's floor, so `off_floor` passed it, but it stands behind the
-dent's west wall. The bot pressed at it, ran an unstick spell, pressed
-again (keys forward 115, bouncing between (4938.8, -1410.0) and (4957.1,
--1405.5)), and only the stuck timeout's replan (`fell`) jumped it out, at
-tick 782. Two changes in `Follower::follow`:
-
-- A landing after a tick off the ground and the rungs, more than a step
-  under both ends of a level edge that is not a jump, drops the plan,
-  avoids the edge and plans again from `NavGraph::walkable_start`. On
-  seed 25 the bot lands at tick 671 and is out of the dent at 676.
-- Every stuck replan, not only the one before a plan's first node, and
-  the unstick spell's (`Follower::stuck`), starts from `walkable_start`.
-
-After, VERIFIED (measured, `ship_stalls` with `UO=1 MAP=mp_cassino
-GAMETYPE=tdm SHOOT=1 TICKS=1800`, seeds 1 to 63 odd, 6b2ab6d1 against the
-branch tip): stalled bot-ticks 5789 to 5366, the stall at (4957, -1405,
-280) and seed 17's on the stair at (1440, -710) (bot-navigation.md
-"Jumps", "A goal that flickers") gone. One new stall in the roofs' box
-(seed 13, bot 5 at (4859, -1258, 256)) is `engaged` from its start, a
-fight the gates do not count. `uo_bots_fight_and_sprint_in_tdm` passes
-`SEED=25` and `SEED=17` on the branch.
-
-Rockets by the muzzle (2026-10-21). INFERRED (reported on another
-branch's draws for `four_shooting_uo_bots_end_a_bas_round`, mp_foy seed 7,
-not reproduced here): a bot died of its own panzerschreck fired from
+Rockets by the muzzle (2026-10-21). INFERRED (reported on another branch's
+draws for `four_shooting_uo_bots_end_a_bas_round`, mp_foy seed 7, not
+reproduced here): a bot died of its own panzerschreck fired from
 `Bot::think_armor` at an enemy vehicle about 1300 off. `Server::armor_view`
-checked a clear line from the eye to the hull's middle and a teammate
-across it, but the rocket leaves the muzzle along the view, led, and
-spread from the hip. VERIFIED (`weapons/mp/panzerschreck_mp`,
-`bazooka_mp` and `panzerfaust_mp` in `pakuo04.pk3`): `explosionRadius 256`
-on all three, `hipSpreadStandMin` 7 and `hipSpreadMax` 12 for the first
-two, 5.5 and 7 for the panzerfaust. `ArmorView::muzzle_clear` now traces
-the view and eight rays round the cone at the spread the next shot takes
-(`combat::hip_spread_now`) out to the splash and `ROCKET_CLEAR_MARGIN`
-(32), against the world, the script models and the hulls (`cone_clear`,
-the breach stand's sighted check made general); with it shut no rocket
-goes and the keys keep the walk. The bots' other rocket paths: a breach
-(`Bot::breach`) fires sighted only from stands whose cone is clear to
-`BREACH_CLEAR` (320) (`breach_aim`), `Bot::trigger` fires no launcher at a
-player, and 1.1's and 1.5's panzerfaust has no bot path that fires it (no
-vehicles, no `bas`).
+checked a clear line from the eye to the hull's middle and a teammate across
+it, but the rocket leaves the muzzle along the view, led, and spread from the
+hip.
+
+- VERIFIED (`weapons/mp/panzerschreck_mp`, `bazooka_mp`, `panzerfaust_mp` in
+  `pakuo04.pk3`): `explosionRadius 256` on all three; `hipSpreadStandMin` 7
+  and `hipSpreadMax` 12 for the first two, 5.5 and 7 for the panzerfaust.
+- `ArmorView::muzzle_clear` traces the view and eight rays round the cone at
+  the next shot's spread (`combat::hip_spread_now`) out to the splash plus
+  `ROCKET_CLEAR_MARGIN` (32), against the world, script models and hulls
+  (`cone_clear`, the breach stand's sighted check made general). With it shut
+  no rocket goes and the keys keep the walk.
+- The other rocket paths: a breach (`Bot::breach`) fires sighted only from
+  stands whose cone is clear to `BREACH_CLEAR` (320) (`breach_aim`);
+  `Bot::trigger` fires no launcher at a player; 1.1's and 1.5's panzerfaust
+  has no bot path that fires it (no vehicles, no `bas`).
 
 ### 10.7 Two exits on one frame
 
@@ -1780,356 +1545,245 @@ plant and the defuse with two bots that do not shoot.
 
 ### 11.4 The stall census over six seeds, 2026-10-27
 
-The census of 12.12 on CoD2: `bot_match` (`GAME=cod2`, six shooting
-bots, `TICKS=6000`, `STALLS=1`, default limits) on the 15 stock maps
-under `dm`, `tdm`, `sd`, `ctf` and `hq`, seeds 1 to 6, 450 matches a
-setting. `bot_match` now counts a bot the script froze (`pm_flags`
-0x8000) as held, as CoD4's does, and prints a stalled bot-tick's spot
-with `STALLS=1`. Before, the three fixes below, all on CoD2's side of
-the bots. VERIFIED (the runs):
+The census of 12.12 on CoD2: `bot_match` (`GAME=cod2`, six shooting bots,
+`TICKS=6000`, `STALLS=1`, default limits) on the 15 stock maps under `dm`,
+`tdm`, `sd`, `ctf` and `hq`, seeds 1 to 6, 450 matches a setting. `bot_match`
+counts a bot the script froze (`pm_flags` 0x8000) as held, as CoD4's does, and
+with `STALLS=1` prints a stalled bot-tick's spot. Each stall spot in 11.4 to
+11.8 was read off a per-tick trace of the bot's body, cmd and follower, and
+each reading carries its label.
 
-| seed | kills | stalled bot-ticks |
-|---|---|---|
-| 1 | 3260 → 3254 | 1728 → 790 |
-| 2 | 3100 → 3187 | 5972 → 718 |
-| 3 | 3149 → 3155 | 2830 → 797 |
-| 4 | 3178 → 3234 | 3536 → 732 |
-| 5 | 3199 → 3229 | 1449 → 236 |
-| 6 | 3142 → 3161 | 4328 → 1042 |
-| all | 19028 → 19220 | 19843 → 4315 |
+Noise: one setting's kills move by 50 a seed (standard deviation over the six
+seeds), the per-seed difference between two settings by 31. VERIFIED (the
+runs).
+
+Current numbers, after 11.8. VERIFIED (the runs):
 
 | gametype | kills | stalled bot-ticks |
 |---|---|---|
-| dm | 5582 → 5604 | 1607 → 5 |
-| tdm | 4880 → 4929 | 2776 → 2432 |
-| sd | 1934 → 1963 | 5287 → 480 |
-| ctf | 3257 → 3315 | 2628 → 560 |
-| hq | 3375 → 3409 | 7545 → 838 |
+| dm | 5572 | 213 |
+| tdm | 5046 | 72 |
+| sd | 1989 | 0 |
+| ctf | 3252 | 318 |
+| hq | 3472 | 216 |
+| all | 19331 | 819 |
 
-One setting's kills move by 50 a seed (standard deviation over the six
-seeds before), the per-seed difference by 31; kills are 1.0% up, stalls
-78% down, and no match is without a kill. Each stall spot below was read
-off a per-tick trace of the bot's body, cmd and follower. INFERRED (the
-traces), unless labelled.
+Totals by round, each VERIFIED (the runs): before 11.4, 19028 kills and 19843
+stalled bot-ticks; after 11.4, 19220 and 4315; 11.5, 19340 and 1856; 11.6,
+19389 and 1786; 11.7, 19242 and 1639; 11.8, 19331 and 819. No match is without
+a kill.
+
+The fixes of this section, all on CoD2's side of the bots:
 
 - A mantle onto a ledge too low to stand on. CoD2's pmove raises
-  `EV_STANCE_FORCE_CROUCH` through the climb (cod2-movement.md 9), and
-  the client holds crouch after it; the bots did not. On mp_breakout an
-  `sd` bot mantled twice from (5843, 4944, 12) and ended the second climb
-  standing at (5809, 4944, 96), off the ground, with no velocity, for the
-  rest of the round (2600 stalled bot-ticks, seed 2). mp_dawnville's
-  (1810, -16280, 62), a bot as still in the air, is likely the same. A bot now holds crouch after the event
-  and stands once a standing box fits on the ground
-  (`Cod2Bots::forced_crouch`); the breakout bot crouches, drops to 68
-  and runs on.
-- A ladder whose rungs let go only past their top. CoD2's ladder takes
-  no flat move into the face (cod2-movement.md 11), so a climber leaves
-  the rungs only above them. mp_matmata's ladder at (5025, 6749) rises to
-  a roof at 169; the graph, proved under 1.5's rules, steps off onto the
-  floor at 130, 77 across. Once level with that floor the brain backed
-  down (`Bot::steer`: a waypoint below on the rungs is backed onto unless
-  it lies within half a body across the face), and the bot went up and
-  down between 45 and 138 (1590 stalled bot-ticks in `dm`, more in the
-  other gametypes). A CoD2 view (`BotView::tops_out`) now climbs on to any
-  head across the face; the bot tops out on the roof and drops to the
-  floor. CoD1, UO and CoD4 keep the half-body rule.
-- Mantle edges that land past the follower's off-path reach. On
-  mp_brecourt the mantle from (-528, -816, 1) lands at (-340, -813, 0),
-  192 across; the follower cleared the path at its foot every tick, and
-  a bot heading east paced it for a minute at a time (1942 stalled
-  bot-ticks in `hq`, more in `ctf`, `tdm` and `sd`). CoD4 follows such an
-  edge (12.4, `BotWorld::LONG_MANTLES`); CoD2's stayed off when
-  bot-combat.md 17.1 found it grew mp_toujane's roof stall. On this code
-  it does not: mp_toujane `hq` (1200, 1900, 70), 3017 stalled bot-ticks
-  before, reads 22 with the first two fixes and 45 with all three. It is
-  on for CoD2.
+  `EV_STANCE_FORCE_CROUCH` through the climb (cod2-movement.md 9) and the
+  client holds crouch after it. A bot now does too, standing once a standing
+  box fits on the ground (`Cod2Bots::forced_crouch`). Before, an mp_breakout
+  `sd` bot mantled from (5843, 4944, 12) and ended standing at (5809, 4944,
+  96), off the ground with no velocity, for the round (2600 stalled bot-ticks,
+  seed 2); now it crouches, drops to 68 and runs on. mp_dawnville's (1810,
+  -16280, 62), a bot as still in the air, is likely the same. INFERRED (the
+  traces).
+- A ladder whose rungs let go only past their top. CoD2's ladder takes no flat
+  move into the face (cod2-movement.md 11), so a climber leaves the rungs only
+  above them. A CoD2 view (`BotView::tops_out`) climbs on to any head across
+  the face; CoD1, UO and CoD4 keep the half-body rule (`Bot::steer` backs onto
+  a waypoint below on the rungs unless it lies within half a body across).
+  Before, on mp_matmata's ladder at (5025, 6749), rising to a roof at 169 with
+  the graph (proved under 1.5's rules) stepping off to the floor at 130, 77
+  across, the bot went up and down between 45 and 138 (1590 stalled bot-ticks
+  in `dm`, more elsewhere). INFERRED (the traces).
+- Mantle edges landing past the follower's off-path reach.
+  `BotWorld::LONG_MANTLES` is on for CoD2, as for CoD4 (12.4). Before,
+  mp_brecourt's mantle from (-528, -816, 1) to (-340, -813, 0), 192 across,
+  had the follower clear the path at its foot every tick (1942 stalled
+  bot-ticks in `hq`, more in `ctf`, `tdm`, `sd`). INFERRED (the traces).
+  bot-combat.md 17.1 had kept it off because it grew mp_toujane's roof stall;
+  on this code mp_toujane `hq` (1200, 1900, 70) reads 45 with it, 3017 before.
+  The first two fixes alone gave 19204 kills and 10847 stalled bot-ticks,
+  mp_brecourt and mp_decoy `hq` at 2195 and 2020, and one mp_harbor `tdm` seed
+  rose from 31 to 1100 at (-6857, -7359, 37). VERIFIED (the runs).
 
-The first two fixes alone (without the third): 19204 kills, 10847
-stalled bot-ticks; mp_brecourt and mp_decoy `hq` stayed at 2195 and
-2020, and one seed of mp_harbor `tdm` rose from 31 to 1100 at (-6857,
--7359, 37), gone with the third. VERIFIED (the runs).
-
-Left, as read off the stall lines: mp_decoy `tdm` (1629), two teammates
-holding each other at (8650, -12570, -531), 30 units apart (CoD2's
-route neither yielded nor parted teammates, `BotWorld::YIELDS` and
-`PARTS_MATES`; 11.5 parts them); and lumps under 300 bot-ticks a spot on
-mp_brecourt, mp_trainstation, mp_toujane and mp_breakout. No nav graph
-changes: the fixes are in the brain and the follower's driver, and
-`nav_build` digests stand. INFERRED (no build code touched).
+No nav graph code changed in 11.4 to 11.7, so the `nav_build` digests stand:
+the fixes are in the brain and the follower's driver. INFERRED (the diffs).
 
 ### 11.5 Teammates parted, 2026-10-28
 
-The stall 11.4 left on mp_decoy `tdm` is two bots of one side at
-(8600 to 8690, -12540 to -12590, -530), 30 units apart: one stops at a
-jump edge's foot (node 9194, jump to 8202 at (8607, -12583, -492)) and
-waits there, the other runs its path through him, and the two swap the
-foot back and forth, seed 6 for most of the match's last fifth (788
-stalled bot-ticks), seed 1 for 527. INFERRED (a per-tick trace of the
-follower and the stall lines' nearest teammate).
+CoD4's rules for a still teammate in the way (12.7, `BotWorld::PARTS_MATES`:
+`mates_in_way` plans round him, `give_way` steps him aside) are on for CoD2;
+`YIELDS` stays off. The stall it fixed: on mp_decoy `tdm` two bots of one side
+at (8600 to 8690, -12540 to -12590, -530), 30 units apart, one waiting at a
+jump edge's foot (node 9194, jump to 8202 at (8607, -12583, -492)), the other
+running through him, the two swapping the foot (seed 6 788 stalled bot-ticks,
+seed 1 527). INFERRED (the traces).
 
-CoD4's two rules for a still teammate in the way (12.7,
-`BotWorld::PARTS_MATES`: `mates_in_way` plans round him, `give_way`
-steps him aside) are now on for CoD2, `YIELDS` still off. Same census
-as 11.4 (450 matches a setting), before is 11.4's after; a second arm
-turned `YIELDS` on as well. VERIFIED (the runs):
+Before is 11.4's after. VERIFIED (the runs):
 
-| gametype | kills | stalled bot-ticks | kills, both on | stalled, both on |
-|---|---|---|---|---|
-| dm | 5604 → 5604 | 5 → 5 | 5602 | 5 |
-| tdm | 4929 → 5001 | 2432 → 945 | 5007 | 1651 |
-| sd | 1963 → 1982 | 480 → 15 | 1942 | 48 |
-| ctf | 3315 → 3313 | 560 → 238 | 3277 | 295 |
-| hq | 3409 → 3440 | 838 → 653 | 3362 | 2175 |
-| all | 19220 → 19340 | 4315 → 1856 | 19190 | 4174 |
+- Stalls 4315 → 1856, kills 19220 → 19340; per-seed kill difference (28, 51,
+  23, 19, -3, 2) inside the noise. `dm` has no teammates and its lines are
+  byte-identical.
+- Down: mp_decoy `tdm` 1629 → 254, mp_decoy `hq` 441 → 0, mp_breakout `ctf`
+  338 → 0, mp_brecourt `sd` 286 → 0, mp_toujane `tdm` 219 → 0, mp_trainstation
+  `sd` 194 → 0.
+- `YIELDS` on as well gave back most of the gain (all 4174, `hq` 2175), as
+  bot-combat.md 15 found.
 
-- `dm` has no teammates and its lines are byte-identical. Over all
-  gametypes stalls are 57% down and kills 0.6% up; the per-seed kill
-  difference (28, 51, 23, 19, -3, 2) is inside 11.4's per-seed noise
-  of 31 to 50. VERIFIED (the runs).
-- mp_decoy `tdm` 1629 → 254, mp_decoy `hq` 441 → 0, mp_breakout `ctf`
-  338 → 0, mp_brecourt `sd` 286 → 0, mp_toujane `tdm` 219 → 0,
-  mp_trainstation `sd` 194 → 0. VERIFIED (the runs).
-- New or grown: mp_trainstation `hq` 221 → 442 (round (7650, -3460,
-  12), a teammate 40 to 130 off), mp_leningrad `ctf` 0 → 152,
-  mp_farmhouse `tdm` 0 → 98, mp_breakout `hq` 0 → 91. Left as read off
-  the stall lines, with mp_brecourt `tdm` (560, unchanged) and mp_burgundy
-  `hq` (120, unchanged). INFERRED (the stall lines).
-- `YIELDS` on as well gives back most of the gain (hq 2175), as
-  bot-combat.md 15 found; it stays off.
-
-No nav graph code changed, so the `nav_build` digests stand, and the
-shared driver is untouched: CoD1, UO and CoD4 run as before. INFERRED
-(the diff is CoD2's `BotWorld` consts).
+New or grown, mp_trainstation `hq` 221 → 442, mp_leningrad `ctf` 0 → 152,
+mp_farmhouse `tdm` 0 → 98, mp_breakout `hq` 0 → 91, went to 11.6. INFERRED
+(the stall lines). The diff is CoD2's `BotWorld` consts; CoD1, UO and CoD4 run
+as before.
 
 ### 11.6 The radio's stand, a bot hung on a teammate, 2026-10-28
 
-The four spots 11.5 left new or grown, each read off a per-tick trace
-of the follower and the stall lines. INFERRED (the traces), unless
-labelled.
+- The radio's capture. CoD2's is a 3D distance within `radio.radius` and a z
+  difference within `level.zradioradius` (72); United Offensive's height is 50.
+  VERIFIED (`hq.gsc` 214, 226, 1255, iw_15.iwd:
+  `distance(players[i].origin, radio.origin) <= radio.radius`, the z
+  difference `<= level.zradioradius`).
+- A CoD2 radio carries `HqRadioView::height` 72 and a stand,
+  `NavGraph::radio_stand`: the node of `zone_stand`'s component nearest the
+  radio within 88 across and 56 up or down (`zone_stand` split into
+  `stand_where`, its pick unchanged). The brain counts a bot inside 104 across
+  and 56 up or down, which retail's check holds (118 at most). United
+  Offensive keeps 50 and the radio's own point. Before, mp_trainstation's
+  first radio at (7680.83, -3602.28, 18) (`maps/mp/mp_trainstation.gsc` 23),
+  50 over the floor at -32, drew bots to its nearest node 6479 on a platform
+  at (7577, -3549, 10), 116 across, where they paced 100 to 130 off it for
+  minutes (442, seeds 1 to 3); now the stand is on the floor
+  (`bots::cod2::tests::a_cod2_radio_stand_is_inside_the_capture`). INFERRED
+  (the traces).
+- A bot hung on a teammate. With CoD2's `BotWorld::PARTS_MATES_ALOFT`, a body
+  off the ground and off a ladder beside a still teammate counts as held up;
+  off for CoD1, UO and CoD4. Before, on mp_leningrad `ctf` (152, seed 1) an
+  allied carrier waited in his capture zone at (-569, -626, 18), a teammate
+  hung on the step below at (-598, -617, 14) with his capsule on the
+  carrier's, off the ground nearly every tick, so `mates_in_way` (which asks
+  the held-up bot to stand) never counted him, and a third queued behind; now
+  he plans round and the carrier gives way. INFERRED (the traces).
+- Not fixed: a bot pressing a mantle edge it never climbs until the follower
+  goes round, mp_farmhouse `tdm` (98, seeds 4 and 5; 6541 → 6843 from (-2304,
+  294, -29) to (-2208, 285, -26)) and mp_breakout `hq` (91, seed 5; from
+  (5799, 4930, 40) down to (5856 to 5888, 4930, 10)). No teammate in either.
+  INFERRED (the traces). 11.8 has where it went.
 
-- mp_trainstation `hq` (442, seeds 1 to 3, before 11.5 too). The first
-  radio stands at (7680.83, -3602.28, 18) (`maps/mp/mp_trainstation.gsc`
-  23), 50 over the floor at -32 beside it. A bot taking it walked at the
-  radio's point: the graph's nearest node to it is node 6479 on a
-  platform at (7577, -3549, 10), 116 across, and from there the bot paced
-  the platform at 100 to 130 off the radio for minutes and never counted
-  as at it. The brain also read the capture with United Offensive's
-  height, 50 up or down; CoD2's is 72 (11.1) and its reach is a distance
-  in three dimensions: VERIFIED (`hq.gsc` 214, 226, 1255, iw_15.iwd:
-  `distance(players[i].origin, radio.origin) <= radio.radius` and the z
-  difference `<= level.zradioradius`). A CoD2 radio now carries
-  `HqRadioView::height` 72 and a stand, `NavGraph::radio_stand`: the
-  node of `zone_stand`'s component nearest the radio within 88 across
-  and 56 up or down. The brain counts a bot inside 104 across and 56 up
-  or down, which retail's check holds (118 at most). On mp_trainstation
-  the stand is on the floor at -32, which the platform node fails
-  (`bots::cod2::tests::a_cod2_radio_stand_is_inside_the_capture`).
-  United Offensive keeps 50 and the radio's own point.
-- mp_leningrad `ctf` (152, seed 1). An allies carrier stood in his capture
-  zone at (-569, -626, 18), waiting for his own flag; a teammate heading
-  out hung at the step below him at (-598, -617, 14), his capsule on the
-  carrier's: off the ground nearly every tick, so `mates_in_way`, which
-  asks a held-up bot to stand on the ground, never counted him held, and
-  a third queued behind both. With CoD2's `BotWorld::PARTS_MATES_ALOFT`
-  a body off the ground and off a ladder beside a still teammate counts
-  as held up; he plans round, the carrier gives way and both run on
-  (152 → 0). Off for CoD1, UO and CoD4.
-- mp_farmhouse `tdm` (98, seeds 4 and 5) and mp_breakout `hq` (91, seed
-  5): a bot pressing a mantle edge it never climbs, mp_farmhouse's 6541 →
-  6843 from (-2304, 294, -29) to (-2208, 285, -26) and mp_breakout's from
-  (5799, 4930, 40) down to (5856 to 5888, 4930, 10), until the follower
-  goes round. No teammate in either; 11.5 only sent a bot that way. Not
-  fixed: the mantle edges are the build's.
+Before is 11.5's after. VERIFIED (the runs):
 
-Same census as 11.4 (450 matches a setting), before is 11.5's after
-(this branch's base). VERIFIED (the runs):
-
-| gametype | kills | stalled bot-ticks |
-|---|---|---|
-| dm | 5604 → 5604 | 5 → 5 |
-| tdm | 5001 → 5012 | 945 → 727 |
-| sd | 1982 → 1982 | 15 → 15 |
-| ctf | 3313 → 3312 | 238 → 92 |
-| hq | 3440 → 3479 | 653 → 947 |
-| all | 19340 → 19389 | 1856 → 1786 |
-
-- The per-seed kill difference is -8, -6, 33, -6, 14, 22, inside 11.4's
-  per-seed noise. `dm` and `sd` are byte-identical (no radio, and no
-  carrier to hang on). VERIFIED (the runs).
-- Down: mp_trainstation `hq` 442 → 0, mp_leningrad `ctf` 152 → 0,
-  mp_burgundy `hq` 120 → 0, mp_breakout `hq` 91 → 10, mp_decoy `tdm`
-  254 → 36, mp_toujane `ctf` 30 → 0. VERIFIED (the runs).
-- New: mp_brecourt `hq` 0 → 419 (one bot, seed 1, at (-1444, -568, 28),
-  no teammate within 1400), mp_decoy `hq` 0 → 364 (seeds 1, 5 and 6 at
-  (8650, -12570, -530), off the ground: 11.5's jump edge foot, alone),
-  mp_toujane `hq` 0 → 154 (seed 4 at (1540, 922, 71)), mp_trainstation
-  `ctf` 47 → 83. None lies within 300 of a radio: every `hq` bot now
-  walks to another point, and the matches run other routes. Left, with
-  mp_brecourt `tdm` (560) and mp_farmhouse `tdm` (98). INFERRED (the
-  stall lines against the maps' radios).
-
-No nav graph code changed (`zone_stand` was split into `stand_where`
-with its pick unchanged), so the `nav_build` digests stand; the shared
-driver runs as before for CoD1, UO and CoD4 (UO's radio height and
-point as before, `PARTS_MATES_ALOFT` off). INFERRED (the diff).
+- Stalls 1856 → 1786, kills 19340 → 19389; per-seed kill difference -8, -6,
+  33, -6, 14, 22. `dm` and `sd` byte-identical.
+- Down: mp_trainstation `hq` 442 → 0, mp_leningrad `ctf` 152 → 0, mp_burgundy
+  `hq` 120 → 0, mp_breakout `hq` 91 → 10, mp_decoy `tdm` 254 → 36, mp_toujane
+  `ctf` 30 → 0.
+- New: mp_brecourt `hq` 0 → 419 (seed 1, (-1444, -568, 28), no teammate within
+  1400), mp_decoy `hq` 0 → 364 (seeds 1, 5, 6 at (8650, -12570, -530), off the
+  ground, alone at 11.5's jump foot), mp_toujane `hq` 0 → 154 (seed 4, (1540,
+  922, 71)), mp_trainstation `ctf` 47 → 83. None within 300 of a radio: the
+  `hq` bots walk to other points and the matches run other routes. INFERRED
+  (the stall lines against the radios).
 
 ### 11.7 A jump edge's top read off the path, the climbs 1.5 proved, 2026-10-29
 
-The spots 11.6 left, each read off a per-tick trace of the follower
-(waypoint, edge kind, `stop`) and, at the mantle, of the cmd and the
-playerstate's mantle flags. INFERRED (the traces), unless labelled.
+- A jump edge at the edge of reach. With CoD2's `BotWorld::FOOT_SLACK` a
+  waypoint up to `REACH` (24) past the build's off-path reach
+  (`OFF_PATH_STEPS` grid steps, 4 times 48, 192;
+  `NavGraph::drop_out_of_reach`) stays on the path (`Follower::foot_slack`);
+  off for CoD1, UO and CoD4. Before, mp_brecourt's jump edge from (-1440,
+  -570, 28) to (-1250, -576, 21), 190.4 across, put a body passing 3 short of
+  the foot 193 off the top; the follower cleared the path every tick and held
+  the bot for the rest of the match (`hq` 419, `tdm` 560). INFERRED (the
+  traces).
+- mp_decoy's pit (8650, -12570, -530), 35 to 55 under the ledges round it,
+  left only by edges 30 to 39 up: 11.7 read it as CoD2's jump cap (the
+  airborne step capped by `Jump_GetStepHeight` 0x80dc73a, a step over the top
+  reverted by `Jump_IsPlayerAboveMax` 0x80dc7c8, cod2-movement.md 6). INFERRED
+  (the traces), and wrong: 11.8 found the edges were leaps. mp_toujane `hq`
+  (1552, 922, 72), a bot hanging on a lip under a node 18 up, went to 11.8.
+  INFERRED (the traces).
+- mp_farmhouse `tdm` (-2275, 300, -29): the bot on mantle edge 6541 → 6843 is
+  pinned at x -2275.1, view yaw -8 to -18, and never gets the hint (mantle
+  flags 0x5, no 0x8); `mantle_walk` over the bare world there climbs at yaw
+  -13 and -20, not -8 or 0. INFERRED (the traces). 11.8 has the cause.
+- Rejected: walking every jump edge and every edge rising more than 12 again
+  under CoD2's pmove (`Cod2Walk`) after the build, dropping the ones no aim
+  lands (75 to 128 a map). The traced spots went to 0 to 46, but mp_decoy
+  `tdm` 36 → 683, mp_railyard `ctf` 0 → 322, mp_toujane `ctf` 0 → 303, and
+  every graph changed, `dm`'s too; with the slack, 19344 kills and 1793
+  stalled bot-ticks. VERIFIED (the runs).
 
-- mp_brecourt `hq` (419) and `tdm` (560): the jump edge from (-1440,
-  -570, 28) to (-1250, -576, 21) is 190.4 across, inside the build's
-  reach of `OFF_PATH_STEPS` grid steps (4 times 48, 192;
-  `NavGraph::drop_out_of_reach`). A body passing the foot from 3 short
-  of it is 193 off the top, and the follower read that as knocked off
-  the path, cleared it every tick and held the bot on its rest point
-  for the rest of the match. With CoD2's `BotWorld::FOOT_SLACK` a
-  waypoint up to `REACH` (24) past that reach stays on the path
-  (`Follower::foot_slack`); the bot jumps it. Off for CoD1, UO and
-  CoD4.
-- mp_decoy `hq` and `tdm` (8650, -12570, -530): a pit 35 to 55 under the
-  ledges round it, left only by jump edges 30 to 39 up, proved under
-  `GRAPH_RULES`. The bot jumps one, falls back short, plans the next,
-  and paces the pit. CoD2's jump never climbs past its 39 (the airborne
-  step capped by `Jump_GetStepHeight` 0x80dc73a, a step over the top
-  reverted by `Jump_IsPlayerAboveMax` 0x80dc7c8, cod2-movement.md 6),
-  so a jump 1.5's walk landed can fall short under CoD2's. mp_toujane
-  `hq` (1552, 922, 72) is alike: the bot hangs in the air on a lip
-  under a node 18 up that the walk proved.
-- mp_farmhouse `tdm` (-2275, 300, -29): a bot on the mantle edge 6541 →
-  6843 is pinned on the wall at x -2275.1 with view yaw -8 to -18 and
-  never gets the hint (mantle flags 0x5, no 0x8). `mantle_walk` over the
-  bare world from that spot climbs at yaw -13 and -20 and not at -8 or
-  0, and from the node at -8 to -20. So the live step there sees
-  something the bare world does not, or the yaw window is that
-  narrow. Not fixed.
+The slack alone, before is 11.6's after, reproduced to the tick. VERIFIED (the
+runs):
 
-The climbs were also walked again under CoD2's own pmove (`Cod2Walk`)
-after the build: every jump edge and every edge rising more than 12,
-dropped where no aim lands (75 to 128 edges a map). On mp_decoy's,
-mp_toujane's and mp_farmhouse's traced seeds their stalls went to 0 to
-46, but over the census the lumps moved: mp_decoy `tdm` 36 → 683,
-mp_railyard `ctf` 0 → 322, mp_toujane `ctf` 0 → 303. Every CoD2 graph
-changes, so `dm` moved as well. The two together came to 19344 kills
-and 1793 stalled bot-ticks. The re-proof is out. VERIFIED (the runs).
-
-Same census as 11.4 (450 matches a setting); before is this branch's
-base, which reproduces 11.6's after to the tick (19389, 1786). The slack
-alone. VERIFIED (the runs):
-
-| gametype | kills | stalled bot-ticks |
-|---|---|---|
-| dm | 5604 → 5577 | 5 → 86 |
-| tdm | 5012 → 4964 | 727 → 453 |
-| sd | 1982 → 1996 | 15 → 0 |
-| ctf | 3312 → 3265 | 92 → 357 |
-| hq | 3479 → 3440 | 947 → 743 |
-| all | 19389 → 19242 | 1786 → 1639 |
-
-- Per-seed kill difference -83, -40, -34, 14, -34, 30: inside 11.4's
-  per-seed noise of 31 to 50 but for seed 1. VERIFIED (the runs).
-- Down: mp_brecourt `tdm` 560 → 0 and `hq` 419 → 0, mp_trainstation
-  `ctf` 83 → 0, mp_farmhouse `tdm` 98 → 55, mp_harbor `tdm` 33 → 0.
-  VERIFIED (the runs).
-- Up: mp_decoy `hq` 364 → 535 and `tdm` 36 → 371 (the pit above),
-  mp_toujane `ctf` 0 → 303 (seed 1 at (50, 910, -14), in both arms),
-  `hq` 154 → 185 (the lip), mp_trainstation `dm` 0 → 66. The slack
-  changes every route a bot takes, `dm`'s too. INFERRED (the stall
-  lines).
-
-No nav graph code changed, so the `nav_build` digests stand; the slack
-is off for CoD1, UO and CoD4. INFERRED (the diff).
+- Stalls 1786 → 1639, kills 19389 → 19242; per-seed kill difference -83, -40,
+  -34, 14, -34, 30, inside the noise but for seed 1.
+- Down: mp_brecourt `tdm` 560 → 0 and `hq` 419 → 0, mp_trainstation `ctf` 83 →
+  0, mp_farmhouse `tdm` 98 → 55, mp_harbor `tdm` 33 → 0.
+- Up: mp_decoy `hq` 364 → 535 and `tdm` 36 → 371 (the pit), mp_toujane `ctf` 0
+  → 303 (seed 1 at (50, 910, -14), both arms), `hq` 154 → 185 (the lip),
+  mp_trainstation `dm` 0 → 66. The slack changes every route, `dm`'s too.
+  INFERRED (the stall lines).
 
 ### 11.8 The pit's leaps, the climbs' re-walk, the mantle strip, 2026-10-29
 
-The two spots 11.7 left, read off per-tick traces of the follower and
-of the cmd and playerstate (`BTRACE` patches, not committed), and off
-CoD2 pmove walks over the bare level world. INFERRED (the traces),
-unless labelled.
+- A CoD2 graph is built without the lip (`bots::cod2::LIP`, as
+  `bots::cod4::LIP`): leaps are cleared before `NavGraph::reprove_jumps` walks
+  each again as a plain jump edge, edges past the follower's reach are
+  dropped, and the mantle probe runs again off the floors the last mantles
+  reached (`NavGraph::build_opts`). Every map loses its leaps (mp_decoy 162,
+  mp_burgundy 346), gains 0 to 120 mantle edges (mp_farmhouse 785 → 905) and
+  keeps every spawn in its component (`nav_build GAME=cod2`, `GAMETYPE=tdm`).
+  VERIFIED (the builds). CoD1, 1.5 and UO build with the lip, so their
+  `nav_build` digests stand.
+- Why: the edges out of mp_decoy's pit (6408 → 9194, 6407 → 9193, 6407 → 9459
+  on seed 2) were leaps (`NavGraph::link_leaps`), and the bot never pressed
+  jump on one (buttons 0 all run at the ledge), falling back off the face.
+  INFERRED (the traces). A bot jumps a leap only when `BotView::lip` says the
+  lip is ahead, filled only on a route with pmove probes; CoD2's has
+  `BotWorld::PMOVE_PROBES` off, so a CoD2 bot never jumps a leap (as 12.14
+  found for CoD4).
+- Why 11.7's re-walk moved the stalls: it walked each leap again as a leap
+  (`Gait::Leap`), which lands, so the leaps stayed (built with the lip,
+  mp_decoy `hq` 535 → 78 but `tdm` 371 → 683); and it walked only the climbs,
+  pushing routes onto edges proved under 1.5's rules alone. On mp_railyard
+  `tdm` and `ctf` (seed 6, 0 → 397 and 322) a bot paced (-1150, -462, 20): a
+  CoD2 body run west from (-1120, -450, 14.5) along the plain edges to (-1216,
+  -479, -9) stops at x -1150.9 on the level's collision, where 1.5's walk went
+  on. VERIFIED (measured, ours, `vcod_cod2::pmove::player_step` over the bare
+  world).
+- Rejected, the graph stays proved under 1.5's rules: the climbs' re-walk
+  without the lip (819 → 1585 stalls over the census), and the whole build
+  under CoD2's step (`Cod2Walk` as the build's `WalkStep`: 1891,
+  mp_trainstation `tdm` and `dm` 579 and 466). VERIFIED (the runs).
+- mp_farmhouse's mantle strip (-2275, 300, -29), edge 6541 → 6843: no script
+  brush or entity stands there (the bare world from the live playerstate gives
+  the same flags, 0x5), and it is not the yaw. A step from rest at x -2275.1
+  gets the hint only on y 262 to 286 of that wall, at every yaw from -40 to 40.
+  The probe climbed at yaw -45 (`link_mantles` tries eight compass ways)
+  from the foot (-2304, 294), sliding along the wall into that strip; a bot
+  runs at the top (-2208, 285), meets the wall at y 307, slides south under 30
+  units/s, slower as it turns square, and gives up at y 290, 4 short. VERIFIED
+  (measured, ours).
+- Rejected: running a rising mantle edge along its probe's heading from the
+  foot (987 stalls against the no-lip graph's 819). Without the lip the routes
+  no longer stop there: mp_farmhouse `tdm` 55 → 0, mp_breakout `hq` 14 → 0.
+  VERIFIED (the runs).
 
-- mp_decoy's pit at (8650, -12570, -530). The edges a bot took out of it
-  (6408 → 9194, 6407 → 9193, 6407 → 9459 on seed 2) were leaps
-  (`NavGraph::link_leaps`), not plain jumps, and the bot never pressed
-  the jump key on one: its cmd's buttons stay 0 the whole run at the
-  ledge, and it falls back off the face. A bot jumps a leap only when
-  `BotView::lip` says the lip is ahead, which the driver fills only on a
-  route with pmove probes; CoD2's has `BotWorld::PMOVE_PROBES` off, so
-  a CoD2 bot never jumps a leap, as 12.14 found for CoD4. 11.7's reading
-  of the stall as CoD2's jump cap was wrong for this spot. A CoD2 graph
-  is now built without the lip (`bots::cod2::LIP`, as `bots::cod4::LIP`):
-  its leaps are cleared before `NavGraph::reprove_jumps` walks each again
-  as a plain jump edge, its edges past the follower's reach are dropped,
-  and the mantle probe runs again off the floors the last mantles reached
-  (`NavGraph::build_opts`). Every map loses its leaps (mp_decoy 162,
-  mp_burgundy 346), gains 0 to 120 mantle edges (mp_farmhouse 785 →
-  905), and keeps every spawn in its component (`nav_build GAME=cod2`,
-  `GAMETYPE=tdm`). VERIFIED (the builds).
-- Why 11.7's re-walk of the climbs under CoD2's pmove moved the stalls.
-  First, it walked each leap again as a leap (`Gait::Leap`, a jump at the
-  lip), which lands, so the leaps a CoD2 bot never jumps stayed: built
-  with the lip it still came to 535 → 78 on mp_decoy `hq` but 371 → 683
-  on `tdm`. Second, it walked only the climbs, and the routes it pushed
-  bots onto run over edges proved under 1.5's rules alone. On mp_railyard
-  `tdm` and `ctf` (seed 6, 0 → 397 and 322) a bot paced (-1150, -462,
-  20): a CoD2 body run west from (-1120, -450, 14.5) at the plain edges
-  to (-1216, -479, -9) is stopped at x -1150.9 by the level's collision,
-  where the graph's walk under 1.5's rules went on. VERIFIED (measured,
-  ours, `vcod_cod2::pmove::player_step` over the bare world). Without the
-  lip the re-walk still adds stalls (819 → 1585 over the census below),
-  and so does building the whole graph under CoD2's step
-  (`Cod2Walk` as the build's `WalkStep`: 1891, mp_trainstation `tdm` and
-  `dm` 579 and 466). Neither is kept; the graph stays proved under 1.5's
-  rules. VERIFIED (the runs).
-- mp_farmhouse `tdm` (-2275, 300, -29), the mantle edge 6541 → 6843. No
-  script brush or entity stands there: the same step over the bare
-  world from the live playerstate gives the same flags (0x5, no hint).
-  Nor is it the yaw. A single step from rest at x -2275.1 gets the hint
-  on y 262 to 286 of that wall at every yaw from -40 to 40, and nowhere
-  else. The probe climbed at yaw -45 (`link_mantles` tries the eight
-  compass ways) from the foot (-2304, 294), sliding along the wall into
-  that strip. A bot runs at the edge's top (-2208, 285) instead, meets
-  the wall at y 307 and slides south at under 30 units/s, slower as its
-  heading turns square to the wall, and gives up at y 290, 4 short.
-  VERIFIED (measured, ours). Running a rising mantle edge along its
-  probe's heading from the foot climbs from where the bot met the wall,
-  but over the census it gave 987 stalls to the no-lip graph's 819 and
-  is not kept. Built without the lip, the routes no longer stop there:
-  mp_farmhouse `tdm` 55 → 0, mp_breakout `hq` 14 → 0. VERIFIED (the
-  runs).
+The graph without the lip, before is 11.7's after, reproduced to the tick.
+VERIFIED (the runs):
 
-Same census as 11.4 (450 matches a setting); before is this branch's
-base, which reproduces 11.7's after to the tick (19242, 1639). The graph
-without the lip. VERIFIED (the runs):
+- Stalls 1639 → 819, kills 19242 → 19331 (the current table in 11.4); per-seed
+  kill difference 41, 48, 33, -83, 20, 30 (standard deviation 45), inside the
+  noise but for seed 4.
+- Down: mp_decoy `hq` 535 → 0 and `tdm` 371 → 8, mp_farmhouse `tdm` 55 → 0,
+  mp_leningrad `ctf` 39 → 0, mp_matmata `tdm` 27 → 0.
+- Up: mp_trainstation `dm` 66 → 201 (seed 4, one bot at (6629, -2565, 128)),
+  mp_brecourt `tdm` 0 → 64, mp_trainstation `hq` 0 → 31.
 
-| gametype | kills | stalled bot-ticks |
-|---|---|---|
-| dm | 5577 → 5572 | 86 → 213 |
-| tdm | 4964 → 5046 | 453 → 72 |
-| sd | 1996 → 1989 | 0 → 0 |
-| ctf | 3265 → 3252 | 357 → 318 |
-| hq | 3440 → 3472 | 743 → 216 |
-| all | 19242 → 19331 | 1639 → 819 |
+Left. INFERRED (the stall lines and a trace of seed 5):
 
-- Per-seed kill difference 41, 48, 33, -83, 20, 30 (standard deviation
-  45): inside 11.4's per-seed noise of 31 to 50 but for seed 4. No
-  match without a kill. VERIFIED (the runs).
-- Down: mp_decoy `hq` 535 → 0 and `tdm` 371 → 8, mp_farmhouse `tdm` 55
-  → 0, mp_leningrad `ctf` 39 → 0, mp_matmata `tdm` 27 → 0. VERIFIED
-  (the runs).
-- Up: mp_trainstation `dm` 66 → 201 (seed 4, one bot at (6629, -2565,
-  128)), mp_brecourt `tdm` 0 → 64, mp_trainstation `hq` 0 → 31. Left:
-  mp_toujane `ctf` 303 (seed 1, two teammates 30 apart at (54, 911,
-  -14)) and `hq` 185 (the lip at (1470 to 1550, 925, 57 to 74): a jump
-  edge from (1472, 932, 57) to (1470, 901, 82) the bot jumps and hangs
-  on, as 11.7 read; the climbs' re-walk drops it, 185 → 0 with the lip
-  and 17 without). INFERRED
-  (the stall lines and a trace of seed 5).
-
-Only CoD2's build changed (`bots::cod2::LIP`, the build's `lip` off);
-CoD1, 1.5 and UO build with the lip as before, so their `nav_build`
-digests stand. INFERRED (the diff).
+- mp_toujane `ctf` 303, seed 1, two teammates 30 apart at (54, 911, -14).
+- mp_toujane `hq` 185, the lip at (1470 to 1550, 925, 57 to 74): a jump edge
+  from (1472, 932, 57) to (1470, 901, 82) the bot jumps and hangs on. The
+  climbs' re-walk drops it (185 → 0 with the lip, 17 without) but is rejected
+  above.
 
 ## 12. CoD4's `sd`, `sab`, `dom` and `koth`
 
