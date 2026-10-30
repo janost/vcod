@@ -2,7 +2,7 @@
 
 Verified engine facts, with the binary addresses, assets and captures they rest on. Read a subsystem's doc before touching its code, and add what you learn to it. The wire reference for CoD 1.1 is `../protocol-1.1.md`; its last section lists every divergence from RTCW/Q3.
 
-Evidence labels: every claim names the module, address and string or table it rests on, and carries one label, VERIFIED (read out of a binary, an asset or a live capture) or INFERRED (read off control flow, instruction order or branch conditions). A doc may open with a document-wide VERIFIED default only when its provenance is uniform and every exception is labelled; section-level blanket labels are not allowed (AGENTS.md, "Evidence labels").
+Every claim names the module, address and string or table it rests on and carries one evidence label: VERIFIED when read out of a binary, an asset or a live capture; INFERRED when read off control flow, instruction order or branch conditions. A section-level blanket label is never allowed, and a document-wide default only where the doc's provenance is uniform and every exception is labelled (AGENTS.md, "Evidence labels").
 
 ## CoD1 1.1
 
