@@ -1,9 +1,9 @@
 # CoD2 1.3 gsc against CoD 1.1: builtins, fields, language, callbacks
 
-What vcod's compiler and VM (`crates/gsc`, `cod11-gsc-language.md`,
-`cod11-gsc-object-model.md`) and the server's builtin families
-(`crates/server/src/game/builtins/*`) would need to run CoD2 1.3's stock MP
-scripts.
+How CoD2 1.3's gsc differs from 1.1's, and how vcod's compiler and VM
+(`crates/gsc`, `cod11-gsc-language.md`, `cod11-gsc-object-model.md`) and
+the server's builtin families (`crates/server/src/game/builtins/*`) run
+CoD2 1.3's stock MP scripts.
 
 Sources. `cod2_lnxded` is the retail Linux 1.3 dedicated server (md5
 fefed4c4909fb7c5c13b13a003f5ccf7, version string `pc_1.3_1_1`), stripped, the
@@ -167,19 +167,18 @@ fadeovertime, scaleovertime, moveovertime, reset, destroy
 
 ### 1.4 Against vcod's builtin families
 
-vcod answers 217 names (every family's `NAMES` plus `host::BUILTINS`, read
-off the source, 2026-10-21). 118 of CoD2's 290 builtin names are not among
-them; 26 of those are called by the stock MP scripts (section 3.6's census,
-the MP subset, calls that resolve to a table name): `assert`, `assertex`,
+The 26 CoD2 builtins the stock MP scripts call (section 3.6's census, MP
+subset) that 1.1's families lack: `assert`, `assertex`,
 `print`, `line`, `int`, `vectordot`, `bullettracepassed`, `precacherumble`,
 `playrumble`, `stoprumble`, `issplitscreen`, `endparty`, `sendranks`,
 `setplayerteamrank`, `updatescores`, `closeingamemenu`, `getcurrentoffhand`,
 `switchtooffhand`, `getplayerangles`, `setweaponclipammo`, `getammocount`,
 `setnormalhealth`, `setteamfortrigger`, `clientclaimtrigger`,
-`clientreleasetrigger`, `setwaypoint`. Of these, `print`, `line` and the
-asserts sit in developer blocks or are compiled out (section 3.3); the rumble,
-splitscreen, rank and party builtins are console features a PC server
-answers with nothing (INFERRED from their names; their handlers are unread).
+`clientreleasetrigger`, `setwaypoint`. vcod answers all 26
+(`builtins::cod2`, `BuiltinSet::cod2()`; 5.1, 5.2). `print`, `line` and the
+asserts sit in developer blocks or are compiled out (section 3.3); the
+rumble, splitscreen, rank and party builtins are console features a PC
+server answers with nothing (5.1).
 
 ## 2. Fields and spawn classnames
 
@@ -394,7 +393,7 @@ statement and expression node kinds are read off the mac `EmitStatement`
 ### 3.2.2 Writing undefined into an array
 
 - VERIFIED live (`probe_array_undef`, `probe_undef_into_unset`,
-  `probe_undef_call_into_unset` on `cod2_lnxded` 1.3, 2026-10-22): the
+  `probe_undef_call_into_unset` on `cod2_lnxded` 1.3): the
   same lines as 1.1d. The literal `x[k] = undefined` removes the key and
   is fatal (`undefined is not an array`) on a never-set local; an
   undefined value from a call is stored and counted by `.size`.
@@ -471,14 +470,14 @@ refusal of both (VERIFIED,
   (3.6).
 - VERIFIED, `probe_c2a`: `x = thread retfn();` compiles, and `x` is
   undefined though `retfn` returns 5 after a wait. VERIFIED live
-  (retail 1.3, 2026-10-22, a `dm.gsc` that stored each result in a dvar
+  (retail 1.3, a `dm.gsc` that stored each result in a dvar
   read back over rcon): a thread that returns before it suspends hands its
   value over, `r = thread f()` with `f() { return 7; }` read 7 and a
   `spawnstruct()` return its field; with a `wait 0.05` first it read
   undefined. Stock `_fx::soundfx` writes `ent.delay` on such a return
-  (`createfx_showOrigin`'s struct), and a script error there on vcod
-  ended mp_burgundy's level script. vcod: `Vm::set_thread_returns`, on
-  for CoD2. VERIFIED,
+  (`createfx_showOrigin`'s struct); without the return a script error
+  there ends mp_burgundy's level script. vcod: `Vm::set_thread_returns`,
+  on for CoD2. VERIFIED,
   `compile::tests::cod2_assigns_a_thread_call_s_undefined`: vcod under
   `Dialect::Cod2` parses a receiverless `thread` call as an assignment's
   right side; a threaded call pushes undefined. Under `Dialect::Cod1` it
@@ -531,7 +530,8 @@ refusal of both (VERIFIED,
 ### 3.6 The stock corpus through vcod's compiler
 
 `gsc_census` over every `.gsc` the stock iwds hold (622 after later iwds
-override earlier ones: `iw_07`, `iw_08`, `iw_13`, `iw_15`), 2026-10-21. MP
+override earlier ones: `iw_07`, `iw_08`, `iw_13`, `iw_15`), under 1.1's
+grammar (`Dialect::Cod1`). MP
 subset: `maps/mp/**`, `codescripts/`, `mptype/`, `character/mp_*`,
 `xmodelalias/mp_*`, 131 files. VERIFIED, the run:
 
@@ -551,7 +551,7 @@ gametype references them (VERIFIED, probes `probe_c2_stairs_down` and
 `Dialect::Cod2` handles both (below).
 
 The same 622 files through `DIALECT=cod2 gsc_census` with `BUILTINS` set to
-CoD2's 290 builtin names (section 1.3), 2026-10-21 (VERIFIED, the run): 620
+CoD2's 290 builtin names (section 1.3) (VERIFIED, the run): 620
 compile (7067 functions) and pass `stack_depth`, all 131 MP files among
 them; the two failures are the `stairs_*` pair above. No MP call is left
 unresolved (`UNKNOWN` lines: none in MP), so `abs`, `array_levelthread`,
@@ -621,28 +621,21 @@ more) are gone; new are the bone and tag names (`tag_flash`, `tag_weapon`,
 
 ## 5. What vcod needs, by size
 
-Items 1 and 2, 4 and 5 are done in `crates/gsc` (`Dialect::Cod2`, sections
-3.1 to 3.5); `ScriptRuntime::load_cod2` passes `Dialect::Cod2` and the
-CoD2 builtin table to the `Loader` (5.1).
+All five are done. `ScriptRuntime::load_cod2` passes `Dialect::Cod2` and
+the CoD2 builtin table to the `Loader` (5.1).
 
-1. `#include` (parser directive, per-file import set, non-transitive,
-   builtins first then includes for an unqualified name, local-vs-include
-   duplicate a compile error): 4 MP files, every gametype through
-   `_weapons.gsc`. The compiler today decides builtin-or-script without the
-   builtin table (`Op::CallBuiltin` for any non-local name); with includes
-   it needs the table, or a link step that resolves an unknown name against
-   the includes before the host.
-2. `waittillframeend` as a keyword and an op that queues the thread behind
-   the frame's `wait 0`s (3.2). Today a silent no-op.
-3. The 26 MP-called builtins vcod lacks (1.4), the 10- and 9-argument
-   damage and killed callbacks, the new notifies (4.2), `script_struct` and
-   the `codescripts/struct` calls, the shrunken entity field table with the
-   rest coming from `radiant/*.txt`, and the float, bit-packed hudelem
-   fields.
-4. A dialect switch for the compile-time typing (3.4): CoD2 reads
-   `self[k]`/`level[k]` at run time and refuses their writes as `not an
-   lvalue`; optional for MP (no stock MP script depends on it).
-5. Optional fidelity: definite assignment (3.5), `x = thread f()`.
+1. `#include` (3.1): directive, per-file import set, non-transitive,
+   local then builtin then include for an unqualified name; 4 MP files,
+   every gametype through `_weapons.gsc`. `crates/gsc`.
+2. `waittillframeend` (3.2): `Op::WaitTillFrameEnd`,
+   `ThreadState::FrameEnd`. `crates/gsc`.
+3. The 26 MP-called builtins (1.4), the 10- and 9-argument damage and
+   killed callbacks (4.1), the new notifies (4.2), `script_struct` and the
+   `codescripts/struct` calls, the shrunken entity field table with
+   Radiant keys, the float, bit-packed hudelem fields. vcod-server, 5.1 and
+   5.2.
+4. The compile-time typing of `self[k]`/`level[k]` (3.4). `crates/gsc`.
+5. Definite assignment and `x = thread f()` (3.5). `crates/gsc`.
 
 ### 5.1 The bootstrap in vcod-server
 
@@ -783,10 +776,10 @@ through the stock menus, spawn on one of the gametype's spawn classes and
 play 10 s with no script error and no builtin
 unanswered (`game::cod2_gametypes`, the ignored `cod2_gametype_census`,
 and a 20 s run of all five on mp_toujane and mp_breakout in the default
-suite; `COD2_DIR`). VERIFIED. Before vcod read a thread's return (3.5),
-a map with a `soundfx` line lost the rest of its `main` at `developer 1`,
-game[] team names included; the census runs at `developer 0`, the
-server's default.
+suite; `COD2_DIR`). VERIFIED. The census runs at `developer 0`, the
+server's default. Without the thread return (3.5) a map with a `soundfx`
+line loses the rest of its `main` at `developer 1`, game[] team names
+included.
 
 `sd`'s bomb zones call four builtins on a `trigger_use` or
 `trigger_use_touch` (any other entity is the handlers' `trigger entity
