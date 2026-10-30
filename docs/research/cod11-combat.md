@@ -8308,7 +8308,7 @@ one that pulled the trigger.
 `setPlayerAngles` every frame, so the view a round reads is one of two:
 
 - VERIFIED, vcod measurement (the six `leanhit` captures with `probe_fall`,
-  1.1d, 1.5b and UO, 2026-10-18; each `PROBE dir` against 15.2's idle sway
+  1.1d, 1.5b and UO; each `PROBE dir` against 15.2's idle sway
   on the last frame's `level.time` composed with the hold's script angle):
   every round fits to 5e-7 either the exact script angle or that angle cut
   to 65536ths, and none fits anything between. A 1.1d run also carried a
@@ -8333,23 +8333,13 @@ one that pulled the trigger.
   ahead of the frame: a long frame takes in the cmds sent while it runs.
   `probe_tapwait 1` taps a frame later; in that run every round on all
   three servers reads the exact angles.
-- vcod: `leanhit_ab`'s `-press` gates replayed each cmd's logged input
-  and ran a shooter's cmd stamped up to 6 ms before a frame after it,
-  built on the snapshot before (`ProbeHold::lead_ms`, retired 2026-10-19
-  for the `ct=` reruns, 3.6). Every round of the 1.1d and UO runs left
-  within 2e-5 of retail's direction, and so did every 1.5b round once its
-  sight test was ported (below). The target's `setOrigin` drop under the
-  same lead landed 0.21 off retail's first fall row, so its cmds kept the
-  plain windows; under `ct=` both clients replay on retail's frames and
-  every fall row matches. The first `-cmds`
-  captures tapped in the grid's frame and logged no input by cmd, and
-  their `DIR_GAPS_*` lists stayed open; their 2026-10-19 rerun with
-  `probe_tapwait 1` replays without them on the plain windows and the
-  `PROBE_IN` lines, but for two 1.1d rounds whose cmd before the trigger
-  ran after the frame on retail (3.6). The 1.1d `-cmds` fixtures now log
-  each snapshot's `commandTime` (`ct=`), and the replay places every cmd
-  on those (`ProbeHold::ran`); both rounds match (3.6).
-- The 1.5b first round's lag, read 2026-10-18 (vcod measurement, the
+- vcod: `leanhit_ab`'s `-press` gates replay each cmd's logged input on the
+  frame its snapshot's `ct=` names (`ProbeHold::ran`, 3.6), both clients on
+  retail's frames: every round of the 1.1d, 1.5b and UO runs leaves within
+  2e-5 of retail's direction and every fall row matches. The `-cmds`
+  captures are reruns with `probe_tapwait 1` (an earlier take tapped in the
+  grid's frame and logged no input by cmd).
+- The 1.5b first round's lag (vcod measurement, the
   `-press-1.5` replay with the shooter's sway state logged per cmd). The
   shooter holds the sight from his first cmd (12450, `in=10:16`), but
   `PM_UpdateAimDownSightFlag` (1.5b 0x2cf6c) clears it unless `pml+0x34`
@@ -8366,12 +8356,11 @@ one that pulled the trigger.
   VERIFIED disassembly) moved no round; vcod keeps its float sway step and
   float product. `pml+0x34` is 1.5's `almostGroundPlane`, set off the
   ground when a floor lies within a unit below (`cod15-movement.md` 5,
-  "The sight off the ground", VERIFIED decompile). vcod read it as the
-  ground itself and started the sight on 12532, the landing, freezing 3.
-  The shooter is 0.63 over the floor at the 12516 cmd's ground trace, so
-  1.5b sights there and freezes 4 (VERIFIED, replay, 2026-10-18: with the
-  test ported every round of the 1.5b run leaves within 2e-5 of retail's
-  direction and `PRESS_DIR_GAPS_15` is gone).
+  "The sight off the ground", VERIFIED decompile). The shooter is 0.63 over
+  the floor at the 12516 cmd's ground trace, so 1.5b sights there and
+  freezes 4 (read as the ground itself, the sight starts on 12532, the
+  landing, and freezes 3). VERIFIED, replay: with the test ported every
+  round of the 1.5b run leaves within 2e-5 of retail's direction.
 
 ### 15.2 `BG_CalculateWeaponAngles` (`0x3a1e4`)
 
@@ -8978,8 +8967,7 @@ What still differs, each INFERRED from 16.1 and not measured:
   (15.6's 50 ms). Their relative order is the same.
 
 The pitch the pose bends the spine by eases after the view the way retail's
-does (16.3); before 2026-10-09 ours posed the new view pitch whole at the end
-frame that copied it.
+does (16.3), not whole at the end frame that copied it.
 
 **A turret round inside its gunner's end frame.** VERIFIED,
 `game.mp.i386.so`: `G_RunFrame`'s slot loop (0x50ab0..0x50add) calls
@@ -9049,7 +9037,7 @@ traces. A victim below the gunner takes its feedback on the next frame.
   rig has two clients and the guns' arcs do not overlap. No retail capture
   covers either case.
 
-VERIFIED, two runs against ours on 2026-09-27, the `probe_passthru` recipe
+VERIFIED, two runs against ours, the `probe_passthru` recipe
 of `client-probes/README.md` with one `--probe-target --probe-team axis` and
 one `--save-hit --probe-sweep --probe-team allies` shooter, `vcod-server
 mp_carentan --gametype-script .../probe_passthru.gsc --set probe_teleport=1`,
@@ -9142,11 +9130,10 @@ bone. INFERRED: a control rotation replaces the bone's local rotation and
 turns it about the model's axes, so pitch tips about the model's left axis
 whatever the bone's own frame; `CoDMP.exe` 0x00481780 has the same two
 product branches, operand order not resolved. In USAirborne3's frames a
-turn about `back_up`'s own Y leans the body sideways, which is what ours
-did before this.
+turn about `back_up`'s own Y leans the body sideways (the trap).
 
 **Measured.** VERIFIED, `crates/server/tests/fixtures/turret/
-mp_carentan-dm-pitch-ease.txt`, retail, 2026-10-09: 16.2's `probe_pose`
+mp_carentan-dm-pitch-ease.txt`, retail: 16.2's `probe_pose`
 recipe twice, the target in slot 0 and in slot 1, 8 s of rounds each. Per
 flip to 85, the round's x less the level body's (k0 the frame whose snapshot
 first read the new pitch), the range over the run's complete flips, and
@@ -9323,14 +9310,12 @@ keeps `ClientSim::pose` across a spawn and starts it fresh at connect.
 
 **The gunner's aim group.** A mounted body runs no controllers, and its
 legs blend the turret anim's leaves by the placement's weights (turrets doc
-7.2), on the client and in ours. The server's locational pose used to
-descend the aim group by `-viewangles[0]`. That picked the `15up` row for
-a gunner looking down, because `descend_aim` reads down as positive. It now
-poses the blend that `turretpose::place_gunner` left on
-`ClientSim::gunner_leaves`. That placement runs in the gunner's turret
-think, after its end frame, so ours poses it one frame late. The fallback
-descent, used when there is no placement, reads the view pitch down
-positive.
+7.2), on the client and in ours. The server's locational pose takes the
+blend `turretpose::place_gunner` left on `ClientSim::gunner_leaves`; that
+placement runs in the gunner's turret think, after its end frame, so ours
+poses it one frame late. The fallback descent, with no placement, reads the
+view pitch down positive (`descend_aim`; `-viewangles[0]` picks the `15up`
+row for a gunner looking down).
 
 Ours: `vcod_common::playerpose::{BodyAngles::step, update_conditions}`
 for the updater and its conditions. `Controllers::new` and
@@ -9397,8 +9382,8 @@ pmove runs them down by its msec. The clip's length is the engine's
 `XAnimGetLength` (syscall 0x5d, `cod_lnxded` 0x08088b3d..0x08088b5b,
 VERIFIED disassembly): the part's frame count over its float framerate,
 times 1000.0 (0x080d4ea8), stored under a 0xc00 control word, so
-truncated: 1.1d's 92 frames at 30 read 3066, where a rounded 3067 was
-vcod's before 2026-10-19. INFERRED: 1.5b and UO store it the same way
+truncated: 1.1d's 92 frames at 30 read 3066, not a rounded 3067. INFERRED:
+1.5b and UO store it the same way
 (their clips here are exact or round down either way).
 
 VERIFIED (capture), a death raised inside the packet pass on
@@ -9480,7 +9465,7 @@ passes the `pm_type` test, so its first cmd, which still holds the weapon,
 can set the bit; the dead arm then zeroes the weapon and the next cmd
 clears it.
 
-VERIFIED live, 2026-10-20: `client-probes/probe_rise` on
+VERIFIED live: `client-probes/probe_rise` on
 `tools/run_probe.sh mp_carentan` with a `--probe-uo-weapon direct
 --probe-cmd-ms 50` client (one cmd a frame) holding the carbine's trigger
 through two `suicide()`s (fixture
@@ -9493,7 +9478,7 @@ in the death's frame (the 25950 snapshot already lacks clip slot 10), the
 first dead cmd's snapshot read 0x10: the ammo test fails. `rise_ab` holds
 ours to both.
 
-VERIFIED live, 2026-10-20: the same probe and client on `COD_VERSION=1.5`
+VERIFIED live: the same probe and client on `COD_VERSION=1.5`
 and `COD_VERSION=uo tools/run_probe.sh mp_carentan` (fixtures
 `mp_carentan-dm-slope-50ms-rise-1.5.txt` and `-rise-uo.txt`, same
 directory) read the same on both deaths: the keeping body's death snapshot
@@ -9557,7 +9542,7 @@ rounding set to truncate (`0x5f40c`-`0x5f41e`), `Scr_GetVector(2)`,
 (`angles2[1]`) the radius. Nothing is range-checked. VERIFIED, `EV_EARTHQUAKE`
 is 195 (`cod11-events-and-fx.md`).
 
-VERIFIED, live, 2026-10-10: `probe_quake` (client-probes) on the retail
+VERIFIED, live: `probe_quake` (client-probes) on the retail
 1.1d server, dm on mp_carentan, one `--net-probe --probe-team allies`
 client; `earthquake(0.3, 2.5, origin, 850)` arrives as `angles2 [0.3,
 850.0, 0.0] time 2500`, `earthquake(0.05, 0.0026, origin, 100)` as
@@ -9785,8 +9770,7 @@ posed (not on pm_type 4 or 5, dead or on a mounted gun; vcod has no
 draws the model with `AnglesToAxis(angles)` as its axes in the view's
 frame. The scope overlay centres on the same step's angles. `--walk`
 draws off `GunAim` too, without lean or landing. `OnlineView::draw_gun`
-carries `cg_drawGun`. The old `ViewmodelMotion`
-(a 1.7 Hz bob and a mouse-driven spring) is gone.
+carries `cg_drawGun`.
 
 ### 17.5 The landing dip
 
