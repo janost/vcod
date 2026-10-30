@@ -5683,8 +5683,7 @@ which are branch conditions.
   on the missile's turn through `Missiles::take_splashes`; gated by
   `crates/server/tests/missile_edge_ab.rs` (`a_frag_into_water_splashes`,
   `a_rocket_into_water_splashes`, `a_uo_smoke_grenade_into_water_is_freed`)
-  and `a_missile_entering_water_fast_splashes`. Before 2026-10-17 no
-  missile splashed.
+  and `a_missile_entering_water_fast_splashes`.
 - When `ent->methodOfDeath (+0x248) == 3` and the hit entity's
   `flags & 0x10000` (byte `gentity+0x17E`, bit 1) is set, the hit entity's
   `contents` (`+0x118`) is zeroed, the trace is run a third time, and the
@@ -5716,8 +5715,7 @@ INFERRED: the ordering and the conditions in it.
   player's posed bones too. VERIFIED, live (12.4, "Resting on a player"):
   a frag on a prone player's back snaps to his bones, not past them to the
   floor. vcod runs the snap through the same body, script model and world
-  trace as the move (`Missile::full_trace`); before 2026-10-16 it traced
-  the world only.
+  trace as the move (`Missile::full_trace`).
 - VERIFIED, `game.mp.i386.so` 1.5b: after the snap's `G_MissileTrace`
   (call at 0x54fe0) the snap applies only when the fraction is below 1.0
   and `tr.entityNum` is 0x3fe (`cmpw $0x3fe` at 0x54ffe); VERIFIED, UO
@@ -5729,8 +5727,8 @@ INFERRED: the ordering and the conditions in it.
   base, z -10.667, on the move's chord. INFERRED, from the frames of
   `mp_carentan-scriptmodel-prone.txt` (1.1d): its strike at z -4.74 sits
   1.49 above the chord between the frames either side. vcod keys the test on `Missile::falls`
-  (`the_15_ground_snap_takes_the_world_only`); before 2026-10-16 its 1.5
-  frag sat 1.5 above his back.
+  (`the_15_ground_snap_takes_the_world_only`); a body snap on 1.5 sets the
+  frag 1.5 above his back.
 - INFERRED, and the trap an implementer walks into: the trace struct 12.3
   reads is the downward one whenever that second trace ran, so a frame whose
   move trace hit a wall but whose downward trace found no floor within 1.5
@@ -5793,9 +5791,7 @@ the ordering and the conditions in it.
   (`SURF_SKY`, `SURF_NOIMPACT`, `UO_SKY_PUSH`, `CONTENTS_SKY`), pinned by
   `a_missile_at_the_sky_is_freed_silently`,
   `a_uo_missile_flies_through_the_sky` and
-  `crates/server/tests/missile_edge_ab.rs`. Before 2026-10-17 every
-  protocol's missile struck the sky: a rocket exploded on it, a grenade
-  bounced off.
+  `crates/server/tests/missile_edge_ab.rs`.
 - VERIFIED, the disassembly: on any other start-solid UO's `G_MissileTrace`
   stores a fraction of 0 (0x5ee1e, 0x5ee27) and `VectorNormalize2(start -
   end)` into the normal; 1.5b's (0x54a18) does the same at 0x54a5e with no
@@ -5833,8 +5829,7 @@ VERIFIED: the entity field table's `origin` sits at gentity offset 308
 of its `trap_LinkEntity` (0x542f0). INFERRED: a script reading a grenade's
 `origin` reads `r.currentOrigin` as this frame's move left it. vcod copies
 each live missile's origin into the entity's script `origin` at the throw
-and after every missile pass (`Missiles::sync_origins`); before 2026-10-09
-it read `(0, 0, 0)`.
+and after every missile pass (`Missiles::sync_origins`).
 
 ### 12.4 `G_BounceMissile`
 
@@ -5906,12 +5901,11 @@ and `mp_carentan-scriptmodel-prone-1.5.txt`): the frag that falls off the
 prone target (12.6) strikes the floor at z -22.375 and is airborne two
 snapshots before it bounces again and rests, a rise of 1.0 at the first
 (40 units/s off the 80 it struck at); the second frag's floor and wall
-bounces land on the same snapshots. vcod took 1.1's split before
-2026-10-16: the fallen frag rose 0.21 (24 units/s), rested a snapshot
-early, and the second frag's rebound off the wall reached z -16.84 where
-retail's reached -2.64. `Missile::bounce` scales by `BOUNCE_15`;
-`a_frag_rests_on_a_prone_players_back_on_15` now holds every snapshot of
-both frags to retail's `trType` and ground, each base within 0.3.
+bounces land on the same snapshots. `Missile::bounce` scales by
+`BOUNCE_15` (1.1's split here makes the fallen frag rise 0.21 and rest a
+snapshot early, and the wall rebound reach z -16.84 against -2.64);
+`a_frag_rests_on_a_prone_players_back_on_15` holds every snapshot of both
+frags to retail's `trType` and ground, each base within 0.3.
 
 INFERRED: the body test reads the struck entity's contents, not whether
 it is a player, so a script model a script `setContents`es to 0x2000000
@@ -5955,9 +5949,9 @@ terrain. VERIFIED, live, mp_brecourt with the target lying still (fixture
 `mp_brecourt-scriptmodel-prone-rest.txt`; the older capture dropped him
 onto the grade every frame, player-model-anim-system.md, "The prone body
 on a grade"): the first frag strikes his back with 0, bounces on with
-1023 and rests on him at (1657.12, 817.81, -80.92) with 0. vcod writes the struck entity (the player, the script model, or
-`CollisionWorld::entity_num`); before 2026-10-16 it wrote 1022 whatever
-was hit. `scriptmodel_ab`'s prone gates hold both throws: every frame
+1023 and rests on him at (1657.12, 817.81, -80.92) with 0. vcod writes the
+struck entity (the player, the script model, or
+`CollisionWorld::entity_num`). `scriptmodel_ab`'s prone gates hold both throws: every frame
 within a unit of retail's on carentan (his prone pose strikes half a unit
 off retail's) and on the brecourt retake, each frag's resting ground, and
 the brecourt retake's rests within a unit. INFERRED: 1.1 never reads a
@@ -5967,9 +5961,8 @@ field only.
 vcod: the move trace (`game::missile`) runs `combat::trace_bodies_faced`
 on every live body but the owner's while it passes, with the bone trace's
 struck face as the normal (`bonetrace::BoneHit::normal`, the entry face's
-axis turned by the bone and the body). Before 2026-10-16 it stopped a
-missile on the link box and reflected it straight back, 25 units short of
-retail's strike. `scriptmodel_ab`'s grenade gate holds every frame of the
+axis turned by the bone and the body); the link box as the contact stops a
+missile 25 units short of retail's strike. `scriptmodel_ab`'s grenade gate holds every frame of the
 throw to 0.1.
 
 ### 12.5 The point trace against terrain
@@ -6008,18 +6001,14 @@ stored normal (0x80650c5). United Offensive's point clip
 vcod: `Terrain::point_clip` is 0x8052894 in `f64`, which an exact
 64-bit-mantissa emulation of the routine matched on every terrain trace of
 the mp_brecourt run below (`the_point_clip_rounds_only_the_fraction_it_stores`
-pins one case). Before 2026-10-16 a 1.1 point trace clipped terrain as a
-static model triangle (`clip_segment_model`: a normal recomputed from the
-corners and distances off a corner), about 20 float steps off in the
-fraction. VERIFIED, live (retail 1.1d, mp_brecourt, fixture
+pins one case). Trap: clipping terrain as a static model triangle (a normal
+recomputed from the corners, distances off a corner) lands about 20 float
+steps off in the fraction. VERIFIED, live (retail 1.1d, mp_brecourt, fixture
 `mp_brecourt-scriptmodel-prone.txt`): the prone part's second frag
 bounces down the field's terrain and rolls to rest on it; ours lands every
 contact on retail's snapshot with retail's `groundEntityNum`, every
-`trBase` retail's to the bit since 2026-10-18 (below;
-`a_frag_rolls_down_terrain_like_retail` compares the bits). Until then
-every base from the second contact sat 2 or 3 float steps off, the old
-clip no closer (3 steps off in the first contact's `trBase.y` where the
-port is 2).
+`trBase` retail's to the bit (below; `a_frag_rolls_down_terrain_like_retail`
+compares the bits).
 
 **The x87 arithmetic of the bounce and the arc (1.1d).** Read in the
 disassembly of `game.mp.i386.so` 1.1d. VERIFIED: none of the steps below stores an
@@ -6099,16 +6088,14 @@ stack.
 VERIFIED, live (retail 1.5b, mp_brecourt,
 `mp_brecourt-scriptmodel-roll-1.5.txt`, `probe_scriptmodel`'s prone
 part): both frags miss the target and bounce up the field's terrain over
-four contacts to rest. With the `f32` arithmetic vcod ran before, every
-base from the second contact sat one float step off retail's in `y`; with
-the stores above every base is retail's to the bit. VERIFIED, live
-(retail 1.5b, `mp_carentan-scriptmodel-throw-1.5.txt`): the second frag's
-wall bounce at x 1583.775 sat 4 steps off in `z` before and is exact
-after. VERIFIED, live (retail UO, mp_brecourt,
+four contacts to rest. With the stores above every base is retail's to the
+bit (plain `f32` puts every base from the second contact a float step off in
+`y`). VERIFIED, live (retail 1.5b, `mp_carentan-scriptmodel-throw-1.5.txt`):
+the second frag's wall bounce at x 1583.775 is exact with them (4 steps off
+in `z` without). VERIFIED, live (retail UO, mp_brecourt,
 `mp_brecourt-scriptmodel-roll-uo.txt`): the second frag's four terrain
-contacts are retail's to the bit, but they were before the port too, as
-were mp_foy's, mp_dawnville's, the carentan throws' and the harbor water
-frag's. VERIFIED, live (retail UO,
+contacts are retail's to the bit either way, as are mp_foy's,
+mp_dawnville's, the carentan throws' and the harbor water frag's. VERIFIED, live (retail UO,
 `missiles/mp_brecourt-frag-roll-uo-45.txt`, `-135.txt` and
 `mp_uo_hurtgen-frag-slide-uo.txt`, `client-probes/probe_skyshot`'s spot
 part): three frags land on terrain (lump-26 triangles under every
@@ -6199,9 +6186,8 @@ within 0.3. `mp_carentan-scriptmodel-throw-1.5.txt` replays the prone part
 prone body too, holds the rest on him: retail's frag strikes his back at
 (1455.86, 2695.97, -10.67) and rests on it at (1469.11, 2713.16, -16.47);
 vcod's within 0.12 of each (`a_frag_rests_on_a_prone_players_back_on_15`).
-Before 2026-10-16 vcod's struck him 1.5 higher and dropped to the floor:
-its ground snap lifted the frag onto his bones (12.2), and its target
-kept another airborne prone body than retail's (cod15-movement.md 4).
+The ground snap onto the world only (12.2) and the airborne prone body
+(cod15-movement.md 4) are what put it there.
 
 ### 12.7 `G_MissileLandAngles`: the angles a contact leaves
 
@@ -6247,11 +6233,11 @@ constants but one (below).
   (6694/65536 of a turn) on the fourth. INFERRED: that one struck at a
   pitch of 49.03, between 45 and 80 off the flat floor, and was eased to
   0.75 of it.
-- VERIFIED, `mp_carentan-tdm-grenade.txt`: the 2026-10-19 take's three
+- VERIFIED, `mp_carentan-tdm-grenade.txt`: the committed take's three
   throws rest at pitch 357.9, 357.9 and 353.3, `flat` on mp_carentan's
-  sloped floor, and the 2026-10-17 take's at 177.9, 357.9 and 173.3, the
-  first and last `flat + 180`, with the roll unwrapped (533.7, 599.0 and
-  298.0; 499.9, 480.6 and 298.4 before).
+  sloped floor, and an older take's at 177.9, 357.9 and 173.3, the first
+  and last `flat + 180`, with the roll unwrapped (533.7, 599.0 and 298.0;
+  499.9, 480.6 and 298.4 on the older take).
 - VERIFIED, `game.mp.i386.so` 1.1d `AngleNormalize360` (0x3eb30) and
   `game.mp.uo.i386.so`'s: the angle times 182.04445 stays on the x87
   stack into the `fistp`, not rounded to a float first. 988.76947 is
@@ -6284,8 +6270,8 @@ not reproducible, so a gate pins the draws a capture shows
 (`Server::pin_missile_draws`): `missile_edge_ab`'s
 `bounce_angles_match_retail_on_1_1` replays the sky frag with its tumble
 and five factors pinned, and every `apos` ours sends matches retail's bit
-for bit. Before the port ours wrapped all three angles with `rem_euclid`,
-kept the throw's pitch rate and rested every frag at pitch 0. On UO
+for bit (wrapping all three angles, keeping the throw's pitch rate or
+resting at pitch 0 are the traps). On UO
 `game::missile`'s roll replays (12.5) pin each contact's draw the same way
 and compare `apos` through the wire's 65536ths.
 
@@ -6367,8 +6353,9 @@ The explode block, reached from all three arms:
   that meets the harbor floor explodes with its base at z -191 and y
   -6648. INFERRED: the point trace stops at -191.875 over the floor at
   -192, a fraction past y -6648 (vcod's replay strikes at y -6647.35), and
-  only `floor` and `ceil` give that base from there. vcod's `snap_towards` truncated until 2026-10-17 and put
-  that explode at -190 (`a_rocket_into_water_splashes`).
+  only `floor` and `ceil` give that base from there. vcod's `snap_towards`
+  does the same (truncation puts that explode at -190;
+  `a_rocket_into_water_splashes`).
 - With `ent->+0x23C` non-zero, `G_RadiusDamage(&tr.endpos, ent, ent->parent,
   (float)ent->+0x23C, (float)ent->+0x240, (float)ent->+0x244, other,
   ent->+0x24C)`. VERIFIED: the ignored entity is `other`, the entity the
@@ -6382,8 +6369,7 @@ The explode block, reached from all three arms:
   back takes 35 `MOD_PROJECTILE_SPLASH`. vcod hands the direct `G_Damage`
   to any struck entity with `takedamage` (`GameHost::entity_takes_damage`:
   turrets, UO vehicles, `setTakeDamage` entities, linked damageable
-  `func_static`s); before 2026-10-17 only a client or a UO vehicle took
-  it, and a struck script model took nothing, the splash skipping it.
+  `func_static`s).
 - `trap_LinkEntity(ent)` closes it.
 
 ### 13.2 `G_ExplodeMissile`, the fuse
@@ -6453,11 +6439,11 @@ it come off the captures rather than off the binary, and each is worth naming
 because a reader of 11 to 13 alone would guess otherwise.
 
 VERIFIED, off `mp_carentan-tdm-grenade.txt`: a throw's `trTime` is the
-*previous* frame's `level.time`, not the frame the release lands on. Its
-2026-10-19 recapture reads it on all three throws' first `!missile` line:
-17700, 27750 and 36400 against release snapshots at 17750, 27800 and 36450
-(484950, 494950 and 503650 against 485000, 495000 and 503700 on the
-2026-10-17 one; the first capture's throws had already bounced there). The
+*previous* frame's `level.time`, not the frame the release lands on. The
+committed take reads it on all three throws' first `!missile` line: 17700,
+27750 and 36400 against release snapshots at 17750, 27800 and 36450
+(484950, 494950 and 503650 against 485000, 495000 and 503700 on an older
+take; the first capture's throws had already bounced there). The
 death-drop capture pins it twice over, `trTime` 1405500 against a death frame
 at `serverTime` 1405550. vcod stamps both the thrown and the dropped grenade
 that way.
@@ -6466,11 +6452,11 @@ VERIFIED, off the same capture's `!trace` lines: from the first snapshot
 whose `grenadeTimeLeft` reads the pullback to the first that carries the
 missile is 1000 ms on `cook_release`, 5000 on `pin_out` and 600 on
 `throw_down`. VERIFIED, `missile_ab.rs`: the replay reads the same three.
-VERIFIED: on the 2026-10-19 recapture the first traces of `cook_release`
+VERIFIED: on the committed take the first traces of `cook_release`
 (`serverTime` 16750), `cancel` and `throw_down` already read
 `grenadeTimeLeft` 4000 and `weaponDelay` 600, where `pin_out` opens on a
-`weaponstate` 0 sample from before its first pressed cmd (the 2026-10-17
-one had it the other way round, `pin_out` alone opening on the pullback).
+`weaponstate` 0 sample from before its first pressed cmd (an older take had
+it the other way round, `pin_out` alone opening on the pullback).
 VERIFIED: `to_frag`'s last trace is `serverTime` 16700 at `weaponstate` 0,
 so no snapshot is missing between the two steps. INFERRED, off
 `CombatProbe::step` in `crates/client/src/probe.rs`: a step's clock starts
@@ -6487,32 +6473,28 @@ trace fraction into it, and the fraction it snaps the origin back with is the
 1.5-unit trace's, not the move trace's. Reproducing the committed arcs to
 within 0.1 units needed both.
 
-VERIFIED, `missile_ab.rs` on 2026-10-18 and again on the 2026-10-19
-recapture: on every one of the three throws'
+VERIFIED, `missile_ab.rs` on the committed take: on every one of the three
+throws'
 `!missile` samples (all 1.1d, through the bounces, the rest and the explode
 frames) our `pos` matches retail's field for field at the probe's one
 decimal (`traj_str`), `trTime` counted from the pullback (a resting one's
 is 0 on both). The gate compares those strings, with no distance
-tolerance. VERIFIED, same run: `apos` does not match past `trType`. Its
-`trDelta` is the throw's random spin (763.5, 0, 358.7 on retail's
-`cook_release` on the 2026-10-19 recapture, 703.5, 0, 335.9 on the
-2026-10-17 one, 679.8, 0, 344.8 on ours), a different draw on ours, and
-retail's pitch rate changes at every bounce (486.7, -411.7, 279.9 on
-`cook_release`'s first three, 593.7, -474.7, 323.1 before) where ours kept
-the throw's. Since
-2026-10-19 ours runs `G_MissileLandAngles` (12.7) and the gate compares
-the part of `apos` no draw moves: `trType`, `trTime`, the yaw and its
-rate, and a resting pitch modulo 180. VERIFIED, `missile_ab.rs` on
-2026-10-19: every sample of the three throws matches; the resting
-pitches read 357.9, 357.9 and 353.3 on retail's 2026-10-19 take (177.9,
-357.9 and 173.3 on the 2026-10-17 one, the same modulo 180), which ours laid at 0
-before the port. The draws themselves are gated off the full-precision
-sky frag capture (12.7).
+tolerance. `apos` carries draws: its `trDelta` is the throw's random spin
+(763.5, 0, 358.7 on retail's `cook_release`; 703.5, 0, 335.9 on an older
+take), and retail's pitch rate changes at every bounce (486.7, -411.7,
+279.9 on `cook_release`'s first three; 593.7, -474.7, 323.1 on the older
+take). Ours runs `G_MissileLandAngles` (12.7), and the gate compares the
+part of `apos` no draw moves: `trType`, `trTime`, the yaw and its rate, and
+a resting pitch modulo 180. VERIFIED, `missile_ab.rs`: every sample of the
+three throws matches; the resting pitches read 357.9, 357.9 and 353.3
+(177.9, 357.9 and 173.3 on the older take, the same modulo 180). The draws
+themselves are gated off the full-precision sky frag capture (12.7).
 
 VERIFIED, off the same lines: the exploded entity stays on the wire for about
-300 ms after the event frame, which is `EVENT_VALID_MS` in the file. Retail's
-`freeAfterEvent` frees it once the event has been sent to everyone who can
-see it; vcod holds it for a fixed window instead.
+300 ms after the event frame. Retail's `G_RunEntity` frees a
+`freeAfterEvent` entity on its first turn more than 300 ms past its event
+(0x50309; 14.7, "Entity numbers"); vcod's missile pass does the same
+(`EVENT_VALID_MS`).
 
 VERIFIED: the lone capture's second throw comes to rest at `z` 179.3 while its
 thrower stands at 144.1, on a stack of `crate_misc1` xmodels at (1193, 1653)
@@ -6562,7 +6544,7 @@ has no water test, and it damages nothing. VERIFIED: the stock paks' only
 mention is a comment in `maps/_fx.gsc` (`pak4.pk3`) saying it was removed.
 
 VERIFIED, `client-probes/probe_concnum.gsc` on the retail 1.1d Linux server,
-mp_carentan, 2026-10-09: a spawn read 299, the call, a spawn 302; one spawn a
+mp_carentan: a spawn read 299, the call, a spawn 302; one spawn a
 frame after it read 303..309 through +350, 300 at +400, 310..315 through
 +700, 301 at +750 and 316 on. INFERRED: the temp entity took 300 and the
 concussion entity 301; the first went back to the free list on the +350
@@ -6608,7 +6590,7 @@ normalizes the direction once more before it scales it by
 `projectileSpeed` (1.1d 0x54627, 1.5b 0x5559a, UO 0x5fc8c), in place, so
 the launcher's local holds the twice-normalized direction once
 `fire_rocket` returns. On UO the second normalize moves a last bit: gdb on
-retail UO 1.51b (2026-10-21; `probe_uofx` with `bazooka_mp` from the hip
+retail UO 1.51b (`probe_uofx` with `bazooka_mp` from the hip
 along (0, 0), and `probe_skyshot`'s sky part twice along (280.15,
 46.25)) read the point before the first normalize (0x7b4c7), the
 direction and the rocket's `trDelta` after `fire_rocket` (0x7b508), and
@@ -6622,11 +6604,9 @@ coduo-diff.md 19 on port 34531 under gdb); its rocket's `trBase` and
 `trDelta` match gdb's, and
 `uo_weapons_ab::the_bazooka_rocket_leaves_on_retails_bits` replays the
 shot on ours with gdb's `gunrandom` pair (x 0xbea62115, y 0xbf0d3c83,
-`Server::pin_spread_draws`) and sends both on retail's bits. Until
-2026-10-21 vcod built the rocket's direction off the bullet's 8192 end
-point with f32 sums and one glam normalize (1-2 ulps off on every round
-measured) and read the post-shot spread scale (2.1). vcod:
-`combat::rocket_aim`, `missile::rocket_launch_dir`.
+`Server::pin_spread_draws`) and sends both on retail's bits (a direction off
+the bullet's 8192 end point with f32 sums and one normalize lands 1-2 ulps
+off). vcod: `combat::rocket_aim`, `missile::rocket_launch_dir`.
 
 VERIFIED, gdb on the retail 1.1d server (`probe_panzer` on
 mp_carentan, the shooter `--probe-weapsel`; dprintfs at 0x68c90, 0x68cf7
@@ -6655,9 +6635,8 @@ floats into `apos.trBase` and `r.currentAngles` with no wrap). VERIFIED,
 `panzerfaust_mp`, `--probe-uo-weapon aim --save-snapshots --capture-tag
 skyrocket`): a rocket fired 80 degrees up with `trDelta` (344, 350, 2756)
 went out with `apos.trBase` (280.09662, 45.49534, 0): `vectoangles`' pitch,
-down positive and wrapped into [0, 360). vcod sent Q3's -79.9 until
-2026-10-18; `missile_edge_ab::launch_angles_match_retail_on_1_1` holds
-ours within the panzerfaust's 3.5 degree `adsSpread` of it (each server
+down positive and wrapped into [0, 360), not Q3's -79.9.
+`missile_edge_ab::launch_angles_match_retail_on_1_1` holds ours within the panzerfaust's 3.5 degree `adsSpread` of it (each server
 draws the spread off its own RNG). INFERRED, `net/snapshots-uo-bazooka.bin`:
 UO's 16-bit angle field cannot tell the two signs apart (the round off
 -0.88 and 359.12 is the same short). VERIFIED, `game.mp.uo.i386.so`:
@@ -6694,9 +6673,7 @@ into `Attack::Rocket`; `Server::launch` aims it with `combat::aim_end`,
 pushes the shooter and calls `Missiles::fire_rocket`, which builds 1.1's
 rocket (or UO's under protocol 22). The contact runs through
 `Missile::impact`: 179, or 180 off a body, the blast at the contact and the
-direct hit as `MOD_PROJECTILE`. Before 2026-10-15 the fire went down the
-bullet arm, so a panzerfaust was hitscan with a bullet's impact and no
-rocket, explode or splash. Pinned by
+direct hit as `MOD_PROJECTILE`. Pinned by
 `a_panzerfaust_launches_a_rocket_that_explodes_where_it_strikes` and
 `a_rocket_that_strikes_a_player_hits_him_directly`
 (`crates/server/tests/combat.rs`), and on the client by
@@ -6707,8 +6684,8 @@ VERIFIED, `game.mp.uo.i386.so`: UO's `fire_rocket` (0x5fc74) stores
 `trType` 2 (0x5fde6) and a 15000 ms think, `Weapon_RocketLauncher_Fire`
 (0x7b3da) leaves it, and `Weapon_Artillery_Fire` (0x7b594), a vehicle main
 gun's fire, rewrites it to 5 (0x7b6c8). VERIFIED, live (retail UO 1.51b, `mp_carentan-skyshot-rocket-uo.txt`): a player's bazooka round
-reads `trType` 2 and climbs an even 137 a frame. Before 2026-10-17 vcod
-flew every UO rocket on `trType` 5.
+reads `trType` 2 and climbs an even 137 a frame. vcod flies a player's UO
+rocket on `trType` 2 and a vehicle main gun's on 5.
 
 ### 13.7 A missile whose thrower left
 
@@ -6773,8 +6750,8 @@ entity 0 as `eAttacker` from that splash. vcod: the drop arms
 owner keeps `parent_unspawned`, and its fuse blast is charged to
 `host::ZEROED_ENTITY`, which `ScriptRuntime::attacker_entity` reads as entity
 0. A fuse blast's means of death is the missile's own splash one (a rocket's
-`MOD_PROJECTILE_SPLASH`, a shell's `MOD_ARTILLERY_SPLASH`); before
-2026-10-20 vcod named every fuse blast `MOD_GRENADE_SPLASH`.
+`MOD_PROJECTILE_SPLASH`, a shell's `MOD_ARTILLERY_SPLASH`), not
+`MOD_GRENADE_SPLASH`.
 
 VERIFIED, UO: `fire_rocket` arms `G_ExplodeMissile` 15 s on for every
 rocket, a vehicle's shell among them (0x5fc74: the `nextthink` and
@@ -6790,10 +6767,9 @@ freed vehicle swept `parent` to NULL, so no walk. vcod: the fuse's
 `ScriptRuntime::charged_owner` keeps and `attacker_entity` resolves while
 the vehicle is live (pinned by
 `a_vehicle_shell_s_fuse_blast_is_charged_to_the_vehicle` and
-`a_blast_charged_to_a_vehicle_names_it`). Before 2026-10-21 vcod charged
-the driver's slot.
+`a_blast_charged_to_a_vehicle_names_it`), never the driver's slot.
 
-The fuse measured, UO 1.51b, 2026-10-21: `client-probes/probe_shellfuse`
+The fuse measured, UO 1.51b: `client-probes/probe_shellfuse`
 on mp_kharkov calls `fireTurret` on the empty Panzer IV (162), then seats
 client 0 in it, fires twice and pins each shell with an `origin` write
 every frame, the first 180 above the Elefant (192), the second 180 above
@@ -6831,9 +6807,7 @@ no such bit.
 
 vcod: `Missiles::set_origin` (from `GameHost::set_field`) is the
 `G_SetOrigin`; the explode flag rides `Missile::fused`, set by the fuse
-alone. Before 2026-10-21 the fire waited for the server's pass after the
-threads, an `origin` write left a missile's flight alone, and a rocket's
-or a shell's fuse explode went out without the bit. Pinned by
+alone; `fireTurret` fires inside the thread. Pinned by
 `crates/server/tests/vehicle_fuse_ab.rs`, every probe line and both
 explodes exact (times past the placement and the first seat, the shells
 named by their order: ours numbers temp entities apart).
