@@ -124,7 +124,7 @@ struct Args {
     /// Game install (holds main/). Defaults to $COD_DIR, else the executable's directory.
     #[arg(long, default_value_os_t = vcod_common::game_dir::default_game_dir())]
     game_dir: std::path::PathBuf,
-    /// Pk3 subdirectory: main for CoD1, uo for United Offensive (untested)
+    /// Pk3 subdirectory: main for CoD1, uo for United Offensive
     #[arg(long, default_value = "main")]
     mod_dir: String,
     /// Which game the install is: cod1, cod2 or cod4. Defaults to what the

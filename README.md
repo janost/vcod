@@ -94,7 +94,8 @@ copied on purpose.
    Server, or join from the browser. PunkBuster servers refuse vcod.
 
 Controls are each game's stock ones. Every key, flag, console command and
-recipe is in [docs/usage.md](docs/usage.md).
+recipe is in [docs/usage.md](docs/usage.md); the first steps per game are
+in [docs/getting-started.md](docs/getting-started.md).
 
 ## Reporting bugs
 
@@ -157,6 +158,8 @@ human squinting at a screen, which is where you come in.
 
 - [docs/features.md](docs/features.md): the supported games, what they
   share, and a page per game on what works and what doesn't.
+- [docs/getting-started.md](docs/getting-started.md): a quick start per
+  game, common recipes (LAN, public server, bots, demos), troubleshooting.
 - [docs/usage.md](docs/usage.md): command lines, server options, controls,
   the console, the menus.
 - [docs/bots.md](docs/bots.md): running bots, the rcon commands, the
