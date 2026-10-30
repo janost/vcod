@@ -496,7 +496,7 @@ The server's step (`pmove::player_step_animated`, `pmove::anim`) picks
   ragdolls in its run). VERIFIED (ours). How a thrown body looks is
   pending a hand check.
 
-### 10.2 The spin at rest and the head's twist (C4-121)
+### 10.2 The spin at rest and the head's twist
 
 - `ragdoll.cfg`'s def 1 limits each swivel on all three axes: limit 2
   (the neck, joint `1 3 swivel`) x -30..30 ("Head turn"), y -30..30, z

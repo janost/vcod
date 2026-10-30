@@ -1371,7 +1371,7 @@ on the `damage` notify alone, counting their own health per part.
   8 596, mp_backlot `dm` most (612 to 470), with no script error and
   suicides alike (16 against 17): the bots' sight took no car into
   account and they fired into cars between them and their enemy. With
-  the cars in the bots' sight test, 2 255 kills (docs/bots.md, "CoD4").
+  the cars in the bots' sight test, 2 255 kills (`bot-measurements-cod2-cod4.md` 6).
   VERIFIED (the counts).
 
 ### 13.1 A round through a script entity

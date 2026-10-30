@@ -157,9 +157,11 @@ covers every name the stock scripts call.
   `G_RegisterWeapon`, INFERRED. 2314 is four bits a lowercase
   hex digit, weapon 0 and each registered weapon set: 113 weapons read
   `ffffffffffffffffffffffffffff3000`. VERIFIED (capture).
-- `hidePart` keeps nothing (no server pose yet); `setCanDamage` is UO's
-  `setTakeDamage`; `isSplitScreen` is 0; `abs`, `min`, `max`, `floor` and
-  `ceil` return floats. INFERRED.
+- `hidePart` keeps the entity's `partBits` (`Cod4HostState::part_bits`),
+  and a hidden bone's collision surfaces no longer clip a round
+  (`entity_damage::ModelPart`); `setCanDamage` is UO's `setTakeDamage`;
+  `isSplitScreen` is 0; `abs`, `min`, `max`, `floor` and `ceil` return
+  floats. INFERRED.
 
 ### 3.1 The census
 
@@ -1111,9 +1113,9 @@ grenade, each a `mp/statsTable.csv` number). VERIFIED (the stock gsc).
 
 ### Open
 
-- The snapshot's PVS cull, and every field
-  pmove writes (`holdBreathScale`, `groundEntityNum`; `legsAnim` matches
-  since the anim script runs, cod4-player-anims.md 7).
+Nothing left here. 1.7 sends no PVS cull to match (cod4-pmove.md 15);
+pmove writes `holdBreathScale` and `groundEntityNum` (`vcod_cod4::pmove`)
+and the anim script `legsAnim` (cod4-player-anims.md 7).
 
 ## 8. The stock gametypes on a running level
 
@@ -1492,11 +1494,10 @@ and `linkTo`s it to the car on that tag, with zero offsets.
   (`link::cod4_model_tag`). VERIFIED (`cod4::destructible_tests`, which
   breaks mp_backlot's sedans with the gsc `radiusDamage` and raised the
   error before).
-- Open: vcod's CoD4 rounds and grenade blasts damage players and
-  helicopters only (`Cod4Level::radius_damage`, `bullet.rs`), so a car
-  breaks only under a script's `radiusDamage` or `losRadiusDamage`,
-  never under a player's fire. INFERRED (no `script_takedamage` reader
-  in `game::cod4`).
+- vcod's CoD4 rounds and blasts also damage the entities a script opened
+  to damage (`setCanDamage`, `GameHost::script_takedamage`), so a
+  player's fire breaks the cars and barrels as a script's `radiusDamage`
+  does (`game::cod4::entity_damage`, cod4-combat.md 13).
 
 ## 10. Arrays are values
 
