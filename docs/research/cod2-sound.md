@@ -1,10 +1,10 @@
 # Call of Duty 2 1.3: sound aliases, falloff and the cgame's sound events
 
-How CoD2 1.3's client loads `soundaliases/*.csv`, what each of the 24 columns does, how a voice falls off with `.vfcurve` curves, and which alias each entity event plays. Written against CoD 1.1's `cod11-sound-system.md`; where this doc is silent, 1.1's mixer rules are vcod's stand-in.
+How CoD2 1.3's client loads `soundaliases/*.csv`, what each of the 24 columns does, how a voice falls off on `.vfcurve` curves, and which alias each entity event plays. Diffed against 1.1's `cod11-sound-system.md`; where this doc is silent, vcod uses 1.1's mixer rules.
 
 ## Sources
 
-- The Mac 1.3 MP binary (`cod2mp_mac13_i386`, client and server in one, fully symbolized). Every address here is in its i386 slice. The Linux dedicated server has no cgame and no sound system.
+- The Mac 1.3 MP binary (`cod2mp_mac13_i386`, client and server in one, with symbols). Every address is in its i386 slice. The Linux dedicated server has no cgame and no sound system.
 - The stock data in the 1.3 install's iwds: `iw_06.iwd` (`iw_sound2.csv`, `volumemodgroups.def`), `iw_07.iwd` (the other six csvs, the `.vfcurve` and `.spkrmap` files) and `iw_15.iwd` (a newer `iw_multiplayer2.csv`, which replaces `iw_07`'s by name).
 - vcod's loader (`crates/client/src/audio/cod2.rs`) and dispatch (`crates/client/src/play/cod2_sound.rs`), run over the install and the retail capture `crates/cod2/tests/fixtures/mp_toujane-spectate.bin`.
 
