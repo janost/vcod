@@ -1165,20 +1165,20 @@ The client side: vcod watches and plays on a UO server.
 
 ## 19. Events, effects and the HUD
 
-The UO cgame (`uo_cgame_mp_x86.dll`, base 0x30000000) read for what it
-does with the events of section 8 and what its HUD draws beyond 1.1's.
-Addresses are the DLL's unless named. Live rows come from
-`client-probes/probe_uofx.gsc` on the retail server (recipe at the end).
+What the UO cgame (`uo_cgame_mp_x86.dll`, base 0x30000000) does with section
+8's events and what its HUD draws beyond 1.1's. Addresses are the DLL's
+unless named. Live rows come from `client-probes/probe_uofx.gsc` on the
+retail server (recipe at the end).
 
 ### Event dispatch
 
-`CG_EntityEvent` is 0x30022810; events 139..210 jump through the table at
-0x30023564 indexed by `event - 0x8b`, whose slots point at 0x30023539
-(`CG_Error("Unknown event: '%s'")`) or 0x3002355a (nothing) for the events
-below marked so (VERIFIED, table bytes). 0x3002ca50 plays a sound on an
-entity; 0x3002ca80 plays one at a position as `ENTITYNUM_WORLD`, the
-handle in EAX and the position in ECX (VERIFIED, call sites). The sound
-handles are registered in 0x3002b560 (VERIFIED, strings).
+`CG_EntityEvent` is 0x30022810. Events 139..210 jump through the table at
+0x30023564 indexed by `event - 0x8b`; the slots for the events marked so
+below point at 0x30023539 (`CG_Error("Unknown event: '%s'")`) or 0x3002355a
+(nothing) (VERIFIED, table bytes). 0x3002ca50 plays a sound on an entity;
+0x3002ca80 plays one at a position as `ENTITYNUM_WORLD`, the handle in EAX
+and the position in ECX (VERIFIED, call sites). The sound handles are
+registered in 0x3002b560 (VERIFIED, strings).
 
 | UO id | Event | What the cgame does | Label |
 |---|---|---|---|
@@ -1199,143 +1199,139 @@ handles are registered in 0x3002b560 (VERIFIED, strings).
 
 - **Impact tables.** `CG_RegisterImpactEffects` 0x3001dfb0 reads every
   `fx/*.csv` in name order, a later file's row replacing an earlier one's
-  (`gmi_impacts.csv`, then UO's `iw_impacts.csv`), over 22 impact types:
-  six bullet classes by normal and reflect, the eight explosion types,
-  `grenade_bounce` and `molotov_explode_reflect`. A surface named
-  `vehicle` takes index 23 (0x3001dd30) (VERIFIED).
+  (`gmi_impacts.csv`, then UO's `iw_impacts.csv`), over 22 impact types: six
+  bullet classes by normal and reflect, the eight explosion types,
+  `grenade_bounce` and `molotov_explode_reflect`. A surface named `vehicle`
+  takes index 23 (0x3001dd30) (VERIFIED).
 - **A leading slash.** `fx/map_trenches/mortar_mz.efx` (pakuo00), which
   mp_berlin's `mp_mortar_mz` chains to, names
-  `/fx/map_trenches/mortar_mz_nest`. `FS_FOpenFileRead` skips every
-  leading `/` and `\` before its search (CoDMP.exe 0x00429a70,
-  CoDUOMP.exe 0x0042d760, coduo_lnxded 0x08061a74) (VERIFIED, the
-  decompilations). vcod's `Pk3Fs` key drops them too (`path_key`); before
-  2026-10-28 the nest effect read as missing and played nothing.
-- **Backslashed rows.** `gmi_impacts.csv` spells every
-  `artillery_explode`, `mortar_explode`, `smoke_grenade_explode` and
-  `tank_explode` path with backslashes (`fx\weapon\explosions\tank_dirt.efx`),
-  and UO's `iw_impacts.csv` its `grenade_explode`, `rocket_explode` and
-  `molotov_explode_normal` ones; the bullet, bounce and b17 rows use
+  `/fx/map_trenches/mortar_mz_nest`. `FS_FOpenFileRead` skips every leading
+  `/` and `\` before its search (CoDMP.exe 0x00429a70, CoDUOMP.exe
+  0x0042d760, coduo_lnxded 0x08061a74) (VERIFIED, the decompilations).
+  vcod's `Pk3Fs` key drops them too (`path_key`); without that the nest
+  effect reads as missing.
+- **Backslashed rows.** `gmi_impacts.csv` spells every `artillery_explode`,
+  `mortar_explode`, `smoke_grenade_explode` and `tank_explode` path with
+  backslashes (`fx\weapon\explosions\tank_dirt.efx`), and UO's
+  `iw_impacts.csv` its `grenade_explode`, `rocket_explode` and
+  `molotov_explode_normal` ones. The bullet, bounce and b17 rows use
   slashes, as all of 1.1's `iw_impacts.csv` does (VERIFIED, the paks).
-  The engine's pak lookup reads a backslash as a slash: `FS_HashFileName`
-  (coduo_lnxded 0x806077a, `cmpl $0x5c` then `movl $0x2f`) and
-  `FS_FilenameCompare` (0x806161e, `\` and `:` to `/`) (VERIFIED,
-  disassembly of the dedicated server; the client's filesystem is the
-  same qcommon code, INFERRED). vcod's `Pk3Fs` keys a lookup the same way;
-  before it did, every UO explode row missed its file and a tank shell,
-  an artillery or mortar round and a frag drew no row effect, only the
-  weapon's own `projExplosionEffect` where it has one
-  (`every_uo_explode_row_reads_its_effect`,
-  `the_uo_tank_capture_shells_draw_off_backslashed_rows`). The server
-  was never at fault: vcod-server under `client-probes/probe_vehicle` on
-  mp_cassino, captured by a `--probe-vehicle driver` over UDP, sends both
-  shells' explodes as retail's capture has them, 185 on `eType` 0, type
-  6, weapon 42, `eFlags` 0x8000, at (3365 -2708 89) on plaster (16, parm
-  32) and (4200 -2807 41) on rock (17, parm 42), the second first seen
-  exploded; through the client's resolve and effect system each drew
-  41-70 particles, a mark and a light with the fix and nothing without
-  it (live, VERIFIED, 2026-10-15).
-- **MG fire loop.** `CG_FireWeapon` sets `cent+0x204` to `fireTime` + 51
-  ms when the weapon has a `loopFireSound`; 0x300490b0, called from
-  `CG_AddPlayerWeapon` for player bodies off a turret and out of a
-  vehicle, counts it down by the frame time, plays the loop at
-  `tag_flash` while it lasts and `stopFireSound` once at the end
-  (VERIFIED). VERIFIED, the disassembly at 0x300490fb..0x300491ab: the
-  origin takes `CG_FireWeapon`'s arms, the ridden body's viewmodel tag
-  (0x3001fec0, behind the weapon's viewmodel at `weapons + 0x1c4 * w`) at
-  0x30049116, another body's world tag (syscall 0xa5 on `es.number`,
-  then 0x3001fdf0) at 0x3004915c, else `es.pos` at the frame's time
-  (0x30005f30) at 0x3004918e, and the start 0x3002ca80 takes the loop's
-  handle (`weapons + 0x128`) in `eax`, the origin in `ecx` and
-  `es.number` pushed, every frame time is left. vcod starts the loop and
-  the stop as a `Source::Tag` at that origin
-  (`AudioSystem::fire_loop_source`) and keeps one voice on the entity's
-  frame (`cod11-sound-system.md` 8) where retail restarts the call each
-  frame; the tag barely moves in the body's frame, so the two sit within
-  a few units. A turret's loop rides `es.loopSound` from `turret_think`
-  0x6bc29; a vehicle's MGs ride its sound blend entities (VERIFIED,
-  `game.mp.uo.i386.so`).
-- **Flamethrower.** No event: `CG_Player` (call 0x30034618) streams
-  chunks while the body's `eFlags` 0x200 (firing) is up with a `gas`
-  weapon, the view weapon does the same at 0x30046387 (VERIFIED). The
-  chunk system 0x30024050..0x30029210 is RTCW's `cg_flamethrower.c`
-  reworked: 8192 chunks, nozzle speed 1800 u/s, minimum 30, friction 3600
-  u/s per s, life 833 ms, start size 16, size cap 290, growth
-  `sizeMax / life / (2 (v / 1800)^3 + 0.8)` per ms, chunk spacing
-  `k * 8.89` ms (0.75 own view, 0.35 others, the latter scaled by eye
-  distance over 2048 clamped to 1..2.93), a hit clipping the chunk
-  along the face at a quarter speed ("Residue" below), sprite `flamethrowerFire{2..44}` by the share of life
-  spent, smoke `flameSmoke1..6` (VERIFIED, the constants). Which UO
-  function stands for which RTCW one is read off their structure
-  (INFERRED). Sounds: `flamethrower_start` on a new
-  stream, `flamethrower_fire` held while firing, `flamethrower_cooldown`
-  on release (0x30029210, VERIFIED). On the wire a flamethrower shot is a
-  plain `EV_FIRE_WEAPON` (163) with parm 0, and the shooter's `eFlags`
-  carry 0x200 while it fires (live, VERIFIED). The victim's client reports
-  the burn with `fdc <entnum>` (0x300291c0) and `wbuttons` 0x1 ("The flame
-  report" below).
+  - The engine's pak lookup reads a backslash as a slash: `FS_HashFileName`
+    (coduo_lnxded 0x806077a, `cmpl $0x5c` then `movl $0x2f`) and
+    `FS_FilenameCompare` (0x806161e, `\` and `:` to `/`) (VERIFIED,
+    disassembly of the dedicated server). The client's filesystem is the
+    same qcommon code (INFERRED).
+  - vcod's `Pk3Fs` keys a lookup the same way. Without it every UO explode
+    row misses its file, and a tank shell, artillery or mortar round or frag
+    draws only the weapon's own `projExplosionEffect`
+    (`every_uo_explode_row_reads_its_effect`,
+    `the_uo_tank_capture_shells_draw_off_backslashed_rows`).
+  - vcod-server sends the shells' explodes as retail does: under
+    `client-probes/probe_vehicle` on mp_cassino, a `--probe-vehicle driver`
+    over UDP saw 185 on `eType` 0, type 6, weapon 42, `eFlags` 0x8000, at
+    (3365 -2708 89) on plaster (16, parm 32) and (4200 -2807 41) on rock
+    (17, parm 42), the second first seen exploded. Each drew 41-70
+    particles, a mark and a light through the client's effect system (live,
+    VERIFIED).
+- **MG fire loop.** `CG_FireWeapon` sets `cent+0x204` to `fireTime` + 51 ms
+  when the weapon has a `loopFireSound`. 0x300490b0, called from
+  `CG_AddPlayerWeapon` for player bodies off a turret and out of a vehicle,
+  counts it down by the frame time, plays the loop at `tag_flash` while it
+  lasts and `stopFireSound` once at the end (VERIFIED).
+  - The origin, VERIFIED disassembly 0x300490fb..0x300491ab: `CG_FireWeapon`'s
+    arms; the ridden body's viewmodel tag (0x3001fec0, behind the weapon's
+    viewmodel at `weapons + 0x1c4 * w`) at 0x30049116; another body's world
+    tag (syscall 0xa5 on `es.number`, then 0x3001fdf0) at 0x3004915c; else
+    `es.pos` at the frame's time (0x30005f30) at 0x3004918e. The start
+    0x3002ca80 takes the loop's handle (`weapons + 0x128`) in `eax`, the
+    origin in `ecx` and `es.number` pushed, every frame time is left.
+  - vcod starts the loop and the stop as a `Source::Tag` at that origin
+    (`AudioSystem::fire_loop_source`) and keeps one voice on the entity's
+    frame (`cod11-sound-system.md` 8), where retail restarts the call each
+    frame. The tag barely moves in the body's frame, so the two sit within a
+    few units.
+  - A turret's loop rides `es.loopSound` from `turret_think` 0x6bc29; a
+    vehicle's MGs ride its sound blend entities (VERIFIED,
+    `game.mp.uo.i386.so`).
+- **Flamethrower.** No event: `CG_Player` (call 0x30034618) streams chunks
+  while the body's `eFlags` 0x200 (firing) is up with a `gas` weapon; the
+  view weapon does the same at 0x30046387 (VERIFIED).
+  - The chunk system 0x30024050..0x30029210 is RTCW's `cg_flamethrower.c`
+    reworked (VERIFIED, the constants): 8192 chunks, nozzle speed 1800 u/s,
+    minimum 30, friction 3600 u/s per s, life 833 ms, start size 16, size
+    cap 290, growth `sizeMax / life / (2 (v / 1800)^3 + 0.8)` per ms, chunk
+    spacing `k * 8.89` ms (0.75 own view, 0.35 others, the latter scaled by
+    eye distance over 2048 clamped to 1..2.93), a hit clipping the chunk
+    along the face at a quarter speed ("Residue" below), sprite
+    `flamethrowerFire{2..44}` by the share of life spent, smoke
+    `flameSmoke1..6`. Which UO function stands for which RTCW one is read
+    off their structure (INFERRED).
+  - Sounds: `flamethrower_start` on a new stream, `flamethrower_fire` held
+    while firing, `flamethrower_cooldown` on release (0x30029210, VERIFIED).
+  - On the wire a flamethrower shot is a plain `EV_FIRE_WEAPON` (163) with
+    parm 0, and the shooter's `eFlags` carry 0x200 while it fires (live,
+    VERIFIED). The victim's client reports the burn with `fdc <entnum>`
+    (0x300291c0) and `wbuttons` 0x1 ("The flame report" below).
 - **CameraShake.** CoDUOMP.exe parses the efx primitive as type 0xc
-  (0x4a6900); at runtime (0x4a908a) it calls the cgame's vmMain 16
+  (0x4a6900). At runtime (0x4a908a) it calls the cgame's vmMain 16
   (0x3002b0e0) with `intensity * 0.05` (parsed into `bounce`'s slot,
   0x4ac0c0, so the later key wins), a random `life` in ms, the effect's
   origin and a random `radius`, which starts the earthquake core 0x3001b420
   (VERIFIED). UO's core also jitters `refdef.vieworg` by up to 0.8 units
   (VERIFIED).
 - **`F <ms>`.** `CG_ServerCommand` 0x3003ac90 hands it to trap 0xf0,
-  CoDUOMP.exe 0x4af950, which frees every effect started in the last
-  `ms`; the server's `rewindFx(player, seconds)` sends it to that player
-  only (VERIFIED, live: the shooter got it, the spectator did not).
+  CoDUOMP.exe 0x4af950, which frees every effect started in the last `ms`.
+  The server's `rewindFx(player, seconds)` sends it to that player only
+  (VERIFIED, live: the shooter got it, the spectator did not).
 
 ### Client-traced rounds
 
-A vehicle MG's round (`CMD_VEH_FireTurret` 0x8ee02,
-`CMD_VEH_FireAltTurret` 0x8f57e in `game.mp.uo.i386.so`) and a mounted
-MG's (0x5aaa9) fire through `Bullet_Fire` and set parm bit 7 when it
-returned 0 (`or 0x80` at 0x8f4a7, 0x8fc06; `mov 0x80` at 0x5abb7), which `Bullet_Fire_Extended` does when it raised
-nothing: no `EV_BULLET_HIT` (a hit on a non-client is sent only when the
-shooter is its own inflictor or the trace named a part) and no
+A vehicle MG's round (`CMD_VEH_FireTurret` 0x8ee02, `CMD_VEH_FireAltTurret`
+0x8f57e in `game.mp.uo.i386.so`) and a mounted MG's (0x5aaa9) fire through
+`Bullet_Fire` and set parm bit 7 when it returned 0 (`or 0x80` at 0x8f4a7,
+0x8fc06; `mov 0x80` at 0x5abb7). `Bullet_Fire_Extended` returns 0 when it
+raised nothing: no `EV_BULLET_HIT` (a hit on a non-client is sent only when
+the shooter is its own inflictor or the trace named a part) and no
 `EV_BULLET_TRACER` (rolled only on a client hit or a miss under the same
 condition) (VERIFIED disassembly and decompile). A vehicle's inflictor is
 the vehicle and its attacker the crewman, so a round into the world comes
 with the bit and one into a player or a part-named model without it
-(INFERRED; live, the jeep capture's one round without the bit, at 26600,
-rode with the server's own `EV_BULLET_HIT`, surface 11).
+(INFERRED). Live, the jeep capture's one round without the bit, at 26600,
+rode with the server's own `EV_BULLET_HIT`, surface 11 (VERIFIED).
 
 The cgame side, `uo_cgame_mp_x86.dll`:
 
-- **Where.** `CG_FireWeapon` passes the bit to the flash (0x30047ef6),
-  for a vehicle on its fire event's tag and for a turret (`eType` 11) on
-  `tag_flash` (the events' tag index 0, 0x3002308d);
-  the flash (0x30045c10) traces only after its effect plays (the weapon
-  has a flash effect and the tag resolves), from the same tag
-  (0x30045c83) (VERIFIED disassembly).
+- **Where.** `CG_FireWeapon` passes the bit to the flash (0x30047ef6), for
+  a vehicle on its fire event's tag and for a turret (`eType` 11) on
+  `tag_flash` (the events' tag index 0, 0x3002308d). The flash (0x30045c10)
+  traces only after its effect plays (the weapon has a flash effect and the
+  tag resolves), from the same tag (0x30045c83) (VERIFIED disassembly).
 - **Once a frame.** 0x30045550 returns at once when it already traced the
   same entity at this `cg.time` (0x300dca18, 0x300dca20) (VERIFIED
-  disassembly). None of the captures carries two rounds of one vehicle in
-  one snapshot (live, VERIFIED).
-- **The axis.** The tag's world matrix (0x3001fdf0); for `tag_altfire`
-  (the coaxial, string 0x3007ac10) instead: a trace from
-  `cg.refdef.vieworg` 10240 units (0x3007c3ec) along `cg.snap`'s
-  `ps.viewangles` (snapshot +0xf4), then the tag's angles turned toward
-  that end point by `AngleSubtract` (0x3004bd70), at most 5 degrees of
-  pitch and 2 of yaw (0x3007c3e8, 0x3007bde0, 0x3007c150, 0x3007bce4),
-  roll kept (VERIFIED disassembly). The server turns the gun the same way
-  toward its driver's aim before its own trace (0x8ee02) (VERIFIED
-  decompile).
-- **The spread.** Up to eight draws: `hipSpreadStandMin + rand() / 32768
-  * hipSpreadMax` degrees (weaponDef +0x298 and +0x2a4, which a turret
-  file names `minSpread` and `maxSpread`: the cgame's field table gives
-  both names the same offsets), then 0x3000fa20: `end = start + forward *
-  10000 + r * tan(spread) * 10000` along the two other axes, `r` and the
-  angle each a uniform draw (0x30049270) (VERIFIED disassembly). The stock
-  vehicle MGs are `minSpread` 0.1, `maxSpread` 2 (VERIFIED, `pakuo`
-  weapon files).
+  disassembly). No capture carries two rounds of one vehicle in one
+  snapshot (live, VERIFIED).
+- **The axis.** The tag's world matrix (0x3001fdf0). For `tag_altfire` (the
+  coaxial, string 0x3007ac10) instead: a trace from `cg.refdef.vieworg`
+  10240 units (0x3007c3ec) along `cg.snap`'s `ps.viewangles` (snapshot
+  +0xf4), then the tag's angles turned toward that end point by
+  `AngleSubtract` (0x3004bd70), at most 5 degrees of pitch and 2 of yaw
+  (0x3007c3e8, 0x3007bde0, 0x3007c150, 0x3007bce4), roll kept (VERIFIED
+  disassembly). The server turns the gun the same way toward its driver's
+  aim before its own trace (0x8ee02) (VERIFIED decompile).
+- **The spread.** Up to eight draws: `hipSpreadStandMin + rand() / 32768 *
+  hipSpreadMax` degrees (weaponDef +0x298 and +0x2a4, which a turret file
+  names `minSpread` and `maxSpread`: the cgame's field table gives both
+  names the same offsets), then 0x3000fa20: `end = start + forward * 10000 +
+  r * tan(spread) * 10000` along the two other axes, `r` and the angle each
+  a uniform draw (0x30049270) (VERIFIED disassembly). The stock vehicle MGs
+  are `minSpread` 0.1, `maxSpread` 2 (VERIFIED, `pakuo` weapon files).
 - **The trace.** `CG_Trace` (0x30035310: syscall 0x26, then the solid
   entities, 0x300350d0) from the tag under mask 0x2802031 skipping the
-  shooter, then one under 0x10000 (skipping the shooter only for
+  shooter. Then one under 0x10000 (skipping the shooter only for
   `tag_altfire`: the string compare at 0x300459b8 picks the shooter, else
   0x3fe), which replaces the first when its fraction is smaller and its
-  entity is not 0x3ff, valid and of `eType` 12 (0x300459fc..0x30045a46,
-  a 0x30-byte copy) (VERIFIED disassembly). A collmap's brushes carry
+  entity is not 0x3ff, valid and of `eType` 12 (0x300459fc..0x30045a46, a
+  0x30-byte copy) (VERIFIED disassembly). A collmap's brushes carry
   0x28031640, which holds 0x10000 and none of 0x2802031 (coduo-vehicles.md
   10.3), so only the second trace meets a hull (VERIFIED, the BSP, through
   `the_uo_tank_capture_collmaps_stop_only_the_second_trace`). A hit entity
@@ -1346,48 +1342,44 @@ The cgame side, `uo_cgame_mp_x86.dll`:
   `cg_tracerchancelmg` 0.7 for an `ammoType` 3..5 weapon (vmCvars
   0x30456200, 0x30455900) (VERIFIED, the table and 0x30045a77).
 - **A hit.** `CG_BulletHitEvent` (0x30048e60), the pre-event's own
-  function, with the end point, the normal, the reflection `dir - 2 (dir
-  . n) n`, the weapon, the surface `(surfaceFlags >> 20) & 0x1f` and the
-  seat: 2 for `tag_secondary_flash`, else 1 (VERIFIED disassembly). It
-  draws the ammo type's normal and reflected rows; its tracer comes off the vehicle's `tag_secondary_flash` for
-  seat 2 and `tag_altfire` for seat 1, off a turret's own `tag_flash`,
-  through the same roll (0x30048d60)
-  (VERIFIED decompile). It also plays a sound at the point through
-  0x3002ca80, the alias in EAX (VERIFIED, call; which alias is INFERRED
-  to be the pre-event's surface sound).
-- **The tracer cvars.** A heavy round's tracer (`ammoType` 3..5) is a
-  local entity flagged 0x20 (0x300482f8), which draws with
-  `cg_tracerlengthlmg` 220 and `cg_tracerwidthlmg` 1.6 instead of
-  `cg_tracerlength` 160 and `cg_tracerwidth` 0.8 (0x3002ab06) (VERIFIED,
-  the table and disassembly). The draw (0x30048460) multiplies the width
-  by `cg_tracernightscale` (vmCvar 0x3048c380, default 5) while the
-  `sv_night` vmCvar's integer (0x30421e4c, the cvar row naming
-  `sv_night`) is set (0x3004853d), for the moving streak and the flesh
-  segment alike (callers 0x3002abae, 0x30048b52) (VERIFIED, the cvar table
-  and disassembly). `sv_night` rides the systeminfo (configstring 1);
-  `maps/mp/mp_berlin_fx.gsc` sets it to 1 and the other stock maps to 0
-  (VERIFIED, `pakuo00`). 1.1's and 1.5's cgames have no `sv_night`
-  (VERIFIED, strings).
+  function, with the end point, the normal, the reflection `dir - 2 (dir .
+  n) n`, the weapon, the surface `(surfaceFlags >> 20) & 0x1f` and the seat:
+  2 for `tag_secondary_flash`, else 1 (VERIFIED disassembly). It draws the
+  ammo type's normal and reflected rows. Its tracer comes off the vehicle's
+  `tag_secondary_flash` for seat 2 and `tag_altfire` for seat 1, or a
+  turret's own `tag_flash`, through the same roll (0x30048d60) (VERIFIED
+  decompile). It plays a sound at the point through 0x3002ca80, the alias in
+  EAX (VERIFIED, call). The alias is the pre-event's surface sound
+  (INFERRED).
+- **The tracer cvars.** A heavy round's tracer (`ammoType` 3..5) is a local
+  entity flagged 0x20 (0x300482f8), drawn with `cg_tracerlengthlmg` 220 and
+  `cg_tracerwidthlmg` 1.6 instead of `cg_tracerlength` 160 and
+  `cg_tracerwidth` 0.8 (0x3002ab06) (VERIFIED, the table and disassembly).
+  The draw (0x30048460) multiplies the width by `cg_tracernightscale`
+  (vmCvar 0x3048c380, default 5) while the `sv_night` vmCvar's integer
+  (0x30421e4c, the cvar row naming `sv_night`) is set (0x3004853d), for the
+  moving streak and the flesh segment alike (callers 0x3002abae,
+  0x30048b52) (VERIFIED, the cvar table and disassembly). `sv_night` rides
+  the systeminfo (configstring 1); `maps/mp/mp_berlin_fx.gsc` sets it to 1,
+  the other stock maps to 0 (VERIFIED, `pakuo00`). 1.1's and 1.5's cgames
+  have no `sv_night` (VERIFIED, strings).
 - **The tracer's length gate.** The streak's spawn (0x30048260; callers
   0x3002317f `EV_BULLET_TRACER`, 0x30045bee a traced miss, 0x30048e46 the
-  bullet hit's tracer) normalizes `end - start` and spawns nothing when
-  that length is under the tracer length, `cg_tracerlengthlmg` for a heavy
-  round (`fcomp` at 0x300482ff, the `jnp` skip on C0) (VERIFIED
-  disassembly). Otherwise it is 1.1's `CG_SpawnTracer` (efx-grammar.md R8)
-  with the local entity's 0x20 flag. 1.5's spawn (0x3003a680) discards
-  the length (`fstp st(0)` at 0x3003a6dc) and 1.1's reads none (VERIFIED
-  disassembly). vcod: `fx::sim::TracerRules`, set per frame on a UO
-  connection.
-
+  bullet hit's tracer) normalizes `end - start` and spawns nothing when that
+  length is under the tracer length, `cg_tracerlengthlmg` for a heavy round
+  (`fcomp` at 0x300482ff, the `jnp` skip on C0) (VERIFIED disassembly).
+  Otherwise it is 1.1's `CG_SpawnTracer` (efx-grammar.md R8) with the local
+  entity's 0x20 flag. 1.5's spawn (0x3003a680) discards the length (`fstp
+  st(0)` at 0x3003a6dc) and 1.1's reads none (VERIFIED disassembly). vcod:
+  `fx::sim::TracerRules`, set per frame on a UO connection.
 - **A player's round.** `CG_CalcMuzzlePoint` (0x30048b60) is 1.1's
-  (`cod11-events-and-fx.md` 6): the shooter's `tag_flash`, else
-  `trBase` plus the stance's `bg_viewheight`, and for the ridden body
-  `ps.origin` plus `viewHeightCurrent` (`ps+0xf8`) and the lean, moved
-  forward first for a deployed `lmg` (`weaponClass` 3, `pm_flags` 0x20)
-  (VERIFIED decompile). It adds no walk bob, unlike the server's
-  `CalcMuzzlePoint` (0x8b8ea, `cod11-combat.md` 2.1). A server's
-  `EV_BULLET_TRACER` draws from its own `trBase`, that server muzzle
-  (above).
+  (`cod11-events-and-fx.md` 6): the shooter's `tag_flash`, else `trBase`
+  plus the stance's `bg_viewheight`; for the ridden body `ps.origin` plus
+  `viewHeightCurrent` (`ps+0xf8`) and the lean, moved forward first for a
+  deployed `lmg` (`weaponClass` 3, `pm_flags` 0x20) (VERIFIED decompile).
+  It adds no walk bob, unlike the server's `CalcMuzzlePoint` (0x8b8ea,
+  `cod11-combat.md` 2.1). A server's `EV_BULLET_TRACER` draws from its own
+  `trBase`, that server muzzle.
 
 ### The flame report
 
@@ -1395,206 +1387,207 @@ The server never traces a flame: the victim's cgame tests its own flame
 chunks against its own box and reports the burn (section 21,
 "Flamethrower"). Addresses are `uo_cgame_mp_x86.dll` unless named.
 
-- **Where it runs.** `CG_AddFlameChunks` (0x30027d10) runs every frame
-  from the draw (call at 0x3004262e, after the view weapon). Its
-  chunk clock is `2 * cg.time` in half-ms ticks (`0x300ab718`, from the
-  `fild cg.time; fadd st,st` at 0x30026904) (VERIFIED). Once a frame's
-  move pass is done it clears the in-flame flag `0x300d9758` if the local
-  client's check time (`centFlameInfo` row 0x300ab7bc, stride 0xb8,
-  indexed by `cg.snap->ps.clientNum`) is behind the clock, draws every
-  chain, then sets that check time 100 ticks (50 ms) on if it was behind,
-  and hands the flag to the exe through trap 0x58 (0x30029199)
-  (VERIFIED). `cg.snap` is 0x30459160, the playerstate at +0xc
-  (`CG_TransitionSnapshot` stores 0x30459164 into it; `clientNum` +0xe0,
-  `origin` +0x20, `mins` +0x568, `maxs` +0x574 match the UO netfield
-  offsets 0xd4, 0x14, 0x55c, 0x568) (VERIFIED). So the check runs once
-  per 50 ms and the flag holds in between (INFERRED, the order).
+- **Where it runs.** `CG_AddFlameChunks` (0x30027d10) runs every frame from
+  the draw (call at 0x3004262e, after the view weapon). Its chunk clock is
+  `2 * cg.time` in half-ms ticks (`0x300ab718`, from the `fild cg.time; fadd
+  st,st` at 0x30026904) (VERIFIED). After a frame's move pass it clears the
+  in-flame flag `0x300d9758` if the local client's check time
+  (`centFlameInfo` row 0x300ab7bc, stride 0xb8, indexed by
+  `cg.snap->ps.clientNum`) is behind the clock, draws every chain, sets
+  that check time 100 ticks (50 ms) on if it was behind, and hands the flag
+  to the exe through trap 0x58 (0x30029199) (VERIFIED). `cg.snap` is
+  0x30459160, the playerstate at +0xc (`CG_TransitionSnapshot` stores
+  0x30459164 into it; `clientNum` +0xe0, `origin` +0x20, `mins` +0x568,
+  `maxs` +0x574 match the UO netfield offsets 0xd4, 0x14, 0x55c, 0x568)
+  (VERIFIED). So the check runs once per 50 ms and the flag holds in
+  between (INFERRED, the order).
 - **Which chunks.** The sprite add (0x300268e0) returns for chunk type 3
-  (`+0x2c`, the smoke `0x30027ad0` spawns) and 1, and for a negative
-  alpha; it tests a chunk of type 0, or type 2 with `+0x14` -1, when
-  `rand() % 5 == 0` and its life fraction (`+0xe8`) is under 0.9
-  (`0x3007c038`), passing the owner (`+0x38`), the size (`+0xe4`) and the
-  origin (`+0xd8`, in EDI) (VERIFIED, disassembly 0x300268fa..0x3002698c).
-- **The test** (0x300265c0, VERIFIED disassembly). It returns once the
-  flag is up or the chunk sits at the world origin. Reach is `size * 0.4`
-  (`0x3007162c`), halved (`0x3007bce8`) for the victim's own flame, and
-  never under 14 (`0x3007c0a0`). It needs the local check due, and it
-  skips a chunk within reach of the last chunk tested on the same tick
-  (`0x300a8710`, `0x300d9760`). The nearest point is the snapshot
-  origin plus `clamp(chunk - origin, mins, maxs)` per axis. The victim's
-  own chunk counts only past 0.4 of its life (`0x3007c098`, a double). The
-  distance to the nearest point must be under the reach. Then a point
-  trace (`0x30035310`: trap 0x26, then the entity clip) runs from the
-  origin's x and y at the chunk's height, clamped a unit inside the box's
-  top and bottom (`0x3007bce0`), to the chunk, mask 0x2802031. It must
-  end with fraction 1 or on the local client's entity. On a pass it calls
-  0x300291c0 with the client in EAX and the owner in ECX and raises the
-  flag.
+  (`+0x2c`, the smoke `0x30027ad0` spawns) and 1, and for a negative alpha.
+  It tests a chunk of type 0, or type 2 with `+0x14` -1, when `rand() % 5 ==
+  0` and its life fraction (`+0xe8`) is under 0.9 (`0x3007c038`), passing
+  the owner (`+0x38`), the size (`+0xe4`) and the origin (`+0xd8`, in EDI)
+  (VERIFIED, disassembly 0x300268fa..0x3002698c).
+- **The test** (0x300265c0, VERIFIED disassembly):
+  - it returns once the flag is up or the chunk sits at the world origin;
+  - reach is `size * 0.4` (`0x3007162c`), halved (`0x3007bce8`) for the
+    victim's own flame, never under 14 (`0x3007c0a0`);
+  - it needs the local check due, and skips a chunk within reach of the last
+    chunk tested on the same tick (`0x300a8710`, `0x300d9760`);
+  - the nearest point is the snapshot origin plus `clamp(chunk - origin,
+    mins, maxs)` per axis, and the distance to it must be under the reach;
+  - the victim's own chunk counts only past 0.4 of its life (`0x3007c098`,
+    a double);
+  - a point trace (`0x30035310`: trap 0x26, then the entity clip) runs from
+    the origin's x and y at the chunk's height, clamped a unit inside the
+    box's top and bottom (`0x3007bce0`), to the chunk, mask 0x2802031, and
+    must end with fraction 1 or on the local client's entity;
+  - on a pass it calls 0x300291c0 with the client in EAX and the owner in
+    ECX and raises the flag.
 - **`fdc`.** 0x300291c0 sends `fdc %i` with the owner through trap 0x18
-  (the client command) when the client's last report (row 0x300ab7f8) is
-  at least 2000 ms of `cg.time` old, and stamps it and the owner (row
+  (the client command) when the client's last report (row 0x300ab7f8) is at
+  least 2000 ms of `cg.time` old, and stamps it and the owner (row
   0x300ab7fc) (VERIFIED decompile).
 - **`wbuttons` 0x1.** Trap 0x58 stores its argument at `0x4963774`
-  (CoDUOMP.exe `CL_CgameSystemCalls` 0x401f30); `CL_FinishMove`'s button pass
-  (0x40c700) ORs 0x1 into the cmd's `wbuttons` (byte +5) while it is set
-  (`or byte [eax+5],1` at 0x40c89b), beside trap 0x57's shellshock 0x4
+  (CoDUOMP.exe `CL_CgameSystemCalls` 0x401f30). `CL_FinishMove`'s button
+  pass (0x40c700) ORs 0x1 into the cmd's `wbuttons` (byte +5) while it is
+  set (`or byte [eax+5],1` at 0x40c89b), beside trap 0x57's shellshock 0x4
   (VERIFIED disassembly). The server burns only while this bit rides the
   victim's last cmd (section 21).
-- **The flood window.** UO's `SV_ClientCommand` (`coduo_lnxded`
-  0x808d629) exempts only `team `, `score ` and `mr ` (the third string,
-  0x80e4c88, read out of the binary) and opens the 800 ms window for any
-  other command, as 1.1 does (docs/protocol-1.1.md), so `fdc` both opens
-  it and is dropped inside it (VERIFIED). The cgame does not space it
-  (INFERRED, nothing in 0x300291c0 reads the window).
-- **Live, retail.** With `client-probes/probe_flame` on the 1.51b
-  server and the recipe below, the victim probe raised the flag on
-  each of the shooter's 150 ms pulses, sent `fdc 1` at 18394 ms and again
-  2086 ms later, and took 8 (`damage 2` times four) with `MOD_FLAME` on
-  every server frame its cmds carried the bit: three frames a pulse, never
-  while the bit was down, though the last `fdc` was inside 3 s (VERIFIED,
-  2026-10-14, `PROBE damage` lines). Thirteen burns killed it. Rerun
-  2026-10-15 with the test's entity clip and the residues in: the same,
-  the flag up on every pulse, `fdc 1` at 16943 and 19038 ms, 8 with
-  `MOD_FLAME` a frame while the bit rode, dead after thirteen (VERIFIED,
-  `PROBE damage` lines).
+- **The flood window.** UO's `SV_ClientCommand` (`coduo_lnxded` 0x808d629)
+  exempts only `team `, `score ` and `mr ` (the third string, 0x80e4c88) and
+  opens the 800 ms window for any other command, as 1.1 does
+  (docs/protocol-1.1.md), so `fdc` both opens it and is dropped inside it
+  (VERIFIED). The cgame does not space it (INFERRED, nothing in 0x300291c0
+  reads the window).
+- **Live, retail.** With `client-probes/probe_flame` on the 1.51b server and
+  the recipe below, the victim probe raised the flag on each of the
+  shooter's 150 ms pulses, sent `fdc 1` at 18394 ms and again 2086 ms later,
+  and took 8 (`damage 2` times four) with `MOD_FLAME` on every server frame
+  its cmds carried the bit: three frames a pulse, never while the bit was
+  down, though the last `fdc` was inside 3 s. Thirteen burns killed it
+  (VERIFIED, `PROBE damage` lines). A rerun with vcod's test entity clip and
+  residues gave the same: `fdc 1` at 16943 and 19038 ms, 8 a frame while the
+  bit rode, dead after thirteen (VERIFIED, `PROBE damage` lines).
 - **Residue.** A stream chunk is born with `+0x14` 1 (0x30024c04).
-  The chunk move (0x30025da0) on a hit that is not all solid and whose
-  `surfaceFlags` lack 0x10 clips the chunk's velocity (`+0x88` times
-  `+0x94`) against the face through 0x30008390 with an overbounce of 1.1
-  (`0x3f8ccccd` pushed at 0x300262e2), normalizes it into `+0x88`, sets
-  `+0x94` to its length times 0.25 (0x3007be58) and `+0xbc` to 0.5
-  (VERIFIED disassembly and bytes). 0x30008390 subtracts `d * 1.1` of the
-  normal for a velocity `d` into the face and `d / 1.1` otherwise
-  (VERIFIED decompile). That is Q3's `PM_ClipVelocity`, so a chunk slides
-  along the face rather than mirroring off it (INFERRED). Then,
-  on the chunk's first such hit (`+0x124` 0), when the struck entity is
-  not a client (`sv_maxclients` at 0x30447bdc, set at 0x300383fd) and the
-  surface is not ice, snow or water (`surfaceFlags & 0x1f00000` 0xc00000,
-  0x1300000, 0x1400000), a fire chunk with `+0x14` set leaves a residue
-  unless its owner's last (`centFlameInfo` row 0x300ab7f0, its spot at
-  0x300ab7e4) is under 200 ticks (100 ms) old, or under 6000 ticks
-  (3 s, 0x3007c0f8) old and within 32 units (0x3007bdd0); `+0x14` then
-  drops to 0 and `+0x124` takes the clock (VERIFIED decompile). The
-  residue is 0x30027ad0's copy of the chunk as type 3 at the contact:
-  speed 0 (its third argument -0.2 is not above 0), size the chunk's held
-  to 145 (0x3007c308); the bounce then gives it a death of `(1 + (1 -
-  |normal z|) / 2) * 2000 + rand * 2000` ticks on (0x3007bd28, 0x3007c300,
-  0x3007bee4) and a trail of 150 shed flames over that life (0x3007c2f0),
-  the first at a random point of the first step (VERIFIED decompile). A
-  type 3 chunk is never drawn (0x300268e0). Each trail step of
-  0x30027d10 copies it as type 2 with `+0x14` -1 and `+0x34` 0x3fe
-  (the owner `+0x38` kept), born at the step's time and dying 2800 ticks
-  later, both moved back by `rand * 600` ticks (0x3007c3b8, 0x3007c3b0,
-  0x3007c3a8), its size cap `1.5 * size` held to 60..120 (0x3007be70,
-  0x3007bff0, 0x3007c158) plus `rand * 25`, starting at half of it,
-  drifting and rising ("Residue flames in motion" below); the next
-  step comes `step / 2 + rand * step` on (0x3007bde8) (VERIFIED
-  decompile). These type 2 flames are what the report tests besides the
-  stream (above), so a residue burns for its own life plus 1.4 s. While
-  under 1300 ticks from its death a residue whose face is gone dies
-  (a 4-unit trace behind it, VERIFIED decompile; vcod's world never
-  moves, so vcod skips it). 0x30027d10 also makes a type 3 off a chunk
-  whose `+0x140` lies between 0 and the clock (`0x30027ad0(chunk, 3,
-  40)` at 0x30027e9d, VERIFIED disassembly), but nothing ever sets a
-  time there ("`+0x140`" below).
+  - The chunk move (0x30025da0), on a hit not all solid whose `surfaceFlags`
+    lack 0x10, clips the chunk's velocity (`+0x88` times `+0x94`) against the
+    face through 0x30008390 with an overbounce of 1.1 (`0x3f8ccccd` pushed at
+    0x300262e2), normalizes it into `+0x88`, sets `+0x94` to its length times
+    0.25 (0x3007be58) and `+0xbc` to 0.5 (VERIFIED disassembly and bytes).
+  - 0x30008390 subtracts `d * 1.1` of the normal for a velocity `d` into the
+    face and `d / 1.1` otherwise (VERIFIED decompile). That is Q3's
+    `PM_ClipVelocity`, so a chunk slides along the face (INFERRED).
+  - On the chunk's first such hit (`+0x124` 0), when the struck entity is
+    not a client (`sv_maxclients` at 0x30447bdc, set at 0x300383fd) and the
+    surface is not ice, snow or water (`surfaceFlags & 0x1f00000` 0xc00000,
+    0x1300000, 0x1400000), a fire chunk with `+0x14` set leaves a residue.
+    It does not when its owner's last (`centFlameInfo` row 0x300ab7f0, spot
+    at 0x300ab7e4) is under 200 ticks (100 ms) old, or under 6000 ticks (3 s,
+    0x3007c0f8) old and within 32 units (0x3007bdd0). `+0x14` then drops to
+    0 and `+0x124` takes the clock (VERIFIED decompile).
+  - The residue is 0x30027ad0's copy of the chunk as type 3 at the contact:
+    speed 0 (its third argument -0.2 is not above 0), size the chunk's held
+    to 145 (0x3007c308). The bounce gives it a death of `(1 + (1 - |normal
+    z|) / 2) * 2000 + rand * 2000` ticks on (0x3007bd28, 0x3007c300,
+    0x3007bee4) and a trail of 150 shed flames over that life (0x3007c2f0),
+    the first at a random point of the first step (VERIFIED decompile). A
+    type 3 chunk is never drawn (0x300268e0).
+  - Each trail step of 0x30027d10 copies it as type 2 with `+0x14` -1 and
+    `+0x34` 0x3fe (owner `+0x38` kept), born at the step's time and dying
+    2800 ticks later, both moved back by `rand * 600` ticks (0x3007c3b8,
+    0x3007c3b0, 0x3007c3a8), its size cap `1.5 * size` held to 60..120
+    (0x3007be70, 0x3007bff0, 0x3007c158) plus `rand * 25`, starting at half
+    of it, drifting and rising ("Residue flames in motion" below). The next
+    step comes `step / 2 + rand * step` on (0x3007bde8) (VERIFIED decompile).
+  - The report tests these type 2 flames besides the stream (above), so a
+    residue burns for its own life plus 1.4 s (INFERRED).
+  - Under 1300 ticks from its death a residue whose face is gone dies (a
+    4-unit trace behind it, VERIFIED decompile). vcod's world never moves,
+    so vcod skips it.
+  - 0x30027d10 also makes a type 3 off a chunk whose `+0x140` lies between 0
+    and the clock (`0x30027ad0(chunk, 3, 40)` at 0x30027e9d, VERIFIED
+    disassembly), but nothing sets a time there ("`+0x140`" below).
 - **vcod.** `fx::flame::FlameSystem::report` runs the check and the test
-  each frame after the chunk step, with `cg.snap` as the older of the
-  drawn pair. `PlayInput::in_flame` carries the flag into `wbuttons`
-  (`msg::WBUTTON_IN_FLAME_V22`), and the client sends the `fdc`. The
-  test's trace (`fx::flame::ShotTrace`) is the world and the snapshot's
-  solid entities, so a body between the chunk and the victim blocks.
-  The chunks' own move clips as 0x30025cd0 does
-  (`fx::flame::ChunkWorld`, "Chunks against bodies" below). Residues
-  are `fx::flame`'s `Residue`: still, shedding flames that drift, rise
-  and grow as below and burn as the stream's. Two differences: vcod's stream chunks are `fx::flame`'s simplified
-  ones; and vcod holds an `fdc` back while the flood window is open
-  (`NetClient::flood_window_open`), so the report retries at a later
-  check instead of being dropped. A following spectator's cgame tests the
-  followed player's box and reports for itself (INFERRED, the check reads
-  `cg.snap`'s `clientNum` and nothing else); vcod does the same.
-- **Chunks against bodies.** The chunk move (0x30025da0) traces each
-  step through 0x30025cd0 with the box -2..2 on each axis (0x300851c4,
-  0x300851d0, VERIFIED bytes), mask 0x2810011 and the chunk's owner
-  `+0x34` as the pass entity (the call at 0x300260fa) (VERIFIED
-  disassembly). 0x30025cd0 runs `CG_Trace`
-  (0x30035310: trap 0x26 on the world, then 0x300350d0 over the solid
-  list, skipping the pass entity's number) (VERIFIED disassembly). Unless
-  the owner is `cg.snap->ps.clientNum` (+0xe0), it then builds a temp
-  model with trap 0x2a off `cg.snap+0x568` and `+0x574`, contents
-  0x2000000, and runs trap 0x29 from the same start to the same end with
-  the same box and mask against it, placed at `cg.snap+0x20` with the
-  angles at 0x30071f58 (VERIFIED disassembly). `cg.snap+0x20`, `+0x568`
-  and `+0x574` are the playerstate's `origin`, `mins` and `maxs` (the
-  report bullet above). 0x300350d0 picks trap 0x2a for an entity whose
-  `eFlags` hold 0x10 and trap 0x23 otherwise (0x300351cd), and every
-  player entity carries 0x10 (cod11-player-clip.md 5), so trap 0x2a is
-  the temp capsule model, and trap 0x29, which 0x300350d0 takes in place
-  of 0x27 on its capsule argument, the capsule trace (INFERRED). That
-  trace replaces `CG_Trace`'s
-  when its byte +0x2e (startsolid) is set or its fraction is the
-  smaller, with the entity number at +0x28 set to the client (VERIFIED
-  disassembly). So a chunk bounces off every solid body but its owner's,
-  and off the local player, who is no snapshot entity, as its capsule;
-  the local player's own chunks pass it (INFERRED). A result with byte
-  +0x2f set zeroes the chunk's velocity (+0x88..+0x94) (VERIFIED
-  decompile). That byte is allsolid (INFERRED, its use). Only a struck
-  entity at or past `sv_maxclients` can take a residue (above), so a chunk that first
-  strikes a body leaves none and has spent its chance. vcod:
-  `fx::flame::ChunkWorld`, with `play::predict::solid_bodies` for the
-  list and `movetrace::body_trace` for the capsule.
+  each frame after the chunk step, with `cg.snap` as the older of the drawn
+  pair. `PlayInput::in_flame` carries the flag into `wbuttons`
+  (`msg::WBUTTON_IN_FLAME_V22`), and the client sends the `fdc`. The test's
+  trace (`fx::flame::ShotTrace`) is the world and the snapshot's solid
+  entities, so a body between the chunk and the victim blocks. The chunks'
+  own move clips as 0x30025cd0 does (`fx::flame::ChunkWorld`, "Chunks
+  against bodies" below). Residues are `fx::flame`'s `Residue`: still,
+  shedding flames that drift, rise and grow as below and burn as the
+  stream's. Two differences from retail:
+  - vcod's stream chunks are `fx::flame`'s simplified ones;
+  - vcod holds an `fdc` back while the flood window is open
+    (`NetClient::flood_window_open`), so the report retries at a later check
+    instead of being dropped.
+
+  A following spectator's cgame tests the followed player's box and reports
+  for itself (INFERRED, the check reads `cg.snap`'s `clientNum` and nothing
+  else); vcod does the same.
+- **Chunks against bodies.** The chunk move (0x30025da0) traces each step
+  through 0x30025cd0 with the box -2..2 on each axis (0x300851c4,
+  0x300851d0, VERIFIED bytes), mask 0x2810011 and the chunk's owner `+0x34`
+  as the pass entity (the call at 0x300260fa) (VERIFIED disassembly).
+  - 0x30025cd0 runs `CG_Trace` (0x30035310: trap 0x26 on the world, then
+    0x300350d0 over the solid list, skipping the pass entity's number)
+    (VERIFIED disassembly).
+  - Unless the owner is `cg.snap->ps.clientNum` (+0xe0), it builds a temp
+    model with trap 0x2a off `cg.snap+0x568` and `+0x574`, contents
+    0x2000000, and runs trap 0x29 from the same start to the same end with
+    the same box and mask against it, placed at `cg.snap+0x20` with the
+    angles at 0x30071f58 (VERIFIED disassembly). `cg.snap+0x20`, `+0x568`
+    and `+0x574` are the playerstate's `origin`, `mins` and `maxs`.
+  - 0x300350d0 picks trap 0x2a for an entity whose `eFlags` hold 0x10 and
+    trap 0x23 otherwise (0x300351cd); every player entity carries 0x10
+    (cod11-player-clip.md 5). So trap 0x2a is the temp capsule model and
+    trap 0x29, which 0x300350d0 takes in place of 0x27 on its capsule
+    argument, the capsule trace (INFERRED).
+  - That trace replaces `CG_Trace`'s when its byte +0x2e (startsolid) is set
+    or its fraction is the smaller, with the entity number at +0x28 set to
+    the client (VERIFIED disassembly). So a chunk bounces off every solid
+    body but its owner's, and off the local player (no snapshot entity) as
+    its capsule; the local player's own chunks pass it (INFERRED).
+  - A result with byte +0x2f set zeroes the chunk's velocity (+0x88..+0x94)
+    (VERIFIED decompile). That byte is allsolid (INFERRED, its use).
+  - Only a struck entity at or past `sv_maxclients` can take a residue, so a
+    chunk that first strikes a body leaves none and has spent its chance
+    (INFERRED).
+  - vcod: `fx::flame::ChunkWorld`, with `play::predict::solid_bodies` for
+    the list and `movetrace::body_trace` for the capsule.
 - **Residue flames in motion.** In 0x30027d10's trail step for a type 3
-  parent, a wall's residue (|normal z| under 0.2, 0x3007c3c0) redraws
-  its `+0xa8` each step as `-0.3 - 2 * rand` (0x3007bfc4); it starts at
-  -0.2, 0x30027ad0's third argument (VERIFIED decompile). The flame's
-  `+0xa8` is the parent's less 20 (0x3007be04), less `(1 - normal z) *
-  5` (0x3007bde0) (VERIFIED decompile). Its direction (`+0x88`) is
-  `right` off the normal's angles (0x3004a000 vectoangles, then
-  0x3004a200 AngleVectors with the normal as forward) times `2 * rand -
-  1` drawn on each axis apart, plus `(1 - |normal z|) * (rand * 0.45 +
-  0.25)` of the normal drawn on each axis apart (0x3007c174,
-  0x3007be58), normalized (VERIFIED decompile and disassembly). A
-  floor's angles have yaw 0, so its `right` is -y and its flames drift
-  along y only (INFERRED, Q3's `vectoangles`). Its speed (`+0x94`) is
-  `(1 - frac) * rand * |parent's +0xa8| + 2` (0x3007bce4) in units per
-  1000 ticks, `frac` the parent's life spent, and its friction `+0xbc`
-  is 0 (VERIFIED decompile). 0x30025990 places a chunk at `base + dir *
-  speed * dt - z * a8 * dt * age * +0xb8`, `dt` and `age` the
-  1000-tick units since the base (`+0x80`) and the birth (`+0x48`), and
-  the move (0x30025da0) rebases it every step past 20 ticks
-  (0x3007c128) until it strikes (VERIFIED decompile). So a flame climbs
-  at a speed of `-a8 * age`: a floor residue's flames rise about 40
-  units in their first second (INFERRED, the step rate). Growth is
-  0x30025c60: while under the cap, `size += dt_ticks * +0xb8 * rate`,
-  `rate` 0x30023b70's, for a type 2 `cap / life + (1 - min(+0xb8, 1))^2
-  * cap / life` per tick (0x3007bde8, 2.0) (VERIFIED disassembly and
-  bytes). `+0xb8`
-  is `CG_FireFlameChunks`' third argument, 1.8 at both callers (0x300346a0,
-  0x30046387), held at 1 while a chain continues (VERIFIED decompile).
-  A steady stream's residue flames therefore grow from half the cap to
-  the whole over half their life (INFERRED, the stream's chain state).
-  vcod: `fx::flame` moves them one frame at a time by that rule with
-  `+0xb8` 1.
+  parent:
+  - a wall's residue (|normal z| under 0.2, 0x3007c3c0) redraws its `+0xa8`
+    each step as `-0.3 - 2 * rand` (0x3007bfc4); it starts at -0.2,
+    0x30027ad0's third argument (VERIFIED decompile);
+  - the flame's `+0xa8` is the parent's less 20 (0x3007be04), less `(1 -
+    normal z) * 5` (0x3007bde0) (VERIFIED decompile);
+  - its direction (`+0x88`) is `right` off the normal's angles (0x3004a000
+    vectoangles, then 0x3004a200 AngleVectors with the normal as forward)
+    times `2 * rand - 1` drawn on each axis apart, plus `(1 - |normal z|) *
+    (rand * 0.45 + 0.25)` of the normal drawn on each axis apart
+    (0x3007c174, 0x3007be58), normalized (VERIFIED decompile and
+    disassembly). A floor's angles have yaw 0, so its `right` is -y and its
+    flames drift along y only (INFERRED, Q3's `vectoangles`);
+  - its speed (`+0x94`) is `(1 - frac) * rand * |parent's +0xa8| + 2`
+    (0x3007bce4) in units per 1000 ticks, `frac` the parent's life spent,
+    and its friction `+0xbc` is 0 (VERIFIED decompile);
+  - 0x30025990 places a chunk at `base + dir * speed * dt - z * a8 * dt *
+    age * +0xb8`, `dt` and `age` the 1000-tick units since the base
+    (`+0x80`) and the birth (`+0x48`), and the move (0x30025da0) rebases it
+    every step past 20 ticks (0x3007c128) until it strikes (VERIFIED
+    decompile). So a flame climbs
+    at `-a8 * age`: a floor residue's flames rise about 40 units in their
+    first second (INFERRED, the step rate);
+  - growth is 0x30025c60: while under the cap, `size += dt_ticks * +0xb8 *
+    rate`, `rate` 0x30023b70's, for a type 2 `cap / life + (1 - min(+0xb8,
+    1))^2 * cap / life` per tick (0x3007bde8, 2.0) (VERIFIED disassembly and
+    bytes). `+0xb8` is `CG_FireFlameChunks`' third argument, 1.8 at both
+    callers (0x300346a0, 0x30046387), held at 1 while a chain continues
+    (VERIFIED decompile). A
+    steady stream's residue flames grow from half the cap to the whole over
+    half their life (INFERRED, the stream's chain state);
+  - vcod: `fx::flame` moves them one frame at a time by that rule with
+    `+0xb8` 1.
 - **Friction after a bounce.** The chunk move opens with a friction step
-  when `+0x94` is above 1.0 (0x3007bce0) and `+0xbc` is not 0: `+0xbc`
-  times 1800 (0x3007c330, float), times 2^65 (0x3007c310) for a type 0
-  chunk outside its owner's chain, times the ticks since `+0xf8` times
-  0.001 (0x3007c338), goes into 0x30023c30 as a negative add to `+0x94`
-  (VERIFIED decompile and bytes). 0x30023c30 sets a sum that is not 0
-  and under 30 (0x3007becc) to 30 (`0x41f00000`) (VERIFIED decompile and
-  bytes). A residue flame is born with `+0xbc` 0 and moves at under 5 a
-  1000 ticks (above), so it brakes only after a bounce, and then only
-  when the clipped speed's quarter is still above 1: past that step its
-  speed is 30 a 1000 ticks and stays there (INFERRED, the arithmetic).
-  vcod: the stream and the residue flames clip as 0x30008390 does
-  (`fx::flame::clip_velocity`); a bounced residue flame brakes by that
-  rule in vcod's units, its speed doubled (`fx::flame::residue_brake`);
-  the stream keeps its own friction.
-- **`+0x140`.** Every store to a chunk's `+0x140` in the module writes
-  the double at 0x3007bcf0 (0x30027c50, 0x30027ea8, 0x300288d5,
-  0x30028d0c) or copies another chunk's (0x30025966, and the whole-chunk
-  copies), and the pool starts zeroed (0x30025570) (VERIFIED, the
-  disassembly's every `+0x140` operand). That double is 0.0 (VERIFIED
-  bytes). The type 3 spawn off `+0x140` is therefore never taken, and
+  when `+0x94` is above 1.0 (0x3007bce0) and `+0xbc` is not 0: `+0xbc` times
+  1800 (0x3007c330, float), times 2^65 (0x3007c310) for a type 0 chunk
+  outside its owner's chain, times the ticks since `+0xf8` times 0.001
+  (0x3007c338), goes into 0x30023c30 as a negative add to `+0x94` (VERIFIED
+  decompile and bytes). 0x30023c30 sets a sum that is not 0 and under 30
+  (0x3007becc) to 30 (`0x41f00000`) (VERIFIED decompile and bytes). A
+  residue flame is born with `+0xbc` 0 and moves at under 5 a 1000 ticks, so
+  it brakes only after a bounce, and only when the clipped speed's quarter
+  is still above 1: past that step its speed is 30 a 1000 ticks and stays
+  there (INFERRED, the arithmetic). vcod: the stream and the residue flames
+  clip as 0x30008390 does (`fx::flame::clip_velocity`); a bounced residue
+  flame brakes by that rule in vcod's units, its speed doubled
+  (`fx::flame::residue_brake`); the stream keeps its own friction.
+- **`+0x140`.** Every store to a chunk's `+0x140` writes the double at
+  0x3007bcf0 (0x30027c50, 0x30027ea8, 0x300288d5, 0x30028d0c) or copies
+  another chunk's (0x30025966, and the whole-chunk copies), and the pool
+  starts zeroed (0x30025570) (VERIFIED, every `+0x140` operand). That double
+  is 0.0 (VERIFIED bytes). The type 3 spawn off `+0x140` is never taken, and
   vcod has none (INFERRED, the test `0 < +0x140`).
 
 Recipe (the victim's cmds face world yaw 0, as both probes send world
@@ -1606,78 +1599,54 @@ angles, so the gsc lays the pair out along +x):
     vcod --game-dir <UO install> --mod-dir uo --net-probe 127.0.0.1:31051 \
         --probe-team allies --probe-flame --probe-secs 55   # 3 s after the shooter
 
-started once the server answers (its boot takes some 15 s). The shooter's
-`--probe-weapsel` fixture is discarded. The same pair on vcod-server
+Start the probes once the server answers (its boot takes some 15 s); discard
+the shooter's `--probe-weapsel` fixture. The same pair on vcod-server
 (`--gametype-script` the probe) burns the victim the same way, 8 with
-`MOD_FLAME` a frame while the bit rides. It also hits the victim with
-`MOD_PISTOL_BULLET` for 3 at each pulse, which retail never does
-(section 21).
+`MOD_FLAME` a frame while the bit rides, and no bullet hit (section 21).
 
 ### HUD
 
 `CG_OwnerDraw` 0x300320e0 returns at once under `cg_drawStatus 0` and
 switches on the owner draw id through 0x300326e8 / 0x30032648 (VERIFIED).
 
-- **Stance (20, 0x3002efc0).** Not drawn from a vehicle seat (`eFlags`
-  0x100000 without 0x400000, popped out of the hatch). The icon is
-  `hudStanceSprint` while `pm_flags` 0x10000, else prone, crouch or stand;
-  over it, while `fatigueScale` > 0, `hudFatigue{Sprint,Prone,Crouch,Stand}`
-  drawn on the rect's bottom `fatigueScale` share with the art's bottom
-  share (st `(0, 1 - f)..(1, 1)`); then `hudStanceFlash` in white for a
-  second after a prone or crouch change (UO registers
-  `cg_hudStanceFlash_r/g/b` and never reads them) (VERIFIED).
-- **Compass vehicles (89, 0x30016c00).** 64 slots by the vehicle pool
-  index in `es.attackerEntityNum`, fed by every `eType` 12 entity whose
-  driver (`otherEntityNum`) is a teammate other than the viewer, at its
-  origin, its yaw (a flak gun, type 5, its `angles2[1]`) and its type in
-  `es.surfType` (1 jeep, 2 tank, 5 artillery); `iCompassTankInfo` packs one
-  more as `iCompassFriendInfo` is packed, with no type. A slot lingers 800
-  ms; each draws 16 units square, green, turned by the view's yaw less
-  its own: `hud@objective_jeep`, `hud@objective_flak_88`, else
-  `hud@objective_tank` (VERIFIED). `iCompassTankInfo` is set only for
-  vehicles a script `addVehicleToCompass`es, which no stock MP script does
-  (INFERRED).
-- **Teammates (88).** 1.1's, the ping flash 4 s (VERIFIED).
-- **Vehicle status (93, 94, 95).** Drawn at the stance slot from a seat,
-  keyed on the vehicle type through the item's `textfont`: the body
-  outline turned by `AngleNormalize180(viewYaw - vehicleYaw)`, the barrel
-  about the body's centre by the `tag_turret` yaw (pivot a quarter up the
-  art, mirrored), and each seat icon whose `textstyle` bit is set in
-  `es.animMovetype` (VERIFIED). 101, 102 and 104 draw nothing (VERIFIED).
-- **Seat crosshair (0x30019cf0).** Two 60% black bars: (300,240,40,2) and
-  (319,242,2,16) for a non-jeep's position 1, (310,240,20,2) and
-  (319,242,2,8) for position 2; none for a jeep driver or the passenger
-  (VERIFIED).
-- **Weapon HUD (81..83, 5, 6, 70, 103, 105, 106).** Hidden from a seat but
-  the jeep's passenger (`vehType` 1, `vehPos` 3), whose ammo items sit 20
-  units up (VERIFIED for the rule, the rects from `hud.menu`).
+| Owner draw | What it draws | Label |
+|---|---|---|
+| Stance (20, 0x3002efc0) | not drawn from a vehicle seat (`eFlags` 0x100000 without 0x400000, popped out of the hatch). The icon is `hudStanceSprint` while `pm_flags` 0x10000, else prone, crouch or stand. Over it, while `fatigueScale` > 0, `hudFatigue{Sprint,Prone,Crouch,Stand}` on the rect's bottom `fatigueScale` share with the art's bottom share (st `(0, 1 - f)..(1, 1)`); then `hudStanceFlash` in white for a second after a prone or crouch change (UO registers `cg_hudStanceFlash_r/g/b` and never reads them) | VERIFIED |
+| Compass vehicles (89, 0x30016c00) | 64 slots by the vehicle pool index in `es.attackerEntityNum`, fed by every `eType` 12 entity whose driver (`otherEntityNum`) is a teammate other than the viewer, at its origin, its yaw (a flak gun, type 5, its `angles2[1]`) and its type in `es.surfType` (1 jeep, 2 tank, 5 artillery). `iCompassTankInfo` packs one more as `iCompassFriendInfo` is packed, with no type. A slot lingers 800 ms; each draws 16 units square, green, turned by the view's yaw less its own: `hud@objective_jeep`, `hud@objective_flak_88`, else `hud@objective_tank` | VERIFIED |
+| Teammates (88) | 1.1's, the ping flash 4 s | VERIFIED |
+| Vehicle status (93, 94, 95) | at the stance slot from a seat, keyed on the vehicle type through the item's `textfont`: the body outline turned by `AngleNormalize180(viewYaw - vehicleYaw)`, the barrel about the body's centre by the `tag_turret` yaw (pivot a quarter up the art, mirrored), and each seat icon whose `textstyle` bit is set in `es.animMovetype`. 101, 102 and 104 draw nothing | VERIFIED |
+| Seat crosshair (0x30019cf0) | two 60% black bars: (300,240,40,2) and (319,242,2,16) for a non-jeep's position 1, (310,240,20,2) and (319,242,2,8) for position 2; none for a jeep driver or the passenger | VERIFIED |
+| Weapon HUD (81..83, 5, 6, 70, 103, 105, 106) | hidden from a seat but the jeep's passenger (`vehType` 1, `vehPos` 3), whose ammo items sit 20 units up | VERIFIED for the rule, the rects from `hud.menu` |
+
+`iCompassTankInfo` is set only for vehicles a script
+`addVehicleToCompass`es, which no stock MP script does (INFERRED, section 9).
+
 - **Health block.** UO's `hud.menu` puts the back (`hud@health.tga`) at
   (501,436,128,32), the bar at (502,460,126,6) and the cross at
-  (488,457,12,12) (VERIFIED, `pakuo03` `ui_mp/hud.menu`).
-  The back's art is `gfx/hud/hud@health.dds` in `pakuo00`, a 128x32
-  frame along the bottom 8 rows (VERIFIED, the pak and the decoded
-  image). 1.1's `pak5` still ships `gfx/hud/hud@health.tga`, a 128x128
-  white disc with alpha 0 only past its rim (VERIFIED, the decoded
-  image), and UO's `main/` keeps it. The image loader drops a named
-  extension and tries `.dds` first (`cod11-front-end.md`, 0x4edf20), so
-  the disc is never drawn; a loader that opens the named `.tga` draws it
-  as a white ellipse over the health block (INFERRED for CoDUOMP.exe: its
-  loader was not decompiled, and the shipped pair only reads right
-  through a `.dds`-first probe).
+  (488,457,12,12) (VERIFIED, `pakuo03` `ui_mp/hud.menu`). The back's art is
+  `gfx/hud/hud@health.dds` in `pakuo00`, a 128x32 frame along the bottom 8
+  rows (VERIFIED, the pak and the decoded image). 1.1's `pak5` still ships
+  `gfx/hud/hud@health.tga`, a 128x128 white disc with alpha 0 only past its
+  rim (VERIFIED, the decoded image), and UO's `main/` keeps it. The image
+  loader drops a named extension and tries `.dds` first
+  (`cod11-front-end.md`, 0x4edf20), so the disc is never drawn. A loader
+  that opens the named `.tga` draws a white ellipse over the health block
+  (INFERRED for CoDUOMP.exe: its loader was not decompiled, and the shipped
+  pair only reads right through a `.dds`-first probe).
 - **Cursor hints (0x3044b6f8).** 1.1's names with `hintLMGMount` at 7 and
   the rest one higher; weapon icons from 11, ammo icons from 139
   (VERIFIED).
 - **The server's item hints.** `G_CheckForCursorHints`
-  (`game.mp.uo.i386.so` 0x575bb) writes 8 for health (`mov [ebp-0x10], 8`
-  at 0x57add, VERIFIED), `giTag + 10` for a weapon the player lacks (`add
-  eax, 0xa` at 0x57b2f, VERIFIED) and `giTag + 0x8a` for one it holds or
-  an ammo row (0x57b19 and 0x57b43, VERIFIED), where 1.1 and 1.5 write 7,
-  `+ 9` and `+ 0x49` (1.5b 0x4e51c, 0x4e56c, 0x4e558, VERIFIED). The
-  wire field stays 8 bits (`fields_v22.rs`), so an owned weapon past
-  index 117 wraps (INFERRED). vcod-server sent 1.1's numbers to UO
-  clients until 2026-10-15: a dropped `springfield_mp` (index 53) hinted
-  62, which UO's cgame draws as weapon 52, `smokegrenade_mp`, and health
-  hinted 7, the bipod mount (`Protocol::cursor_hints`).
+  (`game.mp.uo.i386.so` 0x575bb) writes 8 for health (`mov [ebp-0x10], 8` at
+  0x57add, VERIFIED), `giTag + 10` for a weapon the player lacks (`add eax,
+  0xa` at 0x57b2f, VERIFIED) and `giTag + 0x8a` for one it holds or an ammo
+  row (0x57b19 and 0x57b43, VERIFIED). 1.1 and 1.5 write 7, `+ 9` and `+
+  0x49` (1.5b 0x4e51c, 0x4e56c, 0x4e558, VERIFIED). The wire field stays 8
+  bits (`fields_v22.rs`), so an owned weapon past index 117 wraps
+  (INFERRED). vcod-server writes UO's numbers (`Cod1Wire::cursor_hints`).
+  The trap: 1.1's numbers on a UO client turn a dropped `springfield_mp`
+  (index 53) into 62, which UO's cgame draws as weapon 52,
+  `smokegrenade_mp`, and health into 7, the bipod mount.
 - **Overheat and capture bars.** Script hudelems (`_turret_gmi.gsc`,
   `_tankdrive_gmi.gsc`, the gametypes), no cgame code (VERIFIED).
 - **Binoculars.** Both binocular weapons draw the generic sight overlay
@@ -1686,275 +1655,283 @@ switches on the owner draw id through 0x300326e8 / 0x30032648 (VERIFIED).
 
 ### The turret view
 
-Read off the uo cgame disassembly over 0x30041550..0x30041a2c, called
-from the view setup 0x30041a30 after the playerstate copy and before the
+Read off the UO cgame disassembly over 0x30041550..0x30041a2c, called from
+the view setup 0x30041a30 after the playerstate copy and before the
 first-person offset 0x3003fb60. The predicted playerstate starts at
 0x304831c4 (`eFlags` +0x84 at 0x30483248, `delta_angles` 0x30483210,
 `viewangles` 0x304832ac, `viewHeightCurrent` 0x304832bc,
-`viewlocked_entNum` 0x30483780, offsets as in `fields_v22.rs`); `cent`
-is a `centity_t` (stride 0x288, array 0x3048c6e0, `currentState` at +0,
+`viewlocked_entNum` 0x30483780, offsets as in `fields_v22.rs`). `cent` is a
+`centity_t` (stride 0x288, array 0x3048c6e0, `currentState` at +0,
 `nextState` at +0xf4, `lerpAngles` +0x214); 0x30487ac8 is the refdef's
 angles and 0x30487a90 its origin.
 
 - **Gate.** `ps.eFlags & 0x6000` and `viewlocked_entNum != 0x3ff`, then a
   non-null DObj off trap 0xa5 (VERIFIED, 0x3004156d..0x300415b4).
-  `viewlocked` is never read, here, in the gun's draw (0x3001e9f0) or
-  before the reticle (0x30019ba0's caller) (VERIFIED decompile). UO's
-  server leaves it 0 on a gunner (VERIFIED, `snapshots-uo-turret.bin`:
-  `viewlocked` 0, `viewlocked_entNum` 298 over the mount), so 1.1's gate
-  (`cod11-turrets.md` 14.3) never finds a UO gun.
+  `viewlocked` is never read, here, in the gun's draw (0x3001e9f0) or before
+  the reticle (0x30019ba0's caller) (VERIFIED decompile). UO's server leaves
+  it 0 on a gunner (VERIFIED, `snapshots-uo-turret.bin`: `viewlocked` 0,
+  `viewlocked_entNum` 298 over the mount), so 1.1's gate (`cod11-turrets.md`
+  14.3) never finds a UO gun.
 - **The arcs.** Four `LerpAngle`s (0x3004bd00) of the gun's state at
-  `cg.frameInterpolation` (0x304831a8): es +0xd8 (`leanf`) the pitch
-  high, +0x5c (`origin2[0]`) the yaw high, +0x60 (`origin2[1]`) the pitch
-  low, +0x64 (`origin2[2]`) the yaw low (VERIFIED, 0x300415e6..0x3004163f
-  and the stack slots the loop compares against). The capture's gun
-  sends 40, 45, -40, -45 (VERIFIED, `snapshots-uo-turret.bin`).
+  `cg.frameInterpolation` (0x304831a8): es +0xd8 (`leanf`) the pitch high,
+  +0x5c (`origin2[0]`) the yaw high, +0x60 (`origin2[1]`) the pitch low,
+  +0x64 (`origin2[2]`) the yaw low (VERIFIED, 0x300415e6..0x3004163f and
+  the stack slots the loop compares against). The capture's gun sends 40,
+  45, -40, -45 (VERIFIED, `snapshots-uo-turret.bin`).
 - **The clamp.** For pitch and yaw, `d = AngleSubtract(refdef[i],
   lerpAngles[i])` (0x3004bd70: `a - b` folded by 360 into -180..180,
-  constants 180, 360, -180 at 0x3007bd50..58, VERIFIED); past the high the
-  refdef angle becomes `lerpAngles + high`, under the low `lerpAngles +
-  low` (VERIFIED, 0x30041650..0x300416a9). Roll is left alone.
+  constants 180, 360, -180 at 0x3007bd50..58, VERIFIED). Past the high the
+  refdef angle becomes `lerpAngles + high`, under the low `lerpAngles + low`
+  (VERIFIED, 0x30041650..0x300416a9). Roll is left alone.
 - **The client's view.** `AngleSubtract(refdef - delta_angles * 360/65536,
   0x3048b070)` per axis goes to trap 0xf7 (VERIFIED, 0x300416ab..0x30041765).
   0x3048b070 is summed into the angles trap 0x56 hands the engine
   (0x300426ed..0x300426fe, VERIFIED). The cmd adds those to the client's
   view (`cod11-combat.md` 15.7), so it sends the held view (INFERRED).
 - **The drawn gun.** 0x3001e9f0, the turret's controller, poses a gun the
-  view rides in first person (`ps.eFlags & 0x6000`,
-  `viewlocked_entNum` its number, 0x304831c0 0) with `tag_aim` turned
-  by the same clamp of the refdef against `lerpAngles`, not by
-  `angles2`, and its anim slot is 2 (fire) only for a gun not so ridden
-  whose `eFlags` hold 0x200 and whose es +0xe4 (`animMovetype`) reads 0
-  (VERIFIED decompile). 0x304831c0 reads as `cg.renderingThirdPerson`,
-  and the server's 1 in +0xe4 marks an overheat (section 21, "Heat"), so
-  an overheated gun idles (INFERRED).
+  view rides in first person (`ps.eFlags & 0x6000`, `viewlocked_entNum` its
+  number, 0x304831c0 0) with `tag_aim` turned by the same clamp of the
+  refdef against `lerpAngles`, not by `angles2`. Its anim slot is 2 (fire)
+  only for a gun not so ridden whose `eFlags` hold 0x200 and whose es +0xe4
+  (`animMovetype`) reads 0 (VERIFIED decompile). 0x304831c0 reads as
+  `cg.renderingThirdPerson`, and the server's 1 in +0xe4 marks an overheat
+  (section 21, "Heat"), so an overheated gun idles (INFERRED).
 - **The sway.** The playerstate copied to the stack (0x1141 dwords from
   0x304831c4), `thompson_MP` (0x3007a718) put in it through 0x300110f0,
   then 0x30015ca0 with scale 2.0 and `cg.frametime` on state at
   0x300dc9c0/0x300dc9cc, writing the offset at 0x300dca04..0x300dca0c
-  (VERIFIED, 0x3004176b..0x300417b3). The vehicle gunner's call
-  (0x30040964) passes 0x300dc9dc/0x300dc9e8/0x300dc9f8 (VERIFIED), so the
-  two sways keep separate state.
+  (VERIFIED, 0x3004176b..0x300417b3). The vehicle gunner's call (0x30040964)
+  passes 0x300dc9dc/0x300dc9e8/0x300dc9f8 (VERIFIED), so the two sways keep
+  separate state.
 - **The eye.** `tag_player` (0x30072d68) through 0x3001fdf0, a fatal
   `"Turret has no bone: tag_player"` (0x3007a6cc) when the first lookup
   fails (VERIFIED). The origin's z less `viewHeightCurrent` (VERIFIED,
   0x3004180e..0x30041816). 0x3003fb60 adds `viewHeightCurrent` to the
-  refdef's z and returns on `eFlags & 0x106000` (VERIFIED decompile).
-  The eye is therefore the tag (INFERRED). The eye moves by `fwd * o[0] + left * o[1] - up * o[2]` of
-  the sway's offset in the tag's frame (VERIFIED, 0x300418a7..0x3004194b).
+  refdef's z and returns on `eFlags & 0x106000` (VERIFIED decompile). The
+  eye is therefore the tag (INFERRED). It moves by `fwd * o[0] + left * o[1]
+  - up * o[2]` of the sway's offset in the tag's frame (VERIFIED,
+  0x300418a7..0x3004194b).
 - **Which pose the tag reads.** 0x3001fdf0 takes the bone index (trap
   0xb2), then 0x30022080, then the bone's matrix off trap 0xa0 (VERIFIED
   disassembly). 0x30022080 asks trap 0xab and, on 0, runs traps 0xad and
-  0x9a, the eType's controller (0x30021fe0: 0x3001e9f0 for `eType` 0xb,
-  the gun) and trap 0xae (VERIFIED, 0x30022080..0x300220dd). In
-  `CoDUOMP.exe` trap 0xab is 0x401ca0, which compares the DObj's +8
-  against the counter 0x4927eb0, stamps the counter and drops the
-  DObj's skeleton (VERIFIED decompile). 0x401c50 and 0x419fe0 bump that
-  counter (VERIFIED decompile). INFERRED: the drop runs only when the
-  stamp differs, 0x419fe0 bumps under the connected state 6, once a
-  client frame, so the first bone asked for in a frame poses the DObj,
-  controller included, and the rest of the frame reads that pose. The
-  frame 0x30042160 calls the view 0x30041a30 at 0x300425ba and the entity
-  pass 0x3001b550 at 0x300425ca (VERIFIED disassembly). INFERRED: the
-  view asks first, so `tag_player` is this frame's pose with the gun
-  turned by the controller's clamp of the refdef as it then stands, the
-  playerstate's view; the placement off the gun's `lerpOrigin` and
-  `lerpAngles` may be the last frame's, since the entity pass lerps after
-  the view, which a gun that stands still never shows.
-- **The firing shake and kick.** When `cg.snap`'s playerstate `eFlags`
-  hold 0x200 and the gun's es +0xe4 reads 0 (VERIFIED, 0x3004183e..0x30041861
-  and 0x30041979..0x3004198d), the eye first backs along the tag's
-  forward by `phase * 0.5` (`cg.time % 100` folded at 50, over 50.0 at
-  0x300715c8, times -0.5 at 0x3007bf50, VERIFIED), and after the eye the
-  refdef pitch gains `(2 * rand() / 32768 - 1) * def+0x4a8` and then the
-  yaw `(2 * rand() / 32768 - 1) * def+0x4a4`, the def the gun's
-  `es.weapon` (+0xcc) indexes in 0x30134cd8 (VERIFIED, 0x30041993..0x30041a14;
-  32768 at 0x3007bd10, 1.0 at 0x3007bce0). The cgame's weapon field table
-  names +0x4a4 `horizViewJitter` and +0x4a8 `vertViewJitter` (VERIFIED,
-  records 0x3008511c, 0x30085128, type 6). No UO stock weapon file sets
-  either (VERIFIED, `pakuo00..07`; 1.5's `mg42_bipod_*_mp` set both to
-  0.15, and UO's own copies of those files override them), so a stock UO
-  turret's kick is 0 and only the eye's shake shows (INFERRED, an unset
-  float reading 0).
-- The 1.1 turret view has no kick of its own (`cod11-turrets.md` 14.3:
-  its shake is ±1 degree off `viewlocked` 2).
-- **No damage kick.** 0x3003fb60 calls the damage kick (0x30015a10) and
-  the sight's bob (0x30015b50) and adds their sum to the refdef (VERIFIED
-  decompile). Each of the two tests the playerstate's `eFlags` (+0x84)
-  against 0x106000, `vehType` (+0x618) against 1 and `vehPos` (+0x614)
-  against 3 (VERIFIED disassembly, 0x30015a1f..0x30015a3f and
-  0x30015b63..0x30015b83). INFERRED, off the branches: each adds nothing
-  on a mount or in a seat but the jeep passenger's, so a UO gunner's
-  view takes no kick. 1.1's kick 0x30012cb0 and bob 0x30012dc0 test no `eFlags`
-  (VERIFIED disassembly 0x30012cb0..0x30012e9f). 1.5's kick 0x30013bc0
-  tests none either, and its bob 0x30013cd0 tests `eFlags & 0xc000`
-  (VERIFIED decompile). INFERRED: 1.1's view calls 0x30032ae0 after the
-  turret view 0x30033220 and 1.5's 0x30034180 after 0x300348c0, so a hit
-  1.1 or 1.5 gunner's view kicks, and 1.5's bob skips a mount.
+  0x9a, the eType's controller (0x30021fe0: 0x3001e9f0 for `eType` 0xb, the
+  gun) and trap 0xae (VERIFIED, 0x30022080..0x300220dd). In `CoDUOMP.exe`
+  trap 0xab is 0x401ca0, which compares the DObj's +8 against the counter
+  0x4927eb0, stamps the counter and drops the DObj's skeleton (VERIFIED
+  decompile). 0x401c50 and 0x419fe0 bump that counter (VERIFIED decompile).
+  The frame 0x30042160 calls the view 0x30041a30 at 0x300425ba and the
+  entity pass 0x3001b550 at 0x300425ca (VERIFIED disassembly). INFERRED from
+  those:
+  - the drop runs only when the stamp differs, and 0x419fe0 bumps under the
+    connected state 6 once a client frame, so the first bone asked for in a
+    frame poses the DObj, controller included, and the rest of the frame
+    reads that pose;
+  - the view asks first, so `tag_player` is this frame's pose with the gun
+    turned by the controller's clamp of the refdef as it then stands, the
+    playerstate's view;
+  - the placement off the gun's `lerpOrigin` and `lerpAngles` may be the
+    last frame's, since the entity pass lerps after the view, which a gun
+    that stands still never shows.
+- **The firing shake and kick.** When `cg.snap`'s playerstate `eFlags` hold
+  0x200 and the gun's es +0xe4 reads 0 (VERIFIED, 0x3004183e..0x30041861 and
+  0x30041979..0x3004198d), the eye first backs along the tag's forward by
+  `phase * 0.5` (`cg.time % 100` folded at 50, over 50.0 at 0x300715c8,
+  times -0.5 at 0x3007bf50, VERIFIED). After the eye the refdef pitch gains
+  `(2 * rand() / 32768 - 1) * def+0x4a8` and then the yaw `(2 * rand() /
+  32768 - 1) * def+0x4a4`, the def the gun's `es.weapon` (+0xcc) indexes in
+  0x30134cd8 (VERIFIED, 0x30041993..0x30041a14; 32768 at 0x3007bd10, 1.0 at
+  0x3007bce0). The cgame's weapon field table names +0x4a4 `horizViewJitter`
+  and +0x4a8 `vertViewJitter` (VERIFIED, records 0x3008511c, 0x30085128,
+  type 6). No UO stock weapon file sets either (VERIFIED, `pakuo00..07`;
+  1.5's `mg42_bipod_*_mp` set both to 0.15, and UO's own copies of those
+  files override them). A stock UO turret's kick is 0 and only the eye's
+  shake shows (INFERRED, an unset float reading 0).
+- The 1.1 turret view has no kick of its own (`cod11-turrets.md` 14.3: its
+  shake is ±1 degree off `viewlocked` 2).
+- **No damage kick.** 0x3003fb60 calls the damage kick (0x30015a10) and the
+  sight's bob (0x30015b50) and adds their sum to the refdef (VERIFIED
+  decompile). Each tests the playerstate's `eFlags` (+0x84) against
+  0x106000, `vehType` (+0x618) against 1 and `vehPos` (+0x614) against 3
+  (VERIFIED disassembly, 0x30015a1f..0x30015a3f and 0x30015b63..0x30015b83).
+  Each adds nothing on a mount or in a seat but the jeep passenger's, so a
+  UO gunner's view takes no kick (INFERRED, the branches). 1.1's kick
+  0x30012cb0 and bob 0x30012dc0 test no `eFlags` (VERIFIED disassembly
+  0x30012cb0..0x30012e9f). 1.5's kick 0x30013bc0 tests none either, and its
+  bob 0x30013cd0 tests `eFlags & 0xc000` (VERIFIED decompile). 1.1's view
+  calls 0x30032ae0 after the turret view 0x30033220 and 1.5's 0x30034180
+  after 0x300348c0, so a hit 1.1 or 1.5 gunner's view kicks, and 1.5's bob
+  skips a mount (INFERRED).
 
-vcod: `turret::ridden` takes UO's gate, `turret::UoArcs` the arcs and
-clamp, `turret::uo_eye` the eye, shake and kick (msvcrt's `rand` seeded
-1, as 1.1's shake), `turret::sway_offset` with a `GunnerSway` of its own
-in `main.rs`, and `entities::build_instances` turns the ridden gun by the
-view (`EntityScene::view`) and idles an overheated one. The tag is read off
-this frame's pose, as retail's. `TurretEye::kicked` adds the damage
-kick and the bob on a 1.1 or 1.5 gun and nothing on a UO one (**vcod
-dropped the kick on every mounted gun**). Where it differs: the view
-snaps only when the arcs moved it, which is retail's every-frame trap
-with the same result; the sway's clock is the time since its last call,
-not `cg.frametime`, as the seat's.
-`a_followed_uo_gunner_sees_down_the_gun` replays the turret capture: the
-held view is the gun's `apos + angles2` on all 120 mounted snapshots, 74
-of them with the playerstate's view past an arc (its pitch reads 60 at
-28250 against a top arc of 40), and 44 shake.
+vcod:
+
+- `turret::ridden` takes UO's gate, `turret::UoArcs` the arcs and clamp,
+  `turret::uo_eye` the eye, shake and kick (msvcrt's `rand` seeded 1, as
+  1.1's shake), `turret::sway_offset` with a `GunnerSway` of its own in
+  `main.rs`. `entities::build_instances` turns the ridden gun by the view
+  (`EntityScene::view`) and idles an overheated one. The tag is read off
+  this frame's pose, as retail's.
+- `TurretEye::kicked` adds the damage kick and the bob on a 1.1 or 1.5 gun
+  and nothing on a UO one. Dropping the kick on every mounted gun is the
+  trap.
+- Differences: the view snaps only when the arcs moved it, which gives
+  retail's every-frame result; the sway's clock is the time since its last
+  call, not `cg.frametime`, as the seat's.
+- `a_followed_uo_gunner_sees_down_the_gun` replays the turret capture: the
+  held view is the gun's `apos + angles2` on all 120 mounted snapshots, 74
+  of them with the playerstate's view past an arc (its pitch reads 60 at
+  28250 against a top arc of 40), and 44 shake.
 
 ### Captures
 
-Retail UO 1.51b, mp_cassino, 2026-10-14, each a `--probe-follow`
-spectator's `--save-snapshots` (fixtures in
-`crates/common/tests/fixtures/net/`, recipe below). Times are the
-snapshots' server times; ids and `eFlags` are the wire's, as
-`event_dump` prints them.
+Retail UO 1.51b, mp_cassino, each a `--probe-follow` spectator's
+`--save-snapshots` (fixtures in `crates/common/tests/fixtures/net/`, recipe
+below). Times are the snapshots' server times; ids and `eFlags` are the
+wire's, as `event_dump` prints them.
 
-- **Artillery** (`*-uo-arty.bin`, dm). With `binoculars_artillery_mp` in
-  the binocular slot and one round in its clip, as `_rank_gmi`'s rank 4
-  gets it, sighting raises `EV_DEPLOY_WEAPON` (160) on weapon 6 and
-  letting the sight go `EV_BREAKDOWN_WEAPON` (161): the binoculars ride
-  the bipod's events. The trigger under the sight is
-  `EV_FIRE_WEAPON_LASTSHOT` (166) (live, VERIFIED). The strike is 15
-  `EV_PROJECTILE_LAUNCH` (183) temp entities (`eType` 199), parm 4, all at
-  one point 280 units from the shooter, 13900..21350 ms; 13
-  `EV_PROJECTILE_INCOMING` (184, `eType` 200), parm 4, each at a shell's
-  coming impact 1 to 2 s before it; and 15 `EV_PROJECTILE_EXPLODE` (185)
-  on the shells' own entities (`eType` 0), parm the normal, weapon 6, type
-  4 in `es.scale`, the hit's `surfType`, `eFlags` 0x8000, 21550..38350 ms
-  (live, VERIFIED). The shooter's obituary (209) rides the first
-  explode's frame (live, VERIFIED).
+- **Artillery** (`*-uo-arty.bin`, dm). With `binoculars_artillery_mp` in the
+  binocular slot and one round in its clip, as `_rank_gmi`'s rank 4 gets it,
+  sighting raises `EV_DEPLOY_WEAPON` (160) on weapon 6 and letting the sight
+  go `EV_BREAKDOWN_WEAPON` (161): the binoculars ride the bipod's events.
+  The trigger under the sight is `EV_FIRE_WEAPON_LASTSHOT` (166) (live,
+  VERIFIED). The strike (live, VERIFIED):
+  - 15 `EV_PROJECTILE_LAUNCH` (183) temp entities (`eType` 199), parm 4, all
+    at one point 280 units from the shooter, 13900..21350 ms;
+  - 13 `EV_PROJECTILE_INCOMING` (184, `eType` 200), parm 4, each at a
+    shell's coming impact 1 to 2 s before it;
+  - 15 `EV_PROJECTILE_EXPLODE` (185) on the shells' own entities (`eType`
+    0), parm the normal, weapon 6, type 4 in `es.scale`, the hit's
+    `surfType`, `eFlags` 0x8000, 21550..38350 ms;
+  - the shooter's obituary (209) rides the first explode's frame.
 - **Smoke grenade** (`*-uo-smoke.bin`, dm, `smokegrenade_mp` in its own
-  slot). `EV_PULLBACK_WEAPON` (162) and `EV_FIRE_WEAPON` (163) on weapon
-  52, two `EV_GRENADE_BOUNCE` (181) on the grenade with parm 17 and
-  `surfType` 0, then 185 on the grenade 3.95 s after the throw with type 1,
-  `eFlags` 0. The grenade stays `eType` 4, unlike a shell's or a frag's
-  explode, and stays in the snapshots 15 s more (live, VERIFIED). A
-  `giveWeapon` of the smoke grenade aborts the server, as an unprecached
-  flamethrower does; the slot builtins do not (live, VERIFIED, two runs).
-- **Bipod** (`*-uo-mg.bin`, dm, `mg34_mp`). Sighting in the open raises
-  160 and takes the body prone (`eFlags` 0x40 from the next frame on);
-  36 `EV_FIRE_WEAPON` (163) with `eFlags` 0x200 over the 3 s held under
-  the sight, 50 to 100 ms apart, each with its `EV_BULLET_HIT` (178) on
-  weapon 26; 161 when the sight goes (live, VERIFIED). A prone stance key
-  held before the sight is refused every cmd with
-  `EV_STANCE_FORCE_STAND` (142) on mp_cassino and mp_carentan both (live,
-  VERIFIED, 741 events in one run); the sight alone deploys.
+  slot). `EV_PULLBACK_WEAPON` (162) and `EV_FIRE_WEAPON` (163) on weapon 52,
+  two `EV_GRENADE_BOUNCE` (181) on the grenade with parm 17 and `surfType`
+  0, then 185 on the grenade 3.95 s after the throw with type 1, `eFlags` 0.
+  The grenade stays `eType` 4, unlike a shell's or a frag's explode, and
+  stays in the snapshots 15 s more (live, VERIFIED). A `giveWeapon` of the
+  smoke grenade aborts the server, as an unprecached flamethrower does; the
+  slot builtins do not (live, VERIFIED, two runs).
+- **Bipod** (`*-uo-mg.bin`, dm, `mg34_mp`). Sighting in the open raises 160
+  and takes the body prone (`eFlags` 0x40 from the next frame on); 36
+  `EV_FIRE_WEAPON` (163) with `eFlags` 0x200 over the 3 s held under the
+  sight, 50 to 100 ms apart, each with its `EV_BULLET_HIT` (178) on weapon
+  26; 161 when the sight goes (live, VERIFIED). A prone stance key held
+  before the sight is refused every cmd with `EV_STANCE_FORCE_STAND` (142)
+  on mp_cassino and mp_carentan both (live, VERIFIED, 741 events in one
+  run); the sight alone deploys.
 - **Vehicle fire** (`*-uo-tank.bin`, `*-uo-jeep.bin`, `*-uo-overheat.bin`,
-  tdm). On the vehicle (`eType` 12): the tank's main gun 163 with parm 0
-  (weapon 42 `panzeriv_turret_mp`, `es.weapon`), its coaxial MG 164 with
-  parm 0x9b (bit 7 and weapon 27 `mg34_tank_mp`), its gunner 165 with
-  parm 0xa0 (bit 7 and 32 `mg42_turret_mp`), the jeep's gunner 165 with
-  0x82 (bit 7 and 2 `50cal_tank_mp`). Every MG round carries bit 7, and
-  none brings a bullet-hit temp entity, so the client traces them all.
-  The shell explodes 50 ms after its 163 on its own entity, weapon 42,
-  type 6, `eFlags` 0x8000 (live, VERIFIED).
-- **Overheat** (`*-uo-overheat.bin`, the tank capture's crew with the
-  gunner holding its trigger 6 s). 49 rounds of 165, 100 ms apart from
-  17350 ms, then `EV_OVERHEATING` (208) on the tank, parm 0, at 22150 and
-  no round until the trigger's next press at 31350 (live, VERIFIED).
-- **Turret** (`*-uo-turret.bin`, dm on mp_carentan, the mounted MG42
-  at (1712 1830 8), weapon 30 `mg42_bipod_stand_mp`, with
-  `client-probes/probe_turret`'s `probe_pose 1`, so every hit is logged
-  and lands no damage). 21 `EV_FIRE_WEAPON_MG42` (173) on the gun
-  (`eType` 11) with parm 0x80 from 31750 ms, 50 ms apart, into the world;
-  then 127 with parm 0, one per `PROBE hit` on the target, 83 of them
-  with an `EV_BULLET_TRACER` (176, temp `eType` 192) in the same frame,
-  parm 30 (the weapon), `trBase` the muzzle and `origin2` the hit;
-  `EV_OVERHEATING` (208) on the gun at 36750, 5 s into the fire, and
-  rounds again from 39350 to 41700 (live, VERIFIED). The trigger was
-  still held through the gap (INFERRED, the probe's 10 s of fire). So a
-  mounted MG raises the bit as a vehicle's does (`turret_fire`,
-  `game.mp.uo.i386.so` 0x5abb7: 0x80 when `Bullet_Fire` returned 0,
-  VERIFIED disassembly) and cools off with the trigger down, which the
-  tank's gunner did not (the overheat capture above).
+  tdm), on the vehicle (`eType` 12) (live, VERIFIED):
+
+  | Gun | Event | Parm |
+  |---|---|---|
+  | tank main gun | 163 | 0 (weapon 42 `panzeriv_turret_mp`, `es.weapon`) |
+  | tank coaxial MG | 164 | 0x9b (bit 7, weapon 27 `mg34_tank_mp`) |
+  | tank gunner | 165 | 0xa0 (bit 7, 32 `mg42_turret_mp`) |
+  | jeep gunner | 165 | 0x82 (bit 7, 2 `50cal_tank_mp`) |
+
+  Every MG round carries bit 7 and none brings a bullet-hit temp entity, so
+  the client traces them all. The shell explodes 50 ms after its 163 on its
+  own entity, weapon 42, type 6, `eFlags` 0x8000.
+- **Overheat** (`*-uo-overheat.bin`, the tank capture's crew with the gunner
+  holding its trigger 6 s). 49 rounds of 165, 100 ms apart from 17350 ms,
+  then `EV_OVERHEATING` (208) on the tank, parm 0, at 22150 and no round
+  until the trigger's next press at 31350 (live, VERIFIED).
+- **Turret** (`*-uo-turret.bin`, dm on mp_carentan, the mounted MG42 at
+  (1712 1830 8), weapon 30 `mg42_bipod_stand_mp`, with
+  `client-probes/probe_turret`'s `probe_pose 1`, so every hit is logged and
+  lands no damage). Live, VERIFIED: 21 `EV_FIRE_WEAPON_MG42` (173) on the
+  gun (`eType` 11) with parm 0x80 from 31750 ms, 50 ms apart, into the
+  world; then 127 with parm 0, one per `PROBE hit` on the target, 83 of them
+  with an `EV_BULLET_TRACER` (176, temp `eType` 192) in the same frame, parm
+  30 (the weapon), `trBase` the muzzle and `origin2` the hit;
+  `EV_OVERHEATING` (208) on the gun at 36750, 5 s into the fire; rounds
+  again from 39350 to 41700. The trigger was still held through the gap
+  (INFERRED, the probe's 10 s of fire). A mounted MG raises the bit as a
+  vehicle's does (`turret_fire`, `game.mp.uo.i386.so` 0x5abb7: 0x80 when
+  `Bullet_Fire` returned 0, VERIFIED disassembly), and it cools off with the
+  trigger down, which the tank's gunner did not (live, VERIFIED, the
+  overheat capture above).
 - **Sound blend entities.** The tank carries `eType` 9 entities with
   `otherEntityNum` the tank, origin 0, `eventParm` and `es.scale` sound
-  offsets from configstring 661 and the crossfade in `angles2[1]`: one
-  from the spawn (17/18, `panzerIV_idle_low`/`_high`), a second from the
-  crew's boarding on, absent for some frames (19/20,
-  `panzerIV_engine_low`/`_high`), one per MG while it fires
-  (71/71 `weap_mg42_loop` for the gunner, 69/69 `weap_mg34_loop` for the
-  coaxial), each gone 200 ms after its last round or the overheat (live,
-  VERIFIED). What the cgame and the engine do with them is section 16,
-  "Sound blend entities".
+  offsets from configstring 661 and the crossfade in `angles2[1]` (live,
+  VERIFIED):
+  - one from the spawn (17/18, `panzerIV_idle_low`/`_high`);
+  - a second from the crew's boarding on, absent for some frames (19/20,
+    `panzerIV_engine_low`/`_high`);
+  - one per MG while it fires (71/71 `weap_mg42_loop` for the gunner, 69/69
+    `weap_mg34_loop` for the coaxial), each gone 200 ms after its last round
+    or the overheat.
+
+  Section 16, "Sound blend entities", has what the cgame and engine do with
+  them.
 - **Re-encode.** All five `probe_uofx` pairs and the three vehicle pairs
-  re-encode byte for byte. The flame pair's frame 523 (the follow
-  landing) sends `delta_angles[1]` 0x3555 over a base of 0x3555 and the
-  smoke pair's message 150 the grenade's `eFlags` behind a set zero flag
-  as 24 zero bits: the server's ints differed above the field's width
-  (VERIFIED, the gates; `docs/protocol-1.1.md`, "PlayerState delta").
+  re-encode byte for byte. The flame pair's frame 523 (the follow landing)
+  sends `delta_angles[1]` 0x3555 over a base of 0x3555, and the smoke pair's
+  message 150 the grenade's `eFlags` behind a set zero flag as 24 zero bits:
+  the server's ints differed above the field's width (VERIFIED, the gates;
+  `docs/protocol-1.1.md`, "PlayerState delta").
 
 ### What vcod does
 
 - Events: the UO-only ids keep their numbers as `EV_UO_*` (`EV_FOREIGN |
   id`), and `EV_BULLET_HIT` and the projectile explodes join them; each
   plays as the table above (`fx::registry`, `audio::cues`). `GameEvent`
-  carries the carrier's `eType` and `eFlags`. The impact table reads
-  every `fx/*.csv`.
+  carries the carrier's `eType` and `eFlags`. The impact table reads every
+  `fx/*.csv`, the `vehicle` column included.
 - The MG loop (`AudioSystem::step_fire_loops`), the flamethrower
-  (`fx::flame`, retail's constants; chunks clip bodies and the local
-  player, residue flames drift and rise; no chain merging, one smoke puff
-  per chunk), `CameraShake` and `F` (`fx::sim`), UO's
-  earthquake fields (`play::quake`).
-- The HUD items above (`hud::uo`); `pm_flags` keeps sprinting, winded
-  and overheated at 0x1000000, 0x2000000, 0x4000000.
-- The captures above gate the dispatch (`fx::registry`'s and
-  `audio::cues`' `uo_capture_gates`, `AudioSystem`'s
-  `the_uo_mg_capture_holds_one_fire_loop_through_the_burst`): each
-  vehicle gun's flash on its tag, the artillery, tank and smoke rows, the
-  cloud on the grenade's `g_body`, the barrage, pop, bipod and overheat
-  aliases, one mg34 loop through the burst, no unknown event. A loaded
-  weapon file with no `worldFlashEffect` (a grenade, binoculars) flashes
-  nothing, as `CG_MuzzleFlash` spawns only a set handle
-  (`cod11-events-and-fx.md` 5b).
-- Sound blend entities (`audio::blend`, `AudioSystem::set_sound_blends`)
-  as section 16 has them, every frame off the drawn snapshot pair, the
-  voice on the blend entity placed on its vehicle's drawn origin; the
-  pick weighs rows by `lod` on a UO connection (`AliasTable::pick_lod`).
-  `the_uo_vehicle_captures_blend_the_engines_and_the_mg_loops` replays
-  the three vehicle captures: one voice per blend entity with aliases,
-  on its vehicle, the engines' volume and the jeep engine's pitch the
-  stock rows' blend at `angles2[1]`, gone with the entity.
-- Client-traced rounds (`fx::client_bullet`, `fx::registry::client_round`)
-  as above: a hit becomes the `EV_UO_BULLET_HIT` the server would have
-  sent (normal and reflection as byte dirs), resolved and played as one
-  with its tracer off the seat's tag; a miss draws its tracer. The trace
-  is vcod's world (no static models, as `CM_BoxTrace`), the snapshot's
-  brush models and collmaps placed where the newest snapshot has them
-  (`SnapshotMovers::place`, before the events' traces) and its player
-  capsules; the second trace under 0x10000 stops on a vehicle's collmap
-  and replaces the first when nearer. Heavy rounds' tracers take the
-  `*lmg` cvars' defaults. A server's `EV_BULLET_TRACER` draws unrolled.
-  Every UO tracer takes the length gate and `sv_night`'s width.
-  Registry gates check which captured rounds are traced and from which
-  tags (`the_uo_vehicle_captures_trace_the_mg_rounds_the_server_left`,
-  `the_uo_turret_capture_traces_its_misses_and_draws_the_served_tracers`),
-  and the cues gate the turret's overheat alias.
+  (`fx::flame`, retail's constants; chunks clip bodies and the local player,
+  residue flames drift and rise; no chain merging, one smoke puff per
+  chunk), `CameraShake` and `F` (`fx::sim`), UO's earthquake fields
+  (`play::quake`).
+- The HUD items above (`hud::uo`). Decoded `pm_flags` keep sprinting,
+  winded and overheated at 0x1000000, 0x2000000, 0x4000000 (`PMF_*_V22`).
+- The captures gate the dispatch (`fx::registry`'s and `audio::cues`'
+  `uo_capture_gates`, `AudioSystem`'s
+  `the_uo_mg_capture_holds_one_fire_loop_through_the_burst`): each vehicle
+  gun's flash on its tag, the artillery, tank and smoke rows, the cloud on
+  the grenade's `g_body`, the barrage, pop, bipod and overheat aliases, one
+  mg34 loop through the burst, no unknown event. A loaded weapon file with
+  no `worldFlashEffect` (a grenade, binoculars) flashes nothing, as
+  `CG_MuzzleFlash` spawns only a set handle (`cod11-events-and-fx.md` 5b).
+- Sound blend entities (`audio::blend`, `AudioSystem::set_sound_blends`) as
+  section 16 has them, every frame off the drawn snapshot pair, the voice on
+  the blend entity placed on its vehicle's drawn origin; the pick weighs
+  rows by `lod` on a UO connection (`AliasTable::pick_lod`).
+  `the_uo_vehicle_captures_blend_the_engines_and_the_mg_loops` replays the
+  three vehicle captures: one voice per blend entity with aliases, on its
+  vehicle, the engines' volume and the jeep engine's pitch the stock rows'
+  blend at `angles2[1]`, gone with the entity.
+- Client-traced rounds (`fx::client_bullet`, `fx::registry::client_round`):
+  - a hit becomes the `EV_UO_BULLET_HIT` the server would have sent (normal
+    and reflection as byte dirs), resolved and played as one with its tracer
+    off the seat's tag; a miss draws its tracer;
+  - the trace is vcod's world (no static models, as `CM_BoxTrace`), the
+    snapshot's brush models and collmaps placed where the newest snapshot
+    has them (`SnapshotMovers::place`, before the events' traces) and its
+    player capsules; the second trace under 0x10000 stops on a vehicle's
+    collmap and replaces the first when nearer;
+  - heavy rounds' tracers take the `*lmg` cvars' defaults; a server's
+    `EV_BULLET_TRACER` draws unrolled; every UO tracer takes the length gate
+    and `sv_night`'s width;
+  - gates: `the_uo_vehicle_captures_trace_the_mg_rounds_the_server_left`,
+    `the_uo_turret_capture_traces_its_misses_and_draws_the_served_tracers`,
+    and the cues gate the turret's overheat alias.
 - An entering missile's or general entity's ring replays from 0, as
   `CG_ResetEntity` has it (`cod11-events-and-fx.md` 1, "An entity that
-  enters the snapshot"): a tank shell that strikes within its first step
-  is first sent exploded, `*-uo-tank.bin`'s second shell among them, and
-  plays (`the_uo_tank_capture_shell_explodes_on_the_tank_row`).
-- Not done: the stance owner
-  draw's prone-blocked reset on `EF_DEAD`, the objective pointers' vehicle
-  reference, UO's view jitter in the shake, `sprint_breath_last` (no
-  alias), a captured explode on a
-  vehicle (the `vehicle` column; the dispatch and the server's
-  0x100000 are read off the decompiles, coduo-vehicles.md 14).
+  enters the snapshot"). A tank shell that strikes within its first step is
+  first sent exploded, `*-uo-tank.bin`'s second shell among them, and plays
+  (`the_uo_tank_capture_shell_explodes_on_the_tank_row`).
+- Not done: the stance owner draw's prone-blocked reset on `EF_DEAD`, the
+  objective pointers' vehicle reference, UO's view jitter in the shake,
+  `sprint_breath_last` (no alias). No capture holds an explode on a vehicle,
+  so the `vehicle` column and the server's 0x100000 rest on the decompiles
+  (coduo-vehicles.md 14).
 
 ### Capture recipe
 
-`probe_uofx.gsc` precaches the flamethrower and the artillery
-binoculars, hands the first player the weapon `probe_weapon` names (none:
-its own) and a second later switches it there, then raises the
-earthquake and the `rewindFx`:
+`probe_uofx.gsc` precaches the flamethrower and the artillery binoculars,
+hands the first player the weapon `probe_weapon` names (none: its own), a
+second later switches it there, then raises the earthquake and the
+`rewindFx`:
 
     COD_VERSION=uo PORT=30881 PROBE_SECS=100 tools/run_probe.sh client-probes/probe_uofx mp_cassino \
         +set probe_weapon flamethrower_mp
@@ -1963,13 +1940,20 @@ earthquake and the `rewindFx`:
     vcod --game-dir <UO install> --mod-dir uo --net-probe 127.0.0.1:30881 \
         --probe-team axis --probe-weapsel --capture-tag shooter --probe-secs 44
 
-`--probe-weapsel` takes the server's `a` select and pulls the trigger
-from 15 s; the shooter's own fixture is discarded. The `*-uo-flame.bin`
-pair is that run (2026-10-14); the `*-uo-quake.bin` pair the same with no
-`probe_weapon` and `--save-combat` for the shooter, so its own kar98k: the
-earthquake and five kar98k hits. `probe_uofx` hands a binoculars weapon
-over through the binocular slot with one round and the smoke grenade
-through its own slot; the artillery, smoke and bipod pairs are
+`--probe-weapsel` takes the server's `a` select and pulls the trigger from
+15 s; discard the shooter's own fixture.
+
+| Pair | Recipe |
+|---|---|
+| `*-uo-flame.bin` | the run above |
+| `*-uo-quake.bin` | the same with no `probe_weapon` and `--save-combat` for the shooter, so its own kar98k: the earthquake and five kar98k hits |
+| `*-uo-arty.bin`, `*-uo-smoke.bin`, `*-uo-mg.bin` | the commands below; `probe_uofx` hands a binoculars weapon over through the binocular slot with one round, the smoke grenade through its own slot |
+| `*-uo-overheat.bin` | section 18's tank recipe with `--probe-vehicle overheat` for the gunner |
+| `*-uo-turret.bin` | the turret commands below |
+| `*-uo-bazooka.bin` | the flame recipe with `+set probe_weapon bazooka_mp`, port 31211, the spectator tagged `uo-bazooka` for 55 s and the `--probe-weapsel` shooter 3 s later for 48 s |
+| `*-uo-bazooka-draw.bin` | the bazooka recipe on port 34531 with the server under gdb, which read the round's `gunrandom` pair and its direction's bits (cod11-combat.md 13.6, "The direction's bits"); `the_bazooka_rocket_leaves_on_retails_bits` replays it |
+
+Artillery, smoke and bipod:
 
     COD_VERSION=uo PORT=30941 PROBE_SECS=75 tools/run_probe.sh client-probes/probe_uofx mp_cassino \
         +set probe_weapon binoculars_artillery_mp   # smokegrenade_mp, mg34_mp
@@ -1978,12 +1962,12 @@ through its own slot; the artillery, smoke and bipod pairs are
     vcod --game-dir <UO install> --mod-dir uo --net-probe 127.0.0.1:30941 \
         --probe-team axis --probe-uo-weapon arty --probe-secs 48   # smoke, mg
 
-the shooter started 3 s after the spectator. `--probe-uo-weapon` takes
-the `a` select, then `arty` sights 12 degrees down for 1.5 s and fires,
-`smoke` holds the trigger a second and lets go 10 degrees up, `mg`
-sights 3 s, fires 3 s, holds the sight 2 s and lets go. The
-`*-uo-overheat.bin` pair is section 18's tank recipe with `--probe-vehicle
-overheat` for the gunner. The `*-uo-turret.bin` pair is
+The shooter starts 3 s after the spectator. `--probe-uo-weapon` takes the
+`a` select; then `arty` sights 12 degrees down for 1.5 s and fires, `smoke`
+holds the trigger a second and lets go 10 degrees up, `mg` sights 3 s, fires
+3 s, holds the sight 2 s and lets go.
+
+Turret:
 
     COD_VERSION=uo PORT=30961 PROBE_SECS=100 tools/run_probe.sh client-probes/probe_turret mp_carentan \
         +set probe_teleport 1 +set probe_pose 1
@@ -1992,37 +1976,39 @@ overheat` for the gunner. The `*-uo-turret.bin` pair is
     vcod ... --probe-team axis --probe-secs 60                   # 2 s later, the target
     vcod ... --save-turret --probe-turret-target-ms 9000 --capture-tag uo-turret --probe-secs 55
 
-the gunner 3 s after the target; its own turret fixture is discarded.
-The `*-uo-bazooka.bin` pair (2026-10-15) is the flame recipe with
-`+set probe_weapon bazooka_mp` (which `probe_uofx` precaches only when
-asked; `dm` does not, and the server aborted on the handover without it,
-live, VERIFIED, one run), port 31211, the spectator tagged `uo-bazooka`
-for 55 s and the `--probe-weapsel` shooter 3 s later for 48 s: one round
-on entity 158 as `eType` 4 for eight snapshots, its explode (185) on the
-same entity as `eType` 0 at +400 ms (live, VERIFIED). It gates the
-missile's `projectileSound` (cod11-sound-system.md section 8).
-The `*-uo-bazooka-draw.bin` pair (2026-10-21) is the same recipe on port
-34531 with the server run under gdb, which read the round's `gunrandom`
-pair and its direction's bits (cod11-combat.md 13.6, "The direction's
-bits"); `the_bazooka_rocket_leaves_on_retails_bits` replays it.
-`uo_weapons_ab`'s `the_bazooka_rocket_flies_and_explodes_as_on_uo`
-replays the shooter on ours from retail's spot and view: the rocket's
-trajectory on every snapshot (`TR_LINEAR`, `trTime` 100 ms before the
-fire's snapshot, `trBase` the muzzle to the tenth, a whole-unit
-`trDelta` 2797 to 2800 long, unchanged over the flight) and the
-explode's carrier (`eType` 0, weapon, type 2, `eFlags` 0x10000) match
-retail's; each side's explode lies on its own line on the snapshot the
-flight reaches it, and retail's line meets our mp_cassino at retail's
-explode, on its surface 16 (VERIFIED, capture and gate). The hip
-spread is a random draw, so the direction is each side's own: retail's
-went 0.45 degrees left and 0.9 up, the gate's 7.3 left and 1.4 down,
-and where they go off differs (VERIFIED, the capture's and the gate's `trDelta`).
-`cargo run -p vcod-common --example event_dump -- 22 net/gamestate-uo-flame.bin net/snapshots-uo-flame.bin`
-prints a pair's events. Without the `precacheItem`, which `dm` does not
-do, the retail server dumps core once the flamethrower comes out
-(VERIFIED, three runs); with it the run completes (VERIFIED). The
-artillery binoculars from the hip raise and fire nothing (live, VERIFIED:
-`EV_RAISE_WEAPON`, no fire event).
+The gunner starts 3 s after the target; discard its own turret fixture.
+
+Bazooka facts:
+
+- `probe_uofx` precaches `bazooka_mp` only when asked; `dm` does not, and
+  the server aborted on the handover without it (live, VERIFIED, one run).
+- The capture holds one round on entity 158 as `eType` 4 for eight
+  snapshots and its explode (185) on the same entity as `eType` 0 at +400
+  ms (live, VERIFIED). It gates the missile's `projectileSound`
+  (cod11-sound-system.md section 8).
+- `uo_weapons_ab`'s `the_bazooka_rocket_flies_and_explodes_as_on_uo`
+  replays the shooter on ours from retail's spot and view. The rocket's
+  trajectory on every snapshot (`TR_LINEAR`, `trTime` 100 ms before the
+  fire's snapshot, `trBase` the muzzle to the tenth, a whole-unit `trDelta`
+  2797 to 2800 long, unchanged over the flight) and the explode's carrier
+  (`eType` 0, weapon, type 2, `eFlags` 0x10000) match retail's. Each side's
+  explode lies on its own line on the snapshot the flight reaches it, and
+  retail's line meets our mp_cassino at retail's explode, on its surface 16
+  (VERIFIED, capture and gate).
+- The hip spread is a random draw, so the direction is each side's own:
+  retail's went 0.45 degrees left and 0.9 up, the gate's 7.3 left and 1.4
+  down (VERIFIED, the capture's and the gate's `trDelta`).
+
+Other facts from these runs:
+
+- `cargo run -p vcod-common --example event_dump -- 22
+  net/gamestate-uo-flame.bin net/snapshots-uo-flame.bin` prints a pair's
+  events.
+- Without the `precacheItem`, which `dm` does not do, the retail server
+  dumps core once the flamethrower comes out (VERIFIED, three runs); with
+  it the run completes (VERIFIED).
+- The artillery binoculars from the hip raise and fire nothing (live,
+  VERIFIED: `EV_RAISE_WEAPON`, no fire event).
 
 ## 20. Server: vcod-server hosts UO (stage 1)
 
