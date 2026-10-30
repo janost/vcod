@@ -1,15 +1,14 @@
 # Shellshock in CoD 1.1 MP
 
-What `self shellShock(name, duration)` does on a retail 1.1 client: the
-server half (the three playerstate fields) is in `cod11-gsc-language.md`
-section 9, "Indexing past the first wait"; this is everything after the
-fields reach the client.
+What a retail 1.1 client does with `self shellShock(name, duration)` once
+the three playerstate fields arrive. The server half is in
+`cod11-gsc-language.md` section 9, "Indexing past the first wait".
 
-Modules: `cgame_mp_x86.dll` 1.1 (image base `0x30000000`), `CoDMP.exe` 1.1
-(`0x00400000`), `game.mp.i386.so` 1.1d (file addresses). Both were decompiled
-with Ghidra; where Ghidra lost a register argument I read the disassembly
-and cite the instruction. Syscall numbers are cases of `CL_CgameSystemCalls`
-(`CoDMP.exe 0x401df0`).
+Modules: `cgame_mp_x86.dll` 1.1 (base `0x30000000`), `CoDMP.exe` 1.1
+(`0x00400000`), `game.mp.i386.so` 1.1d (file addresses). Where a register
+argument is cited, it was read off the disassembly at the instruction
+given. Syscall numbers are cases of `CL_CgameSystemCalls` (`CoDMP.exe
+0x401df0`).
 
 ## 1. Stock use
 
@@ -20,7 +19,7 @@ and cite the instruction. Syscall numbers are cases of `CL_CgameSystemCalls`
   `stopShellshock()` three times, all commented out (lines 580, 625, 662).
   The callers are single-player (`maps/_shellshock.gsc`, `_mortar.gsc`,
   `_utility.gsc`, `stalingrad.gsc`, `truckride.gsc` and others). Nothing in
-  1.1 MP shocks a player on its own: a grenade does not.
+  1.1 MP shocks a player on its own, a grenade included.
 - VERIFIED, `soundaliases/*.csv` in the paks: `shellshock_loop`
   (`misc/shellshock_loop.wav`, volume 0.6, channel `shellshock`, streamed,
   looping), `shellshock_loop_silent` (the same file at volume 0),
@@ -116,8 +115,7 @@ as channel `i`'s multiplier (`0x8e079c + i * 12`, the per-channel factor
 weapon, voice, item, body, local, music, announcer, shellshock`. So the
 four 3D channels after `menu` are crossed: `cg_shock_volume_body` scales
 the weapon channel, `item` voices, `weapon` items and `voice` bodies.
-`default.shock` thus takes weapons to 0.1 and items to 0.5, not weapons to
-0.5.
+`default.shock` takes weapons to 0.1 and items to 0.5.
 
 ## 5. The frame
 
@@ -170,10 +168,10 @@ sound to start. INFERRED: `null.wav` on the announcer channel and entity
 `0x3ff` ends a playing `shellshock_end` through the replacement rule
 (`cod11-sound-system.md` section 2).
 
-INFERRED, the formulas on `default.shock`'s numbers (5 s shock): every channel ducks in over 0.25 s and
-stays until 0.75 s before the end, then comes back over 2.5 s; the loop
-plays from the start and fades over 2 s from 1.5 s before the end, which is
-also when the exit sound plays.
+INFERRED, the formulas on `default.shock`'s numbers (5 s shock): every
+channel ducks over 0.25 s, holds until 0.75 s before the end, then recovers
+over 2.5 s. The loop plays from the start and fades over 2 s from 1.5 s
+before the end, when the exit sound plays.
 
 VERIFIED, `CoDMP.exe 0x44f3c0` (syscall 0xd9): the room name goes through
 `0x44f340` (an index 0..25 or one of `generic, paddedcell, room, bathroom,
@@ -272,10 +270,11 @@ whole screen at that alpha with the `<screen>` shader built at `0x4fda00`,
 state `0x65`. INFERRED, Q3's bits: `GLS_SRCBLEND_SRC_ALPHA |
 GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA`.
 
-INFERRED, from the order of the two: each frame of a shock draws the last
-frame's finished 3D view over this one and keeps the result: a trail that keeps 1% of a frame after the decay
-(400 ms in `default.shock`), 83% from one 60 Hz frame to the next. The
-first frame only captures. The HUD is not in it.
+INFERRED, from the order of the two: each shocked frame draws the last
+frame's finished 3D view over this one and keeps the result. The trail
+keeps 1% of a frame after the decay (400 ms in `default.shock`), 83% from
+one 60 Hz frame to the next. The first frame only captures. The HUD is not
+in it.
 
 ## 6. The stock files
 
@@ -304,8 +303,8 @@ the playerstate's index is 0. No cheat check.
 
 ## 8. Measured
 
-2026-10-13, retail 1.1d on mp_carentan, `client-probes/probe_shock.gsc`
-with a `--save-shock` client (`crates/server/tests/fixtures/shellshock/`).
+Retail 1.1d on mp_carentan, `client-probes/probe_shock.gsc` with a
+`--save-shock` client (`crates/server/tests/fixtures/shellshock/`).
 VERIFIED (capture):
 
 - `shellShock("default", 2.5)` at level time 16000: the next snapshot reads
@@ -317,15 +316,16 @@ VERIFIED (capture):
   run reads 90 and the back -63 on the wire; with it clear, 224 and -157.
 
 `crates/server/tests/shellshock_ab.rs` replays the client's cmds on
-vcod-server under the same gsc: the three fields, the origin and the
-velocity match exactly on every one of retail's snapshots, the placement's
-included. VERIFIED (capture, replay): the placement snapshot (t 15000)
-acknowledged commandTime 14968, and the client half's first `!cmd` is
-15018; retail also ran a holding cmd at 15000 that the probe sent before
-it saw the placement and did not log (cod11-movers.md 15, "The cmd at the
-placement"). The gate runs the placement frame to 14968 and that cmd at
-15000 ahead of the log's first; without it the first forward cmd ran
-from 14950 and left a constant 1.66 units on the origin.
+vcod-server under the same gsc. The three fields, the origin and the
+velocity match exactly on every retail snapshot, the placement's included.
+
+VERIFIED (capture, replay): the placement snapshot (t 15000) acknowledged
+commandTime 14968, and the client's first logged `!cmd` is 15018. Retail
+also ran an unlogged holding cmd at 15000, sent before the probe saw the
+placement (cod11-movers.md 15, "The cmd at the placement"). The gate runs
+the placement frame to 14968 and that cmd at 15000 before the log's first.
+Without it the first forward cmd runs from 14950 and leaves a constant 1.66
+units on the origin.
 
 ## vcod
 
