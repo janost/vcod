@@ -4,10 +4,9 @@ How a `misc_turret` works on the CoD2 1.3 server and client: the spawn, the
 use key's mount, the gunner's pmove, the frame that aims, places, fires and
 sounds the gun, the release, and the gunner's first-person eye. CoD1's
 `cod11-turrets.md` is the model; this document records where CoD2 differs
-and what vcod does about it.
+and what vcod does.
 
-Evidence rules as everywhere in this directory, no document-level default:
-every claim carries its own label. Addresses are `cod2_lnxded` (1.3 Linux
+No document-level label: every claim carries its own. Addresses are `cod2_lnxded` (1.3 Linux
 dedicated server, the game module linked in) unless marked Mac, which is
 the 1.3 Mac client (`cod2mp_mac13_i386`, cgame inside). Unnamed statics are
 named here for what their bytes do. `ent` is a gentity (stride 0x230,
@@ -87,9 +86,10 @@ vcod's `spawnTurret` and `precacheTurret` are those (`builtins::cod2`,
 takes its tags and sweeps its rest pitch (`spawn::turret_model_changed`).
 
 vcod-server registers the weapon and the four aliases at the spawn on CoD2
-(`game::spawn`); CoD1 keeps its two. It does not register
-`defaultweapon_mp` first, so its gun reads weapon 1 where retail's reads 2
-and the hint `weapon + 4` reads one lower (section 8).
+(`game::spawn`, under `HostProfile::turret_weapon_and_player_sounds`); CoD1
+keeps its two. `defaultweapon_mp` is registered first at the load
+(`game::script`, `WeaponNumbering::Registered`), so the gun reads weapon 2
+and its hint `weapon + 4` as retail's.
 
 ## 3. Use key
 
@@ -286,8 +286,8 @@ cmds, then its frame) and compares every snapshot: the gunner flags,
 `viewlocked` and its entity, the clamp, the cursor hint's presence and
 string, the view (worst 0.004 degrees), the origin (worst 1e-5), the
 barrel (exact), the gun's firing bit, loop sound and event ids, the
-gunner's `legsAnim` (toggle aside), and the release's stance event. Left out: the sound alias and weapon indices,
-which ride the level's registration order, and `delta_angles`, which
+gunner's `legsAnim` (toggle aside), the gun's `weapon` and `loopSound`,
+and the release's stance event. Left out: `delta_angles`, which
 `SetClientViewAngle` leaves unmasked on retail.
 
 Sections 13, 14 and 16 add six captures under the same gate: a prone
@@ -315,8 +315,8 @@ a bullet def (def+0x78 0), is the inflictor's `s.weapon` (ent+200), which
 in the gunner's hands. VERIFIED, the stock `weapons/mp/mg42_bipod_*_mp`
 and `30cal_*_mp` files carry no `loc*` keys, and the weapon file loader
 0x80f3382 starts from a zeroed def, so the gun's own multipliers are all 0.
-vcod read the gun's, so every turret round on a body did 0 and the callback
-never ran.
+Trap: reading the gun's multipliers makes every turret round on a body do
+0 and the callback never run.
 
 VERIFIED, `player_die` 0x810175a: when the callback's weapon is not 0, the
 attacker is a client with `eFlags & 0x300` and the entity his
@@ -362,8 +362,8 @@ menus shown and `viewlocked_entNum` (cg+0x26158) not 0x3ff, it draws
 `reticleCenterSize` (def+0x120) centred on the screen (both aligns 2),
 coloured (0.25, 1, 0.25) on `pm_flags & 0x100000` (a friend under the
 aim) and white otherwise, at `cg_crosshairAlpha` (registered 1.0). The stock MG42 and 30cal
-files name `gfx/reticle/mg42_cross.tga` at 32. vcod drew no crosshair on a
-gun; `cod2_player_hud`'s `turret_crosshair` draws this one.
+files name `gfx/reticle/mg42_cross.tga` at 32. vcod:
+`cod2_player_hud`'s `turret_crosshair`.
 
 VERIFIED, Mac `CG_BulletHitEvent` / `CG_BulletHitClientEvent` 0x1d9b78:
 the tracer starts at `CG_CalcMuzzlePoint` 0x1d7f72 of the impact's
@@ -373,9 +373,9 @@ view origin and draws no tracer, any other entity its DObj's
 so its tracer leaves the gun's `tag_flash` and the gunner sees his own;
 the flesh impact `finishPlayerDamage` raises names the gunner, whose own
 first-person skip holds. vcod's tracers already ran off those events
-(`play::cod2_fx`); the gun's drawn `tag_flash` now joins the bodies' in
-`Cod2Draw::muzzles`, and before section 11's fix the world impact named
-the gunner, so the gunner saw none.
+(`play::cod2_fx`); the gun's drawn `tag_flash` joins the bodies' in
+`Cod2Draw::muzzles`. A world impact that named the gunner instead would
+leave the gunner seeing no tracer.
 
 ## 13. Prone and duck guns
 
@@ -435,12 +435,12 @@ VERIFIED (capture), the death frame (7550):
   `viewlocked` 0 and 1023, the hint 0 and its string -1.
 - The gun walks home from the next frame, 10 degrees a frame (section 7).
 - A dead body's hint pass still resets `cursorHintString` to -1; only a
-  spectator's and the intermission's keep `ClientSpawn`'s 0. vcod zeroed
-  it for the dead too; `cod2_wire` now limits that to `pm_type` 4 and 5.
+  spectator's and the intermission's keep `ClientSpawn`'s 0. vcod's
+  `cod2_wire` zeroes it for `pm_type` 4 and 5 only.
 - The respawn snapshot's `pm_flags` is 0x801000: `ClientSpawn` (Mac
   0x1930a6) sets 0x1000, which holds `EF_FIRING` off while the trigger
-  stays down; it goes once attack is let go. vcod's CoD2 spawn did not
-  set it and fired on the first cmd after the respawn; it does now.
+  stays down; it goes once attack is let go. vcod's CoD2 spawn sets it
+  too (without it the first cmd after the respawn fires).
 
 The probe's `wait ms / 1000` waits 1.5 s on retail: CoD2's
 `Scr_EvalDivide` (Mac 0x9012c) divides two ints as floats, where CoD1's
@@ -466,13 +466,12 @@ after it):
   VERIFIED, lnxded `PmoveSingle` (0x80e8b56..): its default arm, which
   `pm_type` 6 takes as 0 does, runs the mounted reset (0x80f0946) in place
   of `PM_Weapon` while `eFlags & 0x300`, so the weapon stays in hand (it
-  goes to 0 the next frame) and the firing test still finds rounds. vcod's
-  `pm_weapon` cleared the weapon first for any `pm_type` past 5; it takes
-  the mounted reset first on 0 and 6 now.
+  goes to 0 the next frame) and the firing test still finds rounds.
+  vcod's `pm_weapon` takes the mounted reset first on `pm_type` 0 and 6.
 - The gun keeps `eFlags` 0x40 that frame and `loopSound` goes to 0: no
   store in `G_ClientStopUsingTurret` (lnxded 0x810b9a4) touches the gun's
-  `eFlags`, VERIFIED, and its next `turret_think` clears it (10600). vcod's
-  release cleared the bit; it is left to the think now.
+  `eFlags`, VERIFIED, and its next `turret_think` clears it (10600). vcod
+  leaves the bit to the think too.
 - No stop alias plays: no event rides the gun from the death on.
   INFERRED, the release zeroes the loop timer, so the unmanned think's
   loop pass never runs out with a positive timer.
@@ -501,9 +500,8 @@ gun is manned and again once it is free. VERIFIED (capture):
   is refused. INFERRED, from the order of the calls; no capture puts two
   presses in one frame.
 
-`SHARE` replays it with no difference. A first take put the second
-player 32 to the side and let the gunner release onto his spot:
-`ClientEndFrame` runs `StuckInClient`'s CoD2 form (lnxded 0x80f6e9e,
+`SHARE` replays it with no difference. With the second player 32 to the
+side the gunner releases onto his spot, and `ClientEndFrame` runs `StuckInClient`'s CoD2 form (lnxded 0x80f6e9e,
 after the hint pass and the entity copy, for a player with health) on
 two players whose boxes and capsule radii overlap: both get the
 separation plus a `G_crandom()` per axis, normalized, times
