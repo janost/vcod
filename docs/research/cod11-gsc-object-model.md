@@ -6,9 +6,9 @@ BSP classnames get an engine spawn function, and where the builtin tables
 actually live. This is the measurement pass that stage 2 of the gsc gameplay
 program depends on.
 
-Evidence rules as everywhere in this directory. VERIFIED means I read it out
-of the binary or the shipped assets myself; INFERRED means I read it off
-disassembly without a live test and said so. The module throughout is
+Evidence rules as everywhere in this directory: VERIFIED is read out of the
+binary or the shipped assets; INFERRED is read off disassembly without a
+live test. The module throughout is
 `game.mp.i386.so`, the 1.1d Linux dedicated server's MP game module, which
 carries a full dynamic symbol table. Addresses are module-relative (image base
 0), which is what `nm -D` and `objdump -d` print for it.
@@ -47,7 +47,7 @@ dumpers resolve `.rel.data` and print the symbol.
   `(n * 32 - n) * 4`.
 
 Field offsets in the tables below are byte offsets into those structs.
-Three of them cross-check against unrelated code, which is how I know the
+Three of them cross-check against unrelated code, which shows the
 tables are being read at the right stride:
 
 - `origin` at 308 = 0x134, and `G_CallSpawn` passes `ent + 0x134` to
@@ -233,8 +233,8 @@ carries the recipe and the full log): inside `Callback_PlayerConnect` and
 *before* its `waittill("begin")`, `isdefined(self.pers)` is true while
 `isdefined(self.pers["team"])` is false, and `self.name` already holds the
 connecting client's userinfo name. VERIFIED on the same run that reading an
-index off a genuinely undefined field is fatal — `undefined is not an array,
-string, or vector`, which took the server down.
+index off a genuinely undefined field is fatal (`undefined is not an array,
+string, or vector`), which took the server down.
 
 INFERRED as the mechanism, read off control flow rather than run: `ClientConnect`
 (`0x4246c`) saves its second argument across the `bzero` that clears
@@ -336,7 +336,7 @@ INFERRED: `Scr_AddFields` is an engine callback reached through the syscall
 pointer at 0xc10a4, so what it does with the two arguments is not visible in
 this module. The name, the extension and the file that exists at that path
 make "load `radiant/keys.txt` and register each line as a typed script field"
-the only reading I can construct, but I have not watched it happen.
+the only reading that fits, but it has not been observed.
 
 ## 7. What the map load actually does with an entity block
 
@@ -363,7 +363,7 @@ Key names are not, see below.
 
 ### Applying one key/value pair
 
-The spawn-var applier is the unnamed function at 0x61400, which I will call
+The spawn-var applier is the unnamed function at 0x61400, which this doc calls
 `G_ParseField`. It is two stages:
 
 1. Walk the entity field table with `Q_stricmp`, so a Radiant key matches an
@@ -429,7 +429,7 @@ land in the C struct. Registered script fields land in the entity's script
 object. Everything else in the BSP entity lump is discarded at load and is
 not visible to script at all.
 
-INFERRED: `Scr_FindField` is also an engine callback (0xc10a8), so I cannot
+INFERRED: `Scr_FindField` is also an engine callback (0xc10a8), so this cannot
 see whether its search covers only the radiant fields or every registered
 field including client and HUD names. Stage 2 should assume the narrow
 reading and measure it with a probe if a map ever depends on the wide one.
@@ -464,8 +464,8 @@ reading and measure it with a probe if a map ever depends on the wide one.
 
 vcod applies a block's pairs in lump order
 (`bsp::entity_block_pairs`, `spawn_entities_from_string`), and so does
-the CoD2 struct pass and UO's `spawnDuplicate` (`spawn_from_vars`). It
-used to walk a `HashMap`, whose order changes per process: on UO's
+the CoD2 struct pass and UO's `spawnDuplicate` (`spawn_from_vars`). Trap:
+a `HashMap`'s order changes per process: on UO's
 mp_cassino `script_origin` "auto9" (entity 414, `"origin"` then `"angles"
 "0 2.50448e-006 0"`) the `origin` write's link snapped a yaw already set
 when `angles` came first, and the baseline left `apos.trBase[1]` out.
@@ -604,7 +604,7 @@ The heading's label above covers the table; every claim below carries its own.
   the byte means is not measured. Offset 0x171 is not in the entity field
   table of section 5, so it is engine-only state with no script-visible name,
   and the Q3 analogy that would call it `takedamage` is a guess, not evidence.
-  vcod does not model this gate, and it is the inner of two: a dead client
+  vcod does not model this gate; it is the inner of two: a dead client
   never reaches `hurt_touch` at all, because the touch pass upstream of it
   drops them (8.2).
 
@@ -630,17 +630,15 @@ does, so every per-classname touch function below it -- `hurt_touch`'s
 - So only `pm_type` 0 and 1 touch anything, and the dead (6), a spectator (4)
   and the intermission camera (5) touch nothing. INFERRED, from the rule
   against the measured values. A dead player lying in a trigger therefore
-  notifies it on no frame at all: the corpse waiting out a respawn in a
-  minefield re-fired `_minefields.gsc`'s `minefield_kill` on every pass until
-  vcod took the guard on.
-- An earlier vcod claim that retail notifies the dead and lets script decide,
-  read off `sd.gsc`'s `isalive(other)` tests, is wrong. Those tests cover a
-  player who dies mid-plant, and the module's own guard settles it.
+  notifies it on no frame at all (without the guard a corpse waiting out a
+  respawn in a minefield re-fires `_minefields.gsc`'s `minefield_kill` on
+  every pass). vcod takes the guard.
+- Retail does not notify the dead and let script decide: `sd.gsc`'s
+  `isalive(other)` tests cover a player who dies mid-plant.
 
 ## 9. Builtins are five tables, VERIFIED
 
-This closes the "record struct never fully resolved" gap from
-`cod11-gsc-language.md` section 7, which now points here.
+`cod11-gsc-language.md` section 7 points here for the record struct.
 
 | table | address | stride | count | walked by | 1.5b address, count | UO 1.51b address, count |
 |---|---|---|---|---|---|---|
@@ -749,7 +747,7 @@ error. Section 14 has the structure and the live measurement.
 So the first entity the map load creates is number 72, whatever
 `sv_maxclients` is. That corrects the gameplay design's "allocating upward
 from `sv_maxclients`". `MAX_CLIENTS` is 64 on CoD 1.1, and slots 64 to 71 are
-reserved and never handed out by `G_Spawn`; I have not established what
+reserved and never handed out by `G_Spawn`; it is not established what
 reserves them.
 
 `G_SpawnEntitiesFromString` (0x622dc) parses the first entity block, calls
@@ -780,9 +778,8 @@ number in the 72-and-up range.
 
 ## 13. Five classnames consume their block without an entity, VERIFIED
 
-An earlier version of section 12 said the lump produces a `gentity_t` for
-every block with a classname whether or not the classname is in `spawns`.
-That is wrong. `G_CallSpawn`'s third case runs the record's `SP_` function
+The lump does not produce a `gentity_t` for every block with a classname.
+`G_CallSpawn`'s third case runs the record's `SP_` function
 after the entity is built, and four of those functions are nothing but
 `G_FreeEntity(self)`:
 
@@ -897,7 +894,7 @@ high-water mark. Two facts fall out of that:
 - `delete()` does not free the entity when it is called: the free happens a
   tenth of a second later, off the entity think. INFERRED FROM
   DECOMPILATION, what the `delete` entity method (0x5da14) does to get
-  there — it notifies, unlinks, clears the touch and use handlers, and sets
+  there: it notifies, unlinks, clears the touch and use handlers, and sets
   `think = G_FreeEntity` with `nextthink = level.time + 100`; the two
   constants are VERIFIED at 0x5da9a and 0x5daa4. During the map load the
   `SP_` functions call `G_FreeEntity` directly, so there is no such delay
@@ -914,15 +911,15 @@ high-water mark. Two facts fall out of that:
   endon("death")` and writes `point.delay_use` once its player dies, and
   `bas.gsc` deletes a base's spawn points (`BaseAssault_KillBase`
   3519-3530, `BaseAssault_base_think` 4029-4037); without the notify the write lands
-  on a dead entity, a script error (ours before 2026-10-18, mp_foy bas
-  with four shooting bots, seed 11).
+  on a dead entity, a script error (seen on mp_foy bas with four shooting
+  bots, seed 11).
 
 `ObjectTable::schedule`/`run_thinks` (`crates/server/src/game/entity.rs`)
 reproduce the think pass this implies. A think is an absolute `nextthink` in
 `level.time` milliseconds; `run_thinks` fires every entity whose time has
 come and clears `nextthink` before the call, so a think fires once and has to
 re-arm itself to repeat. A `nextthink` of 0 is no think armed rather than one
-due now: INFERRED, and from lineage rather than from this module — Q3's
+due now: INFERRED, and from lineage rather than from this module: Q3's
 `G_RunThink` (`g_main.c`, `if (thinktime <= 0) return;`) is where the
 convention comes from, and nothing in CoD 1.1 distinguishes the two readings,
 since every arming site read so far writes a positive absolute time.
@@ -980,7 +977,7 @@ under 10, `+0x57` at or above), flushing the trailing partial nibble the
 same way. `bg_numItems` = 70 makes an 18-character string.
 
 **M1, is index 0 unconditional?** `ClearRegisteredItems` (`.text` 0x4eecc)
-resolves, via its relocations, to `__bzero(itemRegistered, 0x400)` — a
+resolves, via its relocations, to `__bzero(itemRegistered, 0x400)`, a
 whole-array zero with no special case for index 0. Index 0's classname is
 blank, so no `precacheItem` call can ever name it either. `RegisterItem`
 (`.text` 0x4e504, mirrored here as `Items::register`) is the only function
@@ -1039,9 +1036,9 @@ two builtins register what they give
 further model fields for *every* item, at offsets 0x8 and 0xc of its
 `bg_itemlist` record. VERIFIED, read out of the binary with
 `dump_itemlist.py`'s `Elf` helper: all five compiled-in rows carry a
-non-empty +0x8 and a null +0xc — `xmodel/ammo_stielhandgranate1` (65),
+non-empty +0x8 and a null +0xc (`xmodel/ammo_stielhandgranate1` (65),
 `xmodel/ammo_stielhandgranate2` (66), `xmodel/health_small` (67),
-`xmodel/health_medium` (68), `xmodel/health_large` (69) — while rows 1-64
+`xmodel/health_medium` (68), `xmodel/health_large` (69)), while rows 1-64
 carry the empty string in both, matching the runtime fill their classnames
 already show.
 
@@ -1052,7 +1049,7 @@ verbatim: `_teams::precache()`'s American list on `mp_carentan` is
 springfield_mp`, and slots 385-392 of the capture are
 `weapon_MK2FragGrenade`, `projectile_USGrenade`, `weapon_colt45`,
 `weapon_M1Carbine`, `weapon_M1Garand`, `weapon_thompson`, `weapon_bar`,
-`weapon_springfield` — the grenade's two fields adjacent, one field each
+`weapon_springfield`: the grenade's two fields adjacent, one field each
 for the seven weapons that ship no `projectileModel`. The German list and
 `mp_pavlov`'s two lists resolve the same way with no leftovers.
 
@@ -1064,7 +1061,7 @@ INFERRED, that the alt-fire link's model precache is the same pair. M2
 above reads retail as precaching offsets 0x188 and 0x31c of the *weapon
 definition* for a chained alt mode, which is a different struct from the
 `bg_itemlist` +0x8/+0xc pair read here; that the two name the same two
-model strings is a reading I have not confirmed, and `register_item` uses
+model strings is an unconfirmed reading, and `register_item` uses
 the +0x8/+0xc pair for base and alt alike. VERIFIED that the choice is
 inert on stock content: all five alt-fire files
 (`bar_slow_mp`, `fg42_semi_mp`, `mp44_semi_mp`, `ppsh_semi_mp`,
@@ -1269,7 +1266,7 @@ before the `spawns` table is even consulted; a hit calls `G_SpawnItem`
 bg_itemlist,%eax` at 0x4e676 (an `R_386_32` relocation onto `bg_itemlist`)
 and `imul $0xaaaaaaab; sar $0x4` at 0x4e67b/0x4e689 (the reciprocal for
 dividing by the 0x30 stride) are the instructions present; the call at
-0x4e68d resolves, with no relocation to chase, to `RegisterItem` (0x4e504) —
+0x4e68d resolves, with no relocation to chase, to `RegisterItem` (0x4e504),
 an intra-module call the linker already fixed up, so objdump names the
 target outright.
 
@@ -1279,11 +1276,11 @@ a data read, so it does not inherit the label above just because each
 instruction in it does): `G_SpawnItem` derives the item's index from
 the matched record's own offset into `bg_itemlist` and passes it to
 `RegisterItem`, and neither function frees the entity the way the five
-classnames in section 13 do. I have not single-stepped this; what backs it
-independently is the outcome two paragraphs down — retail's configstring 8
+classnames in section 13 do. It was not single-stepped; what backs it
+independently is the outcome two paragraphs down: retail's configstring 8
 keeps the `fg42_mp`/`panzerfaust_mp` bits after the map's own script deletes
 those entities, which is only possible if registration already happened
-and survives the delete, matching this reading and no other I can construct.
+and survives the delete, matching this reading and no other that fits.
 
 `bg_itemlist`'s classname field for a weapon slot is not the
 `WEAPON_LIST`/configstring-7 name (`fg42_mp`) but that weapon's own
@@ -1297,7 +1294,7 @@ underscore from a compound name (`kar98k_sniper_mp` ->
 `mpweapon_kar98k_scoped`, `mosin_nagant_mp` -> `mpweapon_mosinnagant`,
 `mosin_nagant_sniper_mp` -> `mpweapon_mosinnagantsniper`), and one is not a
 transform of its own file name at all (`rgd-33russianfrag_mp` ->
-`mpweapon_russiangrenade`) — which is why `crates/server/src/game/spawn.rs`
+`mpweapon_russiangrenade`), which is why `crates/server/src/game/spawn.rs`
 carries `RADIANT_NAMES` as a transcribed table rather than a prefix-and-
 suffix rule. The other nine carry no usable `radiantName`: five alt-fire
 files (`bar_slow_mp`, `fg42_semi_mp`, `mp44_semi_mp`, `ppsh_semi_mp`,
@@ -1328,15 +1325,15 @@ with the stock `scr_allow_panzerfaust`): all eight placed panzerfausts are
 still there after the map load, so the `panzerfaust_mp` bit comes from live
 entities (`cod11-items.md` section 12.1).
 
-INFERRED FROM DECOMPILATION, the one link not closed: I have not traced the
+INFERRED FROM DECOMPILATION, the one link not closed, untraced, is the
 function that copies a weapon's `radiantName` into its `bg_itemlist` row at
-weapon-file-load time — a raw-pointer scan found `radiantName` as a field
+weapon-file-load time (a raw-pointer scan found `radiantName` as a field
 name inside a weapon-definition table sitting in `.data` near
-`bg_itemlist`, which is not a proof of the copy itself. The VERIFIED facts
-above — the assets carry each weapon's `radiantName`, and the BSPs place
+`bg_itemlist`, which is not a proof of the copy itself). The VERIFIED facts
+above (the assets carry each weapon's `radiantName`, and the BSPs place
 entities with exactly that string as their classname, reached by nothing
-except `bg_itemlist`'s match in `G_CallSpawn` — leave no other candidate,
-but I have not single-stepped it.
+except `bg_itemlist`'s match in `G_CallSpawn`) leave no other candidate,
+but it was not single-stepped.
 
 `misc_mg42` and `misc_turret` (section 8) reach `RegisterItem` by a second,
 unrelated path: both are `spawns`-table entries whose `SP_` function is
@@ -1356,11 +1353,11 @@ level, not just read off the disassembly: `mp_carentan.bsp`'s two
 `misc_mg42` blocks both carry `"weaponinfo" "mg42_bipod_stand_mp"`, and
 retail's configstring 8 sets exactly bit 16 (`mg42_bipod_stand_mp`) on that
 map beyond the `fg42_mp`/`fg42_semi_mp`/`panzerfaust_mp` bits `mp_pavlov`
-also sets — the one extra bit this key, read verbatim, predicts.
+also sets: the one extra bit this key, read verbatim, predicts.
 
 `spawn_item_name` (`crates/server/src/game/spawn.rs`) reproduces both
-rules — a `RADIANT_NAMES` table lookup for `mpweapon_*`, and a direct
-`weaponinfo` key read for `misc_mg42`/`misc_turret` — run for every spawned
+rules (a `RADIANT_NAMES` table lookup for `mpweapon_*`, and a direct
+`weaponinfo` key read for `misc_mg42`/`misc_turret`), run for every spawned
 entity alongside `SPAWN_FREES` and independent of it, so a classname that
 both registers and frees still does both.
 
@@ -1372,7 +1369,7 @@ rather than occupying separate runs: on both maps an item registration's
 model sits between two of the entity lump's, and the script's own precaches
 start only after the last of either. INFERRED, that the interleave is
 strictly call order and that getting one contributor wrong therefore
-offsets everything after it rather than leaving a hole — that is a
+offsets everything after it rather than leaving a hole: that is a
 mechanism generalisation from two maps' outcomes, not something a capture
 establishes; what supports it is that the same single indexer
 (`G_ModelIndex`, section 7) is the only writer on all three paths.
@@ -1380,7 +1377,7 @@ establishes; what supports it is that the same single indexer
 1. Every non-brush `model` key in the entity lump, during
    `G_SpawnEntitiesFromString` (section 7).
 2. Each registered item's `worldModel` and `projectileModel`, wherever the
-   item is registered — at spawn for a placed weapon or a mounted mg42
+   item is registered: at spawn for a placed weapon or a mounted mg42
    (section 17), inside `precacheItem` for the script's own list (section
    15, M3).
 3. The script's own `precacheModel` and `setModel` calls, continuing from
@@ -1420,11 +1417,11 @@ usegear`: the table is `.data` 0x7de28, 71 records of 24 bytes
 a null name, and `g_useGear` is its index 67, default `"1"`, flags 0x21.
 The 21 rows flagged 0x800 are exactly `crates/server/src/cvars.rs`'s
 `ENGINE_MIRRORED`, which is why `g_useGear` never appears in the 140/204
-mirror and cannot be recovered from the capture — only from the table.
+mirror and cannot be recovered from the capture, only from the table.
 
 **The other 70 rows are not transcribed here, and nothing warns when one is
 missing.** A script reading an unregistered cvar gets `""`, which
-`getcvarint` reads as 0, silently — which is exactly how `g_useGear` cost a
+`getcvarint` reads as 0, silently, which is how `g_useGear` cost a
 measurement round. `crates/server/src/cvars.rs` carries only the rows whose
 absence has been measured, so the next such miss should be a lookup rather
 than a re-derivation: run the dumper above with the cvar's name as its
@@ -1478,8 +1475,8 @@ inferred, and it is the only branch in this section where **both** arms are
 exercised: the two committed captures take one each, `mp_pavlov` the present
 key and `mp_carentan` the absent one, as the paragraph below shows. This is a raw
 copy of the entity's own key text, never
-a number the engine formats — no `G_SpawnFloat`, no `strtol`, no `strtod`
-anywhere in this sequence — which is why vcod's side does not route it
+a number the engine formats (no `G_SpawnFloat`, no `strtol`, no `strtod`
+anywhere in this sequence), which is why vcod's side does not route it
 through `Cx::format_number`: there is no `Value` to render, only a `String`
 already in its final form, or a fallback string when there is none.
 
@@ -1513,7 +1510,7 @@ section left untraced.
 mechanism), reads two fields off the pointer `BG_GetInfoForWeapon` returns
 (`edi+0xa0`, `edi+0xa4`), and calls `G_SoundAliasIndex` on each one that is a
 non-null, non-empty string (`0x52dad`, `0x52dd8`). INFERRED FROM
-DECOMPILATION for all of that — the order these run in, the gating on each
+DECOMPILATION for all of that: the order these run in, the gating on each
 field being non-null and non-empty, and the narrative that the two
 `G_SoundAliasIndex` calls register sound aliases for the same weapon
 `RegisterItem` just registered as an item. VERIFIED, and only this much:
@@ -1521,12 +1518,12 @@ field being non-null and non-empty, and the narrative that the two
 dynamic symbol table; the calls at `0x52d74` target `RegisterItem`, the ones
 at `0x52dad`/`0x52dd8` target `G_SoundAliasIndex`, and `BG_GetInfoForWeapon`
 is called; and `edi+0xa0`/`edi+0xa4` appear as read offsets in that code. None
-of that by itself is the sequencing or the meaning above — only that these
+of that by itself is the sequencing or the meaning above, only that these
 calls and these offsets exist in this function. VERIFIED separately,
 from the shipped `weapons/mp/mg42_bipod_stand_mp` (`pak0.pk3`), the weapon
 file both gate maps' mounted mg42s name in their own `weaponinfo` key, its
 `loopFireSound` and `stopFireSound` keys are `weap_mg42_loop` and
-`weap_mg42_cooldown` — exactly `mp_carentan`'s captured 526/527, in that
+`weap_mg42_cooldown`, exactly `mp_carentan`'s captured 526/527, in that
 order. So the alias names are weapon-file data, reached through the entity's
 `weaponinfo` value the same way `RegisterItem`'s item name already is;
 `turret_sound_aliases` (`crates/server/src/game/spawn.rs`) reuses
@@ -1564,8 +1561,8 @@ same `self spawn(origin, angles)` that `spawnPlayer()` does; the mode comes
 from the `sessionstate` client field they set immediately before it, not from
 a different builtin. VERIFIED from the shipped `maps/mp/gametypes/*.gsc`.
 
-Whether `ClientSpawn` clears `ps.weapons` is UNVERIFIED: I did not read
-0x4268c. The stock scripts require it to, which is INFERRED from their
+Whether `ClientSpawn` clears `ps.weapons` is UNVERIFIED: 0x4268c was not
+read. The stock scripts require it to, which is INFERRED from their
 ordering: `spawnPlayer()` calls `spawn` first and `_teams::loadout()` after,
 and `giveWeapon` raises a script error on an occupied slot (below), so a
 player who changed side would fail to respawn if the previous life's pistol
@@ -1928,14 +1925,14 @@ neither `trap_LocationalTrace` nor `CalcMuzzlePoints`. VERIFIED,
 `CalcMuzzlePoints`), `trap_EntitiesInBox` (0x4f237) and `trap_Trace`
 (0x4f52e). INFERRED: candidates come from a box around the muzzle filtered by
 distance and view cone, with a line-of-sight trace per candidate; the scoring
-and the trace are in `docs/research/cod11-items.md`, section 2. An earlier
-version of this paragraph named `trap_LocationalTrace` and `CalcMuzzlePoints`
-here, which the listings do not show. No touch path writes any of the three
+and the trace are in `docs/research/cod11-items.md`, section 2 (not
+`trap_LocationalTrace` or `CalcMuzzlePoints`, which the listings do not
+show). No touch path writes any of the three
 hint fields: `SP_trigger_lookat` installs no touch function and the trigger
 touch path stores nothing at `ps+0x384`, `+0x388` or `+0x38c`. INFERRED, from
 the absence rather than from a store. vcod writes `serverCursorHint` and
 `serverCursorHintString` from `ScriptRuntime::cursor_hint_pass`: the item,
-turret and `trigger_use` arms, the last since 2026-10-06
+turret and `trigger_use` arms
 (`docs/research/cod11-gametypes-re-bel.md` 4). VERIFIED, read out of
 `crates/server/src/game/script.rs` and `crates/server/src/spectate.rs`. The
 item arm's hint values are in `docs/research/cod11-items.md` section 2.3, and
@@ -1958,10 +1955,9 @@ Which index is chosen comes from the parsed animscript, through
 `BG_AnimScriptAnimation` (0x29db0), `BG_PlayerAnimation` (0x2c1f4) and
 `BG_AnimUpdatePlayerStateConditions` (0x2a2ec), off the trees
 `BG_AnimParseAnimScript` (0x28b88) builds. VERIFIED that those symbols exist
-and are exported; nothing here traces the path between them. Reproducing a
-spawned player's `legsAnim` means porting that state machine, which is why
-`playerstate_ab.rs` carries the field as its one gap rather than writing the
-number.
+and are exported; nothing here traces the path between them. vcod ports
+that state machine (`crates/common/src/animscript.rs`, `playerpose.rs`), and
+`playerstate_ab.rs`'s `GAPS` is empty, `legsAnim` included.
 
 ## 21. The client entity as vcod builds it
 
@@ -1982,8 +1978,8 @@ makes retail's null `ent->client` check a type-level fact here: a read of a
 client field on a map entity finds no store rather than an unset cell.
 
 The store is indexed by raw `CLIENT_FIELDS` position, not by the
-first-appearance-of-each-offset dedup `ENTITY_FIELDS` uses. Five rows —
-`sessionteam`, `sessionstate`, `statusicon`, `headicon`, `headiconteam` —
+first-appearance-of-each-offset dedup `ENTITY_FIELDS` uses. Five rows
+(`sessionteam`, `sessionstate`, `statusicon`, `headicon`, `headiconteam`)
 carry `offset: 0` because retail's own dump marks them fully custom get and
 set (section 3's client field table). Those zeros are placeholders for an
 accessor, not a shared struct offset, so deduping on them would merge five
@@ -2033,7 +2029,7 @@ VERIFIED, read straight off mp_pavlov's lump 4 (a brush's first six sides are
 its axial bounds; anything past them is an angled plane): of the map's 26
 `minefield` brushes, 19 carry extra non-axial planes, up to 4 extra on `*25`
 and `*28`, and only 7 are plain boxes. `*28`'s bounding box measures
-432.6 x 1663.0 — a fractional extent only an angled cut produces — and `*25`
+432.6 x 1663.0 (a fractional extent only an angled cut produces), and `*25`
 is 696 x 1728 with a diagonal through it, so the part of its box holding no
 brush is meters wide. A touch pass that tests the bounding box kills a player
 that far clear of the mines, which is exactly the death reported against vcod
@@ -2087,13 +2083,13 @@ The `entity_methods` row `istouching` points at 0x59eb8 (VERIFIED,
   half a second after the click, measures the player against the minefield's
   brushes, as the touch pass does, and not against the submodel's box.
 
-vcod's `istouching` read the two boxes until 2026-10-12h, so on
-`mp_hurtgen`, whose minefield `*2` is an L of axial brushes, a bot that
-clipped the corner at (5888, -64) and walked on along the brush's edge was
-still inside `*2`'s box when the check ran and died up to 200 units clear of
-the mines: all four `mp_hurtgen` deaths over 96 seeds of
-`bot-navigation.md`'s detector. `trigger::entity_contact` now mirrors the
-contact with the touch pass's box against the trigger's brushes.
+vcod: `trigger::entity_contact` mirrors the contact with the touch pass's
+box against the trigger's brushes. Trap: two boxes overlap where the brushes
+do not. On `mp_hurtgen`, whose minefield `*2` is an L of axial brushes, a
+bot that clipped the corner at (5888, -64) and walked on along the brush's
+edge was still inside `*2`'s box and died up to 200 units clear of the
+mines: all four `mp_hurtgen` deaths over 96 seeds of `bot-navigation.md`'s
+detector.
 
 The capsule variant, `game.mp.i386.so` and `cod_lnxded` (1.1d):
 
@@ -2132,7 +2128,7 @@ The capsule variant, `game.mp.i386.so` and `cod_lnxded` (1.1d):
 
 vcod tests a client's side as a capsule against a trigger's brushes
 (`trigger::capsule_contacts_hulls`), and a client against a client as
-capsule against capsule (`trigger::capsules_overlap`, since 2026-10-20).
+capsule against capsule (`trigger::capsules_overlap`).
 Two other sides that are not brush models stay a box overlap, which
 matches retail for a capsule against a box (all axial sides). VERIFIED, a
 grep of the stock paks' `maps/MP` scripts: their `istouching` calls are a
@@ -2720,8 +2716,8 @@ then stores the trace's own entity number, the word at `ebp-0x20`, into
 list (0x3073b-0x30768). vcod: `CollisionWorld::entity_num` reports the
 entity the server named for a submodel at spawn
 (`CollisionWorld::set_model_entity`, from `spawn_entities_from_string`) and
-the world's for everything else, and `pmove`'s ground trace keeps it;
-until 2026-09-23 ours wrote 1022 for every ground. `pm_flags` holds 262144
+the world's for everything else, and `pmove`'s ground trace keeps it
+(not 1022 for every ground). `pm_flags` holds 262144
 across the link and the unlink, and `eFlags` changes at no point of either
 sequence: on the attacker it moves only at the probe's two `setOrigin`
 teleports, `serverTime` 68750 and 91800, and on the defender only at its three,
@@ -3289,5 +3285,5 @@ client across a map change.
   `right` rests on reading the helper at 0x4af80. A probe that writes each
   name and reads it back would settle all three in one run.
 - Type 6, the `(0, f, 0)` angle form, is unused by all three server tables. It
-  may exist for the client's own field tables; I have not looked at
-  `cgame_mp_x86.dll` for this.
+  may exist for the client's own field tables; `cgame_mp_x86.dll` is not
+  checked for this.
