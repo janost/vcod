@@ -1,0 +1,91 @@
+# The script model capture's PROBE lines (docs/research/cod4-combat.md
+# 13.1): games_mp.log of cod4_lnxded 1.7 under +set fs_game mods/vcodms
+# (crates/cod4/tests/fixtures/gsc/model_shot packed in the mod's iwd)
+# +devmap mp_backlot, war, sv_pure 0, with play-1.7-models-target.txt
+# (cod4_probe --team allies --script idle --name target --qport 4021
+# --secs 25) and play-1.7-models-shooter.txt (0.5 s later: --team axis
+# --script shoot --name shooter --qport 4022 --secs 25), the server
+# started 40 s before the target. The gsc sets the two players down
+# either side of the first destructible sedan and stands a script model
+# of the sedan's model between them in five 2.5 s phases (each player
+# turned to face the car 0.5 s past its placing) (`phase` lines:
+# name, entity number, origin): plain, raised 30, a `tag_origin` model
+# open to damage with the sedan attached at `tag_origin`, the same with
+# ignoreCollision, none. `hit` is a player's damage (number, damage,
+# flags, location, point in thousandths, direction in millionths, means
+# of death), `ent` the stand-in's damage notify (damage, means of death,
+# point, model, tag, part), `car` the sedan's own (damage, means of
+# death, point).
+PROBE 47200 placed 0 289654 -391059 69000
+PROBE 47700 phase plain 383 515429 -434945 68000
+PROBE 47700 placed 1 623408 -455934 69000
+PROBE 50200 phase raised 384 515429 -434945 98000
+PROBE 52700 phase attached 385 515429 -434945 68000
+PROBE 52950 ent 29 MOD_RIFLE_BULLET 536867 -439286 124085 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_body
+PROBE 53200 ent 29 MOD_RIFLE_BULLET 536890 -439208 124142 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_body
+PROBE 53450 ent 29 MOD_RIFLE_BULLET 536869 -439121 124177 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_body
+PROBE 53700 ent 29 MOD_RIFLE_BULLET 536871 -439038 124191 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_body
+PROBE 53950 ent 29 MOD_RIFLE_BULLET 536898 -438962 124185 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_body
+PROBE 54200 ent 29 MOD_RIFLE_BULLET 536948 -438893 124158 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_body
+PROBE 54450 ent 29 MOD_RIFLE_BULLET 536959 -438820 124108 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_body
+PROBE 54700 ent 29 MOD_RIFLE_BULLET 536983 -438756 124039 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_body
+PROBE 54950 ent 29 MOD_RIFLE_BULLET 537008 -438699 123955 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_body
+PROBE 55200 ent 29 MOD_RIFLE_BULLET 537034 -438650 123856 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_body
+PROBE 55200 phase ignored 386 515429 -434945 68000
+PROBE 55450 ent 29 MOD_RIFLE_BULLET 537058 -438609 123748 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_body
+PROBE 55700 ent 29 MOD_RIFLE_BULLET 537079 -438578 123634 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_body
+PROBE 55950 ent 29 MOD_RIFLE_BULLET 537124 -438562 123519 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_body
+PROBE 56200 ent 29 MOD_RIFLE_BULLET 537083 -438539 123402 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_door_left_front
+PROBE 56450 ent 29 MOD_RIFLE_BULLET 537128 -438544 123296 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_door_left_front
+PROBE 56700 ent 29 MOD_RIFLE_BULLET 537165 -438559 123201 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_door_left_front
+PROBE 56950 ent 29 MOD_RIFLE_BULLET 537194 -438582 123124 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_door_left_front
+PROBE 57200 ent 29 MOD_RIFLE_BULLET 537216 -438615 123058 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_door_left_front
+PROBE 57450 ent 29 MOD_RIFLE_BULLET 537228 -438656 123010 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_door_left_front
+PROBE 57700 ent 29 MOD_RIFLE_BULLET 537229 -438705 122982 vehicle_80s_sedan1_silv_destructible_mp tag_origin tag_door_left_front
+PROBE 57700 phase none
+PROBE 57950 car 29 MOD_RIFLE_BULLET 394321 -410284 112990
+PROBE 58200 car 29 MOD_RIFLE_BULLET 394648 -410520 113057
+PROBE 58450 car 29 MOD_RIFLE_BULLET 394559 -410690 113153
+PROBE 58700 car 29 MOD_RIFLE_BULLET 341830 -400514 109694
+PROBE 58900 hit 0 28 8 torso_lower 298685 -392323 107026 -979191 191817 -66260 MOD_RIFLE_BULLET
+PROBE 58950 car 29 MOD_RIFLE_BULLET 341860 -400780 109948
+PROBE 59150 hit 0 28 8 torso_lower 298460 -392588 107359 -979433 190931 -65227 MOD_RIFLE_BULLET
+PROBE 59200 car 29 MOD_RIFLE_BULLET 341902 -401057 110252
+PROBE 59400 hit 0 29 8 torso_lower 298495 -392909 107755 -979685 190035 -64057 MOD_RIFLE_BULLET
+PROBE 59650 hit 0 29 8 torso_lower 298603 -393241 108187 -979939 189145 -62792 MOD_RIFLE_BULLET
+PROBE 60150 hit 0 29 8 torso_lower 297651 -393654 109011 -980431 187443 -60160 MOD_RIFLE_BULLET
+PROBE 60400 hit 0 29 8 torso_lower 297554 -393910 109432 -980657 186660 -58888 MOD_RIFLE_BULLET
+PROBE 60650 hit 0 29 8 right_arm_lower 285455 -391868 109117 -980864 185943 -57706 MOD_RIFLE_BULLET
+PROBE 60900 hit 0 29 8 right_arm_lower 285377 -392086 109477 -981046 185302 -56658 MOD_RIFLE_BULLET
+PROBE 61150 hit 0 29 8 right_arm_lower 285508 -392336 109826 -981220 184681 -55677 MOD_RIFLE_BULLET
+PROBE 61450 hit 0 29 8 left_arm_upper 297009 -394665 110709 -981347 184210 -54992 MOD_RIFLE_BULLET
+PROBE 61700 hit 0 29 8 left_arm_upper 297632 -394895 110877 -981430 183884 -54595 MOD_RIFLE_BULLET
+PROBE 61900 hit 0 29 8 right_arm_lower 286515 -392876 110307 -981471 183706 -54456 MOD_RIFLE_BULLET
+PROBE 62150 hit 0 29 8 right_arm_lower 286692 -392954 110291 -981490 183580 -54533 MOD_RIFLE_BULLET
+PROBE 62700 hit 0 29 8 left_arm_upper 293831 -394228 110365 -981406 183745 -55489 MOD_RIFLE_BULLET
+PROBE 62950 hit 0 29 8 left_arm_upper 292475 -393881 110017 -981312 184004 -56289 MOD_RIFLE_BULLET
+PROBE 63400 hit 0 29 8 torso_lower 298074 -394647 109660 -981042 184810 -58319 MOD_RIFLE_BULLET
+PROBE 64150 hit 0 29 8 torso_lower 297350 -393826 108321 -980437 186753 -62178 MOD_RIFLE_BULLET
+PROBE 64400 hit 0 29 8 torso_lower 298775 -393821 107978 -980203 187543 -63472 MOD_RIFLE_BULLET
+PROBE 64650 hit 0 29 8 torso_lower 298638 -393501 107560 -979962 188384 -64693 MOD_RIFLE_BULLET
+PROBE 64900 hit 0 29 8 torso_lower 298624 -393193 107188 -979720 189259 -65795 MOD_RIFLE_BULLET
+PROBE 65150 hit 0 29 8 torso_lower 298892 -392933 106888 -979482 190155 -66739 MOD_RIFLE_BULLET
+PROBE 65400 hit 0 29 8 torso_lower 298977 -392636 106639 -979256 191055 -67492 MOD_RIFLE_BULLET
+PROBE 65650 hit 0 29 8 torso_lower 298940 -392321 106455 -979045 191944 -68026 MOD_RIFLE_BULLET
+PROBE 65900 hit 0 29 8 torso_lower 299020 -392039 106358 -978855 192806 -68322 MOD_RIFLE_BULLET
+PROBE 66150 hit 0 29 8 torso_lower 299292 -391810 106357 -978689 193627 -68370 MOD_RIFLE_BULLET
+PROBE 66400 hit 0 29 8 torso_lower 299517 -391592 106437 -978552 194391 -68167 MOD_RIFLE_BULLET
+PROBE 66650 hit 0 29 8 torso_lower 299224 -391297 106561 -978445 195086 -67722 MOD_RIFLE_BULLET
+PROBE 66900 hit 0 29 8 torso_lower 299250 -391094 106784 -978369 195699 -67049 MOD_RIFLE_BULLET
+PROBE 67150 hit 0 29 8 torso_lower 299364 -390942 107081 -978324 196218 -66174 MOD_RIFLE_BULLET
+PROBE 67400 hit 0 29 8 torso_lower 299640 -390858 107446 -978311 196635 -65127 MOD_RIFLE_BULLET
+PROBE 67650 hit 0 29 8 torso_lower 299595 -390749 107834 -978327 196942 -63947 MOD_RIFLE_BULLET
+PROBE 67900 hit 0 29 8 torso_lower 299497 -390669 108249 -978371 197132 -62675 MOD_RIFLE_BULLET
+PROBE 68150 hit 0 29 8 torso_lower 299657 -390682 108697 -978440 197203 -61358 MOD_RIFLE_BULLET
+PROBE 68400 hit 0 29 8 torso_lower 300012 -390774 109128 -978525 197160 -60126 MOD_RIFLE_BULLET
+PROBE 68650 hit 0 29 8 torso_lower 299874 -390807 109542 -978635 196997 -58855 MOD_RIFLE_BULLET
+PROBE 68900 hit 0 29 8 torso_lower 298811 -390695 109871 -978762 196715 -57677 MOD_RIFLE_BULLET
+PROBE 69150 hit 0 29 8 torso_lower 298775 -390828 110218 -978902 196320 -56634 MOD_RIFLE_BULLET
+PROBE 69400 hit 0 29 8 torso_lower 298694 -390988 110505 -979053 195819 -55762 MOD_RIFLE_BULLET
+PROBE 69650 hit 0 29 8 torso_lower 298540 -391166 110721 -979210 195220 -55094 MOD_RIFLE_BULLET
+PROBE 69900 hit 0 29 8 torso_lower 298381 -391373 110861 -979371 194534 -54654 MOD_RIFLE_BULLET

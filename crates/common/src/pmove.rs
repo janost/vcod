@@ -751,7 +751,7 @@ pub enum MoveRules {
 impl MoveRules {
     /// The rules a server speaking this protocol runs.
     pub fn for_protocol(p: &crate::net::protocol::Protocol) -> Self {
-        match p.version {
+        match p.transport.version {
             6 => MoveRules::V1_5,
             22 => MoveRules::Uo,
             _ => MoveRules::V1_1,
@@ -951,6 +951,12 @@ impl PlayerState {
     /// ground trace hit one, and the velocity does not carry the body off it.
     pub fn sliding(&self) -> bool {
         !self.on_ground && self.ground_plane.is_some()
+    }
+
+    /// Sets the plane the last ground trace met, for a body another
+    /// game's pmove moved (`vcod-server`'s CoD2 nav walks).
+    pub fn set_ground_plane(&mut self, normal: Option<Vec3>) {
+        self.ground_plane = normal;
     }
 
     /// What `PM_UpdateAimDownSightFlag` takes for ground: 1.1's
@@ -8675,7 +8681,7 @@ mod tests {
             };
             let world = CollisionWorld::build(&bsp, &[]);
             let world = MoveWorld::bare(&world);
-            let axial_bounds = |b: &crate::bsp::Brush| -> ([f32; 3], [f32; 3]) {
+            let axial_bounds = |b: &crate::mapworld::Brush| -> ([f32; 3], [f32; 3]) {
                 let sides = &bsp.brush_sides[b.first_side as usize..][..b.num_sides as usize];
                 let mut lo = [0.0f32; 3];
                 let mut hi = [0.0f32; 3];

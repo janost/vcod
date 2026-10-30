@@ -158,7 +158,8 @@ fn one_packets_threads_run_in_retails_order_on_1_5() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         return;
     }
     check(
@@ -310,7 +311,8 @@ fn two_packets_in_one_frame_run_the_later_ones_threads_first_on_1_5() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         return;
     }
     check_pair(

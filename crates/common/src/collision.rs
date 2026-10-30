@@ -6,14 +6,14 @@
 //! triangles are required: docs/research/bsp-ibsp59-format.md, "Terrain has
 //! no brushes".
 
-use crate::bsp::{Bsp, Partition};
 use crate::leafwalk::{Item, LeafWalk, Listing};
+use crate::mapworld::{MapWorld, Partition};
 use crate::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use crate::patch::{Arith, PatchCollide, Sweep};
 use crate::terrain::{CapsuleSweep, Terrain};
 use glam::Vec3;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
+use std::sync::{Arc, RwLock};
 
 /// Shared with the xmodel collision surfaces, which use the same bits.
 pub const CONTENTS_SOLID: u32 = 0x1;
@@ -124,6 +124,36 @@ pub enum Prim {
     Model(u32),
     /// A player capsule hit, carrying its entity number (`movetrace.rs`).
     Body(u32),
+    /// A contact a [`WorldClip`] reported, carrying its contents word.
+    Clip(u32),
+}
+
+/// A game's own clip of the world (model 0), traced in place of the BVH and
+/// leaf walk this module builds from a [`MapWorld`]: CoD2's
+/// `vcod_cod2::collision::ClipMap`. The world's other models still clip
+/// here.
+pub trait WorldClip: Send + Sync {
+    /// A sweep of the box `mins..maxs` from `start` to `end` under `mask`;
+    /// `start == end` is a position test.
+    fn trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> WorldHit;
+    /// The contents of the world's brushes at `p`.
+    fn point_contents(&self, p: Vec3) -> u32;
+    /// The world's ladder brushes as axial boxes, for the bots' graph
+    /// (`nav::ladders` reads [`CollisionWorld::brushes`] for the rest).
+    fn ladder_boxes(&self) -> Vec<(Vec3, Vec3)> {
+        Vec::new()
+    }
+}
+
+/// What a [`WorldClip`] trace met.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldHit {
+    pub fraction: f32,
+    pub normal: Vec3,
+    pub surface_flags: u32,
+    pub contents: u32,
+    pub startsolid: bool,
+    pub allsolid: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -287,6 +317,46 @@ impl Capsule {
             radius: half.x,
             offset: Vec3::Z * (half.z - half.x),
         }
+    }
+}
+
+/// The temp box model an entity links with (`CM_TempBoxModel`): the
+/// absolute box `box_min..box_max` met by the box `mins..maxs` swept from
+/// `start` to `end`. Its six sides are axial, which take a capsule as its
+/// box, so the sweep is the box's. A contact it makes names `entity`
+/// ([`CollisionWorld::entity_num`]) and its `hit` is `Prim::Clip(contents)`.
+#[allow(clippy::too_many_arguments)]
+pub fn clip_entity_box(
+    trace: &mut Trace,
+    start: Vec3,
+    end: Vec3,
+    mins: Vec3,
+    maxs: Vec3,
+    box_min: Vec3,
+    box_max: Vec3,
+    contents: u32,
+    entity: u32,
+) {
+    let planes = [
+        (Vec3::NEG_X, maxs.x - box_min.x),
+        (Vec3::X, box_max.x - mins.x),
+        (Vec3::NEG_Y, maxs.y - box_min.y),
+        (Vec3::Y, box_max.y - mins.y),
+        (Vec3::NEG_Z, maxs.z - box_min.z),
+        (Vec3::Z, box_max.z - mins.z),
+    ];
+    let before = (trace.fraction, trace.startsolid, trace.hit);
+    clip_segment(
+        trace,
+        start,
+        end,
+        &planes,
+        &[],
+        Vec3::ZERO,
+        Prim::Clip(contents),
+    );
+    if (trace.fraction, trace.startsolid, trace.hit) != before {
+        trace.copy = Some(entity);
     }
 }
 
@@ -819,7 +889,7 @@ fn clip_patch(
 
 /// Per lump-24 terrain partition and patch of `bsp`, the model whose
 /// lump-23 run lists it (lump 27 bytes 32..40); 0 where none does.
-fn partition_owners(bsp: &Bsp) -> (Vec<u32>, Vec<u32>) {
+fn partition_owners(bsp: &MapWorld) -> (Vec<u32>, Vec<u32>) {
     let mut terrain = vec![0; bsp.terrain.len()];
     let mut patches = vec![0; bsp.patches.len()];
     for (mi, model) in bsp.models.iter().enumerate().skip(1) {
@@ -874,6 +944,9 @@ struct BvhNode {
     /// Whether the subtree holds a prim outside model 0, all the walk after
     /// [`CollisionWorld::clip_leaf_walk`] clips.
     rest: bool,
+    /// Whether the subtree holds a brush or a patch, which
+    /// [`TraceInput::misses`] never culls.
+    loose: bool,
 }
 
 pub struct CollisionWorld {
@@ -948,6 +1021,9 @@ pub struct CollisionWorld {
     /// Terrain point traces and patches take 1.5b's and United
     /// Offensive's arithmetic ([`Self::set_arith`]).
     arith: AtomicU8,
+    /// The world's own clip, when the game brings one
+    /// ([`Self::set_world_clip`]).
+    world_clip: Option<Arc<dyn WorldClip>>,
 }
 
 /// One entity's copy of a submodel: its pose and `r.contents`, which a
@@ -1055,6 +1131,7 @@ impl Clone for CollisionWorld {
             ),
             any_instance: AtomicBool::new(self.any_instance.load(Ordering::Acquire)),
             arith: AtomicU8::new(self.arith.load(Ordering::Acquire)),
+            world_clip: self.world_clip.clone(),
         }
     }
 }
@@ -1155,12 +1232,12 @@ const AXES: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
 
 /// A lump-4 brush's sides as clip planes, appended to `out` and offset to
 /// `origin`, plus the brush's axial bounds. Sides 0..6 are the bit-cast axial
-/// bounds and sides 6.. index `Bsp::planes`
+/// bounds and sides 6.. index `MapWorld::planes`
 /// (docs/research/bsp-ibsp59-format.md, "Brushes"). Point p is inside the
 /// brush iff n·p <= d for every plane returned.
 pub fn brush_side_planes(
-    bsp: &Bsp,
-    brush: &crate::bsp::Brush,
+    bsp: &MapWorld,
+    brush: &crate::mapworld::Brush,
     origin: Vec3,
     out: &mut Vec<(Vec3, f32)>,
 ) -> (Vec3, Vec3) {
@@ -1244,7 +1321,7 @@ impl CollisionWorld {
     /// engine's own triangles, swept as a sphere, and its patches as
     /// `CM_GeneratePatchCollide`'s facets. No render soup collides: retail
     /// clips model 0 through its brushes and lump 24 alone.
-    pub fn build(bsp: &Bsp, model_tris: &[ModelTri]) -> Self {
+    pub fn build(bsp: &MapWorld, model_tris: &[ModelTri]) -> Self {
         let mut brushes = Vec::new();
         let mut water = Vec::new();
         let mut nodrop = Vec::new();
@@ -1494,6 +1571,7 @@ impl CollisionWorld {
                 second: 0,
                 count: 0,
                 rest: true,
+                loose: true,
             });
             let (world_prims, model_prims) = t.prims.split_at_mut(split);
             let wi = build_bvh(world_prims, 0, &mut nodes);
@@ -1506,6 +1584,7 @@ impl CollisionWorld {
                 second: mi,
                 count: 0,
                 rest: true,
+                loose: true,
             };
             mi
         };
@@ -1524,6 +1603,14 @@ impl CollisionWorld {
                     })
             } else {
                 nodes[n.first as usize].rest || nodes[n.second as usize].rest
+            };
+            let n = &nodes[i];
+            nodes[i].loose = if n.count > 0 {
+                t.prims[n.first as usize..][..n.count as usize]
+                    .iter()
+                    .any(|(prim, _, _)| !TraceInput::tight(*prim))
+            } else {
+                nodes[n.first as usize].loose || nodes[n.second as usize].loose
             };
         }
 
@@ -1606,6 +1693,46 @@ impl CollisionWorld {
             instances: RwLock::new(Vec::new()),
             any_instance: AtomicBool::new(false),
             arith: AtomicU8::new(Arith::Kept as u8),
+            world_clip: None,
+        }
+    }
+
+    /// Hands the world's clip to `clip`: every trace, position test and
+    /// contents query meets it first. The [`MapWorld`] this was built from
+    /// must leave model 0's brushes and partitions out.
+    pub fn set_world_clip(&mut self, clip: Arc<dyn WorldClip>) {
+        self.world_clip = Some(clip);
+    }
+
+    /// The world clip's ladder boxes ([`WorldClip::ladder_boxes`]); none
+    /// without a world clip.
+    pub fn world_clip_ladders(&self) -> Vec<(Vec3, Vec3)> {
+        self.world_clip
+            .as_ref()
+            .map_or_else(Vec::new, |c| c.ladder_boxes())
+    }
+
+    /// The world clip's half of a trace, into a fresh `trace`.
+    fn trace_world_clip(
+        &self,
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+        mask: u32,
+        trace: &mut Trace,
+    ) {
+        let Some(clip) = &self.world_clip else {
+            return;
+        };
+        let h = clip.trace(start, end, mins, maxs, mask);
+        trace.fraction = h.fraction;
+        trace.normal = h.normal;
+        trace.surface_flags = h.surface_flags;
+        trace.startsolid = h.startsolid;
+        trace.allsolid = h.allsolid;
+        if h.fraction < 1.0 || h.startsolid {
+            trace.hit = Some(Prim::Clip(h.contents));
         }
     }
 
@@ -2140,6 +2267,7 @@ impl CollisionWorld {
             Some(Prim::Tri(t)) => self.tris_contents[t as usize],
             Some(Prim::Patch(p)) => self.patches[p as usize].content_flags,
             Some(Prim::Model(t)) => self.model_tris[t as usize].contents,
+            Some(Prim::Clip(contents)) => contents,
             Some(Prim::Terrain(_) | Prim::Body(_)) | None => 0,
         }
     }
@@ -2282,6 +2410,9 @@ impl CollisionWorld {
         if self.nodrop.iter().any(inside) {
             out |= CONTENTS_NODROP;
         }
+        if let Some(clip) = &self.world_clip {
+            out |= clip.point_contents(p);
+        }
         if self.nodes.is_empty() {
             return out;
         }
@@ -2366,6 +2497,7 @@ impl CollisionWorld {
             copy: None,
         };
         let capsule = Capsule::of(mins, maxs);
+        self.trace_world_clip(p, p, mins, maxs, mask, &mut trace);
         self.walk_tree(
             TraceInput {
                 start: p,
@@ -2582,6 +2714,7 @@ impl CollisionWorld {
         } else {
             Capsule::of(mins, maxs)
         };
+        self.trace_world_clip(start, end, mins, maxs, mask, &mut trace);
         self.walk_tree(
             TraceInput {
                 start,
@@ -3016,7 +3149,9 @@ impl CollisionWorld {
             return;
         }
         let (lo, hi) = sw.reach(trace.fraction);
-        if !(lo.cmple(node.hi).all() && hi.cmpge(node.lo).all()) {
+        if !(lo.cmple(node.hi).all() && hi.cmpge(node.lo).all())
+            || (!node.loose && sw.misses(node.lo, node.hi))
+        {
             return;
         }
         if node.count > 0 {
@@ -3065,6 +3200,7 @@ impl CollisionWorld {
             // more than this.
             if !(lo.cmple(*phi).all() && hi.cmpge(*plo).all())
                 || brushes != matches!(prim, Prim::Brush(_))
+                || (TraceInput::tight(*prim) && sw.misses(*plo, *phi))
             {
                 continue;
             }
@@ -3170,8 +3306,9 @@ impl CollisionWorld {
                 }
                 clip_segment_model(trace, start, end, mt, prim);
             }
-            // Never stored in world.prims; only movetrace.rs constructs it.
-            Prim::Body(_) => unreachable!(),
+            // Never stored in world.prims; only movetrace.rs and the world
+            // clip construct them.
+            Prim::Body(_) | Prim::Clip(_) => unreachable!(),
         }
     }
 
@@ -3344,6 +3481,7 @@ impl CollisionWorld {
                 )
             }
             Prim::Body(e) => format!("body {e}"),
+            Prim::Clip(cf) => format!("world clip cf={cf:#x}"),
         }
     }
 
@@ -3396,6 +3534,16 @@ struct TraceInput {
 }
 
 impl TraceInput {
+    /// A prim nothing meets off its box, so [`Self::misses`] may cull it:
+    /// a model triangle or a terrain partition. A model-0 patch's leaf-walk
+    /// clip met mp_carentan's patch 9 56 units outside its box, and a
+    /// brush notes a near tie (`note_contact`) for a segment 160 units off
+    /// its box, which sends the trace through retail's leaf order: culling
+    /// either changed which surface a trace named.
+    fn tight(prim: Prim) -> bool {
+        matches!(prim, Prim::Model(_) | Prim::Terrain(_))
+    }
+
     /// The box the sweep covers up to `fraction`, padded a unit.
     fn bounds(&self, fraction: f32) -> (Vec3, Vec3) {
         let cur_end = self.start + (self.end - self.start) * fraction;
@@ -3411,6 +3559,43 @@ impl TraceInput {
     /// order (`note_contact`), where it may be met first.
     fn reach(&self, fraction: f32) -> (Vec3, Vec3) {
         self.bounds((f64::from(fraction) + TIE_WINDOW).min(1.0) as f32)
+    }
+
+    /// Whether a long sweep's whole segment, `start` to `end`, passes
+    /// clear of the box `lo..hi` grown by the swept shape and a margin, so
+    /// nothing in it can touch the trace. The margin (a unit, a hundredth
+    /// of the box's size for a model triangle's barycentric slack, the
+    /// turned capsule's sphere offset) covers every clip's epsilon; the
+    /// box test of [`Self::reach`] stays the one that cuts by fraction. A
+    /// short sweep's box already hugs it and is never tested: this only
+    /// spares a long ray (the 15000-unit look-at trace, a sight line) the
+    /// prims its box takes in off its line. Only [`Self::tight`] prims
+    /// are culled.
+    fn misses(&self, lo: Vec3, hi: Vec3) -> bool {
+        const LONG: f32 = 256.0;
+        let d = self.end - self.start;
+        if d.length_squared() < LONG * LONG {
+            return false;
+        }
+        let pad = Vec3::splat(1.0 + 0.01 * (hi - lo).max_element() + self.sphere.length());
+        let (lo, hi) = (lo - self.maxs - pad, hi - self.mins + pad);
+        let (mut t0, mut t1) = (0.0f32, 1.0f32);
+        for a in 0..3 {
+            let s = self.start[a];
+            if d[a] == 0.0 {
+                if s < lo[a] || s > hi[a] {
+                    return true;
+                }
+                continue;
+            }
+            let (ta, tb) = ((lo[a] - s) / d[a], (hi[a] - s) / d[a]);
+            t0 = t0.max(ta.min(tb));
+            t1 = t1.min(ta.max(tb));
+            if t0 > t1 {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -3468,6 +3653,7 @@ fn build_bvh(prims: &mut [(Prim, Vec3, Vec3)], base: u32, nodes: &mut Vec<BvhNod
         second: 0,
         count: prims.len() as u32,
         rest: true,
+        loose: true,
     });
     if prims.len() <= 4 {
         return idx;
@@ -3602,7 +3788,7 @@ pub fn synthetic_world(
 /// [`CollisionWorld::set_model_linked`] is observable.
 #[doc(hidden)]
 pub fn submodel_test_world(entities: &str, submodels: &[([f32; 3], [f32; 3])]) -> CollisionWorld {
-    let side = |v: f32| crate::bsp::BrushSide {
+    let side = |v: f32| crate::mapworld::BrushSide {
         plane_or_dist: v.to_bits(),
         material: 0,
     };
@@ -3611,7 +3797,7 @@ pub fn submodel_test_world(entities: &str, submodels: &[([f32; 3], [f32; 3])]) -
     let mut brushes = Vec::new();
     let mut models = Vec::new();
     for (i, (lo, hi)) in std::iter::once(&floor).chain(submodels).enumerate() {
-        brushes.push(crate::bsp::Brush {
+        brushes.push(crate::mapworld::Brush {
             first_side: (i * 6) as u32,
             num_sides: 6,
             material: 0,
@@ -3620,7 +3806,7 @@ pub fn submodel_test_world(entities: &str, submodels: &[([f32; 3], [f32; 3])]) -
             brush_sides.push(side(lo[axis]));
             brush_sides.push(side(hi[axis]));
         }
-        models.push(crate::bsp::Model {
+        models.push(crate::mapworld::Model {
             mins: *lo,
             maxs: *hi,
             first_soup: 0,
@@ -3631,45 +3817,17 @@ pub fn submodel_test_world(entities: &str, submodels: &[([f32; 3], [f32; 3])]) -
         });
     }
     CollisionWorld::build(
-        &crate::bsp::Bsp {
-            materials: vec![crate::bsp::Material {
+        &crate::mapworld::MapWorld {
+            materials: vec![crate::mapworld::Material {
                 name: "textures/test/solid".into(),
                 surface_flags: 0,
                 content_flags: CONTENTS_SOLID,
             }],
-            lightmaps: vec![],
-            soups: vec![],
-            verts: vec![],
-            indices: vec![],
             entities: entities.to_string(),
-            planes: vec![],
             brush_sides,
             brushes,
             models,
-            cull_groups: vec![],
-            cull_indices: vec![],
-            portal_verts: vec![],
-            occluders: vec![],
-            occluder_plane_indices: vec![],
-            occluder_edges: vec![],
-            occluder_indices: vec![],
-            aabb_nodes: vec![],
-            cells: vec![],
-            portals: vec![],
-            nodes: vec![],
-            leafs: vec![],
-            terrain: vec![],
-            patches: vec![],
-            collision_verts: vec![],
-            collision_indices: vec![],
-            light_indices: vec![],
-            leaf_lights: vec![],
-            leaf_lists: vec![],
-            leaf_brushes: vec![],
-            leaf_partitions: vec![],
-            lights: vec![],
-            light_vis: vec![],
-            pvs: None,
+            ..Default::default()
         },
         &[],
     )
@@ -3679,7 +3837,7 @@ pub fn submodel_test_world(entities: &str, submodels: &[([f32; 3], [f32; 3])]) -
 /// `material` whose last row collapses onto `c`, its front the side
 /// `cross(b - a, c - a)` points to.
 #[doc(hidden)]
-pub fn push_tri_patches(bsp: &mut crate::bsp::Bsp, tris: &[[Vec3; 3]], material: u16) {
+pub fn push_tri_patches(bsp: &mut crate::mapworld::MapWorld, tris: &[[Vec3; 3]], material: u16) {
     for &[a, b, c] in tris {
         let mid = |p: Vec3, q: Vec3| (p + q) * 0.5;
         let ab = mid(a, b);
@@ -3687,7 +3845,7 @@ pub fn push_tri_patches(bsp: &mut crate::bsp::Bsp, tris: &[[Vec3; 3]], material:
         let first_vert = bsp.collision_verts.len() as u32;
         bsp.collision_verts
             .extend(rows.iter().flatten().map(|v| v.to_array()));
-        bsp.patches.push(crate::bsp::PatchPart {
+        bsp.patches.push(crate::mapworld::PatchPart {
             material,
             width: 3,
             height: 3,
@@ -3700,7 +3858,7 @@ pub fn push_tri_patches(bsp: &mut crate::bsp::Bsp, tris: &[[Vec3; 3]], material:
 /// A test map's lump 24: `tris` as one terrain partition of `material`,
 /// each front the side `cross(b - a, c - a)` points to.
 #[doc(hidden)]
-pub fn push_tri_terrain(bsp: &mut crate::bsp::Bsp, tris: &[[Vec3; 3]], material: u16) {
+pub fn push_tri_terrain(bsp: &mut crate::mapworld::MapWorld, tris: &[[Vec3; 3]], material: u16) {
     let first_vert = bsp.collision_verts.len() as u32;
     let first_index = bsp.collision_indices.len() as u32;
     for (i, tri) in tris.iter().enumerate() {
@@ -3709,7 +3867,7 @@ pub fn push_tri_terrain(bsp: &mut crate::bsp::Bsp, tris: &[[Vec3; 3]], material:
         // The build reads a lump-26 triangle `a, c, b`.
         bsp.collision_indices.extend([i, i + 2, i + 1]);
     }
-    bsp.terrain.push(crate::bsp::TerrainPart {
+    bsp.terrain.push(crate::mapworld::TerrainPart {
         material,
         first_vert,
         vert_count: (tris.len() * 3) as u16,
@@ -3749,15 +3907,15 @@ pub fn synthetic_world_patches(
 fn synthetic_bsp(
     materials: &[(&str, u32, u32)],
     brushes: &[(usize, [f32; 3], [f32; 3])],
-) -> crate::bsp::Bsp {
-    let side = |m: u32, v: f32| crate::bsp::BrushSide {
+) -> crate::mapworld::MapWorld {
+    let side = |m: u32, v: f32| crate::mapworld::BrushSide {
         plane_or_dist: v.to_bits(),
         material: m,
     };
     let mut brush_sides = Vec::new();
     let mut bsp_brushes = Vec::new();
     for (i, (mat, lo, hi)) in brushes.iter().enumerate() {
-        bsp_brushes.push(crate::bsp::Brush {
+        bsp_brushes.push(crate::mapworld::Brush {
             first_side: (i * 6) as u32,
             num_sides: 6,
             material: *mat as u16,
@@ -3775,24 +3933,18 @@ fn synthetic_bsp(
             maxs[axis] = maxs[axis].max(hi[axis]);
         }
     }
-    crate::bsp::Bsp {
+    crate::mapworld::MapWorld {
         materials: materials
             .iter()
-            .map(|(name, content, surface)| crate::bsp::Material {
+            .map(|(name, content, surface)| crate::mapworld::Material {
                 name: name.to_string(),
                 surface_flags: *surface,
                 content_flags: *content,
             })
             .collect(),
-        lightmaps: vec![],
-        soups: vec![],
-        verts: vec![],
-        indices: vec![],
-        entities: String::new(),
-        planes: vec![],
         brush_sides,
         brushes: bsp_brushes,
-        models: vec![crate::bsp::Model {
+        models: vec![crate::mapworld::Model {
             mins,
             maxs,
             first_soup: 0,
@@ -3801,30 +3953,7 @@ fn synthetic_bsp(
             partitions: (0, 0),
             num_brushes: n,
         }],
-        cull_groups: vec![],
-        cull_indices: vec![],
-        portal_verts: vec![],
-        occluders: vec![],
-        occluder_plane_indices: vec![],
-        occluder_edges: vec![],
-        occluder_indices: vec![],
-        aabb_nodes: vec![],
-        cells: vec![],
-        portals: vec![],
-        nodes: vec![],
-        leafs: vec![],
-        terrain: vec![],
-        patches: vec![],
-        collision_verts: vec![],
-        collision_indices: vec![],
-        light_indices: vec![],
-        leaf_lights: vec![],
-        leaf_lists: vec![],
-        leaf_brushes: vec![],
-        leaf_partitions: vec![],
-        lights: vec![],
-        light_vis: vec![],
-        pvs: None,
+        ..Default::default()
     }
 }
 
@@ -4097,29 +4226,23 @@ mod tests {
         assert_eq!(world.box_trace(start, end, mins, maxs).fraction, 1.0);
         assert!(world.shot_trace(start, end).fraction < 1.0);
     }
-    use crate::bsp::{self, Bsp};
+    use crate::mapworld::{self, MapWorld};
     use glam::Vec3;
 
     /// One axial brush (-64,-64,-16)..(64,64,0), one upward triangle patch
     /// at z=10 over x,y in 100..200.
-    pub(crate) fn tiny_world() -> Bsp {
+    pub(crate) fn tiny_world() -> MapWorld {
         let dist = |v: f32| v.to_bits();
-        let side = |v: f32| bsp::BrushSide {
+        let side = |v: f32| mapworld::BrushSide {
             plane_or_dist: dist(v),
             material: 0,
         };
-        let mut bsp = Bsp {
-            materials: vec![bsp::Material {
+        let mut bsp = MapWorld {
+            materials: vec![mapworld::Material {
                 name: "textures/test/solid".into(),
                 surface_flags: 0,
                 content_flags: 0x1,
             }],
-            lightmaps: vec![],
-            soups: vec![],
-            verts: vec![],
-            indices: vec![],
-            entities: String::new(),
-            planes: vec![],
             brush_sides: vec![
                 side(-64.0),
                 side(64.0), // xmin, xmax
@@ -4128,12 +4251,12 @@ mod tests {
                 side(-16.0),
                 side(0.0), // zmin, zmax
             ],
-            brushes: vec![bsp::Brush {
+            brushes: vec![mapworld::Brush {
                 first_side: 0,
                 num_sides: 6,
                 material: 0,
             }],
-            models: vec![bsp::Model {
+            models: vec![mapworld::Model {
                 mins: [-64.0, -64.0, -16.0],
                 maxs: [64.0, 64.0, 0.0],
                 first_soup: 0,
@@ -4142,30 +4265,7 @@ mod tests {
                 partitions: (0, 0),
                 num_brushes: 1,
             }],
-            cull_groups: vec![],
-            cull_indices: vec![],
-            portal_verts: vec![],
-            occluders: vec![],
-            occluder_plane_indices: vec![],
-            occluder_edges: vec![],
-            occluder_indices: vec![],
-            aabb_nodes: vec![],
-            cells: vec![],
-            portals: vec![],
-            nodes: vec![],
-            leafs: vec![],
-            terrain: vec![],
-            patches: vec![],
-            collision_verts: vec![],
-            collision_indices: vec![],
-            light_indices: vec![],
-            leaf_lights: vec![],
-            leaf_lists: vec![],
-            leaf_brushes: vec![],
-            leaf_partitions: vec![],
-            lights: vec![],
-            light_vis: vec![],
-            pvs: None,
+            ..Default::default()
         };
         push_tri_patches(
             &mut bsp,
@@ -4179,8 +4279,8 @@ mod tests {
         bsp
     }
 
-    fn vert(pos: [f32; 3]) -> bsp::DrawVert {
-        bsp::DrawVert {
+    fn vert(pos: [f32; 3]) -> mapworld::DrawVert {
+        mapworld::DrawVert {
             pos,
             uv: [0.0; 2],
             lm_uv: [0.0; 2],
@@ -4262,7 +4362,7 @@ mod tests {
     /// Six triangle patches 1000 units apart along X: the median split
     /// yields a 3-node BVH, so root (0) and last-pushed node (2) differ and
     /// a walk that starts anywhere but the root misses the low-X leaf.
-    fn spread_tris_world() -> Bsp {
+    fn spread_tris_world() -> MapWorld {
         const N: usize = 6;
         let tris: Vec<[Vec3; 3]> = (0..N)
             .map(|i| {
@@ -4274,21 +4374,13 @@ mod tests {
                 ]
             })
             .collect();
-        let mut bsp = Bsp {
-            materials: vec![bsp::Material {
+        let mut bsp = MapWorld {
+            materials: vec![mapworld::Material {
                 name: "textures/test/solid".into(),
                 surface_flags: 0,
                 content_flags: 0x1,
             }],
-            lightmaps: vec![],
-            soups: vec![],
-            verts: vec![],
-            indices: vec![],
-            entities: String::new(),
-            planes: vec![],
-            brush_sides: vec![],
-            brushes: vec![],
-            models: vec![bsp::Model {
+            models: vec![mapworld::Model {
                 mins: [0.0, 0.0, 0.0],
                 maxs: [0.0, 0.0, 0.0],
                 first_soup: 0,
@@ -4297,30 +4389,7 @@ mod tests {
                 partitions: (0, 0),
                 num_brushes: 0,
             }],
-            cull_groups: vec![],
-            cull_indices: vec![],
-            portal_verts: vec![],
-            occluders: vec![],
-            occluder_plane_indices: vec![],
-            occluder_edges: vec![],
-            occluder_indices: vec![],
-            aabb_nodes: vec![],
-            cells: vec![],
-            portals: vec![],
-            nodes: vec![],
-            leafs: vec![],
-            terrain: vec![],
-            patches: vec![],
-            collision_verts: vec![],
-            collision_indices: vec![],
-            light_indices: vec![],
-            leaf_lights: vec![],
-            leaf_lists: vec![],
-            leaf_brushes: vec![],
-            leaf_partitions: vec![],
-            lights: vec![],
-            light_vis: vec![],
-            pvs: None,
+            ..Default::default()
         };
         push_tri_patches(&mut bsp, &tris, 0);
         bsp
@@ -4515,8 +4584,8 @@ mod tests {
                             *prim,
                         );
                     }
-                    // Never stored in world.prims; only movetrace.rs constructs it.
-                    Prim::Body(_) => unreachable!(),
+                    // Never stored in world.prims.
+                    Prim::Body(_) | Prim::Clip(_) => unreachable!(),
                 }
             }
         }
@@ -4990,9 +5059,9 @@ mod tests {
     /// Model 0: floor z -16..0 over +-1024. Model 1: a door brush local
     /// (-8..8)^2 x 0..64 plus a stray render triangle at local x -60..-20,
     /// placed by an entity at (200, 0, 0).
-    fn two_model_world(classname: &str) -> Bsp {
+    fn two_model_world(classname: &str) -> MapWorld {
         let dist = |v: f32| v.to_bits();
-        let side = |v: f32| bsp::BrushSide {
+        let side = |v: f32| mapworld::BrushSide {
             plane_or_dist: dist(v),
             material: 0,
         };
@@ -5005,16 +5074,15 @@ mod tests {
         };
         push_box([-1024.0, -1024.0, -16.0], [1024.0, 1024.0, 0.0]);
         push_box([-8.0, -8.0, 0.0], [8.0, 8.0, 64.0]);
-        Bsp {
-            materials: vec![bsp::Material {
+        MapWorld {
+            materials: vec![mapworld::Material {
                 name: "textures/test/solid".into(),
                 surface_flags: 0,
                 content_flags: 0x1,
             }],
-            lightmaps: vec![],
-            soups: vec![bsp::TriangleSoup {
+            soups: vec![mapworld::TriangleSoup {
                 material: 0,
-                lightmap: bsp::NO_LIGHTMAP,
+                lightmap: mapworld::NO_LIGHTMAP,
                 first_vertex: 0,
                 vertex_count: 3,
                 index_count: 3,
@@ -5029,22 +5097,21 @@ mod tests {
             entities: format!(
                 "{{\n\"classname\" \"{classname}\"\n\"model\" \"*1\"\n\"origin\" \"200 0 0\"\n}}"
             ),
-            planes: vec![],
             brush_sides,
             brushes: vec![
-                bsp::Brush {
+                mapworld::Brush {
                     first_side: 0,
                     num_sides: 6,
                     material: 0,
                 },
-                bsp::Brush {
+                mapworld::Brush {
                     first_side: 6,
                     num_sides: 6,
                     material: 0,
                 },
             ],
             models: vec![
-                bsp::Model {
+                mapworld::Model {
                     mins: [-1024.0; 3],
                     maxs: [1024.0; 3],
                     first_soup: 1,
@@ -5053,7 +5120,7 @@ mod tests {
                     partitions: (0, 0),
                     num_brushes: 1,
                 },
-                bsp::Model {
+                mapworld::Model {
                     mins: [-8.0, -8.0, 0.0],
                     maxs: [8.0, 8.0, 64.0],
                     first_soup: 0,
@@ -5063,30 +5130,7 @@ mod tests {
                     num_brushes: 1,
                 },
             ],
-            cull_groups: vec![],
-            cull_indices: vec![],
-            portal_verts: vec![],
-            occluders: vec![],
-            occluder_plane_indices: vec![],
-            occluder_edges: vec![],
-            occluder_indices: vec![],
-            aabb_nodes: vec![],
-            cells: vec![],
-            portals: vec![],
-            nodes: vec![],
-            leafs: vec![],
-            terrain: vec![],
-            patches: vec![],
-            collision_verts: vec![],
-            collision_indices: vec![],
-            light_indices: vec![],
-            leaf_lights: vec![],
-            leaf_lists: vec![],
-            leaf_brushes: vec![],
-            leaf_partitions: vec![],
-            lights: vec![],
-            light_vis: vec![],
-            pvs: None,
+            ..Default::default()
         }
     }
 
@@ -5178,13 +5222,13 @@ mod tests {
         let mut bsp = two_model_world("script_brushmodel");
         for (lo, hi) in [(-6.0f32, 6.0), (-6.0, 6.0), (60.0, 90.0)] {
             for v in [lo, hi] {
-                bsp.brush_sides.push(bsp::BrushSide {
+                bsp.brush_sides.push(mapworld::BrushSide {
                     plane_or_dist: v.to_bits(),
                     material: 0,
                 });
             }
         }
-        bsp.brushes.push(bsp::Brush {
+        bsp.brushes.push(mapworld::Brush {
             first_side: 12,
             num_sides: 6,
             material: 0,
@@ -5286,9 +5330,9 @@ mod tests {
         );
     }
 
-    fn water_world() -> Bsp {
+    fn water_world() -> MapWorld {
         let dist = |v: f32| v.to_bits();
-        let side = |m: u32, v: f32| bsp::BrushSide {
+        let side = |m: u32, v: f32| mapworld::BrushSide {
             plane_or_dist: dist(v),
             material: m,
         };
@@ -5302,34 +5346,28 @@ mod tests {
                 brush_sides.push(side(m, lo[axis]));
                 brush_sides.push(side(m, hi[axis]));
             }
-            brushes.push(bsp::Brush {
+            brushes.push(mapworld::Brush {
                 first_side: (brushes.len() * 6) as u32,
                 num_sides: 6,
                 material: m as u16,
             });
         }
-        Bsp {
+        MapWorld {
             materials: vec![
-                bsp::Material {
+                mapworld::Material {
                     name: "textures/test/solid".into(),
                     surface_flags: 0,
                     content_flags: 0x1,
                 },
-                bsp::Material {
+                mapworld::Material {
                     name: "textures/common/water".into(),
                     surface_flags: 0,
                     content_flags: 0x20,
                 },
             ],
-            lightmaps: vec![],
-            soups: vec![],
-            verts: vec![],
-            indices: vec![],
-            entities: String::new(),
-            planes: vec![],
             brush_sides,
             brushes,
-            models: vec![bsp::Model {
+            models: vec![mapworld::Model {
                 mins: [-256.0; 3],
                 maxs: [256.0; 3],
                 first_soup: 0,
@@ -5338,30 +5376,7 @@ mod tests {
                 partitions: (0, 0),
                 num_brushes: 2,
             }],
-            cull_groups: vec![],
-            cull_indices: vec![],
-            portal_verts: vec![],
-            occluders: vec![],
-            occluder_plane_indices: vec![],
-            occluder_edges: vec![],
-            occluder_indices: vec![],
-            aabb_nodes: vec![],
-            cells: vec![],
-            portals: vec![],
-            nodes: vec![],
-            leafs: vec![],
-            terrain: vec![],
-            patches: vec![],
-            collision_verts: vec![],
-            collision_indices: vec![],
-            light_indices: vec![],
-            leaf_lights: vec![],
-            leaf_lists: vec![],
-            leaf_brushes: vec![],
-            leaf_partitions: vec![],
-            lights: vec![],
-            light_vis: vec![],
-            pvs: None,
+            ..Default::default()
         }
     }
 
@@ -5386,24 +5401,18 @@ mod tests {
     }
 
     /// One flagged playerclip wall at x 50..54 spanning y -200..200, z 0..100.
-    fn ladder_wall_world(surface_flags: u32) -> Bsp {
+    fn ladder_wall_world(surface_flags: u32) -> MapWorld {
         let dist = |v: f32| v.to_bits();
-        let side = |v: f32| bsp::BrushSide {
+        let side = |v: f32| mapworld::BrushSide {
             plane_or_dist: dist(v),
             material: 0,
         };
-        Bsp {
-            materials: vec![bsp::Material {
+        MapWorld {
+            materials: vec![mapworld::Material {
                 name: "textures/common/ladder".into(),
                 surface_flags,
                 content_flags: 0x10000,
             }],
-            lightmaps: vec![],
-            soups: vec![],
-            verts: vec![],
-            indices: vec![],
-            entities: String::new(),
-            planes: vec![],
             brush_sides: vec![
                 side(50.0),
                 side(54.0),
@@ -5412,12 +5421,12 @@ mod tests {
                 side(0.0),
                 side(100.0),
             ],
-            brushes: vec![bsp::Brush {
+            brushes: vec![mapworld::Brush {
                 first_side: 0,
                 num_sides: 6,
                 material: 0,
             }],
-            models: vec![bsp::Model {
+            models: vec![mapworld::Model {
                 mins: [50.0, -200.0, 0.0],
                 maxs: [54.0, 200.0, 100.0],
                 first_soup: 0,
@@ -5426,30 +5435,7 @@ mod tests {
                 partitions: (0, 0),
                 num_brushes: 1,
             }],
-            cull_groups: vec![],
-            cull_indices: vec![],
-            portal_verts: vec![],
-            occluders: vec![],
-            occluder_plane_indices: vec![],
-            occluder_edges: vec![],
-            occluder_indices: vec![],
-            aabb_nodes: vec![],
-            cells: vec![],
-            portals: vec![],
-            nodes: vec![],
-            leafs: vec![],
-            terrain: vec![],
-            patches: vec![],
-            collision_verts: vec![],
-            collision_indices: vec![],
-            light_indices: vec![],
-            leaf_lights: vec![],
-            leaf_lists: vec![],
-            leaf_brushes: vec![],
-            leaf_partitions: vec![],
-            lights: vec![],
-            light_vis: vec![],
-            pvs: None,
+            ..Default::default()
         }
     }
 
@@ -5584,7 +5570,7 @@ mod tests {
         };
         let bsp = crate::bsp::parse(&data).unwrap();
 
-        let axial_bounds = |b: &crate::bsp::Brush| -> ([f32; 3], [f32; 3]) {
+        let axial_bounds = |b: &crate::mapworld::Brush| -> ([f32; 3], [f32; 3]) {
             let sides = &bsp.brush_sides[b.first_side as usize..][..b.num_sides as usize];
             let mut lo = [0.0f32; 3];
             let mut hi = [0.0f32; 3];
@@ -5599,7 +5585,7 @@ mod tests {
             .brushes
             .iter()
             .find(|b| bsp.materials[b.material as usize].content_flags & 0x20 != 0);
-        let ladders: Vec<&crate::bsp::Brush> = bsp
+        let ladders: Vec<&crate::mapworld::Brush> = bsp
             .brushes
             .iter()
             .filter(|b| bsp.materials[b.material as usize].surface_flags & 0x8 != 0)
@@ -5665,24 +5651,16 @@ mod tests {
         materials: &[(&str, u32, u32)],
         tris: &[(usize, [[f32; 3]; 3])],
     ) -> CollisionWorld {
-        let mut bsp = Bsp {
+        let mut bsp = MapWorld {
             materials: materials
                 .iter()
-                .map(|(name, content, surface)| crate::bsp::Material {
+                .map(|(name, content, surface)| crate::mapworld::Material {
                     name: name.to_string(),
                     surface_flags: *surface,
                     content_flags: *content,
                 })
                 .collect(),
-            lightmaps: vec![],
-            soups: vec![],
-            verts: vec![],
-            indices: vec![],
-            entities: String::new(),
-            planes: vec![],
-            brush_sides: vec![],
-            brushes: vec![],
-            models: vec![crate::bsp::Model {
+            models: vec![crate::mapworld::Model {
                 mins: [0.0; 3],
                 maxs: [0.0; 3],
                 first_soup: 0,
@@ -5691,30 +5669,7 @@ mod tests {
                 partitions: (0, 0),
                 num_brushes: 0,
             }],
-            cull_groups: vec![],
-            cull_indices: vec![],
-            portal_verts: vec![],
-            occluders: vec![],
-            occluder_plane_indices: vec![],
-            occluder_edges: vec![],
-            occluder_indices: vec![],
-            aabb_nodes: vec![],
-            cells: vec![],
-            portals: vec![],
-            nodes: vec![],
-            leafs: vec![],
-            terrain: vec![],
-            patches: vec![],
-            collision_verts: vec![],
-            collision_indices: vec![],
-            light_indices: vec![],
-            leaf_lights: vec![],
-            leaf_lists: vec![],
-            leaf_brushes: vec![],
-            leaf_partitions: vec![],
-            lights: vec![],
-            light_vis: vec![],
-            pvs: None,
+            ..Default::default()
         };
         for (mat, tri) in tris {
             push_tri_patches(&mut bsp, &[tri.map(Vec3::from_array)], *mat as u16);
@@ -5778,7 +5733,7 @@ mod tests {
                 (0..3).map(move |i| [i as f32 * 32.0, j as f32 * 32.0, (i % 2) as f32 * 64.0])
             })
             .collect();
-        bsp.patches.push(crate::bsp::PatchPart {
+        bsp.patches.push(crate::mapworld::PatchPart {
             material: 0,
             width: 3,
             height: 3,

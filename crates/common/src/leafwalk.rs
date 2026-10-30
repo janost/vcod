@@ -9,7 +9,7 @@
 //! so which leaf comes first decides some answers
 //! (docs/research/bsp-ibsp59-format.md, "The leaf walk").
 
-use crate::bsp::{Bsp, Partition};
+use crate::mapworld::{MapWorld, Partition};
 
 const SURFACE_CLIP_EPSILON: f64 = 0.125;
 /// The walk's offset at a slanted plane for anything but a point
@@ -73,7 +73,7 @@ impl LeafWalk {
     /// and the patches' `i` as the world built them, `None` where it kept
     /// none; `bounds` gives each its box. `None` for a map without a tree.
     pub fn new(
-        bsp: &Bsp,
+        bsp: &MapWorld,
         brush: &[Option<u32>],
         terrain: &[Option<u32>],
         patch: &[Option<u32>],
@@ -134,7 +134,7 @@ impl LeafWalk {
     /// lists it; `None` for a map without a tree. mp_carentan's patches 69,
     /// 109, 283 and 284 and mp_brecourt's terrain partition 385 are in no
     /// list, so no trace clips them.
-    pub fn listed(bsp: &Bsp) -> Option<Listed> {
+    pub fn listed(bsp: &MapWorld) -> Option<Listed> {
         if bsp.nodes.is_empty() || bsp.leaf_lists.len() != bsp.leafs.len() {
             return None;
         }

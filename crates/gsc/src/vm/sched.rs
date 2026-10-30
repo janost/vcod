@@ -28,11 +28,29 @@ pub(crate) enum ThreadState {
     /// The script clock reading ([`CLOCK_MASK`]-wrapped) at which this
     /// thread becomes runnable again.
     WaitingUntil(i32),
+    /// CoD2's `waittillframeend`, reached at this clock reading: due then,
+    /// behind every thread a `wait` or a notify made due then, oldest
+    /// first (docs/research/cod2-gsc-diff.md 3.2).
+    FrameEnd(i32),
     WaitingNotify {
         target: Target,
         event: Atom,
         binds: Box<[u16]>,
+        /// `waittillmatch`'s values, which the notify's first arguments
+        /// must equal; empty for `waittill`.
+        matches: Box<[Value]>,
+        /// When it parked, for CoD2's newest-first wake.
+        parked: u64,
     },
+}
+
+/// A thread's place among those due at one clock reading: retail's list
+/// for that time takes a `wait` or a notify's wake at its head and a
+/// `waittillframeend` at its tail (cod2-gsc-diff.md 3.2).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Turn {
+    Newest(Reverse<u64>),
+    FrameEnd(u64),
 }
 
 #[derive(Debug)]
@@ -40,7 +58,9 @@ pub(crate) struct Thread {
     pub id: ThreadId,
     pub frames: Vec<Frame>,
     pub state: ThreadState,
-    pub endons: Vec<(Target, Atom)>,
+    /// Each with the depth of the call that registered it: under
+    /// [`Vm::set_endons_end_with_call`] a return drops its call's.
+    pub endons: Vec<(Target, Atom, usize)>,
     /// When it was last queued: among threads due at the same time, the
     /// latest queued runs first (`Vm::step_runnable`).
     pub seq: u64,
@@ -131,10 +151,12 @@ impl Vm {
             endons: Vec::new(),
             seq,
         });
+        self.thread_returned = None;
         if self.spawn_depth < Self::MAX_SPAWN_DEPTH {
             self.spawn_depth += 1;
-            self.step_thread(host, id, errors);
+            let returned = self.step_thread(host, id, errors);
             self.spawn_depth -= 1;
+            self.thread_returned = returned;
         } else {
             // Silent otherwise, this degrades into exactly the deadlock
             // that running a spawned thread immediately (rather than
@@ -201,29 +223,76 @@ impl Vm {
         let event = self.interner.fold_atom(event);
         let mut i = 0;
         while i < self.threads.len() {
-            if Some(self.threads[i].id) != from
-                && self.threads[i]
-                    .endons
-                    .iter()
-                    .any(|&(t, e)| t == target && e == event)
+            // The outermost call whose endon this is.
+            let depth = self.threads[i]
+                .endons
+                .iter()
+                .filter(|&&(t, e, _)| t == target && e == event)
+                .map(|e| e.2)
+                .min();
+            let parked = !self.threads[i].frames.is_empty();
+            if let Some(d) = depth.filter(|_| Some(self.threads[i].id) != from)
+                && self.endons_end_with_call
+                && d > 1
+                && parked
             {
-                self.threads.remove(i);
+                // CoD4: only that call ends; its caller reads `undefined`
+                // from it and runs on (`probe_endon_return`).
+                let seq = self.next_seq;
+                self.next_seq += 1;
+                let t = &mut self.threads[i];
+                t.frames.truncate(d - 1);
+                t.endons.retain(|e| e.2 < d);
+                if let Some(f) = t.frames.last_mut() {
+                    f.stack.push(Value::Undefined);
+                }
+                t.state = ThreadState::Runnable;
+                t.seq = seq;
+                i += 1;
+            } else if depth.is_some() && Some(self.threads[i].id) != from {
+                let t = self.threads.remove(i);
+                if self.kill_mid_step {
+                    self.killed.push(t.id);
+                }
             } else {
                 i += 1;
             }
         }
 
+        // A waiter binds the arguments into its locals.
+        for a in args {
+            self.heap.share(*a);
+        }
         // Queued newest first, so that the pick, last in first out, resumes
-        // them in start order (`probe_notify`, `probe_notify_frame`).
-        for t in self.threads.iter_mut().rev() {
-            let matches_wait = matches!(
-                &t.state,
-                ThreadState::WaitingNotify { target: wt, event: we, .. }
-                    if *wt == target && *we == event
-            );
-            if !matches_wait {
-                continue;
-            }
+        // them in start order (`probe_notify`, `probe_notify_frame`); on
+        // CoD2 queued oldest `waittill` first, so the newest resumes first.
+        // The waiters this notify wakes, picked before they are ordered:
+        // waking one changes no other's match, and the stable sort keeps
+        // their order as it would among all the threads.
+        let interner = &self.interner;
+        let mut order: Vec<usize> = (0..self.threads.len())
+            .rev()
+            .filter(|&i| {
+                matches!(
+                    &self.threads[i].state,
+                    ThreadState::WaitingNotify { target: wt, event: we, matches, .. }
+                        if *wt == target && *we == event
+                            && matches.iter().enumerate().all(|(k, m)| {
+                                args.get(k).is_some_and(|a| {
+                                    super::interp::values_equal(interner, *m, *a).unwrap_or(false)
+                                })
+                            })
+                )
+            })
+            .collect();
+        if self.newest_waiter_first {
+            order.sort_by_key(|&i| match self.threads[i].state {
+                ThreadState::WaitingNotify { parked, .. } => parked,
+                _ => 0,
+            });
+        }
+        for i in order {
+            let t = &mut self.threads[i];
             let ThreadState::WaitingNotify { binds, .. } =
                 std::mem::replace(&mut t.state, ThreadState::Runnable)
             else {
@@ -267,31 +336,50 @@ impl Vm {
     /// step (`main() { self endon("x"); thread killer(); ... }`, where
     /// `killer`'s immediate run notifies `"x"` before this call ever
     /// reaches its own suspend point to write anything back).
-    fn step_thread(&mut self, host: &mut dyn Host, id: ThreadId, errors: &mut Vec<ScriptError>) {
-        let Some(idx) = self.threads.iter().position(|t| t.id == id) else {
-            return;
-        };
+    /// The value the thread returned, when this step ran it to its end.
+    fn step_thread(
+        &mut self,
+        host: &mut dyn Host,
+        id: ThreadId,
+        errors: &mut Vec<ScriptError>,
+    ) -> Option<Value> {
+        let idx = self.threads.iter().position(|t| t.id == id)?;
         if !matches!(self.threads[idx].state, ThreadState::Runnable) {
-            return;
+            return None;
         }
 
         let mut frames = std::mem::take(&mut self.threads[idx].frames);
         let mut notifies = Vec::new();
         let budget = self.budget;
         let result = self.step_frames(host, &mut frames, budget, Some(id), &mut notifies, errors);
+        if self.spawn_depth == 0 {
+            self.killed.clear();
+        }
+        let mut returned = None;
 
         match result {
-            Ok(Step::Returned(_)) => {
+            Ok(Step::Returned(v)) => {
                 if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
                     self.threads.remove(idx);
                 }
+                returned = Some(v);
             }
             Ok(Step::Suspend(Suspend::Wait { seconds })) => {
                 // Rounded half up on the x87's wider product, as retail's
                 // `wait` does (docs/research/cod11-gsc-language.md, "The
                 // script clock"); the opcode has already refused a negative
                 // wait and one past the 24-bit range.
-                let delay_ms = (f64::from(seconds) * 1000.0 + 0.5) as i32;
+                let delay_ms = if self.frame_waits {
+                    let frames = (f64::from(seconds) * 20.0 + 0.5) as i32;
+                    let frames = if frames == 0 && seconds > 0.0 {
+                        1
+                    } else {
+                        frames
+                    };
+                    frames * self.frame_ms
+                } else {
+                    (f64::from(seconds) * 1000.0 + 0.5) as i32
+                };
                 let deadline = (self.now_ms + delay_ms) & CLOCK_MASK;
                 let seq = self.queue_seq();
                 if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
@@ -300,10 +388,20 @@ impl Vm {
                     self.threads[idx].seq = seq;
                 }
             }
+            Ok(Step::Suspend(Suspend::FrameEnd)) => {
+                let at = self.now_ms;
+                let seq = self.queue_seq();
+                if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
+                    self.threads[idx].frames = frames;
+                    self.threads[idx].state = ThreadState::FrameEnd(at);
+                    self.threads[idx].seq = seq;
+                }
+            }
             Ok(Step::Suspend(Suspend::WaitTill {
                 target,
                 event,
                 binds,
+                matches,
             })) => {
                 if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
                     self.threads[idx].frames = frames;
@@ -311,7 +409,10 @@ impl Vm {
                         target,
                         event,
                         binds,
+                        matches,
+                        parked: self.next_wait,
                     };
+                    self.next_wait += 1;
                 }
             }
             Ok(Step::Running) => {
@@ -349,6 +450,7 @@ impl Vm {
         for (target, event, args) in notifies {
             self.notify_from(Some(id), target, event, &args);
         }
+        returned
     }
 
     /// A ceiling on how many thread steps one pass takes. Retail has none: a
@@ -434,12 +536,15 @@ impl Vm {
                 .threads
                 .iter()
                 .filter_map(|t| match t.state {
-                    ThreadState::Runnable => Some((now, Reverse(t.seq), t.id)),
+                    ThreadState::Runnable => Some((now, Turn::Newest(Reverse(t.seq)), t.id)),
                     // Due on the clock or between it and `level.time`; one
                     // due on `level.time` itself waits a frame, and one
                     // behind the clock waits for it to come round again.
                     ThreadState::WaitingUntil(d) if d == now || (now < d && d < level) => {
-                        Some((d, Reverse(t.seq), t.id))
+                        Some((d, Turn::Newest(Reverse(t.seq)), t.id))
+                    }
+                    ThreadState::FrameEnd(d) if d == now || (now < d && d < level) => {
+                        Some((d, Turn::FrameEnd(t.seq), t.id))
                     }
                     _ => None,
                 })
@@ -644,6 +749,42 @@ mod tests {
         assert_eq!(vm.abort_count() as usize, n);
     }
 
+    /// CoD4's frame-counted `wait` against CoD1's milliseconds, taken at
+    /// 0 with 50 ms frames: the frame each resumes on, a thread due on a
+    /// frame's `level.time` running the frame after. Retail 1.7 woke 0.624
+    /// 12 frames on, 0.626 and 0.643 13, 0.01 one and 1.025 (a float under
+    /// it) 20 (cod4-gsc.md 4.1).
+    #[test]
+    fn cod4_waits_count_whole_frames() {
+        let resumes = |secs: &str, frames: bool| {
+            let mut vm = vm_with(&format!("main() {{ wait {secs}; done(); }}"));
+            vm.set_frame_waits(frames);
+            let mut host = TestHost::default();
+            let f = vm.func_ref("test/script", "main");
+            vm.start_thread(&mut host, f, None, vec![]);
+            (0..40)
+                .map(|k| k * 50)
+                .find(|&t| {
+                    vm.run_frame(&mut host, t);
+                    host.calls.iter().any(|(n, _)| n == "done")
+                })
+                .unwrap()
+        };
+        let cod4 = [
+            ("0.624", 650),
+            ("0.626", 700),
+            ("0.643", 700),
+            ("0.01", 100),
+            ("1.025", 1050),
+        ];
+        for (secs, at) in cod4 {
+            assert_eq!(resumes(secs, true), at, "{secs}");
+        }
+        // CoD1's milliseconds: 626 and 10 run on the next frame past them.
+        assert_eq!(resumes("0.626", false), 650);
+        assert_eq!(resumes("0.01", false), 50);
+    }
+
     #[test]
     fn wait_resumes_only_after_its_deadline() {
         let mut vm = vm_with(r#"main() { wait 0.1; done(); }"#);
@@ -717,6 +858,37 @@ mod tests {
         assert!(host.calls.iter().any(|(n, _)| n == "done"));
         assert!(!host.calls.iter().any(|(n, _)| n == "woke"));
         assert_eq!(vm.thread_count(), 1, "b still waits");
+    }
+
+    /// An `endon` run inside a called function, notified after it
+    /// returned: CoD4's caller lives on (the call's endons went with it),
+    /// CoD1's and CoD2's dies. One notified while the call still waits
+    /// ends that call alone on CoD4, the caller running on at once
+    /// (retail 1.7's `probe_endon_return`, cod4-gsc.md 4.2).
+    #[test]
+    fn cod4_endons_end_with_their_call() {
+        let run = |scoped: bool| {
+            let mut vm = vm_with(
+                r#"main() { helper(); wait 1; returned(); inner(); done(); }
+                   helper() { self endon("stop"); }
+                   inner() { self endon("stop2"); wait 1; }"#,
+            );
+            vm.set_endons_end_with_call(scoped);
+            let mut host = TestHost::default();
+            let f = vm.func_ref("test/script", "main");
+            vm.start_thread(&mut host, f, Some(Target::Entity(EntId(7, 0))), vec![]);
+            vm.run_frame(&mut host, 0);
+            let stop = vm.interner_mut().intern_folded("stop");
+            vm.notify(EntId(7, 0), stop, &[]);
+            vm.run_frame(&mut host, 1050);
+            let stop2 = vm.interner_mut().intern_folded("stop2");
+            vm.notify(EntId(7, 0), stop2, &[]);
+            vm.run_frame(&mut host, 1100);
+            let called = |n: &str| host.calls.iter().any(|(c, _)| c == n);
+            (called("returned"), called("done"), vm.thread_count())
+        };
+        assert_eq!(run(true), (true, true, 0));
+        assert_eq!(run(false), (false, false, 0));
     }
 
     #[test]
@@ -889,6 +1061,54 @@ mod tests {
             order.iter().position(|n| *n == "first"),
             order.iter().position(|n| *n == "second").map(|i| i - 1)
         );
+    }
+
+    /// CoD2's order (`Vm::set_newest_waiter_first`): the newest `waittill`
+    /// resumes first, so two looping waiters swap turns each notify, as
+    /// mp_toujane's `connecting` waiters did live (cod2-protocol.md 15.5).
+    #[test]
+    fn cod2_notify_wakes_the_newest_waittill_first() {
+        let mut vm = vm_with(
+            r#"a() { for(;;) { self waittill("e"); first(); } }
+               b() { for(;;) { self waittill("e"); second(); } }"#,
+        );
+        vm.set_newest_waiter_first(true);
+        let mut host = TestHost::default();
+        let fa = vm.func_ref("test/script", "a");
+        let fb = vm.func_ref("test/script", "b");
+        vm.start_thread(&mut host, fa, Some(Target::Entity(EntId(1, 0))), vec![]);
+        vm.start_thread(&mut host, fb, Some(Target::Entity(EntId(1, 0))), vec![]);
+        vm.run_frame(&mut host, 0);
+        let ev = vm.interner_mut().intern_folded("e");
+        for at in [50, 100] {
+            vm.notify(EntId(1, 0), ev, &[]);
+            vm.run_frame(&mut host, at);
+        }
+        let order: Vec<&str> = host.calls.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(order, ["second", "first", "first", "second"]);
+    }
+
+    /// CoD2's `x = thread f()` reads what `f` returned when it ran to its
+    /// end without suspending, undefined once it waits (retail 1.3,
+    /// cod2-protocol.md 15.7; `_fx::soundfx` writes a field on it).
+    #[test]
+    fn cod2_thread_call_reads_an_unsuspended_return() {
+        let src = r#"main() { r = thread seven(); got(r); w = thread later(); got(w); }
+seven() { return 7; }
+later() { wait 0.05; return 9; }"#;
+        for (on, first) in [(true, Value::Int(7)), (false, Value::Undefined)] {
+            let ast = crate::parse::parse_file_dialect(src, crate::Dialect::Cod2).unwrap();
+            let mut vm = Vm::new();
+            let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+            vm.install(fns).unwrap();
+            vm.set_thread_returns(on);
+            let mut host = TestHost::default();
+            let f = vm.func_ref("test/script", "main");
+            vm.start_thread(&mut host, f, None, vec![]);
+            vm.run_frame(&mut host, 0);
+            let got: Vec<Value> = host.calls.iter().map(|(_, a)| a[0]).collect();
+            assert_eq!(got, [first, Value::Undefined]);
+        }
     }
 
     /// `animscripts/predict.gsc:102-108`'s notetrack-prediction pattern
@@ -1276,6 +1496,31 @@ mod tests {
         );
     }
 
+    /// CoD2 (`Vm::set_kill_mid_step`): the same nested notify ends the
+    /// spawner before its next instruction, as retail's stock tdm showed
+    /// (cod2-protocol.md 16.6).
+    #[test]
+    fn cod2_a_thread_killed_by_a_nested_spawn_s_notify_stops_at_once() {
+        let mut vm = vm_with(
+            r#"main() {
+                self endon("die");
+                self thread killer();
+                sideEffectA();
+            }
+            killer() { self notify("die"); after(); }"#,
+        );
+        vm.set_kill_mid_step(true);
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, f, Some(Target::Entity(EntId(1, 0))), vec![]);
+        assert_eq!(vm.thread_count(), 0);
+        assert!(
+            host.calls.iter().any(|(n, _)| n == "after"),
+            "the notifier runs on"
+        );
+        assert!(!host.calls.iter().any(|(n, _)| n == "sideeffecta"));
+    }
+
     /// A thread looping on `wait 0` is picked again after every turn, so it
     /// takes the whole pass; retail stalls the frame on it for good, and the
     /// cap here ends the pass instead, the other threads due waiting for the
@@ -1621,5 +1866,221 @@ mod tests {
         let described = vm.describe(&vm.aborts()[0]);
         assert!(described.contains("nosuchthing"), "{described}");
         assert_eq!(level_string(&mut vm, "seen"), "ran on");
+    }
+
+    fn vm_cod2(src: &str) -> Vm {
+        vm_dialect(src, crate::Dialect::Cod2)
+    }
+
+    fn vm_dialect(src: &str, dialect: crate::Dialect) -> Vm {
+        let ast = crate::parse::parse_file_dialect(src, dialect).unwrap();
+        let mut vm = Vm::new();
+        let opts = crate::compile::CompileOptions {
+            dialect,
+            ..Default::default()
+        };
+        let fns = crate::compile::compile_file_with(&ast, "test/script", vm.interner_mut(), &opts)
+            .unwrap();
+        vm.install(fns).unwrap();
+        vm
+    }
+
+    fn marks(vm: &Vm, host: &TestHost) -> Vec<String> {
+        host.calls
+            .iter()
+            .filter(|(n, _)| n == "mark")
+            .map(|(_, a)| match a[0] {
+                Value::String(s) => vm.interner().resolve(s).to_string(),
+                ref v => format!("{v:?}"),
+            })
+            .collect()
+    }
+
+    /// CoD4's `waittillmatch` wakes only on a notify whose first arguments
+    /// equal its values; a notify that differs leaves it waiting.
+    #[test]
+    fn cod4_waittillmatch_wakes_on_matching_arguments_only() {
+        let mut vm = vm_dialect(
+            r#"waiter() { self waittillmatch("anim", "end"); mark("woke"); }
+            pump(v) { self notify("anim", v); }"#,
+            crate::Dialect::Cod4,
+        );
+        let mut host = TestHost::default();
+        let me = Some(Target::Entity(EntId(1, 0)));
+        let waiter = vm.func_ref("test/script", "waiter");
+        let pump = vm.func_ref("test/script", "pump");
+        vm.start_thread(&mut host, waiter, me, vec![]);
+        let start = vm.interner_mut().intern_exact("start");
+        vm.start_thread(&mut host, pump, me, vec![Value::String(start)]);
+        vm.run_frame(&mut host, 0);
+        assert!(
+            marks(&vm, &host).is_empty(),
+            "a notify of start is no match"
+        );
+        let anim = vm.interner_mut().intern_folded("anim");
+        vm.notify(Target::Entity(EntId(1, 0)), anim, &[]);
+        vm.run_frame(&mut host, 50);
+        assert!(marks(&vm, &host).is_empty(), "nor is one without arguments");
+        let end = vm.interner_mut().intern_exact("end");
+        vm.start_thread(&mut host, pump, me, vec![Value::String(end)]);
+        vm.run_frame(&mut host, 100);
+        assert_eq!(marks(&vm, &host), ["woke"]);
+    }
+
+    /// CoD4 scales a vector by a number either way round and divides one
+    /// per component; two ints still divide as floats, a zero divisor
+    /// component is an error.
+    #[test]
+    fn cod4_scales_vectors_both_ways() {
+        let mut vm = vm_dialect(
+            r#"main() { v = (2, 4, 8); level.a = 2 * v; level.b = v * 0.5; level.c = v / 2; level.d = 3 / 2; level.e = v * (1, 0, 2); }
+            bad() { level.f = (1, 2, 3) / (1, 0, 1); }"#,
+            crate::Dialect::Cod4,
+        );
+        let mut host = TestHost::default();
+        let main = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, main, None, vec![]);
+        assert_eq!(vm.abort_count(), 0);
+        assert_eq!(level_string(&mut vm, "a"), "Vector([4.0, 8.0, 16.0])");
+        assert_eq!(level_string(&mut vm, "b"), "Vector([1.0, 2.0, 4.0])");
+        assert_eq!(level_string(&mut vm, "c"), "Vector([1.0, 2.0, 4.0])");
+        assert_eq!(level_string(&mut vm, "d"), "Float(1.5)");
+        assert_eq!(level_string(&mut vm, "e"), "Vector([2.0, 0.0, 16.0])");
+        let bad = vm.func_ref("test/script", "bad");
+        vm.start_thread(&mut host, bad, None, vec![]);
+        assert_eq!(vm.abort_count(), 1);
+    }
+
+    /// CoD4's `<<` and `>>` bind between the relations and the sums, and
+    /// `prof_begin` / `prof_end` compile to nothing.
+    #[test]
+    fn cod4_shifts_and_profile_statements() {
+        let mut vm = vm_dialect(
+            r#"main() { prof_begin("x"); level.a = 1 << 2 + 1; level.b = -16 >> 2; level.c = 1 < 1 << 1; prof_end("x"); }"#,
+            crate::Dialect::Cod4,
+        );
+        let mut host = TestHost::default();
+        let main = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, main, None, vec![]);
+        assert_eq!(vm.abort_count(), 0);
+        assert_eq!(level_string(&mut vm, "a"), "Int(8)");
+        assert_eq!(level_string(&mut vm, "b"), "Int(-4)");
+        assert_eq!(level_string(&mut vm, "c"), "Int(1)");
+        assert!(host.calls.is_empty(), "{:?}", host.calls);
+    }
+
+    /// CoD2 divides two ints as floats (`Scr_EvalDivide`, Mac 0x9012c);
+    /// CoD1 truncates.
+    #[test]
+    fn cod2_divides_ints_as_floats() {
+        let src = r#"main() { level.q = 1500 / 1000; level.r = 7; level.r /= 2; }"#;
+        let mut host = TestHost::default();
+        let mut vm = vm_cod2(src);
+        let main = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, main, None, vec![]);
+        assert_eq!(level_string(&mut vm, "q"), "Float(1.5)");
+        assert_eq!(level_string(&mut vm, "r"), "Float(3.5)");
+        let mut vm = vm_with(src);
+        let main = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, main, None, vec![]);
+        assert_eq!(level_string(&mut vm, "q"), "Int(1)");
+    }
+
+    /// CoD2's `Scr_EvalMultiply` (lnxded 0x807e290) multiplies numbers
+    /// only: retail's server died on `anglesToForward(a) * 200` with `pair
+    /// '(1, 0, -0)' and '200' has unmatching types 'vector' and 'int'`
+    /// (cod2-protocol.md 16.5). CoD1's VM keeps its scaling.
+    #[test]
+    fn cod2_refuses_a_vector_times_a_number() {
+        let src = r#"main() { level.n = 2 * 1.5; level.v = (1, 2, 3) * 2; }"#;
+        let mut host = TestHost::default();
+        let mut vm = vm_cod2(src);
+        let main = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, main, None, vec![]);
+        assert_eq!(level_string(&mut vm, "n"), "Float(3.0)");
+        assert_ne!(level_string(&mut vm, "v"), "Vector([2.0, 4.0, 6.0])");
+        assert_eq!(vm.aborts().len(), 1);
+        let mut vm = vm_with(src);
+        let main = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, main, None, vec![]);
+        assert_eq!(level_string(&mut vm, "v"), "Vector([2.0, 4.0, 6.0])");
+    }
+
+    /// CoD2's `probe_c2a` on retail `cod2_lnxded` (cod2-gsc-diff.md 3.2):
+    /// `wait 0` resumes newest first, then the frame-end waiters oldest
+    /// first, and a frame-end wait reached while that list runs still runs
+    /// this frame; `wait 0.05` waits for the next.
+    #[test]
+    fn waittillframeend_runs_behind_the_frame_s_wait_0s() {
+        let mut vm = vm_cod2(
+            r#"main() {
+                wait 0.05;
+                mark("t0");
+                thread fe("fe1");
+                thread w0("w0a");
+                thread fe("fe2");
+                thread w05("w05");
+                thread waiter();
+                thread w0("w0b");
+                level notify("go");
+                mark("main_after_spawns");
+                waittillframeend;
+                mark("main_after_fe");
+                wait 0.05;
+                mark("next_frame");
+            }
+            fe(n) { mark(n + "_start"); waittillframeend; mark(n + "_end"); thread fe_nested(n); }
+            fe_nested(n) { waittillframeend; mark(n + "_nested_end"); }
+            w0(n) { mark(n + "_start"); wait 0; mark(n + "_end"); }
+            w05(n) { wait 0.05; mark(n + "_end"); }
+            waiter() { mark("waiter_start"); level waittill("go"); mark("waiter_woke"); waittillframeend; mark("waiter_fe"); }"#,
+        );
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, f, None, vec![]);
+        vm.run_frame(&mut host, 100);
+        assert_eq!(
+            marks(&vm, &host),
+            [
+                "t0",
+                "fe1_start",
+                "w0a_start",
+                "fe2_start",
+                "waiter_start",
+                "w0b_start",
+                "main_after_spawns",
+                "waiter_woke",
+                "w0b_end",
+                "w0a_end",
+                "fe1_end",
+                "fe2_end",
+                "main_after_fe",
+                "waiter_fe",
+                "fe1_nested_end",
+                "fe2_nested_end",
+            ]
+        );
+        host.calls.clear();
+        vm.run_frame(&mut host, 150);
+        assert_eq!(marks(&vm, &host), ["next_frame", "w05_end"]);
+    }
+
+    /// `probe_c2n`: a `wait 0` a frame-end waiter takes resumes ahead of
+    /// the frame-end waiters still queued.
+    #[test]
+    fn a_wait_0_inside_the_frame_end_list_runs_before_the_rest_of_it() {
+        let mut vm = vm_cod2(
+            r#"main() { wait 0.05; thread fe1(); thread fe2(); mark("main_spawned"); }
+            fe1() { waittillframeend; mark("fe1_end"); wait 0; mark("fe1_w0_end"); }
+            fe2() { waittillframeend; mark("fe2_end"); }"#,
+        );
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, f, None, vec![]);
+        vm.run_frame(&mut host, 100);
+        assert_eq!(
+            marks(&vm, &host),
+            ["main_spawned", "fe1_end", "fe1_w0_end", "fe2_end"]
+        );
     }
 }

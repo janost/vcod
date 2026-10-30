@@ -172,7 +172,7 @@ fn check(fs: vcod_common::pk3::Pk3Fs, proto: &'static Protocol, retail: &str) {
     }
     // Every item lands once, inside its patch's lift range; the log prints
     // to the hundredth, so a lift may read up to 0.005 past either end.
-    let (lo, hi) = if proto.version == PROTOCOL_V1.version {
+    let (lo, hi) = if proto.transport.version == PROTOCOL_V1.transport.version {
         (0.0, 0.5)
     } else {
         (0.5, 1.0)
@@ -224,7 +224,8 @@ fn the_touch_pass_wakes_its_threads_in_retails_order_on_1_5() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         return;
     }
     check(
@@ -300,7 +301,8 @@ fn a_full_trigger_queue_notifies_on_the_spot_on_1_5() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         return;
     }
     check_trigqueue(fs, &PROTOCOL_V6);

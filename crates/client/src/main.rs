@@ -3,6 +3,37 @@ mod blob_shadow;
 mod bloom;
 mod camera;
 mod clock_probe;
+mod cod2_client;
+mod cod2_front;
+mod cod2_glow;
+mod cod2_hud;
+mod cod2_light;
+mod cod2_names;
+mod cod2_player_hud;
+mod cod2_players;
+mod cod2_scene;
+mod cod2_viewmodel;
+mod cod2_world_hud;
+mod cod4_audio;
+mod cod4_client;
+mod cod4_crosshair;
+mod cod4_damage;
+mod cod4_dof;
+mod cod4_fly;
+mod cod4_front;
+mod cod4_fx;
+mod cod4_hud;
+mod cod4_loading;
+mod cod4_look;
+mod cod4_menu;
+mod cod4_radar;
+mod cod4_scoreboard;
+mod cod4_spotshadow;
+mod cod4_sunshadow;
+mod cod4_vehicles;
+mod cod4_viewmodel;
+mod cod4_voice;
+mod cod4_waypoints;
 mod console;
 mod corona;
 mod dlight;
@@ -11,6 +42,8 @@ mod entities;
 mod entity_light;
 mod entity_material;
 mod flame_probe;
+mod frame_digest;
+mod frame_prof;
 mod frontend;
 mod fx;
 mod gamma;
@@ -27,7 +60,9 @@ mod probe;
 mod quick_chat;
 mod quit;
 mod renderer;
+mod scene_copy;
 mod screen_blend;
+mod session;
 mod shadows;
 mod shock_probe;
 mod sky;
@@ -47,15 +82,18 @@ use glam::Vec3;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
+use vcod_common::asset_source::{AssetSource, RawFile};
+use vcod_common::text::atoi_msvc;
 use winit::application::ApplicationHandler;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
+use vcod_common::mapworld::{self, MapWorld};
 use vcod_common::movetrace::MoveWorld;
 use vcod_common::pk3::Pk3Fs;
-use vcod_common::{bsp, collision, mesh, net, pmove, props, weapon, xmodel};
+use vcod_common::{bsp, collision, mesh, model, net, pmove, props, weapon};
 
 use camera::{FlyCamera, InputState};
 use renderer::{DynamicModelInstance, Renderer};
@@ -89,6 +127,12 @@ struct Args {
     /// Pk3 subdirectory: main for CoD1, uo for United Offensive (untested)
     #[arg(long, default_value = "main")]
     mod_dir: String,
+    /// Which game the install is: cod1, cod2 or cod4. Defaults to what the
+    /// game dir holds. cod2 runs fly mode (`vcod <map>`), spectates a server
+    /// (`--connect`), probes one headless (`--net-probe`) and, with none of
+    /// those, opens its main menu.
+    #[arg(long)]
+    game: Option<vcod_common::game::Game>,
     /// Load only the install's stock retail paks (the patch's numbered paks,
     /// their `localized_*` ones, UO's map pack) and ignore every other pk3:
     /// third-party maps, `zzz_*` mods, downloads. Downloads nothing, lists no
@@ -96,6 +140,10 @@ struct Args {
     /// reads 1.
     #[arg(long)]
     vanilla: bool,
+    /// CoD4: the mod a map loads under, `mods/<name>`: its `mod.ff` and
+    /// iwds over the stock ones. A joined server's own `fs_game` wins.
+    #[arg(long)]
+    fs_game: Option<String>,
     /// Spawn as a soldier and walk (first person) instead of flying
     #[arg(long)]
     walk: bool,
@@ -110,10 +158,23 @@ struct Args {
     /// Headless: connect to a CoD server, dump the gamestate, then exit
     #[arg(long)]
     net_probe: Option<String>,
+    /// Headless, CoD2: play this `.dm_1` demo through the client's demo
+    /// path and print what it parsed and drew, a line a second
+    #[arg(long)]
+    probe_demo: Option<std::path::PathBuf>,
+    /// With --probe-demo: play it as `timedemo` does, 50 ms of demo a frame
+    #[arg(long)]
+    probe_timedemo: bool,
     /// Connect to a CoD server (ip:port) and join it through the stock team
-    /// and weapon menus; spectator is one of the team menu's choices
+    /// and weapon menus (CoD4: team and class); spectator is one of the team
+    /// menu's choices
     #[arg(long)]
     connect: Option<String>,
+    /// CoD4: watch a datagram capture (`cod4_probe`'s format, as the
+    /// committed `crates/cod4/tests/fixtures/net/play-1.7-*.txt`) on its
+    /// own clock, as its client saw it
+    #[arg(long)]
+    capture: Option<std::path::PathBuf>,
     /// Answer the stock team menu with this after --connect or the console's
     /// `connect`
     #[arg(long)]
@@ -121,6 +182,9 @@ struct Args {
     /// Answer the stock weapon menu with this weapon file name (e.g. m1carbine_mp)
     #[arg(long)]
     weapon: Option<String>,
+    /// CoD4: answer the class menu with this response (e.g. assault_mp,0)
+    #[arg(long)]
+    class: Option<String>,
     /// Overwrite the committed gamestate.bin fixture with the --net-probe capture.
     /// Off by default: the parser tests pin that file, and a capture from another
     /// map or a mid-round server is not a drop-in. Otherwise the probe writes to tmp/.
@@ -775,16 +839,43 @@ struct Args {
     /// Run without sound (also what happens when no output device opens).
     #[arg(long)]
     no_audio: bool,
+    /// `WxH`: a window of that size for this run, whatever `r_mode` and
+    /// `r_fullscreen` say, a `vid_restart` included. Sets no cvar, so the
+    /// saved config keeps its mode. `tools/cod4_perf.sh` passes its SIZE.
+    #[arg(long, value_name = "WxH", value_parser = parse_window_size)]
+    window: Option<(u32, u32)>,
     /// Master volume, 0.0 to 1.0: sets `mss_volume`, which the options
     /// screen's slider also sets and the config keeps (default 0.8).
     #[arg(long)]
     volume: Option<f32>,
+    /// A console line to run once the window is up, repeatable, in order:
+    /// `--exec "set nextdemo quit" --exec "set timedemo 1" --exec "demo x"`
+    /// plays a demo as fast as it draws and quits at its end.
+    #[arg(long)]
+    exec: Vec<String>,
+    /// As --exec, run once after the first frame that draws a game:
+    /// `--connect ADDR --exec-in-game "record x"` records from the join.
+    #[arg(long)]
+    exec_in_game: Vec<String>,
+    /// `"SECS LINE"`, repeatable, in order: a queue of console lines, each
+    /// run SECS seconds after the one before it ran (the first after the
+    /// --exec-in-game lines), noted in `VCOD_FRAME_PROFILE` as `# exec`
+    /// lines. `tools/cod4_perf.sh`'s sweep toggles one setting a pass
+    /// with it (docs/research/cod4-client-perf.md 25).
+    #[arg(long)]
+    exec_after: Vec<String>,
 }
 
 /// The map every mode reads: the renderer builds from it, entities resolve
 /// submodels in it. `None` while `--connect` is between maps.
 struct World {
-    bsp: bsp::Bsp,
+    bsp: MapWorld,
+    /// The fog a load with no server draws: CoD2 fly mode's map script
+    /// `setExpFog` (`vcod_cod2::world::script_fog`).
+    fog: Option<net::FogParams>,
+    /// A CoD4 map's own materials (`cod4_fly`), which the renderer draws
+    /// with in place of the game's library.
+    materials: Option<vcod_common::material::MaterialLib>,
 }
 
 /// Where `--connect` is between connecting and drawing a map.
@@ -832,7 +923,7 @@ struct LivePhase {
 
 /// The live phase off `bsp`, with the weapons configstring 7 (`weapons_cs`)
 /// names read off `fs`.
-fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp, weapons_cs: &str) -> Phase {
+fn live_phase(fs: &Pk3Fs, bsp: &MapWorld, weapons_cs: &str) -> Phase {
     Phase::Live(Box::new(LivePhase::new(
         client_world(fs, bsp),
         live_weapons(fs, weapons_cs),
@@ -841,7 +932,7 @@ fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp, weapons_cs: &str) -> Phase {
 
 /// The client's collision map off `bsp`, what `CM_LoadMap` (CoDMP.exe
 /// 0x419c90) loads for the cgame.
-fn client_world(fs: &Pk3Fs, bsp: &bsp::Bsp) -> collision::CollisionWorld {
+fn client_world(fs: &Pk3Fs, bsp: &MapWorld) -> collision::CollisionWorld {
     let world = collision::CollisionWorld::build(bsp, &props::collision_tris(fs, &bsp.entities));
     // Predict as the retail Windows client does, not as the server.
     world.set_arith(vcod_common::patch::Arith::for_client());
@@ -897,7 +988,11 @@ enum Mode {
     /// No map and no server: the main menu, or the full-screen console when
     /// no menu is up, as retail's is when disconnected.
     Idle,
+    /// `vcod <map>`: a free camera over a CoD1 or CoD2 map, no server.
     Fly(FlyCamera),
+    /// A CoD2 session, online or a demo (`App::session`'s `Cod2Client`):
+    /// the camera follows its frames, or flies until the first one.
+    Cod2(FlyCamera),
     /// Position follows the interpolated playerstate. The client joins
     /// through the stock menus and plays or spectates as the snapshot says.
     Online {
@@ -947,6 +1042,14 @@ enum Mode {
     },
 }
 
+impl Mode {
+    /// `vid_restart` leaves the offline viewer's sounds playing; a game
+    /// (CoD1, or CoD2 in docs/research/cod2-sound.md section 9) stops them.
+    fn keeps_sounds_on_vid_restart(&self) -> bool {
+        matches!(self, Mode::Fly(_) | Mode::Walk { .. })
+    }
+}
+
 /// Held movement keys, folded into `PmInput`'s float axes once per frame.
 #[derive(Default)]
 struct WalkKeys {
@@ -991,11 +1094,132 @@ impl WalkKeys {
     }
 }
 
+/// The free camera's frame once its view is set, `Mode::Fly`'s and
+/// `Mode::Cod2`'s alike: the listener, the effects' step and draw, CoD2's
+/// clouds and world HUD, then the frame.
+struct ViewTail<'a> {
+    fs: &'a Pk3Fs,
+    shell: &'a console::shell::Shell,
+    audio: &'a mut audio::AudioSystem,
+    fx: &'a mut fx::sim::FxSystem,
+    session: &'a session::Session,
+    r: &'a mut Renderer,
+    time: f32,
+    dt: f32,
+    aspect: f32,
+    cull: renderer::CullMode,
+}
+
+impl ViewTail<'_> {
+    /// `view` is the draw's angles, fov and view weapon, `fly_fov` the
+    /// camera's own; `fx_ms` takes the effects' time.
+    fn run(
+        self,
+        cam: &FlyCamera,
+        view: cod2_client::DrawView,
+        fly_fov: f32,
+        hud_quads: &mut Vec<hud::HudQuad>,
+        fx_ms: &mut f32,
+    ) -> (renderer::Frame, Option<renderer::VmDraw>) {
+        let ViewTail {
+            fs,
+            shell,
+            audio,
+            fx,
+            session,
+            r,
+            time,
+            dt,
+            aspect,
+            cull,
+        } = self;
+        let cod2_client::DrawView {
+            yaw: draw_yaw,
+            pitch: draw_pitch,
+            roll: draw_roll,
+            fov: world_fov,
+            vm: cod2_vm,
+        } = view;
+        let (cam_forward, cam_right, cam_up) = camera::basis(draw_yaw, draw_pitch);
+        // u32::MAX: no entity pinned to the camera.
+        audio.set_listener(cam.pos, cam_forward, cam_right, cam_up, u32::MAX);
+        // no CollisionWorld in fly mode, so usePhysics fx don't collide
+        let fx_t0 = Instant::now();
+        let mut prof = frame_prof::span(frame_prof::Stage::FxStep);
+        fx.step(dt, time, None);
+        if session.live() {
+            // Delayed `playfx` and the hits the step raised.
+            fx.spawn_chained(fs, time);
+        }
+        prof.next(frame_prof::Stage::Sound);
+        audio.step(&session.entity_positions(), &session.entity_angles(), None);
+        prof.next(frame_prof::Stage::FxDraw);
+        // `fx_draw 0` runs the effects and draws none of them
+        let draw_fx = shell.cvar_f32("fx_draw") != 0.0;
+        let quads = match draw_fx {
+            true => fx.build_quads(cam.pos, cam_right, cam_up, time),
+            false => Vec::new(),
+        };
+        r.set_fx_quads(fs, quads, time);
+        // CoD2's snow (fx::cod2_cloud), tested against the map's roofs
+        let clouds = match draw_fx {
+            true => fx.clouds(cam.pos, cam_right, cam_up, time),
+            false => Default::default(),
+        };
+        r.set_fx_clouds(fs, session.map_name(), &clouds, time);
+        r.set_marks(
+            fs,
+            &fx.take_marks(time),
+            &[],
+            (time * 1000.0) as i32,
+            time,
+            shell.cvar_f32("cg_marks") != 0.0,
+        );
+        let mut lights = fx.lights(cam.pos, time);
+        // CoD4's `r_dlightLimit` (0, 2 or 4 in the menu, at most 4: iw3mp.exe
+        // 0x62b34d); vcod keeps the nearest, retail the most important.
+        if let Some(limit) = shell.cvar("r_dlightLimit") {
+            lights.truncate(limit.trim().parse::<usize>().unwrap_or(4).min(4));
+        }
+        r.set_fx_lights(&lights);
+        drop(prof);
+        *fx_ms = fx_t0.elapsed().as_secs_f32() * 1000.0;
+        let view_proj =
+            if (draw_yaw, draw_pitch, draw_roll, world_fov) == (cam.yaw, cam.pitch, 0.0, fly_fov) {
+                cam.view_proj(fly_fov, aspect)
+            } else {
+                camera::view_proj_from(cam.pos, draw_yaw, draw_pitch, draw_roll, world_fov, aspect)
+            };
+        // CoD2's waypoints and head icons, under the 2D HUD.
+        session.world_hud(
+            hud_quads,
+            view_proj,
+            (draw_yaw, draw_pitch, draw_roll),
+            r.screen_size(),
+        );
+        (
+            renderer::Frame {
+                view_proj,
+                eye: cam.pos,
+                fwd: cam_forward,
+                up: Vec3::Z,
+                time,
+                fov_x: world_fov,
+                cull,
+                hud_lines: Vec::new(),
+            },
+            cod2_vm,
+        )
+    }
+}
+
 /// F3 overlay text, top line first. A free function because the caller holds
 /// the renderer borrowed out of `App`.
 #[allow(clippy::too_many_arguments)]
 fn hud_lines(
     mode: &Mode,
+    // `Mode::Cod2`'s camera tag: the game the session plays.
+    cam_tag: &str,
     // The online entity scene; fly/walk have none.
     scene: Option<&entities::EntityScene>,
     stats: &hud_text::HudStats,
@@ -1037,6 +1261,8 @@ fn hud_lines(
         lod.per_lod[0], lod.per_lod[1], lod.per_lod[2], lod.gone, lod.tris
     ));
     lines.push(r.ssao_line());
+    lines.push(r.sun_shadow_line());
+    lines.push(r.spot_shadow_line());
     let vc = r.vis_counts();
     lines.push(format!(
         "vis: {} cells {}/{} soups {}/{} tris {}/{} props {}/{} occ {} {}  {:.2}ms",
@@ -1087,6 +1313,7 @@ fn hud_lines(
     match mode {
         Mode::Idle => {}
         Mode::Fly(cam) => lines.push(cam_line("fly", cam.pos, cam.yaw, cam.pitch)),
+        Mode::Cod2(cam) => lines.push(cam_line(cam_tag, cam.pos, cam.yaw, cam.pitch)),
         Mode::Walk { ps, .. } => {
             lines.push(cam_line("walk", ps.origin, ps.yaw, ps.pitch));
             lines.push(format!(
@@ -1159,7 +1386,10 @@ fn hud_lines(
 }
 
 fn main() -> Result<()> {
+    let started = Instant::now();
     console::log::init();
+    frame_digest::init();
+    frame_prof::init();
     let args = Args::parse();
     log::info!("{TITLE}{}", if args.vanilla { " (vanilla)" } else { "" });
     let default_panic = std::panic::take_hook();
@@ -1168,6 +1398,106 @@ fn main() -> Result<()> {
         default_panic(info);
     }));
     quit::install();
+    use vcod_common::game::Game;
+    let game = Game::resolve(args.game, &args.game_dir);
+    if let Some(addr) = args.connect.as_ref().filter(|_| args.net_probe.is_none()) {
+        vcod_common::laps::begin_load_at(format!("{game:?} start --connect {addr}"), started);
+    }
+    // Where 1.1's `main/codkey` sits (`net::cdkey`).
+    net::cdkey::set_install(&args.game_dir);
+    // Where a CoD4 join reads and writes its profile's stats.
+    play::cod4_profile::set_context(&args.game_dir, "");
+    // CoD2 runs in fly mode only: a map with no walk, server, probe or list.
+    let cod2_fly = game == Game::Cod2
+        && args.map.is_some()
+        && !args.walk
+        && args.connect.is_none()
+        && args.net_probe.is_none()
+        && !args.list;
+    // CoD4 flies over a stock map's zone (cod4_fly), or watches a capture
+    // or a server (play::cod4) over the map its gamestate names.
+    let cod4_watch = game == Game::Cod4
+        && (args.capture.is_some() || args.connect.is_some())
+        && !args.walk
+        && args.net_probe.is_none()
+        && !args.list;
+    let cod4_fly = game == Game::Cod4
+        && args.map.is_some()
+        && !args.walk
+        && !cod4_watch
+        && args.net_probe.is_none()
+        && !args.list;
+    // `--connect` to a CoD2 server spectates or plays (play::cod2), drawn
+    // in fly mode.
+    let cod2_connect = game == Game::Cod2
+        && args.connect.is_some()
+        && args.net_probe.is_none()
+        && !args.walk
+        && !args.list;
+    if game == Game::Cod2
+        && let Some(path) = &args.probe_demo
+    {
+        vcod_cod2::model::register();
+        let dir = args.game_dir.join(&args.mod_dir);
+        let fs = vcod_common::asset_source::open_game_fs(game, &dir, None)
+            .with_context(|| format!("cannot open game data in {}", dir.display()))?;
+        return play::cod2::demo_probe(path, &fs, args.probe_timedemo);
+    }
+    if game == Game::Cod4
+        && let Some(addr) = &args.net_probe
+    {
+        let addr = std::net::ToSocketAddrs::to_socket_addrs(addr.as_str())?
+            .next()
+            .with_context(|| format!("cannot resolve {addr}"))?;
+        let cp = vcod_cod4::net::conn::Cp::Iwds(args.game_dir.join("main"));
+        // Headless, a team that plays takes a class even with none named.
+        let team = args.team.clone().or(args.probe_team.clone());
+        let class = args.class.clone().or_else(|| {
+            team.as_deref()
+                .filter(|t| *t != "spectator")
+                .map(|_| play::cod4_menus::DEFAULT_CLASS.to_string())
+        });
+        let join = play::cod4_menus::Join { team, class };
+        return play::cod4::probe(
+            addr,
+            args.probe_secs,
+            "vcodprobe",
+            cp,
+            join,
+            Some(&args.game_dir),
+        );
+    }
+    if game == Game::Cod2
+        && let Some(addr) = &args.net_probe
+    {
+        vcod_cod2::model::register();
+        let dir = args.game_dir.join(&args.mod_dir);
+        let fs = vcod_common::asset_source::open_game_fs(game, &dir, None)
+            .with_context(|| format!("cannot open game data in {}", dir.display()))?;
+        let join = args.probe_team.clone().map(|team| play::cod2::Join {
+            team,
+            weapon: args.probe_weapon.clone(),
+        });
+        return play::cod2::probe(addr, args.probe_secs, &fs, join);
+    }
+    // Bare `vcod --game cod2` opens CoD2's main menu (frontend::cod2).
+    let cod2_menu = game == Game::Cod2
+        && args.map.is_none()
+        && args.connect.is_none()
+        && args.net_probe.is_none()
+        && !args.walk
+        && !args.list;
+    let cod2 = cod2_fly || cod2_connect || cod2_menu;
+    // Bare `vcod` on a CoD4 install opens 1.7's main menu (cod4_front).
+    let cod4_menu = game == Game::Cod4
+        && args.map.is_none()
+        && !cod4_watch
+        && args.net_probe.is_none()
+        && !args.walk
+        && !args.list;
+    if !cod2 && !cod4_fly && !cod4_watch && !cod4_menu {
+        game.ensure_supported()?;
+    }
 
     let dir = args.game_dir.join(&args.mod_dir);
 
@@ -1281,8 +1611,15 @@ fn main() -> Result<()> {
         );
     }
 
-    let fs = Pk3Fs::open_search(&dir, None, None, args.vanilla)
-        .with_context(|| format!("cannot open game data in {}", dir.display()))?;
+    let mut fs = if cod4_fly || cod4_watch || cod4_menu {
+        cod4_fly::open_fs(&args.game_dir, args.fs_game.as_deref(), args.map.as_deref())
+    } else if cod2 {
+        vcod_cod2::model::register();
+        vcod_common::asset_source::open_game_fs(game, &dir, None)
+    } else {
+        Pk3Fs::open_search(&dir, None, None, args.vanilla)
+    }
+    .with_context(|| format!("cannot open game data in {}", dir.display()))?;
 
     if args.list {
         for name in fs.find_maps() {
@@ -1292,10 +1629,39 @@ fn main() -> Result<()> {
     }
 
     // The config's binds and cvars, or the defaults when there is none yet.
-    let config_path = dir.join(CONFIG_FILE);
+    // On CoD2 the active profile's (`players/active.txt`) holds it, seeded
+    // from the mod directory's until the profile has one of its own
+    // (cod2-fonts-menus.md 4.1).
+    let profile = cod2
+        .then(|| frontend::profiles::active_profile(&dir.join("players")))
+        .flatten();
+    // CoD4's sits in the active profile (`players/profiles/active.txt`),
+    // seeded from the `config_mp.cfg` 1.7 wrote there until vcod has
+    // written its own (cod4-front-end.md 3).
+    let cod4_profile = (game == Game::Cod4)
+        .then(|| play::cod4_menus::front::active_profile(&args.game_dir))
+        .flatten()
+        .and_then(|p| play::cod4_menus::front::profile_dir(&args.game_dir, &p));
+    let config_path = match (&profile, &cod4_profile) {
+        (Some(p), _) => dir.join("players").join(p).join(CONFIG_FILE),
+        (None, Some(d)) => d.join(CONFIG_FILE),
+        (None, None) => dir.join(CONFIG_FILE),
+    };
     let mut shell = console::shell::Shell::new();
-    if let Ok(text) = std::fs::read_to_string(&config_path) {
-        for effect in shell.execute(&text) {
+    let retail_config = cod4_profile
+        .as_ref()
+        .map(|d| d.join("config_mp.cfg"))
+        .filter(|p| p.exists());
+    let read_path = if config_path.exists() {
+        config_path.clone()
+    } else if let Some(p) = retail_config {
+        p
+    } else {
+        dir.join(CONFIG_FILE)
+    };
+    let config_text = std::fs::read_to_string(&read_path).ok();
+    if let Some(text) = &config_text {
+        for effect in shell.exec_config(text) {
             if let console::shell::Effect::Print(line) = effect {
                 log::warn!("{CONFIG_FILE}: {line}");
             }
@@ -1305,14 +1671,45 @@ fn main() -> Result<()> {
     // ALT to `+sprint`; a UO config vcod wrote before it had the sprint
     // has no such line, so it gets the default where ALT is free
     // (docs/research/coduo-movement.md, 8).
-    if args.mod_dir.eq_ignore_ascii_case("uo") && shell.bind_if_free("ALT", "+sprint") {
+    if net::protocol::install_protocol(&fs).is_uo() && shell.bind_if_free("ALT", "+sprint") {
         log::info!("{CONFIG_FILE}: bound ALT to +sprint, United Offensive's default");
     }
     if fs.vanilla() {
         shell.set_rom("vc_vanilla", "1");
     }
+    shell.register_aa_samples();
+    shell.register_depth_prepass(game != Game::Cod1);
+    // CoD4's stock keys are CoD2's where vcod has them (frag, smoke,
+    // `toggleads`, `+melee_breath`).
+    if game == Game::Cod4 {
+        shell.register_cod4_options();
+        let n = shell.use_cod4_defaults(config_text.is_some());
+        log::debug!("{CONFIG_FILE}: {n} keys take CoD2's and CoD4's default binds for CoD4");
+    }
+    if game == Game::Cod2 {
+        shell.use_cod2_cvars();
+        if let Some(p) = &profile {
+            shell.execute(&format!("set com_playerProfile \"{p}\""));
+        }
+        let n = shell.use_cod2_binds();
+        log::debug!("{CONFIG_FILE}: {n} keys take CoD2's default binds");
+    }
     // `cl_language` registers after the config ran, taking its value.
     shell.apply_latched();
+    // vcod's old defaults a config still holds go (cod11-console.md 8).
+    let (reset, upgraded) = shell.upgrade_config(game);
+    for name in &reset {
+        log::info!(
+            "{CONFIG_FILE}: {name} was an old vcod default, now {:?}",
+            shell.cvar(name).unwrap_or("")
+        );
+    }
+    if upgraded
+        && config_path.exists()
+        && let Err(e) = std::fs::write(&config_path, shell.config_text())
+    {
+        log::warn!("cannot write {}: {e}", config_path.display());
+    }
     if let Some(v) = args.volume {
         shell.execute(&format!("set mss_volume {v}"));
     }
@@ -1322,7 +1719,71 @@ fn main() -> Result<()> {
         }
     }
 
+    let mut cod2_fs_game = None;
+    let cod2_session = match &args.connect {
+        Some(addr) if cod2_connect => {
+            let t0 = Instant::now();
+            let mut s = play::cod2::Cod2Session::connect(
+                addr,
+                &cod2_front::connect_opts(&shell, &fs),
+                std::time::Duration::from_secs(15),
+            )?;
+            // The gamestate's `fs_game` and downloads, before the map loads.
+            if s.take_reopen(None) {
+                cod2_fs_game = s.fs_game().map(str::to_string);
+                if let Some(g) = &cod2_fs_game {
+                    shell.force("fs_game", g);
+                }
+                fs = play::cod2::open_search(&args.game_dir, cod2_fs_game.as_deref())?;
+            }
+            s.join = args.team.clone().map(|team| play::cod2::Join {
+                team,
+                weapon: args.weapon.clone(),
+            });
+            vcod_common::laps::span(t0, || "cod2 handshake to the gamestate".into());
+            Some(Box::new(s))
+        }
+        _ => None,
+    };
+    // A live CoD4 join runs beside the window, which draws the connect
+    // screen meanwhile (`cod4_loading`).
+    let mut cod4_loading = None;
+    let cod4_session = match (&args.capture, &args.connect) {
+        _ if !cod4_watch => None,
+        (Some(path), _) => {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("cannot read {}", path.display()))?;
+            Some(play::cod4::Cod4Session::open_capture(&text)?)
+        }
+        (None, Some(addr)) => {
+            let server = addr.clone();
+            let addr = std::net::ToSocketAddrs::to_socket_addrs(addr.as_str())?
+                .next()
+                .with_context(|| format!("cannot resolve {addr}"))?;
+            let name = shell.cvar("name").unwrap_or("vcod").to_string();
+            // `cl_allowDownload` and `cl_wwwDownload`, on by default as
+            // 1.7's (cod4-handshake.md 11).
+            let allow = shell.cvar("cl_allowDownload").is_none_or(|v| v != "0");
+            let www = shell.cvar("cl_wwwDownload").is_none_or(|v| v != "0");
+            cod4_loading = Some(cod4_loading::Loader::start(cod4_loading::JoinArgs {
+                addr,
+                server,
+                name,
+                password: shell.cvar("password").unwrap_or("").to_string(),
+                join: play::cod4_menus::Join {
+                    team: args.team.clone(),
+                    class: args.class.clone(),
+                },
+                game_dir: args.game_dir.clone(),
+                allow_download: allow,
+                www_download: www,
+            }));
+            None
+        }
+        (None, None) => None,
+    };
     let net_client = match &args.connect {
+        Some(_) if cod2_connect || cod4_watch => None,
         Some(addr) => {
             let mut net = net::NetClient::connect_from(addr, net::protocol::install_protocol(&fs))
                 .with_context(|| format!("cannot open a socket to {addr}"))?;
@@ -1335,8 +1796,48 @@ fn main() -> Result<()> {
     // Fly and walk need their map up front; online learns it from the
     // server inside the loop and loads through the same path as a map change.
     // With neither, the window opens on the console.
-    let local = if net_client.is_none()
-        && let Some(map) = args.map.as_deref()
+    // A CoD2 server names its map in the gamestate the session waited for.
+    let map_arg = match &cod2_session {
+        _ if let Some(s) = &cod4_session => {
+            Some(s.map_name().context("cod4: no mapname in serverinfo")?)
+        }
+        Some(s) => Some(
+            s.map_name()
+                .context("cod2: no mapname in serverinfo")?
+                .to_string(),
+        ),
+        None => args.map.clone(),
+    };
+    // The session is read on its own thread until the window's first frame
+    // takes it back (play::cod2::Pump): the load can outlast `sv_timeout`.
+    let cod2_pump = cod2_session.map(|s| s.pump());
+    let mut cod4_map = None;
+    let local = if (cod4_fly || cod4_watch)
+        && let Some(map) = map_arg.as_deref()
+    {
+        let ents = cod4_session
+            .as_ref()
+            .map(|s| s.entity_assets())
+            .unwrap_or_default();
+        // A joined server's `fs_game` (configstring 1) over `--fs-game`:
+        // its mod's zone and iwds load before the map (cod4-fastfile.md 13).
+        let fs_game = match &cod4_session {
+            Some(s) => s.fs_game(),
+            None => args.fs_game.clone(),
+        };
+        // Under a mod the level's `usermaps/<map>/` iwds join it too.
+        if fs_game != args.fs_game || fs_game.is_some() {
+            fs = cod4_fly::open_fs(&args.game_dir, fs_game.as_deref(), Some(map))?;
+        }
+        let mut c = cod4_fly::load(&args.game_dir, fs_game.as_deref(), map, &ents)
+            .with_context(|| format!("cannot load CoD4 map '{map}'"))?;
+        for (path, wav) in std::mem::take(&mut c.sound_files) {
+            fs.overlay(&path, wav);
+        }
+        let bsp = std::mem::take(&mut cod4_map.insert(c).bsp);
+        Some((map.to_string(), bsp))
+    } else if net_client.is_none()
+        && let Some(map) = map_arg.as_deref()
     {
         let Some(path) = fs.resolve_map(map) else {
             let all = fs.find_maps();
@@ -1349,10 +1850,17 @@ fn main() -> Result<()> {
             let suggestions = if similar.is_empty() { all } else { similar };
             bail!("map '{map}' not found; similar: {}", suggestions.join(", "));
         };
+        let t0 = Instant::now();
         let data = fs
             .read(&path)
             .with_context(|| format!("cannot read {path}"))?;
-        let bsp = bsp::parse(&data).with_context(|| format!("cannot parse {path}"))?;
+        let bsp = if cod2 {
+            vcod_cod2::world::from_bytes(&data)
+        } else {
+            mapworld::load(&data)
+        }
+        .with_context(|| format!("cannot parse {path}"))?;
+        vcod_common::laps::span(t0, || format!("{map}: read and parse"));
         Some((map.to_string(), bsp))
     } else {
         None
@@ -1383,18 +1891,48 @@ fn main() -> Result<()> {
     let localized = vcod_common::localize::Localized::load(&fs);
 
     // Fly and walk have no aliases, but `.efx` spawns carry cues and need a listener.
-    let mut audio = audio::AudioSystem::new(
-        &fs,
-        audio::AudioOpts {
-            enabled: !args.no_audio,
-            volume: shell.cvar_f32("mss_volume"),
-            rate: audio::bank::mixer_rate(shell.cvar_f32("mss_khz") as i32),
-        },
-    );
+    let audio_opts = audio::AudioOpts {
+        enabled: !args.no_audio,
+        volume: shell.cvar_f32("mss_volume"),
+        rate: audio::bank::mixer_rate(shell.cvar_f32("mss_khz") as i32),
+    };
+    // CoD4's aliases come off its zones (`cod4_audio`) once the session
+    // runs; its search path has no `soundaliases/`.
+    let mut audio = match game {
+        Game::Cod4 => audio::AudioSystem::with_aliases(&fs, audio_opts, Default::default()),
+        _ => audio::AudioSystem::new(&fs, audio_opts),
+    };
     if !audio.enabled() {
         println!("audio: silent (no output device, or --no-audio)");
     }
 
+    // Fly mode over a CoD4 map: its effects, sounds, fog and vision set
+    // without a session.
+    let cod4_fog = cod4_map
+        .as_ref()
+        .and_then(|c| c.look.fly_fog)
+        .map(|f| f.params());
+    let cod4_fly = match cod4_session {
+        None => cod4_map.as_mut().and_then(|c| {
+            let look = std::mem::take(&mut c.look);
+            Some(cod4_fly::FlyAv::new(c.av.take()?, c.ambient.take(), look))
+        }),
+        Some(_) => None,
+    };
+    let cod4_ents = cod4_map
+        .as_mut()
+        .map(|c| {
+            (
+                std::mem::take(&mut c.models),
+                std::mem::take(&mut c.weapons),
+                c.bodies.take(),
+                c.av.take(),
+                c.world.take(),
+                std::mem::take(&mut c.look),
+                std::mem::take(&mut c.parts),
+            )
+        })
+        .unwrap_or_default();
     let (mode, world, title) = if let Some(net) = net_client {
         (
             online_mode(net, args.team.clone(), args.weapon.clone()),
@@ -1403,14 +1941,37 @@ fn main() -> Result<()> {
         )
     } else if let Some((map, bsp)) = local {
         audio.on_gamestate(&map);
+        // CoD2 runs no script in fly mode: the map's own fog call stands in
+        let fog = if cod2_fly {
+            fs.load::<RawFile>(&format!("maps/mp/{map}.gsc"))
+                .ok()
+                .and_then(|g| vcod_cod2::world::script_fog(&g.text()))
+        } else {
+            cod4_fog
+        };
+        if let Some(f) = fog {
+            log::info!("{map}: script fog {f:?}");
+        }
         // No server to send configstring 3; every stock MP map ships an
         // `ambient_<map>` alias (iw_sound.csv), unknown names just stay silent.
-        let ambient = format!("ambient_{map}");
+        // CoD2's are named by the map script's `ambientPlay`.
+        let ambient = match cod2_fly {
+            true => fs
+                .load::<RawFile>(&format!("maps/mp/{map}.gsc"))
+                .ok()
+                .and_then(|g| play::cod2_sound::script_ambient(&g.text()))
+                .unwrap_or_default(),
+            false => format!("ambient_{map}"),
+        };
         audio.set_ambient(&fs, Some(&ambient));
         let mode = if args.walk {
             walk_mode(&map, &bsp, &fs, view_weapon, rigs)?
         } else {
-            Mode::Fly(match bsp::find_spawn(&bsp.entities) {
+            let spawn = match &cod4_map {
+                Some(c) => Some(c.spawn),
+                None => bsp::find_spawn(&bsp.entities),
+            };
+            let cam = match spawn {
                 Some((origin, yaw)) => FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw),
                 None => {
                     let (min, max) = mesh::map_bounds(&bsp);
@@ -1418,32 +1979,58 @@ fn main() -> Result<()> {
                     log::warn!("no player spawn found, starting at the center of the map");
                     FlyCamera::new(center, 0.0)
                 }
-            })
+            };
+            // `--connect` to a CoD2 server: the session is on its pump. A
+            // watched CoD4 session drives the camera the same way.
+            match cod2_pump.is_some() || cod4_session.is_some() {
+                true => Mode::Cod2(cam),
+                false => Mode::Fly(cam),
+            }
         };
         (
             mode,
-            Some(World { bsp }),
+            Some(World {
+                bsp,
+                fog,
+                materials: cod4_map.take().map(|c| c.materials),
+            }),
             format!("{} — {map}", version_tag()),
         )
     } else {
         (Mode::Idle, None, version_tag())
     };
 
-    fx::registry::init(&fs);
+    // CoD4 plays its zones' effects (`cod4_fx`); its search path has no
+    // `fx/*.csv`.
+    if game != Game::Cod4 {
+        fx::registry::init(&fs);
+    }
 
-    let console = console::Console::new(&fs);
+    let console = if game == Game::Cod4 {
+        let font = fs.dirs().first().and_then(|d| cod4_hud::console_font(d));
+        if font.is_none() {
+            log::warn!("console: the zones lack fonts/consoleFont, drawing no text");
+        }
+        console::Console::with_font(font)
+    } else {
+        console::Console::new(&fs)
+    };
     let language = shell.cvar("cl_language").unwrap_or("").to_string();
     // Retail keeps the favourites beside CoDMP.exe; vcod shares the file.
-    let ui = new_ui(&fs, &args.game_dir, &args.mod_dir, &language);
+    let ui = match game {
+        Game::Cod4 => frontend::Ui::without_menus(&fs),
+        _ => new_ui(&fs, &args.game_dir, &args.mod_dir, &language),
+    };
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
         title,
         world,
+        game,
         fs,
         game_dir: args.game_dir.clone(),
         mod_dir: args.mod_dir.clone(),
-        fs_game: None,
+        fs_game: cod2_fs_game,
         fs_pure: None,
         connect_addr: args.connect.clone(),
         team: args.team.clone(),
@@ -1487,24 +2074,60 @@ fn main() -> Result<()> {
         quick_chat: quick_chat::QuickChat::new(0x51ee),
         ui,
         ui_pending: Vec::new(),
+        cod4_fly,
+        cod4_loading,
+        window_size: args.window,
+        exec: args.exec.clone(),
+        exec_in_game: args.exec_in_game.clone(),
+        exec_after: exec_after_queue(&args.exec_after),
+        exec_after_last: None,
+        soak: play::cod1_soak::Soak::from_env(),
         menu_mouse: false,
         os_cursor: true,
         captured: false,
         server_process: None,
+        cod4_parked: None,
         rcon: Default::default(),
+        cod4_rcon: Default::default(),
         timedemo: Default::default(),
         exec_depth: 0,
         error: None,
+        session: match (cod2, cod4_session) {
+            (_, Some(s)) => session::Session::Cod4(Box::new(cod4_client::Cod4Client::new(
+                s,
+                cod4_ents.0,
+                cod4_ents.6,
+                cod4_ents.1,
+                cod4_ents.2,
+                cod4_ents.3,
+                cod4_ents.4,
+                cod4_ents.5,
+            ))),
+            (true, None) => {
+                session::Session::Cod2(Box::new(cod2_client::Cod2Client::new(cod2_pump)))
+            }
+            (false, None) if cod4_menu => session::Session::Cod4Menu(Box::new(
+                cod4_front::Cod4Front::new(args.game_dir.clone()),
+            )),
+            (false, None) => session::Session::Cod1,
+        },
+        wheel: console::keys::WheelNotches::default(),
     };
-    if matches!(app.mode, Mode::Idle) {
+    if matches!(app.mode, Mode::Idle) && app.cod4_loading.is_none() {
         app.enter_menu(None);
     }
-    event_loop.run_app(&mut app)?;
+    let ran = event_loop.run_app(&mut app);
+    frame_prof::flush();
+    if let Some(soak) = &mut app.soak {
+        soak.flush();
+    }
+    ran?;
     // Retail's quit goes through `CL_Disconnect`. Without the `disconnect`
     // the server holds the slot, and anything it owns, until `sv_timeout`.
     if let Mode::Online { net, .. } = &mut app.mode {
         net.disconnect();
     }
+    app.session.shutdown();
     match app.error.take() {
         Some(e) => Err(e),
         None => Ok(()),
@@ -1513,7 +2136,7 @@ fn main() -> Result<()> {
 
 /// vcod's config, beside retail's `config_mp.cfg` in the mod directory and
 /// written the same way (`Shell::config_text`).
-const CONFIG_FILE: &str = "vcod_mp.cfg";
+pub(crate) const CONFIG_FILE: &str = "vcod_mp.cfg";
 
 /// What `--rtx-on` sets: each vcod-only graphics extra at its on value.
 const RTX_ON: [(&str, &str); 10] = [
@@ -1545,13 +2168,47 @@ fn gamma_cvar(shell: &mut console::shell::Shell) -> f32 {
 }
 
 /// What the next renderer loads and samples images with: the latched
+/// The cvars the samplers follow, as one key: `r_textureMode` and CoD4's
+/// mip mode and anisotropy pair.
+fn texture_mode_key(shell: &console::shell::Shell) -> String {
+    [
+        "r_textureMode",
+        "r_texFilterMipMode",
+        "r_texFilterAnisoMin",
+        "r_texFilterAnisoMax",
+    ]
+    .map(|n| shell.cvar(n).unwrap_or_default())
+    .join("|")
+}
+
+/// `filter` under CoD4's `r_texFilterMipMode` (iw3mp.exe 0x62a005), which
+/// forces the mip blend over `r_textureMode`, and the anisotropy pair
+/// (`TextureFilter::cod4_aniso`); unchanged off CoD4.
+fn cod4_filter(
+    shell: &console::shell::Shell,
+    filter: texture_settings::TextureFilter,
+) -> texture_settings::TextureFilter {
+    let Some(mip_mode) = shell.cvar("r_texFilterMipMode") else {
+        return filter;
+    };
+    let forced = match mip_mode {
+        m if m.eq_ignore_ascii_case("Force Bilinear") => "GL_LINEAR_MIPMAP_NEAREST",
+        m if m.eq_ignore_ascii_case("Force Trilinear") => "GL_LINEAR_MIPMAP_LINEAR",
+        _ => "",
+    };
+    let filter = texture_settings::TextureFilter::by_name(forced).unwrap_or(filter);
+    let aniso = |n| atoi_msvc(shell.cvar(n).unwrap_or("1"));
+    filter.cod4_aniso(aniso("r_texFilterAnisoMin"), aniso("r_texFilterAnisoMax"))
+}
+
 /// `r_picmip`, `r_picmip2`, `r_texturebits`, `r_simpleMipMaps` and
-/// `r_weightMipMaps`, and `r_textureMode`, whose unknown names keep `prev`.
+/// `r_weightMipMaps`, and `r_textureMode`, whose unknown names keep `prev`;
+/// on CoD4 its picmip dvars and [`cod4_filter`].
 fn texture_cvars(
     shell: &console::shell::Shell,
     prev: texture_settings::TextureFilter,
 ) -> texture_settings::TextureSettings {
-    texture_settings::TextureSettings::from_cvars(
+    let mut t = texture_settings::TextureSettings::from_cvars(
         [
             "r_picmip",
             "r_picmip2",
@@ -1562,7 +2219,15 @@ fn texture_cvars(
         .map(|n| shell.cvar_f32(n)),
         shell.cvar("r_textureMode").unwrap_or_default(),
         prev,
-    )
+    );
+    // CoD4's picmip dvars, mip mode and anisotropy (cod4-front-end.md 9)
+    if shell.cvar("r_picmip_bump").is_some() {
+        t.set_cod4_picmip(
+            ["r_picmip", "r_picmip_bump", "r_picmip_spec"].map(|n| shell.cvar_f32(n)),
+        );
+        t.filter = cod4_filter(shell, t.filter);
+    }
+    t
 }
 
 /// `vc_hdr` as latched: the scene format the next renderer builds with.
@@ -1593,14 +2258,108 @@ fn frame_min_ms(maxfps: i32) -> u64 {
     }
 }
 
+/// `--exec-after`'s `"SECS LINE"` arguments as a queue; one whose SECS
+/// does not parse runs at once.
+fn exec_after_queue(args: &[String]) -> std::collections::VecDeque<(f32, String)> {
+    args.iter()
+        .map(|a| {
+            let (secs, line) = a.trim().split_once(' ').unwrap_or((a.as_str(), ""));
+            (secs.parse().unwrap_or(0.0), line.trim().to_string())
+        })
+        .collect()
+}
+
+/// A switch cvar, on unless set to 0 (on when unregistered: the CoD4
+/// Options dvars exist only on a CoD4 install).
+/// The CoD4 renderer's dvars, read every frame.
+pub(crate) fn cod4_options(shell: &console::shell::Shell) -> renderer::Cod4Options {
+    renderer::Cod4Options {
+        // `R_UsingGlow` wants both (cod4-world.md 11.4)
+        glow: cvar_on(shell, "r_glow") && cvar_on(shell, "r_glow_allowed"),
+        specular: cvar_on(shell, "r_specular"),
+        water: cvar_on(shell, "r_drawWater"),
+        zfeather: cvar_on(shell, "r_zFeather"),
+        dof: cvar_on(shell, "r_dof_enable"),
+        distortion: cvar_on(shell, "r_distortion"),
+        fog: cvar_on(shell, "r_fog"),
+        normal_maps: cvar_on(shell, "r_vc_normalMaps"),
+        film: cvar_on(shell, "r_vc_film"),
+    }
+}
+
+fn cvar_on(shell: &console::shell::Shell, name: &str) -> bool {
+    shell
+        .cvar(name)
+        .is_none_or(|v| v.trim().parse::<f32>() != Ok(0.0))
+}
+
+/// `--window`'s `WxH`.
+fn parse_window_size(s: &str) -> Result<(u32, u32), String> {
+    video::parse_size(s)
+        .filter(|&(w, h)| w > 0 && h > 0)
+        .ok_or_else(|| format!("{s:?} is not WxH"))
+}
+
+/// The video mode `--window` (`window`) or else the cvars ask for
+/// ([`video::video_mode`]).
+fn video_mode_or(window: Option<(u32, u32)>, shell: &console::shell::Shell) -> video::VideoMode {
+    match window {
+        Some(size) => video::VideoMode {
+            size: Some(size),
+            fullscreen: video::Fullscreen::Windowed,
+            refresh_hz: None,
+        },
+        None => video_mode(shell),
+    }
+}
+
 /// The video mode the cvars ask for ([`video::video_mode`]).
 fn video_mode(shell: &console::shell::Shell) -> video::VideoMode {
     let int = |name| shell.cvar_f32(name) as i32;
-    video::video_mode(
-        int("r_mode"),
+    let mut mode = video::video_mode(
+        shell.cvar("r_mode").unwrap_or("-1"),
         int("r_fullscreen"),
         (int("r_customwidth"), int("r_customheight")),
-    )
+    );
+    // `%i Hz` (`set_cod2_mode_lists`)
+    mode.refresh_hz = shell
+        .cvar("r_displayRefresh")
+        .and_then(|r| r.trim().strip_suffix("Hz")?.trim().parse().ok());
+    mode
+}
+
+/// CoD2's `r_mode` and `r_displayRefresh` as enum dvars over the primary
+/// display's modes ([`video::cod2_mode_lists`]), what the graphics menu's
+/// `dvarEnumList` items step through.
+fn set_cod2_mode_lists(
+    shell: &mut console::shell::Shell,
+    monitor: Option<winit::monitor::MonitorHandle>,
+) {
+    let modes: Vec<_> = monitor
+        .map(|m| {
+            m.video_modes()
+                .map(|v| video::MonitorMode {
+                    size: v.size().into(),
+                    refresh_mhz: v.refresh_rate_millihertz(),
+                    bit_depth: v.bit_depth(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let (sizes, rates) = video::cod2_mode_lists(&modes);
+    log::debug!(
+        "cod2: {} video modes, {} refresh rates",
+        sizes.len(),
+        rates.len()
+    );
+    shell.set_enum_domain("r_mode", sizes);
+    if shell.cvar("r_displayRefresh").is_none() {
+        shell.execute(&format!(
+            "seta r_displayRefresh \"{}\"",
+            rates.first().map_or("", |r| r)
+        ));
+    }
+    shell.set_enum_domain("r_displayRefresh", rates);
 }
 
 /// Puts `window` in `mode`: windowed at its size, borderless over the
@@ -1628,7 +2387,9 @@ fn apply_video_mode(window: &Window, mode: video::VideoMode) {
                 bit_depth: m.bit_depth(),
             })
             .collect();
-        let pick = modes.get(video::closest_mode(want, &infos)?)?.clone();
+        let pick = modes
+            .get(video::closest_mode_at(want, mode.refresh_hz, &infos)?)?
+            .clone();
         log::info!(
             "exclusive fullscreen {}x{} at {} Hz",
             pick.size().width,
@@ -1652,6 +2413,34 @@ fn apply_video_mode(window: &Window, mode: video::VideoMode) {
             window.set_fullscreen(Some(Fullscreen::Borderless(monitor)));
         }
     }
+}
+
+/// One key on an open chat field: `None` while it stays open, `Some(None)`
+/// when Escape (or Enter on an empty line) closes it, `Some(Some(line))`
+/// when Enter sends `line`. The field is 256 bytes and a quote would end
+/// the argument, so neither gets in.
+fn chat_field_key(
+    field: &mut hud::ChatField,
+    code: KeyCode,
+    text: Option<&str>,
+) -> Option<Option<String>> {
+    match code {
+        KeyCode::Escape => return Some(None),
+        KeyCode::Enter | KeyCode::NumpadEnter => {
+            return Some(Some(std::mem::take(&mut field.text)).filter(|l| !l.is_empty()));
+        }
+        KeyCode::Backspace => {
+            field.text.pop();
+        }
+        _ => {
+            for c in text.unwrap_or("").chars() {
+                if (' '..='~').contains(&c) && c != '"' && field.text.len() < 255 {
+                    field.text.push(c);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// `record [name]` on `net` (CoDMP.exe 0x40e540): the file in `dir`, its
@@ -1734,6 +2523,48 @@ const PITCH_CLAMP_SHORT: i16 = 16000;
 /// UO's in a vehicle seat (coduo-vehicles.md 3).
 const SEAT_PITCH_CLAMP: i16 = 12000;
 
+/// Reads every effect the level can play off its events, with their
+/// sprite images and mark materials, and uploads the models it registers,
+/// at the map load: not in the frame that first plays or draws one
+/// (cod11-client-soak.md).
+fn prewarm_level(
+    fx: &mut fx::sim::FxSystem,
+    r: &mut renderer::Renderer,
+    fs: &Pk3Fs,
+    net: &net::NetClient<net::UdpTransport>,
+    live: &mut LivePhase,
+) {
+    let t0 = Instant::now();
+    let mut laps = vcod_common::laps::Laps::new("cod1 level prewarm");
+    let p = net.protocol();
+    let models = live.scene.prewarm(r, fs, net.configstrings(), p);
+    laps.lap("models");
+    let paths = fx::registry::level_effects(net.configstrings(), &p.cs, &live.weapons, p.is_uo());
+    let (mut marks, mut sprites, fx_models) = fx.preload_cod1(fs, paths.iter().map(String::as_str));
+    laps.lap("effects");
+    for m in &fx_models {
+        live.scene.fx_model(r, fs, m);
+    }
+    laps.lap("effect models");
+    sprites.insert(fx::sim::TRACER_SHADER.to_string());
+    // The blob shadows and the coronas draw through the mark pass.
+    marks.insert(blob_shadow::SHADOW_SHADER.to_string());
+    marks.insert(corona::SHADER.to_string());
+    r.prewarm_marks(fs, marks.iter().map(String::as_str));
+    laps.lap("marks");
+    r.prewarm_fx(fs, sprites.iter().map(String::as_str));
+    laps.lap("sprites");
+    laps.finish();
+    log::info!(
+        "level prewarm: {models} models, {} effects, {} effect models, {} mark and {} sprite shaders in {:.0} ms",
+        paths.len(),
+        fx_models.len(),
+        marks.len(),
+        sprites.len(),
+        t0.elapsed().as_secs_f64() * 1000.0
+    );
+}
+
 /// Loads every viewmodel rig configstring 8 registers and uploads its
 /// models, at the map load and on each CS 8 change; rigs already cached
 /// cost a lookup.
@@ -1748,6 +2579,7 @@ fn prewarm_viewmodels(
     for models in &rigs {
         r.preload_viewmodel(fs, models);
     }
+    vcod_common::laps::span(t0, || "viewmodels".into());
     log::info!(
         "viewmodels: {} rigs preloaded in {:.0} ms",
         rigs.len(),
@@ -1823,7 +2655,7 @@ fn start_loading(
         vcod_common::pk3::search_paks(&dir_paths.iter().map(|p| p.as_path()).collect::<Vec<_>>());
     if vanilla {
         let install = net::protocol::install_protocol_of(&paks);
-        paks.retain(|p| vcod_common::pk3::is_vanilla_pak(p, install));
+        paks.retain(|p| vcod_common::pk3::is_vanilla_pak(p, &install.transport));
     }
     let local: Vec<i32> = paks.iter().map(|p| p.checksum).collect();
     let have = |c: i32| local.contains(&c);
@@ -1834,7 +2666,7 @@ fn start_loading(
     if !stock.is_empty() {
         log::warn!(
             "The server's patch {} paks are not in this install: {}",
-            proto.short_version,
+            proto.transport.short_version,
             stock.join(" ")
         );
     }
@@ -1892,7 +2724,11 @@ fn couldnt_load(map: &str) -> String {
 /// The front end off `fs`, with the favourites file and the Mods menu's
 /// directory listing under `game_dir`.
 fn new_ui(fs: &Pk3Fs, game_dir: &std::path::Path, mod_dir: &str, language: &str) -> frontend::Ui {
-    let ui = frontend::Ui::new(fs, language).with_server_cache(game_dir.join("servercache.dat"));
+    let mut ui =
+        frontend::Ui::new(fs, language).with_server_cache(game_dir.join("servercache.dat"));
+    if fs.game() == vcod_common::game::Game::Cod2 {
+        ui.set_profiles_dir(game_dir.join(mod_dir).join("players"));
+    }
     // `--vanilla` loads no mod, so the Mods menu lists none.
     if fs.vanilla() {
         ui
@@ -1941,7 +2777,11 @@ fn reopen_fs(
     fx: &mut fx::sim::FxSystem,
     quick_chat: &mut quick_chat::QuickChat,
 ) -> Result<()> {
-    *fs = Pk3Fs::open_search(base, game, pure, fs.vanilla())?;
+    let cod2 = fs.game() == vcod_common::game::Game::Cod2;
+    *fs = match cod2 {
+        true => Pk3Fs::open_iwd(base, game)?,
+        false => Pk3Fs::open_search(base, game, pure, fs.vanilla())?,
+    };
     *localized = vcod_common::localize::Localized::load(fs);
     match hud {
         Some(h) => {
@@ -1949,7 +2789,8 @@ fn reopen_fs(
                 log::warn!("hud: {e}, keeping the fonts already loaded");
             }
         }
-        None => *hud = hud::Hud::new(fs).ok(),
+        None if !cod2 => *hud = hud::Hud::new(fs).ok(),
+        None => {}
     }
     audio.reopen(fs);
     fx.reopen();
@@ -1958,16 +2799,10 @@ fn reopen_fs(
     Ok(())
 }
 
-/// `maps/mp/<map>.bsp` off the search path, parsed: what `CM_LoadMap`
-/// (CoDMP.exe 0x419c90) and `R_LoadWorldMap` read.
-fn read_map(fs: &Pk3Fs, map: &str) -> Result<bsp::Bsp> {
-    let Some(path) = fs.resolve_map(map) else {
-        bail!("map '{map}' did not resolve in the pk3 search path");
-    };
-    let data = fs
-        .read(&path)
-        .with_context(|| format!("cannot read {path}"))?;
-    bsp::parse(&data).with_context(|| format!("cannot parse {path}"))
+/// `maps/mp/<map>.bsp` off the search path, parsed ([`MapWorld`]'s asset
+/// kind): what `CM_LoadMap` (CoDMP.exe 0x419c90) and `R_LoadWorldMap` read.
+fn read_map(fs: &dyn AssetSource, map: &str) -> Result<MapWorld> {
+    mapworld::find(fs, map).with_context(|| format!("cannot load map '{map}'"))
 }
 
 /// The serverinfo's map and its collision map off `fs`: the CPU half of
@@ -1975,7 +2810,7 @@ fn read_map(fs: &Pk3Fs, map: &str) -> Result<bsp::Bsp> {
 fn reread_live_map(
     fs: &Pk3Fs,
     configstrings: &[String],
-) -> Result<(bsp::Bsp, collision::CollisionWorld)> {
+) -> Result<(MapWorld, collision::CollisionWorld)> {
     let serverinfo = configstrings.first().map_or("", String::as_str);
     let map = net::info_value_for_key(serverinfo, "mapname")
         .context("the server sent no mapname in its serverinfo")?;
@@ -2055,7 +2890,9 @@ fn load_map(
     window: Option<&Window>,
     title: &mut String,
 ) -> Result<Phase> {
+    let mut laps = vcod_common::laps::Laps::new(format!("cod1 map {map}"));
     let bsp = read_map(fs, map)?;
+    laps.lap("bsp");
     // The ambient rides configstring 3 (docs/research/cod11-sound-system.md,
     // section 9); a fresh gamestate may have changed it.
     audio.set_ambient(fs, net::info_value_for_key(net.configstring(3), "n"));
@@ -2063,12 +2900,20 @@ fn load_map(
     if let Some(window) = window {
         window.set_title(title);
     }
+    laps.lap("ambient");
     let phase = live_phase(fs, &bsp, net.configstring(7));
+    laps.lap("collision and weapons");
     r.load_world(&bsp, fs)?;
+    laps.lap("renderer");
+    laps.finish();
     if let Phase::Live(live) = &phase {
         r.set_hud_weapons(Some(&live.weapons));
     }
-    *world = Some(World { bsp });
+    *world = Some(World {
+        bsp,
+        fog: None,
+        materials: None,
+    });
     Ok(phase)
 }
 
@@ -2164,7 +3009,7 @@ fn loading_text(map: &str, progress: Option<loading::Progress>) -> String {
 
 fn walk_mode(
     map: &str,
-    bsp: &bsp::Bsp,
+    bsp: &MapWorld,
     fs: &Pk3Fs,
     view_weapon: Option<Box<viewmodel::ViewWeapon>>,
     rigs: viewmodel::RigCache,
@@ -2224,6 +3069,9 @@ fn walk_mode(
 struct App {
     title: String,
     world: Option<World>,
+    /// The install's game. A CoD4 search path is an iwd one, whose
+    /// `Pk3Fs::game` reads CoD2, so a CoD4 check reads this.
+    game: vcod_common::game::Game,
     fs: Pk3Fs,
     /// Where downloads land and the pk3 path reopens from.
     game_dir: std::path::PathBuf,
@@ -2246,7 +3094,7 @@ struct App {
     /// captures it again.
     grab_before_console: bool,
     mode: Mode,
-    viewmodel: Arc<[xmodel::XModel]>,
+    viewmodel: Arc<[model::Model]>,
     /// Fly-mode keys; walk keeps its own in `Mode::Walk`.
     input: InputState,
     window: Option<Arc<Window>>,
@@ -2303,6 +3151,23 @@ struct App {
     /// Menu effects queued where no event loop is at hand; `about_to_wait`
     /// runs them.
     ui_pending: Vec<frontend::UiEffect>,
+    /// Fly mode's CoD4 map effects and sounds (`cod4_fly::FlyAv`).
+    cod4_fly: Option<cod4_fly::FlyAv>,
+    /// A CoD4 join in flight: the connect screen draws while it runs
+    /// (`cod4_loading`), and its session and map take over once loaded.
+    cod4_loading: Option<cod4_loading::Loader>,
+    /// `--window`'s size, over the cvars' video mode ([`video_mode_or`]).
+    window_size: Option<(u32, u32)>,
+    /// `--exec`'s lines, run at the end of `resumed`.
+    exec: Vec<String>,
+    /// `--exec-in-game`'s, run after the first frame that draws a game.
+    exec_in_game: Vec<String>,
+    /// `--exec-after`'s queue: seconds after the last one ran, the line.
+    exec_after: std::collections::VecDeque<(f32, String)>,
+    /// When the `--exec-in-game` lines or the last `--exec-after` one ran.
+    exec_after_last: Option<std::time::Instant>,
+    /// `VCOD_SOAK`'s player (`play::cod1_soak`).
+    soak: Option<play::cod1_soak::Soak>,
     /// The menus hold the mouse over a game: the cursor shows and moves
     /// over them and the view does not turn ([`Self::sync_menu_mouse`]).
     menu_mouse: bool,
@@ -2314,14 +3179,23 @@ struct App {
     /// The `vcod-server` Start New Server launched; dropping it kills it,
     /// so it goes with the client.
     server_process: Option<frontend::create::ServerProcess>,
+    /// The CoD4 front end while a CoD4 game is up (`cod4_front`).
+    cod4_parked: Option<Box<cod4_front::Cod4Front>>,
     /// `rcon`'s socket while not connected; its `print` replies are polled
     /// each loop.
     rcon: console::rcon::RconSocket,
+    /// CoD2's and CoD4's `rcon login` password and `rcon host` address.
+    cod4_rcon: console::rcon::Cod4Rcon,
     /// The playing demo's `timedemo` count.
     timedemo: play::demos::TimeDemo,
     /// Nested `exec`s running.
     exec_depth: u8,
     error: Option<anyhow::Error>,
+    /// The game's session: CoD2's client, or CoD1's (whose state is
+    /// `mode`, `world` and `hud`).
+    session: session::Session,
+    /// The wheel's turn not yet a whole notch.
+    wheel: console::keys::WheelNotches,
 }
 
 impl App {
@@ -2354,7 +3228,14 @@ impl App {
         };
         match &mut self.mode {
             Mode::Idle => {}
-            Mode::Fly(cam) => cam.look(look.degrees(dx, dy, 1.0, false)),
+            Mode::Fly(cam) => cam.look(look.degrees(dx, dy, self.look_zoom.0, false)),
+            // The session's zoom and shellshock scale the turn.
+            Mode::Cod2(cam) => {
+                cam.look(
+                    self.session
+                        .turn(look.degrees(dx, dy, self.look_zoom.0, false)),
+                )
+            }
             Mode::Online { join, .. } if join.stray_catcher() => {}
             Mode::Online { input, .. } => {
                 let (zoom, mounted) = self.look_zoom;
@@ -2392,7 +3273,9 @@ impl App {
             .window
             .as_ref()
             .is_some_and(|w| w.fullscreen().is_some());
-        let menus = self.ui.active() && !self.bypass_mouse() && (!self.console.open || fullscreen);
+        let menus = (self.ui.active() || self.session.cod4_front_active())
+            && !self.bypass_mouse()
+            && (!self.console.open || fullscreen);
         let want = self.grabbed || menus;
         if want != self.captured
             && let Some(window) = &self.window
@@ -2448,6 +3331,10 @@ impl App {
         match &mut self.mode {
             Mode::Idle => {}
             Mode::Fly(_) => self.input = InputState::default(),
+            Mode::Cod2(_) => {
+                self.input = InputState::default();
+                self.session.release_keys();
+            }
             Mode::Online { input, .. } => input.release_all(),
             Mode::Walk {
                 input,
@@ -2473,12 +3360,16 @@ impl App {
         if let Some(hud) = &mut self.hud {
             hud.scoreboard.hide();
         }
+        self.session.hide_scoreboard();
     }
 
     /// The chat field's keys while it is open, online only. Enter sends
     /// `say "<line>"` the way the console's field does (CoDMP.exe 0x40d40b);
     /// Escape drops the line. False when the key is not the field's.
     fn chat_key(&mut self, code: KeyCode, text: Option<&str>) -> bool {
+        if let Some(taken) = self.session.chat_key(code, text) {
+            return taken;
+        }
         let Mode::Online { net, .. } = &mut self.mode else {
             return false;
         };
@@ -2488,33 +3379,29 @@ impl App {
         let Some(field) = &mut hud.chat_field else {
             return false;
         };
-        match code {
-            KeyCode::Escape => hud.chat_field = None,
-            KeyCode::Enter | KeyCode::NumpadEnter => {
-                if !field.text.is_empty() {
-                    let word = if field.team { "say_team" } else { "say" };
-                    net.send_reliable(&format!("{word} \"{}\"", field.text));
-                }
-                hud.chat_field = None;
+        if let Some(line) = chat_field_key(field, code, text) {
+            if let Some(cmd) = line.and_then(|l| play::cod2::chat_command(field.team, &l)) {
+                net.send_reliable(&cmd);
             }
-            KeyCode::Backspace => {
-                field.text.pop();
-            }
-            _ => {
-                // The field is 256 bytes; a quote would end the argument.
-                for c in text.unwrap_or("").chars() {
-                    if (' '..='~').contains(&c) && c != '"' && field.text.len() < 255 {
-                        field.text.push(c);
-                    }
-                }
-            }
+            hud.chat_field = None;
         }
         true
     }
 
     /// Whether keys go to the console: it is down, or there is nothing else.
+    /// Keys, mouse buttons and the wheel go through the binds: online,
+    /// a CoD2 session included (`Mode::Cod2`,
+    /// `play::cod2_input`).
+    fn plays_binds(&self) -> bool {
+        matches!(self.mode, Mode::Online { .. }) || self.session.live()
+    }
+
     fn console_active(&self) -> bool {
-        self.console.open || (matches!(self.mode, Mode::Idle) && !self.ui.active())
+        self.console.open
+            || (matches!(self.mode, Mode::Idle)
+                && !self.ui.active()
+                && !self.session.cod4_front_active()
+                && self.cod4_loading.is_none())
     }
 
     /// Whether the front end takes the mouse and keys: with no game up, or
@@ -2566,7 +3453,8 @@ impl App {
             return;
         }
         match &mut self.mode {
-            Mode::Online { .. } => self.after_menu(),
+            // CoD2's UI comes back closed too (cod2-sound.md section 9).
+            Mode::Online { .. } | Mode::Cod2(_) => self.after_menu(),
             Mode::Idle => self.enter_menu(None),
             Mode::Fly(_) | Mode::Walk { .. } => {}
         }
@@ -2575,6 +3463,10 @@ impl App {
     /// The main menu, or the error popup over it when `error` says why the
     /// game ended. The map set is the `menu` one too while no game is up.
     fn enter_menu(&mut self, error: Option<&str>) {
+        self.leave_cod4();
+        if self.enter_cod4_menu(error.map(|e| (e, false))) {
+            return;
+        }
         self.audio.on_gamestate("menu");
         hud::font::set_front_end_colours(&self.fs);
         let mut out = Vec::new();
@@ -2591,7 +3483,9 @@ impl App {
         for effect in effects {
             match effect {
                 UiEffect::ScriptMenuResponse { menu, response } => {
-                    if let Mode::Online { net, .. } = &mut self.mode {
+                    if !self.session.menu_response(&menu, &response)
+                        && let Mode::Online { net, .. } = &mut self.mode
+                    {
                         let cmd = play::join::script_menu_response(
                             &menu,
                             &response,
@@ -2623,6 +3517,7 @@ impl App {
                 }
                 UiEffect::RunMod(game) => self.run_mod(game),
                 UiEffect::StartServer(req) => self.start_server(&req),
+                UiEffect::LoadProfile(name) => self.load_profile(&name),
                 UiEffect::ExecOnCvar {
                     cvar,
                     value,
@@ -2741,23 +3636,34 @@ impl App {
         if pressed && !self.grabbed && self.shell.bind_is_gameplay(key) {
             return;
         }
+        // A CoD4 board takes its keys' presses (`Scoreboard_HandleInput`).
+        if pressed {
+            let step = (self.shell.cvar_f32("cg_scoreboardScrollStep") as i32).clamp(1, 8);
+            if self.session.cod4_scoreboard_key(key, step) {
+                return;
+            }
+        }
         // While held the board takes the wheel and the page keys
         // (cgame 0x30027180), `cg_scoreboardScrollStep` items a press.
-        if let Some(hud) = &mut self.hud
-            && hud.scoreboard.held()
-            && matches!(self.mode, Mode::Online { .. })
+        let board = match (&mut self.hud, &self.mode) {
+            (Some(hud), Mode::Online { .. }) => Some(&mut hud.scoreboard),
+            _ if self.session.live() => self.session.scoreboard_mut(),
+            _ => None,
+        };
+        if let Some(board) = board
+            && board.held()
         {
             let step = self.shell.cvar_f32("cg_scoreboardScrollStep") as i32;
             match key {
                 "MWHEELUP" | "PGUP" | "KP_PGUP" => {
                     if pressed {
-                        hud.scoreboard.scroll_up(step);
+                        board.scroll_up(step);
                     }
                     return;
                 }
                 "MWHEELDOWN" | "PGDN" | "KP_PGDN" => {
                     if pressed {
-                        hud.scoreboard.scroll_down(step);
+                        board.scroll_down(step);
                     }
                     return;
                 }
@@ -2772,6 +3678,10 @@ impl App {
     fn apply(&mut self, event_loop: &ActiveEventLoop, effects: Vec<console::shell::Effect>) {
         use console::shell::Effect;
         for effect in effects {
+            // A CoD2 session takes the gameplay binds (play::cod2_input).
+            if self.session.apply(&effect, &self.shell, self.start) {
+                continue;
+            }
             match effect {
                 Effect::Print(line) => console::log::print(&line),
                 Effect::Clear => self.console.clear(),
@@ -2781,22 +3691,42 @@ impl App {
                     None => console::log::print("Not connected to a server."),
                 },
                 Effect::Record(name) => {
-                    let dir = self.demo_dirs()[0].clone();
-                    match &mut self.mode {
-                        Mode::Online { net, .. } => start_record(net, &dir, name.as_deref()),
+                    let dir = match self.session {
+                        session::Session::Cod4(_) => self.cod4_demo_dirs()[0].clone(),
+                        _ => self.demo_dirs()[0].clone(),
+                    };
+                    match (&mut self.mode, self.session.record(&dir, name.as_deref())) {
+                        (_, Some(reply)) => console::log::print(&reply),
+                        (Mode::Online { net, .. }, _) => start_record(net, &dir, name.as_deref()),
                         _ => console::log::print("You must be in a level to record."),
                     }
                 }
-                Effect::StopRecord => match &mut self.mode {
-                    Mode::Online { net, .. } if net.is_recording() => match net.stop_recording() {
-                        Ok(_) => console::log::print("Stopped demo."),
-                        Err(e) => console::log::print(&format!("ERROR: {e}")),
-                    },
+                Effect::StopRecord => match (&mut self.mode, self.session.stop_record()) {
+                    (_, Some(reply)) => console::log::print(&reply),
+                    (Mode::Online { net, .. }, _) if net.is_recording() => {
+                        match net.stop_recording() {
+                            Ok(_) => console::log::print("Stopped demo."),
+                            Err(e) => console::log::print(&format!("ERROR: {e}")),
+                        }
+                    }
                     _ => console::log::print("Not recording a demo."),
                 },
-                Effect::Demo(name) => self.play_demo(&name),
+                Effect::Demo { name, timedemo } => {
+                    if self.game == vcod_common::game::Game::Cod4 {
+                        self.play_cod4_demo(&name, timedemo);
+                    } else if self.fs.game() == vcod_common::game::Game::Cod2 {
+                        self.play_cod2_demo(&name, timedemo);
+                    } else {
+                        self.play_demo(&name);
+                    }
+                }
+                // A CoD4 session's `disconnect` (Leave Game's Yes) leaves
+                // the server for the main menu.
+                Effect::Disconnect if matches!(self.session, session::Session::Cod4(_)) => {
+                    self.disconnect(None)
+                }
                 Effect::Disconnect => {
-                    if matches!(self.mode, Mode::Online { .. }) {
+                    if self.in_game() || self.session.busy() {
                         self.disconnect(None);
                     } else {
                         console::log::print("Not connected to a server.");
@@ -2805,7 +3735,11 @@ impl App {
                 Effect::Quit => event_loop.exit(),
                 Effect::ShellShock(args) => match &mut self.mode {
                     Mode::Online { view, .. } => view.shock_command = Some(args),
-                    _ => console::log::print("Unknown command \"cg_shellshock\""),
+                    _ => {
+                        if self.session.shellshock(args).is_err() {
+                            console::log::print("Unknown command \"cg_shellshock\"")
+                        }
+                    }
                 },
                 Effect::Rcon(args) => self.rcon(&args),
                 Effect::Forward(line) => match &mut self.mode {
@@ -2861,7 +3795,7 @@ impl App {
                             action,
                             play::input::Action::NextWeapon | play::input::Action::PrevWeapon
                         ) && let Some(s) = net.snapshots().newest()
-                            && net.protocol().version == net::protocol::PROTOCOL_V22.version
+                            && net.protocol().is_uo()
                             && s.ps.field_i32(net.protocol(), "eFlags")
                                 & net::flags::EF_IN_VEHICLE_V22
                                 != 0
@@ -2968,6 +3902,7 @@ impl App {
                     if let Mode::Online { net, .. } = &mut self.mode {
                         net.set_userinfo(self.shell.userinfo());
                     }
+                    self.session.set_userinfo(&self.shell.userinfo());
                 }
                 Effect::SaveConfig => {
                     if let Err(e) = std::fs::write(&self.config_path, self.shell.config_text()) {
@@ -2975,6 +3910,8 @@ impl App {
                     }
                 }
                 Effect::Exec(file) => self.exec_file(event_loop, &file),
+                // CoD2's; a CoD1 client has no such command.
+                Effect::OpenScriptMenu { .. } => {}
                 // cgame 0x300140e0: only with the client's own view
                 // (`pm_flags` 0x40000); CoDMP.exe 0x4034f9 adds `CA_ACTIVE`.
                 // The UI closes every menu, then opens `quickmessage` only
@@ -3022,6 +3959,7 @@ impl App {
                     self.vid_restart(event_loop, false);
                 }
                 Effect::VidRestart => self.vid_restart(event_loop, true),
+                Effect::ApplyPicmip => self.apply_picmip(event_loop),
             }
         }
     }
@@ -3046,19 +3984,56 @@ impl App {
         self.vid_restart_ui();
         self.ignore_hw_gamma = ignore_hw_gamma(&self.shell);
         // Retail's `vid_restart` reloads every image; vcod rebuilds
-        // only when the format or an image setting moved.
+        // only when the format, the MSAA or an image setting moved.
+        self.shell.cod4_set_picmip();
         let textures = texture_cvars(&self.shell, self.textures.filter);
-        if self
-            .renderer
-            .as_ref()
-            .is_some_and(|r| r.hdr() != hdr_cvar(&self.shell) || textures != self.textures)
-        {
+        let samples = renderer::aa_samples(self.shell.cvar_f32("r_aaSamples"));
+        if self.renderer.as_ref().is_some_and(|r| {
+            r.hdr() != hdr_cvar(&self.shell)
+                || textures != self.textures
+                || samples != renderer::msaa_samples()
+        }) {
             self.rebuild_renderer(event_loop);
         }
-        if let Some(w) = &self.window {
-            apply_video_mode(w, video_mode(&self.shell));
+        if let Some(w) = self.window.clone() {
+            apply_video_mode(&w, video_mode_or(self.window_size, &self.shell));
+            self.refresh_mode_lists(&w);
         }
         self.restart_cgame();
+    }
+
+    /// The mode lists again off the monitor the window is on: before the
+    /// first window a Wayland session may name no monitor at all, which
+    /// left Video Mode and Refresh Rate empty and greyed in a window.
+    fn refresh_mode_lists(&mut self, window: &Window) {
+        if !matches!(
+            self.fs.game(),
+            vcod_common::game::Game::Cod2 | vcod_common::game::Game::Cod4
+        ) {
+            return;
+        }
+        if let Some(m) = window
+            .current_monitor()
+            .or_else(|| window.primary_monitor())
+        {
+            set_cod2_mode_lists(&mut self.shell, Some(m));
+        }
+    }
+
+    /// CoD4's `r_applyPicmip` (`R_ApplyPicmip`, iw3mp.exe 0x5f2c80):
+    /// `R_SetPicmip` (0x617520), then every material's file-loaded images
+    /// at a picmip that moved are reloaded (0x5f2c20), with no UI restart.
+    /// vcod reloads by rebuilding the renderer, as a `vid_restart` that
+    /// moved an image setting does.
+    fn apply_picmip(&mut self, event_loop: &ActiveEventLoop) {
+        if self.game != vcod_common::game::Game::Cod4 {
+            return;
+        }
+        self.shell.cod4_set_picmip();
+        let textures = texture_cvars(&self.shell, self.textures.filter);
+        if self.renderer.is_some() && textures != self.textures {
+            self.rebuild_renderer(event_loop);
+        }
     }
 
     /// `CL_Vid_Restart_f`'s `S_StopAllSounds(1)` (CoDMP.exe 0x44fa40), with
@@ -3066,24 +4041,41 @@ impl App {
     /// (docs/research/cod11-front-end.md section 17, "The cgame restart").
     /// The offline viewer has no retail counterpart and keeps its ambient.
     fn vid_restart_stop_sounds(&mut self) {
-        if !matches!(self.mode, Mode::Fly(_) | Mode::Walk { .. }) {
+        if !self.mode.keeps_sounds_on_vid_restart() {
             self.audio.stop_all();
         }
     }
 
     /// A renderer for `window` with the current world, submodels and
-    /// viewmodel loaded into it.
+    /// viewmodel loaded into it. A CoD2 session is read on its own thread
+    /// meanwhile: the world's materials take long on a software adapter.
     fn build_renderer(&mut self, window: Arc<Window>) -> Result<Renderer> {
+        self.session.park();
+        let r = self.build_renderer_now(window);
+        self.session.finish_pump();
+        r
+    }
+
+    fn build_renderer_now(&mut self, window: Arc<Window>) -> Result<Renderer> {
         self.textures = texture_cvars(&self.shell, self.textures.filter);
-        self.texture_mode_seen = self
-            .shell
-            .cvar("r_textureMode")
-            .unwrap_or_default()
-            .to_string();
-        let mut r = Renderer::new(window, &self.fs, hdr_cvar(&self.shell), self.textures)?;
+        self.texture_mode_seen = texture_mode_key(&self.shell);
+        let samples = renderer::aa_samples(self.shell.cvar_f32("r_aaSamples"));
+        let mut r = Renderer::new(
+            window,
+            &self.fs,
+            hdr_cvar(&self.shell),
+            self.textures,
+            samples,
+        )?;
         r.set_image_gamma(image_gamma(&mut self.shell, self.ignore_hw_gamma));
         if let Some(w) = &self.world {
+            if let Some(lib) = &w.materials {
+                r.set_material_lib(lib.clone());
+            }
             r.load_world(&w.bsp, &self.fs)?;
+            if w.fog.is_some() {
+                r.set_fog(w.fog, 0.0);
+            }
             // Offline there is no snapshot to place the brush models, so
             // every one stands where the map put it.
             if !matches!(self.mode, Mode::Online { .. }) {
@@ -3124,20 +4116,28 @@ impl App {
                 r.set_hud_weapons(Some(&live.weapons));
             }
         }
+        // The CoD2 draw's model handles died with the old renderer.
+        self.session.reset_render();
+        self.cod4_prewarm();
     }
 
     /// `r_textureMode` is read every frame (`RE_BeginFrame` tests its
     /// modified flag, 0x4de1db) and applied to every mipmapped image in
-    /// place; vcod swaps the renderer's shared samplers.
+    /// place; vcod swaps the renderer's shared samplers. CoD4's
+    /// `r_texFilterMipMode`, `r_texFilterAnisoMin` and
+    /// `r_texFilterAnisoMax` are read every frame too
+    /// (`RB_UpdateBackEndDvarOptions`, iw3mp.exe 0x6154e0).
     fn texture_mode_changed(&mut self) {
-        let mode = self.shell.cvar("r_textureMode").unwrap_or_default();
-        if mode == self.texture_mode_seen {
+        let seen = texture_mode_key(&self.shell);
+        if seen == self.texture_mode_seen {
             return;
         }
-        self.texture_mode_seen = mode.to_string();
+        self.texture_mode_seen = seen;
+        let mode = self.shell.cvar("r_textureMode").unwrap_or_default();
         match texture_settings::TextureFilter::by_name(mode) {
             None => console::log::print("bad filter name"),
             Some(f) => {
+                let f = cod4_filter(&self.shell, f);
                 self.textures.filter = f;
                 if let Some(r) = &mut self.renderer {
                     r.set_texture_filter(f);
@@ -3167,6 +4167,21 @@ impl App {
         let effects = self.shell.execute(&String::from_utf8_lossy(&text));
         self.apply(event_loop, effects);
         self.exec_depth -= 1;
+    }
+
+    /// The drawn `serverTime` (`VCOD_FRAME_DIGEST`'s line,
+    /// `--exec-in-game`): `None` with no game drawn.
+    fn digest_time(&self) -> Option<i32> {
+        if self.session.live() {
+            return self.session.frame_time();
+        }
+        match &self.mode {
+            Mode::Online {
+                phase: Phase::Live(live),
+                ..
+            } => live.clock.delta().map(|_| live.clock.server_time()),
+            _ => None,
+        }
     }
 
     /// Where demos go and are looked for: the server's or the player's mod
@@ -3225,6 +4240,40 @@ impl App {
         }
     }
 
+    /// `demo <name>` / `timedemo <name>` on a CoD2 install (`CL_PlayDemo_f`,
+    /// Mac 0x14c288): `demos/<name>.dm_1` (a name already ending so kept)
+    /// out of [`Self::demo_dirs`], any game left first, the session read
+    /// to its gamestate and its map loaded as a server's
+    /// (docs/research/cod2-demos.md). A missing file is
+    /// `EXE_ERR_NOT_FOUND`.
+    fn play_cod2_demo(&mut self, name: &str, timedemo: bool) {
+        let file = vcod_cod2::net::demo::file_name(name);
+        let path = self
+            .demo_dirs()
+            .into_iter()
+            .map(|d| d.join(&file))
+            .find(|p| p.is_file());
+        if self.in_game() || self.session.busy() {
+            self.disconnect(None);
+        }
+        let Some(path) = path else {
+            return self.disconnect(Some(format!("EXE_ERR_NOT_FOUND\u{15}demos/{file}")));
+        };
+        log::info!("playing {}", path.display());
+        let played = std::fs::read(&path)
+            .map_err(anyhow::Error::from)
+            .and_then(|data| play::cod2::Cod2Session::play_demo(data, timedemo))
+            .and_then(|s| self.enter_cod2(s));
+        if let Err(e) = played {
+            return self.disconnect(Some(format!("{e:#}")));
+        }
+        self.connect_addr = None;
+        self.set_title(format!("{} — demo {name}", version_tag()));
+        if self.console.open {
+            self.toggle_console();
+        }
+    }
+
     /// `Com_Frame`'s wait (CoDMP.exe 0x437f40): a frame starts once the
     /// millisecond clock has moved `frame_min_ms(com_maxfps)` past the last.
     fn pace_frame(&mut self) {
@@ -3244,9 +4293,16 @@ impl App {
     /// disconnect, then `CL_NextDemo` (0x40ed80), which runs `nextdemo`
     /// once and clears it.
     fn demo_completed(&mut self, event_loop: &ActiveEventLoop, now_ms: i32) {
-        if self.shell.cvar_f32("timedemo") != 0.0
-            && let Some(line) = self.timedemo.report(now_ms)
-        {
+        let line = (self.shell.cvar_f32("timedemo") != 0.0)
+            .then(|| self.timedemo.report(now_ms))
+            .flatten();
+        self.demo_finished(event_loop, line);
+    }
+
+    /// `CL_DemoCompleted`'s tail on either game: the `timedemo` line when
+    /// there is one, the disconnect, then `nextdemo`.
+    fn demo_finished(&mut self, event_loop: &ActiveEventLoop, timedemo: Option<String>) {
+        if let Some(line) = timedemo {
             console::log::print(&line);
         }
         self.disconnect(None);
@@ -3260,13 +4316,19 @@ impl App {
         }
     }
 
-    /// `connect`: leaves any server first, then joins `addr` the way
-    /// `--connect` does. Like retail's `CL_Connect_f`, it closes the console.
     /// `rcon` (CoDMP.exe 0x40f880): to the server once its `connectResponse`
     /// came, else to `rconAddress` (port 28960 when it names none). A bad
-    /// address sends nothing, as retail's `NA_BAD` does.
+    /// address sends nothing, as retail's `NA_BAD` does. CoD2 and CoD4 log
+    /// in instead (`Session::login_rcon`).
     fn rcon(&mut self, args: &[String]) {
         use console::rcon;
+        if let Some(lines) = self
+            .session
+            .login_rcon(&mut self.cod4_rcon, &mut self.rcon, args)
+        {
+            lines.iter().for_each(|l| console::log::print(l));
+            return;
+        }
         let password = self.shell.cvar("rconPassword").unwrap_or("");
         let Some(packet) = rcon::packet(password, args) else {
             console::log::print(rcon::TOO_LONG);
@@ -3292,6 +4354,8 @@ impl App {
         }
     }
 
+    /// `connect`: leaves any server first, then joins `addr` the way
+    /// `--connect` does. Like retail's `CL_Connect_f`, it closes the console.
     fn connect(&mut self, addr: String) {
         if matches!(self.mode, Mode::Online { .. }) {
             self.disconnect(None);
@@ -3304,6 +4368,18 @@ impl App {
         {
             self.server_process = None;
         }
+        // A CoD4 install's search path reads as CoD2's (`iw_*.iwd`); its
+        // session says which it is.
+        if matches!(
+            self.session,
+            session::Session::Cod4(_) | session::Session::Cod4Menu(_)
+        ) {
+            let password = self.shell.cvar("password").unwrap_or("").to_string();
+            return self.connect_cod4(addr, password);
+        }
+        if self.fs.game() == vcod_common::game::Game::Cod2 {
+            return self.connect_cod2(addr);
+        }
         let install = net::protocol::install_protocol(&self.fs);
         let mut net = match net::NetClient::connect_from(&addr, install) {
             Ok(net) => net,
@@ -3314,6 +4390,7 @@ impl App {
         };
         net.set_userinfo(self.shell.userinfo());
         log::info!("connecting to {addr}");
+        vcod_common::laps::begin_load(format!("cod1 connect {addr}"));
         if self.hud.is_none() {
             self.hud = hud::Hud::new(&self.fs)
                 .map_err(|e| log::warn!("hud: {e}, disabling the on-screen HUD"))
@@ -3336,9 +4413,18 @@ impl App {
     /// reaches `com_errorMessage` (CoDMP.exe 0x435a40,
     /// docs/research/cod11-front-end.md section 15).
     fn disconnect(&mut self, reason: Option<String>) {
+        // A CoD4 join still on the connect screen is called off, back to
+        // the main menu when nothing says why.
+        if reason.is_none() && self.cancel_cod4_join() {
+            return;
+        }
+        if let Some(l) = self.cod4_loading.take() {
+            l.cancel();
+        }
         if let Mode::Online { net, .. } = &mut self.mode {
             net.disconnect();
         }
+        self.leave_cod2();
         let mut reason = reason.map(|r| self.localized.message(&r));
         // A server Start New Server launched that died says why in its log.
         if let (Some(r), Some(server)) = (&mut reason, &mut self.server_process)
@@ -3360,7 +4446,14 @@ impl App {
             log::error!("{reason}");
         }
         self.unload_world();
-        self.leave_fs_game();
+        // CoD4's search path is its own (`cod4_front::leave_cod4`).
+        let cod4 = matches!(
+            self.session,
+            session::Session::Cod4(_) | session::Session::Cod4Menu(_)
+        );
+        if !cod4 {
+            self.leave_fs_game();
+        }
         self.mode = Mode::Idle;
         self.set_grab(false);
         self.set_title(version_tag());
@@ -3440,6 +4533,36 @@ impl App {
     /// reopens under the server's pure list, the UI reloads closed and the
     /// cgame half sends `cp` again (CoDMP.exe 0x40fbe0,
     /// docs/research/cod11-front-end.md section 17).
+    /// CoD2's `Com_ChangePlayerProfile` (Mac 0x111936): `players/active.txt`
+    /// names the profile, `com_playerProfile` holds it and its config file
+    /// takes over, run when it has one, else written from what is set now.
+    /// Retail resets every dvar first; vcod keeps what the file does not set.
+    fn load_profile(&mut self, name: &str) {
+        let players = self.game_dir.join(&self.mod_dir).join("players");
+        if let Err(e) = std::fs::write(players.join("active.txt"), name) {
+            log::warn!("cannot write {}: {e}", players.join("active.txt").display());
+        }
+        self.config_path = players.join(name).join(CONFIG_FILE);
+        self.shell
+            .execute(&format!("set com_playerProfile \"{name}\""));
+        match std::fs::read_to_string(&self.config_path) {
+            Ok(text) => {
+                self.shell.exec_config(&text);
+                if self.shell.upgrade_config(vcod_common::game::Game::Cod2).1
+                    && let Err(e) = std::fs::write(&self.config_path, self.shell.config_text())
+                {
+                    log::warn!("cannot write {}: {e}", self.config_path.display());
+                }
+            }
+            Err(_) => {
+                if let Err(e) = std::fs::write(&self.config_path, self.shell.config_text()) {
+                    log::warn!("cannot write {}: {e}", self.config_path.display());
+                }
+            }
+        }
+        log::info!("player profile {name}: {}", self.config_path.display());
+    }
+
     fn run_mod(&mut self, game: Option<String>) {
         log::info!("fs_game {}", game.as_deref().unwrap_or("(none)"));
         self.shell.force("fs_game", game.as_deref().unwrap_or(""));
@@ -3511,7 +4634,11 @@ impl App {
         if let Some(r) = &mut self.renderer {
             r.load_world(&bsp, &self.fs)?;
         }
-        self.world = Some(World { bsp });
+        self.world = Some(World {
+            bsp,
+            fog: None,
+            materials: None,
+        });
         Ok(())
     }
 
@@ -3555,9 +4682,176 @@ impl App {
                 r.set_hud_weapons(Some(&live.weapons));
             }
             prewarm_viewmodels(view, r, &self.fs, net.configstrings());
+            if let Phase::Live(live) = &mut *phase {
+                prewarm_level(&mut self.fx, r, &self.fs, net, live);
+            }
         }
         let feed = net.gamestate().map_or(0, |g| g.checksum_feed);
         net.send_reliable(&self.fs.pure_command(feed, net.protocol().pure_dlls));
+    }
+
+    /// A CoD2 session's level change, before the frame: a server drop ends
+    /// the game with its reason (the caller's error popup), and a gamestate for another map loads
+    /// that map with the session on its pump (play::cod2).
+    fn cod2_level(&mut self) -> Result<()> {
+        let Some(map) = self.session.take_level_change()? else {
+            return Ok(());
+        };
+        vcod_common::laps::begin_load(format!("cod2 map change {map}"));
+        self.reopen_cod2_fs()?;
+        let bsp = self.load_cod2_map(&map)?;
+        self.world = Some(World {
+            bsp,
+            fog: None,
+            materials: None,
+        });
+        self.fx.clear();
+        self.session.reset_view_fx();
+        self.audio.on_gamestate(&map);
+        self.set_title(format!("{} — {map}", version_tag()));
+        Ok(())
+    }
+
+    /// A CoD4 session's map change, before the frame: a gamestate naming
+    /// another map loads it as the start-up does (`cod4_fly::load` over the
+    /// gamestate's models and weapons) and hands the session its parts.
+    fn cod4_level(&mut self) -> Result<()> {
+        let Some(c) = self.session.cod4_mut() else {
+            return Ok(());
+        };
+        let Some(map) = c.session.take_map_change() else {
+            return Ok(());
+        };
+        vcod_common::laps::begin_load(format!("cod4 map change {map}"));
+        let t0 = Instant::now();
+        let ents = c.session.entity_assets();
+        let fs_game = c.session.fs_game();
+        let (mut m, hud) =
+            cod4_fly::load_with_hud(&self.game_dir, fs_game.as_deref(), &map, &ents, None)
+                .with_context(|| format!("cannot load CoD4 map '{map}'"))?;
+        c.install_hud(hud);
+        vcod_common::laps::span(t0, || "cod4 map".into());
+        // The image search path follows the new level's `fs_game` and
+        // usermap, as the zones do (cod4-fastfile.md 13).
+        self.fs = cod4_fly::open_fs(&self.game_dir, fs_game.as_deref(), Some(&map))?;
+        for (path, wav) in std::mem::take(&mut m.sound_files) {
+            self.fs.overlay(&path, wav);
+        }
+        c.new_map(
+            std::mem::take(&mut m.models),
+            std::mem::take(&mut m.parts),
+            std::mem::take(&mut m.weapons),
+            m.bodies.take(),
+            m.av.take(),
+            m.world.take(),
+            std::mem::take(&mut m.look),
+        );
+        let bsp = std::mem::take(&mut m.bsp);
+        if let Some(r) = &mut self.renderer {
+            r.set_material_lib(m.materials.clone());
+            r.load_world(&bsp, &self.fs)?;
+        }
+        self.world = Some(World {
+            bsp,
+            fog: None,
+            materials: Some(m.materials),
+        });
+        self.fx.clear();
+        self.cod4_prewarm();
+        self.set_title(format!("{} — {map}", version_tag()));
+        Ok(())
+    }
+
+    /// The CoD4 level's first-use builds before its first frame, while the
+    /// loading screen is still up ([`cod4_client::Cod4Client::prewarm`]).
+    fn cod4_prewarm(&mut self) {
+        let (Some(c), Some(r)) = (self.session.cod4_mut(), &mut self.renderer) else {
+            return;
+        };
+        let mut cx = cod2_client::Cod2Frame {
+            fs: &self.fs,
+            shell: &self.shell,
+            localized: &self.localized,
+            audio: &mut self.audio,
+            fx: &mut self.fx,
+            ui: &self.ui,
+            r,
+            console_open: self.console.open,
+            time: 0.0,
+            dt: 0.0,
+        };
+        let t0 = Instant::now();
+        c.prewarm(&mut cx);
+        vcod_common::laps::span(t0, || "cod4 prewarm".into());
+    }
+
+    /// The CoD4 join's end, once it comes: its session and loaded map
+    /// take over as the start-up's do (the search path under the level's
+    /// `fs_game`, the session's parts, the world, the camera).
+    fn cod4_join_frame(&mut self) -> Result<()> {
+        let Some(l) = &mut self.cod4_loading else {
+            return Ok(());
+        };
+        let Some(done) = l.poll() else {
+            return Ok(());
+        };
+        vcod_common::laps::mark(|| "cod4 join thread done".into());
+        self.cod4_loading = None;
+        let cod4_loading::Joined {
+            session,
+            mut map,
+            map_name,
+            fs_game,
+            hud,
+        } = match done {
+            Ok(j) => j,
+            Err(e) => {
+                self.cod4_join_failed(&format!("{e:#}"));
+                return Ok(());
+            }
+        };
+        self.fs = cod4_fly::open_fs(&self.game_dir, fs_game.as_deref(), Some(&map_name))?;
+        for (path, wav) in std::mem::take(&mut map.sound_files) {
+            self.fs.overlay(&path, wav);
+        }
+        let mut client = cod4_client::Cod4Client::new(
+            session,
+            std::mem::take(&mut map.models),
+            std::mem::take(&mut map.parts),
+            std::mem::take(&mut map.weapons),
+            map.bodies.take(),
+            map.av.take(),
+            map.world.take(),
+            std::mem::take(&mut map.look),
+        );
+        client.install_hud(hud);
+        // The front end waits for the game to end (`cod4_front`); its music
+        // ends with it.
+        let front = std::mem::replace(&mut self.session, session::Session::Cod4(Box::new(client)));
+        if let session::Session::Cod4Menu(f) = front {
+            self.cod4_parked = Some(f);
+        }
+        self.audio.music_stop(0);
+        if self.console.open {
+            self.toggle_console();
+        }
+        let bsp = std::mem::take(&mut map.bsp);
+        if let Some(r) = &mut self.renderer {
+            r.set_material_lib(map.materials.clone());
+            r.load_world(&bsp, &self.fs)?;
+        }
+        self.world = Some(World {
+            bsp,
+            fog: None,
+            materials: Some(map.materials),
+        });
+        self.audio.on_gamestate(&map_name);
+        self.cod4_prewarm();
+        let (origin, yaw) = map.spawn;
+        self.mode = Mode::Cod2(FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw));
+        self.set_title(format!("{} — {map_name}", version_tag()));
+        self.set_grab(true);
+        Ok(())
     }
 
     /// Drops the map, its sounds and effects, between servers.
@@ -3566,6 +4860,7 @@ impl App {
             r.unload_world();
             r.set_hud_weapons(None);
             r.set_screen_blend(None);
+            r.set_world_blur(0.0);
         }
         self.world = None;
         self.fx.clear();
@@ -3617,8 +4912,38 @@ impl App {
         self.sync_menu_mouse();
     }
 
+    /// Esc in a CoD2 game with no menu up: `UI_SetActiveMenu` case 2
+    /// (Mac 0x15118e) opens the menu `g_scriptMainMenu` names, else the
+    /// main menu over the game.
+    fn escape_in_cod2(&mut self) {
+        let mut out = Vec::new();
+        if !self.session.escape(&mut self.ui, &self.shell, &mut out) {
+            return;
+        }
+        self.ui_pending.extend(out);
+        self.grab_before_console = false;
+        self.sync_menu_mouse();
+    }
+
+    /// The CoD2 session's script menus, once a frame: each gamestate
+    /// loads the precached ones into the UI (closing what was up), the
+    /// `v` the session left to the player set cvars, its `t`, `u` and `K`
+    /// go through [`frontend::cod2::menu_command`], and a refused `t` is
+    /// offered again.
+    fn cod2_script_menus(&mut self) {
+        if self.session.script_menus(
+            &mut self.ui,
+            &self.fs,
+            &mut self.shell,
+            &mut self.ui_pending,
+        ) {
+            self.sync_menu_mouse();
+        }
+    }
+
     fn playing_demo(&self) -> bool {
         matches!(&self.mode, Mode::Online { net, .. } if net.is_demo())
+            || self.session.playing_demo()
     }
 
     /// A key under 128 or MOUSE1 in a demo with no menu, console or chat
@@ -3631,7 +4956,21 @@ impl App {
     /// Esc with no menu up: the in-game menus online, a mouse release
     /// offline.
     fn escape(&mut self) {
-        if matches!(self.mode, Mode::Online { .. }) {
+        // A CoD4 session's menus took Esc first (`Cod4Client::menu_key`):
+        // here it frees the mouse. On the connect screen it calls the join
+        // off.
+        if self.cancel_cod4_join() {
+            return;
+        }
+        // A CoD4 demo leaves for the main menu, as CoD2's does
+        // (cod4-demos.md 5).
+        if matches!(self.session, session::Session::Cod4(_)) && self.session.playing_demo() {
+            self.disconnect(None);
+            return;
+        }
+        if self.session.live() && !matches!(self.session, session::Session::Cod4(_)) {
+            self.escape_in_cod2();
+        } else if matches!(self.mode, Mode::Online { .. }) {
             self.escape_in_game();
         } else {
             self.set_grab(false);
@@ -3666,7 +5005,7 @@ impl App {
     /// back to the view once they let go; the held keys let go as the
     /// menus take it.
     fn sync_menu_mouse(&mut self) {
-        if !matches!(self.mode, Mode::Online { .. }) {
+        if !self.in_game() {
             self.menu_mouse = false;
             return;
         }
@@ -3691,10 +5030,7 @@ impl App {
     /// The last menu over a game closed (Back to Game, Esc): the mouse goes
     /// back to the game unless the menus or the console still hold it.
     fn after_menu(&mut self) {
-        if matches!(self.mode, Mode::Online { .. })
-            && !(self.ui.active() && !self.bypass_mouse())
-            && !self.console.open
-        {
+        if self.in_game() && !(self.ui.active() && !self.bypass_mouse()) && !self.console.open {
             self.menu_mouse = false;
             self.set_grab(true);
         }
@@ -3707,7 +5043,7 @@ impl App {
 /// error the caller drops the game with.
 fn load_script_menus(
     ui: &mut frontend::Ui,
-    fs: &Pk3Fs,
+    fs: &dyn AssetSource,
     shell: &console::shell::Shell,
     configstrings: &[String],
     cs: &net::protocol::CsLayout,
@@ -3728,11 +5064,23 @@ impl ApplicationHandler for App {
         let mut attrs = Window::default_attributes()
             .with_title(&self.title)
             .with_inner_size(winit::dpi::LogicalSize::new(1600.0, 900.0));
-        let mode = video_mode(&self.shell);
+        // CoD4 1.7's lists are built alike (`%ix%i` of at least 640 x 480,
+        // `%i Hz`; iw3mp.exe 0x5f42f0, 0x5f4305, 0x5f43f5).
+        if matches!(
+            self.fs.game(),
+            vcod_common::game::Game::Cod2 | vcod_common::game::Game::Cod4
+        ) {
+            let monitor = event_loop
+                .primary_monitor()
+                .or_else(|| event_loop.available_monitors().next());
+            set_cod2_mode_lists(&mut self.shell, monitor);
+        }
+        let mode = video_mode_or(self.window_size, &self.shell);
         self.ignore_hw_gamma = ignore_hw_gamma(&self.shell);
         if let Some((w, h)) = mode.size {
             attrs = attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h));
         }
+        let t_window = Instant::now();
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -3746,16 +5094,22 @@ impl ApplicationHandler for App {
         if mode.fullscreen != video::Fullscreen::Windowed {
             apply_video_mode(&window, mode);
         }
+        self.refresh_mode_lists(&window);
         match self.build_renderer(window.clone()) {
             Ok(r) => self.renderer = Some(r),
             Err(e) => return self.fail(event_loop, e),
         }
+        vcod_common::laps::span(t_window, || "window and renderer".into());
         // The title was built before the backend was known.
         self.title = self.title.replacen(TITLE, &version_tag(), 1);
         window.set_title(&self.title);
         window.request_redraw();
         self.window = Some(window);
         self.last_frame = Instant::now();
+        for line in std::mem::take(&mut self.exec) {
+            let effects = self.shell.execute(&line);
+            self.apply(event_loop, effects);
+        }
     }
 
     // The loop runs `ControlFlow::Poll`, so this sees a signal within a frame.
@@ -3764,8 +5118,18 @@ impl ApplicationHandler for App {
             event_loop.exit();
         }
         self.poll_server_join();
-        for text in self.rcon.poll() {
+        self.poll_cod2_connect();
+        self.cod4_front_requests();
+        for text in self
+            .rcon
+            .poll()
+            .into_iter()
+            .chain(self.session.take_prints())
+        {
             console::log::print(&text);
+        }
+        for line in self.session.take_menu_console() {
+            self.ui_pending.push(frontend::UiEffect::Command(line));
         }
         let pending = std::mem::take(&mut self.ui_pending);
         self.ui_effects(event_loop, pending);
@@ -3805,8 +5169,13 @@ impl ApplicationHandler for App {
                 }
                 // ` and ~ toggle the console whatever they are bound to
                 // (CoDMP.exe 0x40dc30).
+                // CoD4's `monkeytoy` 1 (Enable Console No) keeps a closed
+                // console closed (iw3mp.exe 0x467fb9; cod4-front-end.md 9).
                 if code == KeyCode::Backquote {
-                    if pressed && !event.repeat {
+                    let restricted = self.game == vcod_common::game::Game::Cod4
+                        && !self.console.open
+                        && self.shell.cvar_f32("monkeytoy") != 0.0;
+                    if pressed && !event.repeat && !restricted {
                         self.toggle_console();
                     }
                     return;
@@ -3818,10 +5187,15 @@ impl ApplicationHandler for App {
                     match code {
                         // In a game Esc reaches the menus under the console
                         // and leaves it down (CoDMP.exe 0x40ddca, 0x4180a0).
-                        KeyCode::Escape
-                            if self.console.open && matches!(self.mode, Mode::Online { .. }) =>
-                        {
-                            if self.ui.active() {
+                        KeyCode::Escape if self.console.open && self.in_game() => {
+                            // A CoD4 session's script menus take it first
+                            // (`Cod4Client::menu_key`), then it frees the
+                            // mouse.
+                            if matches!(self.session, session::Session::Cod4(_)) {
+                                if self.session.chat_key(code, None) != Some(true) {
+                                    self.escape();
+                                }
+                            } else if self.ui.active() {
                                 let (_, effects) = self.ui.key(code, &self.shell);
                                 self.ui_effects(event_loop, effects);
                             } else {
@@ -3925,7 +5299,7 @@ impl ApplicationHandler for App {
                     self.cull_mode = self.cull_mode.next();
                     return;
                 }
-                if matches!(self.mode, Mode::Online { .. }) {
+                if self.plays_binds() {
                     if let Some(key) = console::keys::key_name(code) {
                         self.bound_key(event_loop, key, pressed);
                     }
@@ -3934,7 +5308,7 @@ impl ApplicationHandler for App {
                 let grabbed = self.grabbed;
                 match &mut self.mode {
                     Mode::Idle | Mode::Online { .. } => {}
-                    Mode::Fly(_) => match code {
+                    Mode::Fly(_) | Mode::Cod2(_) => match code {
                         KeyCode::KeyW => self.input.forward = pressed,
                         KeyCode::KeyS => self.input.back = pressed,
                         KeyCode::KeyA => self.input.left = pressed,
@@ -3979,6 +5353,17 @@ impl ApplicationHandler for App {
                 // Only where the pointer cannot be captured: a captured one
                 // moves the cursor by its deltas (`device_event`).
                 if !self.captured
+                    && let Some(r) = &self.renderer
+                {
+                    let at = [position.x as f32, position.y as f32];
+                    if self
+                        .session
+                        .cod4_menu_mouse(None, Some(at), r.screen_size())
+                    {
+                        return;
+                    }
+                }
+                if !self.captured
                     && self.menu_takes_mouse()
                     && let Some(r) = &self.renderer
                 {
@@ -4014,6 +5399,21 @@ impl ApplicationHandler for App {
                 if self.console_active() {
                     return;
                 }
+                // A CoD4 script menu takes the buttons; MOUSE1 clicks it, a
+                // waiting bind row takes any (`Cod4Client::menu_button`).
+                if self.session.cod4_menu_has_mouse() {
+                    if !pressed && button == MouseButton::Left {
+                        self.session.cod4_menu_release();
+                    }
+                    if pressed
+                        && let Some(key) = console::keys::mouse_name(button)
+                        && let Some(r) = &self.renderer
+                    {
+                        let size = r.screen_size();
+                        self.session.cod4_menu_button(key, size);
+                    }
+                    return;
+                }
                 if button == MouseButton::Left && pressed && self.playing_demo() {
                     self.demo_key();
                     return;
@@ -4026,7 +5426,7 @@ impl ApplicationHandler for App {
                 if pressed && self.eat_stray_key() {
                     return;
                 }
-                if matches!(self.mode, Mode::Online { .. }) {
+                if self.plays_binds() {
                     if let Some(key) = console::keys::mouse_name(button) {
                         self.bound_key(event_loop, key, pressed);
                     }
@@ -4050,14 +5450,15 @@ impl ApplicationHandler for App {
                         MouseButton::Right => *ads_held = pressed,
                         _ => {}
                     },
-                    Mode::Idle | Mode::Online { .. } | Mode::Fly(_) => {}
+                    Mode::Idle | Mode::Online { .. } | Mode::Fly(_) | Mode::Cod2(_) => {}
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                // One press a whole notch (console::keys::WheelNotches).
                 let scroll = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y,
-                    MouseScrollDelta::PixelDelta(p) => p.y as f32 / 60.0,
-                };
+                    MouseScrollDelta::LineDelta(_, y) => self.wheel.step(Some(y), None),
+                    MouseScrollDelta::PixelDelta(p) => self.wheel.step(None, Some(p.y as f32)),
+                } as f32;
                 if self.menu_takes_mouse() {
                     if scroll != 0.0 && self.ui.waiting_for_key() {
                         let key = if scroll > 0.0 {
@@ -4079,10 +5480,22 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
-                let grabbed = self.grabbed;
-                match &mut self.mode {
-                    Mode::Fly(cam) => cam.adjust_speed(scroll),
-                    Mode::Online { .. } if grabbed && scroll != 0.0 => {
+                if self.session.cod4_menu_has_mouse() {
+                    if scroll != 0.0
+                        && let Some(r) = &self.renderer
+                    {
+                        let key = if scroll > 0.0 {
+                            "MWHEELUP"
+                        } else {
+                            "MWHEELDOWN"
+                        };
+                        let size = r.screen_size();
+                        self.session.cod4_menu_button(key, size);
+                    }
+                    return;
+                }
+                if self.plays_binds() {
+                    if self.grabbed && scroll != 0.0 {
                         let key = if scroll < 0.0 {
                             "MWHEELDOWN"
                         } else {
@@ -4091,15 +5504,23 @@ impl ApplicationHandler for App {
                         if self.eat_stray_key() {
                             return;
                         }
-                        self.bound_key(event_loop, key, true);
-                        self.bound_key(event_loop, key, false);
+                        for _ in 0..scroll.abs() as i32 {
+                            self.bound_key(event_loop, key, true);
+                            self.bound_key(event_loop, key, false);
+                        }
                     }
-                    _ => {}
+                } else if let Mode::Fly(cam) | Mode::Cod2(cam) = &mut self.mode {
+                    cam.adjust_speed(scroll);
                 }
             }
             WindowEvent::RedrawRequested => {
-                self.pace_frame();
+                {
+                    let _pace = frame_prof::span(frame_prof::Stage::Pace);
+                    self.pace_frame();
+                }
+                let frame_start = Instant::now();
                 self.mouse_frame();
+                self.cod2_script_menus();
                 let now = Instant::now();
                 let dt = (now - self.last_frame).as_secs_f32().min(0.1);
                 self.last_frame = now;
@@ -4111,14 +5532,63 @@ impl ApplicationHandler for App {
                 let eject_brass = self.shell.cvar_f32("cg_brass") as i32 != 0;
                 self.texture_mode_changed();
                 self.audio
-                    .set_master_volume(self.shell.cvar_f32("mss_volume"));
+                    .set_master_volume(self.shell.cvar_f32(audio::volume_cvar(&self.shell)));
                 let demo_dirs = self.demo_dirs();
                 let gamma = gamma_cvar(&mut self.shell);
                 let fullscreen = self
                     .window
                     .as_ref()
                     .is_some_and(|w| w.fullscreen().is_some());
-                let overbright = gamma::overbright_bits(fullscreen, !self.ignore_hw_gamma);
+                let overbright =
+                    gamma::overbright_bits(self.fs.game(), fullscreen, !self.ignore_hw_gamma);
+                // A drop or a failed map load ends the game for the main
+                // menu with its reason, as a CoD1 server's does.
+                if let Err(e) = self.cod2_level() {
+                    self.disconnect(Some(format!("{e:#}")));
+                }
+                // The join in flight: its session and map once loaded; a
+                // refused or failed join or load comes back to the main
+                // menu with its reason.
+                if let Err(e) = self.cod4_join_frame() {
+                    self.unload_world();
+                    self.cod4_join_failed(&format!("{e:#}"));
+                }
+                // A CoD4 map that fails to load ends the game for the main
+                // menu with its reason.
+                if let Err(e) = self.cod4_level() {
+                    self.disconnect(Some(format!("{e:#}")));
+                }
+                // A CoD4 drop (`w`, an out-of-band `disconnect`, `cl_timeout`
+                // of silence) ends the game for the main menu, its reason
+                // the server's notice (`Com_SetErrorMessage`).
+                if let Some(why) = self
+                    .session
+                    .cod4_mut()
+                    .and_then(|c| c.session.take_dropped())
+                {
+                    let why = play::cod4::localize_drop(&why, &self.game_dir);
+                    log::error!("{why}");
+                    self.leave_cod4_game(Some((&why, true)));
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+                // The CoD4 systeminfo's dvars, `sv_cheats` among them
+                // (`CL_SystemInfoChanged`, iw3mp.exe 0x473ab0).
+                if let Some(si) = self
+                    .session
+                    .cod4_mut()
+                    .and_then(|c| c.session.take_systeminfo())
+                {
+                    let out = self.shell.apply_systeminfo(&si);
+                    self.apply(event_loop, out);
+                }
+                // A CoD2 demo played out (`CL_DemoCompleted`, Mac 0x14c096).
+                if let Some(line) = self.session.demo_over() {
+                    self.demo_finished(event_loop, line);
+                    return;
+                }
                 let Some(r) = &mut self.renderer else { return };
                 r.set_gamma(if self.ignore_hw_gamma { 1.0 } else { gamma }, overbright);
                 r.set_bicubic(self.shell.cvar_f32("vc_bicubic") != 0.0);
@@ -4129,6 +5599,35 @@ impl ApplicationHandler for App {
                 r.set_ssao(self.shell.cvar_f32("vc_ssao"));
                 r.set_soft_particles(self.shell.cvar_f32("vc_softParticles"));
                 r.set_shadows(self.shell.cvar_f32("vc_shadows") != 0.0);
+                r.set_sun_shadow(
+                    self.shell.cvar_f32("sm_enable") != 0.0,
+                    vcod_cod4::sunshadow::Settings {
+                        sample_size_near: self.shell.cvar_f32("sm_sunSampleSizeNear"),
+                        scale: self.shell.cvar_f32("sm_sunShadowScale"),
+                        center: self
+                            .shell
+                            .cvar("sm_sunShadowCenter")
+                            .and_then(vcod_common::bsp::parse_vec3)
+                            .map_or(glam::Vec3::ZERO, glam::Vec3::from),
+                    },
+                );
+                let on = |n: &str| self.shell.cvar_f32(n) != 0.0;
+                r.set_spot_shadow(crate::cod4_spotshadow::Settings {
+                    on: on("r_spotLightShadows") && on("sm_spotEnable"),
+                    entities: on("r_spotLightEntityShadows"),
+                    smodels: on("r_spotLightSModelShadows"),
+                    max_lights: (self.shell.cvar_f32("sm_maxLights").max(0.0) as usize)
+                        .min(crate::cod4_spotshadow::MAX_LIGHTS),
+                    fade_time: self
+                        .shell
+                        .cvar_f32("sm_spotShadowFadeTime")
+                        .clamp(0.01, 5.0),
+                    eye_project_dist: self.shell.cvar_f32("sm_lightScore_eyeProjectDist"),
+                    spot_project_frac: self.shell.cvar_f32("sm_lightScore_spotProjectFrac"),
+                    offset_bias: self.shell.cvar_f32("sm_polygonOffsetBias"),
+                    offset_scale: self.shell.cvar_f32("sm_polygonOffsetScale"),
+                });
+                r.set_cookie_settings(cookie_settings(&self.shell));
                 r.set_post(post::PostSettings {
                     grade: self.shell.cvar_f32("vc_grade"),
                     vignette: self.shell.cvar_f32("vc_vignette"),
@@ -4137,10 +5636,41 @@ impl ApplicationHandler for App {
                 r.set_flares(self.shell.cvar_f32("r_flares") as i32 != 0);
                 r.set_draw_sun(self.shell.cvar_f32("r_drawSun") as i32 != 0);
                 r.set_swap_interval(self.shell.cvar_f32("r_swapInterval") as i32 != 0);
+                // CoD4's Model Detail sets the rigid pair (iw3mp.exe
+                // 0x62a29c; cod4-front-end.md 9); vcod has one LOD scale.
+                let (lod_scale, lod_bias) = if self.game == vcod_common::game::Game::Cod4 {
+                    ("r_lodScaleRigid", "r_lodBiasRigid")
+                } else {
+                    ("r_lodscale", "r_lodbias")
+                };
                 r.set_lod(
-                    self.shell.cvar_f32("r_lodscale"),
-                    self.shell.cvar_f32("r_lodbias"),
+                    self.shell.cvar_f32(lod_scale),
+                    self.shell.cvar_f32(lod_bias),
                 );
+                if let Some(c) = self.session.cod4_mut() {
+                    c.session.menus.listen_server = self
+                        .server_process
+                        .as_mut()
+                        .is_some_and(|s| s.joined && s.exited().is_none());
+                }
+                // CoD4's views project at `r_aspectRatio`'s aspect, the
+                // value its last `vid_restart` latched, and its 2D layer
+                // places by the same `vidConfig` (camera::Cod4Screen)
+                r.set_view_aspect((self.game == vcod_common::game::Game::Cod4).then(|| {
+                    let (w, h) = r.screen_size();
+                    let setting = self.shell.cvar("r_aspectRatio").unwrap_or_default();
+                    let screen = camera::Cod4Screen::of(
+                        setting,
+                        w,
+                        h,
+                        self.shell.cvar_f32("r_fullscreen") as i32 != 0,
+                        cvar_on(&self.shell, "vc_windowAspect"),
+                    );
+                    hud::cod2elem::set_cod4_screen(&screen);
+                    screen.aspect
+                }));
+                r.set_cod4_options(cod4_options(&self.shell));
+                r.set_depth_prepass(cvar_on(&self.shell, "r_vc_depthprepass"));
                 r.set_dynamic_lights(
                     self.shell.cvar_f32("r_dynamiclight") as i32,
                     self.shell.cvar_f32("r_dlightQuality") as i32 != 0,
@@ -4157,6 +5687,9 @@ impl ApplicationHandler for App {
                 let mut demo_over = false;
                 // What the mode draws on the 2D layer; the console goes on top.
                 let mut hud_quads: Vec<hud::HudQuad> = Vec::new();
+                if let Some(l) = &mut self.cod4_loading {
+                    hud_quads.extend(l.quads(r.screen_size(), elapsed.as_millis() as i32));
+                }
                 let (mut frame, vm) = match &mut self.mode {
                     Mode::Idle => (
                         renderer::Frame {
@@ -4180,44 +5713,106 @@ impl ApplicationHandler for App {
                         None,
                     ),
                     Mode::Fly(cam) => {
+                        self.look_zoom = (1.0, false);
                         cam.update(&self.input, dt);
+                        if let Some(av) = &mut self.cod4_fly {
+                            av.frame(&self.fs, &mut self.audio, &mut self.fx, f64::from(time));
+                            r.set_level_look(Some(av.look.at((time * 1000.0) as i32, false)));
+                        }
                         let fly_fov =
                             camera::view_fov_x(camera::DEFAULT_FOV_DEG, aspect, widescreen);
-                        let (cam_forward, cam_right, cam_up) = camera::basis(cam.yaw, cam.pitch);
-                        // u32::MAX: no entity pinned to the camera.
-                        self.audio
-                            .set_listener(cam.pos, cam_forward, cam_right, cam_up, u32::MAX);
-                        // no CollisionWorld in fly mode, so usePhysics fx don't collide
-                        let fx_t0 = Instant::now();
-                        self.fx.step(dt, time, None);
-                        self.audio.step(&HashMap::new(), &HashMap::new(), None);
-                        r.set_fx_quads(
-                            &self.fs,
-                            self.fx.build_quads(cam.pos, cam_right, cam_up, time),
+                        let view = cod2_client::DrawView {
+                            yaw: cam.yaw,
+                            pitch: cam.pitch,
+                            roll: 0.0,
+                            fov: fly_fov,
+                            vm: None,
+                        };
+                        ViewTail {
+                            fs: &self.fs,
+                            shell: &self.shell,
+                            audio: &mut self.audio,
+                            fx: &mut self.fx,
+                            session: &self.session,
+                            r,
                             time,
-                        );
-                        r.set_marks(
-                            &self.fs,
-                            &self.fx.take_marks(time),
-                            &[],
-                            (time * 1000.0) as i32,
+                            dt,
+                            aspect,
+                            cull,
+                        }
+                        .run(
+                            cam,
+                            view,
+                            fly_fov,
+                            &mut hud_quads,
+                            &mut self.fx_ms,
+                        )
+                    }
+                    Mode::Cod2(cam) => {
+                        self.session.finish_pump();
+                        self.session.set_fly_keys(&self.input);
+                        let mut cod2_vm = None;
+                        let mut cod2_fx = None;
+                        let mut cx = cod2_client::Cod2Frame {
+                            fs: &self.fs,
+                            shell: &self.shell,
+                            localized: &self.localized,
+                            audio: &mut self.audio,
+                            fx: &mut self.fx,
+                            ui: &self.ui,
+                            r: &mut *r,
+                            console_open: self.console.open,
                             time,
-                            self.shell.cvar_f32("cg_marks") != 0.0,
+                            dt,
+                        };
+                        if self.session.pump(&mut cx, cam) {
+                            let hud_span = frame_prof::span(frame_prof::Stage::Hud);
+                            (cod2_vm, hud_quads) = self.session.scene(&mut cx, cam);
+                            drop(hud_span);
+                            let events = self.session.events(&mut cx);
+                            self.session.audio(&mut cx, &events, cam.pos);
+                            self.session.effects(&mut cx, &events, cam.pos);
+                            if let Some(out) = self.session.view(&mut cx, &events, cam) {
+                                self.look_zoom = (
+                                    out.fov / camera::DEFAULT_FOV_DEG * out.shock.mouse.sensitivity,
+                                    false,
+                                );
+                                cod2_fx = Some(out);
+                            }
+                        } else {
+                            self.look_zoom = (1.0, false);
+                            self.session.idle();
+                            cam.update(&self.input, dt);
+                        }
+                        let fly_fov =
+                            camera::view_fov_x(camera::DEFAULT_FOV_DEG, aspect, widescreen);
+                        let view = self.session.draw_view(
+                            &self.fs,
+                            r,
+                            cam,
+                            cod2_fx.as_ref(),
+                            cod2_vm,
+                            (fly_fov, aspect, widescreen),
                         );
-                        r.set_fx_lights(&self.fx.lights(cam.pos, time));
-                        self.fx_ms = fx_t0.elapsed().as_secs_f32() * 1000.0;
-                        (
-                            renderer::Frame {
-                                view_proj: cam.view_proj(fly_fov, aspect),
-                                eye: cam.pos,
-                                fwd: cam_forward,
-                                up: Vec3::Z,
-                                time,
-                                fov_x: fly_fov,
-                                cull,
-                                hud_lines: Vec::new(),
-                            },
-                            None,
+                        frame_prof::count(frame_prof::Count::Particles, self.fx.counts().0);
+                        ViewTail {
+                            fs: &self.fs,
+                            shell: &self.shell,
+                            audio: &mut self.audio,
+                            fx: &mut self.fx,
+                            session: &self.session,
+                            r,
+                            time,
+                            dt,
+                            aspect,
+                            cull,
+                        }
+                        .run(
+                            cam,
+                            view,
+                            fly_fov,
+                            &mut hud_quads,
+                            &mut self.fx_ms,
                         )
                     }
                     Mode::Online {
@@ -4231,6 +5826,9 @@ impl ApplicationHandler for App {
                         phase,
                         join,
                     } => {
+                        // `VCOD_FRAME_PROFILE`'s stages through the frame; the
+                        // player bodies inside `build_instances` are `bodies`.
+                        let mut prof = frame_prof::span(frame_prof::Stage::Net);
                         let mut vm = None;
                         // A demo is read up to the clock (`CL_SetCGameTime`,
                         // CoDMP.exe 0x404d60), nothing while a map loads.
@@ -4324,7 +5922,7 @@ impl ApplicationHandler for App {
                                     }
                                     // UO's `F <ms>`, `rewindFx` (uo cgame
                                     // 0x3003ac90, trap 0xf0).
-                                    if net.protocol().version == net::protocol::PROTOCOL_V22.version
+                                    if net.protocol().is_uo()
                                         && tokens.first().is_some_and(|t| t == "F")
                                         && let Some(ms) =
                                             tokens.get(1).and_then(|t| t.parse::<i32>().ok())
@@ -4569,6 +6167,23 @@ impl ApplicationHandler for App {
                         // A demo's clock never slews toward its snapshots
                         // (`CL_AdjustTimeDelta`, CoDMP.exe 0x404bf0), and it
                         // sends no cmds.
+                        if let Some(soak) = &mut self.soak
+                            && !net.is_demo()
+                        {
+                            let ps = match &*phase {
+                                Phase::Live(_) => net.snapshots().newest().map(|s| &s.ps),
+                                _ => None,
+                            };
+                            soak.act(
+                                input,
+                                ps,
+                                net.protocol(),
+                                net.configstring(0),
+                                cam.pos,
+                                time,
+                                self.ui.active(),
+                            );
+                        }
                         if net.is_demo()
                             && !gamestate_ready
                             && let (Phase::Live(live), Some(s)) =
@@ -4650,6 +6265,7 @@ impl ApplicationHandler for App {
                                 // on; a mod's connect notice can hold the
                                 // `connectResponse` back for seconds.
                                 if gamestate_ready {
+                                    vcod_common::laps::mark(|| "gamestate".into());
                                     match start_loading(
                                         net,
                                         &mut self.hud,
@@ -4726,6 +6342,7 @@ impl ApplicationHandler for App {
                                             &mut self.shell,
                                             self.ignore_hw_gamma,
                                         ));
+                                        let t_load = Instant::now();
                                         match load_map(
                                             &map,
                                             net,
@@ -4738,6 +6355,9 @@ impl ApplicationHandler for App {
                                         ) {
                                             Ok(next) => {
                                                 *phase = next;
+                                                vcod_common::laps::span(t_load, || {
+                                                    format!("load_map {map}")
+                                                });
                                                 // `CL_DownloadsComplete` sends it
                                                 // after the cgame loads; a pure
                                                 // server drops a client without it.
@@ -4756,6 +6376,15 @@ impl ApplicationHandler for App {
                                                     &self.fs,
                                                     net.configstrings(),
                                                 );
+                                                if let Phase::Live(live) = &mut *phase {
+                                                    prewarm_level(
+                                                        &mut self.fx,
+                                                        r,
+                                                        &self.fs,
+                                                        net,
+                                                        live,
+                                                    );
+                                                }
                                                 // `CL_DownloadsComplete` frees the
                                                 // old cgame and loads a fresh one.
                                                 fresh_cgame(
@@ -4765,6 +6394,7 @@ impl ApplicationHandler for App {
                                                     self.hud.as_mut(),
                                                     &mut self.fx,
                                                 );
+                                                let t_menus = Instant::now();
                                                 if let Err(e) = load_script_menus(
                                                     &mut self.ui,
                                                     &self.fs,
@@ -4774,6 +6404,9 @@ impl ApplicationHandler for App {
                                                 ) {
                                                     fatal = Some(anyhow!(e));
                                                 }
+                                                vcod_common::laps::span(t_menus, || {
+                                                    "script menus".into()
+                                                });
                                             }
                                             Err(e) => fatal = Some(e),
                                         }
@@ -4796,6 +6429,7 @@ impl ApplicationHandler for App {
                             }
                             Phase::Live(live) => {
                                 if gamestate_ready {
+                                    vcod_common::laps::begin_load("cod1 map change");
                                     match start_loading(
                                         net,
                                         &mut self.hud,
@@ -4915,6 +6549,7 @@ impl ApplicationHandler for App {
                                             / (b.server_time - a.server_time).max(1) as f32)
                                             .clamp(0.0, 1.0);
                                         let t0 = Instant::now();
+                                        prof.next(frame_prof::Stage::Pose);
                                         // Last frame's drawn bodies, for the gunner's
                                         // trace down.
                                         let bodies = play::predict::solid_bodies(
@@ -4978,6 +6613,7 @@ impl ApplicationHandler for App {
                                             p,
                                         );
                                         self.build_ms = t0.elapsed().as_secs_f32() * 1000.0;
+                                        prof.next(frame_prof::Stage::Net);
                                         instances = built.instances;
                                         muzzles = built.muzzles;
                                         shot_fallbacks = built.shot_fallbacks;
@@ -4989,6 +6625,7 @@ impl ApplicationHandler for App {
                                         vehicle_wheels = built.vehicle_wheels;
                                         heads = built.heads;
                                         turret_eye = built.turret_eye;
+                                        frame_digest::submodels(&built.submodels);
                                         r.set_submodels(&built.submodels);
                                         r.set_entity_lights(built.scene_lights);
                                         // `cg_shadows` 2 is the renderer's
@@ -5128,6 +6765,7 @@ impl ApplicationHandler for App {
                                     // `CG_ProcessSnapshots`, ahead of the view
                                     // (cgame 0x30033c14, 0x30033d9b): a quake or a
                                     // landing moves the frame it arrives on.
+                                    prof.next(frame_prof::Stage::Events);
                                     let mut evs = Vec::new();
                                     if let Some(newest) = net.snapshots().newest() {
                                         // Our own ring plays off the prediction, and
@@ -5177,6 +6815,7 @@ impl ApplicationHandler for App {
                                             }
                                         }
                                     }
+                                    prof.next(frame_prof::Stage::Vm);
                                     view.step_recoil(weapons, view_ps.as_ref(), local_ms);
                                     // Next frame's cmds carry this kick, as
                                     // `CL_FinishMove` reads last frame's syscall 0x56.
@@ -5610,6 +7249,7 @@ impl ApplicationHandler for App {
                                     // [now-dt, now] integration would move particles born
                                     // at `now` (a tracer would start ahead of its muzzle).
                                     let fx_t0 = Instant::now();
+                                    prof.next(frame_prof::Stage::FxStep);
                                     self.fx.set_view(cam.pos);
                                     self.fx.set_bolts(&muzzles);
                                     // The `playFxOnTag` tags a live effect rides,
@@ -5630,8 +7270,10 @@ impl ApplicationHandler for App {
                                         .collect();
                                     self.fx.set_tag_bolts(&tag_poses);
                                     self.fx.step(dt, time, Some(&*world));
+                                    prof.next(frame_prof::Stage::Fx);
                                     let chained = self.fx.spawn_chained(&self.fs, time);
-                                    self.audio.play_fx(&self.fs, chained);
+                                    // Placed by the wall-clock step (the brass).
+                                    frame_digest::clocked(|| self.audio.play_fx(&self.fs, chained));
                                     // UO's wheel dust (uo cgame 0x30020540): the
                                     // world under each wheel, mask 0x211, then
                                     // every other vehicle's collmap where drawn.
@@ -5667,6 +7309,7 @@ impl ApplicationHandler for App {
                                         }
                                     }
 
+                                    prof.next(frame_prof::Stage::Events);
                                     let (screen_w, screen_h) = r.screen_size();
 
                                     let no_clients = BTreeMap::new();
@@ -5684,7 +7327,7 @@ impl ApplicationHandler for App {
                                             int("eFlags"),
                                             int("viewlocked"),
                                             int("viewlocked_entNum"),
-                                            p.version == 22,
+                                            p.is_uo(),
                                         )?;
                                         let w = s.entities.get(&num)?.field_i32(p, "weapon");
                                         usize::try_from(w).ok()
@@ -5761,7 +7404,7 @@ impl ApplicationHandler for App {
 
                                     // UO's tracers: the length gate, and `sv_night`
                                     // off the systeminfo (fx::sim::TracerRules).
-                                    let uo = p.version == net::protocol::PROTOCOL_V22.version;
+                                    let uo = p.is_uo();
                                     self.fx.set_tracer_rules(fx::sim::TracerRules {
                                         min_length: uo,
                                         night: uo
@@ -6040,7 +7683,7 @@ impl ApplicationHandler for App {
                                                         {
                                                             log::info!(
                                                                 "protocol {} event {} not played",
-                                                                p.version,
+                                                                p.transport.version,
                                                                 ev.event & !foreign
                                                             );
                                                         }
@@ -6073,6 +7716,7 @@ impl ApplicationHandler for App {
                                         }
                                     }
 
+                                    prof.next(frame_prof::Stage::Sound);
                                     // `es.loopSound` (docs/research/cod11-sound-system.md,
                                     // section 9) and each missile's `projectileSound`
                                     // (section 8), reconciled once per snapshot. An entity
@@ -6111,13 +7755,17 @@ impl ApplicationHandler for App {
                                         let f = ((t - a.server_time) as f32
                                             / (b.server_time - a.server_time).max(1) as f32)
                                             .clamp(0.0, 1.0);
-                                        self.audio.step_sound_blends(
-                                            &self.fs,
-                                            p,
-                                            (a, b, f),
-                                            (net.configstrings(), weapons),
-                                            &entity_pos,
-                                        );
+                                        // A blend restarts when its voice ran out,
+                                        // on the wall clock.
+                                        frame_digest::clocked(|| {
+                                            self.audio.step_sound_blends(
+                                                &self.fs,
+                                                p,
+                                                (a, b, f),
+                                                (net.configstrings(), weapons),
+                                                &entity_pos,
+                                            )
+                                        });
                                     }
 
                                     // After the drain, so new voices get this frame's positions.
@@ -6129,6 +7777,9 @@ impl ApplicationHandler for App {
                                     );
                                     self.audio.step(&entity_pos, &entity_angles, Some(&*world));
 
+                                    prof.next(frame_prof::Stage::Pose);
+                                    // The brass below steps on wall-clock time.
+                                    frame_digest::models(&instances);
                                     // After the events, so a case ejected this frame
                                     // draws this frame.
                                     for m in self.fx.models(time) {
@@ -6148,49 +7799,54 @@ impl ApplicationHandler for App {
                                             });
                                         }
                                     }
+                                    frame_prof::count(frame_prof::Count::Models, instances.len());
+                                    frame_prof::count(
+                                        frame_prof::Count::Particles,
+                                        self.fx.counts().0,
+                                    );
                                     r.set_dynamic_models(&instances);
+                                    prof.next(frame_prof::Stage::FxDraw);
 
                                     // `cg.snap`'s own player and solid bodies, the
                                     // older of the drawn pair (coduo-diff.md 19):
                                     // the chunks clip them and the report tests
                                     // the player.
-                                    let (victim, bodies) =
-                                        if p.version == net::protocol::PROTOCOL_V22.version {
-                                            let snap = render_time
-                                                .and_then(|t| net.snapshots().two_for_time(t))
-                                                .map(|(a, _)| a)
-                                                .or(newest);
-                                            let victim = snap.and_then(|s| {
-                                                let v = |n: &str| {
-                                                    Vec3::from_array([0, 1, 2].map(|i| {
-                                                        s.ps.field_f32(p, &format!("{n}[{i}]"))
-                                                    }))
-                                                };
-                                                Some(fx::flame::Victim {
-                                                    client: u32::try_from(
-                                                        s.ps.field_i32(p, "clientNum"),
-                                                    )
-                                                    .ok()?,
-                                                    origin: v("origin"),
-                                                    mins: v("mins"),
-                                                    maxs: v("maxs"),
-                                                })
-                                            });
-                                            let bodies = snap
-                                                .zip(victim)
-                                                .map(|(s, v)| {
-                                                    play::predict::solid_bodies(
-                                                        p,
-                                                        &s.entities,
-                                                        v.client,
-                                                        &entity_pos,
-                                                    )
-                                                })
-                                                .unwrap_or_default();
-                                            (victim, bodies)
-                                        } else {
-                                            (None, Vec::new())
-                                        };
+                                    let (victim, bodies) = if p.is_uo() {
+                                        let snap = render_time
+                                            .and_then(|t| net.snapshots().two_for_time(t))
+                                            .map(|(a, _)| a)
+                                            .or(newest);
+                                        let victim = snap.and_then(|s| {
+                                            let v = |n: &str| {
+                                                Vec3::from_array([0, 1, 2].map(|i| {
+                                                    s.ps.field_f32(p, &format!("{n}[{i}]"))
+                                                }))
+                                            };
+                                            Some(fx::flame::Victim {
+                                                client: u32::try_from(
+                                                    s.ps.field_i32(p, "clientNum"),
+                                                )
+                                                .ok()?,
+                                                origin: v("origin"),
+                                                mins: v("mins"),
+                                                maxs: v("maxs"),
+                                            })
+                                        });
+                                        let bodies = snap
+                                            .zip(victim)
+                                            .map(|(s, v)| {
+                                                play::predict::solid_bodies(
+                                                    p,
+                                                    &s.entities,
+                                                    v.client,
+                                                    &entity_pos,
+                                                )
+                                            })
+                                            .unwrap_or_default();
+                                        (victim, bodies)
+                                    } else {
+                                        (None, Vec::new())
+                                    };
                                     // UO's flamethrower streams off each firing
                                     // body's `tag_flash` (fx::flame).
                                     let nozzles = newest
@@ -6250,7 +7906,7 @@ impl ApplicationHandler for App {
                                     }
                                     // UO's flame report on `cg.snap`'s player.
                                     let mut fdc = None;
-                                    if p.version == net::protocol::PROTOCOL_V22.version {
+                                    if p.is_uo() {
                                         let flame_trace = |s: Vec3, e: Vec3| {
                                             let w = MoveWorld::new(world, &bodies, u32::MAX);
                                             let t = w.box_trace(
@@ -6297,6 +7953,10 @@ impl ApplicationHandler for App {
                                         fx::sim::sort_back_to_front(&mut fx_quads, cam.pos);
                                     }
                                     r.set_fx_quads(&self.fs, fx_quads, time);
+                                    // CoD2's snow (fx::cod2_cloud), tested against the map's roofs
+                                    let clouds = self.fx.clouds(cam.pos, cam_right, cam_up, time);
+                                    let map = self.session.map_name();
+                                    r.set_fx_clouds(&self.fs, map, &clouds, time);
                                     r.set_marks(
                                         &self.fs,
                                         &self.fx.take_marks(time),
@@ -6314,6 +7974,7 @@ impl ApplicationHandler for App {
                                     );
                                     self.fx_ms = fx_t0.elapsed().as_secs_f32() * 1000.0;
 
+                                    prof.next(frame_prof::Stage::Hud);
                                     if let Some(hud) = &mut self.hud {
                                         let hud_t0 = Instant::now();
                                         hud.set_message_widths(
@@ -6323,7 +7984,7 @@ impl ApplicationHandler for App {
                                         );
                                         hud.set_chat_rules(hud::chat::Rules::read(
                                             |c| self.shell.cvar(c),
-                                            p.version == net::protocol::PROTOCOL_V22.version,
+                                            p.is_uo(),
                                         ));
                                         hud_quads = hud.build(&hud_frame);
                                         self.hud_ms = hud_t0.elapsed().as_secs_f32() * 1000.0;
@@ -6378,7 +8039,7 @@ impl ApplicationHandler for App {
                         let fx_t0 = Instant::now();
                         self.fx.step(dt, time, Some(&*world));
                         let chained = self.fx.spawn_chained(&self.fs, time);
-                        self.audio.play_fx(&self.fs, chained);
+                        frame_digest::clocked(|| self.audio.play_fx(&self.fs, chained));
 
                         if let Some(slot) = switch_to.take()
                             && slot != *weapon_slot
@@ -6631,6 +8292,9 @@ impl ApplicationHandler for App {
                             self.fx.build_quads(v.eye, eye_right, eye_up, time),
                             time,
                         );
+                        let clouds = self.fx.clouds(v.eye, eye_right, eye_up, time);
+                        let map = self.session.map_name();
+                        r.set_fx_clouds(&self.fs, map, &clouds, time);
                         r.set_marks(
                             &self.fs,
                             &self.fx.take_marks(time),
@@ -6691,6 +8355,7 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                let ui_span = frame_prof::span(frame_prof::Stage::Ui);
                 // Over the game, under the menus (CoDMP.exe 0x416b10, drawn
                 // in `CA_ACTIVE` with no fullscreen menu up, cod11-demos.md 8).
                 if let Mode::Online {
@@ -6701,11 +8366,31 @@ impl ApplicationHandler for App {
                     && !self.ui.fullscreen()
                     && let Some((name, bytes)) = net.recording_status()
                 {
-                    let v1 = net.protocol().version == net::protocol::PROTOCOL_V1.version;
+                    let v1 = net.protocol().is_v1();
                     let show_name = v1 || self.shell.cvar_f32("cg_showdemoname") as i32 == 1;
                     let text = console::recording_text(name, bytes, show_name);
                     let (w, h) = r.screen_size();
                     hud_quads.extend(self.console.recording_line(&text, v1, w, h));
+                }
+                // CoD2's `SCR_UpdateFrame` (Mac 0x172d88): the name always,
+                // white at (5, 479) on the 640x480 grid as 1.5's.
+                if !self.ui.fullscreen()
+                    && let Some((name, bytes)) = self.session.recording_status()
+                {
+                    let text = console::recording_text(name, bytes, true);
+                    let (w, h) = r.screen_size();
+                    hud_quads.extend(self.console.recording_line(&text, false, w, h));
+                }
+                // The CoD2 connect screen: the address and the download.
+                for (i, line) in self
+                    .session
+                    .connect_lines(&self.localized)
+                    .iter()
+                    .enumerate()
+                {
+                    let (w, h) = r.screen_size();
+                    let y = 240.0 + 20.0 * i as f32;
+                    hud_quads.extend(self.console.screen_text(line, 24.0, y, w, h));
                 }
                 if self.ui.active() {
                     if let Mode::Online { net, .. } = &self.mode {
@@ -6719,19 +8404,26 @@ impl ApplicationHandler for App {
                     }
                     self.ui.frame(now, &self.shell);
                     let (w, h) = r.screen_size();
+                    self.ui.set_screen(w, h);
                     hud_quads.extend(self.ui.build(w, h, &self.localized, &self.shell));
                 }
+                hud_quads.extend(self.session.cod4_front_quads(r.screen_size()));
                 self.console.drain_log();
                 self.console.update(
                     dt * 1000.0,
                     self.shell.cvar_f32("scr_conspeed"),
-                    matches!(self.mode, Mode::Idle) && !self.ui.active(),
+                    matches!(self.mode, Mode::Idle)
+                        && !self.ui.active()
+                        && !self.session.cod4_front_active()
+                        && self.cod4_loading.is_none(),
                 );
                 if self.console.visible() {
                     let (w, h) = r.screen_size();
                     hud_quads.extend(self.console.build(w, h, elapsed.as_millis() as u64));
                 }
+                frame_digest::hud(&hud_quads);
                 r.set_hud_quads(&self.fs, hud_quads);
+                drop(ui_span);
                 // The scene lives in the online phase, so pull it back
                 // out for the overlay after the mode's mutable borrows end.
                 let scene = match &self.mode {
@@ -6749,6 +8441,7 @@ impl ApplicationHandler for App {
                 if self.debug_overlay {
                     frame.hud_lines = hud_lines(
                         &self.mode,
+                        self.session.cam_tag(),
                         scene,
                         &self.hud_stats,
                         (self.build_ms, self.render_ms, self.fx_ms),
@@ -6762,10 +8455,65 @@ impl ApplicationHandler for App {
                         self.audio.stats(),
                         r,
                     );
+                    if let Some(lines) = self.session.debug_lines() {
+                        frame.hud_lines.extend(lines);
+                    }
+                }
+                if frame_digest::on() {
+                    frame_digest::view(&frame, vm.as_ref(), !self.session.live());
                 }
                 let t0 = Instant::now();
                 r.render(frame, vm);
                 self.render_ms = t0.elapsed().as_secs_f32() * 1000.0;
+                if vcod_common::laps::loading()
+                    && (self.digest_time().is_some() || self.session.cod4_in_game())
+                {
+                    vcod_common::laps::span(frame_start, || "the first frame in game".into());
+                    vcod_common::laps::end_load();
+                }
+                if frame_digest::on() {
+                    frame_digest::end_frame(self.digest_time());
+                }
+                if let Some(soak) = &mut self.soak {
+                    soak.end_frame(self.audio.stats().misses);
+                    for ask in soak.take_asks() {
+                        match ask {
+                            play::cod1_soak::Ask::Scores(on) => {
+                                let effects =
+                                    self.shell.execute(if on { "+scores" } else { "-scores" });
+                                self.apply(event_loop, effects);
+                            }
+                            play::cod1_soak::Ask::Esc if self.ui.active() => {
+                                let (_, effects) = self.ui.key(KeyCode::Escape, &self.shell);
+                                self.ui_effects(event_loop, effects);
+                                self.after_menu();
+                            }
+                            play::cod1_soak::Ask::Esc => self.escape(),
+                        }
+                    }
+                }
+                frame_prof::end_frame();
+                if (!self.exec_in_game.is_empty()
+                    || !self.exec_after.is_empty() && self.exec_after_last.is_none())
+                    && (self.digest_time().is_some() || self.session.cod4_in_game())
+                {
+                    for line in std::mem::take(&mut self.exec_in_game) {
+                        let effects = self.shell.execute(&line);
+                        self.apply(event_loop, effects);
+                    }
+                    self.exec_after_last = Some(std::time::Instant::now());
+                }
+                if let (Some(last), Some(&(secs, _))) =
+                    (self.exec_after_last, self.exec_after.front())
+                    && last.elapsed().as_secs_f32() >= secs
+                {
+                    let (_, line) = self.exec_after.pop_front().expect("front");
+                    frame_prof::exec(&line);
+                    let effects = self.shell.execute(&line);
+                    self.apply(event_loop, effects);
+                    // after the line's own work (a `vid_restart`'s rebuild)
+                    self.exec_after_last = Some(std::time::Instant::now());
+                }
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
@@ -6785,6 +8533,13 @@ impl ApplicationHandler for App {
             if self.ui.active() && !self.bypass_mouse() {
                 let effects = self.ui.mouse_delta(dx, dy, &self.shell);
                 self.ui_effects(event_loop, effects);
+                return;
+            }
+            if let Some(r) = &self.renderer
+                && self
+                    .session
+                    .cod4_menu_mouse(Some([dx, dy]), None, r.screen_size())
+            {
                 return;
             }
             if self.grabbed {
@@ -6860,9 +8615,57 @@ fn parse_probe_say(s: &str) -> Result<(f32, String), String> {
     Ok((secs, cmd.to_string()))
 }
 
+/// The `sc_*` dvars as the cookies read them, each clamped to its
+/// registered range (cod2-materials.md 9.8).
+fn cookie_settings(shell: &console::shell::Shell) -> renderer::CookieSettings {
+    let f = |name: &str, lo: f32, hi: f32| shell.cvar_f32(name).clamp(lo, hi);
+    let n = |name: &str| f(name, 0.0, 24.0) as i32;
+    renderer::CookieSettings {
+        enable: shell.cvar_f32("sc_enable") != 0.0,
+        blur: f("sc_blur", 0.0, 4.0) as u32,
+        want: n("sc_wantCount"),
+        want_margin: n("sc_wantCountMargin"),
+        fade_range: f("sc_fadeRange", 0.0, 1.0),
+        in_rate: f("sc_shadowInRate", 0.0, 20.0),
+        out_rate: f("sc_shadowOutRate", 0.0, 20.0),
+        length: f("sc_length", 1.0, 2000.0),
+        casters: n("sc_debugCasterCount") as usize,
+        receivers: n("sc_debugReceiverCount") as usize,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A CoD2 session's `vid_restart` stops its sounds as retail's
+    /// `SND_StopSounds(1)` does; the offline fly camera keeps them.
+    #[test]
+    fn only_the_offline_viewer_keeps_sounds_on_vid_restart() {
+        let cam = || FlyCamera::new(Vec3::ZERO, 0.0);
+        assert!(Mode::Fly(cam()).keeps_sounds_on_vid_restart());
+        assert!(!Mode::Cod2(cam()).keeps_sounds_on_vid_restart());
+        assert!(!Mode::Idle.keeps_sounds_on_vid_restart());
+    }
+
+    /// The chat field takes printable keys but no quote, Backspace
+    /// edits, Enter hands the line over and Escape drops it.
+    #[test]
+    fn the_chat_field_types_and_hands_over_its_line() {
+        let mut f = hud::ChatField::default();
+        for t in ["h", "i", "\"", "!"] {
+            assert_eq!(chat_field_key(&mut f, KeyCode::KeyA, Some(t)), None);
+        }
+        assert_eq!(chat_field_key(&mut f, KeyCode::Backspace, None), None);
+        assert_eq!(f.text, "hi");
+        assert_eq!(
+            chat_field_key(&mut f, KeyCode::Enter, None),
+            Some(Some("hi".to_string()))
+        );
+        assert_eq!(chat_field_key(&mut f, KeyCode::Enter, None), Some(None));
+        f.text = "x".into();
+        assert_eq!(chat_field_key(&mut f, KeyCode::Escape, None), Some(None));
+    }
 
     /// `Com_Frame`'s integer wait: retail's default 85 is 11 ms frames
     /// (90 fps), past 1000 no wait at all, and 0 or less the 1 ms floor.

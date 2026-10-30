@@ -19,6 +19,7 @@ fn push(line: String) {
 /// `println!` that the console sees too, colour codes and all; the terminal
 /// gets the text without them.
 pub fn print(text: &str) {
+    crate::frame_digest::str(crate::frame_digest::Part::Con, text);
     println!("{}", vcod_common::net::strip_colors(text));
     for line in text.lines() {
         push(line.to_string());

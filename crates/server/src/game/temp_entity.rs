@@ -42,6 +42,9 @@ pub enum Scope {
     /// `svFlags` 0x800 with `r.singleClient`: this client's snapshot alone,
     /// culled by PVS.
     Only(usize),
+    /// CoD4's `r.clientMask` cleared for these clients alone (bit `n` for
+    /// client `n`): `playSoundToTeam`'s team.
+    Clients(u64),
 }
 
 /// One event to put on the wire this frame.
@@ -66,7 +69,9 @@ pub struct TempEntity {
     pub scope: Scope,
     /// `EV_EARTHQUAKE`'s own three fields.
     pub quake: Option<Quake>,
-    /// `origin2`, where UO's `EV_BULLET_TRACER` ends.
+    /// `origin2`, where UO's `EV_BULLET_TRACER` ends. On CoD2 an
+    /// `EV_PLAY_FX` has no `origin2` and carries its angles here instead,
+    /// which [`build`] writes to `apos.trBase` (`builtins::cod2_fx`).
     pub origin2: Option<[f32; 3]>,
 }
 
@@ -103,7 +108,7 @@ pub fn build(te: &TempEntity, number: u32, p: &Protocol) -> EntityState {
         set("angles2[0]", q.scale.to_bits() as i32);
         // UO's builtin (game.mp.uo 0x6d8dd) stores the ms as a float in
         // `angles2[2]` and leaves `time` alone (coduo-diff.md 19).
-        if p.version == vcod_common::net::protocol::PROTOCOL_V22.version {
+        if p.is_uo() {
             set("angles2[2]", (q.duration_ms as f32).to_bits() as i32);
         } else {
             set("time", q.duration_ms);
@@ -111,8 +116,15 @@ pub fn build(te: &TempEntity, number: u32, p: &Protocol) -> EntityState {
         set("angles2[1]", q.radius.to_bits() as i32);
     }
     if let Some(o2) = te.origin2 {
+        let into = if p.transport.game == vcod_common::game::Game::Cod2
+            && te.event == vcod_common::net::event_ids::EV_PLAY_FX
+        {
+            "apos.trBase"
+        } else {
+            "origin2"
+        };
         for (axis, v) in o2.iter().enumerate() {
-            set(&format!("origin2[{axis}]"), v.to_bits() as i32);
+            set(&format!("{into}[{axis}]"), v.to_bits() as i32);
         }
     }
     for (axis, v) in te.origin.iter().enumerate() {
@@ -140,6 +152,7 @@ impl Scope {
             Scope::Broadcast | Scope::Pvs => true,
             Scope::AllBut(s) => s != client_num,
             Scope::Only(s) => s == client_num,
+            Scope::Clients(m) => client_num < 64 && m & (1 << client_num) != 0,
         }
     }
 }

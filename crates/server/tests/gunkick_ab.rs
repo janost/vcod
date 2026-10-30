@@ -336,7 +336,8 @@ fn a_1_5_sighted_burst_climbs_with_the_gun_kick() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         return;
     }
     let climb = check(&PROTOCOL_V6, fs, "1.5");

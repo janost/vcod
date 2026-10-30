@@ -8,7 +8,7 @@ use super::msg::{
     ClientState, EntityState, MsgReader, MsgWriter, PlayerState, read_delta_client,
     read_delta_entity, read_delta_playerstate, write_delta_entity,
 };
-use super::protocol::{CLIENTNUM_BITS, ENTITYNUM_NONE, ENTITYNUM_WORLD, GENTITYNUM_BITS, Protocol};
+use super::protocol::{CLIENTNUM_BITS, Cod1Wire, ENTITYNUM_NONE, ENTITYNUM_WORLD, GENTITYNUM_BITS};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub use super::msg::{
@@ -32,6 +32,17 @@ pub struct Snapshot {
     /// False when the delta base was missing; such a frame is not kept as a
     /// base.
     pub valid: bool,
+}
+
+impl Snapshot {
+    /// The header this frame goes out with over `base`
+    /// ([`crate::net::wire::WireGame::write_snapshot`]).
+    pub fn head(&self, base: Option<&Snapshot>) -> crate::net::wire::SnapshotHead {
+        crate::net::wire::SnapshotHead {
+            delta_num: base.map_or(0, |b| self.message_num.wrapping_sub(b.message_num) as u8),
+            snap_flags: self.snap_flags,
+        }
+    }
 }
 
 /// Slots indexed by `message_num % RING_CAP`, plus the gamestate baselines for
@@ -107,7 +118,7 @@ impl SnapshotRing {
     pub fn parse_into(
         &mut self,
         r: &mut MsgReader,
-        p: &Protocol,
+        p: &Cod1Wire,
         message_num: u32,
     ) -> anyhow::Result<&Snapshot> {
         let server_time = r.read_long();
@@ -196,7 +207,7 @@ impl SnapshotRing {
 /// entities not mentioned carry forward.
 fn parse_packet_entities(
     r: &mut MsgReader,
-    p: &Protocol,
+    p: &Cod1Wire,
     oldframe: Option<&BTreeMap<u32, EntityState>>,
     baselines: &HashMap<u32, EntityState>,
 ) -> BTreeMap<u32, EntityState> {
@@ -245,7 +256,7 @@ fn parse_packet_entities(
 /// caller passes no oldframe, so the roster restarts from null.
 fn parse_clients(
     r: &mut MsgReader,
-    p: &Protocol,
+    p: &Cod1Wire,
     oldframe: Option<BTreeMap<u32, ClientState>>,
 ) -> BTreeMap<u32, ClientState> {
     let mut new = oldframe.unwrap_or_default();
@@ -273,7 +284,7 @@ fn parse_clients(
 /// straight into the playerstate delta (docs/protocol-1.1.md, divergence 6).
 pub fn write(
     w: &mut MsgWriter,
-    p: &Protocol,
+    p: &Cod1Wire,
     from: Option<&Snapshot>,
     to: &Snapshot,
     baselines: &HashMap<u32, EntityState>,
@@ -346,7 +357,7 @@ pub fn write(
 /// from its baseline, or the reader never learns it exists.
 fn write_packet_entities(
     w: &mut MsgWriter,
-    p: &Protocol,
+    p: &Cod1Wire,
     from: Option<&BTreeMap<u32, EntityState>>,
     to: &BTreeMap<u32, EntityState>,
     baselines: &HashMap<u32, EntityState>,
@@ -1287,7 +1298,7 @@ pub(crate) mod tests {
     /// [`regate`] in protocol `p`, handing every parsed frame to `each`;
     /// without `reencode` it only parses.
     pub(crate) fn regate_as(
-        p: &Protocol,
+        p: &Cod1Wire,
         gs_fixture: &str,
         snap_fixture: &str,
         reencode: bool,
@@ -1440,7 +1451,7 @@ pub(crate) mod tests {
     fn protocol_6_capture_reencodes_and_maps_pm_flags() {
         use crate::net::flags::{ET_PLAYER, ET_TURRET, PMF_OWN_VIEW, pm_flags_v6_to_v1};
         use crate::net::protocol::PROTOCOL_V6;
-        let raw = Protocol {
+        let raw = Cod1Wire {
             pm_flags_to_v1: |f| f,
             pm_flags_from_v1: |f| f,
             ..PROTOCOL_V6
@@ -1498,7 +1509,7 @@ pub(crate) mod tests {
     #[test]
     fn the_uo_events_capture_reencodes() {
         use crate::net::protocol::PROTOCOL_V22;
-        let raw = Protocol {
+        let raw = Cod1Wire {
             pm_flags_to_v1: |f| f,
             pm_flags_from_v1: |f| f,
             eflags_to_v1: |f| f,
@@ -1539,7 +1550,7 @@ pub(crate) mod tests {
         use crate::net::event_ids::EV_UO_BULLET_HIT;
         use crate::net::flags::{ET_PLAYER, ET_VEHICLE_V22, PMF_FOLLOW, pm_flags_v22_to_v1};
         use crate::net::protocol::PROTOCOL_V22;
-        let raw = Protocol {
+        let raw = Cod1Wire {
             pm_flags_to_v1: |f| f,
             pm_flags_from_v1: |f| f,
             eflags_to_v1: |f| f,
@@ -1614,7 +1625,7 @@ pub(crate) mod tests {
     fn uo_vehicle_captures_reencode() {
         use crate::net::flags::ET_VEHICLE_V22;
         use crate::net::protocol::PROTOCOL_V22;
-        let raw = Protocol {
+        let raw = Cod1Wire {
             pm_flags_to_v1: |f| f,
             pm_flags_from_v1: |f| f,
             eflags_to_v1: |f| f,

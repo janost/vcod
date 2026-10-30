@@ -3,7 +3,7 @@ use glam::Vec3;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let fs = vcod_common::testing::uo_fs().expect("uo");
-    let m = vcod_common::xmodel::load(&fs, &a[1]).unwrap();
+    let m = vcod_common::model::load(&fs, &a[1]).unwrap();
     let f: Vec<f32> = a[2..8].iter().map(|s| s.parse().unwrap()).collect();
     let (p, q) = (Vec3::new(f[0], f[1], f[2]), Vec3::new(f[3], f[4], f[5]));
     let d = q - p;

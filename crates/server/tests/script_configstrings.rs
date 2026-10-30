@@ -18,7 +18,7 @@ fn cfg(map: &str) -> vcod_server::ServerConfig {
 
 #[test]
 fn the_map_script_writes_the_fog_and_ambient_configstrings() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         return;
     };
     let mut sv = vcod_server::server::Server::new(cfg("mp_pavlov"), std::time::Instant::now());
@@ -43,7 +43,7 @@ fn the_map_script_writes_the_fog_and_ambient_configstrings() {
 /// file's `projectileModel`.
 #[test]
 fn the_model_block_carries_the_models_that_come_from_weapon_files() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         return;
     };
     let mut sv = vcod_server::server::Server::new(cfg("mp_pavlov"), std::time::Instant::now());

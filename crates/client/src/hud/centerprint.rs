@@ -23,6 +23,8 @@ const LINE_CHARS: usize = 75;
 pub const OBITUARY_Y: i32 = 400;
 pub const OBITUARY_Y_UO: i32 = 390;
 const OBITUARY_CHAR_WIDTH: f32 = 9.6;
+/// CoD2's `cg_centerPrintY` default (registered in `CG_Init`, Mac 0x145214).
+const COD2_CENTER_Y: f32 = -60.0;
 
 /// The text `CG_Obituary` formats for a kill by the drawn player, before
 /// localization. `victim` is the victim's name, `teammate` a kill on the
@@ -45,6 +47,9 @@ pub struct CenterPrint {
     start: i32,
     y: i32,
     char_width: i32,
+    /// CoD2's layout: `cg_centerPrintY` (-60) up from the bottom, not `y`
+    /// down from the top (cod2-hud.md 15).
+    pub cod2: bool,
 }
 
 impl CenterPrint {
@@ -73,11 +78,19 @@ impl CenterPrint {
         let font = fonts.pick(Slot::Default, scale, 480.0 * v.scale);
         // Traps 0x35 and 0x34 return ints.
         let h = text_height(font, scale).trunc();
-        let mut y = self.y as f32 - h * 0.5 * self.lines as f32 - h;
+        let mut y = if self.cod2 {
+            480.0 + COD2_CENTER_Y - h * 1.2 * self.lines as f32
+        } else {
+            self.y as f32 - h * 0.5 * self.lines as f32 - h
+        };
         for line in self.text.split('\n') {
             let line: String = line.chars().take(LINE_CHARS).collect();
             let w = text_width(font, &line, scale).trunc();
-            let x = (640.0 - w) * 0.5;
+            let x = if self.cod2 {
+                320.0 - w * 0.5
+            } else {
+                (640.0 - w) * 0.5
+            };
             menu_text_rgba(font, &line, (x, y), scale, [1.0, 1.0, 1.0, alpha], v, out);
             y += h * 1.2;
         }

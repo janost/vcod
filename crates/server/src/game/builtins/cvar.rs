@@ -27,18 +27,11 @@ pub fn lookup(folded: &str) -> Option<Builtin> {
     NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
 }
 
-/// C `atoi`: the longest numeric prefix, 0 when there is none. Rust's
-/// `parse` rejects `"12abc"`, which retail reads as 12.
-pub(crate) fn atoi(s: &str) -> i32 {
-    let s = s.trim_start();
-    let end = s
-        .char_indices()
-        .position(|(i, c)| !(c.is_ascii_digit() || (i == 0 && (c == '-' || c == '+'))))
-        .unwrap_or(s.len());
-    s[..end].parse().unwrap_or(0)
-}
+/// C `atoi` as the Linux servers read it (`strtol`).
+pub(crate) use vcod_common::text::atoi;
 
-/// C `atof`, same prefix rule with a decimal point and an exponent.
+/// C `atof`: the longest numeric prefix, a decimal point and an exponent
+/// included, 0 when there is none.
 pub fn atof(s: &str) -> f32 {
     let s = s.trim_start();
     let mut end = 0;
@@ -127,8 +120,60 @@ pub fn set_cvar(
             .format_number(value)
             .ok_or(ErrorKind::BadType("setCvar takes a renderable value"))?,
     };
+    let color = host
+        .profile
+        .color_dvars
+        .iter()
+        .any(|c| c.eq_ignore_ascii_case(&name));
+    let rendered = if color {
+        cod2_color(cx, &rendered)
+    } else {
+        rendered
+    };
     host.cvars.set(&name, &rendered);
     Ok(Value::Undefined)
+}
+
+/// The colour dvars the CoD2 game registers (`g_TeamColor_*`, 0x81084a4
+/// through 0x80b4300, the colour register).
+pub(crate) const COD2_COLOR_DVARS: &[&str] = &["g_TeamColor_Allies", "g_TeamColor_Axis"];
+
+/// CoD4 1.7's colour dvars: every `g_ScoresColor_*` and `g_TeamColor_*`
+/// the mirror carries. `_scoreboard.gsc`'s `setdvar("g_TeamColor_Allies",
+/// "0.6 0.64 0.69")` reads `0.6 0.639216 0.690196 0` in `handshake-1.7.txt`,
+/// CoD2's byte rule. VERIFIED live.
+pub(crate) const COD4_COLOR_DVARS: &[&str] = &[
+    "g_ScoresColor_Allies",
+    "g_ScoresColor_Axis",
+    "g_ScoresColor_EnemyTeam",
+    "g_ScoresColor_Free",
+    "g_ScoresColor_MyTeam",
+    "g_ScoresColor_Spectator",
+    "g_TeamColor_Allies",
+    "g_TeamColor_Axis",
+    "g_TeamColor_EnemyTeam",
+    "g_TeamColor_Free",
+    "g_TeamColor_MyTeam",
+    "g_TeamColor_Spectator",
+];
+
+/// A colour dvar's value as CoD2 keeps it: four components, a missing one
+/// 0, each stored as a byte and printed back `%g` of the byte over 255.
+/// `setCvar("g_TeamColor_Allies", ".25 .25 .75")` reads back
+/// `0.25098 0.25098 0.74902 0` on the wire, VERIFIED live; the rounding to
+/// nearest is INFERRED from that (cod2-protocol.md 15.4).
+fn cod2_color(cx: &Cx, value: &str) -> String {
+    let mut parts = value
+        .split_whitespace()
+        .map(|w| w.parse::<f32>().unwrap_or(0.0));
+    (0..4)
+        .map(|_| {
+            let byte = (parts.next().unwrap_or(0.0).clamp(0.0, 1.0) * 255.0).round();
+            cx.format_number(Value::Float(byte / 255.0))
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// `makeCvarServerInfo(name, default)`: flags the cvar into the 140/204
@@ -271,6 +316,8 @@ pub fn exit_level(
     host.team_scores = [0, 0];
     host.zero_client_scores();
     host.script_log.push("ExitLevel: executed".to_string());
+    // CoD4's `ExitLevel` (0x80b4585) writes the same line to games_mp.log.
+    crate::game::cod4::log_printf(host, "ExitLevel: executed\n".to_string());
     Ok(Value::Undefined)
 }
 
@@ -283,7 +330,10 @@ pub fn map_restart(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     latch(host, LevelLatch::MapRestart, args)?;
-    host.console.push("map_restart".to_string());
+    // CoD2's `GScr_MapRestart` (0x8116a3c) runs `fast_restart`, its
+    // in-place restart; `map_restart` there is a full load
+    // (cod2-map-cycle.md 1).
+    host.console.push(host.profile.restart_command.to_string());
     Ok(Value::Undefined)
 }
 

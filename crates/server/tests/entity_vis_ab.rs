@@ -111,7 +111,7 @@ fn ours(
     team: &str,
     weapon: &str,
     fs: vcod_common::pk3::Pk3Fs,
-    bsp: &vcod_common::bsp::Bsp,
+    bsp: &vcod_common::mapworld::MapWorld,
 ) -> BTreeMap<u32, EntityState> {
     let fs = Rc::new(fs);
     let mut now = Instant::now();

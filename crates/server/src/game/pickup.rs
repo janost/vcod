@@ -27,6 +27,15 @@ pub enum ItemKind {
 
 pub fn item_kind(defs: &crate::defs::Defs, index: usize) -> Option<ItemKind> {
     let weapons = defs.proto.max_weapons;
+    // CoD2's weapon rows are the level's own list (`bg_itemlist + weapon *
+    // 0x2c`, `Drop_Weapon` Mac 0x1b165e), which the static `Defs` cannot
+    // name: every row in range reads as a weapon, and a row the table has
+    // no def for grabs nothing (`pickup_weapon`).
+    if std::ptr::eq(defs, &crate::defs::COD2) {
+        return (1..=weapons)
+            .contains(&index)
+            .then_some(ItemKind::Weapon(index as u8));
+    }
     if (1..=weapons).contains(&index) {
         return defs
             .weapon_name(index)
@@ -384,7 +393,7 @@ fn pickup_weapon(
     let Some(def) = table.get(wi) else {
         return false;
     };
-    let v11 = table.list().proto.version == vcod_common::net::protocol::PROTOCOL_V1.version;
+    let v11 = table.list().proto.is_v1();
     let (reserve, clip) = resolve_counts(def, it, v11, rand);
     if inv.weapons.holds(wi) {
         let offered = reserve + clip;

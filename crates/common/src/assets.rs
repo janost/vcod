@@ -1,3 +1,4 @@
+use crate::asset_source::{Asset, AssetKind, AssetSource};
 use crate::pk3::Pk3Fs;
 use anyhow::{Result, bail, ensure};
 use std::collections::HashMap;
@@ -22,6 +23,7 @@ impl TextureFormat {
     }
 }
 
+#[derive(Clone)]
 pub enum ImageData {
     Bc {
         format: TextureFormat,
@@ -30,6 +32,7 @@ pub enum ImageData {
     Rgba8(Vec<u8>),
 }
 
+#[derive(Clone)]
 pub struct Image {
     pub width: u32,
     pub height: u32,
@@ -287,7 +290,7 @@ pub fn dlight_blob() -> Image {
 /// (effects, pak5); the scan is by suffix, not directory. Thin queries over
 /// [`ShaderLib`] for the consumers that predate the full parser.
 pub struct Shaders {
-    lib: crate::shader::ShaderLib,
+    lib: std::sync::Arc<crate::shader::ShaderLib>,
 }
 
 impl Shaders {
@@ -312,7 +315,7 @@ impl Shaders {
     }
 }
 
-pub fn load_shaders(fs: &Pk3Fs) -> Shaders {
+pub fn load_shaders(fs: &dyn AssetSource) -> Shaders {
     Shaders {
         lib: crate::shader::ShaderLib::load(fs),
     }
@@ -322,11 +325,11 @@ pub fn load_shaders(fs: &Pk3Fs) -> Shaders {
 pub const IMAGE_EXTS: [&str; 3] = [".dds", ".tga", ".jpg"];
 
 /// First `base + ext` present in `fs`, without reading it.
-pub fn probe_image_path(fs: &Pk3Fs, base: &str) -> Option<String> {
+pub fn probe_image_path(fs: &dyn AssetSource, base: &str) -> Option<String> {
     IMAGE_EXTS
         .iter()
         .map(|ext| format!("{base}{ext}"))
-        .find(|path| fs.contains(path))
+        .find(|path| fs.exists(path))
 }
 
 /// The image probe the renderer and the corpus test share, retail's
@@ -334,12 +337,12 @@ pub fn probe_image_path(fs: &Pk3Fs, base: &str) -> Option<String> {
 /// [`IMAGE_EXTS`] probed in order, so a `.tga` path loads the `.dds` beside
 /// it (UO's `hud@health.dds` over 1.1's `hud@health.tga`). A path no probe
 /// finds is tried as-is.
-pub fn resolve_bundle_image(fs: &Pk3Fs, path: &str) -> Option<String> {
+pub fn resolve_bundle_image(fs: &dyn AssetSource, path: &str) -> Option<String> {
     let base = match path.len().checked_sub(4) {
         Some(i) if i > 0 && path.as_bytes()[i] == b'.' => &path[..i],
         _ => path,
     };
-    probe_image_path(fs, base).or_else(|| fs.contains(path).then(|| path.to_string()))
+    probe_image_path(fs, base).or_else(|| fs.exists(path).then(|| path.to_string()))
 }
 
 fn rgba_image(img: image::DynamicImage) -> Image {
@@ -370,26 +373,64 @@ fn decode_image(ext: &str, raw: &[u8]) -> Result<Image> {
     match ext {
         ".dds" => parse_dds(raw),
         ".tga" => decode_with_image(raw, Some(image::ImageFormat::Tga)),
+        // only CoD2 materials name `images/<name>.iwi`; no CoD1 probe adds it
+        ".iwi" => crate::iwi::decode_or_placeholder(raw),
         _ => decode_with_image(raw, None),
     }
 }
 
-fn try_load_image(fs: &Pk3Fs, name: &str) -> Option<Image> {
-    for ext in IMAGE_EXTS {
-        let Some(raw) = fs.read(&format!("{name}{ext}")) else {
-            continue;
-        };
-        match decode_image(ext, &raw) {
-            Ok(img) => return Some(img),
-            Err(e) => log::warn!("bad {ext} for {name}: {e}"),
+/// The file an [`Image`]'s path names is not in the source.
+#[derive(Debug)]
+pub struct ImageMissing(pub String);
+
+impl std::fmt::Display for ImageMissing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} not found", self.0)
+    }
+}
+
+impl std::error::Error for ImageMissing {}
+
+/// An image by its file's path, decoded by the path's extension. The read
+/// goes through [`AssetSource::read`], so a [`Pk3Fs`] marks the pak. A
+/// missing file fails with [`ImageMissing`], an undecodable one with the
+/// decoder's error. The loaders below build through [`Asset::find`], not
+/// the cached [`crate::asset_source::load`]: the client's texture caches
+/// own a decoded image's lifetime, and the source's cache would keep every
+/// texture of a level resident.
+impl Asset for Image {
+    const KIND: AssetKind = AssetKind::Image;
+
+    fn find(src: &dyn AssetSource, path: &str) -> Result<Self> {
+        let raw = src
+            .read(path)
+            .ok_or_else(|| ImageMissing(path.to_string()))?;
+        decode_image(&extension(path), &raw)
+    }
+}
+
+/// [`Image::find`], `None` when the file is missing; an undecodable one
+/// warns `bad <ext> for <name>` first.
+fn find_image(fs: &dyn AssetSource, path: &str, ext: &str, name: &str) -> Option<Image> {
+    match Image::find(fs, path) {
+        Ok(img) => Some(img),
+        Err(e) if e.is::<ImageMissing>() => None,
+        Err(e) => {
+            log::warn!("bad {ext} for {name}: {e}");
+            None
         }
     }
-    None
+}
+
+fn try_load_image(fs: &dyn AssetSource, name: &str) -> Option<Image> {
+    IMAGE_EXTS
+        .iter()
+        .find_map(|ext| find_image(fs, &format!("{name}{ext}"), ext, name))
 }
 
 /// File probe first, then the shader script image. Never fails: missing or
 /// broken assets warn and return retail's default image.
-pub fn load_material_image(fs: &Pk3Fs, shaders: &Shaders, name: &str) -> Image {
+pub fn load_material_image(fs: &dyn AssetSource, shaders: &Shaders, name: &str) -> Image {
     if let Some(img) = try_load_image(fs, name) {
         return img;
     }
@@ -499,30 +540,34 @@ pub fn force_opaque(img: &mut Image) {
 /// at 0.5 cuts it. BC1 counts its transparent code (index 3 when
 /// `c0 <= c1`).
 pub fn has_cutout_alpha(img: &Image) -> bool {
+    cutout_alpha_in(img, 1)
+}
+
+/// [`has_cutout_alpha`] over every level a block-compressed image stores.
+pub fn has_cutout_alpha_any_level(img: &Image) -> bool {
+    cutout_alpha_in(img, usize::MAX)
+}
+
+fn cutout_alpha_in(img: &Image, levels: usize) -> bool {
     match &img.data {
         ImageData::Rgba8(px) => px.iter().skip(3).step_by(4).any(|&a| a < 128),
-        ImageData::Bc { format, mips } => {
-            let Some(top) = mips.first() else {
-                return false;
-            };
-            match format {
-                TextureFormat::Bc1RgbaUnorm => top.as_chunks::<8>().0.iter().any(|b| {
-                    let c0 = u16::from_le_bytes([b[0], b[1]]);
-                    let c1 = u16::from_le_bytes([b[2], b[3]]);
-                    let bits = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
-                    c0 <= c1 && (0..16).any(|t| (bits >> (2 * t)) & 3 == 3)
-                }),
-                TextureFormat::Bc2RgbaUnorm => top
-                    .as_chunks::<16>()
-                    .0
-                    .iter()
-                    .any(|b| b[..8].iter().any(|&n| n & 0x0F < 8 || n >> 4 < 8)),
-                TextureFormat::Bc3RgbaUnorm => top.as_chunks::<16>().0.iter().any(|b| {
-                    let bits = u64::from_le_bytes([b[2], b[3], b[4], b[5], b[6], b[7], 0, 0]);
-                    (0..16).any(|t| bc3_alpha(b[0], b[1], (bits >> (3 * t)) & 7) < 128)
-                }),
-            }
-        }
+        ImageData::Bc { format, mips } => mips.iter().take(levels).any(|level| match format {
+            TextureFormat::Bc1RgbaUnorm => level.as_chunks::<8>().0.iter().any(|b| {
+                let c0 = u16::from_le_bytes([b[0], b[1]]);
+                let c1 = u16::from_le_bytes([b[2], b[3]]);
+                let bits = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+                c0 <= c1 && (0..16).any(|t| (bits >> (2 * t)) & 3 == 3)
+            }),
+            TextureFormat::Bc2RgbaUnorm => level
+                .as_chunks::<16>()
+                .0
+                .iter()
+                .any(|b| b[..8].iter().any(|&n| n & 0x0F < 8 || n >> 4 < 8)),
+            TextureFormat::Bc3RgbaUnorm => level.as_chunks::<16>().0.iter().any(|b| {
+                let bits = u64::from_le_bytes([b[2], b[3], b[4], b[5], b[6], b[7], 0, 0]);
+                (0..16).any(|t| bc3_alpha(b[0], b[1], (bits >> (3 * t)) & 7) < 128)
+            }),
+        }),
     }
 }
 
@@ -531,24 +576,15 @@ pub fn has_cutout_alpha(img: &Image) -> bool {
 /// skin to 0x4eeae0 and so to 0x4edf20, which tries `.dds` first whatever
 /// extension the model names. Missing or undecodable warns and returns
 /// retail's default image.
-pub fn load_skin_image(fs: &Pk3Fs, filename: &str) -> Image {
+pub fn load_skin_image(fs: &dyn AssetSource, filename: &str) -> Image {
     let named = format!("skins/{filename}");
     let path = resolve_bundle_image(fs, &named).unwrap_or(named);
     // some prop skins spell the extension in caps ("wood@pine1.TGA")
-    let ext = path
-        .rfind('.')
-        .map(|i| path[i..].to_lowercase())
-        .unwrap_or_default();
-    if let Some(raw) = fs.read(&path) {
-        match decode_image(&ext, &raw) {
-            Ok(mut img) => {
-                if is_inverted_foliage_mask(filename) {
-                    invert_mask_alpha(&mut img.data);
-                }
-                return img;
-            }
-            Err(e) => log::warn!("bad {ext} for {path}: {e}"),
+    if let Some(mut img) = find_image(fs, &path, &extension(&path), &path) {
+        if is_inverted_foliage_mask(filename) {
+            invert_mask_alpha(&mut img.data);
         }
+        return img;
     }
     log::warn!("no texture found for {path}, using the default image");
     default_image()
@@ -556,26 +592,101 @@ pub fn load_skin_image(fs: &Pk3Fs, filename: &str) -> Image {
 
 /// Whether `skins/<filename>` has an image under retail's probe, as
 /// [`load_skin_image`] resolves it.
-pub fn skin_image_exists(fs: &Pk3Fs, filename: &str) -> bool {
+pub fn skin_image_exists(fs: &dyn AssetSource, filename: &str) -> bool {
     let named = format!("skins/{filename}");
-    resolve_bundle_image(fs, &named).is_some() || fs.contains(&named)
+    resolve_bundle_image(fs, &named).is_some() || fs.exists(&named)
 }
 
 /// Loads by full pk3 path, extension included; no probing, no shader lookup.
 /// Missing or undecodable warns and returns retail's default image.
-pub fn load_path_image(fs: &Pk3Fs, path: &str) -> Image {
-    let ext = path
-        .rfind('.')
-        .map(|i| path[i..].to_lowercase())
-        .unwrap_or_default();
-    if let Some(raw) = fs.read(path) {
-        match decode_image(&ext, &raw) {
-            Ok(img) => return img,
-            Err(e) => log::warn!("bad {ext} for {path}: {e}"),
-        }
+pub fn load_path_image(fs: &dyn AssetSource, path: &str) -> Image {
+    if let Some(img) = find_image(fs, path, &extension(path), path) {
+        return img;
     }
     log::warn!("no texture found for {path}, using the default image");
     default_image()
+}
+
+/// Decoded images by path, filled ahead of need on every core
+/// ([`DecodedImages::prefetch`]) and on a miss. A taker gets what
+/// [`load_path_image`] would have given and its read marked on the pak as
+/// that read would ([`Pk3Fs::mark_read`]): a path decoded ahead and never
+/// taken leaves no mark, and one taken again (another map's load, while
+/// the client keeps the cache) marks again. A path that failed to read or
+/// decode is not kept, so each taker reads it again and warns as before.
+#[derive(Default)]
+pub struct DecodedImages {
+    images: std::sync::Mutex<HashMap<String, Image>>,
+}
+
+impl DecodedImages {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Image>> {
+        self.images.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The `paths` not held yet, read (unflagged) and decoded in parallel.
+    pub fn prefetch(&self, fs: &Pk3Fs, paths: impl IntoIterator<Item = String>) {
+        let mut paths: Vec<String> = {
+            let held = self.lock();
+            paths
+                .into_iter()
+                .filter(|p| !held.contains_key(p))
+                .collect()
+        };
+        paths.sort_unstable();
+        paths.dedup();
+        let images = crate::laps::par_map(&paths, |path| {
+            let raw = fs.read_unflagged(path)?;
+            decode_image(&extension(path), &raw).ok()
+        });
+        let mut held = self.lock();
+        for (p, img) in paths.into_iter().zip(images) {
+            if let Some(img) = img {
+                held.insert(p, img);
+            }
+        }
+    }
+
+    /// The decoded `path`, its read marked, when held.
+    pub fn take(&self, fs: &Pk3Fs, path: &str) -> Option<Image> {
+        let img = self.lock().get(path)?.clone();
+        fs.mark_read(path);
+        Some(img)
+    }
+
+    /// [`load_path_image`] through the cache: held, or read, decoded and
+    /// kept.
+    pub fn load_path_image(&self, fs: &Pk3Fs, path: &str) -> Image {
+        if let Some(img) = self.take(fs, path) {
+            return img;
+        }
+        if let Some(img) = find_image(fs, path, &extension(path), path) {
+            self.lock().insert(path.to_string(), img.clone());
+            return img;
+        }
+        log::warn!("no texture found for {path}, using the default image");
+        default_image()
+    }
+
+    /// Drops every image (the search path changed under them).
+    pub fn clear(&self) {
+        self.lock().clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.lock().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lock().is_empty()
+    }
+}
+
+/// `path`'s lowercase dotted extension, `""` without one.
+fn extension(path: &str) -> String {
+    path.rfind('.')
+        .map(|i| path[i..].to_lowercase())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -724,6 +835,21 @@ mod tests {
         d[16] = 8;
         d.extend(std::iter::repeat_n(0x80u8, w as usize * h as usize));
         d
+    }
+
+    #[test]
+    fn image_assets_decode_by_extension_and_mark_their_pak() {
+        let dir = tempfile::tempdir().unwrap();
+        let tga = gray_tga(2, 1);
+        let pk3 = crate::testing::pk3_with(&[("gfx/A.tga", &tga), ("gfx/bad.dds", b"nope")]);
+        std::fs::write(dir.path().join("pak0.pk3"), pk3).unwrap();
+        let fs = Pk3Fs::open(dir.path()).unwrap();
+        let img = Image::find(&fs, "gfx/a.TGA").unwrap();
+        assert_eq!((img.width, img.height), (2, 1));
+        assert_eq!(fs.referenced_paks().len(), 1);
+        let missing = |p: &str| Image::find(&fs, p).err().map(|e| e.is::<ImageMissing>());
+        assert_eq!(missing("gfx/b.tga"), Some(true));
+        assert_eq!(missing("gfx/bad.dds"), Some(false));
     }
 
     #[test]
@@ -1244,6 +1370,23 @@ gfx/effects/second_stage_only
             };
             assert_eq!(mips[0][8..], [0x5A; 8], "{format:?}: colour untouched");
         }
+    }
+
+    #[test]
+    fn a_cut_in_a_lower_level_only_counts_for_any_level() {
+        // BC2: an opaque level 0 over a level 1 whose alpha is 0
+        let mut opaque = [0xFFu8; 16];
+        opaque[8..].fill(0);
+        let img = Image {
+            width: 8,
+            height: 8,
+            data: ImageData::Bc {
+                format: TextureFormat::Bc2RgbaUnorm,
+                mips: vec![opaque.repeat(4), [0u8; 16].to_vec()],
+            },
+        };
+        assert!(!has_cutout_alpha(&img));
+        assert!(has_cutout_alpha_any_level(&img));
     }
 
     #[test]

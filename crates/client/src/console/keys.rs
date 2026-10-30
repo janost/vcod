@@ -276,6 +276,47 @@ pub fn mouse_name(button: MouseButton) -> Option<&'static str> {
     })
 }
 
+/// Whole wheel notches out of winit's scroll events. A wheel's notch is a
+/// `LineDelta` of 1 (X11, or Wayland's `axis_discrete`); a high-resolution
+/// wheel on Wayland adds a `PixelDelta` for every part of a notch before
+/// the discrete one, and a touchpad sends only those. Retail turns one
+/// notch into one `MWHEELUP`/`MWHEELDOWN`, so counting every event fired
+/// `weapnext` several times a notch, often an even number of times.
+#[derive(Default)]
+pub struct WheelNotches {
+    lines: f32,
+    pixels: f32,
+    /// A discrete notch came: this device's pixel parts are not notches.
+    discrete: bool,
+}
+
+/// A touchpad's pixels to a notch, as the menus' wheel already counts.
+const PIXELS_PER_NOTCH: f32 = 60.0;
+
+impl WheelNotches {
+    /// The whole notches one event completes, a `LineDelta`'s or a
+    /// `PixelDelta`'s y (winit's sign, up positive); up positive.
+    pub fn step(&mut self, line: Option<f32>, pixels: Option<f32>) -> i32 {
+        let acc = if let Some(y) = line {
+            self.discrete = true;
+            self.pixels = 0.0;
+            self.lines += y;
+            &mut self.lines
+        } else if let Some(y) = pixels {
+            if self.discrete {
+                return 0;
+            }
+            self.pixels += y / PIXELS_PER_NOTCH;
+            &mut self.pixels
+        } else {
+            return 0;
+        };
+        let whole = acc.trunc();
+        *acc -= whole;
+        whole as i32
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,5 +355,22 @@ mod tests {
         assert_eq!(canonical("~").as_deref(), Some("`"));
         assert_eq!(canonical("KEY_W"), None);
         assert_eq!(canonical("ww"), None);
+    }
+
+    #[test]
+    fn a_notch_is_one_press_whatever_the_wheel_sends() {
+        let mut w = WheelNotches::default();
+        // X11 or a plain wheel on Wayland: one line a notch.
+        assert_eq!(w.step(Some(-1.0), None), -1);
+        assert_eq!(w.step(Some(1.0), None), 1);
+        // A high-resolution wheel on Wayland: seven parts, then the notch.
+        let mut w = WheelNotches::default();
+        w.step(Some(-1.0), None);
+        let parts: i32 = (0..7).map(|_| w.step(None, Some(-1.875))).sum();
+        assert_eq!(parts + w.step(Some(-1.0), None), -1);
+        // A touchpad: pixels only, a notch every 60.
+        let mut w = WheelNotches::default();
+        let n: i32 = (0..8).map(|_| w.step(None, Some(15.0))).sum();
+        assert_eq!(n, 2);
     }
 }

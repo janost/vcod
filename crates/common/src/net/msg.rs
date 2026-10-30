@@ -10,14 +10,11 @@
 //! does. A raw byte read in the middle of a run of bit fields lands after the
 //! byte those bits are still filling.
 
-use super::huffman::{Huffman, add_bit, get_bit};
-use super::protocol::{ANGLE_BITS, NetField, Protocol};
-
-const MAX_STRING_CHARS: usize = 1024;
-const BIG_INFO_STRING: usize = 8192;
-/// A float that is integral and inside this range goes out truncated.
-const FLOAT_INT_BITS: i32 = 13;
-const FLOAT_INT_BIAS: i32 = 1 << (FLOAT_INT_BITS - 1);
+use super::codec::{
+    ANGLE_BITS, FieldCodec, NetField, write_delta_field, write_delta_struct, write_ps_value,
+};
+pub use super::codec::{MsgReader, MsgWriter};
+use super::protocol::Cod1Wire;
 
 /// `svc_ops_e`, the server->client op bytes (confirmed against cod_lnxded 1.1d).
 pub const SVC_BAD: u8 = 0;
@@ -37,192 +34,7 @@ pub const CLC_CLIENT_COMMAND: i32 = 2;
 pub const CLC_EOF: i32 = 3;
 pub const CLC_BITS: i32 = 2;
 
-/// Reader over a message body; `new` block-decompresses the input.
-pub struct MsgReader {
-    data: Vec<u8>,
-    /// `msg_t.bit`, the bit-field cursor.
-    bit: usize,
-    /// `msg_t.readcount`, the whole-byte cursor.
-    readcount: usize,
-    overflowed: bool,
-}
-
-impl MsgReader {
-    pub fn new(data: &[u8], huff: &Huffman) -> Self {
-        MsgReader {
-            data: huff.decompress_block(data),
-            bit: 0,
-            readcount: 0,
-            overflowed: false,
-        }
-    }
-
-    /// Bits consumed so far, on the decompressed stream.
-    pub fn bits_read(&self) -> usize {
-        self.bit.max(self.readcount * 8)
-    }
-
-    /// The decompressed message, for spanning a region a parse just consumed.
-    pub fn plain(&self) -> &[u8] {
-        &self.data
-    }
-
-    /// Set once a read ran past the end; every read after that returns 0.
-    pub fn is_overflowed(&self) -> bool {
-        self.overflowed
-    }
-
-    /// `MSG_ReadBits` (cod_lnxded 0x807f18c): one bit at a time, LSB first.
-    /// Negative `bits` sign-extends.
-    pub fn read_bits(&mut self, bits: i32) -> i32 {
-        debug_assert!(bits != 0 && (-31..=32).contains(&bits), "bad bits {bits}");
-        if self.overflowed {
-            return 0;
-        }
-        let width = (bits.unsigned_abs() as usize).min(32);
-        let mut value: u32 = 0;
-        for i in 0..width {
-            value |= u32::from(self.next_bit()) << i;
-        }
-        sign_extend(value, width, bits < 0)
-    }
-
-    /// The delta codec's inlined bit read (cod_lnxded 0x807c904): `bits & 7`
-    /// loose bits, then whole bytes off `readcount`. Differs from
-    /// [`Self::read_bits`] at `bits >= 8`; never swap one for the other.
-    pub fn read_packed_bits(&mut self, bits: i32) -> i32 {
-        debug_assert!(bits != 0 && (-32..=32).contains(&bits), "bad bits {bits}");
-        if self.overflowed {
-            return 0;
-        }
-        let width = (bits.unsigned_abs() as usize).min(32);
-        let mut value: u32 = 0;
-        let rem = width & 7;
-        for i in 0..rem {
-            value |= u32::from(self.next_bit()) << i;
-        }
-        let mut got = rem;
-        while got < width {
-            value |= u32::from(self.next_byte()) << got;
-            got += 8;
-        }
-        // No sign extension: a negative `bits` only picks the width.
-        value as i32
-    }
-
-    /// `MSG_ReadByte` (0x807f294): raw at `readcount`, untouched by `bit`.
-    pub fn read_byte(&mut self) -> u8 {
-        if self.overflowed {
-            return 0;
-        }
-        self.next_byte()
-    }
-
-    pub fn read_short(&mut self) -> i16 {
-        let lo = u16::from(self.read_byte());
-        let hi = u16::from(self.read_byte());
-        (lo | (hi << 8)) as i16
-    }
-
-    pub fn read_long(&mut self) -> i32 {
-        let mut v = 0u32;
-        for i in 0..4 {
-            v |= u32::from(self.read_byte()) << (i * 8);
-        }
-        v as i32
-    }
-
-    /// `MSG_ReadString` (CoDMP.exe 0x444e60 family).
-    pub fn read_string(&mut self) -> String {
-        self.read_string_capped(MAX_STRING_CHARS)
-    }
-
-    /// `MSG_ReadBigString` (CoDMP.exe 0x444e00): same byte mapping, bigger cap.
-    pub fn read_big_string(&mut self) -> String {
-        self.read_string_capped(BIG_INFO_STRING)
-    }
-
-    /// The dedicated server's `MSG_ReadString` (cod_lnxded 0x807f320), what
-    /// a client command is read with: the client's byte map less the `%`
-    /// one (0x8083394). The netchan keys server-to-client traffic on this
-    /// copy, so a `%` mapped here desyncs a retail client that typed one.
-    pub fn read_server_string(&mut self) -> String {
-        let mut s = String::new();
-        while s.len() < MAX_STRING_CHARS - 1 {
-            let c = self.read_byte();
-            if c == 0 || self.overflowed {
-                break;
-            }
-            s.push(match c {
-                0x92 => '\'',
-                c if c > 127 => '.',
-                c => c as char,
-            });
-        }
-        s
-    }
-
-    /// CoD 1.1 maps `%` -> `.`, 0x92 -> `'` and every other byte over 127 ->
-    /// `.` in BOTH readers, unlike Q3/RTCW where the big reader keeps high
-    /// bytes. Faithfulness matters beyond display: the usercmd delta key
-    /// hashes the stored server-command string (`Com_HashKey` on raw bytes),
-    /// so a client keeping high bytes - worse, re-encoded as two-byte UTF-8 -
-    /// hashes differently from the server and every move it sends decodes as
-    /// garbage until an ASCII-only command rotates into the acked slot
-    /// (docs/protocol-1.1.md, divergence list).
-    fn read_string_capped(&mut self, cap: usize) -> String {
-        let mut s = String::new();
-        let mut n = 0;
-        while n < cap - 1 {
-            let c = self.read_byte();
-            if c == 0 || self.overflowed {
-                break;
-            }
-            let c = match c {
-                b'%' => b'.',
-                0x92 => b'\'',
-                c if c > 127 => b'.',
-                c => c,
-            };
-            s.push(c as char);
-            n += 1;
-        }
-        s
-    }
-
-    /// One bit, resyncing onto `readcount` at each byte boundary as the C does.
-    fn next_bit(&mut self) -> u8 {
-        if self.bit & 7 == 0 {
-            if self.readcount >= self.data.len() {
-                self.overflowed = true;
-                return 0;
-            }
-            self.bit = self.readcount * 8;
-            self.readcount += 1;
-        }
-        get_bit(&self.data, &mut self.bit)
-    }
-
-    fn next_byte(&mut self) -> u8 {
-        if self.readcount >= self.data.len() {
-            self.overflowed = true;
-            return 0;
-        }
-        let b = self.data[self.readcount];
-        self.readcount += 1;
-        b
-    }
-}
-
-fn sign_extend(value: u32, width: usize, signed: bool) -> i32 {
-    if signed && width < 32 && value & (1 << (width - 1)) != 0 {
-        (value | !((1u32 << width) - 1)) as i32
-    } else {
-        value as i32
-    }
-}
-
-/// Raw wire values in `Protocol::entity_fields` order. Float fields
+/// Raw wire values in `Cod1Wire::entity_fields` order. Float fields
 /// (`bits == 0`) hold the f32 bit pattern.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EntityState {
@@ -231,27 +43,31 @@ pub struct EntityState {
 }
 
 impl EntityState {
-    pub fn null(p: &Protocol) -> Self {
+    pub fn null(p: &Cod1Wire) -> Self {
         EntityState {
             number: 0,
             fields: vec![0; p.entity_fields.len()],
         }
     }
 
-    pub fn field_index(p: &Protocol, name: &str) -> Option<usize> {
-        p.entity_fields.iter().position(|f| f.name == name)
+    /// A name's slot in `p`'s table. CoD2's table spells 1.1's
+    /// `_union.scale` plain `scale` (the same word, es+216), so a 1.1 name
+    /// under `_union.` falls back to its bare name.
+    pub fn field_index(p: &Cod1Wire, name: &str) -> Option<usize> {
+        let at = |n: &str| p.entity_fields.iter().position(|f| f.name == n);
+        at(name).or_else(|| at(name.strip_prefix("_union.")?))
     }
 
     /// Raw wire value of a named field, 0 if the protocol lacks it.
-    pub fn field_i32(&self, p: &Protocol, name: &str) -> i32 {
+    pub fn field_i32(&self, p: &Cod1Wire, name: &str) -> i32 {
         Self::field_index(p, name).map_or(0, |i| self.fields[i])
     }
 
-    pub fn field_f32(&self, p: &Protocol, name: &str) -> f32 {
+    pub fn field_f32(&self, p: &Cod1Wire, name: &str) -> f32 {
         f32::from_bits(self.field_i32(p, name) as u32)
     }
 
-    pub fn origin(&self, p: &Protocol) -> [f32; 3] {
+    pub fn origin(&self, p: &Cod1Wire) -> [f32; 3] {
         [
             self.field_f32(p, "pos.trBase[0]"),
             self.field_f32(p, "pos.trBase[1]"),
@@ -260,7 +76,7 @@ impl EntityState {
     }
 
     /// `apos.trBase`, degrees.
-    pub fn angles(&self, p: &Protocol) -> [f32; 3] {
+    pub fn angles(&self, p: &Cod1Wire) -> [f32; 3] {
         [
             self.field_f32(p, "apos.trBase[0]"),
             self.field_f32(p, "apos.trBase[1]"),
@@ -272,7 +88,7 @@ impl EntityState {
 /// The table an entity delta travels in and each entry's slot in
 /// `entity_fields` order: protocol 22 sends a vehicle through its second
 /// table, behind a select bit (docs/research/coduo-diff.md, section 3).
-fn entity_table(p: &Protocol, vehicle: bool) -> (&'static [NetField], Option<&'static [u8]>) {
+fn entity_table(p: &Cod1Wire, vehicle: bool) -> (&'static [NetField], Option<&'static [u8]>) {
     if vehicle {
         (p.vehicle_fields, Some(p.vehicle_field_slots))
     } else {
@@ -282,7 +98,7 @@ fn entity_table(p: &Protocol, vehicle: bool) -> (&'static [NetField], Option<&'s
 
 /// Whether `es` travels in the vehicle table: `eType` 12 on a protocol that
 /// has one (coduo_lnxded 0x8081d54).
-fn is_vehicle(p: &Protocol, es: &EntityState) -> bool {
+fn is_vehicle(p: &Cod1Wire, es: &EntityState) -> bool {
     !p.vehicle_fields.is_empty()
         && EntityState::field_index(p, "eType")
             .is_some_and(|i| es.fields[i] == crate::net::flags::ET_VEHICLE_V22)
@@ -292,7 +108,7 @@ fn is_vehicle(p: &Protocol, es: &EntityState) -> bool {
 /// delta removed the entity.
 pub fn read_delta_entity(
     r: &mut MsgReader,
-    p: &Protocol,
+    p: &Cod1Wire,
     from: &EntityState,
     number: u32,
 ) -> Option<EntityState> {
@@ -318,7 +134,10 @@ pub fn read_delta_entity(
         if r.read_bits(1) == 0 {
             continue;
         }
-        let v = read_field_value(r, to.fields[i], field.bits);
+        let v = p
+            .transport
+            .field_codec
+            .read_field_value(r, to.fields[i], field.bits);
         to.fields[i] = if Some(i) == eflags {
             (p.eflags_to_v1)(v)
         } else {
@@ -329,7 +148,7 @@ pub fn read_delta_entity(
 }
 
 /// `clientState_t`, the snapshot's third stream. Raw wire values in
-/// `Protocol::client_fields` order. `docs/research/clientstate-wire-format.md`.
+/// `Cod1Wire::client_fields` order. `docs/research/clientstate-wire-format.md`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClientState {
     pub client_num: u32,
@@ -337,24 +156,24 @@ pub struct ClientState {
 }
 
 impl ClientState {
-    pub fn null(p: &Protocol) -> Self {
+    pub fn null(p: &Cod1Wire) -> Self {
         ClientState {
             client_num: 0,
             fields: vec![0; p.client_fields.len()],
         }
     }
 
-    pub fn field_index(p: &Protocol, name: &str) -> Option<usize> {
+    pub fn field_index(p: &Cod1Wire, name: &str) -> Option<usize> {
         p.client_fields.iter().position(|f| f.name == name)
     }
 
-    pub fn field_i32(&self, p: &Protocol, name: &str) -> i32 {
+    pub fn field_i32(&self, p: &Cod1Wire, name: &str) -> i32 {
         Self::field_index(p, name).map_or(0, |i| self.fields[i])
     }
 
     /// `name[0..28]` are the 32-byte char array in LE u32 chunks; latin-1 up
     /// to the first NUL.
-    pub fn name(&self, p: &Protocol) -> String {
+    pub fn name(&self, p: &Cod1Wire) -> String {
         let mut bytes = Vec::with_capacity(32);
         for off in (0..32).step_by(4) {
             let v = self.field_i32(p, &format!("name[{off}]")) as u32;
@@ -369,7 +188,7 @@ impl ClientState {
 
     /// A fresh entry: team plus the name packed LE u32 chunk per
     /// `name[0..28]` field, NUL padded, capped at 31 bytes like the C array.
-    pub fn named(p: &Protocol, client_num: u32, team: i32, name: &str) -> Self {
+    pub fn named(p: &Cod1Wire, client_num: u32, team: i32, name: &str) -> Self {
         let mut cs = ClientState::null(p);
         cs.client_num = client_num;
         if let Some(i) = Self::field_index(p, "team") {
@@ -393,166 +212,26 @@ impl ClientState {
 /// 6-bit client index are already read; `None` means the client disconnected.
 pub fn read_delta_client(
     r: &mut MsgReader,
-    p: &Protocol,
+    p: &Cod1Wire,
     from: &ClientState,
     client_num: u32,
 ) -> Option<ClientState> {
-    if r.read_bits(1) == 1 {
-        return None;
-    }
-    let mut to = ClientState {
-        client_num,
-        fields: from.fields.clone(),
-    };
-    if r.read_bits(1) == 0 {
-        return Some(to);
-    }
-    let lc = (r.read_byte() as usize).min(p.client_fields.len());
-    for (i, field) in p.client_fields.iter().take(lc).enumerate() {
-        to.fields[i] = read_delta_field(r, to.fields[i], field.bits);
-    }
-    Some(to)
+    let fields = p
+        .transport
+        .field_codec
+        .read_delta_struct(r, p.client_fields, &from.fields)?;
+    Some(ClientState { client_num, fields })
 }
 
 /// Inverse of [`read_delta_client`]. The caller has written the presence bit
 /// and the 6-bit client number; `None` writes the removed bit.
 pub fn write_delta_client(
     w: &mut MsgWriter,
-    p: &Protocol,
+    p: &Cod1Wire,
     from: &ClientState,
     to: Option<&ClientState>,
 ) {
-    let Some(to) = to else {
-        w.write_bits(1, 1); // removed
-        return;
-    };
-    debug_assert_eq!(from.fields.len(), to.fields.len());
-    w.write_bits(0, 1);
-    let lc = from
-        .fields
-        .iter()
-        .zip(&to.fields)
-        .rposition(|(a, b)| a != b)
-        .map_or(0, |i| i + 1);
-    debug_assert!(lc <= 255);
-    if lc == 0 {
-        w.write_bits(0, 1); // no delta
-        return;
-    }
-    w.write_bits(1, 1);
-    w.write_byte(lc as u8);
-    for i in 0..lc {
-        write_delta_field(w, from.fields[i], to.fields[i], p.client_fields[i].bits);
-    }
-}
-
-/// One delta field (cod_lnxded 0x807c904): change bit, zero flag, then the
-/// float selector or the packed `|bits|` value. No sign extension.
-fn read_delta_field(r: &mut MsgReader, from_val: i32, bits: i32) -> i32 {
-    if r.read_bits(1) == 0 {
-        return from_val;
-    }
-    read_field_value(r, from_val, bits)
-}
-
-/// [`read_delta_field`] past its change bit.
-fn read_field_value(r: &mut MsgReader, from_val: i32, bits: i32) -> i32 {
-    if bits == 0 {
-        read_float_field(r, from_val)
-    } else if bits == ANGLE_BITS {
-        read_angle_field(r, from_val)
-    } else if r.read_bits(1) == 0 {
-        0
-    } else {
-        // Behind the set zero flag the C's int was not 0, so a packed 0 or
-        // the base's own value says it differed above the width.
-        above_width(r.read_packed_bits(bits), from_val, bits, true)
-    }
-}
-
-/// A packed integer the change bit (and for an entity the zero flag) says
-/// the sender's int held differently from the base and from 0, read back
-/// as the base or as 0 because the difference sat above the field's width:
-/// set bits above the width until it differs, so the writer, which masks to
-/// the width, sends the same bits for it.
-fn above_width(v: i32, from_val: i32, bits: i32, nonzero: bool) -> i32 {
-    let width = bits.unsigned_abs();
-    if width > 28 {
-        return v;
-    }
-    let mut out = v;
-    let mut k = 0;
-    while out == from_val || (nonzero && out == 0) {
-        k += 1;
-        out = v | (k << width);
-    }
-    out
-}
-
-/// Degrees per unit of a 16-bit wire angle.
-const ANGLE_UNIT: f32 = 360.0 / 65536.0;
-
-/// Protocol 22's angle (coduo_lnxded 0x8081850): a zero flag, then a raw
-/// short. The change bit says the sender's two floats differed, which two
-/// angles one short apart need not after quantizing; a value equal to the
-/// base is nudged off it in its last mantissa bit, which the writer still
-/// rounds to the same short, so a capture re-encodes byte for byte. A short
-/// of 0 behind a set zero flag (an angle under half a unit) decodes to the
-/// smallest float above zero for the same reason.
-fn read_angle_field(r: &mut MsgReader, from_val: i32) -> i32 {
-    let v = if r.read_bits(1) == 0 {
-        0
-    } else {
-        match r.read_short() {
-            0 => 1,
-            s => (f32::from(s) * ANGLE_UNIT).to_bits() as i32,
-        }
-    };
-    if v != from_val {
-        v
-    } else if v & 0x7fff_ffff == 0 {
-        v ^ i32::MIN // the other zero
-    } else if v == 1 {
-        2
-    } else {
-        v ^ 1
-    }
-}
-
-/// Inverse of [`read_angle_field`]: `deg * 65536 / 360` truncated toward
-/// zero, the constant the f32 at coduo_lnxded 0x80e292c, stored under
-/// control word 0xc00 (0x8080815). A short the reader decoded comes back
-/// as itself: the f32 constant is a hair over 65536 / 360.
-fn write_angle_field(w: &mut MsgWriter, raw: i32) {
-    let f = f32::from_bits(raw as u32);
-    if f == 0.0 {
-        w.write_bits(0, 1);
-        return;
-    }
-    w.write_bits(1, 1);
-    let units = (f64::from(f) * f64::from(65536.0f32 / 360.0)) as i64;
-    w.write_short(units as u16 as i16);
-}
-
-/// Zero flag, then a 13-bit biased integer or the raw 32 bits. A clear zero
-/// flag from a `+0.0` base means the sender held `-0.0` (the C compares slots
-/// as ints); keeping it lets [`write_delta_entity`] round-trip a capture byte
-/// for byte. docs/protocol-1.1.md, "Entity delta".
-fn read_float_field(r: &mut MsgReader, from_val: i32) -> i32 {
-    if r.read_bits(1) == 0 {
-        return if from_val == 0 {
-            (-0f32).to_bits() as i32
-        } else {
-            0f32.to_bits() as i32
-        };
-    }
-    if r.read_bits(1) == 0 {
-        let trunc = r.read_packed_bits(FLOAT_INT_BITS) - FLOAT_INT_BIAS;
-        (trunc as f32).to_bits() as i32
-    } else {
-        // Raw read at `readcount` (0x807ca80).
-        r.read_long()
-    }
+    write_delta_struct(w, p.client_fields, &from.fields, to.map(|c| &c.fields[..]));
 }
 
 pub fn write_server_command(w: &mut MsgWriter, seq: i32, cmd: &str) {
@@ -566,7 +245,7 @@ pub fn write_server_command(w: &mut MsgWriter, seq: i32, cmd: &str) {
 /// is a change from `0.0`.
 pub fn write_delta_entity(
     w: &mut MsgWriter,
-    p: &Protocol,
+    p: &Cod1Wire,
     from: &EntityState,
     to: Option<&EntityState>,
 ) {
@@ -599,42 +278,6 @@ pub fn write_delta_entity(
     for (k, field) in table.iter().enumerate().take(lc) {
         let i = slot(k);
         write_delta_field(w, from.fields[i], to.fields[i], field.bits);
-    }
-}
-
-fn write_delta_field(w: &mut MsgWriter, from_val: i32, to_val: i32, bits: i32) {
-    if from_val == to_val {
-        w.write_bits(0, 1);
-        return;
-    }
-    w.write_bits(1, 1);
-    if bits == 0 {
-        write_float_field(w, to_val);
-    } else if bits == ANGLE_BITS {
-        write_angle_field(w, to_val);
-    } else if to_val == 0 {
-        w.write_bits(0, 1);
-    } else {
-        w.write_bits(1, 1);
-        w.write_packed_bits(to_val, bits);
-    }
-}
-
-fn write_float_field(w: &mut MsgWriter, raw: i32) {
-    let f = f32::from_bits(raw as u32);
-    if f == 0.0 {
-        w.write_bits(0, 1);
-        return;
-    }
-    w.write_bits(1, 1);
-    let trunc = f as i32;
-    let biased = trunc.wrapping_add(FLOAT_INT_BIAS);
-    if trunc as f32 == f && (0..(1 << FLOAT_INT_BITS)).contains(&biased) {
-        w.write_bits(0, 1);
-        w.write_packed_bits(biased, FLOAT_INT_BITS);
-    } else {
-        w.write_bits(1, 1);
-        w.write_long(raw);
     }
 }
 
@@ -673,7 +316,7 @@ impl Objective {
 }
 
 /// Fields per `hudelem_t` held, the widest protocol's: 1.1 sends table
-/// entries 6..33, United Offensive two more ([`Protocol::hud`]).
+/// entries 6..33, United Offensive two more ([`Cod1Wire::hud`]).
 pub const HUD_ELEM_FIELDS: usize = 30;
 
 /// Elements per HUD array on 1.1, both on the wire and in the playerstate.
@@ -786,7 +429,7 @@ impl Default for PsArrays {
     }
 }
 
-/// Raw wire values in `Protocol::player_fields` order, floats as bit patterns.
+/// Raw wire values in `Cod1Wire::player_fields` order, floats as bit patterns.
 /// The trailing array blocks are not in that table; `arrays` carries them.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct PlayerState {
@@ -795,7 +438,7 @@ pub struct PlayerState {
 }
 
 impl PlayerState {
-    pub fn null(p: &Protocol) -> Self {
+    pub fn null(p: &Cod1Wire) -> Self {
         PlayerState {
             fields: vec![0; p.player_fields.len()],
             arrays: PsArrays::default(),
@@ -837,19 +480,19 @@ impl PlayerState {
         self.arrays.ammoclip[index] = v;
     }
 
-    pub fn field_index(p: &Protocol, name: &str) -> Option<usize> {
+    pub fn field_index(p: &Cod1Wire, name: &str) -> Option<usize> {
         p.player_fields.iter().position(|f| f.name == name)
     }
 
-    pub fn field_i32(&self, p: &Protocol, name: &str) -> i32 {
+    pub fn field_i32(&self, p: &Cod1Wire, name: &str) -> i32 {
         Self::field_index(p, name).map_or(0, |i| self.fields[i])
     }
 
-    pub fn field_f32(&self, p: &Protocol, name: &str) -> f32 {
+    pub fn field_f32(&self, p: &Cod1Wire, name: &str) -> f32 {
         f32::from_bits(self.field_i32(p, name) as u32)
     }
 
-    pub fn origin(&self, p: &Protocol) -> [f32; 3] {
+    pub fn origin(&self, p: &Cod1Wire) -> [f32; 3] {
         [
             self.field_f32(p, "origin[0]"),
             self.field_f32(p, "origin[1]"),
@@ -858,7 +501,7 @@ impl PlayerState {
     }
 
     /// Degrees.
-    pub fn viewangles(&self, p: &Protocol) -> [f32; 3] {
+    pub fn viewangles(&self, p: &Cod1Wire) -> [f32; 3] {
         [
             self.field_f32(p, "viewangles[0]"),
             self.field_f32(p, "viewangles[1]"),
@@ -867,13 +510,19 @@ impl PlayerState {
     }
 }
 
+/// The objective and hud element blocks' field read: their widths are
+/// CoD1's own (`HUD_FIELD_BITS`), so CoD1's codec.
+fn read_delta_field(r: &mut MsgReader, from_val: i32, bits: i32) -> i32 {
+    FieldCodec::COD1.read_delta_field(r, from_val, bits)
+}
+
 /// `MSG_ReadDeltaPlayerstate` (cod_lnxded 0x807e2f0). No per-field zero flag,
 /// unlike the entity delta; the trailing array blocks are consumed only to
 /// stay aligned. docs/protocol-1.1.md, "PlayerState delta".
 /// `pm_flags`' slot in every protocol's playerState table.
 const PM_FLAGS_INDEX: usize = 12;
 
-pub fn read_delta_playerstate(r: &mut MsgReader, p: &Protocol, from: &PlayerState) -> PlayerState {
+pub fn read_delta_playerstate(r: &mut MsgReader, p: &Cod1Wire, from: &PlayerState) -> PlayerState {
     let mut to = PlayerState {
         fields: from.fields.clone(),
         arrays: PsArrays::default(),
@@ -895,55 +544,13 @@ pub fn read_delta_playerstate(r: &mut MsgReader, p: &Protocol, from: &PlayerStat
     to
 }
 
-/// Integral/full selector only, no zero flag (cod_lnxded 0x807e471).
-fn read_ps_float(r: &mut MsgReader) -> i32 {
-    if r.read_bits(1) == 0 {
-        let trunc = r.read_packed_bits(FLOAT_INT_BITS) - FLOAT_INT_BIAS;
-        (trunc as f32).to_bits() as i32
-    } else {
-        r.read_long()
-    }
-}
-
-/// Inverse of [`read_ps_float`]: integral selector unless out of the biased
-/// 13-bit range.
-fn write_ps_float(w: &mut MsgWriter, raw: i32) {
-    let f = f32::from_bits(raw as u32);
-    let trunc = f as i32;
-    let biased = trunc.wrapping_add(FLOAT_INT_BIAS);
-    if trunc as f32 == f && (0..(1 << FLOAT_INT_BITS)).contains(&biased) {
-        w.write_bits(0, 1);
-        w.write_packed_bits(biased, FLOAT_INT_BITS);
-    } else {
-        w.write_bits(1, 1);
-        w.write_long(raw);
-    }
-}
-
-/// The playerState's angle path: [`read_angle_field`]; floats and integers
-/// carry no zero flag (coduo_lnxded 0x8082826).
-fn read_ps_field(r: &mut MsgReader, p: &Protocol, i: usize, bits: i32, from_val: i32) -> i32 {
-    if bits == 0 {
-        let v = read_ps_float(r);
-        // The change bit says the C saw two different ints, but this codec
-        // has no zero flag, so a `-0.0` comes back `+0.0` and would
-        // re-encode as unchanged. Keep the sign the entity codec keeps
-        // (docs/protocol-1.1.md, "PlayerState delta"). The integral path
-        // is exact for everything else, so `v == base` can only mean the
-        // two zeroes; the guard says so rather than trusting it.
-        if v == 0 && from_val == 0 {
-            (-0f32).to_bits() as i32
-        } else {
-            v
-        }
-    } else if bits == ANGLE_BITS {
-        read_angle_field(r, from_val)
-    } else if i == PM_FLAGS_INDEX {
+/// `pm_flags` maps into 1.1's layout; every other field is the codec's
+/// playerState value ([`FieldCodec::read_ps_value`]).
+fn read_ps_field(r: &mut MsgReader, p: &Cod1Wire, i: usize, bits: i32, from_val: i32) -> i32 {
+    if i == PM_FLAGS_INDEX && bits != 0 && bits != ANGLE_BITS {
         (p.pm_flags_to_v1)(r.read_packed_bits(bits))
     } else {
-        // Unsigned, width `|bits|`, no sign extension (0x807e5d7); a
-        // `delta_angles` can differ from its base only past its 16 bits.
-        above_width(r.read_packed_bits(bits), from_val, bits, false)
+        p.transport.field_codec.read_ps_value(r, from_val, bits)
     }
 }
 
@@ -953,7 +560,7 @@ fn read_ps_field(r: &mut MsgReader, p: &Protocol, i: usize, bits: i32, from_val:
 /// reader keeps the sign so the field still counts as changed.
 pub fn write_delta_playerstate(
     w: &mut MsgWriter,
-    p: &Protocol,
+    p: &Cod1Wire,
     from: &PlayerState,
     to: &PlayerState,
 ) {
@@ -980,21 +587,14 @@ pub fn write_delta_playerstate(
             continue;
         }
         w.write_bits(1, 1);
-        if p.player_fields[i].bits == 0 {
-            write_ps_float(w, v);
-        } else if p.player_fields[i].bits == ANGLE_BITS {
-            write_angle_field(w, v);
-        } else {
-            // Unsigned width |bits|, matching the reader's plain packed read.
-            w.write_packed_bits(v, p.player_fields[i].bits);
-        }
+        write_ps_value(w, v, p.player_fields[i].bits);
     }
     write_ps_arrays(w, p, &from.arrays, &to.arrays);
 }
 
 /// Mirror of [`read_ps_arrays`]. Every block carries only what differs from
 /// the base.
-fn write_ps_arrays(w: &mut MsgWriter, p: &Protocol, from: &PsArrays, to: &PsArrays) {
+fn write_ps_arrays(w: &mut MsgWriter, p: &Cod1Wire, from: &PsArrays, to: &PsArrays) {
     // Block 1: the gate, then a raw mask selecting the changed scalars.
     let mut mask = 0i32;
     for i in 0..STAT_WIDTHS.len() {
@@ -1111,7 +711,7 @@ const SHORT_SUB_BLOCK: usize = 16;
 const OBJECTIVE_STATE_BITS: i32 = 3;
 
 /// Block 5's per-element last-changed field index; the element count's
-/// width is the protocol's ([`Protocol::hud`]).
+/// width is the protocol's ([`Cod1Wire::hud`]).
 const HUD_INDEX_BITS: i32 = 5;
 
 /// Where the HUD-element fields start in [`HUD_FIELD_BITS`], past the
@@ -1133,7 +733,7 @@ const HUD_FIELD_BITS: [i32; HUD_ELEM_FIELD_BASE + HUD_ELEM_FIELDS] = [
 
 /// The trailing array blocks (cod_lnxded 0x807e7b3..0x807eeb6). Everything a
 /// block does not carry keeps the base frame's value.
-fn read_ps_arrays(r: &mut MsgReader, p: &Protocol, from: &PsArrays) -> PsArrays {
+fn read_ps_arrays(r: &mut MsgReader, p: &Cod1Wire, from: &PsArrays) -> PsArrays {
     let mut out = PsArrays {
         stats: from.stats,
         ammo: from.ammo,
@@ -1217,7 +817,7 @@ fn read_short_array_group(r: &mut MsgReader, out: &mut [i16; 64]) {
 /// Elements past the count are cleared rather than kept from the base (the
 /// reader's closing `bzero`, 0x807d0e9), which is how a destroyed element
 /// leaves a client's screen.
-fn read_hud_array(r: &mut MsgReader, p: &Protocol, from: &[HudElem]) -> Vec<HudElem> {
+fn read_hud_array(r: &mut MsgReader, p: &Cod1Wire, from: &[HudElem]) -> Vec<HudElem> {
     let count = (r.read_bits(p.hud.count_bits) as usize).min(p.hud.max_elems);
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
@@ -1249,7 +849,7 @@ fn read_hud_array(r: &mut MsgReader, p: &Protocol, from: &[HudElem]) -> Vec<HudE
 /// side fills it from the top, so a live element is never behind a free one
 /// (`crate::net::msg::HudElem`, and retail's count loop 0x807cd8e, which
 /// stops at the first record with a zero `type`).
-fn write_hud_array(w: &mut MsgWriter, p: &Protocol, from: &[HudElem], to: &[HudElem]) {
+fn write_hud_array(w: &mut MsgWriter, p: &Cod1Wire, from: &[HudElem], to: &[HudElem]) {
     let count = to.len().min(p.hud.max_elems);
     w.write_bits(count as i32, p.hud.count_bits);
     for (i, e) in to.iter().take(count).enumerate() {
@@ -1379,7 +979,7 @@ pub fn write_delta_usercmd(w: &mut MsgWriter, key: i32, from: &UserCmd, to: &Use
 /// [`write_delta_usercmd`] in protocol `p`, whose `weapon` may be wider.
 pub fn write_delta_usercmd_in(
     w: &mut MsgWriter,
-    p: &Protocol,
+    p: &Cod1Wire,
     key: i32,
     from: &UserCmd,
     to: &UserCmd,
@@ -1493,7 +1093,7 @@ pub fn read_delta_usercmd(r: &mut MsgReader, key: i32, from: &UserCmd) -> anyhow
 /// [`read_delta_usercmd`] in protocol `p`.
 pub fn read_delta_usercmd_in(
     r: &mut MsgReader,
-    p: &Protocol,
+    p: &Cod1Wire,
     key: i32,
     from: &UserCmd,
 ) -> anyhow::Result<UserCmd> {
@@ -1562,114 +1162,10 @@ fn read_full_usercmd(
     to.weapon = read_keyed_bits(r, key, i32::from(from.weapon), weapon_bits) as u8;
 }
 
-/// Mirror of [`MsgReader`]: assembled plain, block-compressed by
-/// [`Self::finish`].
-pub struct MsgWriter<'a> {
-    huff: &'a Huffman,
-    out: Vec<u8>,
-    /// `msg_t.bit`, the bit-field cursor.
-    bit: usize,
-}
-
-impl<'a> MsgWriter<'a> {
-    pub fn new(huff: &'a Huffman) -> Self {
-        MsgWriter {
-            huff,
-            out: Vec::new(),
-            bit: 0,
-        }
-    }
-
-    /// See [`MsgReader::bits_read`].
-    pub fn bits_written(&self) -> usize {
-        self.bit.max(self.out.len() * 8)
-    }
-
-    /// Mirror of [`MsgReader::read_bits`].
-    pub fn write_bits(&mut self, value: i32, bits: i32) {
-        debug_assert!(bits != 0 && (-31..=32).contains(&bits), "bad bits {bits}");
-        let width = (bits.unsigned_abs() as usize).min(32);
-        let mut value = (value as u32) & (u32::MAX >> (32 - width));
-        for _ in 0..width {
-            self.put_bit((value & 1) as u8);
-            value >>= 1;
-        }
-    }
-
-    /// Mirror of [`MsgReader::read_packed_bits`].
-    pub fn write_packed_bits(&mut self, value: i32, bits: i32) {
-        debug_assert!(bits != 0 && (-32..=32).contains(&bits), "bad bits {bits}");
-        let width = (bits.unsigned_abs() as usize).min(32);
-        let mut value = (value as u32) & (u32::MAX >> (32 - width));
-        let rem = width & 7;
-        for _ in 0..rem {
-            self.put_bit((value & 1) as u8);
-            value >>= 1;
-        }
-        for _ in 0..(width - rem) / 8 {
-            self.out.push((value & 0xff) as u8);
-            value >>= 8;
-        }
-    }
-
-    pub fn write_byte(&mut self, c: u8) {
-        self.out.push(c);
-    }
-
-    pub fn write_short(&mut self, c: i16) {
-        let c = c as u16;
-        self.write_byte(c as u8);
-        self.write_byte((c >> 8) as u8);
-    }
-
-    pub fn write_long(&mut self, c: i32) {
-        let c = c as u32;
-        for i in 0..4 {
-            self.write_byte((c >> (i * 8)) as u8);
-        }
-    }
-
-    /// At each byte boundary the next bit byte goes at the end of the message,
-    /// as `MSG_WriteBits` does.
-    fn put_bit(&mut self, bit: u8) {
-        if self.bit & 7 == 0 {
-            self.bit = self.out.len() * 8;
-            self.out.push(0);
-        }
-        add_bit(bit, &mut self.out, &mut self.bit);
-    }
-
-    pub fn write_string(&mut self, s: &str) {
-        for &b in s.as_bytes().iter().take(MAX_STRING_CHARS - 1) {
-            // "get rid of 0xff chars, because old clients don't like them"
-            self.write_byte(if b > 127 { b'.' } else { b });
-        }
-        self.write_byte(0);
-    }
-
-    /// `MSG_WriteBigString`: each latin-1 char goes out as its byte.
-    pub fn write_big_string(&mut self, s: &str) {
-        for c in s.chars().take(BIG_INFO_STRING - 1) {
-            let b = u32::from(c);
-            self.write_byte(if b > 255 { b'.' } else { b as u8 });
-        }
-        self.write_byte(0);
-    }
-
-    /// Block-compressed, as `SV_Netchan_Transmit` sends it.
-    pub fn finish(self) -> Vec<u8> {
-        self.huff.compress_block(&self.out)
-    }
-
-    /// The plain bytes; the client netchan compresses its op block itself.
-    pub fn into_ops(self) -> Vec<u8> {
-        self.out
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::codec::{BIG_INFO_STRING, FLOAT_INT_BIAS, FLOAT_INT_BITS, write_angle_field};
     use crate::net::huffman::Huffman;
     use crate::net::protocol::PROTOCOL_V1;
 
@@ -2385,10 +1881,9 @@ mod tests {
         assert!(!r.is_overflowed());
     }
 
-    /// A playerstate holding the pinned retail spectator values (provenance:
-    /// docs/design/2026-08-26-server-snapshots-plan.md header). Built by name so
+    /// A playerstate holding the pinned retail spectator values. Built by name so
     /// table order cannot break the test silently.
-    fn spectator_playerstate(p: &Protocol) -> PlayerState {
+    fn spectator_playerstate(p: &Cod1Wire) -> PlayerState {
         let mut ps = PlayerState::null(p);
         let mut set = |name: &str, v: i32| {
             ps.fields[PlayerState::field_index(p, name).unwrap()] = v;

@@ -826,7 +826,7 @@ reading of "500 ms after the restart frame", from a single
 
 As implemented: `crates/server/src/main.rs` runs `Server::drain_console`
 before it counts the frames it owes, so the time a `map_restart` took is
-counted, and `Server::tick_frames` runs `SV_Frame`'s shape. That is the
+counted, and `engine::tick` runs `SV_Frame`'s shape. That is the
 bots and pings once, each owed frame through `game_frame` with an archive
 between them, then `end_frames` (timeouts, snapshots, the unentered and
 zombie messages, heartbeat) once. The catch-up cap follows the dedicated
@@ -853,8 +853,19 @@ A restart also keeps the level's compiled scripts (`Carry::scripts`, a
 `vcod_gsc::Program`: the installed functions and the interner, taken
 before anything ran). The new level starts a fresh `Vm` on them, so its
 heap, threads and clock reset as before; `game[]` is planted after, on
-both paths, so a cached and a fresh compile intern alike. A map load and
-a new `--gametype-script` overlay compile again. Timed with temporary
+both paths, so a cached and a fresh compile intern alike. A new
+`--gametype-script` overlay compiles again. A map load compiles the
+map's closure again but resumes the gametype's, compiled first on every
+load and the same whatever the map: `Carry::gametype` holds the
+`Program` and the `vcod_gsc::LoaderState` as they stood after it, used
+under the same gametype entry and builtin set once every file that
+loader read still reads the same text (`LoaderState::current`, which
+re-reads them all, so the pak references a compile flags are flagged
+again). The resumed compile is the fresh one: same atoms in the same
+order, same functions, same animtrees (`a_cod1_load_resumes_...` and
+CoD2's `a_map_change_resumes_...`). On CoD2 the script stage of a map
+change went from 12-16 ms to 7-10 ms (2026-10-23, release, three stock
+maps through rcon `map`, min of five). Timed with temporary
 timers on 2026-10-12, release build, mp_harbor dm, rcon `map_restart`,
 host loaded by other builds: the compile was 87-139 ms of a 149-229 ms
 restart tick before, 0.2-1.8 ms after, with the restart tick at
@@ -914,6 +925,92 @@ missiles' tumble keeps its own state, reset at every load
 (`Missiles::rng`). `server.rs`'s `a_restart_reseeds_the_script_draws`, on
 `Server::new`, fails without the step.
 
+### 4.9 What a restart costs
+
+VERIFIED, live, 2026-10-28: the round trip of an rcon `map_restart` to
+retail's `print` reply, which `SV_MapRestart_f` sends only once the
+level is re-inited, five restarts each, no client in, loopback, in a
+sealed namespace (`unshare -rnm`):
+
+| Server | Map, gametype | Round trip |
+|---|---|---|
+| 1.1d `cod_lnxded` | mp_carentan sd | 26 to 35 ms |
+| UO 1.51b `coduo_lnxded` | mp_foy sd | 109 to 116 ms |
+| UO 1.51b | mp_foy bas | 110 to 124 ms |
+| UO 1.51b | mp_cassino sd | 96 to 101 ms |
+
+So retail UO's restart holds its frame loop about 100 ms, four times
+1.1's. Where UO spends it is not read.
+
+vcod-server, the same restarts with six shooting bots
+(`VCOD_TICK_PROFILE_MS=20`, the `console/map_restart` and `load/*`
+phases, `spawn/*` inside `load/spawn`), mp_foy sd: the restart tick ran
+125 to 131 ms, 100 to 126 ms of it in `spawn/vehicle info`, UO's
+`G_ParseScrVehicleInfo` (`vehicle::load_level`, coduo-vehicles.md
+10.1). Its file list, `Pk3Fs::list_dir_in_search_order`, reopened every
+pak on the search path and parsed its central directory each time. It
+now reads the paks off the `Pk3Fs`'s open cache, the same order (each
+pak's central-directory order, newest pak first): the tick is 22 to 25
+ms (`load/spawn` 15, 6 of it the 36 vehicles' spawns, `load/bootstrap`
+3, the three settle frames 1.3), and mp_cassino sd's and mp_foy bas's
+restart ticks stay under 20. The scripts are not recompiled
+(`load/compile` reads under 0.1 ms off `Carry::scripts`).
+
+The bot pass after a `bas` restart is a separate cost, not the
+restart's: on mp_foy bas, ticks of 66 to 292 ms in `head/bots` within two
+seconds of a restart, the longest in `bots/deal`. That was
+`Server::breach_stands`, which a rocket carrier asks of each base after
+every graph rebuild (and a restart relinks the walls, so the graph
+rebuilds): it traced `breach_aim` from every graph node 0 to
+`BREACH_STAND_FAR` off the base. It now ranks those nodes by sector and
+score first and traces only until each sector has its stand, the same
+stands (`bmuo_bas` and `dguo_bas` match the base recording): `bots/deal`
+is 43 to 55 ms on those ticks. `bots/goal` read 50 to 96 ms on a few
+ticks, split now into `goal/give way`, `goal/pre route`, `goal/brain` and
+`goal/drive`: all of it was `goal/drive`, one driver's
+`drive_waypoint` plan running 8k to 21k hull fit tests it had not
+cached (about 3.5 us each). Restarts did not empty the cache; each spike
+was a plan into nodes no plan had reached. The fits are now tested as
+A* pops a node, kept across graph rebuilds (dropped only where a toggled
+submodel's bounds reach) and warmed at 600 tests a tick
+(bot-objectives.md 10.3): over two runs of five restarts `bots/goal`
+peaks at 17 ms, and the warm pass (`bots/nav tick`) at 16.
+
+`bots/deal` still read 38 to 69 ms on a few ticks after a restart, split
+now into `deal/vehicles`, `deal/breach models` (with `models/script` and
+`models/vehicles` inside it), `deal/uo` and `uo/breach stands`. Three
+costs, measured over runs of five restarts on mp_foy bas, six shooting
+bots:
+
+- `breach_stands` walked the graph's strongly connected components
+  again for each base, 9 to 26 ms each (43 on a loaded machine), six
+  bases on one or two ticks. The graph indexes them when it is finished
+  and nothing changes it after; `NavGraph::component_ids` reads those, 0.0
+  ms. `NavGraph::zone_stand`'s pick does the same.
+- Its traces, 24 to 94 candidates a base, ran 2.4 to 13 ms a base, one
+  sector after another. The 16 sectors now search on up to 8 threads
+  (`first_passes`): items go out by their place in their sector, one past
+  a stand its sector already found is skipped, so each sector keeps the
+  first candidate in order with a shot, the stand the serial search took.
+  0.9 to 2.4 ms a base. `PlacedModel`'s triangles are `Arc` for that.
+- The first rocket carrier's model gather after a restart read 20 to 27
+  ms: `models/vehicles` 16 to 23 (each vehicle's rig, its xmodel and
+  skeleton) and `models/script` 4 to 6 (the script models' collision),
+  loaded again because each level's `GameHost` starts empty. A restart
+  reads the same files off the same paks and keeps the referenced-pak
+  lists, so `Carry::models` hands the new level the old one's
+  `xmodel_collision`, `xmodel_bounds` and vehicle rigs; a map change does
+  not.
+
+After the three, two runs of five restarts held no tick over the 20 ms
+report threshold; the six bases' stands together cost 9 ms on the tick
+both teams first carried a rocket. `bmuo_*`, `dguo*` and
+`it_bot_vehicles_uo` match the base recording.
+
+A full server's tick in play, 24 bots on 1.1's mp_carentan and UO's
+mp_cassino `tdm` beside CoD2's and CoD4's, and what it spends it on, is
+`cod4-server-frame.md` 10.
+
 ## 5. `SV_MapRotate_f` and the rotation grammar
 
 My name for `cod_lnxded` `0x80840c8`. VERIFIED: registered as the console
@@ -943,6 +1040,32 @@ and call targets below. INFERRED: the ordering and the branch conditions.
 INFERRED, off that write-back: the rotation is consumed destructively, one
 token per call, the cvar is the whole of the cursor, and a server restarted
 mid-rotation resumes where the cvar left it.
+
+`COM_Parse` (`0x8081d1c`) is `Com_ParseExt(&p, 1)` (`0x808170c`) on the
+parse session `PTR_DAT_080e2f40` points at. VERIFIED: the console's
+session, at `0x80de980`, holds 1 at `+0x408` and 0 at `+0x40c` in `.data`
+(`0x80ded80`), and the 1.5b (`0x80ea0a0`) and UO 1.51b (`0x80f09a0`)
+engines' sessions hold the same. INFERRED, off `Com_ParseExt`'s branches
+on those two words (`+0x40c` 0 keeps the inline parser, `+0x408` non-zero
+takes the space-delimited arm over the C-token one):
+
+- Blanks are skipped first: any byte below `!` as a signed `char`, so bytes
+  from 0x80 up are blanks too. `//` runs to the newline, `/* */` to the
+  first `*/` after the opening `*` (`/*/` is a whole comment). Nothing left
+  sets the pointer null, which `NextToken` turns into an empty cvar.
+- A `"` opens a quoted word, read to the next `"` with `\"` as a quote; the
+  pointer is left past the closing quote. An unterminated one leaves it
+  past the string's terminator, reading whatever memory follows.
+- Anything else is a word of bytes above the space; the pointer is left on
+  the blank that ended it.
+- A word keeps 1023 bytes; more are dropped.
+
+So the rest written back keeps its delimiter. VERIFIED live (1.1d, inside
+`unshare -rn`, `+set sv_mapRotation gametype dm map mp_harbor map
+mp_brecourt +map_rotate +map_rotate`): the second `map_rotate` printed
+`"sv_mapRotationCurrent" is:" map mp_brecourt"`, its leading blank
+kept. A quoted `""` is a word, not the end: INFERRED, off the non-null
+pointer the quoted arm leaves.
 
 ### 5.2 The loop
 
@@ -1017,8 +1140,10 @@ setups they select: either prefix is stripped and the bound shrinks with it. The
 
 ### 5.4 As implemented
 
-`crates/server/src/console.rs` carries the `Command` parsing, 5.1's
-destructive token consumer and 5.2's keyword loop;
+`crates/server/src/console.rs` carries the `Command` parsing;
+`crates/server/src/engine/rotation.rs` 5.1's destructive token consumer
+(`Words`, `COM_Parse`'s space-delimited arm with the rest kept from the
+delimiter on) and 5.2's keyword loop, which CoD2's server runs too;
 `crates/server/src/server.rs`'s console drain in `tick` is what runs the
 `map %s` line the loop queues. `devmap` sets `sv_cheats` after the load
 (handshake doc, "Console commands over rcon").
@@ -1469,3 +1594,66 @@ is `crates/server/tests/mapchange_ab.rs` and
 the `savePersist` gate is the three `probe_persist_*` cases in
 `crates/server/tests/semantics_ents.rs`, and the rotation grammar and the
 serverId nibbles are unit tests in `crates/server/src/console.rs`.
+
+## 9. `games_mp.log`
+
+The same file on 1.1d, 1.5b, United Offensive 1.51b and CoD2 1.3, CoD4
+1.7's too (cod4-server-gaps.md, "games_mp.log").
+
+- `G_LogPrintf` (1.1d `game.mp.i386.so` 0x6010c) writes `%3i:%i%i `
+  (file 0x756d5) with the minutes and the two digits of the seconds of
+  `level.time`, then the text, to the open file and nowhere else.
+  VERIFIED. 1.5b, UO and CoD2's format is `%3i:%i%i %s` (cod2_lnxded
+  file 0x112aed). VERIFIED (the strings).
+- `G_InitGame` opens it and writes the 60-dash separator and `InitGame:
+  %s` (1.1d file 0x755fe) with the serverinfo cvars; `G_ShutdownGame`
+  writes `ShutdownGame:` (0x756a2) and the separator, or on a
+  `map_restart` (`G_ShutdownGame(1)`) `RestartGame:` (0x75694), then
+  closes it. VERIFIED (the strings). 1.5b's and UO's module carry
+  `RestartGame:` too (1.5b file 0x7ad14, UO 0xa12f4); CoD2 1.3 and CoD4
+  1.7 have only `ShutdownGame:` (cod2_lnxded file 0x112abd). VERIFIED (the
+  strings).
+- The retail 1.1d run (tdm on mp_carentan, `g_log games_mp.log`,
+  `g_logSync 1`; one probe joined axis, said `hello log`, team-said `team
+  log`, told slot 0 `private` and ran `kill`; rcon `map_restart`, `map
+  mp_harbor`, `quit`) wrote: separator, `InitGame:
+  \g_gametype\tdm\gamename\main\mapname\mp_carentan\protocol\1\shortversion\1.1\sv_allowAnonymous\0\sv_floodProtect\1\sv_hostname\CoDHost\sv_maxclients\8\sv_maxPing\0\sv_maxRate\0\sv_minPing\0\sv_privateClients\0\sv_pure\0`,
+  `J;0;alpha`, `say: alpha: hello log`, `sayteam: alpha: team log`,
+  `tell: alpha to alpha: private`, the script's `K;` line, `RestartGame:`
+  and the separator at the restart's clock, then separator, `InitGame:`
+  and `J;` again, `ShutdownGame:`, separator, separator, mp_harbor's
+  `InitGame:`, `J;`, and at the `quit` `ShutdownGame:` and the separator.
+  VERIFIED live. The stamps ran on across the three levels (`0:28` at the
+  restart, `0:37` at the map, `0:50` at the quit), so `level.time` starts
+  at the server's clock there as on CoD4. VERIFIED live.
+- 1.1's chat lines: `G_Say` (0x46c14) logs `say: %s: %s` (file 0x739ae)
+  or `sayteam: %s: %s` (0x739dd) with the cleaned name, a tell nothing;
+  `Cmd_Tell_f` (0x47210) logs `tell: %s to %s: %s` (0x73a34) ahead of its
+  two `G_Say`s. VERIFIED (the strings; the run's lines). 1.5b's are
+  `say;%d;%d;%s;%s` (file 0x786ed), `sayteam;`, `saysquad;` (0x7879f) and
+  `tell;%d;%d;%s;%d;%d;%s;%s` (0x787ea), UO's the same (0x9ea72,
+  0x9eb6f), CoD2's `say;` and `sayteam;` (cod2_lnxded file 0x110f1e,
+  0x110f51) and no `tell;`. VERIFIED (the strings). The first `%d` is the
+  GUID, 0 on a LAN server with no authorize, the second the slot: CoD2's
+  run logged `say;0;0;alpha;one`. VERIFIED live. Which name a 1.5 `tell;`
+  line carries is INFERRED (1.1's raw `netname`).
+- `Touch_Item` logs 1.1's `Weapon: %i %s` (file 0x74d06) or `Item: %i %s`
+  (0x74d15) (cod11-items.md), 1.5b's `Weapon;%d;%d;%s;%s` (0x79f86) and
+  `Item;` (0x79f9a), UO's (0xa0406) and CoD2's (cod2_lnxded file
+  0x1123a6) the same. VERIFIED (the strings; 1.5b's logs read
+  `Weapon;0;0;vcod;fraggrenade_mp`).
+- The CoD2 1.3 run (tdm on mp_toujane, the same sets; one player joined,
+  said three lines 100 ms apart and ran `kill`; rcon `map_restart`, `map
+  mp_carentan`, `quit`) wrote one `say;` line (the flood window took the
+  other two), `ShutdownGame:` at the restart as at the map change, and
+  `InitGame:` without `scr_friendlyfire` and `scr_killcam` on the first
+  level and with them on the next two. VERIFIED live.
+
+vcod: the game queues each line with `level.time`
+(`GameHost::log_printf`) and each engine writes them after each frame
+through `engine::gamelog::LevelLog`, opened at its level load under
+`<fs_homepath>/<fs_game or the base game>`. On the runs above vcod-server
+wrote the same lines in the same order (1.1: `sv_hostname` aside;
+the probe's own lines a second earlier, its join being faster). Its CoD2
+first level's `InitGame:` lists `scr_friendlyfire` and `scr_killcam`,
+which retail's gametype adds to the serverinfo only after the line.

@@ -812,7 +812,8 @@ fn mover_script_reads_match_retail_on_1_5() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         eprintln!("COD_DIR is not a 1.5 install: skipping");
         return;
     }

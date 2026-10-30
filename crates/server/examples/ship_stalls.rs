@@ -61,7 +61,7 @@ fn main() {
     if seeds.is_empty() {
         seeds = (1..32).step_by(2).collect();
     }
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map(&map).unwrap()).unwrap()).unwrap();
+    let bsp = vcod_common::mapworld::find(&*fs, &map).unwrap();
     let (mut total, mut total_falls) = (0, 0);
     for seed in seeds {
         let mut now = Instant::now();

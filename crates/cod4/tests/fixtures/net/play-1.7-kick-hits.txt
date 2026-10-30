@@ -1,0 +1,53 @@
+# The damage kick capture's PROBE lines (docs/research/cod4-combat.md 3.2):
+# games_mp.log of cod4_lnxded 1.7 under +set fs_game mods/vcodsk
+# (crates/cod4/tests/fixtures/gsc/shot_kick packed in the mod's iwd)
+# +devmap mp_crash, war, sv_pure 0, with play-1.7-kick-target.txt
+# (cod4_probe --team allies --script idle --name target --qport 4021
+# --goto "207 2291 296" --secs 35) and play-1.7-kick-shooter.txt (0.5 s
+# later: --team axis --script sway --name shooter --qport 4022 --goto
+# "123 2110 300" --secs 35), the server started 40 s before the target.
+# Each hit: getTime(), the victim's number, the damage, the flags, the
+# location, the point in thousandths and the direction in millionths;
+# each hurt: getTime(), the shooter's number and the hurt's turn.
+PROBE 46300 armed 0
+PROBE 46800 armed 1
+PROBE 53500 hit 0 40 0 torso_lower 206736 2293619 275727 339844 935024 -101172
+PROBE 55500 hit 0 40 0 torso_lower 207882 2294795 274684 341860 933977 -104006
+PROBE 55750 hit 0 40 0 torso_lower 203711 2287975 274629 405057 908202 -105340
+PROBE 56000 hit 0 40 0 torso_lower 193905 2290751 273415 419946 901649 -103306
+PROBE 57300 hit 0 40 0 torso_lower 195570 2301428 272838 416095 904114 -97168
+PROBE 57550 hit 0 40 0 torso_lower 199457 2286883 276857 415398 904572 -95885
+PROBE 58100 hurt 1 0
+PROBE 59400 hurt 1 1
+PROBE 59800 hit 0 40 0 torso_lower 200641 2287002 276051 397756 911908 -101058
+PROBE 60700 hurt 1 2
+PROBE 61300 hit 0 40 0 torso_lower 207860 2296567 276124 129579 987400 -90831
+PROBE 62000 hurt 1 3
+PROBE 62050 hit 0 40 0 right_leg_lower 199360 2275972 249756 274869 935647 -221381
+PROBE 62550 hit 0 40 0 torso_upper 201196 2287155 288300 176857 983530 -37272
+PROBE 62800 hit 0 40 0 torso_lower 193567 2288154 275358 296058 950754 -91736
+PROBE 63050 hit 0 40 0 torso_lower 194460 2289150 279528 357844 930902 -73271
+PROBE 63300 hurt 1 4
+PROBE 63750 hit 0 40 0 right_arm_upper 206135 2282051 280503 413216 907968 -69612
+PROBE 64000 hit 0 40 0 torso_lower 194801 2288318 270889 359115 926627 -111341
+PROBE 64250 hit 0 40 0 torso_upper 207864 2291659 282149 404087 912764 -59786
+PROBE 64600 hurt 1 5
+PROBE 65000 hit 0 40 0 left_arm_upper 213822 2296998 278182 379639 925095 8473
+PROBE 65500 hit 0 40 0 torso_lower 205432 2290694 277436 360629 932693 5329
+PROBE 65750 hit 0 40 0 right_arm_upper 202669 2281948 277576 398946 916951 6531
+PROBE 65900 hurt 1 6
+PROBE 66000 hit 0 40 0 left_leg_lower 212846 2296224 247362 374538 919508 -119271
+PROBE 66500 hit 0 40 0 torso_lower 203104 2286639 277764 357617 933845 6525
+PROBE 66750 hit 0 40 0 torso_lower 203248 2285506 277360 395260 918551 5618
+PROBE 67000 hit 0 40 0 right_arm_lower 205698 2280839 277559 373881 927459 5655
+PROBE 67200 hurt 1 7
+PROBE 67500 hit 0 40 0 right_arm_lower 205446 2283611 277152 370816 928698 3771
+PROBE 68500 hurt 1 8
+PROBE 69800 hurt 1 9
+PROBE 71100 hurt 1 10
+PROBE 72400 hurt 1 11
+PROBE 73700 hurt 1 12
+PROBE 75000 hurt 1 13
+PROBE 76300 hurt 1 14
+PROBE 77600 hurt 1 15
+PROBE 78900 hurt 1 16

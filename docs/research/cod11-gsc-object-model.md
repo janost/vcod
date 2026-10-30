@@ -434,6 +434,100 @@ see whether its search covers only the radiant fields or every registered
 field including client and HUD names. Stage 2 should assume the narrow
 reading and measure it with a probe if a map ever depends on the wide one.
 
+### The order of a block's keys
+
+- `G_ParseSpawnVars` (0x61a8c) reads a block's tokens pairwise and appends
+  each key/value pair to `level.spawnVars` (count at `level+0x1348`), in the
+  order the entity string lists them, repeats kept. VERIFIED, control flow
+  of 0x61a8c: one append per pair, the count incremented after it.
+- `G_CallSpawn` (0x615e4) hands the pairs to `G_ParseField` (0x61400) from
+  index 0 up, in each of its three spawning arms (loops at 0x61660,
+  0x61707, 0x6177d: `inc esi`, `cmp esi, level+0x1348`, `jl`), and only then
+  calls `G_SetOrigin`, `G_SetAngle` and the arm's spawn function. INFERRED,
+  instruction order. So a key the block repeats is applied once per copy,
+  in lump order, and its last copy is what the field keeps; a repeated
+  type-8 `model` indexes every name it carries. INFERRED from the two
+  facts above.
+- `G_SpawnString` (0x61390), behind every `G_SpawnInt`, `G_SpawnFloat`
+  and `G_SpawnVector`, `strcmp`s the pairs from index 0 and returns the
+  first match. VERIFIED: its one call relocates against `strcmp`
+  (`tools/re/annotate_func.py game.mp.i386.so G_SpawnString`, 0x613c9). So
+  the spawn functions' own key reads are case-sensitive and take a
+  repeated key's first copy, where the field pass keeps its last.
+- CoD2 1.3 keeps the shape. `G_ParseSpawnVars` (cod2_lnxded 0x80f3fd2)
+  appends pairs in token order; `G_ParseEntityFields` (0x811a7b0), called
+  by `G_CallSpawn` (0x811aa7a) in each spawning arm, walks them from 0
+  through `G_ParseEntityField`, then `G_SetOrigin` and `G_SetAngle`; the
+  `script_struct` copy (0x811a828) walks them the same way; the
+  `G_SpawnString` walk (0x80f415e) `strcmp`s from 0 and returns the first.
+  INFERRED, control flow of the decompile.
+
+vcod applies a block's pairs in lump order
+(`bsp::entity_block_pairs`, `spawn_entities_from_string`), and so does
+the CoD2 struct pass and UO's `spawnDuplicate` (`spawn_from_vars`). It
+used to walk a `HashMap`, whose order changes per process: on UO's
+mp_cassino `script_origin` "auto9" (entity 414, `"origin"` then `"angles"
+"0 2.50448e-006 0"`) the `origin` write's link snapped a yaw already set
+when `angles` came first, and the baseline left `apos.trBase[1]` out.
+Applied in lump order the yaw stays unsnapped and goes out as a sent 0,
+byte for byte the baseline the retail UO 1.51b gamestate carries
+(`fixtures/net/gamestate-uo.bin`), VERIFIED by
+`uo_cassinos_auto9_baseline_matches_retail`.
+
+vcod's lookups follow the two rules. A spawn function's own read goes
+through `bsp::spawn_string` (`strcmp`, the first copy): worldspawn's
+`classname` (then `Q_stricmp`'d against `worldspawn`, 1.1d 0x61d16),
+`ambienttrack`, `message`, `gravity` and `northyaw`; `G_CallSpawn`'s
+`classname` (0x615fe); `SP_turret`'s `weaponinfo` (0x533c8) and
+`G_SpawnTurret`'s arcs; `SP_trigger_multiple`'s `wait` (0x64c6f);
+`SP_trigger_hurt`'s `sound` and `life` (0x64f99, 0x64ffe);
+`SP_trigger_damage`'s `wait`, `random`, `accumulate` and `threshold`
+(0x65297..0x6532d); the bobbing, pendulum and static movers' keys
+(0x583ef.., 0x56ffd.., 0x58280); CoD2's `trigger_radius` and
+`trigger_disk` `radius` and `height` (cod2_lnxded `G_SpawnFloat` calls in
+`SP_trigger_radius`/`SP_trigger_disk`); UO's `SP_script_vehicle`
+`delay`, which `G_SpawnFloat` writes over the field pass's
+(game.mp.uo 0x9dec6). VERIFIED, the calls and their key strings. A read
+of what the field pass left on the entity (`spawnflags`, `model`,
+`origin`, UO's `teamname` at `ent+0x1e8` in `SP_trigger_damage`
+0x86f59, CoD2's round-trigger `wait`, read by no `G_SpawnFloat` in
+cod2_lnxded) goes through `bsp::field_value` or `bsp::entity_blocks`:
+keys folded, the last copy. INFERRED for `spawnflags` and `model`, which
+the spawn functions read off the entity in the Q3 lineage. The client's
+and the bots' readers of entity fields (spawn points, turrets, rubble,
+cover) take `entity_blocks` too.
+
+The renderer reads the lump with a third rule. CoDMP.exe 1.1's entity
+pass (0x4dbf50) keeps a key spelled exactly `classname` in a slot of its
+own, each copy over the last, and compares it with `_stricmp`; any other
+key is looked up by 0x4dba20, the first pair under `_stricmp`. VERIFIED,
+decompile. `bsp::coronas` reads through it (`render_classname`,
+`render_key`). The static models are read twice: 0x4dbae0 registers the
+drawn ones through 0x4dba20 (first copy), and 0x41f950 (INFERRED the client's twin of
+cod_lnxded's collision parse 0x80515d4: it registers what it reads
+through 0x41f780) walks the pairs with
+`_stricmp` and overwrites each value, so the last copy stands. VERIFIED,
+decompile of 0x41f950. vcod's one `props::placements` serves both and
+reads the field view (the last copy). The two parsers part on more than
+repeats: 0x41f950 applies `modelscale` and `modelscale_vec` in lump
+order, where 0x4dbae0 and vcod take `modelscale_vec` first, and 82 of
+mp_brecourt's `misc_model`s (196 of UO mp_bocage's, a few on mp_rocket,
+mp_foy, mp_neuville, mp_ponyri, mp_rhinevalley, mp_kursk, mp_italy,
+mp_uo_stanjel) list a `modelscale_vec` before a different `modelscale`;
+and 0x4dbae0 takes an `angle` other than 0.0 (the float at 0x568e64)
+over `angles`, where vcod takes
+`angles` (no stock MP block carries both). VERIFIED, the scan below.
+
+The stock maps: no MP block on 1.1, UO or CoD2 repeats a key exactly.
+Case-folded, UO mp_cassino's `light`s 237, 238, 311, 312 and 654 spell
+`overbrightshift` twice (`overbrightShift` and `overbrightshift`), which
+names no field. Among the single-player maps the stock paks also carry,
+brecourt's worldspawn lists `ambient` twice ("0.18", then ".1"), UO
+credits' `script_brushmodel`s 554-557 and 710-715 list `origin` twice
+with one value, and factory's, trainbridge's `light`s repeat
+`overbrightshift` folded. VERIFIED, a scan of every map's entity string
+in the 1.1 and UO stock paks and the CoD2 1.3 iwds.
+
 ## 8. The `spawns` classname table, VERIFIED
 
 0x7eb30, 8-byte records `{char *name; void (*spawn)(gentity_t *);}`, ends at a
@@ -1576,7 +1670,7 @@ when the `Com_BitCheck` fails. INFERRED, the branch at 0x431c3. Since
 `client+0x30c`, then `ps.weapon` (+0xb0, netfield offset 176) takes the index
 and `ps.weaponstate` (+0xb4, offset 180) takes 0. VERIFIED for the two stores
 at 0x45339 and 0x45345 and for the netfield offsets in
-`crates/common/src/net/fields_v1.rs`. That the stores are skipped for a
+`crates/common/src/net/cod1/fields_v1.rs`. That the stores are skipped for a
 weapon the player does not hold is INFERRED, the branch at 0x4532f.
 
 ### The slot and switch methods: table positions only
@@ -1760,7 +1854,7 @@ nobody to follow the function never reaches those stores.
 (+0x38c, netfield offset 908) at 0x4f603, having zeroed `serverCursorHint`
 (+0x384) and `serverCursorHintVal` (+0x388) just above it. VERIFIED, three
 stores at named offsets. The netfield is 8 bits wide
-(`crates/common/src/net/fields_v1.rs`), so -1 reaches a client as 255, which
+(`crates/common/src/net/cod1/fields_v1.rs`), so -1 reaches a client as 255, which
 is what the committed player captures carry. VERIFIED against those fixtures.
 
 The store is reached only when the entity's `health` (+0x230, the entity field
@@ -3126,7 +3220,13 @@ vcod (`crates/server/src/game/builtins/attach.rs`): the list is the
 compacted slot array, `attach` checks the pair and the count in retail's
 order, `detach` is one builtin for all three protocols, and
 `client_attachments` (`game/script.rs`) indexes a playing or dead client's
-tags each frame. `crates/server/tests/semantics_ents.rs`
+tags each frame, from `ClientEndFrame`'s pass (`server/cod1_frame.rs`), so
+the `d` is queued ahead of the frame's snapshots. Before 2026-10-28 the
+snapshot build indexed them, after the frame's writes went out, and the
+first snapshot naming a new tag reached the client a message ahead of its
+string: UO's ctf flag icon (`TAG_HELMETSIDE`), whose root bone has no name,
+was grafted as a new root for a frame (`cod11-client-soak.md`, the UO
+sweep; `two_clients::an_attachments_tag_reaches_the_client_before_its_snapshot`). `crates/server/tests/semantics_ents.rs`
 `probe_attach_matches_retail` replays the six probes.
 
 ## 25. `addTestClient`

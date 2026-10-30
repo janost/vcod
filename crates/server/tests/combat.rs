@@ -50,7 +50,7 @@ fn cfg() -> vcod_server::ServerConfig {
 fn a_shot_takes_health_and_a_second_one_kills() {
     use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD, UserCmd};
 
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -527,7 +527,7 @@ fn a_shot_takes_health_and_a_second_one_kills() {
 fn the_kill_command_suicides_a_player() {
     use vcod_common::net::msg::NULL_USERCMD;
 
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -975,7 +975,7 @@ fn a_bullet_deaths_frame_is_retails() {
 fn a_player_killed_earlier_in_the_frame_stops_no_later_round() {
     use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD, UserCmd};
 
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -1077,7 +1077,7 @@ fn a_player_killed_earlier_in_the_frame_stops_no_later_round() {
 fn a_melee_swing_hits_and_the_kill_shows_the_melee_icon() {
     use vcod_common::net::msg::{BUTTON_MELEE, NULL_USERCMD, UserCmd};
 
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -1346,7 +1346,7 @@ fn two_placed_under(
     gametype: Option<(&str, &str)>,
     b_at: impl Fn(&vcod_server::Server, [f32; 3]) -> [f32; 3],
 ) -> Option<Pair> {
-    let fs = vcod_common::testing::game_fs()?;
+    let fs = vcod_common::testing::game_fs_11()?;
     let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();
@@ -2314,7 +2314,7 @@ struct Followed {
 
 impl Followed {
     fn new() -> Option<Self> {
-        let fs = vcod_common::testing::game_fs()?;
+        let fs = vcod_common::testing::game_fs_11()?;
         let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
         let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
         let mut now = Instant::now();

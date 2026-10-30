@@ -89,11 +89,15 @@ fn write_fog(
 /// clock (map-cycle doc 4.5).
 pub fn ambient_play(
     cs: &mut crate::configstrings::ConfigStrings,
+    slot: usize,
     level_time_ms: i32,
     cx: &Cx,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    debug_assert!(cs.len() > 3, "configstring table shorter than slot 3");
+    debug_assert!(
+        cs.len() > slot,
+        "configstring table shorter than the ambient slot"
+    );
     let fade_ms = match args {
         [_] => 0,
         [_, f] => {
@@ -122,7 +126,7 @@ pub fn ambient_play(
         return Err(ErrorKind::BadType("ambientPlay: fade time must be >= 0"));
     }
     cs.set(
-        3,
+        slot,
         format!("n\\{alias}\\t\\{}", level_time_ms.wrapping_add(fade_ms)),
     );
     Ok(Value::Undefined)

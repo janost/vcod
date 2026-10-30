@@ -1,12 +1,12 @@
 # Votes: `callvote`, `vote`, `CheckVote`
 
 How the 1.1 and 1.5 game modules run a vote, what the client draws, and
-what two retail runs on this machine showed. vcod's server side is
+what two retail runs showed. vcod's server side is
 `crates/server/src/game/vote.rs`, the client's `crates/client/src/hud/vote.rs`;
 the gate is `crates/server/tests/votes_ab.rs`.
 
 Modules: `game.mp.i386.so` 1.1d (symbols; addresses are `nm`'s) and 1.5b
-(`nm`'s; Ghidra's `game15.so.c` loads it 0x10000 higher, so its `DAT_000889ce`
+(`nm`'s; a Ghidra import loads it 0x10000 higher, so its `DAT_000889ce`
 is file 0x789ce), `cgame_mp_x86.dll` 1.1 and 1.5 (image base 0x30000000),
 `ui_mp_x86.dll` 1.1 (0x40000000), `cod_lnxded` 1.5b. Code was read with
 `tools/re/annotate_func.py` and the Ghidra exports; strings were read out

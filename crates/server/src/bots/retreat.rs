@@ -106,7 +106,7 @@ pub(crate) fn nearest_pack(view: &BotView, packs: &[[f32; 3]]) -> Option<[f32; 3
 }
 
 /// Whether `at` stands at the cover `c`.
-fn at_cover(at: [f32; 3], c: [f32; 3]) -> bool {
+pub(super) fn at_cover(at: [f32; 3], c: [f32; 3]) -> bool {
     (c[0] - at[0]).hypot(c[1] - at[1]) < COVER_REACHED && (c[2] - at[2]).abs() < COVER_HEIGHT
 }
 

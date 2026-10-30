@@ -1,7 +1,8 @@
 //! Which soups a camera sees, decided the way the retail client does it:
 //! docs/research/bsp-ibsp59-format.md, "How the retail client draws the world".
 
-use crate::bsp::{self, Bsp};
+use crate::mapworld;
+use crate::mapworld::MapWorld;
 use glam::{Mat4, Vec3};
 
 /// Planes as `(n, d)`, inside where `n·p + d >= 0`.
@@ -127,6 +128,146 @@ impl Frustum {
     }
 }
 
+/// [`WorldVis::walk_queued`]'s portal state: the chopped points each queued
+/// portal gathered, the single portal that queued it (`None` once two did),
+/// the chain the current cell was entered through, the shallowest visit
+/// that queued it, and the min-heap.
+struct PortalQueue {
+    points: Vec<Vec<Vec3>>,
+    queued: Vec<bool>,
+    depth: Vec<u8>,
+    parent: Vec<Option<usize>>,
+    ancestor: Vec<bool>,
+    heap: std::collections::BinaryHeap<std::cmp::Reverse<(OrdF32, usize)>>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct OrdF32(f32);
+impl Eq for OrdF32 {}
+impl PartialOrd for OrdF32 {
+    fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(o))
+    }
+}
+impl Ord for OrdF32 {
+    fn cmp(&self, o: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&o.0)
+    }
+}
+
+impl PortalQueue {
+    fn push(&mut self, dist: f32, pi: usize) {
+        self.queued[pi] = true;
+        self.heap.push(std::cmp::Reverse((OrdF32(dist), pi)));
+    }
+
+    fn pop(&mut self) -> Option<(f32, usize)> {
+        let std::cmp::Reverse((d, pi)) = self.heap.pop()?;
+        self.queued[pi] = false;
+        Some((d.0, pi))
+    }
+
+    /// `R_SetAncestorListStatus`: the portal and the parents it was queued
+    /// by, while they have one.
+    fn set_ancestors(&mut self, mut p: Option<usize>, on: bool) {
+        let mut steps = self.ancestor.len();
+        while let Some(pi) = p {
+            if steps == 0 || self.ancestor[pi] == on {
+                break;
+            }
+            steps -= 1;
+            self.ancestor[pi] = on;
+            p = self.parent[pi];
+        }
+    }
+}
+
+/// The convex hull of points on a plane with normal `n`, wound around it
+/// (`Com_ConvexHull` on the portal's hull axes).
+fn convex_hull_on_plane(points: &[Vec3], n: Vec3) -> Vec<Vec3> {
+    if points.len() < 3 {
+        return Vec::new();
+    }
+    let u = n.any_orthonormal_vector();
+    let v = n.cross(u);
+    let mut pts: Vec<(f32, f32, Vec3)> = points.iter().map(|&p| (p.dot(u), p.dot(v), p)).collect();
+    pts.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    pts.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3);
+    if pts.len() < 3 {
+        return Vec::new();
+    }
+    let cross = |o: &(f32, f32, Vec3), a: &(f32, f32, Vec3), b: &(f32, f32, Vec3)| {
+        (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+    };
+    let mut hull: Vec<(f32, f32, Vec3)> = Vec::with_capacity(pts.len() * 2);
+    for pass in 0..2 {
+        let start = hull.len();
+        let iter: Box<dyn Iterator<Item = &(f32, f32, Vec3)>> = if pass == 0 {
+            Box::new(pts.iter())
+        } else {
+            Box::new(pts.iter().rev())
+        };
+        for p in iter {
+            while hull.len() >= start + 2
+                && cross(&hull[hull.len() - 2], &hull[hull.len() - 1], p) <= 0.0
+            {
+                hull.pop();
+            }
+            hull.push(*p);
+        }
+        hull.pop();
+    }
+    hull.into_iter().map(|p| p.2).collect()
+}
+
+/// Whether `p`, on the winding's plane, lies inside it (`ProjectedWinding
+/// ContainsCoplanarPoint`): on the inner side of every edge.
+/// Whether a popped portal's hull covers `min_area` of the screen, so its
+/// cell queues its own portals (`R_VisitPortals`, CoD2 Mac 0xf14c0): the
+/// share of the screen's 2 x 2 its points' NDC rectangle covers, then,
+/// past `min_area`, the polygon's own. A point within 0.125 of the eye
+/// plane (clip w) always clips.
+fn clips_children(hull: &[Vec3], view_proj: Mat4, min_area: f32) -> bool {
+    let mut ndc = Vec::with_capacity(hull.len());
+    for &p in hull {
+        let c = view_proj * p.extend(1.0);
+        if c.w < 0.125 {
+            return true;
+        }
+        ndc.push(glam::Vec2::new(c.x / c.w, c.y / c.w));
+    }
+    let (lo, hi) = ndc
+        .iter()
+        .fold((glam::Vec2::ONE, glam::Vec2::NEG_ONE), |(lo, hi), &v| {
+            (lo.min(v), hi.max(v))
+        });
+    if (hi.x - lo.x) * (hi.y - lo.y) * 0.25 < min_area {
+        return false;
+    }
+    // the shoelace sum, twice the area; retail's winding makes it
+    // positive, vcod's hull may wind either way
+    let n = ndc.len();
+    let twice: f32 = (0..n)
+        .map(|i| ndc[i].x * (ndc[(i + 1) % n].y - ndc[(i + n - 1) % n].y))
+        .sum();
+    (twice * 0.125).abs() >= min_area
+}
+
+fn point_in_winding(p: Vec3, verts: &[Vec3], n: Vec3) -> bool {
+    let mut sign = 0.0f32;
+    for i in 0..verts.len() {
+        let e = verts[(i + 1) % verts.len()] - verts[i];
+        let s = n.dot(e.cross(p - verts[i]));
+        if s != 0.0 {
+            if sign != 0.0 && s.signum() != sign {
+                return false;
+            }
+            sign = s.signum();
+        }
+    }
+    true
+}
+
 /// Below this angular width (radians) a clipped portal is a numerical sliver
 /// at a shared edge, not an opening: its cone loses planes or wobbles.
 const SLIVER_EPS: f32 = 1e-4;
@@ -212,21 +353,34 @@ pub struct WorldVis {
     node_bounds: Vec<(Vec3, Vec3)>,
     /// Preorder end of each node's subtree; 0 for nodes no cell reaches.
     tree_end: Vec<u32>,
-    aabb_nodes: Vec<bsp::AabbNode>,
-    cull_groups: Vec<bsp::CullGroup>,
-    cells: Vec<bsp::Cell>,
-    nodes: Vec<bsp::Node>,
-    leafs: Vec<bsp::Leaf>,
+    aabb_nodes: Vec<mapworld::AabbNode>,
+    cull_groups: Vec<mapworld::CullGroup>,
+    cells: Vec<mapworld::Cell>,
+    nodes: Vec<mapworld::Node>,
+    leafs: Vec<mapworld::Leaf>,
     /// `(n, dist)`, front where `n·p - dist > 0`.
     planes: Vec<(Vec3, f32)>,
     cull_indices: Vec<u32>,
-    portals: Vec<bsp::Portal>,
+    /// Per cell, its range of `group_nodes`: the cell's cull groups as a
+    /// box tree, so a cell whose static models lie out of view tests a few
+    /// boxes, not one a placement ([`WorldVis::mark_cell`]).
+    cell_groups: Vec<std::ops::Range<u32>>,
+    group_nodes: Vec<GroupNode>,
+    /// The groups the tree's leaves hold, into `cull_groups`.
+    group_order: Vec<u32>,
+    portals: Vec<mapworld::Portal>,
     portal_verts: Vec<Vec3>,
     occluders: Vec<Occ>,
     occluder_indices: Vec<u16>,
     /// Per brush model past the world, its bounds and its soups. No cell
     /// lists them; they draw only through their entity.
     brush_models: Vec<((Vec3, Vec3), std::ops::Range<usize>)>,
+    /// [`MapWorld::portals_only`].
+    portals_only: bool,
+    /// [`MapWorld::portal_min_clip_area`].
+    min_clip_area: f32,
+    /// [`MapWorld::portal_min_recurse_depth`].
+    min_recurse_depth: u8,
 }
 
 /// State threaded through the portal recursion: the eye and the unnarrowed
@@ -241,9 +395,86 @@ struct Walk<'a> {
     /// Cells whose boundary portal an occluder volume hid; the post-walk
     /// frustum expansion must not reach them (an_occluder_hides_the_portal).
     sealed: Vec<bool>,
+    /// Each cell's occluder volumes, built on its first visit: they depend
+    /// on the cell and the eye alone, and the walk revisits cells.
+    volumes: Vec<Option<std::rc::Rc<Volumes>>>,
 }
 
+/// A cell's occluder volumes, each a set of planes.
+type Volumes = Vec<Vec<(Vec3, f32)>>;
+
 const EMPTY: (Vec3, Vec3) = (Vec3::INFINITY, Vec3::NEG_INFINITY);
+
+/// One node of a cell's cull group tree: its box holds every group under
+/// it, `end` is its subtree's preorder end, and a leaf lists its groups
+/// (`first..first + count` of `WorldVis::group_order`).
+#[derive(Clone, Copy)]
+struct GroupNode {
+    lo: Vec3,
+    hi: Vec3,
+    end: u32,
+    first: u32,
+    count: u32,
+}
+
+/// Groups a leaf of the tree holds at most.
+const GROUP_LEAF: usize = 8;
+
+/// The tree over `idx`'s groups, appended in preorder: split at the
+/// median of the box centres along the longest axis down to
+/// [`GROUP_LEAF`] groups.
+fn build_group_tree(
+    idx: &mut [u32],
+    groups: &[mapworld::CullGroup],
+    nodes: &mut Vec<GroupNode>,
+    order: &mut Vec<u32>,
+) {
+    let bounds = |g: u32| {
+        let g = &groups[g as usize];
+        (Vec3::from(g.mins), Vec3::from(g.maxs))
+    };
+    let (lo, hi) = idx.iter().fold(EMPTY, |b, &g| union(b, bounds(g)));
+    let at = nodes.len();
+    nodes.push(GroupNode {
+        lo,
+        hi,
+        end: 0,
+        first: order.len() as u32,
+        count: 0,
+    });
+    if idx.len() <= GROUP_LEAF {
+        order.extend_from_slice(idx);
+        nodes[at].count = idx.len() as u32;
+    } else {
+        let axis = (hi - lo).max_position();
+        let centre = |g: u32| {
+            let (a, b) = bounds(g);
+            (a[axis] + b[axis]) * 0.5
+        };
+        idx.sort_by(|&a, &b| centre(a).total_cmp(&centre(b)));
+        let (a, b) = idx.split_at_mut(idx.len() / 2);
+        build_group_tree(a, groups, nodes, order);
+        build_group_tree(b, groups, nodes, order);
+    }
+    nodes[at].end = nodes.len() as u32;
+}
+
+/// A soup's bounds over the vertices its indices reach, as CoD2's
+/// `R_LoadSurfaces` (Mac 0xe4672) bounds a surface: a d3dbsp surface's
+/// vertex run is its whole material batch, so bounding the run made every
+/// CoD2 soup map-sized and the frustum culled none
+/// (cod2-d3dbsp-format.md, "Surface bounds"). A CoD1 soup's indices reach
+/// its whole run, so its bounds are the run's.
+pub fn soup_bounds(bsp: &MapWorld, soup: usize) -> (Vec3, Vec3) {
+    let s = &bsp.soups[soup];
+    let (fv, fi) = (s.first_vertex as usize, s.first_index as usize);
+    bsp.indices[fi..fi + s.index_count as usize]
+        .iter()
+        .filter_map(|&i| bsp.verts.get(fv + i as usize))
+        .fold(EMPTY, |b, v| {
+            union(b, (Vec3::from(v.pos), Vec3::from(v.pos)))
+        })
+}
 
 fn union(a: (Vec3, Vec3), b: (Vec3, Vec3)) -> (Vec3, Vec3) {
     (a.0.min(b.0), a.1.max(b.1))
@@ -254,19 +485,9 @@ fn overlaps(a: (Vec3, Vec3), lo: Vec3, hi: Vec3) -> bool {
 }
 
 impl WorldVis {
-    pub fn build(bsp: &Bsp) -> Self {
-        let soup_bounds: Vec<(Vec3, Vec3)> = bsp
-            .soups
-            .iter()
-            .map(|s| {
-                let fv = s.first_vertex as usize;
-                bsp.verts[fv..fv + s.vertex_count as usize]
-                    .iter()
-                    .fold(EMPTY, |b, v| {
-                        union(b, (Vec3::from(v.pos), Vec3::from(v.pos)))
-                    })
-            })
-            .collect();
+    pub fn build(bsp: &MapWorld) -> Self {
+        let soup_bounds: Vec<(Vec3, Vec3)> =
+            (0..bsp.soups.len()).map(|s| soup_bounds(bsp, s)).collect();
         let mut node_bounds = vec![EMPTY; bsp.aabb_nodes.len()];
         let mut tree_end = vec![0u32; bsp.aabb_nodes.len()];
         for cell in &bsp.cells {
@@ -282,6 +503,31 @@ impl WorldVis {
                 );
             }
         }
+        let (mut group_nodes, mut group_order) = (Vec::new(), Vec::new());
+        let cell_groups = bsp
+            .cells
+            .iter()
+            .map(|c| {
+                let start = group_nodes.len() as u32;
+                let mut idx: Vec<u32> = bsp
+                    .cull_indices
+                    .get(c.first_cull_index as usize..(c.first_cull_index + c.cull_count) as usize)
+                    .unwrap_or_default()
+                    .iter()
+                    .copied()
+                    .filter(|&g| (g as usize) < bsp.cull_groups.len())
+                    .collect();
+                if !idx.is_empty() {
+                    build_group_tree(
+                        &mut idx,
+                        &bsp.cull_groups,
+                        &mut group_nodes,
+                        &mut group_order,
+                    );
+                }
+                start..group_nodes.len() as u32
+            })
+            .collect();
         let brush_models = bsp
             .models
             .iter()
@@ -291,6 +537,9 @@ impl WorldVis {
             .map(|r| (r.clone().fold(EMPTY, |b, s| union(b, soup_bounds[s])), r))
             .collect();
         WorldVis {
+            portals_only: bsp.portals_only,
+            min_clip_area: bsp.portal_min_clip_area,
+            min_recurse_depth: bsp.portal_min_recurse_depth,
             brush_models,
             soup_bounds,
             node_bounds,
@@ -306,6 +555,9 @@ impl WorldVis {
                 .map(|p| (Vec3::from(p.normal), p.dist))
                 .collect(),
             cull_indices: bsp.cull_indices.clone(),
+            cell_groups,
+            group_nodes,
+            group_order,
             portals: bsp.portals.clone(),
             portal_verts: bsp.portal_verts.iter().map(|&v| Vec3::from(v)).collect(),
             occluders: bsp
@@ -408,7 +660,14 @@ impl WorldVis {
             vis: self.empty_visible(),
             on_stack: vec![false; self.portals.len()],
             sealed: vec![false; self.cells.len()],
+            volumes: vec![None; self.cells.len()],
         };
+        if self.portals_only {
+            self.walk_queued(cell, frustum, &mut w);
+            self.mark_brush_models(frustum, &mut w.vis);
+            w.vis.stats.soups = w.vis.soups.iter().filter(|&&s| s).count();
+            return w.vis;
+        }
         self.walk(cell, frustum, &mut w, 0);
         // above a cell's top the eye looks over its portal-less walls, which
         // the graph treats as full height: such cells are open from above
@@ -485,7 +744,9 @@ impl WorldVis {
         // the cell's occluder volumes, built once against the fixed eye; each
         // volume is a set of planes a portal is hidden behind when every one
         // of its vertices is on the negative side of them all (CoDMP 0x4e2860)
-        let volumes = self.occluder_volumes(cell, w.eye);
+        let volumes = w.volumes[cell]
+            .get_or_insert_with(|| std::rc::Rc::new(self.occluder_volumes(cell, w.eye)))
+            .clone();
         w.vis.stats.occluders += volumes.len();
         let near = w.camera.planes.get(4).copied();
         for pi in c.first_portal as usize..(c.first_portal + c.portal_count) as usize {
@@ -542,11 +803,274 @@ impl WorldVis {
         }
     }
 
+    /// CoD4 1.7's walk (`R_VisitPortals`, docs/research/cod4-world.md
+    /// 9.1, "The portal walk") and CoD2's, the same queue
+    /// (cod2-client-perf.md 9): a cell's portals are chopped to its
+    /// frustum and queued, nearest first; a portal reached again before
+    /// its turn gathers the new points, and on its turn it is opened once,
+    /// through the convex hull of everything gathered. The recursive
+    /// [`Self::walk`] opens a portal once per path, which on mp_overgrown's
+    /// sky cell ran past its visit cap and dropped whole rooms.
+    fn walk_queued(&self, cell: usize, frustum: &Frustum, w: &mut Walk) {
+        let n = self.portals.len();
+        let mut q = PortalQueue {
+            points: vec![Vec::new(); n],
+            queued: vec![false; n],
+            depth: vec![0; n],
+            parent: vec![None; n],
+            ancestor: vec![false; n],
+            heap: std::collections::BinaryHeap::new(),
+        };
+        self.visit_queued(cell, None, 0, frustum, w, &mut q, true);
+        // retail stops at 256 queued portals (`Com_Error`); a hostile graph
+        // that requeues forever stops here instead
+        let mut budget = 64 * n.max(1);
+        while let Some((_, pi)) = q.pop() {
+            let points = std::mem::take(&mut q.points[pi]);
+            budget -= 1;
+            if budget == 0 {
+                break;
+            }
+            let p = self.portals[pi];
+            let (pn, _) = self.planes[p.plane as usize];
+            let hull = convex_hull_on_plane(&points, pn);
+            if hull.len() < 3 || angular_width(w.eye, &hull) < SLIVER_EPS {
+                continue;
+            }
+            let mut child = match w.view_proj {
+                Some(m) => Frustum::from_polygon_beveled(w.eye, &hull, m),
+                None => Frustum::from_polygon(w.eye, &hull),
+            };
+            child
+                .planes
+                .extend_from_slice(w.camera.planes.get(4..6).unwrap_or_default());
+            // CoD4's `r_portalMinRecurseDepth`: shallow portals always
+            // queue their cell's portals (iw3mp.exe 0x60a6ca..0x60a6e0)
+            let depth = q.depth[pi];
+            let clip_children = match w.view_proj {
+                _ if depth < self.min_recurse_depth => true,
+                Some(m) if self.min_clip_area > 0.0 => clips_children(&hull, m, self.min_clip_area),
+                _ => true,
+            };
+            self.visit_queued(
+                p.cell as usize,
+                Some(pi),
+                depth.saturating_add(1),
+                &child,
+                w,
+                &mut q,
+                clip_children,
+            );
+        }
+    }
+
+    /// `R_VisitPortalsForCell`: marks the cell under `frustum`, then queues
+    /// each of its portals still in view, chopped to `frustum`. A portal the
+    /// eye stands in (within 1/8 unit of its plane) is entered at once
+    /// under the same frustum. `depth` counts the portals opened on the
+    /// way here (0 at the eye's cell); each portal queued keeps the
+    /// shallowest it was queued from (iw3mp.exe 0x60a289, 0x60a2aa).
+    #[allow(clippy::too_many_arguments)]
+    fn visit_queued(
+        &self,
+        cell: usize,
+        parent: Option<usize>,
+        depth: u8,
+        frustum: &Frustum,
+        w: &mut Walk,
+        q: &mut PortalQueue,
+        clip_children: bool,
+    ) {
+        w.vis.cells[cell] = true;
+        w.vis.stats.cells_visited += 1;
+        let c = self.cells[cell];
+        self.mark_cell(cell, frustum, &mut w.vis);
+        q.set_ancestors(parent, true);
+        let volumes = self.occluder_volumes(cell, w.eye);
+        w.vis.stats.occluders += volumes.len();
+        let near = w.camera.planes.get(4).copied();
+        // a portal too small on screen to queue its cell's portals: the
+        // cells beyond under this frustum instead (`DpvsClipChildren` 0)
+        if let (false, Some(pp)) = (clip_children, parent) {
+            let (pn, pd) = self.planes[self.portals[pp].plane as usize];
+            let mut list = Vec::new();
+            self.further_cells(
+                cell,
+                (pn, -pd),
+                frustum,
+                near,
+                &volumes,
+                w.eye,
+                q,
+                &mut list,
+            );
+            for c in list {
+                w.vis.cells[c] = true;
+                w.vis.stats.cells_visited += 1;
+                self.mark_cell(c, frustum, &mut w.vis);
+            }
+            q.set_ancestors(parent, false);
+            return;
+        }
+        for pi in c.first_portal as usize..(c.first_portal + c.portal_count) as usize {
+            if q.ancestor[pi] {
+                continue;
+            }
+            let p = self.portals[pi];
+            let (n, dist) = self.planes[p.plane as usize];
+            let side = n.dot(w.eye) - dist;
+            if side > 0.0 {
+                continue;
+            }
+            let verts =
+                &self.portal_verts[p.first_vert as usize..(p.first_vert + p.vert_count) as usize];
+            if !volumes.is_empty() && self.portal_in_occluders(&p, &volumes) {
+                w.vis.stats.portals_occluded += 1;
+                continue;
+            }
+            if side > -0.125 {
+                // the eye stands in the portal: enter it unnarrowed when the
+                // eye lies inside its winding
+                if point_in_winding(w.eye, verts, n) && !w.on_stack[pi] {
+                    w.on_stack[pi] = true;
+                    self.visit_queued(
+                        p.cell as usize,
+                        Some(pi),
+                        depth.saturating_add(1),
+                        frustum,
+                        w,
+                        q,
+                        clip_children,
+                    );
+                    w.on_stack[pi] = false;
+                }
+                continue;
+            }
+            let mut poly = verts.to_vec();
+            // the entering portal's plane, then the frustum (its near plane
+            // left out, as in `walk`)
+            if let Some(pp) = parent {
+                let (pn, pd) = self.planes[self.portals[pp].plane as usize];
+                poly = clip_polygon(&poly, (pn, -pd));
+            }
+            for &plane in frustum.planes.iter().filter(|&&p| Some(p) != near) {
+                if poly.len() < 3 {
+                    break;
+                }
+                poly = clip_polygon(&poly, plane);
+            }
+            if poly.len() < 3 {
+                continue;
+            }
+            q.points[pi].extend_from_slice(&poly);
+            if q.queued[pi] {
+                if q.parent[pi] != parent {
+                    q.parent[pi] = None;
+                }
+                q.depth[pi] = q.depth[pi].min(depth);
+            } else {
+                q.parent[pi] = parent;
+                q.depth[pi] = depth;
+                // nearest first: the winding's furthest point along the view
+                let fwd = w.camera.planes.get(4).map_or(Vec3::ZERO, |p| p.0);
+                let far = verts
+                    .iter()
+                    .map(|&v| fwd.dot(v - w.eye))
+                    .fold(f32::MIN, f32::max);
+                q.push(far, pi);
+            }
+        }
+        q.set_ancestors(parent, false);
+    }
+
+    /// `R_GetFurtherCellList_r` (CoD2 Mac 0xef68a): through each portal of
+    /// `cell` not on the walk's path, facing away from the eye, clear of
+    /// the visit's occluder `volumes` and left with area after the
+    /// entering portal's plane `enter` and `frustum` (its near plane
+    /// left out, as in `walk`), the cell beyond goes on `list` once and
+    /// its own portals are tried the same way, under the same planes.
+    /// Retail's list holds 384 (its stack array).
+    #[allow(clippy::too_many_arguments)]
+    fn further_cells(
+        &self,
+        cell: usize,
+        enter: (Vec3, f32),
+        frustum: &Frustum,
+        near: Option<(Vec3, f32)>,
+        volumes: &Volumes,
+        eye: Vec3,
+        q: &PortalQueue,
+        list: &mut Vec<usize>,
+    ) {
+        let c = &self.cells[cell];
+        for pi in c.first_portal as usize..(c.first_portal + c.portal_count) as usize {
+            let p = self.portals[pi];
+            let next = p.cell as usize;
+            if list.contains(&next) || q.ancestor[pi] {
+                continue;
+            }
+            let (n, dist) = self.planes[p.plane as usize];
+            if n.dot(eye) - dist > 0.0 {
+                continue;
+            }
+            if !volumes.is_empty() && self.portal_in_occluders(&p, volumes) {
+                continue;
+            }
+            let verts =
+                &self.portal_verts[p.first_vert as usize..(p.first_vert + p.vert_count) as usize];
+            let mut poly = clip_polygon(verts, enter);
+            for &plane in frustum.planes.iter().filter(|&&p| Some(p) != near) {
+                if poly.len() < 3 {
+                    break;
+                }
+                poly = clip_polygon(&poly, plane);
+            }
+            if poly.len() < 3 || list.len() >= 384 {
+                continue;
+            }
+            list.push(next);
+            self.further_cells(next, enter, frustum, near, volumes, eye, q, list);
+        }
+    }
+
+    /// The cell's AABB tree and cull groups under `frustum`
+    /// (`R_AddVisibleSurfacesInCell`).
+    /// Every soup the listed cells' trees and cull groups hold, unculled:
+    /// the most a walk that reaches those cells can mark.
+    pub fn cell_soups(&self, cells: &[bool]) -> Vec<bool> {
+        let mut vis = self.empty_visible();
+        let all = Frustum { planes: Vec::new() };
+        for (ci, _) in cells.iter().enumerate().filter(|&(_, &on)| on) {
+            self.mark_cell(ci, &all, &mut vis);
+        }
+        vis.soups
+    }
+
+    fn mark_cell(&self, cell: usize, frustum: &Frustum, vis: &mut Visible) {
+        let c = &self.cells[cell];
+        self.mark_tree(c.first_aabb, frustum, vis);
+        // the groups' tree: a box out of view holds groups out of view, so
+        // the marks are the flat list's
+        let range = self.cell_groups[cell].clone();
+        let mut i = range.start;
+        while i < range.end {
+            let n = self.group_nodes[i as usize];
+            if !frustum.intersects_aabb(n.lo, n.hi) {
+                i = n.end;
+                continue;
+            }
+            for &gi in &self.group_order[n.first as usize..(n.first + n.count) as usize] {
+                self.mark_group(&self.cull_groups[gi as usize], frustum, vis);
+            }
+            i += 1;
+        }
+    }
+
     /// The cell's occluder volumes against `eye` (CoDMP 0x4e2860): each
     /// front-facing box plane stays, and every silhouette edge whose two
     /// planes straddle the eye contributes one plane through the eye. No
     /// volume (no occluders, or the call had none) is an empty slice.
-    fn occluder_volumes(&self, cell: usize, eye: Vec3) -> Vec<Vec<(Vec3, f32)>> {
+    fn occluder_volumes(&self, cell: usize, eye: Vec3) -> Volumes {
         let c = &self.cells[cell];
         let list = &self.occluder_indices
             [c.first_occluder as usize..(c.first_occluder + c.occluder_count) as usize];
@@ -592,7 +1116,7 @@ impl WorldVis {
 
     /// Portal hidden when every vertex is on the negative side of every
     /// plane of one volume (CoDMP 0x4e2cc0).
-    fn portal_in_occluders(&self, p: &bsp::Portal, volumes: &[Vec<(Vec3, f32)>]) -> bool {
+    fn portal_in_occluders(&self, p: &mapworld::Portal, volumes: &[Vec<(Vec3, f32)>]) -> bool {
         let verts =
             &self.portal_verts[p.first_vert as usize..(p.first_vert + p.vert_count) as usize];
         volumes.iter().any(|volume| {
@@ -645,10 +1169,11 @@ impl WorldVis {
                 root_hit = true;
             }
             let node = &self.aabb_nodes[i];
+            // a soup an earlier visit marked stays marked: no test
             for s in node.first_soup as usize..(node.first_soup + node.soup_count) as usize {
-                let (lo, hi) = self.soup_bounds[s];
-                if frustum.intersects_aabb(lo, hi) {
-                    vis.soups[s] = true;
+                if !vis.soups[s] {
+                    let (lo, hi) = self.soup_bounds[s];
+                    vis.soups[s] = frustum.intersects_aabb(lo, hi);
                 }
             }
             i += 1;
@@ -670,7 +1195,7 @@ impl WorldVis {
     }
 
     /// Group bounds only; retail marks every surface of a hit group.
-    fn mark_group(&self, g: &bsp::CullGroup, frustum: &Frustum, vis: &mut Visible) {
+    fn mark_group(&self, g: &mapworld::CullGroup, frustum: &Frustum, vis: &mut Visible) {
         if frustum.intersects_aabb(Vec3::from(g.mins), Vec3::from(g.maxs)) {
             for s in g.first_soup as usize..(g.first_soup + g.soup_count) as usize {
                 vis.soups[s] = true;
@@ -689,7 +1214,7 @@ const MAX_TREE_DEPTH: usize = 128;
 fn walk_bounds(
     i: usize,
     depth: usize,
-    nodes: &[bsp::AabbNode],
+    nodes: &[mapworld::AabbNode],
     soup_bounds: &[(Vec3, Vec3)],
     node_bounds: &mut [(Vec3, Vec3)],
     tree_end: &mut [u32],
@@ -718,8 +1243,8 @@ fn walk_bounds(
 /// the x = 0 plane; one soup in each cell and one cull-group soup in A.
 /// Always compiled: the client's gather tests use it.
 #[doc(hidden)]
-pub fn two_cell_world() -> Bsp {
-    use crate::bsp::{
+pub fn two_cell_world() -> MapWorld {
+    use crate::mapworld::{
         AabbNode, Cell, CullGroup, DrawVert, Leaf, Material, Node, Plane, Portal, TriangleSoup,
     };
     let vert = |x: f32, y: f32, z: f32| DrawVert {
@@ -741,23 +1266,21 @@ pub fn two_cell_world() -> Bsp {
     let verts: Vec<DrawVert> = [tri(-50.0, 0.0), tri(50.0, 0.0), tri(-50.0, 80.0)].concat();
     let soup = |i: u32| TriangleSoup {
         material: 0,
-        lightmap: bsp::NO_LIGHTMAP,
+        lightmap: mapworld::NO_LIGHTMAP,
         first_vertex: i * 3,
         vertex_count: 3,
         index_count: 3,
         first_index: 0,
     };
-    Bsp {
+    MapWorld {
         materials: vec![Material {
             name: "textures/test/wall".into(),
             surface_flags: 0,
             content_flags: 1,
         }],
-        lightmaps: vec![],
         soups: vec![soup(2), soup(0), soup(1)],
         verts,
         indices: vec![0, 1, 2],
-        entities: String::new(),
         planes: vec![
             Plane {
                 normal: [1.0, 0.0, 0.0],
@@ -768,9 +1291,6 @@ pub fn two_cell_world() -> Bsp {
                 dist: 0.0,
             },
         ],
-        brush_sides: vec![],
-        brushes: vec![],
-        models: vec![],
         cull_groups: vec![CullGroup {
             mins: [-50.0, 80.0, -10.0],
             maxs: [-40.0, 80.0, 10.0],
@@ -788,10 +1308,6 @@ pub fn two_cell_world() -> Bsp {
             [0.0, 50.0, 50.0],
             [0.0, 50.0, -50.0],
         ],
-        occluders: vec![],
-        occluder_plane_indices: vec![],
-        occluder_edges: vec![],
-        occluder_indices: vec![],
         aabb_nodes: vec![
             AabbNode {
                 first_soup: 1,
@@ -862,18 +1378,7 @@ pub fn two_cell_world() -> Bsp {
                 cell: 1,
             },
         ],
-        pvs: None,
-        terrain: vec![],
-        patches: vec![],
-        collision_verts: vec![],
-        collision_indices: vec![],
-        light_indices: vec![],
-        leaf_lights: vec![],
-        leaf_lists: vec![],
-        leaf_brushes: vec![],
-        leaf_partitions: vec![],
-        lights: vec![],
-        light_vis: vec![],
+        ..Default::default()
     }
 }
 
@@ -881,7 +1386,9 @@ pub fn two_cell_world() -> Bsp {
 mod tests {
     use super::*;
     #[allow(unused_imports)]
-    use crate::bsp::{AabbNode, Cell, DrawVert, Leaf, Material, Node, Plane, Portal, TriangleSoup};
+    use crate::mapworld::{
+        AabbNode, Cell, DrawVert, Leaf, Material, Node, Plane, Portal, TriangleSoup,
+    };
 
     /// Nearest corner along each normal: true only when the whole box is inside.
     fn fully_inside(f: &Frustum, lo: Vec3, hi: Vec3) -> bool {
@@ -927,6 +1434,12 @@ mod tests {
         let eye = Vec3::new(-50.0, 0.0, 0.0);
         let v = vis.visible(eye, &frustum_at(eye, Vec3::new(0.6, 0.0, -0.8)), None);
         assert!(!v.soups[2], "below B's top the ray misses the portal");
+        // a CoD4 world walks its portals alone, over the top or not
+        b.portals_only = true;
+        let vis = WorldVis::build(&b);
+        let eye = Vec3::new(-50.0, 0.0, 150.0);
+        let v = vis.visible(eye, &frustum_at(eye, Vec3::new(0.6, 0.0, -0.8)), None);
+        assert!(!v.soups[2], "portals only: B stays hidden");
     }
 
     /// Flying above the map, no soup that is fully on screen in two
@@ -939,7 +1452,7 @@ mod tests {
         let Some(data) = fs.read("maps/mp/mp_brecourt.bsp") else {
             return;
         };
-        let b = bsp::parse(&data).unwrap();
+        let b = crate::bsp::parse(&data).unwrap();
         let vis = WorldVis::build(&b);
         let (lo, hi) = crate::mesh::map_bounds(&b);
         let (lo, hi) = (Vec3::from(lo), Vec3::from(hi));
@@ -1094,7 +1607,7 @@ mod tests {
 
     /// Every store keeps its corners in a run of lump 11 and hides behind
     /// real slab geometry with portal walks intact.
-    fn occluder_world() -> Bsp {
+    fn occluder_world() -> MapWorld {
         let vert = |x: f32, y: f32, z: f32| DrawVert {
             pos: [x, y, z],
             uv: [0.0; 2],
@@ -1113,7 +1626,7 @@ mod tests {
         let verts: Vec<DrawVert> = [tri(-150.0), tri(0.0), tri(150.0)].concat();
         let soup = |i: u32| TriangleSoup {
             material: 0,
-            lightmap: bsp::NO_LIGHTMAP,
+            lightmap: mapworld::NO_LIGHTMAP,
             first_vertex: i * 3,
             vertex_count: 3,
             index_count: 3,
@@ -1186,25 +1699,18 @@ mod tests {
             [0, 3, 4, 5],
             [0, 2, 6, 7],
         ];
-        Bsp {
+        MapWorld {
             materials: vec![Material {
                 name: "textures/test/wall".into(),
                 surface_flags: 0,
                 content_flags: 1,
             }],
-            lightmaps: vec![],
             soups: vec![soup(0), soup(1), soup(2)],
             verts,
             indices: vec![0, 1, 2],
-            entities: String::new(),
             planes,
-            brush_sides: vec![],
-            brushes: vec![],
-            models: vec![],
-            cull_groups: vec![],
-            cull_indices: vec![],
             portal_verts,
-            occluders: vec![bsp::Occluder {
+            occluders: vec![mapworld::Occluder {
                 first_plane: 0,
                 num_planes: 6,
                 num_edges: edges.len() as u16,
@@ -1326,19 +1832,36 @@ mod tests {
                     cell: 2,
                 },
             ],
-            pvs: None,
-            terrain: vec![],
-            patches: vec![],
-            collision_verts: vec![],
-            collision_indices: vec![],
-            light_indices: vec![],
-            leaf_lights: vec![],
-            leaf_lists: vec![],
-            leaf_brushes: vec![],
-            leaf_partitions: vec![],
-            lights: vec![],
-            light_vis: vec![],
+            ..Default::default()
         }
+    }
+
+    /// CoD4's queued walk opens B through the portal once, and the hull of
+    /// points two paths gathered spans both.
+    #[test]
+    fn queued_walk_opens_each_portal_once() {
+        let mut b = two_cell_world();
+        b.portals_only = true;
+        let vis = WorldVis::build(&b);
+        let eye = Vec3::new(-50.0, 0.0, 0.0);
+        let v = vis.visible(eye, &frustum_at(eye, Vec3::X), None);
+        assert!(v.soups[2], "B's soup through the portal");
+        assert_eq!(v.stats.cells_visited, 2);
+        let v = vis.visible(eye, &frustum_at(eye, -Vec3::X), None);
+        assert!(!v.soups[2], "B behind the eye");
+
+        let sq = |x0: f32, y0: f32| {
+            [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+                .map(|(x, y)| Vec3::new(x0 + x, y0 + y, 5.0))
+        };
+        let mut pts = sq(0.0, 0.0).to_vec();
+        pts.extend(sq(5.0, 5.0));
+        let hull = convex_hull_on_plane(&pts, Vec3::Z);
+        assert_eq!(hull.len(), 6, "{hull:?}");
+        let area: f32 = (1..hull.len() - 1)
+            .map(|i| (hull[i] - hull[0]).cross(hull[i + 1] - hull[0]).z * 0.5)
+            .sum();
+        assert!((area.abs() - 200.0).abs() < 1e-3, "{area}");
     }
 
     #[test]
@@ -1361,7 +1884,7 @@ mod tests {
 
     #[test]
     fn nested_tree_unions_bounds_and_skips_a_culled_grandchild() {
-        use crate::bsp::AabbNode;
+        use crate::mapworld::AabbNode;
         let mut bsp = two_cell_world();
         // A 4-node tree in preorder: root (child_count: 2, no soups of its
         // own) over child A (child_count: 1, no soups of its own) and leaf
@@ -1433,7 +1956,7 @@ mod tests {
         let Some(data) = fs.read("maps/MP/mp_powcamp.bsp") else {
             return;
         };
-        let bsp = bsp::parse(&data).unwrap();
+        let bsp = crate::bsp::parse(&data).unwrap();
         let vis = WorldVis::build(&bsp);
         let m = &bsp.models[2];
         let shed = m.first_soup as usize..(m.first_soup + m.num_soups) as usize;
@@ -1460,7 +1983,7 @@ mod tests {
         let Some(data) = fs.read("maps/MP/mp_ship.bsp") else {
             return;
         };
-        let bsp = bsp::parse(&data).unwrap();
+        let bsp = crate::bsp::parse(&data).unwrap();
         let vis = WorldVis::build(&bsp);
         let ocean_soup = bsp
             .soups
@@ -1483,7 +2006,7 @@ mod tests {
 
     #[test]
     fn a_deep_child_chain_stops_at_the_depth_cap() {
-        use crate::bsp::AabbNode;
+        use crate::mapworld::AabbNode;
         let mut bsp = two_cell_world();
         let mut chain = vec![
             AabbNode {
@@ -1511,20 +2034,20 @@ mod tests {
         let vis = WorldVis::build(&two_cell_world());
         assert_eq!(vis.cell_for_point(Vec3::new(-50.0, 0.0, 0.0)), Some(0));
         assert_eq!(vis.cell_for_point(Vec3::new(50.0, 0.0, 0.0)), Some(1));
-        let no_tree = WorldVis::build(&Bsp {
+        let no_tree = WorldVis::build(&MapWorld {
             nodes: vec![],
             ..two_cell_world()
         });
         assert_eq!(no_tree.cell_for_point(Vec3::ZERO), None);
 
-        let solid = WorldVis::build(&Bsp {
+        let solid = WorldVis::build(&MapWorld {
             leafs: vec![
-                bsp::Leaf {
+                mapworld::Leaf {
                     cluster: 0,
                     area: 0,
                     cell: -1,
                 },
-                bsp::Leaf {
+                mapworld::Leaf {
                     cluster: 1,
                     area: 0,
                     cell: 1,
@@ -1606,9 +2129,9 @@ mod tests {
         let Some(data) = crate::testing::real_bsp() else {
             return;
         };
-        let bsp = bsp::parse(&data).unwrap();
+        let bsp = crate::bsp::parse(&data).unwrap();
         let vis = WorldVis::build(&bsp);
-        let (origin, yaw) = bsp::find_spawn(&bsp.entities).unwrap();
+        let (origin, yaw) = crate::bsp::find_spawn(&bsp.entities).unwrap();
         let eye = Vec3::from(origin) + Vec3::Z * 60.0;
         let dir = Vec3::new(yaw.to_radians().cos(), yaw.to_radians().sin(), 0.0);
         let v = vis.visible_fallback(&frustum_at(eye, dir));
@@ -1679,14 +2202,14 @@ mod tests {
         assert_eq!(v.cells, vec![true, false], "portal outside the frustum");
         // eye in no cell: fallback. The fixture's single-plane tree puts every
         // point in a cell, so this needs the solid-leaf (cell -1) variant.
-        let solid = WorldVis::build(&Bsp {
+        let solid = WorldVis::build(&MapWorld {
             leafs: vec![
-                bsp::Leaf {
+                mapworld::Leaf {
                     cluster: 0,
                     area: 0,
                     cell: -1,
                 },
-                bsp::Leaf {
+                mapworld::Leaf {
                     cluster: 1,
                     area: 0,
                     cell: 1,
@@ -1716,12 +2239,12 @@ mod tests {
         let Some(data) = crate::testing::real_bsp() else {
             return;
         };
-        let bsp = bsp::parse(&data).unwrap();
+        let bsp = crate::bsp::parse(&data).unwrap();
         let vis = WorldVis::build(&bsp);
         let mut spawns = 0;
         let mut tighter = 0;
-        for e in bsp::entity_blocks(&bsp.entities) {
-            let Some(origin) = e.get("origin").and_then(|s| bsp::parse_vec3(s)) else {
+        for e in crate::bsp::entity_blocks(&bsp.entities) {
+            let Some(origin) = e.get("origin").and_then(|s| crate::bsp::parse_vec3(s)) else {
                 continue;
             };
             if !e.get("classname").is_some_and(|c| c.starts_with("mp_")) {

@@ -505,23 +505,20 @@ protocol's port of it, 20510 or UO's 20610, in place of retail's fixed
 - The live master answers a heartbeat within 0.2 s with `getchallenge <n>`
   and `getstatus <n>` from the address it was sent to, which a home NAT lets
   through. VERIFIED 2026-10-07 with one heartbeat from a bare socket, and
-  again on retail with `developer 1` (`SV packet 185.34.107.179:20510 :
+  again on retail with `developer 1` (`SV packet <master>:20510 :
   getchallenge`, then `: getstatus`).
 - Retail answers that `getchallenge` by resolving
   `codauthorize.activision.com` and logging `sending getIpAuthorize for
-  185.34.107.179:20510` (0x8084d90), not with a `challengeResponse`.
-  VERIFIED by log. On the machine these captures ran on, `/etc/hosts` points
-  `codauthorize.activision.com` at `127.0.1.2`, so that request never left
-  the host and no authorize reply came back. VERIFIED. Public DNS resolves it
-  to `185.34.107.179`, the master's own address. VERIFIED (`dig @1.1.1.1`).
+  <master>:20510` (0x8084d90), not with a `challengeResponse`.
+  VERIFIED by log. Public DNS resolves `codauthorize.activision.com` to the
+  master's own address. VERIFIED (DNS lookup).
 - Neither server got listed. Retail (`dedicated 2`, one heartbeat, stopped
   with `rcon quit` after about 60 s) was missing from `getservers 1 full
   empty` at 15, 35 and 60 s, among 48 listed servers. vcod's server (one
   heartbeat and its flatline) was missing at 12 and 32 s. VERIFIED
   2026-10-07. With both unlisted there was no behaviour to copy. Whether the
-  missing authorize round trip, the address or something else keeps a
-  server off the list is still open. UNVERIFIED. The next test is retail
-  from a host whose `codauthorize` lookup reaches the real server.
+  authorize round trip, the address or something else keeps a server off
+  the list is still open. UNVERIFIED.
 - vcod's binary starts at `dedicated 1`, not retail's 2. That is deliberate:
   dev and agent runs stay off the public list unless they opt in with
   `--set dedicated=2`.
@@ -556,7 +553,7 @@ protocol's port of it, 20510 or UO's 20610, in place of retail's fixed
   the 5 ms socket read ("Pings"), two requests 505 ms apart
   were both answered on 20 of 20 tries and 490 ms apart on 0 of 10.
   VERIFIED (live, 1.1d, 2026-10-17). vcod-server rebuilds that moment
-  (`Server::handle_packet_read`): a packet's arrival, or the end of the
+  (`handle_queued` in `main.rs`, `engine::Arrival::read`): a packet's arrival, or the end of the
   previous packet's handling when that ran later (an rcon `map_restart`);
   its tick is not counted, since retail's frame runs in well under a
   millisecond. Same 20 of 20 and 0 of 10 on vcod's debug build, where
@@ -644,8 +641,8 @@ protocol's port of it, 20510 or UO's 20610, in place of retail's fixed
   2026-10-11, the namespace capture of "Message pacing": after the probe's
   `disconnect` retail sent 136-byte messages 997 ms apart. VERIFIED
   (capture). vcod sent its zombie a message every frame, growing to 436
-  bytes once the deltas ran out; `send_zombies` now paces it through
-  `Client::pace`, and the same capture reads 1000 ms apart.
+  bytes once the deltas ran out; its turn (`Server::send_zombie`) now
+  paces it through `Client::pace`, and the same capture reads 1000 ms apart.
 - `sv_zombietime` defaults to 2 (0x80d56cf). VERIFIED. The slot is freed
   once its last-packet time is more than `sv_zombietime` seconds old.
   `SV_CheckTimeouts` (0x808cbc0) runs after the frame's clock advance and
@@ -665,8 +662,8 @@ protocol's port of it, 20510 or UO's 20610, in place of retail's fixed
   address and qport (or port) reconnects into it. INFERRED from Q3's
   `SV_DirectConnect`, which this one shares the shape of; not measured.
 - vcod: `zombie_message` writes the ring slot the same way, and
-  `send_zombies` frees a slot on the advanced clock before it sends, off
-  `Client::last_packet_ms`. The same capture against vcod-server: the same
+  `check_timeouts` frees a slot on the advanced clock before any message
+  goes out, off `Client::last_packet_ms`. The same capture against vcod-server: the same
   two messages 1000 ms apart, the same decoded layout. Where retail's was
   136 bytes, vcod's was 128-129. The difference was the playerstate:
   retail's spectator had stepped up 8 units with an `EV_STEP_VIEW` (143)
@@ -725,6 +722,63 @@ protocol's port of it, 20510 or UO's 20610, in place of retail's fixed
   sent the same on both runs: 40 messages, 6 and 4.
   `a_never_active_zombie_is_sent_not_active_snapshots_for_two_seconds`
   pins the first.
+
+### The order of a frame's messages (`SV_SendClientMessages`)
+
+All three servers send a frame's messages in one pass over the slots, in
+slot order, whatever each slot's state. There is no separate pass for
+zombies or for clients not yet in the world.
+
+- `SV_Frame` ends `SV_CheckTimeouts`, `SV_SendClientMessages`, the
+  snapshot archive, `SV_MasterHeartbeat("COD-1")`: 1.1d 0x808cbc0,
+  0x809045c, 0x808fb84; 1.5b 0x8093eac, 0x8098a34; UO 1.51b 0x8094e0d,
+  0x8099a2c. VERIFIED (the call sequences in the three decompiles).
+- `SV_CheckTimeouts` frees the stale zombies (`Going from CS_ZOMBIE to
+  CS_FREE`) on all three, before any message goes out. VERIFIED (the
+  string inside each of the three functions).
+- `SV_SendClientMessages` walks slot 0 to `sv_maxclients - 1` once. A slot
+  whose state is not 0 and whose `nextSnapshotTime` has come gets its next
+  netchan fragment if one is left, else `SV_SendClientSnapshot`: 1.1d
+  0x808f844, 1.5b 0x8097c2f, UO 0x8098c23. VERIFIED (the loop: `state !=
+  0` and the time test are its only conditions).
+- `SV_SendClientSnapshot` serves states 1 to 4. It builds the snapshot
+  and writes the server commands and the snapshot only for state 4
+  (`CS_ACTIVE`) or 1 (`CS_ZOMBIE`). It writes the download blocks for any
+  state but 1 (1.1d 0x8086290, 1.5b 0x808b8a9, UO 0x808c559), then
+  `svc_EOF`. So a `CS_CONNECTED` or `CS_PRIMED` slot's bare 9-byte message
+  goes out on that slot's own turn. VERIFIED (the `== 4 || == 1` and `!= 1`
+  tests in all three).
+- Live, 2026-10-24, loopback `mp_carentan` in a `unshare -rnm` namespace.
+  An `AF_PACKET` socket on `lo` logged every datagram the server sent, in
+  send order. A probe joined through a relay that passed only out-of-band
+  packets, so its slot stayed `CS_CONNECTED` (`status`: slot 0 `CNCT`).
+  A second probe joined at slot 1 and stayed in the world. On 1.1d, in
+  every frame that held both (299 of 299), slot 0's 9-byte message went
+  out before slot 1's snapshot. 1.5b gave 300 of 300 and UO 1.51b 299 of
+  299. VERIFIED (capture). The only frames out of that order were the
+  ones where slot 1 connected: they carry the packet handler's own sends,
+  which happen before the frame.
+- The same with a zombie at slot 0: `--probe-edge zombie-active` joined
+  first, a plain probe second, and the first disconnected after 5 s. For
+  the two seconds the zombie lasted, its 124-136 byte message went out
+  before slot 1's snapshot in every frame, on 1.1d, 1.5b and UO 1.51b.
+  VERIFIED (capture).
+- vcod-server sends the snapshots of the
+  clients in the world in slot order (`engine::send_messages`), then
+  `send_unentered`, then `send_zombies`. The same two captures against it
+  on 1.1: slot 1's snapshot went out before slot 0's 9-byte message in
+  294 of 300 frames, and before slot 0's zombie message in all 40 zombie
+  frames. VERIFIED (capture). Only the order inside a frame differs; the
+  bytes, the pacing and the frame each message goes out on match.
+- vcod-server now runs retail's one pass: `Server::message_due` takes
+  every socketed slot, zombies included, `send_client_snapshot` sends a
+  zombie's, an unentered client's or an active client's message by
+  state, and `check_timeouts` frees the stale zombies first. The same two
+  captures on 1.1: slot 0's 9-byte message first in 300 of 300 frames
+  that held both (the one burst out of order held an rcon reply), and
+  the zombie's 124-125 byte message first in all 40 zombie frames.
+  VERIFIED (capture, 2026-10-24). `a_frames_messages_go_out_in_slot_order`
+  pins both.
 
 ### When the game hears a drop (`SV_DropClient`, `ClientDisconnect`)
 
@@ -1173,7 +1227,7 @@ the game and a socket on 127.0.0.1:20510 standing in for the master.
 - vcod: `Client::stamp_sent` / `stamp_acked` / `calc_ping`,
   `Server::calc_pings`. A reader thread stamps each packet's arrival, the
   tick still handles them in arrival order at its start, and
-  `Server::handle_packet_at` stamps a move message's ack with the frame time
+  `Server::ack_stamp` stamps a move message's ack with the frame time
   of the newest frame whose messages had gone out at arrival
   (`Server::frame_sent`), modelling retail's frame as instantaneous. A
   packet left over past `MAX_PACKETS_PER_FRAME` from an earlier tick takes
@@ -1226,8 +1280,11 @@ playerstate right after it.
 - `cl->rate`, which `status` prints, is 99999 when `Sys_IsLANAddress`
   (0x80c72f8) holds and `dedicated` is not 2. Otherwise it is the
   userinfo's `rate` through `strtol`, clamped to 1000..90000, or 5000 when
-  the key is empty or missing. INFERRED from control flow. VERIFIED by
-  capture: a loopback probe sending `rate 25000` read 99999 under
+  the key is empty or missing. INFERRED from control flow. VERIFIED: the
+  read is `__strtol_internal(s, 0, 10, 0)` at `0x8086b93` (`snaps`' at
+  `0x8086d0a`). INFERRED, off glibc's `strtol`: a value past `i32`
+  saturates before the clamp, as `vcod_common::text::atoi` does, which
+  both vcod servers' `engine::link` reads take. VERIFIED by capture: a loopback probe sending `rate 25000` read 99999 under
   `dedicated 1`; under `dedicated 2` (the 2026-10-07 captures above) it read
   25000.
 - `Sys_IsLANAddress` (cod_lnxded `0x80c72f8`, CoDMP.exe `0x464be0`) is Q3
@@ -1296,11 +1353,13 @@ playerstate right after it.
   `error\nEXE_ERR_BAD_CDKEY` for anything else, `BANNED_CDKEY` included.
   INFERRED (0x8085339..0x80853d9). What reason the authorize server gives
   for a banned address is not measurable; it no longer answers.
-- vcod: no authorize detour, so the list is vcod's own (`crate::bans`,
-  `--ban-file` to keep it). `getchallenge` from a banned address off the
-  LAN gets `error\nEXE_ERR_BAD_CDKEY`; a LAN address is never refused, as
-  on retail. The reply skips the two `Resolving` lines and nothing goes to
-  the authorize server.
+- vcod: no authorize detour, so the list is vcod's own: 1.5's `ban.txt`
+  (`engine::bans`, `--ban-file` to keep it), the client's guid stand-in
+  (an off-LAN IPv4 address as a big-endian `i32`, a LAN client's 0) and
+  its cleaned name a line. `getchallenge` from a banned guid gets
+  `error\nEXE_ERR_BAD_CDKEY`; a LAN client has no guid and is never
+  refused, as on retail. The reply skips the two `Resolving` lines and
+  nothing goes to the authorize server.
 
 ### 1.5 temporary bans (`tempBanUser` 0x8087f2a, `tempBanClient` 0x8088087)
 
@@ -1323,7 +1382,8 @@ cod_lnxded 1.5b, read from the asm.
   0 in the 1.5b log). INFERRED.
 - With any other guid the handler prints `%s (guid %i) was kicked for
   cheating\n` (0x80ddb00) with the cleaned name and calls 0x80890f5, which
-  writes the guid and `svs.time` (0x83ccd84) into a 16-entry table at
+  writes the guid and the game clock (0x83ccd84, the scaled one,
+  `cod15-protocol-diff.md` 12) into a 16-entry table at
   0x83e1e0c, 8 bytes an entry. VERIFIED. The entry is the first whose guid
   is 0, else the one with the lowest time (0x8089096's loop). INFERRED.
 - The check (0x8088f75) is called at 0x808979c, on the path that handles
@@ -1338,10 +1398,14 @@ cod_lnxded 1.5b, read from the asm.
   it lengthens or shortens bans already made, and no code empties an
   entry. INFERRED.
 - vcod has no authorize server: an off-LAN client's address stands in for
-  its guid, a LAN client is kicked and not banned, and the refusal is
-  retail's error string, sent at `getchallenge` (`Server::temp_ban_slot`,
-  `temp_banned`). The print reads `guid 0`, the guid vcod's `getGuid`
-  gives; so does the `rejected connection` line vcod logs at the refusal.
+  its guid (`engine::bans::guid_of`), a LAN client is kicked and not
+  banned, and the refusal is retail's error string, sent at
+  `getchallenge` (`Server::temp_ban_slot`, `engine::bans::TempBans`,
+  shared with CoD2, whose table is the same). The print and the
+  `rejected connection` line carry that stand-in; the script's `getGuid`
+  stays 0. The table is stamped on the game clock, as retail's is; before
+  2026-10-23 vcod stamped the unscaled one, so a ban aged through a match
+  timeout.
 
 ### 1.5 permanent bans (`banUser` 0x8087f73, `banClient` 0x8087fc7, `unbanUser` 0x808801b)
 
@@ -1400,18 +1464,16 @@ holds on UO.
   last line with no line end, was not found; `5   Spaced Name\r\n` went
   for `"spaced name"`; with no file the reply was an empty `print\n`.
 - vcod: no guid, so a 1.5 or UO `banUser`/`banClient` treats an off-LAN
-  address as the guid and does nothing to a LAN client, as retail does to
-  a guid of 0. The list is `crate::bans` (`<ip> <name>` lines in
-  `--ban-file`), checked at `getchallenge` before the temporary bans with
-  retail's print (`GUID 0`) and refusal; `unbanUser` gives retail's three
-  replies, an empty one standing for a list that has never had a file or
-  an entry. vcod's own lines need no `\r`. An entry read off a last line
-  with no line end is never matched, as on retail, and a rewrite keeps
-  that line last and unended (`Bans::unended`). Retail's `banUser`
-  appends `%i %s\r\n` after such a line, running the two lines together
-  so the file check reads only the first guid (INFERRED from the append
-  at 0x8089121 and the line walk at 0x8088ff8); vcod ends the line
-  first, so the new ban holds.
+  address as the guid (a big-endian `i32`) and does nothing to a LAN
+  client, as retail does to a guid of 0. The file is retail's, read and
+  written as retail does: `engine::bans::BanFile`, the code CoD2's
+  `ban.txt` runs on (`cod2-protocol.md` 17.7), at `--ban-file`. It is
+  checked at `getchallenge` before the temporary bans with retail's
+  print and refusal, and `unbanUser` gives retail's three replies, an
+  empty one standing for no file. A ban appended after a last line with
+  no line end runs into it, as on retail. Until 2026-10-23 vcod kept its
+  own `<ip> <name>` lines and ended such a line before appending; a file
+  in that shape is rewritten into guid lines when the server opens it.
 
 ### Shutdown (`SV_Shutdown` 0x808ad8c)
 
@@ -1677,6 +1739,76 @@ userinfo values one after another, and `rcon status` for the slots.
   no authorize detour, so its ping is the plain `challengeResponse` to
   `connect` round trip.
 
+### The challenge table (1.1d `SV_GetChallenge` 0x8084d90, `SV_DirectConnect` 0x8085498, `SV_DropClient` 0x8085cf4)
+
+Read 2026-10-23 off the decompiles and the 1.1d disassembly; 1.5b, UO
+1.51b and CoD2 1.3 beside it. The four keep Q3's table unchanged but for
+the record size.
+
+| | 1.1d | 1.5b | UO 1.51b | CoD2 1.3 |
+|---|---|---|---|---|
+| table, record | 0x83b67f8, 0x2c | 0x83ccde0, 0x54 | 0x84f7060, 0x54 | 0x84230dc, 0x74 |
+| `SV_GetChallenge` | 0x8084d90 | 0x80889d0 | 0x80897d4 | 0x808d18e |
+| `SV_DirectConnect` | 0x8085498 | 0x8089e7e | 0x808ac82 | 0x808e2aa |
+| `SV_DropClient` | 0x8085cf4 | 0x808ac11 | 0x808ba15 | 0x808f02e |
+| address compare | 0x8080dec | 0x808400f | 0x8084af7 | 0x806c54c |
+| slot times | `svs.time` 0x83b67a4 | 0x83ccd88 | 0x84f7008 | `svs.time` 0x8423084 |
+| challenge's xor | 0x83b67a4 | 0x83ccd84 | 0x84f7004 | 0x8423084 |
+
+VERIFIED (each address read in its decompile: the 0x400 loop bound, the
+stride, the writes).
+
+- 1024 slots in every one (loop bound 0x400). VERIFIED. No slot expires:
+  1.1d names the table's base only in `SV_GetChallenge`, the authorize
+  reply (0x808514c), `SV_DirectConnect` and `SV_DropClient`, and none of
+  them reads a slot's age but the authorize wait (`svs.time - firstTime
+  < 5001`, which decides between asking the authorize server again and
+  answering). VERIFIED (1.1d, every reference to 0x83b67f8). The other
+  three have the same four users. INFERRED (their decompiles read for the
+  three functions above only).
+- `getchallenge`: the first slot with `connected` 0 and the same address
+  is used again; on the way the loop keeps the slot with the lowest
+  `time` (+0x18), the first of a tie, connected slots included. With no
+  match that slot is overwritten: address, challenge `rand() << 16 ^
+  rand() ^` the xor clock above, `time` and `firstTime` (+0x20) the slot
+  clock, the stored ping (+0x24) and `connected` (+0x28) 0. A slot asked
+  for again keeps its `time`, so the slot overwritten is the oldest
+  written, not the longest unasked. VERIFIED (0x8084d90's loop and
+  writes; the same writes at 0x80889d0, 0x80897d4, 0x808d18e).
+- The answer-at-once path (`net_lanauthorize` 0 and a LAN address, or
+  the authorize server timed out) stamps `pingTime` (+0x1c) on the slot
+  clock and sends `challengeResponse`. VERIFIED.
+- The address compare is `NET_CompareAdr` in all three places: the
+  type, then for `NA_IP` the four bytes and the port (1.1d 0x8080dec
+  compares the port at its end; 1.5b, UO and CoD2 go through
+  `NET_CompareAdrSigned`, port first). The base compare (1.1d 0x8080e60,
+  `NET_CompareBaseAdr`, string `NET_CompareBaseAdr: bad address type`)
+  is not called here. VERIFIED (1.1d: `call 0x8080dec` at 0x8085702 in
+  the connect's loop; the other three by name or string).
+- `connect`: for an address that is not loopback (`NET_IsLocalAddress`,
+  1.5b 0x808403c), the first slot, connected or not, whose address and
+  challenge both match; none answers `error\nEXE_BAD_CHALLENGE`. Then
+  the stored ping, if 0, becomes `slot clock - pingTime`, and
+  `connected` is set. A connect that takes a slot clears the stored ping
+  again (1.1d 0x8085c16, 1.5b and UO at their `connectResponse`, CoD2 at
+  its). VERIFIED.
+- `SV_DropClient`: the first slot with the client's address, connected
+  or not, gets `connected` 0, and the loop stops there. VERIFIED. It is
+  skipped when the word at `cl+0x10a40` (1.1d, 1.5b; CoD2 `cl+0x20c44`)
+  is set, which vcod reads as the bot flag. INFERRED.
+- 1.5b and UO time their slots on the unscaled clock (0x83ccd88, the
+  snapshot pacing's, `cod15-protocol-diff.md` 12) and xor the challenge
+  with the scaled one (0x83ccd84). VERIFIED (operands).
+- vcod: `engine::challenge::Challenges` is the table for both servers,
+  timed on `svs_time_ms()` (CoD1) and `svs.time` (CoD2); the draw is
+  CoD1's `(rand() << 16) ^ rand() ^ sv_time_ms` (the game clock, 1.5's
+  0x83ccd84), CoD2's the same on `svs.time`. Until 2026-10-23 CoD1's
+  dropped a slot 60 s after it was last asked for, refreshed `time` on
+  every ask, matched a connect on the IP alone, released on drop by IP
+  and challenge, and measured the ping on `Instant`; CoD2's grew a list
+  that `swap_remove`d the oldest. A connect from a port other than the
+  one the challenge went to is now refused, as on retail.
+
 ### Message pacing (`SV_SendClientMessages` 0x809045c)
 
 - Each frame, a client whose `nextSnapshotTime` has come gets either the
@@ -1769,8 +1901,8 @@ userinfo values one after another, and `rcon status` for the slots.
   and the first snapshot one tick after the entering cmd. VERIFIED
   (capture, same relay). Before this change vcod sent a client neither,
   and off the LAN the first snapshot waited out the primed interval.
-- Live, 2026-10-18, `--probe-edge watch` joining 1.1d on loopback
-  (`tmp/netsmall3/r11`): the gamestate is message 1 and the first
+- Live, 2026-10-18, `--probe-edge watch` joining 1.1d on loopback:
+  the gamestate is message 1 and the first
   snapshot message 2, since retail handles the connect and the client's
   first message as they arrive, between frames, and the client answers
   each before the next frame. VERIFIED (capture). vcod-server read
@@ -1841,8 +1973,9 @@ userinfo values one after another, and `rcon status` for the slots.
   gamestate's first fragment and paces the client. The frame loop sends
   the rest one per turn. Against vcod-server, the same probe got the
   6718-byte gamestate as five fragments, one per frame. VERIFIED (capture,
-  same relay). vcod logs a warning past 16384 plain bytes and sends the
-  gamestate whole.
+  same relay). vcod logs a warning past 16384 plain bytes (32768 on
+  United Offensive, whose buffer is twice 1.1d's, `coduo-diff.md` 7) and
+  sends the gamestate whole.
 
 ### `snaps` (`SV_UserinfoChanged` 0x8086ab4)
 
@@ -2201,6 +2334,122 @@ vcod's port: `crates/common/src/pak_checksum.rs`, `Pk3Fs::paks` and
   and `main/n_degaulle.pk3` under its own name; both files' checksums
   (`461172154`, `-479819976`) matched `sv_referencedPaks`, and `donedl`
   brought the gamestate back. VERIFIED.
+
+## CD key authorization (the clients)
+
+The document-level default above does not cover this section: every line
+here was read off the Windows client binaries (1.1 `CoDMP.exe`, 1.5
+`CoDMP.exe`, `CoDUOMP.exe` 1.51, `CoD2MP_s.exe` 1.3, `iw3mp.exe` 1.7) and
+carries its own label. The server side (`getIpAuthorize`, the verdicts) is
+in "Bans" above and in cod2-protocol.md 1.3.
+
+| | 1.1 | 1.5 | UO 1.51 | CoD2 1.3 | CoD4 1.7 |
+|---|---|---|---|---|---|
+| `CL_RequestAuthorization` | 0x40f260 | 0x40fe60 | 0x410bb0 | 0x40d130 | 0x469b20 |
+| authorize host | `codauthorize.activision.com` | same | `coduoauthorize.activision.com` | `cod2master.activision.com` | `cod4master.activision.com` |
+| port (`BigShort` imm.) | 20500 (0x40f2fb) | 20500 (0x40fefb) | 20600 (0x410c41) | 20700 (0x40d1b0) | 20800 (0x469baa) |
+| packet | `getKeyAuthorize %i %s` | same | same | `getKeyAuthorize %i %s PB %s` | same as CoD2 |
+| key read from | file `main/codkey` | registry | registry | registry | registry |
+| `getchallenge` | bare | bare | bare | `getchallenge 0 "%s"` | same as CoD2 |
+
+All VERIFIED: the format strings, host strings and port immediates at those
+addresses, and the `getchallenge` strings (1.1 0x567094, 1.5 0x5a66f8, UO
+0x594300, CoD2 0x5a38a4, CoD4 0x6d09c4).
+
+- `%i` is `cl_anonymous`'s integer (the cvar named at 1.1 0x56753c, CoD2
+  0x5a3c20, CoD4 0x6d05d0's registration), VERIFIED. The `%s` after it is
+  the key itself: the first 32 characters of `cl_cdkey` with all but
+  `0-9a-zA-Z` dropped (the compare chain at 1.1 0x40f3c0, CoD2 0x40d260),
+  VERIFIED. `cl_cdkey` holds the 16 key characters and a NUL, so the
+  packet carries those 16, INFERRED (1.5 stores the NUL at 0x5bb8c4, UO at
+  0x5c51dc). With `fs_restrict` set the word `demo` goes instead
+  (1.1 0x40f379), VERIFIED.
+- CoD2's and CoD4's `PB %s` is `CL_BuildMd5StrFromCDKey` (CoD2 0x40cfc0,
+  CoD4 0x4699a0), the same string `getchallenge 0 "%s"` carries (calls at
+  CoD2 0x40e3d6, CoD4 0x46b29c), VERIFIED. Its parts: the same character filter, a
+  white-space trim (CoD2 0x40cf40), a case fold, MD5 from the state words
+  `0x6f1cd602 0x226c74be 0xb31c088d 0x555a9639` (CoD2 0x40d053, CoD4
+  0x469a37) in place of RFC 1321's with the bit count 0 over the string's
+  `strlen`, and the 16 digest bytes printed `%02x` (0x5a3cc8), VERIFIED.
+  That they run in that order is INFERRED (call order). CoD2 folds to upper case (`_strupr`, 0x58ce80:
+  `a`..`z` less 0x20) and CoD4 to lower (0x688e3b: `A`..`Z` plus 0x20),
+  VERIFIED. That the update and final steps are plain MD5 is INFERRED from
+  the transform they call (CoD2 0x4bc3b0, which holds the constant
+  0xd76aa478) and the 0x38/0x3f padding test in the final (0x4bce22).
+- The key is checked first (`CL_CDKeyValidate`: 1.1 0x414260, 1.5
+  0x415ab0, UO 0x416f40, CoD2 0x4b3b20, CoD4 0x4712e0): a CRC-16 over the
+  16 key characters, each XORed in and shifted right 8 times with
+  `0x14002` XORed in before the shift on an odd value (the reflected
+  0xa001 polynomial, initial 0), printed `%04x` and compared without case
+  to the 4-character checksum, VERIFIED (the `xor eax,0x14002` and the
+  `cmp ecx,0x10` loop in all five). A mismatch ends the request with
+  `Com_Error(1, "EXE_ERR_INVALID_CD_KEY")` (1.1 0x40f286), INFERRED
+  (branch). A
+  valid `main/codkey` passes this check, VERIFIED (checked without
+  printing the key).
+- When: `CL_CheckForResend`'s challenging arm calls it right before every
+  `getchallenge` it sends, unless `net_lanauthorize` is 0 and
+  `Sys_IsLANAddress` calls the server local (1.1 0x4105b5..0x4105df, 1.5
+  0x4112b3, UO 0x4120da, CoD2 0x40e316, CoD4 0x46b1d7 off
+  `net_lanauthorize`'s dvar at 0x14e88b0), INFERRED (branch order). It
+  sends one datagram and waits for nothing: `getchallenge` follows in the
+  same call (1.1 0x4105e4), INFERRED. The name is resolved once and kept
+  (1.1 0x40f2a8 tests the cached port), INFERRED. CoD2 also re-sends it
+  every 300000 ms while connected (0x40d310: state 8, `realtime -
+  authRequestTime > 0x493e0`), INFERRED.
+- `needcdkey` from the server (`CL_ConnectionlessPacket`, 1.1 0x410f00,
+  CoD2 0x40f047): the connect screen's line becomes `EXE_AWAITINGCDKEYAUTH`
+  and the key goes to the authorize server again; the challenge resends go
+  on, INFERRED. `keyAuthorize` from the authorize server is matched and
+  dropped (CoD2 Mac `CL_ConnectionlessPacket`), INFERRED. The refusals the
+  server relays (`error\nEXE_ERR_CDKEY_IN_USE`, `error\nEXE_ERR_BAD_CDKEY`,
+  "Bans" above) reach the client as any `error` does.
+- Where the key lives. 1.1 reads `codkey` under `fs_basepath`'s `main/`
+  (`Com_ReadCDKey` 0x436930, called with `main` at 0x42d0f3): the first
+  16 bytes are the key and the next 4 its checksum, VERIFIED (the two
+  `FS_Read` lengths, and a real key file). The file's tail is the comment lines
+  `Com_WriteCDKey` (0x436bc0) writes after upper-casing both parts
+  (`toupper` through the ctype `_LOWER` mask, 0x525f07), VERIFIED.
+  `Com_AppendCDKey` (0x436a40, called with `fs_game` at 0x42d122) appends a
+  mod directory's `codkey` the same way, VERIFIED. 1.5 reads value `codkey`
+  under `HKLM\SOFTWARE\Activision\Call of Duty` (0x438ee0, 0x5a1f58), UO
+  value `key` under `...\Call of Duty United Offensive` (0x43b070,
+  0x598704, 0x598700), CoD2 `codkey` under `...\Call of Duty 2`
+  (0x433237, 0x5a7f60), CoD4 `codkey` under `...\Call of Duty 4`
+  (0x4fde77, 0x6e13ac), each a 21-byte string, key then checksum,
+  VERIFIED. None of those four reads a file.
+- The localized lines (`exe.str`): 1.1 `AWAITINGCDKEYAUTH` "Awaiting CD key
+  authorization", `ERR_INVALID_CD_KEY` "CD Key not valid. Please enter CD
+  Key in Multiplayer Options/Enter CD-Key menu ...", `ERR_CDKEY_IN_USE`
+  "CD Key in use. Please try reconnecting later.", `ERR_BAD_CDKEY` "Bad CD
+  Key."; CoD2 says "Key code" where 1.1 says "CD key", VERIFIED
+  (`localized_english_pak1.pk3`, `localized_english_iw09.iwd`). CoD4's
+  `localized_code_post_gfx_mp.ff` holds the same four names, VERIFIED.
+
+vcod (`vcod_common::net::cdkey`) sends the same packet to the same host,
+on its own socket and its own thread, for a server off the LAN, before
+each `getchallenge`; `needcdkey` without a key ends the connect with
+`EXE_ERR_INVALID_CD_KEY` (retail never sends one without a key), with a
+key it sends the key again and a timeout reads `EXE_AWAITINGCDKEYAUTH`.
+The key comes from `VCOD_CDKEY`, else on 1.1 and 1.5 from the install's
+`main/codkey`; vcod reads no registry. `Com_AppendCDKey`'s mod key is not
+read. CoD2's 5-minute re-send is not done.
+
+Live, 2026-10-24, CoD2 1.3. Two public servers off the LAN
+answered vcod's bare `getchallenge`, sent without a key, with
+`\xff\xff\xff\xffneedcdkey` about 200 ms later, and vcod ended the
+connect with `EXE_ERR_INVALID_CD_KEY` on the first one, VERIFIED. Retail
+`cod2_lnxded` on mp_toujane inside `unshare -rnm` (the server at
+203.0.113.1, an off-LAN client at 198.51.100.2, `/etc/hosts` bound over
+to name every authorize host 198.51.100.9, where a stand-in logged each
+datagram's command and length and answered `getIpAuthorize` with
+`accept`): with the dummy key `AAAA-AAAA-AAAA-AAAA` the off-LAN join sent
+one 74-byte `getKeyAuthorize 0 <16> PB <32 hex>` to port 20700 and the
+server's `getIpAuthorize` grew from 48 to 84 bytes with the `PB` string
+`getchallenge` now carries; without a key no `getKeyAuthorize` went out;
+from loopback neither a key nor its absence sent anything to the stand-in
+or the server's authorize. All four joins reached the snapshots and the
+server logged each connect, VERIFIED.
 
 ## Raw captures
 

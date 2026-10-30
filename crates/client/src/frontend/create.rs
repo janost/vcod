@@ -150,6 +150,8 @@ pub struct StartServer {
     /// The cvars the create server and game type settings menus edit; the
     /// app reads their values when it launches.
     pub cvars: Vec<String>,
+    /// A CoD2 front end starts `vcod-server --game cod2`.
+    pub cod2: bool,
 }
 
 /// The `vcod-server` command line for `req`, with `value` reading a cvar
@@ -178,6 +180,9 @@ pub fn server_args(
         "--set".into(),
         format!("dedicated={}", req.dedicated.max(1)),
     ];
+    if req.cod2 {
+        args.extend(["--game".into(), "cod2".into()]);
+    }
     if vanilla {
         args.push("--vanilla".into());
     } else if let Some(game) = fs_game.filter(|g| !g.is_empty()) {
@@ -311,6 +316,7 @@ impl Ui {
             gametype,
             dedicated,
             cvars: self.server_cvars(),
+            cod2: self.cod2.is_some(),
         }));
     }
 
@@ -334,14 +340,16 @@ impl Ui {
         out.push(UiEffect::Command(line));
     }
 
-    /// The cvars `createserver_op` and the `settings_*` menus edit, their
-    /// `ui_` shadows left out: what a listen server would read off the
-    /// shared console.
-    fn server_cvars(&self) -> Vec<String> {
+    /// The cvars `createserver_op` (CoD2's `createserver_serversettings`)
+    /// and the `settings_*` menus edit, their `ui_` shadows left out: what
+    /// a listen server would read off the shared console.
+    pub(super) fn server_cvars(&self) -> Vec<String> {
         let mut names: Vec<String> = Vec::new();
         let menus = self.menus.iter().filter(|m| {
             let n = m.name.to_ascii_lowercase();
-            n == "createserver_op" || n.starts_with("settings_")
+            n == "createserver_op"
+                || n == "createserver_serversettings"
+                || n.starts_with("settings_")
         });
         for item in menus.flat_map(|m| &m.items) {
             let set = script_commands(&item.action)
@@ -598,6 +606,7 @@ mod tests {
     #[test]
     fn start_maps_the_menu_cvars_onto_the_command_line() {
         let req = StartServer {
+            cod2: false,
             map: "mp_carentan".into(),
             gametype: "tdm".into(),
             dedicated: 2,
@@ -670,6 +679,7 @@ mod tests {
     #[test]
     fn a_bad_player_count_keeps_the_default() {
         let req = StartServer {
+            cod2: false,
             map: "m".into(),
             gametype: "dm".into(),
             dedicated: 0,
@@ -687,6 +697,7 @@ mod tests {
     #[test]
     fn a_vanilla_client_starts_a_vanilla_server() {
         let req = StartServer {
+            cod2: false,
             map: "m".into(),
             gametype: "dm".into(),
             dedicated: 1,

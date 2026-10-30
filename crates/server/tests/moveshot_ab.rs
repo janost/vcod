@@ -388,7 +388,8 @@ fn a_15_moving_and_leaning_muzzle_lands_as_on_retail() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         return;
     }
     check(&PROTOCOL_V6, fs, WALK, "1.5");

@@ -3,11 +3,11 @@
 //! per-light uniform. The projection itself is `vs_dlight` in shader.wgsl
 //! (CoDMP.exe 0x4ff690; docs/research/cod11-shader-scripts.md, section 3).
 
-use crate::renderer::{DEPTH_FORMAT, MSAA_SAMPLES, upload_image};
+use crate::renderer::{DEPTH_FORMAT, msaa_samples, upload_image};
 use glam::Vec3;
 use vcod_common::assets;
-use vcod_common::bsp::{Bsp, DrawVert, TriangleSoup};
-use vcod_common::shader::{BlendFactor, DLIGHT_IMAGE, DlightDraw, Shader, Stage};
+use vcod_common::mapworld::{DrawVert, MapWorld, TriangleSoup};
+use vcod_common::material::{BlendFactor, DLIGHT_IMAGE, DlightDraw, Material, Stage};
 use vcod_common::static_light::SceneLight;
 
 /// `RE_AddLightToScene`'s queue (0x4e9b00), which is also the dlight
@@ -85,41 +85,28 @@ pub fn soup_s_axes(soups: &[TriangleSoup], verts: &[DrawVert], indices: &[u16]) 
 }
 
 /// Per soup, the bounds of its vertices (spawn pose).
-pub fn soup_bounds(bsp: &Bsp) -> Vec<(Vec3, Vec3)> {
-    bsp.soups
-        .iter()
-        .map(|soup| {
-            let fv = soup.first_vertex as usize;
-            let verts = bsp.verts.get(fv..fv + soup.vertex_count as usize);
-            verts
-                .unwrap_or_default()
-                .iter()
-                .map(|v| Vec3::from_array(v.pos))
-                .fold((Vec3::INFINITY, Vec3::NEG_INFINITY), |(lo, hi), p| {
-                    (lo.min(p), hi.max(p))
-                })
-        })
+pub fn soup_bounds(bsp: &MapWorld) -> Vec<(Vec3, Vec3)> {
+    (0..bsp.soups.len())
+        .map(|s| vcod_common::vis::soup_bounds(bsp, s))
         .collect()
 }
 
 /// The single-stage shaders the pass draws over a material's surfaces
-/// (`Shader::dlight_draw`), each keeping the material's deform and
+/// (`Material::dlight`), each keeping the material's deform and
 /// culling. Fog is the drawn stage's own state bit (0x200000, set at
 /// 0x4fbc71 unless the shader is `nofog`): a `perLight` stage or the copy
 /// keeps the material's, `dlightshader`'s blob takes that shader's
 /// `nofog` (shader doc 3).
-pub fn stage_shaders(material: &Shader, blob: Option<&Shader>) -> Vec<Shader> {
-    let single = |st: Stage, nofog: bool| Shader {
-        stages: vec![st],
-        per_light: Vec::new(),
+pub fn stage_shaders(material: &Material, blob: Option<&Material>) -> Vec<Material> {
+    let single = |st: Stage, nofog: bool| Material {
         nofog,
-        ..material.clone()
+        ..material.with_stages(vec![st])
     };
-    match material.dlight_draw() {
+    match &material.dlight {
         None => Vec::new(),
         Some(DlightDraw::Stages(st)) => st
-            .into_iter()
-            .map(|st| single(st, material.nofog))
+            .iter()
+            .map(|st| single(st.clone(), material.nofog))
             .collect(),
         Some(DlightDraw::Blob) => blob
             .and_then(|b| Some(single(b.stages.first()?.clone(), b.nofog)))
@@ -283,12 +270,14 @@ impl DlightPass {
                 operation: wgpu::BlendOperation::Add,
             },
         };
-        let pipelines = [
+        let blends = [
             DlightBlend::One,
             DlightBlend::SrcAlpha,
             DlightBlend::DstColor,
-        ]
-        .map(|blend| {
+        ];
+        let mut built = crate::renderer::par_build(12, |i| {
+            let blend = blends[i / 4];
+            let (two_sided, want_bias) = (i & 2 != 0, i & 1 != 0);
             let (state, compare) = match blend {
                 DlightBlend::One => (
                     onto_one(wgpu::BlendFactor::One, wgpu::BlendFactor::One),
@@ -303,69 +292,69 @@ impl DlightPass {
                     wgpu::CompareFunction::Equal,
                 ),
             };
-            [false, true].map(|two_sided| {
-                [false, true].map(|want_bias| {
-                    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                        label: Some(&format!(
-                            "dlight {blend:?} twosided={two_sided} bias={want_bias}"
-                        )),
-                        layout: Some(&pipeline_layout),
-                        vertex: wgpu::VertexState {
-                            module: shader,
-                            entry_point: Some("vs_dlight"),
-                            compilation_options: Default::default(),
-                            buffers: &[
-                                Some(wgpu::VertexBufferLayout {
-                                    array_stride: 44,
-                                    step_mode: wgpu::VertexStepMode::Vertex,
-                                    attributes: &wgpu::vertex_attr_array![
-                                        0 => Float32x3,
-                                        1 => Float32x2,
-                                        2 => Float32x2,
-                                        3 => Float32x3,
-                                        4 => Unorm8x4,
-                                    ],
-                                }),
-                                Some(wgpu::VertexBufferLayout {
-                                    array_stride: 12,
-                                    step_mode: wgpu::VertexStepMode::Vertex,
-                                    attributes: &wgpu::vertex_attr_array![5 => Float32x3],
-                                }),
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(&format!(
+                    "dlight {blend:?} twosided={two_sided} bias={want_bias}"
+                )),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs_dlight"),
+                    compilation_options: Default::default(),
+                    buffers: &[
+                        Some(wgpu::VertexBufferLayout {
+                            array_stride: 44,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &wgpu::vertex_attr_array![
+                                0 => Float32x3,
+                                1 => Float32x2,
+                                2 => Float32x2,
+                                3 => Float32x3,
+                                4 => Unorm8x4,
                             ],
-                        },
-                        fragment: Some(wgpu::FragmentState {
-                            module: shader,
-                            entry_point: Some("fs_dlight"),
-                            compilation_options: Default::default(),
-                            targets: &[Some(wgpu::ColorTargetState {
-                                format,
-                                blend: Some(state),
-                                write_mask: wgpu::ColorWrites::ALL,
-                            })],
                         }),
-                        primitive: wgpu::PrimitiveState {
-                            topology: wgpu::PrimitiveTopology::TriangleList,
-                            front_face: wgpu::FrontFace::Cw,
-                            cull_mode: (!two_sided).then_some(wgpu::Face::Back),
-                            ..Default::default()
-                        },
-                        depth_stencil: Some(wgpu::DepthStencilState {
-                            format: DEPTH_FORMAT,
-                            depth_write_enabled: Some(false),
-                            depth_compare: Some(compare),
-                            stencil: Default::default(),
-                            bias: if want_bias { bias } else { Default::default() },
+                        Some(wgpu::VertexBufferLayout {
+                            array_stride: 12,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &wgpu::vertex_attr_array![5 => Float32x3],
                         }),
-                        multisample: wgpu::MultisampleState {
-                            count: MSAA_SAMPLES,
-                            mask: !0,
-                            alpha_to_coverage_enabled: false,
-                        },
-                        multiview_mask: None,
-                        cache: None,
-                    })
-                })
+                    ],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some("fs_dlight"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(state),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    front_face: wgpu::FrontFace::Cw,
+                    cull_mode: (!two_sided).then_some(wgpu::Face::Back),
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(compare),
+                    stencil: Default::default(),
+                    bias: if want_bias { bias } else { Default::default() },
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: msaa_samples(),
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview_mask: None,
+                cache: None,
             })
+        })
+        .into_iter();
+        let pipelines = std::array::from_fn(|_| {
+            std::array::from_fn(|_| std::array::from_fn(|_| built.next().unwrap()))
         });
         Self {
             pipelines,
@@ -474,10 +463,10 @@ mod tests {
         assert!(reaches(&l, l.origin, corner, corner + 1.0));
     }
 
-    fn shader(text: &str) -> Shader {
+    fn shader(text: &str) -> Material {
         use vcod_common::shader::{WarnSet, parse_shader, split_blocks};
         let (name, body) = split_blocks(text).into_iter().next().expect("a block");
-        parse_shader(&name, &body, &mut WarnSet::new())
+        Material::from_shader(&parse_shader(&name, &body, &mut WarnSet::new()))
     }
 
     /// The copy and `perLight` stages fog as their material does; the blob
@@ -496,7 +485,7 @@ mod tests {
         assert!(!fogged[0].nofog);
         assert_eq!(
             fogged[0].stages[0].bundles[1].image,
-            vcod_common::shader::ImageRef::Path(DLIGHT_IMAGE.into())
+            vcod_common::material::ImageRef::Path(DLIGHT_IMAGE.into())
         );
         let unfogged = stage_shaders(&shader(&format!("t {{ nofog {copy} }}")), Some(&blob));
         assert!(unfogged[0].nofog);

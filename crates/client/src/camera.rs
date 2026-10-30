@@ -52,6 +52,104 @@ pub fn view_fov_x(fov_x: f32, aspect: f32, widescreen: bool) -> f32 {
     self::fov_x(fov_y(fov_x, FOUR_THREE), aspect)
 }
 
+/// CoD4's `vidConfig.aspectRatioWindow` (0xcc9d0f8) for `r_aspectRatio`'s
+/// `setting`, by name or enum index, in a `w` x `h` window
+/// (`R_StoreWindowSettings`, iw3mp.exe 0x5f3500, cod4-front-end.md 9.3,
+/// 10.1). A fixed setting names its ratio; `auto`, and any value the enum
+/// would refuse, takes the ratio of the window's shape. The view projects
+/// at the result over the whole window, so a window of another shape
+/// stretches it.
+pub fn cod4_aspect(setting: &str, w: f32, h: f32) -> f32 {
+    // The enum's values in index order; 0 is `auto` (jump table 0x5f36b8).
+    const FIXED: [(&str, &str, f32); 3] = [
+        ("standard", "1", ASPECT_4_3),
+        ("wide 16:10", "2", ASPECT_16_10),
+        ("wide 16:9", "3", ASPECT_16_9),
+    ];
+    FIXED
+        .iter()
+        .find(|(name, index, _)| setting.eq_ignore_ascii_case(name) || setting == *index)
+        .map_or_else(|| auto_aspect(w, h), |&(_, _, ratio)| ratio)
+}
+
+/// The three ratios 1.7 stores (floats at 0x70bb6c, 0x70bb74, 0x70bb70).
+const ASPECT_4_3: f32 = 4.0 / 3.0;
+const ASPECT_16_10: f32 = 1.6;
+const ASPECT_16_9: f32 = 16.0 / 9.0;
+
+/// `auto`: the window's height in sixteenths of its width, kept as a
+/// float (0x5f358c), nudged up by 2^-30 (the double at 0x70b088) and
+/// rounded to nearest (`fistp`, 0x5f35a2), sorts the window: exactly 10
+/// sixteenths is 16:10, fewer 16:9, more 4:3.
+fn auto_aspect(w: f32, h: f32) -> f32 {
+    use std::cmp::Ordering;
+    let sixteenths = (f64::from(h) * 16.0 / f64::from(w.max(1.0))) as f32;
+    let nearest = (f64::from(sixteenths) + 2f64.powi(-30)).round_ties_even();
+    match nearest.total_cmp(&10.0) {
+        Ordering::Less => ASPECT_16_9,
+        Ordering::Equal => ASPECT_16_10,
+        Ordering::Greater => ASPECT_4_3,
+    }
+}
+
+/// Where a CoD4 frame projects its views and places its 2D layer: 1.7's
+/// `vidConfig` (`R_StoreWindowSettings`, iw3mp.exe 0x5f3500) or, under
+/// `vc_windowAspect 1`, vcod's (cod4-front-end.md 10).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Cod4Screen {
+    /// `aspectRatioWindow`: every view projects at it across the whole
+    /// window, its fov a 4:3 view's widened to it (`CG_UpdateFov`).
+    pub aspect: f32,
+    /// The display's pixel aspect (`vidConfig` +0x20, 0xcc9d100): a
+    /// pixel's width over its height, which
+    /// `ScrPlace_SetupFloatViewport` (0x477420) divides the HUD's 4:3
+    /// column by.
+    pub pixel_aspect: f32,
+    /// `wideScreen` (`R_StoreWindowSettings` 0x5f35e5): set off 4:3, so
+    /// the HUD menus draw their 854-wide pieces instead of the 640 ones.
+    pub wide_screen: bool,
+    /// What a HUD strip spanning the picked aspect's screen scales across
+    /// by to span the window: vcod's, above 1 only under
+    /// `vc_windowAspect 1` on a window wider than the picked aspect.
+    pub strip_scale: f32,
+}
+
+impl Cod4Screen {
+    /// 1.7's for `r_aspectRatio`'s `setting` in a `w` x `h` window: the
+    /// picked aspect stretched over the window, and in fullscreen the HUD
+    /// stretched with it (`aspect * h / w`; 1.0 windowed). With
+    /// `window_aspect` (`vc_windowAspect 1`) the view projects at the
+    /// window's own aspect, Hor+ by the same `CG_UpdateFov`, and the HUD
+    /// keeps square pixels: its 4:3 column centred, its `LEFT` and `RIGHT`
+    /// pieces at the window's edges, as 1.7 places them in a window of the
+    /// picked aspect.
+    pub fn of(setting: &str, w: f32, h: f32, fullscreen: bool, window_aspect: bool) -> Self {
+        let picked = cod4_aspect(setting, w, h);
+        let wide_screen = picked != ASPECT_4_3;
+        if window_aspect {
+            let aspect = w / h.max(1.0);
+            // The strip's grid width: 640 at 4:3, 854 (480 * 16/9) otherwise.
+            let authored = if wide_screen { 16.0 / 9.0 } else { 4.0 / 3.0 };
+            return Cod4Screen {
+                aspect,
+                pixel_aspect: 1.0,
+                wide_screen,
+                strip_scale: (aspect / authored).max(1.0),
+            };
+        }
+        Cod4Screen {
+            aspect: picked,
+            pixel_aspect: if fullscreen {
+                picked * h / w.max(1.0)
+            } else {
+                1.0
+            },
+            wide_screen,
+            strip_scale: 1.0,
+        }
+    }
+}
+
 /// A projection `fov_x` degrees wide across a viewport `aspect` wide.
 pub fn perspective(fov_x: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
     glam::camera::rh::proj::directx::perspective(
@@ -363,5 +461,110 @@ mod tests {
         assert_eq!(view_fov_x(80.0, 1.25, true), 80.0);
         assert_eq!(view_fov_x(80.0, 16.0 / 9.0, false), 80.0);
         assert!(close(fov_x(fov_y(80.0, 1.6), 1.6), 80.0));
+    }
+
+    /// `r_aspectRatio` as 1.7's `R_StoreWindowSettings` reads it
+    /// (iw3mp.exe 0x5f3500): `auto` rounds `h * 16 / w` against 10.
+    #[test]
+    fn cod4_aspect_follows_r_aspect_ratio() {
+        assert_eq!(cod4_aspect("auto", 1920.0, 1080.0), 16.0 / 9.0);
+        assert_eq!(cod4_aspect("auto", 1680.0, 1050.0), 1.6);
+        assert_eq!(cod4_aspect("auto", 1024.0, 768.0), 4.0 / 3.0);
+        assert_eq!(cod4_aspect("auto", 1280.0, 1024.0), 4.0 / 3.0);
+        // an ultrawide window rounds to 7: 16:9, stretched
+        assert_eq!(cod4_aspect("auto", 3440.0, 1440.0), 16.0 / 9.0);
+        assert_eq!(cod4_aspect("standard", 1920.0, 1080.0), 4.0 / 3.0);
+        assert_eq!(cod4_aspect("wide 16:10", 1024.0, 768.0), 1.6);
+        assert_eq!(cod4_aspect("Wide 16:9", 1024.0, 768.0), 16.0 / 9.0);
+        // the view's vertical fov stays a 4:3 view's (`CG_UpdateFov`)
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        let wide = view_fov_x(65.0, cod4_aspect("standard", 1920.0, 1080.0), true);
+        assert!(close(fov_y(wide, 4.0 / 3.0), fov_y(65.0, 4.0 / 3.0)));
+    }
+
+    /// `cod4_aspect` across window sizes and every `r_aspectRatio` value,
+    /// ties (`h * 16 / w` at 9.5 and 10.5) and degenerate windows included.
+    #[test]
+    fn cod4_aspect_table() {
+        const S: f32 = 4.0 / 3.0;
+        const W10: f32 = 1.6;
+        const W9: f32 = 16.0 / 9.0;
+        let auto: &[(f32, f32, f32)] = &[
+            (640.0, 480.0, S),
+            (800.0, 600.0, S),
+            (1152.0, 864.0, S),
+            (1280.0, 960.0, S),
+            (1280.0, 1024.0, S),
+            (1080.0, 1920.0, S),
+            (1280.0, 800.0, W10),
+            (1440.0, 900.0, W10),
+            (1680.0, 1050.0, W10),
+            (1920.0, 1200.0, W10),
+            (1280.0, 720.0, W9),
+            (1360.0, 768.0, W9),
+            (1366.0, 768.0, W9),
+            (1600.0, 900.0, W9),
+            (1920.0, 1080.0, W9),
+            (2560.0, 1080.0, W9),
+            (3440.0, 1440.0, W9),
+            (3840.0, 1600.0, W9),
+            (5120.0, 1440.0, W9),
+            (32.0, 19.0, W10),
+            (1920.0, 1140.0, W10),
+            (32.0, 21.0, S),
+            (1024.0, 672.0, S),
+            (1920.0, 1260.0, S),
+            (0.0, 768.0, S),
+            (0.0, 0.0, W9),
+        ];
+        for setting in ["auto", "AUTO", "0", "", "bogus"] {
+            for &(w, h, want) in auto {
+                assert_eq!(cod4_aspect(setting, w, h), want, "{setting} {w}x{h}");
+            }
+        }
+        for (setting, want) in [
+            ("standard", S),
+            ("Standard", S),
+            ("1", S),
+            ("wide 16:10", W10),
+            ("WIDE 16:10", W10),
+            ("2", W10),
+            ("wide 16:9", W9),
+            ("Wide 16:9", W9),
+            ("3", W9),
+        ] {
+            for &(w, h, _) in auto {
+                assert_eq!(cod4_aspect(setting, w, h), want, "{setting} {w}x{h}");
+            }
+        }
+    }
+
+    /// At 3840x1600 (2.4:1) 1.7 picks 16:9 and stretches it; fullscreen
+    /// stretches the HUD's 4:3 column with it (`aspect * h / w`).
+    /// `vc_windowAspect 1` projects at 2.4 with `cg_fov 65`'s 4:3 vertical
+    /// fov and keeps the HUD square.
+    #[test]
+    fn cod4_screen_at_ultrawide_and_16_9() {
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        let s = Cod4Screen::of("auto", 3840.0, 1600.0, false, false);
+        assert_eq!(s.aspect, 16.0 / 9.0);
+        assert_eq!(s.pixel_aspect, 1.0);
+        let s = Cod4Screen::of("auto", 3840.0, 1600.0, true, false);
+        assert!(close(s.pixel_aspect, 16.0 / 9.0 * 1600.0 / 3840.0));
+        let s = Cod4Screen::of("standard", 3840.0, 1600.0, false, false);
+        assert_eq!(s.aspect, 4.0 / 3.0);
+        let s = Cod4Screen::of("auto", 3840.0, 1600.0, true, true);
+        assert!(close(s.aspect, 2.4));
+        assert_eq!(s.pixel_aspect, 1.0);
+        assert!(s.wide_screen && close(s.strip_scale, 2.4 / (16.0 / 9.0)));
+        let fx = view_fov_x(65.0, s.aspect, true);
+        assert!(close(fov_y(fx, 2.4), fov_y(65.0, 4.0 / 3.0)));
+        assert!(Cod4Screen::of("auto", 1920.0, 1080.0, true, false).wide_screen);
+        let std = Cod4Screen::of("standard", 3840.0, 1600.0, true, false);
+        assert!(!std.wide_screen && std.strip_scale == 1.0);
+        // a 16:9 window is the same either way
+        let a = Cod4Screen::of("auto", 1920.0, 1080.0, false, false);
+        let b = Cod4Screen::of("auto", 1920.0, 1080.0, false, true);
+        assert!(close(a.aspect, b.aspect));
     }
 }

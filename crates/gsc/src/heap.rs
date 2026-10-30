@@ -26,6 +26,12 @@ pub enum ArrayKey {
 pub struct Heap {
     structs: Vec<HashMap<Atom, Value>>,
     arrays: Vec<BTreeMap<ArrayKey, Value>>,
+    /// Each array's keys in the order they were first written, for
+    /// [`Heap::array_keys_newest_first`].
+    orders: Vec<Vec<ArrayKey>>,
+    /// Arrays a second place may hold ([`Heap::share`]): a write through
+    /// one copies it first ([`Heap::own`]).
+    shared: Vec<bool>,
 }
 
 impl Heap {
@@ -42,6 +48,43 @@ impl Heap {
     pub fn new_array(&mut self) -> ArrayId {
         let id = ArrayId(self.arrays.len() as u32);
         self.arrays.push(BTreeMap::new());
+        self.orders.push(Vec::new());
+        self.shared.push(false);
+        id
+    }
+
+    /// An array value stored somewhere new (a variable, a field, an
+    /// element, an argument): from here on two places may hold it. Retail
+    /// counts the references (`Scr_EvalArrayRef`'s `refCount`); vcod keeps
+    /// the flag for good, which only costs a copy nobody could tell apart.
+    pub fn share(&mut self, v: Value) {
+        if let Value::Array(a) = v
+            && let Some(f) = self.shared.get_mut(a.0 as usize)
+        {
+            *f = true;
+        }
+    }
+
+    /// The array a write through `a` goes to: `a` itself when nothing else
+    /// holds it, else a fresh copy the caller stores back where it read
+    /// `a`. gsc arrays are values: `b = a; b[1] = x;` leaves `a` alone, on
+    /// every engine (`probe_array_copy`, 1.1d; `CopyArray` under
+    /// `Scr_EvalArrayRef`, cod4-gsc.md 10). The copy is deep as retail's is,
+    /// lazily: the arrays it holds are now held twice, so they are shared.
+    pub fn own(&mut self, a: ArrayId) -> ArrayId {
+        let i = a.0 as usize;
+        if !self.shared.get(i).copied().unwrap_or(false) {
+            return a;
+        }
+        let elems = self.arrays[i].clone();
+        let order = self.orders[i].clone();
+        for v in elems.values() {
+            self.share(*v);
+        }
+        let id = ArrayId(self.arrays.len() as u32);
+        self.arrays.push(elems);
+        self.orders.push(order);
+        self.shared.push(false);
         id
     }
 
@@ -75,13 +118,31 @@ impl Heap {
             .unwrap_or(Value::Undefined)
     }
 
-    /// Writing an unset key grows the array; there is no fixed size. An
-    /// array id out of range is silently dropped rather than panicking.
+    /// Writing an unset key grows the array, `undefined` included; there is
+    /// no fixed size. An array id out of range is silently
+    /// dropped rather than panicking.
     pub fn set_index(&mut self, a: ArrayId, k: ArrayKey, v: Value) {
         if let Some(elems) = self.arrays.get_mut(a.0 as usize) {
-            elems.insert(k, v);
+            if elems.insert(k, v).is_none() {
+                self.orders[a.0 as usize].push(k);
+            }
         } else {
             log::warn!("dropped a write to array {} (out of range)", a.0);
+        }
+    }
+
+    /// `a[k] = undefined` with the literal: the key goes, so `.size` drops,
+    /// the stock `a[a.size - 1] = undefined` shrink (`probe_array_undef`).
+    /// An undefined value from anywhere else is stored by [`Self::set_index`]
+    /// and counted (`probe_undef_call_into_unset`).
+    pub fn clear_index(&mut self, a: ArrayId, k: ArrayKey) {
+        if let Some(elems) = self.arrays.get_mut(a.0 as usize)
+            && elems.remove(&k).is_some()
+        {
+            let order = &mut self.orders[a.0 as usize];
+            if let Some(i) = order.iter().rposition(|o| *o == k) {
+                order.remove(i);
+            }
         }
     }
 
@@ -98,6 +159,16 @@ impl Heap {
         self.arrays
             .get(a.0 as usize)
             .map(|e| e.iter().map(|(k, v)| (*k, *v)).collect())
+            .unwrap_or_default()
+    }
+
+    /// An array's keys, the most recently added first (CoD4's
+    /// `getArrayKeys`, docs/research/cod4-gsc.md 3); an id out of range
+    /// yields nothing.
+    pub fn array_keys_newest_first(&self, a: ArrayId) -> Vec<ArrayKey> {
+        self.orders
+            .get(a.0 as usize)
+            .map(|o| o.iter().rev().copied().collect())
             .unwrap_or_default()
     }
 

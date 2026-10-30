@@ -11,7 +11,7 @@
 //	done        end of the measured part
 //
 //	After `done` the model turns and flashes every 0.1 s, and the helmet
-//	flashes every 2 s, for a human to watch (pending-manual-test.md 182).
+//	flashes every 2 s, for a human to watch (pending a hand check).
 //
 //	The client half is `vcod --net-probe --probe-team allies
 //	--save-scripted fx`, whose `!fx` lines fx_ab.rs compares up to `done`.

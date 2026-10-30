@@ -3,6 +3,7 @@
 
 use std::time::{Duration, Instant};
 
+use vcod_common::text::clean_str;
 use vcod_common::ui_menu::{FEEDER_PLAYER_LIST, UiItem};
 use winit::keyboard::KeyCode;
 
@@ -14,20 +15,6 @@ use super::{
 /// 0x4000c66b, `realTime + 3000`).
 const REFRESH: Duration = Duration::from_millis(3000);
 
-/// `Q_CleanStr`: colour codes and anything unprintable out.
-pub fn clean_name(name: &str) -> String {
-    let mut out = String::new();
-    let mut chars = name.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '^' && chars.peek().is_some_and(|&n| n != '^') {
-            chars.next();
-        } else if (' '..='~').contains(&c) {
-            out.push(c);
-        }
-    }
-    out
-}
-
 impl Ui {
     /// `UI_BuildPlayerList` (0x40008ed0) when the last build is 3 s old:
     /// `names` gives the newest snapshot's client names in slot order,
@@ -37,7 +24,7 @@ impl Ui {
             return;
         }
         self.players_due = Some(now + REFRESH);
-        self.players = names().iter().map(|n| clean_name(n)).collect();
+        self.players = names().iter().map(|n| clean_str(n)).collect();
         self.player_top = self.player_top.min(self.players.len().saturating_sub(1));
     }
 
@@ -124,7 +111,7 @@ mod tests {
 
     #[test]
     fn clean_name_drops_colours_and_controls() {
-        assert_eq!(clean_name("^1Able^7\u{7f}"), "Able");
-        assert_eq!(clean_name("a^^b"), "a^");
+        assert_eq!(clean_str("^1Able^7\u{7f}"), "Able");
+        assert_eq!(clean_str("a^^b"), "a^");
     }
 }

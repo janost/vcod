@@ -4,7 +4,7 @@
 //! restart toggle. The index order is not the file order; see
 //! docs/research/player-model-anim-system.md, "Animation indices: the animtree".
 
-use crate::pk3::Pk3Fs;
+use crate::asset_source::AssetSource;
 use anyhow::{Result, anyhow, bail};
 use std::collections::{HashMap, HashSet};
 
@@ -178,7 +178,7 @@ impl AnimTree {
         self.nodes.iter().position(|n| n.name == name)
     }
 
-    pub fn load(fs: &Pk3Fs, name: &str) -> Result<AnimTree> {
+    pub fn load(fs: &dyn AssetSource, name: &str) -> Result<AnimTree> {
         let path = format!("animtrees/{name}.atr");
         let data = fs
             .read(&path)
@@ -281,6 +281,9 @@ pub struct PlayerAnims {
     motions: Vec<Option<AnimMotion>>,
     /// [`Self::leaf_motion`]'s table, by node id.
     leaf_motions: HashMap<usize, (f32, bool)>,
+    /// The rate divides by [`AnimMotion::move_speed_f`], CoD2's float
+    /// `moveSpeed`, not the truncated one; CoD2's loaders set it.
+    pub float_move_speed: bool,
 }
 
 /// The leaves under a `complete` node that are not under a sync one: each
@@ -320,6 +323,11 @@ pub struct AnimMotion {
     /// `animation_t +0x44`: the root's whole travel, truncated, in units per
     /// second of the clip's truncated ms length (0x27f59..0x27fa5).
     pub move_speed: i32,
+    /// CoD2's `animation_t +0x44`, a float: the root's travel over the
+    /// clip's float length (lnxded `BG_LoadAnim` fill 0x80d72e6), 268.47
+    /// for `pb_stumble_forward` where [`Self::move_speed`] reads 268. Read
+    /// in its place under [`PlayerAnims::float_move_speed`].
+    pub move_speed_f: f32,
     /// `animation_t +0x50` bit 2: a `climbup` or `climbdown` anim with a
     /// `moveSpeed`, whose rate reads the vertical travel alone (0x287f5).
     pub vertical: bool,
@@ -333,7 +341,7 @@ pub struct AnimMotion {
 }
 
 impl PlayerAnims {
-    pub fn load(fs: &Pk3Fs) -> Result<PlayerAnims> {
+    pub fn load(fs: &dyn AssetSource) -> Result<PlayerAnims> {
         let tree = AnimTree::load(fs, "multiplayer")?;
         let text = fs
             .read("mp/playeranim.script")
@@ -344,8 +352,11 @@ impl PlayerAnims {
             .event_referenced_names()
             .iter()
             .filter_map(|name| {
-                let data = fs.read(&format!("xanim/{name}"))?;
-                Some((name.clone(), crate::xanim::duration_ms(name, &data).ok()?))
+                let ms = match fs.read(&format!("xanim/{name}")) {
+                    Some(data) => crate::xanim::duration_ms(name, &data).ok()?,
+                    None => fs.decoded_anim(name)?.ok()?.motion().length_ms as u32,
+                };
+                Some((name.clone(), ms))
             })
             .collect();
         let records = script.anim_records();
@@ -369,8 +380,7 @@ impl PlayerAnims {
                 if !node.children.is_empty() {
                     return None;
                 }
-                let data = fs.read(&format!("xanim/{}", node.name))?;
-                let m = crate::xanim::root_motion(&node.name, &data).ok()?;
+                let m = crate::xanim::clip_motion(fs, &node.name)?;
                 let travel = m.distance as i32;
                 let move_speed = if m.length_ms != 0 && travel != 0 {
                     travel * 1000 / m.length_ms
@@ -383,12 +393,18 @@ impl PlayerAnims {
                 let name = node.name.to_ascii_lowercase();
                 let death = deaths.contains(&name);
                 let move_speed = if death { 0 } else { move_speed };
+                let move_speed_f = if death || m.duration == 0.0 {
+                    0.0
+                } else {
+                    m.distance / m.duration
+                };
                 Some(AnimMotion {
                     duration: m.duration,
                     length_ms: m.length_ms,
                     looping: m.looping,
                     frequency: m.frequency,
                     move_speed,
+                    move_speed_f,
                     vertical: move_speed != 0 && movetypes & climb != 0,
                     blend_ms: if fires.contains(&name) { 30 } else { 0 },
                     death,
@@ -399,8 +415,7 @@ impl PlayerAnims {
             .into_iter()
             .filter_map(|leaf| {
                 let name = &tree.nodes[leaf].name;
-                let m =
-                    crate::xanim::root_motion(name, &fs.read(&format!("xanim/{name}"))?).ok()?;
+                let m = crate::xanim::clip_motion(fs, name)?;
                 Some((leaf, (m.frequency, m.looping)))
             })
             .collect();
@@ -412,6 +427,7 @@ impl PlayerAnims {
             lengths,
             motions,
             leaf_motions,
+            float_move_speed: false,
         })
     }
 

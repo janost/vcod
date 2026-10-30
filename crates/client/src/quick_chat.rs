@@ -4,9 +4,9 @@
 //! Without those files this is inert, exactly like stock retail.
 
 use std::collections::VecDeque;
+use vcod_common::asset_source::AssetSource;
 
 use glam::Vec3;
-use vcod_common::pk3::Pk3Fs;
 use vcod_common::voicechat::{self, VoiceChat};
 
 use crate::audio::cues::{Cue, Source};
@@ -68,7 +68,7 @@ impl QuickChat {
     /// originX, originY, originZ]`.
     pub fn on_server_command(
         &mut self,
-        fs: &Pk3Fs,
+        fs: &dyn AssetSource,
         tokens: &[String],
         team_of: impl Fn(u32) -> Option<i32>,
     ) -> bool {
@@ -146,14 +146,14 @@ impl QuickChat {
     }
 }
 
-fn load_tables(fs: &Pk3Fs) -> Tables {
+fn load_tables(fs: &dyn AssetSource) -> Tables {
     Tables {
         axis: load_table(fs, AXIS_FILE),
         allies: load_table(fs, ALLIES_FILE),
     }
 }
 
-fn load_table(fs: &Pk3Fs, path: &str) -> Option<VoiceChat> {
+fn load_table(fs: &dyn AssetSource, path: &str) -> Option<VoiceChat> {
     // Called once per session, so these warns fire once like retail's do.
     let Some(data) = fs.read(path) else {
         log::warn!("audio: {path} not found; quick chat stays inert (stock parity)");
@@ -182,6 +182,7 @@ fn load_table(fs: &Pk3Fs, path: &str) -> Option<VoiceChat> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::pk3::Pk3Fs;
     use vcod_common::voicechat::Category;
 
     fn cat(name: &str, aliases: &[&str]) -> Category {

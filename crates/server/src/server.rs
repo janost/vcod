@@ -11,6 +11,8 @@ use crate::client::{
 use crate::compass;
 use crate::configstrings;
 use crate::console;
+use crate::engine::bans::{BanFile, guid_of};
+use crate::engine::core::rand_from;
 use crate::follow;
 use crate::game::combat::Effect;
 use crate::game::host::{ClientEvent, SpawnMode};
@@ -21,31 +23,33 @@ use crate::game::stuck::{StuckRules, StuckView, stuck_in_client};
 use crate::game::temp_entity;
 use crate::spectate::{ClientSim, PmType};
 use crate::world::{TestEntities, World};
+use vcod_common::asset_source::RawFile;
 
-mod bot_admin;
+pub mod bot_admin;
 mod bot_vehicles;
+mod bot_world;
+mod cod1_frame;
+mod cod1_game;
+mod cod1_think;
+use cod1_game::{Cod1Game, Cod1Module, FrameOut, Lend};
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::movetrace::CONTENTS_CORPSE;
 use vcod_common::net::connectionless::{Info, build_oob, parse_connect, parse_oob};
-use vcod_common::net::gamestate::{self, Gamestate};
+use vcod_common::net::gamestate::Gamestate;
 use vcod_common::net::huffman::Huffman;
 use vcod_common::net::msg::{
     self, CLC_BITS, CLC_CLIENT_COMMAND, CLC_EOF, CLC_MOVE, CLC_MOVE_NO_DELTA, MsgReader, MsgWriter,
     NULL_USERCMD, UserCmd, read_delta_usercmd_in,
 };
 use vcod_common::net::netchan::{ClientMessage, MAX_RELIABLE_COMMANDS, ServerNetchan};
-use vcod_common::net::protocol::{CS_SERVERINFO, PROTOCOL_V1, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::WireGame;
+use vcod_common::net::protocol::{CS_SERVERINFO, PROTOCOL_V1, Protocol};
 use vcod_common::net::{com_hash_key, flags, info_value_for_key, snapshot};
 use vcod_common::pmove::FallHeights;
 
-/// `MAX_CHALLENGES`, server.h:198.
-const MAX_CHALLENGES: usize = 1024;
-/// A challenge nobody asked about for this long is dropped when a new one
-/// is issued, so a spoof flood has to keep up with real clients to evict them.
-const CHALLENGE_TTL: Duration = Duration::from_secs(60);
 /// `SNAPFLAG_NOT_ACTIVE`, or'd at cod_lnxded 0x808dfe3.
 const SNAPFLAG_NOT_ACTIVE: u32 = 2;
 /// `sv_timeout` default (cod_lnxded 0x80d56c0).
@@ -76,17 +80,9 @@ const MAX_CMDS_PER_TICK: usize = 32;
 /// non-exempt one from an active client is dropped before the game sees it
 /// (`docs/protocol-1.1.md`, "Client commands are flood-protected").
 const FLOOD_WINDOW_MS: i32 = 800;
-/// How often a bot re-runs its enemy search (range gate + LOS traces).
-/// The cached verdict is at most this stale.
-const ENEMY_REFRESH_MS: i32 = 100;
-/// How often a fighting bot re-checks its cover spot, or looks for one.
-const COVER_REFRESH_MS: i32 = 250;
 /// How long the script's brush links hold still before the bots' graph
 /// is rebuilt over them (`Server::relink_nav`).
 const NAV_RELINK_MS: i32 = 2000;
-/// A* nodes a tick may expand across all bots; a plan left unfinished
-/// resumes next tick (bot-navigation.md, section 3).
-const BOT_PLAN_BUDGET: u32 = 4000;
 /// A retrieval objective as the bots see it, with its carrier's slot.
 /// A retrieval objective as [`Server::bot_re`] reads it: the view with the
 /// carrier's feet in `carrier_at` for every team, the carrier's slot, and
@@ -97,8 +93,12 @@ pub(crate) const FRAME_MS: i32 = 50;
 
 /// `SV_SendClientGameState`'s message buffer (`MSG_Init` at 0x8085fa7):
 /// the plain bytes a gamestate can fill (cod11-server-handshake.md,
-/// "The gamestate goes out fragmented").
+/// "The gamestate goes out fragmented"). 1.5b's is the same; United
+/// Offensive's is twice it ([`MAX_GAMESTATE_BYTES_UO`]).
 const MAX_GAMESTATE_BYTES: usize = 0x4000;
+/// United Offensive's `SV_SendClientGameState` (coduo_lnxded 0x808bc48)
+/// builds the gamestate in a 32768-byte buffer (coduo-diff.md 7).
+const MAX_GAMESTATE_BYTES_UO: usize = 0x8000;
 /// Retail's `MAX_CLIENTS`. Client slots index a 6-bit wire field
 /// (clientState entries; `ps.clientNum` gets 8), so more than 64 would
 /// collide silently.
@@ -152,20 +152,6 @@ impl PureCheck {
         let args: Vec<&str> = cmd.split_whitespace().collect();
         vcod_common::pak_checksum::verify_pure(&args, self.cgame, self.ui, &self.loaded, self.feed)
     }
-}
-
-/// `challenge_t`. Entries past `CHALLENGE_TTL` go on the next insert; the
-/// oldest slot is recycled when the table is still full.
-struct Challenge {
-    addr: SocketAddr,
-    challenge: i32,
-    time: Instant,
-    /// When the last `challengeResponse` went out (`pingTime`, +0x1c).
-    ping_time: Instant,
-    /// The first connect's `svs.time - pingTime`, kept for its retries
-    /// (+0x24, 0 until then).
-    ping: Option<i32>,
-    connected: bool,
 }
 
 /// ioq3 `leakyBucket_t`: `used` tokens, one drained per period.
@@ -307,14 +293,6 @@ const FLAME_REPORT_MS: i32 = 3000;
 /// How long a fall holds off `P_DamageFeedback`'s `EV_PAIN`: `ClientEvents`
 /// stores `level.time + 200` into `pain_debounce_time` (player-clip doc 8.8).
 const FALL_PAIN_DEBOUNCE_MS: i32 = 200;
-
-/// The server generator's next value, 0..2^31.
-/// The collision arithmetic of the engine that speaks `proto`: 1.1d's, or
-/// 1.5b's and United Offensive's, which round where 1.1d's does not
-/// (`vcod_common::patch::Arith`).
-fn rand_from(rng: &mut u64) -> i32 {
-    (vcod_common::rng::xorshift(rng) >> 33) as i32 & 0x7fff_ffff
-}
 
 /// `ClientEvents`' fall damage before `G_Damage`'s location multiplier: the
 /// landing pain's percent of `max_health` (`ps.stats[2]`), 1.1 past 99,
@@ -1189,7 +1167,7 @@ fn roster(
             connecting: c.state == ClientState::Connected,
             active: c.state == ClientState::Active,
             following: c.sim.as_ref().and_then(|s| s.follow.target),
-            ping: c.ping,
+            ping: c.link.ping,
             bot: c.is_bot,
         })
     })
@@ -1498,7 +1476,7 @@ pub enum LoadFailure {
 /// module's name and date being 1.1's or 1.5b's (its startup log). The team
 /// count is `G_FindTeams` over `team` keys, which no stock map carries.
 fn restart_game_banner(p: &Protocol) -> String {
-    let (name, date) = match p.version {
+    let (name, date) = match p.transport.version {
         6 => ("Call of Duty", "Nov 15 2004"),
         22 => ("CoD:United Offensive", "Feb 10 2005"),
         _ => ("main", "Nov 13 2003"),
@@ -1513,237 +1491,8 @@ fn restart_game_banner(p: &Protocol) -> String {
     )
 }
 
-pub struct Server {
-    cfg: ServerConfig,
-    huff: Huffman,
-    proto: &'static Protocol,
-    /// `sv_serverid`, `0x10` per map load plus the restart count in the low
-    /// nibble. u8 because the client echoes it in a one-byte header field.
-    server_id: u8,
-    checksum_feed: i32,
-    configstrings: Vec<String>,
-    /// The table as the clients last heard it, which is what a mid-level
-    /// change is diffed against ([`Server::broadcast_configstring_changes`]).
-    /// Re-synced wherever a client is handed the whole table again.
-    sent_configstrings: Vec<String>,
-    challenges: Vec<Challenge>,
-    clients: Vec<Option<Client>>,
-    /// `CS_ZOMBIE` slots by index: a dropped client kept for
-    /// [`ZOMBIE_TIME`] past its last packet so the drop notice reaches it.
-    /// The game has already disconnected it, so it lives beside `clients`
-    /// rather than in it; a slot is free only when both are `None`.
-    zombies: Vec<Option<Client>>,
-    outbox: Vec<(SocketAddr, Vec<u8>)>,
-    limiter: RateLimiter,
-    rng: u64,
-    /// Test-facing: the next rockets' `gunrandom` pairs, a retail
-    /// capture's, in place of `rng`'s ([`Server::pin_spread_draws`]).
-    spread_draws: std::collections::VecDeque<(f32, f32)>,
-    /// The next level's script seed, `G_InitGame`'s `Rand_Init` argument:
-    /// retail passes the wall clock at every load and restart, so no level
-    /// repeats the last one's draws (map-cycle doc 4.8). Stepped at every
-    /// load, from `RNG_SEED` under [`Server::new`].
-    level_seed: u64,
-    /// [`Server::pin_spawns`]'s queues, handed to every level's script.
-    spawn_pins: Option<crate::game::host::SpawnPins>,
-    /// [`Server::pin_stuck_rand`]'s generator.
-    stuck_rand: Option<vcod_common::rng::GlibcRand>,
-    /// The map's collision and spawn, loaded by the binary; tests run
-    /// without. `Rc` so `GameHost.world` can point at the same map for
-    /// `bulletTrace`, which needs real geometry to trace against.
-    world: Option<Rc<World>>,
-    /// The game clock: `level.time` and every snapshot's `serverTime`. On
-    /// 1.1 it is `svs.time`, one frame per tick; 1.5 advances it by
-    /// `timescale` and keeps `svs.time` apart ([`Self::svs_time_ms`]).
-    sv_time_ms: i32,
-    /// How far 1.5's `svs.time` runs ahead of the game clock: the frames
-    /// a `timescale` under 1 held the game still (cod15-protocol-diff.md,
-    /// section 12). Always 0 on 1.1.
-    paused_ms: i32,
-    /// Gamestate entity baselines a delta frame may omit an unchanged entity
-    /// against; empty when `test_entities` is off.
-    baselines: HashMap<u32, msg::EntityState>,
-    /// Scripted entities driving the packet-entity path; `None` when
-    /// `cfg.test_entities` is 0.
-    test_entities: Option<TestEntities>,
-    /// Wall clock of the previous tick, for the trace's send-interval column.
-    last_tick: Option<Instant>,
-    /// The map script; `None` until `load_scripts` succeeds. `tick` steps it
-    /// once per frame.
-    script: Option<crate::game::script::ScriptRuntime>,
-    /// The player animtree, its wire index and the animscript. `None` on a
-    /// host with no paks, where every client keeps index 0.
-    anims: Option<Rc<vcod_common::animtree::PlayerAnims>>,
-    /// Every weapon file, parsed once at load: the animscript tests
-    /// `weaponClass` every frame and the frame loop must not read a pk3.
-    /// `Rc` so a snapshot/move closure can hold it without borrowing `self`.
-    weapon_table: Rc<crate::weapons::WeaponTable>,
-    /// The number of the last client packet executed, bots' included: what
-    /// `replay_moves` orders every client's cmds and `kill`s by.
-    packet_seq: u64,
-    /// When the last frame's messages went out (`Server::frame_sent`), and
-    /// the frame time of the one sent before it.
-    last_send: Option<(Instant, i32)>,
-    /// The frame time of the newest frame sent, for `last_send`.
-    sent_time_ms: i32,
-    /// The ack time of the packet being handled, when it differs from
-    /// `sv_time_ms` (`Server::handle_packet_at`).
-    ack_time_ms: Option<i32>,
-    /// The blasts this frame's missile pass set off, for the radius damage
-    /// pass to charge (`crate::game::missile::Explosion`).
-    pending_explosions: Vec<crate::game::missile::Explosion>,
-    /// Retail's `+set name value` as `Com_StartupVariable` applies it: last
-    /// in the first level's `cvars`, over `default_mp.cfg` and the config's
-    /// own, so a run can turn a script cvar such as `scr_friendlyfire` on
-    /// without a code change. Also where a latched `sv_maxclients` waits.
-    cvar_overrides: Vec<(String, String)>,
-    /// `bg_fallDamageMinHeight` and `bg_fallDamageMaxHeight` as the script's
-    /// cvar table last read, what every move lands with and systeminfo
-    /// carries.
-    fall_heights: FallHeights,
-    /// The hit-location damage multipliers out of the paks
-    /// (`crate::game::combat::HitLocTable`); the default until `load_scripts`.
-    hitlocs: crate::game::combat::HitLocTable,
-    /// The paks, kept past `load_scripts` because a shot loads the victim's
-    /// models to trace against. `None` on a host with none.
-    fs: Option<Rc<vcod_common::pk3::Pk3Fs>>,
-    /// The pak cvars of the mounted search path, systeminfo's lists.
-    paks: configstrings::PakLists,
-    /// The pure checksums a `cp` is checked against, keyed with this
-    /// level's `checksumFeed`; `None` until a level loads.
-    pure_check: Option<PureCheck>,
-    /// The grafted player skeletons those shots trace against, built on first
-    /// use (`crate::game::hitrig`).
-    hit_rigs: crate::game::hitrig::HitRigs,
-    /// Weapons the moves themselves switched to, by slot: only a change the
-    /// machine made, so a playerstate reset from outside a move is not one.
-    /// `tick` writes each back onto the script host before the mirror reads
-    /// it, which is what keeps a switch from being undone the frame after it
-    /// lands.
-    weapon_changes: Vec<(usize, u8)>,
-    /// Commands waiting to run, drained by `drain_console` at the top of
-    /// `tick` (`Cbuf_Execute`, docs/research/cod11-map-cycle.md section 5.2).
-    console: console::Console,
-    /// `sv_mapRotationCurrent`, consumed one token per `map_rotate`.
-    rotation: console::Rotation,
-    /// `sv_mapRotation`, mirrored here by `set_cvar` (doc section 5).
-    sv_map_rotation: String,
-    /// `svs.snapFlagServerBit`, toggled by a map load or restart and sent as
-    /// every snapshot's `snapFlags` (doc section 3 step 13, section 4
-    /// step 4).
-    snap_flag_server_bit: u32,
-    /// The cvar table the outgoing level left, stashed when its script is
-    /// dropped. Retail's `Cvar_Set` writes a process-global table that no
-    /// level boundary clears, so a script's `setCvar` outlives both a
-    /// restart and a map change; rebuilding from `default_mp.cfg` alone
-    /// would lose it.
-    carried_cvars: Option<crate::cvars::Cvars>,
-    /// `g_gametype` and `sv_maxclients` as the running level actually loaded
-    /// with, read off the table `load_scripts_with` built. Doc section 4
-    /// step 3 compares retail's latched value against its live one; this is
-    /// the same comparison's left-hand side, and it has to be the built
-    /// value rather than `cfg`, since a `+set` override outranks `cfg` in
-    /// [`Self::cvars`] and comparing against `cfg` escalates every restart
-    /// for the whole run.
-    level_cvars: Option<(String, String)>,
-    /// `svs.time` of the last spawn or restart, for the same-frame guard
-    /// (doc section 4 step 1).
-    last_spawn_tick: Option<i32>,
-    /// One `.gsc` answered from memory instead of the paks
-    /// ([`Self::overlay_script`]); `None` unless `--gametype-script` or a test set it.
-    script_overlay: Option<(String, String)>,
-    /// A level load that failed with the level already torn down
-    /// ([`LoadFailure::Fatal`]), waiting for `main` to end the process on it.
-    fatal: Option<anyhow::Error>,
-    /// The debug bots, by slot. An entry whose client is gone goes with it.
-    bots: BTreeMap<usize, crate::bots::Bot>,
-    /// What `server/bot_admin.rs` keeps between passes: the manual count
-    /// `--bots` seeds, the pinned bots, the name draw.
-    bot_admin: bot_admin::BotAdmin,
-    /// `SV_AddTestClient`'s process-wide `bot%d` counter (cod_lnxded
-    /// 0x80e2f9c), which `addTestClient` advances through the host's copy.
-    test_client_counter: u32,
-    /// Per bot, `(sv_time of the last look, the enemy that look found)`.
-    /// A fresh LOS trace per bot per tick was the other half of the 24-bot
-    /// CPU load; a bot does not need a new verdict every 50 ms.
-    bot_enemies: BTreeMap<usize, (i32, Option<crate::bots::EnemyView>)>,
-    /// Per bot, the sidestep it is walking to and the sv_time it was picked
-    /// ([`crate::bots::BotView::sidestep`]), held until reached, no longer
-    /// clear or too old (`bots::held_sidestep`): picked afresh every tick, the
-    /// nearest spot moved with the body and a moving teammate's line, and
-    /// the bot jittered between spots.
-    bot_sidesteps: BTreeMap<usize, ([f32; 3], i32)>,
-    /// Per fighting bot, `(sv_time of the last look, the cover spot it
-    /// found)` ([`crate::bots::BotView::cover`]).
-    bot_covers: BTreeMap<usize, (i32, Option<crate::bots::cover::Spot>)>,
-    /// Per hunting bot, `(the lost enemy's spot, its vantage)`
-    /// ([`crate::bots::BotView::hunt`]).
-    bot_hunts: BTreeMap<usize, ([f32; 3], Option<[f32; 3]>)>,
-    /// The level's navigation graph, built on the first tick with bots.
-    nav: Option<std::sync::Arc<crate::nav::NavGraph>>,
-    /// The build of `nav` under way, and whether the tick waits for it or
-    /// ticks on with the bots off the graph until it lands.
-    nav_job: Option<crate::nav::NavJob>,
-    nav_background: bool,
-    /// `GameHost::brush_links` when `nav` was asked for, the count seen
-    /// since and the frame it was first seen, and the rebuild under way
-    /// once it has held [`NAV_RELINK_MS`].
-    nav_links: u32,
-    nav_relink: Option<(u32, i32)>,
-    nav_rebuild: Option<crate::nav::NavJob>,
-    /// The drop probe's crease verdicts on the loaded world.
-    creases: std::cell::RefCell<crate::nav::Creases>,
-    /// Per bot, its walk along `nav`.
-    bot_paths: BTreeMap<usize, crate::nav::Follower>,
-    /// Bots' routes in a UO vehicle's driver's seat.
-    bot_drives: bot_vehicles::BotDrives,
-    /// The graph's nodes UO vehicles parked since its build cover.
-    bot_parked: bot_vehicles::ParkedVehicles,
-    /// Each bombzone's `(mins, maxs)` and the stand `site_stand` picked in
-    /// it, for the life of the nav graph.
-    bot_sites: Vec<([f32; 3], [f32; 3], [f32; 3])>,
-    /// Each `bas` base's origin and the graph's spots a rocket fired from
-    /// bursts at it (`breach_stands`), for the life of the nav graph.
-    bot_breach_stands: Vec<([f32; 3], Vec<[f32; 3]>)>,
-    /// The shots and blasts since the bots last listened, in sim order;
-    /// `step_bots` takes them at the top of the next tick.
-    bot_noises: Vec<crate::bots::Noise>,
-    /// The frames the killcam replays, kept while script has `setarchive`
-    /// on and cleared by every level load (`crate::archive`).
-    archive: crate::archive::Archive,
-    /// `dedicated`. Retail's default is 2, which heartbeats; vcod's is 1 on
-    /// purpose, so dev and test runs stay off the master list. `--set
-    /// dedicated=2` opts in.
-    dedicated: i32,
-    masters: crate::master::Masters,
-    /// `NET_StringToAdr` for the masters; a test swaps in its own.
-    resolver: fn(&str) -> Option<SocketAddr>,
-    /// `rconPassword`; empty refuses every rcon.
-    rcon_password: String,
-    rcon: crate::rcon::Rcon,
-    /// The rcon output being collected, `Com_BeginRedirect` to
-    /// `Com_EndRedirect`.
-    redirect: Option<crate::rcon::Redirect>,
-    /// A `quit` ran: the flatline is in the outbox and the binary exits once
-    /// it has flushed it.
-    quit: bool,
-    /// A `killserver` ran: `sv_running` is 0, so no packet is read and no
-    /// frame runs until a console `map` loads a level again.
-    killed: bool,
-    /// The script log of the level a shutdown took down, for
-    /// [`Self::script_log`].
-    shutdown_log: Vec<String>,
-    /// `sv_cheats`: set by `devmap`, cleared by `map`, carried in
-    /// systeminfo.
-    cheats: bool,
-    bans: crate::bans::Bans,
-    /// 1.5's `tempBan*` table: retail's 16 guids with the `svs_time_ms`
-    /// each was banned at, an address standing in for the guid.
-    temp_bans: Vec<(std::net::Ipv4Addr, i32)>,
-}
-
-/// Retail's temporary ban table holds 16 guids (cod_lnxded 1.5b 0x8089096).
-const TEMP_BANS: usize = 16;
+/// The CoD1 server (1.1, 1.5 and UO): the engine over [`Cod1Game`].
+pub type Server = crate::engine::Engine<Cod1Game>;
 
 /// A follower's frame: the followed client's number, its playerstate with
 /// the follow flags patched in, its eye, and whether it is a replay.
@@ -1752,6 +1501,25 @@ struct FollowFrame {
     ps: msg::PlayerState,
     eye: [f32; 3],
     replay: bool,
+}
+
+/// [`Server::download_opener`]'s file reader.
+type Opener = dyn Fn(&str) -> Result<Vec<u8>, crate::download::Refusal>;
+
+/// What CoD1's `SV_SendClientMessages` builds once for every client's
+/// snapshot ([`Server::snapshots_begin`]).
+pub struct Cod1Snapshots {
+    live: crate::archive::WorldFrame,
+    /// Each slot's team, for the HUD filters.
+    teams: Vec<i32>,
+    follow_frames: Vec<Option<FollowFrame>>,
+    /// The archived frame each client's `archivetime` names, and its age.
+    sources: Vec<Option<(i32, i32)>>,
+    open: Box<Opener>,
+    www: Option<crate::download::WwwConfig>,
+    max_rate: i32,
+    moved: Vec<MoveSummary>,
+    wall: (Option<f32>, u32),
 }
 
 /// The line of a connectionless packet as `SV_ConnectionlessPacket`
@@ -1814,7 +1582,7 @@ fn fdc_inflictor(args: &str, max_clients: usize) -> Option<u32> {
 /// - an index `strtol` reads past 31 (unsigned, so a negative one too) names
 ///   the menu by its own text;
 /// - otherwise the menu is the slot's configstring, empty if unset.
-fn parse_menu_response(cmd: &str, server_id: i32) -> Option<(MenuRef, String)> {
+pub(crate) fn parse_menu_response(cmd: &str, server_id: i32) -> Option<(MenuRef, String)> {
     let args = crate::game::say::tokenize(cmd);
     let [_, sid, index, response] = args.as_slice() else {
         return Some((MenuRef::Name(String::new()), "bad".to_string()));
@@ -1850,7 +1618,7 @@ pub use vcod_common::net::protocol::install_protocol;
 
 /// [`Server::fog_cull`] off the fields, for a caller holding the script.
 fn fog_cull_of(p: &Protocol, configstrings: &[String]) -> Option<f32> {
-    (p.version != vcod_common::net::protocol::PROTOCOL_V1.version)
+    (!p.is_v1())
         .then(|| crate::world::fog_cull(configstrings.get(p.cs.fog).map_or("", String::as_str)))
         .flatten()
 }
@@ -1964,10 +1732,10 @@ fn zombie_message(
     huff: &Huffman,
 ) -> Vec<Vec<u8>> {
     let mut w = MsgWriter::new(huff);
-    write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
-    c.reliable_sent = c.netchan.reliable_sequence as i32;
-    let message_num = c.netchan.outgoing_sequence;
-    let ps = c.frames[message_num as usize % crate::client::SV_PACKET_BACKUP]
+    write_pending_commands(&mut w, &c.link.netchan, c.link.reliable_ack);
+    c.link.reliable_sent = c.link.netchan.reliable_sequence as i32;
+    let message_num = c.link.netchan.outgoing_sequence;
+    let ps = c.link.frames[message_num as usize % crate::client::SV_PACKET_BACKUP]
         .as_ref()
         .map_or_else(|| msg::PlayerState::null(proto), |f| f.ps.clone());
     let frame = snapshot::Snapshot {
@@ -1980,11 +1748,11 @@ fn zombie_message(
         clients: Default::default(),
         valid: true,
     };
-    w.write_byte(snapshot::SVC_SNAPSHOT);
-    snapshot::write(&mut w, proto, None, &frame, &HashMap::new());
-    c.unsent.clear();
-    c.netchan
-        .transmit(c.last_client_command, &w.into_ops(), huff)
+    proto.write_snapshot(&mut w, None, &frame, frame.head(None), &HashMap::new());
+    c.link.unsent.clear();
+    c.link
+        .netchan
+        .transmit(c.link.last_client_command, &w.into_ops(), huff)
 }
 
 /// One message off a client the snapshot pass does not build for: its
@@ -1998,9 +1766,9 @@ fn resend_last_frame(
     baselines: &HashMap<u32, msg::EntityState>,
 ) -> Vec<Vec<u8>> {
     let mut w = MsgWriter::new(huff);
-    write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
-    c.reliable_sent = c.netchan.reliable_sequence as i32;
-    let message_num = c.netchan.outgoing_sequence;
+    write_pending_commands(&mut w, &c.link.netchan, c.link.reliable_ack);
+    c.link.reliable_sent = c.link.netchan.reliable_sequence as i32;
+    let message_num = c.link.netchan.outgoing_sequence;
     if let Some(last) = c.sent_frame(message_num.wrapping_sub(1)) {
         let frame = snapshot::Snapshot {
             server_time: sv_time_ms,
@@ -2011,13 +1779,13 @@ fn resend_last_frame(
         let base = c
             .sent_frame(c.message_ack.max(0) as u32)
             .filter(|b| (1..=255).contains(&message_num.saturating_sub(b.message_num)));
-        w.write_byte(snapshot::SVC_SNAPSHOT);
-        snapshot::write(&mut w, proto, base, &frame, baselines);
+        proto.write_snapshot(&mut w, base, &frame, frame.head(base), baselines);
         c.record_frame(frame);
     }
-    c.unsent.clear();
-    c.netchan
-        .transmit(c.last_client_command, &w.into_ops(), huff)
+    c.link.unsent.clear();
+    c.link
+        .netchan
+        .transmit(c.link.last_client_command, &w.into_ops(), huff)
 }
 
 impl Server {
@@ -2035,10 +1803,10 @@ impl Server {
     pub fn pin_spawns(&mut self, pins: Vec<Vec<crate::game::host::SpawnPin>>) {
         let queues = pins.into_iter().map(Into::into).collect();
         let pins = Rc::new(std::cell::RefCell::new(queues));
-        if let Some(rt) = self.script.as_mut() {
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.host.spawn_pins = Some(pins.clone());
         }
-        self.spawn_pins = Some(pins);
+        self.game.module.spawn_pins = Some(pins);
     }
 
     /// Test-facing: `StuckInClient` draws its jitter from glibc's `rand()`
@@ -2051,7 +1819,7 @@ impl Server {
         for _ in 0..skip {
             g.next_u31();
         }
-        self.stuck_rand = Some(g);
+        self.game.stuck_rand = Some(g);
     }
 
     /// `new` with the generator seeded from `seed`; the binary passes the
@@ -2062,63 +1830,42 @@ impl Server {
         let (bots, bots_shoot) = (cfg.bots, cfg.bots_shoot);
         let server_id = 0x10;
         let fall = FallHeights::default();
-        let mut sv = Server {
-            configstrings: configstrings::static_configstrings(
-                &cfg,
-                server_id,
-                fall,
-                false,
-                &Default::default(),
-                None,
-                &PROTOCOL_V1,
-            ),
-            sent_configstrings: configstrings::static_configstrings(
-                &cfg,
-                server_id,
-                fall,
-                false,
-                &Default::default(),
-                None,
-                &PROTOCOL_V1,
-            ),
-            clients: (0..cfg.max_clients).map(|_| None).collect(),
+        let mut core = crate::engine::EngineCore::new(
+            &PROTOCOL_V1.transport,
+            cfg.max_clients,
+            seed,
+            Default::default(),
+        );
+        core.configstrings = configstrings::static_configstrings(
+            &cfg,
+            server_id,
+            fall,
+            false,
+            &Default::default(),
+            None,
+            &PROTOCOL_V1,
+        );
+        core.sent_configstrings = core.configstrings.clone();
+        let game = Cod1Game {
             zombies: (0..cfg.max_clients).map(|_| None).collect(),
             cfg,
-            huff: Huffman::new(),
             proto: &PROTOCOL_V1,
             server_id,
-            checksum_feed: 0,
-            challenges: Vec::new(),
-            outbox: Vec::new(),
             limiter: RateLimiter::new(now),
-            rng: seed,
-            spread_draws: Default::default(),
-            level_seed: seed,
-            spawn_pins: None,
+            module: Cod1Module::new(seed, bots, bots_shoot, fall),
             stuck_rand: None,
             world: None,
-            sv_time_ms: 0,
             paused_ms: 0,
             baselines: HashMap::new(),
-            test_entities: None,
             last_tick: None,
-            script: None,
-            anims: None,
-            weapon_table: Rc::new(crate::weapons::WeaponTable::empty()),
             packet_seq: 0,
             last_send: None,
             sent_time_ms: 0,
             ack_time_ms: None,
-            pending_explosions: Vec::new(),
             cvar_overrides: Vec::new(),
-            fall_heights: fall,
-            hitlocs: crate::game::combat::HitLocTable::default(),
             fs: None,
             paks: Default::default(),
             pure_check: None,
-            hit_rigs: Default::default(),
-            weapon_changes: Vec::new(),
-            console: console::Console::new(),
             rotation: console::Rotation::default(),
             sv_map_rotation: String::new(),
             // The first map's load toggled it from zero, as every later
@@ -2127,175 +1874,120 @@ impl Server {
             carried_cvars: None,
             level_cvars: None,
             last_spawn_tick: None,
-            script_overlay: None,
             fatal: None,
-            bots: BTreeMap::new(),
-            bot_admin: bot_admin::BotAdmin::new(bots, bots_shoot, seed),
             test_client_counter: 0,
-            bot_enemies: BTreeMap::new(),
-            bot_sidesteps: BTreeMap::new(),
-            bot_covers: BTreeMap::new(),
-            bot_hunts: BTreeMap::new(),
-            nav: None,
-            nav_job: None,
-            nav_links: 0,
-            nav_relink: None,
-            nav_rebuild: None,
-            nav_background: false,
-            creases: Default::default(),
-            bot_paths: BTreeMap::new(),
-            bot_drives: Default::default(),
-            bot_parked: Default::default(),
-            bot_sites: Vec::new(),
-            bot_breach_stands: Vec::new(),
-            bot_noises: Vec::new(),
             archive: Default::default(),
             dedicated: 1,
-            masters: Default::default(),
-            resolver: crate::master::resolve,
             rcon_password: String::new(),
-            rcon: Default::default(),
             redirect: None,
-            quit: false,
             killed: false,
             shutdown_log: Vec::new(),
+            game_log: Default::default(),
             cheats: false,
-            bans: Default::default(),
-            temp_bans: Vec::new(),
+            tick_moved: None,
+            frame_moved: Vec::new(),
+            tick_wall: (None, 0),
         };
+        let mut sv = Server { core, game };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer
         // 0x808a3e0. The server clock stands in for the uptime, as at a map
         // change: the seed carries the binary's randomness, and a seeded
         // test gets the same feed every run.
-        sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ sv.sv_time_ms;
-        if sv.cfg.test_entities > 0 {
-            let te = TestEntities::new(sv.cfg.test_entities, [0.0, 0.0, 64.0]);
-            sv.baselines = te.baselines(sv.proto);
-            sv.test_entities = Some(te);
+        sv.core.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ sv.core.sv_time_ms;
+        if sv.game.cfg.test_entities > 0 {
+            let te = TestEntities::new(sv.game.cfg.test_entities, [0.0, 0.0, 64.0]);
+            sv.game.baselines = te.baselines(sv.game.proto);
+            sv.game.module.test_entities = Some(te);
         }
         // `--bots` without `--bots-shoot` keeps its peaceful bots.
-        if sv.cfg.bots > 0 && !sv.cfg.bots_shoot {
+        if sv.game.cfg.bots > 0 && !sv.game.cfg.bots_shoot {
             sv.set_cvar(crate::botmgmt::cvar::SHOOT, "0");
         }
         sv
     }
 
-    /// xorshift64*, masked to 31 bits like glibc's `rand()` so that
-    /// `(rand() << 16) ^ rand()` wraps into the sign bit and challenges come
-    /// out signed like retail's.
-    fn rand(&mut self) -> i32 {
-        rand_from(&mut self.rng)
-    }
-
     pub fn configstring(&self, i: usize) -> &str {
-        self.configstrings.get(i).map_or("", String::as_str)
+        self.core.configstrings.get(i).map_or("", String::as_str)
     }
 
     pub fn client_count(&self) -> usize {
-        self.clients.iter().flatten().count()
+        self.core.clients.iter().flatten().count()
     }
 
     /// `sv.time`, the game clock the last frame ran at (`level.time`).
     pub fn game_time_ms(&self) -> i32 {
-        self.sv_time_ms
+        self.core.sv_time_ms
     }
 
     /// Starts a fresh server's game clock at `ms` rather than 0, before its
     /// first load: a retail capture taken on a server that had been up a
     /// while starts its level there (coduo-diff.md 20).
     pub fn start_clock_at(&mut self, ms: i32) {
-        self.sv_time_ms = ms;
+        self.core.sv_time_ms = ms;
     }
 
     /// `sv_serverid`. The high nibble is the map load, the low one the
     /// restart count (docs/research/cod11-map-cycle.md, section 3 step 16).
     pub fn server_id(&self) -> u8 {
-        self.server_id
+        self.game.server_id
     }
 
     /// The snapshot cull's fog distance, squared: 1.5's and UO's, never
     /// 1.1's (`crate::world::fog_cull`).
     fn fog_cull(&self) -> Option<f32> {
-        fog_cull_of(self.proto, &self.configstrings)
+        fog_cull_of(self.game.proto, &self.core.configstrings)
     }
 
     /// `svs.time`: what the network runs on (pacing, pings, timeouts, the
     /// flood window, heartbeats), which a 1.5 match timeout leaves running
     /// while the game clock stands.
     fn svs_time_ms(&self) -> i32 {
-        self.sv_time_ms.wrapping_add(self.paused_ms)
-    }
-
-    pub fn take_outgoing(&mut self) -> Vec<(SocketAddr, Vec<u8>)> {
-        std::mem::take(&mut self.outbox)
+        self.core.sv_time_ms.wrapping_add(self.game.paused_ms)
     }
 
     fn send_oob(&mut self, to: SocketAddr, text: &str) {
-        self.outbox.push((to, build_oob(text)));
+        self.core.outbox.push((to, build_oob(text)));
     }
 
-    /// [`Self::handle_packet`] for a packet read off the socket at
-    /// `arrived`. Retail reads its socket every 5 ms and runs a frame in well
-    /// under one, so a move message is stamped with the newest frame that had
-    /// gone out when it arrived; vcod's tick takes long enough that one read
-    /// at the next tick would stamp a packet that came in during the tick a
-    /// frame late. docs/research/cod11-server-handshake.md, "Pings".
-    pub fn handle_packet_at(
-        &mut self,
-        from: SocketAddr,
-        pkt: &[u8],
-        now: Instant,
-        arrived: Instant,
-    ) {
-        self.handle_packet_read(from, pkt, now, arrived, arrived);
-    }
-
-    /// [`Self::handle_packet_at`] with `read`, the moment retail's event
-    /// loop would have handled the packet: its arrival, or later when the
-    /// server was busy with a frame or an earlier packet. rcon's window
-    /// reads it, as retail's reads the clock at the handling
-    /// (cod11-server-handshake.md, "rcon").
-    pub fn handle_packet_read(
-        &mut self,
-        from: SocketAddr,
-        pkt: &[u8],
-        now: Instant,
-        arrived: Instant,
-        read: Instant,
-    ) {
-        self.ack_time_ms = self
+    /// What a move message read off the socket at `arrived` acks against:
+    /// the frame sent before the newest when it arrived ahead of that one,
+    /// else `None`, the frame clock. Retail reads its socket every 5 ms and
+    /// runs a frame in well under one, so a move message is stamped with the
+    /// newest frame that had gone out when it arrived; vcod's tick takes long
+    /// enough that one read at the next tick would stamp a packet that came
+    /// in during the tick a frame late. docs/research/cod11-server-handshake.md,
+    /// "Pings".
+    fn ack_stamp(&self, arrived: Instant) -> Option<i32> {
+        self.game
             .last_send
             .filter(|&(at, _)| arrived < at)
-            .map(|(_, before)| before);
-        self.dispatch_packet(from, pkt, now, read);
-        self.ack_time_ms = None;
+            .map(|(_, before)| before)
+    }
+
+    /// `SV_PacketEvent` with the move acks stamped `ack_time_ms` (`None`,
+    /// the frame clock): the one entry under [`Self::handle_packet`] and
+    /// [`Self::packet_read`]. `at.read` is when retail's event loop would
+    /// have handled the packet: its arrival, or later when the server was
+    /// busy with a frame or an earlier packet. rcon's window reads it, as
+    /// retail's reads the clock at the handling (cod11-server-handshake.md,
+    /// "rcon").
+    pub fn handle_packet_acked(
+        &mut self,
+        from: SocketAddr,
+        pkt: &[u8],
+        at: crate::engine::Arrival,
+        ack_time_ms: Option<i32>,
+    ) {
+        self.game.ack_time_ms = ack_time_ms;
+        crate::engine::packet(self, from, pkt, at);
+        self.game.ack_time_ms = None;
     }
 
     /// Marks the frame just ticked as sent at `at`: the outbox it left has
     /// gone onto the socket.
     pub fn frame_sent(&mut self, at: Instant) {
-        self.last_send = Some((at, self.sent_time_ms));
-        self.sent_time_ms = self.svs_time_ms();
-    }
-
-    /// `SV_PacketEvent`.
-    pub fn handle_packet(&mut self, from: SocketAddr, pkt: &[u8], now: Instant) {
-        self.dispatch_packet(from, pkt, now, now);
-    }
-
-    fn dispatch_packet(&mut self, from: SocketAddr, pkt: &[u8], now: Instant, read: Instant) {
-        // `Com_EventLoop` hands a packet to `SV_PacketEvent` only while
-        // `sv_running` is set.
-        if self.killed {
-            return;
-        }
-        match parse_oob(pkt) {
-            Some((cmd, _)) => {
-                let cmd = cmd.to_string();
-                self.handle_oob(from, &cmd, pkt, now, read);
-            }
-            None => self.handle_client_packet(from, pkt, now),
-        }
+        self.game.last_send = Some((at, self.game.sent_time_ms));
+        self.game.sent_time_ms = self.svs_time_ms();
     }
 
     /// `connect` re-parses `raw` because its body is compressed; the browser
@@ -2304,13 +1996,23 @@ impl Server {
     fn handle_oob(&mut self, from: SocketAddr, cmd: &str, raw: &[u8], now: Instant, read: Instant) {
         match cmd {
             "getinfo" | "getstatus" | "getchallenge" => {
-                if self.limiter.reply_limited(from.ip(), now) {
+                if self.game.limiter.reply_limited(from.ip(), now) {
                     log::debug!("{from}: {cmd} rate limited");
                     return;
                 }
                 match cmd {
-                    "getinfo" => self.svc_info(from, &oob_argv(raw, 1)),
-                    "getstatus" => self.svc_status(from, &oob_argv(raw, 1)),
+                    "getinfo" => crate::engine::answer_status(
+                        self,
+                        from,
+                        crate::engine::StatusQuery::Info,
+                        &oob_argv(raw, 1),
+                    ),
+                    "getstatus" => crate::engine::answer_status(
+                        self,
+                        from,
+                        crate::engine::StatusQuery::Status,
+                        &oob_argv(raw, 1),
+                    ),
                     _ => self.svc_get_challenge(from, now),
                 }
             }
@@ -2335,7 +2037,7 @@ impl Server {
     /// level's table, else the `--set` the first load will stamp, else
     /// `default`.
     fn live_cvar(&self, name: &str, default: &str) -> String {
-        match self.script.as_ref() {
+        match self.game.module.script.as_ref() {
             Some(rt) => rt.cvars().get(name).to_string(),
             None => self.pending_cvar(name, default),
         }
@@ -2379,12 +2081,13 @@ impl Server {
     /// occupied slots from `sv_privateClients` up, `sv_maxclients` is the
     /// rest. A challenge too long to fit gets no reply: retail's
     /// `Info_SetValueForKey` drops the level or crashes there.
-    fn svc_info(&mut self, from: SocketAddr, challenge: &str) {
+    pub(super) fn svc_info(&mut self, challenge: &str) -> Option<String> {
         if self.v15() {
-            return self.svc_info_v6(from, challenge);
+            return self.svc_info_v6(challenge);
         }
         let private = self.private_clients();
         let public_clients = self
+            .core
             .clients
             .iter()
             .skip(private.max(0) as usize)
@@ -2392,19 +2095,19 @@ impl Server {
             .count();
         let mut pairs = vec![
             ("challenge", challenge.to_string()),
-            ("protocol", self.proto.version.to_string()),
+            ("protocol", self.game.proto.transport.version.to_string()),
             (
                 "hostname",
-                self.live_cvar("sv_hostname", &self.cfg.hostname),
+                self.live_cvar("sv_hostname", &self.game.cfg.hostname),
             ),
-            ("mapname", self.cfg.map.clone()),
+            ("mapname", self.game.cfg.map.clone()),
             ("clients", public_clients.to_string()),
             (
                 "sv_maxclients",
-                (self.cfg.max_clients as i32 - private).to_string(),
+                (self.game.cfg.max_clients as i32 - private).to_string(),
             ),
             ("gametype", self.live_gametype()),
-            ("pure", u8::from(self.paks.pure).to_string()),
+            ("pure", u8::from(self.game.paks.pure).to_string()),
         ];
         // `->integer`, each key only when non-zero (0x808c318, 0x808c344).
         for (key, cvar) in [("minPing", "sv_minPing"), ("maxPing", "sv_maxPing")] {
@@ -2421,9 +2124,8 @@ impl Server {
         ));
         pairs.push(("pswrd", self.pswrd().to_string()));
         let mut i = Info::new();
-        if self.info_pairs(&mut i, pairs) {
-            self.send_oob(from, &format!("infoResponse\n{i}"));
-        }
+        self.info_pairs(&mut i, pairs)
+            .then(|| format!("infoResponse\n{i}"))
     }
 
     /// 1.5b's `SVC_Info` (cod_lnxded 1.5b 0x8092a74,
@@ -2431,19 +2133,19 @@ impl Server {
     /// counts every slot and `sv_maxclients` gives back the private slots
     /// in use, the zero-valued keys are left out, and five keys follow
     /// `pswrd`. A pair that does not fit is left out and the rest still go.
-    fn svc_info_v6(&mut self, from: SocketAddr, challenge: &str) {
+    fn svc_info_v6(&mut self, challenge: &str) -> Option<String> {
         let private = self.private_clients().max(0) as usize;
-        let in_private = self.clients.iter().take(private).flatten().count() as i32;
+        let in_private = self.core.clients.iter().take(private).flatten().count() as i32;
         let clients = self.client_count() as i32;
-        let max = self.cfg.max_clients as i32 - (private as i32 - in_private);
+        let max = self.game.cfg.max_clients as i32 - (private as i32 - in_private);
         let mut i = Info::new();
         i.set_value_for_key("challenge", challenge);
-        i.set_value_for_key("protocol", self.proto.version);
+        i.set_value_for_key("protocol", self.game.proto.transport.version);
         i.set_value_for_key(
             "hostname",
-            self.live_cvar("sv_hostname", &self.cfg.hostname),
+            self.live_cvar("sv_hostname", &self.game.cfg.hostname),
         );
-        i.set_value_for_key("mapname", &self.cfg.map);
+        i.set_value_for_key("mapname", &self.game.cfg.map);
         if clients != 0 {
             i.set_value_for_key("clients", clients);
         }
@@ -2451,7 +2153,7 @@ impl Server {
             i.set_value_for_key("sv_maxclients", max);
         }
         i.set_value_for_key("gametype", self.live_gametype());
-        if self.paks.pure {
+        if self.game.paks.pure {
             i.set_value_for_key("pure", 1);
         }
         let int = |sv: &Self, cvar: &str| sv.live_int_cvar(cvar);
@@ -2474,7 +2176,7 @@ impl Server {
         }
         // The string, when its `atoi` is non-zero; UO adds its vehicle
         // switches (coduo_lnxded 0x809392e).
-        let uo: &[(&str, &str)] = if self.proto.version == PROTOCOL_V22.version {
+        let uo: &[(&str, &str)] = if self.game.proto.is_uo() {
             &[("jps", "scr_allow_jeeps"), ("tnk", "scr_allow_tanks")]
         } else {
             &[]
@@ -2495,20 +2197,18 @@ impl Server {
         i.set_value_for_key("hw", 1);
         i.set_value_for_key("pb", int(self, "sv_punkbuster"));
         i.set_value_for_key("mod", u8::from(self.modded(&game)));
-        self.send_oob(from, &format!("infoResponse\n{i}"));
+        Some(format!("infoResponse\n{i}"))
     }
 
     /// 1.5's `mod` key: 1 for a server that is not pure, runs an `fs_game`,
     /// or references a pak `FS_idPak` (cod_lnxded 1.5b 0x80754ea, the same
     /// rule as the client's) does not count as stock.
     fn modded(&self, fs_game: &str) -> bool {
-        !self.paks.pure
+        !self.game.paks.pure
             || !fs_game.is_empty()
-            || self
-                .paks
-                .referenced
-                .iter()
-                .any(|(_, name)| !vcod_common::net::download::is_stock_pak(name, self.proto))
+            || self.game.paks.referenced.iter().any(|(_, name)| {
+                !vcod_common::net::download::is_stock_pak(name, &self.game.proto.transport)
+            })
     }
 
     /// `SV_MasterGameCompleteStatus` (0x808bbc4) and the packet it sends,
@@ -2516,10 +2216,12 @@ impl Server {
     /// argument as `challenge`, and a `statusResponse` player line per
     /// connected client.
     fn game_complete_status(&mut self, arg: &str) {
-        let mut resolve = self.resolver;
-        let (text, to) =
-            self.masters
-                .game_complete_status(self.dedicated, self.svs_time_ms(), &mut resolve);
+        let mut resolve = self.core.resolver;
+        let (text, to) = self.core.masters.game_complete_status(
+            self.game.dedicated,
+            self.svs_time_ms(),
+            &mut resolve,
+        );
         self.print(&text);
         if to.is_empty() {
             return;
@@ -2540,11 +2242,11 @@ impl Server {
     /// score, ping and name per client.
     fn status_lines(&mut self) -> String {
         let mut lines = String::new();
-        for slot in 0..self.clients.len() {
-            let Some(c) = self.clients[slot].as_ref() else {
+        for slot in 0..self.core.clients.len() {
+            let Some(c) = self.core.clients[slot].as_ref() else {
                 continue;
             };
-            let (ping, name) = (c.ping, c.name.clone());
+            let (ping, name) = (c.link.ping, c.name.clone());
             let score = self.client_score(slot);
             lines.push_str(&format!("{score} {ping} \"{name}\"\n"));
         }
@@ -2579,7 +2281,7 @@ impl Server {
 
     /// `SVC_Status` (0x808bd50; 1.5b 0x8092538 adds `con_disabled` and
     /// `mod`).
-    fn svc_status(&mut self, from: SocketAddr, challenge: &str) {
+    pub(super) fn svc_status(&mut self, challenge: &str) -> Option<String> {
         let mut i = self.serverinfo();
         let mut pairs = vec![("challenge", challenge.to_string())];
         pairs.extend(self.demo_keywords(&i));
@@ -2595,10 +2297,10 @@ impl Server {
             pairs.push(("mod", u8::from(self.modded(&game)).to_string()));
         }
         if !self.info_pairs(&mut i, pairs) {
-            return;
+            return None;
         }
         let lines = self.status_lines();
-        self.send_oob(from, &format!("statusResponse\n{i}\n{lines}"));
+        Some(format!("statusResponse\n{i}\n{lines}"))
     }
 
     /// `SVC_RemoteCommand` (0x808c404). The reply is whatever the command
@@ -2607,14 +2309,14 @@ impl Server {
     fn svc_remote_command(&mut self, from: SocketAddr, raw: &[u8], read: Instant, now: Instant) {
         use crate::rcon::Verdict;
         let args = crate::game::say::tokenize(&oob_line(raw));
-        let verdict = self.rcon.check(&self.rcon_password, &args, read);
+        let verdict = self.core.rcon.check(&self.game.rcon_password, &args, read);
         let shown = args.get(2).map_or("", String::as_str);
         match verdict {
             Verdict::Limited => return,
             Verdict::Run(_) => log::info!("Rcon from {from}:\n{shown}"),
             _ => log::info!("Bad rcon from {from}:\n{shown}"),
         }
-        self.redirect = Some(crate::rcon::Redirect::default());
+        self.game.redirect = Some(crate::rcon::Redirect::default());
         match verdict {
             Verdict::NoPassword => self.print(crate::rcon::NO_PASSWORD),
             Verdict::BadPassword => self.print(crate::rcon::BAD_PASSWORD),
@@ -2625,28 +2327,29 @@ impl Server {
         }
         // A `quit` exits before the redirect is flushed, and a `killserver`
         // shuts the server down under it: no reply either way.
-        if self.quit || self.killed {
-            self.redirect = None;
+        if self.core.quit || self.game.killed {
+            self.game.redirect = None;
             return;
         }
-        for reply in self.redirect.take().unwrap_or_default().finish() {
+        for reply in self.game.redirect.take().unwrap_or_default().finish() {
             self.send_oob(from, &reply);
         }
     }
 
-    /// `SV_GetChallenge` without the authorize-server detour. A client still
-    /// asking keeps its entry fresh; stale entries go before a new insert.
-    /// A banned address off the LAN gets the error retail relays from an
-    /// authorize denial; retail never asks the authorize server about a LAN
-    /// client, so a ban does not reach one there either.
-    fn svc_get_challenge(&mut self, from: SocketAddr, now: Instant) {
-        if let std::net::IpAddr::V4(ip) = from.ip()
-            && !crate::client::is_lan(from.ip())
-            && self.bans.contains(ip)
-        {
+    /// `SV_GetChallenge` without the authorize-server detour, on the table
+    /// all four retail servers share (`engine::challenge`). A banned guid
+    /// gets the error retail relays from an authorize denial (1.1) or its
+    /// own refusal at the `accept` (1.5); the guid stands in for an
+    /// off-LAN address, and a LAN client has none, as on retail.
+    fn svc_get_challenge(&mut self, from: SocketAddr, _now: Instant) {
+        let guid = guid_of(crate::engine::Lan::Cod1, from);
+        if self.core.bans.is_banned(guid) {
+            self.core.challenges.forget(from);
             if self.v15() {
                 // 1.5's `ban.txt` check at the authorize `accept` (0x80896bc).
-                self.print("rejected connection from permanently banned GUID 0\n");
+                self.print(&format!(
+                    "rejected connection from permanently banned GUID {guid}\n"
+                ));
                 self.send_oob(
                     from,
                     "error\n\u{15}You are permanently banned from this server",
@@ -2656,49 +2359,29 @@ impl Server {
             }
             return;
         }
-        if let std::net::IpAddr::V4(ip) = from.ip()
-            && self.temp_banned(ip)
+        if self
+            .core
+            .temp_bans
+            .banned(guid, self.core.sv_time_ms, self.kick_ban_time())
         {
-            self.print("rejected connection from temporarily banned GUID 0\n");
+            self.core.challenges.forget(from);
+            self.print(&format!(
+                "rejected connection from temporarily banned GUID {guid}\n"
+            ));
             self.send_oob(
                 from,
                 "error\n\u{15}You are temporarily banned from this server",
             );
             return;
         }
-        let challenge = match self
+        // Slots on the unscaled clock (1.5b 0x83ccd88), the draw's xor on
+        // the game's (0x83ccd84); one clock on 1.1d (0x83b67a4).
+        let (svs, game) = (self.svs_time_ms(), self.core.sv_time_ms);
+        let rng = &mut self.core.rng;
+        let challenge = self
+            .core
             .challenges
-            .iter_mut()
-            .find(|c| !c.connected && c.addr == from)
-        {
-            Some(c) => {
-                c.time = now;
-                c.ping_time = now;
-                c.challenge
-            }
-            None => {
-                self.challenges
-                    .retain(|c| now.duration_since(c.time) < CHALLENGE_TTL);
-                let challenge = (self.rand() << 16) ^ self.rand();
-                let entry = Challenge {
-                    addr: from,
-                    challenge,
-                    time: now,
-                    ping_time: now,
-                    ping: None,
-                    connected: false,
-                };
-                if self.challenges.len() < MAX_CHALLENGES {
-                    self.challenges.push(entry);
-                } else {
-                    let oldest = (0..self.challenges.len())
-                        .min_by_key(|&i| self.challenges[i].time)
-                        .unwrap();
-                    self.challenges[oldest] = entry;
-                }
-                challenge
-            }
-        };
+            .issue(from, svs, || (rand_from(rng) << 16) ^ rand_from(rng) ^ game);
         self.send_oob(from, &format!("challengeResponse {challenge}"));
     }
 
@@ -2712,8 +2395,8 @@ impl Server {
             }
         };
         let val = |k: &str| info_value_for_key(&userinfo, k).and_then(|v| v.parse::<i32>().ok());
-        if val("protocol") != Some(self.proto.version as i32) {
-            let v = self.proto.short_version;
+        if val("protocol") != Some(self.game.proto.transport.version as i32) {
+            let v = self.game.proto.transport.short_version;
             self.send_oob(
                 from,
                 &format!("error\nEXE_SERVER_IS_DIFFERENT_VER\x15{v}\n"),
@@ -2726,36 +2409,30 @@ impl Server {
         };
         let qport = qport as u16;
         let same_peer = |c: &Client| {
-            c.addr.ip() == from.ip() && (c.netchan.qport == qport || c.addr.port() == from.port())
+            c.link.addr.ip() == from.ip()
+                && (c.link.netchan.qport == qport || c.link.addr.port() == from.port())
         };
         if self
+            .core
             .clients
             .iter()
-            .chain(&self.zombies)
+            .chain(&self.game.zombies)
             .flatten()
             .any(|c| same_peer(c) && now.duration_since(c.last_connect) < RECONNECT_LIMIT)
         {
             log::debug!("{from}: reconnect rejected, too soon");
             return;
         }
-        // By ip alone, as retail does: the port may have moved behind a NAT.
-        let Some(ci) = self
-            .challenges
-            .iter()
-            .position(|c| c.addr.ip() == from.ip() && c.challenge == challenge)
-        else {
+        // The whole address, port included (`NET_CompareAdr` 0x8080dec).
+        let svs = self.svs_time_ms();
+        let Some((ci, ping)) = self.core.challenges.connect(from, challenge, svs) else {
             self.send_oob(from, "error\nEXE_BAD_CHALLENGE");
             return;
         };
-        let ch = &mut self.challenges[ci];
-        ch.connected = true;
-        let ping = *ch
-            .ping
-            .get_or_insert(now.saturating_duration_since(ch.ping_time).as_millis() as i32);
         log::debug!("Client {ci} connecting with {ping} challenge ping");
         // Off the LAN only, against `->value`; 0 turns each test off
         // (0x80857ee..0x80858a4).
-        if !crate::client::is_lan(from.ip()) {
+        if !crate::engine::Lan::Cod1.is_lan(from.ip()) {
             let min = crate::game::builtins::cvar::atof(&self.live_cvar("sv_minPing", "0"));
             let max = crate::game::builtins::cvar::atof(&self.live_cvar("sv_maxPing", "0"));
             if min != 0.0 && (ping as f32) < min {
@@ -2770,6 +2447,7 @@ impl Server {
             }
         }
         let reconnect = self
+            .core
             .clients
             .iter()
             .position(|c| c.as_ref().is_some_and(same_peer));
@@ -2779,8 +2457,8 @@ impl Server {
             // over a live player. Only the slot's own challenge (the
             // client's connect retry) may replace a client still heard
             // from; a silent slot (crash, lost disconnect) is reclaimable.
-            let c = self.clients[i].as_ref().unwrap();
-            if c.netchan.challenge != challenge
+            let c = self.core.clients[i].as_ref().unwrap();
+            if c.link.netchan.challenge != challenge
                 && now.duration_since(c.last_packet) < RECONNECT_LIMIT
             {
                 log::info!("{from}: connect with a foreign challenge refused, client {i} is live");
@@ -2790,7 +2468,8 @@ impl Server {
         // A zombie of this peer is a reconnect into its own slot; the game
         // saw it leave at the drop, so there is nothing to tear down.
         let Some(slot) = reconnect.or_else(|| {
-            self.zombies
+            self.game
+                .zombies
                 .iter()
                 .position(|c| c.as_ref().is_some_and(same_peer))
                 .or_else(|| {
@@ -2827,11 +2506,11 @@ impl Server {
             // callback, and its threads live on (cod11-server-handshake.md,
             // "A reconnect into a held slot").
             if self.v15() {
-                self.clients[slot] = None;
+                self.core.clients[slot] = None;
                 self.client_disconnect(slot);
             }
         } else {
-            self.zombies[slot] = None;
+            self.game.zombies[slot] = None;
         }
         // `Info_SetValueForKey(userinfo, "ip", NET_AdrToString(from))`
         // (0x8085498, key at 0x80d43da): any `ip` the client sent goes, the real one is last.
@@ -2842,28 +2521,28 @@ impl Server {
             from.port() as i16
         );
         let mut client = Client::new(from, qport, challenge, userinfo, now);
-        client.last_packet_ms = self.svs_time_ms();
+        client.link.last_packet_ms = self.svs_time_ms();
         log::info!("client {slot} {:?} connected from {from}", client.name);
         let name = client.name.clone();
-        self.clients[slot] = Some(client);
-        if let Some(rt) = self.script.as_mut() {
+        self.core.clients[slot] = Some(client);
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.push_client_event(ClientEvent::Connect { slot, name });
         }
         // A taken connect clears the stored ping (0x8085c16).
-        self.challenges[ci].ping = None;
+        self.core.challenges.taken(ci);
         self.send_oob(from, "connectResponse");
         // The first client, or the last the server holds (0x8085cd3).
         let count = self.client_count();
-        if count == 1 || count == self.clients.len() {
-            self.masters.force();
+        if count == 1 || count == self.core.clients.len() {
+            self.core.masters.force();
         }
     }
 
     /// The first slot at `start` or above neither a client nor a zombie
     /// holds.
     fn free_slot_from(&self, start: usize) -> Option<usize> {
-        (start..self.clients.len())
-            .find(|&i| self.clients[i].is_none() && self.zombies[i].is_none())
+        (start..self.core.clients.len())
+            .find(|&i| self.core.clients[i].is_none() && self.game.zombies[i].is_none())
     }
 
     /// The netchan half of `SV_PacketEvent`, then `SV_ExecuteClientMessage`.
@@ -2880,24 +2559,24 @@ impl Server {
         let qport = u16::from_le_bytes([pkt[4], pkt[5]]);
         let peer = |c: &Option<Client>| {
             c.as_ref()
-                .is_some_and(|c| c.addr.ip() == from.ip() && c.netchan.qport == qport)
+                .is_some_and(|c| c.link.addr.ip() == from.ip() && c.link.netchan.qport == qport)
         };
-        let Some(slot) = self.clients.iter().position(peer) else {
-            match self.zombies.iter().position(peer) {
+        let Some(slot) = self.core.clients.iter().position(peer) else {
+            match self.game.zombies.iter().position(peer) {
                 Some(slot) => self.zombie_packet(slot, pkt),
                 None => log::debug!("{from}: netchan packet from no client (qport {qport})"),
             }
             return;
         };
-        let Some(c) = self.clients[slot].as_ref() else {
+        let Some(c) = self.core.clients[slot].as_ref() else {
             return;
         };
-        let Some(m) = c.netchan.process_in(pkt) else {
+        let Some(m) = c.link.netchan.process_in(pkt) else {
             return;
         };
         // messageAcknowledge names a message we sent, so it is below
         // outgoing_sequence; retail only rejects a negative one.
-        if m.message_ack < 0 || m.message_ack >= c.netchan.outgoing_sequence as i32 {
+        if m.message_ack < 0 || m.message_ack >= c.link.netchan.outgoing_sequence as i32 {
             log::debug!(
                 "client {slot}: messageAcknowledge {} out of range",
                 m.message_ack
@@ -2907,7 +2586,7 @@ impl Server {
         // 0x808ca1a drops an ack too far behind. One ahead of what we sent is
         // bogus too; `write_pending_commands` walks `reliable_ack + 1 ..=
         // reliable_sequence`, so an unbounded value overflows or loops for ages.
-        let reliable_seq = c.netchan.reliable_sequence as i32;
+        let reliable_seq = c.link.netchan.reliable_sequence as i32;
         if m.reliable_ack < 0
             || m.reliable_ack > reliable_seq
             || reliable_seq.saturating_sub(m.reliable_ack) > MAX_RELIABLE_COMMANDS as i32 - 1
@@ -2919,9 +2598,9 @@ impl Server {
             return;
         }
 
-        if m.server_id != self.server_id {
-            let c = self.clients[slot].as_mut().unwrap();
-            if m.server_id & 0xf0 != self.server_id & 0xf0 {
+        if m.server_id != self.game.server_id {
+            let c = self.core.clients[slot].as_mut().unwrap();
+            if m.server_id & 0xf0 != self.game.server_id & 0xf0 {
                 // A map change from the client's view (a fresh client, serverId
                 // 0, looks the same). Resend the gamestate once its ack is past
                 // the last one. Until snapshots exist the gamestate is our only
@@ -2947,11 +2626,11 @@ impl Server {
         };
         // The new delta base commits before any op runs; a message that fails
         // to decode left it alone above.
-        self.clients[slot].as_mut().unwrap().last_cmd = last_cmd;
-        let c = self.clients[slot].as_mut().unwrap();
+        self.core.clients[slot].as_mut().unwrap().last_cmd = last_cmd;
+        let c = self.core.clients[slot].as_mut().unwrap();
         c.accept(&m, now, sv_time_ms);
-        c.addr = from; // NAT may move the port; the qport is the identity
-        self.packet_seq += 1;
+        c.link.addr = from; // NAT may move the port; the qport is the identity
+        self.game.packet_seq += 1;
         let mut commands_done = false;
         for op in ops {
             if !commands_done && matches!(op, ClientOp::Move(_)) {
@@ -2986,7 +2665,7 @@ impl Server {
         m: &ClientMessage,
         base: UserCmd,
     ) -> Option<(Vec<ClientOp>, UserCmd)> {
-        let mut r = MsgReader::new(&m.ops, &self.huff);
+        let mut r = MsgReader::new(&m.ops, &self.core.huff);
         let mut ops = Vec::new();
         let mut prev = base;
         loop {
@@ -3029,11 +2708,11 @@ impl Server {
         if !(1..=MAX_PACKET_USERCMDS).contains(&count) {
             return None;
         }
-        let cmd = &c.netchan.reliable[m.reliable_ack as usize & (MAX_RELIABLE_COMMANDS - 1)];
-        let key = self.checksum_feed ^ m.message_ack ^ com_hash_key(cmd, 32);
+        let cmd = &c.link.netchan.reliable[m.reliable_ack as usize & (MAX_RELIABLE_COMMANDS - 1)];
+        let key = self.core.checksum_feed ^ m.message_ack ^ com_hash_key(cmd, 32);
         let mut out = Vec::with_capacity(count as usize);
         for _ in 0..count {
-            match read_delta_usercmd_in(r, self.proto, key, prev) {
+            match read_delta_usercmd_in(r, self.game.proto, key, prev) {
                 Ok(next) => {
                     out.push(next);
                     *prev = next;
@@ -3050,13 +2729,13 @@ impl Server {
     /// `SV_ClientCommand`. Returns false when the client is gone.
     fn client_command(&mut self, slot: usize, seq: i32, s: String) -> bool {
         let svs_ms = self.svs_time_ms();
-        let Some(c) = self.clients[slot].as_mut() else {
+        let Some(c) = self.core.clients[slot].as_mut() else {
             return false;
         };
-        if seq <= c.last_client_command {
+        if seq <= c.link.last_client_command {
             return true;
         }
-        if seq > c.last_client_command.saturating_add(1) {
+        if seq > c.link.last_client_command.saturating_add(1) {
             self.drop_client(slot, "EXE_LOSTRELIABLECOMMANDS");
             return false;
         }
@@ -3076,11 +2755,11 @@ impl Server {
             .any(|p| trimmed.starts_with(p));
         let mut client_ok = true;
         if !exempt {
-            if c.state == ClientState::Active && svs_ms < c.next_reliable_ms {
+            if c.state == ClientState::Active && svs_ms < c.link.next_reliable_ms {
                 client_ok = false;
                 log::debug!("client text ignored for {}: {trimmed}", c.name);
             }
-            c.next_reliable_ms = svs_ms.wrapping_add(FLOOD_WINDOW_MS);
+            c.link.next_reliable_ms = svs_ms.wrapping_add(FLOOD_WINDOW_MS);
         }
         let engine_command = matches!(
             word,
@@ -3096,8 +2775,8 @@ impl Server {
                 | "wwwdl"
         );
         if !client_ok && !engine_command {
-            c.last_client_command = seq;
-            c.netchan.last_client_command_string = s;
+            c.link.last_client_command = seq;
+            c.link.netchan.last_client_command_string = s;
             return true;
         }
         match word {
@@ -3108,8 +2787,12 @@ impl Server {
             // `SV_VerifyPaks_f` and `SV_ResetPureClient_f`, run whatever
             // `sv_pure` says; only the drops read it.
             "cp" => {
-                let ok = self.pure_check.as_ref().is_some_and(|p| p.verify(trimmed));
-                if let Some(c) = self.clients[slot].as_mut() {
+                let ok = self
+                    .game
+                    .pure_check
+                    .as_ref()
+                    .is_some_and(|p| p.verify(trimmed));
+                if let Some(c) = self.core.clients[slot].as_mut() {
                     c.pure = if ok {
                         crate::client::Pure::Authentic
                     } else {
@@ -3118,7 +2801,7 @@ impl Server {
                 }
             }
             "vdr" => {
-                if let Some(c) = self.clients[slot].as_mut() {
+                if let Some(c) = self.core.clients[slot].as_mut() {
                     c.pure = crate::client::Pure::Unchecked;
                 }
             }
@@ -3126,14 +2809,14 @@ impl Server {
             // 0x80879fc, 0x8087a2c).
             "download" => {
                 let name = args.split_whitespace().next().unwrap_or("");
-                if let Some(c) = self.clients[slot].as_mut() {
+                if let Some(c) = self.core.clients[slot].as_mut() {
                     c.download = Some(crate::download::ServerDownload::new(name));
                 }
             }
             "nextdl" => {
                 let block = args.trim().parse::<i32>().unwrap_or(0);
                 let now = self.svs_time_ms();
-                let Some(c) = self.clients[slot].as_mut() else {
+                let Some(c) = self.core.clients[slot].as_mut() else {
                     return false;
                 };
                 use crate::download::NextDl;
@@ -3147,7 +2830,7 @@ impl Server {
                 }
             }
             "stopdl" => {
-                if let Some(c) = self.clients[slot].as_mut() {
+                if let Some(c) = self.core.clients[slot].as_mut() {
                     c.download = None;
                 }
             }
@@ -3155,7 +2838,7 @@ impl Server {
             // `SV_WWWDownload` (UO 0x808c298), the redirect's replies.
             "wwwdl" => {
                 let sub = args.split_whitespace().next().unwrap_or("");
-                let Some(c) = self.clients[slot].as_mut() else {
+                let Some(c) = self.core.clients[slot].as_mut() else {
                     return false;
                 };
                 let name = c.download.as_ref().map_or("", |d| d.name.as_str());
@@ -3175,7 +2858,7 @@ impl Server {
             }
             "retransdl" => {
                 let block = args.trim().parse::<i32>().unwrap_or(0);
-                if let Some(d) = self.clients[slot]
+                if let Some(d) = self.core.clients[slot]
                     .as_mut()
                     .and_then(|c| c.download.as_mut())
                 {
@@ -3187,11 +2870,11 @@ impl Server {
             // 6's obituaries and scoreboard are the first to notice.
             "userinfo" => {
                 let ui = args.trim().trim_matches('"').to_string();
-                if let Some(c) = self.clients[slot].as_mut() {
+                if let Some(c) = self.core.clients[slot].as_mut() {
                     if let Some(name) = info_value_for_key(&ui, "name") {
                         c.name = sanitize_name(name);
                     }
-                    c.userinfo = ui;
+                    c.link.userinfo = ui;
                 }
             }
             // `Cmd_Say_f` (0x47050): nothing without an argument. 1.5 adds
@@ -3214,9 +2897,10 @@ impl Server {
                     .split_once(char::is_whitespace)
                     .unwrap_or((args.trim(), ""));
                 if let Ok(to) = to.parse::<usize>()
-                    && self.clients.get(to).is_some_and(Option::is_some)
+                    && self.core.clients.get(to).is_some_and(Option::is_some)
                 {
                     let text = crate::game::say::concat_args(text).unwrap_or_default();
+                    self.log_tell(slot, to, &text);
                     self.say(slot, Some(to), SayMode::Tell, &text);
                     self.say(slot, Some(slot), SayMode::Tell, &text);
                 }
@@ -3234,8 +2918,8 @@ impl Server {
             // usercmds, so the move pass runs it ahead of the cmds that came
             // with it (combat doc, 9.2).
             "kill" => {
-                let packet = self.packet_seq;
-                if let Some(c) = self.clients[slot].as_mut()
+                let packet = self.game.packet_seq;
+                if let Some(c) = self.core.clients[slot].as_mut()
                     && !c.commands_at.iter().any(|(_, k)| *k == PacketCommand::Kill)
                 {
                     c.commands_at.push((packet, PacketCommand::Kill));
@@ -3259,19 +2943,19 @@ impl Server {
             // 0x4ede1): a living rider changes seats, in the move pass
             // after the cmds of every earlier packet, so the seat's
             // `SetClientViewAngle` bases `delta_angles` on the last of them.
-            "nextvehslot" | "prevvehslot" if self.proto.version == PROTOCOL_V22.version => {
-                let packet = self.packet_seq;
+            "nextvehslot" | "prevvehslot" if self.game.proto.is_uo() => {
+                let packet = self.game.packet_seq;
                 let back = word == "prevvehslot";
-                if let Some(c) = self.clients[slot].as_mut() {
+                if let Some(c) = self.core.clients[slot].as_mut() {
                     c.commands_at
                         .push((packet, PacketCommand::CycleSeat { back }));
                 }
             }
-            "fdc" if self.proto.version == PROTOCOL_V22.version => {
-                let now = self.sv_time_ms;
-                match fdc_inflictor(args, self.clients.len()) {
+            "fdc" if self.game.proto.is_uo() => {
+                let now = self.core.sv_time_ms;
+                match fdc_inflictor(args, self.core.clients.len()) {
                     Some(n) => {
-                        if let Some(c) = self.clients[slot].as_mut() {
+                        if let Some(c) = self.core.clients[slot].as_mut() {
                             c.flame = Some((n, now));
                         }
                     }
@@ -3280,10 +2964,10 @@ impl Server {
             }
             "mr" => {
                 if let Some((menu, response)) =
-                    parse_menu_response(trimmed, i32::from(self.server_id))
+                    parse_menu_response(trimmed, i32::from(self.game.server_id))
                 {
-                    let packet = self.packet_seq;
-                    if let Some(c) = self.clients[slot].as_mut() {
+                    let packet = self.game.packet_seq;
+                    if let Some(c) = self.core.clients[slot].as_mut() {
                         c.commands_at
                             .push((packet, PacketCommand::MenuResponse(menu, response)));
                     }
@@ -3291,18 +2975,18 @@ impl Server {
             }
             other => log::debug!("client {slot}: command {other:?} ignored"),
         }
-        let Some(c) = self.clients[slot].as_mut() else {
+        let Some(c) = self.core.clients[slot].as_mut() else {
             return false;
         };
-        c.last_client_command = seq;
-        c.netchan.last_client_command_string = s;
+        c.link.last_client_command = seq;
+        c.link.netchan.last_client_command_string = s;
         true
     }
 
     /// `SV_UserMove` past the parse: queue the block for the next tick's
     /// replay. A flood past the cap drops the oldest cmds, not the newest.
     fn user_move(&mut self, slot: usize, cmds: Vec<UserCmd>) {
-        let Some(c) = self.clients[slot].as_mut() else {
+        let Some(c) = self.core.clients[slot].as_mut() else {
             return;
         };
         // The first usercmd after a gamestate is what puts a client in the
@@ -3314,17 +2998,17 @@ impl Server {
         }
         // `SV_UserMove` (0x8086fa4) drops a client a pure server has had no
         // `cp` from, after the entry and before any cmd runs.
-        if self.paks.pure
-            && self.clients[slot]
+        if self.game.paks.pure
+            && self.core.clients[slot]
                 .as_ref()
                 .is_some_and(|c| !c.is_bot && c.pure == crate::client::Pure::Unchecked)
         {
             self.drop_client(slot, "EXE_CANNOTVALIDATEPURECLIENT");
             return;
         }
-        let packet = self.packet_seq;
-        let acked = self.ack_time_ms.unwrap_or(self.svs_time_ms());
-        let Some(c) = self.clients[slot].as_mut() else {
+        let packet = self.game.packet_seq;
+        let acked = self.game.ack_time_ms.unwrap_or(self.svs_time_ms());
+        let Some(c) = self.core.clients[slot].as_mut() else {
             return;
         };
         c.stamp_acked(acked);
@@ -3338,8 +3022,8 @@ impl Server {
     /// commands ran: a pure server drops a client whose `cp` failed. False
     /// when it did.
     fn pure_after_commands(&mut self, slot: usize) -> bool {
-        let unpure = self.paks.pure
-            && self.clients[slot]
+        let unpure = self.game.paks.pure
+            && self.core.clients[slot]
                 .as_ref()
                 .is_some_and(|c| c.pure == crate::client::Pure::Unpure);
         if unpure {
@@ -3350,34 +3034,39 @@ impl Server {
 
     /// `SV_SendClientGameState`.
     fn send_gamestate(&mut self, slot: usize) {
-        let is_bot = self.clients[slot].as_ref().is_some_and(|c| c.is_bot);
-        let (dedicated, max_rate) = (self.dedicated, self.live_int_cvar("sv_maxRate"));
+        let is_bot = self.core.clients[slot].as_ref().is_some_and(|c| c.is_bot);
+        let (dedicated, max_rate) = (self.game.dedicated, self.live_int_cvar("sv_maxRate"));
         let svs_ms = self.svs_time_ms();
-        let Some(c) = self.clients[slot].as_mut() else {
+        let Some(c) = self.core.clients[slot].as_mut() else {
             return;
         };
         c.state = ClientState::Primed;
         // The client restarts its usercmd chain on every gamestate it
         // receives, so the base it deltas against restarts here too.
         c.last_cmd = NULL_USERCMD;
-        c.gamestate_message_num = i64::from(c.netchan.outgoing_sequence);
-        let mut w = MsgWriter::new(&self.huff);
-        write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
-        c.reliable_sent = c.netchan.reliable_sequence as i32;
+        c.gamestate_message_num = i64::from(c.link.netchan.outgoing_sequence);
+        let mut w = MsgWriter::new(&self.core.huff);
+        write_pending_commands(&mut w, &c.link.netchan, c.link.reliable_ack);
+        c.link.reliable_sent = c.link.netchan.reliable_sequence as i32;
         let gs = Gamestate {
-            configstrings: self.configstrings.clone(),
-            baselines: self.baselines.clone(),
+            configstrings: self.core.configstrings.clone(),
+            baselines: self.game.baselines.clone(),
             client_num: slot as i32,
-            checksum_feed: self.checksum_feed,
-            server_command_sequence: c.netchan.reliable_sequence as i32,
+            checksum_feed: self.core.checksum_feed,
+            server_command_sequence: c.link.netchan.reliable_sequence as i32,
         };
-        gamestate::write(&mut w, self.proto, &gs);
+        self.game.proto.write_gamestate(&mut w, &gs);
         let ops = w.into_ops();
         log::info!("client {slot}: gamestate, {} bytes", ops.len());
-        if ops.len() > MAX_GAMESTATE_BYTES {
+        let max = if self.game.proto.is_uo() {
+            MAX_GAMESTATE_BYTES_UO
+        } else {
+            MAX_GAMESTATE_BYTES
+        };
+        if ops.len() > max {
             // Retail's message buffer would cut it here, unchecked.
             log::warn!(
-                "client {slot}: gamestate is {} bytes, past retail's {MAX_GAMESTATE_BYTES}",
+                "client {slot}: gamestate is {} bytes, past retail's {max}",
                 ops.len()
             );
         }
@@ -3387,16 +3076,20 @@ impl Server {
         }
         // The fragments left of an earlier message all go first, in this
         // turn (0x8085f34).
-        self.outbox
-            .extend(c.unsent.drain(..).map(|pkt| (c.addr, pkt)));
-        c.stamp_sent(c.netchan.outgoing_sequence, svs_ms);
+        self.core
+            .outbox
+            .extend(c.link.unsent.drain(..).map(|pkt| (c.link.addr, pkt)));
+        c.stamp_sent(c.link.netchan.outgoing_sequence, svs_ms);
         let rate = c.send_rate(dedicated, max_rate);
-        let sent = c.netchan.transmit(c.last_client_command, &ops, &self.huff);
+        let sent = c
+            .link
+            .netchan
+            .transmit(c.link.last_client_command, &ops, &self.core.huff);
         let msec = c.snapshot_msec();
         c.pace(svs_ms, sent.iter().map(Vec::len).sum(), rate, msec);
         // The first fragment now, the rest one per turn as any message's.
         if let Some(pkt) = c.first_packet(sent) {
-            self.outbox.push((c.addr, pkt));
+            self.core.outbox.push((c.link.addr, pkt));
         }
     }
 
@@ -3408,7 +3101,7 @@ impl Server {
     /// retail's `EXE_SERVERCOMMANDOVERFLOW` (docs/protocol-1.1.md, "The
     /// server command queue").
     fn send_server_command(&mut self, slot: usize, cmd: &str) {
-        let Some(c) = self.clients[slot].as_mut() else {
+        let Some(c) = self.core.clients[slot].as_mut() else {
             return;
         };
         match c.queue_server_command(cmd) {
@@ -3424,8 +3117,10 @@ impl Server {
     /// is already culled, so reading one back would test the cull twice and
     /// the object table not at all.
     pub fn all_entities(&mut self) -> BTreeMap<u32, msg::EntityState> {
-        let proto = self.proto;
-        self.script
+        let proto = self.game.proto;
+        self.game
+            .module
+            .script
             .as_mut()
             .map_or_else(BTreeMap::new, |rt| rt.packet_entities(proto))
     }
@@ -3434,7 +3129,7 @@ impl Server {
     /// Test-facing: a gate about what two clients see of each other needs them
     /// somewhere known, and both spawn weighted-random.
     pub fn place_client(&mut self, slot: usize, origin: [f32; 3], yaw_deg: f32) {
-        let Some(c) = self.clients.get_mut(slot).and_then(Option::as_mut) else {
+        let Some(c) = self.core.clients.get_mut(slot).and_then(Option::as_mut) else {
             return;
         };
         if let Some(sim) = c.sim.as_mut() {
@@ -3448,7 +3143,7 @@ impl Server {
         }
         // What a spawn into play leaves; the next end frame rewrites it off
         // the script's `sessionstate`.
-        if let Some(rt) = self.script.as_mut() {
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.set_client_takedamage(slot, true);
         }
     }
@@ -3458,10 +3153,11 @@ impl Server {
     /// `place_client`: it puts a second gunner on a map with one reachable
     /// gun. False when either is missing or the gun is manned.
     pub fn test_mount(&mut self, slot: usize, gun: u32, mount_origin: [f32; 3]) -> bool {
-        let Some(rt) = self.script.as_mut() else {
+        let Some(rt) = self.game.module.script.as_mut() else {
             return false;
         };
         let Some(sim) = self
+            .core
             .clients
             .get_mut(slot)
             .and_then(Option::as_mut)
@@ -3494,7 +3190,7 @@ impl Server {
     /// Writes a client's `sessionteam` and nothing else. Test-facing: a 1.5
     /// match timeout needs a side, which a `dm` probe gametype gives no one.
     pub fn test_set_client_team(&mut self, slot: usize, team: &str) {
-        if let Some(rt) = self.script.as_mut() {
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.set_client_team_for_test(slot, team);
         }
     }
@@ -3504,6 +3200,7 @@ impl Server {
     /// capture's settled origin where the join left ours elsewhere.
     pub fn test_set_client_origin(&mut self, slot: usize, origin: [f32; 3]) {
         if let Some(sim) = self
+            .core
             .clients
             .get_mut(slot)
             .and_then(Option::as_mut)
@@ -3519,6 +3216,8 @@ impl Server {
     /// `probe_bump.gsc` did on retail.
     pub fn test_script_set_origin(&mut self, slot: usize, origin: [f32; 3]) {
         let rt = self
+            .game
+            .module
             .script
             .as_mut()
             .expect("a script runtime to queue the setorigin on");
@@ -3530,7 +3229,7 @@ impl Server {
     /// Moves the entity numbered `num` as script would. Test-facing, like
     /// `test_mount`: carentan's second gun sits out of the first one's arc.
     pub fn test_place_entity(&mut self, num: u32, origin: [f32; 3], angles: [f32; 3]) {
-        if let Some(rt) = self.script.as_mut() {
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.place_entity(num, origin, angles);
         }
     }
@@ -3539,12 +3238,12 @@ impl Server {
     /// tick's radius damage pass charged them. Test-facing: the replay in
     /// `tests/common` counts them per frame.
     pub fn pending_explosions(&self) -> &[crate::game::missile::Explosion] {
-        &self.pending_explosions
+        &self.game.module.pending_explosions
     }
 
     /// [`scoreboard`] for this server's clients.
     fn scoreboard(&mut self) -> String {
-        scoreboard(&self.clients, self.script.as_mut())
+        scoreboard(&self.core.clients, self.game.module.script.as_mut())
     }
 
     /// `Cmd_MatchTimeout_f` or `Cmd_MatchTimein_f`, inside the packet as
@@ -3552,18 +3251,18 @@ impl Server {
     /// sends them, ahead of the `e` lines, and the `timescale` write
     /// reaches the cvar mirror at the next frame's flush.
     fn match_timeout(&mut self, slot: usize, timein: bool) {
-        let intermission = self.clients[slot]
+        let intermission = self.core.clients[slot]
             .as_ref()
             .and_then(|c| c.sim.as_ref())
             .is_some_and(|s| s.pm_type == crate::spectate::PmType::Intermission);
         let now = self.svs_time_ms();
-        let Some(rt) = self.script.as_mut() else {
+        let Some(rt) = self.game.module.script.as_mut() else {
             return;
         };
         if intermission {
             return;
         }
-        mirror_roster(&self.clients, rt);
+        mirror_roster(&self.core.clients, rt);
         let out = rt.match_timeout(slot, timein, now);
         self.copy_timeout_configstrings();
         for (to, cmd) in out {
@@ -3577,18 +3276,18 @@ impl Server {
     /// `callvote` or `vote` inside the packet: the lines go out first, then
     /// the vote configstrings the command wrote, as retail sends them.
     fn vote_command(&mut self, slot: usize, line: &str) {
-        let intermission = self.clients[slot]
+        let intermission = self.core.clients[slot]
             .as_ref()
             .and_then(|c| c.sim.as_ref())
             .is_some_and(|s| s.pm_type == crate::spectate::PmType::Intermission);
         let svs_ms = self.svs_time_ms();
-        let Some(rt) = self.script.as_mut() else {
+        let Some(rt) = self.game.module.script.as_mut() else {
             return;
         };
         if intermission {
             return;
         }
-        mirror_roster(&self.clients, rt);
+        mirror_roster(&self.core.clients, rt);
         let argv = crate::game::say::tokenize(line);
         let out = rt.vote_command(slot, &argv, svs_ms);
         // `trap_DropClient` comes before the voter's `m -1`.
@@ -3607,7 +3306,7 @@ impl Server {
                 None => self.send_to_all(&cmd),
             }
         }
-        let at = self.proto.cs.vote;
+        let at = self.game.proto.cs.vote;
         self.copy_game_configstrings(at..=at + 3);
     }
 
@@ -3616,6 +3315,7 @@ impl Server {
     /// not wait for the frame's diff.
     fn copy_timeout_configstrings(&mut self) {
         let at = self
+            .game
             .proto
             .cs
             .match_timeout
@@ -3626,13 +3326,14 @@ impl Server {
     /// Configstrings off the game's table, sent at once, as a
     /// `trap_SetConfigstring` outside the frame's diff sends them.
     fn copy_game_configstrings(&mut self, slots: impl IntoIterator<Item = usize>) {
-        let Some(rt) = self.script.as_ref() else {
+        let Some(rt) = self.game.module.script.as_ref() else {
             return;
         };
         for i in slots {
-            if let (Some(to), Some(from)) =
-                (self.configstrings.get_mut(i), rt.configstrings().get(i))
-            {
+            if let (Some(to), Some(from)) = (
+                self.core.configstrings.get_mut(i),
+                rt.configstrings().get(i),
+            ) {
                 to.clone_from(from);
             }
         }
@@ -3641,8 +3342,8 @@ impl Server {
 
     /// `SV_SendServerCommand(NULL, ..)`: every client that has its gamestate.
     fn send_to_all(&mut self, cmd: &str) {
-        for slot in 0..self.clients.len() {
-            if self.clients[slot]
+        for slot in 0..self.core.clients.len() {
+            if self.core.clients[slot]
                 .as_ref()
                 .is_some_and(|c| c.state != ClientState::Connected)
             {
@@ -3654,11 +3355,35 @@ impl Server {
     /// `G_Say`: retail's `trap_SendServerCommand` queues the line from
     /// inside `ClientCommand`, and so does this. Nothing without a script, which is
     /// where the teams and session states live.
-    fn say(&mut self, slot: usize, target: Option<usize>, mode: SayMode, text: &str) {
-        let Some(rt) = self.script.as_mut() else {
+    /// `Cmd_Tell_f`'s log line ahead of its two `G_Say`s: 1.1's `tell: %s
+    /// to %s: %s` (0x47210), 1.5's and UO's `tell;%d;%d;%s;%d;%d;%s;%s`
+    /// (each side's GUID, 0 with no authorize, slot and name), the names
+    /// as sent (cod11-map-cycle.md 9).
+    fn log_tell(&mut self, slot: usize, to: usize, text: &str) {
+        let name = |s: usize| -> String {
+            self.core
+                .clients
+                .get(s)
+                .and_then(Option::as_ref)
+                .map_or(String::new(), |c| c.name.clone())
+        };
+        let (from_name, to_name) = (name(slot), name(to));
+        let Some(rt) = self.game.module.script.as_mut() else {
             return;
         };
-        mirror_roster(&self.clients, rt);
+        let line = if rt.host.logs_1_1() {
+            format!("tell: {from_name} to {to_name}: {text}\n")
+        } else {
+            format!("tell;0;{slot};{from_name};0;{to};{to_name};{text}\n")
+        };
+        rt.host.log_printf(line);
+    }
+
+    fn say(&mut self, slot: usize, target: Option<usize>, mode: SayMode, text: &str) {
+        let Some(rt) = self.game.module.script.as_mut() else {
+            return;
+        };
+        mirror_roster(&self.core.clients, rt);
         for (to, cmd) in rt.say(slot, target, mode, text) {
             self.send_server_command(to, &cmd);
         }
@@ -3669,7 +3394,7 @@ impl Server {
     /// a gate can see each landing and rest it where a retail capture's draw
     /// put it.
     pub fn test_item_lifts(&mut self, f: crate::game::host::ItemLift) {
-        if let Some(rt) = self.script.as_mut() {
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.host.test_item_lift = Some(f);
         }
     }
@@ -3678,7 +3403,7 @@ impl Server {
     /// the server's own (`game::item`'s `unit_draw`), so a gate can launch a
     /// drop with the climb and spin a retail capture shows.
     pub fn pin_item_draws(&mut self, draws: Vec<i32>) {
-        if let Some(rt) = self.script.as_mut() {
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.host.item_draw_pins = draws.into();
         }
     }
@@ -3686,7 +3411,7 @@ impl Server {
     /// Test-facing: the missile pool's next draws, a retail capture's
     /// tumble rates and bounce factors (`Missiles::pin_draws`).
     pub fn pin_missile_draws(&mut self, draws: Vec<f64>) {
-        if let Some(rt) = self.script.as_mut() {
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.host.missiles.pin_draws(draws);
         }
     }
@@ -3694,13 +3419,13 @@ impl Server {
     /// Test-facing: the `gunrandom` pairs the next rockets' spread takes,
     /// read off retail under gdb (combat doc 13.6).
     pub fn pin_spread_draws(&mut self, draws: Vec<(f32, f32)>) {
-        self.spread_draws = draws.into();
+        self.game.module.spread_draws = draws.into();
     }
 
     /// Test-facing: the next rockets' `trDelta`, a retail capture's
     /// (`Missiles::pin_rocket_deltas`).
     pub fn pin_rocket_deltas(&mut self, deltas: Vec<[f32; 3]>) {
-        if let Some(rt) = self.script.as_mut() {
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.host
                 .missiles
                 .pin_rocket_deltas(deltas.into_iter().map(glam::Vec3::from));
@@ -3710,7 +3435,7 @@ impl Server {
     /// Test-facing: the outcomes of the next UO turret rounds' tracer rolls,
     /// one per player hit, as a retail capture drew them.
     pub fn pin_tracer_rolls(&mut self, rolls: Vec<bool>) {
-        if let Some(rt) = self.script.as_mut() {
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.host.tracer_pins = rolls.into();
         }
     }
@@ -3718,13 +3443,13 @@ impl Server {
     /// Test-facing: raise entity `num` by `dz` (an `origin` write) and return
     /// its origin; `dz` 0 only reads it.
     pub fn test_raise_entity(&mut self, num: u32, dz: f32) -> Option<[f32; 3]> {
-        self.script.as_mut()?.raise_entity(num, dz)
+        self.game.module.script.as_mut()?.raise_entity(num, dz)
     }
 
     /// Test-facing: `self pingPlayer()` on `slot`, with no script to call
     /// it.
     pub fn test_ping_player(&mut self, slot: usize) {
-        if let Some(rt) = self.script.as_mut() {
+        if let Some(rt) = self.game.module.script.as_mut() {
             let until = rt.host.level_time_ms + 3000;
             if let Some(p) = rt.host.client_ping_until.get_mut(slot) {
                 *p = until;
@@ -3735,7 +3460,7 @@ impl Server {
     /// Test-facing: `self giveWeapon(name)` on `slot` without its ammo, for
     /// a weapon no stock loadout hands out. False for an unknown name.
     pub fn test_give_weapon(&mut self, slot: usize, name: &str) -> bool {
-        let Some(rt) = self.script.as_mut() else {
+        let Some(rt) = self.game.module.script.as_mut() else {
             return false;
         };
         let Some(index) = rt.host.defs.weapon_index(name) else {
@@ -3751,7 +3476,7 @@ impl Server {
     /// name.
     pub fn test_give_max_ammo(&mut self, slot: usize, name: &str) -> bool {
         use crate::game::host::WeaponOp;
-        let Some(rt) = self.script.as_mut() else {
+        let Some(rt) = self.game.module.script.as_mut() else {
             return false;
         };
         let Some(index) = rt.host.defs.weapon_index(name) else {
@@ -3784,8 +3509,8 @@ impl Server {
     /// gate that needs a shot to land where it did once can have it again.
     /// The bots added after it draw their own streams off `seed` too.
     pub fn test_seed_rng(&mut self, seed: u64) {
-        self.rng = seed | 1;
-        self.bot_admin.seed_rng = bot_admin::seed_stream(seed);
+        self.core.rng = seed | 1;
+        self.game.module.bot_admin.seed_rng = bot_admin::seed_stream(seed);
     }
 
     /// Whether a shot fired from eye height at `origin` along `yaw_deg`
@@ -3795,7 +3520,7 @@ impl Server {
     /// into a wall reads as "the damage path is broken". A server with no
     /// collision world answers yes.
     pub fn test_clear_line(&self, origin: [f32; 3], yaw_deg: f32, dist: f32) -> bool {
-        let Some(world) = self.world.as_ref() else {
+        let Some(world) = self.game.world.as_ref() else {
             return true;
         };
         let stand = vcod_common::pmove::Stance::Stand.view_height();
@@ -3811,7 +3536,7 @@ impl Server {
     /// live blast also meets are left out. 0 is a player the blast cannot
     /// see at all.
     pub fn test_can_damage(&self, at: [f32; 3], feet: [f32; 3]) -> f32 {
-        let Some(world) = self.world.as_ref() else {
+        let Some(world) = self.game.world.as_ref() else {
             return 1.0;
         };
         let v = standing_blast_victim(feet);
@@ -3828,26 +3553,29 @@ impl Server {
         feet: [f32; 3],
         slot: usize,
     ) -> f32 {
-        let Some(world) = self.world.as_ref() else {
+        let Some(world) = self.game.world.as_ref() else {
             return 1.0;
         };
         let bodies: Vec<crate::game::combat::HitBody> = self
+            .core
             .clients
             .iter()
             .enumerate()
             .filter_map(|(i, c)| c.as_ref()?.sim.as_ref()?.hit_body(i))
             .collect();
         let models = self
+            .game
+            .module
             .script
             .as_mut()
             .map_or_else(Vec::new, |rt| rt.placed_script_models());
         let mut bones = crate::game::combat::BoneTraceCtx::of(
-            self.fs.as_deref(),
-            self.anims.as_deref(),
-            &mut self.hit_rigs,
-            self.sv_time_ms,
-            dobj_stamps(self.script.as_mut()),
-            vcod_common::patch::Arith::for_protocol(self.proto),
+            self.game.fs.as_deref(),
+            self.game.module.anims.as_deref(),
+            &mut self.game.module.hit_rigs,
+            self.core.sv_time_ms,
+            dobj_stamps(self.game.module.script.as_mut()),
+            vcod_common::patch::Arith::for_protocol(self.game.proto),
         );
         let mut v = standing_blast_victim(feet);
         v.slot = slot;
@@ -3868,7 +3596,7 @@ impl Server {
     /// goal. On the graph means within a pitch of a node on the same floor:
     /// `nearest` alone answers from a bank for a point down in a ditch.
     pub fn test_nav_route(&self, from: [f32; 3], to: [f32; 3]) -> Option<f32> {
-        let g = self.nav.as_ref()?;
+        let g = self.game.module.driver.nav.as_ref()?;
         let on = |p: [f32; 3]| {
             let n = g.nearest(p)?;
             let d = g.nodes[n as usize] - glam::Vec3::from(p);
@@ -3885,7 +3613,7 @@ impl Server {
     /// Test-facing: what a standing box dropped from `p` lands on, and
     /// where, as `CollisionWorld::describe` names it.
     pub fn test_floor_under(&self, p: [f32; 3]) -> Option<(f32, String)> {
-        let world = self.world.as_ref()?;
+        let world = self.game.world.as_ref()?;
         use vcod_common::pmove::{HALF_WIDTH, Stance};
         let mins = glam::Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0);
         let maxs = glam::Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height());
@@ -3904,13 +3632,14 @@ impl Server {
     /// Test-facing: entity `ent`'s box in the area tree (`r.absmin`,
     /// `r.absmax`), `None` while it is not linked.
     pub fn test_area_link(&self, ent: u32) -> Option<([f32; 3], [f32; 3])> {
-        let link = self.script.as_ref()?.host.area.last_link(ent)?;
+        let link = self.game.module.script.as_ref()?.host.area.last_link(ent)?;
         Some((link.absmin, link.absmax))
     }
 
     /// Test-facing: whether submodel `m`'s brushes clip.
     pub fn test_model_linked(&self, m: usize) -> bool {
-        self.world
+        self.game
+            .world
             .as_ref()
             .is_some_and(|w| w.collision.model_linked(m))
     }
@@ -3920,7 +3649,7 @@ impl Server {
     /// 256 units. What a test needs to put a second client somewhere the map
     /// actually holds one.
     pub fn test_ground_under(&self, p: [f32; 3]) -> Option<[f32; 3]> {
-        let world = self.world.as_ref()?;
+        let world = self.game.world.as_ref()?;
         use vcod_common::pmove::{HALF_WIDTH, Stance};
         let mins = glam::Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0);
         let maxs = glam::Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height());
@@ -3935,14 +3664,16 @@ impl Server {
     /// number. Test-facing, like `place_client`: `cloneplayer` is the script
     /// path that will call this, and it does not exist yet.
     pub fn test_push_body(&mut self, slot: usize) -> Option<u32> {
-        let c = self.clients.get(slot)?.as_ref()?;
+        let c = self.core.clients.get(slot)?.as_ref()?;
         let state = c
             .sim
             .as_ref()?
-            .to_entity(self.proto, slot, c.last_processed_st);
-        let (now, proto) = (self.sv_time_ms, self.proto);
-        let collision = self.world.as_ref().map(|w| &w.collision);
-        self.script
+            .to_entity(self.game.proto, slot, c.last_processed_st);
+        let (now, proto) = (self.core.sv_time_ms, self.game.proto);
+        let collision = self.game.world.as_ref().map(|w| &w.collision);
+        self.game
+            .module
+            .script
             .as_mut()
             .map(|rt| rt.bodies_mut().push(state, None, now, collision, proto))
     }
@@ -3950,7 +3681,7 @@ impl Server {
     /// Raises one event for the next snapshot build. Test-facing, like
     /// `test_push_body`: the script builtins are what raise these in earnest.
     pub fn test_push_temp_entity(&mut self, te: temp_entity::TempEntity) {
-        if let Some(rt) = self.script.as_mut() {
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.push_temp_entity(te);
         }
     }
@@ -3958,7 +3689,7 @@ impl Server {
     /// Puts a client back to spectating, where every client starts and where
     /// a dead one waits. Test-facing, like `place_client`.
     pub fn spectate_client(&mut self, slot: usize, origin: [f32; 3]) {
-        let Some(c) = self.clients.get_mut(slot).and_then(Option::as_mut) else {
+        let Some(c) = self.core.clients.get_mut(slot).and_then(Option::as_mut) else {
             return;
         };
         if let Some(sim) = c.sim.as_mut() {
@@ -3970,11 +3701,11 @@ impl Server {
     /// the script side reads, for the gate that pins both. Test-facing: the
     /// server itself never asks.
     pub fn script_players(&mut self) -> Vec<(usize, [f32; 3])> {
-        let Some(rt) = self.script.as_mut() else {
+        let Some(rt) = self.game.module.script.as_mut() else {
             return Vec::new();
         };
-        let live: Vec<usize> = (0..self.clients.len())
-            .filter(|slot| self.clients[*slot].is_some())
+        let live: Vec<usize> = (0..self.core.clients.len())
+            .filter(|slot| self.core.clients[*slot].is_some())
             .collect();
         let mut out = Vec::new();
         for slot in live {
@@ -3988,11 +3719,12 @@ impl Server {
     /// `SV_DropClient` (cod_lnxded 0x8085cf4). The game's `ClientDisconnect`
     /// runs inside it: on 1.1 after the drop notice, on 1.5 and UO before it
     /// (cod11-server-handshake.md, "When the game hears a drop"). The slot
-    /// goes `CS_ZOMBIE` with the drop notice queued, and `send_zombies`
-    /// keeps sending it until [`ZOMBIE_TIME`] past the client's last packet.
+    /// goes `CS_ZOMBIE` with the drop notice queued, and its slot's turn
+    /// keeps sending it until `check_timeouts` frees it, [`ZOMBIE_TIME`]
+    /// past the client's last packet.
     /// A bot has nobody to tell and is freed now.
     fn drop_client(&mut self, slot: usize, reason: &str) {
-        let Some(mut c) = self.clients[slot].take() else {
+        let Some(mut c) = self.core.clients[slot].take() else {
             return;
         };
         let v15 = self.v15();
@@ -4000,19 +3732,16 @@ impl Server {
         if v15 {
             own = self.client_disconnect(slot);
         }
-        // Match on ip, not `ch.addr == c.addr`; NAT may have moved the port
-        // since the challenge was issued and the slot would stay `connected`.
-        for ch in &mut self.challenges {
-            if ch.addr.ip() == c.addr.ip() && ch.challenge == c.netchan.challenge {
-                ch.connected = false;
-            }
+        // The first slot with the client's address (0x8085cf4).
+        if !c.is_bot {
+            self.core.challenges.release(c.link.addr);
         }
         log::debug!("Going to CS_ZOMBIE for {}", c.name);
         // Everyone else is told unless the client left on its own.
         if reason != "EXE_DISCONNECTED" {
             let notice = format!("e \"\u{15}{}^7 \u{14}{reason}\"", c.name);
-            for other in 0..self.clients.len() {
-                if self.clients[other]
+            for other in 0..self.core.clients.len() {
+                if self.core.clients[other]
                     .as_ref()
                     .is_some_and(|o| o.state != ClientState::Connected)
                 {
@@ -4034,17 +3763,17 @@ impl Server {
         c.squash_ignorable();
         // Appended with no guard: the notice must not be dropped, and a full
         // ring cannot drop a client twice.
-        c.netchan.reliable_sequence += 1;
-        let at = c.netchan.reliable_sequence as usize & (MAX_RELIABLE_COMMANDS - 1);
-        c.netchan.reliable[at] = format!("w \"{reason}\"");
+        c.link.netchan.reliable_sequence += 1;
+        let at = c.link.netchan.reliable_sequence as usize & (MAX_RELIABLE_COMMANDS - 1);
+        c.link.netchan.reliable[at] = format!("w \"{reason}\"");
         c.reliable_kind[at] = CmdKind::Reliable;
         if !c.is_bot {
             c.zombie = true;
-            self.zombies[slot] = Some(c);
+            self.game.zombies[slot] = Some(c);
         }
         // The last client gone (0x8085ebc).
         if self.client_count() == 0 {
-            self.masters.force();
+            self.core.masters.force();
         }
     }
 
@@ -4056,21 +3785,21 @@ impl Server {
     /// (`client-probes/probe_dropclient`). Returns the commands addressed
     /// to the leaver's own slot, for its zombie.
     fn client_disconnect(&mut self, slot: usize) -> Vec<String> {
-        let collision = self.world.as_ref().map(|w| &w.collision);
+        let collision = self.game.world.as_ref().map(|w| &w.collision);
         // 1.5's and UO's `ClientDisconnect` stops a follower outright
         // (1.5b 0x4cf5f, UO 0x55433); 1.1's cycles first.
         let cycle = !self.v15();
         pass_followers_on(
-            &mut self.clients,
+            &mut self.core.clients,
             slot,
-            self.script.as_mut(),
+            self.game.module.script.as_mut(),
             collision,
             cycle,
         );
-        let Some(rt) = self.script.as_mut() else {
+        let Some(rt) = self.game.module.script.as_mut() else {
             return Vec::new();
         };
-        mirror_roster(&self.clients, rt);
+        mirror_roster(&self.core.clients, rt);
         rt.client_disconnect(slot);
         let written: Vec<usize> = rt
             .host
@@ -4081,7 +3810,7 @@ impl Server {
             .collect();
         let commands = rt.take_client_commands();
         let console = rt.take_console();
-        self.console.extend(console);
+        self.core.console.extend(console);
         self.copy_game_configstrings(written);
         let mut own = Vec::new();
         for (to, cmd) in commands {
@@ -4098,20 +3827,20 @@ impl Server {
     /// drop notice the client has seen stops being resent; nothing in it is
     /// executed and it does not hold the slot open (0x808ca44).
     fn zombie_packet(&mut self, slot: usize, pkt: &[u8]) {
-        let Some(z) = self.zombies[slot].as_mut() else {
+        let Some(z) = self.game.zombies[slot].as_mut() else {
             return;
         };
-        let Some(m) = z.netchan.process_in(pkt) else {
+        let Some(m) = z.link.netchan.process_in(pkt) else {
             return;
         };
-        let seq = z.netchan.reliable_sequence as i32;
-        if (0..z.netchan.outgoing_sequence as i32).contains(&m.message_ack) {
+        let seq = z.link.netchan.reliable_sequence as i32;
+        if (0..z.link.netchan.outgoing_sequence as i32).contains(&m.message_ack) {
             z.message_ack = m.message_ack;
         }
         if (0..=seq).contains(&m.reliable_ack)
             && seq - m.reliable_ack < MAX_RELIABLE_COMMANDS as i32
         {
-            z.reliable_ack = m.reliable_ack;
+            z.link.reliable_ack = m.reliable_ack;
         }
     }
 
@@ -4127,8 +3856,8 @@ impl Server {
         let allow = self
             .level_cvar("sv_allowDownload")
             .is_none_or(|v| v.trim().parse::<i32>().unwrap_or(0) != 0);
-        let pure = self.paks.pure;
-        let fs = self.fs.clone();
+        let pure = self.game.paks.pure;
+        let fs = self.game.fs.clone();
         // No stock-pak refusal: retail's `FS_idPak` test gets the name with
         // its `.pk3` and never matches, so both retail servers send a stock
         // pak a client asks for (handshake doc, "Serving a download").
@@ -4157,7 +3886,7 @@ impl Server {
             crate::download::WwwConfig {
                 base_url: self.live_cvar("sv_wwwBaseURL", ""),
                 disconnected: self.live_int_cvar("sv_wwwDlDisconnected") != 0,
-                udp_fallback: self.proto.version != PROTOCOL_V22.version,
+                udp_fallback: !self.game.proto.is_uo(),
             }
         })
     }
@@ -4166,70 +3895,59 @@ impl Server {
     /// retail writes the server commands and the snapshot only for an
     /// active client (or a zombie), so the message is the header and the
     /// download blocks, or the bare header (9 bytes on the wire) for a
-    /// client that is not downloading. It goes out when the client's
-    /// `nextSnapshotTime` comes round, as every message does
+    /// client that is not downloading. It goes out on the slot's own turn
+    /// once its `nextSnapshotTime` comes round, as every message does
     /// ([`Client::pace`]: every frame on a LAN, else at least a second
     /// apart while not downloading); a client in the world gets its blocks
-    /// after its snapshot in [`Self::send_snapshots`].
-    fn send_unentered(&mut self) {
-        let open = self.download_opener();
-        let www = self.www_config();
-        let max_rate = self.live_int_cvar("sv_maxRate");
-        let (dedicated, now) = (self.dedicated, self.svs_time_ms());
-        for c in self.clients.iter_mut().flatten() {
-            if c.sim.is_some() || c.is_bot || now < c.next_message_ms {
-                continue;
-            }
-            let rate = c.send_rate(dedicated, max_rate);
-            if let Some(pkt) = c.next_fragment(now, rate) {
-                self.outbox.push((c.addr, pkt));
-                continue;
-            }
-            let mut w = MsgWriter::new(&self.huff);
-            write_download(c, &mut w, now, rate, &open, www.as_ref());
-            c.stamp_sent(c.netchan.outgoing_sequence, now);
-            let sent = c
+    /// after its snapshot in [`Self::send_client_snapshot`].
+    fn send_unentered(&mut self, slot: usize, snaps: &Cod1Snapshots) {
+        let (dedicated, now) = (self.game.dedicated, self.svs_time_ms());
+        let Some(c) = self.core.clients[slot].as_mut() else {
+            return;
+        };
+        let rate = c.send_rate(dedicated, snaps.max_rate);
+        let mut w = MsgWriter::new(&self.core.huff);
+        write_download(c, &mut w, now, rate, &snaps.open, snaps.www.as_ref());
+        c.stamp_sent(c.link.netchan.outgoing_sequence, now);
+        let sent =
+            c.link
                 .netchan
-                .transmit(c.last_client_command, &w.into_ops(), &self.huff);
-            let msec = c.snapshot_msec();
-            c.pace(now, sent.iter().map(Vec::len).sum(), rate, msec);
-            if let Some(pkt) = c.first_packet(sent) {
-                self.outbox.push((c.addr, pkt));
-            }
+                .transmit(c.link.last_client_command, &w.into_ops(), &self.core.huff);
+        let msec = c.snapshot_msec();
+        c.pace(now, sent.iter().map(Vec::len).sum(), rate, msec);
+        if let Some(pkt) = c.first_packet(sent) {
+            self.core.outbox.push((c.link.addr, pkt));
         }
     }
 
-    /// `SV_SendClientSnapshot` for a zombie (0x808f844): its unacked server
-    /// commands, the drop notice among them, and the stale ring slot
-    /// ([`zombie_message`]). Paced like any message:
+    /// `SV_SendClientSnapshot` for a zombie (0x808f844), on its slot's
+    /// turn: its unacked server commands, the drop notice among them, and
+    /// the stale ring slot ([`zombie_message`]). Paced like any message:
     /// off the LAN a zombie, not being `CS_ACTIVE`, waits a second between
     /// them (`docs/research/cod11-server-handshake.md`, "Zombie slots").
-    fn send_zombies(&mut self) {
-        // `SV_CheckTimeouts` (0x808cbc0) runs after the game frame, on the
-        // advanced clock: a slot whose last packet is more than
-        // `sv_zombietime` old goes `CS_FREE` before this frame's message.
-        let now_ms = self.svs_time_ms();
-        let zombie_ms = ZOMBIE_TIME.as_millis() as i32;
-        for z in &mut self.zombies {
-            if let Some(c) = z.take_if(|c| now_ms.wrapping_sub(c.last_packet_ms) > zombie_ms) {
-                log::debug!("Going from CS_ZOMBIE to CS_FREE for {}", c.name);
-            }
-        }
-        let max_rate = self.live_int_cvar("sv_maxRate");
-        let (dedicated, now, game_ms) = (self.dedicated, self.svs_time_ms(), self.sv_time_ms);
-        let snap_flags = self.snap_flag_server_bit;
-        for z in self.zombies.iter_mut().flatten() {
-            if now < z.next_message_ms {
-                continue;
-            }
-            let not_active = if z.was_active { 0 } else { SNAPFLAG_NOT_ACTIVE };
-            let flags = snap_flags | u32::from(z.rate_delayed) | not_active;
-            let sent = zombie_message(z, game_ms, flags, self.proto, &self.huff);
-            let rate = z.send_rate(dedicated, max_rate);
-            let msec = z.snapshot_msec();
-            z.pace(now, sent.iter().map(Vec::len).sum(), rate, msec);
-            self.outbox.extend(sent.into_iter().map(|p| (z.addr, p)));
-        }
+    fn send_zombie(&mut self, slot: usize, max_rate: i32) {
+        let (dedicated, now, game_ms) = (
+            self.game.dedicated,
+            self.svs_time_ms(),
+            self.core.sv_time_ms,
+        );
+        let snap_flags = self.game.snap_flag_server_bit;
+        let Some(z) = self.game.zombies[slot].as_mut() else {
+            return;
+        };
+        let not_active = if z.link.was_active {
+            0
+        } else {
+            SNAPFLAG_NOT_ACTIVE
+        };
+        let flags = snap_flags | u32::from(z.link.rate_delayed) | not_active;
+        let sent = zombie_message(z, game_ms, flags, self.game.proto, &self.core.huff);
+        let rate = z.send_rate(dedicated, max_rate);
+        let msec = z.snapshot_msec();
+        z.pace(now, sent.iter().map(Vec::len).sum(), rate, msec);
+        self.core
+            .outbox
+            .extend(sent.into_iter().map(|p| (z.link.addr, p)));
     }
 
     /// `SV_FinalMessage` (0x808ad8c), which `SV_Shutdown` runs before the
@@ -4239,18 +3957,25 @@ impl Server {
     fn final_message(&mut self, message: &str) {
         let notice = format!("e \"{message}\"");
         for _ in 0..2 {
-            for slot in 0..self.clients.len() {
-                if self.clients[slot].as_ref().is_none_or(|c| c.is_bot) {
+            for slot in 0..self.core.clients.len() {
+                if self.core.clients[slot].as_ref().is_none_or(|c| c.is_bot) {
                     continue;
                 }
                 self.send_server_command(slot, &notice);
                 self.send_server_command(slot, "w");
-                let Some(c) = self.clients[slot].as_mut() else {
+                let Some(c) = self.core.clients[slot].as_mut() else {
                     continue;
                 };
-                let sent =
-                    resend_last_frame(c, self.sv_time_ms, self.proto, &self.huff, &self.baselines);
-                self.outbox.extend(sent.into_iter().map(|p| (c.addr, p)));
+                let sent = resend_last_frame(
+                    c,
+                    self.core.sv_time_ms,
+                    self.game.proto,
+                    &self.core.huff,
+                    &self.game.baselines,
+                );
+                self.core
+                    .outbox
+                    .extend(sent.into_iter().map(|p| (c.link.addr, p)));
             }
         }
     }
@@ -4260,9 +3985,9 @@ impl Server {
     /// test client acks nothing and reads 999 (retail's `status`), vcod's
     /// own bots, which retail does not have, 0 as Q3's do.
     fn calc_pings(&mut self) {
-        for (slot, c) in self.clients.iter_mut().enumerate() {
+        for (slot, c) in self.core.clients.iter_mut().enumerate() {
             let Some(c) = c else { continue };
-            c.ping = if c.is_bot && self.bots.contains_key(&slot) {
+            c.link.ping = if c.is_bot && self.game.module.driver.bots.contains_key(&slot) {
                 0
             } else if c.is_bot || c.state != ClientState::Active || c.sim.is_none() {
                 999
@@ -4277,715 +4002,38 @@ impl Server {
     /// clock is pulled back to it; one more than `sv_timeout` seconds old
     /// counts a frame, a fresh one resets the count, and the sixth stale
     /// frame in a row drops the client and frees the slot at once, its
-    /// notice never sent. Zombies are freed in `send_zombies`.
+    /// notice never sent. A zombie whose last packet is more than
+    /// `sv_zombietime` old goes `CS_FREE` first, before any message.
     fn check_timeouts(&mut self) {
         let now = self.svs_time_ms();
+        let zombie_ms = ZOMBIE_TIME.as_millis() as i32;
+        for z in &mut self.game.zombies {
+            if let Some(c) = z.take_if(|c| now.wrapping_sub(c.link.last_packet_ms) > zombie_ms) {
+                log::debug!("Going from CS_ZOMBIE to CS_FREE for {}", c.name);
+            }
+        }
         let timeout = self.live_cvar("sv_timeout", TIMEOUT_DEFAULT);
         let timeout_ms = crate::game::builtins::cvar::atoi(&timeout).wrapping_mul(1000);
         let mut stale = Vec::new();
-        for (slot, c) in self.clients.iter_mut().enumerate() {
+        for (slot, c) in self.core.clients.iter_mut().enumerate() {
             let Some(c) = c.as_mut().filter(|c| !c.is_bot) else {
                 continue;
             };
-            if now.wrapping_sub(c.last_packet_ms) < 0 {
-                c.last_packet_ms = now;
+            if now.wrapping_sub(c.link.last_packet_ms) < 0 {
+                c.link.last_packet_ms = now;
             }
-            if now.wrapping_sub(c.last_packet_ms) > timeout_ms {
-                c.timeout_count += 1;
-                if c.timeout_count > 5 {
+            if now.wrapping_sub(c.link.last_packet_ms) > timeout_ms {
+                c.link.timeout_count += 1;
+                if c.link.timeout_count > 5 {
                     stale.push(slot);
                 }
             } else {
-                c.timeout_count = 0;
+                c.link.timeout_count = 0;
             }
         }
         for slot in stale {
             self.drop_client(slot, "EXE_TIMEDOUT");
-            self.zombies[slot] = None;
-        }
-    }
-
-    /// The bots' pass of the tick: join like a client, then move like one.
-    /// Runs before `replay_moves`, so a bot's cmd for this frame is in its
-    /// queue when the sim reads it. Four passes, because the brains need the
-    /// whole of `self` to think and their writes land after.
-    fn step_bots(&mut self) {
-        let mut noises = std::mem::take(&mut self.bot_noises);
-        // A script's `radiusDamage` (the S&D bomb, an exploder) is nobody's.
-        if let Some(rt) = self.script.as_mut() {
-            noises.extend(
-                rt.take_blast_noises()
-                    .into_iter()
-                    .map(|at| crate::bots::Noise {
-                        at: [at[0], at[1], at[2] + 40.0],
-                        source: usize::MAX,
-                        radius: crate::bots::HEAR_BLAST,
-                    }),
-            );
-        }
-        self.manage_bots();
-        if self.bots.is_empty() {
-            return;
-        }
-        let links = self.script.as_ref().map_or(0, |rt| rt.host.brush_links);
-        if self.nav.is_none()
-            && let Some(w) = self.world.as_ref()
-        {
-            let rules = self.move_rules();
-            let job = self.nav_job.get_or_insert_with(|| {
-                self.nav_links = links;
-                crate::nav::NavJob::start(&self.cfg.map, w, rules)
-            });
-            self.nav = job.poll(!self.nav_background);
-        }
-        self.relink_nav(links);
-        self.park_vehicles();
-        let sid = i32::from(self.server_id);
-        // The team table once per frame; `client_team` needs the script's
-        // mutable face, so the enemy pass reads this instead.
-        let teams: Vec<i32> = (0..self.clients.len())
-            .map(|slot| self.script.as_mut().map_or(0, |rt| rt.client_team(slot)))
-            .collect();
-
-        // Pass 1: the reliable commands each bot just received, answered the
-        // way a menu-opening client would execute them client-side.
-        let mut replies: Vec<(usize, String)> = Vec::new();
-        let mut joined: Vec<usize> = Vec::new();
-        let mut entering: Vec<usize> = Vec::new();
-        let slots: Vec<usize> = self.bots.keys().copied().collect();
-        // `_teams::restrict` reads `!getcvar(...)`, a numeric coercion; with
-        // no script nothing restricts.
-        let cvars = self.script.as_ref().map(|rt| rt.cvars());
-        let allowed = |name: &str| {
-            cvars.is_none_or(|c| crate::game::builtins::cvar::atof(c.get(name)) != 0.0)
-        };
-        for &slot in &slots {
-            let Some(c) = self.clients[slot].as_ref() else {
-                continue;
-            };
-            let Some(bot) = self.bots.get_mut(&slot) else {
-                continue;
-            };
-            let fresh: Vec<(i32, &str)> = (bot.last_seen_seq + 1
-                ..=c.netchan.reliable_sequence as i32)
-                .map(|seq| {
-                    (
-                        seq,
-                        c.netchan.reliable[seq as usize & (MAX_RELIABLE_COMMANDS - 1)].as_str(),
-                    )
-                })
-                .collect();
-            bot.last_seen_seq = c.netchan.reliable_sequence as i32;
-            // 1.5's gametypes open `serverinfo_<gametype>` first and the team
-            // menu once it answers `close` (cod15-protocol-diff.md 7).
-            let (serverinfo, fresh): (Vec<_>, Vec<_>) = fresh.into_iter().partition(|(_, text)| {
-                text.strip_prefix("t ")
-                    .and_then(|i| i.trim().parse::<usize>().ok())
-                    .and_then(|i| {
-                        self.configstrings
-                            .get(self.proto.cs.bounds(configstrings::CsRange::Menu).0 + i)
-                    })
-                    .is_some_and(|m| m.starts_with("serverinfo_"))
-            });
-            for (_, text) in serverinfo {
-                replies.push((slot, format!("mr {sid} {} close", &text[2..])));
-            }
-            // 1.5's `map_restart` sends `B` where 1.1 sends `n`.
-            if fresh.iter().any(|(_, text)| *text == "B") {
-                bot.rearm();
-            }
-            // The menu a `t` opens is the one its configstring names: UO's
-            // stock scripts send the weapon menu's `t` ahead of the
-            // `g_scriptMainMenu` that names it, so the bot is told first.
-            let menus = self.proto.cs.bounds(configstrings::CsRange::Menu).0;
-            let named: Vec<(i32, String)> = fresh
-                .iter()
-                .flat_map(|&(seq, text)| {
-                    let menu = text
-                        .strip_prefix("t ")
-                        .and_then(|i| i.trim().parse::<usize>().ok())
-                        .and_then(|i| self.configstrings.get(menus + i))
-                        .filter(|m| !m.is_empty())
-                        .map(|m| (seq, format!("v g_scriptMainMenu {m}")));
-                    menu.into_iter().chain([(seq, text.to_string())])
-                })
-                .collect();
-            let named: Vec<(i32, &str)> = named.iter().map(|(q, t)| (*q, t.as_str())).collect();
-            replies.extend(
-                bot.observe(sid, &named, &allowed)
-                    .into_iter()
-                    .map(|r| (slot, r)),
-            );
-            match c.state {
-                ClientState::Connected => joined.push(slot),
-                // Primed and no sim yet: the entering cmd, which is not
-                // simulated (enter_world consumes it).
-                ClientState::Primed if c.sim.is_none() => entering.push(slot),
-                _ => {}
-            }
-        }
-
-        // Pass 2: what each bot's body sees, for the brains. The enemy
-        // lookup refreshes at ~10 Hz per bot and is cached in between.
-        let sd = self.bot_sd();
-        let re = self.bot_re();
-        let bel = self.bot_bel();
-        let uo = self.bot_uo();
-        let (launchers, guns) = self.bot_launchers(uo.as_ref());
-        let packs = self
-            .script
-            .as_mut()
-            .map_or(Vec::new(), |rt| rt.health_items());
-        // Every playing client on a side, by slot, team and feet: who stands
-        // nearer a noise than a bot (`team::answers`).
-        let on_side: Vec<(usize, i32, [f32; 3])> = self
-            .clients
-            .iter()
-            .enumerate()
-            .filter_map(|(slot, c)| {
-                let sim = c.as_ref()?.sim.as_ref()?;
-                let team = teams.get(slot).copied()?;
-                let playing = sim.pm_type == crate::spectate::PmType::Normal && !sim.dead;
-                (playing && (team == script::TEAM_AXIS || team == script::TEAM_ALLIES))
-                    .then(|| (slot, team, sim.ps.origin.into()))
-            })
-            .collect();
-        let mut views: Vec<(usize, crate::bots::BotView)> = slots
-            .iter()
-            .filter_map(|slot| {
-                let fresh = self
-                    .bot_enemies
-                    .get(slot)
-                    .is_none_or(|(t, _)| self.sv_time_ms.wrapping_sub(*t) >= ENEMY_REFRESH_MS);
-                let enemy = if fresh {
-                    let e = self.bot_enemy(*slot, &teams);
-                    self.bot_enemies.insert(*slot, (self.sv_time_ms, e));
-                    e
-                } else {
-                    self.bot_enemies.get(slot)?.1
-                };
-                // One the brain gave up on (`Bot::ignores`) is left out.
-                let enemy =
-                    enemy.filter(|e| !self.bots.get(slot).is_some_and(|b| b.ignores(e.slot)));
-                let mut view = self.bot_view(*slot, enemy)?;
-                let hearing = self.bots.get(slot).map_or(1.0, |b| b.skill.hearing);
-                // On a side with team play on, only the teammates nearest a
-                // noise go to it.
-                let mine = on_side.iter().find(|c| c.0 == *slot).map(|c| c.1);
-                let heard: Vec<crate::bots::Noise> = match mine {
-                    Some(mine) if self.bots.get(slot).is_some_and(|b| b.team_play) => {
-                        let mates: Vec<(usize, [f32; 3])> = on_side
-                            .iter()
-                            .filter(|(s, t, _)| s != slot && *t == mine)
-                            .map(|(s, _, p)| (*s, *p))
-                            .collect();
-                        noises
-                            .iter()
-                            .filter(|n| crate::bots::team::answers(view.origin, n, &mates))
-                            .copied()
-                            .collect()
-                    }
-                    _ => noises.clone(),
-                };
-                view.noise = crate::bots::loudest(&heard, *slot, view.origin, hearing);
-                view.survive.heal = crate::bots::retreat::nearest_pack(&view, &packs);
-                let held = self.bot_sidesteps.remove(slot);
-                if let Some(e) = enemy {
-                    (view.friend_in_line, view.sidestep) =
-                        self.bot_friend_in_line(*slot, e.origin, &teams, held);
-                    if let Some(p) = view.sidestep {
-                        let since = held
-                            .filter(|(h, _)| *h == p)
-                            .map_or(self.sv_time_ms, |(_, t)| t);
-                        self.bot_sidesteps.insert(*slot, (p, since));
-                    }
-                }
-                view.cover = self.bot_cover(*slot, enemy);
-                Some((*slot, view))
-            })
-            .collect();
-        let round = u32::from(self.server_id);
-        // Bots with team play off (`Bot::team_play`) rank by slot, keep by
-        // a carrier, cover nobody and plan alone, as before `bots::team`.
-        let solo: Vec<usize> = slots
-            .iter()
-            .copied()
-            .filter(|s| self.bots.get(s).is_some_and(|b| !b.team_play))
-            .collect();
-        if let Some((attackers, defenders, objectives)) = &re {
-            let team = |slot: usize| teams.get(slot).copied().unwrap_or(0);
-            let slots: Vec<usize> = views.iter().map(|(s, _)| *s).collect();
-            // The attackers by each carrier who keep by him (`team::escorts`).
-            let escorts: Vec<usize> = objectives
-                .iter()
-                .filter_map(|(o, carrier, _)| Some((o.carrier_at?, (*carrier)?)))
-                .flat_map(|(at, carrier)| {
-                    let mates: Vec<(usize, [f32; 3])> = views
-                        .iter()
-                        .filter(|(s, v)| {
-                            *s != carrier && team(*s) == team(carrier) && v.playing && !v.dead
-                        })
-                        .map(|(s, v)| (*s, v.origin))
-                        .collect();
-                    crate::bots::team::escorts(at, &mates)
-                })
-                .collect();
-            for (slot, view) in views.iter_mut() {
-                let mine = team(*slot);
-                let role = if mine == *attackers {
-                    crate::bots::ObjRole::Attack
-                } else if mine == *defenders {
-                    crate::bots::ObjRole::Defend
-                } else {
-                    continue;
-                };
-                let mates: Vec<usize> =
-                    slots.iter().copied().filter(|s| team(*s) == mine).collect();
-                let alone = solo.contains(slot);
-                view.re = Some(crate::bots::ReView {
-                    role,
-                    rank: if alone {
-                        mates.iter().filter(|s| *s < slot).count()
-                    } else {
-                        crate::bots::team::round_rank(*slot, &mates, mine, round)
-                    },
-                    escort: alone || escorts.contains(slot),
-                    objectives: objectives
-                        .iter()
-                        .map(|(o, carrier, shown_to)| crate::bots::ReObjView {
-                            mine: *carrier == Some(*slot),
-                            // What the bot's compass shows.
-                            carrier_at: o
-                                .carrier_at
-                                .filter(|_| *shown_to == 0 || *shown_to == mine),
-                            ..*o
-                        })
-                        .collect(),
-                });
-            }
-        }
-        if let Some(markers) = &bel {
-            for (slot, view) in views.iter_mut() {
-                let mine = teams.get(*slot).copied().unwrap_or(0);
-                if mine != script::TEAM_AXIS && mine != script::TEAM_ALLIES {
-                    continue;
-                }
-                view.bel = Some(crate::bots::BelView {
-                    hunted: mine == script::TEAM_ALLIES,
-                    // What the compass shows the team (`objectives_for`).
-                    markers: markers
-                        .iter()
-                        .filter(|(_, t, _)| *t == 0 || *t == mine)
-                        .map(|(_, _, at)| *at)
-                        .collect(),
-                    // `make_obj_marker` numbers a player's record
-                    // entnum + 1 (`bel.gsc` 1574).
-                    trail: markers
-                        .iter()
-                        .find(|(n, _, _)| *n == *slot + 1)
-                        .map(|(_, _, at)| *at),
-                });
-            }
-        }
-        self.bot_vehicle_views(&mut views, &teams);
-        let breach_models = if views.iter().any(|(_, v)| v.rocket.is_some()) {
-            self.bot_breach_models(uo.as_ref())
-        } else {
-            Vec::new()
-        };
-        if let Some(uo) = &uo {
-            let team = |slot: usize| teams.get(slot).copied().unwrap_or(0);
-            let slots: Vec<usize> = views.iter().map(|(s, _)| *s).collect();
-            for (slot, view) in views.iter_mut() {
-                let mine = team(*slot);
-                if mine != script::TEAM_AXIS && mine != script::TEAM_ALLIES {
-                    continue;
-                }
-                let rank = slots
-                    .iter()
-                    .filter(|s| team(**s) == mine && *s < slot)
-                    .count();
-                let breach = crate::bots::Breach {
-                    rocket: view.rocket.is_some(),
-                    launchers: &launchers,
-                    guns: &guns,
-                    models: &breach_models,
-                };
-                view.uo = Some(self.bot_uo_view(uo, *slot, mine, rank, &breach));
-            }
-        }
-        if let Some((attackers, defenders, sd)) = &sd {
-            let team = |slot: usize| teams.get(slot).copied().unwrap_or(0);
-            // The team's bots that play, by slot, and each one's distance
-            // to the bomb.
-            let bomb_dist = |v: &crate::bots::BotView| {
-                sd.bomb
-                    .map_or(0.0, |b| crate::bots::dist_sq(v.origin, b.origin))
-            };
-            let side: Vec<(usize, i32, f32, bool)> = views
-                .iter()
-                .map(|(slot, v)| (*slot, team(*slot), bomb_dist(v), v.playing))
-                .collect();
-            // Who the script holds planting in a zone (`team::cover`).
-            let planting: Vec<(usize, [f32; 3], bool)> = views
-                .iter()
-                .map(|(slot, v)| {
-                    let held = v.playing
-                        && v.linked
-                        && sd
-                            .sites
-                            .iter()
-                            .any(|z| crate::bots::inside_site(v.origin, z));
-                    (*slot, v.origin, held)
-                })
-                .collect();
-            for (slot, view) in views.iter_mut() {
-                let mine = team(*slot);
-                let role = if mine == *attackers {
-                    crate::bots::ObjRole::Attack
-                } else if mine == *defenders {
-                    crate::bots::ObjRole::Defend
-                } else {
-                    continue;
-                };
-                let mates: Vec<usize> = side.iter().filter(|s| s.1 == mine).map(|s| s.0).collect();
-                let attack = role == crate::bots::ObjRole::Attack;
-                let alone = solo.contains(slot);
-                let rank = if alone {
-                    mates.iter().filter(|s| *s < slot).count()
-                } else {
-                    crate::bots::team::site_rank(attack, *slot, &mates, mine, round)
-                };
-                let cover = (attack && !alone)
-                    .then(|| {
-                        let mates: Vec<_> = planting
-                            .iter()
-                            .filter(|p| team(p.0) == mine)
-                            .copied()
-                            .collect();
-                        crate::bots::team::cover(*slot, view.origin, &mates)
-                    })
-                    .flatten();
-                // Nearest first, the lower slot on a tie.
-                let lead = side
-                    .iter()
-                    .filter(|s| s.1 == mine && s.3)
-                    .min_by(|a, b| a.2.total_cmp(&b.2).then(a.0.cmp(&b.0)))
-                    .is_some_and(|s| s.0 == *slot);
-                view.sd = Some(crate::bots::SdView {
-                    role,
-                    rank,
-                    lead,
-                    cover,
-                    ..sd.clone()
-                });
-            }
-        }
-
-        // Pass 3: the tick's waypoint toward each brain's goal, then its
-        // cmd. A* is capped per tick across all bots; one that misses out
-        // wanders for a tick and asks again.
-        let mut moves: Vec<(usize, UserCmd, bool)> = Vec::new();
-        let mut budget = BOT_PLAN_BUDGET;
-        // Every player on a ladder, and off one, for the bots that wait for
-        // one.
-        let bodies = |on_ladder: bool| -> Vec<(usize, glam::Vec3, glam::Vec3)> {
-            self.clients
-                .iter()
-                .enumerate()
-                .filter_map(|(slot, c)| {
-                    let sim = c.as_ref()?.sim.as_ref()?;
-                    let playing = sim.pm_type == crate::spectate::PmType::Normal && !sim.dead;
-                    (playing && sim.ps.on_ladder == on_ladder).then_some((
-                        slot,
-                        sim.ps.origin,
-                        sim.ps.velocity,
-                    ))
-                })
-                .collect()
-        };
-        let (climbers, standing) = (bodies(true), bodies(false));
-        // On an objective level each playing bot's path ahead, which its
-        // teammates' plans pay more to share (`team::crowd`).
-        let paths: Vec<crate::bots::team::TeamPath> = views
-            .iter()
-            .filter(|(_, v)| v.playing && !v.dead && Self::team_objective(v))
-            .filter_map(|(slot, _)| {
-                let f = self.bot_paths.get(slot)?;
-                Some((*slot, teams.get(*slot).copied()?, f.ahead().collect()))
-            })
-            .collect();
-        for (slot, mut view) in views {
-            if let Some((threat, held)) = self.bots.get(&slot).and_then(|b| b.cover_query())
-                && let (Some(g), Some(w)) = (self.nav.as_ref(), self.world.as_ref())
-            {
-                view.survive.cover =
-                    crate::bots::retreat::cover_spot(g, &w.collision, view.origin, threat, held);
-            }
-            view.hunt = self.bot_vantage(slot, view.origin);
-            let Some(goal) = self.bots.get(&slot).map(|b| b.goal(&view)) else {
-                continue;
-            };
-            // A seat leaves the walk's follower alone; a driver steers along
-            // a route its hull fits (`drive_waypoint`).
-            if let Some(s) = view.seat.filter(|s| s.seat == 1) {
-                view.waypoint = self.drive_waypoint(slot, goal, &s);
-            } else {
-                self.bot_drives.forget(slot);
-            }
-            if let Some(g) = self.nav.clone().filter(|_| view.seat.is_none()) {
-                let mut follower = self.bot_paths.remove(&slot).unwrap_or_default();
-                follower.crowd = match teams.get(slot) {
-                    Some(&t) if Self::team_objective(&view) && !solo.contains(&slot) => {
-                        crate::bots::team::crowd(&paths, slot, t)
-                    }
-                    _ => Vec::new(),
-                };
-                follower.blocked = self.bot_parked.blocked.clone();
-                if self.bots.get_mut(&slot).is_some_and(|b| b.take_stuck()) {
-                    follower.stuck();
-                }
-                let ps = self.clients[slot]
-                    .as_ref()
-                    .and_then(|c| c.sim.as_ref())
-                    .map(|sim| sim.ps);
-                // The pace the bot runs at: a light weapon's is cut to the
-                // graph's on the ground (`Bot::think`).
-                follower.move_scale = view.move_scale.min(1.0);
-                // What a fall off a ladder takes from this body now: a hurt
-                // bot backed off mp_ship's 296-unit hold ladder onto a
-                // climber's head and died of it (bot-navigation.md section 3).
-                follower.fall_kills = self.clients[slot]
-                    .as_ref()
-                    .and_then(|c| c.sim.as_ref())
-                    .map(|sim| {
-                        crate::nav::fall_that_kills(sim.health, sim.max_health, self.fall_heights)
-                    });
-                let body = crate::nav::Footing {
-                    still: ps.as_ref().is_some_and(crate::nav::ready_to_leap),
-                    on_ground: ps.as_ref().is_some_and(|ps| ps.on_ground),
-                    on_ladder: ps.as_ref().is_some_and(|ps| ps.on_ladder),
-                    velocity: ps.as_ref().map_or(glam::Vec3::ZERO, |ps| ps.velocity),
-                };
-                // The bot's own generator, copied out so the world stays
-                // readable and written back below.
-                let mut rng = self.bots.get(&slot).map_or(1, |b| b.rng);
-                let mut rand = || rand_from(&mut rng);
-                // A seat plans from the vehicle on the ground under it.
-                let at = view.seat.map_or(view.origin, |s| s.origin);
-                let world = self.world.as_ref().map(|w| &w.collision);
-                let others =
-                    |all: &[(usize, glam::Vec3, glam::Vec3)]| -> Vec<(glam::Vec3, glam::Vec3)> {
-                        all.iter()
-                            .filter(|c| c.0 != slot)
-                            .map(|c| (c.1, c.2))
-                            .collect()
-                    };
-                let (others, aground) = (others(&climbers), others(&standing));
-                if let Some(spot) = follower.ladder_yield(&g, at.into(), body, &others, &aground) {
-                    // Come to rest there, as on a leap's foot.
-                    view.waypoint = Some(spot.into());
-                    view.stop = true;
-                } else if follower.abreast_yield(&g, at.into(), body, &others) {
-                    // No waypoint on the rungs climbs down (`Bot::think`).
-                    view.waypoint = None;
-                } else if let Some(head) = follower.head_on_yield(&g, at.into(), body, &others) {
-                    view.waypoint = Some(head.into());
-                } else {
-                    view.waypoint =
-                        follower.waypoint(&g, world, goal, at, body, &mut budget, &mut rand);
-                    // No waypoint while the next plan is searched for: come
-                    // to rest on the last one, as on a leap's foot.
-                    let resting = view.waypoint.is_none() && goal != crate::bots::Goal::Hold;
-                    let rest = follower.rest_point(at, body).filter(|_| resting);
-                    if let Some(p) = follower.climb_line(&g) {
-                        view.ladder_middle = Some(p.into());
-                    }
-                    view.back_face = follower.back_face(&g).map(|(y, m)| (y, m.into()));
-                    if view.fatigue.is_some() {
-                        view.sprint_room = follower.straight_run(&g, at.into());
-                    }
-                    view.jump = follower.jump_cued(&g);
-                    view.leap = follower.leaping(&g);
-                    // A jump edge proved aimed beside its top: steer there.
-                    if let (true, Some(w), Some(p)) =
-                        (view.jump, view.waypoint, follower.jump_aim(&g))
-                    {
-                        view.waypoint = Some([p.x, p.y, w[2]]);
-                    }
-                    view.stop = follower.holding(&g);
-                    if let Some(foot) = ps.as_ref().and_then(|ps| follower.jump_wait(&g, at, ps)) {
-                        // A jump that fails from rest there is planned
-                        // round; the body holds still meanwhile.
-                        let round = world.is_some_and(|w| follower.rest_jump_fails(&g, w, foot));
-                        view.waypoint = Some(if round { at } else { foot });
-                        view.stop = true;
-                        view.jump = false;
-                    }
-                    if let Some(p) = rest {
-                        view.waypoint = Some(p);
-                        view.stop = true;
-                    }
-                    if let Some(w) = view.waypoint
-                        && let Some(p) = follower.rising_hold(at.into(), w.into(), body, &others)
-                    {
-                        view.waypoint = Some(p.into());
-                        view.stop = true;
-                    }
-                    if let Some(w) = view.waypoint
-                        && let Some(p) = follower.pressed_yield(at.into(), w.into(), body, &aground)
-                    {
-                        view.waypoint = Some(p.into());
-                    }
-                    view.run_off = !body.on_ladder
-                        && follower.running_off(
-                            &g,
-                            world,
-                            at.into(),
-                            crate::bots::BACK_DOWN_HEIGHT,
-                        );
-                    view.crouch_jump = view.jump && follower.crouch_jumping(&g);
-                    view.lip = view.jump
-                        && matches!((self.world.as_ref(), ps, view.waypoint), (Some(w), Some(ps), Some(to))
-                            if crate::nav::lip_ahead(&w.collision, &ps, glam::Vec2::new(to[0], to[1]), self.weapon_table.defs()));
-                    view.push_off = match (self.world.as_ref(), ps, view.waypoint) {
-                        (Some(w), Some(ps), Some(to)) if ps.on_ladder => crate::nav::push_off(
-                            &w.collision,
-                            &ps,
-                            to.into(),
-                            self.weapon_table.defs(),
-                        ),
-                        _ => None,
-                    };
-                    view.unpin = match (self.world.as_ref(), ps, view.waypoint) {
-                        (Some(w), Some(ps), Some(to)) if !view.stop => crate::nav::unpin_yaw(
-                            &w.collision,
-                            &w.hazards,
-                            &ps,
-                            to.into(),
-                            self.weapon_table.defs(),
-                        ),
-                        _ => None,
-                    };
-                }
-                if let Some(b) = self.bots.get_mut(&slot) {
-                    b.rng = rng;
-                }
-                self.bot_paths.insert(slot, follower);
-            }
-            if self.bots.get(&slot).is_some_and(|b| b.reads_drops(&view)) {
-                view.drop_ahead = self.drop_probe(slot);
-            }
-            if let Some(b) = self.bots.get(&slot).filter(|b| b.wants_lob(&view))
-                && let (Some(g), Some(at)) = (view.grenade, b.throw_target(&view))
-            {
-                view.lob = self.lob_probe(slot, g, at, &teams);
-            }
-            if let Some(bot) = self.bots.get_mut(&slot) {
-                let cmd = bot.think(&view);
-                moves.push((slot, cmd, view.on_ladder && !view.on_ground));
-                if bot.take_kill() {
-                    replies.push((slot, "kill".into()));
-                }
-            }
-        }
-
-        // Pass 4: everything lands.
-        self.bots.retain(|slot, _| self.clients[*slot].is_some());
-        self.bot_enemies
-            .retain(|slot, _| self.clients[*slot].is_some());
-        self.bot_sidesteps
-            .retain(|slot, _| self.clients[*slot].is_some());
-        self.bot_paths
-            .retain(|slot, _| self.clients[*slot].is_some());
-        replies.append(&mut self.bot_admin.orders);
-        for (slot, r) in replies {
-            if let Some(bot) = self.bots.get_mut(&slot) {
-                let seq = bot.next_command_seq;
-                bot.next_command_seq += 1;
-                // Consumes its own ack bookkeeping; a bot is its own client.
-                self.client_command(slot, seq, r);
-            }
-        }
-        for slot in joined {
-            if let Some(bot) = self.bots.get_mut(&slot) {
-                bot.rearm();
-            }
-            self.send_gamestate(slot);
-        }
-        // Every bot's cmds are one packet, after every real one, in slot
-        // order: `SV_Frame` bumps the DObj stamp once ahead of its bot pass
-        // (movers doc 15), so `replay_moves` poses them under one build.
-        self.packet_seq += 1;
-        for (slot, cmd, on_ladder) in moves {
-            // Stamped here, not in the brain: the cmd rides the server's own
-            // clock, one 50 ms step per tick, five on a ladder.
-            let cmds = crate::nav::tick_times(self.sv_time_ms.wrapping_sub(FRAME_MS), on_ladder)
-                .map(|server_time| UserCmd { server_time, ..cmd })
-                .collect();
-            // Enters the world on the Primed pass, queues on Active.
-            self.user_move(slot, cmds);
-        }
-        for slot in entering {
-            // The entering cmd carries the tick's clock: entry sets the
-            // client's cmd base to it, so the first simulated cmd steps a
-            // sane 50 ms.
-            self.user_move(
-                slot,
-                vec![UserCmd {
-                    server_time: self.sv_time_ms,
-                    ..NULL_USERCMD
-                }],
-            );
-        }
-        // The bot consumed everything; a real client's ack would say the same.
-        for &slot in self.bots.keys() {
-            if let Some(c) = self.clients[slot].as_mut() {
-                c.reliable_ack = c.netchan.reliable_sequence as i32;
-            }
-        }
-    }
-
-    /// Whether the graph stands over the brushes the script links now, with
-    /// no rebuild asked for or under way: a room behind a gametype's walls
-    /// reads as a pit only until the rebuild over their removal lands.
-    fn nav_settled(&self) -> bool {
-        let links = self.script.as_ref().map_or(0, |rt| rt.host.brush_links);
-        self.nav_rebuild.is_none() && self.nav_relink.is_none() && links == self.nav_links
-    }
-
-    /// Rebuilds the navigation graph over the brushes the script has linked
-    /// and unlinked since it was built, once they have held still for
-    /// [`NAV_RELINK_MS`]: United Offensive's `bas.gsc` deletes a base's
-    /// walls when its health runs out (`BaseAssault_base_think`, the
-    /// `script_idnumber` brushes), which opens the way to the charge. The
-    /// bots keep the old graph until the new one lands.
-    fn relink_nav(&mut self, links: u32) {
-        let Some(w) = self.world.as_ref().filter(|_| self.nav.is_some()) else {
-            return;
-        };
-        if self.nav_rebuild.is_none() && links != self.nav_links {
-            match self.nav_relink {
-                Some((l, at)) if l == links => {
-                    if self.sv_time_ms.wrapping_sub(at) >= NAV_RELINK_MS {
-                        let rules = self.move_rules();
-                        self.nav_rebuild = Some(crate::nav::NavJob::start(&self.cfg.map, w, rules));
-                        self.nav_links = links;
-                        self.nav_relink = None;
-                    }
-                }
-                _ => self.nav_relink = Some((links, self.sv_time_ms)),
-            }
-        }
-        if let Some(job) = self.nav_rebuild.as_mut()
-            && let Some(g) = job.poll(!self.nav_background)
-        {
-            log::info!("bots: navigation graph rebuilt over the script's brushes");
-            self.nav = Some(g);
-            self.nav_rebuild = None;
-            self.bot_paths.clear();
-            self.bot_sites.clear();
-            self.bot_breach_stands.clear();
+            self.game.zombies[slot] = None;
         }
     }
 
@@ -5007,7 +4055,7 @@ impl Server {
         };
         let userinfo = format!(
             "\\cg_predictItems\\1\\cl_anonymous\\0\\handicap\\100\\color\\4\\head\\default\\model\\multi\\snaps\\20\\rate\\5000\\name\\{name}\\protocol\\{}\\ip\\bot",
-            proto.version
+            proto.transport.version
         );
         let addr = SocketAddr::from(([127, 0, 0, 1], 65000 - slot as u16));
         let mut client = Client::new(addr, 0, 0, userinfo, Instant::now());
@@ -5056,1108 +4104,19 @@ impl Server {
         })
     }
 
-    /// [`crate::bots::BotView::drop_ahead`] for the body in `slot`: per
-    /// octant, the drop [`crate::nav::drop_ahead`] feels standing on the
-    /// ground off a ladder.
-    fn drop_probe(&self, slot: usize) -> [Option<f32>; 8] {
-        let sim = self.clients[slot].as_ref().and_then(|c| c.sim.as_ref());
-        let standing = sim.filter(|sim| sim.ps.on_ground && !sim.ps.on_ladder);
-        let (Some(sim), Some(w)) = (standing, self.world.as_ref()) else {
-            return [None; 8];
-        };
-        let creases = &mut self.creases.borrow_mut();
-        std::array::from_fn(|i| {
-            let (s, c) = (i as f32 * 45.0).to_radians().sin_cos();
-            let dir = glam::Vec3::new(c, s, 0.0);
-            let look = crate::bots::HAZARD_LOOK;
-            crate::nav::drop_ahead(&w.collision, sim.ps.origin, dir, look, creases)
-        })
-    }
-
-    /// [`crate::bots::BotView::lob`] for the body in `slot` throwing grenade
-    /// `weapon` at `target`: of the throws from 10 degrees down to 85 up,
-    /// every 5, the one whose frag, flown by the missile code to its burst
-    /// (`Missiles::predict_flight`), goes off nearest `target`, within
-    /// [`crate::bots::LOB_MISS`]. The aim as (pitch, yaw), wire degrees.
-    /// A frag leaves at `projectileSpeed` whatever the pitch, so the pitch
-    /// alone sets where it comes down: lobbed 5 to 40 degrees over the
-    /// line, frags flew on to a median 1.8 times the range and went off a
-    /// median 490 units from where they went (bot-combat.md 12). A throw
-    /// whose early arc meets a body is not taken: a UO frag bounces off one
-    /// at full speed. With friendly fire on, None while a live teammate,
-    /// where he stands or where his pace takes him, is within the frag's
-    /// `explosionRadius` of `target` or of where it may go off.
-    fn lob_probe(
-        &self,
-        slot: usize,
-        weapon: u8,
-        target: [f32; 3],
-        teams: &[i32],
-    ) -> Option<[f32; 2]> {
-        use crate::bots::{LOB_MISS, LOB_REACH_SLACK, LOB_SLACK};
-        use vcod_common::net::trajectory::DEFAULT_GRAVITY;
-        let sim = self.clients[slot].as_ref()?.sim.as_ref()?;
-        let def = self.weapon_table.get(weapon as usize)?;
-        let rt = self.script.as_ref()?;
-        let my_team = teams.get(slot).copied().unwrap_or(0);
-        let radius = def.explosion_radius;
-        let target = glam::Vec3::from(target);
-        // Teammates matter only with friendly fire on (1.1's `tdm` ships
-        // with it off; 2 and 3 hurt the thrower or both).
-        let teamplay = (my_team == script::TEAM_AXIS || my_team == script::TEAM_ALLIES)
-            && crate::game::builtins::cvar::atoi(&self.live_cvar("scr_friendlyfire", "0")) != 0;
-        let mates: Vec<(glam::Vec3, glam::Vec3)> = self
-            .clients
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| teamplay && *i != slot && teams.get(*i).copied() == Some(my_team))
-            .filter_map(|(_, c)| c.as_ref()?.sim.as_ref())
-            .filter(|o| o.pm_type == crate::spectate::PmType::Normal && !o.dead)
-            .map(|o| (o.ps.origin, o.ps.velocity))
-            .collect();
-        // A teammate where he stands or where his pace takes him while the
-        // frag flies: one running after the same enemy came into the blast.
-        let mate_near = |at: glam::Vec3| {
-            mates.iter().any(|(m, v)| {
-                (0..=crate::bots::MATE_LEAD_S).any(|t| (*m + *v * t as f32).distance(at) < radius)
-            })
-        };
-        if mate_near(target) {
-            return None;
-        }
-        let world = &self.world.as_ref()?.collision;
-        let eye = crate::game::combat::muzzle_point(&sim.ps);
-        let to = target - eye;
-        let range = to.truncate().length();
-        let yaw = to.y.atan2(to.x).to_degrees();
-        let bodies: Vec<(glam::Vec3, glam::Vec3)> = self
-            .clients
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != slot)
-            .filter_map(|(_, c)| c.as_ref()?.sim.as_ref())
-            .filter(|o| o.pm_type == crate::spectate::PmType::Normal && !o.dead)
-            .map(|o| {
-                let grow = glam::Vec3::splat(crate::bots::LOB_BODY_GROW);
-                (
-                    o.ps.origin + o.ps.mins() - grow,
-                    o.ps.origin + o.ps.maxs() + grow,
-                )
-            })
-            .collect();
-        // When it goes off: a 1.1 or 1.5 fuse runs in full from the
-        // release; a UO cook burns `COOK_MEAN_MS` of it in the hand on the
-        // mean and up to `COOK_MOST_MS`, so a burst near the thrower is
-        // looked for from that much short of the full fuse on. On
-        // mp_cassino a UO stick grenade lobbed at an enemy 550 off met a
-        // wall, came back and went off 340 from the wounded thrower, whose
-        // run from it fell short of the 350 radius (seed 19, bot-combat.md
-        // 6.5).
-        let fuse = vcod_common::weapon::stored_ms(def.fuse_time);
-        let (burst_ms, earliest) = if def.cook_off_hold {
-            (
-                fuse - crate::bots::COOK_MEAN_MS,
-                fuse - crate::bots::COOK_MOST_MS,
-            )
-        } else {
-            (fuse, fuse)
-        };
-        let (lo, hi) = (sim.ps.origin + sim.ps.mins(), sim.ps.origin + sim.ps.maxs());
-        let half_g = 0.5 * DEFAULT_GRAVITY;
-        // Where a throw along `aim` goes off, and whether it stays clear of
-        // the thrower and the teammates from `earliest` on, wherever a cook
-        // that long or short leaves the burst; None when the flight is cut
-        // short (out of the world, or onto the sky).
-        let fly = |aim: [f32; 2]| {
-            let (origin, velocity) = crate::game::missile::throw_velocity(&sim.ps, aim, def);
-            let flight = rt.missiles().predict_flight(
-                world,
-                weapon,
-                origin,
-                velocity,
-                sim.ps.velocity,
-                fuse,
-            );
-            let burst = *flight.get((burst_ms / FRAME_MS).max(1) as usize - 1)?;
-            let clear = flight
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| (*i as i32 + 1) * FRAME_MS >= earliest)
-                .all(|(_, p)| p.clamp(lo, hi).distance(*p) > radius && !mate_near(*p));
-            Some((burst, clear))
-        };
-        let mut best: Option<([f32; 2], f32)> = None;
-        for up in (-2..=17).map(|i| i as f32 * 5.0) {
-            let aim = [-up, yaw];
-            let (origin, velocity) = crate::game::missile::throw_velocity(&sim.ps, aim, def);
-            // Where the arc comes down to the target's height with nothing
-            // in its way: only a throw that lands near the range is flown.
-            let disc = velocity.z * velocity.z - 4.0 * half_g * (target.z - origin.z);
-            if disc < 0.0 {
-                continue;
-            }
-            let down = (velocity.z + disc.sqrt()) / (2.0 * half_g);
-            if (velocity.truncate().length() * down - range).abs() > LOB_REACH_SLACK {
-                continue;
-            }
-            // The arc's first 1.5 s meets a body before the world.
-            let at = |t: f32| origin + velocity * t - glam::Vec3::Z * (half_g * t * t);
-            let mut from = origin;
-            let mut body = false;
-            for i in 1..=30 {
-                let next = at(i as f32 * 0.05);
-                let tr = world.missile_trace(from, next);
-                body = bodies
-                    .iter()
-                    .filter_map(|(lo, hi)| crate::game::combat::ray_box(from, next, *lo, *hi))
-                    .any(|f| f < tr.fraction);
-                if body || tr.fraction < 1.0 {
-                    break;
-                }
-                from = next;
-            }
-            if body {
-                continue;
-            }
-            let Some((burst, true)) = fly(aim) else {
-                continue;
-            };
-            let miss = burst.distance(target);
-            if miss >= LOB_MISS {
-                continue;
-            }
-            // The release may be `LOB_SLACK` off the probed pitch: a frag
-            // let go half a degree under a lob the probe flew clear struck
-            // something 110 units out and went off 220 behind its thrower
-            // (bot-combat.md 12).
-            let slack = [-LOB_SLACK, LOB_SLACK];
-            if !slack
-                .iter()
-                .all(|d| fly([aim[0] + d, yaw]).is_some_and(|(_, c)| c))
-            {
-                continue;
-            }
-            if best.is_none_or(|(_, m)| miss < m) {
-                best = Some((aim, miss));
-            }
-        }
-        best.map(|(aim, _)| aim)
-    }
-
-    /// The rocket launchers lying about, on a `bas` level only: what a bot
-    /// breaches a base with (bot-objectives.md 7.2); and the bullet
-    /// weapons, what a bot with nothing left to fire takes up. Each with a
-    /// round in its clip or its reserve.
-    fn bot_launchers(
-        &mut self,
-        uo: Option<&script::UoObjectives>,
-    ) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
-        if !matches!(uo, Some(script::UoObjectives::Bas(_))) {
-            return (Vec::new(), Vec::new());
-        }
-        let weapons = self.weapon_table.clone();
-        let Some(rt) = self.script.as_mut() else {
-            return (Vec::new(), Vec::new());
-        };
-        let (mut launchers, mut guns) = (Vec::new(), Vec::new());
-        for (w, at, empty) in rt.weapon_items() {
-            match weapons.get(w as usize) {
-                _ if empty => {}
-                Some(d) if d.weapon_class == "rocketlauncher" => launchers.push(at),
-                Some(d) if d.weapon_type == "bullet" => guns.push(at),
-                _ => {}
-            }
-        }
-        (launchers, guns)
-    }
-
-    /// Where a rocket from `slot`'s muzzle is aimed to burst within
-    /// [`crate::bots::BREACH_NEAR`] of a base at `at`, between
-    /// [`crate::bots::BREACH_MIN`] and [`crate::bots::BREACH_RANGE`] off:
-    /// the base's origin, or a point under it on the floor it sits on. A
-    /// script model links as a point, so a rocket aimed at the origin flies
-    /// through it and bursts on what lies behind.
-    fn breach_shot(
-        &self,
-        slot: usize,
-        at: [f32; 3],
-        models: &[crate::game::combat::PlacedModel],
-    ) -> Option<[f32; 3]> {
-        let sim = self.clients[slot].as_ref()?.sim.as_ref()?;
-        let world = &self.world.as_ref()?.collision;
-        let muzzle = crate::game::combat::muzzle_point(&sim.ps);
-        let spot = breach_aim(world, models, muzzle, at.into())?;
-        // A body on the way bursts the rocket there, on the shooter as
-        // often as not: no shot while any other player's box crosses the
-        // line.
-        let bodies: Vec<(glam::Vec3, glam::Vec3)> = self
-            .clients
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != slot)
-            .filter_map(|(_, c)| c.as_ref()?.sim.as_ref())
-            .filter(|o| o.pm_type == crate::spectate::PmType::Normal && !o.dead)
-            .map(|o| (o.ps.origin + o.ps.mins(), o.ps.origin + o.ps.maxs()))
-            .collect();
-        (!crate::bots::friend_in_line(muzzle, spot.into(), &bodies)).then_some(spot)
-    }
-
-    /// The script models and vehicles within [`BREACH_MODEL_NEAR`] of a
-    /// `bas` base, on such a level only: what a rocket fired at one meets
-    /// besides the world, the base's own model among them.
-    fn bot_breach_models(
-        &mut self,
-        uo: Option<&script::UoObjectives>,
-    ) -> Vec<crate::game::combat::PlacedModel> {
-        let Some(script::UoObjectives::Bas(bases)) = uo else {
-            return Vec::new();
-        };
-        let Some(rt) = self.script.as_mut() else {
-            return Vec::new();
-        };
-        rt.shot_models()
-            .into_iter()
-            .filter(|m| {
-                bases
-                    .iter()
-                    .any(|b| m.origin.distance(glam::Vec3::from(b.at)) < BREACH_MODEL_NEAR)
-            })
-            .collect()
-    }
-
-    /// Up to one graph node in each of [`BREACH_SECTORS`] sectors round a
-    /// base, [`crate::bots::BREACH_MIN`] to [`BREACH_STAND_FAR`] off, from
-    /// whose standing eye [`breach_aim`] finds a shot: where a bot with a
-    /// rocket walks to. Empty until the graph is up.
-    fn breach_stands(
-        &mut self,
-        at: [f32; 3],
-        models: &[crate::game::combat::PlacedModel],
-    ) -> Vec<[f32; 3]> {
-        use crate::bots::BREACH_MIN;
-        if let Some((_, s)) = self.bot_breach_stands.iter().find(|(b, _)| *b == at) {
-            return s.clone();
-        }
-        let (Some(g), Some(w)) = (self.nav.clone(), self.world.as_ref()) else {
-            return Vec::new();
-        };
-        let base = glam::Vec3::from(at);
-        // On the graph's main component, as `site_stand`'s.
-        let comp = g.components();
-        let mut sizes: BTreeMap<u32, usize> = BTreeMap::new();
-        for c in &comp {
-            *sizes.entry(*c).or_default() += 1;
-        }
-        let main = sizes
-            .iter()
-            .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
-            .map(|(c, _)| *c);
-        let mut best: [Option<(f32, glam::Vec3)>; BREACH_SECTORS] = [None; BREACH_SECTORS];
-        for (i, n) in g.nodes.iter().enumerate() {
-            let d = n.truncate().distance(base.truncate());
-            if !(BREACH_MIN..=BREACH_STAND_FAR).contains(&d) {
-                continue;
-            }
-            let eye = *n + glam::Vec3::Z * vcod_common::pmove::VIEW_STAND;
-            if breach_aim(&w.collision, models, eye, base).is_none() {
-                continue;
-            }
-            let a = (n.y - base.y)
-                .atan2(n.x - base.x)
-                .rem_euclid(std::f32::consts::TAU);
-            let k = ((a / std::f32::consts::TAU * BREACH_SECTORS as f32) as usize)
-                .min(BREACH_SECTORS - 1);
-            if Some(comp[i]) != main {
-                continue;
-            }
-            let score = (d - BREACH_STAND_IDEAL).abs();
-            if best[k].is_none_or(|(s, _)| score < s) {
-                best[k] = Some((score, *n));
-            }
-        }
-        let stands: Vec<[f32; 3]> = best.iter().flatten().map(|(_, n)| (*n).into()).collect();
-        self.bot_breach_stands.push((at, stands.clone()));
-        stands
-    }
-
-    /// What one bot's body sees this tick, from its sim and the weapon
-    /// table. `None` between levels, where the null cmd is all a bot can
-    /// send.
-    fn bot_view(
-        &self,
-        slot: usize,
-        enemy: Option<crate::bots::EnemyView>,
-    ) -> Option<crate::bots::BotView> {
-        let sim = self.clients[slot].as_ref()?.sim.as_ref()?;
-        let weapons = self.weapon_table.clone();
-        let def = weapons.get(sim.ps.weapon as usize);
-        let held = |pick: &dyn Fn(&vcod_common::weapon::WeaponDef) -> bool| {
-            (1u8..64).find(|i| {
-                sim.ps.weapons_held >> i & 1 == 1 && weapons.get(*i as usize).is_some_and(pick)
-            })
-        };
-        // A frag: UO's smoke grenades and satchel charge are grenades too,
-        // in slots of their own.
-        let grenade = held(&|d| d.weapon_type == "grenade" && d.weapon_slot == "grenade");
-        let pistol = held(&|d| d.weapon_slot == "pistol");
-        let ms = |s: f32| (s * 1000.0) as i32;
-        // A segmented reload's first round lands after its start segment
-        // and one loop segment.
-        let reload_ms = def.map_or(0, |d| {
-            if d.segmented_reload {
-                ms(d.reload_start_time + d.reload_time)
-            } else if d.reload_empty_time > 0.0 {
-                ms(d.reload_empty_time)
-            } else {
-                ms(d.reload_time)
-            }
-        });
-        let draw_ms = pistol
-            .and_then(|p| weapons.get(p as usize))
-            .map_or(0, |p| ms(def.map_or(0.0, |d| d.drop_time) + p.raise_time));
-        let loaded = (1u8..64)
-            .filter(|&i| sim.ps.weapons_held >> i & 1 == 1)
-            .filter(|&i| {
-                weapons.get(i as usize).is_some_and(|d| {
-                    let reserve = if d.clip_only {
-                        0
-                    } else {
-                        sim.ps.ammo[d.ammo_index]
-                    };
-                    sim.ps.ammoclip[d.clip_index] as i32 + reserve as i32 > 0
-                })
-            })
-            .fold(0u64, |m, i| m | 1 << i);
-        // The one in hand first: with two launchers carried, the other
-        // read as the rocket and the one in hand fired at players. Else
-        // any loaded one: an empty bazooka carried beside a loaded
-        // panzerschreck read as no rocket, and the bot traded launcher
-        // after launcher away fetching more (mp_foy, seed 15).
-        let is_launcher = |w: u8| {
-            weapons
-                .get(w as usize)
-                .is_some_and(|d| d.weapon_class == "rocketlauncher")
-        };
-        let rocket = held_rocket(sim.ps.weapon, sim.ps.weapons_held & loaded, is_launcher);
-        let launchers = (1u8..64)
-            .filter(|&w| sim.ps.weapons_held >> w & 1 == 1 && is_launcher(w))
-            .fold(0u64, |m, w| m | 1 << w);
-        let gun = (1u8..64).find(|&i| {
-            loaded >> i & 1 == 1
-                && weapons
-                    .get(i as usize)
-                    .is_some_and(|d| d.weapon_type == "bullet" && d.weapon_slot != "pistol")
-        });
-        Some(crate::bots::BotView {
-            origin: sim.ps.origin.into(),
-            eye_height: sim.ps.view_height(),
-            eye_settled: sim.ps.view_height_settled(),
-            lean_offset: vcod_common::pmove::aim::lean_offset(sim.ps.yaw, sim.ps.lean).into(),
-            delta_angles: sim.delta_angles(),
-            view: sim.view_angles(),
-            gun_offset: sim.gun_offset(),
-            weapon: sim.ps.weapon,
-            weapons_held: sim.ps.weapons_held,
-            clip: def.map_or(-1, |d| sim.ps.ammoclip[d.clip_index]),
-            fire_time_ms: def.map_or(0, |d| (d.fire_time * 1000.0) as i32),
-            busy_ms: sim.ps.weapon_time_ms,
-            automatic: def.is_some_and(|d| !d.semi_auto),
-            has_ads: def.is_some_and(|d| d.aim_down_sight),
-            sniper: def.is_some_and(|d| d.ads_overlay_shader.is_some()),
-            lmg: sim.ps.rules == vcod_common::pmove::MoveRules::Uo
-                && def.is_some_and(|d| d.is_lmg()),
-            deployed: sim.ps.deployed(),
-            deploy_yaw: sim.ps.prone_direction,
-            ads_frac: sim.ps.weapon_pos_frac,
-            spread_scale: sim.ps.aim_spread_scale,
-            speed: sim.ps.velocity.truncate().length(),
-            velocity: sim.ps.velocity.into(),
-            dead: sim.dead,
-            playing: sim.pm_type == crate::spectate::PmType::Normal && !sim.dead,
-            enemy,
-            hurt: self.bot_hurt(sim),
-            // Checked in pass 2 against this tick's teammates.
-            friend_in_line: false,
-            sidestep: None,
-            cover: None,
-            hunt: None,
-            use_takes_weapon: sim.cursor_hint >= self.proto.cursor_hints.weapon,
-            grenade,
-            grenade_cooks: grenade
-                .and_then(|g| weapons.get(g as usize))
-                .is_some_and(|d| d.cook_off_hold),
-            grenade_ready: sim.ps.grenade_time_left_ms > 0 && sim.ps.weapon_delay_ms <= 1,
-            frag_near: self.script.as_ref().and_then(|rt| {
-                let at = sim.ps.origin;
-                let eye = glam::Vec3::from(sim.eye_origin());
-                rt.missiles()
-                    .armed()
-                    .filter(|(_, w, _, _)| {
-                        weapons.get(*w as usize).is_some_and(|d| {
-                            d.explosion_radius > 0.0 && d.explosion_inner_damage > 0
-                        })
-                    })
-                    // A cook dropped by a thrower killed holding it is seen
-                    // fall: one went off by a teammate 3.5 s on and killed
-                    // him (bot-combat.md 12).
-                    .filter(|(o, _, owner, dropped)| {
-                        *owner == Some(slot)
-                            || *dropped
-                            || self.world.as_ref().is_none_or(|w| {
-                                crate::bots::notices_frag(eye, sim.view_angles()[1], *o, |a, b| {
-                                    w.collision.shot_trace(a, b).fraction >= 1.0
-                                })
-                            })
-                    })
-                    .map(|(o, _, _, _)| o)
-                    .filter(|o| {
-                        (o.z - at.z).abs() < crate::bots::FLEE_HEIGHT
-                            && (*o - at).truncate().length() < crate::bots::FLEE_REACH
-                    })
-                    .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
-                    .map(Into::into)
-            }),
-            // Probed in pass 3, on the ticks the brain throws.
-            lob: None,
-            waypoint: None,
-            hazard_ahead: std::array::from_fn(|i| {
-                self.world.as_ref().is_some_and(|w| {
-                    let (s, c) = (i as f32 * 45.0).to_radians().sin_cos();
-                    let ahead = glam::Vec3::new(c, s, 0.0) * crate::bots::HAZARD_LOOK;
-                    crate::nav::hazard(&w.hazards, sim.ps.origin + ahead)
-                })
-            }),
-            // Felt in pass 3, on the ticks the brain reads it.
-            drop_ahead: [None; 8],
-            wall_ahead: std::array::from_fn(|i| {
-                let standing = sim.ps.on_ground && !sim.ps.on_ladder;
-                self.world.as_ref().filter(|_| standing).is_some_and(|w| {
-                    let (s, c) = (i as f32 * 45.0).to_radians().sin_cos();
-                    let dir = glam::Vec3::new(c, s, 0.0);
-                    crate::nav::wall_ahead(&w.collision, sim.ps.origin, dir)
-                })
-            }),
-            linked: sim.link_to.is_some(),
-            stranded: self.nav.as_ref().is_some_and(|g| {
-                let at = sim.ps.origin.into();
-                let spawns = self.world.as_ref().map_or(&[][..], |w| &w.spawn_points);
-                g.dead_end(at) || (self.nav_settled() && g.pit(at, spawns))
-            }) || self.bot_paths.get(&slot).is_some_and(|f| f.penned()),
-            on_ladder: sim.ps.on_ladder,
-            ladder_normal: sim.ps.ladder_normal.into(),
-            ladder_middle: self
-                .nav
-                .as_ref()
-                .filter(|_| sim.ps.on_ladder)
-                .and_then(|g| g.ladder_middle(sim.ps.origin))
-                .map(Into::into),
-            back_face: None,
-            on_ground: sim.ps.on_ground,
-            jump: false,
-            sliding: sim.ps.sliding(),
-            leap: false,
-            lip: false,
-            crouch_jump: false,
-            stop: false,
-            run_off: false,
-            move_scale: def
-                .map(|d| d.move_speed_scale)
-                .filter(|&m| m > 0.0)
-                .unwrap_or(1.0),
-            fatigue: (sim.ps.rules == vcod_common::pmove::MoveRules::Uo).then_some(sim.ps.fatigue),
-            sprinting: sim.ps.sprinting,
-            sprint_room: 0.0,
-            push_off: None,
-            unpin: None,
-            pistol,
-            rocket,
-            primaries: [sim.ps.weapon_slots[1], sim.ps.weapon_slots[2]],
-            launchers,
-            gun,
-            reload_ms,
-            draw_ms,
-            loaded,
-            sd: None,
-            re: None,
-            bel: None,
-            uo: None,
-            noise: None,
-            // Stock `sd.gsc` and `re.gsc` spawn the dead as spectators.
-            one_life: self
-                .level_cvars
-                .as_ref()
-                .is_some_and(|(g, _)| g == "sd" || g == "re"),
-            survive: crate::bots::retreat::Vitals {
-                health: sim.health,
-                max_health: sim.max_health,
-                clip_size: def.map_or(0, |d| d.clip_size.min(i16::MAX as u32) as i16),
-                enemy_eye: enemy.and_then(|e| {
-                    let s = self.clients.get(e.slot)?.as_ref()?.sim.as_ref()?;
-                    Some(s.ps.view().eye.into())
-                }),
-                heal: None,
-                cover: None,
-            },
-            // Filled for the level's vehicles in pass 2.
-            vehicles: Vec::new(),
-            seat: None,
-            armor: None,
-        })
-    }
-
-    /// The S&D objectives for this frame's bot views, on an `sd` level only:
-    /// the attacking and defending team values and the view with a
-    /// placeholder role. Read fresh every frame, since a `map_restart`
-    /// respawns the zones under new handles.
-    /// A level whose bots share out a team objective: `sd`, `re` and UO's
-    /// `ctf`, `dom`, `hq` and `bas`.
-    fn team_objective(v: &crate::bots::BotView) -> bool {
-        v.sd.is_some() || v.re.is_some() || v.uo.is_some()
-    }
-
-    fn bot_sd(&mut self) -> Option<(i32, i32, crate::bots::SdView)> {
-        if self.level_cvars.as_ref().is_none_or(|(g, _)| g != "sd") {
-            return None;
-        }
-        let o = self.script.as_mut()?.sd_objectives();
-        let team = |t: &str| match t {
-            "axis" => script::TEAM_AXIS,
-            "allies" => script::TEAM_ALLIES,
-            _ => -1,
-        };
-        let sites = o
-            .sites
-            .iter()
-            .map(|&(mins, maxs)| crate::bots::SiteView {
-                mins,
-                maxs,
-                stand: self.site_stand(mins, maxs),
-            })
-            .collect();
-        let bomb = o.bomb.map(|(origin, (lo, hi))| crate::bots::BombView {
-            origin,
-            aim: std::array::from_fn(|i| (lo[i] + hi[i]) * 0.5),
-        });
-        Some((
-            team(&o.attackers),
-            team(&o.defenders),
-            crate::bots::SdView {
-                role: crate::bots::ObjRole::Attack,
-                sites,
-                bomb,
-                rank: 0,
-                lead: false,
-                cover: None,
-            },
-        ))
-    }
-
-    /// United Offensive's `ctf`, `dom`, `hq` and `bas` state for this
-    /// frame's bot views, on such a level only. Test-facing too.
-    pub fn bot_uo(&mut self) -> Option<script::UoObjectives> {
-        let gametype = self.level_cvars.as_ref()?.0.clone();
-        let clients = self.clients.len();
-        self.script.as_mut()?.uo_objectives(&gametype, clients)
-    }
-
-    /// One bot's [`crate::bots::UoView`] off [`Self::bot_uo`]'s state: its
-    /// team's objectives against the other's, each zone with the point the
-    /// graph reaches in it.
-    fn bot_uo_view(
-        &mut self,
-        uo: &script::UoObjectives,
-        slot: usize,
-        team: i32,
-        rank: usize,
-        breach: &crate::bots::Breach,
-    ) -> crate::bots::UoView {
-        let rocket = breach.rocket;
-        use crate::bots::*;
-        let origin_of = |c: usize| -> Option<[f32; 3]> {
-            Some(
-                self.clients
-                    .get(c)?
-                    .as_ref()?
-                    .sim
-                    .as_ref()?
-                    .ps
-                    .origin
-                    .into(),
-            )
-        };
-        let escort = match uo {
-            script::UoObjectives::Ctf(flags) => flags
-                .iter()
-                .find(|f| f.team != team)
-                .and_then(|f| f.carrier)
-                .filter(|c| *c != slot)
-                .and_then(origin_of),
-            _ => None,
-        };
-        let mut site = |(mins, maxs): script::Bounds| SiteView {
-            mins,
-            maxs,
-            stand: self.site_stand(mins, maxs),
-        };
-        let mid = |(lo, hi): script::Bounds| -> [f32; 3] {
-            std::array::from_fn(|i| (lo[i] + hi[i]) * 0.5)
-        };
-        match uo {
-            script::UoObjectives::Ctf(flags) => {
-                let mut flag = |f: &script::CtfFlag| CtfFlagView {
-                    home: f.home.map(&mut site),
-                    dropped: f.dropped.map(&mut site),
-                    goal: site(f.goal),
-                    carried: f.carrier.is_some(),
-                };
-                let ours = flags.iter().find(|f| f.team == team);
-                let theirs = flags.iter().find(|f| f.team != team);
-                let (Some(ours), Some(theirs)) = (ours, theirs) else {
-                    return UoView::Dom(DomView {
-                        flags: Vec::new(),
-                        rank,
-                    });
-                };
-                UoView::Ctf(Box::new(CtfView {
-                    ours: flag(ours),
-                    theirs: flag(theirs),
-                    carrying: theirs.carrier == Some(slot),
-                    escort,
-                    rank,
-                }))
-            }
-            script::UoObjectives::Dom(flags) => UoView::Dom(DomView {
-                flags: flags
-                    .iter()
-                    .map(|f| DomFlagView {
-                        site: site(f.bounds),
-                        ours: f.team == team,
-                    })
-                    .collect(),
-                rank,
-            }),
-            script::UoObjectives::Hq { radios, next } => UoView::Hq(HqView {
-                radio: radios.first().map(|r| HqRadioView {
-                    at: r.at,
-                    radius: r.radius,
-                    ours: r.team == team,
-                }),
-                next: *next,
-                rank,
-            }),
-            script::UoObjectives::Bas(bases) => UoView::Bas(BasView {
-                bases: bases
-                    .iter()
-                    .map(|b| BasBaseView {
-                        at: b.at,
-                        ours: b.team == team,
-                        breached: b.breached,
-                        planted: b.planted,
-                        blows_in: b.blows_in,
-                        charge: b.charge.map(|(bounds, model)| BombView {
-                            origin: model,
-                            aim: mid(bounds),
-                        }),
-                        shot: (rocket && b.team != team && !b.breached)
-                            .then(|| self.breach_shot(slot, b.at, breach.models))
-                            .flatten(),
-                        stands: if rocket && b.team != team && !b.breached {
-                            self.breach_stands(b.at, breach.models)
-                        } else {
-                            Vec::new()
-                        },
-                    })
-                    .collect(),
-                launchers: breach.launchers.to_vec(),
-                guns: breach.guns.to_vec(),
-                rank,
-            }),
-        }
-    }
-
-    /// The live objective records as `(index, teamNum, origin)`, on a `bel`
-    /// level only: the allied players' compass markers.
-    fn bot_bel(&self) -> Option<Vec<(usize, i32, [f32; 3])>> {
-        if self.level_cvars.as_ref().is_none_or(|(g, _)| g != "bel") {
-            return None;
-        }
-        let rt = self.script.as_ref()?;
-        Some(
-            rt.host
-                .objectives
-                .iter()
-                .enumerate()
-                .filter(|(_, o)| o.state != 0)
-                .map(|(i, o)| (i, o.team_num, o.origin_f32()))
-                .collect(),
-        )
-    }
-
-    /// The retrieval objectives for this frame's bot views, on an `re` level
-    /// only: the attacking and defending team values and each objective,
-    /// with `mine` and the compass filter left for the caller.
-    fn bot_re(&mut self) -> Option<(i32, i32, Vec<ReObjCarried>)> {
-        if self.level_cvars.as_ref().is_none_or(|(g, _)| g != "re") {
-            return None;
-        }
-        let clients = self.clients.len();
-        let o = self.script.as_mut()?.re_objectives(clients);
-        let team = |t: &str| match t {
-            "axis" => script::TEAM_AXIS,
-            "allies" => script::TEAM_ALLIES,
-            _ => -1,
-        };
-        let objectives = o
-            .objectives
-            .iter()
-            .map(|r| {
-                let mid = |(lo, hi): ([f32; 3], [f32; 3])| -> [f32; 3] {
-                    std::array::from_fn(|i| (lo[i] + hi[i]) * 0.5)
-                };
-                let (lo, hi) = r.goal;
-                let goal = self.site_stand(lo, hi);
-                // The farthest corner, flat, and a body's half width past it.
-                let goal_clear = [lo[0], hi[0]]
-                    .iter()
-                    .flat_map(|&x| [lo[1], hi[1]].map(|y| (x - goal[0]).hypot(y - goal[1])))
-                    .fold(0.0, f32::max)
-                    + 16.0;
-                let carrier_at = r.carrier.and_then(|slot| {
-                    let sim = self.clients.get(slot)?.as_ref()?.sim.as_ref()?;
-                    Some(sim.ps.origin.into())
-                });
-                let view = crate::bots::ReObjView {
-                    pickup: r.pickup.map(mid),
-                    goal,
-                    goal_clear,
-                    carried: r.carrier.is_some(),
-                    mine: false,
-                    carrier_at,
-                    laid: r.laid,
-                };
-                (view, r.carrier, r.shown_to)
-            })
-            .collect();
-        Some((team(&o.attackers), team(&o.defenders), objectives))
-    }
-
-    /// Where a bot stands in a zone (a bombzone, a retrieval goal): the
-    /// graph node inside the bounds nearest their middle, from the
-    /// component holding the most nodes so a bot anywhere can reach it,
-    /// else the nearest such node to the middle. Cached per zone; the zones
-    /// keep their bounds across rounds.
-    fn site_stand(&mut self, mins: [f32; 3], maxs: [f32; 3]) -> [f32; 3] {
-        let mid = [
-            (mins[0] + maxs[0]) * 0.5,
-            (mins[1] + maxs[1]) * 0.5,
-            mins[2],
-        ];
-        if let Some(&(_, _, p)) = self
-            .bot_sites
-            .iter()
-            .find(|(lo, hi, _)| *lo == mins && *hi == maxs)
-        {
-            return p;
-        }
-        let Some(g) = self.nav.clone() else {
-            return mid;
-        };
-        let comp = g.components();
-        let mut sizes: BTreeMap<u32, usize> = BTreeMap::new();
-        for c in &comp {
-            *sizes.entry(*c).or_default() += 1;
-        }
-        // Largest first, lower number on a tie, for a pick that does not
-        // depend on map iteration.
-        let main = sizes
-            .iter()
-            .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
-            .map(|(c, _)| *c);
-        let mid_v = glam::Vec3::from(mid);
-        let inside = |n: &glam::Vec3| {
-            (0..2).all(|i| n[i] >= mins[i] + 16.0 && n[i] <= maxs[i] - 16.0)
-                && n.z <= maxs[2]
-                && n.z + 70.0 >= mins[2]
-        };
-        let best = |want_inside: bool| {
-            g.nodes
-                .iter()
-                .enumerate()
-                .filter(|(i, n)| Some(comp[*i]) == main && (!want_inside || inside(n)))
-                .min_by(|a, b| a.1.distance(mid_v).total_cmp(&b.1.distance(mid_v)))
-                .map(|(_, n)| (*n).into())
-        };
-        let p = best(true).or_else(|| best(false)).unwrap_or(mid);
-        self.bot_sites.push((mins, maxs, p));
-        p
-    }
-
-    /// The live, playing client on another team with a clear eye line that
-    /// the bot in `slot` fights: the one who hit it within
-    /// [`crate::bots::HURT_MS`], else the target it tracks while in sight,
-    /// unless a new one in the sight cone stands nearer than
-    /// [`crate::bots::RETARGET_RATIO`] of its range, else the nearest in
-    /// the cone ([`crate::bots::Skill::fov_deg`]). Team rules: axis and
-    /// allies only fight each other; everyone else is fair game to everyone
-    /// (`dm` carries no teams).
-    fn bot_enemy(&self, slot: usize, teams: &[i32]) -> Option<crate::bots::EnemyView> {
-        if !self.bot_admin.shoot {
-            return None;
-        }
-        let me = self.clients[slot].as_ref()?.sim.as_ref()?;
-        if me.pm_type != crate::spectate::PmType::Normal || me.dead {
-            return None;
-        }
-        let my_team = teams.get(slot).copied().unwrap_or(0);
-        let team_enemy = |their: i32| match my_team {
-            script::TEAM_AXIS => their != script::TEAM_AXIS,
-            script::TEAM_ALLIES => their != script::TEAM_ALLIES,
-            _ => true,
-        };
-        let my_eye: glam::Vec3 = me.eye_origin().into();
-        let world = self.world.as_ref().map(|w| &w.collision);
-        let bot = self.bots.get(&slot);
-        let tracked = bot.and_then(|b| b.target_slot());
-        let aware = bot.is_none_or(|b| b.aware);
-        let attacker = self.bot_hurt(me).map(|h| h.slot).filter(|_| aware);
-        let tracked = tracked.filter(|_| aware);
-        // A seat's view is the seat's (a tank's driver looks down the
-        // hull), not where the bot turns its head: crews see all round.
-        let fov = match bot {
-            Some(b) if b.aware && me.seat.is_none() => b.skill.fov_deg,
-            Some(_) => 360.0,
-            None => crate::bots::Skill::default().fov_deg,
-        };
-        let view = me.view_angles();
-        // In-range candidates nearest first: the tracked target and the
-        // attacker wherever they stand, the rest only inside the cone.
-        let mut candidates: Vec<(f32, glam::Vec3, crate::bots::EnemyView)> = Vec::new();
-        for (i, c) in self.clients.iter().enumerate() {
-            if i == slot {
-                continue;
-            }
-            let Some(s) = c.as_ref().and_then(|c| c.sim.as_ref()) else {
-                continue;
-            };
-            if s.pm_type != crate::spectate::PmType::Normal || s.dead {
-                continue;
-            }
-            if !team_enemy(teams.get(i).copied().unwrap_or(0)) {
-                continue;
-            }
-            // A tank's driver is out of every client's sight and every
-            // round's reach (docs/research/coduo-vehicles.md 13).
-            if self
-                .script
-                .as_ref()
-                .is_some_and(|rt| rt.host.vehicles.drives_tank(i))
-            {
-                continue;
-            }
-            let d = crate::bots::dist_sq(me.ps.origin.into(), s.ps.origin.into());
-            if d > crate::bots::SHOOT_RANGE * crate::bots::SHOOT_RANGE {
-                continue;
-            }
-            let chest = crate::bots::chest(s.ps.origin.into(), s.ps.view_height());
-            let known = Some(i) == tracked || Some(i) == attacker;
-            if !known && !crate::bots::in_sight_cone(my_eye, view, chest.into(), fov) {
-                continue;
-            }
-            candidates.push((
-                d,
-                s.ps.view().eye,
-                crate::bots::EnemyView {
-                    slot: i,
-                    origin: chest,
-                    velocity: s.ps.velocity.into(),
-                },
-            ));
-        }
-        candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let sighted = |(_, eye, enemy): &(f32, glam::Vec3, crate::bots::EnemyView)| {
-            let Some(w) = world else {
-                return Some(*enemy);
-            };
-            let clear = |to: glam::Vec3| w.shot_trace(my_eye, to).fraction >= 1.0;
-            let origin = crate::bots::aim_point(enemy.origin, (*eye).into(), |p| clear(p.into()))?;
-            Some(crate::bots::EnemyView { origin, ..*enemy })
-        };
-        let order: Vec<(f32, usize)> = candidates.iter().map(|c| (c.0, c.2.slot)).collect();
-        crate::bots::pick_enemy(&order, attacker, tracked, |i| sighted(&candidates[i]))
-    }
-
-    /// [`crate::bots::BotView::hurt`] for the body `sim`: its last hit by
-    /// another client within [`crate::bots::HURT_MS`], while he still
-    /// plays.
-    fn bot_hurt(&self, sim: &crate::spectate::ClientSim) -> Option<crate::bots::Hurt> {
-        let (a, at, dir) = sim.last_hit?;
-        let ago_ms = self.sv_time_ms.wrapping_sub(at);
-        if !(0..crate::bots::HURT_MS).contains(&ago_ms) {
-            return None;
-        }
-        let s = self.clients.get(a)?.as_ref()?.sim.as_ref()?;
-        if s.pm_type != crate::spectate::PmType::Normal || s.dead {
-            return None;
-        }
-        Some(crate::bots::Hurt {
-            slot: a,
-            ago_ms,
-            dir,
-        })
-    }
-
-    /// [`crate::bots::BotView::friend_in_line`] for the body in `slot`
-    /// shooting at `target`: its live axis or allies teammates' boxes this
-    /// tick (the enemy is cached, the friends are not); and when one is in
-    /// the line, [`crate::bots::BotView::sidestep`], a graph node near
-    /// whose eye clears it: `held`, the spot and pick time the bot is
-    /// already walking to, while it still clears and is not yet reached.
-    fn bot_friend_in_line(
-        &self,
-        slot: usize,
-        target: [f32; 3],
-        teams: &[i32],
-        held: Option<([f32; 3], i32)>,
-    ) -> (bool, Option<[f32; 3]>) {
-        let my_team = teams.get(slot).copied().unwrap_or(0);
-        if my_team != script::TEAM_AXIS && my_team != script::TEAM_ALLIES {
-            return (false, None);
-        }
-        let Some(me) = self.clients[slot].as_ref().and_then(|c| c.sim.as_ref()) else {
-            return (false, None);
-        };
-        let friends: Vec<(glam::Vec3, glam::Vec3)> = self
-            .clients
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != slot && teams.get(*i).copied() == Some(my_team))
-            .filter_map(|(_, c)| c.as_ref()?.sim.as_ref())
-            .filter(|o| o.pm_type == crate::spectate::PmType::Normal && !o.dead)
-            // A crew mate in the bot's own vehicle sits beside its gun.
-            .filter(|o| {
-                me.seat.is_none() || o.seat.map(|s| s.vehicle) != me.seat.map(|s| s.vehicle)
-            })
-            .map(|o| (o.ps.origin + o.ps.mins(), o.ps.origin + o.ps.maxs()))
-            .collect();
-        let eye = crate::game::combat::muzzle_point(&me.ps);
-        let target = glam::Vec3::from(target);
-        if !crate::bots::friend_in_line(eye, target, &friends) {
-            return (false, None);
-        }
-        let (Some(g), Some(w)) = (self.nav.as_ref(), self.world.as_ref()) else {
-            return (true, None);
-        };
-        let lift = eye - me.ps.origin;
-        let clear = |n: glam::Vec3| {
-            let eye = n + lift;
-            !crate::bots::friend_in_line(eye, target, &friends)
-                && w.collision.shot_trace(eye, target).fraction >= 1.0
-        };
-        if let Some(p) = crate::bots::held_sidestep(held, self.sv_time_ms, me.ps.origin, clear) {
-            return (true, Some(p));
-        }
-        let step = g.sidestep(me.ps.origin, target - me.ps.origin, clear);
-        (true, step.map(Into::into))
-    }
-
-    /// [`crate::bots::BotView::cover`] for the bot in `slot` fighting
-    /// `enemy`: the spot it holds while that still hides and peeks, else
-    /// the nearest that does ([`crate::bots::cover::find`]), looked at
-    /// every [`COVER_REFRESH_MS`].
-    fn bot_cover(
-        &mut self,
-        slot: usize,
-        enemy: Option<crate::bots::EnemyView>,
-    ) -> Option<crate::bots::cover::Spot> {
-        use crate::bots::cover;
-        let Some(e) = enemy.filter(|_| self.bots.get(&slot).is_some_and(|b| b.cover.enabled))
-        else {
-            self.bot_covers.remove(&slot);
-            return None;
-        };
-        let held = self.bot_covers.get(&slot).copied();
-        // A wary bot that shifted off the spot it was given has its own
-        // checked at once.
-        let mine = self
-            .bots
-            .get(&slot)
-            .filter(|b| b.wary)
-            .and_then(|b| b.held_spot());
-        if let Some((t, spot)) = held
-            && self.sv_time_ms.wrapping_sub(t) < COVER_REFRESH_MS
-            && mine.is_none_or(|m| spot.is_some_and(|s| s.at == m.at))
-        {
-            return spot;
-        }
-        let me = self.clients[slot].as_ref()?.sim.as_ref()?;
-        let threat = self.clients[e.slot].as_ref()?.sim.as_ref()?;
-        let (g, w) = (self.nav.as_ref()?, self.world.as_ref()?);
-        let spot = if crate::bots::dist_sq(me.ps.origin.into(), e.origin)
-            < cover::MIN_RANGE * cover::MIN_RANGE
-        {
-            None
-        } else {
-            let clear = |a: glam::Vec3, b: glam::Vec3| w.collision.shot_trace(a, b).fraction >= 1.0;
-            // `PM_UpdateLean`'s sphere from the eye toward the full lean.
-            let lean_room = |a: glam::Vec3, b: glam::Vec3| {
-                let r = glam::Vec3::splat(8.0);
-                w.collision
-                    .move_trace(a, b, -r, r, vcod_common::collision::MASK_PLAYERSOLID)
-                    .fraction
-            };
-            let sight = cover::Sight {
-                threat_eye: threat.ps.view().eye,
-                target: e.origin.into(),
-                lean: if me.ps.rules.v15() { 0.5 } else { 1.0 },
-                clear: &clear,
-                lean_room: &lean_room,
-            };
-            mine.or(held.and_then(|(_, s)| s))
-                .and_then(|s| sight.recheck(s))
-                .or_else(|| cover::find(g, me.ps.origin, &sight))
-        };
-        self.bot_covers.insert(slot, (self.sv_time_ms, spot));
-        spot
-    }
-
-    /// [`crate::bots::BotView::hunt`] for the bot in `slot` standing at
-    /// `from`: the vantage over the spot it hunts ([`crate::bots::hunt::vantage`]),
-    /// looked for once per spot.
-    fn bot_vantage(&mut self, slot: usize, from: [f32; 3]) -> Option<[f32; 3]> {
-        let Some(spot) = self.bots.get(&slot).and_then(|b| b.hunt_query()) else {
-            self.bot_hunts.remove(&slot);
-            return None;
-        };
-        if let Some((s, v)) = self.bot_hunts.get(&slot)
-            && *s == spot
-        {
-            return *v;
-        }
-        let (g, w) = (self.nav.as_ref()?, self.world.as_ref()?);
-        let sees = |feet: glam::Vec3| {
-            w.collision
-                .shot_trace(crate::bots::hunt::eye(feet), spot.into())
-                .fraction
-                >= 1.0
-        };
-        let v = crate::bots::hunt::vantage(g, from.into(), spot.into(), &sees).map(Into::into);
-        self.bot_hunts.insert(slot, (spot, v));
-        v
-    }
-
     /// Test-facing: the shots and blasts the bots hear next tick.
     pub fn bot_noises(&self) -> &[crate::bots::Noise] {
-        &self.bot_noises
+        &self.game.module.driver.noises
     }
 
     /// Test-facing, for the bot gates: the slots the bots hold.
     pub fn bot_slots(&self) -> Vec<usize> {
-        self.bots.keys().copied().collect()
+        self.game.module.driver.bots.keys().copied().collect()
     }
 
     /// Test-facing: where a bot's body is and what it is doing.
     pub fn bot_body(&self, slot: usize) -> Option<crate::bots::BotBody> {
-        let sim = self.clients[slot].as_ref()?.sim.as_ref()?;
+        let sim = self.core.clients[slot].as_ref()?.sim.as_ref()?;
         Some(crate::bots::BotBody {
             origin: sim.ps.origin.into(),
             on_ladder: sim.ps.on_ladder,
@@ -6166,42 +4125,134 @@ impl Server {
             dead: sim.dead,
             health: sim.health,
             clip: {
-                let d = self.weapon_table.get(sim.ps.weapon as usize);
+                let d = self.game.module.weapon_table.get(sim.ps.weapon as usize);
                 d.map_or(-1, |d| sim.ps.ammoclip[d.clip_index])
             },
             weapon: sim.ps.weapon,
             gun: self
+                .game
+                .module
                 .weapon_table
                 .get(sim.ps.weapon as usize)
                 .is_some_and(|d| d.weapon_type == "bullet"),
-            unsticking: self.bots.get(&slot).is_some_and(|b| b.unsticking()),
+            unsticking: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .is_some_and(|b| b.unsticking()),
             sprinting: sim.ps.sprinting,
-            sprint_leg: self.bots.get(&slot).is_some_and(|b| b.sprint_leg()),
+            sprint_leg: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .is_some_and(|b| b.sprint_leg()),
             deployed: sim.ps.deployed(),
-            engaged: self.bots.get(&slot).is_some_and(|b| b.engaged()),
-            retreating: self.bots.get(&slot).map_or(0, |b| b.retreating()),
+            engaged: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .is_some_and(|b| b.engaged()),
+            retreating: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .map_or(0, |b| b.retreating()),
             seat: sim.seat.map(|s| (s.vehicle, s.pos)),
-            crew_wait: self.bots.get(&slot).is_some_and(|b| b.waiting_for_crew()),
-            boardings: self.bots.get(&slot).map_or(0, |b| b.boardings()),
-            rockets_at_armor: self.bots.get(&slot).map_or(0, |b| b.rockets_at_armor()),
-            target: self.bots.get(&slot).and_then(|b| b.target_slot()),
-            firing: self.bots.get(&slot).is_some_and(|b| b.fired()),
+            crew_wait: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .is_some_and(|b| b.waiting_for_crew()),
+            boardings: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .map_or(0, |b| b.boardings()),
+            rockets_at_armor: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .map_or(0, |b| b.rockets_at_armor()),
+            target: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .and_then(|b| b.target_slot()),
+            firing: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .is_some_and(|b| b.fired()),
             clip_size: self
+                .game
+                .module
                 .weapon_table
                 .get(sim.ps.weapon as usize)
                 .filter(|d| d.weapon_type == "bullet")
                 .map_or(0, |d| d.clip_size.min(i16::MAX as u32) as i16),
-            throws: self.bots.get(&slot).map_or(0, |b| b.throws()),
+            throws: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .map_or(0, |b| b.throws()),
             yaw: sim.view_angles()[1],
-            walking: self.bots.get(&slot).is_some_and(|b| b.walking()),
-            holds_cover: self.bots.get(&slot).is_some_and(|b| b.holds_cover()),
-            on_objective: self.bots.get(&slot).is_some_and(|b| b.on_objective()),
+            walking: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .is_some_and(|b| b.walking()),
+            holds_cover: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .is_some_and(|b| b.holds_cover()),
+            on_objective: self
+                .game
+                .module
+                .driver
+                .bots
+                .get(&slot)
+                .is_some_and(|b| b.on_objective()),
         })
+    }
+
+    /// Read-only, for `bot_match`'s `DIGEST=`: a client's last cmd that ran
+    /// (`pers.cmd`), its playerstate and its health.
+    pub fn bot_digest_state(
+        &self,
+        slot: usize,
+    ) -> Option<(UserCmd, &vcod_common::pmove::PlayerState, i32)> {
+        let sim = self.core.clients.get(slot)?.as_ref()?.sim.as_ref()?;
+        Some((sim.pers_cmd, &sim.ps, sim.health))
     }
 
     /// Test-facing: turns a bot's retreat on or off (`Bot::set_retreat`).
     pub fn test_bot_retreat(&mut self, slot: usize, on: bool) {
-        if let Some(bot) = self.bots.get_mut(&slot) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.set_retreat(on);
         }
     }
@@ -6209,7 +4260,7 @@ impl Server {
     /// Test-facing: whether a bot varies its peeks and hunts from a
     /// vantage (`Bot::wary`).
     pub fn test_bot_wary(&mut self, slot: usize, on: bool) {
-        if let Some(bot) = self.bots.get_mut(&slot) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.wary = on;
         }
     }
@@ -6217,19 +4268,19 @@ impl Server {
     /// Test-facing: a bot's peeks, re-peeks and hunt arrivals
     /// (`Bot::tactics`).
     pub fn bot_tactics(&self, slot: usize) -> Option<[u32; 3]> {
-        Some(self.bots.get(&slot)?.tactics())
+        Some(self.game.module.driver.bots.get(&slot)?.tactics())
     }
 
     /// Test-facing: whether a bot fights from cover (`bots::cover`).
     pub fn test_bot_cover(&mut self, slot: usize, on: bool) {
-        if let Some(bot) = self.bots.get_mut(&slot) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.cover.enabled = on;
         }
     }
 
     /// Test-facing: whether a bot moves while it fights (`Bot::footwork`).
     pub fn test_bot_footwork(&mut self, slot: usize, on: bool) {
-        if let Some(bot) = self.bots.get_mut(&slot) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.footwork = on;
         }
     }
@@ -6237,34 +4288,40 @@ impl Server {
     /// Test-facing: whether a bot reacts to hits, keeps its target and
     /// sees in a cone (`Bot::aware`).
     pub fn test_bot_aware(&mut self, slot: usize, on: bool) {
-        if let Some(bot) = self.bots.get_mut(&slot) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.aware = on;
         }
     }
 
     /// Test-facing: whether a bot plays as one of its team (`bots::team`).
     pub fn test_bot_team_play(&mut self, slot: usize, on: bool) {
-        if let Some(bot) = self.bots.get_mut(&slot) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.team_play = on;
         }
     }
 
     /// Test-facing: whether a bot holds a cover spot, and its `ps.lean`.
     pub fn bot_cover_state(&self, slot: usize) -> Option<(bool, f32)> {
-        let sim = self.clients[slot].as_ref()?.sim.as_ref()?;
-        Some((self.bots.get(&slot)?.holds_cover(), sim.ps.lean))
+        let sim = self.core.clients[slot].as_ref()?.sim.as_ref()?;
+        Some((
+            self.game.module.driver.bots.get(&slot)?.holds_cover(),
+            sim.ps.lean,
+        ))
     }
 
     /// Test-facing: pins a bot's goal to a point (`Bot::force_goal`).
     pub fn test_bot_goal(&mut self, slot: usize, p: Option<[f32; 3]>) {
-        if let Some(bot) = self.bots.get_mut(&slot) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
             bot.force_goal(p);
         }
     }
 
     /// Test-facing: a bot's current waypoint node and the next, as points.
     pub fn bot_waypoints(&self, slot: usize) -> (Option<[f32; 3]>, Option<[f32; 3]>) {
-        let (Some(g), Some(f)) = (self.nav.as_ref(), self.bot_paths.get(&slot)) else {
+        let (Some(g), Some(f)) = (
+            self.game.module.driver.nav.as_ref(),
+            self.game.module.driver.paths.get(&slot),
+        ) else {
             return (None, None);
         };
         let at = |n: Option<u32>| n.map(|n| g.nodes[n as usize].into());
@@ -6275,48 +4332,66 @@ impl Server {
     /// Test-facing: the ticks a bot has waited aside for a climber
     /// (`nav::Follower::yielding`).
     pub fn bot_yielding(&self, slot: usize) -> u32 {
-        self.bot_paths.get(&slot).map_or(0, |f| f.yielding())
+        self.game
+            .module
+            .driver
+            .paths
+            .get(&slot)
+            .map_or(0, |f| f.yielding())
     }
 
     /// Test-facing: the name a bot joined with.
     pub fn bot_name(&self, slot: usize) -> Option<&str> {
-        self.bots.get(&slot).map(|b| b.name.as_str())
+        self.game
+            .module
+            .driver
+            .bots
+            .get(&slot)
+            .map(|b| b.name.as_str())
     }
 
     /// Test-facing: a client command a bot sends with its next replies.
     pub fn test_bot_command(&mut self, slot: usize, cmd: &str) {
-        self.bot_admin.orders.push((slot, cmd.to_string()));
+        self.game
+            .module
+            .bot_admin
+            .orders
+            .push((slot, cmd.to_string()));
     }
 
     /// Test-facing: the script team value a bot landed in.
     pub fn bot_team(&mut self, slot: usize) -> i32 {
-        self.script.as_mut().map_or(0, |rt| rt.client_team(slot))
+        self.game
+            .module
+            .script
+            .as_mut()
+            .map_or(0, |rt| rt.client_team(slot))
     }
 
     /// Builds the bots' navigation graph off the tick thread: the server
     /// keeps real time through the build and the bots wander until it lands.
     /// Off by default, so a test's bots find the graph on their first tick.
     pub fn build_nav_in_background(&mut self, on: bool) {
-        self.nav_background = on;
+        self.game.module.driver.nav_background = on;
     }
 
     /// Swap in the map built by the binary; tests run without one.
     pub fn load_world(&mut self, world: World) {
         world
             .collision
-            .set_arith(vcod_common::patch::Arith::for_protocol(self.proto));
-        self.world = Some(Rc::new(world));
-        self.nav = None;
-        self.nav_job = None;
-        self.nav_relink = None;
-        self.nav_rebuild = None;
-        self.bot_paths.clear();
-        self.bot_sites.clear();
-        self.bot_breach_stands.clear();
-        self.bot_noises.clear();
-        self.bot_covers.clear();
-        self.bot_hunts.clear();
-        self.creases = Default::default();
+            .set_arith(vcod_common::patch::Arith::for_protocol(self.game.proto));
+        self.game.world = Some(Rc::new(world));
+        self.game.module.driver.nav = None;
+        self.game.module.driver.nav_job = None;
+        self.game.module.nav_relink = None;
+        self.game.module.nav_rebuild = None;
+        self.game.module.driver.paths.clear();
+        self.game.module.driver.sites.clear();
+        self.game.module.bot_breach_stands.clear();
+        self.game.module.driver.noises.clear();
+        self.game.module.driver.covers.clear();
+        self.game.module.driver.hunts.clear();
+        self.game.module.driver.creases = Default::default();
     }
 
     /// The cvar table a gametype script starts with: the engine defaults,
@@ -6345,14 +4420,15 @@ impl Server {
     /// both boundaries. The `--set`s go in at the first load only, as
     /// `Com_StartupVariable` runs once; [`Self::set_cvar`] writes the
     /// running table after that.
-    fn cvars(&self, fs: &vcod_common::pk3::Pk3Fs) -> crate::cvars::Cvars {
-        let mut cvars = match self.carried_cvars.clone() {
+    fn cvars(&self, fs: &dyn vcod_common::asset_source::AssetSource) -> crate::cvars::Cvars {
+        let mut cvars = match self.game.carried_cvars.clone() {
             Some(c) => c,
             None => {
-                let mut cvars = crate::cvars::Cvars::for_protocol(self.proto.version);
-                match fs.read("default_mp.cfg") {
-                    Some(bytes) => {
-                        let n = cvars.exec_cfg(&String::from_utf8_lossy(&bytes));
+                let mut cvars =
+                    crate::cvars::Cvars::for_protocol(self.game.proto.transport.version);
+                match fs.load::<RawFile>("default_mp.cfg").ok() {
+                    Some(raw) => {
+                        let n = cvars.exec_cfg(&raw.text());
                         log::debug!("default_mp.cfg: {n} cvars set");
                     }
                     // A mount set without the localized pak loses every stock
@@ -6366,27 +4442,27 @@ impl Server {
         };
         // A level load is where a latched value goes live.
         cvars.apply_latched();
-        cvars.set("g_gametype", &self.cfg.gametype);
+        cvars.set("g_gametype", &self.game.cfg.gametype);
         // `SV_SpawnServer`'s `Cvar_Set("mapname", ...)` (map-cycle doc,
         // section 3 step 15), which a script's `getCvar("mapname")` reads.
-        cvars.set("mapname", &self.cfg.map);
+        cvars.set("mapname", &self.game.cfg.map);
         // Latched: a `set` while a level ran waits in the overrides.
         cvars.set(
             "sv_maxclients",
-            &self.pending_cvar("sv_maxclients", &self.cfg.max_clients.to_string()),
+            &self.pending_cvar("sv_maxclients", &self.game.cfg.max_clients.to_string()),
         );
-        cvars.set("dedicated", &self.dedicated.to_string());
+        cvars.set("dedicated", &self.game.dedicated.to_string());
         cvars.set("sv_pure", "0");
         cvars.set("sv_running", "1");
-        cvars.set("sv_serverid", &self.server_id.to_string());
-        cvars.set("sv_cheats", if self.cheats { "1" } else { "0" });
+        cvars.set("sv_serverid", &self.game.server_id.to_string());
+        cvars.set("sv_cheats", if self.game.cheats { "1" } else { "0" });
         // `Com_StartupVariable` runs from `Com_Init` only, never from
         // `SV_SpawnServer`, so the command line's sets go in once, over
         // `default_mp.cfg`; past that a script's `setCvar` stands
         // (map-cycle doc 4.5).
-        if self.carried_cvars.is_none() {
-            cvars.set("sv_hostname", &self.cfg.hostname);
-            for (name, value) in &self.cvar_overrides {
+        if self.game.carried_cvars.is_none() {
+            cvars.set("sv_hostname", &self.game.cfg.hostname);
+            for (name, value) in &self.game.cvar_overrides {
                 cvars.set(name, value);
             }
         }
@@ -6404,68 +4480,70 @@ impl Server {
 
     /// The movement rules this server's players and bots move by.
     pub fn move_rules(&self) -> vcod_common::pmove::MoveRules {
-        vcod_common::pmove::MoveRules::for_protocol(self.proto)
+        vcod_common::pmove::MoveRules::for_protocol(self.game.proto)
     }
 
     /// Test seam: the paks a download is served from, with no level load.
     /// Every pak in `fs` is listed in the systeminfo as if the level had
     /// read it, so a client checks a transfer against its checksum.
     pub fn test_mount_paks(&mut self, fs: Rc<vcod_common::pk3::Pk3Fs>) {
-        self.paks = configstrings::PakLists::of(
+        self.game.paks = configstrings::PakLists::of(
             false,
             fs.paks_read().map(|(p, _)| (p, true)),
-            self.proto,
+            self.game.proto,
             "",
         );
-        self.fs = Some(fs);
-        self.set_protocol(self.proto);
+        self.game.fs = Some(fs);
+        self.set_protocol(self.game.proto);
     }
 
     /// The protocol this server speaks: one per process, as each retail
     /// binary speaks one (docs/research/cod15-protocol-diff.md, "Server
     /// side"). Set before the first level loads.
     pub fn set_protocol(&mut self, p: &'static Protocol) {
-        self.proto = p;
+        self.game.proto = p;
+        self.core.transport = &p.transport;
         // `sv_master1` defaults to the binary's own master unless set.
         if !self
+            .game
             .cvar_overrides
             .iter()
             .any(|(n, _)| n.eq_ignore_ascii_case("sv_master1"))
         {
-            self.masters.set(0, p.master.host);
+            self.core.masters.set(0, p.transport.master().host);
         }
-        self.masters.set_port(p.master.port);
-        if let Some(w) = &self.world {
+        self.core.masters.set_port(p.transport.master().port);
+        if let Some(w) = &self.game.world {
             w.collision
                 .set_arith(vcod_common::patch::Arith::for_protocol(p));
         }
         // The static slots move with the layout (UO's start time, winner
         // and hint strings).
-        self.configstrings = configstrings::static_configstrings(
-            &self.cfg,
-            self.server_id,
-            self.fall_heights,
-            self.cheats,
-            &self.paks,
+        self.core.configstrings = configstrings::static_configstrings(
+            &self.game.cfg,
+            self.game.server_id,
+            self.game.module.fall_heights,
+            self.game.cheats,
+            &self.game.paks,
             self.systeminfo_v6().as_deref(),
             p,
         );
-        self.sent_configstrings = self.configstrings.clone();
+        self.core.sent_configstrings = self.core.configstrings.clone();
     }
 
     pub fn protocol(&self) -> &'static Protocol {
-        self.proto
+        self.game.proto
     }
 
     /// Whether this server speaks 1.5 or United Offensive, whose engine and
     /// game module are 1.5's with UO's additions (coduo-diff.md, "Server").
     pub fn v15(&self) -> bool {
-        self.proto.version != PROTOCOL_V1.version
+        !self.game.proto.is_v1()
     }
 
     /// The game module's tables for this protocol.
     pub fn defs(&self) -> &'static crate::defs::Defs {
-        crate::defs::Defs::of(self.proto)
+        crate::defs::Defs::of(self.game.proto)
     }
 
     /// Configstring 1's 1.5 rows (`registry::SYSTEMINFO_V6`), `None` on a
@@ -6475,10 +4553,10 @@ impl Server {
             return None;
         }
         let fresh;
-        let cvars = match self.script.as_ref() {
+        let cvars = match self.game.module.script.as_ref() {
             Some(rt) => rt.cvars(),
             None => {
-                let mut c = crate::cvars::Cvars::for_protocol(self.proto.version);
+                let mut c = crate::cvars::Cvars::for_protocol(self.game.proto.transport.version);
                 c.set_ui_cvars();
                 fresh = c;
                 &fresh
@@ -6502,7 +4580,7 @@ impl Server {
     ///
     /// The table is cloned in, not moved: `ScriptRuntime::load` fails on a
     /// missing `.gsc`, an unresolvable map, a bad BSP or a failed entity
-    /// spawn, and the error path has to leave `self.configstrings` exactly as
+    /// spawn, and the error path has to leave `self.core.configstrings` exactly as
     /// it was, so the error the caller reports is about the script rather
     /// than about a half-cleared table. `main.rs` exits on it.
     pub fn load_scripts(&mut self, fs: Rc<vcod_common::pk3::Pk3Fs>) -> anyhow::Result<()> {
@@ -6524,9 +4602,9 @@ impl Server {
     /// the real console and restart paths under a probe script call it
     /// directly.
     pub fn overlay_script(&mut self, path: &str, text: &str) {
-        self.script_overlay = Some((path.to_string(), text.to_string()));
+        self.game.module.script_overlay = Some((path.to_string(), text.to_string()));
         // A restart reuses the running level's compile; new text needs a new one.
-        if let Some(rt) = self.script.as_mut() {
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.forget_compiled();
         }
     }
@@ -6535,14 +4613,16 @@ impl Server {
     /// Test-facing: a new level starts a new log, so a caller spanning a
     /// restart collects this per level.
     pub fn script_log(&self) -> &[String] {
-        self.script
+        self.game
+            .module
+            .script
             .as_ref()
-            .map_or(&self.shutdown_log, |rt| rt.script_log())
+            .map_or(&self.game.shutdown_log, |rt| rt.script_log())
     }
 
     /// Whether `killserver` or a `G_Error` drop has shut the level down.
     pub fn is_killed(&self) -> bool {
-        self.killed
+        self.game.killed
     }
 
     /// `SV_InitGameProgs(savePersist)` (docs/research/cod11-map-cycle.md,
@@ -6566,29 +4646,34 @@ impl Server {
         carry: crate::game::script::Carry,
         save_persist: bool,
     ) -> anyhow::Result<()> {
-        let cvars = self.cvars(&fs);
-        self.level_cvars = Some((
+        let cvars = self.cvars(&*fs);
+        self.game.level_cvars = Some((
             cvars.get("g_gametype").to_string(),
             cvars.get("sv_maxclients").to_string(),
         ));
-        self.fs = Some(fs.clone());
+        self.game.fs = Some(fs.clone());
         // `sv_pure` reads the `--set` override; vcod defaults it to 0 where
         // retail's default is 1.
         let pure = cvars.get("sv_pure").trim().parse::<i32>().unwrap_or(0) != 0;
-        if let Some(cs0) = self.configstrings.get_mut(0) {
+        if let Some(cs0) = self.core.configstrings.get_mut(0) {
             *cs0 = configstrings::with_sv_pure(cs0, pure);
         }
-        self.pure_check = Some(PureCheck::new(&fs, self.checksum_feed, self.proto));
+        self.game.pure_check = Some(PureCheck::new(
+            &fs,
+            self.core.checksum_feed,
+            self.game.proto,
+        ));
         if !restart {
-            self.anims = match vcod_common::animtree::PlayerAnims::load(&fs) {
+            self.game.module.anims = match vcod_common::animtree::PlayerAnims::load(&*fs) {
                 Ok(a) => Some(Rc::new(a)),
                 Err(e) => {
                     log::warn!("player anims: {e:#}, players will not animate");
                     None
                 }
             };
-            self.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs, self.defs()));
-            self.hitlocs = crate::game::combat::HitLocTable::load(&fs);
+            self.game.module.weapon_table =
+                Rc::new(crate::weapons::WeaponTable::load(&fs, self.defs()));
+            self.game.module.hitlocs = crate::game::combat::HitLocTable::load(&fs);
         }
         // `game[]` and `pers[]` are the script's and go only under
         // `savePersist`; the item registry is the engine's and survives a
@@ -6601,41 +4686,73 @@ impl Server {
             area: carry.area.filter(|_| restart),
             map: carry.map.filter(|_| restart),
             scripts: carry.scripts.filter(|_| restart),
-            seed: Some(self.level_seed),
-            spawn_pins: self.spawn_pins.clone(),
+            models: carry.models.filter(|_| restart),
+            gametype: carry.gametype,
+            seed: Some(self.game.module.level_seed),
+            spawn_pins: self.game.module.spawn_pins.clone(),
         };
-        self.level_seed = vcod_common::rng::xorshift(&mut self.level_seed) | 1;
+        self.game.module.level_seed =
+            vcod_common::rng::xorshift(&mut self.game.module.level_seed) | 1;
+        // `SV_MapRestart`'s `G_ShutdownGame(1)`: the running level's log
+        // closes ahead of the new one's `G_InitGame`.
+        self.close_game_log(if restart {
+            crate::engine::gamelog::RESTART
+        } else {
+            crate::engine::gamelog::SHUTDOWN
+        });
         let fs_paks = fs.clone();
-        let source = crate::game::script::PakScripts::new(fs.clone(), self.script_overlay.clone());
+        let source = crate::game::script::PakScripts::new(
+            fs.clone(),
+            self.game.module.script_overlay.clone(),
+        );
         let mut rt = crate::game::script::ScriptRuntime::load_from(
             Box::new(source),
             fs,
-            &self.cfg.map,
-            &self.cfg.gametype,
-            self.configstrings.clone(),
+            &self.game.cfg.map,
+            &self.game.cfg.gametype,
+            self.core.configstrings.clone(),
             cvars,
-            self.world.clone(),
-            self.weapon_table.clone(),
-            self.sv_time_ms,
+            self.game.world.clone(),
+            self.game.module.weapon_table.clone(),
+            self.core.sv_time_ms,
             carry,
         )?;
-        rt.set_player_anims(self.anims.clone());
+        rt.set_player_anims(self.game.module.anims.clone());
         // `SV_SpawnServer` step 23, once the level has read its files; a
         // restart keeps the lists, as `SV_MapRestart` never sets them.
         if !restart {
-            self.paks = self.level_paks(&fs_paks, &rt, pure);
+            self.game.paks = self.level_paks(&fs_paks, &rt, pure);
         }
         let mut configstrings = rt.configstrings().to_vec();
         rt.cvars()
             .write_mirror(&mut configstrings)
             .map_err(|e| anyhow::anyhow!("writing the cvar mirror: {e:?}"))?;
-        self.configstrings = configstrings;
-        self.script = Some(rt);
+        self.core.configstrings = configstrings;
+        // `G_InitGame`'s open, at the new `level.time` (cod11-map-cycle.md 9).
+        let game = if rt.cvars().get("fs_game").is_empty() {
+            fs_paks
+                .dirs()
+                .last()
+                .and_then(|d| d.file_name())
+                .map_or("main".to_string(), |n| n.to_string_lossy().into_owned())
+        } else {
+            rt.cvars().get("fs_game").to_string()
+        };
+        let mut info = Info::new();
+        for (k, v) in rt.cvars().info_pairs(crate::cvars::flag::SERVERINFO) {
+            info.set(k, v);
+        }
+        info.set("sv_pure", u8::from(self.game.paks.pure));
+        let info = info.to_string();
+        self.game
+            .game_log
+            .init(rt.cvars(), &game, &info, self.core.sv_time_ms);
+        self.game.module.script = Some(rt);
         self.refresh_fall_heights();
         self.sync_sent_configstrings();
         // `SV_SpawnServer` and `SV_MapRestart` both clear it, the flag
         // included, and the new level's `main` turns it back on.
-        self.archive.clear();
+        self.game.archive.clear();
         Ok(())
     }
 
@@ -6647,9 +4764,9 @@ impl Server {
         rt: &crate::game::script::ScriptRuntime,
         pure: bool,
     ) -> configstrings::PakLists {
-        use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6};
+        use vcod_common::net::protocol::PROTOCOL_V6;
         // 1.1 lists every pak, read or not.
-        if self.proto.version != PROTOCOL_V1.version {
+        if !self.game.proto.is_v1() {
             // `G_ModelIndex` precaches each model as it indexes it, which
             // reads the descriptor and LOD 0's `xmodelparts`; vcod reads
             // them when it needs them, so the reads that flag their paks
@@ -6661,20 +4778,20 @@ impl Server {
                 .bounds(configstrings::CsRange::Model);
             for name in &rt.configstrings()[first..=last] {
                 if let Some(name) = name.strip_prefix("xmodel/") {
-                    let _ = vcod_common::xmodel::load_bones(fs, name);
+                    let _ = vcod_common::model::load_bones(fs, name);
                 }
             }
             // So does the load's sound alias pass: every `soundaliases/*.csv`
             // on 1.5; on UO the map's sound load spec, or the default one
             // when the map ships none, whose aliases UO leaves unflagged.
-            if self.proto.version == PROTOCOL_V6.version {
+            if self.game.proto.transport.version == PROTOCOL_V6.transport.version {
                 for name in fs.list_prefix("soundaliases/") {
                     if name.ends_with(".csv") {
                         fs.touch(&name);
                     }
                 }
             } else {
-                let spec = format!("soundloadspecs/mp/{}.csv", self.cfg.map);
+                let spec = format!("soundloadspecs/mp/{}.csv", self.game.cfg.map);
                 if fs.contains(&spec) {
                     fs.touch(&spec);
                 } else {
@@ -6687,8 +4804,12 @@ impl Server {
             }
         }
         let cvars = rt.cvars();
-        let mut paks =
-            configstrings::PakLists::of(pure, fs.paks_read(), self.proto, cvars.get("fs_basegame"));
+        let mut paks = configstrings::PakLists::of(
+            pure,
+            fs.paks_read(),
+            self.game.proto,
+            cvars.get("fs_basegame"),
+        );
         paks.fs_game = cvars.get("fs_game").to_string();
         paks
     }
@@ -6698,7 +4819,11 @@ impl Server {
     /// aborts stops running, silently as far as the wire is concerned, so
     /// this is what a test checks a clean bootstrap against.
     pub fn script_aborts(&self) -> Vec<String> {
-        self.script.as_ref().map_or_else(Vec::new, |rt| rt.aborts())
+        self.game
+            .module
+            .script
+            .as_ref()
+            .map_or_else(Vec::new, |rt| rt.aborts())
     }
 
     /// One field off a client's script entity, rendered as text. `None` when
@@ -6707,12 +4832,12 @@ impl Server {
     /// and the tests that assert what the stock scripts left there are its
     /// only callers.
     pub fn client_field(&mut self, slot: usize, name: &str) -> Option<String> {
-        self.script.as_mut()?.client_field(slot, name)
+        self.game.module.script.as_mut()?.client_field(slot, name)
     }
 
     /// One key out of a client's `.pers`, rendered the same way.
     pub fn client_pers(&mut self, slot: usize, key: &str) -> Option<String> {
-        self.script.as_mut()?.client_pers(slot, key)
+        self.game.module.script.as_mut()?.client_pers(slot, key)
     }
 
     /// One cvar as the running script reads it. `None` before
@@ -6721,7 +4846,15 @@ impl Server {
     /// answers from, so a rotation that wrote only one of the two is
     /// invisible everywhere else.
     pub fn script_cvar(&self, name: &str) -> Option<String> {
-        Some(self.script.as_ref()?.cvars().get(name).to_string())
+        Some(
+            self.game
+                .module
+                .script
+                .as_ref()?
+                .cvars()
+                .get(name)
+                .to_string(),
+        )
     }
 
     /// `Cvar_Set`: before the first load a `+set` for it to stamp
@@ -6742,18 +4875,19 @@ impl Server {
         // In place when the name is already there, so the last write wins
         // whether it came from `--set` or from a rotation token, and a
         // rotation running for days does not grow the list a map at a time.
-        match self.cvar_overrides.iter_mut().find(|(n, _)| n == name) {
+        match self.game.cvar_overrides.iter_mut().find(|(n, _)| n == name) {
             Some((_, v)) => *v = value.to_string(),
             None => self
+                .game
                 .cvar_overrides
                 .push((name.to_string(), value.to_string())),
         }
         let latched =
             name.eq_ignore_ascii_case("g_gametype") || name.eq_ignore_ascii_case("sv_maxclients");
         if !latched {
-            if let Some(rt) = self.script.as_mut() {
+            if let Some(rt) = self.game.module.script.as_mut() {
                 rt.host.cvars.set(name, value);
-            } else if let Some(c) = self.carried_cvars.as_mut() {
+            } else if let Some(c) = self.game.carried_cvars.as_mut() {
                 c.set(name, value);
             }
         }
@@ -6761,7 +4895,7 @@ impl Server {
         // Latched: serverinfo keeps the running level's value until a load,
         // and takes this one at once only while no level has loaded.
         if name == "g_gametype" {
-            self.cfg.gametype = value.to_string();
+            self.game.cfg.gametype = value.to_string();
             self.refresh_serverinfo();
         }
     }
@@ -6770,14 +4904,14 @@ impl Server {
     fn apply_engine_cvar(&mut self, name: &str, value: &str) {
         let lower = name.to_ascii_lowercase();
         if let Some(i) = crate::master::Masters::index(&lower) {
-            self.masters.set(i, value);
+            self.core.masters.set(i, value);
         }
         match lower.as_str() {
-            "dedicated" => self.dedicated = value.trim().parse().unwrap_or(0),
-            "rconpassword" => self.rcon_password = value.to_string(),
-            "sv_maprotation" => self.sv_map_rotation = value.to_string(),
+            "dedicated" => self.game.dedicated = value.trim().parse().unwrap_or(0),
+            "rconpassword" => self.game.rcon_password = value.to_string(),
+            "sv_maprotation" => self.game.sv_map_rotation = value.to_string(),
             "sv_hostname" => {
-                self.cfg.hostname = value.to_string();
+                self.game.cfg.hostname = value.to_string();
                 self.refresh_serverinfo();
             }
             "sv_privateclients" => self.refresh_serverinfo(),
@@ -6790,7 +4924,7 @@ impl Server {
     /// With no level, the config and the `--set`s the first load stamps.
     /// `sv_pure` is the one the paks were listed under.
     fn serverinfo(&self) -> Info {
-        let mut i = match self.script.as_ref() {
+        let mut i = match self.game.module.script.as_ref() {
             Some(rt) => {
                 let mut i = Info::new();
                 for (k, v) in rt.cvars().info_pairs(crate::cvars::flag::SERVERINFO) {
@@ -6801,12 +4935,12 @@ impl Server {
             None => {
                 let mut i = configstrings::serverinfo(&self.live_cfg());
                 i.set("sv_privateClients", self.private_clients())
-                    .set("protocol", self.proto.version)
-                    .set("shortversion", self.proto.short_version);
+                    .set("protocol", self.game.proto.transport.version)
+                    .set("shortversion", self.game.proto.transport.short_version);
                 i
             }
         };
-        i.set("sv_pure", u8::from(self.paks.pure));
+        i.set("sv_pure", u8::from(self.game.paks.pure));
         i
     }
 
@@ -6814,7 +4948,7 @@ impl Server {
     /// compare: whatever wrote a serverinfo cvar this frame, configstring 0
     /// follows before the snapshots go out.
     fn flush_serverinfo(&mut self) {
-        if self.configstrings.first() != Some(&self.serverinfo().to_string()) {
+        if self.core.configstrings.first() != Some(&self.serverinfo().to_string()) {
             self.refresh_serverinfo();
         }
     }
@@ -6827,10 +4961,10 @@ impl Server {
     /// back over this one every frame.
     fn refresh_serverinfo(&mut self) {
         let info = self.serverinfo().to_string();
-        if let Some(slot) = self.configstrings.get_mut(0) {
+        if let Some(slot) = self.core.configstrings.get_mut(0) {
             *slot = info.clone();
         }
-        if let Some(rt) = self.script.as_mut() {
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.host.configstrings.set(0, info);
         }
     }
@@ -6842,24 +4976,24 @@ impl Server {
     fn refresh_fall_heights(&mut self) {
         use crate::game::builtins::cvar::atof;
         let v6 = self.systeminfo_v6();
-        let Some(rt) = self.script.as_mut() else {
+        let Some(rt) = self.game.module.script.as_mut() else {
             return;
         };
         let cvars = rt.cvars();
-        self.fall_heights = FallHeights {
+        self.game.module.fall_heights = FallHeights {
             min: atof(cvars.get("bg_fallDamageMinHeight")),
             max: atof(cvars.get("bg_fallDamageMaxHeight")),
         };
         let info = configstrings::systeminfo(
-            self.server_id,
-            self.fall_heights,
-            self.cheats,
-            &self.paks,
+            self.game.server_id,
+            self.game.module.fall_heights,
+            self.game.cheats,
+            &self.game.paks,
             v6.as_deref(),
         )
         .to_string();
         rt.host.configstrings.set(1, info.clone());
-        if let Some(slot) = self.configstrings.get_mut(1) {
+        if let Some(slot) = self.core.configstrings.get_mut(1) {
             *slot = info;
         }
     }
@@ -6868,7 +5002,8 @@ impl Server {
     /// own value: a `+set` override if one names it, since [`Self::cvars`]
     /// replays the override list last.
     fn pending_cvar(&self, name: &str, from_cfg: &str) -> String {
-        self.cvar_overrides
+        self.game
+            .cvar_overrides
             .iter()
             .find(|(n, _)| n == name)
             .map_or_else(|| from_cfg.to_string(), |(_, v)| v.clone())
@@ -6889,19 +5024,14 @@ impl Server {
     pub fn spawn_server(&mut self, map: &str) -> Result<(), LoadFailure> {
         let kept = |e: anyhow::Error| LoadFailure::KeptLevel(e);
         let fs = self
+            .game
             .fs
             .clone()
             .ok_or_else(|| kept(anyhow::anyhow!("no paks are mounted")))?;
         // Step 15's `CM_LoadMap`, pulled ahead of the teardown, and with it
         // step 9's `FS_ClearPakReferences`.
         fs.clear_references();
-        let bsp_path = fs
-            .resolve_map(map)
-            .ok_or_else(|| kept(anyhow::anyhow!("map {map} not found in the mounted paks")))?;
-        let bsp_bytes = fs
-            .read(&bsp_path)
-            .ok_or_else(|| kept(anyhow::anyhow!("reading {bsp_path}")))?;
-        let bsp = vcod_common::bsp::parse(&bsp_bytes).map_err(kept)?;
+        let bsp = vcod_common::mapworld::find(&*fs, map).map_err(kept)?;
 
         // Step 2: the flag is read off the outgoing level and handed to the
         // incoming one's `G_InitGame`, along with the two tables it decides
@@ -6909,43 +5039,45 @@ impl Server {
         let (save_persist, carry) = self.lift_persistence();
         // Step 3: every client whose state is `CS_PRIMED` or above, which is
         // every one that has a gamestate to be told is stale.
-        let text = format!("loadingnewmap\n{map}\n{}", self.cfg.gametype);
+        let text = format!("loadingnewmap\n{map}\n{}", self.game.cfg.gametype);
         let told: Vec<SocketAddr> = self
+            .core
             .clients
             .iter()
             .flatten()
             .filter(|c| c.state != ClientState::Connected)
-            .map(|c| c.addr)
+            .map(|c| c.link.addr)
             .collect();
         for addr in told {
             self.send_oob(addr, &text);
         }
         // Step 5: the game module is unloaded, its object table with it, and
         // step 8's `memset(&sv, 0, ...)` takes everything the level queued.
-        self.script = None;
-        self.pending_explosions.clear();
-        self.weapon_changes.clear();
+        self.shutdown_game_log();
+        self.game.module.script = None;
+        self.game.module.pending_explosions.clear();
+        self.game.module.weapon_changes.clear();
         // Step 9.
-        self.checksum_feed = (self.rand() << 16) ^ self.rand() ^ self.sv_time_ms;
+        self.core.checksum_feed = (self.rand() << 16) ^ self.rand() ^ self.core.sv_time_ms;
         // Step 13.
-        self.snap_flag_server_bit ^= console::SNAPFLAG_SERVERCOUNT;
+        self.game.snap_flag_server_bit ^= console::SNAPFLAG_SERVERCOUNT;
         // Step 15's `Cvar_Set("mapname", ...)` and the collision with it.
-        self.cfg.map = map.to_string();
+        self.game.cfg.map = map.to_string();
         self.load_world(World::from_bsp(&bsp, Some(&fs)));
         // Step 16, then steps 7 and 10 with step 24 folded in: the table is
         // rebuilt empty around the serverinfo and systeminfo the new id
         // belongs in, which is where the client reads the id back from.
-        self.server_id = console::next_map_id(self.server_id);
-        self.configstrings = configstrings::static_configstrings(
-            &self.cfg,
-            self.server_id,
-            self.fall_heights,
-            self.cheats,
-            &self.paks,
+        self.game.server_id = console::next_map_id(self.game.server_id);
+        self.core.configstrings = configstrings::static_configstrings(
+            &self.game.cfg,
+            self.game.server_id,
+            self.game.module.fall_heights,
+            self.game.cheats,
+            &self.game.paks,
             self.systeminfo_v6().as_deref(),
-            self.proto,
+            self.game.proto,
         );
-        self.configstrings[CS_SERVERINFO] = self.serverinfo().to_string();
+        self.core.configstrings[CS_SERVERINFO] = self.serverinfo().to_string();
         // Step 19. Past the teardown: a failure here leaves no level.
         self.load_scripts_with(fs, false, carry, save_persist)
             .map_err(LoadFailure::Fatal)?;
@@ -6958,20 +5090,20 @@ impl Server {
         // Step 22, after the settle frames and the baselines: `ClientConnect`
         // again for everyone still on a netchan, then back to `CS_CONNECTED`.
         // A denial drops the client (0x808a76f).
-        for slot in 0..self.clients.len() {
-            let Some(c) = self.clients[slot].as_ref() else {
+        for slot in 0..self.core.clients.len() {
+            let Some(c) = self.core.clients[slot].as_ref() else {
                 continue;
             };
-            if self.password_denied(&c.userinfo, c.is_bot) {
+            if self.password_denied(&c.link.userinfo, c.is_bot) {
                 self.drop_client(slot, "GAME_INVALIDPASSWORD");
                 continue;
             }
-            let Some(c) = self.clients[slot].as_mut() else {
+            let Some(c) = self.core.clients[slot].as_mut() else {
                 continue;
             };
             let name = c.name.clone();
             c.reset_for_level();
-            if let Some(rt) = self.script.as_mut() {
+            if let Some(rt) = self.game.module.script.as_mut() {
                 rt.reconnect_client(slot, name);
             }
         }
@@ -6979,15 +5111,15 @@ impl Server {
         // and settle frames left, so a `setCvar` of a serverinfo cvar in the
         // level's init is in the gamestate.
         self.flush_serverinfo();
-        self.last_spawn_tick = Some(self.svs_time_ms());
+        self.game.last_spawn_tick = Some(self.svs_time_ms());
         log::info!(
             "map {map} ({}), serverId {:#04x}, {} clients kept",
-            self.cfg.gametype,
-            self.server_id,
+            self.game.cfg.gametype,
+            self.game.server_id,
             self.client_count()
         );
         // The masters hear of the new map on the next frame (0x808a915).
-        self.masters.force();
+        self.core.masters.force();
         Ok(())
     }
 
@@ -6997,10 +5129,10 @@ impl Server {
     /// `savePersist` says. `false` and an empty carry when no level is
     /// running.
     fn lift_persistence(&mut self) -> (bool, crate::game::script::Carry) {
-        let Some(rt) = self.script.as_ref() else {
+        let Some(rt) = self.game.module.script.as_ref() else {
             return (false, crate::game::script::Carry::default());
         };
-        self.carried_cvars = Some(rt.cvars().clone());
+        self.game.carried_cvars = Some(rt.cvars().clone());
         (rt.host.save_persist, rt.take_carry())
     }
 
@@ -7012,31 +5144,38 @@ impl Server {
     pub fn map_restart(&mut self) -> Result<(), LoadFailure> {
         // Step 1: a second restart in one frame, or one straight after a
         // spawn, is a no-op.
-        if self.last_spawn_tick == Some(self.svs_time_ms()) {
+        if self.game.last_spawn_tick == Some(self.svs_time_ms()) {
             return Ok(());
         }
         // Step 2.
-        if self.script.is_none() {
+        if self.game.module.script.is_none() {
             log::info!("Server is not running.");
             return Ok(());
         }
-        let Some(fs) = self.fs.clone() else {
+        let Some(fs) = self.game.fs.clone() else {
             return Err(LoadFailure::KeptLevel(anyhow::anyhow!(
                 "no paks are mounted"
             )));
         };
         // Step 3: the escalation. A level that asked to keep its
         // persistence gets the in-place restart even across one of these.
-        let save_persist = self.script.as_ref().is_some_and(|rt| rt.host.save_persist);
+        let save_persist = self
+            .game
+            .module
+            .script
+            .as_ref()
+            .is_some_and(|rt| rt.host.save_persist);
         if !save_persist {
             let changed = self
+                .game
                 .level_cvars
                 .as_ref()
                 .and_then(|(gametype, max_clients)| {
-                    if *gametype != self.pending_cvar("g_gametype", &self.cfg.gametype) {
+                    if *gametype != self.pending_cvar("g_gametype", &self.game.cfg.gametype) {
                         Some("g_gametype")
                     } else if *max_clients
-                        != self.pending_cvar("sv_maxclients", &self.cfg.max_clients.to_string())
+                        != self
+                            .pending_cvar("sv_maxclients", &self.game.cfg.max_clients.to_string())
                     {
                         Some("sv_maxclients")
                     } else {
@@ -7045,53 +5184,58 @@ impl Server {
                 });
             if let Some(name) = changed {
                 log::info!("{name} variable change -- restarting.");
-                let map = self.cfg.map.clone();
+                let map = self.game.cfg.map.clone();
                 return self.spawn_server(&map);
             }
         }
         let (_, carry) = self.lift_persistence();
         // What every client holds of the table, which the incoming level's
         // writes are measured against below.
-        let held = self.sent_configstrings.clone();
+        let held = self.core.sent_configstrings.clone();
         // Step 4's six counters: what this level queued and nothing else,
         // since a restart keeps the map and its collision.
-        self.pending_explosions.clear();
-        self.weapon_changes.clear();
-        self.snap_flag_server_bit ^= console::SNAPFLAG_SERVERCOUNT;
+        self.game.module.pending_explosions.clear();
+        self.game.module.weapon_changes.clear();
+        self.game.snap_flag_server_bit ^= console::SNAPFLAG_SERVERCOUNT;
         // Step 5: only the low nibble moves.
-        self.server_id = console::next_restart_id(self.server_id);
-        // `sv.configstrings` survives a restart: only a spawn clears it, so
+        self.game.server_id = console::next_restart_id(self.game.server_id);
+        // `sv.core.configstrings` survives a restart: only a spawn clears it, so
         // every slot the outgoing level allocated keeps its index and its
         // text, and the incoming level's `G_ModelIndex` finds the same slot
         // (map-cycle doc, 4.6). The static slots are rebuilt around the new
         // id on top; 4.3 is what carries slot 1 to a client that already
         // has a gamestate.
         for (i, s) in configstrings::static_configstrings(
-            &self.cfg,
-            self.server_id,
-            self.fall_heights,
-            self.cheats,
-            &self.paks,
+            &self.game.cfg,
+            self.game.server_id,
+            self.game.module.fall_heights,
+            self.game.cheats,
+            &self.game.paks,
             self.systeminfo_v6().as_deref(),
-            self.proto,
+            self.game.proto,
         )
         .into_iter()
         .enumerate()
         {
             if !s.is_empty() {
-                self.configstrings[i] = s;
+                self.core.configstrings[i] = s;
             }
         }
-        self.configstrings[CS_SERVERINFO] = self.serverinfo().to_string();
+        self.core.configstrings[CS_SERVERINFO] = self.serverinfo().to_string();
         // Step 7: `SV_RestartGameProgs(savePersist)`. Past the teardown: the
         // outgoing level's script is gone and a failure here leaves none.
-        self.print(&restart_game_banner(self.proto));
+        self.print(&restart_game_banner(self.game.proto));
+        let p = crate::tick_profile::phase("console/map_restart/load");
         self.load_scripts_with(fs, true, carry, save_persist)
             .map_err(LoadFailure::Fatal)?;
+        drop(p);
         // Step 8. The incoming level's whole table goes into the diff's copy
         // in one go: what a client learns of it is the burst below, measured
         // against `held` (doc 4.5).
+        let p = crate::tick_profile::phase("console/map_restart/settle");
         self.settle_frames();
+        drop(p);
+        let reenter = crate::tick_profile::phase("console/map_restart/reenter");
         // The incoming level's writes, ahead of the `n`: `sv.restarting`
         // lets `SV_SetConfigstring` broadcast every write that changes its
         // slot, and retail's settle frames flush them before step 9 does
@@ -7104,6 +5248,8 @@ impl Server {
         // the fog `G_setfog("0")` cleared and the map set again still goes
         // out. Slots 0 and 1 are the frame's cvar flush (4.3).
         let game_writes = self
+            .game
+            .module
             .script
             .as_mut()
             .map(|rt| rt.host.configstrings.take_writes())
@@ -7116,13 +5262,13 @@ impl Server {
                 writes.push((i, v));
             }
         }
-        for i in 2..self.configstrings.len() {
-            if table.get(i) != self.configstrings.get(i) {
-                writes.push((i, self.configstrings[i].clone()));
+        for i in 2..self.core.configstrings.len() {
+            if table.get(i) != self.core.configstrings.get(i) {
+                writes.push((i, self.core.configstrings[i].clone()));
             }
         }
-        for slot in 0..self.clients.len() {
-            if self.clients[slot].is_some() {
+        for slot in 0..self.core.clients.len() {
+            if self.core.clients[slot].is_some() {
                 for (i, v) in &writes {
                     for cmd in vcod_common::net::configstring_commands(*i, v) {
                         self.send_server_command(slot, &cmd);
@@ -7132,8 +5278,8 @@ impl Server {
         }
         // Steps 9 to 11: `n`, `ClientConnect` again, and back into the world
         // for a client that was already in it.
-        for slot in 0..self.clients.len() {
-            let Some(c) = self.clients[slot].as_mut() else {
+        for slot in 0..self.core.clients.len() {
+            let Some(c) = self.core.clients[slot].as_mut() else {
                 continue;
             };
             let was_active = c.state == ClientState::Active;
@@ -7150,23 +5296,23 @@ impl Server {
             let restart = if save_persist {
                 "n"
             } else {
-                self.proto.map_restart_command
+                self.game.proto.map_restart_command
             };
             self.send_server_command(slot, restart);
             // That guard can drop the slot; a client that is gone has no
             // `ClientConnect` to run and no world to enter.
-            let Some(c) = self.clients[slot].as_ref() else {
+            let Some(c) = self.core.clients[slot].as_ref() else {
                 continue;
             };
             // A denial drops the client (0x8083f99).
-            if self.password_denied(&c.userinfo, c.is_bot) {
+            if self.password_denied(&c.link.userinfo, c.is_bot) {
                 self.drop_client(slot, "GAME_INVALIDPASSWORD");
                 self.print(&format!(
                     "SV_MapRestart_f: dropped client {slot} - denied!\n"
                 ));
                 continue;
             }
-            if let Some(rt) = self.script.as_mut() {
+            if let Some(rt) = self.game.module.script.as_mut() {
                 rt.reconnect_client(slot, name);
             }
             if was_active {
@@ -7179,17 +5325,18 @@ impl Server {
         }
         // 4.3: `SV_Frame`'s cvar flush carrying the bumped `sv_serverid`,
         // which is what puts the client on the new id.
-        for slot in 0..self.clients.len() {
-            if self.clients[slot].is_some() {
+        for slot in 0..self.core.clients.len() {
+            if self.core.clients[slot].is_some() {
                 self.send_configstring_update(slot, 1);
             }
         }
-        self.last_spawn_tick = Some(self.svs_time_ms());
+        drop(reenter);
+        self.game.last_spawn_tick = Some(self.svs_time_ms());
         log::info!(
             "map_restart {} ({}), serverId {:#04x}, {} clients kept",
-            self.cfg.map,
-            self.cfg.gametype,
-            self.server_id,
+            self.game.cfg.map,
+            self.game.cfg.gametype,
+            self.game.server_id,
             self.client_count()
         );
         Ok(())
@@ -7201,17 +5348,17 @@ impl Server {
     /// the diff's copy of it.
     fn settle_frames(&mut self) {
         for _ in 0..3 {
-            self.sv_time_ms = self.sv_time_ms.wrapping_add(100);
-            if let Some(rt) = self.script.as_mut() {
-                rt.run_frame(self.sv_time_ms);
+            self.core.sv_time_ms = self.core.sv_time_ms.wrapping_add(100);
+            if let Some(rt) = self.game.module.script.as_mut() {
+                rt.run_frame(self.core.sv_time_ms);
                 // The vehicles' first think (`Scr_Vehicle_Init`, spawn + 50)
                 // settles them before the baselines.
-                vehicle_frame(&mut self.clients, rt);
+                vehicle_frame(&mut self.core.clients, rt);
             }
         }
-        if let Some(rt) = self.script.as_ref() {
-            self.configstrings = rt.configstrings().to_vec();
-            if let Err(e) = rt.cvars().write_mirror(&mut self.configstrings) {
+        if let Some(rt) = self.game.module.script.as_ref() {
+            self.core.configstrings = rt.configstrings().to_vec();
+            if let Err(e) = rt.cvars().write_mirror(&mut self.core.configstrings) {
                 log::warn!("rebuilding the cvar mirror: {e:?}");
             }
         }
@@ -7222,18 +5369,22 @@ impl Server {
     /// `SV_CreateBaseline` (map-cycle doc, section 3 step 21): every entity
     /// linked after the load, the `SVF_NOCLIENT` ones included (3.3).
     fn rebuild_baselines(&mut self) {
-        let proto = self.proto;
-        let mut baselines: HashMap<u32, msg::EntityState> =
-            self.script.as_mut().map_or_else(HashMap::new, |rt| {
+        let proto = self.game.proto;
+        let mut baselines: HashMap<u32, msg::EntityState> = self
+            .game
+            .module
+            .script
+            .as_mut()
+            .map_or_else(HashMap::new, |rt| {
                 rt.baseline_entities(proto).into_iter().collect()
             });
-        if let Some(te) = self.test_entities.as_ref() {
+        if let Some(te) = self.game.module.test_entities.as_ref() {
             baselines.extend(te.baselines(proto));
         }
         for es in baselines.values_mut() {
             crate::game::wire::entity_to_protocol(proto, es);
         }
-        self.baselines = baselines;
+        self.game.baselines = baselines;
     }
 
     /// `SV_SetConfigstring`'s per-client half, the `d <index> <text>` server
@@ -7274,10 +5425,10 @@ impl Server {
     /// (`ConfigStrings::writes`), as retail queues each `d` at its write;
     /// the rest (the cvar mirror) after them, in slot order.
     fn broadcast_configstring_changes(&mut self) {
-        let mut changed: Vec<usize> = (0..self.configstrings.len())
-            .filter(|&i| self.sent_configstrings.get(i) != self.configstrings.get(i))
+        let mut changed: Vec<usize> = (0..self.core.configstrings.len())
+            .filter(|&i| self.core.sent_configstrings.get(i) != self.core.configstrings.get(i))
             .collect();
-        if let Some(rt) = self.script.as_ref() {
+        if let Some(rt) = self.game.module.script.as_ref() {
             let writes = rt.host.configstrings.writes();
             changed.sort_by_key(|&i| {
                 writes
@@ -7290,8 +5441,8 @@ impl Server {
             return;
         }
         self.sync_sent_configstrings();
-        for slot in 0..self.clients.len() {
-            let has_table = self.clients[slot]
+        for slot in 0..self.core.clients.len() {
+            let has_table = self.core.clients[slot]
                 .as_ref()
                 .is_some_and(|c| c.state != ClientState::Connected);
             if !has_table {
@@ -7308,7 +5459,7 @@ impl Server {
     /// each client pulls, a restart in the burst 4.3 describes -- so neither
     /// leaves anything for the diff above to send.
     fn sync_sent_configstrings(&mut self) {
-        self.sent_configstrings = self.configstrings.clone();
+        self.core.sent_configstrings = self.core.configstrings.clone();
     }
 
     /// What [`Self::drain_console`] does with a level load's outcome.
@@ -7321,7 +5472,7 @@ impl Server {
                 true
             }
             Err(LoadFailure::Fatal(e)) => {
-                self.fatal = Some(e.context(what.to_string()));
+                self.game.fatal = Some(e.context(what.to_string()));
                 false
             }
         }
@@ -7332,13 +5483,7 @@ impl Server {
     /// retail's `Com_Error` does: nothing can call `exitLevel` any more and
     /// every client would pull an empty gamestate.
     pub fn take_fatal(&mut self) -> Option<anyhow::Error> {
-        self.fatal.take()
-    }
-
-    /// Queues a line for `drain_console` to run at the top of the next tick,
-    /// `Cbuf_AddText`'s `EXEC_APPEND`.
-    pub fn push_console(&mut self, line: &str) {
-        self.console.push_back(line.to_string());
+        self.game.fatal.take()
     }
 
     /// A command-line `+set` placed after `+map`: `Com_AddStartupCommands`
@@ -7352,18 +5497,18 @@ impl Server {
     /// `Cbuf_Execute`: every queued line through [`Self::exec_console_line`].
     /// A command pushed by a builtin during the script pass runs here, at the
     /// top of the next tick, which is `EXEC_APPEND`. The frame loop runs it
-    /// ahead of [`Self::tick_frames`], as `Com_Frame` runs it ahead of
+    /// ahead of [`crate::engine::tick`], as `Com_Frame` runs it ahead of
     /// `SV_Frame`, so the time a command took is owed by the frames after it.
     pub fn drain_console(&mut self, now: Instant) {
-        while let Some(text) = self.console.pop_front() {
+        while let Some(text) = self.core.console.pop_front() {
             let mut lines = console::split_commands(&text).into_iter();
             let Some(line) = lines.next() else {
                 continue;
             };
             for rest in lines.rev() {
-                self.console.push_front(rest);
+                self.core.console.push_front(rest);
             }
-            if !self.exec_console_line(&line, now) || self.quit {
+            if !self.exec_console_line(&line, now) || self.core.quit {
                 return;
             }
         }
@@ -7383,6 +5528,7 @@ impl Server {
         match console::Command::parse(line) {
             console::Command::Map { map, bsp, cheats } => {
                 if self
+                    .game
                     .fs
                     .as_ref()
                     .is_some_and(|fs| fs.resolve_map(&map).is_none())
@@ -7392,7 +5538,9 @@ impl Server {
                 }
                 // `map <the map already serving>` is a restart, not a
                 // spawn (doc section 4.2).
-                let r = if map.eq_ignore_ascii_case(&self.cfg.map) && self.script.is_some() {
+                let r = if map.eq_ignore_ascii_case(&self.game.cfg.map)
+                    && self.game.module.script.is_some()
+                {
                     self.map_restart()
                 } else {
                     self.spawn_server(&map)
@@ -7403,34 +5551,36 @@ impl Server {
                 // After the load, so the gamestate it sent still carries the
                 // old value and the change follows as a configstring update.
                 self.set_cheats(cheats);
-                if self.script.is_some() {
-                    self.killed = false;
+                if self.game.module.script.is_some() {
+                    self.game.killed = false;
                 }
             }
             console::Command::MapRestart => {
+                let _p = crate::tick_profile::phase("console/map_restart");
                 let r = self.map_restart();
                 return self.absorb_load("map_restart", r);
             }
             console::Command::MapRotate => {
                 // Both rotation cvars are the one table a script's
                 // `setCvar` and `getCvar` reach on retail (doc section 5.2).
-                let mut full = self.sv_map_rotation.clone();
-                if let Some(rt) = self.script.as_ref() {
+                let mut full = self.game.sv_map_rotation.clone();
+                if let Some(rt) = self.game.module.script.as_ref() {
                     let script = rt.host.cvars.get("sv_mapRotation");
                     if !script.is_empty() {
                         full = script.to_string();
                     }
-                    self.rotation.current = rt.host.cvars.get("sv_mapRotationCurrent").to_string();
+                    self.game.rotation.current =
+                        rt.host.cvars.get("sv_mapRotationCurrent").to_string();
                 }
-                let before = self.cfg.gametype.clone();
+                let before = self.game.cfg.gametype.clone();
                 let mut gametype = before.clone();
-                let next = self.rotation.rotate(&full, &mut gametype);
-                if let Some(rt) = self.script.as_mut() {
+                let next = self.game.rotation.rotate(&full, &mut gametype);
+                if let Some(rt) = self.game.module.script.as_mut() {
                     rt.host
                         .cvars
-                        .set("sv_mapRotationCurrent", &self.rotation.current);
+                        .set("sv_mapRotationCurrent", &self.game.rotation.current);
                 }
-                for w in self.rotation.warnings.drain(..) {
+                for w in self.game.rotation.warnings.drain(..) {
                     log::warn!("{w}");
                 }
                 if gametype != before {
@@ -7442,13 +5592,13 @@ impl Server {
                     self.set_cvar("g_gametype", &gametype);
                     // A gametype change discards what exitLevel(true)
                     // asked to keep (doc section 5.2).
-                    if let Some(rt) = self.script.as_mut() {
+                    if let Some(rt) = self.game.module.script.as_mut() {
                         rt.host.save_persist = false;
                     }
                 }
                 match next {
-                    console::Rotate::Map(m) => self.console.push_front(format!("map {m}")),
-                    console::Rotate::Restart => self.console.push_front("map_restart".into()),
+                    console::Rotate::Map(m) => self.core.console.push_front(format!("map {m}")),
+                    console::Rotate::Restart => self.core.console.push_front("map_restart".into()),
                 }
             }
             console::Command::Status => {
@@ -7457,19 +5607,21 @@ impl Server {
             }
             console::Command::ClientKick(arg) => self.client_kick(arg.as_deref(), now),
             console::Command::Kick(arg) => self.kick(arg.as_deref(), now),
-            console::Command::AddBot(args) => self.add_bot_command(&args),
-            console::Command::RemoveBot(arg) => self.remove_bot_command(arg.as_deref()),
-            console::Command::ListBots => self.list_bots(),
+            console::Command::AddBot(args) => bot_admin::add_bot_command(self, &args, &mut ()),
+            console::Command::RemoveBot(arg) => {
+                bot_admin::remove_bot_command(self, arg.as_deref(), &mut ())
+            }
+            console::Command::ListBots => bot_admin::list_bots(self, &mut ()),
             console::Command::DumpUser(arg) => self.dump_user(arg.as_deref()),
             console::Command::ServerInfo => {
-                let info = self.configstrings.first().cloned().unwrap_or_default();
+                let info = self.core.configstrings.first().cloned().unwrap_or_default();
                 self.print(&format!(
                     "Server info settings:\n{}",
                     console::info_print(&info)
                 ));
             }
             console::Command::SystemInfo => {
-                let info = self.configstrings.get(1).cloned().unwrap_or_default();
+                let info = self.core.configstrings.get(1).cloned().unwrap_or_default();
                 self.print(&format!(
                     "System info settings:\n{}",
                     console::info_print(&info)
@@ -7490,31 +5642,34 @@ impl Server {
                 self.console_set(&name, &value);
                 // `Cvar_SetA_f`: the archive flag whatever the write did.
                 if cmd == "seta"
-                    && let Some(rt) = self.script.as_mut()
+                    && let Some(rt) = self.game.module.script.as_mut()
                 {
                     rt.host.cvars.add_flags(&name, crate::cvars::flag::ARCHIVE);
                 }
             }
-            console::Command::Heartbeat => self.masters.force(),
+            console::Command::Heartbeat => self.core.masters.force(),
             console::Command::GameCompleteStatus(arg) => self.game_complete_status(&arg),
             console::Command::ScriptUsage => {
-                if let Some(text) = self.script.as_mut().map(|rt| rt.script_usage()) {
+                if let Some(text) = self.game.module.script.as_mut().map(|rt| rt.script_usage()) {
                     self.print(&text);
                 }
             }
             console::Command::StringUsage => {
-                if let Some(text) = self.script.as_ref().map(|rt| rt.string_usage()) {
+                if let Some(text) = self.game.module.script.as_ref().map(|rt| rt.string_usage()) {
                     self.print(&text);
                 }
             }
             console::Command::Quit => {
                 self.final_message("EXE_SERVERQUIT");
-                let mut resolve = self.resolver;
-                let beats = self
-                    .masters
-                    .shutdown(self.dedicated, self.svs_time_ms(), &mut resolve);
-                self.outbox.extend(beats);
-                self.quit = true;
+                self.shutdown_game_log();
+                let mut resolve = self.core.resolver;
+                let beats = self.core.masters.shutdown(
+                    self.game.dedicated,
+                    self.svs_time_ms(),
+                    &mut resolve,
+                );
+                self.core.outbox.extend(beats);
+                self.core.quit = true;
             }
             console::Command::KillServer => self.kill_server(),
             console::Command::BanUser(arg) => {
@@ -7541,16 +5696,17 @@ impl Server {
                     return true;
                 };
                 let name = crate::game::say::clean_name(&arg);
-                match self.bans.remove_named(&name) {
+                match self.core.bans.unban(&name) {
                     Some(0) => self.print(&format!("no banned user has name {name}\n")),
                     Some(n) => self.print(&format!("unbanned {n} user(s) named {name}\n")),
                     None => {}
                 }
             }
             console::Command::CvarList(filter) => {
-                let text = match self.script.as_ref() {
+                let text = match self.game.module.script.as_ref() {
                     Some(rt) => rt.cvars().list(filter.as_deref()),
                     None => self
+                        .game
                         .carried_cvars
                         .clone()
                         .unwrap_or_default()
@@ -7583,7 +5739,7 @@ impl Server {
                 };
                 for cvar in [format!("scr_{name}"), format!("ui_{name}")] {
                     self.set_cvar(&cvar, &value);
-                    if let Some(rt) = self.script.as_mut() {
+                    if let Some(rt) = self.game.module.script.as_mut() {
                         rt.host.cvars.set(&cvar, &value);
                     }
                 }
@@ -7622,40 +5778,47 @@ impl Server {
             return None;
         }
         let n = arg.parse::<usize>().unwrap_or(usize::MAX);
-        if n >= self.clients.len() {
+        if n >= self.core.clients.len() {
             self.print(&format!(
                 "Bad client slot: {}\n",
                 arg.parse::<i64>().unwrap_or(-1)
             ));
             return None;
         }
-        if self.clients[n].is_none() && self.zombies[n].is_none() {
+        if self.core.clients[n].is_none() && self.game.zombies[n].is_none() {
             self.print(&format!("Client {n} is not active\n"));
             return None;
         }
         Some(n)
     }
 
-    /// The tail both bans share (0x8084394, 0x8084524). Retail sends
+    /// The tail both bans share (0x8084394, 0x8084524). Retail 1.1 sends
     /// `banUser <ip>` to the authorize server and leaves the client
-    /// connected; vcod keeps the address in its own list
-    /// (docs/research/cod11-server-handshake.md, "Bans").
+    /// connected; vcod keeps the client's guid in `ban.txt` instead, where
+    /// 1.5 keeps its own (docs/research/cod11-server-handshake.md, "Bans").
     fn ban_slot(&mut self, slot: usize, now: Instant) {
-        let Some(c) = self.clients[slot].as_ref().or(self.zombies[slot].as_ref()) else {
+        let Some(c) = self.core.clients[slot]
+            .as_ref()
+            .or(self.game.zombies[slot].as_ref())
+        else {
             return;
         };
-        let name = if self.clients[slot].is_some() {
+        let name = if self.core.clients[slot].is_some() {
             c.name.clone()
         } else {
             String::new()
         };
-        let addr = c.addr;
+        let guid = guid_of(crate::engine::Lan::Cod1, c.link.addr);
         if self.v15() {
-            self.ban_slot_v15(slot, addr, &name, now);
+            self.ban_slot_v15(slot, guid, &name, now);
             return;
         }
-        if let std::net::IpAddr::V4(ip) = addr.ip() {
-            self.bans.add(ip, &crate::game::say::clean_name(&name));
+        // A LAN client's guid is 0, which no check refuses, as the
+        // authorize server is never asked about one.
+        if guid != 0 && !self.core.bans.is_banned(guid) {
+            self.core
+                .bans
+                .append(guid, &crate::game::say::clean_name(&name));
         }
         self.print(&format!("{name} was banned from coming back\n"));
     }
@@ -7664,59 +5827,46 @@ impl Server {
     /// without a guid or one already in `ban.txt`, else the guid and the
     /// cleaned name appended and the client kicked, with no print
     /// (docs/research/cod11-server-handshake.md, "1.5 permanent bans").
-    /// The address stands in for the guid, which only an off-LAN client
-    /// has.
-    fn ban_slot_v15(&mut self, slot: usize, addr: SocketAddr, name: &str, now: Instant) {
-        let std::net::IpAddr::V4(ip) = addr.ip() else {
-            return;
-        };
-        if crate::client::is_lan(addr.ip()) || self.bans.contains(ip) {
+    fn ban_slot_v15(&mut self, slot: usize, guid: i32, name: &str, now: Instant) {
+        if guid == 0 || self.core.bans.is_banned(guid) {
             return;
         }
-        self.bans.add(ip, &crate::game::say::clean_name(name));
+        self.core
+            .bans
+            .append(guid, &crate::game::say::clean_name(name));
         self.kick_slot(slot, now);
     }
 
     /// 1.5's `tempBanUser`/`tempBanClient` past the lookup (cod_lnxded 1.5b
     /// 0x8087f2a, 0x8088087): the kick, then, for a client with a guid,
     /// `%s (guid %i) was kicked for cheating` and the guid into the table
-    /// (docs/research/cod11-server-handshake.md, "Bans"). The guid comes
-    /// from the authorize server, which never answers for a LAN client, so
-    /// vcod keys an off-LAN client's ban on its address and bans no LAN one.
+    /// (docs/research/cod11-server-handshake.md, "Bans").
     fn temp_ban_slot(&mut self, slot: usize, now: Instant) {
-        let banned = self.clients[slot].as_ref().and_then(|c| match c.addr.ip() {
-            std::net::IpAddr::V4(ip) if !crate::client::is_lan(c.addr.ip()) => {
-                Some((ip, crate::game::say::clean_name(&c.name)))
-            }
-            _ => None,
+        let banned = self.core.clients[slot].as_ref().map(|c| {
+            (
+                guid_of(crate::engine::Lan::Cod1, c.link.addr),
+                crate::game::say::clean_name(&c.name),
+            )
         });
         self.kick_slot(slot, now);
-        if let Some((ip, name)) = banned {
-            self.print(&format!("{name} (guid 0) was kicked for cheating\n"));
-            // `0x8089096`: the first free entry, else the oldest.
-            let stamp = self.svs_time_ms();
-            if self.temp_bans.len() < TEMP_BANS {
-                self.temp_bans.push((ip, stamp));
-            } else if let Some(oldest) = self.temp_bans.iter_mut().min_by_key(|(_, t)| *t) {
-                *oldest = (ip, stamp);
-            }
+        if let Some((guid, name)) = banned
+            && guid != 0
+        {
+            self.print(&format!("{name} (guid {guid}) was kicked for cheating\n"));
+            // 0x80890f5 stamps the game clock (0x83ccd84).
+            self.core.temp_bans.add(guid, self.core.sv_time_ms);
         }
     }
 
-    /// `0x8088f75`: an entry for `ip` no more than `sv_kickBanTime` seconds
-    /// old, the cvar read now, so a change reaches bans already made.
-    fn temp_banned(&mut self, ip: std::net::Ipv4Addr) -> bool {
-        let now = self.svs_time_ms();
-        let limit =
-            crate::game::builtins::cvar::atof(&self.live_cvar("sv_kickBanTime", "300")) * 1000.0;
-        self.temp_bans
-            .iter()
-            .any(|&(b, t)| b == ip && now.wrapping_sub(t) as f32 <= limit)
+    /// `sv_kickBanTime`, read at each check (0x8088f75), so a change
+    /// reaches bans already made.
+    fn kick_ban_time(&self) -> f32 {
+        crate::game::builtins::cvar::atof(&self.live_cvar("sv_kickBanTime", "300"))
     }
 
-    /// Replaces the ban list; the binary loads it from `--ban-file`.
-    pub fn set_bans(&mut self, bans: crate::bans::Bans) {
-        self.bans = bans;
+    /// Replaces `ban.txt`; the binary opens it from `--ban-file`.
+    pub fn set_bans(&mut self, bans: BanFile) {
+        self.core.bans = bans;
     }
 
     /// `SV_KillServer_f` (0x8084d3c) into `SV_Shutdown("EXE_SERVERKILLED")`:
@@ -7741,31 +5891,57 @@ impl Server {
 
     /// `SV_Shutdown` past its final message.
     fn shutdown(&mut self) {
-        if let Some(rt) = self.script.as_ref() {
-            self.shutdown_log = rt.script_log().to_vec();
+        if let Some(rt) = self.game.module.script.as_ref() {
+            self.game.shutdown_log = rt.script_log().to_vec();
         }
-        let mut resolve = self.resolver;
-        let beats = self
-            .masters
-            .shutdown(self.dedicated, self.svs_time_ms(), &mut resolve);
-        self.outbox.extend(beats);
+        self.shutdown_game_log();
+        let mut resolve = self.core.resolver;
+        let beats =
+            self.core
+                .masters
+                .shutdown(self.game.dedicated, self.svs_time_ms(), &mut resolve);
+        self.core.outbox.extend(beats);
         // The cvar table is process-global and outlives the shutdown.
         let _ = self.lift_persistence();
-        self.script = None;
-        self.clients.iter_mut().for_each(|c| *c = None);
-        self.zombies.iter_mut().for_each(|z| *z = None);
-        self.challenges.clear();
-        self.bots.clear();
-        self.pending_explosions.clear();
-        self.weapon_changes.clear();
-        self.killed = true;
+        self.game.module.script = None;
+        self.core.clients.iter_mut().for_each(|c| *c = None);
+        self.game.zombies.iter_mut().for_each(|z| *z = None);
+        self.core.challenges.clear();
+        self.game.module.driver.bots.clear();
+        self.game.module.pending_explosions.clear();
+        self.game.module.weapon_changes.clear();
+        self.game.killed = true;
+    }
+
+    /// The level's `G_LogPrintf` lines since the last call into the file.
+    pub(crate) fn drain_game_log(&mut self) {
+        if let Some(rt) = self.game.module.script.as_mut() {
+            let lines = std::mem::take(&mut rt.host.game_log);
+            self.game.game_log.write(lines);
+        }
+    }
+
+    /// `G_ShutdownGame`: the level's last lines, `ShutdownGame:` and the
+    /// separator at its last `level.time`, the file closed.
+    fn shutdown_game_log(&mut self) {
+        self.close_game_log(crate::engine::gamelog::SHUTDOWN);
+    }
+
+    /// [`Self::shutdown_game_log`] with `word`: 1.1's `G_ShutdownGame(1)`
+    /// writes `RestartGame:` (VERIFIED live, cod11-map-cycle.md 9).
+    fn close_game_log(&mut self, word: &str) {
+        if let Some(rt) = self.game.module.script.as_mut() {
+            let lines = std::mem::take(&mut rt.host.game_log);
+            let at = rt.host.level_time_ms;
+            self.game.game_log.shutdown(lines, at, word);
+        }
     }
 
     /// `sv_cheats`, which only `SV_Map_f` writes: into systeminfo on the
     /// next frame's flush, and into the cvar table a query reads.
     fn set_cheats(&mut self, on: bool) {
-        self.cheats = on;
-        if let Some(rt) = self.script.as_mut() {
+        self.game.cheats = on;
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.host.cvars.set("sv_cheats", if on { "1" } else { "0" });
         }
         self.refresh_fall_heights();
@@ -7776,9 +5952,9 @@ impl Server {
     fn kick_slot(&mut self, slot: usize, now: Instant) {
         self.drop_client(slot, "EXE_PLAYERKICKED");
         let svs_ms = self.svs_time_ms();
-        if let Some(z) = self.zombies[slot].as_mut() {
+        if let Some(z) = self.game.zombies[slot].as_mut() {
             z.last_packet = now;
-            z.last_packet_ms = svs_ms;
+            z.link.last_packet_ms = svs_ms;
         }
     }
 
@@ -7787,8 +5963,8 @@ impl Server {
     /// stripped. A zombie's name is gone with its userinfo, so it matches
     /// only an empty one.
     fn player_by_name(&mut self, name: &str) -> Option<usize> {
-        let found = (0..self.clients.len()).find(|&slot| {
-            let n = match (&self.clients[slot], &self.zombies[slot]) {
+        let found = (0..self.core.clients.len()).find(|&slot| {
+            let n = match (&self.core.clients[slot], &self.game.zombies[slot]) {
                 (Some(c), _) => c.name.as_str(),
                 (None, Some(_)) => "",
                 (None, None) => return false,
@@ -7812,8 +5988,8 @@ impl Server {
         if let Some(slot) = self.player_by_name(arg) {
             self.kick_slot(slot, now);
         } else if arg.eq_ignore_ascii_case("all") {
-            for slot in 0..self.clients.len() {
-                if self.clients[slot].is_some() || self.zombies[slot].is_some() {
+            for slot in 0..self.core.clients.len() {
+                if self.core.clients[slot].is_some() || self.game.zombies[slot].is_some() {
                     self.kick_slot(slot, now);
                 }
             }
@@ -7829,9 +6005,9 @@ impl Server {
         let Some(slot) = self.player_by_name(arg) else {
             return;
         };
-        let info = self.clients[slot]
+        let info = self.core.clients[slot]
             .as_ref()
-            .map_or_else(String::new, |c| c.userinfo.clone());
+            .map_or_else(String::new, |c| c.link.userinfo.clone());
         self.print(&format!(
             "userinfo\n--------\n{}",
             console::info_print(&info)
@@ -7843,8 +6019,8 @@ impl Server {
     fn console_say(&mut self, text: &str) {
         let cmd = format!("h \"\u{15}console: {text}\"");
         log::info!("say: console: {text}");
-        for slot in 0..self.clients.len() {
-            if self.clients[slot]
+        for slot in 0..self.core.clients.len() {
+            if self.core.clients[slot]
                 .as_ref()
                 .is_some_and(|c| c.state != ClientState::Connected)
             {
@@ -7861,13 +6037,13 @@ impl Server {
             "g_gametype" => Some((
                 "g_gametype",
                 self.live_gametype(),
-                self.cfg.gametype.clone(),
+                self.game.cfg.gametype.clone(),
             )),
             "sv_maxclients" => Some((
                 "sv_maxclients",
                 self.level_cvar("sv_maxclients")
-                    .unwrap_or_else(|| self.cfg.max_clients.to_string()),
-                self.pending_cvar("sv_maxclients", &self.cfg.max_clients.to_string()),
+                    .unwrap_or_else(|| self.game.cfg.max_clients.to_string()),
+                self.pending_cvar("sv_maxclients", &self.game.cfg.max_clients.to_string()),
             )),
             _ => None,
         }
@@ -7878,7 +6054,7 @@ impl Server {
     /// a console write never reaches them there, so this is the live half
     /// of the latch.
     fn level_cvar(&self, name: &str) -> Option<String> {
-        let v = self.script.as_ref()?.cvars().get(name);
+        let v = self.game.module.script.as_ref()?.cvars().get(name);
         (!v.is_empty()).then(|| v.to_string())
     }
 
@@ -7886,12 +6062,12 @@ impl Server {
     /// and `getstatus` carry this one until a load takes a latched value.
     fn live_gametype(&self) -> String {
         self.level_cvar("g_gametype")
-            .unwrap_or_else(|| self.cfg.gametype.clone())
+            .unwrap_or_else(|| self.game.cfg.gametype.clone())
     }
 
     /// `cfg` with the running level's `g_gametype`.
     fn live_cfg(&self) -> ServerConfig {
-        let mut cfg = self.cfg.clone();
+        let mut cfg = self.game.cfg.clone();
         cfg.gametype = self.live_gametype();
         cfg
     }
@@ -7908,8 +6084,8 @@ impl Server {
             self.set_cvar(canon, waiting.as_deref().unwrap_or(&live));
             return;
         }
-        let cheats = self.cheats;
-        let outcome = match self.script.as_mut() {
+        let cheats = self.game.cheats;
+        let outcome = match self.game.module.script.as_mut() {
             Some(rt) => rt.host.cvars.console_set(name, value, cheats),
             None => {
                 self.set_cvar(name, value);
@@ -7934,16 +6110,18 @@ impl Server {
         let Some(name) = argv.first() else {
             return false;
         };
-        let Some((canon, value, default, waiting)) = self.script.as_ref().and_then(|rt| {
-            let cv = rt.cvars();
-            let (n, v, d) = cv.lookup(name)?;
-            Some((
-                n.to_string(),
-                v.to_string(),
-                d.to_string(),
-                cv.latched(name).map(str::to_string),
-            ))
-        }) else {
+        let Some((canon, value, default, waiting)) =
+            self.game.module.script.as_ref().and_then(|rt| {
+                let cv = rt.cvars();
+                let (n, v, d) = cv.lookup(name)?;
+                Some((
+                    n.to_string(),
+                    v.to_string(),
+                    d.to_string(),
+                    cv.latched(name).map(str::to_string),
+                ))
+            })
+        else {
             return false;
         };
         if let Some(v) = argv.get(1) {
@@ -7964,7 +6142,9 @@ impl Server {
 
     /// A client's `score` script field, 0 without one.
     fn client_score(&mut self, slot: usize) -> i32 {
-        self.script
+        self.game
+            .module
+            .script
             .as_mut()
             .and_then(|rt| rt.client_field(slot, "score"))
             .and_then(|v| v.parse().ok())
@@ -7976,12 +6156,15 @@ impl Server {
         let mut out = format!(
             "map: {}\nnum score ping name            lastmsg address               qport rate\n\
              --- ----- ---- --------------- ------- --------------------- ----- -----\n",
-            self.cfg.map
+            self.game.cfg.map
         );
-        for slot in 0..self.clients.len() {
-            let zombie = self.clients[slot].is_none();
+        for slot in 0..self.core.clients.len() {
+            let zombie = self.core.clients[slot].is_none();
             let score = if zombie { 0 } else { self.client_score(slot) };
-            let Some(c) = self.clients[slot].as_ref().or(self.zombies[slot].as_ref()) else {
+            let Some(c) = self.core.clients[slot]
+                .as_ref()
+                .or(self.game.zombies[slot].as_ref())
+            else {
                 continue;
             };
             let row = console::StatusRow {
@@ -7992,16 +6175,16 @@ impl Server {
                 } else if c.state == ClientState::Connected {
                     console::Ping::Connecting
                 } else {
-                    console::Ping::Ms(c.ping)
+                    console::Ping::Ms(c.link.ping)
                 },
                 // The drop nukes the userinfo, and the name with it.
                 name: if zombie { "" } else { &c.name },
                 last_msg_ms: now.saturating_duration_since(c.last_packet).as_millis() as i64,
                 addr: c
                     .bot_port
-                    .map_or(console::Adr::Ip(c.addr), console::Adr::Bot),
-                qport: c.netchan.qport,
-                rate: c.rate(self.dedicated),
+                    .map_or(console::Adr::Ip(c.link.addr), console::Adr::Bot),
+                qport: c.link.netchan.qport,
+                rate: c.rate(self.game.dedicated),
             };
             out.push_str(&row.to_string());
         }
@@ -8011,21 +6194,10 @@ impl Server {
 
     /// `Com_Printf`: the log, and the rcon reply when one is being collected.
     fn print(&mut self, msg: &str) {
-        if let Some(r) = self.redirect.as_mut() {
+        if let Some(r) = self.game.redirect.as_mut() {
             r.print(msg);
         }
         log::info!("{}", msg.trim_end());
-    }
-
-    /// Whether a `quit` has run; the binary flushes the outbox and exits.
-    pub fn quit_requested(&self) -> bool {
-        self.quit
-    }
-
-    /// Replaces the master-name resolver, so a test can heartbeat without
-    /// touching DNS.
-    pub fn set_master_resolver(&mut self, resolve: fn(&str) -> Option<SocketAddr>) {
-        self.resolver = resolve;
     }
 
     const FALLBACK_SPAWN: ([f32; 3], f32) = ([0.0, 0.0, 64.0], 0.0);
@@ -8040,27 +6212,28 @@ impl Server {
         // zeroing left it, origin and `delta_angles` 0, until a script
         // spawns it (cod11-gametypes-re-bel.md 8.3). Without one nothing
         // ever would, so it stands at the map's spawn.
-        let (spawn, cmd_angles) = if self.script.is_some() {
+        let (spawn, cmd_angles) = if self.game.module.script.is_some() {
             (([0.0; 3], 0.0), [0; 3])
         } else {
             (
-                self.world
+                self.game
+                    .world
                     .as_ref()
                     .map_or(Self::FALLBACK_SPAWN, |w| w.spawn),
                 entering.map_or(NULL_USERCMD.angles, |c| c.angles),
             )
         };
-        let Some(c) = self.clients[slot].as_mut() else {
+        let Some(c) = self.core.clients[slot].as_mut() else {
             return;
         };
         c.state = ClientState::Active;
         // The first snapshot goes this frame, not after the primed client's
         // 1 s keepalive interval (0x80877d8).
-        c.next_message_ms = svs_ms;
+        c.link.next_message_ms = svs_ms;
         let mut sim = ClientSim::spectator(spawn.0, spawn.1, cmd_angles);
         // A 1.5 server moves every client, bots too, under 1.5's rules, as
         // its game module's one pmove does.
-        sim.ps.rules = vcod_common::pmove::MoveRules::for_protocol(self.proto);
+        sim.ps.rules = vcod_common::pmove::MoveRules::for_protocol(self.game.proto);
         c.sim = Some(sim);
         // The entering cmd is not simulated: retail's execute loop skips
         // every cmd at or before `lastUsercmd`, which entry has just set to
@@ -8069,10 +6242,10 @@ impl Server {
         // ahead cannot leave `commandTime` past every cmd that follows. With
         // no entering cmd, one frame back, so the first cmd's dt is a sane
         // 50 ms rather than the whole age of the client's clock.
-        c.last_processed_st = entering.map_or(self.sv_time_ms.wrapping_sub(FRAME_MS), |c| {
+        c.last_processed_st = entering.map_or(self.core.sv_time_ms.wrapping_sub(FRAME_MS), |c| {
             c.server_time.clamp(
-                self.sv_time_ms.wrapping_sub(1000),
-                self.sv_time_ms.wrapping_add(200),
+                self.core.sv_time_ms.wrapping_sub(1000),
+                self.core.sv_time_ms.wrapping_add(200),
             )
         });
         c.last_usercmd_st = entering.map_or(c.last_processed_st, |c| c.server_time);
@@ -8080,7 +6253,7 @@ impl Server {
         // `ClientBegin`: the notify that releases the connect callback's
         // `waittill("begin")`. The event queues rather than fires here, so it
         // is drained after the `Connect` that armed the wait.
-        if let Some(rt) = self.script.as_mut() {
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.push_client_event(ClientEvent::Begin(slot));
         }
     }
@@ -8090,44 +6263,45 @@ impl Server {
         self.tick_frames(now, 1);
     }
 
-    /// `SV_Frame` (cod_lnxded 0x808cdf8): the bots and the pings once, then
-    /// every game frame the wall clock owes back to back, each but the last
-    /// archived, then the timeouts and one round of messages. A frame loop
-    /// that fell behind, a slow `map_restart` among the causes, catches up
-    /// without a snapshot per frame (map-cycle doc, 4.7).
-    pub fn tick_frames(&mut self, now: Instant, frames: u32) {
+    /// `SV_Frame`'s head: `Cbuf_Execute`, then whether the frame runs at
+    /// all. Keeps the wall gap for `--trace` and starts the tick's moves.
+    fn frame_head(&mut self, now: Instant, frames: u32) -> bool {
+        crate::tick_trace::step!("Cbuf_Execute");
         self.drain_console(now);
         // `Com_Quit_f` exits inside the command; nothing after it runs. A
         // killed server runs no frame (`SV_Frame` returns while
         // `sv_running` is 0).
-        if self.quit || self.killed {
-            return;
+        if self.core.quit || self.game.killed {
+            return false;
         }
-        // The bots' walks move by this server's rules, as their bodies do.
-        crate::nav::with_rules(self.move_rules(), || self.step_bots());
-        self.calc_pings();
         // Wall gap between ticks: sv_time advances FRAME_MS a frame, so a
         // gap far off it means the frames the client interpolates between
         // are not arriving at the rate their timestamps claim.
         let wall_ms = self
+            .game
             .last_tick
             .map(|t| now.saturating_duration_since(t).as_secs_f32() * 1000.0);
-        self.last_tick = Some(now);
-        // The first frame replays the packets; the trace reports that one.
-        let Some(moved) = self.game_frame() else {
-            return;
-        };
-        for _ in 1..frames {
-            // `SV_ArchiveSnapshot` between the frames (0x808d1bb).
-            if self.archive.is_on() {
-                let world = self.build_world_frame();
-                self.archive_frame(world);
-            }
-            if self.game_frame().is_none() {
-                return;
-            }
+        self.game.last_tick = Some(now);
+        self.game.tick_wall = (wall_ms, frames);
+        self.game.tick_moved = None;
+        true
+    }
+
+    /// The bots' cmds, once a `SV_Frame`.
+    fn bot_frame(&mut self) {
+        // The bots' walks move by this server's rules, as their bodies do.
+        crate::tick_trace::step!("SV_BotFrame");
+        crate::nav::with_rules(self.move_rules(), || self.step_bots());
+    }
+
+    /// `SV_ArchiveSnapshot` between the frames (0x808d1bb), while script
+    /// has the archive on.
+    fn archive_between(&mut self) {
+        if self.game.archive.is_on() {
+            crate::tick_trace::step!("SV_ArchiveSnapshot");
+            let world = self.build_world_frame();
+            self.archive_frame(world);
         }
-        self.end_frames(&moved, (wall_ms, frames));
     }
 
     /// How far this frame moves the game clock. 1.1's `SV_Frame` steps
@@ -8140,7 +6314,7 @@ impl Server {
         if !self.v15() {
             return FRAME_MS;
         }
-        let Some(rt) = self.script.as_mut() else {
+        let Some(rt) = self.game.module.script.as_mut() else {
             return FRAME_MS;
         };
         let mut scale = crate::game::builtins::cvar::atof(rt.cvars().get("timescale"));
@@ -8156,1005 +6330,50 @@ impl Server {
         }
     }
 
-    /// One game frame: the clock, every queued move, the script frame and
-    /// the entity pass, and what they queued for the wire.
-    /// `None` when a `G_Error` dropped the level mid-frame.
-    fn game_frame(&mut self) -> Option<Vec<MoveSummary>> {
+    /// The frame's clock: 1.5's game clock steps by `timescale`, `svs.time`
+    /// a whole frame. Returns the game clock's step, which the engine adds.
+    fn frame_clock(&mut self) -> i32 {
         let step = self.game_step_ms();
-        self.sv_time_ms = self.sv_time_ms.wrapping_add(step);
-        self.paused_ms = self.paused_ms.wrapping_add(FRAME_MS - step);
-        let svs_ms = self.svs_time_ms();
-        let mut timeout_written = false;
-        let mut vote_lines: Vec<String> = Vec::new();
-        if let Some(rt) = self.script.as_mut() {
+        self.game.paused_ms = self.game.paused_ms.wrapping_add(FRAME_MS - step);
+        crate::tick_trace::step!(
+            "G_RunFrame time {}",
+            self.core.sv_time_ms.wrapping_add(step)
+        );
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.host.frozen = step == 0;
         }
+        step
+    }
 
-        // Every client's pending moves first, so the world is at this frame
-        // before script or anyone's snapshot reads it.
-        let moved = self.replay_moves();
-        let weapons = self.weapon_table.clone();
-
-        let mut client_commands = Vec::new();
-        let mut console_lines: Vec<String> = Vec::new();
-        let mut ranks_dirty = false;
-        let svs_now = self.svs_time_ms();
-        if let Some(rt) = self.script.as_mut() {
-            for (slot, c) in self.clients.iter().enumerate() {
-                if let Some(c) = c {
-                    rt.set_client_buttons(
-                        slot,
-                        moved[slot].last_buttons.unwrap_or(c.last_cmd.buttons),
-                    );
-                    rt.set_client_last_cmd(slot, c.last_cmd);
-                }
-            }
-            // `addTestClient` can run on any script entry (a load's settle
-            // frames too), so the counter is read back before it goes in.
-            let counter = self.test_client_counter.max(rt.host.test_clients.counter);
-            rt.host.test_clients.counter = counter;
-            rt.set_network_time(svs_now);
-            for (slot, port, name) in std::mem::take(&mut rt.host.test_clients.added) {
-                Self::install_test_client(
-                    &mut self.clients,
-                    slot,
-                    port,
-                    name,
-                    self.proto,
-                    self.sv_time_ms,
-                );
-            }
-            mirror_roster(&self.clients, rt);
-            rt.run_threads(self.sv_time_ms);
-            self.test_client_counter = rt.host.test_clients.counter;
-            for (slot, port, name) in std::mem::take(&mut rt.host.test_clients.added) {
-                Self::install_test_client(
-                    &mut self.clients,
-                    slot,
-                    port,
-                    name,
-                    self.proto,
-                    self.sv_time_ms,
-                );
-            }
-            // The vehicle guns the threads fired (`fireTurret` and kin run
-            // their rounds inside the call).
-            vehicle_fire(
-                &mut self.clients,
-                rt,
-                VehicleFireCtx {
-                    world: self.world.as_deref(),
-                    hitlocs: &self.hitlocs,
-                    fs: self.fs.as_deref(),
-                    anims: self.anims.as_deref(),
-                    rigs: &mut self.hit_rigs,
-                    weapons: &weapons,
-                    rng: &mut self.rng,
-                    now_ms: self.sv_time_ms,
-                },
-            );
-            // `self spawn(origin, angles)` moves the sim, which no builtin
-            // can reach; this is where the queue lands. Before the weapons,
-            // because a spawn resets the playerstate; the ammo arrays are
-            // the weapon ops' alone, so the loadout survives the reset
-            // whichever pass applied it.
-            for s in rt.take_client_spawns() {
-                let Some(c) = self.clients.get_mut(s.slot).and_then(Option::as_mut) else {
-                    continue;
-                };
-                // The client's own angles at this moment, not zero: a
-                // spectator that looked around before answering the weapon
-                // menu carries them, and `spawn_delta_angles` subtracts them
-                // so the spawn preserves the view instead of force-turning it.
-                let cmd_angles = c.last_cmd.angles;
-                let last_cmd = c.last_cmd;
-                let Some(sim) = c.sim.as_mut() else {
-                    continue;
-                };
-                // `ClientSpawn` lets go of a gun first (turrets doc 8). The
-                // teleport's events go out only for a spawn into play, the
-                // `sessionstate` the script set ahead of the spawn.
-                // A gun deleted this frame queued its release for here; the
-                // spawn comes after it, as `G_FreeTurret` ran first in retail.
-                rt.apply_turret_releases(s.slot, sim);
-                let temps = rt.release_turret(s.slot, sim).unwrap_or_default();
-                // And a vehicle seat (`ClientSpawn` 0x44df4).
-                if sim.seat.is_some() {
-                    rt.with_host(|host, cx| {
-                        crate::game::vehicle::seat::unlink_player(
-                            host,
-                            cx,
-                            s.slot,
-                            false,
-                            [0.0; 3],
-                            ([0.0; 3], [0.0; 3]),
-                        )
-                    });
-                    rt.host.vehicles.seat_ops.clear();
-                    sim.leave_seat(None, None);
-                }
-                if s.mode == SpawnMode::Player {
-                    for te in temps {
-                        rt.push_temp_entity(te);
-                    }
-                }
-                // The ammo is the weapon op queue's: the builtin queued the
-                // memset's emptying there ahead of the loadout, and a queue
-                // drained before this pass already landed both.
-                let ammo = (sim.ps.ammo, sim.ps.ammoclip);
-                match s.mode {
-                    SpawnMode::Player => {
-                        sim.become_player(s.origin, s.yaw_deg, cmd_angles);
-                        // UO's `G_DObjUpdate` (0x87df9) rebuilds a client's
-                        // DObj when the spawning thread sets his model.
-                        sim.dobj_ahead = sim.ps.rules == vcod_common::pmove::MoveRules::Uo;
-                        // The builtin's think on its fresh sim already ran
-                        // this one's `ClientImpacts`.
-                        let bodies = rt.host.move_bodies(s.slot);
-                        let (think, _) = sim.spawn_think_on(
-                            &last_cmd,
-                            self.sv_time_ms,
-                            self.world.as_ref().map(|w| {
-                                vcod_common::movetrace::MoveWorld::new(
-                                    &w.collision,
-                                    &bodies,
-                                    s.slot as u32,
-                                )
-                            }),
-                        );
-                        // `ClientSpawn` runs inside `self spawn()`, ahead of
-                        // the loadout the script gives after it, so the
-                        // think animates empty hands.
-                        if let Some(anims) = self.anims.as_deref() {
-                            let index = sim.ps.weapon as usize;
-                            sim.update_anims(
-                                &crate::spectate::AnimInputs {
-                                    anims,
-                                    weapon: crate::items::item_name(
-                                        self.weapon_table.list(),
-                                        index,
-                                    )
-                                    .unwrap_or_default(),
-                                    weapon_class: self.weapon_table.class(index),
-                                },
-                                &think,
-                                (self.sv_time_ms, self.sv_time_ms),
-                                &[],
-                                &mut self.rng,
-                            );
-                        }
-                    }
-                    SpawnMode::Spectator => {
-                        sim.become_spectator(s.origin, s.yaw_deg, cmd_angles);
-                        sim.spawn_think_on(
-                            &last_cmd,
-                            self.sv_time_ms,
-                            self.world
-                                .as_ref()
-                                .map(|w| vcod_common::movetrace::MoveWorld::bare(&w.collision)),
-                        );
-                    }
-                    SpawnMode::Intermission => {
-                        sim.become_intermission(s.origin, s.yaw_deg, cmd_angles, self.sv_time_ms)
-                    }
-                }
-                (sim.ps.ammo, sim.ps.ammoclip) = ammo;
-                // The spawn's own think runs a player or a spectator up to
-                // the frame's clock; the intermission arm runs no pmove.
-                if s.mode != SpawnMode::Intermission {
-                    c.last_processed_st = self.sv_time_ms;
-                }
-            }
-            // The machine's own switches first: `pickup` writes `ps.weapon`
-            // when a drop ends, and the mirror below would put the old
-            // weapon back and start the identical putaway again.
-            for (slot, weapon) in self.weapon_changes.drain(..) {
-                rt.set_client_weapon(slot, weapon);
-            }
-            // What the client holds comes across the same way the
-            // configstrings do: re-read every frame, because any thread can
-            // have changed them. The held bits have to be among them --
-            // `PM_Weapon` disarms a player who no longer owns `ps.weapon`
-            // (combat doc, section 1.8) -- and `ps.weapon` with them, so a
-            // sim reset outside a move comes back armed. The write-back
-            // above is what makes that safe: the host's copy already carries
-            // whatever the machine switched to this tick.
-            mirror_weapons(&mut self.clients, rt);
-            // The ammo and the current weapon, which are edges rather than
-            // state: applying a full clip every frame would make the weapon
-            // bottomless.
-            apply_weapon_ops(&mut self.clients, rt);
-            // `linkTo` and `unlink`, before the entity pass re-anchors so a
-            // link made this frame is already pinned on this frame's wire: both
-            // retail captures read the new `pm_type` on the next snapshot
-            // after the cmd (object-model doc, 23.2).
-            for (slot, op) in rt.take_link_ops() {
-                let Some(sim) = self
-                    .clients
-                    .get_mut(slot)
-                    .and_then(Option::as_mut)
-                    .and_then(|c| c.sim.as_mut())
-                else {
-                    continue;
-                };
-                sim.link_to = match op {
-                    crate::game::host::LinkOp::Link { parent, offset } => {
-                        Some(crate::spectate::Link {
-                            parent,
-                            offset,
-                            velocity: sim.ps.velocity.into(),
-                        })
-                    }
-                    crate::game::host::LinkOp::Unlink => None,
-                };
-            }
-            // A seat the frame's threads left (`Scr_Vehicle_Die` under a
-            // `doDamage`) is left ahead of the entity pass, and ahead of
-            // the knockback of any hit after it: the exit's pop sets the
-            // velocity, the hit adds to it.
-            apply_seat_ops(&mut self.clients, rt);
-            // What script did to each sim, applied once, then the health
-            // mirror and the frame's damage feedback, in that order:
-            // `P_DamageFeedback` reads the health the hit left.
-            let anims = self.anims.as_deref();
-            apply_sim_ops(
-                &mut self.clients,
-                rt,
-                anims,
-                &weapons,
-                &mut self.rng,
-                self.sv_time_ms,
-            );
-            // `G_RunFrame`'s entity loop: items, links, movers, missiles,
-            // thinks and linked clients one entity at a time by number
-            // (combat doc 14.7), after the frame's threads and every client
-            // move they made (spawns, `setOrigin`s, links), so a thread reads
-            // a grenade's or a mover's last-frame origin, the flight is
-            // traced past the bodies where script put them, and a blast walk
-            // meets this frame's turn of every entity numbered below the
-            // grenade (14.7, 16.2). A grenade thrown on this tick was spawned
-            // inside its cmd on the last frame's `level.time`, so it has
-            // already flown a frame by the time the snapshot goes out (combat
-            // doc 11.4). Each blast is walked on its missile's turn, one
-            // victim's callback before the next victim is measured (14.1,
-            // 14.5); each brush model's move pushes its riders and the bodies
-            // in its way on its turn, or holds a frame when a body fits
-            // nowhere (`G_MoverTeam`; movers doc, section 12); a linked client
-            // is re-anchored on its own turn, after its parent's.
-            self.pending_explosions.clear();
-            let collision = self.world.as_ref().map(|w| &w.collision);
-            let (fs, anims, now_ms) = (self.fs.as_deref(), self.anims.as_deref(), self.sv_time_ms);
-            let arith = vcod_common::patch::Arith::for_protocol(self.proto);
-            // Where a callback earlier in the walk set a client down: its
-            // link moved off the one its last cmd made (`setOrigin` relinks
-            // at once, combat doc 14.7), and the walk measures it there.
-            let set_down =
-                |rt: &script::ScriptRuntime, slot: usize, s: &crate::spectate::ClientSim| {
-                    let link = glam::Vec3::from(rt.host.client_link_origin[slot]);
-                    (link != s.link_origin()).then_some(link)
-                };
-            let victim =
-                |rt: &script::ScriptRuntime, slot: usize, s: &crate::spectate::ClientSim| {
-                    let eye = s.ps.view().eye;
-                    let mut v = crate::game::combat::BlastVictim {
-                        slot,
-                        origin: s.ps.origin,
-                        link_origin: s.link_origin(),
-                        mins: s.ps.mins(),
-                        maxs: s.ps.maxs(),
-                        eye,
-                    };
-                    if let Some(at) = set_down(rt, slot, s) {
-                        v = crate::game::combat::BlastVictim {
-                            origin: at,
-                            link_origin: at,
-                            eye: at + (eye - s.ps.origin),
-                            ..v
-                        };
-                    }
-                    v
-                };
-            // A rider is linked to his vehicle (`G_EntLinkToWithOffset`,
-            // coduo-vehicles.md 13) as a `linkTo` client is to its parent.
-            let client_links: Vec<(usize, vcod_gsc::EntId)> = self
-                .clients
-                .iter()
-                .enumerate()
-                .filter_map(|(i, c)| {
-                    let sim = c.as_ref()?.sim.as_ref()?;
-                    let parent = match (sim.link_to, sim.seat) {
-                        (Some(l), _) => l.parent,
-                        (None, Some(seat)) => rt.host.ents.handle(seat.vehicle)?,
-                        (None, None) => return None,
-                    };
-                    Some((i, parent))
-                })
-                .collect();
-            let mut pass = rt.begin_entity_pass(client_links);
-            loop {
-                let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
-                    .clients
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
-                    .collect();
-                let Some(stop) = rt.run_entity_pass(&mut pass, collision, &sims, self.sv_time_ms)
-                else {
-                    break;
-                };
-                let x = match stop {
-                    script::PassStop::Blast(x) => x,
-                    script::PassStop::Push(step) => {
-                        drop(sims);
-                        if let Some(world) = self.world.as_ref() {
-                            push_mover(&mut self.clients, rt, &step, &world.collision);
-                        }
-                        continue;
-                    }
-                    script::PassStop::Client(slot) => {
-                        drop(sims);
-                        if let Some(sim) = self
-                            .clients
-                            .get_mut(slot)
-                            .and_then(Option::as_mut)
-                            .and_then(|c| c.sim.as_mut())
-                        {
-                            run_client_link(rt, slot, sim);
-                        }
-                        continue;
-                    }
-                };
-                self.bot_noises.push(crate::bots::Noise {
-                    at: (x.at + glam::Vec3::Z * 40.0).into(),
-                    source: x.owner.unwrap_or(usize::MAX),
-                    radius: crate::bots::HEAR_BLAST,
-                });
-                let Some(def) = weapons.get(x.weapon as usize) else {
-                    if x.concussive {
-                        rt.spawn_concussive();
-                    }
-                    self.pending_explosions.push(x);
-                    continue;
-                };
-                // A thrower who left is `r.ownerNum` 0x3ff: the direct hit's
-                // `G_Damage` gets a NULL attacker. A UO vehicle shell keeps
-                // its driver's slot (`+0x330`) after he left, and the freed
-                // entity there reads number 0; its fuse blast names the
-                // vehicle (combat doc 13.7).
-                let owner = rt.charged_owner(x.owner);
-                let attacker = owner.unwrap_or(crate::game::host::ENTITYNUM_NONE as usize);
-                // A shell's direct hit lands before its splash, which skips
-                // the client it struck (`G_MissileImpact`, coduo-diff.md 21).
-                // UO's `G_MissileImpact` drops the inflictor with the owner
-                // (game.mp.uo 0x5dc8e), so `G_DamageClient` names weapon 0
-                // (combat doc 13.7); 1.1's hands the missile on.
-                let uo = self.proto.version == vcod_common::net::protocol::PROTOCOL_V22.version;
-                let (inflictor, weapon) = if x.owner.is_none() && uo {
-                    (None, "none")
-                } else {
-                    (
-                        Some(x.inflictor),
-                        crate::items::item_name(
-                            crate::defs::Defs::of(self.proto),
-                            x.weapon as usize,
-                        )
-                        .unwrap_or_default(),
-                    )
-                };
-                if let Some((victim, damage)) = x.direct
-                    && rt.client_vitals(victim).takedamage
-                    && sims.iter().any(|(slot, _)| *slot == victim)
-                {
-                    let hit = crate::game::combat::Hit {
-                        victim,
-                        attacker,
-                        inflictor,
-                        damage,
-                        dflags: 0,
-                        mod_: x.direct_mod,
-                        weapon: weapon.to_string(),
-                        point: x.at.into(),
-                        // `BG_EvaluateTrajectoryDelta` at the contact: an
-                        // artillery shell's is straight down.
-                        dir: x.flight.normalize_or(-glam::Vec3::Z).into(),
-                        hitloc: "none",
-                    };
-                    rt.deliver_hits(vec![hit]);
-                }
-                // Any other entity the shell struck that takes damage (a UO
-                // vehicle, a `setTakeDamage` script model) takes it the same
-                // way (`G_MissileImpact`'s `G_Damage`, 1.1 0x53ab4, game.mp.uo
-                // 0x6db67, combat doc 13.1): the flight as the direction, the
-                // contact as the point.
-                if let Some(v) = x
-                    .struck
-                    .and_then(|n| rt.host.ents.handle(n))
-                    .filter(|&v| rt.host.entity_takes_damage(v))
-                    && x.shell_damage > 0
-                {
-                    rt.deliver_entity_hit(&crate::game::combat::EntityHit {
-                        target: v,
-                        attacker,
-                        inflictor: Some(x.inflictor),
-                        damage: x.shell_damage,
-                        dflags: 0,
-                        mod_: x.direct_mod,
-                        point: x.contact.into(),
-                        dir: x.flight.normalize_or_zero().into(),
-                    });
-                }
-                // UO's `G_MissileImpact` walks the trigger_damages at the
-                // contact alone: start and end are both the trace's end
-                // position (game.mp.uo 0x5df1a, combat doc 14.8).
-                if self.proto.version == vcod_common::net::protocol::PROTOCOL_V22.version
-                    && x.struck.is_some()
-                    && x.shell_damage != 0
-                {
-                    rt.trigger_sweep(&crate::game::combat::TriggerSweep {
-                        attacker,
-                        start: x.contact,
-                        end: x.contact,
-                        damage: x.shell_damage,
-                        mod_: x.direct_mod,
-                    });
-                }
-                // `G_RadiusDamage` returns before its walk when `parent`, its
-                // attacker, is NULL: the thrower left (combat doc 13.7).
-                let Some(owner) = owner else {
-                    if x.concussive {
-                        rt.spawn_concussive();
-                    }
-                    self.pending_explosions.push(x);
-                    continue;
-                };
-                let blast = crate::game::combat::Blast::new(
-                    x.at,
-                    def.explosion_radius,
-                    def.explosion_inner_damage as f32,
-                    def.explosion_outer_damage as f32,
-                    Some(owner),
-                    Some(x.inflictor),
-                    crate::items::item_name(crate::defs::Defs::of(self.proto), x.weapon as usize)
-                        .unwrap_or_default(),
-                    x.mod_,
-                );
-                // `trap_EntitiesInBox`' order (combat doc 14.7): the
-                // clients and the turrets as the area tree lists them, taken
-                // once. Each is measured on its turn, after every earlier
-                // victim's callback (14.5).
-                let (mins, maxs) = blast.search_box();
-                let candidates: Vec<BlastCandidate> = rt
-                    .host
-                    .area
-                    .entities_in_box(mins, maxs, -1)
-                    .into_iter()
-                    .filter_map(|n| {
-                        if let Some(&(slot, s)) = sims.iter().find(|(slot, _)| *slot == n as usize)
-                        {
-                            return Some(BlastCandidate::Client(slot, s));
-                        }
-                        let id = rt.host.ents.handle(n)?;
-                        Some(BlastCandidate::Entity(id))
-                    })
-                    .collect();
-                // A client a callback of this walk killed is a corpse and
-                // stops nothing.
-                let live_bodies =
-                    |rt: &script::ScriptRuntime| -> Vec<crate::game::combat::HitBody> {
-                        if !rt.host.bodies_shield_blasts() {
-                            return Vec::new();
-                        }
-                        sims.iter()
-                            .filter(|(other, _)| !rt.client_vitals(*other).dead)
-                            .filter_map(|&(other, s)| {
-                                let mut body = s.hit_body(other)?;
-                                if let Some(at) = set_down(rt, other, s) {
-                                    body.origin = at;
-                                }
-                                Some(body)
-                            })
-                            .collect()
-                    };
-                for candidate in candidates {
-                    match candidate {
-                        BlastCandidate::Client(slot, s) => {
-                            if !rt.client_vitals(slot).takedamage
-                                || x.direct.is_some_and(|(v, _)| v == slot)
-                            {
-                                continue;
-                            }
-                            let v = victim(rt, slot, s);
-                            if !blast.reaches(&v) {
-                                continue;
-                            }
-                            let bodies = live_bodies(rt);
-                            let models = match rt.client_entity(slot) {
-                                Some(e) => rt.blast_models(e),
-                                None => rt.placed_script_models(),
-                            };
-                            if let Some(hit) = blast.hit(
-                                &v,
-                                collision,
-                                &models,
-                                &bodies,
-                                crate::game::combat::BoneTraceCtx::of(
-                                    fs,
-                                    anims,
-                                    &mut self.hit_rigs,
-                                    now_ms,
-                                    &mut rt.host.dobj_posed,
-                                    arith,
-                                )
-                                .as_mut(),
-                            ) {
-                                rt.deliver_hits(vec![hit]);
-                            }
-                        }
-                        BlastCandidate::Entity(id) => {
-                            // `G_RadiusDamage`'s ignore: what the shell struck.
-                            if x.struck == Some(id.0) {
-                                continue;
-                            }
-                            let Some(v) = rt.blast_entities().into_iter().find(|v| v.id == id)
-                            else {
-                                continue;
-                            };
-                            if !blast.reaches_entity(&v) {
-                                continue;
-                            }
-                            let bodies = live_bodies(rt);
-                            let models = rt.blast_models(id);
-                            if let Some(damage) = blast.entity_damage(
-                                &v,
-                                collision,
-                                &models,
-                                &bodies,
-                                crate::game::combat::BoneTraceCtx::of(
-                                    fs,
-                                    anims,
-                                    &mut self.hit_rigs,
-                                    now_ms,
-                                    &mut rt.host.dobj_posed,
-                                    arith,
-                                )
-                                .as_mut(),
-                            ) {
-                                if rt.host.vehicles.live.contains_key(&v.id) {
-                                    rt.damage_vehicle(
-                                        v.id,
-                                        damage,
-                                        owner,
-                                        x.inflictor,
-                                        x.at.into(),
-                                        x.mod_,
-                                    );
-                                } else {
-                                    rt.damage_entity(&v, &blast, damage, owner);
-                                }
-                            }
-                        }
-                    }
-                }
-                if x.concussive {
-                    rt.spawn_concussive();
-                }
-                self.pending_explosions.push(x);
-            }
+    /// One game frame past its clock and its moves (`moved`, by slot, which
+    /// left the world at this frame before script or anyone's snapshot reads
+    /// it): the script frame and the entity pass, and what they queued for
+    /// the wire. False when a `G_Error` dropped the level mid-frame.
+    fn game_frame(&mut self, moved: &[MoveSummary]) -> bool {
+        let svs_ms = self.svs_time_ms();
+        // `G_RunFrame`, the script threads through every `ClientEndFrame`.
+        let (game, eng) = self.split(svs_ms);
+        let FrameOut {
+            vote_lines,
+            timeout_written,
+            console_lines,
+            client_commands,
+            ranks_dirty,
+        } = match game.run_frame_cod1(eng, moved) {
+            Ok(out) => out,
             // A `G_Error` in the pass: `Com_Error`'s drop runs instead of
             // the rest of the frame (docs/research/cod11-movers.md 18).
-            if let Some(e) = rt.take_game_error() {
+            Err(e) => {
                 self.drop_level(&e);
-                return None;
+                return false;
             }
-            // What the blasts' callbacks did to the sims, as above.
-            mirror_weapons(&mut self.clients, rt);
-            apply_weapon_ops(&mut self.clients, rt);
-            apply_sim_ops(
-                &mut self.clients,
-                rt,
-                self.anims.as_deref(),
-                &weapons,
-                &mut self.rng,
-                self.sv_time_ms,
-            );
-            mirror_vitals(&mut self.clients, rt);
-            // `G_RunClient`'s `pm_type` step down for a rider who left a
-            // seat ahead of the entity pass; for one the vehicle think below
-            // puts out, `ClientEndFrame`'s write does it.
-            for sim in self
-                .clients
-                .iter_mut()
-                .flatten()
-                .filter_map(|c| c.sim.as_mut())
-            {
-                sim.run_client();
-            }
-            // `G_VehicleClientThink` (game.mp.uo 0x8b0ce): after the entity
-            // loop, before every `ClientEndFrame`.
-            vehicle_frame(&mut self.clients, rt);
-            self.archive.set_on(rt.archive_on());
-            // `G_RunFrame`'s own slot order (0x50ab0-0x50ad7), not arrival
-            // order (docs/research/cod11-player-clip.md 4.2, 6). No link
-            // follows a CORPSE write here. The follow half goes first, so a
-            // spectator reads the own-view bit a lower slot took this frame
-            // and a higher slot's from the last one, as retail's loop does.
-            let collision = self.world.as_ref().map(|w| &w.collision);
-            for slot in 0..self.clients.len() {
-                follow_end_frame(
-                    &mut self.clients,
-                    slot,
-                    rt,
-                    &self.archive,
-                    collision,
-                    self.sv_time_ms,
-                );
-                // `takedamage` off the session state (0x40ed9, 0x40f93,
-                // 0x4107c, and `SpectatorClientEndFrame` 0x40788).
-                let session = rt.client_session(slot);
-                if let Some(session) = session {
-                    let playing = session.state == follow::SessionState::Playing;
-                    rt.set_client_takedamage(slot, playing);
-                }
-                let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) else {
-                    continue;
-                };
-                sim.session = session.map(|s| s.state);
-                sim.update_contents();
-                let live = sim.pm_type == PmType::Normal && !sim.dead && sim.health > 0;
-                if live {
-                    let views: Vec<Option<StuckView>> =
-                        self.clients.iter().map(Self::stuck_view).collect();
-                    let rules = if self.proto.version == PROTOCOL_V1.version {
-                        StuckRules::V1_1
-                    } else {
-                        StuckRules::V1_5
-                    };
-                    let (rng, glibc) = (&mut self.rng, &mut self.stuck_rand);
-                    let rand = || match glibc {
-                        Some(g) => g.next_u31(),
-                        None => (vcod_common::rng::xorshift(rng) >> 33) as u32,
-                    };
-                    if let Some(push) = stuck_in_client(slot, &views, rules, rand) {
-                        let me = self.clients[slot]
-                            .as_mut()
-                            .and_then(|c| c.sim.as_mut())
-                            .unwrap();
-                        me.ps.velocity.x = push.self_vel.x;
-                        me.ps.velocity.y = push.self_vel.y;
-                        me.ps.knockback_ms = 300.0;
-                        me.ps.knockback_flags |= vcod_common::pmove::PMF_TIME_KNOCKBACK;
-                        // The caller marks only self a corpse (0x411b8); the
-                        // partner marks itself on its own turn through the scan.
-                        me.contents = CONTENTS_CORPSE;
-                        let other = self.clients[push.other]
-                            .as_mut()
-                            .and_then(|c| c.sim.as_mut())
-                            .unwrap();
-                        other.ps.velocity.x = push.other_vel.x;
-                        other.ps.velocity.y = push.other_vel.y;
-                        other.ps.knockback_ms = 300.0;
-                        other.ps.knockback_flags |= vcod_common::pmove::PMF_TIME_KNOCKBACK;
-                    }
-                }
-                let sim = self.clients[slot]
-                    .as_mut()
-                    .and_then(|c| c.sim.as_mut())
-                    .unwrap();
-                sim.end_frame(self.sv_time_ms);
-                place_rider(rt, slot, sim);
-            }
-            // `ClientEndFrame`'s `pingPlayer` clear (0x41024) and its compass
-            // teammate (0x411fc), per slot in slot order: a lower slot reads
-            // a higher one's ping bit as that slot's last end frame left it.
-            let sessions: Vec<Option<follow::SessionState>> = (0..self.clients.len())
-                .map(|slot| rt.client_session(slot).map(|s| s.state))
-                .collect();
-            let teams: Vec<i32> = (0..self.clients.len())
-                .map(|slot| rt.client_team(slot))
-                .collect();
-            let fog = fog_cull_of(self.proto, rt.configstrings());
-            let broadcast: Vec<bool> = (0..self.clients.len())
-                .map(|slot| rt.in_snapshot_broadcast(slot as u32))
-                .collect();
-            for slot in 0..self.clients.len() {
-                let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) else {
-                    continue;
-                };
-                sim.ping = rt.host.client_ping_until[slot] > rt.host.level_time_ms;
-                sim.voted = rt.host.client_voted[slot];
-                let found = compass_friend(
-                    &self.clients,
-                    slot,
-                    &sessions,
-                    &teams,
-                    &broadcast,
-                    self.world.as_ref().map(|w| (&w.vis, fog)),
-                    self.sv_time_ms,
-                    self.proto,
-                );
-                let sim = self.clients[slot].as_mut().unwrap().sim.as_mut().unwrap();
-                if let Some(found) = found {
-                    sim.compass_friend = found.map_or(0, |(info, _, _)| info);
-                    match found {
-                        Some((_, n, ping)) => {
-                            sim.last_friend = n;
-                            sim.friend_ping = ping;
-                        }
-                        None => sim.last_friend = compass::NO_FRIEND,
-                    }
-                }
-            }
-            // `ClientEndFrame`'s aim trace and cursor hint, after the script
-            // frame and the mirrors so they read the frame's final eye, aim
-            // and items; the fire it raises wakes its waiters next frame
-            // (object-model doc 23.1). The `pm_type` goes with it: a spawn
-            // above changed it with no cmd, and the runtime's gate is what
-            // clears a dead or spectating client's `isLookingAt` and hint.
-            // Every body first, at the origin the sim ops and the re-anchor
-            // left, since any of them can stand in another client's aim.
-            for (slot, c) in self.clients.iter().enumerate() {
-                let sim = c.as_ref().and_then(|c| c.sim.as_ref());
-                rt.set_client_body(slot, sim.and_then(|s| s.hit_body(slot)));
-                rt.set_client_dobj(slot, sim.and_then(|s| s.dobj(slot)));
-            }
-            // UO's `G_CheckFlameDamage` (game.mp.uo 0x3f4d4), from each
-            // slot's `ClientEndFrame` past its cursor hint: a client whose
-            // last cmd carries `wbuttons` 1 and that sent `fdc` inside 3 s
-            // takes the flamethrower's damage from the named player, four
-            // times over from anyone but itself (coduo-diff.md 21).
-            if self.proto.version == PROTOCOL_V22.version {
-                let damage = crate::defs::UO
-                    .weapon_index("flamethrower_mp")
-                    .and_then(|i| weapons.get(i))
-                    .map_or(0, |d| d.damage);
-                let mut burns = Vec::new();
-                for (slot, c) in self.clients.iter().enumerate() {
-                    let Some(c) = c.as_ref() else { continue };
-                    let Some((from, at)) = c.flame else { continue };
-                    let from = from as usize;
-                    if c.last_cmd.wbuttons & vcod_common::net::msg::WBUTTON_IN_FLAME_V22 == 0
-                        || self.sv_time_ms - FLAME_REPORT_MS >= at
-                        || self.clients.get(from).and_then(Option::as_ref).is_none()
-                    {
-                        continue;
-                    }
-                    let origin = |n: usize| {
-                        self.clients[n]
-                            .as_ref()
-                            .and_then(|c| c.sim.as_ref())
-                            .map_or(glam::Vec3::ZERO, |s| s.ps.origin)
-                    };
-                    let (me, them) = (origin(slot), origin(from));
-                    burns.push(Effect::Hit(crate::game::combat::Hit {
-                        victim: slot,
-                        attacker: from,
-                        inflictor: None,
-                        damage: if from == slot { damage } else { damage * 4 },
-                        dflags: 0,
-                        mod_: "MOD_FLAME",
-                        weapon: "flamethrower_mp".into(),
-                        point: them.into(),
-                        dir: (me - them).normalize_or_zero().into(),
-                        hitloc: "none",
-                    }));
-                }
-                for burn in burns {
-                    let Effect::Hit(h) = &burn else { continue };
-                    let victim = h.victim;
-                    if !rt.client_vitals(victim).takedamage {
-                        continue;
-                    }
-                    deliver_turret_rounds(
-                        &mut self.clients,
-                        rt,
-                        vec![burn],
-                        victim,
-                        self.anims.as_deref(),
-                        &weapons,
-                        &mut self.rng,
-                        self.sv_time_ms,
-                    );
-                    // Retail's `P_DamageFeedback` follows the burn inside the
-                    // same `ClientEndFrame`; ours ran ahead of this block, so
-                    // the burn's feedback is taken now, not a frame later.
-                    if let Some(sim) = self.clients[victim].as_mut().and_then(|c| c.sim.as_mut()) {
-                        sim.end_frame(self.sv_time_ms);
-                    }
-                }
-            }
-            // Per slot, `ClientEndFrame`'s tail: the aim trace and cursor
-            // hint, `BG_PlayerAnimation`, then `turret_think_client`
-            // (turrets doc 6.1). A gunner's rounds are traced and delivered
-            // right there, so they meet a lower slot's new pose and a higher
-            // slot's last-frame one, and a higher slot's turn sees what the
-            // callback did (combat doc 16.1, 16.2).
-            // `bg_swingSpeed` is a vmCvar the game refreshes every frame.
-            let swing_speed = crate::game::builtins::cvar::atof(rt.cvars().get("bg_swingSpeed"));
-            let mount_boxes = rt.mount_boxes();
-            for slot in 0..self.clients.len() {
-                let Some(c) = self.clients[slot].as_mut() else {
-                    continue;
-                };
-                let buttons = moved
-                    .get(slot)
-                    .and_then(|m| m.last_buttons)
-                    .unwrap_or(c.last_cmd.buttons);
-                let Some(sim) = c.sim.as_mut() else { continue };
-                rt.set_client_pm_type(slot, sim.wire_pm_type());
-                // The link the script frame made is only on the sim from
-                // here, so the ground reading script sees next frame is
-                // taken again after it.
-                rt.set_client_on_ground(slot, sim.on_ground());
-                rt.set_client_stance(slot, sim.ps.stance);
-                rt.set_client_prone_cone(slot, vcod_common::pmove::ProneCone::of(&sim.ps));
-                let rifle = self
-                    .weapon_table
-                    .get(sim.ps.weapon as usize)
-                    .is_some_and(|d| d.sounds.rifle_bullet);
-                rt.set_client_aim(slot, sim.ps.view().eye.into(), sim.aim_angles(), rifle);
-                rt.aim_lookat(slot, self.sv_time_ms);
-                let lmg = self
-                    .weapon_table
-                    .get(sim.ps.weapon as usize)
-                    .filter(|d| sim.ps.rules == vcod_common::pmove::MoveRules::Uo && d.is_lmg())
-                    .map(|d| crate::game::script::LmgHint {
-                        origin: sim.ps.origin.into(),
-                        yaw_deg: sim.view_angles()[1],
-                        sighted: sim.ps.ads_active,
-                        hint_string: Some(d.use_hint_string.as_str()).filter(|s| !s.is_empty()),
-                        boxes: &mount_boxes,
-                    });
-                let h = rt.cursor_hints(slot, sim.ps.view().eye.into(), sim.view_angles(), lmg);
-                sim.set_cursor_hint(h.hint, h.val);
-                if let Some(string) = h.string {
-                    sim.cursor_hint_string = string;
-                }
-                (sim.head_icon, sim.head_icon_team) = rt.head_icon(slot);
-                // `BG_PlayerAnimation` (0x41486) runs after this slot's
-                // aim trace: a higher slot's trace meets this frame's
-                // pose, a lower one's met the last (combat doc 16.1).
-                if let Some(c) = rt.dobj_record(slot) {
-                    sim.keep_eased(c);
-                }
-                sim.commit_pose(
-                    crate::spectate::EndFrame {
-                        frametime_ms: FRAME_MS,
-                        command_time: c.last_processed_st,
-                        now_ms: self.sv_time_ms,
-                        client_num: slot as i32,
-                    },
-                    swing_speed,
-                    self.anims.as_deref(),
-                );
-                rt.set_client_body(slot, sim.hit_body(slot));
-                rt.set_client_dobj(slot, sim.dobj(slot));
-                if rt.apply_turret_releases(slot, sim) {
-                    rt.teleport_link(slot, sim);
-                }
-                let shot = rt.turret_think_client(
-                    slot,
-                    sim,
-                    buttons & vcod_common::net::msg::BUTTON_ATTACK != 0,
-                    self.anims.as_deref().map(|a| (a, &mut self.hit_rigs)),
-                );
-                sim.end_frame_entity = sim.linked().then(|| {
-                    let e = sim.to_entity(self.proto, slot, c.last_processed_st);
-                    (self.sv_time_ms, e)
-                });
-                let Some(shot) = shot else {
-                    continue;
-                };
-                self.bot_noises.push(crate::bots::Noise {
-                    at: shot.muzzle.into(),
-                    source: shot.slot,
-                    radius: crate::bots::HEAR_GUNFIRE,
-                });
-                let models = rt.shot_models();
-                let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
-                    .clients
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
-                    .collect();
-                let collision = self.world.as_ref().map(|w| &w.collision);
-                let mut bones = crate::game::combat::BoneTraceCtx::of(
-                    self.fs.as_deref(),
-                    self.anims.as_deref(),
-                    &mut self.hit_rigs,
-                    self.sv_time_ms,
-                    &mut rt.host.dobj_posed,
-                    vcod_common::patch::Arith::for_protocol(self.proto),
-                );
-                // 1.1 and 1.5 hand `G_Damage` the gunner as the inflictor,
-                // so the callback is told his own weapon and `player_die`
-                // credits the gun (turrets doc 12.6); UO hands it the gun,
-                // whose weapon the callback is told (turrets doc 11).
-                let uo = self.proto.version == vcod_common::net::protocol::PROTOCOL_V22.version;
-                let gun = rt.host.turrets.iter().find(|(id, _)| id.0 == shot.gun);
-                let carried = sims
-                    .iter()
-                    .find(|(s, _)| *s == shot.slot)
-                    .map_or(0, |(_, sim)| sim.ps.weapon as usize);
-                let weapon_name = match gun {
-                    Some((_, rec)) if uo => rec.weapon.clone(),
-                    _ => crate::items::item_name(crate::defs::Defs::of(self.proto), carried)
-                        .unwrap_or_default()
-                        .to_string(),
-                };
-                let gun_id = gun.map(|(id, _)| *id).filter(|_| uo);
-                let r = crate::game::combat::bullet_fire_from(
-                    shot.slot,
-                    shot.pass(),
-                    shot.muzzle,
-                    shot.dir,
-                    crate::game::combat::bullet_range(self.proto),
-                    shot.damage,
-                    shot.rifle_bullet,
-                    None,
-                    &weapon_name,
-                    &sims,
-                    &rt.host.missiles.shot_targets(),
-                    collision,
-                    &models,
-                    &self.hitlocs,
-                    bones.as_mut(),
-                );
-                for &id in &r.struck {
-                    rt.host.missiles.kill(id, self.sv_time_ms);
-                }
-                let mut effects = r.effects;
-                // A world impact names the gun, `Bullet_Fire_Extended`'s
-                // inflictor (1.1d 0x68b05), so the tracer leaves its tag.
-                for e in &mut effects {
-                    match e {
-                        Effect::Impact(t) => t.other = shot.gun,
-                        Effect::Hit(h) => h.inflictor = gun_id,
-                        Effect::EntityHit(h) => h.inflictor = gun_id,
-                        Effect::TriggerSweep(_) => {}
-                    }
-                }
-                if self.proto.version == vcod_common::net::protocol::PROTOCOL_V22.version {
-                    // UO's turret round passes the gun as its own entity, so
-                    // a world impact raises nothing and a round that met no
-                    // player says so in its fire event's bit 7
-                    // (`Bullet_Fire_Extended` 0x7a920, `turret_fire`
-                    // 0x5aaa9; coduo-diff.md 21).
-                    effects.retain(|e| !matches!(e, Effect::Impact(_)));
-                    let hits: Vec<[f32; 3]> = effects
-                        .iter()
-                        .filter_map(|e| match e {
-                            Effect::Hit(h) => Some(h.point),
-                            _ => None,
-                        })
-                        .collect();
-                    rt.uo_turret_round(shot.slot, shot.muzzle.into(), &hits);
-                }
-                deliver_turret_rounds(
-                    &mut self.clients,
-                    rt,
-                    effects,
-                    slot,
-                    self.anims.as_deref(),
-                    &weapons,
-                    &mut self.rng,
-                    self.sv_time_ms,
-                );
-            }
-            rt.drop_turret_releases();
-            // `CheckMatchTimeout`, past `CheckTeamStatus` and `CheckVote` at
-            // the end of 1.5's `G_RunFrame`, on `trap_Milliseconds`.
-            mirror_roster(&self.clients, rt);
-            vote_lines = rt.check_vote(svs_ms).0;
-            timeout_written = rt.host.patch_1_5 && rt.host.check_match_timeout(svs_ms);
-            console_lines = rt.take_console();
-            client_commands = rt.take_client_commands();
-            ranks_dirty = rt.take_ranks_dirty();
-        }
+        };
+        crate::tick_trace::step!("SV_GameFrameOut");
         self.send_vote_lines(vote_lines.into_iter().map(|l| (None, l)).collect());
         if timeout_written {
             self.copy_timeout_configstrings();
         }
-        if let Some(rt) = self.script.as_mut() {
+        if let Some(rt) = self.game.module.script.as_mut() {
             // The script owns the table while it runs and allocates into it
             // from any thread, so the server re-reads it rather than trusting
             // the copy `load_scripts` took. A whole-table copy per frame is
@@ -9162,8 +6381,8 @@ impl Server {
             // point on the host's table to hang a dirty flag off. The cvar
             // mirror gets the same treatment: a thread past a `wait` can
             // still call `setCvar`.
-            self.configstrings = rt.configstrings().to_vec();
-            if let Err(e) = rt.cvars().write_mirror(&mut self.configstrings) {
+            self.core.configstrings = rt.configstrings().to_vec();
+            if let Err(e) = rt.cvars().write_mirror(&mut self.core.configstrings) {
                 log::warn!("rebuilding the cvar mirror: {e:?}");
             }
         }
@@ -9171,16 +6390,18 @@ impl Server {
         self.flush_serverinfo();
         // `trap_SendConsoleCommand`'s `EXEC_APPEND`: what a builtin queued
         // this frame runs at the top of the next tick, never mid-frame.
-        self.console.extend(console_lines);
+        self.core.console.extend(console_lines);
         // Ahead of the frame's client commands, so a slot the script just
         // allocated is named before anything points at it.
+        crate::tick_trace::step!("SV_SetConfigstring broadcast");
         self.broadcast_configstring_changes();
-        if let Some(rt) = self.script.as_mut() {
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.host.configstrings.take_writes();
         }
         // Outside the borrow: `setClientCvar` and `openMenu` queue rather
         // than send, and this is where the queue reaches the netchan.
         for (slot, cmd) in client_commands {
+            crate::tick_trace::step!("SV_GameSendServerCommand slot {slot}");
             self.send_server_command(slot, &cmd);
         }
         // `G_RunFrame`'s inlined drain (map-cycle doc, 6.3): a frame that
@@ -9190,6 +6411,7 @@ impl Server {
         // would be a command retail never sends.
         if ranks_dirty {
             let watching: Vec<usize> = self
+                .core
                 .clients
                 .iter()
                 .enumerate()
@@ -9201,1167 +6423,58 @@ impl Server {
                 .map(|(slot, _)| slot)
                 .collect();
             for slot in watching {
+                crate::tick_trace::step!("scoreboard slot {slot}");
                 let text = self.scoreboard();
                 self.send_server_command(slot, &text);
             }
         }
 
-        Some(moved)
+        true
     }
 
-    /// `SV_Frame`'s steps past its game frames.
-    fn end_frames(&mut self, moved: &[MoveSummary], wall: (Option<f32>, u32)) {
-        self.check_timeouts();
-        // Every entity built once, then culled and written per client.
-        self.send_snapshots(moved, wall);
-        self.send_unentered();
-        self.send_zombies();
-        // `SV_Frame`'s last step (0x808d258).
-        let mut resolve = self.resolver;
-        let beats = self.masters.heartbeat(
-            self.dedicated,
+    /// The game and what the engine lends it for one call, borrowed apart.
+    fn split(&mut self, svs_time_ms: i32) -> (&mut Cod1Module, Lend<'_>) {
+        (
+            &mut self.game.module,
+            Lend {
+                clients: &mut self.core.clients,
+                world: &self.game.world,
+                fs: &self.game.fs,
+                proto: self.game.proto,
+                sv_time_ms: self.core.sv_time_ms,
+                svs_time_ms,
+                rng: &mut self.core.rng,
+                stuck_rand: &mut self.game.stuck_rand,
+                configstrings: &self.core.configstrings,
+                archive: &mut self.game.archive,
+                test_client_counter: &mut self.game.test_client_counter,
+            },
+        )
+    }
+
+    /// `SV_Frame`'s last step (0x808d258).
+    fn master_heartbeat(&mut self) {
+        let mut resolve = self.core.resolver;
+        let beats = self.core.masters.heartbeat(
+            self.game.dedicated,
             self.svs_time_ms(),
             crate::master::HEARTBEAT_GAME,
             &mut resolve,
         );
-        self.outbox.extend(beats);
+        self.core.outbox.extend(beats);
         // The weapon changes are already drained when a script is loaded,
         // and a server without one has nothing to write them to.
-        self.weapon_changes.clear();
+        self.game.module.weapon_changes.clear();
     }
 
-    /// `SV_ExecuteClientMessage` for every packet since the last tick, in the
-    /// order they arrived: a packet's `kill` first, then one pmove step per
-    /// usercmd, dt off the cmd clocks, matching the client's own prediction.
-    /// Each cmd is `ClientThink_real`: the move, then the shots and swings it
-    /// raised, traced and delivered to the damage callback there and then
-    /// against every client as its own packets so far left it, then the touch
-    /// pass (combat doc, 16). A throw spawns its missile there too. Returns
-    /// what each slot replayed, for the trace line `send_snapshots` writes.
+    /// `SV_ExecuteClientMessage` for every packet since the last tick, in
+    /// arrival order, each cmd a `ClientThink_real`
+    /// ([`Cod1Module::client_think_cod1`]). Returns what each slot
+    /// replayed.
     fn replay_moves(&mut self) -> Vec<MoveSummary> {
-        use vcod_common::movetrace::{Body, MoveWorld};
-        use vcod_common::net::event_ids::{
-            EV_FIRE_WEAPON_MG42, EV_FIRE_WEAPONB, EV_UO_FIRE_WEAPONC,
-        };
-        use vcod_common::pmove::weapon::{
-            EV_FIRE_MELEE, EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT, EV_WEAPON_ALT,
-        };
-        use vcod_common::pmove::{EV_LANDING_PAIN_BASE, EV_LANDING_PAIN_LAST};
-        // Every linked client's body, the mover's own rewritten after each
-        // of its steps: retail relinks after each `Pmove`. A blocked push
-        // leaves its pair out of the tree until each one's next cmd
-        // (movers doc 12, "The candidate trace").
-        let area = self.script.as_ref().map(|rt| &rt.host.area);
-        let mut bodies: Vec<Body> = self
-            .clients
-            .iter()
-            .enumerate()
-            .filter(|(s, _)| area.is_none_or(|a| a.last_link(*s as u32).is_some()))
-            .filter_map(|(s, c)| c.as_ref()?.sim.as_ref()?.body(s as u32))
-            .collect();
-        // The server's pmove point contents meet the mount triggers
-        // (coduo-movement.md 11).
-        let mount_boxes = self
-            .script
-            .as_mut()
-            .map_or_else(Vec::new, |rt| rt.mount_boxes());
-        let weapons = self.weapon_table.clone();
-        let now_ms = self.sv_time_ms;
-        let fall_heights = self.fall_heights;
-        let max_clients = self.clients.len();
-        let mut moved = vec![MoveSummary::default(); max_clients];
-        let mut rounds: Vec<Round> = (0..max_clients).map(|_| Round::default()).collect();
-        // A client past the per-tick cap keeps the rest for the next tick.
-        let mut capped = vec![false; max_clients];
-        // `SpectatorThink` reads the other clients' own-view bits as the
-        // last end frame left them, and each spectator's forced follow.
-        let followable_now: Vec<bool> = (0..max_clients)
-            .map(|slot| followable(&self.clients, slot))
-            .collect();
-        let spectating: Vec<Option<(i32, u8)>> = (0..max_clients)
-            .map(|slot| {
-                let sim = self.clients[slot].as_ref()?.sim.as_ref()?;
-                let s = session_of(self.script.as_mut(), slot, sim);
-                (s.state == follow::SessionState::Spectator)
-                    .then_some((s.spectator_client, s.no_spectate))
-            })
-            .collect();
-        // 1.5's `Cmd_FollowCycle_f` also asks whether the spectator may watch
-        // the candidate's team.
-        let teams_now: Vec<i32> = (0..max_clients)
-            .map(|slot| self.script.as_mut().map_or(0, |rt| rt.client_team(slot)))
-            .collect();
-        let mut use_held: Vec<bool> = (0..max_clients)
-            .map(|slot| {
-                self.script.as_ref().is_some_and(|rt| {
-                    rt.client_old_buttons(slot) & vcod_common::net::msg::BUTTON_USE != 0
-                })
-            })
-            .collect();
-        let mut stamp_packet: Option<u64> = None;
-        loop {
-            // The oldest packet's next item across every client, its `kill`
-            // ahead of its cmds.
-            let mut next: Option<(u64, bool, usize)> = None;
-            for (slot, c) in self.clients.iter_mut().enumerate() {
-                let Some(c) = c.as_mut() else {
-                    continue;
-                };
-                if c.sim.is_none() {
-                    // A primed client's menu answer still reaches the game.
-                    for (_, command) in c.commands_at.drain(..) {
-                        if let PacketCommand::MenuResponse(menu, response) = command
-                            && let Some(rt) = self.script.as_mut()
-                        {
-                            rt.menu_response(slot, &menu, &response);
-                        }
-                    }
-                    continue;
-                }
-                let kill = c.commands_at.first().map(|(p, _)| (*p, false));
-                let cmd = c
-                    .pending
-                    .first()
-                    .filter(|_| !capped[slot])
-                    .map(|q| (q.packet, true));
-                if let Some(item) = kill.into_iter().chain(cmd).min()
-                    && next.is_none_or(|(p, is_cmd, _)| item < (p, is_cmd))
-                {
-                    next = Some((item.0, item.1, slot));
-                }
-            }
-            let Some((packet, is_cmd, slot)) = next else {
-                break;
-            };
-            // `SV_PacketEvent` bumps the skeleton stamp ahead of each
-            // packet (`cod_lnxded` 0x0808c870): the rounds its cmds fire
-            // pose the bodies under a build of their own (movers doc 15).
-            if stamp_packet != Some(packet) {
-                stamp_packet = Some(packet);
-                if let Some(rt) = self.script.as_mut() {
-                    rt.clear_dobj_stamps();
-                }
-            }
-            if !is_cmd {
-                let (_, command) = self.clients[slot].as_mut().unwrap().commands_at.remove(0);
-                match command {
-                    PacketCommand::Kill => {
-                        self.close_round(slot, &mut rounds[slot]);
-                        self.run_kill(slot, &weapons);
-                    }
-                    PacketCommand::CycleSeat { back } => self.cycle_seat(slot, back),
-                    PacketCommand::MenuResponse(menu, response) => {
-                        if let Some(rt) = self.script.as_mut() {
-                            rt.menu_response(slot, &menu, &response);
-                        }
-                    }
-                }
-                relink(&mut bodies, &self.clients, slot);
-                continue;
-            }
-            let collision = self.world.as_ref().map(|w| &w.collision);
-            let c = self.clients[slot].as_mut().unwrap();
-            let m = &mut moved[slot];
-            if m.processed >= MAX_CMDS_PER_TICK {
-                // The resync keeps the newest two cmds and sets the base as
-                // if only the last replays, so the penultimate may
-                // double-count one frame; harmless for flight.
-                c.last_processed_st = c
-                    .pending
-                    .last()
-                    .unwrap()
-                    .cmd
-                    .server_time
-                    .wrapping_sub(FRAME_MS);
-                c.pending.drain(..c.pending.len().saturating_sub(2));
-                capped[slot] = true;
-                continue;
-            }
-            let mut cmd = c.pending.remove(0).cmd;
-            let fresh = cmd.server_time > c.last_usercmd_st;
-            if fresh {
-                c.last_usercmd_st = cmd.server_time;
-            }
-            // `ClientThink_real` holds the cmd's clock within 1000 ms behind
-            // and 200 ms ahead of the `level.time` it runs on, the last
-            // frame's (player-clip doc 8.12).
-            let level_ms = now_ms.wrapping_sub(FRAME_MS);
-            cmd.server_time = cmd
-                .server_time
-                .clamp(level_ms.wrapping_sub(1000), level_ms.wrapping_add(200));
-            // Stale cmds (dt <= 0) are skipped whole; a long one is chopped
-            // rather than clamped away.
-            let dt_ms = cmd.server_time.wrapping_sub(c.last_processed_st);
-            if dt_ms <= 0 {
-                if let Some(sim) = c.sim.as_mut().filter(|_| fresh) {
-                    sim.stale_cmd(&cmd);
-                }
-                continue;
-            }
-            let sim = c.sim.as_mut().unwrap();
-            sim.ps.fall_heights = fall_heights;
-            let round = &mut rounds[slot];
-            // What the client held going in, so a switch the machine made is
-            // told apart from a playerstate reset between ticks.
-            let held = *round.held.get_or_insert(sim.ps.weapon);
-            let prev_buttons = std::mem::replace(&mut sim.last_buttons, cmd.buttons);
-            // A spectator's buttons move its follow, and a follow the last
-            // end frame landed runs no pmove at all.
-            let mut frozen = false;
-            if let Some((forced, no_spectate)) = spectating[slot] {
-                sim.spectator_think(
-                    forced,
-                    no_spectate,
-                    prev_buttons,
-                    cmd.buttons,
-                    max_clients,
-                    |t| followable_now[t] && follow::can_spectate(no_spectate, teams_now[t]),
-                    collision,
-                );
-                frozen = sim.follow.on;
-            }
-            let mut raised = Vec::new();
-            // The movetype each of `raised` selects its anim by.
-            let mut raised_movetype = Vec::new();
-            let mut take = None;
-            // The cmd's `Pmove`: its mask and its touch list span its steps.
-            let pm = vcod_common::movetrace::Pm::default();
-            let mut overlap = None;
-            if !frozen {
-                // The aim block runs once per cmd, on the whole cmd, before
-                // the chop (`ClientThink_real` 0x40169-0x40456), on the last
-                // frame's `level.time` (combat doc 15.1).
-                sim.update_aim(dt_ms, level_ms, weapons.defs());
-                // A UO body inside a vehicle's collmap: the vehicle may sit
-                // out this cmd's pmove (coduo-vehicles.md 11.6).
-                overlap = match (collision, self.script.as_ref()) {
-                    (Some(w), Some(rt))
-                        if sim.ps.rules == vcod_common::pmove::MoveRules::Uo
-                            && spectating[slot].is_none() =>
-                    {
-                        sim.vehicle_overlap(MoveWorld::new(w, &bodies, slot as u32), |e| {
-                            let id = rt.host.ents.handle(e)?;
-                            let v = rt.host.vehicles.live.get(&id)?;
-                            Some((v.pose.origin.into(), v.velocity.into()))
-                        })
-                    }
-                    _ => None,
-                };
-            }
-            // The run-over and the prone 10 land ahead of the pmove, before
-            // anything the cmd raises: a kill there runs this cmd's pmove on
-            // the corpse (coduo-vehicles.md 11.6).
-            if let Some(o) = overlap.filter(|o| o.struck.is_some() || o.prone) {
-                self.vehicle_overlap_hits(slot, o, &mut rounds, &mut bodies, &weapons);
-            }
-            let collision = self.world.as_ref().map(|w| &w.collision);
-            let c = self.clients[slot].as_mut().unwrap();
-            let sim = c.sim.as_mut().unwrap();
-            let round = &mut rounds[slot];
-            if !frozen {
-                let unlinked = match (overlap, collision) {
-                    (Some(o), Some(w)) if o.unlink => w.unlink_model_instance(o.entity),
-                    _ => None,
-                };
-                // A hitching client's gap is simulated, not discarded: see
-                // `cmd::chop`.
-                vcod_common::pmove::cmd::chop(c.last_processed_st, &cmd, |step, dt| {
-                    let events = sim.step(
-                        step,
-                        dt,
-                        collision.map(|w| {
-                            MoveWorld::new(w, &bodies, slot as u32)
-                                .with_boxes(&mount_boxes)
-                                .in_pmove(&pm)
-                        }),
-                        weapons.defs(),
-                    );
-                    let movetype = sim.note_footsteps(step);
-                    raised_movetype.extend(events.iter().map(|_| movetype));
-                    raised.extend(events);
-                    bodies.retain(|b| b.entity != slot as u32);
-                    bodies.extend(sim.body(slot as u32));
-                    sim.ps.jump_latched
-                });
-                if let (Some(u), Some(w)) = (unlinked, collision) {
-                    w.relink_model_instance(u);
-                }
-            }
-            // `BG_PlayerStateToEntityState` hands each new event to
-            // `G_PlayerEvent` after `Pmove`, ahead of `ClientEvents`: on 1.5
-            // and UO a fire event kicks the gun spring the next cmd's aim
-            // reads (cod15-movement.md 6).
-            for e in &raised {
-                if matches!(
-                    e.event,
-                    EV_FIRE_WEAPON
-                        | EV_FIRE_WEAPONB
-                        | EV_FIRE_WEAPON_LASTSHOT
-                        | EV_FIRE_WEAPON_MG42
-                        | EV_UO_FIRE_WEAPONC
-                ) {
-                    sim.fire_recoil(weapons.defs(), || rand_from(&mut self.rng));
-                }
-            }
-            // `ClientEvents` (0x3fd24): this cmd's shots, swings, throws and
-            // falls, in the order it raised them, fired below before its
-            // touch pass.
-            let mut attacks: Vec<Attack> = Vec::new();
-            for e in &raised {
-                let weapon = sim.ps.weapon;
-                let grenade = weapons
-                    .get(weapon as usize)
-                    .is_some_and(|d| d.weapon_type == "grenade");
-                let spotter = weapons
-                    .get(weapon as usize)
-                    .is_some_and(|d| d.weapon_type == "spotter");
-                let gas = weapons
-                    .get(weapon as usize)
-                    .is_some_and(|d| d.weapon_type == "gas");
-                let rocket = weapons
-                    .get(weapon as usize)
-                    .is_some_and(|d| d.weapon_type == "projectile");
-                match e.event {
-                    // UO's `FireWeapon` (game.mp.uo 0x7bd05) does nothing
-                    // for weapon type 4, `gas`: the flamethrower's damage is
-                    // the burnt client's `fdc` report (coduo-diff.md 21).
-                    EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT if gas => {}
-                    EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT if spotter => {
-                        attacks.push(Attack::Strike(Shot {
-                            slot,
-                            weapon,
-                            ads: sim.ps.weapon_pos_frac == 1.0,
-                            aim: sim.aim_angles(),
-                            stance: vcod_common::pmove::weapon::SpreadStance::of(
-                                &sim.ps,
-                                cmd.server_time,
-                                now_ms,
-                            ),
-                        }))
-                    }
-                    EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT if rocket => {
-                        self.bot_noises.push(crate::bots::Noise {
-                            at: (sim.ps.origin + glam::Vec3::Z * 40.0).into(),
-                            source: slot,
-                            radius: crate::bots::HEAR_GUNFIRE,
-                        });
-                        attacks.push(Attack::Rocket(Shot {
-                            slot,
-                            weapon,
-                            ads: sim.ps.weapon_pos_frac == 1.0,
-                            aim: sim.aim_angles(),
-                            stance: vcod_common::pmove::weapon::SpreadStance::of(
-                                &sim.ps,
-                                cmd.server_time,
-                                now_ms,
-                            ),
-                        }))
-                    }
-                    // A grenade's fire event is the throw, and the parm is
-                    // what is left of the fuse (combat doc, 1.11).
-                    EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT if grenade => {
-                        attacks.push(Attack::Throw {
-                            slot,
-                            weapon,
-                            fuse_left_ms: e.parm,
-                            aim: sim.aim_angles(),
-                        })
-                    }
-                    EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT => {
-                        self.bot_noises.push(crate::bots::Noise {
-                            at: (sim.ps.origin + glam::Vec3::Z * 40.0).into(),
-                            source: slot,
-                            radius: crate::bots::HEAR_GUNFIRE,
-                        });
-                        attacks.push(Attack::Shot(Shot {
-                            slot,
-                            weapon,
-                            ads: sim.ps.weapon_pos_frac == 1.0,
-                            aim: sim.aim_angles(),
-                            stance: vcod_common::pmove::weapon::SpreadStance::of(
-                                &sim.ps,
-                                cmd.server_time,
-                                now_ms,
-                            ),
-                        }));
-                    }
-                    EV_FIRE_MELEE => attacks.push(Attack::Swing {
-                        slot,
-                        weapon,
-                        aim: sim.aim_angles(),
-                    }),
-                    ev if (EV_LANDING_PAIN_BASE..=EV_LANDING_PAIN_LAST).contains(&ev) => attacks
-                        .push(Attack::Fall {
-                            slot,
-                            percent: e.parm,
-                        }),
-                    vcod_common::net::event_ids::EV_UO_GRENADE_SUICIDE => {
-                        attacks.push(Attack::Suicide { slot })
-                    }
-                    _ => {}
-                }
-                // A `clipOnly` weapon with nothing left is taken away (combat
-                // doc, 1.5 step 9), and 1.8's switch path then takes
-                // `ps.weapon` to 0 on its own. Hung off the last shot, not
-                // off `EV_NOAMMO`, which a dry trigger raises too and keeps
-                // the weapon.
-                if e.event == EV_FIRE_WEAPON_LASTSHOT
-                    && let Some(def) = weapons.get(weapon as usize)
-                    && def.clip_only
-                    && def.weapon_class != "spotter"
-                    && sim.ps.ammo[def.ammo_index] == 0
-                {
-                    take = Some(weapon);
-                }
-            }
-            let alt_switch = raised.iter().any(|e| e.event == EV_WEAPON_ALT);
-            round.events.extend(
-                raised
-                    .iter()
-                    .zip(raised_movetype)
-                    .map(|(&e, m)| (e, cmd.server_time, m)),
-            );
-            round.switched |= sim.ps.weapon != held;
-            let t = Touched {
-                slot,
-                origin: sim.origin(),
-                buttons: cmd.buttons,
-                pm_type: sim.wire_pm_type(),
-                on_ground: sim.on_ground(),
-                yaw: (sim.pm_type == crate::spectate::PmType::Normal).then(|| sim.view_angles()[1]),
-                weapon: round.switched.then_some(sim.ps.weapon),
-                slots: alt_switch.then_some(sim.ps.weapon_slots),
-                take,
-                eye: sim.ps.view().eye.into(),
-                view: sim.view_angles(),
-                stance: sim.ps.stance,
-                prone_cone: vcod_common::pmove::ProneCone::of(&sim.ps),
-                // `SpectatorThink` runs no `ClientImpacts`.
-                impacts: if sim.pm_type == crate::spectate::PmType::Normal {
-                    pm.touched()
-                } else {
-                    Vec::new()
-                },
-            };
-            round.last_cmd = Some(cmd);
-            sim.pers_cmd = cmd;
-            // `ClientThink_real`'s `BG_PlayerStateToEntityState`, past the
-            // move and ahead of the use key.
-            sim.write_entity();
-            c.last_processed_st = cmd.server_time;
-            m.first_cmd_st.get_or_insert(cmd.server_time);
-            m.last_cmd_st = Some(cmd.server_time);
-            m.last_buttons = Some(cmd.buttons);
-            m.processed += 1;
-            let use_down = cmd.buttons & vcod_common::net::msg::BUTTON_USE != 0;
-            let pressed = use_down && !use_held[slot];
-            use_held[slot] = use_down;
-            // The anim a use press's mount would change is picked off the
-            // state ahead of it.
-            if pressed && self.script.is_some() {
-                self.close_round(slot, &mut rounds[slot]);
-            }
-            // What the cmd left, on the host before the callbacks and the
-            // touch pass read it: the host's copy is otherwise only mirrored
-            // from the sim after the script frame.
-            let proto = self.proto;
-            if let Some(rt) = self.script.as_mut() {
-                let c = self.clients[slot].as_ref().unwrap();
-                let sim = c.sim.as_ref().unwrap();
-                // The ammo among it is what the item pass reads; the pass
-                // itself moves the host's copy as it grabs.
-                mirror_for_callback(rt, sim, proto, slot, c.last_processed_st);
-                // `r.currentOrigin` is the snapped `s.pos.trBase` through
-                // `ClientEvents` and `G_TouchTriggers` (combat doc 2.1, 5.5):
-                // what a callback or a death drop in them reads of the mover.
-                rt.set_client_origin(t.slot, glam::Vec3::from(t.origin).trunc().into());
-                if let Some(yaw) = t.yaw {
-                    rt.set_client_yaw(t.slot, yaw);
-                }
-                rt.set_client_pm_type(t.slot, t.pm_type);
-                rt.set_client_on_ground(t.slot, t.on_ground);
-                rt.set_client_stance(t.slot, t.stance);
-                rt.set_client_prone_cone(t.slot, t.prone_cone);
-                // Ahead of `weapon_changes`, which lands after the script
-                // frame: a grab tests `ps.weapon` as this cmd left it.
-                if let Some(w) = t.weapon {
-                    rt.set_client_weapon(t.slot, w);
-                }
-                if let Some(slots) = t.slots {
-                    rt.set_client_slots(t.slot, slots);
-                }
-                // Retail takes it inside `PM_Weapon`, ahead of the touch.
-                if let Some(w) = t.take {
-                    rt.take_client_weapon(t.slot, w);
-                }
-            }
-            for attack in attacks {
-                self.fire(attack, &mut rounds, &mut bodies, &weapons);
-            }
-            // Retail runs the touch pass per usercmd inside `ClientThink_real`
-            // (0x405b3), right after the link. The item half follows the
-            // trigger half, and the use key after both.
-            if let Some(rt) = self.script.as_mut() {
-                // The link sits between `ClientEvents`, whose shots traced
-                // against the last links, and `G_TouchTriggers` (0x40595).
-                if let Some(sim) = self.clients[t.slot].as_ref().and_then(|c| c.sim.as_ref()) {
-                    link_client(rt, t.slot, sim);
-                }
-                mirror_roster(&self.clients, rt);
-                rt.touch_triggers_at(t.slot, now_ms, t.origin);
-                // `ps.origin` back into `r.currentOrigin` past the touch
-                // (0x405c7), ahead of the use key's `Cmd_Activate_f`. The
-                // item half reads `ps.origin` either way.
-                rt.set_client_origin(t.slot, t.origin);
-                // `ClientImpacts` (0x40614), between the two.
-                rt.client_impacts(t.slot, &t.impacts);
-                rt.item_pass(t.slot, t.buttons, t.eye, t.view);
-                // A vehicle's seat changes land inside the use cmd too.
-                apply_seat_ops(&mut self.clients, rt);
-                // The mount lands inside the use cmd (turrets doc 12.1), so
-                // it reaches the sim before the next cmd's pass runs.
-                let rule = crate::game::turret::AimRule::of(rt.host.defs.proto);
-                for (turret, stance, view) in
-                    rt.take_turret_mounts(t.slot, t.origin, t.stance, t.view)
-                {
-                    if let Some(sim) = self.clients[t.slot].as_mut().and_then(|c| c.sim.as_mut()) {
-                        crate::game::turret::mount_sim(sim, rule, turret, stance, view);
-                    }
-                }
-            }
-            // A `trigger_hurt` that killed the mover ran `player_die` inside
-            // this touch pass, ahead of the cmds behind it.
-            let died = self
-                .script
-                .as_ref()
-                .is_some_and(|rt| rt.client_vitals(slot).dead)
-                && self.clients[slot]
-                    .as_ref()
-                    .and_then(|c| c.sim.as_ref())
-                    .is_some_and(|s| !s.dead && s.pm_type == crate::spectate::PmType::Normal);
-            if died {
-                self.close_round(slot, &mut rounds[slot]);
-            }
-            // What the passes queued for the mover reaches its sim before its
-            // next cmd, as `Touch_Item` and `G_Damage` write the playerstate
-            // inside this one (items doc, 13.2).
-            let st = self.clients[slot]
-                .as_ref()
-                .map_or(0, |c| c.last_processed_st);
-            if let (Some(rt), Some(sim)) = (
-                self.script.as_mut(),
-                self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()),
-            ) && (died || rt.has_ops_of(slot))
-            {
-                apply_callback_ops(
-                    rt,
-                    sim,
-                    slot,
-                    self.anims.as_deref(),
-                    &weapons,
-                    &mut self.rng,
-                    (now_ms, st),
-                );
-            }
-            if died {
-                relink(&mut bodies, &self.clients, slot);
-            }
-        }
-        for (slot, round) in rounds.iter_mut().enumerate() {
-            self.close_round(slot, round);
-        }
-        // The state each player ended the tick in, mirrored onto the host for
-        // `cloneplayer` and for the bodies a scripted blast traces: a builtin
-        // cannot reach a sim, and the corpse is the dying player's entity
-        // state (`crate::game::bodies`). Written here,
-        // before the script frame, because that is the frame the script clones
-        // in; `send_snapshots` re-reads a newborn body afterwards so the death
-        // animation the script raised after the clone still lands on it.
-        let proto = self.proto;
-        if let Some(rt) = self.script.as_mut() {
-            for (slot, c) in self.clients.iter().enumerate() {
-                let sim = c
-                    .as_ref()
-                    .and_then(|c| Some((c.sim.as_ref()?, c.last_processed_st)));
-                rt.set_client_entity_state(slot, sim.map(|(s, st)| s.to_entity(proto, slot, st)));
-                // The cook a death drops, off the same state: both kill paths
-                // run later in this tick, so what they read is this frame's
-                // and not the last one's.
-                rt.set_client_grenade_ms(slot, sim.map_or(0, |(s, _)| s.ps.grenade_time_left_ms));
-                rt.set_client_body(slot, sim.and_then(|(s, _)| s.hit_body(slot)));
-                rt.set_client_dobj(slot, sim.and_then(|(s, _)| s.dobj(slot)));
-                if let Some((s, _)) = sim {
-                    rt.set_client_height(slot, s.box_height());
-                    rt.set_client_link_origin(slot, s.link_origin().into());
-                }
-            }
-        }
-        moved
-    }
-
-    /// The end of a run of one client's cmds: the animation the state and
-    /// events they left imply, and the weapon the machine switched to.
-    fn close_round(&mut self, slot: usize, round: &mut Round) {
-        self.flush_anims(slot, round);
-        if let Some(sim) = self.clients[slot].as_ref().and_then(|c| c.sim.as_ref())
-            && round.held.is_some_and(|h| h != sim.ps.weapon)
-        {
-            self.weapon_changes.push((slot, sim.ps.weapon));
-        }
-        *round = Round::default();
-    }
-
-    /// The animation the client should be playing, from the state its cmds so
-    /// far produced and the input that produced it.
-    fn flush_anims(&mut self, slot: usize, round: &mut Round) {
-        let events = std::mem::take(&mut round.events);
-        let (Some(cmd), Some(anims)) = (round.last_cmd.take(), self.anims.as_deref()) else {
-            return;
-        };
-        let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) else {
-            return;
-        };
-        let index = sim.ps.weapon as usize;
-        sim.update_anims(
-            &crate::spectate::AnimInputs {
-                anims,
-                weapon: crate::items::item_name(self.weapon_table.list(), index)
-                    .unwrap_or_default(),
-                weapon_class: self.weapon_table.class(index),
-            },
-            &cmd,
-            (self.sv_time_ms, cmd.server_time),
-            &events,
-            &mut self.rng,
-        );
-    }
-
-    /// `Cmd_Kill_f`, and what it did to the sim before the cmds behind it
-    /// run: the drop takes the weapon they switch away from, and `EV_DEATH`
-    /// goes on the ring ahead of their events. `pm_type` stays until the end
-    /// frame, so they still move alive (combat doc, 9.2).
-    /// `G_VEH_CycleSlot` for a living rider (coduo-vehicles.md 11.3).
-    fn cycle_seat(&mut self, slot: usize, back: bool) {
-        if let Some(rt) = self.script.as_mut()
-            && rt.client_vitals(slot).health > 0
-        {
-            rt.with_host(|host, cx| crate::game::vehicle::seat::cycle(host, cx, slot, back));
-            apply_seat_ops(&mut self.clients, rt);
-        }
-    }
-
-    fn run_kill(&mut self, slot: usize, weapons: &crate::weapons::WeaponTable) {
-        let proto = self.proto;
-        let now_ms = self.sv_time_ms;
-        let Some(rt) = self.script.as_mut() else {
-            return;
-        };
-        mirror_roster(&self.clients, rt);
-        let Some(c) = self.clients[slot].as_mut() else {
-            return;
-        };
-        let st = c.last_processed_st;
-        let Some(sim) = c.sim.as_mut() else { return };
-        mirror_for_callback(rt, sim, proto, slot, st);
-        if !rt.kill_client(slot) {
-            return;
-        }
-        apply_callback_ops(
-            rt,
-            sim,
-            slot,
-            self.anims.as_deref(),
-            weapons,
-            &mut self.rng,
-            (now_ms, st),
-        );
-    }
-
-    /// `FireWeapon`'s grenade arm: `fire_grenade` from the muzzle this cmd
-    /// left, stamped with the `level.time` a cmd runs under, the frame before
-    /// the one being built (combat doc, 11.3 and 11.4).
-    fn throw(
-        &mut self,
-        slot: usize,
-        weapon: u8,
-        fuse_left_ms: i32,
-        aim: [f32; 2],
-        weapons: &crate::weapons::WeaponTable,
-    ) {
-        let (Some(me), Some(def)) = (
-            self.clients[slot].as_ref().and_then(|c| c.sim.as_ref()),
-            weapons.get(weapon as usize),
-        ) else {
-            return;
-        };
-        let (origin, velocity) = crate::game::missile::throw_velocity(&me.ps, aim, def);
-        let carried = me.ps.velocity;
-        // The projectile's model, indexed when the item was registered
-        // (`GameHost::register_item`). A miss means the map load stopped
-        // registering it and the client has no model to draw the grenade
-        // with, which is silent on the wire.
-        let name = def.projectile_model.as_deref().unwrap_or_default();
-        let model =
-            crate::configstrings::weapon_model_index(&self.configstrings, &self.proto.cs, name);
-        if model == 0 && !name.is_empty() {
-            log::warn!("the grenade client {slot} threw carries {name:?}, which nothing precached");
-        }
-        let level_ms = self.sv_time_ms.wrapping_sub(FRAME_MS);
-        if let Some(rt) = self.script.as_mut() {
-            rt.fire_grenade(
-                slot,
-                weapon,
-                model,
-                origin,
-                velocity,
-                carried,
-                fuse_left_ms,
-                level_ms,
-            );
-        }
-    }
-
-    /// `Weapon_RocketLauncher_Fire` (0x68c40, combat doc 13.6): a rocket from
-    /// the muzzle along the spread aim 16 out (`combat::rocket_aim`), stamped
-    /// with the `level.time` a cmd runs under, then the shooter pushed 64
-    /// back along the view.
-    fn launch(&mut self, shot: Shot, weapons: &crate::weapons::WeaponTable) {
-        let Some(def) = weapons.get(shot.weapon as usize) else {
-            return;
-        };
-        let Some(sim) = self.clients[shot.slot]
-            .as_mut()
-            .and_then(|c| c.sim.as_mut())
-        else {
-            return;
-        };
-        let rng = &mut self.rng;
-        let draw = self
-            .spread_draws
-            .pop_front()
-            .unwrap_or_else(|| crate::game::combat::gun_random(rng));
-        let (muzzle, forward, dir) =
-            crate::game::combat::rocket_aim(sim, def, shot.ads, &shot.stance, shot.aim, draw);
-        sim.ps.velocity += forward * ROCKET_KICK;
-        let level_ms = self.sv_time_ms.wrapping_sub(FRAME_MS);
-        let Some(rt) = self.script.as_mut() else {
-            return;
-        };
-        rt.with_host(|h, cx| {
-            let shell = crate::game::missile::Shell {
-                drop_at_ms: None,
-                speed: def.projectile_speed,
-                damage: def.damage,
-                vehicle: None,
-            };
-            let kind = crate::game::missile::explosion_type(&def.proj_explosion_type);
-            if let Err(e) = h.missiles.fire_rocket(
-                &mut h.ents,
-                cx,
-                shot.slot,
-                shot.weapon,
-                muzzle,
-                dir,
-                shell,
-                kind,
-                false,
-                level_ms,
-            ) {
-                log::warn!(
-                    "the rocket client {} fired was not spawned: {e:?}",
-                    shot.slot
-                );
-            }
-        });
-    }
-
-    /// `Weapon_ArtilleryStrike_Fire` (game.mp.uo 0x7b758): the aim traced
-    /// 10000 out with the weapon's spread; ground starts a barrage there,
-    /// a miss gives the round back (`Add_Ammo(1)`; coduo-diff.md 21). Runs
-    /// on the `level.time` a cmd runs under.
-    fn strike(&mut self, shot: Shot, weapons: &crate::weapons::WeaponTable) {
-        let Some(def) = weapons.get(shot.weapon as usize) else {
-            return;
-        };
-        let models = self
-            .script
-            .as_mut()
-            .map_or_else(Vec::new, |rt| rt.shot_models());
-        let Some(me) = self.clients[shot.slot]
-            .as_ref()
-            .and_then(|c| c.sim.as_ref())
-        else {
-            return;
-        };
-        let (muzzle, _, end) = crate::game::combat::aim_end(
-            me,
-            def,
-            shot.ads,
-            &shot.stance,
-            shot.aim,
-            crate::game::combat::UO_BULLET_RANGE,
-            None,
-            &mut self.rng,
-        );
-        // Mask 0x2802031 is the bullet's: a live body stops it too.
-        let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
-            .clients
-            .iter()
-            .enumerate()
-            .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
-            .collect();
-
-        let targets = self
-            .script
-            .as_ref()
-            .map(|rt| rt.host.missiles.shot_targets())
-            .unwrap_or_default();
-        let mut bones = crate::game::combat::BoneTraceCtx::of(
-            self.fs.as_deref(),
-            self.anims.as_deref(),
-            &mut self.hit_rigs,
-            self.sv_time_ms,
-            dobj_stamps(self.script.as_mut()),
-            vcod_common::patch::Arith::for_protocol(self.proto),
-        );
-        let point = crate::game::combat::strike_point(
-            muzzle,
-            end,
-            shot.slot,
-            &sims,
-            &targets,
-            self.world.as_ref().map(|w| &w.collision),
-            &models,
-            bones.as_mut(),
-        );
-        let level_ms = self.sv_time_ms.wrapping_sub(FRAME_MS);
-        match point {
-            Some((at, false)) => {
-                if let Some(rt) = self.script.as_mut() {
-                    rt.fire_artillery_barrage(shot.slot, shot.weapon, at, level_ms);
-                }
-            }
-            _ => {
-                let Some(sim) = self.clients[shot.slot]
-                    .as_mut()
-                    .and_then(|c| c.sim.as_mut())
-                else {
-                    return;
-                };
-                let c = &mut sim.ps.ammoclip[def.clip_index];
-                *c = (*c + 1).min(def.clip_size as i16);
-            }
-        }
-    }
-
-    /// `ClientEvents`' landing-pain arm (player-clip doc, 8.8), inside the cmd
-    /// that landed: `pain_debounce_time` to `level.time + 200`, which keeps
-    /// the end frame's `EV_PAIN` off a fall, then `G_Damage` with the percent
-    /// taken of `ps.stats[2]` and no inflictor, attacker, point or direction.
-    fn fall(
-        &mut self,
-        slot: usize,
-        percent: i32,
-        rounds: &mut [Round],
-        bodies: &mut Vec<vcod_common::movetrace::Body>,
-        weapons: &crate::weapons::WeaponTable,
-    ) {
-        // A zero share is the one `ClientEvents` skips (0x3fda8).
-        if percent == 0 {
-            return;
-        }
-        let proto = self.proto;
-        let now_ms = self.sv_time_ms;
-        self.close_round(slot, &mut rounds[slot]);
-        let Some(rt) = self.script.as_mut() else {
-            return;
-        };
-        mirror_roster(&self.clients, rt);
-        let Some(c) = self.clients[slot].as_mut() else {
-            return;
-        };
-        let st = c.last_processed_st;
-        let Some(sim) = c.sim.as_mut() else { return };
-        // A cmd runs on the last frame's `level.time`.
-        let level_ms = now_ms.wrapping_sub(FRAME_MS);
-        sim.debounce_pain(level_ms.wrapping_add(FALL_PAIN_DEBOUNCE_MS));
-        let damage = crate::game::combat::located_damage(
-            fall_damage(percent, sim.max_health),
-            self.hitlocs.multiplier("none"),
-        );
-        mirror_for_callback(rt, sim, proto, slot, st);
-        rt.deliver_fall(slot, damage);
-        apply_callback_ops(
-            rt,
-            sim,
-            slot,
-            self.anims.as_deref(),
-            weapons,
-            &mut self.rng,
-            (now_ms, st),
-        );
-        relink(bodies, &self.clients, slot);
-    }
-
-    /// The damage `ClientThink_real` deals a body inside a vehicle ahead of
-    /// its pmove (game.mp.uo 0x415e4..0x419c3, coduo-vehicles.md 11.6): a
-    /// moving vehicle's run-over ([`run_over`]), and to a prone body, every
-    /// cmd, `VEH_PlayerDamage(player, vehicle, 10)`, then `(player, player,
-    /// 10)` when the first left his health alone. Its clock,
-    /// `client+0x472c`, is written nowhere, so past the level's first
-    /// 500 ms nothing holds it back.
-    fn vehicle_overlap_hits(
-        &mut self,
-        slot: usize,
-        overlap: crate::spectate::VehicleOverlap,
-        rounds: &mut [Round],
-        bodies: &mut Vec<vcod_common::movetrace::Body>,
-        weapons: &crate::weapons::WeaponTable,
-    ) {
-        const PRONE_DAMAGE: i32 = 10;
-        let proto = self.proto;
-        let now_ms = self.sv_time_ms;
-        self.close_round(slot, &mut rounds[slot]);
-        let Some(rt) = self.script.as_mut() else {
-            return;
-        };
-        mirror_roster(&self.clients, rt);
-        let Some(c) = self.clients[slot].as_mut() else {
-            return;
-        };
-        let st = c.last_processed_st;
-        let Some(sim) = c.sim.as_mut() else { return };
-        let Some(veh) = rt.host.ents.handle(overlap.entity) else {
-            return;
-        };
-        // The cmd runs on the last frame's `level.time`.
-        let level_ms = now_ms.wrapping_sub(FRAME_MS);
-        mirror_for_callback(rt, sim, proto, slot, st);
-        if let Some(push) = overlap.struck {
-            run_over(rt, slot, veh, push, overlap.prone, overlap.at, level_ms);
-        }
-        if overlap.prone && 0 < level_ms - 500 {
-            let health = rt.client_vitals(slot).health;
-            vehicle_player_damage(rt, slot, veh, PRONE_DAMAGE, overlap.at);
-            if rt.client_vitals(slot).health == health {
-                // `VEH_PlayerDamage` of a non-vehicle: `G_Damage` with the
-                // player as inflictor and attacker, `MOD_SUICIDE`.
-                let weapon = crate::items::item_name(rt.host.defs, sim.ps.weapon as usize)
-                    .unwrap_or("none")
-                    .to_string();
-                rt.deliver_hits(vec![crate::game::combat::Hit {
-                    victim: slot,
-                    attacker: slot,
-                    inflictor: None,
-                    damage: PRONE_DAMAGE,
-                    dflags: 0,
-                    mod_: "MOD_SUICIDE",
-                    weapon,
-                    point: overlap.at.into(),
-                    dir: [0.0; 3],
-                    hitloc: "none",
-                }]);
-            }
-        }
-        apply_callback_ops(
-            rt,
-            sim,
-            slot,
-            self.anims.as_deref(),
-            weapons,
-            &mut self.rng,
-            (now_ms, st),
-        );
-        relink(bodies, &self.clients, slot);
-    }
-
-    /// `FireWeapon` inside the cmd that raised it: the trace against the
-    /// world and every client as it stands now, and each impact and damage
-    /// callback in the order the round met them, so a player one round kills
-    /// is out of the way of the next (combat doc, 16). A throw spawns its
-    /// missile here instead (11.4).
-    fn fire(
-        &mut self,
-        attack: Attack,
-        rounds: &mut [Round],
-        bodies: &mut Vec<vcod_common::movetrace::Body>,
-        weapons: &crate::weapons::WeaponTable,
-    ) {
-        let (attacker, weapon) = match attack {
-            Attack::Shot(s) => (s.slot, s.weapon),
-            Attack::Swing { slot, weapon, .. } => (slot, weapon),
-            Attack::Throw {
-                slot,
-                weapon,
-                fuse_left_ms,
-                aim,
-            } => {
-                self.throw(slot, weapon, fuse_left_ms, aim, weapons);
-                return;
-            }
-            Attack::Fall { slot, percent } => {
-                self.fall(slot, percent, rounds, bodies, weapons);
-                return;
-            }
-            Attack::Suicide { slot } => {
-                self.run_kill(slot, weapons);
-                relink(bodies, &self.clients, slot);
-                return;
-            }
-            Attack::Strike(shot) => {
-                self.strike(shot, weapons);
-                return;
-            }
-            Attack::Rocket(shot) => {
-                self.launch(shot, weapons);
-                return;
-            }
-        };
-        let Some(def) = weapons.get(weapon as usize) else {
-            return;
-        };
-        // UO's round rolls its tracer before the trace (coduo-diff.md 21).
-        let uo_round = match self.script.as_ref() {
-            Some(rt) if self.proto.version == PROTOCOL_V22.version => {
-                let heavy = matches!(def.ammo_type.as_str(), "lmg" | "hmg" | "umg");
-                let chance = crate::game::builtins::cvar::atof(rt.cvars().get(if heavy {
-                    "g_tracerChanceLMG"
-                } else {
-                    "g_tracerChance"
-                }));
-                Some(crate::game::combat::UoRound {
-                    weapon: i32::from(weapon),
-                    tracer: crate::game::host::rand_unit(&mut self.rng) < chance,
-                })
-            }
-            _ => None,
-        };
-        // Script models and UO's vehicles as the trace meets them (combat doc 2.7).
-        let models = self
-            .script
-            .as_mut()
-            .map_or_else(Vec::new, |rt| rt.shot_models());
-        let targets = self
-            .script
-            .as_ref()
-            .map(|rt| rt.host.missiles.shot_targets())
-            .unwrap_or_default();
-        // The bodies are posed off the last end frame (combat doc, 16.1).
-        let result = {
-            let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
-                .clients
-                .iter()
-                .enumerate()
-                .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
-                .collect();
-            let collision = self.world.as_ref().map(|w| &w.collision);
-            // The locational trace's context, absent on a host with no paks
-            // or no animtree; a shot then lands at hit location `none`.
-            let mut bones = crate::game::combat::BoneTraceCtx::of(
-                self.fs.as_deref(),
-                self.anims.as_deref(),
-                &mut self.hit_rigs,
-                self.sv_time_ms,
-                dobj_stamps(self.script.as_mut()),
-                vcod_common::patch::Arith::for_protocol(self.proto),
-            );
-            let name = crate::items::item_name(weapons.list(), weapon as usize).unwrap_or_default();
-            match attack {
-                Attack::Shot(shot) => crate::game::combat::bullet_fire(
-                    attacker,
-                    def,
-                    name,
-                    uo_round,
-                    shot.ads,
-                    &shot.stance,
-                    shot.aim,
-                    &sims,
-                    &targets,
-                    collision,
-                    &models,
-                    &self.hitlocs,
-                    bones.as_mut(),
-                    &mut self.rng,
-                ),
-                Attack::Swing { aim, .. } => crate::game::combat::melee_fire(
-                    attacker,
-                    def,
-                    name,
-                    weapon,
-                    aim,
-                    &sims,
-                    &targets,
-                    collision,
-                    &models,
-                    &self.hitlocs,
-                    bones.as_mut(),
-                    &mut self.rng,
-                ),
-                Attack::Throw { .. }
-                | Attack::Fall { .. }
-                | Attack::Suicide { .. }
-                | Attack::Strike(_)
-                | Attack::Rocket(_) => {
-                    unreachable!()
-                }
-            }
-        };
-        let proto = self.proto;
-        let now_ms = self.sv_time_ms;
-        if let Some(rt) = self.script.as_mut() {
-            // `G_Damage` inside the cmd, on the last frame's `level.time`.
-            for id in result.struck {
-                rt.host.missiles.kill(id, now_ms.wrapping_sub(FRAME_MS));
-            }
-        }
-        for e in result.effects {
-            let hit = match e {
-                Effect::Impact(te) => {
-                    if let Some(rt) = self.script.as_mut() {
-                        rt.push_temp_entity(te);
-                    }
-                    continue;
-                }
-                Effect::EntityHit(h) => {
-                    if let Some(rt) = self.script.as_mut() {
-                        rt.deliver_entity_hit(&h);
-                    }
-                    continue;
-                }
-                Effect::TriggerSweep(t) => {
-                    if let Some(rt) = self.script.as_mut() {
-                        rt.trigger_sweep(&t);
-                    }
-                    continue;
-                }
-                Effect::Hit(h) => h,
-            };
-            let victim = hit.victim;
-            // The victim's own cmds so far are its state now; the callback
-            // lands between them and the ones behind.
-            self.close_round(victim, &mut rounds[victim]);
-            let Some(rt) = self.script.as_mut() else {
-                continue;
-            };
-            mirror_roster(&self.clients, rt);
-            let Some(c) = self.clients[victim].as_mut() else {
-                continue;
-            };
-            let st = c.last_processed_st;
-            let Some(sim) = c.sim.as_mut() else { continue };
-            mirror_for_callback(rt, sim, proto, victim, st);
-            rt.deliver_hits(vec![hit]);
-            apply_callback_ops(
-                rt,
-                sim,
-                victim,
-                self.anims.as_deref(),
-                weapons,
-                &mut self.rng,
-                (now_ms, st),
-            );
-            relink(bodies, &self.clients, victim);
-        }
+        let svs = self.svs_time_ms();
+        let (game, mut eng) = self.split(svs);
+        game.client_think_cod1(&mut eng)
     }
 
     /// What every snapshot of this frame takes its entities and roster
@@ -10378,8 +6491,8 @@ impl Server {
         // `.sessionteam`. Without a script there is nothing to ask, so the
         // slot keeps the value retail's `ClientConnect` leaves in the field.
         type Roster = (i32, Vec<(i32, i32)>, i32);
-        let per_slot: Vec<Roster> = match self.script.as_mut() {
-            Some(rt) => (0..self.clients.len())
+        let per_slot: Vec<Roster> = match self.game.module.script.as_mut() {
+            Some(rt) => (0..self.core.clients.len())
                 .map(|slot| {
                     (
                         rt.client_model_index(slot),
@@ -10388,17 +6501,18 @@ impl Server {
                     )
                 })
                 .collect(),
-            None => vec![(0, Vec::new(), script::TEAM_SPECTATOR); self.clients.len()],
+            None => vec![(0, Vec::new(), script::TEAM_SPECTATOR); self.core.clients.len()],
         };
         let roster: BTreeMap<u32, msg::ClientState> = self
+            .core
             .clients
             .iter()
             .enumerate()
             .filter_map(|(i, c)| {
                 let c = c.as_ref()?;
                 let (model, attachments, team) = &per_slot[i];
-                let mut cs = msg::ClientState::named(self.proto, 0, *team, &c.name);
-                if let Some(idx) = msg::ClientState::field_index(self.proto, "modelindex") {
+                let mut cs = msg::ClientState::named(self.game.proto, 0, *team, &c.name);
+                if let Some(idx) = msg::ClientState::field_index(self.game.proto, "modelindex") {
                     cs.fields[idx] = *model;
                 }
                 for (n, (am, at)) in attachments.iter().enumerate() {
@@ -10406,7 +6520,7 @@ impl Server {
                         (format!("attachModelIndex[{n}]"), am),
                         (format!("attachTagIndex[{n}]"), at),
                     ] {
-                        if let Some(idx) = msg::ClientState::field_index(self.proto, &name) {
+                        if let Some(idx) = msg::ClientState::field_index(self.game.proto, &name) {
                             cs.fields[idx] = *v;
                         }
                     }
@@ -10419,17 +6533,20 @@ impl Server {
         // meaning, so they sit beside the object table's rather than
         // replacing it.
         let mut entities: BTreeMap<u32, msg::EntityState> = self
+            .game
+            .module
             .script
             .as_mut()
-            .map_or_else(BTreeMap::new, |rt| rt.packet_entities(self.proto));
-        if let Some(te) = self.test_entities.as_ref() {
-            entities.extend(te.at(self.proto, self.sv_time_ms));
+            .map_or_else(BTreeMap::new, |rt| rt.packet_entities(self.game.proto));
+        if let Some(te) = self.game.module.test_entities.as_ref() {
+            entities.extend(te.at(self.game.proto, self.core.sv_time_ms));
         }
 
         // One entity per client with a sim, so a client can be told what the
         // others are doing. The receiver's own is dropped below: retail sends
         // a client no entity for itself.
         let client_entities: BTreeMap<u32, msg::EntityState> = self
+            .core
             .clients
             .iter()
             .enumerate()
@@ -10451,25 +6568,25 @@ impl Server {
                 let copied = sim
                     .end_frame_entity
                     .as_ref()
-                    .filter(|(t, _)| *t == self.sv_time_ms)
+                    .filter(|(t, _)| *t == self.core.sv_time_ms)
                     .map(|(_, e)| e.clone());
                 if hidden {
                     None
                 } else if sim.linked() {
                     let mut e = copied.unwrap_or_else(|| {
-                        sim.to_entity(self.proto, i, c.as_ref().unwrap().last_processed_st)
+                        sim.to_entity(self.game.proto, i, c.as_ref().unwrap().last_processed_st)
                     });
                     // Killed after its end frame copied it, its session
                     // still `playing` there: the corpse relink still lands.
                     if sim.dead
-                        && let Some(f) = msg::EntityState::field_index(self.proto, "solid")
+                        && let Some(f) = msg::EntityState::field_index(self.game.proto, "solid")
                     {
                         e.fields[f] = sim.linked_solid;
                     }
                     Some((i as u32, e))
                 } else if sim.dead {
                     let mut e = copied?;
-                    if let Some(f) = msg::EntityState::field_index(self.proto, "solid") {
+                    if let Some(f) = msg::EntityState::field_index(self.game.proto, "solid") {
                         e.fields[f] = 0;
                     }
                     Some((i as u32, e))
@@ -10484,10 +6601,10 @@ impl Server {
         // raises the death animation, so the state the clone copied is a
         // frame stale (`crate::game::bodies`). Then the queue's corpses join the map's
         // entities; they are culled per client like anything else.
-        let proto = self.proto;
-        let collision = self.world.as_ref().map(|w| &w.collision);
-        let clients = &self.clients;
-        if let Some(rt) = self.script.as_mut() {
+        let proto = self.game.proto;
+        let collision = self.game.world.as_ref().map(|w| &w.collision);
+        let clients = &self.core.clients;
+        if let Some(rt) = self.game.module.script.as_mut() {
             // Straight off the sim, not `client_entities`: the source is
             // dead by now and has no entity there.
             rt.bodies_mut().refresh_newborn(
@@ -10504,11 +6621,13 @@ impl Server {
         // Every live temp entity, at the number `G_TempEntity` took for it,
         // on every snapshot until the entity pass frees it.
         let (temps, temp_states): (Vec<temp_entity::Scope>, Vec<(u32, msg::EntityState)>) = self
+            .game
+            .module
             .script
             .as_ref()
             .map(|rt| {
                 rt.temp_entities()
-                    .map(|(n, te)| (te.scope, (n, temp_entity::build(te, n, self.proto))))
+                    .map(|(n, te)| (te.scope, (n, temp_entity::build(te, n, self.game.proto))))
                     .unzip()
             })
             .unwrap_or_default();
@@ -10521,14 +6640,18 @@ impl Server {
         let mut culled: BTreeMap<u32, Rc<msg::EntityState>> =
             entities.into_iter().map(|(n, e)| (n, Rc::new(e))).collect();
         culled.extend(client_entities.into_iter().map(|(n, e)| (n, Rc::new(e))));
-        let mut broadcast: BTreeMap<u32, Rc<msg::EntityState>> =
-            self.script.as_ref().map_or_else(BTreeMap::new, |rt| {
+        let mut broadcast: BTreeMap<u32, Rc<msg::EntityState>> = self
+            .game
+            .module
+            .script
+            .as_ref()
+            .map_or_else(BTreeMap::new, |rt| {
                 rt.missiles()
-                    .entities(self.proto)
+                    .entities(self.game.proto)
                     .map(|(n, e)| (n, Rc::new(e)))
                     .collect()
             });
-        if let Some(rt) = self.script.as_ref() {
+        if let Some(rt) = self.game.module.script.as_ref() {
             for n in rt.broadcast_entities(self.svs_time_ms()) {
                 if let Some(e) = culled.remove(&n) {
                     broadcast.insert(n, e);
@@ -10544,28 +6667,33 @@ impl Server {
                 .collect(),
             broadcast,
             roster: Rc::new(roster),
-            time: self.sv_time_ms,
+            time: self.core.sv_time_ms,
             fog: self.fog_cull(),
         }
     }
 
-    /// One snapshot per active client per tick, the main loop pacing calls at
-    /// sv_fps: a delta against the frame the client last acked when one is
-    /// still in its ring, uncompressed otherwise. Every entity state is built
-    /// once from the world the moves and the script frame left, then culled
-    /// and written per client.
-    /// `wall` is `--trace`'s: the wall gap since the last tick and the
-    /// frames this tick ran, so a catch-up tick's gap reads against them.
-    fn send_snapshots(&mut self, moved: &[MoveSummary], wall: (Option<f32>, u32)) {
+    /// `SV_SendClientMessages`' head ([`crate::engine::send_messages`]):
+    /// every entity state built once from the world the moves and the
+    /// script frame left, to be culled and written per client, and each
+    /// client's follow frame and archive source. `moved` and `wall` are
+    /// `--trace`'s: what each slot replayed, the wall gap since the last
+    /// tick and the frames this tick ran, so a catch-up tick's gap reads
+    /// against them.
+    fn snapshots_begin(
+        &mut self,
+        moved: Vec<MoveSummary>,
+        wall: (Option<f32>, u32),
+    ) -> Cod1Snapshots {
         let live = self.build_world_frame();
         let svs_ms = self.svs_time_ms();
-        if let Some(rt) = self.script.as_mut() {
+        if let Some(rt) = self.game.module.script.as_mut() {
             rt.expire_broadcast_times(svs_ms);
         }
-        let collision_vis = self.world.as_ref().map(|w| &w.vis);
-        let teams: Vec<i32> = (0..self.clients.len())
+        let teams: Vec<i32> = (0..self.core.clients.len())
             .map(|slot| {
-                self.script
+                self.game
+                    .module
+                    .script
                     .as_mut()
                     .map_or(script::TEAM_SPECTATOR, |rt| rt.client_team(slot))
             })
@@ -10578,40 +6706,40 @@ impl Server {
         // of the archive is that frame's, its times shifted by the age
         // (0x808ef7c). Built up front, since the loop below holds each slot
         // mutably.
-        let now = self.sv_time_ms;
-        let svs_ms = self.svs_time_ms();
-        let follow_frames: Vec<Option<FollowFrame>> = (0..self.clients.len())
+        let now = self.core.sv_time_ms;
+        let follow_frames: Vec<Option<FollowFrame>> = (0..self.core.clients.len())
             .map(|slot| {
-                let sim = self.clients[slot].as_ref()?.sim.as_ref()?;
+                let sim = self.core.clients[slot].as_ref()?.sim.as_ref()?;
                 let t = sim.follow.target.filter(|_| sim.follow.on)?;
-                let own = sim.to_wire(self.proto, slot as i32, 0);
-                let ef = msg::PlayerState::field_index(self.proto, "eFlags").unwrap();
+                let own = sim.to_wire(self.game.proto, slot as i32, 0);
+                let ef = msg::PlayerState::field_index(self.game.proto, "eFlags").unwrap();
                 let (mut ps, eye, replay) = match sim.follow.copied.and_then(|c| c.frame) {
                     Some(index) => {
-                        let f = self.archive.frame(index)?;
+                        let f = self.game.archive.frame(index)?;
                         let view = f.clients.get(t)?.as_ref()?;
-                        let ps = crate::archive::replayed_ps(view, now - f.time, self.proto);
+                        let ps = crate::archive::replayed_ps(view, now - f.time, self.game.proto);
                         (ps, view.eye, true)
                     }
                     None => {
-                        let tc = self.clients.get(t)?.as_ref()?;
+                        let tc = self.core.clients.get(t)?.as_ref()?;
                         let ts = tc.sim.as_ref()?;
-                        let mut ps = ts.to_wire(self.proto, t as i32, tc.last_processed_st);
+                        let mut ps = ts.to_wire(self.game.proto, t as i32, tc.last_processed_st);
                         // The end-frame loop runs in slot order.
                         if let (true, Some(last)) = (slot < t, ts.end_frame_wire.as_ref()) {
-                            follow::before_end_frame(&mut ps, last, self.proto);
+                            follow::before_end_frame(&mut ps, last, self.game.proto);
                         }
                         // `P_DamageFeedback`'s `EV_PAIN` is that end frame's too.
                         if let (true, Some(ring)) = (slot < t, ts.ring_before_pain) {
                             ring.write(&mut |name, v| {
-                                let i = msg::PlayerState::field_index(self.proto, name).unwrap();
+                                let i =
+                                    msg::PlayerState::field_index(self.game.proto, name).unwrap();
                                 ps.fields[i] = v;
                             });
                         }
                         (ps, ts.eye_origin(), false)
                     }
                 };
-                follow::patch_wire(&mut ps, self.proto, sim.follow.forced, own.fields[ef]);
+                follow::patch_wire(&mut ps, self.game.proto, sim.follow.forced, own.fields[ef]);
                 Some(FollowFrame {
                     target: t,
                     ps,
@@ -10624,7 +6752,7 @@ impl Server {
         // What a follow leaves in the spectator's playerstate when it stops,
         // and each followable client's frame as this end frame left it.
         for (slot, f) in follow_frames.iter().enumerate() {
-            let Some(c) = self.clients[slot].as_mut() else {
+            let Some(c) = self.core.clients[slot].as_mut() else {
                 continue;
             };
             let command_time = c.last_processed_st;
@@ -10636,7 +6764,7 @@ impl Server {
             }
             sim.end_frame_wire = sim
                 .own_view
-                .then(|| sim.to_wire(self.proto, slot as i32, command_time));
+                .then(|| sim.to_wire(self.game.proto, slot as i32, command_time));
             sim.ring_before_pain = None;
         }
 
@@ -10644,57 +6772,99 @@ impl Server {
         // takes the entities and the roster from the frame it names, times
         // shifted by the age, whether or not the client follows anyone
         // (0x808f1ab..0x808f211); the trim is written back as it is there.
-        let sources: Vec<Option<(i32, i32)>> = (0..self.clients.len())
+        let sources: Vec<Option<(i32, i32)>> = (0..self.core.clients.len())
             .map(|slot| {
-                let rt = self.script.as_mut()?;
+                let rt = self.game.module.script.as_mut()?;
                 let asked = rt.client_archive_ms(slot);
                 let mut age = asked;
-                let index = self.archive.lookup(&mut age);
+                let index = self.game.archive.lookup(&mut age);
                 if age != asked {
                     rt.set_client_archive_ms(slot, age);
                 }
-                let f = self.archive.frame(index?)?;
+                let f = self.game.archive.frame(index?)?;
                 Some((index?, now - f.time))
             })
             .collect();
 
-        let open = self.download_opener();
-        let www = self.www_config();
+        Cod1Snapshots {
+            live,
+            teams,
+            follow_frames,
+            sources,
+            open: Box::new(self.download_opener()),
+            www: self.www_config(),
+            max_rate: self.live_int_cvar("sv_maxRate"),
+            moved,
+            wall,
+        }
+    }
+
+    /// Whether `slot` takes a turn in `SV_SendClientMessages` (0x809045c):
+    /// a client with a socket, in the world or not, or a zombie, once its
+    /// `nextSnapshotTime` came. A bot has no socket to write to; its slot
+    /// still counts toward the roster and entity lists the real clients
+    /// are sent.
+    fn message_due(&self, slot: usize) -> bool {
+        let svs_ms = self.svs_time_ms();
+        match (&self.core.clients[slot], &self.game.zombies[slot]) {
+            (Some(c), _) => !c.is_bot && svs_ms >= c.link.next_message_ms,
+            (None, Some(z)) => svs_ms >= z.link.next_message_ms,
+            (None, None) => false,
+        }
+    }
+
+    /// A turn with fragments left sends the next one instead of a
+    /// snapshot ([`Client::next_fragment`]). A zombie's message goes out
+    /// whole on its turn.
+    fn next_fragment(&mut self, slot: usize) -> Option<(SocketAddr, Vec<u8>)> {
+        let svs_ms = self.svs_time_ms();
         let max_rate = self.live_int_cvar("sv_maxRate");
-        for (slot, follow_frame) in follow_frames.iter().enumerate() {
-            let follow_frame = follow_frame.as_ref();
-            let Some(c) = self.clients[slot].as_mut() else {
-                continue;
+        let c = self.core.clients[slot].as_mut()?;
+        let rate = c.send_rate(self.game.dedicated, max_rate);
+        c.next_fragment(svs_ms, rate).map(|pkt| (c.link.addr, pkt))
+    }
+
+    /// `SV_SendClientSnapshot` (0x808f844), which serves every state: a
+    /// zombie's message ([`Self::send_zombie`]), a client not in the
+    /// world's ([`Self::send_unentered`]), or for a client in the world a
+    /// delta against the frame it last acked when one is still in its
+    /// ring, uncompressed otherwise, culled to what it can see, then its
+    /// download's blocks.
+    fn send_client_snapshot(&mut self, slot: usize, snaps: &Cod1Snapshots) {
+        match &self.core.clients[slot] {
+            None => return self.send_zombie(slot, snaps.max_rate),
+            Some(c) if c.sim.is_none() => return self.send_unentered(slot, snaps),
+            Some(_) => {}
+        }
+        let svs_ms = self.svs_time_ms();
+        let collision_vis = self.game.world.as_ref().map(|w| &w.vis);
+        let Cod1Snapshots {
+            live,
+            teams,
+            follow_frames,
+            sources,
+            open,
+            www,
+            max_rate,
+            moved,
+            wall,
+        } = snaps;
+        let follow_frame = follow_frames[slot].as_ref();
+        {
+            let Some(c) = self.core.clients[slot].as_mut() else {
+                return;
             };
-            // No socket to write to; the bot's slot still counts toward the
-            // roster and entity lists the real clients are sent.
-            if c.is_bot {
-                continue;
-            }
-            if c.sim.is_none() {
-                continue;
-            }
-            // `SV_SendClientMessages` (0x809045c) skips a client until its
-            // `nextSnapshotTime`, and a turn with fragments left sends the
-            // next one instead of a snapshot.
-            if svs_ms < c.next_message_ms {
-                continue;
-            }
-            let rate = c.send_rate(self.dedicated, max_rate);
-            if let Some(pkt) = c.next_fragment(svs_ms, rate) {
-                self.outbox.push((c.addr, pkt));
-                continue;
-            }
+            let rate = c.send_rate(self.game.dedicated, *max_rate);
             let Some(sim) = c.sim.as_ref() else {
-                continue;
+                return;
             };
             // Exactly the serverTime of the last cmd the sim consumed, and
             // nothing else: the client replays everything past it, so a
             // commandTime we never simulated drops that slice of its input
             // and its prediction judders (docs/protocol-1.1.md).
-            c.was_active = true;
+            c.link.was_active = true;
             let command_time = c.last_processed_st;
-            let message_num = c.netchan.outgoing_sequence;
+            let message_num = c.link.netchan.outgoing_sequence;
             // The frame's `ps.clientNum`, which the single-client flags test
             // against and whose entity the frame leaves out.
             let client_num = follow_frame.map_or(slot, |f| f.target);
@@ -10704,22 +6874,23 @@ impl Server {
             // frame (docs/protocol-1.1.md, "Which entities a client is sent").
             let eye = follow_frame.map_or_else(|| sim.eye_origin(), |f| f.eye);
             let (world, shift) = match sources[slot] {
-                Some((index, shift)) => (&self.archive.frame(index).unwrap().world, shift),
-                None => (&live, 0),
+                Some((index, shift)) => (&self.game.archive.frame(index).unwrap().world, shift),
+                None => (live, 0),
             };
-            let mut visible = world.entities_for(client_num, eye, collision_vis, shift, self.proto);
-            if self.proto.et_events != vcod_common::net::events::ET_EVENTS {
+            let mut visible =
+                world.entities_for(client_num, eye, collision_vis, shift, self.game.proto);
+            if self.game.proto.et_events != vcod_common::net::events::ET_EVENTS {
                 for es in visible.values_mut() {
-                    crate::game::wire::entity_to_protocol(self.proto, es);
+                    crate::game::wire::entity_to_protocol(self.game.proto, es);
                 }
             }
             let roster = (*world.roster).clone();
 
             let mut ps = match follow_frame {
                 Some(f) => f.ps.clone(),
-                None => sim.to_wire(self.proto, client_num as i32, command_time),
+                None => sim.to_wire(self.game.proto, client_num as i32, command_time),
             };
-            let pm = msg::PlayerState::field_index(self.proto, "pm_flags").unwrap();
+            let pm = msg::PlayerState::field_index(self.game.proto, "pm_flags").unwrap();
             ps.fields[pm] |= sim.spectate_flags;
             // The script's HUD elements, filtered for this client the way
             // `HudElem_UpdateClient` filters them; retail rebuilds both
@@ -10729,7 +6900,7 @@ impl Server {
             // ride the copied playerstate, and gets its own unarchived half.
             let team_of = |s: usize| teams.get(s).copied().unwrap_or(script::TEAM_SPECTATOR);
             let team = team_of(slot);
-            if let Some(rt) = self.script.as_mut() {
+            if let Some(rt) = self.game.module.script.as_mut() {
                 let (archived, current) = rt.hud_elems(slot, team);
                 ps.arrays.hud_current = current;
                 match follow_frame {
@@ -10745,7 +6916,7 @@ impl Server {
                     Some(_) => {}
                 }
             }
-            crate::game::wire::ps_to_protocol(self.proto, &mut ps);
+            crate::game::wire::ps_to_protocol(self.game.proto, &mut ps);
             // `ClientSpawn`'s memset ran after the frame's HUD update
             // (the retail killcam's end frame reads both arrays empty).
             if sim.hud_cleared {
@@ -10753,10 +6924,10 @@ impl Server {
                 ps.arrays.hud_current.clear();
             }
             let frame = snapshot::Snapshot {
-                server_time: self.sv_time_ms,
+                server_time: self.core.sv_time_ms,
                 message_num,
                 delta_num: -1,
-                snap_flags: self.snap_flag_server_bit | u32::from(c.rate_delayed),
+                snap_flags: self.game.snap_flag_server_bit | u32::from(c.link.rate_delayed),
                 ps,
                 entities: visible,
                 clients: roster,
@@ -10777,23 +6948,28 @@ impl Server {
                 })
                 .cloned();
 
-            let mut w = MsgWriter::new(&self.huff);
-            write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
-            c.reliable_sent = c.netchan.reliable_sequence as i32;
-            w.write_byte(snapshot::SVC_SNAPSHOT);
-            snapshot::write(&mut w, self.proto, base.as_ref(), &frame, &self.baselines);
+            let mut w = MsgWriter::new(&self.core.huff);
+            write_pending_commands(&mut w, &c.link.netchan, c.link.reliable_ack);
+            c.link.reliable_sent = c.link.netchan.reliable_sequence as i32;
+            self.game.proto.write_snapshot(
+                &mut w,
+                base.as_ref(),
+                &frame,
+                frame.head(base.as_ref()),
+                &self.game.baselines,
+            );
             c.record_frame(frame);
             write_download(c, &mut w, svs_ms, rate, &open, www.as_ref());
 
             let ops = w.into_ops();
 
-            if self.cfg.trace {
+            if self.game.cfg.trace {
                 // The prediction contract: a client replays every usercmd
                 // newer than ps.commandTime, so `lead` at or below zero means
                 // we claim to have simulated past our own frame clock and the
                 // client has nothing left to replay. Retail's captures run a
                 // lead of 0..34 ms, never negative (examples/snapshot_timing).
-                let lead = self.sv_time_ms - command_time;
+                let lead = self.core.sv_time_ms - command_time;
                 let queued = c.pending.len();
                 let m = moved.get(slot).copied().unwrap_or_default();
                 let processed = m.processed;
@@ -10823,7 +6999,7 @@ impl Server {
 cmds {processed} span {span} queued {queued} ack {} behind {ack_behind} {base_desc} {} B{walk}",
                     wall.0.map_or("-".into(), |w| format!("{w:.1}")),
                     wall.1,
-                    self.sv_time_ms,
+                    self.core.sv_time_ms,
                     command_time,
                     lead,
                     c.message_ack,
@@ -10831,19 +7007,27 @@ cmds {processed} span {span} queued {queued} ack {} behind {ack_behind} {base_de
                 );
             }
             c.stamp_sent(message_num, svs_ms);
-            let sent = c.netchan.transmit(c.last_client_command, &ops, &self.huff);
+            let sent = c
+                .link
+                .netchan
+                .transmit(c.link.last_client_command, &ops, &self.core.huff);
             let msec = c.snapshot_msec();
             c.pace(svs_ms, sent.iter().map(Vec::len).sum(), rate, msec);
             if let Some(pkt) = c.first_packet(sent) {
-                self.outbox.push((c.addr, pkt));
+                self.core.outbox.push((c.link.addr, pkt));
             }
         }
-        for c in self.clients.iter_mut().flatten() {
+    }
+
+    /// After every client's turn: the HUD a spawn cleared is back, and the
+    /// frame the snapshots were built from goes into the archive.
+    fn snapshots_end(&mut self, snaps: Cod1Snapshots) {
+        for c in self.core.clients.iter_mut().flatten() {
             if let Some(sim) = c.sim.as_mut() {
                 sim.hud_cleared = false;
             }
         }
-        self.archive_frame(live);
+        self.archive_frame(snaps.live);
     }
 
     /// `SV_ArchiveSnapshot` (`cod_lnxded` 0x808fb84), after the frame's
@@ -10851,15 +7035,15 @@ cmds {processed} span {span} queued {queued} ack {} behind {ack_behind} {base_de
     /// client's own view as `GetFollowPlayerState` would answer it, which a
     /// spectating or intermission client has none of.
     fn archive_frame(&mut self, world: crate::archive::WorldFrame) {
-        if !self.archive.is_on() {
+        if !self.game.archive.is_on() {
             return;
         }
-        let clients = (0..self.clients.len())
+        let clients = (0..self.core.clients.len())
             .map(|slot| {
-                let c = self.clients[slot].as_ref()?;
+                let c = self.core.clients[slot].as_ref()?;
                 let sim = c.sim.as_ref().filter(|s| s.own_view)?;
-                let mut ps = sim.to_wire(self.proto, slot as i32, c.last_processed_st);
-                if let Some(rt) = self.script.as_mut() {
+                let mut ps = sim.to_wire(self.game.proto, slot as i32, c.last_processed_st);
+                if let Some(rt) = self.game.module.script.as_mut() {
                     let team = rt.client_team(slot);
                     ps.arrays.hud_archived = rt.hud_elems(slot, team).0;
                     ps.arrays.objectives = rt.objectives_for(slot, team);
@@ -10872,8 +7056,8 @@ cmds {processed} span {span} queued {queued} ack {} behind {ack_behind} {base_de
                 }))
             })
             .collect();
-        self.archive.push(crate::archive::Frame {
-            time: self.sv_time_ms,
+        self.game.archive.push(crate::archive::Frame {
+            time: self.core.sv_time_ms,
             world,
             clients,
         });
@@ -10945,6 +7129,55 @@ fn breach_aim(
     })
 }
 
+/// Per group, the index of its first item `pass` takes, as a search of
+/// each group in order would find it, on up to [`BREACH_THREADS`] threads:
+/// [`Server::breach_stands`]' sectors. The items go out by their place in
+/// their group, every group's first, then every group's second, and one
+/// behind a pass its group already found is skipped. One sector after
+/// another the traces held a `bas` tick 25 to 30 ms (map-cycle doc 4.9).
+fn first_passes<T: Sync>(groups: &[&[T]], pass: impl Fn(&T) -> bool + Sync) -> Vec<Option<usize>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut order: Vec<(usize, usize)> = groups
+        .iter()
+        .enumerate()
+        .flat_map(|(g, items)| (0..items.len()).map(move |i| (i, g)))
+        .collect();
+    order.sort_unstable();
+    let found: Vec<AtomicUsize> = groups
+        .iter()
+        .map(|_| AtomicUsize::new(usize::MAX))
+        .collect();
+    let next = AtomicUsize::new(0);
+    let work = || loop {
+        let Some(&(i, g)) = order.get(next.fetch_add(1, Ordering::Relaxed)) else {
+            return;
+        };
+        if found[g].load(Ordering::Relaxed) > i && pass(&groups[g][i]) {
+            found[g].fetch_min(i, Ordering::Relaxed);
+        }
+    };
+    let threads = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(BREACH_THREADS)
+        .min(order.len());
+    if threads <= 1 {
+        work();
+    } else {
+        std::thread::scope(|s| {
+            for _ in 0..threads {
+                s.spawn(work);
+            }
+        });
+    }
+    found
+        .into_iter()
+        .map(|f| Some(f.into_inner()).filter(|&i| i != usize::MAX))
+        .collect()
+}
+
+/// The most threads [`first_passes`] runs.
+const BREACH_THREADS: usize = 8;
+
 /// The loaded rocket launcher a bot carries ([`crate::bots::BotView::rocket`]):
 /// the one in `hand` if loaded, else the first loaded one in `loaded`
 /// (the held weapons with a round left).
@@ -10995,6 +7228,21 @@ pub(crate) fn cone_clear(
 
 #[cfg(test)]
 mod tests {
+    /// The threaded search finds each group's first pass, as one group
+    /// after another searched in order would, and nothing for a group with
+    /// none.
+    #[test]
+    fn first_passes_finds_what_a_serial_search_finds() {
+        let groups: Vec<Vec<u32>> = (0..16u32)
+            .map(|g| (0..(g * 7 % 40)).map(|i| (g * 131 + i * 17) % 97).collect())
+            .collect();
+        let pass = |v: &u32| v % 13 == 5;
+        let views: Vec<&[u32]> = groups.iter().map(|g| &g[..]).collect();
+        let serial: Vec<Option<usize>> = groups.iter().map(|g| g.iter().position(pass)).collect();
+        assert!(serial.iter().any(Option::is_none) && serial.iter().any(Option::is_some));
+        assert_eq!(first_passes(&views, pass), serial);
+    }
+
     /// A loaded launcher counts whatever else is carried: an empty bazooka
     /// beside a loaded panzerschreck, the pistol in hand.
     #[test]
@@ -11044,6 +7292,7 @@ mod tests {
     use vcod_common::net::msg::write_delta_usercmd;
     use vcod_common::net::netchan::Netchan;
     use vcod_common::net::protocol::PROTOCOL_V6;
+    use vcod_common::net::protocol::PROTOCOL_V22;
     use vcod_common::net::snapshot::{SVC_SNAPSHOT, SnapshotRing};
 
     const QPORT: u16 = 0x2001;
@@ -11108,7 +7357,7 @@ mod tests {
     /// copy is taken back through the cvar mirror. Without it the first tick
     /// reads every static slot as cleared and broadcasts the difference.
     fn install_script(sv: &mut Server, mut rt: crate::game::script::ScriptRuntime) {
-        for (i, cs) in sv.configstrings.iter().enumerate() {
+        for (i, cs) in sv.core.configstrings.iter().enumerate() {
             if rt.host.configstrings[i].is_empty() {
                 rt.host.configstrings.set(i, cs.clone());
             }
@@ -11117,9 +7366,9 @@ mod tests {
         rt.cvars()
             .write_mirror(&mut cs)
             .expect("the cvar mirror fits");
-        sv.configstrings = cs;
+        sv.core.configstrings = cs;
         sv.sync_sent_configstrings();
-        sv.script = Some(rt);
+        sv.game.module.script = Some(rt);
     }
     fn oob(cmd: &str) -> Vec<u8> {
         build_oob(cmd)
@@ -11148,7 +7397,7 @@ mod tests {
     }
     fn connected(sv: &mut Server, from: SocketAddr, now: Instant) -> Netchan {
         let challenge = challenge_for(sv, from, now);
-        let version = sv.proto.version;
+        let version = sv.game.proto.transport.version;
         sv.handle_packet(from, &connect_pkt(challenge, QPORT, version), now);
         assert_eq!(reply_text(sv).0, "connectResponse");
         Netchan::new(QPORT, challenge)
@@ -11180,9 +7429,9 @@ mod tests {
         let now = Instant::now();
         let a = Server::new(cfg(), now);
         let b = Server::new(cfg(), now - Duration::from_secs(5));
-        assert_eq!(a.checksum_feed, b.checksum_feed);
+        assert_eq!(a.core.checksum_feed, b.core.checksum_feed);
         let c = Server::with_seed(cfg(), now, 7);
-        assert_ne!(a.checksum_feed, c.checksum_feed);
+        assert_ne!(a.core.checksum_feed, c.core.checksum_feed);
     }
 
     #[test]
@@ -11288,7 +7537,11 @@ mod tests {
                 let (_, cmd, rest) = reply(&mut sv);
                 assert_eq!(cmd, answer);
                 let text = String::from_utf8_lossy(&rest);
-                assert!(!text.contains("challenge"), "{} {text}", proto.version);
+                assert!(
+                    !text.contains("challenge"),
+                    "{} {text}",
+                    proto.transport.version
+                );
             }
         }
         let mut sv = Server::new(cfg(), now);
@@ -11379,7 +7632,7 @@ mod tests {
         // and `sv_maxclients` gives back the ones in use.
         sv.set_cvar("g_password", "secret");
         sv.set_cvar("sv_privateClients", "2");
-        sv.clients[0] = Some(Client::new(addr(9), 1, 0, "\\name\\x".into(), now));
+        sv.core.clients[0] = Some(Client::new(addr(9), 1, 0, "\\name\\x".into(), now));
         sv.handle_packet(addr(5), &oob("getinfo 1"), now);
         let (_, _, rest) = reply(&mut sv);
         let info = String::from_utf8_lossy(&rest);
@@ -11615,7 +7868,7 @@ mod tests {
     /// single bump ahead of `SV_Frame`'s bot pass does (movers doc 15).
     #[test]
     fn every_bots_cmds_of_a_tick_share_one_packet() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             return;
         };
         let bsp_path = fs.resolve_map("mp_carentan").expect("map in the paks");
@@ -11631,9 +7884,10 @@ mod tests {
             now += std::time::Duration::from_millis(FRAME_MS as u64);
             sv.tick(now);
         }
-        let before = sv.packet_seq;
+        let before = sv.game.packet_seq;
         crate::nav::with_rules(sv.move_rules(), || sv.step_bots());
         let packets: Vec<u64> = sv
+            .core
             .clients
             .iter()
             .flatten()
@@ -11651,7 +7905,7 @@ mod tests {
     /// paks -- the classes come from the weapon files.
     #[test]
     fn the_weapon_class_table_lines_up_with_the_wire_index() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             return;
         };
         let mut sv = Server::new(cfg(), Instant::now());
@@ -11663,7 +7917,7 @@ mod tests {
         ] {
             let index = crate::configstrings::weapon_index(weapon).expect("in WEAPON_LIST");
             assert_eq!(
-                sv.weapon_table.class(index),
+                sv.game.module.weapon_table.class(index),
                 class,
                 "{weapon} at wire index {index}"
             );
@@ -11674,7 +7928,7 @@ mod tests {
             );
         }
         assert_eq!(
-            sv.weapon_table.class(0),
+            sv.game.module.weapon_table.class(0),
             "",
             "slot 0 is the wire's no-weapon"
         );
@@ -11686,12 +7940,12 @@ mod tests {
     #[test]
     fn a_failed_script_load_reports_and_changes_nothing() {
         let mut sv = Server::new(cfg(), Instant::now());
-        let before: Vec<String> = sv.configstrings.clone();
+        let before: Vec<String> = sv.core.configstrings.clone();
         // No paks, so the map script does not resolve and `load` fails at its
         // first step.
         let err = sv.load_scripts(Rc::new(vcod_common::pk3::Pk3Fs::empty()));
         assert!(err.is_err());
-        assert_eq!(sv.configstrings, before);
+        assert_eq!(sv.core.configstrings, before);
         assert!(sv.configstring(7).contains("kar98k_mp"));
     }
 
@@ -11821,28 +8075,39 @@ mod tests {
         let _nc = connected(&mut sv, addr(5), now);
         sv.sync_sent_configstrings();
         assert_eq!(
-            sv.clients[0].as_ref().unwrap().state,
+            sv.core.clients[0].as_ref().unwrap().state,
             ClientState::Connected
         );
 
-        let seq = sv.clients[0].as_ref().unwrap().netchan.reliable_sequence;
-        sv.configstrings[524] = "MP_announcer_allies_win".to_string();
+        let seq = sv.core.clients[0]
+            .as_ref()
+            .unwrap()
+            .link
+            .netchan
+            .reliable_sequence;
+        sv.core.configstrings[524] = "MP_announcer_allies_win".to_string();
         sv.broadcast_configstring_changes();
         assert_eq!(
-            sv.clients[0].as_ref().unwrap().netchan.reliable_sequence,
+            sv.core.clients[0]
+                .as_ref()
+                .unwrap()
+                .link
+                .netchan
+                .reliable_sequence,
             seq,
             "a client with no gamestate was sent a `d`"
         );
 
         // The same slot moving again once the gamestate has gone out does
         // reach it, so the skip above is the state and not the diff.
-        sv.clients[0].as_mut().unwrap().state = ClientState::Primed;
-        sv.configstrings[524] = "MP_announcer_axis_win".to_string();
+        sv.core.clients[0].as_mut().unwrap().state = ClientState::Primed;
+        sv.core.configstrings[524] = "MP_announcer_axis_win".to_string();
         sv.broadcast_configstring_changes();
-        let c = sv.clients[0].as_ref().unwrap();
-        assert_eq!(c.netchan.reliable_sequence, seq + 1);
+        let c = sv.core.clients[0].as_ref().unwrap();
+        assert_eq!(c.link.netchan.reliable_sequence, seq + 1);
         assert_eq!(
-            c.netchan.reliable[c.netchan.reliable_sequence as usize & (MAX_RELIABLE_COMMANDS - 1)],
+            c.link.netchan.reliable
+                [c.link.netchan.reliable_sequence as usize & (MAX_RELIABLE_COMMANDS - 1)],
             "d 524 MP_announcer_axis_win"
         );
     }
@@ -11855,7 +8120,7 @@ mod tests {
     /// three frames touched.
     #[test]
     fn a_spawn_re_syncs_the_table_the_broadcast_diffs_against() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
@@ -11879,7 +8144,12 @@ mod tests {
         sv.spawn_server("mp_brecourt").expect("the map load failed");
         // What the next tick reads back out of the script, which is what it
         // diffs the sent copy against.
-        let rt = sv.script.as_ref().expect("the spawn left no script");
+        let rt = sv
+            .game
+            .module
+            .script
+            .as_ref()
+            .expect("the spawn left no script");
         let mut live = rt.configstrings().to_vec();
         rt.cvars().write_mirror(&mut live).expect("the mirror fits");
         assert!(
@@ -11892,22 +8162,74 @@ mod tests {
                 .collect()
         };
         assert!(
-            stale(&sv.sent_configstrings).is_empty(),
+            stale(&sv.core.sent_configstrings).is_empty(),
             "the spawn left slots {:?} for the diff to send",
-            stale(&sv.sent_configstrings)
+            stale(&sv.core.sent_configstrings)
         );
         assert!(
-            stale(&sv.configstrings).is_empty(),
+            stale(&sv.core.configstrings).is_empty(),
             "the server's own copy is a frame behind the script at slots {:?}",
-            stale(&sv.configstrings)
+            stale(&sv.core.configstrings)
         );
     }
 
     /// A restart starts the level on the compile the outgoing level loaded;
     /// a map load and a new overlay compile again (map-cycle doc, 4.7).
+    /// `games_mp.log` across a `map_restart`, a map load and `quit`, as
+    /// the retail 1.1d run wrote it (cod11-map-cycle.md 9): the separator
+    /// and `InitGame:` at each `G_InitGame`, `RestartGame:` closing the
+    /// restarted level, `ShutdownGame:` the others, the script's
+    /// `logPrint` between.
+    #[test]
+    fn games_mp_log_follows_the_levels() {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let home = std::env::temp_dir().join(format!("vcod-cod1-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.set_cvar("fs_homepath", &home.display().to_string());
+        sv.overlay_script(
+            "maps/mp/gametypes/dm",
+            "main() { maps\\mp\\gametypes\\_callbacksetup::SetupCallbacks(); logPrint(\"hi\\n\"); }",
+        );
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        sv.tick(now);
+        sv.map_restart().expect("the restart failed");
+        sv.tick(now);
+        sv.spawn_server("mp_carentan").expect("the map load failed");
+        sv.tick(now);
+        sv.push_console("quit");
+        sv.tick(now);
+        let text = std::fs::read_to_string(home.join("main/games_mp.log")).unwrap();
+        let sep = "-".repeat(60);
+        let lines: Vec<String> = text
+            .lines()
+            .map(|l| match l[7..].strip_prefix("InitGame: \\") {
+                Some(info) => {
+                    assert!(info.contains("\\mapname\\mp_carentan\\"), "{l}");
+                    "InitGame".to_string()
+                }
+                None => l[7..].to_string(),
+            })
+            .collect();
+        let level = [sep.as_str(), "InitGame", "hi"];
+        let mut want: Vec<&str> = level.to_vec();
+        want.extend(["RestartGame:", &sep]);
+        want.extend(level);
+        want.extend(["ShutdownGame:", &sep]);
+        want.extend(level);
+        want.extend(["ShutdownGame:", &sep]);
+        assert_eq!(lines, want, "{text}");
+        assert!(text.lines().all(|l| l.as_bytes()[3] == b':'), "{text}");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
     #[test]
     fn a_restart_reuses_the_compiled_scripts_and_a_map_load_does_not() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
@@ -11915,7 +8237,9 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_scripts(Rc::new(fs)).expect("load the scripts");
         let compiled = |sv: &Server| {
-            sv.script
+            sv.game
+                .module
+                .script
                 .as_ref()
                 .and_then(|rt| rt.compiled().cloned())
                 .expect("a loaded level keeps its compile")
@@ -11968,7 +8292,7 @@ mod tests {
         for _ in 0..10 {
             sv.tick(now);
         }
-        let text = sv.script.as_mut().unwrap().script_usage();
+        let text = sv.game.module.script.as_mut().unwrap().script_usage();
         // The var usage numbers are vcod's own VM's; the counts and the
         // order are retail's.
         let heads: Vec<&str> = text
@@ -12081,17 +8405,58 @@ mod tests {
         sv.load_world(World::from_bsp(&bsp, Some(&fs)));
         sv.load_scripts(fs).expect("load the scripts");
 
-        let mut ours: Vec<u32> = sv.baselines.keys().copied().collect();
+        let mut ours: Vec<u32> = sv.game.baselines.keys().copied().collect();
         ours.sort_unstable();
         let mut want: Vec<u32> = retail.keys().copied().collect();
         want.sort_unstable();
         assert_eq!(ours, want);
         for n in ours {
-            let (a, b) = (&sv.baselines[&n], &retail[&n]);
+            let (a, b) = (&sv.game.baselines[&n], &retail[&n]);
             for (f, (x, y)) in p.entity_fields.iter().zip(a.fields.iter().zip(&b.fields)) {
                 assert_eq!(x, y, "entity {n} {}", f.name);
             }
         }
+    }
+
+    /// mp_cassino's `script_origin` "auto9" (entity 414) lists `origin`
+    /// before `angles` "0 2.50448e-006 0": applied in lump order the yaw
+    /// stays unsnapped and goes out as a sent 0, as the retail UO
+    /// gamestate's baseline carries it; `angles` first, the `origin` link
+    /// snapped it and the baseline left it out (object-model doc 7).
+    #[test]
+    fn uo_cassinos_auto9_baseline_matches_retail() {
+        let Some(fs) = vcod_common::testing::uo_fs() else {
+            eprintln!("COD_DIR is not a UO install: skipping");
+            return;
+        };
+        let p = &PROTOCOL_V22;
+        let huff = Huffman::new();
+        let gs_bytes = vcod_common::testing::fixture("net/gamestate-uo.bin");
+        let mut r = MsgReader::new(&gs_bytes[4..], &huff);
+        let retail = vcod_common::net::gamestate::parse(&mut r, p)
+            .unwrap()
+            .baselines;
+        let fs = Rc::new(fs);
+        let mut sv = Server::new(
+            ServerConfig {
+                map: "mp_cassino".into(),
+                max_clients: 8,
+                ..cfg()
+            },
+            Instant::now(),
+        );
+        sv.set_protocol(p);
+        let path = fs.resolve_map("mp_cassino").expect("map in the paks");
+        let bsp = vcod_common::bsp::parse(&fs.read(&path).unwrap()).unwrap();
+        sv.load_world(World::from_bsp(&bsp, Some(&fs)));
+        sv.load_scripts(fs).expect("load the scripts");
+        let null = msg::EntityState::null(p);
+        let wire = |e: &msg::EntityState| {
+            let mut w = MsgWriter::new(&huff);
+            msg::write_delta_entity(&mut w, p, &null, Some(e));
+            w.finish()
+        };
+        assert_eq!(wire(&sv.game.baselines[&414]), wire(&retail[&414]));
     }
 
     /// The level script's cvar table carries `mapname`, the probes' only way
@@ -12110,7 +8475,7 @@ mod tests {
     /// load would keep resetting it to one `x`.
     #[test]
     fn a_set_applies_once_and_a_scripts_write_outlives_later_loads() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
@@ -12150,7 +8515,7 @@ mod tests {
     /// map change (map-cycle doc 4.5).
     #[test]
     fn a_scripts_hostname_outlives_later_loads() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
@@ -12219,7 +8584,7 @@ mod tests {
     /// `getCvar` answers from. Writing only `cfg.gametype` splits the two.
     #[test]
     fn a_rotation_gametype_token_outranks_an_earlier_set() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
@@ -12237,8 +8602,8 @@ mod tests {
 
         sv.push_console("map_rotate");
         sv.tick(now);
-        assert_eq!(sv.cfg.map, "mp_brecourt", "the rotation did not load");
-        assert_eq!(sv.cfg.gametype, "tdm");
+        assert_eq!(sv.game.cfg.map, "mp_brecourt", "the rotation did not load");
+        assert_eq!(sv.game.cfg.gametype, "tdm");
         assert!(
             sv.configstring(0).contains("g_gametype\\tdm"),
             "serverinfo: {:?}",
@@ -12269,7 +8634,7 @@ mod tests {
             vcod_common::bsp::parse(&fs.read(&path).expect("read the bsp")).expect("parse the bsp");
         sv.load_world(World::from_bsp(&bsp, Some(&fs)));
         sv.load_scripts(fs).expect("load the scripts");
-        sv.script.as_mut().unwrap().host.cvars.set(
+        sv.game.module.script.as_mut().unwrap().host.cvars.set(
             "sv_mapRotation",
             "gametype tdm map mp_brecourt map mp_carentan",
         );
@@ -12277,13 +8642,14 @@ mod tests {
         sv.push_console("map_rotate");
         sv.tick(now);
         assert_eq!(
-            sv.cfg.map, "mp_brecourt",
+            sv.game.cfg.map, "mp_brecourt",
             "the script's rotation did not load"
         );
-        assert_eq!(sv.cfg.gametype, "tdm");
+        assert_eq!(sv.game.cfg.gametype, "tdm");
         assert_eq!(
             sv.script_cvar("sv_mapRotationCurrent").as_deref(),
-            Some("map mp_carentan"),
+            // Retail keeps the blank that ended `mp_brecourt` (doc 5.1).
+            Some(" map mp_carentan"),
         );
     }
 
@@ -12305,14 +8671,14 @@ mod tests {
         sv.load_world(World::from_bsp(&bsp, Some(&fs)));
         sv.load_scripts(fs).expect("load scripts");
         let draws = |sv: &mut Server| -> Vec<i32> {
-            let host = &mut sv.script.as_mut().unwrap().host;
+            let host = &mut sv.game.module.script.as_mut().unwrap().host;
             (0..4).map(|_| host.rand_int()).collect()
         };
         let first = draws(&mut sv);
-        let id = sv.server_id;
+        let id = sv.game.server_id;
         sv.push_console("map_restart");
         sv.tick(now);
-        assert_ne!(sv.server_id, id, "the restart did not run");
+        assert_ne!(sv.game.server_id, id, "the restart did not run");
         assert_ne!(draws(&mut sv), first, "the restart replayed the draws");
     }
 
@@ -12322,7 +8688,7 @@ mod tests {
     /// low one. A level that asked to keep its persistence is exempt.
     #[test]
     fn a_gametype_change_escalates_a_restart_to_a_spawn() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
@@ -12330,27 +8696,27 @@ mod tests {
         let mut now = Instant::now();
         let mut sv = Server::new(cfg(), now);
         sv.load_scripts(fs).expect("load the scripts");
-        let before = sv.server_id;
+        let before = sv.game.server_id;
 
         // No change yet: the plain restart path.
         sv.push_console("map_restart");
         sv.tick(now);
-        assert_eq!(sv.server_id, console::next_restart_id(before));
+        assert_eq!(sv.game.server_id, console::next_restart_id(before));
 
         // The rotation's `gametype` token, then a restart: the level is
         // still running dm, so this escalates.
-        let id = sv.server_id;
+        let id = sv.game.server_id;
         sv.set_cvar("g_gametype", "tdm");
         now += Duration::from_millis(50);
         sv.push_console("map_restart");
         sv.tick(now);
         assert_eq!(
-            sv.server_id,
+            sv.game.server_id,
             console::next_map_id(id),
             "a gametype change did not escalate to a spawn"
         );
         assert_eq!(
-            sv.cfg.map, "mp_carentan",
+            sv.game.cfg.map, "mp_carentan",
             "the escalation moved off the map"
         );
         assert_eq!(sv.script_cvar("g_gametype").as_deref(), Some("tdm"));
@@ -12363,7 +8729,7 @@ mod tests {
     /// level that is serving and records nothing.
     #[test]
     fn a_script_load_that_fails_after_the_teardown_is_fatal() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
@@ -12378,7 +8744,10 @@ mod tests {
             sv.take_fatal().is_none(),
             "a map the paks do not have took the server down"
         );
-        assert_eq!(sv.cfg.map, "mp_carentan", "the failed map load moved off");
+        assert_eq!(
+            sv.game.cfg.map, "mp_carentan",
+            "the failed map load moved off"
+        );
 
         // The rotation's `gametype` token names a gametype with no script,
         // and the `map` token behind it escalates to a spawn whose
@@ -12399,7 +8768,7 @@ mod tests {
     /// with `w "GAME_INVALIDPASSWORD"` (handshake doc, "g_password").
     #[test]
     fn a_new_g_password_drops_clients_at_the_next_restart_or_map() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
@@ -12423,10 +8792,13 @@ mod tests {
             } else {
                 sv.map_restart().expect("the restart failed");
             }
-            assert!(sv.clients[0].is_none(), "spawn {spawn}: the client stayed");
-            let z = sv.zombies[0].as_ref().expect("a zombie");
-            let at = z.netchan.reliable_sequence as usize & (MAX_RELIABLE_COMMANDS - 1);
-            assert_eq!(z.netchan.reliable[at], "w \"GAME_INVALIDPASSWORD\"");
+            assert!(
+                sv.core.clients[0].is_none(),
+                "spawn {spawn}: the client stayed"
+            );
+            let z = sv.game.zombies[0].as_ref().expect("a zombie");
+            let at = z.link.netchan.reliable_sequence as usize & (MAX_RELIABLE_COMMANDS - 1);
+            assert_eq!(z.link.netchan.reliable[at], "w \"GAME_INVALIDPASSWORD\"");
         }
     }
     /// Doc section 4 step 11: `SV_ClientEnterWorld` runs only for a client
@@ -12435,7 +8807,7 @@ mod tests {
     /// which is the branch the second half exercises.
     #[test]
     fn a_primed_client_is_not_re_entered_by_a_restart() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
@@ -12443,10 +8815,13 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_scripts(Rc::new(fs)).expect("load the scripts");
         let mut nc = active(&mut sv, now);
-        assert_eq!(sv.clients[0].as_ref().unwrap().state, ClientState::Primed);
+        assert_eq!(
+            sv.core.clients[0].as_ref().unwrap().state,
+            ClientState::Primed
+        );
 
         sv.map_restart().expect("the restart failed");
-        let c = sv.clients[0].as_ref().unwrap();
+        let c = sv.core.clients[0].as_ref().unwrap();
         assert_eq!(
             c.state,
             ClientState::Primed,
@@ -12463,7 +8838,7 @@ mod tests {
         let ack = nc.incoming_sequence as i32;
         let pkt = nc.build_out(0x10, ack, 0, &ack_ops(), &huff).unwrap();
         sv.handle_packet(addr(5), &pkt, now);
-        let c = sv.clients[0].as_ref().unwrap();
+        let c = sv.core.clients[0].as_ref().unwrap();
         assert_eq!(c.state, ClientState::Active);
         assert!(c.sim.is_some());
     }
@@ -12474,7 +8849,7 @@ mod tests {
     /// level sets it (coduo-diff.md 22, "Round and map ends").
     #[test]
     fn a_restart_sends_the_slots_the_incoming_level_changed() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
@@ -12518,7 +8893,7 @@ mod tests {
     /// doc 4.5). The allies' 6 is written ahead of the axis' 5 here.
     #[test]
     fn a_restart_s_burst_keeps_the_write_order() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
@@ -12561,22 +8936,22 @@ mod tests {
     /// every restart for the whole run.
     #[test]
     fn a_set_override_of_sv_maxclients_is_not_a_gametype_change() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
-        assert_eq!(sv.cfg.max_clients, 4);
+        assert_eq!(sv.game.cfg.max_clients, 4);
         sv.set_cvar("sv_maxclients", "8");
         sv.load_scripts(Rc::new(fs)).expect("load the scripts");
         assert_eq!(sv.script_cvar("sv_maxclients").as_deref(), Some("8"));
 
-        let before = sv.server_id;
+        let before = sv.game.server_id;
         sv.push_console("map_restart");
         sv.tick(now);
         assert_eq!(
-            sv.server_id,
+            sv.game.server_id,
             console::next_restart_id(before),
             "the override escalated a restart to a spawn"
         );
@@ -12586,19 +8961,19 @@ mod tests {
     /// and so is one straight after a spawn.
     #[test]
     fn a_second_restart_in_one_frame_is_a_no_op() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
         sv.load_scripts(Rc::new(fs)).expect("load the scripts");
-        let before = sv.server_id;
+        let before = sv.game.server_id;
         sv.push_console("map_restart");
         sv.push_console("map_restart");
         sv.tick(now);
         assert_eq!(
-            sv.server_id,
+            sv.game.server_id,
             console::next_restart_id(before),
             "the second restart in the frame was not a no-op"
         );
@@ -12611,7 +8986,7 @@ mod tests {
         let challenge = challenge_for(&mut sv, addr(5), now);
         sv.handle_packet(
             addr(5),
-            &connect_pkt(challenge, QPORT, PROTOCOL_V1.version),
+            &connect_pkt(challenge, QPORT, PROTOCOL_V1.transport.version),
             now,
         );
         let (to, cmd, _) = reply(&mut sv);
@@ -12640,7 +9015,7 @@ mod tests {
         sv.tick(now);
         sv.take_outgoing();
         fn area(sv: &mut Server) -> &mut crate::area::AreaTree {
-            &mut sv.script.as_mut().unwrap().host.area
+            &mut sv.game.module.script.as_mut().unwrap().host.area
         }
         let link = crate::area::Link::boxed([0.0; 3], [-15.0; 3], [15.0; 3], 0x2000000);
         area(&mut sv).link(0, &link);
@@ -12680,16 +9055,21 @@ mod tests {
             let nc = connected(&mut sv, addr(5), now);
             sv.tick(now);
             sv.take_outgoing();
-            let field = |sv: &mut Server, f: &str| sv.script.as_mut().unwrap().level_field(f);
+            let field =
+                |sv: &mut Server, f: &str| sv.game.module.script.as_mut().unwrap().level_field(f);
 
             // Past sv_reconnectlimit, the same peer's connect takes the slot back.
             let t = now + RECONNECT_LIMIT + Duration::from_millis(100);
-            sv.handle_packet(addr(5), &connect_pkt(nc.challenge, QPORT, proto.version), t);
+            sv.handle_packet(
+                addr(5),
+                &connect_pkt(nc.challenge, QPORT, proto.transport.version),
+                t,
+            );
             assert_eq!(reply_text(&mut sv).0, "connectResponse");
             sv.tick(t);
             let ticks = field(&mut sv, "ticks");
             sv.tick(t + Duration::from_millis(100));
-            let v = proto.version;
+            let v = proto.transport.version;
             assert_eq!(
                 field(&mut sv, "gone"),
                 vcod_gsc::Value::Int(callbacks),
@@ -12734,15 +9114,16 @@ mod tests {
             sv.take_outgoing();
             sv.send_server_command(0, "e \"unsent print\"");
             sv.drop_client(0, "EXE_DISCONNECTED");
-            let z = sv.zombies[0].as_ref().expect("a zombie");
-            let ring: Vec<&str> = (z.reliable_sent + 1..=z.netchan.reliable_sequence as i32)
-                .map(|i| z.netchan.reliable[i as usize & (MAX_RELIABLE_COMMANDS - 1)].as_str())
+            let z = sv.game.zombies[0].as_ref().expect("a zombie");
+            let ring: Vec<&str> = (z.link.reliable_sent + 1
+                ..=z.link.netchan.reliable_sequence as i32)
+                .map(|i| z.link.netchan.reliable[i as usize & (MAX_RELIABLE_COMMANDS - 1)].as_str())
                 .collect();
             assert_eq!(
                 ring,
                 ["v probe_self \"1\"", "w \"EXE_DISCONNECTED\""],
                 "{}",
-                proto.version
+                proto.transport.version
             );
         }
     }
@@ -12770,7 +9151,11 @@ mod tests {
         let challenge = challenge_for(&mut sv, addr(5), now);
         sv.handle_packet(
             addr(5),
-            &connect_pkt(challenge.wrapping_add(1), QPORT, PROTOCOL_V1.version),
+            &connect_pkt(
+                challenge.wrapping_add(1),
+                QPORT,
+                PROTOCOL_V1.transport.version,
+            ),
             now,
         );
         assert_eq!(
@@ -12797,7 +9182,7 @@ mod tests {
         let challenge = challenge_for(&mut sv, addr(6), now);
         sv.handle_packet(
             addr(6),
-            &connect_pkt(challenge, QPORT + 1, PROTOCOL_V1.version),
+            &connect_pkt(challenge, QPORT + 1, PROTOCOL_V1.transport.version),
             now,
         );
         assert_eq!(
@@ -12816,7 +9201,7 @@ mod tests {
         let challenge = challenge_for(sv, from, now);
         let ui = format!(
             "\\name\\vcod{extra}\\protocol\\{}\\qport\\{QPORT}\\challenge\\{challenge}",
-            PROTOCOL_V1.version
+            PROTOCOL_V1.transport.version
         );
         sv.handle_packet(from, &build_connect(&ui), now);
         reply_text(sv)
@@ -12832,11 +9217,14 @@ mod tests {
         sv.set_cvar("sv_minPing", "100");
         sv.set_cvar("sv_maxPing", "250");
         let wan = SocketAddr::from(([203, 0, 113, 7], 27960));
+        // The ping is `svs.time` at the connect less at the answer: the
+        // server's clock, not the packets' arrival.
         let connect_after = |sv: &mut Server, from, ms| {
             let challenge = challenge_for(sv, from, now);
+            sv.core.sv_time_ms += ms as i32;
             let ui = format!(
                 "\\name\\vcod\\protocol\\{}\\qport\\{QPORT}\\challenge\\{challenge}",
-                PROTOCOL_V1.version
+                PROTOCOL_V1.transport.version
             );
             sv.handle_packet(from, &build_connect(&ui), now + Duration::from_millis(ms));
             reply_text(sv)
@@ -12875,9 +9263,10 @@ mod tests {
         sv.set_cvar("sv_privateClients", "2");
         sv.set_cvar("sv_privatePassword", "pp");
         let slot_of = |sv: &Server, from: SocketAddr| {
-            sv.clients
+            sv.core
+                .clients
                 .iter()
-                .position(|c| c.as_ref().is_some_and(|c| c.addr == from))
+                .position(|c| c.as_ref().is_some_and(|c| c.link.addr == from))
         };
         // One ip each: the reply limiter would refuse a sixth challenge to one.
         let addr = |n: u8| SocketAddr::from(([10, 0, 1, n], 28960));
@@ -13027,7 +9416,7 @@ mod tests {
         w.write_string("say hi");
         w.write_bits(CLC_EOF, 2);
         let pkt = nc
-            .build_out(i32::from(sv.server_id), 0, 0, &w.into_ops(), &huff)
+            .build_out(i32::from(sv.game.server_id), 0, 0, &w.into_ops(), &huff)
             .unwrap();
         sv.handle_packet(addr(5), &pkt, now);
 
@@ -13053,15 +9442,15 @@ mod tests {
     fn pure_server_after(cmds: impl Fn(i32) -> Vec<String>) -> Server {
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
-        sv.paks.pure = true;
-        sv.pure_check = Some(PureCheck {
+        sv.game.paks.pure = true;
+        sv.game.pure_check = Some(PureCheck {
             cgame: Some(11),
             ui: Some(22),
             loaded: vec![5, 6],
-            feed: sv.checksum_feed,
+            feed: sv.core.checksum_feed,
         });
         let mut nc = active(&mut sv, now);
-        let cmds = cmds(sv.checksum_feed);
+        let cmds = cmds(sv.core.checksum_feed);
         if !cmds.is_empty() {
             let cmds: Vec<&str> = cmds.iter().map(String::as_str).collect();
             pipelined(&mut sv, &mut nc, &cmds, now);
@@ -13069,9 +9458,9 @@ mod tests {
         if sv.client_count() == 1 {
             let huff = Huffman::new();
             let ack = nc.incoming_sequence as i32;
-            let ops = move_ops(sv.checksum_feed, ack, NULL_USERCMD);
+            let ops = move_ops(sv.core.checksum_feed, ack, NULL_USERCMD);
             let pkt = nc
-                .build_out(i32::from(sv.server_id), ack, 0, &ops, &huff)
+                .build_out(i32::from(sv.game.server_id), ack, 0, &ops, &huff)
                 .unwrap();
             sv.handle_packet(addr(5), &pkt, now);
         }
@@ -13107,7 +9496,7 @@ mod tests {
         w.write_bits(CLC_EOF, 2);
         let pkt = nc
             .build_out(
-                i32::from(sv.server_id),
+                i32::from(sv.game.server_id),
                 nc.incoming_sequence as i32,
                 0,
                 &w.into_ops(),
@@ -13125,10 +9514,15 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         let mut nc = active(&mut sv, now);
         sv.take_outgoing();
-        let before = sv.clients[0].as_ref().unwrap().netchan.reliable_sequence;
+        let before = sv.core.clients[0]
+            .as_ref()
+            .unwrap()
+            .link
+            .netchan
+            .reliable_sequence;
         pipelined(&mut sv, &mut nc, &["score"; 65], now);
-        let c = sv.clients[0].as_ref().unwrap();
-        assert_eq!(c.netchan.reliable_sequence, before + 1);
+        let c = sv.core.clients[0].as_ref().unwrap();
+        assert_eq!(c.link.netchan.reliable_sequence, before + 1);
         assert!(
             sv.take_outgoing().is_empty(),
             "nothing goes out before a snapshot"
@@ -13145,8 +9539,9 @@ mod tests {
         let mut nc = active(&mut sv, now);
         sv.take_outgoing();
         let room = {
-            let c = sv.clients[0].as_ref().unwrap();
-            MAX_RELIABLE_COMMANDS as i32 - (c.netchan.reliable_sequence as i32 - c.reliable_ack)
+            let c = sv.core.clients[0].as_ref().unwrap();
+            MAX_RELIABLE_COMMANDS as i32
+                - (c.link.netchan.reliable_sequence as i32 - c.link.reliable_ack)
         };
         for i in 0..room {
             sv.send_server_command(0, &format!("v c{i} 1"));
@@ -13201,7 +9596,7 @@ mod tests {
             ),
         );
         assert_eq!(sv.scoreboard(), "b 0 3 -9999");
-        let cs = sv.script.as_ref().unwrap().configstrings();
+        let cs = sv.game.module.script.as_ref().unwrap().configstrings();
         assert_eq!((cs[5].as_str(), cs[6].as_str()), ("3", "-9999"));
     }
 
@@ -13259,10 +9654,11 @@ mod tests {
             // eviction order is defined.
             sv.handle_packet(from, &oob("getinfo x"), now + GLOBAL_PERIOD * i);
         }
-        assert_eq!(sv.limiter.addrs.len(), MAX_BUCKETS);
+        assert_eq!(sv.game.limiter.addrs.len(), MAX_BUCKETS);
         // The least recently seen address went first.
         assert!(
-            !sv.limiter
+            !sv.game
+                .limiter
                 .addrs
                 .contains_key(&std::net::IpAddr::from([10, 0, 0, 0]))
         );
@@ -13296,8 +9692,8 @@ mod tests {
         let spoofer = addr(6);
         let mut forged = Netchan::new(QPORT, nc.challenge);
         let snapshot = |sv: &Server| {
-            let c = sv.clients[0].as_ref().unwrap();
-            (c.netchan.incoming_sequence, c.addr, c.last_packet)
+            let c = sv.core.clients[0].as_ref().unwrap();
+            (c.link.netchan.incoming_sequence, c.link.addr, c.last_packet)
         };
         let before = snapshot(&sv);
 
@@ -13310,7 +9706,7 @@ mod tests {
         // A stale serverId with nothing to resend.
         forged.outgoing_sequence = 0x7fff_fffe;
         let pkt = forged
-            .build_out(i32::from(sv.server_id) ^ 0x01, 0, 0, &eof, &huff)
+            .build_out(i32::from(sv.game.server_id) ^ 0x01, 0, 0, &eof, &huff)
             .unwrap();
         sv.handle_packet(spoofer, &pkt, later);
         assert_eq!(snapshot(&sv), before, "a stale serverId committed state");
@@ -13321,7 +9717,7 @@ mod tests {
         w.write_bits(CLC_CLIENT_COMMAND, 2);
         w.write_long(1);
         let pkt = forged
-            .build_out(i32::from(sv.server_id), 0, 0, &w.into_ops(), &huff)
+            .build_out(i32::from(sv.game.server_id), 0, 0, &w.into_ops(), &huff)
             .unwrap();
         sv.handle_packet(spoofer, &pkt, later);
         assert_eq!(
@@ -13345,6 +9741,9 @@ mod tests {
     fn a_foreign_challenge_cannot_replace_a_live_client() {
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
+        // A loaded level's clock: at 0 the client's slot, written at 0,
+        // ties the unwritten ones and goes first to the next challenge.
+        sv.start_clock_at(300);
         let mut nc = connected(&mut sv, addr(5), now);
         let huff = Huffman::new();
         let mut w = MsgWriter::new(&huff);
@@ -13364,15 +9763,19 @@ mod tests {
         let t2 = t1 + Duration::from_millis(100);
         sv.handle_packet(
             addr(7),
-            &connect_pkt(foreign, QPORT, PROTOCOL_V1.version),
+            &connect_pkt(foreign, QPORT, PROTOCOL_V1.transport.version),
             t2,
         );
         assert!(sv.take_outgoing().is_empty(), "the takeover got a reply");
-        let c = sv.clients[0].as_ref().unwrap();
-        assert_eq!((c.addr, c.netchan.challenge), (addr(5), own));
+        let c = sv.core.clients[0].as_ref().unwrap();
+        assert_eq!((c.link.addr, c.link.netchan.challenge), (addr(5), own));
 
         // The client's own connect retry, same challenge, still resets its slot.
-        sv.handle_packet(addr(5), &connect_pkt(own, QPORT, PROTOCOL_V1.version), t2);
+        sv.handle_packet(
+            addr(5),
+            &connect_pkt(own, QPORT, PROTOCOL_V1.transport.version),
+            t2,
+        );
         assert_eq!(reply_text(&mut sv).0, "connectResponse");
         assert_eq!(sv.client_count(), 1);
 
@@ -13381,36 +9784,39 @@ mod tests {
         let t3 = t2 + RECONNECT_LIMIT + Duration::from_millis(100);
         sv.handle_packet(
             addr(7),
-            &connect_pkt(foreign, QPORT, PROTOCOL_V1.version),
+            &connect_pkt(foreign, QPORT, PROTOCOL_V1.transport.version),
             t3,
         );
         assert_eq!(reply_text(&mut sv).0, "connectResponse");
         assert_eq!(sv.client_count(), 1);
-        let c = sv.clients[0].as_ref().unwrap();
-        assert_eq!((c.addr, c.netchan.challenge), (addr(7), foreign));
+        let c = sv.core.clients[0].as_ref().unwrap();
+        assert_eq!((c.link.addr, c.link.netchan.challenge), (addr(7), foreign));
     }
 
     #[test]
-    fn stale_challenges_expire_when_a_new_one_is_issued() {
+    fn a_challenge_never_expires_and_binds_the_port() {
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
         let old = challenge_for(&mut sv, addr(5), now);
-        // Asking again refreshes the entry rather than issuing a new one.
-        let t1 = now + CHALLENGE_TTL - Duration::from_secs(1);
-        assert_eq!(challenge_for(&mut sv, addr(5), t1), old);
-        let t2 = now + CHALLENGE_TTL + Duration::from_secs(1);
-        challenge_for(&mut sv, addr(6), t2);
-        assert_eq!(sv.challenges.len(), 2, "a refreshed entry was expired");
-
-        let t3 = t1 + CHALLENGE_TTL + Duration::from_secs(1);
-        challenge_for(&mut sv, addr(8), t3);
-        assert_eq!(sv.challenges.len(), 2);
-        assert!(sv.challenges.iter().all(|c| c.addr != addr(5)));
-        sv.handle_packet(addr(5), &connect_pkt(old, QPORT, PROTOCOL_V1.version), t3);
+        // An hour on, asking again gives the same slot (retail has no TTL).
+        let later = now + Duration::from_secs(3600);
+        assert_eq!(challenge_for(&mut sv, addr(5), later), old);
+        // Another port of the same host is another address (0x8080dec).
+        sv.handle_packet(
+            addr(6),
+            &connect_pkt(old, QPORT, PROTOCOL_V1.transport.version),
+            later,
+        );
         assert_eq!(
             reply_text(&mut sv),
             ("error".to_string(), "EXE_BAD_CHALLENGE".to_string())
         );
+        sv.handle_packet(
+            addr(5),
+            &connect_pkt(old, QPORT, PROTOCOL_V1.transport.version),
+            later,
+        );
+        assert_eq!(reply_text(&mut sv).0, "connectResponse");
     }
 
     /// clc_move ops carrying one usercmd, keyed the way the server decodes it.
@@ -13538,8 +9944,8 @@ mod tests {
             let _ = nc.process_in(&pkt, &huff).unwrap();
         }
         // The gamestate's later fragments, which ticks would send one a turn.
-        for c in sv.clients.iter_mut().flatten() {
-            for pkt in c.unsent.drain(..) {
+        for c in sv.core.clients.iter_mut().flatten() {
+            for pkt in c.link.unsent.drain(..) {
                 let _ = nc.process_in(&pkt, &huff).unwrap();
             }
         }
@@ -13567,7 +9973,7 @@ mod tests {
         let pkt = nc.build_out(0, 0, 0, &ack_ops(), &huff).unwrap();
         sv.handle_packet(wan, &pkt, now);
         sv.take_outgoing();
-        sv.clients[0].as_mut().unwrap().unsent.clear();
+        sv.core.clients[0].as_mut().unwrap().link.unsent.clear();
         let mut bare = Vec::new();
         for i in 0..21 {
             sv.tick(now + Duration::from_millis(50 * i));
@@ -13576,12 +9982,15 @@ mod tests {
         assert_eq!(bare, [19], "one keepalive, a second after the gamestate");
         let t = now + Duration::from_millis(1100);
         let ack = nc.incoming_sequence as i32;
-        let ops = move_ops(sv.checksum_feed, ack, NULL_USERCMD);
+        let ops = move_ops(sv.core.checksum_feed, ack, NULL_USERCMD);
         let pkt = nc
-            .build_out(i32::from(sv.server_id), ack, 0, &ops, &huff)
+            .build_out(i32::from(sv.game.server_id), ack, 0, &ops, &huff)
             .unwrap();
         sv.handle_packet(wan, &pkt, t);
-        assert_eq!(sv.clients[0].as_ref().unwrap().state, ClientState::Active);
+        assert_eq!(
+            sv.core.clients[0].as_ref().unwrap().state,
+            ClientState::Active
+        );
         sv.tick(t);
         assert_eq!(
             sv.take_outgoing().len(),
@@ -13601,12 +10010,12 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         // Enough configstrings to pass one fragment.
         for i in 0..40 {
-            sv.configstrings[vcod_common::net::protocol::CS_SOUNDS + 1 + i] =
+            sv.core.configstrings[vcod_common::net::protocol::CS_SOUNDS + 1 + i] =
                 format!("sound/misc/{i:03}_{}", "x".repeat(40));
         }
         let mut nc = connected(&mut sv, addr(5), now);
         let stale = vec![vec![1u8; 8], vec![2u8; 8]];
-        sv.clients[0].as_mut().unwrap().unsent = stale.clone().into();
+        sv.core.clients[0].as_mut().unwrap().link.unsent = stale.clone().into();
         let pkt = nc.build_out(0, 0, 0, &ack_ops(), &huff).unwrap();
         sv.handle_packet(addr(5), &pkt, now);
         let out: Vec<Vec<u8>> = sv.take_outgoing().into_iter().map(|(_, p)| p).collect();
@@ -13628,7 +10037,7 @@ mod tests {
             frames += 1;
         }
         assert!(frames >= 1);
-        assert!(sv.clients[0].as_ref().unwrap().unsent.is_empty());
+        assert!(sv.core.clients[0].as_ref().unwrap().link.unsent.is_empty());
     }
 
     /// `active` plus the first usercmd, which is what puts a client in the
@@ -13638,9 +10047,9 @@ mod tests {
         let huff = Huffman::new();
         let mut nc = active(sv, now);
         let ack = nc.incoming_sequence as i32;
-        let ops = move_ops(sv.checksum_feed, ack, NULL_USERCMD);
+        let ops = move_ops(sv.core.checksum_feed, ack, NULL_USERCMD);
         let pkt = nc
-            .build_out(i32::from(sv.server_id), ack, 0, &ops, &huff)
+            .build_out(i32::from(sv.game.server_id), ack, 0, &ops, &huff)
             .unwrap();
         sv.handle_packet(addr(5), &pkt, now);
         nc
@@ -13653,7 +10062,7 @@ mod tests {
         ring: &mut SnapshotRing,
         now: Instant,
     ) -> vcod_common::net::snapshot::Snapshot {
-        let p = sv.proto;
+        let p = sv.game.proto;
         latest_snapshot_as(sv, nc, ring, now, p)
     }
 
@@ -13728,7 +10137,7 @@ mod tests {
                     ack,
                     0,
                     &move_ops(
-                        sv.checksum_feed,
+                        sv.core.checksum_feed,
                         ack,
                         UserCmd {
                             server_time: cmd_time,
@@ -13783,7 +10192,7 @@ mod tests {
                 ack,
                 0,
                 &move_ops(
-                    sv.checksum_feed,
+                    sv.core.checksum_feed,
                     ack,
                     UserCmd {
                         server_time: 50,
@@ -13829,7 +10238,7 @@ mod tests {
         for _ in 0..4 {
             sv.tick(now);
         }
-        let ring = sv.clients[0]
+        let ring = sv.core.clients[0]
             .as_ref()
             .and_then(|c| c.sim.as_ref())
             .expect("slot 0 has a sim")
@@ -13863,20 +10272,21 @@ mod tests {
             nav_cover: Vec::new(),
         });
         install_script(&mut sv, rt);
-        sv.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs, &crate::defs::V1));
+        sv.game.module.weapon_table =
+            Rc::new(crate::weapons::WeaponTable::load(&fs, &crate::defs::V1));
         let _nc = begun(&mut sv, now);
         sv.tick(now);
         sv.place_client(0, [0.0, 0.0, 64.0], 0.0);
         let frag = crate::configstrings::weapon_index("fraggrenade_mp").unwrap();
-        let def = sv.weapon_table.get(frag).unwrap().clone();
+        let def = sv.game.module.weapon_table.get(frag).unwrap().clone();
         let mut held = crate::weapons::PlayerWeapons::default();
-        held.give(frag, sv.weapon_table.slot(frag));
+        held.give(frag, sv.game.module.weapon_table.slot(frag));
         held.current = frag as u8;
-        let rt = sv.script.as_mut().unwrap();
-        rt.host.weapons = sv.weapon_table.clone();
+        let rt = sv.game.module.script.as_mut().unwrap();
+        rt.host.weapons = sv.game.module.weapon_table.clone();
         rt.host.precache_items_for_test(&["fraggrenade_mp"]);
         rt.host.client_weapons[0] = held;
-        let c = sv.clients[0].as_mut().unwrap();
+        let c = sv.core.clients[0].as_mut().unwrap();
         let sim = c.sim.as_mut().unwrap();
         sim.ps.weapons_held = held.held;
         sim.ps.weapon_slots = held.slots;
@@ -13911,13 +10321,17 @@ mod tests {
         };
         for i in 0..60 {
             let cmd = frag_throw_cmd(i, st, frag);
-            sv.clients[0].as_mut().unwrap().pending.push(cmd.into());
+            sv.core.clients[0]
+                .as_mut()
+                .unwrap()
+                .pending
+                .push(cmd.into());
             // The frame's clock keeps up with the cmds, which `replay_moves`
             // clamps to 200 ms past `level.time`.
-            sv.sv_time_ms = cmd.server_time;
+            sv.core.sv_time_ms = cmd.server_time;
             sv.replay_moves();
-            let rt = sv.script.as_ref().unwrap();
-            let thrown = rt.missiles().entities(sv.proto).next().is_some();
+            let rt = sv.game.module.script.as_ref().unwrap();
+            let thrown = rt.missiles().entities(sv.game.proto).next().is_some();
             if thrown {
                 assert!(
                     !rt.host.client_weapons[0].holds(frag),
@@ -13940,10 +10354,14 @@ mod tests {
         let now = Instant::now();
         for i in 0..20 {
             let cmd = frag_throw_cmd(i, st, frag);
-            sv.clients[0].as_mut().unwrap().pending.push(cmd.into());
+            sv.core.clients[0]
+                .as_mut()
+                .unwrap()
+                .pending
+                .push(cmd.into());
             sv.tick(now);
         }
-        let stood = sv.clients[0]
+        let stood = sv.core.clients[0]
             .as_ref()
             .unwrap()
             .sim
@@ -13956,11 +10374,11 @@ mod tests {
             forward: 127,
             ..release
         };
-        let c = sv.clients[0].as_mut().unwrap();
+        let c = sv.core.clients[0].as_mut().unwrap();
         c.pending.push(release.into());
         c.pending.push(run.into());
         sv.tick(now);
-        let ran = sv.clients[0]
+        let ran = sv.core.clients[0]
             .as_ref()
             .unwrap()
             .sim
@@ -13971,14 +10389,14 @@ mod tests {
             (glam::Vec3::from(ran) - glam::Vec3::from(stood)).length() > 30.0,
             "the run behind the release moved {stood:?} to {ran:?}"
         );
-        let rt = sv.script.as_ref().unwrap();
+        let rt = sv.game.module.script.as_ref().unwrap();
         let (_, e) = rt
             .missiles()
-            .entities(sv.proto)
+            .entities(sv.game.proto)
             .next()
             .expect("the release threw nothing");
-        let traj = vcod_common::net::trajectory::Trajectory::read(&e, sv.proto, "pos");
-        assert_eq!(traj.tr_time, sv.sv_time_ms - FRAME_MS);
+        let traj = vcod_common::net::trajectory::Trajectory::read(&e, sv.game.proto, "pos");
+        assert_eq!(traj.tr_time, sv.core.sv_time_ms - FRAME_MS);
         assert_eq!(
             [traj.base.x, traj.base.y],
             [stood[0].trunc(), stood[1].trunc()],
@@ -14015,12 +10433,16 @@ mod tests {
             ..NULL_USERCMD
         };
         fn sim(sv: &Server) -> &ClientSim {
-            sv.clients[0].as_ref().unwrap().sim.as_ref().unwrap()
+            sv.core.clients[0].as_ref().unwrap().sim.as_ref().unwrap()
         }
         let mut i = 0;
         while sim(&sv).ps.grenade_time_left_ms == 0 {
             assert!(i < 60, "the pin never came out");
-            sv.clients[0].as_mut().unwrap().pending.push(cook(i).into());
+            sv.core.clients[0]
+                .as_mut()
+                .unwrap()
+                .pending
+                .push(cook(i).into());
             sv.replay_moves();
             i += 1;
         }
@@ -14029,25 +10451,29 @@ mod tests {
             stood[0].fract() != 0.0 && stood[1].fract() != 0.0,
             "the cook settled on the unit grid at {stood:?}"
         );
-        let rt = sv.script.as_mut().unwrap();
+        let rt = sv.game.module.script.as_mut().unwrap();
         let hurt = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
         rt.register_hurt_for_test(
             hurt,
             crate::game::trigger::TriggerShape::boxed([-64.0, -64.0, -8.0], [64.0, 64.0, 64.0]),
             1000,
         );
-        sv.clients[0].as_mut().unwrap().pending.push(cook(i).into());
+        sv.core.clients[0]
+            .as_mut()
+            .unwrap()
+            .pending
+            .push(cook(i).into());
         sv.replay_moves();
 
         let snapped = glam::Vec3::from(stood).trunc();
         assert_eq!(snapped.truncate(), glam::Vec2::new(10.0, -20.0));
-        let rt = sv.script.as_mut().unwrap();
+        let rt = sv.game.module.script.as_mut().unwrap();
         let (_, e) = rt
             .missiles()
-            .entities(sv.proto)
+            .entities(sv.game.proto)
             .next()
             .expect("the death dropped no grenade");
-        let traj = vcod_common::net::trajectory::Trajectory::read(&e, sv.proto, "pos");
+        let traj = vcod_common::net::trajectory::Trajectory::read(&e, sv.game.proto, "pos");
         assert_eq!(
             traj.base,
             snapped + glam::Vec3::Z * 40.0,
@@ -14065,7 +10491,7 @@ mod tests {
         assert_eq!([at[0], at[1]], [snapped.x, snapped.y]);
         // `G_SetOrigin(body, self->r.currentOrigin)` (5.2): the corpse too.
         let (_, body) = rt.host.bodies.entities().next().expect("no corpse");
-        let at = body.origin(sv.proto);
+        let at = body.origin(sv.game.proto);
         assert_eq!([at[0], at[1]], [snapped.x, snapped.y]);
     }
 
@@ -14087,8 +10513,8 @@ mod tests {
         let Some((mut sv, st, frag)) = last_frag_in_hand_under(rt) else {
             return;
         };
-        let def = sv.weapon_table.get(frag).unwrap().clone();
-        let rt = sv.script.as_mut().unwrap();
+        let def = sv.game.module.weapon_table.get(frag).unwrap().clone();
+        let rt = sv.game.module.script.as_mut().unwrap();
         let hurt = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
         rt.register_hurt_for_test(
             hurt,
@@ -14100,16 +10526,39 @@ mod tests {
             weapon: frag as u8,
             ..NULL_USERCMD
         };
-        sv.clients[0].as_mut().unwrap().pending.push(cmd.into());
+        sv.core.clients[0]
+            .as_mut()
+            .unwrap()
+            .pending
+            .push(cmd.into());
         sv.replay_moves();
         fn sim(sv: &Server) -> &ClientSim {
-            sv.clients[0].as_ref().unwrap().sim.as_ref().unwrap()
+            sv.core.clients[0].as_ref().unwrap().sim.as_ref().unwrap()
         }
         let full = def.clip_size as i16;
         assert_eq!(sim(&sv).ps.ammoclip[def.clip_index], full, "the give");
-        assert_eq!(sv.script.as_ref().unwrap().host.client_spawns.len(), 1);
+        assert_eq!(
+            sv.game
+                .module
+                .script
+                .as_ref()
+                .unwrap()
+                .host
+                .client_spawns
+                .len(),
+            1
+        );
         sv.tick(Instant::now() + Duration::from_millis(50));
-        assert!(sv.script.as_ref().unwrap().host.client_spawns.is_empty());
+        assert!(
+            sv.game
+                .module
+                .script
+                .as_ref()
+                .unwrap()
+                .host
+                .client_spawns
+                .is_empty()
+        );
         let at = sim(&sv).origin();
         assert!(at[0] > 300.0, "no spawn ran: {at:?}");
         assert_eq!(sim(&sv).ps.ammoclip[def.clip_index], full, "emptied");
@@ -14139,11 +10588,15 @@ mod tests {
         let now = Instant::now();
         for i in 0..60 {
             let cmd = frag_throw_cmd(i, st, frag);
-            sv.clients[0].as_mut().unwrap().pending.push(cmd.into());
+            sv.core.clients[0]
+                .as_mut()
+                .unwrap()
+                .pending
+                .push(cmd.into());
             sv.tick(now);
             if sv.script_log().iter().any(|l| l.trim() == "regive") {
                 assert!(
-                    sv.script.as_ref().unwrap().host.client_weapons[0].holds(frag),
+                    sv.game.module.script.as_ref().unwrap().host.client_weapons[0].holds(frag),
                     "the frag the script gave back was taken again"
                 );
                 return;
@@ -14177,7 +10630,8 @@ mod tests {
             &mut sv,
             crate::game::script::ScriptRuntime::for_test("main() {}"),
         );
-        sv.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs, &crate::defs::V1));
+        sv.game.module.weapon_table =
+            Rc::new(crate::weapons::WeaponTable::load(&fs, &crate::defs::V1));
         let _nc = begun(&mut sv, now);
         sv.tick(now);
         sv.place_client(0, [0.0, 0.0, 1.0], 0.0);
@@ -14187,13 +10641,13 @@ mod tests {
             index("thompson_mp"),
             index("colt_mp"),
         );
-        let table = sv.weapon_table.clone();
+        let table = sv.game.module.weapon_table.clone();
         let mut held = crate::weapons::PlayerWeapons::default();
         for (w, slot) in [(carbine, 1), (thompson, 2), (colt, 3)] {
             held.give(w, slot);
         }
         held.current = colt as u8;
-        let rt = sv.script.as_mut().unwrap();
+        let rt = sv.game.module.script.as_mut().unwrap();
         rt.host.weapons = table.clone();
         rt.host
             .precache_items_for_test(&["m1carbine_mp", "thompson_mp", "colt_mp"]);
@@ -14205,7 +10659,7 @@ mod tests {
             takedamage: true,
         };
         let pf = rt.place_item("mpweapon_panzerfaust", [40.0, 0.0, 50.0], 0);
-        let c = sv.clients[0].as_mut().unwrap();
+        let c = sv.core.clients[0].as_mut().unwrap();
         let sim = c.sim.as_mut().unwrap();
         sim.ps.weapons_held = held.held;
         sim.ps.weapon_slots = held.slots;
@@ -14223,11 +10677,11 @@ mod tests {
             ..NULL_USERCMD
         };
         c.pending.push(cmd.into());
-        sv.sv_time_ms = cmd.server_time;
+        sv.core.sv_time_ms = cmd.server_time;
         sv.replay_moves();
-        let sim = sv.clients[0].as_ref().unwrap().sim.as_ref().unwrap();
+        let sim = sv.core.clients[0].as_ref().unwrap().sim.as_ref().unwrap();
         assert_eq!(sim.ps.weapon, thompson as u8, "the switch did not land");
-        let rt = sv.script.as_mut().unwrap();
+        let rt = sv.game.module.script.as_mut().unwrap();
         assert!(rt.host.ents.get(pf).unwrap().item.unwrap().taken);
         let dropped: Vec<usize> = rt
             .host
@@ -14264,11 +10718,11 @@ mod tests {
         let _nc = begun(&mut sv, now);
         sv.tick(now);
         sv.place_client(0, [0.0, 0.0, 1.0], 0.0);
-        let rt = sv.script.as_mut().unwrap();
+        let rt = sv.game.module.script.as_mut().unwrap();
         rt.set_client_state_for_test(0, "playing");
         rt.host.cvars.set("g_speed", "250.9");
         sv.tick(now + Duration::from_millis(50));
-        let c = sv.clients[0].as_mut().unwrap();
+        let c = sv.core.clients[0].as_mut().unwrap();
         assert_eq!(c.sim.as_ref().unwrap().ps.speed, 250.0);
         let st = c.last_processed_st;
         for i in 1..=20 {
@@ -14280,7 +10734,7 @@ mod tests {
             c.pending.push(cmd.into());
         }
         sv.replay_moves();
-        let sim = sv.clients[0].as_ref().unwrap().sim.as_ref().unwrap();
+        let sim = sv.core.clients[0].as_ref().unwrap().sim.as_ref().unwrap();
         let h = sim.ps.velocity.truncate().length();
         assert!((h - 250.0).abs() < 1.0, "{h}");
         let w = sim.to_wire(&PROTOCOL_V1, 0, 0);
@@ -14312,14 +10766,14 @@ mod tests {
             let _nc = begun(&mut sv, now);
             sv.tick(now);
             sv.place_client(0, [0.0, 0.0, 0.125], 0.0);
-            let rt = sv.script.as_mut().unwrap();
+            let rt = sv.game.module.script.as_mut().unwrap();
             rt.set_client_state_for_test(0, "playing");
             rt.host.cvars.set("g_gravity", gravity);
             sv.tick(now + Duration::from_millis(50));
-            let st = sv.clients[0].as_ref().unwrap().last_processed_st;
+            let st = sv.core.clients[0].as_ref().unwrap().last_processed_st;
             let mut top = 0.0f32;
             for i in 1..=60 {
-                sv.clients[0].as_mut().unwrap().pending.push(
+                sv.core.clients[0].as_mut().unwrap().pending.push(
                     UserCmd {
                         server_time: st + 50 * i,
                         up: if i == 1 { 127 } else { 0 },
@@ -14328,7 +10782,7 @@ mod tests {
                     .into(),
                 );
                 sv.tick(now + Duration::from_millis(50 + 50 * i as u64));
-                let sim = sv.clients[0].as_ref().unwrap().sim.as_ref().unwrap();
+                let sim = sv.core.clients[0].as_ref().unwrap().sim.as_ref().unwrap();
                 top = top.max(sim.ps.origin.z);
                 if i > 1 && sim.ps.on_ground {
                     let w = sim.to_wire(&PROTOCOL_V1, 0, 0);
@@ -14366,17 +10820,18 @@ mod tests {
             &mut sv,
             crate::game::script::ScriptRuntime::for_test("main() {}"),
         );
-        sv.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs, &crate::defs::V1));
+        sv.game.module.weapon_table =
+            Rc::new(crate::weapons::WeaponTable::load(&fs, &crate::defs::V1));
         let _nc = begun(&mut sv, now);
         sv.tick(now);
         sv.place_client(0, [0.0, 0.0, 1.0], 0.0);
         let carbine = crate::configstrings::weapon_index("m1carbine_mp").unwrap();
-        let def = sv.weapon_table.get(carbine).unwrap().clone();
+        let def = sv.game.module.weapon_table.get(carbine).unwrap().clone();
         let mut held = crate::weapons::PlayerWeapons::default();
-        held.give(carbine, sv.weapon_table.slot(carbine));
+        held.give(carbine, sv.game.module.weapon_table.slot(carbine));
         held.current = carbine as u8;
-        let rt = sv.script.as_mut().unwrap();
-        rt.host.weapons = sv.weapon_table.clone();
+        let rt = sv.game.module.script.as_mut().unwrap();
+        rt.host.weapons = sv.game.module.weapon_table.clone();
         rt.host.precache_items_for_test(&["fraggrenade_mp"]);
         rt.host.client_weapons[0] = held;
         rt.host.client_vitals[0] = crate::game::host::Vitals {
@@ -14386,7 +10841,7 @@ mod tests {
             takedamage: true,
         };
         rt.place_item("mpweapon_m1carbine", [0.0, 0.0, 1.0], 20);
-        let c = sv.clients[0].as_mut().unwrap();
+        let c = sv.core.clients[0].as_mut().unwrap();
         let sim = c.sim.as_mut().unwrap();
         sim.ps.weapons_held = held.held;
         sim.ps.weapon_slots = held.slots;
@@ -14404,7 +10859,7 @@ mod tests {
             c.pending.push(cmd.into());
         }
         sv.replay_moves();
-        let sim = sv.clients[0].as_ref().unwrap().sim.as_ref().unwrap();
+        let sim = sv.core.clients[0].as_ref().unwrap().sim.as_ref().unwrap();
         assert_eq!(sim.ps.ammo[def.ammo_index], 30, "the grab's ammo");
         let ring = sim.ring;
         let drained: Vec<i32> = (0..ring.seq)
@@ -14443,16 +10898,16 @@ mod tests {
         };
         let pkt = nc
             .build_out(
-                i32::from(sv.server_id),
+                i32::from(sv.game.server_id),
                 ack,
                 0,
-                &move_ops(sv.checksum_feed, ack, cmd),
+                &move_ops(sv.core.checksum_feed, ack, cmd),
                 &Huffman::new(),
             )
             .unwrap();
         sv.handle_packet(addr(5), &pkt, now);
         sv.tick(now + Duration::from_millis(50));
-        let rt = sv.script.as_mut().unwrap();
+        let rt = sv.game.module.script.as_mut().unwrap();
         let ent = rt.client_entity(0).expect("client 0 has an entity");
         assert_eq!(rt.field_str(ent, "angles"), "(0.00, 135.00, 0.00)");
     }
@@ -14568,7 +11023,7 @@ mod tests {
                 0x10,
                 ack,
                 0,
-                &move_ops(sv.checksum_feed, ack, entering),
+                &move_ops(sv.core.checksum_feed, ack, entering),
                 &Huffman::new(),
             )
             .unwrap(),
@@ -14610,7 +11065,7 @@ mod tests {
         // Two messages, so the base has to chain across them the way the
         // client's does; `begun` entered on a null cmd, which is where a
         // fresh chain starts.
-        let mut chain = MoveChain::new(sv.checksum_feed);
+        let mut chain = MoveChain::new(sv.core.checksum_feed);
         let later = now + std::time::Duration::from_millis(50);
         let huff = Huffman::new();
         let ack = nc.incoming_sequence as i32;
@@ -14705,7 +11160,7 @@ mod tests {
                 0x10,
                 ack,
                 0,
-                &move_ops_cmds(sv.checksum_feed, ack, &cmds),
+                &move_ops_cmds(sv.core.checksum_feed, ack, &cmds),
                 &Huffman::new(),
             )
             .unwrap(),
@@ -14743,7 +11198,7 @@ mod tests {
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
-        let mut chain = MoveChain::new(sv.checksum_feed);
+        let mut chain = MoveChain::new(sv.core.checksum_feed);
         let mut tick_at = now + std::time::Duration::from_millis(50);
 
         let ack = nc.incoming_sequence as i32;
@@ -14820,7 +11275,7 @@ mod tests {
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
-        let mut chain = MoveChain::new(sv.checksum_feed);
+        let mut chain = MoveChain::new(sv.core.checksum_feed);
         let _ = latest_snapshot(&mut sv, &mut nc, &mut ring, now);
 
         let cmds: Vec<UserCmd> = (0..100)
@@ -14847,9 +11302,9 @@ mod tests {
         );
         assert!(s.valid);
         assert!(
-            sv.clients[0].as_ref().unwrap().pending.len() <= 2,
+            sv.core.clients[0].as_ref().unwrap().pending.len() <= 2,
             "flood left {} cmds queued",
-            sv.clients[0].as_ref().unwrap().pending.len()
+            sv.core.clients[0].as_ref().unwrap().pending.len()
         );
         let s2 = latest_snapshot(
             &mut sv,
@@ -14905,7 +11360,7 @@ mod tests {
                 ack,
                 0,
                 &move_ops(
-                    sv.checksum_feed,
+                    sv.core.checksum_feed,
                     ack,
                     UserCmd {
                         server_time: 500,
@@ -14936,7 +11391,7 @@ mod tests {
                 0x10,
                 ack,
                 0,
-                &move_ops_omit_angles(sv.checksum_feed, ack, 520, 20),
+                &move_ops_omit_angles(sv.core.checksum_feed, ack, 520, 20),
                 &Huffman::new(),
             )
             .unwrap(),
@@ -14984,10 +11439,10 @@ mod tests {
             nav_cover: Vec::new(),
         });
         let mut nc = begun(&mut sv, now);
-        let sim = sv.clients[0].as_mut().unwrap().sim.as_mut().unwrap();
+        let sim = sv.core.clients[0].as_mut().unwrap().sim.as_mut().unwrap();
         sim.become_player([0.0, 0.0, 0.125], 0.0, [0; 3]);
         let mut ring = SnapshotRing::new();
-        let mut chain = MoveChain::new(sv.checksum_feed);
+        let mut chain = MoveChain::new(sv.core.checksum_feed);
         let mut t = now;
         let mut seen = Vec::new();
         for i in 0..40 {
@@ -15003,7 +11458,7 @@ mod tests {
             let pkt = nc.build_out(0x10, ack, 0, &ops, &Huffman::new()).unwrap();
             sv.handle_packet(addr(5), &pkt, t);
             t += std::time::Duration::from_millis(50);
-            sv.sv_time_ms = st;
+            sv.core.sv_time_ms = st;
             let s = latest_snapshot_as(&mut sv, &mut nc, &mut ring, t, &PROTOCOL_V22);
             let ps = &s.ps;
             seen.push((
@@ -15038,10 +11493,10 @@ mod tests {
                 nav_cover: Vec::new(),
             });
             let mut nc = begun(&mut sv, now);
-            let sim = sv.clients[0].as_mut().unwrap().sim.as_mut().unwrap();
+            let sim = sv.core.clients[0].as_mut().unwrap().sim.as_mut().unwrap();
             sim.become_player([0.0, 0.0, 0.125], 0.0, [0; 3]);
             let mut ring = SnapshotRing::new();
-            let mut chain = MoveChain::new(sv.checksum_feed);
+            let mut chain = MoveChain::new(sv.core.checksum_feed);
             let mut t = now;
             let mut penalty = Vec::new();
             for i in 0..30 {
@@ -15057,13 +11512,13 @@ mod tests {
                 let pkt = nc.build_out(0x10, ack, 0, &ops, &Huffman::new()).unwrap();
                 sv.handle_packet(addr(5), &pkt, t);
                 t += std::time::Duration::from_millis(50);
-                sv.sv_time_ms = st;
+                sv.core.sv_time_ms = st;
                 let s = latest_snapshot_as(&mut sv, &mut nc, &mut ring, t, decode);
                 let flags = s.ps.field_i32(decode, "pm_flags");
                 penalty.push((flags & 0x2000 != 0, s.ps.field_i32(decode, "pm_time")));
             }
             let armed = penalty.iter().filter(|(on, time)| *on && *time > 0).count();
-            if p.version == PROTOCOL_V6.version {
+            if p.transport.version == PROTOCOL_V6.transport.version {
                 assert!(armed > 0, "{penalty:?}");
                 assert!(!penalty[5].0, "no penalty before the jump");
             } else {
@@ -15089,7 +11544,7 @@ mod tests {
         });
         let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
-        let mut chain = MoveChain::new(sv.checksum_feed);
+        let mut chain = MoveChain::new(sv.core.checksum_feed);
         let p = &PROTOCOL_V1;
 
         let ack = nc.incoming_sequence as i32;
@@ -15136,7 +11591,7 @@ mod tests {
         );
         // A clock the burst's last cmd is within 200 ms of: the earliest
         // cmds clamp up to 1000 ms behind it, and their frames run as one.
-        sv.sv_time_ms = 1900;
+        sv.core.sv_time_ms = 1900;
         let s2 = latest_snapshot(
             &mut sv,
             &mut nc,
@@ -15184,7 +11639,7 @@ mod tests {
                 ack,
                 0,
                 &move_ops(
-                    sv.checksum_feed,
+                    sv.core.checksum_feed,
                     ack,
                     UserCmd {
                         server_time: 500,
@@ -15222,7 +11677,7 @@ mod tests {
                 0x10,
                 ack,
                 0,
-                &move_ops_omit_angles(sv.checksum_feed, ack, 520, 20),
+                &move_ops_omit_angles(sv.core.checksum_feed, ack, 520, 20),
                 &Huffman::new(),
             )
             .unwrap(),
@@ -15272,6 +11727,44 @@ mod tests {
         }
         assert_eq!(lan_n, 22);
         assert_eq!(wan_n, 2, "a keepalive at 0 and at 1000 ms");
+    }
+
+    /// `SV_SendClientMessages` (0x809045c) is one pass in slot order
+    /// whatever each slot's state: a client not in the world at slot 0,
+    /// or a zombie there, is sent its message before slot 1's snapshot
+    /// (cod11-server-handshake.md, "The order of a frame's messages").
+    #[test]
+    fn a_frames_messages_go_out_in_slot_order() {
+        let t = Instant::now();
+        let low = addr(5);
+        // Another host: the netchan finds a client by ip and qport.
+        let high = SocketAddr::from(([127, 0, 0, 2], 5));
+        let mut sv = Server::new(cfg(), t);
+        sv.set_cvar("rconpassword", "secret");
+        connected(&mut sv, low, t);
+        active_at(&mut sv, high, t);
+        sv.take_outgoing();
+        let order = |sv: &mut Server, at| {
+            sv.tick(at);
+            let out = sv.take_outgoing();
+            out.iter().map(|(to, p)| (*to, p.len())).collect::<Vec<_>>()
+        };
+        let sent = order(&mut sv, t);
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert_eq!(sent[0], (low, 9), "slot 0's bare message first: {sent:?}");
+        assert_eq!(sent[1].0, high);
+
+        let mut sv = Server::new(cfg(), t);
+        sv.set_cvar("rconpassword", "secret");
+        active_at(&mut sv, low, t);
+        active_at(&mut sv, high, t);
+        sv.take_outgoing();
+        rcon(&mut sv, "secret clientkick 0", t);
+        let sent = order(&mut sv, t);
+        assert!(sv.game.zombies[0].is_some());
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert_eq!(sent[0].0, low, "the zombie's message first: {sent:?}");
+        assert_eq!(sent[1].0, high);
     }
 
     /// A spectator in slot 0 on a real netchan and two players put straight
@@ -15328,7 +11821,7 @@ mod tests {
             });
             install_script(&mut sv, rt);
             let nc = begun(&mut sv, now);
-            let chain = MoveChain::new(sv.checksum_feed);
+            let chain = MoveChain::new(sv.core.checksum_feed);
             let mut rig = FollowRig {
                 sv,
                 nc,
@@ -15349,7 +11842,7 @@ mod tests {
         }
 
         fn script(&mut self) -> &mut crate::game::script::ScriptRuntime {
-            self.sv.script.as_mut().unwrap()
+            self.sv.game.module.script.as_mut().unwrap()
         }
 
         fn add_player(&mut self, slot: usize, origin: [f32; 3], yaw: f32) {
@@ -15364,7 +11857,7 @@ mod tests {
             let mut sim = ClientSim::spectator(origin, yaw, [0; 3]);
             sim.become_player(origin, yaw, [0; 3]);
             c.sim = Some(sim);
-            self.sv.clients[slot] = Some(c);
+            self.sv.core.clients[slot] = Some(c);
             self.script().push_client_event(ClientEvent::Connect {
                 slot,
                 name: format!("p{slot}"),
@@ -15372,7 +11865,7 @@ mod tests {
         }
 
         fn sim(&self, slot: usize) -> &ClientSim {
-            self.sv.clients[slot]
+            self.sv.core.clients[slot]
                 .as_ref()
                 .unwrap()
                 .sim
@@ -15381,7 +11874,7 @@ mod tests {
         }
 
         fn sim_mut(&mut self, slot: usize) -> &mut ClientSim {
-            self.sv.clients[slot]
+            self.sv.core.clients[slot]
                 .as_mut()
                 .unwrap()
                 .sim
@@ -15403,7 +11896,13 @@ mod tests {
             let ops = self.chain.ops(ack, &[cmd]);
             let pkt = self
                 .nc
-                .build_out(i32::from(self.sv.server_id), ack, 0, &ops, &Huffman::new())
+                .build_out(
+                    i32::from(self.sv.game.server_id),
+                    ack,
+                    0,
+                    &ops,
+                    &Huffman::new(),
+                )
                 .unwrap();
             self.sv.handle_packet(addr(5), &pkt, self.now);
             latest_snapshot_as(
@@ -15530,7 +12029,12 @@ mod tests {
         }
         rig.script().set_client_team_for_test(1, "axis");
         let called_at = rig.step(0).server_time;
-        let seq = rig.sv.clients[1].as_ref().unwrap().last_client_command + 1;
+        let seq = rig.sv.core.clients[1]
+            .as_ref()
+            .unwrap()
+            .link
+            .last_client_command
+            + 1;
         assert!(rig.sv.client_command(1, seq, "matchtimeout".into()));
         let cmds = rig.commands();
         // The rig's own unacked `d 0` and `d 1` ride along; the timeout's
@@ -15565,7 +12069,7 @@ mod tests {
             "300 + 200 ms on svs.time, and the frame past it"
         );
         assert_eq!(rig.sv.configstring(1628), "");
-        assert_eq!(rig.sv.paused_ms, frozen * FRAME_MS);
+        assert_eq!(rig.sv.game.paused_ms, frozen * FRAME_MS);
     }
 
     /// Retail's run (docs/research/cod11-spectator-follow.md): an attack
@@ -15862,8 +12366,9 @@ mod tests {
         let tr = e2.field_i32(&PROTOCOL_V1, "pos.trTime");
         let archived_tr = rig
             .sv
+            .game
             .archive
-            .frame(rig.sv.archive.lookup(&mut 1000).unwrap())
+            .frame(rig.sv.game.archive.lookup(&mut 1000).unwrap())
             .unwrap()
             .world
             .culled[&2]
@@ -16241,7 +12746,12 @@ mod tests {
         let mut answered = 0;
         for at in [t, t + Duration::from_millis(510)] {
             let pkt = oob("rcon pw bogus_cmd");
-            sv.handle_packet_read(addr(9), &pkt, tick, at, at);
+            let read = crate::engine::Arrival {
+                now: tick,
+                arrived: at,
+                read: at,
+            };
+            sv.packet_read(addr(9), &pkt, read);
             answered += sv.take_outgoing().len();
         }
         assert_eq!(answered, 2);
@@ -16261,25 +12771,30 @@ mod tests {
         sv.set_cvar("sv_timeout", "1");
         let _nc = active(&mut sv, t);
         sv.take_outgoing();
-        let last = sv.sv_time_ms;
-        sv.clients[0].as_mut().unwrap().last_packet_ms = last + 400;
+        let last = sv.core.sv_time_ms;
+        sv.core.clients[0].as_mut().unwrap().link.last_packet_ms = last + 400;
         sv.tick(t);
-        assert_eq!(sv.clients[0].as_ref().unwrap().last_packet_ms, last + 50);
-        let stale_at = |sv: &Server| sv.sv_time_ms - sv.clients[0].as_ref().unwrap().last_packet_ms;
+        assert_eq!(
+            sv.core.clients[0].as_ref().unwrap().link.last_packet_ms,
+            last + 50
+        );
+        let stale_at = |sv: &Server| {
+            sv.core.sv_time_ms - sv.core.clients[0].as_ref().unwrap().link.last_packet_ms
+        };
         while stale_at(&sv) <= 1000 {
             sv.tick(t);
         }
-        assert_eq!(sv.clients[0].as_ref().unwrap().timeout_count, 1);
+        assert_eq!(sv.core.clients[0].as_ref().unwrap().link.timeout_count, 1);
         // From a fresh count, the sixth stale frame drops.
-        sv.clients[0].as_mut().unwrap().last_packet_ms = sv.sv_time_ms - 1001;
-        sv.clients[0].as_mut().unwrap().timeout_count = 0;
+        sv.core.clients[0].as_mut().unwrap().link.last_packet_ms = sv.core.sv_time_ms - 1001;
+        sv.core.clients[0].as_mut().unwrap().link.timeout_count = 0;
         for _ in 0..5 {
             sv.tick(t);
             assert_eq!(sv.client_count(), 1);
         }
         sv.tick(t);
         assert_eq!(sv.client_count(), 0);
-        assert!(sv.zombies[0].is_none());
+        assert!(sv.game.zombies[0].is_none());
     }
 
     /// `SV_DropClient` runs the game's `ClientDisconnect` inside the drop, so
@@ -16304,8 +12819,10 @@ mod tests {
             );
             sv.set_cvar("sv_timeout", "1");
             let mut watcher = begun(&mut sv, t);
-            sv.clients[1] = Some(Client::new(addr(6), 0x3001, 0, "\\name\\quiet".into(), t));
-            sv.script
+            sv.core.clients[1] = Some(Client::new(addr(6), 0x3001, 0, "\\name\\quiet".into(), t));
+            sv.game
+                .module
+                .script
                 .as_mut()
                 .unwrap()
                 .push_client_event(ClientEvent::Connect {
@@ -16315,9 +12832,9 @@ mod tests {
             sv.tick(t);
             sv.take_outgoing();
             let huff = Huffman::new();
-            sv.clients[1].as_mut().unwrap().last_packet_ms = sv.sv_time_ms - 1001;
-            sv.clients[1].as_mut().unwrap().timeout_count = 5;
-            sv.clients[0].as_mut().unwrap().last_packet_ms = sv.sv_time_ms;
+            sv.core.clients[1].as_mut().unwrap().link.last_packet_ms = sv.core.sv_time_ms - 1001;
+            sv.core.clients[1].as_mut().unwrap().link.timeout_count = 5;
+            sv.core.clients[0].as_mut().unwrap().link.last_packet_ms = sv.core.sv_time_ms;
             sv.tick(t);
             assert_eq!(sv.client_count(), 1);
             let out = sv.take_outgoing();
@@ -16330,7 +12847,11 @@ mod tests {
             } else {
                 [notice, gone]
             };
-            assert!(cmds.ends_with(&want), "{}: {cmds:?}", proto.version);
+            assert!(
+                cmds.ends_with(&want),
+                "{}: {cmds:?}",
+                proto.transport.version
+            );
         }
     }
 
@@ -16366,7 +12887,12 @@ mod tests {
         // A different address finds no free slot while the zombie holds 0.
         sv.tick(t1);
         sv.take_outgoing();
-        let seq = sv.zombies[0].as_ref().unwrap().netchan.reliable_sequence as i32;
+        let seq = sv.game.zombies[0]
+            .as_ref()
+            .unwrap()
+            .link
+            .netchan
+            .reliable_sequence as i32;
         let ack = nc.incoming_sequence as i32;
         sv.handle_packet(
             addr(5),
@@ -16386,11 +12912,11 @@ mod tests {
         // frames have run since the kick.
         for frame in 4..=40 {
             sv.tick(t1);
-            assert!(sv.zombies[0].is_some(), "frame {frame}");
+            assert!(sv.game.zombies[0].is_some(), "frame {frame}");
             sv.take_outgoing();
         }
         sv.tick(t1);
-        assert!(sv.zombies[0].is_none());
+        assert!(sv.game.zombies[0].is_none());
         assert!(sv.take_outgoing().is_empty());
     }
 
@@ -16407,12 +12933,15 @@ mod tests {
         let wan = SocketAddr::from(([203, 0, 113, 9], 27960));
         let mut nc = active_at(&mut sv, wan, t);
         let ack = nc.incoming_sequence as i32;
-        let ops = move_ops(sv.checksum_feed, ack, NULL_USERCMD);
+        let ops = move_ops(sv.core.checksum_feed, ack, NULL_USERCMD);
         let pkt = nc
-            .build_out(i32::from(sv.server_id), ack, 0, &ops, &huff)
+            .build_out(i32::from(sv.game.server_id), ack, 0, &ops, &huff)
             .unwrap();
         sv.handle_packet(wan, &pkt, t);
-        assert_eq!(sv.clients[0].as_ref().unwrap().state, ClientState::Active);
+        assert_eq!(
+            sv.core.clients[0].as_ref().unwrap().state,
+            ClientState::Active
+        );
         sv.tick(t);
         sv.take_outgoing();
         let kick = t + Duration::from_millis(1000);
@@ -16452,7 +12981,7 @@ mod tests {
                 valid: true,
             });
         }
-        c.netchan.outgoing_sequence = 41;
+        c.link.netchan.outgoing_sequence = 41;
         let pkts = zombie_message(&mut c, 2050, 4, p, &huff);
         let mut nc = Netchan::new(1, 7);
         nc.incoming_sequence = 40;
@@ -16520,10 +13049,10 @@ mod tests {
         let _nc = active(&mut sv, t);
         sv.drop_client(0, "EXE_DISCONNECTED");
         let _ = connected(&mut sv, SocketAddr::from(([10, 0, 0, 2], 5)), t);
-        assert!(sv.clients[0].is_none() && sv.clients[1].is_some());
+        assert!(sv.core.clients[0].is_none() && sv.core.clients[1].is_some());
         let t2 = t + RECONNECT_LIMIT + Duration::from_millis(100);
         let _ = connected(&mut sv, addr(5), t2);
-        assert!(sv.clients[0].is_some() && sv.zombies[0].is_none());
+        assert!(sv.core.clients[0].is_some() && sv.game.zombies[0].is_none());
     }
 
     fn local_master(_: &str) -> Option<SocketAddr> {
@@ -16585,7 +13114,7 @@ mod tests {
             "print\n0:vcod EXE_PLAYERKICKED\n"
         );
         assert_eq!(sv.client_count(), 0);
-        assert!(sv.zombies[0].is_some());
+        assert!(sv.game.zombies[0].is_some());
     }
 
     /// `set` writes the running level's table and a bare name reads it back
@@ -16598,7 +13127,7 @@ mod tests {
             &mut sv,
             crate::game::script::ScriptRuntime::for_test("main() {}"),
         );
-        if let Some(rt) = sv.script.as_mut() {
+        if let Some(rt) = sv.game.module.script.as_mut() {
             rt.host.cvars.set("g_gametype", "dm");
             rt.host.cvars.set("scr_dm_timelimit", "30");
         }
@@ -16712,12 +13241,15 @@ mod tests {
             assert_eq!(ask(&mut sv, line), format!("print\n{want}"), "{line}");
         }
         assert_eq!(sv.client_count(), 1);
-        assert!(sv.bans.contains(std::net::Ipv4Addr::LOCALHOST));
+        // A LAN client has no guid: nothing is kept and nothing refused.
+        assert_eq!(sv.core.bans.unban("vcod"), None);
         sv.handle_packet(addr(6), &oob("getchallenge"), at);
         assert_eq!(reply(&mut sv).1, "challengeResponse");
 
         let wan = SocketAddr::from(([203, 0, 113, 7], 28960));
-        sv.bans.add(std::net::Ipv4Addr::new(203, 0, 113, 7), "");
+        sv.core
+            .bans
+            .append(guid_of(crate::engine::Lan::Cod1, wan), "");
         sv.handle_packet(wan, &oob("getchallenge"), at);
         let (to, cmd, rest) = reply(&mut sv);
         assert_eq!(
@@ -16735,8 +13267,9 @@ mod tests {
         let mut sv = Server::new(cfg(), t);
         let ip = std::net::Ipv4Addr::new(203, 0, 113, 7);
         let wan = SocketAddr::from((ip, 28960));
-        let now = sv.svs_time_ms();
-        sv.temp_bans.push((ip, now.wrapping_sub(300_000)));
+        let now = sv.core.sv_time_ms;
+        let guid = guid_of(crate::engine::Lan::Cod1, wan);
+        sv.core.temp_bans.add(guid, now.wrapping_sub(300_000));
         sv.handle_packet(wan, &oob("getchallenge"), t);
         let (_, cmd, rest) = reply(&mut sv);
         assert_eq!(
@@ -16746,7 +13279,8 @@ mod tests {
                 &b"\x15You are temporarily banned from this server"[..]
             )
         );
-        sv.temp_bans[0].1 = now.wrapping_sub(300_001);
+        sv.core.temp_bans = crate::engine::bans::TempBans::default();
+        sv.core.temp_bans.add(guid, now.wrapping_sub(300_001));
         sv.handle_packet(wan, &oob("getchallenge"), t);
         assert_eq!(reply(&mut sv).1, "challengeResponse");
         sv.set_cvar("sv_kickBanTime", "400");
@@ -16777,13 +13311,14 @@ mod tests {
         assert_eq!(ask(&mut sv, "unbanUser vcod"), "print\n");
         assert_eq!(ask(&mut sv, "banClient 0"), "print\n");
         assert_eq!(sv.client_count(), 2);
-        assert!(!sv.bans.contains(ip));
+        let guid = guid_of(crate::engine::Lan::Cod1, wan);
+        assert!(!sv.core.bans.is_banned(guid));
         assert_eq!(
             ask(&mut sv, "banClient 1"),
             "print\n1:vcod EXE_PLAYERKICKED\n"
         );
         assert_eq!(sv.client_count(), 1);
-        assert!(sv.bans.contains(ip));
+        assert!(sv.core.bans.is_banned(guid));
 
         sv.handle_packet(wan, &oob("getchallenge"), at.get());
         let (_, cmd, rest) = reply(&mut sv);
@@ -16839,11 +13374,11 @@ mod tests {
         sv.tick(later);
         assert!(sv.take_outgoing().is_empty());
 
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             eprintln!("COD_DIR unset or has no main/: skipping the restart");
             return;
         };
-        sv.fs = Some(Rc::new(fs));
+        sv.game.fs = Some(Rc::new(fs));
         sv.push_console("map mp_carentan");
         sv.tick(later);
         assert!(sv.take_fatal().is_none());
@@ -16858,7 +13393,7 @@ mod tests {
     /// "Console commands over rcon").
     #[test]
     fn devmap_turns_cheats_on_and_map_turns_them_off() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
@@ -16887,7 +13422,7 @@ mod tests {
             "print\ntimescale is cheat protected.\n"
         );
         ask(&mut sv, "devmap mp/mp_carentan");
-        assert_eq!(sv.cfg.map, "mp_carentan");
+        assert_eq!(sv.game.cfg.map, "mp_carentan");
         assert_eq!(
             ask(&mut sv, "sv_cheats"),
             "print\n\"sv_cheats\" is:\"1^7\" default:\"0^7\"\n"
@@ -16912,7 +13447,7 @@ mod tests {
     /// doc, "Console commands over rcon").
     #[test]
     fn a_restart_over_rcon_prints_the_game_banner() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             eprintln!("COD_DIR unset or has no main/: skipping");
             return;
         };
@@ -16952,14 +13487,14 @@ mod tests {
             let ack = nc.incoming_sequence as i32;
             sv.tick(t);
             sv.take_outgoing();
-            let ops = move_ops(sv.checksum_feed, ack, last);
+            let ops = move_ops(sv.core.checksum_feed, ack, last);
             let pkt = nc
-                .build_out(i32::from(sv.server_id), ack, 0, &ops, &huff)
+                .build_out(i32::from(sv.game.server_id), ack, 0, &ops, &huff)
                 .unwrap();
             sv.handle_packet(addr(5), &pkt, t);
         }
         sv.tick(t);
-        assert_eq!(sv.clients[0].as_ref().unwrap().ping, 50);
+        assert_eq!(sv.core.clients[0].as_ref().unwrap().link.ping, 50);
         sv.take_outgoing();
         sv.handle_packet(addr(7), &oob("getstatus x"), t);
         let (_, body) = reply_text(&mut sv);
@@ -16991,19 +13526,24 @@ mod tests {
             clock += 50;
             sv.frame_sent(ms(clock));
             sv.take_outgoing();
-            let ops = move_ops(sv.checksum_feed, ack, last);
+            let ops = move_ops(sv.core.checksum_feed, ack, last);
             let pkt = nc
-                .build_out(i32::from(sv.server_id), ack, 0, &ops, &huff)
+                .build_out(i32::from(sv.game.server_id), ack, 0, &ops, &huff)
                 .unwrap();
             let arrived = if i % 2 == 0 {
                 ms(clock - 1)
             } else {
                 ms(clock + 1)
             };
-            sv.handle_packet_at(addr(5), &pkt, t, arrived);
+            let at = crate::engine::Arrival {
+                now: t,
+                arrived,
+                read: arrived,
+            };
+            sv.packet_read(addr(5), &pkt, at);
         }
         sv.tick(t);
-        assert_eq!(sv.clients[0].as_ref().unwrap().ping, 25);
+        assert_eq!(sv.core.clients[0].as_ref().unwrap().link.ping, 25);
     }
 
     /// `gameCompleteStatus` over rcon (handshake doc, "Console commands
@@ -17016,10 +13556,10 @@ mod tests {
         let t = Instant::now();
         let mut sv = Server::new(cfg(), t);
         sv.set_protocol(&PROTOCOL_V22);
-        assert_eq!(sv.masters.name(0), "master.cod.pm");
+        assert_eq!(sv.core.masters.name(0), "master.cod.pm");
         sv.set_cvar("sv_master1", "127.0.0.1");
         sv.set_protocol(&PROTOCOL_V22);
-        assert_eq!(sv.masters.name(0), "127.0.0.1");
+        assert_eq!(sv.core.masters.name(0), "127.0.0.1");
     }
 
     #[test]

@@ -312,7 +312,7 @@ with `Cx::spawn_then`, so the VM hands back to the host the moment that
 thread first suspends, and `kill_client` walks right after the thread it
 starts; the follow targets and connection states it reads are mirrored in
 by `Server` ahead of every script entry that can kill;
-`send_snapshots` builds a follower's frame from the followed client's
+`snapshots_begin` builds a follower's frame from the followed client's
 wire playerstate, eye and number. `spectatorclient` starts at -1 and is written back to -1 where
 retail writes it.
 
@@ -638,11 +638,12 @@ reading and our server's schedule to it.
 `setarchive(true)` on, `Server::archive_frame` keeps, after each frame's
 snapshots, the entities and roster they were built from and every client's
 own-view playerstate, eye, view and feet, in a ring of 0x4b0 frames that every
-level load clears. `Archive::lookup` is 12.4 and `Archive::player_state` is
+level load clears (`engine::archive::FrameRing`, CoD2's ring too).
+`Archive::lookup` is 12.4 and `Archive::player_state` is
 0x808ef7c. `follow_end_frame` runs 12.5's retry and writes the trimmed age
 back into `archivetime`, which the host keeps in milliseconds (12.2);
-`send_snapshots` builds a replay's playerstate out of the archived frame
-(`archive::replayed_ps`, 12.6) and sends any client whose `archivetime` names
+`snapshots_begin` builds a replay's playerstate out of the archived frame
+(`archive::replayed_ps`, 12.6) and `send_client_snapshot` sends any client whose `archivetime` names
 a frame that frame's entities and roster, shifted. A playing or dead client
 whose last frame was a copy is spawned at the copy (`spawn_from_copy`, 12.7),
 its teleport bit the copy's flipped and its weapons and ammo gone, and its HUD

@@ -268,7 +268,7 @@ fn bone_trace_stored(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::xmodel::{Bone, XModel};
+    use crate::model::{Bone, Model};
     use glam::Quat;
 
     /// `riflePriorityMap` (combat doc, 2.3).
@@ -291,15 +291,7 @@ mod tests {
     /// Unparented bones at the positions given, so a ray down +X meets their
     /// boxes in order and only the trace's ranking is under test.
     fn rig(bones: Vec<Bone>) -> (Skeleton, PoseBuffer) {
-        let m = XModel {
-            lod: "t".into(),
-            surfaces: vec![],
-            materials: vec![],
-            bones,
-            collision: Vec::new(),
-            lod_dists: vec![0.0],
-            coarse: Vec::new(),
-        };
+        let m = Model::rig("t", bones);
         let skel = Skeleton::build(&[&m]);
         let pose = PoseBuffer::new(&skel);
         (skel, pose)

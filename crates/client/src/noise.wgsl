@@ -3,7 +3,7 @@
 // NOISE_TABLE and NOISE_PERM, which a renderer test holds this file to.
 // Private, not `const`: naga copies a const array into a local at every
 // dynamic index, 80 copies per noise_get4f, and the drivers then took
-// seconds per stage pipeline (lavapipe: minutes to build the renderer).
+// seconds per stage pipeline (lavapipe: 2-4 s each, 19 s to build them all).
 var<private> NOISE_PERM: array<u32, 256> = array<u32, 256>(
     148u, 41u, 80u, 144u, 31u, 51u, 119u, 33u, 168u, 20u, 226u, 18u, 221u, 94u, 181u, 180u,
     60u, 48u, 81u, 200u, 120u, 198u, 76u, 31u, 254u, 34u, 130u, 81u, 152u, 221u, 79u, 161u,

@@ -193,7 +193,7 @@ mod tests {
                 assert!(
                     msg::PlayerState::field_index(p, name).is_some(),
                     "{name} on {}",
-                    p.version
+                    p.transport.version
                 );
             }
         }

@@ -404,7 +404,7 @@ mod tests {
                             panic!("{tag}: vehicle {num} has no model");
                         };
                         let skel = skels.entry(model.clone()).or_insert_with(|| {
-                            Skeleton::build(&[&vcod_common::xmodel::load(&fs, &model).unwrap()])
+                            Skeleton::build(&[&vcod_common::model::load(&fs, &model).unwrap()])
                         });
                         let pos = Vec3::from(ea.origin(p)).lerp(Vec3::from(eb.origin(p)), f);
                         let (aa, ab) = (ea.angles(p), eb.angles(p));

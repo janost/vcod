@@ -275,7 +275,7 @@ pub fn of_snapshot(
 ) -> Option<(Seat, u32, [f32; 3])> {
     use vcod_common::net::flags::{EF_IN_VEHICLE_V22, ET_VEHICLE_V22};
     let int = |n: &str| s.ps.field_i32(p, n);
-    if p.version != 22 || int("eFlags") & EF_IN_VEHICLE_V22 == 0 {
+    if !p.is_uo() || int("eFlags") & EF_IN_VEHICLE_V22 == 0 {
         return None;
     }
     let num = u32::try_from(int("viewlocked_entNum")).ok()?;

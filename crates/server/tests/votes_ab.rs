@@ -85,7 +85,7 @@ fn run(fixture: &str, proto: &'static Protocol, cvars: &[(&str, &str)], order: [
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != proto.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != proto.transport.version {
         return;
     }
     let retail = retail(fixture);
@@ -176,7 +176,10 @@ fn run(fixture: &str, proto: &'static Protocol, cvars: &[(&str, &str)], order: [
                     }
                     NetEvent::ConfigstringChanged(cs @ 15..=18) if joined.is_some() => {
                         let mut v = cl[i].configstring(cs).to_string();
-                        if cs == 15 && proto.version == PROTOCOL_V1.version && !v.is_empty() {
+                        if cs == 15
+                            && proto.transport.version == PROTOCOL_V1.transport.version
+                            && !v.is_empty()
+                        {
                             let t = cl[i].snapshots().newest().map_or(0, |s| s.server_time);
                             v = format!("+{}", v.parse::<i32>().unwrap() - t);
                         }

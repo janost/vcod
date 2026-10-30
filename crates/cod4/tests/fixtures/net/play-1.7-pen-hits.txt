@@ -1,0 +1,22 @@
+# The entity penetration capture's PROBE lines (docs/research/cod4-combat.md
+# 13.1): games_mp.log of cod4_lnxded 1.7 under +set fs_game mods/vcodpe
+# (crates/cod4/tests/fixtures/gsc/pen_ent packed in the mod's iwd)
+# +devmap mp_backlot, war, sv_pure 0, with play-1.7-pen-target.txt
+# (cod4_probe --team allies --script idle --name target --qport 4021
+# --secs 25) and play-1.7-pen-shooter.txt (0.5 s later: --team axis
+# --script shoot --name shooter --qport 4022 --secs 25). The gsc sets the
+# two players down either side of the first destructible sedan; `hit` is
+# a player's damage (number, damage, flags, location, point in
+# thousandths, direction in millionths, means of death), `car` the car's
+# own damage notify (damage, means of death, point).
+PROBE 46550 placed 0 289654 -391059 69000 car 368185 -406324 68000 0 259000 0 vehicle_80s_sedan1_silv_destructible_mp
+PROBE 47050 placed 1 623408 -455934 69000 car 368185 -406324 68000 0 259000 0 vehicle_80s_sedan1_silv_destructible_mp
+PROBE 48050 car 29 MOD_RIFLE_BULLET 393537 -411792 113873
+PROBE 48300 car 29 MOD_RIFLE_BULLET 393974 -412126 113630
+PROBE 48550 car 29 MOD_RIFLE_BULLET 394043 -412402 113361
+PROBE 48750 hit 0 28 8 torso_lower 301781 -395284 106720 -980411 184879 -67915 MOD_RIFLE_BULLET
+PROBE 48800 car 29 MOD_RIFLE_BULLET 341372 -402749 109462
+PROBE 49000 hit 0 28 8 torso_lower 301588 -395540 106532 -980537 184010 -68455 MOD_RIFLE_BULLET
+PROBE 49050 car 29 MOD_RIFLE_BULLET 341283 -402989 109303
+PROBE 49250 hit 0 28 8 torso_lower 301489 -395627 106602 -980611 183702 -68226 MOD_RIFLE_BULLET
+PROBE 49300 car 29 MOD_RIFLE_BULLET 341287 -403083 109371

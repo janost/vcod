@@ -20,7 +20,7 @@ use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::net::events::{EventTracker, GameEvent};
 use vcod_common::net::msg::{self, NULL_USERCMD, UserCmd};
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::net::snapshot::Snapshot;
 use vcod_common::patch::Arith;
 use vcod_common::pk3::Pk3Fs;
@@ -65,7 +65,7 @@ struct Tally {
 
 /// One frame's state, as `LivePhase` holds it.
 struct Client<'a> {
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     client_num: i32,
     weapons: &'a [Option<WeaponDef>],
     sounds: HashMap<i32, Option<WeaponSounds>>,
@@ -79,7 +79,7 @@ struct Client<'a> {
 
 impl<'a> Client<'a> {
     fn new(
-        p: &'static Protocol,
+        p: &'static Cod1Wire,
         client_num: i32,
         weapons: &'a [Option<WeaponDef>],
         configstrings: &'a [String],
@@ -192,7 +192,7 @@ impl<'a> Client<'a> {
             shot_fallbacks: &HashMap::new(),
             listener_pos: Vec3::ZERO,
             ps_entity: cues::ps_entity(ps_client),
-            uo: p.version == PROTOCOL_V22.version,
+            uo: p.is_uo(),
         };
         for ev in &evs {
             dispatch(&mut self.tally, ev, &ctx, &cue_ctx);
@@ -238,7 +238,7 @@ enum Line {
     Snap(Box<Snapshot>, Vec<(i32, i32)>),
 }
 
-fn parse(p: &Protocol, text: &str) -> Vec<Line> {
+fn parse(p: &Cod1Wire, text: &str) -> Vec<Line> {
     let mut out = Vec::new();
     for line in text.lines() {
         let Some((kind, rest)) = line.split_once(' ') else {
@@ -323,7 +323,7 @@ fn load_world(fs: &Pk3Fs, map: &str) -> CollisionWorld {
 /// A `--save-slope` capture replayed as our own body, one frame per cmd:
 /// what played, and the events the snapshots brought by id.
 fn replay_own(
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     file: &str,
     fs: &Pk3Fs,
     map: &str,
@@ -335,7 +335,7 @@ fn replay_own(
 /// `replay_own` with the predictor's world on `arith`, and the
 /// predictor's corrections (`Predictor::corrections`).
 fn replay_own_as(
-    p: &'static Protocol,
+    p: &'static Cod1Wire,
     file: &str,
     fs: &Pk3Fs,
     map: &str,
@@ -450,7 +450,7 @@ fn the_windows_build_draws_no_new_correction() {
         return;
     };
     let v1 = vcod_common::testing::game_fs_11();
-    let mut runs: Vec<(&'static Protocol, &str, &Pk3Fs)> = vec![
+    let mut runs: Vec<(&'static Cod1Wire, &str, &Pk3Fs)> = vec![
         (&PROTOCOL_V6, "mp_carentan-dm-slope-8ms-moves-1.5.txt", &fs),
         (&PROTOCOL_V6, "mp_carentan-dm-slope-8ms-turns-1.5.txt", &fs),
         (
@@ -483,7 +483,7 @@ fn the_windows_build_draws_no_new_correction() {
 
 /// The 1.1 ids of a ring's new slots, `prev..cur` (`eventSequence` counts
 /// after the write).
-fn new_slots(p: &Protocol, prev: i32, cur: i32, slot: impl Fn(String) -> i32) -> Vec<i32> {
+fn new_slots(p: &Cod1Wire, prev: i32, cur: i32, slot: impl Fn(String) -> i32) -> Vec<i32> {
     (prev..prev + ((cur - prev) & 0xff).min(4))
         .map(|i| (p.event_to_v1)(slot(format!("events[{}]", i & 3))))
         .collect()
@@ -493,7 +493,7 @@ fn new_slots(p: &Protocol, prev: i32, cur: i32, slot: impl Fn(String) -> i32) ->
 /// prediction: a follower's view as the client draws it, and a seated
 /// body's own ring as a prediction miss plays it, off the snapshot. Checks
 /// the fire events played against the rings' own count.
-fn replay_capture(p: &'static Protocol, tag: &str, weapons: &[Option<WeaponDef>]) -> Tally {
+fn replay_capture(p: &'static Cod1Wire, tag: &str, weapons: &[Option<WeaponDef>]) -> Tally {
     let gs = vcod_common::testing::fixture_gamestate(p, &format!("net/gamestate{tag}.bin"));
     let mut client = Client::new(p, gs.client_num, weapons, &gs.configstrings);
     let (mut fires, mut kicks) = (0, 0);
@@ -766,7 +766,7 @@ fn a_1_1_follow_capture_plays_each_shot_once() {
 /// Every grenade or rocket explode a capture's entity rings carry, once per
 /// missile, against what the client's frame played and how many effects
 /// those plays spawned.
-fn explodes(p: &'static Protocol, tag: &str, fs: Option<&Pk3Fs>) -> (usize, usize, usize) {
+fn explodes(p: &'static Cod1Wire, tag: &str, fs: Option<&Pk3Fs>) -> (usize, usize, usize) {
     use vcod_common::net::event_ids::{EV_GRENADE_EXPLODE, EV_ROCKET_EXPLODE};
     let explode = |e: i32| matches!(e, EV_GRENADE_EXPLODE | EV_ROCKET_EXPLODE);
     let gs = vcod_common::testing::fixture_gamestate(p, &format!("net/gamestate{tag}.bin"));

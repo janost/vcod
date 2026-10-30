@@ -3,11 +3,11 @@
 //! means of death. 1.1 and 1.5 share one set of tables; United Offensive has its own
 //! (docs/research/coduo-diff.md 12, "Server").
 
-use vcod_common::net::protocol::{PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{Cod1Wire, PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22};
 use vcod_common::weapon_table::{STATIC_ITEMS, static_item};
 
 pub struct Defs {
-    pub proto: &'static Protocol,
+    pub proto: &'static Cod1Wire,
     /// Configstring 7: every `weapons/mp` file, lowercased and sorted, which
     /// numbers the weapons 1-based on the wire.
     pub weapons: &'static str,
@@ -46,6 +46,36 @@ pub static UO: Defs = Defs {
     mod_flagged: &[7, 8, 13, 15, 16, 17, 18, 20, 21, 26],
 };
 
+/// CoD2 1.3's: no fixed weapon list, so `weapons` is empty and a level's
+/// list is the order it named each weapon (`Cod2HostState::weapons`,
+/// `builtins::cod2::register_weapon`); `modNames` off cod2_lnxded 0x8187c40
+/// (cod2-gsc-diff.md 4.1). Which means of death the obituary flags is
+/// unread, so none is.
+pub static COD2: Defs = Defs {
+    proto: vcod_cod2::net::PROTOCOL_118.as_cod1_shim(),
+    weapons: "",
+    mod_names: &MOD_NAMES_COD2,
+    mod_flagged: &[],
+};
+
+const MOD_NAMES_COD2: [&str; 15] = [
+    "MOD_UNKNOWN",
+    "MOD_PISTOL_BULLET",
+    "MOD_RIFLE_BULLET",
+    "MOD_GRENADE",
+    "MOD_GRENADE_SPLASH",
+    "MOD_PROJECTILE",
+    "MOD_PROJECTILE_SPLASH",
+    "MOD_MELEE",
+    "MOD_HEAD_SHOT",
+    "MOD_CRUSH",
+    "MOD_TELEFRAG",
+    "MOD_FALLING",
+    "MOD_SUICIDE",
+    "MOD_TRIGGER_HURT",
+    "MOD_EXPLOSIVE",
+];
+
 const WEAPON_LIST_V22: &str = "30cal_tank_mp 50cal_tank_mp bar_mp bar_slow_mp bazooka_mp binoculars_artillery_mp binoculars_mp bren_mp colt_mp dp28_mp elefant_turret_mp enfield_mp fg42_mp fg42_semi_mp flak88_turret_mp flamethrower_mp flashgrenade_mp fraggrenade_mp gewehr43_mp kar98k_mp kar98k_sniper_mp luger_mp m1carbine_mp m1garand_mp mg30cal_mp mg34_mp mg34_tank_mp mg42_bipod_duck_mp mg42_bipod_prone_mp mg42_bipod_stand_mp mg42_tank_mp mg42_turret_mp mg50cal_tripod_stand_mp mg_sg43_stand_mp mk1britishfrag_mp mosin_nagant_mp mosin_nagant_sniper_mp mp40_mp mp44_mp mp44_semi_mp panzerfaust_mp panzeriv_turret_mp panzerschreck_mp ppsh_mp ppsh_semi_mp ptrs41_antitank_rifle_mp rgd-33russianfrag_mp satchelcharge_mp sg43_tank_mp sg43_turret_mp sherman_turret_mp smokegrenade_mp springfield_mp sten_mp sten_silenced_mp stielhandgranate_mp su152_turret_mp svt40_mp t34_turret_mp thompson_mp thompson_semi_mp tt33_mp webley_mp";
 
 const MOD_NAMES_V22: [&str; 27] = [
@@ -80,10 +110,13 @@ const MOD_NAMES_V22: [&str; 27] = [
 
 impl Defs {
     /// The set a server speaking `p` runs.
-    pub fn of(p: &Protocol) -> &'static Defs {
-        match p.version {
-            v if v == PROTOCOL_V22.version => &UO,
-            v if v == PROTOCOL_V6.version => &V15,
+    pub fn of(p: &Cod1Wire) -> &'static Defs {
+        if p.transport.game == vcod_common::game::Game::Cod2 {
+            return &COD2;
+        }
+        match p.transport.version {
+            v if v == PROTOCOL_V22.transport.version => &UO,
+            v if v == PROTOCOL_V6.transport.version => &V15,
             _ => &V1,
         }
     }
@@ -156,7 +189,7 @@ mod tests {
     #[test]
     fn each_protocol_gets_its_own_set() {
         for p in [&PROTOCOL_V1, &PROTOCOL_V6, &PROTOCOL_V22] {
-            assert_eq!(Defs::of(p).proto.version, p.version);
+            assert_eq!(Defs::of(p).proto.transport.version, p.transport.version);
         }
     }
 }

@@ -179,6 +179,41 @@ pub const EF_ADS: i32 = 0x200;
 
 /// The record's `movetype` bits for `climbup` and `climbdown`.
 const MOVETYPE_CLIMB: u32 = 0x30000;
+/// CoD4's: its movetype list puts the climbs at 18 and 19 (1.7's
+/// `BG_Player_DoControllersInternal` tests 0xc0000 at 0x804cff8).
+const MOVETYPE_CLIMB_COD4: u32 = 0xc0000;
+
+/// CoD4's lean dvars as `BG_Player_DoControllersInternal` reads them: the
+/// `tag_origin` shift a unit of lean (`player_lean_shift_*`) and the
+/// spine's and head's roll scale (`player_lean_rotate_*`), left and right,
+/// standing and crouched (cod4-player-anims.md 8).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LeanDvars {
+    pub shift_left: f32,
+    pub shift_right: f32,
+    pub shift_crouch_left: f32,
+    pub shift_crouch_right: f32,
+    pub rotate_left: f32,
+    pub rotate_right: f32,
+    pub rotate_crouch_left: f32,
+    pub rotate_crouch_right: f32,
+}
+
+impl Default for LeanDvars {
+    /// 1.7's defaults, as the server's dvar mirror carries them.
+    fn default() -> Self {
+        LeanDvars {
+            shift_left: 5.0,
+            shift_right: 9.0,
+            shift_crouch_left: 4.0,
+            shift_crouch_right: 15.0,
+            rotate_left: 0.8,
+            rotate_right: 0.4,
+            rotate_crouch_left: 0.8,
+            rotate_crouch_right: 0.3,
+        }
+    }
+}
 /// `idle` and `idlecr`.
 const MOVETYPE_IDLE: u32 = 0x6;
 
@@ -221,11 +256,47 @@ impl BodyAngles {
     /// (game.mp.uo 0x1dbac, uo cgame 0x30004550) add the seat test of
     /// [`SeatWeapon`].
     pub fn step(&mut self, input: &BodyInput, frametime_ms: i32, swing_speed: f32) {
+        self.step_by(Updater::Cod1, input, frametime_ms, swing_speed);
+    }
+
+    /// [`Self::step`] under `updater`'s rules: CoD2's
+    /// (`cod2_lnxded` 0x80da9c8, inlined in the Mac `BG_PlayerAnimation`
+    /// 0x183ef2) adds the mantle and clamps a swing to its full limit.
+    /// docs/research/cod2-player-anims.md 5.
+    pub fn step_by(
+        &mut self,
+        updater: Updater,
+        input: &BodyInput,
+        frametime_ms: i32,
+        swing_speed: f32,
+    ) {
         let ft = frametime_ms as f32;
         let m = input.movement_dir;
         let yaw = angle_mod(input.view[1]);
-        let climbing = self.movetype & MOVETYPE_CLIMB != 0;
-        if !input.rides_bare() && !climbing && self.movetype & MOVETYPE_IDLE != 0 {
+        let climb = match updater {
+            Updater::Cod4(_) => MOVETYPE_CLIMB_COD4,
+            _ => MOVETYPE_CLIMB,
+        };
+        let climbing = self.movetype & climb != 0;
+        let (mantle, margin, pitch_fraction) = match updater {
+            Updater::Cod1 => (Mantle::default(), 1.0, 0.6),
+            Updater::Cod2(mantle) => (mantle, 0.0, 0.6),
+            // `fadd %st(0),%st` at 0x804cefe.
+            Updater::Cod4(mantle) => (mantle, 0.0, 2.0),
+        };
+        let swing_angles =
+            |dest, tolerance, clamp: f32, speed, ft, angle: &mut f32, on: &mut bool| {
+                swing_angles(
+                    dest,
+                    tolerance,
+                    (clamp, clamp - margin),
+                    speed,
+                    ft,
+                    angle,
+                    on,
+                )
+            };
+        if !input.rides_bare() && !climbing && !mantle.on && self.movetype & MOVETYPE_IDLE != 0 {
             if self.firing {
                 self.torso_yawing = true;
                 self.pitching = true;
@@ -240,7 +311,8 @@ impl BodyAngles {
             (yaw, 90.0)
         } else if climbing {
             (yaw + m, 0.0)
-        } else if input.prone() {
+        } else if mantle.on || input.prone() {
+            // CoD2 tests the mantle ahead of the stance.
             (yaw, 90.0)
         } else if input.eflags & EF_FIRING != 0 {
             (yaw, 45.0)
@@ -273,6 +345,8 @@ impl BodyAngles {
         // An armed rider's legs swing toward the seat, which only moves
         // their flag: the rider's yaw below overwrites the angle.
         let seat = input.held_seat_yaw();
+        // A mantling body's legs head for the view, not the move.
+        let legs_dest = if mantle.on && !climbing { yaw } else { yaw + m };
         if input.dead() {
             legs(seat.unwrap_or(yaw), 0.0, self);
         } else if input.prone() {
@@ -282,9 +356,9 @@ impl BodyAngles {
             self.legs_yawing = false;
             legs(yaw, 0.0, self);
         } else if self.legs_yawing {
-            legs(seat.unwrap_or(yaw + m), 0.0, self);
+            legs(seat.unwrap_or(legs_dest), 0.0, self);
         } else {
-            legs(seat.unwrap_or(yaw + m), 40.0, self);
+            legs(seat.unwrap_or(legs_dest), 40.0, self);
         }
         if input.rides() {
             self.torso_yaw = yaw;
@@ -294,11 +368,11 @@ impl BodyAngles {
             self.legs_yaw = yaw + m;
         }
 
-        let pitch_dest = if input.dead() || input.rides() || climbing {
+        let pitch_dest = if input.dead() || input.rides() || climbing || mantle.alone {
             0.0
         } else {
             let p = input.view[0];
-            (if p > 180.0 { p - 360.0 } else { p }) * 0.6
+            (if p > 180.0 { p - 360.0 } else { p }) * pitch_fraction
         };
         swing_angles(
             pitch_dest,
@@ -312,12 +386,35 @@ impl BodyAngles {
     }
 }
 
+/// Which game's angle updater [`BodyAngles::step_by`] runs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Updater {
+    Cod1,
+    Cod2(Mantle),
+    /// 1.7's `BG_PlayerAngles` (`cod4_lnxded` 0x804c636): CoD2's with the
+    /// climbs at CoD4's movetypes and the torso pitch toward twice the
+    /// view's (cod4-player-anims.md 8).
+    Cod4(Mantle),
+}
+
+/// CoD2's mantle (`eFlags` 0x4000), which 1.1's numbering has no bit for:
+/// `on` swings the torso and legs at the view; `alone`, the mantle as the
+/// entity's only flag (`cmpl $0x4000` at 0x80daf19, an equality, not a bit
+/// test), also holds the pitch level.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Mantle {
+    pub on: bool,
+    pub alone: bool,
+}
+
 /// `BG_SwingAngles` (`game.mp.i386.so` 0x2ae00, cgame 0x30003ec0): Q3's
-/// `CG_SwingAngles` with the step scale `max(|swing| * 0.05, 0.5)`.
+/// `CG_SwingAngles` with the step scale `max(|swing| * 0.05, 0.5)`. A swing
+/// past `clamp` is set back to `limit` off `dest`: 1.1 puts it a degree
+/// inside, CoD2 (0x80da7dc) on the clamp itself.
 fn swing_angles(
     dest: f32,
     tolerance: f32,
-    clamp: f32,
+    (clamp, limit): (f32, f32),
     speed: f32,
     frametime_ms: f32,
     angle: &mut f32,
@@ -350,9 +447,9 @@ fn swing_angles(
     }
     let swing = angle_subtract(dest, *angle);
     if swing > clamp {
-        *angle = angle_mod(dest - (clamp - 1.0));
+        *angle = angle_mod(dest - limit);
     } else if swing < -clamp {
-        *angle = angle_mod(dest + (clamp - 1.0));
+        *angle = angle_mod(dest + limit);
     }
 }
 
@@ -737,11 +834,38 @@ impl Controllers {
         }
     }
 
+    /// CoD2's (`BG_Player_DoControllers`, Mac 0x182b82, `cod2_lnxded`
+    /// 0x80db362): zero for a gunner (`eFlags & 0x300`, here
+    /// [`EF_MOUNTED`]), else 1.5's split with CoD2's lean. The caller eases
+    /// toward it ([`Self::ease_toward`]), as CoD2 does at 0.36 a ms.
+    /// docs/research/cod2-player-anims.md 6.
+    pub fn cod2(a: &BodyAngles, input: &BodyInput, slope: &BodySlope) -> Self {
+        if input.mounted() {
+            return Self::default();
+        }
+        Self::body(Split::Cod2, a, input, slope)
+    }
+
+    /// CoD4's (1.7's `BG_Player_DoControllersInternal`, `cod4_lnxded`
+    /// 0x804cf90): CoD2's split and twist with the lean's shift and roll
+    /// scales read off `lean`'s dvars, the climbs at CoD4's movetypes.
+    /// The caller eases toward it at 0.36 a ms. cod4-player-anims.md 8.
+    pub fn cod4(a: &BodyAngles, input: &BodyInput, slope: &BodySlope, lean: &LeanDvars) -> Self {
+        if input.mounted() {
+            return Self::default();
+        }
+        Self::body(Split::Cod4(*lean), a, input, slope)
+    }
+
     fn body(split: Split, a: &BodyAngles, input: &BodyInput, slope: &BodySlope) -> Self {
         let prone = input.prone();
         let crouch = input.eflags & EF_CROUCH != 0;
         let mut t = [0.0, a.torso_yaw, 0.0];
-        if a.movetype & MOVETYPE_CLIMB == 0 {
+        let climb = match split {
+            Split::Cod4(_) => MOVETYPE_CLIMB_COD4,
+            _ => MOVETYPE_CLIMB,
+        };
+        if a.movetype & climb == 0 {
             t[0] = a.pitch;
             if prone {
                 let p = angle_normalize_180(t[0]);
@@ -821,6 +945,48 @@ impl Controllers {
             // 1.5's and UO's: the roll scaled 0.8 standing and 1.5
             // crouched leaning right, 1.25 leaning left, the head's halved
             // prone; the shift 2.5 a unit of lean whatever the stance.
+            // CoD2's: the shift 2.5 a unit of lean right whatever the
+            // stance, 5 left standing, 12.5 left crouched; the roll 1.25
+            // but crouched leaning right, the head's halved prone.
+            Split::Cod2 => {
+                t[2] = roll;
+                h[2] = roll;
+                trans.y = -f
+                    * match (crouch, f > 0.0) {
+                        (_, true) => 2.5,
+                        (false, false) => 5.0,
+                        (true, false) => 12.5,
+                    };
+                if f != 0.0 {
+                    if prone {
+                        h[2] *= 0.5;
+                    } else if !crouch || f <= 0.0 {
+                        t[2] *= 1.25;
+                        h[2] *= 1.25;
+                    }
+                }
+            }
+            // CoD4's: the shift and, standing or crouched, the roll scale
+            // off the dvars by side; prone halves the head's roll only.
+            Split::Cod4(d) => {
+                t[2] = roll;
+                h[2] = roll;
+                if f != 0.0 {
+                    let (shift, rotate) = match (crouch, f > 0.0) {
+                        (true, true) => (d.shift_crouch_right, d.rotate_crouch_right),
+                        (true, false) => (d.shift_crouch_left, d.rotate_crouch_left),
+                        (false, true) => (d.shift_right, d.rotate_right),
+                        (false, false) => (d.shift_left, d.rotate_left),
+                    };
+                    trans.y = -f * shift;
+                    if prone {
+                        h[2] *= 0.5;
+                    } else {
+                        t[2] *= rotate;
+                        h[2] *= rotate;
+                    }
+                }
+            }
             Split::Later => {
                 t[2] = roll;
                 h[2] = roll;
@@ -845,7 +1011,7 @@ impl Controllers {
         }
         if prone {
             l[0] += slope.torso_pitch;
-            if split == Split::Later {
+            if split != Split::V1_1 {
                 // The prone twist swings `tag_origin` round the elbows:
                 // 0x1e761's `sincos(pi * T1 / 180)` arm.
                 let (sin, cos) = (std::f32::consts::PI * t[1] / 180.0).sin_cos();
@@ -944,12 +1110,16 @@ impl Controllers {
 }
 
 /// Which `BG_Player_DoControllers` split a body is posed by: 1.1's
-/// (0x2ba74) or 1.5's and UO's, which differ in the lean and the prone
-/// twist (docs/research/coduo-vehicles.md 14, "The controllers").
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// (0x2ba74), 1.5's and UO's, which differ in the lean and the prone
+/// twist (docs/research/coduo-vehicles.md 14, "The controllers"), or
+/// CoD2's, 1.5's with its own lean (cod2-player-anims.md 6), or CoD4's,
+/// CoD2's with the lean off its dvars (cod4-player-anims.md 8).
+#[derive(Clone, Copy, PartialEq)]
 enum Split {
     V1_1,
     Later,
+    Cod2,
+    Cod4(LeanDvars),
 }
 
 /// `Q_rsqrt`: the one-iteration inverse square root `BG_LerpOffset` and
@@ -1093,6 +1263,9 @@ pub struct PoseInputs<'a> {
     /// rather than its seconds: the 1.5 and UO server's stored pose
     /// (cod11-combat.md 3.1, "The clip's float time").
     pub node_time: bool,
+    /// The skeleton's bindings kept from pose to pose; `None` binds each
+    /// clip afresh.
+    pub binds: Option<&'a crate::skeleton::BindCache>,
 }
 
 /// The legs and torso clips as the tree walk blends `main`'s two nodes
@@ -1102,14 +1275,34 @@ pub struct PoseInputs<'a> {
 /// with the legs' at the legs node's 0.01 (player-model-anim-system.md,
 /// "Legs/torso split"; cod11-movers.md 15, "Torso over legs").
 ///
-/// `clip` resolves a clip name to the loaded xanim. Both the server's hit
-/// and tag poses and the client's drawn bodies pose through this.
+/// `clip` resolves a clip name to the loaded xanim. The server's hit and
+/// tag poses go through this, the client's drawn bodies through
+/// [`pose_player_drawn`].
 pub fn pose_player(
+    skel: &Skeleton,
+    inputs: &PoseInputs,
+    clip: impl FnMut(&str) -> Option<Rc<XAnim>>,
+) -> PoseBuffer {
+    pose_player_onto(PoseBuffer::new(skel), skel, inputs, clip)
+}
+
+/// [`pose_player`] for a body only drawn: the same locals, without the
+/// 1.5/UO engine records (`PoseBuffer::drawn`), whose walk is most of a
+/// pose's cost.
+pub fn pose_player_drawn(
+    skel: &Skeleton,
+    inputs: &PoseInputs,
+    clip: impl FnMut(&str) -> Option<Rc<XAnim>>,
+) -> PoseBuffer {
+    pose_player_onto(PoseBuffer::drawn(skel), skel, inputs, clip)
+}
+
+fn pose_player_onto(
+    mut pose: PoseBuffer,
     skel: &Skeleton,
     inputs: &PoseInputs,
     mut clip: impl FnMut(&str) -> Option<Rc<XAnim>>,
 ) -> PoseBuffer {
-    let mut pose = PoseBuffer::new(skel);
     let tree = &inputs.anims.tree;
     // The legs clips, or a gunner's placement rows as nodes of their own
     // under the turret group.
@@ -1166,7 +1359,13 @@ pub fn pose_player(
     }
     let torso = layer_clips(inputs, &inputs.torso_layers, &mut clip);
     let bind = |clips: &[(Rc<XAnim>, f32, f32)]| -> Vec<_> {
-        clips.iter().map(|(a, ..)| skel.bind(a)).collect()
+        clips
+            .iter()
+            .map(|(a, ..)| match inputs.binds {
+                Some(kept) => kept.bind(skel, a),
+                None => Rc::new(skel.bind(a)),
+            })
+            .collect()
     };
     let (legs_bind, torso_bind) = (bind(&legs), bind(&torso));
     let (legs, torso) = (clips_at(&legs, &legs_bind), clips_at(&torso, &torso_bind));
@@ -1204,12 +1403,12 @@ enum LegsShape {
 
 fn clips_at<'a>(
     clips: &'a [(Rc<XAnim>, f32, f32)],
-    binds: &'a [AnimBinding],
+    binds: &'a [Rc<AnimBinding>],
 ) -> Vec<crate::skeleton::ClipAt<'a>> {
     clips
         .iter()
         .zip(binds)
-        .map(|((a, frame, w), b)| (a.as_ref(), b, *frame, *w))
+        .map(|((a, frame, w), b)| (a.as_ref(), &**b, *frame, *w))
         .collect()
 }
 
@@ -1265,8 +1464,8 @@ fn layer_frame(inputs: &PoseInputs, l: &crate::animclock::Layer, anim: &XAnim) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{Bone, Model};
     use crate::skeleton::PoseBuffer;
-    use crate::xmodel::{Bone, XModel};
 
     const MG42_SAMPLE: &str = r#"
 main
@@ -1352,7 +1551,7 @@ main
 
     /// tag_origin > pelvis > back_low > back_mid > back_up on +Z with identity
     /// binds, so local Y is the lateral axis.
-    fn spine_fixture() -> XModel {
+    fn spine_fixture() -> Model {
         let mut bones = vec![bone("tag_origin", -1, Vec3::ZERO, Quat::IDENTITY, &[])];
         for (name, parent) in [
             ("pelvis", 0i32),
@@ -1363,15 +1562,7 @@ main
             let b = bone(name, parent, Vec3::Z, Quat::IDENTITY, &bones);
             bones.push(b);
         }
-        XModel {
-            lod: "spine".into(),
-            surfaces: vec![],
-            materials: vec![],
-            bones,
-            collision: Vec::new(),
-            lod_dists: vec![0.0],
-            coarse: Vec::new(),
-        }
+        Model::rig("spine", bones)
     }
 
     /// Bind rotations are identity, so the skin matrix's rotation is the posed
@@ -1387,7 +1578,7 @@ main
     fn idle() -> crate::animscript::AnimRecord {
         crate::animscript::AnimRecord {
             movetypes: 1 << 1,
-            strafe: false,
+            ..Default::default()
         }
     }
 
@@ -1545,7 +1736,7 @@ main
             movement_dir: 20.0,
             legs: crate::animscript::AnimRecord {
                 movetypes: 1 << 10,
-                strafe: false,
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -1560,6 +1751,7 @@ main
             legs: crate::animscript::AnimRecord {
                 movetypes: 1 << 10,
                 strafe: true,
+                ..Default::default()
             },
             ..run
         };
@@ -2094,5 +2286,154 @@ main
             near(c.back_up[1], 40.0 * 0.2) && near(c.head[1], 0.0),
             "{c:?}"
         );
+    }
+
+    /// CoD2's body: the six controls keep 1.1's names, set between the
+    /// `j_*` joints they bend (`playerbody_german_africa01`'s order,
+    /// cod2-player-anims.md 2), so each turns every joint above it.
+    fn cod2_spine() -> Model {
+        let mut bones = vec![bone("tag_origin", -1, Vec3::ZERO, Quat::IDENTITY, &[])];
+        for name in [
+            "j_mainroot",
+            "pelvis",
+            "torso_stabilizer",
+            "j_spine1",
+            "back_low",
+            "j_spine2",
+            "back_mid",
+            "j_spine3",
+            "back_up",
+            "j_spine4",
+            "j_neck",
+            "neck",
+            "j_head",
+            "head",
+        ] {
+            let parent = bones.len() as i32 - 1;
+            let b = bone(name, parent, Vec3::Z, Quat::IDENTITY, &bones);
+            bones.push(b);
+        }
+        Model::rig("cod2_spine", bones)
+    }
+
+    #[test]
+    fn cod2_controls_bend_the_j_joints_above_them() {
+        let m = cod2_spine();
+        let skel = Skeleton::build(&[&m]);
+        let c = Controllers {
+            back_low: [0.0, 30.0, 0.0],
+            neck: [0.0, 10.0, 0.0],
+            ..Default::default()
+        };
+        let mut pose = PoseBuffer::new(&skel);
+        apply_controllers(&mut pose, &skel, &c);
+        let yaw = |name: &str| {
+            let (_, r) = pose.bone_world(&skel, skel.bone_index(name).unwrap());
+            let v = r * Vec3::X;
+            v.y.atan2(v.x).to_degrees()
+        };
+        for (name, want) in [
+            ("j_spine1", 0.0),
+            ("back_low", 30.0),
+            ("j_spine2", 30.0),
+            ("j_spine4", 30.0),
+            ("j_neck", 30.0),
+            ("j_head", 40.0),
+            ("head", 40.0),
+        ] {
+            assert!(near(yaw(name), want), "{name}: {}", yaw(name));
+        }
+    }
+
+    /// CoD2's lean (Mac 0x182b82): the shift 2.5 a unit right, 5 left
+    /// standing and 12.5 left crouched; the roll 1.25 but crouched right.
+    #[test]
+    fn cod2_lean_shifts_and_rolls_by_its_own_table() {
+        let a = BodyAngles::default();
+        let input = |eflags: i32| BodyInput {
+            eflags,
+            ..Default::default()
+        };
+        let slope = |lean: f32| BodySlope {
+            lean,
+            ..Default::default()
+        };
+        let f = lean_fraction(0.5);
+        let roll = f * 50.0 * 0.925;
+        for (eflags, lean, shift, scale) in [
+            (0, 0.5, -2.5, 1.25),
+            (0, -0.5, 5.0, 1.25),
+            (EF_CROUCH, 0.5, -2.5, 1.0),
+            (EF_CROUCH, -0.5, 12.5, 1.25),
+        ] {
+            let c = Controllers::cod2(&a, &input(eflags), &slope(lean));
+            let sign = lean.signum();
+            assert!(near(c.origin_trans.y, shift * f), "{eflags} {lean}: {c:?}");
+            assert!(near(c.back_low[2], sign * roll * scale * 0.5), "{c:?}");
+            assert!(near(c.head[2], sign * roll * scale * -0.3), "{c:?}");
+            assert!(near(c.origin[2], sign * f * 50.0 * 0.075), "{c:?}");
+        }
+        // A gunner runs none.
+        let gunner = Controllers::cod2(&a, &input(EF_MOUNTED), &slope(0.5));
+        assert_eq!(gunner, Controllers::default());
+    }
+
+    /// CoD2's updater holds a mantling body's pitch level only while the
+    /// mantle is its one flag (`cmpl $0x4000`, 0x80daf19), and swings its
+    /// legs at the view.
+    #[test]
+    fn cod2_mantle_levels_the_pitch_only_alone() {
+        let swing = |alone: bool| {
+            let (mut a, mut input) = standing([30.0, 0.0, 0.0]);
+            input.movement_dir = 45.0;
+            let mantle = Mantle { on: true, alone };
+            for _ in 0..40 {
+                a.step_by(Updater::Cod2(mantle), &input, 50, BG_SWING_SPEED);
+            }
+            a
+        };
+        let alone = swing(true);
+        assert!(near(alone.pitch, 0.0), "{alone:?}");
+        assert!(near(alone.legs_yaw, 0.0), "{alone:?}");
+        let with_others = swing(false);
+        assert!(near(with_others.pitch, 18.0), "{with_others:?}");
+    }
+
+    /// A swing past its clamp lands a degree inside on 1.1 and on the clamp
+    /// on CoD2 (0x80da7dc).
+    #[test]
+    fn cod2_clamps_a_swing_onto_its_limit() {
+        let clamped = |updater: Updater| {
+            let input = BodyInput {
+                view: [0.0, 100.0, 0.0],
+                eflags: EF_FIRING,
+                legs: idle(),
+                ..Default::default()
+            };
+            let mut a = BodyAngles::default();
+            a.update_conditions(&input);
+            a.step_by(updater, &input, 1, BG_SWING_SPEED);
+            a.torso_yaw
+        };
+        assert!(near(clamped(Updater::Cod1), 56.0));
+        assert!(near(clamped(Updater::Cod2(Mantle::default())), 55.0));
+    }
+
+    /// 1.7's updater swings the torso pitch toward twice the view's
+    /// (0x804cefe), CoD2's toward 0.6 of it; CoD4's split then counters
+    /// it on the neck and head.
+    #[test]
+    fn cod4_torso_pitches_twice_the_view() {
+        let settle = |updater: Updater, pitch: f32| {
+            let (mut a, input) = standing([pitch, 0.0, 0.0]);
+            for _ in 0..80 {
+                a.step_by(updater, &input, 50, BG_SWING_SPEED);
+            }
+            a.pitch
+        };
+        let cod4 = Updater::Cod4(Mantle::default());
+        assert!(near(settle(cod4, 30.0), 60.0));
+        assert!(near(angle_normalize_180(settle(cod4, 330.0)), -60.0));
+        assert!(near(settle(Updater::Cod2(Mantle::default()), 30.0), 18.0));
     }
 }

@@ -210,7 +210,7 @@ mod tests {
     use vcod_gsc::{Host, Value};
 
     fn host(vm: &mut vcod_gsc::Vm, teams: &[&str]) -> GameHost {
-        let mut host = GameHost::new(vec![String::new(); 2048]);
+        let mut host = GameHost::new(&crate::game::profile::COD1_11, vec![String::new(); 2048]);
         host.cvars = crate::cvars::Cvars::for_protocol(6);
         host.cvars.set("g_timeoutsAllowed", "2");
         host.cvars.set("g_timeoutLength", "15000");

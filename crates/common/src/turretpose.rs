@@ -326,6 +326,43 @@ impl GunnerTree {
 /// the gun picks the pitch row.
 pub fn place_gunner(
     anims: &PlayerAnims,
+    clip: impl FnMut(&str) -> Option<Rc<XAnim>>,
+    legs_anim: i32,
+    tag_weapon: (Vec3, Quat),
+    turret: (Vec3, Quat),
+    player_origin: Vec3,
+    rotate_inc: f32,
+) -> Option<GunnerPlacement> {
+    place_gunner_by(
+        GunnerRule::Cod1,
+        anims,
+        clip,
+        legs_anim,
+        tag_weapon,
+        turret,
+        player_origin,
+        rotate_inc,
+    )
+}
+
+/// Which way a game walks the turret group's rows and columns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GunnerRule {
+    /// CoD1 and CoD2 (0x515a8, lnxded 0x810aa50): the rows from the
+    /// file's last, the column at `n / 2 - yaw / inc` over the engine's
+    /// (reversed) order.
+    Cod1,
+    /// CoD4 1.7 (`G_PlayerTurretPositionAndBlend`): the rows from the
+    /// file's first, the column at `n / 2 + yaw / inc` over the engine's
+    /// order (cod4-gsc.md 9.2).
+    Iw3,
+}
+
+/// [`place_gunner`] under `rule`.
+#[allow(clippy::too_many_arguments)]
+pub fn place_gunner_by(
+    rule: GunnerRule,
+    anims: &PlayerAnims,
     mut clip: impl FnMut(&str) -> Option<Rc<XAnim>>,
     legs_anim: i32,
     tag_weapon: (Vec3, Quat),
@@ -355,7 +392,11 @@ pub fn place_gunner(
     let row_weights = |row: usize| -> Option<Vec<(usize, f32)>> {
         let cols: Vec<usize> = children(row).collect();
         let last = cols.len().checked_sub(1)?;
-        let x = (cols.len() as f32 * 0.5 - gun_yaw / rotate_inc).clamp(0.0, last as f32);
+        let turn = match rule {
+            GunnerRule::Cod1 => -gun_yaw,
+            GunnerRule::Iw3 => gun_yaw,
+        };
+        let x = (cols.len() as f32 * 0.5 + turn / rotate_inc).clamp(0.0, last as f32);
         let i = x as usize;
         let f = x - i as f32;
         let mut w = vec![(cols[i], 1.0 - f)];
@@ -384,7 +425,11 @@ pub fn place_gunner(
     // The rows the search set and walked past, each at its pass's goals.
     let mut passed: Vec<Row> = Vec::new();
     let mut walked = Vec::new();
-    for row in children(node) {
+    let row_order: Vec<usize> = match rule {
+        GunnerRule::Cod1 => children(node).collect(),
+        GunnerRule::Iw3 => tree.nodes[node].children.clone(),
+    };
+    for &row in &row_order {
         let w = row_weights(row)?;
         walked.push(row);
         let z = delta(&w)?.0.z;
@@ -562,7 +607,7 @@ mod tests {
             return;
         };
         let anims = PlayerAnims::load(&fs).unwrap();
-        let bones = crate::xmodel::load_bones(&fs, "mg42_bipod").unwrap();
+        let bones = crate::model::load_bones(&fs, "mg42_bipod").unwrap();
         let tag = |n: &str| bones.iter().find(|b| b.name == n).unwrap().pos;
         let (aim, weapon) = (tag("tag_aim"), tag("tag_weapon"));
         let turret = (
@@ -604,7 +649,7 @@ mod tests {
             return;
         };
         let anims = PlayerAnims::load(&fs).unwrap();
-        let bones = crate::xmodel::load_bones(&fs, "mg42_bipod").unwrap();
+        let bones = crate::model::load_bones(&fs, "mg42_bipod").unwrap();
         let tag = |n: &str| bones.iter().find(|b| b.name == n).unwrap().pos;
         let turret = (
             Vec3::new(1712.0, 1830.0, 8.0),

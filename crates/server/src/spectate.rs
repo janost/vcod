@@ -581,7 +581,7 @@ fn weapon_anim_event(event: i32) -> Option<&'static str> {
         // 150 ms later, maps to nothing (combat doc, 1.10).
         EV_MELEE_SWIPE => "meleeattack",
         // UO's deploy and breakdown raise their own blocks beside the
-        // event, forced (0x447aa, 0x4484c in the Ghidra project).
+        // event, forced (0x447aa, 0x4484c in Ghidra's numbering).
         EV_UO_DEPLOY_WEAPON => "lmg_deploy",
         EV_UO_BREAKDOWN_WEAPON => "lmg_breakdown",
         _ => return None,
@@ -3055,7 +3055,12 @@ mod tests {
                 moved: true,
             };
             let w = r.under(own, p);
-            assert_eq!(w.fields[at("clientNum")], 3, "protocol {}", p.version);
+            assert_eq!(
+                w.fields[at("clientNum")],
+                3,
+                "protocol {}",
+                p.transport.version
+            );
         }
     }
 

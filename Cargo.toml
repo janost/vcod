@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/common", "crates/client", "crates/server", "crates/gsc"]
+members = ["crates/common", "crates/client", "crates/server", "crates/gsc", "crates/cod2", "crates/cod4"]
 
 [workspace.package]
 version = "0.1.0"
@@ -21,6 +21,10 @@ glam = "0.33"
 image = { version = "0.25", default-features = false, features = ["tga", "jpeg"] }
 kira = { version = "0.12", default-features = false, features = ["cpal", "mp3", "wav", "pcm"] }
 log = "0.4"
+# CoD4 voice chat: the microphone (kira already builds cpal) and libspeex,
+# opened at run time (client cod4_voice.rs).
+cpal = { version = "0.18", default-features = false }
+libloading = "0.8"
 # kira's own decoder, opened directly so a stream can be resampled (client audio/stream.rs).
 symphonia = { version = "0.6", default-features = false, features = ["mp3", "wav", "pcm"] }
 pollster = "1"

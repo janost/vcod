@@ -12,6 +12,26 @@ PROBE neg_int -5
 PROBE at div_by_zero
 PROBE_FATAL divide by 0
 
+# probe_array_copy
+PROBE local_copy_write 1 2
+PROBE local_orig_write 2 1
+PROBE field_copy_strkey 1 2
+PROBE arg_write 1
+PROBE returned_write 2
+PROBE nested_write 1 2
+PROBE element_copy_write 1 2
+PROBE field_to_field 1 2
+
+# probe_array_undef
+PROBE last_undef_size 2
+PROBE first_undef_size 1
+PROBE first_undef_isdefined 0
+PROBE after_one y
+PROBE append_size 1
+PROBE append_at1 w
+PROBE field_undef_size 1
+PROBE strkey_undef_size 0
+
 # probe_arraykey_case
 PROBE arraykey_size_after_two_spellings 1
 PROBE arraykey_size_both 2
@@ -102,6 +122,26 @@ PROBE at bootstrap_thread_runs_now
 PROBE bootstrap_thread_ran_inline after
 PROBE at bootstrap_startgametype
 PROBE bootstrap_startgametype_allies russian
+
+# probe_cast_string
+PROBE at cast_int_num
+PROBE cast_int_num 5001
+PROBE at cast_int_space
+PROBE cast_int_space -6
+PROBE at cast_int_tail
+PROBE cast_int_tail 13
+PROBE at cast_int_frac
+PROBE cast_int_frac 4
+PROBE at cast_int_zerofrac
+PROBE cast_int_zerofrac 1
+PROBE at cast_int_dotzero
+PROBE cast_int_dotzero 1
+PROBE at cast_float_num
+PROBE cast_float_num 3.5
+PROBE at cast_float_tail
+PROBE cast_float_tail 16
+PROBE at cast_int_word
+PROBE_FATAL cannot cast "abc" to int
 
 # probe_cmp
 PROBE at eq_int_float
@@ -639,6 +679,16 @@ PROBE_FATAL cannot cast undefined to bool
 # probe_truthy_vec
 PROBE at truthy_zero_vector
 PROBE_FATAL cannot cast vector to bool
+
+# probe_undef_call_into_unset
+PROBE at undef_call_into_unset
+PROBE undef_call_isdefined 1
+PROBE undef_call_size 1
+
+# probe_undef_into_unset
+PROBE int_into_unset_size 1
+PROBE at undef_into_unset
+PROBE_FATAL undefined is not an array
 
 # probe_wait0_loop
 PROBE wait0_loop frame 0 i 1000

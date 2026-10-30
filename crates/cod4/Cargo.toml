@@ -1,0 +1,22 @@
+[package]
+name = "vcod-cod4"
+description = "Call of Duty 4 1.7 formats for vcod"
+# tests/main.rs links every test file into one binary (`cargo test --test cod4`).
+autotests = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+# The zlib backend zip already builds (zlib-rs), so no second inflater.
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+vcod-common = { path = "../common" }
+glam.workspace = true
+log.workspace = true
+
+[[test]]
+name = "cod4"
+path = "tests/main.rs"

@@ -20,7 +20,12 @@ const F_CLAMP_T: u32 = 33554432u;
 const F_CLAMP: u32 = 50331648u;
 
 fn sample_image(t: texture_2d<f32>, uv: vec2<f32>, flags: u32) -> vec4<f32> {
-    let mipped = textureNumLevels(t) > 1u;
+    return sample_mipped(t, uv, flags, textureNumLevels(t) > 1u);
+}
+
+// sample_image with the image's mipmaps known to the caller, which then
+// asks no `textureNumLevels` per pixel.
+fn sample_mipped(t: texture_2d<f32>, uv: vec2<f32>, flags: u32, mipped: bool) -> vec4<f32> {
     let clamp = flags & F_CLAMP;
     if (clamp == F_CLAMP) {
         if (mipped) {

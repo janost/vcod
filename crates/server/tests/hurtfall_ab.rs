@@ -148,7 +148,8 @@ fn probe_lines<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<String> {
 /// A 1.5 install's paks, `None` at any other.
 fn fs_15() -> Option<Pk3Fs> {
     let fs = vcod_common::testing::game_fs()?;
-    (vcod_server::server::install_protocol(&fs).version == PROTOCOL_V6.version).then_some(fs)
+    (vcod_server::server::install_protocol(&fs).transport.version == PROTOCOL_V6.transport.version)
+        .then_some(fs)
 }
 
 /// Replays `fixture` on ours under `cvars` and holds every `PROBE` line to

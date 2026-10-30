@@ -79,7 +79,7 @@ impl StatusQuery {
                 continue;
             }
             if let Some(("statusResponse", rest)) = parse_oob(&buf[..n]) {
-                let text: String = rest.iter().map(|&b| b as char).collect();
+                let text = vcod_common::text::latin1(rest);
                 self.rows = status_rows(&self.addr.to_string(), &text);
                 self.socket = None;
                 return;
@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn known_keys_lead_under_their_labels() {
-        let rows = status_rows("1.2.3.4:28960", RETAIL);
+        let rows = status_rows("203.0.113.4:28960", RETAIL);
         let head: Vec<(&str, &str)> = rows
             .iter()
             .take(5)
@@ -174,7 +174,7 @@ mod tests {
             head,
             [
                 ("@EXE_SV_INFO_SERVERNAME", "CoDHost"),
-                ("@EXE_SV_INFO_ADDRESS", "1.2.3.4:28960"),
+                ("@EXE_SV_INFO_ADDRESS", "203.0.113.4:28960"),
                 ("@EXE_SV_INFO_PASSWORD", "@EXE_NO"),
                 ("@EXE_SV_INFO_GAMENAME", "main"),
                 ("@EXE_SV_INFO_GAMETYPE", "dm"),

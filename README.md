@@ -6,6 +6,10 @@ protocol. Patch 1.1, patch 1.5 and United Offensive 1.51 all work, against
 vcod's own server or the retail ones. Nobody ever wrote that protocol down,
 so I dug it out of the binaries.
 
+Call of Duty 2 (patch 1.3) and Call of Duty 4 (patch 1.7) run on the same
+client and server. Both are newer and less complete than CoD 1;
+[docs/features.md](docs/features.md) says what works.
+
 [![mp_railyard on a public server, 3840x1600](docs/screenshots/ultrawide-mp_railyard-s.jpg)](docs/screenshots/ultrawide-mp_railyard.jpg)
 
 [![mp_harbor on a public server, 3840x1600](docs/screenshots/ultrawide-mp_harbor-s.jpg)](docs/screenshots/ultrawide-mp_harbor.jpg)
@@ -235,6 +239,29 @@ implementation.
   netfield tables.
 - [cod-asset-importer](https://github.com/mauserzjeh/cod-asset-importer), a
   GPL Blender add-on. The xmodel triangle-strip decoder is ported from it.
+- [zk_libcod](https://github.com/ibuddieat/zk_libcod), an MIT CoD2 1.3
+  server library. `tools/re` reads its list of named 1.3 addresses to name
+  functions in the retail server; some CoD2 docs use those names.
+
+### Consulted, not copied
+
+These projects were read as references while working out CoD4. vcod contains
+no code from them. Where earlier CoD4 code had followed one of them too
+closely, I had it audited function by function and rewritten from the retail
+1.7 binaries and captures, with the retail gates proving the behaviour held.
+
+- [kisakcod](https://github.com/jm2/kisakcod), GPLv3, a reconstruction of
+  the CoD4 1.8 multiplayer executable. Used for function names and as a
+  cross-check of behaviour. 1.7 is the target: the research docs cite 1.7
+  addresses, and a claim not yet confirmed on 1.7 says so.
+- [CoD4x Server](https://github.com/callofduty4x/CoD4x_Server), AGPLv3, for
+  how CoD4x servers differ on the wire, so vcod can recognise and refuse
+  them.
+- [COD4iOS-COD4NS](https://github.com/DevZer0D4Y/COD4iOS-COD4NS), GPLv3, as a
+  cross-check of the fastfile layout.
+
+### Libraries
+
 - [wgpu](https://github.com/gfx-rs/wgpu),
   [winit](https://github.com/rust-windowing/winit) and
   [kira](https://github.com/tesselode/kira) for graphics, windowing and
@@ -248,7 +275,8 @@ contains no game assets, game code or binaries; it reads the files of a copy
 you own. The reverse engineering was done to interoperate with the game's own
 files and servers. The research notes document file formats and the network
 protocol for that purpose: layouts and addresses recovered from the
-binaries, no copied code. The screenshots show art owned by Activision.
+binaries, no copied code. The projects under "Consulted, not copied" were
+read as references, and no code from them is included. The screenshots show art owned by Activision.
 
 Quake III Arena and Return to Castle Wolfenstein are trademarks of id
 Software. Their GPL sources, and the other ported code, are credited in

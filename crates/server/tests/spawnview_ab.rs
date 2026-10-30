@@ -38,7 +38,7 @@ fn probe_lines<'a>(lines: impl Iterator<Item = &'a str>, v15: bool) -> Vec<Strin
 
 fn check(fs: vcod_common::pk3::Pk3Fs, fixture: &str) {
     let proto = vcod_server::server::install_protocol(&fs);
-    let v15 = proto.version != vcod_common::net::protocol::PROTOCOL_V1.version;
+    let v15 = proto.transport.version != vcod_common::net::protocol::PROTOCOL_V1.transport.version;
     let map = "mp_carentan";
     let bsp_path = fs.resolve_map(map).expect("map in the paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
@@ -78,7 +78,8 @@ fn a_spawned_player_reads_as_retail_15() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         return;
     }
     check(fs, include_str!("fixtures/spawnview/mp_carentan-1.5.txt"));

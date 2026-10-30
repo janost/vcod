@@ -26,19 +26,24 @@ pub enum Kind {
     /// `con_boldgamemessagetime` 8 s, centred on x 320 above y 180, lines 16
     /// apart.
     Bold,
+    /// CoD2's subtitles (`Con_DrawSubtitles`, Mac 0x15dbd4): above y 400
+    /// at x 120 (`cg_subtitlePosX`, `cg_subtitlePosY`), lines 12 apart
+    /// (`cg_subtitleCharHeight`), each line on for the time its print
+    /// asks ([`Window::push_for`]), 5 s when it asks none.
+    Subtitle,
 }
 
 impl Kind {
     fn life_ms(self) -> i32 {
         match self {
-            Kind::Game => 5000,
+            Kind::Game | Kind::Subtitle => 5000,
             Kind::Bold => 8000,
         }
     }
 
     fn line_height(self) -> f32 {
         match self {
-            Kind::Game => 12.0,
+            Kind::Game | Kind::Subtitle => 12.0,
             Kind::Bold => 16.0,
         }
     }
@@ -51,13 +56,14 @@ impl Kind {
         match self {
             Kind::Game => ("cg_gameMessageWidth", 70),
             Kind::Bold => ("cg_gameBoldMessageWidth", 60),
+            Kind::Subtitle => ("cg_subtitleWidthStandard", 80),
         }
     }
 
     /// Font 0 at 0.25, or font 4 at a third.
     fn font<'a>(self, fonts: &'a UiFonts, v: &Virtual) -> (&'a super::font::Font, f32) {
         let (slot, scale) = match self {
-            Kind::Game => (Slot::Default, 0.25),
+            Kind::Game | Kind::Subtitle => (Slot::Default, 0.25),
             Kind::Bold => (Slot::BigFixed, 1.0 / 3.0),
         };
         (fonts.pick(slot, scale, 480.0 * v.scale), scale)
@@ -73,6 +79,9 @@ pub struct KillLine {
     pub icon: String,
     /// The weapon's `wideKillIcon`: trap 4's width 2.8, else 1.4.
     pub icon_wide: bool,
+    /// CoD2's `flipKillIcon`: the icon drawn mirrored left to right
+    /// (`R_DrawConsoleText`, Mac 0xece9a). 1.1 has no such key.
+    pub icon_flip: bool,
     pub victim: (String, [f32; 3]),
 }
 
@@ -101,6 +110,9 @@ pub struct Window {
     pub width: usize,
     slots: [Option<Line>; SLOTS],
     current: usize,
+    /// Where the newest line's baseline goes, in place of the kind's own
+    /// (CoD2's game window, cod2-hud.md 14).
+    pub origin: Option<(f32, f32)>,
 }
 
 impl Window {
@@ -110,6 +122,7 @@ impl Window {
             width: kind.width_cvar().1,
             slots: Default::default(),
             current: 0,
+            origin: None,
         }
     }
 
@@ -117,24 +130,35 @@ impl Window {
     /// 0x401fc2): every `\n` ends a line, an empty one too, and each part
     /// wraps at the window's width. The colour runs on across parts.
     pub fn push(&mut self, text: &str, now_ms: i32) {
+        self.push_for(text, now_ms, self.kind.life_ms());
+    }
+
+    /// [`Self::push`] with each line on for `life_ms` (`CL_ConsolePrint`'s
+    /// duration, Mac 0x15f344); 0 or less takes the kind's.
+    pub fn push_for(&mut self, text: &str, now_ms: i32, life_ms: i32) {
+        let life = if life_ms > 0 {
+            life_ms
+        } else {
+            self.kind.life_ms()
+        };
         let mut colour = '7';
         let parts: Vec<&str> = text.split('\n').collect();
         for (i, part) in parts.iter().enumerate() {
             if part.is_empty() {
                 if i + 1 < parts.len() {
-                    self.add_line(Body::Text(String::new()), now_ms);
+                    self.add_line(Body::Text(String::new()), now_ms, life);
                 }
                 continue;
             }
             for line in wrap(part, self.width, &mut colour) {
-                self.add_line(Body::Text(line), now_ms);
+                self.add_line(Body::Text(line), now_ms, life);
             }
         }
     }
 
     /// A kill line, on `con_gamemessagetime` like any game message.
     pub fn push_kill(&mut self, line: KillLine, now_ms: i32) {
-        self.add_line(Body::Kill(line), now_ms);
+        self.add_line(Body::Kill(line), now_ms, self.kind.life_ms());
     }
 
     #[cfg(test)]
@@ -161,11 +185,11 @@ impl Window {
 
     /// `0x408be0`: the line takes the current slot, and the three oldest
     /// that would outlive the next 500 ms start their fade now.
-    fn add_line(&mut self, body: Body, now: i32) {
+    fn add_line(&mut self, body: Body, now: i32, life_ms: i32) {
         self.slots[self.current] = Some(Line {
             body,
             start: now,
-            end: now + self.kind.life_ms(),
+            end: now + life_ms,
         });
         self.current = (self.current + 1) % SLOTS;
         for i in 0..FORCED {
@@ -182,10 +206,11 @@ impl Window {
     /// above, the stack pushed down while a new line slides in.
     pub fn build(&mut self, fonts: &UiFonts, now: i32, v: &Virtual, out: &mut Vec<HudQuad>) {
         let h = self.kind.line_height();
-        let (x0, mut y) = match self.kind {
+        let (x0, mut y) = self.origin.unwrap_or(match self.kind {
             Kind::Game => (6.0, 357.0),
             Kind::Bold => (320.0, 180.0),
-        };
+            Kind::Subtitle => (120.0, 400.0),
+        });
         for l in self.slots.iter().flatten() {
             if (0..SLIDE_MS).contains(&(now - l.start)) {
                 y += ((1.0 - (now - l.start) as f32 / SLIDE_MS as f32) * h).round();
@@ -216,7 +241,7 @@ impl Window {
                 }
             };
             let x = match self.kind {
-                Kind::Game => x0,
+                Kind::Game | Kind::Subtitle => x0,
                 Kind::Bold => x0 - (text_width(font, text, scale) / 2.0).trunc(),
             };
             menu_text_rgba(
@@ -367,7 +392,12 @@ fn kill_line(
         } as f32;
     let h = unit * ICON_CODE as f32;
     let top = baseline - (scale * 38.4 + h) * 0.5;
-    out.push(v.quad(x, top, w, h, [1.0, 1.0, 1.0, alpha], &k.icon));
+    let uvs = if k.icon_flip {
+        [[1.0, 0.0], [0.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
+    } else {
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+    };
+    out.push(v.quad_uv(x, top, w, h, uvs, [1.0, 1.0, 1.0, alpha], &k.icon));
     x += w;
     run(&format!(" {}", k.victim.0), k.victim.1, &mut x, out);
 }
@@ -449,6 +479,18 @@ mod tests {
         assert_eq!(live(&w).len(), 2);
     }
 
+    /// A subtitle wraps at 80 and stays for the time its print asks, the
+    /// kind's 5 s when it asks none.
+    #[test]
+    fn a_subtitle_stays_as_long_as_its_print_asks() {
+        let mut w = Window::new(Kind::Subtitle);
+        assert_eq!(w.width, 80);
+        w.push_for("radio", 100, 7000);
+        w.push_for("other", 100, 0);
+        let ends: Vec<i32> = w.slots.iter().flatten().map(|l| l.end).collect();
+        assert_eq!(ends, [7100, 5100]);
+    }
+
     /// The width cvar holds between 1 and the console's line width; 0 or
     /// past it takes the console's (78 at 640 wide, 238 at 1920).
     #[test]
@@ -520,6 +562,7 @@ mod tests {
                     attacker: Some(("Att".into(), red)),
                     icon: "gfx/hud/death_melee".into(),
                     icon_wide: wide,
+                    icon_flip: false,
                     victim: ("Vic".into(), blue),
                 },
                 1000,

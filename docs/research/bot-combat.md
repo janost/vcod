@@ -93,6 +93,33 @@ fights.
 A change to bot behaviour reports its before and after on the same seeds,
 map and gametype, in this doc's section for it.
 
+`DIGEST=1` adds a line per match, `digest <map> <gametype> seed <s>
+ticks <n> <hex>`: an FNV-1a 64 folded after every tick over each bot
+slot in order, its last cmd that ran (time, every button byte, stance
+and lean included, weapon, angles, moves) and its
+playerstate origin and velocity (by their bits), health and weapon.
+`DIGEST=<N>` also prints the running hash every `N` ticks as
+`digest@<tick> ...`. It reads and draws nothing, so the other lines
+are those of a run without it. A refactor meant to move no bot prints
+the same digests before and after; when they part, the first
+`digest@` line that differs names the window of `N` ticks where a bot
+first did something else, which a short match catches long before the
+counts move. Its value is only comparable between runs of the same
+map, gametype, seed, `BOTS` and knobs; `JOBS` does not change it.
+
+`NETDIGEST=<N>` adds a second hash, `net@<tick>` and `net <map> ...`
+lines, over every datagram the server sent each tick (address, length,
+bytes, in send order). It joins one observer client that never picks a
+team, at a non-LAN address so the rate and `snaps` pacing run, so it
+changes the match: its `digest` lines compare only with other
+`NETDIGEST` runs. A CoD2 server under it runs `svs.time` on the frame
+clock (`Cod2Server::test_frame_clock`), since the wall clock keys the
+challenge and so every netchan byte. `NETDUMP=<dir>` writes the
+datagrams themselves, to find the bytes behind a `net@` window that
+parted. `VCOD_TICK_TRACE=<dir>` writes each match's tick step log
+(`vcod_server::tick_trace`, one line per `SV_Frame` step and the slot it
+ran for), whose first differing line names a step that moved.
+
 The split (2026-10-21). VERIFIED (measured, release `bot_match`,
 `COD_DIR` at 1.1, master 3135508b with the split, normal skill): `tdm`
 12 bots seeds 1..=4, stalled / held: mp_carentan 925 / 16 428,
@@ -191,12 +218,12 @@ merge, which leaves level 1's lines unchanged).
 Hard and expert sit close in `dm` because both react and settle faster than
 a fight lasts; the gap shows head to head against normal (3 : 1 kills at
 hard, 3.4 : 1 at expert). Nothing here is tuned against a human. How a
-level feels to play against is a hand check (pending-manual-test.md 519).
+level feels to play against is pending a hand check.
 
 ## 4. Cover and lean
 
 The brain is `crates/server/src/bots/cover.rs`; the server fills
-`BotView::cover` in `Server::bot_cover` (`crates/server/src/server.rs`).
+`BotView::cover` in `bots::driver::cover` (`crates/server/src/bots/driver.rs`).
 
 ### 4.1 What a cover spot is
 
@@ -1576,3 +1603,397 @@ run and on allies in the other, 32 matches; master's two sides score
 
 The hunts and retreats that take a fight up again are too few to move
 anything (13.2), and of them only a retreat's lose more than they win.
+
+## 14. CoD2 bots on the mounted guns (2026-10-22)
+
+Retail has no bots and vcod's CoD1 brain mans no gun, so the rule is
+vcod's own (`bots::cod2::gun`): in `dm` and `tdm` a bot that sees an
+enemy inside a free gun's yaw arc and more than 250 units from it, with
+the spot 40 behind the gun within 320 of its feet, within 40 of its
+height and walked to unblocked, goes there (5 s at most) and taps use
+once the cursor hint names the gun. On the gun it turns the barrel 12
+degrees a tick onto the nearest foe in the arc it has a clear shot at
+and holds the trigger within 3 degrees of him; 4 s with none, it taps
+use and lets go. `GUNS=0` turns it off.
+
+`GAME=cod2 MAPS=mp_carentan GAMETYPE=tdm BOTS=8 bot_match 1 2 3 4`, 6000
+ticks a seed, summed:
+
+| | kills | hits / rounds | held bot-ticks | mounts | seconds on a gun | kills off a gun |
+|---|---|---|---|---|---|---|
+| `GUNS=0` | 220 | 394 / 1691 | 20 | 0 | 0 | 0 |
+| guns | 238 | 441 / 1767 | 356 | 10 | 50 | 10 |
+
+Rounds count the carried weapons' clips only, so a gun's do not show.
+Seed 3 meets no enemy in an arc and plays as before. A first build
+reset the gunner's idle clock only on a sighting and let go the tick
+after the mount: 68 mounts for 78 s on the guns.
+
+
+## 15. CoD2 bots on CoD1's tick order (2026-10-23)
+
+CoD2's bots used to run the shared driver (`bots::driver::step`) at five
+points of their own (bot-navigation.md 3). The three ordering points went
+first: the noises heard ahead of the frame's reads, the hunt's vantage
+after the retreat's cover, the lob probed after the drop probe. Then the
+two route consts were turned on one at a time: `YIELDS` (ladder and path
+yields, `team::crowd`, blocked nodes), after the yields stopped counting a
+CoD2 body killed this frame as a teammate, and `PMOVE_PROBES` (lip, push
+off the rungs, unpin, stepping CoD1's pmove on `bots::cod2::move_ps`'s
+body under the graph's rules, no new pmove needed).
+
+Wide run: `GAME=cod2 TICKS=12000 bot_match`, seeds 1..=8, mp_toujane,
+mp_carentan, mp_dawnville, mp_burgundy, a process per match, summed (32
+matches a gametype). Gate run: the `bm2_tdm` set (seeds 1..=4, 6000
+ticks, mp_dawnville, mp_carentan, mp_toujane).
+
+| | kills | hits / rounds | acc | stalled | held | ladder | mantles | retreats | smokes |
+|---|---|---|---|---|---|---|---|---|---|
+| tdm wide, base | 4171 | 6047 / 33103 | 0.183 | 1608 | 68918 | 5193 | 1676 | 2876 | 355 |
+| tdm wide, `YIELDS` | 4171 | 6240 / 33487 | 0.186 | 2783 | 78426 | 4837 | 1727 | 2917 | 380 |
+| tdm wide, `PMOVE_PROBES` | 4231 | 6414 / 33799 | 0.190 | 1700 | 76242 | 3810 | 1683 | 2937 | 356 |
+| dm wide, base | 4361 | 6627 / 36433 | 0.182 | 112 | 81737 | 3994 | 1350 | 3058 | 430 |
+| dm wide, `YIELDS` | 4339 | 6595 / 36479 | 0.181 | 112 | 81389 | 4250 | 1333 | 3051 | 429 |
+| dm wide, `PMOVE_PROBES` | 4343 | 6449 / 36292 | 0.178 | 199 | 79484 | 3919 | 1336 | 3056 | 432 |
+| `bm2_tdm`, base | 758 | 1091 / 5771 | 0.189 | 169 | 12665 | 1110 | 331 | 506 | 75 |
+| `bm2_tdm`, `PMOVE_PROBES` | 740 | 1076 / 5460 | 0.197 | 842 | 12406 | 1079 | 320 | 462 | 79 |
+
+- The order move and the dead-body yield fix: every wide and gate line
+  byte-identical to the base, `DIGEST=250` included (`dg2`). No bot pass
+  on these seeds fell between a kill and the victim's end frame.
+- `YIELDS`: tdm stalls up 73% for the same kills. On the 6000-tick tdm
+  set of four maps and four seeds they went from 169 to 491. Reverted.
+- `PMOVE_PROBES`: the push off the rungs cuts ladder ticks by a quarter
+  in tdm, but stalls rise in every sum: two gate seeds that never stalled
+  stall now (mp_toujane 3 for 408 ticks, mp_dawnville 4 for 225), and dm
+  seed 4 on mp_carentan for 128. Reverted; those seeds are where to look
+  first.
+
+Both consts stay off for CoD2, so the two games share one order but not
+one route.
+
+## 16. The CoD2 graph walked under CoD2's pmove (2026-10-24)
+
+CoD2's graph is flooded and proved under 1.5's rules
+(`bots::cod2::GRAPH_RULES`), while its bots move by CoD2's pmove. I put a
+seam in the walks (`nav::WalkStep`, `nav::with_step`, bot-navigation.md
+2, "Other rules") and a CoD2 step behind it (`bots::cod2::Cod2Walk`):
+each walk's body is a CoD2 playerstate stepped by
+`vcod_cod2::pmove::player_step` over the level's `Rules`, the cmd through
+`to_cmd2`, read back into the CoD1 body the walk tests. Two arms: the
+graph alone under CoD2 (`graph`), and the graph plus the follower's walks
+in the bots' pass (the rest-jump test and the re-proofs) under the
+graph's step and rules (`graph + follower`; then those ran under 1.1's,
+section 17). CoD1 and UO are untouched: the seam's commit leaves
+every `mg-v2/bots1` gate byte-identical (the `bm11*`, `bmuo*`, `dg11`,
+`dguo*`, `nav11`, `navuo`, `nav_census11`, `it_*` and `lib_bots` files,
+the last but for the base's two new tests in its filtered count).
+
+Graph sizes (VERIFIED, measured, ours, release, the `<map> seed 1:
+graph` line of `bot_match GAME=cod2 GAMETYPE=tdm`): nodes, edges and
+mantle edges.
+
+| map | 1.5's rules | CoD2's pmove |
+|---|---|---|
+| mp_toujane | 7386 / 53825 / 352 | 7476 / 54416 / 337 |
+| mp_carentan | 10168 / 72645 / 319 | 10124 / 72157 / 342 |
+| mp_dawnville | 9700 / 69989 / 369 | 9727 / 70088 / 361 |
+| mp_burgundy | 7353 / 52897 / 357 | 7352 / 52675 / 369 |
+
+The build costs the same: a one-tick `bot_match` run, the build
+included, took 2154 / 2159 ms (mp_toujane, 1.5's / CoD2's), 1919 / 1780,
+1522 / 1526 and 1606 / 1698, on a box at load 100.
+
+Wide run as in section 15 (VERIFIED, measured, ours, release; seeds
+1..=8, four maps, `TICKS=12000`, a process per map and gametype, summed
+over 32 matches; the gate sets as the `mg-v2/bots1` baselines run them).
+Kills per death
+stays at 0.99-1.00 in every arm: the bots only kill each other.
+
+| | kills | hits / rounds | acc | stalled | held | ladder | mantles |
+|---|---|---|---|---|---|---|---|
+| tdm, base | 4171 | 6047 / 33103 | 0.183 | 1608 | 68918 | 5193 | 1676 |
+| tdm, graph | 4282 | 6527 / 33770 | 0.193 | 1740 | 81977 | 6085 | 1610 |
+| tdm, graph + follower | 4252 | 6527 / 34340 | 0.190 | 2087 | 80268 | 5098 | 1712 |
+| dm, base | 4361 | 6627 / 36433 | 0.182 | 112 | 81737 | 3994 | 1350 |
+| dm, graph | 4278 | 6527 / 36735 | 0.178 | 656 | 77986 | 4230 | 1306 |
+| dm, graph + follower | 4334 | 6415 / 36710 | 0.175 | 29 | 75163 | 3585 | 1336 |
+| `bm2_tdm`, base | 758 | 1091 / 5771 | 0.189 | 169 | 12665 | 1110 | 331 |
+| `bm2_tdm`, graph + follower | 751 | 1136 / 5681 | 0.200 | 966 | 12591 | 1244 | 345 |
+| `bm2_dm_skills`, base | 593 | 914 / 4857 | 0.188 | 5 | 5881 | 1089 | 202 |
+| `bm2_dm_skills`, graph + follower | 572 | 921 / 4966 | 0.185 | 0 | 9801 | 711 | 172 |
+
+- The base lines reproduce section 15's to the tick.
+- Stalls rise in both arms' sums (1720 to 2396 and to 2116), as lumps
+  on single seeds rather than everywhere: `graph + follower` stalls
+  mp_carentan tdm seed 3 for 815 ticks (12 before) and mp_toujane tdm
+  for 1100 over six seeds (579 over four before), while mp_dawnville tdm
+  falls from 740 to 70. The carentan stall is bots pacing round (755,
+  1800..1890, 8), beside the mantle edges down to the yard at z -40.
+  The two graphs hold the same nodes and mantle edges there, and the
+  `graph` arm stalls that seed 17 ticks, so the follower's walks under
+  the new step moved it. Not looked into further.
+- Reverted: `Cod2Bots::nav_tick` hands the build no step, and the bots'
+  pass stays as it was. `Cod2Walk` stays, one argument from on.
+
+## 17. CoD2's bot pass under the graph's rules (2026-10-24)
+
+Two bugs in what CoD2's follower walks and reads:
+
+1. `Cod2Server::step_bots` ran the driver outside any `nav::with_rules`,
+   so the walks the pass runs (`Follower::rest_jump_fails`, the
+   re-proofs) stepped under 1.1's rules while the graph was proved under
+   `bots::cod2::GRAPH_RULES` (1.5's). The pass now runs under the graph's
+   `NavGraph::moving` (rules and step), `GRAPH_RULES` until the graph
+   lands, as `engine::tick` runs CoD1's under the server's rules
+   (`fix1`).
+2. `bots::cod2::cod1_body` never set `jump_penalty`, so `nav::jump_ready`
+   never waited out CoD2's penalty and the rest-jump test jumped full
+   height. It now copies CoD2's `JUMPING` (`pm_flags` 0x80000) and
+   `pm_time` into 1.5's `jump_penalty` and `knockback_ms`, with
+   `jump_origin_z`, as `Cod2Walk` maps them (`fix2`, on top of `fix1`).
+
+Then the two switches left off in sections 15 and 16, each on top of
+both fixes: `PMOVE_PROBES` on (`probes`), and the graph built and walked
+by `Cod2Walk` (`walk`, section 16's `graph + follower`).
+
+Runs as in section 15 (VERIFIED, measured, ours, release; wide: seeds
+1..=8, four maps, `TICKS=12000`, a process per map and gametype, 32
+matches a gametype; gate sets as `mg-v2/bots1` runs them, `bm2_tdm` 12
+matches, `bm2_dm_skills` 8). Base is section 16's base.
+
+| | kills | hits / rounds | acc | stalled | held | ladder | mantles | retreats |
+|---|---|---|---|---|---|---|---|---|
+| tdm wide, base | 4171 | 6047 / 33103 | 0.183 | 1608 | 68918 | 5193 | 1676 | 2876 |
+| tdm wide, fix1 | 4196 | 6166 / 32678 | 0.189 | 2408 | 65674 | 4061 | 1784 | 2922 |
+| tdm wide, fix2 | 4177 | 6205 / 32764 | 0.189 | 2515 | 66370 | 5212 | 1812 | 2888 |
+| tdm wide, probes | 4202 | 6252 / 33308 | 0.188 | 3179 | 77273 | 4575 | 1751 | 2921 |
+| tdm wide, walk | 4187 | 6487 / 33207 | 0.195 | 1746 | 79316 | 8359 | 1770 | 2994 |
+| dm wide, base | 4361 | 6627 / 36433 | 0.182 | 112 | 81737 | 3994 | 1350 | 3058 |
+| dm wide, fix1 | 4315 | 6638 / 36527 | 0.182 | 71 | 84494 | 4132 | 1328 | 3068 |
+| dm wide, fix2 | 4303 | 6576 / 36512 | 0.180 | 148 | 86512 | 4335 | 1302 | 3003 |
+| dm wide, probes | 4287 | 6441 / 36490 | 0.177 | 140 | 81418 | 4407 | 1351 | 3080 |
+| dm wide, walk | 4333 | 6375 / 37330 | 0.171 | 20 | 78350 | 3159 | 1319 | 2968 |
+| `bm2_tdm`, base | 758 | 1091 / 5771 | 0.189 | 169 | 12665 | 1110 | 331 | 506 |
+| `bm2_tdm`, fix1 | 751 | 1105 / 5735 | 0.193 | 47 | 10286 | 1342 | 355 | 495 |
+| `bm2_tdm`, fix2 | 751 | 1036 / 5181 | 0.200 | 46 | 10054 | 1016 | 351 | 457 |
+| `bm2_tdm`, probes | 746 | 1045 / 5408 | 0.193 | 1028 | 12353 | 730 | 307 | 449 |
+| `bm2_tdm`, walk | 765 | 1112 / 5649 | 0.197 | 567 | 12994 | 1554 | 340 | 470 |
+| `bm2_dm_skills`, base | 593 | 914 / 4857 | 0.188 | 5 | 5881 | 1089 | 202 | 405 |
+| `bm2_dm_skills`, fix1 | 577 | 886 / 4922 | 0.180 | 5 | 8618 | 966 | 169 | 395 |
+| `bm2_dm_skills`, fix2 | 570 | 882 / 5082 | 0.174 | 5 | 9264 | 891 | 179 | 399 |
+| `bm2_dm_skills`, probes | 588 | 940 / 4788 | 0.196 | 22 | 8372 | 776 | 187 | 406 |
+| `bm2_dm_skills`, walk | 578 | 932 / 4984 | 0.187 | 0 | 8785 | 665 | 177 | 420 |
+
+Wide tdm stalls by map (burgundy, carentan, dawnville, toujane): base
+0 / 289 / 740 / 579, fix1 31 / 422 / 740 / 1215, fix2 56 / 352 / 609 /
+1498, probes 0 / 1106 / 459 / 1614, walk 13 / 501 / 130 / 1102.
+
+- Both fixes stay: they make the follower walk and wait as the graph
+  was proved. Kills hold (tdm +6, dm -58 of 4361, within the seeds'
+  spread). Wide tdm stalls rise (1608 to 2515), nearly all on
+  mp_toujane, where seeds 3 and 4 that never stalled now stall 151 and
+  241 ticks; the gate sets' stalls fall (174 to 51). Not looked into
+  further; mp_toujane tdm is where to look first.
+- `probes`: stalls up again in tdm wide (+26%) and the tdm gate (46 to
+  1028), kills flat. Stays off.
+- `walk`: the lowest wide stalls of every arm (tdm 1746, dm 20), kills
+  +10 and +30 on fix2, but the tdm gate's stalls go 46 to 567 (one
+  mp_carentan seed for 474) and tdm ladder ticks rise 60%. Mixed, not a
+  clear win, so it stays off; mp_carentan's yard (section 16) is still
+  where its stalls lump.
+
+### 17.1 Looks on a mantle edge and the slow onto a stop (2026-10-24)
+
+Two fixes in the brain, measured on top of section 17's `fix2` (VERIFIED,
+measured, ours, release; same runs and seeds as above; `base` reproduces
+`fix2`'s rows exactly):
+
+1. `mantle`: on a CoD2 mantle edge (`BotView::mantle`, off
+   `nav::Follower::mantling`) neither the recall look nor `face_hurt`
+   turns the view. CoD2's pmove offers the mantle only to a view facing
+   the wall (INFERRED: `find_surface`, `vcod_cod2::pmove::mantle`,
+   traces along the view's forward), so a bot that
+   turned toward a remembered enemy at mp_toujane's yard wall (400-560,
+   1563, 4) backed off the edge and gave it up. `cover_unseen` is left
+   alone: a held spot walks its own keys straight to the spot, not the
+   path's edge. CoD1 and UO graphs carry no mantle edge, and their gates
+   (`bm11*`, `bmuo*`, `dg11`, `dguo*`, `nav*`, `it_*`) match the base
+   byte for byte.
+2. `stop`: the slow onto a leap's foot or a held node (`Follower::holding`)
+   set the forward key along the view. Under a recall look the view is off
+   the path and the keys were turned to keep it, so the slow walked the
+   body away from its stop. That is `mantle`'s mp_carentan rise: seed 3 of
+   `bm2_tdm` ran a bot's path to node (736, 1881, 8) with a held edge on,
+   the recall look turned the view to (928, 1523), and the slow's +127
+   ground the bot into the corner at (761, 1799, 8) for 335 ticks
+   (INFERRED from a per-tick trace of the bot's cmd and view: `stop`
+   set, view yaw -62, keys 127 / -31, waypoint at yaw 106). The bug
+   predates `mantle`; `mantle` moved seed 3's trajectory onto it. The
+   slow now scales both turned keys under a recall look.
+3. `dead`: an edge the follower gets stuck on again while it is still
+   avoided goes on a dead list that the fallback plan also leaves out until
+   it expires (`nav::Follower::avoid_edge`). Before, a plan with no way
+   round an avoided edge went through it again however often it failed.
+   This is what raised UO's stalls under `stop`; see the notes below the
+   table.
+
+| | kills | hits / rounds | acc | stalled | held | ladder | mantles | retreats |
+|---|---|---|---|---|---|---|---|---|
+| tdm wide, base | 4177 | 6205 / 32764 | 0.189 | 2515 | 66370 | 5212 | 1812 | 2888 |
+| tdm wide, mantle | 4175 | 6313 / 33735 | 0.187 | 914 | 72440 | 4118 | 1720 | 2932 |
+| tdm wide, stop | 4248 | 6429 / 33219 | 0.194 | 0 | 72924 | 4677 | 1870 | 3009 |
+| dm wide, base | 4303 | 6576 / 36512 | 0.180 | 148 | 86512 | 4335 | 1302 | 3003 |
+| dm wide, mantle | 4307 | 6541 / 37092 | 0.176 | 68 | 78925 | 4960 | 1446 | 3035 |
+| dm wide, stop | 4333 | 6600 / 37446 | 0.176 | 50 | 81788 | 4138 | 1429 | 3076 |
+| `bm2_tdm`, base | 751 | 1036 / 5181 | 0.200 | 46 | 10054 | 1016 | 351 | 457 |
+| `bm2_tdm`, mantle | 757 | 1110 / 5813 | 0.191 | 335 | 11461 | 1370 | 373 | 492 |
+| `bm2_tdm`, stop | 748 | 1166 / 5523 | 0.211 | 0 | 11242 | 1246 | 419 | 507 |
+| `bm2_dm_skills`, base | 570 | 882 / 5082 | 0.174 | 5 | 9264 | 891 | 179 | 399 |
+| `bm2_dm_skills`, mantle | 569 | 921 / 5011 | 0.184 | 25 | 7199 | 906 | 191 | 412 |
+| `bm2_dm_skills`, stop | 557 | 873 / 4959 | 0.176 | 0 | 9037 | 734 | 212 | 398 |
+| tdm wide, dead | 4270 | 6442 / 33245 | 0.194 | 149 | 75102 | 4883 | 1874 | 3014 |
+| dm wide, dead | 4333 | 6545 / 37299 | 0.175 | 50 | 80615 | 4037 | 1429 | 3066 |
+| `bm2_tdm`, dead | 744 | 1145 / 5421 | 0.211 | 0 | 11041 | 1286 | 427 | 502 |
+| `bm2_dm_skills`, dead | 564 | 894 / 5057 | 0.177 | 0 | 9164 | 842 | 209 | 409 |
+
+Stalls by map (burgundy, carentan, dawnville, toujane): tdm wide base 56
+/ 352 / 609 / 1498, mantle 0 / 351 / 0 / 563, stop 0 / 0 / 0 / 0; dm
+wide base 8 / 140 / 0 / 0, mantle 0 / 68 / 0 / 0, stop 0 / 0 / 0 / 50;
+`bm2_tdm` (carentan, dawnville, toujane) base 0 / 33 / 13, mantle 335 /
+0 / 0, stop 0 / 0 / 0.
+
+- `mantle` alone takes wide tdm stalls down 64% (dawnville to 0) with
+  kills flat, but raises `bm2_tdm` to 335, all the carentan corner above.
+- `stop` takes every set's stalls to 0 but dm wide's 50: one run at
+  mp_toujane's long mantle (1180, 1860, 70), the edge longer than
+  `OFF_PATH_STEPS` spacings that `Follower::follow`'s off-path check
+  clears (left as it is; exempting it grew the roof stall site). Kills
+  rise in the wide sets (+71, +30) and dip in the gate sets (-3, -13).
+- `dead` leaves CoD2 where `stop` had it but for tdm wide's 149, one
+  run on mp_toujane.
+- `stop` and `dead` are in the shared brain and move CoD1 and UO. Summed
+  over the gate sets (ours, release, a local gate script's sets),
+  base / stop / dead: CoD1's 12 `bm11*` sets kills 12144 / 12236 /
+  12238, stalls 5736 / 4636 / 4892; UO's five `bmuo*` sets kills 2963 /
+  2868 / 2844, stalls 969 / 1687 / 2782. `nav*` match the base, the
+  ignored `bots.rs` tests pass at both installs, and `dg*` move with the
+  play.
+- VERIFIED (measured, per seed): nearly every stall in those sets is on
+  mp_ship (UO base 819 of 969, stop 1669 of 1687), and a set's sum is a
+  few lumps, one bot held for 300 to 3000 ticks. Four seeds a map cannot
+  separate the arms, so mp_ship ran alone on more seeds:
+
+| mp_ship, seeds | | kills | stalled | off the rungs (slalom in) | slalom | seeds with a stall |
+|---|---|---|---|---|---|---|
+| UO tdm, 1-48 | base | 3906 | 4768 | 2281 | 0 | 31 |
+| | stop | 3863 | 3890 | 2444 | 601 | 21 |
+| | dead | 3880 | 5434 | 1319 | 0 | 13 |
+| UO tdm, skills 0 against 3, 1-28 | base | 2100 | 1649 | 671 | 0 | 9 |
+| | stop | 2085 | 11567 | 9316 | 8624 | 13 |
+| | dead | 2030 | 2965 | 887 | 2 | 11 |
+| 1.1 tdm, 1-48 | base | 4329 | 11053 | | | 24 |
+| | stop | 4312 | 3073 | | | 17 |
+| | dead | 4334 | 3960 | | | 19 |
+
+- VERIFIED (measured, a per-tick trace of the bot's cmd, view and
+  follower): UO's rise under `stop` is the deck slalom on mp_ship at
+  (3549..3581, -38..135, 352), nodes 2946, 3846, 5293, 6229, 6697 and
+  4494, each edge held (`Follower::holding`). No bot entered it under
+  the base in 56 matches; under `stop`, recall-looking bots slow onto
+  each held node as they should and get in. The way out, 6697 (3581,
+  89) to 4494 (3552, 135), arrives only with the graph's running start
+  along the edge: the same walk from rest on the node, or from (3572,
+  94), pins at y 96.9 against the wall at y 112 (`walk_with`, UO rules,
+  `Arith::Stored`). The follower avoided the edge, found no way round,
+  planned through it again from rest, failed again, and so on: one bot
+  of seed 15 for 8624 ticks, its plans' goals changing all the while.
+  INFERRED (`Bot::think`'s stall check): each hold sets `BotView::stop`,
+  which restarts the bot's own stall circle, so no unstick spell broke
+  the loop either. With `dead` the
+  slalom costs 0 and 2 stall ticks in the two UO runs above.
+- VERIFIED (measured, same traces): what stays is mostly bots held on or
+  at a ladder with their keys on and neither the stall circle nor the
+  follower's `STUCK_TICKS` noticing: `dead`'s UO 48-seed run has 2353
+  ticks of seed 46 at (3808, 65, 492) on the rungs, the gates' biggest
+  lumps (`bmuo_cover_alt` seed 1, 1909; `bm11_cover_alt` seed 2, 3141)
+  are a bot at the hold ladder's foot (3280, -449, -61) under its head at
+  56, and the base's UO run has 2487 rung ticks of its own. No dead edge
+  was on in any of them. Section 17.2 fixes both.
+- Skipping the recall look while slowing onto a stop, instead of scaling
+  the keys, did as well on CoD2 (tdm wide stalls 113) but raised CoD1's
+  stalls too (5736 to 12014), so the keys scale.
+
+### 17.2 Bots frozen on or at mp_ship's ladders (2026-10-24)
+
+Section 17.1's leftover: bots held on or at a ladder with their keys on,
+with neither `Bot::think`'s stall circle nor the follower's `STUCK_TICKS`
+firing. Two causes, each read off a per-tick trace of the bot's cmd,
+view, stage and follower (VERIFIED, measured, ours, release; the debug
+patch is not committed):
+
+1. `throw`: a grenade throw started on the rungs, or at a ladder's foot
+   as the body grabbed it. The rungs hold `ps.weapon` at 0, so
+   `think_grenade` asked for the frag every tick and never saw it in
+   hand. The stage machine returns before `think_wander`, where the
+   stall circle runs, and a throw's `Goal::Hold` resets the follower each
+   tick, so its clock and `idle` never moved. UO seed 46's bot at (3808,
+   65, 492) sat in `ToGrenade` from tick 7589 with `ps.weapon` 0 and
+   `weaponTime` 0; the gates' `bmuo_cover_alt` seed 1 (slot 2 from tick
+   4065) and `bm11_cover_alt` seed 2 (slot 5) are the same at the hold
+   ladder's foot (3280, -449, -61). Now no throw starts on the rungs, and
+   a throw stage whose wanted weapon is not in hand while the weapon
+   machine sits idle for more than `SWITCH_IDLE_TICKS` (20) is given up
+   (`Bot::switch_idle`). That is also the detector: it catches any switch
+   that never lands, not only the ladder's.
+2. `rungs`: a plan made halfway up a ladder starts at the nearer end
+   (`NavGraph::nearest_ladder_end`), and with the next node the ladder's
+   other end the follower sent the body back to the start first. UO
+   skills seed 1's bot on the hold ladder at (3370, -380) chased a goal
+   that flipped between two enemies: each flip parked one plan and took
+   up the other (`Parked`), one with the foot next, one with the head
+   next, and the bot went up and down between z 188 and 202 for 361
+   ticks, closing on each waypoint in turn so neither check fired. A plan
+   starting at a ladder end whose next node is the ladder's other end,
+   taken with the body on the rungs between them and within a node
+   spacing of the foot, now heads for the other end
+   (bot-navigation.md section 3).
+
+mp_ship alone, as in 17.1 (base is 17.1's `dead`, which is 566a8d80's
+code):
+
+| mp_ship, seeds | | kills | stalled | seeds with a stall |
+|---|---|---|---|---|
+| UO tdm, 1-48 | base | 3880 | 5434 | 13 |
+| | throw | 3872 | 2416 | 13 |
+| | rungs | 3843 | 1100 | 10 |
+| UO tdm, skills 0 against 3, 1-28 | base | 2030 | 2965 | 11 |
+| | throw | 2072 | 1824 | 11 |
+| | rungs | 2091 | 876 | 5 |
+| 1.1 tdm, 1-48 | base | 4334 | 3960 | 19 |
+| | throw | 4328 | 2767 | 17 |
+| | rungs | 4388 | 493 | 11 |
+
+The gate sets (a local gate script's), kills / stalls, with
+section 17's base (b2d7c818, before 17.1) for reference:
+
+| | b2d7c818 | base | throw | rungs |
+|---|---|---|---|---|
+| `bmuo_tdm` | 869 / 106 | 881 / 272 | 885 / 0 | 872 / 0 |
+| `bmuo_skills` | 667 / 27 | 623 / 371 | 623 / 371 | 666 / 0 |
+| `bmuo_cover_alt` | 724 / 722 | 696 / 2106 | 721 / 18 | 713 / 228 |
+| `bmuo_retreat_alt` | 703 / 101 | 644 / 33 | 645 / 187 | 667 / 260 |
+| UO's five `bmuo*` | 2963 / 969 | 2844 / 2782 | | 2918 / 488 |
+| CoD1's 12 `bm11*` | 12144 / 5736 | 12238 / 4892 | | 12298 / 2813 |
+| `bm2_tdm` | 751 / 46 | 744 / 0 | | 745 / 0 |
+| `bm2_dm_skills` | 570 / 5 | 564 / 0 | | 558 / 0 |
+
+- Both stay. Stalls fall in every set but `bmuo_retreat_alt` (a few
+  lumps either way on four seeds); UO's gate stalls end at half
+  b2d7c818's, CoD1's at half of 17.1's. UO's gate kills are 45 under
+  b2d7c818's, 74 over the base; 17.1's own drop (`bmuo_skills`,
+  `bmuo_retreat_alt`) is mostly won back.
+- `nav11` and `navuo` match the base; `dg*` move with the play; the
+  ignored `bots.rs`, `bot_admin`, `bot_objectives` and `bot_vehicles`
+  tests pass at both installs (`bot_vehicles` at UO), `nav_census` at
+  1.1.

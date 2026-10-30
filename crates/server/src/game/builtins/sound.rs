@@ -111,11 +111,11 @@ pub fn play_loop_sound(
 ) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
     let idx = (alloc_alias(host, cx, args)? - sounds_base(host)) as i32;
-    let v1 = is_v1(host);
+    let v1 = loops_v1(host);
     if let Some(ent) = host.ents.get_mut(id) {
         ent.loop_sound = idx;
-        // 1.5 (game.mp 0x5d8a9) and UO (0x68b2e) broadcast a looping
-        // entity for as long as it loops.
+        // 1.5 (game.mp 0x5d8a9), UO (0x68b2e) and CoD2 (lnxded 0x8111e0c)
+        // broadcast a looping entity for as long as it loops.
         if !v1 {
             ent.broadcast_time = -1;
         }
@@ -132,10 +132,11 @@ pub fn stop_loop_sound(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
-    let (v1, now) = (is_v1(host), host.level_time_ms);
+    let (v1, now) = (loops_v1(host), host.level_time_ms);
     if let Some(ent) = host.ents.get_mut(id) {
         ent.loop_sound = 0;
-        // 1.5 (0x5d908) and UO (0x68b8d): 300 ms more, as `playSound`.
+        // 1.5 (0x5d908), UO (0x68b8d) and CoD2 (lnxded 0x8111e5a): 300 ms
+        // more, as `playSound`.
         if !v1 {
             ent.broadcast_time = now.wrapping_add(BROADCAST_MS);
         }
@@ -146,7 +147,13 @@ pub fn stop_loop_sound(
 /// Whether the server speaks 1.1, whose sound builtins write `svFlags`
 /// rather than `r.broadcastTime`.
 fn is_v1(host: &GameHost) -> bool {
-    host.defs.proto.version == vcod_common::net::protocol::PROTOCOL_V1.version
+    host.defs.proto.is_v1()
+}
+
+/// [`is_v1`] for the loop sounds, which CoD2 broadcasts through
+/// `r.broadcastTime` as 1.5 does (cod2-protocol.md 15.7).
+fn loops_v1(host: &GameHost) -> bool {
+    is_v1(host) && !host.profile.loop_sounds_broadcast_time
 }
 
 /// `<player> playLocalSound(alias)` (sound doc, section 9): the reliable
@@ -346,7 +353,7 @@ mod tests {
     #[test]
     fn uo_sounds_broadcast_for_a_while_not_for_good() {
         let (mut vm, mut host) = fixture();
-        host.defs = &crate::defs::UO;
+        host.set_profile(&crate::game::profile::COD1_UO);
         host.level_time_ms = 5000;
         vm.with_cx(|cx| {
             let e = host.ents.spawn(cx).unwrap();

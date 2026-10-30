@@ -305,7 +305,7 @@ pub(super) fn menu_text(
 }
 
 /// [`menu_text`] in `rgba`, which a `^N` code overrides and `^7` restores.
-pub(super) fn menu_text_rgba(
+pub(crate) fn menu_text_rgba(
     font: &Font,
     s: &str,
     (x, baseline): (f32, f32),
@@ -326,7 +326,7 @@ pub(super) fn menu_text_rgba(
     );
 }
 
-pub(super) fn text_width(font: &Font, s: &str, textscale: f32) -> f32 {
+pub(crate) fn text_width(font: &Font, s: &str, textscale: f32) -> f32 {
     font::measure(font, s, textscale / font.unit_scale())
 }
 

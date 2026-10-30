@@ -1,8 +1,12 @@
-use crate::bsp::{Bsp, Material};
+use crate::mapworld::{MapWorld, Material};
 
 pub struct Batch {
     pub material: u16,
     pub lightmap: u16,
+    /// CoD4's reflection probe (`MapWorld::soup_probes`); 0 elsewhere.
+    pub probe: u8,
+    /// CoD4's primary light (`MapWorld::soup_lights`); 0 elsewhere.
+    pub light: u8,
     pub first_index: u32,
     pub index_count: u32,
 }
@@ -80,24 +84,26 @@ pub struct IndexRange {
 }
 
 /// Where a soup landed while grouping: (group key, offset in the group, count).
-type Placed = Option<((u16, u16), u32, u32)>;
+type Placed = Option<((u16, u16, u8, u8), u32, u32)>;
 
 /// One absolute u32 index buffer, one contiguous batch per (material,
-/// lightmap), and each soup's range inside its batch (`None` for `Skip` and
+/// lightmap, reflection probe, primary light), and each soup's range inside its batch (`None` for `Skip` and
 /// `Sky` materials; the sky pass owns the sky soups).
 pub fn build_batches(
-    bsp: &Bsp,
+    bsp: &MapWorld,
     kinds: &[MaterialKind],
 ) -> (Vec<u32>, Vec<Batch>, Vec<Option<IndexRange>>) {
     use std::collections::BTreeMap;
-    let mut groups: BTreeMap<(u16, u16), Vec<u32>> = BTreeMap::new();
+    let mut groups: BTreeMap<(u16, u16, u8, u8), Vec<u32>> = BTreeMap::new();
     let mut placed: Vec<Placed> = Vec::with_capacity(bsp.soups.len());
-    for soup in &bsp.soups {
+    for (si, soup) in bsp.soups.iter().enumerate() {
         if kinds[soup.material as usize] != MaterialKind::Draw {
             placed.push(None);
             continue;
         }
-        let key = (soup.material, soup.lightmap);
+        let probe = bsp.soup_probes.get(si).copied().unwrap_or(0);
+        let light = bsp.soup_lights.get(si).copied().unwrap_or(0);
+        let key = (soup.material, soup.lightmap, probe, light);
         let dst = groups.entry(key).or_default();
         let offset = dst.len() as u32;
         let fi = soup.first_index as usize;
@@ -108,15 +114,17 @@ pub fn build_batches(
     }
     let mut indices = Vec::new();
     let mut batches = Vec::new();
-    let mut batch_of: BTreeMap<(u16, u16), (u32, u32)> = BTreeMap::new();
-    for ((material, lightmap), idx) in groups {
+    let mut batch_of: BTreeMap<(u16, u16, u8, u8), (u32, u32)> = BTreeMap::new();
+    for ((material, lightmap, probe, light), idx) in groups {
         batch_of.insert(
-            (material, lightmap),
+            (material, lightmap, probe, light),
             (batches.len() as u32, indices.len() as u32),
         );
         batches.push(Batch {
             material,
             lightmap,
+            probe,
+            light,
             first_index: indices.len() as u32,
             index_count: idx.len() as u32,
         });
@@ -140,7 +148,7 @@ pub fn build_batches(
 
 /// Bounds over the drawn soups' vertices; the spawn fallback. Name rules
 /// only: callers here have no shader lib.
-pub fn map_bounds(bsp: &Bsp) -> ([f32; 3], [f32; 3]) {
+pub fn map_bounds(bsp: &MapWorld) -> ([f32; 3], [f32; 3]) {
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
     for soup in &bsp.soups {
@@ -161,7 +169,7 @@ pub fn map_bounds(bsp: &Bsp) -> ([f32; 3], [f32; 3]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bsp::{Bsp, DrawVert, Material, TriangleSoup};
+    use crate::mapworld::{DrawVert, MapWorld, Material, TriangleSoup};
 
     fn mat(name: &str) -> Material {
         Material {
@@ -186,14 +194,13 @@ mod tests {
         vec![MaterialKind::Draw, MaterialKind::Skip, MaterialKind::Draw]
     }
 
-    fn test_bsp() -> Bsp {
-        Bsp {
+    fn test_bsp() -> MapWorld {
+        MapWorld {
             materials: vec![
                 mat("textures/wall"),
                 mat("textures/common/clip"),
                 mat("textures/floor"),
             ],
-            lightmaps: vec![],
             // soups 0 and 2 share (material 0, lightmap 0); soup 1 is clip
             soups: vec![
                 TriangleSoup {
@@ -240,35 +247,7 @@ mod tests {
                 })
                 .collect(),
             indices: vec![0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 2, 1],
-            entities: String::new(),
-            planes: vec![],
-            brush_sides: vec![],
-            brushes: vec![],
-            models: vec![],
-            cull_groups: vec![],
-            cull_indices: vec![],
-            portal_verts: vec![],
-            occluders: vec![],
-            occluder_plane_indices: vec![],
-            occluder_edges: vec![],
-            occluder_indices: vec![],
-            aabb_nodes: vec![],
-            cells: vec![],
-            portals: vec![],
-            nodes: vec![],
-            leafs: vec![],
-            terrain: vec![],
-            patches: vec![],
-            collision_verts: vec![],
-            collision_indices: vec![],
-            light_indices: vec![],
-            leaf_lights: vec![],
-            leaf_lists: vec![],
-            leaf_brushes: vec![],
-            leaf_partitions: vec![],
-            lights: vec![],
-            light_vis: vec![],
-            pvs: None,
+            ..Default::default()
         }
     }
 

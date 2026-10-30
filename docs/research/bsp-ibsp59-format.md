@@ -305,7 +305,7 @@ u32 first_vert          // into lump 25
 u32 first_index         // into lump 26, indices relative to first_vert
 ```
 
-Lump 25 is `f32 xyz` per vertex and lump 26 `u16` per index, both shared by the two kinds. mp_carentan carries 568 terrain and 534 patch records, mp_pavlov 619 in all; the patches are almost all 3x3, 3x5, 5x3 and 9x3 grids, and every kerb wall on carentan is a flat 3x3 one. `bsp.rs` parses the three lumps into `Bsp::terrain`, `patches`, `collision_verts` and `collision_indices`.
+Lump 25 is `f32 xyz` per vertex and lump 26 `u16` per index, both shared by the two kinds. mp_carentan carries 568 terrain and 534 patch records, mp_pavlov 619 in all; the patches are almost all 3x3, 3x5, 5x3 and 9x3 grids, and every kerb wall on carentan is a flat 3x3 one. `bsp.rs` parses the three lumps into `MapWorld::terrain`, `patches`, `collision_verts` and `collision_indices`.
 
 ### Patch collision
 

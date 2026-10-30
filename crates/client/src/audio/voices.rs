@@ -2,11 +2,13 @@
 //! (docs/research/cod11-sound-system.md, sections 2 and 4).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 use glam::{Mat3, Vec3};
 
 use crate::audio::alias::{Channel, MasterSlave};
+use crate::audio::cod2::VfCurve;
 use crate::audio::cues::Source;
 use crate::audio::spatial::{Listener, falloff, pan};
 
@@ -68,6 +70,8 @@ pub struct NewVoice {
     /// Linear, already sampled from the row's `vol` range.
     pub volume: f32,
     pub dist: (f32, f32),
+    /// CoD2's falloff curve; `None` is CoD 1's straight line.
+    pub curve: Option<Arc<VfCurve>>,
     pub master_slave: MasterSlave,
     pub spatial: bool,
     pub looping: bool,
@@ -87,6 +91,7 @@ struct Voice {
     channel: Channel,
     volume: f32,
     dist: (f32, f32),
+    curve: Option<Arc<VfCurve>>,
     master_slave: MasterSlave,
     spatial: bool,
     looping: bool,
@@ -112,7 +117,10 @@ pub struct VoiceTable {
     voices: Vec<Voice>,
     next_id: VoiceId,
     /// Per-channel multipliers, by [`Channel`] index; `None` is all 1.
-    channel_volume: Option<[f32; 10]>,
+    channel_volume: Option<[f32; 11]>,
+    /// CoD2's slave duck, `SND_GetLerpedSlavePercentage`'s 0..1 lerp
+    /// (`g_snd` +0x274, Mac 0x49c02); `None` is CoD 1's cap.
+    slave_lerp: Option<f32>,
 }
 
 /// Entity identity for the replacement rule; a fixed point is
@@ -142,7 +150,7 @@ impl VoiceTable {
         is_finished: impl Fn(VoiceId) -> bool,
     ) -> Result<Admitted, NewVoice> {
         let mut replaced = Vec::new();
-        if v.channel != Channel::Auto {
+        if !matches!(v.channel, Channel::Auto | Channel::Auto2d) {
             let ent = entity_of(&v.source);
             self.voices.retain(|x| {
                 let same = x.channel == v.channel && entity_of(&x.source) == ent;
@@ -208,6 +216,7 @@ impl VoiceTable {
             channel: v.channel,
             volume: v.volume,
             dist: v.dist,
+            curve: v.curve,
             master_slave: v.master_slave,
             spatial: v.spatial,
             looping: v.looping,
@@ -227,6 +236,31 @@ impl VoiceTable {
     /// is how loop bookkeeping tells running from lost.
     pub fn looping(&self, id: VoiceId) -> Option<bool> {
         self.voices.iter().find(|v| v.id == id).map(|v| v.looping)
+    }
+
+    /// The entity a voice plays on, [`ENTITYNUM_WORLD`] for a point.
+    pub fn entity(&self, id: VoiceId) -> Option<u32> {
+        self.voices
+            .iter()
+            .find(|v| v.id == id)
+            .map(|v| entity_of(&v.source))
+    }
+
+    /// The voice's expected length in ms, `None` for a stream or an
+    /// unknown voice.
+    pub fn duration_ms(&self, id: VoiceId) -> Option<i32> {
+        let v = self.voices.iter().find(|v| v.id == id)?;
+        let end = v.ends_at?;
+        Some(end.saturating_duration_since(Instant::now()).as_millis() as i32)
+    }
+
+    /// The voice's master or slave part.
+    #[cfg(test)]
+    pub fn master_slave(&self, id: VoiceId) -> Option<MasterSlave> {
+        self.voices
+            .iter()
+            .find(|v| v.id == id)
+            .map(|v| v.master_slave)
     }
 
     /// The voice's linear volume before distance, ducking and master.
@@ -257,8 +291,8 @@ impl VoiceTable {
 
     /// The engine's per-channel volumes (CoDMP.exe `0x8e079c`, set through
     /// cgame syscall 0xd8), multiplied into every voice after the duck.
-    pub fn set_channel_volumes(&mut self, volumes: [f32; 10]) {
-        self.channel_volume = (volumes != [1.0; 10]).then_some(volumes);
+    pub fn set_channel_volumes(&mut self, volumes: [f32; 11]) {
+        self.channel_volume = (volumes != [1.0; 11]).then_some(volumes);
     }
 
     pub fn remove(&mut self, id: VoiceId) {
@@ -267,6 +301,31 @@ impl VoiceTable {
 
     pub fn retain(&mut self, mut keep: impl FnMut(VoiceId) -> bool) {
         self.voices.retain(|v| keep(v.id));
+    }
+
+    /// Ducks slaves as CoD2 does ([`Self::advance_slave_lerp`]) instead of
+    /// CoD 1's cap.
+    pub fn use_slave_lerp(&mut self) {
+        self.slave_lerp = Some(0.0);
+    }
+
+    /// `SND_Update` (Mac 0x4df64)'s step of the slave lerp over `ms`: up
+    /// toward 1 while a master plays, down toward 0 otherwise, a whole
+    /// swing taking `fade_ms` (`snd_slaveFadeTime`, 500); at 0 it jumps.
+    pub fn advance_slave_lerp(&mut self, ms: f32, fade_ms: i32) {
+        let Some(lerp) = self.slave_lerp else {
+            return;
+        };
+        let master = self
+            .voices
+            .iter()
+            .any(|v| v.master_slave == MasterSlave::Master);
+        let next = match (fade_ms, master) {
+            (0, m) => f32::from(u8::from(m)),
+            (f, true) => lerp + ms / f as f32,
+            (f, false) => lerp - ms / f as f32,
+        };
+        self.slave_lerp = Some(next.clamp(0.0, 1.0));
     }
 
     pub fn clear(&mut self) -> Vec<VoiceId> {
@@ -337,20 +396,30 @@ impl VoiceTable {
             }
             let (spatial_scale, pan_v) = if v.spatial {
                 let p = v.source.pos();
+                let d = p.distance(listener.pos);
+                let fall = match &v.curve {
+                    Some(c) => c.attenuate(d, v.dist.0, v.dist.1),
+                    None => falloff(d, v.dist.0, v.dist.1),
+                };
                 (
-                    falloff(p.distance(listener.pos), v.dist.0, v.dist.1)
-                        * occlusion.get(&v.id).copied().unwrap_or(1.0),
+                    fall * occlusion.get(&v.id).copied().unwrap_or(1.0),
                     pan(listener, p),
                 )
             } else {
                 (1.0, 0.0)
             };
             let scaled = v.volume * spatial_scale;
-            let capped = match v.master_slave {
-                MasterSlave::Slave(level) if master_live => scaled.min(level),
+            let capped = match (v.master_slave, self.slave_lerp) {
+                // `SND_GetLerpedSlavePercentage`: 1 - (1 - pct) * lerp.
+                (MasterSlave::Slave(pct), Some(lerp)) if lerp != 0.0 => {
+                    scaled * (1.0 - (1.0 - pct) * lerp)
+                }
+                (MasterSlave::Slave(level), None) if master_live => scaled.min(level),
                 _ => scaled,
             };
-            let channel = self.channel_volume.map_or(1.0, |c| c[v.channel as usize]);
+            let channel = self
+                .channel_volume
+                .map_or(1.0, |c| c.get(v.channel as usize).copied().unwrap_or(1.0));
             out.push(VoiceUpdate {
                 id: v.id,
                 gain: capped * master_volume * channel,
@@ -371,6 +440,7 @@ mod tests {
             channel,
             volume: 1.0,
             dist: (100.0, 1100.0),
+            curve: None,
             master_slave: MasterSlave::None,
             spatial: true,
             looping: false,
@@ -480,6 +550,25 @@ mod tests {
         assert!((get_from(&ups, e).pan + 1.0).abs() < 1e-5);
     }
 
+    /// A CoD2 voice falls off along its curve; `auto2d` is flat and
+    /// replaces nothing on its entity.
+    #[test]
+    fn a_cod2_curve_shapes_the_falloff() {
+        let mut t = VoiceTable::new();
+        let l = Listener::default();
+        let curve = VfCurve::parse("tewsnd", "SNDCURVE 3 0 1 0.25 0.8 1 0").unwrap();
+        let mut v = nv(Source::Point(l.right * 350.0), Channel::Auto);
+        v.curve = Some(Arc::new(curve));
+        let id = put(&mut t, v);
+        let flat = put(&mut t, nv2d(Channel::Auto2d));
+        let again = put(&mut t, nv2d(Channel::Auto2d));
+        let ups = t.update(&l, &HashMap::new(), &HashMap::new(), &HashMap::new(), 1.0);
+        // 350 is a quarter of the way through 100..1100: the knot's 0.8.
+        assert!((get_from(&ups, id).gain - 0.8).abs() < 1e-5);
+        assert_eq!(get_from(&ups, flat).gain, 1.0);
+        assert_eq!(get_from(&ups, again).gain, 1.0);
+    }
+
     /// A tag voice keeps its start's offset off the entity as the entity
     /// moves, and holds still once the entity leaves the map.
     #[test]
@@ -557,7 +646,7 @@ mod tests {
         let mut t = VoiceTable::new();
         let w = put(&mut t, nv2d(Channel::Weapon));
         let m = put(&mut t, nv2d(Channel::Menu));
-        let mut vols = [1.0; 10];
+        let mut vols = [1.0; 11];
         vols[Channel::Weapon as usize] = 0.1;
         t.set_channel_volumes(vols);
         let ups = t.update(
@@ -606,6 +695,40 @@ mod tests {
             1.0,
         );
         assert_eq!(get_from(&ups, s).gain, 1.0);
+    }
+
+    /// CoD2 scales a slave by `1 - (1 - pct) * lerp`, the lerp ramping
+    /// over `snd_slaveFadeTime` while a master plays and back after.
+    #[test]
+    fn cod2_slaves_duck_along_the_lerp() {
+        let mut t = VoiceTable::new();
+        t.use_slave_lerp();
+        let mut slave = nv2d(Channel::Auto);
+        slave.volume = 0.2;
+        slave.master_slave = MasterSlave::Slave(0.25);
+        let s = put(&mut t, slave);
+        let gain = |t: &mut VoiceTable| {
+            let l = Listener::default();
+            let ups = t.update(&l, &HashMap::new(), &HashMap::new(), &HashMap::new(), 1.0);
+            get_from(&ups, s).gain
+        };
+        assert_eq!(gain(&mut t), 0.2);
+        let mut master = nv2d(Channel::Auto);
+        master.master_slave = MasterSlave::Master;
+        let m = put(&mut t, master);
+        // Not yet stepped: the lerp is still 0.
+        assert_eq!(gain(&mut t), 0.2);
+        t.advance_slave_lerp(250.0, 500);
+        // Half way: 1 - 0.75 * 0.5, below the cap CoD 1 would leave alone.
+        assert!((gain(&mut t) - 0.2 * 0.625).abs() < 1e-6);
+        t.advance_slave_lerp(400.0, 500);
+        assert!((gain(&mut t) - 0.2 * 0.25).abs() < 1e-6);
+        t.remove(m);
+        t.advance_slave_lerp(100.0, 500);
+        assert!((gain(&mut t) - 0.2 * (1.0 - 0.75 * 0.8)).abs() < 1e-6);
+        // `snd_slaveFadeTime` 0 jumps.
+        t.advance_slave_lerp(1.0, 0);
+        assert_eq!(gain(&mut t), 0.2);
     }
 
     #[test]

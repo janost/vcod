@@ -134,8 +134,8 @@ fn is_touching_follows_the_stance_box_like_retail_1_1() {
 #[test]
 fn is_touching_follows_the_stance_box_like_retail_1_5() {
     let fs = vcod_common::testing::game_fs().filter(|fs| {
-        vcod_server::server::install_protocol(fs).version
-            == vcod_common::net::protocol::PROTOCOL_V6.version
+        vcod_server::server::install_protocol(fs).transport.version
+            == vcod_common::net::protocol::PROTOCOL_V6.transport.version
     });
     check(fs, "mp_carentan-1.5.txt");
 }

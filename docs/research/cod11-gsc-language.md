@@ -583,6 +583,28 @@ vcod raises `BadType("indexing needs an array")` in that case instead,
 same reachable outcome (both sides stop, per `semantics_ab.rs`'s error
 check) with a different message text, which the harness does not compare.
 
+**Writing `undefined` into an array removes the key, VERIFIED
+(`probe_array_undef`, 1.1d 2026-10-22; the same lines from CoD2 1.3's
+`cod2_lnxded`).** `a[2] = undefined` on a three-element array leaves
+`.size` 2, a hole at `a[0]` leaves 1 with `isdefined(a[0])` 0, and the next
+`a[a.size] = "w"` overwrites `a[1]`: `.size` counts keys. Through a field
+and under a string key alike. CoD2's `_deathicons::removeDeathIcon` shrinks
+its arrays this way and walks them by `.size`.
+
+**Only the literal `undefined` removes a key, and it never vivifies a
+local, VERIFIED (`probe_undef_into_unset`, `probe_undef_call_into_unset`,
+1.1d and CoD2 1.3's `cod2_lnxded`, 2026-10-22, the same lines from
+both).** `c[5] = undefined` on a never-set local is fatal (`undefined is
+not an array`) where `b[5] = 1` there reads `.size` 1. `c[5] = nothing()`,
+a call that returns undefined, vivifies `c` and reads `.size` 1:
+the key stays, holding undefined. INFERRED: the compiler turns an
+assignment of the literal into a clear of the element on the array as it
+stands, and any other right side into a store. vcod compiles the literal
+to `Op::ClearIndex` (an unset local under it is read, not vivified) and
+`StoreIndex` keeps an undefined value as a key (`Heap::set_index`,
+`Heap::clear_index`). A field or element target under the literal
+(`level.unset[5] = undefined`) is unmeasured; vcod still vivifies it.
+
 **Notify wake order: start order, VERIFIED.** Two threads waiting on one
 event on `level` wake in the order they were started.
 
@@ -1270,6 +1292,20 @@ vcod: `crates/server/src/game/builtins/precache.rs` and
 `probe_precache_wait_matches_retail` in
 `crates/server/tests/semantics_ents.rs`.
 
+### Arrays are values
+
+`probe_array_copy` (VERIFIED, 1.1d on mp_pavlov, port 28991,
+2026-10-25): after `b = a`, a write through either leaves the other's
+size alone (`local_copy_write 1 2`, `local_orig_write 2 1`), and so does
+a string key written into a copy of a `level` field
+(`field_copy_strkey 1 2`), a write through an argument (`arg_write 1`),
+a write into a copy of an outer array's nested one (`nested_write 1 2`),
+into a copy of an element (`element_copy_write 1 2`) and into a field
+assigned from another field (`field_to_field 1 2`). CoD4 1.7 prints the
+same lines, and a struct an array holds is shared there (cod4-gsc.md
+10). vcod copies at the write (`Heap::own`); before that its arrays were
+shared, which no 1.1 stock script was seen to depend on. INFERRED.
+
 ### Indexing past the first wait
 
 Which builtins index a configstring at run time comes from the relocations
@@ -1381,6 +1417,31 @@ and `(51.34, 90.00, 0.00)` for three downward aims. vcod:
 `builtins::math::vector_to_angles`; before 2026-10-18 it returned Q3's
 negative pitch.
 
+### Casting a string
+
+VERIFIED, cod_lnxded 1.1d: the casts to bool (0x080a3c30), int
+(0x080a3de0, the VM's case 0x31) and float (0x080a3fa0) read a string
+through `strtol(s, 0, 10)` and `strtod`, so the string's numeric prefix
+is the value, blanks and a sign included and anything after ignored. A
+result of 0 stands only when the first character past those under `!`
+and a sign is `0`, or `.` then `0`; otherwise the cast raises `cannot
+cast "%s" to int` (to bool, to float). UO's engine has the same three
+(coduo_lnxded 0x080aa9a0, 0x080aaae2, 0x080aac34). VERIFIED, retail
+1.1d's log of `probe_cast_string`: `(int) "5000"` is 5000, `(int) " -7"`
+-7, `(int) "12abc"` 12, `(int) "3.9"` 3, `(int) "0.9"` and `(int) ".05"`
+0, `(float) "1.5e1x"` 15, and `(int) "abc"` dies with `cannot cast "abc"
+to int`. A condition and unary `!` take the bool cast, so `!"0.5"` is 1:
+`strtol` stops at the point.
+
+UO's stock `maps/mp/_birdbush.gsc` (pakuo01) adds `(int)
+self.script_noteworthy`, a BSP key and so a string, to `(int) gettime()`
+on every trigger of a `birdbush` brush (mp_uo_stanjel's, in the UO soak,
+`cod11-client-soak.md`). vcod's `(int)` and `(float)`
+refused any string before 2026-10-28: the sum came back undefined, the
+next trigger compared undefined, and the birds never flew; vcod-server
+logged four script errors per trigger. vcod: `vm::interp`'s
+`string_int` and `string_float`, gated by `semantics_ab.rs` on the probe.
+
 ### Still unestablished
 
 - **Unary `!` on a string that will not parse.** `!""` is fatal and `!"1"`
@@ -1415,7 +1476,7 @@ negative pitch.
 
 ## 10. Divergences kept as documentation, not code
 
-Nine places where the implementation made a deliberate call the corpus
+Ten places where the implementation made a deliberate call the corpus
 cannot settle, recorded here rather than silently baked into behaviour that
 looks authoritative. Four more are gone. `delete()` used to free the entity
 on the spot where retail defers it, and the entity think scheduler stage 3
@@ -1454,6 +1515,16 @@ behaviour (`probe_notify_twice`, §9).
   killing itself via a nested spawn's notify, mid-step) no corpus script
   seems to rely on either way; deferred to the next project. Pinned by
   `sched::tests::a_thread_killed_by_its_own_endon_mid_step_still_runs_to_its_next_suspend`.
+  CoD2's stock tdm does rely on it, and retail 1.3 stops the thread at
+  once (cod2-protocol.md 16.8); a CoD2 level turns that on
+  (`Vm::set_kill_mid_step`, a list of the threads a notify ended, checked
+  before each instruction). 1.1 is not measured and keeps the old rule.
+- **A bare local is accepted as a statement.** vcod compiles `x;` (and
+  so `waittillframeend;`, which 1.1 has no keyword for) as a local read
+  and a pop. VERIFIED, a 1.1d probe: retail's compiler refuses both lines
+  as `bad syntax` (cod2-gsc-diff.md 3.2). No stock 1.1 script has one, so
+  the looser grammar stays; CoD2's `waittillframeend` lives behind
+  `Dialect::Cod2`.
 - **A runtime error aborts the thread, where retail kills the server.**
   Every fatal in §9 — a non-numeric condition, `"str" + undefined`,
   `undefined == 0`, `"a" < "b"`, `1 / 0` — raises the equivalent

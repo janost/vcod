@@ -62,11 +62,7 @@ pub const STATIC_V22: &[(usize, &str)] = &[
 
 /// The static table a server speaking `p` starts from.
 pub fn static_table(p: &Protocol) -> &'static [(usize, &'static str)] {
-    if p.version == vcod_common::net::protocol::PROTOCOL_V22.version {
-        STATIC_V22
-    } else {
-        STATIC
-    }
+    if p.is_uo() { STATIC_V22 } else { STATIC }
 }
 
 /// `Cvar_InfoString(CVAR_SERVERINFO)`, capture cs 0. Alphabetical, as the
@@ -76,7 +72,7 @@ pub fn serverinfo(cfg: &ServerConfig) -> Info {
     i.set("g_gametype", &cfg.gametype)
         .set("gamename", "main")
         .set("mapname", &cfg.map)
-        .set("protocol", PROTOCOL_V1.version)
+        .set("protocol", PROTOCOL_V1.transport.version)
         .set("shortversion", "1.1")
         .set("sv_allowAnonymous", 0)
         .set("sv_floodProtect", 1)
@@ -149,9 +145,9 @@ fn lists_referenced(p: &Protocol, pak: &PakInfo, read: bool, basegame: &str) -> 
             .get(..dir.len())
             .is_some_and(|g| g.eq_ignore_ascii_case(dir))
     };
-    if p.version == PROTOCOL_V1.version {
+    if p.is_v1() {
         true
-    } else if p.version == vcod_common::net::protocol::PROTOCOL_V6.version {
+    } else if p.transport.version == vcod_common::net::protocol::PROTOCOL_V6.transport.version {
         read || !under("main")
     } else {
         read || !(under("main") || under(basegame))
@@ -265,7 +261,7 @@ pub fn systeminfo(
         if let Some(i) = paks.referenced.iter().rposition(|(_, n)| {
             stock
                 .iter()
-                .any(|p| vcod_common::net::download::is_stock_pak(n, p))
+                .any(|p| vcod_common::net::download::is_stock_pak(n, &p.transport))
         }) {
             paks.referenced.remove(i);
         } else if paks.referenced.len() >= paks.paks.len() {
@@ -286,7 +282,7 @@ pub fn static_configstrings(
     v6: Option<&[(String, String)]>,
     p: &Protocol,
 ) -> Vec<String> {
-    let mut cs = vec![String::new(); p.max_configstrings];
+    let mut cs = vec![String::new(); p.transport.max_configstrings];
     let table = static_table(p);
     // Names an out-of-range literal instead of a bare index panic.
     debug_assert!(table.iter().all(|&(i, _)| i < cs.len()));
@@ -310,6 +306,22 @@ pub use vcod_common::net::protocol::CsRange;
 pub struct ConfigStrings {
     table: Vec<String>,
     writes: Vec<(usize, String)>,
+    /// Each write's [`next_write_seq`], beside `writes`.
+    seqs: Vec<u64>,
+}
+
+thread_local! {
+    static WRITE_SEQ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// One step of the order a game's configstring writes and server commands
+/// share (`ConfigStrings::set`, `game::commands::ClientCommands::push`).
+pub fn next_write_seq() -> u64 {
+    WRITE_SEQ.with(|s| {
+        let n = s.get() + 1;
+        s.set(n);
+        n
+    })
 }
 
 impl ConfigStrings {
@@ -317,6 +329,7 @@ impl ConfigStrings {
         ConfigStrings {
             table,
             writes: Vec::new(),
+            seqs: Vec::new(),
         }
     }
 
@@ -325,6 +338,7 @@ impl ConfigStrings {
         if self.table[index] != value {
             self.table[index].clone_from(&value);
             self.writes.push((index, value));
+            self.seqs.push(next_write_seq());
         }
     }
 
@@ -334,7 +348,17 @@ impl ConfigStrings {
     }
 
     pub fn take_writes(&mut self) -> Vec<(usize, String)> {
+        self.seqs.clear();
         std::mem::take(&mut self.writes)
+    }
+
+    /// [`Self::take_writes`] with each write's [`next_write_seq`].
+    pub fn take_writes_stamped(&mut self) -> Vec<(u64, usize, String)> {
+        let seqs = std::mem::take(&mut self.seqs);
+        seqs.into_iter()
+            .zip(std::mem::take(&mut self.writes))
+            .map(|(s, (i, v))| (s, i, v))
+            .collect()
     }
 }
 
@@ -366,7 +390,14 @@ pub struct Allocators {
     menu: usize,
     localized: usize,
     shader: usize,
+    /// CoD4's `constantConfigStrings`, `(slot, default)`
+    /// ([`Self::with_constants`]); `None` on CoD1 and CoD2.
+    constants: Option<&'static [(u16, &'static str)]>,
 }
+
+/// CoD4's first case-blind slot (`CS_CASE_INSENSITIVE_BEGIN`):
+/// the constants rule stores names from here on lowercased.
+const CASE_INSENSITIVE_FROM: usize = 821;
 
 impl Default for Allocators {
     fn default() -> Self {
@@ -414,6 +445,7 @@ impl Allocators {
             menu: first(CsRange::Menu),
             localized: first(CsRange::Localized),
             shader: first(CsRange::Shader),
+            constants: None,
         }
     }
 
@@ -437,6 +469,47 @@ impl Allocators {
             *a.next_mut(range) = used.map_or(lo, |i| i + 1);
         }
         a
+    }
+
+    /// CoD4's `G_FindConfigstringIndex` over a table that starts empty
+    /// (cod4-gsc.md 5): a name is found anywhere in its range; a new one
+    /// whose `constantConfigStrings` slot lies in the range takes that slot,
+    /// any other the first empty slot no constant names (the first empty
+    /// one once those run out). The menus and icons keep their own scan,
+    /// the first empty slot from the block's base. The 1.7 capture's
+    /// shellshocks (`default` and `concussion_grenade_mp` on their
+    /// constants 1968 and 1969, `flashbang` on 1955), its localized strings
+    /// (350 and 351 left empty) and its menus (`scoreboard` on 1977, not
+    /// its constant 1986) are this rule.
+    pub fn with_constants(
+        layout: &'static CsLayout,
+        constants: &'static [(u16, &'static str)],
+    ) -> Self {
+        let mut a = Allocators::new(layout);
+        a.constants = Some(constants);
+        a
+    }
+
+    /// The constants rule's slot for a new `name` in `range`.
+    fn constant_slot(
+        cs: &[String],
+        constants: &[(u16, &str)],
+        lo: usize,
+        hi: usize,
+        own_scan: bool,
+        name: &str,
+    ) -> Option<usize> {
+        let empty = |i: usize| cs[i].is_empty();
+        if own_scan {
+            return (lo..=hi).find(|&i| empty(i));
+        }
+        let is_constant = |i: usize| constants.iter().any(|&(s, _)| s as usize == i);
+        constants
+            .iter()
+            .find(|(s, d)| (lo..=hi).contains(&(*s as usize)) && d.eq_ignore_ascii_case(name))
+            .map(|&(s, _)| s as usize)
+            .or_else(|| (lo..=hi).find(|&i| empty(i) && !is_constant(i)))
+            .or_else(|| (lo..=hi).find(|&i| empty(i)))
     }
 
     fn next_mut(&mut self, range: CsRange) -> &mut usize {
@@ -469,6 +542,25 @@ impl Allocators {
     ) -> Result<usize, ErrorKind> {
         let hi = self.layout.bounds(range).1;
         if let Some(slot) = self.find_folded(cs, range, name) {
+            return Ok(slot);
+        }
+        if let Some(constants) = self.constants {
+            let lo = self.layout.bounds(range).0;
+            let own_scan = matches!(
+                range,
+                CsRange::Menu | CsRange::StatusIcon | CsRange::HeadIcon
+            );
+            let slot = Self::constant_slot(cs, constants, lo, hi, own_scan, name)
+                .ok_or(ErrorKind::BadType("configstring range exhausted"))?;
+            // From the ambient slot (821) on, names are kept lowercased,
+            // but for the sound aliases: the walk capture's `d 1344
+            // US_1mc_team_deathmtch` keeps the alias's case (VERIFIED live,
+            // cod4-gsc.md 7).
+            if slot >= CASE_INSENSITIVE_FROM && range != CsRange::SoundAlias {
+                cs.set(slot, name.to_ascii_lowercase());
+            } else {
+                cs.set(slot, name);
+            }
             return Ok(slot);
         }
         let next = *self.next_mut(range);
@@ -561,9 +653,13 @@ impl Allocators {
         range: CsRange,
         name: &str,
     ) -> Option<usize> {
-        let lo = self.layout.bounds(range).0;
-        let next = *self.next_mut(range);
-        (lo..next).find(|&s| cs[s].eq_ignore_ascii_case(name))
+        let (lo, hi) = self.layout.bounds(range);
+        let end = if self.constants.is_some() {
+            hi + 1
+        } else {
+            *self.next_mut(range)
+        };
+        (lo..end).find(|&s| cs[s].eq_ignore_ascii_case(name))
     }
 
     /// `playFxOnTag`'s index for `"%02d%s"` of the effect id and the tag,
@@ -834,9 +930,7 @@ mod tests {
     }
 
     /// Intern-or-append, mirroring `G_ModelIndex` and its siblings: the same
-    /// name twice is one slot, a new name takes the next
-    /// (docs/design/2026-08-28-gsc-gameplay-design.md, "Configstrings stop
-    /// being a static table").
+    /// name twice is one slot, a new name takes the next.
     #[test]
     fn an_allocator_interns_and_appends() {
         let mut cs = ConfigStrings::new(vec![String::new(); 2048]);

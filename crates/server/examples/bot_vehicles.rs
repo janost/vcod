@@ -38,7 +38,7 @@ struct Tally {
 
 fn game(
     fs: &Rc<vcod_common::pk3::Pk3Fs>,
-    bsp: &vcod_common::bsp::Bsp,
+    bsp: &vcod_common::mapworld::MapWorld,
     seed: u64,
     on: bool,
 ) -> Tally {
@@ -175,7 +175,7 @@ fn main() {
     };
     let fs = Rc::new(fs);
     let map = std::env::var("MAP").unwrap_or_else(|_| "mp_cassino".into());
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map(&map).unwrap()).unwrap()).unwrap();
+    let bsp = vcod_common::mapworld::find(&*fs, &map).unwrap();
     let mut seeds: Vec<u64> = std::env::args()
         .skip(1)
         .map(|s| s.parse().unwrap())

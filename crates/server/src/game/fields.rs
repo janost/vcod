@@ -35,6 +35,8 @@ pub struct EngineField {
 }
 
 use FieldType::*;
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 pub const ENTITY_FIELDS: &[EngineField] = &[
     EngineField {
@@ -352,6 +354,14 @@ pub fn hud_color_byte(v: f32) -> u32 {
     ((v.clamp(0.0, 1.0) * 255.0) + 0.5) as u32
 }
 
+/// CoD4's lane (`HudElem_SetColor`): clamped, times 255 on the
+/// x87 stack, rounded to nearest. A `glowcolor` of
+/// (0.7, 0.3, 0.2) reads 0xb2, 0x4d, 0x33 in the walk capture, VERIFIED
+/// live; an `f32` product rounds 0.7's up to 179.
+pub fn hud_color_byte_cod4(v: f32) -> u32 {
+    (f64::from(v.clamp(0.0, 1.0)) * 255.0).round_ties_even() as u32
+}
+
 /// The inverse the two getters take: a lane back to 0..1.
 pub fn hud_color_float(byte: u32) -> f32 {
     byte as f32 * (1.0 / 255.0)
@@ -364,6 +374,7 @@ const FONTS: &[&str] = &["default", "bigfixed", "smallfixed"];
 const ALIGN_X: &[&str] = &["left", "center", "right"];
 const ALIGN_Y: &[&str] = &["top", "middle", "bottom"];
 
+#[derive(Clone, Copy)]
 pub enum Route {
     /// An engine-backed field. `slot` is a dense index over the table's
     /// distinct offsets, so two names sharing a retail offset share a slot.
@@ -455,21 +466,54 @@ fn slot_count(table: &[EngineField]) -> usize {
         .len()
 }
 
+/// Every engine and client field by name, routed once: `route_entity` and
+/// `route_hud` run on every script field access.
+struct Routes {
+    entity: HashMap<&'static str, Route>,
+    hud: HashMap<&'static str, Route>,
+    cod2_hud: HashMap<&'static str, Route>,
+    cod4_hud: HashMap<&'static str, Route>,
+}
+
+fn routes() -> &'static Routes {
+    static ROUTES: OnceLock<Routes> = OnceLock::new();
+    ROUTES.get_or_init(|| {
+        let engine = |table: &'static [EngineField]| {
+            (0..table.len()).map(move |i| {
+                (
+                    table[i].name,
+                    Route::Engine {
+                        slot: slot_of(table, i),
+                        ty: table[i].ty,
+                    },
+                )
+            })
+        };
+        let mut entity: HashMap<&'static str, Route> = HashMap::new();
+        // A client name never shadows an entity one: the entity table wins.
+        for (i, f) in CLIENT_FIELDS.iter().enumerate() {
+            entity.insert(f.name, Route::Client(i));
+        }
+        entity.extend(engine(ENTITY_FIELDS));
+        Routes {
+            entity,
+            hud: engine(HUD_FIELDS).collect(),
+            cod2_hud: engine(COD2_HUD_FIELDS).collect(),
+            cod4_hud: engine(COD4_HUD_FIELDS).collect(),
+        }
+    })
+}
+
 pub fn route_entity(folded: &str) -> Route {
     debug_assert!(
         !folded.chars().any(|c| c.is_ascii_uppercase()),
         "field names arrive folded; caller should use Cx::resolve_folded"
     );
-    if let Some(i) = ENTITY_FIELDS.iter().position(|f| f.name == folded) {
-        return Route::Engine {
-            slot: slot_of(ENTITY_FIELDS, i),
-            ty: ENTITY_FIELDS[i].ty,
-        };
-    }
-    if let Some(i) = CLIENT_FIELDS.iter().position(|f| f.name == folded) {
-        return Route::Client(i);
-    }
-    Route::Script
+    routes()
+        .entity
+        .get(folded)
+        .copied()
+        .unwrap_or(Route::Script)
 }
 
 pub fn route_hud(folded: &str) -> Route {
@@ -477,13 +521,311 @@ pub fn route_hud(folded: &str) -> Route {
         !folded.chars().any(|c| c.is_ascii_uppercase()),
         "field names arrive folded; caller should use Cx::resolve_folded"
     );
-    match HUD_FIELDS.iter().position(|f| f.name == folded) {
-        Some(i) => Route::Engine {
-            slot: slot_of(HUD_FIELDS, i),
-            ty: HUD_FIELDS[i].ty,
+    routes().hud.get(folded).copied().unwrap_or(Route::Script)
+}
+
+/// CoD2 1.3's entity field table, `GScr_AddFieldsForEntity` (cod2_lnxded
+/// 0x811ac48) over 0x815e820: ten of 1.1's names, VERIFIED
+/// (cod2-gsc-diff.md 2.1). Each keeps 1.1's storage slot and type; a name
+/// 1.1 has and CoD2 dropped (`speed`, `wait`, `radius`, ...) is a script
+/// field on CoD2, or a Radiant key's.
+const COD2_ENTITY_FIELDS: &[&str] = &[
+    "classname",
+    "origin",
+    "model",
+    "spawnflags",
+    "target",
+    "targetname",
+    "count",
+    "dmg",
+    "health",
+    "angles",
+];
+
+/// CoD2 1.3's hudelem table (0x8103dca over 0x8159ee0, 15 fields,
+/// cod2-gsc-diff.md 2.3). The names 1.1 has keep 1.1's offsets, so their
+/// storage slots (a slot is the offset's first-appearance rank, so they
+/// lead in 1.1's order), with `x` and `y` now floats; `z`, `horzalign`,
+/// `vertalign` and `foreground` follow at offsets past 1.1's table (CoD2's
+/// own are `+12`, `+28` packed twice and `+124`), on slots of their own.
+pub const COD2_HUD_FIELDS: &[EngineField] = &[
+    EngineField {
+        name: "x",
+        offset: 4,
+        ty: Float,
+    },
+    EngineField {
+        name: "y",
+        offset: 8,
+        ty: Float,
+    },
+    EngineField {
+        name: "fontscale",
+        offset: 12,
+        ty: Float,
+    },
+    EngineField {
+        name: "font",
+        offset: 16,
+        ty: Enum(FONTS),
+    },
+    EngineField {
+        name: "alignx",
+        offset: 20,
+        ty: Enum(ALIGN_X),
+    },
+    EngineField {
+        name: "aligny",
+        offset: 24,
+        ty: Enum(ALIGN_Y),
+    },
+    EngineField {
+        name: "color",
+        offset: 28,
+        ty: Int,
+    },
+    EngineField {
+        name: "alpha",
+        offset: 28,
+        ty: Int,
+    },
+    EngineField {
+        name: "label",
+        offset: 44,
+        ty: Int,
+    },
+    EngineField {
+        name: "sort",
+        offset: 108,
+        ty: Float,
+    },
+    EngineField {
+        name: "archived",
+        offset: 120,
+        ty: Int,
+    },
+    EngineField {
+        name: "z",
+        offset: 1012,
+        ty: Float,
+    },
+    EngineField {
+        name: "horzalign",
+        offset: 1028,
+        ty: Enum(HORZ_ALIGN),
+    },
+    EngineField {
+        name: "vertalign",
+        offset: 1029,
+        ty: Enum(VERT_ALIGN),
+    },
+    EngineField {
+        name: "foreground",
+        offset: 1124,
+        ty: Int,
+    },
+];
+
+/// CoD2's `horzalign` and `vertalign` names, in index order: the pointer
+/// tables at cod2_lnxded 0x8187cc0 and 0x8187ce0, VERIFIED. Its `font`,
+/// `alignx` and `aligny` tables (0x8187c80, 0x8187c8c, 0x8187c98) hold 1.1's
+/// three names each.
+const HORZ_ALIGN: &[&str] = &[
+    "subleft",
+    "left",
+    "center",
+    "right",
+    "fullscreen",
+    "noscale",
+    "alignto640",
+    "center_safearea",
+];
+const VERT_ALIGN: &[&str] = &[
+    "subtop",
+    "top",
+    "middle",
+    "bottom",
+    "fullscreen",
+    "noscale",
+    "alignto480",
+    "center_safearea",
+];
+
+/// The HUD engine slots an element carries: enough for either game's table.
+pub fn hud_slot_count_any() -> usize {
+    hud_slot_count()
+        .max(slot_count(COD2_HUD_FIELDS))
+        .max(slot_count(COD4_HUD_FIELDS))
+}
+
+/// CoD4 1.7's hudelem fields, the 28-byte rows `{name, offset, type, mask,
+/// shift, setter, getter}` at cod4_lnxded 0x8215a20 (19 rows, VERIFIED off
+/// the binary; cod4-gsc.md 3). Type 1 is a float, 0 an int or a setter's
+/// own. `foreground`, `hidewhendead` and `hidewheninmenu` are bits of the
+/// one word at 0x9c and `color`/`alpha`, `glowcolor`/`glowalpha` share a
+/// word each; the three flags sit at offsets of their own here so each
+/// keeps its own slot.
+pub const COD4_HUD_FIELDS: &[EngineField] = &[
+    EngineField {
+        name: "x",
+        offset: 0x4,
+        ty: Float,
+    },
+    EngineField {
+        name: "y",
+        offset: 0x8,
+        ty: Float,
+    },
+    EngineField {
+        name: "z",
+        offset: 0xc,
+        ty: Float,
+    },
+    EngineField {
+        name: "fontscale",
+        offset: 0x14,
+        ty: Float,
+    },
+    EngineField {
+        name: "font",
+        offset: 0x18,
+        ty: Enum(COD4_FONTS),
+    },
+    EngineField {
+        name: "alignx",
+        offset: 0x1c,
+        ty: Enum(ALIGN_X),
+    },
+    EngineField {
+        name: "aligny",
+        offset: 0x1d,
+        ty: Enum(ALIGN_Y),
+    },
+    EngineField {
+        name: "horzalign",
+        offset: 0x20,
+        ty: Enum(HORZ_ALIGN),
+    },
+    EngineField {
+        name: "vertalign",
+        offset: 0x21,
+        ty: Enum(VERT_ALIGN),
+    },
+    EngineField {
+        name: "color",
+        offset: 0x24,
+        ty: Int,
+    },
+    EngineField {
+        name: "alpha",
+        offset: 0x24,
+        ty: Int,
+    },
+    EngineField {
+        name: "label",
+        offset: 0x34,
+        ty: Int,
+    },
+    EngineField {
+        name: "sort",
+        offset: 0x80,
+        ty: Float,
+    },
+    EngineField {
+        name: "foreground",
+        offset: 0x9c,
+        ty: Int,
+    },
+    EngineField {
+        name: "hidewhendead",
+        offset: 0x9d,
+        ty: Int,
+    },
+    EngineField {
+        name: "hidewheninmenu",
+        offset: 0x9e,
+        ty: Int,
+    },
+    EngineField {
+        name: "glowcolor",
+        offset: 0x84,
+        ty: Int,
+    },
+    EngineField {
+        name: "glowalpha",
+        offset: 0x84,
+        ty: Int,
+    },
+    EngineField {
+        name: "archived",
+        offset: 0xa8,
+        ty: Int,
+    },
+];
+
+/// CoD4's `font` names in index order, the pointer table at cod4_lnxded
+/// 0x826ce18, VERIFIED. Its align tables (0x826cdc0 .. 0x826ce14) hold
+/// CoD2's names.
+const COD4_FONTS: &[&str] = &[
+    "default",
+    "bigfixed",
+    "smallfixed",
+    "objective",
+    "big",
+    "small",
+];
+
+/// [`route_hud`] under CoD4's table.
+pub fn route_hud_cod4(folded: &str) -> Route {
+    routes()
+        .cod4_hud
+        .get(folded)
+        .copied()
+        .unwrap_or(Route::Script)
+}
+
+/// [`route_entity`] under CoD2's table: its ten entity fields and its
+/// client fields, 1.1's minus `handicap`, plus `psoffsettime` (an int,
+/// cod2-gsc-diff.md 2.2), which takes the cell `handicap` leaves free.
+pub fn route_entity_cod2(folded: &str) -> Route {
+    match folded {
+        "handicap" => Route::Script,
+        "psoffsettime" => Route::Client(client_index("handicap")),
+        n if COD2_ENTITY_FIELDS.contains(&n) => route_entity(n),
+        n => match route_entity(n) {
+            Route::Client(i) => Route::Client(i),
+            _ => Route::Script,
         },
-        None => Route::Script,
     }
+}
+
+/// [`route_hud`] under CoD2's table.
+pub fn route_hud_cod2(folded: &str) -> Route {
+    routes()
+        .cod2_hud
+        .get(folded)
+        .copied()
+        .unwrap_or(Route::Script)
+}
+
+/// A `radiant/keys.txt` as `GScr_AddFieldsForRadiant` reads one: `<type>
+/// <name>` per line, `//` comments, types `int`, `float`, `string` and
+/// `vector` (CoD2's `iw_07.iwd`, 256 lines). Names fold.
+pub fn parse_radiant_keys(text: &str) -> HashMap<String, FieldType> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.split("//").next()?;
+            let mut it = line.split_whitespace();
+            let ty = match it.next()? {
+                "int" => Int,
+                "float" => Float,
+                "string" => CString,
+                "vector" => Vector,
+                _ => return None,
+            };
+            Some((it.next()?.to_ascii_lowercase(), ty))
+        })
+        .collect()
 }
 
 /// `radiant/keys.txt` (pak4.pk3), the keys `Scr_FindField` answers for so
@@ -666,6 +1008,34 @@ mod tests {
         assert!(matches!(route_entity("sessionteam"), Route::Client(_)));
         assert!(matches!(route_entity("script_exploder"), Route::Script));
         assert!(matches!(route_entity("no_such_field"), Route::Script));
+    }
+
+    /// CoD2's tables: ten entity fields, `psoffsettime` in `handicap`'s
+    /// cell, and the shared HUD names on 1.1's slots.
+    #[test]
+    fn cod2_routes_its_own_tables() {
+        assert!(matches!(route_entity_cod2("origin"), Route::Engine { .. }));
+        assert!(matches!(route_entity_cod2("speed"), Route::Script));
+        assert!(matches!(route_entity("speed"), Route::Engine { .. }));
+        assert!(matches!(route_entity_cod2("handicap"), Route::Script));
+        assert!(matches!(
+            route_entity_cod2("psoffsettime"),
+            Route::Client(i) if i == client_index("handicap")
+        ));
+        assert!(matches!(route_entity("psoffsettime"), Route::Script));
+        let slot = |r: Route| match r {
+            Route::Engine { slot, ty } => (slot, ty),
+            _ => panic!("not an engine field"),
+        };
+        assert_eq!(slot(route_hud_cod2("x")), (slot(route_hud("x")).0, Float));
+        assert_eq!(slot(route_hud_cod2("color")).0, slot(route_hud("color")).0);
+        assert!(slot(route_hud_cod2("foreground")).0 < hud_slot_count_any());
+        assert!(matches!(route_hud("horzalign"), Route::Script));
+        assert_eq!(COD2_HUD_FIELDS.len(), 15);
+        let keys = parse_radiant_keys("// x\nvector\torigin\nint radius // r\nfloat\tdelay\n");
+        assert_eq!(keys.get("radius"), Some(&Int));
+        assert_eq!(keys.get("origin"), Some(&Vector));
+        assert_eq!(keys.len(), 3);
     }
 
     /// The radiant keys that decide what survives a map load. `light` is not

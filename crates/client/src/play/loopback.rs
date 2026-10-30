@@ -169,7 +169,7 @@ fn setup() -> Option<(Pk3Fs, &'static Protocol)> {
 /// `c`, one client frame at a time beside a server frame every 50 ms.
 fn run(c: Conditions, weapon: &str) -> Option<Outcome> {
     let (fs, p) = setup()?;
-    let uo = p.version == PROTOCOL_V22.version;
+    let uo = p.is_uo();
     let bsp_path = fs.resolve_map("mp_carentan").expect("mp_carentan");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let world = CollisionWorld::build(
@@ -246,7 +246,12 @@ fn run(c: Conditions, weapon: &str) -> Option<Outcome> {
             let at = t0 + Duration::from_secs_f64(next_frame / 1000.0);
             arrived.extend(up.due(next_frame).into_iter().map(|p| (at, p)));
             for (when, pkt) in arrived.drain(..) {
-                sv.handle_packet_at(common::ADDR, &pkt, at, when);
+                let read = vcod_server::engine::Arrival {
+                    now: at,
+                    arrived: when,
+                    read: when,
+                };
+                sv.packet_read(common::ADDR, &pkt, read);
             }
             sv.tick(at);
             for (to, pkt) in sv.take_outgoing() {
@@ -430,7 +435,7 @@ fn switch_run(weapon: &str, give: &[&str], binds: &[super::input::Action]) -> Op
         seen.push(held(&net));
     }
     Some(SwitchRun {
-        uo: p.version == PROTOCOL_V22.version,
+        uo: p.is_uo(),
         start,
         slots,
         selected,

@@ -200,7 +200,13 @@ fn unit_draw(host: &mut GameHost) -> f64 {
         None => host.rand_int(),
     };
     let u = f64::from(r) / 2_147_483_648.0;
-    if host.speaks_1_1() { -u } else { u }
+    // CoD2's `crandom` is `2 * rand() / 2^31 - 1` (Mac 0x2cf1a, rodata
+    // 0x3261e8), [-1, 1).
+    if host.profile.items.negative_unit_draw {
+        -u
+    } else {
+        u
+    }
 }
 
 /// The module's `crandom()` as compiled, `2 * unit_draw() - 1`: on 1.1d it
@@ -344,18 +350,29 @@ pub fn run_item(host: &mut GameHost, cx: &mut Cx, id: EntId, now_ms: i32) -> boo
                 RUN_CLIPMASK
             };
             let mut origin = Vec3::from(origin_of(host, cx, id));
-            let ran = run_flight(
-                &world.collision,
-                &mut pos,
-                &mut origin,
-                bounds(weapon),
-                mask,
-                now_ms,
-                &mut |floor| match host.test_item_lift.as_mut() {
-                    Some(f) => f(now_ms, floor.into()),
-                    None => landing_lift(host),
-                },
-            );
+            let ran = if host.profile.items.own_flight {
+                crate::game::cod2_items::run_flight(
+                    &world.collision,
+                    &mut pos,
+                    &mut origin,
+                    bounds(weapon),
+                    mask,
+                    now_ms,
+                )
+            } else {
+                run_flight(
+                    &world.collision,
+                    &mut pos,
+                    &mut origin,
+                    bounds(weapon),
+                    mask,
+                    now_ms,
+                    &mut |floor| match host.test_item_lift.as_mut() {
+                        Some(f) => f(now_ms, floor.into()),
+                        None => landing_lift(host),
+                    },
+                )
+            };
             let _ = host.set_field(cx, id, origin_atom, Value::Vector(origin.into()));
             match ran {
                 Ran::Flew | Ran::Nudged => st.pos = Some(pos),
@@ -491,6 +508,12 @@ pub fn inventory(host: &GameHost, slot: usize) -> Inventory {
 /// health directly, the ammo as ops for the sim.
 pub fn write_back(host: &mut GameHost, slot: usize, before: &Inventory, after: &Inventory) {
     host.client_weapons[slot] = after.weapons;
+    // CoD2's `BG_TakePlayerWeapon` (Mac 0x7bec4) empties the hand when it
+    // takes the weapon in it; 1.1's leaves `ps.weapon` for pmove.
+    let w = &mut host.client_weapons[slot];
+    if host.profile.items.take_empties_hand && w.current != 0 && !w.holds(w.current.into()) {
+        w.current = 0;
+    }
     for i in 0..NUM_AMMO {
         if after.ammo[i] != before.ammo[i] {
             host.weapon_op(
@@ -527,7 +550,7 @@ pub enum DropAt {
 /// `velocity` under gravity from this frame, locked to `owner` for
 /// [`OWNER_LOCKOUT_MS`], and in the drop ring. Its angles are zero. An
 /// owner that is no client (a `misc_spawner`) locks out no one: `None`.
-fn launch(
+pub(crate) fn launch(
     host: &mut GameHost,
     cx: &mut Cx,
     index: usize,
@@ -535,11 +558,22 @@ fn launch(
     velocity: Vec3,
     owner: Option<u8>,
 ) -> Result<EntId, ErrorKind> {
-    let name = crate::items::item_name(host.defs, index)
-        .unwrap_or_default()
-        .to_string();
-    let classname = crate::game::spawn::radiant_name(&name).unwrap_or(&name);
-    let classname = cx.intern_exact(classname);
+    let weapon_rows = host.profile.items.weapon_rows;
+    let name = match crate::items::item_name(host.defs, index) {
+        Some(n) => n.to_string(),
+        // CoD2's rows are its weapon list (`G_GetItemClassname`, INFERRED
+        // `weapon_` and the name).
+        None if weapon_rows => host.weapon_name(index).unwrap_or_default(),
+        None => String::new(),
+    };
+    let classname = if weapon_rows {
+        format!("weapon_{name}")
+    } else {
+        crate::game::spawn::radiant_name(&name)
+            .unwrap_or(&name)
+            .to_string()
+    };
+    let classname = cx.intern_exact(&classname);
     let id = host.ents.spawn(cx)?;
     for (field, value) in [
         ("classname", Value::String(classname)),
@@ -549,7 +583,10 @@ fn launch(
         let atom = cx.intern_folded(field);
         host.set_field(cx, id, atom, value)?;
     }
-    host.register_item(&name)?;
+    // CoD2's weapons are registered by `precacheItem` (`register_weapon`).
+    if host.profile.weapons == crate::game::profile::WeaponNumbering::Fixed {
+        host.register_item(&name)?;
+    }
     let now = host.level_time_ms;
     if let Some(e) = host.ents.get_mut(id) {
         e.item = Some(ItemState {
@@ -594,7 +631,11 @@ fn launch_off(
         .ents
         .handle(slot as u32)
         .ok_or(ErrorKind::BadType("no such player"))?;
-    let yaw = angles_of(host, cx, player)[1].to_radians();
+    let yaw = angles_of(host, cx, player)[1];
+    if host.profile.items.cvar_launch {
+        return crate::game::cod2_items::launch_off(host, cx, slot, index, yaw);
+    }
+    let yaw = yaw.to_radians();
     let up = (f64::from(LAUNCH_UP) + f64::from(LAUNCH_UP_SPREAD) * crandom(host)) as f32;
     let velocity = Vec3::new(yaw.cos() * LAUNCH_SPEED, yaw.sin() * LAUNCH_SPEED, up);
     let mut origin = Vec3::from(origin_of(host, cx, player));
@@ -691,6 +732,34 @@ pub fn launch_weapon(
                 .ents
                 .handle(slot as u32)
                 .ok_or(ErrorKind::BadType("no such player"))?;
+            if host.profile.items.tag_drops {
+                // CoD2's start waits for the body's pose; its angles are
+                // the player's (`G_SetAngle(item, player+0x144)`; the
+                // tag's axis and the 90 of roll land in a local nothing
+                // reads) and its spin is `cod2_items::spin`.
+                host.cod2_mut()
+                    .tag_drops
+                    .push(crate::game::cod2_items::TagDrop {
+                        item: id,
+                        slot,
+                        tag: tag.clone(),
+                    });
+                let angles = angles_of(host, cx, player);
+                let atom = cx.intern_folded("angles");
+                host.set_field(cx, id, atom, Value::Vector(angles))?;
+                let spin = crate::game::cod2_items::spin(host);
+                let now = host.level_time_ms;
+                if let Some(i) = host.ents.get_mut(id).and_then(|e| e.item.as_mut()) {
+                    i.apos = Some(Trajectory {
+                        tr_type: TR_LINEAR,
+                        tr_time: now,
+                        tr_duration: 0,
+                        base: angles.into(),
+                        delta: spin,
+                    });
+                }
+                return finish_drop(host, cx, id, d);
+            }
             if let Some(start) = tag_start(host, slot, tag) {
                 let origin = cx.intern_folded("origin");
                 host.set_field(cx, id, origin, Value::Vector(start.into()))?;
@@ -739,6 +808,16 @@ pub fn launch_weapon(
             id
         }
     };
+    finish_drop(host, cx, id, d)
+}
+
+/// A dropped weapon's rounds: the reserve in `count`, the clip beside it.
+fn finish_drop(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    id: EntId,
+    d: Dropped,
+) -> Result<EntId, ErrorKind> {
     let count = cx.intern_folded("count");
     host.set_field(cx, id, count, Value::Int(d.count))?;
     if let Some(i) = host.ents.get_mut(id).and_then(|e| e.item.as_mut()) {
@@ -910,7 +989,7 @@ pub fn activate_ent(
 /// to an int, so two scores under 1.0 apart compare equal and keep their
 /// walk order, though such a comparator is not a total order (items doc
 /// 2.1).
-fn msort<T: Clone>(v: &mut [T], le: impl Fn(&T, &T) -> bool + Copy) {
+pub(crate) fn msort<T: Clone>(v: &mut [T], le: impl Fn(&T, &T) -> bool + Copy) {
     if v.len() <= 1 {
         return;
     }
@@ -980,6 +1059,21 @@ pub fn touch(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, touched: 
     }
     if let Some(line) = out.log {
         log::info!("script: {line}");
+        // 1.1's `Weapon: %i %s` as is; 1.5's, UO's and CoD2's
+        // `Weapon;%d;%d;%s;%s` and `Item;...` with the GUID (0), the slot,
+        // the cleaned name and the item (cod11-map-cycle.md 9).
+        let text = if host.logs_1_1() {
+            line.clone()
+        } else {
+            let (word, item) = line.split_once(": ").map_or(("", ""), |(w, rest)| {
+                (w, rest.split_once(' ').map_or("", |(_, i)| i))
+            });
+            let name = crate::game::say::clean_name(
+                host.client_names.get(slot).map_or("", String::as_str),
+            );
+            format!("{word};0;{slot};{name};{item}")
+        };
+        host.log_printf(format!("{text}\n"));
         host.script_log.push(line);
     }
     for c in out.commands {
@@ -1090,13 +1184,13 @@ mod tests {
     /// 1.5b's and UO's `rand() / 2^31` in [0.5, 1) (items doc 14.2).
     #[test]
     fn the_landing_lift_reads_each_patchs_range() {
-        for (defs, lo, hi) in [
-            (&crate::defs::V1, 0.0, 0.5),
-            (&crate::defs::V15, 0.5, 1.0),
-            (&crate::defs::UO, 0.5, 1.0),
+        use crate::game::profile::{COD1_11, COD1_15, COD1_UO};
+        for (profile, lo, hi) in [
+            (&COD1_11, 0.0, 0.5),
+            (&COD1_15, 0.5, 1.0),
+            (&COD1_UO, 0.5, 1.0),
         ] {
-            let mut host = GameHost::new(vec![String::new(); 2048]);
-            host.defs = defs;
+            let mut host = GameHost::new(profile, vec![String::new(); 2048]);
             for _ in 0..1000 {
                 let l = landing_lift(&mut host);
                 assert!(l > lo - 1e-6 && l <= hi, "{l} outside ({lo}, {hi}]");
@@ -1263,7 +1357,7 @@ mod tests {
         let (vm, mut host) = fixture();
         host.world = Some(std::rc::Rc::new(crate::world::World {
             collision: world,
-            vis: vcod_common::bsp::Visibility::none(),
+            vis: vcod_common::mapworld::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
             hazards: Vec::new(),

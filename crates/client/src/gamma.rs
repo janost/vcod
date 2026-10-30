@@ -1,12 +1,18 @@
 //! `r_gamma` (the options Brightness slider). Retail loads a 256-entry
 //! hardware gamma ramp; vcod draws retail's framebuffer bytes into an
-//! offscreen target and maps it through the same table in a final pass. Formula, clamps and addresses:
-//! docs/research/cod11-gamma.md.
+//! offscreen target and maps it through the same table in a final pass.
+//! An identity ramp needs no pass: a frame whose last pass can write the
+//! swapchain draws there (`GammaPass::identity`, cod4-client-perf.md 30).
+//! Formula, clamps and addresses: docs/research/cod11-gamma.md.
 
 /// Retail's `overbrightBits` (0x4f0780): `r_overBrightBits` (1, latched)
 /// in full screen with device gamma, 0 windowed or with `r_ignorehwgamma 1`.
-pub fn overbright_bits(fullscreen: bool, hw_gamma: bool) -> u32 {
-    u32::from(fullscreen && hw_gamma)
+/// CoD2 has none: its ramp is `r_gamma` alone and its shaders write
+/// display values (cod2-materials.md 9.3), so 0 there. Nor has CoD4: 1.7
+/// registers no `r_overBrightBits` (cod4-client-perf.md 30).
+pub fn overbright_bits(game: vcod_common::game::Game, fullscreen: bool, hw_gamma: bool) -> u32 {
+    use vcod_common::game::Game;
+    u32::from(game == Game::Cod1 && fullscreen && hw_gamma)
 }
 
 /// Retail's `identityLight` (0x4f0780 step 2), `1 / (1 << overbrightBits)`:
@@ -174,6 +180,12 @@ impl GammaPass {
         );
     }
 
+    /// Whether the ramp maps every byte to itself (`r_gamma` 1, no
+    /// overbright bits), so the pass would copy the gamma scene unchanged.
+    pub fn identity(&self) -> bool {
+        matches!(self.built, Some((g, o)) if g == 1.0 && o.min(1) == 0)
+    }
+
     /// Where the frame's MSAA target resolves.
     pub fn scene_view(&self) -> &wgpu::TextureView {
         &self.scene_view
@@ -277,6 +289,11 @@ mod tests {
                 .all(|(i, &v)| v as usize == i)
         );
         assert_eq!((identity_light(1), identity_light(0)), (0.5, 1.0));
+        use vcod_common::game::Game;
+        assert_eq!(overbright_bits(Game::Cod1, true, true), 1);
+        assert_eq!(overbright_bits(Game::Cod1, false, true), 0);
+        assert_eq!(overbright_bits(Game::Cod2, true, true), 0);
+        assert_eq!(overbright_bits(Game::Cod4, true, true), 0);
     }
 
     /// The bake maps rgb of RGBA images only, never alpha or a DDS chain.

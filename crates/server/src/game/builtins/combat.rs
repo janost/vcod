@@ -162,15 +162,18 @@ pub fn finish_player_damage(
         cx.spawn_then(
             killed,
             recv,
-            vec![
-                inflictor,
-                attacker,
-                Value::Int(damage),
-                *mod_,
-                weapon,
-                Value::Vector(dir),
-                *hitloc,
-            ],
+            host.callback_args(
+                "CodeCallback_PlayerKilled",
+                vec![
+                    inflictor,
+                    attacker,
+                    Value::Int(damage),
+                    *mod_,
+                    weapon,
+                    Value::Vector(dir),
+                    *hitloc,
+                ],
+            ),
             slot as u32,
         );
     }
@@ -290,9 +293,7 @@ pub fn obituary(
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    if host.defs.proto.version == vcod_common::net::protocol::PROTOCOL_V22.version
-        && super::cvar::atoi(host.cvars.get("sv_obituary")) == 0
-    {
+    if host.defs.proto.is_uo() && super::cvar::atoi(host.cvars.get("sv_obituary")) == 0 {
         return Ok(Value::Undefined);
     }
     let (
@@ -323,9 +324,7 @@ pub fn obituary(
     let origin_atom = cx.intern_folded("origin");
     let origin = match host.get_field(cx, victim, origin_atom) {
         // UO's raises it at `vec3_origin` (0x6a819).
-        _ if host.defs.proto.version == vcod_common::net::protocol::PROTOCOL_V22.version => {
-            [0.0; 3]
-        }
+        _ if host.defs.proto.is_uo() => [0.0; 3],
         Value::Vector(v) => v,
         _ => [0.0; 3],
     };
@@ -445,6 +444,7 @@ pub fn suicide(
     };
     notify_death(cx, recv, args[1]);
     let killed = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerKilled");
+    let args = host.callback_args("CodeCallback_PlayerKilled", args);
     cx.spawn_then(killed, recv, args, slot as u32);
     Ok(Value::Undefined)
 }
@@ -496,7 +496,7 @@ fn as_f32(v: &Value) -> Result<f32, ErrorKind> {
 pub fn radius_damage(
     host: &mut GameHost,
     cx: &mut Cx,
-    _recv: Option<Target>,
+    recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     // Retail reads its four arguments by index (`Scr_GetVector(0)` and
@@ -520,12 +520,23 @@ pub fn radius_damage(
     // United Offensive's builtin (0x6c229) takes an attacker and an
     // inflictor after the four, by count (`Scr_GetNumParam`): the attacker
     // the world when absent, the inflictor NULL (coduo-vehicles.md 11.2).
-    let uo = host.defs.proto.version == vcod_common::net::protocol::PROTOCOL_V22.version;
+    // CoD4 1.7's (0x80bdab0) takes the attacker fifth and makes the method
+    // form's entity the inflictor (cod4-combat.md 10.10).
+    let uo = host.defs.proto.is_uo();
+    let cod4 = matches!(host.ext, crate::game::host::HostExt::Cod4(_));
     let entity = |v: Option<&Value>| match v {
-        Some(Value::Entity(e)) if uo => Some(*e),
+        Some(Value::Entity(e)) if uo || cod4 => Some(*e),
         _ => None,
     };
-    let (attacker, inflictor) = (entity(args.get(4)), entity(args.get(5)));
+    let (attacker, inflictor) = if cod4 {
+        let recv = match recv {
+            Some(Target::Entity(e)) => Some(e),
+            _ => None,
+        };
+        (entity(args.get(4)), recv)
+    } else {
+        (entity(args.get(4)), entity(args.get(5)))
+    };
     let candidates = blast_candidates(host, cx, &blast);
     host.blast_noises.push(*origin);
     host.radius_ignore_active = host.ignore_radius_damage;
@@ -646,7 +657,7 @@ pub fn blast_step(host: &mut GameHost, cx: &mut Cx) {
         let weapon = match inflictor.or(attacker) {
             Some(e) => {
                 let w = crate::game::vehicle::inflictor_weapon(host, Some(e));
-                let w = host.defs.weapon_name(w).unwrap_or("none").to_string();
+                let w = host.weapon_name(w).unwrap_or_else(|| "none".into());
                 cx.intern_exact(&w)
             }
             None => none,
@@ -663,6 +674,7 @@ pub fn blast_step(host: &mut GameHost, cx: &mut Cx) {
             Value::String(none),
         ];
         let callback = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerDamage");
+        let args = host.callback_args("CodeCallback_PlayerDamage", args);
         cx.spawn_then(callback, Some(Target::Entity(id)), args, BLAST_TOKEN);
         return;
     }
@@ -818,37 +830,7 @@ pub fn bullet_trace(
 
     let start = Vec3::new(from[0], from[1], from[2]);
     let end = Vec3::new(to[0], to[1], to[2]);
-    let t = host.world.as_ref().map(|w| {
-        let t = w.collision.shot_trace(start, end);
-        (t, w.collision.entity_num(&t))
-    });
-    // A brush entity's clip names its entity, a world copy's included.
-    let mut hit = t.filter(|(t, _)| t.fraction < 1.0).map(|(t, n)| {
-        let ent = (n < vcod_common::net::protocol::ENTITYNUM_WORLD)
-            .then(|| host.ents.handle(n))
-            .flatten();
-        (t.fraction, t.normal, ent, t.surface_flags)
-    });
-    // The world trace's own end point, unless the entity pass lowers the
-    // fraction (1.5b 0x8099b18; cod11-combat.md 2.7).
-    let arith = vcod_common::patch::Arith::for_protocol(host.defs.proto);
-    let mut point = t.map_or(end, |(t, _)| t.endpos);
-    if let Some(e) = script_model_hit(host, cx, start, end, ignore, hit.map_or(1.0, |h| h.0)) {
-        point = crate::game::combat::trace_point(start, end, e.0, arith);
-        hit = Some(e);
-    }
-    // `hitCharacters` keeps `CONTENTS_BODY` in the mask (0x5abfd): a body
-    // the segment scores a bone of stops it, with no surface (3.2).
-    if hit_characters.as_bool()? {
-        let limit = hit.map_or(1.0, |h| h.0);
-        if let Some((slot, f)) = body_hit(host, start, end, ignore, limit) {
-            let ent = host.ents.handle(slot as u32);
-            hit = Some((f, (start - end).normalize_or_zero(), ent, 0));
-            // The entity pass's own end point (3.1, "The arithmetic on 1.5
-            // and UO").
-            point = crate::game::combat::trace_point(start, end, f, arith);
-        }
-    }
+    let (hit, point) = bullet_hit(host, cx, start, end, hit_characters.as_bool()?, ignore);
     cx.set_index(arr, fraction, Value::Float(hit.map_or(1.0, |h| h.0)));
     cx.set_index(arr, position, Value::Vector(point.to_array()));
     // A hit's `surfacetype` is `trap_SurfaceTypeToName`'s, on a
@@ -872,6 +854,54 @@ pub fn bullet_trace(
         }
     }
     Ok(Value::Array(arr))
+}
+
+/// What a `bulletTrace` segment meets first: fraction, normal, entity and
+/// surface flags, `None` for a clear segment, and the point it ends at.
+pub(crate) type BulletHit = (Option<(f32, Vec3, Option<EntId>, u32)>, Vec3);
+
+/// `bulletTrace`'s trace without its result array: the world, the script
+/// models and, with `hit_characters`, the bodies.
+pub(crate) fn bullet_hit(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    start: Vec3,
+    end: Vec3,
+    hit_characters: bool,
+    ignore: Option<EntId>,
+) -> BulletHit {
+    let t = host.world.as_ref().map(|w| {
+        let t = w.collision.shot_trace(start, end);
+        (t, w.collision.entity_num(&t))
+    });
+    // A brush entity's clip names its entity, a world copy's included.
+    let mut hit = t.filter(|(t, _)| t.fraction < 1.0).map(|(t, n)| {
+        let ent = (n < vcod_common::net::protocol::ENTITYNUM_WORLD)
+            .then(|| host.ents.handle(n))
+            .flatten();
+        (t.fraction, t.normal, ent, t.surface_flags)
+    });
+    // The world trace's own end point, unless the entity pass lowers the
+    // fraction (1.5b 0x8099b18; cod11-combat.md 2.7).
+    let arith = vcod_common::patch::Arith::for_protocol(host.defs.proto);
+    let mut point = t.map_or(end, |(t, _)| t.endpos);
+    if let Some(e) = script_model_hit(host, cx, start, end, ignore, hit.map_or(1.0, |h| h.0)) {
+        point = crate::game::combat::trace_point(start, end, e.0, arith);
+        hit = Some(e);
+    }
+    // `hitCharacters` keeps `CONTENTS_BODY` in the mask (0x5abfd): a body
+    // the segment scores a bone of stops it, with no surface (3.2).
+    if hit_characters {
+        let limit = hit.map_or(1.0, |h| h.0);
+        if let Some((slot, f)) = body_hit(host, start, end, ignore, limit) {
+            let ent = host.ents.handle(slot as u32);
+            hit = Some((f, (start - end).normalize_or_zero(), ent, 0));
+            // The entity pass's own end point (3.1, "The arithmetic on 1.5
+            // and UO").
+            point = crate::game::combat::trace_point(start, end, f, arith);
+        }
+    }
+    (hit, point)
 }
 
 /// The living body a `bulletTrace` segment scores a bone of closer than
@@ -1401,7 +1431,7 @@ mod tests {
         let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
         rt.host.world = Some(Rc::new(World {
             collision: vcod_common::collision::test_world(&[]),
-            vis: vcod_common::bsp::Visibility::none(),
+            vis: vcod_common::mapworld::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
             hazards: Vec::new(),
@@ -1484,7 +1514,7 @@ mod tests {
             let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
             rt.host.world = Some(Rc::new(World {
                 collision: vcod_common::collision::test_world(&[]),
-                vis: vcod_common::bsp::Visibility::none(),
+                vis: vcod_common::mapworld::Visibility::none(),
                 spawn: ([0.0, 0.0, 64.0], 0.0),
                 spawn_points: Vec::new(),
                 hazards: Vec::new(),
@@ -1603,7 +1633,7 @@ mod tests {
         let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
         rt.host.world = Some(Rc::new(World {
             collision: vcod_common::collision::test_world(&[]),
-            vis: vcod_common::bsp::Visibility::none(),
+            vis: vcod_common::mapworld::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
             hazards: Vec::new(),
@@ -1692,7 +1722,7 @@ mod tests {
         rt.host.area = crate::area::AreaTree::for_map(&bsp, &fs);
         rt.host.world = Some(Rc::new(World {
             collision: vcod_common::collision::test_world(&[]),
-            vis: vcod_common::bsp::Visibility::none(),
+            vis: vcod_common::mapworld::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
             hazards: Vec::new(),
@@ -1799,7 +1829,7 @@ mod tests {
         let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
         rt.host.world = Some(Rc::new(World {
             collision: vcod_common::collision::test_world(&[]),
-            vis: vcod_common::bsp::Visibility::none(),
+            vis: vcod_common::mapworld::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
             hazards: Vec::new(),
@@ -1920,7 +1950,7 @@ mod tests {
         let (mut vm, mut host) = fixture();
         host.world = Some(Rc::new(World {
             collision: vcod_common::collision::test_world(&[]),
-            vis: vcod_common::bsp::Visibility::none(),
+            vis: vcod_common::mapworld::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
             hazards: Vec::new(),
@@ -1965,8 +1995,10 @@ mod tests {
             contents: 1,
             surface_flags: 0,
         };
-        host.xmodel_collision
-            .insert("xmodel/test_wall".into(), Some(Rc::from(vec![wall])));
+        host.xmodel_collision.insert(
+            "xmodel/test_wall".into(),
+            Some(std::sync::Arc::from(vec![wall])),
+        );
         vm.with_cx(|cx| {
             let id = host.ents.spawn(cx).unwrap();
             for (name, v) in [

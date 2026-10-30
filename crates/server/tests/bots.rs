@@ -27,7 +27,7 @@ fn server_with(bots: usize, shoot: bool) -> Option<(vcod_server::Server, Instant
 }
 
 fn server_on(bots: usize, shoot: bool, gametype: &str) -> Option<(vcod_server::Server, Instant)> {
-    let fs = vcod_common::testing::game_fs()?;
+    let fs = vcod_common::testing::game_fs_11()?;
     let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
     let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
     let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
@@ -342,7 +342,7 @@ fn a_bot_walks_toward_gunfire_it_cannot_see() {
 #[test]
 #[ignore = "runs 6 bots on mp_ship for 4 seeds, ~2 min; run with --ignored"]
 fn bots_on_mp_ships_ladders_keep_climbing() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -383,7 +383,7 @@ fn bots_on_mp_ships_ladders_keep_climbing() {
 #[test]
 #[ignore = "runs 6 bots on mp_ship for 90 s of game time, ~1 min; run with --ignored"]
 fn bots_on_mp_ship_unstick_without_walking_off_the_deck() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -448,7 +448,7 @@ fn bots_on_mp_ship_unstick_without_walking_off_the_deck() {
 #[test]
 #[ignore = "runs 6 bots on mp_ship for 65 s of game time, ~1 min; run with --ignored"]
 fn bots_on_mp_ship_get_off_the_mast_ladder() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -494,7 +494,7 @@ fn bots_on_mp_ship_get_off_the_mast_ladder() {
 #[test]
 #[ignore = "builds mp_hurtgen's graph and runs a bot for 25 s of game time; run with --ignored"]
 fn a_bot_held_in_mp_hurtgens_crease_kills_itself() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -541,7 +541,7 @@ fn a_bot_held_in_mp_hurtgens_crease_kills_itself() {
 #[test]
 #[ignore = "builds mp_ship's graph and runs a bot for 30 s of game time; run with --ignored"]
 fn a_bot_in_mp_ships_boat_drops_out_over_its_rim() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -583,7 +583,7 @@ fn a_bot_in_mp_ships_boat_drops_out_over_its_rim() {
 #[test]
 #[ignore = "builds mp_ship's graph and runs two bots for 20 s of game time; run with --ignored"]
 fn bots_meeting_head_on_at_a_ladder_take_turns() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -659,7 +659,7 @@ fn bots_meeting_head_on_at_a_ladder_take_turns() {
 #[test]
 #[ignore = "builds mp_ship's graph and runs a bot up a ladder from 5 starts; run with --ignored"]
 fn a_bot_climbs_over_mp_ships_hold_ladder_top() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -707,7 +707,7 @@ fn a_bot_climbs_over_mp_ships_hold_ladder_top() {
 #[test]
 #[ignore = "builds mp_ship's graph and runs a bot down a ladder; run with --ignored"]
 fn a_bot_climbs_down_mp_ships_mast_from_the_spar() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -755,7 +755,7 @@ fn a_bot_climbs_down_mp_ships_mast_from_the_spar() {
 #[test]
 #[ignore = "builds mp_depot's graph and runs a bot 28 times down off its roof; run with --ignored"]
 fn a_bot_gets_down_off_mp_depots_roof_onto_the_ledges() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };

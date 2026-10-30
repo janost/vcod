@@ -2,7 +2,7 @@
 //! from RTCW-MP `src/renderer/tr_sky.c`. Pure math; the GPU side lives in
 //! `renderer.rs` (`SkyRender`) and `sky.wgsl`.
 
-use vcod_common::bsp::DrawVert;
+use vcod_common::mapworld::DrawVert;
 
 pub const SKY_SUBDIVISIONS: usize = 8;
 const HALF: i32 = (SKY_SUBDIVISIONS / 2) as i32;

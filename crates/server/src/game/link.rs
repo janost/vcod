@@ -187,8 +187,8 @@ pub fn client_bone(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Vec3,
     let body = host.client_dobjs.get(slot)?.clone()?;
     let anims = host.anims.clone()?;
     let fs = host.fs.clone()?;
-    let skel = host.hit_rigs.rig(&fs, &body.pose.assembly)?;
-    let bone = host.hit_rigs.bone(&fs, &body.pose.assembly, &skel, tag)?;
+    let skel = host.hit_rigs.rig(&*fs, &body.pose.assembly)?;
+    let bone = host.hit_rigs.bone(&*fs, &body.pose.assembly, &skel, tag)?;
     // The bone and its parents, each at the time and with the controls the
     // frame first posed it.
     let mut chain = vec![bone];
@@ -203,7 +203,7 @@ pub fn client_bone(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Vec3,
         if poses.iter().all(|(pt, _)| *pt != t) {
             let inputs = posed.inputs(&body.pose, &anims, t.0, t.1);
             let rigs = &mut host.hit_rigs;
-            let pose = vcod_common::playerpose::pose_player(&skel, &inputs, |n| rigs.clip(&fs, n));
+            let pose = vcod_common::playerpose::pose_player(&skel, &inputs, |n| rigs.clip(&*fs, n));
             poses.push((t, pose));
         }
     }
@@ -225,8 +225,8 @@ fn client_bone_stored(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Ve
     let body = host.client_dobjs.get(slot)?.clone()?;
     let anims = host.anims.clone()?;
     let fs = host.fs.clone()?;
-    let skel = host.hit_rigs.rig(&fs, &body.pose.assembly)?;
-    let bone = host.hit_rigs.bone(&fs, &body.pose.assembly, &skel, tag)?;
+    let skel = host.hit_rigs.rig(&*fs, &body.pose.assembly)?;
+    let bone = host.hit_rigs.bone(&*fs, &body.pose.assembly, &skel, tag)?;
     let mut chain = vec![bone];
     while let Ok(p) = usize::try_from(skel.bones()[*chain.last()?].parent) {
         chain.push(p);
@@ -243,7 +243,7 @@ fn client_bone_stored(host: &mut GameHost, slot: usize, tag: &str) -> Option<(Ve
         done.push(t);
         let inputs = posed.inputs(&body.pose, &anims, t.0, t.1);
         let rigs = &mut host.hit_rigs;
-        let pose = vcod_common::playerpose::pose_player(&skel, &inputs, |n| rigs.clip(&fs, n));
+        let pose = vcod_common::playerpose::pose_player(&skel, &inputs, |n| rigs.clip(&*fs, n));
         match merged.as_mut() {
             None => merged = Some(pose),
             Some(m) => {
@@ -274,11 +274,11 @@ fn client_has_bone(host: &mut GameHost, slot: usize, tag: &str) -> bool {
     let Some(fs) = host.fs.clone() else {
         return false;
     };
-    let Some(skel) = host.hit_rigs.rig(&fs, &body.pose.assembly) else {
+    let Some(skel) = host.hit_rigs.rig(&*fs, &body.pose.assembly) else {
         return false;
     };
     host.hit_rigs
-        .bone(&fs, &body.pose.assembly, &skel, tag)
+        .bone(&*fs, &body.pose.assembly, &skel, tag)
         .is_some()
 }
 
@@ -325,11 +325,49 @@ fn model_bone(
     id: EntId,
     tag: &str,
 ) -> Option<(Vec3, Quat)> {
+    if matches!(host.ext, crate::game::host::HostExt::Cod4(_)) {
+        return cod4_model_tag(host, cx, model, id, tag);
+    }
     let fs = host.fs.clone()?;
     let assembly = entity_assembly(host, cx, model, id)?;
-    let skel = host.hit_rigs.rig(&fs, &assembly)?;
-    let bone = host.hit_rigs.bone(&fs, &assembly, &skel, tag)?;
+    let skel = host.hit_rigs.rig(&*fs, &assembly)?;
+    let bone = host.hit_rigs.bone(&*fs, &assembly, &skel, tag)?;
     Some(vcod_common::skeleton::PoseBuffer::new(&skel).bone_world(&skel, bone))
+}
+
+/// [`model_bone`] on CoD4: the zones' bind-pose tags
+/// (`Cod4HostState::model_tags`), the body's first, then each `attach`ed
+/// model's placed at the body tag it hangs on, as the DObj lists them
+/// (cod4-gsc.md 9.4). The pk3 rigs know no CoD4 model.
+pub(crate) fn cod4_model_tag(
+    host: &GameHost,
+    cx: &mut Cx,
+    model: &str,
+    id: EntId,
+    tag: &str,
+) -> Option<(Vec3, Quat)> {
+    use crate::game::hitrig::model_name;
+    let tags = &host.cod4().model_tags;
+    let find = |model: &str, name: &str| {
+        let t = tags.get(&model_name(model).to_ascii_lowercase())?;
+        t.iter()
+            .find(|(n, _, _)| n.eq_ignore_ascii_case(name))
+            .map(|&(_, p, r)| (p, r))
+    };
+    if let Some(t) = find(model, tag) {
+        return Some(t);
+    }
+    let attachments = host.ents.get(id).map(|e| e.attachments.clone())?;
+    attachments.iter().find_map(|&(m, t)| {
+        let (bone_pos, bone_rot) = find(cx.resolve(m), tag)?;
+        let graft = cx.resolve(t);
+        let (gp, gr) = if graft.is_empty() {
+            (Vec3::ZERO, Quat::IDENTITY)
+        } else {
+            find(model, graft)?
+        };
+        Some((gp + gr * bone_pos, gr * bone_rot))
+    })
 }
 
 /// Why `linkTo` refused, as retail words it (strings at 0x76bc0..0x76ca0).
@@ -883,6 +921,69 @@ mod tests {
                 "r1 read r0 before it ran"
             );
             assert!(close(origin(&mut host, cx, r2), [64.0, 0.0, 0.0]));
+        });
+    }
+
+    /// A CoD4 parent's tag is the zones' bind-pose tag (`model_tags`), the
+    /// body model's or an attached one's on the body tag it hangs on: the
+    /// destructible sedans' `play_sound_on_tag` links a sound to
+    /// `tag_glass_back_d` on the body and a door's `tag_glass_left_front`
+    /// rides the door attached at `tag_door_left_front`.
+    #[test]
+    fn a_cod4_link_finds_the_zone_tags_of_the_body_and_its_attachments() {
+        let mut host = GameHost::new(&crate::game::profile::COD4, vec![String::new(); 2048]);
+        let mut vm = Vm::new();
+        let q = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        let tags = |t: &[(&str, Vec3, Quat)]| {
+            std::rc::Rc::new(t.iter().map(|&(n, p, r)| (n.to_string(), p, r)).collect())
+        };
+        let c4 = host.cod4_mut();
+        c4.model_tags.insert(
+            "car".into(),
+            tags(&[
+                (
+                    "tag_glass_back_d",
+                    Vec3::new(10.0, 0.0, 5.0),
+                    Quat::IDENTITY,
+                ),
+                ("tag_door_left_front", Vec3::new(0.0, 20.0, 0.0), q),
+            ]),
+        );
+        c4.model_tags.insert(
+            "door".into(),
+            tags(&[(
+                "tag_glass_left_front",
+                Vec3::new(4.0, 0.0, 0.0),
+                Quat::IDENTITY,
+            )]),
+        );
+        vm.with_cx(|cx| {
+            let car = spawn(&mut host, cx, "script_model", [100.0, 0.0, 0.0], [0.0; 3]);
+            let m = cx.intern_folded("model");
+            let car_name = cx.intern_exact("car");
+            host.set_field(cx, car, m, Value::String(car_name)).unwrap();
+            let (door, at) = (
+                cx.intern_exact("door"),
+                cx.intern_exact("tag_door_left_front"),
+            );
+            host.ents.get_mut(car).unwrap().attachments.push((door, at));
+            let glass = spawn(&mut host, cx, "script_origin", [0.0; 3], [0.0; 3]);
+            let side = spawn(&mut host, cx, "script_origin", [0.0; 3], [0.0; 3]);
+            let none = Some(([0.0; 3], [0.0; 3]));
+            link(&mut host, cx, glass, car, Some("TAG_GLASS_BACK_D"), none).unwrap();
+            link(&mut host, cx, side, car, Some("tag_glass_left_front"), none).unwrap();
+            assert_eq!(
+                link(&mut host, cx, side, car, Some("tag_nothing"), none),
+                Err(LinkError::NoTag {
+                    tag: "tag_nothing".into(),
+                    model: "car".into()
+                })
+            );
+            link(&mut host, cx, side, car, Some("tag_glass_left_front"), none).unwrap();
+            run(&mut host, cx);
+            assert!(close(origin(&mut host, cx, glass), [110.0, 0.0, 5.0]));
+            // The door turned a quarter at its tag: its +x is the car's +y.
+            assert!(close(origin(&mut host, cx, side), [100.0, 24.0, 0.0]));
         });
     }
 }

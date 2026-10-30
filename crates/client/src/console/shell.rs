@@ -5,8 +5,10 @@
 
 use std::collections::BTreeMap;
 
+use vcod_common::game::Game;
 use vcod_common::localize::Localized;
 use vcod_common::net::{self, Userinfo};
+use vcod_common::text::atoi_msvc;
 
 use crate::play::input::Action;
 
@@ -24,8 +26,12 @@ pub enum Effect {
     /// `record [name]`; no name picks the next free `demoNNNN`.
     Record(Option<String>),
     StopRecord,
-    /// `demo <name>`.
-    Demo(String),
+    /// `demo <name>`, or CoD2's `timedemo <name>`, which plays it under
+    /// `timedemo` (Mac 0x14c288).
+    Demo {
+        name: String,
+        timedemo: bool,
+    },
     /// `rcon <args>`: the arguments after the word, as tokenized
     /// ([`super::rcon::packet`] rebuilds the line).
     Rcon(Vec<String>),
@@ -60,6 +66,9 @@ pub enum Effect {
     /// `snd_restart`: reopen the sound output under the latched `mss_*`
     /// cvars, then `vid_restart` (CoDMP.exe 0x40fdf0).
     SndRestart,
+    /// CoD4's `r_applyPicmip` (`R_ApplyPicmip`, iw3mp.exe 0x5f2c80): the
+    /// picmip dvars read again and the images reloaded at them.
+    ApplyPicmip,
     /// `ui_load`: reload the menus off `ui_menuFiles`.
     UiLoad,
     /// `mp_QuickMessage`, a cgame command (cgame_mp_x86.dll 0x300140e0):
@@ -68,6 +77,13 @@ pub enum Effect {
     /// `cg_shellshock <duration> [file]`, a cgame command (0x30013e70):
     /// the arguments after the word.
     ShellShock(Vec<String>),
+    /// CoD2's `openscriptmenu <menu> <response>` (`CL_OpenScriptMenu_f`,
+    /// Mac 0x1484fe): a script menu response sent as if `menu` had
+    /// answered it (docs/research/cod2-protocol.md 9).
+    OpenScriptMenu {
+        menu: String,
+        response: String,
+    },
 }
 
 /// One cvar. `archive` is retail's `CVAR_ARCHIVE`: written to the config.
@@ -97,60 +113,67 @@ const LATCH: u32 = 0x20;
 const ROM: u32 = 0x40;
 const CHEAT: u32 = 0x200;
 
-/// C's `atoi`: leading blanks, a sign, then digits; anything else reads 0.
-fn atoi(s: &str) -> i32 {
-    let s = s.trim_start();
-    let (neg, digits) = match s.as_bytes().first() {
-        Some(b'-') => (true, &s[1..]),
-        Some(b'+') => (false, &s[1..]),
-        _ => (false, s),
-    };
-    let n = digits
-        .bytes()
-        .take_while(u8::is_ascii_digit)
-        .fold(0i32, |n, d| {
-            n.wrapping_mul(10).wrapping_add(i32::from(d - b'0'))
-        });
-    if neg { -n } else { n }
-}
-
 /// The client commands, for `cmdlist` and completion.
 const COMMANDS: &[&str] = &[
+    "+actionslot",
     "+activate",
     "+attack",
     "+back",
+    "+binoculars",
+    "+breath_sprint",
     "+forward",
+    "+frag",
     "+gostand",
+    "+holdbreath",
     "+leanleft",
     "+leanright",
     "+melee",
+    "+melee_breath",
     "+mlook",
     "+moveleft",
     "+moveright",
     "+reload",
     "+scores",
+    "+smoke",
     "+speed",
+    "+speed_throw",
     "+sprint",
     "+strafe",
+    "+talk",
+    "+toggleads_throw",
+    "+usereload",
+    "-actionslot",
     "-activate",
     "-attack",
     "-back",
+    "-binoculars",
+    "-breath_sprint",
     "-forward",
+    "-frag",
     "-gostand",
+    "-holdbreath",
     "-leanleft",
     "-leanright",
     "-melee",
+    "-melee_breath",
     "-mlook",
     "-moveleft",
     "-moveright",
     "-reload",
     "-scores",
+    "-smoke",
     "-speed",
+    "-speed_throw",
     "-sprint",
     "-strafe",
+    "-talk",
+    "-toggleads_throw",
+    "-usereload",
     "bind",
     "bindlist",
     "cg_shellshock",
+    "chatmodepublic",
+    "chatmodeteam",
     "clear",
     "cmd",
     "cmdlist",
@@ -162,10 +185,13 @@ const COMMANDS: &[&str] = &[
     "exec",
     "gocrouch",
     "goprone",
+    "leaveads",
     "messagemode",
     "messagemode2",
     "mp_QuickMessage",
+    "openscriptmenu",
     "quit",
+    "r_applypicmip",
     "rcon",
     "reconnect",
     "record",
@@ -174,12 +200,14 @@ const COMMANDS: &[&str] = &[
     "set",
     "seta",
     "setfromcvar",
+    "setfromdvar",
     "snd_restart",
     "stoprecord",
     "toggle",
+    "toggleads",
     "toggleconsole",
-    "unbind",
     "ui_load",
+    "unbind",
     "unbindall",
     "version",
     "vid_restart",
@@ -208,6 +236,18 @@ fn button(word: &str) -> Option<Action> {
         "sprint" => Action::Sprint,
         "mlook" => Action::MLook,
         "strafe" => Action::Strafe,
+        "frag" => Action::Frag,
+        "smoke" => Action::Smoke,
+        "binoculars" => Action::Binoculars,
+        "holdbreath" => Action::HoldBreath,
+        "melee_breath" => Action::MeleeBreath,
+        "usereload" => Action::UseReload,
+        // CoD4's (`CL_InitInput`): `+speed_throw` is the held
+        // sight with the throw key, as vcod's `+speed` already sends.
+        "speed_throw" => Action::Ads,
+        "breath_sprint" => Action::BreathSprint,
+        "toggleads_throw" => Action::ToggleAdsThrow,
+        "talk" => Action::Talk,
         _ => return None,
     })
 }
@@ -272,6 +312,39 @@ pub const DEFAULT_BINDS: &[(&str, &str)] = &[
     ("MWHEELUP", "weapprev"),
 ];
 
+/// CoD2 1.3's `default_mp.cfg` binds (`iw_00.iwd`) where they differ
+/// from [`DEFAULT_BINDS`]: [`Shell::use_cod2_binds`] puts each on a key
+/// still holding vcod's CoD1 default or none.
+pub const COD2_BINDS: &[(&str, &str)] = &[
+    ("SHIFT", "+melee_breath"),
+    ("MOUSE2", "toggleads"),
+    ("1", "weapnext"),
+    ("2", "weapnext"),
+    ("MOUSE3", "+frag"),
+    ("G", "+frag"),
+    ("4", "+smoke"),
+    ("B", "+binoculars"),
+    ("X", "openscriptmenu ingame changeweapon"),
+];
+
+/// CoD4 1.7's `default_mp_controls.cfg` binds (a rawfile of
+/// `localized_code_post_gfx_mp.ff`) where they differ from CoD2's:
+/// [`Shell::use_cod4_binds`] puts each on a key still holding vcod's CoD1
+/// or CoD2 default, or none.
+pub const COD4_BINDS: &[(&str, &str)] = &[
+    ("SHIFT", "+breath_sprint"),
+    ("MOUSE2", "+toggleads_throw"),
+    ("V", "+melee"),
+    ("B", "mp_QuickMessage"),
+    ("N", "+actionslot 1"),
+    ("5", "+actionslot 3"),
+    ("6", "+actionslot 4"),
+    ("7", "+actionslot 2"),
+    ("T", "chatmodepublic"),
+    ("Y", "chatmodeteam"),
+    ("Z", "+talk"),
+];
+
 /// The archived cvars the stock options screens set beyond the ones above,
 /// at the defaults CoDMP.exe and cgame register them with
 /// (docs/research/cod11-front-end.md, section 14), so a choice made there
@@ -317,6 +390,71 @@ const MENU_CVARS: &[(&str, &str)] = &[
     ("cg_vehicletrails", "1"),
 ];
 
+/// [`Shell::register_cod4_options`]'s dvars: name, default, flags
+/// (`Dvar_RegisterNew` 0x56c350 calls, cod4-front-end.md 9).
+const COD4_OPTION_DVARS: [(&str, &str, u32); 28] = [
+    // the texture page's (cod4-front-end.md 9.3): 1.7's picmip dvars are
+    // archived, not latched; `r_applyPicmip` reloads the images at them
+    ("r_picmip_manual", "0", ARCHIVE),
+    ("r_picmip", "0", ARCHIVE),
+    ("r_picmip_bump", "0", ARCHIVE),
+    ("r_picmip_spec", "0", ARCHIVE),
+    ("r_texFilterAnisoMin", "1", ARCHIVE),
+    ("r_texFilterAnisoMax", "16", ARCHIVE),
+    // latched to the `vid_restart` (0x62d358: flags 0x21)
+    ("r_aspectRatio", "auto", ARCHIVE | LATCH),
+    ("r_glow_allowed", "1", ARCHIVE),
+    // 0x62c669, flags 0x80 (`DVAR_CHEAT`; cod4-world.md 11.4)
+    ("r_glow", "1", CHEAT),
+    ("r_zFeather", "1", ARCHIVE),
+    // 0x62c59f, registered as r_zFeather is (cod4-effects.md 17)
+    ("r_distortion", "1", ARCHIVE),
+    ("r_dof_enable", "1", ARCHIVE),
+    ("r_specular", "1", 0),
+    // 0x62a50c, flags 0x80 (`DVAR_CHEAT`): 0 draws no fog
+    // (cod4-client-perf.md 25)
+    ("r_fog", "1", CHEAT),
+    ("r_dlightLimit", "4", 0),
+    ("r_lodScaleRigid", "1", ARCHIVE),
+    ("r_lodBiasRigid", "0", ARCHIVE),
+    ("r_drawWater", "1", ARCHIVE),
+    ("r_texFilterMipMode", "Unchanged", ARCHIVE),
+    ("monkeytoy", "0", ARCHIVE),
+    // iw3mp.exe 0x5ba36b, archived (cod4-player-anims.md 10)
+    ("ragdoll_enable", "1", ARCHIVE),
+    // the scoreboard's ping graph, 0x449b84..0x44a0a3 (cod4-hud.md 7.1)
+    ("cg_scoreboardPingGraph", "0", 0),
+    ("cg_ScoresPing_MaxBars", "4", ARCHIVE),
+    ("cg_ScoresPing_Interval", "100", ARCHIVE),
+    ("cg_ScoresPing_HighColor", "0.8 0 0 1", ARCHIVE),
+    ("cg_ScoresPing_MedColor", "0.8 0.8 0 1", ARCHIVE),
+    ("cg_ScoresPing_LowColor", "0 0.75 0 1", ARCHIVE),
+    ("cg_ScoresPing_BgColor", "0.25 0.25 0.25 0.5", ARCHIVE),
+];
+
+/// `r_aspectRatio`'s names (iw3mp.exe 0x71c5f0), its enum's order.
+pub const COD4_ASPECT_RATIOS: [&str; 4] = ["auto", "standard", "wide 16:10", "wide 16:9"];
+
+/// The stamp [`Shell::config_text`] writes as `vc_cfgVersion`; one past
+/// the newest [`STALE_DEFAULTS`] row's version (cod11-console.md 8).
+pub const CONFIG_VERSION: u32 = 1;
+
+/// The first line of every config vcod writes, since the first one.
+const CONFIG_HEADER: &str = "// generated by vcod, do not modify";
+
+/// vcod's own old defaults of archived cvars: (the stamp that retired it,
+/// name, the old default, the games that had it). A vcod config stamped
+/// below the row's version holding the old value gets the cvar's current
+/// default ([`Shell::upgrade_config`]). An old default that was retail's
+/// own (`com_maxfps` 85, `rate` 5000, `r_picmip` 1) has no row.
+const STALE_DEFAULTS: &[(u32, &str, &str, &[Game])] = &[
+    // 4x MSAA on CoD1 and UO until 68d97193, on CoD4 until 36372025;
+    // retail's 1 since (cod11-client-perf.md 4, cod4-client-perf.md 19)
+    (1, "r_aaSamples", "4", &[Game::Cod1, Game::Cod4]),
+    // vcod's name until f5635f70; CL_Init's "Unknown Soldier" since
+    (1, "name", "vcod", &[Game::Cod1, Game::Cod2, Game::Cod4]),
+];
+
 /// The menu cvars vcod applies only at a restart, registered `0x21`
 /// like retail: the image settings (`R_Register`, CoDMP.exe 0x4b3300) wait
 /// for `vid_restart`, `mss_khz` (0x44fe60) for `snd_restart`.
@@ -335,6 +473,9 @@ pub struct Shell {
     /// Cvars set for this run only ([`Shell::set_for_run`]), keyed like
     /// `cvars`, with the value the config keeps for them.
     run_only: BTreeMap<String, String>,
+    /// CoD2's enum dvars' domains ([`Shell::set_enum_domain`]), keyed like
+    /// `cvars`.
+    enums: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for Shell {
@@ -343,6 +484,23 @@ impl Default for Shell {
     }
 }
 
+/// CoD2's `sc_*` dvars and their defaults.
+pub const COOKIE_DVARS: [(&str, &str); 13] = [
+    ("sc_enable", "1"),
+    ("sc_blur", "2"),
+    ("sc_count", "24"),
+    ("sc_debugCasterCount", "24"),
+    ("sc_debugReceiverCount", "24"),
+    ("sc_wantCount", "12"),
+    ("sc_wantCountMargin", "1"),
+    ("sc_fadeRange", "0.25"),
+    ("sc_shadowInRate", "2"),
+    ("sc_shadowOutRate", "5"),
+    ("sc_length", "400"),
+    ("sc_offscreenCasterLodBias", "0"),
+    ("sc_offscreenCasterLodScale", "20"),
+];
+
 impl Shell {
     /// The client's own cvars at their retail defaults, and [`DEFAULT_BINDS`].
     pub fn new() -> Shell {
@@ -350,6 +508,7 @@ impl Shell {
             cvars: BTreeMap::new(),
             binds: BTreeMap::new(),
             run_only: BTreeMap::new(),
+            enums: BTreeMap::new(),
         };
         // CL_Init (CoDMP.exe 0x41236b; 1.5 and UO alike): "Unknown Soldier",
         // archived and userinfo (docs/research/cod11-console.md 5).
@@ -444,6 +603,9 @@ impl Shell {
         s.register("ui_netSource", "0", ARCHIVE);
         // The browser's game type filter (vmCvar row at 0x40036cbc).
         s.register("ui_joinGametype", "0", ARCHIVE);
+        // vcod's CoD4 browser filter: 1 lists CoD4x servers, which never
+        // let 1.7 play (docs/research/cod4-handshake.md 13).
+        s.register("ui_browserShowCoD4x", "0", ARCHIVE);
         // The menu list `ui_load` reads, not archived (vmCvar row at
         // 0x40036c9c).
         s.register("ui_menuFiles", "ui_mp/menus.txt", 0);
@@ -482,6 +644,13 @@ impl Shell {
         // vcod-only, beyond retail: effect sprites fade into the opaque
         // scene behind them, the value the fade's scale (crate::soft_particles)
         s.register("vc_softParticles", "0", ARCHIVE);
+        // `r_vc_depthprepass` registers after the config
+        // (`Shell::register_depth_prepass`), its default per game
+        // vcod-only debug switches for the profile's sweep, the normal path
+        // at 1 (cod4-client-perf.md 25): 0 drops the CoD4 sets' normal map
+        // reads, or the level's film grade
+        s.register("r_vc_normalMaps", "1", 0);
+        s.register("r_vc_film", "1", 0);
         for (name, value) in MENU_CVARS {
             s.register(name, value, ARCHIVE | menu_cvar_latch(name));
         }
@@ -491,6 +660,32 @@ impl Shell {
         s.register("r_weightMipMaps", "0", LATCH);
         // vcod-only, beyond retail; 0 is the retail look
         s.register("vc_shadows", "0", ARCHIVE);
+        // CoD4 1.7's sun shadow map (crate::cod4_sunshadow): on by default
+        // (0x62c08c), and its near texel size, 0.25 in 0.0625..32 (0x62c390;
+        // docs/research/cod4-world.md 3.6)
+        s.register("sm_enable", "1", ARCHIVE);
+        s.register("sm_sunSampleSizeNear", "0.25", ARCHIVE | CHEAT);
+        // the far partition's share of its square, 1 in 0.25..1, and a
+        // fixed centre for it, 0 0 0 for none (0x62c3a3-0x62c438)
+        s.register("sm_sunShadowScale", "1", ARCHIVE | CHEAT);
+        s.register("sm_sunShadowCenter", "0 0 0", CHEAT);
+        // the spot light's map (crate::cod4_spotshadow, cod4-world.md 3.5):
+        // r_spotLightShadows and kin (0x62b4bb-0x62b547, default 1; every
+        // one read),
+        // sm_spotEnable (0x62c11d), sm_spotShadowFadeTime 1 in 0.01..5,
+        // the light score's 64 and 0.125, the offset's 0.5 and 2
+        // (0x62c15a-0x62c32c)
+        s.register("r_spotLightShadows", "1", CHEAT);
+        s.register("r_spotLightSModelShadows", "1", CHEAT);
+        s.register("r_spotLightEntityShadows", "1", CHEAT);
+        s.register("sm_spotEnable", "1", 0);
+        s.register("sm_spotShadowFadeTime", "1", 0);
+        // shadowed primary lights at once, 4 in 0..4 (0x62c15a)
+        s.register("sm_maxLights", "4", 0);
+        s.register("sm_lightScore_eyeProjectDist", "64", 0);
+        s.register("sm_lightScore_spotProjectFrac", "0.125", 0);
+        s.register("sm_polygonOffsetBias", "0.5", 0);
+        s.register("sm_polygonOffsetScale", "2", 0);
         // vcod-only, beyond retail (crate::post): a float world target and
         // tonemap, latched to `vid_restart` like retail's r_ cvars; then a
         // film grade, vignette and grain, strengths read every frame.
@@ -505,6 +700,10 @@ impl Shell {
         // list, the sun's flare and washes with it (0x4d9770,
         // docs/research/cod11-shader-scripts.md section 8, "r_flares").
         s.register("r_flares", "1", CHEAT);
+        // iw3mp.exe 0x49943a (`FX_RegisterDvars`): CoD4's "Toggles drawing
+        // of effects after processing", cheat-protected; 0 still runs the
+        // effects but draws none of their sprites (cod4-client-perf.md 15).
+        s.register("fx_draw", "1", CHEAT);
         // CoDMP.exe 0x4b3965: default "1", CVAR_ARCHIVE; the sky stage
         // (0x4e84d0) draws the disc and adds the flare only while it is set.
         s.register("r_drawSun", "1", ARCHIVE);
@@ -513,6 +712,12 @@ impl Shell {
         // the window's edges; 0 is retail's fixed horizontal fov with the
         // whole HUD in the 4:3 box (camera::view_fov_x, hudelem::Virtual).
         s.register("vc_widescreen", "1", ARCHIVE);
+        // vcod-only, CoD4: 1 projects the view at the window's own aspect
+        // (Hor+ off `cg_fov`'s 4:3 view, as `CG_UpdateFov` widens one) and
+        // keeps the HUD square in a centred box of `r_aspectRatio`'s
+        // aspect; 0 is 1.7's picked aspect stretched over the window
+        // (camera::Cod4Screen, cod4-front-end.md 10).
+        s.register("vc_windowAspect", "0", ARCHIVE);
         // R_Register (CoDMP.exe 0x4b374b, 0x4b3760): the size `r_mode -1`
         // asks for, and its pixel aspect, which vcod ignores. Retail's are
         // 1600 and 1024; vcod's 0 keeps its own window size (crate::video).
@@ -526,6 +731,9 @@ impl Shell {
         // mod and a server's systeminfo both force it; a disconnect leaves
         // it (docs/research/cod11-front-end.md, section 16).
         s.register("fs_game", "", INIT);
+        // vcod-only: the build a saved config was written by
+        // (`Shell::upgrade_config`); a config without it reads 0.
+        s.register("vc_cfgVersion", &CONFIG_VERSION.to_string(), ARCHIVE);
         for (key, cmd) in DEFAULT_BINDS {
             s.binds.insert(key.to_string(), cmd.to_string());
         }
@@ -557,7 +765,7 @@ impl Shell {
     /// demo sets nothing; the caller skips it.
     pub fn apply_systeminfo(&mut self, info: &str) -> Vec<Effect> {
         let mut out = Vec::new();
-        if atoi(net::info_value_for_key(info, "sv_cheats").unwrap_or("")) == 0 {
+        if atoi_msvc(net::info_value_for_key(info, "sv_cheats").unwrap_or("")) == 0 {
             for c in self.cvars.values_mut().filter(|c| c.cheat) {
                 if c.value != c.default {
                     c.value.clone_from(&c.default);
@@ -620,7 +828,7 @@ impl Shell {
 
     /// `sv_cheats` as `Cvar_Set2` reads it: its integer value.
     fn cheats(&self) -> bool {
-        atoi(self.cvar("sv_cheats").unwrap_or("")) != 0
+        atoi_msvc(self.cvar("sv_cheats").unwrap_or("")) != 0
     }
 
     /// The userinfo the cvars make.
@@ -688,6 +896,238 @@ impl Shell {
         true
     }
 
+    /// CoD2's archived dvars the stock options menus set where vcod's CoD1
+    /// set has none: `snd_volume` (`SND_Init`, Mac 0x4b496: 1.0, archived),
+    /// `cg_drawMantleHint` (`CG_Init`, Mac 0x145214: 1, flags 0x1001),
+    /// `cg_drawCrosshairNames` (1, 0x1001), its unarchived position
+    /// `cg_drawCrosshairNamesPosX` 300 and `PosY` 180 (`CG_RegisterDvars`),
+    /// and the HUD's below.
+    /// Registered after the config ran, keeping a value it set. CoD1's
+    /// `timedemo` cvar goes: CoD2's `timedemo` is a command.
+    pub fn use_cod2_cvars(&mut self) {
+        // `timedemo` is a command there (`CL_Init`, Mac 0x14b032).
+        self.cvars.remove("timedemo");
+        // `CG_Init` (Mac 0x145214), all archived (flags 0x1001): the chat's
+        // and say field's places, the stance hint prints and the hints'
+        // fade (cod2-hud.md 9, 14).
+        for (name, default) in [
+            ("snd_volume", "1"),
+            ("cg_drawMantleHint", "1"),
+            ("cg_drawCrosshairNames", "1"),
+            ("cg_hudChatPosition", "5 150"),
+            ("cg_hudSayPosition", "5 126"),
+            ("cg_hudStanceHintPrints", "0"),
+            ("cg_hintFadeTime", "100"),
+            ("cg_drawLagometer", "0"),
+        ] {
+            let kept = self.cvar(name).map(str::to_string);
+            self.register(name, default, ARCHIVE);
+            if let (Some(v), Some(c)) = (kept, self.cvars.get_mut(&name.to_ascii_lowercase())) {
+                c.value = v;
+            }
+        }
+        // The player profile dvars (`Com_InitPlayerProfiles`, Mac 0x111aa6;
+        // `UI_RegisterDvars`, Mac 0x1505b0), none archived; the main menu's
+        // `openMenuOnDvar` asks for the first two.
+        for (name, default) in [
+            ("com_playerProfile", ""),
+            ("ui_playerProfileCount", "0"),
+            ("ui_playerProfileSelected", ""),
+            ("ui_playerProfileNameNew", ""),
+            ("ui_playerProfileAlreadyChosen", "0"),
+        ] {
+            if self.cvar(name).is_none() {
+                self.register(name, default, 0);
+            }
+        }
+        // The shadow cookies' dvars at the renderer's defaults, none
+        // archived (`R_RegisterDvars`, Mac 0x000cb8b6; cod2-materials.md
+        // 9.8); `sc_count` is registered and read by nothing.
+        for (name, default) in [
+            ("cg_drawCrosshairNamesPosX", "300"),
+            ("cg_drawCrosshairNamesPosY", "180"),
+        ] {
+            if self.cvar(name).is_none() {
+                self.register(name, default, 0);
+            }
+        }
+        for (name, default) in COOKIE_DVARS {
+            if self.cvar(name).is_none() {
+                self.register(name, default, 0);
+            }
+        }
+    }
+
+    /// Makes `name` an enum dvar over `entries` (CoD2's `Dvar_RegisterEnum`):
+    /// a set of an index in range or of an entry's name in any case stores
+    /// the entry ([`Self::set`]). A value already held that names an entry
+    /// is spelled as the entry; any other is left, as vcod's `r_mode` -1
+    /// (its own window size) is.
+    pub fn set_enum_domain(&mut self, name: &str, entries: Vec<String>) {
+        let key = name.to_ascii_lowercase();
+        if let Some(c) = self.cvars.get_mut(&key)
+            && let Some(e) = enum_entry(&entries, &c.value)
+        {
+            c.value = e.to_string();
+        }
+        self.enums.insert(key, entries);
+    }
+
+    /// Every enum dvar's entries, by lowercased name.
+    pub fn enum_domains(&self) -> impl Iterator<Item = (&str, &[String])> {
+        self.enums.iter().map(|(k, v)| (k.as_str(), v.as_slice()))
+    }
+
+    /// An enum dvar's entries, `None` for any other cvar.
+    pub fn enum_domain(&self, name: &str) -> Option<&[String]> {
+        self.enums
+            .get(&name.to_ascii_lowercase())
+            .map(Vec::as_slice)
+    }
+
+    /// `r_aaSamples`, the scene's MSAA (`Renderer::new`: 1 or 4), latched
+    /// and registered after the config ran, keeping a value it set. The
+    /// default is retail's 1 in every game: CoD1's pixel format asks for no
+    /// sample buffers and its one multisample cvar, `r_ati_fsaa_samples`
+    /// (CoDMP.exe 0x4b33e4, "1"), is never read (cod11-client-perf.md 4);
+    /// CoD2's `R_RegisterDvars` (Mac 0xc8f98: 1 in 1..4, flags 0x2021) and
+    /// CoD4's (iw3mp.exe 0x62b1cb: 1 in 1..16, cod4-front-end.md 9.1).
+    pub fn register_aa_samples(&mut self) {
+        self.register_kept("r_aaSamples", "1", ARCHIVE | LATCH);
+    }
+
+    /// `r_vc_depthprepass`, vcod's depth-only prepass under the opaque
+    /// surfaces (the same pixels; cod4-client-perf.md 12), registered
+    /// after the config ran at the game's default, not archived: a config's
+    /// line for it is dropped, as the opt-in builds wrote a 0 that pinned
+    /// it off (cod2-client-perf.md 12). On for CoD2 and CoD4, whose retail
+    /// renderers lay the world's depth first; off for CoD1 and UO, whose
+    /// retail renderer runs no prepass and whose prepass takes only the
+    /// entities' first stages, which cost more than they save
+    /// (cod11-client-perf.md 4).
+    pub fn register_depth_prepass(&mut self, on: bool) {
+        self.register("r_vc_depthprepass", if on { "1" } else { "0" }, 0);
+    }
+
+    /// Registers `name` at `value`, keeping the value a config already set.
+    fn register_kept(&mut self, name: &str, value: &str, flags: u32) {
+        let kept = self.cvar(name).map(str::to_string);
+        self.register(name, value, flags);
+        if let (Some(v), Some(c)) = (kept, self.cvars.get_mut(&name.to_ascii_lowercase())) {
+            c.value = v;
+        }
+    }
+
+    /// 1.7's Options dvars vcod reads on a CoD4 install
+    /// (cod4-front-end.md 9), registered after the config ran, keeping a
+    /// value it set: `r_glow_allowed`, `r_glow`, `r_zFeather`, `r_distortion`,
+    /// `r_dof_enable`,
+    /// `r_specular`, `r_fog`, `r_dlightLimit`,
+    /// `r_lodScaleRigid`, `r_lodBiasRigid`, `r_drawWater`,
+    /// `r_texFilterMipMode`, `monkeytoy`, the picmip and anisotropy dvars,
+    /// `r_aspectRatio` and the scoreboard's ping graph dvars at iw3mp.exe's
+    /// defaults; then
+    /// [`Shell::cod4_set_picmip`].
+    pub fn register_cod4_options(&mut self) {
+        // `timedemo` is a command beside `demo` on 1.7 too (`CL_Init`,
+        // `iw3mp.exe` 0x46f541).
+        self.cvars.remove("timedemo");
+        for (name, value, flags) in COD4_OPTION_DVARS {
+            let kept = self.cvar(name).map(str::to_string);
+            self.register(name, value, flags);
+            if let (Some(v), Some(c)) = (kept, self.cvars.get_mut(&name.to_ascii_lowercase())) {
+                c.value = v;
+            }
+        }
+        self.set_enum_domain(
+            "r_aspectRatio",
+            COD4_ASPECT_RATIOS.iter().map(|s| s.to_string()).collect(),
+        );
+        self.cod4_set_picmip();
+    }
+
+    /// `R_SetPicmip` (iw3mp.exe 0x617520) on a CoD4 install: with
+    /// `r_picmip_manual` 0 the renderer picks the levels off the card's
+    /// and the system's memory and writes them back to the three dvars.
+    /// vcod reads every machine as 1.7's top tier (450 MB of texture
+    /// memory, over 640 MB of RAM), whose levels are all 0.
+    pub fn cod4_set_picmip(&mut self) {
+        if self
+            .cvar("r_picmip_manual")
+            .is_none_or(|m| atoi_msvc(m) != 0)
+        {
+            return;
+        }
+        for name in ["r_picmip", "r_picmip_bump", "r_picmip_spec"] {
+            if let Some(c) = self.cvars.get_mut(name) {
+                c.value = "0".into();
+            }
+        }
+    }
+
+    /// [`COD2_BINDS`] on every key unbound or still at its
+    /// [`DEFAULT_BINDS`] command, for a CoD2 install. Returns how many.
+    pub fn use_cod2_binds(&mut self) -> usize {
+        let mut n = 0;
+        for (key, cmd) in COD2_BINDS {
+            let cod1 = DEFAULT_BINDS.iter().find(|(k, _)| k == key).map(|b| b.1);
+            if self
+                .binds
+                .get(*key)
+                .is_none_or(|b| Some(b.as_str()) == cod1)
+            {
+                self.binds.insert(key.to_string(), cmd.to_string());
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// [`COD4_BINDS`] on every key unbound or still at its [`DEFAULT_BINDS`]
+    /// or [`COD2_BINDS`] command, for a CoD4 install, after
+    /// [`Self::use_cod2_binds`]. Returns how many.
+    pub fn use_cod4_binds(&mut self) -> usize {
+        let mut n = 0;
+        for (key, cmd) in COD4_BINDS {
+            fn stock(t: &[(&str, &'static str)], key: &str) -> Option<&'static str> {
+                t.iter().find(|(k, _)| *k == key).map(|b| b.1)
+            }
+            let (cod1, cod2) = (stock(DEFAULT_BINDS, key), stock(COD2_BINDS, key));
+            if self
+                .binds
+                .get(*key)
+                .is_none_or(|b| Some(b.as_str()) == cod1 || Some(b.as_str()) == cod2)
+            {
+                self.binds.insert(key.to_string(), cmd.to_string());
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// A CoD4 start's stock keys ([`Self::use_cod2_binds`], then
+    /// [`Self::use_cod4_binds`]), only when no config was read: a saved
+    /// config holds every bind after its `unbindall`, so a key it leaves
+    /// free was cleared in the bind menu and stays free. Returns how many.
+    pub fn use_cod4_defaults(&mut self, config_read: bool) -> usize {
+        if config_read {
+            return 0;
+        }
+        self.use_cod2_binds() + self.use_cod4_binds()
+    }
+
+    /// Every cvar's value by its lowercased name.
+    pub fn cvar_values(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.cvars
+            .iter()
+            .map(|(k, c)| (k.as_str(), c.value.as_str()))
+    }
+
+    /// Every bind, key and command.
+    pub fn binds(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.binds.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+
     /// Every key bound to exactly `cmd` (case folded), in retail's key-number
     /// order, which is the order the options screens list them in.
     pub fn keys_bound_to(&self, cmd: &str) -> Vec<&str> {
@@ -751,10 +1191,11 @@ impl Shell {
         };
         let tokens = tokenize(cmd);
         match tokens.first().map(String::as_str) {
+            Some(w) if w.eq_ignore_ascii_case("+actionslot") => true,
             Some(w) if w.starts_with('+') => button(&w[1..]).is_some(),
             Some(
                 "gocrouch" | "goprone" | "weaponslot" | "weapnext" | "weapprev" | "weapalt"
-                | "weapon",
+                | "weapon" | "toggleads" | "leaveads",
             ) => true,
             _ => false,
         }
@@ -781,6 +1222,19 @@ impl Shell {
         }
 
         match word.as_str() {
+            // `+actionslot` (`iw3mp.exe` 0x457960) acts on the press, `-actionslot` does
+            // nothing a cmd carries; a slot outside 1..4 does nothing.
+            "+actionslot" => match arg(1).map(vcod_common::text::atoi) {
+                Some(n @ 1..=4) => out.push(Effect::Impulse(Action::UseSlot(n as usize))),
+                Some(n) => print(
+                    out,
+                    format!(
+                        "+/-actionslot; number given is out of range.  Was {n}, expected 1 thru 4."
+                    ),
+                ),
+                None => print(out, "USAGE: +/-actionslot <number>".into()),
+            },
+            "-actionslot" => {}
             "+scores" => out.push(Effect::Scores(true)),
             "-scores" => out.push(Effect::Scores(false)),
             "gocrouch" => out.push(Effect::Impulse(Action::Crouch)),
@@ -788,14 +1242,30 @@ impl Shell {
             "weapnext" => out.push(Effect::Impulse(Action::NextWeapon)),
             "weapprev" => out.push(Effect::Impulse(Action::PrevWeapon)),
             "weapalt" => out.push(Effect::Impulse(Action::AltWeapon)),
+            "toggleads" => out.push(Effect::Impulse(Action::ToggleAds)),
+            "leaveads" => out.push(Effect::Impulse(Action::LeaveAds)),
             "weapon" => out.push(Effect::Weapon(arg(1).unwrap_or("").to_string())),
             // Retail stamps the weapon name before it looks the slot up and
             // prints nothing for a bad one (0x30038342).
             "weaponslot" => out.push(Effect::Impulse(Action::Slot(weapon_slot(
                 arg(1).unwrap_or(""),
             )))),
+            "openscriptmenu" => match (arg(1), arg(2), tokens.len()) {
+                (Some(menu), Some(response), 3) => out.push(Effect::OpenScriptMenu {
+                    menu: menu.to_string(),
+                    response: response.to_string(),
+                }),
+                _ => print(
+                    out,
+                    "USAGE: openscriptmenu <parent menu name> <script menu response>".into(),
+                ),
+            },
             "messagemode" => out.push(Effect::MessageMode { team: false }),
             "messagemode2" => out.push(Effect::MessageMode { team: true }),
+            // CoD4's chat field (`Con_ChatModePublic_f`,
+            // `Con_ChatModeTeam_f`): `messagemode`'s and `messagemode2`'s.
+            "chatmodepublic" => out.push(Effect::MessageMode { team: false }),
+            "chatmodeteam" => out.push(Effect::MessageMode { team: true }),
             "toggleconsole" => out.push(Effect::ToggleConsole),
             "clear" => out.push(Effect::Clear),
             "echo" => print(out, args_from(line, 1)),
@@ -812,8 +1282,21 @@ impl Shell {
             "record" => out.push(Effect::Record(arg(1).map(str::to_string))),
             "stoprecord" => out.push(Effect::StopRecord),
             "demo" => match (arg(1), tokens.len()) {
-                (Some(name), 2) => out.push(Effect::Demo(name.to_string())),
+                (Some(name), 2) => out.push(Effect::Demo {
+                    name: name.to_string(),
+                    timedemo: false,
+                }),
                 _ => print(out, "playdemo <demoname>".into()),
+            },
+            // CoD2's and CoD4's `timedemo` is a command beside `demo` (Mac
+            // 0x14c288, `iw3mp.exe` 0x46f541);
+            // its install has no `timedemo` cvar ([`Self::use_cod2_cvars`]).
+            "timedemo" if !self.cvars.contains_key("timedemo") => match (arg(1), tokens.len()) {
+                (Some(name), 2) => out.push(Effect::Demo {
+                    name: name.to_string(),
+                    timedemo: true,
+                }),
+                _ => print(out, "timedemo <demoname>".into()),
             },
             "rcon" => out.push(Effect::Rcon(tokens[1..].to_vec())),
             "say" | "say_team" => out.push(Effect::Forward(line.trim().to_string())),
@@ -849,7 +1332,8 @@ impl Shell {
             "toggle" => self.cmd_toggle(&tokens, out),
             // `setfromcvar <variable> <variablein>` (CoDMP.exe 0x43a070): a
             // missing source reads "".
-            "setfromcvar" => match (arg(1), arg(2)) {
+            // CoD2 renames it `setfromdvar`; its options menus `exec` that.
+            "setfromcvar" | "setfromdvar" => match (arg(1), arg(2)) {
                 (Some(dest), Some(src)) => {
                     let value = self.cvar(src).unwrap_or("").to_string();
                     self.set(dest, &value, false, out);
@@ -862,6 +1346,7 @@ impl Shell {
             },
             "vid_restart" => out.push(Effect::VidRestart),
             "snd_restart" => out.push(Effect::SndRestart),
+            "r_applypicmip" => out.push(Effect::ApplyPicmip),
             "ui_load" => out.push(Effect::UiLoad),
             "mp_quickmessage" => out.push(Effect::QuickMessage),
             "cg_shellshock" => out.push(Effect::ShellShock(tokens[1..].to_vec())),
@@ -980,6 +1465,11 @@ impl Shell {
     fn set(&mut self, name: &str, value: &str, archive: bool, out: &mut Vec<Effect>) {
         let cheats = self.cheats();
         let key = name.to_ascii_lowercase();
+        let value = match self.enums.get(&key).and_then(|e| enum_entry(e, value)) {
+            Some(e) => e.to_string(),
+            None => value.to_string(),
+        };
+        let value = value.as_str();
         // An explicit set makes a run-only value the user's own.
         self.run_only.remove(&key);
         let c = self.cvars.entry(key).or_insert_with(|| Cvar {
@@ -1086,10 +1576,51 @@ impl Shell {
         names
     }
 
+    /// Runs a saved config ([`Self::execute`]). A vcod config without a
+    /// `vc_cfgVersion` line reads as stamp 0; any other file (1.7's
+    /// `config_mp.cfg`) as this build's, so [`Self::upgrade_config`]
+    /// leaves what it set alone.
+    pub fn exec_config(&mut self, text: &str) -> Vec<Effect> {
+        let vcod = text.starts_with(CONFIG_HEADER);
+        self.set_rom("vc_cfgVersion", "0");
+        let out = self.execute(text);
+        if !vcod {
+            self.set_rom("vc_cfgVersion", &CONFIG_VERSION.to_string());
+        }
+        out
+    }
+
+    /// After a config ran and every late cvar registered: each
+    /// [`STALE_DEFAULTS`] row past the config's stamp whose cvar still holds
+    /// the old default (or has it latched) takes the current default; any
+    /// other value stays. Then the stamp is this build's. Returns the
+    /// cvars reset, and whether anything moved, the stamp included, so the
+    /// caller writes the config.
+    pub fn upgrade_config(&mut self, game: Game) -> (Vec<String>, bool) {
+        let stamp = self.cvar("vc_cfgVersion").map_or(0, atoi_msvc);
+        if stamp >= CONFIG_VERSION as i32 {
+            return (Vec::new(), false);
+        }
+        let mut reset = Vec::new();
+        for (version, name, old, games) in STALE_DEFAULTS {
+            let Some(c) = self.cvars.get_mut(&name.to_ascii_lowercase()) else {
+                continue;
+            };
+            let held = c.latched.as_ref().unwrap_or(&c.value);
+            if *version as i32 > stamp && games.contains(&game) && held == old {
+                c.value.clone_from(&c.default);
+                c.latched = None;
+                reset.push(c.name.clone());
+            }
+        }
+        self.set_rom("vc_cfgVersion", &CONFIG_VERSION.to_string());
+        (reset, true)
+    }
+
     /// The config file text, in the shape CoDMP.exe writes `config_mp.cfg`:
     /// `unbindall`, every bind, then every archived cvar as `seta`.
     pub fn config_text(&self) -> String {
-        let mut s = String::from("// generated by vcod, do not modify\nunbindall\n");
+        let mut s = format!("{CONFIG_HEADER}\nunbindall\n");
         for (k, v) in &self.binds {
             s.push_str(&format!("bind {k} \"{v}\"\n"));
         }
@@ -1104,6 +1635,20 @@ impl Shell {
         }
         s
     }
+}
+
+/// The entry an enum dvar set to `value` holds: the index's when `value`
+/// is an integer in range, else the one `value` names in any case
+/// (`Dvar_StringToEnum`, the lookup `Item_Paint`'s `ITEM_TYPE_DVARENUM`
+/// arm repeats, Mac 0x1704d6).
+pub fn enum_entry<'a>(entries: &'a [String], value: &str) -> Option<&'a str> {
+    if let Ok(i) = value.trim().parse::<usize>() {
+        return entries.get(i).map(String::as_str);
+    }
+    entries
+        .iter()
+        .find(|e| e.eq_ignore_ascii_case(value))
+        .map(String::as_str)
 }
 
 /// `Cmd_TokenizeString`: whitespace splits, a quoted run is one token
@@ -1224,6 +1769,82 @@ mod tests {
         assert_eq!(s.cvar_f32("vc_hdr"), 1.0);
         assert!(!s.apply_latched());
         assert!(s.config_text().contains("seta vc_hdr \"0\"\n"));
+    }
+
+    /// The config a run reads at start-up, through the late registration.
+    fn load(text: &str, game: Game) -> (Shell, Vec<String>, bool) {
+        let mut s = Shell::new();
+        s.exec_config(text);
+        s.register_aa_samples();
+        let (reset, moved) = s.upgrade_config(game);
+        (s, reset, moved)
+    }
+
+    /// An unstamped vcod config's `r_aaSamples 4`, vcod's old default, loads
+    /// as retail's 1 and the stamp moves; a 2 the user picked stays.
+    #[test]
+    fn an_old_config_s_stale_default_resets_and_a_chosen_value_stays() {
+        let old = "// generated by vcod, do not modify\nunbindall\nseta r_aaSamples \"4\"\n";
+        let (s, reset, moved) = load(old, Game::Cod4);
+        assert_eq!(s.cvar("r_aaSamples"), Some("1"));
+        assert_eq!(reset, ["r_aaSamples"]);
+        assert!(moved);
+        assert!(
+            s.config_text()
+                .contains(&format!("seta vc_cfgVersion \"{CONFIG_VERSION}\"\n"))
+        );
+        let picked = old.replace("\"4\"", "\"2\"");
+        let (s, reset, moved) = load(&picked, Game::Cod4);
+        assert_eq!(s.cvar("r_aaSamples"), Some("2"));
+        assert!(reset.is_empty());
+        assert!(moved);
+        // CoD2's default was never 4: there it is the user's
+        let (s, _, _) = load(old, Game::Cod2);
+        assert_eq!(s.cvar("r_aaSamples"), Some("4"));
+    }
+
+    /// A stamped config keeps even an old default's value, set again after
+    /// the upgrade; so does a config vcod did not write (1.7's).
+    #[test]
+    fn a_stamped_or_retail_config_keeps_its_values() {
+        let mut s = Shell::new();
+        s.register_aa_samples();
+        s.execute("set r_aaSamples 4");
+        let text = s.config_text();
+        let (s, reset, moved) = load(&text, Game::Cod1);
+        assert_eq!(
+            (s.cvar("r_aaSamples"), reset.len(), moved),
+            (Some("4"), 0, false)
+        );
+        let (s, reset, moved) = load("seta r_aaSamples \"4\"\n", Game::Cod4);
+        assert_eq!(
+            (s.cvar("r_aaSamples"), reset.len(), moved),
+            (Some("4"), 0, false)
+        );
+    }
+
+    /// No config: the shell already holds this build's stamp, which the
+    /// first config it writes carries.
+    #[test]
+    fn a_fresh_config_gets_the_stamp() {
+        let mut s = Shell::new();
+        s.register_aa_samples();
+        assert_eq!(s.upgrade_config(Game::Cod1), (Vec::new(), false));
+        assert!(
+            s.config_text()
+                .contains(&format!("seta vc_cfgVersion \"{CONFIG_VERSION}\"\n"))
+        );
+    }
+
+    /// A config from the opt-in builds (`seta r_vc_depthprepass "0"`) no
+    /// longer pins the prepass off, nor is the line written back.
+    #[test]
+    fn a_config_s_depth_prepass_gives_way_to_the_game_s_default() {
+        let mut s = Shell::new();
+        s.execute("seta r_vc_depthprepass \"0\"");
+        s.register_depth_prepass(true);
+        assert_eq!(s.cvar("r_vc_depthprepass"), Some("1"));
+        assert!(!s.config_text().contains("r_vc_depthprepass"));
     }
 
     /// An old UO config (`unbindall` and no `+sprint`) gets ALT back; one
@@ -1417,6 +2038,22 @@ mod tests {
         assert!(s.complete("zzz").is_empty());
     }
 
+    /// CoD2's `snd_volume` registers at 1 and archived, keeping what the
+    /// config set; its options menus run `setfromdvar`.
+    #[test]
+    fn cod2_dvars_and_setfromdvar() {
+        let mut s = Shell::new();
+        s.use_cod2_cvars();
+        assert_eq!(s.cvar("snd_volume"), Some("1"));
+        let mut s = Shell::new();
+        s.execute("seta snd_volume 0.3");
+        s.use_cod2_cvars();
+        assert_eq!(s.cvar("snd_volume"), Some("0.3"));
+        assert!(s.config_text().contains("snd_volume"));
+        s.execute("setfromdvar ui_snd_khz snd_volume");
+        assert_eq!(s.cvar("ui_snd_khz"), Some("0.3"));
+    }
+
     #[test]
     fn setfromcvar_exec_and_keys_in_key_order() {
         let mut s = Shell::new();
@@ -1490,6 +2127,21 @@ mod tests {
         assert_eq!(s.execute("sensitivity 3"), [Effect::SaveConfig]);
     }
 
+    /// 1.7's `r_glow` is a cheat dvar, on by default.
+    #[test]
+    fn cod4_r_glow_is_a_cheat_dvar() {
+        let mut s = Shell::new();
+        s.register_cod4_options();
+        assert_eq!(s.cvar("r_glow"), Some("1"));
+        assert_eq!(
+            s.execute("r_glow 0"),
+            [Effect::Print("r_glow is cheat protected.".into())]
+        );
+        s.apply_systeminfo(r"\sv_cheats\1");
+        s.execute("r_glow 0");
+        assert_eq!(s.cvar("r_glow"), Some("0"));
+    }
+
     #[test]
     fn cg_fov_is_cheat_protected() {
         let mut s = Shell::new();
@@ -1527,10 +2179,10 @@ mod tests {
         );
         assert!(s.force("fs_game", "uo").is_empty());
         assert_eq!(s.cvar("fs_game"), Some("uo"));
-        s.apply_systeminfo(r"\fs_game\genesis");
-        assert_eq!(s.cvar("fs_game"), Some("genesis"));
+        s.apply_systeminfo(r"\fs_game\mymod");
+        assert_eq!(s.cvar("fs_game"), Some("mymod"));
         s.apply_systeminfo(r"\sv_serverid\3");
-        assert_eq!(s.cvar("fs_game"), Some("genesis"));
+        assert_eq!(s.cvar("fs_game"), Some("mymod"));
         assert!(!s.config_text().contains("fs_game"));
     }
 
@@ -1538,7 +2190,7 @@ mod tests {
     fn the_systeminfo_forces_every_key() {
         let mut s = Shell::new();
         let out = s.apply_systeminfo(
-            r"\cl_allowDownload\0\rate\5000\vc_vanilla\1\cg_fov\90\r_picmip\2\fs_game\genesis\sv_serverid\16",
+            r"\cl_allowDownload\0\rate\5000\vc_vanilla\1\cg_fov\90\r_picmip\2\fs_game\mymod\sv_serverid\16",
         );
         assert_eq!(out, [Effect::SaveConfig, Effect::Userinfo]);
         assert_eq!(s.cvar("cl_allowDownload"), Some("0"));
@@ -1546,7 +2198,7 @@ mod tests {
         assert_eq!(s.cvar("vc_vanilla"), Some("1"));
         assert_eq!(s.cvar("cg_fov"), Some("90"), "forced past the cheat check");
         assert_eq!(s.cvar("r_picmip"), Some("2"), "no latch");
-        assert_eq!(s.cvar("fs_game"), Some("genesis"));
+        assert_eq!(s.cvar("fs_game"), Some("mymod"));
         assert_eq!(s.cvar("sv_serverid"), Some("16"));
         // A cvar the systeminfo made is not archived.
         assert!(!s.config_text().contains("sv_serverid"));
@@ -1567,6 +2219,22 @@ mod tests {
         assert_eq!(s.cvar("vc_vanilla"), Some("0"));
         s.set_rom("vc_vanilla", "1");
         assert_eq!(s.cvar("vc_vanilla"), Some("1"));
+    }
+
+    /// A CoD4 config whose melee moved from V to B keeps V free on the
+    /// next start; a first start takes the stock keys.
+    #[test]
+    fn a_cod4_config_keeps_a_cleared_key_free() {
+        let mut s = Shell::new();
+        assert!(s.use_cod4_defaults(false) > 0);
+        assert_eq!(s.bind("V"), Some("+melee"));
+        s.execute("unbind V; bind B +melee");
+        let saved = s.config_text();
+        let mut s = Shell::new();
+        s.execute(&saved);
+        assert_eq!(s.use_cod4_defaults(true), 0);
+        assert_eq!(s.bind("V"), None);
+        assert_eq!(s.bind("B"), Some("+melee"));
     }
 
     #[test]

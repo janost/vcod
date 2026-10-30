@@ -1,9 +1,14 @@
-//! IBSP 59 parser. Layouts: docs/research/bsp-ibsp59-format.md.
+//! IBSP 59 (CoD 1) loader into a [`MapWorld`]. Layouts:
+//! docs/research/bsp-ibsp59-format.md.
 
 use anyhow::{Result, anyhow, ensure};
 
-pub const LIGHTMAP_SIZE: usize = 512;
-pub const NO_LIGHTMAP: u16 = 65535;
+/// The IBSP 59 records are the [`MapWorld`]'s; they stay reachable here.
+pub use crate::mapworld::{
+    AabbNode, Brush, BrushSide, Cell, CullGroup, DrawVert, LIGHTMAP_SIZE, Leaf, LeafLists,
+    LinkClusters, MapWorld, Material, Model, NO_LIGHTMAP, Node, Occluder, Partition, PatchPart,
+    Plane, Portal, Pvs, TerrainPart, TriangleSoup, Visibility, areas_connected,
+};
 
 const LUMP_COUNT: usize = 33;
 const LUMP_MATERIALS: usize = 0;
@@ -38,570 +43,9 @@ const LUMP_COLLISION_PARTS: usize = 24;
 const LUMP_COLLISION_VERTS: usize = 25;
 const LUMP_COLLISION_INDICES: usize = 26;
 
-#[derive(Debug)]
-pub struct Material {
-    pub name: String,
-    /// Unused; surfaces are skipped by material name.
-    #[allow(dead_code)]
-    pub surface_flags: u32,
-    pub content_flags: u32,
-}
-
-#[derive(Debug)]
-pub struct TriangleSoup {
-    pub material: u16,
-    pub lightmap: u16,
-    pub first_vertex: u32,
-    pub vertex_count: u16,
-    pub index_count: u16,
-    pub first_index: u32,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct DrawVert {
-    pub pos: [f32; 3],
-    pub uv: [f32; 2],
-    pub lm_uv: [f32; 2],
-    pub normal: [f32; 3],
-    pub color: [u8; 4],
-}
-
-#[derive(Debug, Clone)]
-pub struct Plane {
-    pub normal: [f32; 3],
-    pub dist: f32,
-}
-
-#[derive(Debug)]
-pub struct BrushSide {
-    /// Sides 0..6: f32 axial bound, bit-cast. Sides 6..: index into
-    /// `Bsp::planes`. Decoded in collision.rs.
-    pub plane_or_dist: u32,
-    /// Index into `Bsp::materials`: the side's own material, whose surface
-    /// flags a trace stopping on this side reports.
-    pub material: u32,
-}
-
-#[derive(Debug)]
-pub struct Brush {
-    pub first_side: u32,
-    pub num_sides: u16,
-    pub material: u16,
-}
-
-/// Lump 27 entry. Model 0 is the world; 1.. are the `"model" "*N"`
-/// brushmodels. Soup and brush ranges partition their lumps (doc, "Lump 27,
-/// models").
-#[derive(Debug)]
-pub struct Model {
-    /// Relative to the brushmodel's origin brush. Unused outside tests.
-    pub mins: [f32; 3],
-    pub maxs: [f32; 3],
-    pub first_soup: u32,
-    pub num_soups: u32,
-    pub first_brush: u32,
-    pub num_brushes: u32,
-    /// The model's run in lump 23 (`leaf_partitions`): the terrain and
-    /// patches it owns. A submodel's run is the list of its own leaf, which
-    /// no node of model 0's tree reaches.
-    pub partitions: (u32, u32),
-}
-
-impl Model {
-    /// The clip model's bounds, which `trap_SetBrushModel` hands an entity's
-    /// `r.mins`/`r.maxs`: the lump's grown a unit a side by the submodel
-    /// loader (cod_lnxded 0x804a8e5..0x804a8fa, movers doc 18).
-    pub fn clip_bounds(&self) -> ([f32; 3], [f32; 3]) {
-        (self.mins.map(|v| v - 1.0), self.maxs.map(|v| v + 1.0))
-    }
-}
-
-/// Layouts: docs/research/bsp-ibsp59-format.md, "Visibility and tree lumps".
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CullGroup {
-    pub mins: [f32; 3],
-    pub maxs: [f32; 3],
-    pub first_soup: u32,
-    pub soup_count: u32,
-}
-
-/// Children follow their parent in preorder; a node carries no bounds.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct AabbNode {
-    pub first_soup: u32,
-    pub soup_count: u32,
-    pub child_count: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Cell {
-    pub mins: [f32; 3],
-    pub maxs: [f32; 3],
-    pub first_aabb: u32,
-    pub first_portal: u32,
-    pub portal_count: u32,
-    pub first_cull_index: u32,
-    pub cull_count: u32,
-    /// Into lump 15; the cell's occluder index list.
-    pub first_occluder: u32,
-    pub occluder_count: u32,
-}
-
-/// One occluder polyhedron (lumps 12-15; docs/research/bsp-ibsp59-format.md,
-/// "Lumps 12-15, occluders"). The `first_*` fields index the plane-index,
-/// edge and vertex lumps 13/14/11.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Occluder {
-    pub first_plane: u32,
-    pub num_planes: u16,
-    pub num_edges: u16,
-    pub first_edge: u32,
-    pub first_vert: u32,
-    pub vert_count: u16,
-}
-
-/// `plane` faces out of the owning cell, into `cell`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Portal {
-    pub plane: u32,
-    pub cell: u32,
-    pub first_vert: u32,
-    pub vert_count: u32,
-}
-
-/// `children[0]` is the front side; a negative child is leaf `-(c + 1)`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Node {
-    pub plane: u32,
-    pub children: [i32; 2],
-    pub mins: [i32; 3],
-    pub maxs: [i32; 3],
-}
-
-/// The other six ints (leaf surface/brush/light ranges) are skipped.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Leaf {
-    pub cluster: i32,
-    /// -1 in solid leafs, where `cluster` is -1 too on every stock map.
-    /// Areas join only through area portals, which no stock map opens, so
-    /// two leafs connect when they share it ([`areas_connected`]).
-    pub area: i32,
-    /// -1 in solid leafs.
-    pub cell: i32,
-}
-
-/// Lump 28: one bit row per cluster, saying which clusters that one can see.
-/// A map can ship without it (mp_neuville does), and then nothing is hidden.
-#[derive(Debug)]
-pub struct Pvs {
-    pub cluster_count: usize,
-    pub row_bytes: usize,
-    rows: Vec<u8>,
-}
-
-impl Pvs {
-    /// The rows again, for a `Visibility` that outlives the parsed map.
-    fn clone_rows(&self) -> Pvs {
-        Pvs {
-            cluster_count: self.cluster_count,
-            row_bytes: self.row_bytes,
-            rows: self.rows.clone(),
-        }
-    }
-
-    /// Whether a viewer in `from` can be shown something in `to`. A cluster
-    /// outside the table -- which is what a solid leaf's -1 is -- is visible,
-    /// matching the engine: its own test only ever runs on real clusters.
-    pub fn visible(&self, from: i32, to: i32) -> bool {
-        let (Ok(f), Ok(t)) = (usize::try_from(from), usize::try_from(to)) else {
-            return true;
-        };
-        if f >= self.cluster_count || t >= self.cluster_count {
-            return true;
-        }
-        let byte = self.rows[f * self.row_bytes + (t >> 3)];
-        byte & (1 << (t & 7)) != 0
-    }
-}
-
-/// One lump-24 terrain partition: a triangle list the engine hands
-/// `CM_GenerateTerrainCollide`, indices relative to `first_vert`
-/// (docs/research/bsp-ibsp59-format.md, "Lump 24, collision partitions").
-#[derive(Debug, Clone)]
-pub struct TerrainPart {
-    pub material: u16,
-    pub first_vert: u32,
-    pub vert_count: u16,
-    pub first_index: u32,
-    pub index_count: u16,
-}
-
-/// One lump-24 patch partition: a `width x height` grid of bezier control
-/// points at `first_vert` of lump 25 and the subdivision tolerance, the
-/// engine's `CM_GeneratePatchCollide` input (`patch.rs`).
-#[derive(Debug, Clone)]
-pub struct PatchPart {
-    pub material: u16,
-    pub width: u16,
-    pub height: u16,
-    /// How far a curve may stray from its chord before the grid splits it.
-    pub tolerance: i32,
-    pub first_vert: u32,
-}
-
-/// A lump-23 entry: the lump-24 record a leaf lists, as an index into
-/// [`Bsp::terrain`] or [`Bsp::patches`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Partition {
-    Terrain(u32),
-    Patch(u32),
-}
-
-/// A leaf's runs, (first, count), in [`Bsp::leaf_brushes`] and
-/// [`Bsp::leaf_partitions`] (leaf record bytes 16 and 20, 8 and 12).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LeafLists {
-    pub brushes: (u32, u32),
-    pub partitions: (u32, u32),
-}
-
-#[derive(Debug)]
-pub struct Bsp {
-    pub materials: Vec<Material>,
-    pub lightmaps: Vec<Vec<u8>>, // 512*512*3 RGB pages
-    pub soups: Vec<TriangleSoup>,
-    pub verts: Vec<DrawVert>,
-    pub indices: Vec<u16>,
-    pub entities: String,
-    pub planes: Vec<Plane>,
-    pub brush_sides: Vec<BrushSide>,
-    pub brushes: Vec<Brush>,
-    pub models: Vec<Model>,
-    pub cull_groups: Vec<CullGroup>,
-    pub cull_indices: Vec<u32>,
-    pub portal_verts: Vec<[f32; 3]>,
-    pub occluders: Vec<Occluder>,
-    pub occluder_plane_indices: Vec<u32>,
-    pub occluder_edges: Vec<[u8; 4]>,
-    pub occluder_indices: Vec<u16>,
-    pub aabb_nodes: Vec<AabbNode>,
-    pub cells: Vec<Cell>,
-    pub portals: Vec<Portal>,
-    pub nodes: Vec<Node>,
-    pub leafs: Vec<Leaf>,
-    /// `None` when the map ships no lump 28.
-    pub pvs: Option<Pvs>,
-    /// Lumps 24-26: the engine's own terrain and patch collision input.
-    pub terrain: Vec<TerrainPart>,
-    pub patches: Vec<PatchPart>,
-    pub collision_verts: Vec<[f32; 3]>,
-    pub collision_indices: Vec<u16>,
-    /// Lump 19: indices into `lights`, per leaf through `leaf_lights`. A
-    /// leaf's list may open with a negative entry, the sky flag.
-    pub light_indices: Vec<i16>,
-    /// Per leaf, index-aligned with `leafs`: (first, count) into
-    /// `light_indices` (leaf record bytes 28 and 32).
-    pub leaf_lights: Vec<(u32, u32)>,
-    /// Per leaf, index-aligned with `leafs`: its runs in `leaf_brushes`
-    /// and `leaf_partitions`.
-    pub leaf_lists: Vec<LeafLists>,
-    /// Lump 22: the brushes each leaf lists, as lump-4 indices.
-    pub leaf_brushes: Vec<u32>,
-    /// Lump 23: the lump-24 partitions each leaf lists. A trace clips only
-    /// what the leaves it walks list (bsp-ibsp59-format.md, "The leaf
-    /// walk").
-    pub leaf_partitions: Vec<Partition>,
-    /// Lump 30, 72-byte records as raw words; decoded per light type in
-    /// `static_light.rs`.
-    pub lights: Vec<[u32; 18]>,
-    /// Lump 32, the precomputed light visibility cache, raw.
-    pub light_vis: Vec<u8>,
-}
-
-impl Bsp {
-    /// The tree and table a server needs to decide who can see what, without
-    /// keeping the whole map: the lightmaps alone are megabytes.
-    pub fn visibility(&self) -> Visibility {
-        Visibility {
-            planes: self.planes.clone(),
-            nodes: self.nodes.clone(),
-            leafs: self.leafs.clone(),
-            pvs: self.pvs.as_ref().map(Pvs::clone_rows),
-            models: self.models.iter().map(Model::clip_bounds).collect(),
-        }
-    }
-}
-
-/// Point-to-cluster lookup plus the PVS row test: what a server culls a
-/// client's entity list with (`docs/protocol-1.1.md`, "Which entities a client
-/// is sent").
-#[derive(Debug)]
-pub struct Visibility {
-    planes: Vec<Plane>,
-    nodes: Vec<Node>,
-    leafs: Vec<Leaf>,
-    pvs: Option<Pvs>,
-    /// Each inline model's clip bounds ([`Model::clip_bounds`]), what a
-    /// brush model entity links with.
-    models: Vec<([f32; 3], [f32; 3])>,
-}
-
-impl Visibility {
-    /// An empty tree: every point reads as a solid leaf and nothing is
-    /// hidden. For a server with no map loaded, and for tests that only need
-    /// collision.
-    pub fn none() -> Self {
-        Visibility {
-            planes: Vec::new(),
-            nodes: Vec::new(),
-            leafs: Vec::new(),
-            pvs: None,
-            models: Vec::new(),
-        }
-    }
-
-    /// Test helper: one open cluster holding every point, so every linked
-    /// entity is sent to everyone.
-    #[doc(hidden)]
-    pub fn single_cluster() -> Self {
-        Visibility {
-            planes: vec![Plane {
-                normal: [0.0, 0.0, 1.0],
-                dist: 0.0,
-            }],
-            nodes: vec![Node {
-                plane: 0,
-                children: [-1, -1],
-                mins: [0; 3],
-                maxs: [0; 3],
-            }],
-            leafs: vec![Leaf {
-                cluster: 0,
-                area: 0,
-                cell: 0,
-            }],
-            pvs: None,
-            models: Vec::new(),
-        }
-    }
-
-    /// Inline model `n`'s bounds, `None` past the model count.
-    pub fn model_bounds(&self, n: usize) -> Option<([f32; 3], [f32; 3])> {
-        self.models.get(n).copied()
-    }
-
-    /// The leaf a point falls in, by walking the tree from node 0. The engine
-    /// descends the same way for its camera cell (`0x4e2be0`): a point on the
-    /// plane takes the back child.
-    pub fn leaf_at(&self, p: [f32; 3]) -> Option<&Leaf> {
-        if self.nodes.is_empty() {
-            return self.leafs.first();
-        }
-        let mut i: i32 = 0;
-        // A malformed tree must not spin; no stock map comes close to this.
-        for _ in 0..self.nodes.len() + 1 {
-            if i < 0 {
-                return self.leafs.get((-(i + 1)) as usize);
-            }
-            let n = self.nodes.get(i as usize)?;
-            let pl = self.planes.get(n.plane as usize)?;
-            let d = p[0] * pl.normal[0] + p[1] * pl.normal[1] + p[2] * pl.normal[2] - pl.dist;
-            i = if d > 0.0 {
-                n.children[0]
-            } else {
-                n.children[1]
-            };
-        }
-        None
-    }
-
-    /// The cluster a point falls in, or -1 for a solid leaf or no tree.
-    pub fn cluster_at(&self, p: [f32; 3]) -> i32 {
-        self.leaf_at(p).map_or(-1, |l| l.cluster)
-    }
-
-    /// The area a point falls in, -1 for a solid leaf. A missing tree reads
-    /// as area 0, so a server with no map culls nothing.
-    pub fn area_at(&self, p: [f32; 3]) -> i32 {
-        self.leaf_at(p).map_or(0, |l| l.area)
-    }
-
-    /// Whether a viewer in `from` is shown something in `to`. A map with no
-    /// lump 28 hides nothing.
-    pub fn visible(&self, from: i32, to: i32) -> bool {
-        self.pvs.as_ref().is_none_or(|p| p.visible(from, to))
-    }
-
-    /// The clusters `SV_LinkEntity` keeps for a box, which is what the
-    /// engine culls an entity by. A point lookup is not enough: a turret's or
-    /// a prop's origin often sits inside the geometry it stands on and reads
-    /// as a solid leaf. The engine keeps a capped list rather than every
-    /// cluster the box touches (docs/protocol-1.1.md, "Which entities a
-    /// client is sent"): `CM_BoxLeafnums` lists at most 128 leafs, front
-    /// child first, solid ones included, and the link takes the first 16
-    /// clusters among them; past 16 it keeps the cluster of the last
-    /// non-solid leaf the walk reached, listed or not, as `last_cluster`.
-    pub fn link_clusters(&self, mins: [f32; 3], maxs: [f32; 3]) -> LinkClusters {
-        let mut walk = LeafWalk {
-            leafs: Vec::new(),
-            last_leaf: 0,
-        };
-        self.box_leafs(0, mins, maxs, &mut walk, 0);
-        let mut out = LinkClusters {
-            areas: [-1; 2],
-            ..LinkClusters::default()
-        };
-        // A box over a third area keeps the last as its second (`Object %i
-        // touching 3 areas`, coduo_lnxded 0x8099dee).
-        for leaf in walk.leafs.iter().filter_map(|&l| self.leafs.get(l)) {
-            match leaf.area {
-                -1 => {}
-                a if out.areas[0] == -1 || out.areas[0] == a => out.areas[0] = a,
-                a => out.areas[1] = a,
-            }
-        }
-        let cluster = |i: usize| self.leafs.get(i).map_or(-1, |l| l.cluster);
-        for &leaf in &walk.leafs {
-            let c = cluster(leaf);
-            if c == -1 {
-                continue;
-            }
-            out.clusters.push(c);
-            if out.clusters.len() == MAX_ENT_CLUSTERS {
-                out.last_cluster = cluster(walk.last_leaf);
-                break;
-            }
-        }
-        out.linked = !walk.leafs.is_empty();
-        out
-    }
-
-    /// `SV_AddEntitiesVisibleFromPoint`'s cluster test of a linked entity
-    /// from a viewer in `from`. Past 16 clusters it scans the cluster numbers
-    /// from the 16th up to `last_cluster` and, as Q3's does, reads the scan
-    /// ending on `last_cluster` itself as hidden and running past it as seen.
-    pub fn link_visible(&self, from: i32, link: &LinkClusters) -> bool {
-        if link.clusters.iter().any(|&c| self.visible(from, c)) {
-            return true;
-        }
-        let (Some(&last), true) = (link.clusters.last(), link.last_cluster != 0) else {
-            return false;
-        };
-        let mut l = last;
-        while l <= link.last_cluster && !self.visible(from, l) {
-            l += 1;
-        }
-        l != link.last_cluster
-    }
-
-    /// `CM_BoxLeafnums_r`: a box straddling a plane walks the front child
-    /// first. Every leaf counts against the 128, and a non-solid one is the
-    /// last leaf even when the list is already full.
-    fn box_leafs(&self, i: i32, mins: [f32; 3], maxs: [f32; 3], walk: &mut LeafWalk, depth: u32) {
-        // The tree is a few dozen deep on stock maps; the cap is for a
-        // malformed one, not for them.
-        if depth > 128 {
-            return;
-        }
-        if i < 0 {
-            let leaf = (-(i + 1)) as usize;
-            if self.leafs.get(leaf).is_some_and(|l| l.cluster != -1) {
-                walk.last_leaf = leaf;
-            }
-            if walk.leafs.len() < MAX_BOX_LEAFS {
-                walk.leafs.push(leaf);
-            }
-            return;
-        }
-        let Some(n) = self.nodes.get(i as usize) else {
-            return;
-        };
-        let Some(pl) = self.planes.get(n.plane as usize) else {
-            return;
-        };
-        let (front, back) = box_on_plane_side(pl, mins, maxs);
-        if front {
-            self.box_leafs(n.children[0], mins, maxs, walk, depth + 1);
-        }
-        if back {
-            self.box_leafs(n.children[1], mins, maxs, walk, depth + 1);
-        }
-    }
-}
-
-/// `MAX_ENT_CLUSTERS`: the clusters a linked entity keeps.
-const MAX_ENT_CLUSTERS: usize = 16;
-/// The leaf list `SV_LinkEntity` hands `CM_BoxLeafnums`.
-const MAX_BOX_LEAFS: usize = 128;
-
-/// An entity's link as the snapshot cull reads it ([`Visibility::link_clusters`]).
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct LinkClusters {
-    /// At most 16, in the leaf walk's order, repeats kept.
-    pub clusters: Vec<i32>,
-    /// The cluster of the walk's last non-solid leaf when `clusters` filled
-    /// up, else 0 (the engine's unset value).
-    pub last_cluster: i32,
-    /// The box reached a leaf at all; the engine unlinks an entity whose box
-    /// lists none.
-    pub linked: bool,
-    /// `areanum` and `areanum2`: the first two areas the listed leafs carry,
-    /// -1 for none. The snapshot cull sends an entity only when one of them
-    /// connects to the viewer's ([`areas_connected`]).
-    pub areas: [i32; 2],
-}
-
-/// `CM_AreasConnected` (cod_lnxded 0x8053f44, coduo_lnxded 0x8057abd): no
-/// area -1, and both in one flood. Areas flood only through a portal
-/// `trap_AdjustAreaPortalState` opened, which only a binary mover calls
-/// (`Reached_BinaryMover`, game.mp.uo 0x721ae), and no stock MP map has one,
-/// so a flood is one area.
-pub fn areas_connected(a: i32, b: i32) -> bool {
-    a >= 0 && b >= 0 && a == b
-}
-
-impl LinkClusters {
-    /// Whether one of the entity's areas connects to `area`.
-    pub fn in_area(&self, area: i32) -> bool {
-        self.areas.iter().any(|&a| areas_connected(area, a))
-    }
-}
-
-struct LeafWalk {
-    leafs: Vec<usize>,
-    last_leaf: usize,
-}
-
-/// `BoxOnPlaneSide`, as (front, back): the box's farthest corner along the
-/// normal at or past the plane is in front, its nearest corner short of it
-/// behind. An axial plane takes the same test: the engines' routine is Q3's
-/// x87 assembly, which has no axial case, and no caller checks the plane's
-/// type first, so a box whose high side lies on an axial plane is on both
-/// sides (`cod_lnxded` 0x80c8634, `coduo_lnxded` 0x80cb294;
-/// protocol-1.1.md, "The clusters a link keeps"). The corners follow the
-/// plane's sign bits, set for a component below 0 (0x8067204). The sums run
-/// on the x87 stack, so they are taken in f64 here.
-fn box_on_plane_side(pl: &Plane, mins: [f32; 3], maxs: [f32; 3]) -> (bool, bool) {
-    let (mut near, mut far) = (0.0f64, 0.0f64);
-    for axis in 0..3 {
-        let c = f64::from(pl.normal[axis]);
-        let (lo, hi) = (f64::from(mins[axis]), f64::from(maxs[axis]));
-        if pl.normal[axis] < 0.0 {
-            near += c * hi;
-            far += c * lo;
-        } else {
-            near += c * lo;
-            far += c * hi;
-        }
-    }
-    let dist = f64::from(pl.dist);
-    (far >= dist, near < dist)
-}
-
 /// Lump 28: `i32 cluster_count, row_bytes` then one row per cluster. An empty
 /// lump is a map with no PVS, which the format doc records for mp_neuville.
-fn parse_pvs(b: &[u8]) -> Result<Option<Pvs>> {
+pub(crate) fn parse_pvs(b: &[u8]) -> Result<Option<Pvs>> {
     if b.is_empty() {
         return Ok(None);
     }
@@ -623,11 +67,7 @@ fn parse_pvs(b: &[u8]) -> Result<Option<Pvs>> {
         row_bytes * 8 >= cluster_count,
         "a {row_bytes}-byte row cannot address {cluster_count} clusters"
     );
-    Ok(Some(Pvs {
-        cluster_count,
-        row_bytes,
-        rows: b[8..8 + need].to_vec(),
-    }))
+    Ok(Pvs::new(cluster_count, row_bytes, b[8..8 + need].to_vec()))
 }
 
 fn lump<'a>(data: &'a [u8], dir: &[(u32, u32)], i: usize) -> Result<&'a [u8]> {
@@ -662,7 +102,7 @@ fn records<T>(lump: &[u8], size: usize, name: &str, f: impl Fn(&[u8]) -> T) -> R
     Ok(lump.chunks_exact(size).map(f).collect())
 }
 
-pub fn parse(data: &[u8]) -> Result<Bsp> {
+pub fn parse(data: &[u8]) -> Result<MapWorld> {
     ensure!(
         data.len() >= 8 + LUMP_COUNT * 8,
         "file too small to be a BSP"
@@ -1258,11 +698,24 @@ pub fn parse(data: &[u8]) -> Result<Bsp> {
         );
     }
 
-    Ok(Bsp {
+    Ok(MapWorld {
         materials,
         lightmaps,
+        lightmap_basis: Vec::new(),
+        light_grid: None,
+        sun: None,
+        model_lighting: None,
+        entity_lighting: None,
+        model_lights: Vec::new(),
+        reflection_probes: Vec::new(),
+        waters: Vec::new(),
+        soup_probes: Vec::new(),
+        soup_order: Vec::new(),
+        sun_casters: Vec::new(),
+        soup_lights: Vec::new(),
         soups,
         verts,
+        tangents: Vec::new(),
         indices,
         entities,
         planes,
@@ -1279,6 +732,10 @@ pub fn parse(data: &[u8]) -> Result<Bsp> {
         aabb_nodes,
         cells,
         portals,
+        portals_only: false,
+        portal_min_clip_area: 0.0,
+        portal_min_recurse_depth: 0,
+        static_lods: Vec::new(),
         nodes,
         leafs,
         pvs,
@@ -1296,7 +753,9 @@ pub fn parse(data: &[u8]) -> Result<Bsp> {
     })
 }
 
-fn parse_entity_block(block: &str) -> std::collections::HashMap<String, String> {
+/// One block's key/value pairs in the order the lump lists them, as
+/// `G_ParseSpawnVars` collects them (cod11-gsc-object-model.md 7).
+fn parse_entity_pairs(block: &str) -> Vec<(String, String)> {
     block
         .lines()
         .filter_map(|line| {
@@ -1315,12 +774,77 @@ pub fn parse_vec3(s: &str) -> Option<[f32; 3]> {
     Some([it.next()??, it.next()??, it.next()??])
 }
 
+/// Every block's keys as the field pass reads them: `G_ParseField`
+/// matches a key with `Q_stricmp` (1.1d 0x6143a) and `G_CallSpawn`
+/// applies every pair in order, so a key is stored folded to lower case
+/// and a repeated one keeps its last copy (cod11-gsc-object-model.md 7).
+/// Look keys up in lower case. A spawn function's own read is
+/// `G_SpawnString`'s, which [`spawn_string`] takes over
+/// [`entity_block_pairs`].
 pub fn entity_blocks(entities: &str) -> Vec<std::collections::HashMap<String, String>> {
+    entity_block_pairs(entities)
+        .iter()
+        .map(|pairs| field_view(pairs))
+        .collect()
+}
+
+/// One block's [`entity_blocks`] view: keys folded, the last copy kept.
+pub fn field_view(pairs: &[(String, String)]) -> std::collections::HashMap<String, String> {
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
+        .collect()
+}
+
+/// A key's value as the field pass leaves it on the entity: the last pair
+/// whose key matches without case, as [`field_view`] keeps it.
+pub fn field_value<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    pairs
+        .iter()
+        .rev()
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        .map(|(_, v)| v.as_str())
+}
+
+/// The block's `classname` as CoDMP.exe 1.1's renderer entity pass keeps it
+/// (0x4dbf50): a key spelled exactly `classname`
+/// goes to its own slot, each copy over the last.
+pub fn render_classname(pairs: &[(String, String)]) -> Option<&str> {
+    pairs
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "classname")
+        .map(|(_, v)| v.as_str())
+}
+
+/// Any other key as that pass looks it up (0x4dba20): the first pair
+/// whose key matches with `_stricmp`.
+pub fn render_key<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    pairs
+        .iter()
+        .filter(|(k, _)| k != "classname")
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        .map(|(_, v)| v.as_str())
+}
+
+/// `G_SpawnString` (1.1d 0x61390, UO game.mp.uo 0x812e4, CoD2 0x80f415e), under
+/// `G_SpawnInt`, `G_SpawnFloat` and `G_SpawnVector`: `strcmp` from pair 0,
+/// the first match (cod11-gsc-object-model.md 7). Case-sensitive, unlike
+/// the field pass.
+pub fn spawn_string<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    pairs
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
+}
+
+/// Every block's key/value pairs in lump order, repeats kept.
+pub fn entity_block_pairs(entities: &str) -> Vec<Vec<(String, String)>> {
     entities
         .split('{')
         .skip(1)
         .map(|b| b.split('}').next().unwrap_or(""))
-        .map(parse_entity_block)
+        .map(parse_entity_pairs)
         .collect()
 }
 
@@ -1367,16 +891,13 @@ pub const MAX_MAP_CORONAS: usize = 512;
 /// error in retail; vcod skips the entity.
 pub fn coronas(entities: &str) -> Vec<Corona> {
     let mut out = Vec::new();
-    for b in entity_blocks(entities) {
-        if !b
-            .get("classname")
-            .is_some_and(|c| c.eq_ignore_ascii_case("corona"))
-        {
+    for pairs in entity_block_pairs(entities) {
+        if !render_classname(&pairs).is_some_and(|c| c.eq_ignore_ascii_case("corona")) {
             continue;
         }
+        let b = |k: &str| render_key(&pairs, k);
         let num = |k: &str, default: f32| {
-            b.get(k)
-                .and_then(|v| v.trim().parse::<f32>().ok())
+            b(k).and_then(|v| v.trim().parse::<f32>().ok())
                 .unwrap_or(default)
         };
         let scale = num("scale", 1.0);
@@ -1388,17 +909,11 @@ pub fn coronas(entities: &str) -> Vec<Corona> {
             log::warn!("MAX_MAP_CORONAS ({MAX_MAP_CORONAS}) exceeded, dropping the rest");
             break;
         }
-        let color = b
-            .get("dl_color")
-            .and_then(|v| parse_vec3(v))
-            .unwrap_or([1.0; 3]);
+        let color = b("dl_color").and_then(parse_vec3).unwrap_or([1.0; 3]);
         // clamped, then `_ftol2`'s truncation (0x4dbe2f..0x4dbf15)
         let byte = |c: f32| (c * 255.0).clamp(0.0, 255.0) as u8;
         out.push(Corona {
-            origin: b
-                .get("origin")
-                .and_then(|v| parse_vec3(v))
-                .unwrap_or([0.0; 3]),
+            origin: b("origin").and_then(parse_vec3).unwrap_or([0.0; 3]),
             radius: scale * 25.5,
             zcutoff: num("zcutoff", -0.15),
             zfadeout: num("zfadeout", -0.25),
@@ -1408,11 +923,14 @@ pub fn coronas(entities: &str) -> Vec<Corona> {
     out
 }
 
-/// `(origin, yaw degrees)` of the first spawn in classname priority order.
+/// `(origin, yaw degrees)` of the first spawn in classname priority order:
+/// CoD1's, then CoD2's (`mp_dm_spawn`, `mp_tdm_spawn`).
 pub fn find_spawn(entities: &str) -> Option<([f32; 3], f32)> {
-    const CLASSES: [&str; 4] = [
+    const CLASSES: [&str; 6] = [
         "mp_deathmatch_spawn",
         "mp_teamdeathmatch_spawn",
+        "mp_dm_spawn",
+        "mp_tdm_spawn",
         "mp_deathmatch_intermission",
         "info_player_start",
     ];
@@ -1437,6 +955,22 @@ pub fn find_spawn(entities: &str) -> Option<([f32; 3], f32)> {
 
 #[cfg(test)]
 mod tests {
+    /// `spawn_string` is `G_SpawnString`'s strcmp first match, the field
+    /// view folds keys and keeps the last copy, the renderer's lookup folds
+    /// and takes the first.
+    #[test]
+    fn a_repeated_key_reads_first_by_spawn_string_and_last_as_a_field() {
+        let ents = "{\n\"wait\" \"1\"\n\"Wait\" \"2\"\n\"wait\" \"3\"\n}";
+        let pairs = &entity_block_pairs(ents)[0];
+        assert_eq!(spawn_string(pairs, "wait"), Some("1"));
+        assert_eq!(spawn_string(pairs, "WAIT"), None);
+        assert_eq!(field_value(pairs, "WAIT"), Some("3"));
+        assert_eq!(render_key(pairs, "WAIT"), Some("1"));
+        let view = &entity_blocks(ents)[0];
+        assert_eq!(view.len(), 1);
+        assert_eq!(view.get("wait").map(String::as_str), Some("3"));
+    }
+
     use super::*;
 
     /// IBSP 59 with the given lumps; every other lump is empty.
@@ -1853,218 +1387,5 @@ mod tests {
         data[off + 8..off + 12].copy_from_slice(&u32::MAX.to_le_bytes());
         let err = parse(&data).unwrap_err().to_string();
         assert!(err.contains("portal"), "{err}");
-    }
-}
-
-#[cfg(test)]
-mod pvs_tests {
-    use super::*;
-
-    /// The engines' `BoxOnPlaneSide` has no axial case (`cod_lnxded`
-    /// 0x80c8634): a box whose high side lies on an axial plane is on both
-    /// sides, one whose low side lies on it in front only.
-    #[test]
-    fn a_box_touching_an_axial_plane_from_behind_is_on_both_sides() {
-        let x = Plane {
-            normal: [1.0, 0.0, 0.0],
-            dist: 100.0,
-        };
-        let side = |lo: f32, hi: f32| box_on_plane_side(&x, [lo, -1.0, -1.0], [hi, 1.0, 1.0]);
-        assert_eq!(side(90.0, 100.0), (true, true));
-        assert_eq!(side(100.0, 110.0), (true, false));
-        assert_eq!(side(80.0, 90.0), (false, true));
-        assert_eq!(side(100.0, 100.0), (true, false));
-        let back = Plane {
-            normal: [-1.0, 0.0, 0.0],
-            dist: -100.0,
-        };
-        let side = |lo: f32, hi: f32| box_on_plane_side(&back, [lo, -1.0, -1.0], [hi, 1.0, 1.0]);
-        assert_eq!(side(100.0, 110.0), (true, true));
-        assert_eq!(side(90.0, 100.0), (true, false));
-    }
-
-    fn lump(cluster_count: i32, row_bytes: i32, rows: &[u8]) -> Vec<u8> {
-        let mut b = cluster_count.to_le_bytes().to_vec();
-        b.extend(row_bytes.to_le_bytes());
-        b.extend(rows);
-        b
-    }
-
-    #[test]
-    fn a_row_is_read_bit_by_bit() {
-        // Cluster 0 sees 0 and 9; cluster 1 sees only itself.
-        let p = parse_pvs(&lump(2, 2, &[0b0000_0001, 0b0000_0010, 0b0000_0010, 0]))
-            .expect("parse")
-            .expect("a table");
-        assert!(p.visible(0, 0));
-        assert!(!p.visible(0, 1));
-        assert!(p.visible(0, 9));
-        assert!(p.visible(1, 1));
-        assert!(!p.visible(1, 0));
-    }
-
-    /// A solid leaf's -1 and anything past the table are visible: the engine's
-    /// own test only ever runs on real clusters, and `clusters_in_box` is what
-    /// keeps a solid origin from meaning "everywhere".
-    #[test]
-    fn a_cluster_outside_the_table_is_visible() {
-        let p = parse_pvs(&lump(1, 1, &[0]))
-            .expect("parse")
-            .expect("a table");
-        assert!(p.visible(-1, 0));
-        assert!(p.visible(0, -1));
-        assert!(p.visible(0, 7));
-    }
-
-    /// A box over 21 leafs in a row, leaf `i` in cluster `i + 1`, seen
-    /// from cluster 22, which sees only `sees`.
-    fn leaf_row(sees: &[usize]) -> (Visibility, LinkClusters) {
-        let n = 20usize;
-        let planes = (0..n)
-            .map(|i| Plane {
-                normal: [1.0, 0.0, 0.0],
-                dist: 10.0 * (i + 1) as f32,
-            })
-            .collect();
-        // Node i: its plane's front is leaf i, its back node i + 1; the last
-        // node's back is leaf 20. A box over every plane walks the leafs in
-        // order.
-        let nodes = (0..n)
-            .map(|i| Node {
-                plane: i as u32,
-                children: [
-                    -(i as i32) - 1,
-                    if i + 1 < n {
-                        i as i32 + 1
-                    } else {
-                        -(n as i32) - 1
-                    },
-                ],
-                mins: [0; 3],
-                maxs: [0; 3],
-            })
-            .collect();
-        let leafs = (0..=n)
-            .map(|i| Leaf {
-                cluster: i as i32 + 1,
-                area: 0,
-                cell: 0,
-            })
-            .collect();
-        let (count, row_bytes) = (23, 3);
-        let mut rows = vec![0u8; count * row_bytes];
-        for &c in sees {
-            rows[22 * row_bytes + c / 8] |= 1 << (c % 8);
-        }
-        let vis = Visibility {
-            planes,
-            nodes,
-            leafs,
-            pvs: Some(Pvs {
-                cluster_count: count,
-                row_bytes,
-                rows,
-            }),
-            models: Vec::new(),
-        };
-        let link = vis.link_clusters([0.0, -1.0, -1.0], [250.0, 1.0, 1.0]);
-        (vis, link)
-    }
-
-    /// `SV_LinkEntity` keeps the first 16 clusters and the last leaf's, and
-    /// the snapshot test scans the cluster numbers between them, reading a
-    /// scan that stops on the last cluster as hidden and one that runs past
-    /// it as seen (Q3's `SV_AddEntitiesVisibleFromPoint`, coduo_lnxded
-    /// 0x8096b97).
-    #[test]
-    fn a_link_past_sixteen_clusters_keeps_the_last_one() {
-        let (vis, link) = leaf_row(&[]);
-        assert_eq!(link.clusters, (1..=16).collect::<Vec<_>>());
-        assert_eq!(link.last_cluster, 21);
-        for (sees, seen) in [
-            (vec![3], true),
-            (vec![18], true),
-            (vec![21], false),
-            (vec![16], true),
-            (vec![], true),
-        ] {
-            let (vis, link) = leaf_row(&sees);
-            assert_eq!(vis.link_visible(22, &link), seen, "seeing {sees:?}");
-        }
-        // Under 16 clusters nothing is scanned. Past x 20 the box is behind
-        // every plane, which the row files under the last leaf.
-        let few = vis.link_clusters([0.0, -1.0, -1.0], [25.0, 1.0, 1.0]);
-        assert_eq!((few.clusters, few.last_cluster), (vec![1, 2, 21], 0));
-    }
-
-    #[test]
-    fn an_empty_lump_is_a_map_without_a_pvs() {
-        assert!(parse_pvs(&[]).expect("parse").is_none());
-    }
-
-    #[test]
-    fn a_short_lump_is_an_error_rather_than_a_panic() {
-        assert!(parse_pvs(&lump(4, 8, &[0; 8])).is_err());
-        assert!(parse_pvs(&[0, 0, 0]).is_err());
-    }
-
-    /// Against a real map: every leaf's cluster has a row, which is what
-    /// `visible` indexes with. The format doc records 666 clusters on
-    /// mp_pavlov.
-    #[test]
-    fn every_leaf_cluster_of_a_stock_map_has_a_row() {
-        let Some(fs) = crate::testing::game_fs() else {
-            return;
-        };
-        let Some(bytes) = fs.read("maps/mp/mp_pavlov.bsp") else {
-            return;
-        };
-        let b = parse(&bytes).expect("parse the bsp");
-        let pvs = b.pvs.as_ref().expect("mp_pavlov ships a pvs");
-        let highest = b.leafs.iter().map(|l| l.cluster).max().unwrap_or(-1);
-        assert!(
-            highest < pvs.cluster_count as i32,
-            "leaf cluster {highest} is past the {} rows",
-            pvs.cluster_count
-        );
-        assert!(pvs.row_bytes * 8 >= pvs.cluster_count);
-    }
-
-    /// `SV_LinkEntity` keeps the first area its leafs carry and the last
-    /// other one, a solid leaf's -1 counting for neither (coduo_lnxded
-    /// 0x8099dee), and the cull needs one of them to be the eye's.
-    #[test]
-    fn a_link_keeps_its_first_area_and_its_last_other() {
-        let plane = |dist| Plane {
-            normal: [1.0, 0.0, 0.0],
-            dist,
-        };
-        let node = |plane, children| Node {
-            plane,
-            children,
-            mins: [0; 3],
-            maxs: [0; 3],
-        };
-        // Front child first: the walk meets leafs 3, 2, 1, 0.
-        let leaf = |cluster, area| Leaf {
-            cluster,
-            area,
-            cell: 0,
-        };
-        let vis = Visibility {
-            planes: vec![plane(0.0), plane(10.0), plane(20.0)],
-            nodes: vec![node(0, [1, -1]), node(1, [2, -2]), node(2, [-4, -3])],
-            leafs: vec![leaf(0, 2), leaf(1, 0), leaf(2, 1), leaf(-1, -1)],
-            pvs: None,
-            models: Vec::new(),
-        };
-        let link = vis.link_clusters([-5.0, -1.0, -1.0], [25.0, 1.0, 1.0]);
-        assert_eq!(link.areas, [1, 2]);
-        assert!(link.in_area(1) && link.in_area(2));
-        assert!(!link.in_area(0) && !link.in_area(-1));
-        assert_eq!(vis.area_at([-5.0, 0.0, 0.0]), 2);
-        assert_eq!(vis.area_at([25.0, 0.0, 0.0]), -1);
-        let solid = vis.link_clusters([21.0, -1.0, -1.0], [25.0, 1.0, 1.0]);
-        assert_eq!((solid.areas, solid.clusters.len()), ([-1, -1], 0));
     }
 }

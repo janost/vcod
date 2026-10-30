@@ -2280,7 +2280,7 @@ fn spawn_gate(
     let Some(mut rig) = rig_aligned(&cap, &fs, p, REBASE_MAX_VICTIM, place, None) else {
         return;
     };
-    if p.version == PROTOCOL_V22.version {
+    if p.transport.version == PROTOCOL_V22.transport.version {
         rig.sv.pin_tracer_rolls(tracer_rolls(&cap));
     }
     let ours = replay(&mut rig, &cap);
@@ -2638,7 +2638,8 @@ fn the_spawn_capture_matches_15b_on_mp_carentan() {
         "spawn-15",
         || {
             vcod_common::testing::game_fs().filter(|fs| {
-                vcod_server::server::install_protocol(fs).version == PROTOCOL_V6.version
+                vcod_server::server::install_protocol(fs).transport.version
+                    == PROTOCOL_V6.transport.version
             })
         },
         &PROTOCOL_V6,
@@ -2709,7 +2710,8 @@ fn the_gunner_grid_capture_matches_15b_on_mp_carentan() {
         "gungrid-15",
         || {
             vcod_common::testing::game_fs().filter(|fs| {
-                vcod_server::server::install_protocol(fs).version == PROTOCOL_V6.version
+                vcod_server::server::install_protocol(fs).transport.version
+                    == PROTOCOL_V6.transport.version
             })
         },
         &PROTOCOL_V6,
@@ -2735,7 +2737,8 @@ fn the_hitgrid_capture_matches_15b_on_mp_carentan() {
         "hitgrid-15",
         || {
             vcod_common::testing::game_fs().filter(|fs| {
-                vcod_server::server::install_protocol(fs).version == PROTOCOL_V6.version
+                vcod_server::server::install_protocol(fs).transport.version
+                    == PROTOCOL_V6.transport.version
             })
         },
         &PROTOCOL_V6,
@@ -2817,7 +2820,8 @@ fn a_15_match_timeout_holds_the_gunner_where_he_stands() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         return;
     }
     let cvars = [

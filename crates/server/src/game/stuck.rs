@@ -153,6 +153,104 @@ pub fn stuck_in_client(
     None
 }
 
+/// One CoD2 client as its `StuckInClient` (lnxded 0x80f6e9e) reads it:
+/// the linked entity's box and the gclient's playerstate.
+#[derive(Clone, Copy, Debug)]
+pub struct Cod2StuckView {
+    /// `pm_flags` 0x800000 (`ClientEndFrame`'s mark on a playing client)
+    /// with `sessionState` 0.
+    pub playing: bool,
+    pub health: i32,
+    /// `r.contents`: only 0x2000000 and 0x4000000 take part.
+    pub contents: u32,
+    /// `r.currentOrigin`, at the last link.
+    pub origin: Vec3,
+    /// `r.mins` and `r.maxs`: `r.absmin`/`r.absmax` are these about the
+    /// origin grown a unit (`SV_LinkEntity` 0x809c63a), and the radius test
+    /// sums the two `r.maxs[0]`.
+    pub mins: Vec3,
+    pub maxs: Vec3,
+    pub vel_xy: Vec2,
+    /// `ps.speed`.
+    pub speed: f32,
+}
+
+/// CoD2's `StuckInClient` (lnxded 0x80f6e9e) for `me`, slots in order:
+/// the first other playing client with health whose grown box meets
+/// `me`'s inclusively and whose origin lies within the two `maxs[0]` in
+/// x/y is pushed along the separation plus a `G_crandom()` an axis
+/// (normalized), `me` the other way, each at `eject`
+/// (`g_playerCollisionEjectSpeed`) when its x/y velocity is not 0, both at
+/// their `ps.speed` when neither moves (cod2-turrets.md 14.2).
+pub fn stuck_in_client_cod2(
+    me: usize,
+    views: &[Option<Cod2StuckView>],
+    eject: f32,
+    mut rand: impl FnMut() -> u32,
+) -> Option<Push> {
+    let body = |v: &Cod2StuckView| v.contents == CONTENTS_BODY || v.contents == CONTENTS_CORPSE;
+    let my = views.get(me).copied().flatten()?;
+    if !my.playing || !body(&my) {
+        return None;
+    }
+    let grown = |v: &Cod2StuckView| {
+        let lo = v.origin + v.mins;
+        let hi = v.origin + v.maxs;
+        (lo - Vec3::ONE, hi + Vec3::ONE)
+    };
+    let (my_lo, my_hi) = grown(&my);
+    for (i, slot) in views.iter().enumerate() {
+        let Some(other) = slot else { continue };
+        if i == me || !other.playing || other.health <= 0 || !body(other) {
+            continue;
+        }
+        let (o_lo, o_hi) = grown(other);
+        if !(o_lo.cmple(my_hi).all() && my_lo.cmple(o_hi).all()) {
+            continue;
+        }
+        let d = (other.origin - my.origin).truncate();
+        let r = f64::from(my.maxs.x) + f64::from(other.maxs.x);
+        let (dx, dy) = (f64::from(d.x), f64::from(d.y));
+        if dx * dx + dy * dy > r * r {
+            continue;
+        }
+        // `G_crandom` (0x80a3792): `2 * rand() / 2^31 - 1`, each sum stored.
+        let jx = jitter(StuckRules::V1_5, &mut rand);
+        let jy = jitter(StuckRules::V1_5, &mut rand);
+        let x = (f64::from(d.x) + jx) as f32;
+        let y = (f64::from(d.y) + jy) as f32;
+        // `Vec2Normalize` (0x80a44c2): the squared length stored for
+        // `I_sqrt`, the length stored, the reciprocal kept on the stack.
+        let len = f64::from((f64::from(x) * f64::from(x) + f64::from(y) * f64::from(y)) as f32)
+            .sqrt() as f32;
+        let dir = if len == 0.0 {
+            Vec2::new(x, y)
+        } else {
+            let il = 1.0 / f64::from(len);
+            Vec2::new((f64::from(x) * il) as f32, (f64::from(y) * il) as f32)
+        };
+        let moving = |v: &Cod2StuckView| {
+            if v.vel_xy.length_squared() > 0.0 {
+                eject
+            } else {
+                0.0
+            }
+        };
+        let (mut s_me, mut s_other) = (moving(&my), moving(other));
+        // rodata 0x8157aac.
+        if s_other < 1e-4 && s_me < 1e-4 {
+            s_other = other.speed;
+            s_me = my.speed;
+        }
+        return Some(Push {
+            other: i,
+            self_vel: dir * -s_me,
+            other_vel: dir * s_other,
+        });
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,5 +507,60 @@ mod tests {
         assert_eq!(j(StuckRules::V1_5, 0), -1.0);
         assert_eq!(j(StuckRules::V1_5, 1 << 30), 0.0);
         assert_eq!(j(StuckRules::V1_5, i32::MAX as u32), 1.0 - 2f64.powi(-30));
+    }
+
+    fn cod2_view(x: f32, vx: f32) -> Cod2StuckView {
+        Cod2StuckView {
+            playing: true,
+            health: 100,
+            contents: CONTENTS_BODY,
+            origin: Vec3::new(x, 0.0, 0.0),
+            mins: Vec3::new(-15.0, -15.0, 0.0),
+            maxs: Vec3::new(15.0, 15.0, 70.0),
+            vel_xy: Vec2::new(vx, 0.0),
+            speed: 190.0,
+        }
+    }
+
+    /// CoD2's push: the eject speed for a mover, `ps.speed` for both when
+    /// neither moves, apart along the separation; out of reach or a
+    /// non-body partner, nothing (lnxded 0x80f6e9e).
+    #[test]
+    fn cod2_pushes_overlapping_players_apart_at_the_eject_speed() {
+        const MID: u32 = 1 << 30;
+        let still = [Some(cod2_view(0.0, 0.0)), Some(cod2_view(20.0, 0.0))];
+        let p = stuck_in_client_cod2(0, &still, 25.0, || MID).unwrap();
+        assert_eq!(p.other, 1);
+        assert_eq!(p.other_vel, Vec2::new(190.0, 0.0));
+        assert_eq!(p.self_vel, Vec2::new(-190.0, 0.0));
+        let moving = [Some(cod2_view(0.0, 0.0)), Some(cod2_view(20.0, 50.0))];
+        let p = stuck_in_client_cod2(0, &moving, 25.0, || MID).unwrap();
+        assert_eq!(
+            (p.self_vel, p.other_vel),
+            (Vec2::ZERO, Vec2::new(25.0, 0.0))
+        );
+        // 30 apart is the two radii, inclusive; 31 is out.
+        let edge = [Some(cod2_view(0.0, 0.0)), Some(cod2_view(30.0, 0.0))];
+        assert!(stuck_in_client_cod2(0, &edge, 25.0, || MID).is_some());
+        let out = [Some(cod2_view(0.0, 0.0)), Some(cod2_view(31.0, 0.0))];
+        assert!(stuck_in_client_cod2(0, &out, 25.0, || MID).is_none());
+        // The grown boxes meet two units past the boxes in z.
+        let mut above = cod2_view(0.0, 0.0);
+        above.origin.z = 71.5;
+        assert!(
+            stuck_in_client_cod2(0, &[Some(cod2_view(0.0, 0.0)), Some(above)], 25.0, || MID)
+                .is_some()
+        );
+        above.origin.z = 72.5;
+        assert!(
+            stuck_in_client_cod2(0, &[Some(cod2_view(0.0, 0.0)), Some(above)], 25.0, || MID)
+                .is_none()
+        );
+        let mut gone = cod2_view(20.0, 0.0);
+        gone.contents = 0;
+        assert!(
+            stuck_in_client_cod2(0, &[Some(cod2_view(0.0, 0.0)), Some(gone)], 25.0, || MID)
+                .is_none()
+        );
     }
 }

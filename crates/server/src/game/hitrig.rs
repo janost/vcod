@@ -4,10 +4,10 @@
 
 use std::collections::HashMap;
 use std::rc::Rc;
-use vcod_common::pk3::Pk3Fs;
+use vcod_common::asset_source::AssetSource;
+use vcod_common::model;
 use vcod_common::skeleton::Skeleton;
 use vcod_common::xanim::{self, XAnim};
-use vcod_common::xmodel;
 
 /// The models a client wears: the body, then each attachment with the tag it
 /// grafts at. Mirrored off the script host with the roster, since a head and
@@ -62,7 +62,7 @@ pub struct HitRigs {
 impl HitRigs {
     /// The grafted skeleton for an assembly. `None` when the body will not
     /// load, which leaves the caller with no hit location rather than no hit.
-    pub fn rig(&mut self, fs: &Pk3Fs, assembly: &Assembly) -> Option<Rc<Skeleton>> {
+    pub fn rig(&mut self, fs: &dyn AssetSource, assembly: &Assembly) -> Option<Rc<Skeleton>> {
         // A client between its spawn and the frame that mirrors the character
         // script's model has no body yet; that is not a load failure.
         if assembly.body.is_empty() {
@@ -86,7 +86,7 @@ impl HitRigs {
     /// attachment hangs on (cod11-movers.md 16, "A tag on an attached model").
     pub fn bone(
         &mut self,
-        fs: &Pk3Fs,
+        fs: &dyn AssetSource,
         assembly: &Assembly,
         skel: &Skeleton,
         tag: &str,
@@ -112,18 +112,18 @@ impl HitRigs {
 
     /// An xmodel's root bone name, cached by model. `None` for a model the
     /// paks lack.
-    fn root(&mut self, fs: &Pk3Fs, name: &str) -> Option<String> {
+    fn root(&mut self, fs: &dyn AssetSource, name: &str) -> Option<String> {
         self.roots
             .entry(name.to_string())
             .or_insert_with(|| {
-                let model = xmodel::load(fs, name).ok()?;
+                let model = model::load(fs, name).ok()?;
                 model.bones.first().map(|b| b.name.clone())
             })
             .clone()
     }
 
     /// One anim clip, cached by name. `None` for a clip the paks lack.
-    pub fn clip(&mut self, fs: &Pk3Fs, name: &str) -> Option<Rc<XAnim>> {
+    pub fn clip(&mut self, fs: &dyn AssetSource, name: &str) -> Option<Rc<XAnim>> {
         if let Some(hit) = self.clips.get(name) {
             return hit.clone();
         }
@@ -141,14 +141,14 @@ impl HitRigs {
 
 /// An attachment that will not load is left out, the way the client leaves it
 /// undrawn; a body that will not load has no rig at all.
-fn build(fs: &Pk3Fs, assembly: &Assembly) -> Option<Rc<Skeleton>> {
-    let body = xmodel::load(fs, &assembly.body).ok()?;
-    let parts: Vec<(xmodel::XModel, Option<&str>)> = assembly
+fn build(fs: &dyn AssetSource, assembly: &Assembly) -> Option<Rc<Skeleton>> {
+    let body = model::load(fs, &assembly.body).ok()?;
+    let parts: Vec<(model::Model, Option<&str>)> = assembly
         .attachments
         .iter()
         .enumerate()
         .filter_map(|(i, (name, tag))| {
-            let mut model = xmodel::load(fs, name).ok()?;
+            let mut model = model::load(fs, name).ok()?;
             // The engine's hit-box walk skips a flagged model's boxes
             // (docs/research/cod15-protocol-diff.md, `getAttachIgnoreCollision`).
             if assembly.ignore_collision >> i & 1 != 0 {
@@ -160,7 +160,7 @@ fn build(fs: &Pk3Fs, assembly: &Assembly) -> Option<Rc<Skeleton>> {
             Some((model, tag.as_deref()))
         })
         .collect();
-    let mut refs: Vec<(&xmodel::XModel, Option<&str>)> = vec![(&body, None)];
+    let mut refs: Vec<(&model::Model, Option<&str>)> = vec![(&body, None)];
     refs.extend(parts.iter().map(|(m, t)| (m, *t)));
     Some(Rc::new(Skeleton::build_grafted(&refs)))
 }

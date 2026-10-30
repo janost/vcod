@@ -6,7 +6,7 @@
 //! the GPU. `autosprite_corner` and `autosprite2_corner` are the CPU mirrors
 //! of that vertex-shader step, for the tests.
 
-use crate::bsp::DrawVert;
+use crate::mapworld::DrawVert;
 use glam::Vec3;
 
 /// Half the quad's corner distance becomes the sprite's half-width: the

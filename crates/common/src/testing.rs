@@ -20,12 +20,22 @@ pub fn game_fs() -> Option<Pk3Fs> {
     Pk3Fs::open(&dir).ok()
 }
 
+/// A CoD2 install's `main/` iwds, from `$COD2_DIR`; `None` without it, so
+/// CI (no game data) passes vacuously.
+pub fn cod2_fs() -> Option<Pk3Fs> {
+    let dir = PathBuf::from(std::env::var_os("COD2_DIR")?).join("main");
+    if !dir.is_dir() {
+        return None;
+    }
+    Pk3Fs::open_iwd(&dir, None).ok()
+}
+
 /// [`game_fs`] when the install is 1.1's, `None` at a 1.5 or UO install
 /// (UO's `main/` is 1.5's, `install_protocol`): tests that assert 1.1's
 /// assets or replay a 1.1 retail capture take their paks from here.
 pub fn game_fs_11() -> Option<Pk3Fs> {
     let fs = game_fs()?;
-    (install_protocol(&fs).version == PROTOCOL_V1.version).then_some(fs)
+    (install_protocol(&fs).transport.version == PROTOCOL_V1.transport.version).then_some(fs)
 }
 
 /// [`game_fs`] with the install's stock paks alone (`--vanilla`,
@@ -42,7 +52,7 @@ pub fn stock_fs() -> Option<Pk3Fs> {
 /// [`stock_fs`] when the install is 1.1's, as [`game_fs_11`].
 pub fn stock_fs_11() -> Option<Pk3Fs> {
     let fs = stock_fs()?;
-    (install_protocol(&fs).version == PROTOCOL_V1.version).then_some(fs)
+    (install_protocol(&fs).transport.version == PROTOCOL_V1.transport.version).then_some(fs)
 }
 
 /// United Offensive's `uo/` over its sibling `main/`, `None` unless the

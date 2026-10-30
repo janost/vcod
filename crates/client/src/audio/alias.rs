@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use vcod_common::pk3::Pk3Fs;
+use vcod_common::asset_source::{Asset, AssetKind, AssetSource};
 
 /// Blank `dist_min`; `FUN_00432ad0` @ `CoDMP.exe 0x432ad0` (research doc,
 /// section 1c).
@@ -25,6 +25,9 @@ pub enum Channel {
     Music,
     Announcer,
     Shellshock,
+    /// CoD2's `auto2d`: an `auto` voice heard flat (docs/research/cod2-sound.md
+    /// 2). Last so 1.1's channel indices keep their order.
+    Auto2d,
 }
 
 impl Channel {
@@ -34,6 +37,7 @@ impl Channel {
         !matches!(
             self,
             Channel::Menu
+                | Channel::Auto2d
                 | Channel::Local
                 | Channel::Music
                 | Channel::Announcer
@@ -53,6 +57,7 @@ impl Channel {
             "music" => Channel::Music,
             "announcer" => Channel::Announcer,
             "shellshock" => Channel::Shellshock,
+            "auto2d" => Channel::Auto2d,
             _ => return None,
         })
     }
@@ -90,13 +95,40 @@ pub struct AliasRow {
     /// Trimmed, lowercased raw cell; `for_map` matches against it (research
     /// doc, section 1d).
     pub loadspec: String,
+    /// CoD2's `volumefalloffcurve`; `None` falls off linearly, as CoD 1 does.
+    pub curve: Option<std::sync::Arc<crate::audio::cod2::VfCurve>>,
+    /// CoD2's `secondaryaliasname`, started alongside this row.
+    pub secondary: Option<String>,
+    /// CoD2's `startdelay`, ms.
+    pub start_delay_ms: u32,
+    /// The csv a CoD2 row came from, which settles a duplicate sequence;
+    /// empty for CoD 1.
+    pub csv: String,
+    /// CoD2's `subtitle`: a `subtitle.str` key the cgame prints when the
+    /// row starts (docs/research/cod2-sound.md 7.11).
+    pub subtitle: Option<String>,
+    /// CoD2's `reverb` cell holds `nowetlevel`: no reverb send (flag 0x10).
+    pub no_wet: bool,
+}
+
+impl Asset for AliasTable {
+    const KIND: AssetKind = AssetKind::SoundAliases;
+
+    fn find(src: &dyn AssetSource, _: &str) -> anyhow::Result<Self> {
+        Ok(AliasTable::load(src))
+    }
 }
 
 #[derive(Default, Debug)]
 pub struct AliasTable {
-    rows: HashMap<String, Vec<AliasRow>>,
+    pub(crate) rows: HashMap<String, Vec<AliasRow>>,
     /// Rows dropped for a missing name or file.
     pub skipped: usize,
+    /// CoD2's table: `for_map` applies CoD2's loadspec rule and drops
+    /// duplicate sequences ([`crate::audio::cod2`]).
+    pub(crate) cod2: bool,
+    /// What CoD2's loader would print as `^1ERROR` lines, one per message.
+    pub errors: Vec<String>,
 }
 
 /// Upper bound for a row's `probability` weight.
@@ -155,8 +187,9 @@ fn loadspec_admits(cell: &str, map: &str) -> bool {
 }
 
 /// Splits on commas outside double quotes; quotes are stripped, so `""` is an
-/// empty cell. An unterminated quote swallows the rest of the line.
-fn split_csv(line: &str) -> Vec<String> {
+/// empty cell. An unterminated quote swallows the rest of the line. A csv
+/// line as `Com_Parse` reads it under `Com_SetCSV(1)`, CoD1's and CoD2's.
+pub(super) fn split_csv(line: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut quoted = false;
@@ -285,6 +318,12 @@ impl AliasTable {
                 master_slave,
                 lod: (f("lod_min").unwrap_or(-1.0), f("lod_max").unwrap_or(-1.0)),
                 loadspec: cell("loadspec").to_ascii_lowercase(),
+                curve: None,
+                secondary: None,
+                start_delay_ms: 0,
+                csv: String::new(),
+                subtitle: None,
+                no_wet: false,
             };
             table.rows.entry(name).or_default().push(row);
         }
@@ -301,17 +340,15 @@ impl AliasTable {
             sort_group(entry);
         }
         self.skipped += other.skipped;
+        self.errors.extend(other.errors);
     }
 
-    /// Every `soundaliases/*.csv`. `names_with_suffix` dedups paths with the
-    /// later pak winning; a duplicate name across files adds rows to the
-    /// group (research doc, section 1a).
-    pub fn load(fs: &Pk3Fs) -> AliasTable {
+    /// Every `soundaliases/*.csv`. The listing dedups paths with the later
+    /// pak winning; a duplicate name across files adds rows to the group
+    /// (research doc, section 1a).
+    pub fn load(fs: &(impl AssetSource + ?Sized)) -> AliasTable {
         let mut table = AliasTable::default();
-        for path in fs.names_with_suffix(".csv") {
-            if !path.starts_with("soundaliases/") {
-                continue;
-            }
+        for path in fs.list("soundaliases", ".csv") {
             match fs.read(&path) {
                 Some(bytes) => {
                     let t = AliasTable::parse_csv(&String::from_utf8_lossy(&bytes), &path);
@@ -342,7 +379,15 @@ impl AliasTable {
     /// Rows that apply on `map` (research doc, section 1d); group order is
     /// preserved.
     pub fn for_map(&self, map: &str) -> AliasTable {
-        let map = map.to_ascii_lowercase();
+        // No level loaded (the front end, after a disconnect) is the menu's.
+        let map = if map.is_empty() {
+            "menu".to_string()
+        } else {
+            map.to_ascii_lowercase()
+        };
+        if self.cod2 {
+            return crate::audio::cod2::for_map(self, &map);
+        }
         let mut out = AliasTable {
             skipped: self.skipped,
             ..AliasTable::default()

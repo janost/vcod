@@ -9,6 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::Dialect;
 use crate::ast::{
     self, ArmLabel, BinOp, CallTarget, Cast, Expr, FuncDef, Stmt, StmtKind, SwitchArm, UnOp,
 };
@@ -22,13 +23,52 @@ pub struct CompileError {
     pub msg: String,
 }
 
-/// Compiles every function in `file`. `path` is this file's canonical
-/// script path, interned once and used both as `Function::file` and to
-/// resolve calls and `::name` pointers back into this file.
+/// What a compile needs beyond the file itself.
+pub struct CompileOptions<'a> {
+    pub dialect: Dialect,
+    /// The names of the functions an `#include`d file defines, by its
+    /// canonical path; `None` when there is no such file. Read only for a
+    /// CoD2 file that has an `#include`.
+    pub include_funcs: &'a dyn Fn(&str) -> Option<Vec<String>>,
+    /// Whether an unqualified name is an engine builtin, which beats an
+    /// included function of the same name (cod2-gsc-diff.md 3.1). Without
+    /// a table no name is one, so an included function always wins.
+    pub is_builtin: Option<&'a dyn Fn(&str) -> bool>,
+}
+
+fn no_includes(_: &str) -> Option<Vec<String>> {
+    None
+}
+
+impl Default for CompileOptions<'static> {
+    /// CoD 1.1, no includes, no builtin table.
+    fn default() -> Self {
+        CompileOptions {
+            dialect: Dialect::Cod1,
+            include_funcs: &no_includes,
+            is_builtin: None,
+        }
+    }
+}
+
+/// Compiles every function in `file` as CoD 1.1 script. `path` is this
+/// file's canonical script path, interned once and used both as
+/// `Function::file` and to resolve calls and `::name` pointers back into
+/// this file.
 pub fn compile_file(
     file: &ast::File,
     path: &str,
     interner: &mut Interner,
+) -> Result<Vec<Function>, CompileError> {
+    compile_file_with(file, path, interner, &CompileOptions::default())
+}
+
+/// [`compile_file`] under `opts`.
+pub fn compile_file_with(
+    file: &ast::File,
+    path: &str,
+    interner: &mut Interner,
+    opts: &CompileOptions,
 ) -> Result<Vec<Function>, CompileError> {
     let file_atom = interner.intern_folded(path);
     // The AST does not track which `#using_animtree` was active at each
@@ -40,15 +80,23 @@ pub fn compile_file(
     for f in &file.funcs {
         local_funcs.insert(interner.intern_folded(&f.name));
     }
+    let included = link_includes(file, path, interner, &local_funcs, opts)?;
 
     let mut out = Vec::with_capacity(file.funcs.len());
     for f in &file.funcs {
+        if opts.dialect.cod2_family() {
+            crate::definite::check(f)?;
+        }
         let c = Compiler {
             interner: &mut *interner,
+            dialect: opts.dialect,
+            is_builtin: opts.is_builtin,
             file_atom,
             local_funcs: &local_funcs,
+            included: &included,
             animtree,
             locals: HashMap::new(),
+            slots: 0,
             code: Vec::new(),
             consts: Vec::new(),
             lines: Vec::new(),
@@ -65,12 +113,58 @@ pub fn compile_file(
     Ok(out)
 }
 
+/// CoD2's include pass: every function an `#include`d file defines,
+/// folded name to that file, for the unqualified calls the file's own
+/// functions and the builtins leave. Not transitive: an included file's own
+/// includes stay its own (cod2-gsc-diff.md 3.1).
+fn link_includes(
+    file: &ast::File,
+    path: &str,
+    interner: &mut Interner,
+    local_funcs: &HashSet<Atom>,
+    opts: &CompileOptions,
+) -> Result<HashMap<Atom, Atom>, CompileError> {
+    let mut included = HashMap::new();
+    let mut seen = HashSet::new();
+    for inc in &file.includes {
+        let err = |msg: String| CompileError {
+            line: inc.line,
+            msg,
+        };
+        if !seen.insert(inc.path.as_str()) {
+            return Err(err(format!("Duplicate #include {}", inc.path)));
+        }
+        let funcs = (opts.include_funcs)(&inc.path)
+            .ok_or_else(|| err(format!("could not find script '{}'", inc.path)))?;
+        let inc_atom = interner.intern_folded(&inc.path);
+        for name in funcs {
+            let atom = interner.intern_folded(&name);
+            // Retail's message names the including file, at the
+            // `#include` line (`probe_c2d`). Two includes defining one name
+            // meet the same `LinkThread` check (INFERRED).
+            if local_funcs.contains(&atom) || included.insert(atom, inc_atom).is_some() {
+                return Err(err(format!(
+                    "function '{name}' already defined in '{path}.gsc'"
+                )));
+            }
+        }
+    }
+    Ok(included)
+}
+
 struct Compiler<'a> {
     interner: &'a mut Interner,
+    dialect: Dialect,
+    is_builtin: Option<&'a dyn Fn(&str) -> bool>,
     file_atom: Atom,
     local_funcs: &'a HashSet<Atom>,
+    /// Folded function name to the included file defining it (CoD2).
+    included: &'a HashMap<Atom, Atom>,
     animtree: Option<Atom>,
     locals: HashMap<String, u16>,
+    /// Slots handed out so far: one per parameter, repeated names
+    /// included, then one per new local name.
+    slots: u16,
     code: Vec<Op>,
     consts: Vec<Value>,
     lines: Vec<u32>,
@@ -121,8 +215,16 @@ impl<'a> Compiler<'a> {
         if let Some(&slot) = self.locals.get(&folded) {
             return Ok(slot);
         }
-        let slot = u16::try_from(self.locals.len()).map_err(|_| self.err("too many locals"))?;
+        let slot = self.next_slot()?;
         self.locals.insert(folded, slot);
+        Ok(slot)
+    }
+
+    fn next_slot(&mut self) -> Result<u16, CompileError> {
+        let slot = self.slots;
+        self.slots = slot
+            .checked_add(1)
+            .ok_or_else(|| self.err("too many locals"))?;
         Ok(slot)
     }
 
@@ -141,7 +243,7 @@ impl<'a> Compiler<'a> {
     /// accepts.
     fn declare_param(&mut self, name: &str) -> Result<(), CompileError> {
         let folded = name.to_ascii_lowercase();
-        let slot = u16::try_from(self.locals.len()).map_err(|_| self.err("too many locals"))?;
+        let slot = self.next_slot()?;
         self.locals.insert(folded, slot);
         Ok(())
     }
@@ -176,7 +278,7 @@ impl<'a> Compiler<'a> {
             self.emit(Op::ReturnUndef);
         }
         let name = self.interner.intern_folded(&def.name);
-        let locals = u16::try_from(self.locals.len()).map_err(|_| self.err("too many locals"))?;
+        let locals = self.slots;
         Ok(Function {
             file: self.file_atom,
             name,
@@ -234,6 +336,9 @@ impl<'a> Compiler<'a> {
                 self.compile_expr(e)?;
                 self.emit(Op::Wait);
             }
+            StmtKind::WaitTillFrameEnd => {
+                self.emit(Op::WaitTillFrameEnd);
+            }
         }
         Ok(())
     }
@@ -252,8 +357,24 @@ impl<'a> Compiler<'a> {
                 let a = self.interner.intern_folded(name);
                 self.emit(Op::StoreField(a));
             }
+            // The literal `undefined` clears the key, and an unset local
+            // under it is not vivified: `c[5] = undefined` there is fatal
+            // on 1.1d and CoD2 1.3 (`probe_undef_into_unset`). A field or
+            // element target under it is unmeasured and still vivifies.
+            Expr::Index(obj, idx) if matches!(value, Expr::Undefined) => {
+                self.check_index_write(obj)?;
+                match &**obj {
+                    Expr::Local(name) => {
+                        let slot = self.local_slot(name)?;
+                        self.emit(Op::OwnLocal(slot));
+                    }
+                    _ => self.compile_ensure_array(obj)?,
+                }
+                self.compile_expr(idx)?;
+                self.emit(Op::ClearIndex);
+            }
             Expr::Index(obj, idx) => {
-                self.check_array(obj)?;
+                self.check_index_write(obj)?;
                 self.compile_ensure_array(obj)?;
                 self.compile_expr(idx)?;
                 self.compile_expr(value)?;
@@ -286,7 +407,7 @@ impl<'a> Compiler<'a> {
                 self.emit(Op::EnsureArrayField(a));
             }
             Expr::Index(inner, idx) => {
-                self.check_array(inner)?;
+                self.check_index_write(inner)?;
                 self.compile_ensure_array(inner)?;
                 self.compile_expr(idx)?;
                 self.emit(Op::EnsureArrayIndex);
@@ -306,12 +427,39 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    /// A bracket read. CoD2 compiles one on `self` and `level` and checks
+    /// it at run time (cod2-gsc-diff.md 3.4).
     fn check_array(&self, obj: &Expr) -> Result<(), CompileError> {
         match obj {
-            Expr::SelfRef | Expr::LevelRef | Expr::AnimRef => {
+            Expr::SelfRef | Expr::LevelRef | Expr::AnimRef if self.dialect == Dialect::Cod1 => {
                 Err(self.err("not an array, string, or vector"))
             }
             _ => Ok(()),
+        }
+    }
+
+    /// A bracket write: CoD2 refuses one on `self` and `level` as `not an
+    /// lvalue` (`probe_c2k`, `probe_c2m`).
+    fn check_index_write(&self, obj: &Expr) -> Result<(), CompileError> {
+        match obj {
+            Expr::SelfRef | Expr::LevelRef | Expr::AnimRef if self.dialect.cod2_family() => {
+                Err(self.err("not an lvalue"))
+            }
+            _ => self.check_array(obj),
+        }
+    }
+
+    /// The file an unqualified call or `::name` resolves to: this file's
+    /// own function, else (CoD2) an included one a builtin does not
+    /// shadow. `None` leaves it to the host's builtins.
+    fn resolve_name(&self, name: &str, atom: Atom) -> Option<Atom> {
+        if self.local_funcs.contains(&atom) {
+            return Some(self.file_atom);
+        }
+        let inc = *self.included.get(&atom)?;
+        match self.is_builtin {
+            Some(is_builtin) if is_builtin(&name.to_ascii_lowercase()) => None,
+            _ => Some(inc),
         }
     }
 
@@ -591,7 +739,13 @@ impl<'a> Compiler<'a> {
             // literally the file named "".
             Expr::FuncRef { file, name } => {
                 let file_atom = if file.is_empty() {
-                    self.file_atom
+                    let atom = self.interner.intern_folded(name);
+                    // A pointer names a function, never a builtin.
+                    if self.local_funcs.contains(&atom) {
+                        self.file_atom
+                    } else {
+                        self.included.get(&atom).copied().unwrap_or(self.file_atom)
+                    }
                 } else {
                     self.interner.intern_folded(file)
                 };
@@ -612,7 +766,16 @@ impl<'a> Compiler<'a> {
             Expr::Bin(op, l, r) => {
                 self.compile_expr(l)?;
                 self.compile_expr(r)?;
-                self.emit(bin_op(*op));
+                self.emit(match op {
+                    // CoD4's take a vector against a number.
+                    BinOp::Div if self.dialect == Dialect::Cod4 => Op::DivVector,
+                    BinOp::Mul if self.dialect == Dialect::Cod4 => Op::MulVector,
+                    // CoD2's `Scr_EvalDivide` divides two ints as floats.
+                    BinOp::Div if self.dialect.cod2_family() => Op::DivFloat,
+                    // CoD2's `Scr_EvalMultiply` takes no vector.
+                    BinOp::Mul if self.dialect.cod2_family() => Op::MulNumber,
+                    _ => bin_op(*op),
+                });
             }
             Expr::Un(UnOp::Neg, inner) => {
                 self.compile_expr(inner)?;
@@ -673,6 +836,13 @@ impl<'a> Compiler<'a> {
                 "waittill" => return self.compile_waittill(recv, args),
                 "notify" => return self.compile_notify(recv, args),
                 "endon" => return self.compile_endon(recv, args),
+                // CoD4's statements (docs/research/cod4-gsc.md 1).
+                "waittillmatch" if self.dialect == Dialect::Cod4 => {
+                    return self.compile_waittillmatch(recv, args);
+                }
+                "prof_begin" | "prof_end" if self.dialect == Dialect::Cod4 => {
+                    return self.push_const(Value::Undefined);
+                }
                 _ => {}
             }
         }
@@ -688,12 +858,9 @@ impl<'a> Compiler<'a> {
         match target {
             CallTarget::Name(name) => {
                 let atom = self.interner.intern_folded(name);
-                if self.local_funcs.contains(&atom) {
+                if let Some(file) = self.resolve_name(name, atom) {
                     self.emit(Op::Call {
-                        func: FuncRef {
-                            file: self.file_atom,
-                            name: atom,
-                        },
+                        func: FuncRef { file, name: atom },
                         argc,
                         has_recv,
                         threaded,
@@ -758,6 +925,28 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
+    fn compile_waittillmatch(
+        &mut self,
+        recv: &Option<Box<Expr>>,
+        args: &[Expr],
+    ) -> Result<(), CompileError> {
+        let Some(r) = recv else {
+            return Err(self.err("waittillmatch needs a receiver"));
+        };
+        self.compile_expr(r)?;
+        let Some((name_expr, extra)) = args.split_first() else {
+            return Err(self.err("waittillmatch needs an event name"));
+        };
+        self.compile_expr(name_expr)?;
+        for a in extra {
+            self.compile_expr(a)?;
+        }
+        let argc = u8::try_from(extra.len()).map_err(|_| self.err("too many match values"))?;
+        self.emit(Op::WaitTillMatch { argc });
+        self.push_const(Value::Undefined)?;
+        Ok(())
+    }
+
     fn compile_notify(
         &mut self,
         recv: &Option<Box<Expr>>,
@@ -815,6 +1004,8 @@ fn bin_op(op: BinOp) -> Op {
         BinOp::BitAnd => Op::BitAnd,
         BinOp::BitOr => Op::BitOr,
         BinOp::BitXor => Op::BitXor,
+        BinOp::Shl => Op::Shl,
+        BinOp::Shr => Op::Shr,
         BinOp::And | BinOp::Or => unreachable!("short-circuit ops are compiled separately"),
     }
 }
@@ -929,6 +1120,12 @@ mod tests {
         // `a`'s body reference must load the third parameter's slot (2),
         // the one the second `a` declared, not the first.
         assert!(f[0].code.contains(&Op::LoadLocal(2)));
+        // Every parameter keeps its slot and `x` takes the next. Counted
+        // off the name map, `x` took the second `a`'s slot, and CoD4's
+        // `_destructible.gsc` `setAnim(animname, val, val, val)` got a frame
+        // of two slots for its four arguments (a panic in `make_frame`).
+        assert_eq!(f[0].locals, 4);
+        assert!(f[0].code.contains(&Op::StoreLocal(3)));
     }
 
     #[test]
@@ -1021,5 +1218,203 @@ mod tests {
         let ast = crate::parse::parse_file("m() { break; }").unwrap();
         let mut i = Interner::default();
         assert!(compile_file(&ast, "test/script", &mut i).is_err());
+    }
+
+    fn compile_cod2_with(
+        src: &str,
+        includes: &[(&str, &[&str])],
+        builtins: Option<&[&str]>,
+    ) -> Result<(Interner, Vec<crate::bytecode::Function>), CompileError> {
+        let ast =
+            crate::parse::parse_file_dialect(src, Dialect::Cod2).map_err(|e| CompileError {
+                line: e.line,
+                msg: e.msg,
+            })?;
+        let include_funcs = |p: &str| {
+            includes
+                .iter()
+                .find(|(path, _)| *path == p)
+                .map(|(_, f)| f.iter().map(|n| n.to_string()).collect())
+        };
+        let is_builtin = |n: &str| builtins.is_some_and(|b| b.contains(&n));
+        let opts = CompileOptions {
+            dialect: Dialect::Cod2,
+            include_funcs: &include_funcs,
+            is_builtin: builtins.map(|_| &is_builtin as &dyn Fn(&str) -> bool),
+        };
+        let mut i = Interner::default();
+        let fns = compile_file_with(&ast, "test/script", &mut i, &opts)?;
+        for f in &fns {
+            crate::bytecode::stack_depth(f).unwrap();
+        }
+        Ok((i, fns))
+    }
+
+    fn compile_cod2(src: &str) -> Result<(Interner, Vec<crate::bytecode::Function>), CompileError> {
+        compile_cod2_with(src, &[], None)
+    }
+
+    fn cod2_err(src: &str) -> String {
+        match compile_cod2(src) {
+            Ok(_) => panic!("{src} compiled"),
+            Err(e) => e.msg,
+        }
+    }
+
+    /// The file a call to `name` in the first function goes to, or `None`
+    /// for a builtin.
+    fn call_file(i: &Interner, f: &[crate::bytecode::Function], name: &str) -> Option<String> {
+        let want = i.get_folded(name).unwrap();
+        f[0].code
+            .iter()
+            .find_map(|o| match o {
+                Op::Call { func, .. } if func.name == want => {
+                    Some(i.resolve_folded(func.file).to_string())
+                }
+                Op::CallBuiltin { name, .. } if *name == want => Some(String::new()),
+                _ => None,
+            })
+            .filter(|s| !s.is_empty())
+    }
+
+    const UTIL: (&str, &[&str]) = ("maps/mp/_utility", &["abs", "getcvar"]);
+
+    #[test]
+    fn an_include_imports_its_functions_for_unqualified_calls() {
+        let (i, f) = compile_cod2_with(
+            "#include maps\\mp\\_utility;\nm(a) { x = abs(a); }",
+            &[UTIL],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            call_file(&i, &f, "abs").as_deref(),
+            Some("maps/mp/_utility")
+        );
+    }
+
+    /// `probe_c2b`: a builtin beats an included function of its name; a
+    /// local function beats both (`probe_c2e`).
+    #[test]
+    fn a_builtin_beats_an_included_function_and_a_local_beats_a_builtin() {
+        let src = "#include maps\\mp\\_utility;\nm() { getcvar(\"x\"); }";
+        let (i, f) = compile_cod2_with(src, &[UTIL], Some(&["getcvar"])).unwrap();
+        assert_eq!(call_file(&i, &f, "getcvar"), None);
+        let (i, f) = compile_cod2_with(
+            "m() { getcvar(\"x\"); } getcvar(a) { }",
+            &[],
+            Some(&["getcvar"]),
+        )
+        .unwrap();
+        assert_eq!(call_file(&i, &f, "getcvar").as_deref(), Some("test/script"));
+    }
+
+    /// `probe_c2d`: reported at the `#include` line.
+    #[test]
+    fn a_local_function_named_like_an_included_one_is_a_compile_error() {
+        let e = compile_cod2_with("\n#include maps\\mp\\_utility;\nabs(a) { }", &[UTIL], None)
+            .err()
+            .unwrap();
+        assert_eq!(e.line, 2);
+        assert_eq!(e.msg, "function 'abs' already defined in 'test/script.gsc'");
+    }
+
+    #[test]
+    fn including_one_file_twice_is_a_compile_error() {
+        let e = compile_cod2_with(
+            "#include maps\\mp\\_utility;\n#include maps\\MP\\_utility;\nm() { }",
+            &[UTIL],
+            None,
+        )
+        .err()
+        .unwrap();
+        assert!(e.msg.starts_with("Duplicate #include"), "{}", e.msg);
+    }
+
+    #[test]
+    fn a_bare_pointer_reaches_an_included_function() {
+        let (i, f) = compile_cod2_with(
+            "#include maps\\mp\\_utility;\nm() { x = ::abs; }",
+            &[UTIL],
+            None,
+        )
+        .unwrap();
+        let file = f[0].consts.iter().find_map(|c| match c {
+            Value::Function(r) => Some(i.resolve_folded(r.file).to_string()),
+            _ => None,
+        });
+        assert_eq!(file.as_deref(), Some("maps/mp/_utility"));
+    }
+
+    #[test]
+    fn waittillframeend_is_a_statement_in_cod2_and_a_local_read_in_cod1() {
+        let (_, f) = compile_cod2("m() { waittillframeend; }").unwrap();
+        assert_eq!(f[0].code, [Op::WaitTillFrameEnd, Op::ReturnUndef]);
+        // 1.1 has no such keyword or opcode; vcod reads it as a local, as
+        // it always has (retail 1.1d refuses the line as `bad syntax`).
+        let (_, f) = compile("m() { waittillframeend; }");
+        assert_eq!(f[0].code, [Op::LoadLocal(0), Op::Pop, Op::ReturnUndef]);
+    }
+
+    /// cod2-gsc-diff.md 3.4.
+    #[test]
+    fn cod2_reads_self_and_level_by_index_but_refuses_the_write() {
+        assert!(compile_cod2("m() { x = self[1]; y = level[\"k\"]; }").is_ok());
+        assert_eq!(cod2_err("m() { level[\"k\"] = \"v\"; }"), "not an lvalue");
+        assert_eq!(cod2_err("m() { self[0] = \"w\"; }"), "not an lvalue");
+        assert_eq!(cod2_err("m() { self[0][1] = \"w\"; }"), "not an lvalue");
+        assert_eq!(cod2_err("m() { game.x = 1; }"), "not an object");
+        let ast = crate::parse::parse_file("m() { x = self[1]; }").unwrap();
+        let e = compile_file(&ast, "test/script", &mut Interner::default()).unwrap_err();
+        assert_eq!(e.msg, "not an array, string, or vector");
+    }
+
+    /// `probe_c2h`, `probe_c2l`, `probe_c2m`.
+    #[test]
+    fn cod2_refuses_a_local_not_assigned_on_every_path() {
+        assert_eq!(
+            cod2_err("m(a) { if (a) y = 1; f(y); }"),
+            "uninitialised variable 'y'"
+        );
+        assert_eq!(
+            cod2_err("m() { isDefined(x); }"),
+            "uninitialised variable 'x'"
+        );
+        assert!(compile_cod2("m(a) { if (a) y = 1; else y = 2; f(y); }").is_ok());
+        // 1.1 reads it as undefined.
+        compile("m() { isDefined(x); }");
+    }
+
+    #[test]
+    fn definite_assignment_follows_loops_switches_and_binds() {
+        // A loop body may not run; a `while (1)` leaves only by `break`.
+        assert!(compile_cod2("m(a) { while (a) y = 1; f(y); }").is_err());
+        assert!(compile_cod2("m() { while (1) { y = 1; break; } f(y); }").is_ok());
+        assert!(compile_cod2("m() { for (;;) { if (g()) { y = 1; break; } } f(y); }").is_ok());
+        assert!(compile_cod2("m() { for (i = 0; i < 3; i++) f(i); f(i); }").is_ok());
+        assert!(compile_cod2("m() { do { y = 1; } while (g()); f(y); }").is_ok());
+        // Every arm, `default` included, assigns.
+        assert!(
+            compile_cod2("m(a) { switch (a) { case 1: y = 1; break; default: y = 2; } f(y); }")
+                .is_ok()
+        );
+        assert!(compile_cod2("m(a) { switch (a) { case 1: y = 1; break; } f(y); }").is_err());
+        // Code past a `return` reads nothing.
+        assert!(compile_cod2("m(a) { if (a) return; else y = 1; f(y); }").is_ok());
+        assert!(compile_cod2("m() { self waittill(\"e\", y); f(y); }").is_ok());
+        assert!(compile_cod2("m() { x[0] = 1; f(x); }").is_ok());
+        assert!(compile_cod2("m() { x++; }").is_err());
+    }
+
+    /// `probe_c2a`: the thread's return value never reaches `x`.
+    #[test]
+    fn cod2_assigns_a_thread_call_s_undefined() {
+        let (_, f) = compile_cod2("m() { x = thread g(); } g() { wait 0.05; return 5; }").unwrap();
+        assert!(
+            f[0].code
+                .iter()
+                .any(|o| matches!(o, Op::Call { threaded: true, .. }))
+        );
+        assert!(crate::parse::parse_file("m() { x = thread g(); }").is_err());
     }
 }

@@ -37,6 +37,9 @@ pub struct Interner {
     folded: Vec<String>,
     /// The atom that owns this atom's folded key; what `fold_atom` returns.
     canon: Vec<Atom>,
+    /// A vector renders as `(%g, %g, %g)`, CoD2's `SL_GetStringForVector`,
+    /// not 1.1's two decimals (`value::format_number`).
+    pub vectors_g: bool,
 }
 
 impl Interner {

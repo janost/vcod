@@ -245,7 +245,7 @@ loads the cmd's `forwardmove` (usercmd +0x18) at 0x3413e, sets 0x40 in
 zero with a non-zero `rightmove`; there is no third arm, so a cmd asking for
 neither axis leaves the bit as it was. VERIFIED: RTCW carries the same three
 arms in `PmoveSingle`
-(`private/reference/RTCW-MP/src/game/bg_pmove.c:3915`), which is the lineage
+(RTCW-MP's `src/game/bg_pmove.c:3915`), which is the lineage
 `crates/common/src/pmove.rs` ports. VERIFIED: both captures carry 0x40 at
 `run_back` and at none of the other 42 poses. VERIFIED: 0x80 is the ADS
 walk, which the sight sets, and the `walk*` blocks are reached through it
@@ -362,7 +362,7 @@ which agrees with every pose in the capture and still differs from retail on a
 diagonal, where the latch rule leaves the strafe condition cleared and reading
 the cmd sets it. INFERRED, and wrong: the same round read a coasting player as
 keeping its anim. VERIFIED: RTCW does hold one --
-`private/reference/RTCW-MP/src/game/bg_pmove.c:1607-1622` returns without
+RTCW-MP's `src/game/bg_pmove.c:1607-1622` returns without
 selecting when neither axis is asked for and `xyspeed > 120`, commented
 "continue what they were doing last frame, until we stop" -- and VERIFIED: retail
 dropped it, since the only float compare in `PM_Footsteps` is the one against

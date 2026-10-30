@@ -300,7 +300,7 @@ the two commands on a 1.5 or UO server.
 
 - `cl_avidemo` and `cl_forceavidemo`: vcod takes no screenshots.
 - A demo written by a retail client has not been played in vcod, nor a
-  vcod one in a retail client: this machine runs no retail client. The
+  vcod one in a retail client: no retail client was run. The
   format checks are vcod against itself (`crates/server/tests/demos.rs`)
   and the retail server's own messages played as a demo
   (`a_demo_of_retail_messages_plays_every_frame`).

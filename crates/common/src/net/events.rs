@@ -5,19 +5,19 @@ use std::collections::HashMap;
 
 use crate::net::flags::{EF_CORPSE_FRESH, EF_TELEPORT_BIT, ET_CORPSE, ET_GENERAL, ET_MISSILE};
 use crate::net::msg::EntityState;
-use crate::net::protocol::Protocol;
+use crate::net::protocol::Cod1Wire;
 use crate::net::snapshot::Snapshot;
 
 /// `ET_EVENTS`, the base an event entity's `eType` is offset from. 12 on
 /// CoD 1.1 MP, not Q3's 13 (CoDExtended shared.h:445; section 1); 16 on
-/// United Offensive ([`Protocol::et_events`]).
+/// United Offensive ([`Cod1Wire::et_events`]).
 pub const ET_EVENTS: i32 = 12;
 /// Slots in an entity's or the playerstate's event ring.
 pub const EVENT_RING: i32 = 4;
 
 pub struct GameEvent {
     /// EV_* id (doc section 1), in 1.1's numbering whatever the protocol
-    /// ([`Protocol::event_to_v1`]).
+    /// ([`Cod1Wire::event_to_v1`]).
     pub event: i32,
     pub parm: i32,
     /// The shooter for fire events, the temp entity itself for
@@ -44,7 +44,7 @@ pub struct GameEvent {
     /// The carrier's `eType` as the wire has it (an event entity's is
     /// `ET_EVENTS + id`); `ET_PLAYER` on playerState events.
     pub e_type: i32,
-    /// The carrier's `eFlags`, in 1.1's layout ([`Protocol::eflags_to_v1`]).
+    /// The carrier's `eFlags`, in 1.1's layout ([`Cod1Wire::eflags_to_v1`]).
     pub eflags: i32,
 }
 
@@ -193,7 +193,7 @@ impl EventTracker {
 
     /// Events fired since the last drained snapshot. Idempotent per
     /// message_num.
-    pub fn drain(&mut self, snap: &Snapshot, p: &Protocol) -> Vec<GameEvent> {
+    pub fn drain(&mut self, snap: &Snapshot, p: &Cod1Wire) -> Vec<GameEvent> {
         self.drain_seq(snap, p)
             .into_iter()
             .map(|(_, ev)| ev)
@@ -207,7 +207,7 @@ impl EventTracker {
 
     /// [`Self::drain`], each playerstate-ring event with the 8-bit sequence
     /// it was written at; `None` for entity events.
-    pub fn drain_seq(&mut self, snap: &Snapshot, p: &Protocol) -> Vec<(Option<i32>, GameEvent)> {
+    pub fn drain_seq(&mut self, snap: &Snapshot, p: &Cod1Wire) -> Vec<(Option<i32>, GameEvent)> {
         if self.last_message == Some(snap.message_num) {
             return Vec::new();
         }
@@ -278,7 +278,7 @@ impl EventTracker {
         out
     }
 
-    fn event_from(es: &EntityState, p: &Protocol, num: u32, event: i32, parm: i32) -> GameEvent {
+    fn event_from(es: &EntityState, p: &Cod1Wire, num: u32, event: i32, parm: i32) -> GameEvent {
         GameEvent {
             event,
             parm,
@@ -316,7 +316,7 @@ mod tests {
     use crate::net::snapshot::Snapshot;
     use std::collections::BTreeMap;
 
-    fn ent(p: &Protocol, num: u32, fields: &[(&str, i32)]) -> EntityState {
+    fn ent(p: &Cod1Wire, num: u32, fields: &[(&str, i32)]) -> EntityState {
         let mut e = EntityState::null(p);
         e.number = num;
         for (name, v) in fields {
@@ -325,7 +325,7 @@ mod tests {
         e
     }
 
-    fn snap(p: &Protocol, msg: u32, time: i32, ents: Vec<EntityState>) -> Snapshot {
+    fn snap(p: &Cod1Wire, msg: u32, time: i32, ents: Vec<EntityState>) -> Snapshot {
         Snapshot {
             server_time: time,
             message_num: msg,

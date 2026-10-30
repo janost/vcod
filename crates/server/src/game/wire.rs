@@ -21,20 +21,27 @@
 
 use super::host::GameHost;
 use crate::game::entity::{HUD_OWNER_ALL, HudState};
+use crate::game::profile::{TriggerWire, WeaponNumbering};
 use std::collections::BTreeMap;
 use vcod_common::net::flags::{
     EF_FIRING, EF_NODRAW, EF_TELEPORT_BIT, ET_CORPSE, ET_FX, ET_ITEM, ET_MOVER, ET_PLAYER,
     ET_SCRIPTMOVER, ET_TURRET, SOLID_BMODEL,
 };
 use vcod_common::net::msg::{EntityState, HudElem, MAX_HUD_ELEMS};
-use vcod_common::net::protocol::{ENTITYNUM_NONE, Protocol};
-use vcod_common::net::trajectory::TR_INTERPOLATE;
+use vcod_common::net::protocol::{Cod1Wire, ENTITYNUM_NONE};
+use vcod_common::net::trajectory::{TR_INTERPOLATE, Trajectory};
 use vcod_gsc::EntId;
 use vcod_gsc::{Cx, Host, Value};
 
 /// `eFlags` 2, which every trigger's spawn but `trigger_use`'s ORs in
 /// (`InitTrigger` 0x65784). Unnamed in the 1.1 headers we have.
 const EF_TRIGGER: i32 = 2;
+/// CoD2's: `InitTrigger` (0x811c504) ORs in 1.
+const COD2_EF_TRIGGER: i32 = 1;
+/// CoD4's: 1 and the nodraw 0x20 of a trigger with no model: the walk
+/// capture's triggers read 0x21 in their baselines (VERIFIED live), the
+/// bits `InitTrigger` sets.
+const COD4_EF_TRIGGER: i32 = 0x21;
 /// `eFlags` as the traces carry it on every item, and `clientNum` on one no
 /// dropper's lockout holds: 0x3fe through the 8-bit netfield
 /// (docs/research/cod11-items.md section 9).
@@ -42,6 +49,47 @@ const ITEM_EFLAGS: i32 = 16;
 const ITEM_CLIENTNUM: i32 = 254;
 /// A turret's `apos.trType` in both maps' traces.
 const TURRET_APOS_TRTYPE: i32 = 3;
+
+/// The numbers [`build`] writes an entity in: the game's own `eType`s,
+/// `eFlags` bits and `trType`s, and the events of its ring. vcod's shared
+/// code keeps 1.1's (a mover's trajectories, the events the builtins
+/// raise); a game that numbers them otherwise maps them here, as each
+/// entity is built (`HostProfile::entities`; CoD2's are
+/// `cod2_wire::COD2_ENTITY_NUMBERS`, cod2-protocol.md 14.1).
+pub struct EntityNumbers {
+    pub et_item: i32,
+    /// A `func_bobbing`, `func_pendulum` or `func_static`.
+    pub et_mover: i32,
+    pub et_scriptmover: i32,
+    pub et_fx: i32,
+    pub et_turret: i32,
+    pub ef_teleport: i32,
+    pub ef_nodraw: i32,
+    pub ef_firing: i32,
+    /// What every item carries in `eFlags` beside `ef_nodraw`.
+    pub item_eflags: i32,
+    /// A ring event raised in 1.1's numbering, `None` for one the game has
+    /// no event for: it goes out as none, its parm 0.
+    pub event: fn(i32) -> Option<i32>,
+    /// A `trType` in 1.1's numbering.
+    pub tr_type: fn(i32) -> i32,
+}
+
+/// 1.1's numbers, which 1.5 and United Offensive build in too
+/// ([`entity_to_protocol`] maps what UO renumbered once a snapshot).
+pub const COD1_ENTITY_NUMBERS: EntityNumbers = EntityNumbers {
+    et_item: ET_ITEM,
+    et_mover: ET_MOVER,
+    et_scriptmover: ET_SCRIPTMOVER,
+    et_fx: ET_FX,
+    et_turret: ET_TURRET,
+    ef_teleport: EF_TELEPORT_BIT,
+    ef_nodraw: EF_NODRAW,
+    ef_firing: EF_FIRING,
+    item_eflags: ITEM_EFLAGS,
+    event: Some,
+    tr_type: |t| t,
+};
 
 /// Marks an `eType` that is United Offensive's own (a vehicle, 12): 1.1's
 /// numbering puts its events there, so the type rides above the 8-bit
@@ -54,7 +102,7 @@ const ET_SOUND_BLEND: i32 = 9;
 /// builder (coduo_lnxded 0x8096c6a) tests a blend whose `otherEntityNum`
 /// is not 1023 as that entity: its flags, its broadcast time and its
 /// clusters, never the blend's own (coduo-vehicles.md 10.2).
-pub fn sound_blend_vehicle(p: &Protocol, es: &EntityState) -> Option<u32> {
+pub fn sound_blend_vehicle(p: &Cod1Wire, es: &EntityState) -> Option<u32> {
     let other = es.field_i32(p, "otherEntityNum");
     (es.field_i32(p, "eType") == (ET_RAW | ET_SOUND_BLEND) && other != ENTITYNUM_NONE as i32)
         .then_some(other as u32)
@@ -65,7 +113,7 @@ pub fn sound_blend_vehicle(p: &Protocol, es: &EntityState) -> Option<u32> {
 /// entity's `eType` (`ET_EVENTS` 16 on United Offensive). Identity on 1.1
 /// and 1.5, which share 1.1's numbers. The obituary's means of death is
 /// already the protocol's: the builtin indexes the running `Defs`.
-pub fn entity_to_protocol(p: &Protocol, es: &mut EntityState) {
+pub fn entity_to_protocol(p: &Cod1Wire, es: &mut EntityState) {
     if p.et_events == vcod_common::net::events::ET_EVENTS {
         return;
     }
@@ -117,7 +165,7 @@ pub fn entity_to_protocol(p: &Protocol, es: &mut EntityState) {
 
 /// [`entity_to_protocol`] for a playerstate: its `eFlags` and its event
 /// ring.
-pub fn ps_to_protocol(p: &Protocol, ps: &mut vcod_common::net::msg::PlayerState) {
+pub fn ps_to_protocol(p: &Cod1Wire, ps: &mut vcod_common::net::msg::PlayerState) {
     if p.et_events == vcod_common::net::events::ET_EVENTS {
         return;
     }
@@ -142,21 +190,41 @@ pub fn ps_to_protocol(p: &Protocol, ps: &mut vcod_common::net::msg::PlayerState)
 /// docs/research/cod11-items.md 14, a unit off for the clusters), and
 /// `G_SpawnTurret` (0x52f75) writes (-32, -32, 0) to (32, 32, 56).
 pub fn link_box(etype: i32) -> ([f32; 3], [f32; 3]) {
-    match etype {
-        ET_TURRET => ([-32.0, -32.0, 0.0], [32.0, 32.0, 56.0]),
+    link_box_of(match etype {
+        ET_TURRET => LinkBox::Turret,
+        ET_SCRIPTMOVER => LinkBox::ScriptMover,
+        ET_PLAYER | ET_CORPSE => LinkBox::Body,
+        _ => LinkBox::Point,
+    })
+}
+
+/// Which spawn's box an entity links with, whatever its game numbers its
+/// `eType` ([`link_box_of`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkBox {
+    Turret,
+    ScriptMover,
+    Body,
+    Point,
+}
+
+/// [`link_box`] by the spawn's box.
+pub fn link_box_of(class: LinkBox) -> ([f32; 3], [f32; 3]) {
+    match class {
+        LinkBox::Turret => ([-32.0, -32.0, 0.0], [32.0, 32.0, 56.0]),
         // A script model is spawned with a zero box and nothing on the
         // `SP_script_model` path ever writes one, so its clusters come from
         // the engine's link epsilon alone. A `script_brushmodel` shares this
         // `eType` but links with its inline model's bounds, which
         // `crate::world` reads off the entity's `solid` and `index`.
-        ET_SCRIPTMOVER => ([0.0; 3], [0.0; 3]),
+        LinkBox::ScriptMover => ([0.0; 3], [0.0; 3]),
         // A player links with its own movement box, the one pmove collides
         // with (`vcod_common::pmove`). A corpse keeps the player's box: the
         // clone copies the dying entity's bounds, which `player_die` has
         // already flattened to 30 units tall (cod11-combat.md 5.2). The
         // extra height only widens the cluster set, so the taller box is
         // the conservative one to cull with.
-        ET_PLAYER | ET_CORPSE => (
+        LinkBox::Body => (
             [
                 -vcod_common::pmove::HALF_WIDTH,
                 -vcod_common::pmove::HALF_WIDTH,
@@ -168,7 +236,7 @@ pub fn link_box(etype: i32) -> ([f32; 3], [f32; 3]) {
                 vcod_common::pmove::HEIGHT_STAND,
             ],
         ),
-        _ => ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]),
+        LinkBox::Point => ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]),
     }
 }
 
@@ -276,9 +344,10 @@ fn hud_field_f32(host: &GameHost, id: EntId, name: &str) -> f32 {
     }
 }
 
+/// A slot through the game's own hudelem table (CoD4's packs `color` at
+/// a slot of its own).
 fn hud_slot_value(host: &GameHost, id: EntId, name: &str) -> Option<Value> {
-    let crate::game::fields::Route::Engine { slot, .. } = crate::game::fields::route_hud(name)
-    else {
+    let crate::game::fields::Route::Engine { slot, .. } = (host.profile.route_hud)(name) else {
         return None;
     };
     host.ents.get(id).map(|e| e.engine[slot])
@@ -288,7 +357,7 @@ fn hud_slot_value(host: &GameHost, id: EntId, name: &str) -> Option<Value> {
 pub fn packet_entities(
     host: &mut GameHost,
     cx: &mut Cx,
-    p: &Protocol,
+    p: &Cod1Wire,
 ) -> BTreeMap<u32, EntityState> {
     linked_entities(host, cx, p, false)
 }
@@ -300,7 +369,7 @@ pub fn packet_entities(
 pub fn baseline_entities(
     host: &mut GameHost,
     cx: &mut Cx,
-    p: &Protocol,
+    p: &Cod1Wire,
 ) -> BTreeMap<u32, EntityState> {
     linked_entities(host, cx, p, true)
 }
@@ -308,7 +377,7 @@ pub fn baseline_entities(
 fn linked_entities(
     host: &mut GameHost,
     cx: &mut Cx,
-    p: &Protocol,
+    p: &Cod1Wire,
     noclient: bool,
 ) -> BTreeMap<u32, EntityState> {
     let ids: Vec<EntId> = host.ents.iter_inuse().map(|(id, _)| id).collect();
@@ -326,7 +395,7 @@ fn linked_entities(
 fn build(
     host: &mut GameHost,
     cx: &mut Cx,
-    p: &Protocol,
+    p: &Cod1Wire,
     id: EntId,
     noclient: bool,
 ) -> Option<EntityState> {
@@ -341,12 +410,20 @@ fn build(
         None => return None,
     };
     let kind = kind_of(host, cx, id, &classname)?;
-    // `playSound` clears `SVF_NOCLIENT` (game.mp 0x5d95d).
-    let broadcast = host.ents.get(id).is_some_and(|e| e.broadcast);
+    // `playSound` clears `SVF_NOCLIENT` (game.mp 0x5d95d). CoD2's builder
+    // takes a set `r.broadcastTime` ahead of the `SVF_NOCLIENT` test
+    // (`SV_AddEntitiesVisibleFromPoint`, lnxded 0x8098b98): a looping
+    // `script_origin` goes out (cod2-protocol.md 15.7).
+    let sends = host.profile.broadcast_time_sends;
+    let broadcast = host
+        .ents
+        .get(id)
+        .is_some_and(|e| e.broadcast || sends && e.broadcast_time != 0);
     if !noclient && !broadcast && matches!(kind, Kind::Trigger(_) | Kind::ScriptOrigin) {
         return None;
     }
 
+    let n = host.profile.entities;
     let mut e = EntityState::null(p);
     e.number = id.0;
     let seti = |e: &mut EntityState, name: &str, v: i32| {
@@ -365,9 +442,25 @@ fn build(
     // (`crate::game::mover`, docs/research/cod11-movers.md section 9). An
     // entity no verb has touched is stationary at its `origin`/`angles`.
     match host.movers.wire(id, host.level_time_ms) {
-        Some((pos, apos)) => {
+        Some((pos, mut apos)) => {
+            // A group no verb has run on stands at the entity's own field:
+            // a `moveTo` alone leaves `apos` at the angles script set
+            // (cod4-gsc.md 3.2, the plane's 90).
+            if host
+                .movers
+                .pose_at(id, host.level_time_ms)
+                .is_some_and(|(_, a)| a.is_none())
+            {
+                let angles = host
+                    .ents
+                    .get(id)
+                    .and_then(|e| e.apos_base)
+                    .or_else(|| field_vec(host, cx, id, "angles"))
+                    .unwrap_or([0.0; 3]);
+                apos.base = glam::Vec3::from_array(angles);
+            }
             for (group, tr) in [("pos", pos), ("apos", apos)] {
-                seti(&mut e, &format!("{group}.trType"), tr.tr_type);
+                seti(&mut e, &format!("{group}.trType"), (n.tr_type)(tr.tr_type));
                 seti(&mut e, &format!("{group}.trTime"), tr.tr_time);
                 seti(&mut e, &format!("{group}.trDuration"), tr.tr_duration);
                 for (axis, v) in tr.base.to_array().iter().enumerate() {
@@ -380,13 +473,18 @@ fn build(
         }
         None => {
             let origin = field_vec(host, cx, id, "origin").unwrap_or([0.0; 3]);
-            let angles = field_vec(host, cx, id, "angles").unwrap_or([0.0; 3]);
+            let angles = host
+                .ents
+                .get(id)
+                .and_then(|e| e.apos_base)
+                .or_else(|| field_vec(host, cx, id, "angles"))
+                .unwrap_or([0.0; 3]);
             // A link re-anchors the entity every frame and sends both groups
             // `TR_INTERPOLATE` at the pose (`G_GeneralLink` 0x68568,
             // docs/research/cod11-movers.md 15).
             if host.links.contains(id) {
-                seti(&mut e, "pos.trType", TR_INTERPOLATE);
-                seti(&mut e, "apos.trType", TR_INTERPOLATE);
+                seti(&mut e, "pos.trType", (n.tr_type)(TR_INTERPOLATE));
+                seti(&mut e, "apos.trType", (n.tr_type)(TR_INTERPOLATE));
             }
             for (axis, v) in origin.iter().enumerate() {
                 setf(&mut e, &format!("pos.trBase[{axis}]"), *v);
@@ -399,7 +497,15 @@ fn build(
 
     // The entity's own event ring, which `playSound` writes on a receiver
     // that is not a client (sound doc, section 9).
-    if let Some(ring) = host.ents.get(id).map(|e| e.events) {
+    if let Some(mut ring) = host.ents.get(id).map(|e| e.events) {
+        for k in 0..4 {
+            if ring.events[k] != 0 {
+                match (n.event)(ring.events[k]) {
+                    Some(ev) => ring.events[k] = ev,
+                    None => (ring.events[k], ring.parms[k]) = (0, 0),
+                }
+            }
+        }
         let mut set = |name: &str, v: i32| seti(&mut e, name, v);
         ring.write(&mut set);
     }
@@ -417,10 +523,10 @@ fn build(
     }
     match kind {
         Kind::Item(item) => {
-            seti(&mut e, "eType", ET_ITEM);
+            seti(&mut e, "eType", n.et_item);
             seti(&mut e, "index", i32::from(item.index));
-            let nodraw = if item.nodraw { EF_NODRAW } else { 0 };
-            seti(&mut e, "eFlags", ITEM_EFLAGS | nodraw);
+            let nodraw = if item.nodraw { n.ef_nodraw } else { 0 };
+            seti(&mut e, "eFlags", n.item_eflags | nodraw);
             seti(&mut e, "groundEntityNum", item.ground);
             seti(
                 &mut e,
@@ -429,26 +535,26 @@ fn build(
             );
             // In the air the item's own trajectories, which `G_RunItem` and
             // the spin run (docs/research/cod11-items.md 8, 14).
-            if let Some(pos) = item.pos {
-                pos.write(&mut e, p, "pos");
-            }
-            if let Some(apos) = item.apos {
-                apos.write(&mut e, p, "apos");
+            for (group, tr) in [("pos", item.pos), ("apos", item.apos)] {
+                if let Some(tr) = tr {
+                    let tr_type = (n.tr_type)(tr.tr_type);
+                    Trajectory { tr_type, ..tr }.write(&mut e, p, group);
+                }
             }
         }
         Kind::ScriptMover(model) => {
-            seti(&mut e, "eType", ET_SCRIPTMOVER);
+            seti(&mut e, "eType", n.et_scriptmover);
             seti(&mut e, "index", model);
             seti(&mut e, "eFlags", eflags_hidden(host, id));
         }
         Kind::Mover(model) => {
-            seti(&mut e, "eType", ET_MOVER);
+            seti(&mut e, "eType", n.et_mover);
             seti(&mut e, "index", model);
             seti(&mut e, "solid", SOLID_BMODEL);
             seti(&mut e, "eFlags", eflags_hidden(host, id));
         }
         Kind::BrushModel(model) => {
-            seti(&mut e, "eType", ET_SCRIPTMOVER);
+            seti(&mut e, "eType", n.et_scriptmover);
             seti(&mut e, "index", model);
             seti(&mut e, "solid", SOLID_BMODEL);
             seti(&mut e, "eFlags", eflags_hidden(host, id));
@@ -457,7 +563,7 @@ fn build(
         // `SP_script_origin` links (0x61055) with contents 0, so it has
         // no clusters and rides no snapshot until a `playSound` makes it
         // broadcast.
-        Kind::ScriptOrigin => seti(&mut e, "eType", ET_SCRIPTMOVER),
+        Kind::ScriptOrigin => seti(&mut e, "eType", n.et_scriptmover),
         // A trigger's spawn sets `SVF_NOCLIENT` and, but on a
         // `trigger_use`, `eFlags` 2 (`InitTrigger` 0x65784,
         // `SP_trigger_use` 0x5742c, map-cycle doc 3.3).
@@ -466,7 +572,23 @@ fn build(
                 seti(&mut e, "index", model as i32);
                 seti(&mut e, "solid", SOLID_BMODEL);
             }
-            if t.kind == crate::game::trigger::TriggerKind::Use {
+            if host.profile.trigger_wire != TriggerWire::Cod1 {
+                // CoD2's `InitTrigger` (0x811c504) ORs in `eFlags` 1;
+                // `trigger_radius` never calls it, nor does `SP_trigger_use`
+                // (0x810fe50), which stores the hint string slot and the
+                // cursor hint in `s+0xd8` and `s+0xdc` (cod2-protocol.md 15.6).
+                if t.kind == crate::game::trigger::TriggerKind::Use {
+                    seti(&mut e, "scale", t.hint_string & 0xff);
+                    seti(&mut e, "dmgFlags", t.cursor_hint);
+                } else if t.round.is_none() && t.kind != crate::game::trigger::TriggerKind::LookAt {
+                    let flags = if host.profile.trigger_wire == TriggerWire::Cod4 {
+                        COD4_EF_TRIGGER
+                    } else {
+                        COD2_EF_TRIGGER
+                    };
+                    seti(&mut e, "eFlags", flags);
+                }
+            } else if t.kind == crate::game::trigger::TriggerKind::Use {
                 // `ent+0xd8` and `ent+0xdc` sit inside the entity state.
                 seti(&mut e, "_union.scale", t.hint_string & 0xff);
                 seti(&mut e, "dmgFlags", t.cursor_hint);
@@ -476,13 +598,14 @@ fn build(
         }
         // `playLoopedFx` (game.mp 0x5b536..0x5b585).
         Kind::Fx(fx) => {
-            seti(&mut e, "eType", ET_FX);
+            seti(&mut e, "eType", n.et_fx);
             seti(&mut e, "_union.scale", fx.id);
             for (axis, v) in fx.forward.iter().enumerate() {
                 setf(&mut e, &format!("origin2[{axis}]"), *v);
             }
             setf(&mut e, "angles2[0]", fx.cull);
             setf(&mut e, "angles2[1]", fx.period_ms as f32);
+            seti(&mut e, "eventParm", fx.up);
         }
         Kind::SoundBlend(vehicle, (a, b, blend)) => {
             seti(&mut e, "eType", ET_RAW | ET_SOUND_BLEND);
@@ -495,7 +618,7 @@ fn build(
             crate::game::vehicle::write_wire(host, id, model, &mut |name, v| seti(&mut e, name, v))
         }
         Kind::Turret(model, weapon) => {
-            seti(&mut e, "eType", ET_TURRET);
+            seti(&mut e, "eType", n.et_turret);
             seti(&mut e, "index", model);
             // The turret's own weapon, from its `weaponinfo` key: both gate
             // maps place `mg42_bipod_stand_mp`, configstring 7's 16.
@@ -506,7 +629,7 @@ fn build(
             // 0 for good (movers doc 16).
             let angle_set = host.turrets.get(&id).is_some_and(|r| r.angle_set);
             if !host.links.contains(id) && !angle_set {
-                seti(&mut e, "apos.trType", TURRET_APOS_TRTYPE);
+                seti(&mut e, "apos.trType", (n.tr_type)(TURRET_APOS_TRTYPE));
             }
             // The barrel's own record, built at spawn (`game::turret`). A
             // host with no collision world built no record and sends the
@@ -525,10 +648,10 @@ fn build(
                 }
                 let mut eflags = 0;
                 if rec.teleport_bit {
-                    eflags |= EF_TELEPORT_BIT;
+                    eflags |= n.ef_teleport;
                 }
                 if rec.firing {
-                    eflags |= EF_FIRING;
+                    eflags |= n.ef_firing;
                 }
                 seti(&mut e, "eFlags", eflags);
                 if rec.overheat_mark {
@@ -585,8 +708,19 @@ fn kind_of(host: &mut GameHost, cx: &mut Cx, id: EntId, classname: &str) -> Opti
         return Some(Kind::SoundBlend(veh.0, state));
     }
     if classname == "misc_mg42" || classname == "misc_turret" {
+        // A `spawnTurret` gun has no key; its record names the weapon.
         let weapon = field_string(host, cx, id, "weaponinfo")
-            .and_then(|w| host.defs.weapon_index(&w))
+            .or_else(|| host.turrets.get(&id).map(|r| r.weapon.clone()))
+            .and_then(|w| match host.profile.weapons {
+                // The index `G_SpawnTurret` registered.
+                WeaponNumbering::Registered => host
+                    .cod2()
+                    .weapons
+                    .iter()
+                    .position(|n| n.eq_ignore_ascii_case(&w))
+                    .map(|i| i + 1),
+                WeaponNumbering::Fixed => host.defs.weapon_index(&w),
+            })
             .unwrap_or(0) as i32;
         return Some(Kind::Turret(model_index(host, cx, id)?, weapon));
     }
@@ -620,7 +754,7 @@ fn kind_of(host: &mut GameHost, cx: &mut Cx, id: EntId, classname: &str) -> Opti
 /// `EF_NODRAW` when script has hidden the entity, else 0.
 fn eflags_hidden(host: &GameHost, id: EntId) -> i32 {
     if host.ents.get(id).is_some_and(|e| e.hidden) {
-        EF_NODRAW
+        host.profile.entities.ef_nodraw
     } else {
         0
     }

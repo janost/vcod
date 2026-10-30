@@ -1,8 +1,31 @@
 //! Parser for CoD's `.efx` particle-script text. Curves are parsed, not
 //! evaluated; that is `fx::sim`. Grammar and defaults: `docs/research/efx-grammar.md`.
 
+use vcod_common::asset_source::{Asset, AssetKind, AssetSource};
+use vcod_common::game::Game;
+use vcod_common::text::atoi_msvc;
+
 pub struct Effect {
     pub emitters: Vec<Emitter>,
+}
+
+/// The effect at `path` as the fx system plays it: read at
+/// [`chained_path`], then parsed in the source game's dialect (a CoD2
+/// install's through [`crate::fx::cod2::load`]). Built through
+/// [`Asset::find`], uncached: `FxSystem` keeps its own cache.
+impl Asset for Effect {
+    const KIND: AssetKind = AssetKind::Effect;
+
+    fn find(src: &dyn AssetSource, path: &str) -> anyhow::Result<Self> {
+        let Some(bytes) = src.read(&chained_path(path)) else {
+            anyhow::bail!("not found");
+        };
+        match src.game() {
+            Game::Cod2 => crate::fx::cod2::load(src, path),
+            _ => parse(&String::from_utf8_lossy(&bytes)),
+        }
+        .map_err(anyhow::Error::msg)
+    }
 }
 
 /// Uniform-random scalar range; one value in the file means b == a.
@@ -90,9 +113,30 @@ pub struct Emitter {
     pub length: Curve,
     pub alpha: Curve,
     pub rgb: CurveV3,
-    pub shaders: Vec<String>,
+    /// Shared with every particle and quad drawn from them.
+    pub shaders: Vec<std::sync::Arc<str>>,
     pub sounds: Vec<String>,
     pub unknown_keys: Vec<String>,
+    /// A CoD2 element: the primitive its channels are evaluated from
+    /// (`fx::cod2`); `None` for every CoD1 file.
+    pub cod2: Option<std::sync::Arc<crate::fx::cod2::Element>>,
+    /// A CoD4 element's `effectEmitted` spacing: any element type plays
+    /// [`Self::emit_fx`] along the path it moved (`FX_ProcessEmitting`,
+    /// docs/research/cod4-effects.md 15); `None` for CoD1 and CoD2.
+    pub cod4_emit: Option<Cod4Emit>,
+    /// A CoD4 trail element (type 3): its cross-section and life, drawn by
+    /// `fx::cod4_trail` on a moving effect (cod4-effects.md 16).
+    pub cod4_trail: Option<crate::fx::cod4_trail::TrailDef>,
+}
+
+/// `FX_ProcessEmitting`'s spacing: an element draws `dist` once, adds
+/// `variance_base`, and each play adds a fresh share of `variance_amp`;
+/// units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Cod4Emit {
+    pub dist: R1,
+    pub variance_base: f32,
+    pub variance_amp: f32,
 }
 
 impl Default for Emitter {
@@ -168,6 +212,9 @@ impl Default for Emitter {
             shaders: Vec::new(),
             sounds: Vec::new(),
             unknown_keys: Vec::new(),
+            cod2: None,
+            cod4_emit: None,
+            cod4_trail: None,
         }
     }
 }
@@ -461,7 +508,7 @@ fn dispatch_curve(p: &mut Cursor, em: &mut Emitter, key: &str, line: usize) -> R
 
 fn dispatch_list(em: &mut Emitter, key: &str, items: Vec<String>) {
     match key {
-        "shaders" => em.shaders = items,
+        "shaders" => em.shaders = items.into_iter().map(Into::into).collect(),
         "sounds" => em.sounds = items,
         "models" => em.models = items,
         "impactfx" => em.impact_fx = items,
@@ -495,26 +542,14 @@ fn dispatch_keyval(em: &mut Emitter, key: &str, vals: &[&str], line: usize) -> R
         "intensity" => em.intensity = Some(r1_from_tokens(vals, line)?),
         "density" => em.density = r1_from_tokens(vals, line)?,
         "variance" => em.variance = r1_from_tokens(vals, line)?,
-        "nonUniformScale" => em.non_uniform_scale = atol(vals.first().copied().unwrap_or("")) != 0,
+        "nonUniformScale" => {
+            em.non_uniform_scale = atoi_msvc(vals.first().copied().unwrap_or("")) != 0
+        }
         // Census keys without a field, kept out of unknown_keys.
         "origin2" | "wind" => {}
         _ => em.unknown_keys.push(key.to_string()),
     }
     Ok(())
-}
-
-/// C's `atol`: leading whitespace, a sign and the digits after it; 0 when
-/// none.
-fn atol(s: &str) -> i64 {
-    let s = s.trim_start();
-    let (neg, rest) = match s.as_bytes().first() {
-        Some(b'-') => (true, &s[1..]),
-        Some(b'+') => (false, &s[1..]),
-        _ => (false, s),
-    };
-    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    let v = digits.parse::<i64>().unwrap_or(0);
-    if neg { -v } else { v }
 }
 
 fn parse_block_body(p: &mut Cursor, em: &mut Emitter) -> Result<(), String> {
@@ -674,7 +709,10 @@ Tail
         assert_eq!(em.size.start, R1 { a: 5.0, b: 5.0 });
         assert_eq!(em.size.end, R1 { a: 10.0, b: 10.0 });
         assert_eq!(em.length.end, R1 { a: 120.0, b: 120.0 });
-        assert_eq!(em.shaders, vec!["gfx/effects/antiaircraft_tracer"]);
+        assert_eq!(
+            em.shaders,
+            ["gfx/effects/antiaircraft_tracer"].map(std::sync::Arc::<str>::from)
+        );
     }
 
     /// `fx/impacts/blast_flash2.efx`'s flash: `nonUniformScale 1` and its

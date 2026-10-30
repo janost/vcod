@@ -9,9 +9,13 @@
 //! attachment (blended models and depth-writing blend stages still write
 //! it). Sample 0, not an average, so a silhouette pixel reads a real
 //! surface. docs/research/cod11-gamma.md, section 8.
+//!
+//! The same copy is CoD2's `floatZ` for its `zfeather*` effects, which
+//! retail fades by the depth gap (cod2-materials.md 9.5): the fx pass
+//! splits and reads it for a feathered run whatever `vc_softParticles` is.
 
 /// The copy's target: linear view depth, world units.
-const LINZ_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+pub(crate) const LINZ_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 /// Past this the value only washes sprites out.
 const MAX_SCALE: f32 = 8.0;
 
@@ -63,7 +67,7 @@ impl SoftParticles {
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Depth,
                         view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: true,
+                        multisampled: crate::renderer::msaa_samples() > 1,
                     },
                     count: None,
                 },
@@ -85,7 +89,12 @@ impl SoftParticles {
                 },
             ],
         });
-        let shader = device.create_shader_module(wgpu::include_wgsl!("soft_particles.wgsl"));
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("soft_particles.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(crate::renderer::depth_wgsl(include_str!(
+                "soft_particles.wgsl"
+            ))),
+        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("soft particles copy pipeline layout"),
             bind_group_layouts: &[Some(&copy_layout)],
@@ -112,12 +121,18 @@ impl SoftParticles {
             multiview_mask: None,
             cache: None,
         });
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("soft particles params"),
-            size: std::mem::size_of::<Params>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        // near and far from the start: CoD2's feather reads the copy with
+        // vc_softParticles off
+        let uniform = wgpu::util::DeviceExt::create_buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("soft particles params"),
+                contents: bytemuck::bytes_of(&Params {
+                    p: [crate::camera::Z_NEAR, crate::camera::Z_FAR, 0.0, 0.0],
+                }),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            },
+        );
         let (linz, copy_bg, fx_bg) = targets(
             device,
             &copy_layout,
@@ -177,6 +192,12 @@ impl SoftParticles {
         &self.fx_bg
     }
 
+    /// The linear depth the copy writes, which `crate::scene_copy` binds
+    /// as the distortion effects' `floatZ`.
+    pub fn linz(&self) -> &wgpu::TextureView {
+        &self.linz
+    }
+
     /// Copies the MSAA depth as it stands into the linear target. Call
     /// between the frame's two halves, with no pass holding the depth.
     pub fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
@@ -223,7 +244,10 @@ fn targets(
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: LINZ_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            // copied out by the floatZ tests (cod4-client-perf.md 35)
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         })
         .create_view(&Default::default());

@@ -360,7 +360,10 @@ fn a_ramped_move_puts_retails_four_records_on_the_wire() {
 fn fixture() -> (vcod_gsc::Vm, vcod_server::game::host::GameHost) {
     (
         vcod_gsc::Vm::new(),
-        vcod_server::game::host::GameHost::new(vec![String::new(); 2048]),
+        vcod_server::game::host::GameHost::new(
+            &vcod_server::game::profile::COD1_11,
+            vec![String::new(); 2048],
+        ),
     )
 }
 

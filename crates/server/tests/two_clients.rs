@@ -33,7 +33,7 @@ fn cfg() -> vcod_server::ServerConfig {
 /// Both clients joined, spawned and stepped far enough that each has a
 /// snapshot describing the other.
 fn two_joined() -> Option<(EntityState, EntityState, [f32; 3], [f32; 3])> {
-    let fs = vcod_common::testing::game_fs()?;
+    let fs = vcod_common::testing::game_fs_11()?;
     let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
     let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
     let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
@@ -155,7 +155,7 @@ fn two_clients_are_sent_each_other_as_players() {
 /// script reaches the players, and the entity-list gates cannot see it.
 #[test]
 fn the_scripts_can_find_both_players_by_classname() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -439,7 +439,7 @@ fn a_player_entity_carries_the_animation_it_is_playing() {
 /// missing check looked like.
 #[test]
 fn a_spectator_is_sent_to_nobody() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -523,7 +523,7 @@ fn a_spectator_is_sent_to_nobody() {
 
 /// One client's snapshot and the other's slot, both joined and spawned.
 fn a_roster_view() -> Option<(vcod_common::net::snapshot::Snapshot, u32)> {
-    let fs = vcod_common::testing::game_fs()?;
+    let fs = vcod_common::testing::game_fs_11()?;
     let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
     let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
     let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
@@ -593,7 +593,7 @@ fn opposite_teams_carry_different_roster_team_values() {
     const TEAM_AXIS: i32 = 1;
     const TEAM_ALLIES: i32 = 2;
 
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -662,7 +662,7 @@ fn opposite_teams_carry_different_roster_team_values() {
 /// the same tick says.
 #[test]
 fn a_client_is_told_where_the_other_is_this_frame() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -760,7 +760,7 @@ fn a_weapon_switch_off_the_usercmd_byte_happens_once() {
     const EV_RAISE_WEAPON: i32 = 155;
     const EV_PUTAWAY_WEAPON: i32 = 156;
 
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -855,7 +855,7 @@ fn a_client_out_of_grenades_gets_its_rifle_back() {
     use vcod_common::net::msg::{BUTTON_ATTACK, NULL_USERCMD, UserCmd};
     const EV_FIRE_WEAPON: i32 = 159;
 
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -988,7 +988,7 @@ fn a_client_out_of_grenades_gets_its_rifle_back() {
 /// (`docs/research/cod11-combat.md` section 5.2).
 #[test]
 fn a_body_reaches_both_the_dead_client_and_the_other_one() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -1082,7 +1082,7 @@ fn a_body_reaches_both_the_dead_client_and_the_other_one() {
 fn a_broadcast_temp_entity_skips_the_cull_and_a_scoped_one_does_not() {
     use vcod_server::game::temp_entity::{Scope, TempEntity};
 
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -1206,7 +1206,7 @@ fn a_broadcast_temp_entity_skips_the_cull_and_a_scoped_one_does_not() {
 #[test]
 fn a_map_command_reloads_the_level_on_the_live_netchan() {
     const NEXT: &str = "mp_brecourt";
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -1370,7 +1370,7 @@ fn a_map_command_reloads_the_level_on_the_live_netchan() {
 /// the tail of this test.
 #[test]
 fn map_restart_re_inits_the_level_without_a_gamestate() {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -1539,7 +1539,7 @@ fn the_score_limit_sends_both_clients_to_intermission_and_then_rotates() {
     use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD, UserCmd};
 
     const NEXT: &str = "mp_brecourt";
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -1765,7 +1765,7 @@ fn the_score_limit_sends_both_clients_to_intermission_and_then_rotates() {
 fn a_round_restart_leaves_both_clients_armed_and_flips_the_teleport_bit() {
     use vcod_common::net::NetEvent;
 
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
@@ -1874,4 +1874,77 @@ fn a_round_restart_leaves_both_clients_armed_and_flips_the_teleport_bit() {
          bit never flipped and a retail client interpolates through it",
         a_after.1
     );
+}
+
+/// A tag `attach` names takes its configstring in `ClientEndFrame`
+/// (cod11-gsc-object-model.md 24), so the `d` reaches the client in the
+/// message ahead of the first snapshot whose roster names it. Built at the
+/// snapshot instead, the tag went out a frame late and the client grafted
+/// the attachment by its root bone's name: UO's ctf flag icon, whose root
+/// is nameless, hung off nothing for a frame (the UO soak,
+/// cod11-client-soak.md). Runs at whichever install `COD_DIR` names.
+#[test]
+fn an_attachments_tag_reaches_the_client_before_its_snapshot() {
+    use vcod_common::net::protocol::PROTOCOL_V22;
+    let (fs, p, map, model) = if let Some(fs) = vcod_common::testing::uo_fs() {
+        (
+            fs,
+            &PROTOCOL_V22,
+            "mp_uo_carentan",
+            "xmodel/o_ctf_flagicon_us",
+        )
+    } else if let Some(fs) = vcod_common::testing::game_fs_11() {
+        (fs, &PROTOCOL_V1, MAP, "xmodel/helmet_british_airborne")
+    } else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let probe = format!(
+        "main() {{ maps\\mp\\gametypes\\_callbacksetup::SetupCallbacks(); \
+         level.callbackStartGameType = ::start; \
+         level.callbackPlayerConnect = ::connect; \
+         level.callbackPlayerDisconnect = ::nop; \
+         level.callbackPlayerDamage = ::nop; level.callbackPlayerKilled = ::nop; }}\n\
+         start() {{ precacheModel(\"{model}\"); }}\n\
+         connect() {{ self.sessionstate = \"playing\"; \
+         self spawn((0, 0, 0), (0, 0, 0)); \
+         wait 2; self attach(\"{model}\", \"TAG_HELMETSIDE\", true); }}\n\
+         nop() {{}}\n"
+    );
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(common::cfg(map, "probe_tagattach"), now);
+    sv.set_protocol(p);
+    sv.overlay_script("maps/mp/gametypes/probe_tagattach", &probe);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let mut cl = common::connect(&mut sv, &q, &mut now);
+    let tags = p.cs.tags();
+    let mut named = 0;
+    for _ in 0..80 {
+        now += Duration::from_millis(50);
+        cl.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        common::step(&mut sv, &q, &mut cl, now);
+        let Some(snap) = cl.snapshots().newest() else {
+            continue;
+        };
+        for (n, cs) in &snap.clients {
+            for i in 0..6 {
+                let at = cs.field_i32(p, &format!("attachTagIndex[{i}]"));
+                if at <= 0 {
+                    continue;
+                }
+                let tag = cl.configstrings()[tags + at as usize].as_str();
+                assert!(
+                    !tag.is_empty(),
+                    "client {n}'s attachment {i} names tag {at}, not yet in the table"
+                );
+                named += usize::from(tag == "tag_helmetside");
+            }
+        }
+    }
+    assert!(named > 0, "no snapshot carried the tag");
+    assert!(sv.script_aborts().is_empty(), "{:?}", sv.script_aborts());
 }

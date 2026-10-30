@@ -598,8 +598,8 @@ fn a_swing_at_the_floor_raises_the_miss() {
 /// fixtures' paks.
 fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
     vcod_common::testing::game_fs().filter(|fs| {
-        vcod_server::server::install_protocol(fs).version
-            == vcod_common::net::protocol::PROTOCOL_V6.version
+        vcod_server::server::install_protocol(fs).transport.version
+            == vcod_common::net::protocol::PROTOCOL_V6.transport.version
     })
 }
 

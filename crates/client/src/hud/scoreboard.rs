@@ -1,7 +1,9 @@
 //! The scoreboard: the `b` server command, requested on demand
 //! (docs/research/cod11-hud-protocol.md, sections 3-4), drawn as the cgame
 //! draws it (section 3.1, `0x3002b650` and the functions it calls; 1.5 and
-//! United Offensive draw the same board).
+//! United Offensive draw the same board). CoD2's `CG_DrawScoreboard` (Mac
+//! 0x1c6e30) is the same board with its own [`Style`]
+//! (docs/research/cod2-hud.md 13).
 
 use super::HudQuad;
 use super::font::{Slot, UiFonts};
@@ -28,8 +30,7 @@ const TOP: f32 = 52.0;
 const WIDTH: f32 = 382.0;
 const WIDTH_SCROLLED: f32 = 374.0;
 const ROW_H: f32 = 12.0;
-/// A banner is 32 high; the next banner or row starts 24 below its top.
-const BANNER_H: f32 = 32.0;
+/// The room a banner needs below it before it draws.
 const BANNER_STEP: f32 = 24.0;
 const SECTION_GAP: f32 = 4.0;
 
@@ -37,12 +38,16 @@ const SECTION_GAP: f32 = 4.0;
 /// table's width, its header and whether it is right-aligned.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Column {
+    /// CoD2's talk icon: vcod has no voice chat, so it stays empty.
+    Voice,
     Icon,
     Name,
     Score,
     Deaths,
     Ping,
 }
+
+type Columns = [(Column, f32, &'static str, bool)];
 
 const COLUMNS: [(Column, f32, &str, bool); 5] = [
     (Column::Icon, 0.05, "", false),
@@ -51,6 +56,69 @@ const COLUMNS: [(Column, f32, &str, bool); 5] = [
     (Column::Deaths, 0.2, "CGAME_SB_DEATHS", true),
     (Column::Ping, 0.18, "CGAME_SB_PING", true),
 ];
+
+/// CoD2's `columnInfo` (Mac 0x36e6e0): voice, status icon, name, score,
+/// deaths, ping.
+const COLUMNS_COD2: [(Column, f32, &str, bool); 6] = [
+    (Column::Voice, 0.05, "", false),
+    (Column::Icon, 0.05, "", false),
+    (Column::Name, 0.47, "", false),
+    (Column::Score, 0.13, "CGAME_SB_SCORE", true),
+    (Column::Deaths, 0.13, "CGAME_SB_DEATHS", true),
+    (Column::Ping, 0.17, "CGAME_SB_PING", true),
+];
+
+/// Where one game's board differs from 1.1's.
+pub struct Style {
+    columns: &'static Columns,
+    /// The black panel's alpha.
+    panel_alpha: f32,
+    /// A banner's drawn height and how far the next item starts below it.
+    banner_h: f32,
+    banner_step: f32,
+    /// The banner text's baseline below the banner's top.
+    banner_text_y: f32,
+    /// The column headers', a row's and an objective line's baselines.
+    header_text_y: f32,
+    row_text_y: f32,
+    objective_text_y: f32,
+    /// A cell too wide for its column: the font shrinks in 0.02 steps
+    /// (CoD2) instead of losing characters (1.1).
+    shrink_cells: bool,
+    /// The title's fit measures the game type at 0.41 whatever the map's
+    /// scale (1.1); CoD2 measures both at the shrinking scale.
+    title_fixed_left: bool,
+}
+
+/// 1.1's board (`0x3002b650`); 1.5 and United Offensive draw it too.
+pub const COD1: Style = Style {
+    columns: &COLUMNS,
+    panel_alpha: 0.55,
+    banner_h: 32.0,
+    banner_step: 24.0,
+    banner_text_y: 18.0,
+    header_text_y: 10.5,
+    row_text_y: 10.5,
+    objective_text_y: 9.0,
+    shrink_cells: false,
+    title_fixed_left: true,
+};
+
+/// CoD2 1.3's (cod2-hud.md 13): `cg_scoreboardBannerHeight` 24 draws the
+/// banner 24 / 0.75 high, the rows starting under it, its text at 24 *
+/// 0.84.
+pub const COD2: Style = Style {
+    columns: &COLUMNS_COD2,
+    panel_alpha: 0.8,
+    banner_h: 32.0,
+    banner_step: 32.0,
+    banner_text_y: 20.16,
+    header_text_y: 11.76,
+    row_text_y: 10.08,
+    objective_text_y: 10.08,
+    shrink_cells: true,
+    title_fixed_left: false,
+};
 
 /// One `b` row (doc section 3). `team` is not on the wire: `parse_scores`
 /// leaves it 0 and the board fills it from the client's info.
@@ -184,6 +252,10 @@ pub struct Scoreboard {
     /// The team drawn first while the scores are level (`0x3007497c`,
     /// allies at start).
     leader: i32,
+    /// Player rows the last draw put on screen.
+    rows_drawn: usize,
+    /// The game whose layout this board draws.
+    pub style: &'static Style,
 }
 
 impl Scoreboard {
@@ -202,7 +274,16 @@ impl Scoreboard {
             scroll: 0,
             overflowed: false,
             leader: 2,
+            rows_drawn: 0,
+            style: &COD1,
         }
+    }
+
+    /// Player rows the last [`Self::build`] laid out (drawn or scrolled
+    /// past).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn rows_drawn(&self) -> usize {
+        self.rows_drawn
     }
 
     /// Latest (axis, allies), or `None` before the first reply. `Hud::build`
@@ -349,7 +430,12 @@ impl Scoreboard {
         let Some(alpha) = self.alpha(b.now) else {
             return false;
         };
-        let d = Draw { fonts, v, alpha };
+        let d = Draw {
+            fonts,
+            v,
+            alpha,
+            style: self.style,
+        };
         frame(&d, b, out);
         self.table(&d, b, out);
         true
@@ -415,6 +501,7 @@ impl Scoreboard {
             item: 0,
             scroll: self.scroll,
             overflowed: false,
+            rows: 0,
         };
         let mut section = |team: i32, y: f32, out: &mut Vec<HudQuad>| {
             let total = match team {
@@ -437,6 +524,7 @@ impl Scoreboard {
             section(3, y, out);
         }
         self.overflowed = cx.overflowed;
+        self.rows_drawn = cx.rows;
         if !fits {
             scroll_bar(d, list_top, items, cx.item, self.scroll, out);
         }
@@ -463,6 +551,7 @@ struct Draw<'a> {
     fonts: &'a UiFonts,
     v: &'a Virtual,
     alpha: f32,
+    style: &'a Style,
 }
 
 impl Draw<'_> {
@@ -475,6 +564,28 @@ impl Draw<'_> {
     fn text(&self, s: &str, x: f32, y: f32, scale: f32, rgb: [f32; 3], out: &mut Vec<HudQuad>) {
         let rgba = [rgb[0], rgb[1], rgb[2], self.alpha];
         menu_text_rgba(self.font(scale), s, (x, y), scale, rgba, self.v, out);
+    }
+
+    /// [`Self::text`] in `UI_DrawText`'s style 0, no shadow: CoD2's row
+    /// cell once it shrank below 0.16 (cod2-hud.md 13).
+    #[allow(clippy::too_many_arguments)]
+    fn text_plain(
+        &self,
+        s: &str,
+        x: f32,
+        y: f32,
+        scale: f32,
+        rgb: [f32; 3],
+        out: &mut Vec<HudQuad>,
+    ) {
+        let start = out.len();
+        self.text(s, x, y, scale, rgb, out);
+        // The layout alternates shadow and glyph quads.
+        let mut i = 0;
+        out.retain(|_| {
+            i += 1;
+            i <= start || (i - start).is_multiple_of(2)
+        });
     }
 
     /// Trap 0x34: whole units.
@@ -503,6 +614,8 @@ struct Cursor {
     item: i32,
     scroll: i32,
     overflowed: bool,
+    /// Player rows drawn.
+    rows: usize,
 }
 
 impl Cursor {
@@ -565,18 +678,18 @@ impl Cursor {
             ),
         };
         d.fill(
-            [LEFT, y, self.width, BANNER_H],
+            [LEFT, y, self.width, d.style.banner_h],
             WHITE,
             d.alpha,
             &banner,
             out,
         );
         let color = team_color(team, b.cvar);
-        let ty = y + 18.0;
+        let ty = y + d.style.banner_text_y;
         d.text(&title, 133.0, ty, 0.32, color, out);
         if matches!(team, 1 | 2) {
             let mut x = LEFT;
-            for (col, share, _, right) in COLUMNS {
+            for &(col, share, _, right) in d.style.columns {
                 let s = match col {
                     Column::Score => Some(total.to_string()),
                     Column::Ping => Some(ping.to_string()),
@@ -593,7 +706,7 @@ impl Cursor {
                 x += self.width * share;
             }
         }
-        y + BANNER_STEP
+        y + d.style.banner_step
     }
 
     /// `0x3002b0d0`: the team's rows in the server's order, every other one
@@ -614,6 +727,7 @@ impl Cursor {
                 continue;
             };
             y = self.row(d, b, e, name, color, shade, y, out);
+            self.rows += 1;
             shade = !shade;
         }
         y
@@ -643,7 +757,7 @@ impl Cursor {
         }
         let spectator = e.team == SPECTATOR_TEAM;
         let mut x = LEFT;
-        for (col, share, _, right) in COLUMNS {
+        for &(col, share, _, right) in d.style.columns {
             let w = self.width * share;
             let s = match col {
                 Column::Icon => {
@@ -660,14 +774,38 @@ impl Cursor {
                 _ => String::new(),
             };
             if !s.is_empty() {
-                let s = clip(d, &s, w, 0.22);
-                let off = if right { w - d.width(&s, 0.22) } else { 0.0 };
-                d.text(&s, x + off, y + 10.5, 0.22, WHITE, out);
+                let (s, scale) = if d.style.shrink_cells {
+                    let scale = shrink(d, &s, w, 0.22);
+                    (s, scale)
+                } else {
+                    (clip(d, &s, w, 0.22), 0.22)
+                };
+                let off = if right { w - d.width(&s, scale) } else { 0.0 };
+                let ty = y + d.style.row_text_y;
+                // CoD2 shadows a cell (style 3) only at 0.16 or more
+                // (`CG_DrawClientScore`, Mac 0x1c51b2).
+                if d.style.shrink_cells && scale < SHADOW_MIN_SCALE {
+                    d.text_plain(&s, x + off, ty, scale, WHITE, out);
+                } else {
+                    d.text(&s, x + off, ty, scale, WHITE, out);
+                }
             }
             x += w;
         }
         y + ROW_H
     }
+}
+
+/// The smallest scale a CoD2 row cell keeps its shadow at (0x326398).
+const SHADOW_MIN_SCALE: f32 = 0.16;
+
+/// CoD2's `CG_DrawClientScore` (Mac 0x1c51b2): the scale less 0.02 at a
+/// time until `s` fits `w`.
+fn shrink(d: &Draw, s: &str, w: f32, mut scale: f32) -> f32 {
+    while d.width(s, scale) > w && scale > 0.02 {
+        scale -= 0.02;
+    }
+    scale
 }
 
 /// `s` cut a character at a time from the end until it fits `w`.
@@ -702,7 +840,7 @@ fn frame(d: &Draw, b: &BoardView, out: &mut Vec<HudQuad>) {
     d.fill(
         [120.0, 22.0, 400.0, 430.0],
         [0.0; 3],
-        d.alpha * 0.55,
+        d.alpha * d.style.panel_alpha,
         "black",
         out,
     );
@@ -729,7 +867,7 @@ fn frame(d: &Draw, b: &BoardView, out: &mut Vec<HudQuad>) {
         s
     };
     let title = b.loc.message(b.gametype);
-    let s = fit(&title, b.map, 0.41, 0.025, true);
+    let s = fit(&title, b.map, 0.41, 0.025, d.style.title_fixed_left);
     let base = |row: f32, h: f32, scale: f32| row - (h - d.height(scale)) * 0.5;
     d.text(&title, LEFT, base(51.0, 24.0, 0.41), 0.41, WHITE, out);
     let x = 511.0 - (d.width(b.map, s) + 4.0);
@@ -758,7 +896,7 @@ fn objective(d: &Draw, b: &BoardView, top: f32, out: &mut Vec<HudQuad>) -> f32 {
     let mut y = top + 4.0;
     let line = |a: usize, z: usize, y: f32, out: &mut Vec<HudQuad>| {
         let s: String = text[a..z].iter().collect();
-        d.text(&s, LEFT, y + 9.0, SCALE, WHITE, out);
+        d.text(&s, LEFT, y + d.style.objective_text_y, SCALE, WHITE, out);
     };
     let newline = |i: usize| match text.get(i) {
         Some('\n') => Some(1),
@@ -820,7 +958,7 @@ fn objective(d: &Draw, b: &BoardView, top: f32, out: &mut Vec<HudQuad>) -> f32 {
 /// `0x3002a650`: the localized column headers. Returns the y under them.
 fn headers(d: &Draw, b: &BoardView, y: f32, width: f32, out: &mut Vec<HudQuad>) -> f32 {
     let mut x = LEFT;
-    for (_, share, key, right) in COLUMNS {
+    for &(_, share, key, right) in d.style.columns {
         if !key.is_empty() {
             let s = b.loc.get(key).unwrap_or(key);
             let off = if right {
@@ -828,7 +966,7 @@ fn headers(d: &Draw, b: &BoardView, y: f32, width: f32, out: &mut Vec<HudQuad>) 
             } else {
                 0.0
             };
-            d.text(s, x + off, y + 10.5, 0.3, WHITE, out);
+            d.text(s, x + off, y + d.style.header_text_y, 0.3, WHITE, out);
         }
         x += width * share;
     }
@@ -1080,7 +1218,7 @@ mod tests {
         assert_eq!(allies[0], LEFT);
         let banner = quad(&out, "gfx/hud/hud@mpflag_american.tga")[0];
         assert_eq!(banner.verts[1][0] - banner.verts[0][0], WIDTH);
-        assert_eq!(banner.verts[2][1] - banner.verts[0][1], BANNER_H);
+        assert_eq!(banner.verts[2][1] - banner.verts[0][1], COD1.banner_h);
         // No objective: the headers' 4 + 14 under the table's top.
         assert_eq!(allies[1], TOP + 4.0 + 14.0);
         assert_eq!(axis[1], allies[1] + 24.0 + 12.0 + 4.0);

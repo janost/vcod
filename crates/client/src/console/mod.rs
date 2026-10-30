@@ -55,6 +55,12 @@ impl Console {
                 None
             }
         };
+        Console::with_font(font)
+    }
+
+    /// A console drawing in `font`: CoD4's is a zone's `consoleFont`
+    /// (`cod4_hud::console_font`), its iwds holding no `.dat` font.
+    pub fn with_font(font: Option<Font>) -> Console {
         Console {
             open: false,
             frac: 0.0,
@@ -308,13 +314,20 @@ impl Console {
     /// (CoDMP15.exe 0x4185a0, CoDUOMP.exe 0x419a60) at (5, 479) on the
     /// 640x480 grid, scaled with the window.
     pub fn recording_line(&self, text: &str, v1: bool, w: f32, h: f32) -> Vec<HudQuad> {
-        let mut out = Vec::new();
-        if v1 {
-            self.text(&mut out, text, 5.0, 470.0);
-        } else {
-            let (sx, sy) = (w / 640.0, h / 480.0);
-            self.text_at(&mut out, text, 5.0 * sx, 479.0 * sy, CHAR_W * sx, sy);
+        if !v1 {
+            return self.screen_text(text, 5.0, 479.0, w, h);
         }
+        let mut out = Vec::new();
+        self.text(&mut out, text, 5.0, 470.0);
+        out
+    }
+
+    /// `text` with its baseline at (`x`, `y`) on the 640x480 virtual
+    /// screen, the console font's cell scaled with it.
+    pub fn screen_text(&self, text: &str, x: f32, y: f32, w: f32, h: f32) -> Vec<HudQuad> {
+        let (sx, sy) = (w / 640.0, h / 480.0);
+        let mut out = Vec::new();
+        self.text_at(&mut out, text, x * sx, y * sy, CHAR_W * sx, sy);
         out
     }
 

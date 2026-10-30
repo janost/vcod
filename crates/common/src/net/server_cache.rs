@@ -94,7 +94,7 @@ impl Entry {
     fn str(&self, at: usize) -> String {
         let field = &self.0[at..at + STRING];
         let end = field.iter().position(|&b| b == 0).unwrap_or(STRING);
-        field[..end].iter().map(|&b| b as char).collect()
+        crate::text::latin1(&field[..end])
     }
 
     /// `Q_strncpyz` into a 32-byte field: at most 31 bytes and a NUL.
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn names_are_cut_to_31_bytes() {
-        let e = Entry::new("1.2.3.4:1".parse().unwrap(), &"x".repeat(40));
+        let e = Entry::new("203.0.113.4:1".parse().unwrap(), &"x".repeat(40));
         assert_eq!(e.hostname().len(), 31);
     }
 

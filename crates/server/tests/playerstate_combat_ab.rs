@@ -613,9 +613,9 @@ fn the_grenade_and_melee_channels_match_retail_on_mp_carentan() {
 /// Needs `COD_DIR` at a 1.5 install (a UO one's `main/` is 1.5's).
 #[test]
 fn the_weapon_channel_matches_retail_on_15_mp_carentan() {
-    let Some(fs) = vcod_common::testing::game_fs()
-        .filter(|fs| vcod_server::server::install_protocol(fs).version == PROTOCOL_V6.version)
-    else {
+    let Some(fs) = vcod_common::testing::game_fs().filter(|fs| {
+        vcod_server::server::install_protocol(fs).transport.version == PROTOCOL_V6.transport.version
+    }) else {
         return;
     };
     check_on(&PROTOCOL_V6, fs, "mp_carentan", "dm", "combat-15");
@@ -626,9 +626,9 @@ fn the_weapon_channel_matches_retail_on_15_mp_carentan() {
 /// of each turn, so the walk is compared too.
 #[test]
 fn the_weapon_channel_matches_retail_on_15_mp_carentan_after_a_stall_turn() {
-    let Some(fs) = vcod_common::testing::game_fs()
-        .filter(|fs| vcod_server::server::install_protocol(fs).version == PROTOCOL_V6.version)
-    else {
+    let Some(fs) = vcod_common::testing::game_fs().filter(|fs| {
+        vcod_server::server::install_protocol(fs).transport.version == PROTOCOL_V6.transport.version
+    }) else {
         return;
     };
     check_on(&PROTOCOL_V6, fs, "mp_carentan", "dm", "combat-15-stall");

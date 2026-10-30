@@ -4,6 +4,7 @@
 //! (docs/research/coduo-vehicles.md 10.1).
 
 use vcod_common::pk3::Pk3Fs;
+use vcod_common::text::atoi;
 
 /// `type`: `VEH_ParseSpecificField` (0x7c1ca) maps these strings to 0..5.
 pub const KIND_FOUR_WHEEL: i32 = 1;
@@ -258,10 +259,6 @@ fn info_pairs(s: &str) -> Vec<(String, String)> {
 
 fn atof(s: &str) -> f32 {
     crate::game::builtins::cvar::atof(s)
-}
-
-fn atoi(s: &str) -> i32 {
-    crate::game::builtins::cvar::atoi(s)
 }
 
 #[cfg(test)]

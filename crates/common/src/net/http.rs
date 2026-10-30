@@ -224,9 +224,9 @@ mod tests {
     #[test]
     fn urls_split_into_host_port_and_path() {
         assert_eq!(
-            parse_url("http://167.235.192.175:23140/main/foo.pk3").unwrap(),
+            parse_url("http://203.0.113.5:23140/main/foo.pk3").unwrap(),
             Url {
-                host: "167.235.192.175".into(),
+                host: "203.0.113.5".into(),
                 port: 23140,
                 path: "/main/foo.pk3".into()
             }

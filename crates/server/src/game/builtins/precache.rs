@@ -37,7 +37,7 @@ pub fn lookup(folded: &str) -> Option<Builtin> {
 /// The name argument, accepting both a plain string and a localized
 /// literal: `precacheString(&"MPSCRIPT_KILLCAM")` passes `Value::Localized`
 /// and the two spellings name the same configstring text.
-fn name_arg(cx: &Cx, args: &[Value], what: &'static str) -> Result<String, ErrorKind> {
+pub(crate) fn name_arg(cx: &Cx, args: &[Value], what: &'static str) -> Result<String, ErrorKind> {
     match args.first() {
         Some(Value::String(a)) | Some(Value::Localized(a)) => Ok(cx.resolve(*a).to_string()),
         _ => Err(ErrorKind::BadType(what)),
@@ -46,7 +46,7 @@ fn name_arg(cx: &Cx, args: &[Value], what: &'static str) -> Result<String, Error
 
 /// The check each gated builtin makes first, before it reads its argument
 /// (game.mp 0x5ecb8..0x5ee00, strings 0x77580..0x77740).
-fn before_any_wait(host: &GameHost, builtin: &str) -> Result<(), ErrorKind> {
+pub(crate) fn before_any_wait(host: &GameHost, builtin: &str) -> Result<(), ErrorKind> {
     if host.initializing {
         return Ok(());
     }
@@ -122,6 +122,7 @@ pub fn precache_shader(
     if text.is_empty() {
         return Err(ErrorKind::Custom("Shader name string is empty".into()));
     }
+    let text = host.shader_name(&text);
     host.allocators
         .index(&mut host.configstrings, CsRange::Shader, &text)?;
     Ok(Value::Undefined)

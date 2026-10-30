@@ -201,7 +201,8 @@ fn a_kills_death_frame_matches_15b_by_its_cmds() {
         return;
     };
     // UO's `main/` is 1.5's, so this one runs at a UO install too.
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         return;
     }
     check(
@@ -243,7 +244,8 @@ fn a_kills_death_timers_match_15b_by_its_cmds() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         return;
     }
     check(

@@ -2,15 +2,135 @@
 //! sky (and so the sun) draws in a frame
 //! (docs/research/cod11-shader-scripts.md section 8, "The sun").
 
+use crate::asset_source::AssetSource;
 use glam::Vec3;
 
-use crate::bsp::{self, Bsp};
+use crate::bsp;
+use crate::mapworld::MapWorld;
+use crate::material::{Material, MaterialLib};
 use crate::mesh::{self, MaterialKind};
-use crate::pk3::Pk3Fs;
-use crate::shader::{Shader, ShaderLib, SunFile};
+
+/// `scripts/<name>.sun`, the cvar dump a sky block's `sunfile <name>` token
+/// names (loaded by CoDMP.exe via `"scripts/%s.sun"`, 0x4e7f30). Defaults
+/// are the cvars' registration strings (the `r_sun*` block of 0x4b3300 from
+/// 0x4b41b1 on), which a key the file leaves out keeps.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SunFile {
+    /// `r_sunsprite_shader`; `None` draws no disc ("0" is how mp_harbor.sun
+    /// disables it).
+    pub sprite: Option<String>,
+    /// `r_sunsprite_size`: the disc's half-width is this times 0.0013110929
+    /// at unit distance (0x4e7980), and in 640-wide pixels the radius of
+    /// the flare's visibility window (0x4d9250).
+    pub sprite_size: f32,
+    /// `r_sunflare_shader`; "0" or empty draws no flare.
+    pub flare: Option<String>,
+    pub flare_min_size: f32,
+    pub flare_max_size: f32,
+    pub flare_min_angle: f32,
+    pub flare_max_angle: f32,
+    pub flare_max_alpha: f32,
+    /// Seconds.
+    pub flare_fade_in: f32,
+    pub flare_fade_out: f32,
+    /// `r_sunblind_*`: darkens the screen, `max` is `max_darken`.
+    pub blind: SunFade,
+    /// `r_sunglare_*`: lightens the screen, `max` is `max_lighten`.
+    pub glare: SunFade,
+}
+
+/// The blind and glare screen washes: full strength within `max_angle`
+/// degrees of the sun, none past `min_angle`, eased in and out over the
+/// fade times in seconds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SunFade {
+    pub min_angle: f32,
+    pub max_angle: f32,
+    pub max: f32,
+    pub fade_in: f32,
+    pub fade_out: f32,
+}
+
+impl Default for SunFile {
+    fn default() -> Self {
+        let fade = SunFade {
+            min_angle: 30.0,
+            max_angle: 5.0,
+            max: 0.75,
+            fade_in: 0.5,
+            fade_out: 3.0,
+        };
+        SunFile {
+            sprite: None,
+            sprite_size: Self::DEFAULT_SPRITE_SIZE,
+            flare: Some("sunFlareShader".into()),
+            flare_min_size: 0.0,
+            flare_max_size: 2500.0,
+            flare_min_angle: 45.0,
+            flare_max_angle: 2.0,
+            flare_max_alpha: 1.0,
+            flare_fade_in: 1.0,
+            flare_fade_out: 1.0,
+            blind: fade,
+            glare: fade,
+        }
+    }
+}
+
+impl SunFile {
+    /// Engine default for `r_sunsprite_size`; every stock `.sun` that wants a
+    /// disc sets both fields explicitly, so this only covers partial files.
+    pub const DEFAULT_SPRITE_SIZE: f32 = 16.0;
+
+    pub fn parse(text: &str) -> SunFile {
+        let mut sf = SunFile::default();
+        let shader = |v: &str| (!v.is_empty() && v != "0").then(|| v.to_string());
+        for line in text.lines() {
+            let Some((key, value)) = line.trim().split_once(char::is_whitespace) else {
+                continue;
+            };
+            let value = value.trim().trim_matches('"');
+            let n = value.parse::<f32>().ok();
+            let key = key.trim().to_ascii_lowercase();
+            let num = match key.as_str() {
+                "r_sunsprite_shader" => {
+                    sf.sprite = shader(value);
+                    continue;
+                }
+                "r_sunflare_shader" => {
+                    sf.flare = shader(value);
+                    continue;
+                }
+                "r_sunsprite_size" => &mut sf.sprite_size,
+                "r_sunflare_min_size" => &mut sf.flare_min_size,
+                "r_sunflare_max_size" => &mut sf.flare_max_size,
+                "r_sunflare_min_angle" => &mut sf.flare_min_angle,
+                "r_sunflare_max_angle" => &mut sf.flare_max_angle,
+                "r_sunflare_max_alpha" => &mut sf.flare_max_alpha,
+                "r_sunflare_fadein" => &mut sf.flare_fade_in,
+                "r_sunflare_fadeout" => &mut sf.flare_fade_out,
+                "r_sunblind_min_angle" => &mut sf.blind.min_angle,
+                "r_sunblind_max_angle" => &mut sf.blind.max_angle,
+                "r_sunblind_max_darken" => &mut sf.blind.max,
+                "r_sunblind_fadein" => &mut sf.blind.fade_in,
+                "r_sunblind_fadeout" => &mut sf.blind.fade_out,
+                "r_sunglare_min_angle" => &mut sf.glare.min_angle,
+                "r_sunglare_max_angle" => &mut sf.glare.max_angle,
+                "r_sunglare_max_lighten" => &mut sf.glare.max,
+                "r_sunglare_fadein" => &mut sf.glare.fade_in,
+                "r_sunglare_fadeout" => &mut sf.glare.fade_out,
+                _ => continue,
+            };
+            if let Some(n) = n {
+                *num = n;
+            }
+        }
+        sf
+    }
+}
 
 /// Each material's draw decision over the lib's parsed surface bits.
-pub fn material_kinds(lib: &ShaderLib, bsp: &Bsp) -> Vec<MaterialKind> {
+pub fn material_kinds(lib: &MaterialLib, bsp: &MapWorld) -> Vec<MaterialKind> {
     bsp.materials
         .iter()
         .map(|m| match lib.get(&m.name) {
@@ -36,7 +156,11 @@ pub fn pick_sky(candidates: &[(String, u32)]) -> Option<String> {
 
 /// The map's active sky: the authored `skyparms` blocks its materials name,
 /// ranked by soup reference count. The name and its material index.
-pub fn active_sky(lib: &ShaderLib, bsp: &Bsp, kinds: &[MaterialKind]) -> Option<(String, u16)> {
+pub fn active_sky(
+    lib: &MaterialLib,
+    bsp: &MapWorld,
+    kinds: &[MaterialKind],
+) -> Option<(String, u16)> {
     let norm = |s: &str| s.to_lowercase().replace('\\', "/");
     let mut material_idx = std::collections::HashMap::new();
     for (i, m) in bsp.materials.iter().enumerate() {
@@ -62,7 +186,7 @@ pub fn active_sky(lib: &ShaderLib, bsp: &Bsp, kinds: &[MaterialKind]) -> Option<
 
 /// The direction of the map's lump-30 sun light (`world+0x114`), the last
 /// kind-1 light. Retail draws no sun without one (0x4e83f0).
-pub fn sun_light(bsp: &Bsp) -> Option<Vec3> {
+pub fn sun_light(bsp: &MapWorld) -> Option<Vec3> {
     bsp.lights
         .iter()
         .rev()
@@ -83,7 +207,7 @@ pub struct MapSun {
 /// `None` where retail draws no sun: no `sunfile` on the sky block, a
 /// `.sun` file that does not load (the world load zeroes the sun state and
 /// only a loaded file refills it), or no lump-30 sun light.
-pub fn load(fs: &Pk3Fs, sky: &Shader, bsp: &Bsp) -> Option<MapSun> {
+pub fn load(fs: &dyn AssetSource, sky: &Material, bsp: &MapWorld) -> Option<MapSun> {
     let name = sky.sunfile.as_ref()?;
     let Some(bytes) = fs.read(&format!("scripts/{name}.sun")) else {
         log::debug!("sunfile: scripts/{name}.sun not found");

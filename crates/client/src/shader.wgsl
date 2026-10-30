@@ -7,7 +7,8 @@ struct Camera {
     eye_fog_mode: vec4<f32>,
     // rgb fog colour, a density (GL_EXP)
     fog_color_density: vec4<f32>,
-    // x near, y far (GL_LINEAR)
+    // x near, y far (GL_LINEAR); z 1: radial distance (CoD2); w the exp
+    // fog's start distance (CoD4, 0 before it)
     fog_range: vec4<f32>,
     // xyz unit view forward; fog depth rides along it
     view_fwd: vec4<f32>,
@@ -50,6 +51,12 @@ struct StageParams {
     // the deform records and their kinds (deform.wgsl)
     deform: array<vec4<f32>, 3>,
     deform_kinds: vec4<u32>,
+    // a CoD4 falloff stage: [begin rgb, scale], [end rgb, bias]; its kind
+    // in eye_off.w (0 distance, 1 angle), a CoD4 eye offset in eye_off.z
+    falloff: array<vec4<f32>, 2>,
+    // a CoD4 world fx draw (renderer::cod4_worldfx): x featherParms.x,
+    // yz distortionScale
+    fx: vec4<f32>,
 };
 @group(2) @binding(0) var<uniform> stage: StageParams;
 // Bundle 1's image when it is neither lightmap nor absent (white is bound then).
@@ -106,6 +113,9 @@ struct VsOut {
     // BSP vertices are world space at the brush model's spawn pose.
     @location(3) world_pos: vec3<f32>,
     @location(4) uv1: vec2<f32>,
+    // CoD2's fog amount, per vertex as its techniques' `Fog_VertexCalc`
+    // writes it (cod2-client-perf.md 9; `pixel_fog`); 0 elsewhere
+    @location(5) fog: f32,
 };
 
 @vertex
@@ -121,6 +131,7 @@ fn map_vertex(in: VsIn) -> VsOut {
     out.lm_uv = in.lm_uv;
     out.color = in.color;
     out.world_pos = world.xyz;
+    out.fog = vertex_fog(world.xyz);
     // legacy draws have no second bundle
     out.uv1 = vec2<f32>(0.0);
     return out;
@@ -198,8 +209,40 @@ fn vs_stage(in: VsIn) -> VsOut {
     }
     let world = camera.model * vec4<f32>(pos, 1.0);
     out.clip = camera.view_proj * world;
+    // CoD4's eyeOffsetParms.x in eye_off.z (the sky's flag unset): the
+    // vertex that many units nearer along its view ray, the same pixel
+    // nearer in depth (`*_eo*` vertex shaders, cod4-world.md 9.5)
+    let eye_pull = stage.eye_off.z;
+    if ((stage.flags & F_EYE_OFFSET) == 0u && eye_pull != 0.0 && out.clip.w > eye_pull) {
+        let eye = camera.eye_fog_mode.xyz;
+        let near = eye + (world.xyz - eye) * ((out.clip.w - eye_pull) / out.clip.w);
+        out.clip = camera.view_proj * vec4<f32>(near, 1.0);
+    }
     out.color = in.color;
+    if (stage.falloff[0].w != 0.0) {
+        if (stage.eye_off.w == 0.0) {
+            // vertcol_simple_fog_df: the falloff over the xy distance from
+            // the eye to the texture coordinates (cod4-world.md 9.4)
+            let d = distance(camera.eye_fog_mode.xy, in.uv);
+            let w = saturate(stage.falloff[0].w * d + stage.falloff[1].w);
+            out.color = vec4<f32>(
+                in.color.rgb * mix(stage.falloff[1].rgb, stage.falloff[0].rgb, w),
+                in.color.a * w,
+            );
+        } else {
+            // vertcol_simple_fog_foa: the falloff over the squared cosine
+            // between the view ray and the normal (cod4-world.md 9.5)
+            let m = mat3x3<f32>(camera.model[0].xyz, camera.model[1].xyz, camera.model[2].xyz);
+            let c = dot(normalize(world.xyz - camera.eye_fog_mode.xyz), normalize(m * normal));
+            let w = saturate(stage.falloff[0].w * c * c + stage.falloff[1].w);
+            out.color = vec4<f32>(
+                in.color.rgb * w * mix(stage.falloff[1].rgb, stage.falloff[0].rgb, w),
+                in.color.a,
+            );
+        }
+    }
     out.world_pos = world.xyz;
+    out.fog = vertex_fog(world.xyz);
     out.lm_uv = in.lm_uv;
     // the eye in the brush model's frame; `camera.model` is a rigid pose
     let m3 = mat3x3<f32>(camera.model[0].xyz, camera.model[1].xyz, camera.model[2].xyz);
@@ -340,16 +383,36 @@ fn fog_amount(world_pos: vec3<f32>) -> f32 {
     if (mode == 0.0) {
         return 0.0;
     }
-    let d = max(dot(world_pos - camera.eye_fog_mode.xyz, camera.view_fwd.xyz), 0.0);
+    var d = max(dot(world_pos - camera.eye_fog_mode.xyz, camera.view_fwd.xyz), 0.0);
+    // CoD2's fog runs on the radial distance (fog_range.z 1; fogcalc.hlsl)
+    if (camera.fog_range.z > 0.5) {
+        d = length(world_pos - camera.eye_fog_mode.xyz);
+    }
     if (mode == 1.0) {
-        return 1.0 - exp(-camera.fog_color_density.a * d);
+        return 1.0 - exp(-camera.fog_color_density.a * max(d - camera.fog_range.w, 0.0));
     }
     let span = max(camera.fog_range.y - camera.fog_range.x, 0.0001);
     return clamp((d - camera.fog_range.x) / span, 0.0, 1.0);
 }
 
-fn apply_fog(rgb: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
-    return mix(rgb, camera.fog_color_density.rgb, fog_amount(world_pos));
+// CoD2 (fog_range.z 1) fogs per vertex: `VsOut::fog`.
+fn vertex_fog(world_pos: vec3<f32>) -> f32 {
+    if (camera.fog_range.z > 0.5) {
+        return fog_amount(world_pos);
+    }
+    return 0.0;
+}
+
+// The fragment's fog amount: the vertex's on CoD2, else at the pixel.
+fn pixel_fog(in: VsOut) -> f32 {
+    if (camera.fog_range.z > 0.5) {
+        return in.fog;
+    }
+    return fog_amount(in.world_pos);
+}
+
+fn apply_fog(rgb: vec3<f32>, in: VsOut) -> vec3<f32> {
+    return mix(rgb, camera.fog_color_density.rgb, pixel_fog(in));
 }
 
 fn shade(in: VsOut, albedo: vec4<f32>) -> vec3<f32> {
@@ -363,7 +426,15 @@ fn shade(in: VsOut, albedo: vec4<f32>) -> vec3<f32> {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = sample_image(t_diffuse, in.uv, 0u);
     if (albedo.a < 0.5) { discard; }
-    return vec4<f32>(apply_fog(shade(in, albedo), in.world_pos), 1.0);
+    return vec4<f32>(apply_fog(shade(in, albedo), in), 1.0);
+}
+
+// fs_main without the cut, for an image no texel of which it drops: a
+// shader with no discard keeps early depth writes (cod11-client-perf.md 5).
+@fragment
+fn fs_main_solid(in: VsOut) -> @location(0) vec4<f32> {
+    let albedo = sample_image(t_diffuse, in.uv, 0u);
+    return vec4<f32>(apply_fog(shade(in, albedo), in), 1.0);
 }
 
 // Props: texture times the vertex colour, no lightmap. Only an alpha-testing
@@ -372,21 +443,28 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 fn fs_prop(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = sample_image(t_diffuse, in.uv, 0u);
     if (albedo.a < 0.5) { discard; }
-    return vec4<f32>(apply_fog(albedo.rgb * in.color.rgb, in.world_pos), 1.0);
+    return vec4<f32>(apply_fog(albedo.rgb * in.color.rgb, in), 1.0);
+}
+
+// fs_prop without the cut, as fs_main_solid.
+@fragment
+fn fs_prop_solid(in: VsOut) -> @location(0) vec4<f32> {
+    let albedo = sample_image(t_diffuse, in.uv, 0u);
+    return vec4<f32>(apply_fog(albedo.rgb * in.color.rgb, in), 1.0);
 }
 
 // Alpha-to-coverage: sampled alpha drives MSAA coverage for antialiased cutout edges.
 @fragment
 fn fs_overlay(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = sample_image(t_diffuse, in.uv, 0u);
-    return vec4<f32>(apply_fog(shade(in, albedo), in.world_pos), albedo.a);
+    return vec4<f32>(apply_fog(shade(in, albedo), in), albedo.a);
 }
 
 // polygonOffset terrain blends, weighted by vertex alpha (`alphagen vertex`).
 @fragment
 fn fs_layer(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = sample_image(t_diffuse, in.uv, 0u);
-    return vec4<f32>(apply_fog(shade(in, albedo), in.world_pos), albedo.a * in.color.a);
+    return vec4<f32>(apply_fog(shade(in, albedo), in), albedo.a * in.color.a);
 }
 
 // alphaFunc decode; GE128 carries both low bits so test the pair first.
@@ -410,6 +488,19 @@ fn alphafunc_pass(a: f32) -> bool {
 // (terrain overlays over base ground).
 @fragment
 fn fs_stage(in: VsOut) -> @location(0) vec4<f32> {
+    return stage_shade(in);
+}
+
+// fs_stage's colour times its alpha: a CoD4 premultiplying pixel shader
+// under (OneMinusDstColor, One), which no blend factor can scale by alpha
+// (StageVariant::AdditiveInvDst, cod4-world.md 8.1).
+@fragment
+fn fs_stage_premul(in: VsOut) -> @location(0) vec4<f32> {
+    let c = stage_shade(in);
+    return vec4<f32>(c.rgb * c.a, c.a);
+}
+
+fn stage_shade(in: VsOut) -> vec4<f32> {
     // derivatives before any branch; only vc_shadows' blends read it
     let face_n = cross(dpdx(in.world_pos), dpdy(in.world_pos));
     var c0: vec4<f32>;
@@ -439,12 +530,27 @@ fn fs_stage(in: VsOut) -> @location(0) vec4<f32> {
     }
     if (!sky_unfogged && (stage.flags & F_NOFOG) == 0u) {
         if ((stage.flags & F_FOG_BLACK) != 0u) {
-            rgb *= 1.0 - fog_amount(in.world_pos);
+            rgb *= 1.0 - pixel_fog(in);
         } else {
-            rgb = apply_fog(rgb, in.world_pos);
+            rgb = apply_fog(rgb, in);
         }
     }
     return vec4<f32>(rgb, col.a);
+}
+
+// A CoD2 multiply decal (`vertcol_mul*`, mul.hlsl): the colour map times
+// the vertex rgb, faded to white by the vertex alpha (the map's alpha is
+// unread), blended Zero/SrcColor so the framebuffer is multiplied by it. A
+// fogged one fades to white with the fog: one pass in place of retail's
+// additive fix-up pass (cod2-materials.md 9, "Multiply").
+@fragment
+fn fs_multiply(in: VsOut) -> @location(0) vec4<f32> {
+    let c0 = sample_image(t_diffuse, in.uv, stage.flags);
+    var m = mix(vec3<f32>(1.0), c0.rgb * in.color.rgb, in.color.a);
+    if ((stage.flags & F_NOFOG) == 0u) {
+        m = mix(m, vec3<f32>(1.0), pixel_fog(in));
+    }
+    return vec4<f32>(m, 1.0);
 }
 
 // Fixed-function texturing: unit 0 modulates bundle 0 by the stage colour
@@ -617,4 +723,118 @@ fn fs_dlight(in: DlVsOut) -> @location(0) vec4<f32> {
         rgb *= 1.0 - fog_amount(in.world_pos);
     }
     return vec4<f32>(rgb, col.a);
+}
+
+// ---- CoD4 world fx (renderer::cod4_worldfx) ----
+
+// Group 3 of the world fx pipelines (crate::scene_copy): the soft
+// particles' linear view depth (retail's floatZ), the frame's colour copy
+// (resolvedPostSun) and its sampler, clear of the dlight pass's bindings.
+@group(3) @binding(5) var wfx_linz: texture_2d<f32>;
+@group(3) @binding(6) var wfx_copy: texture_2d<f32>;
+@group(3) @binding(7) var wfx_samp: sampler;
+
+// A world or static model zfeather set's two fades (zfeather_*.hlsl,
+// cod4-effects.md 14): the near fade saturate(w k), which retail folds into
+// the vertex alpha, times the depth feather saturate(|floatZ - w| k), both
+// on the view depth w and featherParms.x k.
+fn world_feather(in: VsOut) -> f32 {
+    let k = stage.fx.x;
+    let w = dot(in.world_pos - camera.eye_fog_mode.xyz, camera.view_fwd.xyz);
+    let scene = textureLoad(wfx_linz, vec2<i32>(in.clip.xy), 0).r;
+    return saturate(w * k) * saturate(abs(scene - w) * k);
+}
+
+// Blends that read the source alpha: the fade scales it.
+@fragment
+fn fs_stage_feather(in: VsOut) -> @location(0) vec4<f32> {
+    let c = stage_shade(in);
+    return vec4<f32>(c.rgb, c.a * world_feather(in));
+}
+
+// (One, One) and the colour multiplies, which read no source alpha:
+// zfeather_add*.hlsl scales the colour by the fade too.
+@fragment
+fn fs_stage_feather_rgb(in: VsOut) -> @location(0) vec4<f32> {
+    let c = stage_shade(in);
+    let f = world_feather(in);
+    return vec4<f32>(c.rgb * f, c.a * f);
+}
+
+// fs_stage_premul with the fade in its alpha.
+@fragment
+fn fs_stage_premul_feather(in: VsOut) -> @location(0) vec4<f32> {
+    let c = stage_shade(in);
+    let a = c.a * world_feather(in);
+    return vec4<f32>(c.rgb * a, a);
+}
+
+struct DistortIn {
+    @location(0) pos: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) lm_uv: vec2<f32>,
+    @location(3) normal: vec3<f32>,
+    @location(4) color: vec4<f32>,
+    @location(5) tangent: vec3<f32>,
+    @location(6) binormal: vec3<f32>,
+};
+
+struct DistortOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    // the screen lookup and its two bends, projected (o5, o3, o4)
+    @location(2) look: vec4<f32>,
+    @location(3) bend_t: vec4<f32>,
+    @location(4) bend_b: vec4<f32>,
+};
+
+// distortion_scale_zfeather.hlsl, the world set's technique 5 (cod4-world.md
+// 9.5, cod4-effects.md 17): the screen lookup (clip x and y times
+// clipSpaceLookupScale (0.5, -0.5) plus w times its offset (0.5, 0.5)),
+// and the tangent and binormal (tangent x normal) turned into clip space
+// without the translation, scaled by distortionScale and the vertex red
+// and green; the bytecode's tangent terms keep +0.5 on y.
+@vertex
+fn vs_world_distort(in: DistortIn) -> DistortOut {
+    var out: DistortOut;
+    let world = camera.model * vec4<f32>(in.pos, 1.0);
+    let c = camera.view_proj * world;
+    out.clip = c;
+    out.uv = in.uv;
+    out.color = in.color;
+    let m3 = mat3x3<f32>(camera.model[0].xyz, camera.model[1].xyz, camera.model[2].xyz);
+    let t = m3 * in.tangent;
+    let b = cross(t, m3 * in.normal);
+    let tc = camera.view_proj * vec4<f32>(t, 0.0);
+    let bc = camera.view_proj * vec4<f32>(b, 0.0);
+    out.look = vec4<f32>(c.x * 0.5 + c.w * 0.5, -c.y * 0.5 + c.w * 0.5, 0.0, c.w);
+    out.bend_t = stage.fx.y * in.color.r * vec4<f32>(tc.x * 0.5, tc.y * 0.5, 0.0, tc.w);
+    out.bend_b = -stage.fx.z * in.color.g * vec4<f32>(bc.x * 0.5, bc.y * 0.5, 0.0, bc.w);
+    return out;
+}
+
+// CoD2's clip z on retail's projection, as fx.wgsl's FEATHER_K and
+// FEATHER_NEAR: the distortion shader's depth test reads it.
+const WFX_CLIP_K: f32 = 0.99950027;
+const WFX_CLIP_NEAR: f32 = 4.0;
+
+// distortion_zfeather.hlsl: the normal map (the material's colour map)
+// as 2 n - 1 bends the lookup into the frame's copy; where the copy's
+// depth there is nearer than this surface the plain lookup is read. The
+// colour is the copy times the vertex blue.
+@fragment
+fn fs_world_distort(in: DistortOut) -> @location(0) vec4<f32> {
+    let n = sample_image(t_diffuse, in.uv, stage.flags);
+    let off = n.xy * 2.0 - 1.0;
+    let q = in.look + off.x * in.bend_t + off.y * in.bend_b;
+    let bent = q.xy / q.w;
+    let flat_uv = in.look.xy / in.look.w;
+    let dims = vec2<f32>(textureDimensions(wfx_linz));
+    let texel = clamp(vec2<i32>(bent * dims), vec2(0), vec2<i32>(dims) - 1);
+    let z = textureLoad(wfx_linz, texel, 0).r;
+    let bent_rgb = textureSampleLevel(wfx_copy, wfx_samp, bent, 0.0).rgb;
+    let flat_rgb = textureSampleLevel(wfx_copy, wfx_samp, flat_uv, 0.0).rgb;
+    let rgb = select(flat_rgb, bent_rgb, abs(z) - WFX_CLIP_K * (in.look.w - WFX_CLIP_NEAR) >= 0.0);
+    return vec4<f32>(rgb * in.color.b, n.a * in.color.a);
 }

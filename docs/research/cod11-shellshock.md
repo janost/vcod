@@ -6,10 +6,9 @@ section 9, "Indexing past the first wait"; this is everything after the
 fields reach the client.
 
 Modules: `cgame_mp_x86.dll` 1.1 (image base `0x30000000`), `CoDMP.exe` 1.1
-(`0x00400000`), `game.mp.i386.so` 1.1d (file addresses). The decompilations
-are `private/ghidra/cgmp11.c` and `CoDMP.exe.c`; where Ghidra lost a
-register argument I read `cgmp11.asm` / `codmp.asm` and cite the
-instruction. Syscall numbers are cases of `CL_CgameSystemCalls`
+(`0x00400000`), `game.mp.i386.so` 1.1d (file addresses). Both were decompiled
+with Ghidra; where Ghidra lost a register argument I read the disassembly
+and cite the instruction. Syscall numbers are cases of `CL_CgameSystemCalls`
 (`CoDMP.exe 0x401df0`).
 
 ## 1. Stock use

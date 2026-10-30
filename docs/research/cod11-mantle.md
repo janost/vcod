@@ -31,13 +31,13 @@ findings are stated against the Linux binary only.
 
 Struct layouts come from the disassembly itself, cross-checked against the
 CoDExtended `shared.h` playerState/usercmd definitions
-(`private/reference/CoDExtended/src/shared.h`). Warning for future readers:
+(CoDExtended's `src/shared.h`). Warning for future readers:
 CoDExtended offsets match the *internal* server struct, while netfield-table
 offsets (see `nf_mp.txt`, `docs/protocol-1.1.md`) index a different layout -
 e.g. `groundEntityNum` lives at ps+0x54 internally (the code writes 1023 there)
 but at wire offset 124. Never mix the two.
 
-Disassembly listings: `private/ghidra/gamemp.asm` (objdump of the .so). Call
+Disassembly: `objdump` of the .so. Call
 targets in that listing need the `.rel.text` PC32 relocations resolved manually;
 relocation entries also carry names for data references (`pml`, `pm`,
 `bg_ladder_yawcap`, ...).
@@ -58,9 +58,8 @@ the waterjump/ladder dispatch - is correct about *location* and wrong about
   1.1/1.5: zero hits for "mantl" in all of them. "climb" hits only as anim
   state tokens (`CLIMBUP`, `CLIMBDOWN`, `CLIMBMOUNT`, `CLIMBDISMOUNT`) in the
   `mp/playeranim.script` token table shared with AI animation parsing.
-- **Decompilations** (`private/ghidra/cgmp11.c`, `cod11.c`, `cod15.c`,
-  `CoDMP.exe.c`; note `cod11.c`/`cod15.c` are singleplayer cgamex86.dll, not
-  game_mp): no climb/mantle-labelled references. cgame_mp knows exactly one
+- **Decompilations** (`cgame_mp_x86.dll` 1.1, `cgamex86.dll` 1.1 and 1.5,
+  `CoDMP.exe`; the two `cgamex86.dll` are singleplayer, not game_mp): no climb/mantle-labelled references. cgame_mp knows exactly one
   ladder string, `"hintLadder"` (use-button hint).
 - **Trace sites.** Every indirect call through the four trace hooks in
   `pmove_t` (`pm+0xE8` trace, `+0xEC`, `+0xF0`, `+0xF4`, read via
@@ -646,7 +645,7 @@ UO), and what vcod runs at each (2026-10-18):
 | `G_MissileLandAngles`, `fire_grenade` | 0x53707.., 0x54585 | same | the missile's angles (cod11-combat.md) |
 
 VERIFIED, the addresses; the table's "1.5b / UO" function names come from
-the Ghidra exports (`game15.so.c`, `game.mp.uo.i386.so.c`), whose static
+the Ghidra exports of the 1.5b and UO game modules, whose static
 functions are unnamed. VERIFIED live (2026-10-18, `playerstate_slope_ab`,
 the two prone crawls `mp_carentan-dm-slope-8ms-prone-street.txt` and
 `-mound.txt`): with the view yaw placed by a float, our view sat up to

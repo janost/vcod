@@ -56,8 +56,8 @@
 //! always run.
 
 use std::rc::Rc;
+use vcod_common::asset_source::{AssetSource, RawFile};
 
-use vcod_common::pk3::Pk3Fs;
 use vcod_gsc::{FuncRef, Loader, ScriptSource, Value, Vm};
 use vcod_server::cvars::Cvars;
 use vcod_server::game::host::{ClientEvent, GameHost};
@@ -159,7 +159,10 @@ fn probe_ents_matches_retail() {
         .load(&mut vm, &path)
         .unwrap_or_else(|e| panic!("probe_ents does not load: {e:?}"));
 
-    let mut host = GameHost::new(vec![String::new(); 2048]);
+    let mut host = GameHost::new(
+        &vcod_server::game::profile::COD1_11,
+        vec![String::new(); 2048],
+    );
     let bsp_path = fs
         .resolve_map("mp_pavlov")
         .expect("mp_pavlov.bsp in the mounted paks");
@@ -222,7 +225,10 @@ fn probe_delete_matches_retail() {
         .load(&mut vm, &path)
         .unwrap_or_else(|e| panic!("probe_delete does not load: {e:?}"));
 
-    let mut host = GameHost::new(vec![String::new(); 2048]);
+    let mut host = GameHost::new(
+        &vcod_server::game::profile::COD1_11,
+        vec![String::new(); 2048],
+    );
     let bsp_path = fs
         .resolve_map("mp_pavlov")
         .expect("mp_pavlov.bsp in the mounted paks");
@@ -266,7 +272,10 @@ fn probe_delete_matches_retail() {
 #[test]
 fn probe_cvar_matches_retail() {
     let (mut vm, main) = install("probe_cvar");
-    let mut host = GameHost::new(vec![String::new(); 2048]);
+    let mut host = GameHost::new(
+        &vcod_server::game::profile::COD1_11,
+        vec![String::new(); 2048],
+    );
     vm.call_now(&mut host, main, None, Vec::new())
         .unwrap_or_else(|e| panic!("probe_cvar main errored: {e:?}"));
 
@@ -288,7 +297,10 @@ fn probe_cvar_matches_retail() {
 #[test]
 fn probe_not_string_matches_retail() {
     let (mut vm, main) = install("probe_not_string");
-    let mut host = GameHost::new(vec![String::new(); 2048]);
+    let mut host = GameHost::new(
+        &vcod_server::game::profile::COD1_11,
+        vec![String::new(); 2048],
+    );
     host.cvars.set("scr_allow_fg42", "0");
     vm.call_now(&mut host, main, None, Vec::new())
         .unwrap_or_else(|e| panic!("probe_not_string main errored: {e:?}"));
@@ -305,7 +317,10 @@ fn probe_not_string_matches_retail() {
 fn run_stale_probe(name: &str) -> (Vec<String>, bool) {
     let run = |threaded: bool| {
         let (mut vm, main) = install(name);
-        let mut host = GameHost::new(vec![String::new(); 2048]);
+        let mut host = GameHost::new(
+            &vcod_server::game::profile::COD1_11,
+            vec![String::new(); 2048],
+        );
         vm.call_now(&mut host, main, None, Vec::new())
             .unwrap_or_else(|e| panic!("{name} main errored: {e:?}"));
         let level = vm.level_id();
@@ -384,7 +399,7 @@ fn probe_stale_handles_match_retail() {
 /// script.rs` is the half this borrows; a private type there cannot be
 /// imported into an integration test.
 struct PakWithProbe {
-    fs: Rc<Pk3Fs>,
+    fs: Rc<dyn AssetSource>,
     path: String,
     text: String,
 }
@@ -394,8 +409,8 @@ impl ScriptSource for PakWithProbe {
         if canonical == self.path {
             return Some(self.text.clone());
         }
-        let bytes = self.fs.read(&format!("{canonical}.gsc"))?;
-        Some(String::from_utf8_lossy(&bytes).into_owned())
+        let raw = self.fs.load::<RawFile>(&format!("{canonical}.gsc")).ok()?;
+        Some(raw.text().into_owned())
     }
 }
 
@@ -447,7 +462,7 @@ fn probe_bootstrap_matches_retail() {
 /// behind: `game[]`, `level` and an entity handle held in `game[]`, across
 /// `map_restart(true)`, `exitLevel(false)` and `exitLevel(true)`. Nothing
 /// short of the whole server reproduces that — the two builtins queue a
-/// console line, `Server::tick` drains it, and the level that comes back is
+/// console line, `engine::tick` drains it, and the level that comes back is
 /// what prints the after-half — so they are claimed here rather than in
 /// `crates/gsc`, where the VM has no host that can restart a level.
 ///

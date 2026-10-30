@@ -156,6 +156,45 @@ impl WeaponTable {
         }
     }
 
+    /// A CoD2 level's table: index 0 empty, then `defs` in the order the
+    /// level named each weapon (`builtins::cod2::register_weapon`), indexed
+    /// and alt-linked as [`WeaponTable::load`] does.
+    pub fn cod2(names: &[String], defs: Vec<Option<WeaponDef>>) -> WeaponTable {
+        let mut defs: Vec<Option<WeaponDef>> = std::iter::once(None).chain(defs).collect();
+        vcod_common::weapon_table::link_alts(&mut defs, names.iter().map(String::as_str));
+        let mut table = WeaponTable {
+            list: &crate::defs::COD2,
+            ..WeaponTable::from_defs(defs)
+        };
+        // CoD2's `BG_SetupAmmoIndexes` / `BG_SetupClipIndexes`: slot 0 is
+        // the empty name, so a weapon with no clip shares it, and the
+        // match is case-sensitive (`vcod_cod2::weapon::clip_indices`;
+        // mp_carentan's axis clips at 12, 14 and 15 live,
+        // cod2-protocol.md 15.6).
+        let present: Vec<usize> = (0..table.defs.len())
+            .filter(|&i| table.defs[i].is_some())
+            .collect();
+        let names_of = |f: fn(&WeaponDef) -> &str, defs: &[Option<WeaponDef>]| {
+            vcod_cod2::weapon::clip_indices(
+                present
+                    .iter()
+                    .map(|&i| f(defs[i].as_ref().unwrap()).to_string())
+                    .collect::<Vec<_>>()
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let ammo = names_of(|d| &d.ammo_name, &table.defs);
+        let clip = names_of(|d| &d.clip_name, &table.defs);
+        for (k, &i) in present.iter().enumerate() {
+            let d = table.defs[i].as_mut().unwrap();
+            d.ammo_index = ammo[k];
+            d.clip_index = clip[k];
+        }
+        table
+    }
+
     /// The weapon list and item rows the table was loaded from.
     pub fn list(&self) -> &'static crate::defs::Defs {
         self.list

@@ -117,7 +117,8 @@ fn diff(retail: &BTreeMap<usize, String>, ours: &BTreeMap<usize, String>, skip: 
 /// The 1.5 install, `None` at any other.
 fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
     let fs = vcod_common::testing::game_fs()?;
-    (vcod_server::server::install_protocol(&fs).version == PROTOCOL_V6.version).then_some(fs)
+    (vcod_server::server::install_protocol(&fs).transport.version == PROTOCOL_V6.transport.version)
+        .then_some(fs)
 }
 
 #[test]

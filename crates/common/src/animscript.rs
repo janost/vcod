@@ -117,6 +117,11 @@ impl AnimScript {
         self.states.get(name).map(Vec::as_slice)
     }
 
+    /// Every state's movetype blocks, states in no particular order.
+    pub fn state_blocks(&self) -> impl Iterator<Item = &Block> {
+        self.states.values().flatten()
+    }
+
     /// One event block, by lowercased name.
     pub fn event(&self, name: &str) -> Option<&Block> {
         self.events.get(name)
@@ -158,7 +163,7 @@ impl AnimScript {
         let mut out: HashMap<String, AnimRecord> = HashMap::new();
         for blocks in self.states.values() {
             for block in blocks {
-                let bit = movetype_bit(&block.name);
+                let (bit, hi) = (movetype_bit(&block.name), movetype_bit_hi(&block.name));
                 for c in &block.clauses {
                     let strafe = c.conditions.iter().any(|k| {
                         k.kind == CondKind::Strafing
@@ -167,6 +172,7 @@ impl AnimScript {
                     for a in &c.legs {
                         let r = out.entry(a.name.clone()).or_default();
                         r.movetypes |= bit;
+                        r.movetypes_hi |= hi;
                         r.strafe |= strafe;
                     }
                 }
@@ -458,6 +464,28 @@ pub fn movetype_bit(name: &str) -> u32 {
         .map_or(0, |i| 1 << (i + 1))
 }
 
+/// A CoD2 movetype's bit in the record's second word (`animation_t +0x58`,
+/// movetypes 32 and up): its index less 32 in CoD2's `animMoveTypesStr`
+/// (cod2-player-anims.md 3). 0 for any other name, so a CoD1 script's
+/// records keep the word clear.
+pub fn movetype_bit_hi(name: &str) -> u32 {
+    const NAMES: [&str; 9] = [
+        "flinch_backward",
+        "flinch_left",
+        "flinch_right",
+        "stumble_forward",
+        "stumble_backward",
+        "stumble_walk_forward",
+        "stumble_walk_backward",
+        "stumble_crouch_forward",
+        "stumble_crouch_backward",
+    ];
+    NAMES
+        .iter()
+        .position(|n| n.eq_ignore_ascii_case(name))
+        .map_or(0, |i| 1 << i)
+}
+
 impl Movetype {
     /// [`movetype_bit`] of this movetype.
     pub fn bit(self) -> u32 {
@@ -471,6 +499,8 @@ impl Movetype {
 pub struct AnimRecord {
     /// Bit `1 << n` for each movetype `n` whose block plays it.
     pub movetypes: u32,
+    /// CoD2's second word: [`movetype_bit_hi`] of each such block.
+    pub movetypes_hi: u32,
     /// Played under a `strafing left` or `right` clause.
     pub strafe: bool,
 }
@@ -997,6 +1027,12 @@ land
         assert!(!r["pb_combatrun_forward_loop"].strafe);
         assert!(!r.contains_key("pb_runjump_land"));
         assert_eq!(movetype_bit("climbdown"), 1 << 17);
+        assert_eq!(r["pb_stand_alert"].movetypes_hi, 0);
+        // CoD2's crouched stumbles, bits 39 and 40 (`+0x58 & 0x180`).
+        assert_eq!(
+            movetype_bit_hi("stumble_crouch_forward") | movetype_bit_hi("stumble_crouch_backward"),
+            0x180
+        );
         assert_eq!(Movetype::IdleCr.bit(), 1 << 2);
     }
 

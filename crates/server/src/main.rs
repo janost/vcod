@@ -8,6 +8,7 @@ use std::net::UdpSocket;
 use std::time::{Duration, Instant};
 use vcod_common::net::protocol::Protocol;
 use vcod_common::pk3::Pk3Fs;
+use vcod_server::engine::{Arrival, Engine, GameModule};
 use vcod_server::{Server, ServerConfig};
 
 #[derive(Parser)]
@@ -21,6 +22,13 @@ struct Args {
     /// Pk3 subdirectory, main for CoD1 or uo for United Offensive
     #[arg(long, default_value = "main")]
     mod_dir: String,
+    /// Which game the install is: cod1, cod2 or cod4. Defaults to what the
+    /// game dir holds. cod2 runs its own engine (`vcod_server::cod2`):
+    /// players join, move, fight, chat and vote, rcon admins them, and the
+    /// maps cycle. cod4 runs a bare 1.7 level (`vcod_server::cod4`): no
+    /// script, clients join and float as spectators.
+    #[arg(long)]
+    game: Option<vcod_common::game::Game>,
     /// UDP port
     #[arg(long, default_value_t = 28960)]
     port: u16,
@@ -30,14 +38,20 @@ struct Args {
     /// sv_maxclients
     #[arg(long, default_value_t = 8)]
     max_clients: usize,
-    /// g_gametype: the script under maps/mp/gametypes to run
-    #[arg(long, default_value = "dm")]
-    gametype: String,
+    /// g_gametype: the script under maps/mp/gametypes to run; dm, or war
+    /// for cod4, where a `--set g_gametype=` wins over it
+    #[arg(long)]
+    gametype: Option<String>,
     /// A gametype script from disk instead of the paks: overlaid at
     /// maps/mp/gametypes/<stem> and run as gametype <stem>. For the client
     /// probes in crates/gsc/tests/fixtures/semantics/client-probes/.
     #[arg(long)]
     gametype_script: Option<std::path::PathBuf>,
+    /// CoD4: a directory whose loose .gsc files each level reads over the
+    /// zones' scripts (maps/mp/mp_crash.gsc, say), as retail reads a mod's.
+    /// For a probe or a perf run's scripted scene.
+    #[arg(long)]
+    script_dir: Option<std::path::PathBuf>,
     /// Scripted entities that exercise the packet-entity wire path. 0 is off.
     #[arg(long, default_value_t = 0)]
     test_entities: usize,
@@ -53,9 +67,11 @@ struct Args {
     /// what the scripts wrote, as retail runs `+map x +set ...`.
     #[arg(long = "set", value_name = "NAME=VALUE")]
     set: Vec<String>,
-    /// File that keeps `banUser`/`banClient` bans across runs, an IPv4
-    /// address and the banned name a line. Without it a ban lasts until the
-    /// process exits.
+    /// File that keeps `banUser`/`banClient` bans across runs: retail's
+    /// `ban.txt`, a guid and the banned name a line, the guid an off-LAN
+    /// client's IPv4 address as an integer (CoD4: the client's GUID). A list in vcod's older
+    /// `<ip> <name>` lines is rewritten on load. Without it a ban lasts
+    /// until the process exits.
     #[arg(long)]
     ban_file: Option<std::path::PathBuf>,
     /// Load only the install's stock retail paks (the patch's numbered paks,
@@ -72,7 +88,8 @@ struct Args {
     trace: bool,
 }
 
-/// `sv_fps 20`.
+/// `sv_fps 20`, the loop's slot until the game names another
+/// (`GameModule::wall_frame_ms`).
 const FRAME: Duration = Duration::from_millis(50);
 
 /// How far behind the schedule one tick still catches up before the loop
@@ -109,6 +126,24 @@ fn main() -> Result<()> {
         eprintln!("vcod-server {} panicked", vcod_server::VERSION);
         default_panic(info);
     }));
+    let trace = args.trace;
+    let game = vcod_common::game::Game::resolve(args.game, &args.game_dir);
+    if game == vcod_common::game::Game::Cod2 {
+        let (mut server, net) = cod2_server(args)?;
+        return serve(&mut server, net, trace);
+    }
+    if game == vcod_common::game::Game::Cod4 {
+        let (mut server, net) = cod4_server(args)?;
+        return serve(&mut server, net, trace);
+    }
+    game.ensure_supported()?;
+    let (mut server, net) = cod1_server(args, &sets_after_map)?;
+    serve(&mut server, net, trace)
+}
+
+/// CoD1 (1.1, 1.5, UO): the install's paks, the map and its scripts
+/// loaded, listening.
+fn cod1_server(args: Args, sets_after_map: &[bool]) -> Result<(Server, Net)> {
     if args.test_entities > vcod_server::world::MAX_TEST_ENTITIES {
         bail!(
             "--test-entities {} exceeds {}, the most that fits below ENTITYNUM_WORLD",
@@ -162,68 +197,21 @@ fn main() -> Result<()> {
             );
         }
     }
-    let Some(bsp_path) = fs.resolve_map(&args.map) else {
-        bail!("map {} not found in {}", args.map, dir.display());
-    };
-    // A corrupt map fails here rather than at first use.
-    let bsp_bytes = fs.read(&bsp_path).context("reading the bsp")?;
-    let bsp = vcod_common::bsp::parse(&bsp_bytes).context("parsing the bsp")?;
+    // A missing or corrupt map fails here rather than at first use.
+    let bsp = vcod_common::mapworld::find(&*fs, &args.map)
+        .with_context(|| format!("loading the map from {}", dir.display()))?;
 
-    let overlay = match &args.gametype_script {
-        Some(path) => {
-            let stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .context("--gametype-script needs a file name")?
-                .to_string();
-            let text = std::fs::read_to_string(path)
-                .with_context(|| format!("reading {}", path.display()))?;
-            Some((stem, text))
-        }
-        None => None,
-    };
-    let gametype = overlay
-        .as_ref()
-        .map_or(args.gametype.clone(), |(s, _)| s.clone());
+    let (gametype, overlay) = gametype_overlay(&args)?;
 
-    let sock = UdpSocket::bind(("0.0.0.0", args.port))
-        .with_context(|| format!("binding udp/{}", args.port))?;
-    // A thread reads the socket as packets arrive so each carries its arrival
-    // time (`Server::handle_packet_read`); the loop handles them while it
-    // waits for the next frame, and those that came in during a tick that
-    // overran its slot at the next tick's start. Either way each is
-    // answered before the loop moves on (`handle_queued`).
-    let (packet_tx, packets) = std::sync::mpsc::sync_channel(PACKET_QUEUE);
-    {
-        let sock = sock.try_clone().context("cloning the socket")?;
-        std::thread::spawn(move || {
-            let mut buf = vec![0u8; 65536];
-            loop {
-                match sock.recv_from(&mut buf) {
-                    Ok((n, from)) => {
-                        if packet_tx
-                            .send((Instant::now(), from, buf[..n].to_vec()))
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                    Err(e) => log::debug!("recv: {e}"),
-                }
-            }
-        });
-    }
+    let (sock, packets) = listen(args.port)?;
     log::info!("vcod-server: {} on udp/{}", args.map, args.port);
-    let seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos() as u64);
+    let seed = wall_seed();
     let protocol = protocol(&args.set, &fs)?;
     log::info!(
         "speaking protocol {} (patch {})",
-        protocol.version,
-        protocol.short_version
+        protocol.transport.version,
+        protocol.transport.short_version
     );
-    let trace = args.trace;
     let mut server = Server::with_seed(
         ServerConfig {
             map: args.map,
@@ -255,9 +243,7 @@ fn main() -> Result<()> {
         server.set_cvar(name, &value);
     }
     if let Some(path) = args.ban_file {
-        let bans = vcod_server::bans::Bans::load(path.clone())
-            .with_context(|| format!("reading {}", path.display()))?;
-        server.set_bans(bans);
+        server.set_bans(vcod_server::engine::bans::BanFile::open(path));
     }
     for pair in &args.set {
         let Some((name, value)) = pair.split_once('=') else {
@@ -273,11 +259,188 @@ fn main() -> Result<()> {
         log::error!("loading the map and gametype scripts: {e:#}");
         std::process::exit(1);
     }
-    for (pair, _) in args.set.iter().zip(&sets_after_map).filter(|(_, a)| **a) {
+    for (pair, _) in args.set.iter().zip(sets_after_map).filter(|(_, a)| **a) {
         if let Some((name, value)) = pair.split_once('=') {
             server.push_set(name, value);
         }
     }
+    Ok((server, (sock, packets)))
+}
+
+/// `--game cod2`: the CoD2 engine (`vcod_server::cod2`) over the
+/// install's iwds, the level loaded, listening.
+fn cod2_server(args: Args) -> Result<(vcod_server::cod2::Cod2Server, Net)> {
+    let fs = std::rc::Rc::new(
+        Pk3Fs::open_iwd(&args.game_dir.join(&args.mod_dir), None)
+            .with_context(|| format!("opening the iwds in {}", args.game_dir.display()))?,
+    );
+    let seed = wall_seed();
+    let (gametype, overlay) = gametype_overlay(&args)?;
+    let mut server = vcod_server::cod2::Cod2Server::new(
+        vcod_server::cod2::Cod2Config {
+            map: args.map.clone(),
+            gametype,
+            hostname: args.hostname.clone(),
+            max_clients: args.max_clients,
+            gametype_script: overlay
+                .map(|(stem, text)| (format!("maps/mp/gametypes/{stem}"), text)),
+        },
+        seed,
+        Instant::now(),
+    );
+    server.exec_default_cfg(&*fs);
+    if let Some(path) = &args.ban_file {
+        server.set_ban_file(path.clone());
+    }
+    // `games_mp.log` goes under the home path; `--set` outranks it.
+    server.set_cvar("fs_homepath", &args.game_dir.to_string_lossy());
+    for pair in &args.set {
+        let Some((name, value)) = pair.split_once('=') else {
+            bail!("--set takes NAME=VALUE, got {pair:?}");
+        };
+        server.set_cvar(vcod_server::rcon::login_cvar_name(name), value);
+    }
+    server.set_cvar("net_port", &args.port.to_string());
+    // `download` serves `<fs_basepath>/<name>` (cod2-protocol.md 17.5).
+    server.set_cvar("fs_basepath", &args.game_dir.to_string_lossy());
+    server.load(Some(fs)).context("loading the level")?;
+    if args.bots > 0 {
+        server.add_bots(args.bots, args.bots_shoot);
+    }
+    let (sock, packets) = listen(args.port)?;
+    let out = sock.try_clone().context("cloning the socket")?;
+    server.set_net_now(vcod_server::cod2::NetNow {
+        send: Box::new(move |to, pkt| {
+            if let Err(e) = out.send_to(pkt, to) {
+                log::debug!("send to {to}: {e}");
+            }
+        }),
+        sleep: Box::new(net_sleep),
+    });
+    log::info!("vcod-server: CoD2 {} on udp/{}", args.map, args.port);
+    Ok((server, (sock, packets)))
+}
+
+/// `--game cod4`: a bare CoD4 1.7 level (`vcod_server::cod4`) over the
+/// install's zones and iwds, listening.
+fn cod4_server(args: Args) -> Result<(vcod_server::cod4::Cod4Server, Net)> {
+    let install = vcod_cod4::install::Install::at(&args.game_dir)
+        .with_context(|| format!("{} has no zone/ directory", args.game_dir.display()))?;
+    let gametype = args.gametype.clone().unwrap_or_else(|| "war".into());
+    let mut server = vcod_server::cod4::Cod4Server::new(
+        vcod_server::cod4::Cod4Config {
+            map: args.map.clone(),
+            gametype,
+            hostname: args.hostname.clone(),
+            max_clients: args.max_clients,
+        },
+        wall_seed(),
+    );
+    // The paths a retail server fills in from its command line and host:
+    // `games_mp.log` and `exec` read them; `--set` outranks them.
+    let base = args.game_dir.display().to_string();
+    server.set_cvar("fs_basepath", &base);
+    server.set_cvar("fs_homepath", &base);
+    for pair in &args.set {
+        let Some((name, value)) = pair.split_once('=') else {
+            bail!("--set takes NAME=VALUE, got {pair:?}");
+        };
+        server.set_cvar(vcod_server::rcon::login_cvar_name(name), value);
+    }
+    server.set_cvar("net_port", &args.port.to_string());
+    if let Some(path) = &args.ban_file {
+        server.set_ban_file(path.clone());
+    }
+    if let Some(dir) = &args.script_dir {
+        server.set_script_overrides(dir.clone());
+    }
+    server.load(Some(&install)).context("loading the level")?;
+    if args.bots > 0 {
+        server.add_bots(args.bots, args.bots_shoot);
+    }
+    let (sock, packets) = listen(args.port)?;
+    let out = sock.try_clone().context("cloning the socket")?;
+    server.set_net_now(vcod_server::cod2::NetNow {
+        send: Box::new(move |to, pkt| {
+            if let Err(e) = out.send_to(pkt, to) {
+                log::debug!("send to {to}: {e}");
+            }
+        }),
+        sleep: Box::new(net_sleep),
+    });
+    log::info!("vcod-server: CoD4 {} on udp/{}", args.map, args.port);
+    Ok((server, (sock, packets)))
+}
+
+/// `--gametype-script <file>`: the gametype to run, `<stem>`, and the
+/// script overlaid at `maps/mp/gametypes/<stem>`; else `--gametype`.
+fn gametype_overlay(args: &Args) -> Result<(String, Option<(String, String)>)> {
+    let Some(path) = &args.gametype_script else {
+        return Ok((args.gametype.clone().unwrap_or_else(|| "dm".into()), None));
+    };
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .context("--gametype-script needs a file name")?
+        .to_string();
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    Ok((stem.clone(), Some((stem, text))))
+}
+
+/// The wall clock in nanoseconds: the server's seed, as retail seeds off
+/// the clock.
+fn wall_seed() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64)
+}
+
+/// Packets the reader thread has read, for a wait that a packet ends
+/// (`NET_Sleep`'s `select`).
+static ARRIVALS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Up to `d`, or until the reader thread reads a packet.
+fn net_sleep(d: std::time::Duration) {
+    let seen = ARRIVALS.load(std::sync::atomic::Ordering::Relaxed);
+    let until = Instant::now() + d;
+    while Instant::now() < until && ARRIVALS.load(std::sync::atomic::Ordering::Relaxed) == seen {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// Binds the port and starts the reader thread. A thread reads the socket
+/// as packets arrive so each carries its arrival time
+/// (`engine::Arrival`); the loop handles them while it waits for
+/// the next frame, and those that came in during a tick that overran its
+/// slot at the next tick's start. Either way each is answered before the
+/// loop moves on (`handle_queued`).
+fn listen(port: u16) -> Result<Net> {
+    let sock = UdpSocket::bind(("0.0.0.0", port)).with_context(|| format!("binding udp/{port}"))?;
+    let (packet_tx, packets) = std::sync::mpsc::sync_channel(PACKET_QUEUE);
+    let reader = sock.try_clone().context("cloning the socket")?;
+    std::thread::spawn(move || {
+        let mut buf = vec![0u8; 65536];
+        loop {
+            match reader.recv_from(&mut buf) {
+                Ok((n, from)) => {
+                    ARRIVALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if packet_tx
+                        .send((Instant::now(), from, buf[..n].to_vec()))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                Err(e) => log::debug!("recv: {e}"),
+            }
+        }
+    });
+    Ok((sock, packets))
+}
+
+/// The frame loop, until `quit`.
+fn serve<G: GameModule>(server: &mut Engine<G>, (sock, packets): Net, trace: bool) -> Result<()> {
     // Ctrl-C runs `quit`, so the masters get their flatline; a second one
     // exits at once.
     let interrupted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -289,6 +452,20 @@ fn main() -> Result<()> {
             }
         })
         .context("installing the Ctrl-C handler")?;
+    }
+    // `VCOD_TICK_TRACE=<path>`: the tick's step log (`tick_trace`); the
+    // loop runs on this thread.
+    if let Some(path) = std::env::var_os("VCOD_TICK_TRACE") {
+        vcod_server::tick_trace::install(std::path::Path::new(&path))
+            .context("opening VCOD_TICK_TRACE")?;
+    }
+    // `VCOD_TICK_PROFILE_MS=<ms>`: each tick past it logged with its
+    // phases and how its wall time split (`tick_profile`).
+    let profile_ms: Option<f32> = std::env::var("VCOD_TICK_PROFILE_MS")
+        .ok()
+        .and_then(|v| v.parse().ok());
+    if profile_ms.is_some() {
+        vcod_server::tick_profile::enable();
     }
     let mut quit_queued = false;
     // A fixed schedule, not a sleep after each tick: `SV_Frame` runs one
@@ -311,13 +488,16 @@ fn main() -> Result<()> {
     };
     loop {
         let now = Instant::now();
+        let sched = profile_ms.and_then(|_| vcod_server::tick_profile::sched());
         let late = now.saturating_duration_since(schedule.next);
+        let packets_phase = vcod_server::tick_profile::phase("packets");
         for _ in 0..MAX_PACKETS_PER_FRAME {
             let Ok(queued) = packets.try_recv() else {
                 break;
             };
-            handle_queued(&mut server, queued, now, &mut free_at, &mut send);
+            handle_queued(server, queued, now, &mut free_at, &mut send);
         }
+        drop(packets_phase);
         if interrupted.load(std::sync::atomic::Ordering::Relaxed) && !quit_queued {
             quit_queued = true;
             server.push_console("quit");
@@ -325,24 +505,38 @@ fn main() -> Result<()> {
         // The console first, then the count: what it ran (a `map_restart`)
         // is owed by this tick's frames, as `Com_Frame` charges the time
         // `Cbuf_Execute` took to the next `SV_Frame` (0x806d003, 0x806d0e4).
-        server.drain_console(now);
+        G::drain_console(server, now);
+        // CoD4's `sv_fps`, read every `SV_Frame` (cod4-server-frame.md 8).
+        schedule.frame = Duration::from_millis(G::wall_frame_ms(server).max(1) as u64);
         let frames = schedule.owed(Instant::now());
         server.tick_frames(now, frames);
+        if let Some(min) = profile_ms {
+            let ms = now.elapsed().as_secs_f32() * 1000.0;
+            let phases = vcod_server::tick_profile::take();
+            if ms > min && frames > 0 {
+                log::warn!(
+                    "tick {ms:.1} ms, {frames} frames ({}): {}",
+                    vcod_server::tick_profile::split(sched, ms),
+                    vcod_server::tick_profile::format(&phases, 1.0)
+                );
+            }
+        }
         if trace {
             stats.add(now.elapsed(), late, frames);
         }
         // A level load that failed with the level already torn down: there is
         // no script to end the level and no table for a client to pull, which
         // is what retail's `Com_Error` ends the process for.
-        if let Some(e) = server.take_fatal() {
+        if let Some(e) = G::take_fatal(server) {
             log::error!("{e:#}");
             std::process::exit(1);
         }
         for (to, pkt) in server.take_outgoing() {
             send(to, &pkt);
         }
-        server.frame_sent(Instant::now());
+        G::frame_sent(server, Instant::now());
         if server.quit_requested() {
+            vcod_server::tick_trace::finish().context("writing VCOD_TICK_TRACE")?;
             return Ok(());
         }
         schedule.ran(frames);
@@ -359,7 +553,7 @@ fn main() -> Result<()> {
             let Ok(queued) = packets.recv_timeout(left) else {
                 break;
             };
-            handle_queued(&mut server, queued, Instant::now(), &mut free_at, &mut send);
+            handle_queued(server, queued, Instant::now(), &mut free_at, &mut send);
         }
     }
 }
@@ -371,11 +565,16 @@ fn main() -> Result<()> {
 struct Schedule {
     /// When the next frame's slot starts.
     next: Instant,
+    /// A slot's length.
+    frame: Duration,
 }
 
 impl Schedule {
     fn new(start: Instant) -> Self {
-        Self { next: start }
+        Self {
+            next: start,
+            frame: FRAME,
+        }
     }
 
     /// The frames owed at `now`: the slot due plus every whole slot
@@ -387,25 +586,28 @@ impl Schedule {
             self.next = now;
             return 1;
         }
-        1 + (behind.as_millis() / FRAME.as_millis()) as u32
+        1 + (behind.as_millis() / self.frame.as_millis()) as u32
     }
 
     /// Moves the grid past the frames a tick ran.
     fn ran(&mut self, frames: u32) {
-        self.next += FRAME * frames;
+        self.next += self.frame * frames;
     }
 }
 
 /// A packet off the reader thread: its arrival time, sender and bytes.
 type Queued = (Instant, std::net::SocketAddr, Vec<u8>);
 
+/// The bound socket and the reader thread's packets ([`listen`]).
+type Net = (UdpSocket, std::sync::mpsc::Receiver<Queued>);
+
 /// One queued packet, handled as `Com_EventLoop` handles it: at the moment
 /// retail's loop would be free for it (`free_at`, moved past it), and
 /// answered at once through `send`, as `NET_SendPacket` writes the socket
 /// inside the handler. A reply held for the tick that follows went out a
 /// whole tick late when the last one overran its slot.
-fn handle_queued(
-    server: &mut Server,
+fn handle_queued<G: GameModule>(
+    server: &mut Engine<G>,
     (arrived, from, pkt): Queued,
     now: Instant,
     free_at: &mut Instant,
@@ -416,7 +618,7 @@ fn handle_queued(
     // handling moment is rebuilt here.
     let read = arrived.max(*free_at);
     let started = Instant::now();
-    server.handle_packet_read(from, &pkt, now, arrived, read);
+    server.packet_read(from, &pkt, Arrival { now, arrived, read });
     *free_at = read + started.elapsed();
     for (to, pkt) in server.take_outgoing() {
         send(to, &pkt);
@@ -445,7 +647,7 @@ fn protocol(sets: &[String], fs: &Pk3Fs) -> Result<&'static Protocol> {
             .trim()
             .parse()
             .ok()
-            .and_then(Protocol::by_version)
+            .and_then(|v| Protocol::by_version(vcod_common::game::Game::Cod1, v))
             .with_context(|| {
                 format!("--set protocol={v}: vcod speaks 1 (1.1), 6 (1.5) and 22 (UO 1.51)")
             });

@@ -140,9 +140,9 @@ const STOPGO_SPAWN_UO: [f32; 2] = [776.0, 3488.0];
 /// gametypes open `serverinfo_<gametype>` before the team menu), so the
 /// client starts this many frames in for an idle set at `idle_ms`.
 fn join_frames(idle_ms: i32, proto: &Protocol) -> u32 {
-    let join_ms = match proto.version {
-        v if v == PROTOCOL_V1.version => 800,
-        v if v == PROTOCOL_V6.version => 900,
+    let join_ms = match proto.transport.version {
+        v if v == PROTOCOL_V1.transport.version => 800,
+        v if v == PROTOCOL_V6.transport.version => 900,
         _ => 1050,
     };
     (idle_ms - join_ms) as u32 / FRAME_MS as u32
@@ -366,9 +366,9 @@ fn ours_walk(
 /// Retail's `placeSpawnpoint` height for the mp_carentan deathmatch point
 /// at `xy` on `fs`'s server, off `placebits-retail.txt`.
 fn placed_spawn(fs: &vcod_common::pk3::Pk3Fs, xy: [f32; 2]) -> Option<[f32; 3]> {
-    let server = match vcod_server::server::install_protocol(fs).version {
-        v if v == PROTOCOL_V6.version => "1.5b",
-        v if v == PROTOCOL_V1.version => "1.1d",
+    let server = match vcod_server::server::install_protocol(fs).transport.version {
+        v if v == PROTOCOL_V6.transport.version => "1.5b",
+        v if v == PROTOCOL_V1.transport.version => "1.1d",
         _ => "uo",
     };
     let text = std::fs::read_to_string(PLACEBITS).unwrap();
@@ -574,7 +574,8 @@ fn a_walking_body_is_posed_like_retail_on_15() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         return;
     }
     let run = ours_walk(fs, CLIENT_15, SPAWN_15, SPAWN_MSG).unwrap();
@@ -671,7 +672,8 @@ fn a_body_stopping_and_going_is_posed_like_retail_on_15() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         return;
     }
     check_stop_and_go(
@@ -819,7 +821,7 @@ fn drawn_feet(draw_ms: i32) -> Option<(usize, f32)> {
     use vcod_common::playerpose::{PoseInputs, pose_player};
     let fs = vcod_common::testing::game_fs_11()?;
     let anims = vcod_common::animtree::PlayerAnims::load(&fs).unwrap();
-    let body = vcod_common::xmodel::load(&fs, "playerbody_american_airborne").unwrap();
+    let body = vcod_common::model::load(&fs, "playerbody_american_airborne").unwrap();
     let skel = vcod_common::skeleton::Skeleton::build(&[&body]);
     let feet = ["bip01 l foot", "bip01 r foot"].map(|n| skel.bone_index(n).expect(n));
     let mut clips: BTreeMap<String, Option<Rc<vcod_common::xanim::XAnim>>> = BTreeMap::new();
@@ -838,6 +840,7 @@ fn drawn_feet(draw_ms: i32) -> Option<(usize, f32)> {
             controllers: None,
             leaf_times: Vec::new(),
             node_time: false,
+            binds: None,
         };
         let pose = pose_player(&skel, &inputs, |n| {
             clips

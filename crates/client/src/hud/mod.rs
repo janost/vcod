@@ -3,6 +3,9 @@
 
 pub mod centerprint;
 pub mod chat;
+// Nothing feeds it yet: CoD2 runs fly mode only, with no server to send hudelems.
+#[allow(dead_code)]
+pub mod cod2elem;
 pub mod font;
 pub mod friends;
 pub mod hudelem;
@@ -27,7 +30,7 @@ use vcod_common::net::NetEvent;
 use vcod_common::net::events::GameEvent;
 use vcod_common::net::flags::{PM_DEAD, PMF_FOLLOW, PMF_PRONE_BLOCKED};
 use vcod_common::net::msg::{ClientState, EntityState, HudElem, PlayerState};
-use vcod_common::net::protocol::{CsRange, PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::{CsRange, Protocol};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::Stance;
 use vcod_common::pmove::predict::Predicted;
@@ -54,6 +57,10 @@ pub struct HudQuad {
     pub rgba: [f32; 4],
     pub texture: String, // pk3 image name, extensionless ok
 }
+
+/// A texture name's prefix that draws its quad blended `SrcAlpha One`
+/// (CoD4's font glow materials, `fonts/*_glow`), the image the rest names.
+pub const ADDITIVE: &str = "$add:";
 
 /// Retail's default shader (`<default>`, CoDMP.exe 0x4fd780) as a HUD
 /// texture: the `*default` image drawn opaque and uncoloured.
@@ -378,13 +385,14 @@ impl Hud {
             .then(|| self.weapon_kill_icon(f.fs, f.configstrings, ob.weapon))
             .flatten();
         let icon_wide = kill_icon.as_ref().is_some_and(|(_, wide)| *wide);
-        let uo = f.protocol.version == PROTOCOL_V22.version;
+        let uo = f.protocol.is_uo();
         let icon = killfeed::icon_for(&ob, kill_icon.as_ref().map(|(path, _)| path.as_str()), uo);
 
         let line = messages::KillLine {
             attacker,
             icon,
             icon_wide,
+            icon_flip: false,
             victim,
         };
         self.game_messages.push_kill(line, (f.now * 1000.0) as i32);
@@ -456,7 +464,7 @@ impl Hud {
         let mut out = Vec::new();
         let screen = (f.screen_w, f.screen_h);
         // vcod's: `vc_widescreen 0` keeps the whole HUD in the 4:3 box.
-        let edges = (f.cvar)("vc_widescreen").is_none_or(|c| vote::atol(&c) != 0);
+        let edges = (f.cvar)("vc_widescreen").is_none_or(|c| vcod_common::text::atoi_msvc(&c) != 0);
         let v = hudelem::Virtual::with_edges(screen, edges);
         let pm_type = |ps: &PlayerState| ps.field_i32(f.protocol, "pm_type");
         match f.ps.filter(|ps| draws_native_hud(pm_type(ps))) {
@@ -506,9 +514,10 @@ impl Hud {
             );
         }
         let now_ms = (f.now * 1000.0) as i32;
+        let clocked = out.len();
         // `CG_Draw2D` returns for intermission (pm_type 5) before both.
         // 1.1 sends the vote's end as server time, 1.5 and UO the ms left.
-        let relative = f.protocol.version != vcod_common::net::protocol::PROTOCOL_V1.version;
+        let relative = !f.protocol.is_v1();
         self.vote
             .update(f.configstrings, f.protocol.cs.vote, relative, now_ms);
         self.timeout
@@ -566,6 +575,7 @@ impl Hud {
                 .build(&self.fonts, now_ms, &v.left(), &mut out);
             self.bold_messages.build(&self.fonts, now_ms, &v, &mut out);
         }
+        crate::frame_digest::hud_clocked(clocked..out.len());
         if let Some(field) = &self.chat_field {
             chat::field(field, &self.fonts, f.localized, &v.left(), &mut out);
         }
@@ -593,8 +603,8 @@ impl Hud {
     fn build_scoreboard(&mut self, f: &HudFrame, v: &Virtual, out: &mut Vec<HudQuad>) -> bool {
         self.scoreboard.intermission =
             f.ps.is_some_and(|ps| ps.field_i32(f.protocol, "pm_type") == 5);
-        let paused = f.protocol.version != vcod_common::net::protocol::PROTOCOL_V1.version
-            && (f.cvar)("timescale").is_some_and(|t| vote::atol(&t) == 0);
+        let paused = !f.protocol.is_v1()
+            && (f.cvar)("timescale").is_some_and(|t| vcod_common::text::atoi_msvc(&t) == 0);
         if paused {
             return false;
         }
@@ -645,7 +655,7 @@ fn obituary_center_print(ob: &killfeed::Obituary, f: &HudFrame) -> Option<(Strin
     if attacker == ob.victim || ps.field_i32(f.protocol, "clientNum") as u32 != attacker {
         return None;
     }
-    let uo = f.protocol.version == PROTOCOL_V22.version;
+    let uo = f.protocol.is_uo();
     if uo && ps.field_i32(f.protocol, "pm_flags") & PMF_FOLLOW != 0 {
         return None;
     }
@@ -700,7 +710,7 @@ pub fn bind_keys(text: &str, bound: &dyn Fn(&str) -> Option<String>) -> String {
 /// 0x3008adb8, 24-byte rows): the only commands its key lookup
 /// (0x30046860) names. Anything else reads unbound.
 pub fn bind_commands(p: &Protocol) -> &'static [&'static str] {
-    match p.version {
+    match p.transport.version {
         6 => BIND_COMMANDS_15,
         22 => BIND_COMMANDS_UO,
         _ => BIND_COMMANDS_11,
@@ -828,7 +838,7 @@ impl Hud {
         let aim = vcod_common::pmove::aim::view_angles;
         let mut out = aim(&gun_ps, def, &kick, gun_ms);
         // 1.5's sight bob (0x30013cd0) skips a mounted gun; 1.1's does not.
-        if p.version == 6 && ps.field_i32(p, "eFlags") & 0xc000 != 0 {
+        if p.transport.version == 6 && ps.field_i32(p, "eFlags") & 0xc000 != 0 {
             let bob = aim(&gun_ps, def, &Default::default(), gun_ms);
             for (o, b) in out.iter_mut().zip(bob) {
                 *o -= b;
@@ -1010,7 +1020,7 @@ fn player_view<'a>(
             }
         },
         held,
-        uo: (f.protocol.version == PROTOCOL_V22.version).then(|| uo_view(ps, eflags, f)),
+        uo: f.protocol.is_uo().then(|| uo_view(ps, eflags, f)),
     }
 }
 
@@ -1100,6 +1110,7 @@ fn compass_vehicles(ps: &PlayerState, f: &HudFrame) -> Vec<uo::VehicleSighting> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::protocol::PROTOCOL_V22;
 
     /// 0x300229b0: the first `[{command}]` takes the command's key text;
     /// an unbound command, an unclosed one or a later one stays as written.
@@ -1572,6 +1583,7 @@ mod tests {
                 attacker: None,
                 icon: "gfx/hud/icon".into(),
                 icon_wide: false,
+                icon_flip: false,
                 victim: ("victim".into(), [1.0; 3]),
             },
             0,
@@ -1657,6 +1669,7 @@ mod tests {
                 attacker: Some(("Me".into(), [1.0, 0.5, 0.5])),
                 icon: "killIconMelee".into(),
                 icon_wide: false,
+                icon_flip: false,
                 victim: ("Bob".into(), [0.5, 0.5, 1.0]),
             }]
         );

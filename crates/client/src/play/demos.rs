@@ -6,8 +6,9 @@ use super::clock::{DemoClock, ServerClock};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use vcod_common::net::demo;
-use vcod_common::net::protocol::{PROTOCOL_V1, Protocol};
+use vcod_common::net::protocol::Protocol;
 use vcod_common::net::{NetClient, NetEvent, Transport};
+use vcod_common::text::atoi_msvc;
 
 /// `record`'s file under `dir` (the game directory's `demos/`) and the
 /// name it keeps (`clc.demoName`): `name` with the protocol's `.dm_<n>`,
@@ -144,7 +145,7 @@ pub fn auto_command(
     name: &str,
     stamp: &str,
 ) -> Option<String> {
-    if p.version == PROTOCOL_V1.version || atol(autodemo) != 1 {
+    if p.is_v1() || atoi_msvc(autodemo) != 1 {
         return None;
     }
     match tokens.first().map(String::as_str)? {
@@ -157,16 +158,6 @@ pub fn auto_command(
     }
 }
 
-/// `atol`: the leading integer, 0 for none.
-fn atol(s: &str) -> i64 {
-    let s = s.trim_start();
-    let end = s
-        .char_indices()
-        .find(|&(i, c)| !(c.is_ascii_digit() || (i == 0 && (c == '-' || c == '+'))))
-        .map_or(s.len(), |(i, _)| i);
-    s[..end].parse().unwrap_or(0)
-}
-
 /// Trap 0xf4's string, `yyyyMMdd-HHmmss` in local time.
 pub fn stamp_now() -> String {
     jiff::Zoned::now().strftime("%Y%m%d-%H%M%S").to_string()
@@ -175,6 +166,7 @@ pub fn stamp_now() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::protocol::PROTOCOL_V1;
     use vcod_common::net::protocol::{PROTOCOL_V6, PROTOCOL_V22};
     use vcod_common::net::{NetEvent, UdpTransport};
 
@@ -238,9 +230,9 @@ mod tests {
 
         std::fs::write(d.join("x.dm_3"), b"").unwrap();
         let found = find(std::slice::from_ref(&d), "x").unwrap();
-        assert_eq!((found.0, found.1.version), (d.join("x.dm_3"), 22));
+        assert_eq!((found.0, found.1.transport.version), (d.join("x.dm_3"), 22));
         let found = find(std::slice::from_ref(&d), "demo0000.dm_1").unwrap();
-        assert_eq!(found.1.version, 1);
+        assert_eq!(found.1.transport.version, 1);
         assert!(find(&[d], "nope").is_none());
     }
 

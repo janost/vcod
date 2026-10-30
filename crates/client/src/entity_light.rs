@@ -77,6 +77,121 @@ pub fn pack(l: &EntityLights, to_view: Option<Mat4>, identity_light: f32) -> Gpu
     set
 }
 
+/// `LightSet::ambient.w` of a CoD4 entity's set (cod2_model.wgsl's
+/// `cod4_model`); a CoD2 probe set's is -1.
+pub const COD4_BLOCK: f32 = -2.0;
+
+/// A CoD4 entity's lighting and the sun, packed for cod2_model.wgsl's
+/// `cod4_model` (cod4-world.md 3.3): the ambient the sun's diffuse colour,
+/// w [`COD4_BLOCK`]; light 0's `pos` the unit vector toward the sun, w
+/// identityLight; light 0's `diffuse.y` the reflection probe's layer and
+/// `.zw` the centre of entity volume block `block` ([`cod4_block_base`]),
+/// which holds the lookup's texels ([`cod4_volume_rows`]). The sun's
+/// specular is its diffuse (`r_specularColorScale` 1, cod4-world.md 9.6).
+///
+/// A lookup settled on a spot or omni light `source` (cod4-world.md 3.5)
+/// takes it in the sun's place from float [`COD4_SOURCE`] on:
+/// `lightPosition` (origin, one over the radius), the colour with w 1 for
+/// an omni light and 2 for a spot, `lightSpotDir` with w the attenuation
+/// row's length, `lightSpotFactors`, then up to [`COD4_ATTENUATION`]
+/// texels of the row, each the integer `r + 256 g + 65536 b`.
+pub fn pack_cod4(
+    light: &vcod_common::mapworld::EntityLight,
+    block: u32,
+    sun_dir: Vec3,
+    sun_colour: Vec3,
+    source: Option<&vcod_common::mapworld::ModelLightSource>,
+    identity_light: f32,
+) -> GpuLightSet {
+    let mut set = GpuLightSet {
+        ambient: [sun_colour.x, sun_colour.y, sun_colour.z, COD4_BLOCK],
+        ..GpuLightSet::default()
+    };
+    set.lights[0].pos = [sun_dir.x, sun_dir.y, sun_dir.z, identity_light];
+    let [u, v] = cod4_block_base(block);
+    set.lights[0].diffuse[1] = f32::from(light.probe);
+    set.lights[0].diffuse[2] = u;
+    set.lights[0].diffuse[3] = v;
+    let floats: &mut [f32; 164] = bytemuck::cast_mut(&mut set);
+    let rgb =
+        |[r, g, b, _]: &[u8; 4]| (u32::from(*r) | u32::from(*g) << 8 | u32::from(*b) << 16) as f32;
+    if let Some(l) = source {
+        let row = &l.attenuation[..l.attenuation.len().min(COD4_ATTENUATION)];
+        let kind = if l.spot { 2.0 } else { 1.0 };
+        let at = COD4_SOURCE;
+        floats[at..at + 16].copy_from_slice(&[
+            l.origin[0],
+            l.origin[1],
+            l.origin[2],
+            l.inv_radius,
+            l.colour[0],
+            l.colour[1],
+            l.colour[2],
+            kind,
+            l.dir[0],
+            l.dir[1],
+            l.dir[2],
+            row.len() as f32,
+            l.spot_factors[0],
+            l.spot_factors[1],
+            l.spot_factors[2],
+            0.0,
+        ]);
+        for (f, t) in floats[at + 16..].iter_mut().zip(row) {
+            *f = rgb(t);
+        }
+    }
+    set
+}
+
+/// Blocks along a row of the entity model lighting volume: its 256 texels
+/// across, as 1.7's (cod4-world.md 3.2).
+pub const COD4_VOLUME_ROW: u32 = 64;
+/// Rows of blocks in the entity volume: 1024 blocks, 1.7's
+/// `xmodelEntryLimit` for one client view (`maxClientViews << 10`).
+/// cod2_model.wgsl's `COD4_LOOKUP_SCALE` reads its height.
+pub const COD4_VOLUME_ROWS: u32 = 16;
+/// The entity volume's blocks; the last is the view model's.
+pub const COD4_VOLUME_BLOCKS: u32 = COD4_VOLUME_ROW * COD4_VOLUME_ROWS;
+
+/// Block `i`'s centre in the entity volume's x and y, 1.7's
+/// `R_SetModelLightingCoords` (`baseLightingCoords`, z 0.5).
+pub fn cod4_block_base(i: u32) -> [f32; 2] {
+    [
+        (4 * (i % COD4_VOLUME_ROW) + 2) as f32 / (4 * COD4_VOLUME_ROW) as f32,
+        (4 * (i / COD4_VOLUME_ROW) + 2) as f32 / (4 * COD4_VOLUME_ROWS) as f32,
+    ]
+}
+
+/// Blocks `0..blocks.len()` laid out as the first `4 * rows` texel rows of
+/// the entity volume, its four slices one after another, RGBA (texel
+/// `x + 4 y + 16 z` of a block at `(4 (i % 64) + x, 4 (i / 64) + y, z)`);
+/// the rows' count, at least one.
+pub fn cod4_volume_rows(blocks: &[[[u8; 4]; 64]]) -> (u32, Vec<u8>) {
+    let rows = (blocks.len() as u32).div_ceil(COD4_VOLUME_ROW).max(1);
+    let (w, h) = ((4 * COD4_VOLUME_ROW) as usize, (4 * rows) as usize);
+    let mut rgba = vec![0u8; w * h * 4 * 4];
+    for (i, texels) in blocks.iter().enumerate() {
+        let (bx, by) = (
+            4 * (i % COD4_VOLUME_ROW as usize),
+            4 * (i / COD4_VOLUME_ROW as usize),
+        );
+        for (t, px) in texels.iter().enumerate() {
+            let (x, y, z) = (t & 3, (t >> 2) & 3, t >> 4);
+            let at = 4 * ((z * h + by + y) * w + bx + x);
+            rgba[at..at + 4].copy_from_slice(px);
+        }
+    }
+    (rows, rgba)
+}
+
+/// Where [`pack_cod4`] puts a spot or omni light, in floats of the set.
+pub const COD4_SOURCE: usize = 88;
+/// The most attenuation texels [`pack_cod4`] keeps (every stock light
+/// def's image is 32 wide).
+pub const COD4_ATTENUATION: usize = 32;
+const _: () = assert!(COD4_SOURCE + 16 + COD4_ATTENUATION <= 164);
+
 /// The fx `Light` blocks as scene lights; the block's size is
 /// `RE_AddLightToScene`'s intensity (the efx light draw, 0x490625).
 pub fn scene_lights(lights: &[FxLight]) -> Vec<SceneLight> {
@@ -94,6 +209,29 @@ pub fn scene_lights(lights: &[FxLight]) -> Vec<SceneLight> {
 mod tests {
     use super::*;
     use vcod_common::static_light::Light;
+
+    /// A block's texels land from light 1's first float on, R low.
+    #[test]
+    fn cod4_set_names_its_block_and_the_block_lands_in_the_volume() {
+        let block: [[u8; 4]; 64] = std::array::from_fn(|t| [t as u8, 1, 2, 204]);
+        let light = vcod_common::mapworld::EntityLight {
+            texels: block,
+            probe: 3,
+            primary: 1,
+        };
+        let set = pack_cod4(&light, 65, Vec3::Z, Vec3::splat(0.5), None, 1.0);
+        assert_eq!(set.ambient, [0.5, 0.5, 0.5, COD4_BLOCK]);
+        assert_eq!(set.lights[0].pos, [0.0, 0.0, 1.0, 1.0]);
+        // block 65: the second row's second block, its centre texel 6, 6
+        assert_eq!(set.lights[0].diffuse[1..], [3.0, 6.0 / 256.0, 6.0 / 64.0]);
+        let mut blocks = vec![[[0; 4]; 64]; 66];
+        blocks[65] = block;
+        let (rows, rgba) = cod4_volume_rows(&blocks);
+        assert_eq!(rows, 2);
+        // texel 27 (x 3, y 2, z 1) at (7, 6) of slice 1, 8 rows a slice
+        let at = 4 * ((8 + 6) * 256 + 7);
+        assert_eq!(rgba[at..at + 4], [27, 1, 2, 204]);
+    }
 
     #[test]
     fn weight_folds_into_colours_and_view_moves_positions() {

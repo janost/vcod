@@ -3,12 +3,11 @@
 
 use std::collections::HashMap;
 use std::io::Cursor;
+use vcod_common::asset_source::AssetSource;
 
 use kira::sound::static_sound::StaticSoundData;
 
 use crate::audio::stream::Resampler;
-
-use vcod_common::pk3::Pk3Fs;
 
 #[derive(Default)]
 pub struct SoundBank {
@@ -61,7 +60,7 @@ fn to_rate(d: StaticSoundData, rate: u32) -> StaticSoundData {
 }
 
 /// Alias `file` values are relative to `sound/`; some carry a leading slash.
-fn sound_path(file: &str) -> String {
+pub(crate) fn sound_path(file: &str) -> String {
     format!("sound/{}", file.trim_start_matches('/'))
 }
 
@@ -75,7 +74,7 @@ impl SoundBank {
     }
 
     /// `None` (cached) when the file is missing or fails to decode.
-    pub fn get(&mut self, fs: &Pk3Fs, file: &str) -> Option<&StaticSoundData> {
+    pub fn get(&mut self, fs: &dyn AssetSource, file: &str) -> Option<&StaticSoundData> {
         let key = file.to_ascii_lowercase();
         if !self.cache.contains_key(&key) {
             let path = sound_path(file);
@@ -102,7 +101,7 @@ impl SoundBank {
 
     /// Raw bytes for a streamed alias; nothing is cached and a missing file
     /// is not counted here.
-    pub fn read_stream(fs: &Pk3Fs, file: &str) -> Option<Vec<u8>> {
+    pub fn read_stream(fs: &dyn AssetSource, file: &str) -> Option<Vec<u8>> {
         let path = sound_path(file);
         let bytes = fs.read(&path);
         if bytes.is_none() {

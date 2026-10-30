@@ -104,7 +104,7 @@ pub struct TurretTags {
 
 impl TurretTags {
     /// The five tags out of a model's bones, `None` if any is missing.
-    pub fn from_bones(bones: &[vcod_common::xmodel::Bone]) -> Option<TurretTags> {
+    pub fn from_bones(bones: &[vcod_common::model::Bone]) -> Option<TurretTags> {
         let tag = |n: &str| bones.iter().find(|b| b.name == n).map(|b| b.pos);
         Some(TurretTags {
             aim: tag("tag_aim")?,
@@ -207,7 +207,7 @@ impl TurretRecord {
     /// cgame holds the gunner's view inside (turrets doc 14.3). `None` on
     /// 1.1, which sends none, and before the first aim.
     pub fn wire_arcs(&self, p: &Protocol) -> Option<[f32; 4]> {
-        (self.aimed && p.version != PROTOCOL_V1.version).then_some([
+        (self.aimed && !p.is_v1()).then_some([
             self.pitch_range[1],
             self.yaw_range[1],
             self.pitch_range[0],
@@ -375,9 +375,9 @@ pub enum AimRule {
 
 impl AimRule {
     pub fn of(p: &Protocol) -> Self {
-        match p.version {
-            v if v == PROTOCOL_V1.version => AimRule::V1,
-            v if v == vcod_common::net::protocol::PROTOCOL_V22.version => AimRule::Uo,
+        match p.transport.version {
+            v if v == PROTOCOL_V1.transport.version => AimRule::V1,
+            v if v == vcod_common::net::protocol::PROTOCOL_V22.transport.version => AimRule::Uo,
             _ => AimRule::V15,
         }
     }
@@ -1004,7 +1004,7 @@ mod tests {
         let Some(fs) = vcod_common::testing::game_fs() else {
             return;
         };
-        let bones = vcod_common::xmodel::load_bones(&fs, "mg42_bipod").unwrap();
+        let bones = vcod_common::model::load_bones(&fs, "mg42_bipod").unwrap();
         let tags = TurretTags::from_bones(&bones).unwrap();
         let reach = |a2: [f32; 3]| {
             let m = muzzle(&tags, [0.0; 3], [0.0, 229.0, 0.0], a2, [1.0, 0.0, 0.0]);
@@ -1135,7 +1135,7 @@ mod tests {
             return;
         };
         let anims = vcod_common::animtree::PlayerAnims::load(&fs).unwrap();
-        let bones = vcod_common::xmodel::load_bones(&fs, "mg42_bipod").unwrap();
+        let bones = vcod_common::model::load_bones(&fs, "mg42_bipod").unwrap();
         let tags = TurretTags::from_bones(&bones).unwrap();
         let bsp = vcod_common::bsp::parse(&fs.read("maps/mp/mp_carentan.bsp").unwrap()).unwrap();
         let world = crate::world::World::from_bsp(&bsp, None);

@@ -8,6 +8,7 @@ use super::font::{Slot, UiFonts};
 use super::hudelem::Virtual;
 use super::player::menu_text_rgba;
 use vcod_common::localize::Localized;
+use vcod_common::text::atoi_msvc;
 
 /// Font 0 at 0.2083 (0x3e555555), as the chat lines.
 const SCALE: f32 = 0.208_333_33;
@@ -15,16 +16,6 @@ const SCALE: f32 = 0.208_333_33;
 const COLOR: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
 /// `ps.eFlags` 0x20000: this client has voted.
 pub const EF_VOTED: i32 = 0x20000;
-
-/// `atol`: leading digits, 0 for none.
-pub(super) fn atol(s: &str) -> i32 {
-    let s = s.trim_start();
-    let end = s
-        .char_indices()
-        .take_while(|&(i, c)| c.is_ascii_digit() || (i == 0 && c == '-'))
-        .count();
-    s[..end].parse().unwrap_or(0)
-}
 
 /// What `CG_ConfigStringModified` keeps of configstrings 15..18 (UO's
 /// 16..19).
@@ -67,7 +58,7 @@ impl Vote {
         let old = self.seen.take().unwrap_or_default();
         let changed = |i: usize| fresh || old[i] != cs[i];
         if changed(0) {
-            let t = atol(&cs[0]);
+            let t = atoi_msvc(&cs[0]);
             self.end = if relative && t != 0 {
                 t.wrapping_add(now_ms)
             } else {
@@ -75,10 +66,10 @@ impl Vote {
             };
         }
         if changed(2) {
-            self.yes = atol(&cs[2]);
+            self.yes = atoi_msvc(&cs[2]);
         }
         if changed(3) {
-            self.no = atol(&cs[3]);
+            self.no = atoi_msvc(&cs[3]);
         }
         if changed(1) {
             self.text = cs[1].clone();
@@ -164,7 +155,7 @@ impl Complaint {
     /// `m <n>`: a prompt about client `n` for 20 s, or a negative `n`'s
     /// outcome line for 10 s.
     pub fn on_command(&mut self, arg: &str, now: i32) {
-        self.client = atol(arg);
+        self.client = atoi_msvc(arg);
         let ms = if self.client < 0 { 10_000 } else { 20_000 };
         self.end = now.wrapping_add(ms);
     }

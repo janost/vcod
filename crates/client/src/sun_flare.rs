@@ -9,9 +9,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-use vcod_common::shader::{SunFade, SunFile};
+use vcod_common::sun::{SunFade, SunFile};
 
-use crate::renderer::{DEPTH_FORMAT, Frame, MSAA_SAMPLES};
+use crate::renderer::{DEPTH_FORMAT, Frame, msaa_samples};
 use crate::texture_settings::TexSamplers;
 
 /// Window sizes are in 640-wide virtual pixels (0x568fe4 is 1/640).
@@ -392,7 +392,7 @@ impl SunFlareGpu {
                     bias: Default::default(),
                 }),
                 multisample: wgpu::MultisampleState {
-                    count: MSAA_SAMPLES,
+                    count: msaa_samples(),
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },
@@ -536,7 +536,7 @@ impl SunFlareGpu {
         self.issued = None;
         let mut quads = [[Vert::zeroed(); 6]; QUADS];
         if let (Some((rect, n)), Some(slot)) = (out.query, slot) {
-            let samples = (n * n) as u64 * u64::from(MSAA_SAMPLES);
+            let samples = (n * n) as u64 * u64::from(msaa_samples());
             self.issued = Some((slot, samples));
             let (x0, y0) = (rect.x as f32, rect.y as f32);
             let (x1, y1) = (x0 + rect.w as f32, y0 + rect.h as f32);

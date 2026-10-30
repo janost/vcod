@@ -1,5 +1,7 @@
 //! One connected client's server-side state (`client_t`).
 
+use crate::engine::slot::Link;
+use crate::engine::{Lan, link};
 use crate::spectate::ClientSim;
 use std::net::SocketAddr;
 use std::time::Instant;
@@ -11,7 +13,7 @@ use vcod_common::net::snapshot::Snapshot;
 const MAX_NAME: usize = 32;
 
 /// Retail's `PACKET_BACKUP`; the client's own `SnapshotRing` ring size matches.
-pub const SV_PACKET_BACKUP: usize = 32;
+pub const SV_PACKET_BACKUP: usize = crate::engine::slot::PACKET_BACKUP;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClientState {
@@ -131,36 +133,19 @@ pub enum Pure {
 }
 
 pub struct Client {
-    pub addr: SocketAddr,
+    /// The connection half both servers keep alike (`engine::slot`).
+    pub link: Link<Snapshot>,
     pub pure: Pure,
     /// The pak being sent, from `download` until it ends.
     pub download: Option<crate::download::ServerDownload>,
     /// The www redirect's state, which outlives one transfer.
     pub www: crate::download::WwwState,
-    pub netchan: ServerNetchan,
-    pub userinfo: String,
     pub name: String,
     pub state: ClientState,
     /// `gamestateMessageNum`, -1 until a gamestate has gone out.
     pub gamestate_message_num: i64,
     pub last_packet: Instant,
-    /// `lastPacketTime` on the server clock: `svs.time` between frames,
-    /// the last frame's, when the packet was taken. What frees a zombie.
-    pub last_packet_ms: i32,
-    /// `timeoutCount`: consecutive frames past `sv_timeout`; the sixth
-    /// drops the client (`SV_CheckTimeouts` 0x808cbc0).
-    pub timeout_count: u32,
     pub last_connect: Instant,
-    /// `lastClientCommand`; goes back out as every message's `reliableAcknowledge`.
-    pub last_client_command: i32,
-    /// `cl->nextReliableTime`: the end of the flood-protection window the
-    /// last non-exempt client command opened (`Server::client_command`).
-    pub next_reliable_ms: i32,
-    /// The client's `reliableAcknowledge`, what it has seen of our server commands.
-    pub reliable_ack: i32,
-    /// `reliableSent`: the last server command a message has carried. Only
-    /// the ones past it can still be squashed.
-    pub reliable_sent: i32,
     /// Each ring slot's [`CmdKind`], beside `netchan.reliable`.
     pub reliable_kind: [CmdKind; MAX_RELIABLE_COMMANDS],
     pub message_ack: i32,
@@ -195,33 +180,9 @@ pub struct Client {
     /// a type-0 (bot) address, which `status` prints IPX-style and
     /// `Sys_IsLANAddress` does not count as LAN. `None` for a socket client.
     pub bot_port: Option<u16>,
-    /// Frames sent to this client, indexed message_num % SV_PACKET_BACKUP;
-    /// the delta base for a later frame is picked from here by message_ack.
-    pub frames: Vec<Option<Snapshot>>,
-    /// `frames[].messageSent` and `.messageAcked` by `outgoingSequence &
-    /// 31`: `svs.time` when the message went out, and when the last move
-    /// message acking it arrived, -1 until then.
-    pub ping_ring: [(i32, i32); SV_PACKET_BACKUP],
-    /// `cl->ping`, `SV_CalcPings`' average over [`Self::ping_ring`].
-    pub ping: i32,
-    /// `nextSnapshotTime`: no message goes out before this server time
-    /// ([`Self::pace`]).
-    pub next_message_ms: i32,
-    /// `netchan.unsentFragments`: the rest of a fragmented message, one
-    /// packet per frame turn ([`Self::next_fragment`]).
-    pub unsent: std::collections::VecDeque<Vec<u8>>,
     /// `CS_ZOMBIE`: dropped, and kept only to carry the drop notice. Paced
     /// as a client out of the world ([`Self::pace`]).
     pub zombie: bool,
-    /// `cl->rateDelayed`: the last off-LAN message's rate interval reached
-    /// the snapshot interval. The next snapshot carries it as
-    /// `SNAPFLAG_RATE_DELAYED` ([`Self::pace`]).
-    pub rate_delayed: bool,
-    /// The word at `cl+4` that `SV_WriteSnapshotToClient` (0x808dee0) sets
-    /// on an active client's snapshot and a zombie keeps: a zombie never
-    /// sent one carries `SNAPFLAG_NOT_ACTIVE` (docs/protocol-1.1.md,
-    /// snapFlags).
-    pub was_active: bool,
 }
 
 impl Client {
@@ -236,28 +197,16 @@ impl Client {
             vcod_common::net::info_value_for_key(&userinfo, "name").unwrap_or("UnnamedPlayer"),
         );
         Client {
-            addr,
+            link: Link::new(addr, ServerNetchan::new(qport, challenge), userinfo),
             pure: Pure::Unchecked,
             download: None,
             www: Default::default(),
-            netchan: ServerNetchan::new(qport, challenge),
-            userinfo,
             name,
             state: ClientState::Connected,
             gamestate_message_num: -1,
             last_packet: now,
-            last_packet_ms: 0,
-            timeout_count: 0,
             last_connect: now,
-            last_client_command: 0,
-            next_message_ms: 0,
             zombie: false,
-            rate_delayed: false,
-            was_active: false,
-            unsent: std::collections::VecDeque::new(),
-            next_reliable_ms: 0,
-            reliable_ack: 0,
-            reliable_sent: 0,
             reliable_kind: [CmdKind::CanIgnore; MAX_RELIABLE_COMMANDS],
             message_ack: 0,
             last_processed_st: 0,
@@ -269,9 +218,6 @@ impl Client {
             sim: None,
             is_bot: false,
             bot_port: None,
-            frames: vec![None; SV_PACKET_BACKUP],
-            ping_ring: [(0, 0); SV_PACKET_BACKUP],
-            ping: 999,
         }
     }
 
@@ -285,7 +231,7 @@ impl Client {
         self.state = ClientState::Connected;
         self.gamestate_message_num = -1;
         self.sim = None;
-        self.frames = vec![None; SV_PACKET_BACKUP];
+        self.link.frames = vec![None; SV_PACKET_BACKUP];
         self.pending.clear();
         self.commands_at.clear();
         self.last_cmd = NULL_USERCMD;
@@ -301,7 +247,7 @@ impl Client {
     /// kept: step 11 hands it to `SV_ClientEnterWorld`.
     pub fn reset_for_restart(&mut self) {
         self.sim = None;
-        self.frames = vec![None; SV_PACKET_BACKUP];
+        self.link.frames = vec![None; SV_PACKET_BACKUP];
         self.pending.clear();
         self.commands_at.clear();
     }
@@ -311,20 +257,20 @@ impl Client {
     /// notice runs, its state no longer active (0x8085e74).
     pub fn squash_ignorable(&mut self) {
         let slot = |seq: i32| seq as usize & (MAX_RELIABLE_COMMANDS - 1);
-        let seq = self.netchan.reliable_sequence as i32;
-        let mut to = self.reliable_sent + 1;
-        for from in self.reliable_sent + 1..=seq {
+        let seq = self.link.netchan.reliable_sequence as i32;
+        let mut to = self.link.reliable_sent + 1;
+        for from in self.link.reliable_sent + 1..=seq {
             if self.reliable_kind[slot(from)] == CmdKind::CanIgnore {
                 continue;
             }
             if slot(from) != slot(to) {
-                self.netchan.reliable[slot(to)] =
-                    std::mem::take(&mut self.netchan.reliable[slot(from)]);
+                self.link.netchan.reliable[slot(to)] =
+                    std::mem::take(&mut self.link.netchan.reliable[slot(from)]);
                 self.reliable_kind[slot(to)] = self.reliable_kind[slot(from)];
             }
             to += 1;
         }
-        self.netchan.reliable_sequence = (to - 1) as u32;
+        self.link.netchan.reliable_sequence = (to - 1) as u32;
     }
 
     /// `SV_AddServerCommand` (cod_lnxded 0x808b680) without the overflow's
@@ -338,24 +284,24 @@ impl Client {
         const RING: i32 = MAX_RELIABLE_COMMANDS as i32;
         let kind = CmdKind::of(cmd);
         let slot = |seq: i32| seq as usize & (MAX_RELIABLE_COMMANDS - 1);
-        let mut seq = self.netchan.reliable_sequence as i32;
+        let mut seq = self.link.netchan.reliable_sequence as i32;
         let mut queued = Queued::Added;
         if !self.is_bot {
-            if seq - self.reliable_ack > 31 || self.state != ClientState::Active {
+            if seq - self.link.reliable_ack > 31 || self.state != ClientState::Active {
                 self.squash_ignorable();
-                seq = self.netchan.reliable_sequence as i32;
+                seq = self.link.netchan.reliable_sequence as i32;
                 if kind == CmdKind::CanIgnore {
                     return Queued::Dropped;
                 }
             }
-            let found = (self.reliable_sent + 1..=seq).find(|&i| {
+            let found = (self.link.reliable_sent + 1..=seq).find(|&i| {
                 self.reliable_kind[slot(i)] == CmdKind::Reliable
-                    && supersedes(cmd, &self.netchan.reliable[slot(i)])
+                    && supersedes(cmd, &self.link.netchan.reliable[slot(i)])
             });
             if let Some(at) = found {
                 for i in at..seq {
-                    self.netchan.reliable[slot(i)] =
-                        std::mem::take(&mut self.netchan.reliable[slot(i + 1)]);
+                    self.link.netchan.reliable[slot(i)] =
+                        std::mem::take(&mut self.link.netchan.reliable[slot(i + 1)]);
                     self.reliable_kind[slot(i)] = self.reliable_kind[slot(i + 1)];
                 }
                 // The freed last slot takes `cmd` below.
@@ -363,19 +309,19 @@ impl Client {
                 queued = Queued::Replaced;
             }
         }
-        if seq + 1 - self.reliable_ack > RING {
+        if seq + 1 - self.link.reliable_ack > RING {
             return Queued::Overflow;
         }
         seq += 1;
-        self.netchan.reliable_sequence = seq as u32;
-        self.netchan.reliable[slot(seq)] = cmd.to_string();
+        self.link.netchan.reliable_sequence = seq as u32;
+        self.link.netchan.reliable[slot(seq)] = cmd.to_string();
         self.reliable_kind[slot(seq)] = kind;
         queued
     }
 
     /// The frame sent as `message_num`, if still in the ring.
     pub fn sent_frame(&self, message_num: u32) -> Option<&Snapshot> {
-        self.frames[message_num as usize % SV_PACKET_BACKUP]
+        self.link.frames[message_num as usize % SV_PACKET_BACKUP]
             .as_ref()
             .filter(|s| s.message_num == message_num)
     }
@@ -383,45 +329,33 @@ impl Client {
     /// File a frame under the sequence its packet will carry.
     pub fn record_frame(&mut self, snap: Snapshot) {
         let idx = snap.message_num as usize % SV_PACKET_BACKUP;
-        self.frames[idx] = Some(snap);
+        self.link.frames[idx] = Some(snap);
     }
 
     /// `SV_SendMessageToClient` (0x808f680): stamps the ring slot of the
     /// message about to go out as `sequence`.
     pub fn stamp_sent(&mut self, sequence: u32, sv_time_ms: i32) {
-        self.ping_ring[sequence as usize % SV_PACKET_BACKUP] = (sv_time_ms, -1);
+        self.link.ping_ring[sequence as usize % SV_PACKET_BACKUP] = (sv_time_ms, -1);
     }
 
     /// `SV_UserMove` (0x8086fa4), once the cmds decode: a move message stamps the
     /// slot it acks, overwriting an earlier ack of the same message.
     pub fn stamp_acked(&mut self, sv_time_ms: i32) {
-        self.ping_ring[self.message_ack as usize % SV_PACKET_BACKUP].1 = sv_time_ms;
+        self.link.ping_ring[self.message_ack as usize % SV_PACKET_BACKUP].1 = sv_time_ms;
     }
 
     /// `SV_CalcPings`' average (0x808cab8): every slot with a positive ack
     /// time counts, capped at 999, and 999 with none.
     pub fn calc_ping(&self) -> i32 {
-        let (sum, n) = self
-            .ping_ring
-            .iter()
-            .filter(|(_, acked)| *acked > 0)
-            .fold((0i32, 0i32), |(s, n), (sent, acked)| {
-                (s.wrapping_add(acked - sent), n + 1)
-            });
-        if n == 0 { 999 } else { (sum / n).min(999) }
+        link::calc_ping(&self.link.ping_ring)
     }
 
     /// `cl->rate` as `SV_UserinfoChanged` (0x8086ab4) sets it: a LAN client
     /// on a server below `dedicated 2` reads 99999, anyone else the
     /// userinfo's `rate` clamped to 1000..90000, or 5000 when it is empty.
     pub fn rate(&self, dedicated: i32) -> i32 {
-        if dedicated != 2 && self.bot_port.is_none() && is_lan(self.addr.ip()) {
-            return 99999;
-        }
-        match vcod_common::net::info_value_for_key(&self.userinfo, "rate") {
-            None | Some("") => 5000,
-            Some(r) => atoi(r).clamp(1000, 90000),
-        }
+        let lan = self.bot_port.is_none() && Lan::Cod1.is_lan(self.link.addr.ip());
+        link::rate(&self.link.userinfo, lan, dedicated)
     }
 
     /// `cl->snapshotMsec` as `SV_UserinfoChanged` sets it (0x8086cad..0x8086d44):
@@ -429,28 +363,19 @@ impl Client {
     /// to 1..30. It floors an off-LAN client's message interval and sizes a
     /// download message.
     pub fn snapshot_msec(&self) -> i32 {
-        match vcod_common::net::info_value_for_key(&self.userinfo, "snaps") {
-            None | Some("") => 50,
-            Some(s) => 1000 / atoi(s).clamp(1, 30),
-        }
+        link::snapshot_msec(&self.link.userinfo)
     }
 
     /// `cl_wwwDownload` read as `SV_UserinfoChanged` reads it (UO
     /// 0x808d2c7): non-empty and its `atoi` not 0.
     pub fn wants_www(&self) -> bool {
-        vcod_common::net::info_value_for_key(&self.userinfo, "cl_wwwDownload")
-            .is_some_and(|v| atoi(v) != 0)
+        link::wants_www(&self.link.userinfo)
     }
 
     /// The rate a message is paced and filled by: [`Self::rate`] under a
     /// non-zero `sv_maxRate`, which reads 1000 at the least (0x808f7a5).
     pub fn send_rate(&self, dedicated: i32, max_rate: i32) -> i32 {
-        let rate = self.rate(dedicated);
-        if max_rate == 0 {
-            rate
-        } else {
-            rate.min(max_rate.max(1000))
-        }
+        link::send_rate(self.rate(dedicated), max_rate)
     }
 
     /// `SV_SendMessageToClient`'s `nextSnapshotTime` (0x808f680) after a
@@ -458,31 +383,28 @@ impl Client {
     /// the rate needs to carry it (capped at 1500 bytes, plus 48 of
     /// headers) and never under the snapshot interval. A client that is
     /// neither in the world nor downloading, a zombie included, waits a
-    /// second. A LAN client leaves [`Self::rate_delayed`] as it was.
+    /// second. A LAN client leaves `link.rate_delayed` as it was.
     pub fn pace(&mut self, sv_time_ms: i32, bytes: usize, rate: i32, snapshot_ms: i32) {
-        if is_lan(self.addr.ip()) {
+        let lan = Lan::Cod1.is_lan(self.link.addr.ip());
+        let idle = (self.state != ClientState::Active || self.zombie) && self.download.is_none();
+        match link::pace(sv_time_ms, bytes, lan, rate, snapshot_ms, idle) {
             // Retail's `svs.time - 1`: due whatever the clock does next.
-            self.next_message_ms = i32::MIN;
-            return;
+            link::Pace::Lan => self.link.next_message_ms = i32::MIN,
+            link::Pace::At { next, delayed } => {
+                self.link.rate_delayed = delayed;
+                self.link.next_message_ms = next;
+            }
         }
-        let msec = (bytes.min(1500) as i32 + 48) * 1000 / rate.max(1);
-        // 0x808f7d8: the floor clears the flag, a rate at or past it sets it.
-        self.rate_delayed = msec >= snapshot_ms;
-        let mut next = sv_time_ms + msec.max(snapshot_ms);
-        if (self.state != ClientState::Active || self.zombie) && self.download.is_none() {
-            next = next.max(sv_time_ms + 1000);
-        }
-        self.next_message_ms = next;
     }
 
     /// `SV_SendMessageToClient`'s send: the first packet of a message goes
-    /// out now, a fragmented message's others wait in [`Self::unsent`].
+    /// out now, a fragmented message's others wait in `link.unsent`.
     pub fn first_packet(&mut self, mut packets: Vec<Vec<u8>>) -> Option<Vec<u8>> {
         if packets.is_empty() {
             return None;
         }
         let first = packets.remove(0);
-        self.unsent = packets.into();
+        self.link.unsent = packets.into();
         Some(first)
     }
 
@@ -490,9 +412,9 @@ impl Client {
     /// packet, paced by the bytes left at the rate with no LAN shortcut and
     /// no snapshot floor.
     pub fn next_fragment(&mut self, sv_time_ms: i32, rate: i32) -> Option<Vec<u8>> {
-        let left: usize = self.unsent.iter().map(Vec::len).sum();
-        let pkt = self.unsent.pop_front()?;
-        self.next_message_ms = sv_time_ms + (left.min(1500) as i32 + 48) * 1000 / rate.max(1);
+        let left: usize = self.link.unsent.iter().map(Vec::len).sum();
+        let pkt = self.link.unsent.pop_front()?;
+        self.link.next_message_ms = sv_time_ms + link::rate_msec(left, rate);
         Some(pkt)
     }
 
@@ -500,35 +422,12 @@ impl Client {
     /// acks and the timeout clock. The address is the caller's call, see
     /// `Server::handle_client_packet`.
     pub fn accept(&mut self, m: &ClientMessage, now: Instant, sv_time_ms: i32) {
-        self.netchan.accept(m);
+        self.link.netchan.accept(m);
         self.last_packet = now;
-        self.last_packet_ms = sv_time_ms;
+        self.link.last_packet_ms = sv_time_ms;
         self.message_ack = m.message_ack;
-        self.reliable_ack = m.reliable_ack;
+        self.link.reliable_ack = m.reliable_ack;
     }
-}
-
-/// `Sys_IsLANAddress` (0x80c72f8): the address shares its class's network
-/// part with one of the host's own.
-pub(crate) fn is_lan(ip: std::net::IpAddr) -> bool {
-    vcod_common::net::lan::is_lan(ip)
-}
-
-/// `strtol(s, 0, 10)` saturated to `i32`: leading blanks and a sign, then
-/// digits until the first non-digit; 0 with none.
-fn atoi(s: &str) -> i32 {
-    let s = s.trim_start();
-    let (neg, digits) = match s.as_bytes().first() {
-        Some(b'-') => (true, &s[1..]),
-        Some(b'+') => (false, &s[1..]),
-        _ => (false, s),
-    };
-    let mut n: i64 = 0;
-    for b in digits.bytes().take_while(u8::is_ascii_digit) {
-        n = (n * 10 + i64::from(b - b'0')).min(i64::from(i32::MAX) + 1);
-    }
-    let n = if neg { -n } else { n };
-    n.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 /// Strips the quote that delimits a `statusResponse` player line and any
@@ -589,17 +488,17 @@ mod tests {
         c.state = ClientState::Active;
         // 452 + 48 bytes at 5000 B/s is 100 ms, past the 50 ms interval.
         c.pace(1000, 452, c.send_rate(1, 0), 50);
-        assert_eq!(c.next_message_ms, 1100);
+        assert_eq!(c.link.next_message_ms, 1100);
         // A small message keeps the snapshot interval.
         c.pace(1000, 100, c.send_rate(1, 0), 50);
-        assert_eq!(c.next_message_ms, 1050);
+        assert_eq!(c.link.next_message_ms, 1050);
         // `sv_maxRate` caps the rate, never under 1000.
         assert_eq!(c.send_rate(1, 3000), 3000);
         assert_eq!(c.send_rate(1, 10), 1000);
         // Not in the world and not downloading: a second.
         c.state = ClientState::Primed;
         c.pace(1000, 100, 5000, 50);
-        assert_eq!(c.next_message_ms, 2000);
+        assert_eq!(c.link.next_message_ms, 2000);
         let mut lan = Client::new(
             SocketAddr::from(([127, 0, 0, 1], 1)),
             1,
@@ -608,22 +507,22 @@ mod tests {
             now,
         );
         lan.pace(1000, 1400, 1000, 50);
-        assert!(lan.next_message_ms <= 1000);
+        assert!(lan.link.next_message_ms <= 1000);
     }
 
     #[test]
     fn rate_is_clamped_as_retail_does() {
         let mut c = active();
-        c.userinfo = "\\rate\\25000".into();
+        c.link.userinfo = "\\rate\\25000".into();
         assert_eq!(c.rate(1), 99999);
         assert_eq!(c.rate(2), 25000);
-        c.addr = "8.8.8.8:1".parse().unwrap();
+        c.link.addr = "203.0.113.1:1".parse().unwrap();
         assert_eq!(c.rate(1), 25000);
         for (rate, want) in [("100", 1000), ("200000", 90000), ("", 5000), ("abc", 1000)] {
-            c.userinfo = format!("\\rate\\{rate}");
+            c.link.userinfo = format!("\\rate\\{rate}");
             assert_eq!(c.rate(1), want, "{rate:?}");
         }
-        c.userinfo = String::new();
+        c.link.userinfo = String::new();
         assert_eq!(c.rate(1), 5000);
     }
 
@@ -639,17 +538,17 @@ mod tests {
             ("abc", 1000),
             ("", 50),
         ] {
-            c.userinfo = format!("\\rate\\25000\\snaps\\{snaps}");
+            c.link.userinfo = format!("\\rate\\25000\\snaps\\{snaps}");
             assert_eq!(c.snapshot_msec(), want, "{snaps:?}");
         }
-        c.userinfo = "\\rate\\25000".into();
+        c.link.userinfo = "\\rate\\25000".into();
         assert_eq!(c.snapshot_msec(), 50);
     }
 
     /// What the next message would carry, oldest first.
     fn unsent(c: &Client) -> Vec<&str> {
-        (c.reliable_sent + 1..=c.netchan.reliable_sequence as i32)
-            .map(|s| c.netchan.reliable[s as usize & 63].as_str())
+        (c.link.reliable_sent + 1..=c.link.netchan.reliable_sequence as i32)
+            .map(|s| c.link.netchan.reliable[s as usize & 63].as_str())
             .collect()
     }
 
@@ -692,7 +591,7 @@ mod tests {
     fn a_command_already_sent_is_never_replaced() {
         let mut c = active();
         c.queue_server_command("v sq_a \"3\"");
-        c.reliable_sent = c.netchan.reliable_sequence as i32;
+        c.link.reliable_sent = c.link.netchan.reliable_sequence as i32;
         assert_eq!(c.queue_server_command("v sq_a \"4\""), Queued::Added);
         assert_eq!(unsent(&c), ["v sq_a \"4\""]);
     }
@@ -745,7 +644,7 @@ mod tests {
             assert_eq!(c.queue_server_command(&format!("v c{i} 1")), Queued::Added);
         }
         assert_eq!(c.queue_server_command("v c99 1"), Queued::Overflow);
-        assert_eq!(c.netchan.reliable_sequence, 64);
+        assert_eq!(c.link.netchan.reliable_sequence, 64);
         // A replacement takes no new slot.
         assert_eq!(c.queue_server_command("v c3 2"), Queued::Replaced);
     }

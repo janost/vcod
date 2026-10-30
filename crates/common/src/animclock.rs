@@ -8,7 +8,7 @@
 //! (docs/research/cod11-movers.md, section 15, "A moving body's clip" and
 //! "The drawn body's clip").
 
-use crate::animscript::movetype_bit;
+use crate::animscript::{movetype_bit, movetype_bit_hi};
 use crate::animtree::{AnimMotion, PlayerAnims};
 use glam::Vec3;
 
@@ -450,7 +450,12 @@ impl ChannelClock {
                 self.old_pos.distance(tr_base)
             };
             let secs = now_ms.wrapping_sub(self.old_ms) as f32 * 0.001;
-            let mut rate = dist / secs / motion.move_speed as f32;
+            let speed = if anims.float_move_speed {
+                motion.move_speed_f
+            } else {
+                motion.move_speed as f32
+            };
+            let mut rate = dist / secs / speed;
             if rate < 0.1 {
                 // 0x2acba..0x2acf6: a ladder anim stops under 0.01.
                 rate = if rate < 0.01 && motion.vertical {
@@ -865,9 +870,18 @@ fn blend_ms_windowed(
         let crouched = movetype_bit("idlecr") | movetype_bit("walkcr") | movetype_bit("walkcrbk");
         let prone =
             movetype_bit("idleprone") | movetype_bit("walkprone") | movetype_bit("walkpronebk");
+        // CoD2 counts its crouched stumbles crouched too (lnxded 0x80d9c02:
+        // `+0x58 & 0x180`), so an anim a crouched stumble block also
+        // plays, `pb_stumble_forward` among them, opens the window from a
+        // standing idle (cod2-combat.md 9.3).
+        let crouched_hi =
+            movetype_bit_hi("stumble_crouch_forward") | movetype_bit_hi("stumble_crouch_backward");
         let class = |i: i32| {
-            let m = anims.record(i).movetypes;
-            (m & crouched != 0, m & prone != 0)
+            let r = anims.record(i);
+            (
+                r.movetypes & crouched != 0 || r.movetypes_hi & crouched_hi != 0,
+                r.movetypes & prone != 0,
+            )
         };
         if class(old) != class(new) {
             *window = now_ms.wrapping_add(400);

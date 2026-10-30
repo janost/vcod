@@ -453,7 +453,7 @@ pub const UO_BULLET_RANGE: f32 = 10_000.0;
 
 /// How far a protocol's server traces a bullet.
 pub fn bullet_range(p: &vcod_common::net::protocol::Protocol) -> f32 {
-    if p.version == vcod_common::net::protocol::PROTOCOL_V22.version {
+    if p.is_uo() {
         UO_BULLET_RANGE
     } else {
         BULLET_RANGE
@@ -1420,6 +1420,7 @@ impl BodyPose {
             },
             leaf_times: self.seat_ramp.leaf_times(now_ms),
             node_time: self.rules.v15(),
+            binds: None,
         }
     }
 
@@ -1685,7 +1686,7 @@ pub fn trace_bodies_faced(
             arith,
         } = &mut **ctx;
         let arith = *arith;
-        let Some(skel) = rigs.rig(fs, &body.pose.assembly) else {
+        let Some(skel) = rigs.rig(*fs, &body.pose.assembly) else {
             let Some(t) = ray_box(start, end, body.origin + body.mins, body.origin + body.maxs)
                 .filter(|&t| t < limit)
             else {
@@ -1983,10 +1984,10 @@ pub struct PlacedModel {
     pub id: EntId,
     pub origin: Vec3,
     pub axis: glam::Mat3,
-    pub tris: std::rc::Rc<[vcod_common::collision::ModelTri]>,
+    pub tris: std::sync::Arc<[vcod_common::collision::ModelTri]>,
     /// A posed vehicle's collision surfaces over `tris`, each culled by its
     /// bounds in its bone's frame; empty clips `tris` whole.
-    pub surfs: std::rc::Rc<[vcod_common::collision::ModelSurf]>,
+    pub surfs: std::sync::Arc<[vcod_common::collision::ModelSurf]>,
     /// `r.ownerNum`, `None` for `ENTITYNUM_NONE`: a driven vehicle's
     /// driver, which a trace's pass rule reads.
     pub owner: Option<u32>,
@@ -3249,7 +3250,7 @@ mod tests {
             id: EntId(300, 0),
             origin: Vec3::new(100.0, 0.0, 40.0),
             axis: glam::Mat3::IDENTITY,
-            tris: std::rc::Rc::from(vec![face([p, r, q]), face([p, t, r])]),
+            tris: std::sync::Arc::from(vec![face([p, r, q]), face([p, t, r])]),
             surfs: Default::default(),
             owner: None,
             takes_damage: true,
@@ -3333,7 +3334,7 @@ mod tests {
             id: EntId(70, 0),
             origin: Vec3::new(x, 0.0, 40.0),
             axis: glam::Mat3::IDENTITY,
-            tris: std::rc::Rc::from(vec![face([p, r, q]), face([p, t, r])]),
+            tris: std::sync::Arc::from(vec![face([p, r, q]), face([p, t, r])]),
             surfs: Default::default(),
             owner: None,
             takes_damage: false,
@@ -3740,7 +3741,7 @@ mod tests {
             id: EntId(170, 0),
             origin: Vec3::new(30.0, 0.0, muzzle.z),
             axis: glam::Mat3::IDENTITY,
-            tris: std::rc::Rc::from(vec![face([p, r, q]), face([p, t, r])]),
+            tris: std::sync::Arc::from(vec![face([p, r, q]), face([p, t, r])]),
             surfs: Default::default(),
             owner: None,
             takes_damage,
@@ -3985,7 +3986,7 @@ mod tests {
             id: EntId(200, 0),
             origin: Vec3::new(24.0, 0.0, 0.0),
             axis: glam::Mat3::IDENTITY,
-            tris: std::rc::Rc::from(vec![face([a, b, c]), face([a, c, d])]),
+            tris: std::sync::Arc::from(vec![face([a, b, c]), face([a, c, d])]),
             surfs: Default::default(),
             owner: None,
             takes_damage: false,

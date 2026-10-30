@@ -14,8 +14,6 @@ pub const MAX_PACKETLEN: usize = 1400;
 pub const FRAGMENT_SIZE: usize = MAX_PACKETLEN - 100;
 /// `FRAGMENT_BIT`, net_chan.c:62.
 const FRAGMENT_BIT: u32 = 1 << 31;
-/// `MAX_MSGLEN`, cap on a reassembled message.
-const MAX_MSGLEN: usize = 32768;
 
 /// `MAX_RELIABLE_COMMANDS`, 64 on CoD 1.1, not RTCW's 256 (CoDExtended
 /// shared.h:135; `SV_UserMove` cod_lnxded 0x8086fa4, the mask at 0x8087060).
@@ -28,15 +26,49 @@ const CLIENT_PACKET_PREFIX: usize = 4 + 2;
 /// Plain client header: u8 `serverId`, i32 `messageAcknowledge`, i32
 /// `reliableAcknowledge`.
 const CLIENT_HEADER_LEN: usize = 1 + 4 + 4;
-/// `CL_DECODE_START` (qcommon.h:1155): payload byte 4, packet byte 8.
-const CL_DECODE_START: usize = 4;
+
+/// The netchan facts that differ between games. Every CoD1 protocol takes
+/// [`Self::COD1`]; CoD2 1.3's are docs/research/cod2-protocol.md 2.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NetchanParams {
+    /// Width of a fragment's start offset: 2 on CoD1, 4 on CoD2. The length
+    /// after it is 2 on both.
+    pub fragment_start_bytes: usize,
+    /// `MAX_MSGLEN`, the cap on a reassembled message.
+    pub max_msglen: usize,
+    /// `MAX_RELIABLE_COMMANDS`, the size of both command rings.
+    pub reliable_commands: usize,
+    /// Whether the server-to-client key string reads as the server's
+    /// `MSG_ReadString` stored it, 0x92 as `'` and every other high byte as
+    /// `.` (CoD1), or raw (CoD2).
+    pub clean_server_key: bool,
+}
+
+impl NetchanParams {
+    pub const COD1: NetchanParams = NetchanParams {
+        fragment_start_bytes: 2,
+        max_msglen: 32768,
+        reliable_commands: MAX_RELIABLE_COMMANDS,
+        clean_server_key: true,
+    };
+    /// cod2-protocol.md 2.2-2.4: `Netchan_Process` (cod2_lnxded 0x806be8a)
+    /// reads a long start, `MAX_MSGLEN` is 0x20000, the rings 128 slots.
+    pub const COD2: NetchanParams = NetchanParams {
+        fragment_start_bytes: 4,
+        max_msglen: 0x20000,
+        reliable_commands: 128,
+        clean_server_key: false,
+    };
+}
 
 pub struct Netchan {
+    pub params: NetchanParams,
     pub qport: u16,
     pub challenge: i32,
     pub incoming_sequence: u32,
     pub outgoing_sequence: u32,
-    /// Sent reliables, ring at `sequence & 63`; keys the decode of server messages.
+    /// Sent reliables, ring at `sequence & (len - 1)`; keys the decode of
+    /// server messages.
     pub reliable: Vec<String>,
     pub reliable_sequence: u32,
     pub reliable_acknowledge: u32,
@@ -52,16 +84,22 @@ pub struct Netchan {
 }
 
 impl Netchan {
+    /// A CoD1 netchan ([`NetchanParams::COD1`]).
     pub fn new(qport: u16, challenge: i32) -> Self {
+        Self::with_params(qport, challenge, NetchanParams::COD1)
+    }
+
+    pub fn with_params(qport: u16, challenge: i32, params: NetchanParams) -> Self {
         Netchan {
+            params,
             qport,
             challenge,
             incoming_sequence: 0,
             outgoing_sequence: 1,
-            reliable: vec![String::new(); MAX_RELIABLE_COMMANDS],
+            reliable: vec![String::new(); params.reliable_commands],
             reliable_sequence: 0,
             reliable_acknowledge: 0,
-            server_commands: vec![String::new(); MAX_RELIABLE_COMMANDS],
+            server_commands: vec![String::new(); params.reliable_commands],
             server_command_sequence: 0,
             dropped: 0,
             total_dropped: 0,
@@ -70,16 +108,36 @@ impl Netchan {
         }
     }
 
-    /// `Netchan_Process` framing, then `CL_Netchan_Decode`. Returns the payload
-    /// past the 4-byte sequence; `None` for stale, duplicate or non-final
-    /// fragment packets; `Err` only when too short to be a netchan packet.
-    /// The codec is unused here (CoD1's acknowledge is plain, see `decode`)
-    /// and kept for symmetry with [`Self::build_out`].
+    /// `Netchan_Process` framing, then `CL_Netchan_Decode` keyed on
+    /// [`Self::reliable`]. Returns the payload past the 4-byte sequence;
+    /// `None` for stale, duplicate or non-final fragment packets; `Err` only
+    /// when too short to be a netchan packet. The codec is unused here
+    /// (CoD1's acknowledge is plain, see [`Self::decode`]) and kept for
+    /// symmetry with [`Self::build_out`].
     pub fn process_in(
         &mut self,
         packet: &[u8],
         _huff: &Huffman,
     ) -> anyhow::Result<Option<Vec<u8>>> {
+        let Some((sequence, mut payload)) = self.frame(packet)? else {
+            return Ok(None);
+        };
+        let ack = if payload.len() >= 4 {
+            i32::from_le_bytes(payload[..4].try_into().unwrap())
+        } else {
+            0
+        };
+        let key = self.reliable[ack as usize & (self.reliable.len() - 1)]
+            .as_bytes()
+            .to_vec();
+        self.decode(sequence, &key, &mut payload);
+        Ok(Some(payload))
+    }
+
+    /// `Netchan_Process` alone: the sequence and the payload past it, the
+    /// fragments joined, still scrambled. `None` and `Err` as in
+    /// [`Self::process_in`].
+    pub fn frame(&mut self, packet: &[u8]) -> anyhow::Result<Option<(u32, Vec<u8>)>> {
         if packet.len() < 4 {
             anyhow::bail!("netchan packet of {} bytes", packet.len());
         }
@@ -90,13 +148,16 @@ impl Netchan {
         let mut read = 4usize;
 
         let (frag_start, frag_len) = if fragmented {
-            if packet.len() < read + 4 {
+            let sb = self.params.fragment_start_bytes;
+            if packet.len() < read + sb + 2 {
                 return Ok(None); // truncated fragment header
             }
-            let s = u16::from_le_bytes(packet[read..read + 2].try_into().unwrap()) as usize;
-            let l = u16::from_le_bytes(packet[read + 2..read + 4].try_into().unwrap()) as usize;
-            read += 4;
-            (s, l)
+            let mut s = [0u8; 8];
+            s[..sb].copy_from_slice(&packet[read..read + sb]);
+            let s = u64::from_le_bytes(s) as usize;
+            let l = u16::from_le_bytes(packet[read + sb..read + sb + 2].try_into().unwrap());
+            read += sb + 2;
+            (s, l as usize)
         } else {
             (0, 0)
         };
@@ -110,9 +171,7 @@ impl Netchan {
 
         if !fragmented {
             self.incoming_sequence = sequence;
-            let mut buf = packet.to_vec();
-            decode(self, &mut buf);
-            return Ok(Some(buf.split_off(4)));
+            return Ok(Some((sequence, packet[4..].to_vec())));
         }
 
         // Fragments must arrive in order; a gap parks the set until the server
@@ -124,7 +183,8 @@ impl Netchan {
         if frag_start != self.frag_buf.len() {
             return Ok(None);
         }
-        if read + frag_len > packet.len() || self.frag_buf.len() + frag_len > MAX_MSGLEN {
+        if read + frag_len > packet.len() || self.frag_buf.len() + frag_len > self.params.max_msglen
+        {
             return Ok(None); // illegal fragment length
         }
         self.frag_buf
@@ -132,30 +192,57 @@ impl Netchan {
         if frag_len == FRAGMENT_SIZE {
             return Ok(None); // more to come
         }
-
-        // The cleared sequence goes back at byte 0; it is half the decode key.
-        let mut buf = Vec::with_capacity(4 + self.frag_buf.len());
-        buf.extend_from_slice(&sequence.to_le_bytes());
-        buf.append(&mut self.frag_buf);
         self.incoming_sequence = sequence;
-        decode(self, &mut buf);
-        Ok(Some(buf.split_off(4)))
+        Ok(Some((sequence, std::mem::take(&mut self.frag_buf))))
     }
 
-    /// `CL_WritePacket` + `CL_Netchan_Transmit`: `[u32 sequence][u16 qport]
-    /// [9 plain header bytes][scrambled Huff_Compress(ops)]`. The header is
-    /// plain with a one-byte `serverId` (`SV_PacketEvent` cod_lnxded 0x808c9d1)
-    /// and the scramble covers the compressed block from its byte 0
-    /// (`SV_Netchan_Decode` 0x808de60). docs/protocol-1.1.md, "Message headers"
-    /// and "XOR scramble".
-    ///
-    /// Outgoing fragmentation is not ported; an oversized message is an error
-    /// rather than a packet the server drops silently.
+    /// `CL_Netchan_Decode` (cl_net_chan.c:99) over a [`Self::frame`]
+    /// payload: bytes 4.. (packet bytes 8..) unscrambled in place, seeded
+    /// `challenge ^ sequence` and keyed on `key`, the client's
+    /// `reliableCommands[reliableAcknowledge]`. The `reliableAcknowledge`
+    /// at 0..4 is plain on CoD1 (`SV_Netchan_Transmit` cod_lnxded
+    /// 0x808f680) and CoD2, so it can be read before decoding.
+    /// docs/protocol-1.1.md, "Message headers".
+    pub fn decode(&self, sequence: u32, key: &[u8], payload: &mut [u8]) {
+        if payload.len() <= 4 {
+            return;
+        }
+        let seed = (self.challenge as u32 ^ sequence) as u8;
+        scramble_server_block(seed, key, self.params.clean_server_key, &mut payload[4..]);
+    }
+
+    /// `CL_WritePacket` + `CL_Netchan_Transmit` keyed on
+    /// [`Self::server_commands`]; see [`Self::build_out_keyed`].
     pub fn build_out(
         &mut self,
         server_id: i32,
         message_ack: i32,
         reliable_ack: i32,
+        ops: &[u8],
+        huff: &Huffman,
+    ) -> anyhow::Result<Vec<u8>> {
+        let key = self.server_commands[reliable_ack as usize & (self.server_commands.len() - 1)]
+            .as_bytes()
+            .to_vec();
+        self.build_out_keyed(server_id, message_ack, reliable_ack, &key, ops, huff)
+    }
+
+    /// `[u32 sequence][u16 qport][9 plain header bytes][scrambled
+    /// Huff_Compress(ops)]`. The header is plain with a one-byte `serverId`
+    /// (`SV_PacketEvent` cod_lnxded 0x808c9d1) and the scramble covers the
+    /// compressed block from its byte 0 (`SV_Netchan_Decode` 0x808de60),
+    /// seeded `challenge ^ serverId ^ messageAcknowledge` and keyed on `key`,
+    /// the client's `serverCommands[reliableAcknowledge]`.
+    /// docs/protocol-1.1.md, "Message headers" and "XOR scramble".
+    ///
+    /// Outgoing fragmentation is not ported; an oversized message is an error
+    /// rather than a packet the server drops silently.
+    pub fn build_out_keyed(
+        &mut self,
+        server_id: i32,
+        message_ack: i32,
+        reliable_ack: i32,
+        key: &[u8],
         ops: &[u8],
         huff: &Huffman,
     ) -> anyhow::Result<Vec<u8>> {
@@ -167,7 +254,8 @@ impl Netchan {
             CLIENT_HEADER_LEN + comp.len(),
             FRAGMENT_SIZE
         );
-        encode(self, server_id, message_ack, reliable_ack, &mut comp);
+        let seed = self.challenge as u32 ^ server_id as u32 ^ message_ack as u32;
+        scramble_client_ops(seed as u8, key, &mut comp);
 
         let mut pkt = Vec::with_capacity(CLIENT_PACKET_PREFIX + CLIENT_HEADER_LEN + comp.len());
         pkt.extend_from_slice(&self.outgoing_sequence.to_le_bytes());
@@ -185,14 +273,15 @@ impl Netchan {
 /// `SV_Netchan_Decode` (cod_lnxded 0x808de60) and `SV_Netchan_Encode` (RTCW
 /// sv_net_chan.c:43).
 pub struct ServerNetchan {
+    pub params: NetchanParams,
     pub qport: u16,
     pub challenge: i32,
     pub incoming_sequence: u32,
     pub outgoing_sequence: u32,
     /// Packets lost between the last two accepted client sequences.
     pub dropped: u32,
-    /// `svc_serverCommand`s sent, ring at `sequence & 63`; keys the decode of
-    /// the client's messages.
+    /// `svc_serverCommand`s sent, ring at `sequence & (len - 1)`; keys the
+    /// decode of the client's messages.
     pub reliable: Vec<String>,
     pub reliable_sequence: u32,
     /// `lastClientCommandString`; keys the scramble of our messages.
@@ -210,14 +299,20 @@ pub struct ClientMessage {
 }
 
 impl ServerNetchan {
+    /// A CoD1 netchan ([`NetchanParams::COD1`]).
     pub fn new(qport: u16, challenge: i32) -> Self {
+        Self::with_params(qport, challenge, NetchanParams::COD1)
+    }
+
+    pub fn with_params(qport: u16, challenge: i32, params: NetchanParams) -> Self {
         ServerNetchan {
+            params,
             qport,
             challenge,
             incoming_sequence: 0,
             outgoing_sequence: 1,
             dropped: 0,
-            reliable: vec![String::new(); MAX_RELIABLE_COMMANDS],
+            reliable: vec![String::new(); params.reliable_commands],
             reliable_sequence: 0,
             last_client_command_string: String::new(),
         }
@@ -247,7 +342,7 @@ impl ServerNetchan {
         let message_ack = i32::from_le_bytes(body[1..5].try_into().unwrap());
         let reliable_ack = i32::from_le_bytes(body[5..9].try_into().unwrap());
         let mut ops = body[CLIENT_HEADER_LEN..].to_vec();
-        let string = self.reliable[reliable_ack as usize & (MAX_RELIABLE_COMMANDS - 1)].as_bytes();
+        let string = self.reliable[reliable_ack as usize & (self.reliable.len() - 1)].as_bytes();
         let seed = self.challenge as u32 ^ u32::from(server_id) ^ message_ack as u32;
         scramble_client_ops(seed as u8, string, &mut ops);
         Some(ClientMessage {
@@ -271,22 +366,48 @@ impl ServerNetchan {
     /// `SV_Netchan_Transmit`: `[reliableAcknowledge][Huff_Compress(ops ++ svc_EOF)]`
     /// scrambled from byte 4, fragmented at `FRAGMENT_SIZE` under one sequence
     /// with a zero-length terminator on an exact multiple. Packets in send order.
+    /// CoD1's `svc_EOF`; [`Self::transmit_eof`] takes the game's.
     pub fn transmit(&mut self, reliable_ack: i32, ops: &[u8], huff: &Huffman) -> Vec<Vec<u8>> {
-        let mut msg = reliable_ack.to_le_bytes().to_vec();
+        self.transmit_eof(reliable_ack, ops, SVC_EOF, huff)
+    }
+
+    /// [`Self::transmit`] closing the block with `eof`, the game's `svc_EOF`
+    /// (CoD2's is 7, cod2-protocol.md 3.1).
+    pub fn transmit_eof(
+        &mut self,
+        reliable_ack: i32,
+        ops: &[u8],
+        eof: u8,
+        huff: &Huffman,
+    ) -> Vec<Vec<u8>> {
         // The retail client needs the trailing `svc_EOF`; without it, it reads
         // the decompressor's pad symbol as an op and drops with "Illegible
         // server message" (docs/protocol-1.1.md, svc_gamestate).
         let mut body = Vec::with_capacity(ops.len() + 1);
         body.extend_from_slice(ops);
-        body.push(SVC_EOF);
-        msg.extend(huff.compress_block(&body));
+        body.push(eof);
+        self.transmit_block(reliable_ack, &huff.compress_block(&body))
+    }
+
+    /// [`Self::transmit`] of a block the caller compressed itself, its
+    /// `svc_EOF` inside: CoD4 1.7's Huffman code is not [`Huffman`]'s
+    /// (cod4-handshake.md 4).
+    pub fn transmit_block(&mut self, reliable_ack: i32, block: &[u8]) -> Vec<Vec<u8>> {
+        let mut msg = reliable_ack.to_le_bytes().to_vec();
+        msg.extend_from_slice(block);
         let string = self.last_client_command_string.as_bytes().to_vec();
         let mut key = (self.challenge as u32 ^ self.outgoing_sequence) as u8;
         let mut index = 0;
         // The 4-byte sequence keeps message and packet parity equal, so `i` from
         // SV_ENCODE_START matches the client's decode.
         for (i, byte) in msg.iter_mut().enumerate().skip(SV_ENCODE_START) {
-            advance_key(&mut key, &string, &mut index, i);
+            advance_key(
+                &mut key,
+                &string,
+                &mut index,
+                i,
+                self.params.clean_server_key,
+            );
             *byte ^= key;
         }
 
@@ -302,7 +423,11 @@ impl ServerNetchan {
         loop {
             let len = FRAGMENT_SIZE.min(msg.len() - start);
             let mut pkt = (seq | FRAGMENT_BIT).to_le_bytes().to_vec();
-            pkt.extend_from_slice(&(start as u16).to_le_bytes());
+            if self.params.fragment_start_bytes == 4 {
+                pkt.extend_from_slice(&(start as u32).to_le_bytes());
+            } else {
+                pkt.extend_from_slice(&(start as u16).to_le_bytes());
+            }
             pkt.extend_from_slice(&(len as u16).to_le_bytes());
             pkt.extend_from_slice(&msg[start..start + len]);
             pkts.push(pkt);
@@ -316,62 +441,43 @@ impl ServerNetchan {
 }
 
 /// One scramble key step over the server's copy of the keyed client command.
-/// Retail's `SV_Netchan_Transmit` walks `lastClientCommandString` raw
+/// Retail CoD1's `SV_Netchan_Transmit` walks `lastClientCommandString` raw
 /// (cod_lnxded 0x808dc74), and that copy came through `MSG_ReadString`
 /// (0x807f320), which maps 0x92 to `'` and every other byte over 127 to `.`
 /// but keeps `%`. Mapping the client's raw copy the same way here gives both
-/// ends one key stream. An empty ring slot is all NULs in the C and
-/// contributes nothing.
-fn advance_key(key: &mut u8, string: &[u8], index: &mut usize, i: usize) {
+/// ends one key stream; `clean` off walks it raw. An empty ring slot is all
+/// NULs in the C and contributes nothing.
+fn advance_key(key: &mut u8, string: &[u8], index: &mut usize, i: usize, clean: bool) {
     if *index >= string.len() {
         *index = 0;
     }
     let c = match string.get(*index).copied().unwrap_or(0) {
-        0x92 => b'\'',
-        c if c > 127 => b'.',
+        0x92 if clean => b'\'',
+        c if clean && c > 127 => b'.',
         c => c,
     };
     *key ^= c << (i & 1);
     *index += 1;
 }
 
-/// `CL_Netchan_Decode` (cl_net_chan.c:99). `buf` is the whole packet, sequence
-/// at byte 0; bytes 8.. are unscrambled in place. The `reliableAcknowledge` at
-/// 4..8 is plain on CoD1 (`SV_Netchan_Transmit` cod_lnxded 0x808f680), so it can
-/// be read before decoding. docs/protocol-1.1.md, "Message headers".
-fn decode(nc: &Netchan, buf: &mut [u8]) {
-    let sequence = u32::from_le_bytes(buf[..4].try_into().unwrap());
-    let ack = if buf.len() >= 8 {
-        i32::from_le_bytes(buf[4..8].try_into().unwrap())
-    } else {
-        0
-    };
-    let string = nc.reliable[ack as usize & (MAX_RELIABLE_COMMANDS - 1)]
-        .as_bytes()
-        .to_vec();
-    let mut key = (nc.challenge as u32 ^ sequence) as u8;
+/// The server-to-client XOR walk over a message's block, the bytes past its
+/// `reliableAcknowledge`, its own inverse: `CL_Netchan_Decode` and
+/// `SV_Netchan_Transmit` both. Parity counts from the block's byte 0, which
+/// is packet byte 8, so it matches the C's packet index. `clean` is
+/// [`NetchanParams::clean_server_key`].
+pub fn scramble_server_block(mut key: u8, string: &[u8], clean: bool, block: &mut [u8]) {
     let mut index = 0;
-    for (i, b) in buf.iter_mut().enumerate().skip(4 + CL_DECODE_START) {
-        advance_key(&mut key, &string, &mut index, i);
+    for (i, b) in block.iter_mut().enumerate() {
+        advance_key(&mut key, string, &mut index, i, clean);
         *b ^= key;
     }
 }
 
-/// `SV_Netchan_Decode` (cod_lnxded 0x808de60) run forward over the compressed
-/// op block from its byte 0. Unlike [`decode`], the seed is
-/// `challenge ^ serverId ^ messageAcknowledge`, the key string is
-/// `serverCommands[reliableAcknowledge & 63]`, and there is no high-ascii
-/// mapping: the server walks its stored bytes raw (0x808dea9).
-fn encode(nc: &Netchan, server_id: i32, message_ack: i32, reliable_ack: i32, comp: &mut [u8]) {
-    let string = nc.server_commands[reliable_ack as usize & (MAX_RELIABLE_COMMANDS - 1)].as_bytes();
-    let seed = nc.challenge as u32 ^ server_id as u32 ^ message_ack as u32;
-    scramble_client_ops(seed as u8, string, comp);
-}
-
-/// The client op block's XOR walk, its own inverse, so [`encode`] and
-/// [`ServerNetchan::process_in`] share it: bare NUL wrap, no substitution,
-/// parity from the block's first byte.
-fn scramble_client_ops(mut key: u8, string: &[u8], ops: &mut [u8]) {
+/// The client op block's XOR walk, its own inverse, so
+/// [`Netchan::build_out_keyed`] and [`ServerNetchan::process_in`] share it:
+/// bare NUL wrap, no substitution, parity from the block's first byte
+/// (`SV_Netchan_Decode` cod_lnxded 0x808de60, cod2-protocol.md 2.4).
+pub fn scramble_client_ops(mut key: u8, string: &[u8], ops: &mut [u8]) {
     let mut index = 0usize;
     for (i, byte) in ops.iter_mut().enumerate() {
         if index >= string.len() {
@@ -388,6 +494,8 @@ fn scramble_client_ops(mut key: u8, string: &[u8], ops: &mut [u8]) {
 mod tests {
     use super::*;
     use crate::net::huffman::Huffman;
+    /// `CL_DECODE_START` (qcommon.h:1155): payload byte 4, packet byte 8.
+    const CL_DECODE_START: usize = 4;
 
     fn server_packet(seq: u32, payload: &[u8]) -> Vec<u8> {
         let mut p = seq.to_le_bytes().to_vec();
@@ -455,6 +563,39 @@ mod tests {
         let out = nc.process_in(&p2, &h).unwrap().unwrap();
         assert_eq!(out, big);
         assert_eq!(nc.incoming_sequence, 10);
+    }
+
+    /// CoD2's fragments carry a long start (cod2-protocol.md 2.2), and its
+    /// key string reads raw where CoD1's maps high bytes.
+    #[test]
+    fn cod2_fragments_take_long_starts_and_a_raw_key() {
+        let mut nc = Netchan::with_params(1, 0x55, NetchanParams::COD2);
+        assert_eq!(nc.reliable.len(), 128);
+        let frag = |start: u32, data: &[u8]| {
+            let mut p = (5u32 | FRAGMENT_BIT).to_le_bytes().to_vec();
+            p.extend_from_slice(&start.to_le_bytes());
+            p.extend_from_slice(&(data.len() as u16).to_le_bytes());
+            p.extend_from_slice(data);
+            p
+        };
+        let a = vec![1u8; FRAGMENT_SIZE];
+        assert!(nc.frame(&frag(0, &a)).unwrap().is_none());
+        let (seq, mut body) = nc
+            .frame(&frag(FRAGMENT_SIZE as u32, &[2; 7]))
+            .unwrap()
+            .unwrap();
+        assert_eq!((seq, body.len()), (5, FRAGMENT_SIZE + 7));
+        let plain = body.clone();
+        let key = b"say \xe9";
+        nc.decode(seq, key, &mut body);
+        let mut raw = plain[4..].to_vec();
+        scramble_server_block((0x55 ^ 5) as u8, key, false, &mut raw);
+        assert_eq!(body[4..], raw[..]);
+        let mut cleaned = plain[4..].to_vec();
+        scramble_server_block((0x55 ^ 5) as u8, key, true, &mut cleaned);
+        assert_ne!(raw, cleaned);
+        assert!(nc.frame(&6u32.to_le_bytes()).unwrap().is_some());
+        assert!(nc.frame(&6u32.to_le_bytes()).unwrap().is_none());
     }
 
     /// An exactly-`FRAGMENT_SIZE` message still needs the zero-length terminator.
@@ -692,6 +833,42 @@ mod tests {
         let plain = h.decompress_block(&m[4..]);
         assert_eq!(&plain[..ops.len()], &ops[..]);
         assert_eq!(plain[ops.len()], SVC_EOF, "the netchan terminator");
+    }
+
+    /// CoD2's server side: 4-byte fragment starts, a raw key with a high
+    /// byte in it, the game's `svc_EOF`, and a 128-slot ring keying the
+    /// client's messages.
+    #[test]
+    fn cod2_server_transmit_reaches_the_cod2_client() {
+        let h = Huffman::new();
+        let (qport, challenge) = (0x2abc, 0x1357_9bdf);
+        let mut sv = ServerNetchan::with_params(qport, challenge, NetchanParams::COD2);
+        let mut cl = Netchan::with_params(qport, challenge, NetchanParams::COD2);
+        let key = "say \u{e9}t\u{e9}";
+        cl.reliable[100] = key.into();
+        sv.last_client_command_string = key.into();
+        let ops: Vec<u8> = (0..6900u32).map(|i| (i * 31 + 7) as u8).collect();
+        let pkts = sv.transmit_eof(100, &ops, 7, &h);
+        assert!(pkts.len() >= 2);
+        // `[seq][u32 start][u16 len]`: the second fragment starts at 1300.
+        assert_eq!(
+            u32::from_le_bytes(pkts[1][4..8].try_into().unwrap()) as usize,
+            FRAGMENT_SIZE
+        );
+        let m = pkts
+            .iter()
+            .filter_map(|p| cl.process_in(p, &h).unwrap())
+            .next()
+            .expect("message");
+        let plain = h.decompress_block(&m[4..]);
+        assert_eq!(&plain[..ops.len()], &ops[..]);
+        assert_eq!(plain[ops.len()], 7);
+
+        sv.reliable[100] = "t 4".into();
+        cl.server_commands[100] = "t 4".into();
+        let pkt = cl.build_out(16, 9, 100, &[1, 2, 3], &h).unwrap();
+        let m = sv.process_in(&pkt).unwrap();
+        assert_eq!(&h.decompress_block(&m.ops)[..3], &[1, 2, 3]);
     }
 
     #[test]

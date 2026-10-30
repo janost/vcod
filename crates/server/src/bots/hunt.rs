@@ -7,7 +7,6 @@
 use super::{Bot, BotView, arrived};
 use crate::nav::NavGraph;
 use glam::Vec3;
-use std::collections::HashSet;
 use vcod_common::pmove;
 
 /// A vantage is at least this far across from the spot: past
@@ -32,17 +31,23 @@ const HUNT_TICKS: [u32; 4] = [70, 70, 60, 50];
 pub fn vantage(g: &NavGraph, from: Vec3, spot: Vec3, sees: &dyn Fn(Vec3) -> bool) -> Option<Vec3> {
     let start = g.nearest(spot.into())?;
     let near = |p: Vec3| (p - spot).truncate().length();
-    let mut seen = HashSet::from([start]);
+    // The nodes reached, in the order reached; `marked` holds them too, so
+    // an edge back into the rings costs no hash.
+    let mut marked = vec![false; g.nodes.len()];
+    marked[start as usize] = true;
+    let mut seen = vec![start];
     let mut ring = vec![start];
     for _ in 0..RINGS {
         let mut next = Vec::new();
         for &a in &ring {
             for &b in &g.edges[a as usize] {
-                if near(g.nodes[b as usize]) <= VANTAGE_REACH
+                if !marked[b as usize]
+                    && near(g.nodes[b as usize]) <= VANTAGE_REACH
                     && !g.jumps.contains(&(a, b))
                     && !g.risky.contains(&(a, b))
-                    && seen.insert(b)
                 {
+                    marked[b as usize] = true;
+                    seen.push(b);
                     next.push(b);
                 }
             }

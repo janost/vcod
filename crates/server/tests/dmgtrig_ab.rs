@@ -454,7 +454,7 @@ fn a_script_spawned_trigger_damage_matches_retail() {
         return;
     };
     let proto = vcod_server::server::install_protocol(&fs);
-    if proto.version == vcod_common::net::protocol::PROTOCOL_V22.version {
+    if proto.transport.version == vcod_common::net::protocol::PROTOCOL_V22.transport.version {
         return;
     }
     let fs = std::rc::Rc::new(fs);
@@ -513,7 +513,7 @@ fn a_round_on_a_script_spawned_trigger_damage_matches_retail() {
         return;
     };
     let proto = vcod_server::server::install_protocol(&fs);
-    if proto.version == vcod_common::net::protocol::PROTOCOL_V22.version {
+    if proto.transport.version == vcod_common::net::protocol::PROTOCOL_V22.transport.version {
         return;
     }
     let ours = direct_run_on(fs, proto, "mp_carentan", "probe_dmgspawnshot");

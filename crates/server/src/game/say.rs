@@ -42,13 +42,42 @@ impl GameHost {
             m => m,
         };
         let name = clean_name(self.client_names.get(speaker).map_or("", String::as_str));
+        // CoD4's `G_Say` (0x80ae962) logs a plain or team line before it
+        // sends anything (`say;` 0x821957d, `sayteam;` 0x821958e); a tell
+        // writes none (VERIFIED live, games_mp.log).
+        let word = match mode {
+            SayMode::All => "say",
+            SayMode::Team => "sayteam",
+            SayMode::Squad => "saysquad",
+            SayMode::Tell => "",
+        };
+        if mode == SayMode::Tell {
+        } else if self.profile.game == vcod_common::game::Game::Cod4 {
+            let (who, guid) = crate::game::cod4::log_client(self, speaker);
+            crate::game::cod4::log_printf(self, format!("{word};{guid};{speaker};{who};{text}\n"));
+        } else if self.logs_1_1() {
+            // 1.1's `G_Say` (0x46c14): `say: %s: %s` or `sayteam: %s: %s`
+            // with the cleaned name (cod11-chat.md).
+            self.log_printf(format!("{word}: {name}: {text}\n"));
+        } else {
+            // 1.5's, UO's and CoD2 1.3's `%s;%d;%d;%s;%s` (cod2_lnxded
+            // 0x110f1e): the GUID, 0 with no authorize, the slot, the
+            // cleaned name, the text (cod11-map-cycle.md 9).
+            self.log_printf(format!("{word};0;{speaker};{name};{text}\n"));
+        }
         let speaker_playing = self.playing(cx, speaker);
+        // CoD4 colours the name by the recipient's side instead: `^8` on the
+        // speaker's team, `^9` off it (the walk capture's teammate reads
+        // `^8walker`, the spectator `^9walker`, VERIFIED live); the line is
+        // built with `^8` and recoloured per recipient below.
+        let cod4 = self.profile.game == vcod_common::game::Game::Cod4;
         let status = if team == "spectator" {
             "\u{15}(\u{14}GAME_SPECTATOR\u{15})".to_string()
         } else if self.patch_1_5 {
             // 1.5 colours the name by side and reads death off the session
             // state, not the health.
             let side = match team {
+                "axis" | "allies" if cod4 => "^8",
                 "axis" => "^9",
                 "allies" => "^8",
                 _ => "",
@@ -125,13 +154,21 @@ impl GameHost {
             if !speaker_playing && !dead_chat && self.playing(cx, slot) {
                 continue;
             }
-            self.client_commands.push((slot, cmd.clone()));
+            let line = if cod4
+                && matches!(team, "axis" | "allies")
+                && !self.same_team(cx, speaker, slot)
+            {
+                cmd.replacen("\u{15}\u{15}^8", "\u{15}\u{15}^9", 1)
+            } else {
+                cmd.clone()
+            };
+            self.client_commands.push((slot, line));
         }
     }
 
     /// `sessionState == SESS_PLAYING`, read off `.sessionstate` the way the
     /// follow pass reads it.
-    fn playing(&mut self, cx: &mut Cx, slot: usize) -> bool {
+    pub(crate) fn playing(&mut self, cx: &mut Cx, slot: usize) -> bool {
         !matches!(
             self.client_field(cx, slot, "sessionstate").as_deref(),
             Some("spectator" | "dead" | "intermission")
@@ -151,17 +188,10 @@ impl GameHost {
     }
 }
 
-/// `Q_CleanStr`: colour codes and anything unprintable out.
+/// A name `Q_CleanStr`'d into 64 bytes, as `G_Say` reads it
+/// (cod11-chat.md): 63 and the terminator.
 pub(crate) fn clean_name(name: &str) -> String {
-    let mut out = String::new();
-    let mut chars = name.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '^' && chars.peek().is_some_and(|&n| n != '^') {
-            chars.next();
-        } else if (' '..='~').contains(&c) {
-            out.push(c);
-        }
-    }
+    let mut out = vcod_common::text::clean_str(name);
     out.truncate(63);
     out
 }
@@ -260,7 +290,7 @@ mod tests {
     /// Clients in slots 0..teams.len(), in the world, on those teams and
     /// playing, each named `p<slot>`.
     fn host(vm: &mut vcod_gsc::Vm, teams: &[&str]) -> GameHost {
-        let mut host = GameHost::new(vec![String::new(); 2048]);
+        let mut host = GameHost::new(&crate::game::profile::COD1_11, vec![String::new(); 2048]);
         for (slot, team) in teams.iter().enumerate() {
             vm.with_cx(|cx| {
                 let id = host.ents.spawn_client(cx, slot, None).expect("a client");
@@ -333,6 +363,32 @@ mod tests {
         );
     }
 
+    /// `G_Say`'s log line: 1.1's `say: %s: %s` and `sayteam: %s: %s` with
+    /// the cleaned name (the retail 1.1d run, cod11-map-cycle.md 9); 1.5's
+    /// `say;%d;%d;%s;%s` with GUID 0 and the slot; a tell writes none here.
+    #[test]
+    fn a_say_logs_the_patch_s_line() {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut host = host(&mut vm, &["allies", "axis"]);
+        host.level_time_ms = 19_000;
+        say(&mut vm, &mut host, 0, SayMode::All, "hello log");
+        say(&mut vm, &mut host, 0, SayMode::Team, "team log");
+        vm.with_cx(|cx| host.say(cx, 0, Some(0), SayMode::Tell, "private"));
+        assert_eq!(
+            std::mem::take(&mut host.game_log),
+            [
+                (19_000, "say: p0: hello log\n".to_string()),
+                (19_000, "sayteam: p0: team log\n".to_string())
+            ]
+        );
+        host.patch_1_5 = true;
+        say(&mut vm, &mut host, 1, SayMode::Team, "go");
+        assert_eq!(
+            std::mem::take(&mut host.game_log),
+            [(19_000, "sayteam;0;1;p1;go\n".to_string())]
+        );
+    }
+
     /// 1.5b's line for a playing axis speaker, from the live capture
     /// (cod15-protocol-diff.md, section 13): the side's colour ahead of the
     /// name.
@@ -363,7 +419,7 @@ mod tests {
         let mut vm = vcod_gsc::Vm::new();
         let mut host = host(&mut vm, &["axis", "axis", "axis", "allies"]);
         host.patch_1_5 = true;
-        host.defs = crate::defs::Defs::of(&vcod_common::net::protocol::PROTOCOL_V6);
+        host.set_profile(&crate::game::profile::COD1_15);
         vm.with_cx(|cx| {
             for (slot, squad) in [(0, "squad_bravo"), (1, "squad_alpha"), (2, "squad_bravo")] {
                 set(&mut host, cx, slot, "sessionsquad", squad);

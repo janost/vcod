@@ -238,7 +238,7 @@ fn load(fixture: &str, map: &str, vehicletype: &str, near: Vec3) -> Option<Case>
     let infos = VehicleInfos::load(&fs);
     let info = infos.list[infos.find(vehicletype).unwrap()].clone();
     let name = xmodel.strip_prefix("xmodel/").unwrap_or(&xmodel);
-    let bones = vcod_common::xmodel::load_bones(&fs, name).unwrap();
+    let bones = vcod_common::model::load_bones(&fs, name).unwrap();
     let model = VehicleModel::from_bones(&bones);
     let pose = (
         Vec3::from(vcod_common::bsp::parse_vec3(vehicle.get("origin").unwrap()).unwrap()),

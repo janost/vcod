@@ -9,6 +9,8 @@ use vcod_common::net::connectionless;
 /// Retail's message buffer, the four 0xff bytes included.
 const MESSAGE_MAX: usize = 0x400;
 
+/// CoD1's refusal (CoDMP.exe 0x567388, three lines as retail prints it);
+/// CoD2 and CoD4 hold no such string.
 pub const NOT_CONNECTED: &str =
     "You must either be connected,\nor set the 'rconAddress' cvar\nto issue rcon commands";
 pub const TOO_LONG: &str = "rcon command too long";
@@ -83,6 +85,113 @@ impl RconSocket {
     }
 }
 
+/// CoD4 1.7's `rcon` (`CL_Rcon_f`, `iw3mp.exe` 0x471af0;
+/// docs/research/cod4-handshake.md 14.2), and CoD2 1.3's, the same
+/// function (`CoD2MP_s.exe` 0x4b41d0; cod2-protocol.md 1.6): no password
+/// dvar, but `rcon login <password>`, `rcon logout` and `rcon host
+/// <address>`; any other line goes to the server joined, else to the host.
+#[derive(Default)]
+pub struct Cod4Rcon {
+    /// `rcon login`'s password (0xe11558).
+    password: String,
+    /// `rcon host`'s address (0xe11570).
+    host: Option<SocketAddrV4>,
+}
+
+/// What a CoD4 `rcon` line does.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Cod4RconOut {
+    /// Console lines, nothing sent.
+    Lines(Vec<String>),
+    /// The out-of-band text (NUL included, no 0xff header) for the server
+    /// joined (`cls.state` at or past `CA_CONNECTED`, 0x471cb7) ...
+    Server(Vec<u8>),
+    /// ... or for `rcon host`'s address.
+    Host(SocketAddrV4, Vec<u8>),
+}
+
+fn lines(l: &[&str]) -> Cod4RconOut {
+    Cod4RconOut::Lines(l.iter().map(|s| s.to_string()).collect())
+}
+
+/// `rcon login`'s cap: a password of 24 bytes or more is refused (0x471a4b).
+const COD4_PASSWORD_MAX: usize = 0x18;
+/// The message buffer; a line that fills it is refused (0x471c91).
+const COD4_MESSAGE_MAX: usize = 0x400;
+
+impl Cod4Rcon {
+    /// `args` are the tokens after `rcon`; `joined` whether a server
+    /// connection is up.
+    pub fn command(&mut self, args: &[String], joined: bool) -> Cod4RconOut {
+        use Cod4RconOut::*;
+        let Some(first) = args.first() else {
+            return lines(&["USAGE: rcon <command> <options...>"]);
+        };
+        match first.to_ascii_lowercase().as_str() {
+            // `CL_RconLogin` (0x471a10).
+            "login" => match args {
+                [_, pw] if pw.len() < COD4_PASSWORD_MAX => {
+                    self.password = pw.clone();
+                    Lines(Vec::new())
+                }
+                [_, _] => Lines(vec![format!(
+                    "rcon password must be {COD4_PASSWORD_MAX} characters or less"
+                )]),
+                _ => lines(&["USAGE: rcon login <password>"]),
+            },
+            "logout" if self.password.is_empty() => lines(&["Not logged in"]),
+            "logout" => {
+                self.password.clear();
+                Lines(Vec::new())
+            }
+            // `CL_RconHost` (0x471a80): port 28960 when it names none.
+            "host" => match args {
+                [_, addr] => {
+                    self.host = vcod_common::net::master::parse_address(addr);
+                    match self.host {
+                        Some(_) => Lines(Vec::new()),
+                        None => lines(&["bad host address"]),
+                    }
+                }
+                _ => lines(&["USAGE: rcon host <address>"]),
+            },
+            _ if self.password.is_empty() => {
+                lines(&["You need to log in with 'rcon login <password>' before using rcon."])
+            }
+            _ => {
+                let mut p = format!("rcon {}", self.password).into_bytes();
+                for a in args {
+                    p.push(b' ');
+                    let quote = a.is_empty() || a.bytes().any(|b| b <= b' ');
+                    if quote {
+                        p.push(b'"');
+                    }
+                    p.extend_from_slice(a.as_bytes());
+                    if quote {
+                        p.push(b'"');
+                    }
+                }
+                if p.len() >= COD4_MESSAGE_MAX {
+                    return Lines(vec![format!(
+                        "rcon commands are limited to {} characters",
+                        COD4_MESSAGE_MAX - 1
+                    )]);
+                }
+                p.push(0);
+                match (joined, self.host) {
+                    (true, _) => Server(p),
+                    (false, Some(to)) => Host(to, p),
+                    (false, None) => lines(&[
+                        "Can't determine rcon target.  You can fix this by either:",
+                        "1) Joining the server as a player.",
+                        "2) Setting the host server with 'rcon host <address>'.",
+                    ]),
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,6 +224,64 @@ mod tests {
         // 4 + 5 + 1015 bytes fills the 1 KB buffer; one fewer fits.
         assert!(packet("", &["x".repeat(1014)]).is_none());
         assert_eq!(packet("", &["x".repeat(1013)]).unwrap().len(), 0x400);
+    }
+
+    /// CoD4's `CL_Rcon_f` (cod4-handshake.md 14.2): its login, logout and
+    /// host, the target it picks and the packet's text.
+    #[test]
+    fn cod4_rcon_logs_in_and_picks_its_target() {
+        let a = |l: &str| -> Vec<String> { l.split(' ').map(str::to_string).collect() };
+        let lines = |l: &[&str]| Cod4RconOut::Lines(l.iter().map(|s| s.to_string()).collect());
+        let mut r = Cod4Rcon::default();
+        assert_eq!(
+            r.command(&[], true),
+            lines(&["USAGE: rcon <command> <options...>"])
+        );
+        assert_eq!(r.command(&a("logout"), true), lines(&["Not logged in"]));
+        assert_eq!(
+            r.command(&a("status"), true),
+            lines(&["You need to log in with 'rcon login <password>' before using rcon."])
+        );
+        assert_eq!(
+            r.command(&a("login"), true),
+            lines(&["USAGE: rcon login <password>"])
+        );
+        // 24 bytes is refused, 23 taken.
+        assert_eq!(
+            r.command(&a(&format!("login {}", "x".repeat(24))), true),
+            lines(&["rcon password must be 24 characters or less"])
+        );
+        assert_eq!(r.command(&a("LOGIN pw"), true), lines(&[]));
+        assert_eq!(
+            r.command(&["say".into(), "a b".into()], true),
+            Cod4RconOut::Server(b"rcon pw say \"a b\"\0".to_vec())
+        );
+        assert_eq!(
+            r.command(&a("status"), false),
+            lines(&[
+                "Can't determine rcon target.  You can fix this by either:",
+                "1) Joining the server as a player.",
+                "2) Setting the host server with 'rcon host <address>'.",
+            ])
+        );
+        assert_eq!(r.command(&a("host 10.0.0.1"), false), lines(&[]));
+        assert_eq!(
+            r.command(&a("status"), false),
+            Cod4RconOut::Host(
+                "10.0.0.1:28960".parse().unwrap(),
+                b"rcon pw status\0".to_vec()
+            )
+        );
+        assert_eq!(r.command(&a("logout"), false), lines(&[]));
+        assert_eq!(
+            r.command(&["x".repeat(1020)], true),
+            lines(&["You need to log in with 'rcon login <password>' before using rcon."])
+        );
+        r.command(&a("login pw"), true);
+        assert_eq!(
+            r.command(&["x".repeat(1016)], true),
+            lines(&["rcon commands are limited to 1023 characters"])
+        );
     }
 
     /// The packet against vcod-server's `SVC_RemoteCommand` in process, and

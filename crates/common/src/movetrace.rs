@@ -100,6 +100,18 @@ impl Pm {
     }
 }
 
+/// An entity linked as a temp box model that a move clips: its absolute
+/// box and contents. CoD2's mantle block (cod2-movement.md 9).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClipBox {
+    pub entity: u32,
+    /// `r.ownerNum`: the mover it lets through (`SV_ClipMoveToEntities`).
+    pub owner: u32,
+    pub mins: Vec3,
+    pub maxs: Vec3,
+    pub contents: u32,
+}
+
 #[derive(Clone, Copy)]
 pub struct MoveWorld<'a> {
     pub world: &'a CollisionWorld,
@@ -110,6 +122,8 @@ pub struct MoveWorld<'a> {
     pub boxes: &'a [ContentsBox],
     /// The `Pmove` this world serves, if any.
     pub pm: Option<&'a Pm>,
+    /// Box entities the traces clip, after the bodies.
+    pub clip_boxes: &'a [ClipBox],
 }
 
 impl<'a> MoveWorld<'a> {
@@ -120,6 +134,7 @@ impl<'a> MoveWorld<'a> {
             pass: u32::MAX,
             boxes: &[],
             pm: None,
+            clip_boxes: &[],
         }
     }
 
@@ -130,7 +145,13 @@ impl<'a> MoveWorld<'a> {
             pass,
             boxes: &[],
             pm: None,
+            clip_boxes: &[],
         }
+    }
+
+    /// The same world clipping `clip_boxes` too.
+    pub fn with_clip_boxes(self, clip_boxes: &'a [ClipBox]) -> MoveWorld<'a> {
+        MoveWorld { clip_boxes, ..self }
     }
 
     /// The same world with entity boxes in its point contents.
@@ -216,6 +237,17 @@ impl<'a> MoveWorld<'a> {
             } else {
                 clip_capsule(&mut t, start, end, mover, (maxs - mins).z * 0.5, b);
             }
+        }
+        for b in self.clip_boxes {
+            if b.entity == self.pass || b.owner == self.pass || b.contents & mask == 0 {
+                continue;
+            }
+            if (b.maxs + PAD).cmplt(swept_min).any() || (b.mins - PAD).cmpgt(swept_max).any() {
+                continue;
+            }
+            crate::collision::clip_entity_box(
+                &mut t, start, end, mins, maxs, b.mins, b.maxs, b.contents, b.entity,
+            );
         }
         // `SV_Trace` recomputes the end point only when an entity cut the
         // world's fraction, from the unshifted points in one rounding
@@ -436,7 +468,7 @@ mod kept {
         allsolid: bool,
     }
 
-    /// The fields of `traceWork_t` the primitives read and write.
+    /// The trace state the primitives read and write.
     struct Work {
         fraction: f32,
         hit: Option<Hit>,
@@ -596,6 +628,39 @@ mod tests {
         assert!((gap - (30.0 + BODY_RADIUS_EPS)).abs() < 0.01, "gap {gap}");
         assert_eq!(mw.entity_num(&t), 1);
         assert!(t.normal.x < -0.99);
+    }
+
+    #[test]
+    fn a_clip_box_stops_a_walk_and_lets_its_owner_through() {
+        let w = test_world(&[]);
+        let blocks = [ClipBox {
+            entity: 70,
+            owner: 2,
+            mins: Vec3::new(85.0, -15.0, 0.0),
+            maxs: Vec3::new(115.0, 15.0, 70.0),
+            contents: 0x10000,
+        }];
+        let (s, e) = (Vec3::new(0.0, 0.0, 1.0), Vec3::new(200.0, 0.0, 1.0));
+        let walk = |pass| {
+            let mw = MoveWorld {
+                pass,
+                ..MoveWorld::bare(&w)
+            }
+            .with_clip_boxes(&blocks);
+            (mw.box_trace(s, e, STAND.0, STAND.1, LIVE), mw)
+        };
+        let (t, mw) = walk(0);
+        assert!((t.endpos.x - 70.0).abs() < 0.2, "{:?}", t.endpos);
+        assert_eq!(mw.entity_num(&t), 70);
+        assert!(t.normal.x < -0.99);
+        assert_eq!(walk(2).0.fraction, 1.0);
+        // A mask without 0x10000 (the spectator's) passes it.
+        let mw = MoveWorld::bare(&w).with_clip_boxes(&blocks);
+        assert_eq!(
+            mw.box_trace(s, e, STAND.0, STAND.1, MASK_SPECTATOR)
+                .fraction,
+            1.0
+        );
     }
 
     #[test]

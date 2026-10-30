@@ -63,8 +63,7 @@ no outside server; `+set logfile 2` puts its console in `main/console_mp.log`.
 - The master query is `getservers <protocol> full empty` in both, the
   protocol coming from the UI's `globalservers %d %d full empty` (the
   string is in both `ui_mp_x86.dll`s, VERIFIED). The master answering
-  `getservers 6` has not been measured: this machine queries no public
-  server.
+  `getservers 6` has not been measured: no public server was queried.
 
 ## 2. Handshake and userinfo
 

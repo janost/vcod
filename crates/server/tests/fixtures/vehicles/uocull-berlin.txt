@@ -1,4 +1,4 @@
-# Retail United Offensive 1.51b, 2026-10-16, run on this machine:
+# Retail United Offensive 1.51b, 2026-10-16, run locally:
 #   COD_VERSION=uo SECS=45 tools/run_probe.sh client-probes/probe_uocull mp_berlin
 #   vcod --game-dir <UO install> --mod-dir uo --net-probe <addr> --probe-edge watch --probe-secs 30
 # The server's PROBE step lines, then the viewer's `EDGE ents` lines (entity

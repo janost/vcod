@@ -44,7 +44,7 @@ is its client, and the playerstate sits at `cl+0`.
 | `cl+0x30c` | `ps.weapons`, the held-weapon bit array | VERIFIED, the `Com_BitCheck` base in `BG_CanItemBeGrabbed` 0x2c56b and `Pickup_Weapon` 0x4cf31 |
 | `cl+0x314..0x319` | `ps.weaponslots`, indexed by `weaponSlot` 1..5 | VERIFIED, `BG_TakePlayerWeapon` 0x36c51 and `Pickup_Weapon` 0x4d09b |
 | `cl+0x10c` / `cl+0x20c` | `ps.ammo[]` / `ps.ammoclip[]` | VERIFIED, `Add_Ammo` 0x4ca56 and 0x4ca65 |
-| `cl+0x384` / `+0x388` / `+0x38c` | `serverCursorHint` / `serverCursorHintVal` / `serverCursorHintString` | VERIFIED, player netfield offsets 900, 904 and 908 in `crates/common/src/net/fields_v1.rs` |
+| `cl+0x384` / `+0x388` / `+0x38c` | `serverCursorHint` / `serverCursorHintVal` / `serverCursorHintString` | VERIFIED, player netfield offsets 900, 904 and 908 in `crates/common/src/net/cod1/fields_v1.rs` |
 | `cl+0x3b8` | the entity number the use key would act on, 0x3ff for none | VERIFIED, `G_CheckForCursorHints` 0x4f5ce and 0x4f652 store it and `Cmd_Activate_f` 0x484d3 reads it |
 
 ## 1. Touch
@@ -1191,7 +1191,7 @@ probe_teleport=1 --set scr_allow_fg42=1` and `--net-probe 127.0.0.1:28960
 --save-pickup --probe-secs 120` against it. It walked the probe's own
 timing and the gsc probe's own teleports, where the gate places the view off
 retail's snapshots. The two files it wrote, the client fixture and the
-server's log, went to `tmp/item-pickup/` and are not committed. Times below
+server's log, went to local scratch and are not committed. Times below
 are relative to a phase's first snapshot, since ours ran on its own clock.
 
 VERIFIED, both client files: the same ten phases in the same order; every

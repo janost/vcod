@@ -20,6 +20,7 @@ impl Server {
         let on = crate::game::builtins::cvar::atoi(&self.live_cvar(VEHICLES_CVAR, "1")) != 0;
         // Every body on foot, by slot and team: what a driver keeps off.
         let walkers: Vec<(usize, [f32; 3], i32)> = self
+            .core
             .clients
             .iter()
             .enumerate()
@@ -31,13 +32,16 @@ impl Server {
             })
             .collect();
         let crewed = self.crewed_vehicles(teams);
-        let Some(rt) = self.script.as_mut() else {
+        let Some(rt) = self.game.module.script.as_mut() else {
             return;
         };
         if rt.host.vehicles.live.is_empty() {
             return;
         }
         let targets: Vec<(usize, u32)> = self
+            .game
+            .module
+            .driver
             .bots
             .iter()
             .filter_map(|(s, b)| Some((*s, b.vehicle_target()?)))
@@ -89,7 +93,9 @@ impl Server {
             .iter()
             .any(|(_, v)| v.seat.is_none() && v.rocket.is_some())
         {
-            self.script
+            self.game
+                .module
+                .script
                 .as_mut()
                 .map(|rt| rt.shot_models())
                 .unwrap_or_default()
@@ -104,7 +110,7 @@ impl Server {
     /// Each live vehicle with a rider: its box, its velocity, its riders as
     /// a slot mask and their teams.
     fn crewed_vehicles(&self, teams: &[i32]) -> Vec<Crewed> {
-        let Some(rt) = self.script.as_ref() else {
+        let Some(rt) = self.game.module.script.as_ref() else {
             return Vec::new();
         };
         let host = &rt.host;
@@ -155,7 +161,7 @@ impl Server {
         teams: &[i32],
         models: &[crate::game::combat::PlacedModel],
     ) -> Option<ArmorView> {
-        if !self.bot_admin.shoot || !view.playing || view.dead {
+        if !self.game.module.bot_admin.shoot || !view.playing || view.dead {
             return None;
         }
         let (min, max, speed, launcher) = match view.seat {
@@ -165,7 +171,7 @@ impl Server {
             Some(_) => return None,
             None => {
                 let r = view.rocket?;
-                let def = self.weapon_table.get(r as usize)?;
+                let def = self.game.module.weapon_table.get(r as usize)?;
                 (
                     crate::bots::VEHICLE_ROCKET_MIN,
                     crate::bots::VEHICLE_ROCKET_RANGE,
@@ -180,9 +186,9 @@ impl Server {
             script::TEAM_ALLIES => their != script::TEAM_ALLIES,
             _ => true,
         };
-        let me = self.clients[slot].as_ref()?.sim.as_ref()?;
+        let me = self.core.clients[slot].as_ref()?.sim.as_ref()?;
         let eye = glam::Vec3::from(me.eye_origin());
-        let world = self.world.as_ref().map(|w| &w.collision);
+        let world = self.game.world.as_ref().map(|w| &w.collision);
         // Along the view and the hip cone round it as a shot this cmd
         // would spread (`Bot::think_armor` fires from the hip), nothing
         // within the rocket's splash of the muzzle.
@@ -234,7 +240,7 @@ impl Server {
 
     /// Test-facing: the kind of the live vehicle `num` (`info::KIND_*`).
     pub fn test_vehicle_kind(&self, num: u32) -> Option<i32> {
-        let host = &self.script.as_ref()?.host;
+        let host = &self.game.module.script.as_ref()?.host;
         let (_, v) = host.vehicles.live.iter().find(|(id, _)| id.0 == num)?;
         Some(host.vehicles.info_of(v).kind)
     }
@@ -242,14 +248,16 @@ impl Server {
     /// Test-facing: vehicles the seven-second stuck kill destroyed this
     /// level.
     pub fn test_stuck_kills(&self) -> u32 {
-        self.script
+        self.game
+            .module
+            .script
             .as_ref()
             .map_or(0, |rt| rt.host.vehicles.stuck_kills)
     }
 
     /// Test-facing: each live vehicle in pool order, as a bot would see it.
     pub fn test_vehicles(&self) -> Vec<VehicleSpot> {
-        let Some(rt) = self.script.as_ref() else {
+        let Some(rt) = self.game.module.script.as_ref() else {
             return Vec::new();
         };
         let host = &rt.host;
@@ -387,6 +395,10 @@ const REPLAN_MS: i32 = 15_000;
 const ROAM_MIN: f32 = 1200.0;
 /// The node expansions one plan may take.
 const PLAN_EXPANSIONS: usize = 30_000;
+/// Fit tests, about 3.5 us each on mp_foy, and cache lookups the warm
+/// pass takes a tick ([`Server::warm_hull_fits`]).
+const WARM_TESTS: usize = 600;
+const WARM_LOOKUPS: usize = 8000;
 /// A node a hull fits on: its box, this share of the vehicle's half
 /// width, clear of the world and the vehicle clip from `FIT_LIFT` over the
 /// feet up `FIT_HEIGHT`, and no edge on the way steeper than a step.
@@ -407,13 +419,87 @@ pub(super) struct DriveRoute {
     best_ms: i32,
 }
 
-/// The drivers' routes, and which nodes a hull of a given half width fits
-/// on, for the graph they were found on.
+/// The drivers' routes, for the graph they were found on, and where a hull
+/// of a given half width fits.
 #[derive(Default)]
 pub(super) struct BotDrives {
     routes: BTreeMap<usize, DriveRoute>,
-    fit: HashMap<(u32, u32), bool>,
+    fits: HullFits,
     graph: usize,
+}
+
+/// Fit tests by node point and box half width, kept across graph
+/// rebuilds: a rebuild follows a script brush link change, and a fit
+/// reads only what its box meets, so only the fits a toggled submodel's
+/// bounds overlap are dropped. A `bas` restart relinks the walls, the
+/// graph is rebuilt, and every driver plans again at once
+/// (cod11-map-cycle.md 4.9).
+#[derive(Default)]
+struct HullFits {
+    fit: HashMap<([u32; 3], u32), bool>,
+    /// Each lump-27 model's link when the fits were taken.
+    linked: Vec<bool>,
+    /// The warm pass's next node, for the graph it walks; `usize::MAX`
+    /// once it has passed every node.
+    warm: usize,
+    warm_graph: usize,
+}
+
+impl HullFits {
+    /// Drops the fits a submodel linked or unlinked since the last call
+    /// can change; all of them on a new map.
+    fn relink(
+        &mut self,
+        collision: &vcod_common::collision::CollisionWorld,
+        bounds: &[([f32; 3], [f32; 3])],
+    ) {
+        let linked: Vec<bool> = (0..collision.model_count())
+            .map(|m| collision.model_linked(m))
+            .collect();
+        if linked.len() != self.linked.len() {
+            self.fit.clear();
+            self.warm = 0;
+        } else if linked != self.linked {
+            self.warm = 0;
+            let toggled: Vec<(glam::Vec3, glam::Vec3)> = (0..linked.len())
+                .filter(|&m| linked[m] != self.linked[m])
+                .map(|m| {
+                    // A model no bounds name drops every fit.
+                    bounds.get(m).map_or(
+                        (glam::Vec3::splat(f32::MIN), glam::Vec3::splat(f32::MAX)),
+                        |(lo, hi)| (glam::Vec3::from(*lo) - 2.0, glam::Vec3::from(*hi) + 2.0),
+                    )
+                })
+                .collect();
+            self.fit.retain(|(p, key), _| {
+                let (lo, hi) = fit_box(glam::Vec3::from(p.map(f32::from_bits)), *key as f32);
+                !toggled
+                    .iter()
+                    .any(|(a, b)| lo.cmple(*b).all() && hi.cmpge(*a).all())
+            });
+        }
+        self.linked = linked;
+    }
+}
+
+/// Whether a hull of fit radius `r` fits on a node at `node`.
+fn test_fit(collision: &vcod_common::collision::CollisionWorld, node: glam::Vec3, r: f32) -> bool {
+    let p = node + glam::Vec3::Z * FIT_LIFT;
+    !collision.box_position_test(
+        p,
+        glam::Vec3::new(-r, -r, 0.0),
+        glam::Vec3::new(r, r, FIT_HEIGHT),
+        vcod_common::collision::CONTENTS_SOLID | VEHICLE_CLIP,
+    )
+}
+
+/// The box a hull of fit radius `r` is tested in on a node at `node`.
+fn fit_box(node: glam::Vec3, r: f32) -> (glam::Vec3, glam::Vec3) {
+    let p = node + glam::Vec3::Z * FIT_LIFT;
+    (
+        p + glam::Vec3::new(-r, -r, 0.0),
+        p + glam::Vec3::new(r, r, FIT_HEIGHT),
+    )
 }
 
 impl BotDrives {
@@ -433,46 +519,51 @@ impl Server {
         seat: &SeatView,
     ) -> Option<[f32; 3]> {
         use crate::bots::Goal;
-        let g = self.nav.clone()?;
+        let g = self.game.module.driver.nav.clone()?;
         let graph = std::sync::Arc::as_ptr(&g) as usize;
-        if self.bot_drives.graph != graph {
-            self.bot_drives = BotDrives {
-                graph,
-                ..BotDrives::default()
-            };
+        let drives = &mut self.game.module.bot_drives;
+        if drives.graph != graph {
+            drives.graph = graph;
+            drives.routes.clear();
         }
         let half = self.seated_half_width(slot)?;
-        let now = self.sv_time_ms;
+        let now = self.core.sv_time_ms;
         let at = glam::Vec3::from(seat.origin);
         let flat = |p: glam::Vec3| (p - at).truncate().length();
         let want = match goal {
             Goal::Hold => {
-                self.bot_drives.routes.remove(&slot);
+                self.game.module.bot_drives.routes.remove(&slot);
                 return None;
             }
             Goal::To(p) => Some(p),
             Goal::Roam | Goal::Away(_) => None,
         };
-        let stale = self.bot_drives.routes.get(&slot).is_none_or(|r| {
-            let moved = match (r.goal, want) {
-                (Some(a), Some(b)) => glam::Vec3::from(a).distance(b.into()) > RETARGET,
-                (None, None) => false,
-                _ => true,
-            };
-            moved
-                || r.next >= r.path.len() && want.is_none()
-                || now.wrapping_sub(r.best_ms) > HEADWAY_MS
-                || now.wrapping_sub(r.planned_ms) > REPLAN_MS
-        });
+        let stale = self
+            .game
+            .module
+            .bot_drives
+            .routes
+            .get(&slot)
+            .is_none_or(|r| {
+                let moved = match (r.goal, want) {
+                    (Some(a), Some(b)) => glam::Vec3::from(a).distance(b.into()) > RETARGET,
+                    (None, None) => false,
+                    _ => true,
+                };
+                moved
+                    || r.next >= r.path.len() && want.is_none()
+                    || now.wrapping_sub(r.best_ms) > HEADWAY_MS
+                    || now.wrapping_sub(r.planned_ms) > REPLAN_MS
+            });
         if stale {
-            self.bot_drives.routes.remove(&slot);
-            let mut rng = self.bots.get(&slot).map_or(1, |b| b.rng);
+            self.game.module.bot_drives.routes.remove(&slot);
+            let mut rng = self.game.module.driver.bots.get(&slot).map_or(1, |b| b.rng);
             let path = self.plan_drive(&g, half, at, want, &mut rng);
-            if let Some(b) = self.bots.get_mut(&slot) {
+            if let Some(b) = self.game.module.driver.bots.get_mut(&slot) {
                 b.rng = rng;
             }
             let path = path?;
-            self.bot_drives.routes.insert(
+            self.game.module.bot_drives.routes.insert(
                 slot,
                 DriveRoute {
                     path,
@@ -484,7 +575,7 @@ impl Server {
                 },
             );
         }
-        let r = self.bot_drives.routes.get_mut(&slot)?;
+        let r = self.game.module.bot_drives.routes.get_mut(&slot)?;
         while r.next < r.path.len() && flat(g.nodes[r.path[r.next] as usize]) < PASS {
             r.next += 1;
             r.best = f32::INFINITY;
@@ -507,9 +598,67 @@ impl Server {
         Some(ahead.into())
     }
 
+    /// Fills the hull fit cache a slice a tick, every node for every live
+    /// vehicle's box, so a driver's plan finds its tests already run: a
+    /// plan into fits never taken ran up to 21k tests, 96 ms, in one tick
+    /// (cod11-map-cycle.md 4.9). A fit is the same whenever it is taken
+    /// (`HullFits` drops the ones a link change moves), so the plans and
+    /// the routes are those of a cold cache.
+    pub(super) fn warm_hull_fits(&mut self) {
+        let (Some(g), Some(world), Some(rt)) = (
+            self.game.module.driver.nav.as_ref(),
+            self.game.world.as_ref(),
+            self.game.module.script.as_ref(),
+        ) else {
+            return;
+        };
+        let host = &rt.host;
+        if host.vehicles.live.is_empty()
+            || crate::game::builtins::cvar::atoi(&self.live_cvar(VEHICLES_CVAR, "1")) == 0
+        {
+            return;
+        }
+        let hull = &mut self.game.module.bot_drives.fits;
+        hull.relink(&world.collision, &host.model_bounds);
+        let graph = std::sync::Arc::as_ptr(g) as usize;
+        if hull.warm_graph != graph {
+            (hull.warm_graph, hull.warm) = (graph, 0);
+        }
+        if hull.warm >= g.nodes.len() {
+            return;
+        }
+        // Each box's fit radius, as `plan_drive` keys it.
+        let mut keys: Vec<(u32, f32)> = host
+            .vehicles
+            .live
+            .values()
+            .map(|v| {
+                let info = host.vehicles.info_of(v);
+                let half = (info.maxs[0] - info.mins[0]).min(info.maxs[1] - info.mins[1]) * 0.5;
+                let r = half * FIT_SHARE;
+                (r as u32, r)
+            })
+            .collect();
+        keys.sort_by_key(|k| k.0);
+        keys.dedup_by_key(|k| k.0);
+        let (mut tests, mut lookups) = (0, 0);
+        while hull.warm < g.nodes.len() && tests < WARM_TESTS && lookups < WARM_LOOKUPS {
+            let node = g.nodes[hull.warm];
+            let at = node.to_array().map(f32::to_bits);
+            for &(key, r) in &keys {
+                lookups += 1;
+                hull.fit.entry((at, key)).or_insert_with(|| {
+                    tests += 1;
+                    test_fit(&world.collision, node, r)
+                });
+            }
+            hull.warm += 1;
+        }
+    }
+
     /// Half the narrower side of the box of the vehicle `slot` sits in.
     fn seated_half_width(&self, slot: usize) -> Option<f32> {
-        let host = &self.script.as_ref()?.host;
+        let host = &self.game.module.script.as_ref()?.host;
         let (id, _) = host.vehicles.seat_of(slot)?;
         let info = host.vehicles.info_of(host.vehicles.live.get(&id)?);
         Some(((info.maxs[0] - info.mins[0]).min(info.maxs[1] - info.mins[1])) * 0.5)
@@ -526,20 +675,22 @@ impl Server {
         want: Option<[f32; 3]>,
         rng: &mut u64,
     ) -> Option<Vec<u32>> {
-        let world = self.world.as_ref()?;
+        let world = self.game.world.as_ref()?;
         let r = half * FIT_SHARE;
         let key = r as u32;
-        let fit = &mut self.bot_drives.fit;
+        let hull = &mut self.game.module.bot_drives.fits;
+        let bounds = self
+            .game
+            .module
+            .script
+            .as_ref()
+            .map_or(&[][..], |rt| &rt.host.model_bounds[..]);
+        hull.relink(&world.collision, bounds);
+        let fit = &mut hull.fit;
         let mut fits = |n: u32| {
-            *fit.entry((n, key)).or_insert_with(|| {
-                let p = g.nodes[n as usize] + glam::Vec3::Z * FIT_LIFT;
-                !world.collision.box_position_test(
-                    p,
-                    glam::Vec3::new(-r, -r, 0.0),
-                    glam::Vec3::new(r, r, FIT_HEIGHT),
-                    vcod_common::collision::CONTENTS_SOLID | VEHICLE_CLIP,
-                )
-            })
+            let node = g.nodes[n as usize];
+            *fit.entry((node.to_array().map(f32::to_bits), key))
+                .or_insert_with(|| test_fit(&world.collision, node, r))
         };
         let from = g.nearest(at.into())?;
         let to = match want {
@@ -556,12 +707,19 @@ impl Server {
         let goal = g.nodes[to as usize];
         let h = |n: u32| g.nodes[n as usize].distance(goal);
         let mut open = std::collections::BinaryHeap::new();
-        let mut cost: HashMap<u32, (f32, u32)> = HashMap::new();
-        cost.insert(from, (0.0, from));
+        // Each node's best cost so far and the node it came from;
+        // infinite while unreached.
+        let mut cost = vec![(f32::INFINITY, u32::MAX); g.nodes.len()];
+        cost[from as usize] = (0.0, from);
         open.push(std::cmp::Reverse((ordered(h(from)), from)));
         let (mut best, mut best_h) = (from, h(from));
         let mut expanded = 0;
         while let Some(std::cmp::Reverse((_, n))) = open.pop() {
+            // A node is tested as it comes off the heap, not as it goes
+            // on: the frontier left at the goal is never tested.
+            if n != from && !fits(n) {
+                continue;
+            }
             if n == to {
                 best = to;
                 break;
@@ -570,7 +728,7 @@ impl Server {
             if expanded > PLAN_EXPANSIONS {
                 break;
             }
-            let here = cost[&n].0;
+            let here = cost[n as usize].0;
             let p = g.nodes[n as usize];
             if h(n) < best_h {
                 (best, best_h) = (n, h(n));
@@ -578,19 +736,23 @@ impl Server {
             for &m in &g.edges[n as usize] {
                 let q = g.nodes[m as usize];
                 let plain = !g.jumps.contains(&(n, m)) && !g.leaps.contains(&(n, m));
-                if !plain || (q.z - p.z).abs() > vcod_common::pmove::STEPSIZE || !fits(m) {
+                if !plain || (q.z - p.z).abs() > vcod_common::pmove::STEPSIZE {
                     continue;
                 }
                 let c = here + p.distance(q);
-                if cost.get(&m).is_none_or(|(old, _)| c < *old) {
-                    cost.insert(m, (c, n));
+                if c < cost[m as usize].0 {
+                    cost[m as usize] = (c, n);
                     open.push(std::cmp::Reverse((ordered(c + h(m)), m)));
                 }
             }
         }
         let mut path = vec![best];
-        while let Some(&(_, prev)) = cost.get(path.last()?) {
-            if prev == *path.last()? {
+        // `best` was expanded, so its chain runs back to `from`, its own
+        // parent.
+        loop {
+            let last = path[path.len() - 1];
+            let prev = cost[last as usize].1;
+            if prev == last {
                 break;
             }
             path.push(prev);
@@ -648,12 +810,14 @@ impl Server {
     /// way wedged between mp_cassino's stair at (426, -958, 60) and a
     /// Panzer IV's rear (seed 23).
     pub(super) fn park_vehicles(&mut self) {
-        let (Some(g), Some(world), Some(rt)) =
-            (self.nav.as_ref(), self.world.as_ref(), self.script.as_ref())
-        else {
+        let (Some(g), Some(world), Some(rt)) = (
+            self.game.module.driver.nav.as_ref(),
+            self.game.world.as_ref(),
+            self.game.module.script.as_ref(),
+        ) else {
             return;
         };
-        let parked = &mut self.bot_parked;
+        let parked = &mut self.game.module.bot_parked;
         let graph = std::sync::Arc::as_ptr(g) as usize;
         if parked.graph != graph {
             *parked = ParkedVehicles {

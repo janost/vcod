@@ -38,6 +38,15 @@ pub fn normalize_in_place(v: Vec3) -> Vec3 {
     normalize(v)
 }
 
+/// CoD4 1.7's `Vec3NormalizeTo` (`cod4_lnxded` 0x8192a64): the squared
+/// length and its root left on the stack, each component times the
+/// reciprocal and rounded once; a zero vector comes out as it went in.
+pub fn normalize_to(v: Vec3) -> Vec3 {
+    let len = dot(v, v).sqrt();
+    let inv = if len > 0.0 { 1.0 / len } else { 1.0 };
+    (v.as_dvec3() * inv).as_vec3()
+}
+
 /// `VectorScale` by a factor left on the stack.
 pub fn scale(v: Vec3, s: f64) -> Vec3 {
     (v.as_dvec3() * DVec3::splat(s)).as_vec3()

@@ -10,17 +10,19 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use vcod_common::animclock::{ChannelClock, Seen, Times};
 use vcod_common::animtree::PlayerAnims;
+use vcod_common::asset_source::AssetSource;
 use vcod_common::collision::MASK_PLAYERSOLID;
+use vcod_common::model::{self, Model};
 use vcod_common::movetrace::MoveWorld;
 use vcod_common::net::flags::{EF_CROUCH, EF_DEAD, EF_PRONE};
 use vcod_common::net::msg::{ClientState, EntityState, PlayerState};
-use vcod_common::net::protocol::{PROTOCOL_V1, Protocol};
+use vcod_common::net::protocol::Protocol;
 use vcod_common::net::snapshot::Snapshot;
 use vcod_common::net::trajectory::{TR_INTERPOLATE, TR_LINEAR_STOP, Trajectory};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::playerpose::{
     BG_SWING_SPEED, BodyAngles, BodyInput, BodySeat, BodySlope, Controllers, PoseInputs,
-    SeatWeapon, pose_player, seat_inputs,
+    SeatWeapon, pose_player_drawn, seat_inputs,
 };
 use vcod_common::pmove::MoveRules;
 use vcod_common::pmove::movers::SnapshotMovers;
@@ -30,7 +32,6 @@ use vcod_common::turretpose::quat_angles;
 use vcod_common::turretpose::{GunnerPlacement, angles_quat, place_gunner, tag_weapon_local};
 use vcod_common::vehiclepose::{self, VehicleFields};
 use vcod_common::xanim::{self, XAnim};
-use vcod_common::xmodel::{self, XModel};
 
 /// `legsAnim`/`torsoAnim`: anim index in the low 9 bits, restart toggle in bit 512.
 const ANIM_INDEX_MASK: i32 = 511;
@@ -227,25 +228,27 @@ pub fn resolve_visual(
 pub struct Assembly {
     pub handles: Vec<ModelHandle>, // parallel to the models given to the skeleton
     pub skeleton: Rc<Skeleton>,
+    /// The skeleton's clip bindings, kept from pose to pose.
+    pub binds: vcod_common::skeleton::BindCache,
     #[allow(dead_code)] // handles.len() is what the draw path uses
     pub model_count: usize,
 }
 
 /// Loaded+uploaded player parts by xmodel name, shared across assemblies.
-/// Holds the `XModel` too, because `Skeleton::build_grafted` re-reads bone
+/// Holds the `Model` too, because `Skeleton::build_grafted` re-reads bone
 /// data for every assembly combination. `None` is a failed part, never retried.
-type PartCache = HashMap<String, Option<(Rc<XModel>, ModelHandle)>>;
+type PartCache = HashMap<String, Option<(Rc<Model>, ModelHandle)>>;
 
 /// One attachment's model, graft tag and GPU handle, kept together so a
 /// dropped attachment never desyncs `Assembly::handles` from the model list.
-type AttachmentPart = (Rc<XModel>, Option<String>, ModelHandle);
+type AttachmentPart = (Rc<Model>, Option<String>, ModelHandle);
 
 /// One assembly's load progress, advanced one part per [`AssemblyCache::resolve`]
 /// call. A slot is `None` until attempted, `Some(None)` once attempted and failed.
 struct PendingAssembly {
     body: String,
     attachments: Vec<(String, Option<String>)>,
-    body_part: Option<Option<(Rc<XModel>, ModelHandle)>>,
+    body_part: Option<Option<(Rc<Model>, ModelHandle)>>,
     attachment_parts: Vec<Option<Option<AttachmentPart>>>,
     /// Render-clock time `resolve` last touched this; `prune_stale` sweeps on it.
     last_touched_ms: i32,
@@ -397,8 +400,8 @@ fn load_part(
     fs: &Pk3Fs,
     renderer: &mut Renderer,
     name: &str,
-) -> Option<(Rc<XModel>, ModelHandle)> {
-    let outcome = match xmodel::load(fs, name) {
+) -> Option<(Rc<Model>, ModelHandle)> {
+    let outcome = match model::load(fs, name) {
         Ok(m) => match renderer.upload_dynamic_model(fs, &m) {
             Some(handle) => Some((Rc::new(m), handle)),
             None => {
@@ -426,7 +429,7 @@ fn finalize_assembly(pending: PendingAssembly) -> Option<Rc<Assembly>> {
         .filter_map(|slot| slot.expect("is_complete checked every attachment slot"))
         .collect();
 
-    let mut refs: Vec<(&XModel, Option<&str>)> = Vec::with_capacity(1 + parts.len());
+    let mut refs: Vec<(&Model, Option<&str>)> = Vec::with_capacity(1 + parts.len());
     refs.push((body_model.as_ref(), None));
     refs.extend(parts.iter().map(|(m, t, _)| (m.as_ref(), t.as_deref())));
     let skeleton = Rc::new(Skeleton::build_grafted(&refs));
@@ -439,6 +442,7 @@ fn finalize_assembly(pending: PendingAssembly) -> Option<Rc<Assembly>> {
         model_count: handles.len(),
         handles,
         skeleton,
+        binds: Default::default(),
     }))
 }
 
@@ -715,7 +719,7 @@ impl EntityScene {
     /// what `PlayEffect`'s bolt reads (CoDMP.exe 0x49e8d0,
     /// docs/research/efx-grammar.md R10). `None` for an entity not drawn
     /// with an xmodel this frame or a model without the tag.
-    pub fn tag_pose(&mut self, fs: &Pk3Fs, num: u32, name: &str) -> Option<TagPose> {
+    pub fn tag_pose(&mut self, fs: &dyn AssetSource, num: u32, name: &str) -> Option<TagPose> {
         let d = self.drawn.get(&num)?.clone();
         let (lp, lr) = match &d.rig {
             Rig::Player => {
@@ -734,18 +738,26 @@ impl EntityScene {
                 *self.vehicle_worlds.get(&num)?.get(bi)?
             }
             Rig::Model(model) => {
+                let parts = &self.parts;
                 let rig = self
                     .model_rigs
                     .entry(model.clone())
-                    .or_insert_with(|| match xmodel::load(fs, model) {
-                        Ok(m) => {
-                            let skeleton = Skeleton::build(&[&m]);
-                            let worlds = PoseBuffer::new(&skeleton).bone_worlds(&skeleton);
-                            Some(ModelRig { skeleton, worlds })
-                        }
-                        Err(e) => {
-                            log::warn!("tag on entity model '{model}': {e:#}");
-                            None
+                    .or_insert_with(|| {
+                        // The level prewarm's copy, else read now.
+                        let m = match parts.get(model.as_str()) {
+                            Some(Some((m, _))) => Ok(m.clone()),
+                            _ => model::load(fs, model).map(Rc::new),
+                        };
+                        match m {
+                            Ok(m) => {
+                                let skeleton = Skeleton::build(&[&*m]);
+                                let worlds = PoseBuffer::new(&skeleton).bone_worlds(&skeleton);
+                                Some(ModelRig { skeleton, worlds })
+                            }
+                            Err(e) => {
+                                log::warn!("tag on entity model '{model}': {e:#}");
+                                None
+                            }
                         }
                     })
                     .as_ref()?;
@@ -757,6 +769,62 @@ impl EntityScene {
             origin: d.pos + d.rot * lp,
             axis: [rot * Vec3::X, rot * Vec3::Y, rot * Vec3::Z],
         })
+    }
+
+    /// Loads the player animtree and uploads every xmodel the level's
+    /// configstrings register, as entity models and as player parts, at
+    /// the map load: not in the frame that first draws one
+    /// (cod11-client-soak.md). Returns the models uploaded.
+    pub fn prewarm(
+        &mut self,
+        renderer: &mut Renderer,
+        fs: &Pk3Fs,
+        configstrings: &[String],
+        p: &Protocol,
+    ) -> usize {
+        use vcod_common::net::protocol::CsRange;
+        if self.anims.is_none() {
+            self.anims = Some(PlayerAnims::load(fs).ok());
+        }
+        let (first, last) = p.cs.bounds(CsRange::Model);
+        let mut names: Vec<String> = configstrings
+            .iter()
+            .take(last + 1)
+            .skip(first)
+            .filter_map(|s| model_name(s))
+            .collect();
+        // A dropped weapon draws its file's world model, an ammo or health
+        // row its own (`EntityVisual::Item`).
+        let cs7 = configstrings.get(7).map(String::as_str).unwrap_or("");
+        for w in split_weapon_list(cs7) {
+            if let Some(m) = resolve_weapon_def(&mut self.weapon_cache, fs, &w)
+                .and_then(|d| d.world_model.clone())
+            {
+                names.push(m);
+            }
+        }
+        names.extend(
+            (0..p.max_weapons + 8).filter_map(|i| static_item_model(p, i).map(str::to_string)),
+        );
+        let mut seen = HashSet::new();
+        names.retain(|n| {
+            !n.starts_with('*') && !self.parts.contains_key(n) && seen.insert(n.clone())
+        });
+        let loaded: Vec<(String, Model)> = names
+            .into_iter()
+            .filter_map(|name| Some((name.clone(), model::load(fs, &name).ok()?)))
+            .collect();
+        let refs: Vec<&Model> = loaded.iter().map(|(_, m)| m).collect();
+        let handles = renderer.upload_dynamic_models(fs, &refs);
+        let mut n = 0;
+        for ((name, m), handle) in loaded.into_iter().zip(handles) {
+            self.model_cache.entry(name.clone()).or_insert(handle);
+            if let Some(h) = handle {
+                self.parts.insert(name, Some((Rc::new(m), h)));
+                n += 1;
+            }
+        }
+        n
     }
 
     pub fn new() -> EntityScene {
@@ -869,7 +937,7 @@ impl EntityAnim {
         EntityAnim {
             key,
             skeleton: skel.clone(),
-            pose: PoseBuffer::new(skel),
+            pose: PoseBuffer::drawn(skel),
             legs: ChannelClock::default(),
             torso: ChannelClock::default(),
             visual: EntityVisual::None,
@@ -893,7 +961,7 @@ fn static_item_model(
 }
 
 /// Loads+uploads an xmodel by name (no `xmodel/` prefix), caching failures as `None`.
-fn resolve_model(
+pub(crate) fn resolve_model(
     cache: &mut HashMap<String, Option<ModelHandle>>,
     renderer: &mut Renderer,
     fs: &Pk3Fs,
@@ -902,7 +970,7 @@ fn resolve_model(
     if let Some(h) = cache.get(name) {
         return *h;
     }
-    let handle = match xmodel::load(fs, name) {
+    let handle = match model::load(fs, name) {
         Ok(m) => renderer.upload_dynamic_model(fs, &m),
         Err(e) => {
             log::warn!("live entity model '{name}': {e:#}, drawing nothing for it");
@@ -913,17 +981,62 @@ fn resolve_model(
     handle
 }
 
+/// [`resolve_model`] over `names`, the ones not cached loaded first and
+/// uploaded as one batch ([`Renderer::upload_dynamic_models`]).
+pub(crate) fn resolve_models(
+    cache: &mut HashMap<String, Option<ModelHandle>>,
+    renderer: &mut Renderer,
+    fs: &Pk3Fs,
+    names: &[String],
+) {
+    let mut loaded: Vec<(&str, Model)> = Vec::new();
+    for name in names {
+        if cache.contains_key(name) || loaded.iter().any(|(n, _)| n == name) {
+            continue;
+        }
+        match model::load(fs, name) {
+            Ok(m) => loaded.push((name, m)),
+            Err(e) => {
+                log::warn!("live entity model '{name}': {e:#}, drawing nothing for it");
+                cache.insert(name.to_string(), None);
+            }
+        }
+    }
+    let refs: Vec<&Model> = loaded.iter().map(|(_, m)| m).collect();
+    let handles = renderer.upload_dynamic_models(fs, &refs);
+    for ((name, _), h) in loaded.iter().zip(handles) {
+        cache.insert(name.to_string(), h);
+    }
+}
+
+/// `name` as the level prewarm uploaded it ([`EntityScene::prewarm`]), else
+/// loaded and uploaded now.
+fn loaded(
+    parts: &PartCache,
+    renderer: &mut Renderer,
+    fs: &Pk3Fs,
+    name: &str,
+) -> anyhow::Result<(Rc<Model>, Option<ModelHandle>)> {
+    if let Some(Some((m, h))) = parts.get(name) {
+        return Ok((m.clone(), Some(*h)));
+    }
+    let m = model::load(fs, name)?;
+    let h = renderer.upload_dynamic_model(fs, &m);
+    Ok((Rc::new(m), h))
+}
+
 /// Loads and uploads a turret's xmodel with its skeleton, caching failures as `None`.
 fn resolve_turret_rig<'a>(
     cache: &'a mut HashMap<String, Option<TurretRig>>,
+    parts: &PartCache,
     renderer: &mut Renderer,
     fs: &Pk3Fs,
     name: &str,
 ) -> Option<&'a mut TurretRig> {
     if !cache.contains_key(name) {
-        let rig = match xmodel::load(fs, name) {
-            Ok(m) => renderer.upload_dynamic_model(fs, &m).map(|handle| {
-                let skeleton = Skeleton::build(&[&m]);
+        let rig = match loaded(parts, renderer, fs, name) {
+            Ok((m, handle)) => handle.map(|handle| {
+                let skeleton = Skeleton::build(&[&*m]);
                 let bind = PoseBuffer::new(&skeleton);
                 let tag = |n: &str| Some(bind.bone_world(&skeleton, skeleton.bone_index(n)?).0);
                 let aim_tags = tag("tag_aim").zip(tag("tag_weapon"));
@@ -948,18 +1061,17 @@ fn resolve_turret_rig<'a>(
 /// as `None`.
 fn resolve_vehicle_rig<'a>(
     cache: &'a mut HashMap<String, Option<VehicleRig>>,
+    parts: &PartCache,
     renderer: &mut Renderer,
     fs: &Pk3Fs,
     name: &str,
 ) -> Option<&'a VehicleRig> {
     if !cache.contains_key(name) {
-        let rig = match xmodel::load(fs, name) {
-            Ok(m) => renderer
-                .upload_dynamic_model(fs, &m)
-                .map(|handle| VehicleRig {
-                    handle,
-                    skeleton: Skeleton::build(&[&m]),
-                }),
+        let rig = match loaded(parts, renderer, fs, name) {
+            Ok((m, handle)) => handle.map(|handle| VehicleRig {
+                handle,
+                skeleton: Skeleton::build(&[&*m]),
+            }),
             Err(e) => {
                 log::warn!("vehicle model '{name}': {e:#}, drawing nothing for it");
                 None
@@ -973,7 +1085,7 @@ fn resolve_vehicle_rig<'a>(
 /// Loads the weapon file for a CS 7 name, caching failures as `None`.
 fn resolve_weapon_def<'a>(
     cache: &'a mut HashMap<String, Option<vcod_common::weapon::WeaponDef>>,
-    fs: &Pk3Fs,
+    fs: &dyn AssetSource,
     name: &str,
 ) -> Option<&'a vcod_common::weapon::WeaponDef> {
     if !cache.contains_key(name) {
@@ -1005,7 +1117,7 @@ pub(crate) fn weapon_name_for_index(weapons: &[String], weapon_index: i32) -> Op
 fn resolve_held_weapon(
     weapon_cache: &mut HashMap<String, Option<vcod_common::weapon::WeaponDef>>,
     warned_items: &mut HashSet<String>,
-    fs: &Pk3Fs,
+    fs: &dyn AssetSource,
     weapons: &[String],
     weapon_index: i32,
 ) -> Option<String> {
@@ -1033,7 +1145,7 @@ fn resolve_held_weapon(
 /// class-based flash, and index and load failures are warned elsewhere.
 fn resolve_weapon_flash<'a>(
     weapon_cache: &'a mut HashMap<String, Option<vcod_common::weapon::WeaponDef>>,
-    fs: &Pk3Fs,
+    fs: &dyn AssetSource,
     weapons: &[String],
     weapon_index: i32,
 ) -> Option<&'a str> {
@@ -1042,24 +1154,13 @@ fn resolve_weapon_flash<'a>(
     def.world_flash_effect.as_deref()
 }
 
-/// Loads a player anim clip, caching both hits and failures by name.
+/// A player anim clip, cached by name.
 fn load_clip(
     cache: &mut HashMap<String, Option<Rc<XAnim>>>,
-    fs: &Pk3Fs,
+    fs: &dyn AssetSource,
     name: &str,
 ) -> Option<Rc<XAnim>> {
-    if let Some(c) = cache.get(name) {
-        return c.clone();
-    }
-    let clip = match xanim::load(fs, name) {
-        Ok(a) => Some(Rc::new(a)),
-        Err(e) => {
-            log::warn!("player anim '{name}': {e:#}, skipping that clip");
-            None
-        }
-    };
-    cache.insert(name.to_string(), clip.clone());
-    clip
+    xanim::load_cached(cache, fs, name, "player anim")
 }
 
 /// [`build_instances`]'s result.
@@ -1233,7 +1334,7 @@ fn place_body(
     guns: &HashMap<u32, GunFrame>,
     pos: Vec3,
     clips: &mut HashMap<String, Option<Rc<XAnim>>>,
-    fs: &Pk3Fs,
+    fs: &dyn AssetSource,
 ) -> Option<(GunnerPlacement, f32)> {
     if ent.field_i32(p, "eFlags") & turret::EF_MOUNTED == 0 {
         return None;
@@ -1351,7 +1452,7 @@ pub fn build_instances(
     let mut scene_lights = Vec::new();
     let mut shadow_casters = Vec::new();
     let ps_int = |name: &str| b.ps.field_i32(p, name);
-    let uo = p.version == 22;
+    let uo = p.is_uo();
     let rules = MoveRules::for_protocol(p);
     let ridden = turret::ridden(
         ps_int("eFlags"),
@@ -1372,7 +1473,7 @@ pub fn build_instances(
         else {
             continue;
         };
-        let Some(rig) = resolve_turret_rig(turret_rigs, renderer, fs, &model) else {
+        let Some(rig) = resolve_turret_rig(turret_rigs, parts, renderer, fs, &model) else {
             continue;
         };
         let prev = a.entities.get(&num);
@@ -1384,7 +1485,7 @@ pub fn build_instances(
         let mut barrel = turret::barrel(from.map(a2), a2(ent), f);
         // 1.5's and UO's ridden gun turns with the view, inside its arcs
         // (1.5 0x3001c2b0, UO 0x3001e9f0).
-        let uo_gun = (p.version != PROTOCOL_V1.version && ridden == Some(num)).then(|| {
+        let uo_gun = (!p.is_v1() && ridden == Some(num)).then(|| {
             let arcs = |e: &EntityState| turret::UoArcs::FIELDS.map(|n| e.field_f32(p, n));
             let arcs = turret::UoArcs::lerp(arcs(prev.unwrap_or(ent)), arcs(ent), f);
             ([angles.x, angles.y], arcs)
@@ -1417,7 +1518,7 @@ pub fn build_instances(
         let EntityVisual::Vehicle(model) = resolve_visual(ent, &b.clients, configstrings, p) else {
             continue;
         };
-        let Some(rig) = resolve_vehicle_rig(vehicle_rigs, renderer, fs, &model) else {
+        let Some(rig) = resolve_vehicle_rig(vehicle_rigs, parts, renderer, fs, &model) else {
             continue;
         };
         let (pos, angles) = lerp_pos_angles(num, ent, &from, f, render_time, p);
@@ -1569,6 +1670,7 @@ pub fn build_instances(
                 body,
                 mut attachments,
             } => {
+                let _bodies = crate::frame_prof::span(crate::frame_prof::Stage::Bodies);
                 // Kept before the held weapon joins: the corpse fallback
                 // re-resolves the weapon from its own entityState.
                 let roster_visual = EntityVisual::Player {
@@ -1632,7 +1734,7 @@ pub fn build_instances(
                     *st = EntityAnim {
                         key: key.clone(),
                         skeleton: assembly.skeleton.clone(),
-                        pose: PoseBuffer::new(&assembly.skeleton),
+                        pose: PoseBuffer::drawn(&assembly.skeleton),
                         legs: st.legs,
                         torso: st.torso,
                         visual: EntityVisual::None,
@@ -1772,8 +1874,10 @@ pub fn build_instances(
                         controllers,
                         leaf_times: Vec::new(),
                         node_time: false,
+                        binds: Some(&assembly.binds),
                     };
-                    st.pose = pose_player(&assembly.skeleton, &inputs, |n| load_clip(clips, fs, n));
+                    st.pose =
+                        pose_player_drawn(&assembly.skeleton, &inputs, |n| load_clip(clips, fs, n));
                 }
 
                 drawn.insert(
@@ -1787,10 +1891,12 @@ pub fn build_instances(
                 if hidden {
                     continue;
                 }
+                // Composed once for the tags and every model's skin.
+                let worlds = st.pose.bone_worlds(&assembly.skeleton);
                 if etype == ET_PLAYER
                     && let Some(bi) = assembly.skeleton.bone_index("Bip01 Head")
                 {
-                    let (local, _) = st.pose.bone_world(&assembly.skeleton, bi);
+                    let (local, _) = worlds[bi];
                     heads.insert(num, transform.transform_point3(local));
                 }
 
@@ -1802,7 +1908,7 @@ pub fn build_instances(
                     .and_then(|_| assembly.skeleton.bone_index("tag_flash"));
                 match flash_tag {
                     Some(bi) => {
-                        let (local_pos, local_rot) = st.pose.bone_world(&assembly.skeleton, bi);
+                        let (local_pos, local_rot) = worlds[bi];
                         // Tags point +X forward (docs/research/xmodel-v14-format.md,
                         // "Model space and the view basis").
                         let world_pos = transform.transform_point3(local_pos);
@@ -1828,7 +1934,7 @@ pub fn build_instances(
                 if held_weapon.is_some()
                     && let Some(bi) = assembly.skeleton.bone_index("tag_brass")
                 {
-                    let (local_pos, local_rot) = st.pose.bone_world(&assembly.skeleton, bi);
+                    let (local_pos, local_rot) = worlds[bi];
                     brass.insert(
                         num,
                         (
@@ -1842,7 +1948,7 @@ pub fn build_instances(
                     out.push(DynamicModelInstance {
                         model: handle,
                         transform,
-                        bones: Some(st.pose.skin_matrices(&assembly.skeleton, m)),
+                        bones: Some(assembly.skeleton.skin_matrices(&worlds, m)),
                         light_origin,
                         shader_time: None,
                     });
@@ -2000,7 +2106,7 @@ pub fn build_instances(
             }
             EntityVisual::Turret { model, weapon } => {
                 let (Some(rig), Some(gun)) = (
-                    resolve_turret_rig(turret_rigs, renderer, fs, &model),
+                    resolve_turret_rig(turret_rigs, parts, renderer, fs, &model),
                     guns.get(&num),
                 ) else {
                     continue;
@@ -2037,7 +2143,7 @@ pub fn build_instances(
                 };
 
                 // The previous anim at full weight, then the goal blended over it.
-                let mut pose = PoseBuffer::new(&rig.skeleton);
+                let mut pose = PoseBuffer::drawn(&rig.skeleton);
                 let ch = &mut st.channel;
                 let fade = (render_time - ch.start_ms) as f32 / turret::ANIM_BLEND_MS as f32;
                 if fade >= 1.0 {
@@ -2203,7 +2309,7 @@ mod tests {
             p.max_weapons + 1..p.max_weapons + 1 + vcod_common::weapon_table::STATIC_ITEMS.len()
         {
             let model = static_item_model(p, index).expect("a static item row");
-            xmodel::load(&fs, model).unwrap_or_else(|e| panic!("{model}: {e:#}"));
+            model::load(&fs, model).unwrap_or_else(|e| panic!("{model}: {e:#}"));
         }
     }
 
@@ -2324,7 +2430,7 @@ mod tests {
         let Some(fs) = vcod_common::testing::game_fs() else {
             return;
         };
-        let model = xmodel::load(&fs, "mg42_bipod").unwrap();
+        let model = model::load(&fs, "mg42_bipod").unwrap();
         let skel = Skeleton::build(&[&model]);
         let (lp, lr) =
             PoseBuffer::new(&skel).bone_world(&skel, skel.bone_index("tag_flash").unwrap());
@@ -2659,16 +2765,8 @@ mod tests {
     }
 
     /// No real GPU upload; `ModelHandle`'s index is `pub(crate)` so tests can build one.
-    fn fake_part() -> (Rc<XModel>, ModelHandle) {
-        let m = XModel {
-            lod: "x".into(),
-            surfaces: vec![],
-            materials: vec![],
-            bones: vec![],
-            collision: Vec::new(),
-            lod_dists: vec![0.0],
-            coarse: Vec::new(),
-        };
+    fn fake_part() -> (Rc<Model>, ModelHandle) {
+        let m = Model::rig("x", vec![]);
         (Rc::new(m), ModelHandle(0))
     }
 
@@ -2712,7 +2810,7 @@ mod tests {
     /// Each rider in the UO seat captures draws as vcod-server poses him:
     /// the seat tag off the drawn vehicle is the one the server places him
     /// at (its hull-only pose, `vehicle::seat::posed_as`), and the
-    /// controllers and seat blend the draw path hands `pose_player` are the
+    /// controllers and seat blend the draw path hands `pose_player_drawn` are the
     /// server's `BodyPose` ones but for the cgame's steer scale.
     #[test]
     fn a_drawn_rider_is_posed_as_the_server_poses_him() {
@@ -2750,7 +2848,7 @@ mod tests {
                         continue;
                     };
                     let skel = skels.entry(model.clone()).or_insert_with(|| {
-                        Skeleton::build(&[&xmodel::load(&fs, &model).expect("the vehicle")])
+                        Skeleton::build(&[&model::load(&fs, &model).expect("the vehicle")])
                     });
                     let v3 = |k: &str| {
                         Vec3::new(

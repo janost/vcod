@@ -1,12 +1,14 @@
 //! CoD1 xanim v14 parsing and sampling. Layout: `docs/research/xanim-v14-format.md`;
 //! header flags: `docs/research/player-model-anim-system.md`, "xanim v14 header flags".
 
-use crate::pk3::Pk3Fs;
+use crate::asset_source::{Asset, AssetKind, AssetSource};
 use crate::xmodel::Reader;
 use anyhow::{Result, anyhow, ensure};
 use glam::{Quat, Vec3};
+use std::collections::HashMap;
+use std::rc::Rc;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct XAnim {
     #[allow(dead_code)] // diagnostics only
     pub name: String,
@@ -23,7 +25,7 @@ pub struct XAnim {
     pub notes: Vec<(String, u16)>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Track {
     pub bone: String,
     pub rot_keys: Vec<(u16, Quat)>, // (frame, local rot), ascending; empty = hold current
@@ -86,6 +88,27 @@ fn read_header(name: &str, r: &mut Reader) -> Result<Header> {
         root_motion: flags & 2 != 0,
         framerate,
     })
+}
+
+/// A root move put into the clip's own frame: turned back by the root's
+/// yaw, given as a half quaternion's unnormalized `(z, w)`; a zero
+/// quaternion leaves it. The sums group as CoD2's do (lnxded 0x80bdd54,
+/// cod2-combat.md 6.2), which `cod2::wire_ab`'s kill-run corpses match bit
+/// for bit; the CoD4 corpse takes the same.
+pub fn unturn_by_yaw(v: Vec3, [z, w]: [f32; 2]) -> Vec3 {
+    let len2 = w * w + z * z;
+    if len2 == 0.0 {
+        return v;
+    }
+    let scale = 2.0 / len2;
+    // The turn's sine and 1 - cosine.
+    let sin = scale * (w * z);
+    let versin = scale * (z * z);
+    Vec3::new(
+        v.x * (1.0 - versin) + v.y * sin,
+        v.y - (v.x * sin + v.y * versin),
+        v.z,
+    )
 }
 
 /// The clip's own length in ms, read from the header alone: a caller that only
@@ -162,10 +185,21 @@ fn frames_of(name: &str, r: &mut Reader, count: u32, frame_count: u32) -> Result
 fn read_root(name: &str, r: &mut Reader, frame_count: u32) -> Result<Track> {
     let rc = r.u16()? as u32;
     ensure!(rc <= frame_count, "{name}: delta rot {rc} > {frame_count}");
-    let rot_keys = frames_of(name, r, rc, frame_count)?
-        .into_iter()
-        .map(|f| Ok((f, dequant(0, 0, r.i16()?))))
-        .collect::<Result<Vec<_>>>()?;
+    let mut rot_keys = Vec::with_capacity(rc as usize);
+    let mut rot_raw: Vec<[i16; 4]> = Vec::with_capacity(rc as usize);
+    for f in frames_of(name, r, rc, frame_count)? {
+        let raw = raw_key(0, 0, r.i16()?);
+        rot_keys.push((f, dequant(0, 0, raw[2])));
+        rot_raw.push(raw);
+    }
+    // CoD2's loader (lnxded `XAnimLoadFile` 0x80c3f8a) negates a key whose
+    // (z, w) turns from its predecessor's; only the shorts take it.
+    for k in 1..rot_raw.len() {
+        let (a, b) = (rot_raw[k - 1], rot_raw[k]);
+        if i32::from(a[2]) * i32::from(b[2]) + i32::from(a[3]) * i32::from(b[3]) < 0 {
+            rot_raw[k] = b.map(i16::wrapping_neg);
+        }
+    }
     let tc = r.u16()? as u32;
     ensure!(
         tc <= frame_count,
@@ -179,7 +213,7 @@ fn read_root(name: &str, r: &mut Reader, frame_count: u32) -> Result<Track> {
         bone: String::new(),
         rot_keys,
         trans_keys,
-        rot_raw: Vec::new(),
+        rot_raw,
     })
 }
 
@@ -334,7 +368,39 @@ pub fn parse(name: &str, data: &[u8]) -> Result<XAnim> {
     })
 }
 
+/// [`RootMotion`] of clip `name` in `fs`: its file's header and root track,
+/// or a decoded clip's ([`AssetSource::decoded_anim`]). `None` where the
+/// source has no such clip.
+pub fn clip_motion(fs: &dyn AssetSource, name: &str) -> Option<RootMotion> {
+    if let Some(data) = fs.read(&format!("xanim/{name}")) {
+        return root_motion(name, &data).ok();
+    }
+    Some(fs.decoded_anim(name)?.ok()?.motion())
+}
+
 impl XAnim {
+    /// [`root_motion`] off a clip already parsed.
+    pub fn motion(&self) -> RootMotion {
+        let last = self.frame_count - 1;
+        let distance = match &self.root {
+            Some(root) => match (root.sample(0.0).0, root.sample(last as f32).0) {
+                (Some(a), Some(b)) => (b - a).length(),
+                _ => 0.0,
+            },
+            None => 0.0,
+        };
+        RootMotion {
+            length_ms: x87_length_ms(last, self.framerate as u32) as i32,
+            duration: self.duration(),
+            looping: self.looping,
+            frequency: match last {
+                0 => 0.0,
+                n => self.framerate / n as f32,
+            },
+            distance,
+        }
+    }
+
     /// Seconds from first to last frame; 0.0 for single-frame anims.
     pub fn duration(&self) -> f32 {
         (self.frame_count - 1) as f32 / self.framerate
@@ -377,12 +443,51 @@ impl Track {
     }
 }
 
-pub fn load(fs: &Pk3Fs, name: &str) -> Result<XAnim> {
-    let path = format!("xanim/{name}");
-    let data = fs
-        .read(&path)
-        .ok_or_else(|| anyhow!("{path} not found in pk3s"))?;
-    parse(name, &data)
+/// [`load`] through a cache by name that keeps hits and failures; a
+/// failure is warned once, as `<what> '<name>': <error>`.
+pub fn load_cached(
+    cache: &mut HashMap<String, Option<Rc<XAnim>>>,
+    fs: &dyn AssetSource,
+    name: &str,
+    what: &str,
+) -> Option<Rc<XAnim>> {
+    if let Some(c) = cache.get(name) {
+        return c.clone();
+    }
+    let clip = match load(fs, name) {
+        Ok(a) => Some(Rc::new(a)),
+        Err(e) => {
+            log::warn!("{what} '{name}': {e:#}, skipping that clip");
+            None
+        }
+    };
+    cache.insert(name.to_string(), clip.clone());
+    clip
+}
+
+/// A clip by its `xanim/` entry's name. The read goes through
+/// [`AssetSource::read`], so a [`crate::pk3::Pk3Fs`] marks the pak it came from.
+/// [`load`] builds through [`Asset::find`], not the cached
+/// [`crate::asset_source::load`]: every caller keeps its own clip cache
+/// ([`load_cached`], the hit rigs, the view weapons).
+impl Asset for XAnim {
+    const KIND: AssetKind = AssetKind::Anim;
+
+    fn find(src: &dyn AssetSource, name: &str) -> Result<Self> {
+        if let Some(clip) = src.decoded_anim(name) {
+            return clip;
+        }
+        let path = format!("xanim/{name}");
+        let data = src
+            .read(&path)
+            .ok_or_else(|| anyhow!("{path} not found in pk3s"))?;
+        parse(name, &data)
+    }
+}
+
+/// [`XAnim::find`]: `name` is the `xanim/` entry, e.g. `pb_stand_alert`.
+pub fn load(fs: &dyn AssetSource, name: &str) -> Result<XAnim> {
+    XAnim::find(fs, name)
 }
 
 #[cfg(test)]

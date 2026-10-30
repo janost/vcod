@@ -6,16 +6,18 @@ pub const VERSION: &str = env!("VCOD_VERSION");
 
 pub mod archive;
 pub mod area;
-pub mod bans;
 pub mod botmgmt;
 pub mod bots;
 pub mod client;
+pub mod cod2;
+pub mod cod4;
 pub mod compass;
 pub mod configstrings;
 pub mod console;
 pub mod cvars;
 pub mod defs;
 pub mod download;
+pub mod engine;
 pub mod follow;
 pub mod game;
 pub mod items;
@@ -25,6 +27,8 @@ pub mod push;
 pub mod rcon;
 pub mod server;
 pub mod spectate;
+pub mod tick_profile;
+pub mod tick_trace;
 pub mod weapons;
 pub mod world;
 

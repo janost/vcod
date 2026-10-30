@@ -7,6 +7,8 @@
 
 use std::collections::HashMap;
 
+use crate::asset_source::{Asset, AssetKind, AssetSource};
+use crate::game::Game;
 use crate::menu::{CvarGate, block, tokenize};
 
 /// `ITEM_TYPE_*` from `menudef.h`.
@@ -20,6 +22,12 @@ pub const ITEM_TYPE_SLIDER: i32 = 10;
 pub const ITEM_TYPE_YESNO: i32 = 11;
 pub const ITEM_TYPE_MULTI: i32 = 12;
 pub const ITEM_TYPE_BIND: i32 = 13;
+/// CoD2's `ITEM_TYPE_DVARENUM` (its 13), which CoD1 lacks; CoD2's types
+/// past its bind (14) read as `100 +` their number.
+pub const ITEM_TYPE_DVARENUM: i32 = 113;
+/// CoD2's `ITEM_TYPE_DECIMALFIELD` (its 17): an edit field that shows its
+/// float dvar to two places.
+pub const ITEM_TYPE_DECIMALFIELD: i32 = 117;
 
 /// `WINDOW_STYLE_*`.
 pub const WINDOW_STYLE_FILLED: i32 = 1;
@@ -37,6 +45,8 @@ pub const FEEDER_ALLMAPS: i32 = 4;
 pub const FEEDER_PLAYER_LIST: i32 = 7;
 pub const FEEDER_MODS: i32 = 9;
 pub const FEEDER_SERVERSTATUS: i32 = 13;
+/// CoD2's `FEEDER_PLAYER_PROFILES` (`ui/menudefinition.h`).
+pub const FEEDER_PLAYER_PROFILES: i32 = 0x18;
 
 /// One `columns` entry of a list box: x offset, width and the character cap.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -94,6 +104,16 @@ pub struct UiItem {
     pub str_list: Vec<(String, String)>,
     /// `cvarFloat`: an `ITEM_TYPE_SLIDER`'s cvar is `cvar`, this its range.
     pub slider: Option<SliderRange>,
+    /// CoD2's `dvarEnumList`: the enum dvar an `ITEM_TYPE_DVARENUM` steps
+    /// its `dvar` through (item +0x2ec, `ItemParse_dvarEnumList` Mac
+    /// 0x1a9bd4).
+    pub enum_list: Option<String>,
+    /// CoD2's `ITEM_TYPE_VALIDFILEFIELD`: an edit field that takes
+    /// letters, digits, `_` and `-` only (`I_isforfilename`, Mac 0x2942c).
+    pub file_name_only: bool,
+    /// CoD2's `accept`: the script Enter runs in the edit field
+    /// (`Item_TextField_HandleKey`, Mac 0x16ee5e).
+    pub accept: Vec<String>,
     /// An edit field's `maxChars` (0: no cap) and `maxPaintChars`.
     pub max_chars: usize,
     pub max_paint_chars: usize,
@@ -111,6 +131,9 @@ pub struct UiItem {
     /// `maxCharsGotoNext`: an edit field that fills to `maxChars` steps to
     /// the next item.
     pub max_chars_goto_next: bool,
+    /// CoD2's `rect` alignment: `HORIZONTAL_ALIGN_*`, `VERTICAL_ALIGN_*`
+    /// (0, the default, with neither given).
+    pub align: [i32; 2],
 }
 
 impl Default for UiItem {
@@ -146,6 +169,9 @@ impl Default for UiItem {
             float_list: Vec::new(),
             str_list: Vec::new(),
             slider: None,
+            enum_list: None,
+            file_name_only: false,
+            accept: Vec::new(),
             max_chars: 0,
             max_paint_chars: 0,
             action: Vec::new(),
@@ -156,6 +182,7 @@ impl Default for UiItem {
             leave_focus: Vec::new(),
             focus_sound: None,
             max_chars_goto_next: false,
+            align: [0; 2],
         }
     }
 }
@@ -180,6 +207,10 @@ pub struct UiMenu {
     pub exec_keys: Vec<(u8, Vec<String>)>,
     /// Rects already offset by the menu's origin.
     pub items: Vec<UiItem>,
+    /// CoD2's `rect` alignment, as [`UiItem::align`].
+    pub align: [i32; 2],
+    /// CoD2's `blurWorld`: the world blurred behind the menu, 0 for none.
+    pub blur_world: f32,
 }
 
 /// Inlines `#include "path"` (read through `include`) and collects
@@ -221,13 +252,30 @@ fn preprocess(
 pub(crate) fn expand(text: &str, include: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
     let mut defines = HashMap::new();
     let text = preprocess(text, include, &mut defines, 0);
-    tokenize(&text)
-        .into_iter()
-        .flat_map(|t| match defines.get(&t) {
-            Some(v) => v.clone(),
-            None => vec![t],
-        })
-        .collect()
+    let mut out = Vec::new();
+    for t in tokenize(&text) {
+        substitute(t, &defines, 0, &mut out);
+    }
+    out
+}
+
+/// `t` with its `#define` body pushed in its place, and that body's own
+/// names in turn (CoD2's `HORIZONTAL_ALIGN_DEFAULT` names
+/// `HORIZONTAL_ALIGN_SUBLEFT`), to a fixed depth so a cycle ends.
+fn substitute(
+    t: String,
+    defines: &HashMap<String, Vec<String>>,
+    depth: u32,
+    out: &mut Vec<String>,
+) {
+    match defines.get(&t) {
+        Some(body) if depth < 8 => {
+            for b in body {
+                substitute(b.clone(), defines, depth + 1, out);
+            }
+        }
+        _ => out.push(t),
+    }
 }
 
 /// Every `menuDef` in `text`. `include` reads an `#include`d file.
@@ -245,17 +293,51 @@ pub struct MenuFile {
     /// `cursor`, the shader the UI draws at the mouse while a menu is up
     /// (`ui_mp_x86.dll` 0x40008060).
     pub cursor: Option<String>,
+    /// What retail's parser would refuse: a CoD2 file's keywords its
+    /// keyword tables lack. Not checked for CoD1.
+    pub errors: Vec<String>,
+}
+
+/// Uncached: the UI and the HUD keep the menus they take out of it. The
+/// file and each `#include` read through [`AssetSource::read`], so a
+/// [`crate::pk3::Pk3Fs`] marks their paks.
+impl Asset for MenuFile {
+    const KIND: AssetKind = AssetKind::Menu;
+
+    fn find(src: &dyn AssetSource, path: &str) -> anyhow::Result<Self> {
+        let read = |p: &str| {
+            src.read(p)
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+        };
+        let Some(text) = read(path) else {
+            anyhow::bail!("{path} not found");
+        };
+        Ok(parse_menu_file_in(src.game(), &text, &read))
+    }
 }
 
 /// [`parse_file`] with the file's `assetGlobalDef` keys vcod reads.
 pub fn parse_menu_file(text: &str, include: &dyn Fn(&str) -> Option<String>) -> MenuFile {
+    parse_menu_file_in(Game::Cod1, text, include)
+}
+
+/// [`parse_menu_file`] in `game`'s grammar. CoD2's renames each `cvar`
+/// keyword `dvar` (read onto the same fields), gives `rect` two optional
+/// alignment numbers and adds keywords vcod skips by their arguments
+/// (docs/research/cod2-fonts-menus.md, section 2).
+pub fn parse_menu_file_in(
+    game: Game,
+    text: &str,
+    include: &dyn Fn(&str) -> Option<String>,
+) -> MenuFile {
     let tokens = expand(text, include);
     let mut file = MenuFile::default();
     let mut i = 0;
     while i < tokens.len() {
         if tokens[i].eq_ignore_ascii_case("menuDef") {
             i += 1;
-            file.menus.push(parse_menu(block(&tokens, &mut i)));
+            let menu = parse_menu(block(&tokens, &mut i), game, &mut file.errors);
+            file.menus.push(menu);
         } else if tokens[i].eq_ignore_ascii_case("assetGlobalDef") {
             i += 1;
             let body = block(&tokens, &mut i);
@@ -416,7 +498,22 @@ fn nums<const N: usize>(tokens: &[String], i: usize) -> [f32; N] {
     std::array::from_fn(|k| num(tokens.get(i + 1 + k)))
 }
 
-fn parse_menu(body: &[String]) -> UiMenu {
+/// CoD2's `rect`: four numbers, then up to two alignment integers on the
+/// same line. The tokens carry no lines, but no keyword is a number.
+fn rect_align(tokens: &[String], i: usize, align: &mut [i32; 2]) -> usize {
+    let mut n = 0;
+    while n < 2 {
+        match tokens.get(i + 5 + n).and_then(|t| t.parse::<i32>().ok()) {
+            Some(v) => align[n] = v,
+            None => break,
+        }
+        n += 1;
+    }
+    5 + n
+}
+
+fn parse_menu(body: &[String], game: Game, errors: &mut Vec<String>) -> UiMenu {
+    let cod2 = game == Game::Cod2;
     let mut menu = UiMenu {
         focus_color: [1.0; 4],
         ..UiMenu::default()
@@ -424,6 +521,9 @@ fn parse_menu(body: &[String]) -> UiMenu {
     let mut i = 0;
     while i < body.len() {
         let key = body[i].to_ascii_lowercase();
+        if cod2 && key != "{" && cod2::menu_arity(&key).is_none() {
+            errors.push(format!("{}: unknown menu keyword {}", menu.name, body[i]));
+        }
         match key.as_str() {
             "name" => {
                 menu.name = body.get(i + 1).cloned().unwrap_or_default();
@@ -431,7 +531,15 @@ fn parse_menu(body: &[String]) -> UiMenu {
             }
             "rect" => {
                 menu.rect = nums::<4>(body, i);
-                i += 5;
+                i += if cod2 {
+                    rect_align(body, i, &mut menu.align)
+                } else {
+                    5
+                };
+            }
+            "blurworld" if cod2 => {
+                menu.blur_world = num(body.get(i + 1));
+                i += 2;
             }
             "fullscreen" => {
                 menu.fullscreen = num(body.get(i + 1)) != 0.0;
@@ -464,7 +572,7 @@ fn parse_menu(body: &[String]) -> UiMenu {
             }
             "itemdef" => {
                 i += 1;
-                let mut item = parse_item(block(body, &mut i));
+                let mut item = parse_item(block(body, &mut i), game, errors);
                 item.rect[0] += menu.rect[0];
                 item.rect[1] += menu.rect[1];
                 menu.items.push(item);
@@ -489,13 +597,15 @@ fn parse_menu(body: &[String]) -> UiMenu {
             "{" => {
                 block(body, &mut i);
             }
+            _ if cod2 => cod2::skip(body, &mut i, cod2::menu_arity(&key)),
             _ => i += 1,
         }
     }
     menu
 }
 
-fn parse_item(tokens: &[String]) -> UiItem {
+fn parse_item(tokens: &[String], game: Game, errors: &mut Vec<String>) -> UiItem {
+    let cod2 = game == Game::Cod2;
     let mut item = UiItem::default();
     let mut cvar_test: Option<String> = None;
     let mut show: Option<(bool, Vec<String>)> = None;
@@ -503,15 +613,33 @@ fn parse_item(tokens: &[String]) -> UiItem {
     let s = |i: usize| tokens.get(i + 1).cloned().unwrap_or_default();
     while i < tokens.len() {
         let key = tokens[i].to_ascii_lowercase();
+        if cod2 && key != "{" && cod2::item_arity(&key).is_none() {
+            errors.push(format!(
+                "{}: unknown menu item keyword {}",
+                item.name, tokens[i]
+            ));
+        }
         let mut skip = 2;
         match key.as_str() {
             "name" => item.name = s(i),
             "group" => item.group = s(i),
-            "type" => item.kind = num(tokens.get(i + 1)) as i32,
+            "type" => {
+                item.kind = num(tokens.get(i + 1)) as i32;
+                if cod2 {
+                    // `ITEM_TYPE_VALIDFILEFIELD` (16): an edit field that
+                    // takes `I_isforfilename`'s characters only.
+                    item.file_name_only = item.kind == 16;
+                    item.kind = cod2::item_type(item.kind);
+                }
+            }
             "style" => item.style = num(tokens.get(i + 1)) as i32,
             "rect" => {
                 item.rect = nums::<4>(tokens, i);
-                skip = 5;
+                skip = if cod2 {
+                    rect_align(tokens, i, &mut item.align)
+                } else {
+                    5
+                };
             }
             // `ItemParse_origin`: shifts the rect parsed so far; a `rect`
             // after it starts over.
@@ -548,10 +676,10 @@ fn parse_item(tokens: &[String]) -> UiItem {
                 item.autowrap = true;
                 skip = 1;
             }
-            "cvar" => item.cvar = Some(s(i)),
-            "cvartest" => cvar_test = Some(s(i)),
-            "showcvar" | "hidecvar" => {
-                let shown = key == "showcvar";
+            "cvar" | "dvar" => item.cvar = Some(s(i)),
+            "cvartest" | "dvartest" => cvar_test = Some(s(i)),
+            "showcvar" | "hidecvar" | "showdvar" | "hidedvar" => {
+                let shown = key.starts_with("show");
                 i += 1;
                 show = Some((shown, block(tokens, &mut i).to_vec()));
                 continue;
@@ -578,11 +706,13 @@ fn parse_item(tokens: &[String]) -> UiItem {
                     .collect();
                 skip = 2 + n * 3;
             }
-            "action" | "doubleclick" | "mouseenter" | "mouseexit" | "onfocus" | "leavefocus" => {
+            "action" | "doubleclick" | "mouseenter" | "mouseexit" | "onfocus" | "leavefocus"
+            | "accept" => {
                 i += 1;
                 let script = block(tokens, &mut i).to_vec();
                 match key.as_str() {
                     "action" => item.action = script,
+                    "accept" => item.accept = script,
                     "doubleclick" => item.double_click = script,
                     "mouseenter" => item.mouse_enter = script,
                     "onfocus" => item.on_focus = script,
@@ -591,13 +721,14 @@ fn parse_item(tokens: &[String]) -> UiItem {
                 }
                 continue;
             }
-            "cvarfloat" => {
+            "cvarfloat" | "dvarfloat" => {
                 item.cvar = Some(s(i));
                 let [default, min, max] = std::array::from_fn(|k| num(tokens.get(i + 2 + k)));
                 item.slider = Some(SliderRange { default, min, max });
                 skip = 5;
             }
             "focussound" => item.focus_sound = Some(s(i)),
+            "dvarenumlist" => item.enum_list = Some(s(i)),
             // 0x40017b10 sets the edit data's `+0x14`.
             "maxcharsgotonext" => {
                 item.max_chars_goto_next = true;
@@ -605,7 +736,7 @@ fn parse_item(tokens: &[String]) -> UiItem {
             }
             "maxchars" => item.max_chars = num(tokens.get(i + 1)) as usize,
             "maxpaintchars" => item.max_paint_chars = num(tokens.get(i + 1)) as usize,
-            "cvarstrlist" => {
+            "cvarstrlist" | "dvarstrlist" => {
                 i += 1;
                 // The stock lists separate their entries with commas.
                 let words: Vec<&String> = block(tokens, &mut i)
@@ -623,7 +754,7 @@ fn parse_item(tokens: &[String]) -> UiItem {
                     .collect();
                 continue;
             }
-            "cvarfloatlist" => {
+            "cvarfloatlist" | "dvarfloatlist" => {
                 i += 1;
                 item.float_list = block(tokens, &mut i)
                     .chunks(2)
@@ -634,6 +765,10 @@ fn parse_item(tokens: &[String]) -> UiItem {
             "{" => {
                 // An unhandled key's block.
                 block(tokens, &mut i);
+                continue;
+            }
+            _ if cod2 => {
+                cod2::skip(tokens, &mut i, cod2::item_arity(&key));
                 continue;
             }
             _ => skip = 1,
@@ -648,6 +783,179 @@ fn parse_item(tokens: &[String]) -> UiItem {
         });
     }
     item
+}
+
+/// CoD2's menu grammar: the keyword tables (`itemParseKeywords` and
+/// `menuParseKeywords`, CoD2MP Mac 1.3 0x34c8a0 and 0x34cbc0) with what
+/// each keyword reads after it.
+mod cod2 {
+    use crate::menu::block;
+
+    #[derive(Clone, Copy)]
+    pub(super) enum Arity {
+        /// That many tokens.
+        Args(usize),
+        /// A `{ }` script or list.
+        Block,
+        /// One token, then a block (`execKey`).
+        ArgBlock,
+        /// `rect`: four numbers and up to two alignments.
+        Rect,
+        /// `columns n` and three numbers per column.
+        Columns,
+    }
+    use Arity::*;
+
+    /// Item keywords, lowercased, in the table's order.
+    const ITEM: [(&str, Arity); 65] = [
+        ("name", Args(1)),
+        ("text", Args(1)),
+        ("textfile", Args(1)),
+        ("textsavegame", Args(0)),
+        ("group", Args(1)),
+        ("rect", Rect),
+        ("origin", Args(2)),
+        ("style", Args(1)),
+        ("decoration", Args(0)),
+        ("notselectable", Args(0)),
+        ("noscrollbars", Args(0)),
+        ("wrapped", Args(0)),
+        ("autowrapped", Args(0)),
+        ("horizontalscroll", Args(0)),
+        ("type", Args(1)),
+        ("elementwidth", Args(1)),
+        ("elementheight", Args(1)),
+        ("feeder", Args(1)),
+        ("elementtype", Args(1)),
+        ("columns", Columns),
+        ("border", Args(1)),
+        ("bordersize", Args(1)),
+        ("visible", Args(1)),
+        ("ownerdraw", Args(1)),
+        ("align", Args(1)),
+        ("textalign", Args(1)),
+        ("textalignx", Args(1)),
+        ("textaligny", Args(1)),
+        ("textscale", Args(1)),
+        ("textstyle", Args(1)),
+        ("textfont", Args(1)),
+        ("backcolor", Args(4)),
+        ("forecolor", Args(4)),
+        ("bordercolor", Args(4)),
+        ("outlinecolor", Args(4)),
+        ("background", Args(1)),
+        ("onfocus", Block),
+        ("leavefocus", Block),
+        ("mouseenter", Block),
+        ("mouseexit", Block),
+        ("mouseentertext", Block),
+        ("mouseexittext", Block),
+        ("action", Block),
+        ("accept", Block),
+        ("special", Args(1)),
+        ("dvar", Args(1)),
+        ("maxchars", Args(1)),
+        ("maxcharsgotonext", Args(0)),
+        ("maxpaintchars", Args(1)),
+        ("focussound", Args(1)),
+        ("dvarfloat", Args(4)),
+        ("dvarstrlist", Block),
+        ("dvarfloatlist", Block),
+        ("dvarenumlist", Args(1)),
+        ("ownerdrawflag", Args(1)),
+        ("enabledvar", Block),
+        ("dvartest", Args(1)),
+        ("disabledvar", Block),
+        ("showdvar", Block),
+        ("hidedvar", Block),
+        ("focusdvar", Block),
+        ("cinematic", Args(1)),
+        ("doubleclick", Block),
+        ("execkey", ArgBlock),
+        ("execkeyint", ArgBlock),
+    ];
+
+    /// Menu keywords, lowercased, in the table's order.
+    const MENU: [(&str, Arity); 32] = [
+        ("name", Args(1)),
+        ("fullscreen", Args(1)),
+        ("rect", Rect),
+        ("style", Args(1)),
+        ("visible", Args(1)),
+        ("onopen", Block),
+        ("onclose", Block),
+        ("onesc", Block),
+        ("border", Args(1)),
+        ("bordersize", Args(1)),
+        ("backcolor", Args(4)),
+        ("forecolor", Args(4)),
+        ("bordercolor", Args(4)),
+        ("focuscolor", Args(4)),
+        ("disablecolor", Args(4)),
+        ("outlinecolor", Args(4)),
+        ("background", Args(1)),
+        ("ownerdraw", Args(1)),
+        ("ownerdrawflag", Args(1)),
+        ("outofboundsclick", Args(0)),
+        ("soundloop", Args(1)),
+        ("itemdef", Block),
+        ("cinematic", Args(1)),
+        ("popup", Args(0)),
+        ("fadeclamp", Args(1)),
+        ("fadecycle", Args(1)),
+        ("fadeamount", Args(1)),
+        ("fadeinamount", Args(1)),
+        ("execkey", ArgBlock),
+        ("execkeyint", ArgBlock),
+        ("blurworld", Args(1)),
+        ("legacysplitscreenscale", Args(0)),
+    ];
+
+    fn find(table: &[(&str, Arity)], key: &str) -> Option<Arity> {
+        table.iter().find(|(k, _)| *k == key).map(|&(_, a)| a)
+    }
+
+    pub(super) fn item_arity(key: &str) -> Option<Arity> {
+        find(&ITEM, key)
+    }
+
+    pub(super) fn menu_arity(key: &str) -> Option<Arity> {
+        find(&MENU, key)
+    }
+
+    /// Steps `*i` past the keyword at it and what it reads; an unknown
+    /// keyword (`None`, already reported) past itself alone.
+    pub(super) fn skip(tokens: &[String], i: &mut usize, arity: Option<Arity>) {
+        *i += 1;
+        match arity {
+            None => {}
+            Some(Args(n)) => *i += n,
+            Some(Block) => {
+                block(tokens, i);
+            }
+            Some(ArgBlock) => {
+                *i += 1;
+                block(tokens, i);
+            }
+            Some(Rect) => *i += super::rect_align(tokens, *i - 1, &mut [0; 2]) - 1,
+            Some(Columns) => {
+                let n = super::num(tokens.get(*i)) as usize;
+                *i += 1 + n * 3;
+            }
+        }
+    }
+
+    /// CoD2's `ITEM_TYPE_*` onto vcod's: 0..12 are CoD1's, its bind (14)
+    /// is CoD1's 13, its file name field (16) an edit field
+    /// ([`super::UiItem::file_name_only`]), the rest `100 +` their number.
+    pub(super) fn item_type(t: i32) -> i32 {
+        match t {
+            0..=12 => t,
+            14 => super::ITEM_TYPE_BIND,
+            16 => super::ITEM_TYPE_EDITFIELD,
+            _ => 100 + t,
+        }
+    }
 }
 
 /// A script's commands: the token stream split on `;`. Retail splits by
@@ -667,7 +975,10 @@ pub fn script_commands(script: &[String]) -> Vec<Vec<String>> {
         if !cur.is_empty() && is_command(t) && args_done(&cur) {
             out.push(std::mem::take(&mut cur));
         }
-        cur.push(t.clone());
+        match cod1_command(t) {
+            Some(c) if cur.is_empty() => cur.push(c.to_string()),
+            _ => cur.push(t.clone()),
+        }
     }
     if !cur.is_empty() {
         out.push(cur);
@@ -675,27 +986,39 @@ pub fn script_commands(script: &[String]) -> Vec<Vec<String>> {
     out
 }
 
+/// CoD2's renamed script commands (`commandList`, CoD2MP Mac 1.3
+/// 0x34b260) as CoD1's, so one runner serves both.
+fn cod1_command(t: &str) -> Option<&'static str> {
+    Some(match t.to_ascii_lowercase().as_str() {
+        "setdvar" => "setcvar",
+        "execondvarintvalue" => "execoncvarintvalue",
+        "execondvarfloatvalue" => "execoncvarfloatvalue",
+        _ => return None,
+    })
+}
+
 /// The script command words the stock front-end menus use.
 fn is_command(t: &str) -> bool {
-    matches!(
-        t.to_ascii_lowercase().as_str(),
-        "play"
-            | "open"
-            | "close"
-            | "show"
-            | "hide"
-            | "exec"
-            | "setcvar"
-            | "uiscript"
-            | "ingameclose"
-            | "setitemcolor"
-            | "setfocus"
-            | "fadein"
-            | "fadeout"
-            | "execoncvarintvalue"
-            | "execoncvarfloatvalue"
-            | "scriptmenuresponse"
-    )
+    cod1_command(t).is_some()
+        || matches!(
+            t.to_ascii_lowercase().as_str(),
+            "play"
+                | "open"
+                | "close"
+                | "show"
+                | "hide"
+                | "exec"
+                | "setcvar"
+                | "uiscript"
+                | "ingameclose"
+                | "setitemcolor"
+                | "setfocus"
+                | "fadein"
+                | "fadeout"
+                | "execoncvarintvalue"
+                | "execoncvarfloatvalue"
+                | "scriptmenuresponse"
+        )
 }
 
 /// Whether `cur` has all the arguments its command word takes, so the next
@@ -836,6 +1159,84 @@ mod tests {
         let a = &file.menus[0].items[0];
         assert!(a.max_chars_goto_next && a.visible);
         assert_eq!(a.max_chars, 4);
+    }
+
+    #[test]
+    fn cod2_reads_dvar_keywords_onto_the_cvar_fields() {
+        let text = r#"{ menuDef { name m rect 0 0 640 480 4 4 blurWorld 2.5 fadeClamp 1
+            soundLoop "music_mainmenu_mp" legacySplitScreenScale
+            itemDef { name a type 14 rect 10 20 30 40 2 1 textfont 1 textstyle 3
+              dvar "r_gamma" dvarTest "ui_x" showDvar { "1" ; "2" }
+              enableDvar { "3" } elementtype 0 elementwidth 5 columns 1 2 190 25
+              dvarFloatList { "@MENU_YES" 1 "@MENU_NO" 0 } special 0
+              action { setdvar ui_x 1; execOnDvarIntValue ui_x 1 "quit" } visible 1 }
+            itemDef { name b type 13 cvar "x" dvarEnumList "r_mode" } } }"#;
+        let file = parse_menu_file_in(Game::Cod2, text, &|_| None);
+        let m = &file.menus[0];
+        assert_eq!(
+            (m.rect, m.align, m.blur_world),
+            ([0.0, 0.0, 640.0, 480.0], [4, 4], 2.5)
+        );
+        let a = &m.items[0];
+        assert_eq!(a.kind, ITEM_TYPE_BIND);
+        assert_eq!((a.rect, a.align), ([10.0, 20.0, 30.0, 40.0], [2, 1]));
+        assert_eq!(a.cvar.as_deref(), Some("r_gamma"));
+        let gate = a.gate.as_ref().unwrap();
+        assert_eq!((gate.cvar.as_str(), gate.show), ("ui_x", true));
+        assert_eq!(gate.values, ["1", "2"]);
+        assert_eq!(a.float_list.len(), 2);
+        assert!(a.visible);
+        assert_eq!(
+            script_commands(&a.action),
+            vec![
+                vec!["setcvar", "ui_x", "1"],
+                vec!["execoncvarintvalue", "ui_x", "1", "quit"]
+            ]
+        );
+        assert_eq!(m.items[1].kind, ITEM_TYPE_DVARENUM);
+        assert_eq!(m.items[1].enum_list.as_deref(), Some("r_mode"));
+        // `cvar` is CoD1's; CoD2's table has only `dvar`.
+        assert_eq!(file.errors, ["b: unknown menu item keyword cvar"]);
+        // CoD1's grammar takes the alignments as stray tokens and checks nothing.
+        let cod1 = parse_menu_file(text, &|_| None);
+        assert!(cod1.errors.is_empty());
+        assert_eq!(cod1.menus[0].align, [0, 0]);
+    }
+
+    /// Every stock CoD2 MP menu parses with no keyword its tables lack:
+    /// the files `ui_mp/menus.txt`, `ingame.txt` and `hud.txt` load and
+    /// every other `ui_mp/` menu (the script menus).
+    #[test]
+    fn stock_cod2_menus_parse_without_errors() {
+        use crate::asset_source::AssetSource;
+        let Some(fs) = crate::testing::cod2_fs() else {
+            return;
+        };
+        let read = |p: &str| fs.read(p).map(|b| String::from_utf8_lossy(&b).into_owned());
+        let mut files: Vec<String> = ["ui_mp/menus.txt", "ui_mp/ingame.txt", "ui_mp/hud.txt"]
+            .iter()
+            .flat_map(|l| menu_list(&read(l).unwrap_or_else(|| panic!("{l} missing"))))
+            .collect();
+        let listed = files.len();
+        // The rest; `button_mainmenu.menu` and kin are `#include` pieces.
+        files.extend(fs.list("ui_mp", ".menu"));
+        let (mut menus, mut errors) = (0, Vec::new());
+        for (n, path) in files.iter().enumerate() {
+            // `menus.txt` names files the iwds lack, as CoD1's does.
+            let Some(text) = read(path) else { continue };
+            let file = parse_menu_file_in(Game::Cod2, &text, &read);
+            assert!(n >= listed || !file.menus.is_empty(), "{path}: no menuDef");
+            menus += file.menus.len();
+            errors.extend(file.errors.into_iter().map(|e| format!("{path}: {e}")));
+        }
+        assert!(errors.is_empty(), "{errors:#?}");
+        assert!(menus >= 60, "{menus} menus in {} files", files.len());
+        let main = parse_menu_file_in(Game::Cod2, &read("ui_mp/main.menu").unwrap(), &read);
+        let resume = (main.menus.iter())
+            .flat_map(|m| &m.items)
+            .find(|i| i.name == "resume" && i.gate.is_some())
+            .expect("main.menu's resume item and its cl_ingame gate");
+        assert_eq!(resume.gate.as_ref().unwrap().cvar, "cl_ingame");
     }
 
     #[test]

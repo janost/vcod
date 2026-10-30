@@ -1,0 +1,2576 @@
+# map mp_toujane
+# made by: tools/run_probe_cod2.sh hurt mp_toujane -299 997 43 90 <out> (retail cod2_lnxded 1.3, pure, defaults, +set probe_hurt 1)
+# move_probe --script hurt: com_maxfps 85, cl_maxpackets 30, cl_packetdup 1
+# spawn (-299 997 38.9932) view (0 90)
+s 3 5350 commandTime=14e6 origin[1]=44794000 origin[0]=c3958000 viewangles[1]=42b40000 origin[2]=421bf909 velocity[2]=c2a00000 pm_flags=800000 viewHeightCurrent=42700000 eFlags=2 holdBreathScale=3f04eb57 viewHeightTarget=3c groundEntityNum=3ff weapon=3 weapons[0]=8 weaponslots[0]=300 delta_angles[1]=4000 cursorHintString=ffffffff viewlocked_entNum=3ff speed=be mins[1]=c1700000 mins[0]=c1700000 maxs[2]=428c0000 maxs[1]=41700000 maxs[0]=41700000 gravity=320 A[2]=37 C[2]=5
+c 5351 0 3 0 0 0 0 0 0
+c 5362 0 3 0 0 0 0 0 0
+c 5373 0 3 0 0 0 0 0 0
+c 5385 0 3 0 0 0 0 0 0
+p 4
+c 5397 0 3 0 0 0 0 0 0
+s 4 5400 commandTime=1509 origin[2]=420ec1f2 velocity[2]=c2da0000 aimSpreadScale=3f091682 holdBreathScale=3f1cf553
+c 5411 0 3 0 0 0 0 0 0
+c 5423 0 3 0 0 0 0 0 0
+p 7
+c 5435 0 3 0 0 0 0 0 0
+c 5446 0 3 0 0 0 0 0 0
+s 5 5450 commandTime=152f origin[2]=41f7b1c4 velocity[2]=c30c0000 aimSpreadScale=3f8ef68b holdBreathScale=3f31df1a
+c 5460 0 3 0 0 0 0 0 0
+p 6
+c 5471 0 3 0 0 0 0 0 0
+c 5483 0 3 0 0 0 0 0 0
+c 5496 0 3 0 0 0 0 0 0
+p 6
+s 6 5500 commandTime=1578 origin[2]=41e10000 velocity[2]=0 eventSequence=1 legsAnim=284 aimSpreadScale=0 events[0]=5f torsoTimer=64 torsoAnim=200 holdBreathScale=3f4e6de2 legsTimer=64 groundEntityNum=3fe eventParms[0]=4
+c 5508 0 3 0 0 0 0 0 0
+c 5520 0 3 0 0 0 0 0 0
+c 5532 0 3 0 0 0 0 0 0
+p 6
+c 5544 0 3 0 0 0 0 0 0
+s 7 5550 commandTime=159c torsoTimer=40 holdBreathScale=3f586254 legsTimer=40
+c 5556 0 3 0 0 0 0 0 0
+c 5568 0 3 0 0 0 0 0 0
+p 6
+c 5580 0 3 0 0 0 0 0 0
+c 5592 0 3 0 0 0 0 0 0
+s 8 5600 commandTime=15c0 legsAnim=99 torsoTimer=1c holdBreathScale=3f6056fd legsTimer=1c
+c 5605 0 3 0 0 0 0 0 0
+p 6
+c 5617 0 3 0 0 0 0 0 0
+c 5629 0 3 0 0 0 0 0 0
+c 5641 0 3 0 0 0 0 0 0
+p 6
+s 9 5650 commandTime=1609 torsoTimer=0 holdBreathScale=3f6be8e8 legsTimer=0
+c 5655 0 3 0 0 0 0 0 0
+c 5669 0 3 0 0 0 0 0 0
+c 5681 0 3 0 0 0 0 0 0
+p 6
+c 5693 0 3 0 0 0 0 0 0
+s 10 5700 commandTime=1631 holdBreathScale=3f705b5c
+c 5705 0 3 0 0 0 0 0 0
+c 5717 0 3 0 0 0 0 0 0
+p 6
+c 5729 0 3 0 0 0 0 0 0
+c 5741 0 3 0 0 0 0 0 0
+s 11 5750 commandTime=1655 holdBreathScale=3f737f94
+c 5753 0 3 0 0 0 0 0 0
+p 6
+c 5765 0 3 0 0 0 0 0 0
+c 5777 0 3 0 0 0 0 0 0
+c 5788 0 3 0 0 0 0 0 0
+p 6
+c 5800 0 3 0 0 0 0 0 0
+s 12 5800 commandTime=169c holdBreathScale=3f77f6b7
+c 5814 0 3 0 0 0 0 0 0
+c 5827 0 3 0 0 0 0 0 0
+p 6
+c 5840 0 3 0 0 0 0 0 0
+c 5852 0 3 0 0 0 0 0 0
+s 13 5850 commandTime=16c3 holdBreathScale=3f79b39e
+c 5863 0 3 0 0 0 0 0 0
+p 6
+c 5876 0 3 0 0 0 0 0 0
+c 5887 0 3 0 0 0 0 0 0
+c 5900 0 3 0 0 0 0 0 0
+p 6
+s 14 5900 commandTime=170c holdBreathScale=3f7c00ef
+c 5912 0 3 0 0 0 0 0 0
+c 5926 0 3 0 0 0 0 0 0
+c 5938 0 3 0 0 0 0 0 0
+p 6
+s 15 5950 commandTime=1732 holdBreathScale=3f7cd8f6
+c 5951 0 3 0 0 0 0 0 0
+c 5962 0 3 0 0 0 0 0 0
+c 5973 0 3 0 0 0 0 0 0
+p 6
+c 5984 0 3 0 0 0 0 0 0
+c 5997 0 3 0 0 0 0 0 0
+s 16 6000 commandTime=1755 holdBreathScale=3f7d76e3
+c 6011 0 3 0 0 0 0 0 0
+p 6
+c 6023 0 3 0 0 0 0 0 0
+c 6037 0 3 0 0 0 0 0 0
+c 6048 0 3 0 0 0 0 0 0
+p 6
+s 17 6050 commandTime=17a0 holdBreathScale=3f7e697a
+c 6061 0 3 0 0 0 0 0 0
+c 6073 0 3 0 0 0 0 0 0
+c 6085 0 3 0 0 0 0 0 0
+p 6
+c 6097 0 3 0 0 0 0 0 0
+s 18 6100 commandTime=17c5 holdBreathScale=3f7ebd37
+c 6108 0 3 0 0 0 0 0 0
+c 6120 0 3 0 0 0 0 0 0
+p 6
+c 6132 0 3 0 0 0 0 0 0
+c 6145 0 3 0 0 0 0 0 0
+s 19 6150 commandTime=17e8 holdBreathScale=3f7efc5f
+c 6158 0 3 0 0 0 0 0 0
+p 6
+c 6170 0 3 0 0 0 0 0 0
+c 6182 0 3 0 0 0 0 0 0
+c 6194 0 3 0 0 0 0 0 0
+p 6
+s 20 6200 commandTime=1832 holdBreathScale=3f7f5c50
+c 6208 0 3 0 0 0 0 0 0
+c 6220 0 3 0 0 0 0 0 0
+c 6234 0 3 0 0 0 0 0 0
+p 6
+c 6246 0 3 0 0 0 0 0 0
+s 21 6250 commandTime=185a holdBreathScale=3f7f808c
+c 6259 0 3 0 0 0 0 0 0
+c 6272 0 3 0 0 0 0 0 0
+p 6
+c 6284 0 3 0 0 0 0 0 0
+c 6296 0 3 0 0 0 0 0 0
+s 22 6300 commandTime=1880 holdBreathScale=3f7f9b75
+c 6308 0 3 0 0 0 0 0 0
+p 6
+c 6321 0 3 0 0 0 0 0 0
+c 6332 0 3 0 0 0 0 0 0
+c 6343 0 3 0 0 0 0 0 0
+p 6
+s 23 6350 commandTime=18c7 holdBreathScale=3f7fbf5f
+c 6355 0 3 0 0 0 0 0 0
+c 6367 0 3 0 0 0 0 0 0
+c 6378 0 3 0 0 0 0 0 0
+p 6
+c 6390 0 3 0 0 0 0 0 0
+s 24 6400 commandTime=18ea holdBreathScale=3f800000
+c 6402 0 3 0 0 0 0 0 0
+c 6415 0 3 0 0 0 0 0 0
+p 6
+c 6429 0 3 0 0 0 0 0 0
+c 6441 0 3 0 0 0 0 0 0
+s 25 6450 commandTime=190f
+c 6453 0 3 0 0 0 0 0 0
+p 6
+c 6465 0 3 0 0 0 0 0 0
+c 6476 0 3 0 0 0 0 0 0
+c 6489 0 3 0 0 0 0 0 0
+p 6
+s 26 6500 commandTime=1959
+c 6500 0 3 0 0 0 0 0 0
+c 6513 0 3 0 0 0 0 0 0
+c 6525 0 3 0 0 0 0 0 0
+p 6
+c 6538 0 3 0 0 0 0 0 0
+c 6550 0 3 0 0 0 0 0 0
+s 27 6550 commandTime=197d
+c 6562 0 3 0 0 0 0 0 0
+p 6
+c 6574 0 3 0 0 0 0 0 0
+c 6586 0 3 0 0 0 0 0 0
+c 6598 0 3 0 0 0 0 0 0
+p 6
+s 28 6600 commandTime=19c6
+c 6611 0 3 0 0 0 0 0 0
+c 6623 0 3 0 0 0 0 0 0
+c 6635 0 3 0 0 0 0 0 0
+p 6
+c 6647 0 3 0 0 0 0 0 0
+s 29 6650 commandTime=19eb
+c 6660 0 3 0 0 0 0 0 0
+c 6672 0 3 0 0 0 0 0 0
+p 6
+c 6684 0 3 0 0 0 0 0 0
+c 6696 0 3 0 0 0 0 0 0
+s 30 6700 commandTime=1a10
+c 6708 0 3 0 0 0 0 0 0
+p 6
+c 6720 0 3 0 0 0 0 0 0
+c 6732 0 3 0 0 0 0 0 0
+c 6744 0 3 0 0 0 0 0 0
+p 6
+s 31 6750 commandTime=1a58
+c 6756 0 3 0 0 0 0 0 0
+c 6768 0 3 0 0 0 0 0 0
+c 6780 0 3 0 0 0 0 0 0
+p 6
+c 6792 0 3 0 0 0 0 0 0
+s 32 6800 commandTime=1a7c
+c 6805 0 3 0 0 0 0 0 0
+c 6817 0 3 0 0 0 0 0 0
+p 6
+c 6829 0 3 0 0 0 0 0 0
+c 6841 0 3 0 0 0 0 0 0
+c 6853 0 3 0 0 0 0 0 0
+p 6
+s 33 6850 commandTime=1ac5 aimSpreadScale=40400000 damageTimer=12c damageEvent=1 damageDuration=12c damageYaw=40 damageCount=3
+c 6865 0 3 0 0 0 0 0 0
+c 6878 0 3 0 0 0 0 0 0
+c 6891 0 3 0 0 0 0 0 0
+p 6
+s 34 6900 commandTime=1aeb aimSpreadScale=0 torsoAnim=f9 damageTimer=106 damageCount=0
+c 6905 0 3 0 0 0 0 0 0
+c 6918 0 3 0 0 0 0 0 0
+c 6929 0 3 0 0 0 0 0 0
+p 6
+c 6943 0 3 0 0 0 0 0 0
+s 35 6950 commandTime=1b11 damageTimer=e0
+c 6955 0 3 0 0 0 0 0 0
+c 6968 0 3 0 0 0 0 0 0
+p 6
+c 6980 0 3 0 0 0 0 0 0
+c 6992 0 3 0 0 0 0 0 0
+s 36 7000 commandTime=1b38 damageTimer=b9
+c 7005 0 3 0 0 0 0 0 0
+p 6
+c 7016 0 3 0 0 0 0 0 0
+c 7029 0 3 0 0 0 0 0 0
+c 7041 0 3 0 0 0 0 0 0
+p 6
+s 37 7050 commandTime=1b81 damageTimer=70
+c 7052 0 3 0 0 0 0 0 0
+c 7064 0 3 0 0 0 0 0 0
+c 7077 0 3 0 0 0 0 0 0
+p 6
+c 7090 0 3 0 0 0 0 0 0
+s 38 7100 commandTime=1ba5 damageTimer=4c
+c 7102 0 3 0 0 0 0 0 0
+c 7114 0 3 0 0 0 0 0 0
+p 6
+c 7126 0 3 0 0 0 0 0 0
+c 7138 0 3 0 0 0 0 0 0
+c 7150 0 3 0 0 0 0 0 0
+p 6
+s 39 7150 commandTime=1bee damageTimer=3
+c 7163 0 3 0 0 0 0 0 0
+c 7175 0 3 0 0 0 0 0 0
+c 7187 0 3 0 0 0 0 0 0
+p 6
+c 7198 0 3 0 0 0 0 0 0
+s 40 7200 commandTime=1c13 torsoAnim=200 damageTimer=0
+c 7211 0 3 0 0 0 0 0 0
+c 7225 0 3 0 0 0 0 0 0
+p 6
+c 7236 0 3 0 0 0 0 0 0
+c 7248 0 3 0 0 0 0 0 0
+s 41 7250 commandTime=1c39
+c 7262 0 3 0 0 0 0 0 0
+p 6
+c 7274 0 3 0 0 0 0 0 0
+c 7285 0 3 0 0 0 0 0 0
+c 7298 0 3 0 0 0 0 0 0
+p 6
+s 42 7300 commandTime=1c82
+c 7311 0 3 0 0 0 0 0 0
+c 7324 0 3 0 0 0 0 0 0
+c 7336 0 3 0 0 0 0 0 0
+p 6
+c 7347 0 3 0 0 0 0 0 0
+s 43 7350 commandTime=1ca8
+c 7360 0 3 0 0 0 0 0 0
+c 7373 0 3 0 0 0 0 0 0
+p 6
+c 7386 0 3 0 0 0 0 0 0
+c 7399 0 3 0 0 0 0 0 0
+s 44 7400 commandTime=1ccd
+c 7411 0 3 0 0 0 0 0 0
+p 6
+c 7425 0 3 0 0 0 0 0 0
+c 7437 0 3 0 0 0 0 0 0
+c 7449 0 3 0 0 0 0 0 0
+p 6
+s 45 7450 commandTime=1cf3
+c 7460 0 3 0 0 0 0 0 0
+c 7474 0 3 0 0 0 0 0 0
+c 7486 0 3 0 0 0 0 0 0
+p 6
+c 7497 0 3 0 0 0 0 0 0
+s 46 7500 commandTime=1d3e
+c 7509 0 3 0 0 0 0 0 0
+c 7523 0 3 0 0 0 0 0 0
+p 6
+c 7535 0 3 0 0 0 0 0 0
+c 7547 0 3 0 0 0 0 0 0
+s 47 7550 commandTime=1d63 aimSpreadScale=40400000 damageTimer=12c flinchYaw=2d damageEvent=2 damageYaw=60 damageCount=3
+c 7559 0 3 0 0 0 0 0 0
+p 6
+c 7571 0 3 0 0 0 0 0 0
+c 7583 0 3 0 0 0 0 0 0
+c 7595 0 3 0 0 0 0 0 0
+p 6
+s 48 7600 commandTime=1dab aimSpreadScale=0 torsoAnim=f7 damageTimer=e4 damageCount=0
+c 7606 0 3 0 0 0 0 0 0
+c 7619 0 3 0 0 0 0 0 0
+c 7631 0 3 0 0 0 0 0 0
+p 6
+c 7642 0 3 0 0 0 0 0 0
+s 49 7650 commandTime=1dcf damageTimer=c0
+c 7655 0 3 0 0 0 0 0 0
+c 7669 0 3 0 0 0 0 0 0
+p 6
+c 7681 0 3 0 0 0 0 0 0
+c 7693 0 3 0 0 0 0 0 0
+s 50 7700 commandTime=1df5 damageTimer=9a
+c 7705 0 3 0 0 0 0 0 0
+p 6
+c 7717 0 3 0 0 0 0 0 0
+c 7729 0 3 0 0 0 0 0 0
+c 7742 0 3 0 0 0 0 0 0
+p 6
+s 51 7750 commandTime=1e3e damageTimer=51
+c 7756 0 3 0 0 0 0 0 0
+c 7768 0 3 0 0 0 0 0 0
+c 7780 0 3 0 0 0 0 0 0
+p 6
+c 7792 0 3 0 0 0 0 0 0
+s 52 7800 commandTime=1e64 damageTimer=2b
+c 7804 0 3 0 0 0 0 0 0
+c 7815 0 3 0 0 0 0 0 0
+p 6
+c 7829 0 3 0 0 0 0 0 0
+c 7840 0 3 0 0 0 0 0 0
+s 53 7850 commandTime=1e87 damageTimer=8
+c 7853 0 3 0 0 0 0 0 0
+p 6
+c 7865 0 3 0 0 0 0 0 0
+c 7877 0 3 0 0 0 0 0 0
+c 7889 0 3 0 0 0 0 0 0
+p 6
+c 7902 0 3 0 0 0 0 0 0
+s 54 7900 commandTime=1ed1 torsoAnim=200 damageTimer=0
+c 7914 0 3 0 0 0 0 0 0
+c 7926 0 3 0 0 0 0 0 0
+p 6
+c 7940 0 3 0 0 0 0 0 0
+s 55 7950 commandTime=1ef6
+c 7954 0 3 0 0 0 0 0 0
+c 7965 0 3 0 0 0 0 0 0
+p 6
+c 7977 0 3 0 0 0 0 0 0
+c 7988 0 3 0 0 0 0 0 0
+c 8002 0 3 0 0 0 0 0 0
+p 6
+s 56 8000 commandTime=1f1d
+c 8014 0 3 0 0 0 0 0 0
+c 8026 0 3 0 0 0 0 0 0
+c 8039 0 3 0 0 0 0 0 0
+p 6
+s 57 8050 commandTime=1f67
+c 8051 0 3 0 0 0 0 0 0
+c 8063 0 3 0 0 0 0 0 0
+c 8077 0 3 0 0 0 0 0 0
+p 6
+c 8088 0 3 0 0 0 0 0 0
+c 8101 0 3 0 0 0 0 0 0
+s 58 8100 commandTime=1f8d
+c 8113 0 3 0 0 0 0 0 0
+p 6
+c 8125 0 3 0 0 0 0 0 0
+c 8139 0 3 0 0 0 0 0 0
+s 59 8150 commandTime=1fb1
+c 8152 0 3 0 0 0 0 0 0
+p 6
+c 8165 0 3 0 0 0 0 0 0
+c 8177 0 3 0 0 0 0 0 0
+c 8188 0 3 0 0 0 0 0 0
+p 6
+s 60 8200 commandTime=1ffc
+c 8201 0 3 0 0 0 0 0 0
+c 8213 0 3 0 0 0 0 0 0
+c 8225 0 3 0 0 0 0 0 0
+p 6
+c 8236 0 3 0 0 0 0 0 0
+c 8249 0 3 0 0 0 0 0 0
+s 61 8250 commandTime=2021 aimSpreadScale=40400000 damageTimer=12c flinchYaw=5a damageEvent=3 damageYaw=80 damageCount=3
+c 8261 0 3 0 0 0 0 0 0
+p 6
+c 8272 0 3 0 0 0 0 0 0
+c 8285 0 3 0 0 0 0 0 0
+c 8299 0 3 0 0 0 0 0 0
+p 6
+s 62 8300 commandTime=206b aimSpreadScale=0 torsoAnim=f7 damageTimer=e2 damageCount=0
+c 8310 0 3 0 0 0 0 0 0
+c 8323 0 3 0 0 0 0 0 0
+c 8337 0 3 0 0 0 0 0 0
+p 6
+s 63 8350 commandTime=2091 damageTimer=bc
+c 8352 0 3 0 0 0 0 0 0
+c 8363 0 3 0 0 0 0 0 0
+c 8375 0 3 0 0 0 0 0 0
+p 6
+c 8387 0 3 0 0 0 0 0 0
+c 8399 0 3 0 0 0 0 0 0
+s 64 8400 commandTime=20b7 damageTimer=96
+c 8411 0 3 0 0 0 0 0 0
+p 6
+c 8422 0 3 0 0 0 0 0 0
+c 8433 0 3 0 0 0 0 0 0
+c 8446 0 3 0 0 0 0 0 0
+p 6
+s 65 8450 commandTime=20fe damageTimer=4f
+c 8459 0 3 0 0 0 0 0 0
+c 8473 0 3 0 0 0 0 0 0
+c 8486 0 3 0 0 0 0 0 0
+p 6
+c 8499 0 3 0 0 0 0 0 0
+s 66 8500 commandTime=2126 damageTimer=27
+c 8512 0 3 0 0 0 0 0 0
+c 8523 0 3 0 0 0 0 0 0
+p 6
+c 8535 0 3 0 0 0 0 0 0
+c 8547 0 3 0 0 0 0 0 0
+s 67 8550 commandTime=214b damageTimer=2
+c 8561 0 3 0 0 0 0 0 0
+p 6
+c 8574 0 3 0 0 0 0 0 0
+c 8586 0 3 0 0 0 0 0 0
+c 8598 0 3 0 0 0 0 0 0
+p 6
+s 68 8600 commandTime=2196 torsoAnim=200 damageTimer=0
+c 8609 0 3 0 0 0 0 0 0
+c 8623 0 3 0 0 0 0 0 0
+c 8634 0 3 0 0 0 0 0 0
+p 6
+c 8648 0 3 0 0 0 0 0 0
+s 69 8650 commandTime=21ba
+c 8661 0 3 0 0 0 0 0 0
+c 8672 0 3 0 0 0 0 0 0
+p 6
+c 8686 0 3 0 0 0 0 0 0
+c 8698 0 3 0 0 0 0 0 0
+s 70 8700 commandTime=21e0
+c 8709 0 3 0 0 0 0 0 0
+p 6
+c 8723 0 3 0 0 0 0 0 0
+c 8736 0 3 0 0 0 0 0 0
+c 8748 0 3 0 0 0 0 0 0
+p 6
+s 71 8750 commandTime=222c
+c 8760 0 3 0 0 0 0 0 0
+c 8773 0 3 0 0 0 0 0 0
+c 8784 0 3 0 0 0 0 0 0
+p 6
+c 8795 0 3 0 0 0 0 0 0
+s 72 8800 commandTime=2250
+c 8808 0 3 0 0 0 0 0 0
+c 8821 0 3 0 0 0 0 0 0
+p 6
+c 8832 0 3 0 0 0 0 0 0
+c 8844 0 3 0 0 0 0 0 0
+s 73 8850 commandTime=2275
+c 8857 0 3 0 0 0 0 0 0
+p 6
+c 8871 0 3 0 0 0 0 0 0
+c 8884 0 3 0 0 0 0 0 0
+c 8897 0 3 0 0 0 0 0 0
+p 6
+s 74 8900 commandTime=22c1
+c 8910 0 3 0 0 0 0 0 0
+c 8921 0 3 0 0 0 0 0 0
+c 8935 0 3 0 0 0 0 0 0
+p 6
+c 8946 0 3 0 0 0 0 0 0
+s 75 8950 commandTime=22e7 aimSpreadScale=40400000 damageTimer=12c flinchYaw=87 damageEvent=4 damageYaw=a0 damageCount=3
+c 8957 0 3 0 0 0 0 0 0
+c 8970 0 3 0 0 0 0 0 0
+p 6
+c 8982 0 3 0 0 0 0 0 0
+c 8994 0 3 0 0 0 0 0 0
+s 76 9000 commandTime=230a aimSpreadScale=0 torsoAnim=f8 damageTimer=109 damageCount=0
+c 9007 0 3 0 0 0 0 0 0
+p 6
+c 9022 0 3 0 0 0 0 0 0
+c 9035 0 3 0 0 0 0 0 0
+c 9049 0 3 0 0 0 0 0 0
+p 6
+s 77 9050 commandTime=2359 damageTimer=ba
+c 9061 0 3 0 0 0 0 0 0
+c 9072 0 3 0 0 0 0 0 0
+c 9084 0 3 0 0 0 0 0 0
+p 6
+c 9096 0 3 0 0 0 0 0 0
+s 78 9100 commandTime=237c damageTimer=97
+c 9108 0 3 0 0 0 0 0 0
+c 9120 0 3 0 0 0 0 0 0
+p 6
+c 9132 0 3 0 0 0 0 0 0
+c 9144 0 3 0 0 0 0 0 0
+s 79 9150 commandTime=23a0 damageTimer=73
+c 9157 0 3 0 0 0 0 0 0
+p 6
+c 9169 0 3 0 0 0 0 0 0
+c 9181 0 3 0 0 0 0 0 0
+c 9193 0 3 0 0 0 0 0 0
+p 6
+s 80 9200 commandTime=23e9 damageTimer=2a
+c 9204 0 3 0 0 0 0 0 0
+c 9217 0 3 0 0 0 0 0 0
+c 9229 0 3 0 0 0 0 0 0
+p 6
+c 9241 0 3 0 0 0 0 0 0
+s 81 9250 commandTime=240d damageTimer=6
+c 9254 0 3 0 0 0 0 0 0
+c 9266 0 3 0 0 0 0 0 0
+p 6
+c 9278 0 3 0 0 0 0 0 0
+c 9290 0 3 0 0 0 0 0 0
+s 82 9300 commandTime=2432 torsoAnim=200 damageTimer=0
+c 9302 0 3 0 0 0 0 0 0
+p 6
+c 9314 0 3 0 0 0 0 0 0
+c 9326 0 3 0 0 0 0 0 0
+c 9338 0 3 0 0 0 0 0 0
+p 6
+c 9350 0 3 0 0 0 0 127 0
+s 83 9350 commandTime=247a
+c 9361 0 3 0 0 0 0 127 0
+c 9373 0 3 0 0 0 0 127 0
+p 6
+c 9385 0 3 0 0 0 0 127 0
+c 9397 0 3 0 0 0 0 127 0
+s 84 9400 commandTime=249d origin[1]=44798c53 bobCycle=1 velocity[1]=42400000 velocity[0]=80000000 legsAnim=27f aimSpreadScale=41ea999a
+c 9409 0 3 0 0 0 0 127 0
+p 6
+c 9421 0 3 0 0 0 0 127 0
+c 9433 0 3 0 0 0 0 127 0
+c 9445 0 3 0 0 0 0 127 0
+p 6
+s 85 9450 commandTime=24e5 origin[1]=447b49d1 bobCycle=a velocity[1]=43030000 aimSpreadScale=42f24001
+c 9457 0 3 0 0 0 0 127 0
+c 9469 0 3 0 0 0 0 127 0
+c 9481 0 3 0 0 0 0 127 0
+p 6
+c 9493 0 3 0 0 0 0 127 0
+s 86 9500 commandTime=2509 origin[1]=447cac1b bobCycle=13 velocity[1]=43240000 aimSpreadScale=43270667
+c 9504 0 3 0 0 0 0 127 0
+c 9516 0 3 0 0 0 0 127 0
+p 6
+c 9528 0 3 0 0 0 0 127 0
+c 9540 0 3 0 0 0 0 127 0
+s 87 9550 commandTime=252c origin[1]=447e43c1 bobCycle=1d velocity[1]=433e0000 aimSpreadScale=4353a667
+c 9553 0 3 0 0 0 0 127 0
+p 6
+c 9565 0 3 0 0 0 0 127 0
+c 9577 0 3 0 0 0 0 127 0
+c 9589 0 3 0 0 0 0 127 0
+p 6
+c 9601 0 3 0 0 0 0 127 0
+s 88 9600 commandTime=2575 origin[1]=4480ddb9 bobCycle=35 aimSpreadScale=437f0000
+c 9612 0 3 0 0 0 0 127 0
+c 9624 0 3 0 0 0 0 127 0
+p 6
+c 9636 0 3 0 0 0 0 127 0
+c 9648 0 3 0 0 0 0 127 0
+s 89 9650 commandTime=2598 origin[1]=4481b286 bobCycle=40 eventSequence=2 events[1]=3 damageTimer=12c flinchYaw=b4 damageEvent=5 damageYaw=c0 damageCount=3
+c 9660 0 3 0 0 0 0 127 0
+p 6
+c 9672 0 3 0 0 0 0 127 0
+c 9684 0 3 0 0 0 0 127 0
+c 9696 0 3 0 0 0 0 127 0
+p 6
+s 90 9700 commandTime=25e0 origin[1]=4483684a bobCycle=58 legsAnim=1d damageTimer=e4 damageCount=0
+c 9709 0 3 0 0 0 0 127 0
+c 9721 0 3 0 0 0 0 127 0
+c 9733 0 3 0 0 0 0 127 0
+p 6
+c 9745 0 3 0 0 0 0 127 0
+s 91 9750 commandTime=2605 origin[1]=44844940 bobCycle=64 damageTimer=bf
+c 9758 0 3 0 0 0 0 127 0
+c 9770 0 3 0 0 0 0 127 0
+p 6
+c 9782 0 3 0 0 0 0 127 0
+c 9794 0 3 0 0 0 0 127 0
+s 92 9800 commandTime=262a origin[1]=44852a36 bobCycle=70 damageTimer=9a
+c 9806 0 3 0 0 0 0 127 0
+p 6
+c 9818 0 3 0 0 0 0 127 0
+c 9830 0 3 0 0 0 0 127 0
+c 9842 0 3 0 0 0 0 127 0
+p 6
+s 93 9850 commandTime=2672 origin[1]=4486dffa bobCycle=88 damageTimer=52
+c 9853 0 3 0 0 0 0 127 0
+c 9865 0 3 0 0 0 0 127 0
+c 9877 0 3 0 0 0 0 127 0
+p 6
+c 9889 0 3 0 0 0 0 127 0
+s 94 9900 commandTime=2695 origin[1]=4487b4c7 bobCycle=93 damageTimer=2f
+c 9902 0 3 0 0 0 0 127 0
+c 9914 0 3 0 0 0 0 127 0
+p 6
+c 9926 0 3 0 0 0 0 127 0
+c 9938 0 3 0 0 0 0 127 0
+c 9949 0 3 0 0 0 0 127 0
+p 6
+s 95 9950 commandTime=26dd origin[1]=44896a8a bobCycle=aa legsAnim=27f damageTimer=0
+c 9961 0 3 0 0 0 0 127 0
+c 9973 0 3 0 0 0 0 127 0
+c 9985 0 3 0 0 0 0 127 0
+p 6
+c 9997 0 3 0 0 0 0 127 0
+s 96 10000 commandTime=2701 origin[1]=448a456c bobCycle=b6
+c 10009 0 3 0 0 0 0 127 0
+c 10021 0 3 0 0 0 0 127 0
+p 6
+c 10033 0 3 0 0 0 0 127 0
+c 10045 0 3 0 0 0 0 127 0
+s 97 10050 commandTime=2725 origin[1]=448b204e bobCycle=c2 eventSequence=3 events[2]=3
+c 10057 0 3 0 0 0 0 127 0
+p 6
+c 10069 0 3 0 0 0 0 127 0
+c 10081 0 3 0 0 0 0 127 0
+c 10093 0 3 0 0 0 0 127 0
+p 6
+s 98 10100 commandTime=276d origin[1]=448cd612 bobCycle=da
+c 10105 0 3 0 0 0 0 127 0
+c 10117 0 3 0 0 0 0 127 0
+c 10129 0 3 0 0 0 0 127 0
+p 6
+c 10141 0 3 0 0 0 0 127 0
+s 99 10150 commandTime=2791 origin[1]=448db0f4 bobCycle=e6
+c 10153 0 3 0 0 0 0 127 0
+c 10165 0 3 0 0 0 0 127 0
+p 6
+c 10177 0 3 0 0 0 0 127 0
+c 10189 0 3 0 0 0 0 127 0
+s 100 10200 commandTime=27b5 origin[1]=448e8bd6 bobCycle=f2
+c 10202 0 3 0 0 0 0 127 0
+p 6
+c 10214 0 3 0 0 0 0 127 0
+c 10226 0 3 0 0 0 0 127 0
+c 10238 0 3 0 0 0 0 127 0
+p 6
+c 10250 0 3 0 0 0 0 127 0
+s 101 10250 commandTime=27fe origin[1]=449047ae bobCycle=a
+c 10263 0 3 0 0 0 0 127 0
+c 10275 0 3 0 0 0 0 127 0
+p 6
+c 10287 0 3 0 0 0 0 127 0
+c 10299 0 3 0 0 0 0 127 0
+s 102 10300 commandTime=2823 origin[1]=449128a4 bobCycle=16
+c 10311 0 3 0 0 0 0 127 0
+p 6
+c 10323 0 3 0 0 0 0 127 0
+c 10335 0 3 0 0 0 0 127 0
+c 10347 0 3 0 0 0 0 127 0
+p 6
+s 103 10350 commandTime=286b origin[1]=4492de68 bobCycle=2e damageTimer=12c flinchYaw=e1 damageEvent=6 damageYaw=e0 damageCount=3
+c 10359 0 3 0 0 0 0 127 0
+c 10371 0 3 0 0 0 0 127 0
+c 10383 0 3 0 0 0 0 127 0
+p 6
+c 10395 0 3 0 0 0 0 127 0
+s 104 10400 commandTime=288f origin[1]=4493b94a bobCycle=3a legsAnim=1d damageTimer=108 damageCount=0
+c 10406 0 3 0 0 0 0 127 0
+c 10418 0 3 0 0 0 0 127 0
+p 6
+c 10430 0 3 0 0 0 0 127 0
+c 10442 0 3 0 0 0 0 127 0
+s 105 10450 commandTime=28b2 origin[1]=44948e17 bobCycle=45 eventSequence=4 events[3]=3 damageTimer=e5
+c 10455 0 3 0 0 0 0 127 0
+p 6
+c 10467 0 3 0 0 0 0 127 0
+c 10479 0 3 0 0 0 0 127 0
+c 10491 0 3 0 0 0 0 127 0
+p 6
+c 10503 0 3 0 0 0 0 127 0
+s 106 10500 commandTime=28fb origin[1]=449649ef bobCycle=5d damageTimer=9c
+c 10515 0 3 0 0 0 0 127 0
+c 10527 0 3 0 0 0 0 127 0
+p 6
+c 10539 0 3 0 0 0 0 127 0
+s 107 10550 commandTime=291f origin[1]=449724d1 bobCycle=69 damageTimer=78
+c 10552 0 3 0 0 0 0 127 0
+c 10564 0 3 0 0 0 0 127 0
+p 6
+c 10576 0 3 0 0 0 0 127 0
+c 10588 0 3 0 0 0 0 127 0
+c 10600 0 3 0 0 0 0 127 0
+p 6
+s 108 10600 commandTime=2968 origin[1]=4498e0a9 bobCycle=81 damageTimer=2f
+c 10613 0 3 0 0 0 0 127 0
+c 10625 0 3 0 0 0 0 127 0
+c 10637 0 3 0 0 0 0 127 0
+p 6
+c 10649 0 3 0 0 0 0 127 0
+s 109 10650 commandTime=298d origin[1]=4499c19f bobCycle=8d damageTimer=a
+c 10661 0 3 0 0 0 0 127 0
+c 10673 0 3 0 0 0 0 127 0
+p 6
+c 10685 0 3 0 0 0 0 127 0
+c 10697 0 3 0 0 0 0 127 0
+s 110 10700 commandTime=29b1 origin[1]=449a9c81 bobCycle=99 legsAnim=27f damageTimer=0
+c 10709 0 3 0 0 0 0 127 0
+p 6
+c 10721 0 3 0 0 0 0 127 0
+c 10732 0 3 0 0 0 0 127 0
+c 10744 0 3 0 0 0 0 127 0
+p 6
+s 111 10750 commandTime=29f8 origin[1]=449c4c30 bobCycle=b0
+c 10757 0 3 0 0 0 0 127 0
+c 10769 0 3 0 0 0 0 127 0
+c 10782 0 3 0 0 0 0 127 0
+p 6
+c 10794 0 3 0 0 0 0 127 0
+s 112 10800 commandTime=2a1e origin[1]=449d333a bobCycle=bc
+c 10805 0 3 0 0 0 0 127 0
+c 10817 0 3 0 0 0 0 127 0
+p 6
+c 10830 0 3 0 0 0 0 127 0
+c 10843 0 3 0 0 0 0 127 0
+s 113 10850 commandTime=2a41 origin[1]=449e0807 bobCycle=c7 eventSequence=5 events[0]=3 eventParms[0]=0
+c 10856 0 3 0 0 0 0 127 0
+p 6
+c 10867 0 3 0 0 0 0 127 0
+c 10881 0 3 0 0 0 0 127 0
+c 10893 0 3 0 0 0 0 127 0
+p 6
+s 114 10900 commandTime=2a8d origin[1]=449e9c00 bobCycle=0 velocity[1]=0 velocity[0]=0 legsAnim=99 aimSpreadScale=433f4000
+c 10904 0 3 0 0 0 0 127 0
+c 10916 0 3 0 0 0 0 127 0
+c 10929 0 3 0 0 0 0 127 0
+p 6
+c 10943 0 3 0 0 0 0 127 0
+s 115 10950 commandTime=2ab1 aimSpreadScale=4311599a
+c 10956 0 3 0 0 0 0 127 0
+c 10969 0 3 0 0 0 0 127 0
+p 6
+c 10980 0 3 0 0 0 0 127 0
+c 10993 0 3 0 0 0 0 127 0
+s 116 11000 commandTime=2ad9 aimSpreadScale=42bcb335
+c 11006 0 3 0 0 0 0 127 0
+p 6
+c 11017 0 3 0 0 0 0 127 0
+c 11028 0 3 0 0 0 0 127 0
+c 11040 0 3 0 0 0 0 127 0
+p 6
+s 117 11050 commandTime=2b20 aimSpreadScale=40da6675 damageTimer=12c flinchYaw=ffa6 damageEvent=7 damageYaw=0 damageCount=3
+c 11052 0 3 0 0 0 0 127 0
+c 11065 0 3 0 0 0 0 127 0
+c 11076 0 3 0 0 0 0 127 0
+p 6
+c 11088 0 3 0 0 0 0 127 0
+c 11099 0 3 0 0 0 0 127 0
+s 118 11100 commandTime=2b44 aimSpreadScale=0 torsoAnim=f6 damageTimer=108 damageCount=0
+c 11112 0 3 0 0 0 0 127 0
+p 6
+c 11125 0 3 0 0 0 0 127 0
+c 11138 0 3 0 0 0 0 127 0
+c 11150 0 3 0 0 0 0 127 0
+p 6
+s 119 11150 commandTime=2b8e damageTimer=be
+c 11162 0 3 0 0 0 0 127 0
+c 11174 0 3 0 0 0 0 127 0
+c 11186 0 3 0 0 0 0 127 0
+p 6
+c 11197 0 3 0 0 0 0 127 0
+s 120 11200 commandTime=2bb2 damageTimer=9a
+c 11209 0 3 0 0 0 0 127 0
+c 11221 0 3 0 0 0 0 127 0
+p 6
+c 11233 0 3 0 0 0 0 127 0
+c 11245 0 3 0 0 0 0 127 0
+s 121 11250 commandTime=2bd5 damageTimer=77
+c 11258 0 3 0 0 0 0 127 0
+p 6
+c 11271 0 3 0 0 0 0 127 0
+c 11282 0 3 0 0 0 0 127 0
+c 11293 0 3 0 0 0 0 127 0
+p 6
+s 122 11300 commandTime=2c1d damageTimer=2f
+c 11305 0 3 0 0 0 0 127 0
+c 11316 0 3 0 0 0 0 127 0
+c 11329 0 3 0 0 0 0 127 0
+p 6
+c 11342 0 3 0 0 0 0 127 0
+s 123 11350 commandTime=2c41 damageTimer=b
+c 11354 0 3 0 0 0 0 -127 0
+c 11368 0 3 0 0 0 0 -127 0
+p 6
+c 11380 0 3 0 0 0 0 -127 0
+c 11391 0 3 0 0 0 0 -127 0
+s 124 11400 commandTime=2c68 origin[1]=449e8c28 velocity[1]=c1b80000 legsAnim=27e aimSpreadScale=418ecccd pm_flags=800080 torsoAnim=200 damageTimer=0
+c 11404 0 3 0 0 0 0 -127 0
+p 6
+c 11416 0 3 0 0 0 0 -127 0
+c 11428 0 3 0 0 0 0 -127 0
+c 11439 0 3 0 0 0 0 -127 0
+p 6
+s 125 11450 commandTime=2caf origin[1]=449e1aed bobCycle=7 velocity[1]=c28a0000 aimSpreadScale=42d8c001
+c 11451 0 3 0 0 0 0 -127 0
+c 11463 0 3 0 0 0 0 -127 0
+c 11474 0 3 0 0 0 0 -127 0
+p 6
+c 11487 0 3 0 0 0 0 -127 0
+s 126 11500 commandTime=2cd2 origin[1]=449dbc79 bobCycle=d velocity[1]=c2b80000 aimSpreadScale=43190000
+c 11503 0 3 0 0 0 0 -127 0
+c 11515 0 3 0 0 0 0 -127 0
+p 6
+c 11528 0 3 0 0 0 0 -127 0
+c 11541 0 3 0 0 0 0 -127 0
+c 11552 0 3 0 0 0 0 -127 0
+p 6
+s 127 11550 commandTime=2d20 origin[1]=449c9463 bobCycle=22 velocity[1]=c3050000 aimSpreadScale=437c7332
+c 11564 0 3 0 0 0 0 -127 0
+c 11577 0 3 0 0 0 0 -127 0
+c 11591 0 3 0 0 0 0 -127 0
+p 6
+s 128 11600 commandTime=2d47 origin[1]=449bee67 bobCycle=2f aimSpreadScale=437f0000
+c 11603 0 3 0 0 0 0 -127 0
+c 11614 0 3 0 0 0 0 -127 0
+c 11628 0 3 0 0 0 0 -127 0
+p 6
+c 11639 0 3 0 0 0 0 -127 0
+s 129 11650 commandTime=2d6c origin[1]=449b50ee bobCycle=3b
+c 11652 0 3 0 0 0 0 -127 0
+c 11665 0 3 0 0 0 0 -127 0
+p 6
+c 11679 0 3 0 0 0 0 -127 0
+c 11690 0 3 0 0 0 0 -127 0
+s 130 11700 commandTime=2d91 origin[1]=449ab375 bobCycle=46 eventSequence=6
+c 11702 0 3 0 0 0 0 -127 0
+p 6
+c 11714 0 3 0 0 0 0 -127 0
+c 11726 0 3 0 0 0 0 -127 0
+c 11738 0 3 0 0 0 0 -127 0
+p 6
+c 11751 0 3 0 0 0 0 -127 0
+s 131 11750 commandTime=2dda origin[1]=44997cc6 bobCycle=5e damageTimer=12c flinchYaw=ffd3 damageEvent=8 damageYaw=20 damageCount=3
+c 11763 0 3 0 0 0 0 -127 0
+c 11775 0 3 0 0 0 0 -127 0
+p 6
+c 11786 0 3 0 0 0 0 -127 0
+c 11800 0 3 0 0 0 0 -127 0
+s 132 11800 commandTime=2dff origin[1]=4498df4e bobCycle=6a legsAnim=1c damageTimer=107 damageCount=0
+c 11812 0 3 0 0 0 0 -127 0
+p 6
+c 11824 0 3 0 0 0 0 -127 0
+c 11836 0 3 0 0 0 0 -127 0
+c 11849 0 3 0 0 0 0 -127 0
+p 6
+s 133 11850 commandTime=2e49 origin[1]=4497a45d bobCycle=82 damageTimer=bd
+c 11862 0 3 0 0 0 0 -127 0
+c 11874 0 3 0 0 0 0 -127 0
+c 11885 0 3 0 0 0 0 -127 0
+p 6
+c 11897 0 3 0 0 0 0 -127 0
+s 134 11900 commandTime=2e6d origin[1]=44970b26 bobCycle=8d damageTimer=99
+c 11910 0 3 0 0 0 0 -127 0
+c 11921 0 3 0 0 0 0 -127 0
+p 6
+c 11934 0 3 0 0 0 0 -127 0
+c 11946 0 3 0 0 0 0 -127 0
+s 135 11950 commandTime=2e91 origin[1]=449671ef bobCycle=98 damageTimer=75
+c 11959 0 3 0 0 0 0 -127 0
+p 6
+c 11973 0 3 0 0 0 0 -127 0
+c 11984 0 3 0 0 0 0 -127 0
+c 11996 0 3 0 0 0 0 -127 0
+p 6
+s 136 12000 commandTime=2edc origin[1]=449532bc bobCycle=b0 damageTimer=2a
+c 12010 0 3 0 0 0 0 -127 0
+c 12022 0 3 0 0 0 0 -127 0
+c 12035 0 3 0 0 0 0 -127 0
+p 6
+c 12047 0 3 0 0 0 0 -127 0
+s 137 12050 commandTime=2f03 origin[1]=44948cc0 bobCycle=bd damageTimer=3
+c 12059 0 3 0 0 0 0 -127 0
+c 12071 0 3 0 0 0 0 -127 0
+p 6
+c 12084 0 3 0 0 0 0 -127 0
+c 12096 0 3 0 0 0 0 -127 0
+s 138 12100 commandTime=2f27 origin[1]=4493f38a bobCycle=c9 eventSequence=7 legsAnim=27e damageTimer=0
+c 12109 0 3 0 0 0 0 -127 0
+p 6
+c 12121 0 3 0 0 0 0 -127 0
+c 12133 0 3 0 0 0 0 -127 0
+c 12145 0 3 0 0 0 0 -127 0
+p 6
+s 139 12150 commandTime=2f71 origin[1]=4492b89a bobCycle=e1
+c 12158 0 3 0 0 0 0 -127 0
+c 12169 0 3 0 0 0 0 -127 0
+c 12183 0 3 0 0 0 0 -127 0
+p 6
+c 12196 0 3 0 0 0 0 -127 0
+s 140 12200 commandTime=2f97 origin[1]=449216df bobCycle=ed
+c 12210 0 3 0 0 0 0 -127 0
+c 12223 0 3 0 0 0 0 -127 0
+p 6
+c 12236 0 3 0 0 0 0 -127 0
+c 12248 0 3 0 0 0 0 -127 0
+s 141 12250 commandTime=2fbf origin[1]=44916ca1 bobCycle=fa
+c 12262 0 3 0 0 0 0 -127 0
+p 6
+c 12273 0 3 0 0 0 0 -127 0
+c 12286 0 3 0 0 0 0 -127 0
+c 12299 0 3 0 0 0 0 -127 0
+p 6
+s 142 12300 commandTime=300b origin[1]=4490292c bobCycle=12
+c 12312 0 3 0 0 0 0 -127 0
+c 12323 0 3 0 0 0 0 -127 0
+c 12337 0 3 0 0 0 0 -127 0
+p 6
+c 12349 0 3 0 0 0 0 -127 0
+s 143 12350 commandTime=3031 origin[1]=448f8771 bobCycle=1e
+c 12360 0 3 0 0 0 0 -127 0
+c 12372 0 3 0 0 0 0 -127 0
+p 6
+c 12385 0 3 0 0 0 0 -127 0
+c 12399 0 3 0 0 0 0 -127 0
+s 144 12400 commandTime=3054 origin[1]=448ef27c bobCycle=29
+c 12412 0 3 0 0 0 0 -127 0
+p 6
+c 12424 0 3 0 0 0 0 -127 0
+c 12437 0 3 0 0 0 0 -127 0
+c 12449 0 3 0 0 0 0 -127 0
+p 6
+s 145 12450 commandTime=30a1 origin[1]=448daac6 bobCycle=42 eventSequence=8 damageTimer=12c flinchYaw=ffff damageEvent=9 damageYaw=3f damageCount=3
+c 12461 0 3 0 0 0 0 -127 0
+c 12474 0 3 0 0 0 0 -127 0
+c 12486 0 3 0 0 0 0 -127 0
+p 6
+c 12498 0 3 0 0 0 0 -127 0
+s 146 12500 commandTime=30c6 origin[1]=448d0d4e bobCycle=4e legsAnim=1c damageTimer=107 damageCount=0
+c 12510 0 3 0 0 0 0 -127 0
+c 12522 0 3 0 0 0 0 -127 0
+p 6
+c 12534 0 3 0 0 0 0 -127 0
+c 12545 0 3 0 0 0 0 -127 0
+s 147 12550 commandTime=30ea origin[1]=448c7418 bobCycle=5a damageTimer=e3
+c 12557 0 3 0 0 0 0 -127 0
+p 6
+c 12570 0 3 0 0 0 0 -127 0
+c 12582 0 3 0 0 0 0 -127 0
+c 12593 0 3 0 0 0 0 -127 0
+p 6
+s 148 12600 commandTime=3131 origin[1]=448b45ec bobCycle=70 damageTimer=9c
+c 12605 0 3 0 0 0 0 -127 0
+c 12618 0 3 0 0 0 0 -127 0
+c 12629 0 3 0 0 0 0 -127 0
+p 6
+c 12640 0 3 0 0 0 0 -127 0
+s 149 12650 commandTime=3155 origin[1]=448aacb5 bobCycle=7b damageTimer=78
+c 12654 0 3 0 0 0 0 -127 0
+c 12668 0 3 0 0 0 0 -127 0
+p 6
+c 12680 0 3 0 0 0 0 -127 0
+c 12694 0 3 0 0 0 0 -127 0
+s 150 12700 commandTime=317c origin[1]=448a06b8 bobCycle=88 damageTimer=51
+c 12706 0 3 0 0 0 0 -127 0
+p 6
+c 12718 0 3 0 0 0 0 -127 0
+c 12731 0 3 0 0 0 0 -127 0
+c 12742 0 3 0 0 0 0 -127 0
+p 6
+s 151 12750 commandTime=31c6 origin[1]=4488cbc7 bobCycle=a0 damageTimer=7
+c 12755 0 3 0 0 0 0 -127 0
+c 12768 0 3 0 0 0 0 -127 0
+c 12780 0 3 0 0 0 0 -127 0
+p 6
+c 12792 0 3 0 0 0 0 -127 0
+s 152 12800 commandTime=31ec origin[1]=44882a0d bobCycle=ac legsAnim=27e damageTimer=0
+c 12803 0 3 0 0 0 0 -127 0
+c 12814 0 3 0 0 0 0 -127 0
+p 6
+c 12828 0 3 0 0 0 0 -127 0
+c 12841 0 3 0 0 0 0 -127 0
+s 153 12850 commandTime=320e origin[1]=44879959 bobCycle=b6
+c 12854 0 3 0 0 0 0 -127 0
+p 6
+c 12868 0 3 0 0 0 0 -127 0
+c 12880 0 3 0 0 0 0 -127 0
+c 12894 0 3 0 0 0 0 -127 0
+p 6
+s 154 12900 commandTime=325e origin[1]=448644dd bobCycle=d1 eventSequence=9
+c 12906 0 3 0 0 0 0 -127 0
+c 12918 0 3 0 0 0 0 -127 0
+c 12932 0 3 0 0 0 0 -127 0
+p 6
+c 12943 0 3 0 0 0 0 -127 0
+s 155 12950 commandTime=3284 origin[1]=4485a323 bobCycle=de
+c 12956 0 3 0 0 0 0 -127 0
+c 12969 0 3 0 0 0 0 -127 0
+p 6
+c 12981 0 3 0 0 0 0 -127 0
+c 12992 0 3 0 0 0 0 -127 0
+s 156 13000 commandTime=32a9 origin[1]=448505aa bobCycle=e9
+c 13007 0 3 0 0 0 0 -127 0
+p 6
+c 13019 0 3 0 0 0 0 -127 0
+c 13031 0 3 0 0 0 0 -127 0
+c 13043 0 3 0 0 0 0 -127 0
+p 6
+s 157 13050 commandTime=32f3 origin[1]=4483caba bobCycle=1
+c 13057 0 3 0 0 0 0 -127 0
+c 13068 0 3 0 0 0 0 -127 0
+c 13081 0 3 0 0 0 0 -127 0
+p 6
+c 13093 0 3 0 0 0 0 -127 0
+s 158 13100 commandTime=3319 origin[1]=448328ff bobCycle=d
+c 13107 0 3 0 0 0 0 -127 0
+c 13120 0 3 0 0 0 0 -127 0
+p 6
+c 13133 0 3 0 0 0 0 -127 0
+c 13146 0 3 0 0 0 0 -127 0
+s 159 13150 commandTime=3340 origin[1]=44828303 bobCycle=1a damageTimer=12c flinchYaw=2c damageEvent=a damageYaw=5f damageCount=3
+c 13157 0 3 0 0 0 0 -127 0
+p 6
+c 13173 0 3 0 0 0 0 -127 0
+c 13184 0 3 0 0 0 0 -127 0
+c 13196 0 3 0 0 0 0 -127 0
+p 6
+s 160 13200 commandTime=338c origin[1]=44813f8e bobCycle=31 legsAnim=1c damageTimer=e0 damageCount=0
+c 13208 0 3 0 0 0 0 -127 0
+c 13219 0 3 0 0 0 0 -127 0
+c 13233 0 3 0 0 0 0 -127 0
+p 6
+c 13246 0 3 0 0 0 0 -127 0
+s 161 13250 commandTime=33b1 origin[1]=4480a215 bobCycle=3d damageTimer=bb
+c 13259 0 3 0 0 0 0 -127 0
+c 13272 0 3 0 0 0 0 -127 0
+p 6
+c 13284 0 3 0 0 0 0 -127 0
+c 13296 0 3 0 0 0 0 -127 0
+s 162 13300 commandTime=33d8 origin[1]=447ff832 bobCycle=49 eventSequence=a damageTimer=94
+c 13313 0 3 0 0 0 0 -127 0
+p 6
+c 13325 0 3 0 0 0 0 -127 0
+c 13337 0 3 0 0 0 0 -127 0
+c 13348 0 3 0 0 0 0 -127 0
+p 6
+s 163 13350 commandTime=3424 origin[1]=447d7148 bobCycle=62 damageTimer=48
+c 13362 200 3 0 0 0 0 0 0
+c 13375 200 3 0 0 0 0 0 0
+c 13388 200 3 0 0 0 0 0 0
+p 6
+c 13400 200 3 0 0 0 0 0 0
+s 164 13400 commandTime=344c origin[1]=447c4c34 bobCycle=6d velocity[1]=c2d40000 legsAnim=290 aimSpreadScale=434c0000 pm_flags=800082 viewHeightCurrent=426689d9 eFlags=6 viewHeightTarget=28 viewHeightLerpTarget=28 viewHeightLerpDown=1 viewHeightLerpTime=3432 damageTimer=20
+c 13412 200 3 0 0 0 0 0 0
+c 13423 200 3 0 0 0 0 0 0
+p 6
+c 13437 200 3 0 0 0 0 0 0
+s 165 13450 commandTime=346f origin[1]=447b7cb2 bobCycle=75 velocity[1]=c2ac0000 aimSpreadScale=431f6000 viewHeightCurrent=42600000 damageTimer=0
+c 13452 200 3 0 0 0 0 0 0
+c 13464 200 3 0 0 0 0 0 0
+p 6
+c 13476 200 3 0 0 0 0 0 0
+c 13488 200 3 0 0 0 0 0 0
+s 166 13500 commandTime=3498 origin[1]=447ac2e3 bobCycle=7c velocity[1]=c27c0000 aimSpreadScale=42d63332 viewHeightCurrent=424bd70a
+c 13503 200 3 0 0 0 0 0 0
+p 6
+c 13516 200 3 0 0 0 0 0 0
+c 13529 200 3 0 0 0 0 0 0
+c 13542 200 3 0 0 0 0 0 0
+p 6
+s 167 13550 commandTime=34e6 origin[1]=447a077e bobCycle=80 velocity[1]=c1a00000 aimSpreadScale=40f4ccaf viewHeightCurrent=42260000
+c 13555 200 3 0 0 0 0 0 0
+c 13568 200 3 0 0 0 0 0 0
+c 13580 200 3 0 0 0 0 0 0
+p 6
+c 13591 200 3 0 0 0 0 0 0
+s 168 13600 commandTime=350c origin[1]=4479f7ef bobCycle=0 velocity[1]=0 aimSpreadScale=0 viewHeightCurrent=42200000 viewHeightLerpTime=0
+c 13605 200 3 0 0 0 0 0 0
+c 13616 200 3 0 0 0 0 0 0
+p 6
+c 13628 200 3 0 0 0 0 0 0
+c 13640 200 3 0 0 0 0 0 0
+s 169 13650 commandTime=3530 velocity[1]=80000000
+c 13655 200 3 0 0 0 0 0 0
+p 6
+c 13667 200 3 0 0 0 0 0 0
+c 13681 200 3 0 0 0 0 0 0
+c 13695 200 3 0 0 0 0 0 0
+p 6
+s 170 13700 commandTime=357f
+c 13707 200 3 0 0 0 0 0 0
+c 13720 200 3 0 0 0 0 0 0
+c 13733 200 3 0 0 0 0 0 0
+p 6
+c 13744 200 3 0 0 0 0 0 0
+s 171 13750 commandTime=35a5
+c 13755 200 3 0 0 0 0 0 0
+c 13768 200 3 0 0 0 0 0 0
+p 6
+c 13781 200 3 0 0 0 0 0 0
+c 13795 200 3 0 0 0 0 0 0
+s 172 13800 commandTime=35c8
+c 13808 200 3 0 0 0 0 0 0
+p 6
+c 13820 200 3 0 0 0 0 0 0
+c 13834 200 3 0 0 0 0 0 0
+c 13845 200 3 0 0 0 0 0 0
+p 6
+s 173 13850 commandTime=3615 aimSpreadScale=40400000 damageTimer=12c flinchYaw=5a damageEvent=b damageYaw=80 damageCount=3
+c 13858 200 3 0 0 0 0 0 0
+c 13870 200 3 0 0 0 0 0 0
+c 13883 200 3 0 0 0 0 0 0
+p 6
+c 13896 200 3 0 0 0 0 0 0
+s 174 13900 commandTime=363b aimSpreadScale=0 damageTimer=106 damageCount=0
+c 13908 200 3 0 0 0 0 0 0
+c 13919 200 3 0 0 0 0 0 0
+p 6
+c 13931 200 3 0 0 0 0 0 0
+c 13943 200 3 0 0 0 0 0 0
+s 175 13950 commandTime=365f damageTimer=e2
+c 13956 200 3 0 0 0 0 0 0
+p 6
+c 13969 200 3 0 0 0 0 0 0
+c 13980 200 3 0 0 0 0 0 0
+c 13992 200 3 0 0 0 0 0 0
+p 6
+s 176 14000 commandTime=36a8 damageTimer=99
+c 14003 200 3 0 0 0 0 0 0
+c 14017 200 3 0 0 0 0 0 0
+c 14030 200 3 0 0 0 0 0 0
+p 6
+c 14041 200 3 0 0 0 0 0 0
+c 14052 200 3 0 0 0 0 0 0
+s 177 14050 commandTime=36ce damageTimer=73
+c 14066 200 3 0 0 0 0 0 0
+p 6
+c 14078 200 3 0 0 0 0 0 0
+c 14091 200 3 0 0 0 0 0 0
+s 178 14100 commandTime=36f2 damageTimer=4f
+c 14105 200 3 0 0 0 0 0 0
+p 6
+c 14116 200 3 0 0 0 0 0 0
+c 14127 200 3 0 0 0 0 0 0
+c 14139 200 3 0 0 0 0 0 0
+p 6
+s 179 14150 commandTime=373b damageTimer=6
+c 14151 200 3 0 0 0 0 0 0
+c 14164 200 3 0 0 0 0 0 0
+c 14177 200 3 0 0 0 0 0 0
+p 6
+c 14189 200 3 0 0 0 0 0 0
+c 14202 200 3 0 0 0 0 0 0
+s 180 14200 commandTime=3761 damageTimer=0
+c 14217 200 3 0 0 0 0 0 0
+p 6
+c 14229 200 3 0 0 0 0 0 0
+c 14242 200 3 0 0 0 0 0 0
+s 181 14250 commandTime=3789
+c 14256 200 3 0 0 0 0 0 0
+p 6
+c 14267 200 3 0 0 0 0 0 0
+c 14279 200 3 0 0 0 0 0 0
+c 14291 200 3 0 0 0 0 0 0
+p 6
+s 182 14300 commandTime=37d3
+c 14302 200 3 0 0 0 0 0 0
+c 14315 200 3 0 0 0 0 0 0
+c 14326 200 3 0 0 0 0 0 0
+p 6
+c 14340 200 3 0 0 0 0 0 0
+s 183 14350 commandTime=37f6
+c 14354 200 3 0 0 0 0 0 0
+c 14366 200 3 0 0 0 0 0 0
+p 6
+c 14379 200 3 0 0 0 0 0 0
+c 14390 200 3 0 0 0 0 0 0
+s 184 14400 commandTime=381e
+c 14403 200 3 0 0 0 0 0 0
+p 6
+c 14415 200 3 0 0 0 0 0 0
+c 14426 200 3 0 0 0 0 0 0
+c 14440 200 3 0 0 0 0 0 0
+p 6
+s 185 14450 commandTime=3868
+c 14453 200 3 0 0 0 0 0 0
+c 14466 200 3 0 0 0 0 0 0
+c 14478 200 3 0 0 0 0 0 0
+p 6
+c 14489 200 3 0 0 0 0 0 0
+c 14502 200 3 0 0 0 0 0 0
+s 186 14500 commandTime=388e
+c 14513 200 3 0 0 0 0 0 0
+p 6
+c 14528 200 3 0 0 0 0 0 0
+c 14540 200 3 0 0 0 0 0 0
+s 187 14550 commandTime=38b1 aimSpreadScale=40400000 damageTimer=12c flinchYaw=87 damageEvent=c damageYaw=a0 damageCount=3
+c 14552 200 3 0 0 0 0 0 0
+p 6
+c 14565 200 3 0 0 0 0 0 0
+c 14578 200 3 0 0 0 0 0 0
+c 14589 200 3 0 0 0 0 0 0
+p 6
+c 14601 200 3 0 0 0 0 0 0
+s 188 14600 commandTime=38fd aimSpreadScale=0 damageTimer=e0 damageCount=0
+c 14614 200 3 0 0 0 0 0 0
+c 14626 200 3 0 0 0 0 0 0
+p 6
+c 14638 200 3 0 0 0 0 0 0
+s 189 14650 commandTime=3922 damageTimer=bb
+c 14650 200 3 0 0 0 0 0 0
+c 14662 200 3 0 0 0 0 0 0
+p 6
+c 14673 200 3 0 0 0 0 0 0
+c 14685 200 3 0 0 0 0 0 0
+c 14697 200 3 0 0 0 0 0 0
+p 6
+s 190 14700 commandTime=3969 damageTimer=74
+c 14710 200 3 0 0 0 0 0 0
+c 14724 200 3 0 0 0 0 0 0
+c 14736 200 3 0 0 0 0 0 0
+p 6
+c 14748 200 3 0 0 0 0 0 0
+s 191 14750 commandTime=3990 damageTimer=4d
+c 14760 200 3 0 0 0 0 0 0
+c 14772 200 3 0 0 0 0 0 0
+p 6
+c 14785 200 3 0 0 0 0 0 0
+c 14799 200 3 0 0 0 0 0 0
+s 192 14800 commandTime=39b4 damageTimer=29
+c 14813 200 3 0 0 0 0 0 0
+p 6
+c 14825 200 3 0 0 0 0 0 0
+c 14836 200 3 0 0 0 0 0 0
+c 14849 200 3 0 0 0 0 0 0
+p 6
+s 193 14850 commandTime=3a01 damageTimer=0
+c 14861 200 3 0 0 0 0 127 0
+c 14872 200 3 0 0 0 0 127 0
+c 14885 200 3 0 0 0 0 127 0
+p 6
+c 14898 200 3 0 0 0 0 127 0
+s 194 14900 commandTime=3a25 origin[1]=447a3adb bobCycle=1 velocity[1]=42200000 velocity[0]=80000000 legsAnim=74 aimSpreadScale=41f4cccd pm_flags=800002
+c 14910 200 3 0 0 0 0 127 0
+c 14922 200 3 0 0 0 0 127 0
+p 6
+c 14934 200 3 0 0 0 0 127 0
+c 14947 200 3 0 0 0 0 127 0
+s 195 14950 commandTime=3a4a origin[1]=447acfb6 bobCycle=6 velocity[1]=42940000 aimSpreadScale=429b8ccd
+c 14960 200 3 0 0 0 0 127 0
+p 6
+c 14974 200 3 0 0 0 0 127 0
+c 14986 200 3 0 0 0 0 127 0
+c 14998 200 3 0 0 0 0 127 0
+p 6
+s 196 15000 commandTime=3a96 origin[1]=447ce726 bobCycle=1a velocity[1]=42f60000 aimSpreadScale=432eaccd
+c 15010 200 3 0 0 0 0 127 0
+c 15022 200 3 0 0 0 0 127 0
+c 15034 200 3 0 0 0 0 127 0
+p 6
+c 15045 200 3 0 0 0 0 127 0
+s 197 15050 commandTime=3aba origin[1]=447e03b1 bobCycle=26 aimSpreadScale=435c9334
+c 15057 200 3 0 0 0 0 127 0
+c 15071 200 3 0 0 0 0 127 0
+p 6
+c 15083 200 3 0 0 0 0 127 0
+c 15094 200 3 0 0 0 0 127 0
+s 198 15100 commandTime=3adf origin[1]=447f2824 bobCycle=31 aimSpreadScale=437f0000
+c 15105 200 3 0 0 0 0 127 0
+p 6
+c 15118 200 3 0 0 0 0 127 0
+c 15131 200 3 0 0 0 0 127 0
+c 15144 200 3 0 0 0 0 127 0
+p 6
+s 199 15150 commandTime=3b28 origin[1]=4480b490 bobCycle=47
+c 15156 200 3 0 0 0 0 127 0
+c 15171 200 3 0 0 0 0 127 0
+c 15186 200 3 0 0 0 0 127 0
+p 6
+c 15199 200 3 0 0 0 0 127 0
+s 200 15200 commandTime=3b52 origin[1]=44815a8d bobCycle=55
+c 15211 200 3 0 0 0 0 127 0
+c 15223 200 3 0 0 0 0 127 0
+p 6
+c 15235 200 3 0 0 0 0 127 0
+c 15247 200 3 0 0 0 0 127 0
+s 201 15250 commandTime=3b77 origin[1]=4481ecc7 bobCycle=61 damageTimer=12c flinchYaw=b4 damageEvent=d damageYaw=c0 damageCount=3
+c 15258 200 3 0 0 0 0 127 0
+p 6
+c 15272 200 3 0 0 0 0 127 0
+c 15283 200 3 0 0 0 0 127 0
+c 15295 200 3 0 0 0 0 127 0
+p 6
+s 202 15300 commandTime=3bbf origin[1]=44830954 bobCycle=77 legsAnim=21d damageTimer=e4 damageCount=0
+c 15308 200 3 0 0 0 0 127 0
+c 15322 200 3 0 0 0 0 127 0
+c 15336 200 3 0 0 0 0 127 0
+p 6
+c 15349 200 3 0 0 0 0 127 0
+s 203 15350 commandTime=3be8 origin[1]=4483ab5c bobCycle=83 damageTimer=bb
+c 15361 200 3 0 0 0 0 127 0
+c 15374 200 3 0 0 0 0 127 0
+p 6
+c 15385 200 3 0 0 0 0 127 0
+c 15399 200 3 0 0 0 0 127 0
+s 204 15400 commandTime=3c0e origin[1]=44844189 bobCycle=8f damageTimer=95
+c 15412 200 3 0 0 0 0 127 0
+p 6
+c 15424 200 3 0 0 0 0 127 0
+c 15437 200 3 0 0 0 0 127 0
+s 205 15450 commandTime=3c34 origin[1]=4484d7b6 bobCycle=9a damageTimer=6f
+c 15451 200 3 0 0 0 0 127 0
+p 6
+c 15463 200 3 0 0 0 0 127 0
+c 15475 200 3 0 0 0 0 127 0
+c 15487 200 3 0 0 0 0 127 0
+p 6
+c 15498 200 3 0 0 0 0 127 0
+s 206 15500 commandTime=3c7f origin[1]=4486001e bobCycle=b2 damageTimer=24
+c 15511 200 3 0 0 0 0 127 0
+c 15525 200 3 0 0 0 0 127 0
+p 6
+c 15537 200 3 0 0 0 0 127 0
+s 207 15550 commandTime=3ca5 origin[1]=4486964b bobCycle=bd legsAnim=74 damageTimer=0
+c 15551 200 3 0 0 0 0 127 0
+c 15563 200 3 0 0 0 0 127 0
+p 6
+c 15575 200 3 0 0 0 0 127 0
+c 15587 200 3 0 0 0 0 127 0
+c 15599 200 3 0 0 0 0 127 0
+p 6
+s 208 15600 commandTime=3cef origin[1]=4487bac0 bobCycle=d5
+c 15612 200 3 0 0 0 0 127 0
+c 15625 200 3 0 0 0 0 127 0
+c 15637 200 3 0 0 0 0 127 0
+p 6
+c 15649 200 3 0 0 0 0 127 0
+s 209 15650 commandTime=3d15 origin[1]=448850ed bobCycle=e1
+c 15661 200 3 0 0 0 0 127 0
+c 15672 200 3 0 0 0 0 127 0
+p 6
+c 15683 200 3 0 0 0 0 127 0
+c 15696 200 3 0 0 0 0 127 0
+s 210 15700 commandTime=3d38 origin[1]=4488db40 bobCycle=ec
+c 15708 200 3 0 0 0 0 127 0
+p 6
+c 15719 200 3 0 0 0 0 127 0
+c 15731 200 3 0 0 0 0 127 0
+c 15743 200 3 0 0 0 0 127 0
+p 6
+s 211 15750 commandTime=3d7f origin[1]=4489f3d9 bobCycle=2
+c 15757 200 3 0 0 0 0 127 0
+c 15768 200 3 0 0 0 0 127 0
+c 15782 200 3 0 0 0 0 127 0
+p 6
+c 15796 200 3 0 0 0 0 127 0
+s 212 15800 commandTime=3da6 origin[1]=448a8dfa bobCycle=d
+c 15809 200 3 0 0 0 0 127 0
+c 15823 200 3 0 0 0 0 127 0
+p 6
+c 15835 200 3 0 0 0 0 127 0
+c 15848 200 3 0 0 0 0 127 0
+s 213 15850 commandTime=3dcf origin[1]=448b3002 bobCycle=19
+c 15861 200 3 0 0 0 0 127 0
+p 6
+c 15873 200 3 0 0 0 0 127 0
+c 15885 200 3 0 0 0 0 127 0
+c 15897 200 3 0 0 0 0 127 0
+p 6
+s 214 15900 commandTime=3e19 origin[1]=448c5476 bobCycle=31
+c 15909 200 3 0 0 0 0 127 0
+c 15921 200 3 0 0 0 0 127 0
+c 15934 200 3 0 0 0 0 127 0
+p 6
+c 15946 200 3 0 0 0 0 127 0
+s 215 15950 commandTime=3e3e origin[1]=448ce6b0 bobCycle=3d damageTimer=12c flinchYaw=e1 damageEvent=e damageYaw=e0 damageCount=3
+c 15959 200 3 0 0 0 0 127 0
+c 15973 200 3 0 0 0 0 127 0
+p 6
+c 15985 200 3 0 0 0 0 127 0
+c 15998 200 3 0 0 0 0 127 0
+s 216 16000 commandTime=3e65 origin[1]=448d80d1 bobCycle=49 legsAnim=21d damageTimer=105 damageCount=0
+c 16011 200 3 0 0 0 0 127 0
+p 6
+c 16023 200 3 0 0 0 0 127 0
+c 16037 200 3 0 0 0 0 127 0
+c 16049 200 3 0 0 0 0 127 0
+p 6
+s 217 16050 commandTime=3eb1 origin[1]=448ead2c bobCycle=61 damageTimer=b9
+c 16062 200 3 0 0 0 0 127 0
+c 16075 200 3 0 0 0 0 127 0
+c 16088 200 3 0 0 0 0 127 0
+p 6
+c 16100 200 3 0 0 0 0 127 0
+s 218 16100 commandTime=3ed8 origin[1]=448f474c bobCycle=6d damageTimer=92
+c 16112 200 3 0 0 0 0 127 0
+c 16124 200 3 0 0 0 0 127 0
+p 6
+c 16136 200 3 0 0 0 0 127 0
+c 16147 200 3 0 0 0 0 127 0
+s 219 16150 commandTime=3efc origin[1]=448fd593 bobCycle=79 damageTimer=6e
+c 16159 200 3 0 0 0 0 127 0
+p 6
+c 16171 200 3 0 0 0 0 127 0
+c 16182 200 3 0 0 0 0 127 0
+c 16194 200 3 0 0 0 0 127 0
+p 6
+s 220 16200 commandTime=3f42 origin[1]=4490ea39 bobCycle=8f damageTimer=28
+c 16206 200 3 0 0 0 0 127 0
+c 16218 200 3 0 0 0 0 127 0
+c 16231 200 3 0 0 0 0 127 0
+p 6
+c 16244 200 3 0 0 0 0 127 0
+s 221 16250 commandTime=3f67 origin[1]=44917c73 bobCycle=9b damageTimer=3
+c 16258 200 3 0 0 0 0 127 0
+c 16269 200 3 0 0 0 0 127 0
+p 6
+c 16283 200 3 0 0 0 0 127 0
+c 16296 200 3 0 0 0 0 127 0
+s 222 16300 commandTime=3f8d origin[1]=449212a0 bobCycle=a6 legsAnim=74 damageTimer=0
+c 16309 200 3 0 0 0 0 127 0
+p 6
+c 16321 200 3 0 0 0 0 127 0
+c 16334 200 3 0 0 0 0 127 0
+c 16346 200 3 0 0 0 0 127 0
+p 6
+s 223 16350 commandTime=3fda origin[1]=449342ee bobCycle=be
+c 16359 200 3 0 0 0 0 127 0
+c 16372 200 3 0 0 0 0 127 0
+c 16385 200 3 0 0 0 0 127 0
+p 6
+c 16398 200 3 0 0 0 0 127 0
+s 224 16400 commandTime=4001 origin[1]=4493dd0e bobCycle=ca
+c 16410 200 3 0 0 0 0 127 0
+c 16422 200 3 0 0 0 0 127 0
+p 6
+c 16434 200 3 0 0 0 0 127 0
+c 16446 200 3 0 0 0 0 127 0
+s 225 16450 commandTime=4026 origin[1]=44946f48 bobCycle=d6
+c 16458 200 3 0 0 0 0 127 0
+p 6
+c 16469 200 3 0 0 0 0 127 0
+c 16482 200 3 0 0 0 0 127 0
+c 16494 200 3 0 0 0 0 127 0
+p 6
+s 226 16500 commandTime=406e origin[1]=44958bd5 bobCycle=ed
+c 16506 200 3 0 0 0 0 127 0
+c 16518 200 3 0 0 0 0 127 0
+c 16532 200 3 0 0 0 0 127 0
+p 6
+c 16545 200 3 0 0 0 0 127 0
+s 227 16550 commandTime=4094 origin[1]=44962203 bobCycle=f9
+c 16557 200 3 0 0 0 0 127 0
+c 16569 200 3 0 0 0 0 127 0
+p 6
+c 16583 200 3 0 0 0 0 127 0
+c 16597 200 3 0 0 0 0 127 0
+s 228 16600 commandTime=40b9 origin[1]=4496b43d bobCycle=5
+c 16610 200 3 0 0 0 0 127 0
+p 6
+c 16622 200 3 0 0 0 0 127 0
+c 16634 200 3 0 0 0 0 127 0
+c 16646 200 3 0 0 0 0 127 0
+p 6
+s 229 16650 commandTime=4106 origin[1]=4497e48c bobCycle=1d damageTimer=12c flinchYaw=ffa6 damageEvent=f damageYaw=0 damageCount=3
+c 16659 200 3 0 0 0 0 127 0
+c 16672 200 3 0 0 0 0 127 0
+c 16684 200 3 0 0 0 0 127 0
+p 6
+c 16698 200 3 0 0 0 0 127 0
+s 230 16700 commandTime=412c origin[1]=44987ab9 bobCycle=29 legsAnim=21d damageTimer=106 damageCount=0
+c 16711 200 3 0 0 0 0 127 0
+c 16723 200 3 0 0 0 0 127 0
+p 6
+c 16735 200 3 0 0 0 0 127 0
+c 16747 200 3 0 0 0 0 127 0
+s 231 16750 commandTime=4153 origin[1]=449914da bobCycle=35 damageTimer=df
+c 16763 200 3 0 0 0 0 127 0
+p 6
+c 16776 200 3 0 0 0 0 127 0
+c 16788 200 3 0 0 0 0 127 0
+c 16799 200 3 0 0 0 0 127 0
+p 6
+s 232 16800 commandTime=419f origin[1]=449a4135 bobCycle=4d damageTimer=93
+c 16810 200 3 0 0 0 0 127 0
+c 16821 200 3 0 0 0 0 127 0
+c 16834 200 3 0 0 0 0 127 0
+p 6
+c 16846 200 3 0 0 0 0 127 0
+s 233 16850 commandTime=41c2 origin[1]=449acb87 bobCycle=57 damageTimer=70
+c 16857 200 3 0 0 0 0 -127 0
+c 16871 200 3 0 0 0 0 -127 0
+p 6
+c 16882 200 3 0 0 0 0 -127 0
+c 16895 200 3 0 0 0 0 -127 0
+s 234 16900 commandTime=41e7 origin[1]=449b41a3 bobCycle=63 velocity[1]=429a0000 velocity[0]=0 movementDir=5a legsAnim=1c pm_flags=800082 damageTimer=4b
+c 16906 200 3 0 0 0 0 -127 0
+p 6
+c 16919 200 3 0 0 0 0 -127 0
+c 16930 200 3 0 0 0 0 -127 0
+c 16941 200 3 0 0 0 0 -127 0
+p 6
+s 235 16950 commandTime=422d origin[1]=449b5af0 bobCycle=66 velocity[1]=c1a80000 movementDir=0 damageTimer=5
+c 16955 200 3 0 0 0 0 -127 0
+c 16967 200 3 0 0 0 0 -127 0
+c 16979 200 3 0 0 0 0 -127 0
+p 6
+c 16990 200 3 0 0 0 0 -127 0
+c 17002 200 3 0 0 0 0 -127 0
+s 236 17000 commandTime=4253 origin[1]=449b2d5a bobCycle=6a velocity[1]=c2380000 legsAnim=273 damageTimer=0
+c 17014 200 3 0 0 0 0 -127 0
+p 6
+c 17026 200 3 0 0 0 0 -127 0
+c 17038 200 3 0 0 0 0 -127 0
+s 237 17050 commandTime=4276 origin[1]=449ae8e1 bobCycle=71 velocity[1]=c28a0000
+c 17052 200 3 0 0 0 0 -127 0
+p 6
+c 17064 200 3 0 0 0 0 -127 0
+c 17076 200 3 0 0 0 0 -127 0
+c 17088 200 3 0 0 0 0 -127 0
+p 6
+c 17099 200 3 0 0 0 0 -127 0
+s 238 17100 commandTime=42c0 origin[1]=449a2082 bobCycle=88 velocity[1]=c2ac0000
+c 17112 200 3 0 0 0 0 -127 0
+c 17123 200 3 0 0 0 0 -127 0
+p 6
+c 17136 200 3 0 0 0 0 -127 0
+c 17148 200 3 0 0 0 0 -127 0
+s 239 17150 commandTime=42e3 origin[1]=4499bfaf bobCycle=92
+c 17159 200 3 0 0 0 0 -127 0
+p 6
+c 17171 200 3 0 0 0 0 -127 0
+c 17183 200 3 0 0 0 0 -127 0
+c 17195 200 3 0 0 0 0 -127 0
+p 6
+s 240 17200 commandTime=432b origin[1]=4498f882 bobCycle=a9
+c 17206 200 3 0 0 0 0 -127 0
+c 17218 200 3 0 0 0 0 -127 0
+c 17230 200 3 0 0 0 0 -127 0
+p 6
+c 17242 200 3 0 0 0 0 -127 0
+s 241 17250 commandTime=434e origin[1]=449897b0 bobCycle=b4
+c 17254 200 3 0 0 0 0 -127 0
+c 17266 200 3 0 0 0 0 -127 0
+p 6
+c 17278 200 3 0 0 0 0 -127 0
+c 17290 200 3 0 0 0 0 -127 0
+c 17302 200 3 0 0 0 0 -127 0
+p 6
+s 242 17300 commandTime=4396 origin[1]=4497d084 bobCycle=cc
+c 17314 200 3 0 0 0 0 -127 0
+c 17326 200 3 0 0 0 0 -127 0
+c 17338 200 3 0 0 0 0 -127 0
+p 6
+s 243 17350 commandTime=43ba origin[1]=44976cee bobCycle=d8 damageTimer=12c flinchYaw=ffd2 damageEvent=10 damageYaw=1f damageCount=3
+c 17352 200 3 0 0 0 0 -127 0
+c 17365 200 3 0 0 0 0 -127 0
+c 17377 200 3 0 0 0 0 -127 0
+p 6
+c 17388 200 3 0 0 0 0 -127 0
+c 17400 200 3 0 0 0 0 -127 0
+s 244 17400 commandTime=43e1 origin[1]=4497010a bobCycle=e4 legsAnim=1c damageTimer=105 damageCount=0
+c 17414 200 3 0 0 0 0 -127 0
+p 6
+c 17427 200 3 0 0 0 0 -127 0
+c 17438 200 3 0 0 0 0 -127 0
+c 17450 200 3 0 0 0 0 -127 0
+p 6
+s 245 17450 commandTime=442a origin[1]=44963718 bobCycle=fa damageTimer=bc
+c 17461 200 3 0 0 0 0 -127 0
+c 17473 200 3 0 0 0 0 -127 0
+c 17485 200 3 0 0 0 0 -127 0
+p 6
+c 17499 200 3 0 0 0 0 -127 0
+s 246 17500 commandTime=444d origin[1]=4495d646 bobCycle=5 damageTimer=99
+c 17512 200 3 0 0 0 0 -127 0
+c 17526 200 3 0 0 0 0 -127 0
+p 6
+c 17538 200 3 0 0 0 0 -127 0
+c 17550 200 3 0 0 0 0 -127 0
+s 247 17550 commandTime=4476 origin[1]=449564d9 bobCycle=11 damageTimer=70
+c 17563 200 3 0 0 0 0 -127 0
+p 6
+c 17576 200 3 0 0 0 0 -127 0
+c 17588 200 3 0 0 0 0 -127 0
+c 17600 200 3 0 0 0 0 -127 0
+p 6
+s 248 17600 commandTime=44c0 origin[1]=44949823 bobCycle=29 damageTimer=26
+c 17612 200 3 0 0 0 0 -127 0
+c 17624 200 3 0 0 0 0 -127 0
+c 17636 200 3 0 0 0 0 -127 0
+p 6
+c 17648 200 3 0 0 0 0 -127 0
+s 249 17650 commandTime=44e4 origin[1]=4494348d bobCycle=35 damageTimer=2
+c 17660 200 3 0 0 0 0 -127 0
+c 17672 200 3 0 0 0 0 -127 0
+p 6
+c 17684 200 3 0 0 0 0 -127 0
+c 17696 200 3 0 0 0 0 -127 0
+s 250 17700 commandTime=4508 origin[1]=4493d0f7 bobCycle=41 legsAnim=273 damageTimer=0
+c 17708 200 3 0 0 0 0 -127 0
+p 6
+c 17722 200 3 0 0 0 0 -127 0
+c 17736 200 3 0 0 0 0 -127 0
+c 17747 200 3 0 0 0 0 -127 0
+p 6
+s 251 17750 commandTime=4553 origin[1]=4493017d bobCycle=58
+c 17760 200 3 0 0 0 0 -127 0
+c 17772 200 3 0 0 0 0 -127 0
+c 17784 200 3 0 0 0 0 -127 0
+p 6
+c 17796 200 3 0 0 0 0 -127 0
+s 252 17800 commandTime=4578 origin[1]=44929b22 bobCycle=64
+c 17809 200 3 0 0 0 0 -127 0
+c 17821 200 3 0 0 0 0 -127 0
+p 6
+c 17834 200 3 0 0 0 0 -127 0
+c 17848 200 3 0 0 0 0 -127 0
+s 253 17850 commandTime=459d origin[1]=449234c7 bobCycle=70
+c 17861 200 3 0 0 0 0 -127 0
+p 6
+c 17874 200 3 0 0 0 0 -127 0
+c 17886 200 3 0 0 0 0 -127 0
+c 17899 200 3 0 0 0 0 -127 0
+p 6
+s 254 17900 commandTime=45eb origin[1]=44915cfe bobCycle=88
+c 17912 200 3 0 0 0 0 -127 0
+c 17924 200 3 0 0 0 0 -127 0
+c 17937 200 3 0 0 0 0 -127 0
+p 6
+c 17949 200 3 0 0 0 0 -127 0
+s 255 17950 commandTime=4611 origin[1]=4490f3de bobCycle=94
+c 17960 200 3 0 0 0 0 -127 0
+c 17971 200 3 0 0 0 0 -127 0
+p 6
+c 17983 200 3 0 0 0 0 -127 0
+c 17995 200 3 0 0 0 0 -127 0
+s 256 18000 commandTime=4633 origin[1]=449095d0 bobCycle=9e
+c 18008 200 3 0 0 0 0 -127 0
+p 6
+c 18020 200 3 0 0 0 0 -127 0
+c 18033 200 3 0 0 0 0 -127 0
+c 18045 200 3 0 0 0 0 -127 0
+p 6
+s 257 18050 commandTime=467d origin[1]=448fc91a bobCycle=b6 damageTimer=12c flinchYaw=0 damageEvent=11 damageYaw=40 damageCount=3
+c 18057 200 3 0 0 0 0 -127 0
+c 18069 200 3 0 0 0 0 -127 0
+c 18081 200 3 0 0 0 0 -127 0
+p 6
+c 18093 200 3 0 0 0 0 -127 0
+s 258 18100 commandTime=46a1 origin[1]=448f6584 bobCycle=c2 legsAnim=1c damageTimer=108 damageCount=0
+c 18105 200 3 0 0 0 0 -127 0
+c 18117 200 3 0 0 0 0 -127 0
+p 6
+c 18129 200 3 0 0 0 0 -127 0
+c 18141 200 3 0 0 0 0 -127 0
+s 259 18150 commandTime=46c5 origin[1]=448f01ee bobCycle=ce damageTimer=e4
+c 18154 200 3 0 0 0 0 -127 0
+p 6
+c 18168 200 3 0 0 0 0 -127 0
+c 18180 200 3 0 0 0 0 -127 0
+c 18192 200 3 0 0 0 0 -127 0
+p 6
+s 260 18200 commandTime=4710 origin[1]=448e3274 bobCycle=e6 damageTimer=99
+c 18204 200 3 0 0 0 0 -127 0
+c 18215 200 3 0 0 0 0 -127 0
+c 18227 200 3 0 0 0 0 -127 0
+p 6
+c 18241 200 3 0 0 0 0 -127 0
+s 261 18250 commandTime=4733 origin[1]=448dd1a2 bobCycle=f1 damageTimer=76
+c 18255 200 3 0 0 0 0 -127 0
+c 18267 200 3 0 0 0 0 -127 0
+p 6
+c 18279 200 3 0 0 0 0 -127 0
+c 18293 200 3 0 0 0 0 -127 0
+s 262 18300 commandTime=475b origin[1]=448d62fa bobCycle=fd damageTimer=4e
+c 18305 200 3 0 0 0 0 -127 0
+p 6
+c 18317 200 3 0 0 0 0 -127 0
+c 18331 200 3 0 0 0 0 -127 0
+c 18345 200 3 0 0 0 0 -127 0
+p 6
+s 263 18350 commandTime=47a9 origin[1]=448c8b33 bobCycle=15 legsAnim=273 damageTimer=0
+c 18357 200 3 0 0 0 0 -127 0
+c 18371 200 3 0 0 0 0 -127 0
+c 18385 200 3 0 0 0 0 -127 0
+p 6
+c 18397 200 3 0 0 0 0 -127 0
+s 264 18400 commandTime=47d1 origin[1]=448c1c8b bobCycle=21
+c 18408 200 3 0 0 0 0 -127 0
+c 18419 200 3 0 0 0 0 -127 0
+p 6
+c 18431 200 3 0 0 0 0 -127 0
+c 18445 200 3 0 0 0 0 -127 0
+s 265 18450 commandTime=47f3 origin[1]=448bbe7d bobCycle=2b
+c 18458 200 3 0 0 0 0 -127 0
+p 6
+c 18470 200 3 0 0 0 0 -127 0
+c 18482 200 3 0 0 0 0 -127 0
+c 18496 200 3 0 0 0 0 -127 0
+p 6
+s 266 18500 commandTime=4840 origin[1]=448ae97a bobCycle=43
+c 18507 200 3 0 0 0 0 -127 0
+c 18519 200 3 0 0 0 0 -127 0
+c 18531 200 3 0 0 0 0 -127 0
+p 6
+c 18543 200 3 0 0 0 0 -127 0
+s 267 18550 commandTime=4863 origin[1]=448a88a8 bobCycle=4e
+c 18554 200 3 0 0 0 0 -127 0
+c 18568 200 3 0 0 0 0 -127 0
+p 6
+c 18582 200 3 0 0 0 0 -127 0
+c 18595 200 3 0 0 0 0 -127 0
+s 268 18600 commandTime=4888 origin[1]=448a224d bobCycle=59
+c 18607 200 3 0 0 0 0 -127 0
+p 6
+c 18619 200 3 0 0 0 0 -127 0
+c 18631 200 3 0 0 0 0 -127 0
+c 18643 200 3 0 0 0 0 -127 0
+p 6
+s 269 18650 commandTime=48d3 origin[1]=448952d3 bobCycle=71
+c 18655 200 3 0 0 0 0 -127 0
+c 18667 200 3 0 0 0 0 -127 0
+c 18678 200 3 0 0 0 0 -127 0
+p 6
+c 18690 200 3 0 0 0 0 -127 0
+s 270 18700 commandTime=48f6 origin[1]=4488f201 bobCycle=7c
+c 18703 200 3 0 0 0 0 -127 0
+c 18715 200 3 0 0 0 0 -127 0
+p 6
+c 18727 200 3 0 0 0 0 -127 0
+c 18739 200 3 0 0 0 0 -127 0
+c 18751 200 3 0 0 0 0 -127 0
+p 6
+s 271 18750 commandTime=493f origin[1]=44882810 bobCycle=94 damageTimer=12c flinchYaw=2d damageEvent=12 damageYaw=60 damageCount=3
+c 18762 200 3 0 0 0 0 -127 0
+c 18774 200 3 0 0 0 0 -127 0
+c 18786 200 3 0 0 0 0 -127 0
+p 6
+c 18798 200 3 0 0 0 0 -127 0
+s 272 18800 commandTime=4962 origin[1]=4487c73e bobCycle=9f legsAnim=1c damageTimer=109 damageCount=0
+c 18810 200 3 0 0 0 0 -127 0
+c 18822 200 3 0 0 0 0 -127 0
+p 6
+c 18834 200 3 0 0 0 0 -127 0
+c 18846 200 3 0 0 0 0 -127 0
+s 273 18850 commandTime=4986 origin[1]=448763a8 bobCycle=ab damageTimer=e5
+c 18859 0 3 0 0 0 0 0 0
+p 6
+c 18871 0 3 0 0 0 0 0 0
+c 18883 0 3 0 0 0 0 0 0
+c 18895 0 3 0 0 0 0 0 0
+p 6
+s 274 18900 commandTime=49cf origin[1]=4486b520 bobCycle=b7 velocity[1]=c2680000 aimSpreadScale=43408666 pm_flags=800080 viewHeightCurrent=422e0000 eFlags=2 viewHeightTarget=3c viewHeightLerpTarget=3c viewHeightLerpDown=0 viewHeightLerpTime=49ab damageTimer=9c
+c 18906 0 3 0 0 0 0 0 0
+c 18918 0 3 0 0 0 0 0 0
+c 18930 0 3 0 0 0 0 0 0
+p 6
+c 18944 0 3 0 0 0 0 0 0
+s 275 18950 commandTime=49f2 origin[1]=448682a9 bobCycle=b9 velocity[1]=c2180000 aimSpreadScale=4313e666 viewHeightCurrent=423e6666 damageTimer=79
+c 18956 0 3 0 0 0 0 0 0
+c 18968 0 3 0 0 0 0 0 0
+p 6
+c 18980 0 3 0 0 0 0 0 0
+c 18993 0 3 0 0 0 0 0 0
+s 276 19000 commandTime=4a18 origin[1]=448665ce velocity[1]=c1800000 aimSpreadScale=42c6e664 viewHeightCurrent=4250a3d7 damageTimer=53
+c 19006 0 3 0 0 0 0 0 0
+p 6
+c 19019 0 3 0 0 0 0 0 0
+c 19031 0 3 0 0 0 0 0 0
+c 19044 0 3 0 0 0 0 0 0
+p 6
+s 277 19050 commandTime=4a64 origin[1]=4486616d bobCycle=0 velocity[1]=0 aimSpreadScale=402332de viewHeightCurrent=42687627 torsoAnim=f7 damageTimer=7
+c 19056 0 3 0 0 0 0 0 0
+c 19069 0 3 0 0 0 0 0 0
+c 19081 0 3 0 0 0 0 0 0
+p 6
+c 19092 0 3 0 0 0 0 0 0
+s 278 19100 commandTime=4a89 legsAnim=299 aimSpreadScale=0 viewHeightCurrent=42700000 torsoAnim=200 viewHeightLerpTime=0 damageTimer=0
+c 19106 0 3 0 0 0 0 0 0
+c 19120 0 3 0 0 0 0 0 0
+p 6
+c 19133 0 3 0 0 0 0 0 0
+c 19145 0 3 0 0 0 0 0 0
+s 279 19150 commandTime=4ab0
+c 19158 0 3 0 0 0 0 0 0
+p 6
+c 19169 0 3 0 0 0 0 0 0
+c 19181 0 3 0 0 0 0 0 0
+c 19194 0 3 0 0 0 0 0 0
+p 6
+s 280 19200 commandTime=4afa
+c 19206 0 3 0 0 0 0 0 0
+c 19218 0 3 0 0 0 0 0 0
+c 19229 0 3 0 0 0 0 0 0
+p 6
+c 19242 0 3 0 0 0 0 0 0
+s 281 19250 commandTime=4b1d
+c 19254 0 3 0 0 0 0 0 0
+c 19266 0 3 0 0 0 0 0 0
+p 6
+c 19279 0 3 0 0 0 0 0 0
+c 19293 0 3 0 0 0 0 0 0
+s 282 19300 commandTime=4b42
+c 19305 0 3 0 0 0 0 0 0
+p 6
+c 19317 0 3 0 0 0 0 0 0
+c 19328 0 3 0 0 0 0 0 0
+c 19340 0 3 0 0 0 0 0 0
+p 6
+c 19352 0 3 0 0 0 0 0 0
+s 283 19350 commandTime=4b8c
+c 19365 0 3 0 0 0 0 0 0
+c 19378 0 3 0 0 0 0 0 0
+p 6
+c 19391 0 3 0 0 0 0 0 0
+s 284 19400 commandTime=4bb2
+c 19404 0 3 0 0 0 0 0 0
+c 19416 0 3 0 0 0 0 0 0
+p 6
+c 19427 0 3 0 0 0 0 0 0
+c 19439 0 3 0 0 0 0 0 0
+s 285 19450 commandTime=4bd8 aimSpreadScale=40400000 damageTimer=12c flinchYaw=59 damageEvent=13 damageYaw=7f damageCount=3
+c 19451 0 3 0 0 0 0 0 0
+p 6
+c 19462 0 3 0 0 0 0 0 0
+c 19474 0 3 0 0 0 0 0 0
+c 19485 0 3 0 0 0 0 0 0
+p 6
+c 19499 0 3 0 0 0 0 0 0
+s 286 19500 commandTime=4c1d aimSpreadScale=0 torsoAnim=f7 damageTimer=e7 damageCount=0
+c 19512 0 3 0 0 0 0 0 0
+c 19524 0 3 0 0 0 0 0 0
+p 6
+c 19537 0 3 0 0 0 0 0 0
+c 19549 0 3 0 0 0 0 0 0
+s 287 19550 commandTime=4c44 damageTimer=c0
+c 19561 0 3 0 0 0 0 0 0
+p 6
+c 19573 0 3 0 0 0 0 0 0
+c 19586 0 3 0 0 0 0 0 0
+s 288 19600 commandTime=4c69 damageTimer=9b
+c 19601 0 3 0 0 0 0 0 0
+p 6
+c 19615 0 3 0 0 0 0 0 0
+c 19627 0 3 0 0 0 0 0 0
+c 19639 0 3 0 0 0 0 0 0
+p 6
+s 289 19650 commandTime=4cb7 damageTimer=4d
+c 19652 0 3 0 0 0 0 0 0
+c 19664 0 3 0 0 0 0 0 0
+c 19676 0 3 0 0 0 0 0 0
+p 6
+c 19688 0 3 0 0 0 0 0 0
+s 290 19700 commandTime=4cdc damageTimer=28
+c 19702 0 3 0 0 0 0 0 0
+c 19715 0 3 0 0 0 0 0 0
+p 6
+c 19728 0 3 0 0 0 0 0 0
+c 19740 0 3 0 0 0 0 0 0
+s 291 19750 commandTime=4d03 damageTimer=1
+c 19753 0 3 0 0 0 0 0 0
+p 6
+c 19767 0 3 0 0 0 0 0 0
+c 19778 0 3 0 0 0 0 0 0
+c 19792 0 3 0 0 0 0 0 0
+p 6
+s 292 19800 commandTime=4d50 torsoAnim=200 damageTimer=0
+c 19805 0 3 0 0 0 0 0 0
+c 19819 0 3 0 0 0 0 0 0
+c 19831 0 3 0 0 0 0 0 0
+p 6
+c 19843 0 3 0 0 0 0 0 0
+s 293 19850 commandTime=4d77
+c 19854 1000 3 0 0 0 0 0 0
+c 19867 1000 3 0 0 0 0 0 0
+p 6
+c 19880 1000 3 0 0 0 0 0 0
+c 19893 1000 3 0 0 0 0 0 0
+s 294 19900 commandTime=4d9b legsAnim=98 pm_flags=8001c0 fWeaponPosFrac=3da3d70b
+c 19904 1000 3 0 0 0 0 0 0
+p 6
+c 19916 1000 3 0 0 0 0 0 0
+c 19927 1000 3 0 0 0 0 0 0
+c 19939 1000 3 0 0 0 0 0 0
+p 6
+c 19950 1000 3 0 0 0 0 0 0
+s 295 19950 commandTime=4de3 fWeaponPosFrac=3ea3d70a
+c 19964 1000 3 0 0 0 0 0 0
+c 19976 1000 3 0 0 0 0 0 0
+p 6
+c 19987 1000 3 0 0 0 0 0 0
+c 19999 1000 3 0 0 0 0 0 0
+s 296 20000 commandTime=4e08 fWeaponPosFrac=3ee2fc96
+c 20010 1000 3 0 0 0 0 0 0
+p 6
+c 20022 1000 3 0 0 0 0 0 0
+c 20034 1000 3 0 0 0 0 0 0
+c 20045 1000 3 0 0 0 0 0 0
+p 6
+s 297 20050 commandTime=4e4d fWeaponPosFrac=3f2c5f94
+c 20056 1000 3 0 0 0 0 0 0
+c 20069 1000 3 0 0 0 0 0 0
+c 20081 1000 3 0 0 0 0 0 0
+p 6
+c 20095 1000 3 0 0 0 0 0 0
+s 298 20100 commandTime=4e71 fWeaponPosFrac=3f4b17e7
+c 20108 1000 3 0 0 0 0 0 0
+c 20119 1000 3 0 0 0 0 0 0
+p 6
+c 20131 1000 3 0 0 0 0 0 0
+c 20144 1000 3 0 0 0 0 0 0
+s 299 20150 commandTime=4e97 aimSpreadScale=40400000 fWeaponPosFrac=3f6b8522 damageTimer=12c flinchYaw=86 damageEvent=14 damageYaw=9f damageCount=3
+c 20157 1000 3 0 0 0 0 0 0
+p 6
+c 20168 1000 3 0 0 0 0 0 0
+c 20182 1000 3 0 0 0 0 0 0
+c 20196 1000 3 0 0 0 0 0 0
+p 6
+s 300 20200 commandTime=4ee4 aimSpreadScale=0 torsoAnim=f7 fWeaponPosFrac=3f800000 damageTimer=df damageCount=0
+c 20207 1000 3 0 0 0 0 0 0
+c 20219 1000 3 0 0 0 0 0 0
+c 20230 1000 3 0 0 0 0 0 0
+p 6
+c 20243 1000 3 0 0 0 0 0 0
+s 301 20250 commandTime=4f06 damageTimer=bd
+c 20254 1000 3 0 0 0 0 0 0
+c 20266 1000 3 0 0 0 0 0 0
+p 6
+c 20279 1000 3 0 0 0 0 0 0
+c 20291 1000 3 0 0 0 0 0 0
+s 302 20300 commandTime=4f2a damageTimer=99
+c 20305 1000 3 0 0 0 0 0 0
+p 6
+c 20317 1000 3 0 0 0 0 0 0
+c 20328 1000 3 0 0 0 0 0 0
+c 20339 1000 3 0 0 0 0 0 0
+p 6
+c 20351 1000 3 0 0 0 0 0 0
+s 303 20350 commandTime=4f73 damageTimer=50
+c 20362 1000 3 0 0 0 0 0 0
+c 20374 1000 3 0 0 0 0 0 0
+p 6
+c 20386 1000 3 0 0 0 0 0 0
+c 20399 1000 3 0 0 0 0 0 0
+s 304 20400 commandTime=4f96 damageTimer=2d
+c 20412 1000 3 0 0 0 0 0 0
+p 6
+c 20424 1000 3 0 0 0 0 0 0
+c 20435 1000 3 0 0 0 0 0 0
+c 20446 1000 3 0 0 0 0 0 0
+p 6
+s 305 20450 commandTime=4fde torsoAnim=200 damageTimer=0
+c 20459 1000 3 0 0 0 0 127 0
+c 20472 1000 3 0 0 0 0 127 0
+c 20485 1000 3 0 0 0 0 127 0
+p 6
+c 20497 1000 3 0 0 0 0 127 0
+s 306 20500 commandTime=5005 origin[1]=44867625 bobCycle=1 velocity[1]=41b00000 velocity[0]=80000000 legsAnim=25d pm_flags=800140
+c 20508 1000 3 0 0 0 0 127 0
+c 20519 1000 3 0 0 0 0 127 0
+p 6
+c 20532 1000 3 0 0 0 0 127 0
+c 20544 1000 3 0 0 0 0 127 0
+s 307 20550 commandTime=5027 origin[1]=448696a1 bobCycle=4 velocity[1]=42080000
+c 20556 1000 3 0 0 0 0 127 0
+p 6
+c 20569 1000 3 0 0 0 0 127 0
+c 20580 1000 3 0 0 0 0 127 0
+c 20594 1000 3 0 0 0 0 127 0
+p 6
+s 308 20600 commandTime=5072 origin[1]=44870dc4 bobCycle=11 velocity[1]=42740000
+c 20605 1000 3 0 0 0 0 127 0
+c 20617 1000 3 0 0 0 0 127 0
+c 20630 1000 3 0 0 0 0 127 0
+p 6
+c 20642 1000 3 0 0 0 0 127 0
+s 309 20650 commandTime=5096 origin[1]=44875dc4 bobCycle=19 velocity[1]=42940000
+c 20653 1000 3 0 0 0 0 127 0
+c 20666 1000 3 0 0 0 0 127 0
+p 6
+c 20677 1000 3 0 0 0 0 127 0
+c 20689 1000 3 0 0 0 0 127 0
+s 310 20700 commandTime=50ba origin[1]=4487b552 bobCycle=22 velocity[1]=42980000
+c 20702 1000 3 0 0 0 0 127 0
+p 6
+c 20713 1000 3 0 0 0 0 127 0
+c 20724 1000 3 0 0 0 0 127 0
+c 20737 1000 3 0 0 0 0 127 0
+p 6
+c 20749 1000 3 0 0 0 0 127 0
+s 311 20750 commandTime=5101 origin[1]=44886200 bobCycle=34
+c 20762 1000 3 0 0 0 0 127 0
+c 20774 1000 3 0 0 0 0 127 0
+p 6
+c 20787 1000 3 0 0 0 0 127 0
+s 312 20800 commandTime=5126 origin[1]=4488bbfc bobCycle=3d
+c 20802 1000 3 0 0 0 0 127 0
+c 20813 1000 3 0 0 0 0 127 0
+p 6
+c 20826 1000 3 0 0 0 0 127 0
+c 20838 1000 3 0 0 0 0 127 0
+c 20850 1000 3 0 0 0 0 127 0
+p 6
+s 313 20850 commandTime=5172 origin[1]=448974d2 bobCycle=50 aimSpreadScale=40400000 damageTimer=12c flinchYaw=b3 damageEvent=15 damageYaw=bf damageCount=3
+c 20863 1000 3 0 0 0 0 127 0
+c 20875 1000 3 0 0 0 0 127 0
+c 20888 1000 3 0 0 0 0 127 0
+p 6
+s 314 20900 commandTime=5198 origin[1]=4489d13d bobCycle=59 legsAnim=19 aimSpreadScale=0 damageTimer=106 damageCount=0
+c 20901 1000 3 0 0 0 0 127 0
+c 20912 1000 3 0 0 0 0 127 0
+c 20923 1000 3 0 0 0 0 127 0
+p 6
+c 20937 1000 3 0 0 0 0 127 0
+c 20949 1000 3 0 0 0 0 127 0
+s 315 20950 commandTime=51bb origin[1]=448a265d bobCycle=62 damageTimer=e3
+c 20962 1000 3 0 0 0 0 127 0
+p 6
+c 20975 1000 3 0 0 0 0 127 0
+c 20987 1000 3 0 0 0 0 127 0
+c 20998 1000 3 0 0 0 0 127 0
+p 6
+s 316 21000 commandTime=5206 origin[1]=448adcc4 bobCycle=75 damageTimer=98
+c 21011 1000 3 0 0 0 0 127 0
+c 21025 1000 3 0 0 0 0 127 0
+c 21037 1000 3 0 0 0 0 127 0
+p 6
+s 317 21050 commandTime=522d origin[1]=448b3b9d bobCycle=7f damageTimer=71
+c 21052 1000 3 0 0 0 0 127 0
+c 21064 1000 3 0 0 0 0 127 0
+c 21076 1000 3 0 0 0 0 127 0
+p 6
+c 21089 1000 3 0 0 0 0 127 0
+s 318 21100 commandTime=5254 origin[1]=448b9a76 bobCycle=89 damageTimer=4a
+c 21103 1000 3 0 0 0 0 127 0
+c 21117 1000 3 0 0 0 0 127 0
+p 6
+c 21128 1000 3 0 0 0 0 127 0
+c 21141 1000 3 0 0 0 0 127 0
+s 319 21150 commandTime=527d origin[1]=448bfe2c bobCycle=94 damageTimer=21
+c 21154 1000 3 0 0 0 0 127 0
+p 6
+c 21168 1000 3 0 0 0 0 127 0
+c 21179 1000 3 0 0 0 0 127 0
+c 21190 1000 3 0 0 0 0 127 0
+p 6
+s 320 21200 commandTime=52c6 origin[1]=448cafb7 bobCycle=a7 legsAnim=25d damageTimer=0
+c 21203 1000 3 0 0 0 0 127 0
+c 21215 1000 3 0 0 0 0 127 0
+c 21228 1000 3 0 0 0 0 127 0
+p 6
+c 21242 1000 3 0 0 0 0 127 0
+s 321 21250 commandTime=52ec origin[1]=448d0c22 bobCycle=b0
+c 21254 1000 3 0 0 0 0 127 0
+c 21266 1000 3 0 0 0 0 127 0
+p 6
+c 21277 1000 3 0 0 0 0 127 0
+c 21289 1000 3 0 0 0 0 127 0
+c 21301 1000 3 0 0 0 0 127 0
+p 6
+s 322 21300 commandTime=5335 origin[1]=448dbdab bobCycle=c3
+c 21313 1000 3 0 0 0 0 127 0
+c 21325 1000 3 0 0 0 0 127 0
+c 21336 1000 3 0 0 0 0 127 0
+p 6
+c 21348 1000 3 0 0 0 0 127 0
+s 323 21350 commandTime=5358 origin[1]=448e12ca bobCycle=cc
+c 21361 1000 3 0 0 0 0 127 0
+c 21373 1000 3 0 0 0 0 127 0
+p 6
+c 21384 1000 3 0 0 0 0 127 0
+c 21395 1000 3 0 0 0 0 127 0
+s 324 21400 commandTime=537d origin[1]=448e6cc6 bobCycle=d5
+c 21407 1000 3 0 0 0 0 127 0
+p 6
+c 21419 1000 3 0 0 0 0 127 0
+c 21431 1000 3 0 0 0 0 127 0
+c 21444 1000 3 0 0 0 0 127 0
+p 6
+s 325 21450 commandTime=53c4 origin[1]=448f1973 bobCycle=e7
+c 21455 1000 3 0 0 0 0 127 0
+c 21468 1000 3 0 0 0 0 127 0
+c 21480 1000 3 0 0 0 0 127 0
+p 6
+c 21493 1000 3 0 0 0 0 127 0
+s 326 21500 commandTime=53e8 origin[1]=448f7101 bobCycle=f0
+c 21507 1000 3 0 0 0 0 127 0
+c 21519 1000 3 0 0 0 0 127 0
+p 6
+c 21531 1000 3 0 0 0 0 127 0
+c 21545 1000 3 0 0 0 0 127 0
+s 327 21550 commandTime=540f origin[1]=448fcfda bobCycle=fa aimSpreadScale=40400000 damageTimer=12c flinchYaw=e1 damageEvent=16 damageYaw=e0 damageCount=3
+c 21557 1000 3 0 0 0 0 127 0
+p 6
+c 21568 1000 3 0 0 0 0 127 0
+c 21579 1000 3 0 0 0 0 127 0
+c 21591 1000 3 0 0 0 0 127 0
+p 6
+s 328 21600 commandTime=5457 origin[1]=44907ef5 bobCycle=d legsAnim=19 aimSpreadScale=0 damageTimer=e4 damageCount=0
+c 21603 1000 3 0 0 0 0 127 0
+c 21615 1000 3 0 0 0 0 127 0
+c 21627 1000 3 0 0 0 0 127 0
+p 6
+c 21640 1000 3 0 0 0 0 127 0
+s 329 21650 commandTime=547b origin[1]=4490d682 bobCycle=16 damageTimer=c0
+c 21654 1000 3 0 0 0 0 127 0
+c 21666 1000 3 0 0 0 0 127 0
+p 6
+c 21678 1000 3 0 0 0 0 127 0
+c 21691 1000 3 0 0 0 0 127 0
+s 330 21700 commandTime=54a2 origin[1]=4491355b bobCycle=20 damageTimer=99
+c 21704 1000 3 0 0 0 0 127 0
+p 6
+c 21715 1000 3 0 0 0 0 127 0
+c 21729 1000 3 0 0 0 0 127 0
+c 21740 1000 3 0 0 0 0 127 0
+p 6
+s 331 21750 commandTime=54ec origin[1]=4491e954 bobCycle=33 damageTimer=4f
+c 21752 1000 3 0 0 0 0 127 0
+c 21764 1000 3 0 0 0 0 127 0
+c 21776 1000 3 0 0 0 0 127 0
+p 6
+c 21788 1000 3 0 0 0 0 127 0
+c 21800 1000 3 0 0 0 0 127 0
+s 332 21800 commandTime=5510 origin[1]=449240e1 bobCycle=3c damageTimer=2b
+c 21812 1000 3 0 0 0 0 127 0
+p 6
+c 21824 1000 3 0 0 0 0 127 0
+c 21837 1000 3 0 0 0 0 127 0
+c 21849 1000 3 0 0 0 0 127 0
+p 6
+s 333 21850 commandTime=5559 origin[1]=4492f26a bobCycle=4e legsAnim=25d damageTimer=0
+c 21861 1000 3 0 0 0 0 127 0
+c 21873 1000 3 0 0 0 0 127 0
+c 21885 1000 3 0 0 0 0 127 0
+p 6
+c 21898 1000 3 0 0 0 0 127 0
+s 334 21900 commandTime=557d origin[1]=449349f7 bobCycle=57
+c 21912 1000 3 0 0 0 0 127 0
+c 21923 1000 3 0 0 0 0 127 0
+p 6
+c 21934 1000 3 0 0 0 0 127 0
+c 21948 1000 3 0 0 0 0 127 0
+s 335 21950 commandTime=55a3 origin[1]=4493a662 bobCycle=61
+c 21959 1000 3 0 0 0 0 127 0
+p 6
+c 21973 1000 3 0 0 0 0 127 0
+c 21987 1000 3 0 0 0 0 127 0
+s 336 22000 commandTime=55c7 origin[1]=4493fdf0 bobCycle=6b
+c 22001 1000 3 0 0 0 0 127 0
+p 6
+c 22012 1000 3 0 0 0 0 127 0
+c 22024 1000 3 0 0 0 0 127 0
+c 22036 1000 3 0 0 0 0 127 0
+p 6
+c 22048 1000 3 0 0 0 0 127 0
+s 337 22050 commandTime=5614 origin[1]=4494b933 bobCycle=80
+c 22060 1000 3 0 0 0 0 127 0
+c 22072 1000 3 0 0 0 0 127 0
+p 6
+c 22084 1000 3 0 0 0 0 127 0
+c 22098 1000 3 0 0 0 0 127 0
+s 338 22100 commandTime=5638 origin[1]=449510c0 bobCycle=89
+c 22111 1000 3 0 0 0 0 127 0
+p 6
+c 22123 1000 3 0 0 0 0 127 0
+c 22137 1000 3 0 0 0 0 127 0
+c 22149 1000 3 0 0 0 0 127 0
+p 6
+s 339 22150 commandTime=5685 origin[1]=4495cc03 bobCycle=9d
+c 22161 1000 3 0 0 0 0 127 0
+c 22174 1000 3 0 0 0 0 127 0
+c 22186 1000 3 0 0 0 0 127 0
+p 6
+c 22199 1000 3 0 0 0 0 127 0
+s 340 22200 commandTime=56aa origin[1]=449625ff bobCycle=a6
+c 22210 1000 3 0 0 0 0 127 0
+c 22223 1000 3 0 0 0 0 127 0
+p 6
+c 22234 1000 3 0 0 0 0 127 0
+c 22246 1000 3 0 0 0 0 127 0
+s 341 22250 commandTime=56cf origin[1]=44967ffc bobCycle=af aimSpreadScale=40400000 damageTimer=12c flinchYaw=ffa6 damageEvent=17 damageYaw=0 damageCount=3
+c 22258 1000 3 0 0 0 0 127 0
+p 6
+c 22271 1000 3 0 0 0 0 127 0
+c 22283 1000 3 0 0 0 0 127 0
+c 22295 1000 3 0 0 0 0 127 0
+p 6
+s 342 22300 commandTime=5717 origin[1]=44972f17 bobCycle=c1 legsAnim=19 aimSpreadScale=0 damageTimer=e4 damageCount=0
+c 22308 1000 3 0 0 0 0 127 0
+c 22320 1000 3 0 0 0 0 127 0
+c 22334 1000 3 0 0 0 0 127 0
+p 6
+c 22345 1000 3 0 0 0 0 127 0
+s 343 22350 commandTime=573e origin[1]=44978df0 bobCycle=cb damageTimer=bd
+c 22357 1000 3 0 0 0 0 127 0
+c 22369 1000 3 0 0 0 0 127 0
+p 6
+c 22380 1000 3 0 0 0 0 127 0
+c 22392 1000 3 0 0 0 0 127 0
+s 344 22400 commandTime=5761 origin[1]=4497e30f bobCycle=d4 damageTimer=9a
+c 22405 1000 3 0 0 0 0 127 0
+p 6
+c 22417 1000 3 0 0 0 0 127 0
+c 22430 1000 3 0 0 0 0 127 0
+c 22443 1000 3 0 0 0 0 127 0
+p 6
+s 345 22450 commandTime=57ab origin[1]=44989708 bobCycle=e6 damageTimer=50
+c 22455 1000 3 0 0 0 0 -127 0
+c 22466 1000 3 0 0 0 0 -127 0
+c 22479 1000 3 0 0 0 0 -127 0
+p 6
+c 22493 1000 3 0 0 0 0 -127 0
+s 346 22500 commandTime=57cf origin[1]=4498c6bc bobCycle=ed velocity[1]=41c00000 velocity[0]=0 movementDir=5a legsAnim=218 pm_flags=8001c0 damageTimer=2c
+c 22506 1000 3 0 0 0 0 -127 0
+c 22517 1000 3 0 0 0 0 -127 0
+p 6
+c 22531 1000 3 0 0 0 0 -127 0
+c 22545 1000 3 0 0 0 0 -127 0
+s 347 22550 commandTime=57f5 origin[1]=4498bdf2 bobCycle=ee velocity[1]=c1800000 movementDir=0 damageTimer=6
+c 22557 1000 3 0 0 0 0 -127 0
+p 6
+c 22569 1000 3 0 0 0 0 -127 0
+c 22581 1000 3 0 0 0 0 -127 0
+c 22593 1000 3 0 0 0 0 -127 0
+p 6
+s 348 22600 commandTime=5841 origin[1]=44987161 bobCycle=fa velocity[1]=c2280000 legsAnim=5c damageTimer=0
+c 22605 1000 3 0 0 0 0 -127 0
+c 22616 1000 3 0 0 0 0 -127 0
+c 22627 1000 3 0 0 0 0 -127 0
+p 6
+c 22639 1000 3 0 0 0 0 -127 0
+s 349 22650 commandTime=5863 origin[1]=44983b5d bobCycle=3 velocity[1]=c2540000
+c 22653 1000 3 0 0 0 0 -127 0
+c 22664 1000 3 0 0 0 0 -127 0
+p 6
+c 22676 1000 3 0 0 0 0 -127 0
+c 22688 1000 3 0 0 0 0 -127 0
+c 22700 1000 3 0 0 0 0 -127 0
+p 6
+s 350 22700 commandTime=58ac origin[1]=4497bf16 bobCycle=16
+c 22712 1000 3 0 0 0 0 -127 0
+c 22725 1000 3 0 0 0 0 -127 0
+c 22737 1000 3 0 0 0 0 -127 0
+p 6
+c 22749 1000 3 0 0 0 0 -127 0
+s 351 22750 commandTime=58d1 origin[1]=44978018 bobCycle=20
+c 22761 1000 3 0 0 0 0 -127 0
+c 22774 1000 3 0 0 0 0 -127 0
+p 6
+c 22787 1000 3 0 0 0 0 -127 0
+s 352 22800 commandTime=58f6 origin[1]=4497411a bobCycle=2a
+c 22801 1000 3 0 0 0 0 -127 0
+c 22814 1000 3 0 0 0 0 -127 0
+p 6
+c 22828 1000 3 0 0 0 0 -127 0
+c 22840 1000 3 0 0 0 0 -127 0
+c 22853 1000 3 0 0 0 0 -127 0
+p 6
+s 353 22850 commandTime=5945 origin[1]=4496ba9c bobCycle=41
+c 22866 1000 3 0 0 0 0 -127 0
+c 22879 1000 3 0 0 0 0 -127 0
+c 22891 1000 3 0 0 0 0 -127 0
+p 6
+c 22903 1000 3 0 0 0 0 -127 0
+s 354 22900 commandTime=596b origin[1]=449679ea bobCycle=4c
+c 22917 1000 3 0 0 0 0 -127 0
+c 22929 1000 3 0 0 0 0 -127 0
+p 6
+c 22941 1000 3 0 0 0 0 -127 0
+s 355 22950 commandTime=5991 origin[1]=44963939 bobCycle=56 aimSpreadScale=40400000 damageTimer=12c flinchYaw=ffd3 damageEvent=18 damageYaw=20 damageCount=3
+c 22955 1000 3 0 0 0 0 -127 0
+c 22967 1000 3 0 0 0 0 -127 0
+p 6
+c 22980 1000 3 0 0 0 0 -127 0
+c 22992 1000 3 0 0 0 0 -127 0
+s 356 23000 commandTime=59b7 origin[1]=4495f888 bobCycle=60 legsAnim=218 aimSpreadScale=0 damageTimer=106 damageCount=0
+c 23004 1000 3 0 0 0 0 -127 0
+p 6
+c 23017 1000 3 0 0 0 0 -127 0
+c 23030 1000 3 0 0 0 0 -127 0
+c 23044 1000 3 0 0 0 0 -127 0
+p 6
+s 357 23050 commandTime=5a04 origin[1]=44957571 bobCycle=76 damageTimer=b9
+c 23057 1000 3 0 0 0 0 -127 0
+c 23069 1000 3 0 0 0 0 -127 0
+c 23080 1000 3 0 0 0 0 -127 0
+p 6
+c 23092 1000 3 0 0 0 0 -127 0
+s 358 23100 commandTime=5a28 origin[1]=44953827 bobCycle=80 damageTimer=95
+c 23104 1000 3 0 0 0 0 -127 0
+c 23117 1000 3 0 0 0 0 -127 0
+p 6
+c 23128 1000 3 0 0 0 0 -127 0
+c 23141 1000 3 0 0 0 0 -127 0
+s 359 23150 commandTime=5a4d origin[1]=4494f929 bobCycle=8a damageTimer=70
+c 23153 1000 3 0 0 0 0 -127 0
+p 6
+c 23166 1000 3 0 0 0 0 -127 0
+c 23178 1000 3 0 0 0 0 -127 0
+c 23190 1000 3 0 0 0 0 -127 0
+p 6
+s 360 23200 commandTime=5a96 origin[1]=44947ce1 bobCycle=9e damageTimer=27
+c 23201 1000 3 0 0 0 0 -127 0
+c 23213 1000 3 0 0 0 0 -127 0
+c 23225 1000 3 0 0 0 0 -127 0
+p 6
+c 23237 1000 3 0 0 0 0 -127 0
+c 23251 1000 3 0 0 0 0 -127 0
+s 361 23250 commandTime=5ab9 origin[1]=4494414b bobCycle=a7 damageTimer=4
+c 23264 1000 3 0 0 0 0 -127 0
+p 6
+c 23278 1000 3 0 0 0 0 -127 0
+c 23291 1000 3 0 0 0 0 -127 0
+s 362 23300 commandTime=5ae0 origin[1]=4493fee6 bobCycle=b2 legsAnim=5c damageTimer=0
+c 23304 1000 3 0 0 0 0 -127 0
+p 6
+c 23316 1000 3 0 0 0 0 -127 0
+c 23327 1000 3 0 0 0 0 -127 0
+c 23341 1000 3 0 0 0 0 -127 0
+p 6
+s 363 23350 commandTime=5b2d origin[1]=44937bd0 bobCycle=c8
+c 23354 1000 3 0 0 0 0 -127 0
+c 23366 1000 3 0 0 0 0 -127 0
+c 23377 1000 3 0 0 0 0 -127 0
+p 6
+c 23391 1000 3 0 0 0 0 -127 0
+s 364 23400 commandTime=5b51 origin[1]=44933e86 bobCycle=d2
+c 23403 1000 3 0 0 0 0 -127 0
+c 23416 1000 3 0 0 0 0 -127 0
+p 6
+c 23428 1000 3 0 0 0 0 -127 0
+c 23440 1000 3 0 0 0 0 -127 0
+c 23452 1000 3 0 0 0 0 -127 0
+p 6
+s 365 23450 commandTime=5b9c origin[1]=4492bed7 bobCycle=e6
+c 23464 1000 3 0 0 0 0 -127 0
+c 23477 1000 3 0 0 0 0 -127 0
+c 23489 1000 3 0 0 0 0 -127 0
+p 6
+s 366 23500 commandTime=5bc1 origin[1]=44927fd9 bobCycle=f0
+c 23503 1000 3 0 0 0 0 -127 0
+c 23514 1000 3 0 0 0 0 -127 0
+c 23526 1000 3 0 0 0 0 -127 0
+p 6
+c 23538 1000 3 0 0 0 0 -127 0
+s 367 23550 commandTime=5be6 origin[1]=449240dc bobCycle=fa
+c 23550 1000 3 0 0 0 0 -127 0
+c 23561 1000 3 0 0 0 0 -127 0
+p 6
+c 23574 1000 3 0 0 0 0 -127 0
+c 23587 1000 3 0 0 0 0 -127 0
+c 23600 1000 3 0 0 0 0 -127 0
+p 6
+s 368 23600 commandTime=5c09 origin[1]=44920546 bobCycle=3
+c 23614 1000 3 0 0 0 0 -127 0
+c 23626 1000 3 0 0 0 0 -127 0
+c 23640 1000 3 0 0 0 0 -127 0
+p 6
+s 369 23650 commandTime=5c58 origin[1]=44917ec8 bobCycle=1a aimSpreadScale=40400000 damageTimer=12c flinchYaw=0 damageEvent=19 damageYaw=40 damageCount=3
+c 23653 1000 3 0 0 0 0 -127 0
+c 23664 1000 3 0 0 0 0 -127 0
+c 23676 1000 3 0 0 0 0 -127 0
+p 6
+c 23687 1000 3 0 0 0 0 -127 0
+c 23699 1000 3 0 0 0 0 -127 0
+s 370 23700 commandTime=5c7c origin[1]=4491417e bobCycle=24 legsAnim=218 aimSpreadScale=0 damageTimer=108 damageCount=0
+c 23710 1000 3 0 0 0 0 -127 0
+p 6
+c 23723 1000 3 0 0 0 0 -127 0
+c 23737 1000 3 0 0 0 0 -127 0
+c 23750 1000 3 0 0 0 0 -127 0
+p 6
+s 371 23750 commandTime=5cc6 origin[1]=4490c383 bobCycle=39 damageTimer=be
+c 23762 1000 3 0 0 0 0 -127 0
+c 23780 1000 3 0 0 0 0 -127 0
+c 23792 1000 3 0 0 0 0 -127 0
+p 6
+s 372 23800 commandTime=5cf0 origin[1]=44907c02 bobCycle=44 damageTimer=94
+c 23806 1000 3 0 0 0 0 -127 0
+c 23819 1000 3 0 0 0 0 -127 0
+c 23830 1000 3 0 0 0 0 -127 0
+p 6
+c 23842 1000 3 0 0 0 0 -127 0
+s 373 23850 commandTime=5d16 origin[1]=44903b51 bobCycle=4f damageTimer=6e
+c 23854 1000 3 0 0 0 0 -127 0
+c 23867 1000 3 0 0 0 0 -127 0
+p 6
+c 23881 1000 3 0 0 0 0 -127 0
+c 23892 1000 3 0 0 0 0 -127 0
+s 374 23900 commandTime=5d3b origin[1]=448ffc53 bobCycle=59 damageTimer=49
+c 23905 1000 3 0 0 0 0 -127 0
+p 6
+c 23917 1000 3 0 0 0 0 -127 0
+c 23929 1000 3 0 0 0 0 -127 0
+c 23942 1000 3 0 0 0 0 -127 0
+p 6
+s 375 23950 commandTime=5d86 origin[1]=448f7ca4 bobCycle=6e legsAnim=5c damageTimer=0
+c 23955 0 3 0 0 0 0 0 0
+c 23968 0 3 0 0 0 0 0 0
+c 23981 0 3 0 0 0 0 0 0
+p 6
+c 23993 0 3 0 0 0 0 0 0
+s 376 24000 commandTime=5dad origin[1]=448f4c28 bobCycle=6f velocity[1]=c2000000 legsAnim=27e pm_flags=800080 fWeaponPosFrac=3f670a3c
+c 24007 0 3 0 0 0 0 0 0
+c 24020 0 3 0 0 0 0 0 0
+p 6
+c 24034 0 3 0 0 0 0 0 0
+c 24047 0 3 0 0 0 0 0 0
+s 377 24050 commandTime=5dd4 origin[1]=448f368e velocity[1]=c1200000 legsAnim=99 fWeaponPosFrac=3f4e1479
+c 24059 0 3 0 0 0 0 0 0
+p 6
+c 24071 0 3 0 0 0 0 0 0
+c 24082 0 3 0 0 0 0 0 0
+c 24095 0 3 0 0 0 0 0 0
+p 6
+s 378 24100 commandTime=5e1f origin[1]=448f3586 bobCycle=0 velocity[1]=0 fWeaponPosFrac=3f1e1479
+c 24107 0 3 0 0 0 0 0 0
+c 24119 0 3 0 0 0 0 0 0
+c 24133 0 3 0 0 0 0 0 0
+p 6
+c 24144 0 3 0 0 0 0 0 0
+s 379 24150 commandTime=5e45 fWeaponPosFrac=3f05c28e
+c 24156 0 3 0 0 0 0 0 0
+c 24169 0 3 0 0 0 0 0 0
+p 6
+c 24183 0 3 0 0 0 0 0 0
+c 24196 0 3 0 0 0 0 0 0
+s 380 24200 commandTime=5e69 fWeaponPosFrac=3edd70a1
+c 24208 0 3 0 0 0 0 0 0
+p 6
+c 24220 0 3 0 0 0 0 0 0
+c 24232 0 3 0 0 0 0 0 0
+c 24244 0 3 0 0 0 0 0 0
+p 6
+s 381 24250 commandTime=5eb4 fWeaponPosFrac=3e7ae142
+c 24255 0 3 0 0 0 0 0 0
+c 24267 0 3 0 0 0 0 0 0
+c 24279 0 3 0 0 0 0 0 0
+p 6
+c 24291 0 3 0 0 0 0 0 0
+c 24303 0 3 0 0 0 0 0 0
+s 382 24300 commandTime=5ed7 fWeaponPosFrac=3e2147a8
+c 24315 0 3 0 0 0 0 0 0
+p 6
+c 24328 0 3 0 0 0 0 0 0
+c 24340 0 3 0 0 0 0 0 0
+s 383 24350 commandTime=5efb aimSpreadScale=40400000 fWeaponPosFrac=3d8a3d64 damageTimer=12c flinchYaw=2c damageEvent=1a damageYaw=5f damageCount=3
+c 24354 0 3 0 0 0 0 0 0
+p 6
+c 24366 0 3 0 0 0 0 0 0
+c 24379 0 3 0 0 0 0 0 0
+c 24392 0 3 0 0 0 0 0 0
+p 6
+s 384 24400 commandTime=5f48 aimSpreadScale=0 torsoAnim=f9 fWeaponPosFrac=0 damageTimer=df damageCount=0
+c 24406 0 3 0 0 0 0 0 0
+c 24419 0 3 0 0 0 0 0 0
+c 24430 0 3 0 0 0 0 0 0
+p 6
+c 24443 0 3 0 0 0 0 0 0
+s 385 24450 commandTime=5f6e damageTimer=b9
+c 24456 0 3 0 0 0 0 0 0
+c 24469 0 3 0 0 0 0 0 0
+p 6
+c 24480 0 3 0 0 0 0 0 0
+c 24492 0 3 0 0 0 0 0 0
+s 386 24500 commandTime=5f95 damageTimer=92
+c 24503 0 3 0 0 0 0 0 0
+p 6
+c 24517 0 3 0 0 0 0 0 0
+c 24528 0 3 0 0 0 0 0 0
+c 24541 0 3 0 0 0 0 0 0
+p 6
+s 387 24550 commandTime=5fdd damageTimer=4a
+c 24554 0 3 0 0 0 0 0 0
+c 24567 0 3 0 0 0 0 0 0
+c 24578 0 3 0 0 0 0 0 0
+p 6
+c 24590 0 3 0 0 0 0 0 0
+c 24602 0 3 0 0 0 0 0 0
+s 388 24600 commandTime=6002 damageTimer=25
+c 24615 0 3 0 0 0 0 0 0
+p 6
+c 24628 0 3 0 0 0 0 0 0
+c 24642 0 3 0 0 0 0 0 0
+s 389 24650 commandTime=6027 torsoAnim=200 damageTimer=0
+c 24656 0 3 0 0 0 0 0 0
+p 6
+c 24669 0 3 0 0 0 0 0 0
+c 24682 0 3 0 0 0 0 0 0
+c 24693 0 3 0 0 0 0 0 0
+p 6
+s 390 24700 commandTime=6075
+c 24704 0 3 0 0 0 0 0 0
+c 24716 0 3 0 0 0 0 0 0
+c 24731 0 3 0 0 0 0 0 0
+p 6
+c 24744 0 3 0 0 0 0 0 0
+s 391 24750 commandTime=609b
+c 24757 0 3 0 0 0 0 0 0
+c 24769 0 3 0 0 0 0 0 0
+p 6
+c 24782 0 3 0 0 0 0 0 0
+c 24795 0 3 0 0 0 0 0 0
+s 392 24800 commandTime=60c1
+c 24808 0 3 0 0 0 0 0 0
+p 6
+c 24820 0 3 0 0 0 0 0 0
+c 24834 0 3 0 0 0 0 0 0
+c 24846 0 3 0 0 0 0 0 0
+p 6
+s 393 24850 commandTime=610e
+c 24859 0 3 0 0 0 0 0 0
+c 24872 0 3 0 0 0 0 0 0
+c 24886 0 3 0 0 0 0 0 0
+p 6
+s 394 24900 commandTime=6136
+c 24900 0 3 0 0 0 0 0 0
+c 24911 0 3 0 0 0 0 0 0
+c 24925 0 3 0 0 0 0 0 0
+p 6
+c 24937 0 3 0 0 0 0 0 0
+c 24948 0 3 0 0 0 0 0 0
+s 395 24950 commandTime=615d
+c 24961 0 3 0 0 0 0 0 0
+p 6
+c 24973 0 3 0 0 0 0 0 0
+c 24986 0 3 0 0 0 0 0 0
+c 24999 0 3 0 0 0 0 0 0
+p 6
+s 396 25000 commandTime=61a7
+c 25012 0 3 0 0 0 0 0 0
+c 25024 0 3 0 0 0 0 0 0
+c 25038 0 3 0 0 0 0 0 0
+p 6
+c 25049 0 3 0 0 0 0 0 0
+s 397 25050 commandTime=61ce
+c 25061 0 3 0 0 0 0 0 0
+c 25073 0 3 0 0 0 0 0 0
+p 6
+c 25085 0 3 0 0 0 0 0 0
+c 25098 0 3 0 0 0 0 0 0
+s 398 25100 commandTime=61f1
+c 25111 0 3 0 0 0 0 0 0
+p 6
+c 25124 0 3 0 0 0 0 0 0
+c 25137 0 3 0 0 0 0 0 0
+c 25148 0 3 0 0 0 0 0 0
+p 6
+s 399 25150 commandTime=623c
+c 25160 0 3 0 0 0 0 0 0
+c 25172 0 3 0 0 0 0 0 0
+c 25183 0 3 0 0 0 0 0 0
+p 6
+c 25196 0 3 0 0 0 0 0 0
+s 400 25200 commandTime=625f
+c 25210 0 3 0 0 0 0 0 0
+c 25224 0 3 0 0 0 0 0 0
+p 6
+c 25236 0 3 0 0 0 0 0 0
+c 25250 0 3 0 0 0 0 0 0
+s 401 25250 commandTime=6288
+c 25263 0 3 0 0 0 0 0 0
+p 6
+c 25274 0 3 0 0 0 0 0 0
+c 25286 0 3 0 0 0 0 0 0
+c 25297 0 3 0 0 0 0 0 0
+p 6
+s 402 25300 commandTime=62d1
+c 25309 0 3 0 0 0 0 0 0
+c 25321 0 3 0 0 0 0 0 0
+c 25333 0 3 0 0 0 0 0 0
+p 6
+c 25345 0 3 0 0 0 0 0 0
+s 403 25350 commandTime=62f5
+c 25356 0 3 0 0 0 0 0 0
+c 25368 0 3 0 0 0 0 0 0
+p 6
+c 25381 0 3 0 0 0 0 0 0
+c 25393 0 3 0 0 0 0 0 0
+s 404 25400 commandTime=6318
+c 25404 0 3 0 0 0 0 0 0
+p 6
+c 25416 0 3 0 0 0 0 0 0
+c 25428 0 3 0 0 0 0 0 0
+c 25441 0 3 0 0 0 0 0 0
+p 6
+s 405 25450 commandTime=6361

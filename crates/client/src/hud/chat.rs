@@ -48,7 +48,8 @@ impl Default for Rules {
 impl Rules {
     /// The cvars as their vmCvars' integers; an unset one keeps its default.
     pub fn read<'a>(cvar: impl Fn(&str) -> Option<&'a str>, uo: bool) -> Rules {
-        let int = |name: &str, default: i32| cvar(name).map_or(default, super::vote::atol);
+        let int =
+            |name: &str, default: i32| cvar(name).map_or(default, vcod_common::text::atoi_msvc);
         Rules {
             height: int("cg_chatHeight", CHAT_LINES as i32),
             time_ms: int("cg_chatTime", CHAT_TIME_MS),
@@ -69,7 +70,7 @@ impl Rules {
 /// `cg_teamChatsOnly` drops every `h` before it is localized, heard, kept
 /// or printed, never an `i` (cod11-chat.md 3).
 pub fn takes(team: bool, team_chats_only: Option<&str>) -> bool {
-    team || team_chats_only.is_none_or(|v| super::vote::atol(v) == 0)
+    team || team_chats_only.is_none_or(|v| vcod_common::text::atoi_msvc(v) == 0)
 }
 
 /// The chat ring, newest last, each line with the ms it arrived.
@@ -185,6 +186,96 @@ impl Chat {
             );
         }
     }
+}
+
+impl Chat {
+    /// CoD2's `CG_DrawChatMessages` (Mac 0x1cf0d0; cod2-hud.md 14): the
+    /// newest line's strip at `cg_hudChatPosition`'s y (`pos`, 150 by
+    /// default, truncated) less 10, each older one 10 above, left-aligned
+    /// on the screen. The strip starts at x 0 and takes the colour of the
+    /// line's leading `^N` (white without one) at a quarter; the text,
+    /// codes and all, starts at the position's x truncated (5) in white.
+    pub fn build_cod2(
+        &mut self,
+        fonts: &UiFonts,
+        now_ms: i32,
+        sp: &super::cod2elem::ScreenPlacement,
+        pos: [f32; 2],
+        out: &mut Vec<HudQuad>,
+    ) {
+        let x0 = pos[0].trunc();
+        let y0 = pos[1].trunc();
+        let time = self.rules.time_ms;
+        let cap = self.rules.lines();
+        if cap == 0 {
+            return;
+        }
+        if self.lines.first().is_some_and(|&(_, t)| now_ms - t > time) {
+            self.lines.remove(0);
+        }
+        let screen_h = sp.real_size[1];
+        let font = fonts.pick(Slot::Default, SCALE, screen_h);
+        let k = sp.virtual_to_real[1];
+        for (n, (line, t)) in self.lines.iter().rev().take(cap).enumerate() {
+            let left = time - (now_ms - t);
+            let alpha = if left > FADE_MS {
+                1.0
+            } else {
+                left as f32 / FADE_MS as f32
+            };
+            if alpha <= 0.0 {
+                continue;
+            }
+            let top = y0 - 10.0 * (n as f32 + 1.0);
+            let lead = line
+                .strip_prefix('^')
+                .and_then(|r| r.chars().next())
+                .and_then(|c| c.to_digit(10))
+                .map_or([1.0; 3], |d| {
+                    let c = super::font::COLORS.get(d as usize).unwrap_or(&[1.0; 4]);
+                    [c[0], c[1], c[2]]
+                });
+            let width = text_width(font, line, SCALE).trunc();
+            let (x, w) = sp.axis(0, 0.0, width + 24.0, 1);
+            let (y, h) = sp.axis(1, top, 10.0, 1);
+            out.push(HudQuad {
+                verts: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
+                uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                rgba: [lead[0] * 0.25, lead[1] * 0.25, lead[2] * 0.25, alpha * 0.6],
+                texture: "hudColorBar".into(),
+            });
+            let (tx, _) = sp.axis(0, x0, 0.0, 1);
+            let (ty, _) = sp.axis(1, top + 9.0 - 48.0 * SCALE, 0.0, 1);
+            let px = SCALE / font.unit_scale() * k;
+            super::font::layout(font, line, tx, ty, px, [1.0, 1.0, 1.0, alpha], out);
+        }
+    }
+}
+
+/// CoD2's `Con_DrawSay` (Mac 0x15d074; cod2-hud.md 14): `EXE_SAY: ` or
+/// `EXE_SAYTEAM: ` at `cg_hudSayPosition` (`pos`, (5, 126) by default)
+/// plus 24 down, the typed line after it, font 0 at 0.20833, left- and
+/// top-aligned.
+pub fn field_cod2(
+    field: &super::ChatField,
+    fonts: &UiFonts,
+    loc: &vcod_common::localize::Localized,
+    sp: &super::cod2elem::ScreenPlacement,
+    pos: [f32; 2],
+    out: &mut Vec<HudQuad>,
+) {
+    let key = if field.team { "EXE_SAYTEAM" } else { "EXE_SAY" };
+    let label = format!("{}: ", loc.get(key).unwrap_or(key));
+    let font = fonts.pick(Slot::Default, SCALE, sp.real_size[1]);
+    let k = sp.virtual_to_real[1];
+    let px = SCALE / font.unit_scale() * k;
+    let (y, _) = sp.axis(1, pos[1] + 24.0, 0.0, 1);
+    let white = [1.0; 4];
+    let (x, _) = sp.axis(0, pos[0], 0.0, 1);
+    super::font::layout(font, &label, x, y, px, white, out);
+    let lw = text_width(font, &label, SCALE).trunc();
+    let (x, _) = sp.axis(0, pos[0] + lw, 0.0, 1);
+    super::font::layout(font, &format!("{}_", field.text), x, y, px, white, out);
 }
 
 /// The chat field while `messagemode` is open (CoDMP.exe 0x409d80, from

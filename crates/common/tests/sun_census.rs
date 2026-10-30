@@ -7,7 +7,7 @@ use vcod_common::{assets, bsp, pk3::Pk3Fs, shader::ShaderLib, sun};
 /// `(map, sky, disc sprite, flare image)` per stock MP map; `None` where
 /// retail draws none.
 fn census(fs: &Pk3Fs) -> Vec<(String, String, Option<String>, Option<String>)> {
-    let lib = ShaderLib::load(fs);
+    let lib = ShaderLib::load(fs).materials();
     let mut maps: Vec<String> = fs
         .find_maps()
         .into_iter()
@@ -131,7 +131,7 @@ fn carentan_spawns_walk_to_the_sky() {
         return;
     };
     let b = bsp::parse(&fs.read("maps/mp/mp_carentan.bsp").unwrap()).unwrap();
-    let lib = ShaderLib::load(&fs);
+    let lib = ShaderLib::load(&fs).materials();
     let kinds = sun::material_kinds(&lib, &b);
     let world = vcod_common::vis::WorldVis::build(&b);
     let sky: Vec<usize> = (0..b.models[0].num_soups as usize)

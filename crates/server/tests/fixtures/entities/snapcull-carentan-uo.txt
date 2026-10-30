@@ -1,4 +1,4 @@
-# Retail United Offensive 1.51b, 2026-10-20, run on this machine:
+# Retail United Offensive 1.51b, 2026-10-20, run locally:
 #   COD_VERSION=uo SECS=60 tools/run_probe.sh client-probes/probe_snapcull mp_carentan
 #   viewer:  vcod --game-dir <UO install> --mod-dir uo --net-probe <addr> --probe-compass --probe-team allies --probe-secs 45
 #   subject, 2 s later: vcod --game-dir <UO install> --mod-dir uo --net-probe <addr> --probe-edge watch --probe-secs 43

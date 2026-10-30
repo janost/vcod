@@ -20,6 +20,9 @@ pub enum BinOp {
     BitAnd,
     BitOr,
     BitXor,
+    /// CoD4's `<<` and `>>`. Integer only.
+    Shl,
+    Shr,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -148,6 +151,9 @@ pub enum StmtKind {
     Continue,
     /// `wait <expr>;`, seconds.
     Wait(Expr),
+    /// `waittillframeend;`, CoD2 only: resumes after every thread due this
+    /// frame (cod2-gsc-diff.md 3.2).
+    WaitTillFrameEnd,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -158,8 +164,16 @@ pub struct FuncDef {
     pub line: u32,
 }
 
+/// `#include path;`, CoD2 only. `path` is canonical (`crate::canonical`).
+#[derive(Clone, PartialEq, Debug)]
+pub struct Include {
+    pub path: String,
+    pub line: u32,
+}
+
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct File {
     pub animtrees: Vec<String>,
+    pub includes: Vec<Include>,
     pub funcs: Vec<FuncDef>,
 }

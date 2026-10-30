@@ -336,7 +336,7 @@ pub fn rider_damage(
 /// then their aliases ahead of every other alias of the level. United
 /// Offensive only.
 pub fn load_level(host: &mut GameHost) {
-    if host.defs.proto.version != vcod_common::net::protocol::PROTOCOL_V22.version {
+    if !host.defs.proto.is_uo() {
         return;
     }
     let Some(fs) = host.fs.clone() else {
@@ -346,6 +346,8 @@ pub fn load_level(host: &mut GameHost) {
     infos.register_sounds(|alias| sound_alias(host, alias));
     host.vehicles = Vehicles {
         infos,
+        // A restart's, carried (`ModelCaches`).
+        rigs: std::mem::take(&mut host.vehicles.rigs),
         ..Vehicles::default()
     };
 }
@@ -401,13 +403,13 @@ pub fn spawn(
     spawn_vars: Vec<(String, String)>,
     loading: bool,
 ) -> Result<(), ErrorKind> {
-    let has_delay = spawn_vars
-        .iter()
-        .any(|(k, _)| k.eq_ignore_ascii_case("delay"));
-    if !has_delay {
-        let burn = crate::game::builtins::cvar::atof(host.cvars.get("g_vehicleBurnTime"));
-        set_field(host, cx, id, "delay", Value::Float(burn));
-    }
+    // `SP_script_vehicle`'s `G_SpawnFloat("delay", g_vehicleBurnTime)`
+    // (game.mp.uo 0x9dec6): the first `strcmp` copy over the field pass's.
+    let delay = match vcod_common::bsp::spawn_string(&spawn_vars, "delay") {
+        Some(v) => crate::game::builtins::cvar::atof(v),
+        None => crate::game::builtins::cvar::atof(host.cvars.get("g_vehicleBurnTime")),
+    };
+    set_field(host, cx, id, "delay", Value::Float(delay));
     let vehicletype = field_string(host, cx, id, "vehicletype");
     let Some(slot) = host.vehicles.slots.iter().position(Option::is_none) else {
         log::error!("Hit max vehicle count [{MAX_VEHICLES}]");
@@ -419,10 +421,8 @@ pub fn spawn(
         return Ok(());
     };
     let info = host.vehicles.infos.list[info_index].clone();
-    let spawnflags = spawn_vars
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("spawnflags"))
-        .map_or(0, |(_, v)| crate::game::builtins::cvar::atoi(v));
+    let spawnflags = vcod_common::bsp::field_value(&spawn_vars, "spawnflags")
+        .map_or(0, crate::game::builtins::cvar::atoi);
     let weapons = [
         weapon_index(host, &info.turret_weapon),
         weapon_index(host, &info.turret_alt_weapon),
@@ -594,7 +594,7 @@ fn vehicle_model(host: &mut GameHost, model: &str) -> physics::VehicleModel {
     };
     let name = model.replace('\\', "/");
     let name = name.trim_start_matches("xmodel/");
-    match vcod_common::xmodel::load_bones(&fs, name) {
+    match vcod_common::model::load_bones(&*fs, name) {
         Ok(bones) => physics::VehicleModel::from_bones(&bones),
         Err(e) => {
             log::warn!("vehicle model {name}: {e}");
@@ -639,8 +639,8 @@ pub fn placed_models(host: &mut GameHost, cx: &mut Cx) -> Vec<crate::game::comba
             id,
             origin: posed.origin,
             axis: glam::Mat3::from_quat(posed.rot),
-            tris: std::rc::Rc::from(tris),
-            surfs: std::rc::Rc::from(surfs),
+            tris: std::sync::Arc::from(tris),
+            surfs: std::sync::Arc::from(surfs),
             owner,
             takes_damage: true,
             body: false,

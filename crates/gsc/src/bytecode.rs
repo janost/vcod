@@ -15,13 +15,22 @@ pub enum Op {
     StoreField(Atom),
     /// Pops the key then the object.
     LoadIndex,
-    /// Pops the value, the key, then the object.
+    /// Pops the value, the key, then the object. An undefined value is
+    /// kept as a key `.size` counts (`probe_undef_call_into_unset`).
     StoreIndex,
+    /// `x[k] = undefined` with the literal: pops the key then the object,
+    /// which must already be an array, and removes the key
+    /// (`probe_array_undef`, `probe_undef_into_unset`).
+    ClearIndex,
     /// Auto-vivifying counterpart to `LoadLocal` for an index-assignment
     /// target: an `Undefined` local becomes a new empty array, written back
     /// to the slot; an existing array is left alone; anything else is a
     /// `BadType` error. Either way pushes the array.
     EnsureArrayLocal(u16),
+    /// Pushes a local as `LoadLocal` does, a shared array in it copied
+    /// first (`Heap::own`) and written back: the local under
+    /// `a[k] = undefined`, which does not vivify.
+    OwnLocal(u16),
     /// Pops the object (struct or entity); same auto-vivification as
     /// `EnsureArrayLocal`, but writes the new array back to the field.
     EnsureArrayField(Atom),
@@ -56,6 +65,19 @@ pub enum Op {
     Sub,
     Mul,
     Div,
+    /// CoD2's `/`: two ints divide as floats (`Scr_EvalDivide`, Mac
+    /// 0x9012c).
+    DivFloat,
+    /// CoD2's `*`: numbers only, so a vector operand is an error
+    /// (`Scr_EvalMultiply`, lnxded 0x807e290).
+    MulNumber,
+    /// CoD4's `*` and `/`: a number against a vector is cast up to one
+    /// (`Scr_CastWeakerPair`) and the pair works per component; two ints
+    /// divide as floats (`Scr_EvalMultiply`, `Scr_EvalDivide`;
+    /// the stock scripts scale vectors both ways, `_helicopter.gsc` 393,
+    /// `_hardpoints.gsc` 287).
+    MulVector,
+    DivVector,
     Mod,
     Neg,
     Not,
@@ -63,6 +85,9 @@ pub enum Op {
     BitAnd,
     BitOr,
     BitXor,
+    /// CoD4's `<<` and `>>`, integer only.
+    Shl,
+    Shr,
     Eq,
     Ne,
     Lt,
@@ -81,10 +106,18 @@ pub enum Op {
     ReturnUndef,
     /// Pops seconds.
     Wait,
+    /// CoD2's `waittillframeend`: suspends behind every thread due this
+    /// frame. No operand.
+    WaitTillFrameEnd,
     /// Pops the receiver and the event name; binds the extra notify
     /// arguments into `binds` in order.
     WaitTill {
         binds: Box<[u16]>,
+    },
+    /// CoD4's `waittillmatch`: pops the receiver, the event name and
+    /// `argc` values the notify's first arguments must equal, in order.
+    WaitTillMatch {
+        argc: u8,
     },
     /// Pops the receiver, the event name and `argc` extra values.
     Notify {
@@ -135,19 +168,27 @@ pub(crate) fn stack_effect(op: &Op) -> (i32, i32) {
         | Op::CastFloat
         | Op::CastVector
         | Op::EnsureArrayField(_) => (1, 1),
-        Op::EnsureArrayLocal(_) => (0, 1),
+        Op::EnsureArrayLocal(_) | Op::OwnLocal(_) => (0, 1),
+        Op::WaitTillFrameEnd => (0, 0),
         Op::StoreField(_) => (2, 0),
         Op::LoadIndex | Op::EnsureArrayIndex => (2, 1),
+        Op::ClearIndex => (2, 0),
         Op::StoreIndex => (3, 0),
         Op::MakeVector => (3, 1),
         Op::Add
         | Op::Sub
         | Op::Mul
         | Op::Div
+        | Op::DivFloat
+        | Op::MulNumber
+        | Op::MulVector
+        | Op::DivVector
         | Op::Mod
         | Op::BitAnd
         | Op::BitOr
         | Op::BitXor
+        | Op::Shl
+        | Op::Shr
         | Op::Eq
         | Op::Ne
         | Op::Lt
@@ -162,7 +203,7 @@ pub(crate) fn stack_effect(op: &Op) -> (i32, i32) {
         Op::CallPtr { argc, has_recv, .. } => (i32::from(*argc) + i32::from(*has_recv) + 1, 1),
         Op::Jump(_) | Op::ReturnUndef => (0, 0),
         Op::WaitTill { .. } | Op::EndOn => (2, 0),
-        Op::Notify { argc } => (2 + i32::from(*argc), 0),
+        Op::Notify { argc } | Op::WaitTillMatch { argc } => (2 + i32::from(*argc), 0),
     }
 }
 

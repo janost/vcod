@@ -4,7 +4,44 @@
 pub mod artillery;
 pub mod bodies;
 pub mod builtins;
+pub mod cod2;
+#[cfg(test)]
+mod cod2_antilag_ab;
+pub mod cod2_archive;
+pub mod cod2_blast;
+#[cfg(test)]
+mod cod2_boot;
+pub mod cod2_cmds;
+pub mod cod2_combat;
+#[cfg(test)]
+mod cod2_combat_ab;
+pub mod cod2_corpse;
+#[cfg(test)]
+mod cod2_fight;
+#[cfg(test)]
+mod cod2_gametypes;
+#[cfg(test)]
+mod cod2_gaps;
+#[cfg(test)]
+mod cod2_hitpose_ab;
+pub mod cod2_identify;
+pub mod cod2_items;
+#[cfg(test)]
+mod cod2_killcam_ab;
+#[cfg(test)]
+mod cod2_ladder;
+pub mod cod2_objectives;
+#[cfg(test)]
+mod cod2_pickup_ab;
+pub mod cod2_turret;
+#[cfg(test)]
+mod cod2_turret_ab;
+pub mod cod2_use;
+pub mod cod2_wire;
+pub mod cod4;
 pub mod combat;
+pub mod commands;
+pub mod corpse;
 pub mod damage_trigger;
 pub mod entity;
 pub mod fields;
@@ -15,6 +52,7 @@ pub mod link;
 pub mod missile;
 pub mod mover;
 pub mod pickup;
+pub mod profile;
 pub mod say;
 pub mod scoreboard;
 pub mod script;
@@ -50,6 +88,9 @@ pub mod testing {
 
     /// A VM and a host with an empty object table, for the game module's tests.
     pub fn fixture() -> (Vm, GameHost) {
-        (Vm::new(), GameHost::new(vec![String::new(); 2048]))
+        (
+            Vm::new(),
+            GameHost::new(&crate::game::profile::COD1_11, vec![String::new(); 2048]),
+        )
     }
 }

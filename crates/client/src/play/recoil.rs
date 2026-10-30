@@ -78,15 +78,23 @@ impl Recoil {
     /// other way, from the sight's ranges only at a full `frac`. The gun's
     /// speed is added to, from the sight's ranges at any `frac` above 0.
     pub fn fire(&mut self, def: &WeaponDef, frac: f32) {
+        self.fire_scaled(def, frac, 1.0);
+    }
+
+    /// [`Self::fire`] with every draw times `scale`: CoD2's
+    /// `BG_WeaponFireRecoil` (Mac 0x7b298) cuts both kicks to the
+    /// `*GunKickReducedKickPercent` while `weaponRestrictKickTime` runs
+    /// (docs/research/cod2-weapons.md, "The recoil").
+    pub fn fire_scaled(&mut self, def: &WeaponDef, frac: f32, scale: f32) {
         let a = &def.aim;
         let ads = usize::from(frac == 1.0);
         let pitch = self.draw(a.view_kick_pitch[ads]);
         let yaw = self.draw(a.view_kick_yaw[ads]);
-        self.speed = [-pitch, yaw, yaw * -0.5];
+        self.speed = [-(pitch * scale), yaw * scale, yaw * scale * -0.5];
         let ads = usize::from(frac > 0.0);
         let gun_pitch = self.draw(a.gun_kick_pitch[ads]);
         let gun_yaw = self.draw(a.gun_kick_yaw[ads]);
-        self.gun.kick(gun_pitch, gun_yaw);
+        self.gun.kick(gun_pitch * scale, gun_yaw * scale);
     }
 
     fn draw(&mut self, [min, max]: [f32; 2]) -> f32 {

@@ -2497,20 +2497,47 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "clap",
+ "cpal",
  "ctrlc",
  "env_logger",
  "glam",
+ "image",
  "jiff",
  "kira",
+ "libloading",
  "log",
  "pollster",
  "symphonia",
  "tempfile",
+ "vcod-cod2",
+ "vcod-cod4",
  "vcod-common",
  "vcod-server",
  "wgpu",
  "winit",
  "zip",
+]
+
+[[package]]
+name = "vcod-cod2"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "glam",
+ "log",
+ "tempfile",
+ "vcod-common",
+]
+
+[[package]]
+name = "vcod-cod4"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "glam",
+ "log",
+ "vcod-common",
 ]
 
 [[package]]
@@ -2547,6 +2574,8 @@ dependencies = [
  "env_logger",
  "glam",
  "log",
+ "vcod-cod2",
+ "vcod-cod4",
  "vcod-common",
  "vcod-gsc",
 ]

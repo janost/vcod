@@ -21,7 +21,7 @@ All binaries are from the 1.1 install unless stated otherwise.
 | `pak0.pk3` | | `weapons/mp/*` weapon defs, `ui/assets/reticle_q.tga` |
 | `pak4.pk3` | | `scripts/ui_hud.shader`, `scripts/hud.shader` |
 | `cgame_mp_x86.dll` from the 1.5 install | `075e2af18aeaf2aeaf2a75ce22db683a` | 1.5 diff (icon names unchanged) |
-| live: `51.195.89.86:28960`, mp_carentan TDM, 2026-08-24 | | `serverCommand` stream, gamestate |
+| live: a public TDM server, mp_carentan, 2026-08-24 | | `serverCommand` stream, gamestate |
 
 Addresses are virtual: image base `0x30000000` for the cgame DLL, `0x00400000`
 for `CoDMP.exe`, file-relative for the Linux `.so`. The cgame DLL and
@@ -75,7 +75,7 @@ serverCommand 5: v g_scriptMainMenu "team_americangerman"
 serverCommand 8: t 0
 serverCommand 13: d 5 118
 serverCommand 14: d 6 131
-serverCommand 29: i "^1Revive:^7 Join our Discord server Cod1.net/^6Discord"
+serverCommand 29: i "^1Server:^7 <advert text>"
 ```
 
 `d` carries the new configstring text as argv[1]; the cgame handler ignores it
@@ -191,7 +191,7 @@ The handler's first three reads are the ints at entityState offsets `0x74`,
 `"CG_Obituary: target out of range"` (`0x30020750`) when it fails, which names
 `+0x74` as the victim:
 
-| entityState offset | Q3/CoD field | vcod netfield (`crates/common/src/net/fields_v1.rs`) | bits | Carries |
+| entityState offset | Q3/CoD field | vcod netfield (`crates/common/src/net/cod1/fields_v1.rs`) | bits | Carries |
 |---|---|---|---|---|
 | 116 (`0x74`) | `otherEntityNum` | `otherEntityNum` | 10 | victim clientNum (0..63) |
 | 120 (`0x78`) | `otherEntityNum2` | `attackerEntityNum` | 10 | attacker clientNum, or `1022` |
@@ -836,7 +836,7 @@ init path `0x3002c060`.
 | 1244+ | `G_LocalizedStringIndex` | localized strings; hudelem strings are `1244 + n` | |
 | 1500+ | `G_ShaderIndex` | materials | |
 
-This agrees with the block map in `crates/common/src/net/protocol.rs`, which
+This agrees with the block map in `crates/common/src/net/cod1/mod.rs`, which
 was built from a live gamestate dump on 2026-08-23. The live probe on
 2026-08-24 reported `354 configstrings` set on mp_carentan, and `d 5 <n>` /
 `d 6 <n>` arrived continuously during the TDM round with both counters
@@ -890,7 +890,7 @@ CS 5 then CS 6.
 
 ### Header vs. scoreboard totals can disagree in the same frame
 
-A live capture (2026-08-24, `51.195.89.86` mp_chateau) caught the status
+A live capture (2026-08-24, a public TDM server, mp_chateau) caught the status
 header, read straight off CS 5/6, showing `219 tdm 214` while the same
 frame's `b` reply carried axis 221 / allies 231. Both configstrings and the
 `b` reply are legitimate wire values. A `d` update for 5/6 and the server's
@@ -2510,7 +2510,7 @@ and the same 128/32/64/2000 defaults.
   value, as RTCW's `Item_Text_Paint` does. INFERRED (lineage).
 - Every item of stock `hud.menu` is an owner draw, which vcod draws
   natively (above). VERIFIED (`pak0.pk3`). A mod's replacement adds plain
-  items: `zzz_zfunmod.pk3` (167.235.192.175:23120, 2026-10-09) adds menus
+  items: `zzz_zfunmod.pk3` (a public server, 2026-10-09) adds menus
   `fm_corners` and `fm_announce` whose `type 1` items read `scr_fm_tl_d`,
   `scr_fm_bl_d`, `scr_fm_mk` and the like, which the server sets per
   client with `v` (seen live: `v scr_fm_tl_d "^3King of the Day: ..."`).

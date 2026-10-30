@@ -125,8 +125,8 @@ fn placespawnpoint_on_15_matches_retail_to_the_bit() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    let v6 = vcod_common::net::protocol::PROTOCOL_V6.version;
-    if vcod_server::server::install_protocol(&fs).version == v6 {
+    let v6 = vcod_common::net::protocol::PROTOCOL_V6.transport.version;
+    if vcod_server::server::install_protocol(&fs).transport.version == v6 {
         check_bits(fs, "1.5b", 16);
     }
 }

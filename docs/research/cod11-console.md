@@ -325,3 +325,41 @@ main loop polls for `print` packets in every mode, the main menu
 included. A `rconAddress` that does not resolve sends nothing, where
 retail's `NET_StringToAdr` leaves a bad address that sends nothing either
 (INFERRED from Q3's `NET_SendPacket`, which drops `NA_BAD`).
+
+CoD2 1.3 and CoD4 1.7 have neither cvar nor the not-connected string:
+their `CL_Rcon_f` logs in (`rcon login`, `rcon host`). VERIFIED
+(cod2-protocol.md 1.6, cod4-handshake.md 14.2). vcod runs theirs on
+those games (`Session::login_rcon`).
+
+## 8. vcod's config stamp
+
+`vcod_mp.cfg` archives every `CVAR_ARCHIVE` cvar at its value, so a
+value written while vcod's default was something else outlives the
+change: an install vcod ran on before kept `r_aaSamples 4` after the
+default became retail's 1 (cod11-client-perf.md 4, cod4-client-perf.md
+19), and CoD2 kept `r_vc_depthprepass 0` from the opt-in builds
+(cod2-client-perf.md 12, now unarchived and its line dropped).
+
+vcod writes `vc_cfgVersion`, an archived cvar of its own, into the
+config (`console::shell::CONFIG_VERSION`). A config whose first line is
+vcod's header and that has no stamp reads as stamp 0; any other file,
+1.7's `config_mp.cfg` included, reads as this build's and nothing in it
+is reset. Once the config ran and the late cvars registered
+(`r_aaSamples`, CoD2's and CoD4's options), `Shell::upgrade_config`
+puts each `STALE_DEFAULTS` row past the stamp back to the cvar's current
+default when the cvar holds that row's old value, then writes the
+config with the stamp moved. A value the player picked stays, and so
+does one set again after the upgrade.
+
+| Stamp | Cvar | Old vcod default | Games | Now |
+|---|---|---|---|---|
+| 1 | `r_aaSamples` | 4 (CoD1 and UO until 68d97193, CoD4 until 36372025) | CoD1, CoD4 | 1 |
+| 1 | `name` | `vcod` (until f5635f70) | all | `Unknown Soldier` |
+
+The rows are vcod's own defaults. An old default that was retail's
+has no row: `com_maxfps` 85 (vcod's for a day, then 0), `rate` 5000
+(then 25000), `r_picmip` 1, `r_picmip2` 2 and `r_swapInterval` 0 (then
+0, 0 and 1). The audit took every archived cvar in `console/shell.rs`
+and each default `git log` shows it registered with; nothing else in
+the client registers an archived cvar. A default change to an archived
+cvar adds a row and bumps `CONFIG_VERSION`.

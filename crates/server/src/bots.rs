@@ -8,7 +8,10 @@
 //! [`BotView`] the server fills. Everything wire- and VM-shaped stays in
 //! `server.rs`.
 
+pub mod cod2;
+pub mod cod4;
 pub(crate) mod cover;
+pub(crate) mod driver;
 pub(crate) mod hunt;
 
 use crate::server::FRAME_MS;
@@ -307,6 +310,14 @@ pub struct BotView {
     /// [`FLEE_REACH`] across and [`FLEE_HEIGHT`] up or down, anyone's own
     /// included: the bot runs from it.
     pub frag_near: Option<[f32; 3]>,
+    /// A post the game sends the bot to, walked to over the graph ahead
+    /// of a chase: CoD4's mounted gun a bot is making for
+    /// (`bots::cod4::gun`). Never set on CoD1 or CoD2.
+    pub post: Option<[f32; 3]>,
+    /// A spot a step away from a teammate held up behind this bot, who is
+    /// planning round it (`bots::driver`'s `give_way`): the bot makes
+    /// room, whatever post it holds. Never set on CoD1 or CoD2.
+    pub give_way: Option<[f32; 3]>,
     /// A lob at [`Self::enemy`] whose flight meets no wall or body short of
     /// most of the range, as (pitch, yaw) wire degrees (`Server::lob_probe`):
     /// a UO frag bounces off both at full speed, back at the thrower. Filled
@@ -327,7 +338,8 @@ pub struct BotView {
     pub drop_ahead: [Option<f32>; 8],
     /// Per octant, a wall the standing body pins on at once that way
     /// (`nav::wall_ahead`), which the drop probe reads as no drop; all
-    /// clear off the ground. A wander heading takes one last.
+    /// clear off the ground, and on a tick the brain cannot pick a
+    /// heading ([`Bot::reads_walls`]). A wander heading takes one last.
     pub wall_ahead: [bool; 8],
     /// The loudest gunfire or blast another player made last tick within
     /// earshot ([`loudest`]), chest high.
@@ -346,6 +358,10 @@ pub struct BotView {
     pub on_ladder: bool,
     /// `ps.ladder_normal`: a climb faces into it (`nav::climb_yaw`).
     pub ladder_normal: [f32; 3],
+    /// The game's ladder takes no flat move into the face (CoD2's
+    /// `PM_LadderMove`): the rungs let go only past their top, so a head
+    /// across the face is climbed on to whatever its distance across.
+    pub tops_out: bool,
     /// On a ladder, the middle of the rungs level with the body
     /// (`nav::NavGraph::ladder_middle`): a climb strafes toward it.
     pub ladder_middle: Option<[f32; 2]>,
@@ -372,6 +388,10 @@ pub struct BotView {
     /// [`Self::waypoint`] lies more than [`BACK_DOWN_HEIGHT`] down a drop
     /// a run off arrives at (`nav::Follower::running_off`): run, don't back.
     pub run_off: bool,
+    /// The edge under way is a CoD2 mantle (`nav::Follower::mantling`):
+    /// pmove offers the climb only to a view on the wall
+    /// (bot-combat.md 17.1), so no look turns it away.
+    pub mantle: bool,
     /// The held weapon's `moveSpeedScale`: a bot following its path on the
     /// ground runs at the graph's pace, not the weapon's (`Bot::think`).
     pub move_scale: f32,
@@ -519,6 +539,22 @@ pub struct SdView {
     /// A teammate planting nearby ([`team::cover`]): the bot guards him
     /// rather than make for its own site.
     pub cover: Option<[f32; 3]>,
+    /// A bomb one bot carries and only its carrier plants with (CoD4's
+    /// key object); `None` where every attacker plants (CoD1, CoD2).
+    pub key: Option<KeyBomb>,
+}
+
+/// CoD4's carried bomb (`_gameobjects.gsc` `setKeyObject`,
+/// docs/research/bot-objectives.md 12).
+#[derive(Clone, Copy, Debug)]
+pub struct KeyBomb {
+    /// Where the bomb lies, for the one bot that walks into it to take it.
+    pub fetch: Option<[f32; 3]>,
+    /// The bot carries it: the rest of its team guard the site.
+    pub mine: bool,
+    /// How long a plant and a defuse hold use.
+    pub plant_ticks: u32,
+    pub defuse_ticks: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -602,6 +638,9 @@ pub struct DomFlagView {
     /// The bot's team holds it; neutral and the other team's are taken by
     /// standing in the zone with no enemy in it.
     pub ours: bool,
+    /// Both teams stand in it, so its capture is held: what the stalled
+    /// bar tells a player in it (CoD4's `numTouching`; never set on UO).
+    pub contested: bool,
 }
 
 /// Headquarters: the radio on show.
@@ -616,8 +655,15 @@ pub struct HqView {
 #[derive(Clone, Copy, Debug)]
 pub struct HqRadioView {
     pub at: [f32; 3],
-    /// How near across a body has to stand; 50 up or down as well.
+    /// How near across a body has to stand.
     pub radius: f32,
+    /// How far up or down (`level.zradioradius`: [`RADIO_HEIGHT`] on
+    /// United Offensive, [`RADIO_HEIGHT_COD2`] on CoD2).
+    pub height: f32,
+    /// Where the bot walks to take it: the radio itself on United
+    /// Offensive, a graph node inside the capture reach on CoD2
+    /// (`NavGraph::radio_stand`).
+    pub stand: [f32; 3],
     /// The bot's team holds it; neutral or not, anyone else's is stood at
     /// (the capture, or the neutralize).
     pub ours: bool,
@@ -996,6 +1042,10 @@ pub struct Bot {
     /// The last think's objective had the bot stand: a plant or defuse
     /// under way, or at its objective's spot ([`BotBody::on_objective`]).
     on_objective: bool,
+    /// The point goal whose plan the follower walked out this tick, set
+    /// by the driver where the game gives up goals no body reaches
+    /// (`BotWorld::GIVES_UP_GOALS`); `None` elsewhere.
+    pub(crate) arrived_goal: Option<[f32; 3]>,
     /// The last think's view was set by a fight, a hurt look, a cover
     /// peek, a recalled spot or a retreat, not the walk: the walking
     /// view takes the path's heading at once ([`Bot::walk_turn`]).
@@ -1027,6 +1077,10 @@ pub struct Bot {
     grenade_cooldown: u32,
     respawn_ticks: u32,
     stage: Stage,
+    /// Ticks a throw's stage has asked for a weapon that is not in hand
+    /// with the weapon machine idle: a switch that never lands
+    /// ([`SWITCH_IDLE_TICKS`]).
+    switch_idle: u32,
     /// The weapon a grenade throw hands back to.
     rifle: u8,
     /// The last weapon `ps.weapon` held, which the cmd keeps asking for
@@ -1191,6 +1245,17 @@ struct Objective {
     /// settled view picked a weapon lying by the charge instead of its
     /// trigger; while set it closes in to [`DEFUSE_CLOSE`].
     close_in: u32,
+    /// The far side of a contested zone the bot stands in, walked to
+    /// before it settles again ([`Bot::sweep_contested`]).
+    sweep: Option<[f32; 3]>,
+    /// The objective's point the follower walked out its plan to with the
+    /// objective not reached, the nearest the body has come to it since
+    /// and the ticks since it last came [`SHORT_GAIN`] nearer
+    /// ([`Bot::track_reach`]).
+    short: Option<([f32; 3], f32, u32)>,
+    /// An objective's point given up on and the ticks left: the objective
+    /// there reads as a guard round it ([`Bot::objective_target`]).
+    shy: Option<([f32; 3], u32)>,
 }
 
 /// What the objective wants of the bot right now.
@@ -1213,11 +1278,13 @@ enum ObjTarget {
     /// Stand inside a zone until the script hands it over: a domination
     /// flag, or a capture goal waiting on the carrier's own flag.
     Occupy(SiteView),
-    /// Stand within `radius` across and [`RADIO_HEIGHT`] up or down of a
-    /// headquarters radio.
+    /// Stand within `radius` across and `height` up or down of a
+    /// headquarters radio, walking to `stand`.
     Radio {
         at: [f32; 3],
         radius: f32,
+        height: f32,
+        stand: [f32; 3],
     },
     /// Aim at a retrieval objective's pickup trigger, `aim`, and tap use,
     /// standing within reach of `from`.
@@ -1257,6 +1324,15 @@ const DEFUSE_CLOSE: f32 = 16.0;
 /// goes ahead whatever it takes.
 const DEFUSE_CLOSE_TICKS: u32 = 100;
 const GUARD_RADIUS: f32 = 250.0;
+/// Ticks a bot that walked out its plan to an objective's point may go
+/// without coming [`SHORT_GAIN`] nearer it before it gives the point up
+/// ([`Bot::track_reach`]).
+const SHORT_TICKS: u32 = 60;
+const SHORT_GAIN: f32 = 16.0;
+/// Ticks a point given up on reads as a guard round it.
+const SHY_TICKS: u32 = 300;
+/// How near a target's point must stand to the one given up on to be it.
+const SHY_SAME: f32 = 32.0;
 /// A guard ring is at least this wide.
 const GUARD_BAND: f32 = 150.0;
 /// An attacker steps off the bomb it planted: a body on the line from a
@@ -1285,8 +1361,11 @@ const SETTLE_DEG: f32 = 1.0;
 const PLANT_PITCH: f32 = -60.0;
 /// `level.zradioradius` (`hq.gsc` 186): how far up or down of a radio a
 /// body still counts; the bot stands this far inside both reaches.
-const RADIO_HEIGHT: f32 = 50.0;
-const RADIO_MARGIN: f32 = 16.0;
+pub(crate) const RADIO_HEIGHT: f32 = 50.0;
+/// CoD2's `level.zradioradius` (`hq.gsc` 214, iw_15.iwd): 72, and
+/// `level.radioradius` 120 is a distance in three dimensions (1255).
+pub(crate) const RADIO_HEIGHT_COD2: f32 = 72.0;
+pub(crate) const RADIO_MARGIN: f32 = 16.0;
 /// `scr_bas_planttime` 15 s and `scr_bas_defusetime` 10 s, a half second
 /// over; the hold aborts past 155 units from the objective model.
 const BAS_PLANT_TICKS: u32 = 310;
@@ -1400,6 +1479,7 @@ impl Bot {
             sprint_leg: false,
             walking: false,
             on_objective: false,
+            arrived_goal: None,
             view_owned: false,
             rungs_ago: u32::MAX,
             rung_spell: false,
@@ -1421,6 +1501,7 @@ impl Bot {
             tapped: None,
             fetch: None,
             stage: Stage::Wander,
+            switch_idle: 0,
             rifle: 0,
             armed: 0,
             switch_to: None,
@@ -1557,6 +1638,17 @@ impl Bot {
         Some(pick.to_string())
     }
 
+    /// The weapon menu and the weapon the bot answers it with, once picked.
+    pub(crate) fn loadout(&self) -> Option<(&str, &'static str)> {
+        self.loadout.as_ref().map(|(m, w)| (m.as_str(), *w))
+    }
+
+    /// The weapon the menu `menu` is answered with from now on, if it
+    /// offers it and the cvars allow it.
+    pub(crate) fn set_loadout(&mut self, menu: &str, weapon: &'static str) {
+        self.loadout = Some((menu.to_string(), weapon));
+    }
+
     /// A new gamestate reruns `ClientConnect` and reopens the menus under the
     /// indices the last one used; without the clear the bot never spawns
     /// again (the same rejoin the probes learned).
@@ -1594,6 +1686,9 @@ impl Bot {
         if self.objective_busy(view) {
             return Goal::Hold;
         }
+        if let Some(p) = view.give_way {
+            return Goal::To(p);
+        }
         if let Some(p) = self.forced {
             return Goal::To(p);
         }
@@ -1628,6 +1723,9 @@ impl Bot {
             return g;
         }
         if let Some(p) = self.recall_goal(view) {
+            return Goal::To(p);
+        }
+        if let Some(p) = view.post {
             return Goal::To(p);
         }
         Goal::Roam
@@ -1686,8 +1784,75 @@ impl Bot {
         self.obj.held > 0 || view.linked
     }
 
-    /// The objective this tick, from the bot's role and the round's state.
+    /// The objective this tick, from the bot's role and the round's state:
+    /// [`Self::objective_wanted`], or a guard round its point while that
+    /// point is given up on ([`Bot::track_reach`]).
     fn objective_target(&self, view: &BotView) -> Option<ObjTarget> {
+        let t = self.objective_wanted(view)?;
+        match (self.obj.shy, Self::target_point(&t)) {
+            (Some((at, _)), Some(p)) if dist_sq(at, p) < SHY_SAME * SHY_SAME => {
+                Some(ObjTarget::Guard { at: p, inner: 0.0 })
+            }
+            _ => Some(t),
+        }
+    }
+
+    /// The point a target's walk heads for when the bot may give it up
+    /// ([`Bot::track_reach`]): not a guard ring, which holds anywhere in
+    /// it, nor a breach stand, which waits there for its shot.
+    fn target_point(t: &ObjTarget) -> Option<[f32; 3]> {
+        match *t {
+            ObjTarget::Plant(s) | ObjTarget::Occupy(s) => Some(s.stand),
+            ObjTarget::Defuse { bomb, .. } => Some(bomb.origin),
+            ObjTarget::Radio { stand, .. } => Some(stand),
+            ObjTarget::Pickup { from, .. } => Some(from),
+            ObjTarget::Deliver(at) | ObjTarget::Chase(at) | ObjTarget::Sweep(at) => Some(at),
+            ObjTarget::Guard { .. } | ObjTarget::Breach { .. } => None,
+        }
+    }
+
+    /// Gives up an objective's point the bot cannot close on: its follower
+    /// walked out the plan to it ([`Self::arrived_goal`]), the objective is
+    /// not reached, and the body came no [`SHORT_GAIN`] nearer the point
+    /// in [`SHORT_TICKS`]. The point then reads as a guard round it for
+    /// [`SHY_TICKS`]. A plan's end short of a point no node reaches is the
+    /// node nearest it, and from there the bot walked at the point into a
+    /// wall or a teammate standing on it for the rest of the round
+    /// (bot-objectives.md 12.19).
+    fn track_reach(&mut self, view: &BotView) {
+        if let Some((at, left)) = self.obj.shy {
+            self.obj.shy = (left > 1).then_some((at, left - 1));
+        }
+        let Some(p) = self.arrived_goal.take() else {
+            self.obj.short = None;
+            return;
+        };
+        let short = self.objective_wanted(view).filter(|t| {
+            self.obj.shy.is_none()
+                && Self::target_point(t) == Some(p)
+                && !Self::at_objective(view, t)
+                && !self.objective_busy(view)
+        });
+        if short.is_none() {
+            self.obj.short = None;
+            return;
+        }
+        let d = dist_sq(view.origin, p).sqrt();
+        let (best, ticks) = match self.obj.short {
+            Some((at, best, ticks)) if at == p && d > best - SHORT_GAIN => (best, ticks + 1),
+            _ => (d, 0),
+        };
+        if ticks >= SHORT_TICKS {
+            self.obj.shy = Some((p, SHY_TICKS));
+            self.obj.short = None;
+        } else {
+            self.obj.short = Some((p, best, ticks));
+        }
+    }
+
+    /// [`Self::objective_target`] before a given-up point turns it to a
+    /// guard.
+    fn objective_wanted(&self, view: &BotView) -> Option<ObjTarget> {
         if let Some(uo) = view.uo.as_ref() {
             return self.uo_target(view, uo);
         }
@@ -1704,17 +1869,27 @@ impl Bot {
                 at: b.origin,
                 inner: BOMB_GUARD_INNER,
             }),
-            (ObjRole::Attack, None) => match sd.cover {
-                Some(at) => Some(ObjTarget::Guard {
+            (ObjRole::Attack, None) => match (sd.key, sd.cover) {
+                (
+                    Some(KeyBomb {
+                        fetch: Some(at), ..
+                    }),
+                    _,
+                ) => Some(ObjTarget::Deliver(at)),
+                (_, Some(at)) => Some(ObjTarget::Guard {
                     at,
                     inner: team::COVER_INNER,
                 }),
-                None => site().map(ObjTarget::Plant),
+                (Some(k), None) if !k.mine => site().map(|s| ObjTarget::Guard {
+                    at: s.stand,
+                    inner: 0.0,
+                }),
+                _ => site().map(ObjTarget::Plant),
             },
             (ObjRole::Defend, Some(b)) if sd.lead => Some(ObjTarget::Defuse {
                 bomb: b,
                 reach: self.press_reach(DEFUSE_REACH),
-                ticks: DEFUSE_TICKS,
+                ticks: sd.key.map_or(DEFUSE_TICKS, |k| k.defuse_ticks),
             }),
             // Everyone else keeps off the defuser's line to the bomb.
             (ObjRole::Defend, Some(b)) => Some(ObjTarget::Guard {
@@ -1834,6 +2009,9 @@ impl Bot {
                 c.escort.map(guard)
             }
             UoView::Dom(d) => {
+                if let Some(at) = self.obj.sweep {
+                    return Some(ObjTarget::Sweep(at));
+                }
                 let open: Vec<usize> = (0..d.flags.len()).filter(|i| !d.flags[*i].ours).collect();
                 if open.is_empty() {
                     let n = d.flags.len();
@@ -1851,6 +2029,8 @@ impl Bot {
                 Some(r) => Some(ObjTarget::Radio {
                     at: r.at,
                     radius: r.radius,
+                    height: r.height,
+                    stand: r.stand,
                 }),
                 None => h.next.map(guard),
             },
@@ -2056,9 +2236,11 @@ impl Bot {
             }
             ObjTarget::Defuse { bomb, reach, .. } => dist_sq(o, bomb.origin) < reach * reach,
             ObjTarget::Occupy(s) => inside_site(o, s),
-            ObjTarget::Radio { at, radius } => {
+            ObjTarget::Radio {
+                at, radius, height, ..
+            } => {
                 (at[0] - o[0]).hypot(at[1] - o[1]) < radius - RADIO_MARGIN
-                    && (at[2] - o[2]).abs() < RADIO_HEIGHT - RADIO_MARGIN
+                    && (at[2] - o[2]).abs() < height - RADIO_MARGIN
             }
             ObjTarget::Pickup { aim, from } => {
                 let reach = if from == aim { PICKUP_REACH } else { 16.0 };
@@ -2095,7 +2277,7 @@ impl Bot {
             ObjTarget::Guard { at, .. } => Goal::To(at),
             ObjTarget::Defuse { bomb, .. } => Goal::To(bomb.origin),
             ObjTarget::Occupy(s) => Goal::To(s.stand),
-            ObjTarget::Radio { at, .. } => Goal::To(at),
+            ObjTarget::Radio { stand, .. } => Goal::To(stand),
             ObjTarget::Breach {
                 stand: Some(at), ..
             } => Goal::To(at),
@@ -2117,9 +2299,37 @@ impl Bot {
     /// ground instead of following a waypoint, and is not stuck.
     fn objective_standing(&self, view: &BotView) -> bool {
         view.linked
-            || self
-                .objective_target(view)
-                .is_some_and(|t| Self::at_objective(view, &t))
+            || (view.give_way.is_none()
+                && self
+                    .objective_target(view)
+                    .is_some_and(|t| Self::at_objective(view, &t)))
+    }
+
+    /// In a contested zone (an enemy stands in it too, out of sight, and
+    /// the capture is held) the bot walks to the zone's far side, and back
+    /// once there, until the contest ends or it leaves the zone. On
+    /// mp_backlot's L-shaped `koth` room an axis and an allies bot each
+    /// held a leg of it for the rest of the match, the axis one in the
+    /// door its teammates queued behind (bot-objectives.md 12.6).
+    fn sweep_contested(&mut self, view: &BotView) {
+        let Some(UoView::Dom(d)) = view.uo.as_ref() else {
+            self.obj.sweep = None;
+            return;
+        };
+        let Some(f) = d
+            .flags
+            .iter()
+            .find(|f| f.contested && inside_site(view.origin, &f.site))
+        else {
+            self.obj.sweep = None;
+            return;
+        };
+        if self.obj.sweep.is_some_and(|at| !arrived(view.origin, at)) {
+            return;
+        }
+        let (lo, hi) = (f.site.mins, f.site.maxs);
+        let o = view.origin;
+        self.obj.sweep = Some([lo[0] + hi[0] - o[0], lo[1] + hi[1] - o[1], f.site.stand[2]]);
     }
 
     /// The plant or defuse itself: the cmd for this tick while one is under
@@ -2147,12 +2357,15 @@ impl Bot {
         if let (Some(UoView::Dom(d)), Some(ObjTarget::Occupy(site))) = (view.uo.as_ref(), t) {
             self.obj.zone = d.flags.iter().position(|f| f.site.stand == site.stand);
         }
+        self.sweep_contested(view);
         let ready = self.obj.rest == 0 && (at || (view.linked && self.obj.held > 0));
         self.fetching(view, t);
         let cur = [yaw_diff(view.view[0], 0.0), view.view[1]];
         match t {
             Some(ObjTarget::Plant(_)) if ready => {
-                if self.obj.held >= PLANT_TICKS || (self.obj.held >= START_TICKS && !view.linked) {
+                let plant_ticks =
+                    (view.sd.as_ref().and_then(|sd| sd.key)).map_or(PLANT_TICKS, |k| k.plant_ticks);
+                if self.obj.held >= plant_ticks || (self.obj.held >= START_TICKS && !view.linked) {
                     // Nothing planted: another zone's plant blocks this one,
                     // or the body never touched. Try the other site.
                     self.obj.held = 0;
@@ -2611,6 +2824,7 @@ impl Bot {
     /// The tick's usercmd. The driver stamps `server_time` and pushes the
     /// cmd into the client's queue.
     pub(crate) fn think(&mut self, view: &BotView) -> UserCmd {
+        self.track_reach(view);
         // Read before the think moves the objective's state, as the goal was.
         self.on_objective = self.objective_busy(view)
             || self
@@ -2743,6 +2957,25 @@ impl Bot {
         {
             self.marker_reached = Some(m);
         }
+        // A switch the weapon machine sits idle on never lands: the rungs
+        // hold the hands empty (`ps.weapon` 0) for as long as the body is on
+        // them, and a throw that waited there with its keys off hung on
+        // mp_ship's hold ladder for 3000 ticks, out of reach of the stall
+        // circle below (bot-combat.md 17.2). Give the throw up.
+        let want = match self.stage {
+            Stage::ToGrenade | Stage::Cook { .. } => view.grenade,
+            Stage::BackToRifle { weapon } => Some(weapon),
+            Stage::Wander => None,
+        };
+        self.switch_idle = match want {
+            Some(w) if view.weapon != w && view.busy_ms == 0 => self.switch_idle + 1,
+            _ => 0,
+        };
+        if self.switch_idle > SWITCH_IDLE_TICKS {
+            self.switch_idle = 0;
+            self.stage = Stage::Wander;
+            self.end_throw();
+        }
         if !matches!(self.stage, Stage::Wander) {
             if let Some(e) = self.throw_enemy(view) {
                 self.throw_at = Some(e.origin);
@@ -2802,6 +3035,7 @@ impl Bot {
             && self.switch_to.is_none()
             && !view.deployed
             && view.speed < THROW_SPEED
+            && !view.on_ladder
             && view.eye_settled
             && view.lob.is_some()
             && let (Some(g), Some(at)) = (view.grenade, self.throw_spot(view))
@@ -2957,9 +3191,11 @@ impl Bot {
                 && view.sprint_room >= SPRINT_ROOM
                 && dist_sq(view.origin, r.at) > view.sprint_room * view.sprint_room
         };
+        // Not on a mantle edge (bot-combat.md 17.1).
         let mut recall_look = false;
         if self.shoot
             && view.enemy.is_none()
+            && !view.mantle
             && pitch == 0.0
             && forward == 127
             && let Some(r) = self.recall
@@ -2975,14 +3211,27 @@ impl Bot {
             [pitch, yaw] = look;
             recall_look = true;
         }
-        // Slowing onto a leap's foot, then standing on it.
+        // Slowing onto a leap's foot, then standing on it. Under a recall
+        // look the keys are turned off the view, so both scale: a forward
+        // key set along the view walked mp_carentan's bots away from their
+        // stop into a corner (bot-combat.md 17.1).
         if let Some(w) = foot {
             let flat = (w[0] - view.origin[0]).hypot(w[1] - view.origin[1]);
-            forward = if flat < crate::nav::LEAP_FOOT * 0.5 {
-                0
+            let slow = if flat < crate::nav::LEAP_FOOT * 0.5 {
+                0.0
             } else {
-                (flat / LEAP_SLOW * 127.0).min(127.0) as i8
+                (flat / LEAP_SLOW).min(1.0)
             };
+            if recall_look {
+                forward = (f32::from(forward) * slow) as i8;
+                cmd.right = (f32::from(cmd.right) * slow) as i8;
+            } else {
+                forward = if slow == 0.0 {
+                    0
+                } else {
+                    (flat / LEAP_SLOW * 127.0).min(127.0) as i8
+                };
+            }
         }
         // Engaging overrides all of this: `footwork` owns the move keys and
         // the aim owns the view.
@@ -3376,11 +3625,16 @@ impl Bot {
         // there pushed the body off the face and short of mp_ship's hold
         // ladder lip at (4332, -87, 615). Farther across, the back off
         // stays: two bots side by side over the top of the ladder at
-        // x 3792 pinned each other there.
+        // x 3792 pinned each other there. Rungs that let go only past their
+        // top (`BotView::tops_out`) are climbed on for any head across:
+        // backed down once level with the floor 77 across mp_matmata's
+        // ladder at (5025, 6749), a CoD2 bot went up and down to the end
+        // (bot-objectives.md 11.4).
         let n = view.ladder_normal;
         let across = (to[0] - from[0]) * n[0] + (to[1] - from[1]) * n[1];
         let over_top = dz > -vcod_common::pmove::STEPSIZE
-            && (-vcod_common::pmove::HALF_WIDTH..-1.0).contains(&across);
+            && (across < -1.0 && view.tops_out
+                || (-vcod_common::pmove::HALF_WIDTH..-1.0).contains(&across));
         // A jump edge was proved by a forward run whatever its drop: backed
         // off mp_ship's stair at (5402, 321, 344) for the floor 140 under
         // it, a bot jumped backwards onto the stair and slid down it
@@ -3510,11 +3764,12 @@ impl Bot {
 
     /// Hit by an enemy not in sight: the view turns toward where the hit
     /// came from, at the bot's turn rate, for [`HURT_LOOK_MS`], so the
-    /// sight cone sweeps over him. The path's keys follow the turn.
+    /// sight cone sweeps over him. The path's keys follow the turn. Not on
+    /// a mantle edge, whose climb wants the view on the wall.
     fn face_hurt(&self, view: &BotView, cmd: &mut UserCmd, yaw: f32) -> Option<[f32; 2]> {
         let h = view
             .hurt
-            .filter(|h| h.ago_ms < HURT_LOOK_MS && self.aware)?;
+            .filter(|h| h.ago_ms < HURT_LOOK_MS && self.aware && !view.mantle)?;
         let [x, y, z] = h.dir;
         if x == 0.0 && y == 0.0 {
             return None;
@@ -3865,6 +4120,11 @@ impl Bot {
         self.on_objective
     }
 
+    /// Switching to its frag or holding it for the throw.
+    pub fn in_throw(&self) -> bool {
+        matches!(self.stage, Stage::ToGrenade | Stage::Cook { .. })
+    }
+
     /// Grenades let go this game ([`BotBody::throws`]).
     pub fn throws(&self) -> u32 {
         self.throws
@@ -3914,6 +4174,21 @@ impl Bot {
             || self.unstick_ticks > 0
             || (self.stall_ticks + 1 >= STALL_TICKS && reach < STALL_RADIUS * STALL_RADIUS)
             || self.objective_standing(view)
+    }
+
+    /// Whether this tick's [`Self::think`] can pick a wander heading, the
+    /// one reader of [`BotView::wall_ahead`]: a tick [`Self::reads_drops`]
+    /// names, or one on guard behind a bipod or at a cover spot (taken
+    /// without asking whether a retreat holds it, which the think may
+    /// start). Eight box traces a bot, so the server feels for walls only
+    /// then.
+    pub(crate) fn reads_walls(&self, view: &BotView) -> bool {
+        self.reads_drops(view)
+            || view.deployed
+            || view
+                .survive
+                .cover
+                .is_some_and(|c| retreat::at_cover(view.origin, c))
     }
 
     fn pick_heading(&mut self, view: &BotView) {
@@ -4224,6 +4499,10 @@ const LMG_ARC_DEG: f32 = 50.0;
 const LMG_PITCH_DEG: f32 = 45.0;
 /// Ticks between one throw's start and the next's.
 const GRENADE_COOLDOWN_TICKS: u32 = 200;
+/// Ticks a throw's switch may sit with the weapon machine idle and the
+/// weapon it asked for not in hand before the throw is given up: a switch
+/// lands a server frame or two after the putaway ends.
+const SWITCH_IDLE_TICKS: u32 = 20;
 /// An enemy in sight this many ticks with no round at him is thrown at;
 /// one lost from sight between these ticks ago is thrown at where he went
 /// ([`Bot::throw_spot`]).
@@ -4280,7 +4559,7 @@ fn aim_angles(view: &BotView, at: [f32; 3]) -> (f32, f32) {
 }
 
 /// An absolute (pitch, yaw) as the cmd carries it, net of `delta_angles`.
-fn cmd_angles(view: &BotView, aim: [f32; 2]) -> [i32; 3] {
+pub(crate) fn cmd_angles(view: &BotView, aim: [f32; 2]) -> [i32; 3] {
     [
         deg_short(aim[0]) - view.delta_angles[0],
         deg_short(aim[1]) - view.delta_angles[1],
@@ -4307,7 +4586,7 @@ fn yaw_diff(to: f32, from: f32) -> f32 {
 
 /// The forward and right keys that move the body the way `forward` and
 /// `right` did under a view at `from` (degrees), with the view at `to`.
-fn rekey(forward: i8, right: i8, from: f32, to: f32) -> (i8, i8) {
+pub(crate) fn rekey(forward: i8, right: i8, from: f32, to: f32) -> (i8, i8) {
     let d = yaw_diff(from, to).to_radians();
     let (f, r) = (forward as f32, right as f32);
     let key = |k: f32| k.round().clamp(-127.0, 127.0) as i8;
@@ -4328,7 +4607,7 @@ pub(crate) type WeaponMenu = (&'static str, &'static [(&'static str, &'static st
 /// The weapons `menu` offers: a nationality's own, or for United
 /// Offensive's two-nation menus (`weapon_americangerman`, `bel.gsc` 222)
 /// both nations'.
-fn menu_weapons<'a>(
+pub(crate) fn menu_weapons<'a>(
     menus: &'a [WeaponMenu],
     menu: &str,
 ) -> Option<impl Iterator<Item = &'a (&'static str, &'static str)>> {
@@ -4498,6 +4777,8 @@ mod tests {
             grenade_cooks: false,
             grenade_ready: true,
             frag_near: None,
+            post: None,
+            give_way: None,
             lob: None,
             waypoint: None,
             hazard_ahead: [false; 8],
@@ -4508,6 +4789,7 @@ mod tests {
             stranded: false,
             on_ladder: false,
             ladder_normal: [0.0; 3],
+            tops_out: false,
             ladder_middle: None,
             back_face: None,
             on_ground: true,
@@ -4518,6 +4800,7 @@ mod tests {
             crouch_jump: false,
             stop: false,
             run_off: false,
+            mantle: false,
             move_scale: 1.0,
             fatigue: None,
             sprinting: false,
@@ -4565,8 +4848,80 @@ mod tests {
             rank: 0,
             lead: true,
             cover: None,
+            key: None,
         });
         v
+    }
+
+    /// A bot in a zone it does not hold, contested or not.
+    fn dom_zone_view(at: [f32; 3], contested: bool) -> BotView {
+        let mut v = view();
+        v.origin = at;
+        v.uo = Some(UoView::Dom(DomView {
+            flags: vec![DomFlagView {
+                site: SiteView {
+                    mins: [0.0, 0.0, 0.0],
+                    maxs: [400.0, 200.0, 128.0],
+                    stand: [200.0, 100.0, 0.0],
+                },
+                ours: false,
+                contested,
+            }],
+            rank: 0,
+        }));
+        v
+    }
+
+    #[test]
+    fn a_bot_in_a_contested_zone_walks_its_far_side_until_the_contest_ends() {
+        let mut bot = Bot::new("allies", true, 1);
+        let v = dom_zone_view([350.0, 150.0, 0.0], false);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::Hold, "in the zone, nobody else in it");
+        let v = dom_zone_view([350.0, 150.0, 0.0], true);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::To([50.0, 50.0, 0.0]), "to the far side");
+        let v = dom_zone_view([200.0, 100.0, 0.0], true);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::To([50.0, 50.0, 0.0]), "kept on the way");
+        let v = dom_zone_view([50.0, 50.0, 0.0], true);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::To([350.0, 150.0, 0.0]), "and back");
+        let v = dom_zone_view([200.0, 100.0, 0.0], false);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::Hold, "the contest over");
+    }
+
+    /// A bot whose follower walked out its plan to a zone's stand short of
+    /// the zone gives the stand up after `SHORT_TICKS` without coming
+    /// nearer, guards round it for `SHY_TICKS`, then walks at it again.
+    #[test]
+    fn a_bot_that_cannot_close_on_its_zone_guards_round_it_for_a_while() {
+        let mut bot = Bot::new("allies", true, 1);
+        // Outside the zone, 60 off its stand, walking at it.
+        let v = dom_zone_view([200.0, 260.0, 0.0], false);
+        let stand = [200.0, 100.0, 0.0];
+        assert_eq!(bot.goal(&v), Goal::To(stand));
+        for tick in 0..SHORT_TICKS {
+            bot.arrived_goal = Some(stand);
+            bot.think(&v);
+            assert_eq!(bot.goal(&v), Goal::To(stand), "tick {tick}");
+        }
+        bot.arrived_goal = Some(stand);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::Hold, "a guard round the stand");
+        assert!(bot.on_objective(), "held on purpose");
+        for _ in 1..SHY_TICKS {
+            bot.think(&v);
+        }
+        assert_eq!(bot.goal(&v), Goal::Hold);
+        bot.think(&v);
+        assert_eq!(bot.goal(&v), Goal::To(stand), "tried again");
+        // A follower still on its plan never gives the stand up.
+        for _ in 0..2 * SHORT_TICKS {
+            bot.think(&v);
+        }
+        assert_eq!(bot.goal(&v), Goal::To(stand));
     }
 
     /// An attacker that always goes to the first site.
@@ -5451,6 +5806,57 @@ mod tests {
         );
     }
 
+    /// A remembered spot to the side turns the view off the path, but not
+    /// on a CoD2 mantle edge: pmove offers the climb only to a view on the
+    /// wall (bot-combat.md 17.1).
+    #[test]
+    fn a_recall_look_keeps_off_a_mantle_edge() {
+        let mut v = view();
+        v.waypoint = Some([0.0, 100.0, 64.0]);
+        let think = |v: &BotView| {
+            let mut bot = Bot::new("allies", true, 1);
+            bot.recall = Some(Recall {
+                at: [300.0, -300.0, 64.0],
+                ticks: 100,
+                seen: true,
+            });
+            bot.think(v)
+        };
+        assert_ne!(think(&v).right, 0, "the plain run turns to the spot");
+        v.mantle = true;
+        assert_eq!(think(&v).right, 0, "a mantle edge keeps the view");
+    }
+
+    /// Slowing onto a stop under a recall look scales the turned keys, so
+    /// the body still heads for the stop (bot-combat.md 17.1).
+    #[test]
+    fn a_recall_look_slows_onto_a_stop_along_the_path() {
+        let mut v = view();
+        v.waypoint = Some([0.0, 24.0, 64.0]);
+        v.stop = true;
+        // Already turned to the spot.
+        v.view = [0.0, -45.0, 0.0];
+        let mut bot = Bot::new("allies", true, 1);
+        bot.recall = Some(Recall {
+            at: [300.0, -300.0, 64.0],
+            ticks: 100,
+            seen: true,
+        });
+        let cmd = bot.think(&v);
+        // The keys in the world: the view's yaw turned by the keys' angle.
+        let yaw = f32::from(cmd.angles[1] as i16) * 360.0 / 65536.0;
+        let keys = f32::from(-cmd.right)
+            .atan2(f32::from(cmd.forward))
+            .to_degrees();
+        let heading = yaw + keys;
+        assert!(
+            yaw_diff(heading, 90.0).abs() < 10.0,
+            "heads for the stop: view {yaw}, keys ({}, {})",
+            cmd.forward,
+            cmd.right
+        );
+    }
+
     /// UO's frag cooks: the sight button goes down a few ticks into the
     /// pullback, and the hold stays well inside the 4 s fuse.
     #[test]
@@ -5706,6 +6112,25 @@ mod tests {
         assert_eq!(bot.think(&v).forward, -127);
     }
 
+    /// A ladder whose rungs let go only past its top (CoD2's): a head a
+    /// few units under the body and far across the face is climbed on to,
+    /// where CoD1's rungs, which step off onto it, back down.
+    #[test]
+    fn a_far_head_over_a_ladder_that_tops_out_is_climbed_on_to() {
+        let mut v = view();
+        v.on_ladder = true;
+        v.ladder_normal = [1.0, 0.0, 0.0];
+        v.waypoint = Some([v.origin[0] - 77.0, v.origin[1] - 11.0, v.origin[2] - 7.0]);
+        let backs = Bot::new("allies", false, 1).think(&v);
+        assert!(backs.forward < 0, "CoD1's backs down: {}", backs.forward);
+        v.tops_out = true;
+        let climbs = Bot::new("allies", false, 1).think(&v);
+        assert_eq!(
+            (climbs.forward, climbs.angles[0]),
+            (127, deg_short(-crate::nav::LADDER_PITCH))
+        );
+    }
+
     #[test]
     fn a_leaps_foot_at_a_ladders_head_is_climbed_to_at_full_rate() {
         let mut bot = Bot::new("allies", false, 1);
@@ -5922,14 +6347,15 @@ mod tests {
         assert!(!bot.shuns(&v, 180.0), "a path that drops as far");
     }
 
-    /// The server feels for drops only on the ticks [`Bot::reads_drops`]
-    /// names: a bot fed them every tick and one fed them only then press
-    /// the same keys, stuck on the way to a waypoint, on its spells and
-    /// wandering with none.
+    /// The server feels for drops and walls only on the ticks
+    /// [`Bot::reads_drops`] and [`Bot::reads_walls`] name: a bot fed them
+    /// every tick and one fed them only then press the same keys, stuck
+    /// on the way to a waypoint, on its spells and wandering with none.
     #[test]
     fn drops_are_felt_only_when_the_brain_reads_them() {
         let mut drops = [Some(100.0); 8];
         drops[2] = None;
+        let walls = [true, false, true, true, false, true, false, true];
         for seed in 1..20 {
             let (mut every, mut lazy) = (
                 Bot::new("allies", false, seed),
@@ -5940,10 +6366,14 @@ mod tests {
             for tick in 0..120 {
                 v.waypoint = (tick < 60).then_some([0.0, 100.0, 64.0]);
                 v.drop_ahead = drops;
+                v.wall_ahead = walls;
                 let want = every.think(&v);
                 if !lazy.reads_drops(&v) {
                     v.drop_ahead = [None; 8];
                     skipped += 1;
+                }
+                if !lazy.reads_walls(&v) {
+                    v.wall_ahead = [false; 8];
                 }
                 assert_eq!(lazy.think(&v), want, "seed {seed} tick {tick}");
             }
@@ -7365,6 +7795,43 @@ mod tests {
         assert!(yaw.abs() < 10.0, "the view turns onto the enemy: {yaw}");
         v.enemy = None;
         assert_eq!(bot.throw_target(&v), Some([400.0, 0.0, 40.0]));
+    }
+
+    /// On the rungs the hands stay empty: no throw starts there, and one
+    /// whose switch never lands (the body grabbed a ladder mid-switch) is
+    /// given up, the bot back on its keys. mp_ship's hold ladder held
+    /// such a bot 3000 ticks (bot-combat.md 17.2).
+    #[test]
+    fn a_throw_whose_switch_never_lands_is_given_up() {
+        let mut v = view();
+        v.grenade = Some(6);
+        v.lob = Some([-10.0, 0.0]);
+        v.enemy = Some(EnemyView {
+            slot: 3,
+            origin: [400.0, 0.0, 40.0],
+            velocity: [0.0; 3],
+        });
+        v.on_ladder = true;
+        let mut bot = Bot::new("allies", true, 1);
+        for _ in 0..400 {
+            bot.think(&v);
+            assert!(
+                matches!(bot.stage, Stage::Wander),
+                "a throw starts on the rungs"
+            );
+        }
+        bot.stage = Stage::ToGrenade;
+        v.weapon = 0;
+        v.busy_ms = 0;
+        for _ in 0..SWITCH_IDLE_TICKS {
+            bot.think(&v);
+            assert!(matches!(bot.stage, Stage::ToGrenade), "given up early");
+        }
+        bot.think(&v);
+        assert!(
+            matches!(bot.stage, Stage::Wander),
+            "the switch waited for good"
+        );
     }
 
     /// An enemy lost from sight a second ago is thrown at where he went;

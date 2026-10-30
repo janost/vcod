@@ -1,7 +1,6 @@
 //! The map's triggers as a host-side table, and the two-stage test the touch
 //! pass runs against them: a box query, then a contact against the trigger's
-//! own brushes. Which classnames are triggers, and what each does, is
-//! docs/superpowers/specs/2026-09-08-movers-triggers-sd-design.md section 3.
+//! own brushes.
 
 use crate::game::host::GameHost;
 use glam::Vec3;
@@ -84,6 +83,37 @@ pub struct Trigger {
     pub hint_string: i32,
     /// A `trigger_damage`'s keys; `None` on every other kind.
     pub spec: Option<DamageSpec>,
+    /// CoD2's `trigger_radius` and `trigger_disk`: no brush, a cylinder
+    /// around the origin; `None` on every other trigger.
+    pub round: Option<Round>,
+    /// CoD2's `setTeamForTrigger` (`ent+0x167`): 0 any team, 1 axis, 2
+    /// allies; the use list skips a trigger of another team.
+    pub team: u8,
+    /// CoD2's `clientClaimTrigger` (`ent+0x1b4`): the client the trigger
+    /// is claimed by, `None` for retail's 0x3ff.
+    pub claimer: Option<u16>,
+}
+
+/// CoD2's round triggers (cod2_lnxded `SP_trigger_radius` 0x811c6e0,
+/// `SP_trigger_disk` 0x811c880, VERIFIED): `r.mins`/`r.maxs` are
+/// `(-r, -r, 0)..(r, r, height)` with `r.svFlags` 0x21, or for a disk
+/// `(-(r + 64), .., -100000)..(r + 64, .., 100000)` with 0x41. The touch
+/// test inside the box is the horizontal distance to the axis, which the
+/// two flags select (INFERRED: the flag bits, not the contact code, are
+/// read).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Round {
+    pub radius: f32,
+}
+
+impl Round {
+    /// Does a box `lo..hi` reach within `radius` of the vertical axis
+    /// through `origin`? Its closest point in the horizontal plane.
+    pub fn contacts(&self, origin: [f32; 3], lo: [f32; 3], hi: [f32; 3]) -> bool {
+        let dx = origin[0].clamp(lo[0], hi[0]) - origin[0];
+        let dy = origin[1].clamp(lo[1], hi[1]) - origin[1];
+        dx * dx + dy * dy <= self.radius * self.radius
+    }
 }
 
 /// What `SP_trigger_damage` (1.1d 0x65278, 1.5b 0x6ac1e, UO 0x76f59) reads
@@ -171,8 +201,20 @@ impl Triggers {
                 },
                 hint_string: -1,
                 spec: None,
+                round: None,
+                team: 0,
+                claimer: None,
             },
         );
+    }
+
+    /// A CoD2 `trigger_radius` or `trigger_disk`: a `trigger_multiple` with
+    /// a round shape (both spawn functions set `Touch_Multi`'s handler 1).
+    pub fn register_round(&mut self, id: EntId, shape: TriggerShape, wait_ms: i32, round: Round) {
+        self.register(id, TriggerKind::Multiple, shape, wait_ms);
+        if let Some(t) = self.rows.get_mut(&id) {
+            t.round = Some(round);
+        }
     }
 
     /// A `trigger_damage` with its keys.
@@ -448,6 +490,18 @@ pub fn kind_of(classname: &str) -> Option<TriggerKind> {
     })
 }
 
+/// [`kind_of`] under CoD2's spawn table: its `trigger_use_touch` runs
+/// `SP_trigger_use`'s function (cod2_lnxded 0x8110052 and 0x811003e both
+/// call 0x810fe50, VERIFIED), and its two round triggers are
+/// [`Triggers::register_round`]'s.
+pub fn kind_of_cod2(classname: &str) -> Option<TriggerKind> {
+    match classname {
+        "trigger_use_touch" => Some(TriggerKind::Use),
+        "trigger_radius" | "trigger_disk" => Some(TriggerKind::Multiple),
+        _ => kind_of(classname),
+    }
+}
+
 /// A box offset to an origin: the shape `abs_bounds` and the point/player
 /// cases share.
 fn offset_bounds(origin: [f32; 3], mins: [f32; 3], maxs: [f32; 3]) -> ([f32; 3], [f32; 3]) {
@@ -537,7 +591,7 @@ pub struct BrushHull {
 /// Trigger brushes are not in `CollisionWorld` -- it drops them on purpose,
 /// since retail leaves a trigger hollow to movement -- so they are decoded
 /// straight off the lump here, through the same side decode the clip uses.
-pub fn model_brush_hulls(bsp: &vcod_common::bsp::Bsp) -> Vec<Vec<BrushHull>> {
+pub fn model_brush_hulls(bsp: &vcod_common::mapworld::MapWorld) -> Vec<Vec<BrushHull>> {
     bsp.models
         .iter()
         .enumerate()
@@ -632,10 +686,6 @@ pub fn touched(host: &mut GameHost, cx: &mut Cx, slot: usize, origin: [f32; 3]) 
     );
     let (mins, maxs) = host.client_box(slot);
     let exact = offset_bounds(origin, mins, maxs);
-    let lo = Vec3::from_array(exact.0);
-    let hi = Vec3::from_array(exact.1);
-    let centre = (lo + hi) * 0.5;
-    let half = (hi - lo) * 0.5;
     let ids: Vec<EntId> = host
         .area
         .entities_in_box(candidate.0, candidate.1, CONTENTS_TOUCH_MASK)
@@ -657,39 +707,79 @@ pub fn touched(host: &mut GameHost, cx: &mut Cx, slot: usize, origin: [f32; 3]) 
             ) {
                 return false;
             }
-            let t_origin = entity_origin(host, cx, *id, origin_atom);
-            let b = abs_bounds(t_origin, &t);
-            if !boxes_overlap(exact, b) {
-                return false;
-            }
-            // A script-spawned trigger's inline model 0 is a copy of the
-            // world at its origin: the box's position test against that
-            // copy's clip, under `trap_EntityContact`'s -1 (combat doc 5.9).
-            if t.shape.model == Some(0)
-                && let Some(w) = host.world.as_ref()
-            {
-                let tr = w.collision.pusher_box_trace(
-                    vcod_common::collision::Pusher::Copy(id.0),
-                    centre,
-                    centre,
-                    -half,
-                    half,
-                    u32::MAX,
-                );
-                return tr.startsolid || tr.allsolid;
-            }
-            match t
-                .shape
-                .model
-                .and_then(|m| host.model_brushes.get(m as usize))
-            {
-                Some(hulls) if !hulls.is_empty() => {
-                    box_contacts_hulls(centre, half, Vec3::from_array(t_origin), hulls)
-                }
-                _ => true,
-            }
+            box_contacts(host, cx, *id, &t, exact)
         })
         .collect()
+}
+
+/// Does the box `exact` (absolute) meet trigger `id`'s shape: its absolute
+/// box, then a round trigger's axis distance, a world copy's clip or its
+/// brushes (`SV_EntityContact`)?
+pub fn box_contacts(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    id: EntId,
+    t: &Trigger,
+    exact: ([f32; 3], [f32; 3]),
+) -> bool {
+    contacts(host, cx, id, t, exact, false)
+}
+
+/// [`box_contacts`] with `capsule` meeting the brushes as the capsule of
+/// the box (`capsule_contacts_hulls`): CoD2's `SV_EntityContact` traces
+/// every box as one (cod2-turrets.md 16).
+pub fn contacts(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    id: EntId,
+    t: &Trigger,
+    exact: ([f32; 3], [f32; 3]),
+    capsule: bool,
+) -> bool {
+    let lo = Vec3::from_array(exact.0);
+    let hi = Vec3::from_array(exact.1);
+    let centre = (lo + hi) * 0.5;
+    let half = (hi - lo) * 0.5;
+    let origin_atom = cx.intern_folded("origin");
+    let t_origin = entity_origin(host, cx, id, origin_atom);
+    let b = abs_bounds(t_origin, t);
+    if !boxes_overlap(exact, b) {
+        return false;
+    }
+    if let Some(round) = t.round {
+        return round.contacts(t_origin, exact.0, exact.1);
+    }
+    // A script-spawned trigger's inline model 0 is a copy of the
+    // world at its origin: the box's position test against that
+    // copy's clip, under `trap_EntityContact`'s -1 (combat doc 5.9).
+    if t.shape.model == Some(0)
+        && let Some(w) = host.world.as_ref()
+    {
+        let tr = w.collision.pusher_box_trace(
+            vcod_common::collision::Pusher::Copy(id.0),
+            centre,
+            centre,
+            -half,
+            half,
+            u32::MAX,
+        );
+        return tr.startsolid || tr.allsolid;
+    }
+    match t
+        .shape
+        .model
+        .and_then(|m| host.model_brushes.get(m as usize))
+    {
+        Some(hulls) if !hulls.is_empty() => {
+            let hull_test = if capsule {
+                capsule_contacts_hulls
+            } else {
+                box_contacts_hulls
+            };
+            hull_test(centre, half, Vec3::from_array(t_origin), hulls)
+        }
+        _ => true,
+    }
 }
 
 /// A trigger's links (combat doc 14.7, `game.mp.i386.so`), off its row: the
@@ -1125,6 +1215,9 @@ mod tests {
             cursor_hint: 0,
             hint_string: -1,
             spec: None,
+            round: None,
+            team: 0,
+            claimer: None,
         };
         assert_eq!(
             abs_bounds([100.0, -50.0, 8.0], &t),
@@ -1505,7 +1598,7 @@ mod tests {
         let world = |extra: &[(Vec3, Vec3)]| {
             Some(std::rc::Rc::new(crate::world::World {
                 collision: vcod_common::collision::test_world(extra),
-                vis: vcod_common::bsp::Visibility::none(),
+                vis: vcod_common::mapworld::Visibility::none(),
                 spawn: ([0.0; 3], 0.0),
                 spawn_points: Vec::new(),
                 hazards: Vec::new(),

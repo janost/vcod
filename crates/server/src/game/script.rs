@@ -3,11 +3,15 @@
 
 use std::collections::HashSet;
 use std::rc::Rc;
+use vcod_common::asset_source::{AssetSource, RawFile};
 
+use crate::game::builtins::set::BuiltinSet;
 use crate::game::host::{ClientEvent, GameHost, SpawnRequest};
 use crate::game::item::Activate;
+use crate::game::profile::{HostProfile, WeaponNumbering};
 use crate::game::spawn::spawn_entities_from_string;
 use crate::game::turret::{TurretOp, TurretShot};
+use vcod_common::mapworld::MapWorld;
 use vcod_common::pk3::Pk3Fs;
 use vcod_gsc::{EntId, Loader, ScriptSource, Target, Value, Vm};
 
@@ -33,12 +37,15 @@ pub enum MenuRef {
     Name(String),
 }
 
-/// Reads `.gsc` out of the mounted paks. `Loader` hands `read` a canonical
-/// path (lowercase, forward slashes, no extension; see `vcod_gsc::canonical`);
-/// the pak stores e.g. `maps/MP/_load.gsc`, and `Pk3Fs::read` already
-/// lowercases its lookup key, so appending `.gsc` is the only work here.
+/// The `script_struct` pair CoD2's engine binds (cod2_lnxded 0x811041e).
+const COD2_STRUCT: &str = "codescripts/struct";
+
+/// Reads `.gsc` off the asset source as raw files. `Loader` hands `read`
+/// a canonical path (lowercase, forward slashes, no extension; see
+/// `vcod_gsc::canonical`); the pak stores e.g. `maps/MP/_load.gsc`, and
+/// the source's lookup is case-blind, so appending `.gsc` is the only work.
 pub(crate) struct PakScripts {
-    fs: Rc<Pk3Fs>,
+    fs: Rc<dyn AssetSource>,
     /// One canonical path answered from memory instead of the paks, for a
     /// test whose gametype script does not ship in one
     /// (`Server::overlay_script`).
@@ -46,7 +53,7 @@ pub(crate) struct PakScripts {
 }
 
 impl PakScripts {
-    pub(crate) fn new(fs: Rc<Pk3Fs>, overlay: Option<(String, String)>) -> PakScripts {
+    pub(crate) fn new(fs: Rc<dyn AssetSource>, overlay: Option<(String, String)>) -> PakScripts {
         PakScripts { fs, overlay }
     }
 }
@@ -58,8 +65,8 @@ impl ScriptSource for PakScripts {
         {
             return Some(text.clone());
         }
-        let bytes = self.fs.read(&format!("{canonical}.gsc"))?;
-        Some(String::from_utf8_lossy(&bytes).into_owned())
+        let raw = self.fs.load::<RawFile>(&format!("{canonical}.gsc")).ok()?;
+        Some(raw.text().into_owned())
     }
 }
 
@@ -86,6 +93,9 @@ pub struct Carry {
     /// files, so it reuses them instead of compiling again (map-cycle doc,
     /// 4.7).
     pub scripts: Option<Rc<CompiledScripts>>,
+    /// The last level's gametype closure, compiled, which a load of any
+    /// map under the same gametype reuses while its files read the same.
+    pub gametype: Option<Rc<GametypeScripts>>,
     /// `G_InitGame`'s `Rand_Init` seed for the script's draws, a new one
     /// every level, restarts included (map-cycle doc 4.8); `None` (a test
     /// building a runtime by hand) takes [`crate::game::host::RNG_SEED`].
@@ -93,6 +103,9 @@ pub struct Carry {
     /// A test's replay of another server's spawn picks
     /// ([`crate::game::host::SpawnPins`]), handed to every level.
     pub spawn_pins: Option<crate::game::host::SpawnPins>,
+    /// The xmodels the level loaded for traces and links. A restart keeps
+    /// the map and the paks, so it reads the same files (map-cycle doc 4.9).
+    pub models: Option<crate::game::host::ModelCaches>,
 }
 
 /// The two closures a level loaded, compiled, before any of it ran.
@@ -102,6 +115,23 @@ pub struct CompiledScripts {
     program: vcod_gsc::Program,
     /// The `#using_animtree` names the closure declares.
     animtrees: Vec<String>,
+    /// The compile as it stood after the gametype's closure, which the
+    /// next map's load starts from (`Carry::gametype`).
+    gametype: Rc<GametypeScripts>,
+}
+
+/// The gametype's closure, compiled first on every load and the same
+/// whatever the map: a map change resumes the compile from here instead
+/// of starting over, once every file it read still reads the same
+/// (`LoaderState::current`). Retail compiles every load; the resumed
+/// compile is the one a fresh compile would have reached.
+pub struct GametypeScripts {
+    gametype_entry: String,
+    /// The builtin set the compile resolved calls against, one per game
+    /// and protocol (`HostProfile::builtins`).
+    set: &'static BuiltinSet,
+    program: vcod_gsc::Program,
+    loader: vcod_gsc::LoaderState,
 }
 
 impl CompiledScripts {
@@ -109,6 +139,41 @@ impl CompiledScripts {
     /// reads at the load (cod11-server-handshake.md, "The four cvars").
     pub fn animtrees(&self) -> &[String] {
         &self.animtrees
+    }
+
+    /// The gametype closure this compile started from or recorded.
+    #[cfg(test)]
+    pub(crate) fn gametype(&self) -> &Rc<GametypeScripts> {
+        &self.gametype
+    }
+
+    /// Whether `other` compiled to the same thing: every atom in the same
+    /// place, the same functions with the same code, the same animtrees.
+    #[cfg(test)]
+    pub(crate) fn same_compile(&self, other: &CompiledScripts) -> bool {
+        let (a, b) = (
+            Vm::from_program(&self.program),
+            Vm::from_program(&other.program),
+        );
+        let funcs = |vm: &Vm| {
+            let mut v: Vec<_> = vm
+                .functions()
+                .map(|f| {
+                    (
+                        f.file,
+                        f.name,
+                        format!("{:?} {:?} {:?}", f.code, f.consts, f.lines),
+                    )
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        a.interner().texts().eq(b.interner().texts())
+            && funcs(&a) == funcs(&b)
+            && self.animtrees == other.animtrees
+            && self.entry == other.entry
+            && self.gametype_entry == other.gametype_entry
     }
 }
 
@@ -118,6 +183,30 @@ pub struct LevelMap {
     entities: String,
     model_bounds: Vec<([f32; 3], [f32; 3])>,
     model_brushes: Vec<Vec<crate::game::trigger::BrushHull>>,
+}
+
+impl LevelMap {
+    /// A level whose map gives its entity string and the brush model
+    /// tables apart (CoD4's clip map, `game::cod4`).
+    pub(crate) fn of_parts(
+        entities: String,
+        model_bounds: Vec<([f32; 3], [f32; 3])>,
+        model_brushes: Vec<Vec<crate::game::trigger::BrushHull>>,
+    ) -> LevelMap {
+        LevelMap {
+            entities,
+            model_bounds,
+            model_brushes,
+        }
+    }
+
+    fn of(bsp: &MapWorld) -> LevelMap {
+        LevelMap {
+            model_bounds: bsp.models.iter().map(|m| m.clip_bounds()).collect(),
+            model_brushes: crate::game::trigger::model_brush_hulls(bsp),
+            entities: bsp.entities.clone(),
+        }
+    }
 }
 
 /// A script value as text, through the same `%g` rendering string
@@ -213,7 +302,7 @@ pub struct EntityPass {
 }
 
 /// A turn of the entity pass that needs the client sims, which
-/// `Server::tick` holds: the pass returns it and is called again for the
+/// `Cod1Module::run_frame_cod1` holds: the pass returns it and is called again for the
 /// next turn.
 pub enum PassStop {
     /// A grenade went off on its turn (`G_RunMissile`); walk the blast.
@@ -234,6 +323,12 @@ pub struct ScriptRuntime {
     /// `None` in a test runtime that mounts no map.
     map: Option<Rc<LevelMap>>,
     scripts: Option<Rc<CompiledScripts>>,
+    /// How far the script clock runs behind `level.time`: CoD2's VM steps
+    /// one 50 ms tick a `G_RunFrame` (`Scr_IncTime` 0x80855e2) whatever
+    /// the frame's length, so its 100 ms load frames leave it behind
+    /// (cod2-protocol.md 15.8). 0 on CoD1, whose `Scr_SetTime` follows
+    /// `level.time`.
+    pub(crate) script_lag_ms: i32,
 }
 
 impl ScriptRuntime {
@@ -285,32 +380,246 @@ impl ScriptRuntime {
         now_ms: i32,
         carry: Carry,
     ) -> anyhow::Result<ScriptRuntime> {
+        let profile = HostProfile::of_protocol_cvar(cvars.get("protocol"));
+        Self::load_game(
+            profile,
+            source,
+            fs,
+            map,
+            gametype,
+            configstrings,
+            cvars,
+            world,
+            weapons,
+            now_ms,
+            carry,
+        )
+    }
+
+    /// A CoD2 level: `world` is the map's `.d3dbsp` as a [`MapWorld`]
+    /// (`vcod_cod2::world`), whose entity string the spawn pass reads, and
+    /// the scripts compile under `Dialect::Cod2` against CoD2's builtin
+    /// tables. Groundwork for hosting CoD2: the host still runs 1.1's
+    /// configstring layout and no weapon table.
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_cod2(
+        source: Box<dyn ScriptSource>,
+        fs: Rc<Pk3Fs>,
+        world: &MapWorld,
+        map: &str,
+        gametype: &str,
+        configstrings: Vec<String>,
+        cvars: crate::cvars::Cvars,
+        now_ms: i32,
+    ) -> anyhow::Result<ScriptRuntime> {
+        Self::load_cod2_in(
+            source,
+            fs,
+            world,
+            None,
+            map,
+            gametype,
+            configstrings,
+            cvars,
+            now_ms,
+        )
+    }
+
+    /// [`ScriptRuntime::load_cod2`] with the level's collision
+    /// (`crate::game::cod2::level_world`), which the traces, the spawn
+    /// pass's links and the triggers read.
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_cod2_in(
+        source: Box<dyn ScriptSource>,
+        fs: Rc<Pk3Fs>,
+        world: &MapWorld,
+        collision: Option<Rc<crate::world::World>>,
+        map: &str,
+        gametype: &str,
+        configstrings: Vec<String>,
+        cvars: crate::cvars::Cvars,
+        now_ms: i32,
+    ) -> anyhow::Result<ScriptRuntime> {
+        Self::load_cod2_carry(
+            source,
+            fs,
+            world,
+            collision,
+            map,
+            gametype,
+            configstrings,
+            cvars,
+            now_ms,
+            Carry::default(),
+        )
+    }
+
+    /// [`ScriptRuntime::load_cod2_in`] with what the last level handed on
+    /// (`take_carry`): `game[]` and `pers[]` under `savePersist`, the
+    /// compiled closures on a restart of the same map. Its map and area
+    /// tree are rebuilt off `world`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_cod2_carry(
+        source: Box<dyn ScriptSource>,
+        fs: Rc<Pk3Fs>,
+        world: &MapWorld,
+        collision: Option<Rc<crate::world::World>>,
+        map: &str,
+        gametype: &str,
+        configstrings: Vec<String>,
+        cvars: crate::cvars::Cvars,
+        now_ms: i32,
+        carry: Carry,
+    ) -> anyhow::Result<ScriptRuntime> {
+        // No `misc_model` goes in the area tree: CoD2's xmodels are not
+        // CoD1's, and nothing the bootstrap runs walks the tree.
+        let area = match world.models.first() {
+            Some(m) => crate::area::AreaTree::new(
+                m.mins,
+                m.maxs,
+                crate::game::entity::MAX_GENTITIES as usize,
+            ),
+            None => crate::area::AreaTree::unbounded(),
+        };
+        let carry = Carry {
+            map: Some(Rc::new(LevelMap::of(world))),
+            area: Some(area),
+            ..carry
+        };
+        Self::load_game(
+            &crate::game::profile::COD2,
+            source,
+            fs,
+            map,
+            gametype,
+            configstrings,
+            cvars,
+            collision,
+            Rc::new(crate::weapons::WeaponTable::empty()),
+            now_ms,
+            carry,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn load_game(
+        profile: &'static HostProfile,
+        source: Box<dyn ScriptSource>,
+        fs: Rc<Pk3Fs>,
+        map: &str,
+        gametype: &str,
+        configstrings: Vec<String>,
+        cvars: crate::cvars::Cvars,
+        world: Option<Rc<crate::world::World>>,
+        weapons: Rc<crate::weapons::WeaponTable>,
+        now_ms: i32,
+        carry: Carry,
+    ) -> anyhow::Result<ScriptRuntime> {
+        Self::load_game_with(
+            profile,
+            source,
+            fs,
+            map,
+            gametype,
+            configstrings,
+            cvars,
+            world,
+            weapons,
+            now_ms,
+            carry,
+            |_| {},
+        )
+    }
+
+    /// [`Self::load_game`] with `setup` run on the fresh host ahead of the
+    /// spawn pass: a game's own state the profile cannot hold
+    /// (`game::cod4::load`'s zones).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn load_game_with(
+        profile: &'static HostProfile,
+        source: Box<dyn ScriptSource>,
+        fs: Rc<Pk3Fs>,
+        map: &str,
+        gametype: &str,
+        configstrings: Vec<String>,
+        cvars: crate::cvars::Cvars,
+        world: Option<Rc<crate::world::World>>,
+        weapons: Rc<crate::weapons::WeaponTable>,
+        now_ms: i32,
+        carry: Carry,
+        setup: impl FnOnce(&mut GameHost),
+    ) -> anyhow::Result<ScriptRuntime> {
+        let proto = profile.defs.proto;
         let entry = format!("maps/mp/{map}");
         let gametype_entry = format!("maps/mp/gametypes/{gametype}");
         let cached = carry
             .scripts
             .filter(|c| c.gametype_entry == gametype_entry && c.entry == entry);
+        let compile = crate::tick_profile::phase("load/compile");
         let (mut vm, scripts) = match cached {
             Some(c) => (Vm::from_program(&c.program), c),
             None => {
-                let mut vm = Vm::new();
+                let set = (profile.builtins)();
+                let dialect = profile.vm.dialect;
+                let resumed = carry.gametype.filter(|g| {
+                    g.gametype_entry == gametype_entry
+                        && std::ptr::eq(g.set, set)
+                        && g.loader.current(source.as_ref())
+                });
                 // One `Loader`, not two: its `loaded` set dedupes the files
                 // both closures share, and `Vm::install` rejects a duplicate
                 // `FuncRef`, so a second `Loader` would fail on the first
                 // shared file.
-                let mut loader = Loader::new(source);
-                loader
-                    .load(&mut vm, &gametype_entry)
-                    .map_err(|e| anyhow::anyhow!("loading {gametype_entry}: {e:?}"))?;
+                let (mut vm, mut loader, gametype) = match resumed {
+                    Some(g) => {
+                        let mut loader = Loader::resume(source, dialect, g.loader.clone());
+                        if profile.compile_against_builtins {
+                            loader.set_builtins(set.table());
+                        }
+                        (Vm::from_program(&g.program), loader, g)
+                    }
+                    None => {
+                        let mut vm = Vm::new();
+                        let mut loader = Loader::with_dialect(source, dialect);
+                        if profile.compile_against_builtins {
+                            loader.set_builtins(set.table());
+                        }
+                        loader
+                            .load(&mut vm, &gametype_entry)
+                            .map_err(|e| anyhow::anyhow!("loading {gametype_entry}: {e:?}"))?;
+                        let g = Rc::new(GametypeScripts {
+                            gametype_entry: gametype_entry.clone(),
+                            set,
+                            program: vm.program(),
+                            loader: loader.state(),
+                        });
+                        (vm, loader, g)
+                    }
+                };
                 loader
                     .load(&mut vm, &entry)
                     .map_err(|e| anyhow::anyhow!("loading {entry}: {e:?}"))?;
-                // The closure calls far more builtins than the host answers
-                // yet. Listing them once here beats discovering them one
-                // aborted thread at a time, and a missing builtin must not
+                // CoD2's engine binds `codescripts/struct`'s pair for the
+                // spawn pass's `script_struct` (cod2-gsc-diff.md 2.4).
+                if profile.script_structs {
+                    loader
+                        .load(&mut vm, COD2_STRUCT)
+                        .map_err(|e| anyhow::anyhow!("loading {COD2_STRUCT}: {e:?}"))?;
+                }
+                // Retail's compiler refuses a call outside its version's
+                // tables: a script compile error, which drops the level
+                // (`builtins::set`).
+                let unknown = set.unknown_calls(&vm);
+                if !unknown.is_empty() {
+                    anyhow::bail!(
+                        "script compile error in {entry} or {gametype_entry}: unknown (builtin) {}",
+                        unknown.join(", ")
+                    );
+                }
+                // A name retail lists that vcod does not answer yet must not
                 // stop the map serving: a thread that reaches one dies, the
-                // rest of the script runs.
-                let missing = loader.missing_builtins(&vm, &|n| crate::game::host::is_builtin(n));
+                // rest of the script runs. List them once here.
+                let missing = set.unimplemented_calls(&vm);
                 if !missing.is_empty() {
                     log::info!(
                         "gsc: {entry} and {gametype_entry} call {} builtins the host does not implement: {}",
@@ -323,10 +632,13 @@ impl ScriptRuntime {
                     entry: entry.clone(),
                     program: vm.program(),
                     animtrees: loader.animtrees().map(str::to_string).collect(),
+                    gametype,
                 });
                 (vm, scripts)
             }
         };
+        drop(compile);
+        vm.apply_profile(&profile.vm);
         // `game[]` before anything runs: the gametype's `main` reads it in
         // its first statements (map-cycle doc, section 1). After the
         // compile, so a cached closure and a fresh one intern alike.
@@ -334,8 +646,13 @@ impl ScriptRuntime {
             vm.install_game(game);
         }
 
-        let mut host = GameHost::new(configstrings);
+        let mut host = GameHost::new(profile, configstrings);
         host.cvars = cvars;
+        // A frame-counted `wait` (CoD4) counts `sv_fps`'s frames from the
+        // bootstrap's first.
+        if profile.vm.frame_waits {
+            vm.set_frame_ms(crate::game::cod4::frame_ms(&host.cvars));
+        }
         // `Scr_Init` takes `developer` at the load (coduo_lnxded 0x80714f1):
         // below 1 a runtime error does not end its thread.
         vm.set_recover_errors(
@@ -347,16 +664,8 @@ impl ScriptRuntime {
                 == 0,
         );
         host.patch_1_5 = matches!(host.cvars.get("protocol"), "6" | "22");
-        let proto = host
-            .cvars
-            .get("protocol")
-            .parse()
-            .ok()
-            .and_then(vcod_common::net::protocol::Protocol::by_version)
-            .unwrap_or(&vcod_common::net::protocol::PROTOCOL_V1);
-        host.defs = crate::defs::Defs::of(proto);
-        host.missiles.uo = proto.version == vcod_common::net::protocol::PROTOCOL_V22.version;
-        host.missiles.falls = proto.version != vcod_common::net::protocol::PROTOCOL_V1.version;
+        host.missiles.uo = proto.is_uo();
+        host.missiles.falls = !host.speaks_1_1();
         host.movers.stored = host.patch_1_5;
         host.allocators = crate::configstrings::Allocators::seeded(&host.configstrings, &proto.cs);
         host.items = crate::items::Items::new(host.defs);
@@ -370,8 +679,10 @@ impl ScriptRuntime {
         }
         host.weapons = weapons;
         host.fs = Some(fs.clone());
+        setup(&mut host);
         host.level_time_ms = now_ms;
         host.dobj_time_ms = now_ms;
+        host.ents.set_clock(now_ms);
         host.pers_carry = carry.pers;
         if let Some(seed) = carry.seed {
             host.rng = seed | 1;
@@ -379,6 +690,11 @@ impl ScriptRuntime {
         host.spawn_pins = carry.spawn_pins;
         if let Some(items) = carry.items {
             host.items = items;
+        }
+        if let Some(m) = carry.models {
+            host.xmodel_collision = m.collision;
+            host.xmodel_bounds = m.bounds;
+            host.vehicles.rigs = m.rigs;
         }
 
         // `_load.gsc::main`, in mp_pavlov's own closure, calls `getEntArray`
@@ -392,27 +708,45 @@ impl ScriptRuntime {
                 (level_map, area)
             }
             _ => {
-                let bsp_path = fs
-                    .resolve_map(map)
-                    .ok_or_else(|| anyhow::anyhow!("map {map} not found in the mounted paks"))?;
-                let bsp_bytes = fs
-                    .read(&bsp_path)
-                    .ok_or_else(|| anyhow::anyhow!("reading {bsp_path}"))?;
-                let bsp = vcod_common::bsp::parse(&bsp_bytes)?;
+                let bsp = vcod_common::mapworld::find(&*fs, map)?;
                 let area = crate::area::AreaTree::for_map(&bsp, &fs);
-                let level_map = LevelMap {
-                    model_bounds: bsp.models.iter().map(|m| m.clip_bounds()).collect(),
-                    model_brushes: crate::game::trigger::model_brush_hulls(&bsp),
-                    entities: bsp.entities,
-                };
-                (Rc::new(level_map), area)
+                (Rc::new(LevelMap::of(&bsp)), area)
             }
         };
+        // `GScr_AddFieldsForRadiant` (cod2_lnxded 0x811ac96) reads
+        // `radiant/keys.txt` at the load (cod2-gsc-diff.md 2.1).
+        if profile.reads_radiant_keys {
+            // CoD4's lives in `common_mp.ff`, read through the zones.
+            let text = match &host.assets {
+                Some(a) => a.read("radiant/keys.txt"),
+                None => fs.read("radiant/keys.txt"),
+            }
+            .unwrap_or_default();
+            host.radiant_keys = Some(crate::game::fields::parse_radiant_keys(
+                &String::from_utf8_lossy(&text),
+            ));
+        }
         host.model_bounds = level_map.model_bounds.clone();
         host.model_brushes = level_map.model_brushes.clone();
         host.area = area;
+        // `G_SetupWeaponDef` (0x8120d74), at the head of `G_InitGame`
+        // (0x8109096): `defaultweapon_mp` is weapon 1, and its world model
+        // the first model (cod2-protocol.md 15.3).
+        if profile.weapons == WeaponNumbering::Registered {
+            crate::game::builtins::cod2::register_weapon(&mut host, "defaultweapon_mp");
+        }
+        // `G_InitGame` then sets the `winner` slot (CoD2's 22) to 0.
+        if profile.init_winner {
+            let winner = host.allocators.layout().winner;
+            host.configstrings.set(winner, "\\winner\\0");
+        }
+        let spawn = crate::tick_profile::phase("load/spawn");
         vm.with_cx(|cx| spawn_entities_from_string(&mut host, cx, &level_map.entities))
             .map_err(|e| anyhow::anyhow!("spawning {map}'s entities: {e:?}"))?;
+        drop(spawn);
+        if profile.script_structs {
+            crate::game::cod2::create_structs(&mut vm, &mut host);
+        }
         // `G_InitGame`'s `G_setfog("0")` past the spawn (0x4fe2e), ahead of
         // the scripts' own fog.
         let fog = host.allocators.layout().fog;
@@ -425,10 +759,12 @@ impl ScriptRuntime {
             gametype_entry,
             map: Some(level_map),
             scripts: Some(scripts),
+            script_lag_ms: 0,
         };
         // `G_InitGame` hands `Scr_InitSystem` the level's own `level.time`
         // (docs/research/cod11-gsc-language.md, "The script clock").
         rt.vm.set_time(now_ms);
+        let _p = crate::tick_profile::phase("load/bootstrap");
         rt.start_bootstrap()?;
         Ok(rt)
     }
@@ -462,6 +798,9 @@ impl ScriptRuntime {
         // calls `level.callbackStartGameType`.
         self.start(CALLBACK_SETUP, "CodeCallback_StartGameType", None)?;
         self.host.initializing = false;
+        if self.host.profile.weapons == WeaponNumbering::Registered {
+            crate::game::builtins::cod2::write_weapon_configstrings(&mut self.host);
+        }
         Ok(())
     }
 
@@ -475,7 +814,7 @@ impl ScriptRuntime {
     }
 
     /// `start` with the arguments the entry point takes.
-    fn start_with_args(
+    pub(crate) fn start_with_args(
         &mut self,
         path: &str,
         name: &str,
@@ -486,6 +825,11 @@ impl ScriptRuntime {
         if !self.vm.has_function(f) {
             anyhow::bail!("{path}.gsc defines no {name}()");
         }
+        let args = if path == CALLBACK_SETUP {
+            self.host.callback_args(name, args)
+        } else {
+            args
+        };
         self.vm.start_thread(&mut self.host, f, recv, args);
         Ok(())
     }
@@ -1909,10 +2253,45 @@ impl ScriptRuntime {
             .notify(id, event, &[Value::String(menu), Value::String(response)]);
     }
 
+    /// An engine notify on client `slot`'s entity with string arguments,
+    /// for the ones a game module raises outside a builtin (CoD2's
+    /// binocular and vote notifies, `crate::game::cod2`). Its waiters run in
+    /// the next thread pass.
+    pub fn notify_client(&mut self, slot: usize, event: &str, args: &[&str]) {
+        let Some(id) = self.client_entity(slot) else {
+            return;
+        };
+        let (event, args) = self.vm.with_cx(|cx| {
+            let args: Vec<Value> = args
+                .iter()
+                .map(|a| Value::String(cx.intern_exact(a)))
+                .collect();
+            (cx.intern_folded(event), args)
+        });
+        self.vm.notify(id, event, &args);
+    }
+
+    /// [`Self::notify_client`] with one value argument (CoD4's
+    /// `confirm_location` vector).
+    pub fn notify_client_value(&mut self, slot: usize, event: &str, arg: Option<Value>) {
+        let Some(id) = self.client_entity(slot) else {
+            return;
+        };
+        let event = self.vm.with_cx(|cx| cx.intern_folded(event));
+        let args: Vec<Value> = arg.into_iter().collect();
+        self.vm.notify(id, event, &args);
+    }
+
     /// The per-client server commands the script queued this frame, in call
     /// order. `Server` sends them; nothing here can reach a netchan.
     pub fn take_client_commands(&mut self) -> Vec<(usize, String)> {
-        std::mem::take(&mut self.host.client_commands)
+        self.host.client_commands.take()
+    }
+
+    /// [`Self::take_client_commands`] with each command's write stamp, the
+    /// order CoD2's engine sends them in among the configstrings.
+    pub fn take_client_commands_stamped(&mut self) -> Vec<(u64, usize, String)> {
+        self.host.client_commands.take_stamped()
     }
 
     /// `GameHost::scoreboard` over the roster last mirrored in.
@@ -1963,6 +2342,9 @@ impl ScriptRuntime {
         argv: &[String],
         svs_ms: i32,
     ) -> crate::game::vote::Sends {
+        if let Some(sends) = self.cod2_script_vote(slot, argv) {
+            return sends;
+        }
         let host = &mut self.host;
         self.vm.with_cx(|cx| {
             if argv[0].eq_ignore_ascii_case("vote") {
@@ -1971,6 +2353,50 @@ impl ScriptRuntime {
                 host.call_vote(cx, slot, argv, svs_ms)
             }
         })
+    }
+
+    /// CoD2's votes under `g_oldVoting` 0 (default 1): `Cmd_CallVote_f`
+    /// (cod2_lnxded 0x80ffbb2) refuses under `g_allowVote` 0 or on a `;` in
+    /// its three arguments and otherwise notifies `call_vote` with them;
+    /// `Cmd_Vote_f` (0x8100960) notifies `vote` with "yes" when the first
+    /// letter is `y` or the second `Y` or `1` (Q3's test, as read), else
+    /// "no". VERIFIED, both functions and the dvar defaults. `None` where
+    /// the engine's own vote runs.
+    fn cod2_script_vote(
+        &mut self,
+        slot: usize,
+        argv: &[String],
+    ) -> Option<crate::game::vote::Sends> {
+        use crate::game::builtins::cvar::atoi;
+        let flag = |v: &str| v.is_empty() || atoi(v) != 0;
+        if !self.host.profile.votes.script_votes || flag(self.host.cvars.get("g_oldVoting")) {
+            return None;
+        }
+        let arg = |i: usize| argv.get(i).map_or("", String::as_str);
+        if argv[0].eq_ignore_ascii_case("vote") {
+            let b = arg(1).as_bytes();
+            let yes = b.first() == Some(&b'y') || matches!(b.get(1), Some(b'Y' | b'1'));
+            self.notify_client(slot, "vote", &[if yes { "yes" } else { "no" }]);
+            return Some(Vec::new());
+        }
+        if !flag(self.host.cvars.get("g_allowVote")) {
+            return Some(vec![(Some(slot), "e \"GAME_VOTINGNOTENABLED\"".into())]);
+        }
+        // CoD4's two-client floor comes ahead of the script's call too
+        // (0x80adc1d).
+        if self.host.client_roster.iter().flatten().count() < self.host.profile.votes.min_connected
+        {
+            return Some(vec![(
+                Some(slot),
+                "e \"GAME_VOTINGNOTENOUGHPLAYERS\"".into(),
+            )]);
+        }
+        let (a, b, c) = (arg(1), arg(2), arg(3));
+        if [a, b, c].iter().any(|s| s.contains(';')) {
+            return Some(vec![(Some(slot), "e \"GAME_INVALIDVOTESTRING\"".into())]);
+        }
+        self.notify_client(slot, "call_vote", &[a, b, c]);
+        Some(Vec::new())
     }
 
     /// `CheckVote`: the lines for everyone and whether configstring 15
@@ -2144,6 +2570,19 @@ impl ScriptRuntime {
         self.vm.with_cx(|cx| {
             let field = cx.intern_folded("origin");
             let _ = host.set_field(cx, ent, field, Value::Vector(origin));
+        });
+    }
+
+    /// Writes a client's `angles` field (`r.currentAngles`), no link.
+    pub fn set_client_angles(&mut self, slot: usize, angles: [f32; 3]) {
+        use vcod_gsc::Host;
+        let Some(ent) = self.client_entity(slot) else {
+            return;
+        };
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let field = cx.intern_folded("angles");
+            let _ = host.set_field(cx, ent, field, Value::Vector(angles));
         });
     }
 
@@ -2367,7 +2806,14 @@ impl ScriptRuntime {
                     .collect()
             })
         };
-        let own_body = self.client_session(slot).is_some_and(|s| {
+        // 1.7's `ClientEndFrame` (0x80a68b8) runs its inlined
+        // `G_UpdateClientInfo` ahead of the session checks, as CoD2's
+        // (0x80f7516) calls 0x80f72f8, so every connected client's tags
+        // take their index (cod4-player-anims.md 5, cod2-player-anims.md 1).
+        let own_body = matches!(
+            self.host.profile.game,
+            vcod_common::game::Game::Cod4 | vcod_common::game::Game::Cod2
+        ) || self.client_session(slot).is_some_and(|s| {
             matches!(
                 s.state,
                 crate::follow::SessionState::Playing | crate::follow::SessionState::Dead
@@ -2456,6 +2902,11 @@ impl ScriptRuntime {
                 _ => [0.0; 3],
             }
         })
+    }
+
+    /// The frame a frame-counted `wait` counts (`Vm::set_frame_ms`).
+    pub fn set_frame_ms(&mut self, ms: i32) {
+        self.vm.set_frame_ms(ms);
     }
 
     /// The network clock (`svs.time`) `addTestClient`'s reconnect check
@@ -2556,8 +3007,14 @@ impl ScriptRuntime {
             area: Some(self.host.area.clone()),
             map: self.map.clone(),
             scripts: self.scripts.clone(),
+            gametype: self.scripts.as_ref().map(|s| s.gametype.clone()),
             seed: None,
             spawn_pins: None,
+            models: Some(crate::game::host::ModelCaches {
+                collision: self.host.xmodel_collision.clone(),
+                bounds: self.host.xmodel_bounds.clone(),
+                rigs: self.host.vehicles.rigs.clone(),
+            }),
         }
     }
 
@@ -3039,7 +3496,7 @@ impl ScriptRuntime {
         &mut self.host.triggers
     }
 
-    /// The cvar table as the script left it. `Server::tick` reads it back
+    /// The cvar table as the script left it. `engine::tick` reads it back
     /// every frame for the same reason it re-reads the configstrings: a
     /// thread past a `wait` can still call `setCvar`.
     pub fn cvars(&self) -> &crate::cvars::Cvars {
@@ -3073,6 +3530,13 @@ impl ScriptRuntime {
     /// The `stringUsage` console command's report (`crate::game::usage`).
     pub fn string_usage(&self) -> String {
         crate::game::usage::string_usage(&self.vm.string_lengths())
+    }
+
+    /// Every builtin the loaded closure calls that its game's tables list
+    /// and vcod does not answer, sorted: what a thread reaching one would
+    /// abort on.
+    pub fn unimplemented_builtins(&self) -> Vec<String> {
+        self.host.builtins().unimplemented_calls(&self.vm)
     }
 
     /// Every thread that has died of an error since map load, rendered
@@ -3113,7 +3577,7 @@ impl ScriptRuntime {
     /// One server frame of script with no clients to trace a missile
     /// against: [`ScriptRuntime::run_threads`], then the whole entity pass.
     /// The blasts it sets off go unwalked and its movers push no one;
-    /// `Server::tick` runs the halves itself.
+    /// `Cod1Module::run_frame_cod1` runs the halves itself.
     pub fn run_frame(&mut self, now_ms: i32) {
         self.run_threads(now_ms);
         let world = self.host.world.clone();
@@ -3160,6 +3624,7 @@ impl ScriptRuntime {
         self.host.dobj_time_ms = self.host.level_time_ms;
         self.host.clear_dobj_stamps();
         self.host.level_time_ms = now_ms;
+        self.host.ents.set_clock(now_ms);
         // The notifies retail raises where they happen: the last entity
         // pass's movers and the cmds' touches, use key and item takes. They
         // only wake their waiters, which run in the first round below with
@@ -3178,9 +3643,9 @@ impl ScriptRuntime {
         if !self.host.patch_1_5 {
             self.host.dobj_time_ms = now_ms;
         }
-        for e in self.vm.run_frame(&mut self.host, now_ms) {
-            log::warn!("script error: {e:?}");
-        }
+        // The VM logs each error itself (`Vm::record_error`).
+        self.vm
+            .run_frame(&mut self.host, now_ms - self.script_lag_ms);
         self.host.dobj_time_ms = now_ms;
     }
 
@@ -3213,9 +3678,7 @@ impl ScriptRuntime {
                 }
                 self.host.trigger_fires.swap_remove(i);
             }
-            for e in self.vm.run_current(&mut self.host) {
-                log::warn!("script error: {e:?}");
-            }
+            self.vm.run_current(&mut self.host);
             if !kept {
                 break;
             }
@@ -4016,7 +4479,7 @@ impl ScriptRuntime {
         let fns = vcod_gsc::compile::compile_file(&ast, path, vm.interner_mut())
             .expect("test script compiles");
         vm.install(fns).expect("test script installs");
-        let host = GameHost::new(vec![String::new(); 2048]);
+        let host = GameHost::new(&crate::game::profile::COD1_11, vec![String::new(); 2048]);
         let mut rt = ScriptRuntime {
             vm,
             host,
@@ -4024,11 +4487,18 @@ impl ScriptRuntime {
             gametype_entry: String::new(),
             map: None,
             scripts: None,
+            script_lag_ms: 0,
         };
         let main = rt.vm.func_ref(&rt.entry, "main");
         rt.vm.start_thread(&mut rt.host, main, None, vec![]);
         rt.host.initializing = false;
         rt
+    }
+
+    /// The path [`Self::install_for_test`] installs under.
+    #[cfg(test)]
+    pub fn entry_for_test(&self) -> &str {
+        &self.entry
     }
 
     /// Compile and install another file's worth of functions into a test
@@ -4098,6 +4568,25 @@ impl ScriptRuntime {
         let f = self.vm.func_ref(&self.entry, name);
         self.vm
             .start_thread(&mut self.host, f, Some(Target::Entity(ent)), vec![]);
+    }
+
+    /// Start `path::name` as a thread on `recv` with the arguments `args`
+    /// builds, the way a script's `thread` does.
+    #[cfg(test)]
+    pub fn start_script_thread_for_test(
+        &mut self,
+        path: &str,
+        name: &str,
+        recv: Option<EntId>,
+        args: impl FnOnce(&mut vcod_gsc::Cx) -> Vec<Value>,
+    ) {
+        let f = self.vm.func_ref(path, name);
+        let args = self.vm.with_cx(args);
+        let recv = Some(match recv {
+            Some(e) => Target::Entity(e),
+            None => Target::Struct(self.vm.level_id()),
+        });
+        self.vm.start_thread(&mut self.host, f, recv, args);
     }
 
     /// Set a test client's health and max health, the way a spawn does.
@@ -4285,7 +4774,7 @@ mod tests {
     /// file the two share (`_utility`, `_teams` and the rest).
     #[test]
     fn the_map_and_gametype_closures_both_load() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             return;
         };
         let rt = ScriptRuntime::load(
@@ -4302,6 +4791,46 @@ mod tests {
         assert!(rt.is_ok(), "{:?}", rt.err());
     }
 
+    /// A CoD1 load handed the last level's gametype compile resumes it and
+    /// ends with the compile a load from nothing makes.
+    #[test]
+    fn a_cod1_load_resumes_the_gametype_compile_where_a_fresh_one_lands() {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
+            return;
+        };
+        let fs = Rc::new(fs);
+        let load = |map: &str, carry: Carry| {
+            ScriptRuntime::load(
+                fs.clone(),
+                map,
+                "dm",
+                vec![String::new(); 2048],
+                crate::cvars::Cvars::new(),
+                None,
+                Rc::new(crate::weapons::WeaponTable::empty()),
+                0,
+                carry,
+            )
+            .unwrap()
+        };
+        let first = load("mp_pavlov", Carry::default());
+        let carry = Carry {
+            gametype: first.take_carry().gametype,
+            ..Carry::default()
+        };
+        let resumed = load("mp_carentan", carry);
+        let fresh = load("mp_carentan", Carry::default());
+        let (a, b, c) = (
+            first.compiled().unwrap(),
+            resumed.compiled().unwrap(),
+            fresh.compiled().unwrap(),
+        );
+        assert!(Rc::ptr_eq(a.gametype(), b.gametype()));
+        assert!(!Rc::ptr_eq(b.gametype(), c.gametype()));
+        assert!(b.same_compile(c));
+        assert_eq!(resumed.configstrings(), fresh.configstrings());
+    }
+
     /// mp_depot's `*1` is a `script_brushmodel` carrying `script_exploder`
     /// and `targetname "exploder"`, which is the arm of `_load.gsc::main`
     /// that calls `notsolid()`. The bootstrap therefore has to leave those
@@ -4313,7 +4842,7 @@ mod tests {
     /// under every other gametype.
     #[test]
     fn the_bootstrap_unlinks_mp_depots_exploder_brush_model() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             return;
         };
         let bytes = fs.read("maps/mp/mp_depot.bsp").expect("mp_depot.bsp");
@@ -4425,7 +4954,7 @@ mod tests {
     /// same as a gametype whose file does not exist at all.
     #[test]
     fn a_gametype_without_a_main_is_an_error_not_a_panic() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = vcod_common::testing::game_fs_11() else {
             return;
         };
         /// The paks with one gametype path answered by a script that has
@@ -4459,6 +4988,53 @@ mod tests {
             err.to_string().contains("defines no main()"),
             "unexpected error: {err:#}"
         );
+    }
+
+    /// A call outside the version's builtin tables is retail's script
+    /// compile error, which fails the load; the same script loads under the
+    /// version that lists the name (`builtins::set`).
+    #[test]
+    fn a_builtin_another_version_lists_fails_the_load() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        struct UoCall(Rc<Pk3Fs>);
+        impl ScriptSource for UoCall {
+            fn read(&self, canonical: &str) -> Option<String> {
+                if canonical == "maps/mp/gametypes/uocall" {
+                    return Some("main() { n = getNumVehicles(); }\n".to_string());
+                }
+                PakScripts::new(self.0.clone(), None).read(canonical)
+            }
+        }
+        let fs = Rc::new(fs);
+        let load = |protocol: &str| {
+            let mut cvars = crate::cvars::Cvars::new();
+            cvars.set("protocol", protocol);
+            ScriptRuntime::load_from(
+                Box::new(UoCall(fs.clone())),
+                fs.clone(),
+                "mp_pavlov",
+                "uocall",
+                vec![String::new(); 2048],
+                cvars,
+                None,
+                Rc::new(crate::weapons::WeaponTable::empty()),
+                0,
+                Carry::default(),
+            )
+        };
+        let Err(err) = load("1") else {
+            panic!("getNumVehicles must not compile on 1.1");
+        };
+        assert!(
+            err.to_string()
+                .contains("unknown (builtin) function 'getnumvehicles'"),
+            "unexpected error: {err:#}"
+        );
+        if let Err(e) = load("22") {
+            assert!(!e.to_string().contains("unknown (builtin)"), "{e:#}");
+        }
     }
 
     /// The engine's side of the connect handshake is one notify and its exact
@@ -4495,7 +5071,7 @@ mod tests {
                          level.floored = self.maxspeed; level.ent = self.speed; \
                          self.maxspeed = 220; }\n";
         let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, src);
-        rt.host.defs = crate::defs::Defs::of(&vcod_common::net::protocol::PROTOCOL_V6);
+        rt.host.set_profile(&crate::game::profile::COD1_15);
         rt.host.cvars.set("g_speed", "300.9");
         rt.reconnect_client(0, "vcod".into());
         assert_eq!(rt.level_field("seeded"), vcod_gsc::Value::Int(300));
@@ -4506,7 +5082,7 @@ mod tests {
         rt.host.cvars.set("g_speed", "190");
         assert_eq!(rt.host.client_speed(0), 220);
 
-        rt.host.defs = crate::defs::Defs::of(&vcod_common::net::protocol::PROTOCOL_V1);
+        rt.host.set_profile(&crate::game::profile::COD1_11);
         assert_eq!(rt.host.client_speed(0), 190);
     }
 
@@ -4712,11 +5288,11 @@ mod tests {
         );
         rt.push_client_event(ClientEvent::Connect {
             slot: 0,
-            name: "janost".into(),
+            name: "player".into(),
         });
         rt.run_frame(50);
         let ent = rt.client_entity(0).expect("connect allocated no entity");
-        assert_eq!(rt.field_str(ent, "probe_out"), "janost:spectator");
+        assert_eq!(rt.field_str(ent, "probe_out"), "player:spectator");
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
     }
 

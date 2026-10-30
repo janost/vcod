@@ -43,7 +43,7 @@ pub fn parse(r: &mut MsgReader, p: &Protocol) -> anyhow::Result<Gamestate> {
 /// `CL_ParseGamestate`, with the op byte already consumed.
 pub fn parse_body(r: &mut MsgReader, p: &Protocol) -> anyhow::Result<Gamestate> {
     let mut gs = Gamestate {
-        configstrings: vec![String::new(); p.max_configstrings],
+        configstrings: vec![String::new(); p.transport.max_configstrings],
         server_command_sequence: r.read_long(),
         ..Default::default()
     };
@@ -57,7 +57,7 @@ pub fn parse_body(r: &mut MsgReader, p: &Protocol) -> anyhow::Result<Gamestate> 
                 let i = r.read_short();
                 let i = usize::try_from(i)
                     .ok()
-                    .filter(|&i| i < p.max_configstrings)
+                    .filter(|&i| i < p.transport.max_configstrings)
                     .ok_or_else(|| anyhow::anyhow!("configstring index {i} out of range"))?;
                 gs.configstrings[i] = r.read_big_string();
             }

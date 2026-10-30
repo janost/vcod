@@ -1,5 +1,5 @@
 //! Throwaway census: tally material content/surface flags across stock paks.
-//! Run: COD_DIR=~/Games/CoD-Deluxe cargo run --example flag_census -p vcod-common
+//! Run: COD_DIR=<UO install> cargo run --example flag_census -p vcod-common
 
 use std::collections::BTreeMap;
 

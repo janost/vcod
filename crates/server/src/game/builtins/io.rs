@@ -31,9 +31,14 @@ pub fn iprint_line(
 ) -> Result<Value, ErrorKind> {
     let text = super::message::construct(host, cx, args);
     log::info!("script: iprintln {text}");
+    let letter = if host.profile.print.letter_from_args {
+        cod2_print_letter(host, cx, args)
+    } else {
+        "f".to_string()
+    };
     // The same rewrite `setClientCvar` does: the message is the line's only
     // quoted argument, so a `"` in it would close that argument early.
-    let cmd = format!("f \"{}\"", text.replace('"', "'"));
+    let cmd = format!("{letter} \"{}\"", text.replace('"', "'"));
     match recv {
         Some(_) => {
             let slot = super::client::client_receiver(host, recv)?;
@@ -46,6 +51,38 @@ pub fn iprint_line(
         }
     }
     Ok(Value::Undefined)
+}
+
+/// The word CoD2's `iPrintLn` (0x8110ad2) sends: `va("%c", 'f')`, which
+/// the packer's own `va` of each player argument's `"%s^7"` (0x8110720)
+/// and the final `va("%s \"%s\"")` (0x8110a60) share with it through
+/// `va`'s two buffers. With one player argument the final `va` writes
+/// over the word's own buffer and reads it back empty, so `iprintln(
+/// &"MP_CONNECTED", self)` goes out as ` "MP_CONNECTED\x15<name>^7"`,
+/// VERIFIED live; with two or more the word is the last even-numbered
+/// player's `"<name>^7"`, INFERRED from the same buffers
+/// (cod2-protocol.md 15.5).
+fn cod2_print_letter(host: &GameHost, cx: &Cx, args: &[Value]) -> String {
+    let players: Vec<String> = args
+        .iter()
+        .filter_map(|a| match a {
+            Value::Entity(id) => host
+                .ents
+                .get(*id)
+                .and_then(|e| e.client.as_ref())
+                .and_then(|c| c.first().copied())
+                .map(|n| match n {
+                    Value::String(s) => format!("{}^7", cx.resolve(s)),
+                    _ => "^7".to_string(),
+                }),
+            _ => None,
+        })
+        .collect();
+    match players.len() {
+        0 => "f".to_string(),
+        n if n % 2 == 1 => String::new(),
+        n => players[n - 1].clone(),
+    }
 }
 
 /// `announcement(message [, args...])` (0x5f0f0) and
@@ -78,7 +115,7 @@ pub fn announcement(
 
 /// The rendered log line, split out from `print_line` so a test can pin it
 /// without a log-capturing harness.
-fn render(cx: &Cx, args: &[Value]) -> String {
+pub(crate) fn render(cx: &Cx, args: &[Value]) -> String {
     let mut out = String::new();
     for a in args {
         match cx.format_number(*a) {
@@ -105,7 +142,7 @@ mod iprintln_tests {
     #[test]
     fn iprintln_goes_out_as_the_f_reliable_command() {
         let mut vm = vcod_gsc::Vm::new();
-        let mut host = GameHost::new(vec![String::new(); 2048]);
+        let mut host = GameHost::new(&crate::game::profile::COD1_11, vec![String::new(); 2048]);
         let ents = &mut host.ents;
         let (a, b, key) = vm.with_cx(|cx| {
             let a = ents.spawn_client(cx, 0, None).expect("a client");
@@ -150,7 +187,7 @@ mod iprintln_tests {
     #[test]
     fn announcement_goes_out_as_the_c_reliable_command() {
         let mut vm = vcod_gsc::Vm::new();
-        let mut host = GameHost::new(vec![String::new(); 2048]);
+        let mut host = GameHost::new(&crate::game::profile::COD1_11, vec![String::new(); 2048]);
         let ents = &mut host.ents;
         let (b, key) = vm.with_cx(|cx| {
             ents.spawn_client(cx, 0, None).expect("a client");

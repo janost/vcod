@@ -8,7 +8,7 @@ use glam::Vec3;
 use vcod_common::net::event_ids::{EV_EARTHQUAKE, EV_FIRE_WEAPON_MG42};
 use vcod_common::net::events::GameEvent;
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::{PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::Protocol;
 
 /// One quake: what `0x30017dd0` copies into a slot.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -53,7 +53,7 @@ pub fn from_event(
         // `earthquake` builtin (game 0x5f3d8) writes them.
         // United Offensive's builtin (game.mp.uo 0x7d8dd) writes the
         // duration as a float into `angles2[2]` (uo cgame 0x30023866).
-        EV_EARTHQUAKE if p.version == PROTOCOL_V22.version => {
+        EV_EARTHQUAKE if p.is_uo() => {
             let es = es?;
             (
                 es.field_f32(p, "angles2[0]"),
@@ -177,6 +177,7 @@ impl Quakes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::protocol::PROTOCOL_V22;
 
     fn quake(scale: f32, duration_ms: f32, radius: f32) -> Quake {
         Quake {

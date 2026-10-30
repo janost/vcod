@@ -57,10 +57,15 @@ pub(crate) enum Suspend {
     Wait {
         seconds: f32,
     },
+    /// `waittillframeend`.
+    FrameEnd,
     WaitTill {
         target: Target,
         event: Atom,
         binds: Box<[u16]>,
+        /// What the notify's first arguments must equal (`waittillmatch`);
+        /// empty for `waittill`.
+        matches: Box<[Value]>,
     },
 }
 
@@ -95,7 +100,7 @@ fn array_key(v: Value) -> Option<ArrayKey> {
 /// is rendered and compared textually, and `undefined` against anything
 /// else is an error, both measured
 /// (tests/fixtures/semantics/retail-captures.txt, `# probe_cmp*`).
-fn values_equal(interner: &Interner, a: Value, b: Value) -> Result<bool, ErrorKind> {
+pub(crate) fn values_equal(interner: &Interner, a: Value, b: Value) -> Result<bool, ErrorKind> {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => Ok(x == y),
         (Value::Int(_) | Value::Float(_), Value::Int(_) | Value::Float(_)) => {
@@ -193,6 +198,39 @@ fn eval_mul(a: Value, b: Value) -> Result<Value, ErrorKind> {
     }
 }
 
+/// CoD4's `*` (`div` false) and `/`: a vector on either side casts the
+/// other side up to one and the pair goes per component, a zero divisor
+/// component an error; numbers as CoD2's (`MulNumber`, `DivFloat`).
+fn eval_vector_op(a: Value, b: Value, div: bool) -> Result<Value, ErrorKind> {
+    let as_vec = |v: Value| match v {
+        Value::Vector(v) => Some(v),
+        n => to_f32(n).map(|f| [f; 3]),
+    };
+    if matches!(a, Value::Vector(_)) || matches!(b, Value::Vector(_)) {
+        let (Some(x), Some(y)) = (as_vec(a), as_vec(b)) else {
+            return Err(ErrorKind::BadType("pair has unmatching types"));
+        };
+        if div {
+            if y.contains(&0.0) {
+                return Err(ErrorKind::BadType("divide by 0"));
+            }
+            return Ok(Value::Vector([x[0] / y[0], x[1] / y[1], x[2] / y[2]]));
+        }
+        return Ok(Value::Vector([x[0] * y[0], x[1] * y[1], x[2] * y[2]]));
+    }
+    if !div {
+        return eval_mul(a, b);
+    }
+    let (a, b) = match (a, b) {
+        (Value::Int(x), Value::Int(y)) => (Value::Float(x as f32), Value::Float(y as f32)),
+        ab => ab,
+    };
+    if matches!(b, Value::Float(y) if y == 0.0) {
+        return Err(ErrorKind::BadType("division by zero"));
+    }
+    eval_div(a, b)
+}
+
 fn eval_div(a: Value, b: Value) -> Result<Value, ErrorKind> {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => {
@@ -244,6 +282,15 @@ fn eval_bitxor(a: Value, b: Value) -> Result<Value, ErrorKind> {
     }
 }
 
+/// `<<` and `>>` on ints; the count wraps as x86's shift does.
+fn eval_shift(a: Value, b: Value, left: bool) -> Result<Value, ErrorKind> {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) if left => Ok(Value::Int(x.wrapping_shl(y as u32))),
+        (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x.wrapping_shr(y as u32))),
+        _ => Err(ErrorKind::BadType("<< and >> need integers")),
+    }
+}
+
 fn eval_neg(v: Value) -> Result<Value, ErrorKind> {
     match v {
         Value::Int(i) => Ok(Value::Int(i.wrapping_neg())),
@@ -270,13 +317,89 @@ fn not_of(v: Value, interner: &Interner) -> Result<bool, ErrorKind> {
     match v {
         Value::String(s) | Value::Localized(s) => {
             let text = interner.resolve(s);
-            let n: f64 = text
-                .parse()
-                .map_err(|_| ErrorKind::Custom(format!("cannot cast \"{text}\" to bool")))?;
-            Ok(n == 0.0)
+            let n = string_int(text)
+                .ok_or_else(|| ErrorKind::Custom(format!("cannot cast \"{text}\" to bool")))?;
+            Ok(n == 0)
         }
         other => other.as_bool().map(|b| !b),
     }
+}
+
+/// A string read as a number by the engine's casts to bool, int and float
+/// (cod_lnxded 1.1d 0x080a3c30, 0x080a3de0, 0x080a3fa0; coduo_lnxded
+/// 0x080aa9a0, 0x080aaae2, 0x080aac34): `strtol(s, 0, 10)` or `strtod`, its longest
+/// numeric prefix ("12abc" is 12, " -7" is -7). A result of 0 stands only
+/// when the first non-blank character, past a sign, is `0` or `.0`;
+/// otherwise the cast fails (`# probe_cast_string`,
+/// tests/fixtures/semantics/retail-captures.txt).
+fn string_int(text: &str) -> Option<i32> {
+    let (len, neg) = numeric_prefix(text, false);
+    let digits = text[..len].trim_start_matches(|c: char| c.is_ascii_whitespace());
+    let digits = digits.trim_start_matches(['+', '-']);
+    // strtol saturates at a 32-bit long.
+    let n = digits.bytes().fold(0i64, |n, d| {
+        (n * 10 + i64::from(d - b'0')).min(i64::from(i32::MAX) + 1)
+    });
+    let n = if neg { -n } else { n };
+    let n = n.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+    (n != 0 || zero_spelled(text)).then_some(n)
+}
+
+/// [`string_int`]'s `strtod` arm.
+fn string_float(text: &str) -> Option<f32> {
+    let (len, _) = numeric_prefix(text, true);
+    let f = text[..len].trim_start().parse::<f64>().unwrap_or(0.0) as f32;
+    (f != 0.0 || zero_spelled(text)).then_some(f)
+}
+
+/// The byte length of `text`'s blanks plus its longest decimal number (an
+/// integer, or with `float` a fraction and an exponent too), and its sign.
+fn numeric_prefix(text: &str, float: bool) -> (usize, bool) {
+    let b = text.as_bytes();
+    let mut i = 0;
+    while i < b.len() && (b[i] == b' ' || (b'\t'..=b'\r').contains(&b[i])) {
+        i += 1;
+    }
+    let start = i;
+    let neg = b.get(i) == Some(&b'-');
+    if matches!(b.get(i), Some(b'+' | b'-')) {
+        i += 1;
+    }
+    let digits = |i: &mut usize| {
+        let from = *i;
+        while *i < b.len() && b[*i].is_ascii_digit() {
+            *i += 1;
+        }
+        *i > from
+    };
+    let mut any = digits(&mut i);
+    if float {
+        if b.get(i) == Some(&b'.') {
+            let mut j = i + 1;
+            if digits(&mut j) || any {
+                any = true;
+                i = j;
+            }
+        }
+        if any && matches!(b.get(i), Some(b'e' | b'E')) {
+            let mut j = i + 1;
+            if matches!(b.get(j), Some(b'+' | b'-')) {
+                j += 1;
+            }
+            if digits(&mut j) {
+                i = j;
+            }
+        }
+    }
+    if any { (i, neg) } else { (start, false) }
+}
+
+/// The engine's test that a cast's 0 was meant: the first character past
+/// the blanks (anything under `!`) and a sign is `0`, or `.` then `0`.
+fn zero_spelled(text: &str) -> bool {
+    let t = text.trim_start_matches(|c: char| c < '!');
+    let t = t.strip_prefix(['+', '-']).unwrap_or(t);
+    t.starts_with('0') || t.starts_with(".0")
 }
 
 /// Retail's two texts for a handle whose object was freed
@@ -307,13 +430,18 @@ fn target_to_value(t: Target) -> Value {
 }
 
 impl Vm {
+    /// Every argument array is shared with the caller's copy
+    /// ([`crate::heap::Heap::share`]).
     pub(crate) fn make_frame(
-        &self,
+        &mut self,
         func: FuncRef,
         func_rc: Rc<Function>,
         recv: Option<Target>,
         args: Vec<Value>,
     ) -> Frame {
+        for a in &args {
+            self.heap.share(*a);
+        }
         let mut locals = vec![Value::Undefined; func_rc.locals as usize];
         let take = args.len().min(func_rc.params as usize);
         locals[..take].copy_from_slice(&args[..take]);
@@ -408,6 +536,11 @@ impl Vm {
         // spawn from `get_field`/`set_field` has no defined moment to run at.
         let mut field_spawns = Vec::new();
         loop {
+            // CoD2: ended by a nested spawn's notify (`Vm::set_kill_mid_step`);
+            // the thread's entry is gone, so its frames are dropped.
+            if !self.killed.is_empty() && thread_id.is_some_and(|id| self.killed.contains(&id)) {
+                return Ok(Step::Returned(Value::Undefined));
+            }
             if *remaining == 0 {
                 return Ok(Step::Running);
             }
@@ -479,6 +612,7 @@ impl Vm {
                 }
                 Op::StoreLocal(slot) => {
                     let v = pop!();
+                    self.heap.share(v);
                     frames[top].locals[slot as usize] = v;
                 }
                 Op::LoadField(name) => {
@@ -527,6 +661,7 @@ impl Vm {
                 Op::StoreField(name) => {
                     let v = pop!();
                     let obj = pop!();
+                    self.heap.share(v);
                     match obj {
                         Value::Struct(id) => self.heap.set_field(id, name, v),
                         Value::Entity(id) => {
@@ -596,6 +731,7 @@ impl Vm {
                     let v = pop!();
                     let key = pop!();
                     let obj = pop!();
+                    self.heap.share(v);
                     let Value::Array(id) = obj else {
                         return Err(err(ErrorKind::BadType("indexing needs an array")));
                     };
@@ -604,14 +740,39 @@ impl Vm {
                     })?;
                     self.heap.set_index(id, k, v);
                 }
+                Op::OwnLocal(slot) => {
+                    if let Value::Array(id) = frames[top].locals[slot as usize] {
+                        let own = self.heap.own(id);
+                        frames[top].locals[slot as usize] = Value::Array(own);
+                    }
+                    let v = frames[top].locals[slot as usize];
+                    push!(v);
+                }
+                Op::ClearIndex => {
+                    let key = pop!();
+                    let obj = pop!();
+                    let Value::Array(id) = obj else {
+                        return Err(err(ErrorKind::BadType("indexing needs an array")));
+                    };
+                    let k = array_key(key).ok_or_else(|| {
+                        err(ErrorKind::BadType("array key must be a string or a number"))
+                    })?;
+                    self.heap.clear_index(id, k);
+                }
                 // Retail auto-vivifies an `Undefined` index-assignment target
                 // into a new empty array (measured,
                 // tests/fixtures/semantics/retail-captures.txt `# probe_autoviv`);
                 // `_load.gsc`'s `add_to_array` ships on every stock map
                 // relying on exactly this for an uninitialised `level` field.
+                // Each also copies a shared array before the write
+                // (`Heap::own`) and stores the copy back where it was read.
                 Op::EnsureArrayLocal(slot) => {
                     let id = match frames[top].locals[slot as usize] {
-                        Value::Array(id) => id,
+                        Value::Array(id) => {
+                            let own = self.heap.own(id);
+                            frames[top].locals[slot as usize] = Value::Array(own);
+                            own
+                        }
                         Value::Undefined => {
                             let id = self.heap.new_array();
                             frames[top].locals[slot as usize] = Value::Array(id);
@@ -625,7 +786,13 @@ impl Vm {
                     let obj = pop!();
                     let id = match obj {
                         Value::Struct(sid) => match self.heap.get_field(sid, name) {
-                            Value::Array(id) => id,
+                            Value::Array(id) => {
+                                let own = self.heap.own(id);
+                                if own != id {
+                                    self.heap.set_field(sid, name, Value::Array(own));
+                                }
+                                own
+                            }
                             Value::Undefined => {
                                 let id = self.heap.new_array();
                                 self.heap.set_field(sid, name, Value::Array(id));
@@ -651,7 +818,22 @@ impl Vm {
                                 "Cx::spawn is only honoured from a builtin"
                             );
                             match cur {
-                                Value::Array(id) => id,
+                                Value::Array(id) => {
+                                    let own = self.heap.own(id);
+                                    if own != id {
+                                        let mut cx = Cx {
+                                            interner: &mut self.interner,
+                                            heap: &mut self.heap,
+                                            level: self.level,
+                                            game: self.game,
+                                            notifies,
+                                            spawns: &mut field_spawns,
+                                        };
+                                        host.store_field(&mut cx, eid, name, Value::Array(own))
+                                            .map_err(err)?;
+                                    }
+                                    own
+                                }
                                 Value::Undefined => {
                                     let id = self.heap.new_array();
                                     let mut cx = Cx {
@@ -693,7 +875,13 @@ impl Vm {
                         err(ErrorKind::BadType("array key must be a string or a number"))
                     })?;
                     let id = match self.heap.get_index(outer, k) {
-                        Value::Array(id) => id,
+                        Value::Array(id) => {
+                            let own = self.heap.own(id);
+                            if own != id {
+                                self.heap.set_index(outer, k, Value::Array(own));
+                            }
+                            own
+                        }
                         Value::Undefined => {
                             let id = self.heap.new_array();
                             self.heap.set_index(outer, k, Value::Array(id));
@@ -762,7 +950,8 @@ impl Vm {
                     })?;
                     if threaded {
                         self.spawn(host, target, callee, recv, args, errors);
-                        push!(Value::Undefined);
+                        let v = self.thread_returned.take().filter(|_| self.thread_returns);
+                        push!(v.unwrap_or(Value::Undefined));
                     } else {
                         frames.push(self.make_frame(target, callee, recv, args));
                     }
@@ -866,7 +1055,8 @@ impl Vm {
                     })?;
                     if threaded {
                         self.spawn(host, target, callee, recv, args, errors);
-                        push!(Value::Undefined);
+                        let v = self.thread_returned.take().filter(|_| self.thread_returns);
+                        push!(v.unwrap_or(Value::Undefined));
                     } else {
                         frames.push(self.make_frame(target, callee, recv, args));
                     }
@@ -891,6 +1081,38 @@ impl Vm {
                     let a = pop!();
                     push!(eval_div(a, b).map_err(err)?);
                 }
+                Op::MulNumber => {
+                    let b = pop!();
+                    let a = pop!();
+                    if matches!(a, Value::Vector(_)) || matches!(b, Value::Vector(_)) {
+                        return Err(err(ErrorKind::BadType("pair has unmatching types")));
+                    }
+                    push!(eval_mul(a, b).map_err(err)?);
+                }
+                Op::MulVector => {
+                    let b = pop!();
+                    let a = pop!();
+                    push!(eval_vector_op(a, b, false).map_err(err)?);
+                }
+                Op::DivVector => {
+                    let b = pop!();
+                    let a = pop!();
+                    push!(eval_vector_op(a, b, true).map_err(err)?);
+                }
+                Op::DivFloat => {
+                    let b = pop!();
+                    let a = pop!();
+                    let (a, b) = match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => {
+                            (Value::Float(x as f32), Value::Float(y as f32))
+                        }
+                        ab => ab,
+                    };
+                    if matches!(b, Value::Float(y) if y == 0.0) {
+                        return Err(err(ErrorKind::BadType("division by zero")));
+                    }
+                    push!(eval_div(a, b).map_err(err)?);
+                }
                 Op::Mod => {
                     let b = pop!();
                     let a = pop!();
@@ -910,6 +1132,11 @@ impl Vm {
                     let b = pop!();
                     let a = pop!();
                     push!(eval_bitxor(a, b).map_err(err)?);
+                }
+                Op::Shl | Op::Shr => {
+                    let b = pop!();
+                    let a = pop!();
+                    push!(eval_shift(a, b, matches!(op, Op::Shl)).map_err(err)?);
                 }
                 Op::Eq => {
                     let b = pop!();
@@ -956,6 +1183,12 @@ impl Vm {
                     let i = match v {
                         Value::Int(i) => i,
                         Value::Float(f) => f as i32,
+                        Value::String(s) | Value::Localized(s) => {
+                            let text = self.interner.resolve(s);
+                            string_int(text).ok_or_else(|| {
+                                err(ErrorKind::Custom(format!("cannot cast \"{text}\" to int")))
+                            })?
+                        }
                         _ => return Err(err(ErrorKind::BadType("(int) needs a number"))),
                     };
                     push!(Value::Int(i));
@@ -965,6 +1198,14 @@ impl Vm {
                     let f = match v {
                         Value::Int(i) => i as f32,
                         Value::Float(f) => f,
+                        Value::String(s) | Value::Localized(s) => {
+                            let text = self.interner.resolve(s);
+                            string_float(text).ok_or_else(|| {
+                                err(ErrorKind::Custom(format!(
+                                    "cannot cast \"{text}\" to float"
+                                )))
+                            })?
+                        }
                         _ => return Err(err(ErrorKind::BadType("(float) needs a number"))),
                     };
                     push!(Value::Float(f));
@@ -1002,6 +1243,7 @@ impl Vm {
                 Op::Return => {
                     let v = pop!();
                     frames.pop();
+                    self.end_call_endons(thread_id, frames.len());
                     if frames.is_empty() {
                         return Ok(Step::Returned(v));
                     }
@@ -1009,6 +1251,7 @@ impl Vm {
                 }
                 Op::ReturnUndef => {
                     frames.pop();
+                    self.end_call_endons(thread_id, frames.len());
                     if frames.is_empty() {
                         return Ok(Step::Returned(Value::Undefined));
                     }
@@ -1036,6 +1279,9 @@ impl Vm {
                     }
                     return Ok(Step::Suspend(Suspend::Wait { seconds }));
                 }
+                Op::WaitTillFrameEnd => {
+                    return Ok(Step::Suspend(Suspend::FrameEnd));
+                }
                 Op::WaitTill { binds } => {
                     let event = pop!();
                     let recv = pop!();
@@ -1057,6 +1303,33 @@ impl Vm {
                         target,
                         event,
                         binds,
+                        matches: Box::new([]),
+                    }));
+                }
+                Op::WaitTillMatch { argc } => {
+                    let mut matches = Vec::with_capacity(argc as usize);
+                    for _ in 0..argc {
+                        matches.push(pop!());
+                    }
+                    matches.reverse();
+                    let event = pop!();
+                    let recv = pop!();
+                    let target = as_target(recv).ok_or_else(|| {
+                        err(ErrorKind::BadType(
+                            "waittillmatch needs an entity or struct receiver",
+                        ))
+                    })?;
+                    let Value::String(event) = event else {
+                        return Err(err(ErrorKind::BadType(
+                            "waittillmatch needs a string event name",
+                        )));
+                    };
+                    let event = self.interner.fold_atom(event);
+                    return Ok(Step::Suspend(Suspend::WaitTill {
+                        target,
+                        event,
+                        binds: Box::new([]),
+                        matches: matches.into_boxed_slice(),
                     }));
                 }
                 // `notify` and `endon` both resolve where they execute:
@@ -1110,7 +1383,7 @@ impl Vm {
                     if let Some(id) = thread_id
                         && let Some(idx) = self.threads.iter().position(|t| t.id == id)
                     {
-                        self.threads[idx].endons.push((target, event));
+                        self.threads[idx].endons.push((target, event, frames.len()));
                     }
                 }
             }

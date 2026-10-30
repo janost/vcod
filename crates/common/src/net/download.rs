@@ -8,6 +8,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use super::protocol::Protocol;
+use super::wire::Transport;
 
 /// Pak names from `sv_referencedPakNames`, e.g. `main/bellicourt_v1_1`.
 pub fn referenced_pak_names(systeminfo: &str) -> Vec<String> {
@@ -16,15 +17,16 @@ pub fn referenced_pak_names(systeminfo: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// `FS_idPak` under the protocol's [`Protocol::id_pak_dirs`] (`main`, and
+/// `FS_idPak` under the protocol's [`crate::net::wire::PakRules::id_pak_dirs`] (`main`, and
 /// `uo` for United Offensive): `mp_bin`, one of its
-/// [`Protocol::id_pak_prefixes`] then one of its
-/// [`Protocol::id_pak_numbers`], and a `localized_*` whose rest holds `_`
+/// [`crate::net::wire::PakRules::id_pak_prefixes`] then one of its
+/// [`crate::net::wire::PakRules::id_pak_numbers`], and a `localized_*` whose rest holds `_`
 /// and such a name (CoDMP.exe 1.1 0x43b6b0, 1.5 0x43e310). Names compare
 /// without case.
-pub fn is_stock_pak(name: &str, proto: &Protocol) -> bool {
+pub fn is_stock_pak(name: &str, t: &Transport) -> bool {
     let lower = name.to_ascii_lowercase().replace('\\', "/");
-    let Some(base) = proto
+    let Some(base) = t
+        .paks
         .id_pak_dirs
         .iter()
         .find_map(|d| lower.strip_prefix(d)?.strip_prefix('/'))
@@ -36,14 +38,14 @@ pub fn is_stock_pak(name: &str, proto: &Protocol) -> bool {
     }
     let numbered = |prefix: &&str| {
         base.strip_prefix(*prefix)
-            .is_some_and(|n| proto.id_pak_numbers.contains(&n))
+            .is_some_and(|n| t.paks.id_pak_numbers.contains(&n))
     };
-    if proto.id_pak_prefixes.iter().any(numbered) {
+    if t.paks.id_pak_prefixes.iter().any(numbered) {
         return true;
     }
     base.strip_prefix("localized_").is_some_and(|rest| {
-        proto.id_pak_prefixes.iter().any(|prefix| {
-            proto
+        t.paks.id_pak_prefixes.iter().any(|prefix| {
+            t.paks
                 .id_pak_numbers
                 .iter()
                 .any(|n| rest.contains(&format!("_{prefix}{n}")))
@@ -53,9 +55,8 @@ pub fn is_stock_pak(name: &str, proto: &Protocol) -> bool {
 
 /// What `FS_ComparePaks` passes over without asking for it: a stock pak, and
 /// on 1.5 one whose name holds `_svr_` (1.5 CoDMP.exe 0x43e510, 0x43e490).
-fn compare_skips(name: &str, proto: &Protocol) -> bool {
-    is_stock_pak(name, proto)
-        || (proto.skips_svr_paks && name.to_ascii_lowercase().contains("_svr_"))
+fn compare_skips(name: &str, t: &Transport) -> bool {
+    is_stock_pak(name, t) || (t.paks.skips_svr_paks && name.to_ascii_lowercase().contains("_svr_"))
 }
 
 /// A directory or file name a server may name: ASCII letters, digits, `_`,
@@ -150,7 +151,7 @@ fn lacking(
     have: &impl Fn(i32) -> bool,
     exists: &impl Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
-    if compare_skips(&pak.name, proto) {
+    if compare_skips(&pak.name, &proto.transport) {
         return None;
     }
     let rel = safe_rel_path(&pak.name, dirs)?;
@@ -178,7 +179,7 @@ pub fn missing_paks(
 ) -> Vec<String> {
     referenced_paks(systeminfo)
         .into_iter()
-        .filter(|p| !compare_skips(&p.name, proto))
+        .filter(|p| !compare_skips(&p.name, &proto.transport))
         .filter(|p| {
             safe_rel_path(&p.name, dirs).is_none()
                 || lacking(p, proto, dirs, &have, &exists).is_some()
@@ -197,7 +198,7 @@ pub fn missing_stock_paks(
 ) -> Vec<String> {
     referenced_paks(systeminfo)
         .into_iter()
-        .filter(|p| is_stock_pak(&p.name, proto) && p.checksum.is_some_and(|c| !have(c)))
+        .filter(|p| is_stock_pak(&p.name, &proto.transport) && p.checksum.is_some_and(|c| !have(c)))
         .map(|p| p.name)
         .collect()
 }
@@ -371,7 +372,7 @@ mod tests {
     use super::*;
     use crate::net::protocol::PROTOCOL_V1;
 
-    // Trimmed from a live server (167.235.192.175:23120).
+    // Trimmed from a live server.
     const SYSTEMINFO: &str = "\\sv_referencedPakNames\\main/zzz_zfunmod main/shipment \
          main/pak6 main/pak0 main/farm main/bellicourt_v1_1 main/localized_english_pak0\
          \\sv_referencedPaks\\1 2 3 4 5 6 7\\sv_serverid\\225";
@@ -389,22 +390,28 @@ mod tests {
     fn stock_paks_follow_the_protocols_id_pak_walk() {
         use crate::net::protocol::PROTOCOL_V6;
         for p in [&PROTOCOL_V1, &PROTOCOL_V6] {
-            assert!(is_stock_pak("main/pak0", p));
-            assert!(is_stock_pak("Main/PAK8", p));
-            assert!(is_stock_pak("main/mp_pak3", p));
-            assert!(is_stock_pak("main/mp_bin", p));
-            assert!(is_stock_pak("main/localized_english_pak1", p));
-            assert!(!is_stock_pak("main/pak10", p)); // custom, downloadable
-            assert!(!is_stock_pak("main/bellicourt_v1_1", p));
-            assert!(!is_stock_pak("revive/pak0", p)); // a mod's own pak0 is fair game
-            assert!(!is_stock_pak("main/zzz_localized_english_pak1", p));
+            assert!(is_stock_pak("main/pak0", &p.transport));
+            assert!(is_stock_pak("Main/PAK8", &p.transport));
+            assert!(is_stock_pak("main/mp_pak3", &p.transport));
+            assert!(is_stock_pak("main/mp_bin", &p.transport));
+            assert!(is_stock_pak("main/localized_english_pak1", &p.transport));
+            assert!(!is_stock_pak("main/pak10", &p.transport)); // custom, downloadable
+            assert!(!is_stock_pak("main/bellicourt_v1_1", &p.transport));
+            assert!(!is_stock_pak("mymod/pak0", &p.transport)); // a mod's own pak0 is fair game
+            assert!(!is_stock_pak(
+                "main/zzz_localized_english_pak1",
+                &p.transport
+            ));
         }
         // 1.1 walks `%d` 0..8, 1.5 `%x` 0..f.
-        assert!(!is_stock_pak("main/pak9", &PROTOCOL_V1));
-        assert!(is_stock_pak("main/pak9", &PROTOCOL_V6));
-        assert!(!is_stock_pak("main/pakb", &PROTOCOL_V1));
-        assert!(is_stock_pak("main/pakb", &PROTOCOL_V6));
-        assert!(is_stock_pak("main/localized_english_pakf", &PROTOCOL_V6));
+        assert!(!is_stock_pak("main/pak9", &PROTOCOL_V1.transport));
+        assert!(is_stock_pak("main/pak9", &PROTOCOL_V6.transport));
+        assert!(!is_stock_pak("main/pakb", &PROTOCOL_V1.transport));
+        assert!(is_stock_pak("main/pakb", &PROTOCOL_V6.transport));
+        assert!(is_stock_pak(
+            "main/localized_english_pakf",
+            &PROTOCOL_V6.transport
+        ));
     }
 
     #[test]
@@ -453,21 +460,21 @@ mod tests {
         assert_eq!(safe_rel_path("Main/foo", &["main"]), None);
         assert_eq!(safe_rel_path("mainx/foo", &["main"]), None);
         assert_eq!(
-            safe_rel_path("genesis/zzz_revive", &["main", "genesis"]),
-            Some(PathBuf::from("genesis/zzz_revive.pk3"))
+            safe_rel_path("mymod/zzz_sample", &["main", "mymod"]),
+            Some(PathBuf::from("mymod/zzz_sample.pk3"))
         );
     }
 
-    // Seen live on 199.247.2.228:28960 and 63.176.159.145:28960, trimmed.
-    const MOD_SYSTEMINFO: &str = "\\cl_allowDownload\\0\\fs_game\\genesis\\sv_referencedPakNames\\\
-         genesis/zzz_revive main/pak6 main/zzz_mosinfix main/localized_english_pak0";
+    // The shape two public servers sent, trimmed, names changed.
+    const MOD_SYSTEMINFO: &str = "\\cl_allowDownload\\0\\fs_game\\mymod\\sv_referencedPakNames\\\
+         mymod/zzz_sample main/pak6 main/zzz_mosinfix main/localized_english_pak0";
 
     #[test]
     fn fs_game_names_a_plain_directory_other_than_the_base() {
-        assert_eq!(fs_game(MOD_SYSTEMINFO, "main").as_deref(), Some("genesis"));
+        assert_eq!(fs_game(MOD_SYSTEMINFO, "main").as_deref(), Some("mymod"));
         assert_eq!(
-            fs_game("\\fs_game\\BO7MEDX-MOD", "main").as_deref(),
-            Some("BO7MEDX-MOD")
+            fs_game("\\fs_game\\ABC1XYZ-MOD", "main").as_deref(),
+            Some("ABC1XYZ-MOD")
         );
         for v in ["", "main", "Main", "..", "../x", "a/b", ".hidden"] {
             assert_eq!(fs_game(&format!("\\fs_game\\{v}"), "main"), None, "{v:?}");
@@ -480,14 +487,14 @@ mod tests {
         let got = missing_paks(
             MOD_SYSTEMINFO,
             &PROTOCOL_V1,
-            &["main", "genesis"],
+            &["main", "mymod"],
             |_| false,
             |rel| rel == Path::new("main/zzz_mosinfix.pk3"),
         );
-        assert_eq!(got, vec!["genesis/zzz_revive.pk3"]);
+        assert_eq!(got, vec!["mymod/zzz_sample.pk3"]);
         // A directory the client won't write to is missing however it's named.
         let got = missing_paks(MOD_SYSTEMINFO, &PROTOCOL_V1, &["main"], |_| false, |_| true);
-        assert_eq!(got, vec!["genesis/zzz_revive.pk3"]);
+        assert_eq!(got, vec!["mymod/zzz_sample.pk3"]);
     }
 
     #[test]
@@ -585,7 +592,7 @@ mod tests {
 
     #[test]
     fn candidates_match_on_names_without_separators() {
-        // Seen live on 167.235.192.175:23120.
+        // Seen live on a public server.
         let info = "\\sv_referencedPakNames\\main/zzz_zfunmod main/farm main/BunkerCourt2AvsG";
         let got = candidates_for_map(
             info,

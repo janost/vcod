@@ -200,7 +200,7 @@ fn ours(
     map: &str,
     capture: &Capture,
     fs: vcod_common::pk3::Pk3Fs,
-    bsp: &vcod_common::bsp::Bsp,
+    bsp: &vcod_common::mapworld::MapWorld,
 ) -> (PlayerState, Join) {
     let fs = std::rc::Rc::new(fs);
     let mut now = Instant::now();

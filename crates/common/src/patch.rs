@@ -42,7 +42,7 @@ impl Arith {
     /// The build a protocol's Linux server runs: 1.1d's keeps its floats,
     /// 1.5b's and United Offensive's store them.
     pub fn for_protocol(p: &crate::net::protocol::Protocol) -> Self {
-        if p.version == crate::net::protocol::PROTOCOL_V1.version {
+        if p.is_v1() {
             Arith::Kept
         } else {
             Arith::Stored

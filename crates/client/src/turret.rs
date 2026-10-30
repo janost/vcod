@@ -467,7 +467,7 @@ mod tests {
         let Some(fs) = vcod_common::testing::game_fs() else {
             return;
         };
-        let model = vcod_common::xmodel::load(&fs, "mg42_bipod").unwrap();
+        let model = vcod_common::model::load(&fs, "mg42_bipod").unwrap();
         let skel = Skeleton::build(&[&model]);
         let at =
             |pose: &PoseBuffer, tag: &str| pose.bone_world(&skel, skel.bone_index(tag).unwrap());

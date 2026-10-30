@@ -528,8 +528,8 @@ fn a_leaning_bodys_bones_sit_as_on_retail() {
 /// 1.5's, so this runs there too).
 fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
     let fs = vcod_common::testing::game_fs()?;
-    let v6 = vcod_common::net::protocol::PROTOCOL_V6.version;
-    (vcod_server::server::install_protocol(&fs).version == v6).then_some(fs)
+    let v6 = vcod_common::net::protocol::PROTOCOL_V6.transport.version;
+    (vcod_server::server::install_protocol(&fs).transport.version == v6).then_some(fs)
 }
 
 /// The 1.5b `probe_bones` capture logs both clients' cmds and `ct=`, so

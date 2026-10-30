@@ -1,10 +1,10 @@
 //! Merges several xmodel bone hierarchies (hands and gun, body and
 //! attachments) into one skeleton and evaluates anim poses into skin matrices.
 
+use crate::model::Model;
 use crate::xanim::XAnim;
-use crate::xmodel::XModel;
 use glam::{Mat4, Quat, Vec3};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 /// Graft warnings already printed, keyed `<kind>:<lod>:<bone>`, so a shared
@@ -44,10 +44,34 @@ pub struct Skeleton {
     /// Per model: inverse of the model's own bind world, so
     /// `world * inv_bind` is identity at bind pose.
     inv_binds: Vec<Vec<Mat4>>,
+    /// Bone name -> the first bone of that name, what `bind` and
+    /// `bone_index` look up.
+    index: HashMap<String, usize>,
 }
 
 /// Track index -> skeleton bone index; `None` for bones the skeleton lacks.
 pub struct AnimBinding(pub(crate) Vec<Option<usize>>);
+
+/// One skeleton's [`Skeleton::bind`]s, made once per clip: a body poses
+/// every frame off the same few clips. Kept beside the skeleton it binds
+/// for; each clip is held, so its address stays its own.
+#[derive(Default)]
+pub struct BindCache(std::cell::RefCell<HashMap<usize, KeptBinding>>);
+
+type KeptBinding = (std::rc::Rc<XAnim>, std::rc::Rc<AnimBinding>);
+
+impl BindCache {
+    /// `skel.bind(anim)`, from the cache once made.
+    pub fn bind(&self, skel: &Skeleton, anim: &std::rc::Rc<XAnim>) -> std::rc::Rc<AnimBinding> {
+        let key = std::rc::Rc::as_ptr(anim) as usize;
+        self.0
+            .borrow_mut()
+            .entry(key)
+            .or_insert_with(|| (anim.clone(), std::rc::Rc::new(skel.bind(anim))))
+            .1
+            .clone()
+    }
+}
 
 /// A merged bone takes the box of the model that brings one. The
 /// playerbody's own `bip01 head` and `bip01 neck` boxes are all-zero and the
@@ -57,7 +81,7 @@ pub struct AnimBinding(pub(crate) Vec<Option<usize>>);
 /// model's `bip01 head`) is its own part's bone on retail and traced as well
 /// (docs/research/cod11-combat.md 3.1): it comes back as a box-only bone to
 /// hang off `slot` at its origin.
-fn adopt_hit_box(slot: &mut SkelBone, from: &crate::xmodel::Bone) -> Option<SkelBone> {
+fn adopt_hit_box(slot: &mut SkelBone, from: &crate::model::Bone) -> Option<SkelBone> {
     if (from.hit_maxs - from.hit_mins).max_element() <= 0.0 {
         return None;
     }
@@ -81,7 +105,7 @@ fn adopt_hit_box(slot: &mut SkelBone, from: &crate::xmodel::Bone) -> Option<Skel
 /// [`adopt_hit_box`] onto `bones[si]`, a second box appended as a child of
 /// it. A name lookup (a clip's track, a tag) finds `bones[si]` first, so the
 /// extra bone keeps its identity local.
-fn extra_box(bones: &mut Vec<SkelBone>, si: usize, from: &crate::xmodel::Bone) {
+fn extra_box(bones: &mut Vec<SkelBone>, si: usize, from: &crate::model::Bone) {
     if let Some(mut extra) = adopt_hit_box(&mut bones[si], from) {
         extra.parent = si as i32;
         bones.push(extra);
@@ -107,7 +131,7 @@ fn inherit_hit_locations(bones: &mut [SkelBone]) {
 
 impl Skeleton {
     /// `build_grafted` with no explicit tags.
-    pub fn build(models: &[&XModel]) -> Skeleton {
+    pub fn build(models: &[&Model]) -> Skeleton {
         Skeleton::build_grafted(&models.iter().map(|m| (*m, None)).collect::<Vec<_>>())
     }
 
@@ -117,7 +141,7 @@ impl Skeleton {
     /// bone tree: a head model's own `bip01 neck`/`bip01 head` must ride the
     /// body's animated copies, not unkeyed duplicates); genuinely new bones
     /// append with remapped parents.
-    pub fn build_grafted(models: &[(&XModel, Option<&str>)]) -> Skeleton {
+    pub fn build_grafted(models: &[(&Model, Option<&str>)]) -> Skeleton {
         let mut bones: Vec<SkelBone> = Vec::new();
         let mut maps: Vec<Vec<usize>> = Vec::new();
         let mut inv_binds: Vec<Vec<Mat4>> = Vec::new();
@@ -144,11 +168,11 @@ impl Skeleton {
                             && warned_grafts()
                                 .lock()
                                 .unwrap()
-                                .insert(format!("ambiguous:{}:{target}", model.lod))
+                                .insert(format!("ambiguous:{}:{target}", model.name))
                         {
                             log::warn!(
                                 "{}: graft bone '{target}' matches more than one bone in the base skeleton, using the first",
-                                model.lod
+                                model.name
                             );
                         }
                         extra_box(&mut bones, si, b);
@@ -158,11 +182,11 @@ impl Skeleton {
                     if warned_grafts()
                         .lock()
                         .unwrap()
-                        .insert(format!("missing:{}:{target}", model.lod))
+                        .insert(format!("missing:{}:{target}", model.name))
                     {
                         log::warn!(
                             "{}: graft bone '{target}' not in the base skeleton, attaching as a new root",
-                            model.lod
+                            model.name
                         );
                     }
                 }
@@ -193,11 +217,30 @@ impl Skeleton {
             maps.push(map);
         }
         inherit_hit_locations(&mut bones);
+        let mut index = HashMap::with_capacity(bones.len());
+        for (i, b) in bones.iter().enumerate() {
+            index.entry(b.name.clone()).or_insert(i);
+        }
         Skeleton {
             bones,
             maps,
             inv_binds,
+            index,
         }
+    }
+
+    /// Model `model`'s skin matrices for the skeleton posed as `worlds`
+    /// (each bone's transform before any inverse bind, in skeleton order):
+    /// `world * inverse_bind` in the model's own bone order.
+    pub fn skin_matrices(&self, worlds: &[(Vec3, Quat)], model: usize) -> Vec<Mat4> {
+        self.maps[model]
+            .iter()
+            .zip(&self.inv_binds[model])
+            .map(|(&si, inv)| {
+                let (p, r) = worlds[si];
+                Mat4::from_rotation_translation(r, p) * *inv
+            })
+            .collect()
     }
 
     pub fn bone_count(&self) -> usize {
@@ -205,7 +248,7 @@ impl Skeleton {
     }
 
     pub fn bone_index(&self, name: &str) -> Option<usize> {
-        self.bones.iter().position(|b| b.name == name)
+        self.index.get(name).copied()
     }
 
     pub fn bones(&self) -> &[SkelBone] {
@@ -216,7 +259,7 @@ impl Skeleton {
         AnimBinding(
             anim.tracks
                 .iter()
-                .map(|t| self.bones.iter().position(|b| b.name == t.bone))
+                .map(|t| self.bone_index(&t.bone))
                 .collect(),
         )
     }
@@ -308,13 +351,22 @@ pub struct PoseBuffer {
 impl PoseBuffer {
     pub fn new(skel: &Skeleton) -> PoseBuffer {
         PoseBuffer {
+            records: Some(skel.bones.iter().map(Record::bind).collect()),
+            ..PoseBuffer::drawn(skel)
+        }
+    }
+
+    /// [`PoseBuffer::new`] without the 1.5/UO engine records: for a pose
+    /// only drawn, never traced, whose blends then skip the records' walk.
+    pub fn drawn(skel: &Skeleton) -> PoseBuffer {
+        PoseBuffer {
             locals: skel
                 .bones
                 .iter()
                 .map(|b| (b.local_pos, b.local_rot))
                 .collect(),
             bind_pos: skel.bones.iter().map(|b| b.local_pos).collect(),
-            records: Some(skel.bones.iter().map(Record::bind).collect()),
+            records: None,
         }
     }
 
@@ -456,21 +508,29 @@ impl PoseBuffer {
     }
 
     /// Posed world transform of one bone, before any inverse bind.
+    /// [`PoseBuffer::bone_worlds`]' entry for `bone`, composed down its
+    /// parent chain alone, in the same order.
     pub fn bone_world(&self, skel: &Skeleton, bone: usize) -> (Vec3, Quat) {
-        self.bone_worlds(skel)[bone]
+        let mut chain = Vec::with_capacity(16);
+        let mut b = bone as i32;
+        while b >= 0 {
+            chain.push(b as usize);
+            b = skel.bones[b as usize].parent;
+        }
+        let mut world: Option<(Vec3, Quat)> = None;
+        for &b in chain.iter().rev() {
+            let (lp, lr) = self.locals[b];
+            world = Some(match world {
+                Some((pp, pr)) => (pp + pr * lp, pr * lr),
+                None => (lp, lr),
+            });
+        }
+        world.expect("the chain holds the bone itself")
     }
 
     /// `world(pose) * inverse_bind`, in the model's own bone order.
     pub fn skin_matrices(&self, skel: &Skeleton, model: usize) -> Vec<Mat4> {
-        let worlds = self.bone_worlds(skel);
-        skel.maps[model]
-            .iter()
-            .zip(&skel.inv_binds[model])
-            .map(|(&si, inv)| {
-                let (p, r) = worlds[si];
-                Mat4::from_rotation_translation(r, p) * *inv
-            })
-            .collect()
+        skel.skin_matrices(&self.bone_worlds(skel), model)
     }
 }
 
@@ -568,16 +628,15 @@ fn bind_raw(q: Quat) -> [i16; 4] {
     crate::xanim::raw_key(c(q.x), c(q.y), c(q.z))
 }
 
-/// A track's keys as shorts: its own, or a hand-built track's rounded.
-fn raw_keys(track: &crate::xanim::Track) -> Vec<[i16; 4]> {
+/// A track's key `k` as shorts: its own, or a hand-built track's rounded.
+fn raw_key_at(track: &crate::xanim::Track, k: usize) -> [i16; 4] {
     if track.rot_raw.len() == track.rot_keys.len() {
-        return track.rot_raw.clone();
+        return track.rot_raw[k];
     }
-    track
-        .rot_keys
-        .iter()
-        .map(|(_, q)| q.to_array().map(|c| (c * 32767.0).round() as i16))
-        .collect()
+    track.rot_keys[k]
+        .1
+        .to_array()
+        .map(|c| (c * 32767.0).round() as i16)
 }
 
 /// The two keys a frame falls between and how far, stored, as UO's
@@ -615,8 +674,7 @@ fn sample_records(
         match key_span(&track.rot_keys, frame_pos) {
             None => r.q[3] = st(f64::from(r.q[3]) + w),
             Some((a, b, frac)) => {
-                let raw = raw_keys(track);
-                let (k0, k1) = (raw[a], raw[b]);
+                let (k0, k1) = (raw_key_at(track, a), raw_key_at(track, b));
                 for c in 0..4 {
                     let s0 = f64::from(k0[c]);
                     let v = if a == b {
@@ -877,8 +935,8 @@ impl PoseBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{Bone, Model};
     use crate::xanim::{Track, XAnim};
-    use crate::xmodel::{Bone, XModel};
     use glam::{Mat4, Quat, Vec3};
 
     fn bone(name: &str, parent: i32, local_pos: Vec3, local_rot: Quat, world: &[Bone]) -> Bone {
@@ -901,20 +959,12 @@ mod tests {
         }
     }
 
-    fn model(bones: Vec<Bone>) -> XModel {
-        XModel {
-            lod: "t".into(),
-            surfaces: vec![],
-            materials: vec![],
-            bones,
-            collision: Vec::new(),
-            lod_dists: vec![0.0],
-            coarse: Vec::new(),
-        }
+    fn model(bones: Vec<Bone>) -> Model {
+        Model::rig("t", bones)
     }
 
     /// hands-like: a > tag_weapon; gun-like: tag_weapon > c.
-    fn two_model_skel() -> (XModel, XModel) {
+    fn two_model_skel() -> (Model, Model) {
         let mut hb = vec![bone("a", -1, Vec3::ZERO, Quat::IDENTITY, &[])];
         hb.push(bone(
             "tag_weapon",
@@ -1228,6 +1278,34 @@ mod tests {
         assert!(pose.local(1).1.abs_diff_eq(want, 1e-5));
     }
 
+    /// A drawn pose blends to the same locals bit for bit without the
+    /// records, and one bone's world off its chain is `bone_worlds`' entry.
+    #[test]
+    fn a_drawn_pose_matches_the_recorded_one() {
+        let skel = two_bone_chain();
+        let turned = Quat::from_rotation_z(0.7);
+        let legs = one_track_anim("root", Vec3::new(1.0, 0.5, 2.0), turned);
+        let torso = one_track_anim("child", Vec3::new(0.0, 3.0, 0.0), turned.inverse());
+        let (bl, bt) = (skel.bind(&legs), skel.bind(&torso));
+        let blend = |mut pose: PoseBuffer| {
+            pose.blend_nodes(&[
+                (&[(&legs, &bl, 0.0, 1.0)], 0.3),
+                (&[(&torso, &bt, 0.0, 0.4)], 1.0),
+            ]);
+            pose
+        };
+        let (kept, drawn) = (
+            blend(PoseBuffer::new(&skel)),
+            blend(PoseBuffer::drawn(&skel)),
+        );
+        assert!(kept.records().is_some() && drawn.records().is_none());
+        let worlds = drawn.bone_worlds(&skel);
+        assert_eq!(kept.bone_worlds(&skel), worlds);
+        for (b, w) in worlds.iter().enumerate() {
+            assert_eq!(drawn.bone_world(&skel, b), *w);
+        }
+    }
+
     fn two_bone_chain() -> Skeleton {
         let mut bones = vec![bone("root", -1, Vec3::ZERO, Quat::IDENTITY, &[])];
         bones.push(bone(
@@ -1266,8 +1344,8 @@ mod tests {
         if fs.read("xanim/viewmodel_kar98mp_idle").is_none() {
             return;
         };
-        let hands = crate::xmodel::load(&fs, "viewmodel_hands_new").unwrap();
-        let gun = crate::xmodel::load(&fs, "viewmodel_kar98k").unwrap();
+        let hands = crate::model::load(&fs, "viewmodel_hands_new").unwrap();
+        let gun = crate::model::load(&fs, "viewmodel_kar98k").unwrap();
         let skel = Skeleton::build(&[&hands, &gun]);
         assert_eq!(skel.bone_count(), 60); // 55 hands + 5 gun children (root aliased)
 
@@ -1331,7 +1409,7 @@ mod tests {
                 assert!(
                     b.local_pos.length() < 1e-4,
                     "{}: {} {}",
-                    m.lod,
+                    m.name,
                     b.name,
                     b.local_pos
                 );
@@ -1344,8 +1422,8 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let body = crate::xmodel::load(&fs, "playerbody_american_airborne").unwrap();
-        let weapon = crate::xmodel::load(&fs, "weapon_kar98").unwrap();
+        let body = crate::model::load(&fs, "playerbody_american_airborne").unwrap();
+        let weapon = crate::model::load(&fs, "weapon_kar98").unwrap();
         let (body_bones, weapon_bones) = (body.bones.len(), weapon.bones.len());
 
         let skel = Skeleton::build_grafted(&[(&body, None), (&weapon, Some("tag_weapon_right"))]);
@@ -1374,8 +1452,8 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let body = crate::xmodel::load(&fs, "playerbody_american_airborne").unwrap();
-        let head = crate::xmodel::load(&fs, "basehead2").unwrap();
+        let body = crate::model::load(&fs, "playerbody_american_airborne").unwrap();
+        let head = crate::model::load(&fs, "basehead2").unwrap();
         let shared = head
             .bones
             .iter()
@@ -1418,7 +1496,7 @@ mod tests {
             "playerbody_german_fallschirmjagergrey",
             "playerbody_american_airborne",
         ] {
-            let body = crate::xmodel::load(&fs, body_name).unwrap();
+            let body = crate::model::load(&fs, body_name).unwrap();
             let skel = Skeleton::build(&[&body]);
             let mut pelvis_z = Vec::new();
             for clip_name in ["pb_stand_alert", "pb_crouch_alert", "pb_prone_aim"] {

@@ -1,6 +1,8 @@
 //! Source text to tokens. The grammar this covers is in
 //! docs/research/cod11-gsc-language.md.
 
+use crate::Dialect;
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum Tok {
     Ident(String),
@@ -13,6 +15,10 @@ pub enum Tok {
     /// Bare `#animtree`, no parens: distinct from `UsingAnimtree`, which
     /// always carries a name.
     AnimtreeRef,
+    /// `#include`, CoD2 only; the path and `;` follow as ordinary tokens.
+    Include,
+    /// `waittillframeend`, a keyword in CoD2 only.
+    WaitTillFrameEnd,
     If,
     Else,
     While,
@@ -50,6 +56,9 @@ pub enum Tok {
     Not,
     Amp,
     Pipe,
+    /// CoD4's `<<` and `>>`; two `<` or `>` in the older dialects.
+    Shl,
+    Shr,
     Caret,
     Dot,
     Comma,
@@ -79,10 +88,18 @@ pub struct LexError {
 }
 
 pub fn lex(src: &str) -> Result<Vec<Spanned>, LexError> {
+    lex_dialect(src, Dialect::Cod1)
+}
+
+/// [`lex`] for a given game's grammar: CoD2 adds the `#include` directive
+/// and the `waittillframeend` keyword (docs/research/cod2-gsc-diff.md 3.1,
+/// 3.2).
+pub fn lex_dialect(src: &str, dialect: Dialect) -> Result<Vec<Spanned>, LexError> {
     Lexer {
         b: src.as_bytes(),
         i: 0,
         line: 1,
+        dialect,
     }
     .run()
 }
@@ -91,6 +108,7 @@ struct Lexer<'a> {
     b: &'a [u8],
     i: usize,
     line: u32,
+    dialect: Dialect,
 }
 
 fn is_ident_start(c: u8) -> bool {
@@ -269,6 +287,12 @@ impl<'a> Lexer<'a> {
                         }
                     }
                 }
+                // CoD2's compiler refuses a line break inside a string:
+                // `bad token '"'` at the opening quote (VERIFIED live,
+                // `cod2_lnxded` 1.3, cod2-gsc-diff.md 3.5).
+                Some(b'\n') if self.dialect.cod2_family() => {
+                    return Err(self.err(open_line, "bad token '\"': a line break in a string"));
+                }
                 Some(b'\n') => {
                     self.line += 1;
                     out.push(b'\n');
@@ -339,6 +363,9 @@ impl<'a> Lexer<'a> {
         if word.eq_ignore_ascii_case("animtree") {
             return Ok(Tok::AnimtreeRef);
         }
+        if self.dialect.cod2_family() && word.eq_ignore_ascii_case("include") {
+            return Ok(Tok::Include);
+        }
         if !word.eq_ignore_ascii_case("using_animtree") {
             return Err(self.err(line, format!("unknown directive '#{word}'")));
         }
@@ -356,6 +383,8 @@ impl<'a> Lexer<'a> {
 
     fn two_char_op(&mut self) -> Option<Tok> {
         let tok = match (self.peek()?, self.peek_at(1)) {
+            (b'<', Some(b'<')) if self.dialect == Dialect::Cod4 => Tok::Shl,
+            (b'>', Some(b'>')) if self.dialect == Dialect::Cod4 => Tok::Shr,
             (b':', Some(b':')) => Tok::ColonColon,
             (b'=', Some(b'=')) => Tok::EqEq,
             (b'!', Some(b'=')) => Tok::NotEq,
@@ -442,6 +471,11 @@ impl<'a> Lexer<'a> {
                 let text = self.read_ident();
                 match bool_literal(&text) {
                     Some(t) => t,
+                    None if self.dialect.cod2_family()
+                        && text.eq_ignore_ascii_case("waittillframeend") =>
+                    {
+                        Tok::WaitTillFrameEnd
+                    }
                     None => keyword(&text).unwrap_or(Tok::Ident(text)),
                 }
             } else if let Some(t) = self.two_char_op() {
@@ -640,6 +674,16 @@ mod tests {
     fn an_unterminated_string_names_its_line() {
         let e = lex("a\nb\n\"oops").unwrap_err();
         assert_eq!(e.line, 3);
+    }
+
+    /// CoD2 refuses a string that runs over a line break (retail's
+    /// `bad token '"'`, cod2-gsc-diff.md 3.5); CoD1's lexer keeps it.
+    #[test]
+    fn a_cod2_string_may_not_span_lines() {
+        let src = "a = \"x\ny\";";
+        let e = lex_dialect(src, Dialect::Cod2).unwrap_err();
+        assert_eq!(e.line, 1);
+        assert!(lex(src).is_ok());
     }
 
     // Distinct from `#using_animtree("name")`: no parens, and it appears in

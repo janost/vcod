@@ -30,6 +30,10 @@ pub fn construct(host: &GameHost, cx: &Cx, args: &[Value]) -> String {
     // `\x15` to a message that opens with a number; the empty-buffer check is
     // what keeps a leading `\x14` off one that opens with a key.
     let mut after_key = true;
+    // CoD2's packer (0x8110720) has neither the trailing `\x15` nor the
+    // letters arm: any non-localized part is an argument
+    // (cod2-protocol.md 15.5).
+    let plain = host.profile.print.plain_packer;
     for &a in args {
         match a {
             Value::Localized(k) => {
@@ -55,7 +59,10 @@ pub fn construct(host: &GameHost, cx: &Cx, args: &[Value]) -> String {
                 // A part with letters is another message the client localizes
                 // and joins as one; anything else is a substitution argument
                 // for the key before it (0x5985c).
-                if text.chars().any(char::is_alphabetic) && !matches!(other, Value::Entity(_)) {
+                if !plain
+                    && text.chars().any(char::is_alphabetic)
+                    && !matches!(other, Value::Entity(_))
+                {
                     if !out.is_empty() {
                         out.push(PART_SEP);
                     }
@@ -67,7 +74,7 @@ pub fn construct(host: &GameHost, cx: &Cx, args: &[Value]) -> String {
             }
         }
     }
-    if after_key {
+    if after_key && !plain {
         out.push(ARG_SEP);
     }
     out
@@ -88,7 +95,7 @@ mod tests {
     /// A host with one client entity named `vcod` in slot 0, the name the two
     /// retail captures were taken under.
     fn host_with_client(vm: &mut vcod_gsc::Vm) -> GameHost {
-        let mut host = GameHost::new(vec![String::new(); 2048]);
+        let mut host = GameHost::new(&crate::game::profile::COD1_11, vec![String::new(); 2048]);
         let ents = &mut host.ents;
         let id = vm.with_cx(|cx| {
             let id = ents.spawn_client(cx, 0, None).expect("a client entity");
@@ -132,7 +139,7 @@ mod tests {
     #[test]
     fn a_number_argument_and_a_second_key_take_different_separators() {
         let mut vm = vcod_gsc::Vm::new();
-        let host = GameHost::new(vec![String::new(); 2048]);
+        let host = GameHost::new(&crate::game::profile::COD1_11, vec![String::new(); 2048]);
         let (a, b) = vm.with_cx(|cx| (cx.intern_exact("GAME_A"), cx.intern_exact("GAME_B")));
         assert_eq!(
             vm.with_cx(|cx| construct(&host, cx, &[Value::Localized(a), Value::Int(25)])),

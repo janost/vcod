@@ -3,6 +3,7 @@
 //! quad top sits `top` (+8) above the baseline, so descenders hang below it.
 
 use super::HudQuad;
+use vcod_common::asset_source::AssetSource;
 use vcod_common::pk3::Pk3Fs;
 
 /// One 80-byte glyph record (doc section 6).
@@ -133,10 +134,62 @@ pub fn parse_font_dat(bytes: &[u8], size: u32) -> Result<Font, String> {
     })
 }
 
-pub fn load_font(fs: &Pk3Fs, size: u32) -> Result<Font, String> {
+pub fn load_font(fs: &dyn AssetSource, size: u32) -> Result<Font, String> {
+    if fs.game() == vcod_common::game::Game::Cod2 {
+        return load_cod2_font(fs, size);
+    }
     let name = format!("fonts/fontImage_{size}.dat");
     let bytes = fs.read(&name).ok_or_else(|| format!("missing {name}"))?;
     parse_font_dat(&bytes, size)
+}
+
+/// CoD2's font for `size` ([`vcod_cod2::font::name_for_size`]) as a [`Font`]:
+/// glyph pixels scaled by `48 / pixel_height` (`R_NormalizedTextScale`),
+/// `max_height` the tallest ascent, so a caller's top-of-text lands the
+/// baseline where retail's draw puts it (docs/research/cod2-fonts-menus.md).
+fn load_cod2_font(fs: &dyn AssetSource, size: u32) -> Result<Font, String> {
+    let name =
+        vcod_cod2::font::name_for_size(size).ok_or(format!("no CoD2 font of size {size}"))?;
+    let bytes = fs.read(name).ok_or_else(|| format!("missing {name}"))?;
+    let f = vcod_cod2::font::parse(&bytes).map_err(|e| format!("{name}: {e:#}"))?;
+    Ok(cod2_font(&f, size))
+}
+
+fn cod2_font(f: &vcod_cod2::font::Font, size: u32) -> Font {
+    let glyphs: Vec<Glyph> = (0..GLYPH_COUNT as u32)
+        .map(|b| {
+            let g = f.glyph(b);
+            Glyph {
+                height: i32::from(g.pixel_height),
+                width: i32::from(g.pixel_width),
+                top: -f32::from(g.y0),
+                bearing: f32::from(g.x0),
+                advance: f32::from(g.dx),
+                image_width: i32::from(g.pixel_width),
+                image_height: i32::from(g.pixel_height),
+                s: g.s0,
+                t: g.t0,
+                s2: g.s1,
+                t2: g.t1,
+                page: 0,
+            }
+        })
+        .collect();
+    let max_height = (0x20u8..=0x7e)
+        .map(|b| glyphs[b as usize].top as i32)
+        .max()
+        .unwrap_or(0)
+        .max(1);
+    let glyph_scale = 48.0 / f.pixel_height.max(1) as f32;
+    Font {
+        size,
+        glyphs,
+        glyph_scale,
+        line_advance: f.pixel_height as f32 * glyph_scale,
+        max_height,
+        page: f.material.clone(),
+        pages: vec![f.material.clone()],
+    }
 }
 
 /// The six fonts `ui_mp/main.menu`'s `assetGlobalDef` registers, which the
@@ -165,7 +218,7 @@ pub enum Slot {
 }
 
 impl UiFonts {
-    pub fn load(fs: &Pk3Fs) -> Result<UiFonts, String> {
+    pub fn load(fs: &dyn AssetSource) -> Result<UiFonts, String> {
         Ok(UiFonts {
             small: load_font(fs, 12)?,
             normal: load_font(fs, 16)?,
@@ -560,6 +613,31 @@ mod tests {
             "should not measure as two '?' glyphs"
         );
         assert_eq!(glyph_index('\u{1F600}'), b'?' as usize);
+    }
+
+    /// CoD2's fonts draw a glyph at `48 * scale / pixelHeight` times its
+    /// pixels, its top `y0` above the baseline (RB_DrawTextCmd).
+    #[test]
+    fn cod2_fonts_draw_at_retails_scale() {
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let fonts = UiFonts::load(&fs).unwrap();
+        let raw = vcod_cod2::font::parse(&fs.read("fonts/normalFont").unwrap()).unwrap();
+        let w = raw.glyph('W' as u32);
+        let f = &fonts.normal;
+        assert_eq!(f.page, "fonts/gamefonts");
+        let scale = 0.5;
+        let want = f32::from(w.dx) * 48.0 * scale / raw.pixel_height as f32;
+        assert!((measure(f, "W", scale / f.unit_scale()) - want).abs() < 1e-4);
+        // Top-of-text at 0: the baseline sits `max_height` scaled below it.
+        let mut out = Vec::new();
+        let s = scale / f.unit_scale();
+        layout(f, "W", 0.0, 0.0, s, [1.0; 4], &mut out);
+        let baseline = f.max_height as f32 * f.glyph_scale * scale;
+        let top = baseline + f32::from(w.y0) * 48.0 * scale / raw.pixel_height as f32;
+        assert!((out[1].verts[0][1] - top).abs() < 1e-4);
+        assert_eq!(fonts.console.glyph_scale, 3.0);
     }
 
     fn font_scale_unit(f: &Font) -> f32 {

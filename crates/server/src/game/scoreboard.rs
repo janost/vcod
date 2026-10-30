@@ -38,21 +38,32 @@ pub struct Row {
 /// `b <numRows> <axis> <allies>{ <client> <score> <ping> <time> <icon>}*`,
 /// one row per online client (`docs/research/cod11-hud-protocol.md` section
 /// 3). `ping` is `-1` for a client still connecting, else capped at 999.
-pub fn text(mut rows: Vec<Row>, [axis, allies]: [i32; 2]) -> String {
+pub fn text(rows: Vec<Row>, scores: [i32; 2]) -> String {
+    text_capped(rows, scores, None)
+}
+
+/// [`text`] with the rows' text cut at `cap` bytes: CoD2's
+/// `DeathmatchScoreboardMessage` (Mac 0x1a4f98) stops at the first row that
+/// would take it past 1024 and counts only the rows written
+/// (cod2-protocol.md 3.4). 1.1 passes `None`.
+pub fn text_capped(mut rows: Vec<Row>, [axis, allies]: [i32; 2], cap: Option<usize>) -> String {
     // `level.sortedClients[]`'s order, `SortRanks` (.so 0x50090): a
     // connecting client last, then spectators last among themselves by
     // slot, then score descending, then deaths ascending; ties keep the
     // slot order (hud protocol doc, section 3).
     rows.sort_by_key(|r| (r.connecting, r.spectator, -r.score, r.deaths, r.slot));
-    let mut text = format!("b {} {axis} {allies}", rows.len());
+    let mut body = String::new();
+    let mut count = 0;
     for r in rows {
         let ping = if r.connecting { -1 } else { r.ping.min(999) };
-        text.push_str(&format!(
-            " {} {} {ping} {} {}",
-            r.slot, r.score, r.deaths, r.icon
-        ));
+        let row = format!(" {} {} {ping} {} {}", r.slot, r.score, r.deaths, r.icon);
+        if cap.is_some_and(|cap| body.len() + row.len() > cap) {
+            break;
+        }
+        body.push_str(&row);
+        count += 1;
     }
-    text
+    format!("b {count} {axis} {allies}{body}")
 }
 
 impl GameHost {
@@ -90,8 +101,8 @@ impl GameHost {
                 ),
             });
         }
-        let [axis, allies] = self.team_scores;
-        text(rows, [axis, allies])
+        let cap = self.profile.scoreboard_cap;
+        text_capped(rows, self.team_scores, cap)
     }
 
     /// `player_die`'s walk (combat doc 5.1 step 9), run once the victim's
@@ -128,7 +139,7 @@ impl GameHost {
 /// the scoreboard row carries, or 0 when there is none or it names an icon
 /// nothing precached. The client resolves `20 + n` for an `n` in `1..8`
 /// (hud protocol doc, section 3).
-fn status_icon_index(
+pub(crate) fn status_icon_index(
     configstrings: &[String],
     layout: &vcod_common::net::protocol::CsLayout,
     name: Option<&str>,
@@ -139,4 +150,41 @@ fn status_icon_index(
         .get(first..=last)
         .and_then(|range| range.iter().position(|cs| cs == name))
         .map_or(0, |i| i + 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(slot: usize, score: i64) -> Row {
+        Row {
+            slot,
+            connecting: false,
+            spectator: false,
+            score,
+            deaths: 0,
+            ping: 50,
+            icon: 0,
+        }
+    }
+
+    #[test]
+    fn a_cod2_board_stops_at_the_row_past_1024_bytes() {
+        // Each row " <slot> 1000000000000 50 0 0" is 26 or 27 bytes.
+        let rows = || {
+            (0..64)
+                .map(|s| row(s, 1_000_000_000_000))
+                .collect::<Vec<_>>()
+        };
+        let full = text(rows(), [0, 0]);
+        assert!(full.starts_with("b 64 0 0 "));
+        let cut = text_capped(rows(), [0, 0], Some(1024));
+        let body = cut.splitn(5, ' ').nth(4).unwrap();
+        let n: usize = cut.split(' ').nth(1).unwrap().parse().unwrap();
+        assert!(n < 64);
+        assert!(body.len() < 1024);
+        assert_eq!(body.split(' ').count(), n * 5);
+        // The rows kept are the full board's first `n`.
+        assert!(full.splitn(5, ' ').nth(4).unwrap().starts_with(body));
+    }
 }

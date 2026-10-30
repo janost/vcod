@@ -1,0 +1,4355 @@
+# map mp_toujane
+# made by: GT=killcam SECOND=killcam PROBE_GSC=crates/cod2/tests/fixtures/killcam/probe_killcam.gsc tools/run_probe_cod2.sh shootlate mp_toujane 1943 1991 65 0 <out> (made the pair killerdies.txt, killerdies-b.txt) (retail cod2_lnxded 1.3, pure, defaults, +set probe_vx 1929 +set probe_vy 1768 +set probe_vz 65 +set probe_vyaw 86 +set probe_aimz 56 +set probe_killerdies 1 +set probe_respawn 3)
+# move_probe --script shootlate: com_maxfps 85, cl_maxpackets 30, cl_packetdup 1
+# weapons defaultweapon_mp mg42_bipod_stand_mp kar98k_mp frag_grenade_american_mp
+# cmd 7150 I "1"
+# cmd 7150 C 4
+# spawn (1943 1991 64.125) view (1.0217285 -93.59253)
+s 2 7150 commandTime=1bee origin[1]=44f8e000 origin[0]=44f2e000 viewangles[1]=c2bb2f60 origin[2]=42804000 viewangles[0]=3f82c800 legsAnim=28a pm_flags=a00000 viewHeightCurrent=42700000 eFlags=2 holdBreathScale=3f04eb57 viewHeightTarget=3c groundEntityNum=3fe weapon=3 weapons[0]=18 weaponslots[0]=300 delta_angles[0]=ba delta_angles[1]=bd72 cursorHintString=ffffffff offHandIndex=4 clientNum=1 viewlocked_entNum=3ff speed=be mins[1]=c1700000 mins[0]=c1700000 maxs[2]=428c0000 maxs[1]=41700000 maxs[0]=41700000 gravity=320 S[0]=64 S[2]=64 S[3]=3f S[5]=1 A[2]=3c C[2]=5 C[3]=3
+e 0 pos.trTime=1be6 pos.trBase[1]=44dd0000 pos.trBase[0]=44f12000 apos.trBase[1]=42a9fdd0 pos.trBase[2]=42800000 legsAnim=99 eType=1 eFlags=2 groundEntityNum=3fe pos.trType=3 solid=66010f apos.trType=1 weapon=3 pos.trDuration=32
+e 84 eType=6 solid=ffffff index=1
+e 307 pos.trBase[1]=41c00000 pos.trBase[0]=44258000 apos.trBase[1]=42a5cb70 pos.trBase[2]=43450000 eType=9 angles2[0]=c2a20000 apos.trType=3 weapon=2 index=27
+e 308 pos.trBase[1]=41c00000 pos.trBase[0]=44258000 apos.trBase[1]=42a5cb70 pos.trBase[2]=43450000 eType=9 angles2[0]=c2a20000 apos.trType=3 weapon=2 index=27
+e 309 pos.trBase[1]=41c00000 pos.trBase[0]=44258000 apos.trBase[1]=42a5cb70 pos.trBase[2]=43450000 eType=9 angles2[0]=c2a20000 apos.trType=3 weapon=2 index=27
+e 310 pos.trBase[1]=44aa4000 pos.trBase[0]=c2a00000 apos.trBase[1]=c1ea6780 pos.trBase[2]=42040000 eType=9 angles2[0]=c2640000 apos.trType=3 weapon=2 index=27
+e 311 pos.trBase[1]=44aa4000 pos.trBase[0]=c2a00000 apos.trBase[1]=c1ea6780 pos.trBase[2]=42040000 eType=9 angles2[0]=c2640000 apos.trType=3 weapon=2 index=27
+e 312 pos.trBase[1]=44aa4000 pos.trBase[0]=c2a00000 apos.trBase[1]=c1ea6780 pos.trBase[2]=42040000 eType=9 angles2[0]=c2640000 apos.trType=3 weapon=2 index=27
+e 368 pos.trBase[1]=44cc4000 pos.trBase[0]=4531b000 apos.trBase[1]=4333fd30 pos.trBase[2]=42340000 apos.trBase[0]=bdd5c000 eType=6 apos.trBase[2]=3f0e0800 index=33
+e 461 pos.trBase[1]=44cc4000 pos.trBase[0]=45312000 apos.trBase[1]=c3340000 pos.trBase[2]=42300000 eType=6 index=37
+e 463 eType=6 solid=ffffff index=8
+e 464 eType=6 solid=ffffff index=9
+e 465 eType=6 solid=ffffff index=a
+e 466 eType=6 solid=ffffff index=b
+e 467 eType=6 solid=ffffff index=c
+e 468 eType=6 solid=ffffff index=d
+e 469 eType=6 solid=ffffff index=e
+e 470 pos.trBase[1]=44cc4000 pos.trBase[0]=4531b000 apos.trBase[1]=4333fd30 pos.trBase[2]=42340000 apos.trBase[0]=bdd5c000 eType=6 apos.trBase[2]=3f0e0800 index=33
+e 471 pos.trBase[1]=44cc4000 pos.trBase[0]=4531b000 apos.trBase[1]=4333fd30 pos.trBase[2]=42340000 apos.trBase[0]=bdd5c000 eType=6 apos.trBase[2]=3f0e0800 index=33
+e 512 eType=6 solid=ffffff index=12
+e 513 eType=6 solid=ffffff index=13
+e 514 eType=6 solid=ffffff index=14
+e 516 pos.trBase[1]=4515d000 pos.trBase[0]=45075000 apos.trBase[1]=c31180c0 pos.trBase[2]=42b20000 eType=9 angles2[0]=c2640000 apos.trType=3 weapon=2 index=27
+e 517 pos.trBase[1]=4515d000 pos.trBase[0]=45075000 apos.trBase[1]=c31180c0 pos.trBase[2]=42b20000 eType=9 angles2[0]=c2640000 apos.trType=3 weapon=2 index=27
+e 518 pos.trBase[1]=4515d000 pos.trBase[0]=45075000 apos.trBase[1]=c31180c0 pos.trBase[2]=42b20000 eType=9 angles2[0]=c2640000 apos.trType=3 weapon=2 index=27
+e 519 pos.trBase[1]=4515d000 pos.trBase[0]=45075000 apos.trBase[1]=c31180c0 pos.trBase[2]=42b20000 eType=9 angles2[0]=c2640000 apos.trType=3 weapon=2 index=27
+e 619 pos.trBase[1]=45237000 pos.trBase[0]=4472c000 angles2[1]=43960000 pos.trBase[2]=42860000 eType=8 scale=2 origin2[2]=3f800000
+e 620 pos.trBase[1]=4504a000 pos.trBase[0]=44608000 angles2[1]=43960000 pos.trBase[2]=420c0000 eType=8 scale=2 origin2[2]=3f800000
+e 621 pos.trBase[1]=44c46000 pos.trBase[0]=44a30000 angles2[1]=43960000 pos.trBase[2]=41500000 eType=8 scale=2 origin2[2]=3f800000
+e 622 pos.trBase[1]=44bea000 pos.trBase[0]=44dc6000 angles2[1]=43960000 pos.trBase[2]=428c0000 eType=8 scale=2 origin2[2]=3f800000
+e 623 pos.trBase[1]=44f4e000 pos.trBase[0]=44c18000 angles2[1]=43960000 pos.trBase[2]=42100000 eType=8 scale=2 origin2[2]=3f800000
+e 624 pos.trBase[1]=44098000 pos.trBase[0]=42440000 angles2[1]=43960000 pos.trBase[2]=41b80000 eType=8 scale=2 origin2[2]=3f800000
+e 625 pos.trBase[1]=44824000 pos.trBase[0]=40e00000 angles2[1]=43960000 pos.trBase[2]=41b80000 eType=8 scale=2 origin2[2]=3f800000
+e 626 pos.trBase[1]=44c3c000 pos.trBase[0]=42c20000 angles2[1]=43960000 pos.trBase[2]=41b80000 eType=8 scale=2 origin2[2]=3f800000
+e 627 pos.trBase[1]=44020000 pos.trBase[0]=44770000 angles2[1]=43960000 pos.trBase[2]=c0000000 eType=8 scale=2 origin2[2]=3f800000
+e 628 pos.trBase[1]=4412c000 pos.trBase[0]=44b90000 angles2[1]=43960000 pos.trBase[2]=c0e00000 eType=8 scale=2 origin2[2]=3f800000
+e 629 pos.trBase[1]=4497a000 pos.trBase[0]=446f0000 angles2[1]=43960000 pos.trBase[2]=c1a00000 eType=8 scale=2 origin2[2]=3f800000
+e 630 pos.trBase[1]=445e8000 pos.trBase[0]=45182000 angles2[1]=43960000 pos.trBase[2]=428a0000 eType=8 scale=2 origin2[2]=3f800000
+e 631 pos.trBase[1]=44c3a000 pos.trBase[0]=451d7000 angles2[1]=43960000 pos.trBase[2]=428a0000 eType=8 scale=2 origin2[2]=3f800000
+e 632 pos.trBase[1]=4501e000 pos.trBase[0]=450ca000 angles2[1]=43960000 pos.trBase[2]=428a0000 eType=8 scale=2 origin2[2]=3f800000
+e 633 pos.trBase[1]=45266000 pos.trBase[0]=44e80000 angles2[1]=43960000 pos.trBase[2]=428a0000 eType=8 scale=2 origin2[2]=3f800000
+e 634 pos.trBase[1]=45459000 pos.trBase[0]=44aaa000 angles2[1]=43960000 pos.trBase[2]=428a0000 eType=8 scale=2 origin2[2]=3f800000
+e 635 pos.trBase[1]=442d0000 pos.trBase[0]=44fd6000 angles2[1]=43960000 pos.trBase[2]=41a80000 eType=8 scale=2 origin2[2]=3f800000
+e 636 pos.trBase[1]=46081000 pos.trBase[0]=c5c1f000 angles2[1]=447a0000 pos.trBase[2]=43560000 eType=8 scale=4 origin2[2]=3f800000
+e 637 pos.trBase[1]=445c4000 pos.trBase[0]=4606c000 angles2[1]=447a0000 pos.trBase[2]=42740000 eType=8 scale=4 origin2[2]=3f800000
+r 0 name[0]=67726174 name[4]=7465 modelindex=41 attachModelIndex[1]=43 attachModelIndex[0]=42
+r 1 name[0]=646f6376 name[4]=65766f6d modelindex=41 attachModelIndex[1]=43 attachModelIndex[0]=42 name[8]=73
+c 7151 0 3 4 0 0 0 0 0
+c 7162 0 3 4 0 0 0 0 0
+c 7176 0 3 4 0 0 0 0 0
+p 3
+c 7188 0 3 4 0 0 0 0 0
+c 7200 0 3 4 0 0 0 0 0
+s 3 7200 commandTime=1c08 viewangles[1]=c2bb2f61 viewangles[0]=3f82c801 legsAnim=99 holdBreathScale=3f1754b2
+e 0 pos.trTime=1c0a
+c 7212 0 3 4 0 0 0 0 0
+p 6
+c 7225 0 3 4 0 0 0 0 0
+c 7238 0 3 4 0 0 0 0 0
+c 7251 0 3 4 0 0 0 0 0
+p 6
+s 4 7250 commandTime=1c53 holdBreathScale=3f3e7001
+e 0 pos.trTime=1c2f
+c 7262 0 3 4 0 0 0 0 0
+c 7275 0 3 4 0 0 0 0 0
+c 7288 0 3 4 0 0 0 0 0
+p 6
+c 7300 0 3 4 0 0 0 0 0
+s 5 7300 commandTime=1c78 holdBreathScale=3f4bf1de
+e 0 pos.trTime=1c78
+c 7314 0 3 4 0 0 0 0 0
+c 7326 0 3 4 0 0 0 0 0
+p 6
+c 7339 0 3 4 0 0 0 0 0
+s 6 7350 commandTime=1c9e holdBreathScale=3f56efc1
+e 0 pos.trTime=1c9d
+c 7351 0 3 4 0 0 0 0 0
+c 7363 0 3 4 0 0 0 0 0
+p 6
+c 7375 0 3 4 0 0 0 0 0
+c 7389 0 3 4 0 0 0 0 0
+s 7 7400 commandTime=1cc3 holdBreathScale=3f5f6528
+e 0 pos.trTime=1ce5
+c 7401 0 3 4 0 0 0 0 0
+p 6
+c 7413 0 3 4 0 0 0 0 0
+c 7425 0 3 4 0 0 0 0 0
+c 7438 0 3 4 0 0 0 0 0
+p 6
+c 7450 0 3 4 0 0 0 0 0
+s 8 7450 commandTime=1d0e holdBreathScale=3f6b93f1
+e 0 pos.trTime=1d08
+c 7462 0 3 4 0 0 0 0 0
+c 7474 0 3 4 0 0 0 0 0
+p 6
+c 7486 0 3 4 0 0 0 0 0
+c 7500 0 3 4 0 0 0 0 0
+s 9 7500 commandTime=1d32 holdBreathScale=3f6fadd9
+e 0 pos.trTime=1d2d
+c 7513 0 3 4 0 0 0 0 0
+p 6
+c 7527 0 3 4 0 0 0 0 0
+c 7540 0 3 4 0 0 0 0 0
+s 10 7550 commandTime=1d59 holdBreathScale=3f733566
+e 0 pos.trTime=1d75
+c 7551 0 3 4 0 0 0 0 0
+p 6
+c 7563 0 3 4 0 0 0 0 0
+c 7576 0 3 4 0 0 0 0 0
+c 7588 0 3 4 0 0 0 0 0
+p 6
+c 7600 0 3 4 0 0 0 0 0
+s 11 7600 commandTime=1da4 holdBreathScale=3f77fd09
+e 0 pos.trTime=1d98
+c 7614 0 3 4 0 0 0 0 0
+c 7625 0 3 4 0 0 0 0 0
+p 6
+c 7637 0 3 4 0 0 0 0 0
+c 7651 0 3 4 0 0 0 0 0
+s 12 7650 commandTime=1dc9 holdBreathScale=3f79a3a5
+e 0 pos.trTime=1de1
+c 7663 0 3 4 0 0 0 0 0
+p 6
+c 7675 0 3 4 0 0 0 0 0
+c 7686 0 3 4 0 0 0 0 0
+c 7697 0 3 4 0 0 0 0 0
+p 6
+s 13 7700 commandTime=1e11 holdBreathScale=3f7bf01f
+e 0 pos.trTime=1e05
+c 7709 0 3 4 0 0 0 0 0
+c 7721 0 3 4 0 0 0 0 0
+c 7734 0 3 4 0 0 0 0 0
+p 6
+c 7746 0 3 4 0 0 0 0 0
+s 14 7750 commandTime=1e36 holdBreathScale=3f7cc653
+e 0 pos.trTime=1e2b
+c 7759 0 3 4 0 0 0 0 0
+c 7771 0 3 4 0 0 0 0 0
+p 6
+c 7783 0 3 4 0 0 0 0 0
+c 7794 0 3 4 0 0 0 0 0
+s 15 7800 commandTime=1e5b holdBreathScale=3f7d7067
+e 0 pos.trTime=1e74
+c 7806 0 3 4 0 0 0 0 0
+p 6
+c 7817 0 3 4 0 0 0 0 0
+c 7831 0 3 4 0 0 0 0 0
+c 7843 0 3 4 0 0 0 0 0
+p 6
+s 16 7850 commandTime=1ea3 holdBreathScale=3f7e5d55
+e 0 pos.trTime=1e98
+c 7854 0 3 4 0 0 0 0 0
+c 7866 0 3 4 0 0 0 0 0
+c 7879 0 3 4 0 0 0 0 0
+p 6
+c 7892 0 3 4 0 0 0 0 0
+s 17 7900 commandTime=1ec7 holdBreathScale=3f7eb16d
+e 0 pos.trTime=1ebd
+c 7905 0 3 4 0 0 0 0 0
+c 7917 0 3 4 0 0 0 0 0
+p 6
+c 7931 0 3 4 0 0 0 0 0
+c 7942 0 3 4 0 0 0 0 0
+s 18 7950 commandTime=1eed holdBreathScale=3f7ef810
+e 0 pos.trTime=1f06
+c 7954 0 3 4 0 0 0 0 0
+p 6
+c 7966 0 3 4 0 0 0 0 0
+c 7978 0 3 4 0 0 0 0 0
+c 7990 0 3 4 0 0 0 0 0
+p 6
+s 19 8000 commandTime=1f36 holdBreathScale=3f7f5887
+e 0 pos.trTime=1f2a
+c 8001 0 3 4 0 0 0 0 0
+c 8013 0 3 4 0 0 0 0 0
+c 8026 0 3 4 0 0 0 0 0
+p 6
+c 8038 0 3 4 0 0 0 0 0
+c 8050 0 3 4 0 0 0 0 0
+s 20 8050 commandTime=1f5a holdBreathScale=3f7f7a2a
+e 0 pos.trTime=1f4f
+c 8063 0 3 4 0 0 0 0 0
+p 6
+c 8077 0 3 4 0 0 0 0 0
+c 8089 0 3 4 0 0 0 0 0
+c 8101 0 3 4 0 0 0 0 0
+p 6
+s 21 8100 commandTime=1fa5 holdBreathScale=3f7fac2b
+e 0 pos.trTime=1f98
+c 8114 0 3 4 0 0 0 0 0
+c 8128 0 3 4 0 0 0 0 0
+c 8141 0 3 4 0 0 0 0 0
+p 6
+c 8153 0 3 4 0 0 0 0 0
+s 22 8150 commandTime=1fcd holdBreathScale=3f7fbeb9
+e 0 pos.trTime=1fbc
+c 8165 0 3 4 0 0 0 0 0
+c 8177 0 3 4 0 0 0 0 0
+p 6
+c 8189 0 3 4 0 0 0 0 0
+s 23 8200 commandTime=1ff1 holdBreathScale=3f800000
+e 0 pos.trTime=1fe3
+c 8202 0 3 4 0 0 0 0 0
+c 8214 0 3 4 0 0 0 0 0
+p 6
+c 8226 0 3 4 0 0 0 0 0
+c 8239 0 3 4 0 0 0 0 0
+c 8251 0 3 4 0 0 0 0 0
+p 6
+s 24 8250 commandTime=203b
+e 0 pos.trTime=202b
+c 8262 0 3 4 0 0 0 0 0
+c 8274 0 3 4 0 0 0 0 0
+c 8286 0 3 4 0 0 0 0 0
+p 6
+c 8299 0 3 4 0 0 0 0 0
+s 25 8300 commandTime=205e
+e 0 pos.trTime=2051
+c 8310 0 3 4 0 0 0 0 0
+c 8323 0 3 4 0 0 0 0 0
+p 6
+c 8335 0 3 4 0 0 0 0 0
+c 8347 0 3 4 0 0 0 0 0
+s 26 8350 commandTime=2083
+e 0 pos.trTime=2098
+c 8360 0 3 4 0 0 0 0 0
+p 6
+c 8371 0 3 4 0 0 0 0 0
+c 8384 0 3 4 0 0 0 0 0
+c 8395 0 3 4 0 0 0 0 0
+p 6
+s 27 8400 commandTime=20cb
+e 0 pos.trTime=20bd
+c 8408 0 3 4 0 0 0 0 0
+c 8419 0 3 4 0 0 0 0 0
+c 8432 0 3 4 0 0 0 0 0
+p 6
+c 8445 0 3 4 0 0 0 0 0
+s 28 8450 commandTime=20f0
+e 0 pos.trTime=20e2
+c 8457 0 3 4 0 0 0 0 0
+c 8469 0 3 4 0 0 0 0 0
+p 6
+c 8481 0 3 4 0 0 0 0 0
+c 8493 0 3 4 0 0 0 0 0
+s 29 8500 commandTime=2115
+e 0 pos.trTime=2129
+c 8505 0 3 4 0 0 0 0 0
+p 6
+c 8517 0 3 4 0 0 0 0 0
+c 8528 0 3 4 0 0 0 0 0
+c 8542 0 3 4 0 0 0 0 0
+p 6
+s 30 8550 commandTime=215e
+e 0 pos.trTime=214d
+c 8555 0 3 4 0 0 0 0 0
+c 8569 0 3 4 0 0 0 0 0
+c 8581 0 3 4 0 0 0 0 0
+p 6
+c 8593 0 3 4 0 0 0 0 0
+s 31 8600 commandTime=2185
+e 0 pos.trTime=2172
+c 8605 0 3 4 0 0 0 0 0
+c 8618 0 3 4 0 0 0 0 0
+p 6
+c 8629 0 3 4 0 0 0 0 0
+c 8642 0 3 4 0 0 0 0 0
+s 32 8650 commandTime=21aa
+e 0 pos.trTime=21bc
+c 8654 0 3 4 0 0 0 0 0
+p 6
+c 8665 0 3 4 0 0 0 0 0
+c 8677 0 3 4 0 0 0 0 0
+c 8688 0 3 4 0 0 0 0 0
+p 6
+c 8699 0 3 4 0 0 0 0 0
+s 33 8700 commandTime=21f0
+e 0 pos.trTime=21df
+c 8711 0 3 4 0 0 0 0 0
+c 8722 0 3 4 0 0 0 0 0
+p 6
+c 8734 0 3 4 0 0 0 0 0
+c 8746 0 3 4 0 0 0 0 0
+s 34 8750 commandTime=2212
+e 0 pos.trTime=2228
+c 8758 0 3 4 0 0 0 0 0
+p 6
+c 8770 0 3 4 0 0 0 0 0
+c 8783 0 3 4 0 0 0 0 0
+c 8795 0 3 4 0 0 0 0 0
+p 6
+s 35 8800 commandTime=225b
+e 0 pos.trTime=224c
+c 8808 0 3 4 0 0 0 0 0
+c 8820 0 3 4 0 0 0 0 0
+c 8832 0 3 4 0 0 0 0 0
+p 6
+c 8843 0 3 4 0 0 0 0 0
+s 36 8850 commandTime=2280
+e 0 pos.trTime=226e
+c 8855 0 3 4 0 0 0 0 0
+c 8869 0 3 4 0 0 0 0 0
+p 6
+c 8882 0 3 4 0 0 0 0 0
+c 8895 0 3 4 0 0 0 0 0
+s 37 8900 commandTime=22a5
+e 0 pos.trTime=22b4
+c 8907 0 3 4 0 0 0 0 0
+p 6
+c 8920 0 3 4 0 0 0 0 0
+c 8932 0 3 4 0 0 0 0 0
+c 8943 0 3 4 0 0 0 0 0
+p 6
+s 38 8950 commandTime=22ef
+e 0 pos.trTime=22d8
+c 8955 0 3 4 0 0 0 0 0
+c 8968 0 3 4 0 0 0 0 0
+c 8980 0 3 4 0 0 0 0 0
+p 6
+c 8993 0 3 4 0 0 0 0 0
+s 39 9000 commandTime=2314
+e 0 pos.trTime=2322
+c 9005 0 3 4 0 0 0 0 0
+c 9017 0 3 4 0 0 0 0 0
+p 6
+c 9031 0 3 4 0 0 0 0 0
+c 9045 0 3 4 0 0 0 0 0
+s 40 9050 commandTime=2339
+e 0 pos.trTime=2347
+c 9057 0 3 4 0 0 0 0 0
+p 6
+c 9068 0 3 4 0 0 0 0 0
+c 9080 0 3 4 0 0 0 0 0
+c 9092 0 3 4 0 0 0 0 0
+p 6
+s 41 9100 commandTime=2384
+e 0 pos.trTime=236b
+c 9104 0 3 4 0 0 0 0 0
+c 9117 0 3 4 0 0 0 0 0
+c 9128 0 3 4 0 0 0 0 0
+p 6
+c 9140 0 3 4 0 0 0 0 0
+s 42 9150 commandTime=23a8
+e 0 pos.trTime=23b4
+c 9154 0 3 4 0 0 0 0 0
+c 9166 0 3 4 0 0 0 0 0
+p 6
+c 9177 0 3 4 0 0 0 0 0
+c 9189 0 3 4 0 0 0 0 0
+c 9201 0 3 4 0 0 0 0 0
+p 6
+s 43 9200 commandTime=23f1
+e 0 pos.trTime=23d8
+c 9213 0 3 4 0 0 0 0 0
+c 9226 0 3 4 0 0 0 0 0
+c 9238 0 3 4 0 0 0 0 0
+p 6
+c 9249 0 3 4 0 0 0 0 0
+s 44 9250 commandTime=2416
+e 0 pos.trTime=2420
+c 9261 0 3 4 0 0 0 0 0
+c 9274 0 3 4 0 0 0 0 0
+p 6
+c 9287 0 3 4 0 0 0 0 0
+c 9298 0 3 4 0 0 0 0 0
+s 45 9300 commandTime=243a
+e 0 pos.trTime=2444
+c 9311 0 3 4 0 0 0 0 0
+p 6
+c 9322 0 3 4 0 0 0 0 0
+c 9335 0 3 4 0 0 0 0 0
+c 9347 0 3 4 0 0 0 0 0
+p 6
+s 46 9350 commandTime=2483
+e 0 pos.trTime=2469
+c 9360 0 3 4 0 0 0 0 0
+c 9371 0 3 4 0 0 0 0 0
+c 9383 0 3 4 0 0 0 0 0
+p 6
+c 9395 0 3 4 0 0 0 0 0
+s 47 9400 commandTime=24a7
+e 0 pos.trTime=24b1
+c 9407 0 3 4 0 0 0 0 0
+c 9419 0 3 4 0 0 0 0 0
+p 6
+c 9431 0 3 4 0 0 0 0 0
+c 9443 0 3 4 0 0 0 0 0
+s 48 9450 commandTime=24cb
+e 0 pos.trTime=24d4
+c 9454 0 3 4 0 0 0 0 0
+p 6
+c 9467 0 3 4 0 0 0 0 0
+c 9479 0 3 4 0 0 0 0 0
+c 9491 0 3 4 0 0 0 0 0
+p 6
+s 49 9500 commandTime=2513
+e 0 pos.trTime=24fa
+c 9505 0 3 4 0 0 0 0 0
+c 9518 0 3 4 0 0 0 0 0
+c 9530 0 3 4 0 0 0 0 0
+p 6
+c 9541 0 3 4 0 0 0 0 0
+s 50 9550 commandTime=253a
+e 0 pos.trTime=2542
+c 9552 0 3 4 0 0 0 0 0
+c 9565 0 3 4 0 0 0 0 0
+p 6
+c 9576 0 3 4 0 0 0 0 0
+c 9590 0 3 4 0 0 0 0 0
+s 51 9600 commandTime=255d
+e 0 pos.trTime=2569
+c 9604 0 3 4 0 0 0 0 0
+p 6
+c 9617 0 3 4 0 0 0 0 0
+c 9630 0 3 4 0 0 0 0 0
+c 9641 0 3 4 0 0 0 0 0
+p 6
+c 9652 0 3 4 0 0 0 0 0
+s 52 9650 commandTime=25a9
+e 0 pos.trTime=258f
+c 9665 0 3 4 0 0 0 0 0
+c 9679 0 3 4 0 0 0 0 0
+p 6
+c 9691 0 3 4 0 0 0 0 0
+c 9702 0 3 4 0 0 0 0 0
+s 53 9700 commandTime=25cf
+e 0 pos.trTime=25d8
+c 9714 0 3 4 0 0 0 0 0
+p 6
+c 9727 0 3 4 0 0 0 0 0
+c 9738 0 3 4 0 0 0 0 0
+s 54 9750 commandTime=25f2
+e 0 pos.trTime=25fe
+c 9752 0 3 4 0 0 0 0 0
+p 6
+c 9766 0 3 4 0 0 0 0 0
+c 9779 0 3 4 0 0 0 0 0
+c 9790 0 3 4 0 0 0 0 0
+p 6
+s 55 9800 commandTime=263e
+e 0 pos.trTime=2625
+c 9804 0 3 4 0 0 0 0 0
+c 9815 0 3 4 0 0 0 0 0
+c 9827 0 3 4 0 0 0 0 0
+p 6
+c 9840 0 3 4 0 0 0 0 0
+s 56 9850 commandTime=2663
+e 0 pos.trTime=2671
+c 9852 0 3 4 0 0 0 0 0
+c 9865 0 3 4 0 0 0 0 0
+p 6
+c 9876 0 3 4 0 0 0 0 0
+c 9889 0 3 4 0 0 0 0 0
+s 57 9900 commandTime=2689
+e 0 pos.trTime=2695
+c 9902 0 3 4 0 0 0 0 0
+p 6
+c 9913 0 3 4 0 0 0 0 0
+c 9925 0 3 4 0 0 0 0 0
+c 9937 0 3 4 0 0 0 0 0
+p 6
+c 9948 0 3 4 0 0 0 0 0
+s 58 9950 commandTime=26d1
+e 0 pos.trTime=26dd
+c 9960 0 3 4 0 0 0 0 0
+c 9971 0 3 4 0 0 0 0 0
+p 6
+c 9985 0 3 4 0 0 0 0 0
+c 9997 0 3 4 0 0 0 0 0
+s 59 10000 commandTime=26f3
+e 0 pos.trTime=2704
+c 10011 0 3 4 0 0 0 0 0
+p 6
+c 10023 0 3 4 0 0 0 0 0
+c 10036 0 3 4 0 0 0 0 0
+c 10048 0 3 4 0 0 0 0 0
+p 6
+s 60 10050 commandTime=2740
+e 0 pos.trTime=272b
+c 10059 0 3 4 0 0 0 0 0
+c 10071 0 3 4 0 0 0 0 0
+c 10083 0 3 4 0 0 0 0 0
+p 6
+c 10095 0 3 4 0 0 0 0 0
+s 61 10100 commandTime=2763
+e 0 pos.trTime=2750
+c 10106 0 3 4 0 0 0 0 0
+c 10117 0 3 4 0 0 0 0 0
+p 6
+c 10130 0 3 4 0 0 0 0 0
+c 10142 0 3 4 0 0 0 0 0
+s 62 10150 commandTime=2785
+e 0 pos.trTime=2799
+c 10156 0 3 4 0 0 0 0 0
+p 6
+c 10168 0 3 4 0 0 0 0 0
+c 10180 0 3 4 0 0 0 0 0
+c 10192 0 3 4 0 0 0 0 0
+p 6
+s 63 10200 commandTime=27d0
+e 0 pos.trTime=27be
+c 10205 0 3 4 0 0 0 0 0
+c 10218 0 3 4 0 0 0 0 0
+c 10230 0 3 4 0 0 0 0 0
+p 6
+c 10241 0 3 4 0 0 0 0 0
+s 64 10250 commandTime=27f6
+e 0 pos.trTime=2805
+c 10255 0 3 4 0 0 0 0 0
+c 10269 0 3 4 0 0 0 0 0
+p 6
+c 10282 0 3 4 0 0 0 0 0
+c 10293 0 3 4 0 0 0 0 0
+s 65 10300 commandTime=281d
+e 0 pos.trTime=2829
+c 10305 0 3 4 0 0 0 0 0
+p 6
+c 10316 0 3 4 0 0 0 0 0
+c 10327 0 3 4 0 0 0 0 0
+c 10339 0 3 4 0 0 0 0 0
+p 6
+c 10350 0 3 4 0 0 0 0 0
+s 66 10350 commandTime=2863
+e 0 pos.trTime=284e
+c 10363 0 3 4 0 0 0 0 0
+c 10376 0 3 4 0 0 0 0 0
+p 6
+c 10388 0 3 4 0 0 0 0 0
+c 10401 0 3 4 0 0 0 0 0
+s 67 10400 commandTime=2888
+e 0 pos.trTime=289a
+c 10413 0 3 4 0 0 0 0 0
+p 6
+c 10425 0 3 4 0 0 0 0 0
+c 10438 0 3 4 0 0 0 0 0
+s 68 10450 commandTime=28ad
+e 0 pos.trTime=28bf
+c 10451 0 3 4 0 0 0 0 0
+p 6
+c 10462 0 3 4 0 0 0 0 0
+c 10476 0 3 4 0 0 0 0 0
+c 10489 0 3 4 0 0 0 0 0
+p 6
+s 69 10500 commandTime=28f9
+e 0 pos.trTime=28e2
+c 10502 0 3 4 0 0 0 0 0
+c 10514 0 3 4 0 0 0 0 0
+c 10526 0 3 4 0 0 0 0 0
+p 6
+c 10538 0 3 4 0 0 0 0 0
+c 10551 0 3 4 0 0 0 0 0
+s 70 10550 commandTime=291e
+e 0 pos.trTime=292a
+c 10563 0 3 4 0 0 0 0 0
+p 6
+c 10574 0 3 4 0 0 0 0 0
+c 10586 0 3 4 0 0 0 0 0
+c 10598 0 3 4 0 0 0 0 0
+p 6
+s 71 10600 commandTime=2966
+e 0 pos.trTime=2950
+c 10610 0 3 4 0 0 0 0 0
+c 10621 0 3 4 0 0 0 0 0
+c 10635 0 3 4 0 0 0 0 0
+p 6
+c 10646 0 3 4 0 0 0 0 0
+s 72 10650 commandTime=298b
+e 0 pos.trTime=2999
+c 10657 0 3 4 0 0 0 0 0
+c 10670 0 3 4 0 0 0 0 0
+p 6
+c 10682 0 3 4 0 0 0 0 0
+c 10694 0 3 4 0 0 0 0 0
+s 73 10700 commandTime=29ae
+e 0 pos.trTime=29bd
+c 10707 0 3 4 0 0 0 0 0
+p 6
+c 10719 0 3 4 0 0 0 0 0
+c 10731 0 3 4 0 0 0 0 0
+c 10743 0 3 4 0 0 0 0 0
+p 6
+s 74 10750 commandTime=29f7
+e 0 pos.trTime=29df
+c 10754 0 3 4 0 0 0 0 0
+c 10766 0 3 4 0 0 0 0 0
+c 10778 0 3 4 0 0 0 0 0
+p 6
+c 10790 0 3 4 0 0 0 0 0
+s 75 10800 commandTime=2a1a
+e 0 pos.trTime=2a28
+c 10802 0 3 4 0 0 0 0 0
+c 10815 0 3 4 0 0 0 0 0
+p 6
+c 10827 0 3 4 0 0 0 0 0
+c 10839 0 3 4 0 0 0 0 0
+c 10850 0 3 4 0 0 0 0 0
+p 6
+s 76 10850 commandTime=2a62
+e 0 pos.trTime=2a4c
+c 10864 0 3 4 0 0 0 0 0
+c 10875 0 3 4 0 0 0 0 0
+c 10888 0 3 4 0 0 0 0 0
+p 6
+c 10901 0 3 4 0 0 0 0 0
+s 77 10900 commandTime=2a88
+e 0 pos.trTime=2a70
+c 10914 0 3 4 0 0 0 0 0
+c 10927 0 3 4 0 0 0 0 0
+p 6
+c 10938 0 3 4 0 0 0 0 0
+c 10949 0 3 4 0 0 0 0 0
+s 78 10950 commandTime=2aaf
+e 0 pos.trTime=2abb
+c 10960 0 3 4 0 0 0 0 0
+p 6
+c 10973 0 3 4 0 0 0 0 0
+c 10987 0 3 4 0 0 0 0 0
+s 79 11000 commandTime=2ad0
+e 0 pos.trTime=2adf
+c 11001 0 3 4 0 0 0 0 0
+p 6
+c 11013 0 3 4 0 0 0 0 0
+c 11024 0 3 4 0 0 0 0 0
+c 11037 0 3 4 0 0 0 0 0
+p 6
+c 11050 0 3 4 0 0 0 0 0
+s 80 11050 commandTime=2b1d
+e 0 pos.trTime=2b04
+c 11061 0 3 4 0 0 0 0 0
+c 11075 0 3 4 0 0 0 0 0
+p 6
+c 11088 0 3 4 0 0 0 0 0
+c 11099 0 3 4 0 0 0 0 0
+s 81 11100 commandTime=2b43
+e 0 pos.trTime=2b50
+c 11111 0 3 4 0 0 0 0 0
+p 6
+c 11123 0 3 4 0 0 0 0 0
+c 11135 0 3 4 0 0 0 0 0
+c 11148 0 3 4 0 0 0 0 0
+p 6
+s 82 11150 commandTime=2b8c
+e 0 pos.trTime=2b76
+c 11161 0 3 4 0 0 0 0 0
+c 11173 0 3 4 0 0 0 0 0
+c 11185 0 3 4 0 0 0 0 0
+p 6
+c 11197 0 3 4 0 0 0 0 0
+s 83 11200 commandTime=2bb1
+e 0 pos.trTime=2bbc
+c 11209 0 3 4 0 0 0 0 0
+c 11221 0 3 4 0 0 0 0 0
+p 6
+c 11233 0 3 4 0 0 0 0 0
+c 11245 0 3 4 0 0 0 0 0
+s 84 11250 commandTime=2bd5
+e 0 pos.trTime=2be0
+c 11258 0 3 4 0 0 0 0 0
+p 6
+c 11270 0 3 4 0 0 0 0 0
+c 11282 0 3 4 0 0 0 0 0
+c 11294 0 3 4 0 0 0 0 0
+p 6
+s 85 11300 commandTime=2c1e
+e 0 pos.trTime=2c05
+c 11306 0 3 4 0 0 0 0 0
+c 11318 0 3 4 0 0 0 0 0
+c 11329 0 3 4 0 0 0 0 0
+p 6
+c 11341 0 3 4 0 0 0 0 0
+c 11352 0 3 4 0 0 0 0 0
+s 86 11350 commandTime=2c41
+e 0 pos.trTime=2c4e
+c 11364 0 3 4 0 0 0 0 0
+p 6
+c 11376 0 3 4 0 0 0 0 0
+c 11388 0 3 4 0 0 0 0 0
+s 87 11400 commandTime=2c64
+e 0 pos.trTime=2c73
+c 11402 0 3 4 0 0 0 0 0
+p 6
+c 11414 0 3 4 0 0 0 0 0
+c 11426 0 3 4 0 0 0 0 0
+c 11438 0 3 4 0 0 0 0 0
+p 6
+c 11450 0 3 4 0 0 0 0 0
+s 88 11450 commandTime=2cae
+e 0 pos.trTime=2c99
+c 11462 0 3 4 0 0 0 0 0
+c 11475 0 3 4 0 0 0 0 0
+p 6
+c 11487 0 3 4 0 0 0 0 0
+c 11499 0 3 4 0 0 0 0 0
+s 89 11500 commandTime=2cd3
+e 0 pos.trTime=2ce1
+c 11511 0 3 4 0 0 0 0 0
+p 6
+c 11524 0 3 4 0 0 0 0 0
+c 11537 0 3 4 0 0 0 0 0
+c 11548 0 3 4 0 0 0 0 0
+p 6
+s 90 11550 commandTime=2d1c
+e 0 pos.trTime=2d08
+c 11560 0 3 4 0 0 0 0 0
+c 11572 0 3 4 0 0 0 0 0
+c 11585 0 3 4 0 0 0 0 0
+p 6
+c 11596 0 3 4 0 0 0 0 0
+s 91 11600 commandTime=2d41
+e 0 pos.trTime=2d51
+c 11608 0 3 4 0 0 0 0 0
+c 11620 0 3 4 0 0 0 0 0
+p 6
+c 11633 0 3 4 0 0 0 0 0
+c 11646 0 3 4 0 0 0 0 0
+s 92 11650 commandTime=2d64
+e 0 pos.trTime=2d76
+c 11658 0 3 4 0 0 0 0 0
+p 6
+c 11669 0 3 4 0 0 0 0 0
+c 11681 0 3 4 0 0 0 0 0
+c 11692 0 3 4 0 0 0 0 0
+p 6
+s 93 11700 commandTime=2dac
+e 0 pos.trTime=2d9c
+c 11706 0 3 4 0 0 0 0 0
+c 11718 0 3 4 0 0 0 0 0
+c 11730 0 3 4 0 0 0 0 0
+p 6
+c 11742 0 3 4 0 0 0 0 0
+s 94 11750 commandTime=2dd2
+e 0 pos.trTime=2de4
+c 11753 0 3 4 0 0 0 0 0
+c 11765 0 3 4 0 0 0 0 0
+p 6
+c 11777 0 3 4 0 0 0 0 0
+c 11789 0 3 4 0 0 0 0 0
+c 11801 0 3 4 0 0 0 0 0
+p 6
+s 95 11800 commandTime=2e19
+e 0 pos.trTime=2e0b
+c 11813 0 3 4 0 0 0 0 0
+c 11825 0 3 4 0 0 0 0 0
+c 11838 0 3 4 0 0 0 0 0
+p 6
+c 11849 0 3 4 0 0 0 0 0
+s 96 11850 commandTime=2e3e
+e 0 pos.trTime=2e30
+c 11861 0 3 4 0 0 0 0 0
+c 11872 0 3 4 0 0 0 0 0
+p 6
+c 11884 0 3 4 0 0 0 0 0
+c 11896 0 3 4 0 0 0 0 0
+s 97 11900 commandTime=2e60
+e 0 pos.trTime=2e79
+c 11908 0 3 4 0 0 0 0 0
+p 6
+c 11920 0 3 4 0 0 0 0 0
+c 11933 0 3 4 0 0 0 0 0
+c 11946 0 3 4 0 0 0 0 0
+p 6
+s 98 11950 commandTime=2eaa
+e 0 pos.trTime=2e9d
+c 11958 0 3 4 0 0 0 0 0
+c 11970 0 3 4 0 0 0 0 0
+c 11981 0 3 4 0 0 0 0 0
+p 6
+c 11995 0 3 4 0 0 0 0 0
+s 99 12000 commandTime=2ecd
+e 0 pos.trTime=2ec1
+c 12008 0 3 4 0 0 0 0 0
+c 12020 0 3 4 0 0 0 0 0
+p 6
+c 12033 0 3 4 0 0 0 0 0
+c 12044 0 3 4 0 0 0 0 0
+s 100 12050 commandTime=2ef4
+e 0 pos.trTime=2f0c
+c 12057 0 3 4 0 0 0 0 0
+p 6
+c 12070 0 3 4 0 0 0 0 0
+c 12082 0 3 4 0 0 0 0 0
+c 12095 0 3 4 0 0 0 0 0
+p 6
+s 101 12100 commandTime=2f3f
+e 0 pos.trTime=2f32
+c 12107 0 3 4 0 0 0 0 0
+c 12119 0 3 4 0 0 0 0 0
+c 12131 0 3 4 0 0 0 0 0
+p 6
+c 12143 0 3 4 0 0 0 0 0
+s 102 12150 commandTime=2f63
+e 0 pos.trTime=2f56
+c 12155 0 3 4 0 0 0 0 0
+c 12167 0 3 4 0 0 0 0 0
+p 6
+c 12179 0 3 4 0 0 0 0 0
+c 12191 0 3 4 0 0 0 0 0
+s 103 12200 commandTime=2f87
+e 0 pos.trTime=2fa0
+c 12204 0 3 4 0 0 0 0 0
+p 6
+c 12215 0 3 4 0 0 0 0 0
+c 12228 0 3 4 0 0 0 0 0
+c 12240 0 3 4 0 0 0 0 0
+p 6
+s 104 12250 commandTime=2fd0
+e 0 pos.trTime=2fc4
+c 12254 0 3 4 0 0 0 0 0
+c 12266 0 3 4 0 0 0 0 0
+c 12278 0 3 4 0 0 0 0 0
+p 6
+c 12291 0 3 4 0 0 0 0 0
+s 105 12300 commandTime=2ff6
+e 0 pos.trTime=2fe9
+c 12303 0 3 4 0 0 0 0 0
+c 12315 0 3 4 0 0 0 0 0
+p 6
+c 12328 0 3 4 0 0 0 0 0
+c 12340 0 3 4 0 0 0 0 0
+s 106 12350 commandTime=301b
+e 0 pos.trTime=3030
+c 12352 0 3 4 0 0 0 0 0
+p 6
+c 12365 0 3 4 0 0 0 0 0
+c 12377 0 3 4 0 0 0 0 0
+c 12389 0 3 4 0 0 0 0 0
+p 6
+c 12401 0 3 4 0 0 0 0 0
+s 107 12400 commandTime=3065
+e 0 pos.trTime=3055
+c 12412 0 3 4 0 0 0 0 0
+c 12424 0 3 4 0 0 0 0 0
+p 6
+c 12436 0 3 4 0 0 0 0 0
+c 12448 0 3 4 0 0 0 0 0
+s 108 12450 commandTime=3088
+e 0 pos.trTime=309c
+c 12460 0 3 4 0 0 0 0 0
+p 6
+c 12472 0 3 4 0 0 0 0 0
+c 12484 0 3 4 0 0 0 0 0
+c 12496 0 3 4 0 0 0 0 0
+p 6
+s 109 12500 commandTime=30d0
+e 0 pos.trTime=30c1
+c 12509 0 3 4 0 0 0 0 0
+c 12521 0 3 4 0 0 0 0 0
+c 12533 0 3 4 0 0 0 0 0
+p 6
+c 12545 0 3 4 0 0 0 0 0
+s 110 12550 commandTime=30f5
+e 0 pos.trTime=30e5
+c 12558 0 3 4 0 0 0 0 0
+c 12570 0 3 4 0 0 0 0 0
+p 6
+c 12583 0 3 4 0 0 0 0 0
+c 12596 0 3 4 0 0 0 0 0
+s 111 12600 commandTime=311a
+e 0 pos.trTime=3130
+c 12608 0 3 4 0 0 0 0 0
+p 6
+c 12619 0 3 4 0 0 0 0 0
+c 12632 0 3 4 0 0 0 0 0
+c 12645 0 3 4 0 0 0 0 0
+p 6
+s 112 12650 commandTime=3165
+e 0 pos.trTime=3155
+c 12657 0 3 4 0 0 0 0 0
+c 12669 0 3 4 0 0 0 0 0
+c 12681 0 3 4 0 0 0 0 0
+p 6
+c 12692 0 3 4 0 0 0 0 0
+s 113 12700 commandTime=3189
+e 0 pos.trTime=317a
+c 12704 0 3 4 0 0 0 0 0
+c 12717 0 3 4 0 0 0 0 0
+p 6
+c 12729 0 3 4 0 0 0 0 0
+c 12741 0 3 4 0 0 0 0 0
+s 114 12750 commandTime=31ad
+e 0 pos.trTime=31c2
+c 12754 0 3 4 0 0 0 0 0
+p 6
+c 12765 0 3 4 0 0 0 0 0
+c 12779 0 3 4 0 0 0 0 0
+c 12791 0 3 4 0 0 0 0 0
+p 6
+s 115 12800 commandTime=31f7
+e 0 pos.trTime=31e7
+c 12803 0 3 4 0 0 0 0 0
+c 12815 0 3 4 0 0 0 0 0
+c 12826 0 3 4 0 0 0 0 0
+p 6
+c 12837 0 3 4 0 0 0 0 0
+c 12849 0 3 4 0 0 0 0 0
+s 116 12850 commandTime=321a
+e 0 pos.trTime=3232
+c 12861 0 3 4 0 0 0 0 0
+p 6
+c 12873 0 3 4 0 0 0 0 0
+c 12886 0 3 4 0 0 0 0 0
+c 12899 0 3 4 0 0 0 0 0
+p 6
+s 117 12900 commandTime=3263
+e 0 pos.trTime=3256
+c 12910 0 3 4 0 0 0 0 0
+c 12922 0 3 4 0 0 0 0 0
+c 12934 0 3 4 0 0 0 0 0
+p 6
+c 12946 0 3 4 0 0 0 0 0
+s 118 12950 commandTime=3286
+e 0 pos.trTime=3279
+c 12958 0 3 4 0 0 0 0 0
+c 12971 0 3 4 0 0 0 0 0
+p 6
+c 12982 0 3 4 0 0 0 0 0
+c 12996 0 3 4 0 0 0 0 0
+s 119 13000 commandTime=32ab
+e 0 pos.trTime=32c3
+c 13007 0 3 4 0 0 0 0 0
+p 6
+c 13019 0 3 4 0 0 0 0 0
+c 13032 0 3 4 0 0 0 0 0
+c 13045 0 3 4 0 0 0 0 0
+p 6
+s 120 13050 commandTime=32f5
+e 0 pos.trTime=32e6
+c 13058 0 3 4 0 0 0 0 0
+c 13069 0 3 4 0 0 0 0 0
+c 13082 0 3 4 0 0 0 0 0
+p 6
+c 13095 0 3 4 0 0 0 0 0
+s 121 13100 commandTime=331a
+e 0 pos.trTime=330a
+c 13107 0 3 4 0 0 0 0 0
+c 13118 0 3 4 0 0 0 0 0
+p 6
+c 13129 0 3 4 0 0 0 0 0
+c 13141 0 3 4 0 0 0 0 0
+s 122 13150 commandTime=333e
+e 0 pos.trTime=334e
+c 13153 0 3 4 0 0 0 0 0
+p 6
+c 13165 0 3 4 0 0 0 0 0
+c 13177 0 3 4 0 0 0 0 0
+c 13189 0 3 4 0 0 0 0 0
+p 6
+c 13201 0 3 4 0 0 0 0 0
+s 123 13200 commandTime=3385
+e 0 pos.trTime=3374
+c 13213 0 3 4 0 0 0 0 0
+c 13226 0 3 4 0 0 0 0 0
+p 6
+c 13238 0 3 4 0 0 0 0 0
+s 124 13250 commandTime=33aa
+e 0 pos.trTime=339c
+c 13251 0 3 4 0 0 0 0 0
+c 13264 0 3 4 0 0 0 0 0
+p 6
+c 13276 0 3 4 0 0 0 0 0
+c 13288 0 3 4 0 0 0 0 0
+s 125 13300 commandTime=33d0
+e 0 pos.trTime=33e5
+c 13302 0 3 4 0 0 0 0 0
+p 6
+c 13314 0 3 4 0 0 0 0 0
+c 13326 0 3 4 0 0 0 0 0
+c 13338 0 3 4 0 0 0 0 0
+p 6
+c 13350 0 3 4 0 0 0 0 0
+s 126 13350 commandTime=341a
+e 0 pos.trTime=340b
+c 13361 0 3 4 0 0 0 0 0
+c 13373 0 3 4 0 0 0 0 0
+p 6
+c 13385 0 3 4 0 0 0 0 0
+c 13397 0 3 4 0 0 0 0 0
+s 127 13400 commandTime=343d
+e 0 pos.trTime=3455
+c 13408 0 3 4 0 0 0 0 0
+p 6
+c 13420 0 3 4 0 0 0 0 0
+c 13433 0 3 4 0 0 0 0 0
+c 13446 0 3 4 0 0 0 0 0
+p 6
+s 128 13450 commandTime=3486
+e 0 pos.trTime=3479
+c 13459 0 3 4 0 0 0 0 0
+c 13472 0 3 4 0 0 0 0 0
+c 13483 0 3 4 0 0 0 0 0
+p 6
+c 13495 0 3 4 0 0 0 0 0
+s 129 13500 commandTime=34ab
+e 0 pos.trTime=349d
+c 13508 0 3 4 0 0 0 0 0
+c 13519 0 3 4 0 0 0 0 0
+p 6
+c 13532 0 3 4 0 0 0 0 0
+c 13546 0 3 4 0 0 0 0 0
+s 130 13550 commandTime=34cf
+e 0 pos.trTime=34e6
+c 13559 0 3 4 0 0 0 0 0
+p 6
+c 13571 0 3 4 0 0 0 0 0
+c 13584 0 3 4 0 0 0 0 0
+c 13595 0 3 4 0 0 0 0 0
+p 6
+s 131 13600 commandTime=351b
+e 0 pos.trTime=3509
+c 13609 0 3 4 0 0 0 0 0
+c 13622 0 3 4 0 0 0 0 0
+c 13634 0 3 4 0 0 0 0 0
+p 6
+c 13647 0 3 4 0 0 0 0 0
+s 132 13650 commandTime=3542
+e 0 pos.trTime=3550
+c 13659 0 3 4 0 0 0 0 0
+c 13672 0 3 4 0 0 0 0 0
+p 6
+c 13684 0 3 4 0 0 0 0 0
+c 13697 0 3 4 0 0 0 0 0
+s 133 13700 commandTime=3568
+e 0 pos.trTime=3576
+c 13710 0 3 4 0 0 0 0 0
+p 6
+c 13722 0 3 4 0 0 0 0 0
+c 13734 0 3 4 0 0 0 0 0
+c 13747 0 3 4 0 0 0 0 0
+p 6
+s 134 13750 commandTime=35b3
+e 0 pos.trTime=359b
+c 13759 0 3 4 0 0 0 0 0
+c 13771 0 3 4 0 0 0 0 0
+c 13783 0 3 4 0 0 0 0 0
+p 6
+c 13796 0 3 4 0 0 0 0 0
+s 135 13800 commandTime=35d7
+e 0 pos.trTime=35e6
+c 13809 0 3 4 0 0 0 0 0
+c 13821 0 3 4 0 0 0 0 0
+p 6
+c 13832 0 3 4 0 0 0 0 0
+c 13844 0 3 4 0 0 0 0 0
+s 136 13850 commandTime=35fd
+e 0 pos.trTime=360b
+c 13855 0 3 4 0 0 0 0 0
+p 6
+c 13868 0 3 4 0 0 0 0 0
+c 13881 0 3 4 0 0 0 0 0
+c 13894 0 3 4 0 0 0 0 0
+p 6
+s 137 13900 commandTime=3646
+e 0 pos.trTime=362f
+c 13905 0 3 4 0 0 0 0 0
+c 13916 0 3 4 0 0 0 0 0
+c 13928 0 3 4 0 0 0 0 0
+p 6
+c 13940 0 3 4 0 0 0 0 0
+s 138 13950 commandTime=3668
+e 0 pos.trTime=3677
+c 13953 0 3 4 0 0 0 0 0
+c 13965 0 3 4 0 0 0 0 0
+p 6
+c 13977 0 3 4 0 0 0 0 0
+c 13990 0 3 4 0 0 0 0 0
+s 139 14000 commandTime=368d
+e 0 pos.trTime=369a
+c 14005 0 3 4 0 0 0 0 0
+p 6
+c 14018 0 3 4 0 0 0 0 0
+c 14030 0 3 4 0 0 0 0 0
+c 14043 0 3 4 0 0 0 0 0
+p 6
+s 140 14050 commandTime=36db
+e 0 pos.trTime=36bd
+c 14055 0 3 4 0 0 0 0 0
+c 14067 0 3 4 0 0 0 0 0
+c 14081 0 3 4 0 0 0 0 0
+p 6
+c 14092 0 3 4 0 0 0 0 0
+s 141 14100 commandTime=3701
+e 0 pos.trTime=3705
+c 14106 0 3 4 0 0 0 0 0
+c 14117 0 3 4 0 0 0 0 0
+p 6
+c 14129 0 3 4 0 0 0 0 0
+c 14141 0 3 4 0 0 0 0 0
+s 142 14150 commandTime=3725
+e 0 pos.trTime=372a
+c 14152 0 3 4 0 0 0 0 0
+p 6
+c 14165 0 3 4 0 0 0 0 0
+c 14176 0 3 4 0 0 0 0 0
+c 14189 0 3 4 0 0 0 0 0
+p 6
+c 14200 0 3 4 0 0 0 0 0
+s 143 14200 commandTime=376d
+e 0 pos.trTime=3771
+c 14211 0 3 4 0 0 0 0 0
+c 14224 0 3 4 0 0 0 0 0
+p 6
+c 14237 0 3 4 0 0 0 0 0
+c 14249 0 3 4 0 0 0 0 0
+s 144 14250 commandTime=3790
+e 0 pos.trTime=3796
+c 14261 0 3 4 0 0 0 0 0
+p 6
+c 14272 0 3 4 0 0 0 0 0
+c 14283 0 3 4 0 0 0 0 0
+c 14294 0 3 4 0 0 0 0 0
+p 6
+s 145 14300 commandTime=37d6
+e 0 pos.trTime=37b9
+c 14306 0 3 4 0 0 0 0 0
+c 14320 0 3 4 0 0 0 0 0
+c 14334 0 3 4 0 0 0 0 0
+p 6
+c 14347 0 3 4 0 0 0 0 0
+s 146 14350 commandTime=37fe
+e 0 pos.trTime=3802
+c 14360 0 3 4 0 0 0 0 0
+c 14372 0 3 4 0 0 0 0 0
+p 6
+c 14384 0 3 4 0 0 0 0 0
+c 14398 0 3 4 0 0 0 0 0
+s 147 14400 commandTime=3824
+e 0 pos.trTime=3828
+c 14410 0 3 4 0 0 0 0 0
+p 6
+c 14423 0 3 4 0 0 0 0 0
+c 14435 0 3 4 0 0 0 0 0
+c 14447 0 3 4 0 0 0 0 0
+p 6
+s 148 14450 commandTime=386f
+e 0 pos.trTime=3870
+c 14459 0 3 4 0 0 0 0 0
+c 14471 0 3 4 0 0 0 0 0
+c 14483 0 3 4 0 0 0 0 0
+p 6
+c 14495 0 3 4 0 0 0 0 0
+s 149 14500 commandTime=3893
+e 0 pos.trTime=3894
+c 14506 0 3 4 0 0 0 0 0
+c 14518 0 3 4 0 0 0 0 0
+p 6
+c 14530 0 3 4 0 0 0 0 0
+c 14542 0 3 4 0 0 0 0 0
+s 150 14550 commandTime=38b6
+e 0 pos.trTime=38b7
+c 14554 0 3 4 0 0 0 0 0
+p 6
+c 14566 0 3 4 0 0 0 0 0
+c 14578 0 3 4 0 0 0 0 0
+c 14590 0 3 4 0 0 0 0 0
+p 6
+s 151 14600 commandTime=38fe
+e 0 pos.trTime=3901
+c 14603 0 3 4 0 0 0 0 0
+c 14616 0 3 4 0 0 0 0 0
+c 14629 0 3 4 0 0 0 0 0
+p 6
+c 14641 0 3 4 0 0 0 0 0
+s 152 14650 commandTime=3925
+e 0 pos.trTime=3926
+c 14653 0 3 4 0 0 0 0 0
+c 14665 0 3 4 0 0 0 0 0
+p 6
+c 14677 0 3 4 0 0 0 0 0
+c 14689 0 3 4 0 0 0 0 0
+c 14701 0 3 4 0 0 0 0 0
+p 6
+s 153 14700 commandTime=396d
+e 0 pos.trTime=394b
+c 14712 0 3 4 0 0 0 0 0
+c 14724 0 3 4 0 0 0 0 0
+c 14736 0 3 4 0 0 0 0 0
+p 6
+c 14748 0 3 4 0 0 0 0 0
+s 154 14750 commandTime=3990
+e 0 pos.trTime=3995
+c 14759 0 3 4 0 0 0 0 0
+c 14771 0 3 4 0 0 0 0 0
+p 6
+c 14783 0 3 4 0 0 0 0 0
+c 14795 0 3 4 0 0 0 0 0
+s 155 14800 commandTime=39b3
+e 0 pos.trTime=39ba
+c 14808 0 3 4 0 0 0 0 0
+p 6
+c 14820 0 3 4 0 0 0 0 0
+c 14832 0 3 4 0 0 0 0 0
+c 14844 0 3 4 0 0 0 0 0
+p 6
+s 156 14850 commandTime=39fc
+e 0 pos.trTime=3a02
+c 14856 0 3 4 0 0 0 0 0
+c 14868 0 3 4 0 0 0 0 0
+c 14880 0 3 4 0 0 0 0 0
+p 6
+c 14892 0 3 4 0 0 0 0 0
+s 157 14900 commandTime=3a20
+e 0 pos.trTime=3a27
+c 14905 0 3 4 0 0 0 0 0
+c 14917 0 3 4 0 0 0 0 0
+p 6
+c 14928 0 3 4 0 0 0 0 0
+c 14940 0 3 4 0 0 0 0 0
+s 158 14950 commandTime=3a45
+e 0 pos.trTime=3a4b
+c 14953 0 3 4 0 0 0 0 0
+p 6
+c 14966 0 3 4 0 0 0 0 0
+c 14978 0 3 4 0 0 0 0 0
+c 14991 0 3 4 0 0 0 0 0
+p 6
+s 159 15000 commandTime=3a8f
+e 0 pos.trTime=3a94
+c 15005 0 3 4 0 0 0 0 0
+c 15017 0 3 4 0 0 0 0 0
+c 15029 0 3 4 0 0 0 0 0
+p 6
+c 15040 0 3 4 0 0 0 0 0
+s 160 15050 commandTime=3ab5
+e 0 pos.trTime=3ab8
+c 15054 0 3 4 0 0 0 0 0
+c 15066 0 3 4 0 0 0 0 0
+p 6
+c 15078 0 3 4 0 0 0 0 0
+c 15092 0 3 4 0 0 0 0 0
+s 161 15100 commandTime=3ada
+e 0 pos.trTime=3add
+c 15104 0 3 4 0 0 0 0 0
+p 6
+c 15116 0 3 4 0 0 0 0 0
+c 15127 0 3 4 0 0 0 0 0
+c 15139 0 3 4 0 0 0 0 0
+p 6
+s 162 15150 commandTime=3b23
+e 0 pos.trTime=3b25
+c 15150 0 3 4 0 0 0 0 0
+c 15164 0 3 4 0 0 0 0 0
+c 15177 0 3 4 0 0 0 0 0
+p 6
+c 15189 0 3 4 0 0 0 0 0
+s 163 15200 commandTime=3b49
+e 0 pos.trTime=3b49
+c 15201 0 3 4 0 0 0 0 0
+c 15213 0 3 4 0 0 0 0 0
+p 6
+c 15226 0 3 4 0 0 0 0 0
+c 15238 0 3 4 0 0 0 0 0
+c 15250 0 3 4 0 0 0 0 0
+p 6
+s 164 15250 commandTime=3b92
+e 0 pos.trTime=3b6e
+c 15261 0 3 4 0 0 0 0 0
+c 15274 0 3 4 0 0 0 0 0
+c 15285 0 3 4 0 0 0 0 0
+p 6
+c 15297 0 3 4 0 0 0 0 0
+s 165 15300 commandTime=3bb5
+e 0 pos.trTime=3bb6
+c 15309 0 3 4 0 0 0 0 0
+c 15321 0 3 4 0 0 0 0 0
+p 6
+c 15333 0 3 4 0 0 0 0 0
+c 15345 0 3 4 0 0 0 0 0
+s 166 15350 commandTime=3bd9
+e 0 pos.trTime=3bda
+c 15359 0 3 4 0 0 0 0 0
+p 6
+c 15373 0 3 4 0 0 0 0 0
+c 15384 0 3 4 0 0 0 0 0
+c 15395 0 3 4 0 0 0 0 0
+p 6
+s 167 15400 commandTime=3c23
+e 0 pos.trTime=3c01
+c 15408 0 3 4 0 0 0 0 0
+c 15421 0 3 4 0 0 0 0 0
+c 15433 0 3 4 0 0 0 0 0
+p 6
+c 15446 0 3 4 0 0 0 0 0
+s 168 15450 commandTime=3c49
+e 0 pos.trTime=3c4a
+c 15458 0 3 4 0 0 0 0 0
+c 15470 0 3 4 0 0 0 0 0
+p 6
+c 15483 0 3 4 0 0 0 0 0
+c 15494 0 3 4 0 0 0 0 0
+s 169 15500 commandTime=3c6e
+e 0 pos.trTime=3c6e
+c 15508 0 3 4 0 0 0 0 0
+p 6
+c 15520 0 3 4 0 0 0 0 0
+c 15532 0 3 4 0 0 0 0 0
+c 15543 0 3 4 0 0 0 0 0
+p 6
+s 170 15550 commandTime=3cb7
+e 0 pos.trTime=3cb7
+c 15556 0 3 4 0 0 0 0 0
+c 15570 0 3 4 0 0 0 0 0
+c 15581 0 3 4 0 0 0 0 0
+p 6
+c 15593 0 3 4 0 0 0 0 0
+s 171 15600 commandTime=3cdd
+e 0 pos.trTime=3cda
+c 15607 0 3 4 0 0 0 0 0
+c 15618 0 3 4 0 0 0 0 0
+p 6
+c 15630 0 3 4 0 0 0 0 0
+c 15642 0 3 4 0 0 0 0 0
+s 172 15650 commandTime=3d02
+e 0 pos.trTime=3cff
+c 15654 0 3 4 0 0 0 0 0
+p 6
+c 15667 0 3 4 0 0 0 0 0
+c 15680 0 3 4 0 0 0 0 0
+c 15693 0 3 4 0 0 0 0 0
+p 6
+s 173 15700 commandTime=3d4d
+e 0 pos.trTime=3d48
+c 15704 0 3 4 0 0 0 0 0
+c 15718 0 3 4 0 0 0 0 0
+c 15731 0 3 4 0 0 0 0 0
+p 6
+c 15745 0 3 4 0 0 0 0 0
+s 174 15750 commandTime=3d73
+e 0 pos.trTime=3d6d
+c 15757 0 3 4 0 0 0 0 0
+c 15769 0 3 4 0 0 0 0 0
+p 6
+c 15781 0 3 4 0 0 0 0 0
+c 15794 0 3 4 0 0 0 0 0
+s 175 15800 commandTime=3d99
+e 0 pos.trTime=3d94
+c 15806 0 3 4 0 0 0 0 0
+p 6
+c 15819 0 3 4 0 0 0 0 0
+c 15831 0 3 4 0 0 0 0 0
+c 15843 0 3 4 0 0 0 0 0
+p 6
+s 176 15850 commandTime=3de3
+e 0 pos.trTime=3ddf
+c 15854 0 3 4 0 0 0 0 0
+c 15866 0 3 4 0 0 0 0 0
+c 15878 0 3 4 0 0 0 0 0
+p 6
+c 15890 0 3 4 0 0 0 0 0
+s 177 15900 commandTime=3e06
+e 0 pos.trTime=3e05
+c 15903 0 3 4 0 0 0 0 0
+c 15915 0 3 4 0 0 0 0 0
+p 6
+c 15927 0 3 4 0 0 0 0 0
+c 15940 0 3 4 0 0 0 0 0
+s 178 15950 commandTime=3e2b
+e 0 pos.trTime=3e2a
+c 15953 0 3 4 0 0 0 0 0
+p 6
+c 15966 0 3 4 0 0 0 0 0
+c 15980 0 3 4 0 0 0 0 0
+c 15991 0 3 4 0 0 0 0 0
+p 6
+s 179 16000 commandTime=3e77
+e 0 pos.trTime=3e72
+c 16003 0 3 4 0 0 0 0 0
+c 16016 0 3 4 0 0 0 0 0
+c 16028 0 3 4 0 0 0 0 0
+p 6
+c 16039 0 3 4 0 0 0 0 0
+c 16050 0 3 4 0 0 0 0 0
+s 180 16050 commandTime=3e9c
+e 0 pos.trTime=3e96
+c 16063 0 3 4 0 0 0 0 0
+p 6
+c 16075 0 3 4 0 0 0 0 0
+c 16087 0 3 4 0 0 0 0 0
+c 16098 0 3 4 0 0 0 0 0
+p 6
+s 181 16100 commandTime=3ee2
+e 0 pos.trTime=3edd
+c 16110 0 3 4 0 0 0 0 0
+c 16121 0 3 4 0 0 0 0 0
+c 16135 0 3 4 0 0 0 0 0
+p 6
+c 16147 0 3 4 0 0 0 0 0
+s 182 16150 commandTime=3f07
+e 0 pos.trTime=3f03
+c 16159 0 3 4 0 0 0 0 0
+c 16173 0 3 4 0 0 0 0 0
+p 6
+c 16186 0 3 4 0 0 0 0 0
+c 16197 0 3 4 0 0 0 0 0
+s 183 16200 commandTime=3f2d
+e 0 pos.trTime=3f26
+c 16209 0 3 4 0 0 0 0 0
+p 6
+c 16221 0 3 4 0 0 0 0 0
+c 16233 0 3 4 0 0 0 0 0
+c 16245 0 3 4 0 0 0 0 0
+p 6
+s 184 16250 commandTime=3f75
+e 0 pos.trTime=3f70
+c 16256 0 3 4 0 0 0 0 0
+c 16268 0 3 4 0 0 0 0 0
+c 16280 0 3 4 0 0 0 0 0
+p 6
+c 16293 0 3 4 0 0 0 0 0
+s 185 16300 commandTime=3f98
+e 0 pos.trTime=3f95
+c 16305 0 3 4 0 0 0 0 0
+c 16316 0 3 4 0 0 0 0 0
+p 6
+c 16328 0 3 4 0 0 0 0 0
+c 16341 0 3 4 0 0 0 0 0
+s 186 16350 commandTime=3fbc
+e 0 pos.trTime=3fb8
+c 16353 0 3 4 0 0 0 0 0
+p 6
+c 16367 0 3 4 0 0 0 0 0
+c 16380 0 3 4 0 0 0 0 0
+c 16392 0 3 4 0 0 0 0 0
+p 6
+s 187 16400 commandTime=4008
+e 0 pos.trTime=4001
+c 16404 0 3 4 0 0 0 0 0
+c 16416 0 3 4 0 0 0 0 0
+c 16430 0 3 4 0 0 0 0 0
+p 6
+c 16441 0 3 4 0 0 0 0 0
+s 188 16450 commandTime=402e
+e 0 pos.trTime=4025
+c 16453 0 3 4 0 0 0 0 0
+c 16465 0 3 4 0 0 0 0 0
+p 6
+c 16477 0 3 4 0 0 0 0 0
+c 16488 0 3 4 0 0 0 0 0
+c 16500 0 3 4 0 0 0 0 0
+p 6
+s 189 16500 commandTime=4074
+e 0 pos.trTime=406e
+c 16513 0 3 4 0 0 0 0 0
+c 16525 0 3 4 0 0 0 0 0
+c 16537 0 3 4 0 0 0 0 0
+p 6
+c 16548 0 3 4 0 0 0 0 0
+s 190 16550 commandTime=4099
+e 0 pos.trTime=4092
+c 16562 0 3 4 0 0 0 0 0
+c 16574 0 3 4 0 0 0 0 0
+p 6
+c 16587 0 3 4 0 0 0 0 0
+c 16599 0 3 4 0 0 0 0 0
+s 191 16600 commandTime=40be
+e 0 pos.trTime=40b7
+c 16612 0 3 4 0 0 0 0 0
+p 6
+c 16624 0 3 4 0 0 0 0 0
+c 16636 0 3 4 0 0 0 0 0
+c 16649 0 3 4 0 0 0 0 0
+p 6
+s 192 16650 commandTime=4109
+e 0 pos.trTime=4102
+c 16662 0 3 4 0 0 0 0 0
+c 16674 0 3 4 0 0 0 0 0
+c 16686 0 3 4 0 0 0 0 0
+p 6
+c 16698 0 3 4 0 0 0 0 0
+s 193 16700 commandTime=412e
+e 0 pos.trTime=4127
+c 16711 0 3 4 0 0 0 0 0
+c 16723 0 3 4 0 0 0 0 0
+p 6
+c 16736 0 3 4 0 0 0 0 0
+c 16748 0 3 4 0 0 0 0 0
+s 194 16750 commandTime=4153
+e 0 pos.trTime=414b
+c 16760 0 3 4 0 0 0 0 0
+p 6
+c 16771 0 3 4 0 0 0 0 0
+c 16785 0 3 4 0 0 0 0 0
+c 16797 0 3 4 0 0 0 0 0
+p 6
+s 195 16800 commandTime=419d
+e 0 pos.trTime=4196
+c 16809 0 3 4 0 0 0 0 0
+c 16823 0 3 4 0 0 0 0 0
+c 16835 0 3 4 0 0 0 0 0
+p 6
+c 16847 0 3 4 0 0 0 0 0
+s 196 16850 commandTime=41c3
+e 0 pos.trTime=41b8
+c 16860 0 3 4 0 0 0 0 0
+c 16872 0 3 4 0 0 0 0 0
+p 6
+c 16885 0 3 4 0 0 0 0 0
+c 16897 0 3 4 0 0 0 0 0
+s 197 16900 commandTime=41e8
+e 0 pos.trTime=41ff
+c 16908 0 3 4 0 0 0 0 0
+p 6
+c 16921 0 3 4 0 0 0 0 0
+c 16932 0 3 4 0 0 0 0 0
+c 16944 0 3 4 0 0 0 0 0
+p 6
+s 198 16950 commandTime=4230
+e 0 pos.trTime=4223
+c 16956 0 3 4 0 0 0 0 0
+c 16969 0 3 4 0 0 0 0 0
+c 16982 0 3 4 0 0 0 0 0
+p 6
+c 16995 0 3 4 0 0 0 0 0
+s 199 17000 commandTime=4256
+e 0 pos.trTime=4247
+c 17009 0 3 4 0 0 0 0 0
+c 17021 0 3 4 0 0 0 0 0
+p 6
+c 17034 0 3 4 0 0 0 0 0
+c 17046 0 3 4 0 0 0 0 0
+s 200 17050 commandTime=427d
+e 0 pos.trTime=4290
+c 17059 0 3 4 0 0 0 0 0
+p 6
+c 17071 0 3 4 0 0 0 0 0
+c 17082 0 3 4 0 0 0 0 0
+c 17094 0 3 4 0 0 0 0 0
+p 6
+s 201 17100 commandTime=42c6
+e 0 pos.trTime=42b4
+c 17106 0 3 4 0 0 0 0 0
+c 17118 0 3 4 0 0 0 0 0
+c 17130 0 3 4 0 0 0 0 0
+p 6
+c 17142 0 3 4 0 0 0 0 0
+s 202 17150 commandTime=42ea
+e 0 pos.trTime=42fc
+c 17154 1000 3 4 0 0 0 0 0
+c 17166 1000 3 4 0 0 0 0 0
+p 6
+c 17178 1000 3 4 0 0 0 0 0
+c 17190 1000 3 4 0 0 0 0 0
+s 203 17200 commandTime=430e legsAnim=298 pm_flags=a00140 fWeaponPosFrac=3da3d70a
+e 0 pos.trTime=431f
+c 17201 1000 3 4 0 0 0 0 0
+p 6
+c 17213 1000 3 4 0 0 0 0 0
+c 17225 1000 3 4 0 0 0 0 0
+c 17236 1000 3 4 0 0 0 0 0
+p 6
+c 17249 1000 3 4 0 0 0 0 0
+s 204 17250 commandTime=4354 fWeaponPosFrac=3ea06d3a
+e 0 pos.trTime=4343
+c 17260 1000 3 4 0 0 0 0 0
+c 17272 1000 3 4 0 0 0 0 0
+p 6
+c 17284 1000 3 4 0 0 0 0 0
+c 17297 1000 3 4 0 0 0 0 0
+s 205 17300 commandTime=4378 fWeaponPosFrac=3edddddd
+e 0 pos.trTime=4389
+c 17310 1000 3 4 0 0 0 0 0
+p 6
+c 17322 1000 3 4 0 0 0 0 0
+c 17333 1000 3 4 0 0 0 0 0
+c 17345 1000 3 4 0 0 0 0 0
+p 6
+s 206 17350 commandTime=43c1 fWeaponPosFrac=3f2d3a08
+e 0 pos.trTime=43ac
+c 17357 1000 3 4 0 0 0 0 0
+c 17369 1000 3 4 0 0 0 0 0
+c 17383 1000 3 4 0 0 0 0 0
+p 6
+c 17395 1000 3 4 0 0 0 0 0
+s 207 17400 commandTime=43e7 fWeaponPosFrac=3f4da743
+e 0 pos.trTime=43f5
+c 17407 1000 3 4 0 0 0 0 0
+c 17418 1000 3 4 0 0 0 0 0
+p 6
+c 17430 1000 3 4 0 0 0 0 0
+c 17441 1000 3 4 0 0 0 0 0
+s 208 17450 commandTime=440a fWeaponPosFrac=3f6b8522
+e 0 pos.trTime=441c
+c 17454 1000 3 4 0 0 0 0 0
+p 6
+c 17466 1000 3 4 0 0 0 0 0
+c 17478 1000 3 4 0 0 0 0 0
+c 17490 1000 3 4 0 0 0 0 0
+p 6
+s 209 17500 commandTime=4452 fWeaponPosFrac=3f800000
+e 0 pos.trTime=4440
+c 17503 1000 3 4 0 0 0 0 0
+c 17515 1000 3 4 0 0 0 0 0
+c 17527 1000 3 4 0 0 0 0 0
+p 6
+c 17539 1000 3 4 0 0 0 0 0
+c 17551 1000 3 4 0 0 0 0 0
+s 210 17550 commandTime=4477
+e 0 pos.trTime=448d
+c 17562 1000 3 4 0 0 0 0 0
+p 6
+c 17574 1000 3 4 0 0 0 0 0
+c 17586 1000 3 4 0 0 0 0 0
+c 17598 1000 3 4 0 0 0 0 0
+p 6
+s 211 17600 commandTime=44be
+e 0 pos.trTime=44b0
+c 17610 1000 3 4 0 0 0 0 0
+c 17622 1000 3 4 0 0 0 0 0
+c 17634 1000 3 4 0 0 0 0 0
+p 6
+c 17646 1000 3 4 0 0 0 0 0
+s 212 17650 commandTime=44e2
+e 0 pos.trTime=44d6
+c 17659 1000 3 4 0 0 0 0 0
+c 17671 1000 3 4 0 0 0 0 0
+p 6
+c 17683 1000 3 4 0 0 0 0 0
+c 17695 1000 3 4 0 0 0 0 0
+s 213 17700 commandTime=4507
+e 0 pos.trTime=4522
+c 17708 1000 3 4 0 0 0 0 0
+p 6
+c 17720 1000 3 4 0 0 0 0 0
+c 17732 1000 3 4 0 0 0 0 0
+c 17746 1000 3 4 0 0 0 0 0
+p 6
+s 214 17750 commandTime=4552
+e 0 pos.trTime=4545
+c 17759 1001 3 4 0 0 0 0 0
+c 17772 1001 3 4 0 0 0 0 0
+c 17786 1001 3 4 0 0 0 0 0
+p 6
+c 17799 1001 3 4 0 0 0 0 0
+s 215 17800 commandTime=457a eventSequence=1 weaponTime=12f pm_flags=800140 events[0]=9e weapAnim=205 torsoTimer=54c torsoAnim=31d eFlags=42 weaponstate=3 weaponrechamber[0]=8 C[2]=4
+e 64 pos.trBase[1]=44dd0000 pos.trBase[0]=44f12000 apos.trBase[1]=42abfdb0 pos.trBase[2]=42804000 legsAnim=22b eType=2 eFlags=a0002 torsoAnim=200 groundEntityNum=3fe pos.trType=1
+e 72 pos.trBase[1]=44dcc000 pos.trBase[0]=44f10000 pos.trBase[2]=42f00000 eType=c1 otherEntityNum=1 surfType=7 eventParm=68 scale=68
+e 74 eType=d0 eventParm=3 attackerEntityNum=1
+e 75 pos.trBase[1]=44dcc000 pos.trBase[0]=44f10000 pos.trBase[2]=42f00000 eType=c1 otherEntityNum=1 surfType=7 eventParm=6a scale=53
+e- 0
+c 17811 1001 3 4 0 0 0 0 0
+c 17823 1001 3 4 0 0 0 0 0
+p 6
+c 17836 1001 3 4 0 0 0 0 0
+c 17849 1001 3 4 0 0 0 0 0
+s 216 17850 commandTime=459f weaponTime=10a torsoTimer=527
+c 17861 1000 3 4 0 0 0 0 0
+p 6
+c 17873 1000 3 4 0 0 0 0 0
+c 17885 1000 3 4 0 0 0 0 0
+c 17897 1000 3 4 0 0 0 0 0
+p 6
+s 217 17900 commandTime=45e9 weaponTime=c0 torsoTimer=4dd eFlags=2
+c 17909 1000 3 4 0 0 0 0 0
+c 17921 1000 3 4 0 0 0 0 0
+c 17934 1000 3 4 0 0 0 0 0
+p 6
+c 17945 1000 3 4 0 0 0 0 0
+s 218 17950 commandTime=460e weaponTime=9b torsoTimer=4b8
+c 17958 1000 3 4 0 0 0 0 0
+c 17969 1000 3 4 0 0 0 0 0
+p 6
+c 17982 1000 3 4 0 0 0 0 0
+c 17994 1000 3 4 0 0 0 0 0
+s 219 18000 commandTime=4631 weaponTime=78 torsoTimer=495
+c 18006 1000 3 4 0 0 0 0 0
+p 6
+c 18018 1000 3 4 0 0 0 0 0
+c 18030 1000 3 4 0 0 0 0 0
+c 18042 1000 3 4 0 0 0 0 0
+p 6
+s 220 18050 commandTime=467a weaponTime=2f torsoTimer=44c
+c 18054 1000 3 4 0 0 0 0 0
+c 18066 1000 3 4 0 0 0 0 0
+c 18078 1000 3 4 0 0 0 0 0
+p 6
+c 18090 1000 3 4 0 0 0 0 0
+s 221 18100 commandTime=469e weaponTime=b torsoTimer=428
+e- 72
+e- 74
+e- 75
+c 18103 1000 3 4 0 0 0 0 0
+c 18115 1000 3 4 0 0 0 0 0
+p 6
+c 18127 1000 3 4 0 0 0 0 0
+c 18139 1000 3 4 0 0 0 0 0
+c 18151 1000 3 4 0 0 0 0 0
+p 6
+s 222 18150 commandTime=46e7 eventSequence=2 weaponTime=3b8 events[1]=a1 weapAnim=207 torsoTimer=3df weaponstate=4 weaponDelay=259
+c 18163 1000 3 4 0 0 0 0 0
+c 18175 1000 3 4 0 0 0 0 0
+c 18187 1000 3 4 0 0 0 0 0
+p 6
+c 18199 1000 3 4 0 0 0 0 0
+s 223 18200 commandTime=470b weaponTime=394 torsoTimer=3bb weaponDelay=235
+c 18211 1000 3 4 0 0 0 0 0
+c 18223 1000 3 4 0 0 0 0 0
+p 6
+c 18235 1000 3 4 0 0 0 0 0
+c 18247 1000 3 4 0 0 0 0 0
+s 224 18250 commandTime=472f weaponTime=370 torsoTimer=397 weaponDelay=211
+c 18260 1000 3 4 0 0 0 0 0
+p 6
+c 18272 1000 3 4 0 0 0 0 0
+c 18284 1000 3 4 0 0 0 0 0
+c 18296 1000 3 4 0 0 0 0 0
+p 6
+s 225 18300 commandTime=4778 weaponTime=327 torsoTimer=34e weaponDelay=1c8
+e 64 pos.trBase[1]=44dd4785 pos.trBase[0]=44f0fbfd
+r 1 attachModelIndex[1]=0
+c 18310 1000 3 4 0 0 0 0 0
+c 18323 1000 3 4 0 0 0 0 0
+c 18335 1000 3 4 0 0 0 0 0
+p 6
+c 18349 1000 3 4 0 0 0 0 0
+s 226 18350 commandTime=479f weaponTime=300 torsoTimer=327 weaponDelay=1a1
+e 64 pos.trBase[1]=44dd925f pos.trBase[0]=44f0d64c
+c 18362 1000 3 4 0 0 0 0 0
+c 18373 1000 3 4 0 0 0 0 0
+p 6
+c 18385 1000 3 4 0 0 0 0 0
+c 18397 1000 3 4 0 0 0 0 0
+s 227 18400 commandTime=47c5 weaponTime=2da torsoTimer=301 weaponDelay=17b
+e 64 pos.trBase[1]=44ddded3 pos.trBase[0]=44f0afcc
+c 18408 1000 3 4 0 0 0 0 0
+p 6
+c 18421 1000 3 4 0 0 0 0 0
+c 18432 1000 3 4 0 0 0 0 0
+c 18445 1000 3 4 0 0 0 0 0
+p 6
+s 228 18450 commandTime=480d weaponTime=292 torsoTimer=2b9 weaponDelay=133
+e 64 pos.trBase[1]=44de2746 pos.trBase[0]=44f08b51
+c 18458 1000 3 4 0 0 0 0 0
+c 18470 1000 3 4 0 0 0 0 0
+c 18482 1000 3 4 0 0 0 0 0
+p 6
+c 18494 1000 3 4 0 0 0 0 0
+s 229 18500 commandTime=4832 weaponTime=26d torsoTimer=294 weaponDelay=10e
+e 64 pos.trBase[1]=44de67b7 pos.trBase[0]=44f06add
+c 18507 1000 3 4 0 0 0 0 0
+c 18519 1000 3 4 0 0 0 0 0
+p 6
+c 18531 1000 3 4 0 0 0 0 0
+c 18542 1000 3 4 0 0 0 0 0
+s 230 18550 commandTime=4857 weaponTime=248 torsoTimer=26f weaponDelay=e9
+e 64 pos.trBase[1]=44de9743 pos.trBase[0]=44f052ec
+c 18553 1000 3 4 0 0 0 0 0
+p 6
+c 18567 1000 3 4 0 0 0 0 0
+c 18578 1000 3 4 0 0 0 0 0
+c 18590 1000 3 4 0 0 0 0 0
+p 6
+c 18601 1000 3 4 0 0 0 0 0
+s 231 18600 commandTime=489e weaponTime=201 torsoTimer=228 weaponDelay=a2
+e 64 pos.trBase[1]=44debd1c pos.trBase[0]=44f03fdd
+c 18612 1000 3 4 0 0 0 0 0
+c 18623 1000 3 4 0 0 0 0 0
+p 6
+c 18635 1000 3 4 0 0 0 0 0
+c 18647 1000 3 4 0 0 0 0 0
+s 232 18650 commandTime=48bf weaponTime=1e0 torsoTimer=207 weaponDelay=81
+c 18660 1000 3 4 0 0 0 0 0
+p 6
+c 18672 1000 3 4 0 0 0 0 0
+c 18684 1000 3 4 0 0 0 0 0
+c 18696 1000 3 4 0 0 0 0 0
+p 6
+s 233 18700 commandTime=4908 weaponTime=197 torsoTimer=1be weaponDelay=38
+c 18708 1000 3 4 0 0 0 0 0
+c 18720 1000 3 4 0 0 0 0 0
+c 18732 1000 3 4 0 0 0 0 0
+p 6
+c 18744 1000 3 4 0 0 0 0 0
+s 234 18750 commandTime=492c weaponTime=173 torsoTimer=19a weaponDelay=14
+c 18756 1000 3 4 0 0 0 0 0
+c 18768 1000 3 4 0 0 0 0 0
+p 6
+c 18780 1000 3 4 0 0 0 0 0
+c 18792 1000 3 4 0 0 0 0 0
+s 235 18800 commandTime=4950 viewangles[0]=0 eventSequence=3 legsAnim=27 weaponTime=14f events[2]=a2 torsoTimer=650 torsoAnim=0 weaponDelay=0 legsTimer=650 pm_type=6 weaponrechamber[0]=0 S[0]=0 S[1]=ffffffa3
+e 65 pos.trTime=4970 pos.trBase[1]=44f8e000 pos.trBase[0]=44f2e000 apos.trBase[1]=c2bb2f60 pos.trBase[2]=42804000 legsAnim=27 eType=2 eFlags=a0002 clientNum=1 groundEntityNum=3ff pos.trType=5
+e 76 eType=d0 otherEntityNum=1 eventParm=8c attackerEntityNum=1
+c 18803 1000 3 4 0 0 0 0 0
+p 6
+c 18815 1000 3 4 0 0 0 0 0
+c 18829 1000 3 4 0 0 0 0 0
+c 18840 1000 3 4 0 0 0 0 0
+p 6
+c 18852 1000 3 4 0 0 0 0 0
+s 236 18850 commandTime=4998 velocity[0]=80000000 pm_flags=800000 viewHeightCurrent=423c28f6 torsoTimer=608 viewHeightTarget=8 legsTimer=608 weapon=0
+e 65 pos.trTime=0 apos.trBase[1]=c2bb2f61 apos.trBase[0]=1 groundEntityNum=3fe pos.trType=1
+c 18865 1000 3 4 0 0 0 0 0
+c 18877 1000 3 4 0 0 0 0 0
+p 6
+c 18889 1000 3 4 0 0 0 0 0
+s 237 18900 commandTime=49bd viewHeightCurrent=4221851f torsoTimer=5e3 legsTimer=5e3
+e 65 pos.trBase[1]=44f943d1 pos.trBase[0]=44f2de00
+c 18901 1000 3 4 0 0 0 0 0
+c 18913 1000 3 4 0 0 0 0 0
+p 6
+c 18925 1000 3 4 0 0 0 0 0
+c 18937 1000 3 4 0 0 0 0 0
+c 18949 1000 3 4 0 0 0 0 0
+p 6
+s 238 18950 commandTime=4a05 viewHeightCurrent=41db5c2a torsoTimer=59b legsTimer=59b
+c 18960 1000 3 4 0 0 0 0 0
+c 18972 1000 3 4 0 0 0 0 0
+c 18984 1000 3 4 0 0 0 0 0
+p 6
+c 18996 1000 3 4 0 0 0 0 0
+s 239 19000 commandTime=4a28 viewHeightCurrent=41a8f5c4 torsoTimer=578 legsTimer=578
+c 19007 1000 3 4 0 0 0 0 0
+c 19019 1000 3 4 0 0 0 0 0
+p 6
+c 19031 1000 3 4 0 0 0 0 0
+c 19043 1000 3 4 0 0 0 0 0
+s 240 19050 commandTime=4a4b viewHeightCurrent=416d1ebc torsoTimer=555 legsTimer=555
+c 19054 1000 3 4 0 0 0 0 0
+p 6
+c 19066 1000 3 4 0 0 0 0 0
+c 19078 1000 3 4 0 0 0 0 0
+c 19090 1000 3 4 0 0 0 0 0
+p 6
+c 19102 1000 3 4 0 0 0 0 0
+s 241 19100 commandTime=4a92 viewHeightCurrent=41000000 torsoTimer=50e legsTimer=50e
+c 19115 1000 3 4 0 0 0 0 0
+c 19126 1000 3 4 0 0 0 0 0
+p 6
+c 19139 1000 3 4 0 0 0 0 0
+s 242 19150 commandTime=4ab6 torsoTimer=4ea legsTimer=4ea
+e- 76
+c 19151 1000 3 4 0 0 0 0 0
+c 19164 1000 3 4 0 0 0 0 0
+p 6
+c 19176 1000 3 4 0 0 0 0 0
+c 19189 1000 3 4 0 0 0 0 0
+s 243 19200 commandTime=4adc torsoTimer=4c4 legsTimer=4c4
+c 19202 1000 3 4 0 0 0 0 0
+p 6
+c 19214 1000 3 4 0 0 0 0 0
+c 19226 1000 3 4 0 0 0 0 0
+c 19238 1000 3 4 0 0 0 0 0
+p 6
+c 19250 1000 3 4 0 0 0 0 0
+s 244 19250 commandTime=4b26 torsoTimer=47a legsTimer=47a
+e 65 pos.trBase[1]=44f9b930 pos.trBase[0]=44f32677
+c 19261 1000 3 4 0 0 0 0 0
+c 19273 1000 3 4 0 0 0 0 0
+p 6
+c 19285 1000 3 4 0 0 0 0 0
+c 19297 1000 3 4 0 0 0 0 0
+s 245 19300 commandTime=4b49 torsoTimer=457 legsTimer=457
+c 19309 1000 3 4 0 0 0 0 0
+p 6
+c 19322 1000 3 4 0 0 0 0 0
+c 19335 1000 3 4 0 0 0 0 0
+c 19348 1000 3 4 0 0 0 0 0
+p 6
+s 246 19350 commandTime=4b94 torsoTimer=40c legsTimer=40c
+c 19360 0 3 4 0 0 0 0 127
+c 19372 0 3 4 0 0 0 0 127
+c 19384 0 3 4 0 0 0 0 127
+p 6
+c 19396 0 3 4 0 0 0 0 127
+s 247 19400 commandTime=4bb8 torsoTimer=3e8 legsTimer=3e8
+c 19407 0 3 4 0 0 0 0 127
+c 19419 0 3 4 0 0 0 0 127
+p 6
+c 19431 0 3 4 0 0 0 0 127
+c 19443 0 3 4 0 0 0 0 127
+s 248 19450 commandTime=4bdb torsoTimer=3c5 legsTimer=3c5
+e 65 pos.trBase[1]=44f97de3 pos.trBase[0]=44f318e0
+c 19456 0 3 4 0 0 0 0 127
+p 6
+c 19468 0 3 4 0 0 0 0 127
+c 19480 0 3 4 0 0 0 0 127
+c 19492 0 3 4 0 0 0 0 127
+p 6
+s 249 19500 commandTime=4c24 torsoTimer=37c legsTimer=37c
+e 65 pos.trBase[1]=44f9476f pos.trBase[0]=44f30f01
+c 19504 0 3 4 0 0 0 0 127
+c 19516 0 3 4 0 0 0 0 127
+c 19528 0 3 4 0 0 0 0 127
+p 6
+c 19540 0 3 4 0 0 0 0 127
+s 250 19550 commandTime=4c48 torsoTimer=358 legsTimer=358
+e 65 pos.trBase[1]=44f90ffc pos.trBase[0]=44f304f4
+c 19553 0 3 4 0 0 0 0 127
+c 19565 0 3 4 0 0 0 0 127
+p 6
+c 19577 0 3 4 0 0 0 0 127
+c 19589 0 3 4 0 0 0 0 127
+c 19601 0 3 4 0 0 0 0 127
+p 6
+s 251 19600 commandTime=4c91 torsoTimer=30f legsTimer=30f
+e 65 pos.trBase[1]=44f8da87 pos.trBase[0]=44f2fb43
+c 19613 0 3 4 0 0 0 0 127
+c 19625 0 3 4 0 0 0 0 127
+c 19637 0 3 4 0 0 0 0 127
+p 6
+c 19649 0 3 4 0 0 0 0 127
+s 252 19650 commandTime=4cb5 torsoTimer=2eb legsTimer=2eb
+e 65 pos.trBase[1]=44f8abdd pos.trBase[0]=44f2f2cd
+c 19661 0 3 4 0 0 0 0 127
+c 19673 0 3 4 0 0 0 0 127
+p 6
+c 19685 0 3 4 0 0 0 0 127
+c 19697 0 3 4 0 0 0 0 127
+s 253 19700 commandTime=4cd9 torsoTimer=2c7 legsTimer=2c7
+e 65 pos.trBase[1]=44f8857d pos.trBase[0]=44f2ebd9
+c 19710 0 3 4 0 0 0 0 127
+p 6
+c 19722 0 3 4 0 0 0 0 127
+c 19734 0 3 4 0 0 0 0 127
+c 19746 0 3 4 0 0 0 0 127
+p 6
+s 254 19750 commandTime=4d22 torsoTimer=27e legsTimer=27e
+e 64 pos.trBase[1]=44dee486 pos.trBase[0]=44f03ad7
+c 19758 0 3 4 0 0 0 0 127
+c 19770 0 3 4 0 0 0 0 127
+c 19781 0 3 4 0 0 0 0 127
+p 6
+c 19793 0 3 4 0 0 0 0 127
+s 255 19800 commandTime=4d45 torsoTimer=25b legsTimer=25b
+e 64 pos.trBase[1]=44df126b pos.trBase[0]=44f034fd
+c 19805 0 3 4 0 0 0 0 127
+c 19817 0 3 4 0 0 0 0 127
+p 6
+c 19829 0 3 4 0 0 0 0 127
+c 19841 0 3 4 0 0 0 0 127
+s 256 19850 commandTime=4d69 torsoTimer=237 legsTimer=237
+e 64 pos.trBase[1]=44df4612 pos.trBase[0]=44f02e68
+c 19852 0 3 4 0 0 0 0 127
+p 6
+c 19864 0 3 4 0 0 0 0 127
+c 19877 0 3 4 0 0 0 0 127
+c 19889 0 3 4 0 0 0 0 127
+p 6
+c 19900 0 3 4 0 0 0 0 127
+s 257 19900 commandTime=4db1 torsoTimer=1ef legsTimer=1ef
+e 64 pos.trBase[1]=44df7aec pos.trBase[0]=44f027ab
+c 19913 0 3 4 0 0 0 0 127
+c 19925 0 3 4 0 0 0 0 127
+p 6
+c 19938 0 3 4 0 0 0 0 127
+c 19950 0 3 4 0 0 0 0 127
+s 258 19950 commandTime=4dd5 torsoTimer=1cb legsTimer=1cb
+e 64 pos.trBase[1]=44dfb060 pos.trBase[0]=44f020db
+c 19963 0 3 4 0 0 0 0 127
+p 6
+c 19974 0 3 4 0 0 0 0 127
+c 19986 0 3 4 0 0 0 0 127
+c 19997 0 3 4 0 0 0 0 127
+p 6
+s 259 20000 commandTime=4e1d torsoTimer=183 legsTimer=183
+e 64 pos.trBase[1]=44dfe3e9 pos.trBase[0]=44f01a49
+c 20009 0 3 4 0 0 0 0 127
+c 20022 0 3 4 0 0 0 0 127
+c 20035 0 3 4 0 0 0 0 127
+p 6
+c 20046 0 3 4 0 0 0 0 127
+s 260 20050 commandTime=4e43 torsoTimer=15d legsTimer=15d
+e 64 pos.trBase[1]=44e011ce pos.trBase[0]=44f01470
+c 20058 0 3 4 0 0 0 0 127
+c 20071 0 3 4 0 0 0 0 127
+p 6
+c 20085 0 3 4 0 0 0 0 127
+c 20097 0 3 4 0 0 0 0 127
+s 261 20100 commandTime=4e67 torsoTimer=139 legsTimer=139
+e 64 pos.trBase[1]=44e03938 pos.trBase[0]=44f00f6a
+c 20109 0 3 4 0 0 0 0 127
+p 6
+c 20121 0 3 4 0 0 0 0 127
+c 20135 0 3 4 0 0 0 0 127
+c 20148 0 3 4 0 0 0 0 127
+p 6
+s 262 20150 commandTime=4eb4 torsoTimer=ec legsTimer=ec
+c 20162 0 3 4 0 0 0 0 127
+c 20175 0 3 4 0 0 0 0 127
+c 20187 0 3 4 0 0 0 0 127
+p 6
+s 263 20200 commandTime=4edb torsoTimer=c5 legsTimer=c5
+c 20201 0 3 4 0 0 0 0 127
+c 20212 0 3 4 0 0 0 0 127
+c 20226 0 3 4 0 0 0 0 127
+p 6
+c 20237 0 3 4 0 0 0 0 127
+s 264 20250 commandTime=4f02 torsoTimer=9e legsTimer=9e
+c 20252 0 3 4 0 0 0 0 127
+c 20264 0 3 4 0 0 0 0 127
+p 6
+c 20276 0 3 4 0 0 0 0 127
+c 20287 0 3 4 0 0 0 0 127
+c 20299 0 3 4 0 0 0 0 127
+p 6
+s 265 20300 commandTime=4f4b torsoTimer=55 legsTimer=55
+e 64 pos.trBase[1]=44dfc6f3 pos.trBase[0]=44f02ddf
+c 20310 0 3 4 0 0 0 0 127
+c 20322 0 3 4 0 0 0 0 127
+c 20334 0 3 4 0 0 0 0 127
+p 6
+c 20347 0 3 4 0 0 0 0 127
+s 266 20350 commandTime=4f6e torsoTimer=32 legsTimer=32
+e 64 pos.trBase[1]=44df26f9 pos.trBase[0]=44f05882
+c 20358 0 3 4 0 0 0 0 127
+c 20370 0 3 4 0 0 0 0 127
+p 6
+c 20382 0 3 4 0 0 0 0 127
+c 20394 0 3 4 0 0 0 0 127
+s 267 20400 commandTime=4f92 torsoTimer=e legsTimer=e
+e 64 pos.trBase[1]=44ded022 pos.trBase[0]=44f06fa7
+c 20406 0 3 4 0 0 0 0 127
+p 6
+c 20418 0 3 4 0 0 0 0 127
+c 20430 0 3 4 0 0 0 0 127
+c 20441 0 3 4 0 0 0 0 127
+p 6
+s 268 20450 commandTime=4fd9 torsoTimer=0 legsTimer=0
+e 65 eFlags=20002
+c 20453 0 3 4 0 0 0 0 127
+c 20465 0 3 4 0 0 0 0 127
+c 20476 0 3 4 0 0 0 0 127
+p 6
+c 20489 0 3 4 0 0 0 0 127
+s 269 20500 commandTime=4ffc
+e 64 eFlags=20002
+c 20503 0 3 4 0 0 0 0 127
+c 20515 0 3 4 0 0 0 0 127
+p 6
+c 20528 0 3 4 0 0 0 0 127
+c 20540 0 3 4 0 0 0 0 127
+s 270 20550 commandTime=5023
+c 20553 0 3 4 0 0 0 0 127
+p 6
+c 20564 0 3 4 0 0 0 0 127
+c 20576 0 3 4 0 0 0 0 127
+c 20588 0 3 4 0 0 0 0 127
+p 6
+c 20601 0 3 4 0 0 0 0 127
+s 271 20600 commandTime=506c
+c 20613 0 3 4 0 0 0 0 127
+c 20624 0 3 4 0 0 0 0 127
+p 6
+c 20637 0 3 4 0 0 0 0 127
+s 272 20650 commandTime=5090
+c 20650 0 3 4 0 0 0 0 127
+c 20662 0 3 4 0 0 0 0 127
+p 6
+c 20674 0 3 4 0 0 0 0 127
+c 20686 0 3 4 0 0 0 0 127
+c 20698 0 3 4 0 0 0 0 127
+p 6
+s 273 20700 commandTime=50da
+c 20710 0 3 4 0 0 0 0 127
+c 20722 0 3 4 0 0 0 0 127
+c 20734 0 3 4 0 0 0 0 127
+p 6
+c 20746 0 3 4 0 0 0 0 127
+s 274 20750 commandTime=50fe
+c 20758 0 3 4 0 0 0 0 127
+c 20770 0 3 4 0 0 0 0 127
+p 6
+c 20782 0 3 4 0 0 0 0 127
+c 20794 0 3 4 0 0 0 0 127
+s 275 20800 commandTime=5122
+c 20807 0 3 4 0 0 0 0 127
+p 6
+c 20819 0 3 4 0 0 0 0 127
+c 20831 0 3 4 0 0 0 0 127
+c 20843 0 3 4 0 0 0 0 127
+p 6
+s 276 20850 commandTime=516b
+c 20854 0 3 4 0 0 0 0 127
+c 20866 0 3 4 0 0 0 0 127
+c 20878 0 3 4 0 0 0 0 127
+p 6
+c 20890 0 3 4 0 0 0 0 127
+s 277 20900 commandTime=518e
+c 20902 0 3 4 0 0 0 0 127
+c 20914 0 3 4 0 0 0 0 127
+p 6
+c 20926 0 3 4 0 0 0 0 127
+c 20938 0 3 4 0 0 0 0 127
+c 20950 0 3 4 0 0 0 0 127
+p 6
+s 278 20950 commandTime=51d6
+c 20962 0 3 4 0 0 0 0 127
+c 20974 0 3 4 0 0 0 0 127
+c 20986 0 3 4 0 0 0 0 127
+p 6
+c 20998 0 3 4 0 0 0 0 127
+s 279 21000 commandTime=51fa
+c 21011 0 3 4 0 0 0 0 127
+c 21023 0 3 4 0 0 0 0 127
+p 6
+c 21035 0 3 4 0 0 0 0 127
+c 21047 0 3 4 0 0 0 0 127
+s 280 21050 commandTime=521f
+c 21058 0 3 4 0 0 0 0 127
+p 6
+c 21070 0 3 4 0 0 0 0 127
+c 21082 0 3 4 0 0 0 0 127
+c 21094 0 3 4 0 0 0 0 127
+p 6
+s 281 21100 commandTime=5266
+c 21106 0 3 4 0 0 0 0 127
+c 21118 0 3 4 0 0 0 0 127
+c 21130 0 3 4 0 0 0 0 127
+p 6
+c 21142 0 3 4 0 0 0 0 127
+s 282 21150 commandTime=528a
+c 21153 0 3 4 0 0 0 0 127
+c 21165 0 3 4 0 0 0 0 127
+p 6
+c 21177 0 3 4 0 0 0 0 127
+c 21189 0 3 4 0 0 0 0 127
+c 21201 0 3 4 0 0 0 0 127
+p 6
+s 283 21200 commandTime=52ad
+c 21213 0 3 4 0 0 0 0 127
+c 21225 0 3 4 0 0 0 0 127
+c 21237 0 3 4 0 0 0 0 127
+p 6
+c 21249 0 3 4 0 0 0 0 127
+s 284 21250 commandTime=52f5
+c 21260 0 3 4 0 0 0 0 127
+c 21272 0 3 4 0 0 0 0 127
+p 6
+c 21284 0 3 4 0 0 0 0 127
+c 21296 0 3 4 0 0 0 0 127
+s 285 21300 commandTime=5318
+c 21307 0 3 4 0 0 0 0 127
+p 6
+c 21319 0 3 4 0 0 0 0 127
+c 21331 0 3 4 0 0 0 0 127
+c 21343 0 3 4 0 0 0 0 127
+p 6
+s 286 21350 commandTime=535f
+c 21355 0 3 4 0 0 0 0 -127
+c 21367 0 3 4 0 0 0 0 -127
+c 21379 0 3 4 0 0 0 0 -127
+p 6
+c 21391 0 3 4 0 0 0 0 -127
+s 287 21400 commandTime=5383
+c 21402 0 3 4 0 0 0 0 -127
+c 21414 0 3 4 0 0 0 0 -127
+p 6
+c 21426 0 3 4 0 0 0 0 -127
+c 21438 0 3 4 0 0 0 0 -127
+c 21450 0 3 4 0 0 0 0 -127
+p 6
+s 288 21450 commandTime=53ca
+c 21461 0 3 4 0 0 0 0 -127
+c 21473 0 3 4 0 0 0 0 -127
+c 21485 0 3 4 0 0 0 0 -127
+p 6
+c 21497 0 3 4 0 0 0 0 -127
+s 289 21500 commandTime=53ed
+c 21508 0 3 4 0 0 0 0 -127
+c 21520 0 3 4 0 0 0 0 -127
+p 6
+c 21532 0 3 4 0 0 0 0 -127
+c 21544 0 3 4 0 0 0 0 -127
+s 290 21550 commandTime=5410
+c 21557 0 3 4 0 0 0 0 -127
+p 6
+c 21569 0 3 4 0 0 0 0 -127
+c 21581 0 3 4 0 0 0 0 -127
+c 21593 0 3 4 0 0 0 0 -127
+p 6
+s 291 21600 commandTime=5459
+c 21604 0 3 4 0 0 0 0 -127
+c 21616 0 3 4 0 0 0 0 -127
+c 21628 0 3 4 0 0 0 0 -127
+p 6
+c 21640 0 3 4 0 0 0 0 -127
+s 292 21650 commandTime=547c
+c 21653 0 3 4 0 0 0 0 -127
+c 21665 0 3 4 0 0 0 0 -127
+p 6
+c 21677 0 3 4 0 0 0 0 -127
+c 21689 0 3 4 0 0 0 0 -127
+c 21701 0 3 4 0 0 0 0 -127
+p 6
+s 293 21700 commandTime=54c5
+c 21712 0 3 4 0 0 0 0 -127
+c 21724 0 3 4 0 0 0 0 -127
+c 21736 0 3 4 0 0 0 0 -127
+p 6
+c 21748 0 3 4 0 0 0 0 -127
+s 294 21750 commandTime=54e8
+c 21760 0 3 4 0 0 0 0 -127
+c 21772 0 3 4 0 0 0 0 -127
+p 6
+c 21784 0 3 4 0 0 0 0 -127
+c 21796 0 3 4 0 0 0 0 -127
+# cmd 21800 I "1"
+# cmd 21800 C 4
+s 295 21800 commandTime=5528 origin[1]=44f8db2c origin[0]=44f32cf0 bobCycle=4 viewangles[1]=c2bb2f60 velocity[1]=c0400000 velocity[0]=42380000 viewangles[0]=3f82c800 movementDir=59 eventSequence=0 legsAnim=288 weaponTime=0 events[0]=0 events[1]=0 events[2]=0 weapAnim=0 viewHeightCurrent=42700000 eFlags=0 fWeaponPosFrac=0 holdBreathScale=3f04eb57 weaponstate=0 viewHeightTarget=3c weapon=3 pm_type=0 S[0]=64 S[1]=0 S[5]=2 C[2]=5
+r 1 attachModelIndex[1]=43
+c 21808 0 3 4 0 0 0 0 -127
+p 6
+c 21820 0 3 4 0 0 0 0 -127
+c 21832 0 3 4 0 0 0 0 -127
+c 21844 0 3 4 0 0 0 0 -127
+p 6
+s 296 21850 commandTime=5554 origin[1]=44f8d4fd origin[0]=44f38e3f bobCycle=8 viewangles[1]=c2bb2f61 velocity[1]=c0c00000 velocity[0]=42a60000 viewangles[0]=3f82c801 legsAnim=7d aimSpreadScale=42606667 holdBreathScale=3f225ba4
+c 21855 0 3 4 0 0 0 0 -127
+c 21867 0 3 4 0 0 0 0 -127
+c 21879 0 3 4 0 0 0 0 -127
+p 6
+c 21891 0 3 4 0 0 0 0 -127
+s 297 21900 commandTime=5577 origin[1]=44f8cc8b origin[0]=44f40098 bobCycle=e velocity[1]=c1100000 velocity[0]=42e00000 aimSpreadScale=42c97334 holdBreathScale=3f34adef
+c 21904 0 3 4 0 0 0 0 -127
+c 21916 0 3 4 0 0 0 0 -127
+p 6
+c 21928 0 3 4 0 0 0 0 -127
+c 21940 0 3 4 0 0 0 0 -127
+s 298 21950 commandTime=559c origin[1]=44f8c15c origin[0]=44f49a18 bobCycle=17 velocity[0]=430a0000 aimSpreadScale=4313e667 holdBreathScale=3f4431d1
+c 21952 0 3 4 0 0 0 0 -127
+p 6
+c 21964 0 3 4 0 0 0 0 -127
+c 21976 0 3 4 0 0 0 0 -127
+c 21988 0 3 4 0 0 0 0 -127
+p 6
+c 22000 0 3 4 0 0 0 0 -127
+s 299 22000 commandTime=55e4 origin[1]=44f8ac42 origin[0]=44f5f532 bobCycle=29 velocity[0]=43180000 movementDir=5a aimSpreadScale=436fb335 holdBreathScale=3f59cd96
+c 22012 0 3 4 0 0 0 0 -127
+c 22024 0 3 4 0 0 0 0 -127
+p 6
+c 22036 0 3 4 0 0 0 0 -127
+c 22048 0 3 4 0 0 0 0 -127
+s 300 22050 commandTime=5608 origin[1]=44f8a29f origin[0]=44f69894 bobCycle=3b origin[2]=42884000 velocity[0]=430d0000 eventSequence=1 aimSpreadScale=437f0000 events[0]=8f holdBreathScale=3f61794d eventParms[0]=84
+c 22061 0 3 4 0 0 0 0 -127
+p 6
+c 22073 0 3 4 0 0 0 0 -127
+c 22085 0 3 4 0 0 0 0 -127
+c 22097 0 3 4 0 0 0 0 -127
+p 6
+s 301 22100 commandTime=5651 origin[1]=44f83d7e origin[0]=44f77b7f bobCycle=49 velocity[1]=c29e0000 velocity[0]=42380000 movementDir=21 eventSequence=2 events[1]=11 holdBreathScale=3f6ca120
+c 22109 0 3 4 0 0 0 0 -127
+c 22121 0 3 4 0 0 0 0 -127
+c 22133 0 3 4 0 0 0 0 -127
+p 6
+c 22145 0 3 4 0 0 0 0 -127
+s 302 22150 commandTime=5675 origin[1]=44f7dd97 origin[0]=44f7b2de bobCycle=4f velocity[1]=c2aa0000 velocity[0]=42440000 holdBreathScale=3f7084f9
+c 22157 0 3 4 0 0 0 0 -127
+c 22169 0 3 4 0 0 0 0 -127
+p 6
+c 22181 0 3 4 0 0 0 0 -127
+c 22193 0 3 4 0 0 0 0 -127
+s 303 22200 commandTime=5699 origin[1]=44f7ca0d origin[0]=44f7be0a bobCycle=0 velocity[1]=0 velocity[0]=bf800000 movementDir=0 legsAnim=299 aimSpreadScale=43606666 holdBreathScale=3f73a0d5
+c 22204 0 3 4 0 0 0 0 -127
+p 6
+c 22216 0 3 4 0 0 0 0 -127
+c 22228 0 3 4 0 0 0 0 -127
+c 22240 0 3 4 0 0 0 0 -127
+p 6
+s 304 22250 commandTime=56e0 aimSpreadScale=4305dfff holdBreathScale=3f780c18
+c 22253 0 3 4 0 0 0 0 -127
+c 22265 0 3 4 0 0 0 0 -127
+c 22277 0 3 4 0 0 0 0 -127
+p 6
+c 22289 0 3 4 0 0 0 0 -127
+c 22301 0 3 4 0 0 0 0 -127
+s 305 22300 commandTime=5705 origin[1]=44f7ca0c origin[0]=44f7be07 velocity[0]=0 aimSpreadScale=42ad6664 holdBreathScale=3f79af78
+c 22314 0 3 4 0 0 0 0 -127
+p 6
+c 22326 0 3 4 0 0 0 0 -127
+c 22338 0 3 4 0 0 0 0 -127
+s 306 22350 commandTime=572a origin[1]=44f7ca74 origin[0]=44f7bdeb velocity[1]=3f800000 velocity[0]=bf800000 aimSpreadScale=421e1994 holdBreathScale=3f7afc75
+c 22350 0 3 4 0 0 0 0 -127
+p 6
+c 22362 0 3 4 0 0 0 0 -127
+c 22374 0 3 4 0 0 0 0 -127
+c 22386 0 3 4 0 0 0 0 -127
+p 6
+c 22398 0 3 4 0 0 0 0 -127
+s 307 22400 commandTime=5772 origin[1]=44f7ca0d origin[0]=44f7be0a velocity[1]=0 aimSpreadScale=0 holdBreathScale=3f7ccc38
+c 22409 0 3 4 0 0 0 0 -127
+c 22421 0 3 4 0 0 0 0 -127
+p 6
+c 22433 0 3 4 0 0 0 0 -127
+c 22445 0 3 4 0 0 0 0 -127
+s 308 22450 commandTime=5795 origin[1]=44f7ca6d origin[0]=44f7bdef velocity[1]=3f800000 holdBreathScale=3f7d6c9d
+c 22458 0 3 4 0 0 0 0 -127
+p 6
+c 22470 0 3 4 0 0 0 0 -127
+c 22482 0 3 4 0 0 0 0 -127
+c 22494 0 3 4 0 0 0 0 -127
+p 6
+s 309 22500 commandTime=57de origin[1]=44f7ca0d origin[0]=44f7be0a velocity[1]=0 holdBreathScale=3f7e5d95
+c 22506 0 3 4 0 0 0 0 -127
+c 22518 0 3 4 0 0 0 0 -127
+c 22530 0 3 4 0 0 0 0 -127
+p 6
+c 22542 0 3 4 0 0 0 0 -127
+s 310 22550 commandTime=5802 origin[1]=44f7ca6c origin[0]=44f7bdef velocity[1]=3f800000 holdBreathScale=3f7eb19c
+c 22554 0 3 4 0 0 0 0 -127
+c 22566 0 3 4 0 0 0 0 -127
+p 6
+c 22578 0 3 4 0 0 0 0 -127
+c 22590 0 3 4 0 0 0 0 -127
+s 311 22600 commandTime=5826 origin[1]=44f7ca0d origin[0]=44f7be0a velocity[1]=0 holdBreathScale=3f7ef4c3
+c 22603 0 3 4 0 0 0 0 -127
+p 6
+c 22615 0 3 4 0 0 0 0 -127
+c 22627 0 3 4 0 0 0 0 -127
+c 22639 0 3 4 0 0 0 0 -127
+p 6
+c 22651 0 3 4 0 0 0 0 -127
+s 312 22650 commandTime=586f origin[1]=44f7ca6c origin[0]=44f7bdf0 velocity[1]=3f800000 holdBreathScale=3f7f566c
+c 22664 0 3 4 0 0 0 0 -127
+c 22676 0 3 4 0 0 0 0 -127
+p 6
+c 22688 0 3 4 0 0 0 0 -127
+s 313 22700 commandTime=5894 origin[1]=44f7ca1a origin[0]=44f7be1f velocity[1]=0 velocity[0]=0 holdBreathScale=3f7f795a
+c 22700 0 3 4 0 0 0 0 -127
+c 22712 0 3 4 0 0 0 0 -127
+p 6
+c 22724 0 3 4 0 0 0 0 -127
+c 22736 0 3 4 0 0 0 0 -127
+c 22748 0 3 4 0 0 0 0 -127
+p 6
+s 314 22750 commandTime=58dc origin[1]=44f7ca6c origin[0]=44f7bdef velocity[1]=3f800000 velocity[0]=bf800000 holdBreathScale=3f7faa00
+c 22760 0 3 4 0 0 0 0 -127
+c 22772 0 3 4 0 0 0 0 -127
+c 22784 0 3 4 0 0 0 0 -127
+p 6
+c 22796 0 3 4 0 0 0 0 -127
+s 315 22800 commandTime=5900 origin[1]=44f7ca0d origin[0]=44f7be0a velocity[1]=0 holdBreathScale=3f7fbb45
+c 22808 0 3 4 0 0 0 0 -127
+c 22821 0 3 4 0 0 0 0 -127
+p 6
+c 22832 0 3 4 0 0 0 0 -127
+c 22845 0 3 4 0 0 0 0 -127
+s 316 22850 commandTime=5925 origin[1]=44f7ca74 origin[0]=44f7bdeb velocity[1]=3f800000 holdBreathScale=3f800000
+c 22857 0 3 4 0 0 0 0 -127
+p 6
+c 22868 0 3 4 0 0 0 0 -127
+c 22880 0 3 4 0 0 0 0 -127
+c 22892 0 3 4 0 0 0 0 -127
+p 6
+s 317 22900 commandTime=596c origin[1]=44f7ca1a origin[0]=44f7be1f velocity[1]=0 velocity[0]=0
+c 22903 0 3 4 0 0 0 0 -127
+c 22915 0 3 4 0 0 0 0 -127
+c 22927 0 3 4 0 0 0 0 -127
+p 6
+c 22941 0 3 4 0 0 0 0 -127
+c 22952 0 3 4 0 0 0 0 -127
+s 318 22950 commandTime=598f origin[1]=44f7ca0d origin[0]=44f7be0a velocity[1]=80000000 velocity[0]=bf800000
+c 22963 0 3 4 0 0 0 0 -127
+p 6
+c 22975 0 3 4 0 0 0 0 -127
+c 22988 0 3 4 0 0 0 0 -127
+s 319 23000 commandTime=59b3 origin[0]=44f7be09 velocity[0]=0
+c 23001 0 3 4 0 0 0 0 -127
+p 6
+c 23012 0 3 4 0 0 0 0 -127
+c 23025 0 3 4 0 0 0 0 -127
+c 23036 0 3 4 0 0 0 0 -127
+p 6
+c 23047 0 3 4 0 0 0 0 -127
+s 320 23050 commandTime=59fc origin[1]=44f7ca1a origin[0]=44f7be1f velocity[1]=0 velocity[0]=80000000
+c 23059 0 3 4 0 0 0 0 -127
+c 23071 0 3 4 0 0 0 0 -127
+p 6
+c 23084 0 3 4 0 0 0 0 -127
+c 23096 0 3 4 0 0 0 0 -127
+s 321 23100 commandTime=5a1f origin[1]=44f7ca0d origin[0]=44f7be0a velocity[1]=80000000 velocity[0]=bf800000
+c 23108 0 3 4 0 0 0 0 -127
+p 6
+c 23121 0 3 4 0 0 0 0 -127
+c 23132 0 3 4 0 0 0 0 -127
+c 23144 0 3 4 0 0 0 0 -127
+p 6
+s 322 23150 commandTime=5a68 origin[1]=44f7ca6d origin[0]=44f7bdef velocity[1]=3f800000
+c 23156 0 3 4 0 0 0 0 -127
+c 23168 0 3 4 0 0 0 0 -127
+c 23182 0 3 4 0 0 0 0 -127
+p 6
+c 23194 0 3 4 0 0 0 0 -127
+s 323 23200 commandTime=5a8e origin[1]=44f7ca7b origin[0]=44f7bde7
+c 23205 0 3 4 0 0 0 0 -127
+c 23218 0 3 4 0 0 0 0 -127
+p 6
+c 23231 0 3 4 0 0 0 0 -127
+c 23242 0 3 4 0 0 0 0 -127
+s 324 23250 commandTime=5ab2 origin[1]=44f7ca73 origin[0]=44f7bdeb
+c 23254 0 3 4 0 0 0 0 -127
+p 6
+c 23267 0 3 4 0 0 0 0 -127
+c 23280 0 3 4 0 0 0 0 -127
+c 23292 0 3 4 0 0 0 0 -127
+p 6
+s 325 23300 commandTime=5afc origin[1]=44f7ca0c origin[0]=44f7be07 velocity[1]=0 velocity[0]=0
+c 23303 0 3 4 0 0 0 0 -127
+c 23314 0 3 4 0 0 0 0 -127
+c 23327 0 3 4 0 0 0 0 -127
+p 6
+c 23340 0 3 4 0 0 0 0 -127
+c 23352 0 3 4 0 0 0 0 0
+s 326 23350 commandTime=5b1f origin[1]=44f7ca74 origin[0]=44f7bdeb velocity[1]=3f800000 velocity[0]=bf800000
+c 23363 0 3 4 0 0 0 0 0
+p 6
+c 23377 0 3 4 0 0 0 0 0
+c 23389 0 3 4 0 0 0 0 0
+c 23402 0 3 4 0 0 0 0 0
+p 6
+s 327 23400 commandTime=5b6a origin[1]=44f7ca1a origin[0]=44f7be1f velocity[1]=0 velocity[0]=0
+c 23416 0 3 4 0 0 0 0 0
+c 23429 0 3 4 0 0 0 0 0
+c 23443 0 3 4 0 0 0 0 0
+p 6
+s 328 23450 commandTime=5b93
+c 23454 0 3 4 0 0 0 0 0
+c 23468 0 3 4 0 0 0 0 0
+c 23480 0 3 4 0 0 0 0 0
+p 6
+c 23491 0 3 4 0 0 0 0 0
+s 329 23500 commandTime=5bb8
+c 23504 0 3 4 0 0 0 0 0
+c 23516 0 3 4 0 0 0 0 0
+p 6
+c 23527 0 3 4 0 0 0 0 0
+c 23540 0 3 4 0 0 0 0 0
+s 330 23550 commandTime=5bdc
+c 23554 0 3 4 0 0 0 0 0
+p 6
+c 23565 0 3 4 0 0 0 0 0
+c 23579 0 3 4 0 0 0 0 0
+c 23592 0 3 4 0 0 0 0 0
+p 6
+s 331 23600 commandTime=5c28
+c 23605 0 3 4 0 0 0 0 0
+c 23617 0 3 4 0 0 0 0 0
+c 23631 0 3 4 0 0 0 0 0
+p 6
+c 23643 0 3 4 0 0 0 0 0
+s 332 23650 commandTime=5c4f
+c 23654 0 3 4 0 0 0 0 0
+c 23668 0 3 4 0 0 0 0 0
+p 6
+c 23681 0 3 4 0 0 0 0 0
+c 23694 0 3 4 0 0 0 0 0
+s 333 23700 commandTime=5c74
+c 23705 0 3 4 0 0 0 0 0
+p 6
+c 23717 0 3 4 0 0 0 0 0
+c 23729 0 3 4 0 0 0 0 0
+c 23741 0 3 4 0 0 0 0 0
+p 6
+s 334 23750 commandTime=5cbd
+c 23752 0 3 4 0 0 0 0 0
+c 23764 0 3 4 0 0 0 0 0
+c 23776 0 3 4 0 0 0 0 0
+p 6
+c 23788 0 3 4 0 0 0 0 0
+c 23800 0 3 4 0 0 0 0 0
+s 335 23800 commandTime=5ce0
+c 23813 0 3 4 0 0 0 0 0
+p 6
+c 23825 0 3 4 0 0 0 0 0
+c 23837 0 3 4 0 0 0 0 0
+c 23849 0 3 4 0 0 0 0 0
+p 6
+s 336 23850 commandTime=5d29
+c 23860 0 3 4 0 0 0 0 0
+c 23872 0 3 4 0 0 0 0 0
+c 23884 0 3 4 0 0 0 0 0
+p 6
+c 23896 0 3 4 0 0 0 0 0
+s 337 23900 commandTime=5d4c
+c 23908 0 3 4 0 0 0 0 0
+c 23920 0 3 4 0 0 0 0 0
+p 6
+c 23932 0 3 4 0 0 0 0 0
+c 23944 0 3 4 0 0 0 0 0
+s 338 23950 commandTime=5d70
+c 23955 0 3 4 0 0 0 0 0
+p 6
+c 23967 0 3 4 0 0 0 0 0
+c 23979 0 3 4 0 0 0 0 0
+c 23991 0 3 4 0 0 0 0 0
+p 6
+s 339 24000 commandTime=5db7
+c 24002 0 3 4 0 0 0 0 0
+c 24014 0 3 4 0 0 0 0 0
+c 24026 0 3 4 0 0 0 0 0
+p 6
+c 24038 0 3 4 0 0 0 0 0
+c 24050 0 3 4 0 0 0 0 0
+s 340 24050 commandTime=5dda
+c 24061 0 3 4 0 0 0 0 0
+p 6
+c 24073 0 3 4 0 0 0 0 0
+c 24085 0 3 4 0 0 0 0 0
+c 24097 0 3 4 0 0 0 0 0
+p 6
+s 341 24100 commandTime=5e21
+c 24108 0 3 4 0 0 0 0 0
+c 24120 0 3 4 0 0 0 0 0
+c 24132 0 3 4 0 0 0 0 0
+p 6
+c 24144 0 3 4 0 0 0 0 0
+s 342 24150 commandTime=5e44
+c 24156 0 3 4 0 0 0 0 0
+c 24168 0 3 4 0 0 0 0 0
+p 6
+c 24180 0 3 4 0 0 0 0 0
+c 24192 0 3 4 0 0 0 0 0
+s 343 24200 commandTime=5e68
+c 24203 0 3 4 0 0 0 0 0
+p 6
+c 24215 0 3 4 0 0 0 0 0
+c 24227 0 3 4 0 0 0 0 0
+c 24239 0 3 4 0 0 0 0 0
+p 6
+s 344 24250 commandTime=5eaf
+c 24252 0 3 4 0 0 0 0 0
+c 24264 0 3 4 0 0 0 0 0
+c 24276 0 3 4 0 0 0 0 0
+p 6
+c 24288 0 3 4 0 0 0 0 0
+c 24300 0 3 4 0 0 0 0 0
+s 345 24300 commandTime=5ed4
+c 24311 0 3 4 0 0 0 0 0
+p 6
+c 24323 0 3 4 0 0 0 0 0
+c 24335 0 3 4 0 0 0 0 0
+c 24347 0 3 4 0 0 0 0 0
+p 6
+s 346 24350 commandTime=5f1b
+c 24358 0 3 4 0 0 0 0 0
+c 24370 0 3 4 0 0 0 0 0
+c 24382 0 3 4 0 0 0 0 0
+p 6
+c 24394 0 3 4 0 0 0 0 0
+s 347 24400 commandTime=5f3e
+c 24407 0 3 4 0 0 0 0 0
+c 24419 0 3 4 0 0 0 0 0
+p 6
+c 24431 0 3 4 0 0 0 0 0
+c 24443 0 3 4 0 0 0 0 0
+s 348 24450 commandTime=5f63
+c 24454 0 3 4 0 0 0 0 0
+p 6
+c 24466 0 3 4 0 0 0 0 0
+c 24478 0 3 4 0 0 0 0 0
+c 24490 0 3 4 0 0 0 0 0
+p 6
+s 349 24500 commandTime=5faa
+c 24502 0 3 4 0 0 0 0 0
+c 24514 0 3 4 0 0 0 0 0
+c 24526 0 3 4 0 0 0 0 0
+p 6
+c 24538 0 3 4 0 0 0 0 0
+c 24550 0 3 4 0 0 0 0 0
+s 350 24550 commandTime=5fce
+c 24562 0 3 4 0 0 0 0 0
+p 6
+c 24574 0 3 4 0 0 0 0 0
+c 24586 0 3 4 0 0 0 0 0
+c 24598 0 3 4 0 0 0 0 0
+p 6
+s 351 24600 commandTime=6016
+c 24611 0 3 4 0 0 0 0 0
+c 24623 0 3 4 0 0 0 0 0
+c 24635 0 3 4 0 0 0 0 0
+p 6
+c 24647 0 3 4 0 0 0 0 0
+s 352 24650 commandTime=603b
+c 24659 0 3 4 0 0 0 0 0
+c 24671 0 3 4 0 0 0 0 0
+p 6
+c 24683 0 3 4 0 0 0 0 0
+c 24695 0 3 4 0 0 0 0 0
+s 353 24700 commandTime=605f
+c 24708 0 3 4 0 0 0 0 0
+p 6
+c 24720 0 3 4 0 0 0 0 0
+c 24732 0 3 4 0 0 0 0 0
+c 24744 0 3 4 0 0 0 0 0
+p 6
+s 354 24750 commandTime=60a8
+c 24755 0 3 4 0 0 0 0 0
+c 24767 0 3 4 0 0 0 0 0
+c 24779 0 3 4 0 0 0 0 0
+p 6
+c 24791 0 3 4 0 0 0 0 0
+c 24803 0 3 4 0 0 0 0 0
+s 355 24800 commandTime=60cb
+c 24815 0 3 4 0 0 0 0 0
+p 6
+c 24827 0 3 4 0 0 0 0 0
+c 24839 0 3 4 0 0 0 0 0
+s 356 24850 commandTime=60ef
+c 24851 0 3 4 0 0 0 0 0
+p 6
+c 24863 0 3 4 0 0 0 0 0
+c 24875 0 3 4 0 0 0 0 0
+c 24887 0 3 4 0 0 0 0 0
+p 6
+c 24899 0 3 4 0 0 0 0 0
+s 357 24900 commandTime=6137
+c 24911 0 3 4 0 0 0 0 0
+c 24923 0 3 4 0 0 0 0 0
+p 6
+c 24936 0 3 4 0 0 0 0 0
+c 24948 0 3 4 0 0 0 0 0
+s 358 24950 commandTime=615b
+c 24959 0 3 4 0 0 0 0 0
+p 6
+c 24972 0 3 4 0 0 0 0 0
+c 24984 0 3 4 0 0 0 0 0
+c 24996 0 3 4 0 0 0 0 0
+p 6
+s 359 25000 commandTime=61a4
+c 25009 0 3 4 0 0 0 0 0
+c 25021 0 3 4 0 0 0 0 0
+c 25033 0 3 4 0 0 0 0 0
+p 6
+c 25045 0 3 4 0 0 0 0 0
+s 360 25050 commandTime=61c9
+c 25057 0 3 4 0 0 0 0 0
+c 25070 0 3 4 0 0 0 0 0
+p 6
+c 25081 0 3 4 0 0 0 0 0
+c 25092 0 3 4 0 0 0 0 0
+s 361 25100 commandTime=61ee
+c 25104 0 3 4 0 0 0 0 0
+p 6
+c 25116 0 3 4 0 0 0 0 0
+c 25130 0 3 4 0 0 0 0 0
+c 25142 0 3 4 0 0 0 0 0
+p 6
+s 362 25150 commandTime=6236
+c 25153 0 3 4 0 0 0 0 0
+c 25167 0 3 4 0 0 0 0 0
+c 25179 0 3 4 0 0 0 0 0
+p 6
+c 25190 0 3 4 0 0 0 0 0
+s 363 25200 commandTime=625b
+c 25204 0 3 4 0 0 0 0 0
+c 25217 0 3 4 0 0 0 0 0
+p 6
+c 25229 0 3 4 0 0 0 0 0
+c 25242 0 3 4 0 0 0 0 0
+s 364 25250 commandTime=6281
+c 25255 0 3 4 0 0 0 0 0
+p 6
+c 25267 0 3 4 0 0 0 0 0
+c 25278 0 3 4 0 0 0 0 0
+c 25289 0 3 4 0 0 0 0 0
+p 6
+s 365 25300 commandTime=62c9
+c 25300 0 3 4 0 0 0 0 0
+c 25312 0 3 4 0 0 0 0 0
+c 25324 0 3 4 0 0 0 0 0
+p 6
+c 25335 0 3 4 0 0 0 0 0
+c 25347 0 3 4 0 0 0 0 0
+s 366 25350 commandTime=62ec
+c 25358 0 3 4 0 0 0 0 0
+p 6
+c 25371 0 3 4 0 0 0 0 0
+c 25382 0 3 4 0 0 0 0 0
+c 25394 0 3 4 0 0 0 0 0
+p 6
+s 367 25400 commandTime=6332
+c 25405 0 3 4 0 0 0 0 0
+c 25417 0 3 4 0 0 0 0 0
+c 25430 0 3 4 0 0 0 0 0
+p 6
+c 25443 0 3 4 0 0 0 0 0
+s 368 25450 commandTime=6356
+c 25455 0 3 4 0 0 0 0 0
+c 25468 0 3 4 0 0 0 0 0
+p 6
+c 25480 0 3 4 0 0 0 0 0
+c 25492 0 3 4 0 0 0 0 0
+s 369 25500 commandTime=637c
+c 25504 0 3 4 0 0 0 0 0
+p 6
+c 25515 0 3 4 0 0 0 0 0
+c 25528 0 3 4 0 0 0 0 0
+c 25540 0 3 4 0 0 0 0 0
+p 6
+s 370 25550 commandTime=63c4
+c 25552 0 3 4 0 0 0 0 0
+c 25564 0 3 4 0 0 0 0 0
+c 25575 0 3 4 0 0 0 0 0
+p 6
+c 25587 0 3 4 0 0 0 0 0
+c 25599 0 3 4 0 0 0 0 0
+s 371 25600 commandTime=63e7
+c 25611 0 3 4 0 0 0 0 0
+p 6
+c 25622 0 3 4 0 0 0 0 0
+c 25635 0 3 4 0 0 0 0 0
+c 25647 0 3 4 0 0 0 0 0
+p 6
+s 372 25650 commandTime=642f
+c 25659 0 3 4 0 0 0 0 0
+c 25671 0 3 4 0 0 0 0 0
+c 25684 0 3 4 0 0 0 0 0
+p 6
+c 25696 0 3 4 0 0 0 0 0
+s 373 25700 commandTime=6454
+c 25709 0 3 4 0 0 0 0 0
+c 25721 0 3 4 0 0 0 0 0
+p 6
+c 25733 0 3 4 0 0 0 0 0
+c 25744 0 3 4 0 0 0 0 0
+s 374 25750 commandTime=6479
+c 25756 0 3 4 0 0 0 0 0
+p 6
+c 25768 0 3 4 0 0 0 0 0
+c 25780 0 3 4 0 0 0 0 0
+c 25792 0 3 4 0 0 0 0 0
+p 6
+s 375 25800 commandTime=64c0
+c 25804 0 3 4 0 0 0 0 0
+c 25816 0 3 4 0 0 0 0 0
+c 25828 0 3 4 0 0 0 0 0
+p 6
+c 25840 0 3 4 0 0 0 0 0
+s 376 25850 commandTime=64e4
+c 25853 0 3 4 0 0 0 0 0
+c 25865 0 3 4 0 0 0 0 0
+p 6
+c 25877 0 3 4 0 0 0 0 0
+c 25889 0 3 4 0 0 0 0 0
+s 377 25900 commandTime=6509
+c 25902 0 3 4 0 0 0 0 0
+p 6
+c 25914 0 3 4 0 0 0 0 0
+c 25926 0 3 4 0 0 0 0 0
+c 25938 0 3 4 0 0 0 0 0
+p 6
+c 25950 0 3 4 0 0 0 0 0
+s 378 25950 commandTime=6552
+c 25961 0 3 4 0 0 0 0 0
+c 25973 0 3 4 0 0 0 0 0
+p 6
+c 25985 0 3 4 0 0 0 0 0
+c 25997 0 3 4 0 0 0 0 0
+s 379 26000 commandTime=6575
+c 26010 0 3 4 0 0 0 0 0
+p 6
+c 26022 0 3 4 0 0 0 0 0
+c 26034 0 3 4 0 0 0 0 0
+c 26045 0 3 4 0 0 0 0 0
+p 6
+s 380 26050 commandTime=65bd
+c 26057 0 3 4 0 0 0 0 0
+c 26069 0 3 4 0 0 0 0 0
+c 26082 0 3 4 0 0 0 0 0
+p 6
+c 26094 0 3 4 0 0 0 0 0
+s 381 26100 commandTime=65e2
+c 26105 0 3 4 0 0 0 0 0
+c 26117 0 3 4 0 0 0 0 0
+p 6
+c 26129 0 3 4 0 0 0 0 0
+c 26141 0 3 4 0 0 0 0 0
+s 382 26150 commandTime=6605
+c 26152 0 3 4 0 0 0 0 0
+p 6
+c 26164 0 3 4 0 0 0 0 0
+c 26176 0 3 4 0 0 0 0 0
+c 26188 0 3 4 0 0 0 0 0
+p 6
+c 26200 0 3 4 0 0 0 0 0
+s 383 26200 commandTime=664c
+c 26213 0 3 4 0 0 0 0 0
+c 26225 0 3 4 0 0 0 0 0
+p 6
+c 26237 0 3 4 0 0 0 0 0
+c 26249 0 3 4 0 0 0 0 0
+s 384 26250 commandTime=6671
+c 26260 0 3 4 0 0 0 0 0
+p 6
+c 26272 0 3 4 0 0 0 0 0
+c 26284 0 3 4 0 0 0 0 0
+c 26296 0 3 4 0 0 0 0 0
+p 6
+s 385 26300 commandTime=66b8
+c 26308 0 3 4 0 0 0 0 0
+c 26320 0 3 4 0 0 0 0 0
+c 26332 0 3 4 0 0 0 0 0
+p 6
+c 26344 0 3 4 0 0 0 0 0
+s 386 26350 commandTime=66dc
+c 26357 0 3 4 0 0 0 0 0
+c 26369 0 3 4 0 0 0 0 0
+p 6
+c 26381 0 3 4 0 0 0 0 0
+c 26393 0 3 4 0 0 0 0 0
+s 387 26400 commandTime=6701
+c 26405 0 3 4 0 0 0 0 0
+p 6
+c 26417 0 3 4 0 0 0 0 0
+c 26429 0 3 4 0 0 0 0 0
+c 26441 0 3 4 0 0 0 0 0
+p 6
+s 388 26450 commandTime=6749
+c 26454 0 3 4 0 0 0 0 0
+c 26466 0 3 4 0 0 0 0 0
+c 26478 0 3 4 0 0 0 0 0
+p 6
+c 26490 0 3 4 0 0 0 0 0
+c 26502 0 3 4 0 0 0 0 0
+s 389 26500 commandTime=676e
+c 26515 0 3 4 0 0 0 0 0
+p 6
+c 26527 0 3 4 0 0 0 0 0
+c 26539 0 3 4 0 0 0 0 0
+s 390 26550 commandTime=6793
+c 26551 0 3 4 0 0 0 0 0
+p 6
+c 26563 0 3 4 0 0 0 0 0
+c 26575 0 3 4 0 0 0 0 0
+c 26587 0 3 4 0 0 0 0 0
+p 6
+c 26599 0 3 4 0 0 0 0 0
+s 391 26600 commandTime=67db
+c 26612 0 3 4 0 0 0 0 0
+c 26624 0 3 4 0 0 0 0 0
+p 6
+c 26636 0 3 4 0 0 0 0 0
+c 26648 0 3 4 0 0 0 0 0
+s 392 26650 commandTime=6800
+c 26661 0 3 4 0 0 0 0 0
+p 6
+c 26673 0 3 4 0 0 0 0 0
+c 26685 0 3 4 0 0 0 0 0
+c 26697 0 3 4 0 0 0 0 0
+p 6
+s 393 26700 commandTime=6849
+c 26710 0 3 4 0 0 0 0 0
+c 26722 0 3 4 0 0 0 0 0
+c 26734 0 3 4 0 0 0 0 0
+p 6
+c 26746 0 3 4 0 0 0 0 0
+s 394 26750 commandTime=686e
+c 26758 0 3 4 0 0 0 0 0
+c 26770 0 3 4 0 0 0 0 0
+p 6
+c 26782 0 3 4 0 0 0 0 0
+c 26794 0 3 4 0 0 0 0 0
+s 395 26800 commandTime=6892
+c 26806 0 3 4 0 0 0 0 0
+p 6
+c 26818 0 3 4 0 0 0 0 0
+c 26830 0 3 4 0 0 0 0 0
+c 26842 0 3 4 0 0 0 0 0
+p 6
+s 396 26850 commandTime=68da
+c 26855 0 3 4 0 0 0 0 0
+c 26867 0 3 4 0 0 0 0 0
+c 26879 0 3 4 0 0 0 0 0
+p 6
+c 26891 0 3 4 0 0 0 0 0
+s 397 26900 commandTime=68ff
+c 26904 0 3 4 0 0 0 0 0
+c 26916 0 3 4 0 0 0 0 0
+p 6
+c 26928 0 3 4 0 0 0 0 0
+c 26940 0 3 4 0 0 0 0 0
+s 398 26950 commandTime=6924
+c 26952 0 3 4 0 0 0 0 0
+p 6
+c 26964 0 3 4 0 0 0 0 0
+c 26976 0 3 4 0 0 0 0 0
+c 26988 0 3 4 0 0 0 0 0
+p 6
+c 27000 0 3 4 0 0 0 0 0
+s 399 27000 commandTime=696c
+c 27012 0 3 4 0 0 0 0 0
+c 27024 0 3 4 0 0 0 0 0
+p 6
+c 27036 0 3 4 0 0 0 0 0
+c 27048 0 3 4 0 0 0 0 0
+s 400 27050 commandTime=6990
+c 27061 0 3 4 0 0 0 0 0
+p 6
+c 27073 0 3 4 0 0 0 0 0
+c 27085 0 3 4 0 0 0 0 0
+c 27097 0 3 4 0 0 0 0 0
+p 6
+s 401 27100 commandTime=69d9
+c 27110 0 3 4 0 0 0 0 0
+c 27122 0 3 4 0 0 0 0 0
+c 27134 0 3 4 0 0 0 0 0
+p 6
+c 27146 0 3 4 0 0 0 0 0
+s 402 27150 commandTime=69fe
+c 27158 0 3 4 0 0 0 0 0
+c 27170 0 3 4 0 0 0 0 0
+p 6
+c 27182 0 3 4 0 0 0 0 0
+c 27194 0 3 4 0 0 0 0 0
+s 403 27200 commandTime=6a22
+c 27205 0 3 4 0 0 0 0 0
+p 6
+c 27217 0 3 4 0 0 0 0 0
+c 27229 0 3 4 0 0 0 0 0
+c 27241 0 3 4 0 0 0 0 0
+p 6
+s 404 27250 commandTime=6a69
+c 27253 0 3 4 0 0 0 0 0
+c 27265 0 3 4 0 0 0 0 0
+c 27277 0 3 4 0 0 0 0 0
+p 6
+c 27289 0 3 4 0 0 0 0 0
+c 27300 0 3 4 0 0 0 0 0
+s 405 27300 commandTime=6a8d
+c 27313 0 3 4 0 0 0 0 0
+p 6
+c 27326 0 3 4 0 0 0 0 0
+c 27340 0 3 4 0 0 0 0 0
+c 27353 0 3 4 0 0 0 0 0
+p 6
+s 406 27350 commandTime=6ad9
+c 27367 0 3 4 0 0 0 0 0
+c 27378 0 3 4 0 0 0 0 0
+c 27390 0 3 4 0 0 0 0 0
+p 6
+s 407 27400 commandTime=6afe
+c 27404 0 3 4 0 0 0 0 0
+c 27416 0 3 4 0 0 0 0 0
+c 27428 0 3 4 0 0 0 0 0
+p 6
+c 27441 0 3 4 0 0 0 0 0
+s 408 27450 commandTime=6b24
+c 27454 0 3 4 0 0 0 0 0
+c 27466 0 3 4 0 0 0 0 0
+p 6
+c 27477 0 3 4 0 0 0 0 0
+c 27489 0 3 4 0 0 0 0 0
+c 27501 0 3 4 0 0 0 0 0
+p 6
+s 409 27500 commandTime=6b6d
+c 27512 0 3 4 0 0 0 0 0
+c 27524 0 3 4 0 0 0 0 0
+c 27537 0 3 4 0 0 0 0 0
+p 6
+c 27549 0 3 4 0 0 0 0 0
+s 410 27550 commandTime=6b91
+c 27562 0 3 4 0 0 0 0 0
+c 27573 0 3 4 0 0 0 0 0
+p 6
+c 27586 0 3 4 0 0 0 0 0
+c 27598 0 3 4 0 0 0 0 0
+s 411 27600 commandTime=6bb5
+c 27610 0 3 4 0 0 0 0 0
+p 6
+c 27621 0 3 4 0 0 0 0 0
+c 27634 0 3 4 0 0 0 0 0
+c 27646 0 3 4 0 0 0 0 0
+p 6
+s 412 27650 commandTime=6bfe
+c 27658 0 3 4 0 0 0 0 0
+c 27670 0 3 4 0 0 0 0 0
+c 27682 0 3 4 0 0 0 0 0
+p 6
+c 27693 0 3 4 0 0 0 0 0
+s 413 27700 commandTime=6c22
+c 27706 0 3 4 0 0 0 0 0
+c 27719 0 3 4 0 0 0 0 0
+p 6
+c 27731 0 3 4 0 0 0 0 0
+c 27743 0 3 4 0 0 0 0 0
+s 414 27750 commandTime=6c47
+c 27754 0 3 4 0 0 0 0 0
+p 6
+c 27766 0 3 4 0 0 0 0 0
+c 27778 0 3 4 0 0 0 0 0
+c 27791 0 3 4 0 0 0 0 0
+p 6
+s 415 27800 commandTime=6c8f
+c 27803 0 3 4 0 0 0 0 0
+c 27814 0 3 4 0 0 0 0 0
+c 27826 0 3 4 0 0 0 0 0
+p 6
+c 27838 0 3 4 0 0 0 0 0
+c 27851 0 3 4 0 0 0 0 0
+s 416 27850 commandTime=6cb2
+c 27864 0 3 4 0 0 0 0 0
+p 6
+c 27876 0 3 4 0 0 0 0 0
+c 27889 0 3 4 0 0 0 0 0
+s 417 27900 commandTime=6cd8
+c 27900 0 3 4 0 0 0 0 0
+p 6
+c 27913 0 3 4 0 0 0 0 0
+c 27925 0 3 4 0 0 0 0 0
+c 27936 0 3 4 0 0 0 0 0
+p 6
+c 27949 0 3 4 0 0 0 0 0
+s 418 27950 commandTime=6d20
+c 27962 0 3 4 0 0 0 0 0
+c 27975 0 3 4 0 0 0 0 0
+p 6
+c 27987 0 3 4 0 0 0 0 0
+c 28000 0 3 4 0 0 0 0 0
+s 419 28000 commandTime=6d47
+c 28012 0 3 4 0 0 0 0 0
+p 6
+c 28024 0 3 4 0 0 0 0 0
+c 28036 0 3 4 0 0 0 0 0
+c 28047 0 3 4 0 0 0 0 0
+p 6
+s 420 28050 commandTime=6d8f
+c 28060 0 3 4 0 0 0 0 0
+c 28072 0 3 4 0 0 0 0 0
+c 28084 0 3 4 0 0 0 0 0
+p 6
+c 28098 0 3 4 0 0 0 0 0
+s 421 28100 commandTime=6db4
+c 28112 0 3 4 0 0 0 0 0
+c 28124 0 3 4 0 0 0 0 0
+p 6
+c 28137 0 3 4 0 0 0 0 0
+c 28149 0 3 4 0 0 0 0 0
+s 422 28150 commandTime=6ddc
+c 28161 0 3 4 0 0 0 0 0
+p 6
+c 28173 0 3 4 0 0 0 0 0
+c 28186 0 3 4 0 0 0 0 0
+c 28198 0 3 4 0 0 0 0 0
+p 6
+s 423 28200 commandTime=6e26
+c 28209 0 3 4 0 0 0 0 0
+c 28222 0 3 4 0 0 0 0 0
+c 28234 0 3 4 0 0 0 0 0
+p 6
+c 28245 0 3 4 0 0 0 0 0
+s 424 28250 commandTime=6e4a
+c 28257 0 3 4 0 0 0 0 0
+c 28268 0 3 4 0 0 0 0 0
+p 6
+c 28281 0 3 4 0 0 0 0 0
+c 28294 0 3 4 0 0 0 0 0
+s 425 28300 commandTime=6e6c
+c 28307 0 3 4 0 0 0 0 0
+p 6
+c 28319 0 3 4 0 0 0 0 0
+c 28332 0 3 4 0 0 0 0 0
+c 28345 0 3 4 0 0 0 0 0
+p 6
+s 426 28350 commandTime=6eb9
+c 28357 0 3 4 0 0 0 0 0
+c 28369 0 3 4 0 0 0 0 0
+c 28381 0 3 4 0 0 0 0 0
+p 6
+c 28393 0 3 4 0 0 0 0 0
+s 427 28400 commandTime=6edd
+c 28404 0 3 4 0 0 0 0 0
+c 28416 0 3 4 0 0 0 0 0
+p 6
+c 28430 0 3 4 0 0 0 0 0
+c 28443 0 3 4 0 0 0 0 0
+s 428 28450 commandTime=6f00
+c 28455 0 3 4 0 0 0 0 0
+p 6
+c 28467 0 3 4 0 0 0 0 0
+c 28478 0 3 4 0 0 0 0 0
+c 28490 0 3 4 0 0 0 0 0
+p 6
+s 429 28500 commandTime=6f4a
+c 28501 0 3 4 0 0 0 0 0
+c 28513 0 3 4 0 0 0 0 0
+c 28524 0 3 4 0 0 0 0 0
+p 6
+c 28537 0 3 4 0 0 0 0 0
+c 28550 0 3 4 0 0 0 0 0
+s 430 28550 commandTime=6f6c
+c 28564 0 3 4 0 0 0 0 0
+p 6
+c 28576 0 3 4 0 0 0 0 0
+c 28589 0 3 4 0 0 0 0 0
+c 28600 0 3 4 0 0 0 0 0
+p 6
+s 431 28600 commandTime=6fb8
+c 28611 0 3 4 0 0 0 0 0
+c 28625 0 3 4 0 0 0 0 0
+c 28637 0 3 4 0 0 0 0 0
+p 6
+c 28649 0 3 4 0 0 0 0 0
+s 432 28650 commandTime=6fdd
+c 28662 0 3 4 0 0 0 0 0
+c 28675 0 3 4 0 0 0 0 0
+p 6
+c 28686 0 3 4 0 0 0 0 0
+c 28699 0 3 4 0 0 0 0 0
+s 433 28700 commandTime=7003
+c 28710 0 3 4 0 0 0 0 0
+p 6
+c 28722 0 3 4 0 0 0 0 0
+c 28735 0 3 4 0 0 0 0 0
+c 28747 0 3 4 0 0 0 0 0
+p 6
+s 434 28750 commandTime=704b
+c 28759 0 3 4 0 0 0 0 0
+c 28772 0 3 4 0 0 0 0 0
+c 28784 0 3 4 0 0 0 0 0
+p 6
+c 28796 0 3 4 0 0 0 0 0
+s 435 28800 commandTime=7070
+c 28809 0 3 4 0 0 0 0 0
+c 28821 0 3 4 0 0 0 0 0
+p 6
+c 28833 0 3 4 0 0 0 0 0
+c 28845 0 3 4 0 0 0 0 0
+s 436 28850 commandTime=7095
+c 28857 0 3 4 0 0 0 0 0
+p 6
+c 28869 0 3 4 0 0 0 0 0
+c 28883 0 3 4 0 0 0 0 0
+c 28896 0 3 4 0 0 0 0 0
+p 6
+s 437 28900 commandTime=70e0
+c 28908 0 3 4 0 0 0 0 0
+c 28921 0 3 4 0 0 0 0 0
+c 28933 0 3 4 0 0 0 0 0
+p 6
+c 28947 0 3 4 0 0 0 0 0
+s 438 28950 commandTime=7105
+c 28961 0 3 4 0 0 0 0 0
+c 28972 0 3 4 0 0 0 0 0
+p 6
+c 28984 0 3 4 0 0 0 0 0
+c 28996 0 3 4 0 0 0 0 0
+s 439 29000 commandTime=712c
+c 29007 0 3 4 0 0 0 0 0
+p 6
+c 29019 0 3 4 0 0 0 0 0
+c 29031 0 3 4 0 0 0 0 0
+c 29043 0 3 4 0 0 0 0 0
+p 6
+s 440 29050 commandTime=7173
+c 29056 0 3 4 0 0 0 0 0
+c 29068 0 3 4 0 0 0 0 0
+c 29080 0 3 4 0 0 0 0 0
+p 6
+c 29092 0 3 4 0 0 0 0 0
+s 441 29100 commandTime=7198
+c 29104 0 3 4 0 0 0 0 0
+c 29116 0 3 4 0 0 0 0 0
+p 6
+c 29128 0 3 4 0 0 0 0 0
+c 29140 0 3 4 0 0 0 0 0
+s 442 29150 commandTime=71bc
+c 29152 0 3 4 0 0 0 0 0
+p 6
+c 29164 0 3 4 0 0 0 0 0
+c 29176 0 3 4 0 0 0 0 0
+c 29188 0 3 4 0 0 0 0 0
+p 6
+c 29200 0 3 4 0 0 0 0 0
+s 443 29200 commandTime=7204
+c 29211 0 3 4 0 0 0 0 0
+c 29223 0 3 4 0 0 0 0 0
+p 6
+c 29235 0 3 4 0 0 0 0 0
+c 29247 0 3 4 0 0 0 0 0
+s 444 29250 commandTime=7227
+c 29258 0 3 4 0 0 0 0 0
+p 6
+c 29271 0 3 4 0 0 0 0 0
+c 29284 0 3 4 0 0 0 0 0
+c 29297 0 3 4 0 0 0 0 0
+p 6
+s 445 29300 commandTime=7271
+c 29309 0 3 4 0 0 0 0 0
+c 29321 0 3 4 0 0 0 0 0
+c 29334 0 3 4 0 0 0 0 0
+p 6
+c 29347 0 3 4 0 0 0 0 0
+s 446 29350 commandTime=7296
+c 29359 0 3 4 0 0 0 0 0
+c 29371 0 3 4 0 0 0 0 0
+p 6
+c 29384 0 3 4 0 0 0 0 0
+c 29397 0 3 4 0 0 0 0 0
+s 447 29400 commandTime=72bb
+c 29409 0 3 4 0 0 0 0 0
+p 6
+c 29420 0 3 4 0 0 0 0 0
+c 29432 0 3 4 0 0 0 0 0
+c 29444 0 3 4 0 0 0 0 0
+p 6
+s 448 29450 commandTime=7304
+c 29456 0 3 4 0 0 0 0 0
+c 29468 0 3 4 0 0 0 0 0
+c 29481 0 3 4 0 0 0 0 0
+p 6
+c 29493 0 3 4 0 0 0 0 0
+s 449 29500 commandTime=7329
+c 29505 0 3 4 0 0 0 0 0
+c 29518 0 3 4 0 0 0 0 0
+p 6
+c 29530 0 3 4 0 0 0 0 0
+c 29542 0 3 4 0 0 0 0 0
+s 450 29550 commandTime=734e
+c 29556 0 3 4 0 0 0 0 0
+p 6
+c 29568 0 3 4 0 0 0 0 0
+c 29579 0 3 4 0 0 0 0 0
+c 29590 0 3 4 0 0 0 0 0
+p 6
+s 451 29600 commandTime=7396
+c 29603 0 3 4 0 0 0 0 0
+c 29615 0 3 4 0 0 0 0 0
+c 29628 0 3 4 0 0 0 0 0
+p 6
+c 29639 0 3 4 0 0 0 0 0
+c 29652 0 3 4 0 0 0 0 0
+s 452 29650 commandTime=73bc
+c 29663 0 3 4 0 0 0 0 0
+p 6
+c 29676 0 3 4 0 0 0 0 0
+c 29688 0 3 4 0 0 0 0 0
+c 29700 0 3 4 0 0 0 0 0
+p 6
+s 453 29700 commandTime=7404
+c 29713 0 3 4 0 0 0 0 0
+c 29725 0 3 4 0 0 0 0 0
+c 29737 0 3 4 0 0 0 0 0
+p 6
+c 29749 0 3 4 0 0 0 0 0
+s 454 29750 commandTime=7429
+c 29761 0 3 4 0 0 0 0 0
+c 29773 0 3 4 0 0 0 0 0
+p 6
+c 29785 0 3 4 0 0 0 0 0
+c 29798 0 3 4 0 0 0 0 0
+s 455 29800 commandTime=744d
+c 29811 0 3 4 0 0 0 0 0
+p 6
+c 29825 0 3 4 0 0 0 0 0
+c 29837 0 3 4 0 0 0 0 0
+c 29849 0 3 4 0 0 0 0 0
+p 6
+s 456 29850 commandTime=7499
+c 29863 0 3 4 0 0 0 0 0
+c 29875 0 3 4 0 0 0 0 0
+c 29887 0 3 4 0 0 0 0 0
+p 6
+c 29901 0 3 4 0 0 0 0 0
+s 457 29900 commandTime=74bf
+c 29913 0 3 4 0 0 0 0 0
+c 29926 0 3 4 0 0 0 0 0
+p 6
+c 29937 0 3 4 0 0 0 0 0
+s 458 29950 commandTime=74e6
+c 29950 0 3 4 0 0 0 0 0
+c 29962 0 3 4 0 0 0 0 0
+p 6
+c 29974 0 3 4 0 0 0 0 0
+c 29986 0 3 4 0 0 0 0 0
+c 29999 0 3 4 0 0 0 0 0
+p 6
+s 459 30000 commandTime=752f
+c 30012 0 3 4 0 0 0 0 0
+c 30025 0 3 4 0 0 0 0 0
+c 30037 0 3 4 0 0 0 0 0
+p 6
+c 30049 0 3 4 0 0 0 0 0
+s 460 30050 commandTime=7555
+c 30062 0 3 4 0 0 0 0 0
+c 30074 0 3 4 0 0 0 0 0
+p 6
+c 30085 0 3 4 0 0 0 0 0
+c 30097 0 3 4 0 0 0 0 0
+s 461 30100 commandTime=757a
+c 30108 0 3 4 0 0 0 0 0
+p 6
+c 30119 0 3 4 0 0 0 0 0
+c 30132 0 3 4 0 0 0 0 0
+c 30145 0 3 4 0 0 0 0 0
+p 6
+s 462 30150 commandTime=75c1
+c 30156 0 3 4 0 0 0 0 0
+c 30167 0 3 4 0 0 0 0 0
+c 30179 0 3 4 0 0 0 0 0
+p 6
+c 30190 0 3 4 0 0 0 0 0
+s 463 30200 commandTime=75e3
+c 30202 0 3 4 0 0 0 0 0
+c 30214 0 3 4 0 0 0 0 0
+p 6
+c 30226 0 3 4 0 0 0 0 0
+c 30238 0 3 4 0 0 0 0 0
+c 30250 0 3 4 0 0 0 0 0
+p 6
+s 464 30250 commandTime=762a
+c 30261 0 3 4 0 0 0 0 0
+c 30273 0 3 4 0 0 0 0 0
+c 30285 0 3 4 0 0 0 0 0
+p 6
+c 30296 0 3 4 0 0 0 0 0
+s 465 30300 commandTime=764d
+c 30309 0 3 4 0 0 0 0 0
+c 30322 0 3 4 0 0 0 0 0
+p 6
+c 30333 0 3 4 0 0 0 0 0
+c 30347 0 3 4 0 0 0 0 0
+s 466 30350 commandTime=7672
+c 30360 0 3 4 0 0 0 0 0
+p 6
+c 30373 0 3 4 0 0 0 0 0
+c 30384 0 3 4 0 0 0 0 0
+c 30396 0 3 4 0 0 0 0 0
+p 6
+s 467 30400 commandTime=76bc
+c 30408 0 3 4 0 0 0 0 0
+c 30420 0 3 4 0 0 0 0 0
+c 30432 0 3 4 0 0 0 0 0
+p 6
+c 30444 0 3 4 0 0 0 0 0
+s 468 30450 commandTime=76e0
+c 30457 0 3 4 0 0 0 0 0
+c 30469 0 3 4 0 0 0 0 0
+p 6
+c 30481 0 3 4 0 0 0 0 0
+c 30493 0 3 4 0 0 0 0 0
+s 469 30500 commandTime=7705
+c 30506 0 3 4 0 0 0 0 0
+p 6
+c 30518 0 3 4 0 0 0 0 0
+c 30530 0 3 4 0 0 0 0 0
+c 30542 0 3 4 0 0 0 0 0
+p 6
+s 470 30550 commandTime=774e
+c 30554 0 3 4 0 0 0 0 0
+c 30566 0 3 4 0 0 0 0 0
+c 30578 0 3 4 0 0 0 0 0
+p 6
+c 30590 0 3 4 0 0 0 0 0
+s 471 30600 commandTime=7772
+c 30605 0 3 4 0 0 0 0 0
+c 30617 0 3 4 0 0 0 0 0
+p 6
+c 30629 0 3 4 0 0 0 0 0
+c 30642 0 3 4 0 0 0 0 0
+s 472 30650 commandTime=7799
+c 30653 0 3 4 0 0 0 0 0
+p 6
+c 30665 0 3 4 0 0 0 0 0
+c 30677 0 3 4 0 0 0 0 0
+c 30689 0 3 4 0 0 0 0 0
+p 6
+c 30701 0 3 4 0 0 0 0 0
+s 473 30700 commandTime=77e1
+c 30713 0 3 4 0 0 0 0 0
+c 30725 0 3 4 0 0 0 0 0
+p 6
+c 30737 0 3 4 0 0 0 0 0
+c 30749 0 3 4 0 0 0 0 0
+s 474 30750 commandTime=7805
+c 30760 0 3 4 0 0 0 0 0
+p 6
+c 30772 0 3 4 0 0 0 0 0
+c 30784 0 3 4 0 0 0 0 0
+c 30796 0 3 4 0 0 0 0 0
+p 6
+s 475 30800 commandTime=784c
+c 30808 0 3 4 0 0 0 0 0
+c 30820 0 3 4 0 0 0 0 0
+c 30832 0 3 4 0 0 0 0 0
+p 6
+c 30844 0 3 4 0 0 0 0 0
+s 476 30850 commandTime=7870
+c 30857 0 3 4 0 0 0 0 0
+c 30869 0 3 4 0 0 0 0 0
+p 6
+c 30881 0 3 4 0 0 0 0 0
+c 30893 0 3 4 0 0 0 0 0
+s 477 30900 commandTime=7895
+c 30906 0 3 4 0 0 0 0 0
+p 6
+c 30918 0 3 4 0 0 0 0 0
+c 30930 0 3 4 0 0 0 0 0
+c 30942 0 3 4 0 0 0 0 0
+p 6
+s 478 30950 commandTime=78de
+c 30954 0 3 4 0 0 0 0 0
+c 30966 0 3 4 0 0 0 0 0
+c 30978 0 3 4 0 0 0 0 0
+p 6
+c 30990 0 3 4 0 0 0 0 0
+s 479 31000 commandTime=7902
+c 31003 0 3 4 0 0 0 0 0
+c 31015 0 3 4 0 0 0 0 0
+p 6
+c 31027 0 3 4 0 0 0 0 0
+c 31039 0 3 4 0 0 0 0 0
+c 31051 0 3 4 0 0 0 0 0
+p 6
+s 480 31050 commandTime=794b
+c 31064 0 3 4 0 0 0 0 0
+c 31076 0 3 4 0 0 0 0 0
+c 31088 0 3 4 0 0 0 0 0
+p 6
+s 481 31100 commandTime=7970
+c 31100 0 3 4 0 0 0 0 0
+c 31112 0 3 4 0 0 0 0 0
+c 31124 0 3 4 0 0 0 0 0
+p 6
+c 31136 0 3 4 0 0 0 0 0
+c 31148 0 3 4 0 0 0 0 0
+s 482 31150 commandTime=7994
+c 31159 0 3 4 0 0 0 0 0
+p 6
+c 31171 0 3 4 0 0 0 0 0
+c 31183 0 3 4 0 0 0 0 0
+c 31195 0 3 4 0 0 0 0 0
+p 6
+s 483 31200 commandTime=79db
+c 31206 0 3 4 0 0 0 0 0
+c 31218 0 3 4 0 0 0 0 0
+c 31230 0 3 4 0 0 0 0 0
+p 6
+c 31242 0 3 4 0 0 0 0 0
+s 484 31250 commandTime=79fe
+c 31255 0 3 4 0 0 0 0 0
+c 31267 0 3 4 0 0 0 0 0
+p 6
+c 31279 0 3 4 0 0 0 0 0
+c 31291 0 3 4 0 0 0 0 0
+c 31303 0 3 4 0 0 0 0 0
+p 6
+s 485 31300 commandTime=7a23
+c 31315 0 3 4 0 0 0 0 0
+c 31327 0 3 4 0 0 0 0 0
+c 31339 0 3 4 0 0 0 0 0
+p 6
+s 486 31350 commandTime=7a6b
+c 31351 0 3 4 0 0 0 0 0
+c 31363 0 3 4 0 0 0 0 0
+c 31375 0 3 4 0 0 0 0 0
+p 6
+c 31387 0 3 4 0 0 0 0 0
+c 31399 0 3 4 0 0 0 0 0
+s 487 31400 commandTime=7a8f
+c 31410 0 3 4 0 0 0 0 0
+p 6
+c 31422 0 3 4 0 0 0 0 0
+c 31434 0 3 4 0 0 0 0 0
+c 31446 0 3 4 0 0 0 0 0
+p 6
+s 488 31450 commandTime=7ad6
+c 31458 0 3 4 0 0 0 0 0
+c 31470 0 3 4 0 0 0 0 0
+c 31482 0 3 4 0 0 0 0 0
+p 6
+c 31494 0 3 4 0 0 0 0 0
+s 489 31500 commandTime=7afa
+c 31506 0 3 4 0 0 0 0 0
+c 31518 0 3 4 0 0 0 0 0
+p 6
+c 31530 0 3 4 0 0 0 0 0
+c 31542 0 3 4 0 0 0 0 0
+s 490 31550 commandTime=7b1e
+c 31554 0 3 4 0 0 0 0 0
+p 6
+c 31566 0 3 4 0 0 0 0 0
+c 31578 0 3 4 0 0 0 0 0
+c 31590 0 3 4 0 0 0 0 0
+p 6
+c 31602 0 3 4 0 0 0 0 0
+s 491 31600 commandTime=7b66
+c 31614 0 3 4 0 0 0 0 0
+c 31626 0 3 4 0 0 0 0 0
+p 6
+c 31638 0 3 4 0 0 0 0 0
+s 492 31650 commandTime=7b8a
+c 31651 0 3 4 0 0 0 0 0
+c 31663 0 3 4 0 0 0 0 0
+p 6
+c 31675 0 3 4 0 0 0 0 0
+c 31687 0 3 4 0 0 0 0 0
+c 31699 0 3 4 0 0 0 0 0
+p 6
+s 493 31700 commandTime=7bd3
+c 31711 0 3 4 0 0 0 0 0
+c 31723 0 3 4 0 0 0 0 0
+c 31735 0 3 4 0 0 0 0 0
+p 6
+c 31747 0 3 4 0 0 0 0 0
+s 494 31750 commandTime=7bf7
+c 31759 0 3 4 0 0 0 0 0
+c 31771 0 3 4 0 0 0 0 0
+p 6
+c 31783 0 3 4 0 0 0 0 0
+c 31795 0 3 4 0 0 0 0 0
+s 495 31800 commandTime=7c1b
+c 31807 0 3 4 0 0 0 0 0
+p 6
+c 31819 0 3 4 0 0 0 0 0
+c 31831 0 3 4 0 0 0 0 0
+c 31843 0 3 4 0 0 0 0 0
+p 6
+s 496 31850 commandTime=7c63
+c 31855 0 3 4 0 0 0 0 0
+c 31867 0 3 4 0 0 0 0 0
+c 31879 0 3 4 0 0 0 0 0
+p 6
+c 31891 0 3 4 0 0 0 0 0
+s 497 31900 commandTime=7c87
+c 31904 0 3 4 0 0 0 0 0
+c 31916 0 3 4 0 0 0 0 0
+p 6
+c 31928 0 3 4 0 0 0 0 0
+c 31940 0 3 4 0 0 0 0 0
+s 498 31950 commandTime=7cac
+c 31953 0 3 4 0 0 0 0 0
+p 6
+c 31965 0 3 4 0 0 0 0 0
+c 31977 0 3 4 0 0 0 0 0
+c 31989 0 3 4 0 0 0 0 0
+p 6
+c 32001 0 3 4 0 0 0 0 0
+s 499 32000 commandTime=7cf5
+c 32013 0 3 4 0 0 0 0 0
+c 32025 0 3 4 0 0 0 0 0
+p 6
+c 32037 0 3 4 0 0 0 0 0
+c 32049 0 3 4 0 0 0 0 0
+s 500 32050 commandTime=7d19
+c 32061 0 3 4 0 0 0 0 0
+p 6
+c 32073 0 3 4 0 0 0 0 0
+c 32085 0 3 4 0 0 0 0 0
+c 32097 0 3 4 0 0 0 0 0
+p 6
+s 501 32100 commandTime=7d61
+c 32108 0 3 4 0 0 0 0 0
+c 32120 0 3 4 0 0 0 0 0
+c 32132 0 3 4 0 0 0 0 0
+p 6
+c 32144 0 3 4 0 0 0 0 0
+s 502 32150 commandTime=7d84
+c 32156 0 3 4 0 0 0 0 0
+c 32168 0 3 4 0 0 0 0 0
+p 6
+c 32180 0 3 4 0 0 0 0 0
+c 32192 0 3 4 0 0 0 0 0
+s 503 32200 commandTime=7da8
+c 32204 0 3 4 0 0 0 0 0
+p 6
+c 32216 0 3 4 0 0 0 0 0
+c 32228 0 3 4 0 0 0 0 0
+c 32240 0 3 4 0 0 0 0 0
+p 6
+s 504 32250 commandTime=7df0
+c 32252 0 3 4 0 0 0 0 0
+c 32264 0 3 4 0 0 0 0 0
+c 32276 0 3 4 0 0 0 0 0
+p 6
+c 32288 0 3 4 0 0 0 0 0
+c 32300 0 3 4 0 0 0 0 0
+s 505 32300 commandTime=7e14
+c 32311 0 3 4 0 0 0 0 0
+p 6
+c 32323 0 3 4 0 0 0 0 0
+c 32335 0 3 4 0 0 0 0 0
+c 32347 0 3 4 0 0 0 0 0
+p 6
+s 506 32350 commandTime=7e5b
+c 32358 0 3 4 0 0 0 0 0
+c 32370 0 3 4 0 0 0 0 0
+c 32382 0 3 4 0 0 0 0 0
+p 6
+c 32394 0 3 4 0 0 0 0 0
+s 507 32400 commandTime=7e7e
+c 32406 0 3 4 0 0 0 0 0
+c 32418 0 3 4 0 0 0 0 0
+p 6
+c 32430 0 3 4 0 0 0 0 0
+c 32442 0 3 4 0 0 0 0 0
+s 508 32450 commandTime=7ea2
+c 32455 0 3 4 0 0 0 0 0
+p 6
+c 32467 0 3 4 0 0 0 0 0
+c 32479 0 3 4 0 0 0 0 0
+c 32491 0 3 4 0 0 0 0 0
+p 6
+s 509 32500 commandTime=7eeb
+c 32504 0 3 4 0 0 0 0 0
+c 32516 0 3 4 0 0 0 0 0
+c 32528 0 3 4 0 0 0 0 0
+p 6
+c 32540 0 3 4 0 0 0 0 0
+c 32552 0 3 4 0 0 0 0 0
+s 510 32550 commandTime=7f10
+c 32564 0 3 4 0 0 0 0 0
+p 6
+c 32576 0 3 4 0 0 0 0 0
+c 32588 0 3 4 0 0 0 0 0
+s 511 32600 commandTime=7f34
+c 32601 0 3 4 0 0 0 0 0
+p 6
+c 32613 0 3 4 0 0 0 0 0
+c 32625 0 3 4 0 0 0 0 0
+c 32637 0 3 4 0 0 0 0 0
+p 6
+c 32649 0 3 4 0 0 0 0 0
+s 512 32650 commandTime=7f7d
+c 32662 0 3 4 0 0 0 0 0
+c 32674 0 3 4 0 0 0 0 0
+p 6
+c 32686 0 3 4 0 0 0 0 0
+c 32698 0 3 4 0 0 0 0 0
+s 513 32700 commandTime=7fa2
+c 32710 0 3 4 0 0 0 0 0
+p 6
+c 32722 0 3 4 0 0 0 0 0
+c 32734 0 3 4 0 0 0 0 0
+c 32746 0 3 4 0 0 0 0 0
+p 6
+s 514 32750 commandTime=7fea
+c 32758 0 3 4 0 0 0 0 0
+c 32770 0 3 4 0 0 0 0 0
+c 32782 0 3 4 0 0 0 0 0
+p 6
+c 32794 0 3 4 0 0 0 0 0
+s 515 32800 commandTime=800e
+c 32805 0 3 4 0 0 0 0 0
+c 32817 0 3 4 0 0 0 0 0
+p 6
+c 32828 0 3 4 0 0 0 0 0
+c 32840 0 3 4 0 0 0 0 0
+s 516 32850 commandTime=8031
+c 32852 0 3 4 0 0 0 0 0
+p 6
+c 32864 0 3 4 0 0 0 0 0
+c 32876 0 3 4 0 0 0 0 0
+c 32888 0 3 4 0 0 0 0 0
+p 6
+c 32900 0 3 4 0 0 0 0 0
+s 517 32900 commandTime=8078
+c 32912 0 3 4 0 0 0 0 0
+c 32924 0 3 4 0 0 0 0 0
+p 6
+c 32936 0 3 4 0 0 0 0 0
+c 32948 0 3 4 0 0 0 0 0
+s 518 32950 commandTime=809c
+c 32959 0 3 4 0 0 0 0 0
+p 6
+c 32971 0 3 4 0 0 0 0 0
+c 32983 0 3 4 0 0 0 0 0
+c 32995 0 3 4 0 0 0 0 0
+p 6
+s 519 33000 commandTime=80e3
+c 33007 0 3 4 0 0 0 0 0
+c 33019 0 3 4 0 0 0 0 0
+c 33031 0 3 4 0 0 0 0 0
+p 6
+c 33043 0 3 4 0 0 0 0 0
+s 520 33050 commandTime=8107
+c 33054 0 3 4 0 0 0 0 0
+c 33066 0 3 4 0 0 0 0 0
+p 6
+c 33078 0 3 4 0 0 0 0 0
+c 33090 0 3 4 0 0 0 0 0
+s 521 33100 commandTime=812a
+c 33103 0 3 4 0 0 0 0 0
+p 6
+c 33115 0 3 4 0 0 0 0 0
+c 33127 0 3 4 0 0 0 0 0
+c 33139 0 3 4 0 0 0 0 0
+p 6
+c 33151 0 3 4 0 0 0 0 0
+s 522 33150 commandTime=8173
+c 33162 0 3 4 0 0 0 0 0
+c 33174 0 3 4 0 0 0 0 0
+p 6
+c 33186 0 3 4 0 0 0 0 0
+c 33198 0 3 4 0 0 0 0 0
+s 523 33200 commandTime=8196
+c 33210 0 3 4 0 0 0 0 0
+p 6
+c 33222 0 3 4 0 0 0 0 0
+c 33234 0 3 4 0 0 0 0 0
+c 33246 0 3 4 0 0 0 0 0
+p 6
+s 524 33250 commandTime=81de
+c 33259 0 3 4 0 0 0 0 0
+c 33271 0 3 4 0 0 0 0 0
+c 33283 0 3 4 0 0 0 0 0
+p 6
+c 33295 0 3 4 0 0 0 0 0
+s 525 33300 commandTime=8203
+c 33306 0 3 4 0 0 0 0 0
+c 33318 0 3 4 0 0 0 0 0
+p 6
+c 33330 0 3 4 0 0 0 0 0
+c 33342 0 3 4 0 0 0 0 0
+s 526 33350 commandTime=8226
+c 33354 0 3 4 0 0 0 0 0
+p 6
+c 33366 0 3 4 0 0 0 0 0
+c 33378 0 3 4 0 0 0 0 0
+c 33390 0 3 4 0 0 0 0 0
+p 6
+c 33402 0 3 4 0 0 0 0 0
+s 527 33400 commandTime=826e
+c 33415 0 3 4 0 0 0 0 0
+c 33427 0 3 4 0 0 0 0 0
+p 6
+c 33439 0 3 4 0 0 0 0 0
+s 528 33450 commandTime=8293
+c 33451 0 3 4 0 0 0 0 0
+c 33463 0 3 4 0 0 0 0 0
+p 6
+c 33475 0 3 4 0 0 0 0 0
+c 33487 0 3 4 0 0 0 0 0
+c 33499 0 3 4 0 0 0 0 0
+p 6
+s 529 33500 commandTime=82db
+c 33510 0 3 4 0 0 0 0 0
+c 33522 0 3 4 0 0 0 0 0
+c 33534 0 3 4 0 0 0 0 0
+p 6
+c 33546 0 3 4 0 0 0 0 0
+s 530 33550 commandTime=82fe
+c 33559 0 3 4 0 0 0 0 0
+c 33571 0 3 4 0 0 0 0 0
+p 6
+c 33583 0 3 4 0 0 0 0 0
+c 33595 0 3 4 0 0 0 0 0
+s 531 33600 commandTime=8323
+c 33607 0 3 4 0 0 0 0 0
+p 6
+c 33619 0 3 4 0 0 0 0 0
+c 33631 0 3 4 0 0 0 0 0
+c 33643 0 3 4 0 0 0 0 0
+p 6
+s 532 33650 commandTime=836b
+c 33656 0 3 4 0 0 0 0 0
+c 33668 0 3 4 0 0 0 0 0
+c 33680 0 3 4 0 0 0 0 0
+p 6
+c 33692 0 3 4 0 0 0 0 0
+s 533 33700 commandTime=8390
+c 33703 0 3 4 0 0 0 0 0
+c 33715 0 3 4 0 0 0 0 0
+p 6
+c 33727 0 3 4 0 0 0 0 0
+c 33739 0 3 4 0 0 0 0 0
+c 33751 0 3 4 0 0 0 0 0
+p 6
+s 534 33750 commandTime=83d7
+c 33762 0 3 4 0 0 0 0 0
+c 33774 0 3 4 0 0 0 0 0
+c 33786 0 3 4 0 0 0 0 0
+p 6
+c 33798 0 3 4 0 0 0 0 0
+s 535 33800 commandTime=83fa
+c 33811 0 3 4 0 0 0 0 0
+c 33823 0 3 4 0 0 0 0 0
+p 6
+c 33835 0 3 4 0 0 0 0 0
+c 33847 0 3 4 0 0 0 0 0
+s 536 33850 commandTime=841f
+c 33858 0 3 4 0 0 0 0 0
+p 6
+c 33870 0 3 4 0 0 0 0 0
+c 33882 0 3 4 0 0 0 0 0
+c 33894 0 3 4 0 0 0 0 0
+p 6
+s 537 33900 commandTime=8466
+c 33907 0 3 4 0 0 0 0 0
+c 33919 0 3 4 0 0 0 0 0
+c 33931 0 3 4 0 0 0 0 0
+p 6
+c 33943 0 3 4 0 0 0 0 0
+s 538 33950 commandTime=848b
+c 33954 0 3 4 0 0 0 0 0
+c 33966 0 3 4 0 0 0 0 0
+p 6
+c 33978 0 3 4 0 0 0 0 0
+c 33990 0 3 4 0 0 0 0 0
+s 539 34000 commandTime=84ae
+c 34003 0 3 4 0 0 0 0 0
+p 6
+c 34015 0 3 4 0 0 0 0 0
+c 34027 0 3 4 0 0 0 0 0
+c 34039 0 3 4 0 0 0 0 0
+p 6
+c 34051 0 3 4 0 0 0 0 0
+s 540 34050 commandTime=84f7
+c 34064 0 3 4 0 0 0 0 0
+c 34076 0 3 4 0 0 0 0 0
+p 6
+c 34088 0 3 4 0 0 0 0 0
+s 541 34100 commandTime=851c
+c 34101 0 3 4 0 0 0 0 0
+c 34113 0 3 4 0 0 0 0 0
+p 6
+c 34125 0 3 4 0 0 0 0 0
+c 34137 0 3 4 0 0 0 0 0
+c 34149 0 3 4 0 0 0 0 0
+p 6
+s 542 34150 commandTime=8565
+c 34161 0 3 4 0 0 0 0 0
+c 34173 0 3 4 0 0 0 0 0
+c 34185 0 3 4 0 0 0 0 0
+p 6
+c 34197 0 3 4 0 0 0 0 0
+s 543 34200 commandTime=8589
+c 34209 0 3 4 0 0 0 0 0
+c 34221 0 3 4 0 0 0 0 0
+p 6
+c 34233 0 3 4 0 0 0 0 0
+c 34245 0 3 4 0 0 0 0 0
+s 544 34250 commandTime=85ad
+c 34257 0 3 4 0 0 0 0 0
+p 6
+c 34269 0 3 4 0 0 0 0 0
+c 34281 0 3 4 0 0 0 0 0
+c 34293 0 3 4 0 0 0 0 0
+p 6
+s 545 34300 commandTime=85f5
+c 34304 0 3 4 0 0 0 0 0
+c 34316 0 3 4 0 0 0 0 0
+c 34328 0 3 4 0 0 0 0 0
+p 6
+c 34340 0 3 4 0 0 0 0 0
+s 546 34350 commandTime=8618
+c 34352 0 3 4 0 0 0 0 0
+c 34364 0 3 4 0 0 0 0 0
+p 6
+c 34376 0 3 4 0 0 0 0 0
+c 34388 0 3 4 0 0 0 0 0
+c 34400 0 3 4 0 0 0 0 0
+p 6
+s 547 34400 commandTime=8660
+c 34413 0 3 4 0 0 0 0 0
+c 34425 0 3 4 0 0 0 0 0
+c 34437 0 3 4 0 0 0 0 0
+p 6
+c 34449 0 3 4 0 0 0 0 0
+s 548 34450 commandTime=8685
+c 34461 0 3 4 0 0 0 0 0
+c 34473 0 3 4 0 0 0 0 0
+p 6
+c 34485 0 3 4 0 0 0 0 0
+c 34497 0 3 4 0 0 0 0 0
+s 549 34500 commandTime=86a9
+c 34509 0 3 4 0 0 0 0 0
+p 6
+c 34521 0 3 4 0 0 0 0 0
+c 34533 0 3 4 0 0 0 0 0
+c 34545 0 3 4 0 0 0 0 0
+p 6
+s 550 34550 commandTime=86f1
+c 34558 0 3 4 0 0 0 0 0
+c 34570 0 3 4 0 0 0 0 0
+c 34582 0 3 4 0 0 0 0 0
+p 6
+c 34594 0 3 4 0 0 0 0 0
+s 551 34600 commandTime=8716
+c 34605 0 3 4 0 0 0 0 0
+c 34617 0 3 4 0 0 0 0 0
+p 6
+c 34629 0 3 4 0 0 0 0 0
+c 34641 0 3 4 0 0 0 0 0
+s 552 34650 commandTime=8739
+c 34654 0 3 4 0 0 0 0 0
+p 6
+c 34666 0 3 4 0 0 0 0 0
+c 34678 0 3 4 0 0 0 0 0
+c 34690 0 3 4 0 0 0 0 0
+p 6
+s 553 34700 commandTime=8782
+c 34703 0 3 4 0 0 0 0 0
+c 34715 0 3 4 0 0 0 0 0
+c 34727 0 3 4 0 0 0 0 0
+p 6
+c 34739 0 3 4 0 0 0 0 0
+c 34751 0 3 4 0 0 0 0 0
+s 554 34750 commandTime=87a7
+c 34764 0 3 4 0 0 0 0 0
+p 6
+c 34776 0 3 4 0 0 0 0 0
+c 34788 0 3 4 0 0 0 0 0
+c 34800 0 3 4 0 0 0 0 0
+p 6
+s 555 34800 commandTime=87f0
+c 34813 0 3 4 0 0 0 0 0
+c 34825 0 3 4 0 0 0 0 0
+c 34837 0 3 4 0 0 0 0 0
+p 6
+c 34849 0 3 4 0 0 0 0 0
+s 556 34850 commandTime=8815
+c 34861 0 3 4 0 0 0 0 0
+c 34873 0 3 4 0 0 0 0 0
+p 6
+c 34885 0 3 4 0 0 0 0 0
+c 34897 0 3 4 0 0 0 0 0
+s 557 34900 commandTime=8839
+c 34908 0 3 4 0 0 0 0 0
+p 6
+c 34920 0 3 4 0 0 0 0 0
+c 34932 0 3 4 0 0 0 0 0
+c 34944 0 3 4 0 0 0 0 0
+p 6
+s 558 34950 commandTime=8880
+c 34956 0 3 4 0 0 0 0 0
+c 34968 0 3 4 0 0 0 0 0
+c 34980 0 3 4 0 0 0 0 0
+p 6
+c 34992 0 3 4 0 0 0 0 0
+s 559 35000 commandTime=88a4
+c 35005 0 3 4 0 0 0 0 0
+c 35017 0 3 4 0 0 0 0 0
+p 6
+c 35029 0 3 4 0 0 0 0 0
+c 35041 0 3 4 0 0 0 0 0
+s 560 35050 commandTime=88c9
+c 35053 0 3 4 0 0 0 0 0
+p 6
+c 35065 0 3 4 0 0 0 0 0
+c 35077 0 3 4 0 0 0 0 0
+c 35089 0 3 4 0 0 0 0 0
+p 6
+c 35101 0 3 4 0 0 0 0 0
+s 561 35100 commandTime=8911
+c 35113 0 3 4 0 0 0 0 0
+c 35125 0 3 4 0 0 0 0 0
+p 6
+c 35137 0 3 4 0 0 0 0 0
+c 35149 0 3 4 0 0 0 0 0
+s 562 35150 commandTime=8935
+c 35160 0 3 4 0 0 0 0 0
+p 6
+c 35172 0 3 4 0 0 0 0 0
+c 35184 0 3 4 0 0 0 0 0
+c 35196 0 3 4 0 0 0 0 0
+p 6
+s 563 35200 commandTime=897c
+c 35208 0 3 4 0 0 0 0 0
+c 35220 0 3 4 0 0 0 0 0
+c 35232 0 3 4 0 0 0 0 0
+p 6
+c 35244 0 3 4 0 0 0 0 0
+s 564 35250 commandTime=89a0
+c 35255 0 3 4 0 0 0 0 0
+c 35267 0 3 4 0 0 0 0 0
+p 6
+c 35279 0 3 4 0 0 0 0 0
+c 35291 0 3 4 0 0 0 0 0
+s 565 35300 commandTime=89c3
+c 35303 0 3 4 0 0 0 0 0
+p 6
+c 35315 0 3 4 0 0 0 0 0
+c 35327 0 3 4 0 0 0 0 0
+c 35339 0 3 4 0 0 0 0 0
+p 6
+c 35351 0 3 4 0 0 0 0 0
+s 566 35350 commandTime=8a0b
+c 35362 0 3 4 0 0 0 0 0
+c 35374 0 3 4 0 0 0 0 0
+p 6
+c 35386 0 3 4 0 0 0 0 0
+c 35398 0 3 4 0 0 0 0 0
+s 567 35400 commandTime=8a2e
+c 35409 0 3 4 0 0 0 0 0
+p 6
+c 35421 0 3 4 0 0 0 0 0
+c 35433 0 3 4 0 0 0 0 0
+c 35445 0 3 4 0 0 0 0 0
+p 6
+s 568 35450 commandTime=8a75
+c 35458 0 3 4 0 0 0 0 0
+c 35470 0 3 4 0 0 0 0 0
+c 35482 0 3 4 0 0 0 0 0
+p 6
+c 35494 0 3 4 0 0 0 0 0
+s 569 35500 commandTime=8a9a
+c 35505 0 3 4 0 0 0 0 0
+c 35517 0 3 4 0 0 0 0 0
+p 6
+c 35529 0 3 4 0 0 0 0 0
+c 35541 0 3 4 0 0 0 0 0
+s 570 35550 commandTime=8abd
+c 35554 0 3 4 0 0 0 0 0
+p 6
+c 35566 0 3 4 0 0 0 0 0
+c 35578 0 3 4 0 0 0 0 0
+c 35590 0 3 4 0 0 0 0 0
+p 6
+s 571 35600 commandTime=8b06
+c 35602 0 3 4 0 0 0 0 0
+c 35614 0 3 4 0 0 0 0 0
+c 35626 0 3 4 0 0 0 0 0
+p 6
+c 35638 0 3 4 0 0 0 0 0
+c 35650 0 3 4 0 0 0 0 0
+s 572 35650 commandTime=8b2a
+c 35662 0 3 4 0 0 0 0 0
+p 6
+c 35674 0 3 4 0 0 0 0 0
+c 35686 0 3 4 0 0 0 0 0
+c 35698 0 3 4 0 0 0 0 0
+p 6
+s 573 35700 commandTime=8b72
+c 35709 0 3 4 0 0 0 0 0
+c 35721 0 3 4 0 0 0 0 0
+c 35733 0 3 4 0 0 0 0 0
+p 6
+c 35745 0 3 4 0 0 0 0 0
+s 574 35750 commandTime=8b95
+c 35756 0 3 4 0 0 0 0 0
+c 35768 0 3 4 0 0 0 0 0
+p 6
+c 35780 0 3 4 0 0 0 0 0
+c 35792 0 3 4 0 0 0 0 0
+s 575 35800 commandTime=8bb8
+c 35804 0 3 4 0 0 0 0 0
+p 6
+c 35816 0 3 4 0 0 0 0 0
+c 35828 0 3 4 0 0 0 0 0
+c 35840 0 3 4 0 0 0 0 0
+p 6
+s 576 35850 commandTime=8c00
+c 35852 0 3 4 0 0 0 0 0
+c 35864 0 3 4 0 0 0 0 0
+c 35876 0 3 4 0 0 0 0 0
+p 6
+c 35888 0 3 4 0 0 0 0 0
+c 35900 0 3 4 0 0 0 0 0
+s 577 35900 commandTime=8c24
+c 35911 0 3 4 0 0 0 0 0
+p 6
+c 35923 0 3 4 0 0 0 0 0
+c 35935 0 3 4 0 0 0 0 0
+c 35947 0 3 4 0 0 0 0 0
+p 6
+s 578 35950 commandTime=8c6b
+c 35960 0 3 4 0 0 0 0 0
+c 35972 0 3 4 0 0 0 0 0
+c 35984 0 3 4 0 0 0 0 0
+p 6
+c 35996 0 3 4 0 0 0 0 0
+s 579 36000 commandTime=8c90
+c 36008 0 3 4 0 0 0 0 0
+c 36020 0 3 4 0 0 0 0 0
+p 6
+c 36032 0 3 4 0 0 0 0 0
+c 36044 0 3 4 0 0 0 0 0
+s 580 36050 commandTime=8cb4
+c 36055 0 3 4 0 0 0 0 0
+p 6
+c 36067 0 3 4 0 0 0 0 0
+c 36079 0 3 4 0 0 0 0 0
+c 36091 0 3 4 0 0 0 0 0
+p 6
+s 581 36100 commandTime=8cfb
+c 36102 0 3 4 0 0 0 0 0
+c 36114 0 3 4 0 0 0 0 0
+c 36126 0 3 4 0 0 0 0 0
+p 6
+c 36138 0 3 4 0 0 0 0 0
+c 36150 0 3 4 0 0 0 0 0
+s 582 36150 commandTime=8d1e
+c 36162 0 3 4 0 0 0 0 0
+p 6
+c 36174 0 3 4 0 0 0 0 0
+c 36186 0 3 4 0 0 0 0 0
+c 36198 0 3 4 0 0 0 0 0
+p 6
+s 583 36200 commandTime=8d66
+c 36209 0 3 4 0 0 0 0 0
+c 36221 0 3 4 0 0 0 0 0
+c 36233 0 3 4 0 0 0 0 0
+p 6
+c 36245 0 3 4 0 0 0 0 0
+s 584 36250 commandTime=8d89
+c 36257 0 3 4 0 0 0 0 0
+c 36269 0 3 4 0 0 0 0 0
+p 6
+c 36281 0 3 4 0 0 0 0 0
+c 36293 0 3 4 0 0 0 0 0
+s 585 36300 commandTime=8dad
+c 36306 0 3 4 0 0 0 0 0
+p 6
+c 36318 0 3 4 0 0 0 0 0
+c 36330 0 3 4 0 0 0 0 0
+c 36342 0 3 4 0 0 0 0 0
+p 6
+s 586 36350 commandTime=8df6
+c 36354 0 3 4 0 0 0 0 0
+c 36366 0 3 4 0 0 0 0 0
+c 36378 0 3 4 0 0 0 0 0
+p 6
+c 36390 0 3 4 0 0 0 0 0
+c 36402 0 3 4 0 0 0 0 0
+s 587 36400 commandTime=8e1a
+c 36415 0 3 4 0 0 0 0 0
+p 6
+c 36427 0 3 4 0 0 0 0 0
+c 36439 0 3 4 0 0 0 0 0
+s 588 36450 commandTime=8e3f
+c 36451 0 3 4 0 0 0 0 0
+p 6
+c 36463 0 3 4 0 0 0 0 0
+c 36475 0 3 4 0 0 0 0 0
+c 36487 0 3 4 0 0 0 0 0
+p 6
+c 36499 0 3 4 0 0 0 0 0
+s 589 36500 commandTime=8e87
+c 36511 0 3 4 0 0 0 0 0
+c 36523 0 3 4 0 0 0 0 0
+p 6
+c 36535 0 3 4 0 0 0 0 0
+c 36547 0 3 4 0 0 0 0 0
+s 590 36550 commandTime=8eab
+c 36559 0 3 4 0 0 0 0 0
+p 6
+c 36571 0 3 4 0 0 0 0 0
+c 36583 0 3 4 0 0 0 0 0
+c 36595 0 3 4 0 0 0 0 0
+p 6
+s 591 36600 commandTime=8ef3
+c 36607 0 3 4 0 0 0 0 0
+c 36619 0 3 4 0 0 0 0 0
+c 36631 0 3 4 0 0 0 0 0
+p 6
+c 36643 0 3 4 0 0 0 0 0
+s 592 36650 commandTime=8f17
+c 36656 0 3 4 0 0 0 0 0
+c 36668 0 3 4 0 0 0 0 0
+p 6
+c 36680 0 3 4 0 0 0 0 0
+c 36692 0 3 4 0 0 0 0 0
+# cmd 36700 J 0
+s 593 36700 commandTime=8f3c
+e 84 groundEntityNum=3ff
+e 307 groundEntityNum=3ff
+e 308 groundEntityNum=3ff
+e 309 groundEntityNum=3ff
+e 310 groundEntityNum=3ff
+e 311 groundEntityNum=3ff
+e 312 groundEntityNum=3ff
+e 368 groundEntityNum=3ff
+e 461 groundEntityNum=3ff
+e 463 groundEntityNum=3ff
+e 464 groundEntityNum=3ff
+e 465 groundEntityNum=3ff
+e 466 groundEntityNum=3ff
+e 467 groundEntityNum=3ff
+e 468 groundEntityNum=3ff
+e 469 groundEntityNum=3ff
+e 470 groundEntityNum=3ff
+e 471 groundEntityNum=3ff
+e 512 groundEntityNum=3ff
+e 513 groundEntityNum=3ff
+e 514 groundEntityNum=3ff
+e 516 groundEntityNum=3ff
+e 517 groundEntityNum=3ff
+e 518 groundEntityNum=3ff
+e 519 groundEntityNum=3ff
+e 619 groundEntityNum=3ff
+e 620 groundEntityNum=3ff
+e 621 groundEntityNum=3ff
+e 622 groundEntityNum=3ff
+e 623 groundEntityNum=3ff
+e 624 groundEntityNum=3ff
+e 625 groundEntityNum=3ff
+e 626 groundEntityNum=3ff
+e 627 groundEntityNum=3ff
+e 628 groundEntityNum=3ff
+e 629 groundEntityNum=3ff
+e 630 groundEntityNum=3ff
+e 631 groundEntityNum=3ff
+e 632 groundEntityNum=3ff
+e 633 groundEntityNum=3ff
+e 634 groundEntityNum=3ff
+e 635 groundEntityNum=3ff
+e 636 groundEntityNum=3ff
+e 637 groundEntityNum=3ff
+r- 0
+c 36705 0 3 4 0 0 0 0 0
+p 6
+c 36717 0 3 4 0 0 0 0 0
+c 36729 0 3 4 0 0 0 0 0
+c 36741 0 3 4 0 0 0 0 0
+p 6
+s 594 36750 commandTime=8f85
+c 36754 0 3 4 0 0 0 0 0
+c 36766 0 3 4 0 0 0 0 0
+c 36778 0 3 4 0 0 0 0 0
+p 6
+c 36790 0 3 4 0 0 0 0 0
+s 595 36800 commandTime=8faa
+c 36802 0 3 4 0 0 0 0 0
+c 36814 0 3 4 0 0 0 0 0
+p 6
+c 36826 0 3 4 0 0 0 0 0
+c 36838 0 3 4 0 0 0 0 0
+s 596 36850 commandTime=8fce
+c 36851 0 3 4 0 0 0 0 0
+p 6
+c 36863 0 3 4 0 0 0 0 0
+c 36875 0 3 4 0 0 0 0 0
+c 36887 0 3 4 0 0 0 0 0
+p 6
+c 36899 0 3 4 0 0 0 0 0
+s 597 36900 commandTime=9017
+c 36912 0 3 4 0 0 0 0 0
+c 36924 0 3 4 0 0 0 0 0
+p 6
+c 36936 0 3 4 0 0 0 0 0
+c 36948 0 3 4 0 0 0 0 0
+s 598 36950 commandTime=903c
+c 36959 0 3 4 0 0 0 0 0
+p 6
+c 36971 0 3 4 0 0 0 0 0
+c 36983 0 3 4 0 0 0 0 0
+c 36995 0 3 4 0 0 0 0 0
+p 6
+s 599 37000 commandTime=9083
+c 37006 0 3 4 0 0 0 0 0
+c 37018 0 3 4 0 0 0 0 0
+c 37030 0 3 4 0 0 0 0 0
+p 6
+c 37042 0 3 4 0 0 0 0 0
+s 600 37050 commandTime=90a6
+c 37054 0 3 4 0 0 0 0 0
+c 37066 0 3 4 0 0 0 0 0
+p 6
+c 37078 0 3 4 0 0 0 0 0
+c 37090 0 3 4 0 0 0 0 0
+s 601 37100 commandTime=90ca
+c 37103 0 3 4 0 0 0 0 0
+p 6
+c 37115 0 3 4 0 0 0 0 0
+c 37127 0 3 4 0 0 0 0 0
+c 37139 0 3 4 0 0 0 0 0
+p 6
+s 602 37150 commandTime=9113
+c 37152 0 3 4 0 0 0 0 0
+c 37164 0 3 4 0 0 0 0 0
+c 37176 0 3 4 0 0 0 0 0
+p 6
+c 37188 0 3 4 0 0 0 0 0
+c 37200 0 3 4 0 0 0 0 0
+s 603 37200 commandTime=9138
+c 37211 0 3 4 0 0 0 0 0
+p 6
+c 37223 0 3 4 0 0 0 0 0
+c 37235 0 3 4 0 0 0 0 0
+c 37247 0 3 4 0 0 0 0 0
+p 6
+s 604 37250 commandTime=917f
+c 37259 0 3 4 0 0 0 0 0
+c 37271 0 3 4 0 0 0 0 0
+c 37283 0 3 4 0 0 0 0 0
+p 6
+c 37295 0 3 4 0 0 0 0 0
+s 605 37300 commandTime=91a3
+c 37307 0 3 4 0 0 0 0 0
+c 37319 0 3 4 0 0 0 0 0
+p 6
+c 37331 0 3 4 0 0 0 0 0
+c 37343 0 3 4 0 0 0 0 0
+s 606 37350 commandTime=91c7
+c 37354 0 3 4 0 0 0 0 0
+p 6
+c 37366 0 3 4 0 0 0 0 0
+c 37378 0 3 4 0 0 0 0 0
+c 37390 0 3 4 0 0 0 0 0
+p 6
+s 607 37400 commandTime=920e
+c 37403 0 3 4 0 0 0 0 0
+c 37415 0 3 4 0 0 0 0 0
+c 37427 0 3 4 0 0 0 0 0
+p 6
+c 37439 0 3 4 0 0 0 0 0
+c 37451 0 3 4 0 0 0 0 0
+s 608 37450 commandTime=9233
+c 37462 0 3 4 0 0 0 0 0
+p 6
+c 37474 0 3 4 0 0 0 0 0
+c 37486 0 3 4 0 0 0 0 0
+c 37498 0 3 4 0 0 0 0 0
+p 6
+s 609 37500 commandTime=927a
+c 37510 0 3 4 0 0 0 0 0
+c 37522 0 3 4 0 0 0 0 0
+c 37534 0 3 4 0 0 0 0 0
+p 6
+c 37546 0 3 4 0 0 0 0 0
+s 610 37550 commandTime=929e
+c 37559 0 3 4 0 0 0 0 0
+c 37571 0 3 4 0 0 0 0 0
+p 6
+c 37583 0 3 4 0 0 0 0 0
+c 37595 0 3 4 0 0 0 0 0
+s 611 37600 commandTime=92c3
+c 37606 0 3 4 0 0 0 0 0
+p 6
+c 37618 0 3 4 0 0 0 0 0
+c 37630 0 3 4 0 0 0 0 0
+c 37642 0 3 4 0 0 0 0 0
+p 6
+s 612 37650 commandTime=930a
+c 37654 0 3 4 0 0 0 0 0
+c 37666 0 3 4 0 0 0 0 0
+c 37678 0 3 4 0 0 0 0 0
+p 6
+c 37690 0 3 4 0 0 0 0 0
+c 37702 0 3 4 0 0 0 0 0
+s 613 37700 commandTime=932e
+c 37713 0 3 4 0 0 0 0 0
+p 6
+c 37725 0 3 4 0 0 0 0 0
+c 37737 0 3 4 0 0 0 0 0
+c 37749 0 3 4 0 0 0 0 0
+p 6
+s 614 37750 commandTime=9375
+c 37761 0 3 4 0 0 0 0 0
+c 37773 0 3 4 0 0 0 0 0
+c 37785 0 3 4 0 0 0 0 0
+p 6
+c 37797 0 3 4 0 0 0 0 0
+s 615 37800 commandTime=9399
+c 37808 0 3 4 0 0 0 0 0
+c 37820 0 3 4 0 0 0 0 0
+p 6
+c 37832 0 3 4 0 0 0 0 0
+c 37844 0 3 4 0 0 0 0 0
+s 616 37850 commandTime=93bc
+#   0:05 PROBE spawned 0 (1929, 1768, 64.125)
+#   0:07 PROBE spawned 1 (1943, 1991, 64.125)
+#   0:17 PROBE damage 0 17750 270 32 MOD_RIFLE_BULLET kar98k_mp head 100 (1928.98, 1766.5, 120.186) (-0.062336, -0.997902, -0.017511)
+#   0:17 PROBE killed 0 17750 270 MOD_RIFLE_BULLET kar98k_mp head -9
+#   0:18 PROBE detach 1 18300
+#   0:18 PROBE killed 1 18800 100000 MOD_SUICIDE none none 0
+#   0:19 PROBE killcam 0 19800
+#   0:19 PROBE archivetime 0 19850 9
+#   0:21 PROBE spawned 1 (1945.4, 1990.85, 64.125)
+#   0:28 PROBE killcam_end 0 28800 dead

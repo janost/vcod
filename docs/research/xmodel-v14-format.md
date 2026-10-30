@@ -101,7 +101,7 @@ All CoDMP.exe 1.1. Each claim carries its own label.
 - VERIFIED, the descriptor reader 0x48b020: the three LOD slots are `{f32 dist; cstr name}` pairs copied raw into a parse buffer of `0x404`-byte records (name, then dist at `+0x400`).
 - VERIFIED, the loader 0x48b290: per slot it copies the name, stores the dist at `xmodel+4 + i*0x14` and the name pointer at `+8 + i*0x14`, and increments the LOD count at `xmodel+0x64` (a short). INFERRED, off the `je 0x48b53c` on an empty name at 0x48b414: the count stops at the first empty slot. The stock paks have no gap (1012 descriptors, VERIFIED by a census).
 - VERIFIED: 0x48b290 loads `xmodelparts` once, from LOD 0's name (0x48ac80 with `xmodel+8`, the string `xmodelparts/%s` at 0x48ac80's body), then `xmodelsurfs` once per present LOD (0x48aac0 into `+0xc + i*0x14`). INFERRED, off the `goto` to the free path: a LOD whose surfs fail to load fails the whole model.
-- VERIFIED (asset census, `pak0`-`pak6`): 710 of the 719 coarse LODs ship no `xmodelparts` entry at all (`USAirborneA_LOD13`, `Blake0`, `lowpoly0`, `k98_lod_med0`), so a coarse LOD's vertex bone ids index LOD 0's bones. vcod bakes every LOD against LOD 0's bind (`xmodel::XModel::coarse`).
+- VERIFIED (asset census, `pak0`-`pak6`): 710 of the 719 coarse LODs ship no `xmodelparts` entry at all (`USAirborneA_LOD13`, `Blake0`, `lowpoly0`, `k98_lod_med0`), so a coarse LOD's vertex bone ids index LOD 0's bones. vcod bakes every LOD against LOD 0's bind (`model::Model::lods`).
 - VERIFIED (census): 546 of 1012 descriptors have every dist 0, each with a single LOD, and so always draw LOD 0; 41 of the 43 `*viewmodel*` descriptors are among them (`viewmodel_ammo` has one LOD at 5000, `vehicle_tank_t34_viewmodel` `1000 3000`). Common tables: heads `400 800 3000` (134), player bodies `800 1200 0` (70), world weapons `150 500 1000` (18), `crate_misc1a` `512 0`.
 
 ### The per-frame inputs
@@ -120,7 +120,7 @@ All CoDMP.exe 1.1. Each claim carries its own label.
 
 ### vcod
 
-- `xmodel::LodView` and `xmodel::select_lod` are the two functions above. The renderer picks each entity part's LOD at the start of `Renderer::render` from the instance's origin and draws nothing for one past its last LOD; `vc_shadows`' entity casters are the drawn instances, so they agree. Props bake every LOD into the map buffers (`props::Props::ranges` carries the LOD) and the gather keeps the picked one; the static `vc_shadows` layer casts LOD 0, since it is cached across views.
+- `model::LodView` and `model::select_lod` are the two functions above. The renderer picks each entity part's LOD at the start of `Renderer::render` from the instance's origin and draws nothing for one past its last LOD; `vc_shadows`' entity casters are the drawn instances, so they agree. Props bake every LOD into the map buffers (`props::Props::ranges` carries the LOD) and the gather keeps the picked one; the static `vc_shadows` layer casts LOD 0, since it is cached across views.
 - The viewmodel is a DObj in retail too. INFERRED: it sits at the eye, so its `lodDist` is about `r_lodbias` and a stock gun or hands model (one LOD at 0, or `viewmodel_ammo` at 5000) never drops; vcod's viewmodel pass draws LOD 0. Model Detail Aggressive's -200 only lowers the distance.
 - Collision is untouched: the collision mesh is the descriptor's own, and hit boxes ride LOD 0's `xmodelparts`, shared by every LOD.
 

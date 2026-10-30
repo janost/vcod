@@ -1,0 +1,2325 @@
+# CoD4 1.7: the 2D layer of a watched session
+
+What vcod draws over a watched CoD4 session and where each piece comes
+from: the fonts and HUD images, the playerstate's hudelems, the server
+commands the cgame reads (chat, game messages, scores, configstrings), the
+obituary's kill line and centre print, and the compass. Code:
+`crates/cod4/src/hud.rs` (renderer-free) and `crates/client/src/cod4_hud.rs`;
+gates: `crates/cod4/tests/hud_assets.rs` and the `cod4_hud` tests in the
+client.
+
+## Sources
+
+- `iw3mp.exe` 1.7 (image base 0x400000, md5
+  8c40cde102a9d8297a8674cb149f96ed), read with `objdump -d -M intel`.
+- The stock zones `code_post_gfx_mp`, `localized_code_post_gfx_mp`,
+  `common_mp`, `localized_common_mp` and `mp_crash`, walked by
+  `vcod_cod4::walk`.
+- The kill pair and the playing pair of captures,
+  `crates/cod4/tests/fixtures/net/play-1.7-*.txt` (cod4-netfields.md 8, 10).
+- A claim labelled INFERRED that names no 1.7 address is not yet
+  confirmed on 1.7.
+
+## 1. Fonts, images and strings
+
+- The UI fonts live in `localized_code_post_gfx_mp`: `fonts/smallFont`
+  (pixel height 10), `normalFont` (16), `consoleFont` (16, 254 glyphs),
+  `bigFont` (24), `boldFont` (16), `extraBigFont` (48), `objectiveFont`
+  (35), each 191 glyphs unless noted, all on the material
+  `fonts/gamefonts_pc`, whose one image `gamefonts_pc` has no pixels in the
+  zone; they come from `images/gamefonts_pc.iwi` in the iwds. VERIFIED (zone
+  walk). `fonts/smallDevFont` (96 glyphs, `fonts/devfonts`) is there too;
+  `fonts/bigDevFont` in `localized_common_mp` names its material as a stub
+  (`,fonts/devfonts`). VERIFIED.
+- The drop-down console draws in `fonts/consoleFont`
+  (`cls.consoleFont = R_RegisterFont("fonts/consoleFont", 3)` at client
+  start, INFERRED for 1.7). The iwds hold no `.dat` font
+  (`fontImage_18.dat`, CoD1's console font, is absent), so vcod reads
+  it out of `localized_code_post_gfx_mp` at start-up
+  (`cod4_hud::console_font`), before any map. VERIFIED (iwd listing,
+  zone walk). vcod keeps its 8 px console cells rather than retail's
+  proportional run.
+- `Font_s` and its glyphs have CoD2's layout, so vcod draws them as CoD2's,
+  each glyph's pixels scaled by `48 / pixelHeight`. The scale is INFERRED
+  (`R_NormalizedTextScale` is CoD2's, Mac 0x31d6c; not traced in 1.7).
+- A HUD material's image is its 2D (semantic 0) or colour map texture's.
+  VERIFIED for the fonts, the kill icons and `compass_map_mp_crash` (zone
+  walk). A name that opens with `,` is a reference to an asset another zone
+  carries: the M16's `killIcon` reads `,hud_icon_m16a4_grenade` in
+  `common_mp`, whose textures `localized_common_mp` holds. VERIFIED.
+- The localized strings are `localize` assets keyed by the whole name
+  (`MP_CONNECTED` = `&&1 Connected`, `CGAME_YOUKILLED` = `You killed &&1`,
+  `CGAME_YOUWEREKILLED` = `Killed by &&1`): 3593 in
+  `localized_code_post_gfx_mp`, 53 in `localized_common_mp`. VERIFIED. Their
+  `&&n` slots and the `\x14` / `\x15` message parts read as CoD2's
+  (`Localized::message`). INFERRED.
+
+## 2. Server commands
+
+- `CG_DeployServerCommand` is `iw3mp.exe` 0x44be40, with a byte table at
+  0x44c5b8 indexing a jump table at 0x44c530. VERIFIED. It takes the first
+  character of `Cmd_Argv(0)` and sends anything past `v` (0x76) to the
+  unknown-command arm. INFERRED (the `cmp ecx,0x76; ja` at 0x44be71). The
+  cases are `a b c d e f g h i j k n o p q r s t u v` and `B C D E F G H I J
+  K L N`, each to its own code (`e` and `f` share one); every other
+  character goes to the unknown-command arm at 0x44c48c. VERIFIED (both
+  tables read out). What each case
+  does: `h` chat and `i` team chat, `e`/`f` a game
+  message, `c`/`g` a bold one, `b` the scores, `d` a configstring, `v`
+  client dvars, `G`/`H` team 1's and 2's score. INFERRED.
+- 1.7's player-connected line reaches the client as
+  `<space>"MP_CONNECTED\x15<name>^7"`: its first byte is 0x20. VERIFIED (every
+  join in the four play captures). Tokenized, its first argument is the
+  quoted message, whose `M` no case takes, so the line never shows.
+  INFERRED. That the space is `iprintln`'s command letter, overwritten by
+  a later `va()`, is INFERRED.
+- `CG_ParseScores` is `iw3mp.exe` 0x44a350; the `b` case's code at
+  0x44beac is a call to it. VERIFIED. It reads `Cmd_Argv(1)` capped at
+  0x40 rows, then arguments 2, 3 and 4, then seven arguments a row (the
+  loop's base index steps by 7 from 7, reading `base - 2` to `base + 4`),
+  stored at row offsets 0, 4, 8, 0xc, a local, 0x14 and 0x1c. INFERRED
+  (control flow at 0x44a393, 0x44a4a5..0x44a603). The fields are: count, team 1 score, team
+  2 score, score limit; client, score, ping, deaths, status icon, kills,
+  assists, INFERRED. A status icon is used when it is 1..8
+  (`lea eax,[ebp-1]; cmp eax,7` at 0x44a606). INFERRED. It names
+  configstring `2258 + n` (section 7). The four play captures carry no
+  `b`; the score capture does (section 7). VERIFIED.
+- The server dvar mirror: names at configstrings 20..147, each value 128
+  slots on. VERIFIED in the kill capture (`friction` at 36, `5.5` at 164;
+  `g_TeamColor_MyTeam` at 47, `0.6 0.8 0.6 0` at 175;
+  `g_TeamColor_EnemyTeam` at 45, `1 0.45098 0.501961 0` at 173).
+
+## 3. Obituaries, kill lines and the centre print
+
+- An obituary is the event entity `EV_OBITUARY` (cod4-netfields.md 10);
+  `otherEntityNum` is the victim, `attackerEntityNum` the attacker,
+  `eventParm` the weapon or, with 0x80 set, a means of death. VERIFIED (the
+  kill capture: parm 27, `m16_gl_mp`, victim 0, attacker 1).
+- `CG_Obituary`: a kill line `^<c>attacker^7 <icon> ^<c>victim`
+  where `^8` is the drawn player's team and `^9` the other's (`^7` without
+  teams); the icon is the weapon's `killIcon` (`WeaponDef` +1304), 1.4 font
+  heights square, twice as wide for `killIconRatio` (+1308) 1 or 2 and half
+  as tall for 2, mirrored when `flipKillIcon` (+1312) is set; a means of
+  death picks one of the `killicon*` materials. INFERRED. The M16's words at +1308 and +1312 read 2 and 1. VERIFIED
+  (zone walk).
+  The `killicon*` materials (`killicondied`, `killiconmelee`,
+  `killiconheadshot`, `killiconcrush`, `killiconfalling`,
+  `killiconsuicide`, `killiconimpact`) are in the zones. VERIFIED.
+- The drawn player's kill prints `CGAME_YOUKILLED`, his death
+  `CGAME_YOUWEREKILLED`, each with `CGAME_TEAMMATE` for a teammate, in the
+  centre. INFERRED.
+- Neither prints while `ps.deltaTime` is set (the killcam),
+  INFERRED; the kill capture's second `EV_OBITUARY` is the killcam's replay
+  and arrives with `deltaTime` set. VERIFIED (the gate counts one kill
+  line).
+
+## 4. Where the text goes
+
+- The `gamemessages` menu (`common_mp`) holds one item of type 19 (a game
+  message window): rect (6, -65), left and bottom aligned, text scale
+  0.28125, font 0, style 3, window 0, mode 1. `boldgamemessages`: (0, -60),
+  horizontal and vertical align 7, scale 0.417, font 6 (objective),
+  `textAlignMode` 1, window 1, mode 1. `subtitles`: (200, 400), scale 0.375,
+  window 2, mode 1. VERIFIED (item bytes 4..24, 192..220 of `itemDef_s`).
+  That mode 1 grows the lines up from the rect is INFERRED.
+- `con_gameMsgWindow<n>MsgTime` 5, 8, 5, 5 s and `LineCount` 4, 5, 7, 5
+  are the tables at 0x6bdc7c and 0x6bdc8c, beside their names. VERIFIED.
+  The fade times (in 0.25 s, 0.75 s for window 2; out 0.5 s, 0.01 s for
+  window 1) are INFERRED.
+- `cg_chatTime` 12000 (0x43cdd0), `cg_chatHeight` 8 (0x43ce07),
+  `cg_gameBoldMessageWidth` 390 (0x43d219) and `cg_gameMessageWidth` 455
+  (0x43d1cf) are the registrations' default
+  operands. INFERRED (instruction order). `cg_hudChatPosition` loads 5.0
+  (0x6cf674) and 204.0 (0x70bcc4) before its call. INFERRED.
+  `CG_AddToTeamChat` wraps past 52 characters, INFERRED.
+- The obituary's centre print uses the `centerobituary` menu's item: rect
+  (0, 150), centre aligned, scale 0.4583, style 3. VERIFIED (zone). That
+  ownerdraw 90 is the centre print is INFERRED; `cg_centertime` loads 5.0
+  before its registration (0x43c295), INFERRED as its default.
+- `ui_smallFont` 0.25, `ui_bigFont` 0.4 and `ui_extraBigFont` 0.55 load
+  before their registrations at 0x541d94, 0x541def and 0x541e4a. INFERRED.
+  `UI_GetFontHandle`: font enums 2, 3, 5 and 6 are big, small,
+  console and objective; 4 picks small, normal or bold and any other
+  small, normal, big or extra big by the scale against those three.
+  INFERRED.
+
+## 5. Hudelems
+
+- The 40-field `hudelem_t` (cod4-netfields.md 1) packs `alignOrg` and
+  `alignScreen` as CoD2 does (`alignx << 2 | aligny`, `horzalign << 3 |
+  vertalign`). VERIFIED against the kill capture: the perk icons sit at
+  alignScreen 0x1b (right, bottom), alignOrg 0xa, x -5, and draw against
+  the bottom right in the screenshots.
+- `he_type_t` is CoD2's with `MAPNAME` 4 and `GAMETYPE` 5 added, `WAYPOINT`
+  13, INFERRED. The kill capture's elements are types 1, 6, 9
+  (the respawn countdown, `0:01.1`) and 13. VERIFIED.
+- `font` 0..5 map to `UI_GetFontHandle` enums 0, 4, 5, 6, 2, 3 at base
+  scales 0.25, 0.5, 1/3, 0.25, 0.25, 0.25 times `fontScale`,
+  INFERRED. The team splash (`Marine Force Recon`, `OpFor`) is font 3, the
+  objective font. VERIFIED (capture).
+- `flags` bit 1 draws in the foreground pass, bit 2 hides the element while
+  dead, INFERRED. Bit 4 is `hideWhenInMenu`: the prematch's text
+  and timer, which `matchStartTimer` marks `hidewheninmenu`, carry flags 4
+  on the wire. VERIFIED (the prematch capture, section 13, and
+  `_globallogic.gsc`). `CG_DrawHudElems` skips such an element while
+  `UI_AnyMenuVisible`, INFERRED; vcod skips it while a script
+  menu is up. A text's `fxBirthTime` / `fxLetterTime` /
+  `fxDecayStartTime` / `fxDecayDuration` (`setPulseFX`) type the text in and
+  fade it; vcod reveals a letter a `fxLetterTime` and fades the whole text
+  over the decay, an approximation of the per-letter decay. INFERRED.
+- Text and labels are localized-string configstrings `309 + n`, materials
+  `2002 + n` (cod4-handshake.md 5). VERIFIED (capture: material 1 is
+  `faction_128_usmc`).
+- A label and a text that are both non-empty become one string:
+  `GetHudElemInfo` calls the label and text merge (`iw3mp.exe` 0x438a00)
+  at 0x438d6f only after testing both first bytes, and that copies the
+  label up to its first `&&1` (the `cmp dl,0x26`, `cmp [..+0x11],dl`,
+  `cmp [..+0x12],0x31` at 0x438a18..0x438a23), skips the three bytes,
+  copies the text, then the label's rest; a label without `&&1` is
+  followed by the text. VERIFIED (the disassembly). The killstreak
+  splash's `MP_KILLSTREAK_N` label over `setValue(3)` reads `3 Kill
+  Streak!`, the promotion's rank label over `RANK_ROMANI` `Private First
+  Class I`. VERIFIED (the zone's strings, `cod4_live_three_kills_*`).
+  vcod: `vcod_cod4::hud::consolidate`.
+- A material's drawn size runs from `fromWidth` / `fromHeight` to
+  `width` / `height` over `scaleTime` after `scaleStartTime`,
+  the from side placed off `fromAlignScreen`. INFERRED. The stock progress bar is
+  that: `_hud_util::updateBarScale` sets the fill `int(width * frac +
+  0.5)` wide (at least 1) and `scaleOverTime`s it to the full width over
+  `(1 - frac) / rate`; `_gameobjects` calls `updateBar( curProgress /
+  useTime, 1000 / useTime * useRate )` on the use and proximity bars, the
+  HQ radio's among them. VERIFIED (the rawfiles). Its fill and black
+  backing share the image `progress_bar_background`. VERIFIED (the
+  zone's materials). vcod
+  drew `width` alone, so the bar read full from the first frame; it lerps
+  in virtual units with one alignment (`cod4_hud::material_size`), which
+  differs from retail only when one side is full-screen aligned. Gate
+  `cod4_live_progress_bar_fills_over_its_scale_time` (vcod-server's
+  `updateBar( 0, 0.5 )` reads under a quarter at the start and between a
+  quarter and nine tenths at 1.2 s). The look against retail is pending
+  a pixel check.
+
+### 5.1 What vcod-server sends
+
+- `G_UpdateHudElemsToClients` runs after the entity pass and
+  before the end frames: every client in use gets both arrays rebuilt
+  from the pool (`HudElem_UpdateClient`: a team element for its
+  `sess.cs.team`, an owned one for its owner, archived or current by the
+  record's `archived`, 31 a side). A follower's `ClientEndFrame` copies
+  the followed client's playerstate and rebuilds only its own current
+  half. INFERRED (the order). vcod's level does the same
+  (`game::cod4::wire::hud_elems`, `Cod4Level::hud_into`).
+- `HudElem_SetDefaults` leaves `fontScale` 0, `color` white and
+  `archived` 1: the walk capture's spawn splash material, never given a
+  scale, reads `fontScale` 0. VERIFIED live.
+- A colour lane is the script's 0..1 times 255 on the x87 stack, rounded
+  to nearest: the hint's `glowcolor` of
+  (0.7, 0.3, 0.2) reads 0xb2, 0x4d, 0x33. VERIFIED live. 1.1's +0.5 and
+  truncate in `float` gives 0xb3.
+- `setPulseFX(letter, decayStart, decayDuration)` writes `fxBirthTime`
+  as `level.time`, the three times, and the owner's next `soundID`
+  (1..31 round, `hudElemLastAssignedSoundID`): the spawn hint
+  reads soundID 1, letter 100, decay 4000 / 1000. VERIFIED live. vcod
+  gives an element no client owns soundID 0. INFERRED (the lookup would read past
+  the client array there).
+- The prematch (`_globallogic::matchStartTimer`, `common_mp.ff`): two
+  archived server elements, the objective font at 1.5 with the waiting
+  text and a type 7 timer at 1.4, both sort 1001, `hidewheninmenu`,
+  centred; the timer's `time` 15000 is
+  `scr_game_playerwaittime` past the level's start. With one team
+  only, `waitForPlayers` gives up 200 ms short of it (14800), the text
+  turns to `MP_MATCH_STARTING_IN` and the timer to 19800, and both are
+  gone at 19800 (`play-1.7-prematch.txt`, a probe joining 3 s after the
+  server started, and a second run of mine joining at 7 s). VERIFIED
+  live. The freeze is `freezeControls`
+  (`PMF_FROZEN`), lifted at the same frame.
+- Gates: `cod4::prematch_ab` (every element of every snapshot of the
+  prematch capture and its server commands in order, `ui_hud_hardcore`
+  among them), `cod4::wire_ab` (the
+  walk and spec captures' elements, the whole run).
+
+## 6. The compass
+
+- `compass_old` (`common_mp`) is the compass menu: `minimapBG`
+  (`minimap_background`, -8 12 125 125), `mini_map` (6 18 102 102,
+  ownerdraw 159), `compasspointers`, the friendlies, enemies, helicopters
+  and planes, and `compassplayer` (`compassping_player`), all left and top
+  aligned. VERIFIED (zone).
+- Configstring 823 is `"compass_map_<map>" x0 y0 x1 y1` and 822 the north
+  yaw (cod4-handshake.md 5); `compass_map_mp_crash` is in the map's zone.
+  VERIFIED.
+- The compass map (owner draw 159): east is (north.y, -north.x), south
+  -north; the map's world size is the corner-to-corner vector on east and
+  south; the view's offset from the upper left on them gives the texture
+  centre; the radius is half of `compassMaxRange` over the larger size,
+  the smaller axis scaled up to it; with `compassRotation` the map turns by
+  `-(viewYaw - northYaw)`. INFERRED. `compassMaxRange` loads 2500.0 before
+  its registration (0x425416). INFERRED. The arrow is
+  `compassPlayerWidth` 18.75 square, INFERRED.
+
+## 7. The scoreboard
+
+- The board is not a menu list. The `scoreboard` menu (`common_mp`) holds
+  32 plain items (the header lines, team icons and scores, all driven by
+  expressions vcod does not read) and no listbox; the score list is the
+  cgame's own draw. VERIFIED (zone walk, `examples/menu_dump.rs`).
+  `CG_DrawScoreboard` lays it out, INFERRED: a backdrop
+  `cg_scoreboardWidth` by `cg_scoreboardHeight` centred on the grid, the
+  host name at its foot, column headers (`CGAME_SB_SCORE`, `_KILLS`,
+  `_ASSISTS`, `_DEATHS`, `_PING`) at 0.85 of the header font scale, then
+  a banner per team (its `g_TeamIcon_*`, its localized `g_TeamName_*`
+  and `( n )`), our own team first, then the other, the free players and
+  the spectators, each row on a `g_ScoresColor_*` backing at half alpha:
+  rank icon, status icon, name, talking icon, score, kills, assists,
+  deaths, ping, a text shrunk by 0.025 until it fits its column, our own
+  row in `cg_scoreboardMyColor`.
+- 1.7's defaults, read off the registrations in instruction order
+  (INFERRED, each the operand loaded before its name): `cg_scoreboardBannerHeight`
+  35 (0x449d0c), `cg_scoreboardItemHeight` 18 (0x449d54),
+  `cg_scoreboardPingWidth` 0.036 (0x70bbc0), `cg_scoreboardPingHeight`
+  0.7 (0x70b0e8), `cg_scoreboardWidth` 500 (0x70bbbc),
+  `cg_scoreboardHeight` 435 (0x70bbb8), `cg_scoreboardMyColor` 1 0.8 0.4 1
+  (0x449eeb..0x449f17), `cg_scoreboardTextOffset` 0.5 (0x6be648),
+  `cg_scoreboardFont` 0 (0x449f93), `cg_scoreboardHeaderFontScale` 0.35
+  (0x70bba4), `cg_scoreboardPingText` 1 (0x44a035), so the ping column
+  draws, `cg_scoreboardPingGraph` 0 (0x44a079) and
+  `cg_scoreboardRankFontScale` 0.25 (0x70b2b4). The names are at
+  0x6cd3dc..0x6cd6b8.
+- The status icon is configstring `2258 + n` for `n` 1..8: `CG_ParseScores`
+  reads `[ebp*4 + 0xc64c34]`, and the configstring offsets start at
+  0xc628ec, 2258 slots below. VERIFIED (0x44a611; 0xc628ec is the base
+  every other configstring read indexes). In the score capture 2259 is
+  `hud_status_dead` and 2260 `hud_status_connecting`. VERIFIED.
+- The colours, icons and team names the board reads are server dvars in
+  the configstring mirror: `g_ScoresColor_Allies` at 37 and `0.6 0.639216
+  0.690196 0` at 165, `g_TeamIcon_Axis` `faction_128_arab`,
+  `g_TeamName_Allies` `MPUI_MARINES_SHORT`. VERIFIED (score capture). A
+  rank icon is `mp/rankIconTable.csv`'s row for the rank, column prestige
+  + 1, and its level `mp/rankTable.csv`'s column 14 (`CL_GetRankIcon`,
+  `CL_GetRankData`), INFERRED.
+- The client asks: `+scores` sends `score` and shows the board, and while
+  it draws a `score` goes out every 2 s (`CG_ScoresDown`, `UpdateScores`), INFERRED. The board also draws at intermission (`pm_type` 5)
+  and fades over 100 ms after `-scores`. INFERRED.
+- `CG_DrawScoreboard` draws its backdrop whether
+  or not a `b` came (`UpdateScores` only asks), so a held `+scores`
+  shows an empty board until the first reply, INFERRED.
+  vcod-server's CoD4 game does not answer `score` yet (its
+  `game_command` drops it), so a board against it has no rows.
+  VERIFIED (`crates/server/src/cod4/mod.rs`).
+- The score capture, `play-1.7-score-target.txt`: the kill recipe
+  (cod4-netfields.md 10) with the target's probe run `--scores`, 25 s.
+  Its 12 `score` requests got 12 `b` replies, the first `b 2 0 0 750 0 0 14
+  0 0 0 0 1 0 145 0 1 0 0` (the shooter not yet spawned: status icon 1,
+  dead), and after the kill `b 2 10 0 750 1 10 15 0 0 1 0 0 0 18 1 1 0 0`:
+  the shooter's 10 points and kill, the target's death, team 1's 10.
+  VERIFIED live. So the seven row numbers are client, score, ping,
+  deaths, status icon, kills, assists, as section 2 has them. VERIFIED.
+  The gate `cod4_hud::tests::score_capture_draws_both_players_on_the_board`
+  replays it with `+scores` held.
+- vcod-server answers `score` as the scoreboard reply does: `b`, the
+  row count, `level.teamScores[1]` and `[2]` (axis, allies), the
+  `scr_<gametype>_scorelimit` dvar (else the round limit), then per client
+  in `SortRanks`' order its number, score, ping (-1 connecting), deaths,
+  status icon, kills, assists (`Cod4Level::scoreboard`). INFERRED, the
+  rule. `cod4::combat_ab::the_score_command_answers_as_retail` replays the
+  kill pair, sends `score` at the score capture's twelve times, and every
+  reply matches retail's word for word but the pings, and the second,
+  which the score run asked before its kill and the kill capture's timing
+  puts after. VERIFIED (the gate).
+
+### 7.1 Scrolling, the scroll bar and the ping graph
+
+- The headers share the first banner's line while the board is at its
+  top: `CG_DrawScoreboard_ScoresList` (`iw3mp.exe` 0x4496d0) compares
+  `cg.scoresTop` (0x79e620) with 1 at 0x449739 and, at 1, drops the `y`
+  `CG_DrawScoreboard_ListColumnHeaders` (0x447f40) returns (`fstp st(0)`
+  at 0x4497c3); scrolled, the list starts below them (0x4497b1 keeps it).
+  VERIFIED (the code). vcod used to start the list below the headers
+  always.
+- Every banner and row is a line: the board's per-line check
+  counts and skips the lines above `scoresTop`, and the first that would
+  end past the backdrop's foot (its top + 435 - 20) sets
+  `cg.scoresOffBottom` (0x79e624, cleared at 0x4496ec) and stops the
+  board; the last line drawn is `cg.scoresBottom` (0x79e628, stored at
+  0x4498ed). The total is the rows plus a banner for each team with
+  players (0x449ae9..0x449b1b). VERIFIED (the code); the per-line rule
+  INFERRED.
+- `CG_DrawScrollbar` (0x4491d0, called at 0x4498f3) draws while
+  `scoresTop` is past 1 or the board ran off the bottom: a `black` bar 8
+  wide at half alpha right of the list (x the backdrop's left + 9 + the
+  list's width times `cg_scoreboardPingWidth` + 1, then + 12), from 35
+  below the headers' line to the foot, a `white` thumb inside it at a
+  quarter alpha spanning `scoresTop..scoresBottom` of the total, and 26
+  past the list `hudscoreboardscroll_uparrow` with `_upkey` 18 under it
+  (scrolled) and `_downarrow` at the foot with `_downkey` 18 over it (off
+  the bottom), each 16 square; the names at 0x6cd258..0x6cd2b0, pushed at
+  0x44944f and 0x449582. VERIFIED (the strings and pushes); the geometry
+  INFERRED.
+- The keys: `Scoreboard_HandleInput` (0x44a2c0) takes 163 (PGDN), 190
+  (KP_PGDN) and 205 (MWHEELDOWN) down, 164 (PGUP), 184 (KP_PGUP) and 206
+  (MWHEELUP) up, through its index table at 0x44a320 (0 down, 1 up, 2
+  not the board's): up subtracts `cg_scoreboardScrollStep` from a
+  `scoresTop` past 1, no lower than 1 (0x44a2d8); down (0x449ae0) adds it
+  while off the bottom, no further than the total. VERIFIED (the code and
+  the table). The key then reaches no bind while `+scores` is held
+  (`CL_KeyEvent`), INFERRED. `cg_scoreboardScrollStep` is an
+  int, 3, 1 to 8 (registered at 0x449cea, pointer 0x8c9da4). VERIFIED.
+- A board opened with `scoresTop` at 0 or less (`+scores` and
+  `-scores` set it to -1, as a first `b` does) opens on our own row:
+  the draw puts the top half a screen above it
+  when it sits past the lines a screen holds, else at 1; a spectator's
+  board opens at 1. INFERRED.
+- `cg_scoreboardPingGraph` (bool, 0, pointer 0x8c9dc8, read at
+  0x44902a) adds `CG_DrawClientPing` (0x4487b0) right of a row's columns:
+  a `white` backing in `cg_ScoresPing_BgColor` (0x6cd1a4), then
+  `cg_ScoresPing_MaxBars` (4, 1..10: 0x449b49..0x449b84) less the ping
+  over `cg_ScoresPing_Interval` (100, 1..500: 0x449b91..0x449bcc) bars, at
+  least one, each `h * cg_scoreboardPingHeight * bar / maxBars` tall,
+  coloured from `cg_ScoresPing_HighColor` to `_MedColor` below half the
+  bars and `_MedColor` to `_LowColor` above (the names read at 0x44893a,
+  0x448965, 0x4489c7 by the compare at 0x448932). VERIFIED (the code and
+  limits). The colours' defaults are 0.8 0 0 1, 0.8 0.8 0 1, 0 0.75 0 1
+  and the backing 0.25 0.25 0.25 0.5: the `fld` constants 0.8
+  (0x6cdd4c), 0.75 (0x6bdf74), 0.25 (0x70b2b4) and 0.5 (0x6be648),
+  `fld1` and `fldz`, stored ahead of each `Dvar_RegisterColor`
+  (0x56c660) call at 0x449c01..0x449ca2. VERIFIED.
+- The cgame registers all of them (`Dvar_RegisterNew` 0x56c350: the type
+  is the last push, the flags the one before): `cg_scoreboardPingGraph` a bool, flags 0,
+  default 0 (`mov BYTE PTR [esp+0x20],0x0` at 0x44a079, the call at
+  0x44a0a3); `cg_ScoresPing_MaxBars` and `_Interval` ints and the four
+  colours archived (flags 1). VERIFIED. So a bare
+  `cg_scoreboardPingGraph 1` at the console sets it (`Dvar_Command`).
+  vcod's shell had not registered the name, so the line went to the
+  server as an unknown command and the board never drew the bars; the
+  CoD4 shell now registers these seven
+  (`Shell::register_cod4_options`).
+- `cg_scoreboardPingText` (bool, flags 0, default 1, 0x44a05f, pointer
+  0x8c9de0) picks the column table: 1 the nine columns at 0x6be490, 0 the
+  eight at 0x6be410 without the ping (0x448b82, the headers at 0x447fa1).
+  VERIFIED (the code). vcod draws the ping column always and does not
+  register the dvar.
+- The talking column is drawn: `voice_on` (0x6ccf08) or `voice_off`
+  (0x6cd234), loaded at 0x448edd and 0x448ec9 (cod4-voice.md).
+  VERIFIED (the strings and pushes).
+- vcod: `cod4_scoreboard::layout` and `Cod4Hud::scoreboard_key`. Gate:
+  `play::cod4::tests::cod4_live_a_long_board_scrolls_by_the_wheel`
+  (vcod-server's war with 20 bots: the board opens with the headers on
+  our banner's line and the down arrow, a wheel notch scrolls three lines,
+  one back returns to the same board, and the ping graph adds its bars).
+
+## 8. Key names in hudelem text
+
+- `ReplaceDirective` is `iw3mp.exe` 0x4380d0: it finds `[{` (0x6c8d14)
+  and then `}]` (0x6c8d18) with `strstr` (0x438109, 0x438128), and
+  returns 0 when either is missing or the directive between them is
+  empty (0x438117, 0x438142), so the rest of the text is left as it is.
+  VERIFIED (the branches). The binding replaces the whole `[{...}]`, and the search
+  goes on past it. INFERRED (the length arithmetic at 0x4381a7).
+- The directive parse is 0x438040: the binding text of
+  `GetKeyBindingLocalizedString` (0x552460), else `FAKE_INTRO_SECONDS`
+  (0x6c8d00) for the intro, else `KEY_UNBOUND` (0x6c7f0c) printed through
+  `"%s"` (0x6c5ecc), with no `(directive)` after it.
+  VERIFIED (the calls and pushes at 0x438056..0x4380bd). Two keys read
+  `<key> KEY_OR <key>` (`"%s %s %s"` at 0x6ebec4, `KEY_OR` 0x6ebebc).
+  VERIFIED. Each key name goes through its `KEY_*` string when one is
+  there. INFERRED (`Key_KeynumToString`'s localized table).
+- vcod runs it on a hudelem's text and label (`hud::replace_directives`,
+  vcod's binds through `Shell::key_text`). The kill capture's killcam line
+  reads `Press^3 F ^7to respawn` with the default binds. VERIFIED (the gate
+  `cod4_hud::tests::kill_capture_names_the_activate_key`).
+
+## 9. The weapon HUD's owner draws
+
+- The `weaponinfo` menu (`common_mp`), right and bottom aligned, holds
+  `clipGraphic` (owner draw 117, at -34 -10), `ammoStock` (119, -34 -2,
+  font 6, scale 0.375, style 3, alpha 0.75), `offhandFragIcon` (103,
+  -40 -41, 24 square), `offhandSmokeIcon` (104, -70 -41),
+  `offHandSmokeAmmo` (106, -49 -16), `offHandFragAmmo` (105, -18 -16) and
+  `weapname` (81, -44 -16). VERIFIED (zone walk; owner draw at item byte
+  64, font 192, scale 208, style 212, colour 88).
+- The `stance` menu's one item (owner draw 20) sits at -1000 -1000: the
+  stock HUD draws no stance icon on screen. VERIFIED (zone). vcod draws
+  none.
+- What each draws, INFERRED: 119 the reserve as `"%3i"`; 81 the
+  weapon's localized `displayName` (and `/ modeName`) ending 28 left of
+  the rect's right edge; 103 and 104 the `hudIcon` of the first held
+  weapon of offhand class 1 (frag), or of class 2 (smoke) or 3 (flash) by
+  `ps.offhandSecondary`, the first with rounds else the first held; 105
+  and 106 the summed clips of that class as `"%i"`, red-orange (0.89 0.18
+  0.01) at 0. None draws for a spectator, a dead player, one on a turret
+  (`eFlags` 0x20000) or with `weapFlags` 0x80. `hud_fade_ammodisplay` and
+  `hud_fade_offhand` default to 0 (the `fldz` before each registration,
+  0x44074e and 0x4408b6), so neither fades. INFERRED (instruction order).
+- The `WeaponDef` fields: `offhandClass` at +324, `ammoName` +804,
+  `clipName` +812 (the walk's string slots, `assets/weapon.rs`). The
+  string slots are VERIFIED (they load where 1.7 puts them); +324 is
+  INFERRED from the struct order, which the walk's other slots
+  match (`impactType` +312, `viewFlashEffect` +332), and the frag reads
+  class 1. VERIFIED (`hud_assets` test).
+- Ammo slots. A weapon's `ammo` and `ammoclip` slots are assigned in
+  weapon list order, a weapon sharing the slot of the first earlier one
+  with the same ammo (clip) name, slot 0 the default weapon's
+  (`BG_SetupAmmoIndexes`). The kill capture's target bears it out
+  for every weapon it holds: `m16_gl_mp` (27) reads ammo slot 4 (60) and
+  clip 27 (30), `beretta_mp` (11) ammo 9 (30) and clip 11 (15),
+  `gl_m16_mp` ammo 5 and clip 28, `frag_grenade_mp` clip 40 and
+  `concussion_grenade_mp` clip 43, one each. VERIFIED
+  (`hud::ammo_slots` against the capture's playerstate).
+- The clip graphic (117) draws the clip, not a count: the draw,
+  by the weapon's `ammoCounterClip` (`WeaponDef` +796) lays `clipSize`
+  (+824) pictures leftward of the item's corner, the rounds past the
+  clip's count in grey 0.3. Magazine (1): `ammo_counter_bullet` 4 by 8,
+  4 apart, from 4 left; short magazine (2): `ammo_counter_riflebullet`
+  32 by 8, 40 apart, from 32 left; shotgun (3):
+  `ammo_counter_shotgunshell` 16 by 8, 20 apart; rocket (4):
+  `ammo_counter_rocket` 64 by 16, 72 apart; alt weapon (6) the alt
+  weapon's. The sizes are physical pixels (`CL_DrawStretchPicPhysical`),
+  each of kinds 1 to 4 vertically centred on the corner. INFERRED.
+  The two offsets follow the struct order from the verified +804 and +812,
+  and read 1 and 30 for `m16_gl_mp`, 2 and 5 for `m40a3_mp`, 3 and 7 for
+  `winchester1200_mp`, 4 and 1 for `rpg_mp`, 5 and 100 for `m60e4_mp`,
+  6 for `gl_m16_mp`; the five materials are in the zones. VERIFIED (the
+  test `hud_assets`).
+- The belt fed clip (5) is a serpentine of 20-round rows, not one
+  column: `iw3mp.exe` 0x4228d0 (kind 5's arm of the switch at 0x422a58,
+  table 0x422afc) draws `ammo_counter_beltbullet` (material 0x84f2c0) 8
+  by 4 (0x729c78, 0x729c7c) for each of `clipSize` rounds, starting
+  `clipSize / 20` (the `0x66666667` divide at 0x4228f4) times 4 * 0.25
+  below the corner with a step of 8 (0x729c80). At every round whose
+  index is a multiple of 20 (the divide at 0x422986) the step flips sign
+  (`fmul` by -1.0 at 0x4229a6), the row climbs 2 (0x729c84, -2.0) and x
+  takes the new step; after each draw x takes the step again. So round
+  `i` sits in row `i / 20`, `2 * (i / 20)` above the first row, the even
+  rows running leftward from 8 left of the corner (`x - 8 * (i % 20 +
+  1)`), the odd ones back rightward from 160 left of it (`x - 8 * (20 -
+  i % 20)`); `m60e4_mp`'s 100 rounds make five rows, the first 3 below
+  the corner. Not centred: the first row's top is the corner plus
+  `clipSize / 20` less 2. VERIFIED (disassembly).
+- vcod draws kinds 1 to 5; an alt weapon's clip (the walk keeps no
+  `altWeapon`) is not drawn. The low-clip flash is section 15. Before,
+  vcod drew the clip as a count, which sat under the frag icon, and
+  then the belt as one column of `clipSize` links 2 apart.
+- The gate `cod4_hud::tests::kill_capture_draws_the_targets_weapon_info`
+  reads ` 60`, `M16A4`, the frag and stun grenade icons and `1`, `1`,
+  and the clip as the magazine's 30 bullets touching none of the other
+  pieces at 1280x960.
+- A spectator following a player draws neither the ammo counter nor the
+  minimap. `weaponinfo`'s `visible when` ends `&& ( !
+  spectatingclient() )` and `compass_old`'s the same, op 0x49 (VERIFIED,
+  menu_dump over `common_mp`), and 1.7's operator runner (0x53e860) takes op 0x49 through its
+  switch at 0x53e8b8 (table 0x53f46c) to 0x53f091, which reads 1 when the
+  predicted playerstate's `otherFlags` (byte 0x794488, the playerstate at
+  0x794474 whose `clientNum` 0x794550 the event code compares) has bit 2
+  (VERIFIED, the disassembly). A follower's playerstate carries
+  `otherFlags` 0xa on retail (cod4-gsc.md 7, VERIFIED live). So vcod's
+  hidden compass and ammo while following match 1.7; the 2026-10-26
+  playtest's note that 1.7 shows them is not what the binary does, and a
+  look at a retail client following someone is pending.
+
+## 10. The compass's pointers
+
+- `compass_old`'s `compassfriendlies` (owner draw 158), `compassenemies`
+  (170) and `compasspointers` (152, background `objective_line`) share
+  the map's rect (6 18 102 102). VERIFIED (zone).
+- 1.7's defaults, read off the registrations in instruction order
+  (INFERRED): `compassSize` 1 (`fld1` at 0x4253bd),
+  `compassFriendlyWidth` and `compassFriendlyHeight` 18.75 (0x6c6884),
+  `compassObjectiveWidth` and `Height` 20 (0x6df498),
+  `compassObjectiveMaxRange` 2048 (0x70bbf0), `compassObjectiveMinAlpha`
+  1 (0x425c4a), so an objective never fades; `compassClampIcons` and
+  `compassRotation` take `bl`, 1 since 0x425387.
+- `CG_WorldPosToCompass`, INFERRED: the offset from the eye
+  times the rect's height over `compassMaxRange`, turned so the view's
+  yaw vector points up, and with clamping on, scaled back onto the rect's
+  half size. A teammate (same team, both on 1 or 2, not us) draws
+  `compassping_friendly_mp` turned by his yaw against ours; an enemy as
+  the UAV's sweep pings him, `compassping_enemy` (section 15);
+  an objective in state 1 (active) or 4 (current) its icon, configstring
+  `2002 + icon`, at its entity or its own origin, a current one with the
+  `objective_line` crosshair through it. vcod draws a teammate as he
+  stands in the newest snapshot; retail keeps the last place it saw him
+  for 1.5 s and blinks talking and `pingPlayer` pings. INFERRED. Shot pings are 15.7.
+- `compassping_friendly_mp` names its image by reference,
+  `,compassping_green_hollow_mp`; the HUD's image map drops the comma.
+  VERIFIED (zone walk).
+- The walk capture's walker pings its idle teammate on 2365 of its 2525
+  drawn frames, always inside the compass; no enemy, no objective (war
+  sets none). VERIFIED (the gate
+  `cod4_hud::tests::walk_capture_pings_the_teammate_on_the_compass`).
+
+## 11. The killcam
+
+- `common_mp`'s `killcam` menu holds three items: two bars at 0 0 and
+  0 368, 640 by 112, aligned fullscreen (4 4), the `white` material in
+  0.49 0.05 0.03 0.5; and a title whose `textExp` is the string
+  `KILLCAM`, at 0 45 aligned centre top (2 1), font 6, scale 0.9, text
+  style 6, centred (`textAlignMode` 1, +196), white. VERIFIED (zone
+  walk; the item's `textExp` at +316, its string operand; the test
+  `hud_assets`).
+- The menu draws while `cg.inKillCam`, which `CG_TransitionKillcam`
+  sets once a snapshot's `ps.deltaTime` is non-zero and clears when it
+  is 0 again; the menu's `visible when` reads `inkillcam()`. INFERRED; the
+  menu's expression is not decoded.
+- The rest of the killcam's overlay is the gametype script's hudelems,
+  which the snapshot carries: the tenths timer (kind 9, bottom centre,
+  `0:02.6` down to `0:00.0` in the kill capture), `Press^3 F ^7to
+  respawn`, and the killer's three perks with their names at the bottom
+  right. Neither the menu nor the hudelems name the killer. VERIFIED (the
+  kill capture's playerstate, snapshots 129 to 219).
+- vcod draws the menu under everything else while `deltaTime` is set
+  (`Cod4Hud::draw_killcam`). The gate
+  `cod4_hud::tests::kill_capture_draws_the_killcam_letterbox_title_and_timer`
+  finds both bars and the title's seven letters on every killcam frame
+  and on no other, and the timer counting down. VERIFIED (the gate).
+- The obituary's kill line and centre print draw from the death for 5 s,
+  on into the killcam (`cod4_hud::tests::kill_capture_draws_the_obituary_line_and_centre_print`).
+  VERIFIED (the gate).
+
+## 12. The script menus
+
+`play::cod4_menus` (renderer-free state: the open menu, focus, cursor,
+local variables), `vcod_cod4::scriptmenu` (the layout and scripts),
+`vcod_cod4::menuexp` (the expressions) and `cod4_menu` (the drawing)
+run the server's script menus on a live join; gates:
+`the_team_and_class_menus_list_their_responses` (`hud_assets.rs`),
+`menuexp`'s and `scriptmenu`'s unit tests,
+`cod4_team_and_class_menus_draw_from_the_zones` (`cod4_menu`), the
+`cod4_menus` and `cod4_live_join` tests in the client.
+`cargo run -p vcod-cod4 --example menu_dump -- common_mp <menu>` prints
+a menu's items with their expressions and scripts.
+
+- The team and class menus are in `common_mp`: `team_marinesopfor`,
+  `changeclass`, `changeclass_offline`, `class_marines`,
+  `changeclass_marines`, `initteam_marines` and the opfor ones. VERIFIED
+  (the zone walk). `_menus.gsc` (a `common_mp` rawfile) precaches them and
+  `_globallogic.gsc` opens `team_marinesopfor` on the connect and
+  `changeclass_<team>` from `beginClassChoice`. VERIFIED (the rawfiles).
+- Each pick is an item `action` string, words in quotes split by `;`:
+  `team_marinesopfor`'s items answer `scriptMenuResponse` `axis`,
+  `allies`, `autoassign` and `spectator` (`axis` on two items, which its
+  visibility expressions place), and its `onEsc` answers `back`;
+  `changeclass`'s first five answer `assault_mp,0`, `specops_mp,0`,
+  `heavygunner_mp,0`, `demolitions_mp,0` and `sniper_mp,0`, the next five
+  `custom1,0` .. `custom5,0`. VERIFIED (the zone walk, item `action` at
+  `itemDef_s` +252). The buttons carry no `text`: their labels are
+  `textExp`s (`"@" + dvarString( g_TeamName_Allies )`, `@CLASS_CLASS1`).
+  VERIFIED (the walk).
+- `changeclass_marines` draws nothing of its own: its `onOpen` reads
+  `setLocalVarString ui_team marines ; uiScript openMenuOnDvar onlinegame
+  0 changeclass_offline ; uiScript openMenuOnDvar onlinegame 1
+  changeclass ; close self`. VERIFIED (the zone walk). The class pick
+  therefore goes back from `changeclass` (slot 15 on `war`): the capture's
+  walker sent `mr 16 15 assault_mp,0` after the server opened slot 10, and
+  spawned. VERIFIED live (cod4-netfields.md 8). vcod reads `onlinegame`
+  as 1. INFERRED (the capture's choice; the dvar's value on a retail PC
+  client was not read).
+- The server's `t <n>` opens the menu at `CS_SCRIPT_MENUS + n`, `u` and
+  `L` close it (`closeMenu`, `closeInGameMenu`). INFERRED (cod4-gsc.md 7's
+  command letters). The team pick's answer reads `u`, `L`, then
+  `t 10`; the class pick's `u`, `L`. VERIFIED live (vcod's net probe
+  against retail, below).
+- `v g_scriptMainMenu team_marinesopfor` names the menu Esc opens with
+  none up. INFERRED (`_globallogic.gsc` sets it on the connect; the Esc
+  rule is `UI_KeyEvent`'s).
+- Live: `vcod --game cod4 --net-probe 127.0.0.1:28960 --team allies
+  --class assault_mp,0` against retail `cod4_lnxded` (war, mp_crash,
+  `sv_pure 1`, the namespace of cod4-handshake.md 7) answered `mr 16 8
+  allies` on `team_marinesopfor`, `mr 16 15 assault_mp,0` on
+  `changeclass_marines`, and spawned 0.25 s later as client 1 holding
+  weapon 27, `m16_gl_mp`; a second probe with `--team spectator` stayed in
+  as a free spectator. VERIFIED live. The first runs failed in the stats
+  phase (`Received stats packet from unknown remote client` on the
+  server's console) with a random qport, and passed once the qport was
+  kept under 0x8000. VERIFIED live; that the server reads the stats
+  packet's qport as a signed short is INFERRED.
+
+### 12.1 The menu structs
+
+- `menuDef_t` is 0x11C: `window` (0x9C), `font` +156, `fullScreen` +160,
+  `itemCount` +164, `onOpen` +196, `onClose` +200, `onESC` +204, `onKey`
+  +208, `visibleExp` +212, `focusColor` +232, `disableColor` +248,
+  `rectXExp` +264, `rectYExp` +272, `items` +280. INFERRED; the walk loads 1.7's zones at these offsets
+  with every pointer resolving. VERIFIED.
+- `windowDef_t` (0x9C): `rect` +4 (x, y, w, h, `horzAlign` +20,
+  `vertAlign` +24), `group` +52, `style` +56, `border` +60, `ownerDraw`
+  +64, `borderSize` +72, `staticFlags` +76, `dynamicFlags` +80,
+  `foreColor` +88, `backColor` +104, `borderColor` +120, `background`
+  +152. INFERRED (as above). The team menu's buttons read
+  `rect` (-320, 228, 220, 22) aligned (2, 1), `dynamicFlags` 0x10004.
+  VERIFIED (the walk).
+- `itemDef_s` (0x174): `type` +180, `fontEnum` +192, `textAlignMode`
+  +196, `textalignx` +200, `textaligny` +204, `textscale` +208,
+  `textStyle` +212, `text` +224, then ten strings at +236..+272
+  (`mouseEnterText`, `mouseExitText`, `mouseEnter`, `mouseExit`,
+  `action`, `onAccept`, `onFocus`, `leaveFocus`, `dvar`, `dvarTest`),
+  `onKey` +276, `enableDvar` +280, `dvarFlags` +284, and eight
+  statements +308..+364 (`visibleExp`, `textExp`, `materialExp`,
+  `rectXExp`, `rectYExp`, `rectWExp`, `rectHExp`, `forecolorAExp`).
+  INFERRED. The team menu's `onFocus` at +260 sets
+  `ui_highlight`, the highlight bars' `visibleExp` reads it. VERIFIED
+  (the walk).
+- A statement is `numEntries` then entries of 0xC: type 0 an operator
+  (`operationEnum`), type 1 an operand (data type 0 int, 1 float, 2
+  string). The entries are the source's tokens in order, the opening
+  `(` kept and the closing one dropped. VERIFIED (the walk: every team
+  and class menu statement opens on operator 16 and has one `)` fewer
+  than it has `(`s and calls).
+
+### 12.2 Expressions
+
+- 1.7's `s_operatorPrecedence` is at `iw3mp.exe` 0x7245c0, 81 ints:
+  `NOOP` 0x7fffffff, `)` 0, `*` `/` `%` 11, `+` `-` 13, `!` 9, the four
+  comparisons 15, `==` `!=` 16, `&&` `||` 25, `(` 99, `,` 80, `&` 17,
+  `|` 18, `~` 9, the shifts 14, every function call (0x17 on) 5.
+  VERIFIED (the bytes, matched whole).
+- The evaluator is `iw3mp.exe` 0x53f640. It walks the entries in order:
+  an operand goes on the operand stack as a list of one, `(` (16) goes
+  on the operator stack at once, and any other operator first runs the
+  stacked ones the test at 0x53f5d0 lets through, then goes on. That
+  test runs the top operator while its rank is below the incoming one's
+  and is not 5 (a call waits for its `)`), or while it is the same
+  operator and 0x53f5b0 calls it non-associative, which is true of `/`,
+  `%` and `-` only. So a repeated `-` chains left to right and the rest
+  of a rank right to left (`10 - 4 + 3` is 3). Past the last entry it
+  runs every stacked operator through 0x53e860, then fails with "Error:
+  stray operands in expression" (0x6e960c) for more than one list left,
+  with nothing for none, and with "Error: More than one operand in
+  expression result" (0x6e9634) for one list of several. Both stacks
+  hold 60: "Invalid expression - too many operands" (0x6e95ac) and
+  "operators are nested too deeply" (0x6e95d4). VERIFIED (the
+  instructions). vcod has no such limits, vcod's choice. 0x53e860 pops
+  one operator and jumps on it through the table at 0x53f46c (0..0x50).
+  VERIFIED (the instructions). What its arms do is INFERRED: a `)` runs
+  the operators under it down to and including the `(` or call it
+  closes, a comma joins the top two lists, a call of one operand takes the top list's value when
+  it holds exactly one (else reads 0 and leaves the list), and a `-`
+  with no list under its operand negates it (a string leaves nothing).
+- A pair of operand types an operator has no function for reads its
+  strings as numbers (an int when `atoi` and `atof` agree); `+` with a
+  string concatenates (`%i`, `%f`); `==` of two strings ignores case;
+  `&&` and `||` of a string and a number read the string as true when
+  not empty; `/` of two ints is a float, and `/` or `%` by 0 gives 0; a
+  result is true when its int is not 0. INFERRED, not yet confirmed
+  against 1.7's operator functions. `menu_expression_values_hold`
+  (`hud_assets.rs`) pins vcod's values for every stock menu expression.
+- The stock team and class menus call `dvarInt`, `dvarBool`,
+  `dvarString`, `stat`, `team( name )`, `tableLookup`, `localVarInt`,
+  `localVarString`, `min` and `toInt`. VERIFIED (the walk). `team( name
+  )` is `TEAM_FREE`, `TEAM_AXIS`, `TEAM_ALLIES` or `TEAM_SPECTATOR`
+  (`iw3mp.exe` string 0x6ccfd4 for the last; the others INFERRED from
+  `CG_GetTeamName`). `tableLookup( table, column, value, ret )` reads
+  the last row whose column matches, any case. INFERRED (`StringTable_Lookup`). `stat()` reads the stats block the join sent
+  (`Stats::fresh`, cod4-netfields.md): a fresh profile shows
+  Demolitions and Sniper greyed (`stat(257)`, `stat(258)` 0) and no
+  custom classes (`stat(260)` 0). VERIFIED (the zone's expressions over
+  that block); that retail draws the same for a fresh profile is not
+  checked against a screenshot.
+- `gameTypeName()` (0x44), `gameType()` (0x45) and
+  `gameTypeDescription()` (0x46) take no operand: the display name of the
+  level's `g_gametype` translated, the name itself, and
+  `cg_objectiveText` localized. INFERRED (the game type name,
+  The game type objective, `CG_SetClientDvarFromServer`). The display name
+  is the first token of the rawfile `maps/mp/gametypes/<name>.txt`, which
+  `code_post_gfx_mp` carries for the six stock types (`war` reads
+  `"MPUI_WAR"`, "Team Deathmatch"), listed in its `_gametypes.txt`.
+  VERIFIED (the zone's rawfiles); that the UI reads them so is INFERRED
+  (`UI_GetGameTypesList_FastFile`). The server sends
+  `cg_objectiveText` as `v cg_objectiveText "OBJECTIVES_WAR_SCORE\x15750"`
+  on the team pick. VERIFIED (the walk and prematch captures).
+- 1.7's `g_expOperatorNames` is at `iw3mp.exe` 0x723f38: 81 string
+  pointers in `operationEnum` order, `NOOP` (0x6e99a0) to
+  `isintermission` (0x6e96e0). VERIFIED (the table). Its names fix the
+  numbers vcod reads: 0x22 `flashbanged`, 0x23 `scoped`, 0x24
+  `scoreboard_visible`, 0x25 `inkillcam`, 0x26 `player`, 0x27
+  `selecting_location`, 0x2c `menuisopen`, 0x2d..0x32 the party calls,
+  0x33 `adsjavelin`, 0x34..0x36 the Javelin lock and attack modes, 0x37
+  `secondsastime`, 0x39 `locstring`, 0x3e `timeleft`, 0x3f
+  `secondsascountdown`, 0x40 `gamemsgwndactive`, 0x47 `scoreatrank`,
+  0x48 `friendsonline`, 0x49 `spectatingclient`, 0x4a
+  `statrangeanybitsset`, 0x4b `keybinding`, 0x4c `actionslotusable`,
+  0x4d `hudfade`, 0x4e `maxrecommendedplayers`, 0x4f `acceptinginvite`,
+  0x50 `isintermission`. VERIFIED (the strings). What each returns is
+  INFERRED (not yet confirmed against 0x53e860's arms): the flags read the cgame
+  (`cg.inKillCam`, `CG_IsScoreboardDisplayed`, `pm_type ==
+  PM_INTERMISSION`, `otherFlags & 2` for `spectatingclient`);
+  `player( name )` reads `teamname`, `otherteamname`, `dead`, `clipAmmo`,
+  `nightvision`, and the player's own score row's `score`, `deaths`,
+  `kills` and `ping`, any other name 0; `team( score )` is
+  `cg.teamScores[team]`; `scoreAtRank( n )` the n-th row's score for an
+  int n from 1; `timeLeft()` `(cgs.gameEndTime - nextSnap.serverTime) /
+  1000`; `secondsAsCountdown( s )` `%2i:%02i`, `""` below 0;
+  `secondsAsTime( s )` `%id %ih %im` of the rounded minutes;
+  `statRangeAnyBitsSet( lo, hi, mask )` 1 when any stat lo..hi has a mask
+  bit; `keyBinding( cmd )` the first bound key's name (`KEY_UNBOUND`
+  with none); `actionSlotUsable( n )` the cgame's test on slots 1..4;
+  `hudFade( name )` the dpad, weapon or compass alpha (1 for
+  `scoreboard`); `locString( ... )` joins its string operands (each
+  losing its first character, the `@`) with 0x14 and puts 0x15 before
+  the others, then localizes the message; the party, Javelin, friends and
+  invite calls read 0 on a PC client.
+- `evaluate`'s census: every expression of the 288 menus the HUD zones
+  and mp_crash carry evaluates; none falls back to the list. VERIFIED
+  (`every_menu_expression_evaluates`, `hud_assets.rs`). Before these
+  calls 40 did (the scoreboard, killcam, HUD hints, end of game, victory
+  and create-a-class pages). vcod feeds the calls from the newest
+  snapshot, configstring 11 (`timeLeft()`, section 23) and the last
+  `score` reply (`Cod4Hud::menu_game`); it fades no HUD part, so
+  `hudFade()` reads 1. vcod's choice. Of those 40, the HUD menus
+  (`compass_old`, `weaponinfo`, `stance`, `killcam`, `gamemessages`) are
+  drawn by `cod4_hud`'s own code, the bars, the hints and the
+  `scoreboard` menu item by item off their expressions (section 23),
+  not by the menu runner, and the create-a-class pages and popups belong to the main
+  menu, which a CoD4 session does not have; the runner draws any of them
+  the server or a script opens.
+- Retail reads the menus' dvars from its dvar table: the server's
+  mirror (configstrings 20..275, section 2) and `v`, the `set`s and
+  `statGetInDvar`s the menus' `execNow` runs, `setDvar`. vcod keeps them
+  in one table for the menus; `onlinegame` reads 1 and `mapname` the
+  serverinfo's. VERIFIED (the team menu's `mapname` lookup in
+  `mp/mapsTable.csv` draws "Crash").
+- Under those, the client's own startup configs. `iw3mp.exe` 0x4ff130
+  queues `exec default_mp.cfg` (string 0x6e1cec) and then `exec
+  language.cfg` (0x6e1d04) through 0x4f8d90 before the player's config
+  (`exec %s`, 0x6e1d18). VERIFIED (the instructions). The localized
+  iwd's `default_mp.cfg` execs `default_mp_controls.cfg`,
+  `default_mp_gamesettings.cfg` and `server_map.cfg`, and
+  `iw_00.iwd`'s `default_mp_gamesettings.cfg` sets
+  `scr_game_spectatetype 1`. VERIFIED (the files). The team menu's
+  Spectator row is `visible when( team( name ) != "TEAM_SPECTATOR" &&
+  dvarBool( scr_game_spectatetype ) )` (`team_marinesopfor`, common_mp).
+  VERIFIED (the walk). Retail's server never sends that dvar: it is in
+  neither configstring 0 nor the mirror of `handshake-1.7.txt`, whose
+  script dvars are `scr_allies`, `scr_axis`, `scr_oldschool` and
+  `ui_*`. VERIFIED (`cod4_boot`'s capture). The scripts set it on the
+  server through `registerTweakable` (`_tweakables.gsc`), not
+  `makeDvarServerInfo`. VERIFIED (the rawfile). So a client shows the
+  row off its own config, whatever the server's spectate type, and a
+  client without those configs never shows it. INFERRED. vcod reads the
+  configs' `set`s once per zone load (`hud::startup_dvars`) and the
+  menus look them up after the mirror (`ScriptMenus::startup`).
+- So the team menu a client first sees has no Spectator row: on a first
+  connect `_globallogic::Callback_PlayerConnect` sets `pers["team"]`
+  "spectator", opens `game["menu_team"]` and sets `sessionteam`
+  "spectator" in the same frame, and the row hides on `team( name ) ==
+  "TEAM_SPECTATOR"`. Once on a team, the same menu (Change Team) shows
+  it. VERIFIED (the rawfile and the item's expression). vcod draws the
+  same; `cod4_team_menu_spectator_reads_the_startup_configs` hides the
+  row at team 3. A retail client's first menu is not captured.
+
+### 12.3 Scripts
+
+- 1.7's `commandList` is at `iw3mp.exe` 0x6b4940: 42 `{ name, handler }`
+  pairs, `fadein` (0x54c610) to `getautoupdate` (0x54dd60), with
+  `scriptmenuresponse` at 0x54dd90 and `setLocalVarInt` at 0x54da70.
+  VERIFIED (the table). A word not in it goes to `UI_RunMenuScript`,
+  which reads the next word as its name (`uiScript openMenuOnDvar`).
+  INFERRED (`Item_RunScript`). vcod runs `scriptMenuResponse`
+  (`mr` with the open menu's slot), `close`, `open`, `setFocus`,
+  `setDvar`, `exec` / `execNow` (`set`, `statGetInDvar`, `cmd`,
+  `disconnect` and `quit` only), the `setLocalVar`s, `show` / `hide`,
+  `openMenuOnDvar`(`Not`) and the `uiScript`s of 12.6 and `play` (a local
+  sound, section 23); the rest are skipped. `close self` closes the menu whose script runs, so
+  `changeclass_marines`'s closes nothing once `changeclass` is up.
+- The team menu's buttons answer without closing (the server's `u`
+  closes it); the class buttons answer, then `close self`. VERIFIED (the
+  walk).
+
+### 12.4 Drawing and input
+
+- An item draws when `WINDOW_VISIBLE` (`dynamicFlags` 4) is set and its
+  `visibleExp` is true; style 1 fills the rect with `backColor`, style 3
+  draws the material (`materialExp`, else `background`) in `foreColor`
+  when `dynamicFlags` 0x10000 is set and white otherwise; then a text or
+  button item's text: `text`, else `textExp`, else the dvar, `@`-keys
+  localized, at `textalignx`/`y` off the rect's corner, moved by
+  `textAlignMode & 3` (1 centre, 2 right, by `rect.w` less the text's
+  width) and `& 0xC` (4 a line down, 8 centred `(h + textHeight) / 2`,
+  12 at the bottom), the baseline there. Text style 3 and 6 shadow. The
+  focused item's text pulses between `focusColor` and 0.8 of it on
+  `sin(realTime / 75)`. INFERRED (`Window_Paint`,
+  `Item_SetTextExtents`, `Item_TextColor`).
+- A yes/no, multi, `dvarEnumList` or bind row draws its value in place of
+  its text, by the same rules; its label is a separate item. INFERRED
+  (`Item_YesNo_Paint`, `Item_Multi_Paint`,
+  `Item_DvarEnum_Paint`, `Item_Bind_Paint`). A text field (types 4, 9
+  numeric, 16 file name, 17 decimal, 18 upper case) draws its own text
+  (Start New Server's are `" "`), then the dvar's value (a decimal
+  field's to two places) at that text rect's right plus 8, or plus 0 when
+  `text` is empty; an aligned field keeps the value's width beside its
+  text. INFERRED (`Item_TextField_Paint`, `Item_IsTextField`,
+  `Item_SetTextExtents`). Typed keys: a numeric field takes digits, a
+  decimal one digits and `.`, a file name field letters, digits, `_` and
+  `-`, an upper case field shouts, and none takes `@`. INFERRED
+  (`Item_TextField_HandleKey`).
+- A front-end owner draw (`UI_OwnerDraw`, `iw3mp.exe` 0x544820) with no
+  text draws its value at the rect's corner plus `textalignx` and
+  `textaligny`, the baseline there, whatever the `textAlignMode`
+  (0x5447f2..0x54480a add `text_x`, `text_y` to `x`, `y`, then switch on
+  `ownerDraw - 205`; `UI_DrawNetGameType` 0x543830 draws at the rect's
+  `x`, `y`). With text, `Item_OwnerDraw_Paint` draws the text first and
+  calls it with `x` the text rect's right plus 8.0 (the double at
+  0x70ae88, call at 0x5539ef) and `text_x` 0; with none, with
+  `textalignx` (`+0xc8`, call at 0x553ae3). VERIFIED (the disassembly).
+  Start New Server's game type (owner draw 245, `textalignx` 240,
+  `textaligny` 20, `textAlignMode` 8) so sits on its Game Mode row, not
+  centred a row lower. VERIFIED (vcod's layout of the zone's item).
+- The map preview (owner draw 254, `UI_DrawMapPreview`) fills its rect
+  with the level shot of `ui_currentNetMap`'s map, `loadscreen_<map>`
+  (`UI_LoadArenas` formats `loadscreen_%s`, 0x6e9b3c, at 0x5412b4, into
+  the map entry's image name). VERIFIED (the disassembly); the draw
+  INFERRED (`UI_DrawMapPreview`, `UI_GetLevelShot`). The test pins the team
+  menu's rows: "OpFor", "Marines", "Auto-Assign" right-aligned 10 in
+  from x 220 on a 640x480 window, baselines 224.5 + 24 a row.
+  VERIFIED (vcod's layout of the zone's items; retail's pixels not
+  compared).
+- The cursor moves by the raw mouse counts while the pointer is
+  captured, by its position otherwise, and draws `ui_cursor` 32 grid
+  units square, full screen, centred on it. INFERRED (`UI_Refresh`; `ui_cursor` is a 1.7 string at 0x6ea9e0, VERIFIED).
+- Focus: the topmost visible item under the cursor that is not a
+  decoration (`staticFlags` 0x100000) nor plain text takes the focus,
+  the old one's `leaveFocus` running before its `onFocus`; the items the
+  cursor enters and leaves run `mouseEnter` and `mouseExit`; a focus the
+  cursor left with nothing taking it clears. Tab, down and right step to
+  the next such item, up and left to the one before, wrapping; Enter
+  and MOUSE1 on the focused item run its `action`; Esc runs `onEsc`; a
+  character runs the menu's `execKey` for it (the stock team and class
+  menus have none). INFERRED (`Menu_HandleMouseMove`,
+  `Item_SetFocus`, `Menu_HandleKey`). vcod leaves plain text items
+  (type 0) out of the focus.
+- The mouse, its buttons and the wheel stay off the view and the binds
+  while a drawn menu is up; the keys go to the console line with the
+  console down, as before.
+
+### 12.5 Esc in a game
+
+- After the team pick the server sets `v g_scriptMainMenu
+  "class_marines"` (`"class_opfor"` for axis); before it,
+  `team_marinesopfor`. VERIFIED (the walk and prematch captures;
+  `_globallogic.gsc` sets `game["menu_class_" + team]`). Esc with no menu
+  up opens that menu (section 12). INFERRED (`UI_KeyEvent`).
+- `class_marines` draws nothing: its `onOpen` reads `setLocalVarString
+  ui_team marines ; open class ; close self`. VERIFIED (the zone walk).
+  `class` is the in-game menu: the game type's name (`gameTypeName()`,
+  scale 0.5833) and objective (`gameTypeDescription()`) over rows
+  Choose Class (`scriptMenuResponse changeclass_marines`, shown while
+  `ui_team` is set and `scr_oldschool` is not 1), Change Team
+  (`changeteam`), Controls (`close self ; open main_controls`), Options
+  (`open main_options`), Call Vote (`open callvote`, greyed text while
+  `ui_allowvote` is 0), Mute Players (`open muteplayer`) and Leave Game
+  (`open popup_endgame` with `sv_running` 1, `popup_leavegame`
+  otherwise); its `onEsc` answers `back`. VERIFIED (the zone walk). The
+  answers go back from `class`'s own slot, 14 on mp_crash `war`
+  (configstring 1984). VERIFIED (the captures' configstrings).
+- `popup_leavegame`'s Yes runs `close self ; exec disconnect`. VERIFIED
+  (the walk). vcod hands `disconnect` (and `quit`) from a menu's `exec`
+  to its console; with no CoD4 front end a CoD4 session's `disconnect`
+  quits the client, which leaves the server. `main_controls`,
+  `main_options`, `callvote` and `muteplayer` open and draw from the
+  zones; section 12.6 runs their rows.
+- Gate: `cod4_esc_in_game_draws_the_class_menu` (`cod4_menu`).
+
+### 12.6 Controls, Options, Call Vote, Mute Players
+
+The `class` menu's other rows open pages of `common_mp`, whose controls
+`play::cod4_menus::controls` runs on vcod's console. Gates:
+`the_in_game_pages_carry_their_controls` (`hud_assets.rs`, the zone's
+items) and `cod4_controls_rebind_through_the_console`,
+`cod4_options_set_vcods_cvars`, `cod4_call_vote_sends_callvote`,
+`cod4_mute_players_toggles_and_filters_chat` (`cod4_menu`, clicks on the
+drawn rows of the zone's menus).
+
+- The pages: `main_controls` lists Look, Move, Combat, Interact and
+  Multiplayer Controls (`options_look`, `options_move`, `options_shoot`,
+  `options_misc`, `controls_multi`), each action closing every page and
+  opening its own; `main_options` lists `options_graphics`,
+  `options_graphics_texture`, `options_sound`, `options_voice`,
+  `options_game` and `options_multi`. Call Vote opens `callvote`, whose
+  rows open `changemap`, `changegametype` and `kickplayer`; Mute
+  Players opens `muteplayer`. Each page's `onEsc` closes it (the vote
+  and mute pages then `open class`). VERIFIED (the zone walk).
+- Item kinds on these pages: 47 bind rows (type 14), 18 multi (12), 16
+  yes/no (11), 5 sliders (10), 2 dvar enums (13), one edit field (4),
+  four list boxes (6) and the owner draws 250 (the key bind status line,
+  six pages) and 245 (`changegametype`'s game type). A control's
+  `typeData` (+300) is an `editFieldDef_s` (0x20: `minVal`, `maxVal`,
+  `defVal`, `range`, `maxChars`, `maxCharsGotoNext`, `maxPaintChars`,
+  `paintOffset`) for the slider, yes/no, bind and edit kinds, a
+  `multiDef_s` (0x188: 32 label strings, 32 value strings, 32 floats,
+  `count` +384, `strDef` +388), the enum dvar's name, or a
+  `listBoxDef_s` (0x154: `elementWidth` +16, `elementHeight` +20,
+  `numColumns` +28, `columnInfo` +32, 16 of `pos`, `width`, `maxChars`,
+  `alignment`, `doubleClick` +288). INFERRED; the zone's values read sanely at those offsets:
+  sensitivity 1..30 default 5, `r_gamma` 0.5..3, `snd_volume` 0..1
+  default 0.8, antialiasing labels Off/2x/4x over 1, 2, 4. VERIFIED (the
+  walk). A list box's feeder is `itemDef_s.special` (+292): 4 for the
+  map lists, 7 for `kickplayer`, 20 for `playermutelist`. VERIFIED (the
+  walk); what each feeds is INFERRED (`UI_FeederCount`).
+- Bind rows carry their command in `dvar`: `options_look` binds
+  `+leanleft`, `+leanright`, `+lookup`, `+lookdown`, `+left`, `+right`,
+  `+mlook`, `centerview`; `options_shoot` `+toggleads_throw`,
+  `+speed_throw`, `+breath_sprint`, `+actionslot 1..4` among its rows.
+  VERIFIED (the walk). A row shows the first two keys bound to its
+  command, `KEY_*` names joined by `KEY_OR` (0x6ebebc), else
+  `KEY_UNBOUND` (0x6c7f0c), as `GetKeyBindingLocalizedString` (0x552460)
+  does. VERIFIED (the strings). Enter or a click waits for a key: the row
+  reads `@MENU_BIND_KEY_PENDING` (0x6ebed0) and the bind status line,
+  `show`n by the row's `onFocus`, `EXE_KEYWAIT` (0x6eab1c) rather than
+  `EXE_KEYCHANGE` (0x6eab28). VERIFIED (the strings and the zone's
+  scripts). The next key binds the row's command; Escape cancels;
+  Backspace, or a command already holding two keys, unbinds both first;
+  a command with one key keeps it and shows both (`V or B`): the
+  rebind adds a key, a third press of the row replaces the pair.
+  VERIFIED (`Item_Bind_HandleKey`, `iw3mp.exe` 0x552970..0x5529eb: the
+  `0x7f` and `== 2` tests ahead of the two `Key_SetBinding(.., "")`
+  calls; `Key_GetCommandAssignment`, 0x4678e0, counts up to two keys in
+  key order). vcod binds through its
+  console (`bind`, `unbind`), so the config keeps them; its CoD4 cmd acts
+  on the commands `play::cod4_input` knows, the rows' `+toggleads_throw`
+  (the press flips the sight toggle, the hold is the throw bit 0x80000),
+  `+speed_throw`, `+breath_sprint` (0x2000 and the sprint 0x2 held),
+  `+actionslot 1..4` and `+talk` (voice only; nothing in vcod) among
+  them. INFERRED (`IN_BreathSprint_Down`, `IN_TalkDown`).
+  `+toggleads_throw` (0x462d90) flips `usingAds` (0xc5f930) and presses
+  the throw key; `-toggleads_throw` (0x462d80) only lets the throw key
+  go; `CL_CmdButtons` sets 0x800 while the `+speed` key's state differs
+  from `usingAds` (0x463248..0x46326d). So a held MOUSE2 sights on the
+  press and stays sighted on the release, as a tap does: a hold-to-sight
+  is the stock `+speed_throw` row (`MENU_AIM_DOWN_THE_SIGHT`), the toggle
+  `+toggleads_throw` (`MENU_TOGGLE_AIM_DOWN_THE_SIGHT`), which
+  `default_mp_controls.cfg` binds to MOUSE2. VERIFIED (the code, the
+  rawfile). A saved config holds every bind after its `unbindall`; vcod
+  puts its CoD4 stock keys on free keys only on a start that read no
+  config, so a key the bind menu cleared stays clear
+  (`Shell::use_cod4_defaults`). vcod's rule. `chatmodepublic` and
+  `chatmodeteam` open the chat field (`Con_ChatModePublic_f`,
+  `Con_ChatModeTeam_f`): `EXE_SAY: ` or `EXE_SAYTEAM: ` and
+  the line, white, font 0 at 16 over 48, 24 under `cg_hudSayPosition`
+  (5, 180); Enter sends `say <line>` or `say_team <line>`, Escape drops
+  it. INFERRED (`Con_DrawSay`, `CL_KeyEvent`'s chat arm). vcod
+  binds them as `default_mp_controls.cfg` does (SHIFT, MOUSE2, T, Y, Z).
+  VERIFIED (the rawfile, `localized_code_post_gfx_mp`).
+- Yes/no rows toggle `atoi(value) == 0` and show `EXE_YES` / `EXE_NO`
+  (0x6ebeac, 0x6ebeb4); multi rows step to the next entry (a click,
+  Enter, the right arrow) or the one before (the left arrow), `%g` of
+  the float or the string; the arrows step a slider 5% of its range,
+  clamped, and a click puts it at the cursor over the 84 units from 6 in
+  of its 96-unit bar (`ui_slider2`, 0x6ea9c4; thumb `ui_sliderbutt_1`,
+  0x6ea9d0). VERIFIED (the strings); the rules are INFERRED (`Item_YesNo_HandleKey`, `Item_Multi_HandleKey`,
+  `Item_Slider_HandleKey`, `Scroll_Slider_SetThumbPos`). Invert Mouse is
+  a yes/no on `ui_mousePitch` whose action runs `uiScript update
+  ui_mousePitch`. VERIFIED (the walk). That sets `m_pitch` to -0.022 or
+  0.022. INFERRED (`UI_Update`).
+- vcod wires `sensitivity`, `cl_freelook`, `m_filter`, `m_pitch`,
+  `r_gamma`, `fx_marks` (its `cg_marks`), `cg_drawCrosshair` (the
+  crosshair, `cod4_crosshair`), `sm_enable` (the sun shadows),
+  `cl_allowDownload`, `name` (through `ui_name`) and `snd_volume` (its
+  master volume, `mss_volume` on a CoD4 install) to its own cvars; the
+  `dvarEnumList` rows (Video Mode, Refresh Rate) step through `r_mode`'s
+  and `r_displayRefresh`'s domains, the adapter's modes, which vcod's
+  window has none of, so they are greyed too; every other option's dvar
+  (the `ui_r_*` graphics, glow, depth of field, texture
+  settings, sound quality, voice, language, PunkBuster) has no vcod
+  equivalent: the row draws in the menu's `disableColor`, takes no
+  focus, and is logged once. vcod's choice. `ui_multiplayer` reads 1, as
+  1.7 registers it, which picks the pages' multiplayer rows
+  (cod4-front-end.md 9).
+- The pages' rows that change with the state are pairs of items under
+  opposite `visible when`s; none of `ui_mp`'s or `common_mp`'s Options
+  pages carries a `dvarTest`. VERIFIED (menu_dump). Graphics, Texture
+  Settings, Sound and Reset to Defaults have a copy at 0.5 grey with no
+  action shown while `dvarBool(sv_running) && !dvarBool(ui_allow_graphic_change)`,
+  `arcademode` 0; `ui_allow_graphic_change` and `arcademode` are not in
+  `iw3mp.exe`'s strings, so neither is registered and both read 0.
+  VERIFIED (the walk, the strings). So 1.7 greys them on a listen server
+  and never on a client of a remote one. vcod runs no server in the
+  client; its menus read `sv_running` 1 while a joined Dedicated No
+  server runs (`ScriptMenus::listen_server`, cod4-front-end.md 10.2) and
+  0 otherwise. `options_game`'s
+  language row is `visible when dvarBool(developer)`, which vcod reads off
+  the console; `options_graphics_texture`'s picmip rows follow
+  `ui_r_picmip_manual`. VERIFIED (the walk). Gate:
+  `cod4_menu::tests::cod4_options_rows_follow_sv_running_and_developer`.
+- Call Vote: Restart Map and Next Map run `exec "cmd callvote
+  map_restart"` and `"cmd callvote map_rotate"`. VERIFIED (the walk). The
+  map lists show `mp/cod2maps.arena` (a `code_post_gfx_mp` rawfile; its
+  name at 0x6e9b1c): 21 maps, `mp_convoy` first, each with a `longname`
+  key and the game types it runs. VERIFIED (the rawfile). The game types
+  are `_gametypes.txt`'s `dm dom sd sab war koth`. VERIFIED (the
+  rawfile). A map list holds the maps of `ui_netGameType`'s type, a pick
+  sets `ui_currentNetMap`; `changegametype`'s owner draw 245 steps
+  `ui_netGameType` on a click or Enter. INFERRED (`UI_MapCountByGameType`, `UI_FeederSelection`,
+  `UI_NetGameType_HandleKey`). The Vote buttons run `uiScript voteMap`,
+  `voteTypeMap` and `voteTempBan`. VERIFIED (the walk). They send
+  `callvote map %s` (0x6eaffc), `callvote typemap %s %s` (0x6eafdc) and
+  `callvote tempBanUser "%s"` (0x6eb1f8); `voteGame` and `voteKick`
+  send `callvote g_gametype %s` (0x6eb01c) and `callvote kick "%s"`
+  (0x6eb1d8). VERIFIED (the strings); which handler sends which is
+  INFERRED (each name sitting just before its format).
+  vcod sends them as client commands; vcod-server's CoD4 game runs
+  them as 1.7's `Cmd_CallVote_f` does (cod4-map-cycle.md 4).
+- Mute Players lists the players by number with their cleaned names,
+  our own among them: `UI_BuildPlayerList` (0x543e30) takes every slot
+  up to `sv_maxclients` that `CL_GetClientName` (0x475fb0, the newest
+  snapshot's client states) names, and `CL_MutePlayer` (0x472940,
+  called at 0x546cbf) has no test of the own slot, so 1.7 lets a player
+  mute himself. VERIFIED (the code). vcod reads them off the newest
+  snapshot's client states as well. Toggle Mute
+  (`uiScript mutePlayer`, 0x6eb2ac) flips the pick and sends `muteplayer
+  %i` or `unmuteplayer %i` (0x6d24e8, 0x6d24f8); the list's first column
+  reads `MP_MUTED` (0x6eb42c) for a muted player. VERIFIED (the
+  strings); the toggle is INFERRED (`CL_MutePlayer`). Retail's
+  mute holds back the muted player's voice only. INFERRED (`CL_IsPlayerMuted`'s callers). vcod also drops his chat lines (a line
+  whose speaker ends with a muted player's cleaned name): vcod's
+  choice.
+- List boxes draw rows of `elementHeight` from 1 in, the picked one
+  filled in `outlineColor` (window +136), each column's text at its
+  `pos`, cut to `maxChars`, until a row no longer fits; a click picks
+  the row under the cursor and the wheel scrolls the focused list.
+  INFERRED (`Item_ListBox_Paint`). A list without
+  `noScrollBars` draws its scroll bar 16 wide, 17 in from its right: the
+  up arrow, the bar, the down arrow and the thumb, 17 down plus the first
+  row's share of the track (`Item_ListBox_ThumbPosition`). A click on an
+  arrow steps a row, on the track a page, and the thumb holds the mouse:
+  the cursor drags it, its centre over the track, until MOUSE1 goes up,
+  and so does a slider's thumb. A second click on the same row inside
+  300 ms runs the list's `doubleClick`. INFERRED (`Item_ListBox_OverLB`, `Item_StartCapture`, `Scroll_ListBox_ThumbFunc`,
+  `Item_ListBox_HandleKey`). The bar's materials are `ui_scrollbar`,
+  `ui_scrollbar_arrow_up_a`, `ui_scrollbar_arrow_dwn_a` and
+  `ui_scrollbar_thumb`. VERIFIED (`iw3mp.exe` strings 0x6ea938..0x6ea9b0;
+  which slot each fills is INFERRED from the names). Mute Players'
+  `playermutelist` has `doubleClick` `play mouse_click ; uiScript
+  mutePlayer`; the map and player lists have none. VERIFIED (the walk).
+  vcod's last first row is the row count less the rows shown, where
+  retail's `Item_ListBox_MaxScroll` allows one more; and a menu opening
+  forgets the last click. vcod's choice. Gate:
+  `cod4_list_box_scrolls_drags_and_double_clicks` (`cod4_menu`).
+
+## 13. The prematch
+
+`play-1.7-prematch.txt`: a probe joining retail's `war` on mp_crash 3 s
+after the map command, at level time 6600, inside the prematch (recipe in
+its header). VERIFIED live.
+
+- `matchStartTimer` (`_globallogic.gsc`) makes two server elements: a
+  text at (0, -20) aligned (5, 18), font 3 (objective) scale 1.5,
+  `MP_WAITING_FOR_TEAMS` ("Waiting for teams to be ready..."), and a type
+  7 down timer at (0, 0), font 3 scale 1.4, `time` 15000; both sort 1001
+  and flags 4 (`hideWhenInMenu`). Once `level.prematchPeriod` (15 s,
+  `scr_game_playerwaittime`) runs out, the text turns to
+  `MP_MATCH_STARTING_IN` ("Match begins in:") and the timer's `time` to
+  19800 (`scr_game_matchstarttime` 5 s on); both go at 19800. VERIFIED
+  (the capture's hudelems at 6600, 14800 and 19800; the rawfile). The
+  wait does not end early with one team: the probe was alone on allies.
+  VERIFIED (capture).
+- The prematch writes `ui_hud_hardcore` 1 into the dvar mirror
+  (configstring 247, the value of 119) and `d 247 0` at its end, level
+  time 19850. VERIFIED (capture). The `compass_old` and `weaponinfo`
+  menus draw only while it reads 0 (their `visible when`). VERIFIED (the
+  zone walk). vcod leaves the compass and the weapon owner draws out
+  while it reads 1.
+- `visionSetNaked("mpIntro", 0)` writes configstring 824 `"mpintro" 0`
+  for the prematch and `"mp_crash" 2000` at its end, the 2 s fade back.
+  VERIFIED (capture). `vision/mpintro.vision` (`common_mp`) is
+  `r_filmEnable` 1, `r_filmDesaturation` 1, `r_filmContrast` 1.8,
+  `r_filmBrightness` 0.05: the grey prematch look. VERIFIED (the
+  rawfile). vcod draws the set's film tweak and the fade
+  (`cod4-world.md` 11).
+- Gate: `prematch_capture_draws_the_wait_text_and_the_countdown`
+  (`cod4_hud`): both texts over their spans, the timer from 0:09 at the
+  join down to 0:01, the glyphs gone with a menu up, and the ammo counter
+  held back until `ui_hud_hardcore` clears.
+
+## 14. The vote, Connection Interrupted, the intermission
+
+- `CG_Draw2D` at intermission (`pm_type` 5) draws the scoreboard, the
+  chat and the say field and returns: no hud elems, compass, weapon
+  info, vote or lagometer. INFERRED (`DrawIntermission`).
+  vcod's `Cod4Hud::build` does the same, so the board shows the moment
+  a server's `endGame` puts the players in intermission.
+- The vote's configstrings: 13 `%d %d`, the vote's end (server time)
+  and `sv_serverid`, taken only when the id is the system info's
+  (0xc84fe4, set off `sv_serverid` at 0x473b0e), else no vote; 14 the
+  text, through `SEH_LocalizeTextMessage` (`vote string`, 0x6cc154); 15
+  and 16 the yes and no counts. VERIFIED (`CG_ConfigStringModified`,
+  0x44afd0..0x44b03d, and the same four read at a gamestate, 0x43f770).
+- `CG_DrawVote` (0x42ed50, called at 0x42f774): nothing while the end
+  reads 0; else a size of 16, 10 once the window is over 768 lines
+  (`vidHeight`, 0x74a914), at scale size / 48 (the double 48.0 at
+  0x70aef8), left and top aligned at `cg_hudVotePosition` (5, 220;
+  registered at 0x43bb44), white, style 3: the first line's baseline a
+  size under the position, `%s(%i):%s` (0x6c7e18) of `CGAME_VOTE`, the
+  seconds left (`(end - cg.time) / 1000`, never under 0) and the text;
+  the second a size under that, `%s(%s):%i, %s(%s):%i` (0x6c7e4c) of
+  `CGAME_YES`, the keys `GetKeyBindingLocalizedString` gives `vote yes`
+  (the literal command when none is bound), the yes count, and the same
+  for `CGAME_NO`, or `%s:%i, %s:%i` (0x6c7e3c) once the drawn
+  playerstate's `eFlags` carry 0x100000. VERIFIED (the code). vcod picks
+  the font by the scale as the other HUD texts do.
+- `CG_DrawDisconnect` (0x42f930, tail-called by the lagometer at
+  0x42fef4, 0x42ff6d, 0x42ff7b, after the vote): not in a demo; it
+  reads the cmd `cmdNumber - 127`, the oldest of the 128 kept, and
+  draws only when `cg.snap->ps.commandTime < cmd.serverTime <= cg.time`:
+  `CGAME_CONNECTIONINTERUPTED` at scale 0.5 centred on the 640 grid
+  (`(640 - width) / 2`), its baseline at y 100 (0x6f9e58), white, style
+  3; unless `cg.time & 0x200`, `net_disconnect` at (296, 320), 48 by 48
+  (0x6c7f44, 0x6c7f48, 0x70bdcc). VERIFIED (the code). A server gone
+  silent leaves the client making cmds it never runs, so the line comes
+  about 2 s in at 60 cmds a second; the drop follows `cl_timeout`
+  (cod4-handshake.md 10). vcod: `Cod4Session::interrupted`, gate
+  `cod4_live_silence_interrupts_then_times_out`.
+- Gates: `cod4_vote_draws_while_it_runs` (`cod4_hud`); the vote HUD and
+  the intermission are pending a pixel check against retail.
+
+## 15. Hardpoints, the UAV and low ammo
+
+### 15.1 Census
+
+| Item | What 1.7 draws it from | vcod |
+|---|---|---|
+| Hardpoint (killstreak) icon | `dpad` menu, owner draws 166..169 on action slots 1..4 (`ps.actionSlotType`/`Param`); `_hardpoints::giveHardpointItem` puts `radar_mp`, `airstrike_mp` or `helicopter_mp` on slot 4 | drawn (15.2) |
+| "Press [key]" under a slot | the `dpad` menu's text items, `"[" + keyBinding("+actionslot n") + "]"` while `actionSlotUsable(n)` | drawn (15.2) |
+| Earned splash ("UAV ready" and kin) | `_hud_message::notifyMessage`'s hudelems | drawn already (hudelems, section 5) |
+| UAV sweep's enemy pings | owner draw 170 `compassenemies` off `ps.radarEnabled`, the server's `level.teamHasRadar` (`setTeamRadar`) | drawn (15.3) |
+| The sweep's line on the compass | the map's owner draw 159, `compass_radarline` | drawn (15.7) |
+| Enemy shot flash | owner draw 170, `compassping_enemyfiring` off `CG_CompassAddWeaponPingInfo` | drawn, held 0 ms (15.7) |
+| Friendly shot flash | owner draw 158, `compassping_friendlyfiring_mp` over the arrow | drawn, held 0 ms (15.7) |
+| Friendly arrows | owner draw 158, `compassping_friendly_mp` turned by the body's yaw | drawn (10) |
+| Footstep pings | `compassEnemyFootstepEnabled`, 0 in 1.7 | off in 1.7: nothing to draw (15.3) |
+| Talking and script pings | `compassping_friendlyyelling_mp`, `pingPlayer`'s blink (`eFlags` 0x400000) | not drawn |
+| Objective icons | owner draw 152, `objective_add` / `setWaypoint` icons in state active or current | drawn (10) |
+| Helicopter | owner draw 155, `ET_HELICOPTER` (12), `compass_objpoint_helicopter_busy` / `_friendly` | drawn (15.7) |
+| Airstrike planes | owner draw 156, `ET_PLANE` (13), `compass_objpoint_airstrike_busy` / `_friendly` | drawn (15.7) |
+| Out-of-snapshot players | `ps.iCompassPlayerInfo` | 0 on retail on every stock map, and on vcod-server (15.7) |
+| The full map (`COMPASS_TYPE_FULL`) | `fullscreenmap` (owner draws 181..188) while the location selector is up, the team and `class` menus' 181..188 | drawn (15.8) |
+| `g_compassShowEnemies` (sab's bomb carrier, `scr_game_forceuav`) | server dvar in the configstring mirror; every enemy heard from in 1.5 s | drawn (15.3) |
+| Hardcore's compass during a UAV | `compass_old`'s `visible when` reads `ui_uav_allies` / `_axis` / `_client` | drawn: the menus' expressions decide (15.4) |
+| Counter-UAV / radar jam | none in 1.7: no counter-UAV hardpoint; `specialty_gpsjammer` (perk bit 0) keeps its bearer off the sweep | the perk drawn (15.3) |
+| Low clip pulse | owner draw 117's round colour | drawn (15.5) |
+| Low reserve | owner draw 119 in red | drawn (15.5) |
+| "Reload" / "Low Ammo" / "No Ammo" text | owner draw 120, `CG_DrawPlayerWeaponLowAmmoWarning` | no stock 1.7 menu holds owner draw 120: nothing to draw |
+
+The menus and their items are VERIFIED (`examples/menu_dump.rs` over
+`common_mp`); no item of any `common_mp` menu carries owner draw 120.
+VERIFIED (the dump). What each owner draw does is INFERRED
+(`CG_OwnerDraw`).
+
+### 15.2 The action slots
+
+- `dpad` (0 -42 25 25, aligned centre bottom): `slot1` at -14 -43 28 28
+  (owner draw 166), `slot3` at -88 -43 (168), `slot4` at 60 -43 (169), no
+  item for slot 2; a text item under each, alpha `0.65 * hudFade("dpad")`,
+  visible on `actionSlotUsable(n)`. The menu is visible when not in the
+  killcam, not flashbanged, no UI menu up, not scoped, `createfx` off and
+  `ui_hud_hardcore` 0. VERIFIED (zone).
+- The walk capture's spawn: slot 1 night vision (type 3), slot 3 alt mode
+  (type 2). VERIFIED (capture).
+- `CG_DrawPlayerActionSlot`, INFERRED: a weapon slot (type 1)
+  draws its weapon's `dpadIcon` (+1316) while held, 2:1 (`dpadIconRatio`
+  +1320 = 1) twice as wide, 4:1 (2) twice as wide at half height and a
+  quarter down; its rounds (`BG_WeaponAmmo`, clip plus reserve) as `%3i`
+  at the rect's right less 13 (plus a width for 2:1 and 4:1) and 3 under
+  it, red (1, 0.3, 0.3) at none; the alt slot the same for the weapon
+  its alt toggle shows (`Cod4Session::alt_toggle_weapon`); night vision `hud_icon_nvg`. A slot
+  that is the selection draws its colour times 1.2 at full alpha. The two
+  offsets are VERIFIED (1.7's weapon field table at `iw3mp.exe` 0x3289c4
+  in the file: `dpadIcon` 1316, `dpadIconRatio` 1320).
+- The arrow highlight (`CG_DrawPlayerActionSlotDpad`, owner draw 165) is
+  in no stock menu. VERIFIED (dump).
+- `giveWeapon` and `setActionSlot` write the playerstate itself
+  (`G_GivePlayerWeapon`, INFERRED). vcod-server keeps them in
+  the client's loadout and copies it into `ps` at the end frame; a
+  client packet's cmds each copy `ps` back into the loadout after their
+  move. A streak kill landing inside a packet's first cmd gave
+  `airstrike_mp` and slot 4 in the loadout, and the packet's next cmd
+  moved off the old `ps` and copied the old weapons back: the slot named
+  a weapon not held, so the `dpad` drew nothing and the key did nothing,
+  at random, as often as the kill fell short of a packet's last cmd. The
+  loadout now goes into `ps` ahead of each cmd's move. VERIFIED (ours:
+  the live gate's second earn failed so without it and passes with it).
+- Gates: `walk_capture_draws_the_action_slots` (the goggles, the
+  launcher's icon and `  2`, `[N]` and `[5]` with 1.7's binds), and
+  `cod4_live_uav_hardpoint_shows_on_the_dpad_and_pings_the_enemy` below.
+
+### 15.3 The UAV
+
+- `useRadarItem` (`_hardpoints.gsc`) runs `setTeamRadar(team, true)` and
+  `ui_uav_<team>` 1 for `level.radarViewTime` 30 s; free for all sets the
+  player's `hasRadar` and `ui_uav_client`. VERIFIED (rawfile). `ClientEndFrame`
+  writes `ps.radarEnabled` from the team's radar or `hasRadar`,
+  INFERRED; vcod-server writes the team's (`script_ps_writes`).
+- The client keeps an actor per client: where it last saw him (the
+  snapshot's player entities, else `ps.iCompassPlayerInfo`: client in
+  bits 0..5, x and y offsets from the view as `4 * n - 1020` in bits 6..14
+  and 15..23, yaw at 1.40625 a step in the top byte), when, and where and
+  when the sweep last pinged him (0x429660,
+  15.9; INFERRED). vcod-server sends no `iCompassPlayerInfo` (it sends every
+  player), so only the entities feed it there.
+- While `radarEnabled` the sweep advances by the frame's time over
+  `compassRadarUpdateTime` (4.0 at `iw3mp.exe` 0x4258f5's operand
+  0x6bdf00); it is a line along the map's east axis moving from a margin
+  west of the map to a margin east (margin half the larger
+  of `2500 * (sqrt 2 + compassRadarLineThickness)` and
+  `cg_hudMapRadarLineThickness` times the map's width). An enemy it crosses
+  that was seen in the last 1.5 s and lacks `specialty_gpsjammer` is
+  pinged where he stood, and the ping fades over
+  `compassRadarPingFadeTime` 4 s. A moving enemy who crosses the line is
+  pinged too. INFERRED. The defaults are 1.7's: thickness 0.4
+  (0x42595a's operand), map thickness 0.15 (0x426295), ping fade 4.0
+  (0x4258eb's operands), the footstep ping off (`compassEnemyFootstepEnabled`,
+  the `mov BYTE PTR [esp+0x30],0x0` at 0x426263). INFERRED (instruction
+  order).
+- With `g_compassShowEnemies` every enemy heard from in 1.5 s draws where
+  he is, at full alpha, INFERRED.
+- `compassping_enemy` draws upright at `compassFriendlyWidth` 18.75 on
+  the friendlies' rect. vcod: `cod4_radar::Radar`, stepped in
+  `Cod4Hud::update`. The shot flash and the sweep's line are 15.7.
+
+### 15.4 The HUD menus' `visible when`
+
+- `compass_old`, `weaponinfo` and `dpad` draw when their `visible when`
+  evaluates true over the HUD's context: the configstring dvar mirror,
+  then the `v` dvars, our team off the snapshot, `uiActive()` true only
+  while a script menu is up, and the cgame state of `Cod4Hud::menu_game`.
+  A menu whose expression does not evaluate falls back to
+  `ui_hud_hardcore` 0. vcod's rule. `uiActive()` is op 0x21; the menus'
+  `!uiActive()` hides the HUD under a script menu, as 1.7's
+  `UI_AnyMenuVisible` does. INFERRED.
+
+### 15.5 Low ammo
+
+- `CG_CheckPlayerForLowClipSpecific`, INFERRED: not a clip-only
+  weapon (`clipOnly` +1280), a clip at or under `lowAmmoWarningThreshold`
+  (+1468, a float) times `clipSize` (+824). The offsets are VERIFIED (the
+  field table above); the M16's threshold reads 0.33. VERIFIED (the
+  shooter capture's replay).
+- The clip graphic's round colour, INFERRED: the rounds lerp toward
+  `colorLowAmmo` (1, 0.3, 0.3; VERIFIED, the four floats at rdata
+  0x6be598) by `sin(t / (40 pi)) / 2 + 1/2`, `t` the ms since the clip
+  last read not low.
+- `CG_CheckPlayerForLowAmmoSpecific`, INFERRED: the reserve at
+  or under 0.2 of `BG_GetAmmoPlayerMax` (a shared cap +840, a clip-only
+  weapon's clip, else the summed `maxAmmo` +820 of every held weapon on
+  the ammo slot) draws owner draw 119 in (1, 0.3, 0.3).
+- Gate: `kill_capture_pulses_the_shooters_low_clip`: the shooter's M16 at
+  9 of 30 pulses from that snapshot until the reload and never outside it,
+  and the reserve reads red exactly while 30 of 180 is left.
+
+### 15.6 `weapon_change`
+
+- `G_ClientDoPerFrameNotifies`, INFERRED: after the frame's
+  threads, every client whose `ps.weapon` moved since the last gets
+  `weapon_change` with the weapon's name. `hardpointItemWaiter` waits on
+  it to call a hardpoint in once its weapon is up (`_hardpoints.gsc`,
+  VERIFIED rawfile). vcod-server raises it (`Cod4Level::per_frame_notifies`);
+  its waiters run in the next thread pass. `begin_firing`, `end_firing`,
+  `night_vision_on`/`off` and `sprint_begin`/`end` are not raised.
+- Gate: `cod4_live_uav_hardpoint_shows_on_the_dpad_and_pings_the_enemy`
+  (`play::cod4`): two clients on vcod-server's war, the stock
+  `giveHardpointItem("radar_mp")` on ours; the dpad draws the UAV's icon,
+  `+actionslot 4` selects it, the stock waiter calls the UAV in,
+  `radarEnabled` arrives and the compass draws the enemy's ping.
+- Earned in play: `Callback_PlayerKilled` counts `cur_kill_streak` for
+  a living attacker and threads `giveHardpointItemForStreak`, which gives
+  the UAV at 3, the airstrike at 5 and the helicopter at 7, or with
+  `scr_game_forceuav` the airstrike at 3 and the helicopter at 5 (the
+  UAV never). A higher hardpoint replaces an unused lower one on slot 4;
+  `hardpointNotify` queues the splash behind any earlier one (the
+  promotion's), so it can come up after the item is used. VERIFIED
+  (rawfiles). A stale entry in `level.players` (the `spawnPerFrameUpdate`
+  flood) does not stop it on ours: the kill path reads no other player.
+  VERIFIED (a run of the gates below with one injected).
+- A team change keeps the streak. `menuSpectator`, `menuAllies`,
+  `menuAxis` and `menuAutoAssign` set `switching_teams` before the
+  `suicide()`, and `Callback_PlayerKilled` resets `cur_kill_streak` and
+  counts the death only without it; the obituary still goes out, so the
+  kill feed shows the switch as a suicide with no death on the board.
+  `cur_kill_streak` is set to 0 only there and in
+  `Callback_PlayerConnect`. VERIFIED (the 1.7 `_globallogic.gsc`
+  rawfile). The held hardpoint is `pers["hardPointItem"]`, one slot, so
+  an unused airstrike is gone once the helicopter replaces it (the
+  `giveHardpointItem` test above). VERIFIED (the `_hardpoints.gsc`
+  rawfile). Both are the stock script running on vcod-server as on
+  retail (playtest 2026-10-26).
+- Gates: `cod4_live_three_kills_earn_the_airstrike_and_call_it_in` and
+  `cod4_live_five_kills_earn_the_helicopter_and_call_it_in`
+  (`play::cod4`, the `streak_kill` fixture gsc: no killcam,
+  `scr_game_forceuav` 1, kills through the stock damage callback): the
+  splash reads `3 Kill Streak!` / `5 Kill Streak!` and `Press 6 for
+  AIRSTRIKE.`, the dpad draws the item, `+actionslot 4` selects it, the
+  airstrike's selector opens and its confirm sends the planes, and our
+  compass draws the planes or the helicopter as ours.
+
+### 15.7 The sweep's line, shots, vehicles and `iCompassPlayerInfo`
+
+- `compass_old`'s items draw in this order: `minimapBG`, the ticker's
+  border and ticker (146), the map (159), pointers (152), friendlies
+  (158), enemies (170), `compasshelicopters` (155), `compassplanes` (156)
+  and `compassplayer` (150), all on 6 18 102 102. VERIFIED (menu_dump
+  over `common_mp`). vcod draws them in that order. The full map
+  (`COMPASS_TYPE_FULL`) is `common_mp`'s `fullscreenmap` (-100 -100 400
+  400, centred): `map_map` 181, `map_locator` 186, `mappointers` 182
+  (`objective_line`), `mapfriendlies` 185, the enemies 188, the player
+  183 and `mapborder` 187 (`map_border`); `team_marinesopfor` and `class`
+  hold 181, 182, 183, 185 and 188 too. VERIFIED (the dump). None has
+  helicopters or planes. vcod draws them (15.8).
+- The names are 1.7's: `compassping_enemy` (`iw3mp.exe` 0x6cbcf4),
+  `compassping_enemyfiring` (0x6cbd08), `compass_radarline` (0x6cbd68),
+  `compass_objpoint_helicopter_busy` / `_friendly` (0x6cbd7c, 0x6cbda0),
+  `compass_objpoint_airstrike_busy` / `_friendly` (0x6cbdc8, 0x6cbde8),
+  each pushed for `Material_RegisterHandle` between 0x43eb01 and
+  0x43ec5d; `compassping_friendlyfiring_mp` at 0x6cbcb4. VERIFIED. That
+  the helicopters' owner draw uses the first pair and the planes' the
+  second is, INFERRED.
+- The sweep's line on the compass (owner draw 159,
+  INFERRED): while `radarEnabled`, `compass_radarline` over the map's
+  rect, its texture centred at S = (the view's distance east of the line
+  over `compassMaxRange`) / 0.4 + 0.5 and T = 0, radius 1.25 in both,
+  turned by `northYaw - viewYaw` as the map is. vcod carries the sweep on
+  from its last step to the frame's render time, so the line moves every
+  frame where the step runs on snapshot time.
+- A shot (`CG_CompassAddWeaponPingInfo`, INFERRED): another
+  player's `EV_FIRE_WEAPON` or `_LASTSHOT` whose weapon is neither
+  `silenced` (+1360; VERIFIED, 1.7's weapon field table of 15.2 lists
+  `silenced` at 1360, type 5, and `fireSound` at 368) nor a grenade (`weapType` 1), and `EV_FIRE_WEAPON_MG42`'s
+  gunner (the parm) unless we are locked to that turret, holds the
+  actor's ping until `cg.time` plus the fire sound's length (50 for the
+  turret), then fades it over `compassSoundPingFadeTime`. That dvar is
+  2.0 in 1.7: the float at 0x700c0c loaded at 0x425531 into the default
+  the registration at 0x42558d passes for the name at 0x6c6a44, 0 to 10
+  (0x6bdf70), flags 0x81. VERIFIED (the bytes); its reading as the
+  default is INFERRED (instruction order). An enemy's shot also moves his
+  actor (pinged by the sweep if the move crosses it) and sets where his
+  pings draw; `compassping_enemyfiring` draws over his radar ping, each
+  at its own alpha, and a friendly's `compassping_friendlyfiring_mp` over
+  his arrow, which is not drawn under a shot at full alpha. vcod hears
+  the shot where the shooter's entity stands (retail: the flash tag) and
+  holds it for the length of the fire sound its audio started (15.9).
+- Vehicles (INFERRED): every `ET_HELICOPTER` and `ET_PLANE` in the
+  snapshot is remembered in eight slots (its own, the first unused, else
+  the oldest) with its position, yaw and `teamAndOwnerIndex` (team in
+  bits 0..1, owner from bit 2), and drawn for 1.5 s past its last
+  sighting: a helicopter 40 square, a plane 20, turned by its yaw
+  against the view's; `_busy` for an enemy's (another team's, or in free
+  for all another owner's), `_friendly` for ours. vcod evaluates the
+  entity's trajectory at the snapshot's time (planes fly `TR_LINEAR`).
+- `iCompassPlayerInfo`. 1.7's `ClientEndFrame` writes it from the function
+  at `cod4_lnxded` 0x80a73c4: none for a spectator (team at client
+  +0x3010 is 3), none in free for all without radar, else the first
+  client after the last one sent (0x3ff, `ENTITYNUM_NONE`, starts at 0)
+  in use, playing (+0x2f64 is 0), not us, our teammate unless
+  `g_compassShowEnemies` (dvar at 0x84bc17c) or the radar (0x836f6d4,
+  the client's +0x3178) is on, that `SV_inSnapshot` (0x817ca04) says is
+  not in our snapshot; packed with the 1024, -1022 and 256/360 constants
+  at rodata 0x8217da4..0x8217dac. VERIFIED (the code and the floats).
+  `SV_inSnapshot` passes a linked entity on the cluster test, then on the
+  fog's opaque distance, which `G_setfog` (0x80aed9e) sets only when its
+  string scans seven fields with `%f %f %f %f %f %f %i`; `setExpFog`
+  writes six (`%g %g %g %g %g %.0f`), so the distance stays `FLT_MAX`.
+  VERIFIED (the code and the strings). With one cluster row on every
+  stock map (cod4-pmove.md 15) every playing client is in every snapshot
+  and the field is 0. Every committed 1.7 capture carries 0 in every
+  snapshot, the walk capture's beside its teammate, whom the scan reads
+  without a UAV. VERIFIED (the gate
+  `cod4_hud::tests::retail_captures_send_no_compass_player_info`).
+  vcod-server sends every playing client and leaves the field 0.
+- Gates (`play::cod4`, vcod-server's war):
+  `cod4_live_uav_hardpoint_shows_on_the_dpad_and_pings_the_enemy` (the
+  line draws only while `radarEnabled`, and its S slides east every
+  frame) and `cod4_live_compass_flashes_the_enemys_shots_and_draws_his_helicopter`
+  (the enemy's M16 flashes on our compass with no sweep ping, and his
+  stock helicopter draws `compass_objpoint_helicopter_busy`).
+
+### 15.9 Friendlies, `pingPlayer` and a talker
+
+- `iw3mp.exe` 0x429660..0x429870 keeps an actor for each
+  client (an array at 0x742b20, 0x30 a slot: +0 the last update,
+  +0x14 the last yaw, +0x18 the ping time, +0x24 the voice fade start, +0x28
+  the enemy flag, +0x2c the perks). For each `ET_PLAYER` (+0xd0 is 1) of the
+  snapshot not on a turret (`eFlags` 0x20000): its position, `lastUpdate`
+  the frame's time, `lastYaw` the body's yaw (+0x2c); a talker
+  (`CL_IsPlayerTalking`, 0x476930) sets `beginVoiceFadeTime` 50 ms past
+  the frame (0x429711); `eFlags` 0x400000 with `pingTime` not ahead sets
+  it 3000 ms past (0x429717..0x42972d). `iCompassPlayerInfo`'s player
+  takes its yaw from the field's top byte times 1.40625 (0x429833,
+  0x42984d) and the ping from the playerstate's `eFlags` 0x800000
+  (0x429856). VERIFIED (the code).
+- The friendlies' draw (0x429880) draws every teammate actor
+  heard from in the last 1500 ms (0x429a5c), not us, from its last
+  position and yaw: so a teammate who leaves the snapshot (dead, his
+  body a corpse) stays 1.5 s where he was. VERIFIED (the constant).
+  While `pingTime` is ahead the arrow gives way, for the second 250 ms of
+  every 500 (0x429c59..0x429c62), to `objective_friendly_chat`
+  (the name at 0x6cbc80) unturned; a shot's
+  `compassping_friendlyfiring_mp` and a talker's
+  `compassping_friendlyyelling_mp` (0x6cbcd4) draw over the arrow, each
+  fading over `compassSoundPingFadeTime`, the arrow not drawn under
+  either at full alpha. VERIFIED (the constants and strings); the order
+  INFERRED. The chat icon's distance fade reads
+  `compassObjectiveMaxRange` (2048) and `compassObjectiveMinAlpha`,
+  registered 1 (`fld1` at 0x425c4a, pointer 0x742a10 for the range), so
+  it stays opaque. VERIFIED (the operands).
+- `pingPlayer` (`cod4_lnxded` 0x80a8810, the method table row at
+  0x8218f00): the client's `ps.eFlags` (+0xb0) gains 0x400000 and
+  `compassPingTime` (+0x3108) becomes `level.time` + 3000;
+  `ClientEndFrame` clears the bit once that time is reached
+  (0x80a6c9f..0x80a6cad). VERIFIED (the code). The stock quick messages
+  call it. vcod-server: `builtins::cod4_client::ping_player`, the end
+  frame's write in `Cod4Level::player_end_frame`.
+- A shot's ping holds for the fire sound's known length
+  (`SND_GetKnownLength` of the voice `CG_FireWeapon` started,
+  INFERRED). vcod hands the length of the voice its audio started for
+  the shot (`AudioSystem::voice_ms`) to the radar (`Radar::hold_shot`);
+  a turret's holds 50.
+- Gate: `play::cod4::tests::cod4_live_compass_flashes_a_pinged_friend_and_keeps_him_when_he_falls`
+  (two clients on allies: the teammate's `pingPlayer` holds the bit 3 s
+  and our compass flashes the chat icon, then his death leaves his arrow
+  1.5 s).
+
+### 15.8 The full map and the location selector
+
+- `fullscreenmap`'s items carry one `visible when` that reads
+  `selectingLocation()` (op 0x27) and not `spectatingFree` (op 0x49).
+  VERIFIED (menu_dump over `common_mp`). `selectingLocation()` is
+  `ps.locationSelectionInfo != 0` (`CG_IsSelectingLocation`),
+  INFERRED. `beginLocationSelection` writes it as the selector's 1-based
+  slot among configstrings 827..829 plus six radius bits (cod4-gsc.md).
+  The stock airstrike is the one stock caller:
+  `_hardpoints::selectAirstrikeLocation` runs
+  `beginLocationSelection("map_artillery_selector", ...)`. VERIFIED
+  (rawfile).
+- The owner draws in the full-map compass mode, INFERRED: the item's rect shrunk to the minimap's aspect
+  and centred, less `cg_hudMapBorderWidth` (no more than a quarter of a
+  side); 181 the minimap's material across it unturned; 186 the
+  selector's material centred on the cursor (`cg.selectedLocation`, 0..1
+  east and south) with a radius of the six bits over 63 of the rect's
+  height, its texture clipped to the rect; 182 each active or current
+  objective's icon at `compassObjectiveWidth` 20; 185 each teammate's
+  `compassping_friendly_mp` at `cg_hudMapFriendlyWidth` 15, turned by
+  `AngleDelta(northYaw, yaw)`; 188 the radar's pings at 15; 183 the
+  item's material (`compassping_player`) at `cg_hudMapPlayerWidth` 20,
+  turned so; 187 `map_border` as eight pieces around the rect (four
+  corners, four edges, none over the map), each corner twice the border. A world point sits at its east and south
+  distance from the minimap's upper left corner over the map's size, off
+  the rect's centre. That the item draws 15 for the enemies is vcod's.
+- 1.7's defaults: `cg_hudMapBorderWidth` 2.0 (the float at `iw3mp.exe`
+  0x700c0c loaded at 0x42646e), `cg_hudMapFriendlyWidth` and `Height`
+  15.0 (0x6be63c, at 0x4262fd and 0x426357), `cg_hudMapPlayerWidth` and
+  `Height` 20.0 (0x6df498, at 0x4263b4 and 0x426414),
+  `cg_mapLocationSelectionCursorSpeed` 0.6 (0x6b7a9c, at 0x43bc42).
+  VERIFIED (the bytes). Each value's reading as its dvar's default is
+  INFERRED (instruction order: the first float loaded after the last
+  registration call).
+- Input (`CL_CreateCmd` and `CL_KeyEvent`), INFERRED: while
+  selecting, the mouse moves the cursor and not the view; a press of a
+  key bound `+attack` confirms, Esc cancels. The cmd carries only the
+  stance bits and 0x100000, and a confirm adds 0x10000 with
+  `selectedLocation` as `round(at * 255) + 0x80`, a cancel 0x20000.
+  vcod moves the cursor 0.6 / 100 of the map for each degree the mouse
+  would have turned the view, its own scale: 1.7 scales the mouse's
+  counts by the frame time.
+- The team and `class` menus' 181..188 draw over the menu's own quads
+  through the same code.
+- `fullscreenmap`'s text item reads `@PLATFORM_PRESS_TO_SET_AIRSTRIKE`,
+  a key of `localized_code_post_gfx_mp`; each map's minimap image
+  (`compass_map_mp_crash`, `compass_map_mp_backlot`) is in that map's
+  own zone, not in `common_mp` (which holds `compass_map_default`).
+  VERIFIED (`HudAssets::load_zones` per zone). vcod drew the item's
+  text through the server-message path, which does not read a leading
+  `@`, so the key showed raw; and the HUD kept the zones it loaded for
+  the first map, so after a rotation the next map's minimap had no image
+  and the full map and compass drew empty. It now localizes an `@KEY`
+  item text (`Cod4Hud::menu_text`) and loads the zones again when the
+  map changes. VERIFIED (the gates below, ours).
+- Gates: `play::cod4::tests::cod4_live_airstrike_picks_its_spot_on_the_full_map`
+  (vcod-server's war: the stock `giveHardpointItem("airstrike_mp")`, its
+  slot pressed, the minimap, the selector and the border draw, the
+  cursor moves, the item's text has no raw key, and the confirm ends the
+  selection) and
+  `cod4_hud::tests::a_new_map_reloads_the_zones_and_the_selector_reads_localized`.
+
+## 16. Perks
+
+### 16.1 Census
+
+`bg_perkNames` lists twenty perks from `specialty_gpsjammer` (bit 0) to
+`specialty_specialgrenade` (bit 19); the strings run in reverse from
+`iw3mp.exe` file offset 0x2c20d4 down to 0x2c1f0c, and the bits the
+code below tests (0x4, 0x8, 0x10, 0x20, 0x100, 0x200, 0x400) fall on
+their names in that order. VERIFIED (the strings and the tests). The
+client reads two copies: the playerstate's `perks` (the drawn view's own)
+and each client's `clientState_t.perks` (`cgs.clientinfo[n].perks`,
+0x4cc a client from 0x83929c). VERIFIED (the reads below).
+
+| Perk (bit) | What the 1.7 client does | Reads | vcod |
+|---|---|---|---|
+| UAV Jammer, `gpsjammer` (0) | off the enemy's UAV sweep | the compass actor's copy of `clientinfo.perks` (0x4295af, 0x4297b0) | done (15.3) |
+| Steady Aim, `bulletaccuracy` (1) | `BG_GetSpreadForWeapon` scales the min and max spread by `perk_weapSpreadMultiplier` | `ps.perks` bit 1 (0x416d45..0x416d62) | the crosshair's spread (17); a client-side round's spread is not modelled (cod4-effects.md 12) |
+| Sleight of Hand, `fastreload` (2), Double Tap, `rof` (3), Iron Lungs, `holdbreath` (4), Extreme Conditioning, `longersprint` (10) | pmove's reload, fire, breath and sprint times | `ps.perks` | predicted (`vcod_cod4::pmove`) |
+| Deep Impact, `bulletpenetration` (5) | the client-side round's penetration depth times `perk_bulletPenetrationMultiplier` | the shooter's `clientinfo.perks` bit 5 (0x455c79..0x455ca0) | done (cod4-effects.md 12.1) |
+| Dead Silence, `quieter` (8) | the `q` footstep, landing and gear set; off the compass's footstep pings | the stepping entity's `clientinfo.perks` bit 8 (0x435de9, 0x428fcc) | steps done (cod4-sound.md 4); the pings are off by default (15.3) |
+| Eavesdrop, `parabolic` (9) | the talker list draws an enemy talker with `perk_parabolicIcon` (`specialty_parabolic`) instead of `voice_on`; the server relays enemy voice within `perk_parabolicRadius` | `nextSnap->ps.perks` bit 9 (0x443eaf..0x443ebb) | done: the talker list draws it (cod4-voice.md 4) |
+| Bomb Squad, `detectexplosive` (11) | nothing in the engine: `_weapons.gsc` spawns a `trigger_radius` (512 by 256) under each enemy claymore and C4, and a player with the perk who touches one gets one of four `waypoint_bombsquad` client hudelems over it | the script's `detectExplosives` | done: the waypoints draw (16.2) |
+| Martyrdom, Last Stand, Stopping Power, Juggernaut, Sonic Boom, Bandolier, Overkill, Frag x3, the grenade and inventory perks | the server's damage, death and loadout | the server's copy | the server's (S-C4-18) |
+
+That no string in `iw3mp.exe` names `bombsquad`, `detectexplosive` but
+the perk table, is VERIFIED (strings). The other rows' 1.7 reads are
+VERIFIED at the addresses given; the shape of each function around them
+is INFERRED.
+
+- The perk icons themselves are script: `_globallogic::spawnPlayer`
+  calls `_hud_util::showPerk` for the three perks of the class at
+  bottom right (32 by 32, x -5, y `-(90 + 32 (2 - n))`), text left of
+  each, hidden 3 s on over 2 s (`scr_showperksonspawn` 1); the killcam
+  draws the killer's the same way (11). VERIFIED (rawfiles). The class
+  menu draws a class's perks off `mp/classTable.csv` and
+  `mp/statstable.csv` column 6 by stat 205..207 of the class
+  (`changeclass`'s item expressions). VERIFIED (zone).
+- Gates: `cod4_menu::tests::cod4_team_and_class_menus_draw_from_the_zones`
+  (Assault's Stopping Power and Extreme Conditioning icons in the class
+  menu) and
+  `play::cod4::tests::cod4_live_dead_silence_steps_quiet_and_bomb_squad_shows_the_trigger`
+  (the spawn's two perk icons, live on vcod-server).
+
+### 16.2 Waypoints in the world
+
+- The waypoint sprite (`iw3mp.exe` 0x43a190..0x43a2b4): an
+  element of type 13 whose lerped colour has an alpha (0x40d500), with no
+  offscreen material (+0x44) and a material (+0x40), adds a sprite at
+  `(x, y, z)` (+4, +8, +0xc) in that colour: its radius the element's
+  height as 0x4392b0 gives it, or with `value` (+0x78) above
+  0 that height times 0.0043 (0x70ba60, flags 3, the constant-size
+  sprite). VERIFIED (the code). The height scales from `fromHeight` over
+  `scaleTime`. INFERRED.
+- An element with an offscreen material (`setWaypoint(true,
+  material)`) draws in the 2D pass instead, clamped to the screen's
+  edges with a pointer. INFERRED. vcod draws them (16.3).
+- vcod draws the sprites under the 2D HUD on CoD2's camera-facing quad
+  (`Cod4Hud::world_quads`, `cod2_world_hud::WorldView`).
+- vcod-server spawns a script `trigger_radius` with its radius and
+  height (`spawn(classname, origin, flags, radius, height)`) and runs
+  `G_TouchTriggers` after each cmd's events, so `detectIconWaiter` sees
+  the touch. INFERRED (`ClientThink_real`).
+- Live on vcod-server: us on Assault, the class changed in the grace
+  period to `offline_class2_mp` (Bomb Squad, UAV Jammer, Dead Silence,
+  client state perks 0x901), the stock
+  `_weapons::claymoreDetectionTrigger("axis")` laid where we stand; the
+  stock `showHeadIcon` raises our `waypoint_bombsquad`, and backed off
+  1.5 s it draws ahead on the screen. VERIFIED (the gate above).
+
+### 16.3 Offscreen waypoints
+
+- A waypoint with an offscreen material draws in the 2D hudelem pass
+  (the 2D element draw takes the offscreen path for type
+  13) and not as a world sprite (16.2). INFERRED: at its target entity when `targetEntNum` names one
+  in the snapshot (a player raised by `waypointPlayerOffsetProne`,
+  `Crouch` or `Stand` by `eFlags` 8 and 4), else at its own point;
+  nothing for our own entity. The point projects through the refdef
+  (behind the eye, its left and up offsets pushed past the window), is
+  raised by `waypointTweakY`, and clamped to the window's edges less the
+  pads plus half the pointer's height and its distance, its corners
+  rounded by `waypointOffscreenCornerRadius`. Clamped, the pointer
+  (`hud_offscreenobjectivepointer`) draws `waypointOffscreenPointerDistance`
+  out from the icon, turned along the way out, faded inside
+  `waypointOffscreenDistanceThresholdAlpha`. The icon is
+  `waypointIconWidth` by `Height`, scaled from 1 at
+  `waypointDistScaleRangeMin` to `waypointDistScaleSmallest` at `Max`.
+  Every size is in 480-line units.
+- 1.7's defaults, VERIFIED (the bytes each registration's first float
+  load reads; reading each as the default is INFERRED, instruction
+  order): `waypointIconWidth` and `Height` 36 (0x70bbe4, at 0x4376d5,
+  0x437736), `waypointOffscreenPointerWidth` 25 (0x70b324),
+  `PointerHeight` 12 (0x6be650), `PointerDistance` 30 and
+  `DistanceThresholdAlpha` 30 (0x6b76bc), `PadLeft` 103 (0x70bbe0),
+  `PadRight` and `PadTop` 0 (`fldz`), `PadBottom` 30,
+  `RoundedCorners` 1 (the byte its registration at 0x437ac0 passes),
+  `CornerRadius` 105 (0x70bbdc), `ScaleLength` 500 (0x70bbbc),
+  `ScaleSmallest` 1 (`fld1`), `waypointDistScaleRangeMin` 1000
+  (0x70bae8), `Max` 3000 (0x70ad80), `Smallest` 0.8 (0x6cdd4c),
+  `waypointTweakY` -17 (0x70bbd4), `waypointPlayerOffsetProne` 30,
+  `Crouch` 56 (0x70bbd0), `Stand` 74 (0x70bbcc). The registrations run
+  from 0x4376d0. The pointer's name is the string at 0x6cbe5c, pushed at
+  0x43ed1f. VERIFIED. The 1.7 draw reads the corner dvars at 0x43966e and
+  0x439681 and warns `targetEnt %i not in snapshot` at 0x439c26.
+  VERIFIED (the reads and the push).
+- The projection is `iw3mp.exe` 0x439320: a point ahead (its depth
+  along the view at least 0) lands at `size / 2 * (1 - (left, up) /
+  tanHalfFov / depth)`; one behind takes `(-left, -up)`, an axis under
+  the float 0.001 at 0x70b278 replaced by 0.001 and both under it giving
+  twice the window's height down, then multiplies the pair by the width
+  until x clears it and by the height until y does (0x439358..0x4394ab).
+  VERIFIED (the disassembly). The edge clamp is 0x439510 (the corner
+  dvar reads above sit in it). VERIFIED (the call at 0x439cda). Gates:
+  `cod4_waypoints`' unit pins and the live gate below.
+- No stock 1.7 script passes `setWaypoint` an offscreen material
+  (`_objpoints::createTeamObjpoint` passes `true` alone). VERIFIED
+  (rawfiles). So the gate runs a probe gsc:
+  `crates/cod4/tests/fixtures/gsc/offscreen_waypoint` gives each player
+  a client waypoint 2000 units behind him, 64 up.
+- Gate: `play::cod4::tests::cod4_live_offscreen_waypoint_sits_on_the_edge_with_its_pointer`
+  (vcod-server under the probe: the icon at the top edge's padding, 0.9
+  of 36 at 2000 units, the pointer over it).
+
+### 16.4 The death icons
+
+- The stock `_globallogic.gsc`'s killed callback threads
+  `_deathicons::addDeathIcon(body, self, team, 5.0)` off its
+  `clonePlayer` in a team game; the thread reads `body.origin` before its
+  first wait, then (past `ui_hud_showdeathicons` and hardcore) raises a
+  team hudelem at that point plus 54 up, alpha 0.61,
+  `setShader("headicon_dead", 7, 7)` and `setWaypoint(true)`: a
+  constant-size world sprite (16.2) the dead man's team sees, faded out
+  over a second after 5 s. VERIFIED (the zone's rawfiles).
+- A corpse's `origin` is its `r.currentOrigin`, which `clonePlayer` sets
+  from the player's. INFERRED (`PlayerCmd_ClonePlayer`).
+  vcod-server reads it off the corpse's `pos.trBase`, where the clone
+  set it down (cod4-combat.md 5): the engine's entity slot is never
+  written for a body. Before, `body.origin` read `(0, 0, 0)` and every
+  death raised its icon at `(0, 0, 54)`, over the middle of the map
+  (playtest 2026-10-27). VERIFIED (vcod-server, the gate below).
+- Gate: `play::cod4::tests::cod4_live_a_teammates_death_icon_sits_over_his_corpse`
+  (two allies on vcod-server's `war`, the teammate's `suicide`; the icon
+  over where he stood, 54 over the floor under him, drawn as a sprite).
+
+## 17. The crosshair
+
+- `CG_DrawCrosshair` (`iw3mp.exe` ..0x43143e) calls
+  The crosshair test (0x430b50), `CG_CalcCrosshairPosition`
+  (0x42ff80), `CG_TransitionToAds` (0x430c80), the ADS aim indicator
+  (0x430bc0), `CG_DrawReticleCenter` (0x430d50) and
+  `CG_DrawReticleSides` (0x430f60), and reads `cg_crosshairDynamic` (the
+  dvar at 0x8c6324) between them. VERIFIED (the calls and the read). Its
+  shape is INFERRED: the turret's own on a
+  turret (`eFlags` 0x300, below), nothing without a view weapon; the sight's overlay first (`CG_DrawWeapReticle`, 0x4308c0)
+  while zoomed past 0.01, the crosshair at the rest of the alpha; no
+  crosshair at full ADS with the gun drawn.
+- The crosshair test refuses weapon states 12, 13, 14, 7, 1, 2, 3
+  and 4 and reads `cg_drawCrosshair` (0x748654) and `ui_drawCrosshair`
+  (0xcae61c8). VERIFIED (the compares and reads at 0x430b67..0x430bab).
+- The colour (0x430960): white, or with the weapon's
+  `crosshairColorChange` `g_TeamColor_MyTeam` over a friend (`weapFlags`
+  8) and `g_TeamColor_EnemyTeam` over an enemy (0x10, with
+  `cg_crosshairEnemyColor`), at `cg_crosshairAlpha`; the names are the
+  strings at 0x6c7f7c and 0x6c7f90. VERIFIED (the strings and the flag
+  tests). The wait each makes on `cg_friendlyNameFadeIn` and
+  `cg_enemyNameFadeIn` is not modelled.
+- The sides (0x430e40, 0x430f10): `BG_GetSpreadForWeapon` (0x416c70)
+  gives the hip spread's two ends by `viewHeightCurrent` (prone 11,
+  crouched 40, standing 60), Steady Aim (`perks` bit 1) scaling both by
+  `perk_weapSpreadMultiplier`; the spread is `aimSpreadScale` / 255 of
+  the way between them times the ADS shrink, projected as `tan` times
+  240 over `tanHalfFovY`, no less than `reticleMinOfs` (+556), less
+  `hipReticleSidePos` (+1152) times the side's size; the four pieces sit
+  that far out, turned 0, 90, 180 and 270, an eighth of their size
+  apart, their alpha `cg_crosshairAlpha` times `1 - aimSpreadScale /
+  255`, never under `cg_crosshairAlphaMin`. VERIFIED (the offsets read
+  at 0x430ebc and 0x430eea, the 255 and 240 constants at 0x70aee0 and
+  0x70b548, the `tanHalfFovY` divide at 0x430eb2); the shape INFERRED.
+- 1.7's defaults: `perk_weapSpreadMultiplier` 0.65 (0x70b390, at
+  0x40dcf9), `cg_crosshairAlpha` 1 (`fld1` at 0x43bce1),
+  `cg_crosshairAlphaMin` 0.5 (0x6be648, at 0x43bd39), `cg_drawCrosshair`
+  1 and `cg_crosshairEnemyColor` 1 (the bytes their registrations
+  pass), `cg_crosshairDynamic` 0. VERIFIED (the bytes); their reading as
+  defaults INFERRED (instruction order).
+- The overlay (`CG_DrawAdsOverlay`, INFERRED): the
+  `adsOverlayShader` (+1072, the low-res one on a window of 480 lines or
+  fewer) `adsOverlayWidth` by `Height` (+1088, +1092), mirrored into four
+  quarters around the centre when it fits a quarter of the screen, else
+  once, and the screen outside it filled with its edge texels; its alpha
+  the zoom past `1 - adsZoomInFrac` (+1064; `OutFrac` +1068 going down).
+- On a turret (0x4311e0..0x431294): with `ps.viewlocked` (0x794a0c) set
+  and the locked entity's (`viewlocked_entNum`, 0x794a10, into the entity
+  array at 0x84f468, 0x1dc a slot) weapon carrying an `adsOverlayShader`
+  (+0x430) the overlay draws at full alpha (0x430540); otherwise, drawing
+  the HUD with `viewlocked_entNum` not 1023, `CG_DrawTurretCrossHair`
+  (0x430a50): under `cg_drawTurretCrosshair` (bool 1, archived, pointer
+  0x74a880, registered at 0x43b194) and `cg_crosshairAlpha` of at least
+  0.01 (0x430ab8), the gun's `reticleCenter` (+0x21c) its
+  `reticleCenterSize` (+0x224) square, centred (alignment 2, 2), in
+  `CG_CalcCrosshairColor(1.0)` (0x430ad0). VERIFIED (the code). vcod:
+  `cod4_crosshair::turret`, off the snapshot's entity.
+- `CG_CalcCrosshairPosition` (0x42ff80) projects `cg.gunPitch` and
+  `gunYaw` (cg +0x50434, +0x50438, times the float pi/180 at 0x70b2d0)
+  with the view's roll onto the screen: the direction's dot with the
+  view's forward, then its left over that times `tanHalfFovX`, times -320
+  (0x70b358), and its up over that times `tanHalfFovY`, times -240
+  (0x70b350); the centre when the dot or the tangent is not positive.
+  VERIFIED (the code and constants). The gun's angles are the view's
+  except while an aim-down-sight weapon without an overlay reticle has
+  its sight's lerp past 0, when they are the view weapon's turned axis
+  (`CalculateWeaponPosition_SaveOffsetAngles`), INFERRED. So
+  `cg_crosshairDynamic` 1 moves the crosshair only while a sight comes up
+  or goes down (at full ADS no crosshair draws with the gun); the ADS
+  aim indicator rides the same point under either setting. vcod:
+  `ViewPs::gun_dir` off `cod4_viewmodel`'s frame.
+- vcod: `cod4_crosshair`, off the predicted playerstate at the fov the
+  world draws at. Gate:
+  `play::cod4::tests::cod4_live_crosshair_spreads_by_the_weapon_and_steady_aim`
+  (vcod-server's war: as Spec Ops, whose stock class carries Steady Aim
+  (`perks` 0x1002), the MP5's sides sit at its spread times 0.65; as
+  Assault, without bit 1, the M16's at its own);
+  `cod4_live_saw_mounts_fires_clamps_and_lets_go` (mp_backlot's SAW: one
+  centred quad of its `reticleCenterSize`);
+  `cod4_live_dynamic_crosshair_follows_the_raised_gun` (the M16's sight
+  coming up: under `cg_crosshairDynamic` 1 the crosshair moves by the
+  turned gun's projection).
+
+## 18. The connect screen
+
+- `SCR_DrawScreenField` draws `UI_DrawConnectScreen` from
+  `CA_CONNECTING` to `CA_PRIMED`, INFERRED: `CG_DrawInformation`'s `UI_DrawMapLevelshot` paints the
+  `connect` menu once `g_mapname` is known, black before; then, unless
+  a download runs, the game type's display name at y 89 and the map's
+  (`UI_GetMapDisplayName`) at 119, centred, scale 0.5 in font 6; then
+  while the map is unknown or fully loaded the stage's line at y 145
+  with dots counting every 500 ms: `EXE_AWAITINGCHALLENGE`,
+  `EXE_AWAITINGGAMESTATE`, `EXE_AWAITINGHOST`. A download draws
+  `UI_DisplayDownloadInfo`: the bar across the screen in green at 0.15
+  alpha, `EXE_DOWNLOADING` and the file, and `<got> EXE_OF <size>
+  EXE_COPIED (n%)`.
+- `connect` is in `code_post_gfx_mp`: -107 0 854 480; a filled frame at
+  -128 -40 260 4 and `loadbar` (style 6, `white`) at -127 -39 258 2,
+  aligned centre bottom; a "did you know" box (`@MENU_INTEL`, dvar
+  `didyouknow`) whose items carry dynamic flag 0x10000. VERIFIED
+  (menu_dump). Style 6 draws its material over the first loaded fraction
+  of its width (`UI_DrawLoadBar`, the fraction `DB_GetLoadedFraction`), INFERRED. vcod draws the menu's background (the `_load`
+  zone's `$levelbriefing` as its image, `loadscreen_<map>` in the iwds)
+  and the bar, leaving out the "did you know" box while the dvar is
+  empty; the fraction is vcod's own, stepped at the load's stages
+  (`cod4_fly::set_load_report`).
+- vcod: the window opens first; the join (`connect_password`, the downloads,
+  the gamestate) and the map load run on a worker (`cod4_loading`),
+  whose `LoadProgress` the screen reads; `set_download` takes a file's
+  bytes. Gate: `cod4_loading::tests::cod4_live_join_draws_the_connect_screen_then_hands_over`
+  (vcod-server's mp_crash: the stages, the levelshot, a bar that only
+  grows, and the session and map handed over).
+- vcod: a join from the front end (the console's `connect`, the
+  browser's, Start New Server's) runs through the same worker with the
+  menus closed; a refused join or a failed load goes back to the main
+  menu with its reason (cod4-front-end.md 7).
+- The game type and the map's name glow: 1.7's `UI_DrawConnectScreen`
+  hands `ui_connectScreenTextGlowColor` (its value at the dvar + 0xc) to
+  both `Text_PaintCenter` calls (0x549a60, at 0x54a686 and 0x54a6bb).
+  VERIFIED. The dvar's 1.7 default is (0.3, 0.6, 0.3, 1), range 0..1:
+  the floats stored at 0x542628..0x542659 before its registration at
+  0x542665. VERIFIED (the bytes); reading them as x, y, z, w then min
+  and max is INFERRED (instruction order, as a
+  `Dvar_RegisterVec4` call). vcod draws them with the glow of 22.
+- `UI_DisplayDownloadInfo` 1.7 (0x549ae0..0x54a37f), VERIFIED (the
+  disassembly and the constants it loads), its full-screen grid y off
+  the 89 top line: three black bands at alpha 0.2 (0x70b198) from y + 184, + 185, + 186, 640 wide, 85, 83 and 81 tall
+  (0x70bd68, 0x70bd58, 0x70bd48; 0x70bb94, 0x70bd60, 0x70bd50); with a
+  size, the green bars (alpha 0.15, 0x6df42c) at + 164, + 165, + 166,
+  `(int)(got / size * 640)` plus 2, 1 and 0 wide, 5, 3 and 1 tall; `EXE_DOWNLOADING`,
+  `EXE_EST_TIME_LEFT` and `EXE_TRANS_RATE` at x 24 (0x70bba8), y + 210,
+  + 235, + 260, in font 1 at 0.5, light grey; the file's name at x 200
+  (0x70b774), y + 210, its scale cut so it is at most 430 wide
+  (0x70bd10), no less than 0.2. Then (0x549fea) once the count is 4096
+  or more and the download has a start time, the rate is the count over
+  the whole seconds since its start (`realTime` at 0xcaee208), and with
+  a size and a rate one estimate, `size / rate - (size / rate) * (count
+  / 1024) / (size / 1024)` in integers, goes into an 80-slot ring
+  (0x729db8, index at 0xd8b2f00) whose sum over 80 is the time left:
+  `UI_PrintTime` (0x549990) at x 200, y + 235, and the count line
+  centred at y + 320 (0x70b640). Without a size or rate `EXE_ESTIMATING`
+  centred at + 235 and the count line (`(<got> EXE_COPIED)` without a
+  size) at + 320. A rate draws `<rate>/EXE_SECONDS` at x 200, y + 260
+  (`%s/%s`, 0x6c81dc). Under 4096 bytes: `EXE_ESTIMATING` at + 235 and
+  the count line at + 340.
+- `UI_ReadableSize` (0x549800): past 2^30, 2^20 or 1024 bytes (strictly)
+  `%d` whole units, then for GB and MB `.%02d %s` with the remainder
+  times 100 over the unit, in 32-bit integers (`EXE_GIGABYTE`,
+  `EXE_MEGABYTE`), for KB ` %s` (`EXE_KILOBYTE`), else `%d %s` with
+  `EXE_BYTES`. `UI_PrintTime`: past 3600 s `%d %s %d %s` hours and
+  minutes, past 60 minutes and seconds, else `%d %s` seconds
+  (`EXE_HOURS`, `EXE_MINUTES`, `EXE_SECONDS`). VERIFIED. In English
+  those read `GB`, `MB`, `KB`, `bytes`, `hr`, `min`, `sec`,
+  `estimating`, `Estimated time left:`, `Transfer rate:` (VERIFIED,
+  `localized_code_post_gfx_mp`). vcod: `cod4_connect::progress_lines`
+  and its tests; the ring lives in the `Loader`, one per join, where
+  retail's is a static.
+- The yellow lines under the title (y + 210, wrapped past 40 characters
+  at a space or at 58, 22 apart) are `clc.serverMessage` while the
+  state is under `CA_CONNECTED`, which a `print` packet and `needcdkey`
+  (`EXE_AWAITINGCDKEYAUTH`) set; a refusal (`error`) is `Com_Error`'s,
+  the main menu's `error_popmenu` (INFERRED). 1.7's `CL_ConnectionlessPacket`
+  copies a `print`'s text into `clc.serverMessage` (`iw3mp.exe`
+  0x8f4d0c, 255 bytes, the copy at 0x46bc4f) and `needcdkey` the key
+  `EXE_AWAITINGCDKEYAUTH` (0x46be56); `CL_Connect` clears it (0x46959f);
+  `CL_GetClientState` (0x4754f0) hands it to the UI at +0x808.
+  VERIFIED (the code). `UI_DrawConnectScreen` draws it while
+  `connState` is under 5 (0x54a709), translated (0x54aca0), in the
+  title's font at scale 0.5, centred on x 320, from y 299 (0x70be4c)
+  22 apart (0x70b7e8), yellow (1, 1, 0, 1 at 0x6b4498), no glow; a line
+  ends at its 59th character, at the text's end, or at a space once
+  past its 41st, the space kept (0x54a750..0x54a7d4). VERIFIED (the
+  code). The stock 1.7 server sends `print` only for an rcon redirect
+  (`print\n%s` at 0x8232778, read only by the redirect flush at
+  0x8177e66), so a stock server shows no line in a join. VERIFIED (the
+  string's two readers). vcod: the join tells the screen through
+  `conn::JoinNote` (a new join, a message, `connectResponse`, which
+  also moves the stage line on to `EXE_AWAITINGGAMESTATE`), and
+  `cod4_connect::message_lines` splits it as 1.7 does. Gate:
+  `cod4_loading::tests::cod4_connect_screen_draws_a_print_in_yellow`.
+
+## 19. The low-health overlay and the hit direction icons
+
+Code: `crates/client/src/cod4_damage.rs`, drawn by `cod4_hud`; gate:
+`play::cod4`'s `cod4_live_blast_pulses_the_overlay_and_points_an_icon_at_it`
+(a vcod-server frag 240 units off a joined player).
+
+- The overlay is the `low health` menu in `common_mp`: one item,
+  `healthoverlay`, rect 0 0 640 480, alignment 4 4, owner draw 112,
+  background `overlay_low_health`, colour 1 1 1 1, no `visible`
+  expression. VERIFIED (`menu_dump`). Owner draw 112 reaches
+  `CG_DrawPlayerLowHealthOverlay` (`iw3mp.exe` 0x442e70, called at
+  0x444441). VERIFIED.
+- 0x442e70 reads the health fraction off the newest snapshot's
+  playerstate (`cg.nextSnap`, 0x74e35c, plus 0xc) through
+  `CG_CalcPlayerHealth` (0x442640): `stats[0] / stats[2]` (ps+0x148 over
+  ps+0x150) clamped to 0..1, 0 when either is 0 or `pm_type` is 7. At 0 it
+  neither steps the pulse nor draws. VERIFIED. Otherwise it steps the
+  pulse (0x442c20), takes its alpha (0x442bb0) into the item's colour and
+  draws the background over the rect when the alpha is not 0. VERIFIED.
+- The pulse state sits at `cg` + 0x50334..0x50354 (alpha from, alpha to,
+  phase start, phase length, phase, active, hurt time, last fraction,
+  pulse index). VERIFIED. A fall in the fraction to under
+  `hud_healthOverlay_pulseStart` restarts the count at the first pulse
+  and stamps the hurt time; past the phase's end, under `pulseStart` (or
+  with a pulse running) the next phase starts from the alpha reached:
+  the pulse's magnitude, times `phaseTwo_toAlphaMultiplier`, times
+  `phaseThree_toAlphaMultiplier`, each clamped to 0..1 and each over its
+  `pulseDuration`; after the third the index moves on once
+  `cg.time >= hurt - 3 * (sum of the three durations) + regenPauseTime`.
+  Past the fourth pulse the overlay eases to `phaseEnd_toAlpha` over
+  `phaseEnd_pulseDuration` and goes inactive. The magnitudes are 1, 0.8
+  (0x6cdd4c), 0.6 (0x6b7a9c), 0.3 (0x6d8d84). VERIFIED (0x442c23..
+  0x442e5e). The alpha lerps from the old to the new over the phase
+  (0x442bb0). VERIFIED.
+- The dvars' 1.7 defaults (registered at 0x440b2d..0x440deb):
+  `regenPauseTime` 8000 (max 10000), `pulseStart` 0.55, `phaseOne_
+  pulseDuration` 150, `phaseTwo_toAlphaMultiplier` 0.7, its duration 320,
+  `phaseThree_toAlphaMultiplier` 0.6, its duration 400, `phaseEnd_toAlpha`
+  0, its duration 700. VERIFIED. CoD2 1.3's pulse starts at 0.35 and
+  waits 5000; the rest match.
+- `CG_DamageFeedback` (0x445d00) runs from the playerstate transition
+  (0x44622d, and 0x44e275) when `damageEvent` (ps+0x138) changed and
+  `damageCount` (ps+0x144) is not 0, with `damageYaw` (0x13c) and
+  `damagePitch` (0x140). VERIFIED. Yaw and pitch both 255 is a hit with
+  no direction: no icon. VERIFIED (0x445d4b). Else the slot with the
+  oldest start of eight (`cg.viewDamage`, 0x79e6b8, 12 bytes each: start,
+  length, yaw) takes `cg.snap->serverTime`, `cg_hudDamageIconTime` and
+  `damageYaw / 255 * 360 + (rand() / 32768 - 0.5) * 20`, normalized to
+  0..360 (0x445eb0..0x445f2f). VERIFIED. `damageYaw` is the push's way,
+  from the blast toward the player (the live gate's icon reads 261 for a
+  frag at yaw 90). VERIFIED (live, vcod-server, whose `damageYaw`
+  `combat_ab` holds to retail's).
+- `CG_Respawn` (0x445fa0), run on the first snapshot and when
+  `stats[4]` or `clientNum` changes (0x44de5f..0x44de91), clears the
+  eight slots (0x44607a) and resets the pulse: inactive, alpha to
+  `phaseEnd_toAlpha`, length, phase and index 0, last fraction 1
+  (0x44610a..0x446133). VERIFIED.
+- `CG_DrawDamageDirectionIndicators` (0x42c6e0): nothing while a sight's
+  overlay is up unless `cg_hudDamageIconInScope` (default 0); otherwise
+  each slot with `0 < cg.time - start < length` draws `hit_direction`
+  white at alpha `min(1, 2 - 2t / length)`, a quad `cg_hudDamageIcon
+  Width` (128) wide from `Offset` (128) to `Offset + Height` (64) below
+  the screen's centre, turned by the view axis's yaw less the slot's
+  (`CG_DrawRotatedQuadPic`). VERIFIED (0x42c739..0x42c8db; the defaults
+  at 0x43b3ab..0x43b4f1).
+- A shellshock's screen blend hides them too: before the scope test,
+  0x42c6f3 reads `cg.shellshock`'s start (0x79e80c) less `cg.time`
+  (0x794460) plus its duration (0x79e810), and with that above 0 and
+  the record's `screenBlend.type` (its `parms` at 0x79e808, + 0x10) not
+  0 draws nothing. VERIFIED (the disassembly); the name `CG_Flashbanged`
+  is INFERRED. The stock `shellshockOnDamage` gives any explosive hit
+  over 10 damage `frag_grenade_mp` for 0.5 s, a `blurred` record, so a
+  frag's icon shows only from half a second in. VERIFIED (the zone's
+  `_shellshock.gsc` and `shock/frag_grenade_mp.shock`). vcod:
+  `cod4_shock::flashbanged`, on the newest snapshot's shock; the live
+  gate below reads a live slot under the shock with no icon drawn.
+- The jitter's `rand()` is the CRT's (0x670622), shared with every other
+  caller, so its draws are not retail's; vcod seeds its own MSVC
+  sequence. INFERRED.
+- The view's damage kick, which the same `CG_DamageFeedback` sets up
+  (0x79e734..0x79e73c): cod4-client-view.md 14.2.
+
+## 20. The cursor hint
+
+Code: `crates/client/src/cod4_hints.rs`, drawn by `cod4_hud`; gate:
+`play::cod4`'s `cod4_live_frag_at_our_feet_draws_the_throw_back_hint`
+(a vcod-server frag at a joined player's feet). The server's side is
+cod4-gsc.md 9.1.
+
+- The menu is `cursorhints` in `common_mp`: rect 0 60 40 40, alignment
+  2 2 (the screen's centre), visible while `ui_hud_hardcore` is 0 and
+  the game's state allows; one item, `chRect`, the same rect, owner draw
+  72, font 0, scale 0.375, style 3, colour white. VERIFIED (`menu_dump`).
+- `CG_DrawCursorhint` is `iw3mp.exe` 0x4431e0, behind `cg_cursorHints`
+  (0x8c9404, default 4, registered at 0x43acde). It runs
+  0x443000 first: with no third person
+  (`cg` + 0x46138) and `cursorHint` (`predictedPlayerState` + 0x5a4) set,
+  `cursorHintTime` = `cg.time`, `cursorHintFade` = `cg_hintFadeTime`
+  (0x8c93f4, default 100), `cursorHintIcon` and `cursorHintString` the
+  playerstate's. VERIFIED (0x443000..0x443045). The alpha is the item's
+  times `CG_FadeAlpha(time, cursorHintTime, fade, 100)`; at 0 the icon
+  is cleared and nothing draws (0x443208..0x44326a). VERIFIED. Modes
+  under 4 pulse or scale it (0x443276..0x443367); vcod draws mode 4.
+- Icon 1 is the use string alone: centred on the item, its baseline half
+  a line under the item's y (0x44336b..0x443447). VERIFIED. Icon 2..4
+  are `hint_usable`, `hint_health`, `hint_friendly` (registered at
+  0x43e8e5..0x43e932), 5..132 a weapon's `hudIcon` for weapon `icon - 4`
+  (0x443467..0x443484). VERIFIED. A weapon's icon is twice as wide for
+  `hudIconRatio` 1 and also half as high for 2 (+0x30c, +0x310, the 2.0
+  and 0.5 at 0x700c0c and 0x6be648). VERIFIED.
+- The text: a turret (`weapClass` 7, +0x130) the use string and its
+  name; another weapon the use string 0x443050 builds: with an
+  `inventoryType` (+0x13c), a frag class (`offhandClass` +0x144 of 1)
+  `PLATFORM_THROWBACKGRENADE` with `+frag`'s key, else
+  `PLATFORM_PICKUPNEWWEAPON`; a primary `PLATFORM_SWAPWEAPONS` with two
+  primaries held (the count at 0x41c250), else
+  `PLATFORM_PICKUPNEWWEAPON`, those three with `+activate`'s key and the
+  weapon's name second. VERIFIED (0x443050..0x443133). A non-weapon
+  icon takes the use string when `cursorHintString` is 0 or more, else
+  for icon 3 `PLATFORM_PICKUPHEALTH` (0x443525..0x443569). VERIFIED.
+- `CG_GetUseString` (0x443140): configstring 277 plus
+  `cursorHintString`, empty for none, localized as a `"Hint String"`
+  message (0x538d30) with `&&1` the `+activate` key, `KEY_USE` when
+  unbound (0x44317f). VERIFIED.
+- Layout with a text and a name and `cg_weaponHintsCoD1Style` (0x748648,
+  default 1, 0x43ad22): the text and `" " + name` (0x6ccddc) side by
+  side centred on the item's x, their baseline half a line under its y,
+  the icon centred under them a line and a half lower. VERIFIED
+  (0x4435de..0x4436f1). The centring takes the text's and the bare
+  name's widths (`UI_TextWidth`, 0x542ee0, at 0x44359e and 0x4435fe),
+  not the drawn `" " + name`'s, both in the font handle the owner draw
+  was handed (`ebx`, the caller's), the one it then draws with.
+  VERIFIED. That the caller picks that font at the screen's placement,
+  as every vcod owner draw does, is INFERRED. vcod measured on the
+  640x480 grid's font up to the 2026-10-26 playtest: past 1080p the
+  draw takes a bigger font with other advances, and the text ran into
+  the name (`Press F to swap for<name>`). With a text alone: text then icon in one row,
+  both centred; with an icon alone, the icon centred on the item. The
+  shapes are INFERRED from `CG_DrawCursorhint`
+  where the branches past 0x443700 were not read.
+- vcod-server's hint pass (S-C4-25) sends `cursorHint`,
+  `cursorHintString` and `cursorHintEntIndex` in each snapshot; the gate
+  reads `PLATFORM_THROWBACKGRENADE` with the bound frag key and the
+  frag's `hudIcon` to its right, a 40-unit square on the
+  item's row, the throw back icon at the grenade indicator's place
+  (21), and nothing once the blast has killed us. VERIFIED (the gate,
+  ours). vcod's HUD draws no hint past `PM_DEAD`, as it draws no other
+  HUD menu then. INFERRED (vcod's rule).
+- Retail clears `cursorHint` at death and leaves the rest:
+  `Player_UpdateCursorHints` (`cod4_lnxded` 0x80d2c30) stores 0 into
+  the hint (ps + 0x5a0, 0x80d2c45) and returns at once when the
+  entity's health (+0x1a0) is 0 or less (0x80d2c62..0x80d2c6a), before
+  it writes `cursorHintString` or `cursorHintEntIndex`. VERIFIED (the
+  bytes). In `play-1.7-planefx.txt` the probe stands over his dropped
+  M16 with hint (31, -1, 317) and suicides at 49000: that snapshot reads
+  `pm_type` 7 and hint 0 with the string -1 and entity 317 kept, until
+  the respawn at 51000 clears both. VERIFIED (the capture). So the pass
+  runs on a dead player's end frame too. INFERRED (the capture). vcod-server's
+  dead end frame now runs it (`level::player_end_frame`), and
+  `cod4::planefx_ab` holds the four words across the death to retail's.
+  VERIFIED (the gate, ours).
+
+## 21. The grenade indicators
+
+Code: `crates/client/src/cod4_grenades.rs`, drawn by `cod4_client` over
+the HUD.
+
+- `CG_DrawGrenadeIndicators` is `iw3mp.exe` 0x42ce90: nothing without a
+  next snapshot, for a spectator (`pm_type` 4) or a follower
+  (`otherFlags` 2), or with no grenade taken this frame (0x42ce99..
+  0x42cecd); under a sight's overlay only with
+  `cg_hudGrenadeIconInScope` (0x8c62e0, default 0). VERIFIED. Each
+  grenade draws the pointer (0x42c8f0) then the icon (0x42ca90) in white
+  at the pulse's alpha `sin(cg.time * 2 pi / 1000 * PulseFreq) *
+  (Max - Min) / 2 + Min + (Max - Min) / 2`, clamped to 0..1
+  (0x42cf90..0x42d03e). VERIFIED.
+- `CG_AddHudGrenade` (0x42cd50) for a missile: the weapon a grenade
+  (`weapType` 1, +0x12c), its `projExplosionType` (+0x588) 0, 2 or 6,
+  `timedDetonation` (+0x5ac) set, the position check (0x42cbf0), a
+  speed (`trDelta`) of at most `bg_maxGrenadeIndicatorSpeed` (20,
+  0x40a315) for a frag or heavy one, under 32 taken. A flashbang only
+  with `cg_hudGrenadeIconEnabledFlash` (0x746f44, default 0). A frag
+  under the cursor hint (`cursorHint` 5 or more and `cursorHintEntIndex`
+  its number) takes `hud_grenadethrowback`, else `hud_grenadeicon`.
+  VERIFIED (0x42cd60..0x42ce77).
+- The position check (0x42cbf0): range `cg_hudGrenadeIconMaxRangeFlash`
+  for a flashbang, else the larger of `cg_hudGrenadeIconMaxRangeFrag`
+  and the weapon's `explosionRadius` (+0x554); above the feet at most
+  `MaxHeight` plus `viewHeightCurrent` or the ceiling (`cg` + 0x492c4),
+  below at most `MaxHeight`. VERIFIED. The ceiling is
+  The ceiling probe's player box traced 1024 up from the feet; vcod
+  traces the world clip with mask 1. INFERRED.
+- The 1.7 defaults (registered at 0x43b54e..0x43b9f1): MaxRangeFrag 250,
+  MaxRangeFlash 500, MaxHeight 104,
+  IconOffset 50, IconHeight and IconWidth 25, PointerHeight 12,
+  PointerWidth 25, PointerPivot (12, 27), PulseFreq 1.7, PulseMax 1.85,
+  PulseMin 0.3. VERIFIED (the floats each registration loads).
+- The pointer: the yaw `vectoyaw(grenade - feet) - viewangles[1]`
+  normalized to 0..360; at the centre less `IconOffset * (sin, cos)` of
+  it, a `PointerWidth` by `PointerHeight` quad about its pivot turned by
+  minus the yaw. The icon: an upright `IconWidth` by `IconHeight` square
+  centred at the same point. VERIFIED (0x42c8f0..0x42ca76,
+  0x42ca90..). So a frag ahead draws above the crosshair and one to the
+  left to its left.
+- Left out: the crosshair's position under a sight
+  (`CG_CalcCrosshairPosition`), since the indicators do not draw there
+  at the default.
+
+## 22. Text glow and the compass's tickertape
+
+- Glow. `SetDrawText2DGlowParms` (`iw3mp.exe` 0x5f6aa0): a glow whose
+  alpha is 0 adds nothing; else the command's flags take 0x30 and its
+  forced glow colour is the glow's RGB times 0.1 (the double at
+  0x70b040) with alpha the glow's times the text's. VERIFIED. The text
+  draw's second pass (0x6148d1..0x614aff) runs over each glyph after the
+  whole text's first: with flag 0x20 its colour's RGB bytes are the
+  forced colour's (0x6148ec..0x6148fa) and its alpha byte stays the
+  glyph's own. VERIFIED (the stores); that the forced alpha goes unread
+  is INFERRED (no other store). Without 0x20 the RGB is the glyph's
+  times 0.06 (0x613a80). Each glyph draws four times from the font's
+  glow material: width `pixelWidth * xScale * 1.75` (0x70b620), height
+  `pixelHeight * yScale * 1.125` (0x70bb10), at the glyph's place less
+  `pixelWidth * -0.75 * 0.5` and `pixelHeight * -0.125 * 0.5` (0x70b7e0,
+  0x70ace8, 0x70bb18) plus twice the scale times the offsets at 0x700bec:
+  (-1, -1), (-1, 1), (1, -1), (1, 1). VERIFIED.
+- Every stock font's glow material is `fonts/gamefonts_pc_glow` (the
+  console's and the dev font's their own `_glow`): technique set `2d`,
+  the font page's image, blend `SrcAlpha One`, alpha test `> 0`.
+  VERIFIED (the zones, `localized_code_post_gfx_mp`).
+- A hudelem's `glowColor` (and `glowAlpha`) is the playerstate's
+  `glowColor.rgba` word; `CG_DrawHudElemText` hands it to the text draw
+  unfaded (INFERRED). The stock
+  splashes glow: `_hud_message.gsc`'s `notifyTitle`, `notifyText` and
+  `notifyText2` (0.2, 0.3, 0.7) or the notify's own, alpha 1; the
+  outcome text. VERIFIED (the zone's scripts).
+- vcod: `cod4_hud::glow_text`, after the text, four quads a glyph on the
+  font's page drawn through the HUD pass's additive pipelines (the
+  texture name's `hud::ADDITIVE` prefix). Hudelem text and the connect
+  screen's two titles (18) use it. Gate:
+  `play::cod4`'s `cod4_live_splash_glows_and_the_ticker_turns` (the
+  first spawn's splash on vcod-server's `war`).
+- The tickertape. `compass_old`'s `minimapTickerBorder` (owner draw
+  151, `minimap_tickertape_background`, 6 3 102 14) and `minimapTicker`
+  (owner draw 146, `minimap_tickertape_mp`, 6 6 102 9, text scale
+  0.55). VERIFIED (menu_dump). The tape's draw is `iw3mp.exe`
+  0x428310: the compass fade (0x440f30), `tapeRotation = -(viewYaw -
+  northYaw)` (0x79b69c, 0x79e7cc), its centre `tapeRotation / 360`
+  (0x70b4b0), the tape's material over the rect from S `centre -
+  stretch / 2` to `centre + stretch / 2`, T 0 to 1 (0x45b8d0), with
+  `compassTickertapeStretch` 0.5 (registered at 0x42588b, default the
+  float at 0x6be648, minimum 0.01, maximum 1, pointer at 0x742988).
+  VERIFIED. Then the sixteen objectives (stride 0x1c from the newest
+  snapshot's + 0x668) whose state is 4 or 1, at their entity's place or
+  their own origin, none at the origin: the distance times 0.0254
+  (0x70b048), the bearing from north, the icon at the rect's width
+  times `(delta + 90) / 180` clamped, `delta` the bearing's turn from
+  the tape's centre (90 is `stretch * 360 / 2`), then its distance text
+  (0x428190). VERIFIED (the loop's bounds and loads); the icon's size
+  (`compassObjectiveWidth` times `compassSize`) and the text's colour
+  (0.9, 1, 0.1), `%im` from `compassObjectiveDetailDist` 10 out and
+  `%.1fm` cut to tenths inside, its baseline `iconH + 2` under the
+  tape's middle, are, INFERRED.
+- vcod: `cod4_hud::draw_ticker`, the tape as one or two quads so the S
+  range never wraps inside one (the image's address mode is not read).
+  The same gate turns the view an eighth and reads the tape's S move an
+  eighth. No capture holds an objective, so the icons and distances on
+  the tape have no live gate.
+- Talking icons: 1.7 draws them for voice chat's talkers, which vcod
+  does not have (cod4-gaps.md 18); nothing to draw.
+
+## 23. The bars, the board's menu, the hints and the menu sounds
+
+Code: `crates/client/src/cod4_hud/menus.rs` (the HUD's zone menus drawn
+item by item), `cod4_menu::hud_item`, `play::cod4_menus` (`play`);
+gates: `play::cod4`'s `cod4_live_bars_board_and_hints_draw_from_their_menus`
+(a client joined to vcod-server's `war` on mp_crash) and `cod4_menu`'s
+`cod4_in_game_menus_play_their_sounds`.
+
+- The `xpbar`, `scorebars` and `scorebar` menus in `common_mp` are plain
+  items: windows (style 3 materials such as `hud_xpticker480`,
+  `scorebar_backdrop`, `scorebar_<team>`, `rank_rec1`) and text items,
+  every rect, material, text and visibility an expression; no owner
+  draw. VERIFIED (`menu_dump`). vcod draws them through the HUD's
+  expression context: each visible item (`dynamicFlags` 4 and its
+  `visible when`), its rect expressions with x and y off the menu's,
+  its material expression or background, its text or `textExp`, as
+  `Item_Paint` does. INFERRED (`Item_Paint`, as 12.4). The XP
+  bar's fill is `640 * (stat(2301) - stat(2351)) / (stat(2352) -
+  stat(2351))` (`854 *` in its `wideScreen` set, cod4-front-end.md
+  10.1), so vcod's fresh stats block draws it empty. VERIFIED
+  (the item's `rectW` expression). A background vcod's images lack
+  (`,white`, `,line_horizontal`) is read without its comma, the engine's
+  own image. INFERRED.
+- `scorebars` turns on `team(score) < otherTeam(score)`: the backdrop's
+  `rectH` reads `64 - 128 * trailing` and its `rectY` `-45 - 20 *
+  trailing`, and each row's y moves by 24 (the first pair) or 12 (the
+  second). VERIFIED (`menu_dump`). `UI_DrawHandlePic` (`iw3mp.exe`
+  0x53c070) takes a negative width or height as a flip: it negates it
+  and swaps that axis's texture coordinates (`fchs` at 0x53c082 and
+  0x53c0b3, `fld1` into s0 or t0), then draws from the same corner
+  through 0x45b8d0. VERIFIED (the instructions). So a trailing team's
+  backdrop is the picture upside down over -63..1, still round the team
+  icon; vcod drew it from y upward, a backdrop's height above the icon
+  (playtest 2026-10-26), and now flips it in `cod4_menu::window`
+  (`cod4_live_trailing_score_bars_flip_the_backdrop_in_place`). The
+  team-coloured sliver at each row's left, under the score's first
+  digit, is the `scorebar_<team>` fill, `76 * score / ui_scorelimit`
+  wide: 8 units at 80 of war's 750. VERIFIED (the `rectW` expression).
+- Their `visible when` read `!uiActive()`, `!inKillcam()`,
+  `!flashbanged()` and `ui_hud_hardcore == 0`, and `xpbar` also
+  `dvarBool(onlinegame)`, which vcod reads 1 (12). VERIFIED (the
+  expressions). The `scorebar` menu also reads `!menuIsOpen(scoreboard)`.
+  VERIFIED (the expression).
+- The `scorebar` menu (`common_mp`) is a line across the top centre
+  (rect -200 3 400 18 under `line_horizontal`) and one of
+  `MENU_SCORE_WINNING`, `_LOSING` or `_TIED` with `team(score)` and
+  `otherTeam(score)` at y 20, by how the two compare. Its `visible when`
+  wants a player on allies or axis, outside the killcam, the board and
+  the main menus, not hardcore, and one of: `dvarInt(ui_score_bar)`;
+  a spectator; a time limit (`ui_timelimit > 0`) with `timeLeft() >= 0`
+  and `timeLeft() % 60 < 5` or `timeLeft() < 60` (the five seconds
+  before each whole minute left, then the last minute), or past the end
+  with `timeLeft() % 60 > -5`; or `max(marines(score), opfor(score)) /
+  ui_scorelimit > 0.75`. VERIFIED (`menu_dump`, operators by 12.2's
+  table). So in a timed match the bar comes up for 5 s each minute.
+  `_hud::showClientScoreBar(5.0)` sets `ui_score_bar` 1 at a player's
+  first spawn of the level and back to 0 five seconds on; the thread
+  ends on `death`. VERIFIED (the zone's rawfiles). So a player killed
+  inside those five seconds keeps the bar up. INFERRED.
+- `team( score )` reads `cg.teamScores` (`iw3mp.exe` 0x79dbe4, by
+  `team_t`). `CG_ParseScores` (0x44a350) zeroes all four and stores the
+  `b` reply's arguments 2 and 3 at axis's (0x79dbe8) and allies'
+  (0x79dbec); the `G` case (0x44c38a) stores `atoi(argv(1))` at axis's
+  and `H` (0x44c3ac) at allies'. VERIFIED (the instructions). The client
+  asks for `score` only while the board draws (`CG_UpdateScores`, INFERRED), so between boards the bars run on `G` and `H`,
+  which `setTeamScore` and `updateScores` send (cod4-gsc.md).
+  vcod's HUD read `team( score )` off the last `b` alone: the top bar
+  said "Tied 0 - 0" through a match until Tab was held (playtest
+  2026-10-27). It now keeps `cg.teamScores` as the cgame does
+  (`Cod4Hud::team_scores`). Gate:
+  `play::cod4::tests::cod4_live_a_kill_moves_the_team_scores_without_the_board`
+  (the enemy's kill moves axis's score to 10 with no `score` reply).
+  VERIFIED (vcod-server).
+- `+scores` (`iw3mp.exe` 0x42aaa0, registered under the string `+scores`
+  0x6c7a24 at 0x42adae) runs the score request (0x42aa50), then, with a
+  snapshot (0x74e35c) and the UI's menu state (0xcaefaa0) not 10, sets
+  it to 10, closes the UI's menus (0x54c540) and opens `scoreboard`
+  (0x6e8f3c) in the UI's context (0xcaee200) through 0x550b50.
+  VERIFIED (the instructions). `-scores` (0x42a9d0) sets the state back
+  to 0 and closes them. VERIFIED. The intermission's draw (0x42f080)
+  asks for state 10 too (0x549540 with 10 at 0x42f0f4). VERIFIED. That
+  0xcaeec30, which both test above 0, is the UI's menu count is
+  INFERRED. vcod draws the `scoreboard` menu while `+scores` is held and
+  at intermission, over the board, and reads `uiActive()` and
+  `menuIsOpen(scoreboard)` true then, so the bars hide under it. vcod's
+  choice for the order; the hiding is the expressions'.
+- The `scoreboard` menu's own items: a header band across the top
+  (y 4..28, `line_horizontal_scorebar` in the team's colour by
+  `scr_allies` / `scr_axis`), both team icons and scores, and centred on
+  y 26 either the game type's name (`gameTypeName()`, while `timeLeft()
+  % 8 < 4` or the time is out) or `MENU_SCORE_WINNING_WITH`, `_LOSING_`
+  or `_TIED_` with the score limit, and the countdown
+  (`secondsAsCountdown(timeLeft())`, orange under 30 s, red under 10).
+  VERIFIED (`menu_dump`). The live gate reads "0", "0", "Team
+  Deathmatch", " 9:5x" on `war`. VERIFIED (vcod-server).
+- `timeLeft()` is `(cgs.gameEndTime - nextSnap.serverTime) / 1000`, the
+  end being configstring 11 read with `atoi`. INFERRED (the time left, `CG_ParseGameEndTime`). Retail's server writes the end
+  there (`setGameEndTime`, `oob_ab`'s `CS_GAMEENDTIME` row). VERIFIED.
+- The hint menus, each one owner draw item named `chRect`:
+  `mantlehint` (rect 0 105 40 40, alignment 2 2, owner draw 80, scale
+  0.375, style 3), `invalidcmdhint` (0 -150 0 0, 113, font 1) and
+  `holdbreathhint` (0 -130 0 0, 71). VERIFIED (`menu_dump`). The
+  predicted playerstate sits at `iw3mp.exe` 0x794474: `weapFlags`
+  0x794484, `offHandIndex` 0x794554, `weapon` 0x79455c, `fWeaponPosFrac`
+  0x794568, `holdBreathTimer` 0x794a4c, `mantleState.flags` 0x794a60,
+  each at its netfield offset. VERIFIED (the addresses against
+  `net::fields`). vcod reads the newest snapshot's playerstate instead.
+- Owner draw 71 (0x443900): under `cg_drawBreathHint` (0x748628,
+  registered at 0x43af4c), nothing with `weapFlags` 4, else the held
+  weapon (`offHandIndex` with `weapFlags` 2) must have an
+  `overlayReticle` (`WeaponDef` +0x438), not be `weapClass` 9 (+0x130),
+  sit at `fWeaponPosFrac` 1.0, not hold `+holdbreath` in the current cmd
+  (buttons 0x2000, read through 0x45ab40) and have `holdBreathTimer` 0.
+  The key is the first bound of `+holdbreath` (0x6ccde0),
+  `+melee_breath` (0x6c7ea4) and `+breath_sprint` (0x6ccdec) through
+  0x552460, put into `PLATFORM_HOLD_BREATH` (0x6ccdfc) by 0x54adb0.
+  VERIFIED (the instructions). The line is white, centred on the rect's
+  x by half its width rounded, its baseline at the rect's y. INFERRED
+  (the `fmul 0.5` and the call at 0x443a3a;
+  `CG_DrawHoldBreathHint`). The live gate shows none on the M16's sight.
+  VERIFIED (vcod-server); a scoped sniper's line is not gated.
+- Owner draw 80 (0x443ab0): under `cg_drawMantleHint` (0x8c638c,
+  default 1 at 0x43af69) while `mantleState.flags` & 8, the key of
+  `+gostand` (0x6ccc9c) else `+moveup` (0x6cccb4) in `PLATFORM_MANTLE`
+  (0x6cce14), then the mantle icon (`cgMedia` 0x84cd88, `hint_mantle`
+  registered at 0x43ea8d) after the text. VERIFIED (the instructions).
+  The line starts `(w + width) / 2` left of the rect's x, its baseline
+  half a text height under the rect's y, the icon `w` by `h` from half
+  `h` above it, in the item's colour. INFERRED (`CG_DrawMantleHint`). Live: walked into mp_crash's brush 10804 from
+  (-204, 1680) facing +y, the server sets the flag and the client draws
+  "Press Space to" with the icon. VERIFIED (vcod-server).
+- Owner draw 113 (0x443c60): the type at 0x79e654 clears once `cg.time`
+  (0x794460) passes its time (0x79e658) plus `cg_invalidCmdHintDuration`
+  (0x74a860, default 1800 at 0x43da20); a type 1..9 reads its string
+  off the jump table at 0x443dbc: 1 `WEAPON_NO_AMMO`, 2
+  `WEAPON_NO_FRAG_GRENADE`, 3 `WEAPON_NO_SPECIAL_GRENADE`, 4 nothing, 5
+  `GAME_STAND_BLOCKED`, 6 `GAME_CROUCH_BLOCKED`, 7
+  `WEAPON_TARGET_TOO_CLOSE`, 8 `WEAPON_LOCKON_REQUIRED`, 9
+  `WEAPON_TARGET_NOT_ENOUGH_CLEARANCE`; its alpha is `(cg.time - time) %
+  blink / blink`, `cg_invalidCmdHintBlinkInterval` (0x74e330, default
+  600 at 0x43da68). VERIFIED (the instructions and strings). The player
+  view's events 67 `EV_NO_FRAG_GRENADE_HINT`, 68 `_SPECIAL_`, 69
+  `EV_TARGET_TOO_CLOSE_HINT`, 70 `EV_TARGET_NOT_ENOUGH_CLEARANCE` and 71
+  `EV_LOCKON_REQUIRED_HINT` set types 2, 3, 7, 9 and 8, stamping the time
+  only when the type changes. INFERRED (`CG_EntityEvent`,
+  `CG_SetInvalidCmdHint`). Live: a
+  second frag press with the one frag thrown blinks "No Frag Grenades
+  Remaining". VERIFIED (vcod-server). The "can't go prone here" line is
+  `CG_DrawPlayerStance`'s (owner draw 20), whose `stance` menu sits off
+  the screen (cod4-gaps.md), so 1.7 shows none. INFERRED.
+- Menu sounds: the stock menus' scripts `play` `mouse_click` (7236
+  times across `common_mp` and `ui_mp`), `mouse_submenu_over` (4004),
+  `mouse_over` (881) and `mp_ingame_summary` (2). VERIFIED (`menu_dump`).
+  The three mouse aliases are in `localized_code_post_gfx_mp`, which a
+  game loads its sounds from, and in no other HUD zone. VERIFIED (the
+  gate's zone walk). vcod plays a game's menus' `play` as a local sound,
+  as the front end's (cod4-front-end.md). INFERRED (`Script_playLocalSound`).
+- Menu fades: no stock item starts fading (initial `dynamicFlags` are
+  0, 4, 0x1000, 0x10000 or 0x10004, never 0x10 or 0x20), and the only
+  fade commands, `main_controls`' and `main_options`' `onOpen`
+  `setitemcolor fadebox backcolor 0 0 0 1 ; fadeout fadebox`, name an
+  item neither menu has. VERIFIED (`menu_dump` of `common_mp` and
+  `ui_mp`). So 1.7's stock menus fade nothing and vcod runs neither
+  command. `Fade` would step `backColor[3]` of a style 1 item with a
+  background, or `foreColor[3]` of a text, by the menu's `fadeAmount`
+  every `fadeCycle` ms. INFERRED (`Window_Paint`,
+  `Item_TextColor`).
+
+## What is left
+
+- The script menus: the other skipped commands, horizontal list boxes'
+  scroll bars, plain-text
+  items taking the focus, owner draws (the team and `class` menus'
+  minimap), and a pixel comparison with retail's team, class and
+  in-game menus.
+- The vision sets' glow (`cod4-world.md` 11.4).
+- A pixel comparison of the scoreboard (7.1) and its menu's header
+  (23) with retail's.
+- A retail capture of `pingPlayer`'s flash and a talker on the compass
+  (15.9); a live gate of the tickertape's objective icons (22). No capture holds
+  an objective yet.
+- A retail capture of a UAV, a shot ping, a helicopter or planes (no
+  committed fixture holds one; 15.3 and 15.7 rest on INFERRED code reads and the live
+  gates against vcod-server).
+- The alt weapon's clip graphic (`ammoCounterClip` 6, no `altWeapon`
+  read), the offhand highlight; the XP bar's fill off real rank stats
+  (23).
+- The name fade-in's wait on the crosshair's colour (17); the location
+  selector's mouse scale against 1.7's counts (15.8); a foreground
+  offscreen waypoint's place among the hudelems (16.3); the connect
+  screen's yellow `print` and key-wait lines, a live download through
+  it, and a pixel comparison of the screen with retail's (18).

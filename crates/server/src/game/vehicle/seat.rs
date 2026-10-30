@@ -84,7 +84,7 @@ pub enum SeatOp {
 /// for its collision surfaces.
 pub struct Rig {
     pub skel: Skeleton,
-    pub model: vcod_common::xmodel::XModel,
+    pub model: vcod_common::model::Model,
 }
 
 /// A vehicle posed as its wire fields have it this frame, for its tags.
@@ -150,7 +150,7 @@ fn rig(host: &mut GameHost, model: &str) -> Option<Rc<Rig>> {
     let rig = host.fs.clone().and_then(|fs| {
         let name = model.replace('\\', "/");
         let name = name.trim_start_matches("xmodel/");
-        vcod_common::xmodel::load(&fs, name)
+        vcod_common::model::load(&*fs, name)
             .map_err(|e| log::warn!("vehicle model {name}: {e}"))
             .ok()
             .map(|m| {

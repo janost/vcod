@@ -96,15 +96,17 @@ const UO: Patch = Patch {
 impl Patch {
     /// The paks the capture's server read, when the install has them.
     fn fs(&self) -> Option<vcod_common::pk3::Pk3Fs> {
-        if self.proto.version == PROTOCOL_V1.version {
+        if self.proto.transport.version == PROTOCOL_V1.transport.version {
             return vcod_common::testing::game_fs_11();
         }
-        if self.proto.version == PROTOCOL_V22.version {
+        if self.proto.transport.version == PROTOCOL_V22.transport.version {
             return vcod_common::testing::uo_fs();
         }
         // A UO install's `main/` is 1.5's.
-        vcod_common::testing::game_fs()
-            .filter(|fs| vcod_server::server::install_protocol(fs).version == PROTOCOL_V6.version)
+        vcod_common::testing::game_fs().filter(|fs| {
+            vcod_server::server::install_protocol(fs).transport.version
+                == PROTOCOL_V6.transport.version
+        })
     }
 
     /// `G_BounceItem`'s lift, `0.5 + 0.5 * u`: (0, 0.5] on 1.1d, [0.5, 1)

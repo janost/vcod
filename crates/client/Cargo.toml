@@ -12,14 +12,18 @@ description = "Call of Duty (2003) map viewer and spectator client"
 
 [dependencies]
 vcod-common.workspace = true
+vcod-cod2 = { path = "../cod2" }
+vcod-cod4 = { path = "../cod4" }
 anyhow.workspace = true
 bytemuck.workspace = true
 clap.workspace = true
+cpal.workspace = true
 ctrlc.workspace = true
 env_logger.workspace = true
 glam.workspace = true
 jiff.workspace = true
 kira.workspace = true
+libloading.workspace = true
 log.workspace = true
 pollster.workspace = true
 symphonia.workspace = true
@@ -27,6 +31,7 @@ winit.workspace = true
 wgpu.workspace = true
 
 [dev-dependencies]
+image.workspace = true
 vcod-server = { path = "../server" }
 tempfile.workspace = true
 zip.workspace = true

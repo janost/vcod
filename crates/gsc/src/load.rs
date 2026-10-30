@@ -3,9 +3,13 @@
 //! Scripts write `maps\mp\_load::main()` while the paks store
 //! `maps/MP/_load.gsc`, so every path is canonicalized before lookup.
 
-use std::collections::{BTreeSet, HashSet};
+use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 
+use crate::Dialect;
 use crate::bytecode::Op;
+use crate::compile::CompileOptions;
 use crate::value::{FuncRef, Value};
 use crate::vm::Vm;
 
@@ -30,6 +34,44 @@ pub struct LoadError {
     pub msg: String,
 }
 
+/// One file as the source answered it, and its parse.
+struct SourceFile {
+    text: String,
+    parsed: Result<crate::ast::File, crate::parse::ParseError>,
+}
+
+/// What a [`Loader`] has done so far, without its source or builtin
+/// table: [`Loader::state`] takes one after some loads and
+/// [`Loader::resume`] carries on from it, as the loader that took it
+/// would have. A host keeps one beside the matching [`crate::Program`]
+/// to skip compiling a closure it compiled before.
+#[derive(Clone, Default)]
+pub struct LoaderState {
+    loaded: HashSet<String>,
+    animtrees: BTreeSet<String>,
+    /// Every path the source was asked for, with what it answered.
+    files: HashMap<String, Option<Rc<SourceFile>>>,
+}
+
+impl LoaderState {
+    /// Whether `source` still answers every path this state read with the
+    /// same text (a missing file still missing): if so, loading again from
+    /// `source` repeats exactly what built this state. Reads every one.
+    pub fn current(&self, source: &dyn ScriptSource) -> bool {
+        // Sorted, so the reads (and whatever they touch in the source) go
+        // in one order run to run.
+        let mut paths: Vec<_> = self.files.iter().collect();
+        paths.sort_by(|a, b| a.0.cmp(b.0));
+        paths
+            .into_iter()
+            .all(|(path, file)| match (source.read(path), file) {
+                (Some(text), Some(f)) => text == f.text,
+                (None, None) => true,
+                _ => false,
+            })
+    }
+}
+
 /// Reads, compiles and installs scripts on demand, following every
 /// cross-file reference a loaded file names until the transitive closure
 /// is installed.
@@ -41,15 +83,69 @@ pub struct Loader {
     loaded: HashSet<String>,
     /// Every `#using_animtree` name the loaded files declare, folded.
     animtrees: BTreeSet<String>,
+    /// Each path read once and parsed once: a CoD2 file's includes are
+    /// looked up by every file that includes them.
+    files: RefCell<HashMap<String, Option<Rc<SourceFile>>>>,
+    dialect: Dialect,
+    /// The host's builtin names, which beat an included function (CoD2).
+    is_builtin: Option<BuiltinTable>,
 }
 
+/// Answers whether a folded name is a builtin.
+pub type BuiltinTable = Box<dyn Fn(&str) -> bool>;
+
 impl Loader {
+    /// A loader compiling CoD 1.1 script.
     pub fn new(source: Box<dyn ScriptSource>) -> Self {
+        Self::with_dialect(source, Dialect::Cod1)
+    }
+
+    pub fn with_dialect(source: Box<dyn ScriptSource>, dialect: Dialect) -> Self {
+        Self::resume(source, dialect, LoaderState::default())
+    }
+
+    /// A loader that carries on from `state` (taken by [`Loader::state`]
+    /// under the same dialect) over `source`, which should answer as the
+    /// one that built it did ([`LoaderState::current`]). The builtin table
+    /// is not part of the state: set it again.
+    pub fn resume(source: Box<dyn ScriptSource>, dialect: Dialect, state: LoaderState) -> Self {
         Loader {
             source,
-            loaded: HashSet::new(),
-            animtrees: BTreeSet::new(),
+            loaded: state.loaded,
+            animtrees: state.animtrees,
+            files: RefCell::new(state.files),
+            dialect,
+            is_builtin: None,
         }
+    }
+
+    /// What this loader has loaded and read so far.
+    pub fn state(&self) -> LoaderState {
+        LoaderState {
+            loaded: self.loaded.clone(),
+            animtrees: self.animtrees.clone(),
+            files: self.files.borrow().clone(),
+        }
+    }
+
+    /// `path` read and parsed, once per loader.
+    fn file(&self, path: &str) -> Option<Rc<SourceFile>> {
+        if let Some(f) = self.files.borrow().get(path) {
+            return f.clone();
+        }
+        let f = self.source.read(path).map(|text| {
+            let parsed = crate::parse::parse_file_dialect(&text, self.dialect);
+            Rc::new(SourceFile { text, parsed })
+        });
+        self.files.borrow_mut().insert(path.to_string(), f.clone());
+        f
+    }
+
+    /// Gives the compiler the host's builtin table, folded names: under
+    /// CoD2 an unqualified call to a name both a builtin and an included
+    /// function is the builtin's. Without one the included function wins.
+    pub fn set_builtins(&mut self, is_builtin: BuiltinTable) {
+        self.is_builtin = Some(is_builtin);
     }
 
     /// The animtrees the loaded files name in `#using_animtree`, lowercase
@@ -77,12 +173,17 @@ impl Loader {
     pub fn load(&mut self, vm: &mut Vm, path: &str) -> Result<(), LoadError> {
         let mut installed = Vec::new();
         let mut visited = Vec::new();
+        let read_before: HashSet<String> = self.files.borrow().keys().cloned().collect();
         self.load_one(vm, &canonical(path), None, &mut installed, &mut visited)
             .inspect_err(|_| {
                 vm.uninstall(&installed);
                 for p in &visited {
                     self.loaded.remove(p);
                 }
+                // A retry reads again what this call read.
+                self.files
+                    .borrow_mut()
+                    .retain(|p, _| read_before.contains(p));
             })
     }
 
@@ -106,7 +207,7 @@ impl Loader {
         }
         visited.push(path.to_string());
 
-        let text = self.source.read(path).ok_or_else(|| LoadError {
+        let file = self.file(path).ok_or_else(|| LoadError {
             path: path.to_string(),
             // No source line exists for "the file itself is missing".
             line: 0,
@@ -116,20 +217,37 @@ impl Loader {
             },
         })?;
 
-        let ast = crate::parse::parse_file(&text).map_err(|e| LoadError {
+        let ast = file.parsed.as_ref().map_err(|e| LoadError {
             path: path.to_string(),
             line: e.line,
-            msg: e.msg,
+            msg: e.msg.clone(),
         })?;
 
         self.animtrees
             .extend(ast.animtrees.iter().map(|t| t.to_ascii_lowercase()));
-        let fns =
-            crate::compile::compile_file(&ast, path, vm.interner_mut()).map_err(|e| LoadError {
+        // An included file's function names, read off its parse; a file
+        // that does not parse is reported when it loads below.
+        let include_funcs = |p: &str| {
+            let file = self.file(p)?;
+            let names = file
+                .parsed
+                .as_ref()
+                .map(|f| f.funcs.iter().map(|f| f.name.clone()).collect())
+                .unwrap_or_default();
+            Some(names)
+        };
+        let opts = CompileOptions {
+            dialect: self.dialect,
+            include_funcs: &include_funcs,
+            is_builtin: self.is_builtin.as_deref(),
+        };
+        let fns = crate::compile::compile_file_with(ast, path, vm.interner_mut(), &opts).map_err(
+            |e| LoadError {
                 path: path.to_string(),
                 line: e.line,
                 msg: e.msg,
-            })?;
+            },
+        )?;
 
         // Collected before `install` consumes `fns`. A cross-file call is
         // an `Op::Call` whose target names another file; a bare `::name`
@@ -141,7 +259,9 @@ impl Loader {
         // reference gets blamed on, and which spelling of a folded key
         // `resolve` keeps (`atom.rs`'s "whichever the compiler saw first"),
         // nondeterministic run to run.
-        let mut refs: BTreeSet<String> = BTreeSet::new();
+        // An included file loads whether or not anything calls into it,
+        // as retail's include pass loads it.
+        let mut refs: BTreeSet<String> = ast.includes.iter().map(|i| i.path.clone()).collect();
         for f in &fns {
             for op in &f.code {
                 if let Op::Call { func, .. } = op {
@@ -223,6 +343,119 @@ mod tests {
                 .map(|(k, v)| (canonical(k), v.to_string()))
                 .collect(),
         )
+    }
+
+    /// A source whose files a test changes between loads, counting reads.
+    #[derive(Clone, Default)]
+    struct Shared(Rc<RefCell<(HashMap<String, String>, usize)>>);
+
+    impl Shared {
+        fn set(&self, path: &str, text: &str) {
+            self.0.borrow_mut().0.insert(canonical(path), text.into());
+        }
+        fn reads(&self) -> usize {
+            self.0.borrow().1
+        }
+    }
+
+    impl ScriptSource for Shared {
+        fn read(&self, canonical: &str) -> Option<String> {
+            let mut s = self.0.borrow_mut();
+            s.1 += 1;
+            s.0.get(canonical).cloned()
+        }
+    }
+
+    #[test]
+    fn a_cod2_include_is_read_once_however_many_files_include_it() {
+        let src = Shared::default();
+        src.set("a", "#include c;\nmain() { b::f(); one(); }");
+        src.set("b", "#include c;\nf() { one(); }");
+        src.set("c", "one() { }");
+        let mut l = Loader::with_dialect(Box::new(src.clone()), Dialect::Cod2);
+        l.load(&mut Vm::new(), "a").unwrap();
+        assert_eq!(src.reads(), 3);
+    }
+
+    /// A loader resumed from another's state, on a `Vm` built from that
+    /// one's program, ends where the first would have: same functions,
+    /// same atoms, same file order.
+    #[test]
+    fn a_resumed_loader_carries_on_as_the_one_it_was_taken_from() {
+        let src = source(&[
+            (
+                "gt",
+                r#"#using_animtree("multiplayer"); main() { shared::f(); }"#,
+            ),
+            (
+                "map",
+                r#"#using_animtree("flak88"); main() { shared::f(); own::g(); }"#,
+            ),
+            ("shared", "f() { x = \"s\"; }"),
+            ("own", "g() { y = \"o\"; }"),
+        ]);
+        let mut vm = Vm::new();
+        let mut l = Loader::new(Box::new(src));
+        l.load(&mut vm, "gt").unwrap();
+        let state = l.state();
+        let program = vm.program();
+        l.load(&mut vm, "map").unwrap();
+
+        let src = source(&[
+            (
+                "gt",
+                r#"#using_animtree("multiplayer"); main() { shared::f(); }"#,
+            ),
+            (
+                "map",
+                r#"#using_animtree("flak88"); main() { shared::f(); own::g(); }"#,
+            ),
+            ("shared", "f() { x = \"s\"; }"),
+            ("own", "g() { y = \"o\"; }"),
+        ]);
+        assert!(state.current(&src));
+        let mut vm2 = Vm::from_program(&program);
+        let mut l2 = Loader::resume(Box::new(src), Dialect::Cod1, state);
+        l2.load(&mut vm2, "map").unwrap();
+
+        assert_eq!(l2.loaded_count(), l.loaded_count());
+        assert_eq!(
+            l2.animtrees().collect::<Vec<_>>(),
+            ["flak88", "multiplayer"]
+        );
+        let funcs = |vm: &Vm| {
+            let mut v: Vec<_> = vm
+                .functions()
+                .map(|f| (f.file, f.name, format!("{:?}", f.code)))
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(funcs(&vm2), funcs(&vm));
+        // Every atom in the same place.
+        assert!(vm2.interner().texts().eq(vm.interner().texts()));
+    }
+
+    #[test]
+    fn a_state_is_stale_once_a_file_it_read_changes_or_appears() {
+        let src = Shared::default();
+        src.set("a", "#include b;\nmain() { }");
+        src.set("b", "f() { }");
+        let mut l = Loader::with_dialect(Box::new(src.clone()), Dialect::Cod2);
+        l.load(&mut Vm::new(), "a").unwrap();
+        let state = l.state();
+        assert!(state.current(&src));
+        src.set("b", "f() { wait 1; }");
+        assert!(!state.current(&src));
+        src.set("b", "f() { }");
+        assert!(state.current(&src));
+
+        // A path the load found missing is part of the state too.
+        let mut l = Loader::new(Box::new(src.clone()));
+        assert!(l.load(&mut Vm::new(), "gone").is_err());
+        assert!(l.load(&mut Vm::new(), "a/b").is_err());
+        src.set("a/b", "main() { }");
+        l.load(&mut Vm::new(), "a/b").unwrap();
     }
 
     #[test]
@@ -408,5 +641,48 @@ mod tests {
         let mut l = Loader::new(Box::new(src));
         l.load(&mut vm, "a").unwrap();
         assert!(l.missing_builtins(&vm, &|_| false).is_empty());
+    }
+
+    /// `probe_c2b` and `probe_c2c`: an include imports its file's functions,
+    /// the file's own includes work inside it, and they reach no further.
+    #[test]
+    fn a_cod2_include_is_not_transitive() {
+        let src = source(&[
+            ("a", "#include b;\nmain() { one(); two(); }"),
+            ("b", "#include c;\none() { two(); }"),
+            ("c", "two() { }"),
+        ]);
+        let mut vm = Vm::new();
+        let mut l = Loader::with_dialect(Box::new(src), Dialect::Cod2);
+        l.load(&mut vm, "a").unwrap();
+        // `two` from `a` is left to the builtins; `one` and `b`'s `two`
+        // are script calls.
+        assert_eq!(l.missing_builtins(&vm, &|_| false), vec!["two"]);
+        let mut host = TestHost::default();
+        let f = vm.func_ref("b", "one");
+        assert!(vm.call_now(&mut host, f, None, vec![]).is_ok());
+    }
+
+    #[test]
+    fn a_cod2_include_loads_its_file_unreferenced_and_the_builtin_table_wins() {
+        let src = source(&[
+            ("a", "#include b;\nmain() { getcvar(); }"),
+            ("b", "getcvar() { }"),
+        ]);
+        let mut vm = Vm::new();
+        let mut l = Loader::with_dialect(Box::new(src), Dialect::Cod2);
+        l.set_builtins(Box::new(|n| n == "getcvar"));
+        l.load(&mut vm, "a").unwrap();
+        assert_eq!(l.loaded_count(), 2);
+        assert_eq!(l.missing_builtins(&vm, &|_| false), vec!["getcvar"]);
+    }
+
+    #[test]
+    fn a_cod1_loader_refuses_an_include() {
+        let src = source(&[("a", "#include b;\nmain() { }"), ("b", "")]);
+        let e = Loader::new(Box::new(src))
+            .load(&mut Vm::new(), "a")
+            .unwrap_err();
+        assert_eq!(e.msg, "unknown directive '#include'");
     }
 }

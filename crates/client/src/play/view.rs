@@ -194,7 +194,7 @@ fn lean_offset(leanf: f32, frac: f32) -> Vec3 {
 
 /// A (forward, left, up) vector in view space (X right, Y up, -Z forward);
 /// docs/research/xmodel-v14-format.md, "Model space and the view basis".
-fn view_from_ful(v: Vec3) -> Vec3 {
+pub(crate) fn view_from_ful(v: Vec3) -> Vec3 {
     Vec3::new(-v.y, v.z, -v.x)
 }
 
@@ -206,7 +206,7 @@ pub fn pose_transform(pose: scope::GunPose) -> Mat4 {
 /// The view weapon's model matrix in view space: the model's axes are
 /// `AnglesToAxis(angles)` in the view's frame (`0x30037480`-`0x300374aa`
 /// multiply it onto the view's axis), at `pos`.
-fn gun_transform(pos: Vec3, angles: [f32; 3]) -> Mat4 {
+pub(crate) fn gun_transform(pos: Vec3, angles: [f32; 3]) -> Mat4 {
     let [f, l, u] = aim::angles_to_axis_msvc(angles).map(|r| view_from_ful(Vec3::from(r)));
     Mat4::from_translation(pos)
         * Mat4::from_cols(f.extend(0.0), l.extend(0.0), u.extend(0.0), glam::Vec4::W)

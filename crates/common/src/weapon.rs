@@ -7,7 +7,6 @@
 //! own viewmodel machine still ignores them. `adsBobFactor` scales the walk
 //! bob on the gun down the sight (combat doc, 15.2).
 
-use crate::pk3::Pk3Fs;
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 
@@ -418,6 +417,9 @@ pub enum OverlayReticle {
     Springfield,
     /// Drawn as `Fg42`.
     Gewehr43,
+    /// CoD2's fifth name (`binoculars_mp`), after `Springfield` in its
+    /// table (Mac `_szWeapOverlayReticleNames`, 0x349db8); CoD1 has none.
+    Binoculars,
 }
 
 impl OverlayReticle {
@@ -432,6 +434,7 @@ impl OverlayReticle {
             "fg42" => OverlayReticle::Fg42,
             "springfield" => OverlayReticle::Springfield,
             "gewehr43" => OverlayReticle::Gewehr43,
+            "binoculars" => OverlayReticle::Binoculars,
             _ => {
                 log::warn!("weapon: unknown adsOverlayReticle {v:?}");
                 OverlayReticle::None
@@ -783,13 +786,24 @@ impl Default for WeaponDef {
 }
 
 /// `name` is the CS 7 name (`kar98k_mp`), without the `weapons/mp/` prefix.
-pub fn load(fs: &Pk3Fs, name: &str) -> Result<WeaponDef> {
+pub fn load(
+    fs: &(impl crate::asset_source::AssetSource + ?Sized),
+    name: &str,
+) -> Result<WeaponDef> {
     let path = format!("weapons/mp/{name}");
     let text = fs
         .read(&path)
         .ok_or_else(|| anyhow!("{path} not found in pk3s"))?;
     let map = crate::xmodel::parse_weapon(&String::from_utf8_lossy(&text));
     Ok(WeaponDef::from_map(&map))
+}
+
+impl crate::asset_source::Asset for WeaponDef {
+    const KIND: crate::asset_source::AssetKind = crate::asset_source::AssetKind::Weapon;
+
+    fn find(src: &dyn crate::asset_source::AssetSource, name: &str) -> Result<Self> {
+        load(src, name)
+    }
 }
 
 /// Picks the viewmodel clip for the wire's `ps.weapAnim`

@@ -260,6 +260,9 @@ pub struct LoopedFx {
     pub cull: f32,
     /// `es.angles2[1]`, the repeat delay in whole ms.
     pub period_ms: i32,
+    /// `es.eventParm`: CoD2's `DirToByte` of the up vector, 0 for none
+    /// and always 0 on CoD1.
+    pub up: i32,
 }
 
 /// `playLoopedFx(fx, delay, origin[, cull[, forward]])` (`.so` 0x5b3c0):
@@ -303,24 +306,39 @@ pub fn play_looped_fx(
         None => 0.0,
     };
     let period_ms = (float(args.get(1))? * 1000.0 + 0.5) as i32;
-    let id = host.ents.spawn(cx)?;
-    let classname = cx.intern_folded("classname");
-    let noclass = Value::String(cx.intern_exact("noclass"));
-    host.set_field(cx, id, classname, noclass)?;
-    let og = cx.intern_folded("origin");
-    host.set_field(cx, id, og, Value::Vector(*origin))?;
-    if let Some(e) = host.ents.get_mut(id) {
-        e.broadcast = true;
-    }
-    host.looped_fx.insert(
-        id,
+    spawn_looped_fx(
+        host,
+        cx,
+        *origin,
         LoopedFx {
             id: fx & 0xff,
             forward,
             cull,
             period_ms,
+            up: 0,
         },
-    );
+    )
+}
+
+/// The `ET_FX` entity both games' `playLoopedFx` spawn: `G_Spawn`,
+/// broadcast, `G_SetOrigin` at `origin`, `fx` for the wire, linked, and
+/// handed back.
+pub fn spawn_looped_fx(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    origin: [f32; 3],
+    fx: LoopedFx,
+) -> Result<Value, ErrorKind> {
+    let id = host.ents.spawn(cx)?;
+    let classname = cx.intern_folded("classname");
+    let noclass = Value::String(cx.intern_exact("noclass"));
+    host.set_field(cx, id, classname, noclass)?;
+    let og = cx.intern_folded("origin");
+    host.set_field(cx, id, og, Value::Vector(origin))?;
+    if let Some(e) = host.ents.get_mut(id) {
+        e.broadcast = true;
+    }
+    host.looped_fx.insert(id, fx);
     Ok(Value::Entity(id))
 }
 

@@ -50,7 +50,7 @@ fn booted(map: &str, fs: vcod_common::pk3::Pk3Fs, now: Instant) -> vcod_server::
 }
 
 fn check(map: &str) {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         return;
     };
     let aborts = booted(map, fs, Instant::now()).script_aborts();
@@ -67,7 +67,7 @@ fn check(map: &str) {
 /// the retail capture was taken with, so this and the playerstate gate drive
 /// the same one.
 fn check_join(map: &str) {
-    let Some(fs) = vcod_common::testing::game_fs() else {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
         return;
     };
     let mut now = Instant::now();

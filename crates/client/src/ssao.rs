@@ -101,7 +101,7 @@ impl SsaoPass {
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Depth,
                         view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: true,
+                        multisampled: crate::renderer::msaa_samples() > 1,
                     },
                     count: None,
                 },
@@ -117,7 +117,12 @@ impl SsaoPass {
                 },
             ],
         });
-        let shader = device.create_shader_module(wgpu::include_wgsl!("ssao.wgsl"));
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ssao.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(crate::renderer::depth_wgsl(include_str!(
+                "ssao.wgsl"
+            ))),
+        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ssao pipeline layout"),
             bind_group_layouts: &[Some(&layout)],
@@ -177,7 +182,7 @@ impl SsaoPass {
             "fs_apply",
             scene_format,
             Some(multiply),
-            crate::renderer::MSAA_SAMPLES,
+            crate::renderer::msaa_samples(),
             Some(wgpu::DepthStencilState {
                 format: crate::renderer::DEPTH_FORMAT,
                 depth_write_enabled: Some(false),

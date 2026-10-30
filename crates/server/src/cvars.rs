@@ -5,8 +5,8 @@
 //! Configstrings 140..203 hold the names of the mirrored cvars and
 //! 204..267 their values, paired by offset 64, and the client runs
 //! `Cvar_Set(cs[140 + i], cs[204 + i])` down the block until a value is
-//! empty. The block is sorted by name, not written in call order: the
-//! evidence is in docs/design/2026-08-30-gsc-stage3-design.md.
+//! empty. The block is sorted by name, not written in call order. The
+//! engine's writer is in `docs/research/cod11-map-cycle.md` 3.2.
 
 use std::collections::BTreeMap;
 use vcod_gsc::ErrorKind;
@@ -163,8 +163,11 @@ impl Cvars {
         let v6 = protocol == 6 || uo;
         let mut cv = Cvars {
             vars: BTreeMap::new(),
-            mirror: vcod_common::net::protocol::Protocol::by_version(protocol)
-                .map_or(&vcod_common::net::protocol::PROTOCOL_V1.cs, |p| &p.cs),
+            mirror: vcod_common::net::protocol::Protocol::by_version(
+                vcod_common::game::Game::Cod1,
+                protocol,
+            )
+            .map_or(&vcod_common::net::protocol::PROTOCOL_V1.cs, |p| &p.cs),
         };
         let mirrored = ENGINE_MIRRORED
             .iter()
@@ -241,6 +244,13 @@ impl Cvars {
         self.vars
             .get(&name.to_ascii_lowercase())
             .map(|c| (c.name.as_str(), c.value.as_str(), c.default.as_str()))
+    }
+
+    /// Whether a `set` made the cvar rather than a registration.
+    pub fn user_created(&self, name: &str) -> bool {
+        self.vars
+            .get(&name.to_ascii_lowercase())
+            .is_some_and(|c| c.user_created)
     }
 
     /// `Cvar_Set`: registers the cvar if it does not exist, and never
@@ -320,6 +330,31 @@ impl Cvars {
             .map(|c| (c.name.as_str(), c.value.as_str()))
     }
 
+    /// Gives an existing cvar `name`'s spelling, as another game registers
+    /// it (CoD4's `sv_floodprotect` over CoD1's `sv_floodProtect`).
+    pub fn respell(&mut self, name: &str) {
+        if let Some(c) = self.vars.get_mut(&name.to_ascii_lowercase()) {
+            c.name = name.to_string();
+        }
+    }
+
+    /// Clears `bits` on every cvar.
+    pub fn clear_flags(&mut self, bits: u16) {
+        for c in self.vars.values_mut() {
+            c.flags &= !bits;
+        }
+    }
+
+    /// Every cvar carrying `bit` as `(name, value)`, case-folded order,
+    /// a latched value in place of the live one, empty values kept: what
+    /// CoD4's `writeconfig` archives (cod4-handshake.md 14.1).
+    pub fn flagged(&self, bit: u16) -> impl Iterator<Item = (&str, &str)> {
+        self.vars
+            .values()
+            .filter(move |c| c.flags & bit != 0)
+            .map(|c| (c.name.as_str(), c.latched.as_deref().unwrap_or(&c.value)))
+    }
+
     pub fn flags(&self, name: &str) -> Option<u16> {
         self.vars.get(&name.to_ascii_lowercase()).map(|c| c.flags)
     }
@@ -391,12 +426,54 @@ impl Cvars {
         applied
     }
 
+    /// [`Self::exec_cfg`] under the command line: a row the operator
+    /// already set (`+set` runs after the startup configs) keeps its value.
+    pub fn exec_cfg_under_sets(&mut self, text: &str) -> usize {
+        let mut applied = 0;
+        for line in text.lines() {
+            let tokens = cfg_tokens(line);
+            if tokens.len() >= 2 && tokens[0].eq_ignore_ascii_case("set") {
+                let set_by_hand = self
+                    .vars
+                    .get(&tokens[1].to_ascii_lowercase())
+                    .is_some_and(|c| c.user_created || c.value != c.default);
+                if !set_by_hand {
+                    self.set(&tokens[1], tokens.get(2).map_or("", |s| s.as_str()));
+                    applied += 1;
+                }
+            }
+        }
+        applied
+    }
+
     /// `makeCvarServerInfo(name, default)`: `register` plus the mirror
     /// flag, which it sets whether or not the cvar already existed.
     pub fn make_server_info(&mut self, name: &str, default: &str) {
         self.register(name, default);
         if let Some(c) = self.vars.get_mut(&name.to_ascii_lowercase()) {
             c.mirrored = true;
+        }
+    }
+
+    /// Another game's mirror: the block at `layout`'s `cvar_names`, and
+    /// `rows` its engine's mirrored dvars at their defaults in place of the
+    /// 1.1 table's (CoD2's, cod2-protocol.md 15.4).
+    pub fn remirror(
+        &mut self,
+        layout: &'static vcod_common::net::protocol::CsLayout,
+        rows: &[(&str, &str)],
+    ) {
+        for c in self.vars.values_mut() {
+            c.mirrored = false;
+        }
+        self.mirror = layout;
+        for &(name, value) in rows {
+            self.register(name, value);
+            if let Some(c) = self.vars.get_mut(&name.to_ascii_lowercase()) {
+                c.value = value.to_string();
+                c.default = value.to_string();
+                c.mirrored = true;
+            }
         }
     }
 
@@ -410,7 +487,7 @@ impl Cvars {
         let (first, last) = self.mirror.cvar_names;
         let values = self.mirror.cvar_values;
         if flagged.len() > last + 1 - first {
-            // Checked before the clear loop below: `Server::tick` passes its
+            // Checked before the clear loop below: `engine::tick` passes its
             // live configstring table in, and an overflow here must leave
             // the previous frame's mirror stale rather than wipe it.
             return Err(ErrorKind::BadType("cvar mirror range exhausted"));

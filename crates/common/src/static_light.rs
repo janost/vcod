@@ -4,8 +4,11 @@
 //! lit from them with its own normal. Facts and addresses:
 //! docs/research/cod11-light-grid-and-leaf-lights.md.
 
-use crate::bsp::{self, Bsp};
+use crate::bsp;
+
 use crate::collision::CollisionWorld;
+use crate::mapworld;
+use crate::mapworld::MapWorld;
 use glam::Vec3;
 use std::sync::Arc;
 
@@ -368,15 +371,15 @@ fn leaf_lights(bsp: &LeafTree, leaf: usize) -> (Vec<usize>, bool) {
 /// The BSP tree and leaf light lists, copied out of the map so the
 /// lighting outlives the parse.
 struct LeafTree {
-    planes: Vec<bsp::Plane>,
-    nodes: Vec<bsp::Node>,
-    leafs: Vec<bsp::Leaf>,
+    planes: Vec<mapworld::Plane>,
+    nodes: Vec<mapworld::Node>,
+    leafs: Vec<mapworld::Leaf>,
     light_indices: Vec<i16>,
     leaf_lights: Vec<(u32, u32)>,
 }
 
 impl LeafTree {
-    fn of(bsp: &Bsp) -> LeafTree {
+    fn of(bsp: &MapWorld) -> LeafTree {
         LeafTree {
             planes: bsp.planes.clone(),
             nodes: bsp.nodes.clone(),
@@ -450,11 +453,13 @@ impl SunKeep {
 /// Points for [`sun_keep`]: the centroids of up to `max` lightmapped
 /// triangles facing within 18 degrees of straight up, each with the
 /// luminance of the nearest lightmap texel.
-pub fn sun_keep_samples(bsp: &Bsp, max: usize) -> Vec<(Vec3, f32)> {
-    const SIDE: usize = bsp::LIGHTMAP_SIZE;
+pub fn sun_keep_samples(bsp: &MapWorld, max: usize) -> Vec<(Vec3, f32)> {
+    const SIDE: usize = mapworld::LIGHTMAP_SIZE;
     let mut tris = Vec::new();
     for soup in &bsp.soups {
-        if soup.lightmap == bsp::NO_LIGHTMAP || usize::from(soup.lightmap) >= bsp.lightmaps.len() {
+        if soup.lightmap == mapworld::NO_LIGHTMAP
+            || usize::from(soup.lightmap) >= bsp.lightmaps.len()
+        {
             continue;
         }
         let first = soup.first_index as usize;
@@ -643,7 +648,7 @@ pub fn sun_keep_regions(
 }
 
 /// How far a trace must run to leave `bsp`'s world: its bounds' diagonal.
-pub fn world_reach(bsp: &Bsp) -> f32 {
+pub fn world_reach(bsp: &MapWorld) -> f32 {
     bsp.models.first().map_or(32768.0, |m| {
         (Vec3::from(m.maxs) - Vec3::from(m.mins)).length() + 64.0
     })
@@ -666,7 +671,7 @@ pub struct StaticLighting {
 }
 
 impl StaticLighting {
-    pub fn new(bsp: &Bsp) -> Self {
+    pub fn new(bsp: &MapWorld) -> Self {
         let world = WorldLight::parse(&bsp.entities);
         let lights: Vec<Light> = bsp
             .lights

@@ -43,8 +43,71 @@
 //! With an arm one-sided the totals add a row per arm, named by the
 //! one-sided features on for it. `VERBOSE=1` prints every kill. Seeds
 //! default to 1..=8.
+//!
+//! `DIGEST=1` (any game) prints a line per match, `digest <map>
+//! <gametype> seed <s> ticks <n> <hex>`: a running FNV-1a 64 over each
+//! bot's last run cmd and its origin, velocity, health and weapon, folded
+//! after every tick in slot order. `DIGEST=<N>` adds `digest@<tick>` lines
+//! every N ticks, so two runs' first differing line names the window where
+//! a bot first did something else. It only reads: the other lines match a
+//! run without it.
+//!
+//! `NETDIGEST=<N>` joins one observer client (a spectator that never picks
+//! a team, at a non-LAN address so rates and `snaps` pace it) before the
+//! first tick and folds every datagram the server sends each tick, to
+//! anyone, in send order (address, length, bytes), into a second FNV-1a
+//! 64 printed as `net@<tick>` every N ticks and `net <map> <gametype> seed
+//! <s> ticks <n> <hex>` per match. The observer is a client, so it changes
+//! the match: compare `NETDIGEST` runs only with `NETDIGEST` runs. CoD2's
+//! `svs.time` reads the wall clock, which keys the challenge and so every
+//! netchan byte; under `NETDIGEST` the CoD2 server runs it on the frame
+//! clock (`Cod2Server::test_frame_clock`). `NETDUMP=<dir>` writes the
+//! datagrams themselves, a line each (`<tick> <to> <len> <hex>`), to
+//! `<dir>/<game>_<map>_<gametype>_s<seed>.net`, to find the bytes behind a
+//! `net@` window that parted.
+//!
+//! `OBSERVERS=<N>` (CoD1 and CoD2) joins N more such spectators, each at
+//! its own address, whose datagrams no digest folds: a server with N
+//! human clients to build snapshots for. They change the match as the
+//! `NETDIGEST` one does.
+//!
+//! `VCOD_TICK_TRACE=<dir>` writes each match's tick step log
+//! (`vcod_server::tick_trace`) to `<dir>/<game>_<map>_<gametype>_s<seed>.trace`,
+//! `<game>` `11`, `uo` or `cod2`.
+//!
+//! `GAME=cod2` runs CoD2 matches instead (`COD2_DIR=<install>`, maps
+//! `mp_toujane` by default, `GAMETYPE=` dm or tdm): the bots of
+//! `vcod-server --game cod2 --bots N --bots-shoot` (`bots::cod2`), with
+//! kills, deaths, suicides, hits, rounds fired and the 12 s stalls split
+//! as above (held: `BotBody::holds`' engaged, cover, retreat or objective,
+//! or frozen by the script, on any tick of the window; `STALLS=1` prints
+//! every 20th stalled bot-tick to stderr as CoD4's does), plus the cover-hold and lean ticks, the
+//! retreats, the smoke grenades thrown and the hits answered within 1 s.
+//! The mounted guns' mounts, seconds manned and kills (`GUNS=0`:
+//! bots leave the guns alone).
+//! `SKILLS=` (one level a bot, in join order) or `AXIS_SKILL=` /
+//! `ALLIES_SKILL=` set the levels; the totals split kills, hits, rounds,
+//! sighted rounds and time-to-kill by weapon class and by skill, and count
+//! the guns bots picked up. The feature arms and `UO` are CoD1's only.
+//!
+//! `GAME=cod4` runs CoD4 1.7 matches (`COD4_DIR=<install>`, maps
+//! `mp_crash` by default, `GAMETYPE=` any stock one, `war` by default,
+//! `SET=` cvars before the load): the bots of `vcod-server --game cod4
+//! --bots N --bots-shoot` (`bots::cod4`), with kills, deaths, suicides,
+//! hits, rounds fired, the 12 s stalls split as CoD2's, ladder ticks, the
+//! frag throws and mantles, the levels run past the first (`restarts`, a
+//! round's `fast_restart`; `spawns`, a map loaded by the match's end and
+//! rotation; the maps in order), the objectives' actions read off the
+//! scripts each tick (bomb `pickup`, `plant`, `defuse`, `explode`, zone
+//! `capture`), and every distinct script error the levels raised
+//! (`ScriptRuntime::aborts`) with its count, per match and summed.
+//! `LEAVE=<tick>,...` drops the lowest scoring bot at each of those ticks
+//! (`removebot 1`), a client leaving mid-match; `OBJ=0` keeps the bots off
+//! the objectives (`Cod4Bots::objectives`). `SPIKE_MS=<ms>` prints every
+//! tick past it with its phases (`vcod_server::tick_profile`).
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -375,8 +438,378 @@ impl Tally {
     }
 }
 
+/// `TICKSTATS=1` (any game): each tick's wall time and its
+/// `vcod_server::tick_profile` phases, printed per match to stderr as
+/// `tickstats <map> <gametype> seed <s>: ticks N p50 p90 p99 max` and a
+/// line per phase (mean and p99 ms a tick, longest mean first). Tick 0,
+/// which waits on the nav graph, is left out. Run with `JOBS=1`: matches
+/// beside each other share the CPUs.
+#[derive(Default)]
+struct TickStats {
+    ms: Vec<f32>,
+    /// Each phase's time per counted tick, 0 where it did not run.
+    phases: BTreeMap<&'static str, Vec<f32>>,
+    /// The slowest tick: ms, tick, its phases.
+    worst: (f32, usize, String),
+}
+
+impl TickStats {
+    fn from_env() -> Option<TickStats> {
+        (std::env::var("TICKSTATS").as_deref() == Ok("1")).then(|| {
+            vcod_server::tick_profile::enable();
+            TickStats::default()
+        })
+    }
+
+    fn add(&mut self, tick: usize, ms: f32, phases: &[vcod_server::tick_profile::PhaseTime]) {
+        if tick == 0 {
+            return;
+        }
+        let n = self.ms.len();
+        self.ms.push(ms);
+        for (name, d, _) in phases {
+            let v = self.phases.entry(name).or_default();
+            v.resize(n, 0.0);
+            v.push(d.as_secs_f32() * 1000.0);
+        }
+        if ms > self.worst.0 {
+            self.worst = (ms, tick, vcod_server::tick_profile::format(phases, 1.0));
+        }
+    }
+
+    fn pct(v: &[f32], p: f32) -> f32 {
+        let mut s = v.to_vec();
+        s.sort_by(f32::total_cmp);
+        s.get(((s.len() as f32 - 1.0) * p).round() as usize)
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    fn print(&self, map: &str, gametype: &str, seed: u64) {
+        let n = self.ms.len();
+        eprintln!(
+            "tickstats {map} {gametype} seed {seed}: ticks {n} p50 {:.2} p90 {:.2} p99 {:.2} max {:.1} ms (tick {}: {})",
+            Self::pct(&self.ms, 0.5),
+            Self::pct(&self.ms, 0.9),
+            Self::pct(&self.ms, 0.99),
+            self.worst.0,
+            self.worst.1,
+            self.worst.2,
+        );
+        let mut rows: Vec<(&str, f32, f32)> = self
+            .phases
+            .iter()
+            .map(|(k, v)| {
+                let mut v = v.clone();
+                v.resize(n, 0.0);
+                (
+                    *k,
+                    v.iter().sum::<f32>() / n.max(1) as f32,
+                    Self::pct(&v, 0.99),
+                )
+            })
+            .collect();
+        rows.sort_by(|a, b| b.1.total_cmp(&a.1));
+        for (k, mean, p99) in rows {
+            if mean >= 0.01 || p99 >= 0.1 {
+                eprintln!("tickstats   {k:<28} mean {mean:6.3} p99 {p99:6.2} ms");
+            }
+        }
+    }
+}
+
+/// `DIGEST=`: a running FNV-1a 64 over every bot's last run cmd and body,
+/// folded after each tick in slot order (bot-combat.md section 1). `1`
+/// prints the match's final value; `N` above 1 also prints it every `N`
+/// ticks, so a diff of two runs names the first window that parted.
+#[derive(Default, Clone)]
+struct Digest {
+    /// `digest` or `net`: the lines' first word.
+    label: &'static str,
+    hash: u64,
+    every: usize,
+    /// (tick, running hash) every `every` ticks.
+    windows: Vec<(usize, u64)>,
+}
+
+impl Digest {
+    fn from_env() -> Option<Digest> {
+        Self::from_var("DIGEST", "digest")
+    }
+
+    /// `NETDIGEST=`'s: the datagrams sent.
+    fn net_from_env() -> Option<Digest> {
+        Self::from_var("NETDIGEST", "net")
+    }
+
+    fn from_var(var: &str, label: &'static str) -> Option<Digest> {
+        let every: usize = std::env::var(var).ok()?.parse().expect(var);
+        (every > 0).then_some(Digest {
+            label,
+            hash: 0xcbf2_9ce4_8422_2325,
+            every,
+            windows: Vec::new(),
+        })
+    }
+
+    fn bytes(&mut self, b: &[u8]) {
+        for &x in b {
+            self.hash ^= u64::from(x);
+            self.hash = self.hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    fn i32s(&mut self, v: &[i32]) {
+        for x in v {
+            self.bytes(&x.to_le_bytes());
+        }
+    }
+
+    /// Floats by their bits: a last-bit change shows.
+    fn f32s(&mut self, v: &[f32]) {
+        for x in v {
+            self.bytes(&x.to_bits().to_le_bytes());
+        }
+    }
+
+    /// Closes tick `n` (1-based).
+    fn end_tick(&mut self, n: usize) {
+        if self.every > 1 && n.is_multiple_of(self.every) {
+            self.windows.push((n, self.hash));
+        }
+    }
+
+    fn print(&self, map: &str, gametype: &str, seed: u64, ticks: usize) {
+        let label = self.label;
+        for (t, h) in &self.windows {
+            println!("{label}@{t} {map} {gametype} seed {seed} {h:016x}");
+        }
+        println!(
+            "{label} {map} {gametype} seed {seed} ticks {ticks} {:016x}",
+            self.hash
+        );
+    }
+
+    /// One tick's datagrams, in send order, then the tick closed.
+    fn datagrams(&mut self, sent: &[(SocketAddr, Vec<u8>)], tick: usize) {
+        for (to, p) in sent {
+            self.bytes(to.to_string().as_bytes());
+            self.bytes(&(p.len() as u32).to_le_bytes());
+            self.bytes(p);
+        }
+        self.end_tick(tick + 1);
+    }
+
+    /// One CoD1 tick: each bot slot, then its last run cmd, origin,
+    /// velocity, health and weapon (or a 0 byte with no body).
+    fn cod1(&mut self, sv: &vcod_server::Server, tick: usize) {
+        for slot in sv.bot_slots() {
+            self.bytes(&(slot as u32).to_le_bytes());
+            let Some((c, ps, health)) = sv.bot_digest_state(slot) else {
+                self.bytes(&[0]);
+                continue;
+            };
+            self.bytes(&[1]);
+            self.i32s(&[c.server_time]);
+            self.bytes(&[c.buttons, c.wbuttons, c.weapon, c.flags]);
+            self.i32s(&c.angles);
+            self.bytes(&[c.forward as u8, c.right as u8, c.up as u8]);
+            self.f32s(&ps.origin.to_array());
+            self.f32s(&ps.velocity.to_array());
+            self.i32s(&[health]);
+            self.bytes(&[ps.weapon]);
+        }
+        self.end_tick(tick + 1);
+    }
+
+    /// One CoD2 tick, as [`Digest::cod1`] over `slots` sorted: the
+    /// player's `oldcmd` (the last cmd that ran) and playerstate.
+    fn cod2(&mut self, sv: &vcod_server::cod2::Cod2Server, slots: &[usize], tick: usize) {
+        let mut slots = slots.to_vec();
+        slots.sort_unstable();
+        for slot in slots {
+            self.bytes(&(slot as u32).to_le_bytes());
+            let level = sv.level();
+            let Some(p) = level.and_then(|l| l.players.get(slot)?.as_ref()) else {
+                self.bytes(&[0]);
+                continue;
+            };
+            let c = p.oldcmd;
+            self.bytes(&[1]);
+            self.i32s(&[c.server_time, c.buttons]);
+            self.bytes(&[c.weapon, c.off_hand_index]);
+            self.i32s(&c.angles);
+            self.bytes(&[c.forward_move as u8, c.right_move as u8]);
+            self.f32s(&p.ps.origin.to_array());
+            self.f32s(&p.ps.velocity.to_array());
+            let health = level.map_or(0, |l| l.rt.client_vitals(slot).health);
+            self.i32s(&[health]);
+            self.bytes(&[p.ws.weapon]);
+        }
+        self.end_tick(tick + 1);
+    }
+
+    /// One CoD4 tick, as [`Digest::cod2`]: the player's `oldcmd` and
+    /// playerstate.
+    fn cod4(
+        &mut self,
+        level: &vcod_server::game::cod4::level::Cod4Level,
+        slots: &[usize],
+        tick: usize,
+    ) {
+        let mut slots = slots.to_vec();
+        slots.sort_unstable();
+        for slot in slots {
+            self.bytes(&(slot as u32).to_le_bytes());
+            let (Some(p), Some(ps)) = (
+                level.players.get(slot).and_then(Option::as_ref),
+                level.pm_state(slot),
+            ) else {
+                self.bytes(&[0]);
+                continue;
+            };
+            let c = p.oldcmd;
+            self.bytes(&[1]);
+            self.i32s(&[c.server_time, c.buttons as i32]);
+            self.bytes(&[c.weapon, c.offhand]);
+            self.i32s(&c.angles.map(i32::from));
+            self.bytes(&[c.forward_move as u8, c.right_move as u8]);
+            self.f32s(&ps.origin.to_array());
+            self.f32s(&ps.velocity.to_array());
+            self.i32s(&[level.rt.client_vitals(slot).health]);
+            self.i32s(&[ps.weapon as i32]);
+        }
+        self.end_tick(tick + 1);
+    }
+}
+
+/// `NETDIGEST`'s observer: a non-LAN address, so the server paces it on
+/// its rate and `snaps` as it would a remote client.
+const OBSERVER: SocketAddr = SocketAddr::new(
+    std::net::IpAddr::V4(std::net::Ipv4Addr::new(198, 51, 100, 7)),
+    28961,
+);
+
+/// The two queues between [`Observer`]'s client and the server.
+#[derive(Default)]
+struct Pipe {
+    to_server: VecDeque<Vec<u8>>,
+    to_client: VecDeque<Vec<u8>>,
+}
+
+struct PipeEnd(Rc<std::cell::RefCell<Pipe>>);
+
+impl vcod_common::net::Transport for PipeEnd {
+    fn try_recv(&mut self, buf: &mut [u8]) -> Option<usize> {
+        let p = self.0.borrow_mut().to_client.pop_front()?;
+        buf[..p.len()].copy_from_slice(&p);
+        Some(p.len())
+    }
+    fn send(&mut self, data: &[u8]) {
+        self.0.borrow_mut().to_server.push_back(data.to_vec());
+    }
+}
+
+/// A CoD1 spectator client that joins and stays in the team menu,
+/// acknowledging every snapshot.
+struct Observer {
+    pipe: Rc<std::cell::RefCell<Pipe>>,
+    cl: vcod_common::net::NetClient<PipeEnd>,
+    addr: SocketAddr,
+}
+
+/// `OBSERVERS=`' count, 0 without it.
+fn observers_from_env() -> usize {
+    std::env::var("OBSERVERS").map_or(0, |v| v.parse().expect("OBSERVERS"))
+}
+
+/// The `i`th observer's address and qport: [`OBSERVER`] and 4660 for the
+/// first, the next host and qport for each after it.
+fn observer_addr(i: usize) -> (SocketAddr, u16) {
+    let mut a = OBSERVER;
+    a.set_ip(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+        198,
+        51,
+        100,
+        7 + i as u8,
+    )));
+    (a, 4660 + i as u16)
+}
+
+impl Observer {
+    fn new(proto: &'static vcod_common::net::protocol::Protocol, now: Instant, i: usize) -> Self {
+        let (addr, qport) = observer_addr(i);
+        let pipe = Rc::new(std::cell::RefCell::new(Pipe::default()));
+        let cl = vcod_common::net::NetClient::start_with_protocol(
+            PipeEnd(pipe.clone()),
+            now,
+            qport,
+            proto,
+        );
+        Observer { pipe, cl, addr }
+    }
+
+    /// The client's packets since the last tick, into the server.
+    fn deliver(&mut self, sv: &mut vcod_server::Server, now: Instant) {
+        let pending: Vec<Vec<u8>> = self.pipe.borrow_mut().to_server.drain(..).collect();
+        for p in pending {
+            sv.handle_packet(self.addr, &p, now);
+        }
+    }
+
+    /// The tick's datagrams to the client, then its frame.
+    fn receive(&mut self, sent: &[(SocketAddr, Vec<u8>)], now: Instant) {
+        for (to, p) in sent {
+            if *to == self.addr {
+                self.pipe.borrow_mut().to_client.push_back(p.clone());
+            }
+        }
+        self.cl.pump_at(now);
+        self.cl
+            .send_frame(&vcod_common::net::msg::UserCmd::default());
+    }
+}
+
+/// `NETDUMP=<dir>`: this match's datagrams file.
+fn net_dump(
+    game: &str,
+    map: &str,
+    gametype: &str,
+    seed: u64,
+) -> Option<std::io::BufWriter<std::fs::File>> {
+    let dir = std::env::var_os("NETDUMP")?;
+    let path = std::path::Path::new(&dir).join(format!("{game}_{map}_{gametype}_s{seed}.net"));
+    Some(std::io::BufWriter::new(
+        std::fs::File::create(path).expect("NETDUMP"),
+    ))
+}
+
+/// One tick's datagrams into a [`net_dump`] file.
+fn dump_datagrams(
+    w: &mut Option<std::io::BufWriter<std::fs::File>>,
+    sent: &[(SocketAddr, Vec<u8>)],
+    tick: usize,
+) {
+    use std::io::Write;
+    let Some(w) = w.as_mut() else { return };
+    for (to, p) in sent {
+        let hex: String = p.iter().map(|b| format!("{b:02x}")).collect();
+        writeln!(w, "{} {to} {} {hex}", tick + 1, p.len()).expect("NETDUMP");
+    }
+}
+
+/// `VCOD_TICK_TRACE=<dir>`: this match's step log, on this thread.
+fn install_trace(game: &str, map: &str, gametype: &str, seed: u64) {
+    if let Some(dir) = std::env::var_os("VCOD_TICK_TRACE") {
+        let path =
+            std::path::Path::new(&dir).join(format!("{game}_{map}_{gametype}_s{seed}.trace"));
+        vcod_server::tick_trace::install(&path).expect("VCOD_TICK_TRACE");
+    }
+}
+
 #[derive(Default, Clone)]
 struct Match {
+    net: Option<Digest>,
     map: String,
     seed: u64,
     ticks: usize,
@@ -398,10 +831,17 @@ struct Match {
     held: u32,
     log: Vec<String>,
     dm: bool,
+    digest: Option<Digest>,
 }
 
 fn main() {
     let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.into());
+    if env("GAME", "cod1") == "cod2" {
+        return cod2::main();
+    }
+    if env("GAME", "cod1") == "cod4" {
+        return cod4::main();
+    }
     let uo = env("UO", "0") == "1";
     let gametype = env("GAMETYPE", "tdm");
     let mut bots: usize = env("BOTS", "6").parse().expect("BOTS");
@@ -475,7 +915,9 @@ fn main() {
                     let Some((map, seed)) = queue.lock().unwrap().pop() else {
                         break;
                     };
-                    let Some(m) = run(&opts, &map, seed) else {
+                    let m = run(&opts, &map, seed);
+                    vcod_server::tick_trace::finish().expect("VCOD_TICK_TRACE");
+                    let Some(m) = m else {
                         return;
                     };
                     eprintln!(
@@ -515,6 +957,12 @@ fn main() {
             all.line(),
             m.actions,
         );
+        if let Some(d) = &m.digest {
+            d.print(&m.map, &opts.gametype, m.seed, m.ticks);
+        }
+        if let Some(d) = &m.net {
+            d.print(&m.map, &opts.gametype, m.seed, m.ticks);
+        }
     }
     if opts.maps.len() > 1 {
         for map in &opts.maps {
@@ -596,13 +1044,13 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
         vcod_common::testing::game_fs()
     }?;
     let fs = Rc::new(fs);
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map(map).unwrap()).unwrap()).unwrap();
+    let bsp = vcod_common::mapworld::find(&*fs, map).unwrap();
     let mut now = Instant::now();
     let manual = o.console.is_empty();
     let cfg = vcod_server::ServerConfig {
         map: map.to_string(),
         hostname: "match".into(),
-        max_clients: (o.bots + 2).max(8),
+        max_clients: (o.bots + 2 + observers_from_env()).max(8),
         gametype: o.gametype.clone(),
         test_entities: 0,
         trace: false,
@@ -628,8 +1076,20 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
         map: map.to_string(),
         seed,
         dm: o.gametype == "dm",
+        digest: Digest::from_env(),
+        net: Digest::net_from_env(),
         ..Default::default()
     };
+    let game = if o.uo { "uo" } else { "11" };
+    install_trace(game, map, &o.gametype, seed);
+    let mut observer = m
+        .net
+        .is_some()
+        .then(|| Observer::new(sv.protocol(), now, 0));
+    let mut crowd: Vec<Observer> = (1..=observers_from_env())
+        .map(|i| Observer::new(sv.protocol(), now, i))
+        .collect();
+    let mut dump = net_dump(game, map, &o.gametype, seed);
     let mut seen = 0;
     let mut level = sv.server_id();
     // (attacker, victim) -> tick of the attacker's first hit this life.
@@ -639,6 +1099,7 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
     let mut hist: HashMap<usize, VecDeque<([f32; 3], bool)>> = HashMap::new();
     let mut bots: HashMap<usize, Life> = HashMap::new();
     let mut react = React::default();
+    let mut stats = TickStats::from_env();
     for tick in 0..o.ticks {
         now += Duration::from_millis(TICK_MS);
         // A default arm never calls its hook, so an all-on run is the
@@ -665,8 +1126,36 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                 sv.test_bot_wary(slot, wary.on(team, seed));
             }
         }
+        if let Some(ob) = observer.as_mut() {
+            ob.deliver(&mut sv, now);
+        }
+        for ob in &mut crowd {
+            ob.deliver(&mut sv, now);
+        }
+        let t0 = Instant::now();
         sv.tick(now);
+        if let Some(st) = stats.as_mut() {
+            let ms = t0.elapsed().as_secs_f32() * 1000.0;
+            st.add(tick, ms, &vcod_server::tick_profile::take());
+        }
         m.ticks = tick + 1;
+        if let Some(d) = m.digest.as_mut() {
+            d.cod1(&sv, tick);
+        }
+        if let (Some(ob), Some(d)) = (observer.as_mut(), m.net.as_mut()) {
+            let sent = sv.take_outgoing();
+            d.datagrams(&sent, tick);
+            dump_datagrams(&mut dump, &sent, tick);
+            ob.receive(&sent, now);
+            for ob in &mut crowd {
+                ob.receive(&sent, now);
+            }
+        } else if !crowd.is_empty() {
+            let sent = sv.take_outgoing();
+            for ob in &mut crowd {
+                ob.receive(&sent, now);
+            }
+        }
         if sv.server_id() != level {
             // A restart (sd's rounds) keeps the log; every body respawns.
             level = sv.server_id();
@@ -902,6 +1391,9 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                 }
             }
         }
+    }
+    if let Some(st) = &stats {
+        st.print(map, &o.gametype, seed);
     }
     Some(m)
 }
@@ -1320,5 +1812,1402 @@ impl Fights {
             life.on.insert(t, (tick, tick));
         }
         f
+    }
+}
+
+/// `GAME=cod2`: CoD2 matches through `vcod_server::cod2::Cod2Server`.
+mod cod2 {
+    use std::collections::{BTreeMap, HashMap, VecDeque};
+    use std::rc::Rc;
+    use std::time::{Duration, Instant};
+
+    use vcod_server::cod2::{Cod2Config, Cod2Server};
+
+    use super::{Digest, RADIUS, TICK_MS, WINDOW, install_trace};
+
+    /// `NETDIGEST`'s CoD2 observer ([`super::Observer`]): challenge,
+    /// connect, then a packet a tick, its `cp` once the gamestate is in.
+    #[derive(Default)]
+    enum Observer2 {
+        #[default]
+        Start,
+        Challenging,
+        Connecting(i32),
+        Joined {
+            cl: Box<vcod_cod2::net::Client>,
+            out: Vec<Vec<u8>>,
+        },
+    }
+
+    /// An [`Observer2`] at the `i`th observer's address
+    /// ([`super::observer_addr`]).
+    struct Spectator2 {
+        state: Observer2,
+        addr: std::net::SocketAddr,
+        qport: u16,
+    }
+
+    impl Spectator2 {
+        fn new(i: usize) -> Self {
+            let (addr, qport) = super::observer_addr(i);
+            Spectator2 {
+                state: Observer2::Start,
+                addr,
+                qport,
+            }
+        }
+
+        fn deliver(&mut self, sv: &mut Cod2Server, now: Instant) {
+            for p in self.state.packets(self.qport) {
+                sv.handle_packet(self.addr, &p, now);
+            }
+        }
+
+        fn receive(
+            &mut self,
+            sent: &[(std::net::SocketAddr, Vec<u8>)],
+            map: &str,
+            fs: &vcod_common::pk3::Pk3Fs,
+        ) {
+            self.state.receive(sent, self.addr, self.qport, map, fs);
+        }
+    }
+
+    impl Observer2 {
+        /// The packets due to the server.
+        fn packets(&mut self, qport: u16) -> Vec<Vec<u8>> {
+            use vcod_cod2::net::oob;
+            match self {
+                Observer2::Start => {
+                    *self = Observer2::Challenging;
+                    vec![oob::getchallenge(None)]
+                }
+                Observer2::Challenging => Vec::new(),
+                Observer2::Connecting(c) => {
+                    let ui = "\\name\\observer\\rate\\25000\\snaps\\20\\cl_punkbuster\\0";
+                    vec![oob::connect(ui, *c, qport)]
+                }
+                Observer2::Joined { out, .. } => std::mem::take(out),
+            }
+        }
+
+        fn receive(
+            &mut self,
+            sent: &[(std::net::SocketAddr, Vec<u8>)],
+            addr: std::net::SocketAddr,
+            qport: u16,
+            map: &str,
+            fs: &vcod_common::pk3::Pk3Fs,
+        ) {
+            use vcod_cod2::net::oob::{self, Reply};
+            for (to, p) in sent {
+                if *to != addr {
+                    continue;
+                }
+                if let Some(payload) = oob::payload(p) {
+                    match (oob::parse_reply(payload), &*self) {
+                        (Reply::Challenge(c), Observer2::Challenging) => {
+                            *self = Observer2::Connecting(c);
+                        }
+                        (Reply::Connect, Observer2::Connecting(c)) => {
+                            let cl = vcod_cod2::net::Client::new(qport, *c);
+                            *self = Observer2::Joined {
+                                cl: Box::new(cl),
+                                out: Vec::new(),
+                            };
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+                let Observer2::Joined { cl, .. } = self else {
+                    continue;
+                };
+                if let Ok(Some(parsed)) = cl.receive(p)
+                    && parsed.gamestate
+                {
+                    let gs = cl.parser.gamestate.as_ref().unwrap();
+                    let si = gs.configstring(1).to_string();
+                    let feed = gs.checksum_feed;
+                    fs.clear_references();
+                    fs.touch(&format!("maps/mp/{map}.d3dbsp"));
+                    let cp = vcod_cod2::net::pure::pure_command(fs, feed, &si);
+                    cl.add_reliable(&cp);
+                }
+            }
+            if let Observer2::Joined { cl, out } = self {
+                let pkt = if cl.parser.gamestate.is_some() {
+                    let base = cl.parser.snapshot().map_or(0, |s| s.server_time);
+                    let cmd = cl.idle_cmd(base + super::TICK_MS as i32);
+                    cl.build_packet(&[cmd])
+                } else {
+                    cl.build_packet(&[])
+                };
+                out.extend(pkt.ok());
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct Cod2Match {
+        net: Option<Digest>,
+        map: String,
+        seed: u64,
+        ticks: usize,
+        /// By the killer's team (`dm`: "none"), kills of another player.
+        kills: BTreeMap<String, u32>,
+        deaths: u32,
+        /// Deaths with no other player the killer: suicides and falls.
+        suicides: u32,
+        hits: u32,
+        rounds: u32,
+        playing: u64,
+        stalled: u64,
+        held: u64,
+        ladder: u64,
+        /// Units walked by every bot, over every tick it played.
+        travelled: f64,
+        /// The script's `A;` actions (`bomb_plant`, `bomb_defuse`).
+        actions: BTreeMap<String, u32>,
+        /// The team scores at the end, [axis, allies].
+        scores: [i32; 2],
+        /// Offhand grenades the bots threw.
+        throws: u32,
+        /// Mantles the bots started.
+        mantles: u32,
+        /// Mounts of a gun, the ticks spent on one, and kills off one.
+        mounts: u32,
+        gun_ticks: u64,
+        gun_kills: u32,
+        /// Bot-ticks playing on a held cover spot, and with `leanf` off 0.
+        cover: u64,
+        lean: u64,
+        /// Retreats started (`Bot::retreating` from 0 to 1 or 2).
+        retreats: u32,
+        /// Smoke grenades the bots threw.
+        smokes: u32,
+        /// Hits on a bot by an enemy (one per attacker until answered or
+        /// 1 s passes), and those the bot fired back at him within 1 s.
+        hurt: u32,
+        answered: u32,
+        /// By weapon class ([`class_of`]) and by skill level.
+        classes: BTreeMap<&'static str, Arms>,
+        skills: BTreeMap<u8, Arms>,
+        /// By weapon name.
+        weapons: BTreeMap<String, Arms>,
+        /// Each bot's spawn kit chosen, by primary name.
+        picks: BTreeMap<String, u32>,
+        /// Weapons a living bot came to hold that it did not spawn with.
+        pickups: u32,
+        log: Vec<String>,
+        digest: Option<Digest>,
+    }
+
+    /// One row of the weapon class or skill split: kills, deaths, hits,
+    /// rounds fired and those fired with the sight fully up, and each
+    /// kill's time from the killer's first hit on the victim, ms.
+    #[derive(Default, Clone)]
+    struct Arms {
+        kills: u32,
+        deaths: u32,
+        hits: u32,
+        rounds: u32,
+        sighted: u32,
+        ttk_ms: Vec<u64>,
+    }
+
+    impl Arms {
+        fn add(&mut self, o: &Arms) {
+            self.kills += o.kills;
+            self.deaths += o.deaths;
+            self.hits += o.hits;
+            self.rounds += o.rounds;
+            self.sighted += o.sighted;
+            self.ttk_ms.extend(&o.ttk_ms);
+        }
+
+        fn line(&self) -> String {
+            let mut t = self.ttk_ms.clone();
+            t.sort_unstable();
+            let mean = t.iter().sum::<u64>() / (t.len().max(1) as u64);
+            let median = t.get(t.len() / 2).copied().unwrap_or(0);
+            format!(
+                "kills {:4} deaths {:4} hits {:5} rounds {:6} acc {:.3} sighted {:3.0}% ttk mean {:5} median {:5} ms",
+                self.kills,
+                self.deaths,
+                self.hits,
+                self.rounds,
+                f64::from(self.hits) / f64::from(self.rounds.max(1)),
+                100.0 * f64::from(self.sighted) / f64::from(self.rounds.max(1)),
+                mean,
+                median
+            )
+        }
+    }
+
+    /// The class a weapon's kills and rounds count under: CoD2's
+    /// `weaponClass`, its rifles split into bolt, semi-automatic and scoped.
+    fn class_of(d: Option<&vcod_cod2::pmove::weapon::WeaponParams>) -> &'static str {
+        let Some(d) = d else {
+            return "other";
+        };
+        match d.weap_class {
+            0 if d.name.contains("sniper") || d.name.contains("scope") => "sniper",
+            0 if d.bolt_action => "bolt",
+            0 if d.semi_auto => "semi",
+            0 => "auto rifle",
+            1 => "mg",
+            2 => "smg",
+            3 => "shotgun",
+            4 => "pistol",
+            5 => "grenade",
+            _ => "other",
+        }
+    }
+
+    pub(super) fn main() {
+        let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.into());
+        let maps: Vec<String> = env("MAPS", &env("MAP", "mp_toujane"))
+            .split(',')
+            .map(str::to_string)
+            .collect();
+        let gametype = env("GAMETYPE", "dm");
+        let bots: usize = env("BOTS", "6").parse().expect("BOTS");
+        let ticks: usize = env("TICKS", "6000").parse().expect("TICKS");
+        let jobs: usize = env("JOBS", "4").parse().expect("JOBS");
+        let verbose = env("VERBOSE", "0") == "1";
+        let mut seeds: Vec<u64> = std::env::args()
+            .skip(1)
+            .map(|s| s.parse().expect("seed"))
+            .collect();
+        if seeds.is_empty() {
+            seeds = (1..=4).collect();
+        }
+        println!(
+            "cod2 maps {} gametype {gametype} bots {bots} ticks {ticks}",
+            maps.join(",")
+        );
+        let started = Instant::now();
+        let queue = std::sync::Mutex::new(
+            maps.iter()
+                .rev()
+                .flat_map(|m| seeds.iter().rev().map(move |s| (m.clone(), *s)))
+                .collect::<Vec<_>>(),
+        );
+        let results = std::sync::Mutex::new(Vec::new());
+        std::thread::scope(|s| {
+            for _ in 0..jobs.max(1) {
+                s.spawn(|| {
+                    while let Some((map, seed)) = queue.lock().unwrap().pop() {
+                        let m = run(&map, &gametype, bots, ticks, seed, verbose);
+                        vcod_server::tick_trace::finish().expect("VCOD_TICK_TRACE");
+                        let Some(m) = m else {
+                            return;
+                        };
+                        eprintln!(
+                            "{map} seed {seed} done ({:.0} s)",
+                            started.elapsed().as_secs_f32()
+                        );
+                        results.lock().unwrap().push(m);
+                    }
+                });
+            }
+        });
+        let mut results = results.into_inner().unwrap();
+        if results.is_empty() {
+            eprintln!("no CoD2 fs (set COD2_DIR)");
+            return;
+        }
+        results.sort_by(|a, b| (&a.map, a.seed).cmp(&(&b.map, b.seed)));
+        let line = |m: &Cod2Match| {
+            let kills: u32 = m.kills.values().sum();
+            format!(
+                "kills {kills} {:?} deaths {} suicides {} hits {} rounds {} acc {:.2} stalled {} held {} of {} ({:.1}%) ladder {} walked {:.0} u/bot-s actions {:?} score axis {} allies {} throws {} mantles {} cover {} lean {} retreats {} smokes {} answered {} of {} ({:.0}%) mounts {} gun-s {:.0} gun kills {}",
+                m.kills,
+                m.deaths,
+                m.suicides,
+                m.hits,
+                m.rounds,
+                f64::from(m.hits) / f64::from(m.rounds.max(1)),
+                m.stalled,
+                m.held,
+                m.playing,
+                100.0 * m.stalled as f64 / m.playing.max(1) as f64,
+                m.ladder,
+                m.travelled / (m.playing.max(1) as f64 * TICK_MS as f64 / 1000.0),
+                m.actions,
+                m.scores[0],
+                m.scores[1],
+                m.throws,
+                m.mantles,
+                m.cover,
+                m.lean,
+                m.retreats,
+                m.smokes,
+                m.answered,
+                m.hurt,
+                100.0 * f64::from(m.answered) / f64::from(m.hurt.max(1)),
+                m.mounts,
+                m.gun_ticks as f64 * TICK_MS as f64 / 1000.0,
+                m.gun_kills,
+            )
+        };
+        for m in &results {
+            for l in &m.log {
+                println!("  {} seed {} {l}", m.map, m.seed);
+            }
+            println!("{} seed {}: ticks {} {}", m.map, m.seed, m.ticks, line(m));
+            if let Some(d) = &m.digest {
+                d.print(&m.map, &gametype, m.seed, m.ticks);
+            }
+            if let Some(d) = &m.net {
+                d.print(&m.map, &gametype, m.seed, m.ticks);
+            }
+        }
+        let mut classes: BTreeMap<&str, Arms> = BTreeMap::new();
+        let mut skills: BTreeMap<u8, Arms> = BTreeMap::new();
+        let mut pickups = 0;
+        let mut weapons: BTreeMap<&str, Arms> = BTreeMap::new();
+        let mut picks: BTreeMap<&str, u32> = BTreeMap::new();
+        for m in &results {
+            for (k, a) in &m.weapons {
+                weapons.entry(k).or_default().add(a);
+            }
+            for (k, n) in &m.picks {
+                *picks.entry(k).or_default() += n;
+            }
+            for (k, a) in &m.classes {
+                classes.entry(k).or_default().add(a);
+            }
+            for (k, a) in &m.skills {
+                skills.entry(*k).or_default().add(a);
+            }
+            pickups += m.pickups;
+        }
+        for (k, a) in &classes {
+            println!("class {k:8} {}", a.line());
+        }
+        for (k, a) in &weapons {
+            println!("weapon {k:22} {}", a.line());
+        }
+        for (k, a) in &skills {
+            println!("skill {k}        {}", a.line());
+        }
+        println!("spawn picks {picks:?}");
+        println!("pickups {pickups}");
+        for map in &maps {
+            let mut t = Cod2Match {
+                map: map.clone(),
+                ..Default::default()
+            };
+            for m in results.iter().filter(|m| &m.map == map) {
+                for (k, v) in &m.kills {
+                    *t.kills.entry(k.clone()).or_default() += v;
+                }
+                t.deaths += m.deaths;
+                t.suicides += m.suicides;
+                t.hits += m.hits;
+                t.rounds += m.rounds;
+                t.playing += m.playing;
+                t.stalled += m.stalled;
+                t.held += m.held;
+                t.ladder += m.ladder;
+                t.travelled += m.travelled;
+                for (k, v) in &m.actions {
+                    *t.actions.entry(k.clone()).or_default() += v;
+                }
+                t.scores[0] += m.scores[0];
+                t.scores[1] += m.scores[1];
+                t.throws += m.throws;
+                t.mantles += m.mantles;
+                t.mounts += m.mounts;
+                t.gun_ticks += m.gun_ticks;
+                t.gun_kills += m.gun_kills;
+                t.cover += m.cover;
+                t.lean += m.lean;
+                t.retreats += m.retreats;
+                t.smokes += m.smokes;
+                t.hurt += m.hurt;
+                t.answered += m.answered;
+            }
+            println!("{map} total: {}", line(&t));
+        }
+    }
+
+    fn run(
+        map: &str,
+        gametype: &str,
+        bots: usize,
+        ticks: usize,
+        seed: u64,
+        verbose: bool,
+    ) -> Option<Cod2Match> {
+        let fs = Rc::new(vcod_common::testing::cod2_fs()?);
+        let mut now = Instant::now();
+        let mut sv = Cod2Server::new(
+            Cod2Config {
+                map: map.to_string(),
+                gametype: gametype.to_string(),
+                hostname: "match".into(),
+                max_clients: (bots + 2 + super::observers_from_env()).max(8),
+                gametype_script: None,
+            },
+            seed * 2 + 1,
+            now,
+        );
+        sv.load(Some(fs.clone())).expect("load the level");
+        let slots = sv.add_bots(bots, true);
+        // `SKILLS=a,b,...` one level a bot in join order, else
+        // `AXIS_SKILL=` / `ALLIES_SKILL=` by team (`add_bots` alternates
+        // allies and axis), else `vc_bot_skill`'s.
+        let list: Vec<u8> = std::env::var("SKILLS")
+            .map(|l| l.split(',').filter_map(|s| s.trim().parse().ok()).collect())
+            .unwrap_or_default();
+        let side = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u8>().ok());
+        let (axis, allies) = (side("AXIS_SKILL"), side("ALLIES_SKILL"));
+        let mut level_of: HashMap<usize, u8> = HashMap::new();
+        if let Some(b) = sv.bots_mut() {
+            b.wait_for_graph();
+            b.man_guns = std::env::var("GUNS").map_or(true, |v| v != "0");
+            for (i, &slot) in slots.iter().enumerate() {
+                let l = if !list.is_empty() {
+                    Some(list[i % list.len()])
+                } else if gametype == "dm" {
+                    None
+                } else if i % 2 == 0 {
+                    allies
+                } else {
+                    axis
+                };
+                if let Some(l) = l {
+                    b.admin.skills.insert(slot, l);
+                    if let Some(bot) = b.bots_mut().get_mut(&slot) {
+                        bot.skill = vcod_server::bots::Skill::level(l);
+                    }
+                }
+                let l = b
+                    .bots()
+                    .get(&slot)
+                    .and_then(|bot| bot.skill.level_of())
+                    .unwrap_or(1);
+                level_of.insert(slot, l);
+            }
+        }
+        let mut first_hit: HashMap<(usize, usize), usize> = HashMap::new();
+        let mut kit: HashMap<usize, u64> = HashMap::new();
+        let mut lives: HashMap<usize, u32> = HashMap::new();
+        let mut m = Cod2Match {
+            map: map.to_string(),
+            seed,
+            digest: Digest::from_env(),
+            net: Digest::net_from_env(),
+            ..Default::default()
+        };
+        install_trace("cod2", map, gametype, seed);
+        let mut observer = m.net.is_some().then(|| Spectator2::new(0));
+        let mut crowd: Vec<Spectator2> = (1..=super::observers_from_env())
+            .map(Spectator2::new)
+            .collect();
+        let mut dump = super::net_dump("cod2", map, gametype, seed);
+        if observer.is_some() {
+            sv.test_frame_clock();
+        }
+        // `STALLS=1`: every 20th tick of a stalled sample to stderr.
+        let stall_log = std::env::var("STALLS").as_deref() == Ok("1");
+        let mut seen = 0;
+        let mut hist: HashMap<usize, VecDeque<([f32; 3], bool)>> = HashMap::new();
+        let mut last: HashMap<usize, ([f32; 3], u8, i32)> = HashMap::new();
+        let mut mantling: HashMap<usize, bool> = HashMap::new();
+        let mut gunning: HashMap<usize, bool> = HashMap::new();
+        let mut retreating: HashMap<usize, u8> = HashMap::new();
+        // (victim, attacker) -> the tick of the hit still to answer.
+        let mut pending: HashMap<(usize, usize), usize> = HashMap::new();
+        let mut stats = super::TickStats::from_env();
+        for tick in 0..ticks {
+            now += Duration::from_millis(TICK_MS);
+            // The script's `map_restart` and `exitLevel` run off the
+            // console, as `main.rs`'s loop drains it ahead of the frame.
+            if let Some(ob) = observer.as_mut() {
+                ob.deliver(&mut sv, now);
+            }
+            for ob in &mut crowd {
+                ob.deliver(&mut sv, now);
+            }
+            let t0 = Instant::now();
+            sv.drain_console(now);
+            sv.tick_frames(now, 1);
+            if let Some(st) = stats.as_mut() {
+                let ms = t0.elapsed().as_secs_f32() * 1000.0;
+                st.add(tick, ms, &vcod_server::tick_profile::take());
+            }
+            m.ticks = tick + 1;
+            if let Some(d) = m.digest.as_mut() {
+                d.cod2(&sv, &slots, tick);
+            }
+            if let (Some(ob), Some(d)) = (observer.as_mut(), m.net.as_mut()) {
+                let sent = sv.take_outgoing();
+                d.datagrams(&sent, tick);
+                super::dump_datagrams(&mut dump, &sent, tick);
+                ob.receive(&sent, map, &fs);
+                for ob in &mut crowd {
+                    ob.receive(&sent, map, &fs);
+                }
+            } else if !crowd.is_empty() {
+                let sent = sv.take_outgoing();
+                for ob in &mut crowd {
+                    ob.receive(&sent, map, &fs);
+                }
+            }
+            if tick == 0
+                && let Some(g) = sv.bots_mut().and_then(|b| b.graph())
+            {
+                eprintln!(
+                    "{map} seed {seed}: graph {} nodes, {} edges, {} mantles",
+                    g.len(),
+                    g.edge_count(),
+                    g.mantles.len()
+                );
+            }
+            // Per bot: holding still on purpose (`BotBody::holds` less the
+            // seats and bipods CoD2 has none of), on a cover spot, its
+            // retreat, and the target it fired at this tick.
+            let state: HashMap<usize, (bool, bool, u8, Option<usize>)> = sv
+                .bots_mut()
+                .map(|b| {
+                    b.bots()
+                        .iter()
+                        .map(|(s, b)| {
+                            let holds = b.engaged()
+                                || b.holds_cover()
+                                || b.retreating() != 0
+                                || b.on_objective();
+                            let fired = b.target_slot().filter(|_| b.fired());
+                            (*s, (holds, b.holds_cover(), b.retreating(), fired))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let teams: HashMap<usize, String> = sv
+                .bots_mut()
+                .map(|b| {
+                    b.bots()
+                        .iter()
+                        .map(|(s, b)| (*s, b.team().to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            pending.retain(|(victim, attacker), at| {
+                if state.get(victim).and_then(|s| s.3) == Some(*attacker) {
+                    m.answered += 1;
+                    return false;
+                }
+                tick - *at < 20
+            });
+            let level = sv.level()?;
+            for &slot in &slots {
+                let Some(p) = level.players.get(slot).and_then(Option::as_ref) else {
+                    continue;
+                };
+                let playing = level.playing(slot) && p.ps.pm_type == 0;
+                let at: [f32; 3] = p.ps.origin.into();
+                let held_w = level
+                    .combat
+                    .weapons
+                    .get(usize::from(p.ws.weapon))
+                    .and_then(Option::as_ref);
+                let clip = held_w.map_or(0, |d| p.ws.clip[d.clip_index]);
+                if let Some((was, w, c)) = last.get(&slot)
+                    && playing
+                {
+                    if *w == p.ws.weapon && clip < *c && held_w.is_some_and(|d| d.weap_type == 0) {
+                        let n = (c - clip) as u32;
+                        m.rounds += n;
+                        let sighted = if p.ws.pos_frac >= 1.0 { n } else { 0 };
+                        let name = held_w.map_or("?", |d| d.name.as_str()).to_string();
+                        for a in [
+                            m.classes.entry(class_of(held_w)).or_default(),
+                            m.skills.entry(level_of[&slot]).or_default(),
+                            m.weapons.entry(name).or_default(),
+                        ] {
+                            a.rounds += n;
+                            a.sighted += sighted;
+                        }
+                    }
+                    let d = (glam::Vec3::from(at) - glam::Vec3::from(*was))
+                        .truncate()
+                        .length();
+                    if d < 200.0 {
+                        m.travelled += f64::from(d);
+                    }
+                }
+                last.insert(slot, (at, p.ws.weapon, clip));
+                let h = hist.entry(slot).or_default();
+                if !playing {
+                    h.clear();
+                    kit.remove(&slot);
+                    lives.remove(&slot);
+                    continue;
+                }
+                let life = lives.entry(slot).or_default();
+                *life += 1;
+                // A gun come to hand past the spawn's kit.
+                let guns = (1..64u32)
+                    .filter(|&w| p.ws.held >> w & 1 == 1)
+                    .filter(|&w| {
+                        level
+                            .combat
+                            .weapons
+                            .get(w as usize)
+                            .and_then(Option::as_ref)
+                            .is_some_and(|d| d.offhand_class == 0 && d.weap_type == 0)
+                    })
+                    .fold(0u64, |m, w| m | 1 << w);
+                // The spawn's kit is what it holds over its first second;
+                // a gun past that was picked up.
+                let had = kit.get(&slot).copied().unwrap_or(0);
+                if *life > 20 {
+                    m.pickups += (guns & !had).count_ones();
+                } else if *life == 20 {
+                    let first = (1..64u32).find(|&w| {
+                        guns >> w & 1 == 1
+                            && level
+                                .combat
+                                .weapons
+                                .get(w as usize)
+                                .and_then(Option::as_ref)
+                                .is_some_and(|d| d.weap_class != 4)
+                    });
+                    if let Some(d) = first.and_then(|w| {
+                        level
+                            .combat
+                            .weapons
+                            .get(w as usize)
+                            .and_then(Option::as_ref)
+                    }) {
+                        *m.picks.entry(d.name.clone()).or_default() += 1;
+                    }
+                }
+                kit.insert(slot, had | guns);
+                m.playing += 1;
+                let (holds, cover, retreat, _) = state.get(&slot).copied().unwrap_or_default();
+                m.cover += u64::from(cover);
+                m.lean += u64::from(p.ps.leanf != 0.0);
+                if retreat != 0 && retreating.get(&slot).copied().unwrap_or(0) == 0 {
+                    m.retreats += 1;
+                }
+                retreating.insert(slot, retreat);
+                let mantle = p.ps.pm_flags & vcod_cod2::pmove::pmf::MANTLE != 0;
+                if mantle && !mantling.get(&slot).copied().unwrap_or(false) {
+                    m.mantles += 1;
+                }
+                mantling.insert(slot, mantle);
+                let on_gun = p.ps.e_flags & vcod_cod2::pmove::ef::TURRET != 0;
+                if on_gun && !gunning.get(&slot).copied().unwrap_or(false) {
+                    m.mounts += 1;
+                }
+                gunning.insert(slot, on_gun);
+                if on_gun {
+                    m.gun_ticks += 1;
+                }
+                if p.ps.pm_flags & vcod_cod2::pmove::pmf::LADDER != 0 {
+                    m.ladder += 1;
+                }
+                // A body the script froze (`freezeControls`, a round's end)
+                // holds still by the rules, not by a stall.
+                let frozen = p.ps.pm_flags & vcod_cod2::pmove::pmf::FROZEN != 0;
+                h.push_back((at, holds || frozen));
+                if h.len() > WINDOW {
+                    h.pop_front();
+                }
+                if h.len() == WINDOW {
+                    let here = glam::Vec3::from(at);
+                    let still = h
+                        .iter()
+                        .all(|(o, _)| glam::Vec3::from(*o).distance(here) < RADIUS);
+                    if still {
+                        if h.iter().any(|(_, e)| *e) {
+                            m.held += 1;
+                        } else {
+                            m.stalled += 1;
+                            if stall_log && tick % 20 == 0 {
+                                // The nearest teammate: where it stands and
+                                // how fast (a queue behind a still one).
+                                let team = teams.get(&slot);
+                                let mate = slots
+                                    .iter()
+                                    .filter(|&&o| o != slot && teams.get(&o) == team)
+                                    .filter_map(|&o| {
+                                        let q = level.players.get(o)?.as_ref()?;
+                                        level.playing(o).then_some((o, q))
+                                    })
+                                    .map(|(o, q)| {
+                                        let o_at = glam::Vec3::from(<[f32; 3]>::from(q.ps.origin));
+                                        let v = glam::Vec3::from(<[f32; 3]>::from(q.ps.velocity));
+                                        (o, o_at.distance(here), o_at, v.length())
+                                    })
+                                    .min_by(|a, b| a.1.total_cmp(&b.1));
+                                eprintln!(
+                                    "STALL {map} seed {seed} tick {tick} slot {slot} team {} at {:.0?} pmf {:#x} gnd {} vel {:.0?} mate {:.0?}",
+                                    team.map_or("?", String::as_str),
+                                    at,
+                                    p.ps.pm_flags,
+                                    p.ps.ground_entity_num,
+                                    <[f32; 3]>::from(p.ps.velocity),
+                                    mate
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            let log = level.rt.script_log();
+            for l in log.get(seen..).unwrap_or_default() {
+                let f: Vec<&str> = l.trim_end().split(';').collect();
+                // guid, num, team, name for the victim and the attacker,
+                // then weapon, damage, means of death, location.
+                if f[0] == "A" && f.len() >= 6 {
+                    *m.actions.entry(f[5].to_string()).or_default() += 1;
+                    if verbose {
+                        m.log.push(format!("tick {tick} {}", l.trim_end()));
+                    }
+                    continue;
+                }
+                if f.len() < 13 {
+                    continue;
+                }
+                let (vnum, anum, ateam) = (f[2], f[6], f[7]);
+                let def = level
+                    .combat
+                    .weapons
+                    .iter()
+                    .flatten()
+                    .find(|d| d.name == f[9]);
+                let class = if f[11] == "MOD_MELEE" {
+                    "melee"
+                } else {
+                    class_of(def)
+                };
+                let num = |s: &str| s.parse::<usize>().ok();
+                let attacker = num(anum).filter(|a| Some(*a) != num(vnum));
+                let alevel = attacker.and_then(|a| level_of.get(&a).copied());
+                match f[0] {
+                    "D" if anum != "-1" && anum != vnum => {
+                        m.hits += 1;
+                        m.classes.entry(class).or_default().hits += 1;
+                        m.weapons.entry(f[9].to_string()).or_default().hits += 1;
+                        if let Some(l) = alevel {
+                            m.skills.entry(l).or_default().hits += 1;
+                        }
+                        if let (Some(v), Some(a)) = (num(vnum), attacker) {
+                            first_hit.entry((a, v)).or_insert(tick);
+                        }
+                        let (Ok(v), Ok(a)) = (vnum.parse::<usize>(), anum.parse::<usize>()) else {
+                            continue;
+                        };
+                        let enemy = gametype == "dm" || f[3] != ateam;
+                        if enemy && slots.contains(&v) && !pending.contains_key(&(v, a)) {
+                            m.hurt += 1;
+                            pending.insert((v, a), tick);
+                        }
+                    }
+                    "K" => {
+                        m.deaths += 1;
+                        let v = num(vnum);
+                        if let Some(l) = v.and_then(|v| level_of.get(&v)) {
+                            m.skills.entry(*l).or_default().deaths += 1;
+                        }
+                        if let (Some(v), Some(a)) = (v, attacker) {
+                            let ttk = first_hit
+                                .remove(&(a, v))
+                                .map_or(0, |t| (tick - t) as u64 * TICK_MS);
+                            // The lethal hit logs `K` alone.
+                            for c in [
+                                m.classes.entry(class).or_default(),
+                                m.weapons.entry(f[9].to_string()).or_default(),
+                            ] {
+                                c.kills += 1;
+                                c.hits += 1;
+                                c.ttk_ms.push(ttk);
+                            }
+                            if let Some(l) = alevel {
+                                let s = m.skills.entry(l).or_default();
+                                s.kills += 1;
+                                s.hits += 1;
+                                s.ttk_ms.push(ttk);
+                            }
+                        }
+                        if let Some(v) = v {
+                            first_hit.retain(|(_, victim), _| *victim != v);
+                        }
+                        if anum == "-1" || anum == vnum {
+                            m.suicides += 1;
+                        } else {
+                            let team = if ateam.is_empty() { "none" } else { ateam };
+                            *m.kills.entry(team.to_string()).or_default() += 1;
+                            if f[9].starts_with("mg42_bipod") || f[9].starts_with("30cal") {
+                                m.gun_kills += 1;
+                            }
+                        }
+                        if verbose {
+                            m.log.push(format!("tick {tick} {}", l.trim_end()));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            seen = log.len();
+        }
+        if verbose && let Some(l) = sv.level() {
+            for e in l.rt.aborts() {
+                m.log.push(format!("script error: {e}"));
+            }
+        }
+        m.scores = sv
+            .level_mut()
+            .map_or([0, 0], |l| l.rt.with_host(|h, _| h.team_scores));
+        m.throws = sv
+            .bots_mut()
+            .map_or(0, |b| b.bots().values().map(|b| b.throws()).sum());
+        m.smokes = sv.bots_mut().map_or(0, |b| b.smokes());
+        if let Some(st) = &stats {
+            st.print(map, gametype, seed);
+        }
+        Some(m)
+    }
+}
+
+/// `GAME=cod4`: CoD4 1.7 matches through `vcod_server::cod4::Cod4Server`.
+mod cod4 {
+    use std::collections::{BTreeMap, HashMap, VecDeque};
+    use std::time::{Duration, Instant};
+
+    use vcod_server::cod4::{Cod4Config, Cod4Server};
+    use vcod_server::engine::GameModule;
+    use vcod_server::game::cod4::bot_feed::Cod4Objectives;
+
+    use super::{Digest, RADIUS, TICK_MS, WINDOW, install_trace};
+
+    #[derive(Default)]
+    struct Cod4Match {
+        map: String,
+        seed: u64,
+        ticks: usize,
+        /// By the killer's team (`dm`: "none"), kills of another player.
+        kills: BTreeMap<String, u32>,
+        deaths: u32,
+        /// Deaths with no other player the killer: suicides and falls.
+        suicides: u32,
+        hits: u32,
+        /// Bullet rounds fired: a held bullet gun's clip drops.
+        rounds: u32,
+        playing: u64,
+        stalled: u64,
+        held: u64,
+        ladder: u64,
+        travelled: f64,
+        /// Frag throws let go, mantles started.
+        throws: u32,
+        mantles: u32,
+        /// Guns manned and live frags thrown back (`GUNS=0` and
+        /// `THROWBACK=0` keep the bots off both).
+        mounts: u32,
+        throw_backs: u32,
+        /// Levels run past the first: `fast_restart`s (a round's end, the
+        /// low nibble of `sv_serverid` stepped) and spawns (a map loaded:
+        /// the match ended and rotated), and the maps in run order.
+        restarts: u32,
+        spawns: u32,
+        maps: Vec<String>,
+        /// The script's `A;` actions and `W;` wins; on CoD4, whose
+        /// `logString` writes nothing, the objectives' changes read off the
+        /// scripts each tick ([`objective_actions`]).
+        actions: BTreeMap<String, u32>,
+        wins: BTreeMap<String, u32>,
+        /// Every distinct script error (`ScriptRuntime::aborts`) and how
+        /// often it came.
+        errors: BTreeMap<String, u32>,
+        /// Levels whose `game["state"]` reached `postgame` (`endGame`).
+        ended: u32,
+        /// A line per level run: how it began, its ticks, the bot-ticks
+        /// playing, the kills, whether its match ended.
+        levels: Vec<String>,
+        log: Vec<String>,
+        digest: Option<Digest>,
+    }
+
+    pub(super) fn main() {
+        // The server's warnings at `RUST_LOG`'s level, none without it.
+        let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("off"))
+            .try_init();
+        let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.into());
+        let maps: Vec<String> = env("MAPS", &env("MAP", "mp_crash"))
+            .split(',')
+            .map(str::to_string)
+            .collect();
+        let gametype = env("GAMETYPE", "war");
+        let bots: usize = env("BOTS", "6").parse().expect("BOTS");
+        let ticks: usize = env("TICKS", "6000").parse().expect("TICKS");
+        let jobs: usize = env("JOBS", "4").parse().expect("JOBS");
+        let verbose = env("VERBOSE", "0") == "1";
+        let sets: Vec<(String, String)> = env("SET", "")
+            .split(',')
+            .filter_map(|p| p.split_once('='))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let mut seeds: Vec<u64> = std::env::args()
+            .skip(1)
+            .map(|s| s.parse().expect("seed"))
+            .collect();
+        if seeds.is_empty() {
+            seeds = (1..=4).collect();
+        }
+        println!(
+            "cod4 maps {} gametype {gametype} bots {bots} ticks {ticks}",
+            maps.join(",")
+        );
+        let started = Instant::now();
+        let queue = std::sync::Mutex::new(
+            maps.iter()
+                .rev()
+                .flat_map(|m| seeds.iter().rev().map(move |s| (m.clone(), *s)))
+                .collect::<Vec<_>>(),
+        );
+        let results = std::sync::Mutex::new(Vec::new());
+        std::thread::scope(|s| {
+            for _ in 0..jobs.max(1) {
+                s.spawn(|| {
+                    while let Some((map, seed)) = queue.lock().unwrap().pop() {
+                        let m = run(&map, &gametype, bots, ticks, seed, verbose, &sets);
+                        vcod_server::tick_trace::finish().expect("VCOD_TICK_TRACE");
+                        let Some(m) = m else {
+                            return;
+                        };
+                        eprintln!(
+                            "{map} seed {seed} done ({:.0} s)",
+                            started.elapsed().as_secs_f32()
+                        );
+                        results.lock().unwrap().push(m);
+                    }
+                });
+            }
+        });
+        let mut results = results.into_inner().unwrap();
+        if results.is_empty() {
+            eprintln!("no CoD4 install (set COD4_DIR)");
+            return;
+        }
+        results.sort_by(|a, b| (&a.map, a.seed).cmp(&(&b.map, b.seed)));
+        let line = |m: &Cod4Match| {
+            let kills: u32 = m.kills.values().sum();
+            let errors: u32 = m.errors.values().sum();
+            format!(
+                "kills {kills} {:?} deaths {} suicides {} hits {} rounds {} acc {:.2} stalled {} held {} of {} ({:.1}%) ladder {} walked {:.0} u/bot-s throws {} mantles {} mounts {} throwbacks {} restarts {} spawns {} ended {} actions {:?} wins {:?} script errors {errors} ({} distinct)",
+                m.kills,
+                m.deaths,
+                m.suicides,
+                m.hits,
+                m.rounds,
+                f64::from(m.hits) / f64::from(m.rounds.max(1)),
+                m.stalled,
+                m.held,
+                m.playing,
+                100.0 * m.stalled as f64 / m.playing.max(1) as f64,
+                m.ladder,
+                m.travelled / (m.playing.max(1) as f64 * TICK_MS as f64 / 1000.0),
+                m.throws,
+                m.mantles,
+                m.mounts,
+                m.throw_backs,
+                m.restarts,
+                m.spawns,
+                m.ended,
+                m.actions,
+                m.wins,
+                m.errors.len(),
+            )
+        };
+        let mut errors: BTreeMap<&str, u32> = BTreeMap::new();
+        for m in &results {
+            for l in m.log.iter().chain(&m.levels) {
+                println!("  {} seed {} {l}", m.map, m.seed);
+            }
+            println!(
+                "{} seed {}: ticks {} maps {} {}",
+                m.map,
+                m.seed,
+                m.ticks,
+                m.maps.join(">"),
+                line(m)
+            );
+            if let Some(d) = &m.digest {
+                d.print(&m.map, &gametype, m.seed, m.ticks);
+            }
+            for (e, n) in &m.errors {
+                *errors.entry(e).or_default() += n;
+            }
+        }
+        println!("{gametype} script errors: {} distinct", errors.len());
+        for (e, n) in &errors {
+            println!("  {n:6} {e}");
+        }
+    }
+
+    /// What changed between two ticks' objective states, counted into
+    /// `actions`: a bomb taken (`pickup`), planted, defused or blown up
+    /// (`explode`, the bomb's timer run out), a zone taken by a team
+    /// (`capture`).
+    fn objective_actions(
+        was: Option<&Cod4Objectives>,
+        now: Option<&Cod4Objectives>,
+        actions: &mut BTreeMap<String, u32>,
+    ) {
+        let mut count = |k: &str| *actions.entry(k.to_string()).or_default() += 1;
+        match (was, now) {
+            (Some(Cod4Objectives::Bomb(a)), Some(Cod4Objectives::Bomb(b))) => {
+                if a.carrier.is_none() && b.carrier.is_some() && b.planted.is_none() {
+                    count("pickup");
+                }
+                match (a.planted.is_some(), b.planted.is_some()) {
+                    (false, true) => count("plant"),
+                    (true, false) if b.exploded => count("explode"),
+                    (true, false) => count("defuse"),
+                    _ => {}
+                }
+            }
+            (Some(Cod4Objectives::Zones(a)), Some(Cod4Objectives::Zones(b))) => {
+                for z in b {
+                    let before = a.iter().find(|y| y.bounds == z.bounds);
+                    if z.team != 0 && before.is_some_and(|y| y.team != z.team) {
+                        count("capture");
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The weapon in hand, its clip, and whether it fires bullets.
+    fn clip_of(
+        level: &vcod_server::game::cod4::level::Cod4Level,
+        slot: usize,
+    ) -> Option<(u32, i32, bool)> {
+        let ps = level.pm_state(slot)?;
+        let d = level.weapon_defs().get(ps.weapon as usize)?;
+        Some((
+            ps.weapon,
+            ps.ammoclip.get(d.clip_index).copied().unwrap_or(0),
+            d.weap_type == 0 && d.offhand_class == 0,
+        ))
+    }
+
+    fn run(
+        map: &str,
+        gametype: &str,
+        bots: usize,
+        ticks: usize,
+        seed: u64,
+        verbose: bool,
+        sets: &[(String, String)],
+    ) -> Option<Cod4Match> {
+        let install = vcod_cod4::testing::cod4_install()?;
+        let leave: Vec<usize> = std::env::var("LEAVE")
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|t| t.trim().parse().ok())
+            .collect();
+        let mut now = Instant::now();
+        let mut sv = Cod4Server::new(
+            Cod4Config {
+                map: map.to_string(),
+                gametype: gametype.to_string(),
+                hostname: "match".into(),
+                max_clients: (bots + 2).max(8),
+            },
+            seed * 2 + 1,
+        );
+        for (k, v) in sets {
+            sv.set_cvar(k, v);
+        }
+        sv.load(Some(&install)).expect("load the level");
+        let slots = sv.add_bots(bots, true);
+        if let Some(b) = sv.bots_mut() {
+            b.wait_for_graph();
+            b.objectives = std::env::var("OBJ").as_deref() != Ok("0");
+            b.man_guns = std::env::var("GUNS").as_deref() != Ok("0");
+            b.throw_back = std::env::var("THROWBACK").as_deref() != Ok("0");
+        }
+        let mut last_obj = None;
+        // `STALLS=1`: every 20th tick of a stalled sample to stderr.
+        let stall_log = std::env::var("STALLS").as_deref() == Ok("1");
+        let mut m = Cod4Match {
+            map: map.to_string(),
+            seed,
+            digest: Digest::from_env(),
+            maps: vec![map.to_string()],
+            ..Default::default()
+        };
+        install_trace("cod4", map, gametype, seed);
+        // `SPIKE_MS=<ms>`: each tick past it to stderr with its phases
+        // (`vcod_server::tick_profile`).
+        let spike_ms: Option<f32> = std::env::var("SPIKE_MS").ok().and_then(|v| v.parse().ok());
+        if spike_ms.is_some() {
+            vcod_server::tick_profile::enable();
+        }
+        let mut stats = super::TickStats::from_env();
+        let mut seen = 0;
+        let mut errors_seen = 0;
+        let mut level_id = sv.server_id();
+        let mut hist: HashMap<usize, VecDeque<([f32; 3], bool)>> = HashMap::new();
+        let mut last: HashMap<usize, ([f32; 3], u32, i32)> = HashMap::new();
+        let mut mantling: HashMap<usize, bool> = HashMap::new();
+        // The level under way: how it began, its first tick, its playing
+        // bot-ticks and kills, whether its match ended.
+        let mut lv = ("start", 0usize, 0u64, 0u32, None::<usize>);
+        let close = |m: &mut Cod4Match, lv: (&str, usize, u64, u32, Option<usize>), tick: usize| {
+            m.ended += u32::from(lv.4.is_some());
+            m.levels.push(format!(
+                "level {} {} ({}) ticks {}..{tick}: bot-ticks playing {} kills {} match ended {}",
+                m.levels.len(),
+                m.maps.last().map_or("", String::as_str),
+                lv.0,
+                lv.1,
+                lv.2,
+                lv.3,
+                lv.4.map_or("no".to_string(), |t| format!("at tick {t}")),
+            ));
+        };
+        for tick in 0..ticks {
+            now += Duration::from_millis(TICK_MS);
+            // The script's `map_restart` and `exitLevel` run off the
+            // console, as `main.rs`'s loop drains it ahead of the frame.
+            if leave.contains(&tick) {
+                sv.core.console.push_back("removebot 1".into());
+            }
+            let sched = spike_ms.and_then(|_| vcod_server::tick_profile::sched());
+            let t0 = Instant::now();
+            <vcod_server::cod4::Cod4Game as GameModule>::drain_console(&mut sv, now);
+            sv.tick_frames(now, 1);
+            let tick_ms = t0.elapsed().as_secs_f32() * 1000.0;
+            let phases = vcod_server::tick_profile::take();
+            if let Some(st) = stats.as_mut() {
+                st.add(tick, tick_ms, &phases);
+            }
+            if spike_ms.is_some_and(|s| tick_ms > s) {
+                eprintln!(
+                    "spike {map} {gametype} seed {seed} tick {tick} {tick_ms:.1} ms ({}): {}",
+                    vcod_server::tick_profile::split(sched, tick_ms),
+                    vcod_server::tick_profile::format(&phases, 1.0)
+                );
+            }
+            sv.take_outgoing();
+            m.ticks = tick + 1;
+            if tick == 0
+                && let Some(g) = sv.bots_mut().and_then(|b| b.graph())
+            {
+                eprintln!(
+                    "{map} seed {seed}: graph {} nodes, {} edges, {} mantles",
+                    g.len(),
+                    g.edge_count(),
+                    g.mantles.len()
+                );
+            }
+            let id = sv.server_id();
+            if id != level_id {
+                close(&mut m, lv, tick);
+                // A restart keeps the high nibble (`restart_server_id`).
+                if id & 0xf0 == level_id & 0xf0 {
+                    m.restarts += 1;
+                    lv = ("fast_restart", tick, 0, 0, None);
+                } else {
+                    m.spawns += 1;
+                    m.maps.push(sv.cvar("mapname").to_string());
+                    lv = ("map loaded", tick, 0, 0, None);
+                }
+                level_id = id;
+                seen = 0;
+                errors_seen = 0;
+                last.clear();
+                hist.clear();
+                last_obj = None;
+            }
+            let obj = sv.level_mut()?.objectives();
+            objective_actions(last_obj.as_ref(), obj.as_ref(), &mut m.actions);
+            last_obj = obj;
+            // Per bot: holding still on purpose (a fight, cover, a retreat,
+            // its objective, as CoD2's), and the team it asked for (the
+            // `K;` lines leave the teams empty, `_globallogic.gsc`).
+            let state: HashMap<usize, (bool, String)> = sv
+                .bots_mut()
+                .map(|b| {
+                    b.bots()
+                        .iter()
+                        .map(|(s, b)| {
+                            let holds = b.engaged()
+                                || b.holds_cover()
+                                || b.retreating() != 0
+                                || b.on_objective();
+                            let team = match b.team() {
+                                "allies" | "axis" if gametype != "dm" => b.team(),
+                                _ => "none",
+                            };
+                            (*s, (holds, team.to_string()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if (tick % 20 == 19 || tick + 1 == ticks)
+                && sv.level_mut()?.game_value("state") == "postgame"
+            {
+                lv.4.get_or_insert(tick);
+            }
+            let level = sv.level()?;
+            if tick % 20 == 19 || tick + 1 == ticks {
+                let errs = level.rt.aborts();
+                for e in errs.get(errors_seen..).unwrap_or_default() {
+                    // The thread's own numbers vary; the place does not.
+                    *m.errors.entry(e.clone()).or_default() += 1;
+                }
+                errors_seen = errs.len().max(errors_seen);
+            }
+            for &slot in &slots {
+                let Some(ps) = level.pm_state(slot) else {
+                    continue;
+                };
+                // A follower is sent the followed client's playerstate.
+                let playing = ps.pm_type == 0
+                    && ps.other_flags & vcod_cod4::pmove::POF_PLAYER != 0
+                    && !level.rt.client_vitals(slot).dead;
+                let at: [f32; 3] = ps.origin.into();
+                let clip = clip_of(level, slot);
+                if let (Some((was, w, c)), Some((w2, c2, bullet))) = (last.get(&slot), clip)
+                    && playing
+                {
+                    if *w == w2 && c2 < *c && bullet {
+                        m.rounds += (c - c2) as u32;
+                    }
+                    let d = (glam::Vec3::from(at) - glam::Vec3::from(*was))
+                        .truncate()
+                        .length();
+                    if d < 200.0 {
+                        m.travelled += f64::from(d);
+                    }
+                }
+                if let Some((w, c, _)) = clip {
+                    last.insert(slot, (at, w, c));
+                }
+                let h = hist.entry(slot).or_default();
+                if !playing {
+                    h.clear();
+                    continue;
+                }
+                m.playing += 1;
+                lv.2 += 1;
+                let mantle = ps.pm_flags & vcod_cod4::pmove::pmf::MANTLE != 0;
+                if mantle && !mantling.get(&slot).copied().unwrap_or(false) {
+                    m.mantles += 1;
+                }
+                mantling.insert(slot, mantle);
+                if ps.pm_flags & vcod_cod4::pmove::pmf::LADDER != 0 {
+                    m.ladder += 1;
+                }
+                // A body the script froze (`freezeControls`, a round's end)
+                // holds still by the rules, not by a stall.
+                let frozen = ps.pm_flags & vcod_cod4::pmove::pmf::FROZEN != 0;
+                h.push_back((at, frozen || state.get(&slot).is_some_and(|s| s.0)));
+                if h.len() > WINDOW {
+                    h.pop_front();
+                }
+                if h.len() == WINDOW {
+                    let here = glam::Vec3::from(at);
+                    let still = h
+                        .iter()
+                        .all(|(o, _)| glam::Vec3::from(*o).distance(here) < RADIUS);
+                    if still {
+                        if h.iter().any(|(_, e)| *e) {
+                            m.held += 1;
+                        } else {
+                            m.stalled += 1;
+                            if stall_log && tick % 20 == 0 {
+                                // The nearest teammate: where it stands, how
+                                // far and how fast (a queue behind a guard).
+                                let team = state.get(&slot).map(|s| s.1.clone());
+                                let mate = slots
+                                    .iter()
+                                    .filter(|&&o| {
+                                        o != slot && state.get(&o).map(|s| &s.1) == team.as_ref()
+                                    })
+                                    .filter_map(|&o| Some((o, level.pm_state(o)?)))
+                                    .map(|(o, p)| {
+                                        (
+                                            o,
+                                            p.origin.distance(ps.origin),
+                                            p.origin,
+                                            p.velocity.length(),
+                                        )
+                                    })
+                                    .min_by(|a, b| a.1.total_cmp(&b.1));
+                                eprintln!(
+                                    "STALL {map} seed {seed} tick {tick} slot {slot} team {} at {:.0?} pmf {:#x} gnd {} vel {:.0?} mantle {:?} mate {:.0?}",
+                                    team.as_deref().unwrap_or("?"),
+                                    at,
+                                    ps.pm_flags,
+                                    ps.ground_entity_num,
+                                    ps.velocity,
+                                    ps.mantle,
+                                    mate
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(d) = m.digest.as_mut() {
+                d.cod4(level, &slots, tick);
+            }
+            let log = level.rt.script_log();
+            for l in log.get(seen..).unwrap_or_default() {
+                let f: Vec<&str> = l.trim_end().split(';').collect();
+                match f[0] {
+                    "A" if f.len() >= 6 => {
+                        *m.actions.entry(f[5].to_string()).or_default() += 1;
+                    }
+                    "W" | "L" if f.len() >= 2 => {
+                        if f[0] == "W" {
+                            *m.wins.entry(f[1].to_string()).or_default() += 1;
+                        }
+                    }
+                    "D" if f.len() >= 13 && f[6] != "-1" && f[6] != f[2] => m.hits += 1,
+                    "K" if f.len() >= 13 => {
+                        m.deaths += 1;
+                        if f[6] == "-1" || f[6] == f[2] {
+                            m.suicides += 1;
+                        } else {
+                            let team = f[6]
+                                .parse::<usize>()
+                                .ok()
+                                .and_then(|a| state.get(&a))
+                                .map_or("none", |s| s.1.as_str());
+                            *m.kills.entry(team.to_string()).or_default() += 1;
+                            m.hits += 1;
+                            lv.3 += 1;
+                        }
+                        if verbose {
+                            m.log.push(format!("tick {tick} {}", l.trim_end()));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            seen = log.len();
+        }
+        close(&mut m, lv, ticks);
+        m.throws = sv
+            .bots_mut()
+            .map_or(0, |b| b.bots().values().map(|b| b.throws()).sum());
+        (m.mounts, m.throw_backs) = sv.bots_mut().map_or((0, 0), |b| b.gun_counts());
+        if let Some(st) = &stats {
+            st.print(map, gametype, seed);
+        }
+        Some(m)
     }
 }

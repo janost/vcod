@@ -21,7 +21,7 @@ fn main() {
     let ticks: usize = env("TICKS", "3000").parse().unwrap();
     let every: usize = env("EVERY", "40").parse().unwrap();
     let seed: u64 = env("SEED", "7").parse().unwrap();
-    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map(&map).unwrap()).unwrap()).unwrap();
+    let bsp = vcod_common::mapworld::find(&fs, &map).unwrap();
     let mut now = Instant::now();
     let cfg = vcod_server::ServerConfig {
         map: map.clone(),

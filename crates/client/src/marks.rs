@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::ops::Range;
 
 use glam::Vec3;
-use vcod_common::bsp::Bsp;
+use vcod_common::mapworld::MapWorld;
 
 /// The cgame's mark pool (0x30023440 links 0x400 entries of 0x174 bytes).
 pub const MAX_MARKS: usize = 1024;
@@ -96,7 +96,7 @@ pub struct MarkWorld {
 impl MarkWorld {
     /// `drawn(material)` says whether the renderer draws the soup at all
     /// (sky and nodraw soups never reach the cells' surface lists).
-    pub fn build(bsp: &Bsp, drawn: impl Fn(u16) -> bool) -> MarkWorld {
+    pub fn build(bsp: &MapWorld, drawn: impl Fn(u16) -> bool) -> MarkWorld {
         let mut out = MarkWorld::default();
         let world_soups = bsp.models.first().map_or(0..bsp.soups.len(), |m| {
             m.first_soup as usize..(m.first_soup + m.num_soups) as usize
@@ -205,19 +205,21 @@ fn chop(input: &[ClipVert], normal: Vec3, dist: f32, out: &mut Vec<ClipVert>) {
     const FRONT: u8 = 0;
     const BACK: u8 = 1;
     const ON: u8 = 2;
-    let dists: Vec<f32> = input.iter().map(|p| p.pos.dot(normal) - dist).collect();
-    let sides: Vec<u8> = dists
-        .iter()
-        .map(|&d| {
-            if d > CLIP_EPSILON {
-                FRONT
-            } else if d < -CLIP_EPSILON {
-                BACK
-            } else {
-                ON
-            }
-        })
-        .collect();
+    // on the stack: a mark's gather chops every triangle near it
+    let mut dists = [0.0f32; MAX_CLIP_IN];
+    let mut sides = [ON; MAX_CLIP_IN];
+    for (i, p) in input.iter().enumerate() {
+        let d = p.pos.dot(normal) - dist;
+        dists[i] = d;
+        sides[i] = if d > CLIP_EPSILON {
+            FRONT
+        } else if d < -CLIP_EPSILON {
+            BACK
+        } else {
+            ON
+        };
+    }
+    let sides = &sides[..input.len()];
     if !sides.contains(&FRONT) {
         return;
     }
@@ -293,9 +295,17 @@ pub fn mark_fragments(
         .iter()
         .filter(|s| s.mins.cmple(maxs).all() && s.maxs.cmpge(mins).all())
         .take(MAX_MARK_SURFACES);
+    // A triangle wholly past one side of the gather box, grown by the
+    // clip's epsilon, leaves nothing after the chops: skipped unchopped.
+    let (lo, hi) = (mins - Vec3::splat(1.0), maxs + Vec3::splat(1.0));
     for surf in surfaces {
         for tri in &world.tris[surf.tris.clone()] {
             let [v0, v1, v2] = tri.map(|c| c.pos);
+            if (v0.cmplt(lo) & v1.cmplt(lo) & v2.cmplt(lo)).any()
+                || (v0.cmpgt(hi) & v1.cmpgt(hi) & v2.cmpgt(hi)).any()
+            {
+                continue;
+            }
             let n = (v0 - v1).cross(v2 - v1).normalize_or_zero();
             if n.dot(a0) <= FACING_MIN {
                 continue;

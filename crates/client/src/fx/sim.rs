@@ -3,11 +3,13 @@
 //! wire knowledge. Engine semantics: `docs/research/efx-grammar.md`, R1 to R10.
 
 use crate::fx::efx::{self, Effect, Emitter, R1, R3};
+use crate::fx::{cod2, cod2_cloud, cod2_tracer, cod4_trail};
 use crate::marks::MarkRequest;
 use glam::Vec3;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::sync::Arc;
+use vcod_common::asset_source::{Asset, AssetSource};
 use vcod_common::collision::{CONTENTS_SOLID, CollisionWorld};
-use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::aim::angles_to_axis_msvc;
 
 pub const MAX_PARTICLES: usize = 2048;
@@ -53,7 +55,7 @@ const TRACER_FLESH_MIN_DIST: f32 = 100.0;
 const TRACER_FLESH_NEAR: f32 = 50.0;
 const TRACER_FLESH_SPREAD_CUT: f32 = 60.0;
 /// Registered in CG_RegisterGraphics @ 0x30020da0.
-const TRACER_SHADER: &str = "gfx/misc/tracer";
+pub(crate) const TRACER_SHADER: &str = "gfx/misc/tracer";
 
 /// Where an effect is planted; decides emitter orientation.
 #[derive(Clone, Copy, Debug)]
@@ -107,7 +109,7 @@ pub struct FxQuad {
     pub verts: [[f32; 3]; 4],
     pub uvs: [[f32; 2]; 4],
     pub rgba: [f32; 4],
-    pub shader: String,
+    pub shader: Arc<str>,
 }
 
 pub struct FxLight {
@@ -153,7 +155,9 @@ enum Behavior {
 /// model and plays its `emitfx` along the way.
 fn classify(kind: &str) -> Behavior {
     match kind {
-        "Particle" | "OrientedParticle" | "Cylinder" => Behavior::Billboard,
+        // CoD2's `Cloud` lives as a sprite does and draws through
+        // `FxSystem::clouds` (docs/research/cod2-efx.md 5.1).
+        "Particle" | "OrientedParticle" | "Cylinder" | "Cloud" => Behavior::Billboard,
         "Decal" => Behavior::Decal,
         "Tail" | "Line" => Behavior::Stretch,
         "Light" => Behavior::Light,
@@ -198,12 +202,14 @@ struct Particle {
     impact_fx: Option<String>,
     /// Played where its life runs out (R10).
     death_fx: Option<String>,
-    shader: String,
+    shader: Arc<str>,
     is_light: bool,
     /// `Some` for an `Emitter` element, which draws no sprite.
     debris: Option<Debris>,
     /// An `Emitter`'s `emitfx` state.
     emit: Option<Emit>,
+    /// A CoD4 element's `effectEmitted` state.
+    emit4: Option<Emit4>,
     /// How many effects up the chain this particle's effect sits.
     depth: u8,
     /// A `relative` element of an effect played on a tag rides that tag
@@ -213,6 +219,8 @@ struct Particle {
     /// frame until it falls due and posed there on the tag as it then
     /// stands (0x493f40), with its gravity.
     repose: Option<f32>,
+    /// A CoD2 element's channels and spawn frame (`fx::cod2`).
+    cod2: Option<Box<cod2::Live>>,
 }
 
 /// `CEmitter`'s emit cursor (CoDMP.exe 0x48fcd4, grammar doc R10): the
@@ -227,6 +235,30 @@ struct Emit {
     spacing: f32,
     density: f32,
     variance: f32,
+}
+
+/// A CoD4 element's `effectEmitted` cursor (docs/research/cod4-effects.md
+/// 15): the effect plays at points spaced `gap + spread * rand` apart along
+/// the element's path, each step's move walked from where the last one
+/// ended.
+struct Emit4 {
+    fx: String,
+    /// The spacing's fixed part: the element's `emitDist` draw plus
+    /// `emitDistVariance.base`.
+    gap: f32,
+    /// `emitDistVariance.amplitude`, scaled by a fresh draw each spacing.
+    spread: f32,
+    /// The element's world position at the last step.
+    at: Vec3,
+    /// Units travelled since the last play, in 256ths of the widest
+    /// spacing: retail keeps the leftover in a byte (`emitResidual`).
+    owed: u8,
+}
+
+impl Emit4 {
+    fn widest(&self) -> f32 {
+        self.gap + self.spread
+    }
 }
 
 /// An effect another one starts: an `FxRunner`'s `playfx`, an `Emitter`'s
@@ -462,10 +494,44 @@ struct PendingMark {
 }
 
 /// Where one spawn's elements land.
+/// A camera's frustum as `FX_SetNextUpdateCamera` builds it: the view's
+/// forward plane through the eye, then its four sides, each `(normal,
+/// distance)` with the normal inward (cod4-effects.md 18).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Frustum {
+    planes: [(Vec3, f32); 5],
+}
+
+impl Frustum {
+    /// The frustum of an eye at `pos` along `fwd`, `left` and `up`,
+    /// `tan_x` and `tan_y` the tangents of its half fovs.
+    pub fn new(pos: Vec3, (fwd, left, up): (Vec3, Vec3, Vec3), tan_x: f32, tan_y: f32) -> Frustum {
+        let side = |t: f32, axis: Vec3| {
+            let c = 1.0 / (t * t + 1.0).sqrt();
+            (fwd * (t * c) + axis * c, fwd * (t * c) - axis * c)
+        };
+        let (l, r) = side(tan_x, left);
+        let (u, d) = side(tan_y, up);
+        let plane = |n: Vec3| (n, n.dot(pos));
+        Frustum {
+            planes: [plane(fwd), plane(l), plane(r), plane(u), plane(d)],
+        }
+    }
+
+    /// `FX_CullSphere` (iw3mp.exe 0x4a6290): the sphere lies wholly behind
+    /// one plane.
+    pub fn culls(&self, centre: Vec3, radius: f32) -> bool {
+        self.planes
+            .iter()
+            .any(|(n, d)| n.dot(centre) - d <= -radius)
+    }
+}
+
 struct SpawnOut<'a> {
     particles: &'a mut VecDeque<Particle>,
     marks: &'a mut Vec<PendingMark>,
     chains: &'a mut Vec<Chain>,
+    trails: &'a mut Vec<(Bolt, cod4_trail::Trail)>,
 }
 
 /// What one effect spawn shares between its elements.
@@ -475,6 +541,8 @@ struct SpawnCx {
     now: f32,
     /// The camera, for `cullrange`.
     view: Option<Vec3>,
+    /// The camera's frustum, for `frustumCull` (CoD4 only).
+    frustum: Option<Frustum>,
     depth: u8,
     /// The tag the effect was played on, and its frame when it is posed.
     bolt: Option<(Bolt, Option<BoltFrame>)>,
@@ -527,6 +595,29 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
     if behavior == Behavior::NoOp {
         return;
     }
+    // A CoD4 trail drops its cross-sections as the effect's tag moves; an
+    // effect on no tag never moves, so it draws none.
+    if let Some(def) = &em.cod4_trail {
+        if let (Some((id, Some(f))), Some(el)) = (cx.bolt, &em.cod2) {
+            let shader = pick(rng, &em.shaders).cloned().unwrap_or_default();
+            let (x, y, z) = f.axis;
+            out.trails.push((
+                id,
+                cod4_trail::Trail::start(
+                    el.clone(),
+                    def.clone(),
+                    shader,
+                    (f.origin, [x, y, z]),
+                    now,
+                    rng,
+                ),
+            ));
+            if out.trails.len() > MAX_TRAILS {
+                out.trails.remove(0);
+            }
+        }
+        return;
+    }
     // The effect runner skips an element when the effect is played past
     // its `cullrange` from the view, and never tests it again (CoDMP.exe
     // 0x493a1f, grammar doc R9).
@@ -550,11 +641,39 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
         Some((id, Some(frame))) => Some((id, frame)),
         _ => None,
     };
+    // CoD2's `spawnRange` also has a near end (cod2-efx.md 4.1).
+    if let Some(el) = &em.cod2
+        && el.prim.spawn_range.0 > 0.0
+        && let Some(view) = cx.view
+        && (spawn_pos(at) - view).length() < el.prim.spawn_range.0
+    {
+        return;
+    }
+    // `FX_CullElemForSpawn` (iw3mp.exe 0x4a0b90): a `frustumCull` element
+    // spawns only when a sphere of `spawnFrustumCullRadius` round the
+    // effect's origin meets the camera's frustum (cod4-effects.md 18).
+    if let Some(el) = &em.cod2
+        && el.prim.has_spawn(vcod_cod2::efx::spawn::FRUSTUM_CULL)
+        && let Some(f) = &cx.frustum
+        && f.culls(spawn_pos(at), el.prim.spawn_frustum_cull_radius)
+    {
+        return;
+    }
     // Clamped so a malformed count (1e9) does not spin the loop before
     // push_capped evicts.
     let count = (sample_r1(rng, em.count).round().max(0.0) as usize).min(MAX_PARTICLES);
-    for _ in 0..count {
-        let delay = sample_r1(rng, em.delay) / 1000.0;
+    // CoD2's `evenDistribution` spreads the delays over the range by the
+    // spawn's index instead of drawing them (FxScheduler::PlayEffect).
+    let even = em
+        .cod2
+        .as_ref()
+        .filter(|el| el.prim.has_spawn(vcod_cod2::efx::spawn::EVEN_DISTRIBUTION))
+        .map(|el| (el.prim.delay.1 - el.prim.delay.0).abs() / count.max(1) as f32);
+    for index in 0..count {
+        let delay = match even {
+            Some(step) => (index as f32 * step).trunc() / 1000.0,
+            None => sample_r1(rng, em.delay) / 1000.0,
+        };
         let spawn = now + delay;
         if behavior == Behavior::Runner {
             // Case 10 of the spawner: the element's origin and frame, then
@@ -675,7 +794,7 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
         // `CEmitter` (0x4a02c0) starts its cursor at its own origin and
         // velocity; the first spacing is drawn like every later one.
         let emit = match pick(rng, &em.emit_fx) {
-            Some(fx) if behavior == Behavior::Emitter => {
+            Some(fx) if behavior == Behavior::Emitter && em.cod4_emit.is_none() => {
                 let density = sample_r1(rng, em.density);
                 let variance = sample_r1(rng, em.variance);
                 Some(Emit {
@@ -692,9 +811,48 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
         };
         let mut emit = emit;
         let mut debris = debris;
+        let emit4 = em.cod4_emit.and_then(|c| {
+            let fx = pick(rng, &em.emit_fx)?;
+            Some(Emit4 {
+                fx: efx::chained_path(fx),
+                gap: sample_r1(rng, c.dist) + c.variance_base,
+                spread: c.variance_amp,
+                at: pos,
+                owed: 0,
+            })
+        });
+        // A CoD2 element moves on its velocity curves from here, on the
+        // effect's axis or, under axisFromSphere, the spread's.
+        let mut live = em.cod2.as_ref().map(|el| {
+            let (fx, fy, fz) = frame.unwrap_or(UP_AXIS);
+            let mut axis = [fx, fy, fz];
+            if el.prim.has_spawn(vcod_cod2::efx::spawn::AXIS_FROM_SPHERE)
+                && let Some(radial) = (base - center).try_normalize()
+            {
+                let (x, y, z) = tangent_basis(radial);
+                axis = [x, y, z];
+            }
+            let l = cod2::Live::spawn(
+                el.clone(),
+                rng,
+                (pos, axis),
+                Vec3::Z,
+                life * 1000.0,
+                &shader,
+                index as u32,
+            );
+            vel = (l.position(0.001) - l.position(0.0)) / 0.001;
+            if let Some(e) = &mut emit {
+                e.vel = vel;
+            }
+            Box::new(l)
+        });
         // A delayed non-`relative` element waits in the tag's frame.
         let repose = posed.filter(|_| bolt.is_none() && spawn > now);
         if let Some((_, frame)) = repose {
+            if let Some(l) = &mut live {
+                l.carry(|p| frame.unrotate(p - frame.origin), |d| frame.unrotate(d));
+            }
             pos = frame.unrotate(pos - frame.origin);
             vel = frame.unrotate(vel);
             accel = frame.unrotate(accel - Vec3::Z * gravity);
@@ -707,6 +865,9 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
             }
         }
         if let Some((_, frame)) = bolt {
+            if let Some(l) = &mut live {
+                l.carry(|p| frame.unrotate(p - frame.origin), |d| frame.unrotate(d));
+            }
             pos = frame.unrotate(pos - frame.origin);
             vel = frame.unrotate(vel);
             accel = frame.unrotate(accel);
@@ -744,9 +905,11 @@ fn spawn_emitter(rng: &mut Rng, out: &mut SpawnOut, em: &Emitter, cx: &SpawnCx) 
             is_light: behavior == Behavior::Light,
             debris,
             emit,
+            emit4,
             depth: cx.depth,
             bolt: bolt.or(repose).map(|(id, _)| id),
             repose: repose.map(|_| gravity),
+            cod2: live,
         };
 
         push_capped(out.particles, p, MAX_PARTICLES);
@@ -778,7 +941,7 @@ fn decal_request(rng: &mut Rng, em: &Emitter, at: SpawnAt, life: f32) -> MarkReq
         String::new()
     } else {
         let idx = ((rng.next_f32() * em.shaders.len() as f32) as usize).min(em.shaders.len() - 1);
-        em.shaders[idx].clone()
+        em.shaders[idx].to_string()
     };
     MarkRequest {
         shader,
@@ -840,9 +1003,15 @@ fn step_pool(pool: &mut VecDeque<Particle>, cx: &StepCx, rng: &mut Rng, chains: 
             p.pos = f.origin + f.rotate(p.pos);
             p.vel = f.rotate(p.vel);
             p.accel = f.rotate(p.accel) + Vec3::Z * gravity;
+            if let Some(l) = &mut p.cod2 {
+                l.carry(|v| f.origin + f.rotate(v), |d| f.rotate(d));
+            }
             if let Some(e) = &mut p.emit {
                 e.pos = p.pos;
                 e.vel = p.vel;
+            }
+            if let Some(e) = &mut p.emit4 {
+                e.at = f.origin + f.rotate(p.pos);
             }
             if let Some(d) = &mut p.debris {
                 d.angles += forward_angles(f.axis.0);
@@ -869,6 +1038,10 @@ fn step_pool(pool: &mut VecDeque<Particle>, cx: &StepCx, rng: &mut Rng, chains: 
         let before = p.pos;
         if !update_origin(p, dt, cx.world, now, chains) {
             return false;
+        }
+        if let Some(l) = &p.cod2 {
+            // Degrees per 100 ms (cod2-efx.md 4.3).
+            p.rot_delta = l.rotation_delta(((now - p.spawn) / p.life).clamp(0.0, 1.0)) * 10.0;
         }
         p.rot += p.rot_delta * dt;
         if let Some(d) = &mut p.debris {
@@ -899,8 +1072,52 @@ fn step_pool(pool: &mut VecDeque<Particle>, cx: &StepCx, rng: &mut Rng, chains: 
             }
             p.emit = Some(e);
         }
+        if let Some(e) = &mut p.emit4 {
+            let end = frame.map_or(p.pos, |f| f.origin + f.rotate(p.pos));
+            for (pos, dir) in emit4_along(e, end, rng) {
+                chains.push(Chain {
+                    due: now,
+                    path: e.fx.clone(),
+                    at: SpawnAt::Directed { pos, dir },
+                    depth: p.depth + 1,
+                    bolt: None,
+                    repose: false,
+                });
+            }
+        }
         true
     });
+}
+
+/// Most plays one element's emission makes in one step.
+const MAX_EMITS_PER_STEP: usize = 64;
+
+/// Walks `e` to `end` and returns where its effect plays on the way, each
+/// with the move's direction. A spacing that ends exactly at `end` plays;
+/// one shorter than what was already owed plays at the move's start.
+fn emit4_along(e: &mut Emit4, end: Vec3, rng: &mut Rng) -> Vec<(Vec3, Vec3)> {
+    let from = std::mem::replace(&mut e.at, end);
+    let (dir, len) = (end - from).normalize_and_length();
+    let widest = e.widest();
+    // No move, or a spacing that could never advance.
+    if len == 0.0 || widest <= 0.0 {
+        return Vec::new();
+    }
+    // Distances along the move; the carried units put the walk's origin
+    // behind the move's start. vcod caps a step's plays against a
+    // near-zero spacing.
+    let owed = f32::from(e.owed) / 256.0 * widest;
+    let (gap, spread) = (e.gap, e.spread);
+    let marks: Vec<f32> = std::iter::successors(Some(-owed), |&d| {
+        let next = d + gap + spread * rng.next_f32();
+        (next <= len).then_some(next.max(0.0))
+    })
+    .skip(1)
+    .take(MAX_EMITS_PER_STEP)
+    .collect();
+    let since = len - marks.last().copied().unwrap_or(-owed);
+    e.owed = (since / widest * 256.0).round().clamp(0.0, 255.0) as u8;
+    marks.into_iter().map(|d| (from + dir * d, dir)).collect()
 }
 
 /// `Die` (CoDMP.exe 0x48dda0): a `deathfx` plays at the particle along a
@@ -997,8 +1214,20 @@ fn update_origin(
     now: f32,
     chains: &mut Vec<Chain>,
 ) -> bool {
-    p.vel += p.accel * dt;
-    let new_pos = p.pos + p.vel * dt + 0.5 * p.accel * dt * dt;
+    let new_pos = match p.cod2.as_deref().filter(|l| l.moving) {
+        // A CoD2 element sits where its velocity integrals put it.
+        Some(l) => {
+            let at = l.position(now - p.spawn);
+            if dt > 0.0 {
+                p.vel = (at - p.pos) / dt;
+            }
+            at
+        }
+        None => {
+            p.vel += p.accel * dt;
+            p.pos + p.vel * dt + 0.5 * p.accel * dt * dt
+        }
+    };
     if p.physics
         && let Some(world) = world
     {
@@ -1020,6 +1249,14 @@ fn update_origin(
             if p.impact_kills {
                 return false;
             }
+            // A bounced CoD2 element falls on as a CoD1 one does from here:
+            // `gravity * s^2` is an acceleration of twice `gravity`.
+            if let Some(l) = &mut p.cod2
+                && l.moving
+            {
+                l.moving = false;
+                p.accel = l.up * (2.0 * l.gravity);
+            }
             p.vel += p.accel * (tr.fraction * dt);
             p.vel = (p.vel - 2.0 * p.vel.dot(tr.normal) * tr.normal) * p.elasticity;
             // Too slow off a floor: it rests, and stops tracing.
@@ -1038,20 +1275,22 @@ fn update_origin(
 }
 
 /// Farthest from `cam_pos` first, the order `Renderer::set_fx_quads` draws in.
-pub fn sort_back_to_front(quads: &mut [FxQuad], cam_pos: Vec3) {
-    quads.sort_by(|a, b| {
-        let da = (quad_center(a) - cam_pos).length_squared();
-        let db = (quad_center(b) - cam_pos).length_squared();
-        // total_cmp: a NaN must not panic here.
-        db.total_cmp(&da)
-    });
+pub fn sort_back_to_front(quads: &mut Vec<FxQuad>, cam_pos: Vec3) {
+    // each distance once, not twice per comparison
+    let mut keyed: Vec<(f32, FxQuad)> = quads
+        .drain(..)
+        .map(|q| ((quad_center(&q) - cam_pos).length_squared(), q))
+        .collect();
+    // total_cmp: a NaN must not panic here.
+    keyed.sort_by(|a, b| b.0.total_cmp(&a.0));
+    quads.extend(keyed.into_iter().map(|(_, q)| q));
 }
 
 fn quad_center(q: &FxQuad) -> Vec3 {
     q.verts.iter().map(|v| Vec3::from(*v)).sum::<Vec3>() / 4.0
 }
 
-fn make_quad(center: Vec3, x: Vec3, y: Vec3, rgb: Vec3, alpha: f32, shader: &str) -> FxQuad {
+fn make_quad(center: Vec3, x: Vec3, y: Vec3, rgb: Vec3, alpha: f32, shader: &Arc<str>) -> FxQuad {
     let mut verts = [[0.0f32; 3]; 4];
     let mut uvs = [[0.0f32; 2]; 4];
     for (i, (u, v)) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
@@ -1065,7 +1304,7 @@ fn make_quad(center: Vec3, x: Vec3, y: Vec3, rgb: Vec3, alpha: f32, shader: &str
         verts,
         uvs,
         rgba: [rgb.x, rgb.y, rgb.z, alpha],
-        shader: shader.to_string(),
+        shader: shader.clone(),
     }
 }
 
@@ -1096,17 +1335,72 @@ fn live(p: &Particle, now: f32) -> bool {
     now >= p.spawn && p.life > 0.0 && now - p.spawn <= p.life
 }
 
+/// A particle's extents at life fraction `t`: half-width, half-height,
+/// and the tail's length for a stretched one.
+struct Shape {
+    half: f32,
+    height: f32,
+    len: Option<f32>,
+}
+
+impl Shape {
+    fn at(p: &Particle, t: f32) -> Shape {
+        match &p.cod2 {
+            // `size2` draws only under `nonUniformScale`, as on CoD1.
+            Some(l) => Shape {
+                half: l.size(t),
+                height: if l.prim().non_uniform_scale {
+                    l.size2(t)
+                } else {
+                    l.size(t)
+                },
+                len: l.stretches().then(|| l.length(t)),
+            },
+            None => Shape {
+                half: lerp(p.size0, p.size1, t),
+                height: lerp(p.height0, p.height1, t),
+                len: (p.len0 != 0.0 || p.len1 != 0.0).then(|| lerp(p.len0, p.len1, t)),
+            },
+        }
+    }
+}
+
 /// A sprite's vertex colour at `t` through its life: the rgb curve, then
 /// the alpha curve clamped to 0..1, into the alpha (`useAlpha`) or onto the
 /// rgb with an opaque alpha (0x48e640 then 0x48e7d0).
+/// [`vertex_colour`] at `pos`, a CoD4 element's alpha scaled by its
+/// distance fade from `cam_pos` ([`cod2::Live::distance_fade`]).
+fn faded_colour(p: &Particle, t: f32, pos: Vec3, cam_pos: Vec3) -> (Vec3, f32) {
+    let (rgb, alpha) = vertex_colour(p, t);
+    let fade = p
+        .cod2
+        .as_ref()
+        .map_or(1.0, |l| l.distance_fade(pos.distance(cam_pos)));
+    if p.use_alpha {
+        (rgb, alpha * fade)
+    } else {
+        (rgb * fade, alpha)
+    }
+}
+
 fn vertex_colour(p: &Particle, t: f32) -> (Vec3, f32) {
-    let alpha = lerp(p.alpha0, p.alpha1, t).clamp(0.0, 1.0);
-    let rgb = p.rgb0.lerp(p.rgb1, t);
+    let (rgb, alpha) = match &p.cod2 {
+        Some(l) => (l.rgb(t), l.alpha(t)),
+        None => (
+            p.rgb0.lerp(p.rgb1, t),
+            lerp(p.alpha0, p.alpha1, t).clamp(0.0, 1.0),
+        ),
+    };
     if p.use_alpha {
         (rgb, alpha)
     } else {
         (rgb * alpha, 1.0)
     }
+}
+
+/// A CoD2 `Cloud`, drawn by [`FxSystem::clouds`] instead of as a quad.
+fn is_cloud(p: &Particle) -> bool {
+    p.cod2.as_ref().is_some_and(|l| l.cloud_axis.is_some())
 }
 
 fn push_quads(
@@ -1122,35 +1416,45 @@ fn push_quads(
         // An element with no `shaders` list draws retail's shader handle 0,
         // `<default>`, at its size; every stock one is zero-sized, so it
         // draws nothing (grammar doc R4, "An element with no shaders").
-        if p.is_light || p.debris.is_some() || p.shader.is_empty() || !live(p, now) {
+        if p.is_light || p.debris.is_some() || p.shader.is_empty() || !live(p, now) || is_cloud(p) {
             continue;
         }
         let Some((pos, vel)) = world_state(p, bolts) else {
             continue;
         };
         let t = ((now - p.spawn) / p.life).clamp(0.0, 1.0);
+        let shape = Shape::at(p, t);
         // `size` is a half-extent (grammar doc R4).
-        let half = lerp(p.size0, p.size1, t);
-        let (rgb, alpha) = vertex_colour(p, t);
+        let half = shape.half;
+        let (rgb, alpha) = faded_colour(p, t, pos, cam_pos);
         let rad = p.rot.to_radians();
+        let uvs = p
+            .cod2
+            .as_ref()
+            .and_then(|l| l.uvs((now - p.spawn) * 1000.0));
+        let mut push = |mut q: FxQuad| {
+            if let Some(uvs) = uvs {
+                q.uvs = uvs;
+            }
+            out.push(q);
+        };
 
-        if p.len0 != 0.0 || p.len1 != 0.0 {
+        if let Some(len) = shape.len {
             // Anchored at the head, trailing `length` back along travel,
             // `2 * size` wide (grammar doc R5).
-            let len = lerp(p.len0, p.len1, t);
             let head = pos;
             let tail = head - vel.normalize_or_zero() * len;
             let mid = (head + tail) * 0.5;
             let axis = (head - tail) * 0.5;
             let view_dir = (cam_pos - mid).normalize_or_zero();
             let side = stretch_side_dir(axis, view_dir, cam_up, cam_right) * half;
-            out.push(make_quad(mid, axis, side, rgb, alpha, &p.shader));
+            push(make_quad(mid, axis, side, rgb, alpha, &p.shader));
         } else {
             // `size` across the view, `size2` up it, both turned by the
             // rotation (0x5101d0).
-            let height = lerp(p.height0, p.height1, t);
+            let height = shape.height;
             let (rx, ry) = rotate2(cam_right, cam_up, rad);
-            out.push(make_quad(
+            push(make_quad(
                 pos,
                 rx * half,
                 ry * height,
@@ -1200,13 +1504,15 @@ fn tracer_particle(spawn: f32, life: f32, head: Vec3, vel: Vec3, len: f32, width
         elasticity: 0.0,
         impact_fx: None,
         death_fx: None,
-        shader: TRACER_SHADER.to_string(),
+        shader: TRACER_SHADER.into(),
         is_light: false,
         debris: None,
         emit: None,
+        emit4: None,
         depth: 0,
         bolt: None,
         repose: None,
+        cod2: None,
     }
 }
 
@@ -1219,6 +1525,8 @@ pub struct FxSystem {
     chains: Vec<Chain>,
     /// The camera, for `cullrange`.
     view: Option<Vec3>,
+    /// The camera's frustum, for `frustumCull`; see [`Self::set_frustum`].
+    frustum: Option<Frustum>,
     /// This frame's tags effects are played on, see [`Self::set_bolts`]
     /// and [`Self::set_tag_bolts`].
     bolts: HashMap<Bolt, BoltFrame>,
@@ -1229,7 +1537,14 @@ pub struct FxSystem {
     rewind_ms: Option<f32>,
     /// United Offensive's tracer rules, see [`Self::set_tracer_rules`].
     tracer_rules: TracerRules,
+    /// CoD2's tracers in flight ([`Self::spawn_cod2_tracer`]).
+    cod2_tracers: Vec<cod2_tracer::Tracer>,
+    /// CoD4 trails on their effects' tags.
+    trails: Vec<(Bolt, cod4_trail::Trail)>,
 }
+
+/// Most CoD4 trails running at once; a new one past it ends the oldest.
+const MAX_TRAILS: usize = 64;
 
 /// How a United Offensive cgame draws a tracer where 1.1's and 1.5's do
 /// not (docs/research/coduo-diff.md 19, "The tracer cvars").
@@ -1269,12 +1584,45 @@ impl FxSystem {
             marks: Vec::new(),
             chains: Vec::new(),
             view: None,
+            frustum: None,
             bolts: HashMap::new(),
             rng: Rng::new(0x9E3779B97F4A7C15),
             shakes: Vec::new(),
             rewind_ms: None,
             tracer_rules: TracerRules::default(),
+            cod2_tracers: Vec::new(),
+            trails: Vec::new(),
         }
+    }
+
+    /// A CoD2 tracer from `muzzle` to `hit`, spawned at `now` less
+    /// `back_ms`; the event path rolled its chance.
+    pub fn spawn_cod2_tracer(&mut self, muzzle: Vec3, hit: Vec3, now: f32, back_ms: i32) {
+        crate::frame_digest::effect("", muzzle);
+        crate::frame_digest::effect("", hit);
+        crate::frame_digest::u32(crate::frame_digest::Part::Fx, back_ms as u32);
+        // A full pool reuses the oldest (`CG_AllocLocalEntity`).
+        if self.cod2_tracers.len() >= cod2_tracer::MAX_LOCAL_ENTITIES {
+            self.cod2_tracers.remove(0);
+        }
+        self.cod2_tracers
+            .push(cod2_tracer::Tracer::new(muzzle, hit, now, back_ms));
+    }
+
+    /// A CoD4 tracer from `muzzle` to `hit` (`CG_SpawnTracer` under 1.7's
+    /// dvars, [`cod2_tracer::COD4`]), back-dated `back_ms`; the caller
+    /// rolled its chance.
+    pub fn spawn_cod4_tracer(&mut self, muzzle: Vec3, hit: Vec3, now: f32, back_ms: i32) {
+        if self.cod2_tracers.len() >= cod2_tracer::MAX_LOCAL_ENTITIES {
+            self.cod2_tracers.remove(0);
+        }
+        self.cod2_tracers.push(cod2_tracer::Tracer::with(
+            cod2_tracer::COD4,
+            muzzle,
+            hit,
+            now,
+            back_ms,
+        ));
     }
 
     /// The connection's tracer rules: a United Offensive server's, with
@@ -1295,34 +1643,116 @@ impl FxSystem {
         std::mem::take(&mut self.shakes)
     }
 
-    fn ensure_cached(&mut self, fs: &Pk3Fs, path: &str) {
+    fn ensure_cached(&mut self, fs: &dyn AssetSource, path: &str) {
         if self.cache.contains_key(path) {
             return;
         }
         // Registration keeps a name up to its first `.` and reads it back as
         // `.efx` (0x492eb0, efx-grammar.md R9), which United Offensive's
-        // `worldFlashEffect fx/weapon/muzzleflash/mf_kar98.efx.efx` needs.
-        let effect = match fs.read(&efx::chained_path(path)) {
-            None => {
+        // `worldFlashEffect fx/weapon/muzzleflash/mf_kar98.efx.efx` needs
+        // (`efx::chained_path`, in `Effect`'s find).
+        let effect = match efx::Effect::find(fs, path) {
+            Ok(e) => Some(e),
+            Err(err) => {
                 if self.warned.insert(path.to_string()) {
-                    log::warn!("fx {path}: not found");
+                    log::warn!("fx {path}: {err}");
                 }
                 None
             }
-            Some(bytes) => {
-                let text = String::from_utf8_lossy(&bytes).into_owned();
-                match efx::parse(&text) {
-                    Ok(e) => Some(e),
-                    Err(err) => {
-                        if self.warned.insert(path.to_string()) {
-                            log::warn!("fx {path}: {err}");
-                        }
-                        None
-                    }
-                }
-            }
         };
         self.cache.insert(path.to_string(), effect);
+    }
+
+    /// Parses `paths` and every effect they chain to (impact, emitted,
+    /// death and runner effects) now, as a level's registration does,
+    /// so no first play reads a file in its frame. Returns the shaders
+    /// they draw: `Decal` elements' mark materials, then every other
+    /// element's sprites.
+    pub fn preload<'a>(
+        &mut self,
+        fs: &dyn AssetSource,
+        paths: impl IntoIterator<Item = &'a str>,
+    ) -> (Vec<Arc<str>>, Vec<Arc<str>>) {
+        let mut todo: Vec<String> = paths.into_iter().map(str::to_string).collect();
+        let mut seen: HashSet<String> = HashSet::new();
+        let (mut marks, mut sprites) = (Vec::new(), Vec::new());
+        while let Some(path) = todo.pop() {
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            self.ensure_cached(fs, &path);
+            let Some(Some(e)) = self.cache.get(&path) else {
+                continue;
+            };
+            for m in &e.emitters {
+                let set = if m.kind == "Decal" {
+                    &mut marks
+                } else {
+                    &mut sprites
+                };
+                set.extend(m.shaders.iter().cloned());
+                for chained in [&m.impact_fx, &m.emit_fx, &m.death_fx, &m.play_fx] {
+                    todo.extend(chained.iter().filter(|p| !seen.contains(*p)).cloned());
+                }
+            }
+        }
+        for v in [&mut marks, &mut sprites] {
+            v.sort();
+            v.dedup();
+        }
+        (marks, sprites)
+    }
+
+    /// CoD1's [`Self::preload`]: parses `paths` and every effect they chain
+    /// to (`playfx`, `emitfx`, `impactfx`, `deathfx`, read as
+    /// [`efx::chained_path`] names them) now, and returns the shaders their elements
+    /// draw: `Decal` elements' mark shaders, then every other's. A CoD1
+    /// level reads its effects this way with the gamestate, not in an
+    /// effect's first frame (cod11-client-soak.md). The third set is the
+    /// xmodels their `Model` elements throw (brass, debris).
+    pub fn preload_cod1<'a>(
+        &mut self,
+        fs: &dyn AssetSource,
+        paths: impl IntoIterator<Item = &'a str>,
+    ) -> (BTreeSet<String>, BTreeSet<String>, BTreeSet<String>) {
+        let mut todo: Vec<String> = paths.into_iter().map(str::to_string).collect();
+        let mut seen = HashSet::new();
+        let (mut marks, mut sprites, mut models) =
+            (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+        while let Some(path) = todo.pop() {
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            self.ensure_cached(fs, &path);
+            let Some(Some(effect)) = self.cache.get(&path) else {
+                continue;
+            };
+            for em in &effect.emitters {
+                let set = if em.kind == "Decal" {
+                    &mut marks
+                } else {
+                    &mut sprites
+                };
+                set.extend(em.shaders.iter().map(|s| s.to_string()));
+                models.extend(em.models.iter().cloned());
+                for fx in em
+                    .play_fx
+                    .iter()
+                    .chain(&em.emit_fx)
+                    .chain(&em.impact_fx)
+                    .chain(&em.death_fx)
+                {
+                    todo.push(efx::chained_path(fx));
+                }
+            }
+        }
+        (marks, sprites, models)
+    }
+
+    /// An effect built elsewhere (CoD4's zone effects, `cod4_fx`), held
+    /// under `path` as [`Self::spawn`] and the chains look it up.
+    pub fn insert(&mut self, path: &str, effect: Effect) {
+        self.cache.insert(path.to_string(), Some(effect));
     }
 
     /// A download reopened the search path: effect files parse again, and a
@@ -1338,11 +1768,27 @@ impl FxSystem {
         self.marks.clear();
         self.chains.clear();
         self.bolts.clear();
+        self.cod2_tracers.clear();
+        self.trails.clear();
     }
 
-    /// The camera this frame's spawns are culled against.
+    /// The camera this frame's spawns are culled against. Drops the last
+    /// frustum: a caller that culls by one sets it after this.
     pub fn set_view(&mut self, pos: Vec3) {
         self.view = Some(pos);
+        self.frustum = None;
+    }
+
+    /// The camera's frustum this frame's `frustumCull` spawns are culled
+    /// against (cod4-effects.md 18). Only CoD4's frame sets one.
+    pub fn set_frustum(&mut self, frustum: Frustum) {
+        self.frustum = Some(frustum);
+    }
+
+    /// The camera [`Self::set_view`] last set.
+    #[cfg(test)]
+    pub fn view(&self) -> Option<Vec3> {
+        self.view
     }
 
     /// This frame's tags, as (origin, forward) by key: the shooters'
@@ -1368,13 +1814,20 @@ impl FxSystem {
         );
     }
 
-    /// The `playFxOnTag` tags a live element or a pending chain rides,
-    /// which the caller poses for [`Self::set_tag_bolts`] each frame.
+    /// The `playFxOnTag` tags a live element, a pending chain or a CoD4
+    /// trail rides, which the caller poses for [`Self::set_tag_bolts`] each
+    /// frame.
     pub fn tag_bolts(&self) -> HashSet<TagBolt> {
         let particles = self.particles.iter().filter_map(|p| p.bolt);
         let chains = self.chains.iter().filter_map(|c| c.bolt);
+        let trails = self
+            .trails
+            .iter()
+            .filter(|(_, t)| !t.ended)
+            .map(|(b, _)| *b);
         particles
             .chain(chains)
+            .chain(trails)
             .filter_map(|b| match b {
                 Bolt::Tag(t) => Some(t),
                 Bolt::Muzzle(_) => None,
@@ -1387,12 +1840,13 @@ impl FxSystem {
     /// follow the tag after this frame (`PlayEffect` 0x493870, R10).
     pub fn spawn_on_tag(
         &mut self,
-        fs: &Pk3Fs,
+        fs: &dyn AssetSource,
         path: &str,
         tag: TagBolt,
         pose: TagPose,
         now: f32,
     ) -> Vec<FxSound> {
+        crate::frame_digest::effect(path, pose.origin);
         self.bolts.insert(Bolt::Tag(tag), BoltFrame::tag(pose));
         let at = SpawnAt::Oriented {
             pos: pose.origin,
@@ -1406,7 +1860,13 @@ impl FxSystem {
 
     /// Missing or broken files warn once and no-op. Returns the `Sound`
     /// cues for the audio system.
-    pub fn spawn(&mut self, fs: &Pk3Fs, path: &str, at: SpawnAt, now: f32) -> Vec<FxSound> {
+    pub fn spawn(
+        &mut self,
+        fs: &dyn AssetSource,
+        path: &str,
+        at: SpawnAt,
+        now: f32,
+    ) -> Vec<FxSound> {
         self.spawn_marked(fs, path, at, None, now, true)
     }
 
@@ -1416,13 +1876,14 @@ impl FxSystem {
     /// `EV_ROCKET_EXPLODE_NOMARKS` has the cgame refuse them.
     pub fn spawn_marked(
         &mut self,
-        fs: &Pk3Fs,
+        fs: &dyn AssetSource,
         path: &str,
         at: SpawnAt,
         bolt: Option<u32>,
         now: f32,
         marks: bool,
     ) -> Vec<FxSound> {
+        crate::frame_digest::effect(path, spawn_pos(at));
         let first_mark = self.marks.len();
         let first_chain = self.chains.len();
         let mut sounds = self.spawn_effect(fs, path, at, now, 0, bolt.map(Bolt::Muzzle));
@@ -1436,7 +1897,7 @@ impl FxSystem {
 
     fn spawn_effect(
         &mut self,
-        fs: &Pk3Fs,
+        fs: &dyn AssetSource,
         path: &str,
         at: SpawnAt,
         now: f32,
@@ -1451,6 +1912,7 @@ impl FxSystem {
             at,
             now,
             view: self.view,
+            frustum: self.frustum,
             depth,
             bolt: bolt.map(|id| (id, self.bolts.get(&id).copied())),
         };
@@ -1460,8 +1922,15 @@ impl FxSystem {
                 particles: &mut self.particles,
                 marks: &mut self.marks,
                 chains: &mut self.chains,
+                trails: &mut self.trails,
             };
             for em in &effect.emitters {
+                if em.kind == "CameraShake" && em.cod2.is_some() {
+                    // `FX_AddCameraShake` (Mac 0x59fec) hands the cgame
+                    // origin, intensity and radius; not drawn yet.
+                    log::debug!("fx {path}: CoD2 CameraShake at {:?}", spawn_pos(at));
+                    continue;
+                }
                 if em.kind == "CameraShake" {
                     let origin = spawn_pos(at);
                     let culled = em.cullrange > 0.0
@@ -1487,7 +1956,7 @@ impl FxSystem {
 
     /// Spawns the chained effects due by `now` from `chains[from..]`,
     /// and those they start in turn.
-    fn drain_chains(&mut self, fs: &Pk3Fs, now: f32, from: usize) -> Vec<FxSound> {
+    fn drain_chains(&mut self, fs: &dyn AssetSource, now: f32, from: usize) -> Vec<FxSound> {
         let mut sounds = Vec::new();
         let mut i = from;
         while i < self.chains.len() {
@@ -1511,7 +1980,13 @@ impl FxSystem {
     /// Plays the effects due by `now` that others started: delayed
     /// `playfx`, and the `impactfx`, `emitfx` and `deathfx` the steps
     /// since the last call raised.
-    pub fn spawn_chained(&mut self, fs: &Pk3Fs, now: f32) -> Vec<FxSound> {
+    /// The chained effects waiting to start, by path, for the gates.
+    #[cfg(test)]
+    pub(crate) fn pending_chains(&self) -> Vec<&str> {
+        self.chains.iter().map(|c| c.path.as_str()).collect()
+    }
+
+    pub fn spawn_chained(&mut self, fs: &dyn AssetSource, now: f32) -> Vec<FxSound> {
         self.drain_chains(fs, now, 0)
     }
 
@@ -1532,6 +2007,10 @@ impl FxSystem {
         now: f32,
         frame_dt: f32,
     ) -> bool {
+        crate::frame_digest::effect("", muzzle);
+        crate::frame_digest::effect("", impact);
+        let flags = u32::from(flesh) | u32::from(heavy) << 1 | u32::from(roll) << 2;
+        crate::frame_digest::u32(crate::frame_digest::Part::Fx, flags);
         let (chance, len, mut width) = match heavy {
             true => (TRACER_CHANCE_HEAVY, TRACER_LENGTH_HEAVY, TRACER_WIDTH_HEAVY),
             false => (TRACER_CHANCE, TRACER_LENGTH, TRACER_WIDTH),
@@ -1592,6 +2071,7 @@ impl FxSystem {
             at,
             now,
             view: self.view,
+            frustum: self.frustum,
             depth: 0,
             bolt: None,
         };
@@ -1599,6 +2079,7 @@ impl FxSystem {
             particles: &mut self.particles,
             marks: &mut self.marks,
             chains: &mut self.chains,
+            trails: &mut self.trails,
         };
         for em in &effect.emitters {
             spawn_emitter(&mut self.rng, &mut out, em, &cx);
@@ -1622,6 +2103,15 @@ impl FxSystem {
             bolts: &self.bolts,
         };
         step_pool(&mut self.particles, &cx, &mut self.rng, &mut self.chains);
+        for (id, t) in &mut self.trails {
+            let frame = self.bolts.get(id).map(|f| {
+                let (x, y, z) = f.axis;
+                (f.origin, [x, y, z])
+            });
+            t.advance(frame, now, &mut self.rng);
+        }
+        self.trails.retain(|(_, t)| !t.done(now));
+        self.cod2_tracers.retain(|t| now < t.end);
     }
 
     /// This frame's `Emitter` debris models.
@@ -1635,7 +2125,7 @@ impl FxSystem {
                 let (origin, _) = world_state(p, &self.bolts)?;
                 let frame = p.bolt.and_then(|id| self.bolts.get(&id)).copied();
                 let t = ((now - p.spawn) / p.life).clamp(0.0, 1.0);
-                let scale = lerp(p.size0, p.size1, t);
+                let scale = Shape::at(p, t).half;
                 let axis = angles_to_axis_msvc(d.angles.to_array()).map(|a| {
                     let a = Vec3::from(a) * scale;
                     frame.map_or(a, |f| f.rotate(a))
@@ -1668,8 +2158,68 @@ impl FxSystem {
             now,
             &mut out,
         );
+        let cam_fwd = cam_up.cross(cam_right);
+        for t in self.cod2_tracers.iter().filter(|t| t.live(now)) {
+            t.quads(now, cam_pos, cam_fwd, cam_right, cam_up, &mut out);
+        }
+        for (_, t) in &self.trails {
+            t.quads(now, cam_pos, &mut out);
+        }
         sort_back_to_front(&mut out, cam_pos);
         out
+    }
+
+    /// This frame's CoD2 clouds (`fx::cod2_cloud`), far to near from
+    /// `cam_pos`.
+    pub fn clouds(
+        &self,
+        cam_pos: Vec3,
+        cam_right: Vec3,
+        cam_up: Vec3,
+        now: f32,
+    ) -> cod2_cloud::Clouds {
+        let mut out: Vec<cod2_cloud::FxCloud> = Vec::new();
+        for p in &self.particles {
+            let Some((l, axis)) = p.cod2.as_ref().and_then(|l| Some((l, l.cloud_axis?))) else {
+                continue;
+            };
+            if p.shader.is_empty() || !live(p, now) {
+                continue;
+            }
+            let Some((pos, vel)) = world_state(p, &self.bolts) else {
+                continue;
+            };
+            let t = ((now - p.spawn) / p.life).clamp(0.0, 1.0);
+            let size = l.size(t);
+            let width = if l.prim().non_uniform_scale {
+                l.size2(t)
+            } else {
+                size
+            };
+            let length = if l.prim().use_length {
+                l.length(t)
+            } else {
+                width
+            };
+            let (rgb, alpha) = faded_colour(p, t, pos, cam_pos);
+            out.push(cod2_cloud::FxCloud::new(
+                pos,
+                vel,
+                (size, width, length),
+                p.rot,
+                axis,
+                [rgb.x, rgb.y, rgb.z, alpha],
+                &p.shader,
+                (cam_right, cam_up),
+            ));
+        }
+        let d = |c: &cod2_cloud::FxCloud| c.origin.distance_squared(cam_pos);
+        out.sort_by(|a, b| d(b).total_cmp(&d(a)));
+        cod2_cloud::Clouds {
+            list: out,
+            right: cam_right,
+            up: cam_up,
+        }
     }
 
     /// Live Light-kind particles as point lights: the first
@@ -1683,8 +2233,11 @@ impl FxSystem {
             .filter_map(|p| {
                 let (pos, _) = world_state(p, &self.bolts)?;
                 let t = ((now - p.spawn) / p.life).clamp(0.0, 1.0);
-                let radius = lerp(p.size0, p.size1, t);
-                let rgb = p.rgb0.lerp(p.rgb1, t);
+                let radius = Shape::at(p, t).half;
+                let rgb = match &p.cod2 {
+                    Some(l) => l.rgb(t),
+                    None => p.rgb0.lerp(p.rgb1, t),
+                };
                 let dist_sq = (pos - cam_pos).length_squared();
                 Some((
                     dist_sq,
@@ -1728,6 +2281,7 @@ mod tests {
     use super::*;
     use crate::fx::efx::{Curve, Emitter, R1};
     use glam::Vec3;
+    use vcod_common::pk3::Pk3Fs;
 
     /// A minimal one-particle emitter: no ranges, so behavior is exact.
     #[allow(clippy::field_reassign_with_default)]
@@ -2313,7 +2867,7 @@ mod tests {
     fn tracer_extent(s: &FxSystem, now: f32) -> Option<(f32, f32, f32)> {
         let q = s.build_quads(Vec3::new(0.0, -500.0, 0.0), Vec3::X, Vec3::Z, now);
         let q = q.first()?;
-        assert_eq!(q.shader, "gfx/misc/tracer");
+        assert_eq!(&*q.shader, "gfx/misc/tracer");
         let xs = q.verts.map(|v| v[0]);
         let width = (Vec3::from(q.verts[2]) - Vec3::from(q.verts[1])).length();
         Some((
@@ -2620,6 +3174,50 @@ mod tests {
         }
     }
 
+    /// The level preload reads every effect the stock events and weapons
+    /// play, and what they chain to: spawning each of them afterwards, and
+    /// stepping until their chains ran, reads no file (an empty search
+    /// path would cache a miss).
+    #[test]
+    fn a_preloaded_level_plays_its_effects_without_reading_a_file() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        crate::fx::registry::init(&fs);
+        let p = vcod_common::net::protocol::PROTOCOL_V1;
+        let weapons: Vec<_> = [
+            "kar98k_mp",
+            "thompson_mp",
+            "fraggrenade_mp",
+            "panzerfaust_mp",
+        ]
+        .iter()
+        .map(|w| vcod_common::weapon::load(&fs, w).ok())
+        .collect();
+        let paths = crate::fx::registry::level_effects(&[], &p.cs, &weapons, false);
+        assert!(paths.len() > 20, "{paths:?}");
+        let mut s = FxSystem::new();
+        let (marks, sprites, _) = s.preload_cod1(&fs, paths.iter().map(String::as_str));
+        assert!(!marks.is_empty() && !sprites.is_empty());
+        let cached: HashSet<String> = s.cache.keys().cloned().collect();
+        let empty = Pk3Fs::empty();
+        let at = SpawnAt::Surface {
+            pos: Vec3::ZERO,
+            normal: Vec3::Z,
+        };
+        for (i, path) in paths.iter().enumerate() {
+            s.spawn(&empty, path, at, i as f32);
+        }
+        let mut now = paths.len() as f32;
+        for _ in 0..200 {
+            now += 0.05;
+            s.step(0.05, now, None);
+            s.spawn_chained(&empty, now);
+        }
+        let read: Vec<_> = s.cache.keys().filter(|k| !cached.contains(*k)).collect();
+        assert!(read.is_empty(), "read in play: {read:?}");
+    }
+
     #[test]
     fn spawn_loads_and_caches_a_real_effect_file_and_warns_once_on_missing() {
         let Some(fs) = vcod_common::testing::game_fs() else {
@@ -2716,6 +3314,23 @@ mod tests {
         assert_eq!(s.build_quads(Vec3::ZERO, Vec3::X, Vec3::Z, 0.0).len(), 1);
         let s = spawn_seen_from(Vec3::ZERO, simple_emitter());
         assert_eq!(s.build_quads(Vec3::ZERO, Vec3::X, Vec3::Z, 0.0).len(), 1);
+    }
+
+    /// `FX_CullSphere` against `FX_SetNextUpdateCamera`'s planes: a
+    /// sphere is culled once it lies wholly behind the eye's forward plane
+    /// or a side.
+    #[test]
+    fn frustum_culls_a_sphere_wholly_outside_one_plane() {
+        // along +x, 90 degrees each way
+        let f = Frustum::new(Vec3::ZERO, (Vec3::X, Vec3::Y, Vec3::Z), 1.0, 1.0);
+        assert!(!f.culls(Vec3::new(100.0, 0.0, 0.0), 0.0));
+        assert!(f.culls(Vec3::new(-100.0, 0.0, 0.0), 50.0));
+        assert!(!f.culls(Vec3::new(-100.0, 0.0, 0.0), 150.0));
+        // 35.4 past the 45 degree side, either way
+        for p in [Vec3::new(100.0, 150.0, 0.0), Vec3::new(100.0, -150.0, 0.0)] {
+            assert!(f.culls(p, 30.0) && !f.culls(p, 40.0), "{p}");
+        }
+        assert!(f.culls(Vec3::new(100.0, 0.0, -150.0), 30.0));
     }
 
     /// `fx/shellejects/pistol.efx` from `pak5.pk3`, verbatim but for the
@@ -2985,6 +3600,50 @@ mod tests {
         assert!((plays[0].0 - 0.05).abs() < 1e-4, "{plays:?}");
         assert!((plays[0].1 - Vec3::new(10.2, 0.0, 0.0)).length() < 1e-3);
         assert!((plays[1].1 - Vec3::new(20.4, 0.0, 0.0)).length() < 1e-3);
+    }
+
+    /// A CoD4 sprite carrying `effectEmitted` (no `Emitter` needed) flying
+    /// 200 u/s plays it every `emitDist` (10) units it moved, along the
+    /// move, the spacing carried from step to step (cod4-effects.md 15).
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn a_cod4_element_emits_every_emit_distance_it_moves() {
+        let mut e = simple_emitter();
+        e.gravity = R1 { a: 0.0, b: 0.0 };
+        e.velocity = R3 {
+            a: [200.0, 0.0, 0.0],
+            b: [200.0, 0.0, 0.0],
+        };
+        e.emit_fx = vec!["fx/puff".into()];
+        e.cod4_emit = Some(efx::Cod4Emit {
+            dist: R1 { a: 10.0, b: 10.0 },
+            variance_base: 0.0,
+            variance_amp: 0.0,
+        });
+        let mut s = sys_with(e, SpawnAt::Point { pos: Vec3::ZERO });
+        let mut plays = Vec::new();
+        // 7 ms steps, 1.4 units each, to 98 units.
+        for i in 1..=70 {
+            let now = i as f32 * 0.007;
+            s.step(0.007, now, None);
+            for c in s.chains.drain(..) {
+                assert_eq!(c.path, "fx/puff.efx");
+                let SpawnAt::Directed { pos, dir } = c.at else {
+                    panic!("{:?}", c.at);
+                };
+                assert!((dir - Vec3::X).length() < 1e-5);
+                plays.push(pos.x);
+            }
+        }
+        assert_eq!(plays.len(), 9, "{plays:?}");
+        // The units carried between steps are kept in 256ths of a
+        // spacing, as retail keeps them: each play lands a little short.
+        for (k, x) in plays.iter().enumerate() {
+            assert!((x - 10.0 * (k + 1) as f32).abs() < 0.5, "{plays:?}");
+        }
+        for w in plays.windows(2) {
+            assert!((w[1] - w[0] - 10.0).abs() < 0.1, "{plays:?}");
+        }
     }
 
     #[test]

@@ -12,22 +12,58 @@ answer goes into a research doc with the bytes.
 
 | Crate | Package | Owns |
 |---|---|---|
-| `crates/common` | `vcod-common` | formats (bsp, xmodel, xanim, shader, pk3, menus), collision, vis, pmove, weapons, animscript, `net/` (the 1.1 protocol both ways, 1.5 and UO 1.51 as per-connection `net::protocol::Protocol` descriptors, plus the master query) |
-| `crates/client` | `vcod` | window, renderer, HUD, fx, audio, `console/` (drop-down console, cvars, binds), `frontend/` (stock main menu, server browser, options screens, Start New Server, the server's script menus), `play/` (join, input, cmd clock, prediction), `probe.rs` |
-| `crates/server` | `vcod-server` | `server.rs` (tick), `spectate.rs` (usercmds in, playerstate out), `game/` (script host, combat, entities, links), `bots.rs` + `nav.rs`, `rcon.rs`, `console.rs`, `cvars/`, `bans.rs`, `master.rs` (heartbeat), `area.rs` |
-| `crates/gsc` | `vcod-gsc` | the `.gsc` compiler and VM (`vm/interp.rs`, `vm/sched.rs`) that runs Activision's stock gametype and map scripts |
+| `crates/common` | `vcod-common` | `mapworld` (the loaded map every reader takes; `mapworld::load` picks the loader), formats (bsp, xmodel, xanim, shader, pk3, menus), the neutral `Material` the renderer draws (CoD1 shaders compile into it), collision, `clipmap/` (the CoD2-family clip map and its trace kernels: `vcod_cod2::collision` builds one from a `.d3dbsp`, `vcod_cod4::collision` from a clipMap_t), vis, pmove, weapons, animscript, `net/` (the 1.1 protocol both ways, 1.5 and UO 1.51 as per-connection `net::protocol::Cod1Wire` descriptors, plus the master query; `net/wire.rs` the `Transport` every game shares (version, master, codec, netchan, stock paks) and the `WireGame` trait each game's descriptor implements (its `id()`, game and version together, never the version alone: CoD4 1.7 and CoD1 1.5 both speak protocol 6; its connectionless framing, gamestate and snapshot writers); `net/codec.rs` is the game-neutral bit reader and table-driven field codec, `net/cod1/` CoD1's tables, configstring layouts and 1.1 numbering) |
+| `crates/client` | `vcod` | window, renderer, HUD, fx, audio, `console/` (drop-down console, cvars, binds), `frontend/` (stock main menu, server browser, options screens, Start New Server, the server's script menus), `play/` (join, input, cmd clock, prediction), `session.rs` (`App`'s game: `Session::Cod1`, whose state is still `App`'s `mode`/`world`/`hud`, or `Session::Cod2`, whose online or demo session plays in `Mode::Cod2` (an offline `vcod <map> --game cod2` stays `Mode::Fly`), or `Session::Cod4` (`cod4_client.rs` over `play/cod4.rs`: a watched CoD4 capture or spectator join, also in `Mode::Cod2`; `cod4_audio.rs` and `cod4_fx.rs` its events' sounds and effects, `cod4_hud.rs` its 2D layer, `cod4_scoreboard.rs` its scoreboard, `cod4_viewmodel.rs` its first-person view weapon, `play/cod4_predict.rs` its prediction); one call per frame step, input, console effect, renderer build and quit), `cod2_client.rs` (the CoD2 session, pump, draw, view, HUD, menus and those steps, borrowing `App` through `Cod2Frame`), `probe.rs` |
+| `crates/server` | `vcod-server` | `server.rs` (CoD1's frame), `spectate.rs` (usercmds in, playerstate out), `game/` (script host, combat, entities, links; `game/profile.rs` holds `HostProfile`, one static per game version naming every rule the host tells the versions apart by; a game's own host state is `GameHost::ext`, a `HostExt` arm, CoD2's `Cod2HostState` read through `host.cod2()` / `cod2_mut()`, CoD4's `Cod4HostState` through `host.cod4()`; `game/cod4/` loads CoD4 1.7's zones and runs its level: the gametype's scripts, the clients' playerstates and their pmove over the map's clip map), `bots.rs` + `nav.rs`, `bots/driver.rs` (the bots' per-tick driver over `BotWorld`; CoD1's `impl` and view builders in `server/bot_world.rs`, CoD2's `impl` in `cod2/bots.rs` over the readers in `bots/cod2.rs`), `server/bot_admin.rs` (bot admin both servers call: the pass, `addbot`, `removebot`, `listbots`, over `AdminHost`), `rcon.rs`, `console.rs`, `cvars/`, `master.rs` (heartbeat), `area.rs`, `engine/` (state and housekeeping both servers share: `game` `Engine<G: GameModule>`, the server as engine core plus game module, with `engine::tick` / `engine::packet`, the `SV_Frame` and `SV_PacketEvent` order over the module's hooks, `engine::send_messages`, the one `SV_SendClientMessages` pump, and `engine::answer_status`, the `getinfo`/`getstatus` reply (CoD1's `Cod1Game` in `server/cod1_game.rs`, CoD2's `Cod2Game` in `cod2/mod.rs`); `core` `EngineCore`, the engine state each embeds as `core`; `slot` `Link`, a client slot's connection half, each client struct's `link`; `link` LAN test, rates, pacing, ping; `archive` the killcam ring; `rotation` `map_rotate`'s walk; `challenge` the challenge table; `bans` `ban.txt` and the temporary bans), `cod2/` (the CoD2 engine: handshake, gamestate, snapshots, spectators; `house.rs` zombies, downloads, heartbeat), `cod4/` (the CoD4 1.7 engine, `Cod4Game`: handshake with stats and pure, gamestate, snapshots, the level's clients through `game::cod4::level::Cod4Level` (connect, menus, team, class, spawn, follow; no pmove yet), its server-command types and squash; its wire is `vcod_cod4::net::wire::PROTOCOL_17`) |
+| `crates/cod2` | `vcod-cod2` | CoD2 1.3's formats, wire, pmove and collision; `map.rs` is the map loader: a `.d3dbsp` parsed once (`MapFile`) into the `MapWorld` and the `ClipMap` (`LoadedMap`, built side by side), `ClipMap::build` reading `ClipLumps`, never the `D3dBsp`; the server's collision and combat and the client's prediction share one `Arc<ClipMap>` per load |
+| `crates/cod4` | `vcod-cod4` | CoD4 1.7's formats: `zone.rs` reads a fastfile (`zone/<language>/*.ff`) up to its asset bodies (container, `XFile`, script strings, asset list); `walk.rs` walks every body block-exactly into `assets/` (one module per family; bulk data kept under `WalkOptions::keep_bulk`); `install.rs` finds the install through `COD4_DIR`; `map.rs` builds a map zone's render world, cells, static models, entities and range-checked collision counts; `image.rs` decodes zone pixels and `.iwi` v6; `source.rs` is CoD4's `AssetSource` (zones over the iwds); `anim.rs` turns xmodels and xanims into vcod-common's `Model` and `XAnim` and serves the player tree through `BodySource` (`AssetSource::decoded_anim`/`decoded_model`); `techset.rs` classifies techsets by name; `hud.rs` the HUD's server commands, scores, hudelems, `[{+cmd}]` directives, ammo slots and zone assets (fonts, images, strings, kill icons, message windows, compass, `weaponinfo`, rank tables); `sound.rs` the alias rows, `channels.def` and loaded sounds as `.wav`; `fx.rs` an effect element's `FxElemDef` and samples; `ragdoll.rs` the client ragdoll (`ragdoll.cfg`'s defs, the 1.7 dvars, the solver `play::cod4_players` runs on a corpse); `net/` the 1.7 wire (Huffman, netfield tables generated by `tools/re/cod4_netfields.py`, delta codec, gamestate and snapshot parse, writer, `pure.rs` the `cp` checksum, `stats.rs` the stats block, `wire.rs` `Cod4Wire`/`PROTOCOL_17` and the server's gamestate builder and snapshot writer, `events.rs` the event names generated by `tools/re/cod4_events.py`, `conn.rs` the join and move messages `examples/cod4_probe` and the client share); `pmove/` 1.7's player movement, seeded from CoD2's with its own playerstate (`player_step`, `PmWorld` over the clip map, `wire.rs` to the netfield words; `weapon.rs` the weapon half with the offhand and the melee, `anim.rs` the anim script the server's step runs through `player_step_animated`) |
+| `crates/gsc` | `vcod-gsc` | the `.gsc` compiler and VM (`vm/interp.rs`, `vm/sched.rs`; `vm/profile.rs`, a game's `VmProfile`) that runs Activision's stock gametype and map scripts |
 
 - Dependency rules: `common` imports no wgpu, winit or kira; `gsc` depends on
   neither `common` nor the client. Check with `cargo tree -p vcod-common -e
   normal --depth 1` and `cargo tree -p vcod-gsc -e normal` (only `anyhow` and
   `log`; `vcod-common` is a gsc dev-dependency for the corpus tests).
+- Assets load by kind and name through `vcod_common::asset_source`
+  (`load::<T>`, an `Asset` impl per type; kinds so far: weapons,
+  localized strings, sound aliases, raw files, images, CoD1's shader
+  library, CoD2's compiled materials, xmodels, xanims, effects, impact
+  tables, menu files, maps). Scripts, `default_mp.cfg`,
+  `.stype` templates and other text read as `RawFile`, and a reader that
+  only reads takes `&dyn AssetSource`, not `&Pk3Fs`. A load is cached
+  until `Pk3Fs::clear_references` (or an `overlay`) drops the cache, so
+  within a level only its first load marks the pak it read. An `Image`
+  (by path, extension included) builds uncached through `Asset::find`:
+  the client's texture caches own it, and `assets::DecodedImages` keeps
+  `&Pk3Fs` for its unflagged prefetch and `mark_read`. `ShaderLib::load`
+  is cached (one parse per source; a `.shader` read marks no pak);
+  `vcod_cod2::materials::load_lib` builds `Compiled` uncached, as the
+  renderer owns its `MaterialLib`. A `Model` (v14 or v20, by its
+  `xmodel/` name) builds uncached too (`model::load` is `Model::find`):
+  the client's model caches and the server's hit rigs own it, and the
+  renderer's `upload_dynamic_model` and the multicore prop load keep
+  `&Pk3Fs`. An `XAnim` (CoD1's or CoD2's, by its `xanim/` name) builds
+  uncached the same way (`xanim::load` is `XAnim::find`): every reader
+  keeps its own clip cache (`xanim::load_cached`, `PlayerAnimSet`,
+  `HitRigs::clip`, the view weapons). The client's `fx::efx::Effect`
+  (by `fx/` path; a CoD2 source parses through `vcod_cod2::efx::Effect`,
+  kind `Cod2Effect`) and both games' impact tables build uncached:
+  `FxSystem`, the impact table static and `Cod2Fx` keep them. A
+  `ui_menu::MenuFile` (by path, parsed in the source's game's grammar,
+  `#include`s read) builds uncached: the UI and both HUDs keep its
+  menus. `ui_menu::game_types` keeps `&Pk3Fs` for `file_list`'s
+  search-path order. A map loads by name, uncached, as the level owns
+  it: CoD1's `MapWorld` (`mapworld::find`, `maps/` then `maps/mp/`, as
+  `Pk3Fs::resolve_map`) and CoD2's `vcod_cod2::map::MapFile` (kind
+  `Cod2Map`, `maps/mp/<name>.d3dbsp`; `LoadedMap::find` builds both
+  halves). The client's CoD2 window load (`load_cod2_map`) reads the
+  bytes itself for `Com_LoadBsp`'s error and the parse's panic guard.
 - Grep these, don't read them whole: `client/src/probe.rs` (11k lines),
   `server/src/server.rs` (10k), `common/src/pmove.rs`, `client/src/renderer.rs`
   (5k each), `server/src/game/script.rs`, `client/src/main.rs`,
   `common/src/collision.rs`, `server/src/spectate.rs` (3k+ each).
   `docs/research/cod11-combat.md` is 300 KB; jump by section.
 - Gitignored and local to one machine: `private/` (GPL lineage sources, the
-  retail 1.1d Linux server, Ghidra output, old plans), `docs/design/`,
+  retail 1.1d Linux server, old plans), `docs/design/`,
   `docs/superpowers/`, `tmp/` (scratch; probe captures land there).
 
 ## Research docs
@@ -46,9 +82,14 @@ instead of leaving the fact in a commit message.
 | United Offensive 1.51 (protocol 22): wire, configstrings, events, vehicles, sprint, gametypes, assets, scope | `coduo-diff.md` |
 | UO vehicle seats: getting in and out, the seated cmd, prediction and the camera in a seat; the server's vehicles: spawn, seats, the drive step, guns, damage; wheel dust, a vehicle's death | `coduo-vehicles.md` |
 | United Offensive movement against 1.5: sprint, fatigue, the LMG bipod and its mounts, the grenade cook, weapon time truncation | `coduo-movement.md` |
+| CoD2 1.3 (protocol 118) wire against 1.1: handshake, netchan, svc/clc ops, usercmd, netfield tables and codec, configstrings, entity types and events, the `Cod2Wire` descriptor and its CoD1 shim, map change and restarts, the client's spectator and join, the client commands, cheats, follow, votes and console, vcod's server and its housekeeping (slots, passwords, ping limits, pacing, zombies, downloads, the master: 17) | `cod2-protocol.md` |
+| CoD2 1.3 gsc against 1.1: builtin, method, field and spawn tables, `#include`, `waittillframeend`, compile-time typing, callbacks, engine notifies, the stock gametype census, the use key's one list (items, guns, use triggers) and cursor hint | `cod2-gsc-diff.md` |
+| CoD2 1.3 map cycle on vcod-server: `map`, `map_restart`, `fast_restart`, `map_rotate`, `sv_serverid`, the round and intermission flows against retail's captures | `cod2-map-cycle.md` |
+| CoD2 1.3 movement against CoD1: function map, stored floats, usercmd buttons, the trace without `endpos`, clip and slide plane order, inertia, jump cap, mantle, stance, flags, tunables, what a CoD2 `MoveRules` needs, what `vcod_cod2::pmove` ports, its A/B gate against retail (`moves_ab`) and its gaps, the client's prediction and first-person eye | `cod2-movement.md` |
 | Map change, `map_restart`, `sv_serverid`, rotation | `cod11-map-cycle.md` |
 | Shots, damage, death, grenades, blasts, hit locations, shot timing | `cod11-combat.md` |
 | Movement, stances, constants | `cod11-mantle.md`, `bsp-ibsp59-format.md` (Movement constants) |
+| CoD2 1.3 maps (`.d3dbsp`, IBSP 4): lumps, the collision model and what the trace walks, the trace A/B against retail (`trace_ab.rs`, `examples/trace_probe.rs`), lightmaps, light grid | `cod2-d3dbsp-format.md` |
 | Player clip, kerbs, stuck | `cod11-player-clip.md` |
 | Movers, push, `linkTo` | `cod11-movers.md` |
 | Items, pickups, drops | `cod11-items.md` |
@@ -60,15 +101,47 @@ instead of leaving the fact in a commit message.
 | `re` / `bel` gametypes | `cod11-gametypes-re-bel.md` |
 | Spectator follow, killcam | `cod11-spectator-follow.md` |
 | Client console, binds, `vcod_mp.cfg` | `cod11-console.md` |
-| Demos: `record`, `demo`, the `.dm_<n>` format, `timedemo`, `nextdemo`, the `RECORDING` line, `cg_autodemo` | `cod11-demos.md` |
+| Demos: `record`, `demo`, the `.dm_<n>` format, `timedemo`, `nextdemo`, the `RECORDING` line, `cg_autodemo` | `cod11-demos.md`; CoD2's `cod2-demos.md`, CoD4 1.7's `cod4-demos.md` |
 | Main menu, server browser, options screens, Start New Server, script menus in the UI | `cod11-front-end.md` |
 | Chat, quick chat | `cod11-chat.md`, `cod11-quick-chat.md` |
 | Votes: `callvote`, `vote`, `CheckVote`, the vote lines on the HUD | `cod11-votes.md` |
+| CoD4 1.7 map cycle (`map`, `fast_restart`, `map_rotate`), the client's map change, votes, the menu answers' one-packet rule | `cod4-map-cycle.md` |
 | Bots | `bot-navigation.md` (its Build times set the census floors), `bot-objectives.md`, `bot-combat.md` (skill levels, the `bot_match` harness, cover and lean, retreat, section 6's one table of them all, team spread, awareness, aim and footwork, varied peeks and hunts) |
 | Player models, anims, formats | `player-model-anim-system.md`, `xmodel-v14-format.md`, `xanim-v14-format.md` |
+| CoD2 1.3 xmodel / xmodelparts / xmodelsurfs v20 against v14: hit boxes, weights, materials, what the server loads | `cod2-xmodel-v20-format.md` |
+| CoD2 1.3 player bodies: models from the client state, the `j_*` rig and its controls, the anim array, angle updater, controllers, lerp frames; the legs and torso anims pmove and `PM_Weapon` pick, the hit flinches and stumbles, the death anim and the corpse | `cod2-player-anims.md` |
+| CoD2 1.3 weapon files: the loader's field table and types, the enum tables, what changed from 1.1, the stale stock keys; the view weapon's anim tree, rates and `weapAnim` mapping, clip indexes | `cod2-weapons.md` |
+| CoD2 1.3 combat: `PM_Weapon`'s states and events, the sight and the spread, `FireWeaponAntiLag`, `Bullet_Fire_Extended`, `G_Damage`'s hit-location multipliers, `finishPlayerDamage`, `player_die` and `deathAnimDuration`, `cloneplayer`, `obituary`, grenades, rockets and blasts; what vcod-server's CoD2 level does | `cod2-combat.md` |
+| CoD2 1.3 killcam: the frame archive, the archived follow copy and its time shift, the replay snapshot, the dead spawn at its end, retail A/B (`cod2_killcam_ab`) | `cod2-killcam.md` |
+| CoD2 1.3 mounted guns: spawn, the use key's mount, pmove's view clamp, the cursor hint, the gunner's frame (aim, placement, fire, loop sound), release, the gunner's eye, prone and duck guns, `spawnTurret`, a gunner killed on the gun, other gunners on the client, the retail A/B (`cod2_turret_ab`) | `cod2-turrets.md` |
+| CoD2 1.3 player HUD: `hud.menu`'s owner draws (ammo counter, weapon name, stance, compass, offhand, hints, low-health overlay), the crosshair, damage icons | `cod2-hud.md` |
 | Shader scripts, light grid, prop and entity lighting | `cod11-shader-scripts.md`, `cod11-light-grid-and-leaf-lights.md` |
 | Gamma, overbright, `r_intensity` | `cod11-gamma.md` |
+| CoD2 `.iwd` search path, `.iwi` images (header, formats, the wavelet decoder and where its tables come from) | `cod2-iwi-iwd.md` |
+| CoD4 1.7 fastfiles: the `IWffu100` container, `XFile` and its nine blocks, pointer tokens, script strings, the asset list and the 1.7 `XAssetType` table, every asset type's body layout and the 1.7 `Load_*` addresses, the zone census (`COD4_DIR`, `COD4_LNXDED_DIR`) | `cod4-fastfile.md` |
+| CoD4 1.7 map worlds: world vertices and surfaces, cells and portals, static models, techset names, zone and `.iwi` v6 images, the collision map's indices, the map census | `cod4-world.md` |
+| CoD4 1.7 wire: handshake, stats phase and the stats block, the pure `cp` check, netchan, Huffman, configstrings, what vcod-server's 1.7 server sends | `cod4-handshake.md` |
+| CoD4 1.7 collision: the clip map as the shared kernels trace it, prebuilt leaf brush trees, indexed triangles and walkable edges, submodels, static model point clip, clip census | `cod4-collision.md` |
+| CoD4 1.7 netfield tables, delta codec, gamestate end, snapshots, the move message | `cod4-netfields.md` |
+| CoD4 1.7 player movement: the kept float model, flags and buttons, ground, step, moves, stance and prone, the view on the wire, the jump, the sprint, the dvar defaults, the moves A/B (`cod4_moves_ab`) and its gaps; the server's think, the spawn's own think, the breath, `placeSpawnPoint`, hidden entities and no PVS cull, LAN pacing, the walk replay (`cod4::wire_ab`) | `cod4-pmove.md` |
+| CoD4 1.7 combat on vcod-server: the `WeaponDef` offsets, `PM_Weapon` and the sight, the shot, hit boxes, antilag, damage, corpse and death anim, obituary, dropped weapon and its ammo, the killcam's look back and entity archive, the combat A/B (`cod4_combat_ab`); the offhand, grenades and the launcher (missiles, bounce, `G_RadiusDamage`), the melee, `kill` | `cod4-combat.md` |
+| CoD4 1.7 player bodies: xanim parts and their stream order, xmodel bones and skinning, the player anim index, heads and tags, trajectories, the anim script pmove runs on the server (`pmove::anim`), the corpse's ragdoll | `cod4-player-anims.md` |
+| CoD4 1.7 HUD: the zones' fonts and HUD images, the server commands, the scores and scoreboard, the kill feed, chat, hudelems and their key names, the weapon HUD and its clip graphic, the compass and its pointers, the killcam, the script menus a join draws and answers (their expressions and scripts), the low-health overlay and hit direction icons | `cod4-hud.md` |
+| CoD4 1.7 sound: alias lists and loaded sounds in the zones, streamed files, `channels.def`, the alias flags, falloff and speaker maps, the event sounds and where they play, entity loop sounds, `EV_SOUND_ALIAS` and its master arm, `EV_STOPSOUNDS`, the createfx sounds | `cod4-sound.md` |
+| CoD4 1.7 effects: `FxEffectDef` and `FxElemDef`, the sampled graphs, the impact table, the event effects, the earthquake, on vcod's CoD2 effect path; looping elements, tag-riding flashes, the map's createfx ambience, `ET_FX` / `ET_LOOP_FX`, client-side bullets and `whizby` | `cod4-effects.md` |
+| CoD4 1.7 watched view: the client clock (`CL_AdjustTimeDelta`), the snapshot pair and lerp, the teleport cuts, the view weapon (rig, `weapAnim` nodes, bob, sway, fov), prediction (`play::cod4_predict`: the cmd clock, error decay, step smoothing, the weapon half, own events off the predicted ring), the hardpoint jets and helicopter (`cod4_vehicles`: rotors, wash, stage smoke, `playFxOnTag` bolts) | `cod4-client-view.md` |
+| CoD4 1.7 gsc: the dialect over CoD2's (`waittillmatch`, shifts), the builtin tables (`tools/re/cod4_builtins.py`), the handlers the `war` boot reaches, the configstring allocator's constant slots, the callbacks; the connect, menus, loadout and spawn on vcod-server, the server commands' types and squash, the follow (`cod4::wire_ab`); the hardpoint planes and helicopter, the script traces | `cod4-gsc.md` |
 | Shellshock: `.shock` files, screen blend, kick, mouse, sound mix, `wbuttons` 0x4 | `cod11-shellshock.md` |
+| CoD4 client frame time: `VCOD_FRAME_PROFILE`, `tools/cod4_perf.sh`, the per-map table, what to cut next | `cod4-client-perf.md` |
+| CoD1 and UO client frame time: the profile's stages on that path, `cod4_perf.sh GAME=cod1/uo`, the before and after of the cuts, what is left | `cod11-client-perf.md` |
+| CoD2 client frame time: `GAME=cod2 tools/cod4_perf.sh`, where a CoD2 frame goes, the cuts | `cod2-client-perf.md` |
+| CoD4 client: what a 1.7 match shows that vcod still lacks, ranked | `cod4-gaps.md` |
+| CoD4 server: what a 1.7 dedicated server does that vcod-server lacks, ranked | `cod4-server-gaps.md` |
+| CoD4 1.7 front end: the `ui_mp` zone's main menu and its screens, the menu stack, profiles, Start New Server, Mods, `error_popmenu`, menu sounds and music | `cod4-front-end.md` |
+| CoD2 effects: `.efx` grammar, channels and curves, CoD1 migration, spawn and motion, atlases, `Cloud`, `CameraShake`, the spectator's event and looped effects | `cod2-efx.md` |
+| CoD2 1.3 materials: the binary material file, techsets, techniques, statemaps, state bits, sampler states, shader families, image names, surface flags the server reads | `cod2-materials.md` |
+| CoD2 1.3 fonts (`fonts/*`, glyph records, scale), the menu keyword and script command tables, `rect` alignment, hudelem screen placement, the front end (LAN browser columns, menu-on-dvar scripts, `g_scriptMainMenu`) | `cod2-fonts-menus.md` |
+| CoD2 1.3 sound: the 24-column alias csvs, `volumemodgroups.def`, `.vfcurve` falloff, `loadspec`, the pick and secondary aliases, the cgame's sound events, whizby, loop sounds, sound server commands and ambient | `cod2-sound.md` |
 
 ### Evidence labels
 
@@ -114,10 +187,15 @@ check.
   and no A/B gate runs in CI, only on a machine with an install. `nightly.yml`
   rebuilds the rolling `nightly` release on master pushes that touch code
   (docs, tools and `*.md` are path-ignored); `workflow_dispatch` forces one.
+- `renderer::pipeline_check` builds the real `Renderer` headless and draws a
+  CoD1 and a CoD2 frame under wgpu validation; it needs a Vulkan (not GL)
+  adapter with BC textures (lavapipe: `VK_DRIVER_FILES=<lvp_icd.json>
+  WGPU_BACKEND=vulkan GALLIVM_PERF=nopt`) and otherwise skips, so run it
+  after any shader or layout change.
 - Each crate's integration tests are one binary named after the crate
-  (`--test server`, `--test common`, `--test gsc`; `tests/main.rs`): a new
-  file there needs its `mod` line, and a file's tests filter by its name
-  (`-- vehicle_ab::`).
+  (`--test server`, `--test common`, `--test gsc`, `--test cod2`;
+  `tests/main.rs`): a new file there needs its `mod` line, and a file's
+  tests filter by its name (`-- vehicle_ab::`).
 - Ignored tests to run when you touch their area, in release: `nav_census`
   (all stock nav graphs, ~8 s, 65 s of CPU: `cargo test --release -p
   vcod-server --test server -- --ignored nav_census::`) and the ignored
@@ -137,9 +215,16 @@ check.
   bots' vehicles off and on (`bot-objectives.md` 10.6). `cargo run
   --release -p vcod-server --example ship_stalls` is the stall detector
   behind `bot-navigation.md`'s tables (`UO=1` for a UO server), and
-  `--example nav_build` the build-time table's (`UO=1`, `RULES=`); its
+  `--example nav_build` the build-time table's (`UO=1`, `RULES=`,
+  `GAME=cod4` for CoD4's graph over its clip map); its
   `digest` matches across two builds only when they built the same graph,
   the check for a collision change meant to move no trace.
+- `COD2_DIR=... cargo test -p vcod --bins -- --ignored cod2_map_census` runs every stock CoD2 map through vcod-server, a spectating client, a headless frame (lavapipe env and `nice` as for `pipeline_check`; `VCOD_CENSUS_FRAMES=0` skips it) and a walk from each spawn, and writes its table, frames and per-map warnings to `tmp/cod2-map-census/` (`play/cod2_census.rs` header).
+- `COD4_DIR=... cargo test -p vcod --bins -- --ignored cod4_map_sweep --nocapture` runs every stock CoD4 map under war, dm, sd, sab, dom and koth: per map a vcod-server with six shooting bots rotating through the six (30 s limits) and one client playing it through `Cod4Client::pump` into a headless renderer (lavapipe env as for `pipeline_check`). It writes the per-pair table (load, end, rotate, client spawn, script errors, bot stalls, client and server warnings, panics) and the ranked errors to `tmp/cod4-map-sweep/summary.md`; run one map a process (`VCOD_SWEEP_MAPS=<map>`, `VCOD_SWEEP_JOBS=1`, about 3 GB and 6 to 8 minutes each) under `taskset -c 0-7` with `LP_NUM_THREADS=1` (`play/cod4_sweep.rs` header). Results: `cod4-map-sweep.md`.
+- The `cod4_live_*` tests (`COD4_DIR`) each run a CoD4 vcod-server and client in process, on `play::cod4`'s `tests::sim` clock: a test's loops count frames its own sleeps move, so under load it runs slower, never out of time, and only `sim::Clock::sleep`'s 60 s wall assert stops a stalled one. The 92 of them take about 5 min of wall at 4 test threads and peak near 10 GB. Two such test binaries side by side under one memory cap (a 1.1 and a UO pass of the same suite, both with `COD4_DIR` set) sit past it, swap, and crawl for an hour instead of failing: run the CoD4 client tests once, and leave `COD4_DIR` unset for a CoD1 or CoD2 pass. Only the client's sleeps move the clock, never the wall (a client that computes, loads or blocks still runs no server frame), and every serve loop builds the bots' graph inline; a helper thread on the wall (`live_www`'s HTTP server) holds the server's frames while it works, or the client's waits run the level minutes ahead of it. A live test that writes frames (`VCOD_C4_SHOTS`) runs through `tests::run_held`, each frame loop sleeping its 16 ms first; the client reads the session's clock through `play::cod4::clock_now`, never `Instant`. Three runs of one build then write the same bytes for every frame (cod4-client-perf.md 39).
+- `tools/cod4_soak.sh <outdir> [map...]` (`COD4_DIR`, the lavapipe env; `WRAP` names a wrapper command, default `nice -n 10`) runs the soak, `cod4_soak` in the same file: one map a process, war, dm, sd, koth and sab at 3 min limits, the client playing as a player (walks nav paths, fires, throws, dies, respawns, opens the board and the Esc menu) through `main`'s whole CoD4 frame, render and HUD included. Its `soak.md` adds the player's counts, wgpu errors, problem debug lines, audio misses, client frames and server ticks past 100 ms and the resident set per level (a `soak rss:` line at each load; under `LD_PRELOAD` jemalloc with `MALLOC_CONF=prof:true` it also dumps a heap profile there, cod4-client-perf.md 23); about 20 minutes and 3.5 GB a map. Method and results: `cod4-map-sweep.md`, "The soak".
+- `tools/cod1_soak.sh <outdir> [map...]` (`COD_DIR`, `UO=1`, `LVP_ICD`, `MINUTES`, `GAMETYPES`) is CoD1's soak: per map a vcod-server with six shooting bots rotating through every gametype the map's arena lists, and the real `vcod` on a nested `kwin_wayland --virtual` joined as axis and played by `VCOD_SOAK` (`play::cod1_soak`) through `main`'s whole frame; `tools/cod1_soak.py <outdir>` writes `soak.md` (stalls by part and action, first in-game frame, warnings, script errors, panics, server ticks, resident set per level). About 6 minutes a 1.1 map and 11 a UO map at `MINUTES=1` (`UO=1 JOBS=2`: all nineteen in 105 minutes). Method and results: `cod11-client-soak.md`. A level's gamestate prewarms its models, effects and their images (`prewarm_level` in `main.rs`): a new thing the client draws or plays off an event goes in that list, or its first use stalls a frame.
+- `tools/cod2_soak.sh <outdir> [map...]` (`COD2_DIR`, the same env; `cod4_soak.sh` with `GAME=cod2`) runs the CoD2 soak, `play::cod2_soak`, on the same harness: per map vcod-server `--game cod2` with six shooting bots rotates through dm, tdm, sd, ctf and hq (`VCOD_SOAK_MINUTES`), and the client plays through `main`'s `Mode::Cod2` frame. Same `soak.md` columns plus the frames past a level's first 5 s that built a mark material or loaded an fx image; about 10 minutes and 2 GB a map at 2 min limits. Each map load logs a `soak rss:` line (resident set and malloc's live bytes); a repeated `VCOD_SWEEP_GAMETYPES` list runs a map round more than once. Method and results: `cod2-client-perf.md`, "The soak".
 - The all-maps census tests scope to stock `pak[0-9].pk3`. Map downloads drop
   third-party `zzz_*.pk3` into `main/`, and a census failure on one of those
   is not a regression.
@@ -161,7 +246,20 @@ check.
   its sibling `main/`, `pk3::base_dirs`). `COD_DIR` overrides the install,
   `--game-dir` overrides both. `--vanilla` on either keeps only the
   install patch's stock paks on the search path (`pk3::is_vanilla_pak`,
-  `Pk3Fs::vanilla`). `pak1-4` are identical between 1.1 and 1.5
+  `Pk3Fs::vanilla`). `--game cod1|cod2|cod4` overrides
+  `game::Game::detect` (CoD2 by `main/iw_*.iwd` or `CoD2MP_s.exe`, CoD4
+  by `zone/` or `iw3mp.exe`); both refuse any game but CoD1 (the client
+  runs CoD2 in fly mode or its main menu, and `--connect` / `--net-probe`
+  and the menu's `connect` (`cod2_front.rs`) spectate or join a CoD2
+  server through `play::cod2`, not `NetClient`, and a CoD4 one through
+  `play::cod4`, its script menus `play::cod4_menus`, its keys
+  `play::cod4_input`;
+  `vcod-server --game cod2` runs `cod2::Cod2Server`, an engine beside
+  `Server` driving `game::cod2::Cod2Level`, cod2-protocol.md 14;
+  `vcod-server --game cod4` runs `cod4::Cod4Server` over
+  `game::cod4::level::Cod4Level`: the scripts, the menus, the spawns and
+  pmove, no combat yet, cod4-handshake.md 9, cod4-pmove.md 15), whose version
+  is the install's `Cod1Wire` (`is_uo`, `is_v1`). `pak1-4` are identical between 1.1 and 1.5
   and `pak0` is not (its checksum differs), so a 1.5 install works as the
   asset source but not on a pure 1.1 server; the RE notes are about the 1.1 binaries. The client
   also joins 1.5 servers (protocol 6, `net::protocol::PROTOCOL_V6`,
@@ -170,7 +268,7 @@ check.
   install as `--game-dir` and `--mod-dir uo`): it connects with its
   install's protocol and switches when refused, between 1.1 and 1.5 only.
   A UO install refuses a 1.1 or 1.5 server and the others a UO one
-  (`Protocol::same_game`, `NetClient::connect_from`); the net probe still
+  (`Transport::same_game`, `NetClient::connect_from`); the net probe still
   switches to any.
   The server speaks one protocol per process, the install's
   (`server::install_protocol`: 1.5's `pak0` checksum, UO's `uo/pakuo*`)
@@ -195,6 +293,35 @@ check.
   admin commands go through rcon, refused until `--set rconPassword=...`.
 - `RUST_LOG` drives env_logger (default `info`); `WGPU_BACKEND` narrows the
   backend.
+- `VCOD_FRAME_PROFILE=<path>` on `vcod` writes each frame's CPU ms by
+  stage (net, bodies, fx, hud, cull, encode...), its counts and its GPU
+  ms per pass group (`frame_prof`). `tools/cod4_perf.sh <outdir> <map>
+  <secs>` runs a CoD4 server with 12 shooting bots and a spectating
+  client under it in a nested kwin (`SESSION=1`: a window in the
+  current session, on a real GPU) and prints the summary
+  (`GAMETYPE=war` holds the view still for a GPU A/B, `TURN=<deg/s>`
+  turns it on its own for a moving view's CPU); `GAME=cod2` with
+  `COD2_DIR` runs CoD2's, whose free spectator holds still on any
+  gametype, and `GAME=cod1` or `GAME=uo` with `COD_DIR` a CoD1 or UO
+  server, whose spectator stands still. `docs/research/cod4-client-perf.md`
+  has the per-map table, `cod2-client-perf.md` CoD2's,
+  `cod11-client-perf.md` the CoD1 and UO numbers. `SIZE=WxH` sizes the
+  client's window (`vcod --window`) in both modes; `SESSION=1` without it
+  keeps the game's saved video mode.
+  `SWEEP=1 SESSION=1 tools/cod4_perf.sh <outdir> mp_crossfire 10` holds
+  one view in one session and toggles one setting a pass (MSAA, prepass,
+  sun shadow, feather, distortion, `fx_draw`, specular, normal maps, fog,
+  glow, dof, film), printing a row a pass with the finer `gpu.<group>`
+  stamps (world, smodel, ents, gun, fx, each post pass);
+  `cod4-client-perf.md` 25 has the command and what each column is.
+  It restores the install's `vcod_mp.cfg` files at the end.
+- `VCOD_TICK_TRACE=<path>` on `vcod-server` writes the tick's step log
+  (`tick_trace`): a line per `SV_Frame` step, named after the retail
+  function, with the slot it ran for, in execution order.
+  `VCOD_TICK_PROFILE_MS=<ms>` logs each tick past `<ms>` with its phases'
+  times and its wall time split into run, queued and asleep
+  (`tick_profile`; the CoD4 soak's `VCOD_SOAK_TICK_LOG_MS` and
+  `bot_match`'s `SPIKE_MS` print the same, cod4-server-frame.md 9).
 - F3 (`--debug-overlay`) shows frame, draw, vis, shader, fog, audio, camera
   and (online) prediction, net and snapshot counters. The `audio` line reads
   `audio vN plays N miss N cull N drop N steal N N.NNms`: live voices, cues
@@ -208,9 +335,18 @@ check.
   newest snapshot time minus the drawn time, then `CL_AdjustTimeDelta`'s
   resets, fast and slow adjusts and the frames that reached the newest
   snapshot (docs/protocol-1.1.md, "The client's clock").
+  On a CoD2 server F3 adds `net: ping P  snaps N/s  msgs N/s  out N/s
+  lost N (total)  frag N/s (total)  rate R snaps S [lan]`, the clock line
+  under CoD2's rules and a `pred` line (`Cod2Session::debug_lines`,
+  cod2-protocol.md 18); `--net-probe --game cod2` prints them as `link`.
   The `ssao` line reads `ssao <vc_ssao|off>  gpu scene X.XXms ao Y.YYms`:
   GPU timestamps around the world passes and the SSAO passes alone,
   smoothed; absent where the adapter has no timestamp queries.
+- On a CoD4 map F3's `sunshadow` line reads `sunshadow sm_enable  casters
+  Ak/Bk tris + N ents  gpu X.XXms` (or `sunshadow off`): the world and
+  static model caster triangles drawn into both sun shadow partitions of
+  all, the entity surfaces drawn into each, and both passes' GPU ms
+  (`cod4_sunshadow`, cod4-world.md 3.6).
 - With `vc_shadows 1` F3 adds `shadow: ents N static Ak/Bk tris cut Ck/Dk
   xN cpu X.XXms gpu static X.XX dyn X.XX mask X.XXms`: casting entity
   surfaces, static caster triangles drawn at the last static redraw (a
@@ -233,11 +369,36 @@ check.
 - To reproduce a screenshot spot in fly mode, add a temporary
   `VCOD_POS="x y z yaw"` override to the `FlyCamera::new` spawn in `main.rs`
   and remove it before committing.
+- Map loads log their stages on one `load <what>: <total> ms (<stage>
+  <ms>, ...)` line at info (`vcod_common::laps::Laps`): the client's
+  world GPU state and CoD2 map, the CoD2 server's level and its parts.
+  `cod2_load_profile` (ignored, in `renderer/pipeline_check.rs`, run on
+  lavapipe as `pipeline_check` is, in release) loads three CoD2 maps
+  twice through the renderer, the prediction's collision and the first
+  draw, and prints a digest of every texture uploaded and the paks the
+  load marked: a load made faster keeps both. The CoD2 loads read
+  ahead on every core (`assets::DecodedImages::prefetch`,
+  `Pk3Fs::read_unflagged`), so a read for a pak's referenced flag goes
+  through `Pk3Fs::read` or `mark_read`, never the unflagged read alone.
+  A map load resumes the last level's gametype compile
+  (`Carry::gametype`) once every file its `Loader` read reads the same
+  (`LoaderState::current`); the key is that text, the gametype entry and
+  the builtin set, so anything else a compile comes to depend on (a
+  cvar, a new `CompileOptions` field) goes in `GametypeScripts`' check
+  or a map change runs the old compile (cod11-map-cycle.md 4.7).
 - Bot play is measured, not eyeballed: `cargo run --release -p vcod-server
   --example bot_match [seed...]` runs seeded bot-vs-bot matches (`MAPS=`,
   `GAMETYPE=`, `BOTS=`, `TICKS=`, `JOBS=`, `SET=`, `UO=1`, per-side
   `AXIS_SKILL=`/`ALLIES_SKILL=`, and one-sided `COVER=`, `RETREAT=`,
-  `TEAMPLAY=`, `AWARE=`, `FOOTWORK=`, `WARY=` arms) and prints kills,
+  `TEAMPLAY=`, `AWARE=`, `FOOTWORK=`, `WARY=` arms; `GAME=cod2` runs
+  `vcod-server --game cod2`'s bots instead, split by weapon class and
+  skill, `GUNS=0` keeping them off the mounted guns, docs/bots.md "CoD2";
+  `GAME=cod4` CoD4's, with each level's line and every script error the
+  levels raised, docs/bots.md "CoD4"; `DIGEST=1`
+  or `DIGEST=<N>` adds a per-tick hash of every bot's cmd and body, the
+  check that a refactor moved no bot; `NETDIGEST=<N>` one of every
+  datagram sent, with an observer client joined, and `VCOD_TICK_TRACE=<dir>`
+  the tick's step log, bot-combat.md section 1) and prints kills,
   deaths, damage, time-to-kill, wins, objective actions, lives, wounds
   survived, retreats, cover holds, peeks and hunts and the deaths after
   them, hits answered, deaths blindsided, stalls (split from deliberate holds), shots, hits, accuracy,
@@ -264,6 +425,10 @@ check.
   The net probe joins it with the UO install as `--game-dir` and
   `--mod-dir uo`; `cargo run -p vcod-common --example handshake_probe` is
   the standalone decoder `coduo-diff.md` was written with.
+- `tools/run_probe_cod2.sh` runs retail `cod2_lnxded` with the CoD2
+  movement probe gametype inside `unshare -rn` beside
+  `crates/cod2/examples/move_probe.rs`, which writes a
+  `crates/cod2/tests/fixtures/moves/` capture (`cod2-movement.md` 17).
 - `tools/run_probe.sh <probe> [map] [+set ...]` boots retail with a
   `crates/gsc/tests/fixtures/semantics/probe_*.gsc` (or
   `client-probes/probe_*`) installed as the gametype and prints its `PROBE`
@@ -288,13 +453,17 @@ check.
   `--set NAME=VALUE` is retail's `+set`, `--bots N [--bots-shoot]` adds
   clients, `--trace` logs per-snapshot timing.
 - Public servers: vcod's browser and heartbeat use `master.cod.pm`, whose
-  operator allowed it: ports 20510 (CoD 1.1 to 1.5, protocols 1-6) and
-  20610 (UO, 21 and 22). Ask `getservers <protocol> full empty` with one
-  protocol, never 0 (all games), at most once a second
-  (`net::master::master_send_allowed`); a list may come in several
-  packets ending `\EOT`, the last `\EOF`. Retail's Activision masters are
-  not contacted. A 60-100 s spectator capture during a round shows every
-  combat event.
+  operator allowed it: ports 20510 (CoD1, protocols 1-6), 20610 (UO, 21
+  and 22), 20710 (CoD2, 115-118), 20810 (CoD4). Ask
+  `getservers <protocol> full empty` with one protocol, never 0 (all
+  games), at most once a second (`net::master::master_send_allowed`);
+  a list may come in several packets ending `\EOT`, the last `\EOF`.
+  Retail's Activision masters are not asked for lists. The client's one
+  packet to them is `getKeyAuthorize`, sent only with a key set
+  (`VCOD_CDKEY`, 1.1's `main/codkey`) and only to a server off the LAN
+  (`net::cdkey`); tests and probes on loopback never send it, and no
+  test may set `VCOD_CDKEY`. A 60-100 s spectator
+  capture during a round shows every combat event.
 
 ### The probe client
 
@@ -440,28 +609,78 @@ kick) and counts each round fired against the ammo the server took.
 
 ## The server tick
 
-`Server::tick_frames` and `replay_moves` (`crates/server/src/server.rs`) follow
-retail's `SV_Frame` / `ClientThink_real` / `ClientEndFrame` order, and the
-comments at each step cite the section that measured it. The shape: console
-lines (a `map` reloads first), bots, pings, clock; every packet's
-cmds in arrival order, each one a `ClientThink_real` with its shots traced and
-their callbacks run inside the cmd (`cod11-combat.md` 16); menu responses,
-the script threads; spawns, weapon, link and sim ops; the entity pass,
-items, links, movers, missiles, thinks, temp entity frees and linked clients
-one entity at a time by number, each blast walked on its grenade's turn and
-each mover's push on its own (14.7); every
-slot's end frame, then per slot the aim trace, `commit_pose` and
-that slot's turret, whose rounds deliver inside its turn; outgoing commands,
-`SV_CheckTimeouts` on the advanced clock (a silent client goes on its sixth
-stale frame, a zombie is freed in the zombie pass), snapshots, zombies,
-heartbeat. A tick is one `SV_Frame`: `Server::tick_frames` runs every frame
-the wall clock owes, clock through end frames, back to back with only the
-archive between them, then one round of timeouts and snapshots. `main.rs`
-runs the console before it counts what is owed, so a slow `map_restart` is
-caught up with a single snapshot (`cod11-map-cycle.md` 4.7).
+Every game runs on one skeleton: `Server` is `engine::Engine<Cod1Game>`,
+`Cod2Server` `engine::Engine<Cod2Game>`, `Cod4Server`
+`engine::Engine<Cod4Game>`, each an `engine::EngineCore`
+(`core`) beside the game. `engine::tick` (`engine/game.rs`) is retail's
+`SV_Frame` order, calling the game's `GameModule` hooks:
 
-Moving work across this order makes a snapshot or a later round read a
-frame-old field.
+1. `frame_head` (CoD1's `Cbuf_Execute`, its `quit` and `killserver`
+   stop), then, when a frame runs, `HEAD`'s order of the bots, the pings
+   and (CoD2, CoD4) configstrings 0/1, each once.
+2. Per owed frame (at least `MIN_FRAMES`, CoD1's 1): the clock, the
+   queued cmds under `ThinkTiming::InFrame` (CoD1's `replay_moves`; CoD2
+   thinks each cmd as its packet arrives), `run_frame`, the archive
+   between frames, `frame_out`.
+3. `SV_CheckTimeouts` on the advanced clock (the stale zombies freed
+   there), then `engine::send_messages`, the one `SV_SendClientMessages`
+   pump: `snapshots_begin` once, then in slot order each slot
+   `message_due` gets `next_fragment` if one is left, else
+   `send_client_snapshot`, then `snapshots_end`. The pump serves every
+   state on its own slot's turn: a zombie's message and a client not in
+   the world's bare one go out between their neighbours' snapshots
+   (`cod11-server-handshake.md`, "The order of a frame's messages").
+4. The last frame's archive under `ARCHIVE_AFTER_MESSAGES` (CoD1's
+   `snapshots_end` archives its own); the heartbeat.
+
+Under `POST_EACH_FRAME` (CoD4 1.7, `cod4-server-frame.md`) the timeouts,
+messages, archive and heartbeat follow every owed frame instead, so a
+hitch sends one message per frame, and under `FRAGMENTS_FIRST` (CoD4 1.7)
+the pump sends every due slot's fragment before any new message.
+
+A tick is one `SV_Frame`: every frame the wall clock owes runs back to
+back with only the archive between them, then one round of timeouts and
+messages. `main.rs`'s `serve<G: GameModule>` is the loop for both games:
+it runs `drain_console` before it counts what is owed, so a slow
+`map_restart` is caught up with a single snapshot (`cod11-map-cycle.md`
+4.7), and hands each socket packet to `Engine::packet_read` with its
+`engine::Arrival` (CoD1 stamps the move acks there, `Server::ack_stamp`).
+`engine::packet` checks `accepts_packets`, then splits `SV_PacketEvent`
+on `is_connectionless` into the game's `connectionless` and
+`client_packet`. A step whose order differs between games is one of the
+consts or hooks, never a branch on the game; moving work across this
+order makes a snapshot or a later round read a frame-old field.
+
+CoD1's frame (`Server::game_frame`, `Cod1Module::run_frame_cod1` in
+`server/cod1_frame.rs`) follows `G_RunFrame` / `ClientThink_real` /
+`ClientEndFrame`, and the comments at each step cite the section that
+measured it: every packet's cmds in arrival order, each one a
+`ClientThink_real` with its shots traced and their callbacks run inside
+the cmd (`cod11-combat.md` 16); menu responses, the script threads;
+spawns, weapon, link and sim ops; the entity pass, items, links, movers,
+missiles, thinks, temp entity frees and linked clients one entity at a
+time by number, each blast walked on its grenade's turn and each mover's
+push on its own (14.7); every slot's end frame, then per slot the aim
+trace, `commit_pose` and that slot's turret, whose rounds deliver inside
+its turn; outgoing commands. A silent client goes on its sixth stale
+frame; a zombie is freed in `SV_CheckTimeouts`. CoD2's order is in
+`cod2-protocol.md` 14.1.
+
+The engine state both games drive is `EngineCore`: transport, slot table,
+configstrings and their sent copy, console queue, challenges, bans,
+masters, rcon limiter, the game clock and `rand()`. A slot's netchan,
+acks, frame and ping rings, pacing, fragments and timeout clock are its
+`link` (`engine::slot::Link`). What both servers answer alike over it
+(`tick_frames`, `handle_packet`, `push_console`, `take_outgoing`) is one
+`impl<G: GameModule> Engine<G>`. The frame writers are the wire's
+(`WireGame::write_gamestate`, `write_snapshot`); a game builds its frame
+in its own numbering (CoD1 maps 1.1's once a snapshot). `getinfo` and
+`getstatus` reply through `engine::answer_status`: the game's
+`GameModule::status` text framed by `WireGame::oob_packet`. `Cod1Game`
+(`server/cod1_game.rs`) still holds the engine state CoD1 keeps itself
+(zombies, pure check, rcon password and redirect, the killcam archive,
+`cfg`) beside its game module, `Cod1Game::module` (`Cod1Module`); `Lend`
+is what the engine lends the module for one call.
 
 `Cx::spawn` runs a script thread before the calling builtin's next
 instruction; `Cx::spawn_then` adds `Host::spawn_returned` once that thread
@@ -474,9 +693,9 @@ dropped, so test such a builtin through `ScriptRuntime`.
 ### Wire and netcode
 
 - Protocol 6 (1.5) renumbered the top of `pm_flags`; the decoder rewrites
-  it into 1.1's layout (`Protocol::pm_flags_to_v1`), so a `PlayerState`
+  it into 1.1's layout (`Cod1Wire::pm_flags_to_v1`), so a `PlayerState`
   never holds the raw 1.5 value. The writer maps it back
-  (`Protocol::pm_flags_from_v1`); 1.5-only state (`flags::PMF_MAY_CYCLE`,
+  (`Cod1Wire::pm_flags_from_v1`); 1.5-only state (`flags::PMF_MAY_CYCLE`,
   `PMF_MAY_FREE`, `PMF_WEAPON_DISABLED`) sits above 1.1's 19 bits, which a
   protocol 1 wire masks off. 1.5's jump penalty keeps its 0x2000, which 1.1
   never sets, and `predict::from_wire` turns it on under 1.5's rules
@@ -484,22 +703,29 @@ dropped, so test such a builtin through `ScriptRuntime`.
   the predictor reads 1.5's stance off the flags. 1.5 and UO send `B` where 1.1 sends `n` for a
   `map_restart` that drops `pers[]` (`n` for one that keeps it), and its gametypes open `serverinfo_<gametype>` before the
   team menu, so a `t` index is not `g_scriptMainMenu`'s.
+- The CD key goes to the authorize server on its own socket and thread
+  (`net::cdkey::request_authorization`), never through the connection's
+  transport, and never into a log: `CdKey`'s `Debug` hides it. 1.1, 1.5
+  and UO send the bare key, CoD2 and CoD4 add `PB <md5>`, an MD5 from
+  Activision's own initial state over the upper-cased (CoD2) or
+  lower-cased (CoD4) key, the same hash their `getchallenge` carries
+  (cod11-server-handshake.md, "CD key authorization (the clients)").
 - A UO script model or turret carries its model in `xmodel`, not `index`
   (`G_DObjUpdate`); a brush model keeps its number in `index`.
 - Protocol 22 (UO) sends an `eType` 12 entity (a vehicle) through a second
   netfield table behind a select bit after its number; a decoded
   `EntityState` keeps the main table's order whichever table carried it
-  (`Protocol::vehicle_field_slots`). Its `bits -100` fields are 16-bit
+  (`Cod1Wire::vehicle_field_slots`). Its `bits -100` fields are 16-bit
   angles held as f32 degrees; one equal to its base after quantizing is
   nudged a mantissa bit so a capture re-encodes. UO's `eType` 9..15 are its
   own (`flags::ET_VEHICLE_V22` and kin) and `ET_EVENTS` is 16: ask
-  `Protocol::event_of`, never `eType >= ET_EVENTS`. Its events, `eFlags`,
+  `Cod1Wire::event_of`, never `eType >= ET_EVENTS`. Its events, `eFlags`,
   `pm_flags` and means of death are mapped onto 1.1's at decode (the
   predictor's ring too: `predict::from_wire`, or every own shot plays
   twice, `coduo-movement.md` 15), the
   configstring blocks and the fixed slots past 11 (UO's fog is 13, its
-  start time 14) are `Protocol::cs`, never the `CS_*` constants, and the
-  ammo and health items follow `Protocol::max_weapons` weapon rows
+  start time 14) are `Cod1Wire::cs`, never the `CS_*` constants, and the
+  ammo and health items follow `Cod1Wire::max_weapons` weapon rows
   (`weapon_table::static_item`: 65..69, UO 129..133). UO's
   own events, its `EV_BULLET_HIT` and its projectile explodes keep their
   UO number under `EV_FOREIGN` (`EV_UO_*`), and its sprinting, winded and
@@ -518,13 +744,19 @@ dropped, so test such a builtin through `ScriptRuntime`.
   protocol's once a snapshot (`game::wire::entity_to_protocol`,
   `ps_to_protocol`; baselines too); `pm_flags` maps in the writer. A new
   wire path that skips them sends 1.1 numbers to a UO client.
+  CoD2's server builds its entities in CoD2's numbers as it builds them
+  (`HostProfile::entities`, `cod2_wire::COD2_ENTITY_NUMBERS`: types,
+  `eFlags`, `trType`s, ring events), held in vcod's `EntityState` over
+  118's table (`Cod2Wire::as_cod1_shim`, identity maps) until the engine
+  takes `EntityState2`; `cod2_wire::to_cod2_entity` only copies. A CoD2
+  builder that writes a 1.1 number sends it as is (cod2-protocol.md 15.9).
 - Every playerstate field `predict::from_wire` reads, `ClientSim::to_wire`
   has to write: the predictor rebuilds from the snapshot each time, and a
   field left 0 replays differently from the server. A missing
   `iFatigueSoundTime` breathed on every snapshot and played rounds twice
   (coduo-movement.md 15); `predict_ab`'s 1.5 and UO side-by-side gates
   catch the next one.
-- The stock pak set is the protocol's (`Protocol::id_pak_numbers`: 1.1
+- The stock pak set is the protocol's (`PakRules::id_pak_numbers`, the protocol's `transport.paks`: 1.1
   `pak0`..`pak8`, 1.5 `pak0`..`pakf`, UO's `pakuo` ones in `uo/` too), not the install's, and a retail
   server streams a stock pak anyone asks for. A 1.5 match timeout freezes
   snapshot serverTime, so the client clock counts snapshots by message
@@ -584,11 +816,13 @@ dropped, so test such a builtin through `ScriptRuntime`.
   waits out its rate and its `snaps` interval between messages. A test that
   reads one tick's packets sees only the first fragment of a big message.
   A client not in the world gets a 9-byte bare message on each turn (every
-  tick on a LAN, 1 s apart off it), so such a test drains those too.
+  tick on a LAN, 1 s apart off it), so such a test drains those too. That
+  message and a zombie's go out on their own slot's turn in the one
+  slot-order pass, so a lower slot's precedes a higher slot's snapshot.
 - A pure server drops a client that enters the world without a valid `cp`
   (pak checksums keyed with the gamestate's `checksumFeed`), which on UO
   opens with the paks of `uo_cgame_mp_x86.dll` and `uo_ui_mp_x86.dll`
-  (`Protocol::pure_dlls`), not 1.1's modules its `main/` still holds. Extra
+  (`Cod1Wire::pure_dlls`), not 1.1's modules its `main/` still holds. Extra
   arguments to `tools/run_server.sh` land after `+map`, so `+set sv_pure 1`
   there leaves `sv_paks` empty yet still drops; pass it before the map
   (`PRE_MAP_ARGS='+set sv_pure 1'`) to test a pure server.
@@ -871,12 +1105,26 @@ so do a missile's arc and bounce (`Missile::kept`, combat doc 12.5) and the
 
 ### Script
 
+- A game version's rule in the host, spawn, item, vote, field and print
+  code reads a named `HostProfile` field (`game::profile`), never
+  `profile.game`; the VM's go through `VmProfile` (`Vm::apply_profile`).
+  The load picks the profile and `GameHost::new` takes it. A test that
+  switches version calls `GameHost::set_profile`: a write to `defs` alone
+  leaves the builtins and rules on the old version. CoD2's own state
+  (`host.cod2()`) panics on a CoD1 host; `GameHost::new` and
+  `set_profile` pick the `HostExt` arm off the game.
 - gsc folds case for identifiers, fields, paths and event names but not for
   string values or array keys. A misrouted event name hangs its `waittill`
   silently.
 - Unary `!` and a condition read a string as the number it spells (`!"0"`
   is 1, `if ("1")` passes); `""` or `"a"` there is fatal.
 - A float prints `%g`-style (`1e-05`, `1.23457e+06`), not Rust's format.
+- An array is a value on every engine: `b = a; b[k] = v` leaves `a`
+  alone. The VM flags an array stored a second time and copies it at the
+  next write (`Heap::share`, `Heap::own`); a write path that skips the
+  `EnsureArray*`/`OwnLocal` ops writes into every holder. CoD4's
+  `CountPlayers` shared `level.players` that way and flooded
+  `spawnPerFrameUpdate` (cod4-gsc.md 10).
 - A BSP key reaches script only if it is in the entity field table or
   `radiant/keys.txt`; anything else is dropped silently.
 - A brush model's `.model` reads `""` (its `*N` key goes to `s.index`).
@@ -1020,6 +1268,16 @@ so do a missile's arc and bounce (`Missile::kept`, combat doc 12.5) and the
 
 ### Bots
 
+- The per-tick driver (`bots::driver::step`) reads and writes the game
+  only through `BotWorld`, one call per point of the tick, in CoD1's old
+  `step_bots` order: a call moved across another moves rand draws, the
+  enemy cache and the plan budget. Its state (`BotDriver`) stays in the
+  game for the tick: the view builders, the vehicle code and the admin
+  read `bots`, `nav` and `paths` mid-tick. Both games run it in one
+  order; what a game's route leaves out the trait carries as a const
+  (`YIELDS`, `PMOVE_PROBES`), and flipping one moves that game's draws. A per-game
+  step goes in a hook (`feel`, `pre_route`, `routed`, `pre_think`,
+  `keeps_alive`, `cmd`, `tick_done`), not in `step`.
 - Nav build: `Prim::Tri` is terrain only, and `under_ground`'s ray counts
   terrain only, or a patch spar overhead makes a ladder foot read as
   underground. Minefields and `trigger_hurt` brushes are excluded.
@@ -1058,9 +1316,12 @@ so do a missile's arc and bounce (`Missile::kept`, combat doc 12.5) and the
   on its foot until the jump is ready (`Follower::jump_wait`), and on 1.5
   and UO until the jump penalty has run out (`nav::jump_ready`).
 - Every walk's body moves by the rules `nav::with_rules` set on its thread
-  (`nav::body`); the build, `par_map`'s workers and the server's bot pass
-  set them. A walk that builds its `PlayerState` with
-  `PlayerState::spawn` instead proves the edge under 1.1's.
+  (`nav::body`); the build, `par_map`'s workers and both servers' bot
+  passes set them (CoD2's through its graph's `NavGraph::moving`). A walk that builds its `PlayerState` with
+  `PlayerState::spawn` instead proves the edge under 1.1's. A game's own
+  pmove goes in through `nav::with_step` (`nav::WalkStep`); every
+  `player_step` in a walk dispatches to it when one is set. CoD2's
+  (`bots::cod2::Cod2Walk`) is off (bot-combat.md 16, 17).
 - A UO bot sprints only along `Follower::straight_run`: level, straight,
   no jump, leap or risky edge. A sprint takes no weapon scale, so the
   graph's 190 is 304 there; a turn or a drop at that pace was never
@@ -1073,19 +1334,27 @@ so do a missile's arc and bounce (`Missile::kept`, combat doc 12.5) and the
   and the view the graph proved it on. A view set after the walk's is
   seen as owned (`Bot::view_owned`) and handed back at once; one set
   before it, as the recall look is, flags itself.
-- The server fills `BotView::drop_ahead` only on the ticks
+- The driver fills `BotView::drop_ahead` only on the ticks
   `Bot::reads_drops` names; a new reader in the brain widens it.
 - The graph's cache keys on which submodels clip, and the server rebuilds
   it once the script's brush links (`GameHost::brush_links`) hold still
   2 s (`Server::relink_nav`): a test that runs two gametypes on one map
   builds two graphs, and one that deletes a brush mid-level waits on a
   build. `bas` breaches delete a base's walls; a UO bot test on a `bas`
-  map runs a second build.
+  map runs a second build. A CoD4 graph clips the brush entities standing
+  once the level has run a frame (`bots::cod4::BrushedClip`), its cache
+  key carrying their set; a test's `bot_world(.., Vec::new())` and
+  `nav_build` clip the clip map alone.
 - A vehicle moved since the build does not rebuild the graph: once it
   holds still 20 ticks its nodes are blocked for the followers
   (`Server::park_vehicles`, `Follower::blocked`), and a bot hemmed in by
   them reads as stranded. A test that parks a vehicle by hand waits those
   ticks before the bots see it.
+- A CoD4 bot never writes a message, so the commands it reads must be
+  marked sent (`reliable_sent`) as well as acknowledged: 1.7's
+  `SV_AddServerCommand` squashes only unsent ones, and a squash of one
+  already read moved the next level's team menu under the acknowledge,
+  so no bot played past a map change.
 
 ## Reverse engineering
 
@@ -1100,14 +1369,6 @@ so do a missile's arc and bounce (`Missile::kept`, combat doc 12.5) and the
 Image bases: `0x30000000` cgame, `0x20000000` game DLLs, `0x00400000`
 CoDMP.exe. md5s are in `docs/research/cod11-events-and-fx.md`.
 
-- Ghidra exports live under `private/ghidra/`. Grep the existing `.c` export
-  before re-running; a full decompile takes ~15 minutes.
-  `tools/re/ExportDecomp.java` makes one: `analyzeHeadless <dir> <proj>
-  -import <dll>`, then `-process <dll> -noanalysis -scriptPath tools/re
-  -postScript ExportDecomp.java`. `DecompAt.java <hex addr>...` under
-  `-readOnly` decompiles just those functions into `decomp_at.c` in about
-  a minute, making a function where analysis left a label (a refexport
-  slot's target).
 - `tools/re/`: `evtab.py` (`EV_*` table), `netfields.py`,
   `dump_field_table.py`, `xref.py`, `dump_script_fields.py`,
   `dump_builtins.py`, `dump_cvars.py`, `dump_itemlist.py`, and
@@ -1117,6 +1378,13 @@ CoDMP.exe. md5s are in `docs/research/cod11-events-and-fx.md`.
   finds each table by symbol or off its lookup function and resolves the
   relocations: a pointer stored in `.data` reads as 0 in the file.
   `net-notes.md` is the server disassembly log.
+- CoD2 1.3's `cod2_lnxded` is stripped and links the game in; its names
+  come off the Mac 1.3 MP binary's i386 slice, which keeps its symbols.
+  `ExportFuncGraph.java` dumps each analyzed program's functions
+  (`*.funcs.tsv`), `symmap.py` pairs them (its header lists the passes and
+  why the size filter stays), `merge_zk.py` folds in zk_libcod's
+  `functions.hpp` addresses for the rest, and `check_zk.py` scores a map
+  against them.
 - Ghidra prints a `fistp` under a `| 0xc00` control word as `ROUND`, and
   that store truncates toward zero; read the `fldcw` before porting one
   (the bob cycle and every `delta_angles` push are such stores). A float

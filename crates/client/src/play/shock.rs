@@ -6,6 +6,7 @@
 //! docs/research/cod11-shellshock.md.
 
 use vcod_common::pk3::Pk3Fs;
+use vcod_common::text::atoi_msvc;
 
 /// The cvar names in the parser's table order (cgame `0x300748a0`), with the
 /// defaults `CG_RegisterCvars` gives them (`0x30075260`).
@@ -67,8 +68,9 @@ pub struct ShockParams {
     pub room: String,
     pub wet: f32,
     pub mod_end_delay_ms: i32,
-    /// By engine channel ([`VOLUME_CVARS`]).
-    pub volumes: [f32; 10],
+    /// By `audio::alias::Channel` index ([`VOLUME_CVARS`]); 1.1 has no
+    /// `auto2d`, so its slot (10) stays 1.
+    pub volumes: [f32; 11],
     pub mouse: bool,
     pub max_pitch: f32,
     pub max_yaw: f32,
@@ -92,7 +94,7 @@ fn unit(x: f32) -> f32 {
 }
 
 /// `atof`: the longest leading float, 0 for none.
-fn atof(s: &str) -> f32 {
+pub(crate) fn atof(s: &str) -> f32 {
     let s = s.trim_start();
     let b = s.as_bytes();
     let mut end = 0;
@@ -118,23 +120,6 @@ fn atof(s: &str) -> f32 {
         end -= 1;
     }
     0.0
-}
-
-/// `atoi`: leading sign and digits.
-fn atoi(s: &str) -> i32 {
-    let s = s.trim_start();
-    let (neg, digits) = match s.as_bytes().first() {
-        Some(b'-') => (true, &s[1..]),
-        Some(b'+') => (false, &s[1..]),
-        _ => (false, s),
-    };
-    let n = digits
-        .bytes()
-        .take_while(u8::is_ascii_digit)
-        .fold(0i64, |n, d| {
-            (n * 10 + i64::from(d - b'0')).min(i64::from(i32::MAX))
-        });
-    (if neg { -n } else { n }) as i32
 }
 
 /// `COM_Parse`'s tokens with the line each starts on: whitespace, `//` and
@@ -186,13 +171,25 @@ fn tokens(text: &str) -> Vec<(usize, String)> {
 /// any of the 27 left unset fails the file. Returns the 27 values in
 /// [`CVARS`] order.
 pub fn parse_cvars(text: &str, file: &str) -> Result<[String; 27], Vec<&'static str>> {
-    let mut values: [Option<String>; 27] = Default::default();
+    let names = CVARS.map(|(n, _)| n);
+    let v = parse_named(text, file, &names)?;
+    Ok(std::array::from_fn(|i| v[i].clone()))
+}
+
+/// [`parse_cvars`] over any name table: CoD2's `Com_LoadDvarsFromBuffer`
+/// (Mac 0x54806) reads its 29 the same way.
+pub fn parse_named(
+    text: &str,
+    file: &str,
+    names: &[&'static str],
+) -> Result<Vec<String>, Vec<&'static str>> {
+    let mut values: Vec<Option<String>> = vec![None; names.len()];
     let toks = tokens(text);
     let mut i = 0;
     while i < toks.len() {
         let (line, name) = &toks[i];
         let value = toks.get(i + 1).filter(|(l, _)| l == line);
-        match CVARS.iter().position(|(n, _)| n.eq_ignore_ascii_case(name)) {
+        match names.iter().position(|n| n.eq_ignore_ascii_case(name)) {
             Some(k) => values[k] = Some(value.map_or(String::new(), |(_, v)| v.clone())),
             None => log::warn!("shellshock: unknown cvar '{name}' in file '{file}'"),
         }
@@ -201,16 +198,16 @@ pub fn parse_cvars(text: &str, file: &str) -> Result<[String; 27], Vec<&'static 
             i += 1;
         }
     }
-    let missing: Vec<&str> = CVARS
+    let missing: Vec<&str> = names
         .iter()
         .zip(&values)
         .filter(|(_, v)| v.is_none())
-        .map(|((n, _), _)| *n)
+        .map(|(n, _)| *n)
         .collect();
     if !missing.is_empty() {
         return Err(missing);
     }
-    Ok(values.map(Option::unwrap_or_default))
+    Ok(values.into_iter().map(Option::unwrap_or_default).collect())
 }
 
 impl ShockParams {
@@ -222,7 +219,7 @@ impl ShockParams {
             blend_fade_ms: ms1(f(1)),
             kick_rate: 0.001 / f(2).max(0.001),
             kick_radius: f(3),
-            sound: atoi(&v[4]) != 0,
+            sound: atoi_msvc(&v[4]) != 0,
             fade_in_ms: ms1(f(5)),
             fade_out_ms: ms1(f(6)),
             loop_fade_ms: ms1(f(7)),
@@ -230,8 +227,14 @@ impl ShockParams {
             room: v[9].chars().take(15).collect(),
             wet: unit(f(10)),
             mod_end_delay_ms: ms(f(11)),
-            volumes: VOLUME_CVARS.map(|i| unit(f(i))),
-            mouse: atoi(&v[22]) != 0,
+            volumes: {
+                let mut v = [1.0; 11];
+                for (o, i) in v.iter_mut().zip(VOLUME_CVARS) {
+                    *o = unit(f(i));
+                }
+                v
+            },
+            mouse: atoi_msvc(&v[22]) != 0,
             max_pitch: f(23),
             max_yaw: f(24),
             sensitivity: f(25),
@@ -389,8 +392,9 @@ fn mouse(p: &ShockParams, elapsed: i32, duration: i32) -> ShockMouse {
 /// The sound half's per-frame state (`0x3002f2d0`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShockSound {
-    /// Per engine channel, multiplied into every voice (syscall 0xd8).
-    pub volumes: [f32; 10],
+    /// By `audio::alias::Channel` index, multiplied into every voice
+    /// (syscall 0xd8).
+    pub volumes: [f32; 11],
     /// The room type and its wet level (syscall 0xd9).
     pub room: String,
     pub wet: f32,
@@ -404,7 +408,7 @@ pub struct ShockSound {
 impl ShockSound {
     fn idle(cue: Option<(&'static str, i32)>) -> ShockSound {
         ShockSound {
-            volumes: [1.0; 10],
+            volumes: [1.0; 11],
             room: "generic".into(),
             wet: 0.0,
             loop_blend: None,
@@ -463,6 +467,13 @@ pub struct ShellShock {
     captured: bool,
     /// The end cue's latch (`0x3020d5bc`): the end time it played for.
     end_latch: i32,
+    /// How a name becomes a record: 1.1's `scripts/<name>.shock` when
+    /// `None`, CoD2's `shock/<name>.shock` through
+    /// `play::cod2_shock::load`.
+    loader: Option<fn(&Pk3Fs, &str) -> Option<ShockParams>>,
+    /// The registered defaults `cg_shellshock <duration>` takes before any
+    /// file loaded: 1.1's when `None`.
+    defaults: Option<fn() -> ShockParams>,
 }
 
 impl ShellShock {
@@ -471,13 +482,31 @@ impl ShellShock {
     pub fn restart_cgame(&mut self) -> ShellShock {
         ShellShock {
             last: self.last.take(),
+            loader: self.loader,
+            defaults: self.defaults,
+            ..ShellShock::default()
+        }
+    }
+
+    /// A state whose records load through `loader` (CoD2's files), with
+    /// `defaults` its registered dvars.
+    pub fn with_loader(
+        loader: fn(&Pk3Fs, &str) -> Option<ShockParams>,
+        defaults: fn() -> ShockParams,
+    ) -> ShellShock {
+        ShellShock {
+            loader: Some(loader),
+            defaults: Some(defaults),
             ..ShellShock::default()
         }
     }
 
     fn params(&mut self, fs: &Pk3Fs, name: &str) -> Option<&ShockParams> {
         if !self.loaded.contains_key(name) {
-            let p = ShockParams::load(fs, name);
+            let p = match self.loader {
+                Some(load) => load(fs, name),
+                None => ShockParams::load(fs, name),
+            };
             if let Some(p) = &p {
                 self.last = Some(p.clone());
             }
@@ -491,10 +520,19 @@ impl ShellShock {
     /// console's reply.
     pub fn command(&mut self, fs: &Pk3Fs, args: &[&str], now: i32) -> Result<(), String> {
         let params = match args {
-            [_] => self.last.clone().unwrap_or_else(ShockParams::defaults),
+            [_] => self
+                .last
+                .clone()
+                .unwrap_or_else(self.defaults.unwrap_or(ShockParams::defaults)),
+            // CoD2's loader warns on its own (`CG_LoadShellShockDvars`) and
+            // the command then starts nothing (`CG_ShellShock_f`, Mac
+            // 0x1d2e3c): an empty reply.
             [_, file] => {
-                let p = ShockParams::load(fs, file)
-                    .ok_or_else(|| format!("couldn't load 'scripts/{file}.shock'"))?;
+                let p = match self.loader {
+                    Some(load) => load(fs, file).ok_or_else(String::new)?,
+                    None => ShockParams::load(fs, file)
+                        .ok_or_else(|| format!("couldn't load 'scripts/{file}.shock'"))?,
+                };
                 self.last = Some(p.clone());
                 p
             }
@@ -691,7 +729,7 @@ mod tests {
         // item/body, then local, music, announcer, shellshock.
         assert_eq!(
             p.volumes,
-            [0.1, 1.0, 0.1, 0.1, 0.5, 0.2, 0.1, 0.1, 1.0, 1.0]
+            [0.1, 1.0, 0.1, 0.1, 0.5, 0.2, 0.1, 0.1, 1.0, 1.0, 1.0]
         );
         assert!(p.mouse);
         assert_eq!((p.max_pitch, p.max_yaw, p.sensitivity), (90.0, 90.0, 0.5));
@@ -722,8 +760,8 @@ mod tests {
         assert_eq!(atof("1.5x"), 1.5);
         assert_eq!(atof("1e"), 1.0);
         assert_eq!(atof(""), 0.0);
-        assert_eq!(atoi("0.5"), 0);
-        assert_eq!(atoi("-3"), -3);
+        assert_eq!(atoi_msvc("0.5"), 0);
+        assert_eq!(atoi_msvc("-3"), -3);
         assert_eq!(ms(-0.75), -750);
         assert_eq!(ms1(0.0), 1);
     }
@@ -833,7 +871,7 @@ mod tests {
         let off = at(&mut s, 4250 + 2500);
         assert_eq!(
             (off.room.as_str(), off.wet, off.volumes),
-            ("generic", 0.0, [1.0; 10])
+            ("generic", 0.0, [1.0; 11])
         );
         // Loop: half faded a second past 3500, gone at 5500.
         assert_eq!(at(&mut s, 4500).loop_blend, Some(0.5));

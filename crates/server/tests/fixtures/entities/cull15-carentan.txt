@@ -1,4 +1,4 @@
-# Retail 1.5b, 2026-10-16, run on this machine:
+# Retail 1.5b, 2026-10-16, run locally:
 #   COD_VERSION=1.5 SECS=75 tools/run_probe.sh client-probes/probe_cull15 mp_carentan
 #   vcod --game-dir <1.5 install> --net-probe <addr> --probe-edge watch --probe-secs 62
 # The server's PROBE lines, then the viewer's `EDGE ents` lines (entity

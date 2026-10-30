@@ -47,7 +47,7 @@ body:
     attributes:
       label: Server
       description: The server's address if it's public, or how you started it (command line and `--set` options) if it's a vcod server you ran yourself. Mods it runs matter too.
-      placeholder: 1.2.3.4:28960, or vcod-server mp_pavlov --set g_gametype=sd
+      placeholder: 203.0.113.4:28960, or vcod-server mp_pavlov --set g_gametype=sd
 
   - type: input
     id: map

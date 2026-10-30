@@ -7,8 +7,10 @@
 
 use crate::configstrings::{Allocators, CsRange};
 use crate::game::builtins;
+use crate::game::builtins::set::BuiltinSet;
 use crate::game::entity::{FIRST_HUD_ELEM, ObjectTable, ThinkFn};
 use crate::game::fields::{self, FieldType, Route};
+use crate::game::profile::WeaponNumbering;
 use crate::server::MAX_CLIENTS;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -42,42 +44,93 @@ pub fn empty_objective() -> Objective {
     }
 }
 
-/// The builtins `GameHost::builtin` answers from its own match, folded: the
-/// env and io names, which have no family module of their own. Every other
-/// builtin comes from a family's `NAMES`, and `is_builtin` walks both so the
-/// load-time pre-scan sees the same set dispatch does.
-/// `every_listed_builtin_dispatches` keeps this list in step with the match.
-pub const BUILTINS: &[&str] = &[
-    "setcullfog",
-    "setexpfog",
-    "ambientplay",
-    "println",
-    "iprintln",
-    "logprint",
-    "announcement",
-    "clientannouncement",
+/// The builtins `GameHost` answers itself: the env and io names, which have
+/// no family module of their own. `builtins::set::implementations` lists
+/// them with the families.
+pub const INLINE: &[(&str, builtins::score::Builtin)] = &[
+    ("setcullfog", set_cull_fog),
+    ("setexpfog", set_exp_fog),
+    ("ambientplay", ambient_play),
+    ("println", print_line),
+    ("logprint", log_print),
+    ("iprintln", builtins::io::iprint_line),
+    ("announcement", announcement),
+    ("clientannouncement", client_announcement),
 ];
 
-/// Every builtin family's `NAMES`, walked in the same order `builtin`
-/// dispatches them, so the pre-scan and dispatch cannot drift apart by
-/// construction.
-pub fn is_builtin(name: &str) -> bool {
-    builtins::entity::lookup(name).is_some()
-        || builtins::math::lookup(name).is_some()
-        || builtins::fx::lookup(name).is_some()
-        || builtins::hud::lookup(name).is_some()
-        || builtins::sound::lookup(name).is_some()
-        || builtins::attach::lookup(name).is_some()
-        || builtins::client::lookup(name).is_some()
-        || builtins::combat::lookup(name).is_some()
-        || builtins::mover::lookup(name).is_some()
-        || builtins::cvar::lookup(name).is_some()
-        || builtins::precache::lookup(name).is_some()
-        || builtins::score::lookup(name).is_some()
-        || builtins::objective::lookup(name).is_some()
-        || builtins::uo::lookup(name).is_some()
-        || builtins::vehicle::lookup(name).is_some()
-        || BUILTINS.contains(&name)
+fn set_cull_fog(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = host.allocators.layout().fog;
+    builtins::env::set_cull_fog(&mut host.configstrings, slot, cx, args)
+}
+
+fn set_exp_fog(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = host.allocators.layout().fog;
+    builtins::env::set_exp_fog(&mut host.configstrings, slot, cx, args)
+}
+
+fn ambient_play(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = host.profile.spawn.ambient_slot;
+    builtins::env::ambient_play(&mut host.configstrings, slot, host.level_time_ms, cx, args)
+}
+
+fn print_line(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    builtins::io::print_line(host, cx, args)
+}
+
+/// `logPrint`: the joined text to `games_mp.log` as given
+/// (`GScr_LogPrint`, CoD1 1.1 game.mp, CoD2 1.3), and to the script log.
+fn log_print(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    host.log_printf(builtins::io::render(cx, args));
+    builtins::io::print_line(host, cx, args)
+}
+
+fn announcement(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    builtins::io::announcement(host, cx, None, args)
+}
+
+fn client_announcement(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let (who, rest) = args.split_first().ok_or(ErrorKind::BadType(
+        "clientAnnouncement needs a player and a message",
+    ))?;
+    let Value::Entity(id) = *who else {
+        return Err(ErrorKind::BadType("not an entity"));
+    };
+    builtins::io::announcement(host, cx, Some(Target::Entity(id)), rest)
 }
 
 /// One client lifecycle step the netcode raised, by client slot. `Connect`
@@ -97,6 +150,87 @@ pub enum ClientEvent {
     /// The client is gone; runs `CodeCallback_PlayerDisconnect` and frees
     /// the entity.
     Disconnect(usize),
+}
+
+/// What CoD2's damage and killed callbacks take past 1.1's arguments
+/// (cod2-gsc-diff.md 4.1, "timeOffset and deathAnimDuration"): a hit's
+/// `timeOffset` ([`crate::game::cod2::time_offset`] for a bullet, 0 for
+/// every other `G_Damage` caller) and the death anim's length
+/// `BG_AnimScriptEvent` returns. Both 0 until a CoD2 hit sets them.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Cod2CallbackArgs {
+    pub time_offset: i32,
+    pub death_anim_duration: i32,
+}
+
+/// The game's own host state, one arm per game: CoD1 keeps all of its in
+/// the shared [`GameHost`] fields.
+pub enum HostExt {
+    Cod1,
+    Cod2(Box<Cod2HostState>),
+    Cod4(Box<crate::game::cod4::Cod4HostState>),
+}
+
+impl HostExt {
+    /// The arm `profile`'s game runs, fresh.
+    pub fn of(profile: &crate::game::profile::HostProfile) -> Self {
+        match profile.game {
+            vcod_common::game::Game::Cod2 => HostExt::Cod2(Box::default()),
+            vcod_common::game::Game::Cod4 => HostExt::Cod4(Box::default()),
+            _ => HostExt::Cod1,
+        }
+    }
+}
+
+/// What CoD2's game module keeps on the host that CoD1's has no field
+/// for ([`GameHost::cod2`]).
+pub struct Cod2HostState {
+    /// CoD2's weapons in registration order, index 1 first
+    /// (`builtins::cod2::register_weapon`).
+    pub weapons: Vec<String>,
+    /// Whether each of `weapons` names an `offhandClass` (a grenade),
+    /// which `giveWeapon` makes the offhand rather than a slot's.
+    pub offhands: Vec<bool>,
+    /// CoD2's `script_struct` blocks in lump order, for the load to turn
+    /// into `level.struct` entries once the spawn pass is done, each block's
+    /// keys in lump order.
+    pub script_structs: Vec<Vec<(String, String)>>,
+    /// The two arguments CoD2's damage and killed callbacks add
+    /// ([`GameHost::callback_args`]), as the hit being delivered sets them.
+    pub callback: Cod2CallbackArgs,
+    /// CoD2's per-client state the game module keeps beside the shared
+    /// tables, by slot (`crate::game::cod2`).
+    pub clients: Vec<crate::game::cod2::Cod2ClientState>,
+    /// The CoD2 game's `rand()`, the same stream as `Combat::rand`.
+    pub rand: std::rc::Rc<crate::game::cod2_combat::GameRand>,
+    /// Test-facing: per client slot, the death anims (`legsAnim` without
+    /// the toggle) its kills take in turn over the drawn one, the draw
+    /// still made: a gate replays retail's clock-seeded picks with it.
+    pub death_pins: Vec<std::collections::VecDeque<i32>>,
+    /// Test-facing: the `crandom()` values a CoD2 weapon drop takes in
+    /// turn over the drawn ones (its climb, then its spin's roll, yaw and
+    /// pitch), the draw still made: a gate replays retail's clock-seeded
+    /// draws, read off the item in flight, with it.
+    pub drop_pins: std::collections::VecDeque<f64>,
+    /// CoD2 weapons dropped from a tag, waiting for the dropper's pose
+    /// (`game::cod2_items::TagDrop`).
+    pub tag_drops: Vec<crate::game::cod2_items::TagDrop>,
+}
+
+impl Default for Cod2HostState {
+    fn default() -> Self {
+        Cod2HostState {
+            weapons: Vec::new(),
+            offhands: Vec::new(),
+            script_structs: Vec::new(),
+            callback: Cod2CallbackArgs::default(),
+            clients: vec![Default::default(); MAX_CLIENTS],
+            rand: Default::default(),
+            death_pins: Vec::new(),
+            drop_pins: Default::default(),
+            tag_drops: Vec::new(),
+        }
+    }
 }
 
 /// The `r.maxs[2]` `player_die` writes between its unlink and link (1.1d
@@ -336,7 +470,7 @@ pub struct GameHost {
     /// Per-client server commands the script asked for, by client slot,
     /// drained by `Server` after `run_frame`. A builtin cannot reach the
     /// netchan, so it queues, the same reason `client_events` does.
-    pub client_commands: Vec<(usize, String)>,
+    pub client_commands: crate::game::commands::ClientCommands,
     /// Spawns the script performed this frame, drained by `Server` after
     /// `run_frame` the way `client_commands` is.
     pub client_spawns: Vec<SpawnRequest>,
@@ -406,7 +540,7 @@ pub struct GameHost {
     /// `spawn`: what `setPlayerAngles` holds the entity's `angles` in.
     pub client_prone_cone: Vec<Option<vcod_common::pmove::ProneCone>>,
     /// Each client's eye, `[pitch, yaw]` aim and `rifleBullet` weapon flag
-    /// as the tick left them, for the aim trace `Server::tick` runs after the
+    /// as the tick left them, for the aim trace `Cod1Module::run_frame_cod1` runs after the
     /// script frame.
     pub client_aim: Vec<([f32; 3], [f32; 2], bool)>,
     /// What the last aim trace entered, for `isLookingAt`
@@ -516,6 +650,10 @@ pub struct GameHost {
     /// server's `games_mp.log`; this is where that will come from, and it is
     /// what lets a test replay a retail capture.
     pub script_log: Vec<String>,
+    /// The `G_LogPrintf` lines (`logPrint`, `ExitLevel`, chat, pickups),
+    /// each with `level.time`, for the engine to write to `games_mp.log`
+    /// (`engine::gamelog`).
+    pub game_log: Vec<(i32, String)>,
     /// The level clock in milliseconds: `getTime()` reads it, and it is set
     /// by `ScriptRuntime::load` at map load and by `run_frame` every frame
     /// after. `getTime`'s real units are unmeasured (`probe_cvar` only
@@ -566,11 +704,24 @@ pub struct GameHost {
     /// the weapon list, the item rows, the means of death and, through
     /// `defs.proto.cs`, where the configstring blocks sit.
     pub defs: &'static crate::defs::Defs,
+    /// The game version whose scripts run here and every rule it differs
+    /// in (`game::profile`); `defs` starts as its tables.
+    pub profile: &'static crate::game::profile::HostProfile,
+    /// CoD2's Radiant keys, `radiant/keys.txt` as the load read it
+    /// (`fields::parse_radiant_keys`); `None` runs 1.1's compiled-in set.
+    pub radiant_keys: Option<std::collections::HashMap<String, fields::FieldType>>,
+    /// The game's own state beside the shared tables ([`HostExt`]), read
+    /// through [`GameHost::cod2`].
+    pub ext: HostExt,
     /// The mounted paks, once there are any. `register_item` reads a
     /// weapon's models out of its weapon file through this; `None` on a
     /// fresh host, so a unit test that mounts nothing registers the bit and
     /// precaches no weapon model.
     pub fs: Option<std::rc::Rc<vcod_common::pk3::Pk3Fs>>,
+    /// The level's asset source where it is not the paks: CoD4's zones
+    /// over its iwds (`game::cod4`). `None` on CoD1 and CoD2, which read
+    /// [`Self::fs`].
+    pub assets: Option<std::rc::Rc<dyn vcod_common::asset_source::AssetSource>>,
     /// Each turret's live record, by entity, built at spawn from its weapon
     /// file and its own arc/damage keys (`crate::game::turret`). `wire.rs`
     /// reads `angles2` and the view-lock/firing bits off it; mount, aim,
@@ -615,7 +766,7 @@ pub struct GameHost {
     /// `missiles` is: retail's own state lives on the `gentity_t`, ours in a
     /// table the object model does not have to carry.
     pub triggers: crate::game::trigger::Triggers,
-    /// Per lump-27 model, its clip bounds (`bsp::Model::clip_bounds`), for
+    /// Per lump-27 model, its clip bounds (`mapworld::Model::clip_bounds`), for
     /// the brush entities that read one. Filled at map load from the BSP;
     /// empty in a test that mounts no map.
     pub model_bounds: Vec<([f32; 3], [f32; 3])>,
@@ -667,7 +818,7 @@ pub struct GameHost {
     /// Each xmodel's collision triangles in its own frame, by `.model` name,
     /// loaded through `fs` the first time a trace meets an entity carrying
     /// it; `None` for a name that did not load or has no collision.
-    pub xmodel_collision: HashMap<String, Option<Rc<[ModelTri]>>>,
+    pub xmodel_collision: HashMap<String, Option<std::sync::Arc<[ModelTri]>>>,
     /// Each xmodel's descriptor bounds by `.model` name, for the box a
     /// `script_model` is filed in the area tree under; `None` for a name
     /// that did not load.
@@ -693,6 +844,17 @@ pub struct GameHost {
 
 /// A `mins`, `maxs` pair.
 pub type Bounds = ([f32; 3], [f32; 3]);
+
+/// [`GameHost`]'s xmodel caches, which [`crate::game::script::Carry`]
+/// hands a restart: `xmodel_collision`, `xmodel_bounds` and the vehicles'
+/// rigs. Loaded again after a `bas` restart they held the bot pass's first
+/// model gather 20 to 27 ms (map-cycle doc 4.9).
+#[derive(Clone, Default)]
+pub struct ModelCaches {
+    pub collision: HashMap<String, Option<std::sync::Arc<[ModelTri]>>>,
+    pub bounds: HashMap<String, Option<Bounds>>,
+    pub rigs: HashMap<String, Option<Rc<crate::game::vehicle::seat::Rig>>>,
+}
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
 /// state is the one xorshift degenerates on.
@@ -899,6 +1061,12 @@ impl GameHost {
         if angles != raw {
             let atom = cx.intern_folded("angles");
             let _ = self.write_field(cx, id, atom, Value::Vector(angles));
+            if pose.is_none()
+                && self.profile.unsnapped_apos
+                && let Some(e) = self.ents.get_mut(id)
+            {
+                e.apos_base = Some(raw);
+            }
         }
         let Some(shape) = shape else {
             self.area.unlink(id.0);
@@ -991,8 +1159,7 @@ impl GameHost {
             return *b;
         }
         let b = self.fs.as_ref().and_then(|fs| {
-            let bytes = fs.read(&format!("xmodel/{}", name.strip_prefix("xmodel/")?))?;
-            let (lo, hi) = vcod_common::xmodel::descriptor_bounds(&bytes)?;
+            let (lo, hi) = vcod_common::model::bounds(&**fs, name.strip_prefix("xmodel/")?)?;
             Some((lo.to_array(), hi.to_array()))
         });
         self.xmodel_bounds.insert(name.to_string(), b);
@@ -1171,7 +1338,7 @@ impl GameHost {
             return vec![("damage", hit.uo_args(cx, damage, attacker))];
         }
         let mut out = self.damage_entity(cx, id, damage, attacker);
-        if self.defs.proto.version == vcod_common::net::protocol::PROTOCOL_V22.version {
+        if self.defs.proto.is_uo() {
             out[0].1 = hit.uo_args(cx, damage.max(1), attacker);
         }
         // A `trigger_damage`'s `pain` or `die` (combat doc 14.8).
@@ -1320,12 +1487,12 @@ impl GameHost {
 
     /// `xmodel_collision`'s entry for `name` (the `.model` value, `xmodel/`
     /// prefix and all), loading it on first use.
-    pub fn xmodel_tris(&mut self, name: &str) -> Option<Rc<[ModelTri]>> {
+    pub fn xmodel_tris(&mut self, name: &str) -> Option<std::sync::Arc<[ModelTri]>> {
         if let Some(t) = self.xmodel_collision.get(name) {
             return t.clone();
         }
         let tris = self.fs.as_ref().and_then(|fs| {
-            let model = vcod_common::xmodel::load(fs, name.strip_prefix("xmodel/")?).ok()?;
+            let model = vcod_common::model::load(&**fs, name.strip_prefix("xmodel/")?).ok()?;
             let at_rest = vcod_common::props::Placement {
                 model: String::new(),
                 origin: glam::Vec3::ZERO,
@@ -1335,7 +1502,7 @@ impl GameHost {
             };
             let mut out = Vec::new();
             vcod_common::props::placed_collision_tris(&at_rest, &model, &mut out);
-            (!out.is_empty()).then(|| Rc::from(out))
+            (!out.is_empty()).then(|| std::sync::Arc::from(out))
         });
         self.xmodel_collision.insert(name.to_string(), tris.clone());
         tris
@@ -1399,7 +1566,10 @@ impl GameHost {
     /// the world and the bodies: every script model, then on United
     /// Offensive every vehicle's hull (combat doc, 2.7).
     pub fn shot_models(&mut self, cx: &mut Cx) -> Vec<crate::game::combat::PlacedModel> {
+        let p = crate::tick_profile::phase("models/script");
         let mut out = self.placed_script_models(cx);
+        drop(p);
+        let _p = crate::tick_profile::phase("models/vehicles");
         out.extend(crate::game::vehicle::placed_models(self, cx));
         out
     }
@@ -1440,21 +1610,32 @@ impl GameHost {
         crate::game::builtins::cvar::atof(self.cvars.get("g_gravity")) as i32
     }
 
-    /// The server speaks 1.1's protocol 1.
+    /// The server runs 1.1's rules (`HostProfile::speaks_1_1`).
     pub fn speaks_1_1(&self) -> bool {
-        self.defs.proto.version == vcod_common::net::protocol::PROTOCOL_V1.version
+        self.profile.speaks_1_1
     }
 
     /// The server speaks United Offensive's protocol 22.
     pub fn is_uo(&self) -> bool {
-        self.defs.proto.version == vcod_common::net::protocol::PROTOCOL_V22.version
+        self.defs.proto.is_uo()
+    }
+
+    /// The name `G_ShaderIndex` indexes: CoD2's lowercases it first
+    /// (cod2_lnxded 0x811d44a, `I_strlwr`; cod2-protocol.md 15.3), 1.1's
+    /// keeps the script's spelling.
+    pub fn shader_name(&self, name: &str) -> String {
+        if self.profile.lowercase_shaders {
+            name.to_ascii_lowercase()
+        } else {
+            name.to_string()
+        }
     }
 
     /// Whether the players' bodies stop a blast's `CanDamage` traces: 1.1's
     /// mask 0x2802091 holds `CONTENTS_BODY`, United Offensive's 0x802091
     /// (game.mp.uo `CanDamage` 0x503f8) does not.
     pub fn bodies_shield_blasts(&self) -> bool {
-        self.defs.proto.version != vcod_common::net::protocol::PROTOCOL_V22.version
+        !self.defs.proto.is_uo()
     }
 
     /// Queues `op` for the client's sim and applies it to the host's mirror
@@ -1467,14 +1648,113 @@ impl GameHost {
         self.client_weapon_ops.push((slot, op));
     }
 
-    pub fn new(configstrings: Vec<String>) -> GameHost {
+    /// The builtins this level's game version answers.
+    pub fn builtins(&self) -> &'static BuiltinSet {
+        (self.profile.builtins)()
+    }
+
+    /// Runs `profile`'s rules and tables from here on: a test's switch of
+    /// version on a host built for another.
+    pub fn set_profile(&mut self, profile: &'static crate::game::profile::HostProfile) {
+        if profile.game != self.profile.game {
+            self.ext = HostExt::of(profile);
+        }
+        self.profile = profile;
+        self.defs = profile.defs;
+    }
+
+    /// CoD2's state; panics on a CoD1 host.
+    pub fn cod2(&self) -> &Cod2HostState {
+        match &self.ext {
+            HostExt::Cod2(c) => c,
+            _ => panic!("CoD2 host state on a non-CoD2 host"),
+        }
+    }
+
+    /// [`Self::cod2`], mutable.
+    pub fn cod2_mut(&mut self) -> &mut Cod2HostState {
+        match &mut self.ext {
+            HostExt::Cod2(c) => c,
+            _ => panic!("CoD2 host state on a non-CoD2 host"),
+        }
+    }
+
+    /// CoD4's state; panics on another game's host.
+    pub fn cod4(&self) -> &crate::game::cod4::Cod4HostState {
+        match &self.ext {
+            HostExt::Cod4(c) => c,
+            _ => panic!("CoD4 host state on a non-CoD4 host"),
+        }
+    }
+
+    /// [`Self::cod4`], mutable.
+    pub fn cod4_mut(&mut self) -> &mut crate::game::cod4::Cod4HostState {
+        match &mut self.ext {
+            HostExt::Cod4(c) => c,
+            _ => panic!("CoD4 host state on a non-CoD4 host"),
+        }
+    }
+
+    /// The `script_struct` blocks the spawn pass keeps
+    /// (`HostProfile::script_structs`), on the game that keeps them.
+    pub fn script_structs_mut(&mut self) -> &mut Vec<Vec<(String, String)>> {
+        match &mut self.ext {
+            HostExt::Cod2(c) => &mut c.script_structs,
+            HostExt::Cod4(c) => &mut c.script_structs,
+            HostExt::Cod1 => panic!("script_struct blocks on a CoD1 host"),
+        }
+    }
+
+    /// An engine callback's arguments as the game passes them, `name` the
+    /// `_callbacksetup` function. CoD2's damage callback takes a tenth,
+    /// `timeOffset`, and the killed callback two more, `timeOffset` and
+    /// `deathAnimDuration` (cod2_lnxded `Scr_PlayerDamage` 0x81183b8,
+    /// `Scr_PlayerKilled` 0x8118492; cod2-gsc-diff.md 4.1), off
+    /// [`Cod2HostState::callback`].
+    pub fn callback_args(&self, name: &str, mut args: Vec<Value>) -> Vec<Value> {
+        if self.profile.callback_extra_args {
+            let c = match &self.ext {
+                HostExt::Cod4(c) => c.callback,
+                _ => self.cod2().callback,
+            };
+            match name {
+                "CodeCallback_PlayerDamage" => args.push(Value::Int(c.time_offset)),
+                "CodeCallback_PlayerKilled" => {
+                    args.push(Value::Int(c.time_offset));
+                    args.push(Value::Int(c.death_anim_duration));
+                }
+                _ => {}
+            }
+        }
+        args
+    }
+
+    /// The Radiant key `G_ParseField` stores on the script struct: CoD2's
+    /// parsed `radiant/keys.txt`, else 1.1's compiled-in list.
+    pub fn radiant_key(&self, folded: &str) -> Option<fields::FieldType> {
+        match &self.radiant_keys {
+            Some(keys) => keys.get(folded).copied(),
+            None => fields::radiant_key(folded),
+        }
+    }
+
+    pub fn new(
+        profile: &'static crate::game::profile::HostProfile,
+        configstrings: Vec<String>,
+    ) -> GameHost {
         let allocators =
             Allocators::seeded(&configstrings, &vcod_common::net::protocol::PROTOCOL_V1.cs);
+        let mut ents = ObjectTable::new();
+        // CoD2's `G_Spawn` keeps a freed slot 500 ms, so the map's freed
+        // blocks still take numbers (cod2-protocol.md 15.1).
+        if let Some(ms) = profile.ent_reuse_after_ms {
+            ents.set_reuse_after(ms);
+        }
         GameHost {
             configstrings: crate::configstrings::ConfigStrings::new(configstrings),
-            ents: ObjectTable::new(),
+            ents,
             client_events: Vec::new(),
-            client_commands: Vec::new(),
+            client_commands: Default::default(),
             client_spawns: Vec::new(),
             test_clients: TestClients::default(),
             client_weapons: vec![crate::weapons::PlayerWeapons::default(); MAX_CLIENTS],
@@ -1525,6 +1805,7 @@ impl GameHost {
             rng: RNG_SEED,
             spawn_pins: None,
             script_log: Vec::new(),
+            game_log: Vec::new(),
             level_time_ms: 0,
             initializing: true,
             dobj_time_ms: 0,
@@ -1533,9 +1814,13 @@ impl GameHost {
             pers_carry: Vec::new(),
             console: Vec::new(),
             items: crate::items::Items::default(),
-            defs: &crate::defs::V1,
+            defs: profile.defs,
+            profile,
+            radiant_keys: None,
+            ext: HostExt::of(profile),
             client_name_mode: builtins::cvar::ClientNameMode::default(),
             fs: None,
+            assets: None,
             turrets: std::collections::HashMap::new(),
             misc_spawners: std::collections::HashSet::new(),
             vehicles: crate::game::vehicle::Vehicles::default(),
@@ -1635,7 +1920,31 @@ impl GameHost {
     ///
     /// A new item past `level.initializing` is a script error
     /// (`Scr_Error` at 0x4e577; UO and 1.5b the same).
+    /// A weapon's 1-based wire index: [`crate::defs::Defs::weapon_index`]'s
+    /// fixed list on CoD1; on CoD2 `G_GetWeaponIndexForName`, which loads
+    /// and appends a weapon not yet named (`builtins::cod2::register_weapon`).
+    pub fn weapon_index(&mut self, name: &str) -> Option<usize> {
+        match self.profile.weapons {
+            WeaponNumbering::Registered => builtins::cod2::register_weapon(self, name),
+            WeaponNumbering::Fixed => self.defs.weapon_index(name),
+        }
+    }
+
+    /// The weapon at a 1-based wire index, as [`GameHost::weapon_index`]
+    /// numbers them.
+    pub fn weapon_name(&self, index: usize) -> Option<String> {
+        match self.profile.weapons {
+            WeaponNumbering::Registered => self.cod2().weapons.get(index.checked_sub(1)?).cloned(),
+            WeaponNumbering::Fixed => self.defs.weapon_name(index).map(str::to_string),
+        }
+    }
+
     pub fn register_item(&mut self, name: &str) -> Result<(), ErrorKind> {
+        // CoD2's `RegisterItem` of a weapon is `G_GetWeaponIndexForName`.
+        if self.profile.weapons == WeaponNumbering::Registered {
+            builtins::cod2::register_weapon(self, name);
+            return Ok(());
+        }
         let registered = self
             .items
             .register(name, &self.weapons, self.initializing)
@@ -1663,6 +1972,14 @@ impl GameHost {
             self.register_item(name).unwrap();
         }
         self.initializing = was;
+    }
+
+    /// CoD2's `G_crandom` (Mac 0x2cf1a): `2 * rand() / 2^31 - 1` off the
+    /// game's `rand()`, on the stack; a drop pin, when one waits, stands
+    /// in for the value.
+    pub fn cod2_crandom(&mut self) -> f64 {
+        let drawn = 2.0 * self.cod2().rand.g_random() - 1.0;
+        self.cod2_mut().drop_pins.pop_front().unwrap_or(drawn)
     }
 
     /// A uniform draw in `[0, 1)` off the host's own state.
@@ -1929,27 +2246,42 @@ impl GameHost {
         field: Atom,
         value: Value,
     ) -> Option<Result<(), ErrorKind>> {
+        // CoD4's `glowcolor` and `glowalpha` pack a word of their own as
+        // `color` and `alpha` do (cod4_lnxded's rows share offset 0x84).
+        let cod4 = self.profile.game == vcod_common::game::Game::Cod4;
+        let byte = if cod4 {
+            fields::hud_color_byte_cod4
+        } else {
+            fields::hud_color_byte
+        };
         let lane = |v: Value| match v {
-            Value::Int(i) => Some(fields::hud_color_byte(i as f32)),
-            Value::Float(f) => Some(fields::hud_color_byte(f)),
+            Value::Int(i) => Some(byte(i as f32)),
+            Value::Float(f) => Some(byte(f)),
             _ => None,
         };
+        let packed = match cx.resolve_folded(field) {
+            "glowcolor" | "glowalpha" if cod4 => "glowcolor",
+            _ => "color",
+        };
+        let route = self.packed_hud_route();
+        let old_word = |host: &Self| {
+            host.ents
+                .get(ent)
+                .map_or(0, |e| hud_color_word(e, route(packed)))
+        };
         let word = match cx.resolve_folded(field) {
-            "color" => {
+            n @ ("color" | "glowcolor") if n == "color" || cod4 => {
                 let Value::Vector(v) = value else {
                     return Some(Err(ErrorKind::BadType("color takes a vector")));
                 };
-                let old = self.ents.get(ent).map_or(0, hud_color_word);
-                (old & 0xff00_0000)
-                    | fields::hud_color_byte(v[0])
-                    | (fields::hud_color_byte(v[1]) << 8)
-                    | (fields::hud_color_byte(v[2]) << 16)
+                let old = old_word(self);
+                (old & 0xff00_0000) | byte(v[0]) | (byte(v[1]) << 8) | (byte(v[2]) << 16)
             }
-            "alpha" => {
+            n @ ("alpha" | "glowalpha") if n == "alpha" || cod4 => {
                 let Some(a) = lane(value) else {
                     return Some(Err(ErrorKind::BadType("alpha takes a number")));
                 };
-                let old = self.ents.get(ent).map_or(0, hud_color_word);
+                let old = old_word(self);
                 (old & 0x00ff_ffff) | (a << 24)
             }
             "label" => {
@@ -1969,13 +2301,13 @@ impl GameHost {
             }
             _ => return None,
         };
-        Some(self.store_hud_slot(ent, "color", Value::Int(word as i32)))
+        Some(self.store_hud_slot(ent, packed, Value::Int(word as i32)))
     }
 
     /// One HUD engine slot by name, for the setters that compute their own
     /// stored value.
     fn store_hud_slot(&mut self, ent: EntId, name: &str, v: Value) -> Result<(), ErrorKind> {
-        let Route::Engine { slot, .. } = fields::route_hud(name) else {
+        let Route::Engine { slot, .. } = (self.packed_hud_route())(name) else {
             return Err(ErrorKind::BadType("no such HUD field"));
         };
         let Some(e) = self.ents.get_mut(ent) else {
@@ -1986,10 +2318,36 @@ impl GameHost {
     }
 }
 
-/// The packed RGBA word behind `color` and `alpha`, both of which share one
-/// engine slot because they share `hudelem_t+0x1c`.
-fn hud_color_word(e: &crate::game::entity::GEntity) -> u32 {
-    match fields::route_hud("color") {
+impl GameHost {
+    /// `G_LogPrintf`: `text` queued with `level.time` for `games_mp.log`
+    /// (`engine::gamelog`).
+    pub fn log_printf(&mut self, text: String) {
+        self.game_log.push((self.level_time_ms, text));
+    }
+
+    /// Whether the log lines take 1.1's forms (`say: %s: %s`, `Weapon: %i
+    /// %s`) rather than 1.5's, UO's and CoD2's `;` records: CoD1 at
+    /// protocol 1 (cod11-map-cycle.md 9).
+    pub fn logs_1_1(&self) -> bool {
+        self.profile.game == vcod_common::game::Game::Cod1 && !self.patch_1_5
+    }
+
+    /// The route the packed HUD setters store through: CoD4's own table,
+    /// CoD1's slots for the others (CoD2's `color` and `label` share them).
+    fn packed_hud_route(&self) -> fn(&str) -> Route {
+        if self.profile.game == vcod_common::game::Game::Cod4 {
+            self.profile.route_hud
+        } else {
+            fields::route_hud
+        }
+    }
+}
+
+/// The packed RGBA word behind `color` and `alpha` (CoD4's `glowcolor` and
+/// `glowalpha` too), both of which share one engine slot because they share
+/// `hudelem_t+0x1c`; `route` is the word's field's route.
+fn hud_color_word(e: &crate::game::entity::GEntity, route: Route) -> u32 {
+    match route {
         Route::Engine { slot, .. } => match e.engine[slot] {
             Value::Int(i) => i as u32,
             _ => 0,
@@ -2033,79 +2391,9 @@ impl Host for GameHost {
     ) -> Result<Value, ErrorKind> {
         // `resolve_folded`, not `resolve`: the atom carries the spelling the
         // script used (`setCullFog`), and dispatch matches the folded form.
-        // Owned rather than borrowed: the entity family needs `cx` mutably,
-        // which a borrow still held from `resolve_folded` would block.
-        let folded = cx.resolve_folded(name).to_string();
-        if let Some(f) = builtins::entity::lookup(&folded) {
-            return f(self, cx, recv, args);
-        }
-        if let Some(f) = builtins::math::lookup(&folded) {
-            return f(self, cx, recv, args);
-        }
-        if let Some(f) = builtins::fx::lookup(&folded) {
-            return f(self, cx, recv, args);
-        }
-        if let Some(f) = builtins::hud::lookup(&folded) {
-            return f(self, cx, recv, args);
-        }
-        if let Some(f) = builtins::sound::lookup(&folded) {
-            return f(self, cx, recv, args);
-        }
-        if let Some(f) = builtins::attach::lookup(&folded) {
-            return f(self, cx, recv, args);
-        }
-        if let Some(f) = builtins::client::lookup(&folded) {
-            return f(self, cx, recv, args);
-        }
-        if let Some(f) = builtins::combat::lookup(&folded) {
-            return f(self, cx, recv, args);
-        }
-        if let Some(f) = builtins::mover::lookup(&folded) {
-            return f(self, cx, recv, args);
-        }
-        if let Some(f) = builtins::cvar::lookup(&folded) {
-            return f(self, cx, recv, args);
-        }
-        if let Some(f) = builtins::precache::lookup(&folded) {
-            return f(self, cx, recv, args);
-        }
-        if let Some(f) = builtins::score::lookup(&folded) {
-            return f(self, cx, recv, args);
-        }
-        if let Some(f) = builtins::objective::lookup(&folded) {
-            return f(self, cx, recv, args);
-        }
-        if let Some(f) = builtins::uo::lookup(&folded) {
-            return f(self, cx, recv, args);
-        }
-        if let Some(f) = builtins::vehicle::lookup(&folded) {
-            return f(self, cx, recv, args);
-        }
-        match folded.as_str() {
-            "setcullfog" => {
-                let slot = self.allocators.layout().fog;
-                builtins::env::set_cull_fog(&mut self.configstrings, slot, cx, args)
-            }
-            "setexpfog" => {
-                let slot = self.allocators.layout().fog;
-                builtins::env::set_exp_fog(&mut self.configstrings, slot, cx, args)
-            }
-            "ambientplay" => {
-                builtins::env::ambient_play(&mut self.configstrings, self.level_time_ms, cx, args)
-            }
-            "iprintln" => builtins::io::iprint_line(self, cx, recv, args),
-            "println" | "logprint" => builtins::io::print_line(self, cx, args),
-            "announcement" => builtins::io::announcement(self, cx, None, args),
-            "clientannouncement" => {
-                let (who, rest) = args.split_first().ok_or(ErrorKind::BadType(
-                    "clientAnnouncement needs a player and a message",
-                ))?;
-                let Value::Entity(id) = *who else {
-                    return Err(ErrorKind::BadType("not an entity"));
-                };
-                builtins::io::announcement(self, cx, Some(Target::Entity(id)), rest)
-            }
-            _ => Err(ErrorKind::MissingBuiltin(name)),
+        match self.builtins().get(cx.resolve_folded(name)) {
+            Some(f) => f(self, cx, recv, args),
+            None => Err(ErrorKind::MissingBuiltin(name)),
         }
     }
 
@@ -2175,28 +2463,51 @@ impl Host for GameHost {
                 _ => {}
             }
         }
+        // A CoD2 corpse's `origin` is its `r.currentOrigin`, which
+        // `cloneplayer` set to the player's (`G_SetOrigin`, Mac 0x1c3574)
+        // and its fall moves; the engine slot is never written for one
+        // (cod2-hud.md 19.1, the death icons).
+        if cx.resolve_folded(field) == "origin"
+            && let Some(o) = self.bodies.cod2_origin(ent.0)
+        {
+            return Value::Vector(o.to_array());
+        }
+        // A CoD4 corpse's `origin` is where `clonePlayer` stood it; the
+        // engine slot is never written for one either (the death icons,
+        // cod4-hud.md 16.4).
+        if self.profile.game == vcod_common::game::Game::Cod4
+            && cx.resolve_folded(field) == "origin"
+            && let Some(o) = self
+                .bodies
+                .tr_base(ent.0, &crate::game::cod4::COD4_HOST_PROTO)
+        {
+            return Value::Vector(o.to_array());
+        }
         if ent.0 >= FIRST_HUD_ELEM {
             // The two lanes of the packed colour word, each its own getter
             // in retail (0x4c1ac, 0x4c27c).
+            let cod4 = self.profile.game == vcod_common::game::Game::Cod4;
+            let word = |name| hud_color_word(e, (self.packed_hud_route())(name));
             match cx.resolve_folded(field) {
-                "color" => {
-                    let w = hud_color_word(e);
+                n @ ("color" | "glowcolor") if n == "color" || cod4 => {
+                    let w = word(n);
                     return Value::Vector([
                         fields::hud_color_float(w & 0xff),
                         fields::hud_color_float((w >> 8) & 0xff),
                         fields::hud_color_float((w >> 16) & 0xff),
                     ]);
                 }
-                "alpha" => {
-                    return Value::Float(fields::hud_color_float(hud_color_word(e) >> 24));
+                n @ ("alpha" | "glowalpha") if n == "alpha" || cod4 => {
+                    let packed = if n == "alpha" { "color" } else { "glowcolor" };
+                    return Value::Float(fields::hud_color_float(word(packed) >> 24));
                 }
                 _ => {}
             }
         }
         let route = if ent.0 >= FIRST_HUD_ELEM {
-            fields::route_hud(cx.resolve_folded(field))
+            (self.profile.route_hud)(cx.resolve_folded(field))
         } else {
-            fields::route_entity(cx.resolve_folded(field))
+            (self.profile.route_entity)(cx.resolve_folded(field))
         };
         match route {
             Route::Engine {
@@ -2239,6 +2550,10 @@ impl Host for GameHost {
                     Value::Float(archive_time_seconds(archive_time_ms(c[i])))
                 }
                 Some(c) => c[i],
+                // CoD4 reaches the client fields only for a client: on any
+                // other entity `pers` and `maxhealth` are its own (the
+                // helicopter's, cod4-gsc.md 3.2).
+                None if matches!(self.ext, HostExt::Cod4(_)) => cx.get_field(e.script, field),
                 None => Value::Undefined,
             },
             Route::Script => cx.get_field(e.script, field),
@@ -2258,6 +2573,12 @@ impl Host for GameHost {
         value: Value,
     ) -> Result<(), ErrorKind> {
         self.write_field(cx, ent, field, value)?;
+        if ent.0 < FIRST_HUD_ELEM
+            && cx.resolve_folded(field) == "angles"
+            && let Some(e) = self.ents.get_mut(ent)
+        {
+            e.apos_base = None;
+        }
         if ent.0 < FIRST_HUD_ELEM && cx.resolve_folded(field) == "origin" {
             if let Value::Vector(v) = value {
                 self.missiles.set_origin(ent, glam::Vec3::from_array(v));
@@ -2308,10 +2629,27 @@ impl GameHost {
             return r;
         }
         let route = if ent.0 >= FIRST_HUD_ELEM {
-            fields::route_hud(cx.resolve_folded(field))
+            (self.profile.route_hud)(cx.resolve_folded(field))
         } else {
-            fields::route_entity(cx.resolve_folded(field))
+            (self.profile.route_entity)(cx.resolve_folded(field))
         };
+        // CoD4's `killcamentity` setter (cod4_lnxded 0x808b288): -1 or an
+        // entity number, else a script error (cod4-combat.md 7).
+        if matches!(self.ext, HostExt::Cod4(_))
+            && ent.0 < FIRST_HUD_ELEM
+            && cx.resolve_folded(field) == "killcamentity"
+        {
+            let n = match value {
+                Value::Int(n) => n,
+                Value::Float(f) => f as i32,
+                _ => return Err(ErrorKind::BadType("killcamentity takes a number")),
+            };
+            if !(-1..1024).contains(&n) {
+                return Err(ErrorKind::Custom(
+                    "killcamentity can only be set to -1, or a valid entity number".into(),
+                ));
+            }
+        }
         let max_speed = !self.speaks_1_1() && cx.resolve_folded(field) == "maxspeed";
         if !self.speaks_1_1()
             && cx.resolve_folded(field) == "sessionsquad"
@@ -2385,6 +2723,11 @@ impl GameHost {
             }
             // Retail's null `ent->client` check: an entity `spawn_client`
             // never touched has no `client` store to write into.
+            Route::Client(_) if e.client.is_none() && matches!(self.ext, HostExt::Cod4(_)) => {
+                let s = e.script;
+                cx.set_field(s, field, value);
+                Ok(())
+            }
             Route::Client(i) => {
                 let Some(c) = e.client.as_mut() else {
                     return Err(ErrorKind::BadType("that entity has no client"));
@@ -2664,7 +3007,7 @@ mod tests {
     #[test]
     fn setcullfog_and_ambientplay_write_their_configstring_slots() {
         let mut vm = vcod_gsc::Vm::new();
-        let mut host = GameHost::new(vec![String::new(); 2048]);
+        let mut host = GameHost::new(&crate::game::profile::COD1_11, vec![String::new(); 2048]);
         let src = r#"main() {
             setCullFog(0, 6000, 0.8, 0.8, 0.8, 0);
             ambientPlay("ambient_mp_pavlov");
@@ -2685,7 +3028,7 @@ mod tests {
     #[test]
     fn ambientplay_stamps_the_level_time_and_writes_keep_call_order() {
         let mut vm = vcod_gsc::Vm::new();
-        let mut host = GameHost::new(vec![String::new(); 2048]);
+        let mut host = GameHost::new(&crate::game::profile::COD1_11, vec![String::new(); 2048]);
         host.level_time_ms = 70050;
         host.initializing = true;
         let src = r#"main() {
@@ -2728,7 +3071,7 @@ mod tests {
     /// error kind the call died on.
     fn run_main(src: &str) -> Result<GameHost, vcod_gsc::ErrorKind> {
         let mut vm = vcod_gsc::Vm::new();
-        let mut host = GameHost::new(vec![String::new(); 2048]);
+        let mut host = GameHost::new(&crate::game::profile::COD1_11, vec![String::new(); 2048]);
         let ast = vcod_gsc::parse::parse_file(src).unwrap();
         let fns = vcod_gsc::compile::compile_file(&ast, "test", vm.interner_mut()).unwrap();
         vm.install(fns).unwrap();
@@ -2758,30 +3101,14 @@ mod tests {
         }
     }
 
-    /// `BUILTINS` plus every family's `NAMES` drives the load-time pre-scan
-    /// (`is_builtin`) while `builtin`'s dispatch chain answers the same
-    /// names; a name dropped from one and not the other would make the
-    /// pre-scan lie. Argument errors are fine here, `MissingBuiltin` is not.
+    /// Every handler dispatches under the version that lists it (UO lists
+    /// them all). Argument errors are fine here, `MissingBuiltin` is not.
     #[test]
     fn every_listed_builtin_dispatches() {
-        let names: Vec<&str> = BUILTINS
-            .iter()
-            .copied()
-            .chain(builtins::entity::NAMES.iter().map(|(n, _)| *n))
-            .chain(builtins::math::NAMES.iter().map(|(n, _)| *n))
-            .chain(builtins::fx::NAMES.iter().map(|(n, _)| *n))
-            .chain(builtins::hud::NAMES.iter().map(|(n, _)| *n))
-            .chain(builtins::sound::NAMES.iter().map(|(n, _)| *n))
-            .chain(builtins::attach::NAMES.iter().map(|(n, _)| *n))
-            .chain(builtins::client::NAMES.iter().map(|(n, _)| *n))
-            .chain(builtins::combat::NAMES.iter().map(|(n, _)| *n))
-            .chain(builtins::mover::NAMES.iter().map(|(n, _)| *n))
-            .chain(builtins::cvar::NAMES.iter().map(|(n, _)| *n))
-            .chain(builtins::precache::NAMES.iter().map(|(n, _)| *n))
-            .collect();
-        for name in names {
+        for (name, _) in builtins::set::implementations() {
             let mut vm = vcod_gsc::Vm::new();
-            let mut host = GameHost::new(vec![String::new(); 2048]);
+            let mut host = GameHost::new(&crate::game::profile::COD1_11, vec![String::new(); 2048]);
+            host.set_profile(&crate::game::profile::COD1_UO);
             let src = format!("main() {{ {name}(); }}");
             let ast = vcod_gsc::parse::parse_file(&src).unwrap();
             let fns = vcod_gsc::compile::compile_file(&ast, "test", vm.interner_mut()).unwrap();
@@ -2844,7 +3171,8 @@ mod tests {
             "vectortoangles",
         ];
         assert_eq!(CENSUS.len(), 37);
-        let missing: Vec<_> = CENSUS.iter().filter(|n| !is_builtin(n)).collect();
+        let set = BuiltinSet::of(&vcod_common::net::protocol::PROTOCOL_V1);
+        let missing: Vec<_> = CENSUS.iter().filter(|n| set.get(n).is_none()).collect();
         assert!(missing.is_empty(), "not answered: {missing:?}");
     }
 

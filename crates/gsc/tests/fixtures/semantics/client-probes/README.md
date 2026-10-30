@@ -1366,7 +1366,7 @@ A linked corpse (`pm_type` 7) on 1.1d, 1.5b and UO: the placed allied player is 
 to a `script_origin` inside the moves script's diagonal runs, killed half a
 second later, and stays a linked corpse to the end of the run.
 `docs/research/cod11-player-clip.md` 1.1. The link wait is timed against
-this machine's join; check the capture's velocity at the link and move
+the capture's join; check the capture's velocity at the link and move
 `probe_link_wait` if it reads 0. Two shells:
 
 ```

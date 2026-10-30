@@ -22,15 +22,20 @@ pub const ESCORTS: usize = 1;
 pub const ANSWERS: usize = 2;
 
 impl super::Bot {
-    /// The bot carries a retrieval objective: it keeps running for the
+    /// The bot carries a retrieval objective or CoD4's bomb: it keeps running for the
     /// goal, the keys on the path, and fights on the way (as a `bas` bot
     /// clearing a charge's blast does) rather than close on what it sees.
     pub(super) fn carrying(&self, view: &super::BotView) -> bool {
         self.team_play
-            && view
+            && (view
                 .re
                 .as_ref()
                 .is_some_and(|r| r.objectives.iter().any(|m| m.mine))
+                || view
+                    .sd
+                    .as_ref()
+                    .and_then(|sd| sd.key)
+                    .is_some_and(|k| k.mine))
     }
 }
 

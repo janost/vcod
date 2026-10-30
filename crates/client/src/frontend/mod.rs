@@ -13,10 +13,12 @@
 //! screens whose controls do nothing.
 
 pub mod browser;
+pub mod cod2;
 pub mod create;
 mod listbox;
 mod options;
 mod players;
+pub mod profiles;
 mod status;
 
 use std::cell::RefCell;
@@ -24,15 +26,16 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddrV4;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-
+use vcod_common::asset_source::{Asset, AssetSource};
 use vcod_common::localize::Localized;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::ui_menu::{
-    self, FEEDER_ALLMAPS, FEEDER_MODS, FEEDER_PLAYER_LIST, FEEDER_SERVERS, FEEDER_SERVERSTATUS,
-    ITEM_ALIGN_CENTER, ITEM_ALIGN_RIGHT, ITEM_TYPE_BIND, ITEM_TYPE_BUTTON, ITEM_TYPE_EDITFIELD,
-    ITEM_TYPE_LISTBOX, ITEM_TYPE_MULTI, ITEM_TYPE_NUMERICFIELD, ITEM_TYPE_OWNERDRAW,
-    ITEM_TYPE_SLIDER, ITEM_TYPE_TEXT, ITEM_TYPE_YESNO, UiItem, UiMenu, WINDOW_STYLE_CVAR_SHADER,
-    WINDOW_STYLE_FILLED, WINDOW_STYLE_SHADER,
+    self, FEEDER_ALLMAPS, FEEDER_MODS, FEEDER_PLAYER_LIST, FEEDER_PLAYER_PROFILES, FEEDER_SERVERS,
+    FEEDER_SERVERSTATUS, ITEM_ALIGN_CENTER, ITEM_ALIGN_RIGHT, ITEM_TYPE_BIND, ITEM_TYPE_BUTTON,
+    ITEM_TYPE_DECIMALFIELD, ITEM_TYPE_DVARENUM, ITEM_TYPE_EDITFIELD, ITEM_TYPE_LISTBOX,
+    ITEM_TYPE_MULTI, ITEM_TYPE_NUMERICFIELD, ITEM_TYPE_OWNERDRAW, ITEM_TYPE_SLIDER, ITEM_TYPE_TEXT,
+    ITEM_TYPE_YESNO, MenuFile, UiItem, UiMenu, WINDOW_STYLE_CVAR_SHADER, WINDOW_STYLE_FILLED,
+    WINDOW_STYLE_SHADER,
 };
 use winit::keyboard::KeyCode;
 
@@ -56,7 +59,7 @@ const INGAME_LIST: &str = "ui_mp/ingame.txt";
 /// with retail's warning. Each file is tried under `cl_language`'s
 /// directory first ([`ui_menu::localized_menu_path`]).
 /// Returns what the files' `assetGlobalDef`s set, the last one winning.
-fn load_menus(fs: &Pk3Fs, list: &str, language: &str, menus: &mut Vec<UiMenu>) -> Assets {
+fn load_menus(fs: &dyn AssetSource, list: &str, language: &str, menus: &mut Vec<UiMenu>) -> Assets {
     let read = |p: &str| fs.read(p).map(|b| String::from_utf8_lossy(&b).into_owned());
     let text = read(list).or_else(|| {
         crate::console::log::print(&format!("^3menu file not found: {list}, using default"));
@@ -68,18 +71,19 @@ fn load_menus(fs: &Pk3Fs, list: &str, language: &str, menus: &mut Vec<UiMenu>) -
     }
     let mut assets = Assets::default();
     for path in &files {
-        let text = ui_menu::localized_menu_path(path, language)
-            .and_then(|p| read(&p))
-            .or_else(|| read(path));
-        match text {
-            Some(text) => {
-                let file = ui_menu::parse_menu_file(&text, &read);
+        let file = ui_menu::localized_menu_path(path, language)
+            .and_then(|p| MenuFile::find(fs, &p).ok())
+            .or_else(|| MenuFile::find(fs, path).ok());
+        match file {
+            Some(file) => {
                 menus.extend(file.menus);
                 assets.item_focus_sound = file.item_focus_sound.or(assets.item_focus_sound);
                 assets.cursor = file.cursor.or(assets.cursor);
             }
-            // Stock `menus.txt` names three files no pak ships, `ingame.txt` six.
-            None => log::debug!("ui: menu file not found: {path}"),
+            // Stock lists name files no pak ships (CoD2's eleven,
+            // cod2-fonts-menus.md); `UI_ParseMenuInternal` (Mac 0x1acac4)
+            // skips one without a warning.
+            None => log::trace!("ui: no {path}, skipped"),
         }
     }
     assets
@@ -218,6 +222,9 @@ pub enum UiEffect {
     RunMod(Option<String>),
     /// `StartServer`: launch a server and join it.
     StartServer(create::StartServer),
+    /// CoD2's `loadPlayerProfile`: make this profile the active one
+    /// (`Com_ChangePlayerProfile`, Mac 0x111936).
+    LoadProfile(String),
     /// `execOnCvarIntValue` / `execOnCvarFloatValue`: run `command` when
     /// `cvar` holds `value` (compared as integers when `int`). Read when the
     /// effect runs, after the commands queued before it.
@@ -311,6 +318,10 @@ pub struct Ui {
     player_row: usize,
     player_top: usize,
     players_due: Option<Instant>,
+    /// CoD2's player profiles (`FEEDER_PLAYER_PROFILES`) and the last
+    /// click on their list.
+    profiles: profiles::Profiles,
+    last_profile_click: Option<Instant>,
     /// The `cvar` of the item whose script runs (`openForGameType` reads it).
     script_cvar: Option<String>,
     /// The list box whose scroll bar thumb the left button holds.
@@ -352,6 +363,9 @@ pub struct Ui {
     /// The client cvars the server set (`v`, and the 140/204 mirror),
     /// lower-case names; the script menus' cvar tests read them.
     server_cvars: HashMap<String, String>,
+    /// CoD2's menus' parsed rects, placed by their alignment for the
+    /// window ([`Self::set_screen`]); `None` for CoD1.
+    cod2: Option<cod2::Cod2Rects>,
 }
 
 /// The maps `levelshots/` holds an image for.
@@ -374,19 +388,44 @@ impl Ui {
     /// it (0x4000d324), so the UI always starts off [`MENU_LIST`], then
     /// adds [`INGAME_LIST`]'s. `language` is `cl_language`'s value.
     pub fn new(fs: &Pk3Fs, language: &str) -> Ui {
+        Self::open(fs, language, true)
+    }
+
+    /// A front end with no menus, fonts, arenas or game types read: a
+    /// CoD4 session draws its own (`play::cod4_menus`), and its search
+    /// path holds none of CoD1's or CoD2's.
+    pub fn without_menus(fs: &Pk3Fs) -> Ui {
+        Self::open(fs, "", false)
+    }
+
+    fn open(fs: &Pk3Fs, language: &str, load: bool) -> Ui {
         let mut menus = Vec::new();
-        let assets = load_menus(fs, MENU_LIST, language, &mut menus);
-        let assets = load_menus(fs, INGAME_LIST, language, &mut menus).or(assets);
+        let assets = if load {
+            let assets = load_menus(fs, MENU_LIST, language, &mut menus);
+            load_menus(fs, INGAME_LIST, language, &mut menus).or(assets)
+        } else {
+            Assets::default()
+        };
         let state = item_states(&menus);
-        let arenas = create::load_arenas(fs);
+        let arenas = if load {
+            create::load_arenas(fs)
+        } else {
+            Default::default()
+        };
         let mut browser = Browser::default();
         browser.columns = server_columns(&menus);
-        // The install's own protocol only: 1.1, 1.5 or UO 1.51.
-        browser.master_query =
-            browser::MasterQuery::of(vcod_common::net::protocol::install_protocol(fs));
-        let fonts = UiFonts::load(fs)
-            .map_err(|e| log::warn!("ui: {e}, drawing no text"))
-            .ok();
+        // The install's own protocol only: 1.1, 1.5, UO 1.51 or CoD2 1.3.
+        browser.master_query = Some(browser::MasterQuery::of(match fs.game() {
+            vcod_common::game::Game::Cod2 => &vcod_cod2::net::PROTOCOL_118.transport,
+            _ => &vcod_common::net::protocol::install_protocol(fs).transport,
+        }));
+        let fonts = load
+            .then(|| {
+                UiFonts::load(fs)
+                    .map_err(|e| log::warn!("ui: {e}, drawing no text"))
+                    .ok()
+            })
+            .flatten();
         Ui {
             menus,
             state,
@@ -420,26 +459,53 @@ impl Ui {
             player_row: 0,
             player_top: 0,
             players_due: None,
+            profiles: Default::default(),
+            last_profile_click: None,
             script_cvar: None,
             thumb_drag: None,
             arrow_hold: None,
             cursor_item: HashMap::new(),
             focus: HashMap::new(),
-            game_types: ui_menu::game_types(fs),
-            levelshots: levelshots(fs),
+            game_types: if load {
+                ui_menu::game_types(fs)
+            } else {
+                Vec::new()
+            },
+            levelshots: if load { levelshots(fs) } else { HashSet::new() },
             assets,
             closing: Vec::new(),
             text_rects: RefCell::default(),
             list_menus: 0,
             active_type: UIMENU_NONE,
             server_cvars: HashMap::new(),
+            cod2: (fs.game() == vcod_common::game::Game::Cod2).then(cod2::Cod2Rects::default),
         }
         .with_list_menus()
     }
 
     fn with_list_menus(mut self) -> Ui {
         self.list_menus = self.menus.len();
+        self.sync_cod2_rects(0);
         self
+    }
+
+    /// CoD2: takes the parsed rects of every menu past the first `keep`.
+    fn sync_cod2_rects(&mut self, keep: usize) {
+        if let Some(c) = &mut self.cod2 {
+            c.sync(&self.menus, keep);
+        }
+    }
+
+    /// The window is `w` x `h` px. CoD2 places its menus' rects for it
+    /// (`CalcScreenPlacement`, [`cod2`]); CoD1's sit on the grid as parsed.
+    /// Call before [`Self::build`] and the mouse.
+    pub fn set_screen(&mut self, w: f32, h: f32) {
+        if let Some(c) = &mut self.cod2
+            && c.place(&mut self.menus, w, h)
+        {
+            // The kept text rects were measured off the old rects.
+            self.text_rects.borrow_mut().clear();
+        }
     }
 
     /// The Mods menu lists the directories of `game_dir` beside `base`.
@@ -472,6 +538,21 @@ impl Ui {
     /// flagged visible and fullscreen, a UI taken down by a key included.
     pub fn fullscreen(&self) -> bool {
         self.open.iter().any(|&m| self.menus[m].fullscreen)
+    }
+
+    /// `CL_GetMenuBlurRadius` (CoD2 Mac 0x00172970): with the UI's key
+    /// catcher up, the painted menus' `blurWorld`s added in quadrature
+    /// (`Menu_Paint` 0x0017077c), 480-high virtual units; 0 otherwise.
+    /// The caller drops it on a demo (cod2-materials.md 9.12).
+    pub fn blur_world(&self) -> f32 {
+        if !self.active() {
+            return 0.0;
+        }
+        self.open
+            .iter()
+            .map(|&m| self.menus[m].blur_world.powi(2))
+            .sum::<f32>()
+            .sqrt()
     }
 
     /// `_UI_KeyEvent` (0x4000d6f0) for a key, a button or a release: with
@@ -524,6 +605,7 @@ impl Ui {
         self.assets = load_menus(fs, list, language, &mut self.menus);
         // The script menus go with the rest until the cgame loads them again.
         self.list_menus = self.menus.len();
+        self.sync_cod2_rects(0);
         // `UI_Load` reloads the game types too (0x4000871d).
         self.game_types = ui_menu::game_types(fs);
         self.state = item_states(&self.menus);
@@ -574,7 +656,7 @@ impl Ui {
     /// drops the game over one (`Could not load script menu file`).
     pub fn load_script_menus(
         &mut self,
-        fs: &Pk3Fs,
+        fs: &dyn AssetSource,
         names: &[String],
         language: &str,
     ) -> Vec<String> {
@@ -592,18 +674,16 @@ impl Ui {
         }
         self.menus.truncate(base);
         self.state.truncate(base);
-        let read = |p: &str| fs.read(p).map(|b| String::from_utf8_lossy(&b).into_owned());
         let mut missing = Vec::new();
         for name in names.iter().filter(|n| !n.is_empty()) {
             let path = format!("ui_mp/scriptmenus/{name}.menu");
-            let text = ui_menu::localized_menu_path(&path, language)
-                .and_then(|p| read(&p))
-                .or_else(|| read(&path));
-            match text {
-                Some(text) => {
-                    // `UI_ParseMenu` (0x40008240) runs `Asset_Parse` on a
-                    // script menu's `assetGlobalDef` as on a list menu's.
-                    let file = ui_menu::parse_menu_file(&text, &read);
+            let file = ui_menu::localized_menu_path(&path, language)
+                .and_then(|p| MenuFile::find(fs, &p).ok())
+                .or_else(|| MenuFile::find(fs, &path).ok());
+            match file {
+                // `UI_ParseMenu` (0x40008240) runs `Asset_Parse` on a
+                // script menu's `assetGlobalDef` as on a list menu's.
+                Some(file) => {
                     let assets = Assets {
                         item_focus_sound: file.item_focus_sound,
                         cursor: file.cursor,
@@ -615,6 +695,7 @@ impl Ui {
                 None => missing.push(name.clone()),
             }
         }
+        self.sync_cod2_rects(base);
         missing
     }
 
@@ -695,6 +776,21 @@ impl Ui {
             return Vec::new();
         }
         self.key(KeyCode::Escape, shell).1
+    }
+
+    /// CoD2's `K` (`closeInGameMenu`): `CL_CloseInGameMenu` (Mac
+    /// 0x17afbe) runs `UI_CloseFocusedMenu` (0x1518ae) when the menu Esc
+    /// opened is up, which closes every menu unless a fullscreen one is
+    /// shown. The stock gametypes send it ahead of the `t` that answers an
+    /// `ingame` button, which `UI_SetActiveMenu` would refuse while
+    /// `ingame` holds the focus.
+    pub fn close_in_game_menu(&mut self, shell: &Shell) -> Vec<UiEffect> {
+        let mut out = Vec::new();
+        if self.active_type == UIMENU_INGAME && self.focused_menu().is_some() && !self.fullscreen()
+        {
+            self.close_every_menu(shell, &mut out);
+        }
+        out
     }
 
     /// Whether a key press goes to the menus while `cl_bypassMouseInput`
@@ -932,6 +1028,12 @@ impl Ui {
                 }
                 "exec" => out.push(UiEffect::Command(arg(1).to_string())),
                 "setcvar" => self.set_cvar(arg(1), arg(2), out),
+                "uiscript" if profiles::is_profile_script(arg(1)) => {
+                    self.profile_script(arg(1), shell, out);
+                }
+                "uiscript" if menu_on_dvar(arg(1)).is_some() => {
+                    self.menu_on_dvar(&cmd[1..], shell, out);
+                }
                 "uiscript" => self.ui_script(&cmd[1..], out),
                 "scriptmenuresponse" => out.push(UiEffect::ScriptMenuResponse {
                     menu: self.menus[menu].name.clone(),
@@ -966,6 +1068,33 @@ impl Ui {
                 // `main`'s Esc and Back to Game; inert with no game up.
                 "ingameclose" if self.in_game => self.close_menu(arg(1), shell, out),
                 _ => {}
+            }
+        }
+    }
+
+    /// CoD2's `openMenuOnDvar`, `openMenuOnDvarNot`, `closeMenuOnDvar` and
+    /// `closeMenuOnDvarNot` `<dvar> <value> <menu>` (`UI_RunMenuScript`,
+    /// Mac 0x1548e8): the menu opens or closes when the dvar's value equals
+    /// `value` case folded, or for the `Not` pair when it does not. A dvar
+    /// that does not exist does nothing (`cannot find dvar`), as does a
+    /// missing argument.
+    fn menu_on_dvar(&mut self, args: &[String], shell: &Shell, out: &mut Vec<UiEffect>) {
+        let Some((open, equal)) = args.first().and_then(|a| menu_on_dvar(a)) else {
+            return;
+        };
+        let [_, dvar, value, menu, ..] = args else {
+            log::debug!("ui: {}: missing arguments", args[0]);
+            return;
+        };
+        let Some(current) = self.cvar(dvar, shell) else {
+            log::debug!("ui: {}: cannot find dvar {dvar}", args[0]);
+            return;
+        };
+        if current.eq_ignore_ascii_case(value) == equal {
+            if open {
+                self.open_menu(menu, shell, out);
+            } else {
+                self.close_menu(menu, shell, out);
             }
         }
     }
@@ -1123,6 +1252,7 @@ impl Ui {
     /// cannot capture the mouse: mapped through the menus' 4:3 box, clamped
     /// to its edges.
     pub fn mouse_move(&mut self, x: f32, y: f32, w: f32, h: f32, shell: &Shell) -> Vec<UiEffect> {
+        self.set_screen(w, h);
         self.cursor = Virtual::new((w, h)).grid_point(x, y);
         self.cursor_moved(shell)
     }
@@ -1436,7 +1566,7 @@ impl Ui {
         match kind {
             ITEM_TYPE_LISTBOX => matches!(key, K_MOUSE1 | K_MOUSE2),
             ITEM_TYPE_OWNERDRAW => matches!(key, K_MOUSE1 | K_MOUSE2 | K_ENTER | K_KP_ENTER),
-            ITEM_TYPE_SLIDER | ITEM_TYPE_YESNO | ITEM_TYPE_MULTI => {
+            ITEM_TYPE_SLIDER | ITEM_TYPE_YESNO | ITEM_TYPE_MULTI | ITEM_TYPE_DVARENUM => {
                 matches!(key, K_MOUSE1 | K_MOUSE2 | K_MOUSE3 | K_ENTER)
             }
             ITEM_TYPE_BIND => true,
@@ -1536,6 +1666,21 @@ impl Ui {
             self.player_click(&item);
             return;
         }
+        if item.kind == ITEM_TYPE_LISTBOX && item.feeder == Some(FEEDER_PLAYER_PROFILES) {
+            let double = self
+                .last_profile_click
+                .is_some_and(|t| now - t < DOUBLE_CLICK);
+            let again = self.profile_click(&item, double);
+            self.last_profile_click = Some(now);
+            if let Some(name) = self.profile_selected() {
+                self.set_cvar("ui_playerProfileSelected", &name, out);
+            }
+            if again {
+                self.last_profile_click = None;
+                self.run(top, &item.double_click, shell, out);
+            }
+            return;
+        }
         if item.kind == ITEM_TYPE_LISTBOX && item.feeder == Some(FEEDER_SERVERS) {
             let row = ((self.cursor[1] - item.rect[1] - 1.0) / item.element_height.max(1.0)).floor()
                 as usize
@@ -1584,7 +1729,10 @@ impl Ui {
         }
         // The option handlers test the cursor; Enter off a yes/no, multi,
         // slider or bind item changes nothing but still runs the action.
-        let ran = if inside {
+        let ran = if inside && item.kind == ITEM_TYPE_DVARENUM {
+            self.enum_step(&item, back, shell, out);
+            true
+        } else if inside {
             self.option_click(top, i, shell, out)
         } else {
             true
@@ -1757,6 +1905,7 @@ impl Ui {
             Some(FEEDER_SERVERS) => Some((self.browser.rows().len(), self.list_top)),
             Some(FEEDER_MODS) => Some((self.mods.len(), self.mod_top)),
             Some(FEEDER_PLAYER_LIST) => Some((self.players.len(), self.player_top)),
+            Some(FEEDER_PLAYER_PROFILES) => Some((self.profiles.len(), self.profiles.top)),
             _ => None,
         }
     }
@@ -1767,6 +1916,7 @@ impl Ui {
             Some(FEEDER_SERVERS) => self.list_top = top,
             Some(FEEDER_MODS) => self.mod_top = top,
             Some(FEEDER_PLAYER_LIST) => self.player_top = top,
+            Some(FEEDER_PLAYER_PROFILES) => self.profiles.top = top,
             _ => {}
         }
     }
@@ -1940,7 +2090,10 @@ impl Ui {
         if !item.text.is_empty() {
             loc.translate(&item.text).into_owned()
         } else if let Some(cvar) = &item.cvar
-            && item.kind != ITEM_TYPE_MULTI
+            && !matches!(
+                item.kind,
+                ITEM_TYPE_MULTI | ITEM_TYPE_DVARENUM | ITEM_TYPE_DECIMALFIELD
+            )
         {
             // `ui_favorite_message` holds a localized key.
             let v = self.cvar(cvar, shell).unwrap_or_default();
@@ -1999,8 +2152,12 @@ impl Ui {
     pub fn build(&self, w: f32, h: f32, loc: &Localized, shell: &Shell) -> Vec<HudQuad> {
         let mut out = Vec::new();
         let p = Painter {
-            v: Virtual::new((w, h)),
+            v: match self.cod2 {
+                Some(_) => cod2::grid(w, h),
+                None => Virtual::new((w, h)),
+            },
             fonts: self.fonts.as_ref(),
+            exact: self.cod2.is_some(),
         };
         for &m in &self.open {
             let menu = &self.menus[m];
@@ -2044,6 +2201,10 @@ impl Ui {
                 }
                 if item.kind == ITEM_TYPE_LISTBOX && item.feeder == Some(FEEDER_ALLMAPS) {
                     self.map_rows(&p, item, &mut out);
+                    continue;
+                }
+                if item.kind == ITEM_TYPE_LISTBOX && item.feeder == Some(FEEDER_PLAYER_PROFILES) {
+                    self.profile_rows(&p, item, &mut out);
                     continue;
                 }
                 if item.kind == ITEM_TYPE_LISTBOX && item.feeder == Some(FEEDER_PLAYER_LIST) {
@@ -2283,6 +2444,24 @@ impl Ui {
     /// `Item_ListBox_Paint` for `FEEDER_SERVERS`. A cell's icon is a square
     /// of the column's width from half a row down, and takes no text align
     /// (ui_mp_x86.dll 0x400159b0).
+    /// A server list cell ([`browser::column_cell`]). CoD2's map column
+    /// (`UI_FeederItemText` column 3, Mac 0x152e8a) prints the `longname`
+    /// of the `.arena` entry whose `map` is the server's `mapname` in any
+    /// case, the `mapname` when none is.
+    fn list_cell(&self, s: &browser::Server, kind: browser::Column) -> browser::Cell {
+        if kind == browser::Column::Map
+            && self.browser.columns.len() == browser::COLUMNS_V118.len()
+            && let Some(a) = s.info.as_ref().and_then(|i| {
+                self.arenas
+                    .iter()
+                    .find(|a| a.map.eq_ignore_ascii_case(&i.mapname))
+            })
+        {
+            return browser::Cell::Text(a.long_name.clone());
+        }
+        browser::column_cell(s, kind)
+    }
+
     fn server_list(&self, p: &Painter, item: &UiItem, out: &mut Vec<HudQuad>) {
         let rows = self.browser.rows();
         let [x, y0, w, _] = item.rect;
@@ -2290,7 +2469,7 @@ impl Ui {
         let eh = item.element_height.max(1.0);
         for s in rows.iter().skip(self.list_top).take(visible_rows(item)) {
             for (&kind, col) in self.browser.columns.iter().zip(&item.columns) {
-                match browser::column_cell(s, kind) {
+                match self.list_cell(s, kind) {
                     browser::Cell::Image(shader) => p.quad(
                         [x + 4.0 + col.pos, y - 1.0 + eh * 0.5, col.width, col.width],
                         [1.0; 4],
@@ -2349,6 +2528,18 @@ impl Ui {
                 None => shell.cvar(name).map(str::to_string),
             },
         }
+    }
+}
+
+/// CoD2's `uiScript` menu-on-dvar names: whether it opens, and whether it
+/// acts on an equal value.
+fn menu_on_dvar(name: &str) -> Option<(bool, bool)> {
+    match name.to_ascii_lowercase().as_str() {
+        "openmenuondvar" => Some((true, true)),
+        "openmenuondvarnot" => Some((true, false)),
+        "closemenuondvar" => Some((false, true)),
+        "closemenuondvarnot" => Some((false, false)),
+        _ => None,
     }
 }
 
@@ -2413,6 +2604,15 @@ fn refresh_date(t: jiff::civil::DateTime, loc: &Localized) -> String {
 }
 
 fn fill(fmt: &str, args: &[&str]) -> String {
+    // CoD2's strings number their slots `&&1`..`&&9` (cod2-protocol.md
+    // 3.4.1); no CoD1 string holds `&&`.
+    if fmt.contains("&&") {
+        let mut out = fmt.to_string();
+        for (n, a) in args.iter().enumerate() {
+            out = out.replace(&format!("&&{}", n + 1), a);
+        }
+        return out;
+    }
     let mut out = String::new();
     let mut args = args.iter();
     let mut rest = fmt;
@@ -2476,9 +2676,10 @@ fn paints_text(item: &UiItem) -> bool {
         | ITEM_TYPE_BUTTON
         | ITEM_TYPE_EDITFIELD
         | ITEM_TYPE_NUMERICFIELD
-        | ITEM_TYPE_UPREDITFIELD => true,
+        | ITEM_TYPE_UPREDITFIELD
+        | ITEM_TYPE_DECIMALFIELD => true,
         ITEM_TYPE_OWNERDRAW | ITEM_TYPE_SLIDER | ITEM_TYPE_YESNO | ITEM_TYPE_MULTI
-        | ITEM_TYPE_BIND => !item.text.is_empty(),
+        | ITEM_TYPE_DVARENUM | ITEM_TYPE_BIND => !item.text.is_empty(),
         _ => false,
     }
 }
@@ -2488,7 +2689,10 @@ fn paints_text(item: &UiItem) -> bool {
 fn takes_cvar_width(item: &UiItem) -> bool {
     matches!(
         item.kind,
-        ITEM_TYPE_EDITFIELD | ITEM_TYPE_NUMERICFIELD | ITEM_TYPE_UPREDITFIELD
+        ITEM_TYPE_EDITFIELD
+            | ITEM_TYPE_NUMERICFIELD
+            | ITEM_TYPE_UPREDITFIELD
+            | ITEM_TYPE_DECIMALFIELD
     ) && item.text_align == ITEM_ALIGN_CENTER
 }
 
@@ -2556,11 +2760,25 @@ fn text_extents(item: &UiItem, kept: Option<[f32; 4]>, widths: TextWidths) -> [f
 pub(crate) struct Painter<'a> {
     pub(crate) v: Virtual,
     pub(crate) fonts: Option<&'a UiFonts>,
+    /// CoD2: every rect maps straight through `v`, none stretched to the
+    /// window, as its rects were already placed ([`cod2`]).
+    pub(crate) exact: bool,
 }
 
 impl Painter<'_> {
     pub(crate) fn quad(&self, r: [f32; 4], rgba: [f32; 4], texture: &str, out: &mut Vec<HudQuad>) {
-        out.push(self.v.quad_fill(r[0], r[1], r[2], r[3], rgba, texture));
+        if !self.exact {
+            out.push(self.v.quad_fill(r[0], r[1], r[2], r[3], rgba, texture));
+            return;
+        }
+        let [x0, y0] = self.v.point(r[0], r[1]);
+        let [x1, y1] = self.v.point(r[0] + r[2], r[1] + r[3]);
+        out.push(HudQuad {
+            verts: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
+            uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            rgba,
+            texture: texture.to_string(),
+        });
     }
 
     pub(crate) fn fill(&self, r: [f32; 4], rgba: [f32; 4], out: &mut Vec<HudQuad>) {
@@ -2755,6 +2973,7 @@ mod tests {
         let p = Painter {
             v: Virtual::new((640.0, 480.0)),
             fonts: None,
+            exact: false,
         };
         let mut item = UiItem {
             style: WINDOW_STYLE_SHADER,
@@ -3894,6 +4113,7 @@ mod tests {
         let p = Painter {
             v: Virtual::new((640.0, 480.0)),
             fonts: ui.fonts.as_ref(),
+            exact: false,
         };
         let scale = ui.menus[m].items[start].text_scale;
         let total = p.width(&text, scale);
@@ -4668,7 +4888,7 @@ mod tests {
             PROTOCOL_V1, PROTOCOL_V6, PROTOCOL_V22, install_protocol,
         };
         if let Some(fs) = vcod_common::testing::stock_fs()
-            && install_protocol(&fs).version != PROTOCOL_V1.version
+            && install_protocol(&fs).transport.version != PROTOCOL_V1.transport.version
         {
             for gt in ["dm", "tdm", "sd", "re", "bel", "hq"] {
                 let menu = format!("serverinfo_{gt}");
@@ -4816,6 +5036,8 @@ mod tests {
             "Source:     Internet"
         );
         assert_eq!(fill("100%", &[]), "100%");
+        // CoD2's numbered slots.
+        assert_eq!(fill("Source: &&1", &["Local"]), "Source: Local");
         assert_eq!(truncate_visible("^1abc^7def", 4), "^1abc^7d");
         assert_eq!(truncate_visible("abc", 0), "abc");
     }

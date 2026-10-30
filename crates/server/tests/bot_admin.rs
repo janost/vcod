@@ -20,7 +20,7 @@ const RCON: SocketAddr =
     SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 31999);
 
 fn server(gametype: &str, max_clients: usize) -> Option<(Server, Instant)> {
-    let fs = vcod_common::testing::game_fs()?;
+    let fs = vcod_common::testing::game_fs_11()?;
     let bsp_bytes = fs.read(&fs.resolve_map(MAP)?)?;
     let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
     let now = Instant::now();

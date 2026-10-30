@@ -6,9 +6,10 @@
 
 use std::collections::HashMap;
 
-use vcod_common::bsp::{self, Bsp};
+use vcod_common::mapworld;
+use vcod_common::mapworld::MapWorld;
 
-const SIZE: usize = bsp::LIGHTMAP_SIZE;
+const SIZE: usize = mapworld::LIGHTMAP_SIZE;
 const NONE: u32 = u32::MAX;
 
 /// A lightmap page and its block runs ([`edges`]), material bindings 1 and 4.
@@ -40,11 +41,9 @@ pub fn upload_edges(
 /// Per page, `SIZE * SIZE` texels of `[left, up, right, down]`: how many
 /// texels of the same block follow this one along its row and column on
 /// each side, capped at 255. A texel no triangle maps reads all zero.
-pub fn edges(bsp: &Bsp) -> Vec<Vec<[u8; 4]>> {
-    page_tris(bsp)
-        .iter()
-        .map(|page| page_edges(&labels(page)))
-        .collect()
+pub fn edges(bsp: &MapWorld) -> Vec<Vec<[u8; 4]>> {
+    // pages are independent: one a core
+    vcod_common::laps::par_map(&page_tris(bsp), |page| page_edges(&labels(page)))
 }
 
 /// The triangles mapped onto one page.
@@ -64,7 +63,7 @@ struct PageTris {
 /// flush. Terrain charts are not rectangles, so the runs follow the
 /// block's own outline rather than its bounds (a bounding box would
 /// swallow the small blocks packed into its concave corners).
-fn page_tris(bsp: &Bsp) -> Vec<PageTris> {
+fn page_tris(bsp: &MapWorld) -> Vec<PageTris> {
     let mut pages: Vec<PageTris> = Vec::new();
     pages.resize_with(bsp.lightmaps.len(), Default::default);
     let mut seen: Vec<HashMap<[u32; 5], u32>> = vec![HashMap::new(); bsp.lightmaps.len()];
@@ -79,7 +78,7 @@ fn page_tris(bsp: &Bsp) -> Vec<PageTris> {
             .get(s.first_index as usize..s.first_index as usize + s.index_count as usize)
             .unwrap_or(&[]);
         for tri in idx.as_chunks::<3>().0 {
-            let verts: Option<Vec<&bsp::DrawVert>> = tri
+            let verts: Option<Vec<&mapworld::DrawVert>> = tri
                 .iter()
                 .map(|&i| bsp.verts.get(first + i as usize))
                 .collect();
@@ -248,7 +247,7 @@ mod tests {
         let Some(fs) = vcod_common::testing::game_fs() else {
             return;
         };
-        let bsp = bsp::parse(&fs.read("maps/mp/mp_carentan.bsp").unwrap()).unwrap();
+        let bsp = vcod_common::bsp::parse(&fs.read("maps/mp/mp_carentan.bsp").unwrap()).unwrap();
         let grid = labels(&page_tris(&bsp)[3]);
         assert_ne!(grid[384 * SIZE + 24], NONE);
         assert_eq!(grid[384 * SIZE + 24], grid[384 * SIZE + 25]);
@@ -264,7 +263,7 @@ mod tests {
         };
         for map in ["mp_carentan", "mp_ship"] {
             let data = fs.read(&format!("maps/mp/{map}.bsp")).unwrap();
-            let bsp = bsp::parse(&data).unwrap();
+            let bsp = vcod_common::bsp::parse(&data).unwrap();
             let (mut blocks, mut biggest) = (0, 0);
             for page in page_tris(&bsp) {
                 let mut sizes = HashMap::<u32, usize>::new();

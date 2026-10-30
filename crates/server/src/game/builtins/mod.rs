@@ -4,6 +4,16 @@
 
 pub mod attach;
 pub mod client;
+pub mod cod2;
+pub mod cod2_fx;
+pub mod cod2_trigger;
+pub mod cod4;
+pub mod cod4_client;
+pub mod cod4_combat;
+pub mod cod4_names;
+pub mod cod4_script;
+pub mod cod4_trace;
+pub mod cod4_vehicle;
 pub mod combat;
 pub mod cvar;
 pub mod entity;
@@ -17,6 +27,7 @@ pub mod mover;
 pub mod objective;
 pub mod precache;
 pub mod score;
+pub mod set;
 pub mod sound;
 pub mod uo;
 pub mod vehicle;

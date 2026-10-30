@@ -4,7 +4,7 @@ What CoD's material scripts contain, what vcod implements of them, and where
 the implementation deliberately diverges. Evidence rules as everywhere in this
 directory: VERIFIED means I measured it against the stock assets or saw it in
 the running client; INFERRED means read off the RTCW sources or asset shape and
-labelled so. RTCW references are `private/reference/RTCW-MP/src/renderer/*.c`
+labelled so. RTCW references are RTCW-MP's `src/renderer/*.c`
 (the closest public ancestor of the CoD 1.1 renderer); vcod references name the
 file and line on `feature/shader-scripts`. The vcod-side parser and runtime
 math live in `crates/common/src/shader.rs`, application in
@@ -29,8 +29,16 @@ CoD-specific placements matter:
   `textures/skies/noville` block straight out of that archive).
 
 vcod parses every script entry into `ShaderLib` at load
-(`shader.rs` `ShaderLib::load`). A block whose name matches nothing drawn never
+(`shader.rs` `ShaderLib::load`, once per search path through
+`asset_source::load`). A block whose name matches nothing drawn never
 costs more than memory.
+
+The renderer never reads a `Shader`: `ShaderLib::materials` compiles each
+block into the game-neutral `material::Material` (`Material::from_shader`),
+which resolves the sort (section 5), the polygon offset, the dlight draw
+(section 3) and the sorting stage's images, and keeps the stages as parsed.
+`renderer/material_keys.rs` pins what the renderer derives from every stock
+block and `.stype` template.
 
 ## 2. Census
 

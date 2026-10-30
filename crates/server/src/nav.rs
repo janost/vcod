@@ -116,6 +116,19 @@ pub struct NavGraph {
     /// Nodes whose middle stands over a fall that kills, on a rail or a
     /// spar's edge: a roam never ends on one ([`NavGraph::mark_perches`]).
     pub perches: HashSet<u32>,
+    /// The edges only a CoD2 mantle climbs ([`NavGraph::link_mantles`]): a
+    /// bot on one runs at the wall and jumps once pmove offers the climb.
+    /// Empty on a CoD1 graph.
+    pub mantles: HashSet<(u32, u32)>,
+    /// Each mantle edge's landing as its probe proved it, which may stand
+    /// a cell off the node the edge ends at: a body run at the node need
+    /// not be offered the climb ([`Follower::mantle_land`]).
+    pub mantle_lands: HashMap<(u32, u32), Vec3>,
+    /// The nodes the flood started from at the spawn points. A ladder's
+    /// ends seed a flood of their own, which may never meet the spawns'
+    /// floors: mp_shipment's grounds round the yard, out of bounds, are
+    /// the larger part of its graph.
+    seeds: Vec<u32>,
     /// The grid pitch the graph was built on.
     pub spacing: f32,
     /// Nodes by grid column, for lookups only; nothing iterates it.
@@ -130,13 +143,16 @@ pub struct NavGraph {
     /// has 1 to 13 components.
     reach: Vec<Vec<u64>>,
     /// The largest strongly connected component with the [`Self::risky`]
-    /// edges left out: a roam from inside it never ends where only a risky
-    /// edge leads ([`Self::roam_from`]).
+    /// edges left out that holds a spawn's seed ([`Self::seeds`]): a roam
+    /// from inside it never ends where only a risky edge leads
+    /// ([`Self::roam_from`]).
     safe: Vec<bool>,
     /// The world's ladders ([`ladders`]), for the build.
     ladder_boxes: Vec<(Vec3, Vec3)>,
     /// The movement rules the walks proved the edges under.
     pub rules: MoveRules,
+    /// The game's own step they moved by instead, if any ([`with_step`]).
+    pub step: Option<Arc<dyn WalkStep>>,
 }
 
 /// The spawn points' horizontal bounding box.
@@ -164,7 +180,51 @@ impl NavGraph {
         hazards: &[BrushHull],
         rules: MoveRules,
     ) -> NavGraph {
-        with_rules(rules, || Self::build_here(world, seeds, cover, hazards))
+        Self::build_with(world, seeds, cover, hazards, rules, None, None)
+    }
+
+    /// [`Self::build`], with the mantle edges `mantle` finds
+    /// ([`Self::link_mantles`]) and the floors past them flooded too, the
+    /// bodies moving by `step` when one is given ([`with_step`]).
+    pub fn build_with(
+        world: &CollisionWorld,
+        seeds: &[[f32; 3]],
+        cover: &[[f32; 3]],
+        hazards: &[BrushHull],
+        rules: MoveRules,
+        mantle: Option<&MantleProbe>,
+        step: Option<Arc<dyn WalkStep>>,
+    ) -> NavGraph {
+        Self::build_opts(world, seeds, cover, hazards, rules, mantle, step, true)
+    }
+
+    /// [`Self::build_with`] for bots that read a leap's lip (`lip`) or
+    /// not. A bot whose route never reads the lip
+    /// (`BotWorld::PMOVE_PROBES` off, CoD2's and CoD4's) never jumps on a
+    /// leap edge and runs off its foot: off mp_killhouse's crate tops at z
+    /// 60 it fell to the floor at 28 again and again (bot-objectives.md
+    /// 12.14), and paced mp_decoy's pit under its leaps out (11.8).
+    /// Without the lip a leap is kept only as a plain jump edge its bot's
+    /// own jump lands ([`Self::reprove_jumps`]). The same graph also drops
+    /// the edges past the follower's reach
+    /// ([`Self::drop_out_of_reach`]) and probes for mantles again off the
+    /// floors the last mantles' tops led to.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_opts(
+        world: &CollisionWorld,
+        seeds: &[[f32; 3]],
+        cover: &[[f32; 3]],
+        hazards: &[BrushHull],
+        rules: MoveRules,
+        mantle: Option<&MantleProbe>,
+        step: Option<Arc<dyn WalkStep>>,
+        lip: bool,
+    ) -> NavGraph {
+        with_rules(rules, || {
+            with_step(step, || {
+                Self::build_here(world, seeds, cover, hazards, mantle, lip)
+            })
+        })
     }
 
     fn build_here(
@@ -172,6 +232,8 @@ impl NavGraph {
         seeds: &[[f32; 3]],
         cover: &[[f32; 3]],
         hazards: &[BrushHull],
+        mantle: Option<&MantleProbe>,
+        lip: bool,
     ) -> NavGraph {
         // The pitch cuts the spawns' box into about TARGET_CELLS, rounded up
         // to a multiple of 16; the flood stays within MARGIN of the box and
@@ -197,6 +259,9 @@ impl NavGraph {
             aims: HashMap::new(),
             risky: HashSet::new(),
             perches: HashSet::new(),
+            mantles: HashSet::new(),
+            mantle_lands: HashMap::new(),
+            seeds: Vec::new(),
             spacing: spacing.clamp(SPACING_MIN, SPACING_MAX),
             columns: HashMap::new(),
             comp: Vec::new(),
@@ -205,6 +270,7 @@ impl NavGraph {
             safe: Vec::new(),
             ladder_boxes: ladders(world),
             rules: RULES.get(),
+            step: own_step(),
         };
         let mut queue = Vec::new();
         for seed in seeds {
@@ -215,16 +281,44 @@ impl NavGraph {
             // centre, so every later walk targets a node's real spot.
             let c = g.column(p);
             let p = walk(world, &g.ladder_boxes, p, g.center(c)).map_or(p, |(p, _)| p);
-            if g.find(c, p.z).is_none() {
-                queue.push(g.add(c, p));
+            match g.find(c, p.z) {
+                Some(n) => g.seeds.push(n),
+                None => {
+                    let n = g.add(c, p);
+                    g.seeds.push(n);
+                    queue.push(n);
+                }
             }
         }
         g.flood(world, hazards, &inside, queue);
         let ends = g.link_ladders(world, hazards);
         g.flood(world, hazards, &inside, ends);
+        if let Some(probe) = mantle {
+            // A graph with `lip` off (CoD2's, CoD4's) probes again from
+            // the nodes each flood off the tops found, until one finds
+            // none: mp_bloc's
+            // pool is reached only down off a mantle's top, and its way
+            // out is a mantle (bot-objectives.md 12.16).
+            let mut probed = 0;
+            loop {
+                let before = g.nodes.len();
+                let tops = g.link_mantles(world, hazards, &inside, probe, probed);
+                g.flood(world, hazards, &inside, tops);
+                probed = before;
+                if lip || g.nodes.len() == probed {
+                    break;
+                }
+            }
+        }
         g.link_back(world);
         g.link_leaps(world);
+        if !lip {
+            g.leaps.clear();
+        }
         g.reprove_jumps(world);
+        if !lip {
+            g.drop_out_of_reach();
+        }
         g.link_pockets(world, hazards, &inside);
         g.mark_risky(world);
         g.mark_perches(world);
@@ -251,7 +345,9 @@ impl NavGraph {
             .flat_map(|(a, out)| out.iter().map(move |&b| (a as u32, b)))
             .filter(|&(a, b)| {
                 let (p, q) = (self.nodes[a as usize], self.nodes[b as usize]);
-                q.z < p.z - LEVEL && !self.jumps.contains(&(a, b))
+                q.z < p.z - LEVEL
+                    && !self.jumps.contains(&(a, b))
+                    && !self.mantles.contains(&(a, b))
             })
             .collect();
         let risky = par_map(&drops, |&(a, b)| {
@@ -309,6 +405,48 @@ impl NavGraph {
             .zip(risky)
             .filter_map(|(e, r)| r.then_some(e))
             .collect();
+    }
+
+    /// Links every node from `from` on to where a mantle off it lands, by
+    /// `probe` facing each of the eight compass ways, as a mantle edge
+    /// ([`Self::mantles`]) unless a walk already proved the edge; a landing
+    /// no node stands at gets one, and the new nodes are returned for the
+    /// flood to go on from.
+    fn link_mantles(
+        &mut self,
+        world: &CollisionWorld,
+        hazards: &[BrushHull],
+        inside: &dyn Fn(Vec3) -> bool,
+        probe: &MantleProbe,
+        from: usize,
+    ) -> Vec<u32> {
+        let found = par_map(&self.nodes[from..], |&p| {
+            (0..8)
+                .filter_map(|k| probe(world, p, k as f32 * 45.0))
+                .collect::<Vec<Vec3>>()
+        });
+        let mut new = Vec::new();
+        for (a, lands) in found.into_iter().enumerate() {
+            let a = (from + a) as u32;
+            for q in lands {
+                let c = self.column(q);
+                let b = match self.find(c, q.z) {
+                    Some(b) => b,
+                    None if inside(q) && !hazard(hazards, q) && self.nodes.len() < MAX_NODES => {
+                        let b = self.add(c, q);
+                        new.push(b);
+                        b
+                    }
+                    None => continue,
+                };
+                if a != b && !self.edges[a as usize].contains(&b) {
+                    self.edges[a as usize].push(b);
+                    self.mantles.insert((a, b));
+                    self.mantle_lands.insert((a, b), q);
+                }
+            }
+        }
+        new
     }
 
     /// Marks [`Self::perches`]: nodes with no floor under their middle
@@ -460,6 +598,11 @@ impl NavGraph {
         (most, spawns.len() - lost.len())
     }
 
+    /// Runs `f` with the walks' bodies moving as this graph's did.
+    pub fn moving<R>(&self, f: impl FnOnce() -> R) -> R {
+        with_rules(self.rules, || with_step(self.step.clone(), f))
+    }
+
     /// The census's main-component count, and the spawns that do not reach
     /// that component: each spawn's index with its node, `None` for one
     /// with no node at all (`nav_build`'s `LOST=1`).
@@ -471,7 +614,7 @@ impl NavGraph {
         let nodes: Vec<Option<u32>> = spawns
             .iter()
             .map(|s| {
-                let feet = with_rules(self.rules, || settle(world, Vec3::from(*s), 0.0));
+                let feet = self.moving(|| settle(world, Vec3::from(*s), 0.0));
                 self.nearest(feet.map_or(*s, Into::into))
             })
             .collect();
@@ -494,6 +637,12 @@ impl NavGraph {
         (most, lost)
     }
 
+    /// The components of `comp` (one per node) that hold a spawn's seed
+    /// ([`Self::seeds`]); empty for a graph built without any.
+    fn seeded(&self, comp: &[u32]) -> HashSet<u32> {
+        self.seeds.iter().map(|&n| comp[n as usize]).collect()
+    }
+
     fn index_components(&mut self) {
         self.comp = self.components();
         let safe = self.components_by(|a, b| !self.risky.contains(&(a, b)));
@@ -501,6 +650,8 @@ impl NavGraph {
         for &c in &safe {
             *sizes.entry(c).or_insert(0usize) += 1;
         }
+        let seeded = self.seeded(&safe);
+        sizes.retain(|c, _| seeded.is_empty() || seeded.contains(c));
         let largest = sizes
             .into_iter()
             .max_by_key(|&(c, k)| (k, c))
@@ -817,6 +968,34 @@ impl NavGraph {
         }
     }
 
+    /// Drops every edge but a mantle whose top lies more than
+    /// [`OFF_PATH_STEPS`] grid steps across from its foot: a follower
+    /// reads a waypoint that far off as a body knocked off its path and
+    /// plans again, so it never sets off on one. mp_crash's roof at
+    /// (64, -643, 313) has jumps 158 across to (160, -518, 304), the
+    /// way back along its mantles (`NavGraph::link_back`); a bot there
+    /// planned the jump, dropped it at its foot and planned it again for
+    /// the rest of a `koth` match (bot-objectives.md 12.15).
+    fn drop_out_of_reach(&mut self) {
+        let reach = OFF_PATH_STEPS * self.spacing;
+        for a in 0..self.edges.len() {
+            let p = self.nodes[a];
+            let mut out = std::mem::take(&mut self.edges[a]);
+            out.retain(|&b| {
+                let e = (a as u32, b);
+                let keep = self.mantles.contains(&e)
+                    || (self.nodes[b as usize] - p).truncate().length() <= reach;
+                if !keep {
+                    self.jumps.remove(&e);
+                    self.crouch_jumps.remove(&e);
+                    self.aims.remove(&e);
+                }
+                keep
+            });
+            self.edges[a] = out;
+        }
+    }
+
     /// Where a bot on edge `a -> b` steers: `b`'s spot, or the point
     /// beside it the edge's jump was proved at ([`Self::aims`]).
     pub fn aim(&self, a: u32, b: u32) -> glam::Vec2 {
@@ -1078,6 +1257,26 @@ impl NavGraph {
                         && (p.z - at.z).abs() <= reach
                         && !stands(world, p + Vec3::Z * 0.125)
                     {
+                        out.push(n);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The nodes less than `half` from `at` along both axes across and
+    /// less than `rise` up or down: where a body's box would meet one of
+    /// half width `half` minus its own standing at `at`.
+    pub fn nodes_in_box(&self, at: Vec3, half: f32, rise: f32) -> Vec<u32> {
+        let (cx, cy) = self.column(at);
+        let span = (half / self.spacing).ceil() as i32;
+        let mut out = Vec::new();
+        for dy in -span..=span {
+            for dx in -span..=span {
+                for &n in self.columns.get(&(cx + dx, cy + dy)).into_iter().flatten() {
+                    let d = self.nodes[n as usize] - at;
+                    if d.x.abs() < half && d.y.abs() < half && d.z.abs() < rise {
                         out.push(n);
                     }
                 }
@@ -1382,6 +1581,62 @@ impl NavGraph {
     /// A* from `from` to `to` over the directed edges, Euclidean cost and
     /// heuristic. The node list runs from `from` to `to` inclusive; `None`
     /// when `to` is unreachable or the search runs past its budget.
+    /// Where a bot stands in a zone `mins`..`maxs` (a bombzone, a goal
+    /// trigger): the node 16 units inside the bounds nearest their middle
+    /// at the floor, from the component holding the most nodes of those a
+    /// spawn's seed is in ([`Self::seeds`]) so a bot anywhere can reach it,
+    /// else the nearest such node to the middle.
+    pub fn zone_stand(&self, mins: [f32; 3], maxs: [f32; 3]) -> Option<[f32; 3]> {
+        let mid = Vec3::new(
+            (mins[0] + maxs[0]) * 0.5,
+            (mins[1] + maxs[1]) * 0.5,
+            mins[2],
+        );
+        let inside = |n: &Vec3| {
+            (0..2).all(|i| n[i] >= mins[i] + 16.0 && n[i] <= maxs[i] - 16.0)
+                && n.z <= maxs[2]
+                && n.z + 70.0 >= mins[2]
+        };
+        self.stand_where(mid, inside)
+    }
+
+    /// Where a bot stands to take a headquarters radio at `at`: as
+    /// [`Self::zone_stand`], the node within `reach` across and `height`
+    /// up or down of it nearest it.
+    pub fn radio_stand(&self, at: [f32; 3], reach: f32, height: f32) -> Option<[f32; 3]> {
+        let at = Vec3::from(at);
+        self.stand_where(at, |n: &Vec3| {
+            (*n - at).truncate().length() < reach && (n.z - at.z).abs() < height
+        })
+    }
+
+    /// The node `inside` keeps nearest `mid`, from the component of
+    /// [`Self::zone_stand`], else the nearest there to `mid`.
+    fn stand_where(&self, mid: Vec3, inside: impl Fn(&Vec3) -> bool) -> Option<[f32; 3]> {
+        let comp = self.component_ids();
+        let mut sizes: std::collections::BTreeMap<u32, usize> = Default::default();
+        for c in comp {
+            *sizes.entry(*c).or_default() += 1;
+        }
+        let seeded = self.seeded(comp);
+        sizes.retain(|c, _| seeded.is_empty() || seeded.contains(c));
+        // Largest first, lower number on a tie, for a pick that does not
+        // depend on map iteration.
+        let main = sizes
+            .iter()
+            .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
+            .map(|(c, _)| *c);
+        let best = |want_inside: bool| {
+            self.nodes
+                .iter()
+                .enumerate()
+                .filter(|(i, n)| Some(comp[*i]) == main && (!want_inside || inside(n)))
+                .min_by(|a, b| a.1.distance(mid).total_cmp(&b.1.distance(mid)))
+                .map(|(_, n)| (*n).into())
+        };
+        best(true).or_else(|| best(false))
+    }
+
     pub fn path(&self, from: u32, to: u32) -> Option<Vec<u32>> {
         self.path_avoiding(from, to, &[])
     }
@@ -1412,6 +1667,13 @@ impl NavGraph {
     /// iterative). Two nodes share a number when each reaches the other.
     pub fn components(&self) -> Vec<u32> {
         self.components_by(|_, _| true)
+    }
+
+    /// [`Self::components`] as indexed when the graph was finished, which
+    /// nothing changes after: a lookup, where a fresh walk of a stock UO
+    /// graph took 9 to 26 ms (map-cycle doc 4.9).
+    pub fn component_ids(&self) -> &[u32] {
+        &self.comp
     }
 
     /// [`Self::components`] over only the edges `keep` passes.
@@ -1485,6 +1747,9 @@ impl NavGraph {
             aims: HashMap::new(),
             risky: HashSet::new(),
             perches: HashSet::new(),
+            mantles: HashSet::new(),
+            mantle_lands: HashMap::new(),
+            seeds: Vec::new(),
             spacing: SPACING_MIN,
             columns: HashMap::new(),
             comp: Vec::new(),
@@ -1493,6 +1758,7 @@ impl NavGraph {
             safe: Vec::new(),
             ladder_boxes: Vec::new(),
             rules: MoveRules::V1_1,
+            step: None,
         };
         for p in nodes {
             let c = g.column(p);
@@ -1510,6 +1776,7 @@ impl NavGraph {
 type CacheKey = (
     String,
     MoveRules,
+    Option<String>,
     usize,
     usize,
     usize,
@@ -1538,6 +1805,7 @@ fn cache_key(
     (
         map.to_ascii_lowercase(),
         rules,
+        own_step().map(|s| s.key()),
         c.brushes.len(),
         c.tris.len(),
         c.model_tris.len(),
@@ -1608,6 +1876,12 @@ pub fn graph_for(map: &str, world: &crate::world::World) -> Arc<NavGraph> {
     })
 }
 
+/// Where a mantle off a node lands: the body's feet at the node, facing the
+/// yaw (degrees), and the feet where the climb leaves it standing, if the
+/// wall ahead takes one. The CoD2 bots hand one in
+/// (`crate::bots::cod2::mantle_probe`); CoD1 has no mantle.
+pub type MantleProbe = Arc<dyn Fn(&CollisionWorld, Vec3, f32) -> Option<Vec3> + Send + Sync>;
+
 /// A graph on its way: built on a thread of its own over a snapshot of the
 /// collision, so the server keeps ticking through a build of a second or
 /// more (bot-navigation.md, "Build times").
@@ -1621,11 +1895,42 @@ impl NavJob {
     /// of `world`'s collision as it stands now: the links and poses scripts
     /// change later never reach the build. The walks move by `rules`.
     pub fn start(map: &str, world: &crate::world::World, rules: MoveRules) -> NavJob {
+        Self::start_with(map, world, rules, None, None)
+    }
+
+    /// [`Self::start`] for a graph with mantle edges off `mantle`, its
+    /// bodies moving by `step` ([`NavGraph::build_with`]).
+    pub fn start_with(
+        map: &str,
+        world: &crate::world::World,
+        rules: MoveRules,
+        mantle: Option<MantleProbe>,
+        step: Option<Arc<dyn WalkStep>>,
+    ) -> NavJob {
+        Self::start_opts(map, world, rules, mantle, step, true)
+    }
+
+    /// [`Self::start_with`] for bots that read a leap's lip or not
+    /// ([`NavGraph::build_opts`]).
+    pub fn start_opts(
+        map: &str,
+        world: &crate::world::World,
+        rules: MoveRules,
+        mantle: Option<MantleProbe>,
+        step: Option<Arc<dyn WalkStep>>,
+        lip: bool,
+    ) -> NavJob {
         let collision = world.collision.clone();
         for &m in &world.rubble {
             collision.set_model_linked(m, false);
         }
-        let key = cache_key(map, &collision, world, rules);
+        let mut key = with_step(step.clone(), || cache_key(map, &collision, world, rules));
+        if mantle.is_some() {
+            key.0.push_str(" (mantles)");
+        }
+        if !lip {
+            key.0.push_str(" (no lip)");
+        }
         // A lock held elsewhere is a build in progress; the thread waits on
         // it, never the tick.
         if let Ok(cache) = CACHE.try_lock()
@@ -1644,7 +1949,16 @@ impl NavJob {
             // schedule it runs beside.
             SPARE_CORE.set(true);
             cached(key, || {
-                NavGraph::build(&collision, &seeds, &cover, &hazards, rules)
+                NavGraph::build_opts(
+                    &collision,
+                    &seeds,
+                    &cover,
+                    &hazards,
+                    rules,
+                    mantle.as_ref(),
+                    step,
+                    lip,
+                )
             })
         };
         NavJob {
@@ -1848,6 +2162,10 @@ pub struct Follower {
     clock: u32,
     /// Edges it got stuck on, left out of its plans until the tick given.
     avoid: Vec<(u32, u32, u32)>,
+    /// Edges it got stuck on again while still avoided, planned through
+    /// for want of a way round: left out of that plan too, until the tick
+    /// given ([`Self::avoid_edge`]).
+    dead: Vec<(u32, u32, u32)>,
     /// The plan under way, and whether it leaves out `avoid` (a plain one
     /// follows if it fails).
     search: Option<Search>,
@@ -1919,6 +2237,11 @@ pub struct Follower {
     /// Ticks held still for a climber rising under the body
     /// ([`Self::rising_hold`]).
     rising_ticks: u32,
+    /// Ticks the body has been held up by a teammate standing still at
+    /// its side, and the nodes it plans round for the ticks left after
+    /// (`bots::driver`'s `mates_in_way`).
+    pub mate_ticks: u32,
+    pub mate_block: (u32, Arc<[u32]>),
     /// Ticks pressed on another body, and the spot and ticks of a give way
     /// ([`Self::pressed_yield`]).
     pressed_ticks: u32,
@@ -1926,6 +2249,22 @@ pub struct Follower {
     /// The lowest fall that kills this body now ([`fall_that_kills`]):
     /// a hurt bot dies off a shorter ladder. `None` reads [`DEADLY_LADDER`].
     pub fall_kills: Option<f32>,
+    /// A mantle edge whose landing lies past [`OFF_PATH_STEPS`] is still
+    /// followed: the probe's climb ends where the body comes down, which
+    /// on CoD4's mp_crash rubble at (291, -1439, 84) is 162 across
+    /// (bot-objectives.md 12.4). Set by the driver per game.
+    pub long_mantles: bool,
+    /// A waypoint up to [`REACH`] past [`OFF_PATH_STEPS`] is still on the
+    /// path: a body passes an edge's foot from up to [`REACH`] short of
+    /// it, so an edge nearly [`OFF_PATH_STEPS`] long read as off the path
+    /// there. Set by the driver per game.
+    pub foot_slack: bool,
+    /// A mantle edge down more than a jump is taken from rest at its foot
+    /// without the creep's re-proof ([`Self::backs_short`]).
+    pub mantle_rests: bool,
+    /// What a jump edge adds to a plan's length ([`Search::jumps_costing`]).
+    /// Set by the driver per game.
+    pub jump_cost: f32,
     /// Off the ground and off the rungs last tick: a landing is read
     /// against the edge under way.
     airborne: bool,
@@ -2023,6 +2362,7 @@ impl Follower {
         self.airborne = !body.on_ground && !body.on_ladder;
         let clock = self.clock;
         self.avoid.retain(|e| e.2 > clock);
+        self.dead.retain(|e| e.2 > clock);
         if self.rest > 0 {
             self.rest -= 1;
             return None;
@@ -2107,6 +2447,27 @@ impl Follower {
             self.idle = 0;
         }
         let flat = |p: Vec3| (p - here).truncate().length();
+        // A plan made or taken up on the rungs starts at the ladder's end the
+        // body is nearer, and when the edge on from there is that ladder the
+        // body is already on it: head for the other end. Heading for the
+        // start first, a bot halfway up mp_ship's hold ladder at (3370,
+        // -380) whose goal flipped between two plans went down for one and
+        // up for the other, over and over (bot-combat.md 17.2).
+        if body.on_ladder
+            && self.next == 0
+            && let (Some(&a), Some(&b)) = (self.path.first(), self.path.get(1))
+        {
+            let (a, b) = (g.nodes[a as usize], g.nodes[b as usize]);
+            let (low, high) = if a.z < b.z { (a, b) } else { (b, a) };
+            if high.z - low.z > vcod_common::pmove::JUMP_HEIGHT
+                && (low.z..high.z).contains(&here.z)
+                && flat(low) < g.spacing
+            {
+                self.next = 1;
+                self.best = f32::INFINITY;
+                self.idle = 0;
+            }
+        }
         // Past a waypoint once inside its reach, or once nearer the next one
         // than the waypoint itself is: that keeps a bot from doubling back
         // to touch a node it cut the corner on. Either only on the
@@ -2224,7 +2585,7 @@ impl Follower {
             if level && reached && leap && !self.leap_holds(world, here, g) {
                 // The leap fails from where this body came to rest: round it.
                 let edge = (self.path[self.next], self.path[self.next + 1]);
-                self.avoid.push((edge.0, edge.1, self.clock + AVOID_TICKS));
+                self.avoid_edge(edge.0, edge.1);
                 self.reset();
                 return None;
             }
@@ -2251,7 +2612,7 @@ impl Follower {
                 let edge = (self.path[self.next], self.path[self.next + 1]);
                 if held {
                     // Flung from at rest too: round it.
-                    self.avoid.push((edge.0, edge.1, self.clock + AVOID_TICKS));
+                    self.avoid_edge(edge.0, edge.1);
                     self.reset();
                     return None;
                 }
@@ -2268,7 +2629,7 @@ impl Follower {
             {
                 let edge = (self.path[self.next], self.path[self.next + 1]);
                 if held {
-                    self.avoid.push((edge.0, edge.1, self.clock + AVOID_TICKS));
+                    self.avoid_edge(edge.0, edge.1);
                     self.reset();
                     return None;
                 }
@@ -2303,7 +2664,7 @@ impl Follower {
                         self.held = Some(edge);
                         break;
                     }
-                    self.avoid.push((edge.0, edge.1, self.clock + AVOID_TICKS));
+                    self.avoid_edge(edge.0, edge.1);
                     self.reset();
                     return None;
                 }
@@ -2352,7 +2713,9 @@ impl Follower {
             };
         };
         let w = g.nodes[w as usize];
-        if flat(w) > OFF_PATH_STEPS * g.spacing {
+        let slack = if self.foot_slack { REACH } else { 0.0 };
+        if flat(w) > OFF_PATH_STEPS * g.spacing + slack && !(self.long_mantles && self.mantling(g))
+        {
             // Fallen this far off the edge under way, still in the air: round
             // it, as a landing under it below plans. Planned again with it,
             // a bot ran off mp_ship's ledge at (7256, 237, 166) down the
@@ -2360,7 +2723,7 @@ impl Follower {
             // bot-navigation.md section 3).
             if self.next > 0 && !self.climbing(g) && w.z - here.z > FELL_BELOW {
                 let edge = (self.path[self.next - 1], self.path[self.next]);
-                self.avoid.push((edge.0, edge.1, self.clock + AVOID_TICKS));
+                self.avoid_edge(edge.0, edge.1);
                 self.fell = true;
             }
             self.path.clear();
@@ -2372,7 +2735,7 @@ impl Follower {
         // under the shelf at 396).
         if body.on_ground && self.next > 0 && !self.climbing(g) && w.z - here.z > FELL_BELOW {
             let edge = (self.path[self.next - 1], self.path[self.next]);
-            self.avoid.push((edge.0, edge.1, self.clock + AVOID_TICKS));
+            self.avoid_edge(edge.0, edge.1);
             self.reset();
             self.fell = true;
             return None;
@@ -2390,7 +2753,7 @@ impl Follower {
             let (za, zb) = (g.nodes[a as usize].z, g.nodes[b as usize].z);
             let step = vcod_common::pmove::STEPSIZE;
             if !g.jumps.contains(&(a, b)) && (za - zb).abs() < step && here.z < za.min(zb) - step {
-                self.avoid.push((a, b, self.clock + AVOID_TICKS));
+                self.avoid_edge(a, b);
                 self.reset();
                 self.fell = true;
                 return None;
@@ -2456,7 +2819,7 @@ impl Follower {
                     Walked::Arrived(_, false)
                 )
             {
-                self.avoid.push((edge.0, edge.1, self.clock + AVOID_TICKS));
+                self.avoid_edge(edge.0, edge.1);
                 self.reset();
                 return None;
             }
@@ -2494,7 +2857,7 @@ impl Follower {
                 self.fell = true;
                 if let Some(from) = self.next.checked_sub(1).map(|i| self.path[i]) {
                     let to = self.path[self.next];
-                    self.avoid.push((from, to, self.clock + AVOID_TICKS));
+                    self.avoid_edge(from, to);
                 } else {
                     self.rest = REST_TICKS;
                 }
@@ -2579,12 +2942,14 @@ impl Follower {
             };
             // Round the edges it got stuck on when there is a way round,
             // else through them again: whatever blocked one may have moved.
+            // Not through one that failed again so ([`Self::avoid_edge`]).
             let avoid: Vec<(u32, u32)> = self.avoid.iter().map(|e| (e.0, e.1)).collect();
             self.round = !avoid.is_empty();
             self.search = Some(
                 Search::new(g, start, to, avoid)
                     .crowded(self.crowd.clone())
-                    .blocking(self.blocked.clone()),
+                    .blocking(self.blocked.clone())
+                    .jumps_costing(self.jump_cost),
             );
         }
         let search = self.search.as_mut()?;
@@ -2603,7 +2968,8 @@ impl Follower {
             }
             Plan::Failed => {
                 let s = self.search.take()?;
-                // Round the edges it got stuck on, then through them.
+                // Round the edges it got stuck on, then through all but the
+                // dead ones.
                 let blocked = if self.round {
                     self.round = false;
                     s.blocked.clone()
@@ -2627,10 +2993,12 @@ impl Follower {
                     // them, as round an edge it got stuck on.
                     Arc::default()
                 };
+                let dead = self.dead.iter().map(|e| (e.0, e.1)).collect();
                 self.search = Some(
-                    Search::new(g, s.from, s.to, Vec::new())
+                    Search::new(g, s.from, s.to, dead)
                         .crowded(s.crowd)
-                        .blocking(blocked),
+                        .blocking(blocked)
+                        .jumps_costing(s.jump_cost),
                 );
                 None
             }
@@ -2683,6 +3051,10 @@ impl Follower {
         let jump = g.jumps.contains(&(a, b));
         let edge = (a, b);
         self.walked_jump = None;
+        // No CoD1 walk climbs a mantle; the graph's probe proved it.
+        if g.mantles.contains(&edge) {
+            return true;
+        }
         // A crouched jump's walk is the gait that proved it: no other gets
         // through the window.
         let gait = if g.crouch_jumps.contains(&edge) {
@@ -2873,6 +3245,18 @@ impl Follower {
             return false;
         };
         let (from, to) = (g.nodes[a as usize], g.nodes[b as usize]);
+        // A mantle down over a rail: no walk climbs it, the graph's probe
+        // proved it from rest at its foot. Under CoD1's walks the creep
+        // back down missed it at pace and arrived from rest, so the bot
+        // came to rest first and took it; a game step that mantles
+        // (`bots::cod4::Cod4Walk`) misses it either way, so rest and go
+        // (bot-objectives.md 12.11).
+        if self.mantle_rests
+            && g.mantles.contains(&(a, b))
+            && to.z < from.z - vcod_common::pmove::JUMP_HEIGHT
+        {
+            return body.on_ground && self.held != Some((a, b));
+        }
         to.z < from.z - vcod_common::pmove::JUMP_HEIGHT
             && body.on_ground
             && !g.jumps.contains(&(a, b))
@@ -3261,7 +3645,7 @@ impl Follower {
         if let Some(from) = self.next.checked_sub(1).and_then(|i| self.path.get(i))
             && let Some(&to) = self.path.get(self.next)
         {
-            self.avoid.push((*from, to, self.clock + AVOID_TICKS));
+            self.avoid_edge(*from, to);
             self.reset();
             self.fell = true;
         }
@@ -3572,6 +3956,24 @@ impl Follower {
         }
     }
 
+    /// Whether the way to the current waypoint is a mantle edge
+    /// ([`NavGraph::mantles`]).
+    pub fn mantling(&self, g: &NavGraph) -> bool {
+        self.mantle_edge(g).is_some()
+    }
+
+    /// The mantle edge the current waypoint ends, if it is one.
+    pub fn mantle_edge(&self, g: &NavGraph) -> Option<(u32, u32)> {
+        let i = self.next.checked_sub(1)?;
+        let e = (*self.path.get(i)?, *self.path.get(self.next)?);
+        g.mantles.contains(&e).then_some(e)
+    }
+
+    /// On a mantle edge, where its probe landed ([`NavGraph::mantle_lands`]).
+    pub fn mantle_land(&self, g: &NavGraph) -> Option<Vec3> {
+        g.mantle_lands.get(&self.mantle_edge(g)?).copied()
+    }
+
     /// Whether the bot jumps on the way to the current waypoint: a jump
     /// edge, unless its walk on from where the body passed the edge's
     /// first node ran it without the jump ([`Self::walked_jump`]).
@@ -3684,7 +4086,7 @@ impl Follower {
         if lands {
             return false;
         }
-        self.avoid.push((edge.0, edge.1, self.clock + AVOID_TICKS));
+        self.avoid_edge(edge.0, edge.1);
         self.reset();
         true
     }
@@ -3796,6 +4198,12 @@ impl Follower {
         }
     }
 
+    /// Whether the plan to the point goal is walked out: the body heads
+    /// straight at the point ([`Self::arrival`]).
+    pub fn walked_out(&self) -> bool {
+        self.arrived
+    }
+
     /// Whether the last plan found the body hemmed in by parked vehicles
     /// ([`Self::blocked`]) with no way out round them: what the bot reads
     /// as stranded (`bots::BotView::stranded`).
@@ -3806,6 +4214,21 @@ impl Follower {
     /// Whether a parked vehicle stands over node `n` ([`Self::blocked`]).
     fn blocks(&self, n: u32) -> bool {
         self.blocked.binary_search(&n).is_ok()
+    }
+
+    /// Plans round the edge `a` to `b` for [`AVOID_TICKS`]. One stuck on
+    /// again while still avoided was planned through for want of a way
+    /// round and failed again: no plan takes it until it expires. Taken
+    /// again and again, a bot paced the slalom on mp_ship's deck at (3565,
+    /// 95, 352) for most of a UO match: its way out north is proved only
+    /// with a running start, and no turn into it gives one
+    /// (bot-combat.md 17.1).
+    fn avoid_edge(&mut self, a: u32, b: u32) {
+        let until = self.clock + AVOID_TICKS;
+        if self.avoid.iter().any(|e| (e.0, e.1) == (a, b)) {
+            self.dead.push((a, b, until));
+        }
+        self.avoid.push((a, b, until));
     }
 
     fn reset(&mut self) {
@@ -3828,6 +4251,7 @@ impl NavGraph {
             && !self.leaps.contains(&e)
             && !self.crouch_jumps.contains(&e)
             && !self.risky.contains(&e)
+            && !self.mantles.contains(&e)
             && (self.nodes[a as usize].z - self.nodes[b as usize].z).abs()
                 <= vcod_common::pmove::STEPSIZE
     }
@@ -3946,6 +4370,7 @@ pub struct Search {
     avoid: Vec<(u32, u32)>,
     crowd: Vec<(u32, u32)>,
     blocked: Arc<[u32]>,
+    jump_cost: f32,
     cost: Vec<f32>,
     came: Vec<u32>,
     open: BinaryHeap<Open>,
@@ -3961,6 +4386,7 @@ impl Search {
             avoid,
             crowd: Vec::new(),
             blocked: Arc::default(),
+            jump_cost: 0.0,
             cost: vec![f32::INFINITY; n],
             came: vec![u32::MAX; n],
             open: BinaryHeap::new(),
@@ -3987,6 +4413,12 @@ impl Search {
     /// it has failed.
     fn reached(&self) -> usize {
         self.cost.iter().filter(|c| c.is_finite()).count()
+    }
+
+    /// The search with every jump edge `cost` longer than it is.
+    pub fn jumps_costing(mut self, cost: f32) -> Search {
+        self.jump_cost = cost;
+        self
     }
 
     /// The search through none of `blocked`'s nodes (sorted) but its
@@ -4054,6 +4486,9 @@ impl Search {
                     .is_ok()
                 {
                     len *= 1.0 + CROWD_COST;
+                }
+                if self.jump_cost > 0.0 && g.jumps.contains(&(node, next)) {
+                    len += self.jump_cost;
                 }
                 let c = self.cost[node as usize] + len + risk;
                 if c < self.cost[next as usize] {
@@ -4126,6 +4561,9 @@ thread_local! {
     static SPARE_CORE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The movement rules every walk's body moves by ([`with_rules`]).
     static RULES: std::cell::Cell<MoveRules> = const { std::cell::Cell::new(MoveRules::V1_1) };
+    /// A game's own step every walk's body moves by in place of CoD1's
+    /// pmove ([`with_step`]).
+    static STEP: std::cell::RefCell<Option<Arc<dyn WalkStep>>> = const { std::cell::RefCell::new(None) };
     /// Set inside [`walk_to`]: a forward run that stalls bobbing on a steep
     /// face jumps on its next tick on the ground ([`walk_sliding`]).
     static BOB: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -4156,6 +4594,50 @@ pub fn with_rules<R>(rules: MoveRules, f: impl FnOnce() -> R) -> R {
     r
 }
 
+/// What a [`WalkStep`] keeps of a walk's body between its cmds, beside the
+/// [`PlayerState`] the walk reads: the game's own playerstate.
+pub type WalkCarry = Option<Arc<dyn std::any::Any + Send + Sync>>;
+
+/// A game's own move for the walks' bodies, in place of CoD1's pmove
+/// under [`MoveRules`]: CoD2's (`crate::bots::cod2::Cod2Walk`), so its
+/// graph is proved by a body that moves as its bots do
+/// (bot-navigation.md, "Other rules").
+pub trait WalkStep: Send + Sync {
+    /// Moves `ps` by one cmd over `world`, its clock from `from_ms` to
+    /// `cmd.server_time`. The view is `cmd.angles` plus `delta`, which the
+    /// step may push as `delta_angles`; `weapons` holds the def of
+    /// `ps.weapon`. `carry` is what the step kept after the walk's last
+    /// cmd, `None` on its first.
+    #[allow(clippy::too_many_arguments)]
+    fn step(
+        &self,
+        ps: &mut PlayerState,
+        delta: &mut [i32; 3],
+        carry: &mut WalkCarry,
+        from_ms: i32,
+        cmd: &UserCmd,
+        world: &CollisionWorld,
+        weapons: &[Option<vcod_common::weapon::WeaponDef>],
+    );
+
+    /// Tells graphs proved by two steps apart in the cache.
+    fn key(&self) -> String;
+}
+
+/// Runs `f` with every walk's body moving by `step`, `None` for CoD1's
+/// pmove under the rules in force ([`with_rules`]).
+pub fn with_step<R>(step: Option<Arc<dyn WalkStep>>, f: impl FnOnce() -> R) -> R {
+    let was = STEP.replace(step);
+    let r = f();
+    STEP.set(was);
+    r
+}
+
+/// The step in force ([`with_step`]).
+fn own_step() -> Option<Arc<dyn WalkStep>> {
+    STEP.with_borrow(Clone::clone)
+}
+
 /// A body standing at `p` facing `yaw`, moving by the rules in force.
 fn body(p: Vec3, yaw: f32) -> PlayerState {
     let mut ps = PlayerState::spawn(p, yaw);
@@ -4181,11 +4663,14 @@ fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> 
     let next = std::sync::atomic::AtomicUsize::new(0);
     let mut out: Vec<Option<R>> = (0..items.len()).map(|_| None).collect();
     let rules = RULES.get();
+    let step = own_step();
     std::thread::scope(|s| {
         let handles: Vec<_> = (0..threads.min(items.len()))
             .map(|_| {
-                s.spawn(|| {
+                let (step, next, f) = (step.clone(), &next, &f);
+                s.spawn(move || {
                     RULES.set(rules);
+                    STEP.set(step);
                     let mut done = Vec::new();
                     loop {
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -4211,8 +4696,9 @@ fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> 
 /// The world's ladders as axial boxes: the `SURF_LADDER` brushes of the
 /// world model and of every submodel linked where it spawned (mp_italy's
 /// allied `bas` bunker is left by the two in its base's `*4`,
-/// bot-navigation.md section 2), with touching ones merged, since a tall
-/// ladder is often several brushes stacked.
+/// bot-navigation.md section 2), and a world clip's (CoD2's, which keeps
+/// model 0's brushes out of [`CollisionWorld::brushes`]), with touching
+/// ones merged, since a tall ladder is often several brushes stacked.
 fn ladders(world: &CollisionWorld) -> Vec<(Vec3, Vec3)> {
     let mut boxes: Vec<(Vec3, Vec3)> = world
         .brushes
@@ -4232,6 +4718,7 @@ fn ladders(world: &CollisionWorld) -> Vec<(Vec3, Vec3)> {
             }
             lo.cmple(hi).all().then_some((lo, hi))
         })
+        .chain(world.world_clip_ladders())
         .collect();
     let mut merged = true;
     while merged {
@@ -5295,6 +5782,10 @@ pub fn lip_ahead(
         ..NULL_USERCMD
     };
     let dt = FRAME_MS as f32 / 1000.0;
+    if let Some(own) = own_step() {
+        own.step(&mut ps, &mut [0; 3], &mut None, 0, &cmd, world, weapons);
+        return !ps.on_ground && !ps.on_ladder;
+    }
     let mw = MoveWorld::bare(world);
     player_step(
         &mut ps,
@@ -5353,10 +5844,12 @@ pub fn unpin_yaw(
     // How much nearer `to` a run held at `yaw` ends, when it keeps its
     // footing on the floor all the way.
     let key = paced_key_for(127, ps, weapons);
+    let own = own_step();
     let closes = |yaw: f32| {
         let mut ps = *ps;
         let mut delta = [0; 3];
         let mut ring = EventRing::default();
+        let mut carry = None;
         for i in 0..UNPIN_TICKS {
             let cmd = UserCmd {
                 server_time: FRAME_MS * (i as i32 + 1),
@@ -5365,7 +5858,15 @@ pub fn unpin_yaw(
                 weapon: ps.weapon,
                 ..NULL_USERCMD
             };
-            player_step(&mut ps, &mut delta, &mut ring, &cmd, dt, &mw, weapons);
+            match &own {
+                Some(own) => {
+                    let from = FRAME_MS * i as i32;
+                    own.step(&mut ps, &mut delta, &mut carry, from, &cmd, world, weapons);
+                }
+                None => {
+                    player_step(&mut ps, &mut delta, &mut ring, &cmd, dt, &mw, weapons);
+                }
+            }
             if !ps.on_ground || !(lo..=hi).contains(&ps.origin.z) || hazard(hazards, ps.origin) {
                 return None;
             }
@@ -5429,6 +5930,8 @@ pub fn push_off(
     let mut ring = EventRing::default();
     let mw = MoveWorld::bare(world);
     let dt = FRAME_MS as f32 / 1000.0;
+    let own = own_step();
+    let mut carry = None;
     for i in 0..PUSH_OFF_TICKS {
         let cmd = UserCmd {
             server_time: FRAME_MS * (i as i32 + 1),
@@ -5438,7 +5941,15 @@ pub fn push_off(
             weapon: ps.weapon,
             ..NULL_USERCMD
         };
-        player_step(&mut ps, &mut delta, &mut ring, &cmd, dt, &mw, weapons);
+        match &own {
+            Some(own) => {
+                let from = FRAME_MS * i as i32;
+                own.step(&mut ps, &mut delta, &mut carry, from, &cmd, world, weapons);
+            }
+            None => {
+                player_step(&mut ps, &mut delta, &mut ring, &cmd, dt, &mw, weapons);
+            }
+        }
         if i == 0 && ps.on_ladder {
             return None;
         }
@@ -5572,6 +6083,8 @@ struct Sim {
     /// Off the rungs, the tick's cmds as a client's lengths instead of one
     /// 50 ms cmd ([`drains`]).
     split: Option<[i32; 3]>,
+    /// The [`WalkStep`]'s own body, when one is in force.
+    carry: WalkCarry,
 }
 
 impl Sim {
@@ -5619,12 +6132,26 @@ impl Sim {
         // of the walk.
         let d = self.delta;
         let angles = [0, 1, 2].map(|i| cmd.angles[i] - d[i]);
+        let own = own_step();
         for &server_time in &times[..n] {
             let cmd = UserCmd {
                 server_time,
                 angles,
                 ..*cmd
             };
+            if let Some(own) = &own {
+                own.step(
+                    ps,
+                    &mut self.delta,
+                    &mut self.carry,
+                    self.time,
+                    &cmd,
+                    world,
+                    weapons,
+                );
+                self.time = server_time;
+                continue;
+            }
             chop(self.time, &cmd, |step, dt| {
                 player_step(ps, &mut self.delta, &mut self.ring, step, dt, &mw, weapons);
                 ps.jump_latched
@@ -5767,6 +6294,7 @@ mod tests {
     #[test]
     fn a_drop_splits_the_components() {
         let c = tiny().components();
+        assert_eq!(tiny().component_ids(), &c[..]);
         assert!(c[0] == c[1] && c[1] == c[2] && c[2] == c[3]);
         assert_ne!(c[4], c[0], "the node below the drop is its own component");
     }
@@ -5875,6 +6403,41 @@ mod tests {
         g.edges[0] = vec![2];
         let mut s = Search::new(&g, 0, 2, Vec::new());
         assert!(matches!(s.run(&g, &mut 100), Plan::Found(p) if p == [0, 2]));
+    }
+
+    /// An edge stuck on again while it is avoided, planned through for want
+    /// of a way round, is planned through no more until it expires: the
+    /// bot gets no waypoint rather than the same edge again.
+    #[test]
+    fn an_edge_stuck_on_again_while_avoided_is_not_planned_through() {
+        use crate::bots::Goal;
+        let nodes = vec![Vec3::ZERO, Vec3::new(64.0, 0.0, 0.0)];
+        let mut g = NavGraph::from_parts(nodes, vec![vec![1], vec![]]);
+        g.index_components();
+        let goal = Goal::To([64.0, 0.0, 0.0]);
+        let plan = |f: &mut Follower| {
+            let mut budget = 100;
+            (0..4).find_map(|_| {
+                f.waypoint(
+                    &g,
+                    None,
+                    goal,
+                    [0.0; 3],
+                    Footing::STANDING,
+                    &mut budget,
+                    &mut || 0,
+                )
+            })
+        };
+        let mut f = Follower::default();
+        f.avoid_edge(0, 1);
+        assert_eq!(plan(&mut f), Some([64.0, 0.0, 0.0]), "through it once");
+        f.reset();
+        f.avoid_edge(0, 1);
+        assert_eq!(plan(&mut f), None, "not again");
+        f.clock += AVOID_TICKS;
+        f.rest = 0;
+        assert_eq!(plan(&mut f), Some([64.0, 0.0, 0.0]), "once it expires");
     }
 
     /// A point goal that moves off and comes back within `PARK_TICKS`

@@ -37,8 +37,10 @@ fn index_arg(v: Option<&Value>) -> Result<usize, ErrorKind> {
 }
 
 /// `ObjectiveStateIndexFromString` (0x5e008): empty 0, invisible 2,
-/// current 4. The fourth value, 1, is `objective_current`'s alone.
-fn state_arg(cx: &Cx, v: Option<&Value>) -> Result<i32, ErrorKind> {
+/// current 4. The fourth value, 1, is `objective_current`'s alone, but on
+/// CoD4 1.7, whose `objective_state` (0x80c210a) reads `active` as 1
+/// (cod4-gsc.md 7).
+fn state_arg(host: &GameHost, cx: &Cx, v: Option<&Value>) -> Result<i32, ErrorKind> {
     let Some(Value::String(a)) = v else {
         return Err(ErrorKind::BadType("objective state must be a string"));
     };
@@ -46,6 +48,7 @@ fn state_arg(cx: &Cx, v: Option<&Value>) -> Result<i32, ErrorKind> {
         "empty" => Ok(0),
         "invisible" => Ok(2),
         "current" => Ok(4),
+        "active" if host.profile.game == vcod_common::game::Game::Cod4 => Ok(1),
         _ => Err(ErrorKind::BadType("unknown objective state")),
     }
 }
@@ -70,6 +73,7 @@ fn icon_arg(host: &mut GameHost, cx: &Cx, v: Option<&Value>) -> Result<i32, Erro
     if name.len() > 63 || name.starts_with('^') {
         return Err(ErrorKind::BadType("bad objective icon name"));
     }
+    let name = host.shader_name(&name);
     host.allocators
         .shader_index(&mut host.configstrings, &name, host.initializing)
 }
@@ -90,7 +94,7 @@ pub fn objective_add(
         ));
     }
     let i = index_arg(args.first())?;
-    let state = state_arg(cx, args.get(1))?;
+    let state = state_arg(host, cx, args.get(1))?;
     let mut o = empty_objective();
     o.state = state;
     if args.len() > 2 {
@@ -127,7 +131,7 @@ pub fn objective_state(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let i = index_arg(args.first())?;
-    let state = state_arg(cx, args.get(1))?;
+    let state = state_arg(host, cx, args.get(1))?;
     host.objectives[i].state = state;
     if state == 0 || state == 2 {
         host.objectives[i].ent_num = ENTITYNUM_NONE;

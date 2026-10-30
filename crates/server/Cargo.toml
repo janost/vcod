@@ -21,6 +21,8 @@ ctrlc.workspace = true
 env_logger.workspace = true
 log.workspace = true
 glam.workspace = true
+vcod-cod2 = { path = "../cod2" }
+vcod-cod4 = { path = "../cod4" }
 
 [[test]]
 name = "server"

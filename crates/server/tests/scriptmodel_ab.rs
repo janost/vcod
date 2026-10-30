@@ -392,7 +392,7 @@ fn ours_pair_run(
     // 2.1, "The thrower's slide"). 1.1's captures log no thrower.
     let aim = || common::ProbeHold {
         aim: true,
-        framed: proto.version != PROTOCOL_V1.version,
+        framed: proto.transport.version != PROTOCOL_V1.transport.version,
         ..Default::default()
     };
     let (mut ha, mut hb) = (aim(), aim());
@@ -402,7 +402,7 @@ fn ours_pair_run(
             // 1.5's and UO's target keeps the body his drop's last airborne
             // cmd wrote; 1.1's lies flat after any drop, and its captures
             // settle on the grade where the even cadence puts him.
-            framed: proto.version != PROTOCOL_V1.version,
+            framed: proto.transport.version != PROTOCOL_V1.transport.version,
             ..Default::default()
         };
         if let Some(log) = target_log {
@@ -906,7 +906,8 @@ fn a_frag_rolls_up_terrain_like_retail_on_15() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         return;
     }
     compare_rolls(
@@ -1042,7 +1043,8 @@ fn a_frag_leaves_15s_untruncated_muzzle() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         return;
     }
     compare_throw_starts(
@@ -1087,7 +1089,9 @@ fn a_frag_rests_on_a_prone_players_back_on_15() {
         let Some(fs) = vcod_common::testing::game_fs() else {
             return;
         };
-        if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+        if vcod_server::server::install_protocol(&fs).transport.version
+            != PROTOCOL_V6.transport.version
+        {
             return;
         }
         prone_back_gate(fs, fixture, thrower_at, true);
@@ -1103,7 +1107,8 @@ fn a_frag_rests_on_a_prone_players_back_like_retail_on_15() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         return;
     }
     let fixture =

@@ -3,9 +3,11 @@
 How vcod's debug bots (`--bots`) play stock Search & Destroy, Retrieval
 (section 4) and Behind Enemy Lines (section 5), what changes on a
 United Offensive server (section 6), UO's own `ctf`, `dom`, `hq` and
-`bas` (section 7), and UO's vehicles (section 10). The brain is
+`bas` (section 7), UO's vehicles (section 10), CoD2's `sd`, `ctf` and
+`hq` (section 11), and CoD4's `sd`, `sab`, `dom` and `koth` (section
+12). The brain is
 `crates/server/src/bots.rs` (`ObjTarget`, `think_objective`); the server fills
-`BotView::sd` and `BotView::linked` in `crates/server/src/server.rs`
+`BotView::sd` and `BotView::linked` in `crates/server/src/server/bot_world.rs`
 (`bot_sd`, `site_stand`) from `ScriptRuntime::sd_objectives`
 (`crates/server/src/game/script.rs`). Navigation is in `bot-navigation.md`.
 
@@ -62,7 +64,7 @@ Line numbers are `maps/MP/gametypes/sd.gsc` in `pak5.pk3`.
   (`bots::tests::a_blocked_bot_steps_aside_to_clear_the_line`,
   `nav::tests::a_sidestep_goes_across_the_line_on_level_edges`). No spot,
   and the bot holds as before. The server keeps a bot's spot
-  (`Server::bot_sidesteps`, `bots::held_sidestep`) until the body is
+  (`BotDriver::sidesteps`, `bots::held_sidestep`) until the body is
   within 16 units of it, it no longer clears the line, or 3 s have passed;
   only then does it pick again. Picked afresh every tick, the nearest spot
   moved with the body and with a teammate walking across the line, and the
@@ -370,8 +372,7 @@ VERIFIED (measured, ours, 2026-10-08, `mp_brecourt` `bel`, 6 shooting
 bots, release, two runs of 120 and 90 s): all six joined; the axis
 killed an allied bot 8 times in each run, so 8 swaps each; allied bots
 killed axis ones 6 and 7 times and earned 17 and 11 `bel_alive_tick`s.
-Whether the hunt and the flight look sensible is a hand check
-(`pending-manual-test.md` section 49).
+Whether the hunt and the flight look sensible is pending a hand check.
 
 VERIFIED (measured, ours, 2026-10-08, release, 6 shooting bots, seeds 1
 to 4, 150 s, `mp_brecourt` and `mp_carentan`): with the flight from the
@@ -434,7 +435,7 @@ files):
   its 1.8 s deploy is as long as a fight at pistol range, so an LMG bot
   with an enemy inside 500 units, or resting its button, draws the pistol;
   no frag is thrown with the bipod down. Whether a deployed bot looks
-  right is a hand check (`pending-manual-test.md` 217). VERIFIED
+  right is pending a hand check. VERIFIED
   (measured, ours, 2026-10-15, `ship_stalls` `UO=1 SHOOT=1`, `mp_cassino`
   `tdm`, seeds 13, 15, 17, 33): the deployed bots stand for the stall
   count's 12 s, 952, 1 049, 951 and 1 570 stalled bot-ticks against 0,
@@ -1186,7 +1187,10 @@ the backing rule seed 5 ran out its 29 minutes on six defuses.
 vcod's own extension, with nothing on retail to match beyond the paths a
 bot joins and leaves by. `crate::botmgmt` holds the rules and the name
 pool, `server/bot_admin.rs` the pass that runs at the top of the bots'
-tick (every 500 ms, or the tick after an `addbot` or `removebot`).
+tick (every 500 ms, or the tick after an `addbot` or `removebot`) and
+the commands. Both servers run that one copy over its `AdminHost`
+hooks: CoD1's `Server` implements them there, `Cod2Server` in
+`cod2/bots.rs`.
 
 - Names. VERIFIED: 1.1d's `ClientUserinfoChanged` (game.mp.i386.so
   0x520f4) copies the userinfo `name` into the client's 32-byte buffer at
@@ -1362,6 +1366,16 @@ stops boarding.
   node 220 or more across from the hull; nodes within 110 are passed. A
   route goes again when its goal moves 300, after 5 s without closing on
   its next node, and every 15 s.
+- A node's fit is a box position test (about 3.5 us on mp_foy), tested
+  as the node comes off A*'s heap, not as it goes on, and cached by node
+  point and box size. The cache outlives a graph rebuild: a rebuild
+  follows a script brush link change, and only the fits whose box meets a
+  toggled submodel's bounds (grown 2) are dropped. A warm pass fills it
+  in node order for every live vehicle's box, at most 600 tests a tick
+  (`Server::warm_hull_fits`), so a plan finds its tests run. A fit is the
+  same whenever it is taken, so routes match a cold cache's: `bmuo_*`,
+  `dguo*` and `it_bot_vehicles_uo` match the base recording
+  (cod11-map-cycle.md 4.9).
 - The goal is the brain's own (`Bot::goal`): an enemy, the objective or a
   roam, which picks a node a hull fits on at least 1200 away.
 - `rightmove` steers both kinds toward the waypoint's bearing past 6
@@ -1698,3 +1712,1596 @@ aborts from tick 1037, after a driver and a gunner left one tank on tick
 938. Not measured on retail, which needs two clients' exits on one
 frame. Bots now press use on frames of their own seat's, so none of
 theirs coincide.
+
+## 11. CoD2's `sd`, `ctf` and `hq`
+
+CoD2 bots (`crates/server/src/bots/cod2.rs`) play the three with the
+brain of sections 3 and 7.2. The server half reads the stock scripts
+(`maps/mp/gametypes/*.gsc` in `iw_15.iwd`, line numbers below) in
+`crates/server/src/game/cod2_objectives.rs` and deals the views as the
+CoD1 driver does (rank, lead, cover; section 9).
+
+### 11.1 What the scripts ask of a player
+
+- VERIFIED (`sd.gsc` `bombzones`, 1433-1551; the mp_toujane ents lump):
+  the sites are the `trigger_use_touch` entities with targetname
+  `bombzone` whose `script_bombmode_original` key is set (the
+  `level.bombmode` 0 default; `_single` for 1, `_dual` for 2), A and B by
+  `script_label`. The defuse trigger `bombtrigger` is a
+  `trigger_use_touch` too, sent away by `triggerOff` (1572) and moved
+  onto the bomb at the plant (1754).
+- INFERRED (`bombzone_think`, 1638-1700, branch conditions): a plant
+  starts on the zone's `"trigger"` from an attacker on the ground, and
+  runs while he stays alive with use held: the `"trigger"` is the use
+  press's, the touch trigger's -256 score in the use list
+  (`game/cod2_use.rs`), so the view does not matter. The script then
+  `linkTo`s him to the zone (1697). The defuse (`bomb_think`, 1863-1917)
+  is the same on `bombtrigger` with no `isLookingAt`.
+- VERIFIED (`sd.gsc` 1768, 1943): a plant and a defuse log `A;...;bomb_plant`
+  and `A;...;bomb_defuse`, what `bot_match` counts.
+- VERIFIED (`ctf.gsc` `initFlags`, 1051-1083; the mp_toujane ents
+  lump): each flag is a `trigger_radius` (radius 48, height 128),
+  targetname `allied_flag` or `axis_flag`, carrying `team`, `atbase` and
+  `home_origin`.
+- INFERRED (`ctf.gsc` `flag`, 1095-1166, branch conditions): an enemy's
+  touch takes the flag; its own team's touch returns it when not
+  `atbase`, and, when `atbase`, captures the other flag if the toucher
+  carries it (`.flag`). `pickupFlag` (1176) moves the trigger 10000 down
+  while carried; `dropFlag` (1204) puts it where the carrier fell.
+- VERIFIED (`hq.gsc` 1096-1128, 214, 226): the radios are `level.radio`,
+  each with `team`, `hidden` and `radius` (`level.radioradius` 120), and
+  `level.zradioradius` is 72, the fields United Offensive's `hq.gsc` has,
+  so `ScriptRuntime::uo_objectives("hq")` reads them unchanged.
+
+### 11.2 What the server tells the brain
+
+- `sd`: `SdView` as in section 2, off the zones above; the standing
+  point is `NavGraph::zone_stand`, the CoD1 `site_stand` rule.
+- `ctf`: `UoView::Ctf` (section 7.2). A flag's `home` is its trigger
+  while `atbase` and carried by nobody, `dropped` while not `atbase` and
+  carried by nobody, and its `goal` the other flag's trigger at its
+  `home_origin`: a carrier captures at his own flag, which must be home.
+- `hq`: `UoView::Hq`, off `uo_objectives`.
+- `linked`: `pm_type` 1. VERIFIED (measured, ours, mp_toujane `sd`, two
+  bots shoot off, 2026-10-22): before this change vcod-server's CoD2
+  level never drained the script's `linkTo` and `unlink` of a player
+  (`GameHost::client_link_ops`), so the plant ran (the zone's `planting`
+  read 1) while the bot, seeing no link after 20 ticks, let go. The level
+  now sets `pm_type` 1 on a link and 0 on an unlink (`Cod2Level::
+  apply_link_ops`); the body is not carried with its parent.
+
+### 11.3 Measured
+
+`bot_match` with `GAME=cod2`, docs/bots.md "CoD2": with six shooting bots
+over seeds 1 and 2, mp_toujane `sd` planted 14 times and defused 6, and
+`ctf` and `hq` scored where the bots without objectives scored nothing.
+`bots::cod2::tests::cod2_bots_plant_and_defuse_on_mp_toujane` holds the
+plant and the defuse with two bots that do not shoot.
+
+### 11.4 The stall census over six seeds, 2026-10-27
+
+The census of 12.12 on CoD2: `bot_match` (`GAME=cod2`, six shooting
+bots, `TICKS=6000`, `STALLS=1`, default limits) on the 15 stock maps
+under `dm`, `tdm`, `sd`, `ctf` and `hq`, seeds 1 to 6, 450 matches a
+setting. `bot_match` now counts a bot the script froze (`pm_flags`
+0x8000) as held, as CoD4's does, and prints a stalled bot-tick's spot
+with `STALLS=1`. Before, the three fixes below, all on CoD2's side of
+the bots. VERIFIED (the runs):
+
+| seed | kills | stalled bot-ticks |
+|---|---|---|
+| 1 | 3260 → 3254 | 1728 → 790 |
+| 2 | 3100 → 3187 | 5972 → 718 |
+| 3 | 3149 → 3155 | 2830 → 797 |
+| 4 | 3178 → 3234 | 3536 → 732 |
+| 5 | 3199 → 3229 | 1449 → 236 |
+| 6 | 3142 → 3161 | 4328 → 1042 |
+| all | 19028 → 19220 | 19843 → 4315 |
+
+| gametype | kills | stalled bot-ticks |
+|---|---|---|
+| dm | 5582 → 5604 | 1607 → 5 |
+| tdm | 4880 → 4929 | 2776 → 2432 |
+| sd | 1934 → 1963 | 5287 → 480 |
+| ctf | 3257 → 3315 | 2628 → 560 |
+| hq | 3375 → 3409 | 7545 → 838 |
+
+One setting's kills move by 50 a seed (standard deviation over the six
+seeds before), the per-seed difference by 31; kills are 1.0% up, stalls
+78% down, and no match is without a kill. Each stall spot below was read
+off a per-tick trace of the bot's body, cmd and follower. INFERRED (the
+traces), unless labelled.
+
+- A mantle onto a ledge too low to stand on. CoD2's pmove raises
+  `EV_STANCE_FORCE_CROUCH` through the climb (cod2-movement.md 9), and
+  the client holds crouch after it; the bots did not. On mp_breakout an
+  `sd` bot mantled twice from (5843, 4944, 12) and ended the second climb
+  standing at (5809, 4944, 96), off the ground, with no velocity, for the
+  rest of the round (2600 stalled bot-ticks, seed 2). mp_dawnville's
+  (1810, -16280, 62), a bot as still in the air, is likely the same. A bot now holds crouch after the event
+  and stands once a standing box fits on the ground
+  (`Cod2Bots::forced_crouch`); the breakout bot crouches, drops to 68
+  and runs on.
+- A ladder whose rungs let go only past their top. CoD2's ladder takes
+  no flat move into the face (cod2-movement.md 11), so a climber leaves
+  the rungs only above them. mp_matmata's ladder at (5025, 6749) rises to
+  a roof at 169; the graph, proved under 1.5's rules, steps off onto the
+  floor at 130, 77 across. Once level with that floor the brain backed
+  down (`Bot::steer`: a waypoint below on the rungs is backed onto unless
+  it lies within half a body across the face), and the bot went up and
+  down between 45 and 138 (1590 stalled bot-ticks in `dm`, more in the
+  other gametypes). A CoD2 view (`BotView::tops_out`) now climbs on to any
+  head across the face; the bot tops out on the roof and drops to the
+  floor. CoD1, UO and CoD4 keep the half-body rule.
+- Mantle edges that land past the follower's off-path reach. On
+  mp_brecourt the mantle from (-528, -816, 1) lands at (-340, -813, 0),
+  192 across; the follower cleared the path at its foot every tick, and
+  a bot heading east paced it for a minute at a time (1942 stalled
+  bot-ticks in `hq`, more in `ctf`, `tdm` and `sd`). CoD4 follows such an
+  edge (12.4, `BotWorld::LONG_MANTLES`); CoD2's stayed off when
+  bot-combat.md 17.1 found it grew mp_toujane's roof stall. On this code
+  it does not: mp_toujane `hq` (1200, 1900, 70), 3017 stalled bot-ticks
+  before, reads 22 with the first two fixes and 45 with all three. It is
+  on for CoD2.
+
+The first two fixes alone (without the third): 19204 kills, 10847
+stalled bot-ticks; mp_brecourt and mp_decoy `hq` stayed at 2195 and
+2020, and one seed of mp_harbor `tdm` rose from 31 to 1100 at (-6857,
+-7359, 37), gone with the third. VERIFIED (the runs).
+
+Left, as read off the stall lines: mp_decoy `tdm` (1629), two teammates
+holding each other at (8650, -12570, -531), 30 units apart (CoD2's
+route neither yielded nor parted teammates, `BotWorld::YIELDS` and
+`PARTS_MATES`; 11.5 parts them); and lumps under 300 bot-ticks a spot on
+mp_brecourt, mp_trainstation, mp_toujane and mp_breakout. No nav graph
+changes: the fixes are in the brain and the follower's driver, and
+`nav_build` digests stand. INFERRED (no build code touched).
+
+### 11.5 Teammates parted, 2026-10-28
+
+The stall 11.4 left on mp_decoy `tdm` is two bots of one side at
+(8600 to 8690, -12540 to -12590, -530), 30 units apart: one stops at a
+jump edge's foot (node 9194, jump to 8202 at (8607, -12583, -492)) and
+waits there, the other runs its path through him, and the two swap the
+foot back and forth, seed 6 for most of the match's last fifth (788
+stalled bot-ticks), seed 1 for 527. INFERRED (a per-tick trace of the
+follower and the stall lines' nearest teammate).
+
+CoD4's two rules for a still teammate in the way (12.7,
+`BotWorld::PARTS_MATES`: `mates_in_way` plans round him, `give_way`
+steps him aside) are now on for CoD2, `YIELDS` still off. Same census
+as 11.4 (450 matches a setting), before is 11.4's after; a second arm
+turned `YIELDS` on as well. VERIFIED (the runs):
+
+| gametype | kills | stalled bot-ticks | kills, both on | stalled, both on |
+|---|---|---|---|---|
+| dm | 5604 → 5604 | 5 → 5 | 5602 | 5 |
+| tdm | 4929 → 5001 | 2432 → 945 | 5007 | 1651 |
+| sd | 1963 → 1982 | 480 → 15 | 1942 | 48 |
+| ctf | 3315 → 3313 | 560 → 238 | 3277 | 295 |
+| hq | 3409 → 3440 | 838 → 653 | 3362 | 2175 |
+| all | 19220 → 19340 | 4315 → 1856 | 19190 | 4174 |
+
+- `dm` has no teammates and its lines are byte-identical. Over all
+  gametypes stalls are 57% down and kills 0.6% up; the per-seed kill
+  difference (28, 51, 23, 19, -3, 2) is inside 11.4's per-seed noise
+  of 31 to 50. VERIFIED (the runs).
+- mp_decoy `tdm` 1629 → 254, mp_decoy `hq` 441 → 0, mp_breakout `ctf`
+  338 → 0, mp_brecourt `sd` 286 → 0, mp_toujane `tdm` 219 → 0,
+  mp_trainstation `sd` 194 → 0. VERIFIED (the runs).
+- New or grown: mp_trainstation `hq` 221 → 442 (round (7650, -3460,
+  12), a teammate 40 to 130 off), mp_leningrad `ctf` 0 → 152,
+  mp_farmhouse `tdm` 0 → 98, mp_breakout `hq` 0 → 91. Left as read off
+  the stall lines, with mp_brecourt `tdm` (560, unchanged) and mp_burgundy
+  `hq` (120, unchanged). INFERRED (the stall lines).
+- `YIELDS` on as well gives back most of the gain (hq 2175), as
+  bot-combat.md 15 found; it stays off.
+
+No nav graph code changed, so the `nav_build` digests stand, and the
+shared driver is untouched: CoD1, UO and CoD4 run as before. INFERRED
+(the diff is CoD2's `BotWorld` consts).
+
+### 11.6 The radio's stand, a bot hung on a teammate, 2026-10-28
+
+The four spots 11.5 left new or grown, each read off a per-tick trace
+of the follower and the stall lines. INFERRED (the traces), unless
+labelled.
+
+- mp_trainstation `hq` (442, seeds 1 to 3, before 11.5 too). The first
+  radio stands at (7680.83, -3602.28, 18) (`maps/mp/mp_trainstation.gsc`
+  23), 50 over the floor at -32 beside it. A bot taking it walked at the
+  radio's point: the graph's nearest node to it is node 6479 on a
+  platform at (7577, -3549, 10), 116 across, and from there the bot paced
+  the platform at 100 to 130 off the radio for minutes and never counted
+  as at it. The brain also read the capture with United Offensive's
+  height, 50 up or down; CoD2's is 72 (11.1) and its reach is a distance
+  in three dimensions: VERIFIED (`hq.gsc` 214, 226, 1255, iw_15.iwd:
+  `distance(players[i].origin, radio.origin) <= radio.radius` and the z
+  difference `<= level.zradioradius`). A CoD2 radio now carries
+  `HqRadioView::height` 72 and a stand, `NavGraph::radio_stand`: the
+  node of `zone_stand`'s component nearest the radio within 88 across
+  and 56 up or down. The brain counts a bot inside 104 across and 56 up
+  or down, which retail's check holds (118 at most). On mp_trainstation
+  the stand is on the floor at -32, which the platform node fails
+  (`bots::cod2::tests::a_cod2_radio_stand_is_inside_the_capture`).
+  United Offensive keeps 50 and the radio's own point.
+- mp_leningrad `ctf` (152, seed 1). An allies carrier stood in his capture
+  zone at (-569, -626, 18), waiting for his own flag; a teammate heading
+  out hung at the step below him at (-598, -617, 14), his capsule on the
+  carrier's: off the ground nearly every tick, so `mates_in_way`, which
+  asks a held-up bot to stand on the ground, never counted him held, and
+  a third queued behind both. With CoD2's `BotWorld::PARTS_MATES_ALOFT`
+  a body off the ground and off a ladder beside a still teammate counts
+  as held up; he plans round, the carrier gives way and both run on
+  (152 → 0). Off for CoD1, UO and CoD4.
+- mp_farmhouse `tdm` (98, seeds 4 and 5) and mp_breakout `hq` (91, seed
+  5): a bot pressing a mantle edge it never climbs, mp_farmhouse's 6541 →
+  6843 from (-2304, 294, -29) to (-2208, 285, -26) and mp_breakout's from
+  (5799, 4930, 40) down to (5856 to 5888, 4930, 10), until the follower
+  goes round. No teammate in either; 11.5 only sent a bot that way. Not
+  fixed: the mantle edges are the build's.
+
+Same census as 11.4 (450 matches a setting), before is 11.5's after
+(this branch's base). VERIFIED (the runs):
+
+| gametype | kills | stalled bot-ticks |
+|---|---|---|
+| dm | 5604 → 5604 | 5 → 5 |
+| tdm | 5001 → 5012 | 945 → 727 |
+| sd | 1982 → 1982 | 15 → 15 |
+| ctf | 3313 → 3312 | 238 → 92 |
+| hq | 3440 → 3479 | 653 → 947 |
+| all | 19340 → 19389 | 1856 → 1786 |
+
+- The per-seed kill difference is -8, -6, 33, -6, 14, 22, inside 11.4's
+  per-seed noise. `dm` and `sd` are byte-identical (no radio, and no
+  carrier to hang on). VERIFIED (the runs).
+- Down: mp_trainstation `hq` 442 → 0, mp_leningrad `ctf` 152 → 0,
+  mp_burgundy `hq` 120 → 0, mp_breakout `hq` 91 → 10, mp_decoy `tdm`
+  254 → 36, mp_toujane `ctf` 30 → 0. VERIFIED (the runs).
+- New: mp_brecourt `hq` 0 → 419 (one bot, seed 1, at (-1444, -568, 28),
+  no teammate within 1400), mp_decoy `hq` 0 → 364 (seeds 1, 5 and 6 at
+  (8650, -12570, -530), off the ground: 11.5's jump edge foot, alone),
+  mp_toujane `hq` 0 → 154 (seed 4 at (1540, 922, 71)), mp_trainstation
+  `ctf` 47 → 83. None lies within 300 of a radio: every `hq` bot now
+  walks to another point, and the matches run other routes. Left, with
+  mp_brecourt `tdm` (560) and mp_farmhouse `tdm` (98). INFERRED (the
+  stall lines against the maps' radios).
+
+No nav graph code changed (`zone_stand` was split into `stand_where`
+with its pick unchanged), so the `nav_build` digests stand; the shared
+driver runs as before for CoD1, UO and CoD4 (UO's radio height and
+point as before, `PARTS_MATES_ALOFT` off). INFERRED (the diff).
+
+### 11.7 A jump edge's top read off the path, the climbs 1.5 proved, 2026-10-29
+
+The spots 11.6 left, each read off a per-tick trace of the follower
+(waypoint, edge kind, `stop`) and, at the mantle, of the cmd and the
+playerstate's mantle flags. INFERRED (the traces), unless labelled.
+
+- mp_brecourt `hq` (419) and `tdm` (560): the jump edge from (-1440,
+  -570, 28) to (-1250, -576, 21) is 190.4 across, inside the build's
+  reach of `OFF_PATH_STEPS` grid steps (4 times 48, 192;
+  `NavGraph::drop_out_of_reach`). A body passing the foot from 3 short
+  of it is 193 off the top, and the follower read that as knocked off
+  the path, cleared it every tick and held the bot on its rest point
+  for the rest of the match. With CoD2's `BotWorld::FOOT_SLACK` a
+  waypoint up to `REACH` (24) past that reach stays on the path
+  (`Follower::foot_slack`); the bot jumps it. Off for CoD1, UO and
+  CoD4.
+- mp_decoy `hq` and `tdm` (8650, -12570, -530): a pit 35 to 55 under the
+  ledges round it, left only by jump edges 30 to 39 up, proved under
+  `GRAPH_RULES`. The bot jumps one, falls back short, plans the next,
+  and paces the pit. CoD2's jump never climbs past its 39 (the airborne
+  step capped by `Jump_GetStepHeight` 0x80dc73a, a step over the top
+  reverted by `Jump_IsPlayerAboveMax` 0x80dc7c8, cod2-movement.md 6),
+  so a jump 1.5's walk landed can fall short under CoD2's. mp_toujane
+  `hq` (1552, 922, 72) is alike: the bot hangs in the air on a lip
+  under a node 18 up that the walk proved.
+- mp_farmhouse `tdm` (-2275, 300, -29): a bot on the mantle edge 6541 →
+  6843 is pinned on the wall at x -2275.1 with view yaw -8 to -18 and
+  never gets the hint (mantle flags 0x5, no 0x8). `mantle_walk` over the
+  bare world from that spot climbs at yaw -13 and -20 and not at -8 or
+  0, and from the node at -8 to -20. So the live step there sees
+  something the bare world does not, or the yaw window is that
+  narrow. Not fixed.
+
+The climbs were also walked again under CoD2's own pmove (`Cod2Walk`)
+after the build: every jump edge and every edge rising more than 12,
+dropped where no aim lands (75 to 128 edges a map). On mp_decoy's,
+mp_toujane's and mp_farmhouse's traced seeds their stalls went to 0 to
+46, but over the census the lumps moved: mp_decoy `tdm` 36 → 683,
+mp_railyard `ctf` 0 → 322, mp_toujane `ctf` 0 → 303. Every CoD2 graph
+changes, so `dm` moved as well. The two together came to 19344 kills
+and 1793 stalled bot-ticks. The re-proof is out. VERIFIED (the runs).
+
+Same census as 11.4 (450 matches a setting); before is this branch's
+base, which reproduces 11.6's after to the tick (19389, 1786). The slack
+alone. VERIFIED (the runs):
+
+| gametype | kills | stalled bot-ticks |
+|---|---|---|
+| dm | 5604 → 5577 | 5 → 86 |
+| tdm | 5012 → 4964 | 727 → 453 |
+| sd | 1982 → 1996 | 15 → 0 |
+| ctf | 3312 → 3265 | 92 → 357 |
+| hq | 3479 → 3440 | 947 → 743 |
+| all | 19389 → 19242 | 1786 → 1639 |
+
+- Per-seed kill difference -83, -40, -34, 14, -34, 30: inside 11.4's
+  per-seed noise of 31 to 50 but for seed 1. VERIFIED (the runs).
+- Down: mp_brecourt `tdm` 560 → 0 and `hq` 419 → 0, mp_trainstation
+  `ctf` 83 → 0, mp_farmhouse `tdm` 98 → 55, mp_harbor `tdm` 33 → 0.
+  VERIFIED (the runs).
+- Up: mp_decoy `hq` 364 → 535 and `tdm` 36 → 371 (the pit above),
+  mp_toujane `ctf` 0 → 303 (seed 1 at (50, 910, -14), in both arms),
+  `hq` 154 → 185 (the lip), mp_trainstation `dm` 0 → 66. The slack
+  changes every route a bot takes, `dm`'s too. INFERRED (the stall
+  lines).
+
+No nav graph code changed, so the `nav_build` digests stand; the slack
+is off for CoD1, UO and CoD4. INFERRED (the diff).
+
+### 11.8 The pit's leaps, the climbs' re-walk, the mantle strip, 2026-10-29
+
+The two spots 11.7 left, read off per-tick traces of the follower and
+of the cmd and playerstate (`BTRACE` patches, not committed), and off
+CoD2 pmove walks over the bare level world. INFERRED (the traces),
+unless labelled.
+
+- mp_decoy's pit at (8650, -12570, -530). The edges a bot took out of it
+  (6408 → 9194, 6407 → 9193, 6407 → 9459 on seed 2) were leaps
+  (`NavGraph::link_leaps`), not plain jumps, and the bot never pressed
+  the jump key on one: its cmd's buttons stay 0 the whole run at the
+  ledge, and it falls back off the face. A bot jumps a leap only when
+  `BotView::lip` says the lip is ahead, which the driver fills only on a
+  route with pmove probes; CoD2's has `BotWorld::PMOVE_PROBES` off, so
+  a CoD2 bot never jumps a leap, as 12.14 found for CoD4. 11.7's reading
+  of the stall as CoD2's jump cap was wrong for this spot. A CoD2 graph
+  is now built without the lip (`bots::cod2::LIP`, as `bots::cod4::LIP`):
+  its leaps are cleared before `NavGraph::reprove_jumps` walks each again
+  as a plain jump edge, its edges past the follower's reach are dropped,
+  and the mantle probe runs again off the floors the last mantles reached
+  (`NavGraph::build_opts`). Every map loses its leaps (mp_decoy 162,
+  mp_burgundy 346), gains 0 to 120 mantle edges (mp_farmhouse 785 →
+  905), and keeps every spawn in its component (`nav_build GAME=cod2`,
+  `GAMETYPE=tdm`). VERIFIED (the builds).
+- Why 11.7's re-walk of the climbs under CoD2's pmove moved the stalls.
+  First, it walked each leap again as a leap (`Gait::Leap`, a jump at the
+  lip), which lands, so the leaps a CoD2 bot never jumps stayed: built
+  with the lip it still came to 535 → 78 on mp_decoy `hq` but 371 → 683
+  on `tdm`. Second, it walked only the climbs, and the routes it pushed
+  bots onto run over edges proved under 1.5's rules alone. On mp_railyard
+  `tdm` and `ctf` (seed 6, 0 → 397 and 322) a bot paced (-1150, -462,
+  20): a CoD2 body run west from (-1120, -450, 14.5) at the plain edges
+  to (-1216, -479, -9) is stopped at x -1150.9 by the level's collision,
+  where the graph's walk under 1.5's rules went on. VERIFIED (measured,
+  ours, `vcod_cod2::pmove::player_step` over the bare world). Without the
+  lip the re-walk still adds stalls (819 → 1585 over the census below),
+  and so does building the whole graph under CoD2's step
+  (`Cod2Walk` as the build's `WalkStep`: 1891, mp_trainstation `tdm` and
+  `dm` 579 and 466). Neither is kept; the graph stays proved under 1.5's
+  rules. VERIFIED (the runs).
+- mp_farmhouse `tdm` (-2275, 300, -29), the mantle edge 6541 → 6843. No
+  script brush or entity stands there: the same step over the bare
+  world from the live playerstate gives the same flags (0x5, no hint).
+  Nor is it the yaw. A single step from rest at x -2275.1 gets the hint
+  on y 262 to 286 of that wall at every yaw from -40 to 40, and nowhere
+  else. The probe climbed at yaw -45 (`link_mantles` tries the eight
+  compass ways) from the foot (-2304, 294), sliding along the wall into
+  that strip. A bot runs at the edge's top (-2208, 285) instead, meets
+  the wall at y 307 and slides south at under 30 units/s, slower as its
+  heading turns square to the wall, and gives up at y 290, 4 short.
+  VERIFIED (measured, ours). Running a rising mantle edge along its
+  probe's heading from the foot climbs from where the bot met the wall,
+  but over the census it gave 987 stalls to the no-lip graph's 819 and
+  is not kept. Built without the lip, the routes no longer stop there:
+  mp_farmhouse `tdm` 55 → 0, mp_breakout `hq` 14 → 0. VERIFIED (the
+  runs).
+
+Same census as 11.4 (450 matches a setting); before is this branch's
+base, which reproduces 11.7's after to the tick (19242, 1639). The graph
+without the lip. VERIFIED (the runs):
+
+| gametype | kills | stalled bot-ticks |
+|---|---|---|
+| dm | 5577 → 5572 | 86 → 213 |
+| tdm | 4964 → 5046 | 453 → 72 |
+| sd | 1996 → 1989 | 0 → 0 |
+| ctf | 3265 → 3252 | 357 → 318 |
+| hq | 3440 → 3472 | 743 → 216 |
+| all | 19242 → 19331 | 1639 → 819 |
+
+- Per-seed kill difference 41, 48, 33, -83, 20, 30 (standard deviation
+  45): inside 11.4's per-seed noise of 31 to 50 but for seed 4. No
+  match without a kill. VERIFIED (the runs).
+- Down: mp_decoy `hq` 535 → 0 and `tdm` 371 → 8, mp_farmhouse `tdm` 55
+  → 0, mp_leningrad `ctf` 39 → 0, mp_matmata `tdm` 27 → 0. VERIFIED
+  (the runs).
+- Up: mp_trainstation `dm` 66 → 201 (seed 4, one bot at (6629, -2565,
+  128)), mp_brecourt `tdm` 0 → 64, mp_trainstation `hq` 0 → 31. Left:
+  mp_toujane `ctf` 303 (seed 1, two teammates 30 apart at (54, 911,
+  -14)) and `hq` 185 (the lip at (1470 to 1550, 925, 57 to 74): a jump
+  edge from (1472, 932, 57) to (1470, 901, 82) the bot jumps and hangs
+  on, as 11.7 read; the climbs' re-walk drops it, 185 → 0 with the lip
+  and 17 without). INFERRED
+  (the stall lines and a trace of seed 5).
+
+Only CoD2's build changed (`bots::cod2::LIP`, the build's `lip` off);
+CoD1, 1.5 and UO build with the lip as before, so their `nav_build`
+digests stand. INFERRED (the diff).
+
+## 12. CoD4's `sd`, `sab`, `dom` and `koth`
+
+CoD4 bots (`crates/server/src/bots/cod4.rs`) play the four with the
+brain of sections 2, 3 and 7.2. The server half reads the stock scripts'
+game objects (`maps/mp/gametypes/*.gsc` and `_gameobjects.gsc` from the
+zones) in `crates/server/src/game/cod4/bot_feed.rs`
+(`Cod4Level::objectives`) and deals the views as the CoD1 driver does
+(rank, lead, cover; section 9). What the engine had to do for a player to
+take, plant, defuse and capture at all is `cod4-gsc.md` 9.
+
+### 12.1 What the scripts ask of a player
+
+- VERIFIED (`sd.gsc` `bombs`): the bomb is a carry object on the
+  `sd_bomb_pickup_trig` trigger, carried by the attackers only
+  (`allowCarry("friendly")`); the zones are use objects on the
+  `bombzone` triggers keyed to it (`setKeyObject(level.sdBomb)`), so only
+  its carrier plants, with `briefcase_bomb_mp` as the use weapon and
+  `level.plantTime` (5 s by default) as the use time. The
+  plant moves each zone's `bombDefuseTrig` onto the bomb as the defuse
+  object (`level.defuseTime`, 5 s by default, `briefcase_bomb_defuse_mp`) and
+  disables the other zones.
+- VERIFIED (`sab.gsc` `bombs`, `createBombZone`, `onPickup`, `onUse`):
+  one neutral bomb (`sab_bomb_pickup_trig`, `allowCarry("any")`) and a
+  zone per team, `level.bombZones[team]` its own, planted at by the
+  other side; the plant turns the same zone into the defuse
+  (`setUpForDefusing`), `level.bombPlantedBy` names the planters, and a
+  defuse hands the bomb to the defuser.
+- VERIFIED (`dom.gsc` `domFlags`): each flag is a proximity use object on
+  a `trigger_radius` (`flag_primary`, `flag_secondary`), taken in 10 s
+  (`setUseTime(10.0)`) by a team standing in it with nobody of the other
+  team in it (`_gameobjects.gsc` `updateUseRate`).
+- VERIFIED (`koth.gsc`, the radio loop): `level.radioObject` is the radio
+  up now, a proximity use object on its `radiotrigger`; for
+  `level.hqSpawnTime` after it is picked its trigger is disabled (sent
+  50000 down by `updateTrigger`), then any team takes it by standing in
+  it and the other side destroys it the same way.
+- VERIFIED (`_gameobjects.gsc` `useObjectUseThink`, `useHoldThink`): a
+  use object starts on its trigger's `"trigger"` from a player on the
+  ground whose team may use it and who carries its key object, links him
+  to the trigger, switches him to the use weapon and fills only while it
+  is in hand and use stays held.
+- VERIFIED (`_gameobjects.gsc` `createCarryObject`, `setPickedUp`,
+  `setDropped`): a carry object's `carrier`, `curOrigin` (where it lies)
+  and `interactTeam` are fields on its struct, and `updateTrigger` sends a
+  trigger no team may use 50000 down.
+- INFERRED, not yet confirmed on 1.7 (`ScrCmd_LogString` reads its
+  string and writes nothing): `logString` logs nothing, and vcod's CoD4
+  builtin is a no-op, so a CoD4 level logs no `A;` action; `bot_match`
+  counts the objectives' changes off the scripts instead.
+
+### 12.2 What the server tells the brain
+
+- `sd`, `sab`: `SdView` as in section 2. A team attacks (its zones are
+  the sites) while it carries the bomb or may take it lying, and defends
+  the zones the other side plants at otherwise; once the bomb is down the
+  planters guard it and the other side's bot nearest it is the lead that
+  defuses. The bomb is a key object, `SdView::key` (`KeyBomb`): the
+  team's playing bot nearest the bomb lying walks into it
+  (`ObjTarget::Deliver`; the touch takes it), only the carrier plants
+  (and keeps for its site through a fight, as a carrier does, section
+  9), the other attackers guard their site. A plant and a defuse hold use
+  for the script's use time plus 2 s, the briefcase's switch. CoD1's and
+  CoD2's views carry no key and play as before.
+- `dom`, `koth`: `UoView::Dom` (section 7.2), each flag or the radio a
+  zone off its trigger's bounds (a round trigger's inner square). A radio
+  not up yet reads as held, so the bots wait round it.
+- A script's `switchToWeapon` reaches a bot as `a <weapon>` in 1.7's
+  numbers; the bot asks for it in the cmd's weapon byte until it is in
+  hand, past the brain's own weapon numbering (`bots::cod4::Arms`).
+
+### 12.3 Measured
+
+`bot_match` with `GAME=cod4` (docs/bots.md "CoD4"): six shooting
+bots, `TICKS=6000` (5 min, the prematch and intermission included),
+seeds 1 and 2 summed per map, 2026-10-25, the stock limits (`sd` and
+`sab` a match of rounds, a round over at its end). Before is e6c7bf06
+(no touch pass, no use key: nothing could be taken or planted), after is
+this change; `bot_match` read the objectives' changes off the scripts
+for the after arm only, so the before arm's zeros are by construction.
+A run of this change with `OBJ=0` (bots off the objectives, the engine
+fixes in) matches the before arm's kills, levels and stalls on every
+`sd`, `sab` and `koth` run, and picked the bomb up 2 to 10 times a map
+and took 1 to 4 `dom` flags in passing.
+
+| gametype | map | pickups | plants | defuses | explodes | captures | levels ended (by the bomb) | kills | stalled bot-ticks |
+|---|---|---|---|---|---|---|---|---|---|
+| sd | mp_backlot | 0 → 13 | 0 → 8 | 0 → 3 | 0 → 3 | 0 → 0 | 8 → 10 (6) | 35 → 37 | 3 → 127 |
+| sd | mp_crash | 0 → 10 | 0 → 5 | 0 → 1 | 0 → 2 | 0 → 0 | 9 → 6 (3) | 34 → 21 | 954 → 3571 |
+| sd | mp_strike | 0 → 10 | 0 → 4 | 0 → 0 | 0 → 2 | 0 → 0 | 9 → 6 (2) | 40 → 25 | 0 → 4142 |
+| sab | mp_backlot | 0 → 12 | 0 → 5 | 0 → 3 | 0 → 2 | 0 → 0 | 0 → 2 (2) | 48 → 41 | 0 → 0 |
+| sab | mp_crash | 0 → 22 | 0 → 4 | 0 → 2 | 0 → 2 | 0 → 0 | 0 → 2 (2) | 56 → 73 | 644 → 707 |
+| sab | mp_strike | 0 → 11 | 0 → 5 | 0 → 2 | 0 → 3 | 0 → 0 | 0 → 3 (3) | 73 → 53 | 0 → 80 |
+| dom | mp_backlot | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 29 | 0 → 0 | 45 → 59 | 0 → 0 |
+| dom | mp_crash | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 28 | 0 → 0 | 60 → 116 | 4112 → 0 |
+| dom | mp_strike | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 33 | 0 → 0 | 75 → 81 | 0 → 0 |
+| koth | mp_backlot | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 7 | 0 → 0 | 48 → 49 | 0 → 0 |
+| koth | mp_crash | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 1 | 0 → 0 | 52 → 93 | 8581 → 981 |
+| koth | mp_strike | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 8 | 0 → 0 | 75 → 40 | 1423 → 1268 |
+
+- `sd`: every map plants and the bomb blows up or is defused; 6 of 10
+  levels on mp_backlot, 3 of 6 on mp_crash and 2 of 6 on mp_strike end
+  on the bomb rather than a team's last death. Rounds run longer (the 45 s bomb timer, the walk to
+  the bomb), so fewer end in the 5 minutes on mp_crash and mp_strike.
+- `sab`: each map ends at least two matches on an explosion; before,
+  no `sab` level ended in 5 minutes.
+- `dom`: 28 to 33 captures a map against none.
+- `koth`: the radio is taken on every map but rarely on mp_crash, where
+  both sides reach it and stand in it together, which holds the capture
+  (`updateUseRate`) until one side is dead. Fewer bot-ticks play
+  (mp_backlot 65 726 before, 50 443 after); not looked into.
+- The stalls left in `sd` are defenders short of a zone's stand: on
+  mp_strike seed 2 every stalled sample was two axis bots at
+  (1573, 643, 16), 114 units outside zone B's box, out of reach of a
+  stand inside it. Resolved in 12.4: they were dead bots following a
+  teammate.
+- `cod4::bots::tests::cod4_bots_take_plant_and_defuse_the_sd_bomb` and
+  `_the_sab_bomb` (two bots that do not shoot, mp_crash),
+  `cod4_bots_capture_dom_flags` (mp_crash) and
+  `cod4_bots_capture_the_koth_radio` (one bot, mp_backlot) hold each
+  objective on a live level.
+
+### 12.4 Followers, mantles, the radio's floor and frags
+
+What held the bots of 12.3 back, each read off a traced `bot_match` run
+(`GAME=cod4`, seeds 1 and 2):
+
+- The `sd` stalls were not bots. A spectator following another client
+  is sent that client's playerstate whole, `pm_type` 0 and origin with
+  it (`game::cod4::level`'s follow, cod4-hud.md 5.1), so a dead bot read
+  as playing where the teammate it followed stood guard, was dealt a
+  role and counted as stalled. Both mp_strike axis bots at (1573, 641,
+  16) followed the defender guarding zone B. The feed and `bot_match`
+  now count a client as playing only with `POF_PLAYER` (4) in its own
+  `otherFlags`. INFERRED (the bots' playerstates at the stalled ticks).
+- mp_crash's `sd` stalls were a mantle the follower dropped: the edge
+  from (291, -1439, 84) lands at (385, -1307, 128), 162 across, past the
+  follower's off-path reach of four grid steps, so the path was cleared
+  every tick and the bot stood at the edge's foot heading for zone B. On
+  CoD4 a mantle edge is now followed to its landing however far it lies
+  (`BotWorld::LONG_MANTLES`; off on CoD2, whose `bot_match` digests it
+  moved; 56 of
+  mp_crash's 1222 mantle edges are longer than the reach, 12 of
+  mp_backlot's 1498, 2 of mp_strike's 615). INFERRED (the follower's
+  state at the stalled ticks; `nav_build`'s `ROUTE=` with `GAME=cod4`).
+- On mp_crash `koth` nobody took the radio because nobody touched its
+  trigger. The radio at (310.5, 1267, 303) has its `radiotrigger` (`*25`,
+  z 271..393) over a stair whose nodes at 201..209 were the zone's
+  stand; the brain read a body there as in the zone (its box top reaches
+  the trigger's bottom), the stock script never counted one
+  (`numTouching` stayed 0 for the whole match). The two teams never
+  stood in it together, so there was no contest to fight out. A `dom`
+  or `koth` site now starts a standing body's height (70) over the
+  trigger's bottom: its stand and its test are feet on a floor inside the
+  trigger. VERIFIED (`level.radioObject.numTouching` read each tick of
+  the run); `_gameobjects.gsc` `triggerTouchThink` counts a body only
+  while `isTouching`. The holders cannot respawn while they hold it
+  (`koth.gsc`), so a koth level with the radio taken has fewer kills.
+- No frag ever left a bot's hand on purpose: the feed read 1.7's
+  `OFFHAND_HOLD` (17) as the pin out, but `PM_Weapon_OffHandHold` moves
+  to `OFFHAND_START` (18) once the pin is out and the release goes
+  through 17 (vcod_cod4's `pmove::weapon`, CoD2's names swapped). The
+  brain waited for the pin and put the frag back.
+- The kill rate. Six bots, 6000 ticks, seeds 1 and 2 summed, kills per
+  playing bot-minute: CoD2 `tdm` on mp_toujane 2.59 (140 kills); CoD4
+  `war` on mp_crash 1.27 before, 1.50 after. CoD4's bots fire more
+  rounds (1286 against CoD2's 817) and land 0.23 of them, at 3.7 hits a
+  kill (100 health against 30-40 a round), so the gap left is the
+  weapons' damage, not the feed. CoD2's `bot_match` counts its hits off
+  `D;` lines its scripts log only on some hits (133 hits for 140 kills),
+  so the two hit counts do not compare. On both games the view follows
+  the brain's aim to within 0.003 degrees (median), and every weapon of
+  the five classes, the frag and the offhands, takes a brain number.
+  INFERRED (the brain's `PONYRI_DBG` lines and the feed's weapon list,
+  mp_crash seed 1).
+- CoD4's `positionWouldTelefrag` now sees a body spawned this frame: 1.7
+  writes `pm_type` in `ClientSpawn` and reads alive as below `PM_DEAD`
+  (7). It moved no number here (the `sd` overlaps were followers).
+  INFERRED (`GScr_positionWouldTelefrag`).
+
+Before is 91bcd359, after is this change, `bot_match` as 12.3 (six
+shooting bots, `TICKS=6000`, seeds 1 and 2 summed, 2026-10-25). The
+after arm counts no follower as playing, so its playing bot-ticks drop
+where the dead wait (`sd`, `koth`) and its stalls with them.
+
+| gametype | map | kills | hits / rounds | throws | stalled bot-ticks | objective actions |
+|---|---|---|---|---|---|---|
+| war | mp_backlot | 66 → 73 | 258/1001 → 261/983 | 0 → 33 | 0 → 0 | |
+| war | mp_crash | 67 → 78 | 256/896 → 291/1286 | 0 → 32 | 968 → 938 | |
+| war | mp_strike | 67 → 75 | 228/880 → 295/1018 | 0 → 17 | 4 → 21 | |
+| sd | mp_backlot | 31 → 41 | 114/576 → 132/333 | 2 → 8 | 291 → 32 | plants 8 → 7, defuses 3 → 3 |
+| sd | mp_crash | 14 → 29 | 51/136 → 109/248 | 0 → 9 | 9267 → 595 | plants 1 → 5, defuses 1 → 2 |
+| sd | mp_strike | 32 → 34 | 108/765 → 110/448 | 0 → 16 | 386 → 68 | plants 6 → 7, defuses 1 → 4 |
+| sab | mp_backlot | 68 → 71 | 269/918 → 245/759 | 0 → 24 | 0 → 0 | plants 3 → 4, explodes 1 → 2 |
+| sab | mp_crash | 79 → 64 | 259/837 → 247/749 | 0 → 17 | 256 → 0 | plants 5 → 3, explodes 1 → 2 |
+| sab | mp_strike | 59 → 52 | 251/833 → 213/724 | 0 → 16 | 0 → 7 | plants 6 → 3, explodes 3 → 2 |
+| dom | mp_backlot | 71 → 66 | 284/1105 → 228/733 | 0 → 19 | 54 → 0 | captures 41 → 40 |
+| dom | mp_crash | 108 → 117 | 373/1095 → 380/1067 | 0 → 36 | 1772 → 332 | captures 27 → 28 |
+| dom | mp_strike | 88 → 82 | 305/1126 → 235/1164 | 0 → 18 | 0 → 0 | captures 28 → 31 |
+| koth | mp_backlot | 47 → 42 | 161/452 → 171/477 | 0 → 9 | 0 → 0 | captures 7 → 8 |
+| koth | mp_crash | 86 → 15 | 326/672 → 50/123 | 0 → 2 | 575 → 851 | captures 1 → 7 |
+| koth | mp_strike | 40 → 21 | 125/295 → 85/248 | 0 → 6 | 275 → 0 | captures 7 → 8 |
+
+- Frags fly on every map (0 to 2 a map before, 6 to 36 after).
+- `sd` mp_crash: 9267 stalled bot-ticks to 595 and twice the kills.
+- `koth` mp_crash: the radio taken 7 times against once; its holders
+  wait dead, so kills fall from 86 to 15 and the playing bot-ticks from
+  60 942 to 41 008. mp_crash's koth stalls (851) are attackers short of
+  the radio room: bots wedged on a window sill, 12.5.
+- `sab` mp_strike's suicides rose from 4 to 14: frags cooked off in the
+  hand of a bot killed mid-throw, and the bomb, 12.5.
+- `cod4::bots::tests::cod4_bots_capture_the_koth_radio_on_mp_crash`
+  holds the radio's floor on a live level.
+
+### 12.5 The sill, the stance events and the frag after a death
+
+Read off traced `bot_match` runs (`GAME=cod4`, `STALLS=1` prints a
+stalled sample's spot, `pm_flags`, ground and mantle state):
+
+- The mp_crash `koth` stalls of 12.4 were bots wedged in a window sill
+  of the radio room, at (-536, 1952, 290) for the rest of the match. The
+  sill (brushes x -528..-520, y 1924..2052, top 290, a lintel over it) is
+  a `MANTLE_OVER` east to west, which the graph has as the mantle edge
+  (-504, 1919, 251) to (-544, 1953, 254). A bot came down from the climb
+  in the air 8 past the landing, turned back for the node, and its feed
+  pressed the jump key on the hint the sill's west face offered: a climb
+  onto the 8-unit top with `flag::CROUCH`, the standing box not fitting
+  under the lintel. The bot kept standing and ended all in solid, in the
+  air with no velocity. INFERRED (the follower's path and the bot's
+  playerstate each tick); VERIFIED that a standing body at the spot
+  starts all solid and a crouched one 0.125 up does not, and that 1.7's
+  pmove ends the climb from the west on the sill's top (the clip map
+  traced and stepped through `vcod_cod4::pmove`).
+- So the feed climbs a mantle edge once: the jump key goes on the hint
+  only until `PMF_MANTLE` was seen on that edge
+  (`bots::cod4`'s `climbed`). INFERRED.
+- And a bot honours `EV_STANCE_FORCE_CROUCH` (7) in its own ring as the
+  client game does a player's (`CL_SetStance(CL_STANCE_CROUCH)`,
+  `CG_EntityEvent`): it holds crouch until a standing body fits
+  where it stands on the ground. Stepped through 1.7's pmove from (-566,
+  1952, 254) at the sill, a body that crouches on the event walks off the
+  top and down the far side, one that does not stays wedged. VERIFIED (the
+  clip map stepped); that 1.7's client game does the same is INFERRED.
+- The `sab` suicides of 12.4 were frags cooked off in the hand, each by
+  one bot every 268 ticks: a bot killed mid-throw read its frag as the
+  weapon in hand (the feed reports the frag in hand while its key is held,
+  `offhand_cmd`), which became the brain's armed weapon, so the next life
+  asked for the frag from its first cmd, held its key with the pin out
+  and never pressed the trigger, the brain's throw having ended with the
+  death, until `EV_GRENADE_SUICIDE`. The feed now reports the frag in
+  hand only while the brain is in its throw (`Bot::in_throw`), and a
+  body out of play presses no frag key. Over `sab` on the three maps,
+  seeds 1 to 8: 23 `MOD_SUICIDE` frag deaths before, none after; frag
+  splash on the thrower 3 before, 6 after; throws 222 before, 265 after.
+  INFERRED (each bot's cmd and playerstate per tick).
+- The other `sab` "suicides" are the bomb: `sab.gsc` passes
+  `level.bombowner` as the blast's attacker, which no stock script sets,
+  so its `radiusDamage` kills with the world as attacker
+  (`MOD_EXPLOSIVE`). VERIFIED (the script); retail's as ours.
+
+Before is d9584100, after is this change; `bot_match` as 12.3 (six
+shooting bots, `TICKS=6000`, seeds 1 and 2 summed, 2026-10-25):
+
+| gametype | map | kills | suicides | hits / rounds | throws | stalled bot-ticks | objective actions |
+|---|---|---|---|---|---|---|---|
+| war | mp_backlot | 78 → 74 | 0 → 1 | 290/875 → 292/1117 | 33 → 26 | 8 → 0 |  |
+| war | mp_crash | 73 → 69 | 0 → 0 | 310/1027 → 303/1683 | 24 → 24 | 2577 → 57 |  |
+| war | mp_strike | 71 → 74 | 0 → 0 | 279/836 → 268/975 | 16 → 30 | 820 → 0 |  |
+| sd | mp_backlot | 38 → 36 | 0 → 0 | 136/346 → 133/328 | 9 → 11 | 269 → 0 | plant 8 → 7, defuse 6 → 5 |
+| sd | mp_crash | 24 → 24 | 1 → 0 | 78/206 → 74/163 | 10 → 14 | 646 → 946 | plant 6 → 6, defuse 3 → 3 |
+| sd | mp_strike | 37 → 34 | 0 → 0 | 125/341 → 123/528 | 18 → 15 | 40 → 67 | plant 8 → 7, defuse 6 → 2 |
+| sab | mp_backlot | 59 → 60 | 7 → 3 | 232/791 → 238/761 | 18 → 26 | 0 → 0 | plant 3 → 5, defuse 2 → 4, explode 1 → 1 |
+| sab | mp_crash | 87 → 87 | 4 → 1 | 278/697 → 279/695 | 27 → 30 | 715 → 0 | plant 4 → 5, defuse 4 → 5 |
+| sab | mp_strike | 63 → 85 | 4 → 0 | 208/704 → 272/745 | 12 → 14 | 0 → 13 | plant 3 → 6, defuse 1 → 6, explode 2 → 0 |
+| dom | mp_backlot | 65 → 69 | 1 → 2 | 222/776 → 237/862 | 21 → 23 | 0 → 0 | capture 39 → 44 |
+| dom | mp_crash | 117 → 121 | 0 → 1 | 408/1197 → 442/1219 | 26 → 29 | 0 → 0 | capture 31 → 28 |
+| dom | mp_strike | 76 → 87 | 2 → 1 | 254/952 → 284/961 | 23 → 15 | 0 → 0 | capture 34 → 31 |
+| koth | mp_backlot | 32 → 32 | 0 → 1 | 103/236 → 97/230 | 10 → 11 | 9 → 0 | capture 9 → 8 |
+| koth | mp_crash | 41 → 31 | 1 → 0 | 161/390 → 131/312 | 12 → 2 | 3105 → 569 | capture 6 → 8 |
+| koth | mp_strike | 30 → 34 | 0 → 0 | 124/345 → 144/350 | 5 → 3 | 0 → 0 | capture 8 → 7 |
+
+- `war` mp_crash 2577 stalled bot-ticks to 57, `koth` mp_crash 3105 to
+  569, `sab` mp_crash 715 to 0, `war` mp_strike 820 to 0 (mp_crash's
+  were the sill; mp_strike's were not traced). What stalls on mp_crash now is a bot pacing a few
+  steps round its spot: a defender at (745, 965, 174) in `sd`, which
+  climbs to a ledge and drops off it again, and the bots waiting
+  round the first radio before it is up in `koth`. Not looked into.
+- `sab`: no frag goes off in a hand; mp_strike's kills 63 to 85.
+- The 3.7 rounds that hit a kill of 12.4 are not the weapons' damage:
+  ours deals the stock files' numbers, 30 to 56 a round against 100
+  health, and the kill gate matches retail's health after every round;
+  the rounds that hit a body that lives are spent, as health comes back
+  5 s after the last hit (cod4-combat.md 4). VERIFIED (the weapon files,
+  the scripts, `cod4_combat_ab`).
+
+### 12.6 Mantles a bot can climb, contested zones, frozen bodies
+
+Read off traced `bot_match` runs (`GAME=cod4`, `STALLS=1`) on 71a62e20:
+
+- The `sd` stall on mp_crash (12.5's defender "pacing" at (745, 965,
+  174)) is attackers at the foot of a mantle edge, (672, 964, 174) to
+  (800, 964, 139) and its neighbours off (704, 964) and (736, 967). The
+  graph's probe found the climb facing 315: its walk bounced along a
+  stair and met the wall at y 959, where `Mantle_Check` offers it. A bot
+  runs straight at the landing, facing 0 to 2 degrees, and at y 964 to
+  965 the hint never came: it ran at the wall, fell back off the stair
+  and tried again until the round ended. VERIFIED (1.7's pmove stepped
+  over the clip map from those spots: facing 315 off (676, 964, 174)
+  climbs, facing the landing does not). The probe now keeps a climb only
+  when the walk again facing its landing, as a bot follows the edge,
+  climbs it and lands within a grid cell of it (`bots::cod4`'s
+  `climbs_facing`): 1222 mantle edges to 1079 on mp_crash, 1498 to 1347
+  on mp_backlot, 615 to 508 on mp_strike, every spawn still in one
+  component. A stricter test (the walk from 4 units either side too)
+  left 862, 1053 and 400 and moved the jams elsewhere: `sd` mp_crash 486
+  stalled bot-ticks against this one's 25, attackers queued in a door
+  behind teammates standing guard. INFERRED (that run's trace).
+- With the mantle change alone `koth` stalled 1001 bot-ticks on
+  mp_backlot (5 before) and 961 on mp_crash (630): on mp_backlot two
+  axis bots at (534, -470, 204) in the door of the radio's L-shaped room (`radiotrigger` `*14`, two
+  brushes), behind an axis teammate standing in one leg of it while an
+  allies bot stood in the other. Both teams touched the trigger, so
+  `_gameobjects.gsc` `updateUseRate` held the capture at 0, and neither
+  bot saw the other round the corner, for the rest of the match. A
+  player in the zone sees his capture bar stop. The feed now reads the
+  game object's `numTouching` for both teams (`Zone::contested`), and a
+  bot in a contested zone walks to the zone box's far side and back
+  until the contest ends (`Bot::sweep_contested`; `DomFlagView::contested`,
+  never set on United Offensive). VERIFIED (`koth.gsc`,
+  `_gameobjects.gsc` `updateUseRate`, the trigger's brushes off the clip
+  map); the stand-off INFERRED (each bot's view and the others' bodies
+  per tick).
+- `bot_match` counted a body `freezeControls` holds (`pm_flags`
+  `FROZEN`, 0x800: an `sd` or `sab` round's end) as stalled. It counts
+  it as held now: 145 of mp_crash's 946 `sd` stalled bot-ticks, all of
+  mp_strike's 67 and `sab`'s 44 and 122. VERIFIED (the stalled samples'
+  `pm_flags`).
+- `koth` raised no script error on any level: the bots' 3 s wait before
+  their first spawn holds (cod4-gsc.md 8). VERIFIED (the runs below).
+
+Before is 71a62e20 with the `FROZEN` count (the `sd` and `sab` rows) or
+without it (the others, where nothing is frozen in play), after is this
+change; six shooting bots, `TICKS=6000`, seeds 1 and 2 summed,
+2026-10-26:
+
+| gametype | map | kills | hits / rounds | mantles climbed | stalled bot-ticks | objective actions |
+|---|---|---|---|---|---|---|
+| war | mp_backlot | 88 → 90 | 347/1388 → 344/1351 | 101 → 99 | 0 → 0 |  |
+| war | mp_crash | 66 → 93 | 274/1637 → 369/1236 | 138 → 79 | 8 → 0 |  |
+| war | mp_strike | 75 → 77 | 288/1006 → 308/1880 | 144 → 97 | 0 → 0 |  |
+| dm | mp_backlot | 97 → 95 | 403/1725 → 386/1532 | 92 → 77 | 0 → 0 |  |
+| dm | mp_crash | 120 → 106 | 440/1567 → 437/1493 | 107 → 125 | 0 → 0 |  |
+| dm | mp_strike | 115 → 116 | 394/1660 → 414/1812 | 75 → 65 | 0 → 0 |  |
+| sd | mp_backlot | 36 → 38 | 133/328 → 135/368 | 110 → 109 | 0 → 0 | pickup 12 → 16, plant 7 → 9, defuse 5 → 4 |
+| sd | mp_crash | 24 → 24 | 74/163 → 90/181 | 108 → 107 | 801 → 25 | pickup 11 → 11, plant 6 → 7, defuse 3 → 4 |
+| sd | mp_strike | 34 → 40 | 123/528 → 133/487 | 44 → 44 | 0 → 0 | pickup 13 → 11, plant 7 → 8, defuse 2 → 5 |
+| sab | mp_backlot | 55 → 51 | 207/803 → 193/735 | 84 → 81 | 0 → 0 | pickup 13 → 10, plant 3 → 4, defuse 1 → 1, explode 2 → 3 |
+| sab | mp_crash | 84 → 64 | 300/811 → 213/610 | 120 → 94 | 0 → 0 | pickup 29 → 22, plant 6 → 4, defuse 6 → 2, explode 0 → 2 |
+| sab | mp_strike | 50 → 73 | 195/695 → 271/827 | 73 → 83 | 0 → 0 | pickup 9 → 19, plant 5 → 6, defuse 1 → 3, explode 4 → 2 |
+| dom | mp_backlot | 82 → 81 | 288/1126 → 304/854 | 173 → 86 | 0 → 0 | capture 37 → 40 |
+| dom | mp_crash | 154 → 170 | 505/1466 → 561/1672 | 134 → 88 | 0 → 0 | capture 31 → 31 |
+| dom | mp_strike | 102 → 101 | 372/1526 → 351/1579 | 146 → 132 | 0 → 0 | capture 27 → 36 |
+| koth | mp_backlot | 11 → 30 | 40/71 → 97/297 | 60 → 57 | 5 → 74 | capture 8 → 8 |
+| koth | mp_crash | 24 → 19 | 95/242 → 71/206 | 40 → 47 | 630 → 0 | capture 6 → 6 |
+| koth | mp_strike | 25 → 35 | 89/253 → 138/497 | 62 → 65 | 227 → 2 | capture 8 → 7 |
+
+- `war` kills 229 to 260 over seeds 1 and 2, 268 to 269 over 3 and 4;
+  `dm` 332 to 317, 316 to 301 and, over seeds 5 to 8, 647 to 641: 2.8%
+  fewer `dm` kills over eight seeds, within the spread between seeds
+  of one arm (mp_crash seed 1 against seed 2 differs by 20%).
+- What stalls is left: `koth` mp_backlot's 74 and `sd` mp_crash's 25
+  are bots behind teammates in a door, which the follower's crowd cost
+  does not part. Not looked into. The contested walk moved no `dom`
+  number: no run had both teams in a flag out of each other's sight.
+
+### 12.7 Teammates held up behind a still one, the mounted guns
+
+Read off traced `bot_match` runs (`GAME=cod4`, `STALLS=1`, whose stall
+lines now name the nearest teammate, its distance and speed) on
+b7630cbb, six shooting bots, `TICKS=6000`, seeds 1 and 2:
+
+- What stalled was not where 12.6 put it. `sd` mp_crash's 25 is an
+  allies bot mantling at (760, 894, 232) with its nearest teammate 697
+  units off. `koth` mp_backlot's 74 is an axis bot upstairs at (-1129 to
+  -1041, -564, 258) walking round two still teammates 32 to 42 units
+  off, `koth` mp_strike's 31 one beside a teammate 159 off. INFERRED
+  (the stall lines).
+- With a bot that plans round a still teammate it is held up by
+  (below), `koth` mp_crash seed 2 stalled 310 bot-ticks: two axis bots
+  stood still in the radio room's door at (1653, -1762, 226) and (1683,
+  -1758, 226), inside the zone, and a third paced between the door and
+  the stairs down at (1650, -1900, 202) for the rest of the match. No way
+  round the two reached the zone, so the plan went through them again.
+  INFERRED (the stall lines, each bot's goal per tick).
+- So two rules, CoD4 only (`BotWorld::PARTS_MATES`): a bot fighting
+  nobody that has been slower than 60 units/s for 20 ticks with a still
+  teammate (under 10 units/s) within 48 units toward its path's next
+  node plans round the nodes still teammates stand on for the next 200
+  ticks, or to a clear node beside its destination when one stands on
+  it (`bots::driver`'s `mates_in_way`, through
+  `Follower::blocked`); let go at once, the bot walked back into him
+  and paced. And a still bot whose node a held-up teammate within 96
+  units plans round steps 64 units away from him, its post or zone
+  spot notwithstanding (`give_way`, `BotView::give_way`). VERIFIED (the
+  runs below).
+- `bot_match` before is b7630cbb for the objective gametypes and b7630cbb with the walk to
+  a gun on another floor (docs/bots.md, "CoD4") for `war` and `dm`;
+  after is both rules:
+
+| gametype | map | kills | hits / rounds | stalled bot-ticks | objective actions |
+|---|---|---|---|---|---|
+| sd | mp_backlot | 39 → 39 | 136/389 → 136/389 | 0 → 0 | pickup 17 → 17, plant 8 → 8, defuse 4 → 4 |
+| sd | mp_crash | 23 → 24 | 89/183 → 82/176 | 25 → 25 | pickup 11 → 13, plant 7 → 8, defuse 4 → 5 |
+| sd | mp_strike | 39 → 38 | 129/479 → 128/472 | 0 → 0 | pickup 11 → 12, plant 8 → 8, defuse 5 → 4 |
+| sab | mp_backlot | 51 → 56 | 193/735 → 207/576 | 0 → 0 | pickup 10 → 15, plant 4 → 3, defuse 1 → 1, explode 3 → 2 |
+| sab | mp_crash | 64 → 73 | 213/610 → 238/685 | 0 → 0 | pickup 22 → 22, plant 4 → 5, defuse 2 → 4, explode 2 → 1 |
+| sab | mp_strike | 73 → 75 | 271/827 → 259/813 | 0 → 0 | pickup 19 → 20, plant 6 → 5, defuse 3 → 3, explode 2 → 2 |
+| dom | mp_backlot | 81 → 87 | 304/854 → 305/939 | 0 → 0 | capture 40 → 44 |
+| dom | mp_crash | 170 → 168 | 561/1672 → 580/1705 | 0 → 0 | capture 31 → 29 |
+| dom | mp_strike | 101 → 109 | 351/1579 → 360/1381 | 0 → 0 | capture 36 → 34 |
+| koth | mp_backlot | 43 → 31 | 157/439 → 104/307 | 74 → 0 | capture 7 → 7 |
+| koth | mp_crash | 19 → 18 | 71/206 → 68/198 | 0 → 0 | capture 6 → 6 |
+| koth | mp_strike | 35 → 21 | 138/497 → 82/354 | 31 → 0 | capture 7 → 7 |
+| war | mp_backlot | 82 → 85 | 338/1196 → 334/1248 | 0 → 0 |  |
+| war | mp_crash | 105 → 86 | 406/1297 → 384/1301 | 0 → 52 |  |
+| war | mp_strike | 77 → 85 | 308/1880 → 313/1377 | 0 → 0 |  |
+| dm | mp_backlot | 98 → 98 | 340/1218 → 340/1218 | 0 → 0 |  |
+| dm | mp_crash | 102 → 102 | 410/1522 → 410/1522 | 0 → 0 |  |
+| dm | mp_strike | 115 → 115 | 407/1776 → 407/1776 | 0 → 0 |  |
+
+- `dm` does not move (no teammates). The first rule fired 14 times over
+  three `war` mp_crash seeds, yet any firing sends a match down another
+  course: over `war` mp_crash seeds 1-8 kills went 364 to 341 with it.
+  `war` mp_crash's new 52 is an allies bot climbing at (-91, -897, 141
+  to 233), its nearest teammate 750 off; `sd` mp_crash's 25 is still
+  the mantle. `koth` lost kills on mp_backlot and mp_strike (78 to 52
+  over both seeds) with the captures unchanged: not looked into.
+  INFERRED (the stall lines).
+- mp_backlot's two SAWs: docs/bots.md ("CoD4") has the cause and the
+  walk over the graph to a gun on another floor, with its numbers.
+
+### 12.8 A mantle's landing, the shipment yard's stand
+
+Read off traced `bot_match` runs (`GAME=cod4`, `STALLS=1`, the
+follower's path per tick) on 8e1d545d:
+
+- `sd` mp_crash's stall at (745, 964, 174) (12.5 to 12.7) is the mantle
+  edge from (704.1, 964.3, 173.9) to (800.0, 964.4, 139.0) and its
+  neighbour off (736.1, 967.0, 174.2). The graph's probe climbs off the
+  first facing 315 and lands at (787.6, 953.1, 140.3), in the column of
+  the node at (800, 964); 12.6's check ran the walk again facing that
+  landing, which climbs. A bot follows the edge at its node, and run at
+  (800, 964) from 96 spots between (690, 950) and (745, 985), 5 are
+  offered the climb; run at the landing, 52 are, every one north of y
+  964, where the bots come from. VERIFIED (1.7's pmove stepped over the
+  clip map, `a_mantle_edge_keeps_the_landing_its_probe_climbed_to`). The
+  graph now keeps each mantle edge's landing (`NavGraph::mantle_lands`)
+  and a CoD4 bot on the edge runs at it until it stands within 24 units
+  of it, then on to the node (`BotWorld::MANTLE_AIMS`). INFERRED (the
+  runs below).
+- mp_shipment's `koth` and `dom` stalls are axis and allies bots pressed
+  against the yard's south wall at y -617. Their goal was the radio's
+  stand, (2.8, -672, 192), behind that wall. mp_shipment's graph is two
+  floods that never meet: the yard the spawns stand in (1771 nodes,
+  x -733..709) and, larger, the out-of-bounds grounds round it (3048
+  nodes, x -1244..1187), flooded from a ladder's ends at (62, 927, 192)
+  to 320 with no edge either way. `NavGraph::zone_stand` took its stand
+  from the largest component, the grounds, so every zone's stand fell
+  outside the yard, at the node nearest its middle. VERIFIED (the
+  graph). A zone's stand, and the roams' safe component, now come from
+  the largest component a spawn's seed lies in (`NavGraph::seeds`); on
+  a graph whose largest component holds a seed nothing moves.
+  VERIFIED (`a_zone_stand_comes_from_the_floor_the_spawns_flood`, and
+  the mp_crash and mp_strike rows below, the same with and without it).
+
+Six shooting bots, `TICKS=6000`, default limits, seeds 1 and 2 summed,
+2026-10-27; before is 8e1d545d, after is both changes:
+
+| gametype | map | kills | hits / rounds | stalled bot-ticks | mantles climbed | objective actions |
+|---|---|---|---|---|---|---|
+| sd | mp_crash | 25 → 27 | 85/174 → 82/215 | 25 → 0 | 117 → 128 | pickup 13 → 13, plant 9 → 8, defuse 6 → 4 |
+| sd | mp_shipment | 53 → 47 | 170/356 → 163/408 | 0 → 0 | 27 → 38 | pickup 19 → 23, plant 10 → 11, defuse 7 → 6 |
+| sd | mp_strike | 38 → 38 | 128/472 → 126/529 | 0 → 0 | 46 → 38 | pickup 12 → 14, plant 8 → 7, defuse 4 → 4 |
+| sab | mp_crash | 62 → 83 | 217/704 → 257/851 | 13 → 60 | 87 → 135 | pickup 18 → 31, plant 4 → 5, defuse 1 → 4, explode 2 → 0 |
+| sab | mp_shipment | 79 → 83 | 254/669 → 277/770 | 0 → 0 | 29 → 46 | pickup 22 → 22, plant 9 → 6, defuse 5 → 3, explode 3 → 3 |
+| sab | mp_strike | 57 → 55 | 202/767 → 206/734 | 0 → 0 | 84 → 84 | pickup 12 → 16, plant 6 → 5, defuse 3 → 3, explode 3 → 2 |
+| koth | mp_crash | 75 → 82 | 234/535 → 301/683 | 17 → 78 | 105 → 97 | capture 8 → 8 |
+| koth | mp_shipment | 169 → 282 | 576/1486 → 905/1936 | 3177 → 0 | 0 → 0 | capture 8 → 5 |
+| koth | mp_strike | 78 → 74 | 272/1034 → 276/730 | 0 → 0 | 99 → 112 | capture 9 → 10 |
+| dom | mp_crash | 149 → 152 | 477/1451 → 521/1494 | 0 → 0 | 145 → 125 | capture 32 → 32 |
+| dom | mp_shipment | 150 → 192 | 484/1279 → 645/1475 | 3219 → 0 | 0 → 0 | capture 23 → 70 |
+| dom | mp_strike | 87 → 96 | 308/1539 → 337/1397 | 0 → 0 | 131 → 144 | capture 34 → 33 |
+| war | mp_crash | 95 → 98 | 364/1375 → 349/1354 | 0 → 0 | 58 → 120 | |
+| war | mp_shipment | 202 → 202 | 740/1685 → 740/1685 | 0 → 0 | 0 → 0 | |
+| war | mp_strike | 82 → 85 | 307/1057 → 312/1143 | 0 → 0 | 134 → 127 | |
+
+- 1401 kills to 1596, 6476 stalled bot-ticks to 138. mp_shipment's
+  `koth` and `dom` carry most of both: the bots now meet in the yard's
+  middle. `war` mp_shipment does not move (no zone, no mantle).
+- With the short limits the map sweep runs (`scr_sd_timelimit 0.5`, one
+  round, `sv_mapRotation` the one level), `sd` mp_crash seeds 1-4
+  stalled 862 bot-ticks before the landing aim, 0 after; kills 18 to 20.
+- What stalls on mp_crash now (60 in `sab`, 78 in `koth`) are single
+  samples at other spots: an axis bot beside a still teammate at (-138,
+  1457, 232), climbs at (-79, -914, 173), (521, 1388, 181) and (1541,
+  -1951, 114). Not looked into. INFERRED (the stall lines).
+
+### 12.9 The stall census, a curb's border, jumps CoD4 does not make
+
+A census: `bot_match` (`GAME=cod4`, six shooting bots, `TICKS=6000`,
+seeds 1 and 2, default limits, `STALLS=1`) on all 21 stock maps under
+`war`, `sd`, `koth`, `sab` and `dom`, 210 pairs, on 8a947914 and on this
+change, 2026-10-27. VERIFIED (the runs):
+
+| gametype | map | kills | stalled bot-ticks |
+|---|---|---|---|
+| sab | mp_carentan | 63 → 80 | 4073 → 0 |
+| koth | mp_killhouse | 123 → 123 | 1245 → 1245 |
+| sab | mp_cargoship | 54 → 54 | 1052 → 1052 |
+| sab | mp_creek | 65 → 56 | 858 → 0 |
+| koth | mp_cargoship | 74 → 74 | 725 → 725 |
+| koth | mp_crash | 80 → 74 | 660 → 140 |
+| koth | mp_crossfire | 71 → 71 | 301 → 301 |
+| dom | mp_broadcast | 42 → 42 | 264 → 264 |
+| war | mp_cargoship | 71 → 71 | 178 → 178 |
+| war | mp_creek | 57 → 74 | 125 → 0 |
+| dom | mp_showdown | 139 → 154 | 80 → 0 |
+| sab | mp_farm | 62 → 56 | 73 → 0 |
+| war | mp_bloc | 88 → 85 | 0 → 166 |
+| koth | mp_crash_snow | 80 → 80 | 31 → 129 |
+
+All 210 pairs: 8718 kills to 8674, 10120 stalled bot-ticks to 4606.
+Every other pair moved by under 50 stalled bot-ticks, most by none (a
+map whose bots never meet the new arm replays to the tick).
+
+- `sab` mp_carentan's 4073 was one allies bot for the rest of a match
+  at (881, 1857, -48), in the air with no velocity: it had walked south
+  along x 881 into the terrain, whose 8-unit curb from (871, 1886) to
+  (912, 1872) rises to -39.75, and ended 8 units inside it, all solid.
+  The capsule sweep from (881, 1913) to (881, 1857) passed through: the
+  curb's triangles face away or along the sweep, and its partition's
+  border was met only where its top lay within the capsule's straight
+  part, while this one lies 26 under the centre, beside the lower
+  sphere. VERIFIED (the clip map traced). 1.7 meets such a border with
+  the end sphere (cod4-collision.md 2, "1.7's capsule border"), and the
+  CoD4 sweep now does (`Cx::border_sphere`). `sab` mp_creek's and
+  `koth` mp_crash's stalls were the same, bots wedged in terrain at
+  (540, 4554, -41) and (62, -640, 313). INFERRED (their stall lines
+  gone with the change alone).
+- What is left: mp_killhouse `koth`'s 1245 is an axis bot jumping again
+  and again from a crate top at (1280, 2532, 60) for the jump edges up
+  to (1310, 2557, 97) and (1310, 2586, 97), 37 units; mp_cargoship's
+  is allies bots at (1346, 36, 52) jumping for (1313, 36, 80), 28 up,
+  rising to 91 and falling back to the foot. The graph's walks proved
+  them under CoD1's pmove (`GRAPH_RULES`); its CoD4 body does not make
+  them as the bot takes them. INFERRED (the follower's path per tick).
+  Pruning every jump edge up more than a step that a CoD4 body could
+  not land (a probe like the mantle's, run as the bot jumps: pinned two
+  ticks or right under the top) cleared mp_killhouse but pruned 875 of
+  mp_cargoship's 1179 such edges and left its `sd` bots never meeting
+  (32 kills to 0); a lenient probe (any jump tick) kept the bad ones.
+  Not taken. A CoD4 walk step for the graph (`nav::WalkStep`, as
+  CoD2's `Cod2Walk`) is the root fix. INFERRED (those runs).
+
+### 12.10 The graph walked under CoD4's pmove
+
+`bots::cod4::Cod4Walk` is a `nav::WalkStep` as CoD2's `Cod2Walk` is:
+each walk's body is a 1.7 playerstate stepped by
+`vcod_cod4::pmove::player_step` over the level's clip map, its cmd
+through `to_cmd4` (weapon 0, so the graph's 190 units/s), read back into
+the CoD1 body the walk tests. The graph build and the bots' pass
+(`NavGraph::moving`) both take it with `VC_NAV_COD4=1`; it is off by
+default. Graphs move by under 5% of their edges and every map's spawns
+stay in one component. VERIFIED (`nav_build GAME=cod4` on the 21 maps,
+both arms).
+
+The census of 12.9 (210 pairs, seeds 1 and 2, `TICKS=6000`), CoD1's
+walks (12.9's after) against CoD4's, 2026-10-27. VERIFIED (the runs):
+
+| gametype | map | kills | stalled bot-ticks |
+|---|---|---|---|
+| koth | mp_killhouse | 123 → 142 | 1245 → 1752 |
+| sab | mp_cargoship | 54 → 49 | 1052 → 158 |
+| koth | mp_cargoship | 74 → 67 | 725 → 250 |
+| koth | mp_crossfire | 71 → 73 | 301 → 9 |
+| dom | mp_broadcast | 42 → 30 | 264 → 465 |
+| war | mp_bloc | 85 → 74 | 166 → 0 |
+| koth | mp_crash_snow | 80 → 97 | 129 → 341 |
+| sd | mp_cargoship | 32 → 0 | 0 → 531 |
+| dom | mp_cargoship | 151 → 71 | 0 → 552 |
+| sd | mp_bloc | 29 → 26 | 61 → 437 |
+
+All 210 pairs: 8674 kills to 8335, 4606 stalled bot-ticks to 5460, so
+it stays off.
+
+- mp_killhouse `koth` seed 1 runs clean under it (0 stalled), seed 2
+  stalls 1752 at the crates. INFERRED (the stall lines).
+- On mp_cargoship the CoD4 walks prove none of the deck's jump edges
+  up 28 to 36 that the CoD1 graph had and live bots take, so the
+  attackers' plan goes over the rail by the mantle edges down to the
+  dock at 16, where each follower re-proof (`Follower::flings`,
+  `backs_short`, CoD1 walks of a drop) avoids the edge and the next
+  plan takes its neighbour: `sd` ends every round on time with no kill.
+  Exempting mantle edges from those re-proofs sent the bots over the
+  rail and stalled them on the dock instead (`sd` mp_cargoship 2991
+  stalled bot-ticks over the two seeds). INFERRED (the follower's path
+  per tick).
+- The walk reads a CoD4 body back into CoD1's shape; a mantle the CoD4
+  body starts on a pinned jump moves it along the climb's scripted
+  path, which the walk's arrival and fall tests were not written for.
+  That is the likeliest reason a CoD4 walk proves fewer of the jumps a
+  live bot takes. Not looked into. INFERRED.
+
+### 12.11 What the CoD4 walks missed, and the census again
+
+Per rejected edge, the CoD4 walk's body (`Cod4Walk`, per tick) against
+the live bot's path on the same edge (`bot_match` traces), 2026-10-27:
+
+- The guess of 12.10 was half right. A pinned jump at a wall that
+  offers the climb starts a mantle in 1.7's pmove, and the walk's body
+  takes it: off mp_cargoship's deck at (2467, -384, 176) toward the rail
+  top at 212, the jump became a `MANTLE_OVER` (`trans_index` 3) over the
+  rail and down to the dock at 16, so the CoD1 graph's jump edge onto
+  the rail went unproved. A live bot that jumps there mantles over too,
+  so that edge was right to go. INFERRED (the walk's per-tick body).
+- What broke `sd` and `dom` mp_cargoship was not the walk's graph: both
+  graphs route the attackers over the rail by the same mantle edge,
+  (2498, 384, 176) down to (2400, 390, 16), and the same 150 nodes. It
+  was the bots' own pass, whose re-proofs ran under the CoD4 step once
+  the graph carried it (`NavGraph::moving`). A mantle down deeper than a
+  jump read as a drop to back down: the brain backed the bot into the
+  rail (`BotView::run_off` false), where no mantle starts, and the
+  creep's re-proof (`Follower::backs_short`) under 1.7's pmove never
+  arrived, so the follower avoided each rail edge in turn. Under a game
+  step a mantle edge down now comes to rest at its foot once and is
+  taken facing the wall (`Follower::mantle_rests`, set only where the
+  graph carries a step; `BotView::run_off` on a mantle edge). INFERRED
+  (the follower's path per tick).
+- The walk clipped the clip map alone; the live body also clips the
+  linked `script_brushmodel`s. mp_cargoship's `pipe_shootable` (`*76`
+  at (1300, 61, 104)) caps the head of a jump up the deck's step from
+  (1345, 36, 52) to (1313, 36, 80): the walk's body landed on the step,
+  live bots rose to 91 and fell back for a whole `war` or `sd` match.
+  The walk now clips the map's `script_brushmodel`s where they stand at
+  load (`bots::cod4::map_brushes`). VERIFIED (the entity and the walk
+  with and without it); that the pipe is the cap is INFERRED.
+- Left: mp_killhouse's crate jumps from (1279, 2496, 60) up 37 to
+  (1310, 2556, 97). The CoD4 walk proves them with a running start
+  aimed 8 units aside; a bot that comes to rest at the foot (the jump's
+  wait, `Follower::jump_wait`) jumps from a standstill and falls back,
+  and the follower cycles through four parallel edges. INFERRED.
+
+The census of 12.9 again, default (CoD1's walks) against
+`VC_NAV_COD4=1` with the three changes, 210 pairs, seeds 1 and 2,
+`TICKS=6000`, 2026-10-27. VERIFIED (the runs):
+
+| gametype | map | kills | stalled bot-ticks |
+|---|---|---|---|
+| koth | mp_killhouse | 123 → 136 | 1245 → 1088 |
+| sab | mp_cargoship | 54 → 72 | 1052 → 0 |
+| koth | mp_cargoship | 74 → 70 | 725 → 807 |
+| koth | mp_crossfire | 71 → 78 | 301 → 0 |
+| dom | mp_broadcast | 42 → 44 | 264 → 43 |
+| war | mp_bloc | 85 → 96 | 166 → 498 |
+| koth | mp_crash_snow | 80 → 84 | 129 → 13 |
+| sd | mp_cargoship | 32 → 36 | 0 → 0 |
+| dom | mp_cargoship | 151 → 176 | 0 → 0 |
+
+All 210 pairs: 4606 stalled bot-ticks to 3255, 8674 kills to 8622, no
+pair without a kill. The stalls fall by 29%, the kills by 0.6%, inside
+what two seeds move a row (12.6), but not a win on both, so the
+default stays CoD1's walks.
+
+### 12.12 The kill gap over six seeds, killhouse's crate jumps
+
+- mp_killhouse `koth`: per tick, a bot that lands from a jump onto the
+  crate tops at z 60 carries 1.7's `PMF_JUMPING` with `pm_time` 1800,
+  the jump penalty, and waits it out at the foot (`Follower::jump_wait`,
+  `nav::jump_ready`). Once it is ready the plan has moved on to a drop
+  off the crates, which it backs toward (`forwardmove` -127, `pm_flags`
+  0x20) past the jump edge's top and off the ledge to 28, and the round
+  starts again. INFERRED (each cmd and playerstate per tick). Two fixes
+  measured on seeds 1 and 2, neither kept: a wait 48 units back from the
+  foot for a running start (`koth` mp_killhouse 0/1088 stalled bot-ticks
+  to 1362/0), and jump edges re-proved from rest under a game step
+  (no change: the walk from rest lands them too). INFERRED (the runs).
+- `war` mp_bloc's new stalls are two allies bots holding each other at
+  (350, -5700, -24); `koth` mp_cargoship's are both teams on the stair
+  at (2830, -100, 280) by the radio, as under CoD1's walks. INFERRED
+  (the stall lines).
+
+The census of 12.9 on seeds 1 to 6 (630 matches a setting), CoD1's
+walks against `VC_NAV_COD4=1`, 2026-10-27. VERIFIED (the runs):
+
+| seed | kills | stalled bot-ticks |
+|---|---|---|
+| 1 | 4402 → 4202 | 3003 → 824 |
+| 2 | 4272 → 4420 | 1603 → 2431 |
+| 3 | 4298 → 4367 | 2208 → 2589 |
+| 4 | 4331 → 4369 | 2631 → 3199 |
+| 5 | 4296 → 4298 | 1623 → 1500 |
+| 6 | 4267 → 4313 | 1715 → 2616 |
+| all | 25866 → 25969 | 12783 → 13159 |
+
+- One setting's kills move by 50 a seed (standard deviation over the six
+  seeds); the two settings' per-seed difference by 117. The walk's kills
+  are 0.4% up, its stalls 3% up: the 12.11 result on seeds 1 and 2 was
+  seed 1's luck. Most of the walk's stalls are `koth`: mp_killhouse 1526
+  → 4157, mp_carentan 375 → 1824, mp_crash 274 → 1227, mp_bloc 5 → 954.
+  `dom` mp_cargoship 554 → 0 and no pair without a kill.
+- So `VC_NAV_COD4` stays off and the nav_build digests stand.
+
+### 12.13 Holding the plan through the jump penalty, not kept
+
+S-C4-45's reading of mp_killhouse `koth` (12.12) traced again per tick
+on seed 1 with the follower's plan, its avoided edges and each reset's
+call site, 2026-10-27. INFERRED (the trace):
+
+- The plan does not move on by itself while the penalty runs. A bot
+  that lands from `J296` (1247, 2524, 60) on the crate top holds still
+  at the next node (1242, 2496, 60), `PMF_JUMPING` set; after 20 ticks
+  beside a still teammate `mates_in_way` (`PARTS_MATES`, 12.7) plans it
+  round him, and `give_way` steps it off. Elsewhere the wait reaches
+  `STUCK_TICKS` (40) with no progress and the follower avoids the edge
+  under way. Either new plan starts with a drop off the crate.
+- What it waits for then fails. With the penalty spent, the jumps from
+  the crate top up 37 to (1310, 2557, 97) and (1310, 2586, 97)
+  (`J3298`, `J3299`) and from the floor at 28 up 32 to (1280, 2532, 60)
+  (`J177`) rise beside the ledge and fall to 28: the follower's
+  "fallen off the path" check avoids the edge, the next plan takes a
+  parallel one, and the bot cycles. Allies slot 1 stalls there with no
+  penalty and no teammate in play.
+
+The change tried: on the CoD4 path only (`BotWorld::HOLDS_PENALTY`),
+a bot on the ground under `jump_penalty` whose current or previous edge
+is a jump counts no idle ticks toward `STUCK_TICKS`, is not held up by
+a teammate for `mates_in_way` and gives no way. The census of 12.12
+(630 matches a setting, CoD1's walks, `VC_NAV_COD4` off), 2026-10-27.
+The base arm reproduced 12.12's default column to the match. VERIFIED
+(the runs):
+
+| seed | kills | stalled bot-ticks |
+|---|---|---|
+| 1 | 4402 → 4381 | 3003 → 4270 |
+| 2 | 4272 → 4296 | 1603 → 2282 |
+| 3 | 4298 → 4269 | 2208 → 1456 |
+| 4 | 4331 → 4369 | 2631 → 2569 |
+| 5 | 4296 → 4286 | 1623 → 1726 |
+| 6 | 4267 → 4236 | 1715 → 2314 |
+| all | 25866 → 25837 | 12783 → 14617 |
+
+- Kills hold: the per-seed difference's standard deviation is 29, the
+  total 0.1% down. Stalls rise 14%. `koth` mp_killhouse 1526 → 2693
+  (per seed 1009, 236, 0, 0, 281, 0 → 2088, 380, 0, 0, 225, 0);
+  `koth` mp_cargoship 1478 → 829 and mp_crossfire 302 → 91 fall;
+  `koth` mp_overgrown 0 → 726 and `dom` mp_showdown 14 → 716 rise.
+  No pair without a kill.
+- So the hold is not kept. Kept on its plan, the bot only waits longer
+  before the same failed jump. The fix is in the jumps: edges up more
+  than a step that a body at rest on 1.7's pmove does not land, here
+  `J177`, `J3298`, `J3299` (12.9, 12.11's "Left"). INFERRED.
+
+### 12.14 No leaps on CoD4's graph
+
+Why the graph kept mp_killhouse's crate jumps of 12.13. INFERRED (each
+edge's flags and walks in the graph, 2026-10-27):
+
+- The edges up 37 from the crate tops at z 60 to (1310, 2557, 97) and
+  (1310, 2586, 97) were leaps (`NavGraph::link_leaps`): proved from a
+  standstill with a jump on the tick the body would lose the ground
+  (`nav::lip_ahead`). A bot jumps a leap only when `BotView::lip` says
+  the lip is ahead, and the driver fills it only on a route with pmove
+  probes (`BotWorld::PMOVE_PROBES`), which CoD4's has off. So a CoD4 bot
+  on a leap never jumps: it runs off the foot and lands on the floor at
+  28, the fall that 12.13 read as a failed jump.
+- Walked as plain jumps, the way a bot without the lip takes them (a
+  pinned jump, `nav::PinJump`, `nav::as_a_bot`) and aimed at the top,
+  all five leaps off the crate tops fall back to 28, under CoD1's walk
+  and under `bots::cod4::Cod4Walk` alike. Aimed 8 units beside the top
+  (`nav::SIDESTEP`), the one from (1242, 2496, 60) lands, and the build
+  keeps it as a plain jump with that aim
+  (`bots::cod4::tests::a_cod4_graph_keeps_no_leap_its_bots_cannot_jump`). The plain jumps onto the crate tops from
+  the floor (J177's kind, up 32) land under both; they were not the
+  cause.
+- `NavGraph::reprove_jumps` skipped leaps, so no build ever tried them as
+  plain jumps.
+
+The change: a CoD4 graph clears its leaps after `link_leaps`, before
+`reprove_jumps`, which walks each again as a plain jump edge and drops
+those that fall (`bots::cod4::LIP`, `NavGraph::build_opts`,
+`NavJob::start_opts`; its cache key carries "(no lip)"). Every CoD4 map
+loses its leaps; the 21 maps' graphs lose 1 to 108 edges each
+(mp_killhouse 23901 → 23890, mp_creek 56985 → 56877), no spawn leaves
+its component. `build_with` and `start_with` pass the lip, so the CoD1,
+1.5, UO and CoD2 graphs and their `nav_build` digests do not change.
+VERIFIED (`nav_build GAME=cod4`, the census's graph lines, the 1.1 and
+UO digests).
+
+The census of 12.12 (630 matches a setting, CoD1's walks, `VC_NAV_COD4`
+off), the same tip with and without the change, 2026-10-28. VERIFIED (the
+runs):
+
+| seed | kills | stalled bot-ticks |
+|---|---|---|
+| 1 | 4279 → 4236 | 2528 → 1760 |
+| 2 | 4257 → 4308 | 2163 → 2027 |
+| 3 | 4202 → 4199 | 2739 → 2570 |
+| 4 | 4137 → 4143 | 2538 → 1553 |
+| 5 | 4219 → 4230 | 1779 → 1803 |
+| 6 | 4269 → 4191 | 2435 → 2098 |
+| all | 25363 → 25307 | 14182 → 11811 |
+
+- Stalls fall 17%, kills by 0.2% (the per-seed difference's standard
+  deviation is 45). `koth` mp_killhouse 1707 → 20 (per seed 644, 13, 0,
+  1050, 0, 0 → 0, 13, 0, 7, 0, 0) with kills 418 → 444; `koth` mp_creek
+  180 → 0 and mp_broadcast 221 → 104. No pair without a kill.
+- Rises: `koth` mp_crash 403 → 727 and mp_crash_snow 905 → 958, all
+  gametypes on mp_crash 301 and mp_crash_snow 284, mp_cargoship 99. Not
+  traced. INFERRED.
+- The base arm here differs from 12.13's before column (25866 kills,
+  12783 stalls): the tip moved by CoD4 combat changes between the two,
+  so this table compares two builds of the one tip.
+
+### 12.15 A ladder's top, edges past the follower's reach, brush entities
+
+The rises of 12.14 (`koth` mp_crash and mp_crash_snow, `war`
+mp_cargoship) traced per tick with the follower's plan on seeds 1 to
+6, `STALLS=1`, 2026-10-28. The tip reproduced 12.14's after column to
+the match on the ten pairs run (`koth` mp_crash seeds 1, 4, 6,
+mp_crash_snow 3 to 6, `war` mp_crash_snow 4, `sab` mp_crash_snow 6,
+`war` mp_cargoship 3), so that column is the before here. VERIFIED (the
+runs).
+
+- The ladder at (-91, -890) on mp_crash and mp_crash_snow, foot at 122,
+  roof at 272: a bot climbed to 278, its waypoint on the roof 5 under
+  its feet and 60 to 126 across the face, and `Bot::steer` backed it
+  down (a waypoint below on the rungs is backed onto unless it lies
+  within half a body across, 11.4); at 200 the waypoint was above again
+  and it climbed. Up and down for the rest of a match (229 stalled
+  bot-ticks in `war` mp_crash_snow seed 4, more in `koth` and `sab`).
+  INFERRED (the follower's path per tick). 1.7's `PM_LadderMove` is
+  CoD2's: the climb is the forward key times the view's pitch, the
+  strafe along the face, no flat move into it
+  (`vcod_cod4::pmove::ladder::ladder_move`, cod4-pmove.md 7), so the
+  rungs let go only past their top. INFERRED. The CoD4 view
+  now sets `BotView::tops_out`, as CoD2's does: a head across the face
+  is climbed on to.
+- mp_crash's roof at (64, -643, 313), reached by a mantle from 272:
+  `NavGraph::link_back` walked the mantle edges onto it back as jumps
+  158 across to (160, -518, 304) and (-32, -518, 304). The follower
+  reads a waypoint more than four grid steps off (128 at spacing 32) as
+  a body knocked off its path and plans again, so a bot at the roof's
+  node planned the jump, dropped the plan and planned it again, every
+  tick, until the match ended (401 stalled bot-ticks, `koth` seed 4).
+  INFERRED (the follower's path per tick). The 21 maps' graphs held 61
+  such jumps (mp_convoy 13, mp_crash 12, mp_crash_snow 11, mp_carentan
+  6, mp_broadcast 5, mp_crossfire and mp_killhouse 4, mp_showdown 3,
+  mp_backlot 2, mp_citystreets 1) and 3 such walks (mp_bog, mp_convoy,
+  mp_crossfire). VERIFIED (the graphs). A CoD4
+  graph now drops every edge but a mantle that long, after
+  `reprove_jumps` and before `link_pockets` (`NavGraph::drop_out_of_reach`,
+  under `NavGraph::build_opts`' `lip` off, which only CoD4 sets);
+  mp_crash's roof keeps its drops to 272.
+- mp_cargoship's deck step at (1346, 36, 52): the jump to (1313, 36,
+  80) under `pipe_shootable` of 12.11, rising to 91 and falling back.
+  The bots' world clipped the clip map alone. It now clips the level's
+  solid brush entities too, read once the level has run a frame, when
+  the gametype has deleted the other gametypes' objects
+  (`bots::cod4::BrushedClip`, `Cod4Level::brushes`, as
+  `game::cod4::clip::Cod4Clip` clips a body's pmove). The graph's cache
+  key carries the set. VERIFIED (the jump edge gone,
+  `a_cod4_graph_clips_the_brush_entities_its_bots_clip`). mp_countdown's
+  `war` graph drops from 8499 nodes to 7028: its exploder 500 debris
+  (`*2` to `*22` round (-500, 2910)) and `missile06` stand solid at
+  load, since `maps\mp\_load::setupExploders` hides and unsolids only
+  the `exploder` and `exploderchunk` targetnames. VERIFIED (the stock
+  script, the graph lines); that those nodes stood on or behind them is
+  INFERRED. `nav_build` builds over the clip map alone, so its digests
+  are not the live graphs on maps with brush entities.
+- mp_vacant `sd` (cod4-map-sweep.md "Left" 1): 0 stalled bot-ticks on
+  all six seeds, before and after. VERIFIED (the runs).
+
+The census of 12.12 (630 matches a setting, CoD1's walks, `VC_NAV_COD4`
+off), 12.14's after column against the three changes, 2026-10-28.
+VERIFIED (the runs):
+
+| seed | kills | stalled bot-ticks |
+|---|---|---|
+| 1 | 4236 → 4308 | 1760 → 296 |
+| 2 | 4308 → 4255 | 2027 → 478 |
+| 3 | 4199 → 4244 | 2570 → 1218 |
+| 4 | 4143 → 4259 | 1553 → 463 |
+| 5 | 4230 → 4252 | 1803 → 1215 |
+| 6 | 4191 → 4213 | 2098 → 602 |
+| all | 25307 → 25531 | 11811 → 4272 |
+
+- Stalls fall 64%, kills rise 0.9% (the per-seed difference's standard
+  deviation is 57). By gametype, stalls: `war` 859 → 185, `sd` 949 →
+  394, `koth` 5924 → 2844, `sab` 3530 → 366, `dom` 549 → 483. By map,
+  all gametypes: mp_cargoship 4623 fewer (`sab` 3235 → 0, `war` 287 →
+  0), mp_crash_snow 1051, mp_bog 854, mp_crash 452. No pair without a
+  kill.
+- Left: `koth` mp_cargoship 1229 (seed 3 833), `koth` mp_showdown 529 →
+  935 (seed 5 769), `sab` mp_bloc seed 2 0 → 317. Not traced.
+  INFERRED.
+
+### 12.16 A pool left by a mantle, a stair's guard, a roof's parapet
+
+12.15's three pairs traced per tick with the follower's plan,
+`STALLS=1`, 2026-10-29. The tip reproduced 12.15's after column on all
+three (833, 769, 317 stalled bot-ticks). VERIFIED (the runs).
+
+- `sab` mp_bloc seed 2: an axis bot in the empty pool at (160, -5540,
+  -24) with its goal at the bomb zone (-864, -6044, 0) planned nothing
+  for 300 ticks: the graph held the pool's 132 nodes as a pocket with
+  edges in (walks down off its rim at 24) and none out. VERIFIED (the
+  graph). The rim is ringed by mantle strips 12 wide at (168, -5756),
+  (168, -5310) and (378, -5536), tops at 28, which 1.7's pmove climbs
+  from the floor (row 1, flags 4, 700 ms; `mantle_spots`) and the
+  graph's probe climbs too from the pool's nodes. VERIFIED (the
+  probe from those nodes). The probe ran once, before the flood off the
+  mantles' tops had found the pool, so no node there was probed. A CoD4
+  graph (`lip` off) now probes again off each flood's new nodes until a
+  round finds none (`NavGraph::build_here`, `link_mantles`' `from`);
+  mp_bloc's `sab` graph goes from 6082 nodes to 6039, 649 mantles to
+  700, and the pool reaches the zone and back
+  (`a_cod4_graph_mantles_out_of_mp_blocs_pool`). VERIFIED (the graph).
+  A probe aimed at the nearest mantle face within 45 degrees, tried
+  first, found no climb the straight one missed and moved `koth`
+  mp_bloc's radio stand out of its zone (seeds 3 and 5, 0 to 1126 and
+  392 stalled bot-ticks); not kept. INFERRED (the runs with it on and
+  off).
+- `koth` mp_showdown seed 5: allies bots on the roof at (708, 608, 192)
+  planned the mantle edges over the parapet down to (709, 672, 50); the
+  creep's re-proof (`Follower::backs_short`) under CoD1's walks never
+  arrived down one, so the follower avoided each in turn, then the jump
+  `(763, 512) -> (796, 512, 224)`, which fell back, and the roof held
+  them for 600 ticks. INFERRED (the follower's path per tick). 12.11's
+  rest-and-go on a mantle down (`Follower::mantle_rests`), set only under
+  a game step, is now on for CoD4 under CoD1's walks too
+  (`BotWorld::MANTLE_RESTS`).
+- `koth` mp_cargoship seed 3: axis bots queued on the stair at (2820,
+  -97, 296) to (2848, -103, 288) for the radio at (3032, 0, 367), each
+  walk on proved under both CoD1's and 1.7's pmove from where they stood.
+  VERIFIED (`walk_as` both ways). The way was held by a teammate
+  guarding the zone from the stair's top at (2844, -65, 336), 40 over
+  and 30 across: 50 in three dimensions, past `mates_in_way`'s 48, so
+  no one was ever held up by him and nobody planned round. INFERRED
+  (the stall lines' nearest still mate). On CoD4 a still teammate now
+  counts by his distance across, within 64 up or down
+  (`BotWorld::PARTS_MATES_FLAT`). With it off, the other two changes
+  kept, `koth` mp_cargoship seeds 1, 3, 4, 5 and 6 stall 1606
+  bot-ticks; with it on, 726. VERIFIED (the runs).
+
+The census of 12.12 (630 matches a setting, CoD1's walks, `VC_NAV_COD4`
+off), the same tip with and without the three changes, 2026-10-29.
+VERIFIED (the runs):
+
+| seed | kills | stalled bot-ticks |
+|---|---|---|
+| 1 | 4303 → 4416 | 296 → 369 |
+| 2 | 4263 → 4299 | 473 → 214 |
+| 3 | 4249 → 4410 | 1218 → 134 |
+| 4 | 4242 → 4353 | 493 → 220 |
+| 5 | 4263 → 4211 | 1215 → 934 |
+| 6 | 4239 → 4238 | 664 → 160 |
+| all | 25559 → 25927 | 4359 → 2031 |
+
+- Stalls fall 53%, kills rise 1.4% (the per-seed difference's standard
+  deviation is 81). By gametype, stalls: `war` 185 → 232, `sd` 394 →
+  730, `koth` 2906 → 712, `sab` 396 → 132, `dom` 478 → 225. The three
+  pairs: `koth` mp_cargoship seed 3 833 → 0, `koth` mp_showdown seed 5
+  769 → 0, `sab` mp_bloc seed 2 317 → 0. No pair without a kill.
+- Left: `sd` mp_bog seed 5 5 → 632, one axis bot pacing round a still
+  teammate at (4312, 338, -6) by the bomb zone; `koth` mp_showdown seed
+  1 108 and mp_cargoship seed 5 49. Not traced. INFERRED.
+
+### 12.17 Two guards a node apart, and the gap between their boxes
+
+12.16's `sd` mp_bog seed 5 traced per tick with the follower's plan and
+the live clip, 2026-10-29. VERIFIED (the runs).
+
+- The axis bot in slot 1 was held up in front of two still teammates
+  guarding the bomb zone, slot 3 at (4312, 338, -6) and slot 5 at (4239,
+  345, -6), 73 apart. With `PARTS_MATES_FLAT` on it was held up by the
+  near one (it was not before, at 58 in three dimensions), and
+  `mates_in_way` blocked the node nearest each guard (484 and 870). The
+  plan went round through node 1111 between them; the body pressed on
+  slot 3's and slot 5's boxes there at (4282, 368, -6), 1.7's pmove
+  clip naming each in turn (fraction 0.0001, entity 3 then 5), and
+  paced back round when the hold ran out, 632 stalled bot-ticks.
+  VERIFIED (the per-tick trace). On CoD4 the way round a still teammate
+  now keeps off every node within a box's width (30) across of him on
+  both axes and a step (18) up or down, not only the nearest
+  (`BotWorld::PARTS_MATES_BOX`, `NavGraph::nodes_in_box`). Up to
+  `MATE_RISE` (64) instead blocked a mantle's foot 57 under a guard on
+  mp_crash's ledge at (1414, 208, 183): `war` seed 4 went 0 to 334;
+  with the step, 0. VERIFIED (the runs).
+
+The census of 12.16 (630 matches, CoD1's walks, `VC_NAV_COD4` off),
+12.16's tip against it with the box, 2026-10-29. VERIFIED (the runs):
+
+| gametype | kills | stalled bot-ticks |
+|---|---|---|
+| `war` | 5990 → 5955 | 232 → 156 |
+| `sd` | 2371 → 2346 | 730 → 174 |
+| `koth` | 6080 → 6125 | 712 → 650 |
+| `sab` | 4241 → 4272 | 132 → 152 |
+| `dom` | 7245 → 7214 | 225 → 295 |
+| all | 25927 → 25912 | 2031 → 1427 |
+
+- Stalls fall 30%; kills hold (-15, the per-seed difference's standard
+  deviation 78). `war` and `sd` are under 12.15's 185 and 394 again.
+  `sd` mp_bog seed 5 632 → 78; 12.16's three pairs stay at 0.
+- `war`'s other rise in 12.16 (mp_countdown 6, mp_carentan 1,
+  mp_showdown 4, 12 to 40 each) and `sd`'s (mp_bog 1, mp_bloc 2 and 6,
+  25 to 40) were single episodes of one or two stall lines with no
+  teammate in the way, gone or moved in this census. INFERRED (the
+  stall lines).
+- `dom` rises 70 over five matches of 40 to 86 each; not traced.
+
+### 12.18 Jump edges on CoD4, and goals no body reaches, 2026-10-29
+
+12.17's `dom` rise (225 → 295) traced per tick with the follower's plan,
+`STALLS=1`, 2026-10-29. The tip reproduced 12.17's after column on every
+`dom` and `koth` pair. VERIFIED (the runs).
+
+- The rise is two pairs that moved, not one new spot: mp_pipeline seed 6
+  (0 → 86) and mp_broadcast seed 2 (14 → 36), against mp_broadcast seeds
+  1 and 5 (48 → 36, 26 → 0). VERIFIED (the census lines). Every `dom`
+  stall of 12.17's census sits on a run of jump edges: mp_pipeline's
+  crates at (-48, 3262), rising 38 and 31 to 32 and 63; mp_broadcast's
+  crates at (-1250, 340), rising 35 and 38 to 208 and 182, and the step at
+  (160, -709), 38; mp_showdown's stair at (1055, 630), 20 to 35 a step.
+  There bots jumped from rest at the foot and fell back, waited out 1.7's
+  jump slowdown at the foot (`Follower::jump_wait`; 1.2 to 1.8 s,
+  cod4-pmove.md 10), queued behind a teammate waiting so, and missed a
+  jump down onto a crate's top for the floor beside it. INFERRED (the
+  follower's path per tick). On mp_pipeline the way round slot 4
+  waiting at the crates' foot was planned by 12.17's box
+  (`PARTS_MATES_BOX`) but the plan under way kept its node.
+  INFERRED (the same trace). Of `koth`'s largest pairs mp_showdown seed
+  1, mp_crash seed 3 and mp_carentan seed 6 sit on the same kind of
+  edges, mp_crash seed 4 behind a still teammate and mp_overgrown seed 1
+  at a mantle. INFERRED (the stall lines).
+- Three ways round the jumps, measured, none kept. VERIFIED (the runs):
+
+| arm | `war` | `sd` | `koth` | `sab` | `dom` | all | kills |
+|---|---|---|---|---|---|---|---|
+| tip (12.17) | 156 | 174 | 650 | 152 | 295 | 1427 | 25912 |
+| every jump edge 64 longer in A* | 276 | 550 | 469 | 373 | 67 | 1735 | 25956 |
+| jump edges rising 30 or more, 64 | 158 | 342 | 671 | 960 | 99 | 2230 | 25997 |
+
+  A third, a jump under the slowdown taken once the cut jump
+  (`vcod_cod4::pmove` `jump_curve`'s 39 over the curve) clears the
+  edge's rise by 4, ran only on the 66 stalled `dom` and `koth` pairs:
+  `dom` 295 → 30, `koth` 624 → 721 (mp_overgrown seed 4 0 → 277).
+  Each arm takes 12.17's pairs to 0 or near it (all of `dom`'s, `koth`
+  mp_crash seeds 3 and 4, mp_showdown seed 3) and opens others; the kill
+  difference's per-seed standard deviation is 64 and 52.
+- What the new stalls were, traced: the two A* arms' three worst pairs
+  (`sab` mp_overgrown seed 5 765, `sab` mp_bog seed 6 247, `koth`
+  mp_bloc seed 5 196) are one shape: a bot whose plan has run out (the
+  path done, the goal its waypoint) circling 50 to 80 units off its
+  goal for 20 to 50 s, the goal a spot no body
+  stands on (the `sab` bomb lying at (872, -3841, -152) on mp_overgrown,
+  at (2655, -158, -8) on mp_bog; `koth`'s radio at (-2112, -4470, 52) on
+  mp_bloc, two bots circling it). The tip shows it too (`koth` mp_convoy
+  seed 4 at (134, -451)). INFERRED (the follower's state on each stall
+  line). The others: a bot on mp_crash's ladder at (-91, -890) again
+  (`war` seed 4, 74), one held in the air with no speed at (1174, -141,
+  45) on mp_cargoship (`war` seed 2, 165), teammates at an `sd` zone.
+  INFERRED (the same).
+- One match swings the census by hundreds (765 above), so a change that
+  moves every trajectory needs more than six seeds to show a drop under
+  1427. INFERRED (the per-seed totals: 108 to 560 and 20 to 925 against
+  177 to 304).
+
+### 12.19 Goals a plan's end leaves out of reach, the jump cost again, 2026-10-30
+
+12.18's two unreachable goals traced per tick with the follower's plan
+and the objective's trigger, on 12.18's tip with every jump edge 64
+longer in A*, `STALLS=1`, 2026-10-29. VERIFIED (the runs).
+
+- What the stock scripts take. VERIFIED (`maps/mp/gametypes/*.gsc` in
+  1.7's `common_mp.ff`): the `sab` bomb is a carry object on its
+  `sab_bomb_pickup_trig`, a `trigger_multiple` (`createCarryObject`,
+  `allowCarry("any")`), taken by any live player of a team that may
+  carry it whose `"trigger"` it hears (`carryObjectProxThink`), not
+  while the bomb `isResetting`, while he throws a grenade, or while
+  `canPickupObject` is off, which `pickupObjectDelay` holds until a
+  player who just dropped it is 64 from where he dropped it. A drop
+  moves the trigger to `playerPhysicsTrace` from 20 over the carrier to
+  2000 under him (`setDropped`), and `pickupTimeout` sends it home after
+  `autoResetTime` (60 s, `sab.gsc` `onPickup`). The `koth` radio is a
+  use object on its `radiotrigger`, a `trigger_multiple`, counting a
+  player only while he `isTouching` it (12.1). Neither accepts a body
+  near the trigger: the bomb wants the touch, a zone the body inside the
+  volume, which `inside_site` already tests (12.4).
+- `sab` mp_bog seed 6 (247 stalled bot-ticks): an allies bot with the
+  bomb, its goal the axis zone's stand at (2656, -158, -8) inside
+  `sab_bomb_axis` (`*46`, x 2543..2705 here), paced at (2725..2790,
+  -260..-130) for 14 s, east of the zone. Its follower had counted the
+  plan walked at (2762, -75) (`Follower::arrival`) and the bot ran at
+  the stand over the mantle edge at the zone's east side (1968 to 1214,
+  (2720, -96) to (2656, -120)) it never climbed, back and forth into
+  the crates. INFERRED (the follower's state per tick).
+- `koth` mp_bloc seed 5 (196): the radio's `radiotrigger` (`*19` at
+  (-1977, -4462, 116), bounds x -2085..-1869, y -4647..-4277) holds no
+  node of the graph, so its stand (`NavGraph::zone_stand`'s fallback)
+  is node 5599 at (-2112, -4470, 52), 27 west of the trigger. Two allies
+  bots walked out their plans there and circled the stand, each pushed
+  off it by the other, for 11 s. VERIFIED (the zone's stand and
+  `nav_build` `NEAR=` round the trigger); why the room's floor (z 52,
+  open from x -1990 to -1830 under a 30-wide box) has no node is not
+  traced.
+- On CoD4 a bot whose follower walked out its plan to an objective's
+  point (`Follower::walked_out`) and comes no 16 units nearer it in 3 s
+  (`SHORT_TICKS`, `SHORT_GAIN`), the objective not reached, gives the
+  point up for 15 s (`SHY_TICKS`): the objective reads as a guard round
+  the point (`Bot::track_reach`, `BotWorld::GIVES_UP_GOALS`), held as
+  any guard is, then it walks at the point again. A guard ring and a
+  breach stand are never given up. With the jump cost on, mp_bog seed
+  6 247 → 0 and mp_bloc seed 5 196 → 2. VERIFIED (the runs). The bomb
+  is not taken any sooner by this; the plan's end short of a mantle and
+  the radio room's missing nodes are left.
+
+The census (630 matches a setting, CoD1's walks, `VC_NAV_COD4` off),
+seeds 1 to 12 (1260 matches), 2026-10-29 and 30. The tip is 12.18's
+(seeds 1 to 6 are 12.17's after column), the fix is the give-up, and
+the third column the give-up with every jump edge 64 longer in A*
+(`BotWorld::JUMP_COST`). VERIFIED (the runs):
+
+| seed | kills tip → fix → +jump cost | stalled bot-ticks |
+|---|---|---|
+| 1 | 4402 → 4399 → 4333 | 212 → 212 → 108 |
+| 2 | 4329 → 4328 → 4347 | 212 → 212 → 450 |
+| 3 | 4251 → 4254 → 4304 | 276 → 276 → 71 |
+| 4 | 4342 → 4344 → 4408 | 177 → 150 → 236 |
+| 5 | 4263 → 4263 → 4304 | 246 → 246 → 116 |
+| 6 | 4325 → 4325 → 4257 | 304 → 304 → 313 |
+| 7 | 4314 → 4328 → 4411 | 987 → 968 → 157 |
+| 8 | 4291 → 4291 → 4482 | 322 → 322 → 70 |
+| 9 | 4359 → 4359 → 4343 | 338 → 338 → 318 |
+| 10 | 4306 → 4306 → 4368 | 335 → 335 → 95 |
+| 11 | 4221 → 4231 → 4411 | 225 → 225 → 139 |
+| 12 | 4245 → 4245 → 4325 | 493 → 493 → 287 |
+| all | 51648 → 51673 → 52293 | 4127 → 4081 → 2360 |
+
+| gametype | kills tip → fix → +jump cost | stalled bot-ticks |
+|---|---|---|
+| `war` | 11797 → 11797 → 11970 | 282 → 282 → 440 |
+| `sd` | 4673 → 4670 → 4788 | 1032 → 1032 → 881 |
+| `koth` | 12211 → 12237 → 12323 | 1654 → 1608 → 815 |
+| `sab` | 8530 → 8532 → 8678 | 399 → 399 → 157 |
+| `dom` | 14437 → 14437 → 14534 | 760 → 760 → 67 |
+
+- The give-up alone moves 9 of 1260 matches (`koth` mp_convoy seeds 4
+  and 7, 27 and 19 → 0, the rest kills only): without the jump cost the
+  unreachable goals are rare. Kept. INFERRED (the matches that moved).
+- With the jump cost on top stalls fall 42% and kills rise 1.2%, 9 of
+  12 seeds lower (the per-seed kill difference's standard deviation 77,
+  the stall difference's 244). `dom` falls 760 → 67 and `koth` halves;
+  `war` rises 282 → 440. VERIFIED (the runs). The earlier wins hold but
+  one: `koth` mp_cargoship seed 3, mp_showdown seed 5 and `sab` mp_bloc
+  seed 2 stay 0, `sd` mp_bog seed 5 is 92 (78 on the tip), and `war`
+  mp_crash seed 4 goes 0 → 74: an axis bot on the ladder at (-91, -884,
+  192..237) whose plan, made on the rungs, starts at (-31, -868, 272)
+  off the ladder's top at (-63, -895, 319), so it climbs and slides on
+  the rungs for 4 s. INFERRED (the follower's path per tick; 12.18 saw
+  the same bot under this arm). So the jump cost stays 0 until that
+  ladder plan is fixed; the switch is in. The largest stalls left with
+  it on: `sd` mp_crash seed 2 234, `war` mp_cargoship seed 2 165 (12.18's
+  body held in the air at (1174, -141, 45)), `koth` mp_crash_snow seed
+  12 155. Not traced.

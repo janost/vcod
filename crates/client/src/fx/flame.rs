@@ -31,7 +31,7 @@ use vcod_common::movetrace::{Body, CONTENTS_BODY, MoveWorld, body_trace};
 
 use super::sim::FxQuad;
 use vcod_common::net::flags::{EF_FIRING, ET_PLAYER};
-use vcod_common::net::protocol::{PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::Protocol;
 use vcod_common::net::snapshot::Snapshot;
 use vcod_common::weapon::WeaponDef;
 
@@ -766,7 +766,7 @@ impl FlameSystem {
                     ],
                     uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
                     rgba: [a; 4],
-                    shader,
+                    shader: shader.into(),
                 }
             })
             .collect()
@@ -784,7 +784,7 @@ pub fn nozzles(
     weapons: &[Option<WeaponDef>],
     muzzles: &HashMap<u32, (Vec3, Vec3)>,
 ) -> Vec<Nozzle> {
-    if p.version != PROTOCOL_V22.version {
+    if !p.is_uo() {
         return Vec::new();
     }
     let gas = |w: i32| {
@@ -1028,7 +1028,7 @@ mod tests {
         );
         let q = f.quads(1200.0, Vec3::Y, Vec3::Z);
         assert!(
-            q.iter().any(|q| q.shader == "flamethrowerFire12"),
+            q.iter().any(|q| &*q.shader == "flamethrowerFire12"),
             "{:?}",
             q.iter().map(|q| &q.shader).collect::<Vec<_>>()
         );

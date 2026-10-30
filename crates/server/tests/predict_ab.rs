@@ -1429,8 +1429,12 @@ fn predictor_holds_retail_intermission_1_1() {
 
 /// A 1.5 install's paks, or a UO one's `main/` (1.5's).
 fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
-    vcod_common::testing::game_fs()
-        .filter(|fs| vcod_common::net::protocol::install_protocol(fs).version == 6)
+    vcod_common::testing::game_fs().filter(|fs| {
+        vcod_common::net::protocol::install_protocol(fs)
+            .transport
+            .version
+            == 6
+    })
 }
 
 /// The 22 s spectator spell of retail 1.5b's `probe_states` capture: 1.5's
@@ -1565,7 +1569,7 @@ fn carried(p: &Protocol, w: &msg::PlayerState) -> bool {
     pm == PM_NORMAL_LINKED
         || pm == PM_DEAD_LINKED
         || ef & EF_MOUNTED != 0
-        || (p.version == PROTOCOL_V22.version && ef & EF_IN_VEHICLE_V22 != 0)
+        || (p.transport.version == PROTOCOL_V22.transport.version && ef & EF_IN_VEHICLE_V22 != 0)
 }
 
 /// The serverTimes of the gsc's `PROBE place <time> (x, y, z)` lines.
@@ -2090,7 +2094,11 @@ fn a_body_sunk_in_terrain_finds_no_ground() {
         };
         for _ in 0..6 {
             pm::pmove(&mut ps, &input, &mw, 0.008, &[]);
-            assert!(!ps.on_ground, "protocol {}: {:?}", p.version, ps.origin);
+            assert!(
+                !ps.on_ground,
+                "protocol {}: {:?}",
+                p.transport.version, ps.origin
+            );
         }
     }
 }

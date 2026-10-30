@@ -53,7 +53,7 @@ turret's record.
 | `cl+0x54` | `ps.groundEntityNum` | VERIFIED, player netfield table |
 | `cl+0x80` | `ps.eFlags`; byte `+0x81` holds 0x4000 and 0x8000 | VERIFIED, player netfield offset 128 |
 | `cl+0xc0` | `ps.viewangles` | VERIFIED, player netfield table |
-| `cl+0x374` / `+0x378` / `+0x380` | `ps.viewlocked` (8 bits) / `ps.viewlocked_entNum` (16 bits) / `ps.gunfx` (8 bits) | VERIFIED, player netfield offsets 884, 888 and 896 in `crates/common/src/net/fields_v1.rs` |
+| `cl+0x374` / `+0x378` / `+0x380` | `ps.viewlocked` (8 bits) / `ps.viewlocked_entNum` (16 bits) / `ps.gunfx` (8 bits) | VERIFIED, player netfield offsets 884, 888 and 896 in `crates/common/src/net/cod1/fields_v1.rs` |
 | `cl+0x20d0` | `sessionstate` | VERIFIED, `cod11-map-cycle.md`; the name is INFERRED |
 | `cl+0x21e8` | the last cmd's buttons byte | VERIFIED, `cod11-gsc-object-model.md` 23.5 |
 
@@ -1645,15 +1645,15 @@ A second run of the same recipe, live rather than replayed, taken again on
 (`--net-probe 127.0.0.1:28990 --probe-team axis --probe-secs 180`), the
 gunner client third (`--net-probe 127.0.0.1:28990 --save-turret
 --probe-secs 170`). It overwrote the committed `mp_carentan-dm-turret.txt`;
-that capture moved to `tmp/turret-ours-2.txt` (the pre-fix run stays at
-`tmp/turret-ours.txt` for comparison) and `git checkout` restored the
+that capture moved to a scratch copy (the pre-fix run stays in another
+for comparison) and `git checkout` restored the
 fixture directory, `git status` clean afterward.
 
 VERIFIED, D1: the use cmd (`buttons=64`) reaches the server and the very
 next snapshot already reads `viewlocked=1`, `viewlocked_entNum=298` and
 `eFlags=49176` (0xC018), matching retail's own first-mounted values --
 unchanged from the pre-fix run. VERIFIED: body placement now lands one
-frame later instead of two -- `tmp/turret-ours-2.txt` line 88 is the use
+frame later instead of two -- the scratch copy's line 88 is the use
 cmd (`st=36216`), line 93 (`serverTime=36250`, the very next snapshot)
 already reads `viewlocked=1` but keeps `groundEntityNum` 1022, the
 pre-mount origin and `legsAnim` 634, and line 97 (`serverTime=36300`, one
@@ -2519,9 +2519,8 @@ gunner grids to `GUNGRID_NEAR` (0.0005) with no gap.
 ## 14. The client
 
 How `cgame_mp_x86.dll` (1.1, image base 0x30000000) draws a turret, puts a
-gunner's view on it and draws its reticle. Addresses are the module's VAs;
-`private/ghidra/cgmp11.c` and `cgmp11.asm` are the Ghidra export they were
-read from. `cent` is a `centity_t` (stride 0x228, array at 0x3020db80) whose
+gunner's view on it and draws its reticle. Addresses are the module's VAs,
+read from its decompilation and disassembly. `cent` is a `centity_t` (stride 0x228, array at 0x3020db80) whose
 first 0xf0 bytes are its current `entityState_t`; the predicted playerstate
 copy starts at 0x3020715c.
 

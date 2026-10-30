@@ -22,7 +22,7 @@ const SNAP_SCRATCH_PATH: &str = "tmp/snapshots.bin";
 const SNAP_CAPTURE_TARGET: usize = 24;
 
 thread_local! {
-    static WIRE: std::cell::Cell<&'static net::protocol::Protocol> =
+    static WIRE: std::cell::Cell<&'static net::protocol::Cod1Wire> =
         const { std::cell::Cell::new(&net::protocol::PROTOCOL_V1) };
 }
 
@@ -30,26 +30,26 @@ thread_local! {
 /// snapshots, events and configstrings through. One probe is one connection;
 /// [`probe`] sets it each frame from [`NetClient::protocol`]. 1.1 until then,
 /// and in the unit tests.
-pub(crate) fn wire() -> &'static net::protocol::Protocol {
+pub(crate) fn wire() -> &'static net::protocol::Cod1Wire {
     WIRE.with(|w| w.get())
 }
 
-fn set_wire(p: &'static net::protocol::Protocol) {
+fn set_wire(p: &'static net::protocol::Cod1Wire) {
     WIRE.with(|w| w.set(p));
 }
 
 /// The untagged fixture names hold 1.1's evidence, which a capture off
 /// another protocol must never replace: such a run needs `--capture-tag`.
 fn check_capture_tag(
-    p: &net::protocol::Protocol,
+    p: &net::protocol::Cod1Wire,
     writes_fixture: bool,
     tag: Option<&str>,
 ) -> anyhow::Result<()> {
-    if writes_fixture && tag.is_none() && p.version != 1 {
+    if writes_fixture && tag.is_none() && !p.is_v1() {
         anyhow::bail!(
             "this is a protocol {} server; the untagged fixture names hold 1.1 evidence, \
              so pass --capture-tag to write this capture beside them",
-            p.version
+            p.transport.version
         );
     }
     Ok(())
@@ -57,7 +57,7 @@ fn check_capture_tag(
 
 /// The retail build behind the connection, as a fixture header names it.
 pub(crate) fn retail_build() -> &'static str {
-    match wire().version {
+    match wire().transport.version {
         6 => "1.5b",
         22 => "UO 1.51b",
         _ => "1.1d",
@@ -69,7 +69,7 @@ pub(crate) fn retail_build() -> &'static str {
 fn drain_v1(
     tracker: &mut vcod_common::net::events::EventTracker,
     snap: &net::snapshot::Snapshot,
-    p: &net::protocol::Protocol,
+    p: &net::protocol::Cod1Wire,
 ) -> Vec<vcod_common::net::events::GameEvent> {
     let mut events = tracker.drain(snap, p);
     for ev in &mut events {
@@ -86,7 +86,7 @@ fn drain_v1(
 
 /// The owned-weapon bitfield words, `weapons[0],weapons[1]`, and the two
 /// more United Offensive's 128 weapon slots add.
-fn weapon_bits(ps: &net::msg::PlayerState, p: &net::protocol::Protocol) -> String {
+fn weapon_bits(ps: &net::msg::PlayerState, p: &net::protocol::Cod1Wire) -> String {
     (0..4)
         .map(|k| format!("weapons[{k}]"))
         .filter(|n| net::msg::PlayerState::field_index(p, n).is_some())
@@ -2058,7 +2058,7 @@ impl ProbeWatch {
         &mut self,
         s: &net::snapshot::Snapshot,
         configstrings: &[String],
-        p: &'static net::protocol::Protocol,
+        p: &'static net::protocol::Cod1Wire,
     ) {
         use crate::entities::{ET_GENERAL, EntityVisual, resolve_visual};
         if !self.aliases.is_empty() {
@@ -2188,7 +2188,7 @@ impl ProbeWatch {
     /// client extrapolates (one non-stationary group per verb). Runs per
     /// snapshot rather than per second: a two-second move is 40 frames and a
     /// once-a-second sample cannot tell the two shapes apart.
-    fn check_movers(&mut self, s: &net::snapshot::Snapshot, p: &'static net::protocol::Protocol) {
+    fn check_movers(&mut self, s: &net::snapshot::Snapshot, p: &'static net::protocol::Cod1Wire) {
         for (&num, ent) in &s.entities {
             let now = (
                 Trajectory::read(ent, p, "pos"),
@@ -2218,7 +2218,7 @@ impl ProbeWatch {
         &mut self,
         s: &net::snapshot::Snapshot,
         configstrings: &[String],
-        p: &'static net::protocol::Protocol,
+        p: &'static net::protocol::Cod1Wire,
     ) {
         for (&num, ent) in &s.entities {
             let ls = ent.field_i32(p, "loopSound");
@@ -2252,7 +2252,7 @@ impl ProbeWatch {
             shot_fallbacks: &Default::default(),
             listener_pos: glam::Vec3::from(s.ps.origin(p)),
             ps_entity: crate::audio::cues::ps_entity(ps_client),
-            uo: p.version == net::protocol::PROTOCOL_V22.version,
+            uo: p.is_uo(),
         };
         for ev in drain_v1(&mut self.events, s, p) {
             for cue in crate::audio::cues::resolve(&ev, &ctx) {
@@ -2306,7 +2306,7 @@ const CS_SOUNDS_COUNT: usize = 256;
 /// can carry anything), so callers print the raw index.
 fn sound_cs_alias<'a>(
     configstrings: &'a [String],
-    p: &net::protocol::Protocol,
+    p: &net::protocol::Cod1Wire,
     idx: i32,
 ) -> Option<(usize, &'a str)> {
     if idx <= 0 || idx as usize >= CS_SOUNDS_COUNT {
@@ -2316,7 +2316,7 @@ fn sound_cs_alias<'a>(
     Some((cs, configstrings.get(cs).map_or("<unset>", String::as_str)))
 }
 
-fn sound_cs_alias_paren(configstrings: &[String], p: &net::protocol::Protocol, idx: i32) -> String {
+fn sound_cs_alias_paren(configstrings: &[String], p: &net::protocol::Cod1Wire, idx: i32) -> String {
     match sound_cs_alias(configstrings, p, idx) {
         Some((cs, name)) => format!("(cs {cs}) = {name:?}"),
         None => format!("(index {idx}: no alias)"),
@@ -7483,7 +7483,7 @@ fn write_slope_fixture(
     capture: &SlopeCapture,
     cmd_ms: u64,
     walk: SlopeWalk,
-    protocol: &net::protocol::Protocol,
+    protocol: &net::protocol::Cod1Wire,
     tag: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
@@ -7509,7 +7509,7 @@ fn write_slope_fixture(
     ));
     out.push_str("# sv_maxclients 8, sv_pure 0, stock scr_* defaults, one client on the server.\n");
     if let SlopeWalk::MoveShot(part) = walk {
-        let env = if protocol.version == 22 {
+        let env = if protocol.is_uo() {
             "COD_VERSION=uo "
         } else {
             "COD_VERSION=1.5 "
@@ -7525,7 +7525,7 @@ fn write_slope_fixture(
              # moveshot_script({name}) from the placement, facing world yaw 0. !cmd is a\n"
         ));
     } else if walk == SlopeWalk::PatchWalk {
-        let env = match protocol.version {
+        let env = match protocol.transport.version {
             6 => "COD_VERSION=1.5 ",
             22 => "COD_VERSION=uo ",
             _ => "",
@@ -7565,7 +7565,7 @@ fn write_slope_fixture(
             | SlopeWalk::Autofire
             | SlopeWalk::Talk
     ) {
-        let env = match protocol.version {
+        let env = match protocol.transport.version {
             6 => "COD_VERSION=1.5 ",
             22 => "COD_VERSION=uo ",
             _ => "",
@@ -7620,7 +7620,7 @@ fn write_slope_fixture(
     out.push_str("# as entnum:x,y,z, ;-separated; one impact rides several snapshots.\n");
     out.push_str(&format!("# cmd_ms {cmd_ms}\n"));
     // The weapon list a replay loads its defs by, where it is not 1.1's.
-    if protocol.version == 22 {
+    if protocol.is_uo() {
         let cs7 = configstrings.get(7).map(String::as_str).unwrap_or("");
         out.push_str(&format!("# cs7 {cs7}\n"));
     }
@@ -8727,11 +8727,7 @@ impl TriggerProbe {
             println!("TRIGGERS: no game data, the walk has nothing to steer at");
             return;
         };
-        let Some(bsp) = fs
-            .resolve_map(map)
-            .and_then(|p| fs.read(&p))
-            .and_then(|d| vcod_common::bsp::parse(&d).ok())
-        else {
+        let Some(bsp) = vcod_common::mapworld::find(fs, map).ok() else {
             println!("TRIGGERS: cannot load {map}, the walk has nothing to steer at");
             return;
         };
@@ -9331,11 +9327,7 @@ impl SdProbe {
             println!("SD: no game data, the walk has nothing to steer at");
             return;
         };
-        let Some(bsp) = fs
-            .resolve_map(map)
-            .and_then(|p| fs.read(&p))
-            .and_then(|d| vcod_common::bsp::parse(&d).ok())
-        else {
+        let Some(bsp) = vcod_common::mapworld::find(fs, map).ok() else {
             println!("SD: cannot load {map}, the walk has nothing to steer at");
             return;
         };
@@ -10737,11 +10729,7 @@ impl TurretProbe {
             println!("TURRET: no game data, no gun to find");
             return;
         };
-        let Some(bsp) = fs
-            .resolve_map(map)
-            .and_then(|p| fs.read(&p))
-            .and_then(|d| vcod_common::bsp::parse(&d).ok())
-        else {
+        let Some(bsp) = vcod_common::mapworld::find(fs, map).ok() else {
             println!("TURRET: cannot load {map}, no gun to find");
             return;
         };
@@ -12342,7 +12330,7 @@ impl CompassProbe {
         let info = ps.field_i32(p, "iCompassFriendInfo") as u32;
         let decoded = unpack(info);
         // UO's tank, packed the same way with the vehicle's pool slot.
-        let tank = if p.version == 22 {
+        let tank = if p.is_uo() {
             let t = ps.field_i32(p, "iCompassTankInfo") as u32;
             let vehicles: Vec<String> = snap
                 .entities
@@ -13489,7 +13477,7 @@ struct EntInfo {
 }
 
 impl EntInfo {
-    fn of(p: &net::protocol::Protocol, e: &net::msg::EntityState) -> Self {
+    fn of(p: &net::protocol::Cod1Wire, e: &net::msg::EntityState) -> Self {
         EntInfo {
             etype: e.field_i32(p, "eType"),
             index: e.field_i32(p, "index"),

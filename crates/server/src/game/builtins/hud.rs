@@ -60,7 +60,7 @@ mod elem_type {
 /// The receiver a hudelem method carries. `HudElem_GetMethod` (0x4be38) is
 /// only consulted for a HUD element, so a gentity receiver here is the type
 /// error retail's own dispatch would raise by never finding the name.
-fn hud_receiver(host: &GameHost, recv: Option<Target>) -> Result<EntId, ErrorKind> {
+pub(crate) fn hud_receiver(host: &GameHost, recv: Option<Target>) -> Result<EntId, ErrorKind> {
     let id = entity_receiver(recv)?;
     if id.0 < FIRST_HUD_ELEM || host.ents.get(id).is_none() {
         return Err(ErrorKind::BadType("needs a HUD element receiver"));
@@ -79,7 +79,10 @@ pub fn new_hud_elem(
     _recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    Ok(Value::Entity(host.ents.spawn_hud_elem(cx)?))
+    Ok(Value::Entity(host.ents.spawn_hud_elem_for(
+        cx,
+        host.profile.game == vcod_common::game::Game::Cod4,
+    )?))
 }
 
 /// `newClientHudElem(player)` (`GScr_NewClientHudElem` 0x4b298): the same
@@ -100,7 +103,9 @@ pub fn new_client_hud_elem(
         return Err(ErrorKind::BadType("not a client"));
     }
     let owner = id.0;
-    let elem = host.ents.spawn_hud_elem(cx)?;
+    let elem = host
+        .ents
+        .spawn_hud_elem_for(cx, host.profile.game == vcod_common::game::Game::Cod4)?;
     with_hud(host, elem, |h| h.owner = owner)?;
     Ok(Value::Entity(elem))
 }
@@ -127,7 +132,9 @@ pub fn new_team_hud_elem(
         "spectator" => TEAM_SPECTATOR,
         _ => return Err(ErrorKind::BadType("not a team name")),
     };
-    let elem = host.ents.spawn_hud_elem(cx)?;
+    let elem = host
+        .ents
+        .spawn_hud_elem_for(cx, host.profile.game == vcod_common::game::Game::Cod4)?;
     with_hud(host, elem, |h| h.team = team)?;
     Ok(Value::Entity(elem))
 }
@@ -215,7 +222,7 @@ pub fn set_shader(
     let (Value::String(a) | Value::Localized(a)) = name else {
         return Err(ErrorKind::BadType("setShader takes a shader name"));
     };
-    let name = cx.resolve(*a).to_string();
+    let name = host.shader_name(cx.resolve(*a));
     let index = host
         .allocators
         .shader_index(&mut host.configstrings, &name, host.initializing)?;
@@ -248,7 +255,7 @@ pub fn destroy(
 
 /// Edits one record's [`HudState`]. The receiver check has already run, so
 /// a record missing here is a bug rather than a script error.
-fn with_hud(
+pub(crate) fn with_hud(
     host: &mut GameHost,
     id: EntId,
     f: impl FnOnce(&mut HudState),
@@ -413,7 +420,7 @@ fn set_any_clock(
     let (Value::String(a) | Value::Localized(a)) = args[2] else {
         return Err(ErrorKind::BadType("setClock takes a shader name"));
     };
-    let name = cx.resolve(a).to_string();
+    let name = host.shader_name(cx.resolve(a));
     let shader = host
         .allocators
         .shader_index(&mut host.configstrings, &name, host.initializing)?;

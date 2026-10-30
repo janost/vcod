@@ -2,9 +2,9 @@
 //! and `G_ParseField` (docs/research/cod11-gsc-object-model.md section 7).
 
 use crate::configstrings::CsRange;
-use crate::game::fields::{self, FieldType, Route};
+use crate::game::fields::{FieldType, Route};
 use crate::game::host::GameHost;
-use vcod_common::net::protocol::CS_NORTHYAW;
+use vcod_common::bsp::{field_value, spawn_string};
 use vcod_common::x87::angles_to_axis;
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Value};
 
@@ -68,50 +68,70 @@ pub fn spawn_entities_from_string(
     cx: &mut Cx,
     entities: &str,
 ) -> Result<(), ErrorKind> {
-    let mut blocks = vcod_common::bsp::entity_blocks(entities).into_iter();
+    // `G_ParseSpawnVars` keeps each block's pairs in lump order and
+    // `G_CallSpawn` applies them in that order (object-model doc 7), so
+    // the keys go on in `pairs` order. A spawn function's own read is
+    // `G_SpawnString`'s (`spawn_string`: strcmp, the first copy); one of an
+    // entity field the pass set is `field_value` (folded, the last copy).
+    let mut blocks = vcod_common::bsp::entity_block_pairs(entities).into_iter();
     let world = blocks
         .next()
         .ok_or(ErrorKind::BadType("empty entity lump"))?;
-    if world.get("classname").map(String::as_str) != Some("worldspawn") {
+    // `SP_worldspawn` (0x61d05): `G_SpawnString("classname")`, `Q_stricmp`.
+    if !spawn_string(&world, "classname").is_some_and(|c| c.eq_ignore_ascii_case("worldspawn")) {
         return Err(ErrorKind::BadType("first entity block is not worldspawn"));
     }
     // `SP_worldspawn` (0x61cec) writes 2, the start time, 3, 4 (the
     // `message` key, 0x61dcc), `g_motd` (0x61dde), `g_gravity` (0x61e0a)
     // and 11, in that order.
     let layout = host.allocators.layout();
+    // CoD2's `SP_worldspawn` (0x811b56a) opens with configstring 2, `cod`
+    // (cod2-protocol.md 15.3).
+    if let Some(cs2) = host.profile.spawn.worldspawn_cs2 {
+        host.configstrings.set(2, cs2);
+    }
     host.configstrings
         .set(layout.level_start, host.level_time_ms.to_string());
-    host.configstrings.set(3, worldspawn_ambient(&world));
-    host.configstrings
-        .set(4, world.get("message").cloned().unwrap_or_default());
+    let slots = &host.profile.spawn;
+    let (ambient, message, northyaw) =
+        (slots.ambient_slot, slots.message_slot, slots.northyaw_slot);
+    host.configstrings.set(ambient, worldspawn_ambient(&world));
+    host.configstrings.set(
+        message,
+        spawn_string(&world, "message")
+            .unwrap_or_default()
+            .to_string(),
+    );
     let motd = host.cvars.get("g_motd").to_string();
     host.configstrings.set(layout.motd, motd);
     // The map's `gravity` key or 800, over whatever `+set` put there
     // (cod15-movement.md, "ps.gravity").
-    let gravity = world.get("gravity").map_or("800", String::as_str);
+    let gravity = spawn_string(&world, "gravity").unwrap_or("800");
     host.cvars.set("g_gravity", gravity);
     host.configstrings
-        .set(CS_NORTHYAW, worldspawn_northyaw(&world));
+        .set(northyaw, worldspawn_northyaw(&world));
     // `G_ParseScrVehicleInfo` runs ahead of every other alias of the level.
+    let p = crate::tick_profile::phase("spawn/vehicle info");
     crate::game::vehicle::load_level(host);
-    for block in blocks {
-        let Some(classname) = block.get("classname").cloned() else {
+    drop(p);
+    for pairs in blocks {
+        // `G_CallSpawn`'s `G_SpawnString("classname")` (0x615fe).
+        let Some(classname) = spawn_string(&pairs, "classname").map(str::to_string) else {
             // `G_CallSpawn` warns and creates nothing.
             log::warn!("gsc: entity block with no classname, dropped");
             continue;
         };
         let id = host.ents.spawn(cx)?;
-        for (k, v) in &block {
+        for (k, v) in &pairs {
             parse_field(host, cx, id, k, v);
         }
         // `SP_script_vehicle_collmap` (0x8df52) only sets `eType` 14 and
         // contents 0: it never links, and the vehicle takes its `*N` below.
         if classname == "script_vehicle" && !host.vehicles.infos.list.is_empty() {
-            let vars = block.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            crate::game::vehicle::spawn(host, cx, id, vars, true)?;
+            let _p = crate::tick_profile::phase("spawn/vehicle");
+            crate::game::vehicle::spawn(host, cx, id, pairs.clone(), true)?;
         }
-        let spawnflags = block
-            .get("spawnflags")
+        let spawnflags = field_value(&pairs, "spawnflags")
             .and_then(|v| v.trim().parse::<i32>().ok())
             .unwrap_or(0);
         // Only UO's spawn table has `trigger_mount` (`SP_trigger_mount`).
@@ -120,8 +140,27 @@ pub fn spawn_entities_from_string(
                 crouch: spawnflags & 1 != 0,
             },
         );
-        if let Some(kind) = crate::game::trigger::kind_of(&classname).or(mount) {
-            register_trigger(host, &block, id, kind);
+        if host.profile.script_structs && classname == "script_struct" {
+            // `SP_script_struct` builds no entity (cod2-gsc-diff.md 2.4):
+            // the struct is made after the spawn pass, in lump order.
+            host.free_entity(id);
+            host.script_structs_mut().push(pairs);
+            continue;
+        }
+        let trig = crate::tick_profile::phase("spawn/trigger");
+        if let Some(kind) = (host.profile.trigger_kind)(&classname).or(mount) {
+            if let Some(round) = round_trigger(host, &pairs, &classname)? {
+                let (shape, round) = round;
+                // No `G_SpawnFloat("wait")` in cod2_lnxded: the field.
+                let wait_ms = field_value(&pairs, "wait")
+                    .and_then(|v| v.trim().parse::<f32>().ok())
+                    .map_or(crate::game::trigger::MULTIPLE_DEFAULT_WAIT_MS, |s| {
+                        (s * 1000.0) as i32
+                    });
+                host.triggers.register_round(id, shape, wait_ms, round);
+            } else {
+                register_trigger(host, &pairs, id, kind);
+            }
             if kind == crate::game::trigger::TriggerKind::Hurt {
                 crate::game::trigger::default_hurt_dmg(host, cx, id);
             }
@@ -137,60 +176,40 @@ pub fn spawn_entities_from_string(
             }
             crate::game::trigger::link(host, cx, id, spawnflags);
         }
-        link_script_entity(host, cx, &block, id, &classname);
-        crate::game::mover::spawn_sine(host, cx, id, &classname, Some(&block));
-        crate::game::item::spawn_misc_spawner(host, cx, id, &classname);
-        if let Some(item) = spawn_item_name(host, cx, id, &classname) {
+        drop(trig);
+        let p = crate::tick_profile::phase("spawn/link");
+        link_script_entity(host, cx, &pairs, id, &classname);
+        drop(p);
+        // CoD2's spawn table has neither `func_bobbing`/`func_pendulum` nor
+        // `misc_spawner` (cod2-gsc-diff.md 2.4).
+        if host.profile.spawn.sine_movers_and_spawner {
+            crate::game::mover::spawn_sine(host, cx, id, &classname, Some(&pairs));
+            crate::game::item::spawn_misc_spawner(host, cx, id, &classname);
+        }
+        if let (Some(register), Some(weapon)) = (
+            host.profile.spawn.weapon_pickup,
+            classname.strip_prefix("weapon_"),
+        ) {
+            register(host, weapon)?;
+        }
+        if let Some(item) = spawn_item_name(host, &pairs, &classname) {
             host.register_item(&item.name)?;
             match item.row {
                 Some(row) => {
                     crate::game::item::attach(host, id, row);
                     crate::game::item::link(host, cx, id, crate::game::item::CONTENTS_ITEM);
+                    let _p = crate::tick_profile::phase("spawn/item drop");
                     drop_item_to_floor(host, cx, id, is_weapon_row(host.defs, row));
                 }
                 None => {
-                    for alias in turret_sound_aliases(host.fs.as_deref(), &item.name) {
-                        register_sound_alias(host, alias);
-                    }
-                    let bones = turret_bones(host, cx, id);
-                    let rest = settle_turret_pitch(host, cx, id, bones.as_deref());
-                    if let Some(def) = turret_def(host.fs.as_deref(), &item.name) {
-                        let keys = turret_keys(&block);
-                        if host.turrets.len() >= MAX_TURRETS {
-                            // Retail's `Com_Error` here is fatal
-                            // (`docs/research/cod11-turrets.md`'s turret
-                            // record table); we log and spawn no record.
-                            log::error!(
-                                "G_SpawnTurret: max number of turrets ({MAX_TURRETS}) exceeded"
-                            );
-                        } else {
-                            let mut rec =
-                                crate::game::turret::TurretRecord::new(&item.name, def, keys, rest);
-                            // `G_SpawnTurret` zeroes `angles2` and thinks
-                            // `turret_think_init` 100 ms on (0x52fd2).
-                            rec.angles2 = [0.0; 3];
-                            rec.init_at = Some(host.level_time_ms + 100);
-                            rec.tags = bones
-                                .as_deref()
-                                .and_then(crate::game::turret::TurretTags::from_bones);
-                            host.turrets.insert(id, rec);
-                            host.link_turret(cx, id);
-                            let health = cx.intern_folded("health");
-                            if matches!(
-                                host.get_field(cx, id, health),
-                                Value::Int(0) | Value::Undefined
-                            ) {
-                                let full = Value::Int(crate::game::turret::TURRET_HEALTH);
-                                host.set_field(cx, id, health, full)?;
-                            }
-                        }
-                    }
+                    let _p = crate::tick_profile::phase("spawn/turret");
+                    spawn_turret(host, cx, id, &item.name, &turret_keys(&pairs))?
                 }
             }
         }
         if SPAWN_FREES.contains(&classname.as_str()) {
             host.free_entity(id);
-        } else if let (Some(n), Some(world)) = (submodel_index(&block), &host.world) {
+        } else if let (Some(n), Some(world)) = (submodel_index(&pairs), &host.world) {
             // A trace that ends on the model's brushes names this entity,
             // which is what a player standing on it reads as its ground.
             world.collision.set_model_entity(n, id.0);
@@ -204,6 +223,7 @@ pub fn spawn_entities_from_string(
                 .set_model_linked(n, classname != "script_vehicle_collmap");
         }
     }
+    let _p = crate::tick_profile::phase("spawn/collmaps");
     crate::game::vehicle::pair_collmaps(host, cx);
     Ok(())
 }
@@ -231,12 +251,8 @@ const CONTENTS_BRUSH_SET: i32 = -1;
 
 /// The submodel's box as `trap_SetBrushModel` sets `r.mins`/`r.maxs`. A
 /// block with no `*N` leaves `s.index` 0, the world's model (movers doc 19).
-fn brush_shape(
-    host: &GameHost,
-    block: &std::collections::HashMap<String, String>,
-) -> ([f32; 3], [f32; 3]) {
-    let n = block
-        .get("model")
+fn brush_shape(host: &GameHost, block: &[(String, String)]) -> ([f32; 3], [f32; 3]) {
+    let n = field_value(block, "model")
         .and_then(|m| m.strip_prefix('*'))
         .and_then(|n| n.parse::<usize>().ok())
         .unwrap_or(0);
@@ -253,7 +269,7 @@ fn brush_shape(
 pub fn link_script_entity(
     host: &mut GameHost,
     cx: &mut Cx,
-    block: &std::collections::HashMap<String, String>,
+    block: &[(String, String)],
     id: EntId,
     classname: &str,
 ) {
@@ -293,9 +309,8 @@ pub fn link_script_model(host: &mut GameHost, cx: &mut Cx, id: EntId) {
 }
 
 /// The `N` of a block's `"model" "*N"`, for a submodel (N > 0).
-fn submodel_index(block: &std::collections::HashMap<String, String>) -> Option<usize> {
-    block
-        .get("model")?
+fn submodel_index(block: &[(String, String)]) -> Option<usize> {
+    field_value(block, "model")?
         .strip_prefix('*')?
         .parse()
         .ok()
@@ -304,8 +319,8 @@ fn submodel_index(block: &std::collections::HashMap<String, String>) -> Option<u
 
 /// `SP_worldspawn` (0x61cec): `ambienttrack` as `n\\<track>`, or `""` with
 /// no such key (0x61d72..0x61daa). The gametype's `ambientPlay` overwrites it.
-fn worldspawn_ambient(world: &std::collections::HashMap<String, String>) -> String {
-    match world.get("ambienttrack") {
+fn worldspawn_ambient(world: &[(String, String)]) -> String {
+    match spawn_string(world, "ambienttrack") {
         Some(v) if !v.is_empty() => format!("n\\{v}"),
         _ => String::new(),
     }
@@ -319,9 +334,9 @@ fn worldspawn_ambient(world: &std::collections::HashMap<String, String>) -> Stri
 /// `"0"` is that literal, not a formatted zero; `mp_pavlov`'s `"90"` is the
 /// key's value verbatim. INFERRED FROM DECOMPILATION for the mechanism,
 /// cross-checked against both captures for the outcome.
-fn worldspawn_northyaw(world: &std::collections::HashMap<String, String>) -> String {
-    match world.get("northyaw") {
-        Some(v) if !v.is_empty() => v.clone(),
+fn worldspawn_northyaw(world: &[(String, String)]) -> String {
+    match spawn_string(world, "northyaw") {
+        Some(v) if !v.is_empty() => v.to_string(),
         _ => "0".to_string(),
     }
 }
@@ -339,11 +354,10 @@ fn worldspawn_northyaw(world: &std::collections::HashMap<String, String>) -> Str
 /// has, and neither gate map's `trigger_hurt` carries an empty `sound`
 /// value, so that branch is deliberate but unmeasured, not proven either
 /// way.
-fn trigger_hurt_sound(block: &std::collections::HashMap<String, String>) -> String {
-    block
-        .get("sound")
-        .cloned()
-        .unwrap_or_else(|| "world_hurt_me".to_string())
+fn trigger_hurt_sound(block: &[(String, String)]) -> String {
+    spawn_string(block, "sound")
+        .unwrap_or("world_hurt_me")
+        .to_string()
 }
 
 /// A trigger's shape is its submodel's (`"model" "*N"`) -- the box for the
@@ -359,12 +373,11 @@ fn trigger_hurt_sound(block: &std::collections::HashMap<String, String>) -> Stri
 /// and `life`.
 fn register_trigger(
     host: &mut GameHost,
-    block: &std::collections::HashMap<String, String>,
+    block: &[(String, String)],
     id: EntId,
     kind: crate::game::trigger::TriggerKind,
 ) {
-    let model = block
-        .get("model")
+    let model = field_value(block, "model")
         .and_then(|m| m.strip_prefix('*'))
         .and_then(|n| n.parse::<u32>().ok())
         .filter(|n| host.model_bounds.get(*n as usize).is_some());
@@ -376,18 +389,28 @@ fn register_trigger(
         maxs: bounds.1,
         model,
     };
+    // `SP_trigger_multiple`'s `G_SpawnFloat("wait")` (1.1d 0x64c6f).
     let secs_ms = |key: &str, default: i32| -> i32 {
-        block
-            .get(key)
+        spawn_string(block, key)
             .and_then(|v| v.trim().parse::<f32>().ok())
             .map_or(default, |s| (s * 1000.0) as i32)
     };
     if kind == crate::game::trigger::TriggerKind::Hurt {
-        let sound = crate::game::trigger::hurt_sound_index(host, &trigger_hurt_sound(block));
-        let key = |k: &str| block.get(k).map(|v| v.trim());
-        let spawnflags = key("spawnflags").and_then(|v| v.parse().ok()).unwrap_or(0);
+        // CoD2's `SP_trigger_hurt` (0x811caba) reads the key and indexes
+        // nothing (cod2-protocol.md 15.3).
+        let sound = if host.profile.spawn.hurt_sound {
+            crate::game::trigger::hurt_sound_index(host, &trigger_hurt_sound(block))
+        } else {
+            0
+        };
+        let spawnflags = field_value(block, "spawnflags")
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0);
         // `atof(G_SpawnString("life", "0"))`.
-        let life = key("life").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        let life = spawn_string(block, "life")
+            .map(str::trim)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0);
         host.triggers
             .register_hurt(id, shape, sound, spawnflags, life);
         return;
@@ -408,6 +431,53 @@ fn register_trigger(
     host.triggers.register(id, kind, shape, wait_ms);
 }
 
+/// A CoD2 `trigger_radius` or `trigger_disk`'s box and radius off its
+/// `radius` and `height` keys (`SP_trigger_radius` 0x811c6e0,
+/// `SP_trigger_disk` 0x811c880, VERIFIED; [`crate::game::trigger::Round`]).
+/// A missing key is retail's `Com_Error`, which fails the load. `None` for
+/// any other classname or game.
+fn round_trigger(
+    host: &GameHost,
+    block: &[(String, String)],
+    classname: &str,
+) -> Result<
+    Option<(
+        crate::game::trigger::TriggerShape,
+        crate::game::trigger::Round,
+    )>,
+    ErrorKind,
+> {
+    if !host.profile.spawn.round_triggers {
+        return Ok(None);
+    }
+    let key = |k: &str| -> Result<f32, ErrorKind> {
+        spawn_string(block, k)
+            .map(crate::game::builtins::cvar::atof)
+            .ok_or_else(|| {
+                ErrorKind::Custom(format!(
+                    "{k} not specified for trigger_radius at ({})",
+                    field_value(block, "origin").unwrap_or("")
+                ))
+            })
+    };
+    // rodata 0x815ebd0: a disk's radius grows by 64; 0xc7c35000 is -100000.
+    const DISK_GROW: f32 = 64.0;
+    const DISK_HALF_HEIGHT: f32 = 100_000.0;
+    let (r, lo, hi) = match classname {
+        "trigger_radius" => {
+            let r = key("radius")?;
+            (r, 0.0, key("height")?)
+        }
+        "trigger_disk" => {
+            let r = key("radius")? + DISK_GROW;
+            (r, -DISK_HALF_HEIGHT, DISK_HALF_HEIGHT)
+        }
+        _ => return Ok(None),
+    };
+    let shape = crate::game::trigger::TriggerShape::boxed([-r, -r, lo], [r, r, hi]);
+    Ok(Some((shape, crate::game::trigger::Round { radius: r })))
+}
+
 /// `G_SpawnTurret` (0x52c84), reached from `SP_turret` for `misc_mg42` and
 /// `misc_turret`: right after `RegisterItem(weaponinfo)`, it reads two
 /// string fields off the weapon info struct `BG_GetInfoForWeapon` returns
@@ -419,7 +489,16 @@ fn register_trigger(
 /// the weapon file, keyed by the entity's own `weaponinfo` value -- the same
 /// string `spawn_item_name` already resolved for `RegisterItem`, reused here
 /// rather than re-read.
-fn turret_sound_aliases(fs: Option<&vcod_common::pk3::Pk3Fs>, weaponinfo: &str) -> Vec<String> {
+///
+/// CoD2's `G_SpawnTurret` (0x810c6b2) indexes four, the weapon def's words
+/// at 0xb0..0xbc: `loopFireSound`, `loopFireSoundPlayer`, `stopFireSound`,
+/// `stopFireSoundPlayer`, as mp_toujane's 591..594 read live
+/// (cod2-protocol.md 15.3, cod2-turrets.md 2).
+fn turret_sound_aliases(
+    fs: Option<&vcod_common::pk3::Pk3Fs>,
+    weaponinfo: &str,
+    player_sounds: bool,
+) -> Vec<String> {
     let Some(fs) = fs else {
         return Vec::new();
     };
@@ -427,8 +506,17 @@ fn turret_sound_aliases(fs: Option<&vcod_common::pk3::Pk3Fs>, weaponinfo: &str) 
         return Vec::new();
     };
     let map = vcod_common::xmodel::parse_weapon(&String::from_utf8_lossy(&bytes));
-    ["loopFireSound", "stopFireSound"]
-        .iter()
+    let keys: &[&str] = if player_sounds {
+        &[
+            "loopFireSound",
+            "loopFireSoundPlayer",
+            "stopFireSound",
+            "stopFireSoundPlayer",
+        ]
+    } else {
+        &["loopFireSound", "stopFireSound"]
+    };
+    keys.iter()
         .filter_map(|k| map.get(*k))
         .filter(|v| !v.is_empty())
         .cloned()
@@ -452,21 +540,15 @@ fn turret_def(
 }
 
 /// The `leftarc`/`rightarc`/`toparc`/`bottomarc`/`damage` spawn keys off the
-/// entity's raw BSP block, case-folded the way `G_SpawnFloat`/`G_SpawnInt`
-/// match a key name. None of the five reaches script: neither
-/// `fields::ENTITY_FIELDS` nor `fields::RADIANT_KEYS` names any of them (the
-/// AGENTS.md gotcha on Radiant keys), so they are read here off the block
-/// `spawn_entities_from_string` already holds rather than through
-/// `host.get_field`.
-fn turret_keys(
-    block: &std::collections::HashMap<String, String>,
-) -> crate::game::turret::TurretKeys {
-    let f = |key: &str| -> Option<f32> {
-        block
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(key))
-            .and_then(|(_, v)| v.trim().parse().ok())
-    };
+/// entity's raw BSP pairs, matched as `G_SpawnFloat`/`G_SpawnInt` match a
+/// key name: `G_SpawnString` (1.1d 0x61390, CoD2 0x80f415e) `strcmp`s the
+/// pairs in lump order and takes the first. None of the five reaches
+/// script: neither `fields::ENTITY_FIELDS` nor `fields::RADIANT_KEYS` names
+/// any of them (the AGENTS.md gotcha on Radiant keys), so they are read
+/// here rather than through `host.get_field`.
+fn turret_keys(pairs: &[(String, String)]) -> crate::game::turret::TurretKeys {
+    let f =
+        |key: &str| -> Option<f32> { spawn_string(pairs, key).and_then(|v| v.trim().parse().ok()) };
     crate::game::turret::TurretKeys {
         left: f("leftarc"),
         right: f("rightarc"),
@@ -653,7 +735,7 @@ fn settle_turret_pitch(
     host: &mut GameHost,
     cx: &mut Cx,
     id: EntId,
-    bones: Option<&[vcod_common::xmodel::Bone]>,
+    bones: Option<&[vcod_common::model::Bone]>,
 ) -> f32 {
     let (Some(world), Some(bones)) = (host.world.clone(), bones) else {
         return DEFAULT_TURRET_PITCH;
@@ -675,23 +757,46 @@ fn settle_turret_pitch(
 }
 
 /// The bones of a turret's `model`, `None` with no paks or a model that does
-/// not load.
+/// not load. A CoD4 model is the zones' (its bind-pose tags,
+/// `Cod4HostState::model_tags`), never a pak's.
 fn turret_bones(
     host: &mut GameHost,
     cx: &mut Cx,
     id: EntId,
-) -> Option<Vec<vcod_common::xmodel::Bone>> {
-    let fs = host.fs.clone()?;
+) -> Option<Vec<vcod_common::model::Bone>> {
     let model_at = cx.intern_folded("model");
     let Value::String(model) = host.get_field(cx, id, model_at) else {
         return None;
     };
-    // The `model` key is the pak path; `xmodel::load_bones` wants the name.
+    // The `model` key is the pak path; `model::load_bones` wants the name.
     // UO's mp_foy spells it `xmodel\mg42_bipod`; Q3's `FS_HashFileName`
     // folds `\` into `/`, so retail finds it (INFERRED).
     let model = cx.resolve(model).replace('\\', "/");
     let model = model.trim_start_matches("xmodel/").to_string();
-    vcod_common::xmodel::load_bones(&fs, &model)
+    if let crate::game::host::HostExt::Cod4(c4) = &host.ext {
+        let tags = c4.model_tags.get(&model.to_ascii_lowercase());
+        if tags.is_none() {
+            log::warn!("turret model {model}: not in the zones");
+        }
+        return Some(
+            tags?
+                .iter()
+                .map(|(name, pos, rot)| vcod_common::model::Bone {
+                    name: name.clone(),
+                    parent: -1,
+                    pos: *pos,
+                    rot: *rot,
+                    local_pos: *pos,
+                    local_rot: *rot,
+                    hit_mins: glam::Vec3::ZERO,
+                    hit_maxs: glam::Vec3::ZERO,
+                    hit_location: 0,
+                })
+                .collect(),
+        );
+    }
+    let fs = host.fs.clone()?;
+    vcod_common::model::load_bones(&*fs, &model)
         .map_err(|e| log::warn!("turret model {model}: {e}"))
         .ok()
 }
@@ -901,9 +1006,8 @@ pub fn radiant_weapon(classname: &str) -> Option<&'static str> {
 }
 
 fn spawn_item_name(
-    host: &mut GameHost,
-    cx: &mut Cx,
-    id: EntId,
+    host: &GameHost,
+    pairs: &[(String, String)],
     classname: &str,
 ) -> Option<SpawnItem> {
     if let Some(row) = crate::items::classname_index(host.defs, classname) {
@@ -913,13 +1017,11 @@ fn spawn_item_name(
         });
     }
     if classname == "misc_mg42" || classname == "misc_turret" {
-        let weaponinfo = cx.intern_folded("weaponinfo");
-        if let Value::String(s) = host.get_field(cx, id, weaponinfo) {
-            return Some(SpawnItem {
-                name: cx.resolve(s).to_string(),
-                row: None,
-            });
-        }
+        // `SP_turret`'s `G_SpawnString("weaponinfo")` (1.1d 0x533c8).
+        return spawn_string(pairs, "weaponinfo").map(|name| SpawnItem {
+            name: name.to_string(),
+            row: None,
+        });
     }
     None
 }
@@ -940,10 +1042,10 @@ struct SpawnItem {
 /// BSP keys script can see at all.
 fn parse_field(host: &mut GameHost, cx: &mut Cx, id: EntId, key: &str, raw: &str) {
     let folded = key.to_ascii_lowercase();
-    let ty = match fields::route_entity(&folded) {
+    let ty = match (host.profile.route_entity)(&folded) {
         Route::Engine { ty, .. } => ty,
         Route::Client(_) => return,
-        Route::Script => match fields::radiant_key(&folded) {
+        Route::Script => match host.radiant_key(&folded) {
             Some(ty) => ty,
             None => return,
         },
@@ -984,7 +1086,7 @@ fn parse_field(host: &mut GameHost, cx: &mut Cx, id: EntId, key: &str, raw: &str
 /// leads the string and 0 for none: mp_foy's `"script_idnumber" "foo"`
 /// reads 0 on retail UO (`client-probes/probe_spawnint`), and `bas.gsc`
 /// deletes a breached base's walls on `isdefined` of it.
-fn convert(cx: &mut Cx, ty: FieldType, raw: &str) -> Option<Value> {
+pub(crate) fn convert(cx: &mut Cx, ty: FieldType, raw: &str) -> Option<Value> {
     use crate::game::builtins::cvar::{atof, atoi};
     Some(match ty {
         FieldType::Int => Value::Int(atoi(raw)),
@@ -1198,7 +1300,7 @@ mod tests {
         let (mut vm, mut host) = fixture();
         host.world = Some(std::rc::Rc::new(crate::world::World {
             collision,
-            vis: vcod_common::bsp::Visibility::none(),
+            vis: vcod_common::mapworld::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
             hazards: Vec::new(),
@@ -1651,6 +1753,67 @@ mod tests {
         );
     }
 
+    /// `G_CallSpawn` applies a block's keys in lump order (object-model doc
+    /// 7): a repeated `model` indexes both names, first the first, and of
+    /// two spellings of one field the later write stays.
+    #[test]
+    fn a_blocks_keys_apply_in_lump_order() {
+        let (mut vm, mut host) = fixture();
+        let names = vm.with_cx(|cx| {
+            super::spawn_entities_from_string(
+                &mut host,
+                cx,
+                "{\n\"classname\" \"worldspawn\"\n}\n\
+                 {\n\"classname\" \"script_model\"\n\"model\" \"xmodel/b_second\"\n\
+                 \"model\" \"xmodel/a_first\"\n\"TargetName\" \"one\"\n\"targetname\" \"two\"\n}\n\
+                 {\n\"classname\" \"script_origin\"\n\"targetname\" \"three\"\n\"TARGETNAME\" \"four\"\n}\n",
+            )
+            .unwrap();
+            let targetname = cx.intern_folded("targetname");
+            let ids: Vec<EntId> = host.ents.iter_inuse().map(|(id, _)| id).collect();
+            ids.into_iter()
+                .map(|id| match host.get_field(cx, id, targetname) {
+                    Value::String(s) => cx.resolve(s).to_string(),
+                    v => format!("{v:?}"),
+                })
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(names, ["two", "four"]);
+        let slot = |name: &str| host.configstrings.iter().position(|s| s == name);
+        let (b, a) = (slot("xmodel/b_second"), slot("xmodel/a_first"));
+        assert!(b.is_some() && a.is_some(), "both model keys index");
+        assert!(b < a, "in the lump's order");
+    }
+
+    /// A key a block repeats: a spawn function's `G_SpawnString` (strcmp)
+    /// takes the first exact copy, the field pass (`Q_stricmp`) leaves the
+    /// last spelling of any case (object-model doc 7).
+    #[test]
+    fn spawn_string_reads_the_first_copy_and_the_field_the_last() {
+        let (mut vm, mut host) = fixture();
+        let target = vm.with_cx(|cx| {
+            super::spawn_entities_from_string(
+                &mut host,
+                cx,
+                "{\n\"classname\" \"worldspawn\"\n\"Gravity\" \"700\"\n\
+                 \"gravity\" \"500\"\n\"gravity\" \"600\"\n}\n\
+                 {\n\"classname\" \"trigger_hurt\"\n\"sound\" \"hurt_first\"\n\
+                 \"Sound\" \"hurt_folded\"\n\"sound\" \"hurt_last\"\n\
+                 \"targetname\" \"a\"\n\"TargetName\" \"b\"\n}\n",
+            )
+            .unwrap();
+            let targetname = cx.intern_folded("targetname");
+            let id = host.ents.iter_inuse().map(|(id, _)| id).next().unwrap();
+            match host.get_field(cx, id, targetname) {
+                Value::String(s) => cx.resolve(s).to_string(),
+                v => format!("{v:?}"),
+            }
+        });
+        assert_eq!(host.cvars.get("g_gravity"), "500");
+        assert_eq!(host.configstrings[525], "hurt_first");
+        assert_eq!(target, "b");
+    }
+
     /// `SP_trigger_hurt` (0x64ef8) always registers a sound alias, its own
     /// `sound` key or the compiled-in default `"world_hurt_me"` when the key
     /// is absent -- both gate maps place exactly one `trigger_hurt` with no
@@ -1767,6 +1930,87 @@ mod tests {
         for rec in host.turrets.values() {
             let tags = rec.tags.expect("every tag on the stock model");
             assert!(tags.flash.x > tags.player.x, "{tags:?}");
+        }
+    }
+}
+
+/// `G_SpawnTurret` on `id` for the turret weapon `weaponinfo`: the map
+/// load's `SP_turret` with the entity's spawn keys, or CoD2's
+/// `spawnTurret` builtin (lnxded 0x811138c) with none, whose spawn vars are
+/// not valid there (cod2-turrets.md 2).
+pub(crate) fn spawn_turret(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    id: EntId,
+    weaponinfo: &str,
+    keys: &crate::game::turret::TurretKeys,
+) -> Result<(), ErrorKind> {
+    let cod2_rules = host.profile.spawn.turret_weapon_and_player_sounds;
+    // CoD2's `G_SpawnTurret` takes the weapon's index first
+    // (lnxded 0x810c6b2, cod2-turrets.md 2).
+    if cod2_rules {
+        // CoD4 numbers its weapons in registration order too
+        // (`G_GetWeaponIndexForName`, cod4-gsc.md 9.2).
+        if matches!(host.ext, crate::game::host::HostExt::Cod4(_)) {
+            crate::game::builtins::cod4::register_weapon(host, weaponinfo)?;
+        } else {
+            host.weapon_index(weaponinfo);
+        }
+    }
+    for alias in turret_sound_aliases(host.fs.as_deref(), weaponinfo, cod2_rules) {
+        register_sound_alias(host, alias);
+    }
+    let bones = turret_bones(host, cx, id);
+    let rest = settle_turret_pitch(host, cx, id, bones.as_deref());
+    let Some(def) = turret_def(host.fs.as_deref(), weaponinfo) else {
+        return Ok(());
+    };
+    if host.turrets.len() >= MAX_TURRETS {
+        // Retail's `Com_Error` here is fatal
+        // (`docs/research/cod11-turrets.md`'s turret record table); we log
+        // and spawn no record.
+        log::error!("G_SpawnTurret: max number of turrets ({MAX_TURRETS}) exceeded");
+        return Ok(());
+    }
+    let mut rec = crate::game::turret::TurretRecord::new(weaponinfo, def, *keys, rest);
+    // `G_SpawnTurret` zeroes `angles2` and thinks `turret_think_init` 100 ms
+    // on (0x52fd2).
+    rec.angles2 = [0.0; 3];
+    rec.init_at = Some(host.level_time_ms + 100);
+    rec.tags = bones
+        .as_deref()
+        .and_then(crate::game::turret::TurretTags::from_bones);
+    host.turrets.insert(id, rec);
+    host.link_turret(cx, id);
+    let health = cx.intern_folded("health");
+    if matches!(
+        host.get_field(cx, id, health),
+        Value::Int(0) | Value::Undefined
+    ) {
+        let full = Value::Int(crate::game::turret::TURRET_HEALTH);
+        host.set_field(cx, id, health, full)?;
+    }
+    Ok(())
+}
+
+/// A turret's tags once a `setModel` gave it a model (`G_DObjUpdate`): a
+/// `spawnTurret` gun has none until then.
+pub(crate) fn turret_model_changed(host: &mut GameHost, cx: &mut Cx, id: EntId) {
+    if !host.turrets.contains_key(&id) {
+        return;
+    }
+    let bones = turret_bones(host, cx, id);
+    // `turret_think_init` sweeps the rest pitch off the DObj a frame after
+    // the spawn, so a model set before then still settles it.
+    let pending = host.turrets.get(&id).is_some_and(|r| r.init_at.is_some());
+    let rest = pending.then(|| settle_turret_pitch(host, cx, id, bones.as_deref()));
+    let tags = bones
+        .as_deref()
+        .and_then(crate::game::turret::TurretTags::from_bones);
+    if let Some(rec) = host.turrets.get_mut(&id) {
+        rec.tags = tags;
+        if let Some(rest) = rest {
+            rec.rest_pitch = rest;
         }
     }
 }

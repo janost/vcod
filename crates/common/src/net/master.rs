@@ -10,10 +10,10 @@ use std::time::Instant;
 
 use super::connectionless::info_value_for_key;
 
-/// The master vcod lists on and asks: cod.pm's, used with its operator's
-/// permission. Retail's own (`codmaster.activision.com`,
-/// `coduomaster.activision.com`) are documented in the research docs and
-/// never contacted.
+/// The master vcod lists on and asks, for every game: cod.pm's, used with
+/// its operator's permission. Retail's own masters (`codmaster`,
+/// `coduomaster`, `cod2master.activision.com`) are documented in the
+/// research docs and never contacted.
 pub const MASTER_HOST: &str = "master.cod.pm";
 
 /// A master server: its host and the port one game's list lives on.
@@ -23,9 +23,8 @@ pub struct Master {
     pub port: u16,
 }
 
-/// cod.pm's ports: CoD 1.1 to 1.5 (protocols 1 to 6) on retail's
-/// `PORT_MASTER` 20510 (`CL_GlobalServers_f`, CoDMP.exe 0x413890), United
-/// Offensive (21, 22) on 20610.
+/// cod.pm's ports: CoD1 1.1 to 1.5 (protocols 1 to 6), United Offensive
+/// (21, 22), CoD2 (115, 117, 118), CoD4.
 pub const COD1_MASTER: Master = Master {
     host: MASTER_HOST,
     port: 20510,
@@ -34,12 +33,21 @@ pub const UO_MASTER: Master = Master {
     host: MASTER_HOST,
     port: 20610,
 };
+pub const COD2_MASTER: Master = Master {
+    host: MASTER_HOST,
+    port: 20710,
+};
+pub const COD4_MASTER: Master = Master {
+    host: MASTER_HOST,
+    port: 20810,
+};
 
 /// The query the stock browser's refresh ends up sending: the UI runs
-/// `globalservers 0 <protocol> full empty` (ui_mp_x86.dll 0x4000ebe4) and
-/// `CL_GlobalServers_f` sends `getservers` with the arguments past the master
-/// number. vcod asks for exactly one protocol, the install's; protocol 0
-/// would list every game's servers and is never sent.
+/// `globalservers 0 <protocol> full empty` (ui_mp_x86.dll 0x4000ebe4; CoD2
+/// `0x76`, cod2-protocol.md "The master") and `CL_GlobalServers_f` sends
+/// `getservers` with the arguments past the master number. vcod asks for
+/// exactly one protocol, the install's; protocol 0 would list every game's
+/// servers and is never sent.
 pub fn getservers(protocol: u32) -> String {
     assert_ne!(protocol, 0, "getservers 0 lists every protocol");
     format!("getservers {protocol} full empty")
@@ -165,6 +173,10 @@ pub struct ServerInfo {
     pub hardware: i32,
     /// 1.5's `mod`.
     pub modded: bool,
+    /// CoD2's `voice`: the server runs voice chat.
+    pub voice: bool,
+    /// CoD2's `pure`, absent on an unpure server (cod2-protocol.md 9).
+    pub pure: bool,
 }
 
 impl ServerInfo {
@@ -185,6 +197,8 @@ impl ServerInfo {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0),
             modded: n("mod").unwrap_or(0) != 0,
+            voice: n("voice").unwrap_or(0) != 0,
+            pure: n("pure").unwrap_or(0) != 0,
         }
     }
 }
@@ -212,7 +226,7 @@ mod tests {
         // The live master's shape: a `\n\0` after the command word, then
         // `\` + 4 + 2 bytes per server, then `\EOF`.
         let mut body = b"\n\0".to_vec();
-        for (ip, port) in [([15, 206, 117, 161], 20600u16), ([51, 195, 89, 86], 28960)] {
+        for (ip, port) in [([203, 0, 113, 10], 20600u16), ([198, 51, 100, 20], 28960)] {
             body.push(b'\\');
             body.extend_from_slice(&ip);
             body.extend_from_slice(&port.to_be_bytes());
@@ -222,8 +236,8 @@ mod tests {
         assert_eq!(
             list,
             vec![
-                "15.206.117.161:20600".parse().unwrap(),
-                "51.195.89.86:28960".parse().unwrap()
+                "203.0.113.10:20600".parse().unwrap(),
+                "198.51.100.20:28960".parse().unwrap()
             ]
         );
     }
@@ -252,8 +266,8 @@ mod tests {
 
     #[test]
     fn the_query_names_one_protocol() {
+        assert_eq!(getservers(118), "getservers 118 full empty");
         assert_eq!(getservers(1), "getservers 1 full empty");
-        assert_eq!(getservers(22), "getservers 22 full empty");
     }
 
     #[test]
@@ -265,9 +279,9 @@ mod tests {
     #[test]
     fn info_fields() {
         let i = ServerInfo::parse(
-            "\\challenge\\xxx\\protocol\\1\\hostname\\^1Revive TDM\\mapname\\mp_powcamp\\clients\\12\\sv_maxclients\\64\\gametype\\tdm\\pure\\0\\pswrd\\1",
+            "\\challenge\\xxx\\protocol\\1\\hostname\\^1Sample TDM\\mapname\\mp_powcamp\\clients\\12\\sv_maxclients\\64\\gametype\\tdm\\pure\\0\\pswrd\\1",
         );
-        assert_eq!(i.hostname, "^1Revive TDM");
+        assert_eq!(i.hostname, "^1Sample TDM");
         assert_eq!((i.clients, i.max_clients, i.protocol), (12, 64, 1));
         assert_eq!(i.gametype, "tdm");
         assert!(i.password);

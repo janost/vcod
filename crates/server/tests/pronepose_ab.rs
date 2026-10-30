@@ -77,7 +77,7 @@ fn ours(
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let join_ms = rays.map_or(common::PROBE_JOIN_MS, |f| {
         first_place(f)
-            - match proto.version == PROTOCOL_V6.version {
+            - match proto.transport.version == PROTOCOL_V6.transport.version {
                 true => PLACE_AFTER_JOIN_MS_15,
                 false => PLACE_AFTER_JOIN_MS,
             }
@@ -318,7 +318,8 @@ fn a_prone_body_on_the_mp_brecourt_field_poses_like_retail() {
 /// 1.5's, so these run there too).
 fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
     let fs = vcod_common::testing::game_fs()?;
-    (vcod_server::server::install_protocol(&fs).version == PROTOCOL_V6.version).then_some(fs)
+    (vcod_server::server::install_protocol(&fs).transport.version == PROTOCOL_V6.transport.version)
+        .then_some(fs)
 }
 
 #[test]

@@ -319,6 +319,16 @@ fn client_spawn(
     host.set_field(cx, id, angles_field, Value::Vector(read))?;
 
     host.client_weapons[slot] = crate::weapons::PlayerWeapons::default();
+    if host.profile.game == vcod_common::game::Game::Cod4 {
+        host.cod4_mut().clients[slot].spawned();
+        // 1.7's `ClientSpawn` writes the playerstate's `pm_type` in the call,
+        // so the next spawn's `positionWouldTelefrag` sees this body; the
+        // copy here was the last move's, a dead body's 7 at a round's start
+        // (bot-objectives.md 12.4).
+        if mode == SpawnMode::Player {
+            host.client_pm_type[slot] = 0;
+        }
+    }
     // The `gclient_t` memset (0x42804) takes the client's objective copy
     // with it; the next frame's filter refills only the live records
     // (docs/research/cod11-gametypes-re-bel.md, 8.4).
@@ -428,9 +438,12 @@ fn spawn_think(
         }
     }
     let bodies = host.move_bodies(slot);
+    // CoD4's level runs its own spawn think on its 1.7 pmove
+    // (`game::cod4::level`): the script reads the spot.
     let world = host
         .world
         .as_ref()
+        .filter(|_| host.profile.game != vcod_common::game::Game::Cod4)
         .map(|w| vcod_common::movetrace::MoveWorld::new(&w.collision, &bodies, slot as u32));
     let moved = world.is_some();
     let (think, touched) = sim.spawn_think_on(&last, host.level_time_ms, world);
@@ -450,9 +463,31 @@ fn spawn_think(
 /// the fields set, numbered after everything already in the table. An item
 /// classname makes an item (`dm.gsc`'s `dropHealth` spawns `item_health`).
 fn spawn_entity(host: &mut GameHost, cx: &mut Cx, args: &[Value]) -> Result<Value, ErrorKind> {
+    let num = |v: &Value| match v {
+        Value::Int(i) => Some(*i as f32),
+        Value::Float(f) => Some(*f),
+        _ => None,
+    };
+    // CoD4's `spawn("trigger_radius", origin, flags, radius, height)`: the
+    // stock claymore and C4 detection triggers (`_weapons.gsc`,
+    // cod4-hud.md 16.2).
+    let mut round = None;
     let (cls, at, flags) = match args {
         [Value::String(cls), Value::Vector(at)] => (*cls, *at, 0),
         [Value::String(cls), Value::Vector(at), Value::Int(flags)] => (*cls, *at, *flags),
+        [
+            Value::String(cls),
+            Value::Vector(at),
+            Value::Int(flags),
+            r,
+            h,
+        ] if host.profile.game == vcod_common::game::Game::Cod4
+            && num(r).is_some()
+            && num(h).is_some() =>
+        {
+            round = num(r).zip(num(h));
+            (*cls, *at, *flags)
+        }
         _ => {
             return Err(ErrorKind::BadType(
                 "spawn takes a classname, an origin and optional spawnflags",
@@ -481,7 +516,13 @@ fn spawn_entity(host: &mut GameHost, cx: &mut Cx, args: &[Value]) -> Result<Valu
     } else if name == "script_model" {
         crate::game::spawn::link_script_model(host, cx, id);
     } else if name == "script_brushmodel" {
-        crate::game::spawn::link_script_entity(host, cx, &Default::default(), id, &name);
+        crate::game::spawn::link_script_entity(host, cx, &[], id, &name);
+    } else if let Some((r, h)) = round.filter(|_| name == "trigger_radius") {
+        use crate::game::trigger::{MULTIPLE_DEFAULT_WAIT_MS, Round, TriggerShape};
+        let shape = TriggerShape::boxed([-r, -r, 0.0], [r, r, h]);
+        host.triggers
+            .register_round(id, shape, MULTIPLE_DEFAULT_WAIT_MS, Round { radius: r });
+        crate::game::trigger::link(host, cx, id, flags);
     } else if name == "trigger_damage" {
         crate::game::damage_trigger::spawn_scripted(host, cx, id, flags);
     } else if name == "trigger_hurt" {
@@ -518,7 +559,8 @@ pub fn spawn_struct(
 /// clips out of every gametype but sd (docs/research/cod11-mantle.md, "A
 /// submodel's brushes are its entity's"). It notifies `"death"` with the
 /// entity first (cod11-gsc-object-model.md 14), which ends a stock
-/// `point endon("death")` on a deleted `bas` spawn point.
+/// `point endon("death")` on a deleted `bas` spawn point. CoD4's number
+/// joins the free list in the call (`HostProfile::delete_queues_number`).
 pub fn delete(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -528,6 +570,9 @@ pub fn delete(
     let id = entity_receiver(recv)?;
     let death = cx.intern_folded("death");
     cx.notify(Target::Entity(id), death, vec![Value::Entity(id)]);
+    if host.profile.delete_queues_number {
+        host.ents.queue_number(id);
+    }
     unlink_and_free(host, id);
     Ok(Value::Undefined)
 }
@@ -594,6 +639,9 @@ fn set_solid(host: &mut GameHost, recv: Option<Target>, solid: bool) -> Result<V
     let brush = e
         .link
         .is_some_and(|l| l.kind == crate::game::entity::LinkKind::ScriptBrush);
+    let model = e
+        .link
+        .is_some_and(|l| l.kind == crate::game::entity::LinkKind::ScriptModel);
     if brush {
         let contents = if solid {
             crate::game::spawn::CONTENTS_SCRIPT_BRUSHMODEL
@@ -601,6 +649,11 @@ fn set_solid(host: &mut GameHost, recv: Option<Target>, solid: bool) -> Result<V
             0
         };
         host.set_link_contents(id, contents);
+    }
+    // CoD4's write a `script_model`'s too: 0 (`cod4_lnxded` 0x809a053) or
+    // 0x2080 (0x809a186), which rounds meet (cod4-combat.md 13.1).
+    if model && matches!(host.ext, crate::game::host::HostExt::Cod4(_)) {
+        host.set_link_contents(id, if solid { 0x2080 } else { 0 });
     }
     link_submodel(host, id, solid);
     Ok(Value::Undefined)
@@ -676,6 +729,7 @@ pub fn set_model(
     let field = cx.intern_folded("model");
     host.set_field(cx, id, field, Value::String(name))?;
     super::super::link::model_changed(host, cx, id);
+    crate::game::spawn::turret_model_changed(host, cx, id);
     if id.0 < crate::server::MAX_CLIENTS as u32 {
         if let Some(link) = host.area.last_link(id.0) {
             host.area.link(id.0, &link);
@@ -1147,7 +1201,7 @@ mod tests {
         let (mut vm, mut host) = fixture();
         host.world = Some(Rc::new(World {
             collision: vcod_common::collision::ramp_test_world(10.0, 0.0, 512.0),
-            vis: vcod_common::bsp::Visibility::none(),
+            vis: vcod_common::mapworld::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
             hazards: Vec::new(),
@@ -1210,7 +1264,7 @@ mod tests {
         let (mut vm, mut host) = fixture();
         host.world = Some(Rc::new(World {
             collision: vcod_common::collision::test_world(&[]),
-            vis: vcod_common::bsp::Visibility::none(),
+            vis: vcod_common::mapworld::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
             hazards: Vec::new(),
@@ -1247,7 +1301,7 @@ mod tests {
                 Vec3::new(20.0, -64.0, 0.0),
                 Vec3::new(100.0, 64.0, 40.0),
             )]),
-            vis: vcod_common::bsp::Visibility::none(),
+            vis: vcod_common::mapworld::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
             hazards: Vec::new(),
@@ -1279,7 +1333,7 @@ mod tests {
                 "{\n\"classname\" \"script_brushmodel\"\n\"model\" \"*1\"\n\"origin\" \"200 0 0\"\n}",
                 &[([-8.0, -8.0, 0.0], [8.0, 8.0, 64.0])],
             ),
-            vis: vcod_common::bsp::Visibility::none(),
+            vis: vcod_common::mapworld::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
             spawn_points: Vec::new(),
             hazards: Vec::new(),

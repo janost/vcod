@@ -542,7 +542,8 @@ mod tests {
         let fs_15 = || {
             let fs = vcod_common::testing::game_fs()?;
             let p = crate::server::install_protocol(&fs);
-            (p.version == vcod_common::net::protocol::PROTOCOL_V6.version).then_some(fs)
+            (p.transport.version == vcod_common::net::protocol::PROTOCOL_V6.transport.version)
+                .then_some(fs)
         };
         let cases = [
             (

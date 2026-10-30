@@ -3,17 +3,17 @@
 //! `archivetime` into a frame and trims it, and the time shift a replayed
 //! frame carries (docs/research/cod11-spectator-follow.md, section 12).
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use vcod_common::bsp::Visibility;
+use vcod_common::mapworld::Visibility;
 use vcod_common::net::msg::{self, hud_field};
 use vcod_common::net::protocol::Protocol;
 
+use crate::engine::archive::FrameRing;
 use crate::game::temp_entity::Scope;
 
-/// How far back a request reaches, in frames (`cod_lnxded` 0x808ef09).
-pub const MAX_FRAMES: i32 = 0x4b0;
+pub use crate::engine::archive::MAX_FRAMES;
 /// `sv_fps`, which turns an age into frames.
 const SV_FPS: i32 = 1000 / crate::server::FRAME_MS;
 
@@ -137,9 +137,7 @@ pub enum Source {
 #[derive(Default)]
 pub struct Archive {
     on: bool,
-    frames: VecDeque<Rc<Frame>>,
-    /// Frames archived since the level loaded.
-    count: i32,
+    ring: FrameRing<Frame>,
 }
 
 impl Archive {
@@ -159,25 +157,19 @@ impl Archive {
     /// Keeps `frame` as the newest, dropping the oldest past [`MAX_FRAMES`].
     /// An entity or roster identical to the last frame's shares its storage.
     pub fn push(&mut self, mut frame: Frame) {
-        if let Some(last) = self.frames.back() {
+        if let Some(last) = self.ring.last() {
             share_unchanged(&mut frame.world.culled, &last.world.culled);
             share_unchanged(&mut frame.world.broadcast, &last.world.broadcast);
             if frame.world.roster == last.world.roster {
                 frame.world.roster = last.world.roster.clone();
             }
         }
-        if self.frames.len() >= MAX_FRAMES as usize {
-            self.frames.pop_front();
-        }
-        self.frames.push_back(Rc::new(frame));
-        self.count += 1;
+        self.ring.push(frame);
     }
 
     /// The frame at an absolute index, while it is still kept.
     pub fn frame(&self, index: i32) -> Option<&Rc<Frame>> {
-        let first = self.count - self.frames.len() as i32;
-        let i = index.checked_sub(first)?;
-        usize::try_from(i).ok().and_then(|i| self.frames.get(i))
+        self.ring.frame(index)
     }
 
     /// `0x808eeb8`: the frame `age_ms` back. An age reaching past the last
@@ -189,23 +181,7 @@ impl Archive {
         if !self.on || *age_ms < 1 {
             return None;
         }
-        let cur = self.count;
-        let back = (i64::from(SV_FPS) * i64::from(*age_ms) / 1000).min(i64::from(i32::MAX));
-        let mut index = cur.saturating_sub(back as i32);
-        let floor = cur - MAX_FRAMES;
-        if index < floor {
-            *age_ms = (cur - floor) * 1000 / SV_FPS;
-            index = floor;
-        }
-        if index < 0 {
-            index = 0;
-            *age_ms = cur * 1000 / SV_FPS;
-        }
-        if index < cur && self.frame(index).is_some() {
-            return Some(index);
-        }
-        *age_ms = 0;
-        None
+        self.ring.lookup(age_ms, SV_FPS)
     }
 
     /// `trap_GetArchivedPlayerState` (0x808ef7c) for `client` at `age_ms`,

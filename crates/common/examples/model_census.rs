@@ -1,5 +1,5 @@
 //! Throwaway census: which entity classnames reference inline `*N` models.
-//! Run: COD_DIR=~/Games/CoD-Deluxe cargo run --example model_census -p vcod-common
+//! Run: COD_DIR=<UO install> cargo run --example model_census -p vcod-common
 
 use std::collections::BTreeMap;
 

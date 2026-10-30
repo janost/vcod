@@ -242,8 +242,8 @@ fn a_spawn_into_a_player_runs_null_on_retail() {
 #[test]
 fn a_spawn_into_a_player_walks_out_of_him_as_on_15() {
     let fs = vcod_common::testing::game_fs().filter(|fs| {
-        vcod_server::server::install_protocol(fs).version
-            == vcod_common::net::protocol::PROTOCOL_V6.version
+        vcod_server::server::install_protocol(fs).transport.version
+            == vcod_common::net::protocol::PROTOCOL_V6.transport.version
     });
     check(fs, RETAIL_15);
 }

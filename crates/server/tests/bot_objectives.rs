@@ -16,7 +16,13 @@ fn server(bots: usize) -> Option<(vcod_server::Server, Instant)> {
 }
 
 fn server_on(map: &str, gametype: &str, bots: usize) -> Option<(vcod_server::Server, Instant)> {
-    server_from(vcod_common::testing::game_fs()?, None, map, gametype, bots)
+    server_from(
+        vcod_common::testing::game_fs_11()?,
+        None,
+        map,
+        gametype,
+        bots,
+    )
 }
 
 fn server_from(

@@ -765,7 +765,7 @@ pub fn spawn_sine(
     cx: &mut vcod_gsc::Cx,
     id: EntId,
     classname: &str,
-    keys: Option<&std::collections::HashMap<String, String>>,
+    keys: Option<&[(String, String)]>,
 ) -> bool {
     use crate::game::builtins::cvar::{atof, atoi};
     let bobbing = match classname {
@@ -774,11 +774,8 @@ pub fn spawn_sine(
         "func_static" => return spawn_static(host, cx, id, keys),
         _ => return false,
     };
-    // `G_SpawnString` matches a key with `Q_stricmp`.
-    let key = |name: &str| {
-        keys.and_then(|b| b.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)))
-            .map(|(_, v)| v.as_str())
-    };
+    // `G_SpawnString` matches a key with `strcmp`, the first copy (0x613c9).
+    let key = |name: &str| keys.and_then(|b| vcod_common::bsp::spawn_string(b, name));
     let float = |name: &str, default: f32| key(name).map_or(default, atof);
     let model = host.ents.get(id).and_then(|e| e.brush_model).unwrap_or(0) as usize;
     let (mins, maxs) = host
@@ -915,7 +912,7 @@ fn spawn_static(
     host: &mut GameHost,
     cx: &mut vcod_gsc::Cx,
     id: EntId,
-    keys: Option<&std::collections::HashMap<String, String>>,
+    keys: Option<&[(String, String)]>,
 ) -> bool {
     let model = host.ents.get(id).and_then(|e| e.brush_model).unwrap_or(0) as usize;
     let (mins, maxs) = host
@@ -936,8 +933,7 @@ fn spawn_static(
     };
     host.link_shaped(cx, id, shape);
     let spawnflags = match keys {
-        Some(b) => b
-            .get("spawnflags")
+        Some(b) => vcod_common::bsp::field_value(b, "spawnflags")
             .and_then(|v| v.trim().parse::<i32>().ok())
             .unwrap_or(0),
         None => {
@@ -956,7 +952,7 @@ fn spawn_static(
     // pain arm writes `health` 9999 (0x5828a..0x582d7). A script spawn reads
     // no key.
     let health_key = keys
-        .and_then(|b| b.get("health"))
+        .and_then(|b| vcod_common::bsp::spawn_string(b, "health"))
         .and_then(|v| v.trim().parse::<i32>().ok())
         .unwrap_or(0);
     let use_static = health_key != 0 || spawnflags & 6 != 0;

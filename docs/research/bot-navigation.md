@@ -421,6 +421,15 @@ that proved it jumped (`nav::PinJump`, `nav::leap_cue`, `nav::jump_key`):
   The flood walks one column, so it never tried the step to the crate. A
   leap from the step at (-1820, -609) lands on the crate; a forward walk
   falls.
+- A CoD4 graph keeps no leap (`bots::cod4::LIP`, `NavGraph::build_opts`):
+  its bots' route has no pmove probes (`BotWorld::PMOVE_PROBES` off), so
+  `BotView::lip` stays false and a bot on a leap never jumps and runs off
+  the foot. Each leap there is walked again as a plain jump edge by
+  `NavGraph::reprove_jumps` and dropped where that walk falls. CoD2's
+  route has no pmove probes either, and its build drops the lip too
+  (`bots::cod2::LIP`, bot-objectives.md 11.8). The CoD1, 1.5 and UO
+  builds keep their leaps (`build_with` passes the lip), so their graphs
+  do not move. INFERRED (bot-objectives.md 12.14).
 - A ladder's head is never a leap's foot: a node some edge climbs to more
   than a jump. A bot arrives there off the rungs and comes to rest where
   the climb tips it over, not where the head was measured. VERIFIED
@@ -568,7 +577,7 @@ that proved it jumped (`nav::PinJump`, `nav::leap_cue`, `nav::jump_key`):
 ### Build times
 
 VERIFIED (measured) with `cargo run --release -p vcod-server --example nav_build` on an
-8-core, 16-thread Ryzen 7 5850U laptop. Last column: spawn points in the
+8-core laptop. Last column: spawn points in the
 strongly connected component holding the most of them.
 
 Before the ladder pass (2026-10-06):
@@ -881,7 +890,7 @@ measured). `mp_ship`'s cycles moved within the noise (VERIFIED, measured, three 
   (`nav::tests::the_cache_key_covers_every_placement`).
 - A background build's walks leave one core to the tick (`nav::par_map`
   under `SPARE_CORE`). `vcod-server --trace` logs a `tick:` line a second:
-  mean and slowest `Server::tick` and the worst lag of a tick's start behind
+  mean and slowest tick and the worst lag of a tick's start behind
   its slot. VERIFIED (measured, release, 4 bots, 16 threads, load average
   17-31 from other builds): through `mp_ship`'s 2.8 s build and
   `mp_carentan`'s 1.3 s one the slowest tick was 9-11 ms and the worst lag
@@ -932,7 +941,7 @@ under 1.1's. Now:
 - Every walk's body comes from `nav::body`, which takes the rules
   `nav::with_rules` set on the thread. `NavGraph::build` takes the rules
   and sets them; `par_map` hands them to its workers; `NavJob::start`
-  builds under the server's; `Server::tick_frames` runs the bots' pass
+  builds under the server's; `engine::tick` runs the bots' pass
   under them, so the follower's re-proofs (`edge_holds`, `flings`,
   `runs_off`, the crease test) walk the same pmove. The graph cache keys
   on the rules. `NavGraph::rules` records them.
@@ -957,6 +966,24 @@ under 1.1's. Now:
   `mp_rhinevalley` 51 to 248, `mp_ponyri` 38 to 61) and equal on
   `mp_cassino` (10 to 11). INFERRED: 1.5's step and ground snap
   (`cod15-movement.md` 5) land more of the leap walks.
+
+CoD2's graph is walked under 1.5's rules too (`bots::cod2::GRAPH_RULES`),
+though its bots move by CoD2's pmove. A game can hand the walks a step of
+its own: `nav::WalkStep`, set on the thread by `nav::with_step` beside the
+rules, handed to `par_map`'s workers, passed to the build by
+`NavJob::start_with` and kept in `NavGraph::step`; the cache keys on it,
+and `NavGraph::moving` sets both. A walk carries the step's own state
+between cmds in `Sim` (`nav::WalkCarry`). CoD1 sets none, and its walks
+step as before (bot-combat.md 16, every CoD1 and UO gate byte-identical).
+CoD2's step (`bots::cod2::Cod2Walk`) moved its graphs by under 1% and its
+bots stalled more, so it is off (bot-combat.md 16). Until 2026-10-24
+CoD2's bots' pass ran outside any `with_rules`, so the follower's walks
+for a CoD2 bot (`Follower::rest_jump_fails` and the re-proofs) stepped
+under 1.1's rules. `Cod2Server::step_bots` now runs the driver under its
+graph's `NavGraph::moving` (`GRAPH_RULES` while the graph builds), and
+the body the follower reads (`bots::cod2::cod1_body`) carries CoD2's jump
+penalty (`pm_flags` 0x80000 with `pm_time`, 1.5's 0x2000 under the
+graph's rules), so `nav::jump_ready` waits it out (bot-combat.md 17).
 
 United Offensive's census. VERIFIED (measured 2026-10-14, release
 `nav_build` `UO=1`, COD_DIR at the stock 1.5 `main/` with UO's `uo/`,
@@ -1242,6 +1269,34 @@ the build read only off model 0 (section 2, "Ladders"); since
 
 ## 3. Following
 
+The tick runs in four passes over the bots in slot order
+(`bots::driver::step`, one driver over a game's `BotWorld`): every bot's
+server commands first; then every bot's view (enemy refresh, view,
+hearing, heal, sidestep, cover, in that order per bot) and the objective
+roles over all of them; then per bot the retreat's cover, the hunt's
+vantage, the goal, the seat, the follower below, the drop and lob probes
+and `think`; then the replies, gamestates and cmds. The follower's rand
+draws come off the bot's own generator, so a bot's walk depends on the
+plan budget the bots before it in slot order spent that tick, not on
+their draws. VERIFIED (`bot_match` and the `bots::` tests byte-identical
+before and after the driver moved behind `BotWorld`, 2026-10-23).
+
+CoD2's bots run the same driver in the same order. The route leaves out
+what the trait's consts name: no yields, no crowd and no blocked nodes
+(`YIELDS`), and none of the edge cues that step CoD1's pmove (lip, push
+off, unpin; `PMOVE_PROBES`). Turned on, each made CoD2's bots stall
+more (bot-combat.md 15). Between the route and the drop probe
+`pre_think` walks a bot to a gun or a dropped gun. VERIFIED (`bot_match
+DIGEST=100` over CoD2 tdm on three maps and dm on two, one 1.1 and one
+UO run, byte-identical before and after CoD2 moved onto the driver,
+2026-10-23). CoD2 used to hear its noises after the frame's objective
+and gun reads, look up the hunt's vantage at the end of each view and
+probe the lob before the goal; on CoD1's order its `bot_match` gates
+(`DIGEST=250` included) stay byte-identical, once the noise pass reads
+the level's clock: at the tick's top the frame's pass holds none, and a
+smoke cloud aged against 0 was dropped the tick it burst. VERIFIED
+(`bot_match` CoD2 tdm and dm gates, 2026-10-23).
+
 The brain stays pure. Each tick the server asks `Bot::goal(&BotView)` for a
 `Goal`: `Hold` (dead, spectating, mid-throw), `To(point)` (the enemy it sees,
 else a spot it remembers or heard, section 4), `Roam`, or `Away(threat)`
@@ -1249,7 +1304,7 @@ else a spot it remembers or heard, section 4), `Roam`, or `Away(threat)`
 
 - A* (Euclidean cost and heuristic) from the node nearest the bot to the node
   nearest the goal. The bots of a tick share a budget of 4000 expanded
-  nodes (`BOT_PLAN_BUDGET`). A search is resumable (`nav::Search`): each
+  nodes (`bots::driver::PLAN_BUDGET`). A search is resumable (`nav::Search`): each
   tick a follower's search runs at most 2000 of what is left
   (`PLAN_SLICE`), the bot wanders while it is unfinished, and the search
   resumes next tick where it stopped. A plan searches round the avoided
@@ -1379,7 +1434,11 @@ else a spot it remembers or heard, section 4), `Roam`, or `Away(threat)`
   can be a floor behind the climber's back, which a ladder move does not
   reach (2026-10-12, below). Such a plan's first node over the feet, the
   head, is passed only on the ground, like any climb's (2026-10-13d,
-  below). A bot jumps only on a
+  below). When such a plan, or a parked one taken up again, starts at
+  the ladder's foot or head and its next node is the ladder's other
+  end, a body on the rungs between them within a node spacing of the
+  foot heads straight for the other end: the start is behind it on the
+  same ladder (`Follower::follow`; bot-combat.md 17.2). A bot jumps only on a
   jump edge, never toward its first node. VERIFIED (measured, `mp_depot`
   `re`, 2 bots, seed 7): with jumped walks counted, a bot that fell off
   the leap to the documents' crate into the gap at z 84 planned from the

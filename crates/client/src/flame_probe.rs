@@ -48,11 +48,7 @@ impl FlameProbe {
             return;
         };
         self.weapons = vcod_common::weapon_table::from_configstring(fs, cs7);
-        if let Some(bsp) = fs
-            .resolve_map(map)
-            .and_then(|p| fs.read(&p))
-            .and_then(|d| vcod_common::bsp::parse(&d).ok())
-        {
+        if let Ok(bsp) = vcod_common::mapworld::find(fs, map) {
             let tris = vcod_common::props::collision_tris(fs, &bsp.entities);
             self.world = Some(Box::new(CollisionWorld::build(&bsp, &tris)));
         }

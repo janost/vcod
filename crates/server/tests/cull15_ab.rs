@@ -142,7 +142,8 @@ fn the_15_cull_matches_retail_step_for_step() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         eprintln!("COD_DIR is not a 1.5 install: skipping");
         return;
     }
@@ -193,7 +194,8 @@ fn the_15_solid_eye_fog_and_compass_match_retail() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         eprintln!("COD_DIR is not a 1.5 install: skipping");
         return;
     }

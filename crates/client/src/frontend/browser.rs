@@ -16,8 +16,8 @@ use vcod_common::net::master::{
     GETINFO, LAN_PORTS, LAN_ROUNDS, Master, ServerInfo, getservers, master_send_allowed,
     parse_address, parse_servers_response,
 };
-use vcod_common::net::protocol::Protocol;
 use vcod_common::net::server_cache::{self, Entry, MAX_FAVORITES};
+use vcod_common::net::wire::Transport;
 
 /// Pings in flight at once, and how long one waits for its reply. vcod's
 /// numbers, not measured.
@@ -40,10 +40,10 @@ pub struct MasterQuery {
 }
 
 impl MasterQuery {
-    pub fn of(p: &Protocol) -> MasterQuery {
+    pub fn of(t: &Transport) -> MasterQuery {
         MasterQuery {
-            master: p.master,
-            protocol: p.version,
+            master: t.master(),
+            protocol: t.version,
         }
     }
 }
@@ -175,8 +175,8 @@ pub struct Browser {
     master_due: Option<SocketAddr>,
     /// The address the `getservers` went to; its answers are taken.
     master: Option<SocketAddr>,
-    /// The install's master and protocol.
-    pub master_query: MasterQuery,
+    /// The install's master and protocol; `None` asks no master.
+    pub master_query: Option<MasterQuery>,
     started: Option<Instant>,
     pub source: Source,
     /// Indexed by [`Source`].
@@ -205,7 +205,9 @@ impl Default for Browser {
             resolve: None,
             master_due: None,
             master: None,
-            master_query: MasterQuery::of(&vcod_common::net::protocol::PROTOCOL_V1),
+            master_query: Some(MasterQuery::of(
+                &vcod_common::net::protocol::PROTOCOL_V1.transport,
+            )),
             started: None,
             source: Source::Local,
             lists: Default::default(),
@@ -290,12 +292,17 @@ impl Browser {
         self.master_due = None;
         self.master = None;
         self.started = Some(now);
-        match self.source {
-            Source::Internet => {
+        match (self.source, self.master_query) {
+            (Source::Internet, None) => {
+                log::info!("browser: no master query for this game; use Local or a favourite");
+                self.list_mut().clear();
+                self.status = Status::Failed;
+                return;
+            }
+            (Source::Internet, Some(q)) => {
                 let (tx, rx) = mpsc::channel();
-                let m = self.master_query.master;
                 std::thread::spawn(move || {
-                    let addr = (m.host, m.port)
+                    let addr = (q.master.host, q.master.port)
                         .to_socket_addrs()
                         .ok()
                         .and_then(|mut a| a.find(SocketAddr::is_ipv4));
@@ -305,7 +312,7 @@ impl Browser {
                 self.resolve = Some(rx);
                 self.status = Status::Master;
             }
-            Source::Local => {
+            (Source::Local, _) => {
                 self.list_mut().clear();
                 for _ in 0..LAN_ROUNDS {
                     for &to in &self.lan_targets {
@@ -316,7 +323,7 @@ impl Browser {
                 }
                 self.status = Status::Pinging;
             }
-            Source::Favorites => {
+            (Source::Favorites, _) => {
                 self.reset_pings();
                 self.status = Status::Pinging;
             }
@@ -396,7 +403,8 @@ impl Browser {
             match addr {
                 Some(addr) => self.master_due = Some(addr),
                 None => {
-                    log::warn!("browser: cannot resolve {}", self.master_query.master.host);
+                    let host = self.master_query.map_or("", |q| q.master.host);
+                    log::warn!("browser: cannot resolve {host}");
                     self.status = Status::Failed;
                     self.socket = None;
                 }
@@ -404,10 +412,10 @@ impl Browser {
         }
         // One `getservers` per refresh, sent once the master's host is out
         // of its last second; a list in several packets is not asked again.
-        if let (Some(addr), Some(socket)) = (self.master_due, &self.socket)
+        if let (Some(addr), Some(socket), Some(q)) =
+            (self.master_due, &self.socket, self.master_query)
             && master_send_allowed(addr.ip())
         {
-            let q = self.master_query;
             log::info!(
                 "browser: requesting protocol {} servers from {addr}",
                 q.protocol
@@ -438,13 +446,14 @@ impl Browser {
                 }
                 "infoResponse" => {
                     // Latin-1, as the font indexes glyphs by byte.
-                    let text: String = rest.iter().map(|&b| b as char).collect();
+                    let text = vcod_common::text::latin1(rest);
                     let info = ServerInfo::parse(&text);
                     // The master lists by what a server told it; one that
                     // answers with another protocol is dropped.
                     if self.source == Source::Internet
+                        && let Some(q) = self.master_query
                         && info.protocol != 0
-                        && info.protocol != self.master_query.protocol
+                        && info.protocol != q.protocol
                     {
                         self.list_mut().retain(|s| s.addr != from4);
                         continue;
@@ -537,8 +546,12 @@ impl Browser {
                     Column::GameType => strip(&ia.gametype).cmp(&strip(&ib.gametype)),
                     Column::Ping => a.ping.cmp(&b.ping),
                     // 1.5's `LAN_CompareServers` (CoDMP.exe 0x419c00) keys 1, 6, 7.
-                    Column::Hardware => ia.hardware.cmp(&ib.hardware),
-                    Column::PunkBuster => ia.punkbuster.cmp(&ib.punkbuster),
+                    Column::Hardware | Column::Hardware2 => ia.hardware.cmp(&ib.hardware),
+                    Column::PunkBuster | Column::PunkBusterText => {
+                        ia.punkbuster.cmp(&ib.punkbuster)
+                    }
+                    Column::Voice => ia.voice.cmp(&ib.voice),
+                    Column::Pure => ia.pure.cmp(&ib.pure),
                     Column::Mod => ia.modded.cmp(&ib.modded),
                     Column::Password => std::cmp::Ordering::Equal,
                 }
@@ -638,6 +651,14 @@ pub enum Column {
     /// 1.5: `X` on a `mod` server.
     Mod,
     Ping,
+    /// CoD2: the `hw` icon out of CoD2's own materials.
+    Hardware2,
+    /// CoD2: `X` on a `voice` server.
+    Voice,
+    /// CoD2: `X` on a `pure` server.
+    Pure,
+    /// CoD2: `X` on a `pb` server, no logo.
+    PunkBusterText,
 }
 
 /// 1.1's `joinserver.menu`, six columns (ui_mp_x86.dll 0x4000c8ad).
@@ -664,12 +685,29 @@ pub const COLUMNS_V5: [Column; 9] = [
     Column::Ping,
 ];
 
-/// The layout a list box of `count` columns is: 1.5's nine, else 1.1's.
+/// CoD2 1.3's, eleven (`UI_FeederItemText`, Mac 0x152e8a: the `hw` icon,
+/// then `X` for `voice`, `pure`, `mod` and `pb`).
+pub const COLUMNS_V118: [Column; 11] = [
+    Column::Password,
+    Column::Hardware2,
+    Column::Name,
+    Column::Map,
+    Column::Players,
+    Column::GameType,
+    Column::Voice,
+    Column::Pure,
+    Column::Mod,
+    Column::PunkBusterText,
+    Column::Ping,
+];
+
+/// The layout a list box of `count` columns is: CoD2's eleven, 1.5's nine,
+/// else 1.1's.
 pub fn columns_for(count: usize) -> &'static [Column] {
-    if count == COLUMNS_V5.len() {
-        &COLUMNS_V5
-    } else {
-        &COLUMNS_V1
+    match count {
+        11 => &COLUMNS_V118,
+        9 => &COLUMNS_V5,
+        _ => &COLUMNS_V1,
     }
 }
 
@@ -681,6 +719,18 @@ const HARDWARE_ICONS: [&str; 6] = [
     "ui_mp/assets/server_hardware_mac_dedicated",
     "ui_mp/assets/server_hardware_win_listen",
     "ui_mp/assets/server_hardware_mac_listen",
+];
+
+/// `hw` 0..6 to the material CoD2's `UI_Init` registers for it (Mac 0x1506ba;
+/// 4 registers nothing).
+const HARDWARE_ICONS_V118: [&str; 7] = [
+    "server_hardware_unknown",
+    "server_hardware_linux_dedicated",
+    "server_hardware_win_dedicated",
+    "server_hardware_mac_dedicated",
+    "",
+    "server_hardware_win_listen",
+    "server_hardware_mac_listen",
 ];
 
 /// One list cell: an icon, or text.
@@ -713,7 +763,21 @@ pub fn column_cell(s: &Server, col: Column) -> Cell {
         Column::Mod if info.modded => text("X"),
         Column::Ping if ping > 0 => Cell::Text(ping.to_string()),
         Column::Ping => text("..."),
-        Column::Password | Column::PunkBuster | Column::Mod => text(""),
+        Column::Hardware2 => match usize::try_from(info.hardware) {
+            Ok(i) if i < HARDWARE_ICONS_V118.len() && !HARDWARE_ICONS_V118[i].is_empty() => {
+                Cell::Image(HARDWARE_ICONS_V118[i])
+            }
+            _ => text(""),
+        },
+        Column::Voice if info.voice => text("X"),
+        Column::Pure if info.pure => text("X"),
+        Column::PunkBusterText if info.punkbuster => text("X"),
+        Column::Password
+        | Column::PunkBuster
+        | Column::Mod
+        | Column::Voice
+        | Column::Pure
+        | Column::PunkBusterText => text(""),
     }
 }
 
@@ -743,7 +807,7 @@ mod tests {
                 ..Default::default()
             }),
             ping: Some(ping),
-            ..Server::new("1.2.3.4:28960".parse().unwrap())
+            ..Server::new("203.0.113.4:28960".parse().unwrap())
         }
     }
 
@@ -914,13 +978,27 @@ mod tests {
         assert_eq!(b.lists[2][0].name, "Other");
     }
 
-    /// The Internet list against cod.pm's live master: one `getservers 1`
-    /// on port 20510, then a `getinfo` to every server it lists. Run with
+    /// With no master an Internet refresh asks nobody and ends at once.
+    #[test]
+    fn no_master_asks_no_master() {
+        let mut b = Browser {
+            master_query: None,
+            source: Source::Internet,
+            ..Browser::default()
+        };
+        b.refresh();
+        assert_eq!(b.status, Status::Failed);
+        assert!(b.resolve.is_none() && b.socket.is_none());
+    }
+
+    /// The Internet list against cod.pm's live master: one `getservers 118`
+    /// on the CoD2 port, then a `getinfo` to every server it lists. Run with
     /// `cargo test -p vcod --bins master_list_live -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn master_list_live() {
         let mut b = Browser {
+            master_query: Some(MasterQuery::of(&vcod_cod2::net::PROTOCOL_118.transport)),
             source: Source::Internet,
             ..Browser::default()
         };
@@ -941,7 +1019,10 @@ mod tests {
             );
         }
         println!("listed {} answered {}", b.list().len(), rows.len());
-        assert!(rows.iter().all(|s| s.info.as_ref().unwrap().protocol == 1));
+        assert!(
+            rows.iter()
+                .all(|s| s.info.as_ref().unwrap().protocol == 118)
+        );
         assert!(!rows.is_empty());
     }
 

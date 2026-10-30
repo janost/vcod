@@ -14,6 +14,7 @@ use crate::value::{ArrayId, EntId, FuncRef, StructId, Value};
 use sched::Thread;
 
 mod interp;
+pub mod profile;
 pub mod sched;
 
 /// `self`/a call's receiver, once resolved to something field access and
@@ -331,6 +332,12 @@ impl Cx<'_> {
         self.heap.array_len(a)
     }
 
+    /// An array's keys, the most recently added first, for a builtin that
+    /// lists them (CoD4's `getArrayKeys`).
+    pub fn array_keys_newest_first(&self, a: ArrayId) -> Vec<ArrayKey> {
+        self.heap.array_keys_newest_first(a)
+    }
+
     /// One array's contents, lifted out of this heap for another `Vm`
     /// (`ArrayCarry`). A host carrying a client's `pers[]` across a level
     /// boundary takes it here.
@@ -541,10 +548,35 @@ pub struct Vm {
     /// How many threads have died in total, including the ones `aborts`
     /// stopped recording, so a truncated list cannot pass for a whole one.
     aborts_seen: u32,
+    /// Each logged error's text: when it was last logged and how often it
+    /// came again since ([`Vm::record_error`]).
+    error_log: HashMap<String, (std::time::Instant, u32)>,
     /// Retail's mode below `developer 1`: a runtime error leaves the failed
     /// instruction's results undefined and the thread runs on
     /// (`step_frames`). Off, as at `developer 1`, the thread dies.
     recover_errors: bool,
+    /// CoD2's notify order: waiters resume newest `waittill` first
+    /// ([`Vm::set_newest_waiter_first`]); CoD1's resume in start order.
+    newest_waiter_first: bool,
+    /// [`Vm::set_frame_waits`].
+    frame_waits: bool,
+    /// The frame a frame-counted `wait` counts ([`Vm::set_frame_ms`]).
+    frame_ms: i32,
+    /// [`Vm::set_endons_end_with_call`].
+    endons_end_with_call: bool,
+    /// CoD2: a `thread` call reads what the thread returned when it ended
+    /// before its first suspend ([`Vm::set_thread_returns`]).
+    thread_returns: bool,
+    /// What the last spawned thread returned on its immediate run.
+    thread_returned: Option<Value>,
+    /// Stamps each `waittill` as it parks, for `newest_waiter_first`.
+    next_wait: u64,
+    /// CoD2: a thread another thread's notify ends while it is on the
+    /// call stack stops at once ([`Vm::set_kill_mid_step`]).
+    kill_mid_step: bool,
+    /// Threads a notify ended since the outermost step began, for
+    /// `kill_mid_step`'s check.
+    killed: Vec<sched::ThreadId>,
 }
 
 impl Default for Vm {
@@ -586,7 +618,17 @@ impl Vm {
             spawn_depth: 0,
             aborts: Vec::new(),
             aborts_seen: 0,
+            error_log: HashMap::new(),
             recover_errors: false,
+            newest_waiter_first: false,
+            frame_waits: false,
+            frame_ms: 50,
+            endons_end_with_call: false,
+            thread_returns: false,
+            thread_returned: None,
+            next_wait: 0,
+            kill_mid_step: false,
+            killed: Vec::new(),
         }
     }
 
@@ -594,6 +636,74 @@ impl Vm {
     /// or the thread runs on past it (on, below `developer 1`).
     pub fn set_recover_errors(&mut self, on: bool) {
         self.recover_errors = on;
+    }
+
+    /// CoD2's notify wake order: the waiter whose `waittill` parked last
+    /// resumes first. Live on mp_toujane, the stock gametypes' `connecting`
+    /// waiters (`_teams`, `_weapons`, `_grenadeindicators`, parked in that
+    /// order at init) answered the first connect newest first and the
+    /// second, after each had parked again in that wake order, oldest
+    /// first (cod2-protocol.md 15.5).
+    /// CoD2's `x = thread f()`: the value `f` returned when it ran to its end
+    /// without suspending, else undefined. VERIFIED live on retail 1.3
+    /// (cod2-protocol.md 15.7); CoD1's reads undefined (not measured).
+    pub fn set_thread_returns(&mut self, on: bool) {
+        self.thread_returns = on;
+    }
+
+    pub fn set_newest_waiter_first(&mut self, on: bool) {
+        self.newest_waiter_first = on;
+    }
+
+    /// CoD4's `wait`: the seconds times 20 rounded half up to whole 50 ms
+    /// frames, a wait under half a frame (but not `wait 0`) one frame.
+    /// Measured on retail 1.7 (cod4-gsc.md 4): 0.624 wakes 12 frames on,
+    /// 0.626 and 0.643 13, 0.01 one, 1.025 (1.02499997 as a float) 20.
+    /// CoD1's counts milliseconds, a wait due between two frames running
+    /// on the later one.
+    pub fn set_frame_waits(&mut self, on: bool) {
+        self.frame_waits = on;
+    }
+
+    /// The server frame's length under [`Vm::set_frame_waits`], 50 ms by
+    /// default (`sv_fps` 20). Retail's script clock counts `G_RunFrame`s,
+    /// so a `wait 5` at `sv_fps` 40 is 100 frames of 25 ms: 2.5 s of
+    /// `level.time` (VERIFIED live, cod4-server-frame.md 8). A wait
+    /// already parked keeps the length it was taken at.
+    pub fn set_frame_ms(&mut self, ms: i32) {
+        self.frame_ms = ms.max(1);
+    }
+
+    /// CoD4's `endon` belongs to the call that ran it: a return drops it,
+    /// and its notify ends that call alone, its caller reading `undefined`
+    /// from it and running on; only a thread's own body's ends the thread.
+    /// Stock `hardpointItemWaiter` lives on past
+    /// `selectAirstrikeLocation`'s `endon("stop_location_selection")`
+    /// (cod4-gsc.md 4.2). CoD1's and CoD2's end the thread.
+    pub fn set_endons_end_with_call(&mut self, on: bool) {
+        self.endons_end_with_call = on;
+    }
+
+    /// Drops the endons of the calls above `depth` on `thread`, under
+    /// [`Self::set_endons_end_with_call`].
+    pub(crate) fn end_call_endons(&mut self, thread: Option<sched::ThreadId>, depth: usize) {
+        if !self.endons_end_with_call {
+            return;
+        }
+        if let Some(t) = thread.and_then(|id| self.threads.iter_mut().find(|t| t.id == id)) {
+            t.endons.retain(|e| e.2 <= depth);
+        }
+    }
+
+    /// CoD2: a thread an `endon` ends while it waits on a nested spawn
+    /// (`self thread f()` whose run notifies) runs no further instruction.
+    /// Retail's stock tdm ends the killed callback that way: its
+    /// `checkScoreLimit` threads `endMap`, whose `spawnIntermission`
+    /// notifies the victim's `spawned`, and the callback's `K;` line never
+    /// reached `games_mp.log` (cod2-protocol.md 16.6). CoD1's VM runs such
+    /// a thread on to its next suspend (cod11-gsc-language.md section 10).
+    pub fn set_kill_mid_step(&mut self, on: bool) {
+        self.kill_mid_step = on;
     }
 
     pub fn set_budget(&mut self, budget: u32) {
@@ -648,9 +758,13 @@ impl Vm {
     /// How many aborts `aborts` keeps. Invented, not measured: retail has no
     /// abort log at all. Any number large enough to hold a broken map load
     /// works; the cap only bounds what a server running for hours with a
-    /// thread dying every frame accumulates. Every abort is logged whatever
-    /// the cap, and `abort_count` counts past it.
+    /// thread dying every frame accumulates. Every abort is logged (a
+    /// repeat as a count, `record_error`) whatever the cap, and
+    /// `abort_count` counts past it.
     const MAX_RECORDED_ABORTS: usize = 256;
+
+    /// How often a repeating error's count is logged.
+    const REPEAT_LOG: std::time::Duration = std::time::Duration::from_secs(10);
 
     /// Logs a dead thread, counts it, and keeps it in `aborts` up to the cap.
     fn record_abort(&mut self, e: &ScriptError) {
@@ -659,11 +773,34 @@ impl Vm {
 
     /// Logs a runtime error, counts it, and keeps it in `aborts` up to the
     /// cap, whether the thread died of it or ran on (`recovered`).
+    /// An error a loop hits every frame logs once, then its count every
+    /// [`Self::REPEAT_LOG`]. Retail prints every one, and only under
+    /// `developer` or `logfile` (cod11-gsc-language.md, "Runtime errors
+    /// below developer 1"); a line a frame buries a dedicated server's log,
+    /// so this divergence is in the log only.
     pub(crate) fn record_error(&mut self, e: &ScriptError, recovered: bool) {
-        if recovered {
-            log::warn!("gsc: script error, thread runs on, in {}", self.describe(e));
+        let text = if recovered {
+            format!("script error, thread runs on, in {}", self.describe(e))
         } else {
-            log::warn!("gsc: thread aborted in {}", self.describe(e));
+            format!("thread aborted in {}", self.describe(e))
+        };
+        let now = std::time::Instant::now();
+        match self.error_log.get_mut(&text) {
+            None => {
+                log::warn!("gsc: {text}");
+                self.error_log.insert(text, (now, 0));
+            }
+            Some((at, n)) => {
+                *n += 1;
+                if now.duration_since(*at) >= Self::REPEAT_LOG {
+                    log::warn!(
+                        "gsc: {text} (again {n} times in {} s)",
+                        now.duration_since(*at).as_secs()
+                    );
+                    *at = now;
+                    *n = 0;
+                }
+            }
         }
         self.aborts_seen = self.aborts_seen.saturating_add(1);
         if self.aborts.len() < Self::MAX_RECORDED_ABORTS {
@@ -983,6 +1120,25 @@ pub(crate) mod tests {
         assert_eq!(v, Value::Int(3));
         let (v, _, _) = run("main() { return (float)3; }");
         assert_eq!(v, Value::Float(3.0));
+    }
+
+    /// A string casts through `strtol` / `strtod`'s numeric prefix; a 0
+    /// not spelled as one is fatal (`# probe_cast_string`). UO's
+    /// `_birdbush.gsc` casts a BSP key this way.
+    #[test]
+    fn a_string_casts_by_its_numeric_prefix() {
+        for (src, want) in [
+            ("(int)\"5000\"", Value::Int(5000)),
+            ("(int)\" -7\"", Value::Int(-7)),
+            ("(int)\"12abc\"", Value::Int(12)),
+            ("(int)\"0.9\"", Value::Int(0)),
+            ("(int)\".05\"", Value::Int(0)),
+            ("(float)\"1.5e1x\"", Value::Float(15.0)),
+            ("!\"0.5\"", Value::Int(1)),
+        ] {
+            let (v, _, _) = run(&format!("main() {{ return {src}; }}"));
+            assert_eq!(v, want, "{src}");
+        }
     }
 
     /// `i32::MIN` is not spellable: the magnitude saturates at `i32::MAX`

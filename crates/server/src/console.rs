@@ -238,67 +238,27 @@ pub struct Rotation {
 }
 
 impl Rotation {
-    /// `NextToken` (doc 5.1): destructive, one token per call.
-    fn next_token(&mut self) -> Option<String> {
-        let trimmed = self.current.trim_start();
-        let mut it = trimmed.splitn(2, char::is_whitespace);
-        let tok = it.next().filter(|t| !t.is_empty())?.to_string();
-        self.current = it.next().unwrap_or("").to_string();
-        Some(tok)
-    }
-
-    /// `SV_MapRotate_f`'s loop (doc 5.2): returns the map to load, or
+    /// `SV_MapRotate_f`'s loop (doc 5.2) through
+    /// [`crate::engine::rotation::rotate`]: returns the map to load, or
     /// `Restart` when the rotation names none. A `gametype` token writes
     /// `gametype` and the caller clears its stashed `savePersist` when the
     /// value changed.
     pub fn rotate(&mut self, full: &str, gametype: &mut String) -> Rotate {
-        if self.current.trim().is_empty() {
-            self.current = full.to_string();
+        use crate::engine::rotation::{self, End, Words};
+        let walk = rotation::rotate(full, &mut self.current, Words::Cod1);
+        if let Some(g) = walk.gametype {
+            *gametype = g;
         }
-        let mut tok = self.next_token();
-        if tok.is_none() {
-            self.current = full.to_string();
-            tok = self.next_token();
-        }
-        let Some(mut tok) = tok else {
+        for w in walk.unknown {
             self.warnings
-                .push("No map specified in sv_mapRotation - forcing map_restart.".into());
-            return Rotate::Restart;
-        };
-        loop {
-            match tok.to_ascii_lowercase().as_str() {
-                "gametype" => match self.next_token() {
-                    Some(g) => *gametype = g,
-                    None => {
-                        self.warnings.push(
-                            "No gametype specified after 'gametype' keyword in sv_mapRotation - forcing map_restart."
-                                .into(),
-                        );
-                        return Rotate::Restart;
-                    }
-                },
-                "map" => match self.next_token() {
-                    Some(m) => return Rotate::Map(m),
-                    None => {
-                        self.warnings.push(
-                            "No map specified after 'map' keyword in sv_mapRotation - forcing map_restart."
-                                .into(),
-                        );
-                        return Rotate::Restart;
-                    }
-                },
-                _ => self
-                    .warnings
-                    .push(format!("Unknown keyword '{tok}' in sv_mapRotation.")),
-            }
-            match self.next_token() {
-                Some(t) => tok = t,
-                None => {
-                    self.warnings
-                        .push("No map specified in sv_mapRotation - forcing map_restart.".into());
-                    return Rotate::Restart;
-                }
-            }
+                .push(format!("Unknown keyword '{w}' in sv_mapRotation."));
+        }
+        if let Some(w) = walk.end.warning() {
+            self.warnings.push(w.into());
+        }
+        match walk.end {
+            End::Map(m) => Rotate::Map(m),
+            _ => Rotate::Restart,
         }
     }
 }

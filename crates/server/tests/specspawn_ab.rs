@@ -126,7 +126,8 @@ fn a_spectator_spawn_runs_the_last_cmd_like_15() {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    if vcod_server::server::install_protocol(&fs).version != PROTOCOL_V6.version {
+    if vcod_server::server::install_protocol(&fs).transport.version != PROTOCOL_V6.transport.version
+    {
         return;
     }
     check(fs, include_str!("fixtures/specspawn/mp_carentan-1.5.txt"));

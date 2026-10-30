@@ -63,13 +63,21 @@ impl Value {
 /// How a value reads when concatenated onto a string or compared against
 /// one. Measured against retail in
 /// tests/fixtures/semantics/retail-captures.txt (`# probe_concat`,
-/// `# probe_concat_vec`). `None` for a value retail refuses to render,
+/// `# probe_concat_vec`); CoD2's vector form is its `SL_GetStringForVector`
+/// (lnxded 0x8079f00, `(%g, %g, %g)`), which the combat captures' `PROBE`
+/// lines print (cod2-gsc-diff.md). `None` for a value retail refuses to render,
 /// which the caller turns into an error.
 pub fn format_number(v: Value, interner: &Interner) -> Option<String> {
     match v {
         Value::Int(i) => Some(i.to_string()),
         Value::Float(f) => Some(format_g(f)),
         Value::String(a) | Value::Localized(a) => Some(interner.resolve(a).to_string()),
+        Value::Vector(v) if interner.vectors_g => Some(format!(
+            "({}, {}, {})",
+            format_g(v[0]),
+            format_g(v[1]),
+            format_g(v[2])
+        )),
         Value::Vector(v) => Some(format!("({:.2}, {:.2}, {:.2})", v[0], v[1], v[2])),
         _ => None,
     }

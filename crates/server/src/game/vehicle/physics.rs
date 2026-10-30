@@ -172,7 +172,7 @@ pub struct VehicleModel {
 
 impl VehicleModel {
     /// The tags off an xmodel's bones (`pos` is model space).
-    pub fn from_bones(bones: &[vcod_common::xmodel::Bone]) -> VehicleModel {
+    pub fn from_bones(bones: &[vcod_common::model::Bone]) -> VehicleModel {
         let find = |n: &str| bones.iter().find(|b| b.name.eq_ignore_ascii_case(n));
         VehicleModel {
             wheels: WHEEL_TAGS.map(|t| find(t).map(|b| b.pos)),

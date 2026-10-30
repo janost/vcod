@@ -280,6 +280,11 @@ mp_cassino and mp_arnhem gamestates, VERIFIED):
 - `serverinfo_<gametype>` is the first script menu (1333) as on 1.5, and the
   gamestate on mp_cassino is 14757 bytes decompressed with 504 configstrings
   and 52 baselines; mp_arnhem ctf 586 and 62 (live, VERIFIED).
+- The server builds the gamestate in a 32768-byte buffer, twice 1.1d's
+  and 1.5b's 16384: `SV_SendClientGameState` (`coduo_lnxded` 0x808bc48,
+  `MSG_Init(..., 0x8000)`; 1.5b's at 0x808ae44 passes 0x4000). VERIFIED
+  (the decompilation). vcod-server's six-bot gamestates on mp_cassino and
+  mp_foy run 16642 to 24541 bytes (`cod11-client-soak.md`), inside it.
 
 ## 8. Entity types, events, server commands
 
@@ -1088,7 +1093,7 @@ Each stage stands on its own: stage 1 is useful without 2, and 1 and 2
 are the same work a 1.5 server needed, scaled up. The risks that cut across
 all three are version gating in shared code (pmove, combat, the weapon
 enums, the 1.1 "no cook" rule) without moving 1.1's A/B gates, and testing:
-this machine runs the retail UO server but joins no public one, so
+the retail UO server was run but no public one joined, so
 third-party UO content and live player behaviour stay unmeasured.
 
 ## 18. What vcod does
@@ -1222,6 +1227,13 @@ handles are registered in 0x3002b560 (VERIFIED, strings).
   six bullet classes by normal and reflect, the eight explosion types,
   `grenade_bounce` and `molotov_explode_reflect`. A surface named
   `vehicle` takes index 23 (0x3001dd30) (VERIFIED).
+- **A leading slash.** `fx/map_trenches/mortar_mz.efx` (pakuo00), which
+  mp_berlin's `mp_mortar_mz` chains to, names
+  `/fx/map_trenches/mortar_mz_nest`. `FS_FOpenFileRead` skips every
+  leading `/` and `\` before its search (CoDMP.exe 0x00429a70,
+  CoDUOMP.exe 0x0042d760, coduo_lnxded 0x08061a74) (VERIFIED, the
+  decompilations). vcod's `Pk3Fs` key drops them too (`path_key`); before
+  2026-10-28 the nest effect read as missing and played nothing.
 - **Backslashed rows.** `gmi_impacts.csv` spells every
   `artillery_explode`, `mortar_explode`, `smoke_grenade_explode` and
   `tank_explode` path with backslashes (`fx\weapon\explosions\tank_dirt.efx`),

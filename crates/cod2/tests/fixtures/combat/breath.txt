@@ -1,0 +1,2747 @@
+# map mp_toujane
+# made by: GT=combat tools/run_probe_cod2.sh breath mp_toujane -299 997 43 90 <out> (retail cod2_lnxded 1.3, pure, defaults, +set probe_weapon kar98k_sniper_mp)
+# move_probe --script breath: com_maxfps 85, cl_maxpackets 30, cl_packetdup 1
+# weapons defaultweapon_mp mg42_bipod_stand_mp kar98k_sniper_mp frag_grenade_american_mp
+# cmd 5100 I "1"
+# cmd 5100 C 4
+# spawn (-299 997 38.9932) view (0 90)
+s 3 5100 commandTime=13ec origin[1]=44794000 origin[0]=c3958000 viewangles[1]=42b40000 origin[2]=421bf909 velocity[2]=c2a00000 pm_flags=800000 viewHeightCurrent=42700000 eFlags=2 holdBreathScale=3f04eb57 viewHeightTarget=3c groundEntityNum=3ff weapon=3 weapons[0]=18 weaponslots[0]=300 delta_angles[1]=4000 cursorHintString=ffffffff offHandIndex=4 viewlocked_entNum=3ff speed=be mins[1]=c1700000 mins[0]=c1700000 maxs[2]=428c0000 maxs[1]=41700000 maxs[0]=41700000 gravity=320 S[0]=64 S[2]=64 S[3]=3f S[5]=1 A[2]=3c C[2]=5 C[3]=3
+e 84 eType=6 solid=ffffff index=1
+e 307 pos.trBase[1]=41c00000 pos.trBase[0]=44258000 apos.trBase[1]=42a5cb70 pos.trBase[2]=43450000 eType=9 angles2[0]=c2a20000 apos.trType=3 weapon=2 index=27
+e 308 pos.trBase[1]=41c00000 pos.trBase[0]=44258000 apos.trBase[1]=42a5cb70 pos.trBase[2]=43450000 eType=9 angles2[0]=c2a20000 apos.trType=3 weapon=2 index=27
+e 309 pos.trBase[1]=41c00000 pos.trBase[0]=44258000 apos.trBase[1]=42a5cb70 pos.trBase[2]=43450000 eType=9 angles2[0]=c2a20000 apos.trType=3 weapon=2 index=27
+e 310 pos.trBase[1]=44aa4000 pos.trBase[0]=c2a00000 apos.trBase[1]=c1ea6780 pos.trBase[2]=42040000 eType=9 angles2[0]=c2640000 apos.trType=3 weapon=2 index=27
+e 311 pos.trBase[1]=44aa4000 pos.trBase[0]=c2a00000 apos.trBase[1]=c1ea6780 pos.trBase[2]=42040000 eType=9 angles2[0]=c2640000 apos.trType=3 weapon=2 index=27
+e 312 pos.trBase[1]=44aa4000 pos.trBase[0]=c2a00000 apos.trBase[1]=c1ea6780 pos.trBase[2]=42040000 eType=9 angles2[0]=c2640000 apos.trType=3 weapon=2 index=27
+e 368 pos.trBase[1]=44cc4000 pos.trBase[0]=4531b000 apos.trBase[1]=4333fd30 pos.trBase[2]=42340000 apos.trBase[0]=bdd5c000 eType=6 apos.trBase[2]=3f0e0800 index=33
+e 461 pos.trBase[1]=44cc4000 pos.trBase[0]=45312000 apos.trBase[1]=c3340000 pos.trBase[2]=42300000 eType=6 index=37
+e 463 eType=6 solid=ffffff index=8
+e 464 eType=6 solid=ffffff index=9
+e 465 eType=6 solid=ffffff index=a
+e 466 eType=6 solid=ffffff index=b
+e 467 eType=6 solid=ffffff index=c
+e 468 eType=6 solid=ffffff index=d
+e 469 eType=6 solid=ffffff index=e
+e 470 pos.trBase[1]=44cc4000 pos.trBase[0]=4531b000 apos.trBase[1]=4333fd30 pos.trBase[2]=42340000 apos.trBase[0]=bdd5c000 eType=6 apos.trBase[2]=3f0e0800 index=33
+e 471 pos.trBase[1]=44cc4000 pos.trBase[0]=4531b000 apos.trBase[1]=4333fd30 pos.trBase[2]=42340000 apos.trBase[0]=bdd5c000 eType=6 apos.trBase[2]=3f0e0800 index=33
+e 512 eType=6 solid=ffffff index=12
+e 513 eType=6 solid=ffffff index=13
+e 514 eType=6 solid=ffffff index=14
+e 516 pos.trBase[1]=4515d000 pos.trBase[0]=45075000 apos.trBase[1]=c31180c0 pos.trBase[2]=42b20000 eType=9 angles2[0]=c2640000 apos.trType=3 weapon=2 index=27
+e 517 pos.trBase[1]=4515d000 pos.trBase[0]=45075000 apos.trBase[1]=c31180c0 pos.trBase[2]=42b20000 eType=9 angles2[0]=c2640000 apos.trType=3 weapon=2 index=27
+e 518 pos.trBase[1]=4515d000 pos.trBase[0]=45075000 apos.trBase[1]=c31180c0 pos.trBase[2]=42b20000 eType=9 angles2[0]=c2640000 apos.trType=3 weapon=2 index=27
+e 519 pos.trBase[1]=4515d000 pos.trBase[0]=45075000 apos.trBase[1]=c31180c0 pos.trBase[2]=42b20000 eType=9 angles2[0]=c2640000 apos.trType=3 weapon=2 index=27
+e 619 pos.trBase[1]=45237000 pos.trBase[0]=4472c000 angles2[1]=43960000 pos.trBase[2]=42860000 eType=8 scale=2 origin2[2]=3f800000
+e 620 pos.trBase[1]=4504a000 pos.trBase[0]=44608000 angles2[1]=43960000 pos.trBase[2]=420c0000 eType=8 scale=2 origin2[2]=3f800000
+e 621 pos.trBase[1]=44c46000 pos.trBase[0]=44a30000 angles2[1]=43960000 pos.trBase[2]=41500000 eType=8 scale=2 origin2[2]=3f800000
+e 622 pos.trBase[1]=44bea000 pos.trBase[0]=44dc6000 angles2[1]=43960000 pos.trBase[2]=428c0000 eType=8 scale=2 origin2[2]=3f800000
+e 623 pos.trBase[1]=44f4e000 pos.trBase[0]=44c18000 angles2[1]=43960000 pos.trBase[2]=42100000 eType=8 scale=2 origin2[2]=3f800000
+e 624 pos.trBase[1]=44098000 pos.trBase[0]=42440000 angles2[1]=43960000 pos.trBase[2]=41b80000 eType=8 scale=2 origin2[2]=3f800000
+e 625 pos.trBase[1]=44824000 pos.trBase[0]=40e00000 angles2[1]=43960000 pos.trBase[2]=41b80000 eType=8 scale=2 origin2[2]=3f800000
+e 626 pos.trBase[1]=44c3c000 pos.trBase[0]=42c20000 angles2[1]=43960000 pos.trBase[2]=41b80000 eType=8 scale=2 origin2[2]=3f800000
+e 627 pos.trBase[1]=44020000 pos.trBase[0]=44770000 angles2[1]=43960000 pos.trBase[2]=c0000000 eType=8 scale=2 origin2[2]=3f800000
+e 628 pos.trBase[1]=4412c000 pos.trBase[0]=44b90000 angles2[1]=43960000 pos.trBase[2]=c0e00000 eType=8 scale=2 origin2[2]=3f800000
+e 629 pos.trBase[1]=4497a000 pos.trBase[0]=446f0000 angles2[1]=43960000 pos.trBase[2]=c1a00000 eType=8 scale=2 origin2[2]=3f800000
+e 630 pos.trBase[1]=445e8000 pos.trBase[0]=45182000 angles2[1]=43960000 pos.trBase[2]=428a0000 eType=8 scale=2 origin2[2]=3f800000
+e 631 pos.trBase[1]=44c3a000 pos.trBase[0]=451d7000 angles2[1]=43960000 pos.trBase[2]=428a0000 eType=8 scale=2 origin2[2]=3f800000
+e 632 pos.trBase[1]=4501e000 pos.trBase[0]=450ca000 angles2[1]=43960000 pos.trBase[2]=428a0000 eType=8 scale=2 origin2[2]=3f800000
+e 633 pos.trBase[1]=45266000 pos.trBase[0]=44e80000 angles2[1]=43960000 pos.trBase[2]=428a0000 eType=8 scale=2 origin2[2]=3f800000
+e 634 pos.trBase[1]=45459000 pos.trBase[0]=44aaa000 angles2[1]=43960000 pos.trBase[2]=428a0000 eType=8 scale=2 origin2[2]=3f800000
+e 635 pos.trBase[1]=442d0000 pos.trBase[0]=44fd6000 angles2[1]=43960000 pos.trBase[2]=41a80000 eType=8 scale=2 origin2[2]=3f800000
+e 636 pos.trBase[1]=46081000 pos.trBase[0]=c5c1f000 angles2[1]=447a0000 pos.trBase[2]=43560000 eType=8 scale=4 origin2[2]=3f800000
+e 637 pos.trBase[1]=445c4000 pos.trBase[0]=4606c000 angles2[1]=447a0000 pos.trBase[2]=42740000 eType=8 scale=4 origin2[2]=3f800000
+c 5101 0 3 4 0 0 0 0 0
+c 5113 0 3 4 0 0 0 0 0
+c 5125 0 3 4 0 0 0 0 0
+p 3
+c 5137 0 3 4 0 0 0 0 0
+c 5149 0 3 4 0 0 0 0 0
+s 4 5150 commandTime=1405 origin[2]=4212ef35 velocity[2]=c2ca0000 aimSpreadScale=3ec3d6e8 holdBreathScale=3f16a40e
+c 5162 0 3 4 0 0 0 0 0
+p 6
+c 5174 0 3 4 0 0 0 0 0
+c 5186 0 3 4 0 0 0 0 0
+s 5 5200 commandTime=142a origin[2]=4201bc37 velocity[2]=c3030000 aimSpreadScale=3f72d756 holdBreathScale=3f2c57f6
+c 5199 0 3 4 0 0 0 0 0
+p 6
+c 5211 0 3 4 0 0 0 0 0
+c 5223 0 3 4 0 0 0 0 0
+c 5235 0 3 4 0 0 0 0 0
+p 6
+s 6 5250 commandTime=1473 origin[2]=41e10000 velocity[2]=0 eventSequence=1 legsAnim=284 aimSpreadScale=0 events[0]=5f torsoTimer=72 torsoAnim=200 holdBreathScale=3f4aea4d legsTimer=72 groundEntityNum=3fe eventParms[0]=4
+c 5248 0 3 4 0 0 0 0 0
+c 5260 0 3 4 0 0 0 0 0
+c 5272 0 3 4 0 0 0 0 0
+p 6
+c 5284 0 3 4 0 0 0 0 0
+c 5296 0 3 4 0 0 0 0 0
+s 7 5300 commandTime=1498 torsoTimer=4d holdBreathScale=3f55d99e legsTimer=4d
+c 5309 0 3 4 0 0 0 0 0
+p 6
+c 5321 0 3 4 0 0 0 0 0
+c 5333 0 3 4 0 0 0 0 0
+c 5345 0 3 4 0 0 0 0 0
+p 6
+s 8 5350 commandTime=14e1 legsAnim=99 torsoTimer=4 holdBreathScale=3f6540e2 legsTimer=4
+c 5356 0 3 4 0 0 0 0 0
+c 5368 0 3 4 0 0 0 0 0
+c 5380 0 3 4 0 0 0 0 0
+p 6
+c 5392 0 3 4 0 0 0 0 0
+s 9 5400 commandTime=1504 torsoTimer=0 holdBreathScale=3f6a7c8c legsTimer=0
+c 5405 0 3 4 0 0 0 0 0
+c 5417 0 3 4 0 0 0 0 0
+p 6
+c 5429 0 3 4 0 0 0 0 0
+c 5441 0 3 4 0 0 0 0 0
+s 10 5450 commandTime=1529 holdBreathScale=3f6eeb04
+c 5453 0 3 4 0 0 0 0 0
+p 6
+c 5465 0 3 4 0 0 0 0 0
+c 5477 0 3 4 0 0 0 0 0
+c 5489 0 3 4 0 0 0 0 0
+p 6
+s 11 5500 commandTime=1571 holdBreathScale=3f751708
+c 5500 0 3 4 0 0 0 0 0
+c 5512 0 3 4 0 0 0 0 0
+c 5524 0 3 4 0 0 0 0 0
+p 6
+c 5536 0 3 4 0 0 0 0 0
+s 12 5550 commandTime=1594 holdBreathScale=3f77397c
+c 5549 0 3 4 0 0 0 0 0
+c 5561 0 3 4 0 0 0 0 0
+p 6
+c 5573 0 3 4 0 0 0 0 0
+c 5585 0 3 4 0 0 0 0 0
+c 5597 0 3 4 0 0 0 0 0
+p 6
+s 13 5600 commandTime=15dd holdBreathScale=3f7a6e75
+c 5608 0 3 4 0 0 0 0 0
+c 5620 0 3 4 0 0 0 0 0
+c 5632 0 3 4 0 0 0 0 0
+p 6
+c 5644 0 3 4 0 0 0 0 0
+s 14 5650 commandTime=1600 holdBreathScale=3f7b855e
+c 5657 0 3 4 0 0 0 0 0
+c 5669 0 3 4 0 0 0 0 0
+p 6
+c 5681 0 3 4 0 0 0 0 0
+c 5693 0 3 4 0 0 0 0 0
+s 15 5700 commandTime=1625 holdBreathScale=3f7c718f
+c 5706 0 3 4 0 0 0 0 0
+p 6
+c 5718 0 3 4 0 0 0 0 0
+c 5730 0 3 4 0 0 0 0 0
+c 5742 0 3 4 0 0 0 0 0
+p 6
+s 16 5750 commandTime=166e holdBreathScale=3f7dbe46
+c 5754 0 3 4 0 0 0 0 0
+c 5766 0 3 4 0 0 0 0 0
+c 5778 0 3 4 0 0 0 0 0
+p 6
+c 5790 0 3 4 0 0 0 0 0
+s 17 5800 commandTime=1692 holdBreathScale=3f7e324b
+c 5802 0 3 4 0 0 0 0 0
+c 5814 0 3 4 0 0 0 0 0
+p 6
+c 5826 0 3 4 0 0 0 0 0
+c 5838 0 3 4 0 0 0 0 0
+s 18 5850 commandTime=16b6 holdBreathScale=3f7e8f03
+c 5849 0 3 4 0 0 0 0 0
+p 6
+c 5861 0 3 4 0 0 0 0 0
+c 5873 0 3 4 0 0 0 0 0
+c 5885 0 3 4 0 0 0 0 0
+p 6
+c 5897 0 3 4 0 0 0 0 0
+s 19 5900 commandTime=16fd holdBreathScale=3f7f12cf
+c 5910 0 3 4 0 0 0 0 0
+c 5922 0 3 4 0 0 0 0 0
+p 6
+c 5934 0 3 4 0 0 0 0 0
+c 5946 0 3 4 0 0 0 0 0
+s 20 5950 commandTime=1722 holdBreathScale=3f7f43ab
+c 5959 0 3 4 0 0 0 0 0
+p 6
+c 5971 0 3 4 0 0 0 0 0
+c 5983 0 3 4 0 0 0 0 0
+c 5995 0 3 4 0 0 0 0 0
+p 6
+s 21 6000 commandTime=176b holdBreathScale=3f7f887e
+c 6007 0 3 4 0 0 0 0 0
+c 6019 0 3 4 0 0 0 0 0
+c 6031 0 3 4 0 0 0 0 0
+p 6
+c 6043 0 3 4 0 0 0 0 0
+s 22 6050 commandTime=178f holdBreathScale=3f7fa07e
+c 6057 0 3 4 0 0 0 0 0
+c 6068 0 3 4 0 0 0 0 0
+p 6
+c 6080 0 3 4 0 0 0 0 0
+c 6092 0 3 4 0 0 0 0 0
+s 23 6100 commandTime=17b4 holdBreathScale=3f7fb42c
+c 6103 1000 3 4 0 0 0 0 0
+p 6
+c 6115 1000 3 4 0 0 0 0 0
+c 6127 1000 3 4 0 0 0 0 0
+c 6139 1000 3 4 0 0 0 0 0
+p 6
+s 24 6150 commandTime=17fb legsAnim=293 pm_flags=800140 fWeaponPosFrac=3e408314 holdBreathScale=3f800000
+c 6150 1000 3 4 0 0 0 0 0
+c 6162 1000 3 4 0 0 0 0 0
+c 6174 1000 3 4 0 0 0 0 0
+p 6
+c 6186 1000 3 4 0 0 0 0 0
+c 6198 1000 3 4 0 0 0 0 0
+s 25 6200 commandTime=181e fWeaponPosFrac=3ea7ef9f
+c 6211 1000 3 4 0 0 0 0 0
+p 6
+c 6223 1000 3 4 0 0 0 0 0
+c 6235 1000 3 4 0 0 0 0 0
+c 6247 1000 3 4 0 0 0 0 0
+p 6
+s 26 6250 commandTime=1867 fWeaponPosFrac=3f1eb852
+c 6260 1000 3 4 0 0 0 0 0
+c 6272 1000 3 4 0 0 0 0 0
+c 6284 1000 3 4 0 0 0 0 0
+p 6
+s 27 6300 commandTime=188c fWeaponPosFrac=3f449ba5
+c 6298 1000 3 4 0 0 0 0 0
+c 6310 1000 3 4 0 0 0 0 0
+c 6322 1000 3 4 0 0 0 0 0
+p 6
+c 6334 1000 3 4 0 0 0 0 0
+c 6346 1000 3 4 0 0 0 0 0
+s 28 6350 commandTime=18b2 fWeaponPosFrac=3f6b851d
+c 6358 1000 3 4 0 0 0 0 0
+p 6
+c 6370 1000 3 4 0 0 0 0 0
+c 6382 1000 3 4 0 0 0 0 0
+c 6394 1000 3 4 0 0 0 0 0
+p 6
+s 29 6400 commandTime=18fa fWeaponPosFrac=3f800000
+c 6407 1000 3 4 0 0 0 0 0
+c 6419 1000 3 4 0 0 0 0 0
+c 6431 1000 3 4 0 0 0 0 0
+p 6
+c 6443 1000 3 4 0 0 0 0 0
+s 30 6450 commandTime=191f
+c 6456 1000 3 4 0 0 0 0 0
+c 6468 1000 3 4 0 0 0 0 0
+p 6
+c 6480 1000 3 4 0 0 0 0 0
+c 6492 1000 3 4 0 0 0 0 0
+s 31 6500 commandTime=1944
+c 6503 1000 3 4 0 0 0 0 0
+p 6
+c 6515 1000 3 4 0 0 0 0 0
+c 6527 1000 3 4 0 0 0 0 0
+c 6539 1000 3 4 0 0 0 0 0
+p 6
+s 32 6550 commandTime=198b
+c 6551 1000 3 4 0 0 0 0 0
+c 6563 1000 3 4 0 0 0 0 0
+c 6575 1000 3 4 0 0 0 0 0
+p 6
+c 6587 1000 3 4 0 0 0 0 0
+s 33 6600 commandTime=19af
+c 6598 1000 3 4 0 0 0 0 0
+c 6610 1000 3 4 0 0 0 0 0
+p 6
+c 6622 1000 3 4 0 0 0 0 0
+c 6634 1000 3 4 0 0 0 0 0
+c 6646 1000 3 4 0 0 0 0 0
+p 6
+s 34 6650 commandTime=19f6
+c 6659 1000 3 4 0 0 0 0 0
+c 6671 1000 3 4 0 0 0 0 0
+c 6683 1000 3 4 0 0 0 0 0
+p 6
+c 6695 1000 3 4 0 0 0 0 0
+s 35 6700 commandTime=1a1b
+c 6708 1000 3 4 0 0 0 0 0
+c 6720 1000 3 4 0 0 0 0 0
+p 6
+c 6732 1000 3 4 0 0 0 0 0
+c 6744 1000 3 4 0 0 0 0 0
+s 36 6750 commandTime=1a40
+c 6755 1000 3 4 0 0 0 0 0
+p 6
+c 6767 1000 3 4 0 0 0 0 0
+c 6779 1000 3 4 0 0 0 0 0
+c 6791 1000 3 4 0 0 0 0 0
+p 6
+s 37 6800 commandTime=1a87
+c 6803 1000 3 4 0 0 0 0 0
+c 6815 1000 3 4 0 0 0 0 0
+c 6827 1000 3 4 0 0 0 0 0
+p 6
+c 6839 1000 3 4 0 0 0 0 0
+s 38 6850 commandTime=1aab
+c 6852 1000 3 4 0 0 0 0 0
+c 6864 1000 3 4 0 0 0 0 0
+p 6
+c 6876 1000 3 4 0 0 0 0 0
+c 6888 1000 3 4 0 0 0 0 0
+s 39 6900 commandTime=1ad0
+c 6899 1000 3 4 0 0 0 0 0
+p 6
+c 6911 1000 3 4 0 0 0 0 0
+c 6923 1000 3 4 0 0 0 0 0
+c 6935 1000 3 4 0 0 0 0 0
+p 6
+c 6947 1000 3 4 0 0 0 0 0
+s 40 6950 commandTime=1b17
+c 6960 1000 3 4 0 0 0 0 0
+c 6972 1000 3 4 0 0 0 0 0
+p 6
+c 6984 1000 3 4 0 0 0 0 0
+c 6996 1000 3 4 0 0 0 0 0
+s 41 7000 commandTime=1b3c
+c 7007 1000 3 4 0 0 0 0 0
+p 6
+c 7019 1000 3 4 0 0 0 0 0
+c 7031 1000 3 4 0 0 0 0 0
+c 7043 1000 3 4 0 0 0 0 0
+p 6
+s 42 7050 commandTime=1b83
+c 7055 1000 3 4 0 0 0 0 0
+c 7067 1000 3 4 0 0 0 0 0
+c 7079 1000 3 4 0 0 0 0 0
+p 6
+c 7091 1000 3 4 0 0 0 0 0
+s 43 7100 commandTime=1ba7
+c 7104 9000 3 4 0 0 0 0 0
+c 7116 9000 3 4 0 0 0 0 0
+p 6
+c 7128 9000 3 4 0 0 0 0 0
+c 7140 9000 3 4 0 0 0 0 0
+s 44 7150 commandTime=1bcc pm_flags=804140 holdBreathScale=3f6709fb holdBreathTimer=19
+c 7151 9000 3 4 0 0 0 0 0
+p 6
+c 7163 9000 3 4 0 0 0 0 0
+c 7175 9000 3 4 0 0 0 0 0
+c 7187 9000 3 4 0 0 0 0 0
+p 6
+s 45 7200 commandTime=1c13 holdBreathScale=3f2cb6d1 holdBreathTimer=60
+c 7200 9000 3 4 0 0 0 0 0
+c 7212 9000 3 4 0 0 0 0 0
+c 7224 9000 3 4 0 0 0 0 0
+p 6
+c 7236 9000 3 4 0 0 0 0 0
+c 7248 9000 3 4 0 0 0 0 0
+s 46 7250 commandTime=1c38 holdBreathScale=3f146451 holdBreathTimer=85
+c 7261 9000 3 4 0 0 0 0 0
+p 6
+c 7273 9000 3 4 0 0 0 0 0
+c 7285 9000 3 4 0 0 0 0 0
+c 7297 9000 3 4 0 0 0 0 0
+p 6
+s 47 7300 commandTime=1c81 holdBreathScale=3edc015c holdBreathTimer=ce
+c 7310 9000 3 4 0 0 0 0 0
+c 7322 9000 3 4 0 0 0 0 0
+c 7334 9000 3 4 0 0 0 0 0
+p 6
+c 7346 9000 3 4 0 0 0 0 0
+s 48 7350 commandTime=1ca6 holdBreathScale=3ebd05f8 holdBreathTimer=f3
+c 7358 9000 3 4 0 0 0 0 0
+c 7370 9000 3 4 0 0 0 0 0
+p 6
+c 7382 9000 3 4 0 0 0 0 0
+c 7394 9000 3 4 0 0 0 0 0
+s 49 7400 commandTime=1cca holdBreathScale=3ea316ef holdBreathTimer=117
+c 7407 9000 3 4 0 0 0 0 0
+p 6
+c 7419 9000 3 4 0 0 0 0 0
+c 7431 9000 3 4 0 0 0 0 0
+c 7443 9000 3 4 0 0 0 0 0
+p 6
+s 50 7450 commandTime=1d13 holdBreathScale=3e71cbce holdBreathTimer=160
+c 7456 9000 3 4 0 0 0 0 0
+c 7468 9000 3 4 0 0 0 0 0
+c 7480 9000 3 4 0 0 0 0 0
+p 6
+c 7492 9000 3 4 0 0 0 0 0
+s 51 7500 commandTime=1d38 holdBreathScale=3e4fbed7 holdBreathTimer=185
+c 7505 9000 3 4 0 0 0 0 0
+c 7517 9000 3 4 0 0 0 0 0
+p 6
+c 7529 9000 3 4 0 0 0 0 0
+c 7541 9000 3 4 0 0 0 0 0
+s 52 7550 commandTime=1d5d holdBreathScale=3e327d6e holdBreathTimer=1aa
+c 7552 9000 3 4 0 0 0 0 0
+p 6
+c 7564 9000 3 4 0 0 0 0 0
+c 7576 9000 3 4 0 0 0 0 0
+c 7588 9000 3 4 0 0 0 0 0
+p 6
+s 53 7600 commandTime=1da4 holdBreathScale=3e056e4f holdBreathTimer=1f1
+c 7600 9000 3 4 0 0 0 0 0
+c 7612 9000 3 4 0 0 0 0 0
+c 7624 9000 3 4 0 0 0 0 0
+p 6
+c 7636 9000 3 4 0 0 0 0 0
+s 54 7650 commandTime=1dc8 holdBreathScale=3de63fac holdBreathTimer=215
+c 7649 9000 3 4 0 0 0 0 0
+c 7661 9000 3 4 0 0 0 0 0
+p 6
+c 7673 9000 3 4 0 0 0 0 0
+c 7685 9000 3 4 0 0 0 0 0
+c 7697 9000 3 4 0 0 0 0 0
+p 6
+s 55 7700 commandTime=1e11 holdBreathScale=3daaaed9 holdBreathTimer=25e
+c 7709 9000 3 4 0 0 0 0 0
+c 7721 9000 3 4 0 0 0 0 0
+c 7733 9000 3 4 0 0 0 0 0
+p 6
+c 7745 9000 3 4 0 0 0 0 0
+s 56 7750 commandTime=1e35 holdBreathScale=3d9343fa holdBreathTimer=282
+c 7757 9000 3 4 0 0 0 0 0
+c 7769 9000 3 4 0 0 0 0 0
+p 6
+c 7781 9000 3 4 0 0 0 0 0
+c 7793 9000 3 4 0 0 0 0 0
+s 57 7800 commandTime=1e59 holdBreathScale=3d7e1f30 holdBreathTimer=2a6
+c 7806 9000 3 4 0 0 0 0 0
+p 6
+c 7818 9000 3 4 0 0 0 0 0
+c 7830 9000 3 4 0 0 0 0 0
+c 7842 9000 3 4 0 0 0 0 0
+p 6
+s 58 7850 commandTime=1ea2 holdBreathScale=3d3c614f holdBreathTimer=2ef
+c 7854 9000 3 4 0 0 0 0 0
+c 7866 9000 3 4 0 0 0 0 0
+c 7878 9000 3 4 0 0 0 0 0
+p 6
+c 7890 9000 3 4 0 0 0 0 0
+s 59 7900 commandTime=1ec6 holdBreathScale=3d2288dd holdBreathTimer=313
+c 7901 9000 3 4 0 0 0 0 0
+c 7913 9000 3 4 0 0 0 0 0
+p 6
+c 7925 9000 3 4 0 0 0 0 0
+c 7937 9000 3 4 0 0 0 0 0
+s 60 7950 commandTime=1ee9 holdBreathScale=3d0cd307 holdBreathTimer=336
+c 7950 9000 3 4 0 0 0 0 0
+p 6
+c 7962 9000 3 4 0 0 0 0 0
+c 7974 9000 3 4 0 0 0 0 0
+c 7986 9000 3 4 0 0 0 0 0
+p 6
+c 7998 9000 3 4 0 0 0 0 0
+s 61 8000 commandTime=1f32 holdBreathScale=3cd0c923 holdBreathTimer=37f
+c 8011 9000 3 4 0 0 0 0 0
+c 8023 9000 3 4 0 0 0 0 0
+p 6
+c 8035 9000 3 4 0 0 0 0 0
+c 8047 9000 3 4 0 0 0 0 0
+s 62 8050 commandTime=1f57 holdBreathScale=3cb3623a holdBreathTimer=3a4
+c 8060 9000 3 4 0 0 0 0 0
+p 6
+c 8072 9000 3 4 0 0 0 0 0
+c 8084 9000 3 4 0 0 0 0 0
+c 8096 9000 3 4 0 0 0 0 0
+p 6
+s 63 8100 commandTime=1fa0 holdBreathScale=3c84fa13 holdBreathTimer=3ed
+c 8108 9000 3 4 0 0 0 0 0
+c 8120 9000 3 4 0 0 0 0 0
+c 8132 9000 3 4 0 0 0 0 0
+p 6
+c 8144 9000 3 4 0 0 0 0 0
+s 64 8150 commandTime=1fc4 holdBreathScale=3c65771a holdBreathTimer=411
+c 8155 9000 3 4 0 0 0 0 0
+c 8167 9000 3 4 0 0 0 0 0
+p 6
+c 8179 9000 3 4 0 0 0 0 0
+c 8191 9000 3 4 0 0 0 0 0
+s 65 8200 commandTime=1fe7 holdBreathScale=3c46d096 holdBreathTimer=434
+c 8202 9000 3 4 0 0 0 0 0
+p 6
+c 8214 9000 3 4 0 0 0 0 0
+c 8226 9000 3 4 0 0 0 0 0
+c 8238 9000 3 4 0 0 0 0 0
+p 6
+s 66 8250 commandTime=202e holdBreathScale=3c149ff5 holdBreathTimer=47b
+c 8251 9000 3 4 0 0 0 0 0
+c 8263 9000 3 4 0 0 0 0 0
+c 8275 9000 3 4 0 0 0 0 0
+p 6
+c 8287 9000 3 4 0 0 0 0 0
+s 67 8300 commandTime=2053 holdBreathScale=3bff63cc holdBreathTimer=4a0
+c 8299 9000 3 4 0 0 0 0 0
+c 8311 9000 3 4 0 0 0 0 0
+p 6
+c 8323 9000 3 4 0 0 0 0 0
+c 8335 9000 3 4 0 0 0 0 0
+s 68 8350 commandTime=2077 holdBreathScale=3bdc59c8 holdBreathTimer=4c4
+c 8348 9000 3 4 0 0 0 0 0
+p 6
+c 8360 9000 3 4 0 0 0 0 0
+c 8372 9000 3 4 0 0 0 0 0
+c 8384 9000 3 4 0 0 0 0 0
+p 6
+c 8396 9000 3 4 0 0 0 0 0
+s 69 8400 commandTime=20c0 holdBreathScale=3ba3587c holdBreathTimer=50d
+c 8407 9000 3 4 0 0 0 0 0
+c 8419 9000 3 4 0 0 0 0 0
+p 6
+c 8431 9000 3 4 0 0 0 0 0
+c 8443 9000 3 4 0 0 0 0 0
+s 70 8450 commandTime=20e3 holdBreathScale=3b8d86ea holdBreathTimer=530
+c 8454 9000 3 4 0 0 0 0 0
+p 6
+c 8466 9000 3 4 0 0 0 0 0
+c 8478 9000 3 4 0 0 0 0 0
+c 8490 9000 3 4 0 0 0 0 0
+p 6
+s 71 8500 commandTime=212a holdBreathScale=3b539923 holdBreathTimer=577
+c 8503 9000 3 4 0 0 0 0 0
+c 8515 9000 3 4 0 0 0 0 0
+c 8527 9000 3 4 0 0 0 0 0
+p 6
+c 8539 9000 3 4 0 0 0 0 0
+s 72 8550 commandTime=214f holdBreathScale=3b35ccd4 holdBreathTimer=59c
+c 8551 9000 3 4 0 0 0 0 0
+c 8563 9000 3 4 0 0 0 0 0
+p 6
+c 8575 9000 3 4 0 0 0 0 0
+c 8587 9000 3 4 0 0 0 0 0
+s 73 8600 commandTime=2173 holdBreathScale=3b1cdb7d holdBreathTimer=5c0
+c 8598 9000 3 4 0 0 0 0 0
+p 6
+c 8610 9000 3 4 0 0 0 0 0
+c 8622 9000 3 4 0 0 0 0 0
+c 8634 9000 3 4 0 0 0 0 0
+p 6
+c 8646 9000 3 4 0 0 0 0 0
+s 74 8650 commandTime=21ba holdBreathScale=3aea84cc holdBreathTimer=607
+c 8657 9000 3 4 0 0 0 0 0
+c 8669 9000 3 4 0 0 0 0 0
+p 6
+c 8681 9000 3 4 0 0 0 0 0
+c 8693 9000 3 4 0 0 0 0 0
+s 75 8700 commandTime=21dd holdBreathScale=3acb317b holdBreathTimer=62a
+c 8706 9000 3 4 0 0 0 0 0
+p 6
+c 8718 9000 3 4 0 0 0 0 0
+c 8730 9000 3 4 0 0 0 0 0
+c 8742 9000 3 4 0 0 0 0 0
+p 6
+s 76 8750 commandTime=2226 holdBreathScale=3a96a079 holdBreathTimer=673
+c 8753 9000 3 4 0 0 0 0 0
+c 8765 9000 3 4 0 0 0 0 0
+c 8777 9000 3 4 0 0 0 0 0
+p 6
+c 8789 9000 3 4 0 0 0 0 0
+s 77 8800 commandTime=2249 holdBreathScale=3a8281d2 holdBreathTimer=696
+c 8801 9000 3 4 0 0 0 0 0
+c 8813 9000 3 4 0 0 0 0 0
+p 6
+c 8825 9000 3 4 0 0 0 0 0
+c 8837 9000 3 4 0 0 0 0 0
+s 78 8850 commandTime=226d holdBreathScale=0 holdBreathTimer=6ba
+c 8849 9000 3 4 0 0 0 0 0
+p 6
+c 8861 9000 3 4 0 0 0 0 0
+c 8873 9000 3 4 0 0 0 0 0
+c 8885 9000 3 4 0 0 0 0 0
+p 6
+s 79 8900 commandTime=22b5 holdBreathTimer=702
+c 8898 9000 3 4 0 0 0 0 0
+c 8910 9000 3 4 0 0 0 0 0
+c 8922 9000 3 4 0 0 0 0 0
+p 6
+c 8934 9000 3 4 0 0 0 0 0
+c 8946 9000 3 4 0 0 0 0 0
+s 80 8950 commandTime=22da holdBreathTimer=727
+c 8959 9000 3 4 0 0 0 0 0
+p 6
+c 8971 9000 3 4 0 0 0 0 0
+c 8983 9000 3 4 0 0 0 0 0
+c 8995 9000 3 4 0 0 0 0 0
+p 6
+s 81 9000 commandTime=2323 holdBreathTimer=770
+c 9006 9000 3 4 0 0 0 0 0
+c 9018 9000 3 4 0 0 0 0 0
+c 9030 9000 3 4 0 0 0 0 0
+p 6
+c 9042 9000 3 4 0 0 0 0 0
+s 82 9050 commandTime=2346 holdBreathTimer=793
+c 9053 9000 3 4 0 0 0 0 0
+c 9065 9000 3 4 0 0 0 0 0
+p 6
+c 9077 9000 3 4 0 0 0 0 0
+c 9089 9000 3 4 0 0 0 0 0
+s 83 9100 commandTime=2369 holdBreathTimer=7b6
+c 9101 1000 3 4 0 0 0 0 0
+p 6
+c 9113 1000 3 4 0 0 0 0 0
+c 9125 1000 3 4 0 0 0 0 0
+c 9137 1000 3 4 0 0 0 0 0
+p 6
+s 84 9150 commandTime=23b1 pm_flags=800140 holdBreathScale=3f14ed02 holdBreathTimer=79e
+c 9148 1000 3 4 0 0 0 0 0
+c 9160 1000 3 4 0 0 0 0 0
+c 9172 1000 3 4 0 0 0 0 0
+p 6
+c 9184 1000 3 4 0 0 0 0 0
+c 9196 1000 3 4 0 0 0 0 0
+s 85 9200 commandTime=23d4 holdBreathScale=3f67443e holdBreathTimer=77b
+c 9207 1000 3 4 0 0 0 0 0
+p 6
+c 9219 1000 3 4 0 0 0 0 0
+c 9231 1000 3 4 0 0 0 0 0
+c 9243 1000 3 4 0 0 0 0 0
+p 6
+s 86 9250 commandTime=241b holdBreathScale=3fae7ca6 holdBreathTimer=734
+c 9254 1000 3 4 0 0 0 0 0
+c 9266 1000 3 4 0 0 0 0 0
+c 9278 1000 3 4 0 0 0 0 0
+p 6
+c 9290 1000 3 4 0 0 0 0 0
+s 87 9300 commandTime=243e holdBreathScale=3fc265da holdBreathTimer=711
+c 9301 1000 3 4 0 0 0 0 0
+c 9313 1000 3 4 0 0 0 0 0
+p 6
+c 9325 1000 3 4 0 0 0 0 0
+c 9337 1000 3 4 0 0 0 0 0
+s 88 9350 commandTime=2461 holdBreathScale=3fd1db11 holdBreathTimer=6ee
+c 9349 1000 3 4 0 0 0 0 0
+p 6
+c 9361 1000 3 4 0 0 0 0 0
+c 9373 1000 3 4 0 0 0 0 0
+c 9385 1000 3 4 0 0 0 0 0
+p 6
+s 89 9400 commandTime=24a9 holdBreathScale=3fe72d62 holdBreathTimer=6a6
+c 9398 1000 3 4 0 0 0 0 0
+c 9410 1000 3 4 0 0 0 0 0
+c 9422 1000 3 4 0 0 0 0 0
+p 6
+c 9434 1000 3 4 0 0 0 0 0
+c 9446 1000 3 4 0 0 0 0 0
+s 90 9450 commandTime=24ce holdBreathScale=3fee0e9e holdBreathTimer=681
+c 9459 1000 3 4 0 0 0 0 0
+p 6
+c 9471 1000 3 4 0 0 0 0 0
+c 9483 1000 3 4 0 0 0 0 0
+c 9495 1000 3 4 0 0 0 0 0
+p 6
+s 91 9500 commandTime=2517 holdBreathScale=3ff60d60 holdBreathTimer=638
+c 9506 1000 3 4 0 0 0 0 0
+c 9518 1000 3 4 0 0 0 0 0
+c 9530 1000 3 4 0 0 0 0 0
+p 6
+c 9542 1000 3 4 0 0 0 0 0
+s 92 9550 commandTime=253a holdBreathScale=3ff7f1ee holdBreathTimer=615
+c 9553 1000 3 4 0 0 0 0 0
+c 9565 1000 3 4 0 0 0 0 0
+p 6
+c 9577 1000 3 4 0 0 0 0 0
+c 9589 1000 3 4 0 0 0 0 0
+s 93 9600 commandTime=255d holdBreathScale=3ff8e8fa holdBreathTimer=5f2
+c 9601 1000 3 4 0 0 0 0 0
+p 6
+c 9613 1000 3 4 0 0 0 0 0
+c 9625 1000 3 4 0 0 0 0 0
+c 9637 1000 3 4 0 0 0 0 0
+p 6
+s 94 9650 commandTime=25a5 holdBreathScale=3ff8a39c holdBreathTimer=5aa
+c 9650 1000 3 4 0 0 0 0 0
+c 9662 1000 3 4 0 0 0 0 0
+c 9674 1000 3 4 0 0 0 0 0
+p 6
+c 9686 1000 3 4 0 0 0 0 0
+s 95 9700 commandTime=25ca holdBreathScale=3ff7b19a holdBreathTimer=585
+c 9699 1000 3 4 0 0 0 0 0
+c 9711 1000 3 4 0 0 0 0 0
+p 6
+c 9723 1000 3 4 0 0 0 0 0
+c 9735 1000 3 4 0 0 0 0 0
+c 9747 1000 3 4 0 0 0 0 0
+p 6
+s 96 9750 commandTime=2613 holdBreathScale=3ff4aa95 holdBreathTimer=53c
+c 9758 1000 3 4 0 0 0 0 0
+c 9770 1000 3 4 0 0 0 0 0
+c 9782 1000 3 4 0 0 0 0 0
+p 6
+c 9794 1000 3 4 0 0 0 0 0
+s 97 9800 commandTime=2636 holdBreathScale=3ff2d06f holdBreathTimer=519
+c 9807 1000 3 4 0 0 0 0 0
+c 9819 1000 3 4 0 0 0 0 0
+p 6
+c 9831 1000 3 4 0 0 0 0 0
+c 9843 1000 3 4 0 0 0 0 0
+s 98 9850 commandTime=265b holdBreathScale=3ff0a2a8 holdBreathTimer=4f4
+c 9856 1000 3 4 0 0 0 0 0
+p 6
+c 9868 1000 3 4 0 0 0 0 0
+c 9880 1000 3 4 0 0 0 0 0
+c 9892 1000 3 4 0 0 0 0 0
+p 6
+s 99 9900 commandTime=26a4 holdBreathScale=3febdeee holdBreathTimer=4ab
+c 9904 1000 3 4 0 0 0 0 0
+c 9916 1000 3 4 0 0 0 0 0
+c 9928 1000 3 4 0 0 0 0 0
+p 6
+c 9940 1000 3 4 0 0 0 0 0
+s 100 9950 commandTime=26c8 holdBreathScale=3fe95a72 holdBreathTimer=487
+c 9953 1000 3 4 0 0 0 0 0
+c 9965 1000 3 4 0 0 0 0 0
+p 6
+c 9977 1000 3 4 0 0 0 0 0
+c 9989 1000 3 4 0 0 0 0 0
+s 101 10000 commandTime=26ed holdBreathScale=3fe6ac73 holdBreathTimer=462
+c 10002 1000 3 4 0 0 0 0 0
+p 6
+c 10014 1000 3 4 0 0 0 0 0
+c 10026 1000 3 4 0 0 0 0 0
+c 10038 1000 3 4 0 0 0 0 0
+p 6
+s 102 10050 commandTime=2736 holdBreathScale=3fe1341b holdBreathTimer=419
+c 10051 1000 3 4 0 0 0 0 0
+c 10063 1000 3 4 0 0 0 0 0
+c 10075 1000 3 4 0 0 0 0 0
+p 6
+c 10087 1000 3 4 0 0 0 0 0
+c 10099 1000 3 4 0 0 0 0 0
+s 103 10100 commandTime=275b holdBreathScale=3fde5b7f holdBreathTimer=3f4
+c 10112 1000 3 4 0 0 0 0 0
+p 6
+c 10124 1000 3 4 0 0 0 0 0
+c 10136 1000 3 4 0 0 0 0 0
+s 104 10150 commandTime=2780 holdBreathScale=3fdb79d1 holdBreathTimer=3cf
+c 10147 1000 3 4 0 0 0 0 0
+p 6
+c 10159 1000 3 4 0 0 0 0 0
+c 10171 1000 3 4 0 0 0 0 0
+c 10183 1000 3 4 0 0 0 0 0
+p 6
+c 10195 1000 3 4 0 0 0 0 0
+s 105 10200 commandTime=27c7 holdBreathScale=3fd5e3d6 holdBreathTimer=388
+c 10208 1000 3 4 0 0 0 0 0
+c 10220 1000 3 4 0 0 0 0 0
+p 6
+c 10232 1000 3 4 0 0 0 0 0
+c 10244 1000 3 4 0 0 0 0 0
+s 106 10250 commandTime=27ec holdBreathScale=3fd2f0e3 holdBreathTimer=363
+c 10257 1000 3 4 0 0 0 0 0
+p 6
+c 10269 1000 3 4 0 0 0 0 0
+c 10281 1000 3 4 0 0 0 0 0
+c 10293 1000 3 4 0 0 0 0 0
+p 6
+s 107 10300 commandTime=2835 holdBreathScale=3fcd176a holdBreathTimer=31a
+c 10304 1000 3 4 0 0 0 0 0
+c 10316 1000 3 4 0 0 0 0 0
+c 10328 1000 3 4 0 0 0 0 0
+p 6
+c 10340 1000 3 4 0 0 0 0 0
+s 108 10350 commandTime=2858 holdBreathScale=3fca47de holdBreathTimer=2f7
+c 10353 1000 3 4 0 0 0 0 0
+c 10365 1000 3 4 0 0 0 0 0
+p 6
+c 10377 1000 3 4 0 0 0 0 0
+c 10389 1000 3 4 0 0 0 0 0
+s 109 10400 commandTime=287d holdBreathScale=3fc74a4a holdBreathTimer=2d2
+c 10401 1000 3 4 0 0 0 0 0
+p 6
+c 10413 1000 3 4 0 0 0 0 0
+c 10425 1000 3 4 0 0 0 0 0
+c 10437 1000 3 4 0 0 0 0 0
+p 6
+s 110 10450 commandTime=28c5 holdBreathScale=3fc177dd holdBreathTimer=28a
+c 10448 1000 3 4 0 0 0 0 0
+c 10460 1000 3 4 0 0 0 0 0
+c 10472 1000 3 4 0 0 0 0 0
+p 6
+c 10484 1000 3 4 0 0 0 0 0
+c 10496 1000 3 4 0 0 0 0 0
+s 111 10500 commandTime=28e8 holdBreathScale=3fbea300 holdBreathTimer=267
+c 10509 1000 3 4 0 0 0 0 0
+p 6
+c 10521 1000 3 4 0 0 0 0 0
+c 10533 1000 3 4 0 0 0 0 0
+c 10545 1000 3 4 0 0 0 0 0
+p 6
+s 112 10550 commandTime=2931 holdBreathScale=3fb8b4ba holdBreathTimer=21e
+c 10556 1000 3 4 0 0 0 0 0
+c 10568 1000 3 4 0 0 0 0 0
+c 10580 1000 3 4 0 0 0 0 0
+p 6
+c 10592 1000 3 4 0 0 0 0 0
+s 113 10600 commandTime=2954 holdBreathScale=3fb5de1e holdBreathTimer=1fb
+c 10605 1000 3 4 0 0 0 0 0
+c 10617 1000 3 4 0 0 0 0 0
+p 6
+c 10629 1000 3 4 0 0 0 0 0
+c 10641 1000 3 4 0 0 0 0 0
+s 114 10650 commandTime=2979 holdBreathScale=3fb2da8d holdBreathTimer=1d6
+c 10653 1000 3 4 0 0 0 0 0
+p 6
+c 10665 1000 3 4 0 0 0 0 0
+c 10677 1000 3 4 0 0 0 0 0
+c 10689 1000 3 4 0 0 0 0 0
+p 6
+s 115 10700 commandTime=29c1 holdBreathScale=3facffca holdBreathTimer=18e
+c 10700 1000 3 4 0 0 0 0 0
+c 10712 1000 3 4 0 0 0 0 0
+c 10724 1000 3 4 0 0 0 0 0
+p 6
+c 10736 1000 3 4 0 0 0 0 0
+c 10748 1000 3 4 0 0 0 0 0
+s 116 10750 commandTime=29e4 holdBreathScale=3faa280c holdBreathTimer=16b
+c 10760 1000 3 4 0 0 0 0 0
+p 6
+c 10772 1000 3 4 0 0 0 0 0
+c 10784 1000 3 4 0 0 0 0 0
+c 10796 1000 3 4 0 0 0 0 0
+p 6
+s 117 10800 commandTime=2a2c holdBreathScale=3fa44b98 holdBreathTimer=123
+c 10807 1000 3 4 0 0 0 0 0
+c 10819 1000 3 4 0 0 0 0 0
+c 10831 1000 3 4 0 0 0 0 0
+p 6
+c 10843 1000 3 4 0 0 0 0 0
+s 118 10850 commandTime=2a4f holdBreathScale=3fa17343 holdBreathTimer=100
+c 10855 1000 3 4 0 0 0 0 0
+c 10867 1000 3 4 0 0 0 0 0
+p 6
+c 10879 1000 3 4 0 0 0 0 0
+c 10891 1000 3 4 0 0 0 0 0
+s 119 10900 commandTime=2a73 holdBreathScale=3f9e8499 holdBreathTimer=dc
+c 10903 1000 3 4 0 0 0 0 0
+p 6
+c 10915 1000 3 4 0 0 0 0 0
+c 10927 1000 3 4 0 0 0 0 0
+c 10939 1000 3 4 0 0 0 0 0
+p 6
+s 120 10950 commandTime=2abb holdBreathScale=3f98a743 holdBreathTimer=94
+c 10952 1000 3 4 0 0 0 0 0
+c 10964 1000 3 4 0 0 0 0 0
+c 10976 1000 3 4 0 0 0 0 0
+p 6
+c 10988 1000 3 4 0 0 0 0 0
+s 121 11000 commandTime=2ae0 holdBreathScale=3f95a255 holdBreathTimer=6f
+c 11000 1000 3 4 0 0 0 0 0
+c 11012 1000 3 4 0 0 0 0 0
+p 6
+c 11024 1000 3 4 0 0 0 0 0
+c 11036 1000 3 4 0 0 0 0 0
+s 122 11050 commandTime=2b04 holdBreathScale=3f92b3ef holdBreathTimer=4b
+c 11049 1000 3 4 0 0 0 0 0
+p 6
+c 11061 1000 3 4 0 0 0 0 0
+c 11073 1000 3 4 0 0 0 0 0
+c 11085 1000 3 4 0 0 0 0 0
+p 6
+c 11097 1000 3 4 0 0 0 0 0
+s 123 11100 commandTime=2b4d holdBreathScale=3f8cc0d5 holdBreathTimer=2
+c 11108 1000 3 4 0 0 0 0 0
+c 11120 1000 3 4 0 0 0 0 0
+p 6
+c 11132 1000 3 4 0 0 0 0 0
+c 11144 1000 3 4 0 0 0 0 0
+s 124 11150 commandTime=2b70 holdBreathScale=3f8a420e holdBreathTimer=0
+c 11157 1000 3 4 0 0 0 0 0
+p 6
+c 11169 1000 3 4 0 0 0 0 0
+c 11181 1000 3 4 0 0 0 0 0
+c 11193 1000 3 4 0 0 0 0 0
+p 6
+s 125 11200 commandTime=2bb9 holdBreathScale=3f868262
+c 11205 1000 3 4 0 0 0 0 0
+c 11217 1000 3 4 0 0 0 0 0
+c 11229 1000 3 4 0 0 0 0 0
+p 6
+c 11241 1000 3 4 0 0 0 0 0
+s 126 11250 commandTime=2bdd holdBreathScale=3f8533bd
+c 11253 1000 3 4 0 0 0 0 0
+c 11265 1000 3 4 0 0 0 0 0
+p 6
+c 11277 1000 3 4 0 0 0 0 0
+c 11289 1000 3 4 0 0 0 0 0
+s 127 11300 commandTime=2c01 holdBreathScale=3f84284c
+c 11300 1000 3 4 0 0 0 0 0
+p 6
+c 11312 1000 3 4 0 0 0 0 0
+c 11324 1000 3 4 0 0 0 0 0
+c 11336 1000 3 4 0 0 0 0 0
+p 6
+s 128 11350 commandTime=2c48 holdBreathScale=3f82ac25
+c 11348 1000 3 4 0 0 0 0 0
+c 11360 1000 3 4 0 0 0 0 0
+c 11372 1000 3 4 0 0 0 0 0
+p 6
+c 11384 1000 3 4 0 0 0 0 0
+c 11396 1000 3 4 0 0 0 0 0
+s 129 11400 commandTime=2c6c holdBreathScale=3f8222c1
+c 11407 1000 3 4 0 0 0 0 0
+p 6
+c 11419 1000 3 4 0 0 0 0 0
+c 11431 1000 3 4 0 0 0 0 0
+c 11443 1000 3 4 0 0 0 0 0
+p 6
+s 130 11450 commandTime=2cb3 holdBreathScale=3f815f76
+c 11456 1000 3 4 0 0 0 0 0
+c 11468 1000 3 4 0 0 0 0 0
+c 11480 1000 3 4 0 0 0 0 0
+p 6
+c 11492 1000 3 4 0 0 0 0 0
+s 131 11500 commandTime=2cd8 holdBreathScale=3f811710
+c 11504 1000 3 4 0 0 0 0 0
+c 11516 1000 3 4 0 0 0 0 0
+p 6
+c 11528 1000 3 4 0 0 0 0 0
+c 11540 1000 3 4 0 0 0 0 0
+s 132 11550 commandTime=2cfc holdBreathScale=3f80df05
+c 11553 1000 3 4 0 0 0 0 0
+p 6
+c 11565 1000 3 4 0 0 0 0 0
+c 11577 1000 3 4 0 0 0 0 0
+c 11589 1000 3 4 0 0 0 0 0
+p 6
+s 133 11600 commandTime=2d45 holdBreathScale=3f808d84
+c 11602 9000 3 4 0 0 0 0 0
+c 11614 9000 3 4 0 0 0 0 0
+c 11626 9000 3 4 0 0 0 0 0
+p 6
+c 11638 9000 3 4 0 0 0 0 0
+s 134 11650 commandTime=2d6a pm_flags=804140 holdBreathScale=3f5ce625 holdBreathTimer=25
+c 11649 9000 3 4 0 0 0 0 0
+c 11661 9000 3 4 0 0 0 0 0
+p 6
+c 11673 9000 3 4 0 0 0 0 0
+c 11685 9000 3 4 0 0 0 0 0
+s 135 11700 commandTime=2d8d holdBreathScale=3f3f648d holdBreathTimer=48
+c 11698 9000 3 4 0 0 0 0 0
+p 6
+c 11710 9000 3 4 0 0 0 0 0
+c 11722 9000 3 4 0 0 0 0 0
+c 11734 9000 3 4 0 0 0 0 0
+p 6
+c 11746 9000 3 4 0 0 0 0 0
+s 136 11750 commandTime=2dd6 holdBreathScale=3f0de111 holdBreathTimer=91
+c 11757 9000 3 4 0 0 0 0 0
+c 11769 9000 3 4 0 0 0 0 0
+p 6
+c 11781 9000 3 4 0 0 0 0 0
+c 11793 9000 3 4 0 0 0 0 0
+s 137 11800 commandTime=2df9 holdBreathScale=3ef5db14 holdBreathTimer=b4
+c 11804 9000 3 4 0 0 0 0 0
+p 6
+c 11816 9000 3 4 0 0 0 0 0
+c 11828 9000 3 4 0 0 0 0 0
+c 11840 9000 3 4 0 0 0 0 0
+p 6
+s 138 11850 commandTime=2e40 holdBreathScale=3eb7ca5e holdBreathTimer=fb
+c 11852 9000 3 4 0 0 0 0 0
+c 11864 9000 3 4 0 0 0 0 0
+c 11876 9000 3 4 0 0 0 0 0
+p 6
+c 11888 9000 3 4 0 0 0 0 0
+s 139 11900 commandTime=2e64 holdBreathScale=3e9e9320 holdBreathTimer=11f
+c 11902 9000 3 4 0 0 0 0 0
+c 11915 9000 3 4 0 0 0 0 0
+p 6
+c 11927 9000 3 4 0 0 0 0 0
+c 11939 9000 3 4 0 0 0 0 0
+s 140 11950 commandTime=2e8b holdBreathScale=3e871945 holdBreathTimer=146
+c 11953 9000 3 4 0 0 0 0 0
+p 6
+c 11965 9000 3 4 0 0 0 0 0
+c 11976 9000 3 4 0 0 0 0 0
+c 11987 9000 3 4 0 0 0 0 0
+p 6
+s 141 12000 commandTime=2ed3 holdBreathScale=3e4921a1 holdBreathTimer=18e
+c 11999 9000 3 4 0 0 0 0 0
+c 12012 9000 3 4 0 0 0 0 0
+c 12024 9000 3 4 0 0 0 0 0
+p 6
+c 12037 9000 3 4 0 0 0 0 0
+s 142 12050 commandTime=2ef8 holdBreathScale=3e2cceaa holdBreathTimer=1b3
+c 12049 9000 3 4 0 0 0 0 0
+c 12062 9000 3 4 0 0 0 0 0
+p 6
+c 12074 9000 3 4 0 0 0 0 0
+c 12085 9000 3 4 0 0 0 0 0
+c 12097 9000 3 4 0 0 0 0 0
+p 6
+s 143 12100 commandTime=2f41 holdBreathScale=3e00197a holdBreathTimer=1fc
+c 12109 9000 3 4 0 0 0 0 0
+c 12120 9000 3 4 0 0 0 0 0
+c 12134 9000 3 4 0 0 0 0 0
+p 6
+c 12148 9000 3 4 0 0 0 0 0
+s 144 12150 commandTime=2f66 holdBreathScale=3ddc1cc1 holdBreathTimer=221
+c 12161 9000 3 4 0 0 0 0 0
+c 12173 9000 3 4 0 0 0 0 0
+p 6
+c 12185 9000 3 4 0 0 0 0 0
+c 12197 9000 3 4 0 0 0 0 0
+s 145 12200 commandTime=2f8d holdBreathScale=3dbb86ac holdBreathTimer=248
+c 12209 9000 3 4 0 0 0 0 0
+p 6
+c 12221 9000 3 4 0 0 0 0 0
+c 12234 9000 3 4 0 0 0 0 0
+c 12246 9000 3 4 0 0 0 0 0
+p 6
+s 146 12250 commandTime=2fd6 holdBreathScale=3d8b0345 holdBreathTimer=291
+c 12257 9000 3 4 0 0 0 0 0
+c 12269 9000 3 4 0 0 0 0 0
+c 12282 9000 3 4 0 0 0 0 0
+p 6
+c 12293 9000 3 4 0 0 0 0 0
+s 147 12300 commandTime=2ffa holdBreathScale=3d6fe068 holdBreathTimer=2b5
+c 12305 9000 3 4 0 0 0 0 0
+c 12318 9000 3 4 0 0 0 0 0
+p 6
+c 12330 9000 3 4 0 0 0 0 0
+c 12341 9000 3 4 0 0 0 0 0
+s 148 12350 commandTime=301e holdBreathScale=3d4ef653 holdBreathTimer=2d9
+c 12354 9000 3 4 0 0 0 0 0
+p 6
+c 12367 9000 3 4 0 0 0 0 0
+c 12379 9000 3 4 0 0 0 0 0
+c 12392 9000 3 4 0 0 0 0 0
+p 6
+s 149 12400 commandTime=3068 holdBreathScale=3d18c5ff holdBreathTimer=323
+c 12405 9000 3 4 0 0 0 0 0
+c 12417 9000 3 4 0 0 0 0 0
+c 12429 9000 3 4 0 0 0 0 0
+p 6
+c 12442 9000 3 4 0 0 0 0 0
+s 150 12450 commandTime=308d holdBreathScale=3d034261 holdBreathTimer=348
+c 12454 9000 3 4 0 0 0 0 0
+c 12465 9000 3 4 0 0 0 0 0
+p 6
+c 12477 9000 3 4 0 0 0 0 0
+c 12489 9000 3 4 0 0 0 0 0
+s 151 12500 commandTime=30b1 holdBreathScale=3ce27f56 holdBreathTimer=36c
+c 12501 9000 3 4 0 0 0 0 0
+p 6
+c 12513 9000 3 4 0 0 0 0 0
+c 12525 9000 3 4 0 0 0 0 0
+c 12537 9000 3 4 0 0 0 0 0
+p 6
+c 12549 9000 3 4 0 0 0 0 0
+s 152 12550 commandTime=30f9 holdBreathScale=3ca89c52 holdBreathTimer=3b4
+c 12562 9000 3 4 0 0 0 0 0
+c 12574 9000 3 4 0 0 0 0 0
+p 6
+c 12586 9000 3 4 0 0 0 0 0
+s 153 12600 commandTime=311e holdBreathScale=3c90ddc1 holdBreathTimer=3d9
+c 12598 9000 3 4 0 0 0 0 0
+c 12610 9001 3 4 0 0 0 0 0
+p 6
+c 12622 9001 3 4 0 0 0 0 0
+c 12634 9001 3 4 0 0 0 0 0
+c 12646 9001 3 4 0 0 0 0 0
+p 6
+s 154 12650 commandTime=3166 eventSequence=2 weaponTime=126 pm_flags=800140 events[1]=9e weapAnim=205 torsoTimer=543 torsoAnim=11d eFlags=42 holdBreathScale=3eae426b weaponstate=3 weaponrechamber[0]=8 C[2]=4
+e 72 pos.trBase[1]=44a06000 pos.trBase[0]=c3958000 pos.trBase[2]=42b00000 eType=c1 surfType=10 eventParm=68 scale=68
+c 12659 9001 3 4 0 0 0 0 0
+c 12671 9001 3 4 0 0 0 0 0
+c 12683 9001 3 4 0 0 0 0 0
+p 6
+c 12695 9001 3 4 0 0 0 0 0
+s 155 12700 commandTime=318b weaponTime=101 torsoTimer=51e holdBreathScale=3f1a1ee5 holdBreathTimer=3b4
+c 12707 9000 3 4 0 0 0 0 0
+c 12719 9000 3 4 0 0 0 0 0
+p 6
+c 12731 9000 3 4 0 0 0 0 0
+c 12743 9000 3 4 0 0 0 0 0
+s 156 12750 commandTime=31af weaponTime=dd torsoTimer=4fa eFlags=2 holdBreathScale=3f4cca37 holdBreathTimer=390
+c 12756 9000 3 4 0 0 0 0 0
+p 6
+c 12768 9000 3 4 0 0 0 0 0
+c 12780 9000 3 4 0 0 0 0 0
+c 12792 9000 3 4 0 0 0 0 0
+p 6
+s 157 12800 commandTime=31f8 weaponTime=94 torsoTimer=4b1 holdBreathScale=3f898d64 holdBreathTimer=347
+c 12805 9000 3 4 0 0 0 0 0
+c 12817 9000 3 4 0 0 0 0 0
+c 12829 9000 3 4 0 0 0 0 0
+p 6
+c 12841 9000 3 4 0 0 0 0 0
+s 158 12850 commandTime=321d weaponTime=6f torsoTimer=48c holdBreathScale=3f953cdf holdBreathTimer=322
+c 12854 9000 3 4 0 0 0 0 0
+c 12866 9000 3 4 0 0 0 0 0
+p 6
+c 12878 9000 3 4 0 0 0 0 0
+c 12890 9000 3 4 0 0 0 0 0
+s 159 12900 commandTime=3242 weaponTime=4a torsoTimer=467 holdBreathScale=3f9de51b holdBreathTimer=2fd
+c 12903 9000 3 4 0 0 0 0 0
+p 6
+c 12915 9000 3 4 0 0 0 0 0
+c 12927 9000 3 4 0 0 0 0 0
+c 12939 9000 3 4 0 0 0 0 0
+p 6
+s 160 12950 commandTime=328b weaponTime=1 torsoTimer=41e holdBreathScale=3fa864fd holdBreathTimer=2b4
+e- 72
+c 12951 9000 3 4 0 0 0 0 0
+c 12963 9000 3 4 0 0 0 0 0
+c 12975 9000 3 4 0 0 0 0 0
+p 6
+c 12987 9000 3 4 0 0 0 0 0
+s 161 13000 commandTime=32af eventSequence=3 weaponTime=3dc events[2]=a1 weapAnim=207 torsoTimer=3fa holdBreathScale=3fab331c weaponstate=4 weaponDelay=27d holdBreathTimer=290
+c 13000 9000 3 4 0 0 0 0 0
+c 13012 9000 3 4 0 0 0 0 0
+p 6
+c 13024 9000 3 4 0 0 0 0 0
+c 13036 9000 3 4 0 0 0 0 0
+c 13048 9000 3 4 0 0 0 0 0
+p 6
+s 162 13050 commandTime=32f8 weaponTime=393 torsoTimer=3b1 holdBreathScale=3fad97c4 weaponDelay=234 holdBreathTimer=247
+c 13061 9000 3 4 0 0 0 0 0
+c 13073 9000 3 4 0 0 0 0 0
+c 13085 9000 3 4 0 0 0 0 0
+p 6
+c 13097 9000 3 4 0 0 0 0 0
+s 163 13100 commandTime=331d weaponTime=36e torsoTimer=38c holdBreathScale=3fad8f1d weaponDelay=20f holdBreathTimer=222
+c 13110 9000 3 4 0 0 0 0 0
+c 13122 9000 3 4 0 0 0 0 0
+p 6
+c 13134 9000 3 4 0 0 0 0 0
+s 164 13150 commandTime=3342 weaponTime=349 torsoTimer=367 holdBreathScale=3face935 weaponDelay=1ea holdBreathTimer=1fd
+c 13147 9000 3 4 0 0 0 0 0
+c 13159 9000 3 4 0 0 0 0 0
+p 6
+c 13171 9000 3 4 0 0 0 0 0
+c 13183 9000 3 4 0 0 0 0 0
+c 13195 9000 3 4 0 0 0 0 0
+p 6
+s 165 13200 commandTime=338b weaponTime=300 torsoTimer=31e holdBreathScale=3faa4d94 weaponDelay=1a1 holdBreathTimer=1b4
+c 13208 9000 3 4 0 0 0 0 0
+c 13220 9000 3 4 0 0 0 0 0
+c 13232 9000 3 4 0 0 0 0 0
+p 6
+c 13244 9000 3 4 0 0 0 0 0
+s 166 13250 commandTime=33b0 weaponTime=2db torsoTimer=2f9 holdBreathScale=3fa87afe weaponDelay=17c holdBreathTimer=18f
+c 13255 9000 3 4 0 0 0 0 0
+c 13267 9000 3 4 0 0 0 0 0
+p 6
+c 13279 9000 3 4 0 0 0 0 0
+c 13291 9000 3 4 0 0 0 0 0
+s 167 13300 commandTime=33d3 weaponTime=2b8 torsoTimer=2d6 holdBreathScale=3fa689c0 weaponDelay=159 holdBreathTimer=16c
+c 13303 9000 3 4 0 0 0 0 0
+p 6
+c 13315 9000 3 4 0 0 0 0 0
+c 13327 9000 3 4 0 0 0 0 0
+c 13339 9000 3 4 0 0 0 0 0
+p 6
+s 168 13350 commandTime=341b weaponTime=270 torsoTimer=28e holdBreathScale=3fa20383 weaponDelay=111 holdBreathTimer=124
+c 13350 9000 3 4 0 0 0 0 0
+c 13362 9000 3 4 0 0 0 0 0
+c 13374 9000 3 4 0 0 0 0 0
+p 6
+c 13386 9000 3 4 0 0 0 0 0
+c 13398 9000 3 4 0 0 0 0 0
+s 169 13400 commandTime=343e weaponTime=24d torsoTimer=26b holdBreathScale=3f9fa189 weaponDelay=ee holdBreathTimer=101
+c 13411 9000 3 4 0 0 0 0 0
+p 6
+c 13423 9000 3 4 0 0 0 0 0
+c 13435 9000 3 4 0 0 0 0 0
+c 13447 9000 3 4 0 0 0 0 0
+p 6
+s 170 13450 commandTime=3487 weaponTime=204 torsoTimer=222 holdBreathScale=3f9a5fdd weaponDelay=a5 holdBreathTimer=b8
+c 13460 9000 3 4 0 0 0 0 0
+c 13472 9000 3 4 0 0 0 0 0
+c 13484 9000 3 4 0 0 0 0 0
+p 6
+s 171 13500 commandTime=34ac weaponTime=1df torsoTimer=1fd holdBreathScale=3f979acf weaponDelay=80 holdBreathTimer=93
+c 13497 9000 3 4 0 0 0 0 0
+c 13509 9000 3 4 0 0 0 0 0
+c 13521 9000 3 4 0 0 0 0 0
+p 6
+c 13533 9000 3 4 0 0 0 0 0
+c 13545 9000 3 4 0 0 0 0 0
+s 172 13550 commandTime=34d1 weaponTime=1ba torsoTimer=1d8 holdBreathScale=3f94c8e2 weaponDelay=5b holdBreathTimer=6e
+c 13556 9000 3 4 0 0 0 0 0
+p 6
+c 13568 9000 3 4 0 0 0 0 0
+c 13580 9000 3 4 0 0 0 0 0
+c 13592 9000 3 4 0 0 0 0 0
+p 6
+s 173 13600 commandTime=3518 weaponTime=173 torsoTimer=191 holdBreathScale=3f8f4834 weaponDelay=14 holdBreathTimer=27
+c 13603 9000 3 4 0 0 0 0 0
+c 13615 9000 3 4 0 0 0 0 0
+c 13627 9000 3 4 0 0 0 0 0
+p 6
+c 13639 9000 3 4 0 0 0 0 0
+s 174 13650 commandTime=353b eventSequence=4 weaponTime=150 events[3]=a2 torsoTimer=16e holdBreathScale=3f8c883f weaponDelay=0 holdBreathTimer=4 weaponrechamber[0]=0
+c 13651 9000 3 4 0 0 0 0 0
+c 13663 9000 3 4 0 0 0 0 0
+p 6
+c 13675 9000 3 4 0 0 0 0 0
+c 13687 9000 3 4 0 0 0 0 0
+s 175 13700 commandTime=355f weaponTime=12c pm_flags=804140 torsoTimer=14a holdBreathScale=3f7d1822 holdBreathTimer=18
+c 13700 9000 3 4 0 0 0 0 0
+p 6
+c 13712 9000 3 4 0 0 0 0 0
+c 13724 9000 3 4 0 0 0 0 0
+c 13736 9000 3 4 0 0 0 0 0
+p 6
+c 13748 9000 3 4 0 0 0 0 0
+s 176 13750 commandTime=35a8 weaponTime=e3 torsoTimer=101 holdBreathScale=3f3b9e4e holdBreathTimer=61
+c 13759 9000 3 4 0 0 0 0 0
+c 13771 9000 3 4 0 0 0 0 0
+p 6
+c 13783 9000 3 4 0 0 0 0 0
+c 13795 9000 3 4 0 0 0 0 0
+s 177 13800 commandTime=35cb weaponTime=c0 torsoTimer=de holdBreathScale=3f228ebc holdBreathTimer=84
+c 13807 9000 3 4 0 0 0 0 0
+p 6
+c 13819 9000 3 4 0 0 0 0 0
+c 13831 9000 3 4 0 0 0 0 0
+c 13843 9000 3 4 0 0 0 0 0
+p 6
+s 178 13850 commandTime=3613 weaponTime=78 torsoTimer=96 holdBreathScale=3ef20635 holdBreathTimer=cc
+c 13855 9000 3 4 0 0 0 0 0
+c 13867 9000 3 4 0 0 0 0 0
+c 13879 9000 3 4 0 0 0 0 0
+p 6
+c 13892 9000 3 4 0 0 0 0 0
+s 179 13900 commandTime=3637 weaponTime=54 torsoTimer=72 holdBreathScale=3ed0d1a1 holdBreathTimer=f0
+c 13903 9000 3 4 0 0 0 0 0
+c 13916 9000 3 4 0 0 0 0 0
+p 6
+c 13929 9000 3 4 0 0 0 0 0
+c 13941 9000 3 4 0 0 0 0 0
+s 180 13950 commandTime=365c weaponTime=2f torsoTimer=4d holdBreathScale=3eb368b6 holdBreathTimer=115
+c 13952 9000 3 4 0 0 0 0 0
+p 6
+c 13964 9000 3 4 0 0 0 0 0
+c 13976 9000 3 4 0 0 0 0 0
+c 13988 9000 3 4 0 0 0 0 0
+p 6
+s 181 14000 commandTime=36a4 weaponTime=0 torsoTimer=5 torsoAnim=200 holdBreathScale=3e858def weaponstate=0 holdBreathTimer=15d
+c 13999 9000 3 4 0 0 0 0 0
+c 14011 9000 3 4 0 0 0 0 0
+c 14023 9000 3 4 0 0 0 0 0
+p 6
+c 14035 9000 3 4 0 0 0 0 0
+c 14047 9000 3 4 0 0 0 0 0
+s 182 14050 commandTime=36c7 torsoTimer=0 holdBreathScale=3e676e23 holdBreathTimer=180
+c 14058 9000 3 4 0 0 0 0 0
+p 6
+c 14070 9000 3 4 0 0 0 0 0
+c 14082 9000 3 4 0 0 0 0 0
+c 14094 9000 3 4 0 0 0 0 0
+p 6
+s 183 14100 commandTime=370e holdBreathScale=3e2d01b0 holdBreathTimer=1c7
+c 14105 9000 3 4 0 0 0 0 0
+c 14117 9000 3 4 0 0 0 0 0
+c 14129 9000 3 4 0 0 0 0 0
+p 6
+c 14141 9000 3 4 0 0 0 0 0
+s 184 14150 commandTime=3731 holdBreathScale=3e15e5c4 holdBreathTimer=1ea
+c 14153 9000 3 4 0 0 0 0 0
+c 14165 9000 3 4 0 0 0 0 0
+p 6
+c 14177 9000 3 4 0 0 0 0 0
+c 14189 9000 3 4 0 0 0 0 0
+s 185 14200 commandTime=3755 holdBreathScale=3e0154f0 holdBreathTimer=20e
+c 14201 1000 3 4 0 0 0 0 0
+p 6
+c 14213 1000 3 4 0 0 0 0 0
+c 14225 1000 3 4 0 0 0 0 0
+c 14237 1000 3 4 0 0 0 0 0
+p 6
+s 186 14250 commandTime=379d pm_flags=800140 holdBreathScale=3edb6cea holdBreathTimer=1f6
+c 14248 1000 3 4 0 0 0 0 0
+c 14260 1000 3 4 0 0 0 0 0
+c 14272 1000 3 4 0 0 0 0 0
+p 6
+c 14284 1000 3 4 0 0 0 0 0
+c 14296 1000 3 4 0 0 0 0 0
+s 187 14300 commandTime=37c0 holdBreathScale=3f199287 holdBreathTimer=1d3
+c 14308 1000 3 4 0 0 0 0 0
+p 6
+c 14320 1000 3 4 0 0 0 0 0
+c 14332 1000 3 4 0 0 0 0 0
+c 14344 1000 3 4 0 0 0 0 0
+p 6
+s 188 14350 commandTime=3808 holdBreathScale=3f577186 holdBreathTimer=18b
+c 14357 1000 3 4 0 0 0 0 0
+c 14369 1000 3 4 0 0 0 0 0
+c 14381 1000 3 4 0 0 0 0 0
+p 6
+c 14393 1000 3 4 0 0 0 0 0
+s 189 14400 commandTime=382d holdBreathScale=3f6c3455 holdBreathTimer=166
+c 14406 1000 3 4 0 0 0 0 0
+c 14418 1000 3 4 0 0 0 0 0
+p 6
+c 14430 1000 3 4 0 0 0 0 0
+c 14442 1000 3 4 0 0 0 0 0
+s 190 14450 commandTime=3852 holdBreathScale=3f7b7248 holdBreathTimer=141
+c 14454 1000 3 4 0 0 0 0 0
+p 6
+c 14466 1000 3 4 0 0 0 0 0
+c 14478 1000 3 4 0 0 0 0 0
+c 14490 1000 3 4 0 0 0 0 0
+p 6
+s 191 14500 commandTime=389a holdBreathScale=3f86ae26 holdBreathTimer=f9
+c 14501 1000 3 4 0 0 0 0 0
+c 14513 1000 3 4 0 0 0 0 0
+c 14525 1000 3 4 0 0 0 0 0
+p 6
+c 14537 1000 3 4 0 0 0 0 0
+c 14549 1000 3 4 0 0 0 0 0
+s 192 14550 commandTime=38bd holdBreathScale=3f88f5ce holdBreathTimer=d6
+c 14560 1000 3 4 0 0 0 0 0
+p 6
+c 14572 1000 3 4 0 0 0 0 0
+c 14584 1000 3 4 0 0 0 0 0
+s 193 14600 commandTime=38e0 holdBreathScale=3f8a3ca8 holdBreathTimer=b3
+c 14597 1000 3 4 0 0 0 0 0
+p 6
+c 14609 1000 3 4 0 0 0 0 0
+c 14621 1000 3 4 0 0 0 0 0
+c 14633 1000 3 4 0 0 0 0 0
+p 6
+c 14645 1000 3 4 0 0 0 0 0
+s 194 14650 commandTime=3929 holdBreathScale=3f8a620f holdBreathTimer=6a
+c 14658 1000 3 4 0 0 0 0 0
+c 14670 1000 3 4 0 0 0 0 0
+p 6
+c 14682 1000 3 4 0 0 0 0 0
+c 14694 1000 3 4 0 0 0 0 0
+s 195 14700 commandTime=394e holdBreathScale=3f899923 holdBreathTimer=45
+c 14705 1000 3 4 0 0 0 0 0
+p 6
+c 14717 1000 3 4 0 0 0 0 0
+c 14729 1000 3 4 0 0 0 0 0
+c 14741 1000 3 4 0 0 0 0 0
+p 6
+s 196 14750 commandTime=3995 holdBreathScale=3f86e8f8 holdBreathTimer=0
+c 14754 1000 3 4 0 0 0 0 0
+c 14766 1000 3 4 0 0 0 0 0
+c 14778 1000 3 4 0 0 0 0 0
+p 6
+c 14790 1000 3 4 0 0 0 0 0
+s 197 14800 commandTime=39ba holdBreathScale=3f857c95
+c 14802 1000 3 4 0 0 0 0 0
+c 14814 1000 3 4 0 0 0 0 0
+p 6
+c 14826 1000 3 4 0 0 0 0 0
+c 14838 1000 3 4 0 0 0 0 0
+s 198 14850 commandTime=39de holdBreathScale=3f846284
+c 14851 1000 3 4 0 0 0 0 0
+p 6
+c 14863 1000 3 4 0 0 0 0 0
+c 14875 1000 3 4 0 0 0 0 0
+c 14887 1000 3 4 0 0 0 0 0
+p 6
+c 14899 1000 3 4 0 0 0 0 0
+s 199 14900 commandTime=3a27 holdBreathScale=3f82c84d
+c 14910 1000 3 4 0 0 0 0 0
+c 14922 1000 3 4 0 0 0 0 0
+p 6
+c 14934 1000 3 4 0 0 0 0 0
+s 200 14950 commandTime=3a4a holdBreathScale=3f823cef
+c 14947 1000 3 4 0 0 0 0 0
+c 14959 1000 3 4 0 0 0 0 0
+p 6
+c 14971 1000 3 4 0 0 0 0 0
+c 14983 1000 3 4 0 0 0 0 0
+c 14995 1000 3 4 0 0 0 0 0
+p 6
+s 201 15000 commandTime=3a93 holdBreathScale=3f816b8f
+c 15008 1000 3 4 0 0 0 0 0
+c 15020 1000 3 4 0 0 0 0 0
+c 15032 1000 3 4 0 0 0 0 0
+p 6
+c 15044 1000 3 4 0 0 0 0 0
+s 202 15050 commandTime=3ab8 holdBreathScale=3f8120ab
+c 15057 1000 3 4 0 0 0 0 0
+c 15069 1000 3 4 0 0 0 0 0
+p 6
+c 15081 1000 3 4 0 0 0 0 0
+c 15093 1000 3 4 0 0 0 0 0
+s 203 15100 commandTime=3add holdBreathScale=3f80e535
+c 15105 1000 3 4 0 0 0 0 0
+p 6
+c 15117 1000 3 4 0 0 0 0 0
+c 15129 1000 3 4 0 0 0 0 0
+c 15141 1000 3 4 0 0 0 0 0
+p 6
+s 204 15150 commandTime=3b25 holdBreathScale=3f809264
+c 15152 1000 3 4 0 0 0 0 0
+c 15164 1000 3 4 0 0 0 0 0
+c 15176 1000 3 4 0 0 0 0 0
+p 6
+c 15188 1000 3 4 0 0 0 0 0
+s 205 15200 commandTime=3b48 holdBreathScale=3f8075c0
+c 15201 1000 3 4 0 0 0 0 0
+c 15213 1000 3 4 0 0 0 0 0
+p 6
+c 15225 1000 3 4 0 0 0 0 0
+c 15237 1000 3 4 0 0 0 0 0
+c 15249 1000 3 4 0 0 0 0 0
+p 6
+s 206 15250 commandTime=3b91 holdBreathScale=3f804ab9
+c 15261 1000 3 4 0 0 0 0 0
+c 15273 1000 3 4 0 0 0 0 0
+c 15285 1000 3 4 0 0 0 0 0
+p 6
+s 207 15300 commandTime=3bb5 holdBreathScale=3f803bb8
+c 15297 1000 3 4 0 0 0 0 0
+c 15309 1000 3 4 0 0 0 0 0
+c 15321 1000 3 4 0 0 0 0 0
+p 6
+c 15333 1000 3 4 0 0 0 0 0
+c 15345 1000 3 4 0 0 0 0 0
+s 208 15350 commandTime=3bd9 holdBreathScale=3f802fba
+c 15358 1000 3 4 0 0 0 0 0
+p 6
+c 15370 1000 3 4 0 0 0 0 0
+c 15382 1000 3 4 0 0 0 0 0
+c 15394 1000 3 4 0 0 0 0 0
+p 6
+s 209 15400 commandTime=3c22 holdBreathScale=3f800000
+c 15407 1000 3 4 0 0 0 0 0
+c 15419 1000 3 4 0 0 0 0 0
+c 15431 1000 3 4 0 0 0 0 0
+p 6
+c 15443 1000 3 4 0 0 0 0 0
+s 210 15450 commandTime=3c47
+c 15455 1000 3 4 0 0 0 0 0
+c 15467 1000 3 4 0 0 0 0 0
+p 6
+c 15479 1000 3 4 0 0 0 0 0
+c 15491 1000 3 4 0 0 0 0 0
+s 211 15500 commandTime=3c6b
+c 15502 1000 3 4 0 0 0 0 0
+p 6
+c 15514 1000 3 4 0 0 0 0 0
+c 15526 1000 3 4 0 0 0 0 0
+c 15538 1000 3 4 0 0 0 0 0
+p 6
+s 212 15550 commandTime=3cb2
+c 15551 1000 3 4 0 0 0 0 0
+c 15563 1000 3 4 0 0 0 0 0
+c 15575 1000 3 4 0 0 0 0 0
+p 6
+c 15587 1000 3 4 0 0 0 0 0
+c 15599 1000 3 4 0 0 0 0 0
+s 213 15600 commandTime=3cd7
+c 15610 1000 3 4 0 0 0 0 0
+p 6
+c 15622 1000 3 4 0 0 0 0 0
+c 15634 1000 3 4 0 0 0 0 0
+s 214 15650 commandTime=3cfa
+c 15647 1000 3 4 0 0 0 0 0
+p 6
+c 15659 1000 3 4 0 0 0 0 0
+c 15671 1000 3 4 0 0 0 0 0
+c 15683 1000 3 4 0 0 0 0 0
+p 6
+c 15695 1000 3 4 0 0 0 0 0
+s 215 15700 commandTime=3d43
+c 15708 1000 3 4 0 0 0 0 0
+c 15720 1000 3 4 0 0 0 0 0
+p 6
+c 15732 1000 3 4 0 0 0 0 0
+c 15744 1000 3 4 0 0 0 0 0
+s 216 15750 commandTime=3d68
+c 15756 1000 3 4 0 0 0 0 0
+p 6
+c 15768 1000 3 4 0 0 0 0 0
+c 15780 1000 3 4 0 0 0 0 0
+c 15792 1000 3 4 0 0 0 0 0
+p 6
+s 217 15800 commandTime=3db0
+c 15803 1000 3 4 0 0 0 0 0
+c 15815 1000 3 4 0 0 0 0 0
+c 15827 1000 3 4 0 0 0 0 0
+p 6
+c 15839 1000 3 4 0 0 0 0 0
+s 218 15850 commandTime=3dd3
+c 15852 1000 3 4 0 0 0 0 0
+c 15864 1000 3 4 0 0 0 0 0
+p 6
+c 15876 1000 3 4 0 0 0 0 0
+c 15888 1000 3 4 0 0 0 0 0
+s 219 15900 commandTime=3df8
+c 15901 1000 3 4 0 0 0 0 0
+p 6
+c 15913 1000 3 4 0 0 0 0 0
+c 15925 1000 3 4 0 0 0 0 0
+c 15937 1000 3 4 0 0 0 0 0
+p 6
+c 15949 1000 3 4 0 0 0 0 0
+s 220 15950 commandTime=3e41
+c 15962 1000 3 4 0 0 0 0 0
+c 15974 1000 3 4 0 0 0 0 0
+p 6
+c 15986 1000 3 4 0 0 0 0 0
+s 221 16000 commandTime=3e66
+c 15999 1000 3 4 0 0 0 0 0
+c 16011 1000 3 4 0 0 0 0 0
+p 6
+c 16023 1000 3 4 0 0 0 0 0
+c 16035 1000 3 4 0 0 0 0 0
+s 222 16050 commandTime=3e8b
+c 16048 1000 3 4 0 0 0 0 0
+p 6
+c 16060 1000 3 4 0 0 0 0 0
+c 16072 1000 3 4 0 0 0 0 0
+c 16084 1000 3 4 0 0 0 0 0
+p 6
+c 16096 1000 3 4 0 0 0 0 0
+s 223 16100 commandTime=3ed4
+c 16107 1000 3 4 0 0 0 0 0
+c 16119 1000 3 4 0 0 0 0 0
+p 6
+c 16131 1000 3 4 0 0 0 0 0
+c 16143 1000 3 4 0 0 0 0 0
+s 224 16150 commandTime=3ef7
+c 16155 1000 3 4 0 0 0 0 0
+p 6
+c 16167 1000 3 4 0 0 0 0 0
+c 16179 1000 3 4 0 0 0 0 0
+c 16191 1000 3 4 0 0 0 0 0
+p 6
+s 225 16200 commandTime=3f3f
+c 16202 1000 3 4 0 0 0 0 0
+c 16214 1000 3 4 0 0 0 0 0
+c 16226 1000 3 4 0 0 0 0 0
+p 6
+c 16238 1000 3 4 0 0 0 0 0
+s 226 16250 commandTime=3f62
+c 16251 1000 3 4 0 0 0 0 0
+c 16263 1000 3 4 0 0 0 0 0
+p 6
+c 16275 1000 3 4 0 0 0 0 0
+c 16287 1000 3 4 0 0 0 0 0
+c 16299 1000 3 4 0 0 0 0 0
+p 6
+s 227 16300 commandTime=3fab
+c 16311 1000 3 4 0 0 0 0 0
+c 16323 1000 3 4 0 0 0 0 0
+c 16335 1000 3 4 0 0 0 0 0
+p 6
+s 228 16350 commandTime=3fcf
+c 16347 1000 3 4 0 0 0 0 0
+c 16359 1000 3 4 0 0 0 0 0
+c 16371 1000 3 4 0 0 0 0 0
+p 6
+c 16383 1000 3 4 0 0 0 0 0
+c 16395 1000 3 4 0 0 0 0 0
+s 229 16400 commandTime=3ff3
+c 16408 1000 3 4 0 0 0 0 0
+p 6
+c 16420 1000 3 4 0 0 0 0 0
+c 16432 1000 3 4 0 0 0 0 0
+c 16444 1000 3 4 0 0 0 0 0
+p 6
+s 230 16450 commandTime=403c
+c 16455 1000 3 4 0 0 0 0 0
+c 16467 1000 3 4 0 0 0 0 0
+c 16479 1000 3 4 0 0 0 0 0
+p 6
+c 16491 1000 3 4 0 0 0 0 0
+s 231 16500 commandTime=405f
+c 16503 1000 3 4 0 0 0 0 0
+c 16515 1000 3 4 0 0 0 0 0
+p 6
+c 16527 1000 3 4 0 0 0 0 0
+c 16539 1000 3 4 0 0 0 0 0
+s 232 16550 commandTime=4083
+c 16552 1000 3 4 0 0 0 0 0
+p 6
+c 16564 1000 3 4 0 0 0 0 0
+c 16576 1000 3 4 0 0 0 0 0
+c 16588 1000 3 4 0 0 0 0 0
+p 6
+s 233 16600 commandTime=40cc
+c 16601 1000 3 4 0 0 0 0 0
+c 16613 1000 3 4 0 0 0 0 0
+c 16625 1000 3 4 0 0 0 0 0
+p 6
+c 16637 1000 3 4 0 0 0 0 0
+c 16649 1000 3 4 0 0 0 0 0
+s 234 16650 commandTime=40f1
+c 16661 1000 3 4 0 0 0 0 0
+p 6
+c 16673 1000 3 4 0 0 0 0 0
+c 16685 1000 3 4 0 0 0 0 0
+s 235 16700 commandTime=4115
+c 16697 1000 3 4 0 0 0 0 0
+p 6
+c 16709 9000 3 4 0 0 0 0 0
+c 16721 9000 3 4 0 0 0 0 0
+c 16733 9000 3 4 0 0 0 0 0
+p 6
+c 16745 9000 3 4 0 0 0 0 0
+s 236 16750 commandTime=415d pm_flags=804140 holdBreathScale=3f5ce08e holdBreathTimer=24
+c 16756 9000 3 4 0 0 0 0 0
+c 16769 9000 3 4 0 0 0 0 0
+p 6
+c 16781 9000 3 4 0 0 0 0 0
+c 16793 9000 3 4 0 0 0 0 0
+s 237 16800 commandTime=4181 holdBreathScale=3f3e91dc holdBreathTimer=48
+c 16805 9000 3 4 0 0 0 0 0
+p 6
+c 16817 9000 3 4 0 0 0 0 0
+c 16829 9000 3 4 0 0 0 0 0
+c 16841 9000 3 4 0 0 0 0 0
+p 6
+s 238 16850 commandTime=41c9 holdBreathScale=3f0ddd78 holdBreathTimer=90
+c 16854 9000 3 4 0 0 0 0 0
+c 16866 9000 3 4 0 0 0 0 0
+c 16878 9000 3 4 0 0 0 0 0
+p 6
+c 16890 9000 3 4 0 0 0 0 0
+s 239 16900 commandTime=41ee holdBreathScale=3ef3c636 holdBreathTimer=b5
+c 16901 9000 3 4 0 0 0 0 0
+c 16913 9000 3 4 0 0 0 0 0
+p 6
+c 16925 9000 3 4 0 0 0 0 0
+c 16937 9000 3 4 0 0 0 0 0
+c 16949 9000 3 4 0 0 0 0 0
+p 6
+s 240 16950 commandTime=4235 holdBreathScale=3eb63c05 holdBreathTimer=fc
+c 16960 9000 3 4 0 0 0 0 0
+c 16972 9000 3 4 0 0 0 0 0
+c 16984 9000 3 4 0 0 0 0 0
+p 6
+s 241 17000 commandTime=4258 holdBreathScale=3e9de48d holdBreathTimer=11f
+c 16997 9000 3 4 0 0 0 0 0
+c 17009 9000 3 4 0 0 0 0 0
+c 17021 9000 3 4 0 0 0 0 0
+p 6
+c 17033 9000 3 4 0 0 0 0 0
+c 17045 9000 3 4 0 0 0 0 0
+s 242 17050 commandTime=427d holdBreathScale=3e87a860 holdBreathTimer=144
+c 17056 9000 3 4 0 0 0 0 0
+p 6
+c 17068 9000 3 4 0 0 0 0 0
+c 17080 9000 3 4 0 0 0 0 0
+c 17092 9000 3 4 0 0 0 0 0
+p 6
+s 243 17100 commandTime=42c4 holdBreathScale=3e4ad2ae holdBreathTimer=18b
+c 17105 9000 3 4 0 0 0 0 0
+c 17117 9000 3 4 0 0 0 0 0
+c 17129 9000 3 4 0 0 0 0 0
+p 6
+c 17141 9000 3 4 0 0 0 0 0
+s 244 17150 commandTime=42e9 holdBreathScale=3e2e42ba holdBreathTimer=1b0
+c 17153 9000 3 4 0 0 0 0 0
+c 17165 9000 3 4 0 0 0 0 0
+p 6
+c 17177 9000 3 4 0 0 0 0 0
+c 17189 9000 3 4 0 0 0 0 0
+s 245 17200 commandTime=430d holdBreathScale=3e165a32 holdBreathTimer=1d4
+c 17200 9000 3 4 0 0 0 0 0
+p 6
+c 17212 9000 3 4 0 0 0 0 0
+c 17224 9000 3 4 0 0 0 0 0
+c 17236 9000 3 4 0 0 0 0 0
+p 6
+c 17248 9000 3 4 0 0 0 0 0
+s 246 17250 commandTime=4354 holdBreathScale=3de0cb02 holdBreathTimer=21b
+c 17259 9000 3 4 0 0 0 0 0
+c 17271 9000 3 4 0 0 0 0 0
+p 6
+c 17283 9000 3 4 0 0 0 0 0
+c 17295 9000 3 4 0 0 0 0 0
+s 247 17300 commandTime=4377 holdBreathScale=3dc2c442 holdBreathTimer=23e
+c 17307 9000 3 4 0 0 0 0 0
+p 6
+c 17319 9000 3 4 0 0 0 0 0
+c 17331 9000 3 4 0 0 0 0 0
+c 17343 9000 3 4 0 0 0 0 0
+p 6
+s 248 17350 commandTime=43bf holdBreathScale=3d90fd48 holdBreathTimer=286
+c 17355 9000 3 4 0 0 0 0 0
+c 17367 9000 3 4 0 0 0 0 0
+c 17379 9000 3 4 0 0 0 0 0
+p 6
+c 17391 9000 3 4 0 0 0 0 0
+s 249 17400 commandTime=43e3 holdBreathScale=3d7a31af holdBreathTimer=2aa
+c 17402 9000 3 4 0 0 0 0 0
+c 17414 9000 3 4 0 0 0 0 0
+p 6
+c 17426 9000 3 4 0 0 0 0 0
+c 17438 9000 3 4 0 0 0 0 0
+s 250 17450 commandTime=4406 holdBreathScale=3d58c659 holdBreathTimer=2cd
+c 17449 9000 3 4 0 0 0 0 0
+p 6
+c 17461 9000 3 4 0 0 0 0 0
+c 17473 9000 3 4 0 0 0 0 0
+c 17485 9000 3 4 0 0 0 0 0
+p 6
+c 17497 9000 3 4 0 0 0 0 0
+s 251 17500 commandTime=444d holdBreathScale=3d220d06 holdBreathTimer=314
+c 17509 9000 3 4 0 0 0 0 0
+c 17521 9000 3 4 0 0 0 0 0
+p 6
+c 17533 9000 3 4 0 0 0 0 0
+c 17545 9000 3 4 0 0 0 0 0
+s 252 17550 commandTime=4471 holdBreathScale=3d0bd156 holdBreathTimer=338
+c 17556 9000 3 4 0 0 0 0 0
+p 6
+c 17568 9000 3 4 0 0 0 0 0
+c 17580 9000 3 4 0 0 0 0 0
+c 17592 9000 3 4 0 0 0 0 0
+p 6
+s 253 17600 commandTime=44b8 holdBreathScale=3cd10ae9 holdBreathTimer=37f
+c 17605 9000 3 4 0 0 0 0 0
+c 17617 9000 3 4 0 0 0 0 0
+c 17629 9000 3 4 0 0 0 0 0
+p 6
+c 17641 9000 3 4 0 0 0 0 0
+s 254 17650 commandTime=44dd holdBreathScale=3cb39abd holdBreathTimer=3a4
+c 17654 9000 3 4 0 0 0 0 0
+c 17666 9000 3 4 0 0 0 0 0
+p 6
+c 17678 9000 3 4 0 0 0 0 0
+c 17690 9000 3 4 0 0 0 0 0
+s 255 17700 commandTime=4502 holdBreathScale=3c9a4fd6 holdBreathTimer=3c9
+c 17701 9000 3 4 0 0 0 0 0
+p 6
+c 17713 9000 3 4 0 0 0 0 0
+c 17725 9000 3 4 0 0 0 0 0
+c 17737 9000 3 4 0 0 0 0 0
+p 6
+s 256 17750 commandTime=4549 holdBreathScale=3c66b683 holdBreathTimer=410
+c 17748 9000 3 4 0 0 0 0 0
+c 17760 9000 3 4 0 0 0 0 0
+c 17772 9000 3 4 0 0 0 0 0
+p 6
+c 17784 9000 3 4 0 0 0 0 0
+c 17796 9000 3 4 0 0 0 0 0
+s 257 17800 commandTime=456c holdBreathScale=3c47e555 holdBreathTimer=433
+c 17809 9000 3 4 0 0 0 0 0
+p 6
+c 17821 9000 3 4 0 0 0 0 0
+c 17833 9000 3 4 0 0 0 0 0
+c 17845 9000 3 4 0 0 0 0 0
+p 6
+s 258 17850 commandTime=45b5 holdBreathScale=3c142eb5 holdBreathTimer=47c
+c 17856 9000 3 4 0 0 0 0 0
+c 17868 9000 3 4 0 0 0 0 0
+c 17879 9000 3 4 0 0 0 0 0
+p 6
+c 17891 9000 3 4 0 0 0 0 0
+s 259 17900 commandTime=45d7 holdBreathScale=3c00edbd holdBreathTimer=49e
+c 17903 9000 3 4 0 0 0 0 0
+c 17917 9000 3 4 0 0 0 0 0
+p 6
+c 17929 9000 3 4 0 0 0 0 0
+c 17941 9000 3 4 0 0 0 0 0
+s 260 17950 commandTime=45fd holdBreathScale=3bdc9c2f holdBreathTimer=4c4
+c 17953 9000 3 4 0 0 0 0 0
+p 6
+c 17966 9000 3 4 0 0 0 0 0
+c 17978 9000 3 4 0 0 0 0 0
+c 17990 9000 3 4 0 0 0 0 0
+p 6
+s 261 18000 commandTime=4646 holdBreathScale=3ba389b5 holdBreathTimer=50d
+c 18002 9000 3 4 0 0 0 0 0
+c 18014 9000 3 4 0 0 0 0 0
+c 18026 9000 3 4 0 0 0 0 0
+p 6
+c 18038 9000 3 4 0 0 0 0 0
+s 262 18050 commandTime=466a holdBreathScale=3b8d19cb holdBreathTimer=531
+c 18050 9000 3 4 0 0 0 0 0
+c 18064 9000 3 4 0 0 0 0 0
+p 6
+c 18075 9000 3 4 0 0 0 0 0
+c 18087 9000 3 4 0 0 0 0 0
+s 263 18100 commandTime=4690 holdBreathScale=3b717011 holdBreathTimer=557
+c 18099 9000 3 4 0 0 0 0 0
+p 6
+c 18111 9000 3 4 0 0 0 0 0
+c 18122 9000 3 4 0 0 0 0 0
+c 18134 9000 3 4 0 0 0 0 0
+p 6
+c 18147 9000 3 4 0 0 0 0 0
+s 264 18150 commandTime=46d6 holdBreathScale=3b353f03 holdBreathTimer=59d
+c 18159 9000 3 4 0 0 0 0 0
+c 18170 9000 3 4 0 0 0 0 0
+p 6
+c 18182 9000 3 4 0 0 0 0 0
+c 18194 9000 3 4 0 0 0 0 0
+s 265 18200 commandTime=46fa holdBreathScale=3b1c606d holdBreathTimer=5c1
+c 18205 9000 3 4 0 0 0 0 0
+p 6
+c 18217 9000 3 4 0 0 0 0 0
+c 18229 9000 3 4 0 0 0 0 0
+c 18241 9000 3 4 0 0 0 0 0
+p 6
+s 266 18250 commandTime=4741 holdBreathScale=3ae9ccd2 holdBreathTimer=608
+c 18253 9000 3 4 0 0 0 0 0
+c 18265 9000 3 4 0 0 0 0 0
+c 18277 9000 3 4 0 0 0 0 0
+p 6
+c 18289 9000 3 4 0 0 0 0 0
+s 267 18300 commandTime=4765 holdBreathScale=3ac9b919 holdBreathTimer=62c
+c 18300 9000 3 4 0 0 0 0 0
+c 18312 9000 3 4 0 0 0 0 0
+p 6
+c 18324 9000 3 4 0 0 0 0 0
+c 18336 9000 3 4 0 0 0 0 0
+s 268 18350 commandTime=4788 holdBreathScale=3aaec739 holdBreathTimer=64f
+c 18348 9000 3 4 0 0 0 0 0
+p 6
+c 18360 9000 3 4 0 0 0 0 0
+c 18372 9000 3 4 0 0 0 0 0
+c 18384 9000 3 4 0 0 0 0 0
+p 6
+c 18396 9000 3 4 0 0 0 0 0
+s 269 18400 commandTime=47d0 holdBreathScale=3a821c08 holdBreathTimer=697
+c 18407 9000 3 4 0 0 0 0 0
+c 18419 9000 3 4 0 0 0 0 0
+p 6
+c 18431 9000 3 4 0 0 0 0 0
+c 18443 9000 3 4 0 0 0 0 0
+s 270 18450 commandTime=47f3 holdBreathScale=0 holdBreathTimer=6ba
+c 18456 9000 3 4 0 0 0 0 0
+p 6
+c 18468 9000 3 4 0 0 0 0 0
+c 18480 9000 3 4 0 0 0 0 0
+c 18492 9000 3 4 0 0 0 0 0
+p 6
+s 271 18500 commandTime=483c holdBreathTimer=703
+c 18503 9000 3 4 0 0 0 0 0
+c 18515 9000 3 4 0 0 0 0 0
+c 18527 9000 3 4 0 0 0 0 0
+p 6
+c 18539 9000 3 4 0 0 0 0 0
+s 272 18550 commandTime=485f holdBreathTimer=726
+c 18551 9000 3 4 0 0 0 0 0
+c 18563 9000 3 4 0 0 0 0 0
+p 6
+c 18575 9000 3 4 0 0 0 0 0
+c 18587 9000 3 4 0 0 0 0 0
+s 273 18600 commandTime=4883 holdBreathTimer=74a
+c 18599 9000 3 4 0 0 0 0 0
+p 6
+c 18611 9000 3 4 0 0 0 0 0
+c 18623 9000 3 4 0 0 0 0 0
+c 18635 9000 3 4 0 0 0 0 0
+p 6
+s 274 18650 commandTime=48cb holdBreathTimer=792
+c 18648 9000 3 4 0 0 0 0 0
+c 18660 9000 3 4 0 0 0 0 0
+c 18672 9000 3 4 0 0 0 0 0
+p 6
+c 18684 9000 3 4 0 0 0 0 0
+c 18696 9000 3 4 0 0 0 0 0
+s 275 18700 commandTime=48f0 holdBreathTimer=7b7
+c 18707 9000 3 4 0 0 0 0 0
+p 6
+c 18719 9000 3 4 0 0 0 0 0
+c 18731 9000 3 4 0 0 0 0 0
+c 18743 9000 3 4 0 0 0 0 0
+p 6
+s 276 18750 commandTime=4937 holdBreathTimer=7fe
+c 18755 9000 3 4 0 0 0 0 0
+c 18767 9000 3 4 0 0 0 0 0
+c 18779 9000 3 4 0 0 0 0 0
+p 6
+c 18791 9000 3 4 0 0 0 0 0
+s 277 18800 commandTime=495b holdBreathTimer=822
+c 18802 9000 3 4 0 0 0 0 0
+c 18814 9000 3 4 0 0 0 0 0
+p 6
+c 18826 9000 3 4 0 0 0 0 0
+c 18838 9000 3 4 0 0 0 0 0
+s 278 18850 commandTime=497e holdBreathTimer=845
+c 18851 9000 3 4 0 0 0 0 0
+p 6
+c 18863 9000 3 4 0 0 0 0 0
+c 18875 9000 3 4 0 0 0 0 0
+c 18887 9000 3 4 0 0 0 0 0
+p 6
+c 18899 9000 3 4 0 0 0 0 0
+s 279 18900 commandTime=49c7 holdBreathTimer=88e
+c 18910 9000 3 4 0 0 0 0 0
+c 18922 9000 3 4 0 0 0 0 0
+p 6
+c 18934 9000 3 4 0 0 0 0 0
+s 280 18950 commandTime=49ea holdBreathTimer=8b1
+c 18947 9000 3 4 0 0 0 0 0
+c 18959 9000 3 4 0 0 0 0 0
+p 6
+c 18971 9000 3 4 0 0 0 0 0
+c 18983 9000 3 4 0 0 0 0 0
+c 18995 9000 3 4 0 0 0 0 0
+p 6
+s 281 19000 commandTime=4a33 holdBreathTimer=8fa
+c 19008 9000 3 4 0 0 0 0 0
+c 19020 9000 3 4 0 0 0 0 0
+c 19031 9000 3 4 0 0 0 0 0
+p 6
+c 19043 9000 3 4 0 0 0 0 0
+s 282 19050 commandTime=4a57 holdBreathTimer=91e
+c 19056 9000 3 4 0 0 0 0 0
+c 19068 9000 3 4 0 0 0 0 0
+p 6
+c 19080 9000 3 4 0 0 0 0 0
+c 19092 9000 3 4 0 0 0 0 0
+s 283 19100 commandTime=4a7c holdBreathTimer=943
+c 19105 9000 3 4 0 0 0 0 0
+p 6
+c 19117 9000 3 4 0 0 0 0 0
+c 19129 9000 3 4 0 0 0 0 0
+c 19141 9000 3 4 0 0 0 0 0
+p 6
+s 284 19150 commandTime=4ac5 holdBreathTimer=98c
+c 19153 9000 3 4 0 0 0 0 0
+c 19165 9000 3 4 0 0 0 0 0
+c 19178 9000 3 4 0 0 0 0 0
+p 6
+c 19190 9000 3 4 0 0 0 0 0
+s 285 19200 commandTime=4aea holdBreathTimer=9b1
+c 19201 9000 3 4 0 0 0 0 0
+c 19213 9000 3 4 0 0 0 0 0
+p 6
+c 19225 9000 3 4 0 0 0 0 0
+c 19237 9000 3 4 0 0 0 0 0
+c 19249 9000 3 4 0 0 0 0 0
+p 6
+s 286 19250 commandTime=4b31 holdBreathTimer=9f8
+c 19260 9000 3 4 0 0 0 0 0
+c 19272 9000 3 4 0 0 0 0 0
+c 19284 9000 3 4 0 0 0 0 0
+p 6
+s 287 19300 commandTime=4b54 holdBreathTimer=a1b
+c 19297 9000 3 4 0 0 0 0 0
+c 19309 9000 3 4 0 0 0 0 0
+c 19321 9000 3 4 0 0 0 0 0
+p 6
+c 19333 9000 3 4 0 0 0 0 0
+c 19345 9000 3 4 0 0 0 0 0
+s 288 19350 commandTime=4b79 holdBreathTimer=a40
+c 19356 9000 3 4 0 0 0 0 0
+p 6
+c 19368 9000 3 4 0 0 0 0 0
+c 19380 9000 3 4 0 0 0 0 0
+c 19392 9000 3 4 0 0 0 0 0
+p 6
+s 289 19400 commandTime=4bc0 holdBreathTimer=a87
+c 19405 9000 3 4 0 0 0 0 0
+c 19417 9000 3 4 0 0 0 0 0
+c 19429 9000 3 4 0 0 0 0 0
+p 6
+c 19441 9000 3 4 0 0 0 0 0
+s 290 19450 commandTime=4be5 holdBreathTimer=aac
+c 19453 9000 3 4 0 0 0 0 0
+c 19465 9000 3 4 0 0 0 0 0
+p 6
+c 19477 9000 3 4 0 0 0 0 0
+c 19489 9000 3 4 0 0 0 0 0
+s 291 19500 commandTime=4c09 holdBreathTimer=ad0
+c 19500 9000 3 4 0 0 0 0 0
+p 6
+c 19512 9000 3 4 0 0 0 0 0
+c 19524 9000 3 4 0 0 0 0 0
+c 19536 9000 3 4 0 0 0 0 0
+p 6
+c 19548 9000 3 4 0 0 0 0 0
+s 292 19550 commandTime=4c50 holdBreathTimer=b17
+c 19561 9000 3 4 0 0 0 0 0
+c 19573 9000 3 4 0 0 0 0 0
+p 6
+c 19585 9000 3 4 0 0 0 0 0
+c 19597 9000 3 4 0 0 0 0 0
+s 293 19600 commandTime=4c75 holdBreathTimer=b3c
+c 19608 9000 3 4 0 0 0 0 0
+p 6
+c 19620 9000 3 4 0 0 0 0 0
+c 19632 9000 3 4 0 0 0 0 0
+c 19644 9000 3 4 0 0 0 0 0
+p 6
+s 294 19650 commandTime=4cbc holdBreathTimer=b83
+c 19657 9000 3 4 0 0 0 0 0
+c 19669 9000 3 4 0 0 0 0 0
+c 19681 9000 3 4 0 0 0 0 0
+p 6
+c 19693 9000 3 4 0 0 0 0 0
+s 295 19700 commandTime=4ce1 holdBreathTimer=ba8
+c 19704 9000 3 4 0 0 0 0 0
+c 19716 9000 3 4 0 0 0 0 0
+p 6
+c 19728 9000 3 4 0 0 0 0 0
+c 19740 9000 3 4 0 0 0 0 0
+s 296 19750 commandTime=4d04 holdBreathTimer=bcb
+c 19751 9000 3 4 0 0 0 0 0
+p 6
+c 19763 9000 3 4 0 0 0 0 0
+c 19775 9000 3 4 0 0 0 0 0
+c 19787 9000 3 4 0 0 0 0 0
+p 6
+s 297 19800 commandTime=4d4b holdBreathTimer=c12
+c 19799 9000 3 4 0 0 0 0 0
+c 19811 9000 3 4 0 0 0 0 0
+c 19823 9000 3 4 0 0 0 0 0
+p 6
+c 19835 9000 3 4 0 0 0 0 0
+c 19847 9000 3 4 0 0 0 0 0
+s 298 19850 commandTime=4d6f holdBreathTimer=c36
+c 19860 9000 3 4 0 0 0 0 0
+p 6
+c 19872 9000 3 4 0 0 0 0 0
+c 19884 9000 3 4 0 0 0 0 0
+c 19896 9000 3 4 0 0 0 0 0
+p 6
+s 299 19900 commandTime=4db8 holdBreathTimer=c7f
+c 19907 9000 3 4 0 0 0 0 0
+c 19919 9000 3 4 0 0 0 0 0
+c 19931 9000 3 4 0 0 0 0 0
+p 6
+c 19943 9000 3 4 0 0 0 0 0
+s 300 19950 commandTime=4ddb holdBreathTimer=ca2
+c 19954 9000 3 4 0 0 0 0 0
+c 19966 9000 3 4 0 0 0 0 0
+p 6
+c 19978 9000 3 4 0 0 0 0 0
+c 19990 9000 3 4 0 0 0 0 0
+s 301 20000 commandTime=4dfe holdBreathTimer=cc5
+c 20001 9000 3 4 0 0 0 0 0
+p 6
+c 20013 9000 3 4 0 0 0 0 0
+c 20025 9000 3 4 0 0 0 0 0
+c 20037 9000 3 4 0 0 0 0 0
+p 6
+s 302 20050 commandTime=4e45 holdBreathTimer=d0c
+c 20048 9000 3 4 0 0 0 0 0
+c 20060 9000 3 4 0 0 0 0 0
+c 20072 9000 3 4 0 0 0 0 0
+p 6
+c 20084 9000 3 4 0 0 0 0 0
+c 20096 9000 3 4 0 0 0 0 0
+s 303 20100 commandTime=4e68 holdBreathTimer=d2f
+c 20109 9000 3 4 0 0 0 0 0
+p 6
+c 20121 9000 3 4 0 0 0 0 0
+c 20133 9000 3 4 0 0 0 0 0
+c 20145 9000 3 4 0 0 0 0 0
+p 6
+s 304 20150 commandTime=4eb1 holdBreathTimer=d78
+c 20156 9000 3 4 0 0 0 0 0
+c 20168 9000 3 4 0 0 0 0 0
+c 20180 9000 3 4 0 0 0 0 0
+p 6
+c 20192 9000 3 4 0 0 0 0 0
+s 305 20200 commandTime=4ed4 holdBreathTimer=d9b
+c 20203 9000 3 4 0 0 0 0 0
+c 20215 9000 3 4 0 0 0 0 0
+p 6
+c 20227 9000 3 4 0 0 0 0 0
+c 20239 9000 3 4 0 0 0 0 0
+s 306 20250 commandTime=4ef7 holdBreathTimer=dbe
+c 20251 9000 3 4 0 0 0 0 0
+p 6
+c 20263 9000 3 4 0 0 0 0 0
+c 20275 9000 3 4 0 0 0 0 0
+c 20287 9000 3 4 0 0 0 0 0
+p 6
+s 307 20300 commandTime=4f3f holdBreathTimer=e06
+c 20299 9000 3 4 0 0 0 0 0
+c 20311 9000 3 4 0 0 0 0 0
+c 20323 9000 3 4 0 0 0 0 0
+p 6
+c 20335 9000 3 4 0 0 0 0 0
+s 308 20350 commandTime=4f63 holdBreathTimer=e2a
+c 20348 9000 3 4 0 0 0 0 0
+c 20360 9000 3 4 0 0 0 0 0
+p 6
+c 20372 9000 3 4 0 0 0 0 0
+c 20384 9000 3 4 0 0 0 0 0
+c 20396 9000 3 4 0 0 0 0 0
+p 6
+s 309 20400 commandTime=4fac holdBreathTimer=e73
+c 20409 9000 3 4 0 0 0 0 0
+c 20421 9000 3 4 0 0 0 0 0
+c 20433 9000 3 4 0 0 0 0 0
+p 6
+c 20445 9000 3 4 0 0 0 0 0
+s 310 20450 commandTime=4fd1 holdBreathTimer=e98
+c 20456 9000 3 4 0 0 0 0 0
+c 20468 9000 3 4 0 0 0 0 0
+p 6
+c 20480 9000 3 4 0 0 0 0 0
+c 20492 9000 3 4 0 0 0 0 0
+s 311 20500 commandTime=4ff4 holdBreathTimer=ebb
+c 20504 9000 3 4 0 0 0 0 0
+p 6
+c 20516 9000 3 4 0 0 0 0 0
+c 20528 9000 3 4 0 0 0 0 0
+c 20540 9000 3 4 0 0 0 0 0
+p 6
+s 312 20550 commandTime=503c holdBreathTimer=f03
+c 20551 9000 3 4 0 0 0 0 0
+c 20563 9000 3 4 0 0 0 0 0
+c 20575 9000 3 4 0 0 0 0 0
+p 6
+c 20587 9000 3 4 0 0 0 0 0
+c 20599 9000 3 4 0 0 0 0 0
+s 313 20600 commandTime=505f holdBreathTimer=f26
+c 20612 9000 3 4 0 0 0 0 0
+p 6
+c 20624 9000 3 4 0 0 0 0 0
+c 20636 9000 3 4 0 0 0 0 0
+s 314 20650 commandTime=5084 holdBreathTimer=f4b
+c 20647 9000 3 4 0 0 0 0 0
+p 6
+c 20659 9000 3 4 0 0 0 0 0
+c 20671 9000 3 4 0 0 0 0 0
+c 20683 9000 3 4 0 0 0 0 0
+p 6
+c 20695 9000 3 4 0 0 0 0 0
+s 315 20700 commandTime=50cb holdBreathTimer=f92
+c 20706 9000 3 4 0 0 0 0 0
+c 20718 9000 3 4 0 0 0 0 0
+p 6
+c 20730 9000 3 4 0 0 0 0 0
+c 20742 9000 3 4 0 0 0 0 0
+s 316 20750 commandTime=50ee holdBreathTimer=fb5
+c 20756 9000 3 4 0 0 0 0 0
+p 6
+c 20768 9000 3 4 0 0 0 0 0
+c 20781 9000 3 4 0 0 0 0 0
+c 20792 9000 3 4 0 0 0 0 0
+p 6
+s 317 20800 commandTime=5138 holdBreathTimer=fff
+c 20804 9000 3 4 0 0 0 0 0
+c 20817 9000 3 4 0 0 0 0 0
+c 20829 9000 3 4 0 0 0 0 0
+p 6
+c 20840 9000 3 4 0 0 0 0 0
+s 318 20850 commandTime=515d holdBreathTimer=1024
+c 20851 9000 3 4 0 0 0 0 0
+c 20864 9000 3 4 0 0 0 0 0
+p 6
+c 20876 9000 3 4 0 0 0 0 0
+c 20889 9000 3 4 0 0 0 0 0
+s 319 20900 commandTime=5180 holdBreathTimer=1047
+c 20902 9000 3 4 0 0 0 0 0
+p 6
+c 20914 9000 3 4 0 0 0 0 0
+c 20926 9000 3 4 0 0 0 0 0
+c 20938 9000 3 4 0 0 0 0 0
+p 6
+s 320 20950 commandTime=51ca holdBreathTimer=1091
+c 20950 9000 3 4 0 0 0 0 0
+c 20962 9000 3 4 0 0 0 0 0
+c 20974 9000 3 4 0 0 0 0 0
+p 6
+c 20986 9000 3 4 0 0 0 0 0
+s 321 21000 commandTime=51ee holdBreathTimer=10b5
+c 20998 9000 3 4 0 0 0 0 0
+c 21010 9000 3 4 0 0 0 0 0
+p 6
+c 21022 9000 3 4 0 0 0 0 0
+c 21034 9000 3 4 0 0 0 0 0
+c 21046 9000 3 4 0 0 0 0 0
+p 6
+s 322 21050 commandTime=5236 holdBreathTimer=10fd
+c 21057 9000 3 4 0 0 0 0 0
+c 21069 9000 3 4 0 0 0 0 0
+c 21081 9000 3 4 0 0 0 0 0
+p 6
+c 21093 9000 3 4 0 0 0 0 0
+s 323 21100 commandTime=5259 holdBreathTimer=1120
+c 21104 9000 3 4 0 0 0 0 0
+c 21116 9000 3 4 0 0 0 0 0
+p 6
+c 21128 9000 3 4 0 0 0 0 0
+c 21140 9000 3 4 0 0 0 0 0
+s 324 21150 commandTime=527c holdBreathTimer=1143
+c 21151 9000 3 4 0 0 0 0 0
+p 6
+c 21163 9000 3 4 0 0 0 0 0
+c 21175 9000 3 4 0 0 0 0 0
+c 21187 9000 3 4 0 0 0 0 0
+p 6
+c 21199 9000 3 4 0 0 0 0 0
+s 325 21200 commandTime=52c3 holdBreathTimer=118a
+c 21211 9000 3 4 0 0 0 0 0
+c 21223 9000 3 4 0 0 0 0 0
+p 6
+c 21236 9000 3 4 0 0 0 0 0
+s 326 21250 commandTime=52e7 pm_flags=800140 holdBreathScale=3f66ef17 holdBreathTimer=1564
+c 21247 9000 3 4 0 0 0 0 0
+c 21259 9000 3 4 0 0 0 0 0
+p 6
+c 21271 9000 3 4 0 0 0 0 0
+c 21283 9000 3 4 0 0 0 0 0
+c 21296 9000 3 4 0 0 0 0 0
+p 6
+s 327 21300 commandTime=5330 holdBreathScale=400cdb76 holdBreathTimer=151b
+c 21308 9000 3 4 0 0 0 0 0
+c 21320 9000 3 4 0 0 0 0 0
+c 21334 9000 3 4 0 0 0 0 0
+p 6
+s 328 21350 commandTime=5356 holdBreathScale=402ade63 holdBreathTimer=14f5
+c 21349 9000 3 4 0 0 0 0 0
+c 21363 9000 3 4 0 0 0 0 0
+c 21375 9000 3 4 0 0 0 0 0
+p 6
+c 21387 9000 3 4 0 0 0 0 0
+s 329 21400 commandTime=537f holdBreathScale=4043e3c3 holdBreathTimer=14cc
+c 21399 9000 3 4 0 0 0 0 0
+c 21411 9000 3 4 0 0 0 0 0
+p 6
+c 21423 9000 3 4 0 0 0 0 0
+c 21434 9000 3 4 0 0 0 0 0
+c 21446 9000 3 4 0 0 0 0 0
+p 6
+s 330 21450 commandTime=53c6 holdBreathScale=4061972d holdBreathTimer=1485
+c 21458 9000 3 4 0 0 0 0 0
+c 21470 9000 3 4 0 0 0 0 0
+c 21482 9000 3 4 0 0 0 0 0
+p 6
+c 21495 9000 3 4 0 0 0 0 0
+s 331 21500 commandTime=53ea holdBreathScale=406be6fd holdBreathTimer=1461
+c 21507 9000 3 4 0 0 0 0 0
+c 21521 9000 3 4 0 0 0 0 0
+p 6
+c 21532 9000 3 4 0 0 0 0 0
+c 21546 9000 3 4 0 0 0 0 0
+s 332 21550 commandTime=5411 holdBreathScale=407470c6 holdBreathTimer=143a
+c 21558 9000 3 4 0 0 0 0 0
+p 6
+c 21569 9000 3 4 0 0 0 0 0
+c 21581 9000 3 4 0 0 0 0 0
+c 21595 9000 3 4 0 0 0 0 0
+p 6
+s 333 21600 commandTime=545b holdBreathScale=407f0066 holdBreathTimer=13f0
+c 21608 9000 3 4 0 0 0 0 0
+c 21620 9000 3 4 0 0 0 0 0
+c 21633 9000 3 4 0 0 0 0 0
+p 6
+s 334 21650 commandTime=5481 holdBreathScale=40812b79 holdBreathTimer=13ca
+c 21648 9000 3 4 0 0 0 0 0
+c 21660 9000 3 4 0 0 0 0 0
+c 21671 9000 3 4 0 0 0 0 0
+p 6
+c 21682 9000 3 4 0 0 0 0 0
+c 21695 9000 3 4 0 0 0 0 0
+s 335 21700 commandTime=54a7 holdBreathScale=408252e9 holdBreathTimer=13a4
+c 21706 9000 3 4 0 0 0 0 0
+p 6
+c 21717 9000 3 4 0 0 0 0 0
+c 21728 9000 3 4 0 0 0 0 0
+c 21740 9000 3 4 0 0 0 0 0
+p 6
+s 336 21750 commandTime=54ec holdBreathScale=40837055 holdBreathTimer=135f
+c 21751 9000 3 4 0 0 0 0 0
+c 21763 9000 3 4 0 0 0 0 0
+c 21777 9000 3 4 0 0 0 0 0
+p 6
+c 21789 9000 3 4 0 0 0 0 0
+s 337 21800 commandTime=5511 holdBreathScale=4083a67a holdBreathTimer=133a
+c 21800 9000 3 4 0 0 0 0 0
+c 21812 9000 3 4 0 0 0 0 0
+p 6
+c 21823 9000 3 4 0 0 0 0 0
+c 21835 9000 3 4 0 0 0 0 0
+c 21847 9000 3 4 0 0 0 0 0
+p 6
+s 338 21850 commandTime=5557 holdBreathScale=40838b22 holdBreathTimer=12f4
+c 21859 9000 3 4 0 0 0 0 0
+c 21871 9000 3 4 0 0 0 0 0
+c 21883 9000 3 4 0 0 0 0 0
+p 6
+c 21894 9000 3 4 0 0 0 0 0
+s 339 21900 commandTime=557b holdBreathScale=40834b61 holdBreathTimer=12d0
+c 21907 9000 3 4 0 0 0 0 0
+c 21920 9000 3 4 0 0 0 0 0
+p 6
+c 21934 9000 3 4 0 0 0 0 0
+s 340 21950 commandTime=55a0 holdBreathScale=4082ef9b holdBreathTimer=12ab
+c 21947 9000 3 4 0 0 0 0 0
+c 21959 9000 3 4 0 0 0 0 0
+p 6
+c 21971 9000 3 4 0 0 0 0 0
+c 21983 9000 3 4 0 0 0 0 0
+c 21995 9000 3 4 0 0 0 0 0
+p 6
+s 341 22000 commandTime=55eb holdBreathScale=4081fa37 holdBreathTimer=1260
+c 22008 9000 3 4 0 0 0 0 0
+c 22020 9000 3 4 0 0 0 0 0
+c 22032 9000 3 4 0 0 0 0 0
+p 6
+c 22044 9000 3 4 0 0 0 0 0
+s 342 22050 commandTime=5610 holdBreathScale=40816bbf holdBreathTimer=123b
+c 22055 9000 3 4 0 0 0 0 0
+c 22067 9000 3 4 0 0 0 0 0
+p 6
+c 22079 9000 3 4 0 0 0 0 0
+c 22091 9000 3 4 0 0 0 0 0
+s 343 22100 commandTime=5633 holdBreathScale=4080dbf7 holdBreathTimer=1218
+c 22102 9000 3 4 0 0 0 0 0
+p 6
+c 22114 9000 3 4 0 0 0 0 0
+c 22126 9000 3 4 0 0 0 0 0
+c 22138 9000 3 4 0 0 0 0 0
+p 6
+s 344 22150 commandTime=567a holdBreathScale=407f44a3 holdBreathTimer=11d1
+c 22150 9000 3 4 0 0 0 0 0
+c 22162 9000 3 4 0 0 0 0 0
+c 22174 9000 3 4 0 0 0 0 0
+p 6
+c 22186 9000 3 4 0 0 0 0 0
+c 22198 9000 3 4 0 0 0 0 0
+s 345 22200 commandTime=569e holdBreathScale=407df5d0 holdBreathTimer=11ad
+c 22209 1000 3 4 0 0 0 0 0
+p 6
+c 22221 1000 3 4 0 0 0 0 0
+c 22233 1000 3 4 0 0 0 0 0
+c 22245 1000 3 4 0 0 0 0 0
+p 6
+s 346 22250 commandTime=56e5 holdBreathScale=407b4bb3 holdBreathTimer=1166
+c 22258 1000 3 4 0 0 0 0 0
+c 22270 1000 3 4 0 0 0 0 0
+c 22282 1000 3 4 0 0 0 0 0
+p 6
+c 22294 1000 3 4 0 0 0 0 0
+s 347 22300 commandTime=570a holdBreathScale=4079de78 holdBreathTimer=1141
+c 22306 1000 3 4 0 0 0 0 0
+c 22318 1000 3 4 0 0 0 0 0
+p 6
+c 22330 1000 3 4 0 0 0 0 0
+c 22342 1000 3 4 0 0 0 0 0
+s 348 22350 commandTime=572e holdBreathScale=407877b5 holdBreathTimer=111d
+c 22354 1000 3 4 0 0 0 0 0
+p 6
+c 22366 1000 3 4 0 0 0 0 0
+c 22378 1000 3 4 0 0 0 0 0
+c 22390 1000 3 4 0 0 0 0 0
+p 6
+s 349 22400 commandTime=5776 holdBreathScale=4075a0dd holdBreathTimer=10d5
+c 22401 1000 3 4 0 0 0 0 0
+c 22413 1000 3 4 0 0 0 0 0
+c 22425 1000 3 4 0 0 0 0 0
+p 6
+c 22437 1000 3 4 0 0 0 0 0
+s 350 22450 commandTime=5799 holdBreathScale=40743cc9 holdBreathTimer=10b2
+c 22450 1000 3 4 0 0 0 0 0
+c 22462 1000 3 4 0 0 0 0 0
+p 6
+c 22474 1000 3 4 0 0 0 0 0
+c 22486 1000 3 4 0 0 0 0 0
+c 22498 1000 3 4 0 0 0 0 0
+p 6
+s 351 22500 commandTime=57e2 holdBreathScale=40714f3d holdBreathTimer=1069
+c 22511 1000 3 4 0 0 0 0 0
+c 22525 1000 3 4 0 0 0 0 0
+c 22537 1000 3 4 0 0 0 0 0
+p 6
+c 22549 1000 3 4 0 0 0 0 0
+s 352 22550 commandTime=5809 holdBreathScale=406fbb00 holdBreathTimer=1042
+c 22562 1000 3 4 0 0 0 0 0
+c 22573 1000 3 4 0 0 0 0 0
+p 6
+c 22585 1000 3 4 0 0 0 0 0
+s 353 22600 commandTime=582d holdBreathScale=406e4779 holdBreathTimer=101e
+c 22597 1000 3 4 0 0 0 0 0
+c 22609 1000 3 4 0 0 0 0 0
+p 6
+c 22620 1000 3 4 0 0 0 0 0
+c 22633 1000 3 4 0 0 0 0 0
+c 22645 1000 3 4 0 0 0 0 0
+p 6
+s 354 22650 commandTime=5875 holdBreathScale=406b5e3c holdBreathTimer=fd6
+c 22657 1000 3 4 0 0 0 0 0
+c 22671 1000 3 4 0 0 0 0 0
+c 22682 1000 3 4 0 0 0 0 0
+p 6
+c 22693 1000 3 4 0 0 0 0 0
+s 355 22700 commandTime=589a holdBreathScale=4069dd98 holdBreathTimer=fb1
+c 22706 1000 3 4 0 0 0 0 0
+c 22718 1000 3 4 0 0 0 0 0
+p 6
+c 22729 1000 3 4 0 0 0 0 0
+c 22741 1000 3 4 0 0 0 0 0
+s 356 22750 commandTime=58be holdBreathScale=406867e2 holdBreathTimer=f8d
+c 22754 1000 3 4 0 0 0 0 0
+p 6
+c 22766 1000 3 4 0 0 0 0 0
+c 22778 1000 3 4 0 0 0 0 0
+c 22791 1000 3 4 0 0 0 0 0
+p 6
+s 357 22800 commandTime=5907 holdBreathScale=40657076 holdBreathTimer=f44
+c 22804 1000 3 4 0 0 0 0 0
+c 22816 1000 3 4 0 0 0 0 0
+c 22829 1000 3 4 0 0 0 0 0
+p 6
+c 22842 1000 3 4 0 0 0 0 0
+s 358 22850 commandTime=592d holdBreathScale=4063e3f3 holdBreathTimer=f1e
+c 22855 1000 3 4 0 0 0 0 0
+c 22867 1000 3 4 0 0 0 0 0
+p 6
+c 22879 1000 3 4 0 0 0 0 0
+c 22892 1000 3 4 0 0 0 0 0
+s 359 22900 commandTime=5953 holdBreathScale=4062578f holdBreathTimer=ef8
+c 22904 1000 3 4 0 0 0 0 0
+p 6
+c 22916 1000 3 4 0 0 0 0 0
+c 22928 1000 3 4 0 0 0 0 0
+c 22940 1000 3 4 0 0 0 0 0
+p 6
+s 360 22950 commandTime=599c holdBreathScale=405f6018 holdBreathTimer=eaf
+c 22952 1000 3 4 0 0 0 0 0
+c 22964 1000 3 4 0 0 0 0 0
+c 22976 1000 3 4 0 0 0 0 0
+p 6
+c 22988 1000 3 4 0 0 0 0 0
+s 361 23000 commandTime=59c0 holdBreathScale=405de9a8 holdBreathTimer=e8b
+c 23000 1000 3 4 0 0 0 0 0
+c 23012 1000 3 4 0 0 0 0 0
+p 6
+c 23025 1000 3 4 0 0 0 0 0
+c 23036 1000 3 4 0 0 0 0 0
+s 362 23050 commandTime=59e4 holdBreathScale=405c7309 holdBreathTimer=e67
+c 23049 1000 3 4 0 0 0 0 0
+p 6
+c 23061 1000 3 4 0 0 0 0 0
+c 23073 1000 3 4 0 0 0 0 0
+c 23085 1000 3 4 0 0 0 0 0
+p 6
+c 23097 1000 3 4 0 0 0 0 0
+s 363 23100 commandTime=5a2d holdBreathScale=40597a46 holdBreathTimer=e1e
+c 23108 1000 3 4 0 0 0 0 0
+c 23120 1000 3 4 0 0 0 0 0
+p 6
+c 23132 1000 3 4 0 0 0 0 0
+c 23144 1000 3 4 0 0 0 0 0
+s 364 23150 commandTime=5a50 holdBreathScale=40580e7e holdBreathTimer=dfb
+c 23157 1000 3 4 0 0 0 0 0
+p 6
+c 23169 1000 3 4 0 0 0 0 0
+c 23181 1000 3 4 0 0 0 0 0
+c 23193 1000 3 4 0 0 0 0 0
+p 6
+s 365 23200 commandTime=5a99 holdBreathScale=4055153e holdBreathTimer=db2
+c 23205 1000 3 4 0 0 0 0 0
+c 23217 1000 3 4 0 0 0 0 0
+c 23229 1000 3 4 0 0 0 0 0
+p 6
+c 23241 1000 3 4 0 0 0 0 0
+s 366 23250 commandTime=5abd holdBreathScale=40539e35 holdBreathTimer=d8e
+c 23253 1000 3 4 0 0 0 0 0
+c 23265 1000 3 4 0 0 0 0 0
+p 6
+c 23277 1000 3 4 0 0 0 0 0
+c 23289 1000 3 4 0 0 0 0 0
+s 367 23300 commandTime=5ae1 holdBreathScale=4052271c holdBreathTimer=d6a
+c 23301 1000 3 4 0 0 0 0 0
+p 6
+c 23314 1000 3 4 0 0 0 0 0
+c 23326 1000 3 4 0 0 0 0 0
+c 23338 1000 3 4 0 0 0 0 0
+p 6
+s 368 23350 commandTime=5b2a holdBreathScale=404f2da8 holdBreathTimer=d21
+c 23351 1000 3 4 0 0 0 0 0
+c 23362 1000 3 4 0 0 0 0 0
+c 23374 1000 3 4 0 0 0 0 0
+p 6
+c 23386 1000 3 4 0 0 0 0 0
+s 369 23400 commandTime=5b4e holdBreathScale=404db683 holdBreathTimer=cfd
+c 23398 1000 3 4 0 0 0 0 0
+c 23410 1000 3 4 0 0 0 0 0
+p 6
+c 23423 1000 3 4 0 0 0 0 0
+c 23434 1000 3 4 0 0 0 0 0
+s 370 23450 commandTime=5b72 holdBreathScale=404c3f66 holdBreathTimer=cd9
+c 23450 1000 3 4 0 0 0 0 0
+p 6
+c 23461 1000 3 4 0 0 0 0 0
+c 23472 1000 3 4 0 0 0 0 0
+c 23484 1000 3 4 0 0 0 0 0
+p 6
+c 23496 1000 3 4 0 0 0 0 0
+s 371 23500 commandTime=5bbc holdBreathScale=40493a23 holdBreathTimer=c8f
+c 23510 1000 3 4 0 0 0 0 0
+c 23522 1000 3 4 0 0 0 0 0
+p 6
+c 23534 1000 3 4 0 0 0 0 0
+s 372 23550 commandTime=5be2 holdBreathScale=4047acde holdBreathTimer=c69
+c 23548 1000 3 4 0 0 0 0 0
+c 23561 1000 3 4 0 0 0 0 0
+p 6
+c 23574 1000 3 4 0 0 0 0 0
+c 23585 1000 3 4 0 0 0 0 0
+s 373 23600 commandTime=5c09 holdBreathScale=4046149e holdBreathTimer=c42
+c 23599 1000 3 4 0 0 0 0 0
+p 6
+c 23611 1000 3 4 0 0 0 0 0
+c 23623 1000 3 4 0 0 0 0 0
+c 23634 1000 3 4 0 0 0 0 0
+p 6
+c 23647 1000 3 4 0 0 0 0 0
+s 374 23650 commandTime=5c52 holdBreathScale=40431caf holdBreathTimer=bf9
+c 23658 1000 3 4 0 0 0 0 0
+c 23670 1000 3 4 0 0 0 0 0
+p 6
+c 23682 1000 3 4 0 0 0 0 0
+c 23694 1000 3 4 0 0 0 0 0
+s 375 23700 commandTime=5c76 holdBreathScale=4041a61b holdBreathTimer=bd5
+c 23707 1000 3 4 0 0 0 0 0
+p 6
+c 23719 1000 3 4 0 0 0 0 0
+c 23731 1000 3 4 0 0 0 0 0
+c 23743 1000 3 4 0 0 0 0 0
+p 6
+s 376 23750 commandTime=5cbf holdBreathScale=403ead95 holdBreathTimer=b8c
+c 23756 1000 3 4 0 0 0 0 0
+c 23768 1000 3 4 0 0 0 0 0
+c 23782 1000 3 4 0 0 0 0 0
+p 6
+c 23793 1000 3 4 0 0 0 0 0
+s 377 23800 commandTime=5ce6 holdBreathScale=403d151f holdBreathTimer=b65
+c 23806 1000 3 4 0 0 0 0 0
+c 23818 1000 3 4 0 0 0 0 0
+p 6
+c 23830 1000 3 4 0 0 0 0 0
+c 23842 1000 3 4 0 0 0 0 0
+s 378 23850 commandTime=5d0a holdBreathScale=403b9e8b holdBreathTimer=b41
+c 23854 1000 3 4 0 0 0 0 0
+p 6
+c 23866 1000 3 4 0 0 0 0 0
+c 23878 1000 3 4 0 0 0 0 0
+c 23890 1000 3 4 0 0 0 0 0
+p 6
+s 379 23900 commandTime=5d52 holdBreathScale=4038b142 holdBreathTimer=af9
+c 23901 1000 3 4 0 0 0 0 0
+c 23913 1000 3 4 0 0 0 0 0
+c 23925 1000 3 4 0 0 0 0 0
+p 6
+c 23937 1000 3 4 0 0 0 0 0
+s 380 23950 commandTime=5d75 holdBreathScale=4037456b holdBreathTimer=ad6
+c 23950 1000 3 4 0 0 0 0 0
+c 23962 1000 3 4 0 0 0 0 0
+p 6
+c 23974 1000 3 4 0 0 0 0 0
+c 23986 1000 3 4 0 0 0 0 0
+c 23998 1000 3 4 0 0 0 0 0
+p 6
+s 381 24000 commandTime=5dbe holdBreathScale=40344c36 holdBreathTimer=a8d
+c 24011 1000 3 4 0 0 0 0 0
+c 24023 1000 3 4 0 0 0 0 0
+c 24035 1000 3 4 0 0 0 0 0
+p 6
+c 24047 1000 3 4 0 0 0 0 0
+s 382 24050 commandTime=5de3 holdBreathScale=4032ca0c holdBreathTimer=a68
+c 24059 1000 3 4 0 0 0 0 0
+c 24071 1000 3 4 0 0 0 0 0
+p 6
+c 24083 1000 3 4 0 0 0 0 0
+c 24095 1000 3 4 0 0 0 0 0
+s 383 24100 commandTime=5e07 holdBreathScale=40315316 holdBreathTimer=a44
+c 24107 1000 3 4 0 0 0 0 0
+p 6
+c 24119 1000 3 4 0 0 0 0 0
+c 24131 1000 3 4 0 0 0 0 0
+c 24143 1000 3 4 0 0 0 0 0
+p 6
+s 384 24150 commandTime=5e4f holdBreathScale=402e64f2 holdBreathTimer=9fc
+c 24154 1000 3 4 0 0 0 0 0
+c 24166 1000 3 4 0 0 0 0 0
+c 24178 1000 3 4 0 0 0 0 0
+p 6
+c 24190 1000 3 4 0 0 0 0 0
+s 385 24200 commandTime=5e72 holdBreathScale=402cf8cf holdBreathTimer=9d9
+c 24202 0 3 4 0 0 0 0 0
+c 24214 0 3 4 0 0 0 0 0
+p 6
+c 24226 0 3 4 0 0 0 0 0
+c 24238 0 3 4 0 0 0 0 0
+s 386 24250 commandTime=5e96 legsAnim=99 pm_flags=800000 fWeaponPosFrac=3f70a3d8 holdBreathScale=402add64 holdBreathTimer=9b5
+c 24249 0 3 4 0 0 0 0 0
+p 6
+c 24261 0 3 4 0 0 0 0 0
+c 24273 0 3 4 0 0 0 0 0
+c 24285 0 3 4 0 0 0 0 0
+p 6
+c 24297 0 3 4 0 0 0 0 0
+s 387 24300 commandTime=5edd fWeaponPosFrac=3f433337 holdBreathScale=40222f94 holdBreathTimer=96e
+c 24310 0 3 4 0 0 0 0 0
+c 24322 0 3 4 0 0 0 0 0
+p 6
+c 24334 0 3 4 0 0 0 0 0
+c 24346 0 3 4 0 0 0 0 0
+s 388 24350 commandTime=5f02 fWeaponPosFrac=3f2b8523 holdBreathScale=401bf9a5 holdBreathTimer=949
+c 24359 0 3 4 0 0 0 0 0
+p 6
+c 24371 0 3 4 0 0 0 0 0
+c 24383 0 3 4 0 0 0 0 0
+c 24395 0 3 4 0 0 0 0 0
+p 6
+s 389 24400 commandTime=5f4b fWeaponPosFrac=3ef999a5 holdBreathScale=400db451 holdBreathTimer=900
+c 24408 0 3 4 0 0 0 0 0
+c 24420 0 3 4 0 0 0 0 0
+c 24432 0 3 4 0 0 0 0 0
+p 6
+c 24444 0 3 4 0 0 0 0 0
+s 390 24450 commandTime=5f70 fWeaponPosFrac=3eca3d7c holdBreathScale=4005cfbd holdBreathTimer=8db
+c 24455 0 3 4 0 0 0 0 0
+c 24467 0 3 4 0 0 0 0 0
+p 6
+c 24479 0 3 4 0 0 0 0 0
+c 24491 0 3 4 0 0 0 0 0
+s 391 24500 commandTime=5f93 fWeaponPosFrac=3e9d70af holdBreathScale=3ffc4ae9 holdBreathTimer=8b8
+c 24502 0 3 4 0 0 0 0 0
+p 6
+c 24514 0 3 4 0 0 0 0 0
+c 24526 0 3 4 0 0 0 0 0
+c 24538 0 3 4 0 0 0 0 0
+p 6
+s 392 24550 commandTime=5fda fWeaponPosFrac=3e051ece holdBreathScale=3fdc8166 holdBreathTimer=871
+c 24549 0 3 4 0 0 0 0 0
+c 24561 0 3 4 0 0 0 0 0
+c 24573 0 3 4 0 0 0 0 0
+p 6
+c 24585 0 3 4 0 0 0 0 0
+c 24597 0 3 4 0 0 0 0 0
+s 393 24600 commandTime=5ffd fWeaponPosFrac=3d2e14d2 holdBreathScale=3fccccd9 holdBreathTimer=84e
+c 24609 0 3 4 0 0 0 0 0
+p 6
+c 24621 0 3 4 0 0 0 0 0
+c 24633 0 3 4 0 0 0 0 0
+c 24645 0 3 4 0 0 0 0 0
+p 6
+s 394 24650 commandTime=6045 fWeaponPosFrac=0 holdBreathScale=3fb1286d holdBreathTimer=806
+c 24658 0 3 4 0 0 0 0 0
+c 24670 0 3 4 0 0 0 0 0
+c 24682 0 3 4 0 0 0 0 0
+p 6
+c 24694 0 3 4 0 0 0 0 0
+s 395 24700 commandTime=606a holdBreathScale=3fa7082e holdBreathTimer=7e1
+c 24705 0 3 4 0 0 0 0 0
+c 24717 0 3 4 0 0 0 0 0
+p 6
+c 24729 0 3 4 0 0 0 0 0
+c 24741 0 3 4 0 0 0 0 0
+s 396 24750 commandTime=608d holdBreathScale=3f9f652b holdBreathTimer=7be
+c 24752 0 3 4 0 0 0 0 0
+p 6
+c 24764 0 3 4 0 0 0 0 0
+c 24776 0 3 4 0 0 0 0 0
+c 24788 0 3 4 0 0 0 0 0
+p 6
+s 397 24800 commandTime=60d4 holdBreathScale=3f942e6c holdBreathTimer=777
+c 24801 0 3 4 0 0 0 0 0
+c 24813 0 3 4 0 0 0 0 0
+c 24825 0 3 4 0 0 0 0 0
+p 6
+c 24837 0 3 4 0 0 0 0 0
+s 398 24850 commandTime=60f9 holdBreathScale=3f900633 holdBreathTimer=752
+c 24848 0 3 4 0 0 0 0 0
+c 24860 0 3 4 0 0 0 0 0
+p 6
+c 24872 0 3 4 0 0 0 0 0
+c 24884 0 3 4 0 0 0 0 0
+c 24896 0 3 4 0 0 0 0 0
+p 6
+s 399 24900 commandTime=6140 holdBreathScale=3f8a4cf6 holdBreathTimer=70b
+c 24907 0 3 4 0 0 0 0 0
+c 24919 0 3 4 0 0 0 0 0
+c 24931 0 3 4 0 0 0 0 0
+p 6
+c 24943 0 3 4 0 0 0 0 0
+s 400 24950 commandTime=6163 holdBreathScale=3f884907 holdBreathTimer=6e8
+c 24955 0 3 4 0 0 0 0 0
+c 24967 0 3 4 0 0 0 0 0
+p 6
+c 24979 0 3 4 0 0 0 0 0
+c 24991 0 3 4 0 0 0 0 0
+s 401 25000 commandTime=6187 holdBreathScale=3f869f14 holdBreathTimer=6c4
+c 25004 0 3 4 0 0 0 0 0
+p 6
+c 25016 0 3 4 0 0 0 0 0
+c 25028 0 3 4 0 0 0 0 0
+c 25040 0 3 4 0 0 0 0 0
+p 6
+s 402 25050 commandTime=61d0 holdBreathScale=3f84339f holdBreathTimer=67b
+c 25051 0 3 4 0 0 0 0 0
+c 25063 0 3 4 0 0 0 0 0
+c 25075 0 3 4 0 0 0 0 0
+p 6
+c 25087 0 3 4 0 0 0 0 0
+c 25099 0 3 4 0 0 0 0 0
+s 403 25100 commandTime=61f3 holdBreathScale=3f83612c holdBreathTimer=658
+c 25111 0 3 4 0 0 0 0 0
+p 6
+c 25123 0 3 4 0 0 0 0 0
+c 25135 0 3 4 0 0 0 0 0
+s 404 25150 commandTime=6217 holdBreathScale=3f82b36d holdBreathTimer=634
+c 25147 0 3 4 0 0 0 0 0
+p 6
+c 25159 0 3 4 0 0 0 0 0
+c 25171 0 3 4 0 0 0 0 0
+c 25183 0 3 4 0 0 0 0 0
+p 6
+c 25195 0 3 4 0 0 0 0 0
+s 405 25200 commandTime=625f holdBreathScale=3f81b99b holdBreathTimer=5ec
+c 25208 0 3 4 0 0 0 0 0
+c 25220 0 3 4 0 0 0 0 0
+p 6
+c 25232 0 3 4 0 0 0 0 0
+c 25244 0 3 4 0 0 0 0 0
+s 406 25250 commandTime=6284 holdBreathScale=3f815ea4 holdBreathTimer=5c7
+c 25256 0 3 4 0 0 0 0 0
+p 6
+c 25268 0 3 4 0 0 0 0 0
+c 25280 0 3 4 0 0 0 0 0
+c 25292 0 3 4 0 0 0 0 0
+p 6
+s 407 25300 commandTime=62cc holdBreathScale=3f80dff3 holdBreathTimer=57f
+c 25303 0 3 4 0 0 0 0 0
+c 25315 0 3 4 0 0 0 0 0
+c 25327 0 3 4 0 0 0 0 0
+p 6
+c 25339 0 3 4 0 0 0 0 0
+s 408 25350 commandTime=62ef holdBreathScale=3f80b422 holdBreathTimer=55c
+c 25350 0 3 4 0 0 0 0 0
+c 25362 0 3 4 0 0 0 0 0
+p 6
+c 25374 0 3 4 0 0 0 0 0
+c 25386 0 3 4 0 0 0 0 0
+c 25398 0 3 4 0 0 0 0 0
+p 6
+s 409 25400 commandTime=6336 holdBreathScale=3f8073cb holdBreathTimer=515
+c 25409 0 3 4 0 0 0 0 0
+c 25421 0 3 4 0 0 0 0 0
+c 25433 0 3 4 0 0 0 0 0
+p 6
+c 25445 0 3 4 0 0 0 0 0
+s 410 25450 commandTime=6359 holdBreathScale=3f805d24 holdBreathTimer=4f2
+c 25457 0 3 4 0 0 0 0 0
+c 25469 0 3 4 0 0 0 0 0
+p 6
+c 25482 0 3 4 0 0 0 0 0
+c 25494 0 3 4 0 0 0 0 0
+s 411 25500 commandTime=637d holdBreathScale=3f804a70 holdBreathTimer=4ce
+c 25507 0 3 4 0 0 0 0 0
+p 6
+c 25519 0 3 4 0 0 0 0 0
+c 25531 0 3 4 0 0 0 0 0
+c 25543 0 3 4 0 0 0 0 0
+p 6
+s 412 25550 commandTime=63c7 holdBreathScale=3f802eef holdBreathTimer=484
+c 25556 0 3 4 0 0 0 0 0
+c 25568 0 3 4 0 0 0 0 0
+c 25580 0 3 4 0 0 0 0 0
+p 6
+c 25592 0 3 4 0 0 0 0 0
+s 413 25600 commandTime=63ec holdBreathScale=3f802544 holdBreathTimer=45f
+c 25603 0 3 4 0 0 0 0 0
+c 25615 0 3 4 0 0 0 0 0
+p 6
+c 25627 0 3 4 0 0 0 0 0
+c 25639 0 3 4 0 0 0 0 0
+s 414 25650 commandTime=640f holdBreathScale=3f800000 holdBreathTimer=43c
+c 25651 0 3 4 0 0 0 0 0
+p 6
+c 25663 0 3 4 0 0 0 0 0
+c 25675 0 3 4 0 0 0 0 0
+c 25687 0 3 4 0 0 0 0 0
+p 6
+s 415 25700 commandTime=6457 holdBreathTimer=3f4
+#   0:05 PROBE spawned 0 (-299, 997, 38.9932)

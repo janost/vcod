@@ -111,7 +111,11 @@ impl SunShafts {
                     },
                     count: None,
                 },
-                tex(3, wgpu::TextureSampleType::Depth, true),
+                tex(
+                    3,
+                    wgpu::TextureSampleType::Depth,
+                    crate::renderer::msaa_samples() > 1,
+                ),
             ],
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -128,7 +132,12 @@ impl SunShafts {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let shader = device.create_shader_module(wgpu::include_wgsl!("sun_shafts.wgsl"));
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("sun_shafts.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(crate::renderer::depth_wgsl(include_str!(
+                "sun_shafts.wgsl"
+            ))),
+        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("sun shafts pipeline layout"),
             bind_group_layouts: &[Some(&layout)],

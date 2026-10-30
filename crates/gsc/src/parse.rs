@@ -1,5 +1,6 @@
 //! Recursive descent with precedence climbing.
 
+use crate::Dialect;
 use crate::ast::*;
 use crate::lex::{Spanned, Tok};
 
@@ -26,6 +27,7 @@ fn keyword_text(tok: &Tok) -> Option<&'static str> {
         Tok::Return => "return",
         Tok::Thread => "thread",
         Tok::Wait => "wait",
+        Tok::WaitTillFrameEnd => "waittillframeend",
         _ => return None,
     })
 }
@@ -33,11 +35,16 @@ fn keyword_text(tok: &Tok) -> Option<&'static str> {
 pub struct Parser<'a> {
     t: &'a [Spanned],
     i: usize,
+    dialect: Dialect,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(t: &'a [Spanned]) -> Self {
-        Parser { t, i: 0 }
+        Self::with_dialect(t, Dialect::Cod1)
+    }
+
+    pub fn with_dialect(t: &'a [Spanned], dialect: Dialect) -> Self {
+        Parser { t, i: 0, dialect }
     }
 
     fn peek(&self) -> &Tok {
@@ -130,11 +137,14 @@ impl<'a> Parser<'a> {
             Tok::Gt => (BinOp::Gt, 7),
             Tok::Le => (BinOp::Le, 7),
             Tok::Ge => (BinOp::Ge, 7),
-            Tok::Plus => (BinOp::Add, 8),
-            Tok::Minus => (BinOp::Sub, 8),
-            Tok::Star => (BinOp::Mul, 9),
-            Tok::Slash => (BinOp::Div, 9),
-            Tok::Percent => (BinOp::Mod, 9),
+            // C's order: shifts between the relations and the sums.
+            Tok::Shl => (BinOp::Shl, 8),
+            Tok::Shr => (BinOp::Shr, 8),
+            Tok::Plus => (BinOp::Add, 9),
+            Tok::Minus => (BinOp::Sub, 9),
+            Tok::Star => (BinOp::Mul, 10),
+            Tok::Slash => (BinOp::Div, 10),
+            Tok::Percent => (BinOp::Mod, 10),
             _ => return None,
         })
     }
@@ -443,6 +453,21 @@ impl<'a> Parser<'a> {
                     self.expect(&Tok::Semi)?;
                     file.animtrees.push(name);
                 }
+                // `#include maps\mp\_utility;`: a backslash path, no `::`.
+                // The lexer only makes the token under CoD2.
+                Tok::Include => {
+                    let line = self.line();
+                    self.bump();
+                    let mut path = vec![self.ident_name()?];
+                    while self.eat(&Tok::Backslash) {
+                        path.push(self.ident_name()?);
+                    }
+                    self.expect(&Tok::Semi)?;
+                    file.includes.push(Include {
+                        path: crate::canonical(&path.join("/")),
+                        line,
+                    });
+                }
                 _ => file.funcs.push(self.func_def()?),
             }
         }
@@ -536,6 +561,15 @@ impl<'a> Parser<'a> {
                 Ok(vec![Stmt {
                     line,
                     kind: StmtKind::Continue,
+                }])
+            }
+            Tok::WaitTillFrameEnd => {
+                let line = self.line();
+                self.bump();
+                self.expect(&Tok::Semi)?;
+                Ok(vec![Stmt {
+                    line,
+                    kind: StmtKind::WaitTillFrameEnd,
                 }])
             }
             Tok::Wait => {
@@ -717,7 +751,16 @@ impl<'a> Parser<'a> {
         let kind = match self.peek().clone() {
             Tok::Assign => {
                 self.bump();
-                let value = self.expr()?;
+                // CoD2 takes `x = thread f();`, which stores what `f`
+                // returned if it never suspended, else undefined
+                // (cod2-gsc-diff.md 3.5); 1.1 has no such form.
+                let value = if self.dialect.cod2_family() && *self.peek() == Tok::Thread {
+                    self.bump();
+                    let target = self.call_target()?;
+                    self.finish_call(None, target, true)?
+                } else {
+                    self.expr()?
+                };
                 StmtKind::Assign { target, value }
             }
             Tok::PlusAssign => self.compound_assign(target, BinOp::Add)?,
@@ -751,13 +794,18 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// Lexes and parses a whole script file.
+/// Lexes and parses a whole script file as CoD 1.1 script.
 pub fn parse_file(src: &str) -> Result<File, ParseError> {
-    let toks = crate::lex::lex(src).map_err(|e| ParseError {
+    parse_file_dialect(src, Dialect::Cod1)
+}
+
+/// [`parse_file`] under a given game's grammar.
+pub fn parse_file_dialect(src: &str, dialect: Dialect) -> Result<File, ParseError> {
+    let toks = crate::lex::lex_dialect(src, dialect).map_err(|e| ParseError {
         line: e.line,
         msg: e.msg,
     })?;
-    Parser::new(&toks).file()
+    Parser::with_dialect(&toks, dialect).file()
 }
 
 #[cfg(test)]

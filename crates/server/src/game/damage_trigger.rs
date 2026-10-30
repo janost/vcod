@@ -8,7 +8,6 @@ use crate::game::entity::ThinkFn;
 use crate::game::host::GameHost;
 use crate::game::trigger::{DamageSpec, TriggerKind};
 use glam::Vec3;
-use std::collections::HashMap;
 use vcod_gsc::{Cx, EntId, Host, Value};
 
 /// The `health` `SP_trigger_damage` stores and every activation restores
@@ -22,26 +21,24 @@ const WALK_CONTENTS: i32 = 0x40_0000;
 /// `wait` becomes `wait - 100` (`.rodata` 0x79ab8, UO 0xa5d88), and the
 /// engine prints `trigger_damage has random >= wait`. UO alone reads
 /// `teamname` (0x76f59).
-pub fn spec_of(block: &HashMap<String, String>, uo: bool) -> DamageSpec {
+/// Each through `G_SpawnFloat` / `G_SpawnInt` (1.1d 0x65297..0x6532d):
+/// `strcmp`, the first copy; `spawnflags` and UO's `teamname` (`ent+0x1e8`,
+/// game.mp.uo 0x86f59) are the entity's fields.
+pub fn spec_of(block: &[(String, String)], uo: bool) -> DamageSpec {
+    use vcod_common::bsp::{field_value, spawn_string};
     let float = |k: &str, d: f32| {
-        block
-            .get(k)
+        spawn_string(block, k)
             .and_then(|v| v.trim().parse::<f32>().ok())
             .unwrap_or(d)
     };
-    let int = |k: &str| {
-        block
-            .get(k)
-            .and_then(|v| v.trim().parse::<i32>().ok())
-            .unwrap_or(0)
-    };
+    let int = |v: Option<&str>| v.and_then(|v| v.trim().parse::<i32>().ok()).unwrap_or(0);
     let wait = float("wait", 0.5);
     let mut random = float("random", 0.0);
     if wait <= random && wait >= 0.0 {
         random = wait - 100.0;
         log::info!("trigger_damage has random >= wait");
     }
-    let team = match block.get("teamname").map(|t| t.to_ascii_lowercase()) {
+    let team = match field_value(block, "teamname").map(|t| t.to_ascii_lowercase()) {
         Some(t) if uo && t == "axis" => 1,
         Some(t) if uo && t == "allies" => 2,
         _ => 0,
@@ -49,9 +46,9 @@ pub fn spec_of(block: &HashMap<String, String>, uo: bool) -> DamageSpec {
     DamageSpec {
         wait,
         random,
-        accumulate: int("accumulate"),
-        threshold: int("threshold"),
-        spawnflags: int("spawnflags"),
+        accumulate: int(spawn_string(block, "accumulate")),
+        threshold: int(spawn_string(block, "threshold")),
+        spawnflags: int(field_value(block, "spawnflags")),
         team,
         grenade_touch: false,
     }
@@ -63,7 +60,7 @@ pub fn spec_of(block: &HashMap<String, String>, uo: bool) -> DamageSpec {
 /// copy of the whole world where it stands, its box the world's moved to
 /// its origin (docs/research/cod11-combat.md 14.8, movers doc 19).
 pub fn spawn_scripted(host: &mut GameHost, cx: &mut Cx, id: EntId, spawnflags: i32) {
-    let block = HashMap::from([("spawnflags".to_string(), spawnflags.to_string())]);
+    let block = [("spawnflags".to_string(), spawnflags.to_string())];
     let spec = spec_of(&block, host.is_uo());
     let (mins, maxs) = host.model_bounds.first().copied().unwrap_or_default();
     let shape = crate::game::trigger::TriggerShape {

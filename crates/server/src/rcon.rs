@@ -16,6 +16,27 @@ const MAX_LINE: usize = 0x400;
 pub const NO_PASSWORD: &str = "No rconpassword set on the server.\n";
 pub const BAD_PASSWORD: &str = "Bad rconpassword.\n";
 
+/// CoD2 1.3's and CoD4 1.7's refusals (`cod2_lnxded` 0x8097188,
+/// `cod4_lnxded` 0x8232838, 0x8232878, 0x82327ee): the server's password is
+/// `rcon_password`, and the client logs in (cod2-protocol.md 1.6,
+/// cod4-handshake.md 14.2).
+pub const LOGIN_NO_PASSWORD: &str =
+    "The server must set 'rcon_password' for clients to use 'rcon'.\n";
+pub const LOGIN_NOT_LOGGED_IN: &str =
+    "You must log in with 'rcon login <password>' before using 'rcon'.\n";
+pub const LOGIN_INVALID: &str = "Invalid password.\n";
+
+/// CoD2's and CoD4's cvar for a `--set` name: vcod's `rconPassword`
+/// (CoD1's, the name docs/usage.md gives every game) is `rcon_password`
+/// there; retail would keep it as a dvar nothing reads.
+pub fn login_cvar_name(name: &str) -> &str {
+    if name.eq_ignore_ascii_case("rconPassword") {
+        "rcon_password"
+    } else {
+        name
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verdict {
     /// Inside [`INTERVAL`] of the last answered request: no reply at all.
@@ -31,6 +52,21 @@ pub enum Verdict {
 #[derive(Default)]
 pub struct Rcon {
     last: Option<Instant>,
+}
+
+impl Verdict {
+    /// The CoD2 and CoD4 refusal a verdict prints, `None` for none: an
+    /// empty password given is a client that never ran `rcon login`.
+    pub fn login_refusal(&self, args: &[String]) -> Option<&'static str> {
+        match self {
+            Verdict::NoPassword => Some(LOGIN_NO_PASSWORD),
+            Verdict::BadPassword if args.get(1).is_none_or(|p| p.is_empty()) => {
+                Some(LOGIN_NOT_LOGGED_IN)
+            }
+            Verdict::BadPassword => Some(LOGIN_INVALID),
+            Verdict::Limited | Verdict::Run(_) => None,
+        }
+    }
 }
 
 impl Rcon {

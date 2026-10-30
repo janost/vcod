@@ -1,0 +1,1105 @@
+# map mp_toujane
+# made by: tools/run_probe_cod2.sh reverse mp_toujane -299 997 43 90 <out> (retail cod2_lnxded 1.3, pure, defaults)
+# move_probe --script reverse: com_maxfps 85, cl_maxpackets 30, cl_packetdup 1
+# spawn (-299 997 38.9932) view (0 90)
+s 3 5000 commandTime=1388 origin[1]=44794000 origin[0]=c3958000 viewangles[1]=42b40000 origin[2]=421bf909 velocity[2]=c2a00000 pm_flags=800000 viewHeightCurrent=42700000 eFlags=2 holdBreathScale=3f04eb57 viewHeightTarget=3c groundEntityNum=3ff weapon=3 weapons[0]=8 weaponslots[0]=300 delta_angles[1]=4000 cursorHintString=ffffffff viewlocked_entNum=3ff speed=be mins[1]=c1700000 mins[0]=c1700000 maxs[2]=428c0000 maxs[1]=41700000 maxs[0]=41700000 gravity=320
+c 5002 0 3 0 0 0 0 0 0
+c 5014 0 3 0 0 0 0 0 0
+c 5025 0 3 0 0 0 0 0 0
+p 3
+c 5037 0 3 0 0 0 0 0 0
+s 4 5050 commandTime=13a1 origin[2]=4212eb1c velocity[2]=c2ca0000 aimSpreadScale=3ec3d6fd holdBreathScale=3f169987
+c 5049 0 3 0 0 0 0 0 0
+c 5062 0 3 0 0 0 0 0 0
+p 6
+c 5074 0 3 0 0 0 0 0 0
+c 5087 0 3 0 0 0 0 0 0
+s 5 5100 commandTime=13c6 origin[2]=4201b81e velocity[2]=c3030000 aimSpreadScale=3f72d761 holdBreathScale=3f2c4f9a
+c 5099 0 3 0 0 0 0 0 0
+p 6
+c 5112 0 3 0 0 0 0 0 0
+c 5124 0 3 0 0 0 0 0 0
+c 5136 0 3 0 0 0 0 0 0
+p 6
+s 6 5150 commandTime=1410 origin[2]=41e10000 velocity[2]=0 eventSequence=1 legsAnim=284 aimSpreadScale=0 events[0]=5f torsoTimer=71 torsoAnim=200 holdBreathScale=3f4b3ce4 legsTimer=71 groundEntityNum=3fe eventParms[0]=4
+c 5148 0 3 0 0 0 0 0 0
+c 5160 0 3 0 0 0 0 0 0
+c 5173 0 3 0 0 0 0 0 0
+p 6
+c 5185 0 3 0 0 0 0 0 0
+c 5197 0 3 0 0 0 0 0 0
+s 7 5200 commandTime=1435 torsoTimer=4c holdBreathScale=3f561b33 legsTimer=4c
+c 5210 0 3 0 0 0 0 0 0
+p 6
+c 5223 0 3 0 0 0 0 0 0
+c 5236 0 3 0 0 0 0 0 0
+c 5248 0 3 0 0 0 0 0 0
+p 6
+s 8 5250 commandTime=1480 legsAnim=99 torsoTimer=1 holdBreathScale=3f65c239 legsTimer=1
+c 5261 0 3 0 0 0 0 0 0
+c 5273 0 3 0 0 0 0 0 0
+c 5284 0 3 0 0 0 0 0 0
+p 6
+s 9 5300 commandTime=14a4 torsoTimer=0 holdBreathScale=3f6b0785 legsTimer=0
+c 5297 0 3 0 0 0 0 0 0
+c 5309 0 3 0 0 0 0 0 0
+c 5322 0 3 0 0 0 0 0 0
+p 6
+c 5334 0 3 0 0 0 0 0 0
+c 5345 0 3 0 0 0 0 0 0
+s 10 5350 commandTime=14ca holdBreathScale=3f6f74ed
+c 5357 0 3 0 0 0 0 0 0
+p 6
+c 5368 0 3 0 0 0 0 0 0
+c 5379 0 3 0 0 0 0 0 0
+c 5393 0 3 0 0 0 0 0 0
+p 6
+s 11 5400 commandTime=1511 holdBreathScale=3f755df8
+c 5404 0 3 0 0 0 0 0 0
+c 5417 0 3 0 0 0 0 0 0
+c 5430 0 3 0 0 0 0 0 0
+p 6
+c 5442 0 3 0 0 0 0 0 0
+s 12 5450 commandTime=1536 holdBreathScale=3f778ec3
+c 5456 0 3 0 0 0 0 0 0
+c 5467 0 3 0 0 0 0 0 0
+p 6
+c 5479 0 3 0 0 0 0 0 0
+c 5493 0 3 0 0 0 0 0 0
+s 13 5500 commandTime=155b holdBreathScale=3f794c19
+c 5506 0 3 0 0 0 0 0 0
+p 6
+c 5518 0 3 0 0 0 0 0 0
+c 5530 0 3 0 0 0 0 0 0
+c 5542 0 3 0 0 0 0 0 0
+p 6
+s 14 5550 commandTime=15a6 holdBreathScale=3f7bcd3e
+c 5556 0 3 0 0 0 0 0 0
+c 5569 0 3 0 0 0 0 0 0
+c 5581 0 3 0 0 0 0 0 0
+p 6
+c 5592 0 3 0 0 0 0 0 0
+s 15 5600 commandTime=15cd holdBreathScale=3f7cb5aa
+c 5605 0 3 0 0 0 0 0 0
+c 5618 0 3 0 0 0 0 0 0
+p 6
+c 5629 0 3 0 0 0 0 0 0
+c 5640 0 3 0 0 0 0 0 0
+s 16 5650 commandTime=15f2 holdBreathScale=3f7d6334
+c 5651 0 3 0 0 0 0 0 0
+p 6
+c 5663 0 3 0 0 0 0 0 0
+c 5675 0 3 0 0 0 0 0 0
+c 5687 0 3 0 0 0 0 0 0
+p 6
+s 17 5700 commandTime=1637 holdBreathScale=3f7e4c83
+c 5701 0 3 0 0 0 0 0 0
+c 5713 0 3 0 0 0 0 0 0
+c 5725 0 3 0 0 0 0 0 0
+p 6
+c 5739 0 3 0 0 0 0 0 0
+s 18 5750 commandTime=165d holdBreathScale=3f7ea878
+c 5752 0 3 0 0 0 0 0 0
+c 5763 0 3 0 0 0 0 0 0
+p 6
+c 5777 0 3 0 0 0 0 0 0
+c 5789 0 3 0 0 0 0 0 0
+s 19 5800 commandTime=1683 holdBreathScale=3f7ef104
+c 5800 0 3 0 0 0 0 0 127
+p 6
+c 5814 0 3 0 0 0 0 0 127
+c 5827 0 3 0 0 0 0 0 127
+c 5841 0 3 0 0 0 0 0 127
+p 6
+s 20 5850 commandTime=16d1 origin[0]=c394a7a1 bobCycle=1 velocity[0]=42400000 movementDir=ffffffa6 legsAnim=27c aimSpreadScale=42511999 holdBreathScale=3f7f598f
+c 5852 0 3 0 0 0 0 0 127
+c 5865 0 3 0 0 0 0 0 127
+c 5877 0 3 0 0 0 0 0 127
+p 6
+c 5890 0 3 0 0 0 0 0 127
+s 21 5900 commandTime=16f5 origin[0]=c3936f4f bobCycle=4 velocity[0]=429c0000 aimSpreadScale=42c45999 holdBreathScale=3f7f7afd
+c 5903 0 3 0 0 0 0 0 127
+c 5915 0 3 0 0 0 0 0 127
+p 6
+c 5926 0 3 0 0 0 0 0 127
+c 5937 0 3 0 0 0 0 0 127
+c 5948 0 3 0 0 0 0 0 127
+p 6
+s 22 5950 commandTime=171b origin[0]=c3918d5b bobCycle=a velocity[0]=42dc0000 aimSpreadScale=4312a000 holdBreathScale=3f7f9712
+c 5962 0 3 0 0 0 0 0 127
+c 5974 0 3 0 0 0 0 0 127
+c 5986 0 3 0 0 0 0 0 127
+p 6
+s 23 6000 commandTime=1762 origin[0]=c38d9000 bobCycle=0 velocity[0]=0 movementDir=0 legsAnim=99 aimSpreadScale=436d2666 holdBreathScale=3f7fbc8f
+c 6001 0 3 0 0 0 0 0 127
+c 6013 0 3 0 0 0 0 0 127
+c 6025 0 3 0 0 0 0 0 127
+p 6
+c 6037 0 3 0 0 0 0 0 127
+s 24 6050 commandTime=1789 aimSpreadScale=433b6ccc holdBreathScale=3f800000
+c 6049 0 3 0 0 0 0 0 127
+c 6061 0 3 0 0 0 0 0 127
+p 6
+c 6072 0 3 0 0 0 0 0 127
+c 6083 0 3 0 0 0 0 0 127
+c 6095 0 3 0 0 0 0 0 127
+p 6
+s 25 6100 commandTime=17cf aimSpreadScale=42c45996
+c 6106 0 3 0 0 0 0 0 127
+c 6118 0 3 0 0 0 0 0 127
+c 6132 0 3 0 0 0 0 0 127
+p 6
+c 6144 0 3 0 0 0 0 0 127
+s 26 6150 commandTime=17f4 aimSpreadScale=424bfff8
+c 6157 0 3 0 0 0 0 0 127
+c 6169 0 3 0 0 0 0 0 127
+p 6
+c 6181 0 3 0 0 0 0 0 127
+c 6194 0 3 0 0 0 0 0 127
+s 27 6200 commandTime=1819 aimSpreadScale=4074cc52
+c 6205 0 3 0 0 0 0 0 127
+p 6
+c 6217 0 3 0 0 0 0 0 127
+c 6229 0 3 0 0 0 0 0 127
+c 6241 0 3 0 0 0 0 0 127
+p 6
+s 28 6250 commandTime=1861 aimSpreadScale=0
+c 6254 0 3 0 0 0 0 0 127
+c 6266 0 3 0 0 0 0 0 127
+c 6278 0 3 0 0 0 0 0 127
+p 6
+c 6291 0 3 0 0 0 0 0 127
+s 29 6300 commandTime=1886
+c 6304 0 3 0 0 0 0 0 127
+c 6316 0 3 0 0 0 0 0 127
+p 6
+c 6329 0 3 0 0 0 0 0 127
+c 6343 0 3 0 0 0 0 0 127
+s 30 6350 commandTime=18ac
+c 6355 0 3 0 0 0 0 0 127
+p 6
+c 6367 0 3 0 0 0 0 0 127
+c 6379 0 3 0 0 0 0 0 127
+c 6392 0 3 0 0 0 0 0 127
+p 6
+s 31 6400 commandTime=18f8
+c 6403 0 3 0 0 0 0 0 127
+c 6414 0 3 0 0 0 0 0 127
+c 6427 0 3 0 0 0 0 0 127
+p 6
+c 6438 0 3 0 0 0 0 0 127
+s 32 6450 commandTime=191b
+c 6450 0 3 0 0 0 0 0 127
+c 6463 0 3 0 0 0 0 0 127
+p 6
+c 6474 0 3 0 0 0 0 0 127
+c 6487 0 3 0 0 0 0 0 127
+s 33 6500 commandTime=193f
+c 6499 0 3 0 0 0 0 0 127
+p 6
+c 6510 0 3 0 0 0 0 0 127
+c 6522 0 3 0 0 0 0 0 127
+c 6534 0 3 0 0 0 0 0 127
+p 6
+c 6545 0 3 0 0 0 0 0 127
+s 34 6550 commandTime=1986
+c 6556 0 3 0 0 0 0 0 127
+c 6568 0 3 0 0 0 0 0 127
+p 6
+c 6579 0 3 0 0 0 0 0 127
+c 6592 0 3 0 0 0 0 0 127
+s 35 6600 commandTime=19a8
+c 6603 0 3 0 0 0 0 0 -127
+p 6
+c 6615 0 3 0 0 0 0 0 -127
+c 6627 0 3 0 0 0 0 0 -127
+c 6641 0 3 0 0 0 0 0 -127
+p 6
+s 36 6650 commandTime=19f1 origin[0]=c38e5406 bobCycle=1 velocity[1]=80000000 velocity[0]=c2380000 movementDir=5a legsAnim=27d aimSpreadScale=4241cccd
+c 6653 0 3 0 0 0 0 0 -127
+c 6665 0 3 0 0 0 0 0 -127
+c 6677 0 3 0 0 0 0 0 -127
+p 6
+c 6689 0 3 0 0 0 0 0 -127
+s 37 6700 commandTime=1a15 origin[0]=c38f834e bobCycle=4 velocity[0]=c2980000 aimSpreadScale=42bcb334
+c 6700 0 3 0 0 0 0 0 -127
+c 6712 0 3 0 0 0 0 0 -127
+p 6
+c 6724 0 3 0 0 0 0 0 -127
+c 6736 0 3 0 0 0 0 0 -127
+c 6748 0 3 0 0 0 0 0 -127
+p 6
+s 38 6750 commandTime=1a5c origin[0]=c3936428 bobCycle=12 velocity[0]=c3030000 aimSpreadScale=4338e001
+c 6760 0 3 0 0 0 0 0 -127
+c 6774 0 3 0 0 0 0 0 -127
+c 6786 0 3 0 0 0 0 0 -127
+p 6
+s 39 6800 commandTime=1a82 origin[0]=c3962b03 bobCycle=1c velocity[0]=c3180000 aimSpreadScale=43695335
+c 6797 0 3 0 0 0 0 0 -127
+c 6809 0 3 0 0 0 0 0 -127
+c 6821 0 3 0 0 0 0 0 -127
+p 6
+c 6833 0 3 0 0 0 0 0 -127
+c 6846 0 3 0 0 0 0 0 -127
+s 40 6850 commandTime=1aa5 origin[0]=c398d3f9 bobCycle=25 aimSpreadScale=437f0000
+c 6857 0 3 0 0 0 0 0 -127
+p 6
+c 6869 0 3 0 0 0 0 0 -127
+c 6881 0 3 0 0 0 0 0 -127
+c 6893 0 3 0 0 0 0 0 -127
+p 6
+s 41 6900 commandTime=1aed origin[0]=c39e4ccf bobCycle=38
+c 6904 0 3 0 0 0 0 0 -127
+c 6917 0 3 0 0 0 0 0 -127
+c 6928 0 3 0 0 0 0 0 -127
+p 6
+c 6940 0 3 0 0 0 0 0 -127
+s 42 6950 commandTime=1b10 origin[0]=c3a0f5c5 bobCycle=42 eventSequence=2 events[1]=3
+c 6952 0 3 0 0 0 0 0 -127
+c 6964 0 3 0 0 0 0 0 -127
+p 6
+c 6977 0 3 0 0 0 0 0 -127
+c 6989 0 3 0 0 0 0 0 -127
+s 43 7000 commandTime=1b34 origin[0]=c3a3b230 bobCycle=4b
+c 7002 0 3 0 0 0 0 0 -127
+p 6
+c 7015 0 3 0 0 0 0 0 -127
+c 7028 0 3 0 0 0 0 0 -127
+c 7040 0 3 0 0 0 0 0 -127
+p 6
+s 44 7050 commandTime=1b80 origin[0]=c3a67000 bobCycle=0 velocity[1]=0 velocity[0]=0 movementDir=0 legsAnim=99 aimSpreadScale=434e8ccd
+c 7051 0 3 0 0 0 0 0 -127
+c 7065 0 3 0 0 0 0 0 -127
+c 7077 0 3 0 0 0 0 0 -127
+p 6
+c 7090 0 3 0 0 0 0 0 -127
+s 45 7100 commandTime=1ba5 aimSpreadScale=431f6000
+c 7104 0 3 0 0 0 0 0 -127
+c 7116 0 3 0 0 0 0 0 -127
+p 6
+c 7129 0 3 0 0 0 0 0 -127
+c 7140 0 3 0 0 0 0 0 -127
+s 46 7150 commandTime=1bcc aimSpreadScale=42db4ccd
+c 7153 0 3 0 0 0 0 0 -127
+p 6
+c 7164 0 3 0 0 0 0 0 -127
+c 7176 0 3 0 0 0 0 0 -127
+c 7188 0 3 0 0 0 0 0 -127
+p 6
+s 47 7200 commandTime=1c14 aimSpreadScale=418ecccd
+c 7200 0 3 0 0 0 0 0 -127
+c 7212 0 3 0 0 0 0 0 -127
+c 7224 0 3 0 0 0 0 0 -127
+p 6
+c 7236 0 3 0 0 0 0 0 -127
+s 48 7250 commandTime=1c38 aimSpreadScale=0
+c 7249 0 3 0 0 0 0 0 -127
+c 7262 0 3 0 0 0 0 0 -127
+p 6
+c 7274 0 3 0 0 0 0 0 -127
+c 7286 0 3 0 0 0 0 0 -127
+s 49 7300 commandTime=1c5e
+c 7300 0 3 0 0 0 0 0 -127
+p 6
+c 7312 0 3 0 0 0 0 0 -127
+c 7324 0 3 0 0 0 0 0 -127
+c 7336 0 3 0 0 0 0 0 -127
+p 6
+s 50 7350 commandTime=1ca8
+c 7349 0 3 0 0 0 0 0 -127
+c 7361 0 3 0 0 0 0 0 -127
+c 7375 0 3 0 0 0 0 0 -127
+p 6
+c 7386 0 3 0 0 0 0 0 -127
+c 7398 0 3 0 0 0 0 0 -127
+s 51 7400 commandTime=1ccf
+c 7412 0 3 0 0 0 0 0 127
+p 6
+c 7424 0 3 0 0 0 0 0 127
+c 7435 0 3 0 0 0 0 0 127
+c 7447 0 3 0 0 0 0 0 127
+p 6
+s 52 7450 commandTime=1d17 origin[0]=c3a5a279 bobCycle=1 velocity[0]=42400000 movementDir=ffffffa6 legsAnim=27c aimSpreadScale=42328000
+c 7459 0 3 0 0 0 0 0 127
+c 7472 0 3 0 0 0 0 0 127
+c 7486 0 3 0 0 0 0 0 127
+p 6
+s 53 7500 commandTime=1d3e origin[0]=c3a4474a bobCycle=5 velocity[0]=42a00000 aimSpreadScale=42bcb333
+c 7498 0 3 0 0 0 0 0 127
+c 7510 0 3 0 0 0 0 0 127
+c 7522 0 3 0 0 0 0 0 127
+p 6
+c 7534 0 3 0 0 0 0 0 127
+c 7546 0 3 0 0 0 0 0 127
+s 54 7550 commandTime=1d62 origin[0]=c3a27b57 bobCycle=b velocity[0]=42dc0000 aimSpreadScale=430c4000
+c 7560 0 3 0 0 0 0 0 127
+p 6
+c 7572 0 3 0 0 0 0 0 127
+c 7583 0 3 0 0 0 0 0 127
+c 7595 0 3 0 0 0 0 0 127
+p 6
+s 55 7600 commandTime=1dab origin[0]=c39d6f72 bobCycle=1c velocity[0]=43180000 aimSpreadScale=43695334
+c 7606 0 3 0 0 0 0 0 127
+c 7618 0 3 0 0 0 0 0 127
+c 7629 0 3 0 0 0 0 0 127
+p 6
+c 7641 0 3 0 0 0 0 0 127
+s 56 7650 commandTime=1dcd origin[0]=c39ad9f1 bobCycle=25 aimSpreadScale=437f0000
+c 7653 0 3 0 0 0 0 0 127
+c 7665 0 3 0 0 0 0 0 127
+p 6
+c 7677 0 3 0 0 0 0 0 127
+c 7689 0 3 0 0 0 0 0 127
+s 57 7700 commandTime=1df1 origin[0]=c3981d86 bobCycle=2e
+c 7700 0 3 0 0 0 0 0 127
+p 6
+c 7712 0 3 0 0 0 0 0 127
+c 7724 0 3 0 0 0 0 0 127
+c 7736 0 3 0 0 0 0 0 127
+p 6
+s 58 7750 commandTime=1e38 origin[0]=c392b825 bobCycle=40 eventSequence=3 events[2]=3
+c 7749 0 3 0 0 0 0 0 127
+c 7761 0 3 0 0 0 0 0 127
+c 7773 0 3 0 0 0 0 0 127
+p 6
+c 7785 0 3 0 0 0 0 0 127
+s 59 7800 commandTime=1e5d origin[0]=c38fe845 bobCycle=4a
+c 7798 0 3 0 0 0 0 0 127
+c 7810 0 3 0 0 0 0 0 127
+p 6
+c 7823 0 3 0 0 0 0 0 127
+c 7834 0 3 0 0 0 0 0 127
+c 7846 0 3 0 0 0 0 0 127
+p 6
+s 60 7850 commandTime=1ea6 origin[0]=c38d9000 bobCycle=0 velocity[0]=0 movementDir=0 legsAnim=99 aimSpreadScale=4351199a
+c 7857 0 3 0 0 0 0 0 127
+c 7871 0 3 0 0 0 0 0 127
+c 7883 0 3 0 0 0 0 0 127
+p 6
+c 7895 0 3 0 0 0 0 0 127
+s 61 7900 commandTime=1ecb aimSpreadScale=4321eccd
+c 7908 0 3 0 0 0 0 0 127
+c 7920 0 3 0 0 0 0 0 127
+p 6
+c 7931 0 3 0 0 0 0 0 127
+c 7943 0 3 0 0 0 0 0 127
+s 62 7950 commandTime=1ef0 aimSpreadScale=42e58000
+c 7956 0 3 0 0 0 0 0 127
+p 6
+c 7968 0 3 0 0 0 0 0 127
+c 7979 0 3 0 0 0 0 0 127
+c 7991 0 3 0 0 0 0 0 127
+p 6
+s 63 8000 commandTime=1f37 aimSpreadScale=41c1cccb
+c 8005 0 3 0 0 0 0 0 -127
+c 8017 0 3 0 0 0 0 0 -127
+c 8029 0 3 0 0 0 0 0 -127
+p 6
+c 8042 0 3 0 0 0 0 0 -127
+s 64 8050 commandTime=1f5d origin[0]=c38e1a34 velocity[1]=80000000 velocity[0]=c21c0000 movementDir=5a legsAnim=27d aimSpreadScale=4213e666
+c 8054 0 3 0 0 0 0 0 -127
+c 8068 0 3 0 0 0 0 0 -127
+p 6
+c 8080 0 3 0 0 0 0 0 -127
+c 8092 0 3 0 0 0 0 0 -127
+s 65 8100 commandTime=1f84 origin[0]=c38f48b7 bobCycle=4 velocity[0]=c28e0000 aimSpreadScale=42ad6666
+c 8104 0 3 0 0 0 0 0 -127
+p 6
+c 8116 0 3 0 0 0 0 0 -127
+c 8129 0 3 0 0 0 0 0 -127
+c 8142 0 3 0 0 0 0 0 -127
+p 6
+s 66 8150 commandTime=1fce origin[0]=c39336ef bobCycle=12 velocity[0]=c3020000 aimSpreadScale=43350ccd
+c 8154 0 3 0 0 0 0 0 -127
+c 8165 0 3 0 0 0 0 0 -127
+c 8178 0 3 0 0 0 0 0 -127
+p 6
+c 8191 0 3 0 0 0 0 0 -127
+s 67 8200 commandTime=1ff2 origin[0]=c395d350 bobCycle=1c velocity[0]=c3180000 aimSpreadScale=4362f333
+c 8203 0 3 0 0 0 0 0 -127
+c 8217 0 3 0 0 0 0 0 -127
+p 6
+c 8228 0 3 0 0 0 0 0 -127
+c 8241 0 3 0 0 0 0 0 -127
+s 68 8250 commandTime=2019 origin[0]=c398ca19 bobCycle=27 aimSpreadScale=437f0000
+c 8254 0 3 0 0 0 0 0 -127
+p 6
+c 8265 0 3 0 0 0 0 0 -127
+c 8276 0 3 0 0 0 0 0 -127
+c 8288 0 3 0 0 0 0 0 -127
+p 6
+s 69 8300 commandTime=2060 origin[0]=c39e2f7a bobCycle=3b
+c 8299 0 3 0 0 0 0 0 -127
+c 8311 0 3 0 0 0 0 0 -127
+c 8323 0 3 0 0 0 0 0 -127
+p 6
+c 8335 0 3 0 0 0 0 0 -127
+s 70 8350 commandTime=2083 origin[0]=c3a0d870 bobCycle=44 eventSequence=4 events[3]=3
+c 8348 0 3 0 0 0 0 0 -127
+c 8360 0 3 0 0 0 0 0 -127
+p 6
+c 8372 0 3 0 0 0 0 0 -127
+c 8384 0 3 0 0 0 0 0 -127
+c 8396 0 3 0 0 0 0 0 -127
+p 6
+s 71 8400 commandTime=20cc origin[0]=c3a664bb bobCycle=57
+c 8407 0 3 0 0 0 0 0 -127
+c 8419 0 3 0 0 0 0 0 -127
+c 8430 0 3 0 0 0 0 0 -127
+p 6
+c 8442 0 3 0 0 0 0 0 -127
+s 72 8450 commandTime=20ee origin[0]=c3a67000 bobCycle=0 velocity[1]=0 velocity[0]=0 movementDir=0 legsAnim=99 aimSpreadScale=4361accd
+c 8454 0 3 0 0 0 0 0 -127
+c 8465 0 3 0 0 0 0 0 -127
+p 6
+c 8477 0 3 0 0 0 0 0 -127
+c 8489 0 3 0 0 0 0 0 -127
+s 73 8500 commandTime=2111 aimSpreadScale=43350ccd
+c 8501 0 3 0 0 0 0 0 -127
+p 6
+c 8513 0 3 0 0 0 0 0 -127
+c 8525 0 3 0 0 0 0 0 -127
+c 8537 0 3 0 0 0 0 0 -127
+p 6
+s 74 8550 commandTime=2159 aimSpreadScale=42b27ffe
+c 8550 0 3 0 0 0 0 0 -127
+c 8562 0 3 0 0 0 0 0 -127
+c 8574 0 3 0 0 0 0 0 -127
+p 6
+c 8586 0 3 0 0 0 0 0 -127
+c 8598 0 3 0 0 0 0 0 -127
+s 75 8600 commandTime=217e aimSpreadScale=42284cca
+c 8611 0 3 0 0 0 0 127 0
+p 6
+c 8624 0 3 0 0 0 0 127 0
+c 8636 0 3 0 0 0 0 127 0
+s 76 8650 commandTime=21a3 origin[1]=4479527f velocity[1]=41b00000 velocity[0]=80000000 legsAnim=27f aimSpreadScale=0
+c 8649 0 3 0 0 0 0 127 0
+p 6
+c 8662 0 3 0 0 0 0 127 0
+c 8674 0 3 0 0 0 0 127 0
+c 8686 0 3 0 0 0 0 127 0
+p 6
+s 77 8700 commandTime=21ee origin[1]=447aaf71 bobCycle=7 velocity[1]=42da0000 aimSpreadScale=42bf4001
+c 8698 0 3 0 0 0 0 127 0
+c 8711 0 3 0 0 0 0 127 0
+c 8723 0 3 0 0 0 0 127 0
+p 6
+c 8735 0 3 0 0 0 0 127 0
+c 8747 0 3 0 0 0 0 127 0
+s 78 8750 commandTime=2213 origin[1]=447bef71 bobCycle=f velocity[1]=43140000 aimSpreadScale=430ecccd
+c 8759 0 3 0 0 0 0 127 0
+p 6
+c 8770 0 3 0 0 0 0 127 0
+c 8783 0 3 0 0 0 0 127 0
+c 8795 0 3 0 0 0 0 127 0
+p 6
+s 79 8800 commandTime=225b origin[1]=447f2722 bobCycle=23 velocity[1]=433e0000 aimSpreadScale=436a999a
+c 8808 0 3 0 0 0 0 127 0
+c 8821 0 3 0 0 0 0 127 0
+c 8835 0 3 0 0 0 0 127 0
+p 6
+s 80 8850 commandTime=2283 origin[1]=448086c4 bobCycle=2f aimSpreadScale=437f0000
+c 8848 0 3 0 0 0 0 127 0
+c 8862 0 3 0 0 0 0 127 0
+c 8873 0 3 0 0 0 0 127 0
+p 6
+c 8887 0 3 0 0 0 0 127 0
+s 81 8900 commandTime=22a9 origin[1]=44816dce bobCycle=3a
+c 8900 0 3 0 0 0 0 127 0
+c 8913 0 3 0 0 0 0 127 0
+p 6
+c 8925 0 3 0 0 0 0 127 0
+c 8937 0 3 0 0 0 0 127 0
+s 82 8950 commandTime=22d1 origin[1]=44826101 bobCycle=46 eventSequence=5 events[0]=3 eventParms[0]=0
+c 8949 0 3 0 0 0 0 127 0
+p 6
+c 8961 0 3 0 0 0 0 127 0
+c 8973 0 3 0 0 0 0 127 0
+c 8986 0 3 0 0 0 0 127 0
+p 6
+s 83 9000 commandTime=231a origin[1]=44841cd9 bobCycle=5e
+c 8999 0 3 0 0 0 0 127 0
+c 9013 0 3 0 0 0 0 127 0
+c 9026 0 3 0 0 0 0 127 0
+p 6
+c 9037 0 3 0 0 0 0 127 0
+c 9048 0 3 0 0 0 0 127 0
+s 84 9050 commandTime=2342 origin[1]=4485100c bobCycle=6a
+c 9061 0 3 0 0 0 0 127 0
+p 6
+c 9073 0 3 0 0 0 0 127 0
+c 9086 0 3 0 0 0 0 127 0
+s 85 9100 commandTime=2365 origin[1]=4485e4d8 bobCycle=74
+c 9101 0 3 0 0 0 0 -127 0
+p 6
+c 9113 0 3 0 0 0 0 -127 0
+c 9125 0 3 0 0 0 0 -127 0
+c 9137 0 3 0 0 0 0 -127 0
+p 6
+s 86 9150 commandTime=23b1 origin[1]=44874506 bobCycle=8b velocity[1]=42ae0000 velocity[0]=0 movementDir=5a legsAnim=7e pm_flags=800080
+c 9149 0 3 0 0 0 0 -127 0
+c 9161 0 3 0 0 0 0 -127 0
+c 9173 0 3 0 0 0 0 -127 0
+p 6
+c 9184 0 3 0 0 0 0 -127 0
+c 9196 0 3 0 0 0 0 -127 0
+s 87 9200 commandTime=23d5 origin[1]=448778e8 bobCycle=8e velocity[1]=41c00000
+c 9208 0 3 0 0 0 0 -127 0
+p 6
+c 9220 0 3 0 0 0 0 -127 0
+c 9232 0 3 0 0 0 0 -127 0
+c 9244 0 3 0 0 0 0 -127 0
+p 6
+s 88 9250 commandTime=241c origin[1]=44874137 bobCycle=90 velocity[1]=c2380000 movementDir=0
+c 9256 0 3 0 0 0 0 -127 0
+c 9268 0 3 0 0 0 0 -127 0
+c 9280 0 3 0 0 0 0 -127 0
+p 6
+c 9292 0 3 0 0 0 0 -127 0
+s 89 9300 commandTime=2440 origin[1]=4486fa10 bobCycle=95 velocity[1]=c28c0000
+c 9304 0 3 0 0 0 0 -127 0
+c 9316 0 3 0 0 0 0 -127 0
+p 6
+c 9328 0 3 0 0 0 0 -127 0
+c 9340 0 3 0 0 0 0 -127 0
+s 90 9350 commandTime=2464 origin[1]=44869743 bobCycle=9c velocity[1]=c2bc0000
+c 9352 0 3 0 0 0 0 -127 0
+p 6
+c 9364 0 3 0 0 0 0 -127 0
+c 9376 0 3 0 0 0 0 -127 0
+c 9388 0 3 0 0 0 0 -127 0
+p 6
+s 91 9400 commandTime=24ac origin[1]=44858494 bobCycle=b1 velocity[1]=c3050000
+c 9401 0 3 0 0 0 0 -127 0
+c 9413 0 3 0 0 0 0 -127 0
+c 9425 0 3 0 0 0 0 -127 0
+p 6
+c 9437 0 3 0 0 0 0 -127 0
+s 92 9450 commandTime=24d1 origin[1]=4484e71c bobCycle=bd
+c 9450 0 3 0 0 0 0 -127 0
+c 9462 0 3 0 0 0 0 -127 0
+p 6
+c 9474 0 3 0 0 0 0 -127 0
+c 9486 0 3 0 0 0 0 -127 0
+s 93 9500 commandTime=24f6 origin[1]=448449a4 bobCycle=c9 eventSequence=6
+c 9498 0 3 0 0 0 0 -127 0
+p 6
+c 9510 0 3 0 0 0 0 -127 0
+c 9522 0 3 0 0 0 0 -127 0
+c 9535 0 3 0 0 0 0 -127 0
+p 6
+s 94 9550 commandTime=253f origin[1]=448312f6 bobCycle=e1
+c 9548 0 3 0 0 0 0 -127 0
+c 9560 0 3 0 0 0 0 -127 0
+c 9572 0 3 0 0 0 0 -127 0
+p 6
+c 9584 0 3 0 0 0 0 -127 0
+c 9596 0 3 0 0 0 0 -127 0
+s 95 9600 commandTime=2564 origin[1]=4482757e bobCycle=ed
+c 9607 0 3 0 0 0 0 0 0
+p 6
+c 9619 0 3 0 0 0 0 0 0
+c 9631 0 3 0 0 0 0 0 0
+c 9643 0 3 0 0 0 0 0 0
+p 6
+s 96 9650 commandTime=25ab origin[1]=4481657b bobCycle=fd velocity[1]=c2cc0000 aimSpreadScale=43431333
+c 9654 0 3 0 0 0 0 0 0
+c 9666 0 3 0 0 0 0 0 0
+c 9678 0 3 0 0 0 0 0 0
+p 6
+c 9690 0 3 0 0 0 0 0 0
+s 97 9700 commandTime=25ce origin[1]=448101c8 bobCycle=1 velocity[1]=c2a40000 aimSpreadScale=43167333
+c 9703 0 3 0 0 0 0 0 0
+c 9715 0 3 0 0 0 0 0 0
+p 6
+c 9727 0 3 0 0 0 0 0 0
+c 9739 0 3 0 0 0 0 0 0
+s 98 9750 commandTime=25f3 origin[1]=4480b106 bobCycle=4 velocity[1]=c2740000 aimSpreadScale=42ce8ccc
+c 9750 0 3 0 0 0 0 0 0
+p 6
+c 9762 0 3 0 0 0 0 0 0
+c 9774 0 3 0 0 0 0 0 0
+c 9788 0 3 0 0 0 0 0 0
+p 6
+s 99 9800 commandTime=263c origin[1]=44805b23 bobCycle=6 velocity[1]=c1980000 aimSpreadScale=41233324
+c 9801 0 3 0 0 0 0 0 0
+c 9812 0 3 0 0 0 0 0 0
+c 9824 0 3 0 0 0 0 0 0
+p 6
+c 9836 0 3 0 0 0 0 0 0
+s 100 9850 commandTime=2660 origin[1]=4480541d bobCycle=0 velocity[1]=0 legsAnim=299 aimSpreadScale=0
+c 9848 0 3 0 0 0 0 0 0
+c 9859 0 3 0 0 0 0 0 0
+p 6
+c 9871 0 3 0 0 0 0 0 0
+c 9884 0 3 0 0 0 0 0 0
+c 9896 0 3 0 0 0 0 0 0
+p 6
+s 101 9900 commandTime=26a8 velocity[1]=80000000
+c 9908 0 3 0 0 0 0 0 0
+c 9919 0 3 0 0 0 0 0 0
+c 9932 0 3 0 0 0 0 0 0
+p 6
+c 9943 0 3 0 0 0 0 0 0
+s 102 9950 commandTime=26cc
+c 9956 0 3 0 0 0 0 0 0
+c 9967 0 3 0 0 0 0 0 0
+p 6
+c 9979 0 3 0 0 0 0 0 0
+c 9993 0 3 0 0 0 0 0 0
+s 103 10000 commandTime=26ef
+c 10006 0 3 0 0 0 0 0 0
+p 6
+c 10019 0 3 0 0 0 0 0 0
+c 10032 0 3 0 0 0 0 0 0
+c 10044 0 3 0 0 0 0 0 0
+p 6
+s 104 10050 commandTime=273c
+c 10056 0 3 0 0 0 0 0 0
+c 10067 0 3 0 0 0 0 0 0
+c 10079 0 3 0 0 0 0 0 0
+p 6
+c 10091 0 3 0 0 0 0 0 0
+s 105 10100 commandTime=275f
+c 10103 0 3 0 0 0 0 0 0
+c 10115 0 3 0 0 0 0 0 0
+p 6
+c 10127 0 3 0 0 0 0 0 0
+c 10140 0 3 0 0 0 0 0 0
+s 106 10150 commandTime=2783
+c 10152 0 3 0 0 0 0 0 0
+p 6
+c 10163 0 3 0 0 0 0 0 0
+c 10175 0 3 0 0 0 0 0 0
+c 10187 0 3 0 0 0 0 0 0
+p 6
+c 10199 0 3 0 0 0 0 0 0
+s 107 10200 commandTime=27cb
+c 10211 0 3 0 0 0 0 0 0
+c 10223 0 3 0 0 0 0 0 0
+p 6
+c 10235 0 3 0 0 0 0 0 0
+s 108 10250 commandTime=27ef
+c 10247 0 3 0 0 0 0 0 0
+c 10259 0 3 0 0 0 0 0 0
+p 6
+c 10270 0 3 0 0 0 0 0 0
+c 10282 0 3 0 0 0 0 0 0
+c 10294 0 3 0 0 0 0 0 0
+p 6
+s 109 10300 commandTime=2836
+c 10306 0 3 0 0 0 0 0 0
+c 10318 0 3 0 0 0 0 0 0
+c 10331 0 3 0 0 0 0 0 0
+p 6
+c 10345 0 3 0 0 0 0 0 0
+s 110 10350 commandTime=285b
+c 10357 0 3 0 0 0 0 0 0
+c 10370 0 3 0 0 0 0 0 0
+p 6
+c 10382 0 3 0 0 0 0 0 0
+c 10394 0 3 0 0 0 0 0 0
+s 111 10400 commandTime=2882
+c 10406 0 3 0 0 0 0 0 0
+p 6
+c 10418 0 3 0 0 0 0 0 0
+c 10430 0 3 0 0 0 0 0 0
+c 10442 0 3 0 0 0 0 0 0
+p 6
+s 112 10450 commandTime=28ca
+c 10454 0 3 0 0 0 0 0 0
+c 10466 0 3 0 0 0 0 0 0
+c 10477 0 3 0 0 0 0 0 0
+p 6
+c 10491 0 3 0 0 0 0 0 0
+s 113 10500 commandTime=28ed
+c 10502 0 3 0 0 0 0 0 0
+c 10516 0 3 0 0 0 0 0 0
+p 6
+c 10529 0 3 0 0 0 0 0 0
+c 10542 0 3 0 0 0 0 0 0
+s 114 10550 commandTime=2914
+c 10553 0 3 0 0 0 0 0 0
+p 6
+c 10564 0 3 0 0 0 0 0 0
+c 10575 0 3 0 0 0 0 0 0
+c 10587 0 3 0 0 0 0 0 0
+p 6
+s 115 10600 commandTime=295b
+c 10598 0 3 0 0 0 0 0 0
+c 10610 0 3 0 0 0 0 127 127
+c 10622 0 3 0 0 0 0 127 127
+p 6
+c 10634 0 3 0 0 0 0 127 127
+c 10646 0 3 0 0 0 0 127 127
+s 116 10650 commandTime=297e origin[1]=44806339 origin[0]=c3a6338e velocity[1]=41c80000 velocity[0]=41c80000 movementDir=ffffffd3 legsAnim=7f aimSpreadScale=4174cccd pm_flags=800000
+c 10657 0 3 0 0 0 0 127 127
+p 6
+c 10669 0 3 0 0 0 0 127 127
+c 10681 0 3 0 0 0 0 127 127
+c 10692 0 3 0 0 0 0 127 127
+p 6
+s 117 10700 commandTime=29c4 origin[1]=4480e6dc origin[0]=c3a424fe bobCycle=9 velocity[1]=42a60000 velocity[0]=42a60000 aimSpreadScale=42d1199b
+c 10704 0 3 0 0 0 0 127 127
+c 10716 0 3 0 0 0 0 127 127
+c 10728 0 3 0 0 0 0 127 127
+p 6
+c 10740 0 3 0 0 0 0 127 127
+s 118 10750 commandTime=29e8 origin[1]=44815a34 origin[0]=c3a2579c bobCycle=11 velocity[1]=42d80000 velocity[0]=42d80000 aimSpreadScale=43167334
+c 10752 0 3 0 0 0 0 127 127
+c 10764 0 3 0 0 0 0 127 127
+p 6
+c 10776 0 3 0 0 0 0 127 127
+c 10788 0 3 0 0 0 0 127 127
+s 119 10800 commandTime=2a0c origin[1]=4481e6a7 origin[0]=c3a025cd bobCycle=1b velocity[1]=43000000 velocity[0]=43000000 aimSpreadScale=4344599b
+c 10801 0 3 0 0 0 0 127 127
+p 6
+c 10813 0 3 0 0 0 0 127 127
+c 10825 0 3 0 0 0 0 127 127
+c 10836 0 3 0 0 0 0 127 127
+p 6
+s 120 10850 commandTime=2a54 origin[1]=44831c16 origin[0]=c39b5012 bobCycle=32 velocity[1]=43060000 velocity[0]=43060000 movementDir=ffffffd4 aimSpreadScale=437f0000
+c 10848 0 3 0 0 0 0 127 127
+c 10861 0 3 0 0 0 0 127 127
+c 10874 0 3 0 0 0 0 127 127
+p 6
+c 10885 0 3 0 0 0 0 127 127
+c 10896 0 3 0 0 0 0 127 127
+s 121 10900 commandTime=2a7a origin[1]=4483bf75 origin[0]=c398c297 bobCycle=3e
+c 10908 0 3 0 0 0 0 127 127
+p 6
+c 10920 0 3 0 0 0 0 127 127
+c 10932 0 3 0 0 0 0 127 127
+c 10944 0 3 0 0 0 0 127 127
+p 6
+s 122 10950 commandTime=2ac0 origin[1]=4484ec67 origin[0]=c3940ecf bobCycle=54 movementDir=ffffffd3 eventSequence=7
+c 10956 0 3 0 0 0 0 127 127
+c 10968 0 3 0 0 0 0 127 127
+c 10979 0 3 0 0 0 0 127 127
+p 6
+c 10992 0 3 0 0 0 0 127 127
+s 123 11000 commandTime=2ae3 origin[1]=448582e0 origin[0]=c391b4eb bobCycle=5f movementDir=ffffffd4
+c 11005 0 3 0 0 0 0 127 127
+c 11017 0 3 0 0 0 0 127 127
+p 6
+c 11029 0 3 0 0 0 0 127 127
+c 11041 0 3 0 0 0 0 127 127
+s 124 11050 commandTime=2b09 origin[1]=4486263f origin[0]=c38f2770 bobCycle=6b movementDir=ffffffd3
+c 11054 0 3 0 0 0 0 127 127
+p 6
+c 11066 0 3 0 0 0 0 127 127
+c 11079 0 3 0 0 0 0 127 127
+c 11092 0 3 0 0 0 0 127 127
+p 6
+s 125 11100 commandTime=2b54 origin[1]=44877e87 origin[0]=c38d9007 bobCycle=7e velocity[1]=431b0000 velocity[0]=0 movementDir=0
+c 11103 0 3 0 0 0 0 127 127
+c 11115 0 3 0 0 0 0 127 127
+c 11126 0 3 0 0 0 0 127 127
+p 6
+c 11137 0 3 0 0 0 0 127 127
+s 126 11150 commandTime=2b76 origin[1]=44882fa7 origin[0]=c38d9005 bobCycle=87 velocity[1]=43260000
+c 11150 0 3 0 0 0 0 127 127
+c 11161 0 3 0 0 0 0 127 127
+p 6
+c 11173 0 3 0 0 0 0 127 127
+c 11185 0 3 0 0 0 0 127 127
+c 11198 0 3 0 0 0 0 127 127
+p 6
+s 127 11200 commandTime=2bbe origin[1]=4489c840 origin[0]=c38d9007 bobCycle=9d velocity[1]=43390000
+c 11211 0 3 0 0 0 0 127 127
+c 11225 0 3 0 0 0 0 127 127
+c 11236 0 3 0 0 0 0 127 127
+p 6
+s 128 11250 commandTime=2be4 origin[1]=448aaeac origin[0]=c38d7d4e bobCycle=aa velocity[1]=43400000 velocity[0]=41500000 movementDir=fffffffd
+c 11250 0 3 0 0 0 0 127 127
+c 11263 0 3 0 0 0 0 127 127
+c 11275 0 3 0 0 0 0 127 127
+p 6
+c 11288 0 3 0 0 0 0 127 127
+s 129 11300 commandTime=2c0b origin[1]=448ba2fd origin[0]=c38cae88 bobCycle=b7 velocity[1]=43460000 velocity[0]=425c0000 movementDir=fffffff1
+c 11299 0 3 0 0 0 0 127 127
+c 11312 0 3 0 0 0 0 127 -127
+p 6
+c 11324 0 3 0 0 0 0 127 -127
+c 11336 0 3 0 0 0 0 127 -127
+s 130 11350 commandTime=2c30 origin[1]=448c8dec origin[0]=c38b851d bobCycle=c5 velocity[1]=43470000 velocity[0]=424c0000 movementDir=fffffff2 eventSequence=8
+c 11348 0 3 0 0 0 0 127 -127
+p 6
+c 11360 0 3 0 0 0 0 127 -127
+c 11372 0 3 0 0 0 0 127 -127
+c 11384 0 3 0 0 0 0 127 -127
+p 6
+c 11397 0 3 0 0 0 0 127 -127
+s 131 11400 commandTime=2c78 origin[1]=448e60f8 origin[0]=c38bba7e bobCycle=dd velocity[1]=434d0000 velocity[0]=c2280000 movementDir=b
+c 11409 0 3 0 0 0 0 127 -127
+c 11421 0 3 0 0 0 0 127 -127
+p 6
+c 11432 0 3 0 0 0 0 127 -127
+c 11446 0 3 0 0 0 0 127 -127
+s 132 11450 commandTime=2c9d origin[1]=448e9bff origin[0]=c38ce316 bobCycle=e0 velocity[1]=0 velocity[0]=c28e0000 movementDir=5a
+c 11460 0 3 0 0 0 0 127 -127
+p 6
+c 11471 0 3 0 0 0 0 127 -127
+c 11482 0 3 0 0 0 0 127 -127
+c 11494 0 3 0 0 0 0 127 -127
+p 6
+s 133 11500 commandTime=2ce6 origin[1]=448ed06b origin[0]=c3907a9a bobCycle=eb velocity[1]=42540000 velocity[0]=c2ea0000 movementDir=41
+c 11507 0 3 0 0 0 0 127 -127
+c 11519 0 3 0 0 0 0 127 -127
+c 11531 0 3 0 0 0 0 127 -127
+p 6
+c 11544 0 3 0 0 0 0 127 -127
+s 134 11550 commandTime=2d0b origin[1]=448f28c9 origin[0]=c392e27f bobCycle=f4 velocity[1]=42aa0000 velocity[0]=c3080000 movementDir=3a
+c 11556 0 3 0 0 0 0 127 -127
+c 11569 0 3 0 0 0 0 127 -127
+p 6
+c 11581 0 3 0 0 0 0 127 -127
+c 11594 0 3 0 0 0 0 127 -127
+s 135 11600 commandTime=2d31 origin[1]=448fa620 origin[0]=c395ae0e bobCycle=0 velocity[1]=42de0000 velocity[0]=c3180000 movementDir=35
+c 11605 0 3 0 0 0 0 127 -127
+p 6
+c 11617 0 3 0 0 0 0 127 -127
+c 11630 0 3 0 0 0 0 127 -127
+c 11641 0 3 0 0 0 0 127 -127
+p 6
+s 136 11650 commandTime=2d79 origin[1]=4490b67d origin[0]=c39b18f3 bobCycle=18 velocity[1]=42f20000 velocity[0]=c3140000 movementDir=32
+c 11653 0 3 0 0 0 0 127 -127
+c 11666 0 3 0 0 0 0 127 -127
+c 11678 0 3 0 0 0 0 127 -127
+p 6
+c 11690 0 3 0 0 0 0 127 -127
+s 137 11700 commandTime=2d9e origin[1]=449147c4 origin[0]=c39dcc69 bobCycle=24 velocity[1]=42f80000 velocity[0]=c3110000 movementDir=31
+c 11702 0 3 0 0 0 0 127 -127
+c 11714 0 3 0 0 0 0 127 -127
+p 6
+c 11726 0 3 0 0 0 0 127 -127
+c 11738 0 3 0 0 0 0 127 -127
+s 138 11750 commandTime=2dc2 origin[1]=4491d823 origin[0]=c3a0611a bobCycle=30 velocity[1]=42fc0000 velocity[0]=c30f0000 movementDir=30
+c 11750 0 3 0 0 0 0 127 -127
+p 6
+c 11762 0 3 0 0 0 0 127 -127
+c 11773 0 3 0 0 0 0 127 -127
+c 11785 0 3 0 0 0 0 127 -127
+p 6
+s 139 11800 commandTime=2e09 origin[1]=4492f9f6 origin[0]=c3a563c1 bobCycle=47 velocity[1]=43010000 velocity[0]=c30c0000 movementDir=2f eventSequence=9
+c 11797 0 3 0 0 0 0 127 -127
+c 11811 0 3 0 0 0 0 127 -127
+c 11825 0 3 0 0 0 0 127 -127
+p 6
+c 11837 0 3 0 0 0 0 127 -127
+s 140 11850 commandTime=2e31 origin[1]=4493a30a origin[0]=c3a66ff8 bobCycle=51 velocity[1]=43090000 velocity[0]=0 movementDir=0
+c 11848 0 3 0 0 0 0 127 -127
+c 11861 0 3 0 0 0 0 127 -127
+p 6
+c 11873 0 3 0 0 0 0 127 -127
+c 11885 0 3 0 0 0 0 127 -127
+c 11896 0 3 0 0 0 0 127 -127
+p 6
+s 141 11900 commandTime=2e78 origin[1]=4494ffeb origin[0]=c3a66ffb bobCycle=63 velocity[1]=43240000
+c 11908 0 3 0 0 0 0 127 -127
+c 11920 0 3 0 0 0 0 127 -127
+c 11932 0 3 0 0 0 0 127 -127
+p 6
+c 11944 0 3 0 0 0 0 127 -127
+s 142 11950 commandTime=2e9c origin[1]=4495c50a origin[0]=c3a66ffa bobCycle=6c velocity[1]=432e0000
+c 11957 0 3 0 0 0 0 127 -127
+c 11969 0 3 0 0 0 0 127 -127
+p 6
+c 11981 0 3 0 0 0 0 127 -127
+c 11993 0 3 0 0 0 0 127 -127
+s 143 12000 commandTime=2ec1 origin[1]=44969a0d bobCycle=78 velocity[1]=43370000
+c 12004 0 3 0 0 0 0 0 0
+p 6
+c 12016 0 3 0 0 0 0 0 0
+c 12030 0 3 0 0 0 0 0 0
+c 12041 0 3 0 0 0 0 0 0
+p 6
+s 144 12050 commandTime=2f09 origin[1]=44981be6 bobCycle=8b velocity[1]=430e0000 aimSpreadScale=4341cccd
+c 12052 0 3 0 0 0 0 0 0
+c 12065 0 3 0 0 0 0 0 0
+c 12079 0 3 0 0 0 0 0 0
+p 6
+c 12091 0 3 0 0 0 0 0 0
+s 145 12100 commandTime=2f2f origin[1]=4498b117 bobCycle=91 velocity[1]=42e40000 aimSpreadScale=4311599a
+c 12103 0 3 0 0 0 0 0 0
+c 12116 0 3 0 0 0 0 0 0
+p 6
+c 12127 0 3 0 0 0 0 0 0
+c 12139 0 3 0 0 0 0 0 0
+s 146 12150 commandTime=2f54 origin[1]=44992634 bobCycle=97 velocity[1]=42b80000 aimSpreadScale=42c4599a
+c 12152 0 3 0 0 0 0 0 0
+p 6
+c 12164 0 3 0 0 0 0 0 0
+c 12176 0 3 0 0 0 0 0 0
+c 12188 0 3 0 0 0 0 0 0
+p 6
+s 147 12200 commandTime=2f9c origin[1]=4499c41d bobCycle=9d velocity[1]=424c0000 aimSpreadScale=40cbfff9
+c 12199 0 3 0 0 0 0 0 0
+c 12211 0 3 0 0 0 0 0 0
+c 12223 0 3 0 0 0 0 0 0
+p 6
+c 12235 0 3 0 0 0 0 0 0
+c 12247 0 3 0 0 0 0 0 0
+s 148 12250 commandTime=2fbf origin[1]=4499eebe velocity[1]=41f80000 aimSpreadScale=0
+c 12260 0 3 0 0 0 0 0 0
+p 6
+c 12272 0 3 0 0 0 0 0 0
+c 12284 0 3 0 0 0 0 0 0
+c 12296 0 3 0 0 0 0 0 0
+p 6
+s 149 12300 commandTime=3008 origin[1]=449a0432 bobCycle=0 velocity[1]=0 legsAnim=299
+c 12307 0 3 0 0 0 0 0 0
+c 12319 0 3 0 0 0 0 0 0
+c 12331 0 3 0 0 0 0 0 0
+p 6
+c 12344 0 3 0 0 0 0 0 0
+s 150 12350 commandTime=302b
+c 12357 0 3 0 0 0 0 0 0
+c 12369 0 3 0 0 0 0 0 0
+p 6
+c 12381 0 3 0 0 0 0 0 0
+c 12393 0 3 0 0 0 0 0 0
+s 151 12400 commandTime=3051
+c 12404 0 3 0 0 0 0 0 0
+p 6
+c 12416 0 3 0 0 0 0 0 0
+c 12428 0 3 0 0 0 0 0 0
+c 12440 0 3 0 0 0 0 0 0
+p 6
+s 152 12450 commandTime=3098
+c 12454 0 3 0 0 0 0 0 0
+c 12466 0 3 0 0 0 0 0 0
+c 12479 0 3 0 0 0 0 0 0
+p 6
+c 12490 0 3 0 0 0 0 0 0
+s 153 12500 commandTime=30bf
+c 12501 0 3 0 0 0 0 0 0
+c 12514 0 3 0 0 0 0 0 0
+p 6
+c 12527 0 3 0 0 0 0 0 0
+c 12539 0 3 0 0 0 0 0 0
+s 154 12550 commandTime=30e2
+c 12552 0 3 0 0 0 0 0 0
+p 6
+c 12565 0 3 0 0 0 0 0 0
+c 12577 0 3 0 0 0 0 0 0
+c 12589 0 3 0 0 0 0 0 0
+p 6
+s 155 12600 commandTime=312d
+c 12602 0 3 0 0 0 0 0 0
+c 12613 0 3 0 0 0 0 0 0
+c 12624 0 3 0 0 0 0 0 0
+p 6
+c 12637 0 3 0 0 0 0 0 0
+s 156 12650 commandTime=3150
+c 12650 0 3 0 0 0 0 0 0
+c 12661 0 3 0 0 0 0 0 0
+p 6
+c 12675 0 3 0 0 0 0 0 0
+c 12688 0 3 0 0 0 0 0 0
+s 157 12700 commandTime=3175
+c 12702 0 3 0 0 0 0 0 0
+p 6
+c 12713 0 3 0 0 0 0 0 0
+c 12724 0 3 0 0 0 0 0 0
+c 12738 0 3 0 0 0 0 0 0
+p 6
+s 158 12750 commandTime=31c2
+c 12752 0 3 0 0 0 0 0 0
+c 12764 0 3 0 0 0 0 0 0
+c 12777 0 3 0 0 0 0 0 0
+p 6
+c 12788 0 3 0 0 0 0 0 0
+s 159 12800 commandTime=31e9
+c 12800 0 3 0 0 0 0 0 0
+c 12812 0 3 0 0 0 0 0 0
+p 6
+c 12824 0 3 0 0 0 0 0 0
+c 12836 0 3 0 0 0 0 0 0
+s 160 12850 commandTime=320c
+c 12852 0 3 0 0 0 0 0 0
+p 6
+c 12864 0 3 0 0 0 0 0 0
+c 12876 0 3 0 0 0 0 0 0
+c 12888 0 3 0 0 0 0 0 0
+p 6
+s 161 12900 commandTime=3258
+c 12899 0 3 0 0 0 0 0 0
+c 12911 0 3 0 0 0 0 0 0
+c 12924 0 3 0 0 0 0 0 0
+p 6
+c 12936 0 3 0 0 0 0 0 0
+s 162 12950 commandTime=327c
+c 12948 0 3 0 0 0 0 0 0
+c 12961 0 3 0 0 0 0 0 0
+p 6
+c 12972 0 3 0 0 0 0 0 0
+c 12985 0 3 0 0 0 0 0 0
+c 12996 0 3 0 0 0 0 0 0
+p 6
+s 163 13000 commandTime=32c4
+c 13008 0 3 0 0 0 0 0 0
+c 13021 0 3 0 0 0 0 0 0
+c 13033 0 3 0 0 0 0 0 0
+p 6
+c 13046 0 3 0 0 0 0 0 0
+s 164 13050 commandTime=32e9
+c 13057 0 3 0 0 0 0 0 0
+c 13071 0 3 0 0 0 0 0 0
+p 6
+c 13084 0 3 0 0 0 0 0 0
+c 13095 0 3 0 0 0 0 0 0
+s 165 13100 commandTime=330f
+c 13109 0 3 0 0 0 0 0 0
+p 6
+c 13121 0 3 0 0 0 0 0 0
+c 13135 0 3 0 0 0 0 0 0
+s 166 13150 commandTime=3335
+c 13147 0 3 0 0 0 0 0 0
+p 6
+c 13159 0 3 0 0 0 0 0 0
+c 13171 0 3 0 0 0 0 0 0
+c 13183 0 3 0 0 0 0 0 0
+p 6
+s 167 13200 commandTime=337f
+c 13198 0 3 0 0 0 0 0 0
+c 13209 0 3 0 0 0 0 0 0
+c 13221 0 3 0 0 0 0 0 0
+p 6
+c 13233 0 3 0 0 0 0 0 0
+c 13244 0 3 0 0 0 0 0 0
+s 168 13250 commandTime=33a5
+c 13256 0 3 0 0 0 0 0 0
+p 6
+c 13269 0 3 0 0 0 0 0 0
+c 13281 0 3 0 0 0 0 0 0
+c 13293 0 3 0 0 0 0 0 0
+p 6
+s 169 13300 commandTime=33ed
+c 13305 0 3 0 0 0 0 0 0
+c 13317 0 3 0 0 0 0 0 0
+c 13330 0 3 0 0 0 0 0 0
+p 6
+c 13342 0 3 0 0 0 0 0 0
+s 170 13350 commandTime=3412
+c 13354 0 3 0 0 0 0 0 0
+c 13366 0 3 0 0 0 0 0 0
+p 6
+c 13378 0 3 0 0 0 0 0 0
+c 13390 0 3 0 0 0 0 0 0
+s 171 13400 commandTime=3436
+c 13402 0 3 0 0 0 0 0 0
+p 6
+c 13414 0 3 0 0 0 0 0 0
+c 13425 0 3 0 0 0 0 0 0
+c 13436 0 3 0 0 0 0 0 0
+p 6
+s 172 13450 commandTime=347c
+c 13449 0 3 0 0 0 0 0 0
+c 13461 0 3 0 0 0 0 0 0
+c 13473 0 3 0 0 0 0 0 0
+p 6
+c 13485 0 3 0 0 0 0 0 0
+s 173 13500 commandTime=34a1
+c 13498 0 3 0 0 0 0 0 0

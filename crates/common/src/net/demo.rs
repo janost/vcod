@@ -15,7 +15,7 @@ use std::io::{self, Write};
 /// 0x40e540), 2 on 1.5 (CoDMP15.exe 0x40f210), 3 on UO (CoDUOMP.exe
 /// 0x40fb80).
 pub fn extension_number(p: &Protocol) -> u32 {
-    match p.version {
+    match p.transport.version {
         6 => 2,
         22 => 3,
         _ => 1,
@@ -42,7 +42,7 @@ pub fn extension_of(name: &str) -> Option<u32> {
 /// `CL_ReadDemoMessage`'s buffer: 16384 bytes on 1.1 and 1.5, 32768 on UO
 /// (CoDMP.exe 0x40e9c0, CoDUOMP.exe 0x410060). A longer record is fatal.
 pub fn max_message(p: &Protocol) -> usize {
-    if p.version == 22 { 0x8000 } else { 0x4000 }
+    if p.is_uo() { 0x8000 } else { 0x4000 }
 }
 
 /// `record` with no name: the first of `demo0000`..`demo9999` `exists`
@@ -135,11 +135,13 @@ pub struct DemoReader {
 
 impl DemoReader {
     pub fn new(data: Vec<u8>, p: &Protocol) -> Self {
-        DemoReader {
-            data,
-            pos: 0,
-            max: max_message(p),
-        }
+        Self::with_max(data, max_message(p))
+    }
+
+    /// A reader refusing records past `max` bytes: another game's
+    /// `MAX_MSGLEN` (CoD2's 0x20000, `vcod_cod2::net::demo`).
+    pub fn with_max(data: Vec<u8>, max: usize) -> Self {
+        DemoReader { data, pos: 0, max }
     }
 
     fn long(&mut self) -> Option<i32> {
@@ -218,7 +220,10 @@ mod tests {
         assert_eq!(extension_number(&PROTOCOL_V22), 3);
         for p in [&PROTOCOL_V1, &PROTOCOL_V6, &PROTOCOL_V22] {
             let n = extension_number(p);
-            assert_eq!(protocol_of_extension(n).unwrap().version, p.version);
+            assert_eq!(
+                protocol_of_extension(n).unwrap().transport.version,
+                p.transport.version
+            );
         }
         assert_eq!(extension_of("demo0003.dm_1"), Some(1));
         assert_eq!(extension_of("a.dm_3"), Some(3));

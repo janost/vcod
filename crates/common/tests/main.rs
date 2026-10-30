@@ -1,5 +1,7 @@
 //! The crate's integration tests as one binary: linked once, not once per file.
 
+mod cod2_iwd_iwi;
+mod cod2_wavelet;
 mod evidence_labels;
 mod shader_corpus;
 mod slope_seams;

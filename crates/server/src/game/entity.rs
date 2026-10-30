@@ -27,7 +27,7 @@ pub const FIRST_HUD_ELEM: u32 = MAX_GENTITIES;
 pub const MAX_HUDELEMS: u32 = 1024;
 
 use crate::game::fields::{
-    CLIENT_FIELDS, HUD_WHITE, Route, engine_slot_count, hud_slot_count, pers_index, route_hud,
+    CLIENT_FIELDS, HUD_WHITE, Route, engine_slot_count, pers_index, route_hud,
 };
 use crate::server::MAX_CLIENTS;
 use vcod_common::pmove::cmd::EventRing;
@@ -93,6 +93,11 @@ pub struct GEntity {
     /// restart's `ClientConnect`; a dead or spectating player is still
     /// hidden by its `SVF_NOCLIENT` (sound doc, section 9).
     pub broadcast: bool,
+    /// CoD2's `s.apos.trBase` where a link's snap moved `r.currentAngles`
+    /// (the `angles` field) off it: `G_SetAngle`'s unsnapped write, which
+    /// the wire carries (cod2-protocol.md 15.6). Cleared by an `angles`
+    /// write.
+    pub apos_base: Option<[f32; 3]>,
     /// 1.5's and United Offensive's `r.broadcastTime`, which their sound
     /// builtins write in place of 1.1's `svFlags` bits: `playSound` and
     /// `stopLoopSound` the level time plus 300, `playLoopSound` -1. The
@@ -208,6 +213,15 @@ pub struct HudState {
     /// interrupts.
     pub from_x: i32,
     pub from_y: i32,
+    /// CoD4's `setPulseFX`: `fxBirthTime`, `fxLetterTime`,
+    /// `fxDecayStartTime`, `fxDecayDuration`, and its `soundID`.
+    pub pulse: [i32; 4],
+    pub sound_id: i32,
+    /// CoD4's `targetEntNum` (`setTargetEnt`), [`HUD_OWNER_ALL`]'s
+    /// `ENTITYNUM_NONE` for none, and `offscreenMaterialIdx`
+    /// (`setWaypoint`'s second argument).
+    pub target_ent: u32,
+    pub offscreen_material: i32,
 }
 
 impl Default for HudState {
@@ -238,6 +252,10 @@ impl Default for HudState {
             move_ms: 0,
             from_x: 0,
             from_y: 0,
+            pulse: [0; 4],
+            sound_id: 0,
+            target_ent: HUD_OWNER_ALL,
+            offscreen_material: 0,
         }
     }
 }
@@ -328,7 +346,17 @@ pub struct ObjectTable {
     num_entities: u32,
     /// `level.firstFreeEnt`/`level.lastFreeEnt` (level+0x10, level+0x14): a
     /// FIFO of freed slots that `G_Spawn` drains before it bumps the counter.
-    free_list: std::collections::VecDeque<u32>,
+    /// Each slot carries the clock it was freed on.
+    free_list: std::collections::VecDeque<(u32, i32)>,
+    /// Numbers [`Self::queue_number`] put on the free list ahead of the
+    /// entity's own free, which then leaves the list alone.
+    queued: std::collections::HashSet<u32>,
+    /// How long a freed slot waits before `G_Spawn` hands it out again:
+    /// `None` on CoD1, 500 ms on CoD2 (`G_Spawn` 0x811e9d6 asks 0x811e988,
+    /// cod2-protocol.md 15.1).
+    reuse_after_ms: Option<i32>,
+    /// `level.time` as the allocator sees it, for `reuse_after_ms`.
+    clock_ms: i32,
 }
 
 impl Default for ObjectTable {
@@ -347,7 +375,21 @@ impl ObjectTable {
             hud_gens: vec![0; MAX_HUDELEMS as usize],
             num_entities: FIRST_MAP_ENTITY,
             free_list: std::collections::VecDeque::new(),
+            queued: std::collections::HashSet::new(),
+            reuse_after_ms: None,
+            clock_ms: 0,
         }
+    }
+
+    /// CoD2's `G_Spawn`: a freed slot is handed out again only `ms` after
+    /// its free, or once the counter is at the table's end.
+    pub fn set_reuse_after(&mut self, ms: i32) {
+        self.reuse_after_ms = Some(ms);
+    }
+
+    /// `level.time`, for [`Self::set_reuse_after`]'s rule.
+    pub fn set_clock(&mut self, ms: i32) {
+        self.clock_ms = ms;
     }
 
     pub fn num_entities(&self) -> u32 {
@@ -359,8 +401,26 @@ impl ObjectTable {
     /// `G_Error` when the counter reaches `ENTITYNUM_WORLD` with nothing
     /// free; we raise instead.
     pub fn spawn(&mut self, cx: &mut Cx) -> Result<EntId, ErrorKind> {
-        let n = match self.free_list.pop_front() {
-            Some(n) => n,
+        // 0x811e988: the head is reusable when it was freed at least
+        // `reuse_after_ms` ago (`level.time - freetime > 499`) or the
+        // counter has reached `ENTITYNUM_WORLD`.
+        let reusable = |&(_, at): &(u32, i32)| match self.reuse_after_ms {
+            None => true,
+            Some(ms) => {
+                self.clock_ms.wrapping_sub(at) >= ms || self.num_entities >= ENTITYNUM_WORLD
+            }
+        };
+        // A queued number whose entity has not gone yet is not free.
+        let head = self
+            .free_list
+            .front()
+            .filter(|h| reusable(h) && self.ents[h.0 as usize].is_none())
+            .copied();
+        let n = match head {
+            Some((n, _)) => {
+                self.free_list.pop_front();
+                n
+            }
             None => {
                 if self.num_entities >= ENTITYNUM_WORLD {
                     return Err(ErrorKind::BadType("entity table full"));
@@ -403,6 +463,7 @@ impl ObjectTable {
             loop_sound: 0,
             broadcast: false,
             broadcast_time: 0,
+            apos_base: None,
             item: None,
             brush_model: None,
             link: None,
@@ -433,11 +494,16 @@ impl ObjectTable {
 
     /// The world as a script value: what the `radiusDamage` builtin passes
     /// the damage callbacks as the attacker (docs/research/cod11-combat.md,
-    /// 14.2). Made on first use; the world carries no fields of its own.
+    /// 14.2). Made on first use; its one field is the classname
+    /// `worldspawn` `SP_worldspawn` gives it (cod4-gsc.md 3.5).
     pub fn world(&mut self, cx: &mut Cx) -> EntId {
         if self.world.is_none() {
+            let mut engine = vec![Value::Undefined; engine_slot_count()];
+            if let Route::Engine { slot, .. } = crate::game::fields::route_entity("classname") {
+                engine[slot] = Value::String(cx.intern_exact("worldspawn"));
+            }
             self.world = Some(GEntity {
-                engine: vec![Value::Undefined; engine_slot_count()],
+                engine,
                 client: None,
                 script: cx.new_struct(),
                 solid: true,
@@ -451,6 +517,7 @@ impl ObjectTable {
                 loop_sound: 0,
                 broadcast: false,
                 broadcast_time: 0,
+                apos_base: None,
                 item: None,
                 brush_model: None,
                 link: None,
@@ -558,6 +625,7 @@ impl ObjectTable {
             loop_sound: 0,
             broadcast: false,
             broadcast_time: 0,
+            apos_base: None,
             item: None,
             brush_model: None,
             link: None,
@@ -594,17 +662,30 @@ impl ObjectTable {
     /// convention a gentity's fields follow; the wire build reads an
     /// undefined slot as the zero it stands for.
     pub fn spawn_hud_elem(&mut self, cx: &mut Cx) -> Result<EntId, ErrorKind> {
+        self.spawn_hud_elem_for(cx, false)
+    }
+
+    /// [`Self::spawn_hud_elem`], the defaults stored through CoD4's field
+    /// table with `cod4`: `HudElem_SetDefaults` leaves
+    /// `fontscale` 0 (a material element never given one reads 0 in the
+    /// walk capture, VERIFIED live), with `color` white and `archived` 1.
+    pub fn spawn_hud_elem_for(&mut self, cx: &mut Cx, cod4: bool) -> Result<EntId, ErrorKind> {
         let Some(i) = self.huds.iter().position(|h| h.is_none()) else {
             return Err(ErrorKind::BadType("out of hudelems"));
         };
         let script = cx.new_struct();
-        let mut engine = vec![Value::Undefined; hud_slot_count()];
+        let mut engine = vec![Value::Undefined; crate::game::fields::hud_slot_count_any()];
+        let route: fn(&str) -> Route = if cod4 {
+            crate::game::fields::route_hud_cod4
+        } else {
+            route_hud
+        };
         for (name, v) in [
-            ("fontscale", Value::Float(1.0)),
+            ("fontscale", Value::Float(if cod4 { 0.0 } else { 1.0 })),
             ("color", Value::Int(HUD_WHITE)),
             ("archived", Value::Int(1)),
         ] {
-            if let Route::Engine { slot, .. } = route_hud(name) {
+            if let Route::Engine { slot, .. } = route(name) {
                 engine[slot] = v;
             }
         }
@@ -623,6 +704,7 @@ impl ObjectTable {
             loop_sound: 0,
             broadcast: false,
             broadcast_time: 0,
+            apos_base: None,
             item: None,
             brush_model: None,
             link: None,
@@ -650,8 +732,20 @@ impl ObjectTable {
         let n = id.0 as usize;
         self.ents[n] = None;
         self.ent_gens[n] = self.ent_gens[n].wrapping_add(1);
-        if id.0 >= FIRST_MAP_ENTITY {
-            self.free_list.push_back(id.0);
+        if id.0 >= FIRST_MAP_ENTITY && !self.queued.remove(&id.0) {
+            self.free_list.push_back((id.0, self.clock_ms));
+        }
+    }
+
+    /// CoD4's `delete()`: `G_FreeEntity` runs inside the call, so the
+    /// number joins the free list's tail now, stamped now; the entity
+    /// itself goes with the deferred free (cod4-combat.md 14).
+    pub fn queue_number(&mut self, id: EntId) {
+        if self.get(id).is_some()
+            && (FIRST_MAP_ENTITY..ENTITYNUM_WORLD).contains(&id.0)
+            && self.queued.insert(id.0)
+        {
+            self.free_list.push_back((id.0, self.clock_ms));
         }
     }
 
@@ -891,6 +985,51 @@ mod tests {
             assert_eq!(t.spawn(cx).unwrap().0, b.0);
             assert_eq!(t.spawn(cx).unwrap().0, a.0);
             assert_eq!(t.spawn(cx).unwrap(), EntId(c.0 + 1, 0));
+        });
+    }
+
+    /// CoD4's `delete()` queues the number at the call: two deletes join
+    /// the list in call order whatever order their entities go in, the
+    /// later free leaves the list alone, and a number is never handed out
+    /// while its entity is still there (cod4-combat.md 14).
+    #[test]
+    fn a_queued_number_keeps_the_delete_order() {
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let mut t = ObjectTable::new();
+            t.set_reuse_after(500);
+            t.set_clock(1000);
+            let a = t.spawn(cx).unwrap();
+            let b = t.spawn(cx).unwrap();
+            t.queue_number(b);
+            t.queue_number(a);
+            t.set_clock(1600);
+            assert_eq!(t.spawn(cx).unwrap().0, b.0 + 1);
+            t.free(a);
+            t.free(b);
+            assert_eq!(t.spawn(cx).unwrap().0, b.0);
+            assert_eq!(t.spawn(cx).unwrap().0, a.0);
+            assert_eq!(t.spawn(cx).unwrap().0, b.0 + 2);
+        });
+    }
+
+    /// CoD2's `G_Spawn` (0x811e988) skips a head freed under 500 ms ago and
+    /// bumps the counter, so a map's freed blocks still take numbers
+    /// (mp_toujane's script entities at 617.., cod2-protocol.md 15.1).
+    #[test]
+    fn a_cod2_slot_waits_500_ms_before_reuse() {
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let mut t = ObjectTable::new();
+            t.set_reuse_after(500);
+            t.set_clock(1000);
+            let a = t.spawn(cx).unwrap();
+            t.free(a);
+            assert_eq!(t.spawn(cx).unwrap().0, a.0 + 1);
+            t.set_clock(1499);
+            assert_eq!(t.spawn(cx).unwrap().0, a.0 + 2);
+            t.set_clock(1500);
+            assert_eq!(t.spawn(cx).unwrap().0, a.0);
         });
     }
 

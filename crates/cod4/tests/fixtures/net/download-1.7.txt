@@ -1,0 +1,255 @@
+# CoD4 1.7 downloads off retail cod4_lnxded (2026-10-25), derived from three
+# cod4_probe captures (docs/research/cod4-handshake.md 11). The raw datagrams
+# carry the mod's file bytes and are not committed: each line here is one
+# decoded message, `<ms from the first gamestate> s2c msg <n> ...` or the first
+# send of a reliable command, `c2s cmd <n> "<text>"` (cp's numbers dropped).
+# Server: `+set fs_game mods/modwarfare +set sv_allowDownload 1|0 +set sv_pure 1
+# +map mp_crash` under `unshare -rnm` (recipe in section 7), with a stock mod
+# holding one iwd of 178745 bytes and a mod.ff of 34310 bytes. Probes:
+# `--download auto` (what net::download::missing_files lists: the mod's iwd and
+# mod.ff) and `--download main/iw_00,mods/modwarfare/nothere.iwd`.
+# systeminfo: sv_referencedIwdNames main/iw_11 mods/modwarfare/z_modwarfare,
+# sv_referencedFFNames code_post_gfx_mp mp_crash common_mp mods/modwarfare/mod,
+# sv_referencedFFCheckSums 89196 35287381 13517381 34310.
+# allow auto
+0 s2c msg 1 gamestate
+79 c2s cmd 1 "cp"
+79 c2s cmd 2 "download mods/modwarfare/z_modwarfare.iwd"
+199 s2c msg 2 download block 0 size Some(178745) len 2048
+230 c2s cmd 3 "nextdl 0"
+449 s2c msg 3 download block 1 size None len 2048
+481 c2s cmd 4 "nextdl 1"
+698 s2c msg 4 download block 2 size None len 2048
+731 c2s cmd 5 "nextdl 2"
+950 s2c msg 5 download block 3 size None len 2048
+982 c2s cmd 6 "nextdl 3"
+1203 s2c msg 6 download block 4 size None len 2048
+1236 c2s cmd 7 "nextdl 4"
+1451 s2c msg 7 download block 5 size None len 2048
+1487 c2s cmd 8 "nextdl 5"
+1704 s2c msg 8 download block 6 size None len 2048
+1737 c2s cmd 9 "nextdl 6"
+1954 s2c msg 9 download block 7 size None len 2048
+1988 c2s cmd 10 "nextdl 7"
+2200 s2c msg 10 download block 8 size None len 2048
+2239 c2s cmd 11 "nextdl 8"
+2452 s2c msg 11 download block 9 size None len 2048
+2490 c2s cmd 12 "nextdl 9"
+2703 s2c msg 12 download block 10 size None len 2048
+2741 c2s cmd 13 "nextdl 10"
+2954 s2c msg 13 download block 11 size None len 2048
+2972 c2s cmd 14 "nextdl 11"
+3202 s2c msg 14 download block 12 size None len 2048
+3223 c2s cmd 15 "nextdl 12"
+3449 s2c msg 15 download block 13 size None len 2048
+3474 c2s cmd 16 "nextdl 13"
+3701 s2c msg 16 download block 14 size None len 2048
+3726 c2s cmd 17 "nextdl 14"
+3953 s2c msg 17 download block 15 size None len 2048
+3985 c2s cmd 18 "nextdl 15"
+4202 s2c msg 18 download block 16 size None len 2048
+4236 c2s cmd 19 "nextdl 16"
+4460 s2c msg 19 download block 17 size None len 2048
+4487 c2s cmd 20 "nextdl 17"
+4700 s2c msg 20 download block 18 size None len 2048
+4738 c2s cmd 21 "nextdl 18"
+4953 s2c msg 21 download block 19 size None len 2048
+4993 c2s cmd 22 "nextdl 19"
+5201 s2c msg 22 download block 20 size None len 2048
+5243 c2s cmd 23 "nextdl 20"
+5449 s2c msg 23 download block 21 size None len 2048
+5495 c2s cmd 24 "nextdl 21"
+5700 s2c msg 24 download block 22 size None len 2048
+5746 c2s cmd 25 "nextdl 22"
+5948 s2c msg 25 download block 23 size None len 2048
+5997 c2s cmd 26 "nextdl 23"
+6202 s2c msg 26 download block 24 size None len 2048
+6248 c2s cmd 27 "nextdl 24"
+6452 s2c msg 27 download block 25 size None len 2048
+6500 c2s cmd 28 "nextdl 25"
+6700 s2c msg 28 download block 26 size None len 2048
+6701 c2s cmd 29 "nextdl 26"
+6952 s2c msg 29 download block 27 size None len 2048
+6953 c2s cmd 30 "nextdl 27"
+7201 s2c msg 30 download block 28 size None len 2048
+7203 c2s cmd 31 "nextdl 28"
+7449 s2c msg 31 download block 29 size None len 2048
+7454 c2s cmd 32 "nextdl 29"
+7702 s2c msg 32 download block 30 size None len 2048
+7706 c2s cmd 33 "nextdl 30"
+7951 s2c msg 33 download block 31 size None len 2048
+7958 c2s cmd 34 "nextdl 31"
+8204 s2c msg 34 download block 32 size None len 2048
+8208 c2s cmd 35 "nextdl 32"
+8448 s2c msg 35 download block 33 size None len 2048
+8459 c2s cmd 36 "nextdl 33"
+8698 s2c msg 36 download block 34 size None len 2048
+8710 c2s cmd 37 "nextdl 34"
+8952 s2c msg 37 download block 35 size None len 2048
+8961 c2s cmd 38 "nextdl 35"
+9198 s2c msg 38 download block 36 size None len 2048
+9212 c2s cmd 39 "nextdl 36"
+9450 s2c msg 39 download block 37 size None len 2048
+9463 c2s cmd 40 "nextdl 37"
+9700 s2c msg 40 download block 38 size None len 2048
+9714 c2s cmd 41 "nextdl 38"
+9949 s2c msg 41 download block 39 size None len 2048
+9966 c2s cmd 42 "nextdl 39"
+10201 s2c msg 42 download block 40 size None len 2048
+10217 c2s cmd 43 "nextdl 40"
+10449 s2c msg 43 download block 41 size None len 2048
+10469 c2s cmd 44 "nextdl 41"
+10701 s2c msg 44 download block 42 size None len 2048
+10720 c2s cmd 45 "nextdl 42"
+10949 s2c msg 45 download block 43 size None len 2048
+10971 c2s cmd 46 "nextdl 43"
+11198 s2c msg 46 download block 44 size None len 2048
+11223 c2s cmd 47 "nextdl 44"
+11452 s2c msg 47 download block 45 size None len 2048
+11474 c2s cmd 48 "nextdl 45"
+11704 s2c msg 48 download block 46 size None len 2048
+11726 c2s cmd 49 "nextdl 46"
+11952 s2c msg 49 download block 47 size None len 2048
+11977 c2s cmd 50 "nextdl 47"
+12198 s2c msg 50 download block 48 size None len 2048
+12229 c2s cmd 51 "nextdl 48"
+12450 s2c msg 51 download block 49 size None len 2048
+12481 c2s cmd 52 "nextdl 49"
+12699 s2c msg 52 download block 50 size None len 2048
+12731 c2s cmd 53 "nextdl 50"
+12949 s2c msg 53 download block 51 size None len 2048
+12982 c2s cmd 54 "nextdl 51"
+13200 s2c msg 54 download block 52 size None len 2048
+13235 c2s cmd 55 "nextdl 52"
+13451 s2c msg 55 download block 53 size None len 2048
+13487 c2s cmd 56 "nextdl 53"
+13701 s2c msg 56 download block 54 size None len 2048
+13738 c2s cmd 57 "nextdl 54"
+13951 s2c msg 57 download block 55 size None len 2048
+13992 c2s cmd 58 "nextdl 55"
+14200 s2c msg 58 download block 56 size None len 2048
+14242 c2s cmd 59 "nextdl 56"
+14449 s2c msg 59 download block 57 size None len 2048
+14494 c2s cmd 60 "nextdl 57"
+14702 s2c msg 60 download block 58 size None len 2048
+14746 c2s cmd 61 "nextdl 58"
+14952 s2c msg 61 download block 59 size None len 2048
+14997 c2s cmd 62 "nextdl 59"
+15200 s2c msg 62 download block 60 size None len 2048
+15249 c2s cmd 63 "nextdl 60"
+15449 s2c msg 63 download block 61 size None len 2048
+15451 c2s cmd 64 "nextdl 61"
+15701 s2c msg 64 download block 62 size None len 2048
+15703 c2s cmd 65 "nextdl 62"
+15951 s2c msg 65 download block 63 size None len 2048
+15954 c2s cmd 66 "nextdl 63"
+16202 s2c msg 66 download block 64 size None len 2048
+16205 c2s cmd 67 "nextdl 64"
+16451 s2c msg 67 download block 65 size None len 2048
+16458 c2s cmd 68 "nextdl 65"
+16701 s2c msg 68 download block 66 size None len 2048
+16709 c2s cmd 69 "nextdl 66"
+16953 s2c msg 69 download block 67 size None len 2048
+16960 c2s cmd 70 "nextdl 67"
+17200 s2c msg 70 download block 68 size None len 2048
+17212 c2s cmd 71 "nextdl 68"
+17452 s2c msg 71 download block 69 size None len 2048
+17463 c2s cmd 72 "nextdl 69"
+17699 s2c msg 72 download block 70 size None len 2048
+17715 c2s cmd 73 "nextdl 70"
+17951 s2c msg 73 download block 71 size None len 2048
+17967 c2s cmd 74 "nextdl 71"
+18199 s2c msg 74 download block 72 size None len 2048
+18218 c2s cmd 75 "nextdl 72"
+18451 s2c msg 75 download block 73 size None len 2048
+18469 c2s cmd 76 "nextdl 73"
+18699 s2c msg 76 download block 74 size None len 2048
+18721 c2s cmd 77 "nextdl 74"
+18952 s2c msg 77 download block 75 size None len 2048
+18971 c2s cmd 78 "nextdl 75"
+19200 s2c msg 78 download block 76 size None len 2048
+19225 c2s cmd 79 "nextdl 76"
+19449 s2c msg 79 download block 77 size None len 2048
+19476 c2s cmd 80 "nextdl 77"
+19699 s2c msg 80 download block 78 size None len 2048
+19727 c2s cmd 81 "nextdl 78"
+19950 s2c msg 81 download block 79 size None len 2048
+19978 c2s cmd 82 "nextdl 79"
+20200 s2c msg 82 download block 80 size None len 2048
+20231 c2s cmd 83 "nextdl 80"
+20461 s2c msg 83 download block 81 size None len 2048
+20484 c2s cmd 84 "nextdl 81"
+20702 s2c msg 84 download block 82 size None len 2048
+20735 c2s cmd 85 "nextdl 82"
+20948 s2c msg 85 download block 83 size None len 2048
+20985 c2s cmd 86 "nextdl 83"
+21203 s2c msg 86 download block 84 size None len 2048
+21237 c2s cmd 87 "nextdl 84"
+21452 s2c msg 87 download block 85 size None len 2048
+21488 c2s cmd 88 "nextdl 85"
+21700 s2c msg 88 download block 86 size None len 2048
+21739 c2s cmd 89 "nextdl 86"
+21899 s2c msg 89 download block 87 size None len 569
+21940 c2s cmd 90 "nextdl 87"
+21948 s2c msg 90 download block 88 size None len 0
+21991 c2s cmd 91 "nextdl 88"
+21991 c2s cmd 92 "download mods/modwarfare/mod.ff"
+22053 s2c msg 91 download block 0 size Some(34310) len 2048
+22092 c2s cmd 93 "nextdl 0"
+22300 s2c msg 92 download block 1 size None len 2048
+22344 c2s cmd 94 "nextdl 1"
+22555 s2c msg 93 download block 2 size None len 2048
+22595 c2s cmd 95 "nextdl 2"
+22802 s2c msg 94 download block 3 size None len 2048
+22846 c2s cmd 96 "nextdl 3"
+23050 s2c msg 95 download block 4 size None len 2048
+23098 c2s cmd 97 "nextdl 4"
+23301 s2c msg 96 download block 5 size None len 2048
+23349 c2s cmd 98 "nextdl 5"
+23552 s2c msg 97 download block 6 size None len 2048
+23601 c2s cmd 99 "nextdl 6"
+23800 s2c msg 98 download block 7 size None len 2048
+23802 c2s cmd 100 "nextdl 7"
+24049 s2c msg 99 download block 8 size None len 2048
+24052 c2s cmd 101 "nextdl 8"
+24302 s2c msg 100 download block 9 size None len 2048
+24303 c2s cmd 102 "nextdl 9"
+24552 s2c msg 101 download block 10 size None len 2048
+24554 c2s cmd 103 "nextdl 10"
+24803 s2c msg 102 download block 11 size None len 2048
+24806 c2s cmd 104 "nextdl 11"
+25053 s2c msg 103 download block 12 size None len 2048
+25057 c2s cmd 105 "nextdl 12"
+25300 s2c msg 104 download block 13 size None len 2048
+25309 c2s cmd 106 "nextdl 13"
+25553 s2c msg 105 download block 14 size None len 2048
+25561 c2s cmd 107 "nextdl 14"
+25799 s2c msg 106 download block 15 size None len 2048
+25813 c2s cmd 108 "nextdl 15"
+26049 s2c msg 107 download block 16 size None len 1542
+26064 c2s cmd 109 "nextdl 16"
+26150 s2c msg 108 download block 17 size None len 0
+26165 c2s cmd 110 "nextdl 17"
+26165 c2s cmd 111 "donedl"
+29706 s2c msg 109 gamestate
+29732 c2s cmd 112 "cp"
+# allow list
+0 s2c msg 1 gamestate
+82 c2s cmd 1 "cp"
+82 c2s cmd 2 "download main/iw_00"
+150 s2c msg 2 download Refused("EXE_CANTAUTODLGAMEPAK\u{15}main/iw_00")
+182 c2s cmd 3 "download mods/modwarfare/nothere.iwd"
+203 s2c msg 3 download Refused("EXE_AUTODL_FILENOTONSERVER\u{15}mods/modwarfare/nothere.iwd")
+233 c2s cmd 4 "donedl"
+3749 s2c msg 4 gamestate
+3798 c2s cmd 5 "cp"
+# deny auto
+0 s2c msg 2 gamestate
+95 c2s cmd 1 "cp"
+95 c2s cmd 2 "download mods/modwarfare/z_modwarfare.iwd"
+199 s2c msg 3 download Refused("EXE_AUTODL_SERVERDISABLED_PURE\u{15}mods/modwarfare/z_modwarfare.iwd")
+246 c2s cmd 3 "download mods/modwarfare/mod.ff"
+250 s2c msg 4 download Refused("EXE_AUTODL_SERVERDISABLED_PURE\u{15}mods/modwarfare/mod.ff")
+296 c2s cmd 4 "donedl"
+3799 s2c msg 5 gamestate
+3818 c2s cmd 5 "cp"

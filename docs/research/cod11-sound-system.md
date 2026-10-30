@@ -1004,8 +1004,8 @@ committed.
 
 | Capture | Date | Server | Map / gametype | Players | Length |
 |---|---|---|---|---|---|
-| A | 2026-08-25 | `51.68.172.126:1337` ("EURO RIFLES S&D") | `mp_harbor` / `sd`, ~5 rounds | ~5 | 300 s |
-| B | 2026-08-25 | `51.195.89.86:28960` ("Revive TDM") | `mp_harbor` then `mp_depot` / `tdm` | ~15 | 103 s (dropped on the map change) plus a second 300 s run |
+| A | 2026-08-25 | a public S&D server | `mp_harbor` / `sd`, ~5 rounds | ~5 | 300 s |
+| B | 2026-08-25 | a public TDM server | `mp_harbor` then `mp_depot` / `tdm` | ~15 | 103 s (dropped on the map change) plus a second 300 s run |
 
 Both are 1.1 servers running mods, so a row that reads "not observed" may mean
 the mod's gsc does not make that call, not that the wire path is wrong.
@@ -1031,7 +1031,7 @@ block, never snapshot it at connect.
 
 ## 9a. Footstep and landing cadence (`game.mp.i386.so`, pmove side)
 
-Everything here is read off the disassembly (`gamemp.asm`, virtual addresses ==
+Everything here is read off the disassembly (`objdump` of the .so, virtual addresses ==
 file offsets); none of it is live-verified against a running server, because a
 footstep event is indistinguishable in a spectator capture from any other
 entity event of the same id. The client-side half (which alias each id plays)

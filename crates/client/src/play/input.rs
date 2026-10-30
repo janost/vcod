@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use vcod_common::net::flags::{EF_IN_VEHICLE_V22, EF_MOUNTED, PMF_OWN_VIEW};
 use vcod_common::net::msg::{self, PlayerState, UserCmd};
 use vcod_common::net::protocol::Protocol;
+use vcod_common::text::atoi_msvc;
 use vcod_common::weapon::WeaponDef;
 
 /// `eFlags` bits the server writes for a crouched/prone player
@@ -176,6 +177,28 @@ pub enum Action {
     MLook,
     /// `+strafe` (0x40a8c0): the mouse's horizontal motion strafes.
     Strafe,
+    /// CoD2's own binds (`play::cod2_input`): `+frag`, `+smoke`,
+    /// `+binoculars`, `+holdbreath`, `+melee_breath`, `+usereload`, and the
+    /// impulses `toggleads` and `leaveads`. CoD1 ignores them.
+    Frag,
+    Smoke,
+    Binoculars,
+    HoldBreath,
+    MeleeBreath,
+    UseReload,
+    ToggleAds,
+    LeaveAds,
+    /// CoD4's `+actionslot <n>` (1..=4): the playerstate's
+    /// `actionSlotType[n - 1]` says what it does (`play::cod4_input`).
+    UseSlot(usize),
+    /// CoD4's `+breath_sprint` (hold breath and sprint, one key) and
+    /// `+toggleads_throw` (the press flips the sight toggle, the hold is
+    /// the throw key); `play::cod4_input`.
+    BreathSprint,
+    ToggleAdsThrow,
+    /// CoD4's `+talk`: push to talk, which only voice reads; vcod has
+    /// none, so it holds nothing.
+    Talk,
 }
 
 /// The client's own stance, held level on the wire
@@ -251,7 +274,7 @@ pub struct Held {
 /// UO's seat gate: the seat bit off `eflags_ps`, `vehType` 1 and `vehPos` 3
 /// (the jeep passenger, who fires his own weapon) off `seat_ps`.
 fn seat_refuses(p: &Protocol, eflags_ps: &PlayerState, seat_ps: &PlayerState) -> bool {
-    p.version == 22
+    p.is_uo()
         && eflags_ps.field_i32(p, "eFlags") & EF_IN_VEHICLE_V22 != 0
         && !(seat_ps.field_i32(p, "vehType") == 1 && seat_ps.field_i32(p, "vehPos") == 3)
 }
@@ -287,8 +310,8 @@ impl Held {
             own_view: ps.field_i32(p, "pm_flags") & PMF_OWN_VIEW != 0,
             spawn: Some((ps.field_i32(p, "clientNum"), ps.arrays.stats[5])),
             mounted: ps.field_i32(p, "eFlags") & EF_MOUNTED != 0,
-            sprint_button: p.version == 22,
-            uo_slots: p.version == 22,
+            sprint_button: p.is_uo(),
+            uo_slots: p.is_uo(),
             seat_refuses_slot: seat_refuses(p, ps, ps),
             seat_refuses_alt: seat_refuses(p, ps, ps),
         }
@@ -395,21 +418,6 @@ pub enum AltWeapon {
     NoAlternate,
     /// Off our own view, on a mounted gun, or the mode is not carried.
     Refused,
-}
-
-/// `atol` cut to a byte, as `weapon`'s number reaches the select: a leading
-/// sign and digits, 0 for none.
-fn atol(s: &str) -> u8 {
-    let s = s.trim_start();
-    let (neg, digits) = match s.strip_prefix('-') {
-        Some(rest) => (true, rest),
-        None => (false, s.strip_prefix('+').unwrap_or(s)),
-    };
-    let n = digits
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .fold(0i64, |n, c| n.wrapping_mul(10) + i64::from(c as u8 - b'0'));
-    (if neg { -n } else { n }) as u8
 }
 
 /// The `cl_run` cvar. The ads bit is set when it equals the `+speed` key's
@@ -673,7 +681,9 @@ impl PlayInput {
         }
         // 0x3000f260's miss falls through to `atol`, which reads a leading
         // number and 0 for anything else.
-        let w = index(arg).filter(|&w| w != 0).unwrap_or_else(|| atol(arg));
+        let w = index(arg)
+            .filter(|&w| w != 0)
+            .unwrap_or_else(|| atoi_msvc(arg) as u8);
         if w == 0 {
             return false;
         }

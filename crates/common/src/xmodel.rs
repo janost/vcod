@@ -1,93 +1,12 @@
-//! v14 `xmodel`/`xmodelparts`/`xmodelsurfs` parsing and bind-pose bake, plus
-//! the weapon file parser. Layouts: `docs/research/xmodel-v14-format.md`.
+//! v14 `xmodel`/`xmodelparts`/`xmodelsurfs` parsing and bind-pose bake into
+//! [`crate::model::Model`] ([`V14`]), plus the weapon file parser. Layouts:
+//! `docs/research/xmodel-v14-format.md`.
 
-use crate::pk3::Pk3Fs;
+use crate::asset_source::AssetSource;
+use crate::model::{Bone, CollSurf, Lod, Model, ModelFormat, Surface, Vertex};
 use anyhow::{Result, anyhow, ensure};
 use glam::{DMat3, DVec3, Quat, Vec3};
 use std::collections::HashMap;
-
-#[derive(Clone)]
-pub struct XModel {
-    /// LOD0 name, used only in diagnostics.
-    pub lod: String,
-    pub surfaces: Vec<Surface>,
-    pub materials: Vec<String>, // skin filenames, index-aligned with surfaces
-    pub bones: Vec<Bone>,
-    /// The descriptor's collision mesh, baked to model space. Empty for the
-    /// models that have none (`collision_lod == -1`).
-    pub collision: Vec<CollSurf>,
-    /// Per present LOD, the LOD distance it draws below; 0 draws at any
-    /// distance. `[0]` belongs to `surfaces`, the rest to `coarse`.
-    pub lod_dists: Vec<f32>,
-    /// LODs 1.., baked against `bones`: retail reads `xmodelparts` for LOD 0
-    /// only (docs/research/xmodel-v14-format.md, "LOD selection").
-    pub coarse: Vec<Lod>,
-}
-
-/// One coarser LOD's mesh, skinned against its model's LOD 0 bones.
-#[derive(Clone)]
-pub struct Lod {
-    pub name: String,
-    pub surfaces: Vec<Surface>,
-    pub materials: Vec<String>,
-}
-
-/// One collision surface. `contents` meets the trace mask the way a brush's
-/// does (solid 0x1, lamp glass 0x10; tree canopies and signs carry 0), and
-/// `flags` carries the sound material in bits 20-24.
-/// docs/research/xmodel-v14-format.md, "Collision block".
-#[derive(Clone)]
-pub struct CollSurf {
-    pub contents: u32,
-    pub flags: u32,
-    pub tris: Vec<[Vec3; 3]>,
-    /// The stored `mins`/`maxs`, in the bone's space and unbaked: what the
-    /// engine's static-model bounds are built from (combat doc 14.7).
-    pub bounds: (Vec3, Vec3),
-    /// The bone the surface rides, into `XModel::bones`: `tris` are baked
-    /// at its bind, and a posed model's trace moves them with it
-    /// (docs/research/coduo-vehicles.md 13).
-    pub bone: usize,
-}
-
-#[derive(Clone)]
-pub struct Surface {
-    pub verts: Vec<VmVert>,
-    pub indices: Vec<u16>,
-    pub material: usize,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct VmVert {
-    pub pos: [f32; 3],
-    pub normal: [f32; 3],
-    pub uv: [f32; 2],
-    /// Model-local bone ids, padded with 0.
-    pub bone_indices: [u8; 4],
-    /// Sums to 1.0, padded with 0.0.
-    pub bone_weights: [f32; 4],
-}
-
-/// `pos`/`rot` are the world bind the mesh is skinned against; `local_*` the
-/// unbaked local, after the viewhands zeroing. On viewhands `pos` is the bind
-/// the mesh implies, not the composition of the zeroed locals.
-#[derive(Clone)]
-pub struct Bone {
-    pub name: String,
-    pub parent: i32,
-    pub pos: Vec3,
-    pub rot: Quat,
-    pub local_pos: Vec3,
-    pub local_rot: Quat,
-    /// The hit box in this bone's own frame; all-zero on a bone the artist
-    /// turned off. docs/research/xmodel-v14-format.md, "xmodelparts/<lod>".
-    pub hit_mins: Vec3,
-    pub hit_maxs: Vec3,
-    /// Index into the 19 hit-location names, 0 (`none`) when the bone
-    /// inherits its parent's. docs/research/cod11-combat.md section 3.
-    pub hit_location: u8,
-}
 
 /// Little-endian cursor; bounds-checked, never panics on a truncated file.
 pub(crate) struct Reader<'a> {
@@ -190,7 +109,7 @@ struct RawCollSurf {
 /// Plane + two barycentric edge planes to vertices, emitted (v0, v2, v1) so
 /// the winding matches the stored normal. docs/research/xmodel-v14-format.md,
 /// "Collision block". `None` when the planes are not independent.
-fn coll_tri_verts(rec: &[f32; 12]) -> Option<[Vec3; 3]> {
+pub fn coll_tri_verts(rec: &[f32; 12]) -> Option<[Vec3; 3]> {
     let row = |i: usize| DVec3::new(rec[i] as f64, rec[i + 1] as f64, rec[i + 2] as f64);
     let a = DMat3::from_cols(row(0), row(4), row(8)).transpose();
     let det = a.determinant();
@@ -530,12 +449,15 @@ fn bake_surfs(raw: Vec<RawSurface>, bones: &[Bone]) -> Result<Vec<Surface>> {
                 bone_weights[i] = w * norm;
             }
 
-            verts.push(VmVert {
+            verts.push(Vertex {
                 pos: pos.to_array(),
                 normal: normal.to_array(),
                 uv: rv.uv,
                 bone_indices,
                 bone_weights,
+                color: [255; 4],
+                tangent: [0.0; 3],
+                binormal: [0.0; 3],
             });
         }
         surfaces.push(Surface {
@@ -550,11 +472,11 @@ fn bake_surfs(raw: Vec<RawSurface>, bones: &[Bone]) -> Result<Vec<Surface>> {
 /// `surfs[i]` is the `xmodelsurfs` of the descriptor's LOD `i`; LOD 0's
 /// name's last byte is the model type.
 #[cfg(test)]
-fn parse_model(desc: &[u8], parts: &[u8], surfs: &[&[u8]]) -> Result<XModel> {
+fn parse_model(desc: &[u8], parts: &[u8], surfs: &[&[u8]]) -> Result<Model> {
     build_model(parse_descriptor(desc)?, parts, surfs)
 }
 
-fn build_model(descriptor: Descriptor, parts: &[u8], surfs: &[&[u8]]) -> Result<XModel> {
+fn build_model(descriptor: Descriptor, parts: &[u8], surfs: &[&[u8]]) -> Result<Model> {
     ensure!(
         surfs.len() == descriptor.lods.len(),
         "{} xmodelsurfs for {} LODs",
@@ -587,6 +509,7 @@ fn build_model(descriptor: Descriptor, parts: &[u8], surfs: &[&[u8]]) -> Result<
         );
         lods.push(Lod {
             name: l.name.clone(),
+            dist: l.dist,
             surfaces,
             materials: l.materials.clone(),
         });
@@ -611,141 +534,81 @@ fn build_model(descriptor: Descriptor, parts: &[u8], surfs: &[&[u8]]) -> Result<
             bone: bone_index,
         });
     }
-    let mut lods = lods.into_iter();
-    let lod0 = lods
-        .next()
-        .expect("parse_descriptor refuses a model without LODs");
-    Ok(XModel {
-        lod: lod0.name,
-        surfaces: lod0.surfaces,
-        materials: lod0.materials,
+    Ok(Model {
+        name,
         bones,
+        lods,
         collision,
-        lod_dists: descriptor.lods.iter().map(|l| l.dist).collect(),
-        coarse: lods.collect(),
     })
 }
 
-/// The view's LOD inputs, retail's `RE_RenderScene` (CoDMP.exe 0x4e9f..):
-/// `scale` is `tan(min(fov_x, fov_y) / 2) / tan(40)` times `r_lodscale`,
-/// `bias` is `r_lodbias`. docs/research/xmodel-v14-format.md, "LOD selection".
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LodView {
-    pub scale: f32,
-    pub bias: f32,
-}
+/// CoD1's xmodel version 14, [`crate::model`]'s built-in format.
+pub struct V14;
 
-impl LodView {
-    /// `fov_x`/`fov_y` in degrees, the refdef's.
-    pub fn new(fov_x: f32, fov_y: f32, r_lodscale: f32, r_lodbias: f32) -> LodView {
-        let fov = fov_x.min(fov_y);
-        let scale = (fov.to_radians() * 0.5).tan() / 40f32.to_radians().tan() * r_lodscale;
-        LodView {
-            scale,
-            bias: r_lodbias,
+impl ModelFormat for V14 {
+    fn version(&self) -> u16 {
+        14
+    }
+
+    fn load(&self, fs: &dyn AssetSource, descriptor: &[u8]) -> Result<Model> {
+        let desc = parse_descriptor(descriptor)?;
+        // One xmodelparts for all LODs, an xmodelsurfs each (CoDMP.exe 0x48b290).
+        let parts = read(fs, format!("xmodelparts/{}", desc.lods[0].name))?;
+        let surfs = desc
+            .lods
+            .iter()
+            .map(|l| read(fs, format!("xmodelsurfs/{}", l.name)))
+            .collect::<Result<Vec<_>>>()?;
+        let surfs: Vec<&[u8]> = surfs.iter().map(Vec::as_slice).collect();
+        build_model(desc, &parts, &surfs)
+    }
+
+    fn load_bones(&self, fs: &dyn AssetSource, descriptor: &[u8]) -> Result<Vec<Bone>> {
+        let lod0 = parse_descriptor(descriptor)?.lods.swap_remove(0).name;
+        let model_type = *lod0
+            .as_bytes()
+            .last()
+            .ok_or_else(|| anyhow!("empty model name"))?;
+        parse_parts(&read(fs, format!("xmodelparts/{lod0}"))?, model_type)
+    }
+
+    /// The `mins`/`maxs` after the version.
+    fn bounds(&self, data: &[u8]) -> Option<(Vec3, Vec3)> {
+        let mut r = Reader::new(data);
+        if r.u16().ok()? != 14 {
+            return None;
         }
-    }
-
-    /// The distance a model's LOD table is read at (0x4ea0c0). `model_scale`
-    /// is the refEntity's scale, 0 for an unscaled model.
-    pub fn distance(&self, eye: Vec3, origin: Vec3, model_scale: f32) -> f32 {
-        let d = self.scale * eye.distance(origin) + self.bias;
-        if model_scale != 0.0 {
-            d / model_scale
-        } else {
-            d
+        let mut v = [0f32; 6];
+        for x in &mut v {
+            *x = r.f32().ok()?;
         }
+        Some((Vec3::new(v[0], v[1], v[2]), Vec3::new(v[3], v[4], v[5])))
     }
 }
 
-/// Retail's pick (0x48bd70): the first LOD whose distance is 0 or beyond
-/// `lod_dist`; `None` past the last, and the model is not drawn.
-pub fn select_lod(lod_dists: &[f32], lod_dist: f32) -> Option<usize> {
-    lod_dists.iter().position(|&d| d == 0.0 || lod_dist < d)
-}
-
-impl XModel {
-    /// LOD `i`'s surfaces and materials; 0 is the model's own.
-    pub fn lod_mesh(&self, i: usize) -> Option<(&[Surface], &[String])> {
-        match i {
-            0 => Some((&self.surfaces, &self.materials)),
-            _ => self
-                .coarse
-                .get(i - 1)
-                .map(|l| (l.surfaces.as_slice(), l.materials.as_slice())),
-        }
-    }
-}
-
-/// The descriptor's own `mins`/`maxs` (`xmodel/<name>`, after the version),
-/// which a `script_model` is filed in the area tree under
-/// (docs/research/cod11-combat.md 14.7). `None` for a short or foreign file.
-pub fn descriptor_bounds(data: &[u8]) -> Option<(Vec3, Vec3)> {
-    let mut r = Reader::new(data);
-    if r.u16().ok()? != 14 {
-        return None;
-    }
-    let mut v = [0f32; 6];
-    for x in &mut v {
-        *x = r.f32().ok()?;
-    }
-    Some((Vec3::new(v[0], v[1], v[2]), Vec3::new(v[3], v[4], v[5])))
-}
-
-/// `name` is the `xmodel/` entry, e.g. `viewmodel_kar98k`.
-pub fn load(fs: &Pk3Fs, name: &str) -> Result<XModel> {
-    let read = |path: String| -> Result<Vec<u8>> {
-        fs.read(&path)
-            .ok_or_else(|| anyhow!("{path} not found in pk3s"))
-    };
-    let desc = parse_descriptor(&read(format!("xmodel/{name}"))?)?;
-    // One xmodelparts for all LODs, an xmodelsurfs each (CoDMP.exe 0x48b290).
-    let parts = read(format!("xmodelparts/{}", desc.lods[0].name))?;
-    let surfs = desc
-        .lods
-        .iter()
-        .map(|l| read(format!("xmodelsurfs/{}", l.name)))
-        .collect::<Result<Vec<_>>>()?;
-    let surfs: Vec<&[u8]> = surfs.iter().map(Vec::as_slice).collect();
-    build_model(desc, &parts, &surfs)
-}
-
-/// The model's bones alone: the descriptor and `xmodelparts`, without the
-/// `xmodelsurfs` geometry. The dedicated server wants tag positions and has no
-/// use for vertices.
-pub fn load_bones(fs: &Pk3Fs, name: &str) -> Result<Vec<Bone>> {
-    let read = |path: String| -> Result<Vec<u8>> {
-        fs.read(&path)
-            .ok_or_else(|| anyhow!("{path} not found in pk3s"))
-    };
-    let lod0 = parse_descriptor(&read(format!("xmodel/{name}"))?)?
-        .lods
-        .swap_remove(0)
-        .name;
-    let model_type = *lod0
-        .as_bytes()
-        .last()
-        .ok_or_else(|| anyhow!("empty model name"))?;
-    parse_parts(&read(format!("xmodelparts/{lod0}"))?, model_type)
+fn read(fs: &dyn AssetSource, path: String) -> Result<Vec<u8>> {
+    fs.read(&path)
+        .ok_or_else(|| anyhow!("{path} not found in pk3s"))
 }
 
 /// The hands ship with all four surfaces on `viewhands@default.jpg`, a white
 /// placeholder the engine re-skins at runtime. Substitutes the hand atlas and
 /// the Wehrmacht sleeve, only when the materials are exactly the four
 /// placeholders. docs/research/xmodel-v14-format.md, "`xmodel/<name>` (descriptor)".
-pub fn apply_viewhands_placeholder_override(model: &mut XModel) {
+pub fn apply_viewhands_placeholder_override(model: &mut Model) {
     const PLACEHOLDER: &str = "viewhands@default.jpg";
-    if model.materials.len() != 4 || model.materials.iter().any(|m| m != PLACEHOLDER) {
+    let materials = &mut model.lods[0].materials;
+    if materials.len() != 4 || materials.iter().any(|m| m != PLACEHOLDER) {
         log::debug!(
             "{}: materials aren't the 4x viewhands placeholder, leaving as-is",
-            model.lod
+            model.name
         );
         return;
     }
-    model.materials[0] = "viewhands@hand.dds".to_string();
-    model.materials[1] = "viewhands@hand.dds".to_string();
-    model.materials[2] = "viewhands@vsleeve_whermact.tga".to_string();
-    model.materials[3] = "viewhands@vsleeve_whermact.tga".to_string();
+    materials[0] = "viewhands@hand.dds".to_string();
+    materials[1] = "viewhands@hand.dds".to_string();
+    materials[2] = "viewhands@vsleeve_whermact.tga".to_string();
+    materials[3] = "viewhands@vsleeve_whermact.tga".to_string();
 }
 
 /// `\key\value...` weapon file. The shipped files open with a bare
@@ -768,6 +631,10 @@ pub fn parse_weapon(text: &str) -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn load(fs: &dyn AssetSource, name: &str) -> Result<Model> {
+        crate::model::load(fs, name)
+    }
 
     /// Encodes a triangle the way the descriptor does and decodes it back.
     #[test]
@@ -898,62 +765,6 @@ mod tests {
         assert_eq!(map.get("handModel").unwrap(), "viewmodel_hands_new");
     }
 
-    #[test]
-    fn select_lod_takes_the_first_lod_reaching_past_the_distance() {
-        let head = [400.0, 800.0, 3000.0];
-        assert_eq!(select_lod(&head, 0.0), Some(0));
-        assert_eq!(select_lod(&head, 399.9), Some(0));
-        assert_eq!(
-            select_lod(&head, 400.0),
-            Some(1),
-            "strictly below the distance"
-        );
-        assert_eq!(select_lod(&head, 2999.0), Some(2));
-        assert_eq!(
-            select_lod(&head, 3000.0),
-            None,
-            "past the last LOD: not drawn"
-        );
-        let body = [800.0, 1200.0, 0.0];
-        assert_eq!(
-            select_lod(&body, 1e9),
-            Some(2),
-            "a 0 distance never runs out"
-        );
-        assert_eq!(select_lod(&[0.0], 1e9), Some(0));
-        assert_eq!(
-            select_lod(&[600.0], -50.0),
-            Some(0),
-            "a bias can go negative"
-        );
-    }
-
-    #[test]
-    fn lod_view_scales_by_the_narrower_fov_against_80_degrees() {
-        // 80 across a square view reads the table at the true distance
-        let v = LodView::new(80.0, 80.0, 1.0, 0.0);
-        assert!((v.scale - 1.0).abs() < 1e-6);
-        // cg_fov 80 across 4:3 is 64.38 tall, which reads the table nearer
-        let fov_y = 2.0 * ((40f32.to_radians().tan() * 0.75).atan()).to_degrees();
-        let v = LodView::new(80.0, fov_y, 1.0, 0.0);
-        assert!((v.scale - 0.75).abs() < 1e-5, "{}", v.scale);
-        // a zoomed scope reads it nearer still; Model Detail multiplies
-        let zoomed = LodView::new(20.0, 15.0, 1.0, 0.0);
-        assert!(zoomed.scale < 0.2);
-        let aggressive = LodView::new(80.0, 80.0, 4.0, -200.0);
-        assert_eq!(aggressive.bias, -200.0);
-        let eye = Vec3::ZERO;
-        let at = Vec3::new(300.0, 400.0, 0.0);
-        assert!((aggressive.distance(eye, at, 0.0) - 1800.0).abs() < 1e-3);
-        assert!((aggressive.distance(eye, at, 2.0) - 900.0).abs() < 1e-3);
-        // `off` keeps every model on LOD 0
-        let off = LodView::new(80.0, 64.0, 0.0, 0.0);
-        assert_eq!(
-            select_lod(&[150.0, 500.0, 1000.0], off.distance(eye, at * 100.0, 0.0)),
-            Some(0)
-        );
-    }
-
     /// Coarse LODs ship without `xmodelparts` and skin against LOD 0's
     /// bones; each is lighter than the one before.
     #[test]
@@ -970,10 +781,9 @@ mod tests {
             ("viewmodel_hands_new", vec![0.0]),
         ] {
             let m = load(&fs, name).unwrap();
-            assert_eq!(m.lod_dists, dists, "{name}");
-            assert_eq!(m.coarse.len() + 1, dists.len(), "{name}");
-            let mut last = tris(&m.surfaces);
-            for l in &m.coarse {
+            assert_eq!(m.lod_dists(), dists, "{name}");
+            let mut last = tris(m.surfaces());
+            for l in &m.lods[1..] {
                 let (surfaces, materials) = (&l.surfaces, &l.materials);
                 assert_eq!(surfaces.len(), materials.len(), "{name} {}", l.name);
                 assert!(tris(surfaces) < last, "{name} {}", l.name);
@@ -1071,10 +881,10 @@ mod tests {
     fn parses_synthetic_model() {
         let (desc, parts, surfs) = synthetic_model([0, 1, 2]);
         let m = parse_model(&desc, &parts, &[&surfs]).unwrap();
-        assert_eq!(m.materials, vec!["tex@a.dds".to_string()]);
+        assert_eq!(m.materials(), vec!["tex@a.dds".to_string()]);
         assert_eq!(m.bones.len(), 2);
         assert_eq!(m.bones[1].name, "child");
-        let s = &m.surfaces[0];
+        let s = &m.surfaces()[0];
         assert_eq!(s.indices, vec![2, 1, 0]); // strip emits reversed
         assert_eq!(s.verts[1].pos, [1.0, 0.0, 2.0]); // baked through the child at (0,0,2)
         assert_eq!(s.verts[0].uv, [0.25, 0.75]); // no v flip
@@ -1099,7 +909,7 @@ mod tests {
             return;
         };
         let body = load(&fs, "playerbody_american_airborne").unwrap();
-        let by_name = |m: &XModel, name: &str| {
+        let by_name = |m: &Model, name: &str| {
             let b = m.bones.iter().position(|b| b.name == name).unwrap();
             (
                 m.bones[b].hit_mins,
@@ -1144,7 +954,7 @@ mod tests {
                 assert!(
                     b.hit_location <= 18,
                     "{}: {} {}",
-                    m.lod,
+                    m.name,
                     b.name,
                     b.hit_location
                 );
@@ -1196,29 +1006,36 @@ mod tests {
             return;
         };
         let gun = load(&fs, "viewmodel_kar98k").unwrap();
-        assert_eq!(gun.surfaces.len(), 5);
-        assert_eq!(gun.materials.len(), 5);
+        assert_eq!(gun.surfaces().len(), 5);
+        assert_eq!(gun.materials().len(), 5);
         assert_eq!(gun.bones.len(), 6);
         assert_eq!(gun.bones[0].name, "tag_weapon");
         assert_eq!(
-            gun.surfaces.iter().map(|s| s.verts.len()).sum::<usize>(),
+            gun.surfaces().iter().map(|s| s.verts.len()).sum::<usize>(),
             1125
         );
         assert_eq!(
-            gun.surfaces.iter().map(|s| s.indices.len()).sum::<usize>(),
+            gun.surfaces()
+                .iter()
+                .map(|s| s.indices.len())
+                .sum::<usize>(),
             1001 * 3
         );
 
         let hands = load(&fs, "viewmodel_hands_new").unwrap();
-        assert_eq!(hands.surfaces.len(), 4);
+        assert_eq!(hands.surfaces().len(), 4);
         assert_eq!(hands.bones.len(), 55);
         assert_eq!(
-            hands.surfaces.iter().map(|s| s.verts.len()).sum::<usize>(),
+            hands
+                .surfaces()
+                .iter()
+                .map(|s| s.verts.len())
+                .sum::<usize>(),
             1914
         );
         assert_eq!(
             hands
-                .surfaces
+                .surfaces()
                 .iter()
                 .map(|s| s.indices.len())
                 .sum::<usize>(),
@@ -1227,7 +1044,7 @@ mod tests {
 
         // descriptor bounds (±36.2 gun, ±23.7 hands) plus 0.5 slack
         for (m, bound) in [(&gun, 36.7), (&hands, 24.2)] {
-            for s in &m.surfaces {
+            for s in m.surfaces() {
                 for v in &s.verts {
                     assert!(
                         v.pos.iter().all(|c| c.abs() <= bound),
@@ -1236,13 +1053,13 @@ mod tests {
                     );
                 }
             }
-            for s in &m.surfaces {
+            for s in m.surfaces() {
                 assert!(s.indices.iter().all(|&i| (i as usize) < s.verts.len()));
             }
         }
 
         for m in [&gun, &hands] {
-            for s in &m.surfaces {
+            for s in m.surfaces() {
                 for v in &s.verts {
                     let sum: f32 = v.bone_weights.iter().sum();
                     assert!((sum - 1.0).abs() < 1e-3, "weights {:?}", v.bone_weights);
@@ -1252,7 +1069,7 @@ mod tests {
         }
         assert!(
             hands
-                .surfaces
+                .surfaces()
                 .iter()
                 .flat_map(|s| &s.verts)
                 .any(|v| v.bone_weights[1] > 0.0)
@@ -1266,14 +1083,14 @@ mod tests {
         };
         let mut hands = load(&fs, "viewmodel_hands_new").unwrap();
         assert_eq!(
-            hands.materials,
+            hands.materials(),
             vec!["viewhands@default.jpg".to_string(); 4],
             "expected the shipped hands model to still be the blank placeholder"
         );
 
         apply_viewhands_placeholder_override(&mut hands);
         assert_eq!(
-            hands.materials,
+            hands.materials(),
             vec![
                 "viewhands@hand.dds".to_string(),
                 "viewhands@hand.dds".to_string(),
@@ -1308,30 +1125,16 @@ mod tests {
 
     #[test]
     fn viewhands_override_leaves_non_placeholder_models_untouched() {
-        let mut m = XModel {
-            lod: "test".into(),
-            surfaces: Vec::new(),
-            materials: vec!["some@other.dds".to_string(); 4],
-            bones: Vec::new(),
-            collision: Vec::new(),
-            lod_dists: vec![0.0],
-            coarse: Vec::new(),
-        };
-        let before = m.materials.clone();
+        let mut m = Model::rig("test", Vec::new());
+        m.lods[0].materials = vec!["some@other.dds".to_string(); 4];
+        let before = m.materials().to_vec();
         apply_viewhands_placeholder_override(&mut m);
-        assert_eq!(m.materials, before);
+        assert_eq!(m.materials(), before);
 
-        let mut m3 = XModel {
-            lod: "test".into(),
-            surfaces: Vec::new(),
-            materials: vec!["viewhands@default.jpg".to_string(); 3],
-            bones: Vec::new(),
-            collision: Vec::new(),
-            lod_dists: vec![0.0],
-            coarse: Vec::new(),
-        };
-        let before3 = m3.materials.clone();
+        let mut m3 = Model::rig("test", Vec::new());
+        m3.lods[0].materials = vec!["viewhands@default.jpg".to_string(); 3];
+        let before3 = m3.materials().to_vec();
         apply_viewhands_placeholder_override(&mut m3);
-        assert_eq!(m3.materials, before3);
+        assert_eq!(m3.materials(), before3);
     }
 }

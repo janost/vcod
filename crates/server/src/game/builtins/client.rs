@@ -70,7 +70,8 @@ pub const NAMES: &[(&str, Builtin)] = &[
 /// "addTestClient"). `undefined` with no free slot, and for the counter's
 /// first bot inside `sv_reconnectlimit` of the start: its address, port 0,
 /// matches every never-used slot's in `SV_DirectConnect`'s reconnect check.
-/// The client sends no cmds, so nothing ever thinks for it.
+/// On 1.1 the client sends no cmds, so nothing ever thinks for it; CoD2's
+/// thinks on a random cmd each frame (`Cod2Level::test_client_cmd`).
 pub fn add_test_client(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -96,6 +97,16 @@ pub fn add_test_client(
         return Ok(Value::Undefined);
     }
     let name = format!("bot{port}");
+    let enters_world = host.profile.test_client_enters_world;
+    if enters_world {
+        // `ClientConnect`'s fresh `gclient_t` and `pers.connected` 1, as
+        // `Cod2Level::connect_at` gives a real client.
+        host.cod2_mut().clients[slot] = Default::default();
+        host.client_roster[slot] = Some(crate::game::scoreboard::RosterSlot {
+            connecting: true,
+            ..Default::default()
+        });
+    }
     let Some(id) = host.connect_client(cx, slot, &name) else {
         return Ok(Value::Undefined);
     };
@@ -106,6 +117,15 @@ pub fn add_test_client(
         "CodeCallback_PlayerConnect",
     );
     cx.spawn(connect, Some(me), Vec::new());
+    if enters_world {
+        // CoD2's `SV_AddTestClient` (lnxded 0x80913da) ends in
+        // `SV_ClientEnterWorld`: `ClientBegin`'s `pers.connected` 2.
+        if let Some(r) = host.client_roster[slot].as_mut() {
+            r.connecting = false;
+            r.active = true;
+        }
+        host.ranks_dirty = true;
+    }
     let begin = cx.intern_folded(crate::game::script::BEGIN_NOTIFY);
     cx.notify(me, begin, Vec::new());
     Ok(Value::Entity(id))
@@ -440,7 +460,7 @@ pub fn drop_item(
         return Err(ErrorKind::BadType("dropItem takes an item name"));
     };
     let name = cx.resolve(*name).to_string();
-    let Some(index) = host.defs.weapon_index(&name).filter(|&i| i != 0) else {
+    let Some(index) = host.weapon_index(&name).filter(|&i| i != 0) else {
         return match crate::items::classname_index(host.defs, &name) {
             Some(row) => Ok(Value::Entity(crate::game::item::drop_item(
                 host, cx, slot, row,
@@ -684,13 +704,16 @@ fn send_menu(
 /// 20). That reading is control flow, not a measurement, so this raises
 /// instead of reproducing an inferred behaviour. The cost is that a typo kills
 /// the calling thread where retail may keep it alive.
-fn weapon_argument(host: &GameHost, cx: &Cx, args: &[Value]) -> Result<(String, usize), ErrorKind> {
+fn weapon_argument(
+    host: &mut GameHost,
+    cx: &Cx,
+    args: &[Value],
+) -> Result<(String, usize), ErrorKind> {
     let Some(Value::String(name)) = args.first() else {
         return Err(ErrorKind::BadType("that builtin takes a weapon name"));
     };
     let name = cx.resolve(*name).to_string();
     let index = host
-        .defs
         .weapon_index(&name)
         .ok_or(ErrorKind::BadType("no such weapon"))?;
     Ok((name, index))
@@ -846,7 +869,7 @@ pub fn take_weapon(
     let Some(Value::String(name)) = args.first() else {
         return Err(ErrorKind::BadType("takeWeapon takes a weapon name"));
     };
-    let Some(index) = host.defs.weapon_index(cx.resolve(*name)) else {
+    let Some(index) = host.weapon_index(cx.resolve(*name)) else {
         return Ok(Value::Undefined);
     };
     let weapons = host.weapons.clone();
@@ -935,8 +958,8 @@ pub fn set_weapon_slot_weapon(
     if index == 0 {
         return Ok(Value::Undefined);
     }
-    let name = host.defs.weapon_name(index).unwrap_or_default();
-    register_given(host, client, name, index)?;
+    let name = host.weapon_name(index).unwrap_or_default();
+    register_given(host, client, &name, index)?;
     host.client_weapons[client].give_chain(&weapons, index, slot);
     if let Some(def) = weapons.get(index) {
         host.weapon_op(
@@ -1072,6 +1095,13 @@ pub fn position_would_telefrag(
         return Err(ErrorKind::BadType("positionWouldTelefrag takes an origin"));
     };
     let at = *at;
+    // `PM_DEAD`: 6 on CoD1, 7 on 1.7, whose 6 is the living `PM_LASTSTAND`
+    // (`GScr_positionWouldTelefrag`).
+    let dead = if host.profile.game == vcod_common::game::Game::Cod4 {
+        7
+    } else {
+        6
+    };
     // `playerMins`/`playerMaxs`, the standing box the playerstate carries.
     let box_of = pmove::PlayerState::spawn(glam::Vec3::ZERO, 0.0);
     let (mins, maxs) = (box_of.mins(), box_of.maxs());
@@ -1087,7 +1117,7 @@ pub fn position_would_telefrag(
                     .ents
                     .handle(n)
                     .is_some_and(|id| host.ents.get(id).is_some_and(|e| e.client.is_some()))
-                && host.client_pm_type.get(n as usize).copied().unwrap_or(0) < 6
+                && host.client_pm_type.get(n as usize).copied().unwrap_or(0) < dead
         });
     Ok(Value::Int(hit.into()))
 }

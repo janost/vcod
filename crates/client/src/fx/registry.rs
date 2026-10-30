@@ -5,10 +5,10 @@ use crate::fx::sim::SpawnAt;
 use glam::Vec3;
 use std::collections::HashMap;
 use std::sync::{LazyLock, PoisonError, RwLock};
+use vcod_common::asset_source::{Asset, AssetKind, AssetSource};
 use vcod_common::net::events::{GameEvent, byte_to_dir};
 use vcod_common::net::flags::{EF_CROUCH, EF_IN_VEHICLE_V22, EF_PRONE, ET_TURRET, ET_VEHICLE_V22};
 use vcod_common::net::protocol::{CsLayout, CsRange};
-use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::{VIEW_CROUCH, VIEW_PRONE, VIEW_STAND};
 use vcod_common::weapon::WeaponDef;
 
@@ -164,35 +164,41 @@ fn parse_impacts_csv(text: &str) -> ImpactTable {
 /// one's rows (`CG_RegisterImpactEffects`, uo cgame 0x3001dfb0, which lists
 /// the directory and sorts it). 1.1's paks ship only `fx/iw_impacts.csv`;
 /// UO's add `fx/gmi_impacts.csv` ahead of their own `iw_impacts.csv`.
-fn load(fs: &Pk3Fs) -> ImpactTable {
-    let mut files: Vec<String> = fs
-        .names_with_suffix(".csv")
-        .into_iter()
-        .filter(|n| {
-            n.to_ascii_lowercase()
-                .strip_prefix("fx/")
-                .is_some_and(|rest| !rest.contains('/'))
-        })
-        .collect();
-    files.sort_by_key(|n| n.to_ascii_lowercase());
-    files.dedup();
-    let mut table = ImpactTable::default();
-    for name in &files {
-        if let Some(bytes) = fs.read(name) {
-            table.add_csv(&String::from_utf8_lossy(&bytes));
+/// Built through [`Asset::find`], uncached: [`init`] keeps the table.
+impl Asset for ImpactTable {
+    const KIND: AssetKind = AssetKind::ImpactEffects;
+
+    fn find(src: &dyn AssetSource, _: &str) -> anyhow::Result<Self> {
+        let files: Vec<String> = src
+            .list("fx", ".csv")
+            .into_iter()
+            .filter(|n| {
+                n.strip_prefix("fx/")
+                    .is_some_and(|rest| !rest.contains('/'))
+            })
+            .collect();
+        let mut table = ImpactTable::default();
+        for name in &files {
+            if let Some(bytes) = src.read(name) {
+                table.add_csv(&String::from_utf8_lossy(&bytes));
+            }
         }
+        if files.is_empty() {
+            log::warn!("fx: no fx/*.csv; bullet impacts will have no visual");
+        }
+        Ok(table)
     }
-    if files.is_empty() {
-        log::warn!("fx: no fx/*.csv; bullet impacts will have no visual");
-    }
-    table
+}
+
+fn load(fs: &dyn AssetSource) -> ImpactTable {
+    ImpactTable::find(fs, "").unwrap_or_default()
 }
 
 static TABLE: LazyLock<RwLock<ImpactTable>> = LazyLock::new(RwLock::default);
 
 /// Loads the table off `fs`: at startup, and again whenever a download
 /// reopens the search path. `resolve()` reads an empty table before the first.
-pub fn init(fs: &Pk3Fs) {
+pub fn init(fs: &dyn AssetSource) {
     *TABLE.write().unwrap_or_else(PoisonError::into_inner) = load(fs);
 }
 
@@ -268,6 +274,59 @@ pub struct ResolveCtx<'a> {
     pub configstrings: &'a [String],
     /// Where its blocks sit (`Protocol::cs`).
     pub cs: &'a CsLayout,
+}
+
+/// Every `.efx` a CoD1 level can play off its events: the impact table's
+/// rows, the flash fallbacks, `FLESH_NOBLOOD`, the effect configstrings
+/// configstring 7's weapons' flash, eject and explosion effects, and on
+/// United Offensive the vehicles' wheel dust. The
+/// gamestate preloads them (`FxSystem::preload`).
+pub fn level_effects(
+    configstrings: &[String],
+    cs: &CsLayout,
+    weapons: &[Option<WeaponDef>],
+    uo: bool,
+) -> Vec<String> {
+    let mut out: Vec<String> = TABLE
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .map
+        .values()
+        .cloned()
+        .collect();
+    out.push(FLESH_NOBLOOD.into());
+    out.push(flash_effect_path(EV_FIRE_WEAPON_MG42).into());
+    out.push(flash_effect_path(0).into());
+    out.extend(
+        (1..128)
+            .filter_map(|id| effect_path(configstrings, cs, id))
+            .map(str::to_string),
+    );
+    for w in weapons.iter().flatten() {
+        out.extend(
+            [
+                &w.world_flash_effect,
+                &w.view_flash_effect,
+                &w.shell_eject_effect,
+                &w.last_shot_eject_effect,
+                &w.proj_explosion_effect,
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|p| !p.is_empty())
+            .cloned(),
+        );
+    }
+    if uo {
+        out.extend(
+            crate::fx::vehicle_trails::EFFECTS
+                .iter()
+                .map(|p| p.to_string()),
+        );
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// The `.efx` an effect id names: configstring `780 + id`, ids 1..63
@@ -591,7 +650,7 @@ fn fire_flash(ev: &GameEvent, ctx: &ResolveCtx) -> Vec<Resolved> {
 /// [`resolve`] against `fs`'s impact table rather than the one [`init`]
 /// loaded, which tests running beside each other would race on.
 #[cfg(test)]
-pub(crate) fn resolve_in(fs: &Pk3Fs, ev: &GameEvent, ctx: &ResolveCtx) -> Vec<Resolved> {
+pub(crate) fn resolve_in(fs: &dyn AssetSource, ev: &GameEvent, ctx: &ResolveCtx) -> Vec<Resolved> {
     resolve_with(ev, &load(fs), ctx)
 }
 
@@ -2229,6 +2288,7 @@ mod uo_capture_gates {
     use super::*;
     use uo_captures::{events, weapons};
     use vcod_common::net::flags::ET_MISSILE;
+    use vcod_common::pk3::Pk3Fs;
 
     fn ctx(weapons: &[Option<WeaponDef>]) -> ResolveCtx<'_> {
         static NONE: LazyLock<HashMap<u32, (Vec3, Vec3)>> = LazyLock::new(HashMap::new);

@@ -4,11 +4,11 @@
 //! (docs/research/coduo-diff.md, section 9, "Client rendering", and 18).
 
 use crate::collision::ModelTri;
+use crate::model::Model;
 use crate::net::msg::EntityState;
 use crate::net::protocol::Protocol;
 use crate::skeleton::{PoseBuffer, Skeleton};
 use crate::turretpose::angles_quat;
-use crate::xmodel::XModel;
 use glam::{Quat, Vec3};
 
 /// The vehicle file's `type` as the server packs it into `surfType`:
@@ -294,14 +294,14 @@ pub fn seat_frame(
 /// xmodel clip walks every surface in its bone's posed frame, so a tank's
 /// turret stops a round where it is turned (docs/research/coduo-vehicles.md
 /// 13). Surfaces with contents 0 meet no mask and are left out.
-pub fn posed_collision(model: &XModel, worlds: &[(Vec3, Quat)], out: &mut Vec<ModelTri>) {
+pub fn posed_collision(model: &Model, worlds: &[(Vec3, Quat)], out: &mut Vec<ModelTri>) {
     posed_collision_surfs(model, worlds, out, &mut Vec::new());
 }
 
 /// [`posed_collision`] with each surface's run, posed bone frame and stored
 /// bounds in `surfs`, for [`crate::collision::clip_model_surfs`].
 pub fn posed_collision_surfs(
-    model: &XModel,
+    model: &Model,
     worlds: &[(Vec3, Quat)],
     out: &mut Vec<ModelTri>,
     surfs: &mut Vec<crate::collision::ModelSurf>,
@@ -338,10 +338,10 @@ pub fn rider_seat(surf_type: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::xmodel::Bone;
+    use crate::model::Bone;
 
     /// A model of `(name, parent, local_pos)` tags, all bound unrotated.
-    pub(crate) fn tag_model(tags: &[(&str, i32, Vec3)]) -> XModel {
+    pub(crate) fn tag_model(tags: &[(&str, i32, Vec3)]) -> Model {
         let mut bones: Vec<Bone> = Vec::new();
         for &(name, parent, local_pos) in tags {
             let pos = match usize::try_from(parent) {
@@ -360,15 +360,7 @@ mod tests {
                 hit_location: 0,
             });
         }
-        XModel {
-            lod: "vehicle".into(),
-            surfaces: vec![],
-            materials: vec![],
-            bones,
-            collision: Vec::new(),
-            lod_dists: vec![0.0],
-            coarse: Vec::new(),
-        }
+        Model::rig("vehicle", bones)
     }
 
     fn fields(kind: i32) -> VehicleFields {
@@ -437,7 +429,7 @@ mod tests {
             Vec3::new(40.0, 10.0, 80.0),
             Vec3::new(40.0, 0.0, 90.0),
         ];
-        m.collision.push(crate::xmodel::CollSurf {
+        m.collision.push(crate::model::CollSurf {
             contents: 1,
             flags: 0,
             tris: vec![tri],
@@ -500,7 +492,7 @@ mod tests {
     }
 
     /// The tags the pose reads on `mp_vehicle_panzeriv`, at their bind.
-    fn panzer() -> XModel {
+    fn panzer() -> Model {
         tag_model(&[
             ("tag_origin", -1, Vec3::ZERO),
             ("tag_body", 0, Vec3::new(0.0, 0.0, -0.98)),
@@ -515,7 +507,7 @@ mod tests {
     }
 
     /// The same of `mp_v_us_lnd_willysjeep`.
-    fn jeep() -> XModel {
+    fn jeep() -> Model {
         tag_model(&[
             ("tag_origin", -1, Vec3::ZERO),
             ("tag_body", 0, Vec3::new(-0.5, 0.0, 20.4)),

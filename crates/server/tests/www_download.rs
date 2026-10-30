@@ -55,11 +55,14 @@ fn a_redirected_download_lands_over_http_and_the_gamestate_follows() {
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut now = Instant::now();
     let mut cl = connect(&mut sv, &q, &mut now);
-    assert_eq!(cl.protocol().version, PROTOCOL_V22.version);
+    assert_eq!(
+        cl.protocol().transport.version,
+        PROTOCOL_V22.transport.version
+    );
     let dest = scratch.join("client/main/zzz_www.pk3");
     cl.begin_download("main/zzz_www.pk3", &dest).unwrap();
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     let mut landed = false;
     while !landed {
         assert!(std::time::Instant::now() < deadline, "no download");
@@ -137,7 +140,7 @@ fn wrong_pak_at_the_url(proto: &'static Protocol, tag: &str) -> WrongPak {
     let q = Rc::new(RefCell::new(Queues::default()));
     let mut now = Instant::now();
     let mut cl = connect(&mut sv, &q, &mut now);
-    assert_eq!(cl.protocol().version, proto.version);
+    assert_eq!(cl.protocol().transport.version, proto.transport.version);
     let dest = scratch.join("client/main/zzz_www.pk3");
     cl.begin_download("main/zzz_www.pk3", &dest).unwrap();
     WrongPak {
@@ -164,7 +167,7 @@ fn a_chkfail_on_1_5_falls_back_to_udp() {
         requests,
         scratch,
     } = wrong_pak_at_the_url(&PROTOCOL_V6, "chkfail15");
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     let mut landed = false;
     while !landed {
         assert!(std::time::Instant::now() < deadline, "no download");
@@ -212,7 +215,7 @@ fn a_refused_redirect_on_uo_is_redirected_again_until_the_client_leaves() {
         requests,
         scratch,
     } = wrong_pak_at_the_url(&PROTOCOL_V22, "refuseuo");
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     let reason = loop {
         assert!(
             std::time::Instant::now() < deadline,

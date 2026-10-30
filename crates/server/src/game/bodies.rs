@@ -76,6 +76,20 @@ pub struct Body {
     /// The client slot the body was cloned from, taken by the first
     /// `refresh_newborn` after its birth.
     source: Option<usize>,
+    /// A [`BodyQueue::push_raw`] corpse's own fresh bit: its `eFlags`
+    /// field index, the bit and the ms after birth it goes out.
+    fresh: Option<(usize, i32, i32)>,
+    /// A clone's own move (`game::corpse`).
+    pub cod2: Option<Cod2Corpse>,
+}
+
+/// What a CoD2 corpse carries beyond its entity state: `r.currentOrigin`,
+/// which its fall and its death anim move, and the death anim's node time
+/// once its own anim update set it (`game::corpse`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Cod2Corpse {
+    pub origin: Vec3,
+    pub anim: Option<crate::game::corpse::CorpseAnim>,
 }
 
 /// Nothing frees a clone on a timer: it lives until the eighth subsequent
@@ -120,8 +134,77 @@ impl BodyQueue {
             state: clone_of(&state, number, self.toggles[i], now_ms, collision, p),
             born_ms: now_ms,
             source,
+            fresh: None,
+            cod2: None,
         });
         number
+    }
+
+    /// A corpse the caller built whole (CoD2's `cloneplayer`, whose
+    /// `eFlags` are not 1.1's): numbered into the next slot and settled,
+    /// nothing else rewritten and no refresh from a sim, but for the
+    /// teleport bit 0x2, which the slot flips on each use (lnxded
+    /// 0x811eaa4, cod2-protocol.md 15.7). `fresh` is the `eFlags` bit its
+    /// think takes out and the ms after birth it does.
+    pub fn push_raw(
+        &mut self,
+        mut state: EntityState,
+        now_ms: i32,
+        collision: Option<&CollisionWorld>,
+        p: &Protocol,
+        fresh: Option<(i32, i32)>,
+    ) -> u32 {
+        let i = self.next % self.slots.len();
+        self.next += 1;
+        self.toggles[i] = !self.toggles[i];
+        let number = BODY_FIRST + i as u32;
+        state.number = number;
+        if let Some(f) = EntityState::field_index(p, "eFlags") {
+            state.fields[f] = state.fields[f] & !0x2 | if self.toggles[i] { 0x2 } else { 0 };
+        }
+        settle(&mut state, collision, p);
+        self.slots[i] = Some(Body {
+            state,
+            born_ms: now_ms,
+            source: None,
+            fresh: fresh
+                .and_then(|(bit, ms)| Some((EntityState::field_index(p, "eFlags")?, bit, ms))),
+            cod2: None,
+        });
+        number
+    }
+
+    /// The live body numbered `number`.
+    pub fn body_mut(&mut self, number: u32) -> Option<&mut Body> {
+        number
+            .checked_sub(BODY_FIRST)
+            .and_then(|i| self.slots.get_mut(i as usize))
+            .and_then(Option::as_mut)
+    }
+
+    /// A CoD2 corpse's `r.currentOrigin`, what script reads as its
+    /// `origin` (`None` for a 1.1 body or an empty slot).
+    pub fn cod2_origin(&self, number: u32) -> Option<Vec3> {
+        let i = number.checked_sub(BODY_FIRST)? as usize;
+        self.slots.get(i)?.as_ref()?.cod2.map(|c| c.origin)
+    }
+
+    /// A body's `pos.trBase` under `p`: a CoD4 corpse's `origin`, where
+    /// `clonePlayer` put it (`None` for an empty slot).
+    pub fn tr_base(&self, number: u32, p: &Protocol) -> Option<Vec3> {
+        let i = number.checked_sub(BODY_FIRST)? as usize;
+        let b = self.slots.get(i)?.as_ref()?;
+        let mut at = [0.0; 3];
+        for (k, v) in at.iter_mut().enumerate() {
+            let f = EntityState::field_index(p, &format!("pos.trBase[{k}]"))?;
+            *v = f32::from_bits(b.state.fields[f] as u32);
+        }
+        Some(Vec3::from(at))
+    }
+
+    /// Every live body, in slot order.
+    pub fn bodies_mut(&mut self) -> impl Iterator<Item = &mut Body> {
+        self.slots.iter_mut().flatten()
     }
 
     /// Re-reads every body born since the last call from its source
@@ -171,8 +254,12 @@ impl BodyQueue {
         else {
             return;
         };
-        if now_ms.wrapping_sub(body.born_ms) >= CORPSE_FRESH_MS {
-            body.state.fields[index] &= !EFLAGS_CORPSE_FRESH;
+        let age = now_ms.wrapping_sub(body.born_ms);
+        match body.fresh {
+            Some((i, bit, ms)) if age >= ms => body.state.fields[i] &= !bit,
+            Some(_) => {}
+            None if age >= CORPSE_FRESH_MS => body.state.fields[index] &= !EFLAGS_CORPSE_FRESH,
+            None => {}
         }
     }
 

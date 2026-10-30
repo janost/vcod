@@ -408,7 +408,7 @@ facts it reads are labelled, the design is not a claim about retail.
   read by the mask and the receivers); elsewhere the map's keep holds.
   The worldspawn ratio stands in until the measurement (a thread started
   the first frame `vc_shadows` is on: 16384 samples through the brushes,
-  30-950 ms on this machine) finishes, and for a map it fails on.
+  30-950 ms on the measuring machine) finishes, and for a map it fails on.
 - VERIFIED, vcod measurement 2026-10-12 (`static_light::sun_keep`, the
   ignored test `stock_sun_keep`): the lightmap texel under the centroid of
   every lightmapped triangle facing within 18 degrees of straight up,
@@ -541,7 +541,7 @@ facts it reads are labelled, the design is not a claim about retail.
   buffer and 1 unit towards the sun against acne.
 - VERIFIED, vcod measurement 2026-10-12: mp_carentan, 8 bots, a
   spectator at the stock spectator spawn, 1280 x 800, release build, on
-  this machine's Radeon Vega iGPU (Cezanne) shared with other jobs (load
+  an integrated GPU shared with other jobs (load
   average 10 to 40): the dynamic layer 0.5-0.8 ms of GPU time with
   530-630 caster surfaces, the mask 0.85-1.3 ms, a static redraw 1.3 ms
   (83k of 108k caster triangles after the cell cull; 4.1 ms without the

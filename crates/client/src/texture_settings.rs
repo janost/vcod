@@ -4,8 +4,8 @@
 //! `vid_restart`) and `r_textureMode` on the samplers
 //! (docs/research/cod11-front-end.md, section 14, "Texture settings").
 
+use vcod_common::asset_source::AssetSource;
 use vcod_common::assets::{self, Image, ImageData};
-use vcod_common::pk3::Pk3Fs;
 
 /// What one renderer build loads and samples images with.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -19,6 +19,10 @@ pub struct TextureSettings {
     /// `r_simpleMipMaps` and `r_weightMipMaps`.
     pub mip_filter: MipFilter,
     pub filter: TextureFilter,
+    /// CoD4's `r_picmip_bump` and `r_picmip_spec`: levels dropped from a
+    /// normal and a specular map ([`iwi_picmip`]); 0 off CoD4.
+    pub picmip_bump: u32,
+    pub picmip_spec: u32,
 }
 
 impl Default for TextureSettings {
@@ -31,6 +35,8 @@ impl Default for TextureSettings {
             bits: 0,
             mip_filter: MipFilter::Box,
             filter: TextureFilter::by_name("GL_LINEAR_MIPMAP_NEAREST").unwrap(),
+            picmip_bump: 0,
+            picmip_spec: 0,
         }
     }
 }
@@ -51,7 +57,19 @@ impl TextureSettings {
             bits: bits as i32 as u32,
             mip_filter: MipFilter::from_cvars(simple, weight),
             filter: TextureFilter::by_name(texture_mode).unwrap_or(prev),
+            picmip_bump: 0,
+            picmip_spec: 0,
         }
+    }
+
+    /// CoD4's three picmip dvars (`R_SetPicmip`, iw3mp.exe 0x617520):
+    /// `r_picmip` for the world's colour maps, `r_picmip_bump` and
+    /// `r_picmip_spec`, each clamped to 0..=3 (0x616d40). vcod's models
+    /// keep every level (cod4-front-end.md 9.3).
+    pub fn set_cod4_picmip(&mut self, [color, bump, spec]: [f32; 3]) {
+        self.picmip = picmip_level(color);
+        self.picmip_bump = picmip_level(bump);
+        self.picmip_spec = picmip_level(spec);
     }
 
     /// How images store their levels under these settings.
@@ -124,6 +142,9 @@ pub struct TextureFilter {
     pub min: wgpu::FilterMode,
     pub mag: wgpu::FilterMode,
     pub mip: Option<wgpu::MipmapFilterMode>,
+    /// The anisotropy a trilinear sampler takes: vcod's 16 on CoD1 and
+    /// CoD2, CoD4's `r_texFilterAnisoMin` ([`TextureFilter::cod4_aniso`]).
+    pub aniso: u16,
 }
 
 impl TextureFilter {
@@ -141,12 +162,30 @@ impl TextureFilter {
             "GL_LINEAR_MIPMAP_LINEAR" => (Linear, Linear, Some(M::Linear)),
             _ => return None,
         };
-        Some(TextureFilter { min, mag, mip })
+        Some(TextureFilter {
+            min,
+            mag,
+            mip,
+            aniso: 16,
+        })
     }
 
-    /// A sampler descriptor for mipmapped images under this filter. vcod's
-    /// 16x anisotropy rides only the trilinear mode, the one wgpu allows it
-    /// with; retail 1.1 forces `r_ext_texture_filter_anisotropic` to 0.
+    /// `R_SetTexFilter` (iw3mp.exe 0x631740): `r_texFilterAnisoMax` capped
+    /// at the card's limit (wgpu's 16) and at least 1, then
+    /// `r_texFilterAnisoMin` capped at that is a linear mipped sampler's
+    /// anisotropy.
+    pub fn cod4_aniso(self, min: i32, max: i32) -> TextureFilter {
+        let max = max.clamp(1, 16);
+        TextureFilter {
+            aniso: min.clamp(1, max) as u16,
+            ..self
+        }
+    }
+
+    /// A sampler descriptor for mipmapped images under this filter. The
+    /// anisotropy ([`TextureFilter::aniso`]) rides only the trilinear mode,
+    /// the one wgpu allows it with; retail 1.1 forces
+    /// `r_ext_texture_filter_anisotropic` to 0.
     pub fn sampler<'a>(
         &self,
         label: &'a str,
@@ -164,7 +203,7 @@ impl TextureFilter {
             min_filter: self.min,
             mipmap_filter: self.mip.unwrap_or(wgpu::MipmapFilterMode::Nearest),
             lod_max_clamp: if self.mip.is_some() { 32.0 } else { 0.0 },
-            anisotropy_clamp: if trilinear { 16 } else { 1 },
+            anisotropy_clamp: if trilinear { self.aniso.max(1) } else { 1 },
             ..Default::default()
         }
     }
@@ -206,13 +245,13 @@ impl<'a> Mips<'a> {
 
 /// A `#N` level by pk3 path, probed over the image extensions as
 /// `R_LoadImage` probes them (0x4edf20).
-pub fn path_levels(fs: &Pk3Fs) -> impl Fn(&str) -> Option<Image> + '_ {
+pub fn path_levels(fs: &dyn AssetSource) -> impl Fn(&str) -> Option<Image> + '_ {
     |name| assets::resolve_bundle_image(fs, name).map(|p| assets::load_path_image(fs, &p))
 }
 
 /// A `#N` level of a model skin, through `load_skin_image` so foliage masks
 /// invert like their level 0.
-pub fn skin_levels(fs: &Pk3Fs) -> impl Fn(&str) -> Option<Image> + '_ {
+pub fn skin_levels(fs: &dyn AssetSource) -> impl Fn(&str) -> Option<Image> + '_ {
     |name| {
         assets::resolve_bundle_image(fs, &format!("skins/{name}"))
             .map(|p| assets::load_skin_image(fs, &p["skins/".len()..]))
@@ -307,6 +346,25 @@ impl TexSamplers {
             binding: Self::BINDINGS[i],
             resource: wgpu::BindingResource::Sampler(samplers[i]),
         })
+    }
+}
+
+/// The levels a CoD4 `.iwi` (version 6) drops at `picmip`
+/// (`Image_LoadFromFileWithReader`, iw3mp.exe 0x64244b): none when its
+/// header sets `NOPICMIP` or `NOMIPMAPS` (flags 0x3) or its shorter side
+/// is under 32 texels. Anything else (a CoD2 `.iwi`, another format)
+/// keeps `picmip`.
+pub fn iwi_picmip(data: &[u8], picmip: u32) -> u32 {
+    use vcod_common::iwi::{IwiHeader, flags};
+    match IwiHeader::parse_version(data, 6) {
+        _ if picmip == 0 => 0,
+        Ok(h)
+            if h.flags & (flags::NOPICMIP | flags::NOMIPMAPS) != 0
+                || h.width.min(h.height) < 32 =>
+        {
+            0
+        }
+        _ => picmip,
     }
 }
 
@@ -982,5 +1040,42 @@ mod tests {
         // a side of one writes nothing: the leading texels of the level above
         let line: Vec<u8> = (0..16).collect();
         assert_eq!(halve_kernel(4, 1, &line), (2, 1, line[..8].to_vec()));
+    }
+
+    /// 1.7's picmip refusal (iw3mp.exe 0x64244b): flags 0x3 or a side
+    /// under 32; a CoD2 header keeps the level.
+    #[test]
+    fn cod4_iwi_header_refuses_picmip() {
+        let head = |version: u8, flags: u8, w: u16, h: u16| {
+            let mut b = b"IWi".to_vec();
+            b.extend_from_slice(&[version, 11, flags]);
+            b.extend_from_slice(&w.to_le_bytes());
+            b.extend_from_slice(&h.to_le_bytes());
+            b.resize(vcod_common::iwi::HEADER_LEN, 0);
+            b
+        };
+        assert_eq!(iwi_picmip(&head(6, 0, 512, 256), 2), 2);
+        assert_eq!(iwi_picmip(&head(6, 0, 512, 256), 0), 0);
+        assert_eq!(iwi_picmip(&head(6, 1, 512, 256), 2), 0);
+        assert_eq!(iwi_picmip(&head(6, 2, 512, 256), 2), 0);
+        assert_eq!(iwi_picmip(&head(6, 0, 512, 16), 2), 0);
+        assert_eq!(iwi_picmip(&head(5, 1, 512, 256), 2), 2);
+    }
+
+    /// `R_SetTexFilter`'s linear mipped anisotropy (iw3mp.exe 0x631740).
+    #[test]
+    fn cod4_anisotropy_is_the_minimum_under_the_maximum() {
+        let tri = TextureFilter::by_name("GL_LINEAR_MIPMAP_LINEAR").unwrap();
+        assert_eq!(tri.aniso, 16);
+        assert_eq!(tri.cod4_aniso(1, 16).aniso, 1);
+        assert_eq!(tri.cod4_aniso(8, 16).aniso, 8);
+        assert_eq!(tri.cod4_aniso(8, 4).aniso, 4);
+        assert_eq!(tri.cod4_aniso(8, 0).aniso, 1);
+        assert_eq!(tri.cod4_aniso(32, 64).aniso, 16);
+        let bilinear = TextureFilter::by_name("GL_LINEAR_MIPMAP_NEAREST").unwrap();
+        let d = bilinear
+            .cod4_aniso(8, 16)
+            .sampler("t", wgpu::AddressMode::Repeat);
+        assert_eq!(d.anisotropy_clamp, 1, "wgpu takes it trilinear only");
     }
 }

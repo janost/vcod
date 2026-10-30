@@ -1,6 +1,7 @@
 //! The map side of the server: collision for spectator flight and a spawn.
 
 use std::collections::{BTreeMap, HashMap};
+use vcod_common::mapworld;
 use vcod_common::net::msg::EntityState;
 use vcod_common::net::protocol::{ENTITYNUM_WORLD, Protocol};
 use vcod_common::net::trajectory::{TR_LINEAR, Trajectory};
@@ -9,7 +10,7 @@ use vcod_common::{bsp, collision::CollisionWorld};
 pub struct World {
     pub collision: CollisionWorld,
     /// The BSP tree and PVS table, for culling each client's entity list.
-    pub vis: bsp::Visibility,
+    pub vis: mapworld::Visibility,
     /// Feet origin and yaw degrees, from the ents lump's spawn classes.
     pub spawn: ([f32; 3], f32),
     /// Every gametype's spawn points, what the bots' navigation graph is
@@ -47,7 +48,7 @@ const LINK_EPSILON: f32 = 1.0;
 /// The two areas must connect too, and an eye in a solid leaf is sent
 /// nothing ([`Viewer::sees_nothing`]).
 pub fn visible_entities(
-    vis: &bsp::Visibility,
+    vis: &mapworld::Visibility,
     eye: [f32; 3],
     entities: &BTreeMap<u32, EntityState>,
     time: i32,
@@ -74,7 +75,7 @@ pub struct Viewer {
 }
 
 impl Viewer {
-    pub fn at(vis: &bsp::Visibility, eye: [f32; 3]) -> Self {
+    pub fn at(vis: &mapworld::Visibility, eye: [f32; 3]) -> Self {
         Viewer {
             eye,
             cluster: vis.cluster_at(eye),
@@ -94,7 +95,7 @@ impl Viewer {
 /// [`visible_entities`]' cluster test for one entity, from the cluster
 /// `from`, in the frame whose level time is `time`.
 pub fn entity_visible(
-    vis: &bsp::Visibility,
+    vis: &mapworld::Visibility,
     from: i32,
     e: &EntityState,
     time: i32,
@@ -107,7 +108,7 @@ pub fn entity_visible(
 /// unconditionally: the areas, the clusters, then on 1.5 and UO the fog.
 /// `fog` is [`fog_cull`]'s squared distance.
 pub fn entity_seen(
-    vis: &bsp::Visibility,
+    vis: &mapworld::Visibility,
     v: &Viewer,
     e: &EntityState,
     time: i32,
@@ -160,7 +161,7 @@ fn box_dist_sq(lo: [f32; 3], hi: [f32; 3], p: [f32; 3]) -> f32 {
 /// 1.5 and UO test the areas first and count it as not seen, and add the
 /// fog.
 pub fn in_snapshot(
-    vis: &bsp::Visibility,
+    vis: &mapworld::Visibility,
     eye: [f32; 3],
     e: &EntityState,
     broadcast: bool,
@@ -168,31 +169,56 @@ pub fn in_snapshot(
     p: &Protocol,
     fog: Option<f32>,
 ) -> bool {
-    if broadcast {
-        return true;
-    }
-    let (link, lo, hi) = entity_link(vis, e, time, p);
-    let v1 = p.version == vcod_common::net::protocol::PROTOCOL_V1.version;
+    broadcast || link_in_snapshot(vis, eye, &entity_link(vis, e, time, p), p.is_v1(), fog)
+}
+
+/// [`in_snapshot`]'s test past the broadcast flag, on a link the caller
+/// placed ([`link_at`]). `v1` is 1.1's rule for an entity touching no
+/// cluster.
+pub fn link_in_snapshot(
+    vis: &mapworld::Visibility,
+    eye: [f32; 3],
+    (link, lo, hi): &(mapworld::LinkClusters, [f32; 3], [f32; 3]),
+    v1: bool,
+    fog: Option<f32>,
+) -> bool {
+    let (lo, hi) = (*lo, *hi);
     if v1 && link.clusters.is_empty() {
         return true;
     }
     let v = Viewer::at(vis, eye);
     link.in_area(v.area)
         && !link.clusters.is_empty()
-        && vis.link_visible(v.cluster, &link)
+        && vis.link_visible(v.cluster, link)
         && fog.is_none_or(|d| box_dist_sq(lo, hi, eye) <= d)
 }
 
 /// The clusters an entity's link box leaves it with, and that box
 /// (`r.absmin`, `r.absmax`).
 fn entity_link(
-    vis: &bsp::Visibility,
+    vis: &mapworld::Visibility,
     e: &EntityState,
     time: i32,
     p: &Protocol,
-) -> (bsp::LinkClusters, [f32; 3], [f32; 3]) {
+) -> (mapworld::LinkClusters, [f32; 3], [f32; 3]) {
     let (o, angles) = link_pose(e, time, p);
-    let (mins, maxs) = link_bounds(vis, e, angles, p);
+    let bmodel = (e.field_i32(p, "solid") == vcod_common::net::flags::SOLID_BMODEL)
+        .then(|| e.field_i32(p, "index") as usize);
+    let own = crate::game::wire::link_box(e.field_i32(p, "eType"));
+    link_at(vis, o, angles, bmodel, own)
+}
+
+/// The clusters an entity linked at `o` turned by `angles` leaves, and its
+/// box (`r.absmin`, `r.absmax`): a brush model's (`bmodel`, its inline
+/// model number) or else `own`, about the origin.
+pub fn link_at(
+    vis: &mapworld::Visibility,
+    o: [f32; 3],
+    angles: [f32; 3],
+    bmodel: Option<usize>,
+    own: ([f32; 3], [f32; 3]),
+) -> (mapworld::LinkClusters, [f32; 3], [f32; 3]) {
+    let (mins, maxs) = link_bounds(vis, bmodel, angles, own);
     let at = |b: [f32; 3], pad: f32| [o[0] + b[0] + pad, o[1] + b[1] + pad, o[2] + b[2] + pad];
     let (lo, hi) = (at(mins, -LINK_EPSILON), at(maxs, LINK_EPSILON));
     (vis.link_clusters(lo, hi), lo, hi)
@@ -216,16 +242,13 @@ fn link_pose(e: &EntityState, time: i32, p: &Protocol) -> ([f32; 3], [f32; 3]) {
 /// bounds: VERIFIED, `SV_LinkEntity`'s `r.bmodel` arm (cod_lnxded 0x80908b0)
 /// takes `RadiusFromBounds` when `r.currentAngles` is not zero.
 fn link_bounds(
-    vis: &bsp::Visibility,
-    e: &EntityState,
+    vis: &mapworld::Visibility,
+    bmodel: Option<usize>,
     angles: [f32; 3],
-    p: &Protocol,
+    own: ([f32; 3], [f32; 3]),
 ) -> ([f32; 3], [f32; 3]) {
-    let model = (e.field_i32(p, "solid") == vcod_common::net::flags::SOLID_BMODEL)
-        .then(|| vis.model_bounds(e.field_i32(p, "index") as usize))
-        .flatten();
-    let Some((mins, maxs)) = model else {
-        return crate::game::wire::link_box(e.field_i32(p, "eType"));
+    let Some((mins, maxs)) = bmodel.and_then(|i| vis.model_bounds(i)) else {
+        return own;
     };
     if angles == [0.0; 3] {
         return (mins, maxs);
@@ -244,7 +267,7 @@ impl World {
     /// bullet passes through a barrel (`crates/server/tests/missile_ab.rs`,
     /// where the capture's own grenade comes to rest on one). `None` is the
     /// bare world every test that mounts no paks builds.
-    pub fn from_bsp(b: &bsp::Bsp, fs: Option<&vcod_common::pk3::Pk3Fs>) -> Self {
+    pub fn from_bsp(b: &mapworld::MapWorld, fs: Option<&vcod_common::pk3::Pk3Fs>) -> Self {
         let props = fs.map_or_else(Vec::new, |fs| {
             vcod_common::props::collision_tris(fs, &b.entities)
         });
@@ -277,7 +300,7 @@ impl World {
 
 /// The brushes of every `trigger_hurt` and every `trigger_multiple` named
 /// `minefield` (`maps/mp/_minefields.gsc` kills whoever stays in one).
-fn hazards(b: &bsp::Bsp) -> Vec<crate::game::trigger::BrushHull> {
+fn hazards(b: &mapworld::MapWorld) -> Vec<crate::game::trigger::BrushHull> {
     let mut hulls = crate::game::trigger::model_brush_hulls(b);
     let mut out = Vec::new();
     for e in bsp::entity_blocks(&b.entities) {
@@ -298,8 +321,7 @@ fn hazards(b: &bsp::Bsp) -> Vec<crate::game::trigger::BrushHull> {
 }
 
 /// Scripted entities that exist only to drive the packet-entity wire path:
-/// baselines, deltas, removals and trajectory evaluation. No gameplay meaning
-/// (docs/design/2026-08-27-delta-compression-design.md).
+/// baselines, deltas, removals and trajectory evaluation. No gameplay meaning.
 pub struct TestEntities {
     count: usize,
     around: [f32; 3],

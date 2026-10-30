@@ -235,10 +235,12 @@ fn ours(fs: vcod_common::pk3::Pk3Fs, fixture: &str, lead: i32) -> (Vec<Snap>, Ve
             let gained = last_seq.map_or(0, |prev| ((seq - prev) & 0xff).min(4));
             let events = ((seq - gained)..seq)
                 .map(|k| s.ps.field_i32(p, &format!("events[{}]", k & 3)))
-                .map(|id| match p.version == PROTOCOL_V22.version {
-                    true => event_ids::event_v22_to_v1(id),
-                    false => id,
-                })
+                .map(
+                    |id| match p.transport.version == PROTOCOL_V22.transport.version {
+                        true => event_ids::event_v22_to_v1(id),
+                        false => id,
+                    },
+                )
                 .collect();
             last_seq = Some(seq);
             snaps.push((s.server_time, bits, z, events));
@@ -296,8 +298,8 @@ fn check(fs: fn() -> Option<vcod_common::pk3::Pk3Fs>, fixture: &str) {
 /// 1.5's, too).
 fn fs_15() -> Option<vcod_common::pk3::Pk3Fs> {
     let fs = vcod_common::testing::game_fs()?;
-    let v6 = vcod_common::net::protocol::PROTOCOL_V6.version;
-    (vcod_server::server::install_protocol(&fs).version == v6).then_some(fs)
+    let v6 = vcod_common::net::protocol::PROTOCOL_V6.transport.version;
+    (vcod_server::server::install_protocol(&fs).transport.version == v6).then_some(fs)
 }
 
 #[test]

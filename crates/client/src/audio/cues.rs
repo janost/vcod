@@ -27,6 +27,11 @@ pub const AMBIENT_ENTITY: u32 = 0xFFFF_FFFE;
 /// 0x20 (research doc, section 10).
 pub const MUSIC_ENTITY: u32 = 0xFFFF_FFFD;
 
+/// CoD2's second ambient stream slot, where a crossfade starts the next
+/// track while the old one fades out on [`AMBIENT_ENTITY`] (or the other
+/// way round; `SND_PlayAmbientAlias`, Mac 0x4c806).
+pub const AMBIENT_ENTITY_2: u32 = 0xFFFF_FFFC;
+
 /// Entity whose playerState we ride; `u32::MAX` when there is none, which
 /// matches no entity.
 pub fn ps_entity(client_num: i32) -> u32 {

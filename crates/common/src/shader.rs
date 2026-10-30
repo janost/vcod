@@ -3,195 +3,19 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::pk3::Pk3Fs;
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum BlendFactor {
-    Zero,
-    One,
-    DstColor,
-    OneMinusDstColor,
-    SrcColor,
-    OneMinusSrcColor,
-    SrcAlpha,
-    OneMinusSrcAlpha,
-    DstAlpha,
-    OneMinusDstAlpha,
-    SrcAlphaSaturate,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum WaveForm {
-    Sin,
-    Square,
-    Triangle,
-    Sawtooth,
-    InverseSawtooth,
-    /// Retail's genfunc 6 (CoDMP.exe 0x4f1a1d): R_NoiseGet4f over time,
-    /// read only by `rgbGen wave` (shader doc 4).
-    Noise,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Wave {
-    pub form: WaveForm,
-    pub base: f32,
-    pub amp: f32,
-    pub phase: f32,
-    pub freq: f32,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum TcMod {
-    Scroll(f32, f32),
-    Scale(f32, f32),
-    Rotate(f32),
-    Stretch(Wave),
-    Turb { amp: f32, phase: f32, freq: f32 },
-    Transform([f32; 6]),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ImageRef {
-    Path(String),
-    Lightmap,
-    White,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct AnimSpec {
-    pub fps: f32,
-    pub paths: Vec<String>,
-}
-
-/// A bundle image's wrap per axis: retail's image flags 0x10 (`s`) and 0x20
-/// (`t`) pick `GL_CLAMP_TO_EDGE` over `GL_REPEAT` for `GL_TEXTURE_WRAP_S`
-/// and `_T` (CoDMP.exe 0x4ec6e9, 0x4ec70f; shader doc 3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Clamp {
-    pub s: bool,
-    pub t: bool,
-}
-
-impl Clamp {
-    pub const NONE: Clamp = Clamp { s: false, t: false };
-    pub const BOTH: Clamp = Clamp { s: true, t: true };
-
-    pub fn any(self) -> bool {
-        self.s || self.t
-    }
-}
-
-/// One `map`/`animMap` group inside a stage; a stage has one or more.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Bundle {
-    pub image: ImageRef,
-    pub anim: Option<AnimSpec>,
-    pub clamp: Clamp,
-    pub tcmods: Vec<TcMod>,
-    pub tc_gen: TcGen,
-    /// How the bundle combines with the one before it; bundle 0's is unused.
-    pub env: TexEnv,
-}
-
-/// A `nextbundle`'s `blendFunc`, which picks the texture environment and
-/// leaves the stage's blend alone (CoDMP.exe 0x4f8ba3, 0x4f8bce, 0x4f8bf3): `filter`
-/// and `GL_ZERO GL_SRC_COLOR` modulate, `add` adds, `blend` decals.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TexEnv {
-    #[default]
-    Modulate,
-    Add,
-    Decal,
-}
-
-/// A bundle's texture coordinates before its tcMods.
-#[derive(Debug, Clone, PartialEq)]
-pub enum TcGen {
-    /// The vertex's own (`tcGen base`/`texture`, or none).
-    Base,
-    /// `tcGen vector` basis, sx sy sz tx ty tz; renderer dots world position.
-    Vector([f32; 6]),
-    /// `tcGen environment` (texgen 4, CoDMP.exe 0x4f9838): the view vector
-    /// reflected about the normal in the model's frame, `s = 0.5 + 0.5 r.y`,
-    /// `t = 0.5 - 0.5 r.z` (0x514d40; docs/research/cod11-shader-scripts.md, §3).
-    Environment,
-}
-
-/// `depthFunc`: the stage's depth test (CoDMP.exe 0x4f8990, GL state bits
-/// 0x20000 and 0x40000).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DepthFunc {
-    #[default]
-    LessEqual,
-    Equal,
-    Always,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum AlphaFunc {
-    Gt0,
-    Lt128,
-    Ge128,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum RgbGen {
-    IdentityLighting,
-    Identity,
-    ExactVertex,
-    Vertex,
-    Const([f32; 3]),
-    ConstLighting([f32; 3]),
-    Wave(Wave),
-    /// `lightingDiffuse` (gen 10) and `lightingAmbient` (gen 9): GL lighting
-    /// from the light grid, model skins only (cod11-light-grid-and-leaf-lights.md,
-    /// section 13).
-    LightingDiffuse,
-    /// `lightingPrecalc` (gen 0xb): the entity's `shaderRGBA` on a model.
-    LightingPrecalc,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum AlphaGen {
-    Identity,
-    Vertex,
-    Const(f32),
-    Wave(Wave),
-    /// The entity's `shaderRGBA` alpha.
-    Entity,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Stage {
-    pub bundles: Vec<Bundle>,
-    pub blend: Option<(BlendFactor, BlendFactor)>,
-    /// `depthWrite` seen explicitly; absent means stage-default.
-    pub depth_write: Option<bool>,
-    pub alpha_func: Option<AlphaFunc>,
-    pub depth_func: DepthFunc,
-    pub rgb_gen: RgbGen,
-    pub alpha_gen: AlphaGen,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct SkyParms {
-    pub env: String,
-    pub cloud_height: f32,
-}
-
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct SurfaceBits {
-    pub sky: bool,
-    pub nodraw: bool,
-    pub trans: bool,
-    pub water: bool,
-    pub nonsolid: bool,
-    pub nolightmap: bool,
-    /// `surfaceParm nodlight`: surface flag 0x20000, which keeps the
-    /// dlight pass off (0x500d3a).
-    pub nodlight: bool,
-}
+use crate::asset_source::{Asset, AssetKind, AssetSource};
+pub use crate::material::{
+    AlphaFunc, AlphaGen, AnimSpec, BlendFactor, Bulge, Bundle, Clamp, ClassedStage, DEFAULT_IMAGE,
+    DLIGHT_IMAGE, Deform, DeformNormal, DepthFunc, DlightDraw, DrawClass, Flap, ImageRef,
+    NOISE_PERM, NOISE_TABLE, PolygonOffset, RgbGen, SORT_ADDITIVE, SORT_BANNER, SORT_BLEND,
+    SORT_BOATHULL, SORT_DECAL, SORT_OCEAN, SORT_OPAQUE, SORT_SEETHROUGH, SORT_UNDERWATER,
+    SORT_WATER, SkyParms, Sprite, Stage, SurfaceBits, TcGen, TcMod, TexEnv, Wave, WaveForm,
+    bundle_affine, bundle_turb, has_animated_tcmods, noise_get4f, rgb_wave_value, wave_value,
+};
+use crate::material::{
+    Cull, Material, MaterialLib, Technique, TexSemantic, TextureBinding, norm_key,
+};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Shader {
@@ -229,195 +53,6 @@ pub struct Shader {
 
 /// Retail's deform record cap (`MAX_SHADER_DEFORMS`, CoDMP.exe 0x4f9d20).
 pub const MAX_SHADER_DEFORMS: usize = 3;
-
-/// One `deformVertexes` record (CoDMP.exe 0x4f9d20's 0x34-byte records).
-#[derive(Debug, Clone, PartialEq)]
-pub enum Deform {
-    /// `wave <div> <func> <base> <amp> <phase> <rate>`, the ocean swell:
-    /// along the normal by `base + amp * sin(2pi * (phase + t * rate +
-    /// (x+y+z) * spread))` (0x513570); `spread` is 1/div.
-    Wave { wave: Wave, spread: f32 },
-    /// `flap <s|x|t|y> <div> <func> <base> <amp> <phase> <rate>`: the
-    /// wave above scaled by the vertex's base `s` (or `t`), so a flag's
-    /// hoist edge (s = 0) holds still (0x5136e0).
-    Flap(Flap),
-    /// `bulge <width> <height> <speed>` (0x513ad0).
-    Bulge(Bulge),
-    /// `move <x> <y> <z> <func> <base> <amp> <phase> <rate>`: every vertex
-    /// moves along the vector by the wave (0x513b70).
-    Move { by: [f32; 3], wave: Wave },
-    /// `normal <amplitude> <frequency>` (0x513990).
-    Normal(DeformNormal),
-    /// A record vcod draws some other way or not at all: `autosprite`,
-    /// `autosprite2` (see [`Shader::sprite`]), `projectionShadow`,
-    /// `text0`-`text7`, `syncNormal`. It still takes one of the three slots.
-    Other,
-}
-
-impl Deform {
-    /// Whether the record moves vertex positions.
-    pub fn moves(&self) -> bool {
-        matches!(
-            self,
-            Deform::Wave { .. } | Deform::Flap(_) | Deform::Bulge(_) | Deform::Move { .. }
-        )
-    }
-}
-
-/// A `deformVertexes flap`: `along_t` for the `t`/`y` axis (deform 3),
-/// otherwise `s`/`x` (deform 2); `spread` is 1/div as for `wave`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Flap {
-    pub along_t: bool,
-    pub wave: Wave,
-    pub spread: f32,
-}
-
-/// `deformVertexes bulge`: a sine along the base `s` coordinate, travelling
-/// at `speed`, pushes each vertex out along its normal by up to `height`
-/// (CoDMP.exe 0x513ad0; shader doc 8).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Bulge {
-    pub width: f32,
-    pub height: f32,
-    pub speed: f32,
-}
-
-/// `deformVertexes normal`: each normal is nudged by `amp` times the noise
-/// at the vertex and renormalized (CoDMP.exe 0x513990; shader doc 8).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct DeformNormal {
-    pub amp: f32,
-    pub freq: f32,
-}
-
-/// The two sprite deforms (deform types 9 and 10 in the 1.1 parser).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Sprite {
-    /// Every four vertices become a quad facing the view plane.
-    Auto,
-    /// Every quad turns about its long axis to face the eye.
-    Auto2,
-}
-
-/// `scripts/<name>.sun`, the cvar dump a sky block's `sunfile <name>` token
-/// names (loaded by CoDMP.exe via `"scripts/%s.sun"`, 0x4e7f30). Defaults
-/// are the cvars' registration strings (the `r_sun*` block of 0x4b3300 from
-/// 0x4b41b1 on), which a key the file leaves out keeps.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SunFile {
-    /// `r_sunsprite_shader`; `None` draws no disc ("0" is how mp_harbor.sun
-    /// disables it).
-    pub sprite: Option<String>,
-    /// `r_sunsprite_size`: the disc's half-width is this times 0.0013110929
-    /// at unit distance (0x4e7980), and in 640-wide pixels the radius of
-    /// the flare's visibility window (0x4d9250).
-    pub sprite_size: f32,
-    /// `r_sunflare_shader`; "0" or empty draws no flare.
-    pub flare: Option<String>,
-    pub flare_min_size: f32,
-    pub flare_max_size: f32,
-    pub flare_min_angle: f32,
-    pub flare_max_angle: f32,
-    pub flare_max_alpha: f32,
-    /// Seconds.
-    pub flare_fade_in: f32,
-    pub flare_fade_out: f32,
-    /// `r_sunblind_*`: darkens the screen, `max` is `max_darken`.
-    pub blind: SunFade,
-    /// `r_sunglare_*`: lightens the screen, `max` is `max_lighten`.
-    pub glare: SunFade,
-}
-
-/// The blind and glare screen washes: full strength within `max_angle`
-/// degrees of the sun, none past `min_angle`, eased in and out over the
-/// fade times in seconds.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SunFade {
-    pub min_angle: f32,
-    pub max_angle: f32,
-    pub max: f32,
-    pub fade_in: f32,
-    pub fade_out: f32,
-}
-
-impl Default for SunFile {
-    fn default() -> Self {
-        let fade = SunFade {
-            min_angle: 30.0,
-            max_angle: 5.0,
-            max: 0.75,
-            fade_in: 0.5,
-            fade_out: 3.0,
-        };
-        SunFile {
-            sprite: None,
-            sprite_size: Self::DEFAULT_SPRITE_SIZE,
-            flare: Some("sunFlareShader".into()),
-            flare_min_size: 0.0,
-            flare_max_size: 2500.0,
-            flare_min_angle: 45.0,
-            flare_max_angle: 2.0,
-            flare_max_alpha: 1.0,
-            flare_fade_in: 1.0,
-            flare_fade_out: 1.0,
-            blind: fade,
-            glare: fade,
-        }
-    }
-}
-
-impl SunFile {
-    /// Engine default for `r_sunsprite_size`; every stock `.sun` that wants a
-    /// disc sets both fields explicitly, so this only covers partial files.
-    pub const DEFAULT_SPRITE_SIZE: f32 = 16.0;
-
-    pub fn parse(text: &str) -> SunFile {
-        let mut sf = SunFile::default();
-        let shader = |v: &str| (!v.is_empty() && v != "0").then(|| v.to_string());
-        for line in text.lines() {
-            let Some((key, value)) = line.trim().split_once(char::is_whitespace) else {
-                continue;
-            };
-            let value = value.trim().trim_matches('"');
-            let n = value.parse::<f32>().ok();
-            let key = key.trim().to_ascii_lowercase();
-            let num = match key.as_str() {
-                "r_sunsprite_shader" => {
-                    sf.sprite = shader(value);
-                    continue;
-                }
-                "r_sunflare_shader" => {
-                    sf.flare = shader(value);
-                    continue;
-                }
-                "r_sunsprite_size" => &mut sf.sprite_size,
-                "r_sunflare_min_size" => &mut sf.flare_min_size,
-                "r_sunflare_max_size" => &mut sf.flare_max_size,
-                "r_sunflare_min_angle" => &mut sf.flare_min_angle,
-                "r_sunflare_max_angle" => &mut sf.flare_max_angle,
-                "r_sunflare_max_alpha" => &mut sf.flare_max_alpha,
-                "r_sunflare_fadein" => &mut sf.flare_fade_in,
-                "r_sunflare_fadeout" => &mut sf.flare_fade_out,
-                "r_sunblind_min_angle" => &mut sf.blind.min_angle,
-                "r_sunblind_max_angle" => &mut sf.blind.max_angle,
-                "r_sunblind_max_darken" => &mut sf.blind.max,
-                "r_sunblind_fadein" => &mut sf.blind.fade_in,
-                "r_sunblind_fadeout" => &mut sf.blind.fade_out,
-                "r_sunglare_min_angle" => &mut sf.glare.min_angle,
-                "r_sunglare_max_angle" => &mut sf.glare.max_angle,
-                "r_sunglare_max_lighten" => &mut sf.glare.max,
-                "r_sunglare_fadein" => &mut sf.glare.fade_in,
-                "r_sunglare_fadeout" => &mut sf.glare.fade_out,
-                _ => continue,
-            };
-            if let Some(n) = n {
-                *num = n;
-            }
-        }
-        sf
-    }
-}
 
 /// The line-break token [`tokens`] emits and block bodies keep.
 pub const NEWLINE: &str = "\n";
@@ -551,54 +186,6 @@ pub fn map_sort_token(tok: &str) -> Option<f32> {
     }
 }
 
-pub const SORT_OCEAN: f32 = 3.0;
-pub const SORT_BOATHULL: f32 = 4.0;
-pub const SORT_OPAQUE: f32 = 5.0;
-pub const SORT_DECAL: f32 = 6.0;
-pub const SORT_SEETHROUGH: f32 = 7.0;
-pub const SORT_BANNER: f32 = 8.0;
-pub const SORT_UNDERWATER: f32 = 10.0;
-pub const SORT_WATER: f32 = 11.0;
-pub const SORT_BLEND: f32 = 15.0;
-pub const SORT_ADDITIVE: f32 = 19.0;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DrawClass {
-    Opaque,
-    Blend,
-    Additive,
-}
-
-/// The three polygon offset keywords: shader flags 0x10, 0x20 and 0x40,
-/// drawn at `(r_offsetfactor, r_offsetunits)`, twice that pair, and `(0,
-/// r_offsetunits)` (CoDMP.exe 0x4fbbdd, 0x4d5991; events doc 9.5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PolygonOffset {
-    Single,
-    Double,
-    Const,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ClassedStage {
-    pub class: DrawClass,
-    pub depth_write: bool,
-    pub bias: bool,
-    pub two_sided: bool,
-}
-
-/// Start true; a blend clears it unless it degenerates to (One, Zero); an
-/// explicit `depthWrite` keyword wins over both.
-fn depth_write(st: &Stage) -> bool {
-    if let Some(dw) = st.depth_write {
-        return dw;
-    }
-    match &st.blend {
-        None => true,
-        Some(pair) => *pair == (BlendFactor::One, BlendFactor::Zero),
-    }
-}
-
 impl Shader {
     /// Whether some bundle takes `tcGen environment`.
     pub fn reflects(&self) -> bool {
@@ -620,7 +207,7 @@ impl Shader {
                 SORT_DECAL
             } else {
                 match self.stages.first() {
-                    Some(st @ Stage { blend: Some(_), .. }) if depth_write(st) => SORT_SEETHROUGH,
+                    Some(st @ Stage { blend: Some(_), .. }) if st.writes_depth() => SORT_SEETHROUGH,
                     Some(Stage {
                         blend: Some((_, BlendFactor::One)),
                         ..
@@ -723,16 +310,89 @@ impl Shader {
         // or its exact decimal parse
         Some(ClassedStage {
             class,
-            depth_write: depth_write(st),
+            depth_write: st.writes_depth(),
             bias: self.depth_bias().is_some(),
             two_sided: self.two_sided,
         })
     }
 }
 
-/// The engine's default image (`*default`, `R_CreateDefaultImage` 0x4f0380);
-/// renderers bind `assets::default_image` for it.
-pub const DEFAULT_IMAGE: &str = "*default";
+impl Material {
+    /// Compiles a parsed script: its FinishShader sort and polygon offset,
+    /// its dlight draw, its sorting stage's images, its stages as written.
+    pub fn from_shader(sh: &Shader) -> Material {
+        let technique = if sh.sky.is_some() {
+            Technique::Sky
+        } else if sh.stages.is_empty() {
+            Technique::None
+        } else {
+            Technique::Stages
+        };
+        let sorting = sh.sorting_stage();
+        let mut textures = Vec::new();
+        if let Some(st) = &sorting {
+            if let Some(b) = st
+                .bundles
+                .iter()
+                .find(|b| matches!(b.image, ImageRef::Path(_)))
+            {
+                textures.push(TextureBinding {
+                    semantic: TexSemantic::Color,
+                    image: b.image.clone(),
+                });
+            }
+            if st.bundles.iter().any(|b| b.image == ImageRef::Lightmap) {
+                textures.push(TextureBinding {
+                    semantic: TexSemantic::Lightmap,
+                    image: ImageRef::Lightmap,
+                });
+            }
+        }
+        Material {
+            name: sh.name.clone(),
+            technique,
+            sort: sh.sort_value(),
+            surface: sh.surface.clone(),
+            cull: if sh.two_sided { Cull::None } else { Cull::Back },
+            depth_bias: sh.depth_bias(),
+            nofog: sh.nofog,
+            nopicmip: sh.nopicmip,
+            nomipmaps: sh.nomipmaps,
+            sky: sh.sky.clone(),
+            sunfile: sh.sunfile.clone(),
+            deforms: sh.deforms.clone(),
+            sprite: sh.sprite,
+            textures,
+            stages: sh.stages.clone(),
+            dlight: sh.dlight_draw(),
+            sort_images: sorting
+                .map(|st| st.bundles.iter().take(2).map(|b| b.image.clone()).collect()),
+            dropped_stages: sh.dropped_stages,
+            model_axes: sh.model_axes,
+            phong: None,
+            vertex_multiply: false,
+            falloff: None,
+            premultiplied: false,
+            eye_offset: None,
+            reflex: None,
+            model_light: crate::material::ModelLight::None,
+            probe: None,
+            smodel: None,
+            feather: None,
+            feather_view_depth: false,
+            floatz: None,
+            entity_cull: false,
+            distortion: None,
+            cookie: crate::material::CookieRole::default(),
+            water: None,
+        }
+    }
+}
+
+/// Retail's `<default>` shader compiled ([`default_shader`]).
+pub fn default_material() -> Material {
+    Material::from_shader(&default_shader())
+}
 
 /// Retail's `<default>` shader (CoDMP.exe 0x4fd780): one opaque stage of
 /// `*default` that writes depth, its rgbGen left 0, which 0x4ffa60's default
@@ -758,34 +418,6 @@ pub fn default_shader() -> Shader {
             alpha_gen: AlphaGen::Identity,
         }],
         ..Default::default()
-    }
-}
-
-/// The engine's dlight image (`$dlight`, 0x4f0150); a bundle that names it
-/// takes the lightmap's texture coordinates, which the dlight pass fills
-/// with the projected light (0x4f8556, 0x500a8c).
-pub const DLIGHT_IMAGE: &str = "$dlight";
-
-/// The dlight pass's draw for one block (`Shader::dlight_draw`).
-#[derive(Debug, Clone, PartialEq)]
-pub enum DlightDraw {
-    /// These stages, once per light: the block's `perLight` stages or the
-    /// automatic copy.
-    Stages(Vec<Stage>),
-    /// `dlightshader` (`scripts/gfx.shader`): the light's colour through
-    /// the dlight image, `GL_DST_COLOR GL_ONE`, `depthFunc equal`.
-    Blob,
-}
-
-impl Bundle {
-    /// Retail's bundle flag at `+0xc4` (0x4f8556): the lightmap and the
-    /// dlight image read the lightmap texture coordinates.
-    pub fn takes_lightmap_coords(&self) -> bool {
-        match &self.image {
-            ImageRef::Lightmap => true,
-            ImageRef::Path(p) => p == DLIGHT_IMAGE,
-            ImageRef::White => false,
-        }
     }
 }
 
@@ -2062,21 +1694,35 @@ pub struct ShaderLib {
     warns: usize,
 }
 
-impl ShaderLib {
-    pub fn load(fs: &Pk3Fs) -> Self {
+/// The library by [`crate::asset_source::load`]: every script parsed once
+/// per source, until [`crate::pk3::Pk3Fs::clear_references`] or an overlay drops the
+/// cache. A `.shader` read marks no pak. The name is unused (`""`).
+impl Asset for ShaderLib {
+    const KIND: AssetKind = AssetKind::ShaderScripts;
+
+    fn find(src: &dyn AssetSource, _name: &str) -> anyhow::Result<Self> {
         // one set for the whole scan: repeated damage across many files
         // warns once per (shader, message)
-        Self::load_with(fs, &mut WarnSet::new())
+        Ok(Self::load_with(src, &mut WarnSet::new()))
+    }
+}
+
+impl ShaderLib {
+    /// The source's library, parsed on the first ask ([`Asset`] above).
+    pub fn load(fs: &dyn AssetSource) -> Arc<Self> {
+        crate::asset_source::load(fs, "").expect("a shader scan never fails")
     }
 
-    /// [`load`](Self::load), firing its warnings into `warns`.
-    pub fn load_with(fs: &Pk3Fs, warns: &mut WarnSet) -> Self {
+    /// The scan behind [`load`](Self::load), uncached, firing its warnings
+    /// into `warns`.
+    pub fn load_with(fs: &dyn AssetSource, warns: &mut WarnSet) -> Self {
         let mut lib = Self {
             by_name: HashMap::new(),
             images: HashMap::new(),
             warns: 0,
         };
-        for path in fs.names_with_suffix(".shader") {
+        // every directory: effects keep theirs in fxshaders/
+        for path in fs.list("", ".shader") {
             let Some(raw) = fs.read(&path) else { continue };
             let text = String::from_utf8_lossy(&raw);
             for (name, body) in split_blocks(&text) {
@@ -2095,6 +1741,19 @@ impl ShaderLib {
         }
         lib.warns = warns.len();
         lib
+    }
+
+    /// Every block compiled into a [`Material`].
+    pub fn materials(&self) -> MaterialLib {
+        MaterialLib {
+            by_name: self
+                .by_name
+                .iter()
+                .map(|(k, sh)| (k.clone(), Material::from_shader(sh)))
+                .collect(),
+            images: self.images.clone(),
+            warns: self.warns,
+        }
     }
 
     pub fn get(&self, name: &str) -> Option<&Shader> {
@@ -2144,6 +1803,11 @@ impl ShaderLib {
         self.by_name.values().filter(|s| s.sky.is_some())
     }
 
+    /// Every block's (normalized) name, in no particular order.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.by_name.keys().map(String::as_str)
+    }
+
     pub fn len(&self) -> usize {
         self.by_name.len()
     }
@@ -2151,10 +1815,6 @@ impl ShaderLib {
     pub fn is_empty(&self) -> bool {
         self.by_name.is_empty()
     }
-}
-
-fn norm_key(name: &str) -> String {
-    name.to_lowercase().replace('\\', "/")
 }
 
 /// The first `map`/`clampmap` image of a raw block body, normalized the way
@@ -2186,602 +1846,10 @@ fn body_image(body: &[&str]) -> Option<String> {
     None
 }
 
-// ---- tcMod runtime evaluation ----
-// Math pinned to RTCW-MP src/renderer/tr_shade_calc.c; table build loop is
-// tr_init.c R_Init.
-
-const FUNCTABLE_SIZE: usize = 1024;
-const FUNCTABLE_MASK: i64 = (FUNCTABLE_SIZE - 1) as i64;
-
-/// Compile-time stand-in for libm sin(): quadrant reduction then Maclaurin.
-const fn sin_deg(deg: f64) -> f64 {
-    let mut x = deg % 360.0;
-    if x > 180.0 {
-        x -= 360.0;
-    } else if x < -180.0 {
-        x += 360.0;
-    }
-    if x > 90.0 {
-        x = 180.0 - x;
-    } else if x < -90.0 {
-        x = -180.0 - x;
-    }
-    let r = x * std::f64::consts::PI / 180.0;
-    let sq = -r * r;
-    let mut term = r;
-    let mut sum = r;
-    let mut k = 2.0f64;
-    while k < 30.0 {
-        term *= sq / (k * (k + 1.0));
-        sum += term;
-        k += 2.0;
-    }
-    sum
-}
-
-const fn build_sin_table() -> [f32; FUNCTABLE_SIZE] {
-    let mut t = [0.0f32; FUNCTABLE_SIZE];
-    let mut i = 0usize;
-    while i < FUNCTABLE_SIZE {
-        // RTCW spans the table over SIZE-1 degrees of arc, so entry 256 is
-        // sin(90.088deg), not exactly 1
-        t[i] = sin_deg(i as f64 * 360.0 / (FUNCTABLE_SIZE - 1) as f64) as f32;
-        i += 1;
-    }
-    t
-}
-
-const fn build_square_table() -> [f32; FUNCTABLE_SIZE] {
-    let mut t = [0.0f32; FUNCTABLE_SIZE];
-    let mut i = 0usize;
-    while i < FUNCTABLE_SIZE {
-        t[i] = if i < FUNCTABLE_SIZE / 2 { 1.0 } else { -1.0 };
-        i += 1;
-    }
-    t
-}
-
-const fn build_sawtooth_table() -> [f32; FUNCTABLE_SIZE] {
-    let mut t = [0.0f32; FUNCTABLE_SIZE];
-    let mut i = 0usize;
-    while i < FUNCTABLE_SIZE {
-        t[i] = i as f32 / FUNCTABLE_SIZE as f32;
-        i += 1;
-    }
-    t
-}
-
-const fn build_inverse_sawtooth_table() -> [f32; FUNCTABLE_SIZE] {
-    let mut t = [0.0f32; FUNCTABLE_SIZE];
-    let mut i = 0usize;
-    while i < FUNCTABLE_SIZE {
-        t[i] = 1.0 - i as f32 / FUNCTABLE_SIZE as f32;
-        i += 1;
-    }
-    t
-}
-
-const fn build_triangle_table() -> [f32; FUNCTABLE_SIZE] {
-    let mut t = [0.0f32; FUNCTABLE_SIZE];
-    let mut i = 0usize;
-    while i < FUNCTABLE_SIZE {
-        t[i] = if i < FUNCTABLE_SIZE / 2 {
-            if i < FUNCTABLE_SIZE / 4 {
-                i as f32 / (FUNCTABLE_SIZE / 4) as f32
-            } else {
-                1.0 - t[i - FUNCTABLE_SIZE / 4]
-            }
-        } else {
-            -t[i - FUNCTABLE_SIZE / 2]
-        };
-        i += 1;
-    }
-    t
-}
-
-const SIN_TABLE: [f32; FUNCTABLE_SIZE] = build_sin_table();
-const SQUARE_TABLE: [f32; FUNCTABLE_SIZE] = build_square_table();
-const TRIANGLE_TABLE: [f32; FUNCTABLE_SIZE] = build_triangle_table();
-const SAWTOOTH_TABLE: [f32; FUNCTABLE_SIZE] = build_sawtooth_table();
-const INVERSE_SAWTOOTH_TABLE: [f32; FUNCTABLE_SIZE] = build_inverse_sawtooth_table();
-
-/// R_NoiseInit (CoDMP.exe 0x4dd490, CoDUOMP.exe 0x50e7d0): `srand(1001)`,
-/// then per entry one MSVC `rand()` for the value, `r * (1 / 32767) * 2 - 1`
-/// (0x568ed8), and one for the permutation, `(r * 256) >> 15` (shader doc 4).
-const fn build_noise_tables() -> ([f32; 256], [u8; 256]) {
-    let mut table = [0.0f32; 256];
-    let mut perm = [0u8; 256];
-    let mut hold: u32 = 1001;
-    let mut i = 0;
-    while i < 256 {
-        hold = hold.wrapping_mul(214013).wrapping_add(2531011);
-        let r = (hold >> 16) & 0x7fff;
-        let c = (1.0f32 / 32767.0) as f64;
-        table[i] = (r as f64 * c * 2.0 - 1.0) as f32;
-        hold = hold.wrapping_mul(214013).wrapping_add(2531011);
-        let r = (hold >> 16) & 0x7fff;
-        perm[i] = (r >> 7) as u8;
-        i += 1;
-    }
-    (table, perm)
-}
-
-const NOISE: ([f32; 256], [u8; 256]) = build_noise_tables();
-/// The noise's value and permutation tables.
-pub const NOISE_TABLE: [f32; 256] = NOISE.0;
-pub const NOISE_PERM: [u8; 256] = NOISE.1;
-
-/// R_NoiseGet4f (CoDMP.exe 0x4dd4f0): the value at the lattice point
-/// `INDEX(x, y, z, t) = perm[x + perm[y + perm[z + perm[t]]]]`, trilinear in
-/// x, y, z, then linear in t. Each floor is `fistp(v - 0.49999999)`.
-pub fn noise_get4f(x: f32, y: f32, z: f32, t: f32) -> f32 {
-    let split = |v: f32| {
-        let i = (v as f64).floor();
-        (i as i32, v as f64 - i)
-    };
-    let (ix, fx) = split(x);
-    let (iy, fy) = split(y);
-    let (iz, fz) = split(z);
-    let (it, ft) = split(t);
-    let val = |a: i32| NOISE_PERM[(a & 0xff) as usize] as i32;
-    let get = |x: i32, y: i32, z: i32, t: i32| {
-        NOISE_TABLE[val(x + val(y + val(z + val(t)))) as usize] as f64
-    };
-    let lerp = |a: f64, b: f64, f: f64| a * (1.0 - f) + b * f;
-    let at = |t: i32| {
-        let front = lerp(
-            lerp(get(ix, iy, iz, t), get(ix + 1, iy, iz, t), fx),
-            lerp(get(ix, iy + 1, iz, t), get(ix + 1, iy + 1, iz, t), fx),
-            fy,
-        );
-        let back = lerp(
-            lerp(get(ix, iy, iz + 1, t), get(ix + 1, iy, iz + 1, t), fx),
-            lerp(
-                get(ix, iy + 1, iz + 1, t),
-                get(ix + 1, iy + 1, iz + 1, t),
-                fx,
-            ),
-            fy,
-        );
-        lerp(front, back, fz)
-    };
-    lerp(at(it), at(it + 1), ft) as f32
-}
-
-/// WAVEVALUE (tr_shade_calc.c:34): base + table[idx]*amp with
-/// idx = ftol(phase + t*freq, scaled by 1024) & 1023. myftol is x87 fistp,
-/// which rounds to nearest even, so 511.9 indexes 512 where an `as` cast
-/// would truncate to 511.
-pub fn wave_value(w: &Wave, t: f32) -> f32 {
-    let table = match w.form {
-        WaveForm::Sin => &SIN_TABLE,
-        WaveForm::Square => &SQUARE_TABLE,
-        WaveForm::Triangle => &TRIANGLE_TABLE,
-        WaveForm::Sawtooth => &SAWTOOTH_TABLE,
-        WaveForm::InverseSawtooth => &INVERSE_SAWTOOTH_TABLE,
-        // only `rgbGen` reads noise ([`rgb_wave_value`]); retail's other
-        // wave readers find no table for it and error (0x5133d0)
-        WaveForm::Noise => return w.base,
-    };
-    let x = (w.phase + t * w.freq) * FUNCTABLE_SIZE as f32;
-    let idx = x.round_ties_even() as i64 & FUNCTABLE_MASK;
-    w.base + table[idx as usize] * w.amp
-}
-
-/// `rgbGen wave` before its clamp (CoDMP.exe 0x514c00): a noise wave is
-/// `base + amp * R_NoiseGet4f(0, 0, 0, (t + phase) * freq)`, any other the
-/// table wave, which the renderer then scales by identityLight.
-pub fn rgb_wave_value(w: &Wave, t: f32) -> f32 {
-    if w.form == WaveForm::Noise {
-        return w.base + noise_get4f(0.0, 0.0, 0.0, (t + w.phase) * w.freq) * w.amp;
-    }
-    wave_value(w, t)
-}
-
-/// Column-major like wgpu mat3x2: [a,b,c,d,tx,ty] means
-/// s' = a*s + c*t + tx ; t' = b*s + d*t + ty.
-type Affine = [f32; 6];
-
-const AFFINE_IDENTITY: Affine = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
-
-/// outer applied after inner.
-fn compose_affine(o: &Affine, i: &Affine) -> Affine {
-    [
-        o[0] * i[0] + o[2] * i[1],
-        o[1] * i[0] + o[3] * i[1],
-        o[0] * i[2] + o[2] * i[3],
-        o[1] * i[2] + o[3] * i[3],
-        o[0] * i[4] + o[2] * i[5] + o[4],
-        o[1] * i[4] + o[3] * i[5] + o[5],
-    ]
-}
-
-/// Folds the tcMods of one bundle left from identity in listed order.
-/// Turb is not affine and rides separately in [`bundle_turb`].
-pub fn bundle_affine(tcmods: &[TcMod], t: f32) -> [f32; 6] {
-    let mut acc = AFFINE_IDENTITY;
-    for m in tcmods {
-        let next = match m {
-            TcMod::Scroll(sx, sy) => {
-                // RB_CalcScrollTexCoords keeps the fractional part only
-                let fx = sx * t;
-                let fy = sy * t;
-                [1.0, 0.0, 0.0, 1.0, fx - fx.floor(), fy - fy.floor()]
-            }
-            TcMod::Scale(sx, sy) => [*sx, 0.0, 0.0, *sy, 0.0, 0.0],
-            TcMod::Rotate(dps) => {
-                // RB_CalcRotateTexCoords: negated degrees, index truncated
-                // toward zero before masking, cos read a quarter ahead
-                let degs = -dps * t;
-                let idx = (degs * (FUNCTABLE_SIZE as f32 / 360.0)) as i64 & FUNCTABLE_MASK;
-                let sin_v = SIN_TABLE[idx as usize];
-                let cos_v =
-                    SIN_TABLE[(idx + FUNCTABLE_SIZE as i64 / 4) as usize & FUNCTABLE_MASK as usize];
-                [
-                    cos_v,
-                    sin_v,
-                    -sin_v,
-                    cos_v,
-                    0.5 - 0.5 * cos_v + 0.5 * sin_v,
-                    0.5 - 0.5 * sin_v - 0.5 * cos_v,
-                ]
-            }
-            TcMod::Stretch(w) => {
-                // RB_CalcStretchTexCoords: uniform 1/waveform about centre
-                let p = 1.0 / wave_value(w, t);
-                [p, 0.0, 0.0, p, 0.5 - 0.5 * p, 0.5 - 0.5 * p]
-            }
-            // args stored m00 m01 m10 m11 tS tT map verbatim onto this layout
-            TcMod::Transform(a) => *a,
-            TcMod::Turb { .. } => continue,
-        };
-        acc = compose_affine(&next, &acc);
-    }
-    acc
-}
-
-/// [amp0, now0, amp1, now1] with now = phase + t*freq for the last Turb of
-/// the list; zeros when there is none. The VS adds
-/// amp*sin(worldpos_axis/1024 + now) per axis.
-pub fn bundle_turb(tcmods: &[TcMod], t: f32) -> [f32; 4] {
-    let mut out = [0.0f32; 4];
-    for m in tcmods {
-        if let TcMod::Turb { amp, phase, freq } = m {
-            let now = phase + t * freq;
-            out = [*amp, now, *amp, now];
-        }
-    }
-    out
-}
-
-/// Scale/Transform are static; everything else animates with time.
-pub fn has_animated_tcmods(tcmods: &[TcMod]) -> bool {
-    tcmods
-        .iter()
-        .any(|m| !matches!(m, TcMod::Scale(_, _) | TcMod::Transform(_)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ---- tcMod runtime evaluation ----
-
-    fn apply(m: &[f32; 6], s: f32, t: f32) -> (f32, f32) {
-        (m[0] * s + m[2] * t + m[4], m[1] * s + m[3] * t + m[5])
-    }
-
-    fn close(a: f32, b: f32, eps: f32) -> bool {
-        (a - b).abs() <= eps
-    }
-
-    fn assert_mat6(got: &[f32; 6], want: [f32; 6], eps: f32) {
-        for i in 0..6 {
-            assert!(
-                close(got[i], want[i], eps),
-                "[{i}] got {} want {}",
-                got[i],
-                want[i]
-            );
-        }
-    }
-
-    #[test]
-    fn scroll_translates_fractional_speed_times_time() {
-        // 0.5 * 2.3 = 1.15, wrapped to 0.15
-        assert_mat6(
-            &bundle_affine(&[TcMod::Scroll(0.5, 0.0)], 2.3),
-            [1.0, 0.0, 0.0, 1.0, 0.15, 0.0],
-            1e-6,
-        );
-        // negative speeds wrap upward: -0.75 -> 0.25, -0.25 -> 0.75
-        assert_mat6(
-            &bundle_affine(&[TcMod::Scroll(-0.75, -0.25)], 1.0),
-            [1.0, 0.0, 0.0, 1.0, 0.25, 0.75],
-            1e-6,
-        );
-    }
-
-    #[test]
-    fn rotate_negates_degrees_per_second() {
-        // 90 deg/s for 1s: degs = -90, quarter turn about (0.5, 0.5) sends
-        // UV point (1, 0.5) to (0.5, 0)
-        let m = bundle_affine(&[TcMod::Rotate(90.0)], 1.0);
-        assert_mat6(&m, [0.0, -1.0, 1.0, 0.0, 0.0, 1.0], 1e-4);
-        let (sp, tp) = apply(&m, 1.0, 0.5);
-        assert!(close(sp, 0.5, 1e-4) && close(tp, 0.0, 1e-4));
-
-        // small positive time, CCW-positive speed: (1, 0.5) drifts toward
-        // negative t (RB_CalcRotateTexCoords negates first)
-        let m = bundle_affine(&[TcMod::Rotate(90.0)], 0.01);
-        let (sp, tp) = apply(&m, 1.0, 0.5);
-        assert!(sp > 0.99 && sp < 1.01, "s' {sp}");
-        assert!(tp < 0.499, "t' must drop below 0.5, got {tp}");
-    }
-
-    #[test]
-    fn stretch_inverts_wave_about_centre() {
-        // phase+freq*t lands exactly on table index 256: sin ~= 1,
-        // waveform = 1 + 0.5 ~= 1.5, p = 1/1.5 = 2/3
-        let w = Wave {
-            form: WaveForm::Sin,
-            base: 1.0,
-            amp: 0.5,
-            phase: 0.0,
-            freq: 0.25,
-        };
-        let m = bundle_affine(&[TcMod::Stretch(w)], 1.0);
-        let p = m[0];
-        assert!(close(p, 2.0 / 3.0, 1e-4), "p {p}");
-        assert_mat6(&m, [p, 0.0, 0.0, p, 0.5 - 0.5 * p, 0.5 - 0.5 * p], 1e-6);
-        // centre is a fixed point
-        let (sp, tp) = apply(&m, 0.5, 0.5);
-        assert!(close(sp, 0.5, 1e-5) && close(tp, 0.5, 1e-5));
-    }
-
-    #[test]
-    fn transform_matrix_applies_verbatim_args() {
-        let ident = bundle_affine(&[TcMod::Transform([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])], 7.0);
-        assert_eq!(ident, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-
-        // args arrive m00 m01 m10 m11 tS tT; lone transform comes back
-        // verbatim in [a,b,c,d,tx,ty] layout
-        let args = [2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
-        let m = bundle_affine(&[TcMod::Transform(args)], 7.0);
-        assert_eq!(m, args);
-        // s' = m00*s + m10*t + tS ; t' = m01*s + m11*t + tT
-        let (sp, tp) = apply(&m, 0.3, 0.8);
-        assert!(close(sp, 2.0 * 0.3 + 4.0 * 0.8 + 6.0, 1e-5));
-        assert!(close(tp, 3.0 * 0.3 + 5.0 * 0.8 + 7.0, 1e-5));
-    }
-
-    #[test]
-    fn tcmod_composition_order_matters() {
-        // scroll-then-scale carries the translation through the scale
-        let a = bundle_affine(&[TcMod::Scroll(0.5, 0.0), TcMod::Scale(2.0, 2.0)], 2.3);
-        assert_mat6(&a, [2.0, 0.0, 0.0, 2.0, 0.3, 0.0], 1e-6);
-        // scale-then-scroll does not
-        let b = bundle_affine(&[TcMod::Scale(2.0, 2.0), TcMod::Scroll(0.5, 0.0)], 2.3);
-        assert_mat6(&b, [2.0, 0.0, 0.0, 2.0, 0.15, 0.0], 1e-6);
-    }
-
-    #[test]
-    fn square_wave_flips_at_half_cycle_with_nearest_index() {
-        let w = Wave {
-            form: WaveForm::Square,
-            base: 0.0,
-            amp: 1.0,
-            phase: 0.0,
-            freq: 1.0,
-        };
-        assert!(close(wave_value(&w, 0.499), 1.0, 1e-6));
-        // 0.4999 * 1024 = 511.898: myftol rounds to nearest, indexing 512
-        // (truncation would stay on 511 and read +1)
-        assert!(close(wave_value(&w, 0.4999), -1.0, 1e-6));
-        assert!(close(wave_value(&w, 0.5), -1.0, 1e-6));
-        assert!(close(wave_value(&w, 1.0), 1.0, 1e-6));
-    }
-
-    #[test]
-    fn wave_value_matches_hand_computed_table_entries() {
-        // sawtooth table[i] = i/1024: index 256 reads 0.25 exactly
-        let saw = Wave {
-            form: WaveForm::Sawtooth,
-            base: 0.0,
-            amp: 1.0,
-            phase: 0.25,
-            freq: 0.0,
-        };
-        assert!(close(wave_value(&saw, 123.0), 0.25, 1e-6));
-        // inverse sawtooth mirrors it
-        let inv = Wave {
-            form: WaveForm::InverseSawtooth,
-            ..saw.clone()
-        };
-        assert!(close(wave_value(&inv, 123.0), 0.75, 1e-6));
-        // triangle peaks at the quarter, bottoms past three quarters
-        let tri = |phase: f32| Wave {
-            form: WaveForm::Triangle,
-            base: 0.0,
-            amp: 1.0,
-            phase,
-            freq: 0.0,
-        };
-        assert!(close(wave_value(&tri(0.125), 0.0), 0.5, 1e-6));
-        assert!(close(wave_value(&tri(0.25), 0.0), 1.0, 1e-6));
-        assert!(close(wave_value(&tri(0.75), 0.0), -1.0, 1e-6));
-        // sin near its peak: sinTable[256] = sin(256*360/1023 deg)
-        let sin = Wave {
-            form: WaveForm::Sin,
-            base: 100.0,
-            amp: 20.0,
-            phase: 0.25,
-            freq: 0.0,
-        };
-        assert!(close(wave_value(&sin, 0.0), 120.0, 1e-4));
-        // negative phases index through the mask, not negative slots
-        let neg = Wave {
-            form: WaveForm::Sawtooth,
-            base: 0.0,
-            amp: 1.0,
-            phase: -0.25,
-            freq: 0.0,
-        };
-        assert!(close(wave_value(&neg, 0.0), 0.75, 1e-6));
-    }
-
-    #[test]
-    fn noise_tables_follow_msvc_rand_seeded_1001() {
-        // srand(1001): the first rand() is (1001 * 214013 + 2531011) >> 16
-        assert_eq!(
-            NOISE_TABLE[0],
-            (3307.0f64 * (1.0f32 / 32767.0) as f64 * 2.0 - 1.0) as f32
-        );
-        assert!(NOISE_TABLE.iter().all(|v| (-1.0..=1.0).contains(v)));
-        // a permutation byte is rand() >> 7, so all of 0..255 can appear
-        assert!(NOISE_PERM.iter().any(|&p| p > 200));
-        // on the lattice the noise is one table entry, between it a blend
-        let index = |t: i32| {
-            let val = |a: i32| NOISE_PERM[(a & 0xff) as usize] as i32;
-            NOISE_TABLE[val(val(val(val(t)))) as usize]
-        };
-        assert_eq!(noise_get4f(0.0, 0.0, 0.0, 7.0), index(7));
-        let mid = noise_get4f(0.0, 0.0, 0.0, 7.25);
-        assert!(close(mid, index(7) * 0.75 + index(8) * 0.25, 1e-6));
-        // negative times floor down, not toward zero
-        assert!(close(
-            noise_get4f(0.0, 0.0, 0.0, -0.5),
-            (index(-1) + index(0)) * 0.5,
-            1e-6
-        ));
-    }
-
-    #[test]
-    fn rgb_noise_wave_flickers_about_its_base() {
-        // UO ba.shader textures/ardennes/windows/firewindow
-        let w = Wave {
-            form: WaveForm::Noise,
-            base: 0.4,
-            amp: 0.1,
-            phase: 0.0,
-            freq: 10.0,
-        };
-        let v: Vec<f32> = (0..50)
-            .map(|i| rgb_wave_value(&w, i as f32 * 0.013))
-            .collect();
-        assert!(v.iter().all(|x| (0.3..=0.5).contains(x)));
-        assert!(v.iter().any(|x| (x - 0.4).abs() > 0.02), "{v:?}");
-        // noise elsewhere (alphaGen, tcMod stretch) has no table: base
-        assert_eq!(wave_value(&w, 0.37), 0.4);
-    }
-
-    #[test]
-    fn sin_table_matches_libm_over_full_range() {
-        for (i, v) in SIN_TABLE.iter().enumerate() {
-            let want = (i as f64 * 360.0 / (FUNCTABLE_SIZE - 1) as f64)
-                .to_radians()
-                .sin() as f32;
-            assert!((v - want).abs() < 1e-5, "SIN_TABLE[{i}] {v} vs libm {want}");
-        }
-    }
-
-    #[test]
-    fn wave_value_is_periodic_over_one_cycle() {
-        let forms = [
-            WaveForm::Sin,
-            WaveForm::Square,
-            WaveForm::Triangle,
-            WaveForm::Sawtooth,
-            WaveForm::InverseSawtooth,
-        ];
-        for form in forms {
-            let label = format!("{form:?}");
-            let w = Wave {
-                form: form.clone(),
-                base: 0.3,
-                amp: 0.8,
-                phase: 0.11,
-                freq: 1.0,
-            };
-            let mut t = 0.0f32;
-            while t < 1.0 {
-                assert!(
-                    close(wave_value(&w, t), wave_value(&w, t + 1.0), 1e-4),
-                    "{label} at t={t}"
-                );
-                t += 0.037;
-            }
-        }
-    }
-
-    #[test]
-    fn turb_bundle_folds_time_into_now_last_wins() {
-        assert_eq!(bundle_turb(&[], 3.0), [0.0; 4]);
-        assert_eq!(bundle_turb(&[TcMod::Scroll(1.0, 1.0)], 3.0), [0.0; 4]);
-        // now = phase + freq*t, unwrapped; same now for both axes
-        let turb = TcMod::Turb {
-            amp: 2.0,
-            phase: 0.25,
-            freq: 0.5,
-        };
-        assert_eq!(
-            bundle_turb(std::slice::from_ref(&turb), 3.0),
-            [2.0, 1.75, 2.0, 1.75]
-        );
-        // the affine pass leaves turbulence untouched
-        assert_eq!(
-            bundle_affine(
-                &[TcMod::Turb {
-                    amp: 2.0,
-                    phase: 0.25,
-                    freq: 0.5
-                }],
-                3.0
-            ),
-            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-        );
-        // later Turb replaces earlier
-        let late = TcMod::Turb {
-            amp: 3.0,
-            phase: 1.0,
-            freq: 1.0,
-        };
-        assert_eq!(
-            bundle_turb(&[turb, TcMod::Scale(2.0, 2.0), late], 2.0),
-            [3.0, 3.0, 3.0, 3.0]
-        );
-    }
-
-    #[test]
-    fn has_animated_tcmods_truth_table() {
-        assert!(!has_animated_tcmods(&[]));
-        assert!(!has_animated_tcmods(&[TcMod::Scale(2.0, 2.0)]));
-        assert!(!has_animated_tcmods(&[TcMod::Transform([1.0; 6])]));
-        assert!(has_animated_tcmods(&[TcMod::Scroll(0.1, 0.0)]));
-        assert!(has_animated_tcmods(&[TcMod::Rotate(30.0)]));
-        assert!(has_animated_tcmods(&[TcMod::Stretch(Wave {
-            form: WaveForm::Sin,
-            base: 1.0,
-            amp: 0.1,
-            phase: 0.0,
-            freq: 1.0
-        })]));
-        assert!(has_animated_tcmods(&[TcMod::Turb {
-            amp: 1.0,
-            phase: 0.0,
-            freq: 1.0
-        }]));
-        // static mods alongside an animated one still animate
-        assert!(has_animated_tcmods(&[
-            TcMod::Scale(2.0, 2.0),
-            TcMod::Scroll(0.1, 0.0)
-        ]));
-    }
-
-    #[test]
-    fn empty_tcmods_yield_identity_affine() {
-        assert_eq!(bundle_affine(&[], 5.0), [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-    }
+    use crate::sun::SunFile;
 
     // ---- stage parser ----
 
@@ -4001,6 +3069,45 @@ textures/sfx/test_water
         );
     }
 
+    // ---- material compile ----
+
+    #[test]
+    fn a_compiled_material_resolves_what_the_script_leaves_implicit() {
+        let m = Material::from_shader(&parse_one(
+            "t { cull none sort decal { map a.tga } { map $lightmap blendFunc filter } }",
+        ));
+        assert_eq!(m.technique, Technique::Stages);
+        assert_eq!(m.sort, SORT_DECAL);
+        assert_eq!(m.depth_bias, Some(PolygonOffset::Single));
+        assert_eq!(m.cull, Cull::None);
+        assert_eq!(m.stages.len(), 2);
+        // sorted past opaque: no dlight pass
+        assert_eq!(m.dlight, None);
+        // the collapsed pair sorts by texture then lightmap
+        assert_eq!(
+            m.sort_images,
+            Some(vec![ImageRef::Path("a.tga".into()), ImageRef::Lightmap])
+        );
+        assert_eq!(
+            m.texture(TexSemantic::Color),
+            Some(&ImageRef::Path("a.tga".into()))
+        );
+        assert_eq!(m.texture(TexSemantic::Lightmap), Some(&ImageRef::Lightmap));
+
+        let blend = Material::from_shader(&parse_one("t { { map a.tga blendFunc add } }"));
+        assert_eq!(blend.sort, SORT_ADDITIVE);
+        assert_eq!(blend.depth_bias, None);
+        assert_eq!(blend.cull, Cull::Back);
+        assert_eq!(blend.texture(TexSemantic::Lightmap), None);
+
+        let sky = parse_one("s { skyparms env/sky 512 - }");
+        assert_eq!(Material::from_shader(&sky).technique, Technique::Sky);
+        assert_eq!(
+            Material::from_shader(&parse_one("n { surfaceparm nodraw }")).technique,
+            Technique::None
+        );
+    }
+
     // ---- library ----
 
     fn make_pk3(dir: &std::path::Path, file: &str, script: &str) {
@@ -4039,5 +3146,20 @@ textures/sfx/test_water
             lib.image("textures/x/dupe")
                 .is_some_and(|p| p.ends_with("b"))
         );
+    }
+
+    #[test]
+    fn the_library_parses_once_until_the_cache_clears() {
+        let dir = tempfile::tempdir().unwrap();
+        make_pk3(dir.path(), "pak0.pk3", "a\n{\n}\n");
+        let fs = crate::pk3::Pk3Fs::open(dir.path()).unwrap();
+        let a = ShaderLib::load(&fs);
+        assert!(Arc::ptr_eq(&a, &ShaderLib::load(&fs)));
+        // a script read marks no pak (FS_FOpenFileRead skips `.shader`)
+        assert_eq!(fs.referenced_paks().len(), 0);
+        fs.clear_references();
+        let b = ShaderLib::load(&fs);
+        assert!(!Arc::ptr_eq(&a, &b));
+        assert_eq!(b.len(), 1);
     }
 }

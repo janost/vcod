@@ -30,7 +30,7 @@ are mixed and each claim says which one it rests on:
   marked as such the first time it appears. Its first LOAD segment sits at
   `0x08048000` with file offset 0, so a virtual address is the file offset
   plus `0x8048000`.
-- `private/reference/CoDExtended/src/shared.h`, the community's struct
+- CoDExtended's `src/shared.h`, the community's struct
   headers. Only three things below rest on it, each labelled, and each is
   cross-checked against an offset the binary uses.
 
@@ -2253,7 +2253,7 @@ INFERRED, mapping the pushes back to the trap's arguments: the call is
 `SV_Trace(results, start, mins=NULL, maxs=NULL, end, passEntityNum,
 contentmask, 0, locational=1, priorityMap, staticmodels=1)`. VERIFIED:
 `0x80916f4` is the same address CoDExtended calls directly
-(`private/reference/CoDExtended/src/sv_world.c:20`), and the prototype
+(CoDExtended's `src/sv_world.c:20`), and the prototype
 published there names the `locational` flag and the `char *priorityMap`,
 which confirms the tail of that signature independently.
 
@@ -2689,7 +2689,7 @@ landed 2 float steps off retail's z on 1.5b (-10.992799 against
 
 VERIFIED, live (retail 1.5b and UO 1.51b under gdb, 2026-10-20, the same
 recipe on ports 34181 and 34183, both clients' cmds logged; scripts and
-dumps in the gitignored `tmp/strikebones/`): breakpoints on the locational trace (1.5b
+dumps kept locally): breakpoints on the locational trace (1.5b
 0x80d2000, UO 0x80c7394; the DObj's skeleton, the body-frame start and
 end, the caller's world start and end), on the skeleton build (1.5b
 0x80d0902, UO 0x80c5c96; the records) and after the call (1.5b
@@ -3883,7 +3883,7 @@ player's entity state onto `GameHost::client_entity_states` before the script
 frame, and `cloneplayer` copies the slot's entry. That copy is one step stale
 by construction: the gametype clones the player before the death animation is
 raised. So the queue records which client each body was born from, and
-`Server::send_snapshots` re-reads a body born this frame from that client's
+`Server::snapshots_begin` re-reads a body born this frame from that client's
 sim once, at the snapshot build, after the frame's sim ops have been applied.
 A body born on an earlier frame is never re-read.
 
@@ -4075,7 +4075,7 @@ the compares.
 still carries it; it is the end-of-frame pass that hides it, which is why the
 capture reads one more frame with the entity, the kill's, and then none.
 
-As implemented: `Server::send_snapshots` builds no entity for a client whose
+As implemented: `Server::snapshots_begin` builds no entity for a client whose
 sim is dead, the same filter that already drops spectators. The corpse's
 newborn re-read (5.2) takes its state straight off the sim, since the dead
 client has no entity in that list any more. Before this, a retail client was
@@ -5761,7 +5761,7 @@ ordering, and every "when" and "otherwise" in it, which are branch conditions.
   the cook time transfers from the playerstate to the missile's fuse and
   nothing keeps counting on the player.
 - `s.eType` (`+0x4`) takes 4. VERIFIED: 4 is `ET_MISSILE` in
-  `private/reference/CoDExtended/src/shared.h:449`, and the entity runner that
+  CoDExtended's `src/shared.h:449`, and the entity runner that
   precedes `G_RunFrame` (`0x50478`) branches on `s.eType == 4` into
   `G_RunMissile` at `0x50376`.
 - `s.eFlags` (`+0x8`) takes `0x03000000`. VERIFIED: this is the module's only
@@ -6013,7 +6013,7 @@ which are branch conditions.
   INFERRED, off the decompiles: in all three the `d[2]` fix multiplies a
   negative z by a `.rodata` constant, which the captures below read as -1.
   VERIFIED: the `+216` (`+0xDC` on UO) field is `_union.scale` in the
-  entity netfields (`crates/common/src/net/fields_v1.rs`, `fields_v22.rs`).
+  entity netfields (`crates/common/src/net/cod1/fields_v1.rs`, `fields_v22.rs`).
 - VERIFIED, live (2026-10-17, `crates/server/tests/fixtures/missiles/
   mp_harbor-water-*.txt`, `client-probes/probe_skyshot` spot part on
   mp_harbor's south sea wall over the harbor; the water's top is z -120,
@@ -7483,7 +7483,7 @@ points is already full damage. INFERRED: nothing on the bullet path consults
 any of this, which 4.6 already said.
 
 **As implemented.** `crate::game::combat`'s `Blast` and `can_damage`, with
-`Server::tick` walking each of the frame's explosions where it delivers
+`Cod1Module::run_frame_cod1` walking each of the frame's explosions where it delivers
 damage, so a grenade damages on the frame it goes off, and the
 `radiusDamage` builtin (`builtins/combat.rs`) walking the same `Blast` for a
 script's own; both walks are 14.5's. The divergences left are listed in
@@ -7718,7 +7718,7 @@ the client entities whose link box meets the blast's box, test each for
 `takedamage` on its turn, measure it, and run its callback before the next:
 the builtin through a `Cx::spawn_then` per victim whose
 `Host::spawn_returned` takes the next turn (`builtins::combat::blast_step`),
-the grenade pass (`Server::tick`) by measuring each candidate on its turn and
+the grenade pass (`Cod1Module::run_frame_cod1`) by measuring each candidate on its turn and
 delivering its hit before the next. A client killed
 earlier in the walk, or anywhere earlier in the frame, is left out of the
 bodies that stop a probe. `a_blast_walks_its_victims_one_callback_at_a_time`
@@ -7830,8 +7830,7 @@ live server.
 ### 14.7 The walk's order: the area tree
 
 `trap_EntitiesInBox` is the engine's, so the order 14.5 measured is read out
-of `cod_lnxded` (1.1d, stripped; Ghidra export
-`private/ghidra/cod_lnxded.c`).
+of `cod_lnxded` (1.1d, stripped).
 
 VERIFIED: the game-module syscall dispatch sends 0x32 to `0x80908b0`, 0x33
 to `0x8091f94` and 0x34 to `0x805a540`. INFERRED: those are
@@ -8006,7 +8005,7 @@ where the last frame left them: the thrower's first grenade bounced off slot
 (0, -120.5, -10.1), an eighth of the throw, where retail's flew on at 960
 (`--save-grenade` captures of both, kept out of the fixtures).
 
-vcod: `Server::tick` runs the entity pass (below) after
+vcod: `Cod1Module::run_frame_cod1` runs the entity pass (below) after
 `ScriptRuntime::run_threads` and every client write the frame's threads
 queued (spawns, `setOrigin`s, `linkTo` re-anchors, mover pushes), then
 applies what the walks' callbacks queued.
@@ -8063,7 +8062,7 @@ think (`GameHost::run_entity_think`) and an unmanned turret's
 64..71; and on a linked client's number, after its parent's turn, the
 `G_RunClient` re-anchor and relink. Each entity runs once a frame, its link
 parent first. The loop returns at each turn that needs the client sims (a
-blast, a mover's push, a linked client), which `Server::tick` handles before
+blast, a mover's push, a linked client), which `Cod1Module::run_frame_cod1` handles before
 calling it again from the same place.
 `a_blast_meets_the_links_below_its_grenade_s_number_only`
 (`crates/server/tests/combat.rs`) is the probe's two-client form.
@@ -8192,7 +8191,7 @@ stores the six floats after it at `buf+0xc0c..+0xc20` (0x80c119d..
 `ebp-0x1c..-0x8`, those six, to the new record's `+0x4c..+0x60`
 (0x80c1781..0x80c17a2) and stores the record at the model's `+0x4`
 (0x80c17b2). So the box is the `.xmodel` descriptor's own mins and maxs,
-the base model's only (vcod: `xmodel::descriptor_bounds`).
+the base model's only (vcod: `model::bounds`).
 
 VERIFIED, the entity lumps of every `maps/mp/*.bsp` in the stock paks: no
 `trigger_multiple` or `trigger_once` carries `spawnflags & 8`; the values
@@ -8293,7 +8292,7 @@ without a link (`AreaTree::set_contents`), as `trigger_hurt` and
 both blast walks take their candidates from `entities_in_box` over the
 blast's box and keep the clients and turrets, in the tree's order (the
 `radiusDamage` builtin's `builtins::combat::blast_candidates` and the
-grenade pass in `Server::tick`); the touch pass (`trigger::touched`, run by
+grenade pass in `Cod1Module::run_frame_cod1`); the touch pass (`trigger::touched`, run by
 `ScriptRuntime::touch_triggers_at` per cmd) walks it with mask 0x405c0008
 and touches items and triggers in that one order, each with the two
 `"touch"` notifies first. `probe_blastorder` against `vcod-server` read every `cb` row
@@ -9611,7 +9610,7 @@ own copy: the cvar table row at 0x30075420 is the vmCvar 0x301d94a0, name
 server's is cheat protected too: an rcon `bg_swingSpeed 1` on retail
 printed `bg_swingSpeed is cheat protected.` VERIFIED by capture
 (2026-10-09). vcod reads the level's value once per end frame
-(`Server::tick`, into `commit_pose`) and the client's console value each
+(`Cod1Module::run_frame_cod1`, into `commit_pose`) and the client's console value each
 drawn frame (`EntityScene::swing_speed`). Destination and
 clamp by case, first match:
 

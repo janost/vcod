@@ -4,7 +4,7 @@
 
 use super::HudQuad;
 use super::player::DamageFeedback;
-use vcod_common::net::protocol::{PROTOCOL_V22, Protocol};
+use vcod_common::net::protocol::Protocol;
 use vcod_common::pmove::PlayerState;
 use vcod_common::pmove::aim::{self, AimInput, AimState, DamageKick, GunMove};
 use vcod_common::weapon::{OverlayReticle, WeaponDef};
@@ -172,7 +172,7 @@ pub enum Layout {
 
 impl Layout {
     pub fn of(proto: &Protocol) -> Self {
-        if proto.version == PROTOCOL_V22.version {
+        if proto.is_uo() {
             Layout::Whole
         } else {
             Layout::Quarters
@@ -240,7 +240,8 @@ pub fn build(
     let vline = "hudSoftLine";
     let hline = "hudSoftLineH";
     match def.ads_overlay_reticle {
-        OverlayReticle::None => {}
+        // CoD2's binoculars reach no CoD1 scope.
+        OverlayReticle::None | OverlayReticle::Binoculars => {}
         OverlayReticle::Crosshair => {
             if let Some(center) = &def.reticle_center {
                 let s = def.reticle_center_size * scale;

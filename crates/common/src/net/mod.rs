@@ -2,16 +2,15 @@
 //! docs/protocol-1.1.md.
 
 pub mod capture;
+pub mod cdkey;
+pub mod cod1;
+pub use cod1::{event_ids, fields_v1, fields_v6, fields_v22, flags};
+pub mod codec;
 pub mod connectionless;
 pub mod demo;
 pub use connectionless::{info_pairs, info_value_for_key};
 pub mod download;
-pub mod event_ids;
 pub mod events;
-pub mod fields_v1;
-pub mod fields_v22;
-pub mod fields_v6;
-pub mod flags;
 pub mod gamestate;
 pub mod http;
 pub mod huffman;
@@ -25,6 +24,7 @@ pub mod server_cache;
 pub use protocol::{CS_FOG_V1, FogParams};
 pub mod snapshot;
 pub mod trajectory;
+pub mod wire;
 
 use gamestate::Gamestate;
 use huffman::Huffman;
@@ -34,7 +34,7 @@ use msg::{
     UserCmd, write_delta_usercmd_in,
 };
 use netchan::Netchan;
-use protocol::{PROTOCOL_V1, PROTOCOL_V22, Protocol};
+use protocol::{PROTOCOL_V1, Protocol};
 use snapshot::SnapshotRing;
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
@@ -74,6 +74,11 @@ const ACTIVE_TIMEOUT: Duration = Duration::from_secs(30);
 pub trait Transport {
     fn try_recv(&mut self, buf: &mut [u8]) -> Option<usize>;
     fn send(&mut self, data: &[u8]);
+    /// The server's address, where there is one: what decides whether the
+    /// CD key goes to the authorize server ([`cdkey::authorizes`]).
+    fn server_addr(&self) -> Option<std::net::SocketAddr> {
+        None
+    }
 }
 
 pub struct UdpTransport {
@@ -88,6 +93,12 @@ impl UdpTransport {
     pub fn connect(addr: &str) -> anyhow::Result<Self> {
         let sock = UdpSocket::bind("0.0.0.0:0")?;
         sock.connect(addr)?;
+        Self::from_socket(sock)
+    }
+
+    /// A transport over a socket already bound (and connected, or it counts
+    /// as on the LAN): what a CoD2 session hands over after its handshake.
+    pub fn from_socket(sock: UdpSocket) -> anyhow::Result<Self> {
         sock.set_nonblocking(true)?;
         let sim = netsim::NetSimConfig::from_env().map(|cfg| {
             log::info!("VCOD_NETSIM: {cfg:?}");
@@ -98,7 +109,7 @@ impl UdpTransport {
         });
         // Retail's `Sys_IsLANAddress` (CoDMP.exe 0x464be0), which lets every
         // frame send a packet. A simulated network is never one.
-        let lan = sim.is_none() && lan::is_lan(sock.peer_addr()?.ip());
+        let lan = sim.is_none() && sock.peer_addr().ok().is_none_or(|a| lan::is_lan(a.ip()));
         Ok(UdpTransport {
             sock: Some(sock),
             sim,
@@ -124,6 +135,16 @@ impl UdpTransport {
         }
     }
 
+    /// Puts every datagram the simulator still holds on the wire now, so a
+    /// disconnect is not lost with the session.
+    pub fn drain(&mut self) {
+        if let (Some(sim), Some(sock)) = (&mut self.sim, &self.sock) {
+            for d in sim.drain_outgoing() {
+                let _ = sock.send(&d);
+            }
+        }
+    }
+
     /// Whether the server is on this machine or its LAN (`Sys_IsLANAddress`).
     pub fn is_lan(&self) -> bool {
         self.lan
@@ -136,6 +157,9 @@ impl UdpTransport {
 }
 
 impl Transport for UdpTransport {
+    fn server_addr(&self) -> Option<std::net::SocketAddr> {
+        self.peer()
+    }
     fn try_recv(&mut self, buf: &mut [u8]) -> Option<usize> {
         let sock = self.sock.as_ref()?;
         let Some(sim) = &mut self.sim else {
@@ -252,6 +276,16 @@ fn process_qport() -> u16 {
 
 /// The protocol an `error` refusing the connect for its version names:
 /// `\nEXE_SERVER_IS_DIFFERENT_VER\x15<shortversion>\n`.
+/// Whose CD key a connection speaking `proto` sends: 1.1 and 1.5 share
+/// one, United Offensive has its own.
+fn key_game(proto: &Protocol) -> cdkey::KeyGame {
+    if proto.is_uo() {
+        cdkey::KeyGame::Uo
+    } else {
+        cdkey::KeyGame::Cod1
+    }
+}
+
 fn other_version(rest: &[u8]) -> Option<&'static Protocol> {
     let text = String::from_utf8_lossy(rest);
     let v = text
@@ -269,7 +303,7 @@ pub struct NetClient<T: Transport> {
     /// The handshake already switched protocol once; a second refusal ends it.
     proto_switched: bool,
     /// The install's protocol ([`NetClient::connect_from`]): a server of
-    /// another game ([`Protocol::same_game`]) ends the handshake instead of
+    /// another game ([`Transport::same_game`](crate::net::wire::Transport::same_game)) ends the handshake instead of
     /// switching. `None` switches to any.
     install: Option<&'static Protocol>,
 
@@ -321,6 +355,12 @@ pub struct NetClient<T: Transport> {
     /// Last OOB `print` during the handshake; the rejection reason if the
     /// connect stalls.
     handshake_print: Option<String>,
+    /// The CD key sent to the authorize server beside each `getchallenge`
+    /// ([`cdkey::lookup`]); `None` sends nothing.
+    pub cd_key: Option<cdkey::CdKey>,
+    /// The server answered `needcdkey`: a connect that times out says
+    /// `EXE_AWAITINGCDKEYAUTH`, as retail's connect screen does.
+    awaiting_key: bool,
 
     download: Option<download::Download>,
     /// `stopdl` already sent for an unrequested transfer.
@@ -466,10 +506,10 @@ impl<T: Transport> NetClient<T> {
             qport,
             userinfo: String::new(),
             info: Userinfo::default(),
-            netchan: Netchan::new(qport, 0),
+            netchan: Netchan::with_params(qport, 0, proto.transport.netchan),
             gamestate: None,
             snapshots: SnapshotRing::new(),
-            configstrings: vec![String::new(); proto.max_configstrings],
+            configstrings: vec![String::new(); proto.transport.max_configstrings],
             big_configstring: String::new(),
             server_id: 0,
             checksum_feed: 0,
@@ -487,6 +527,8 @@ impl<T: Transport> NetClient<T> {
             last_snapshot: now,
             last_packet: None,
             handshake_print: None,
+            cd_key: cdkey::lookup(key_game(proto)),
+            awaiting_key: false,
             download: None,
             stopdl_sent: false,
             www: None,
@@ -902,9 +944,20 @@ impl<T: Transport> NetClient<T> {
 
     // ---- internals ----
 
+    /// `CL_CheckForResend`'s challenge (CoDMP.exe 0x4105b5): the key to
+    /// the authorize server first, unless the server is on the LAN, then
+    /// `getchallenge`, whatever came of the first.
     fn send_getchallenge(&mut self) {
+        self.request_authorization();
         self.transport
             .send(&connectionless::build_oob("getchallenge"));
+    }
+
+    /// `CL_RequestAuthorization` (CoDMP.exe 0x40f260), fire and forget.
+    fn request_authorization(&self) {
+        if let (Some(key), Some(server)) = (&self.cd_key, self.transport.server_addr()) {
+            cdkey::request_authorization(key_game(self.proto), key, server);
+        }
     }
 
     /// The userinfo cvars. Once connected, a change goes to the server as a
@@ -953,14 +1006,14 @@ impl<T: Transport> NetClient<T> {
         // 1.5 registers `cl_guid` and `cl_punkbuster` (CVAR_USERINFO)
         // between `cl_anonymous` and `password` (CoDMP.exe 1.5 0x413380);
         // `cl_guid` keeps its default unless PunkBuster sets it.
-        let pb = if self.proto.version == PROTOCOL_V1.version {
+        let pb = if self.proto.is_v1() {
             ""
         } else {
             "\\cl_punkbuster\\0\\cl_guid\\unknown"
         };
         // `cl_wwwDownload` (default 1, flags 3) is older than `name` in
         // 1.5's `CL_Init` (0x413380), so it closes the walk; 1.1 lacks it.
-        let www = if self.proto.version == PROTOCOL_V1.version {
+        let www = if self.proto.is_v1() {
             String::new()
         } else {
             format!("\\cl_wwwDownload\\{www_download}")
@@ -975,7 +1028,7 @@ impl<T: Transport> NetClient<T> {
         self.userinfo = format!(
             "{}\\protocol\\{}\\qport\\{}\\challenge\\{}",
             self.base_userinfo(),
-            self.proto.version,
+            self.proto.transport.version,
             self.qport,
             self.challenge
         );
@@ -990,6 +1043,7 @@ impl<T: Transport> NetClient<T> {
                 if self.now.duration_since(self.last_send) >= CONNECT_RESEND {
                     if self.tries >= CONNECT_TRIES {
                         let reason = match self.handshake_print.take() {
+                            _ if self.awaiting_key => "EXE_AWAITINGCDKEYAUTH".to_string(),
                             Some(msg) => format!("no response from server (server said: {msg})"),
                             None => "no response from server".to_string(),
                         };
@@ -1091,11 +1145,24 @@ impl<T: Transport> NetClient<T> {
                     return;
                 };
                 self.challenge = ch;
-                self.netchan = Netchan::new(self.qport, ch);
+                self.netchan = Netchan::with_params(self.qport, ch, self.proto.transport.netchan);
                 self.send_connect();
                 self.state = NetState::Connecting;
                 self.tries = 1;
                 self.last_send = self.now;
+            }
+            // The authorize server does not know the key yet (CoDMP.exe
+            // 0x410f00): retail shows `EXE_AWAITINGCDKEYAUTH`, sends the key
+            // again and keeps challenging. Without a key retail never gets
+            // here: it stops at `EXE_ERR_INVALID_CD_KEY` (0x40f286).
+            "needcdkey" if self.state == NetState::Challenging => {
+                if self.cd_key.is_none() {
+                    cdkey::warn_no_key();
+                    self.drop("EXE_ERR_INVALID_CD_KEY");
+                    return;
+                }
+                self.awaiting_key = true;
+                self.request_authorization();
             }
             "connectResponse" if self.state == NetState::Connecting => {
                 self.state = NetState::LoadingGamestate;
@@ -1120,14 +1187,14 @@ impl<T: Transport> NetClient<T> {
             "error"
                 if self.state == NetState::Connecting
                     && let (Some(install), Some(proto)) = (self.install, other_version(rest))
-                    && !proto.same_game(install) =>
+                    && !proto.transport.same_game(&install.transport) =>
             {
-                self.drop(&if proto.version == PROTOCOL_V22.version {
+                self.drop(&if proto.is_uo() {
                     "This is a United Offensive server: run vcod with --mod-dir uo".to_string()
                 } else {
                     format!(
                         "This is a CoD {} server: run vcod without --mod-dir uo",
-                        proto.short_version
+                        proto.transport.short_version
                     )
                 });
             }
@@ -1141,12 +1208,12 @@ impl<T: Transport> NetClient<T> {
             {
                 log::info!(
                     "server is {}, reconnecting with protocol {}",
-                    proto.short_version,
-                    proto.version
+                    proto.transport.short_version,
+                    proto.transport.version
                 );
                 self.proto = proto;
                 self.proto_switched = true;
-                self.configstrings = vec![String::new(); proto.max_configstrings];
+                self.configstrings = vec![String::new(); proto.transport.max_configstrings];
                 self.send_getchallenge();
                 self.state = NetState::Challenging;
                 self.tries = 1;
@@ -1404,7 +1471,7 @@ impl<T: Transport> NetClient<T> {
             self.drop("truncated download redirect");
             return Err(());
         }
-        if self.proto.version == PROTOCOL_V1.version {
+        if self.proto.is_v1() {
             self.drop(&format!(
                 "server redirected a download to {url}, which protocol 1 has no way to do"
             ));
@@ -1578,10 +1645,10 @@ impl<T: Transport> NetClient<T> {
     fn restart_handshake(&mut self) {
         self.www_reconnect = true;
         self.challenge = 0;
-        self.netchan = Netchan::new(self.qport, 0);
+        self.netchan = Netchan::with_params(self.qport, 0, self.proto.transport.netchan);
         self.gamestate = None;
         self.snapshots.clear();
-        self.configstrings = vec![String::new(); self.proto.max_configstrings];
+        self.configstrings = vec![String::new(); self.proto.transport.max_configstrings];
         self.server_id = 0;
         self.command_sequence = 0;
         self.commands_taken = None;
@@ -1852,8 +1919,14 @@ fn parse_configstring_update(cmd: &str) -> Option<(usize, String)> {
 
 /// `Com_HashKey` (cod_lnxded 0x806810c). Empty string hashes to 0.
 pub fn com_hash_key(s: &str, maxlen: usize) -> i32 {
+    com_hash_key_bytes(s.as_bytes(), maxlen)
+}
+
+/// [`com_hash_key`] over raw bytes, signed chars, stopping at a NUL
+/// (cod2_lnxded 0x80acaa4 is the same function).
+pub fn com_hash_key_bytes(s: &[u8], maxlen: usize) -> i32 {
     let mut hash: i32 = 0;
-    for (i, &b) in s.as_bytes().iter().take(maxlen).enumerate() {
+    for (i, &b) in s.iter().take(maxlen).enumerate() {
         if b == 0 {
             break;
         }
@@ -2716,7 +2789,7 @@ mod tests {
             .push_back(oob("error", "\nEXE_SERVER_IS_DIFFERENT_VER\u{15}1.5\n"));
         assert!(c.pump_at(t0).is_empty());
         assert_eq!(c.state(), NetState::Challenging);
-        assert_eq!(c.protocol().version, 6);
+        assert_eq!(c.protocol().transport.version, 6);
         assert_eq!(
             c.transport.sent[sent],
             connectionless::build_oob("getchallenge")
@@ -2758,7 +2831,7 @@ mod tests {
             ),
         ] {
             let mut c = NetClient::start_from(FakeTransport::default(), t0, install);
-            assert_eq!(c.protocol().version, install.version);
+            assert_eq!(c.protocol().transport.version, install.transport.version);
             c.transport
                 .incoming
                 .push_back(oob("challengeResponse", " 7"));
@@ -2786,7 +2859,7 @@ mod tests {
             .push_back(oob("error", "\nEXE_SERVER_IS_DIFFERENT_VER\u{15}1.1\n"));
         c.pump_at(t0);
         assert_eq!(c.state(), NetState::Challenging);
-        assert_eq!(c.protocol().version, 1);
+        assert_eq!(c.protocol().transport.version, 1);
     }
 
     /// A PunkBuster server refuses a client without it in one `error`, the
@@ -2863,12 +2936,12 @@ mod tests {
         c.pump_at(t0);
         c.transport
             .incoming
-            .push_back(oob("print", "\n^1Welcome to Revive TDM\n"));
+            .push_back(oob("print", "\n^1Welcome to Sample TDM\n"));
         let ev = c.pump_at(t0);
         assert_eq!(c.state(), NetState::Connecting);
         assert_eq!(
             ev.first(),
-            Some(&NetEvent::Print("Welcome to Revive TDM".to_string()))
+            Some(&NetEvent::Print("Welcome to Sample TDM".to_string()))
         );
         c.transport.incoming.push_back(oob("connectResponse", ""));
         c.pump_at(t0);
@@ -2895,6 +2968,94 @@ mod tests {
             }
         }
         panic!("never dropped");
+    }
+
+    #[test]
+    fn needcdkey_without_a_key_says_so() {
+        let t0 = Instant::now();
+        let mut c = NetClient::start(FakeTransport::default(), t0);
+        c.cd_key = None;
+        c.transport.incoming.push_back(oob("needcdkey", ""));
+        let ev = c.pump_at(t0);
+        assert_eq!(c.state(), NetState::Disconnected);
+        assert_eq!(
+            ev.first(),
+            Some(&NetEvent::Dropped("EXE_ERR_INVALID_CD_KEY".to_string()))
+        );
+    }
+
+    #[test]
+    fn needcdkey_with_a_key_keeps_challenging() {
+        let t0 = Instant::now();
+        let mut c = NetClient::start(FakeTransport::default(), t0);
+        c.cd_key = cdkey::CdKey::parse("AAAA-AAAA-AAAA-AAAA");
+        c.transport.incoming.push_back(oob("needcdkey", ""));
+        c.pump_at(t0);
+        assert_eq!(c.state(), NetState::Challenging);
+        // The fake transport has no address, so nothing goes past it.
+        assert!(
+            c.transport
+                .sent
+                .iter()
+                .all(|p| last_oob_of(p) == "getchallenge")
+        );
+        for i in 1..=6 {
+            let ev = c.pump_at(t0 + Duration::from_secs(2 * i));
+            if let Some(NetEvent::Dropped(r)) = ev.first() {
+                assert_eq!(r, "EXE_AWAITINGCDKEYAUTH");
+                return;
+            }
+        }
+        panic!("never dropped");
+    }
+
+    /// Over real UDP on loopback, a server that checks no key answers the
+    /// same handshake with a key set as without: the key stays home.
+    #[test]
+    fn a_key_leaves_a_loopback_join_unchanged() {
+        let run = |key: Option<cdkey::CdKey>| {
+            let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+            server
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+            let addr = server.local_addr().unwrap().to_string();
+            let t0 = Instant::now();
+            let mut c = NetClient::start(UdpTransport::connect(&addr).unwrap(), t0);
+            c.cd_key = key;
+            // The first `getchallenge` went out before the key was set:
+            // send it again with this one.
+            c.send_getchallenge();
+            let mut seen = Vec::new();
+            let mut buf = [0u8; 2048];
+            while c.state() != NetState::LoadingGamestate && seen.len() < 6 {
+                let (n, from) = server.recv_from(&mut buf).unwrap();
+                let cmd = last_oob_of(&buf[..n]);
+                let reply = match cmd.as_str() {
+                    "getchallenge" => "challengeResponse 7",
+                    "connect" => "connectResponse",
+                    _ => "",
+                };
+                seen.push(cmd);
+                server.send_to(&oob(reply, ""), from).unwrap();
+                for _ in 0..50 {
+                    c.pump_at(Instant::now());
+                    if c.state() != NetState::Challenging {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            }
+            assert_eq!(c.state(), NetState::LoadingGamestate);
+            seen
+        };
+        let without = run(None);
+        let with = run(cdkey::CdKey::parse("AAAA-AAAA-AAAA-AAAA"));
+        assert_eq!(without, with);
+        assert_eq!(with.last().map(String::as_str), Some("connect"));
+    }
+
+    fn last_oob_of(p: &[u8]) -> String {
+        connectionless::parse_oob(p).map_or(String::new(), |(c, _)| c.to_string())
     }
 
     #[test]
@@ -2931,7 +3092,7 @@ mod tests {
         assert!(c.take_server_commands().is_empty());
 
         c.on_gamestate(Gamestate {
-            configstrings: vec![String::new(); PROTOCOL_V1.max_configstrings],
+            configstrings: vec![String::new(); PROTOCOL_V1.transport.max_configstrings],
             baselines: Default::default(),
             client_num: 0,
             checksum_feed: 0,

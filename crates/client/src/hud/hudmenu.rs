@@ -8,11 +8,11 @@ use super::HudQuad;
 use super::font::UiFonts;
 use super::hudelem::{Anchor, Virtual};
 use crate::frontend::Painter;
+use vcod_common::asset_source::{Asset, AssetSource};
 use vcod_common::localize::Localized;
-use vcod_common::pk3::Pk3Fs;
 use vcod_common::ui_menu::{
-    ITEM_ALIGN_CENTER, ITEM_ALIGN_RIGHT, ITEM_TYPE_OWNERDRAW, UiItem, WINDOW_STYLE_FILLED,
-    WINDOW_STYLE_SHADER, parse_file,
+    ITEM_ALIGN_CENTER, ITEM_ALIGN_RIGHT, ITEM_TYPE_OWNERDRAW, MenuFile, UiItem,
+    WINDOW_STYLE_FILLED, WINDOW_STYLE_SHADER,
 };
 
 /// `cg_hudFiles`' default: a `loadMenu { "..." }` list.
@@ -24,7 +24,7 @@ pub struct HudMenu {
 }
 
 impl HudMenu {
-    pub fn load(fs: &Pk3Fs) -> HudMenu {
+    pub fn load(fs: &dyn AssetSource) -> HudMenu {
         let read = |path: &str| {
             fs.read(path)
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
@@ -37,8 +37,8 @@ impl HudMenu {
         };
         let items = files
             .iter()
-            .filter_map(|f| read(f))
-            .flat_map(|text| parse_file(&text, &read))
+            .filter_map(|f| MenuFile::find(fs, f).ok())
+            .flat_map(|file| file.menus)
             .filter(|m| m.visible)
             .flat_map(|m| m.items)
             .filter(|i| i.visible && i.kind != ITEM_TYPE_OWNERDRAW && i.ownerdraw == 0)
@@ -61,6 +61,7 @@ impl HudMenu {
             let p = Painter {
                 v: v.at(Anchor::of_span(x, x + w)),
                 fonts: Some(fonts),
+                exact: false,
             };
             if !item
                 .gate
@@ -113,6 +114,7 @@ fn menu_files(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::pk3::Pk3Fs;
 
     /// Shaped like a mod's addition to `hud.menu`: two stock owner draws, a
     /// banner fed by a server-set cvar, a static label and a hidden menu.

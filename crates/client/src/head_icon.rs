@@ -103,7 +103,7 @@ fn sized_sprite(centre: Vec3, radius: f32, right: Vec3, up: Vec3, shader: &str) 
         verts: corners.map(|c| c.to_array()),
         uvs: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
         rgba: [1.0; 4],
-        shader: shader.to_string(),
+        shader: shader.into(),
     }
 }
 
@@ -265,7 +265,7 @@ mod tests {
         };
         let q = quads(&scene, Vec3::Y, Vec3::Z);
         assert_eq!(q.len(), 1);
-        assert_eq!(q[0].shader, "gfx/hud/headicon@re_objcarrier");
+        assert_eq!(&*q[0].shader, "gfx/hud/headicon@re_objcarrier");
         assert_eq!(q[0].verts[0][2], 78.0 + RADIUS);
     }
 
@@ -342,9 +342,9 @@ mod tests {
         let q = quads(&scene, Vec3::Y, Vec3::Z);
         let centre = |q: &FxQuad| q.verts[0][2] - RADIUS;
         assert_eq!(q.len(), 3);
-        assert_eq!((q[0].shader.as_str(), centre(&q[0])), ("icon", 78.0));
+        assert_eq!((&*q[0].shader, centre(&q[0])), ("icon", 78.0));
         // Head icon height 16, less the balloon's 5, over the head's 18.
-        assert_eq!((q[1].shader.as_str(), centre(&q[1])), (TALK_SHADER, 89.0));
-        assert_eq!((q[2].shader.as_str(), centre(&q[2])), (TALK_SHADER, 73.0));
+        assert_eq!((&*q[1].shader, centre(&q[1])), (TALK_SHADER, 89.0));
+        assert_eq!((&*q[2].shader, centre(&q[2])), (TALK_SHADER, 73.0));
     }
 }

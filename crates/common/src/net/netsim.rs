@@ -119,6 +119,12 @@ impl NetSim {
         }
     }
 
+    /// Every sent datagram still held, at once: what goes before the
+    /// socket closes.
+    pub fn drain_outgoing(&mut self) -> Vec<Vec<u8>> {
+        self.outgoing.queue.drain(..).map(|(_, d)| d).collect()
+    }
+
     /// The next sent datagram due on the wire by `now`.
     pub fn take_outgoing(&mut self, now: Instant) -> Option<Vec<u8>> {
         self.outgoing.pop_due(now)
@@ -142,6 +148,22 @@ mod tests {
         assert_eq!(NetSimConfig::parse(""), None);
         assert_eq!(NetSimConfig::parse("ping=x"), None);
         assert_eq!(NetSimConfig::parse("lag=5"), None);
+    }
+
+    /// What is still held goes at once, in order, and nothing is left.
+    #[test]
+    fn drain_hands_over_the_held_datagrams() {
+        let cfg = NetSimConfig {
+            ping_ms: 400.0,
+            ..NetSimConfig::default()
+        };
+        let mut sim = NetSim::new(cfg, 3);
+        let t0 = Instant::now();
+        sim.depart(t0, b"a");
+        sim.depart(t0, b"b");
+        assert!(sim.take_outgoing(t0).is_none());
+        assert_eq!(sim.drain_outgoing(), [b"a".to_vec(), b"b".to_vec()]);
+        assert!(sim.take_outgoing(t0 + Duration::from_secs(1)).is_none());
     }
 
     #[test]

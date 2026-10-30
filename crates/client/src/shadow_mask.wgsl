@@ -109,7 +109,7 @@ fn fog_amount(world_pos: vec3<f32>) -> f32 {
     }
     let d = max(dot(world_pos - m.eye_fog_mode.xyz, m.view_fwd.xyz), 0.0);
     if (mode == 1.0) {
-        return 1.0 - exp(-m.fog_color_density.a * d);
+        return 1.0 - exp(-m.fog_color_density.a * max(d - m.fog_range.w, 0.0));
     }
     let span = max(m.fog_range.y - m.fog_range.x, 0.0001);
     return clamp((d - m.fog_range.x) / span, 0.0, 1.0);

@@ -644,7 +644,7 @@ fn the_talk_captures_fail_under_the_other_rules() {
         (TALK_1_1, &PROTOCOL_V1, MoveRules::V1_5),
         (TALK_1_5, &PROTOCOL_V6, MoveRules::V1_1),
     ] {
-        if protocol.version == 1 && !install_11 {
+        if protocol.transport.version == 1 && !install_11 {
             continue;
         }
         let text = std::fs::read_to_string(format!("{FIXTURE_DIR}/{file}")).unwrap();

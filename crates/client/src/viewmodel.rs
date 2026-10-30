@@ -3,8 +3,8 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use vcod_common::pk3::Pk3Fs;
-use vcod_common::{skeleton, weapon, xanim, xmodel};
+use vcod_common::asset_source::AssetSource;
+use vcod_common::{model, skeleton, weapon, xanim, xmodel};
 
 /// A weapon's clips, each bound to the rig's skeleton.
 pub type ViewAnims = HashMap<weapon::WeaponAnim, (Arc<xanim::XAnim>, skeleton::AnimBinding)>;
@@ -36,12 +36,12 @@ pub struct RigCache {
 #[derive(Default)]
 struct Parts {
     weapons: HashMap<String, Option<Arc<HashMap<String, String>>>>,
-    models: HashMap<String, Option<Arc<xmodel::XModel>>>,
+    models: HashMap<String, Option<Arc<model::Model>>>,
     anims: HashMap<String, Option<Arc<xanim::XAnim>>>,
 }
 
 impl Parts {
-    fn weapon(&mut self, fs: &Pk3Fs, name: &str) -> Option<Arc<HashMap<String, String>>> {
+    fn weapon(&mut self, fs: &dyn AssetSource, name: &str) -> Option<Arc<HashMap<String, String>>> {
         self.weapons
             .entry(name.to_string())
             .or_insert_with(|| {
@@ -53,10 +53,10 @@ impl Parts {
             .clone()
     }
 
-    fn model(&mut self, fs: &Pk3Fs, name: &str) -> Option<Arc<xmodel::XModel>> {
+    fn model(&mut self, fs: &dyn AssetSource, name: &str) -> Option<Arc<model::Model>> {
         self.models
             .entry(name.to_string())
-            .or_insert_with(|| match xmodel::load(fs, name) {
+            .or_insert_with(|| match model::load(fs, name) {
                 Ok(m) => Some(Arc::new(m)),
                 Err(e) => {
                     log::warn!("viewmodel {name}: {e:#}");
@@ -66,7 +66,7 @@ impl Parts {
             .clone()
     }
 
-    fn anim(&mut self, fs: &Pk3Fs, name: &str, key: &str) -> Option<Arc<xanim::XAnim>> {
+    fn anim(&mut self, fs: &dyn AssetSource, name: &str, key: &str) -> Option<Arc<xanim::XAnim>> {
         self.anims
             .entry(name.to_string())
             .or_insert_with(|| match xanim::load(fs, name) {
@@ -81,7 +81,7 @@ impl Parts {
 }
 
 /// Hands then gun, shared between the cache and whoever draws them.
-pub type ViewModels = Arc<[xmodel::XModel]>;
+pub type ViewModels = Arc<[model::Model]>;
 
 struct CachedRig {
     models: ViewModels,
@@ -93,7 +93,7 @@ impl RigCache {
     /// same models and a fresh rig (pose seeded with idle, state at rest).
     pub fn load(
         &mut self,
-        fs: &Pk3Fs,
+        fs: &dyn AssetSource,
         name: &str,
         hands_model: Option<&str>,
     ) -> Option<(ViewModels, Option<Box<ViewWeapon>>)> {
@@ -122,10 +122,10 @@ impl RigCache {
 /// [`load_with`] off empty parts.
 #[cfg(test)]
 pub fn load_view_weapon(
-    fs: &Pk3Fs,
+    fs: &dyn AssetSource,
     name: &str,
     hands_model: Option<&str>,
-) -> Option<(Vec<xmodel::XModel>, Option<Box<ViewWeapon>>)> {
+) -> Option<(Vec<model::Model>, Option<Box<ViewWeapon>>)> {
     load_with(&mut Parts::default(), fs, name, hands_model)
 }
 
@@ -137,10 +137,10 @@ pub fn load_view_weapon(
 /// `ps.viewmodelIndex`"). The `xmodel/` prefix is optional.
 fn load_with(
     parts: &mut Parts,
-    fs: &Pk3Fs,
+    fs: &dyn AssetSource,
     name: &str,
     hands_model: Option<&str>,
-) -> Option<(Vec<xmodel::XModel>, Option<Box<ViewWeapon>>)> {
+) -> Option<(Vec<model::Model>, Option<Box<ViewWeapon>>)> {
     let weapon = parts.weapon(fs, name)?;
     let hands = match hands_model {
         Some(h) => h.strip_prefix("xmodel/").unwrap_or(h),
@@ -159,9 +159,9 @@ fn load_with(
 /// viewmodel draws in bind pose.
 fn load_anims(
     parts: &mut Parts,
-    fs: &Pk3Fs,
+    fs: &dyn AssetSource,
     weapon: &HashMap<String, String>,
-    models: &[xmodel::XModel],
+    models: &[model::Model],
 ) -> Option<ViewWeapon> {
     let [hands, gun] = models else {
         return None;
@@ -521,11 +521,12 @@ mod tests {
         assert_eq!(us.len(), 2);
         // The hand files share one mesh and differ in their sleeve skins.
         assert_ne!(
-            us[0].materials, own[0].materials,
+            us[0].materials(),
+            own[0].materials(),
             "hands must come from the override"
         );
-        assert!(us[0].materials.iter().any(|m| m == "viewsleeves_new.tga"));
-        assert_eq!(us[1].lod, own[1].lod, "the gun stays the file's");
+        assert!(us[0].materials().iter().any(|m| m == "viewsleeves_new.tga"));
+        assert_eq!(us[1].name, own[1].name, "the gun stays the file's");
         assert!(rig.is_some_and(|w| w.anims.contains_key(&weapon::WeaponAnim::Idle)));
     }
 }

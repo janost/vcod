@@ -1,17 +1,27 @@
-// vc_hdr's tonemap and vc_grade / vc_vignette / vc_grain (crate::post): the
-// world target in, retail's framebuffer bytes out, before the HUD draws.
+// A CoD4 vision set's film tweak, then vc_hdr's tonemap and vc_grade /
+// vc_vignette / vc_grain (crate::post): the world target in, retail's
+// framebuffer bytes out, before the HUD draws.
 // Everything here works on the display value at gamma 1, framebuffer /
 // identityLight, and writes framebuffer units back, so the gamma pass's
 // ramp (r_gamma, the overbright doubling) still runs after it.
 struct Params {
     // x: identityLight, y: 1 with vc_hdr, z: vc_grade, w: vc_vignette
     a: vec4<f32>,
-    // x: vc_grain, y: grain seed (changes 24 times a second), zw: unused
+    // x: vc_grain, y: grain seed (changes 24 times a second), z: the CoD4
+    // glow's intensity (glowApply.w), w: unused
     b: vec4<f32>,
+    // CoD4's postfx_color: colorBias; colorTintBase, w 1 when the film
+    // runs; colorTintDelta
+    film_bias: vec4<f32>,
+    film_base: vec4<f32>,
+    film_delta: vec4<f32>,
 };
 
 @group(0) @binding(0) var world: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
+// The CoD4 glow's quarter target, display values (crate::cod2_glow).
+@group(1) @binding(0) var glow: texture_2d<f32>;
+@group(1) @binding(1) var glow_smp: sampler;
 
 @vertex
 fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -47,6 +57,15 @@ fn grade(c: vec3<f32>) -> vec3<f32> {
     return g;
 }
 
+// postfx_color.hlsl (cod4-world.md 11): the colour pulled toward its luma
+// by the desaturation, times the tint between dark and light by luma, plus
+// the bias; the 8-bit target it writes clamps.
+fn film(c: vec3<f32>) -> vec3<f32> {
+    let l = luma(c);
+    let tint = params.film_delta.rgb * l + params.film_base.rgb;
+    return clamp((c * params.film_bias.w + l) * tint + params.film_bias.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 fn hash(p: vec2<f32>) -> f32 {
     let q = fract(p * vec2<f32>(0.1031, 0.1030));
     let r = q + dot(q, q.yx + 33.33);
@@ -57,7 +76,16 @@ fn hash(p: vec2<f32>) -> f32 {
 fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let il = params.a.x;
     let fb = max(textureLoad(world, vec2<i32>(pos.xy), 0).rgb, vec3<f32>(0.0));
-    let d = fb / il;
+    var d = fb / il;
+    if (params.film_base.w > 0.5) {
+        d = film(d);
+    }
+    if (params.b.z > 0.0) {
+        // glow_apply_bloom adds One, One into the 8-bit framebuffer
+        let uv = pos.xy / vec2<f32>(textureDimensions(world));
+        let g = textureSampleLevel(glow, glow_smp, uv, 0.0).rgb;
+        d = select(min(d, vec3<f32>(1.0)), d, params.a.y > 0.5) + g * params.b.z;
+    }
     var c = select(min(d, vec3<f32>(1.0)), tonemap(d), params.a.y > 0.5);
     if (params.a.z > 0.0) {
         c = mix(c, grade(c), params.a.z);

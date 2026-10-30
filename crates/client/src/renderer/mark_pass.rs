@@ -12,11 +12,12 @@
 use std::collections::HashMap;
 
 use vcod_common::bsp::{self, DrawVert};
-use vcod_common::pk3::Pk3Fs;
-use vcod_common::shader::{
-    AlphaGen, BlendFactor, Bundle, Clamp, DepthFunc, ImageRef, PolygonOffset, RgbGen, Shader,
-    ShaderLib, Stage, TcGen, TexEnv,
+use vcod_common::material::{
+    AlphaGen, BlendFactor, Bundle, Clamp, DepthFunc, ImageRef, Material, MaterialLib,
+    PolygonOffset, RgbGen, Stage, TcGen, TexEnv,
 };
+use vcod_common::pk3::Pk3Fs;
+use vcod_common::shader::Shader;
 
 use super::{
     AnimFrames, BundleViews, STAGE_PARAMS_SIZE, depth_bias, scene_pipeline, stage_animated,
@@ -55,7 +56,7 @@ const MAX_INDICES: usize = MAX_DRAWN * (MAX_MARK_VERTS - 2) * 3 + MAX_SPRITES * 
 
 /// A mark shader's parse and its params slot per stage.
 struct MarkShader {
-    shader: Shader,
+    shader: Material,
     sort: f32,
     slots: Vec<u32>,
 }
@@ -74,7 +75,7 @@ pub(super) struct MarkCtx<'a> {
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,
     pub fs: &'a Pk3Fs,
-    pub shader_lib: &'a ShaderLib,
+    pub shader_lib: &'a MaterialLib,
     pub material_layout: &'a wgpu::BindGroupLayout,
     pub stage_layout: &'a wgpu::BindGroupLayout,
     pub white_view: &'a wgpu::TextureView,
@@ -385,6 +386,7 @@ impl MarkPass {
                 picmip: ctx.textures.world_picmip(ms.shader.nopicmip),
                 mipmap: !ms.shader.nomipmaps,
                 store: ctx.textures.store(),
+                prefetched: None,
             };
             let mut batches = Vec::new();
             for (si, st) in ms.shader.stages.iter().enumerate() {
@@ -395,7 +397,7 @@ impl MarkPass {
                     st.blend.clone(),
                     cs.depth_write,
                     cs.two_sided,
-                    ms.shader.depth_bias(),
+                    ms.shader.depth_bias,
                 );
                 let pipeline = match self.pipelines.iter().position(|(k, _)| *k == pipe_key) {
                     Some(i) => i,
@@ -438,6 +440,53 @@ impl MarkPass {
         self.materials.get(key)
     }
 
+    /// Mark shaders registered so far.
+    #[cfg(test)]
+    pub(super) fn registered(&self) -> usize {
+        self.shaders.len()
+    }
+
+    /// Registers each shader of `names` and builds its stages unlit
+    /// (`NO_LIGHTMAP`): the images, bind groups and pipelines a first mark
+    /// would build in its frame.
+    /// Their stages' pipelines are built first, all at once
+    /// (`par_build`), registered in the same order a first mark would.
+    pub(super) fn prewarm<'a>(&mut self, ctx: &MarkCtx, names: impl IntoIterator<Item = &'a str>) {
+        let names: Vec<&str> = names.into_iter().collect();
+        let mut fresh: Vec<PipeKey> = Vec::new();
+        for name in &names {
+            if !self.shaders.contains_key(*name) {
+                let ms = self.register(ctx, name);
+                self.shaders.insert(name.to_string(), ms);
+            }
+            let Some(ms) = &self.shaders[*name] else {
+                continue;
+            };
+            for (si, st) in ms.shader.stages.iter().enumerate() {
+                let Some(cs) = ms.shader.classify_stage(si) else {
+                    continue;
+                };
+                let key = (
+                    st.blend.clone(),
+                    cs.depth_write,
+                    cs.two_sided,
+                    ms.shader.depth_bias,
+                );
+                if !fresh.contains(&key) && !self.pipelines.iter().any(|(k, _)| *k == key) {
+                    fresh.push(key);
+                }
+            }
+        }
+        let (module, format, layout) = (&self.module, self.format, &self.layout);
+        let built = super::par_build(fresh.len(), |i| {
+            mark_pipeline(ctx.device, module, format, layout, &fresh[i])
+        });
+        self.pipelines.extend(fresh.into_iter().zip(built));
+        for name in names {
+            self.material(ctx, &(name.to_string(), bsp::NO_LIGHTMAP));
+        }
+    }
+
     /// Parses a mark shader and fills its params slots. A name with no
     /// script draws its image blended under vertex colour.
     fn register(&mut self, ctx: &MarkCtx, name: &str) -> Option<MarkShader> {
@@ -469,18 +518,18 @@ impl MarkPass {
             }
         }
         Some(MarkShader {
-            sort: shader.sort_value(),
+            sort: shader.sort,
             shader,
             slots,
         })
     }
 
-    /// Draws run `ri`'s stages back to back; the caller has bound the
-    /// world camera at group 0.
-    pub(super) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, ri: usize, time: f32) {
+    /// Draws run `ri`'s stages back to back, the caller having bound the
+    /// world camera at group 0; the number of draws.
+    pub(super) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, ri: usize, time: f32) -> u32 {
         let run = &self.runs[ri];
         let Some(batches) = self.materials.get(&run.key) else {
-            return;
+            return 0;
         };
         pass.set_vertex_buffer(0, self.vertex_buf.slice(..));
         pass.set_index_buffer(self.index_buf.slice(..), wgpu::IndexFormat::Uint32);
@@ -495,6 +544,7 @@ impl MarkPass {
             );
             pass.draw_indexed(run.first..run.first + run.count, 0, 0..1);
         }
+        batches.len() as u32
     }
 }
 
@@ -530,7 +580,7 @@ fn mark_pipeline(
     )
 }
 
-fn implicit_mark_shader(name: &str) -> Shader {
+fn implicit_mark_shader(name: &str) -> Material {
     let bundle = |image| Bundle {
         image,
         anim: None,
@@ -539,7 +589,7 @@ fn implicit_mark_shader(name: &str) -> Shader {
         tc_gen: TcGen::Base,
         env: TexEnv::Modulate,
     };
-    Shader {
+    Material::from_shader(&Shader {
         name: name.to_string(),
         stages: vec![Stage {
             bundles: vec![
@@ -555,5 +605,5 @@ fn implicit_mark_shader(name: &str) -> Shader {
         }],
         polygon_offset: Some(PolygonOffset::Single),
         ..Shader::default()
-    }
+    })
 }

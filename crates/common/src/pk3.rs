@@ -7,11 +7,53 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// One open archive file read at a cursor of its own: clones share the
+/// handle and read with positioned reads, so no clone moves another's.
+#[derive(Clone)]
+struct SharedFile {
+    file: std::sync::Arc<File>,
+    pos: u64,
+}
+
+impl SharedFile {
+    fn open(path: &Path) -> std::io::Result<Self> {
+        Ok(SharedFile {
+            file: std::sync::Arc::new(File::open(path)?),
+            pos: 0,
+        })
+    }
+}
+
+impl Read for SharedFile {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        #[cfg(unix)]
+        let n = std::os::unix::fs::FileExt::read_at(&*self.file, buf, self.pos)?;
+        #[cfg(windows)]
+        let n = std::os::windows::fs::FileExt::seek_read(&*self.file, buf, self.pos)?;
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+impl std::io::Seek for SharedFile {
+    fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+        let pos = match to {
+            std::io::SeekFrom::Start(p) => Some(p),
+            std::io::SeekFrom::End(d) => self.file.metadata()?.len().checked_add_signed(d),
+            std::io::SeekFrom::Current(d) => self.pos.checked_add_signed(d),
+        };
+        self.pos = pos.ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "seek before the start")
+        })?;
+        Ok(self.pos)
+    }
+}
+
 /// Largest entry `Pk3Fs::read` will inflate. The biggest stock asset is a
 /// lightmapped BSP under 32 MiB; anything past this is a corrupt or hostile pak.
 pub const MAX_ENTRY_BYTES: u64 = 64 << 20;
 
-/// Case-insensitive virtual filesystem over the *.pk3 archives of one mod
+/// Case-insensitive virtual filesystem over the *.pk3 (CoD2: *.iwd) archives of one mod
 /// directory. Later archives override earlier ones, as the game layers paks.
 pub struct Pk3Fs {
     /// The directories searched, lowest priority first.
@@ -21,6 +63,8 @@ pub struct Pk3Fs {
     paks: Vec<PakInfo>,
     /// `pack->referenced`, set by a read (see `referenced_paks`).
     referenced: Vec<AtomicBool>,
+    /// [`Self::set_surfs_unflagged`]: an `xmodelsurfs/` read flags nothing.
+    surfs_unflagged: AtomicBool,
     // lowercased entry path -> (archive index, exact entry name in that zip)
     index: HashMap<String, (usize, String)>,
     // Same with '@' normalized to '_'; BSP material names sometimes spell the
@@ -28,11 +72,15 @@ pub struct Pk3Fs {
     alias_index: HashMap<String, (usize, String)>,
     // Kept open after first read; re-parsing a central directory per entry
     // dominates when loading ~3000 anims. Reads take &self, hence the lock.
-    open: Mutex<HashMap<usize, zip::ZipArchive<File>>>,
+    // The lock only hands out a clone (shared directory, own cursor), so
+    // reads on several threads inflate side by side.
+    open: Mutex<HashMap<usize, zip::ZipArchive<SharedFile>>>,
     // lowercased path -> bytes `read` returns ahead of every archive.
     overlay: HashMap<String, Vec<u8>>,
     /// `--vanilla`: only [`is_vanilla_pak`]s are on the search path.
     vanilla: bool,
+    kind: ArchiveKind,
+    assets: crate::asset_source::AssetCache,
 }
 
 /// One pak on the search path, as the pure-server lists name it.
@@ -42,7 +90,7 @@ pub struct PakInfo {
     /// The directory it sits in (`main`, a mod's), the `<game>/` of
     /// `sv_referencedPakNames`.
     pub game: String,
-    /// The file name without `.pk3`.
+    /// The file name without `.pk3` or `.iwd`.
     pub name: String,
     /// `localized_*`: never in `sv_paks`, searched after every other pak.
     pub localized: bool,
@@ -67,9 +115,14 @@ impl PakInfo {
 /// A lookup key: case folded, a backslash read as a slash, as
 /// `FS_HashFileName` (coduo_lnxded 0x806077a) and `FS_FilenameCompare`
 /// (0x806161e) read one. UO's `fx/gmi_impacts.csv` names its explodes
-/// `fx\weapon\explosions\...`.
+/// `fx\weapon\explosions\...`. A leading slash or backslash is dropped, as
+/// `FS_FOpenFileRead` skips it (CoDMP.exe 0x00429a70, CoDUOMP.exe 0x0042d760,
+/// coduo_lnxded 0x08061a74): UO's `fx/map_trenches/mortar_mz.efx` chains
+/// `/fx/map_trenches/mortar_mz_nest`.
 fn path_key(path: &str) -> String {
-    path.to_lowercase().replace('\\', "/")
+    path.trim_start_matches(['/', '\\'])
+        .to_lowercase()
+        .replace('\\', "/")
 }
 
 /// `FS_AddGameDirectory`'s sort: names compare case-blind with `mp_` read
@@ -86,19 +139,106 @@ fn retail_sort_key(file: &str) -> String {
     }
 }
 
+/// CoD2's `iwdsort` (cod2mp Mac 1.3 0x34412) as a key: names compare
+/// upper-cased with `\` and `:` read as `/`, and of two `localized_*` ones an
+/// English one sorts first (docs/research/cod2-iwi-iwd.md, "The search
+/// path"). Localized and plain archives never meet here: [`search_archives`]
+/// splits them.
+fn iwd_sort_key(file: &str) -> String {
+    let upper = file.to_ascii_uppercase().replace(['\\', ':'], "/");
+    let foreign = upper.strip_prefix("LOCALIZED_").is_some_and(|rest| {
+        let lang: String = rest.chars().take_while(char::is_ascii_alphabetic).collect();
+        lang != "ENGLISH"
+    });
+    format!("{}{upper}", u8::from(foreign))
+}
+
+/// The archives a search path is built from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArchiveKind {
+    /// CoD1's `*.pk3`.
+    Pk3,
+    /// CoD2's `*.iwd`, plain zips under another name and sort.
+    Iwd,
+}
+
+impl ArchiveKind {
+    pub fn ext(self) -> &'static str {
+        match self {
+            ArchiveKind::Pk3 => "pk3",
+            ArchiveKind::Iwd => "iwd",
+        }
+    }
+
+    fn sort_key(self, file: &str) -> String {
+        match self {
+            ArchiveKind::Pk3 => retail_sort_key(file),
+            ArchiveKind::Iwd => iwd_sort_key(file),
+        }
+    }
+}
+
 /// The `.pk3`s directly in `dir`, highest priority first.
 fn pk3s_in(dir: &Path) -> Result<Vec<PathBuf>> {
+    archives_in(dir, ArchiveKind::Pk3)
+}
+
+/// `kind`'s archives directly in `dir`, highest priority first: the engine
+/// sorts them ascending and pushes each on the head of the search path.
+fn archives_in(dir: &Path, kind: ArchiveKind) -> Result<Vec<PathBuf>> {
     let mut archives: Vec<PathBuf> = std::fs::read_dir(dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pk3")))
+        .filter(|p| {
+            p.extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case(kind.ext()))
+        })
         .collect();
     archives.sort_by_cached_key(|p| {
-        std::cmp::Reverse(retail_sort_key(
-            &p.file_name().unwrap_or_default().to_string_lossy(),
-        ))
+        std::cmp::Reverse(kind.sort_key(&p.file_name().unwrap_or_default().to_string_lossy()))
     });
     Ok(archives)
+}
+
+/// File `name` off the search path `FS_FOpenFileRead` walks over `dirs`,
+/// highest priority first: each directory's archives (`localized_*`
+/// aside), then its loose file; then every directory's `localized_*`
+/// archives. CoD4 1.7's `path` lists a home path's iwds, its directory,
+/// then the base path's (docs/research/cod4-handshake.md 14.1).
+pub fn read_search(dirs: &[PathBuf], kind: ArchiveKind, name: &str) -> Option<Vec<u8>> {
+    let key = path_key(name);
+    let member = |pak: &Path| -> Option<Vec<u8>> {
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(pak).ok()?).ok()?;
+        let entry = zip.file_names().find(|n| path_key(n) == key)?.to_string();
+        let mut f = zip.by_name(&entry).ok()?;
+        let mut out = Vec::new();
+        std::io::Read::read_to_end(&mut f, &mut out).ok()?;
+        Some(out)
+    };
+    let localized = |p: &PathBuf| {
+        p.file_name().is_some_and(|n| {
+            n.to_string_lossy()
+                .to_ascii_lowercase()
+                .starts_with("localized_")
+        })
+    };
+    for dir in dirs {
+        let paks = archives_in(dir, kind).unwrap_or_default();
+        if let Some(data) = paks
+            .iter()
+            .filter(|p| !localized(p))
+            .find_map(|p| member(p))
+        {
+            return Some(data);
+        }
+        if let Ok(data) = std::fs::read(dir.join(name)) {
+            return Some(data);
+        }
+    }
+    dirs.iter()
+        .flat_map(|d| archives_in(d, kind).unwrap_or_default())
+        .filter(|p| localized(p))
+        .find_map(|p| member(&p))
 }
 
 /// The readable paks of `dirs` (lowest priority first, the base then a
@@ -107,6 +247,13 @@ fn pk3s_in(dir: &Path) -> Result<Vec<PathBuf>> {
 /// paks the same way. A directory that does not exist adds nothing; an
 /// unreadable pak is skipped.
 pub fn search_paks(dirs: &[&Path]) -> Vec<PakInfo> {
+    search_archives(dirs, ArchiveKind::Pk3)
+}
+
+/// [`search_paks`] over `kind`'s archives. CoD2 orders its directories and
+/// its `localized_*` iwds the same way (`FS_AddGameDirectory`, cod2mp Mac
+/// 1.3 0x34ffe).
+pub fn search_archives(dirs: &[&Path], kind: ArchiveKind) -> Vec<PakInfo> {
     let mut main = Vec::new();
     let mut localized = Vec::new();
     for dir in dirs.iter().rev() {
@@ -114,14 +261,14 @@ pub fn search_paks(dirs: &[&Path]) -> Vec<PakInfo> {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        for path in pk3s_in(dir).unwrap_or_default() {
+        for path in archives_in(dir, kind).unwrap_or_default() {
             let crcs = match std::fs::File::open(&path)
                 .map_err(anyhow::Error::from)
                 .and_then(|f| crate::pak_checksum::entry_crcs(std::io::BufReader::new(f)))
             {
                 Ok(c) => c,
                 Err(e) => {
-                    log::warn!("skipping unreadable pk3 {}: {e}", path.display());
+                    log::warn!("skipping unreadable {} {}: {e}", kind.ext(), path.display());
                     continue;
                 }
             };
@@ -153,11 +300,11 @@ pub fn search_paks(dirs: &[&Path]) -> Vec<PakInfo> {
 /// (`net::download::is_stock_pak`, `localized_*` ones included) and, on
 /// United Offensive, `uo/uomappack00`, which a stock 1.51b server lists in
 /// `sv_pakNames` (crates/server/tests/fixtures/configstrings/mp_cassino-dm-uo-pure.txt).
-pub fn is_vanilla_pak(pak: &PakInfo, proto: &crate::net::protocol::Protocol) -> bool {
+pub fn is_vanilla_pak(pak: &PakInfo, t: &crate::net::wire::Transport) -> bool {
     let name = pak.qualified_name();
-    crate::net::download::is_stock_pak(&name, proto)
-        || (proto.version == crate::net::protocol::PROTOCOL_V22.version
-            && name.eq_ignore_ascii_case("uo/uomappack00"))
+    let uo = t.version == crate::net::protocol::PROTOCOL_V22.transport.version;
+    crate::net::download::is_stock_pak(&name, t)
+        || (uo && name.eq_ignore_ascii_case("uo/uomappack00"))
 }
 
 /// `base` and what sits under it, lowest priority first: a base other than
@@ -253,13 +400,51 @@ impl Pk3Fs {
     /// The paks of `dirs`, lowest priority first, as [`search_paks`] orders
     /// them; `pure` and `vanilla` as in [`open_search`](Self::open_search).
     pub fn open_dirs(dirs: Vec<PathBuf>, pure: Option<&[i32]>, vanilla: bool) -> Result<Self> {
+        Self::open_archives(dirs, pure, vanilla, ArchiveKind::Pk3)
+    }
+
+    /// A CoD2 search path: `base`'s `.iwd`s, then `game`'s on top of them.
+    /// No pure list and no `--vanilla` yet; those are CoD1's.
+    pub fn open_iwd(base: &Path, game: Option<&Path>) -> Result<Self> {
+        if !base.is_dir() {
+            bail!("cannot read game dir {}", base.display());
+        }
+        // the wavelet .iwi tables live only in the install's render DLL
+        if let Some(root) = base.parent() {
+            crate::iwi::load_wavelet_tables(root);
+        }
+        let mut dirs = vec![base.to_path_buf()];
+        dirs.extend(game.filter(|g| g.is_dir()).map(Path::to_path_buf));
+        Self::open_archives(dirs, None, false, ArchiveKind::Iwd)
+    }
+
+    /// [`Self::open_iwd`] with any number of directories over `base`, each
+    /// over the last (CoD4's `usermaps/<map>/` then `fs_game`).
+    pub fn open_iwd_layers(base: &Path, over: &[PathBuf]) -> Result<Self> {
+        if !base.is_dir() {
+            bail!("cannot read game dir {}", base.display());
+        }
+        if let Some(root) = base.parent() {
+            crate::iwi::load_wavelet_tables(root);
+        }
+        let mut dirs = vec![base.to_path_buf()];
+        dirs.extend(over.iter().filter(|g| g.is_dir()).cloned());
+        Self::open_archives(dirs, None, false, ArchiveKind::Iwd)
+    }
+
+    fn open_archives(
+        dirs: Vec<PathBuf>,
+        pure: Option<&[i32]>,
+        vanilla: bool,
+        kind: ArchiveKind,
+    ) -> Result<Self> {
         let base = dirs.first().cloned().unwrap_or_default();
         let dir_refs: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
-        let mut paks = search_paks(&dir_refs);
+        let mut paks = search_archives(&dir_refs, kind);
         if vanilla {
             let proto = crate::net::protocol::install_protocol_of(&paks);
             paks.retain(|p| {
-                let keep = is_vanilla_pak(p, proto);
+                let keep = is_vanilla_pak(p, &proto.transport);
                 if !keep {
                     log::info!("vanilla: skipping {}", p.path.display());
                 }
@@ -278,7 +463,7 @@ impl Pk3Fs {
         // Override order: the lowest priority first.
         paks.reverse();
         if paks.is_empty() {
-            bail!("no .pk3 archives found in {}", base.display());
+            bail!("no .{} archives found in {}", kind.ext(), base.display());
         }
         let mut index = HashMap::new();
         let mut alias_index = HashMap::new();
@@ -292,7 +477,11 @@ impl Pk3Fs {
             let zip = match zip {
                 Ok(z) => z,
                 Err(e) => {
-                    log::warn!("skipping unreadable pk3 {}: {e}", pak.path.display());
+                    log::warn!(
+                        "skipping unreadable {} {}: {e}",
+                        kind.ext(),
+                        pak.path.display()
+                    );
                     continue;
                 }
             };
@@ -307,7 +496,7 @@ impl Pk3Fs {
             readable.push(pak);
         }
         if readable.is_empty() {
-            bail!("no readable .pk3 archives in {}", base.display());
+            bail!("no readable .{} archives in {}", kind.ext(), base.display());
         }
         let referenced = readable.iter().map(|_| AtomicBool::new(false)).collect();
         Ok(Self {
@@ -315,17 +504,33 @@ impl Pk3Fs {
             archives: readable.iter().map(|p| p.path.clone()).collect(),
             paks: readable,
             referenced,
+            surfs_unflagged: AtomicBool::new(false),
             index,
             alias_index,
             open: Mutex::new(HashMap::new()),
             overlay: HashMap::new(),
             vanilla,
+            kind,
+            assets: Default::default(),
         })
     }
 
     /// Whether the search path was opened `--vanilla`.
     pub fn vanilla(&self) -> bool {
         self.vanilla
+    }
+
+    /// The game whose archives these are: CoD2's for iwds, else CoD1's.
+    pub fn game(&self) -> crate::game::Game {
+        match self.kind {
+            ArchiveKind::Pk3 => crate::game::Game::Cod1,
+            ArchiveKind::Iwd => crate::game::Game::Cod2,
+        }
+    }
+
+    /// What `Pk3Fs::load` loaded from this search path.
+    pub(crate) fn asset_cache(&self) -> &crate::asset_source::AssetCache {
+        &self.assets
     }
 
     /// The directories searched, lowest priority first.
@@ -367,13 +572,23 @@ impl Pk3Fs {
         for r in &self.referenced {
             r.store(false, Ordering::Relaxed);
         }
+        // A cached asset would skip the reads that mark its paks again.
+        self.assets.clear();
+    }
+
+    /// What [`Self::read`] of `path` marks, after a [`Self::read_unflagged`]
+    /// of it: an overlaid path marks nothing, any other its pak.
+    pub fn mark_read(&self, path: &str) {
+        if !self.overlay.contains_key(&path_key(path)) {
+            self.touch(path);
+        }
     }
 
     /// Marks `path`'s pak referenced as a read would, without reading it.
     pub fn touch(&self, path: &str) {
         let key = path_key(path);
         if let Some((ai, _)) = self.index.get(&key).or_else(|| self.alias_index.get(&key))
-            && flags_reference(&key)
+            && self.flags(&key)
         {
             self.referenced[*ai].store(true, Ordering::Relaxed);
         }
@@ -416,11 +631,14 @@ impl Pk3Fs {
             archives: Vec::new(),
             paks: Vec::new(),
             referenced: Vec::new(),
+            surfs_unflagged: AtomicBool::new(false),
             index: HashMap::new(),
             alias_index: HashMap::new(),
             open: Mutex::new(HashMap::new()),
             overlay: HashMap::new(),
             vanilla: false,
+            kind: ArchiveKind::Pk3,
+            assets: Default::default(),
         }
     }
 
@@ -428,6 +646,7 @@ impl Pk3Fs {
     /// overrides an earlier one. For tests that run a patched copy of an asset.
     pub fn overlay(&mut self, path: &str, bytes: Vec<u8>) {
         self.overlay.insert(path_key(path), bytes);
+        self.assets.clear();
     }
 
     /// Same lookup as `read`, without touching the archive.
@@ -457,6 +676,17 @@ impl Pk3Fs {
     /// `limit` bytes. The zip central directory's size field only sizes the
     /// buffer; the stream itself is bounded, since the field can lie.
     pub fn read_limited(&self, path: &str, limit: u64) -> Option<Vec<u8>> {
+        self.read_flagging(path, limit, true)
+    }
+
+    /// [`Self::read`] that marks no pak referenced: a read ahead of need
+    /// (a load's parallel prefetch), whose user calls [`Self::mark_read`]
+    /// on the path if and when it takes the bytes.
+    pub fn read_unflagged(&self, path: &str) -> Option<Vec<u8>> {
+        self.read_flagging(path, MAX_ENTRY_BYTES, false)
+    }
+
+    fn read_flagging(&self, path: &str, limit: u64, flag: bool) -> Option<Vec<u8>> {
         let key = path_key(path);
         if let Some(bytes) = self.overlay.get(&key) {
             return (bytes.len() as u64 <= limit).then(|| bytes.clone());
@@ -465,21 +695,12 @@ impl Pk3Fs {
             .index
             .get(&key)
             .or_else(|| self.alias_index.get(&key))?;
-        if flags_reference(&key) {
+        if flag && self.flags(&key) {
             self.referenced[*ai].store(true, Ordering::Relaxed);
         }
         // `fs_debug 1`'s line, for diffing what a load reads against retail.
         log::trace!("read {path} from {}", self.paks[*ai].qualified_name());
-        // A poisoned lock still holds a usable cache; `by_name` re-seeks from
-        // the central directory.
-        let mut open = self.open.lock().unwrap_or_else(|e| e.into_inner());
-        let zip = match open.entry(*ai) {
-            Entry::Occupied(e) => e.into_mut(),
-            Entry::Vacant(e) => {
-                let file = File::open(&self.archives[*ai]).ok()?;
-                e.insert(zip::ZipArchive::new(file).ok()?)
-            }
-        };
+        let mut zip = self.archive(*ai)?;
         let f = zip.by_name(entry).ok()?;
         if f.size() > limit {
             log::warn!("{path}: declared size {} exceeds {limit} bytes", f.size());
@@ -494,6 +715,20 @@ impl Pk3Fs {
             return None;
         }
         Some(buf)
+    }
+
+    /// Archive `ai` off the open cache, its central directory parsed once
+    /// per `Pk3Fs`. A poisoned lock still holds a usable cache; `by_name`
+    /// re-seeks from the central directory.
+    fn archive(&self, ai: usize) -> Option<zip::ZipArchive<SharedFile>> {
+        let mut open = self.open.lock().unwrap_or_else(|e| e.into_inner());
+        match open.entry(ai) {
+            Entry::Occupied(e) => Some(e.get().clone()),
+            Entry::Vacant(e) => {
+                let file = SharedFile::open(&self.archives[ai]).ok()?;
+                Some(e.insert(zip::ZipArchive::new(file).ok()?).clone())
+            }
+        }
     }
 
     /// Lowercased entry paths ending in `suffix`, e.g. ".shader".
@@ -532,11 +767,10 @@ impl Pk3Fs {
         let prefix = format!("{}/", dir.to_lowercase());
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
-        for path in self.archives.iter().rev() {
-            let Ok(zip) = File::open(path)
-                .map_err(anyhow::Error::from)
-                .and_then(|f| Ok(zip::ZipArchive::new(f)?))
-            else {
+        // Off the open cache: reparsing every pak's central directory cost
+        // UO's `map_restart` 100 ms (cod11-map-cycle.md 4.9).
+        for ai in (0..self.archives.len()).rev() {
+            let Some(zip) = self.archive(ai) else {
                 continue;
             };
             for i in 0..zip.len() {
@@ -593,16 +827,25 @@ impl Pk3Fs {
         out
     }
 
+    /// A map file's extension: CoD1's `.bsp`, CoD2's `.d3dbsp`.
+    fn map_ext(&self) -> &'static str {
+        match self.kind {
+            ArchiveKind::Pk3 => ".bsp",
+            ArchiveKind::Iwd => ".d3dbsp",
+        }
+    }
+
     pub fn find_maps(&self) -> Vec<String> {
+        let ext = self.map_ext();
         let mut maps: Vec<String> = self
             .index
             .keys()
-            .filter(|k| k.ends_with(".bsp"))
+            .filter(|k| k.ends_with(ext))
             .filter(|k| {
                 let dir = &k[..k.rfind('/').unwrap_or(0)];
                 dir == "maps" || dir == "maps/mp"
             })
-            .map(|k| k[k.rfind('/').unwrap() + 1..k.len() - 4].to_string())
+            .map(|k| k[k.rfind('/').unwrap() + 1..k.len() - ext.len()].to_string())
             .collect();
         maps.sort();
         maps.dedup();
@@ -610,13 +853,28 @@ impl Pk3Fs {
     }
 
     pub fn resolve_map(&self, name: &str) -> Option<String> {
-        let name = name.to_lowercase();
-        for candidate in [format!("maps/{name}.bsp"), format!("maps/mp/{name}.bsp")] {
+        let (name, ext) = (name.to_lowercase(), self.map_ext());
+        for candidate in [format!("maps/{name}{ext}"), format!("maps/mp/{name}{ext}")] {
             if let Some((_, entry)) = self.index.get(&candidate) {
                 return Some(entry.clone());
             }
         }
         None
+    }
+}
+
+impl Pk3Fs {
+    /// A CoD2 dedicated server's reads: its xmodel surface loader (cod2_lnxded
+    /// 0x80c7436) is a stub that reads nothing, so the meshes vcod loads for
+    /// collision and bones leave their iwds out of `sv_referencedIwds`
+    /// (cod2-protocol.md 11.3).
+    pub fn set_surfs_unflagged(&self, on: bool) {
+        self.surfs_unflagged.store(on, Ordering::Relaxed);
+    }
+
+    fn flags(&self, key: &str) -> bool {
+        flags_reference(key)
+            && !(key.starts_with("xmodelsurfs/") && self.surfs_unflagged.load(Ordering::Relaxed))
     }
 }
 
@@ -643,6 +901,107 @@ mod tests {
             z.write_all(content.as_bytes()).unwrap();
         }
         z.finish().unwrap();
+    }
+
+    /// CoD4 1.7's `exec` off the disk (cod4-handshake.md 14.1): a home
+    /// path iwd beats a loose file beside it, the home directory beats the
+    /// base path's iwds, and the localized iwds come last.
+    #[test]
+    fn read_search_takes_each_dirs_iwds_then_its_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home/main");
+        let base = dir.path().join("base/main");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&base).unwrap();
+        make_pk3(
+            &home,
+            "zz_vtest.iwd",
+            &[("vt_both.cfg", "iwd"), ("VT_IWD.cfg", "iwd")],
+        );
+        std::fs::write(home.join("vt_both.cfg"), "loose").unwrap();
+        std::fs::write(home.join("vt_loose.cfg"), "loose").unwrap();
+        make_pk3(
+            &base,
+            "iw_00.iwd",
+            &[("vt_loose.cfg", "base"), ("b.cfg", "base iwd")],
+        );
+        make_pk3(
+            &base,
+            "localized_english_iw00.iwd",
+            &[("b.cfg", "en"), ("c.cfg", "en")],
+        );
+        std::fs::write(base.join("c.cfg"), "base loose").unwrap();
+        let dirs = [home, base];
+        let read = |p: &str| {
+            read_search(&dirs, ArchiveKind::Iwd, p).map(|b| String::from_utf8(b).unwrap())
+        };
+        assert_eq!(read("vt_both.cfg").as_deref(), Some("iwd"));
+        assert_eq!(read("vt_iwd.cfg").as_deref(), Some("iwd"));
+        assert_eq!(read("vt_loose.cfg").as_deref(), Some("loose"));
+        assert_eq!(read("b.cfg").as_deref(), Some("base iwd"));
+        assert_eq!(read("c.cfg").as_deref(), Some("base loose"));
+        assert_eq!(read("nothere.cfg"), None);
+    }
+
+    #[test]
+    fn iwd_search_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
+        let game = dir.path().join("mod");
+        std::fs::create_dir_all(&main).unwrap();
+        std::fs::create_dir_all(&game).unwrap();
+        make_pk3(&main, "iw_00.iwd", &[("a.txt", "00"), ("b.txt", "00")]);
+        make_pk3(&main, "iw_15.iwd", &[("a.txt", "15")]);
+        make_pk3(&main, "IW_06.IWD", &[("a.txt", "06"), ("e.txt", "06")]);
+        make_pk3(
+            &main,
+            "localized_english_iw00.iwd",
+            &[("b.txt", "en"), ("c.txt", "en")],
+        );
+        make_pk3(&main, "localized_french_iw00.iwd", &[("c.txt", "fr")]);
+        make_pk3(&main, "pak0.pk3", &[("d.txt", "pk3")]);
+        make_pk3(&game, "z.iwd", &[("e.txt", "mod")]);
+        let fs = Pk3Fs::open_iwd(&main, Some(&game)).unwrap();
+        let read = |p: &str| fs.read(p).map(|b| String::from_utf8(b).unwrap());
+        assert_eq!(read("a.txt").as_deref(), Some("15"));
+        // localized iwds sit under every plain one
+        assert_eq!(read("b.txt").as_deref(), Some("00"));
+        // an English one sorts first, so any other language overrides it
+        assert_eq!(read("c.txt").as_deref(), Some("fr"));
+        assert_eq!(read("d.txt"), None);
+        assert_eq!(read("e.txt").as_deref(), Some("mod"));
+        let names: Vec<&str> = fs.paks().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "z",
+                "iw_15",
+                "IW_06",
+                "iw_00",
+                "localized_french_iw00",
+                "localized_english_iw00"
+            ]
+        );
+    }
+
+    #[test]
+    fn iwd_maps_are_d3dbsp() {
+        let dir = tempfile::tempdir().unwrap();
+        make_pk3(
+            dir.path(),
+            "iw_04.iwd",
+            &[
+                ("maps/mp/mp_toujane.d3dbsp", "data"),
+                ("maps/mp/old.bsp", "x"),
+            ],
+        );
+        let fs = Pk3Fs::open_iwd(dir.path(), None).unwrap();
+        assert_eq!(fs.find_maps(), ["mp_toujane"]);
+        assert_eq!(
+            fs.resolve_map("MP_Toujane").as_deref(),
+            Some("maps/mp/mp_toujane.d3dbsp")
+        );
+        assert_eq!(fs.resolve_map("old"), None);
     }
 
     #[test]
@@ -681,7 +1040,7 @@ mod tests {
     }
 
     /// UO's impact table names its explodes with backslashes, which the
-    /// engine's lookup reads as slashes.
+    /// engine's lookup reads as slashes; a leading slash is skipped.
     #[test]
     fn a_backslash_reads_as_a_slash() {
         let dir = tempfile::tempdir().unwrap();
@@ -694,6 +1053,10 @@ mod tests {
         let path = r"fx\weapon\explosions\tank_dirt.efx";
         assert_eq!(fs.read(path).unwrap(), b"data");
         assert!(fs.contains(path));
+        assert_eq!(
+            fs.read("/fx/weapon/explosions/tank_dirt.efx").unwrap(),
+            b"data"
+        );
     }
 
     /// A UO `cp` opens with the paks of UO's own client modules

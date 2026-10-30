@@ -1,4 +1,8 @@
 pub mod client_bullet;
+pub mod cod2;
+pub mod cod2_cloud;
+pub mod cod2_tracer;
+pub mod cod4_trail;
 pub mod efx;
 pub mod flame;
 pub mod looped;

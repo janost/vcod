@@ -7,10 +7,26 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use vcod_common::localize::Localized;
+use vcod_common::text::atoi_msvc;
 use vcod_common::ui_menu::{
     ITEM_TYPE_BIND, ITEM_TYPE_EDITFIELD, ITEM_TYPE_MULTI, ITEM_TYPE_NUMERICFIELD, ITEM_TYPE_SLIDER,
     ITEM_TYPE_YESNO, UiItem,
 };
+use vcod_common::ui_menu::{ITEM_TYPE_DECIMALFIELD, ITEM_TYPE_DVARENUM};
+
+/// The entry an enum item's dvar value names (`atoi` in range, else a
+/// case-blind name match), 0 when none does.
+fn enum_index(entries: &[String], value: &str) -> usize {
+    let n = atoi_msvc(value);
+    if n >= 0 && (n as usize) < entries.len() {
+        return n as usize;
+    }
+    entries
+        .iter()
+        .position(|e| e.eq_ignore_ascii_case(value))
+        .unwrap_or(0)
+}
+
 use winit::keyboard::KeyCode;
 
 use super::{Painter, Ui, UiEffect};
@@ -230,6 +246,34 @@ impl Ui {
         self.set_cvar(cvar, &value, out);
     }
 
+    /// CoD2's `ITEM_TYPE_DVARENUM` arm of `Item_HandleKey` (Mac 0x16d720):
+    /// the item's dvar to `%i` of the entry after the one it names (the
+    /// one before on a right click), wrapping; an index in range or an
+    /// entry's name in any case names one, anything else the first. An enum
+    /// with no entries sets 0. Nothing moves when the index would not.
+    pub(super) fn enum_step(
+        &mut self,
+        item: &UiItem,
+        back: bool,
+        shell: &Shell,
+        out: &mut Vec<UiEffect>,
+    ) {
+        let (Some(cvar), Some(list)) = (item.cvar.as_deref(), item.enum_list.as_deref()) else {
+            return;
+        };
+        let entries = shell.enum_domain(list).unwrap_or_default();
+        let at = enum_index(entries, &self.cvar(cvar, shell).unwrap_or_default());
+        let n = entries.len();
+        let next = match n {
+            0 => 0,
+            _ if back => (at + n - 1) % n,
+            _ => (at + 1) % n,
+        };
+        if next != at {
+            self.set_cvar(cvar, &next.to_string(), out);
+        }
+    }
+
     /// A slider follows the mouse while its button is down, clamped to
     /// the bar (`0x40012d30`, the capture function).
     pub(super) fn drag_to(&mut self, shell: &Shell, out: &mut Vec<UiEffect>) {
@@ -318,6 +362,8 @@ impl Ui {
         let item = &self.menus[m].items[i];
         // Q3's `Item_TextField_HandleKey`: a numeric field takes digits only.
         let numeric = item.kind == ITEM_TYPE_NUMERICFIELD;
+        let file_name = item.file_name_only;
+        let accept = item.accept.clone();
         let goto_next = item.max_chars_goto_next;
         let (Some(cvar), max) = (item.cvar.clone(), item.max_chars) else {
             self.options.editing = None;
@@ -327,6 +373,10 @@ impl Ui {
         match code {
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
                 self.options.editing = None;
+                // CoD2's `accept` runs on Enter (Mac 0x16ee5e).
+                if code != KeyCode::Escape && !accept.is_empty() {
+                    self.run(m, &accept, shell, &mut out);
+                }
                 return out;
             }
             // The keypad's arrows only with Num Lock off, when they type
@@ -353,6 +403,7 @@ impl Ui {
                     .chars()
                     .filter(|c| !c.is_control() && *c != '"')
                     .filter(|c| !numeric || c.is_ascii_digit())
+                    .filter(|&c| !file_name || c.is_ascii_alphanumeric() || c == '_' || c == '-')
                 {
                     if max == 0 || value.chars().count() < max {
                         value.push(c);
@@ -408,6 +459,22 @@ impl Ui {
                 };
                 label.map_or(String::new(), |l| loc.translate(l).into_owned())
             }
+            // `Item_Paint`'s `ITEM_TYPE_DVARENUM` arm (Mac 0x1704d6): the
+            // entry the item's dvar names, blank for an empty enum.
+            ITEM_TYPE_DVARENUM => match item.enum_list.as_deref() {
+                None => "<dvarEnumList not set>".to_string(),
+                Some(list) => match shell.enum_domain(list) {
+                    None => "<not an enum dvar>".to_string(),
+                    Some([]) => String::new(),
+                    Some(e) => {
+                        e[enum_index(e, &self.cvar(cvar, shell).unwrap_or_default())].clone()
+                    }
+                },
+            },
+            // `Item_TextField_Paint` (Mac 0x16994a): a decimal field shows
+            // its float dvar through `Com_LocalizedFloatToString` at two
+            // places.
+            ITEM_TYPE_DECIMALFIELD => format!("{:.2}", self.cvar_value(cvar, shell)),
             ITEM_TYPE_YESNO => {
                 let key = if self.cvar_value(cvar, shell) != 0.0 {
                     "@EXE_YES"

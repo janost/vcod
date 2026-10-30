@@ -3,14 +3,15 @@
 //! through the map pipeline (`build`), and their collision triangles for the
 //! collision world (`collision_tris`).
 
-use crate::bsp::{self, Bsp, DrawVert};
+use crate::asset_source::{AssetSource, RawFile};
+use crate::bsp;
 use crate::collision::ModelTri;
 use crate::deform;
+use crate::mapworld::{DrawVert, MapWorld};
 use crate::mesh::IndexRange;
-use crate::pk3::Pk3Fs;
+use crate::model;
 use crate::shader::Sprite;
 use crate::static_light::{self, ModelLights, StaticLighting};
-use crate::xmodel;
 use glam::{Mat3, Vec3};
 use std::collections::{BTreeMap, HashMap};
 
@@ -58,11 +59,42 @@ pub struct SkinDraw {
     pub sprite: Option<Sprite>,
     /// Takes `tcGen environment`: batched per placement.
     pub reflects: bool,
+    /// Draws its model's own vertex colours, unlit: a CoD2 material with no
+    /// light probe technique (a `vertcol_mul` decal, an `effect_add` glow),
+    /// whose stage reads the colour the xmodelsurfs store
+    /// (cod2-materials.md 9).
+    pub model_colour: bool,
+    /// A CoD2 `ambient_*` set: a static model takes `lprobe_smc_amb`, its
+    /// light at the model's centre and the sun without `N.L`
+    /// (cod2-materials.md 9.2).
+    pub ambient: bool,
+    /// A CoD2 material drawn per pixel by its static model technique
+    /// (`lprobe_smc*`, cod2-materials.md 9.6): its vertices keep the
+    /// model's colours and its light is the client's, not baked.
+    pub smodel: bool,
+    /// Drawn by no static model technique (a CoD2 `objective` set, which
+    /// names none; cod2-materials.md 9.2): its surfaces are left out.
+    pub skip: bool,
 }
 
 /// All props of a map, ready to append to the map's vertex/index buffers.
 pub struct Props {
     pub verts: Vec<DrawVert>,
+    /// Per vertex, index-aligned with `verts`: its placement's index into
+    /// `placements(entities)`.
+    pub vert_placement: Vec<u32>,
+    /// Per vertex: its skin is `lightingDiffuse`, lit from the map.
+    pub vert_lit: Vec<bool>,
+    /// Per vertex, the colour its model stores (white on v14), which a CoD2
+    /// probe technique multiplies its light by.
+    pub vert_colour: Vec<[u8; 4]>,
+    /// Per vertex: its skin is [`SkinDraw::ambient`].
+    pub vert_ambient: Vec<bool>,
+    /// Per vertex: its skin is [`SkinDraw::smodel`].
+    pub vert_smodel: Vec<bool>,
+    /// Per vertex, the model's tangent and binormal turned into the world
+    /// as the normal is (zero on v14, which stores none).
+    pub vert_tangent: Vec<[[f32; 3]; 2]>,
     /// Relative to `verts`; the renderer rebases them onto the combined buffer.
     pub indices: Vec<u32>,
     pub batches: Vec<Batch>,
@@ -77,7 +109,7 @@ pub struct Props {
 }
 
 /// A placement's LOD inputs: the refEntity origin and scale retail's static
-/// model draws with, and the model's LOD table (`XModel::lod_dists`, empty
+/// model draws with, and the model's LOD table (`Model::lod_dists`, empty
 /// for a placement that draws nothing). docs/research/xmodel-v14-format.md,
 /// "LOD selection".
 #[derive(Clone, Debug, Default)]
@@ -143,7 +175,7 @@ pub fn placements(entities: &str) -> Vec<Placement> {
             .and_then(|s| bsp::parse_vec3(s))
             .map_or([uniform; 3], |v| v.map(scale_or_one));
         let precalc = e
-            .get("lightingPrecalc")
+            .get("lightingprecalc")
             .and_then(|s| bsp::parse_vec3(s))
             .map_or(Vec3::ONE, |c| {
                 Vec3::from_array(c).clamp(Vec3::ZERO, Vec3::ONE)
@@ -163,7 +195,7 @@ pub fn placements(entities: &str) -> Vec<Placement> {
 /// Scale, rotate, translate. Normals use the inverse-transpose (`R * S⁻¹`) so
 /// a non-uniform `modelscale_vec` doesn't skew them. The colour is filled in
 /// by `build` once the lighting is known.
-fn bake(p: &Placement, rot: Mat3, v: &xmodel::VmVert) -> DrawVert {
+fn bake(p: &Placement, rot: Mat3, v: &model::Vertex) -> DrawVert {
     let pos = rot * (p.scale * Vec3::from_array(v.pos)) + p.origin;
     let normal = rot * (Vec3::from_array(v.normal) / p.scale);
     DrawVert {
@@ -188,6 +220,8 @@ pub enum SkinGen {
     ConstLighting(Vec3),
     /// Anything else (`wave`): drawn with the precalc colour.
     Other,
+    /// The model's own vertex colours ([`SkinDraw::model_colour`]).
+    Model,
 }
 
 /// The first stage `rgbGen` in a shader body.
@@ -223,21 +257,36 @@ pub fn parse_skin_gen(text: &str) -> SkinGen {
     SkinGen::Other
 }
 
-fn skin_gen(fs: &Pk3Fs, skin: &str) -> SkinGen {
+fn skin_gen(fs: &dyn AssetSource, skin: &str) -> SkinGen {
     let Some(kind) = skin_type(skin) else {
         return SkinGen::Diffuse;
     };
-    match fs.read(&format!("shadertypes/model/{kind}.stype")) {
-        Some(text) => parse_skin_gen(&String::from_utf8_lossy(&text)),
-        None => SkinGen::Diffuse,
+    match fs.load::<RawFile>(&format!("shadertypes/model/{kind}.stype")) {
+        Ok(file) => parse_skin_gen(&file.text()),
+        Err(_) => SkinGen::Diffuse,
     }
 }
 
-/// A model that fails to load is warned once and its placements dropped.
-fn load_model(fs: &Pk3Fs, name: &str) -> Option<xmodel::XModel> {
-    xmodel::load(fs, name)
-        .map_err(|e| log::warn!("prop {name}: {e:#}, skipping its placements"))
-        .ok()
+/// Each distinct model of `names`, loaded on every core. A model that
+/// fails to load is warned once, in first-named order, and its placements
+/// dropped.
+fn load_models<'a>(
+    fs: &dyn AssetSource,
+    names: impl IntoIterator<Item = &'a str>,
+) -> HashMap<String, Option<model::Model>> {
+    let mut seen = std::collections::HashSet::new();
+    let distinct: Vec<&str> = names.into_iter().filter(|n| seen.insert(*n)).collect();
+    let loaded = crate::laps::par_map(&distinct, |name| model::load(fs, name));
+    distinct
+        .into_iter()
+        .zip(loaded)
+        .map(|(name, m)| {
+            let m = m
+                .map_err(|e| log::warn!("prop {name}: {e:#}, skipping its placements"))
+                .ok();
+            (name.to_string(), m)
+        })
+        .collect()
 }
 
 /// Bakes every placed prop into world geometry, one batch per skin,
@@ -245,8 +294,8 @@ fn load_model(fs: &Pk3Fs, name: &str) -> Option<xmodel::XModel> {
 /// which entity models go on to share.
 /// `skin_draw` says how each skin's shader deforms and reflects.
 pub fn build(
-    fs: &Pk3Fs,
-    bsp: &Bsp,
+    fs: &dyn AssetSource,
+    bsp: &MapWorld,
     lighting: &mut StaticLighting,
     skin_draw: &dyn Fn(&str) -> SkinDraw,
 ) -> Props {
@@ -292,7 +341,7 @@ pub fn skin_type(skin: &str) -> Option<String> {
 type GroupKey = (String, Option<u32>);
 
 fn build_with(
-    fs: &Pk3Fs,
+    fs: &dyn AssetSource,
     entities: &str,
     mut lighting: Option<&mut StaticLighting>,
     skin_draw: &dyn Fn(&str) -> SkinDraw,
@@ -304,8 +353,20 @@ fn build_with(
     // vertex is lit with: retail's, the scaled axis renormalised
     let mut surf_runs: Vec<(usize, usize, usize, SkinGen)> = Vec::new();
     let mut lit_normals: Vec<Vec3> = Vec::new();
-    let mut cache: HashMap<String, Option<xmodel::XModel>> = HashMap::new();
+    let cache = load_models(
+        fs,
+        placements
+            .iter()
+            .map(|p| p.model.as_str())
+            .filter(|m| !is_unregistered(m)),
+    );
     let mut verts: Vec<DrawVert> = Vec::new();
+    let mut vert_placement: Vec<u32> = Vec::new();
+    let mut vert_lit: Vec<bool> = Vec::new();
+    let mut vert_colour: Vec<[u8; 4]> = Vec::new();
+    let mut vert_ambient: Vec<bool> = Vec::new();
+    let mut vert_smodel: Vec<bool> = Vec::new();
+    let mut vert_tangent: Vec<[[f32; 3]; 2]> = Vec::new();
     let mut groups: BTreeMap<GroupKey, Vec<u32>> = BTreeMap::new();
     let mut drawn = 0usize;
 
@@ -328,16 +389,13 @@ fn build_with(
             lods.push(lod);
             continue;
         }
-        let model = cache
-            .entry(p.model.clone())
-            .or_insert_with(|| load_model(fs, &p.model));
-        let Some(model) = model else {
+        let Some(model) = &cache[&p.model] else {
             bounds.push((Vec3::ZERO, Vec3::ZERO));
             lods.push(lod);
             continue;
         };
         drawn += 1;
-        lod.dists = model.lod_dists.clone();
+        lod.dists = model.lod_dists();
         lods.push(lod);
         let rot = rotation(p.angles);
         let mut lo = Vec3::INFINITY;
@@ -345,29 +403,47 @@ fn build_with(
         // a placement's surfaces sharing a skin land consecutively in that
         // skin's group, so one (offset, count) per LOD and skin stays contiguous
         let mut this: HashMap<(u8, GroupKey), (u32, u32)> = HashMap::new();
-        let meshes = (0..model.lod_dists.len()).filter_map(|i| model.lod_mesh(i));
+        let meshes = model.lods.iter().map(|l| (&l.surfaces, &l.materials));
         for (li, (surfaces, materials)) in meshes.enumerate() {
             for surf in surfaces {
                 let Some(skin) = materials.get(surf.material) else {
                     continue;
                 };
                 let base = verts.len() as u32;
+                let draw = *draws.entry(skin.clone()).or_insert_with(|| skin_draw(skin));
+                if draw.skip {
+                    continue;
+                }
                 for v in &surf.verts {
-                    let dv = bake(p, rot, v);
+                    let mut dv = bake(p, rot, v);
+                    if draw.model_colour || draw.smodel {
+                        dv.color = v.color;
+                    }
+                    vert_colour.push(v.color);
+                    vert_ambient.push(draw.ambient);
+                    vert_smodel.push(draw.smodel);
+                    vert_tangent.push([
+                        (rot * Vec3::from_array(v.tangent)).to_array(),
+                        (rot * Vec3::from_array(v.binormal)).to_array(),
+                    ]);
                     if li == 0 {
                         lo = lo.min(Vec3::from(dv.pos));
                         hi = hi.max(Vec3::from(dv.pos));
                     }
                     verts.push(dv);
+                    vert_placement.push(pi as u32);
                     lit_normals
                         .push((rot * (p.scale * Vec3::from_array(v.normal))).normalize_or_zero());
                 }
-                let sg = *gens
-                    .entry(skin.clone())
-                    .or_insert_with(|| skin_gen(fs, skin));
+                let sg = match draw.model_colour || draw.smodel {
+                    true => SkinGen::Model,
+                    false => *gens
+                        .entry(skin.clone())
+                        .or_insert_with(|| skin_gen(fs, skin)),
+                };
+                vert_lit.resize(verts.len(), sg == SkinGen::Diffuse);
                 surf_runs.push((pi, base as usize, verts.len(), sg));
                 let mut idx: Vec<u32> = surf.indices.iter().map(|&i| base + i as u32).collect();
-                let draw = *draws.entry(skin.clone()).or_insert_with(|| skin_draw(skin));
                 match draw.sprite {
                     Some(Sprite::Auto) => {
                         idx = deform::encode_autosprite(&mut verts[base as usize..], base)
@@ -415,11 +491,17 @@ fn build_with(
         );
     }
     // Vertex alpha 255 marks a `lightingDiffuse` skin, which dynamic lights
-    // reach (`vs_prop` in the client's shader.wgsl); the other gens read 0.
+    // reach (`vs_prop` in the client's shader.wgsl); the other gens read 0,
+    // but a model's own colours keep the alpha they store, as a CoD2 lit
+    // model's do once the client lights it from the grid (its `_a`
+    // techniques output it; cod2-materials.md 9.2).
     let identity = static_light::identity_byte();
     for (pi, first, end, sg) in surf_runs {
         let p = &placements[pi];
         let precalc = static_light::precalc_byte;
+        if sg == SkinGen::Model {
+            continue;
+        }
         for (v, n) in verts[first..end].iter_mut().zip(&lit_normals[first..end]) {
             v.color = match sg {
                 SkinGen::Diffuse => match (&lighting, &model_lights[pi]) {
@@ -428,7 +510,7 @@ fn build_with(
                 },
                 SkinGen::IdentityLighting => [identity, identity, identity, 0],
                 SkinGen::ConstLighting(c) => [precalc(c.x), precalc(c.y), precalc(c.z), 0],
-                SkinGen::Precalc | SkinGen::Other => [
+                SkinGen::Precalc | SkinGen::Other | SkinGen::Model => [
                     precalc(p.precalc.x),
                     precalc(p.precalc.y),
                     precalc(p.precalc.z),
@@ -479,6 +561,12 @@ fn build_with(
     );
     Props {
         verts,
+        vert_placement,
+        vert_lit,
+        vert_colour,
+        vert_ambient,
+        vert_smodel,
+        vert_tangent,
         indices,
         batches,
         ranges,
@@ -491,7 +579,7 @@ fn build_with(
 /// `bake` places render vertices, each with its surface's `contents` and
 /// flags for the trace mask and the sound material. A surface with contents
 /// 0 (a tree canopy, a hanging sign) can match no mask and is left out.
-pub fn placed_collision_tris(p: &Placement, model: &xmodel::XModel, out: &mut Vec<ModelTri>) {
+pub fn placed_collision_tris(p: &Placement, model: &model::Model, out: &mut Vec<ModelTri>) {
     let rot = rotation(p.angles);
     let place = |v: Vec3| rot * (p.scale * v) + p.origin;
     for surf in &model.collision {
@@ -508,16 +596,15 @@ pub fn placed_collision_tris(p: &Placement, model: &xmodel::XModel, out: &mut Ve
 
 /// Every collision triangle of every placed prop, for
 /// `CollisionWorld::build`. Models load once each.
-pub fn collision_tris(fs: &Pk3Fs, entities: &str) -> Vec<ModelTri> {
+pub fn collision_tris(fs: &dyn AssetSource, entities: &str) -> Vec<ModelTri> {
     let placements = placements(entities);
-    let mut cache: HashMap<String, Option<xmodel::XModel>> = HashMap::new();
+    let cache = load_models(fs, placements.iter().map(|p| p.model.as_str()));
     let mut out = Vec::new();
     let mut collidable = 0usize;
     for p in &placements {
-        let model = cache
-            .entry(p.model.clone())
-            .or_insert_with(|| load_model(fs, &p.model));
-        let Some(model) = model else { continue };
+        let Some(model) = &cache[&p.model] else {
+            continue;
+        };
         let before = out.len();
         placed_collision_tris(p, model, &mut out);
         collidable += (out.len() > before) as usize;
@@ -537,14 +624,14 @@ pub fn collision_tris(fs: &Pk3Fs, entities: &str) -> Vec<ModelTri> {
 /// links the model (0x80594c4) only when the OR of its surfaces' contents,
 /// masked `& 0xdfff7ffb`, is non-zero. INFERRED: the stored bounds are read
 /// unbaked, in the bone's space, which is model space for a rigid prop.
-pub fn area_bounds(fs: &Pk3Fs, entities: &str) -> Vec<(Vec3, Vec3)> {
-    let mut cache: HashMap<String, Option<xmodel::XModel>> = HashMap::new();
+pub fn area_bounds(fs: &dyn AssetSource, entities: &str) -> Vec<(Vec3, Vec3)> {
+    let placements = placements(entities);
+    let cache = load_models(fs, placements.iter().map(|p| p.model.as_str()));
     let mut out = Vec::new();
-    for p in placements(entities) {
-        let model = cache
-            .entry(p.model.clone())
-            .or_insert_with(|| load_model(fs, &p.model));
-        let Some(model) = model else { continue };
+    for p in &placements {
+        let Some(model) = &cache[&p.model] else {
+            continue;
+        };
         let contents = model.collision.iter().fold(0, |c, s| c | s.contents) & 0xdfff_7ffb;
         if model.collision.is_empty() || contents == 0 {
             continue;
@@ -602,20 +689,16 @@ mod tests {
     #[test]
     fn placed_collision_keeps_contents_and_transforms_them() {
         let tri = [Vec3::ZERO, Vec3::X, Vec3::Y];
-        let model = xmodel::XModel {
-            lod: "t0".into(),
-            surfaces: vec![],
-            materials: vec![],
-            bones: vec![],
+        let model = model::Model {
             collision: vec![
-                xmodel::CollSurf {
+                model::CollSurf {
                     contents: crate::collision::CONTENTS_SOLID,
                     flags: 21 << 20,
                     tris: vec![tri],
                     bounds: (Vec3::ZERO, Vec3::ONE),
                     bone: 0,
                 },
-                xmodel::CollSurf {
+                model::CollSurf {
                     contents: 0,
                     flags: 0,
                     tris: vec![tri],
@@ -623,8 +706,7 @@ mod tests {
                     bone: 0,
                 },
             ],
-            lod_dists: vec![0.0],
-            coarse: Vec::new(),
+            ..model::Model::rig("t0", vec![])
         };
         let p = Placement {
             model: "t".into(),
@@ -795,12 +877,15 @@ mod tests {
             scale: Vec3::new(2.0, 2.0, 4.0),
             precalc: Vec3::ONE,
         };
-        let v = xmodel::VmVert {
+        let v = model::Vertex {
             pos: [1.0, 0.0, 1.0],
             normal: [1.0, 0.0, 0.0],
             uv: [0.25, 0.75],
             bone_indices: [0; 4],
             bone_weights: [1.0, 0.0, 0.0, 0.0],
+            color: [255; 4],
+            tangent: [0.0; 3],
+            binormal: [0.0; 3],
         };
         let out = bake(&p, rotation(p.angles), &v);
         // scale (2,0,4), yaw 90 -> (0,2,4), translate -> (100,2,12)
@@ -852,13 +937,13 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let shrub = xmodel::load(&fs, "fullspikeyshrub").unwrap();
-        assert!(!shrub.surfaces.is_empty());
-        assert!(shrub.surfaces.iter().all(|s| !s.verts.is_empty()));
-        assert_eq!(shrub.materials.len(), shrub.surfaces.len());
+        let shrub = model::load(&fs, "fullspikeyshrub").unwrap();
+        assert!(!shrub.surfaces().is_empty());
+        assert!(shrub.surfaces().iter().all(|s| !s.verts.is_empty()));
+        assert_eq!(shrub.materials().len(), shrub.surfaces().len());
 
         // prop materials are skin filenames under skins/, not textures/ paths
-        for skin in &shrub.materials {
+        for skin in shrub.materials() {
             assert!(skin.contains('.'), "expected a filename, got {skin}");
             assert!(
                 !is_default_image(&load_skin_image(&fs, skin)),
@@ -919,6 +1004,7 @@ mod tests {
         let skin_draw = |skin: &str| SkinDraw {
             sprite: None,
             reflects: skin.starts_with("metal_env@"),
+            ..SkinDraw::default()
         };
         let props = build_with(&fs, &ents, None, &skin_draw);
         let body: Vec<&Batch> = props

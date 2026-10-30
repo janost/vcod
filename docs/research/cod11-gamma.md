@@ -156,7 +156,7 @@ colours are raw bytes, so products, blends, fog and the clamp at 1.0 all
 happen in byte space as in retail's GL 1.x framebuffer. `gamma.wgsl` then
 maps every frame onto the swapchain through retail's 256-entry table
 (`gamma::ramp(r_gamma, overbrightBits)`), indexed by the framebuffer byte,
-and linearises the result for the sRGB swapchain. So the display doubling
+and linearises the result where the swapchain is sRGB. So the display doubling
 happens once, at the end, as retail's hardware ramp does it:
 
 - `overbrightBits` 1 (full screen with device gamma,
@@ -164,6 +164,15 @@ happens once, at the end, as retail's hardware ramp does it:
   bytes 128..255 show as distinct shades, as in retail.
 - `overbrightBits` 0 (windowed, or `r_ignorehwgamma 1`): the unshifted
   ramp; the framebuffer byte is the display byte.
+
+That last case at `r_gamma` 1 makes the table the identity, and the pass
+a copy. A frame that runs the post pass then draws it and the 2D straight
+into the swapchain and skips the gamma pass, when the swapchain is
+`Rgba8Unorm` (the window asks for it where the surface lists it) and
+opaque, and nothing that frame samples or copies the gamma scene (a
+shellshock's capture; without the post pass the glow, blur, bloom and
+shafts work in it). The bytes are the same either way
+(cod4-client-perf.md 30).
 
 `identityLight` (`gamma::identity_light`, 0.5 or 1) follows the same bits
 every frame and rides the camera uniform (`time_pad.y`), so the lighting
@@ -206,7 +215,9 @@ in retail. HUD images reload when the table changes.
 
 Divergences:
 
-- 4x MSAA resolves to the 8-bit target; retail ran without it.
+- `r_aaSamples` above 1 (4x MSAA) resolves to the 8-bit target; retail ran
+  without it, and the default is retail's single sample
+  (`cod11-client-perf.md` 4).
 - vcod's implicit vertex-lit world surfaces multiply the raw vertex colour
   in both modes. INFERRED: retail does the same, since `0x4d9af0` is called
   only for lightmap pages (section 3); the BSP vertex-colour load is not
@@ -382,8 +393,8 @@ bilinear samples placed by the weights; clamping two neighbouring taps
 keeps them neighbours or folds them onto one texel, so the trick holds at
 the edges too.
 
-Cost, VERIFIED by vcod measurement 2026-10-12 (release, 1600x900, 4x MSAA, Radeon
-Vega iGPU, machine loaded by other builds, so medians of alternating
+Cost, VERIFIED by vcod measurement 2026-10-12 (release, 1600x900, 4x MSAA, an
+integrated GPU, machine loaded by other builds, so medians of alternating
 120-frame windows): mp_carentan indoors +0.5..0.9 ms on a 1.7..2.4 ms
 frame, its street +0.6 ms on 3.9 ms, mp_ship +0.3 ms on 4.5 ms. With
 `vc_bicubic 0` the frame is within noise of a build without the code
@@ -421,7 +432,7 @@ scene behind:
   layers).
 
 Cost, VERIFIED by vcod measurement 2026-10-12 (release, 1280x765 window in a nested
-kwin, 4x MSAA, Radeon Vega iGPU, machine loaded by other agents' builds):
+kwin, 4x MSAA, an integrated GPU, machine loaded by other builds):
 the copy pass alone reads 0.26..0.37 ms on GPU timestamps. Whole-scene GPU
 time on a view filled with `fx/smoke/cratersmoke.efx` (about 70 large
 cards) ran 4.7..13.0 ms off (median 8.1 over five runs) and 9.8..11.7 ms on
@@ -504,7 +515,7 @@ the frame's aspect kept. `vc_grain` (live, 0..2) adds monochrome noise of
 up to 6% x strength, strongest in the mid-tones, reseeded 24 times a second.
 
 Cost, vcod measurement 2026-10-12 (release, nested compositor at about
-1280 x 765, 4x MSAA, Radeon Vega iGPU, load average 11 to 33 from sibling
+1280 x 765, 4x MSAA, an integrated GPU, load average 11 to 33 from sibling
 builds, vsync off, mean frame time of 300-frame windows): `vc_hdr 0` held
 6.8 ms at its steadiest, `vc_hdr 1` 7.6 ms in the same run, about +0.8 ms
 from the doubled MSAA colour bandwidth and the post pass. The grade alone

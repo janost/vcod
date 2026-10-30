@@ -15,14 +15,19 @@ use vcod_common::net::master::{COD1_MASTER, Master, RateLimiter};
 
 /// `HEARTBEAT_MSEC` (`add eax,0x2bf20` at 0x808ba3d).
 pub const HEARTBEAT_MS: i32 = 180_000;
-/// `sv_master1`'s default until the protocol's ([`Protocol::master`],
+/// CoD2's status interval: `SV_MasterHeartbeat` (cod2_lnxded 0x8096ed6)
+/// sends `SVC_Status` to the master each 600000 ms. VERIFIED.
+pub const STATUS_MS: i32 = 600_000;
+/// `sv_master1`'s default until the protocol's ([`Transport::master`],
 /// `Server::set_protocol`); `sv_master2..5` default empty. Retail's is
 /// `codmaster.activision.com` on `PORT_MASTER` 20510 (`push 0x501e` at
 /// 0x808baff).
 ///
-/// [`Protocol::master`]: vcod_common::net::protocol::Protocol::master
+/// [`Transport::master`]: vcod_common::net::wire::Transport::master
 pub const DEFAULT_MASTER: Master = COD1_MASTER;
 pub const HEARTBEAT_GAME: &str = "COD-1";
+/// CoD2's `SV_MasterHeartbeat("COD-2")` (cod2_lnxded 0x8096ed6).
+pub const HEARTBEAT_GAME_COD2: &str = "COD-2";
 pub const FLATLINE: &str = "flatline";
 pub const MAX_MASTERS: usize = 5;
 
@@ -37,6 +42,10 @@ pub struct Masters {
     /// resolves into its table alone.
     status_addrs: [Option<SocketAddr>; MAX_MASTERS],
     next_ms: i32,
+    /// CoD2's status timer (`DAT_084230d8`), and the masters a due status
+    /// still owes because the one-a-second limit held it back.
+    status_next_ms: i32,
+    status_owed: [bool; MAX_MASTERS],
     /// The port every master gets, the protocol's: retail's
     /// `strstr(":", name)` has its arguments swapped, so a port in the cvar
     /// is parsed and then overwritten.
@@ -58,6 +67,8 @@ impl Default for Masters {
             addrs: [None; MAX_MASTERS],
             status_addrs: [None; MAX_MASTERS],
             next_ms: 0,
+            status_next_ms: 0,
+            status_owed: [false; MAX_MASTERS],
             port: DEFAULT_MASTER.port,
             limit: RateLimiter::default(),
         }
@@ -65,7 +76,20 @@ impl Default for Masters {
 }
 
 impl Masters {
-    /// Every master's port, the protocol's; each resolves again.
+    /// The masters a server with only `master` in `sv_master1` heartbeats.
+    pub fn new(master: Master) -> Masters {
+        let mut m = Masters::default();
+        m.set_master(master);
+        m
+    }
+
+    /// The protocol's master: `sv_master1`'s host and every master's port.
+    pub fn set_master(&mut self, master: Master) {
+        self.set(0, master.host);
+        self.set_port(master.port);
+    }
+
+    /// Every master's port; each resolves again.
     pub fn set_port(&mut self, port: u16) {
         if self.port != port {
             self.port = port;
@@ -153,6 +177,40 @@ impl Masters {
             {
                 log::info!("Sending heartbeat to {}", self.names[i]);
                 out.push((a, build_oob(&format!("heartbeat {text}\n"))));
+            }
+        }
+        out
+    }
+
+    /// CoD2's second arm of `SV_MasterHeartbeat` (0x8096ed6): with
+    /// `dedicated` 2, each [`STATUS_MS`] a `statusResponse` to every
+    /// master the heartbeat resolved. Run after [`Self::heartbeat`] in the
+    /// same frame, as retail's order is; where the heartbeat took the
+    /// master's one packet that second, the status waits for the next
+    /// second instead of going out with it (retail sends both at once).
+    pub fn status(&mut self, dedicated: i32, now_ms: i32) -> Vec<SocketAddr> {
+        if dedicated != 2 {
+            return Vec::new();
+        }
+        if now_ms >= self.status_next_ms {
+            self.status_next_ms = now_ms.saturating_add(STATUS_MS);
+            self.status_owed = [true; MAX_MASTERS];
+        }
+        let mut out = Vec::new();
+        for i in 0..MAX_MASTERS {
+            if !self.status_owed[i] {
+                continue;
+            }
+            match self.addrs[i] {
+                Some(a) if !self.names[i].is_empty() => {
+                    if self.limit.allow(a.ip(), now_ms.max(0) as u64) {
+                        log::info!("Sending status to {}", self.names[i]);
+                        out.push(a);
+                        self.status_owed[i] = false;
+                    }
+                }
+                // `SV_MasterAddress` reads `NA_BAD`: nothing goes.
+                _ => self.status_owed[i] = false,
             }
         }
         out
@@ -297,9 +355,8 @@ mod tests {
     }
 
     #[test]
-    fn the_protocols_port_reaches_every_master() {
-        let mut m = Masters::default();
-        m.set_port(vcod_common::net::master::UO_MASTER.port);
+    fn the_protocols_master_sets_every_port() {
+        let mut m = Masters::new(vcod_common::net::master::UO_MASTER);
         m.set(1, "127.0.0.2");
         let mut r = |n: &str| {
             Some(SocketAddr::new(

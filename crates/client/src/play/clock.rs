@@ -43,6 +43,15 @@ pub struct DemoClock {
 
 #[derive(Default)]
 pub struct ServerClock {
+    /// CoD2's `CL_AdjustTimeDelta` (Mac 0x17b544) instead of 1.1's
+    /// ([`Self::cod2`]).
+    cod2: bool,
+    /// CoD4 1.7 ([`Self::cod4`]): CoD2's adjust, but a reset aims at the
+    /// newest snapshot less 5 ms.
+    cod4: bool,
+    /// CoD2: the snapshot time `cl.snap` held before the newest
+    /// (`cl` +0x2700, stored by `CL_ParseSnapshot`, Mac 0x1d5cb2).
+    prev_snap: Option<i32>,
     /// The snapshot message number seen last frame, to tell a new one.
     last_snap: Option<u32>,
     /// `cl.serverTimeDelta`; `None` until the first snapshot.
@@ -60,6 +69,41 @@ pub struct ServerClock {
 }
 
 impl ServerClock {
+    /// A clock under CoD2's rules: its delta aims one snapshot behind the
+    /// newest and slews either way (docs/research/cod2-protocol.md 18.1).
+    pub fn cod2() -> Self {
+        ServerClock {
+            cod2: true,
+            ..Default::default()
+        }
+    }
+
+    /// A clock under CoD4 1.7's rules (`CL_AdjustTimeDelta`, iw3mp.exe
+    /// 0x45c0e0): CoD2's, except that a reset puts the delta at the newest
+    /// snapshot's time less 5 ms (docs/research/cod4-client-view.md 1).
+    /// Run it through [`Self::update_cod2`].
+    pub fn cod4() -> Self {
+        ServerClock {
+            cod2: true,
+            cod4: true,
+            ..Default::default()
+        }
+    }
+
+    /// CoD2's `CL_SetCGameTime` (Mac 0x17ba76) for one frame: [`Self::update`]
+    /// with no `cl_timeNudge` (CoD2 registers none) and `prev`, the
+    /// snapshot time before the newest, for the adjust.
+    pub fn update_cod2(
+        &mut self,
+        realtime: i32,
+        snap: i32,
+        prev: Option<i32>,
+        snap_num: u32,
+    ) -> i32 {
+        self.prev_snap = prev;
+        self.update(realtime, snap, snap_num, 0)
+    }
+
     /// `CL_SetCGameTime` for one frame: `realtime` is local ms, `snap` the
     /// newest snapshot's serverTime, `new_snapshot` whether one arrived since
     /// the last frame, `nudge` `cl_timeNudge`. Returns the frame's time.
@@ -148,6 +192,9 @@ impl ServerClock {
 
     /// `CL_AdjustTimeDelta` (CoDMP.exe 0x404bf0).
     fn adjust_delta(&mut self, realtime: i32, snap: i32) {
+        if self.cod2 {
+            return self.adjust_delta_cod2(realtime, snap);
+        }
         let Some(delta) = self.delta else { return };
         let new_delta = snap - realtime;
         let off = (new_delta - delta).abs();
@@ -166,6 +213,56 @@ impl ServerClock {
         } else {
             self.stats.ahead += 1;
             delta + 1
+        };
+        self.delta = Some(delta);
+    }
+
+    /// CoD2's `CL_AdjustTimeDelta` (Mac 0x17b544): the target is the
+    /// previous snapshot's time less 5 ms, and a delta short of it by less
+    /// than one snapshot interval only slews. A reset or a fast adjust
+    /// measures the shortfall past that interval (all of it once the
+    /// interval passes 500 ms). The slew is -2 after an extrapolated frame,
+    /// else one ms toward the target (`com_timescale` 1).
+    fn adjust_delta_cod2(&mut self, realtime: i32, snap: i32) {
+        let Some(delta) = self.delta else { return };
+        let prev = self.prev_snap.unwrap_or(snap);
+        let interval = snap - prev;
+        let new_delta = prev - realtime - 5;
+        let short = new_delta - delta;
+        let off = if short < 1 {
+            Some(-short)
+        } else if interval > 500 {
+            Some(short)
+        } else if short - interval >= 0 {
+            Some(short - interval)
+        } else {
+            None
+        };
+        let delta = match off {
+            Some(off) if off > RESET_TIME => {
+                self.stats.resets += 1;
+                self.server_time = snap;
+                self.old_server_time = snap;
+                if self.cod4 {
+                    snap - realtime - 5
+                } else {
+                    new_delta
+                }
+            }
+            Some(off) if off > FAST_ADJUST => {
+                self.stats.fast += 1;
+                (delta + new_delta) >> 1
+            }
+            _ if self.extrapolated => {
+                self.extrapolated = false;
+                self.stats.back += 1;
+                delta - 2
+            }
+            _ => {
+                self.stats.ahead += u32::from(delta < new_delta);
+                self.stats.back += u32::from(delta > new_delta);
+                delta + (new_delta - delta).signum()
+            }
         };
         self.delta = Some(delta);
     }
@@ -381,5 +478,98 @@ mod tests {
             timedemo_frames: Some(2),
         };
         assert_eq!(c.update_demo(1002, 50_100, 0, frozen), 50_100);
+    }
+
+    /// CoD2's adjust (Mac 0x17b544) arm by arm: the target is the previous
+    /// snapshot less 5, a shortfall inside one interval slews by one either
+    /// way, past it the excess is what the reset and the fast adjust read.
+    #[test]
+    fn cod2_aims_one_snapshot_behind() {
+        let mut c = ServerClock::cod2();
+        c.update_cod2(0, 10_000, None, 1);
+        assert_eq!(c.delta(), Some(10_000));
+        c.extrapolated = false;
+        // Next at 10_050 arrives at 50: target 10_000 - 50 - 5 = 9_945,
+        // the delta 55 ahead of it: slewed back one.
+        c.update_cod2(50, 10_050, Some(10_000), 2);
+        assert_eq!(c.delta(), Some(10_000 - 2), "extrapolated frame: -2");
+        // Drawn at 10_098, inside 5 of the newest: extrapolated, -2 again.
+        c.update_cod2(100, 10_100, Some(10_050), 3);
+        assert_eq!(c.delta(), Some(10_000 - 4));
+        // Drawn well short of it: one toward the target.
+        c.update_cod2(120, 10_150, Some(10_100), 4);
+        assert_eq!(c.delta(), Some(10_000 - 5));
+        // Next at 10_200 (prev 10_150) at 300: target 9_845. 40 short of
+        // it, inside the 50 ms interval: +1.
+        c.delta = Some(9_845 - 40);
+        c.extrapolated = false;
+        c.update_cod2(300, 10_200, Some(10_150), 5);
+        assert_eq!(c.delta(), Some(9_845 - 39));
+        // 200 short: 150 past the interval, fast.
+        c.delta = Some(9_845 - 200);
+        c.update_cod2(300, 10_200, Some(10_150), 6);
+        assert_eq!(c.delta(), Some((9_845 - 200 + 9_845) >> 1));
+        assert_eq!(c.stats.fast, 1);
+        // 600 ahead: reset to the target, the time held at the snapshot.
+        c.delta = Some(9_845 + 600);
+        assert_eq!(c.update_cod2(300, 10_200, Some(10_150), 7), 10_200);
+        assert_eq!(c.delta(), Some(9_845));
+        assert_eq!(c.stats.resets, 1);
+    }
+
+    /// 20 Hz snapshots over a 30 ms jitter, 5 % loss, 125 fps: the CoD2
+    /// clock never steps back and draws short of the newest snapshot on
+    /// nearly every frame, nearer one interval behind it than 1.1's.
+    #[test]
+    fn cod2_settles_a_snapshot_behind_under_jitter() {
+        let mut c = ServerClock::cod2();
+        let mut rng = 999u64;
+        let mut rand = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng % 1000) as f64 / 1000.0
+        };
+        let mut arrivals = Vec::new();
+        for i in 0..1200 {
+            if rand() < 0.05 {
+                continue;
+            }
+            let at = (1000 + i * 50) as f64 + 50.0 + (rand() - 0.5) * 30.0;
+            arrivals.push((at as i32, 10_000 + i * 50));
+        }
+        let (mut next, mut snap, mut prev, mut num) = (0, None, None, 0);
+        let mut last = None;
+        let mut behind = Vec::new();
+        for realtime in (1000..61_000).step_by(8) {
+            while next < arrivals.len() && arrivals[next].0 <= realtime {
+                // In order (the netchan drops a stale one).
+                if snap.is_none_or(|s| arrivals[next].1 > s) {
+                    prev = snap;
+                    snap = Some(arrivals[next].1);
+                    num += 1;
+                }
+                next += 1;
+            }
+            let Some(s) = snap else { continue };
+            let t = c.update_cod2(realtime, s, prev, num);
+            if let Some(l) = last {
+                assert!(t >= l, "ran back");
+            }
+            last = Some(t);
+            if realtime > 11_000 {
+                behind.push(s - t);
+            }
+        }
+        assert_eq!(c.stats.resets, 0);
+        let past = behind.iter().filter(|&&b| b <= 0).count();
+        let mean = behind.iter().sum::<i32>() as f64 / behind.len() as f64;
+        eprintln!(
+            "past {past} of {}, mean lag {mean:.1}, {:?}",
+            behind.len(),
+            c.stats
+        );
+        assert!(past * 20 < behind.len(), "past the newest on {past} frames");
+        assert!((20.0..80.0).contains(&mean), "mean lag {mean}");
     }
 }

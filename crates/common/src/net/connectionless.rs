@@ -45,7 +45,7 @@ pub fn parse_connect(packet: &[u8]) -> anyhow::Result<String> {
         .position(|&b| b == b'"' || b == 0)
         .unwrap_or(s.len());
     anyhow::ensure!(end > 0, "empty userinfo");
-    Ok(s[..end].iter().map(|&b| b as char).collect())
+    Ok(crate::text::latin1(&s[..end]))
 }
 
 /// `MAX_INFO_STRING`: what `Info_SetValueForKey` lets an info string grow to.
@@ -261,8 +261,8 @@ mod tests {
     #[test]
     fn info_pairs_walk_like_cl_system_info_changed() {
         assert_eq!(
-            info_pairs(r"\sv_cheats\0\rate\5000\fs_game\genesis"),
-            [("sv_cheats", "0"), ("rate", "5000"), ("fs_game", "genesis")]
+            info_pairs(r"\sv_cheats\0\rate\5000\fs_game\mymod"),
+            [("sv_cheats", "0"), ("rate", "5000"), ("fs_game", "mymod")]
         );
         // No leading `\`, an empty value, and a last key with no value.
         assert_eq!(info_pairs(r"a\\b\2\c"), [("a", ""), ("b", "2"), ("c", "")]);

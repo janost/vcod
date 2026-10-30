@@ -183,7 +183,7 @@ sites in `CoDMP.exe`.
 
 `entityState_t` offsets are the netfield offsets. The client-side table in
 `CoDMP.exe` @ `0x005419d0` (59 entries) is identical in order, offset and bit
-width to the one `crates/common/src/net/fields_v1.rs` was generated from, so
+width to the one `crates/common/src/net/cod1/fields_v1.rs` was generated from, so
 vcod's decoded field names apply directly. The ones that matter here:
 
 | Offset | Field | Bits |
@@ -337,7 +337,7 @@ units apart, both printing every 173 to 176 they drained:
   and `eventParm` 111 or 112 in the swinger's snapshot beside the `EV_MELEE_HIT`,
   and a 176 with `clientNum` 1 in the victim's.
 
-VERIFIED live (2026-08-24, 51.195.89.86:28960, 100s capture during active
+VERIFIED live (2026-08-24, a public TDM server, 100s capture during active
 combat, taken by a free-flying spectator): 175/176 never arrived while 173
 with `surfType == 7` appeared 38 times. A free spectator's `ps.clientNum` is
 its own, so this matches the delivery rule above; it does not show that the
@@ -480,7 +480,7 @@ The client half is `CG_AddCEntity` case 10 (the `eType` switch in cgame 0x3001d5
   with nothing drawn; otherwise the time advances by the period, at least
   once and until no more than a period is left (0x3001cf50..0x3001cf68).
   When `cg.time` is not past it, it is set to `cg.time`. INFERRED, off a
-  grep of `cgmp11.asm` for `+0x21c]`: nothing else in cgame writes that
+  grep of the module's disassembly for `+0x21c]`: nothing else in cgame writes that
   slot, so the timer outlives the entity and starts from 0 for a slot
   never used. INFERRED, off the loop's `jg` at 0x3001cf68: a zero period
   never leaves it, so retail's client hangs. vcod plays the effect every
@@ -870,7 +870,7 @@ directly.
 780..843 as effects (`syscall 0xde`, stored at `0x301d1ccc + cs*4`, which is
 `0x301d28fc + id*4` for `id = cs - 780`). `EV_PLAY_FX*` and `ET_FX` index that
 array with `1..63`, i.e. the `.efx` path is `configstring(780 + id)`.
-`crates/common/src/net/protocol.rs` documents the same base. Models are
+`crates/common/src/net/cod1/mod.rs` documents the same base. Models are
 268..523, shellshock 1100..1115, in the same function.
 
 ### 5d. Ejecting brass: `CG_EjectBrass` (`0x30038a30`)
@@ -1108,7 +1108,7 @@ vcod already knows its own client number from the connect handshake, so:
 - `(ps.pm_flags & 0x020000) != 0` -> following a specific client rather than
   free-flying.
 
-The netfield table in `crates/common/src/net/fields_v1.rs` gives `pm_flags`
+The netfield table in `crates/common/src/net/cod1/fields_v1.rs` gives `pm_flags`
 19 bits, so all three flags survive the delta encoding.
 
 ---

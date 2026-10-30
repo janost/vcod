@@ -1,6 +1,7 @@
 //! Stock-pak census for the script parser. Needs `COD_DIR`; skips silently
 //! otherwise, the same gate every game-data test in this workspace uses.
 
+use vcod_common::asset_source::{AssetSource, RawFile};
 use vcod_common::pk3::Pk3Fs;
 
 /// A `Pk3Fs` over symlinks to only the stock `pak<N>.pk3` archives, so a
@@ -219,12 +220,12 @@ fn the_corpus_builtin_surface_is_stable() {
 /// references, the rollback on a failed load, and the pre-scan are only
 /// ever exercised against small hand-written fixtures in `load.rs`'s own
 /// tests. This is `Loader` against real content instead.
-struct StockSource(std::rc::Rc<Pk3Fs>);
+struct StockSource(std::rc::Rc<dyn AssetSource>);
 
 impl vcod_gsc::ScriptSource for StockSource {
     fn read(&self, canonical: &str) -> Option<String> {
-        let bytes = self.0.read(&format!("{canonical}.gsc"))?;
-        Some(String::from_utf8_lossy(&bytes).into_owned())
+        let raw = self.0.load::<RawFile>(&format!("{canonical}.gsc")).ok()?;
+        Some(raw.text().into_owned())
     }
 }
 
@@ -325,8 +326,11 @@ fn every_uo_script_compiles() {
         "no UO gametypes mounted"
     );
     for name in &names {
-        let src =
-            String::from_utf8_lossy(&fs.read(name).expect("a listed script reads")).into_owned();
+        let src = fs
+            .load::<RawFile>(name)
+            .expect("a listed script reads")
+            .text()
+            .into_owned();
         let ast = match vcod_gsc::parse::parse_file(&src) {
             Ok(a) => a,
             Err(e) => {

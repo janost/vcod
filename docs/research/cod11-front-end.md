@@ -258,7 +258,7 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   `\xff\xff\xff\xffgetservers 1 full empty`. INFERRED from the format and the
   argument loop; the live master answers exactly that request (below).
 - Live, 2026-10-08: `getservers 1 full empty` to `codmaster.activision.com`
-  (`185.34.107.179:20510`) came back in one 378-byte packet:
+  port 20510 came back in one 378-byte packet:
   `\xff\xff\xff\xffgetserversResponse\n\0`, then 50 entries of `\`, four
   address bytes and a big-endian port, then `\EOF`. VERIFIED by capture.
 - `CL_ServersResponsePacket` (`0x4107b0`) is called from the connectionless
@@ -481,7 +481,7 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   `UDP_OpenSocket: setsockopt SO_BROADCAST` warning string). VERIFIED for
   the string.
 - Live, 2026-10-09, in a network namespace whose only interface is a dummy
-  (this host's firewall drops a broadcast's local copy): one
+  (a host firewall can drop a broadcast's local copy): one
   `getinfo xxx` broadcast to `255.255.255.255:29661` and `:29662` was
   answered by the retail 1.1d server and by vcod-server, each with its usual
   `infoResponse`; the retail one, started with `g_password secret`, sent
@@ -657,7 +657,7 @@ nine-column list in 1.1's six, shifted a column right (issue #3).
   (`net::master::master_send_allowed`); a list that comes in several
   packets is read whole, not asked again. A listed server whose
   `infoResponse` names another protocol is dropped. Live, 2026-10-22:
-  `getservers 1` listed 49 servers in one packet, `6` 51, UO's `22` 134
+  `getservers 1` listed 49 servers in one packet, `6` 50, UO's `22` 131
   in two (the first ending `\EOT`, the last `\EOF`). VERIFIED capture.
 - Text is placed as RTCW's `Item_SetTextExtents` does: baseline at
   `rect.y + textaligny`, x at `textalignx` moved left by the width (right
@@ -1616,15 +1616,14 @@ them as a spectator for 10-25 s each.
   `mp/playeranim.script`), a weapon menu (`zzz_nexus_weaponmenu_v2`: one
   script menu, `nexus_weapons`), zombies, jump and gungame maps. VERIFIED
   (systeminfos and the downloaded paks).
-- Two of the 13 put `fs_game` in the systeminfo (`genesis` on
-  199.247.2.228:28960, `BO7MEDX-MOD` on 63.176.159.145:28960) and name
+- Two of the 13 put `fs_game` in the systeminfo and name
   their paks `<fs_game>/<pak>`; the second ships a replacement front end
   (`ui_mp/main.menu`, `joinserver.menu` and twelve more). VERIFIED.
 - Every one of the 13 systeminfos carries `cl_allowDownload`: 0 on six
-  (the three Katalyst servers joined on 107.191.99.123, `genesis`, an iw1x
+  (three servers of one host, the first `fs_game` server above, an iw1x
   jump server, a pure LAN-party server), 1 on the rest. A server with it 0
   answered vcod's `download` with `EXE_AUTODL_SERVERDISABLED<pak>` and
-  dropped it. VERIFIED (live, 107.191.99.123:28961).
+  dropped it. VERIFIED (live).
 - Two set `sv_wwwBaseURL` (HTTP downloads for patched clients); the stock
   1.1 client has no HTTP download and fetches over UDP. VERIFIED (no
   `sv_wwwBaseURL` string in `CoDMP.exe`).
@@ -1636,9 +1635,9 @@ them as a spectator for 10-25 s each.
 - Two CoDaM servers had `ET_ITEM` entities with `index` 68, the
   `item_health` row of `bg_itemlist` (`cod11-items.md`), which stock maps
   never place: mod health drops. vcod draws rows 65-69 with their world
-  models. VERIFIED (snapshots, 199.247.2.228:28960, 167.235.192.175:23120).
-- 141.95.34.204:28960 answered `connect` with two OOB `print`s
-  (`^5https://codservers.net`) and sent `connectResponse` 4 s after the
+  models. VERIFIED (snapshots, two public servers).
+- One server answered `connect` with two OOB `print`s
+  (an advertising URL) and sent `connectResponse` 4 s after the
   challenge. VERIFIED (live).
 
 ### The systeminfo sets client cvars
