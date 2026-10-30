@@ -1,9 +1,8 @@
 # CoD4 1.7 map x gametype sweep
 
 Every claim here is VERIFIED by the sweep itself (vcod-server and the
-in-process client on this repo's code, lavapipe, 2026-10-26 and
-2026-10-27) unless it
-carries its own label.
+in-process client on this repo's code, lavapipe) unless it carries its
+own label.
 
 ## The tool
 
@@ -27,14 +26,10 @@ under a local wrapper script: a map peaks near 3 GB and takes 5 to 8 minutes.
 
 ## Run of 2026-10-27
 
-All 21 maps, 126 pairs, one map a process under `heavy.sh`, with
-`VCOD_SWEEP_LEVEL_SECS=180`. It followed the CoD4 call-scoped `endon`,
-the frame-rounded waits, ragdolls, the portal-only cell walk and static
-model LODs, client-side rounds, the damage overlay and kicks, and the
-HUD menus. The other eleven maps ran first, on the tip with the HUD
-menus and voice chat merged; the first ten were rerun on the later tip
-with the script model damage (`entity_damage.rs`) merged. mp_creek and
-mp_killhouse ran after fix 8 below.
+All 21 maps, 126 pairs, one map a process under a local wrapper, with
+`VCOD_SWEEP_LEVEL_SECS=180`. The first ten maps ran on a tree with the
+script model damage (`entity_damage.rs`); mp_creek and mp_killhouse ran
+after fix 8 below.
 
 | map | gametype | load | end | rotate | client spawn | script errors | stall % | client warn | server warn | panic |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -176,16 +171,15 @@ with no script error and no panic. Against the 2026-10-26 run:
 - No new script error. The call-scoped `endon` (cod4-gsc.md 4.2) let
   no thread run on into an error, and ended none that a level's end or
   rotation waits on.
-- The 12 script errors of that run's first table (mp_bloc `sab`,
-  mp_bog `sd`, mp_carentan `sab`, fixes 4 and 5's) are gone.
-- The client warnings it counted on many pairs (the root-grafted
-  `prop_suitcase_bomb` and stowed RPGs, fixes 6 and 7) are gone. The one
-  left is mp_crash_snow `war`'s missing alias (Left 3).
-- With 180 s a level, the three `sab` pairs that were forced on
-  (mp_creek, mp_overgrown, mp_shipment) end and rotate on their own.
-- On the first ten maps the 05c95b34 tip (before the HUD menus) gave
-  the same row on every pair but the stall share, which moves from run
-  to run (mp_broadcast `koth` 4.8 there, 0.0 here).
+- The 12 script errors of the earlier run (mp_bloc `sab`, mp_bog `sd`,
+  mp_carentan `sab`; fixes 4 and 5) are gone.
+- Its client warnings (the root-grafted `prop_suitcase_bomb` and stowed
+  RPGs, fixes 6 and 7) are gone. The one left is mp_crash_snow `war`'s
+  missing alias (Left 3).
+- At 180 s a level, the three `sab` pairs it forced on (mp_creek,
+  mp_overgrown, mp_shipment) end and rotate on their own.
+- The stall share moves from run to run (mp_broadcast `koth` 4.8 on an
+  earlier tree, 0.0 here); every other column matched.
 
 ## Findings and fixes, by count
 
@@ -195,7 +189,7 @@ Fixes 1 to 7 came out of the 2026-10-26 run, 8 to 10 out of the 2026-10-27 one.
    more reflection probes than wgpu's default 256 array layers hold,
    so the probe cube array, and every entity bind group with it, was
    invalid. Fixed: the devices ask for the adapter's layer limit, and a
-   probe past it is left out (cod4-world.md 9.7). The live client used
+   probe past it is left out (cod4-world.md 9.7). The live client had
    the same default limit.
 2. A client panic (`attempt to add with overflow`, `trajectory.rs`) on
    mp_backlot `sab`, which ended that map's sweep: a destroyed car's
@@ -212,16 +206,14 @@ Fixes 1 to 7 came out of the 2026-10-26 run, 8 to 10 out of the 2026-10-27 one.
    inflictor, and `weaponClass` of no weapon is `"none"`
    (cod4-combat.md 10.10).
 
-5. The world's classname: 1.7's
-   `SP_worldspawn` writes `worldspawn` (cod4-gsc.md 3.5), and vcod's
-   world now carries it, so a blast with no attacker no longer fails
-   `Callback_PlayerKilled:4787`.
+5. The world's classname: 1.7's `SP_worldspawn` writes `worldspawn`
+   (cod4-gsc.md 3.5). vcod's world carries it, so a blast with no
+   attacker does not fail `Callback_PlayerKilled:4787`.
 6. `prop_suitcase_bomb` and `weapon_rpg*_stow` grafted by their root
    (15 pairs of the first run): the roster indexed a new tag after the
    frame's configstring flush, so the client saw `attachTagIndex` a
-   snapshot ahead of its string. The roster's writes now flush before
-   the messages (cod4-player-anims.md 5). The second run's mp_crash_snow
-   (on the old binary) still showed both; the later maps did not.
+   snapshot ahead of its string. Fixed: the roster's writes flush before
+   the messages (cod4-player-anims.md 5).
 7. One stowed RPG still grafted by its root on mp_shipment `dom` after
    fix 6: vcod indexed tags only for a playing or dead client (CoD1's
    rule), where 1.7's `ClientEndFrame` indexes every client's
@@ -232,8 +224,8 @@ Fixes 1 to 7 came out of the 2026-10-26 run, 8 to 10 out of the 2026-10-27 one.
    invalid"), on every gametype after the first. With every static model
    LOD baked (the static model LOD work) their world vertex buffers are
    393 MB and 303 MB, past wgpu's default 256 MB `max_buffer_size`. The
-   window's device had been given the adapter's limit; the headless one
-   the sweep and `pipeline_check` build had not. Both now take one
+   window's device had the adapter's limit; the headless one the sweep
+   and `pipeline_check` build did not. Fixed: both take one
    `renderer::device_limits`. Gate:
    `renderer::pipeline_check::headless_device_has_the_window_limits`.
    The live client was never affected.
@@ -244,12 +236,12 @@ Fixes 1 to 7 came out of the 2026-10-26 run, 8 to 10 out of the 2026-10-27 one.
    outside the yard: the graph's largest component is the
    out-of-bounds grounds a ladder's ends flood, and the stand came from
    it, so bots stood pressed against the yard's south wall at y -617.
-   Stands now come from the floor the spawns flood. On mp_crash the
+   Fixed: stands come from the floor the spawns flood. On mp_crash the
    bots ran at a mantle edge's end node, which a body run at is never
-   offered the climb; they now run at the landing the graph's climb
+   offered the climb. Fixed: they run at the landing the graph's climb
    reached. INFERRED (`bot_match` traces). A sweep of mp_crash,
-   mp_shipment and mp_strike on the fix (2026-10-27, one process, three
-   jobs) read 0.0 % on every pair but mp_crash `sab` 0.7, mp_shipment
+   mp_shipment and mp_strike on the fix (one process, three jobs) read
+   0.0 % on every pair but mp_crash `sab` 0.7, mp_shipment
    `dom` 0.7 and mp_strike `sab` 0.4. VERIFIED (the sweep). One sweep's
    share moves from run to run: a sweep of mp_shipment alone on the
    tree before the fix read `sab` 0.0 and `dom` 3.3 (VERIFIED, the
@@ -257,7 +249,7 @@ Fixes 1 to 7 came out of the 2026-10-26 run, 8 to 10 out of the 2026-10-27 one.
 10. The sweep filed a level's load-time lines under the level before:
    the server logs while the console's `map_rotate` loads the next
    level, before the sweep sees the new level and marks its pair. The
-   mp_strike `sd` spawn in solid was `sab`'s. The marker now goes in
+   mp_strike `sd` spawn in solid was `sab`'s. Fixed: the marker goes in
    ahead of the frame's lines. VERIFIED (the re-sweep files it under
    `sab`).
 
@@ -310,8 +302,8 @@ the graph lands.
 
 ### Run of 2026-10-27
 
-All 21 maps x 5 gametypes, 105 pairs, about 25 minutes a map, on
-613b00de (fix 1 below in). Totals: 522 spawns, 445 deaths, 951 frags,
+All 21 maps x 5 gametypes, 105 pairs, about 25 minutes a map, with fix 1
+below in. Totals: 522 spawns, 445 deaths, 951 frags,
 559 board opens, 268 Esc menus, 1014 paths with 19371 waypoints reached,
 880890 frames. The sweep's columns came out clean on every pair: loaded,
 ended, rotated on its own, client spawned, no script error, no panic.
@@ -337,7 +329,7 @@ expression error and no problem debug line in any of the 105 pairs.
    feedback's `update`) walked the whole list. The run before the fix
    (the first five maps) showed the resident set growing 100 to 250 MB a
    level after the first (mp_backlot 3332 -> 3562, mp_bog 3147 -> 3890
-   over four levels). A live session now sheds down to the newest 1200
+   over four levels). Fixed: a live session sheds down to the newest 1200
    (one minute at 20 snapshots a second) once it holds 2400
    (`Client::shed`, `KEEP_SNAPSHOTS`). A capture or a demo keeps all of
    its snapshots. After the fix, a level after the first moves the
@@ -355,8 +347,8 @@ expression error and no problem debug line in any of the 105 pairs.
    252 ms, `exp_spark` 72 ms, `dirtchunks` 75 ms, `fire_patch_ember_add`
    77 ms, `ak47_flares` 45 ms, and the marks `gfx_impact_metal_painted01`
    168 ms, `gfx_impact_black01` 167 ms, `gfx_crater_blacktop` 123 ms on
-   lavapipe. When the client hands the level's effects to the fx system
-   it now builds every `Decal` element's mark material unlit
+   lavapipe. Fixed: when the client hands the level's effects to the fx
+   system it builds every `Decal` element's mark material unlit
    (`Renderer::prewarm_marks`) and loads every other element's images
    and the tracer's (`Renderer::prewarm_fx`). A surface's first mark then
    builds only its lightmap's bind groups (0.1 ms). After the fix the same
@@ -369,7 +361,7 @@ expression error and no problem debug line in any of the 105 pairs.
    pose of every player model) on mp_cargoship. It comes once a map, as
    the level first draws. Retail spends that time behind its loading
    screen (INFERRED). Fixed: the HUD zones, the effects and every entity
-   model now build with the load (`Cod4Client::prewarm`); the `net` part
+   model build with the load (`Cod4Client::prewarm`); the `net` part
    was the HUD's zones, not the gamestate (cod4-client-perf.md 17).
 4. Three single ticks of 101 to 125 ms (mp_citystreets war and sd,
    mp_shipment war), with the client and lavapipe on the same eight
@@ -377,7 +369,7 @@ expression error and no problem debug line in any of the 105 pairs.
    every server in its process for 18 to 66 ms on the address space's
    lock while lavapipe compiles, and a dedicated server alone, nav builds
    included, ran no tick past 27 ms (cod4-server-frame.md 9). The table
-   now counts the stalls on a CPU apart.
+   counts the stalls on a CPU apart.
 
 The renders themselves (lavapipe's `submit` and `acquire`, 100 to 500 ms
 when the view takes in the whole map) are not counted as stalls; they
