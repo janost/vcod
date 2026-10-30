@@ -1,6 +1,7 @@
 # Call of Duty: United Offensive 1.51
 
-United Offensive patch 1.51, protocol 22. It runs on the CoD1 code path
+United Offensive patch 1.51, protocol 22: CoD1 with tanks, jeeps, sprint
+and a flamethrower, and vcod does all four. It runs on the CoD1 code path
 with 1.5's movement and wire as its base, so everything in
 [cod1.md](cod1.md) applies unless this page says otherwise. The other
 games and what they all share are in [../features.md](../features.md).
@@ -115,7 +116,7 @@ Vehicles ([coduo-vehicles.md](../research/coduo-vehicles.md) 10-14):
 - Hulls posed per bone stop rounds, grenades, shells and blasts. A jeep
   takes bullets and a struck vehicle takes a shell's whole damage. One
   driven into another shoves it; one wedged seven seconds destroys
-  itself, and the wreck respawns.
+  itself (retail's rule, not mine), and the wreck respawns.
 - A vehicle's death puts its riders out: each takes the 5-point probe hit
   through his damage callback, a survivor looks for a dismount spot, and
   the corpses slide out of the hull.
@@ -163,11 +164,12 @@ Everything under [cod1.md](cod1.md#missing-compared-to-retail) applies:
 no listen server, no PunkBuster, no screenshots, the UI DLL ignored, no
 authorize server, rcon's subset.
 
-- Audio has had little checking by ear.
+- Audio has had little checking by ear, tank engines included.
 
 ## Beyond retail
 
 The renderer extras, widescreen, F3 overlay, `--vanilla` and the asphalt
 footsteps from [cod1.md](cod1.md#beyond-retail) all apply. Also:
 
-- Bots, vehicle crews included. Retail has none.
+- Bots, vehicle crews included. Retail has none. They wedge a tank into a
+  wall now and then, which is period-accurate.

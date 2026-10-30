@@ -3,7 +3,8 @@
 vcod plays and hosts Call of Duty 4: Modern Warfare multiplayer, patch 1.7
 only (the wire's protocol 6, told apart from CoD1 1.5's by the game). It
 needs a CoD4 install: `zone/<language>/*.ff` fastfiles beside `main/` and
-its iwds. Point `COD4_DIR` or `--game-dir` at it. The game is detected
+its iwds. Put the binaries in it, or point `--game-dir` or `COD_DIR` at
+it (`COD4_DIR` is only for tests and tools). The game is detected
 from `zone/` or `iw3mp.exe`; `--game cod4` forces it. How to run each
 mode is in [usage.md](../usage.md).
 
@@ -390,12 +391,14 @@ Ranked by how much a player notices. The research-side lists are
    1.7 client and hands it to CoD4x's own update backend. vcod refuses
    them at the challenge and hides them in the browser unless
    `ui_browserShowCoD4x` is 1 ([cod4-handshake.md](../research/cod4-handshake.md)
-   13). vcod joins stock 1.7 servers only.
+   13). vcod joins stock 1.7 servers only, which are rarer than they
+   should be.
 2. **Ranks and unlocks start fresh.** vcod keeps its own stats file per
    profile (`vcod_mpdata`) and never reads retail's `mpdata`. The main
    menu reads a fresh profile's stats, so Create a Class is greyed and
    Rank & Challenges shows nothing earned
-   ([cod4-front-end.md](../research/cod4-front-end.md) 4).
+   ([cod4-front-end.md](../research/cod4-front-end.md) 4). Your retail
+   rank is safe, and no use here.
 3. **Physics debris stays put.** A `physicsLaunch`ed part (a car's door
    or hood) keeps the spot it stood on: the client runs no rigid-body
    physics for `TR_PHYSICS`. Ragdolls use vcod's position-based solver,
@@ -417,7 +420,8 @@ Ranked by how much a player notices. The research-side lists are
    nor vcod's in `iw3mp.exe`. The `RECORDING` line draws at CoD2's place
    ([cod4-demos.md](../research/cod4-demos.md) 7).
 9. **Small menus.** The CD key menus are missing; Single Player's Yes
-   does nothing; the `winvoice_*` voice settings are not read.
+   does nothing (this is a multiplayer client); the `winvoice_*` voice
+   settings are not read.
 10. **Server-side differences.** vcod-server never asks the authorize
     server, so it answers an off-LAN challenge at once where 1.7 waits on
     the authorize server (cod4-handshake.md 15). The helicopter's flight
@@ -434,8 +438,8 @@ Pending human checks: pixel and by-ear comparisons with retail.
   4:3 view, with the HUD unstretched: compass, score and weapon info at
   the window's edges, centred pieces in the middle
   ([cod4-front-end.md](../research/cod4-front-end.md) 10).
-- Esc on the connect screen calls the join off; 1.7's Esc does nothing
-  there.
+- Esc on the connect screen calls the join off. 1.7's Esc does nothing
+  there, which never made sense.
 - The browser's Internet list comes from `master.cod.pm`.
 - `r_vc_depthprepass` (default 1): a depth-only pass first, which also
   writes the feathered effects' `floatZ`, so the frame needs no depth

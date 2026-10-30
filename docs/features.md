@@ -1,8 +1,8 @@
 # What vcod does, and what it doesn't
 
-vcod is one client (`vcod`) and one dedicated server (`vcod-server`) for
-four Call of Duty multiplayer games. Each game has its own page: what
-works, what is missing against retail, and what vcod adds.
+One client (`vcod`), one dedicated server (`vcod-server`), four Call of
+Duty multiplayer games. Each game has its own page: what works, what's
+still missing against retail, and what vcod adds that retail never had.
 
 | Game | Patch | Protocol | Client | Server | Bots | Page |
 |---|---|---|---|---|---|---|
@@ -68,19 +68,20 @@ works, what is missing against retail, and what vcod adds.
   (`--ban-file`), `g_log`, pings, rate and `snaps` pacing, zombies,
   downloads and `getinfo` / `getstatus` as each retail server does them.
 - `dedicated` defaults to 1 (no heartbeat); `--set dedicated=2` opts in.
-- No stdin console, no authorize server, no anti-cheat.
+- No stdin console, no authorize server, no anti-cheat. Host for people
+  you'd lend your car to.
 
 ### Bots
 
 `vcod-server --bots N [--bots-shoot]` and rcon's `addbot`, `removebot`
 and `listbots` work in all four games. One driver runs them over a nav
 graph built from each game's own pmove; they join through the stock
-menus, play the objectives and fight. Retail has no bots
-([bots.md](bots.md)).
+menus, play the objectives and fight. Retail has no bots, so there's no
+oracle to blame for these ([bots.md](bots.md)).
 
 ### Measuring against retail
 
-Retail's servers are the oracle. A headless probe client
+Retail's servers are the oracle, and they win every argument. A headless probe client
 (`vcod --net-probe`) records what a retail server sends, the captures are
 committed as fixtures, and the A/B tests replay their inputs on
 vcod-server and diff the result. `.gsc` probes run on retail and on vcod's

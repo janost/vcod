@@ -1,8 +1,8 @@
 # Call of Duty 1.1 and 1.5
 
 Call of Duty (2003) multiplayer, patch 1.1 (protocol 1) and patch 1.5
-(protocol 6). Both run off one code path. Where 1.5 differs, the line says
-so. United Offensive has its own page: [uo.md](uo.md). The other games and
+(protocol 6). This is where vcod started; CoD2 and CoD4 came later. Both
+patches run off one code path, and where 1.5 differs, the line says so. United Offensive has its own page: [uo.md](uo.md). The other games and
 what they all share are in [../features.md](../features.md).
 
 ## What works
@@ -355,7 +355,8 @@ Client:
   dropped and three-unit stages give way to the scripts' two-unit ones,
   as on retail cards without them. mp_ship's deckflag has no file behind
   it, so a stand-in draws.
-- Audio has had little checking by ear.
+- Audio has had little checking by ear. If something sounds wrong, it
+  probably is: [report it](../../README.md#reporting-bugs).
 
 Server:
 
@@ -379,7 +380,8 @@ Server:
 - `gameCompleteStatus` reaches only the masters the server resolved
   itself, as retail's does.
 - The heartbeat to `master.cod.pm` has not been tried against the live
-  master; tests heartbeat a loopback fake.
+  master; tests heartbeat a loopback fake. If you try it, tell me how it
+  went.
 - No anti-cheat.
 
 ## Beyond retail
@@ -414,7 +416,7 @@ Server:
   pixels, faster on some GPUs, slower on lavapipe.
 - Asphalt footsteps play. Retail's engine asks for `asphalt` and the sound
   table spells it `asphault`, so retail's are silent. vcod uses the
-  table's spelling.
+  table's spelling, typo and all.
 - Wall occlusion on sounds.
 - Visibility draws a little more than retail on purpose. Retail assumes
   nobody looks over a cell's walls, and the mp_ship decks disagree.
@@ -424,7 +426,7 @@ Server:
   retail and drifts its riders about 0.02 units a frame. vcod's comes back
   to zero. I'm calling that a bug in retail.
 - vcod-server serves only the paks it lists. Retail serves any file under
-  its directories, `..` included.
+  its directories, `..` included. I'm not copying that one.
 - Bots (above). Retail has none.
 - The F3 overlay: frame, draw, vis, shader, fog, audio, camera, clock,
   prediction, net and snapshot counters ([usage.md](../usage.md)).
@@ -436,11 +438,13 @@ Server:
 - No mantling, no swimming. Retail 1.1 MP has neither
   ([cod11-mantle.md](../research/cod11-mantle.md)).
 - No grenade cooking on 1.1 or 1.5. The fuse runs in full from the
-  release. United Offensive has one, and vcod does it there.
+  release. United Offensive has one, and vcod does it there. If you
+  remember cooking frags in 1.1, you remember UO.
 - No doppler. The engine never gives a sound a velocity.
 - Quick chat (`vsay`) does nothing on a stock install: its `.voice`
   tables only ship in mods.
-- Show Compass and Team Overlay do nothing, as in retail.
+- Show Compass and Team Overlay do nothing, as in retail. Faithfully
+  reproduced.
 
 ## Debug and developer modes
 
