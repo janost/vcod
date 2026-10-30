@@ -302,7 +302,7 @@ spots held), GPU ms, mean:
 
 | build | gpu.sunshadow | gpu.total |
 |---|---|---|
-| before (C4-93) | 39.4, 44.0 (two runs) | 109.9, 122.9 |
+| before | 39.4, 44.0 (two runs) | 109.9, 122.9 |
 | after | 5.8, 6.8 | 74.6, 83.0 |
 
 - `gpu.sunshadow` times the atlas passes only; a cache redraw runs
@@ -330,7 +330,7 @@ static model caster triangles inside the partitions fall from 70k to
 toward retail's (far models' shadows from their coarse LODs). With the
 caches of section 10 a held view redraws nothing either way, so the
 gain shows on the frames a moving view redraws them. dm on mp_crash
-following a bot (30 s, two runs each, before = C4-95): `gpu.sunshadow`
+following a bot (30 s, two runs each, before = the tree before the change): `gpu.sunshadow`
 25.0, 31.1 -> 32.6, 36.2 ms and `gpu.total` 281, 311 -> 352, 369 ms,
 but `gpu.scene`, which this does not touch, moved as much (250, 276 ->
 314, 327) with other views (60-64k against 72-77k world triangles a
@@ -384,7 +384,7 @@ passes' depths are the same bits.
   vertex and binning work for the opaque set and saves little shading.
   INFERRED.
   A real card's early-Z and its shading cost are what the dvar is for.
-- Real GPU (the 2026-10-27 playtest): `SESSION=1 tools/cod4_perf.sh
+- Real GPU (a 2026-10-27 run): `SESSION=1 tools/cod4_perf.sh
   /tmp/perf mp_crossfire 60` at 1920x1080 with `--exec-in-game "set
   r_vc_depthprepass 0"` and then `1`, one run each, sun shadows on in
   both. VERIFIED (real-card runs, ours):
@@ -399,7 +399,7 @@ passes' depths are the same bits.
   then. On the playtest's eye the frames looked the same and the frame
   rate felt the same.
 
-## 13. The world fx: feathered beams and distortion glass (C4-98)
+## 13. The world fx: feathered beams and distortion glass
 
 A visible `zfeather` world or static model stage, or the world's
 distortion glass, now splits the frame for its copies
@@ -424,7 +424,7 @@ with its dvar on and off. GPU ms, mean:
   the scene copy); the frame total sits inside the noise.
 - A real card is not measured here.
 
-## 14. The feather's cost again, without bots (C4-102)
+## 14. The feather's cost again, without bots
 
 Section 13 read about 15 ms for `r_zFeather` at mp_crash's lens flare,
 with 4 bots moving through the view. The same spot with no bots
@@ -451,7 +451,7 @@ dropped), two release builds of one tip, runs interleaved. Mean
 - Nothing is cut: there is no cost to find at this spot on lavapipe.
   A real card is not measured.
 
-## 15. Close to a car again, at 1920 x 1080 (C4-106)
+## 15. Close to a car again, at 1920 x 1080
 
 The playtest of section 8 again (a real card, 1920 x 1080: 100+ fps,
 about 20 by the damaged sedan's window with `r_distortion` 0 and Soften
@@ -570,7 +570,7 @@ Pending, on a real card: `SESSION=1 tools/cod4_perf.sh <out> mp_crossfire 30`
 before and after (12 bots); expect `net` and `events` to halve and
 `bodies`' p50 to fall by about a fifth.
 
-## 17. The first frame after the join (C4-110)
+## 17. The first frame after the join
 
 The soak (cod4-map-sweep.md, "The soak", item 3) found one 600 to
 1300 ms frame on the first draw after every join. `tools/cod4_soak.sh`'s
@@ -596,7 +596,7 @@ What each was, mp_crossfire:
   `MsgWriter` asks for and never uses (`parse::UNUSED_HUFF`, 30 to
   42 ms; `clmsg` held a second copy of it).
 - `events`, 90 ms: the level's effects taken and their sprites and mark
-  materials prewarmed (section 4's C4-104 prewarm), on the first frame.
+  materials prewarmed (section 4's prewarm), on the first frame.
 - `bodies` and `pose`, 430 to 570 ms: each entity model's first upload
   (`Renderer::upload_dynamic_model`: the skins' images decoded and
   mipped, the vertex buffers): 3 to 280 ms a model, a body or a head the
@@ -634,7 +634,7 @@ Pending, on a real card: join any CoD4 map through the browser;
 the connect screen stays up about a second longer and the first frame
 in game should not hitch.
 
-## 18. A shot car's first damaged draw (C4-113)
+## 18. A shot car's first damaged draw
 
 Cause: `Cod4Client::handle` built each hidden-part state as a new
 model. It cloned the xmodel less the surfaces whose `XSurface.partBits`
@@ -646,7 +646,7 @@ materials. Section 17's prewarm uploads only the whole model, and
 mp_crash's sedans start with the setup's ten later-state tags hidden
 (`[0x242a, 0x92480000, 0, 0]`, `retail_sedans_draw_with_their_hidden_parts`),
 so even an intact car's first draw uploaded in play. The same path
-hides C4-106's glass pairs (section 15): one function serves both.
+hides section 15's glass pairs: one function serves both.
 
 Fix: a hidden-part state is a view of the prewarmed upload.
 `Renderer::dynamic_model_hiding` makes a new handle whose LOD 0
@@ -675,7 +675,7 @@ drew:
 
 Before the fix the gate fails, with six states uploaded in play
 (three sedan colours' setup states and the shot car's three). Here the
-per-state cost is small, I think because section 17's prewarm had
+per-state cost is small, probably because section 17's prewarm had
 already decoded the skins' images (`model_images`). Section 17's 16 to
 208 ms were measured before that prewarm existed. Each state still
 rebuilt its buffers, textures and materials.
@@ -717,7 +717,7 @@ ours):
 
 ### What does: a feathered effect keeps the entities out
 
-Section 20 (C4-114) since keeps a CoD4 frame's entities in the prepass under a feather; what follows is the state before it, and `feathered` now counts CoD2 frames only.
+Section 20 since keeps a CoD4 frame's entities in the prepass under a feather; what follows is the state before it, and `feathered` now counts CoD2 frames only.
 
 With `r_zFeather` 1 the entities stay out of the prepass on any frame
 a feathered effect draws (section 12, `ent_prepass`): the feather's
@@ -791,7 +791,7 @@ sv_cheats=1"` and `--exec-in-game "setviewpos 5232 -888 180 225 0"`):
 0 against 1, reading `gpu.opaque`, fps and the `feathered` column.
 Pending.
 
-## 20. Soft smoke by the intact sedan, and `sv_cheats` on the client (C4-114)
+## 20. Soft smoke by the intact sedan, and `sv_cheats` on the client
 
 The playtest (real card, 1920 x 1080, `setviewpos -279 1396 233 -15 28`
 by mp_crash's intact red sedan): 15.5 fps by default, 30 with Soften
@@ -856,7 +856,7 @@ or fire on the intact car (VERIFIED, a screenshot).
   runs it through `Shell::apply_systeminfo`, as `CL_SystemInfoChanged`
   (iw3mp.exe 0x473ab0) does: `sv_cheats` 0 puts every cheat dvar back,
   then every key is force-set. A demo sets none. INFERRED (CoD1's
-  `CL_SystemInfoChanged`; I did not re-read 1.7's at that address).
+  `CL_SystemInfoChanged`; 1.7's at that address was not re-read).
   `play::cod4::cod4_live_cheat_dvars_follow_the_servers_sv_cheats` joins
   vcod-server started with `sv_cheats 1`, sets `fx_draw 0` and `r_glow 0`,
   sends `sv_cheats 0` to the server's console (the two go back to 1 and
@@ -1084,13 +1084,13 @@ No renderer change, so section 21's census stands: 1104 draws (887
 world) at the held view and 305 (171 world) at the median one, with
 `draw_joins` on. Its 887 world calls against this table's 818 batches
 are the live frame's draw list (fx stages, moved brush models) against
-the cull walk alone; I did not chase the difference. INFERRED.
+the cull walk alone; the difference was not chased. INFERRED.
 
 On a real card: nothing new to measure from this item. Section 21's
 real-card list still holds; if its item 3 shows `gpu.opaque` waiting on
 calls, this section's tile join is the next one.
 
-## 23. The resident set level by level, and the player rigs (C4-118)
+## 23. The resident set level by level, and the player rigs
 
 CoD2's client built one rig per (character, held weapon) pair and each
 baked its own body and head (`cod2-client-perf.md` 5.3). `Cod4Players`
@@ -1764,7 +1764,7 @@ t11 four shaders).
   The prepass's EQUAL pipelines split the same way.
 - The load collects every key its binds ask for and compiles them at
   `Cod2Builder::finish_keeping`, eight at a time on their own threads,
-  before the first frame (the C4-110 and C2-MR prewarm's shape). Each
+  before the first frame (the shape of section 17's prewarm and CoD2's). Each
   is kept in `LitShared` across loads.
 - `r_vc_normalMaps 0` takes the path without `M_NORMAL`; its pipelines
   are made on the first switch off (a sweep switch, not a gameplay one).
@@ -2662,7 +2662,7 @@ owed), carrying a point's velocity across a longer step and the damping
 per sixtieth of a second, a step capped at 100 ms (vcod's; a hitch loses
 time, as before). At 200 fps the count is the same as before; at
 lavapipe's 10-18 fps a third. The corpses' spin at rest and the head's
-twist (C4-121) are the solver's, at 4 ms frames and at 100 ms alike, not
+twist (cod4-player-anims.md 10.2) are the solver's, at 4 ms frames and at 100 ms alike, not
 the step rule's (cod4-player-anims.md 10.2).
 
 ### Numbers
