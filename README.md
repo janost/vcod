@@ -1,14 +1,20 @@
 # vcod
 
-Call of Duty (2003) multiplayer, rebuilt from scratch in Rust. A client and
-a dedicated server that read your copy's pk3s and speak the original wire
-protocol. Patch 1.1, patch 1.5 and United Offensive 1.51 all work, against
-vcod's own server or the retail ones. Nobody ever wrote that protocol down,
-so I dug it out of the binaries.
+Call of Duty multiplayer, rebuilt from scratch in Rust. A client and a
+dedicated server that read your copy's game files and speak each game's
+original wire protocol, against vcod's own server or the retail ones.
+Nobody ever wrote those protocols down, so I dug them out of the binaries.
 
-Call of Duty 2 (patch 1.3) and Call of Duty 4 (patch 1.7) run on the same
-client and server. Both are newer and less complete than CoD 1;
-[docs/features.md](docs/features.md) says what works.
+| Game | Patch | Protocol | Client | Server | Bots | Details |
+|---|---|---|---|---|---|---|
+| Call of Duty | 1.1, 1.5 | 1, 6 | Plays | Hosts | Yes | [cod1.md](docs/features/cod1.md) |
+| United Offensive | 1.51 | 22 | Plays, tanks and jeeps included | Hosts, tanks and jeeps included | Yes | [uo.md](docs/features/uo.md) |
+| Call of Duty 2 | 1.3 | 118 | Plays | Hosts | Yes | [cod2.md](docs/features/cod2.md) |
+| Call of Duty 4 | 1.7 | 6 | Plays on stock 1.7 servers (not CoD4x) | Hosts | Yes | [cod4.md](docs/features/cod4.md) |
+
+Each game's page says what works, what's still missing against retail,
+and what vcod adds. [docs/features.md](docs/features.md) covers what they
+share.
 
 [![mp_railyard on a public server, 3840x1600](docs/screenshots/ultrawide-mp_railyard-s.jpg)](docs/screenshots/ultrawide-mp_railyard.jpg)
 
@@ -16,104 +22,79 @@ client and server. Both are newer and less complete than CoD 1;
 
 [![Twelve bots fighting over one wall on mp_pavlov, 3840x1600](docs/screenshots/ultrawide-mp_pavlov-bots-s.jpg)](docs/screenshots/ultrawide-mp_pavlov-bots.jpg)
 
-All three run at 21:9 with the F3 overlay up. Click one for the full size.
+All three are CoD 1 at 21:9 with the F3 overlay up. Click one for the full
+size.
 
 ## Read this first: it plays, and it still has opinions
 
 You can play it. Start a server, join it, pick a team, shoot bots or
-friends, plant the bomb, drive a tank in United Offensive. Most evenings it
-feels like Call of Duty. Now and then it finds a bug the 2003 game never
-had, and occasionally one it had and I copied on purpose.
+friends, plant the bomb, drive a tank in United Offensive, call in an
+airstrike in CoD 4. Most evenings it feels like Call of Duty. Now and then
+it finds a bug the original never had, and occasionally one it had and I
+copied on purpose.
 
-- **Retail is the referee.** Movement, shots, grenades, collision, snapshots
-  and the handshake are replayed against captures from the real 1.1, 1.5
-  and UO servers, down to the float rounding of each build. When vcod and
-  retail disagree, retail wins and the bytes go into a research doc.
-- **It still has bugs.** Fewer than it used to, and different ones from
-  the 2003 game. Please [report them](#reporting-bugs).
-- **It's a hobby.** I work on it while poking at a 2003 engine is fun. No
+- **Retail is the referee.** Movement, shots, grenades, collision,
+  snapshots and the handshake are replayed against captures from the real
+  servers of all four games, down to the float rounding of each build.
+  When vcod and retail disagree, retail wins and the bytes go into a
+  research doc.
+- **It still has bugs.** Please [report them](#reporting-bugs).
+- **It's a hobby.** I work on it while poking at old engines is fun. No
   roadmap, no "1.0", no promises.
 - **It needs your copy of the game.** No assets ship here, and none will.
-- **Hosting is for friends, for now.** There's no anti-cheat, the rcon knows
-  a few dozen commands, and the bots are the only players it has been
-  tested against at length. A LAN or a few friends is fine. Your public
-  server's regulars deserve better.
+- **Hosting is for friends, for now.** There's no anti-cheat, rcon knows a
+  few dozen commands, and the bots are the only players it has been tested
+  against at length. A LAN or a few friends is fine. Your public server's
+  regulars deserve better.
 - **Linux is the only platform I run.** Windows and macOS builds exist and
   nobody has told me whether they work. Godspeed.
 
-## What works
+## What every game gets
 
-The short tour. The long one, gaps included, is
-[docs/features.md](docs/features.md).
-
-- **The client** opens on the stock main menu and server browser, built from
-  the game's own menu files. It joins 1.1, 1.5 and UO servers, downloads
-  missing paks, and plays: movement and prediction, every stock weapon with
-  its viewmodel, sights, recoil and scopes, the HUD, scoreboard, chat,
-  votes, quick messages, mounted MGs, and UO's sprint, bipods, cooked
-  grenades, tanks and jeeps.
-- **The server** hosts whichever patch its install is. It runs Activision's
-  own gametype scripts on vcod's own `.gsc` VM, so `dm`, `tdm`, `sd`, `re`,
-  `bel` and UO's `ctf`, `dom`, `hq` and `bas` play by the stock rules.
-  Bullets, grenades, rockets, vehicles, items, movers, the killcam, map
-  rotation and rcon all work. Retail clients can join it.
-- **Bots** (`--bots`) join through the menus, find their way around the
-  map, play the objectives and, with `--bots-shoot`, fight back. They're bad
-  at it. So am I. rcon's `addbot`, `removebot` and `vc_bot_minplayers`
-  manage them on a running server ([docs/bots.md](docs/bots.md)).
-- **Extras retail never had**, all off by default: soft sun shadows, SSAO,
-  bloom, HDR, sun shafts, soft particles and a film grade. `--rtx-on` turns
-  them all on for one run. Despite the name, no rays were harmed.
-- **Widescreen and ultrawide.** Retail keeps the same horizontal field of
-  view on any window, so a wider screen loses picture at the top and
-  bottom, and its HUD stays in a 4:3 box in the middle. vcod widens the
-  view instead (Hor+): 16:9 and 21:9 see more at the sides, and the
-  compass, kill feed and ammo counter move out to the window's edges.
-  `vc_widescreen 0` brings back retail's. Borderless and exclusive
-  fullscreen both work, and Alt+Enter flips between windowed and
-  fullscreen.
+- **The client** opens on the game's own main menu and server browser,
+  joins retail servers and vcod's, downloads missing files, and plays:
+  movement and prediction, the weapons, the HUD, scoreboard, chat, votes
+  and the server's script menus.
+- **The server** runs Activision's own gametype scripts on vcod's own
+  `.gsc` VM, so the stock modes play by the stock rules. Retail clients
+  can join it.
+- **Bots** (`--bots N --bots-shoot`) join through the menus, find their way
+  around the map, play the objectives and fight back. They're bad at it.
+  So am I. rcon's `addbot` and `removebot` manage them on a running server
+  ([docs/bots.md](docs/bots.md)).
+- **Widescreen and ultrawide** see more at the sides (Hor+) instead of
+  losing picture at the top and bottom: by default on CoD 1, UO and CoD 2,
+  with `vc_windowAspect 1` on CoD 4.
+- **Extras retail never had** on CoD 1 and UO, all off by default: soft sun
+  shadows, SSAO, bloom, HDR, sun shafts, soft particles and a film grade.
+  `--rtx-on` turns them all on for one run. Despite the name, no rays were
+  harmed.
 
 ## How to play
 
-1. **Own the game.** Call of Duty with patch 1.1 or 1.5, or United
-   Offensive 1.51.
+1. **Own the game**: CoD 1.1 or 1.5, United Offensive 1.51, CoD 2 1.3 or
+   CoD 4 1.7.
 2. **Get vcod.** Grab the archive for your OS from the
    [nightly release](https://github.com/janost/vcod/releases/tag/nightly)
-   (or [build it](#building-from-source)). Put `vcod` and `vcod-server`
-   next to `CoDMP.exe`. If you'd rather not, point `COD_DIR` or
-   `--game-dir` at the install.
-3. **Play against bots.** The quickest way to a fight:
+   (or [build it](#building-from-source)) and put `vcod` and `vcod-server`
+   in the game's directory. Each binary tells the games apart by the
+   install. Elsewhere, point `COD_DIR` or `--game-dir` at it.
+3. **Play against bots**:
 
-   ```
-   vcod-server mp_carentan --bots 6 --bots-shoot --gametype tdm
-   vcod --connect 127.0.0.1:28960
-   ```
+   | Game | Server |
+   |---|---|
+   | CoD 1 | `vcod-server mp_carentan --bots 6 --bots-shoot --gametype tdm` |
+   | UO | `vcod-server mp_cassino --mod-dir uo --bots 6 --bots-shoot --gametype tdm` |
+   | CoD 2 | `vcod-server mp_toujane --bots 6 --bots-shoot --gametype tdm` |
+   | CoD 4 | `vcod-server mp_crash --bots 6 --bots-shoot --gametype war` |
 
-   Pick a team, pick a weapon, go get shot.
-4. **Play with friends.** Run plain `vcod` and use Start New Server in the
-   main menu. Dedicated No starts a server and puts you in it. Friends on
-   your LAN find it under Local in the browser, anyone else connects by
-   address once you open UDP 28960. The server stops when you leave. Start New Server has no bots. Use the
-   command line above for those.
-5. **Join someone else's server.** The browser lists the Internet, the LAN
-   and your favourites, or use `vcod --connect <ip:port>`. PunkBuster
-   servers will refuse you, since vcod runs no PunkBuster. If vcod acts
-   weird on a public server, leave before the regulars notice.
+   Then `vcod --connect 127.0.0.1:28960` (add `--mod-dir uo` for UO). Pick
+   a team, pick a weapon, go get shot.
+4. **Play with friends or online.** Run plain `vcod` and use Start New
+   Server, or join from the browser. PunkBuster servers refuse vcod.
 
-**United Offensive** reads `uo/` over the `main/` beside it. Run both
-binaries from the UO install with `--mod-dir uo`, e.g.
-`vcod-server mp_cassino --mod-dir uo --bots 6 --bots-shoot` and
-`vcod --mod-dir uo --connect 127.0.0.1:28960`. A server on a 1.5 install
-speaks 1.5 on its own.
-
-Mods or downloaded maps acting up? `--vanilla` on either binary loads
-only the stock paks and ignores every other pk3
-([docs/usage.md](docs/usage.md)).
-
-Controls are the stock ones: WASD, Space to jump, C and Ctrl to crouch and
-go prone, Q and E to lean, right mouse for the sight, F to use, M for the
-team and weapon menu, `` ` `` for the console. UO adds Alt to sprint. Every
-key, flag and console command is in [docs/usage.md](docs/usage.md).
+Controls are each game's stock ones. Every key, flag, console command and
+recipe is in [docs/usage.md](docs/usage.md).
 
 ## Reporting bugs
 
@@ -126,22 +107,18 @@ screenshot, so I can see where you were standing.
 
 ## Known gaps
 
-The ones you'll hit first. The full list is in
-[docs/features.md](docs/features.md#what-it-doesnt-do).
+The ones you'll hit first, in every game. Each game's page lists the rest.
 
 - No listen server. Start New Server always runs a separate `vcod-server`.
-- No PunkBuster.
-- A mod's UI DLL is ignored. Its menu files work.
+- No PunkBuster, no anti-cheat.
 - Audio follows the engine on paper but has had little checking by ear.
-- Visibility draws a bit more than retail on purpose. Retail assumes nobody
-  looks over a cell's walls, and the mp_ship decks disagree.
+- CoD 4: most public servers run CoD4x, which no stock 1.7 client can
+  play on. vcod refuses them and hides them in the browser.
 
-And a few that look like gaps and aren't. Retail 1.1 has no mantling, no
-swimming and no grenade cooking, and its engine never gives a sound a
-velocity, so no doppler either. Asphalt footsteps are silent in retail
-because the engine asks for `asphalt` and the sound table spells it
-`asphault`. vcod uses the table's spelling, so you can hear asphalt.
-Twenty-three years late, Infinity Ward, you're welcome.
+And one that looks like a fix and is one. Asphalt footsteps are silent in
+CoD 1 retail because the engine asks for `asphalt` and the sound table
+spells it `asphault`. vcod uses the table's spelling, so you can hear
+asphalt. Twenty-three years late, Infinity Ward, you're welcome.
 
 ## Building from source
 
@@ -178,23 +155,26 @@ human squinting at a screen, which is where you come in.
 
 ## Documentation
 
-- [docs/features.md](docs/features.md): everything vcod does and doesn't.
+- [docs/features.md](docs/features.md): the supported games, what they
+  share, and a page per game on what works and what doesn't.
 - [docs/usage.md](docs/usage.md): command lines, server options, controls,
   the console, the menus.
 - [docs/bots.md](docs/bots.md): running bots, the rcon commands, the
   minimum player count, team balance and slots.
 - [docs/protocol-1.1.md](docs/protocol-1.1.md): the 1.1 wire protocol, both
   directions, with every divergence from RTCW/Q3 at the end.
-- [docs/research/](docs/research/): about forty documents on file formats,
+- [docs/research/](docs/research/): about eighty documents on file formats,
   movement, combat, vehicles, sound, scripts, bots and the rest. Every claim
   names the binary address it rests on and says whether it was verified or
   inferred. I'd call this the most useful part of the repo.
 - [AGENTS.md](AGENTS.md): the contributor guide. Layout, measuring against
   retail, and the traps I already paid for.
 
-The code is four crates. `vcod-common` holds formats, collision, movement
-and the protocol, with no GPU or audio. `vcod` is the client, `vcod-server`
-the server, and `vcod-gsc` the script VM, which depends on nothing else here.
+The code is six crates. `vcod-common` holds CoD 1's formats, collision,
+movement and protocol and what every game shares, with no GPU or audio.
+`vcod-cod2` and `vcod-cod4` hold CoD 2's and CoD 4's formats, wire and
+movement. `vcod` is the client, `vcod-server` the server, and `vcod-gsc`
+the script VM, which depends on nothing else here.
 
 ## Some numbers, for fun
 
@@ -213,7 +193,8 @@ Mostly to see whether it could be done. CoD 1 descends from id Tech 3, and
 the Quake III and RTCW sources are public, but CoD's wire protocol was never
 documented. Every field width, enum order and place Infinity Ward wandered
 off from RTCW had to come out of the binaries and be checked against the
-retail server. Also, watching a 2003 game come back to life in a window you
+retail server. CoD 2 and CoD 4 went the same way later, on the same
+client and server. Also, watching a 2003 game come back to life in a window you
 built yourself is a lot of fun.
 
 ### This is an AI-driven project
