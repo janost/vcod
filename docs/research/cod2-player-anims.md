@@ -31,10 +31,10 @@ second client running on `cod2_lnxded`).
   whatever its session, and `SV_SetConfigstring`'s `d` is queued ahead of the
   frame's snapshots. VERIFIED (the call at the function's head). vcod's
   `Cod2Level::end_frame` indexes them there
-  (`ScriptRuntime::client_attachments`). The snapshot build did it before:
-  the first snapshot naming a new tag (ctf's flag on `J_Spine4`) reached a
-  client whose table had no such string, and the client grafted
-  `flag_carry0`'s one root bone, whose name is empty in
+  (`ScriptRuntime::client_attachments`). Trap: indexing them in the
+  snapshot build sends the first snapshot naming a new tag (ctf's flag on
+  `J_Spine4`) to a client whose table lacks the string, and the client
+  grafts `flag_carry0`'s one root bone, whose name is empty in
   `xmodelparts/flag_carry0` (iw_13), as a new root for that frame.
   VERIFIED (the parts file: 0 children, 1 root, an empty name).
 - The capture's client 0 carries `modelindex` 72, `attachModelIndex[0]`
@@ -176,8 +176,7 @@ VERIFIED, `combat/hit-tags` (cod2-combat.md 9.3, "The knocked body").
 - `vcod_cod2::player` runs 1.1's `animtree`, `animclock` (1.5's windowed
   setter), `playerpose` and `skeleton` over CoD2's files.
   `playerpose::BodyAngles::step_by(Updater::Cod2(..))` and
-  `Controllers::cod2` hold sections 5 and 6; 1.1, 1.5 and UO take the same
-  paths as before.
+  `Controllers::cod2` hold sections 5 and 6.
 - The server poses the same body for its traces, kept per client from
   the connect and animated in `ClientEndFrame`; its controls ease only
   when a trace builds the skeleton, and its clips play at node time
@@ -353,6 +352,6 @@ VERIFIED:
 vcod-server runs the event on the playerstate with the line
 `finishPlayerDamage` drew, and `cloneplayer` copies the anims, keeps the
 corpse's CoD2 `eFlags` on the wire and takes the fresh bit out at
-`deathAnimDuration`. The corpse falls under `TR_GRAVITY` until it rests
-(`game::cod2_corpse`, cod2-combat.md 6.2); the origin's move at the think
-(the death anim's root motion) is not done.
+`deathAnimDuration`. The corpse falls under `TR_GRAVITY` until it rests and moves by its
+death anim's root motion each frame (`game::cod2_corpse::run`,
+`vcod_cod2::rootdelta::rel_delta`; cod2-combat.md 6.2).
