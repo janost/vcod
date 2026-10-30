@@ -550,37 +550,36 @@ Recipe: `client-probes/probe_vehicle` installed as the gametype
 ## 10. The server: definition files and spawn
 
 Sections 10 to 14 are the server's half: what `vcod-server` reproduces of
-`game.mp.uo.i386.so` (addresses `nm`, as above; `coduo_lnxded` addresses
-are the engine's, non-PIC). Gentity offsets are UO's, 4 above 1.1's
-(UO's `entityState_t` grew `xmodel`): `r.svFlags` +0xf8, `r.contents`
-+0x120, `r.ownerNum` +0x154, the vehicle record pointer +0x164,
-`health` +0x240 (VERIFIED, the netfield table at `coduo_lnxded`
-0x080e11a0 and `dump_script_fields.py`).
+`game.mp.uo.i386.so` (`nm` addresses as above; `coduo_lnxded` addresses
+are the engine's, non-PIC). Gentity offsets are UO's, 4 above 1.1's (UO's
+`entityState_t` grew `xmodel`): `r.svFlags` +0xf8, `r.contents` +0x120,
+`r.ownerNum` +0x154, vehicle record pointer +0x164, `health` +0x240
+(VERIFIED, the netfield table at `coduo_lnxded` 0x080e11a0 and
+`dump_script_fields.py`).
 
 ### 10.1 The files
 
 - `G_ParseScrVehicleInfo` (0x8a51f) runs at the top of `G_InitGame`
-  (0x586cf), after `BG_SetupWeaponInfo` and before every other
-  configstring registration of the level (VERIFIED decompile).
+  (0x586cf), after `BG_SetupWeaponInfo` and before every other configstring
+  registration of the level (VERIFIED decompile).
 - It lists `vehicles/` through `trap_FS_GetFileList`, at most 64 files
-  (`Com_Error` past it), each `VEHICLEFILE` plus an info string under
-  8 KB parsed over the 58-key table at 0xae9c0 (VERIFIED decompile and
+  (`Com_Error` past that), each `VEHICLEFILE` plus an info string under
+  8 KB, parsed over the 58-key table at 0xae9c0 (VERIFIED decompile and
   table dump).
-- The list is the search path's order: newest pak first, each pak's own
-  entry order, a name already listed (case-folded) skipped, no sort
-  (INFERRED: a simulation of that order reproduces the gamestate's alias
-  block 662..727 exactly). On a UO-over-1.5 install that is 39 files:
-  `pakuo07`'s nine `_mp` files, then `pakuo03`'s fourteen others, then
-  `main/pak0`'s sixteen (VERIFIED, `Pk3Fs::list_dir_in_search_order`
-  against the paks; `coduo-diff.md` 9's 23 counts the UO paks alone).
-- `maxSpeed`, `accel`, `collisionSpeed` and `engineSndSpeed` are scaled by
-  17.6 (f32 at 0xa72b4) and the box's half extents by 0.5 (0xa72b8)
-  after the parse (VERIFIED bytes).
+- The list is in search-path order: newest pak first, each pak's own entry
+  order, a name already listed (case-folded) skipped, no sort (INFERRED: a
+  simulation of that order reproduces the gamestate's alias block 662..727
+  exactly). A UO-over-1.5 install has 39 files: `pakuo07`'s nine `_mp`
+  files, `pakuo03`'s fourteen others, `main/pak0`'s sixteen (VERIFIED,
+  `Pk3Fs::list_dir_in_search_order` against the paks; `coduo-diff.md` 9's
+  23 counts the UO paks alone).
+- After the parse `maxSpeed`, `accel`, `collisionSpeed` and
+  `engineSndSpeed` are scaled by 17.6 (f32 at 0xa72b4) and the box's half
+  extents by 0.5 (0xa72b8) (VERIFIED bytes).
 - Per file in list order, the seven alias keys (`lowIdleSnd` ..
-  `impactSnd`, `info+0x174 + 0x40 i`) then `vehicle_hit_person` go
-  through `G_SoundAliasIndex`, so the vehicles hold aliases 1..66 (CS
-  662..727) on every map (VERIFIED decompile; VERIFIED capture,
-  `configstrings_uo_ab`).
+  `impactSnd`, `info+0x174 + 0x40 i`) then `vehicle_hit_person` go through
+  `G_SoundAliasIndex`, so the vehicles hold aliases 1..66 (CS 662..727) on
+  every map (VERIFIED decompile; VERIFIED capture, `configstrings_uo_ab`).
 
 ### 10.2 Spawning one
 
@@ -588,89 +587,86 @@ In BSP order, as any entity (`G_CallSpawn` 0x719a6, VERIFIED decompile):
 
 1. `G_Spawn` takes the number; the field parse indexes the `model` key
    (CS 405 + i) (VERIFIED decompile).
-2. `SP_script_vehicle` (0x8dec6): `delay` defaults to
-   `g_vehicleBurnTime` ("10"), the spawn vars are backed up for
-   `spawnDuplicate` (VERIFIED decompile).
+2. `SP_script_vehicle` (0x8dec6): `delay` defaults to `g_vehicleBurnTime`
+   ("10"); the spawn vars are backed up for `spawnDuplicate` (VERIFIED
+   decompile).
 3. `G_SpawnVehicle` (0x8abfd): the first free slot of 64 (0x3ec bytes
-   each), whose index goes in `s.attackerEntityNum`; the file found by
+   each), its index in `s.attackerEntityNum`; the file found by
    `strcasecmp` on `vehicletype`, else `Com_Error` naming the targetname
    (VERIFIED decompile).
-4. `fn_7c935`: `eType` 12, `r.svFlags` 4, `r.contents` 0x2080 (|
-   0x200000 under spawnflag 1), both trTypes 1, `s.weapon` the turret
-   weapon, `surfType` the file's type, `origin2[0]` and `[2]` the ints
-   127, think `Scr_Vehicle_Init` 50 ms on, `takedamage` 1, clipmask
-   0x201; the DObj's bounds; `RegisterItem` on the turret, alt and
-   gunner weapons, which registers their models only (VERIFIED
-   decompile).
+4. `fn_7c935`: `eType` 12, `r.svFlags` 4, `r.contents` 0x2080 (| 0x200000
+   under spawnflag 1), both trTypes 1, `s.weapon` the turret weapon,
+   `surfType` the file's type, `origin2[0]` and `[2]` the ints 127, think
+   `Scr_Vehicle_Init` 50 ms on, `takedamage` 1, clipmask 0x201; the DObj's
+   bounds; `RegisterItem` on the turret, alt and gunner weapons, which
+   registers their models only (VERIFIED decompile).
 5. `fn_7cebf`: `otherEntityNum` 1023, the slot's record, the
-   `useHintString` through `G_GetHintStringIndex` (CS 1365 + i, the first
-   equal or empty slot); then up to four sound-blend entities: B1 when
-   both idle aliases are set, B2 when both engine aliases are, B3 and B4
-   always (their test is a null check that never fires, 0x7d1e4); each
+   `useHintString` through `G_GetHintStringIndex` (CS 1365 + i, first equal
+   or empty slot). Then up to four sound-blend entities: B1 when both idle
+   aliases are set, B2 when both engine aliases are, B3 and B4 always
+   (their test is a null check that never fires, 0x7d1e4). Each is a
    `G_SpawnSoundBlend` (0x5a65d): `eType` 9, contents 0, `svFlags |= 8`,
    `otherEntityNum` the vehicle, no classname, linked silent at once
    (`trap_LinkEntity` 0x7d19b, 0x7d1df, 0x7d214, 0x7d249) (VERIFIED
    disassembly). The snapshot builder culls a blend as its vehicle
-   (`coduo-diff.md` 9, "The cause was the broadcast").
-   Then the alt and gunner weapons' `loopFireSound` and `stopFireSound`
-   aliases (VERIFIED decompile).
+   (`coduo-diff.md` 9, "The cause was the broadcast"). Then the alt and
+   gunner weapons' `loopFireSound` and `stopFireSound` aliases (VERIFIED
+   decompile).
 
 So mp_cassino's eight tanks take 156, 161, .., 191, each followed by its
 four blends, in pool slots 0..7; dm keeps 176 (slot 4) and 181 (slot 5),
-the trigger_hurt lands on 435 and the collmaps on 436, 437 (VERIFIED,
-the gamestate's baselines against a simulation of the order). No effect
-and no other model is registered on the way: the wrecks and effects come
-from `_tankeffects_gmi` (VERIFIED decompile).
+the trigger_hurt lands on 435 and the collmaps on 436, 437 (VERIFIED, the
+gamestate's baselines against a simulation of the order). No effect or
+other model is registered on the way: wrecks and effects come from
+`_tankeffects_gmi` (VERIFIED decompile).
 
 ### 10.3 Collmaps
 
-- `SP_script_vehicle_collmap` (0x8df52) sets `eType` 14 and contents 0
-  and never links (VERIFIED decompile).
+- `SP_script_vehicle_collmap` (0x8df52) sets `eType` 14 and contents 0 and
+  never links (VERIFIED decompile).
 - After the BSP pass, `G_SetupScrVehicles` (0x8ab36) pairs each vehicle in
-  slot order: `VEH_SetupCollmap` (0x7d3e2) takes the first in-use collmap
-  by number whose `targetname` is the vehicle's model name, case folded,
-  puts its `*N` in the **vehicle's** `s.index`, runs `SetBrushModel` on
-  the vehicle and sets the vehicle's contents to 0x800000 | 0x200000
-  (VERIFIED decompile; `coduo-diff.md` 9 had it on the collmap). One
-  collmap serves every vehicle of its model (INFERRED, the scan). A
-  vehicle placed after load pairs at once (VERIFIED decompile).
+  slot order. `VEH_SetupCollmap` (0x7d3e2) takes the first in-use collmap
+  by number whose `targetname` is the vehicle's model name (case folded),
+  puts its `*N` in the **vehicle's** `s.index`, runs `SetBrushModel` on the
+  vehicle and sets the vehicle's contents to 0x800000 | 0x200000 (VERIFIED
+  decompile; `coduo-diff.md` 9 had it on the collmap). One collmap serves
+  every vehicle of its model (INFERRED, the scan). A vehicle placed after
+  load pairs at once (VERIFIED decompile).
 - The capture's tanks carry `index` 27 and 28 and `solid` 0xffffff
   (VERIFIED, baselines).
 - mp_cassino's two collmaps' brushes carry contents 0x28031640: player
-  clip, the vehicle clip 0x200, no SOLID and no shot bit (VERIFIED, the
-  BSP).
+  clip, the vehicle clip 0x200, no SOLID, no shot bit (VERIFIED, the BSP).
 - So a player bumps a tank and a bullet passes its collmap; retail tests a
   brush model's own contents against the mask inside the clip (INFERRED).
   A vehicle's clipmask 0x201 meets the collmap brushes through 0x200, a
   player's 0x2810011 through 0x10000 (VERIFIED, the masks and the brush
   word).
-- Each vehicle clips its own copy of the brushes where it stands, under
-  its own `r.contents`: mp_kharkov's Horch glances off a parked Panzer IV
-  that is not the last of its model to have moved (VERIFIED, the ram
-  capture, section 12). vcod keeps a per-entity model instance in its
-  collision world for each vehicle (`CollisionWorld::set_model_instance`),
-  names the vehicle on its hits and passes it on the vehicle's own traces;
-  until then one posed brush model served every vehicle of a model, so
-  only one tank of each kind blocked anything.
+- Each vehicle clips its own copy of the brushes where it stands, under its
+  own `r.contents`: mp_kharkov's Horch glances off a parked Panzer IV that
+  is not the last of its model to have moved (VERIFIED, the ram capture,
+  section 12). vcod keeps a per-entity model instance for each vehicle
+  (`CollisionWorld::set_model_instance`), names the vehicle on its hits and
+  passes it on the vehicle's own traces. One shared posed brush model per
+  kind lets only one tank of each kind block anything.
 
 ### 10.4 The first think and the park
 
 `Scr_Vehicle_Init` (0x8c5ab), 50 ms after the spawn, settles a tank or a
-four-wheel on its wheel traces, so the BSP's z -8 parks at -7.875
-(VERIFIED, baselines) and `time2` becomes `trunc(1000 *
-suspensionTravel)`, 6 bits on the wire (24 for the Panzer IV, 8 for the
-Sherman) (VERIFIED decompile; capture). The vehicle table's angles are 16
-bits, so the BSP's yaw 270 reads -90 (VERIFIED, baselines).
+four-wheel on its wheel traces: the BSP's z -8 parks at -7.875 (VERIFIED,
+baselines), and `time2` becomes `trunc(1000 * suspensionTravel)`, 6 bits on
+the wire (24 for the Panzer IV, 8 for the Sherman) (VERIFIED decompile;
+capture). The vehicle table's angles are 16 bits, so the BSP's yaw 270
+reads -90 (VERIFIED, baselines).
 
-`Scr_Vehicle_Init` does nothing else of the step: it settles, places the
-vehicle through 0x7c762 (`G_SetOrigin`, `G_SetAngle`, a relink only when
-`r.linked`), copies the settled pose into the record's previous pose,
-runs `G_DoTouchTriggers` and hands the think to `Scr_Vehicle_Think` 50 ms
-on (VERIFIED decompile, 0x8c5ab..0x8c7c9). It leaves the committed copy
-at `rec+0x170`, which `VEH_InitPhysics` (0x7cd00) took from the unsettled
-spawn pose; so a vehicle that settled fails 0x827ab's "nothing moved"
-test on its first think and runs the collision probes once (VERIFIED
-decompile; section 15.2 for what that does to a wreck's duplicate).
+It does nothing else of the step: it settles, places the vehicle through
+0x7c762 (`G_SetOrigin`, `G_SetAngle`, a relink only when `r.linked`),
+copies the settled pose into the record's previous pose, runs
+`G_DoTouchTriggers` and hands the think to `Scr_Vehicle_Think` 50 ms on
+(VERIFIED decompile, 0x8c5ab..0x8c7c9). It leaves the committed copy at
+`rec+0x170`, which `VEH_InitPhysics` (0x7cd00) took from the unsettled
+spawn pose. So a vehicle that settled fails 0x827ab's "nothing moved" test
+on its first think and runs the collision probes once (VERIFIED decompile;
+section 15.2 for what that does to a wreck's duplicate).
 
 ### 10.5 Freeing
 
@@ -689,247 +685,251 @@ into `eType` 13 `script_vehicle_corpse`; no stock MP script calls it
   and, for a vehicle `G_IsVehicleUsable` (0x8b673) passes, its `use`, the
   entry (VERIFIED decompile).
 - `G_IsVehicleUsable`: not seated, a free seat, the vehicle at most 100
-  units/s and alive, contents 0x200000, no grenade in hand, every rider
-  on the player's team (VERIFIED decompile).
-- `VEH_LinkPlayer` (0x8998d), in order: the owner lock (`vehicle_owner`
-  a client, seat 1 free, not the player: `e
-  "GMI_GAME_VEHICLE_NOT_OWNER"`); silent unless on the ground or falling
-  slower than 80, and 250 ms past the last seat stamp; the stamp
-  (`client+0x468c`: now on a tank's first entry, now + 1500 else); the
-  seat; `SetClientOrigin` at the seat tag (+1 z, the teleport bit);
-  `SetClientViewAngle` at the view tag's forward (`tag_player`, seat 2
-  `tag_secondary_gun`, else `tag_body`), roll 0; the link; the record's
-  occupant and `animMovetype |= 1 << seat`; on seat 1 the vehicle driven,
-  its `eFlags` 0x100000, `r.ownerNum` and `otherEntityNum` the driver;
-  `ps.eFlags |= 0x300000`, `viewlocked_entNum`, the sight flag off;
-  reliable `v cl_run 1` and `v cl_stance 0`; `vehPos`, `vehType`;
-  `activated (vehpos, player)` on the vehicle and `vehicle_activated
-  (vehpos, vehicle)` on the player; `fTorsoPitch` and `fWaistPitch` the
-  gunner's vertical spans (VERIFIED decompile).
+  units/s and alive, contents 0x200000, no grenade in hand, every rider on
+  the player's team (VERIFIED decompile).
+- `VEH_LinkPlayer` (0x8998d), in order (VERIFIED decompile):
+  1. The owner lock (`vehicle_owner` a client, seat 1 free, not the
+     player: `e "GMI_GAME_VEHICLE_NOT_OWNER"`).
+  2. Silent unless on the ground or falling slower than 80, and 250 ms
+     past the last seat stamp.
+  3. The stamp (`client+0x468c`: now on a tank's first entry, now + 1500
+     else).
+  4. The seat; `SetClientOrigin` at the seat tag (+1 z, the teleport bit);
+     `SetClientViewAngle` at the view tag's forward (`tag_player`, seat 2
+     `tag_secondary_gun`, else `tag_body`), roll 0; the link.
+  5. The record's occupant and `animMovetype |= 1 << seat`; on seat 1 the
+     vehicle driven, its `eFlags` 0x100000, `r.ownerNum` and
+     `otherEntityNum` the driver.
+  6. `ps.eFlags |= 0x300000`, `viewlocked_entNum`, sight flag off;
+     reliable `v cl_run 1` and `v cl_stance 0`; `vehPos`, `vehType`.
+  7. `activated (vehpos, player)` on the vehicle, `vehicle_activated
+     (vehpos, vehicle)` on the player; `fTorsoPitch` and `fWaistPitch` the
+     gunner's vertical spans.
 
 ### 11.2 Getting out
 
-- `VEH_UnlinkPlayer` (0x89fb2): a voluntary exit (the use key) is
-  refused on a live tank inside 1500 ms of the stamp while the seat has
-  changed at most once (`e "GMI_GAME_VEHICLE_EXIT_DELAY"`), or with no
-  dismount spot (`e "GMI_GAME_VEHICLE_UNLINK_BLOCKED"`). Then the seat
-  and its mask bit are cleared, on seat 1 the vehicle's driver fields,
-  and a tank coasts 3 s on its last forward input; the player's seat
-  bits, `viewlocked_entNum` 1023, `vehPos` 0 (`vehType` and `vehMotion`
-  kept), the sight; `v cl_run 1`, `v cl_stance 0`; a voluntary exit
-  lands on the spot (+1 z) and inside the coast window pops up at 200;
-  `deactivated (player)`, `vehicle_deactivated (vehicle)` (VERIFIED
-  decompile; the exits of both seat captures, VERIFIED).
-- `VEH_FindValidDismountSpot` (0x88dee): a point off the side away from
-  the vehicle's motion, or toward the player at rest, sized `60 + maxsX +
-  maxs.y` sideways or `maxs.x + max(collisionFront, collisionBack) + 100`
-  along, 4 up, along `AngleVectors` of the record's whole angles
-  (`rec+0xd0`: on a slope the spot tilts with the hull); a 20-unit grid
-  of offsets -80..60 about it (0xa6e08 80, 0xa6e1c 20), each point at two
-  heights 32 apart (the inner loop's bound 2, 0xa6e18), four passes
-  flipping forward then side. The grid's first point is the base itself:
-  each offset is applied after its point's two heights (VERIFIED
-  decompile). A spot needs a capsule position test under 0x2000000 (no
-  body) to pass, a capsule from it 256 down under 0x810011 to hit without
-  starting solid, and a box (the player's, `maxs.z - 30`) from the
-  vehicle's origin 30 up to the spot 30 up, passing the player's
-  `r.ownerNum` (the vehicle) under 0x810011, to arrive or stop on the
-  vehicle (VERIFIED decompile). vcod took the yaw alone and three heights,
-  which on mp_peaks' slope put the jeep's exit 10 above retail's; it now
-  lands on retail's spot (VERIFIED, `vehicle_ab`). The six vectors at 0xa6660 are the collision
-  probes' (section 12), not the dismount's (VERIFIED, every reference;
-  `coduo-diff.md` 9 had them here).
-- The exit leaves `pm_type` as the seat had it: `VEH_UnlinkPlayer` calls
+- `VEH_UnlinkPlayer` (0x89fb2). A voluntary exit (the use key) is refused
+  on a live tank inside 1500 ms of the stamp while the seat has changed at
+  most once (`e "GMI_GAME_VEHICLE_EXIT_DELAY"`), or with no dismount spot
+  (`e "GMI_GAME_VEHICLE_UNLINK_BLOCKED"`). Then: the seat and its mask bit
+  cleared; on seat 1 the vehicle's driver fields, and a tank coasts 3 s on
+  its last forward input; the player's seat bits, `viewlocked_entNum`
+  1023, `vehPos` 0 (`vehType` and `vehMotion` kept), the sight; `v cl_run
+  1`, `v cl_stance 0`; a voluntary exit lands on the spot (+1 z) and inside
+  the coast window pops up at 200; `deactivated (player)`,
+  `vehicle_deactivated (vehicle)` (VERIFIED decompile; the exits of both
+  seat captures, VERIFIED).
+- `VEH_FindValidDismountSpot` (0x88dee) (VERIFIED decompile):
+  - Base point off the side away from the vehicle's motion, or toward the
+    player at rest: `60 + maxsX + maxs.y` sideways or `maxs.x +
+    max(collisionFront, collisionBack) + 100` along, 4 up, along
+    `AngleVectors` of the record's whole angles (`rec+0xd0`: on a slope the
+    spot tilts with the hull).
+  - A 20-unit grid of offsets -80..60 about it (0xa6e08 80, 0xa6e1c 20),
+    each point at two heights 32 apart (inner loop bound 2, 0xa6e18), four
+    passes flipping forward then side. The first point is the base itself:
+    each offset is applied after its point's two heights.
+  - A spot passes when a capsule position test under 0x2000000 (no body)
+    is clear, a capsule from it 256 down under 0x810011 hits without
+    starting solid, and a box (the player's, `maxs.z - 30`) from the
+    vehicle's origin 30 up to the spot 30 up, passing the player's
+    `r.ownerNum` (the vehicle) under 0x810011, arrives or stops on the
+    vehicle.
+  - Trap: the yaw alone with three heights put mp_peaks' jeep exit 10
+    above retail's; vcod now lands on retail's spot (VERIFIED,
+    `vehicle_ab`). The six vectors at 0xa6660 are the collision probes'
+    (section 12), not the dismount's (VERIFIED, every reference;
+    `coduo-diff.md` 9 had them here).
+- The exit leaves `pm_type` as the seat had it. `VEH_UnlinkPlayer` calls
   `G_EntUnlink` and `SetClientOrigin` and writes no `pm_type` (VERIFIED
-  disassembly, 0x8a1ac, 0x8a463), and `G_RunClient`'s unlinked arm steps
-  a 1 down to 0 and a 7 to 6 on the client's entity-pass turn (VERIFIED
-  disassembly, 0x41f39..0x41f62). The cmds left in the exit's frame run
-  under `pm_type` 1 and move nothing; the fall or the pop starts on the
-  next frame's first cmd (INFERRED, that control flow). All three exits
-  captured show it: the use edge's frame ends on the spot with the
-  velocity unspent though one to four cmds ran after the press (the jeep
-  drive's msg 482, ct 37342, velocity 0; the tank drive's msg 483 and the
-  tank seats' msg 685, velocity 200), and vcod's pmove run from that
-  snapshot's `commandTime` on the next frame's cmds lands on the next
-  snapshots to 0.005 (jeep 93.11678 against 93.11677 at ct 37394, tank
-  30.149006 against 30.149002 at ct 36991) (VERIFIED, capture and
-  replay). `ClientEndFrame` (0x52f59) writes `pm_type` again off the link
-  alone: 1 linked, 0 not, 7 and 6 for a dead client (VERIFIED decompile),
-  so a rider the vehicle think puts out after `G_RunClient`'s turn is
-  unlinked by his end frame and runs the next frame's cmds free (VERIFIED,
-  11.7's capture). vcod holds a left seat's cmds linked until
-  `ClientSim::run_client`, which the frame runs after the entity pass and
-  before the vehicle thinks, or the client's end frame, whichever comes
-  first; it used to hold them to the next frame's `run_client`, and a
-  corpse the think put out ran a frame linked.
+  disassembly, 0x8a1ac, 0x8a463); `G_RunClient`'s unlinked arm steps 1 to
+  0 and 7 to 6 on the client's entity-pass turn (VERIFIED disassembly,
+  0x41f39..0x41f62). The cmds left in the exit's frame run under `pm_type`
+  1 and move nothing; the fall or the pop starts on the next frame's first
+  cmd (INFERRED, that control flow). All three captured exits show it: the
+  use edge's frame ends on the spot with the velocity unspent though one
+  to four cmds ran after the press (jeep drive msg 482, ct 37342, velocity
+  0; tank drive msg 483 and tank seats msg 685, velocity 200). vcod's
+  pmove from that snapshot's `commandTime` on the next frame's cmds lands
+  on the next snapshots to 0.005 (jeep 93.11678 vs 93.11677 at ct 37394,
+  tank 30.149006 vs 30.149002 at ct 36991) (VERIFIED, capture and replay).
+- `ClientEndFrame` (0x52f59) writes `pm_type` again off the link alone: 1
+  linked, 0 not, 7 and 6 for a dead client (VERIFIED decompile). A rider
+  the vehicle think puts out after `G_RunClient`'s turn is unlinked by his
+  end frame and runs the next frame's cmds free (VERIFIED, 11.7's
+  capture). vcod holds a left seat's cmds linked until
+  `ClientSim::run_client` (after the entity pass, before the vehicle
+  thinks) or the client's end frame, whichever comes first. Holding them
+  to the next frame's `run_client` ran a corpse the think put out a frame
+  linked.
 - Forced exits (no refusal, no search, the body left at the seat): a seat
   change, the vehicle think's pass over dead riders, `ClientSpawn`,
   `ClientDisconnect`, a team change (VERIFIED decompile).
 - `Scr_Vehicle_Die` (0x8dccb) probes each rider with a 5-point
-  `MOD_EXPLOSIVE` hit (health padded by 10) and dismounts one it did not
-  hurt, the rest in place (VERIFIED decompile). The death below.
+  `MOD_EXPLOSIVE` hit (health padded by 10), dismounts one it did not
+  hurt and puts the rest out in place (VERIFIED decompile). Details below.
 
 #### The death's riders: `Scr_Vehicle_Die`
 
 `G_Damage` (0x4fedb) runs the die callback after the `damage` and `death`
 notifies, as `(self, inflictor, attacker, damage, mod, inflictor's
-s.weapon, &dir, hitloc)`, with a NULL inflictor or attacker already the
+s.weapon, &dir, hitloc)`, a NULL inflictor or attacker already made the
 world (VERIFIED decompile). `Scr_Vehicle_Die` (0x8dccb):
 
-- For seats 1 to 6 in order, each seat whose entity is a client: its
-  `health` (+0x240) goes up 10, then `G_Damage(rider, attacker, attacker,
+- For seats 1 to 6 in order, each seat whose entity is a client: `health`
+  (+0x240) goes up 10, then `G_Damage(rider, attacker, attacker,
   vec3_origin, ps.origin, 5, 0, MOD_EXPLOSIVE (0x17), 0)`. The rider is
-  shielded when his health still reads the padded value. Then his health
+  shielded when his health still reads the padded value. His health then
   goes back to what it was, whatever the hit did, and `VEH_UnlinkPlayer`
-  (0x89fb2) runs with `voluntary` set to shielded (VERIFIED decompile).
-- After the unlink, `G_SetOrigin` puts `r.currentOrigin` 32 (f32 at
+  (0x89fb2) runs with `voluntary` = shielded (VERIFIED decompile).
+- After the unlink `G_SetOrigin` puts `r.currentOrigin` 32 (f32 at
   0xa7624) above where the unlink left it (VERIFIED decompile and bytes).
-  The playerstate keeps the old origin, so only reads of
-  `r.currentOrigin` before the rider's end frame see the lift: the
-  `origin` field and a `radiusDamage` measure do, a `doDamage`'s
-  direction does not (VERIFIED capture below).
+  The playerstate keeps the old origin, so only reads of `r.currentOrigin`
+  before the rider's end frame see the lift: the `origin` field and a
+  `radiusDamage` measure do, a `doDamage`'s direction does not (VERIFIED
+  capture below).
 - `G_DamageClient` (0x4fd4b) decides the probe like any hit. A tank's
   driver is shielded from every attacker but his own tank (13, the
   invulnerability), so the stuck kill and a tank that is its own attacker
   put him out where he sits. A damage callback that never calls
   `finishPlayerDamage` (stock tdm's friendly fire 0) shields its rider too
   (VERIFIED capture below).
-- A shielded rider's unlink searches a dismount spot, as a use exit does
-  (the exit delay is skipped: the vehicle's health is under 1), and a
-  blocked search refuses and leaves him seated (VERIFIED decompile). A
-  dismount sets the origin through `SetClientOrigin` and pops a tank's
-  driver up at 200 while the tank coasts (11.2 above).
-- Last, an attacker whose `s.weapon` is a grenade (type 1) or a
-  projectile (2) jolts the hull along the hit's direction, scale 1
-  (0x8d492) (VERIFIED decompile).
+- A shielded rider's unlink searches a dismount spot as a use exit does
+  (the exit delay is skipped: the vehicle's health is under 1); a blocked
+  search refuses and leaves him seated (VERIFIED decompile). A dismount
+  sets the origin through `SetClientOrigin` and pops a tank's driver up at
+  200 while the tank coasts (11.2).
+- Last, an attacker whose `s.weapon` is a grenade (type 1) or projectile
+  (2) jolts the hull along the hit's direction, scale 1 (0x8d492)
+  (VERIFIED decompile).
 - `PlayerCmd_isInVehicle` (0x46ca0) reads the entity state's `eFlags`
   0x100000, not the playerstate's: a rider put out where he sat reads 1
-  until his end frame, one a dismount moved reads 0 at once (VERIFIED
+  until his end frame; one a dismount moved reads 0 at once (VERIFIED
   decompile and capture below).
 - UO's `radiusDamage` (0x6c229) takes an attacker and an inflictor after
-  its four arguments, by count: the attacker the world when absent, the
-  inflictor NULL (VERIFIED decompile). `_tankdrive_gmi`'s death blast
-  passes both, so its victims' callbacks name the tank's last attacker
-  and its weapon. The damage callback's weapon is the inflictor's
-  `s.weapon`, else the attacker's (`G_DamageClient`, VERIFIED
-  decompile).
+  its four arguments, by count: attacker the world when absent, inflictor
+  NULL (VERIFIED decompile). `_tankdrive_gmi`'s death blast passes both,
+  so its victims' callbacks name the tank's last attacker and its weapon.
+  The damage callback's weapon is the inflictor's `s.weapon`, else the
+  attacker's (`G_DamageClient`, VERIFIED decompile).
 - Stock tdm's `Callback_PlayerKilled` reads `level.teamkill_penalty`,
   which nothing sets, for a death to something not a player. A tank that
-  is its own attacker has `tank_death_player_damage` kill its driver so,
-  and on `run_probe.sh`'s retail server that is a fatal script error
-  (VERIFIED capture, the probe's first run). Below `developer 1` the
-  `if` takes its branch and the victim's team loses a point
+  is its own attacker has `tank_death_player_damage` kill its driver that
+  way, and on `run_probe.sh`'s retail server that is a fatal script error
+  (VERIFIED capture, the probe's first run). Below `developer 1` the `if`
+  takes its branch and the victim's team loses a point
   (cod11-gsc-language.md, "Runtime errors below developer 1").
 
-Measured, retail UO 1.51b, 2026-10-17, `client-probes/probe_vehdie`
+Measured on retail UO 1.51b, 2026-10-17, `client-probes/probe_vehdie`
 (fixtures `crates/server/tests/fixtures/vehicles/*-die-*-uo.txt`, recipes
-in their headers): a `--probe-vehicle driver` and a `--probe-vehicle
+in their headers). A `--probe-vehicle driver` and a `--probe-vehicle
 gunner` client board, and a frame after the second seat the gsc kills the
 vehicle with `doDamage(10000, ..., by, by, "MOD_EXPLOSIVE")` (VERIFIED,
 capture):
 
-- The Panzer IV, its own attacker: both riders' callbacks run with 5,
-  flags 0, the tank as inflictor and attacker, `panzeriv_turret_mp`,
-  their own origins as the point, a zero direction, `none`, health 110.
-  Both read health 100 after, `isInVehicle` 1 and their origin 32 up;
-  the gunner's `vehicle_deactivated` waiter runs before the driver's.
-- The Panzer IV killed by its gunner: the driver's callback never runs,
-  he reads `isInVehicle` 0 at a spot 227 units ahead of the hull's
-  origin, 32 up; the gunner's runs (his own `kar98k_mp`) and he stays put.
-- The Willys, its driver alone, killed by a teammate on foot under
-  friendly fire 0: the callback runs, tdm returns, the health stays 110,
-  and the driver is dismounted.
+| Case | Result |
+|---|---|
+| Panzer IV, its own attacker | Both riders' callbacks run with 5, flags 0, the tank as inflictor and attacker, `panzeriv_turret_mp`, their own origins as the point, zero direction, `none`, health 110. Both read health 100 after, `isInVehicle` 1, origin 32 up; the gunner's `vehicle_deactivated` waiter runs before the driver's. |
+| Panzer IV killed by its gunner | The driver's callback never runs; he reads `isInVehicle` 0 at a spot 227 units ahead of the hull's origin, 32 up. The gunner's runs (his own `kar98k_mp`) and he stays put. |
+| Willys, driver alone, killed by a teammate on foot, friendly fire 0 | The callback runs, tdm returns, health stays 110, the driver is dismounted. |
 
-vcod walks the riders in `vehicle::die`: inside the builtin that killed
-the vehicle each rider's callback is a `spawn_then` (`DIE_TOKEN`), and a
-death outside a builtin (a round, a blast, a collision) is walked at
-`ScriptRuntime::vehicle_deaths` with each callback run to its first
-`wait`. A rider put out in place is held in `Vehicles::stale_seated` and
-the lifted origin's unlifted one in `Vehicles::lifted` until his origin
-is next mirrored. The seats the frame's threads left are applied ahead of
-the script's sim ops, so a dismount's pop sets the velocity and a hit
-after it adds its knockback. `vehicle_die_ab` replays the three captures
-on ours: every line from the kill on matches retail's, the death blast's
-victims and their damage included, but the gunner's body within 4 units
-(the kill comes mid-turn of his gun; retail's three runs put him 3.3
-apart), a dismounted driver's first fall frame (the probe client's cmd
-clock), and the corpses of the riders killed in place: they get out of
-the hull a cmd at a time (11.6), along retail's path but the probe
-client's cmd clock apart, the gunner's from his mid-turn spot.
+vcod walks the riders in `vehicle::die`. Inside the builtin that killed
+the vehicle each rider's callback is a `spawn_then` (`DIE_TOKEN`); a death
+outside a builtin (a round, a blast, a collision) is walked at
+`ScriptRuntime::vehicle_deaths`, each callback run to its first `wait`. A
+rider put out in place is held in `Vehicles::stale_seated`, and the lifted
+origin's unlifted one in `Vehicles::lifted`, until his origin is next
+mirrored. The seats the frame's threads left are applied ahead of the
+script's sim ops, so a dismount's pop sets the velocity and a hit after it
+adds its knockback. `vehicle_die_ab` replays the three captures: every
+line from the kill on matches retail's, the death blast's victims and
+their damage included, except:
+
+- the gunner's body, within 4 units (the kill comes mid-turn of his gun;
+  retail's three runs put him 3.3 apart);
+- a dismounted driver's first fall frame (the probe client's cmd clock);
+- the corpses of riders killed in place: they leave the hull a cmd at a
+  time (11.6) along retail's path, but the probe client's cmd clock apart,
+  the gunner's from his mid-turn spot.
 
 ### 11.3 Changing seats
 
 `Cmd_NextVehSlot_f` (0x4ed9b) and `Cmd_PrevVehSlot_f` (0x4ede1), for a
-living rider, run `G_VEH_CycleSlot` (0x8da1e): none when no seat is
-free; a tank's first change after a use entry is never refused; inside
-250 ms of the stamp `e "GMI_GAME_VEHICLE_DELAY_IGNORE"` at most every
-500 ms; else a forced exit and an entry at the next free seat (wrapping
-6 to 1), stamped 1500 ms ahead, so changes are 1750 ms apart and the
-script sees `deactivated` then `activated` (VERIFIED decompile).
+living rider, run `G_VEH_CycleSlot` (0x8da1e) (VERIFIED decompile):
+
+- nothing when no seat is free;
+- a tank's first change after a use entry is never refused;
+- inside 250 ms of the stamp, `e "GMI_GAME_VEHICLE_DELAY_IGNORE"` at most
+  every 500 ms;
+- else a forced exit and an entry at the next free seat (wrapping 6 to 1),
+  stamped 1500 ms ahead: changes are 1750 ms apart and the script sees
+  `deactivated` then `activated`.
 
 The cycle is a client command, so it runs where `SV_ExecuteClientMessage`
-runs its packet's commands: after every earlier packet's usercmds and
-before its own packet's. `SetClientViewAngle` (0x54301) writes
-`delta_angles` as `ANGLE2SHORT(view) - client+0x452c`, the angles of the
-last cmd run (VERIFIED decompile), so where in the frame's cmds the
-command lands moves the seat's `delta_angles` and every view after it.
-Both seats captures fit a change after the last cmd that still turns and
-before the held run the probe's `say` step starts: the tank's
-`delta_angles` (23003, 63172) at the driver's seat are `tag_player`'s
-view (8.88, -27.60) less cmd 41000's (44149, 62875), the jeep's (13195,
-41447) at the passenger's `tag_body` (-11.21, 76.53) less cmd 39700's,
-to a short (VERIFIED, capture). vcod-server queues the cycle with its
-packet and runs it in the move pass ahead of that packet's cmds, as it
-runs `kill` (`client::PacketCommand`); it used to run it on arrival,
-ahead of the cmds of packets queued before it, and the seat's view
-stood off retail's by up to 0.84 degrees on the change's snapshot.
+runs its packet's commands: after every earlier packet's usercmds, before
+its own packet's. `SetClientViewAngle` (0x54301) writes `delta_angles` as
+`ANGLE2SHORT(view) - client+0x452c`, the angles of the last cmd run
+(VERIFIED decompile), so where the command lands among the frame's cmds
+moves the seat's `delta_angles` and every view after it. Both seat
+captures fit a change after the last cmd that still turns and before the
+held run the probe's `say` step starts: the tank's `delta_angles` (23003,
+63172) at the driver's seat are `tag_player`'s view (8.88, -27.60) less
+cmd 41000's (44149, 62875); the jeep's (13195, 41447) at the passenger's
+`tag_body` (-11.21, 76.53) less cmd 39700's, to a short (VERIFIED,
+capture). vcod-server queues the cycle with its packet and runs it in the
+move pass ahead of that packet's cmds, as it runs `kill`
+(`client::PacketCommand`). Run on arrival, ahead of earlier packets' cmds,
+the seat's view stood up to 0.84° off retail's on the change's snapshot.
 
 ### 11.4 Every frame
 
 - `G_RunClient` (0x41dfc) puts a linked player in `pm_type` 1, 7 dead
   (VERIFIED decompile).
-- `ClientEndFrame` (0x42f59): `vehMotion` 1 under 20 units/s of the
-  hull's forward speed, else 2 forward, 3 back; the entity's `surfType`
-  is `vehPos | vehType << 3 | vehMotion << 6` and its `otherEntityNum`
-  the vehicle (VERIFIED decompile); then `G_PlayerVehiclePositionAndBlend`
-  (0x9048f) puts `ps.origin` at the seat tag plus `BG_GetVehiclePosOffset`
-  in the tag's axes (VERIFIED decompile), then runs the plain
-  `BG_PlayerStateToEntityState` (0x20a35) with the snap on: `pos.trType`
-  and `apos.trType` 1, `pos.trBase` the origin truncated (`fldcw` with
-  `| 0xc00` at 0x20ab0) and `apos.trBase` the view, over the extrapolated
-  write's `trTime`, `trDuration` and `trDelta` (VERIFIED disassembly).
-  A seated player's entity in `snapshots-uo-jeep.bin`, `-uo-tank.bin` and
-  `-uo-overheat.bin` carries `pos.trType` 1, whole-unit bases, a 50 ms
-  duration and a stale delta (VERIFIED, capture, `rider_dump` example);
-  vcod-server sends the type and the truncated base.
+- `ClientEndFrame` (0x42f59) (VERIFIED decompile unless noted):
+  - `vehMotion` 1 under 20 units/s of the hull's forward speed, else 2
+    forward, 3 back; the entity's `surfType` is `vehPos | vehType << 3 |
+    vehMotion << 6`, its `otherEntityNum` the vehicle.
+  - `G_PlayerVehiclePositionAndBlend` (0x9048f) puts `ps.origin` at the
+    seat tag plus `BG_GetVehiclePosOffset` in the tag's axes.
+  - Then the plain `BG_PlayerStateToEntityState` (0x20a35) with the snap
+    on: `pos.trType` and `apos.trType` 1, `pos.trBase` the origin
+    truncated (`fldcw` with `| 0xc00` at 0x20ab0), `apos.trBase` the view,
+    over the extrapolated write's `trTime`, `trDuration` and `trDelta`
+    (VERIFIED disassembly). A seated player's entity in
+    `snapshots-uo-jeep.bin`, `-uo-tank.bin` and `-uo-overheat.bin`
+    carries `pos.trType` 1, whole-unit bases, a 50 ms duration and a stale
+    delta (VERIFIED, capture); vcod-server sends the type and the
+    truncated base.
 - The tag comes off the vehicle's DObj as the frame's first tag query
-  posed it, with the controls from before the frame's step: a rider placed
+  posed it, with the controls from before the frame's step. A rider placed
   with this frame's controls misses retail's origin by up to 3 units in a
-  turn, with the last frame's by none (VERIFIED, replay, section 14).
+  turn; with the last frame's, by none (VERIFIED, replay, section 14).
 - The engine never sends a tank's driver to anyone (`coduo_lnxded`
-  0x8096b97, test at 0x8096d7a: a player in a vehicle whose `surfType`
-  is 2 and whose own `surfType & 7` is 1) (VERIFIED decompile).
-- A rider's legs come off the animscript: `BG_AnimUpdatePlayerStateConditions`
-  (0x1c973) sets `mounted` to the seat (`vehDriver`, `vehGunner`,
-  `vehPassenger1`..), `vehicle` to the kind (`tank`, `jeep`, `flak88`) and
-  `vehicle_motion` (`idle`, `forward`, `reversing`) (VERIFIED decompile),
-  and `playeranim.script`'s clauses pick them; the selection runs for a
-  rider though it is off the ground (INFERRED; the replay's legs match).
+  0x8096b97, test at 0x8096d7a: a player in a vehicle whose `surfType` is
+  2 and whose own `surfType & 7` is 1) (VERIFIED decompile).
+- A rider's legs come off the animscript.
+  `BG_AnimUpdatePlayerStateConditions` (0x1c973) sets `mounted` to the
+  seat (`vehDriver`, `vehGunner`, `vehPassenger1`..), `vehicle` to the kind
+  (`tank`, `jeep`, `flak88`) and `vehicle_motion` (`idle`, `forward`,
+  `reversing`) (VERIFIED decompile), and `playeranim.script`'s clauses pick
+  them; the selection runs for a rider though he is off the ground
+  (INFERRED; the replay's legs match).
 - Slot 4 takes `ps.vehMotion` (`ps+0x61c`) as it stands (VERIFIED
-  decompile, 0x1c973), and its value table opens on `** UNUSED **`:
-  `.data` 0xa92a0 holds `** UNUSED **`, `IDLE`, `FORWARD`, `REVERSING`,
-  each with a -1 (VERIFIED, file bytes and `.rel.dyn`).
-  `VEH_LinkPlayer` writes `vehPos` and `vehType` but not `vehMotion`
-  (11.1), the exit keeps it (11.2) and the spawn's memset zeroes it
-  (11.7), so a boarding after a spawn runs its cmds before the end frame
-  under motion 0, which no `vehicle_motion` clause names (INFERRED, off
-  the three). The seat's legs then wait for the end frame's `vehMotion` and
-  the next frame's cmds: the jeep driver boarded by a use cmd at 29716,
-  with a seated cmd at 29733 in the same frame, is sent with the on-foot
-  idle (697) at 29750 and the seat's (94) at 29800, and his bones begin
-  the glide down a frame after vcod's did (VERIFIED, capture 2026-10-21,
-  the first cut of `mp_peaks-jeep-glide-uo.txt`, since recaptured, 13). vcod: the boarding keeps the sim's
-  `veh_motion` and `seat_conditions` names no motion for 0.
+  decompile, 0x1c973); its value table opens on `** UNUSED **`: `.data`
+  0xa92a0 holds `** UNUSED **`, `IDLE`, `FORWARD`, `REVERSING`, each with a
+  -1 (VERIFIED, file bytes and `.rel.dyn`). `VEH_LinkPlayer` writes
+  `vehPos` and `vehType` but not `vehMotion` (11.1), the exit keeps it
+  (11.2) and the spawn's memset zeroes it (11.7). So a boarding after a
+  spawn runs its cmds before the end frame under motion 0, which no
+  `vehicle_motion` clause names (INFERRED, off the three). The seat's legs
+  then wait for the end frame's `vehMotion` and the next frame's cmds: the
+  jeep driver boarded by a use cmd at 29716, with a seated cmd at 29733 in
+  the same frame, is sent with the on-foot idle (697) at 29750 and the
+  seat's (94) at 29800, and his bones begin the glide down a frame later
+  than vcod's once did (VERIFIED, capture 2026-10-21, the first cut of
+  `mp_peaks-jeep-glide-uo.txt`, since recaptured, 13). vcod: the boarding
+  keeps the sim's `veh_motion`, and `seat_conditions` names no motion for
+  0.
 
 ### 11.5 A spawn out of a seat
 
@@ -938,252 +938,251 @@ stood off retail's by up to 0.84 degrees on the change's snapshot.
 `pm_flags & 0x80000` and `eFlags & 0x100000` and calls
 `VEH_UnlinkPlayer(ent, 0)` (0x44e9e), both ahead of `G_EntUnlink`
 (0x44ea9) (VERIFIED disassembly). The think on the client's last cmd
-(0x45409, cod15-movement.md 4) comes after the playerstate is rebuilt,
-so a rider spawned out of his seat moves from the spawn spot on that
-cmd, with nothing of the seat in it (INFERRED, call order).
+(0x45409, cod15-movement.md 4) comes after the playerstate is rebuilt, so
+a rider spawned out of his seat moves from the spawn spot on that cmd,
+with nothing of the seat in it (INFERRED, call order).
 
-VERIFIED, retail capture (`crates/server/tests/fixtures/seatspawn/mp_cassino-tank-uo.txt`,
-`client-probes/probe_vehicle` with `probe_respawn 3`): a panzeriv
-driver holding forward, spawned 3 s after his seat at (4676, -2179,
-40.12) facing 0, reads `(4677.49, -2179.00, 36.12) (0.00, 0.00, 0.00)`
-as `self.origin` and `self.angles` straight after the `spawn`: 1.49
-along the spawn's yaw and the 100 ms fall. vcod's `spawn` builtin runs
-the same think on a fresh sim, which holds no seat, and reads the same
-text (`vehicle_ab`'s `a_driver_spawned_out_of_the_seat_reads_retail_s_origin`).
+VERIFIED, retail capture
+(`crates/server/tests/fixtures/seatspawn/mp_cassino-tank-uo.txt`,
+`client-probes/probe_vehicle` with `probe_respawn 3`): a panzeriv driver
+holding forward, spawned 3 s after his seat at (4676, -2179, 40.12) facing
+0, reads `(4677.49, -2179.00, 36.12) (0.00, 0.00, 0.00)` as `self.origin`
+and `self.angles` straight after the `spawn`: 1.49 along the spawn's yaw
+and the 100 ms fall. vcod's `spawn` builtin runs the same think on a fresh
+sim, which holds no seat, and reads the same text (`vehicle_ab`'s
+`a_driver_spawned_out_of_the_seat_reads_retail_s_origin`).
 
 A frame later the script's read (`PROBE seatnext`) is wherever the
-client's next cmds took him: 33.15 in that run, 31.96 in a second one
-with an 8 ms cmd clock (`fixtures/seatspawn/mp_cassino-tank-cmds-uo.txt`,
-its cmds and snapshots in
-`playerstate/mp_cassino-tdm-slope-8ms-tank-respawn-uo.txt`), and the yaw
--90, the view the probe kept across the spawn's new `delta_angles`
-(VERIFIED, capture). The spawn frame's `commandTime` is 18550, the
-frame's own time, not a cmd's: the probe's cmd stamped 18550 sits on the
-spawn's `delta_angles` (13653 against the seat's 62805) and its weapon
-echoes the spawn's, so it went out after that snapshot and ran in the
-next frame, where `ClientThink_real` drops it (its clock is not past
-`commandTime`) and it is still the next cmd's `pers.oldcmd`
+client's next cmds took him: 33.15 in that run, 31.96 in a second with an
+8 ms cmd clock (`fixtures/seatspawn/mp_cassino-tank-cmds-uo.txt`, its cmds
+and snapshots in `playerstate/mp_cassino-tdm-slope-8ms-tank-respawn-uo.txt`),
+and yaw -90, the view the probe kept across the spawn's new
+`delta_angles` (VERIFIED, capture). The spawn frame's `commandTime` is
+18550, the frame's own time, not a cmd's. The probe's cmd stamped 18550
+sits on the spawn's `delta_angles` (13653 against the seat's 62805) and
+its weapon echoes the spawn's, so it went out after that snapshot and ran
+in the next frame, where `ClientThink_real` drops it (its clock is not
+past `commandTime`) and it stays the next cmd's `pers.oldcmd`
 (cod11-combat.md 2.1) (VERIFIED, capture). Replayed that way,
 `a_driver_spawned_out_of_the_seat_moves_on_retail_s_cmds` reads retail's
-`seatnext` text and matches every snapshot after it on foot (VERIFIED,
-replay). The replay used to run the cmds up to a snapshot's
-`commandTime` before its frame, which on a spawn frame sent that cmd
-ahead of the spawn: its angles then based the spawn's `delta_angles`,
-and the yaw read 0.
+`seatnext` text and matches every later snapshot on foot (VERIFIED,
+replay). Trap: running the cmds up to a snapshot's `commandTime` before
+its frame sends that cmd ahead of the spawn; its angles then base the
+spawn's `delta_angles` and the yaw reads 0.
 
 ### 11.6 A body inside a vehicle
 
-United Offensive's `ClientThink_real` (game.mp.uo 0x40c91) gets a client
-on foot out of a vehicle before his `Pmove` (VERIFIED disassembly,
-0x415e4..0x419c3, and decompile):
+UO's `ClientThink_real` (game.mp.uo 0x40c91) gets a client on foot out of
+a vehicle before his `Pmove` (VERIFIED disassembly, 0x415e4..0x419c3, and
+decompile):
 
-- With `ps.eFlags & 0x100000` clear (not seated), a `trap_TraceCapsule`
-  position test at `ps.origin` with the client's box, `maxs.z` 30 under
-  `pm_flags` 1 (prone) and 50 under 2 (crouched), passing his own
-  number, under the cmd's mask: 0x2810011 alive, 0x810011 at `pm_type`
-  6 and up.
-- When it starts or is all solid and the entity it names has `eType` 12:
-  `dir` is `ps.origin - r.currentOrigin` of the vehicle, `VectorNormalize`d
-  whole, and `along` the velocity's `VectorNormalize2`, which returns the
-  speed; both then lose their z without renormalizing.
-- The speed under 1.0 (rodata 0x9de18), or `dir . along` past 0.8
-  (0x9de24): the vehicle is `trap_UnlinkEntity`ed, and
-  `trap_LinkEntity`ed back after the `Pmove` (0x41a97). Otherwise
-  nothing happens.
-- Then, not prone and the speed under 1.0: a vehicle whose record
-  velocity (`rec+0xe8`) is past 1.0 runs `VEH_PlayerCollision(vehicle,
-  player)` and a velocity under 200 (0x9de28) is scaled up to 200; a
-  vehicle at rest sets the velocity to `200 dir`. Either way `pm_time`
-  becomes 200 and `pm_flags` takes 0x200 (the damage knockback's timer).
-- Prone, inside the vehicle (unlinked or not), and `client+0x472c` more
-  than 500 ms old: `VEH_PlayerDamage(player, vehicle, 10)`, and a second
-  `VEH_PlayerDamage(player, player, 10)` when the first left his health
-  alone (VERIFIED decompile). `client+0x472c` is read there alone
-  (0x41964) and written nowhere in the module (VERIFIED disassembly,
-  every reference to the displacement): unlike `VEH_PlayerCollision`'s
-  `+0x4728` it holds nothing back, so past the level's first 500 ms the
-  prone body takes the 10 on every cmd (VERIFIED, capture below).
-- `VEH_PlayerDamage` (0x81ffd) of a vehicle is `G_Damage` with the
-  vehicle as the inflictor and its `r.ownerNum` as the attacker (the
-  vehicle itself at 1023), no direction, the body's `r.currentOrigin` as
-  the point, dflags 0, `MOD_CRUSH_JEEP` (18) where the vehicle file's
-  type (`info+0x40`) is 1, `MOD_CRUSH_TANK` (17) else; `VEH_LinkPlayer`
-  (0x8998d) sets a vehicle's `r.ownerNum` to its driver and
-  `VEH_UnlinkPlayer` back to 1023. Of anything else (the player himself)
-  it is `G_Damage` with him as inflictor and attacker under
-  `MOD_SUICIDE` (21) (VERIFIED decompile).
+1. Not seated (`ps.eFlags & 0x100000` clear): a `trap_TraceCapsule`
+   position test at `ps.origin` with the client's box (`maxs.z` 30 under
+   `pm_flags` 1 prone, 50 under 2 crouched), passing his own number, under
+   the cmd's mask: 0x2810011 alive, 0x810011 at `pm_type` 6 and up.
+2. When it starts or is all solid and names an `eType` 12 entity: `dir` is
+   `ps.origin - r.currentOrigin` of the vehicle, `VectorNormalize`d whole,
+   and `along` the velocity's `VectorNormalize2`, which returns the speed;
+   both then lose their z without renormalizing.
+3. Speed under 1.0 (rodata 0x9de18), or `dir . along` past 0.8 (0x9de24):
+   the vehicle is `trap_UnlinkEntity`ed and `trap_LinkEntity`ed back after
+   the `Pmove` (0x41a97). Otherwise nothing happens.
+4. Then, not prone and speed under 1.0: a vehicle whose record velocity
+   (`rec+0xe8`) is past 1.0 runs `VEH_PlayerCollision(vehicle, player)`,
+   and a velocity under 200 (0x9de28) is scaled up to 200; a vehicle at
+   rest sets the velocity to `200 dir`. Either way `pm_time` becomes 200
+   and `pm_flags` takes 0x200 (the damage knockback's timer).
+5. Prone, inside the vehicle (unlinked or not), and `client+0x472c` more
+   than 500 ms old: `VEH_PlayerDamage(player, vehicle, 10)`, and a second
+   `VEH_PlayerDamage(player, player, 10)` when the first left his health
+   alone (VERIFIED decompile). `client+0x472c` is read there alone
+   (0x41964) and written nowhere in the module (VERIFIED disassembly,
+   every reference to the displacement). Unlike `VEH_PlayerCollision`'s
+   `+0x4728` it holds nothing back, so past the level's first 500 ms the
+   prone body takes the 10 on every cmd (VERIFIED, capture below).
 
-A rider put out where he sat (11.2) is that body: his box starts in the
-hull's collmap, so a cmd with velocity left meets the linked hull, is
-held all solid and ends with its velocity zeroed by the pmove's tail; the
-next starts under 1.0, unlinks the hull and pushes him off at 200 from
-its origin. The corpse leaves a cmd at a time, which the three captures
-of `client-probes/probe_vehdie` show: Panzer IV killed by itself, the
-driver's corpse 0.65 along x at the kill's next frame and 8.7 half a
+`VEH_PlayerDamage` (0x81ffd) of a vehicle is `G_Damage` with the vehicle
+as inflictor and its `r.ownerNum` as attacker (the vehicle itself at
+1023), no direction, the body's `r.currentOrigin` as the point, dflags 0,
+`MOD_CRUSH_JEEP` (18) where the file's type (`info+0x40`) is 1, else
+`MOD_CRUSH_TANK` (17). `VEH_LinkPlayer` (0x8998d) sets a vehicle's
+`r.ownerNum` to its driver, `VEH_UnlinkPlayer` back to 1023. Of anything
+else (the player himself) it is `G_Damage` with him as inflictor and
+attacker under `MOD_SUICIDE` (21) (VERIFIED decompile).
+
+A rider put out where he sat (11.2) is that body. His box starts in the
+hull's collmap, so a cmd with velocity left meets the linked hull, is held
+all solid and ends with its velocity zeroed by the pmove's tail; the next
+starts under 1.0, unlinks the hull and pushes him off at 200 from its
+origin. The corpse leaves a cmd at a time, as the three
+`client-probes/probe_vehdie` captures show: Panzer IV killed by itself,
+the driver's corpse 0.65 along x at the kill's next frame and 8.7 half a
 second on, the gunner's 20 units out (VERIFIED, capture,
 `mp_cassino-tank-die-*-uo.txt`).
 
 vcod runs it as `ClientSim::vehicle_overlap` before each UO cmd's pmove,
 the collmap instance taken out of the collision world for the cmd
 (`CollisionWorld::unlink_model_instance`), and deals the run-over and
-the prone damage ahead of the cmd's pmove (`Server::vehicle_overlap_hits`),
-so a kill there runs the pmove on the corpse. `vehicle_die_ab` sends the
-probe's 16, 16 and 18 ms cmds a frame and puts the driver's corpse
-within 1 unit of retail's at both lines, and the gunner's within 6.2
-from his mid-turn start (INFERRED, the residue is the probe client's cmd
-clock, which no capture logs).
+prone damage ahead of the cmd's pmove (`Server::vehicle_overlap_hits`), so
+a kill there runs the pmove on the corpse. `vehicle_die_ab` sends the
+probe's 16, 16 and 18 ms cmds a frame and puts the driver's corpse within
+1 unit of retail's at both lines, the gunner's within 6.2 from his
+mid-turn start (INFERRED, the residue is the probe client's cmd clock,
+which no capture logs).
 
-Measured, retail UO 1.51b, 2026-10-17, `client-probes/probe_vehicle_ram`
-with `probe_victim` (fixtures
+**Run-over, standing and prone.** Retail UO 1.51b, 2026-10-17,
+`client-probes/probe_vehicle_ram` with `probe_victim` (fixtures
 `crates/server/tests/fixtures/vehicles/mp_kharkov-jeep-runover-*-uo.txt`,
 recipes in their headers): mp_kharkov's second Horch, driven straight
 ahead by `--probe-vehicle ram`, meets an allied victim standing or prone
-150 units ahead:
+150 units ahead.
 
-- Standing, he is struck twice. 52 points 350 ms past the jeep's first
-  move, `MOD_CRUSH_JEEP`, the Horch the inflictor, its driver the
-  attacker, weapon `none`, the victim's origin as the point and no
-  direction; he is thrown 11 up and forward, and `vehicle_hit_person`
-  (alias 8) plays at his origin 972 up. The jeep catches him in the air
-  650 ms later for 138, which kills him, the sound 115 up (VERIFIED,
-  capture). Both are this path's, not the drive step's probes: the
-  amounts are `150 min(speed / 400, 1)` of the speed the hull had after
-  the frame before (140.5 gives 52, 369.2 gives 138, the heights `1500 (1
-  - f)`), and the callbacks read the last frame's time, as a cmd's do
-  (INFERRED, the amounts and times; vcod deals them on this path and
-  matches every one).
-- Prone, the hull runs over him without a push and without a sound: 10 on
-  every one of his cmds, three a frame (100 to 20), then a 72 at 192
-  units/s, which kills him (VERIFIED, capture). The 72 reads the frame's
-  own time: the drive step's strike (INFERRED, the time).
+- Standing, he is struck twice. First 52 points 350 ms past the jeep's
+  first move: `MOD_CRUSH_JEEP`, the Horch the inflictor, its driver the
+  attacker, weapon `none`, the victim's origin as the point, no direction;
+  he is thrown 11 up and forward, and `vehicle_hit_person` (alias 8) plays
+  at his origin 972 up. The jeep catches him in the air 650 ms later for
+  138, which kills him, the sound 115 up (VERIFIED, capture). Both come
+  from this path, not the drive step's probes: the amounts are `150
+  min(speed / 400, 1)` of the hull's speed after the frame before (140.5
+  gives 52, 369.2 gives 138; the heights `1500 (1 - f)`), and the
+  callbacks read the last frame's time, as a cmd's do (INFERRED, the
+  amounts and times; vcod deals them on this path and matches every one).
+- Prone, the hull runs over him without a push or a sound: 10 on each of
+  his cmds, three a frame (100 to 20), then a 72 at 192 units/s, which
+  kills him (VERIFIED, capture). The 72 reads the frame's own time: the
+  drive step's strike (INFERRED, the time).
 - Prone under a teammate's jeep with `scr_friendlyfire 0`, every cmd's
-  crush is refused and the second call follows, `MOD_SUICIDE` with the
-  victim as inflictor and attacker and his own `mosin_nagant_mp`; past
-  his death the two keep coming until his end frame, the health reading
-  0, -10, -20 (VERIFIED, capture). That is `takedamage` staying set
-  until his end frame (INFERRED, combat doc 14.7's rule).
+  crush is refused and the second call follows: `MOD_SUICIDE`, the victim
+  as inflictor and attacker, his own `mosin_nagant_mp`. Past his death the
+  two keep coming until his end frame, health reading 0, -10, -20
+  (VERIFIED, capture): `takedamage` stays set until his end frame
+  (INFERRED, combat doc 14.7's rule).
 
-`vehicle_runover_ab` replays the three on ours: every damage callback
-and every hit sound matches retail's in time, amount, means, attacker,
-inflictor, weapon and health; the victim's origin matches to the
-hundredth up to 150 ms past the first strike, and after it within a
-probe client cmd's travel (INFERRED, the gsc reads it after however many
-of the probe's cmds a frame ran: retail's flight steps 14, 3.8 and 17.6
-units over three frames where ours steps 10.6 each). Where a prone
-victim lies down is the probe client's timing too: retail's two prone
-runs lie 1.1 units apart. The same captures carry the Horch's own ram
-sounds as it strikes the Panzer past the victim, `EV_SOUND_ALIAS` parm 7
-(`vehicle_impact`) at z 1825 and 2409 over the struck hull, 1300 and 2100
-ms after the jeep's first move in the standing run (VERIFIED, capture);
-the gate matches each one's time from that move, alias and snapped
-origin on ours (`compare_impacts`).
+`vehicle_runover_ab` replays the three on ours. Every damage callback and
+hit sound matches retail's in time, amount, means, attacker, inflictor,
+weapon and health. The victim's origin matches to the hundredth up to
+150 ms past the first strike, and after it within a probe client cmd's
+travel (INFERRED: the gsc reads it after however many of the probe's cmds
+a frame ran; retail's flight steps 14, 3.8 and 17.6 units over three
+frames, ours 10.6 each). Where a prone victim lies down is the probe
+client's timing too: retail's two prone runs lie 1.1 units apart. The same
+captures carry the Horch's own ram sounds as it strikes the Panzer past
+the victim, `EV_SOUND_ALIAS` parm 7 (`vehicle_impact`) at z 1825 and 2409
+over the struck hull, 1300 and 2100 ms after the jeep's first move in the
+standing run (VERIFIED, capture); the gate matches each one's time from
+that move, alias and snapped origin (`compare_impacts`).
 
-- **The first drop.** The probe sets the victim down 8 over the
-  jeep's line on the first frame he plays, and he falls about 14 units to rest
-  before the second placement a second later (VERIFIED, `try_victim` in
+- **The first drop.** The probe sets the victim down 8 over the jeep's
+  line on the first frame he plays; he falls about 14 units to rest before
+  the second placement a second later (VERIFIED, `try_victim` in
   `probe_vehicle_ram.gsc` and the captures). The four retail runs fall
-  differently from the same spot (VERIFIED, captures: z at the first four
-  frames past the placement, stand -76.13, -77.47, -82.77, -90.05; prone
-  -76.11, -78.40, -82.69, -88.98; prone under a teammate -75.81, -79.64,
-  -81.12, -89.06; bail -76.29, -78.78, -83.23, -89.77). The vertical
-  drops read as a fall from rest after a whole number of the probe
-  client's ~16.7 ms cmds: two, four and eight by the first three frames
-  standing, one, six and seven under the teammate, two, five and eight
-  prone (INFERRED, `400 t^2` against each drop). In the bail run he also
-  slides 13.9 units/s across the ground from the first frame on. Nothing
-  in the gsc moves him sideways, so that is velocity his spawn left: a
-  frame of his cmds ran between the spawn and the placement (INFERRED,
+  differently from the same spot (VERIFIED, captures; z at the first four
+  frames past the placement):
+
+  | Run | z |
+  |---|---|
+  | stand | -76.13, -77.47, -82.77, -90.05 |
+  | prone | -76.11, -78.40, -82.69, -88.98 |
+  | prone under a teammate | -75.81, -79.64, -81.12, -89.06 |
+  | bail | -76.29, -78.78, -83.23, -89.77 |
+
+  The drops read as a fall from rest after a whole number of the probe
+  client's ~16.7 ms cmds by the first three frames: two, four, eight
+  standing; one, six, seven under the teammate; two, five, eight prone
+  (INFERRED, `400 t^2` against each drop). In the bail run he also slides
+  13.9 units/s across the ground from the first frame. Nothing in the gsc
+  moves him sideways, so that is velocity his spawn left: a frame of his
+  cmds ran between the spawn and the placement (INFERRED,
   `replace_victim`'s comment; the spawn point is not logged). Ours runs
-  the probe's 16, 16 and 18 ms cmds and he carries no velocity into the
-  placement, so his first drop reads two, five and eight cmds from rest on
-  every run (VERIFIED, `RUNOVER_DUMP` of all four tests).
-  That is retail's prone run to the hundredth, rest spot included
-  (VERIFIED, the gate). Joining him later moves none of it (VERIFIED,
-  measured on ours): with our victim placed at retail's
-  7850, 7900 and 7950 ms instead of 2900, the rows are the same lines at
-  the shifted times. `vehicle_runover_ab` compares the prone run's first
-  drop line for line (`compare_first_drop`) and names the other three in
-  `FIRST_DROP_GAPS`. Comparing them needs a recapture with the victim's
-  `CMDS` lines replayed through `ProbeHold::times`, plus his spawn
-  pinned.
+  the probe's 16, 16 and 18 ms cmds with no velocity into the placement,
+  so the first drop reads two, five and eight cmds from rest on every run
+  (VERIFIED, `RUNOVER_DUMP` of all four tests): retail's prone run to the
+  hundredth, rest spot included (VERIFIED, the gate). Joining him later
+  moves none of it (VERIFIED, measured on ours): placed at retail's 7850,
+  7900 and 7950 ms instead of 2900, the rows are the same lines at the
+  shifted times. `vehicle_runover_ab` compares the prone run's first drop
+  line for line (`compare_first_drop`) and names the other three in
+  `FIRST_DROP_GAPS`. Closing them needs a recapture with the victim's
+  `CMDS` lines replayed through `ProbeHold::times`, plus his spawn pinned.
 
-Measured, retail UO 1.51b, 2026-10-20, the same probe with
-`--probe-vehicle bail` for the driver (out at full throttle a second into
-the drive) and the victim 300 ahead (fixture
+**Run-over by a driverless jeep.** Retail UO 1.51b, 2026-10-20, the same
+probe with `--probe-vehicle bail` for the driver (out at full throttle a
+second into the drive) and the victim 300 ahead (fixture
 `crates/server/tests/fixtures/vehicles/mp_kharkov-jeep-runover-bail-uo.txt`,
-recipe in its header): the driverless Horch rolls on at about 320
-units/s and strikes the standing victim once.
+recipe in its header): the driverless Horch rolls on at about 320 units/s
+and strikes the standing victim once.
 
-- 121 points, `MOD_CRUSH_JEEP`, the Horch (182) both the inflictor and
-  the attacker, weapon `none`, no direction, and the victim's unsnapped
-  origin as the point, the callback's time the last frame's (VERIFIED,
-  capture). That is `VEH_PlayerDamage` with `r.ownerNum` 1023 after the
-  driver's exit (11.2), on the cmd's path (INFERRED, the time).
-- The callback reads the victim's `origin` equal to the point, the
-  origin his cmd started from: the kill lands before that cmd's
-  `Pmove` (VERIFIED, capture: the probe's `dmgorigin` line; vcod read
-  the origin past the pmove until 2026-10-20, (-1025, 7768, -97) against
-  retail's (-1032.02, 7763.81, -103.08)).
+- 121 points, `MOD_CRUSH_JEEP`, the Horch (182) both inflictor and
+  attacker, weapon `none`, no direction, the victim's unsnapped origin as
+  the point, the callback's time the last frame's (VERIFIED, capture):
+  `VEH_PlayerDamage` with `r.ownerNum` 1023 after the driver's exit
+  (11.2), on the cmd's path (INFERRED, the time).
+- The callback reads the victim's `origin` equal to the point, the origin
+  his cmd started from: the kill lands before that cmd's `Pmove`
+  (VERIFIED, capture: the probe's `dmgorigin` line). Trap: reading the
+  origin after the pmove gave (-1025, 7768, -97) against retail's
+  (-1032.02, 7763.81, -103.08).
 - The corpse leaves on the knock, 418 units/s by the frames after. Where
-  the death frame's gsc reads it depends on how many of the victim's
-  cmds that frame ran past the kill: four retail runs put it 7.5, 14.2,
-  20.9 and 27.7 units out (a fifth is lost to the crash below), and
-  vcod's three cmds a frame 20.9 (INFERRED, the steps are whole cmds of
-  that speed). Where the victim lands from his placement is the probe
-  client's timing too: four runs settle within 0.03 of (-1032.02,
-  7763.81, -103.08), where vcod settles, and one 0.7 away (VERIFIED,
-  capture).
+  the death frame's gsc reads it depends on how many of the victim's cmds
+  that frame ran past the kill: four retail runs put it 7.5, 14.2, 20.9
+  and 27.7 units out (a fifth was lost to the crash below), vcod's three
+  cmds a frame 20.9 (INFERRED, the steps are whole cmds of that speed).
+  Where the victim lands from his placement is the probe client's timing
+  too: four runs settle within 0.03 of (-1032.02, 7763.81, -103.08), where
+  vcod settles, and one 0.7 away (VERIFIED, capture).
 - Stock UO `tdm.gsc`'s `Callback_PlayerKilled` reads
-  `level.teamkill_penalty`, which nothing sets, for a kill whose
-  attacker is not a player (line 815): a script runtime error, fatal on
-  a `developer 1` server (VERIFIED, the first capture run) and run on
-  past below it (cod11-gsc-language.md, "Runtime errors below developer
-  1"). The probe sets it to 0.
+  `level.teamkill_penalty`, which nothing sets, for a kill whose attacker
+  is not a player (line 815): a script runtime error, fatal on a
+  `developer 1` server (VERIFIED, the first capture run) and run past
+  below it (cod11-gsc-language.md, "Runtime errors below developer 1").
+  The probe sets it to 0.
 
 `vehicle_runover_ab`'s `a_driverless_jeep_runs_over_a_standing_player`
-replays it on ours: the damage line, its point and the callback's origin
-match retail's exactly, the corpse within one cmd's travel.
+replays it: the damage line, its point and the callback's origin match
+retail's exactly, the corpse within one cmd's travel.
 
 ### 11.7 A rider killed in his seat
 
-VERIFIED, retail capture (`crates/server/tests/fixtures/playerstate/mp_peaks-tdm-slope-8ms-jeep-die-uo.txt`,
-2026-10-19, `client-probes/probe_vehicle` on mp_peaks with
-`+set probe_vehicletype willyjeep_mp +set probe_side 75 +set probe_pitch
-15 +set probe_suicide 3.5` and a `--probe-vehicle drive --save-slope
---slope-every-state` client, port 33573): the Willys' driver, 3.5 s after his seat
+VERIFIED, retail capture
+(`crates/server/tests/fixtures/playerstate/mp_peaks-tdm-slope-8ms-jeep-die-uo.txt`,
+2026-10-19, `client-probes/probe_vehicle` on mp_peaks with `+set
+probe_vehicletype willyjeep_mp +set probe_side 75 +set probe_pitch 15
++set probe_suicide 3.5` and a `--probe-vehicle drive --save-slope
+--slope-every-state` client): the Willys' driver, 3.5 s after his seat
 (1.35 s into the drive script's full-throttle step), is killed with
 `suicide()` where he sits.
 
 - The death's snapshot (t 18700) is already out of the seat: `pm_type` 6,
-  `vehPos` 0, `viewlocked_entNum` 1023, the seat bits off, the origin
-  where the seat left it and the velocity 0, while `vehType` 1 and
-  `vehMotion` 2 stay until the respawn. `player_die` (0x5f972) touches no
-  seat; the driven jeep's think, `G_VehicleClientThink` (0x9b0ce) after
-  the entity pass, puts its dead riders out (`Scr_Vehicle_Think`
-  0x9c7cc, health under 1, `VEH_UnlinkPlayer(rider, 0)`), and the end
-  frame's write (11.2) reads no link (VERIFIED decompile).
-- The view's pitch drops: 24.999 seated, 0 on the death's snapshot, the
+  `vehPos` 0, `viewlocked_entNum` 1023, seat bits off, the origin where
+  the seat left it, velocity 0; `vehType` 1 and `vehMotion` 2 stay until
+  the respawn. `player_die` (0x5f972) touches no seat. The driven jeep's
+  think, `G_VehicleClientThink` (0x9b0ce) after the entity pass, puts its
+  dead riders out (`Scr_Vehicle_Think` 0x9c7cc, health under 1,
+  `VEH_UnlinkPlayer(rider, 0)`), and the end frame's write (11.2) reads no
+  link (VERIFIED decompile).
+- The view's pitch drops (24.999 seated, 0 on the death's snapshot), the
   yaw kept. `player_die` copies the entity's angles into `ps.viewangles`
   (combat doc 5.1 step 12, UO the same stores), and every cmd leaves them
   (0, view yaw, 0) (`ClientThink_real` 0x50c91's tail) (VERIFIED
   decompile and capture).
 - The corpse leaves the hull as 11.6's body does, a cmd held inside it
   then a push off its origin: (-234, -218, 274) at t 18750 and (-189,
-  -355, 267) at 18800, then a fall onto the slope (VERIFIED, capture).
-  At ct 18793 retail's held cmd also lands on the hull: `EV_LANDING` on
+  -355, 267) at 18800, then a fall onto the slope (VERIFIED, capture). At
+  ct 18793 retail's held cmd also lands on the hull: `EV_LANDING` on
   surface 13 with parm 9, the height of a 274 rise from where it stands.
   Its ground trace there meets the collmap's brushes in lump order: the
-  sixth of the Willys' nine (vcod's brush 6989 on mp_peaks) at fraction 0 on
-  the face that turns to (-0.548, 0.101, 0.830), and the seventh, an axial
+  sixth of the Willys' nine (vcod's brush 6989 on mp_peaks) at fraction 0
+  on the face that turns to (-0.548, 0.101, 0.830); the seventh, an axial
   box, holds the whole sweep. The submodel's leaf trace (UO `coduo_lnxded`
   0x8059875; the box trace 0x805a9d5 sends a moving submodel sweep there)
   stops its brush loop once the fraction reaches 0, so the box is never
-  clipped and the trace stands the corpse on the face (VERIFIED
-  decompile; the event and its parm VERIFIED, capture and replay).
-  vcod clipped every brush and read the trace all solid until
-  `CollisionWorld::clip_model` stopped at 0 the same way.
-- The corpse's cone reads 255 on the death's snapshot and 0 after, and
-  the reverse step of the drive script sets `pm_flags` 0x40 on it
+  clipped and the trace stands the corpse on the face (VERIFIED decompile;
+  the event and its parm VERIFIED, capture and replay).
+  `CollisionWorld::clip_model` stops at 0 the same way; clipping every
+  brush read the trace all solid.
+- The corpse's cone reads 255 on the death's snapshot and 0 after, and the
+  drive script's reverse step sets `pm_flags` 0x40 on it
   (cod11-player-clip.md 1.1).
 - The respawn (tdm's, at t 37000) reads `vehType` and `vehMotion` 0:
   `ClientSpawn`'s rebuild clears them (VERIFIED, capture).
@@ -1192,18 +1191,14 @@ vcod: the end frame clears `ClientSim::unseated`, `ClientSim::die` drops
 the pitch, `cmd::dead_step` runs the head, and the respawn clears the
 seat's two fields. `vehicle_ab`'s
 `the_jeep_driver_killed_in_his_seat_replays_on_ours` replays the capture
-on ours (server seed 2, retail's death clip; retail's respawn spot
-pinned) and matches every field it compares up to the gsc's placement
-after the respawn, the landing's event and parm included; before these fixes the death
-snapshot read `pm_type` 7, the corpse ran a frame linked, its view kept
-the pitch, the cone stayed 255 and the respawn kept the seat's fields.
-It now runs the whole capture: past the gsc's placement beside the hull
-(37050) retail's body slides 65 units down the slope and settles at
-37900, and ours slides with it to the bit (VERIFIED, replay). The
-placement lands a hair inside the terrain, so `PM_GroundTrace`'s start
-in solid lets the body off the ground (cod11-mantle.md, "A start in
-solid on the ground trace"); before that retrace vcod stood it on the
-face.
+(server seed 2, retail's death clip, retail's respawn spot pinned) and
+matches every compared field through the whole capture, the landing's
+event and parm included. Past the gsc's placement beside the hull (37050)
+retail's body slides 65 units down the slope and settles at 37900, and
+ours slides with it to the bit (VERIFIED, replay). The placement lands a
+hair inside the terrain, so `PM_GroundTrace`'s start in solid lets the
+body off the ground (cod11-mantle.md, "A start in solid on the ground
+trace").
 
 ## 12. The drive step
 
