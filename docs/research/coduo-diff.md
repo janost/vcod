@@ -66,7 +66,7 @@ loaders (bsp, xmodel, xanim, shader, efx, weapon, menu, sound alias, gsc).
 - Retail's master is `coduomaster.activision.com`; CD keys go to
   `coduoauthorize.activision.com` (strings in `CoDUOMP.exe` and
   `coduo_lnxded`, VERIFIED). That master on 20510 answered `getservers 21`,
-  `22` and `24 full empty` with an empty list, `23` with 6 addresses, `1`
+  `22` and `24 full empty` with an empty `getserversResponse`, `23` with 6 addresses, `1`
   and `6` with 46 and 69 (live, VERIFIED). vcod's browser does not ask it: a
   UO install asks `master.cod.pm:20610` for its own protocol
   (`net::master::UO_MASTER`, `getservers`).
@@ -515,7 +515,8 @@ has the seats, the drive step and vcod-server's vehicles.
     for good; UO's (0x68abb) and 1.5's (0x5d836) write `r.broadcastTime` =
     `level.time + 300` and leave `svFlags` alone (VERIFIED decompile,
     `cod11-sound-system.md` 9). A vcod-server that broadcast the tank for
-    the rest of the level is the trap. With the 300 ms rule
+    the rest of the level kept it in all 245 of the viewer's changed
+    snapshots, those 11 included (VERIFIED, the same probe): the trap. With the 300 ms rule
     (`builtins/sound.rs`) ours culls the tank at the same two spawns,
     retail's one-snapshot flicker between them included (VERIFIED, the same
     probe).
@@ -2016,79 +2017,86 @@ Other facts from these runs:
 `server::install_protocol` picks it when `uo/pakuo*` paks are mounted, and
 `--set protocol=22` forces it. One protocol per process, as with 1.5
 (`cod15-protocol-diff.md` 13). Measured against the retail 1.51b server on
-loopback (`COD_VERSION=uo tools/run_server.sh`, mp_cassino dm,
-2026-10-14).
+loopback (`COD_VERSION=uo tools/run_server.sh`, mp_cassino dm).
 
 ### What the server writes as UO's
 
 - **Queries and connect.** `getinfo` is 1.5's builder with `jps` and `tnk`
   after `timeoutsAllowed`; `getstatus` is 1.5's. Both replies, and the
   refusal of a protocol 1 or 6 connect
-  (`EXE_SERVER_IS_DIFFERENT_VER\x151.51`), are byte for byte retail's on
-  the same paks (VERIFIED, live, `protocol_22_answers_getinfo_and_refuses_as_uo_does`).
+  (`EXE_SERVER_IS_DIFFERENT_VER\x151.51`), are byte for byte retail's on the
+  same paks (VERIFIED, live,
+  `protocol_22_answers_getinfo_and_refuses_as_uo_does`).
 - **Cvars.** The table is 1.5's with UO's rows on top
   (`cvars::registry::REGISTRY_V22`, `tools/capture_cvars.py` against the
-  retail server, VERIFIED): the identity rows, `fs_basegame uo`, the
-  vehicle and tracer cvars, `sv_night`, `sv_obituary`, `bg_nofatigue`,
+  retail server, VERIFIED): the identity rows, `fs_basegame uo`, the vehicle
+  and tracer cvars, `sv_night`, `sv_obituary`, `bg_nofatigue`,
   `bg_lmg_yawcap`, `cg_hudcompassMaxRange`, `scr_allow_jeeps` and
   `scr_allow_tanks` (`S`, `L`, default 1), `sv_master1
-  coduomaster.activision.com` (vcod's row reads `master.cod.pm`, whose
-  UO list is on port 20610). The mirror adds `bg_lmg_yawcap`,
-  `bg_nofatigue` and `cg_hudcompassMaxRange` to 1.5's set (VERIFIED, the
-  gamestate's 155, 156, 165); systeminfo adds `sv_allowDownload`,
-  `sv_night` and `sv_obituary` to 1.5's rows (VERIFIED, configstring 1).
+  coduomaster.activision.com` (vcod's row reads `master.cod.pm`, whose UO
+  list is on port 20610). The mirror adds `bg_lmg_yawcap`, `bg_nofatigue`
+  and `cg_hudcompassMaxRange` to 1.5's set (VERIFIED, the gamestate's 155,
+  156, 165); systeminfo adds `sv_allowDownload`, `sv_night` and
+  `sv_obituary` to 1.5's rows (VERIFIED, configstring 1).
 - **Configstrings.** The server's table is the protocol's own layout
-  (`Protocol::cs`, section 7): every allocator, the mirror, the vote, the
+  (`Cod1Wire::cs`, section 7): every allocator, the mirror, the vote, the
   match timeout and the hint strings index through it. The fixed slots
   12..21 moved up one: `setWind` has 12 (game.mp.uo 0x6ca27), `G_setfog`
-  writes 13 (0x4a59a, and `G_InitGame` clears it with `"0"`, 0x586cf),
+  writes 13 (0x4a59a; `G_InitGame` clears it with `"0"`, 0x586cf),
   `SP_worldspawn` the start time 14, `G_InitGame` the winner 21 (VERIFIED
-  decompile). Configstring 7 is UO's 63 weapons (`defs::UO`, the
-  gamestate's list, VERIFIED), configstring 8 34 hex digits for
-  `bg_numItems` 134, and the five hint strings 1365..1369 are static as
-  1.1's two are (VERIFIED, gamestate). From 1370 on come the spawned
-  vehicles' `useHintString`s in BSP order: mp_cassino's Sherman and
-  Panzer IV, mp_foy's jeep, Horch, Panzer IV, Sherman and Flak 88
-  (VERIFIED, `gamestate-uo.bin` and `mp_foy-bas-uo.txt`;
-  `coduo-vehicles.md` 10.2).
+  decompile). Configstring 7 is UO's 63 weapons (`defs::UO`, the gamestate's
+  list, VERIFIED), configstring 8 34 hex digits for `bg_numItems` 134, and
+  the five hint strings 1365..1369 are static as 1.1's two are (VERIFIED,
+  gamestate). From 1370 on come the spawned vehicles' `useHintString`s in
+  BSP order: mp_cassino's Sherman and Panzer IV, mp_foy's jeep, Horch,
+  Panzer IV, Sherman and Flak 88 (VERIFIED, `gamestate-uo.bin` and
+  `mp_foy-bas-uo.txt`; `coduo-vehicles.md` 10.2).
 - **Items.** `bg_itemlist` is 128 weapon rows, then the two grenade ammo
-  rows and the three health rows at 129..133 (section 12, VERIFIED);
+  rows and the three health rows at 129..133 (section 12, VERIFIED).
   `RegisterItem` takes a UO weapon file's `pickupModel` between its
   `worldModel` and `projectileModel` (VERIFIED, the gamestate's 547/548),
   and its `attachModel` between `worldModel` and `pickupModel`: the
   flamethrower's `xmodel/c_ge_eqp_tank` sits at 528, between 527's
   `w_ge_prj_flamethrower_game` and 529's pickup (VERIFIED, mp_foy `bas`
   capture `mp_foy-bas-uo.txt`).
-- **Means of death.** `modNames` is UO's (section 12), and the obituary
-  sends `0x80 | mod` for 7, 8, 13, 15, 16, 17, 18, 20, 21 and 26, the
-  weapon index otherwise (`obituary` 0x6a819, VERIFIED decompile).
+- **Means of death.** `modNames` is UO's (section 12). The obituary sends
+  `0x80 | mod` for 7, 8, 13, 15, 16, 17, 18, 20, 21 and 26, the weapon index
+  otherwise (`obituary` 0x6a819, VERIFIED decompile).
 - **Wire numbering.** The server builds every entity and playerstate in
-  1.1's numbering and maps it once a snapshot (`game::wire::entity_to_protocol`,
-  `ps_to_protocol`): `eFlags` one place down from 0x100
-  (`flags::eflags_v1_to_v22`), the event ids by section 8's table read
-  backwards (`event_ids::event_v1_to_v22`, both bullet hits to 178, the
-  explodes to 185 and 186), and an event entity's `eType` from 16. The
-  baselines go through the same map. `pm_flags` maps in the writer, as on
-  1.5.
-- **Playerstate.** `sprintSpeedScale` 1.6, `fatigueScale`,
-  `lastSprintTime` and the sprinting and winded `pm_flags` come off the
-  sim, which runs `MoveRules::Uo` for every client and bot; `gunfx`, gone
-  in UO, is left out. A spawned axis kar98k player matches retail's
-  capture on all 114 fields except the spawn point and the anim restart
-  toggle; `viewmodelIndex` matches since the vehicles spawn
+  1.1's numbering and maps it once a snapshot
+  (`game::wire::entity_to_protocol`, `ps_to_protocol`; baselines too):
+  `eFlags` one place down from 0x100 (`flags::eflags_v1_to_v22`), the event
+  ids by section 8's table read backwards (`event_ids::event_v1_to_v22`,
+  both bullet hits to 178, the explodes to 185 and 186), and an event
+  entity's `eType` from 16. `pm_flags` maps in the writer, as on 1.5.
+- **Playerstate.** `sprintSpeedScale` 1.6, `fatigueScale`, `lastSprintTime`
+  and the sprinting and winded `pm_flags` come off the sim, which runs
+  `MoveRules::Uo` for every client and bot; `gunfx`, gone in UO, is left
+  out. A spawned axis kar98k player matches retail's capture on all 114
+  fields except the spawn point and the anim restart toggle;
+  `viewmodelIndex` matches only with the vehicles spawned
   (`playerstate_uo_ab`, VERIFIED, `fixtures/playerstate/mp_cassino-dm-uo.txt`).
 - **Scripts.** UO's stock `dm`, `tdm` and `sd` compile and run. A string
   indexes by character (`probe_string_index`, 1.1d and UO, VERIFIED;
-  `_gameobjects::main` needs it). The builtins they reach that vcod lacked
-  are in `game::builtins::uo`: `getFullClipAmmo` (0x6782e, the weapon's
-  `clipSize`), `isValidPlayer` (0x67176), `distanceSquared` (0x6b83d),
-  `iPrintLnBold` (`g`, 0x66e86 and 0x489fd), `getWeaponSlotAmmo` (0x4838a),
-  `getWeaponSlotClipAmmo` (0x486f3), `attackButtonPressed`, `isInVehicle`
-  (always 0), `viewKick` (0x6db55: damage feedback of `force` from the
-  given point), `setContents` (0x696b9), and `setTakeDamage` and
-  `setBounds`, which check their arguments and change nothing (VERIFIED
-  decompile for each address). `weaponSlot` gains `satchel` and
-  `binocular` (strings 0x9bc21, 0x9bc29, VERIFIED).
+  `_gameobjects::main` needs it). UO's own builtins are in
+  `game::builtins::uo` (VERIFIED decompile for each address):
+
+  | Builtin | Retail | vcod |
+  |---|---|---|
+  | `getFullClipAmmo` | 0x6782e | the weapon's `clipSize` |
+  | `isValidPlayer` | 0x67176 | |
+  | `distanceSquared` | 0x6b83d | |
+  | `iPrintLnBold` | `g`, 0x66e86 and 0x489fd | |
+  | `getWeaponSlotAmmo`, `getWeaponSlotClipAmmo` | 0x4838a, 0x486f3 | |
+  | `attackButtonPressed` | | |
+  | `isInVehicle` | | 1 while the player holds a seat |
+  | `viewKick` | 0x6db55 | damage feedback of `force` from the given point |
+  | `setContents` | 0x696b9 | |
+  | `setTakeDamage` | 0x691d2 | writes the entity's `takedamage` (section 22) |
+| `setBounds` | | sets the link box and relinks |
+
+  `weaponSlot` gains `satchel` and `binocular` (strings 0x9bc21, 0x9bc29,
+  VERIFIED).
 - **Anims.** UO's player anim indices follow two rules 1.1's tree never
   exercised (`player-model-anim-system.md`, "United Offensive's array").
   The server's torso anims under the kar98k match retail's
@@ -2097,41 +2105,41 @@ loopback (`COD_VERSION=uo tools/run_server.sh`, mp_cassino dm,
 ### Vehicles
 
 `vcod-server` spawns, seats, drives, fires and damages UO's vehicles as
-retail does: `coduo-vehicles.md` 10 to 14, which carry the addresses, the
-captures and the gates.
+retail does: `coduo-vehicles.md` 10 to 14 carry the addresses, captures and
+gates.
 
 ### Measured
 
-- `configstrings_uo_ab`: the whole table against `gamestate-uo.bin`, the
-  start time included: UO's level clock starts at the server's uptime, 3's
-  `t` and 14 read 1810050 there, and the gate loads ours on that clock
-  (`Server::start_clock_at`), `sv_serverid` included. A fresh retail UO
-  server's first level reads 16, in `rcon sv_serverid` and in a probe's
-  gamestate, with no client and with one joined (VERIFIED, live,
-  2026-10-17, mp_cassino dm), as `SV_SpawnServer`'s `+0x10` gives
-  (coduo_lnxded, the add after `Cvar_Set("mapname")`; VERIFIED,
-  decompile). The capture's 17 is that server's history: one spawn and
-  one `map_restart` (`0x8088325`, low nibble up one; VERIFIED, decompile)
-  before the probe joined. INFERRED, off the nibbles. The gate restarts
-  ours once on a clock 300 ms earlier, the three 100 ms settle frames
-  the spawn runs before the restart can start its level, and the table
-  then matches whole. VERIFIED (gate).
+- `configstrings_uo_ab`: the whole table against `gamestate-uo.bin`, start
+  time included. UO's level clock starts at the server's uptime (3's `t`
+  and 14 read 1810050 there), and the gate loads ours on that clock
+  (`Server::start_clock_at`), `sv_serverid` included.
+  - A fresh retail UO server's first level reads `sv_serverid` 16, in `rcon
+    sv_serverid` and in a probe's gamestate, with no client and with one
+    joined (VERIFIED, live, mp_cassino dm), as `SV_SpawnServer`'s `+0x10`
+    gives (coduo_lnxded, the add after `Cvar_Set("mapname")`; VERIFIED,
+    decompile).
+  - The capture's 17 is that server's history before the probe joined: one
+    spawn and one `map_restart` (`0x8088325`, low nibble up one; VERIFIED, decompile).
+    That history is INFERRED, off the nibbles.
+  - The gate restarts ours once on a clock 300 ms earlier, the three 100 ms
+    settle frames the spawn runs before the restart can start its level, and
+    the table then matches whole (VERIFIED, gate).
 - `playerstate_uo_ab`: above.
 - `playerstate_combat_ab`'s UO capture, `mp_cassino-dm-combat-uo.txt`:
   retail's `--save-combat --capture-tag uo --probe-team axis` capture
   (kar98k: single shot, sustained fire, reload, crouched and prone shots;
-  retaken cmd-logged 2026-10-19, local 1.51b) replayed on a protocol 22
-  server with retail's cmds frame for frame, as the 1.1 captures are
-  (`cod11-combat.md` 1.13): the same five shots and, sample for sample,
-  the same `weaponstate` runs, `weapAnim` and `torsoAnim` indices, torso
-  toggle flips, `weaponDelay` peak, sight fraction, spread counter and
-  view, with no tolerance and no gap (VERIFIED, gate). Both takes were
-  retaken on 2026-10-19 with the `!cmds` line's `a=` and `m=` columns,
-  so their `advance` walks are compared cmd for cmd too. In
-  `mp_cassino-dm-combat-uo.txt` the walk stalled once (-135, turned to
-  -90); `mp_cassino-dm-combat-uo-stall.txt` stalled three times (45,
-  then 90, 135 and 180), and `idle`'s first cmd turns back to the
-  spawn's facing. Both pass whole (VERIFIED, gate).
+  cmd-logged, local 1.51b) replayed on a protocol 22 server with retail's
+  cmds frame for frame, as the 1.1 captures are (`cod11-combat.md` 1.13).
+  The same five shots and, sample for sample, the same `weaponstate` runs,
+  `weapAnim` and `torsoAnim` indices, torso toggle flips, `weaponDelay`
+  peak, sight fraction, spread counter and view, with no tolerance and no
+  gap (VERIFIED, gate). Both takes carry the `!cmds` line's `a=` and `m=`
+  columns, so their `advance` walks are compared cmd for cmd too. In
+  `mp_cassino-dm-combat-uo.txt` the walk stalled once (-135, turned to -90);
+  `mp_cassino-dm-combat-uo-stall.txt` stalled three times (45, then 90, 135
+  and 180), and `idle`'s first cmd turns back to the spawn's facing. Both
+  pass whole (VERIFIED, gate).
 - The server command stream of a join (team menu, weapon menu, the
   objective text and `cg_hudcompassMaxRange`) is retail's verbatim
   (VERIFIED, live, both probes' logs).
@@ -2142,20 +2150,22 @@ captures and the gates.
 
 ### Not done (stage 1)
 
-The compass's tanks and what `coduo-vehicles.md` 14 leaves out; `bas`,
-`ctf`, `dom` and `hq` (section 22 has them now); artillery, the flamethrower's `fdc` damage,
-smoke and the satchel's own paths (they ride the generic missile code;
-section 21 has them now);
-the cooked-out frag's `EV_GRENADE_SUICIDE` death (`coduo-movement.md` 12;
-the mount hint and `spawnTriggerMount` are done, section 11 there); `EV_BULLET_HIT`'s reflected direction in
-`es.scale` and a projectile explode's type in `es.scale` (both go out 0);
-`bg_nofatigue`; battle rank's `GMI_RANK_*` path past what `dm` runs; a
-retail UO client against vcod-server is a hand check.
+Stage 1's list is mostly closed: the gametypes are section 22; artillery,
+smoke, the satchel and the flamethrower's `fdc` damage section 21; the mount
+hint and `spawnTriggerMount` `coduo-movement.md` 11; the cooked-out frag's
+`EV_GRENADE_SUICIDE` death (`Attack::Suicide`); `EV_BULLET_HIT`'s reflected
+direction and a projectile explode's type in `es.scale` (section 21). Left:
+
+- what `coduo-vehicles.md` 14 leaves out; `iCompassTankInfo` stays 0, as on
+  stock retail (section 9);
+- `bg_nofatigue` is registered and mirrored but not read;
+- battle rank's `GMI_RANK_*` path past what `dm` runs;
+- a retail UO client against vcod-server is a pending hand check.
 
 ## 21. Server: UO's weapons on vcod-server
 
 Addresses are `game.mp.uo.i386.so` file vaddrs (Ghidra's export sits
-0x10000 higher) unless named otherwise. The gate is
+0x10000 higher) unless named. The gate is
 `crates/server/tests/uo_weapons_ab.rs`: it runs `client-probes/probe_uofx`
 (and `probe_turret`) as the gametype on a protocol 22 server, places the
 shooter where the retail capture's stood, drives `--probe-uo-weapon`'s step
@@ -2166,348 +2176,347 @@ carriers against the section 19 captures.
 
 - **Bounce.** `G_BounceMissile` (0x5d6e5) reflects the velocity at the
   impact time and scales all of it by 0.4 (.rodata 0xa17a4), 0.1 (0xa17a0)
-  in water or when `tr+0x20` holds 0x2000000 (`and` at 0x5d841); 1.1's
-  keeps 0.75 along the surface and 0.3 off it (cod11-combat.md 12.4).
-  INFERRED: `tr+0x20` is the trace's `contents` (`G_RunMissile` reads the
-  material bits 0x1f00000 off `tr+0x1c`, the surface flags), so 0x2000000
-  is `CONTENTS_BODY`: a frag off a player keeps a tenth. VERIFIED, live
-  (retail UO 1.51b, 2026-10-16, `mp_carentan-scriptmodel-prone-rest-uo.txt`):
-  a frag that strikes a prone player's back moves under 3 units a frame
-  after it, strikes him again 8 units lower and slides off him to the
-  floor. vcod
-  took 0.4 off a player before 2026-10-16 and threw the frag 50 units up
-  (`a_frag_strikes_a_prone_players_back_on_uo`). VERIFIED, decompile of
-  `game.mp.uo.i386.so`: the only store of the constant 0x2000000 into an
-  entity's `r.contents` (`+0x120`) is `G_SetClientContents`'s; a script
-  model gets it only through `setContents(int)` (0x696b9; 1.1d and 1.5b
-  have the method too), which stores the script's value. VERIFIED, the
-  stock `pakuo*` scripts: every `setContents` call passes 0 or 1.
-  INFERRED: a script model takes the tenth only under a third-party script
-  that gives it 0x2000000 (and the
-  locational trace reporting the entity's contents for its DObj hit);
-  vcod keys the soft bounce on the struck model's link contents
-  (`PlacedModel::body`, `a_body_contents_model_bounces_a_uo_frag_softly`).
-  The rest test (normal z
-  over 0.7, speed under 20), the 0.1 nudge and the 100 units/s event gate
-  are 1.1's (VERIFIED decompile and constants). `G_MissileImpact`
-  (0x5db67) bounces off a player that takes damage with no event when the
-  missile's `damage` is 0, and gives a `flamebarrel` classname
-  `EV_FLAMEBARREL_BOUNCE` (200) in place of 181 (VERIFIED decompile).
-  With the 0.4 the smoke capture's two bounces land on retail's spots and
-  frames, and the pop on retail's point (VERIFIED, the gate).
-- **Clipmask.** `G_RunMissile` (0x5ee7d) traces every move with the
-  entity's clipmask (`+0x1a0`), which `fire_grenade` (0x5f7ad),
-  `fire_rocket` (0x5fc74) and `fire_artillery` (0x5ff4a) all set to
-  0x2802091 (VERIFIED decompile), as 1.1d's and 1.5b's do
-  (cod11-combat.md 11.1). The 0x2080 kerb and floor brushes stop a UO
-  missile: one of the strike capture's shells reports concrete (5) off a
-  0x2080 caulk brush's top side at (3229 -2877 408) (VERIFIED, the capture
-  against our collision). vcod's missiles trace with 0x2802091 on every
-  protocol.
+  in water or when `tr+0x20` holds 0x2000000 (`and` at 0x5d841) (VERIFIED
+  decompile). 1.1's keeps 0.75 along the surface and 0.3 off it
+  (cod11-combat.md 12.4).
+  - `tr+0x20` is the trace's `contents` (`G_RunMissile` reads the material
+    bits 0x1f00000 off `tr+0x1c`, the surface flags), so 0x2000000 is
+    `CONTENTS_BODY`: a frag off a player keeps a tenth (INFERRED).
+  - Retail UO 1.51b, `mp_carentan-scriptmodel-prone-rest-uo.txt`: a frag
+    that strikes a prone player's back moves under 3 units a frame after
+    it, strikes him again 8 units lower and slides off him to the floor
+    (VERIFIED, live). Taking 0.4 off a player throws the frag 50 units up,
+    the trap `a_frag_strikes_a_prone_players_back_on_uo` holds.
+  - The only store of the constant 0x2000000 into an entity's `r.contents`
+    (`+0x120`) is `G_SetClientContents`'s; a script model gets it only
+    through `setContents(int)` (0x696b9; 1.1d and 1.5b have the method too),
+    which stores the script's value (VERIFIED, decompile). Every
+    `setContents` call in the stock `pakuo*` scripts passes 0 or 1
+    (VERIFIED). So a script model takes the tenth only under a third-party
+    script that gives it 0x2000000 (INFERRED, with the locational trace
+    reporting the entity's contents for its DObj hit). vcod keys the soft
+    bounce on the struck model's link contents (`PlacedModel::body`,
+    `a_body_contents_model_bounces_a_uo_frag_softly`).
+  - The rest test (normal z over 0.7, speed under 20), the 0.1 nudge and
+    the 100 units/s event gate are 1.1's (VERIFIED decompile and
+    constants).
+  - `G_MissileImpact` (0x5db67) bounces off a player that takes damage with
+    no event when the missile's `damage` is 0, and gives a `flamebarrel`
+    classname `EV_FLAMEBARREL_BOUNCE` (200) in place of 181 (VERIFIED
+    decompile).
+  - With the 0.4 the smoke capture's two bounces land on retail's spots and
+    frames, and the pop on retail's point (VERIFIED, the gate).
+- **Clipmask.** `G_RunMissile` (0x5ee7d) traces every move with the entity's
+  clipmask (`+0x1a0`), which `fire_grenade` (0x5f7ad), `fire_rocket`
+  (0x5fc74) and `fire_artillery` (0x5ff4a) all set to 0x2802091 (VERIFIED
+  decompile), as 1.1d's and 1.5b's do (cod11-combat.md 11.1). The 0x2080
+  kerb and floor brushes stop a UO missile: one of the strike capture's
+  shells reports concrete (5) off a 0x2080 caulk brush's top side at (3229
+  -2877 408) (VERIFIED, the capture against our collision). vcod's missiles
+  trace with 0x2802091 on every protocol.
 - **Explode.** `G_ExplodeMissile` (0x5e2b5) writes `projExplosionType`
-  (weapon def +0x390, the 0xab540 enum) into `es.scale` (+0xdc), keeps
-  1.1's `eType` 0, `eFlags` 0x80 (1.1's 0x100) and downward-trace normal,
-  centres the blast on the end of a trace 10 units up (mask 0x11) and
-  ignores the missile itself; it spawns no concussion entity:
-  `Concussive_fx` (0x5e221) has no caller (VERIFIED decompile). vcod sends
-  the type and skips the concussion under UO. In water (`trap_PointContents`
-  mask 0x20 at the origin) it traces with mask 0x20 from 500 above
-  (.rodata 0xa17d0) to the downward trace's end, 16 under (0xa17cc), and
-  on a fraction under 1 (0xa17d4) sets the origin to the trace's end
-  before the blast's lift trace, surface 20 (VERIFIED decompile and
-  constants). 1.1's has no such move (VERIFIED decompile, game.mp
-  0x53d6c; cod11-combat.md 13.2). A frag whose fuse runs out on
-  mp_harbor's floor at z -190.4, 70 under the water, goes out at z
-  -119.875 on UO 1.51b and at -190 on 1.1d and 1.5b (VERIFIED, live,
-  `fixtures/missiles/mp_harbor-water-frag{,-15,-uo}.txt`). vcod ports
-  it (`a_uo_explode_in_water_comes_up_to_the_surface`), and
-  `missile_edge_ab`'s `a_frag_into_water_splashes` holds the explode's
-  frame and origin to the three captures.
-- **After the explode.** `G_ExplodeMissile` (0x5e2b5) sets `eType` 0,
-  zeroes `r.contents` (`+0x120`) and sets `freeAfterEvent` (`+0x194`),
-  and leaves `takedamage` (`+0x17d`), `health`, `think` and `nextthink`
-  as they were (VERIFIED decompile). The entity pass (0x59a35, unnamed in
-  the export) frees an entity with `freeAfterEvent` once its event is
-  300 ms old and before that runs nothing for it: no `G_RunMissile`, no
-  `G_RunThink` (VERIFIED decompile). So a `G_GrenadeDie` from a blast
-  inside those 300 ms only sets a `nextthink` that never runs, and a
-  round passes the zero contents (INFERRED, control flow; the chain
-  capture below shows no second explode).
-- **Smoke.** `fire_grenade` (0x5f7ad) arms `G_ExplodeSmokeGrenade`
-  (0x5eb72) for type 1: 185 with the normal of a trace 16 down, type 1 in
-  `es.scale`, the surface type, then `G_FreeEntity` 15000 ms on, with
-  `eType`, `eFlags` and the trajectory left alone (VERIFIED decompile). The
-  grenade keeps flying as a missile until the free. Ours rides
-  `15000 - 50` ms of snapshots past the pop; retail's capture ends inside
-  that (VERIFIED, the gate).
+  (weapon def +0x390, the 0xab540 enum) into `es.scale` (+0xdc), keeps 1.1's
+  `eType` 0, `eFlags` 0x80 (1.1's 0x100) and downward-trace normal, centres
+  the blast on the end of a trace 10 units up (mask 0x11) and ignores the
+  missile itself. It spawns no concussion entity: `Concussive_fx` (0x5e221)
+  has no caller (VERIFIED decompile). vcod sends the type and skips the
+  concussion under UO.
+  - In water (`trap_PointContents` mask 0x20 at the origin) it traces with
+    mask 0x20 from 500 above (.rodata 0xa17d0) to the downward trace's end,
+    16 under (0xa17cc), and on a fraction under 1 (0xa17d4) sets the origin
+    to the trace's end before the blast's lift trace, surface 20 (VERIFIED
+    decompile and constants). 1.1's has no such move (VERIFIED decompile,
+    game.mp 0x53d6c; cod11-combat.md 13.2).
+  - A frag whose fuse runs out on mp_harbor's floor at z -190.4, 70 under
+    the water, goes out at z -119.875 on UO 1.51b and at -190 on 1.1d and
+    1.5b (VERIFIED, live, `fixtures/missiles/mp_harbor-water-frag{,-15,-uo}.txt`).
+    vcod ports it (`a_uo_explode_in_water_comes_up_to_the_surface`), and
+    `missile_edge_ab`'s `a_frag_into_water_splashes` holds the explode's
+    frame and origin to the three captures.
+- **After the explode.** `G_ExplodeMissile` (0x5e2b5) sets `eType` 0, zeroes
+  `r.contents` (`+0x120`) and sets `freeAfterEvent` (`+0x194`), and leaves
+  `takedamage` (`+0x17d`), `health`, `think` and `nextthink` as they were
+  (VERIFIED decompile). The entity pass (0x59a35, unnamed in the export)
+  frees an entity with `freeAfterEvent` once its event is 300 ms old and
+  before that runs nothing for it: no `G_RunMissile`, no `G_RunThink`
+  (VERIFIED decompile). So a `G_GrenadeDie` from a blast inside those 300 ms
+  only sets a `nextthink` that never runs, and a round passes the zero
+  contents (INFERRED, control flow; the chain capture below shows no second
+  explode).
+- **Smoke.** `fire_grenade` (0x5f7ad) arms `G_ExplodeSmokeGrenade` (0x5eb72)
+  for type 1: 185 with the normal of a trace 16 down, type 1 in `es.scale`,
+  the surface type, then `G_FreeEntity` 15000 ms on, with `eType`, `eFlags`
+  and the trajectory left alone (VERIFIED decompile). The grenade keeps
+  flying as a missile until the free. Ours rides `15000 - 50` ms of
+  snapshots past the pop; retail's capture ends inside that (VERIFIED, the
+  gate).
 - **Satchel.** `satchelcharge_mp` is a type-2 (`rocket`) grenade: 185 type
   2, radius 450, 500 to 20, `MOD_GRENADE_SPLASH` (VERIFIED, the file and
-  `fire_grenade`'s +0x25c 4). Its `takeDamage 1` and 6 s fuse (anything
-  past 500 ms) give it a (-6,-6,0)..(6,6,6) box with contents 0x2000,
-  `takedamage`, 1 health, `die` `G_GrenadeDie`, `eFlags` 0x10, the fuse
-  saved at `+0x32c` and the think `G_GrenadeLeaveOwnerThink` 500 ms on,
-  and links it (VERIFIED decompile).
-  `G_GrenadeLeaveOwnerThink` (0x5f6b7) point-tests the origin against
-  bodies (mask 0x2000000, no pass entity); while one holds it and the
-  fuse is more than 100 ms off it runs again 100 ms on, otherwise it makes
-  the grenade its own owner (`r.ownerNum`), relinks it and hands back the
-  saved fuse with the explode (or smoke) think (VERIFIED decompile).
-  Until then its thrower's traces pass it and it passes him (INFERRED,
-  Q3's `SV_ClipMoveToEntities` owner skip). `G_GrenadeDie` (0x5f683) sets
-  the think 100 ms on and clears `takedamage`; a grenade shot while still
-  in its leave-owner phase therefore keeps its fuse (INFERRED, the think
-  it leaves in place). vcod links the box in the area tree (the blasts'
-  candidates; other missiles stay out of the tree), stops rounds, turret
-  rounds and strikes on it (the impact surface 0), damages it from blasts,
-  and runs the leave-owner think
-  (`a_satchel_passes_its_thrower_until_he_steps_off`,
-  `a_shot_satchel_blows_100_ms_on`,
-  `a_round_stops_on_a_satchel_its_shooter_does_not_own`). The bounce
-  sound is the client's (`cloth`, section 19).
+  `fire_grenade`'s +0x25c 4).
+  - Its `takeDamage 1` and 6 s fuse (anything past 500 ms) give it a
+    (-6,-6,0)..(6,6,6) box with contents 0x2000, `takedamage`, 1 health,
+    `die` `G_GrenadeDie`, `eFlags` 0x10, the fuse saved at `+0x32c` and the
+    think `G_GrenadeLeaveOwnerThink` 500 ms on, and links it (VERIFIED
+    decompile).
+  - `G_GrenadeLeaveOwnerThink` (0x5f6b7) point-tests the origin against
+    bodies (mask 0x2000000, no pass entity). While one holds it and the fuse
+    is more than 100 ms off it runs again 100 ms on; otherwise it makes the
+    grenade its own owner (`r.ownerNum`), relinks it and hands back the
+    saved fuse with the explode (or smoke) think (VERIFIED decompile).
+    Until then its thrower's traces pass it and it passes him (INFERRED,
+    Q3's `SV_ClipMoveToEntities` owner skip).
+  - `G_GrenadeDie` (0x5f683) sets the think 100 ms on and clears
+    `takedamage` (VERIFIED decompile). A grenade shot while still in its
+    leave-owner phase keeps its fuse (INFERRED, the think it leaves in
+    place).
+  - vcod links the box in the area tree (the blasts' candidates; other
+    missiles stay out of the tree), stops rounds, turret rounds, strikes and
+    swings on it (the impact surface 0), damages it from blasts, and runs
+    the leave-owner think (`a_satchel_passes_its_thrower_until_he_steps_off`,
+    `a_shot_satchel_blows_100_ms_on`,
+    `a_round_stops_on_a_satchel_its_shooter_does_not_own`). The other
+    missiles' every-frame links are unlinks, their `r.contents` being 0
+    (cod11-combat.md 2.5, 14.7). The bounce sound is the client's (`cloth`,
+    section 19).
 - **Satchel shot off, satchel chain** (`client-probes/probe_satchelshot`,
-  mp_cassino tdm, 2026-10-20, `fixtures/missiles/mp_cassino-satchel{shot,chain}-uo.txt`
-  and `*-uo-satchel{shot,chain}.bin`). Two satchels thrown 2.4 s apart.
-  A sighted kar98k round into the second, 4.5 s after the first throw:
-  `EV_BULLET_HIT` (178) on it, and its 185 (type 2, surface 21,
-  `eFlags` 0x90) on the snapshot 100 ms after the shot's. Its blast
-  leaves the first satchel, 225 units off, alone (the thrower, 380 off,
-  takes 31), and that one goes off on its own fuse, 6 s after its throw
-  (VERIFIED, live). With no shot and the second thrown 10 degrees over,
-  137 units from the first: the first goes off on its fuse, the second
-  100 ms later, and the first, inside the 300 ms its explode rides the
-  wire when the second's blast reaches it, never goes off again (VERIFIED,
-  live; two explodes in all, the thrower hit 48 then 193). vcod matches
-  both runs explode for explode, field for field and frame for frame
-  (`uo_weapons_ab`'s `a_shot_satchel_goes_off_100_ms_on`,
-  `a_satchel_blast_sets_off_the_next_and_none_goes_off_twice`); the shot
-  satchel's rest moves a tenth of a unit with the client's cmd timing
-  between two retail runs, so its explode origin is held to a unit. vcod
-  keeps a gone-off missile out of the blast and round targets, and its
-  pool never runs a think for one (`a_satchel_gone_off_never_goes_off_again`).
-- **Satchel capture** (`*-uo-satchel.bin`, mp_cassino dm, 2026-10-14,
-  `probe_weapon satchelcharge_mp`, which `probe_uofx` hands over through the
-  `satchel` slot with one charge, shooter on `--probe-uo-weapon smoke`):
-  `EV_PULLBACK_WEAPON` (162), `EV_FIRE_WEAPON_LASTSHOT` (166) and
-  `EV_NOAMMO` (151) on weapon 48, three bounces (181) at +350, +700 and
-  +1000 ms with parms 5, 17, 17 and `eFlags` 0x10, then 185 at +5950 on the
+  mp_cassino tdm,
+  `fixtures/missiles/mp_cassino-satchel{shot,chain}-uo.txt` and
+  `*-uo-satchel{shot,chain}.bin`). Two satchels thrown 2.4 s apart.
+  - A sighted kar98k round into the second, 4.5 s after the first throw:
+    `EV_BULLET_HIT` (178) on it, and its 185 (type 2, surface 21, `eFlags`
+    0x90) on the snapshot 100 ms after the shot's. Its blast leaves the
+    first satchel, 225 units off, alone (the thrower, 380 off, takes 31),
+    and that one goes off on its own fuse, 6 s after its throw (VERIFIED,
+    live).
+  - With no shot and the second thrown 10 degrees over, 137 units from the
+    first: the first goes off on its fuse, the second 100 ms later, and the
+    first, inside the 300 ms its explode rides the wire when the second's
+    blast reaches it, never goes off again (VERIFIED, live; two explodes in
+    all, the thrower hit 48 then 193).
+  - vcod matches both runs explode for explode, field for field and frame
+    for frame (`uo_weapons_ab`'s `a_shot_satchel_goes_off_100_ms_on`,
+    `a_satchel_blast_sets_off_the_next_and_none_goes_off_twice`). The shot
+    satchel's rest moves a tenth of a unit with the client's cmd timing
+    between two retail runs, so its explode origin is held to a unit. vcod
+    keeps a gone-off missile out of the blast and round targets, and its
+    pool never runs a think for one
+    (`a_satchel_gone_off_never_goes_off_again`).
+- **Satchel capture** (`*-uo-satchel.bin`, mp_cassino dm, `probe_weapon
+  satchelcharge_mp`, which `probe_uofx` hands over through the `satchel`
+  slot with one charge, shooter on `--probe-uo-weapon smoke`). Live,
+  VERIFIED: `EV_PULLBACK_WEAPON` (162), `EV_FIRE_WEAPON_LASTSHOT` (166) and
+  `EV_NOAMMO` (151) on weapon 48; three bounces (181) at +350, +700 and
+  +1000 ms with parms 5, 17, 17 and `eFlags` 0x10; then 185 at +5950 on the
   satchel as `eType` 0, type 2, surface 17, `eFlags` 0x90, which kills the
-  thrower (obituary parm 48, the weapon) (live, VERIFIED). After the third
-  bounce the thrower's ring carries `EV_REMOVE_WEAPON_ATTACHMENTS` (202)
-  with parm 48 and a raise of weapon 0 (live, VERIFIED): UO's putaway
-  (0x448ee), in the branch for a weapon gone from under the player,
-  raises 202 with the weapon going down where 1.1's raises nothing
-  (VERIFIED decompile). vcod's satchel bounces on the same spots, frames
-  and surfaces, explodes on the same point and frame with the same type,
-  flags and surface, and the thrower's ring carries the 202 with parm 48
-  on the same frame (VERIFIED, the gate). Recipe: section 19's artillery lines with
-  `+set probe_weapon satchelcharge_mp`, `--capture-tag uo-satchel` and
-  `--probe-uo-weapon smoke`, ports 31021 (run with 75 s, spectator 55,
-  shooter 48, 3 s apart).
+  thrower (obituary parm 48, the weapon).
+  - After the third bounce the thrower's ring carries
+    `EV_REMOVE_WEAPON_ATTACHMENTS` (202) with parm 48 and a raise of weapon
+    0 (live, VERIFIED). UO's putaway (0x448ee), in the branch for a weapon
+    gone from under the player, raises 202 with the weapon going down where
+    1.1's raises nothing (VERIFIED decompile).
+  - vcod's satchel bounces on the same spots, frames and surfaces, explodes
+    on the same point and frame with the same type, flags and surface, and
+    the thrower's ring carries the 202 with parm 48 on the same frame
+    (VERIFIED, the gate).
+  - Recipe: section 19's artillery lines with `+set probe_weapon
+    satchelcharge_mp`, `--capture-tag uo-satchel` and `--probe-uo-weapon
+    smoke`, port 31021 (run 75 s, spectator 55, shooter 48, 3 s apart).
 
 ### Artillery
 
 - `FireWeapon` (0x7bd05) sends type 3 (`spotter`) to
-  `Weapon_ArtilleryStrike_Fire` (0x7b758): `BG_Bullet_Endpos` 10000 out
-  with the weapon's spread, a locational trace (mask 0x2802031); a miss or
-  `SURF_SKY` gives the round back (`Add_Ammo(1)`), anything else calls
+  `Weapon_ArtilleryStrike_Fire` (0x7b758): `BG_Bullet_Endpos` 10000 out with
+  the weapon's spread, a locational trace (mask 0x2802031). A miss or
+  `SURF_SKY` gives the round back (`Add_Ammo(1)`); anything else calls
   `fire_artillery_barrage` (0x601fb) on the end point (VERIFIED decompile).
-  vcod's trace stops on live bodies and shootable grenades as a round's
-  does (`a_strike_on_a_body_stops_at_the_body`).
+  vcod's trace stops on live bodies and shootable grenades as a round's does
+  (`a_strike_on_a_body_stops_at_the_body`).
 - `PM_Weapon`'s spent-`clipOnly` take (0x35ce8) skips `weaponClass` 8, so
   the binoculars stay with no `EV_NOAMMO` (VERIFIED decompile; the capture's
   breakdown after the strike is on weapon 6).
-- The barrage is an `eType` 0, `SVF_NOCLIENT` entity (classname
-  `rocket`) at the strike point with first think 50 ms on, the first launch
-  due at +250 and the first incoming at +`projectileDelay` (6000), counted
-  from the `level.time` the firing cmd ran under; it notifies its owner
-  `artillery` with the point, which `_rank_gmi` waits on (VERIFIED
-  decompile, `_rank_gmi.gsc` line 627).
-- `G_BarrageThink` (0x5e7b5), every 50 ms: while launches are left and the
-  next is due (strictly past), `EV_PROJECTILE_LAUNCH` (183) at the strike
-  point, parm the explosion type, next = `(int)(0.5 * irand(spacingMin,
-  spacingMax) + next)`; while incomings are left and due,
-  `EV_PROJECTILE_INCOMING` (184) at the strike plus `projectileRadius` times
-  one `crandom` per axis along a random yaw's forward (z unchanged), next +=
-  `irand(300, 1800)`, and `fire_artillery` 1000 above it; once both counts
-  reach `projectileCount` (15) it frees itself on the next think (VERIFIED
-  decompile; `irand` 0x3f3a3 is `min + (max - min) * u`). Measured: first
-  launch at the fire's frame + 250, first incoming + 6000 (VERIFIED, both
-  sides of the gate).
+- The barrage is an `eType` 0, `SVF_NOCLIENT` entity (classname `rocket`) at
+  the strike point with first think 50 ms on, the first launch due at +250
+  and the first incoming at +`projectileDelay` (6000), counted from the
+  `level.time` the firing cmd ran under. It notifies its owner `artillery`
+  with the point, which `_rank_gmi` waits on (VERIFIED decompile,
+  `_rank_gmi.gsc` line 627).
+- `G_BarrageThink` (0x5e7b5), every 50 ms (VERIFIED decompile; `irand`
+  0x3f3a3 is `min + (max - min) * u`):
+  - while launches are left and the next is due (strictly past),
+    `EV_PROJECTILE_LAUNCH` (183) at the strike point, parm the explosion
+    type, next = `(int)(0.5 * irand(spacingMin, spacingMax) + next)`;
+  - while incomings are left and due, `EV_PROJECTILE_INCOMING` (184) at the
+    strike plus `projectileRadius` times one `crandom` per axis along a
+    random yaw's forward (z unchanged), next += `irand(300, 1800)`, and
+    `fire_artillery` 1000 above it;
+  - once both counts reach `projectileCount` (15) it frees itself on the
+    next think.
+
+  Measured: first launch at the fire's frame + 250, first incoming + 6000
+  (VERIFIED, both sides of the gate).
 - `fire_artillery` (0x5ff4a): `eType` 4, `eFlags` 0x8000, classname
   `rocket`, `SVF_NOCLIENT`, `groundEntityNum` 1022 (which keeps
   `G_RunMissile`'s fall test, 0x5ee7d, off it), `trType` 0 another 1000 up,
   `trDelta` (0, 0, -`projectileSpeed`), damage 2000, splash 300 to 10 over
   500, means of death 13 and 14 (`MOD_ARTILLERY`, `_SPLASH`), mask
-  0x2802091; `G_DropArtillery` (0x5eabe), its think 1750 ms on, sets
+  0x2802091. `G_DropArtillery` (0x5eabe), its think 1750 ms on, sets
   `trType` 5 with `trTime` one frame back, `svFlags` 0x88 and a 15 s
   `G_ExplodeMissile` fallback (VERIFIED decompile). The shell falls about
-  0.2 s: each explode sits inside 1750 to 2050 ms after its incoming on the same
+  0.2 s: each explode sits 1750 to 2050 ms after its incoming on the same
   spot on both sides (VERIFIED, the gate).
-- On contact `G_MissileImpact`'s explode arm: the hit entity, if it takes
-  damage, takes `Damage_Falloff` of 2000 (the stock file's 100
-  `minDamagePercent` leaves it whole) as `MOD_ARTILLERY`; 185, or 186 off
-  a player or a body part, with the face's normal; `eType` 0, `eFlags`
-  unchanged (0x8000), type 4, the face's surface type (20 in water),
-  0x100000 on a vehicle hit; the origin `SnapVectorTowards` the base; the
-  splash from the end of a trace 4 off the face, skipping the hit entity,
-  credited to the owner with the shell as inflictor (VERIFIED decompile).
-  UO's `dm.gsc` (line 556) folds the splash into `MOD_ARTILLERY` for the
-  obituary, so both sides send parm 141 (VERIFIED, the capture and ours).
+- On contact, `G_MissileImpact`'s explode arm (VERIFIED decompile): the hit
+  entity, if it takes damage, takes `Damage_Falloff` of 2000 (the stock
+  file's 100 `minDamagePercent` leaves it whole) as `MOD_ARTILLERY`; 185, or
+  186 off a player or a body part, with the face's normal; `eType` 0,
+  `eFlags` unchanged (0x8000), type 4, the face's surface type (20 in
+  water), 0x100000 on a vehicle hit; the origin `SnapVectorTowards` the
+  base; the splash from the end of a trace 4 off the face, skipping the hit
+  entity, credited to the owner with the shell as inflictor. UO's `dm.gsc`
+  (line 556) folds the splash into `MOD_ARTILLERY` for the obituary, so
+  both sides send parm 141 (VERIFIED, the capture and ours).
 - Surfaces: a trace reports the side it stopped on, not the brush's
   material (bsp-ibsp59-format.md, lump 3). With that and the clipmask
   above, our collision reads retail's surface at all 15 of the strike
-  capture's explodes and under the satchel's three bounces and its
-  explode (VERIFIED, the gate). The earlier guess that terrain wins a tie
-  with a brush face was wrong: there is no terrain at those spots.
+  capture's explodes and under the satchel's three bounces and its explode
+  (VERIFIED, the gate). There is no terrain at those spots, so no
+  terrain-against-brush tie decides them.
 
 ### Bullets and turrets
 
 - `Bullet_Fire_Extended` (0x7a920) raises the world impact (178) only when
   the pass entity is the attacker, with the weapon (+0xcc) and the round's
-  reflection as a byte dir in `es.scale` (+0xdc, `dir - 2 (dir.n) n`); a
-  hit on a player draws `EV_BULLET_TRACER` (176) from the start with
-  probability `g_tracerChanceLMG` for an `lmg`/`hmg`/`umg` `ammoType`
-  (the 0xab50c enum, def +0x90), else `g_tracerChance`; the return is
-  whether anything was raised (VERIFIED decompile). vcod's player rounds
-  carry the weapon and reflection (the bipod gate's 36 impacts) and roll
-  the tracer once a shot, for its first leg's player hit or miss; retail
-  rolls once a leg (INFERRED small: only a round through a body has two).
-- **Falloff.** Each leg's damage is `Damage_Falloff` (0x7a7f8) of the
-  leg's length (`VectorDistance(start, endpos)`) off the weapon's
+  reflection as a byte dir in `es.scale` (+0xdc, `dir - 2 (dir.n) n`). A hit
+  on a player draws `EV_BULLET_TRACER` (176) from the start with probability
+  `g_tracerChanceLMG` for an `lmg`/`hmg`/`umg` `ammoType` (the 0xab50c enum,
+  def +0x90), else `g_tracerChance`. The return is whether anything was
+  raised (VERIFIED decompile). vcod's player rounds carry the weapon and
+  reflection (the bipod gate's 36 impacts) and roll the tracer once a shot,
+  for its first leg's player hit or miss; retail rolls once a leg, which
+  differs only for a round through a body (INFERRED).
+- **Falloff.** Each leg's damage is `Damage_Falloff` (0x7a7f8) of the leg's
+  length (`VectorDistance(start, endpos)`) off the weapon's
   `minDamagePercent`, `damageInnerRadius` and `damageOuterRadius` (def
-  +0x210..0x218): whole up to the inner radius, `0.01 * minDamagePercent`
-  of it past the outer, `0.01 * ((100 - min) * (1 - (d - inner) /
-  (outer - inner)) + min)` between, truncated by an `fistp` under a 0xc00
-  control word (0x7b10b), with no `G_Damage` unless it is positive; a
-  rifle round through a body goes on with `(int)(0.5f * damage)` of the
-  leg's falloff damage (0x7b266) and its next leg falls off from the hit
-  point (VERIFIED decompile, constants 0.01, 1, 100 at 0xa5ee8..0xa5ef0).
-  The thompson's 1000..5000 at 35% leaves 50 at 1000, 33 at 3000, 17 past
-  5000. vcod-server ran 1.1's whole damage and integer halving until
-  `combat::Falloff`.
-- A UO round's impact on a leg whose pass entity is not the shooter (past
-  a body it went through) is not drawn (the `param_1 == param_2` test
-  above); vcod-server drew it until it took the same test.
-- `CanDamage` (0x503f8) traces its five probes under 0x802091 on both
-  arms, where 1.1's took 0x2802091: no body shields a UO blast (VERIFIED
+  +0x210..0x218): whole up to the inner radius, `0.01 * minDamagePercent` of
+  it past the outer, `0.01 * ((100 - min) * (1 - (d - inner) / (outer -
+  inner)) + min)` between, truncated by an `fistp` under a 0xc00 control
+  word (0x7b10b), with no `G_Damage` unless it is positive. A rifle round
+  through a body goes on with `(int)(0.5f * damage)` of the leg's falloff
+  damage (0x7b266), and its next leg falls off from the hit point (VERIFIED
+  decompile, constants 0.01, 1, 100 at 0xa5ee8..0xa5ef0). The thompson's
+  1000..5000 at 35% leaves 50 at 1000, 33 at 3000, 17 past 5000. vcod:
+  `combat::Falloff` (1.1's whole damage and integer halving are the trap).
+- A UO round's impact on a leg whose pass entity is not the shooter (past a
+  body it went through) is not drawn (the `param_1 == param_2` test above);
+  vcod-server takes the same test.
+- `CanDamage` (0x503f8) traces its five probes under 0x802091 on both arms,
+  where 1.1's took 0x2802091: no body shields a UO blast (VERIFIED
   decompile). Vehicle hulls do (0x800000; coduo-vehicles.md 13).
-- A turret round passes the gun (`turret_fire` 0x5aaa9 hands
-  `Bullet_Fire` the gun as inflictor), so it never raises a world impact,
-  and its `EV_FIRE_WEAPON_MG42` takes parm 0x80 when the round raised
-  nothing (VERIFIED decompile; the capture's 21 rounds into the world
-  carry 0x80 and no impact). On a player hit vcod rolls the tracer
-  (the turret's `hmg` takes 0.7: the capture's 83 of 127).
+- A turret round passes the gun (`turret_fire` 0x5aaa9 hands `Bullet_Fire`
+  the gun as inflictor), so it never raises a world impact, and its
+  `EV_FIRE_WEAPON_MG42` takes parm 0x80 when the round raised nothing
+  (VERIFIED decompile; the capture's 21 rounds into the world carry 0x80 and
+  no impact). On a player hit vcod rolls the tracer (the turret's `hmg`
+  takes 0.7: the capture's 83 of 127).
 - **Aim.** The manned aim (0x6b950) clamps the view off the gun into the
-  arcs with no 15-degree step and no `SetClientViewAngle`, and no UO
-  turret path writes `viewlocked` (VERIFIED decompile; live in
-  `fixtures/turret/mp_carentan-dm-turret-uo.txt`, `cod11-turrets.md`
-  14.3). vcod-server aimed with 1.1's step and snap and sent `viewlocked`
-  1 and 2 until `turret::AimRule`.
+  arcs with no 15-degree step and no `SetClientViewAngle`, and no UO turret
+  path writes `viewlocked` (VERIFIED decompile; live in
+  `fixtures/turret/mp_carentan-dm-turret-uo.txt`, `cod11-turrets.md` 14.3).
+  vcod: `turret::AimRule` (1.1's step, snap and `viewlocked` 1 and 2 on a UO
+  gun are the trap).
 - **Heat.** A round adds `fireHeat` (rec +0x40; 0.02 on
-  `mg42_bipod_stand_mp`); `turret_think` (0x5c1f2), every frame on every
+  `mg42_bipod_stand_mp`). `turret_think` (0x5c1f2), every frame on every
   gun, sets the latch (rec +0x44), raises `EV_OVERHEATING` (208), notifies
   `overheating` and writes `es.animMovetype` 1 when the heat is 1 or more,
   clears the latch once it is 0.5 or less, then takes `cooldownRate` (0.01)
-  off; the fire tick (0x5bb49) and the round (0x5aaa9) both refuse a
-  latched gun (VERIFIED decompile). `animMovetype` is never cleared
-  (VERIFIED, the capture: 1 from the overheat to the end). The gate
-  matches the capture's 100 rounds before the overheat, the overheat 5000
-  ms after the first round, the first round after it and the mark
-  (VERIFIED). The overheat tank capture's vehicle gunner is section 9's,
-  not this path.
+  off. The fire tick (0x5bb49) and the round (0x5aaa9) both refuse a latched
+  gun (VERIFIED decompile). `animMovetype` is never cleared (VERIFIED, the
+  capture: 1 from the overheat to the end). The gate matches the capture's
+  100 rounds before the overheat, the overheat 5000 ms after the first
+  round, the first round after it and the mark (VERIFIED). The overheat tank
+  capture's vehicle gunner is section 9's, not this path.
 
 ### Flamethrower
 
-- `weaponType gas` does nothing in `FireWeapon` (0x7bd05: types 0 to 3
-  have an arm, 4 falls through the `!= 4` error test; VERIFIED). vcod
-  used to fire it as a bullet (3 damage, `MOD_PISTOL_BULLET` a pulse);
-  its fire event now starts nothing (`a_flamethrower_pulse_deals_no_bullet_damage`).
-  `fdc <n>`
-  (`Cmd_FlameDamageClient_f` 0x4ee2c) stores `n` and the time when it
-  has exactly one argument, read through a 4-byte `trap_Argv` buffer (its
-  first three characters) and `atoi`, and `0 <= n <= level+0x1e4`;
-  anything else prints `bad arg count` or `bad inflictor num` and keeps
-  the last report (VERIFIED decompile). `level+0x1e4` is `maxclients`,
-  not `num_entities`: `G_InitGame` (0x586cf) copies `g_maxclients`'s
-  integer there and `G_Spawn` counts entities at `level+0xc` (VERIFIED
-  decompile). So `fdc 1000` reads as 100, `fdc x`
-  as 0, and `n == maxclients` passes (INFERRED, off the compare);
-  `server::fdc_inflictor` reads it the same way; `G_CheckFlameDamage`
-  (0x3f4d4) runs in `ClientEndFrame` (0x42f59) after the cursor hints: with
-  `wbuttons` bit 1 in the client's last cmd and the report inside 3000 ms,
-  the reporter takes the flamethrower's `damage` (2), four times over when
-  `n` is someone else, from `n` with `MOD_FLAME` (25), point `n`'s origin
-  (VERIFIED decompile). The victim's cgame sends `fdc` at most every 2 s
-  and raises bit 1 through trap 0x58 while its chunks reach it (section 19,
-  "The flame report", VERIFIED disassembly), and vcod's client does the
-  same. On the retail server a vcod victim burnt 8 a frame while the bit
-  rode and not otherwise (VERIFIED, live, section 19's recipe); on
-  vcod-server the same pair burns the same way. `FireWeapon` (0x7bd05)
-  starts nothing for weapon type 4, `gas`, so a flamethrower pulse deals
-  no damage of its own (VERIFIED decompile); vcod-server fired it as a
-  bullet weapon, 3 with `MOD_PISTOL_BULLET` a pulse, until a gate pinned
-  the pulse to no damage. vcod checks `n` against `MAX_GENTITIES`, not
-  the live count. The burn lands after vcod's end-frame pass, so the
-  victim's `P_DamageFeedback` runs again right after it, putting
-  `damageEvent` and the pain on the burn's own snapshot as retail's
-  `ClientEndFrame` order does (VERIFIED decompile, 0x42f59; the gate pins
-  ours).
+- `weaponType gas` does nothing in `FireWeapon` (0x7bd05: types 0 to 3 have
+  an arm, 4 falls through the `!= 4` error test; VERIFIED). A pulse deals no
+  damage of its own; firing it as a bullet (3 with `MOD_PISTOL_BULLET` a
+  pulse) is the trap `a_flamethrower_pulse_deals_no_bullet_damage` holds.
+- `fdc <n>` (`Cmd_FlameDamageClient_f` 0x4ee2c) stores `n` and the time when
+  it has exactly one argument, read through a 4-byte `trap_Argv` buffer (its
+  first three characters) and `atoi`, and `0 <= n <= level+0x1e4`. Anything
+  else prints `bad arg count` or `bad inflictor num` and keeps the last
+  report (VERIFIED decompile). `level+0x1e4` is `maxclients`, not
+  `num_entities`: `G_InitGame` (0x586cf) copies `g_maxclients`'s integer
+  there and `G_Spawn` counts entities at `level+0xc` (VERIFIED decompile).
+  So `fdc 1000` reads as 100, `fdc x` as 0, and `n == maxclients` passes
+  (INFERRED, off the compare). `server::fdc_inflictor` reads it the same
+  way; vcod checks `n` against `MAX_GENTITIES`, not the live count.
+- `G_CheckFlameDamage` (0x3f4d4) runs in `ClientEndFrame` (0x42f59) after
+  the cursor hints: with `wbuttons` bit 1 in the client's last cmd and the
+  report inside 3000 ms, the reporter takes the flamethrower's `damage` (2),
+  four times over when `n` is someone else, from `n` with `MOD_FLAME` (25),
+  point `n`'s origin (VERIFIED decompile).
+- The victim's cgame sends `fdc` at most every 2 s and raises bit 1 through
+  trap 0x58 while its chunks reach it (section 19, "The flame report",
+  VERIFIED disassembly); vcod's client does the same. On the retail server a
+  vcod victim burnt 8 a frame while the bit rode and not otherwise
+  (VERIFIED, live, section 19's recipe); on vcod-server the same pair burns
+  the same way.
+- The burn lands after vcod's end-frame pass, so the victim's
+  `P_DamageFeedback` runs again right after it, putting `damageEvent` and
+  the pain on the burn's own snapshot as retail's `ClientEndFrame` order
+  does (VERIFIED decompile, 0x42f59; the gate pins ours).
 - `eFlags` 0x200 (1.1's 0x400) rides every fire while the trigger is held
-  (the flame capture), which vcod's sim already sets for any held trigger.
+  (the flame capture), which vcod's sim sets for any held trigger.
 
 ### Not done
 
-A swing now strikes a satchel's box as a round does, and the other
-missiles' every-frame links are unlinks, their `r.contents` being 0
-(cod11-combat.md 2.5, 14.7). A live run of a retail UO client burning on vcod-server; the
-flamethrower's stray bullets on vcod-server. The bipod deploy's entity
-bit is not a gap: `BG_PlayerStateToEntityState` (game.mp.uo 0x2cd8b) ORs
-0x100 (1.1's 0x200) into the entity's `eFlags` whenever `pm_flags` 0x20,
-the sight flag the deploy rides on, is set, as 1.1's does with 0x200
-(VERIFIED decompile, both modules), and vcod's entity carries it
-(`a_uo_deploy_frame_carries_the_sight_bit_on_the_entity`); a ps event's
-carrier reads `ps.eFlags`, which never has it.
+- A live run of a retail UO client burning on vcod-server.
+- The bipod deploy's entity bit is not a gap: `BG_PlayerStateToEntityState`
+  (game.mp.uo 0x2cd8b) ORs 0x100 (1.1's 0x200) into the entity's `eFlags`
+  whenever `pm_flags` 0x20, the sight flag the deploy rides on, is set, as
+  1.1's does with 0x200 (VERIFIED decompile, both modules). vcod's entity
+  carries it (`a_uo_deploy_frame_carries_the_sight_bit_on_the_entity`); a
+  ps event's carrier reads `ps.eFlags`, which never has it.
 
 ## 22. Server: UO's gametypes on vcod-server
 
-`bas`, `ctf`, `dom` and `hq` run on vcod-server under protocol 22 with
-UO's stock scripts. Addresses are `game.mp.uo.i386.so` file vaddrs
-(Ghidra's export sits 0x10000 higher) unless named otherwise. Two gates,
-both with `COD_DIR` at a UO install:
+`bas`, `ctf`, `dom` and `hq` run on vcod-server under protocol 22 with UO's
+stock scripts. Addresses are `game.mp.uo.i386.so` file vaddrs (Ghidra's
+export sits 0x10000 higher) unless named. Two gates, both with `COD_DIR` at
+a UO install:
 
 - `configstrings_uo_ab`'s `the_configstring_tables_match_uo_s_gametypes`
   diffs the table after the load and 20 frames against
-  `tests/fixtures/configstrings/<map>-<gametype>-uo.txt`
-  (`--save-configstrings --capture-tag uo` beside `COD_VERSION=uo
-  tools/run_server.sh <map> +set g_gametype <gt>`; mp_cassino for `ctf`,
-  `dom`, `hq`, mp_foy for `bas`, the first stock maps whose arena lists
-  them). The model, alias and effect blocks are retail's minus the vehicles'
-  entries in retail's order; the shader and hint string blocks match once
-  the vehicles' (`GMI_VEHICLE_*`, `fire_ready_shell`) are set aside. All
-  four match (VERIFIED, the gate).
+  `tests/fixtures/configstrings/<map>-<gametype>-uo.txt` (`--save-configstrings
+  --capture-tag uo` beside `COD_VERSION=uo tools/run_server.sh <map> +set
+  g_gametype <gt>`; mp_cassino for `ctf`, `dom`, `hq`, mp_foy for `bas`, the
+  first stock maps whose arena lists them). The model, alias and effect
+  blocks are retail's minus the vehicles' entries in retail's order; the
+  shader and hint string blocks match once the vehicles' (`GMI_VEHICLE_*`,
+  `fire_ready_shell`) are set aside. All four match (VERIFIED, the gate).
 - `gametypes_ab`'s `uo_*` tests run `client-probes/probe_<gt>` as the
-  gametype with two `--save-scripted` probes, allies then axis, and
-  compare every view (commands, sounds, HUD, objectives, scoreboard, the
-  roster, objective models and the probe's log) against
-  `tests/fixtures/gametypes/<map>-<gt>-<role>-uo.txt` (2026-10-14, ports
-  31013-31015). Each probe moves every spawn onto a fixed spot per team
-  (each team's first spawn point), so what one probe sees of the other is
-  not the spawn script's random pick. A UO run drops objective entity
-  numbers and model entity numbers, which the vehicles vcod does not spawn
-  shift by about 40.
+  gametype with two `--save-scripted` probes, allies then axis, and compare
+  every view (commands, sounds, HUD, objectives, scoreboard, roster,
+  objective models and the probe's log) against
+  `tests/fixtures/gametypes/<map>-<gt>-<role>-uo.txt` (ports 31013-31015).
+  Each probe moves every spawn onto a fixed spot per team (each team's first
+  spawn point), so what one probe sees of the other is not the spawn
+  script's random pick. A UO run drops objective entity numbers and model
+  entity numbers, which the vehicles shift by about 40. `gametypes_ab::GAPS`
+  is empty.
 
 ### What each probe drives
 
-- **ctf** (mp_cassino, 75 s). The first level ends in ctf's own match
-  start: once both teams hold a weapon, `CheckMatchStart` calls
-  `endRound("reset")`, a 15 s stopwatch (`setClock`) and
-  `map_restart(true)` (INFERRED from the script; the restart itself
-  VERIFIED, the capture's `n`). On the second level the allied player is
-  set on `level.axis_flag.trigger`, 8 units up, and picks the flag up 50 ms
-  later with the carrier status icon `hud@ctf_german.dds`; set into the
-  axis flag's `goal` trigger, he captures 50 ms later: allies 1, his score
-  13, the rank 2 icon a frame after (VERIFIED, the retail log). The gate
-  matches every view (VERIFIED).
+- **ctf** (mp_cassino, 75 s). The first level ends in ctf's own match start:
+  once both teams hold a weapon, `CheckMatchStart` calls `endRound("reset")`,
+  a 15 s stopwatch (`setClock`) and `map_restart(true)` (INFERRED from the
+  script; the restart itself VERIFIED, the capture's `n`). On the second
+  level the allied player is set on `level.axis_flag.trigger`, 8 units up,
+  and picks the flag up 50 ms later with the carrier status icon
+  `hud@ctf_german.dds`. Set into the axis flag's `goal` trigger, he captures
+  50 ms later: allies 1, his score 13, the rank 2 icon a frame after
+  (VERIFIED, the retail log). The gate matches every view (VERIFIED).
 - **dom** (mp_cassino, 75 s). The same restart. The allied player stood on
   `flag5_neutral` (trigger `*3`, `script_timer` 3) owns the flag 3.05 s
   later, allies 1, his score 3; the axis player on the same spot retakes it
@@ -2519,55 +2528,54 @@ both with `COD_DIR` at a UO install:
   script). Once both teams are in, one of the map's seven `hqradio` script
   models (the BSP's own; mp_cassino's level script spawns none, VERIFIED,
   the entity lump and the script) shows at a random pick 45 s into the
-  level; the allied player on it captures it 10 s later and the axis
-  player neutralizes it 8 s after he steps on, `HQ_SCORED_AXIS` 36
-  (VERIFIED, the retail log and captures). The radio is a random pick on
-  both servers, so the gate drops objective origins and compares the radio
-  models as a set; everything else matches (VERIFIED).
+  level. The allied player on it captures it 10 s later and the axis player
+  neutralizes it 8 s after he steps on, `HQ_SCORED_AXIS` 36 (VERIFIED, the
+  retail log and captures). The radio is a random pick on both servers, so
+  the gate drops objective origins and compares the radio models as a set;
+  everything else matches (VERIFIED).
 - **bas** (mp_foy, 80 s). The same restart as ctf. The probe's
-  `doDamage(30000, origin + (0,0,64), allied, allied,
-  "MOD_GRENADE_SPLASH")` on the axis `hq` base (`gmi_base`, 24500 health)
-  breaches it 50 ms later: health -5500, status `destroyed`, the
-  attacker's score 8 (VERIFIED, the retail log). No tank is needed: the
-  base takes any player's `MOD_GRENADE*`, `MOD_PROJECTILE*` or
-  `MOD_ARTILLERY*` (INFERRED from bas.gsc 3954). Two views are gaps
-  (`gametypes_ab::GAPS`, "Gaps" below).
+  `doDamage(30000, origin + (0,0,64), allied, allied, "MOD_GRENADE_SPLASH")`
+  on the axis `hq` base (`gmi_base`, 24500 health) breaches it 50 ms later:
+  health -5500, status `destroyed`, the attacker's score 8 (VERIFIED, the
+  retail log). No tank is needed: the base takes any player's `MOD_GRENADE*`,
+  `MOD_PROJECTILE*` or `MOD_ARTILLERY*` (INFERRED from bas.gsc 3954). The
+  gate matches every view ("Gaps" below).
 
 ### Round and map ends
 
-Four more probes play each gametype to its end, 2026-10-15, ports
-31111-31117, under the same two `--save-scripted` clients, and
-`gametypes_ab`'s `uo_*_end` tests compare them the same way
-(`tests/fixtures/gametypes/<map>-<gt>end-<role>-uo.txt`). Each probe sets
-its limit with `setCvar` ahead of the stock `main()`, so both servers run
-the same limits, and logs `PROBE done` on the level `exitLevel(false)`
-falls back to (a `probe_ended` cvar, which outlives the restart). The
-recipe is the header of each fixture; `--probe-secs` 75, 100, 180 and 175.
+Four more probes play each gametype to its end (ports 31111-31117) under the
+same two `--save-scripted` clients; `gametypes_ab`'s `uo_*_end` tests compare
+them the same way (`tests/fixtures/gametypes/<map>-<gt>end-<role>-uo.txt`).
+Each probe sets its limit with `setCvar` ahead of the stock `main()`, so both
+servers run the same limits, and logs `PROBE done` on the level
+`exitLevel(false)` falls back to (a `probe_ended` cvar, which outlives the
+restart). The recipe is the header of each fixture; `--probe-secs` 75, 100,
+180 and 175.
 
 - **ctf** (`probe_ctfend`, mp_cassino, `scr_ctf_scorelimit 1`). The allied
-  player takes the axis flag and `suicide()`s 1 s later: the flag stays
-  where he died and `flag_timeout` returns it 20.05 s later,
-  `GMI_CTF_AXIS_FLAG_TIMEOUT_RETURNING` (VERIFIED, the log's 30500 and
-  50550, and the capture). He takes it again and captures: allies 1, which
-  is the score limit, so `checkScoreLimit` ends the map in the same frame
-  (`PROBE captured` and `PROBE intermission` both at 52650), with
+  player takes the axis flag and `suicide()`s 1 s later: the flag stays where
+  he died and `flag_timeout` returns it 20.05 s later,
+  `GMI_CTF_AXIS_FLAG_TIMEOUT_RETURNING` (VERIFIED, the log's 30500 and 50550,
+  and the capture). He takes it again and captures: allies 1, the score
+  limit, so `checkScoreLimit` ends the map in the same frame (`PROBE
+  captured` and `PROBE intermission` both at 52650), with
   `GMI_CTF_ALLIEDMISSIONACCOMPLISHED`, `MP_announcer_allies_win` and
-  `us_victory`; both clients read `pm_type` 5 until `exitLevel(false)`
-  10 s later (VERIFIED, the log and captures).
+  `us_victory`. Both clients read `pm_type` 5 until `exitLevel(false)` 10 s
+  later (VERIFIED, the log and captures).
 - **dom** (`probe_domend`, mp_cassino, `scr_dom_roundlimit 1`). The allied
   player holds flag1 to flag5 in turn (3.05, 5.05, 7.05, 5.05 and 3.05 s,
-  each trigger's `script_timer` plus a frame): allies 1 to 5, then
+  each trigger's `script_timer` plus a frame): allies 1 to 5. Then
   `Flag_AllCapturedThink`'s half-second poll ends the round with
   `scr_dom_domination_points` (2) on top, allies 7, 0.3 s after the fifth
   flag; `endRound` waits `scr_dom_endrounddelay` (10 s), the round limit
-  ends the map, intermission, `exitLevel(false)` (VERIFIED, the log's
-  times and state lines, `d 6 5` then `d 6 7`). Each capture plays
+  ends the map, intermission, `exitLevel(false)` (VERIFIED, the log's times
+  and state lines, `d 6 5` then `d 6 7`). Each capture plays
   `us_area_secured` through `playLocalAnnouncerSound`, `S` on the wire
   (VERIFIED, the captures).
 - **hq** (`probe_hqend`, mp_cassino, `scr_hq_scorelimit 90`). The allied
   player captures the first radio and goes home. Each reinforcement wave
-  ends with `HQ_SCORED_ALLIES` 45, `d 6 45` 46 s after the capture and
-  `d 6 90` 46 s after that (45 counted down plus the timer's 1 s wait),
+  ends with `HQ_SCORED_ALLIES` 45, `d 6 45` 46 s after the capture and `d 6
+  90` 46 s after that (45 counted down plus the timer's 1 s wait),
   `hq_score` each time, and `hq_points_players` gives the holder 3 a wave
   (VERIFIED, the captures and state lines). The second wave reaches the
   limit: intermission about 1 s later, `exitLevel(false)` 10 s on
@@ -2575,167 +2583,169 @@ recipe is the header of each fixture; `--probe-secs` 75, 100, 180 and 175.
 - **bas** (`probe_basend`, mp_foy, `scr_bas_bombtime 20`,
   `scr_bas_roundlimit 1`). `doDamage` breaches the three axis bases. The
   allied player stands by the hq base's bomb, turned to it, and holds use:
-  the `trigger_lookat` fires off his aim, `bas_planted` after the 15 s
-  plant with `us_bomb_planted`; the axis player holds use there through
-  the 10 s defuse, `bas_defused` and `ge_bomb_diffused`. The allied player
-  plants it again, then the ammo and fuel bases' bombs; each blast 20 s
-  after its plant is `bas_destroyed`, +1 allied team score in
-  `BaseAssault_KillBase`, and the third ends the round
-  (`GMI_DOM_ALLIEDMISSIONACCOMPLISHED`, `us_victory`), the round limit the
-  map (VERIFIED, the log and captures). The probe finds a spot on rings
-  around each bomb with `bulletTrace` and `isOnGround`; both servers pick
-  the same ones and log every rejected try (VERIFIED, `PROBE off`).
+  the `trigger_lookat` fires off his aim, `bas_planted` after the 15 s plant
+  with `us_bomb_planted`. The axis player holds use there through the 10 s
+  defuse, `bas_defused` and `ge_bomb_diffused`. The allied player plants it
+  again, then the ammo and fuel bases' bombs; each blast 20 s after its
+  plant is `bas_destroyed`, +1 allied team score in `BaseAssault_KillBase`,
+  and the third ends the round (`GMI_DOM_ALLIEDMISSIONACCOMPLISHED`,
+  `us_victory`), the round limit the map (VERIFIED, the log and captures).
+  The probe finds a spot on rings around each bomb with `bulletTrace` and
+  `isOnGround`; both servers pick the same ones and log every rejected try
+  (VERIFIED, `PROBE off`).
 
 Every ending falls back the same way: `exitLevel(false)` queues
-`map_rotate`, the empty rotation forces `map_restart` without `pers[]`,
-and the burst before `B` carries every configstring the incoming level
-wrote to a new value: `d 14 <level start>`, `d 6 0` (the outgoing
-`ExitLevel` zeroed the scores in the game, not the configstring, and the
-new level's `setTeamScore("allies", 0)` changes it), `d 3` (the ambient)
-(VERIFIED, every `*end*-uo.txt` capture at the `B`; the order INFERRED as
-`G_InitGame`'s, the gametype's and the level script's writes). vcod's
-restart sends every changed slot in slot order, then `d 3`, `B`/`n` and
-`d 1` (cod11-map-cycle.md 4.5); it has no `d 14`, which it holds at `0`.
+`map_rotate`, the empty rotation forces `map_restart` without `pers[]`, and
+the burst before `B` carries every configstring the incoming level wrote to
+a new value: `d 14 <level start>`, `d 6 0` (the outgoing `ExitLevel` zeroed
+the scores in the game, not the configstring, and the new level's
+`setTeamScore("allies", 0)` changes it), `d 3` (the ambient) (VERIFIED,
+every `*end*-uo.txt` capture at the `B`). Their order is `G_InitGame`'s, the
+gametype's and the level script's writes (INFERRED). vcod's restart sends
+the same burst in write order (cod11-map-cycle.md 4.5, "Gaps" below).
 
-Four more probes, 2026-10-17, ports 32531-32539, the same two clients and
-`gametypes_ab` tests (`uo_*_time*`, `uo_team_deathmatch_*`), cover the
-clock ends, the defender's return and a rotation to another map:
+Four more probes (ports 32531-32539), the same two clients and
+`gametypes_ab` tests (`uo_*_time*`, `uo_team_deathmatch_*`), cover the clock
+ends, the defender's return and a rotation to another map:
+
 - **ctf** (`probe_ctftime`, mp_cassino, `scr_ctf_roundlength 0.5`,
-  `scr_ctf_timelimit 0.5`, no score or round limit). The allied player
-  takes the axis flag, faces yaw 0 and `suicide()`s: `drop_flag`'s
-  `getPlant` puts it 11 units ahead, at (4974, -1987, -7.88). The axis
-  player `setOrigin`s onto it and `ctf_think`'s own-team branch returns
-  it one frame later: `A;...;axis;...;ctf_returned`,
+  `scr_ctf_timelimit 0.5`, no score or round limit). The allied player takes
+  the axis flag, faces yaw 0 and `suicide()`s: `drop_flag`'s `getPlant`
+  puts it 11 units ahead, at (4974, -1987, -7.88). The axis player
+  `setOrigin`s onto it and `ctf_think`'s own-team branch returns it one
+  frame later: `A;...;axis;...;ctf_returned`,
   `GMI_CTF_PLAYER_RETURNED_FLAG_AXIS` and the returned sound, no
   `TIMEOUT_RETURNING` (VERIFIED, the log's 17400 and 17450, and the
   captures). The round clock runs out 30 s into the level:
-  `GMI_CTF_TIMEEXPIRED`, `endRound("draw")`; after the 10 s end-round
-  delay `game["timepassed"]` reads 0.78 and `checkTimeLimit` ends the map
+  `GMI_CTF_TIMEEXPIRED`, `endRound("draw")`; after the 10 s end-round delay
+  `game["timepassed"]` reads 0.78 and `checkTimeLimit` ends the map
   (`MPSCRIPT_TIME_LIMIT_REACHED`, `MPSCRIPT_THE_GAME_IS_A_TIE`,
   intermission). The probe's own `setCvar("sv_mapRotation", "gametype
-  probe_ctftime map mp_foy")` is what `exitLevel(false)` rotates through:
-  a gamestate for mp_foy with serverId 33, and `g_gametype` still the
-  probe (VERIFIED, the log's `PROBE done mp_foy probe_ctftime` and the
-  `!gamestate` line; cod11-map-cycle.md 5.2).
+  probe_ctftime map mp_foy")` is what `exitLevel(false)` rotates through: a
+  gamestate for mp_foy with serverId 33, and `g_gametype` still the probe
+  (VERIFIED, the log's `PROBE done mp_foy probe_ctftime` and the
+  `!gamestate` line; cod11-map-cycle.md 5.2). `map_rotate` reads the
+  script's cvars; a rotation that ignores them restarts mp_cassino.
 - **tdm** (`probe_tdmend`, mp_cassino, `scr_tdm_timelimit 0.5`,
   `scr_tdm_scorelimit 2`). The allied player kills the axis player with
-  `finishPlayerDamage`: allies 1, under the limit. The victim's killcam
-  runs (2 s dying, `archivetime` 9), and he respawns only on a use press
-  after it (`waitRespawnButton`; the probe taps use 10 s after the kill).
+  `finishPlayerDamage`: allies 1, under the limit. The victim's killcam runs
+  (2 s dying, `archivetime` 9), and he respawns only on a use press after it
+  (`waitRespawnButton`; the probe taps use 10 s after the kill).
   `startGame`'s `checkTimeLimit` ends the map at 30100 ms of level time
   (VERIFIED, the log and captures).
-- **hq** (`probe_hqtime`, mp_cassino, `scr_hq_timelimit 0.5`). Nobody
-  takes the radio; the time limit ends the map at 30100. The restarted
-  level shows a different radio, (1903, -1314, 168) where the first showed
-  (658, -1782, 0) (VERIFIED, the captures' objective slot 0). The draws
-  do not carry: `G_InitGame` reseeds `hq_randomize_radioarray`'s
-  `randomInt` from the wall clock at every load, a restart included
-  (VERIFIED, cod11-map-cycle.md 4.8). vcod used to seed every level with
-  `RNG_SEED` and showed the first radio again; the binary now steps a
-  level seed per load (`Server::with_seed`), which `gametypes_ab` runs,
-  replaying retail's spawn picks off the captures (cod11-map-cycle.md
-  4.8). `gametypes_ab` drops every hq radio's origin, as for the first
-  level's random pick.
+- **hq** (`probe_hqtime`, mp_cassino, `scr_hq_timelimit 0.5`). Nobody takes
+  the radio; the time limit ends the map at 30100. The restarted level shows
+  a different radio, (1903, -1314, 168) where the first showed (658, -1782,
+  0) (VERIFIED, the captures' objective slot 0). The draws do not carry:
+  `G_InitGame` reseeds `hq_randomize_radioarray`'s `randomInt` from the wall
+  clock at every load, a restart included (VERIFIED, cod11-map-cycle.md
+  4.8). vcod steps a level seed per load (`Server::with_seed`); seeding
+  every level alike shows the first radio again. `gametypes_ab` replays
+  retail's spawn picks off the captures (cod11-map-cycle.md 4.8) and drops
+  every hq radio's origin, as for the first level's random pick.
 - **bas** (`probe_bastime`, mp_foy, `scr_bas_roundlength 0.5`,
-  `scr_bas_roundlimit 1`, `scr_bas_startrounddelay 5`). Nobody breaches;
-  the round clock runs out with three bases a side: `GMI_DOM_TIMEEXPIRED`,
-  `endRound("draw")`, then `MPSCRIPT_ROUND_LIMIT_REACHED` and the map end
-  at 53650 (VERIFIED, the log and captures).
-All four match on vcod-server; `probe_ctftime` failed before
-`map_rotate` read the script's cvars (ours restarted mp_cassino).
+  `scr_bas_roundlimit 1`, `scr_bas_startrounddelay 5`). Nobody breaches; the
+  round clock runs out with three bases a side: `GMI_DOM_TIMEEXPIRED`,
+  `endRound("draw")`, then `MPSCRIPT_ROUND_LIMIT_REACHED` and the map end at
+  53650 (VERIFIED, the log and captures).
 
-One more, 2026-10-17, port 32711, the same clients, `gametypes_ab`'s
-`uo_domination_round_clock_and_time_limit_match_retail`:
+All four match on vcod-server.
+
+One more (port 32711, the same clients, `gametypes_ab`'s
+`uo_domination_round_clock_and_time_limit_match_retail`):
+
 - **dom** (`probe_domtime`, mp_cassino, `scr_dom_roundlength 0.5`,
   `scr_dom_timelimit 0.5`, no score or round limit,
   `scr_dom_startrounddelay 5`). The first level ends in dom's match-start
   `map_restart(true)` (`n`). On the second, `startRound` runs at 13300 and
   draws the round clock (`setTimer`, the timer element at 56,365 on the
-  wire);
-  the allied player holds flag1 (`dom_captured`, allies 1, his score 3,
-  18350) and goes home. The clock runs out 30 s on:
-  `GMI_DOM_TIMEEXPIRED`, and `startRound`'s flag count (1 to 0) gives the
-  round to allies, `GMI_DOM_ALLIEDMISSIONACCOMPLISHED`, `ended=1` at
-  42350. After `scr_dom_endrounddelay`'s 10 s, `endRound` logs `W;allies`,
+  wire). The allied player holds flag1 (`dom_captured`, allies 1, his score
+  3, 18350) and goes home. The clock runs out 30 s on: `GMI_DOM_TIMEEXPIRED`,
+  and `startRound`'s flag count (1 to 0) gives the round to allies,
+  `GMI_DOM_ALLIEDMISSIONACCOMPLISHED`, `ended=1` at 42350. After
+  `scr_dom_endrounddelay`'s 10 s, `endRound` logs `W;allies`,
   `game["timepassed"]` reads 0.783333 (47 s since `startGame` over 60) and
   `checkTimeLimit`, no longer held off by `level.roundstarted`, ends the
   map: `MPSCRIPT_TIME_LIMIT_REACHED`, intermission at 52350,
-  `exitLevel(false)` 10 s on, `B`, and the restarted level opens with
-  dom's match-start restart again; its own round clock expires to a draw
+  `exitLevel(false)` 10 s on, `B`. The restarted level opens with dom's
+  match-start restart again; its own round clock expires to a draw
   (VERIFIED, the log and captures). No team point is scored for the round:
   dom's team score is the flag count (`d 6 1`, then `d 6 0` at the
-  restart). vcod-server matched on the first run.
+  restart). vcod-server matches.
 
 ### Engine facts the gametypes reach
 
-- **Model entities send `xmodel`.** UO's `G_DObjUpdate` (0x77df9) writes
-  the model index into `s.xmodel` (entity +0x90) for `eType` 0, 8, 11, 12,
-  13 and 14; 1.1's (0x66054) writes `s.index` (+0x8c) for 0, 8 and 11
+- **Model entities send `xmodel`.** UO's `G_DObjUpdate` (0x77df9) writes the
+  model index into `s.xmodel` (entity +0x90) for `eType` 0, 8, 11, 12, 13
+  and 14; 1.1's (0x66054) writes `s.index` (+0x8c) for 0, 8 and 11
   (VERIFIED decompile). Retail UO's script models carry `index` 0 and the
   model in `xmodel` (VERIFIED, every `ctf`/`hq` capture). vcod's server
   moves a non-brush script mover's or turret's model there under protocol
   22 (`wire::entity_to_protocol`), and the client and the scripted capture
   read it there; a brush model keeps its inline number in `index`.
-- **`setShader` takes texture coordinates.** UO's (0x52779) takes 1, 3 or
-  5 arguments, the last two floats stored at hudelem +0x70/+0x74 (1.0 when
+- **`setShader` takes texture coordinates.** UO's (0x52779) takes 1, 3 or 5
+  arguments, the last two floats stored at hudelem +0x70/+0x74 (1.0 when
   absent, .rodata 0x9ff3c), which go out as `SCOORD`/`TCOORD`; owner and
-  team moved to +0x7c/+0x80 (`HudElem_Alloc` 0x51a1c) (VERIFIED
-  decompile). dom's capping icon passes five.
+  team moved to +0x7c/+0x80 (`HudElem_Alloc` 0x51a1c) (VERIFIED decompile).
+  dom's capping icon passes five.
 - **`setClock`/`setClockUp`** (UO 0x52c95/0x52cca, 1.1 0x4c644/0x4c664,
-  shared body UO 0x529c5): three or five arguments, both times rounded up
-  to ms, `time` above zero except for `setClockUp`, `duration` above zero,
-  the shader indexed as `setShader` does, a negative size refused; type 8
-  or 9, `time` = `level.time` + time at +0x5c, `duration` at +0x60
-  (VERIFIED decompile). `_util_mp_gmi::InitClock` and bas's bomb
-  stopwatch draw one.
-- **`playLocalAnnouncerSound(alias)`** (0x494d8) sends `S <alias index>`
-  to that player (the format at .rodata 0x9e432); **`rewindFx(ent, s)`**
-  (0x6c620) sends `F <s * 1000>` to the entity's client (.rodata 0xa3b60);
-  **`getStance()`** (0x68590) answers `prone` under `pm_flags` 1, else
-  `crouch` under 2, else `stand`; **`detach(model[, tag])`** (0x67cb0,
-  `G_EntDetach` 0x7818a) drops the first attachment on the tag whose model
-  matches without case and shifts the rest down with their
-  ignore-collision bits, or fails `failed to detach model '%s' from tag
-  '%s'`; **`print3d`** (0x66eb4) is a `trap_AddDebugString` a dedicated
-  server never draws (VERIFIED decompile, each).
-- **`setTakeDamage`, `doDamage`, `doDamageMod`.** `setTakeDamage` (0x691d2)
-  writes `takedamage` (+0x17d). `doDamage(damage, source[, attacker[,
-  inflictor[, mod]]])` (0x68e67) calls `G_Damage` with the direction from
-  `source` to the entity, the attacker NULL (the world) when absent, the
-  inflictor the attacker, the means of death `G_IndexForMeansOfDeath`'s (0,
-  `MOD_UNKNOWN`, when absent); `doDamageMod(damage, source, mod)` (0x69042)
-  passes NULL for both (VERIFIED decompile). `G_Damage` (0x4fedb) on a
-  non-client with `takedamage`: `eType` 5 notifies `trigger` and calls the
-  `use`; `eType` 8 only notifies `damage` with six arguments (damage,
-  attacker, normalized direction, point, means of death name, inflictor),
-  leaving `health` alone; anything else takes the damage off `health`
-  (raised to 1), notifies the same six, then `death` at 0 or below
-  (VERIFIED decompile). `G_RadiusDamage` (0x5098b) passes the direction
-  from the blast to `r.currentOrigin` lifted 24 and the blast's origin as
-  the point (VERIFIED decompile). vcod reproduces all of this
-  (`GameHost::damage_nonclient`). `doDamage` on a player or a vehicle
-  goes through `vehicle::g_damage`: a vehicle's own branch, a player's
-  damage callback behind `G_DamageClient`'s rider branch
-  (`coduo-vehicles.md` 14, "Riders"). A
-  `radiusDamage((100,200,10), 200, 100, 50)` on a script model at
-  (100,200,0) with `setTakeDamage(true)` notifies `9 MOD_EXPLOSIVE (0, 0,
-  1) (100, 200, 10)` on retail and on vcod (VERIFIED,
-  `client-probes/probe_blastbase` on mp_cassino, `blast_entity_uo_ab`);
-  the 9 against the distance's 97 is `CanDamage`'s 0.1 for a point on the
-  floor (INFERRED).
-- **`map_restart`'s letter.** 1.5's and UO's `SV_MapRestart_f`
-  (coduo_lnxded 0x8088325; CoDMP15.exe's twin) send `n` when the game
-  keeps `pers[]` (the `VM_Call(gvm, 0x12)` answer that also feeds
-  `SV_RestartGameProgs`) and `B` when not: the strings at 0x80e35b1 and
-  0x80e35b3 (VERIFIED, bytes; CoDMP15.exe 0x59df44 and 0x59df40). Retail
-  UO sent `n` on bas's `map_restart(true)` (VERIFIED, the capture). UO's
-  cgame runs `CG_MapRestart(1)` for `n` and `(0)` for `B`, the 0 also
-  resetting the script menus (uo_cgame 0x3003ac90, 0x30039500; VERIFIED
-  decompile). vcod sends `n` for a persisting restart on every protocol.
+  shared body UO 0x529c5): three or five arguments, both times rounded up to
+  ms, `time` above zero except for `setClockUp`, `duration` above zero, the
+  shader indexed as `setShader` does, a negative size refused; type 8 or 9,
+  `time` = `level.time` + time at +0x5c, `duration` at +0x60 (VERIFIED
+  decompile). `_util_mp_gmi::InitClock` and bas's bomb stopwatch draw one.
+- **Small builtins** (VERIFIED decompile, each):
+  - `playLocalAnnouncerSound(alias)` (0x494d8) sends `S <alias index>` to
+    that player (format at .rodata 0x9e432);
+  - `rewindFx(ent, s)` (0x6c620) sends `F <s * 1000>` to the entity's client
+    (.rodata 0xa3b60);
+  - `getStance()` (0x68590) answers `prone` under `pm_flags` 1, else
+    `crouch` under 2, else `stand`;
+  - `detach(model[, tag])` (0x67cb0, `G_EntDetach` 0x7818a) drops the first
+    attachment on the tag whose model matches without case and shifts the
+    rest down with their ignore-collision bits, or fails `failed to detach
+    model '%s' from tag '%s'`;
+  - `print3d` (0x66eb4) is a `trap_AddDebugString` a dedicated server never
+    draws.
+- **`setTakeDamage`, `doDamage`, `doDamageMod`** (VERIFIED decompile):
+  - `setTakeDamage` (0x691d2) writes `takedamage` (+0x17d);
+  - `doDamage(damage, source[, attacker[, inflictor[, mod]]])` (0x68e67)
+    calls `G_Damage` with the direction from `source` to the entity, the
+    attacker NULL (the world) when absent, the inflictor the attacker, the
+    means of death `G_IndexForMeansOfDeath`'s (0, `MOD_UNKNOWN`, when
+    absent);
+  - `doDamageMod(damage, source, mod)` (0x69042) passes NULL for both;
+  - `G_Damage` (0x4fedb) on a non-client with `takedamage`: `eType` 5
+    notifies `trigger` and calls the `use`; `eType` 8 only notifies `damage`
+    with six arguments (damage, attacker, normalized direction, point, means
+    of death name, inflictor), leaving `health` alone; anything else takes
+    the damage off `health` (raised to 1), notifies the same six, then
+    `death` at 0 or below;
+  - `G_RadiusDamage` (0x5098b) passes the direction from the blast to
+    `r.currentOrigin` lifted 24 and the blast's origin as the point.
+
+  vcod reproduces all of this (`GameHost::damage_nonclient`). `doDamage` on
+  a player or a vehicle goes through `vehicle::g_damage`: a vehicle's own
+  branch, a player's damage callback behind `G_DamageClient`'s rider branch
+  (`coduo-vehicles.md` 14, "Riders"). A `radiusDamage((100,200,10), 200,
+  100, 50)` on a script model at (100,200,0) with `setTakeDamage(true)`
+  notifies `9 MOD_EXPLOSIVE (0, 0, 1) (100, 200, 10)` on retail and on vcod
+  (VERIFIED, `client-probes/probe_blastbase` on mp_cassino,
+  `blast_entity_uo_ab`). The 9 against the distance's 97 is `CanDamage`'s
+  0.1 for a point on the floor (INFERRED).
+- **`map_restart`'s letter.** 1.5's and UO's `SV_MapRestart_f` (coduo_lnxded
+  0x8088325; CoDMP15.exe's twin) send `n` when the game keeps `pers[]` (the
+  `VM_Call(gvm, 0x12)` answer that also feeds `SV_RestartGameProgs`) and `B`
+  when not: the strings at 0x80e35b1 and 0x80e35b3 (VERIFIED, bytes;
+  CoDMP15.exe 0x59df44 and 0x59df40). Retail UO sent `n` on bas's
+  `map_restart(true)` (VERIFIED, the capture). UO's cgame runs
+  `CG_MapRestart(1)` for `n` and `(0)` for `B`, the 0 also resetting the
+  script menus (uo_cgame 0x3003ac90, 0x30039500; VERIFIED decompile). vcod
+  sends `n` for a persisting restart on every protocol.
 - **UO's placed weapons register.** `mpweapon_bazooka`,
   `mpweapon_panzerschreck`, `mpweapon_flamethrower` and eleven more UO
-  radiant names (read off `weapons/mp/*` in pakuo*) register their items
-  at spawn, which puts their projectile models in retail's order (mp_foy's
+  radiant names (read off `weapons/mp/*` in pakuo*) register their items at
+  spawn, which puts their projectile models in retail's order (mp_foy's
   `weapon_panzerfaust_rocket` at 487) (VERIFIED, the bas gate).
 - **Fog.** `setCullFog`/`setExpFog` write slot 13 on UO (`CsLayout::fog`;
   mp_foy's `500 5500 1 0.5254 0.6117 0.7215 0`), 12 on 1.1 (VERIFIED, the
@@ -2747,125 +2757,121 @@ One more, 2026-10-17, port 32711, the same clients, `gametypes_ab`'s
   `probe_endon_after_notify` on 1.1d and UO): hq's `level notify("Timer
   Changed"); level thread hq_reinforcement_timer()` keeps the new timer's
   endon (cod11-gsc-language.md 9).
-
 - **`ExitLevel`** (UO 0x590e1) is 1.1's (cod11-map-cycle.md 2):
   `trap_SendConsoleCommand(2, "map_rotate\n")`, the two team scores at
   `level+0x200`/`+0x204` to 0, each connected client's (`+0x4520` reads 2)
   score at `+0x4514` to 0 and its state to 1, client stride 0x4734, then
-  `ExitLevel: executed` (VERIFIED, disassembly). No configstring write:
-  the `d 6 0` above is the next level's.
+  `ExitLevel: executed` (VERIFIED, disassembly). No configstring write: the
+  `d 6 0` above is the next level's.
 - **A dying player is notified `death`.** `player_die` calls
   `Scr_Notify(self, scr_const+0x1c, 1)` with the attacker ahead of
   `Scr_PlayerKilled` (UO 0x4f9fe, 1.1 0x49a81; `scr_const+0x1c` is
   `"death"`, cod11-combat.md 14.6) (VERIFIED, disassembly). UO's rank icon
   hangs on it: `_rank_gmi::RankHudDestroy` destroys `rank_hud_icon` on
   `waittill("death")`, so a dead player's HUD loses the icon at 119,405
-  (VERIFIED, the ctf capture after the suicide). vcod queues the notify
-  from `finishPlayerDamage`, `suicide` and the `kill` command; from a
-  builtin it lands after the killed callback's first run, where retail's
-  is before it (INFERRED, the VM's notify queue).
+  (VERIFIED, the ctf capture after the suicide). vcod queues the notify from
+  `finishPlayerDamage`, `suicide` and the `kill` command; from a builtin it
+  lands after the killed callback's first run, where retail's is before it
+  (INFERRED, the VM's notify queue).
 - **`enableWeapon` gives nothing back by itself.** After the plant's
   `disableWeapon`/`enableWeapon` pair the probe client, which echoes
   `ps.weapon` in its cmd, stays at weapon 0 until it dies, on every plant
   and the defuse (VERIFIED, the bas captures' vitals). vcod gives the
-  holstered weapon back only off the ladder; after `enableWeapon` the
-  pickup reads the cmd's weapon byte (INFERRED, cod15-movement.md 6's
-  pickup at 0x2e4bc).
+  holstered weapon back only off the ladder; after `enableWeapon` the pickup
+  reads the cmd's weapon byte (INFERRED, cod15-movement.md 6's pickup at
+  0x2e4bc).
 - **`sin`, `cos`, `tan`, `asin`, `acos`, `atan`** (UO table rows 43-48 at
   0x6b551..0x6b795, 1.1 rows 38-43 at 0x5e5dc..0x5e804) take and give
   degrees: `x * M_PI / 180` in doubles, `tan` refusing a zero cosine with
-  `divide by 0`, `asin` and `acos` anything off [-1, 1] with
-  `%g out of range`, and the inverse ones `atan2` over `sqrt(1 - x*x)`
-  times 180 over `M_PI` (VERIFIED, 1.1 disassembly; the UO rows by name,
+  `divide by 0`, `asin` and `acos` anything off [-1, 1] with `%g out of
+  range`, and the inverse ones `atan2` over `sqrt(1 - x*x)` times 180 over
+  `M_PI` (VERIFIED, 1.1 disassembly; the UO rows by name,
   `tools/re/dump_builtins.py`). `probe_basend` calls `cos` and `sin`.
 
 ### Gaps
 
-- **bas `hud`**, closed 2026-10-17. Retail's `map_restart` recompiles the
-  scripts, about 850 ms of wall time, and catches the frames up before its
-  first snapshot (level start 23300, first snapshot 24150), so a new base
-  health bar's first half second at full width (`setShader(..., 32, 4)`
-  before the 0.5 s update writes 31) never reaches a client (VERIFIED, the
-  capture's times; cod11-map-cycle.md 4.7). INFERRED, off 4.7's frame
-  loop: that is the host's time, not a rule of the engine. `gametypes_ab` now reads each restart's and each
-  in-level stall's length off the capture (`RetailClock`) and runs ours'
-  owed frames back to back before one snapshot, as retail's frame loop
+All closed; `gametypes_ab::GAPS` is empty.
+
+- **bas `hud`.** Retail's `map_restart` recompiles the scripts, about 850 ms
+  of wall time, and catches the frames up before its first snapshot (level
+  start 23300, first snapshot 24150), so a new base health bar's first half
+  second at full width (`setShader(..., 32, 4)` before the 0.5 s update
+  writes 31) never reaches a client (VERIFIED, the capture's times;
+  cod11-map-cycle.md 4.7). That is the host's time, not a rule of the engine
+  (INFERRED, off 4.7's frame loop). `gametypes_ab` reads each restart's and
+  each in-level stall's length off the capture (`RetailClock`) and runs
+  ours' owed frames back to back before one snapshot, as retail's frame loop
   does, and the bar's 32 is gone from ours too.
-- **bas `players`**, closed 2026-10-16. The probes stand 8500 units apart
-  on mp_foy's open ground under a 500..5500 cull fog, and retail never
-  sends either the other: the snapshot builder's fog cull
-  (`cod15-protocol-diff.md` 15). vcod-server applies it and the view
-  matches.
-- **`basend` `hud`**, closed 2026-10-17: the same as `bas` at both
-  restarts, plus a 1.6 s stall of retail's host mid-plant (snapshots
-  98250 then 99850 on both probes, wall clocks 1.6 s apart; VERIFIED, the
-  captures), which cost the blinking bomb icon one cycle. The same replay closes it.
-- **A restart's `d 14`**, closed 2026-10-17: the burst carries
-  `SP_worldspawn`'s level start, the fog and the ambient as retail's does
-  (cod11-map-cycle.md 4.5). VERIFIED, retail's burst at mp_foy's first
-  restart (`mp_foy-bas-attacker-uo.txt`, `ms=19467`): `d 14 23300`, `d 13`
-  with the fog, `d 3 n\ambient_mp_foy\t\23300`, then `n`.
+- **bas `players`.** The probes stand 8500 units apart on mp_foy's open
+  ground under a 500..5500 cull fog, and retail never sends either the
+  other: the snapshot builder's fog cull (`cod15-protocol-diff.md` 15).
+  vcod-server applies it and the view matches.
+- **`basend` `hud`.** The same as `bas` at both restarts, plus a 1.6 s stall
+  of retail's host mid-plant (snapshots 98250 then 99850 on both probes,
+  wall clocks 1.6 s apart; VERIFIED, the captures), which cost the blinking
+  bomb icon one cycle. The same replay closes it.
+- **A restart's `d 14`.** The burst carries `SP_worldspawn`'s level start,
+  the fog and the ambient as retail's does (cod11-map-cycle.md 4.5).
+  Retail's burst at mp_foy's first restart (`mp_foy-bas-attacker-uo.txt`,
+  `ms=19467`): `d 14 23300`, `d 13` with the fog, `d 3
+  n\ambient_mp_foy\t\23300`, then `n` (VERIFIED).
 - Not measured: `doDamage` on a client.
 
 ## 23. HTTP downloads
 
-UO 1.51 runs 1.5's www download redirect (`cod15-protocol-diff.md` 14,
-which holds the addresses for both). What is UO's own:
+UO 1.51 runs 1.5's www download redirect (`cod15-protocol-diff.md` 14, which
+holds the addresses for both). UO's own:
 
-- A client without `cl_wwwDownload` on a server with `sv_wwwDownload 1`
-  gets nothing: `SV_WriteDownloadToClient` (0x808c559) returns through a
-  stub that returns 1 (0x808c54f) before it opens the pak (decompile,
-  INFERRED from the branches). Live on loopback the server logged
-  `clientDownload: 0 : begining "main/nsf_mp_j5outpost.pk3"` every frame
-  and the client timed out at 0 bytes (VERIFIED). 1.5b opens the pak
-  first and falls back to UDP by accident.
+- A client without `cl_wwwDownload` on a server with `sv_wwwDownload 1` gets
+  nothing: `SV_WriteDownloadToClient` (0x808c559) returns through a stub that
+  returns 1 (0x808c54f) before it opens the pak (INFERRED, the decompile's
+  branches). Live on loopback the server logged `clientDownload: 0 :
+  begining "main/nsf_mp_j5outpost.pk3"` every frame and the client timed out
+  at 0 bytes (VERIFIED). 1.5b opens the pak first and falls back to UDP by
+  accident.
 - A `wwwdl fail` sets the fallback flag, but the fallback branch returns
-  through the same stub and the next frame redirects again; UO never
-  falls back to UDP (decompile, INFERRED).
-- `sv_wwwDlDisconnected 1` makes the redirect's flags 1; the client's
-  `wwwdl bbl8r` draws `GMI_EXE_DOWNLOADDISCONNECTED` (live, VERIFIED,
+  through the same stub and the next frame redirects again: UO never falls
+  back to UDP (INFERRED, decompile).
+- `sv_wwwDlDisconnected 1` makes the redirect's flags 1; the client's `wwwdl
+  bbl8r` draws `GMI_EXE_DOWNLOADDISCONNECTED` (live, VERIFIED,
   `crates/common/tests/fixtures/net/www-redirect-uo-discon.bin`).
-- `CoDUOMP.exe` registers `cl_wwwDownload` default `1`, flags 3 in
-  `CL_Init` (0x414500, decompile, VERIFIED), parses the redirect in
-  `CL_ParseDownload` (0x418f90) and finishes it in `CL_WWWDownload`
-  (0x413420).
-
+- `CoDUOMP.exe` registers `cl_wwwDownload` default `1`, flags 3 in `CL_Init`
+  (0x414500, decompile, VERIFIED), parses the redirect in `CL_ParseDownload`
+  (0x418f90) and finishes it in `CL_WWWDownload` (0x413420).
 - A pure `cp` opens with the paks of `uo_cgame_mp_x86.dll` and
   `uo_ui_mp_x86.dll`, not 1.1's `cgame_mp_x86.dll` and `ui_mp_x86.dll`
   (which UO's `main/` paks still carry). Both names are stored shifted:
-  `wqaeicogaoraz:80fnn` plus -2 and `ztdzndrud}=;3iqq` plus -5, decoded
-  by 0x8075080 in `SV_VerifyPaks_f` (coduo_lnxded 0x808cf23) and matched
-  the same way in the client's file open (`CoDUOMP.exe` 0x42d760)
-  (decompile and decoded strings, VERIFIED). The open sets a flag on the
-  pak that holds each, which is what `CL_SendPureChecksums` reads
-  (INFERRED from the stores). In UO's install both are in `pakuo07` (and the
-  older `pakuo05`). A `cp` keyed off 1.1's names drew
-  `EXE_UNPURECLIENTDETECTED` from a pure UO server; off UO's it passed
-  (live, 2026-10-15, VERIFIED).
+  `wqaeicogaoraz:80fnn` plus -2 and `ztdzndrud}=;3iqq` plus -5, decoded by
+  0x8075080 in `SV_VerifyPaks_f` (coduo_lnxded 0x808cf23) and matched the
+  same way in the client's file open (`CoDUOMP.exe` 0x42d760) (decompile and
+  decoded strings, VERIFIED). The open sets a flag on the pak that holds
+  each, which is what `CL_SendPureChecksums` reads (INFERRED from the
+  stores). In UO's install both are in `pakuo07` (and the older `pakuo05`).
+  A `cp` keyed off 1.1's names drew `EXE_UNPURECLIENTDETECTED` from a pure
+  UO server; off UO's it passed (live, VERIFIED).
 
-vcod's client sends `cl_wwwDownload` (a console cvar, default 1) on
-protocol 22 and fetches the
-redirect over HTTP, connected or disconnected, and vcod-server redirects
-on 22 too (`cod15-protocol-diff.md` 14, "What vcod does", "vcod-server").
-The client's `cp` and the server's check take the module names from
-`Protocol::pure_dlls`.
+vcod's client sends `cl_wwwDownload` (a console cvar, default 1) on protocol
+22 and fetches the redirect over HTTP, connected or disconnected; vcod-server
+redirects on 22 too (`cod15-protocol-diff.md` 14, "What vcod does",
+"vcod-server"). The client's `cp` and the server's check take the module
+names from `Cod1Wire::pure_dlls`.
 
 ## 24. The systeminfo and its pak lists
 
 - UO's configstring 1 is bounded by `BIG_INFO_STRING`, not 1.1's 1023: a
   `sv_pure 1` server sends 1318 bytes on mp_cassino and 1351 on
   mp_j5outpost with every list whole (live, VERIFIED,
-  `crates/server/tests/fixtures/configstrings/*-dm-uo-pure.txt`). A change
-  of 1000 bytes or more goes to clients as `x`/`y`/`z` pieces
+  `crates/server/tests/fixtures/configstrings/*-dm-uo-pure.txt`). A change of
+  1000 bytes or more goes to clients as `x`/`y`/`z` pieces
   (`SV_SetConfigstring` 0x8090da8; the client's side `CoDUOMP.exe`
   0x401630). Addresses and the 1.1 and 1.5 sides are in
   `cod11-server-handshake.md`, "Configstring 1, systeminfo".
-- `sv_referencedPaks`/`sv_referencedPakNames` name the paks the level read
-  a file from (UO's read flag skips `soundaliases/` too), plus any pak
-  outside both `main` and `fs_basegame` (`uo`); 1.1 names every pak
+- `sv_referencedPaks`/`sv_referencedPakNames` name the paks the level read a
+  file from (UO's read flag skips `soundaliases/` too), plus any pak outside
+  both `main` and `fs_basegame` (`uo`); 1.1 names every pak
   (`cod11-server-handshake.md`, "The four cvars"). On mp_j5outpost that is
   section 1's ten stock paks and `main/nsf_mp_j5outpost` (live, VERIFIED).
-- vcod-server builds the same lists and bound; `configstrings_uo_ab`
+- vcod-server builds the same lists and bound. `configstrings_uo_ab`
   compares the referenced pair on every UO table and both pure captures'
   serverinfo and systeminfo byte for byte, `sv_serverid` 32 included: the
   captures were each recipe's second map load, and the gate loads the
@@ -2874,12 +2880,12 @@ The client's `cp` and the server's check take the module names from
 
 ## Tools
 
-- `tools/re/netfields.py <bin> <va> <count>` prints one table; UO's need
-  it because the scan cannot split them.
+- `tools/re/netfields.py <bin> <va> <count>` prints one table; UO's need it
+  because the scan cannot split them.
 - `tools/re/netfield_diff.py <binA> <va> <n> <binB> <va> <n>` diffs two
   tables by field name.
 - `crates/common/examples/handshake_probe.rs` connects at any protocol
-  number and prints the replies and the gamestate's configstrings; given a
+  number and prints the replies and the gamestate's configstrings. Given a
   directory of `netfields.py` dumps of UO's six tables (named `ent.txt`,
   `alt.txt`, `ps.txt`, `cli.txt`, `obj.txt`, `hud.txt`), it decodes the
   baselines, enters the world with an unchanged cmd, answers the script
