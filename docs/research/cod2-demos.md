@@ -1,10 +1,9 @@
 # CoD2 demos: `record`, `stoprecord`, `demo`, `timedemo`
 
 What the retail CoD2 1.3 client writes into a demo and how it plays one
-back, read out of the Mac 1.3 client (`cod2mp_mac13_i386`, symbols, the
-Ghidra export the cod2 docs cite) and checked live against
-`CoD2MP_s.exe` 1.3 under Wine. CoD1's account is `cod11-demos.md`; this
-doc lists what CoD2 keeps and what it changes. vcod's code:
+back. Source: the Mac 1.3 client (`cod2mp_mac13_i386`, with symbols),
+checked live against `CoD2MP_s.exe` 1.3 under Wine. CoD1's account is
+`cod11-demos.md`; this doc lists what CoD2 keeps and changes. vcod:
 `crates/cod2/src/net/demo.rs` (the format, `Recording`),
 `vcod_cod2::net::Client::{start_recording, server_message, demo_message}`
 (the write and the read), and `crates/client/src/play/cod2.rs`
@@ -15,7 +14,7 @@ doc lists what CoD2 keeps and what it changes. vcod's code:
 - `CL_Init` (Mac 0x14b032) adds `record` (`CL_Record_f`), `stoprecord`
   (`CL_StopRecord_f`), and both `demo` and `timedemo` with
   `CL_PlayDemo_f`, autocompleting from `demos` with extension `dm_1`
-  (VERIFIED, the `Cmd_AddCommand` and `Cmd_SetAutoComplete` calls). So
+  (VERIFIED, the `Cmd_AddCommand` and `Cmd_SetAutoComplete` calls).
   `timedemo` is a command, not a dvar as on CoD1: `CL_PlayDemo_f` sets
   `clc` +0x4018c to whether `Cmd_Argv(0)` is `timedemo` (VERIFIED, the
   `I_stricmp` at 0x14c288). vcod drops its CoD1 `timedemo` cvar on a CoD2
@@ -183,7 +182,7 @@ demo is INFERRED from `CG_PredictPlayerState` (Mac 0x1ddafa) opening on
 
 ## 6. Live runs
 
-On 2026-10-22, all in one `unshare -rn` namespace (loopback only):
+All in one `unshare -rn` namespace (loopback only):
 
 - vcod recorded retail `cod2_lnxded` 1.3 (`mp_toujane`, dm, a moving
   second client): `vcod --net-probe 127.0.0.1:28970 --game cod2

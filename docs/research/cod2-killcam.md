@@ -1,13 +1,11 @@
 # CoD2 1.3 MP: the killcam
 
 How the CoD2 1.3 server replays a kill: the stock script's fields, the
-engine's frame archive, the follow copy taken out of it, the snapshot that
-carries the archived frame's entities, and the spawn that ends it. CoD1's
-`cod11-spectator-follow.md` section 12 is the model; this document records
-CoD2's shape and what vcod does.
+frame archive, the follow copy taken out of it, the snapshot carrying the
+archived frame's entities, and the spawn that ends it. CoD1's model is
+`cod11-spectator-follow.md` section 12.
 
-Evidence rules as everywhere in this directory, no document-level default:
-every claim carries its own label. Addresses are the 1.3 Mac client
+No document-level label: every claim carries its own. Addresses are the 1.3 Mac client
 (`cod2mp_mac13_i386`, which links the server and game in, with symbols)
 unless marked lnxded (`cod2_lnxded`). `cl` is a gclient, the playerstate at
 `cl+0`.
@@ -61,9 +59,9 @@ unless marked lnxded (`cod2_lnxded`). `cl` is a gclient, the playerstate at
   so a press let go between two frames still reads 1 to that frame's
   threads.
 - INFERRED, vcod's port: `Cod2Level::client_think` stores both words
-  before any arm and mirrors their OR onto the host, and `end_frame`
-  clears the latch. Until 2026-10-23 the mirror sat after pmove, past the
-  follower's early return, so a killcam's skip never fired on vcod-server
+  before any arm and mirrors their OR onto the host; `end_frame` clears
+  the latch. Trap: a mirror placed after pmove sits past the follower's
+  early return, and the skip never fires
   (`cod2_fight::a_use_press_skips_the_killcam`). Not run live against
   `cod2_lnxded`; the decompile is the evidence.
 
@@ -185,7 +183,7 @@ unless marked lnxded (`cod2_lnxded`). `cl` is a gclient, the playerstate at
 
 ## 6. The retail run
 
-2026-10-22, `GT=killcam SECOND=killcam
+`GT=killcam SECOND=killcam
 PROBE_GSC=crates/cod2/tests/fixtures/killcam/probe_killcam.gsc
 tools/run_probe_cod2.sh shootlate mp_toujane 1943 1991 65 0` with the
 combat captures' `probe_v*` cvars, inside `unshare -rn`. The gametype is
@@ -237,7 +235,7 @@ sends; `snapshot_entities` runs section 4 (the culled entity is the one
 `ps.clientNum` names, live or archived, and a temp entity's scope is
 tested against it too). `end_frame` takes its arm off `sessionstate`: a
 session made "spectator" runs the follow whatever `pm_type` the client
-had (the dead one kept the corpse view before), and a client whose last
+had, and a client whose last
 frame was a copy is spawned at it (`spawn_at_follow_copy`, section 5),
 its spawn think run on the last cmd.
 

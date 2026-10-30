@@ -52,19 +52,21 @@ Tools, run on the stock paks extracted in iwd order (`iw_00..15`, then the
   counts and the census below.
 - `vcod_cod2::materials` compiles each material into vcod's neutral
   `Material`: the lit technique of 4.1, its first pass statemap applied
-  to the material's `stateBits`, the result read as one CoD1-style stage
-  (colour map, the lightmap under the `lmap*` techniques). It is an
-  approximation for the stage renderer, not a port of section 9; an
-  `lmap` technique with only the `_a`, `_s` and `_dtl` suffixes also
-  carries its switches and `detailScale` (`PhongLit`), which the client's
-  CoD2 world pipeline (`crates/client/src/renderer/cod2.rs`,
-  `cod2_world.wgsl`) draws as section 9.1 lays out, and the sky its cube's
-  image path, which `sky_cube.wgsl` samples. Texture scroll, the dynamic
-  shadow and every other family stay on the stage; a `water_l_sun`
-  material carries `WaterLit`, which the CoD2 water pipeline draws
-  (9.12); a `particle_cloud*` one draws through the cloud pass (9.14).
-  The stock materials of 24 sets (objective, the renderer's post-effect
-  materials, distortion, the shadow cookie sets) take its
+  to the material's `stateBits`, read as one CoD1-style stage (colour
+  map, plus the lightmap under the `lmap*` techniques). That stage is an
+  approximation, not a port of section 9. What draws closer to retail:
+
+  | Material | Carries | Drawn by |
+  |---|---|---|
+  | `lmap` with only `_a`, `_s`, `_dtl` suffixes | its switches and `detailScale` (`PhongLit`) | the CoD2 world pipeline (`renderer/cod2.rs`, `cod2_world.wgsl`), as 9.1 |
+  | sky | its cube's image path | `sky_cube.wgsl` |
+  | probe sets | `Material::probe` | `cod2_model.wgsl` (9.4, 9.6) |
+  | `water_l_sun` | `WaterLit` | the CoD2 water pipeline (9.12) |
+  | `particle_cloud*` | | the cloud pass (9.14) |
+
+  Texture scroll on world surfaces and every other family stay on the
+  stage. The stock materials of 24 sets (objective, the renderer's
+  post-effect materials, distortion, the shadow cookie sets) take the
   colour-map-only fallback; `materials::fallback_use` says which of them
   default play shows (9.11), and `crates/cod2/tests/materials_lib.rs`
   reports them.
@@ -559,11 +561,11 @@ index count u16, first index u32; record size VERIFIED in `R_LoadSurfaces`
 0x000e4672) weighted by triangles, and every `misc_model` in lump 37's
 entity text weighted by the materials its xmodel file names (VERIFIED,
 census). Six `misc_model`s spell their xmodel in another case
-(`prop_barrel_BLACK_snow` four times, `prop_barrel_WHITE` twice); the
+(`prop_barrel_BLACK_snow` four times, `prop_barrel_WHITE` twice). The
 Python tool on a case-sensitive extract drops them and counts 38,249
-references, the case-blind lookup the engine's file system does finds
-them and counts 38,267 (VERIFIED, `material_stock.rs`). The table below
-is the Python count; the 18 do not move its first two rows.
+references; the engine's case-blind lookup counts 38,267 (VERIFIED,
+`material_stock.rs`). The table uses the Python count; the 18 do not move
+its first two rows.
 
 World, 1,646,795 triangles, 83% of them lightmapped:
 
@@ -919,18 +921,17 @@ What vcod draws (`crates/client/src/cod2_light.rs`, `vcod_cod2::lightgrid`):
   the compiled set), and the library compiles the lightmap one first
   (4.1), so the entity path redraws a set with a probe technique
   (`ModelLight::Probe`) as its colour map times the vertex colour times
-  the probe: no lightmap bundle, `lightingDiffuse`. Before that, every CoD2 entity
-  drew the implicit skin over the default image (mean 24 of 255), a
-  near-black silhouette in sunlight.
+  the probe: no lightmap bundle, `lightingDiffuse`. Looking for a `skins/`
+  script instead finds none and draws the default image (mean 24 of 255),
+  a near-black silhouette.
 - A static prop surface whose set has no probe technique (the
   `effect_multiply` decals, `effect_add` glows, `unlit_*` sets) keeps the
   colour its xmodelsurfs vertices store, which those techniques read
   (`vertcol_mul.hlsl`, `vertex_color_simple.hlsl`, above). The crates'
   stencilled labels (`mtl_dak_crate_decals` on `prop_crate_dak1`,
   `mtl_europe_crate_decals`) store 231..251 grey at alpha 255 (VERIFIED,
-  the xmodelsurfs); taking the grid in their place multiplied the wood
-  under each label by the half-scale light, a near-black rectangle.
-  The census of every stock model material outside the opaque sets, by
+  the xmodelsurfs); lit by the grid instead, the label multiplies the wood
+  under it by the half-scale light, a near-black rectangle. The census of every stock model material outside the opaque sets, by
   the stage pipeline each draws with, is
   `crates/client/src/renderer/prop_blends.rs`.
 - Every lit model technique multiplies by the model's vertex colour:
@@ -944,10 +945,10 @@ What vcod draws (`crates/client/src/cod2_light.rs`, `vcod_cod2::lightgrid`):
   the three `phong_alphatest_scroll` materials, 134 on the `ambient_*`
   ones), 203 on the 1,602,587 vertices of `phong_replace_spec`, the
   biggest (VERIFIED, census `stock_model_sets_take_their_light` in
-  `prop_blends.rs`). Before vcod read the colour, every lit model drew
-  as a white model: mp_toujane's `prop_crate_dak1` body (`mtl_dak_crate`,
-  its greys averaging 162) stored a mean red byte of 64.4 lit white and
-  42.2 with its greys (VERIFIED, `toujane_crate_labels_keep_the_model_colours`).
+  `prop_blends.rs`). Dropping the colour draws a white model:
+  mp_toujane's `prop_crate_dak1` body (`mtl_dak_crate`, its greys
+  averaging 162) stores a mean red byte of 64.4 lit white and 42.2 with
+  its greys (VERIFIED, `toujane_crate_labels_keep_the_model_colours`).
   The entity's GPU path is checked against the CPU formula on lavapipe
   (`probe_shader_lights_a_model_as_the_cpu_does`, a white and a 125 grey
   sphere).
@@ -980,8 +981,8 @@ What vcod draws (`crates/client/src/cod2_light.rs`, `vcod_cod2::lightgrid`):
   (VERIFIED, `objective.techset`). So an `objective` material on a static
   model draws nothing: the static model types 12 and 15 find no
   technique and retail skips the draw (INFERRED, 4.1). vcod leaves those
-  surfaces out of the props (`props::SkinDraw::skip`); before, it drew
-  them as the compiled stage, the colour map added.
+  surfaces out of the props (`props::SkinDraw::skip`) rather than draw
+  the compiled stage, the colour map added.
 - Not drawn: `CG_General`'s locked lighting origin (`eFlags` 0x400). The
   dynamic shadow on the sun is 9.8's.
 
@@ -1006,12 +1007,10 @@ What vcod draws (`crates/client/src/cod2_light.rs`, `vcod_cod2::lightgrid`):
   identityLight 1, in full screen too (`gamma::overbright_bits`): the
   lit model stages, scaled by identityLight, and the unlit ones
   (`vertcol_*`, the colour map times the vertex colour, unscaled) both
-  show the HLSL's value. Before, full screen doubled the scene through
-  the ramp while only the lit paths had halved theirs, so every unlit
-  model stage (the `effect_add` glows, the `unlit_*` and `ambient_*`
-  entity sets, the static props' stage-path decals) drew twice as
-  bright as retail, and a lit colour above 1 survived where retail's
-  framebuffer clamps it.
+  show the HLSL's value. The trap: CoD1's full-screen overbright ramp
+  doubles every unlit model stage (the `effect_add` glows, the `unlit_*`
+  and `ambient_*` entity sets, the static props' stage-path decals) and
+  lets a lit colour above 1 survive where retail's framebuffer clamps it.
 
 ### 9.4 Model techniques: normal and specular maps, the objective pulse
 
@@ -1077,14 +1076,13 @@ What vcod draws (`crates/client/src/cod2_light.rs`, `vcod_cod2::lightgrid`):
   rig's). vcod's CoD2 view weapon draws the grid sample at the eye
   through the same `cod2_model.wgsl` (`viewmodel.wgsl`'s CoD2 arm, its
   normals turned back to the world by the view's inverse), with the
-  model's vertex colour; before, it took CoD1's static lighting.
+  model's vertex colour, not CoD1's static lighting.
 
 ### 9.5 The depth feather
 
-`gfx_d3d_mp_x86_s.dll` (md5 2402bf2072f9255b85e3d23297d1d0ed, image base
-0x10000000) is the PC renderer. The Mac build registers no `r_zFeather`
+The feather is the PC renderer's (`gfx_d3d_mp_x86_s.dll`, section 0). The Mac build registers no `r_zFeather`
 and its `R_RenderScene` queues only type 21 for the emissive pass
-(VERIFIED, the Mac decompile), so the feather below is the PC's.
+(VERIFIED, the Mac decompile).
 
 - `r_zFeather` is a bool registered default 1, flags 0x2000 (VERIFIED,
   the push of 1 before its name at 0x1000b4c1, stored to 0x101ce694).
@@ -1157,9 +1155,8 @@ and its `R_RenderScene` queues only type 21 for the emissive pass
 - With a feathered run in the frame the copy goes before the first
   entity or view weapon surface in the sorted list
   (`renderer::feather_copy_at`, never past the split), so the feather
-  reads the world, not the players and entities; before, a sprite
-  feathered into a player that retail's `floatZ` leaves out and cuts
-  hard. Static props are world draws in vcod and stay in the copy;
+  reads the world, not the players and entities: retail's `floatZ` leaves
+  players out, so a sprite cuts hard against one. Static props are world draws in vcod and stay in the copy;
   whether retail's static models write `floatZ` is open
   (`r_depthPrepassModels` gates "models", 4.1).
 - The feathered outdoor term is not drawn. One stock material,
@@ -1918,15 +1915,9 @@ fallback; only the visible ones log a warning (9.13). The rest:
   20 water, 21 wood, 22 asphalt; `opaqueglass` is glass's 9 without glass
   contents. `Com_SurfaceTypeFromName` (0x000bcad0) and
   `Com_SurfaceTypeToName` (0x000bcb46) index the first 22 rows.
-- Other surface flags: 0x1 nodamage, 0x2 slick, 0x4 sky, 0x8 ladder,
-  0x10 noimpact, 0x20 nomarks, 0x80 nodraw, 0x400 nolightmap, 0x800
-  pointlight, 0x2000 nosteps, 0x4000 nonsolid, 0x10000 alphashadow, 0x20000
-  nodlight, 0x40000 nocastshadow, 0x2000000 mantleOn, 0x4000000 mantleOver,
-  0x80000000 portal. Contents: 0x2 foliage, 0x10 glass, 0x20 water,
-  0x40 canshootclip, 0x80 clipmissile, 0x200 vehicleclip, 0x400 itemclip,
-  0x800 sky, 0x1000 ai_nosight, 0x2000 clipshot, 0x10000 playerclip,
-  0x20000 monsterclip, 0x1000000 mantleOn/mantleOver, 0x8000000 detail,
-  0x10000000 structural, 0x80000000 nodrop (VERIFIED, table).
+- The other surface flag bits and every content bit, read off the same
+  table, are tabled in cod2-d3dbsp-format.md, "Contents and surface flags"
+  (VERIFIED, table).
 - Readers, by name in the Mac decompile (VERIFIED, the `& 0x1f00000`
   sites; the Linux build has the same masks in `PM_GroundSurfaceType`
   0x080e2220, `PM_FootstepEvent` 0x080e5402, `G_RunMissile` 0x0810e0ce,
@@ -1952,5 +1943,6 @@ fallback; only the visible ones log a warning (9.13). The rest:
 - The Windows DLL's own addresses for the loader and applier: only strings
   were matched here.
 - The world vertex's lightmap coords are rescaled per lightmap by a
-  20-byte record (`R_LoadSurfaces` 0x000e4672); its meaning belongs with
-  the d3dbsp lumps.
+  20-byte record (`R_LoadSurfaces` 0x000e4672). cod2-d3dbsp-format.md,
+  lump 1, reads it as the `r_optimizeLightmaps` page merge's scale and
+  offset, a load-time choice; the record's field layout is not worked out.

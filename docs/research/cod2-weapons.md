@@ -353,14 +353,17 @@ loop over three angles; `pmove::tests::the_cmd_roll_rides_into_the_view`).
   keys outside the table. `vcod_cod2::model::recover_bind` rebuilds the
   view rigs' bind (cod2-xmodel-v20-format.md, "Viewmodels and hands").
 - `cod2_viewmodel` loads the rig, steps one main node by section 6's
-  rules with its rate, poses the sight clip at the lerped
+  rules with its rate, poses the sight clip at the lerped (or predicted)
   `fWeaponPosFrac` under it, and draws hands and gun at the eye with the
-  view's angles. A follower's camera takes the followed view angles.
+  view's angles, for the own predicted body and for a followed one. A
+  follower's camera takes the followed view angles.
+- `play::cod2_gun` places the gun off the view: offsets, bob, sway, lean
+  roll, the idle drift, the damage kick, the turn lag
+  (`BG_CalculateWeaponPosition_Sway`, `BG_CalculateWeaponAngles`;
+  constants in cod2-hud.md 18). The scope overlay hides the gun through
+  `play::cod2_view::ViewOut::overlay`.
 - The recoil, as "The recoil" above.
 - A main node change cuts, as retail's does; the sight switch
   crossfades (section 6).
-- Not modelled: the gun's position offsets, bob, sway and lean
-  (`BG_CalculateWeaponPosition_Sway` and kin), notetrack sounds
-  (`noteTrackSoundA`..`D`), the flash and brass tags, `cg_drawGun` and the
-  scope overlay's hiding of the gun. The gun only draws for a client the
-  spectator follows; a playing client is the session's to add.
+- Not modelled: notetrack sounds (`noteTrackSoundA`..`D`), the view
+  weapon's flash and brass tags, `cg_drawGun` on the CoD2 path.

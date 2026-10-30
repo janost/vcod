@@ -1,12 +1,14 @@
 # CoD2 BSP format (`.d3dbsp`, IBSP version 4)
 
-The byte layout of Call of Duty 2 1.3's `maps/mp/*.d3dbsp`, written as a diff against CoD 1's IBSP 59 (`bsp-ibsp59-format.md`) and meant to be enough to write a loader from. All integers and floats are little-endian.
+The byte layout of Call of Duty 2 1.3's `maps/mp/*.d3dbsp`, as a diff against CoD 1's IBSP 59 (`bsp-ibsp59-format.md`), enough to write a loader from. All integers and floats are little-endian.
 
-Sources and how each is cited:
+Sources:
 
-- `cod2_lnxded` is the retail Linux 1.3 dedicated server, the oracle for everything the server reads. It has no renderer. Its loader functions are unnamed in the binary; the names used below are the `Hunk_Alloc` tag strings each function passes (`"CMod_LoadLeafs"` and so on), which match the Mac build's symbols.
-- The Mac 1.3 MP binary is fully symbolized and carries the renderer, so it is the source for the render lumps. Mac addresses are marked `mac`.
-- The census is a script run over the 15 stock MP maps of the CoD2 1.3 install (`iw_03.iwd`, `iw_04.iwd`, `iw_15.iwd`): mp_breakout, mp_brecourt, mp_burgundy, mp_carentan, mp_dawnville, mp_decoy, mp_downtown, mp_farmhouse, mp_harbor, mp_leningrad, mp_matmata, mp_railyard, mp_rhine, mp_toujane, mp_trainstation. `tools/re/d3dbsp_census.py <map>...` reruns it; it prints `FAILURES 0` on all 15 (2026-10-21). "Census" below means that run.
+- `cod2_lnxded`, the retail Linux 1.3 dedicated server: the oracle for everything the server reads. It has no renderer. Its loader functions are unnamed; the names below are the `Hunk_Alloc` tag strings each passes (`"CMod_LoadLeafs"` and so on), which match the Mac build's symbols.
+- The Mac 1.3 MP binary: fully symbolized and carries the renderer, so it is the source for the render lumps. Its addresses are marked `mac`.
+- The census: `tools/re/d3dbsp_census.py <map>...` over the 15 stock MP maps (`iw_03.iwd`, `iw_04.iwd`, `iw_15.iwd`): mp_breakout, mp_brecourt, mp_burgundy, mp_carentan, mp_dawnville, mp_decoy, mp_downtown, mp_farmhouse, mp_harbor, mp_leningrad, mp_matmata, mp_railyard, mp_rhine, mp_toujane, mp_trainstation. It prints `FAILURES 0` on all 15. "Census" below means that run.
+
+vcod: `vcod_cod2::d3dbsp` parses the lumps, `vcod_cod2::collision::build` fills a `ClipMap` from the collision lumps, and the trace kernels live in `vcod_common::clipmap` (re-exported by `vcod_cod2::collision`); their module comments carry the addresses below.
 
 ## Header
 
@@ -269,7 +271,22 @@ VERIFIED, the material compiler's `surfaceparm` table in the Mac 1.3 MP binary (
 | 0x400 | `itemclip` | | 0x80000000 | `nodrop` |
 | 0x800 | `sky` | | | |
 
-and the surface bits `nodamage` 0x1, `slick` 0x2, `sky` 0x4, `ladder` 0x8, `noimpact` 0x10, `nomarks` 0x20, `nodraw` 0x80, `pointlight` 0x800, `nolightmap` 0x400, `nosteps` 0x2000, `nonsolid` 0x4000, `alphashadow` 0x10000, `nodlight` 0x20000, `nocastshadow` 0x40000, `mantleOn` 0x2000000, `mantleOver` 0x4000000, `portal` 0x80000000, and the sound material in bits 20-24 (`bark` 1 through `asphalt` 0x16, `opaqueglass` reusing `glass`'s 9). INFERRED from the table: 0x4 and 0x20000000, the two bits `CMod_LoadBrushes` clears off a brush (0x080536bc, "Lump 6"), come from no `surfaceparm` here; three of the census's most common brush words carry 0x20000000 (0x28031640, 0x28030200, 0x28001002; VERIFIED, census).
+and the surface bits
+
+| Bit | `surfaceparm` | | Bit | `surfaceparm` |
+|---|---|---|---|---|
+| 0x1 | `nodamage` | | 0x4000 | `nonsolid` |
+| 0x2 | `slick` | | 0x10000 | `alphashadow` |
+| 0x4 | `sky` | | 0x20000 | `nodlight` |
+| 0x8 | `ladder` | | 0x40000 | `nocastshadow` |
+| 0x10 | `noimpact` | | bits 20-24 | sound material: `bark` 1 through `asphalt` 0x16, `opaqueglass` reusing `glass`'s 9 |
+| 0x20 | `nomarks` | | 0x2000000 | `mantleOn` |
+| 0x80 | `nodraw` | | 0x4000000 | `mantleOver` |
+| 0x400 | `nolightmap` | | 0x80000000 | `portal` |
+| 0x800 | `pointlight` | | | |
+| 0x2000 | `nosteps` | | | |
+
+INFERRED from the table: 0x4 and 0x20000000, the two bits `CMod_LoadBrushes` clears off a brush (0x080536bc, "Lump 6"), come from no `surfaceparm` here; three of the census's most common brush words carry 0x20000000 (0x28031640, 0x28030200, 0x28001002; VERIFIED, census).
 
 The masks the server traces with, each VERIFIED as the immediate its caller passes (Mac 1.3 names):
 
@@ -287,7 +304,7 @@ INFERRED, from the masks against the census: a `clipshot` trim (0x2080 after the
 
 ## The trace
 
-`cod2_lnxded`'s trace functions, matched to the Mac names by their callers, sizes and constants (Mac addresses in the list after each). VERIFIED for each the structure described; the arithmetic is the Linux build's x87 code, every named float variable stored and every expression in between extended. `vcod_cod2::collision` ports them; its module comments carry the same addresses.
+`cod2_lnxded`'s trace functions, matched to the Mac names by their callers, sizes and constants (Mac addresses after each). VERIFIED for each the structure described. The arithmetic is the Linux build's x87 code: every named float variable stored, every expression in between extended. `vcod_common::clipmap` ports them with the same addresses in its comments.
 
 - `CM_Trace` 0x0805b414 (mac 0x64426): the box is shifted to its centre, `(mins + maxs) * 0.5` (rodata 0x8140270), the start and end each moved by it; the half size goes to `size`, the capsule's radius is the smaller of `size.z` and `size.x` and its sphere offset `size.z - radius`. `invDelta` is `1 / (start - end)` per axis, 0 where they meet (0x0805d86c). The trace's bounds are the swept span grown by the radius in x and y and by radius plus offset in z, and a sweep whose bounds' volume is under 16 times `size.x * size.y * size.z * |delta|` (rodata 0x814026c) culls the AABB trees by their axes alone (0x0805b39c). `start == end` (0x0805d78c) is a position test; otherwise a trace with a zero box is a point. Model 0 walks the tree from node 0 with the start at fraction 0 and the end at the trace's fraction.
 - `CM_TraceThroughTree` 0x0805b058 (mac 0x63f90), "What the trace reads" above. Front when the smaller distance is at least the offset, back when the larger is at most minus it; both are the engine's `fsel` min and max (0x0805d5f2, 0x0805d5ce), which take the difference as a float. A crossing returns once the trace's fraction is no further than the segment's start; a segment within 4.7684e-7 (rodata 0x8140268) of parallel walks the front whole.
@@ -304,13 +321,13 @@ INFERRED, from the masks against the census: a `clipshot` trim (0x2080 after the
 
 VERIFIED, `CMod_LoadBrushRelated` 0x08054c2a: the brush trees' pool is addressed from one node before its first allocation, so tree node indices start at 1 and a leaf with no brushes keeps 0, which `CM_PointContents` reads as none.
 
-VERIFIED, 0x08055af0 and 0x08055d4c: the partition stamp is a `u16` compared with the trace count sign-extended from 16 bits, so while the count's low half is 0x8000 or more the stamp never matches and a partition shared by several tree leaves is clipped again; once the count wraps, a stale stamp can match and skip one. INFERRED: the second clip of a partition finds nothing nearer, so only the wrap can change a trace; `vcod_cod2::collision` stamps with the full count.
+VERIFIED, 0x08055af0 and 0x08055d4c: the partition stamp is a `u16` compared with the trace count sign-extended from 16 bits, so while the count's low half is 0x8000 or more the stamp never matches and a partition shared by several tree leaves is clipped again; once the count wraps, a stale stamp can match and skip one. INFERRED: the second clip of a partition finds nothing nearer, so only the wrap can change a trace; `vcod_common::clipmap` (`stamp_partition`) stamps with the full count.
 
-VERIFIED, `crates/cod2/tests/collision_maps.rs` against the port: point traces from the spawns agree with a clip over every model-0 brush and every triangle under a leaf's trees to 1e-4 on all 15 maps (800 segments each), and every stock spawn, placed by `GScr_PlaceSpawnPoint`'s three traces, is not `startsolid` for the standing player. Before placement 12 of the 930 spawns, on 6 maps, start solid where the map puts them: mp_carentan 1 (an `mp_dm_spawn` at (0, 696, 160) whose box reaches 14 units into a 26-sided `clip_nosight` brush), mp_harbor 1, mp_railyard 2, mp_rhine 4, mp_toujane 2 (one, at (536, 1585, 39), under a plaster block from z 100 that the placement then lands it on top of), mp_trainstation 2. VERIFIED, retail (`crates/cod2/tests/trace_ab.rs`, "The trace A/B" below): every stock spawn of the 15 maps, 1902 placements counting each gametype's class, lands where the port puts it to the bit, and retail warns `in solid` about none.
+VERIFIED, `crates/cod2/tests/collision_maps.rs` against the port: point traces from the spawns agree with a clip over every model-0 brush and every triangle under a leaf's trees to 1e-4 on all 15 maps (800 segments each). Every stock spawn, placed by `GScr_PlaceSpawnPoint`'s three traces, is not `startsolid` for the standing player. Before placement 12 of the 930 spawns, on 6 maps, start solid where the map puts them: mp_carentan 1 (an `mp_dm_spawn` at (0, 696, 160) whose box reaches 14 units into a 26-sided `clip_nosight` brush), mp_harbor 1, mp_railyard 2, mp_rhine 4, mp_toujane 2 (one, at (536, 1585, 39), under a plaster block from z 100 that the placement then lands it on top of), mp_trainstation 2. VERIFIED, retail (`crates/cod2/tests/trace_ab.rs`, "The trace A/B" below): every stock spawn of the 15 maps, 1902 placements counting each gametype's class, lands where the port puts it to the bit, and retail warns `in solid` about none.
 
 ## The trace A/B
 
-`crates/cod2/tests/trace_ab.rs` replays `tests/fixtures/traces/<map>.txt` through `ClipMap::trace` and diffs bit for bit. Each fixture is what `cod2_lnxded` 1.3 returned to a gsc gametype that `cargo run -p vcod-cod2 --example trace_probe -- <map>` writes. On mp_toujane and mp_carentan it is `bulletTrace(start, end, false, undefined)` and `physicsTrace(start, end)` over 1729 and 1688 segments (the c4 doorway and window rays, the window swept every 2 units up its height, a 24 by 24 grid of vertical rays over the spawns' area, axial and slanted rays grazing brush box edges at 0, 1/64, 1/8 and 1/8 + 1/64 off, rays down onto collision triangles' middles, corners and edges and just outside an edge, glancing rays along triangles, rays from spawn eyes), `placeSpawnPoint()` on 258 and 240 script_origins around the spawns, and on each spawn entity. On the other 13 maps (`--spawns-only`) it is `placeSpawnPoint()` on each spawn entity of every gametype class. A run boots the server in an `unshare -rn` namespace with the probe installed as a loose gametype (`maps/mp/gametypes/<name>.gsc` and its `.txt`, `sv_pure 0`), reads the `logPrint` lines from `games_mp.log` and pairs each console `WARNING: Spawn point entity %i is in solid` with its placement by entity number and rounded origin. A map's run takes about 6 s.
+`crates/cod2/tests/trace_ab.rs` replays `tests/fixtures/traces/<map>.txt` through `ClipMap::trace` and diffs bit for bit. Each fixture is what `cod2_lnxded` 1.3 returned to a gsc gametype written by `cargo run -p vcod-cod2 --example trace_probe -- <map>`. On mp_toujane and mp_carentan the fixture holds `bulletTrace(start, end, false, undefined)` and `physicsTrace(start, end)` over 1729 and 1688 segments (the c4 doorway and window rays, the window swept every 2 units up its height, a 24 by 24 grid of vertical rays over the spawns' area, axial and slanted rays grazing brush box edges at 0, 1/64, 1/8 and 1/8 + 1/64 off, rays down onto collision triangles' middles, corners and edges and just outside an edge, glancing rays along triangles, rays from spawn eyes), `placeSpawnPoint()` on 258 and 240 script_origins around the spawns, and on each spawn entity. On the other 13 maps (`--spawns-only`) it is `placeSpawnPoint()` on each spawn entity of every gametype class. A run boots the server in an `unshare -rn` namespace with the probe installed as a loose gametype (`maps/mp/gametypes/<name>.gsc` and its `.txt`, `sv_pure 0`), reads the `logPrint` lines from `games_mp.log` and pairs each console `WARNING: Spawn point entity %i is in solid` with its placement by entity number and rounded origin. A map's run takes about 6 s.
 
 What the probe rests on:
 - VERIFIED, `Scr_BulletTrace` 0x08113818: it returns `fraction`, `position` (`Vec3Lerp` 0x080e129e, `a + (b - a) * f`), `entity`, `normal` and `surfacetype` (`Com_SurfaceTypeToName` 0x080b948a over the 20-byte rows at 0x08182dec, index `surface_flags >> 20 & 0x1f`, `default` for 0 and past 22, `none` at fraction 1, where the normal is the segment's direction). `hitchars` false clears BODY off the shot mask, leaving 0x802831.
@@ -490,4 +507,4 @@ VERIFIED, census, record counts per map:
 - The leaf's `area` word: read by neither loader here, so whether anything in 1.3 uses areas for the snapshot cull (CoD 1's does) is open.
 - What reads lump 28 at runtime, if anything.
 - Which bit 0x800000 is: every player and shot mask carries it and no `surfaceparm` sets it.
-- No retail trace oracle exists yet: `vcod_cod2::collision` follows the decompiled arithmetic but has not been compared against `cod2_lnxded` trace for trace ("The trace").
+- The trace against retail is closed: `trace_ab` compares the port with `cod2_lnxded` record for record ("The trace A/B"). Entities and static models stay outside the clip map and the gate skips them.

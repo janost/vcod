@@ -1,8 +1,8 @@
 # CoD2 xmodel format (version 20)
 
-The three files of a Call of Duty 2 1.3 model, written as a diff against `xmodel-v14-format.md` (CoD1) and its parser `crates/common/src/xmodel.rs`. A Rust loader for v20 can be written from this document alone; where a section says "as v14" the v14 document has the detail.
+The three files of a CoD2 1.3 model, as a diff against `xmodel-v14-format.md` (CoD1) and its parser `crates/common/src/xmodel.rs`. "As v14" means the v14 document has the detail.
 
-Sources. The Linux 1.3 dedicated server `cod2_lnxded` is the oracle; its loader functions are unnamed in the symbol map, so each is given by address with the Mac 1.3 MP binary's symbol beside it. The Mac build is a release build with full symbols and STABS struct layouts (`XModel`, `XModelParts_s`, `XSurface_s`, `XVertexInfo_s`, `XBlendInfo_s`, `XBoneInfo_s`, `XModelCollSurf_s`, `XModelLodInfo`); field names below are its. The layouts were then checked against every model in the CoD2 1.3 install's `main/iw_*.iwd` and `localized_english_iw*.iwd` (later archive wins): 1533 `xmodel`, 1197 `xmodelparts` and 2654 `xmodelsurfs` entries, all parsed to exact EOF with no failure (VERIFIED, census script in my scratch directory, not committed). All integers are little-endian; `cstr` is NUL-terminated.
+Sources: the Linux 1.3 dedicated server `cod2_lnxded` is the oracle. Its loaders are unnamed, so each is given by address with the Mac 1.3 MP binary's symbol beside it; the Mac build carries full symbols and STABS struct layouts (`XModel`, `XModelParts_s`, `XSurface_s`, `XVertexInfo_s`, `XBlendInfo_s`, `XBoneInfo_s`, `XModelCollSurf_s`, `XModelLodInfo`), and field names below are its. "Census" is a check against every model in the 1.3 install's `main/iw_*.iwd` and `localized_english_iw*.iwd` (later archive wins): 1533 `xmodel`, 1197 `xmodelparts` and 2654 `xmodelsurfs` entries, all parsed to exact EOF with no failure (VERIFIED; the census script is not committed). Integers are little-endian; `cstr` is NUL-terminated.
 
 vcod reads these files with `vcod_cod2::xmodel` (raw records) and bakes them into the neutral `vcod_common::model::Model` with `vcod_cod2::model::V20` (positions through the base pose below, collision bounds grown and contents masked as the loader does), rebuilding a view rig's bind as "Viewmodels and hands" says. It keeps the vertex colour (`model::Vertex::color`, white on v14) and the tangent frame (`tangent`, `binormal`, turned by the base pose as the normal is; zero on v14).
 
@@ -115,7 +115,7 @@ num_child x { u8 parent; f32 trans[3]; i16 quat[3] }    // 19 bytes
 
 - VERIFIED (census): every stock skeleton uses `j_*` joints (8502 names) and `tag_*` tags (3663); `bip01` appears in no `xmodelparts` entry and in 2 of 3669 xanims. Player bodies root at `tag_origin > j_mainroot > pelvis`, and carry `j_spine4`, `j_neck > neck > j_head > head`, `j_shoulder_le/ri`, `j_wrist_le/ri`, and `tag_weapon_left/right` under the wrists. Heads and helmets root at `j_spine4`, `j_head` or `j_helmet`. Viewmodel guns root at `j_gun` (`viewmodel_kar98k`: `j_gun j_bolt j_clip j_round j_stripper tag_brass tag_flash`); hands root at `tag_view`, with `tag_torso`, `tag_weapon`, `tag_camera` and `tag_cambone` under it. No stock model has an upper-case bone name or two bones with one name.
 - INFERRED (Mac `XModelGetBoneIndex` 0x45a5c, its loop): a tag resolves by its interned string id, scanning from the last bone down, so the highest-numbered bone with that name wins and a miss returns -1.
-- vcod's CoD1 code hardcodes `bip01 *` and `tag_weapon` names (combat, poses, viewmodel graft); those need a CoD2 table.
+- vcod's CoD1 code names `bip01 *` and `tag_weapon` (combat, poses, viewmodel graft); the CoD2 paths carry their own `j_*` names (`client/src/cod2_players.rs`, `cod2_viewmodel.rs`, `server/src/game/cod2_hitpose_ab.rs`).
 
 ### Hit locations
 
@@ -178,7 +178,7 @@ else:
 
 - VERIFIED (census): `|normal · tangent| <= 0.001` everywhere. `cross(normal, tangent) · binormal` is positive on 2366079 vertices and negative on 1605478, so the handedness is per vertex and must be read, not derived.
 - VERIFIED (census): 7050 distinct colours; (255,255,255,255) on 1962058 vertices, greys with alpha 255 on most of the rest, and alpha 0 on 16492.
-- VERIFIED (census): `tile_mode` is 0 on 4187 surfaces, all with UVs inside 0..1; 1 on 247, all slightly outside (-0.05..1.05) on one axis or both; 2 on 1949, mostly well outside (some by more than 1e6, garbage UVs on surfaces whose material presumably does not sample them). That 0 is clamp and 2 is wrap is INFERRED from those ranges; I found no reader in the renderer functions I checked. Sample with wrap, as for v14, until a material says otherwise.
+- VERIFIED (census): `tile_mode` is 0 on 4187 surfaces, all with UVs inside 0..1; 1 on 247, all slightly outside (-0.05..1.05) on one axis or both; 2 on 1949, mostly well outside (some by more than 1e6, garbage UVs on surfaces whose material presumably does not sample them). That 0 is clamp and 2 is wrap is INFERRED from those ranges; no reader was found in the renderer functions checked. vcod parses `tile_mode` and uses it nowhere.
 - UVs are used raw, no v-flip, as v14.
 
 ### Winding
@@ -193,6 +193,6 @@ else:
 
 ## xanim
 
-- VERIFIED (Linux `XAnimLoadFile` 0x080c3f8a, the "out of date (version %d, expecting %d)" call passes 0xe; Mac 0xba204): CoD2 xanims are version 14. vcod's `xanim::parse` decodes all 3669 stock CoD2 xanims to exact EOF (multi-game design, 2026-10-21).
+- VERIFIED (Linux `XAnimLoadFile` 0x080c3f8a, the "out of date (version %d, expecting %d)" call passes 0xe; Mac 0xba204): CoD2 xanims are version 14. vcod's `xanim::parse` decodes all 3669 stock CoD2 xanims to exact EOF.
 - VERIFIED (census): 3480 of them name `j_*` bones and 3605 `tag_*`. Tracks bind to model bones by name, so a CoD2 clip on a CoD2 skeleton needs no remap; a CoD1 clip on a CoD2 skeleton would bind nothing.
 - VERIFIED (Linux 0x080c3e62, the notetrack reader, and the string `end` at 0x08150448): each notetrack's `u16` frame is stored as `frame / (n - 1)`, where `n` is the header's frame count plus 1 for a looping clip (flag bit 0) and the result is 0 when `n - 1` is 0, names are interned with `SL_GetString(name, 0, 3)`, and the reader appends a notetrack `end` at 1.0 after the file's own. vcod parses notetracks for EOF only; a consumer has to add the `end`.
