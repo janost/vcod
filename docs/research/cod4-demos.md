@@ -1,12 +1,12 @@
 # CoD4 1.7 demos: `record`, `stoprecord`, `demo`, `timedemo`
 
 What the retail CoD4 1.7 client (`iw3mp.exe`) writes into a demo and how
-it plays one back, read off its disassembly (2026-10-26). CoD2's account
-is `cod2-demos.md`; this doc lists what 1.7 keeps and what it changes.
+it plays one back, read off its disassembly. CoD2's account is
+`cod2-demos.md`; this doc lists what 1.7 keeps and what it changes.
 Function names are INFERRED; the addresses and the facts are the 1.7
-binary's. No retail-recorded 1.7 demo exists here
-and retail has not played vcod's, so the byte layout below is the
-binary's only (section 7). vcod's code: `crates/cod4/src/net/demo.rs`
+binary's. No retail-recorded 1.7 demo has been read and retail has not
+played vcod's, so the byte layout below rests on the binary alone
+(section 7). vcod's code: `crates/cod4/src/net/demo.rs`
 (the format, `Recording`, `DemoReader`, `gamestate_message`),
 `vcod_cod4::net::conn::{Received::msg, Conn::no_delta}` (the bytes a
 record holds, `demowaiting`'s move), and `crates/client/src/play/cod4.rs`
@@ -45,12 +45,10 @@ addresses 0x914e1c..0x934e98 the functions below read and write).
   0x468a95..0x468abe). That the file lands under the game directory
   (`main/demos/`, or the mod's under `fs_game`) is INFERRED from the
   qpath; vcod writes `main/demos/` or the mod's
-  (`App::cod4_demo_dirs`). `demo` and `timedemo` read the same list. Up to
-  the 2026-10-26 playtest the app picked the CoD4 player by its search
-  path's game, which for a CoD4 install's iwds reads CoD2, so `demo test`
-  ran CoD2's player, looked in CoD2's directories and said
-  `EXE_ERR_NOT_FOUND`; the app now keeps the install's game
-  (`App::game`).
+  (`App::cod4_demo_dirs`). `demo` and `timedemo` read the same list.
+  Trap: the app picks the demo player by `App::game`, the install's game;
+  the search path's game reads CoD2 for a CoD4 install's iwds, and
+  picking by it ran CoD2's player and said `EXE_ERR_NOT_FOUND`.
 - `stoprecord` (`CL_StopRecord_f`, 0x4688c0): `Not recording demo.`
   when not recording, else a byte 0 and two -1 longs, the close, and
   `Stopped demo.` (VERIFIED, 0x4688cc..0x468946).
@@ -63,11 +61,10 @@ addresses 0x914e1c..0x934e98 the functions below read and write).
   "EXE_ERR_NOT_FOUND\x15<path>")` (VERIFIED, 0x469212..0x469275). So
   `timedemo 1` looks for `demos/1.dm_1`, on retail as on vcod. The error
   popup shows the text localized (`localized_code_post_gfx_mp`'s string
-  with the path for its `&&1`: `demos/1.dm_1 not found.`); vcod showed the raw key up to the
-  2026-10-26 playtest and now localizes it as a server drop's reason
-  (`play::cod4::localize_drop`). That `Com_Error` localizes its text
-  for the popup is INFERRED. It
-  keeps the name in `demoName`, closes the console, sets `cls.state` 5,
+  with the path for its `&&1`: `demos/1.dm_1 not found.`); vcod localizes
+  it as it does a server drop's reason (`play::cod4::localize_drop`).
+  That `Com_Error` localizes its text for the popup is INFERRED.
+- On an open file `CL_PlayDemo_f` keeps the name in `demoName`, closes the console, sets `cls.state` 5,
   `demoplaying`, the timedemo flag from `Cmd_Argv(0)` being `timedemo`,
   the last archive row to 0, and reads records while the state is 5 to
   7, then clears `firstDemoFrameSkipped` (VERIFIED, 0x46929c..0x469362).
@@ -247,23 +244,25 @@ That the cgame predicts nothing in a demo is INFERRED from CoD2's
 (`cod2-demos.md` 5). The recorder's eye is his playerstate lerped
 between the two snapshots drawn, and his view angles, which his
 snapshots leave out (`cod4-netfields.md` 7), come off the archive rows
-lerped at the drawn time; that 1.7's cgame reads them so is INFERRED. vcod
-reads every row of the file when the demo opens
-(`DemoPlay::views`): a row is stamped with the recorder's drawn time,
+lerped at the drawn time; that 1.7's cgame reads them so is INFERRED.
+
+vcod reads every row of the file when the demo opens
+(`DemoPlay::views`). A row is stamped with the recorder's drawn time,
 which lags the newest snapshot, so it lands in the file a message or two
-after the snapshot it belongs beside, and rows read only with their
-messages left nothing past the drawn time to lerp to. The view then held
-for six frames in seven at 144 fps and jumped once a snapshot, which
-the 2026-10-26 playtest saw as a choppy demo
-(`cod4_live_recorded_run_plays_back_smoothly`: a recorder running back
-and forth and turning 30 degrees a second plays back moving and turning
-every frame, VERIFIED live). Any key under 0x80 and Esc in a demo leave for the main menu,
-as CoD2's (INFERRED, 1.7's `CL_KeyEvent` not read).
+after the snapshot it belongs beside. Rows read only with their messages
+leave nothing past the drawn time to lerp to: the view holds six frames
+in seven at 144 fps and jumps once a snapshot. With every row read, a
+recorder running back and forth and turning 30 degrees a second plays
+back moving and turning every frame. VERIFIED live
+(`cod4_live_recorded_run_plays_back_smoothly`).
+
+Any key under 0x80 and Esc in a demo leave for the main menu, as CoD2's.
+INFERRED (1.7's `CL_KeyEvent` not read).
 
 ## 6. Live run
 
-`play::cod4::tests::cod4_live_recorded_demo_plays_back_what_the_session_saw`
-(2026-10-26): a spectator on vcod-server's mp_crash `war` beside four
+`play::cod4::tests::cod4_live_recorded_demo_plays_back_what_the_session_saw`:
+a spectator on vcod-server's mp_crash `war` beside four
 shooting bots records 13 s, then plays the file in process: 76 KB, 260
 messages (the gamestate, then 259 snapshots, the first a full frame), 0
 parse errors; every snapshot equals the live session's for state,
@@ -274,9 +273,9 @@ count within two. VERIFIED live.
 
 ## 7. Not done
 
-- Retail has neither played a vcod demo nor recorded one here: whether
-  `iw3mp.exe` reads vcod's files is untested (a CD-keyless 1.7 client
-  under Wine is the next check, as `cod2-demos.md` 6 ran for CoD2).
+- Retail has neither played a vcod demo nor recorded one for vcod to
+  read: whether `iw3mp.exe` reads vcod's files is untested (next check: a
+  CD-keyless 1.7 client under Wine, as `cod2-demos.md` 6 ran for CoD2).
 - `cl_avidemo`, `timedemo`'s csv and the `RECORDING` line's 1.7 place
   (`SCR_DrawDemoRecording` 0x474c80, drawn at CoD2's spot in vcod).
 - 1.7's front end demo list.
