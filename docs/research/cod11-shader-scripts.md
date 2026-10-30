@@ -1,37 +1,32 @@
 # CoD 1.1 shader scripts
 
 What CoD's material scripts contain, what vcod implements of them, and where
-the implementation deliberately diverges. Evidence rules as everywhere in this
-directory: VERIFIED means I measured it against the stock assets or saw it in
-the running client; INFERRED means read off the RTCW sources or asset shape and
-labelled so. RTCW references are RTCW-MP's `src/renderer/*.c`
-(the closest public ancestor of the CoD 1.1 renderer); vcod references name the
-file and line on `feature/shader-scripts`. The vcod-side parser and runtime
-math live in `crates/common/src/shader.rs`, application in
+it diverges on purpose. VERIFIED means measured against the stock assets or a
+binary, or seen in the running client; INFERRED means read off the RTCW
+sources or asset shape. RTCW references are RTCW-MP's `src/renderer/*.c`, the
+closest public ancestor of the CoD 1.1 renderer. vcod's parser and runtime
+math live in `crates/common/src/shader.rs`, the drawing in
 `crates/client/src/renderer.rs` and `crates/client/src/sky.rs`.
 
 ## 1. What shader scripts are and where they live
 
 CoD 1.1 keeps the Q3/RTCW material-script system: a BSP soup material name is
 looked up in a shader library parsed from `scripts/*.shader` blocks across all
-mounted paks; a name with no block falls back to being used as a plain image
-path. Block syntax is Q3's `{ keyword args ... { stage } }` grammar. Two
-CoD-specific placements matter:
+mounted paks; a name with no block is used as a plain image path. Block
+syntax is Q3's `{ keyword args ... { stage } }`. CoD-specific placements:
 
 - World materials resolve from `scripts/*.shader` in `main/` paks; every
-  authored stock block sits in pak4, pak5, pak8 or pak9 of the Deluxe install
-  (VERIFIED by census; see §2).
-- Effect shaders for the fx system live in `fxshaders/` inside `pak5.pk3`, not
-  `scripts/`, and are almost all additive (`blendfunc gl_one gl_one`). This was
-  already noted in AGENTS.md; the fx path consumes them as texture sources.
+  authored stock block sits in pak4, pak5, pak8 or pak9 of a 1.5 install
+  (VERIFIED by census, §2).
+- Effect shaders live in `fxshaders/` inside `pak5.pk3`, not `scripts/`, and
+  are almost all additive (`blendfunc gl_one gl_one`).
 - United Offensive adds its own scripts under `uo/`, e.g. the MP sky blocks in
-  `uo/pakuo01.pk3 : scripts/gmi_sky.shader` (VERIFIED: I read the
-  `textures/skies/noville` block straight out of that archive).
+  `uo/pakuo01.pk3 : scripts/gmi_sky.shader` (VERIFIED: the
+  `textures/skies/noville` block read out of that archive).
 
 vcod parses every script entry into `ShaderLib` at load
 (`shader.rs` `ShaderLib::load`, once per search path through
-`asset_source::load`). A block whose name matches nothing drawn never
-costs more than memory.
+`asset_source::load`). An unused block costs only memory.
 
 The renderer never reads a `Shader`: `ShaderLib::materials` compiles each
 block into the game-neutral `material::Material` (`Material::from_shader`),
@@ -42,16 +37,14 @@ block and `.stype` template.
 
 ## 2. Census
 
-Method: parse every `.shader` entry from the stock `pak[0-9].pk3` of my Deluxe
-1.5 install (assets identical between 1.1 and 1.5), then cross-reference block
-names against the soup-material set of every map in those paks. The throwaway
-script I used for the first pass is gone on purpose; the durable form of this
-census is `crates/common/tests/shader_corpus.rs`, which re-measures the pins on
-every run (needs `COD_DIR`) and fails when parser changes move them. Like the
-other census tests it scopes to stock paks only, because live-server downloads
-drop third-party `zzz_*.pk3` files into `main/`.
+Method: parse every `.shader` entry from the stock `pak[0-9].pk3` of a 1.5
+install (assets identical between 1.1 and 1.5) and cross-reference block names
+against the soup-material set of every map in those paks.
+`crates/common/tests/shader_corpus.rs` re-measures the pins on every run
+(needs `COD_DIR`) and fails when parser changes move them. It scopes to stock
+paks, since server downloads drop third-party `zzz_*.pk3` files into `main/`.
 
-Headline numbers, measured 2026-08-26 on the Deluxe install (all VERIFIED):
+Headline numbers on that install (all VERIFIED):
 
 | measure | value |
 |---|---|
@@ -65,20 +58,20 @@ one or more stages):
 
 | keyword | share / count |
 |---|---|
-| rgbGen | 92.9% — exactVertex 180, vertex 88, identity 21, identityLighting 15, const 12, constLighting 11, wave 2 |
+| rgbGen | 92.9%: exactVertex 180, vertex 88, identity 21, identityLighting 15, const 12, constLighting 11, wave 2 |
 | blendFunc | 65.3% |
-| alphaGen | 37.3% — vertex 111, const 19 |
-| tcMod | 40.7% — scroll 166, scale 93, turb 57, transform 9, rotate 1, stretch 0 |
-| tcGen | 26% — vector 90; nv_* only behind `requires` gates; environment ungated in mp_ship's six door and window blocks (§3) and stalin_1wet |
+| alphaGen | 37.3%: vertex 111, const 19 |
+| tcMod | 40.7%: scroll 166, scale 93, turb 57, transform 9, rotate 1, stretch 0 |
+| tcGen | 26%: vector 90; nv_* only behind `requires` gates; environment ungated in mp_ship's six door and window blocks (§3) and stalin_1wet |
 | depthWrite | 18.4% |
-| alphaFunc | 18.6% — every occurrence GE128 |
+| alphaFunc | 18.6%: every occurrence GE128 |
 | animMap | one block |
 
 blendFunc pairs in world blocks: src_alpha/one_minus_src_alpha 141,
 one/one 51, src_alpha/one 18, dst_color/zero 17, plus the shorthands
-(`add`, `filter`, `blend`). `nextbundle` appears in roughly 140 world blocks —
-water `$lightmap` bundles, terrain blends, foliage, facades, windows, flags —
-so two-bundle stages are core CoD grammar, not an exotic corner.
+(`add`, `filter`, `blend`). `nextbundle` appears in roughly 140 world blocks
+(water `$lightmap` bundles, terrain blends, foliage, facades, windows, flags):
+two-bundle stages are core CoD grammar.
 
 A `$lightmap` bundle must carry the same overbright as the implicit
 texture-times-lightmap path, or coplanar surfaces split in brightness:
@@ -87,8 +80,8 @@ over `map $lightmap` `blendFunc filter`, polygonOffset) sit on base ground
 soups whose material is the raw image path with no script at all, and the
 pair must shade identically for the vertex-alpha cross-fade to read as one
 surface (mp_brecourt: 19 staged overlay soups over 65 implicit base soups).
-vcod applies its x2 overbright to `$lightmap` bundles in `fs_stage` for
-this reason (`shader.wgsl`).
+So vcod applies its x2 overbright to `$lightmap` bundles in `fs_stage`
+(`shader.wgsl`).
 A stage with no `$lightmap` bundle takes that x2 itself unless it, or a
 later `$lightmap` stage, multiplies the framebuffer (`cod11-gamma.md`
 section 5).
@@ -126,7 +119,7 @@ of its line (below). RTCW line anchors from `tr_shader.c` unless noted.
 | sort | sort-name table tr_shader.c :1224-1242 | mapping in §5 |
 | skyParms | ParseSkyParms :1152 | farbox + cloud dome; see §6 |
 | sunfile | no RTCW anchor (CoD-only) | argument stored on the block (`Shader::sunfile`), resolved to `scripts/<name>.sun` and drawn as the sun disc (§8) |
-| deformVertexes | ParseDeform (tr_shader.c) | wave, flap, autosprite, autosprite2 drawn; the 1.1 parser's other forms consumed inertly (§8, "Vertex deforms") |
+| deformVertexes | ParseDeform (tr_shader.c) | wave, flap, bulge, move, normal, autosprite, autosprite2 drawn; syncNormal, projectionShadow, text0-7 consumed inertly (§8, "Vertex deforms") |
 | fogvars / skyfogvars / waterfogvars / nofog / tesssize / light / entityMergable / clampTime / radialNormals / fogParms / picmip2 / nolightscale / qer* / q3map* | ParseShader :1367 | consumed as known tokens; script fog values stay inert, MP fog rides configstring 12 (§8) |
 
 CoD-only stage keywords read out of CoDMP.exe 1.1's stage parser
@@ -183,10 +176,10 @@ and CoDUOMP.exe (0x4fea30) parse stages with the same keyword strings:
   empty. The stock corpus agrees: read so, it leaves no token over on
   any install. vcod's tokenizer emits a line-break token
   (`shader::NEWLINE`) and each handler sees only the rest of its line.
-  Before 2026-10-15 arguments ran on across lines: stock water's
-  three-number `tcMod turb 2.03 0.2 1.03` ate the next line's `rgbGen`,
-  leaving `exactVertex` behind, and every `rgbGen wave` left its
-  frequency (`unknown token 1.5`, 49 of them on UO).
+  Trap: arguments that run on across lines let stock water's
+  three-number `tcMod turb 2.03 0.2 1.03` eat the next line's `rgbGen`,
+  and every `rgbGen wave` leave its frequency behind (`unknown token 1.5`,
+  49 of them on UO).
 - VERIFIED, 0x4f1b40, `tcMod`: each form reads its numbers and returns
   with "missing tcMod turb" (or the form's own message) before counting
   the tcMod when one is empty, so a short `turb` adds no tcMod. vcod drops
@@ -204,8 +197,8 @@ and CoDUOMP.exe (0x4fea30) parse stages with the same keyword strings:
   `animMap 17` over seventeen `map` lines (`fxshaders/pj_fx.shader`,
   `jh_fx.shader`); UO's `bodyFlameAnimating` lists its frames on the
   `animMap` line, which retail skips, so that stage has no image ("bundle
-  with no map"). Before 2026-10-15 vcod read Q3's inline list and drew the
-  last `map` line still.
+  with no map"). Reading Q3's inline list instead draws the last `map`
+  line still.
 - VERIFIED, 0x4f946e, `multiplyImage`: up to four arguments off the line,
   each `identityLighting` (the renderer's identityLight, 0x16c55b0) or a
   number; one sets rgb and leaves alpha 1, three set rgb, four rgba. It
@@ -271,7 +264,7 @@ and CoDUOMP.exe (0x4fea30) parse stages with the same keyword strings:
   texture-times-lightmap surface lights up per dlight through its own
   texture.
 - VERIFIED, string search of the stock `maps/MP/*.bsp` against the stock
-  blocks (2026-10-12): 23 blocks carry `perLight` (`jeff.shader`,
+  blocks: 23 blocks carry `perLight` (`jeff.shader`,
   `surfacelight.shader`); mp_ship references eight (the bridge windows,
   ship doors and the two deck flags), mp_chateau `litwindow1aext`,
   mp_powcamp `barrackswindow3`.
@@ -324,9 +317,8 @@ The dlight pass in detail, all CoDMP.exe 1.1:
   additive stage fades to nothing with distance instead of greying
   towards the fog colour. vcod: `STAGE_FLAG_FOG_BLACK` (`renderer.rs`),
   set by `stage_params` for a stage blended onto `GL_ONE`, makes
-  `fs_stage` scale by `1 - fog` (`shader.wgsl`); `fx.wgsl`'s additive draw
-  did so already. Before 2026-10-21 the world's additive stages fogged
-  towards the fog colour.
+  `fs_stage` scale by `1 - fog` (`shader.wgsl`), as `fx.wgsl`'s additive
+  draw does.
 - VERIFIED, GL_State 0x4d57b0, the blend: a state whose low byte is 0
   disables `GL_BLEND`; otherwise the low nibble picks the source factor
   (1 `GL_ZERO`, 2 `GL_ONE`, 3 `GL_DST_COLOR`, 4 `GL_ONE_MINUS_DST_COLOR`,
@@ -350,13 +342,12 @@ The dlight pass in detail, all CoDMP.exe 1.1:
   `vertex_alpha_unless_set`), so the world's, the marks' and the fx
   pass's stages agree. An `alphaGen identity` before the rgbGen is
   overridden, one after it stays, and `const` or `wave` either side
-  stays. Before 2026-10-21 only the fx pass applied it, and
-  `stage_params` drew such a stage at alpha 1. The entity and viewmodel
-  passes read no vertex colour, the static props' stage path draws with
-  `vs_prop`'s alpha 1, the cloud dome's vertices are white and the HUD
-  draws no script stages, so none of them changes.
+  stays. The entity and viewmodel passes read no vertex colour, the static
+  props' stage path draws with `vs_prop`'s alpha 1, the cloud dome's
+  vertices are white and the HUD draws no script stages, so the rule
+  changes none of them.
 - VERIFIED, the stock 1.1, 1.5 and UO `scripts/`, `fxshaders/` and
-  `shadertypes/` blocks parsed both ways (2026-10-21): no stock stage
+  `shadertypes/` blocks parsed with and without the rule: no stock stage
   writes `alphaGen identity` after a vertex rgbGen, so 0x4ffa60's
   identityLight-1 case below never arises. The world materials whose
   changed stage reads alpha (a `GL_SRC_ALPHA` blend factor or an
@@ -372,29 +363,26 @@ The dlight pass in detail, all CoDMP.exe 1.1:
   mp_neuville, mp_tigertown, mp_cassino, mp_foy, mp_italy, mp_kursk and
   mp_ponyri, `128windowborder01`, `neuville_window`, mp_berlin's
   `mpberlinwater`, mp_rhinevalley's `truck_single` and mp_uo_stanjel's
-  `dove_anim`, carry alpha 255 on every vertex and draw as before.
-- VERIFIED, the stock `.efx` `Decal` elements' shader lists (2026-10-21):
-  every stock mark material changes but UO's `impact/bullet_sand_a`
+  `dove_anim`, carry alpha 255 on every vertex, so the rule changes nothing there.
+- VERIFIED, the stock `.efx` `Decal` elements' shader lists: the rule
+  reaches every stock mark material but UO's `impact/bullet_sand_a`
   (`rgbgen identity`): 1.1's `gfx/impact/bullethit_*`, `bullethole1`,
   `2`, `cratered*`, `stone_piece1`, `stone_singleshot1`, UO's
   `impact/bullet_*`, `impact/scorch_*` and `misc/lamp_oil`, all `rgbGen
   vertex` under `GL_SRC_ALPHA GL_ONE_MINUS_SRC_ALPHA`. INFERRED, with
-  `CG_AddMarks` (events-and-fx 9.3): their alpha fade now draws, where
-  vcod held them opaque to the end of their life, and so does the
+  `CG_AddMarks` (events-and-fx 9.3): their alpha fade draws (without the
+  rule they stay opaque to the end of their life), and so does the
   corona's `zfadeout` ramp (`flareShader`, section 8).
 - vcod, the fx pass (`renderer::fx_stage_draw`, `fx.wgsl`): a stage draws
   straight alpha, additive onto `GL_ONE` (the texture's alpha read only
   under `GL_SRC_ALPHA GL_ONE`), `GL_ONE GL_ONE_MINUS_SRC_COLOR`
   (`fs_screen`) or unblended with depth written, and a `nofog` material
-  is never fogged. Before 2026-10-21 the pass fogged every sprite, drew
-  `GL_ONE GL_ONE_MINUS_SRC_COLOR` as straight alpha and dropped the
-  texture's alpha under `GL_SRC_ALPHA GL_ONE`. vcod ignores the stage
-  flag 4 that 0x4fbc6b also tests, as the world's `STAGE_FLAG_NOFOG`
-  does.
+  is never fogged. vcod ignores the stage flag 4 that 0x4fbc6b also
+  tests, as the world's `STAGE_FLAG_NOFOG` does.
 - VERIFIED, string search of the stock 1.1, 1.5 and UO paks' `scripts/`
   and `fxshaders/` blocks against the `.efx` `shaders` lists and
-  `fx::flame`'s names (2026-10-21): the fx materials that change are
-  UO's, `flamethrowerFire1`..`46` in `pakuo01.pk3`
+  `fx::flame`'s names: the fx materials whose draw depends on those
+  rules are UO's, `flamethrowerFire1`..`46` in `pakuo01.pk3`
   `scripts/flamethrower.shader` (`GL_ONE GL_ONE_MINUS_SRC_COLOR`, `nofog`;
   `fx::flame` draws 2..44), `flameSmoke1`..`6` there (blend, `nofog`) and
   the nine `.efx` materials `smoke/smk_{p_out,p_top,t}_fire_{a,b,c}`
@@ -463,11 +451,9 @@ The fx pass's stage loop, all CoDMP.exe 1.1:
   is not an image file (`$whiteimage`, `$lightmap`) draws nothing, and
   bundle 1 is never drawn. Blended stages keep `LessEqual` with no depth
   write: no stock effect stage has `depthFunc` or a blended `depthWrite`.
-  The quad buffers hold `MAX_FX_DRAWN`, twice the sim's quad cap. Before
-  2026-10-21 the pass drew only the first image stage, with the first
-  stage's colour scale times the sprite's colour.
-- VERIFIED, string search of the 1.1, 1.5 and UO paks' `.efx` materials
-  (2026-10-21), what the stage loop changes in vcod: the second stage
+  The quad buffers hold `MAX_FX_DRAWN`, twice the sim's quad cap.
+- VERIFIED, string search of the 1.1, 1.5 and UO paks' `.efx` materials,
+  what the stage loop draws beyond a first-image-stage-only pass: the second stage
   draws on `gfx/effects/smoke/roller` and `smoke_bck` (two blended
   layers) and UO's `impact/bullet_fabric_a` and `_b` (an additive glow,
   `rgbGen wave`); the tcMods draw on those, `smoke_frnt` (`rotate`),
@@ -578,13 +564,11 @@ matches the base pass. A dlight stage whose shader is not `nofog` (the
 copy, a fogged material's `perLight` stages) fogs towards black, its
 colour times one minus the fog amount (`fs_dlight`); the blob is
 `dlightshader`'s own stage under its `nofog` (`dlight::stage_shaders`).
-Before 2026-10-21 the pass drew unfogged, as RTCW-MP's
-`ProjectDlightTexture` does, so a light in fog added its full
-brightness. Before 2026-10-12 vcod dropped `perLight`
-stages and added its own fx-light falloff to every lightmap instead.
-A `nextbundle`'s `blendFunc` is now the bundle's texture environment
-(`TexEnv`; `fs_stage` adds or decals by the flags); before, it replaced
-the stage's blend, so terrain.shader's trench blocks drew `filter`.
+Unlike RTCW-MP's `ProjectDlightTexture`, which draws unfogged and so adds
+a light's full brightness in fog. A `nextbundle`'s `blendFunc` is the
+bundle's texture environment (`TexEnv`; `fs_stage` adds or decals by the
+flags), never the stage's blend, or terrain.shader's trench blocks draw
+`filter`.
 
 vcod: `TcGen::Environment` and `DepthFunc` in `shader.rs`. The env UV is
 computed in the vertex shader (`env_uv` in `shader.wgsl`,
@@ -594,7 +578,7 @@ the viewmodel's motion transform; a world-baked static prop dots the
 reflection with its model's axes, section 8), before the bundle's tcMods.
 
 VERIFIED, string search of the 12 stock `maps/MP/*.bsp` against the stock
-script blocks (2026-10-11): one map references a world block with an
+script blocks: one map references a world block with an
 ungated `tcGen environment`, mp_ship, six of them
 (`textures/battleship/bridgewindowbroken`, `bridgewindow2broken`,
 `shipdoor3a`, `shipdoor3b_trans`, `textures/battleship2a/shipdoor2a`,
@@ -608,15 +592,10 @@ Classification and ordering: `Shader::classify_stage` sorts each stage into
 Opaque / Blend / Additive (dst factor One or SrcAlphaSaturate means additive),
 which picks the stage's pipeline (`renderer.rs` `stage_draw_facts`). Where a
 draw goes in the frame is its shader's sort and sorted index, not its class
-(§5).
+(§5); retail sorts nothing by depth, so no per-batch centroid order.
 Per-stage state rides to the GPU in 240-byte `StageParams` slots
 (`renderer.rs`; size pinned by a const assert), one bind group per stage, with
 animated stages re-evaluated per frame.
-
-Before 2026-10-12 vcod bucketed world stages into five bands by class
-(opaque with cutouts, decal, see-through, blends back to front by per-batch
-centroid, additives last). Retail sorts nothing by depth (§5), so the
-centroids are gone.
 
 Each bundle of a stage picks its own sampler from its clamp bits, so a
 repeating bundle 0 beside a clamped bundle 1 keeps wrapping.
@@ -625,7 +604,7 @@ repeating bundle 0 beside a clamped bundle 1 keeps wrapping.
 
 - Wave forms index a 1024-entry sin table built over SIZE-1 degrees of arc, so
   entry 256 is sin(90.088 deg), not exactly 1: `tr_init.c` :1150 builds
-  `tr.sinTable` with `i * 360 / (FUNCTABLE_SIZE - 1)`, i.e. the /1023 divisor;
+  `tr.sinTable` with `i * 360 / (FUNCTABLE_SIZE - 1)`, the /1023 divisor;
   vcod mirrors it in a const table (`build_sin_table`, `shader.rs`) and pins it
   against libm over the full range in a unit test.
 - Index rounding is nearest-even: WAVEVALUE (`tr_shade_calc.c` :34) feeds
@@ -645,8 +624,7 @@ repeating bundle 0 beside a clamped bundle 1 keeps wrapping.
   amplitude through the sin table (RB_CalcTurbulentTexCoords,
   `tr_shade_calc.c` :1009). vcod ships `[amp0, now0, amp1, now1]` in
   StageParams and does `sin(worldpos_axis/1024 + now)` in the VS
-  (`shader.wgsl`). An earlier draft had the s-axis wrong; the corpus-era
-  screenshots caught it and it now matches the C.
+  (`shader.wgsl`), s on `x + z` as in the C.
 
 - VERIFIED, CoDMP.exe 0x514c00 (RB_CalcWaveColor, the `rgbGen wave`
   case 8 of the colour switch at 0x4ffa60): a table wave is `(base + amp *
@@ -658,8 +636,7 @@ repeating bundle 0 beside a clamped bundle 1 keeps wrapping.
   past 2 does it saturate.
 - vcod: `stage_params` clamps a table wave below at 0 only and the
   stage shaders clamp `tint * identityLight` at 1 (`F_TINT_LIGHT`).
-  Before 2026-10-16 the wave was clamped to 1 before the scale, so 1.5
-  drew 0.5.
+  Clamping to 1 before the scale is the trap: 1.5 then draws 0.5.
 
 ### The noise wave
 
@@ -719,9 +696,8 @@ is `GL_ONE` (0x4fbce3), blend 15 otherwise (0x4fbcef), and opaque 5 for
 everything left (0x4fbd3f). The stock blocks name `water` 15 times,
 `nearest` 9, `innerBlend` and `outerBlend` 5 each, `additive` and `corona`
 3 each, `ocean`, `boathull` and `seeThrough` 2 each, `underwater` once
-(string search, 2026-10-12). `map_sort_token` and `Shader::sort_value`
-(`shader.rs`) follow both tables; before 2026-10-12 vcod used RTCW's
-numbers and had no `ocean`, `boathull` or `corona`.
+(string search). `map_sort_token` and `Shader::sort_value` (`shader.rs`)
+follow both tables, not RTCW's numbers.
 
 The draw list, VERIFIED from CoDMP.exe 1.1:
 
@@ -854,7 +830,7 @@ Stock skies are always farbox + cloud dome: `skyParms env/<name> 512 -`, no
 inner box anywhere in the corpus (§2). The geometry is transcribed from
 `tr_sky.c`:
 
-- Cube axis → env-image suffix comes from ParseSkyParms loading
+- Cube axis to env-image suffix comes from ParseSkyParms loading
   {rt, bk, lf, ft, up, dn} into outerbox[0..5] while DrawSkyBox renders axis i
   with outerbox[sky_texorder[i]] and sky_texorder is {0,2,1,3,4,5}
   (`tr_sky.c` :374), giving +x rt, -x lf, +y bk, -y ft, +z up, -z dn
@@ -891,32 +867,31 @@ Four pieces of the corpus have no RTCW parser counterpart:
   stage only. The census hits are NV/ATI hardware paths: GL_NV_texture_shader,
   GL_NV_register_combiners, GL_ATI_fragment_shader, texEnvCombine variants,
   `waterMap`, cubemap nextbundles, tcGen
-  environment / nv_dot_product_reflect_cube_map_eye_from_qs_*, sunHalfAngle -
+  environment / nv_dot_product_reflect_cube_map_eye_from_qs_*, sunHalfAngle,
   all confined to requires-gated stages except the ungated `tcGen
   environment` of stalin_1wet and mp_ship's door and window blocks, which
-  vcod draws since 2026-10-11 (§3).
+  vcod draws (§3).
 - CoD sort names (§5).
 - `sunfile <map>` on sky blocks.
 
 vcod evaluates gates against a fixed low-spec profile: the six NV/ATI/cubemap
 extensions count absent (`CAPS_ABSENT`, `shader.rs`), GL_MAX_TEXTURE_UNITS_ARB
 is 2 (`TEXTURE_UNITS`: a stage draws two bundles, and `nextbundle` opens the
-second and last), `sys_cpuMHz >= N` is false and other cvars true. The
-units read 4 before 2026-10-15, which kept six three-bundle stages
-(`ash_embers`, `charred_embers`, `solidcharred_embers`, `sewercaustic` and
-mp_ship's two deck flags' `perLight` stage) and drew their third bundle's
-blend over the second's; at 2 those surfaces take the two-unit stages the
-scripts carry for them, and the deck flags take `dlightshader`. No other
-stock stage changes (diff of every parsed block, 1.1 and UO). That drops the
-hardware-specific stages and keeps the fallback ones, which is what retail did
-on machines without the extensions - the gated stages exist precisely because
-the ungated fallback had to render the surface. A failed gate skips the stage
-body straight to its closing brace, so hw-path fields (register combiner setup
-and friends) are never parsed at all. Unit tests pin each rule
-(`shader.rs` tests around the `eval_requires` machinery). The profile choice is
-INFERRED-from-assets rather than disassembled; retail's exact evaluation order
-was never dumped, but the kept/dropped outcome on stock assets is deterministic
-under it and matches the fallback shapes.
+second and last), `sys_cpuMHz >= N` is false and other cvars true. At 4
+units six three-bundle stages pass (`ash_embers`, `charred_embers`,
+`solidcharred_embers`, `sewercaustic` and mp_ship's two deck flags'
+`perLight` stage) and draw their third bundle's blend over the second's; at
+2 those surfaces take the two-unit stages the scripts carry for them, and the
+deck flags take `dlightshader`. No other stock stage differs between 2 and 4
+(diff of every parsed block, 1.1 and UO). The profile drops the
+hardware-specific stages and keeps the fallbacks, what retail did on machines
+without the extensions: the gated stages exist because the ungated fallback
+had to render the surface. A failed gate skips the stage body to its closing
+brace, so hw-path fields (register combiner setup and the like) are never
+parsed. Unit tests pin each rule (`shader.rs`, `eval_requires`). The profile
+is INFERRED from assets, not disassembled; retail's evaluation order is
+unread, but the kept and dropped stages on stock assets are deterministic
+under it and match the fallback shapes.
 
 ## 8. Deliberately not implemented
 
@@ -925,7 +900,7 @@ Each omission with its census justification:
 - NV/ATI hardware-path stage contents (`waterMap`, register combiners,
   nv_texshader tcGens, sunHalfAngle). Every occurrence but stalin_1wet sits
   behind a `requires` gate this profile fails, so dropping them reproduces
-  retail-on-fallback-hardware. The ungated `tcGen environment` stages
+  retail on fallback hardware. The ungated `tcGen environment` stages
   (stalin_1wet, mp_ship's doors and windows) draw (§3).
 - Vertex deforms, model skin scripts and the sun: the three subsections
   at the end of this section.
@@ -940,8 +915,8 @@ Each omission with its census justification:
   fog for it.
 - The fog every MP map shows is set by gsc
   (`setCullFog` / `setExpFog`, e.g. `mp_ship.gsc`) and reaches the client as
-  configstring 12; vcod parses and applies it since 2026-08-26 — wire format
-  in docs/protocol-1.1.md, mode rules from RTCW-MP tr_main.c R_SetFog.
+  configstring 12, which vcod parses and applies (wire format in
+  docs/protocol-1.1.md, mode rules from RTCW-MP tr_main.c R_SetFog).
   The exp-fog density rides the wire raw: retail's mp_chateau `re` gamestate
   carries `0 1 1e-05 0 0 0 0` for `setExpFog(0.00001, 0, 0, 0, 0)`
   (`crates/server/tests/fixtures/configstrings/mp_chateau-re.txt`, VERIFIED).
@@ -954,20 +929,19 @@ Each omission with its census justification:
   `.rdata` string `*default` @ 0x54b57c). `R_FindShader` reaches it through the
   `Couldn't find image for shader %s` branch @ 0x4fc7fc, which flags the
   material and lets FinishShader return the default shader. INFERRED from
-  decompilation; not yet compared against a retail frame. `assets::default_image`
-  matches those bytes, so a material whose file no pak ships reads as a dark
-  surface rather than a placeholder pattern (`textures/cod2/egypt_wire_black`
-  on the custom map mp_burgundy is the case that motivated it: the map
-  references it and ships it in neither of the server's referenced paks).
+  decompilation; a side-by-side with a retail frame is pending (human).
+  `assets::default_image` matches those bytes, so a material whose file no
+  pak ships reads as a dark surface, not a placeholder pattern (e.g.
+  `textures/cod2/egypt_wire_black` on the custom map mp_burgundy, which
+  ships it in neither of the server's referenced paks).
 - `$dlight` bundle images: the engine-generated dlight image
   (`assets::dlight_blob`, retail's formula from 0x4f0150), never a file
   on disk (corpus whitelist in `shader_corpus.rs`, which cites the pak9
   window.shader occurrence). Every stock one sits in a `perLight` stage,
-  drawn by the dlight pass (section 3). The mp_ship
-  flag decks bind 1x1 white for the same reason that
-  `textures/battleship/deckflag_np.tga` (flagfore/flagaft's second bundle)
-  ships in no stock pak under any extension; retail binds its own default
-  image there too, so both stay in the corpus whitelist.
+  drawn by the dlight pass (section 3). The mp_ship flag decks bind 1x1
+  white because `textures/battleship/deckflag_np.tga` (flagfore/flagaft's
+  second bundle) ships in no stock pak under any extension; retail binds
+  its own default image there too, so both stay in the corpus whitelist.
 - `heightToNormal` is ignored (a debug note). (`clampy` sits on stock
   foliage and water, `clampx` on seven `shadertypes/world/*_clampx.stype`;
   both clamp their one axis, section 3.)
@@ -1120,9 +1094,9 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   so there the wave's `x + y + z` and the normal's noise read view-space
   coordinates (no stock viewmodel skin deforms). The sprites stay
   load-time encodings (world soups and props only) and hold their slot
-  without a GPU record. Before 2026-10-16 vcod kept one record of each
-  kind in a fixed order (wave or flap, bulge, move) along the undeformed
-  normal, and the entity and viewmodel passes ran none.
+  without a GPU record. Records run in script order on the normal the
+  previous one wrote, never one per kind in a fixed order on the
+  undeformed normal.
 - Inert: syncNormal, projectionShadow, text0-7. None has a stock user.
 
 ### Model skin scripts
@@ -1163,12 +1137,12 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   skin's image, and so does a static prop (`prop_skin_draw`). VERIFIED,
   census (`a_typed_skin_retail_cannot_build_draws_the_default_shader`):
   the 5171 typed skin slots of the 1012 stock 1.1 xmodels all build, so
-  no stock model draws it. Before 2026-10-16 vcod drew the implicit skin
-  there.
+  no stock model draws it. Drawing the implicit skin there would be
+  wrong.
 - VERIFIED, census: 12 skins placed on stock MP maps have a `skins/` block:
   `light_sprite` (autosprite, additive), `lightbulb_on`, `ceilinglight1on`,
   `ind_lamp1_on`, `lantern_on`, `exteriorlamp2_on` (all `rgbGen
-  identityLighting`, so the lit bulbs no longer take the grid's shade),
+  identityLighting`, so the lit bulbs ignore the grid's shade),
   `lanternglass` and `whiteglobe` (blended glass), `shipflag_np` and
   `shipflag2_np` (flap, `lightingDiffuse`, alpha-tested),
   `yacht_int_floor` and `yacht_int_side` (`sort boathull`, `depthfunc
@@ -1202,15 +1176,14 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   (one opaque stage; mp_cassino, mp_italy, mp_sicily), and skins with a
   `skins/` block. No skin without a block or an `@` cuts.
 - vcod: `fs_prop` drops texels under alpha 0.5, which suits only a
-  template with one alpha-testing stage. Since 2026-10-15 a prop skin
-  without a `skins/` block draws by its template
+  template with one alpha-testing stage. A prop skin without a `skins/`
+  block draws by its template
   (`renderer::prop_skin_draw`): more than one stage or a blend goes
   through the stage path with `$texturename` bound to `skins/<skin>`
   (`entity_material::bind_texture_name`); one alpha-testing stage keeps
   the cut; one opaque stage, or the implicit skin, has its image alpha set
-  to 255 at load, as the world types are. Before, the staff car drew only
-  the texels the cut kept (the chrome) and the glass blends drew as
-  cutouts.
+  to 255 at load, as the world types are. Through the cut alone the staff
+  car draws only the chrome and the glass blends draw as cutouts.
 - VERIFIED, 0x505580 (`RB_SurfaceStaticModel( %s )`, string 0x5463e8):
   the uncached static-model surface copies its vertex positions
   (surface `+0x1c`), texture coordinates (`+0x14`) and, when the shader
@@ -1228,12 +1201,12 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   (`Shader::reflects`) batches per placement (`props::Batch::model_axes`,
   the model's left and up axes in the world), and that batch's copy of
   the shader carries them (`Shader::model_axes`) into `StageParams`'
-  `vec*_s`/`vec*_t`, which `env_uv` dots the world reflection with. Before
-  2026-10-15 a prop reflected in the world's frame. The staff car stands
-  at yaw 93, so its side panels (model normal ±y, world ±x) looked
-  straight on reflected `s` 0.5, the middle of `environmap_1day.jpg`
-  (128x128, luminance 254 there), where retail's reflect `s` 0 or 1, the
-  tree line (luminance 25 and 38). VERIFIED, asset: the body skin's alpha
+  `vec*_s`/`vec*_t`, which `env_uv` dots the world reflection with.
+  Reflecting in the world's frame is wrong: the staff car stands at yaw
+  93, so its side panels (model normal +/-y, world +/-x) seen straight on
+  would reflect `s` 0.5, the middle of `environmap_1day.jpg` (128x128,
+  luminance 254 there), where retail's reflect `s` 0 or 1, the tree line
+  (luminance 25 and 38). VERIFIED, asset: the body skin's alpha
   averages 43 of 255 and sits near 64..100 on the panels, so the panels
   take 25..40% of the map; the column bands of the map average 69, 168,
   180, 104 and 51 left to right.
@@ -1308,18 +1281,18 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
 - VERIFIED, asset: `textures/austria/doors/wood@chateau_exteriordoor.tga`
   (pak1, 256x512, 32-bit) carries alpha 255 on the six panes and 0 on the
   wood; `wood@chateau_extdoorborder.tga` is mostly 0.
-- vcod: a script-less world material drew through `fs_main`, which drops
-  texels under alpha 0.5, so mp_chateau's glazed doors showed only their
-  panes. Since 2026-10-15 the renderer sets a script-less, non-overlay
-  material's image alpha to 255 at load when its world type draws opaque
-  (no stage alpha-tests, the first does not blend; `stype_draws_opaque`,
-  `assets::force_opaque`), which also keeps it out of the shadow cut.
+- vcod: `fs_main` drops texels under alpha 0.5, which would leave
+  mp_chateau's glazed doors only their panes. So the renderer sets a
+  script-less, non-overlay material's image alpha to 255 at load when its
+  world type draws opaque (no stage alpha-tests, the first does not blend;
+  `stype_draws_opaque`, `assets::force_opaque`), which also keeps it out of
+  the shadow cut.
   The other alpha-tested types still cut through `fs_main`. VERIFIED, a
   census of every stock `.bsp`'s script-less, non-overlay materials whose
   image has alpha under 128: on the MP maps this turns
   `wood@chateau_exteriordoor`, `wood@chateau_extdoorborder` and
   mp_depot's `glass@window2a` opaque. Blended types (`cloth_blend`,
-  `glass_blend_in`) still cut rather than blend (not changed).
+  `glass_blend_in`) still cut rather than blend.
 
 ### The sun: disc, flare, blind and glare
 
@@ -1330,16 +1303,15 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   0.9) normalised (0x4dd040..0x4dd066). VERIFIED on mp_ship: `-45 110 0`
   read as angles points within 0.999 (dot) of the lump-30 sun light's
   direction (`bsp::mp_ship_sundirection_is_angles_matching_the_sun_light`).
-  vcod read it as a vector before 2026-10-12, which put mp_ship's moon on
-  the horizon.
+  Read as a vector, it puts mp_ship's moon on the horizon.
 - VERIFIED, 0x4e83f0 (called from the sky draw 0x4e8460 when `r_drawSun`
   is set): it returns unless the map has a lump-30 sun light
   (`world+0x114`), and draws the disc (0x4e80c0) and adds the flare
   (0x4e81e0) only while `dot(view forward, 0x16c57d0) > 0`.
 - VERIFIED, 0x4e7980: the disc is a quad at unit distance along the sun
   with half-width `r_sunsprite_size * 0.0013110929` (0x569024). vcod scales
-  that out to farbox distance; before 2026-10-12 it read the size as
-  degrees, several times too large.
+  that out to farbox distance; the size is not degrees (read so, the disc
+  is several times too large).
 - VERIFIED, 0x4e7be0 (run after a `.sun` file loads, 0x4e7f30): it
   registers `r_sunflare_shader` as a shader, halves the flare min and max
   sizes, takes the cosines of the four pairs of angles and turns the six
@@ -1446,8 +1418,8 @@ vcod (`vcod_common::deform`, `vs_stage` in `shader.wgsl`):
   `global_flare` only (mp_carentan, mp_cassino, mp_dawnville, mp_harbor,
   mp_neuville, mp_rhinevalley, mp_stalingrad, mp_tigertown,
   mp_uo_carentan, mp_uo_dawnville, mp_uo_harbor and mp_uo_stanjel).
-- INFERRED: UO's client draws its sun by 1.1's rules; there is no UO
-  client binary here to read.
+- INFERRED: UO's client draws its sun by 1.1's rules; its client binary
+  is unread.
 
 vcod (`sun_flare.rs`, `vcod_common::sun`): the same flare, fades and
 washes, in the scene pass after the 3D draws and before the HUD.
@@ -1507,9 +1479,9 @@ flares. None of the 1.1 flare machinery draws them.
 
 vcod (`crate::corona`, `bsp::coronas`): the same sprite each frame through
 the marks' stage path (`mark_pass::MarkPass::set_sprites`), so it takes
-the shader's sort in the frame's draw list, its alpha the sprite's
-(before 2026-10-21 the parse left `alphaGen identity`, so the
-`zfadeout` ramp never drew; section 3). The cull is the frustum and
+the shader's sort in the frame's draw list and its alpha from the sprite
+(the vertex alphaGen rule of section 3; without it the `zfadeout` ramp
+never draws). The cull is the frustum and
 the visited cells' bounds (`Vis::prop_visible`), not retail's portal
 planes.
 
@@ -1553,29 +1525,27 @@ out between the sun's NDC reaching the screen edge and 1.6.
 
 - `stock_shaders_parse_without_warnings` (`shader_corpus.rs`) parses every
   stock `.shader` and `.stype` of the install `COD_DIR` names (1.1, 1.5, or
-  UO's `uo/` over `main/`) and fails on any warning; 0 on each since
-  2026-10-15, from 65 (1.1) and 207 (UO) unique ones before.
+  UO's `uo/` over `main/`) and fails on any warning: 0 on each (65 unique on
+  1.1 and 207 on UO before the line-bound arguments and keyword fixes).
 - Corpus tests (`crates/common/tests/shader_corpus.rs`, needs `COD_DIR`):
   >500-block library pin, 250..350 world-reference band, the every-MP-map-has-a-sky
-  pin, and the assertion that every stage image of every authored MP material
-  resolves through the renderer's probe chain. That last one earned its keep
-  during development: it caught 13 paths scripted as .tga but shipped as .dds,
-  fixed by routing resolution through the shared `assets::resolve_bundle_image`.
+  pin, and every stage image of every authored MP material resolving through
+  the renderer's probe chain, which catches paths scripted as .tga but
+  shipped as .dds (13 of them; `assets::resolve_bundle_image` handles both).
 - Unit tests cover the wave-table ties-even rounding, the sin table against
   libm over the full range, turb axes, requires gating rules, sort mapping and
   sky geometry (zenith UV = pi/2, bottom face omitted, box spans).
-- Live fly-throughs, VERIFIED by me on the Deluxe install: mp_pavlov (night
-  sky), mp_harbor, mp_bocage (overcast hedgerow sky, fence and foliage
-  cutouts, terrain detail blends), noville (dusk cloud dome, scrolling cloud
-  stage visible), burnville. Zero missing textures on stock main maps; 94-145 fps
-  during the passes.
-- PENDING HUMAN REVIEW: pixel-truth against the retail renderer. Everything
-  above proves the surfaces render as authored; only side-by-side comparison
-  with the real game can prove the last percent of blending and sky shading.
-- Known divergences, all logged in §8: NV/ATI hw-path stages dropped (retail
-  fallback parity), `deformVertexes` bulge, move, normal and text inert, script fog
-  keywords inert (no stock MP map sets fog from a script; the fog every map
-  shows arrives in configstring 12 and is rendered), `$dlight` bundles and the
-  mp_ship deckflag image have substitutes rather than files, noville's missing textures under `--mod-dir uo` are the
-  documented single-mod-dir mounting limitation (its textures ship in main/
-  pak0/pak1), turb axis follows tr_shade_calc.c.
+- Live fly-throughs on a 1.5/UO install: mp_pavlov (night sky), mp_harbor,
+  mp_bocage (overcast hedgerow sky, fence and foliage cutouts, terrain
+  detail blends), noville (dusk cloud dome, scrolling cloud stage visible),
+  burnville. Zero missing textures on stock main maps; 94-145 fps during the
+  passes.
+- PENDING HUMAN REVIEW: pixel-truth against the retail renderer. The above
+  shows surfaces render as authored; only a side-by-side with the real game
+  settles the last percent of blending and sky shading.
+- Known divergences, all in §8: NV/ATI hw-path stages dropped (retail
+  fallback parity), `deformVertexes` syncNormal, projectionShadow and
+  text0-7 inert, script fog keywords inert (no stock MP map sets fog from a
+  script; the fog every map shows arrives in configstring 12 and is
+  rendered), `$dlight` bundles and the mp_ship deckflag image have
+  substitutes rather than files, turb axis follows tr_shade_calc.c.
