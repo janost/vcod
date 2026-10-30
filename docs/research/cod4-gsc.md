@@ -45,7 +45,7 @@ no table. VERIFIED (census run). The three additions:
   statements, which retail compiles the stock scripts with. INFERRED.
   Semantics: a `waittill` that wakes only on a notify whose first
   arguments equal the values, in order; one that differs leaves it
-  waiting (`cod4_waittillmatch_wakes_on_matching_arguments_only`). INFERRED from `OP_waittillmatch`; NEEDS-M5.
+  waiting (`cod4_waittillmatch_wakes_on_matching_arguments_only`). INFERRED from `OP_waittillmatch`.
 - `prof_begin(name)` / `prof_end(name)` compile to nothing (13 `prof_begin` each in
   `_globallogic.gsc` and `_spawnlogic.gsc`). INFERRED: they drive a
   profiler only.
@@ -64,7 +64,7 @@ no table. VERIFIED (census run). The three additions:
 
 The VM takes CoD2's rules (`VmProfile::COD4` is `COD2` with the dialect
 swapped): newest waiter first, kill mid-step, thread returns. INFERRED,
-unmeasured on 1.7 (M5).
+unmeasured on 1.7.
 
 ## 2. The builtin tables
 
@@ -157,18 +157,19 @@ covers every name the stock scripts call.
   `G_RegisterWeapon`, INFERRED. 2314 is four bits a lowercase
   hex digit, weapon 0 and each registered weapon set: 113 weapons read
   `ffffffffffffffffffffffffffff3000`. VERIFIED (capture).
-- `hidePart` keeps nothing (no server pose yet); `setCanDamage` is UO's
-  `setTakeDamage`; `isSplitScreen` is 0; `abs`, `min`, `max`, `floor` and
-  `ceil` return floats. INFERRED.
+- `hidePart` keeps the entity's `partBits` (`Cod4HostState::part_bits`),
+  and a hidden bone's collision surfaces no longer clip a round
+  (`entity_damage::ModelPart`); `setCanDamage` is UO's `setTakeDamage`;
+  `isSplitScreen` is 0; `abs`, `min`, `max`, `floor` and `ceil` return
+  floats. INFERRED.
 
 ### 3.1 The census
 
 `game::cod4::census::cod4_builtin_census` compiles every `.gsc` of the
 base zones with each of the 21 stock `mp_*` zones in turn (up to 131
-scripts) and lists each builtin the closure calls with no handler. At
-94d0d8ea it listed 71, at 19ff3be1 the 18 of the hardpoint vehicles and
-the physics calls; its `LEFT_OUT` table is now empty, and it fails on
-any name without a handler. VERIFIED (the test).
+scripts) and lists each builtin the closure calls with no handler. Its
+`LEFT_OUT` table is empty, and it fails on any name without a handler.
+VERIFIED (the test).
 
 `builtins/cod4_script.rs` answers the rest:
 
@@ -177,8 +178,8 @@ any name without a handler. VERIFIED (the test).
   0x8099f66, 0x8099f6c) are `push ebp; mov ebp,esp; pop ebp; ret`, empty
   on the PC build. VERIFIED (the bytes). A ranked match (`sv_pure 1`,
   `level.rankedMatch`) runs `setXenonRanks` from `endGame`, whose
-  `sendRanks()` killed `endGame` on ours before the intermission;
-  `cod4_ranked_match_ends_with_the_scoreboard_and_rotates` now runs a
+  `sendRanks()` must return or `endGame` dies before the intermission;
+  `cod4_ranked_match_ends_with_the_scoreboard_and_rotates` runs a
   one-minute ranked match through the intermission (`pm_type` 5 on both
   clients) to the next map with no script error. VERIFIED (the test).
 - `getAssignedTeam` (0x80bb48e) and `buttonPressed` (0x80a9838) each
@@ -699,10 +700,10 @@ writes `scr_const+0x9c` into the world's classname the same way
 slot into the world too. INFERRED (the code names neither string). A blast with no attacker (`sd.gsc` 807,
 `_destructible.gsc` 1064) hands the callbacks the world, and
 `Callback_PlayerKilled:4787` compares `attacker.classname` with
-`"script_vehicle"`: with the classname undefined that comparison was a
+`"script_vehicle"`: with the classname undefined that comparison is a
 script error on every such kill (the map sweep's `sd` and `sab` rows).
-vcod's world (`ObjectTable::world`) now carries `worldspawn` on every
-game. VERIFIED (`cod4::gametype_tests::a_blast_with_no_attacker_names_the_world`).
+vcod's world (`ObjectTable::world`) carries `worldspawn` on every game.
+VERIFIED (`cod4::gametype_tests::a_blast_with_no_attacker_names_the_world`).
 
 ## 4. The load
 
@@ -714,7 +715,7 @@ game. VERIFIED (`cod4::gametype_tests::a_blast_with_no_attacker_names_the_world`
   confirmed on 1.7; the directory stands for that.
 - Bootstrap: the gametype's `main`, the map's `main`, then
   `CodeCallback_StartGameType`, each run to its first wait, as CoD2's.
-  INFERRED (M4).
+  INFERRED.
 - `InitStructs` runs at every load, so `level.struct` is always an array:
   mp_crash has no `script_struct` and `common_scripts/utility.gsc`'s
   `struct_class_init` reads `level.struct.size`. INFERRED from `G_LoadStructs` and the corpus (`init_structs_always`).
@@ -722,7 +723,8 @@ game. VERIFIED (`cod4::gametype_tests::a_blast_with_no_attacker_names_the_world`
   VERIFIED) runs `default_mp_gamesettings.cfg` from `iw_00.iwd`, which sets
   `scr_war_scorelimit 750`: the capture's `ui_scorelimit` is 750 where
   `war.gsc`'s own default is 500. VERIFIED. `cod4_boot` runs that file
-  ahead of the load in its place; the server's start-up is S-C4-1's.
+  ahead of the load in its place; vcod-server's start-up runs it as
+  retail's does.
 
 ### 4.1 `wait` counts frames
 
@@ -827,8 +829,9 @@ game. VERIFIED (`cod4::gametype_tests::a_blast_with_no_attacker_names_the_world`
   mirror is compared by name for the scripts' `scr_*` and `ui_*` dvars,
   all equal. VERIFIED. The engine's own mirrored dvars (`friction`,
   `g_TeamColor_*`, `jump_height`, `player_*`, ...) are not registered on
-  ours, so the block's sorted slots differ from retail's; that is the one
-  gap, left to S-C4-1.
+  `cod4_boot`'s bare host, so its block's sorted slots differ from
+  retail's. vcod-server registers them (`cod4::oob`), and `cod4::oob_ab`
+  compares its mirror with retail's.
 
 ## 6. Callbacks
 
@@ -845,8 +848,7 @@ CodeCallback_PlayerLastStand(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWea
 
 All six names are strings at 0x821c247 .. 0x821c2cf. VERIFIED. The damage
 and killed callbacks take CoD2's extra arguments; `HostProfile::COD4`
-leaves `callback_extra_args` off until a CoD4 hit sets them (S-C4-6), and
-the call sites are M4's.
+sets `callback_extra_args`.
 
 `modNames` registers `MOD_UNKNOWN` .. `MOD_EXPLOSIVE` and `MOD_IMPACT` (16)
 from 0x80a4109, in string-pool order. INFERRED (`game::cod4::COD4_DEFS`).
@@ -1111,9 +1113,9 @@ grenade, each a `mp/statsTable.csv` number). VERIFIED (the stock gsc).
 
 ### Open
 
-- The snapshot's PVS cull, and every field
-  pmove writes (`holdBreathScale`, `groundEntityNum`; `legsAnim` matches
-  since the anim script runs, cod4-player-anims.md 7).
+Nothing left here. 1.7 sends no PVS cull to match (cod4-pmove.md 15);
+pmove writes `holdBreathScale` and `groundEntityNum` (`vcod_cod4::pmove`)
+and the anim script `legsAnim` (cod4-player-anims.md 7).
 
 ## 8. The stock gametypes on a running level
 
@@ -1124,10 +1126,10 @@ Gates: `cod4::gametype_tests` (`COD4_DIR`) and the bot soak in
 - A brush entity's box is its inline model's (`cmodel_t`'s `mins`,
   `maxs`, the clip map's `Submodel`), and `isTouching` and the touch
   pass test a box against that model's brushes. `SV_SetBrushModel`
-  taking `CM_ModelBounds`: INFERRED. vcod's level now carries
-  both tables from the clip map (`game::cod4::brush_models`); without
-  them no brush trigger touched anything, so `koth::SetupRadios` found
-  every radio outside its `radiotrigger` and `AbortLevel` loaded `dm`.
+  taking `CM_ModelBounds`: INFERRED. vcod's level carries both tables
+  from the clip map (`game::cod4::brush_models`); without them no brush
+  trigger touches anything, so `koth::SetupRadios` finds every radio
+  outside its `radiotrigger` and `AbortLevel` loads `dm`.
   mp_crash's radios are `script_model`s whose point origins lie inside
   the `trigger_multiple` brushes `*24` .. `*27`. VERIFIED
   (`koth_on_mp_crash_finds_its_radios`, our clip map read off the zone).
@@ -1163,8 +1165,7 @@ Gates: `cod4::gametype_tests` (`COD4_DIR`) and the bot soak in
   "script runtime error" ("pair 'undefined' and '0' has unmatching
   types", line 793 of the stock file) that ends the level and shuts the
   server down, at `developer 0` as at 1 (`logfile 2`). VERIFIED (the
-  capture's console; rerun 2026-10-26, `run_koth.sh`,
-  scratch). It ends it because it comes while the level is still loading,
+  capture's console, rerun once). It ends it because it comes while the level is still loading,
   not because of what it is: see 8.1. A
   client loading the level takes longer than the 19 frames: retail's two
   probes joining 44 s past the load spawned with none unset. VERIFIED (the
@@ -1307,11 +1308,11 @@ planted, defused, picked up and captured. vcod's port is
   `dropItem` launches one, the item's weapon is given with the item's
   clip and reserve, switched to (`a <weapon>`), and the item freed the
   next entity pass. INFERRED (vcod's CoD2 swap rule; 1.7's `Touch_Item` is not read).
-- Missiles and turrets join the list since S-C4-25 (9.2, 9.3); a
-  `trigger_use`'s `requireLookAt` is still left out
-  (`useTriggerRequireLookAt` is not a vcod builtin yet). A dropped
+- Missiles and turrets are on the list (9.2, 9.3); a `trigger_use`'s
+  `requireLookAt` is left out (`useTriggerRequireLookAt` has no
+  handler). A dropped
   weapon's middle is its rest point, not its bounds' middle. INFERRED.
-- What the stock maps would reach (2026-10-25): six maps place a
+- What the stock maps reach: six maps place a
   `misc_turret`, each a `weapon_saw_MG_setup` on `saw_bipod_stand_mp` or
   `saw_bipod_crouch_mp`: mp_backlot two, mp_carentan three, mp_convoy,
   mp_farm and mp_overgrown two each, mp_pipeline one. VERIFIED (the
@@ -1331,8 +1332,8 @@ planted, defused, picked up and captured. vcod's port is
 
 Captured on retail with `cod4_probe --script saw` behind mp_backlot's
 crouch SAW 393 (`devmap mp_backlot`, war, `setviewpos -770 68 320 0`,
-`--face 0`): `play-1.7-saw.txt` in the S-C4-25 scratch, recipe
-`run_saw.sh` there. The live gate is the client's
+`--face 0`): `play-1.7-saw.txt`, an uncommitted capture. The live gate
+is the client's
 `cod4_live_saw_mounts_fires_clamps_and_lets_go`; vcod's port is
 `game::cod4::turret` over the shared `TurretRecord`. Names and order
 are INFERRED where no label says otherwise.
@@ -1429,7 +1430,7 @@ are INFERRED where no label says otherwise.
 
 Captured on retail with two probes on `devmap mp_crash` war: a
 `--script frag` thrower at 123 2110 300 and a `--script throwback` target
-at 207 2291 296 (`run_tb.sh` in the S-C4-25 scratch). The live gate is
+at 207 2291 296 (an uncommitted capture). The live gate is
 the client's `cod4_live_frag_at_the_feet_is_thrown_back`.
 
 - With a live frag at rest near it the target's hint reads 44 (the
@@ -1484,19 +1485,17 @@ and `linkTo`s it to the car on that tag, with zero offsets.
   `tag_glass_left_front`. VERIFIED (the zone's xmodels, `vcod-cod4`'s
   `bone_dump`). So retail finds every tag the script asks for.
   INFERRED (not shot on retail).
-- vcod looked a non-client parent's tag up in the pk3 rigs, which hold no
-  CoD4 model: every tagged `linkTo` on a CoD4 script model failed, and
-  each sedan part broken in `sab` on mp_backlot and mp_strike logged the
-  error. A CoD4 parent's tag is now the zones' bind-pose bone, the body's
-  first, then each attached model's placed on the body tag it hangs on
-  (`link::cod4_model_tag`). VERIFIED (`cod4::destructible_tests`, which
-  breaks mp_backlot's sedans with the gsc `radiusDamage` and raised the
-  error before).
-- Open: vcod's CoD4 rounds and grenade blasts damage players and
-  helicopters only (`Cod4Level::radius_damage`, `bullet.rs`), so a car
-  breaks only under a script's `radiusDamage` or `losRadiusDamage`,
-  never under a player's fire. INFERRED (no `script_takedamage` reader
-  in `game::cod4`).
+- vcod reads a CoD4 parent's tag off the zones' bind-pose bone, the
+  body's first, then each attached model's placed on the body tag it
+  hangs on (`link::cod4_model_tag`). VERIFIED (`cod4::destructible_tests`,
+  which breaks mp_backlot's sedans with the gsc `radiusDamage`). Trap:
+  the pk3 rigs hold no CoD4 model, so a tag looked up there fails every
+  tagged `linkTo` on a CoD4 script model (each sedan part broken in `sab`
+  on mp_backlot and mp_strike logged it).
+- vcod's CoD4 rounds and blasts also damage the entities a script opened
+  to damage (`setCanDamage`, `GameHost::script_takedamage`), so a
+  player's fire breaks the cars and barrels as a script's `radiusDamage`
+  does (`game::cod4::entity_damage`, cod4-combat.md 13).
 
 ## 10. Arrays are values
 
@@ -1600,7 +1599,6 @@ ended its level: that one fell inside the load, this one 7 s past it
   chat and the snapshots' client states read (`GameHost::client_names`),
   under `auto_change`, or under `manual_change` for a client not yet in
   the game; it does not clean the name. The engine's copy (`status`,
-  the log) follows the userinfo at once, as retail's. Up to the
-  2026-10-26 playtest the client sent no userinfo after the connect and
-  the server only kept the engine's copy, so a `name` took effect on
-  the next connect.
+  the log) follows the userinfo at once, as retail's. The client sends
+  its userinfo on every change, so a `name` takes effect in the game,
+  not only at the next connect.

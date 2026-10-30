@@ -202,12 +202,12 @@ first 1987 bytes, the rest about 25). VERIFIED live.
   index 0, team 3. VERIFIED live.
 - Two server settings the capture needed. `sv_pure 1` (the default) drops
   a client that sent no `cp` command (`cod4-handshake.md` 8 has the
-  check and the command, which the probe now sends). With all-zero
+  check and the command, which the probe sends). With all-zero
   stats the stock `_globallogic.gsc` kicks the client on connect: it
   checks `getstat(205 + 10 * i)` for i 0..4 on an online game, and
   `level.onlineGame` is hard-coded true (both in the rawfile of the same
   name in `common_mp.ff`). VERIFIED. The console showed `was kicked for
-  cheating` after 38 snapshots. VERIFIED live. The probe now sends a
+  cheating` after 38 snapshots. VERIFIED live. The probe sends a
   fresh profile's stats (section 10, "The stats block").
 
 ## 7. The writer and the re-encode gate
@@ -217,9 +217,10 @@ and playerstate delta, and `parse.rs`'s `Client::write` puts a parsed
 server message back together; `clmsg.rs` does the same for the client's
 ops. The gate (`tests/net_decode.rs`'s `walk`) re-encodes every message
 of every committed capture and compares the compressed block byte for
-byte, both directions. All seven captures pass: `handshake-1.7.txt`,
-`handshake-1.7-cmds.txt`, `snapshots-1.7.txt`, the two of section 8 and
-the two of section 10. VERIFIED live.
+byte, both directions. Every capture it walks passes:
+`handshake-1.7.txt`, `handshake-1.7-cmds.txt`, `snapshots-1.7.txt`,
+`play-1.7-fly.txt` (the free spectator), the two of section 8 and the
+two of section 10. VERIFIED live.
 
 The writer's forms follow `MSG_WriteDeltaField` and its helpers,
 INFERRED; that every capture
@@ -377,8 +378,7 @@ VERIFIED off the table:
 | 32 | `EV_PREP_OFFHAND` | 99 | `EV_LANDING_ASPHALT` |
 | 33 | `EV_USE_OFFHAND` | 61 (temp entity) | `EV_EARTHQUAKE` |
 
-The five ids round 3 had guessed (26, 32, 33, 73, 76) hold on
-1.7. VERIFIED. The walker's temp entity 17 + 61 is the frag's
+The walker's temp entity 17 + 61 is the frag's
 earthquake. VERIFIED (the name; that the frag raised it is INFERRED from
 its timing). `cargo run -p vcod-cod4 --example cod4_event_dump --
 <capture>` prints a capture's events by name.
@@ -426,9 +426,10 @@ messages; the shooter: 349 and 382. VERIFIED live.
   3 item, 4 missile, 6 script mover, and events 17 + {41, 43, 61, 66}.
   Never seen: 5 sound blend, 7 fx, 8 loop fx, 9 helicopter, 10 plane, 11
   vehicle (the eType numbers are the per-type table's order, section 1).
-  VERIFIED live. Nothing in these short war rounds spawned a helicopter
-  or a plane; a run where a player earns killstreak rewards, or a gsc
-  that spawns them, would show those tables on the wire.
+  VERIFIED live. The planes and helicopter are in the later hardpoint
+  captures (`play-1.7-hardpoint.txt`, `play-1.7-planefx.txt`; eType 13 in
+  cod4-gsc.md 3.2), which the hardpoint gates read; this gate does not
+  re-encode them.
 
 ### The stats block
 
@@ -500,9 +501,10 @@ read nor written.
   INFERRED. The reader keeps the base's values there; the probe
   sends an origin of 1e6, so every capture has bit 1. A vcod client needs
   that ring before it reports its real predicted origin.
-- Sound blend, fx, loop fx, helicopter, plane and vehicle entities
-  (section 10).
-- The spectator stayed a free spectator; following a player is untried.
+- Re-encoding sound blend, fx, loop fx, helicopter, plane and vehicle
+  entities (section 10).
+- A spectator following a player in these captures: the only follow on
+  the wire is the class-less walker's forced follow (cod4-gsc.md 7).
 - The ammo, clip and weapon model masks are rebuilt, not recorded
   (section 7).
 
@@ -556,10 +558,10 @@ through it. The clock and lerp it draws with are `cod4-client-view.md`'s.
   client's view by the delta's change, which leaves the cmd's angles
   where they were, as retail's unchanged `cl.viewangles` do
   (`CL_FinishMove` writes them alone; `IN_CenterView` is the only
-  writer that reads the delta). INFERRED. Taking the
-  playerstate's viewangles instead snapped the view toward the stale
-  angles section 7's rule leaves on the wire (the last teleport's) each
-  time `PM_UpdateViewAngles`' pitch clamp pushed a pitch past 85 into the
-  delta: `cod4_live_pitch_held_past_the_limit_stays_at_the_limit` on
-  vcod-server ended with the camera at 36 degrees before the fix and
-  holds it at 85 after. VERIFIED (the test).
+  writer that reads the delta). INFERRED.
+- Trap: taking the playerstate's viewangles instead snaps the view toward
+  the stale angles section 7's rule leaves on the wire (the last
+  teleport's) each time `PM_UpdateViewAngles`' pitch clamp pushes a pitch
+  past 85 into the delta. `cod4_live_pitch_held_past_the_limit_stays_at_the_limit`
+  on vcod-server holds the camera at 85 (36 with the playerstate's
+  angles). VERIFIED (the test).

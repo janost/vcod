@@ -15,9 +15,9 @@ client `crates/client/src/cod4_voice.rs`.
   1.7 address is not yet confirmed on 1.7.
 - `iw3mp.exe` 1.7 (image base 0x400000), the same way.
 - Dvar defaults off `tools/re/cod4_dvars.py` over `cod4_lnxded`.
-- One live run against vcod-server (section 5). No retail voice capture:
-  the retail Linux server has no client that talks, and no retail client
-  ran here.
+- One live run against vcod-server (section 5). There is no retail voice
+  capture: the retail Linux server has no talking client, and no retail
+  client was run.
 
 ## 2. The wire
 
@@ -194,9 +194,9 @@ At the default 180 the angle test always passes, so Eavesdrop is a
 - The client sends `cl_voice\1` in its userinfo, encodes the microphone
   (cpal, averaged down to 8000 Hz mono) through the system's libspeex,
   opened at run time (`libspeex.so.1` and kin), and plays each talker on
-  a stream of its own. Retail's one decoder serves every talker; vcod's
-  does too. Without libspeex the client still joins, shows nothing it
-  cannot hear, and sends nothing. `VCOD_VOICE_INPUT=tone` swaps the
+  a stream of its own. One decoder serves every talker, as on retail.
+  Without libspeex the client still joins, shows nothing it cannot hear,
+  and sends nothing. `VCOD_VOICE_INPUT=tone` swaps the
   microphone for a 440 Hz tone.
 - The live gate `cod4_live_voice_reaches_the_team_and_voice_global_the_enemy`
   runs three clients on vcod-server's `war`: a tone through the
@@ -205,6 +205,5 @@ At the default 180 the angle test always passes, so Eavesdrop is a
   the enemy, the teammate's talker list names the talker, and the server
   stamps `lastVoiceTime`. VERIFIED live (vcod against vcod).
 - Not done: the compass's voice fade for a talking friendly
-  (`beginVoiceFadeTime`), `winvoice_*` (the Windows mixer's
-  record level, mute and `voice.wav`), the record level meter on the
-  options page.
+  (`beginVoiceFadeTime`), `winvoice_*` (the Windows mixer's record level,
+  mute and `voice.wav`), and the options page's record level meter.

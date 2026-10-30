@@ -199,7 +199,7 @@ label for each engine name; 1.7 holds no enum names.
 `cargo test -p vcod-cod4 --test cod4 -- --nocapture zone_census` with
 `COD4_DIR` (and optionally `COD4_LNXDED_DIR`) prints every zone's counts.
 On the stock 1.7 install, all 85 zones read and walk (section 11).
-VERIFIED (2026-10-24).
+VERIFIED.
 
 - code_post_gfx_mp: material 200, techset 94, stringtable 30, rawfile 23,
   image 6, xmodel 5, xanim 2, menufile 2, and one each of physpreset,
@@ -486,10 +486,10 @@ read and dropped) and checks: the last body ends on the last inflated
 byte; every block's end (the temp block's peak plus 16) equals its
 `blockSize`; every header slot holds an asset of its listed type; no
 offset token is left unresolved. All 85 zones pass, in 3.5 s on four
-threads. VERIFIED (2026-10-24).
+threads. VERIFIED.
 
 `walk_spots` walks mp_crash and code_post_gfx_mp with the bulk data kept.
-VERIFIED (2026-10-24):
+VERIFIED:
 
 - mp_crash's gfx_map `maps/mp/mp_crash.d3dbsp` (base name `mp_crash`):
   166418 vertices (0x2C bytes each), 347493 indices, 5558 surfaces, every

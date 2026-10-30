@@ -887,12 +887,12 @@ world triangles drawn of all, the entity surfaces and the passes' GPU ms.
 From each stock spawn point's standing view (80 degrees across at 16:9,
 along the spawn's yaw) the near and far partitions draw on average, in
 thousands of the map's caster triangles: mp_crash (940) 120 and 262
-under C4-31's 512-unit squares, 28 and 121 under the planes at 128;
-mp_bog (773) 109 and 222, then 16 and 104. VERIFIED (`sunshadow_census`'s
+under 512-unit squares, 28 and 121 under the planes at 128; mp_bog (773)
+109 and 222, then 16 and 104. VERIFIED (`sunshadow_census`'s
 `caster_culling_from_the_spawn_views`). The lavapipe frame over mp_crash
-in `pipeline_check` drew 537k triangles in 60.7 ms before and 73k in
-47.9 ms after, the image the same to the byte sum; the cost on a real GPU
-is not measured.
+in `pipeline_check` drew 537k triangles in 60.7 ms under the squares and
+73k in 47.9 ms under the planes, the image the same to the byte sum; the
+cost on a real GPU is not measured.
 
 Gates: `cod4_floor_takes_the_sun_shadow_map_as_the_hlsl_does` (lavapipe:
 the atlas read back, three views against the bytecode's test),
@@ -917,13 +917,11 @@ the spot pass
 too, so vcod's spot tiles take the same picks, is INFERRED.
 `sunshadow::smodel_casters` keeps every LOD's casting runs and
 `SunShadowPass::pick_smodel_lods` picks them each frame through
-`StaticLod::pick` (9.10); the caches key on the picked models. Before,
-vcod cast LOD 0 for every static model: from the spawn views the
-partitions held 70k static model triangles a view on mp_crash and 78k
-on mp_bog, against 36k and 29k at the picks
-(`caster_culling_from_the_spawn_views`). The shadows of far static
-models now come from their coarse LODs, as retail's do; the sun shadow
-gate's world holds no static model, so its atlas did not move.
+`StaticLod::pick` (9.10); the caches key on the picked models. From the
+spawn views the partitions hold 36k static model triangles a view on
+mp_crash and 29k on mp_bog at the picks, 70k and 78k at LOD 0
+(`caster_culling_from_the_spawn_views`). The sun shadow gate's world
+holds no static model, so the picks do not move its atlas.
 
 ## 4. Technique sets by name
 
@@ -1290,8 +1288,8 @@ building that is cell 9). VERIFIED (`map_spots`).
 vcod draws such a material (`Material::dist_falloff`) through the stage
 pipeline's `Multiply2x` variant, (Dst, Src) on the colour and the
 destination alpha kept, with the falloff in `StageParams::falloff`,
-applied in `shader.wgsl`'s `vs_stage`. Before, the pair fell to the alpha
-blend: the white colour map at alpha 1 painted every doorway white.
+applied in `shader.wgsl`'s `vs_stage`. Drawn as the alpha blend, the
+white colour map at alpha 1 paints every doorway white.
 
 ### 9.5 The material census
 
@@ -1317,8 +1315,8 @@ draws' `sortKey` order (9 to 48 on these maps). VERIFIED (census). What it made 
   `zfeather_foa_nf_eo_dtex` read the same. A sheet seen edge on fades
   out: `wc/ch_godray01`'s `falloffParms.zw` are (2.128, -0.064), so `w`
   is 0 below `c^2 = 0.03`. Most draw (InvDestColor, One), the screen
-  blend of 8.1; `wc/ch_hotspot02` and kin (One, One). Before, vcod drew
-  them at full strength as (SrcAlpha, One).
+  blend of 8.1; `wc/ch_hotspot02` and kin (One, One). Without the
+  falloff they draw at full strength as (SrcAlpha, One).
 - The add sets' (One, One) draws as (SrcAlpha, One) (8.1):
   `wc_unlit_add` (364 surfaces, the cargo container numbers and lit
   windows), `mc_unlit_add`, the effect sets.
@@ -1473,7 +1471,7 @@ The array takes six layers a probe, and wgpu's default device limit is
 256 layers, 42 probes. mp_cargoship has more, so on the default limit the
 array failed to build and every entity bind group with it (1974
 validation errors in a `war` level of the map sweep, `cod4-map-sweep.md`).
-VERIFIED (the sweep, lavapipe). Both devices now ask for the adapter's own
+VERIFIED (the sweep, lavapipe). Both devices ask for the adapter's own
 `max_texture_array_layers`, and a
 probe past the device's limit is left out of the array. VERIFIED
 (`entity_material::tests::probes_past_the_layer_limit_leave_a_valid_array`).
@@ -1559,18 +1557,18 @@ Gates: `cod4_water_shades_as_water_l_sun` (lavapipe, against the HLSL),
   `r_portalWalkLimit` 0x706100 and `r_portalMinRecurseDepth` 0x7061dc).
   INFERRED (`R_VisitPortals`, `R_VisitPortalsForCell`,
   `R_EnqueuePortal`; the three strings VERIFIED in iw3mp.exe).
-- vcod's recursive walk opened a portal once per path and stopped at 8
-  visits a cell. On mp_overgrown the sky cell (cell 0, 80 portals) took
-  the whole budget: from the ground floor of the two-storey house at
-  -718.5 -3784.5 -48 (cell 24), yaw 225, pitch 25, the walk spent 241
-  visits before the stair hole's portal to cell 21 and drew the upper
-  floor's walls as sky, the playtest's missing house tops. 103 of the
-  views a ring round every spawn looks along hit the cap. A CoD4 world
-  now walks the queue (`WorldVis::walk_queued`): that view visits 6
-  cells and reaches 21, and across 2748 eyes the views where a ray's
-  first front face is a soup the walk dropped fell from 238 to 235, none
-  new; the rest are sight lines through hedges and fences no portal
-  covers. VERIFIED (`vis_rays`, `overgrown_stair_hole_shows_the_upper_floor`).
+- A CoD4 world walks the queue (`WorldVis::walk_queued`). Trap: a
+  recursive walk that opens a portal once per path and stops at 8 visits
+  a cell spends its budget in mp_overgrown's sky cell (cell 0, 80
+  portals). From the ground floor of the two-storey house at -718.5
+  -3784.5 -48 (cell 24), yaw 225, pitch 25, it spent 241 visits before
+  the stair hole's portal to cell 21 and drew the upper floor's walls as
+  sky (the house tops missing); 103 of the views a ring round every spawn
+  looks along hit the cap. The queue's walk visits 6 cells from that view
+  and reaches 21; across 2748 eyes the views where a ray's first front
+  face is a soup the walk dropped fell from 238 to 235, none new; the
+  rest are sight lines through hedges and fences no portal covers.
+  VERIFIED (`vis_rays`, `overgrown_stair_hole_shows_the_upper_floor`).
 - `R_PortalClipPlanes` is 0x606680. A winding of more than 10 points
   gets the bevel planes alone (the `cmp $0xa` at 0x606697). VERIFIED.
   After the side planes it copies the near plane (`dpvsGlob.nearPlane`,
@@ -1638,11 +1636,11 @@ Gates: `cod4_water_shades_as_water_l_sun` (lavapipe, against the HLSL),
   against the rules of this section and 9.10).
 - With vis off the renderer draws every static model at LOD 0; with it
   on, at the LOD 9.10 picks. The trees that change between the two
-  modes in the playtest change LOD, not visibility. VERIFIED (renderer
+  modes change LOD, not visibility. VERIFIED (renderer
   `cull`, the same view's walk misses nothing).
 
-- The playtest's white rectangle on mp_overgrown (-1553 -3414 -61, yaw
-  61) is a static model, `com_barrier_tall1` at -1418 -3317.5 -139
+- The white rectangle seen on mp_overgrown (-1553 -3414 -61, yaw 61) is
+  a static model, `com_barrier_tall1` at -1418 -3317.5 -139
   (`mc/mtl_barrier`, `mc_l_sm_r0c0n0s0`, its maps `barrier`,
   `barrier_norm` and the composite spec map all decoded). The first
   ray hits it in both vis modes. VERIFIED (`vis_rays` scratch picks).
@@ -1698,7 +1696,8 @@ Gates: `cod4_water_shades_as_water_l_sun` (lavapipe, against the HLSL),
   draws (One, One) without its vertex alpha (8.1).
 - Water: the sampler state retail sets on the height map and the probe
   (9.8). Fog and the vision sets are section 11.
-- The collision is checked, not fed to a trace (stage C4-5).
+- The collision feeds the server's and the client's traces
+  (cod4-collision.md); nothing open here.
 
 ## 11. Fog and vision sets
 
@@ -1902,8 +1901,8 @@ moved at the spawn's view). VERIFIED (the test, ours). The test turns
 the glow off through the console's `r_glow 0` under `sv_cheats 1`, read
 by the frame's `cod4_options`: vcod registers `r_glow` as 1.7 does, on
 and cheat protected, and draws the glow only with it and
-`r_glow_allowed` both on. Before, `r_glow` was no registered dvar and
-`r_glow 0` changed nothing (the 2026-10-27 playtest). mp_bog's cutoff
+`r_glow_allowed` both on (unregistered, `r_glow 0` changes nothing).
+mp_bog's cutoff
 of 0.93 blooms only a fire's brightest flicker: one run moved 348
 pixels, the next 0 over 395 frames round the spawn. VERIFIED (our
 runs).

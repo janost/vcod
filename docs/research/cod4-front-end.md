@@ -267,7 +267,7 @@ off the clock; retail picks one at random. INFERRED.
   `[CoD4x] <hostname>`, since the join is refused at the challenge.
   The mark is not a `serverInfo_t` field, so `servercache.dat` does not
   keep it: a cached favourite shows until its ping answers. vcod joins
-  stock 1.7 servers only; CoD4x support is open.
+  stock 1.7 servers only; playing on CoD4x servers is not supported.
 - Left: create a class off real stats, and the CD key menus
   (`cdkey_menu`, `verifyCDKey`, `getCDKey`).
 
@@ -355,8 +355,8 @@ off the clock; retail picks one at random. INFERRED.
   0x21, a default and minimum of 1 (`ebx`, set to 1 at 0x629df3 and
   pushed as both) and a maximum of 16 (`mov eax, 0x10` at 0x62b1a1); `r_vsync` at 0x62b20e, a bool with flags
   0x21. VERIFIED (the disassembly). Anti-aliasing's Off, 2x and 4x set 1,
-  2 and 4; vcod's CoD4 default is retail's 1 (before 2026-10-27 it was
-  CoD1's 4, cod4-client-perf.md 19); vcod's scene has 1 or 4 samples (`renderer::aa_samples`), so
+  2 and 4; vcod's CoD4 default is retail's 1, not CoD1's 4
+  (cod4-client-perf.md 19); vcod's scene has 1 or 4 samples (`renderer::aa_samples`), so
   2x draws 4x, and the `vid_restart` rebuilds the renderer when the count
   moves. Sync Every Frame sets vcod's `r_swapInterval`, read every frame,
   so it applies at once, before the popup's restart.
@@ -619,13 +619,12 @@ How 1.7 turns `r_aspectRatio` and the window into the view's fov and the
   it (`Renderer::set_view_aspect`) with `CG_UpdateFov`'s Hor+ fov
   whatever `vc_widescreen` says, and `ScreenPlacement::cod4`
   (`hud::cod2elem`) places the HUD, menus, hints and the loading screen
-  by `ScrPlace_SetupFloatViewport`'s column. Before 2026-10-29 the HUD
-  kept square pixels in fullscreen and `vc_widescreen 0` held the
-  horizontal fov at `cg_fov`.
+  by `ScrPlace_SetupFloatViewport`'s column, in fullscreen too and under
+  `vc_widescreen 0` alike.
 - A joined Dedicated No server stands in for the listen server: its
   menus read `sv_running` 1 (`ScriptMenus::listen_server`), so the
-  in-game Graphics row greys as 1.7's does, where it used to open and
-  its `vid_restart` was refused with only a console line. Leave Game
+  in-game Graphics row greys as 1.7's does (it does not open a page
+  whose `vid_restart` the server would refuse). Leave Game
   opens `popup_endgame` then, whose Yes is `exec disconnect` as
   `popup_leavegame`'s is. VERIFIED (`menu_dump common_mp
   popup_endgame`).
@@ -637,12 +636,11 @@ How 1.7 turns `r_aspectRatio` and the window into the view's fov and the
   (`ScrPlace_ApplyX`, 0x477500): `LEFT` and `RIGHT` at the window's
   edges, `CENTER` on its middle, `FULLSCREEN` across the whole window.
   INFERRED (the two bullets on 0x477420 and 0x477500 in 10.1, with the
-  window's own aspect for the picked one). Its first version kept
-  `LEFT` and `RIGHT` in a centred box of the picked aspect (at 3840x1600
-  under `auto` a 16:9 box from x 497.8 to 3342.2): the compass stood
-  471 px in, and the scoreboard ran 497.8 px right of the middle, its
-  host name line with it. VERIFIED (the gate below, run before the
-  change). The board centres on `virtualViewableMax - Min`, the window's
+  window's own aspect for the picked one). Trap: `LEFT` and `RIGHT` in a
+  centred box of the picked aspect (at 3840x1600 under `auto` a 16:9 box
+  from x 497.8 to 3342.2) put the compass 471 px in and the scoreboard,
+  host name line included, 497.8 px right of the middle. VERIFIED (the
+  gate below, run on that box). The board centres on `virtualViewableMax - Min`, the window's
   width on the grid, and places `LEFT` (`cod4_scoreboard::layout`), so
   only an origin at the window's edge centres it. INFERRED (the
   layout's arithmetic).
@@ -668,14 +666,14 @@ How 1.7 turns `r_aspectRatio` and the window into the view's fov and the
   | `hud_xpticker480` | 0..2880.0 | 0..2133.3 | 0..1440.0 |
 
   Under `vc_windowAspect 1` every box at 3840x1600 is 1.7's windowed one
-  at that size, at 1920x1080 1.7's own; with it 0 every box is as before
-  C4-122. The board's middle is 1920.0. The weapon info's frag icon is
-  36 grid units in from the right edge at both sizes. (The table is
-  C4-122's; the XP bar's rows moved in C4-123, below.)
-- vcod did not set `wideScreen` before C4-123, so the HUD drew `xpbar`'s
-  640-unit set at every aspect: 1440 of 1920 at 16:9, 2133 of 3840 under
-  `vc_windowAspect 1` at 3840x1600. VERIFIED (the gate's dump before
-  the change). The menus now read it off the frame's screen
+  at that size, at 1920x1080 1.7's own; with it 0 every box is 1.7's
+  fullscreen one. The board's middle is 1920.0. The weapon info's frag
+  icon is 36 grid units in from the right edge at both sizes. (The XP
+  bar's rows are the `wideScreen` ones below.)
+- Without `wideScreen` set the HUD draws `xpbar`'s 640-unit set at
+  every aspect: 1440 of 1920 at 16:9, 2133 of 3840 under
+  `vc_windowAspect 1` at 3840x1600. VERIFIED (the gate's dump with it
+  unset). The menus read it off the frame's screen
   (`camera::Cod4Screen::wide_screen`, by the picked aspect as
   `R_StoreWindowSettings` does), which moves `vc_windowAspect 0` toward
   1.7: at 1920x1080 the backing is 0..1921.5 and the ticks are the `ws`
@@ -694,8 +692,8 @@ How 1.7 turns `r_aspectRatio` and the window into the view's fov and the
   strip. The SUBLEFT backdrops of the option and class menus (`-120 0
   880 480`, `-107 0 854 480`, align `0 0`) are menus, not HUD, and keep
   the 4:3 column's frame.
-- The XP bar's boxes after C4-123 (`HUD_RECTS_DUMP`, x0..x1 in pixels).
-  VERIFIED (the gate's dump):
+- The XP bar's boxes with `wideScreen` (`HUD_RECTS_DUMP`, x0..x1 in
+  pixels). VERIFIED (the gate's dump):
 
   | piece | 3840x1600 full, 1.7 | 3840x1600 windowed, 1.7 | 3840x1600 `vc_windowAspect 1` | 1920x1080 either |
   |---|---|---|---|---|

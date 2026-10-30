@@ -583,7 +583,7 @@ server holds the float itself.
 ## 14. Open
 
 - The rest of pmove and the trace kernels in the kept model, which the
-  gaps above point at (design NEEDS-M6): `PM_StepSlideMove` at 0x805e930
+  gaps above point at: `PM_StepSlideMove` at 0x805e930
   and the `PM_SlideMove` it calls at 0x805e030 (both INFERRED, section 1)
   are the next to read.
 - Captures for the sprint, the ladder, a prone body and the sighted
@@ -743,12 +743,15 @@ eye, the ground and the breath, is exact on all 789. The gate's
   all 789 rows. VERIFIED (the gate). Its angles go out `(int)`, then through the
   writer's half-short rounding (section 8): the walk's body yaw and the
   idle teammate's match retail on all 789 rows (cod4-player-anims.md 8).
-- The touch pass (`ClientImpacts`, the triggers) after the move. The weapon half and the shots are
+- `ClientImpacts` after the move (the pmove touch list's callbacks). The
+  triggers' touch pass runs, at the head of `G_RunFrame`
+  (`Cod4Level::touch_triggers`). The weapon half and the shots are
   cod4-combat.md's.
 - A free spectator (`scr_game_spectatetype` 2) flies on ours (`cod4_probe
   --script fly` against `vcod-server --set scr_game_spectatetype=2`
-  crossed 700 units of mp_crash), but no gate compares it with the fly
-  capture (section 13) yet.
+  crossed 700 units of mp_crash). No server gate compares it with the
+  fly capture; the moves A/B (section 13) replays that capture through
+  pmove alone.
 
 ## 16. The weapon half
 

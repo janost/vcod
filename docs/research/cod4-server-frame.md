@@ -3,18 +3,17 @@
 The order `cod4_lnxded` 1.7 runs a server frame in: what runs ahead of the
 game frames, what follows each one, when a client's cmds are thought, where
 zombies are freed and sent, where the snapshot archive runs, and the order of
-a frame's messages. It answers M1 and M2 of the CoD4 server design. The
-engine follows it through `GameModule::HEAD` and `GameModule::POST_EACH_FRAME`
-(`crates/server/src/engine/game.rs`).
+a frame's messages. vcod's engine follows it through `GameModule::HEAD`
+and `GameModule::POST_EACH_FRAME` (`crates/server/src/engine/game.rs`).
 
 ## Sources
 
 - `cod4_lnxded`, md5 `bf8448740b3f4cb74c2254f01af14cdd`, the binary of
   `cod4-handshake.md`. Stripped: every address below was found from a string
-  xref or a call site, then read in `objdump -d` and Ghidra (`DecompAt.java`
-  on a `-noanalysis` import). Function names are the Q3 lineage's. A claim
+  xref or a call site, then read in `objdump -d`. Function names are the
+  Q3 lineage's. A claim
   labelled INFERRED that names no 1.7 address is not yet confirmed on 1.7.
-- Three live runs, 2026-10-24, on loopback `mp_crash` `war` inside
+- Three live runs on loopback `mp_crash` `war` inside
   `unshare -rnm` (`cod4-handshake.md` 7), `sv_maxclients 8`, `developer 0`.
   `cod4_probe` joined as a spectator in the team menu and logged every
   datagram. An `AF_PACKET` socket on `lo` logged every datagram the server
@@ -154,7 +153,7 @@ whatever its state. INFERRED (the two passes). Live:
 - A zombie at slot 0 and a probe at slot 1: the zombie's message went first
   in all 7 of its frames. VERIFIED live.
 - The gamestate's fragments went out 347 to 353 ms apart on loopback.
-  VERIFIED live (M7's question).
+  VERIFIED live.
 
 The archive is the tail of `SV_SendClientMessages`: when `sv.state`
 (0x13e77f80) is 2 it copies the frame's snapshot into the archive ring.
@@ -194,7 +193,7 @@ seen from the wire.
 
 ## 7. What vcod's engine does with it
 
-`Cod4Game` sets (S-C4-1 adds the module):
+`Cod4Game` sets:
 
 | Const | Value | Rests on |
 |---|---|---|
@@ -223,7 +222,7 @@ per second` 0x82317a8) through the int registrar 0x81a2596 with default
 no latch. A query prints `"sv_fps" is: "30^7" default: "20^7"` and
 `Domain is any integer from 10 to 1000`; `sv_fps 5` and `sv_fps 2000`
 print `'5' is not a valid value for dvar 'sv_fps'` with the domain and
-leave the value as it was. VERIFIED live (rcon, 2026-10-27).
+leave the value as it was. VERIFIED live (rcon).
 
 `SV_FrameInternal` reads it on every call (0x81770c4, section 1 step 3).
 INFERRED. A change takes the next frame: an rcon `sv_fps 40` on a server
@@ -358,10 +357,9 @@ at 33400 and 33425, then 33575) and 198 at 30. VERIFIED live (the
 fragment sizes and times). vcod's was 755 bytes, 158 ms, so 200 at 40.
 Field by field, against the capture's first snapshot (VERIFIED live):
 
-- The team menu's spectator reads `moveSpeedScaleMultiplier` 1;
+- The team menu's spectator reads `moveSpeedScaleMultiplier` 1:
   `ClientEndFrame` copies the session's into the playerstate for every
-  session, and vcod wrote it only for a
-  player. vcod now writes it at the end frame's head.
+  session, not only a player's. vcod writes it at the end frame's head.
 - The connect's `v ui_3dwaypointtext "1"` and `v ui_deathicontext "1"`
   (`_menus.gsc`'s `onPlayerConnect`, on `connecting` after the callback's
   `waittillframeend`) went out ahead of the gamestate, whose command
@@ -383,12 +381,11 @@ Open: the off-LAN snapshot rate above 20.
 
 ## 9. Slow ticks
 
-The C4-104 soak (`cod4-map-sweep.md`, "The soak") saw three vcod-server
-ticks of 101 to 125 ms over 105 map and gametype pairs. This section is
-vcod's own tick, measured; retail has no counterpart in it. Every number
-below is VERIFIED (the logs of the runs named), on a many-core machine shared
-with other jobs, each run pinned to cores 0-7 (`taskset`) under a
-memory cap.
+A soak (`cod4-map-sweep.md`, "The soak") saw three vcod-server ticks of
+101 to 125 ms over 105 map and gametype pairs. This section is vcod's own
+tick, measured; retail has no counterpart. Every number below is VERIFIED
+(the logs of the runs named), on a many-core machine shared with other
+jobs, each run pinned to cores 0-7 (`taskset`) under a memory cap.
 
 ### The instruments
 
@@ -480,17 +477,17 @@ lavapipe. Four soak runs (`tools/cod4_soak.sh`):
   (`memory.events`, `cpu.stat`) in any of them.
 
 So the soak's stalls are the harness: a dedicated vcod-server shares its
-address space with no client and no software renderer. The three
-C4-104 counted (mp_citystreets `war` 73 s and `sd` 6 s, mp_shipment `war`
-10 s) were not reproduced; two came 6 and 10 s into a level, where its
+address space with no client and no software renderer. The first soak's
+three (mp_citystreets `war` 73 s and `sd` 6 s, mp_shipment `war` 10 s)
+were not reproduced; two came 6 and 10 s into a level, where its
 client joins, and fit this. The one 73 s in is not explained (INFERRED
 that it is the same: the client's first draw of something lavapipe had
 not compiled).
 
-The soak's table now counts the stalls past 100 ms on a CPU apart
-(`server stalls, on CPU`): a stall there is the server's own work.
+The soak's table counts the stalls past 100 ms on a CPU apart (`server
+stalls, on CPU`): a stall there is the server's own work.
 
-### Long runs, past 40 ms (2026-10-28)
+### Long runs, past 40 ms
 
 Server alone, the same core pinning, every tick past 40 ms logged
 (`SPIKE_MS=40`, `VCOD_TICK_PROFILE_MS=40`); `bot_match`'s first tick
@@ -508,16 +505,16 @@ of a level, which waits on the graph it asks for, is left out. VERIFIED
 - The round restart was `fast_restart`'s `console` (67 to 83 ms) plus the
   frames it owed. Its phases put 57 to 65 ms in reopening `main/`'s iwds
   for the scripts' file reads (24243 files indexed), 6 to 10 ms in the
-  scripts' `G_InitGame`. The level's zones now keep the opened set
-  (`Cod4Zones::iwds`), and the same 4000 ticks of mp_shipment and
-  mp_crash `sd` restart in 32 to 39 ms, with the same kills, hits and
+  scripts' `G_InitGame`. The level's zones keep the opened set
+  (`Cod4Zones::iwds`): the same 4000 ticks of mp_shipment and mp_crash
+  `sd` then restart in 32 to 39 ms, with the same kills, hits and
   rounds.
 - So 73 s into a `war` level the server alone does nothing past 40 ms:
-  the C4-104 soak's 73 s tick stays unreproduced, and this section's
+  the first soak's 73 s tick stays unreproduced, and this section's
   harness reading (the client's draws in the same process) is the one
   left standing. INFERRED.
 
-## 10. Full servers, every game (2026-10-29)
+## 10. Full servers, every game
 
 Section 9's runs had 8 to 12 bots. This one fills the server: 24 bots on
 each game's stock map, and 24 and 32 on two CoD4 maps, `war`. vcod's own
@@ -569,14 +566,14 @@ mp_crash are a level's first scripted frames (`frame/scripts`, tick 60).
   and `PlayerState::from_wire` found each of its 120-odd fields by name in
   the 141-entry `PLAYER_STATE` table, formatting `origin[0]` and its kin
   as strings: about 5 ms of `frame` at 24 to 32 bots. The field words are
-  now constants looked up at compile time (`crates/cod4/src/pmove/wire.rs`,
+  constants looked up at compile time (`crates/cod4/src/pmove/wire.rs`,
   `ix!`); `frame` fell from 5 to 8 ms a tick to about 3. VERIFIED.
 - CoD2: `Player_UpdateLookAtEntity` (Mac 0x1cd1d4, cod2-combat.md 9.2)
   traces 15000 units along every playing client's view each end frame.
   The common collision world's BVH walk cut nodes and prims by the
   sweep's axis-aligned box, which for a long diagonal ray takes in most
   of the map: 70% of CoD2's tick, most of it in static model triangles.
-  A sweep longer than 256 units now also drops a model triangle, a
+  A sweep longer than 256 units also drops a model triangle, a
   terrain partition, or a node holding only those, that its segment
   passes clear of (a slab test on the box grown by the swept shape, a
   unit, a hundredth of the box for a model triangle's barycentric slack
@@ -594,7 +591,7 @@ mp_crash are a level's first scripted frames (`frame/scripts`, tick 60).
   lines (`bots/sense`, p99 10.5 to 3.4 ms) and UO's `frame` (3.1 to 1.6)
   with it. VERIFIED.
 - The bots' wall feelers (`nav::wall_ahead`, eight box traces a bot) ran
-  on every tick, but only a wander heading reads them. They now run on
+  on every tick, but only a wander heading reads them. They run on
   the ticks `Bot::reads_walls` names (those `Bot::reads_drops` names, a
   bipod down, a body at its cover spot), as the drop probe already did:
   CoD4's `bots/sense` at 32 bots fell from 4.2 to 1.2 ms. An instrumented
@@ -617,7 +614,7 @@ over ticks or sharing them between bots changes what the bots do, which
 the digests forbid; the follower and the probe's shape belong to the CoD4
 bot movement work. The tick stays under the 50 ms frame at p99. VERIFIED.
 
-## 11. 32 bots, the same decisions (2026-10-29)
+## 11. 32 bots, the same decisions
 
 Section 10 left CoD4's 32-bot tick in the bots' drop probes, pmove and
 route planning. This pass cuts what those cost without changing a bot's
@@ -655,12 +652,12 @@ both pmoves.
 
 - The BSP walk (`CM_TraceThroughTree`, `crates/common/src/clipmap/trace.rs`)
   split a sweep down to every leaf its box crosses, and most leaves hold
-  nothing that box meets. Each node now carries the box round its
+  nothing that box meets. Each node carries the box round its
   leaves' brush boxes and AABB tree roots (`ClipMap::node_reach`, built on
   the first sweep); a node the sweep's box (grown by the trace's box and a
   unit) misses is passed over. Every test under such a node is a
   brush-box cull, a brush or a `CM_CullBox` that fails on that axis, so
-  the result is the same. The brush test (`CM_TraceThroughBrush`) now
+  the result is the same. The brush test (`CM_TraceThroughBrush`)
   returns first where both ends of the sweep stand more than a unit
   outside one axial side, which its axial loop does too. Both are in the
   shared kernel: CoD2's and CoD4's traces.
@@ -679,7 +676,7 @@ both pmoves.
   0.13 ms.
 - `hunt::vantage` gathered its rings in a `HashSet` and then sorted them;
   a flag per node and the rings in the order reached do the same work.
-  The sort is stable, so a tie in distance now goes to the node reached
+  The sort is stable, so a tie in distance goes to the node reached
   first where the set's random order picked one before. INFERRED (no
   digest moved).
 - The gsc scheduler's `notify` sorted every thread before it looked for

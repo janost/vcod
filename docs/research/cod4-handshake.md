@@ -1,10 +1,10 @@
 # Call of Duty 4 1.7: the handshake against the retail Linux server
 
-What a CoD4 1.7 client sees from `cod4_lnxded` between `getinfo` and the end of the gamestate, measured live on loopback (2026-10-24). It extends an earlier CoD4 survey written before any retail run.
+What a CoD4 1.7 client sees from `cod4_lnxded` between `getinfo` and the end of the gamestate, measured live on loopback, and what vcod-server sends in its place.
 
 ## Sources
 
-- `cod4_lnxded` from the 1.7 Linux server package: ELF i386, stripped, built `Jun 28 2008` (string at 0x8219c14), banner `CoD4 MP 1.7 build linux-i386 Jun 28 2008` on its console. Addresses without a module name are in it. A claim labelled INFERRED that names no 1.7 address is not yet confirmed on 1.7. The package also holds `cod4_lnxded-bin`, a different build dated `May 20 2008`; I ran only `cod4_lnxded`.
+- `cod4_lnxded` from the 1.7 Linux server package: ELF i386, stripped, built `Jun 28 2008` (string at 0x8219c14), banner `CoD4 MP 1.7 build linux-i386 Jun 28 2008` on its console. Addresses without a module name are in it. A claim labelled INFERRED that names no 1.7 address is not yet confirmed on 1.7. The package also holds `cod4_lnxded-bin`, a different build dated `May 20 2008`; only `cod4_lnxded` was run.
 - `iw3mp.exe` 1.7, for the client half (image base 0x400000).
 - Two captures, written by `tools/cod4_handshake_probe.py` and read by `cargo run -p vcod-common --example cod4_capture`: `crates/cod4/tests/fixtures/net/handshake-1.7.txt` (the full walk, a refused connect included) and `handshake-1.7-cmds.txt` (an earlier run whose gamestate carries two server commands; cut at 3.3 s). Each line is `<ms> <c2s|s2c|auth> <peer> <hex>`, every datagram raw. Facts read from them are VERIFIED live.
 
@@ -15,13 +15,13 @@ What a CoD4 1.7 client sees from `cod4_lnxded` between `getinfo` and the end of 
 - Command line: `+set fs_basepath <tree> +set fs_homepath <home> +set net_ip 127.0.0.1 +set net_port 28960 +set dedicated 1 +set sv_punkbuster 0 +set logfile 2 +set sv_maxclients 8 +map mp_crash`. It loads `code_post_gfx_mp`, `localized_code_post_gfx_mp`, `ui_mp`, `common_mp`, `localized_common_mp`, unloads `ui_mp` and loads `mp_crash`; the map load took 2-5 s here. VERIFIED (its console).
 - PunkBuster: without its files the server logs `Error: Unable to initialize punkbuster.  Punkbuster is disabled` and carries on. VERIFIED.
 - `developer 1` refuses every connect: `SV_DirectConnect` logs `Clients can't connect if the server is in developer mode` (0x8217ed0) and answers `error\nGAME_INVALIDSERVER` (0x8217f4b). VERIFIED live. Run at `developer 0`.
-- Isolation. `+set dedicated 1` is refused (`dedicated is read only.`; section 15, "The server's own address"), so the server runs at `dedicated 2` and heartbeats: the server resolves `cod4master.activision.com` (0x822325c) and sends `heartbeat COD-4\n` (`COD-4` at 0x8232326) to port 20810. VERIFIED live. Inside a bare `unshare -rn` the lookup still went through systemd-resolved's socket and resolved the real address before the send failed with `Network is unreachable`. VERIFIED live. The recipe I used is `unshare -rnm`, a bind mount of a hosts file over `/etc/hosts` mapping the master to 127.0.0.2, and a tmpfs over `/run/systemd/resolve`. The heartbeat then lands on 127.0.0.2:20810, where the probe logs it (`auth` lines), and nothing leaves the namespace. VERIFIED live.
+- Isolation. `+set dedicated 1` is refused (`dedicated is read only.`; section 15, "The server's own address"), so the server runs at `dedicated 2` and heartbeats: the server resolves `cod4master.activision.com` (0x822325c) and sends `heartbeat COD-4\n` (`COD-4` at 0x8232326) to port 20810. VERIFIED live. Inside a bare `unshare -rn` the lookup still went through systemd-resolved's socket and resolved the real address before the send failed with `Network is unreachable`. VERIFIED live. The recipe (section 7) is `unshare -rnm`, a bind mount of a hosts file over `/etc/hosts` mapping the master to 127.0.0.2, and a tmpfs over `/run/systemd/resolve`. The heartbeat then lands on 127.0.0.2:20810, where the probe logs it (`auth` lines), and nothing leaves the namespace. VERIFIED live.
 
 ## 2. `getinfo` and `getstatus`
 
 - `getinfo xxx` answers `infoResponse\n\challenge\xxx\protocol\6\hostname\CoD4Host\mapname\mp_crash\sv_maxclients\8\gametype\war\pure\1\kc\1\hw\1\mod\0\voice\0\pb\0` (142 bytes with the `FF` header). VERIFIED live. CoD2 1.3's key set and order (`cod2-protocol.md` 9) with `protocol` 6.
 - `getstatus xxx` answers `statusResponse\n` and the serverinfo with `challenge\xxx`, `pswrd\0` and `mod\0` appended, then an empty player list (372 bytes). VERIFIED live. It carries `gamename\Call of Duty 4`, `protocol\6` and `shortversion\1.7`. VERIFIED live.
-- **Protocol 6, shortversion 1.7.** A `connect` whose userinfo says `protocol\7` gets `error\nEXE_SERVER_IS_DIFFERENT_VER\x151.7\n` (string at 0x8230d4a); `protocol\6` gets `connectResponse`. VERIFIED live. This settles the survey's 1.6-or-1.7 doubt: the server reports 1.7.
+- **Protocol 6, shortversion 1.7.** A `connect` whose userinfo says `protocol\7` gets `error\nEXE_SERVER_IS_DIFFERENT_VER\x151.7\n` (string at 0x8230d4a); `protocol\6` gets `connectResponse`. VERIFIED live. The server is 1.7.
 - The default gametype is `war` and `sv_maxRate` 5000. VERIFIED live.
 
 ## 3. The handshake
@@ -51,17 +51,17 @@ The facts behind it:
 
 - `getchallenge 0 "<md5 hex>"` is the client's form (`getchallenge 0 "%s"` in `iw3mp.exe` at 0x6d09c4). VERIFIED. The server answered at once, with no authorize round trip, for a loopback client. VERIFIED live. The 32 hex digits became the client's GUID (`Going from CS_FREE to CS_CONNECTED for  (num 0 guid "<the same hex>")` on the console). VERIFIED live. The authorize request strings are present (`getIpAuthorize %i %i.%i.%i.%i "%s" %i` at 0x823070c); no `getIpAuthorize` reached 127.0.0.2:20800 in either run. VERIFIED live. That a loopback client skips the authorize step is INFERRED from that silence.
 - The `<md5 hex>` is `CL_BuildMd5StrFromCDKey` (iw3mp.exe 0x4699a0): MD5 of the lower-cased key from Activision's own initial state, the hash CoD2 uses on the upper-cased key. VERIFIED. The key itself goes as `getKeyAuthorize 0 <key> PB <hash>` to `cod4master.activision.com` port 20800 (`CL_RequestAuthorization` 0x469b20). VERIFIED (the strings and the port). It goes to a server off the LAN only, before each challenge, and the client waits for nothing (`CL_CheckForResend` 0x46b1d7). INFERRED. cod11-server-handshake.md, "CD key authorization (the clients)", has the five clients side by side. Without a key vcod keeps sending md5("vcodprobe"), which a server checking no key accepts.
-- `connect "<userinfo>"` is plain text after the `FF` bytes, as on CoD2: the retail server read my uncompressed packet. VERIFIED live. The userinfo I sent is the server's own test-client string (`connect "\cg_predictItems\1\cl_punkbuster\0\cl_anonymous\0\color\4\head\default\model\multi\snaps\20\rate\5000\name\bot%d\protocol\%d\qport\%d"`, present in both binaries) with `rate` 25000, `name`, `protocol`, `challenge` and `qport` set. VERIFIED. `connectResponse ` ends in a space: the format is `connectResponse %s` (0x8231410) with `fs_game` empty. VERIFIED.
+- `connect "<userinfo>"` is plain text after the `FF` bytes, as on CoD2: the retail server read an uncompressed packet. VERIFIED live. The probe's userinfo is the server's own test-client string (`connect "\cg_predictItems\1\cl_punkbuster\0\cl_anonymous\0\color\4\head\default\model\multi\snaps\20\rate\5000\name\bot%d\protocol\%d\qport\%d"`, present in both binaries) with `rate` 25000, `name`, `protocol`, `challenge` and `qport` set. VERIFIED. `connectResponse ` ends in a space: the format is `connectResponse %s` (0x8231410) with `fs_game` empty. VERIFIED.
 - The stats phase. After `connectResponse` the client sends seven OOB packets `FF FF FF FF "stats\0" [i16 qport][u8 index][data]`, 1240 bytes of data for 0..5 and 752 for 6 (0x2000 in all), and the server answers each `statResponse <mask>` (0x823114c), the mask the indices still missing: 126 after index 0, down to 0 after 6. VERIFIED live, all-zero stats accepted (the stock scripts then kick the client; the block's layout and a fresh profile's contents are in `cod4-netfields.md` 10). The console logs `Received packet %i of stats data` (0x823079c) per packet. VERIFIED. The 1.7 server accepted the packet layout and the 1240-byte split, which VERIFIES them on 1.7.
-- The gamestate goes out only once all seven stats packets are in, and only on a netchan message from the client: an empty message (the plain 9-byte header, nothing after it) at 63 ms brought the first fragment 6 ms later. VERIFIED live. The `requeststats` reply (0x82310a8) to a netchan message that comes before any stats is INFERRED from `SV_SendClientGameState`; I did not trigger it.
+- The gamestate goes out only once all seven stats packets are in, and only on a netchan message from the client: an empty message (the plain 9-byte header, nothing after it) at 63 ms brought the first fragment 6 ms later. VERIFIED live. The `requeststats` reply (0x82310a8) to a netchan message that comes before any stats is INFERRED from `SV_SendClientGameState` (not triggered here).
 - A later empty message whose `messageAcknowledge` passes the gamestate's sequence, with the stale `serverId` 0, makes the server send the whole gamestate again. VERIFIED live (an earlier run acked each new sequence and got the gamestate every 3.15 s, six times in 20 s). The probe holds its ack at the gamestate's sequence.
-- Rate. The fragments came 350 ms apart after the first two, on loopback, with my `rate` 25000 and the default `sv_maxRate` 5000. VERIFIED live. CoD1 skips rate pacing for LAN addresses; 1.7 paced these fragments. A loopback client's whole messages still go a frame apart whatever their size: the walker's 359-byte spawn frame and its next snapshot went out 50 ms apart at 5000. VERIFIED live (cod4-pmove.md 15). That `SV_SendMessageToClient`'s LAN arm gives that spacing is INFERRED. Why 350 ms and not the 271 ms Q3's rate formula gives for 1310 bytes at 5000 is not settled. Off the LAN the second fragment waits a second (section 15).
+- Rate. The fragments came 350 ms apart after the first two, on loopback, with the probe's `rate` 25000 and the default `sv_maxRate` 5000. VERIFIED live. CoD1 skips rate pacing for LAN addresses; 1.7 paced these fragments. A loopback client's whole messages still go a frame apart whatever their size: the walker's 359-byte spawn frame and its next snapshot went out 50 ms apart at 5000. VERIFIED live (cod4-pmove.md 15). That `SV_SendMessageToClient`'s LAN arm gives that spacing is INFERRED. Why 350 ms and not the 271 ms Q3's rate formula gives for 1310 bytes at 5000 is not settled. Off the LAN the second fragment waits a second (section 15).
 - After the gamestate, with the client stuck on the old `serverId`, the server sends a 9-byte datagram (sequence, `reliableAcknowledge`, one block byte that decodes to `svc_EOF`) about every 50 ms. VERIFIED live. In one run (`handshake-1.7-cmds.txt`) one such message went out as sequence 1 during the stats phase, and the gamestate followed as sequence 2. VERIFIED live.
 
 ## 4. Netchan, scramble and Huffman
 
-- The netchan is CoD2's. Server to client: a 4-byte sequence, bit 31 marking a fragment; a fragment carries a 4-byte start and a 2-byte length; fragments are 1300 bytes, the last shorter. VERIFIED live: vcod's `Netchan` with `NetchanParams::COD2` reassembles the gamestate (`handshake-1.7.txt`: 9 x 1300 + 1240 = 12940 bytes). Client to server: 4-byte sequence, 2-byte qport, then the 9-byte plain header (`serverId` byte, `messageAcknowledge`, `reliableAcknowledge`). VERIFIED live (the server took my 15-byte packets for the client on that qport).
-- The scramble is CoD2's on the server's side: the message's first 4 bytes (`reliableAcknowledge`) plain, the rest XORed from a key seeded `challenge ^ sequence` (low byte) and walking the last client command, here empty. VERIFIED live: `Netchan::decode` with an empty key string gives a block that Huffman-decodes cleanly. The walk over a non-empty command string and the client-to-server key (`challenge ^ serverId ^ messageAcknowledge`, survey section 3) are not exercised: no client command was sent and every client message was empty.
+- The netchan is CoD2's. Server to client: a 4-byte sequence, bit 31 marking a fragment; a fragment carries a 4-byte start and a 2-byte length; fragments are 1300 bytes, the last shorter. VERIFIED live: vcod's `Netchan` with `NetchanParams::COD2` reassembles the gamestate (`handshake-1.7.txt`: 9 x 1300 + 1240 = 12940 bytes). Client to server: 4-byte sequence, 2-byte qport, then the 9-byte plain header (`serverId` byte, `messageAcknowledge`, `reliableAcknowledge`). VERIFIED live (the server took the probe's 15-byte packets for the client on that qport).
+- The scramble is CoD2's on the server's side: the message's first 4 bytes (`reliableAcknowledge`) plain, the rest XORed from a key seeded `challenge ^ sequence` (low byte) and walking the last client command, here empty. VERIFIED live: `Netchan::decode` with an empty key string gives a block that Huffman-decodes cleanly. The walk over a non-empty command string and the client-to-server key (`challenge ^ serverId ^ messageAcknowledge`) are not exercised in this capture, whose client messages were all empty (both are since, section 6).
 - **The Huffman code is not CoD2's.** The weight table in `cod4_lnxded` is 256 little-endian words at 0x82287a0 (file offset 0x1e07a0), starting 274054, 68777, 40460; the same 1 KB sits in `iw3mp.exe` at 0x6bbc10. VERIFIED. vcod's CoD1/CoD2 `MSG_HDATA` (250315, 41193, ...) appears in neither binary. VERIFIED.
 - The tree is built differently too: CoD1 and CoD2 feed the weights through the adaptive `Huff_addRef`; 1.7's is a static tree. `cod4_lnxded` never sorts the weights: the function at 0x812af70, called by the init that prints `Huffman Took %d Milliseconds` (0x8130a5a, string 0x82246ed), stores all 513 nodes of the finished tree as constants, each 20 bytes `{first, second, parent, weight, symbol}`: the NYT leaf (symbol 256, weight 0) at state +0x414, leaf `s` at +0x428 + 20 `s`, the internal nodes (symbol 257) after them, the root at +0x2c14 behind the state's word at +8. VERIFIED. `tools/re/cod4_huffman.py` replays those stores and prints every symbol's code; the leaf weights are the table's, and `net::huffman::CODES` is its output, a step to a node's first link reading 0. VERIFIED (every capture decodes and re-encodes through it, cod4-netfields.md 7). The NYT's 11-bit code `10111101100` ends a decode. The result is a Huffman code for the weights plus the NYT (`codes_are_a_huffman_code_for_the_weights`). VERIFIED. Tied weights (155 and 205 at 3889, 228 and 231 at 4683) take the codes the server's tree gives them; a build from the weights would have to reproduce `iw3mp.exe`'s sort to match (below).
 - `iw3mp.exe` builds its tree at run time instead (0x504ef0): the 256 leaves in symbol order, `qsort` (0x671320) by weight alone (the comparator at 0x504ed0 subtracts the two weights), the NYT (made at 0x504e60) merged with the first, then each round a `qsort` of what is left and the first two merged, the lighter first. VERIFIED (the constants and calls); that the unstable sort lands on the server's tree is INFERRED: a stock 1.7 client plays on the Linux server, and every server message in the captures decodes and re-encodes through the server's codes (cod4-netfields.md 7). VERIFIED live.
@@ -115,7 +115,7 @@ byte  3                                ; svc_baseline, at decompressed byte 1171
 | 2267..2273 | `headicon_american`, `faction_128_arab`, `talkingicon`, three empty | head icons 2267 |
 | 2314 | `ffffffffffffffffffffffffffff3000` | items 2314 |
 
-Every index the capture shows sits inside its kind's range, and the highest is 2314. VERIFIED live. The range bounds come from the indexers in `cod4_lnxded`: `G_FindConfigstringIndex` (0x80cae70, its overflow string 0x82200d0) is called with first slot and count 1342/256 for sound aliases (0x80cb114), 1598/100 effects (0x80cb17f), 1698/256 effect tags (0x80bdfa5), 1954/16 shellshocks (0x80cb14a), 2002/256 materials (0x80cb202), 309/512 localized strings (0x80cb266) and 2282/32 tags (0x80cb1b2); a model is its index plus 830 (0x80cac45) of 512 (0x80cad3d, `G_ModelIndex: overflow` 0x821ff06); menus scan 1970 up to 2002 (0x80bcc6c), head icons 2267 up to 2282 (0x80bc62e, 0x80bc664), status icons 2259..2266 unrolled (0x80bc95d..0x80bca91). VERIFIED (the constants). `SV_SetConfigstring` (0x8173e54) refuses an index above 2441 (the compare at 0x8173e60, `SV_SetConfigstring: bad index %i` at 0x82320d4) and `SV_SendClientGameState` (0x816e10a) loops to 2442, so `MAX_CONFIGSTRINGS` is 2442. VERIFIED. The The mirrored dvars (flag 0x100) go out from 20, 128 of them (0x8175017..0x817502e, again at 0x8176f7b), each value 128 past its name (`SV_SetConfigValueForKey` 0x81741c8, the value's slot at 0x8174378; its overflow `Overflow at config string start value of %i` 0x8232054), so names 20..147 and values 148..275. `callvote` writes its time (`%i %i`), string, yes and no to 13..16 (0x80ae074..0x80ae0d2), and the worldspawn's `message` goes to 3 and `g_motd`'s value (dvar named at 0x8219cf9) to 10 (0x80c82a5, 0x80c82bd). VERIFIED (the constants). The hint strings: below.
+Every index the capture shows sits inside its kind's range, and the highest is 2314. VERIFIED live. The range bounds come from the indexers in `cod4_lnxded`: `G_FindConfigstringIndex` (0x80cae70, its overflow string 0x82200d0) is called with first slot and count 1342/256 for sound aliases (0x80cb114), 1598/100 effects (0x80cb17f), 1698/256 effect tags (0x80bdfa5), 1954/16 shellshocks (0x80cb14a), 2002/256 materials (0x80cb202), 309/512 localized strings (0x80cb266) and 2282/32 tags (0x80cb1b2); a model is its index plus 830 (0x80cac45) of 512 (0x80cad3d, `G_ModelIndex: overflow` 0x821ff06); menus scan 1970 up to 2002 (0x80bcc6c), head icons 2267 up to 2282 (0x80bc62e, 0x80bc664), status icons 2259..2266 unrolled (0x80bc95d..0x80bca91). VERIFIED (the constants). `SV_SetConfigstring` (0x8173e54) refuses an index above 2441 (the compare at 0x8173e60, `SV_SetConfigstring: bad index %i` at 0x82320d4) and `SV_SendClientGameState` (0x816e10a) loops to 2442, so `MAX_CONFIGSTRINGS` is 2442. VERIFIED. The mirrored dvars (flag 0x100) go out from 20, 128 of them (0x8175017..0x817502e, again at 0x8176f7b), each value 128 past its name (`SV_SetConfigValueForKey` 0x81741c8, the value's slot at 0x8174378; its overflow `Overflow at config string start value of %i` 0x8232054), so names 20..147 and values 148..275. `callvote` writes its time (`%i %i`), string, yes and no to 13..16 (0x80ae074..0x80ae0d2), and the worldspawn's `message` goes to 3 and `g_motd`'s value (dvar named at 0x8219cf9) to 10 (0x80c82a5, 0x80c82bd). VERIFIED (the constants). The hint strings: below.
 
 ### Configstring defaults
 
@@ -128,13 +128,16 @@ Every index the capture shows sits inside its kind's range, and the highest is 2
 
 ## 6. Not decoded, and what is still open
 
-- Decoded since: the baselines, `svc_EOF`, `clientNum` and `checksumFeed` (`cod4-netfields.md` 4).
-- Answered since: `crates/cod4/examples/cod4_probe.rs` sends `sv_serverid` back in keyed move messages and captures snapshots (`cod4-netfields.md` 5, 6).
-- The client-to-server scramble over non-empty server commands is exercised since (`cod4-netfields.md` 5), and the server-to-client key over a non-empty client command too (`cod4-netfields.md` 8).
-- `constantConfigStrings`: read from both binaries (section 5, "Configstring defaults").
-- The rate pacing on loopback (section 3) and why the first two fragments go out together.
-- `requeststats` and the authorize round trip off the LAN: answered since, section 15.
+Closed since this capture:
+
+- The baselines, `svc_EOF`, `clientNum` and `checksumFeed` are decoded (`cod4-netfields.md` 4).
+- `crates/cod4/examples/cod4_probe.rs` sends `sv_serverid` back in keyed move messages and captures snapshots (`cod4-netfields.md` 5, 6).
+- Both scramble directions over non-empty commands are exercised (`cod4-netfields.md` 5, 8).
+- `constantConfigStrings` is read from both binaries (section 5, "Configstring defaults").
+- `requeststats` and the authorize round trip off the LAN: section 15.
 - The pure check: section 8.
+
+Still open: the rate pacing on loopback (section 3) and why the first two fragments go out together.
 
 ## 7. Recipe
 
@@ -163,7 +166,7 @@ cargo run -p vcod-common --example cod4_capture -- out.txt --strings
 - The command. `CL_SendPureChecksums` (iw3mp.exe 0x46a0f0) writes `"Va "` (0x6d06a4), appends `FS_ReferencedIwdPureChecksums`, then adds 13 and 15 to the first two bytes, so the reliable command reads `cp @ <sum> ... <key> `. VERIFIED (the two `add BYTE PTR` at 0x46a125 and 0x46a12a). The `@`, the `"%i "` numbers and the key (`checksumFeed` XOR every sum XOR their count) follow `FS_ReferencedIwdPureChecksums`, INFERRED; the server's check below VERIFIES the key's shape on 1.7.
 - The server. `cp` is the first row of the client command table at 0x826d398 (`"cp"` at 0x82314af, handler 0x817059c). The handler reads argument 1 and needs `@` (0x81705c4); it parses the rest with `strtol`, refuses a repeated sum (0x8170656), loads the server's own list from `FS_LoadedIwdPureChecksums` (0x817067e) and refuses a sum not in it (0x8170719), then XORs `checksumFeed` (0x13e77f94) with the sums and the count and compares the last argument (0x817074d). A pass sets `pureAuthentic` (client offset 0x804fc) to 1, a failure to 2. INFERRED (read off the handler). It reads no fastfile checksum: `sv_referencedFFCheckSums` serves only the client's own check. INFERRED (no FF read on that path).
 - No sum is needed. `cp @ <checksumFeed>` (the count 0) passes the same test. VERIFIED live: the kill capture's target sent only that and stayed in.
-- Without `cp`. `SV_UserMove` (0x81727b8) drops a client whose `pureAuthentic` is still 0 on a pure server with `EXE_CANNOTVALIDATEPURECLIENT` (0x8231470), past the `CS_PRIMED` arm; one at 2 goes with `EXE_UNPURECLIENTDETECTED` (0x823148d, the check at 0x8172a6d). INFERRED (read off the branches). The first drop is VERIFIED live: a probe started with `--no-cp` beside the pure one got `w "EXE_CANNOTVALIDATEPURECLIENT"` as its first server command after the gamestate, and the console printed `0:nocp EXE_CANNOTVALIDATEPURECLIENT`. Round 3's note that a pure server "holds the client out of the world and resends the gamestate" does not hold on 1.7.
+- Without `cp`. `SV_UserMove` (0x81727b8) drops a client whose `pureAuthentic` is still 0 on a pure server with `EXE_CANNOTVALIDATEPURECLIENT` (0x8231470), past the `CS_PRIMED` arm; one at 2 goes with `EXE_UNPURECLIENTDETECTED` (0x823148d, the check at 0x8172a6d). INFERRED (read off the branches). The first drop is VERIFIED live: a probe started with `--no-cp` beside the pure one got `w "EXE_CANNOTVALIDATEPURECLIENT"` as its first server command after the gamestate, and the console printed `0:nocp EXE_CANNOTVALIDATEPURECLIENT`. A pure server does not hold such a client out of the world and resend the gamestate: it drops it.
 - `net::pure` holds the checksum, the command (`pure_command` reads an install's `main/`) and the server's check (`verify_cp`). `cod4_probe` sends `cp` as reliable command 1 on the first gamestate (`--iwds <main>` for the real sums, the bare key without it).
 
 ## 9. What vcod-server's 1.7 server sends
@@ -215,10 +218,10 @@ build brought out these facts:
   (0x822b5d8), and the reason (`EXE_LEFTGAME`, 0x8231229, for
   `EXE_DISCONNECTED`). VERIFIED (the disassembly at 0x8170a12..0x8170a54
   and 0x8170b55..0x8170b82). The cgame's `e` reads only its first
-  argument (`CG_DeployServerCommand`, `iw3mp.exe` 0x44be40).
-  INFERRED. vcod's unquoted line, `%c %s^7 %s%s`,
-  left a kicked `[BOT] Major Lag` as `[BOT]` in the kill feed. VERIFIED
-  (the live test below before the fix). The lookup goes through the localize assets
+  argument (`CG_DeployServerCommand`, `iw3mp.exe` 0x44be40). INFERRED.
+  Trap: an unquoted line, `%c %s^7 %s%s`, leaves a kicked `[BOT] Major
+  Lag` as `[BOT]` in the kill feed. VERIFIED (the live test below, run
+  on the unquoted line). The lookup goes through the localize assets
   (`DB_FindXAssetHeader` type 0x16, 0x817f36f); the dedicated server's
   only localized zone is `localized_code_post_gfx_mp`, so vcod marks a
   reason that zone holds (`Cod4Server::code_string`). INFERRED (the
@@ -231,10 +234,10 @@ build brought out these facts:
   `Going to CS_ZOMBIE` line (0x81709cd, `SV_FreeClient`, so
   `ClientDisconnect` and `CodeCallback_PlayerDisconnect`) when its state
   is above `CS_ZOMBIE`; a zombie's ran at its drop. VERIFIED (the
-  disassembly; the `%s:reconnect. same qport` print is 0x8171e9d). vcod's
-  connect skipped it, so the old player stayed in `level.players` as a
-  stale entry beside the new one and the stock scripts erred on it every
-  frame (`cod4::disconnect_tests`).
+  disassembly; the `%s:reconnect. same qport` print is 0x8171e9d). vcod
+  does the same; skipping it leaves the old player in `level.players`
+  beside the new one, and the stock scripts err on it every frame
+  (`cod4::disconnect_tests`).
 - A loopback client's messages go out every frame and only a message's
   later fragments wait on the rate (section 3, cod4-pmove.md 15); a
   snapshot leaves out what `hide` hid and culls nothing by position
@@ -281,14 +284,13 @@ against the binary.
   to fall back to, so the client logs the reason and quits, as its
   `disconnect` does. Gates: `cod4_live_w_drops_with_its_reason`,
   `cod4_live_silence_interrupts_then_times_out` (the second with
-  `timeout` cut to 3 s). Before, the client read neither, and a server
-  stopped with Ctrl-C left it drawing the last snapshot.
+  `timeout` cut to 3 s).
 
 
 ## 11. Downloads
 
 Read off `cod4_lnxded`'s and `iw3mp.exe`'s disassembly and measured live
-(2026-10-25) with `cod4_probe --download` against retail serving a mod
+with `cod4_probe --download` against retail serving a mod
 (`+set fs_game mods/modwarfare`, `sv_pure 1`, `sv_allowDownload` 1 and 0).
 The raw captures hold the mod's bytes and stay out of the tree;
 `crates/cod4/tests/fixtures/net/download-1.7.txt` is the decoded message
@@ -379,8 +381,8 @@ list (block numbers, sizes and lengths, the commands, the refusals).
   (0xc5b188), then the size (0x14b8c30) and the flags (0xc5b6a8) as
   longs. VERIFIED (the code). Flags bit 2 (`test al,0x2` at 0x474308)
   sends `wwwdl bbl8r` (0x47432c) and `quit` (0x6d28e0) after a call at
-  0x5769e0, which ET's source names `Sys_OpenURL`. INFERRED (read off
-  the branch; the call's role from ET). Otherwise it logs `Server redirected
+  0x5769e0, the Q3 lineage's `Sys_OpenURL`. INFERRED (read off the
+  branch; the call's role from the lineage). Otherwise it logs `Server redirected
   download: %s`, sends `wwwdl ack`, sets the www download flag (0xc5b6a4) and
   starts the fetch into the OS path of the requested name under
   `fs_homepath` (0x474381..0x4743db); a fetch that does not start sends
@@ -475,8 +477,7 @@ list (block numbers, sizes and lengths, the commands, the refusals).
 
 ## 12. The server browser
 
-Read off `iw3mp.exe`'s disassembly and data (2026-10-25); addresses are
-in it. The function names are INFERRED; the facts
+Read off `iw3mp.exe`'s disassembly and data; addresses are in it. The function names are INFERRED; the facts
 are the 1.7 binary's. The live checks ran on loopback and in the
 namespace of section 7 only, against vcod-server, retail `cod4_lnxded`
 and a fake master on 127.0.0.1; no public master or server was
@@ -507,7 +508,7 @@ contacted.
   ping goes in the short at +0x2a and +0x30 is set to 1. The refresh's
   mark is +0x1b and the ping's send time +0x2c (0x470455); a new row's
   ping is -1 (0x47172b). VERIFIED (the code). What raises the byte at
-  +0x24, which the cache writer reads (12.5), I did not find.
+  +0x24, which the cache writer reads (12.5), is not found.
 
 ### 12.2 The wire
 
@@ -534,7 +535,7 @@ contacted.
   `masterServerName` (the same name, `Master server name for listing
   public inet games`), `masterPort` (20810), `authServerName` and
   `authPort` (20800) are registered at 0x4febc1..0x4fecbf, but the query
-  reads neither master dvar: I found no load of their pointers (0x1476f04,
+  reads neither master dvar: no load of their pointers (0x1476f04,
   0x1476ef4) outside the registrations. VERIFIED (the code).
 - The master's answer (`CL_ServersResponsePacket` 0x4714b0, matched as the
   18 bytes `getserversResponse`, 0x46bd96): from the first `\`, four
@@ -618,7 +619,7 @@ zone, `menu_dump`).
   name, 4 `clients`, 5 the game type's display name, 6 `voice`, 7 `pure`,
   8 `mod`, 9 `pb`, 10 the ping; ties by ping, then `gametype`, then host
   name; the direction negates. VERIFIED (the code). The starting column
-  and direction I did not find.
+  and direction are not found.
 - Feeder 2's columns (`UI_FeederItemText` 0x5483e0): 0 `X` with a
   password; 1 the `hw` icon, `server_hardware_unknown`, `_linux_dedicated`,
   `_win_dedicated`, `_mac_dedicated`, `_win_listen`, `_mac_listen` for 0,
@@ -675,14 +676,13 @@ zone, `menu_dump`).
   cache file, Internet through a fake master on loopback), and
   `cod4_browser_against_a_named_server` (`COD4_BROWSER_SERVER`, skipped
   without it).
-- Live (2026-10-25): retail `cod4_lnxded` bound to 0.0.0.0 in the
+- Live: retail `cod4_lnxded` bound to 0.0.0.0 in the
   namespace, with 10.9.9.1/24 on `lo` and a vcod probe joined, answered the
   Local broadcast to 10.9.9.255:28960; the row read `^2retail ^7lnxded`,
   Crash, `1 (8)`, Team Deathmatch, a 16 ms ping, `hw` 1, `pure` 1, `kc` 1,
   and the status listed the labelled keys, `ui_maxclients` 32 unlabelled,
-  and the probe as `0 0 24 vcodprobe`. VERIFIED live
-  (`tmp`-only script; the test above with `COD4_BROWSER_SERVER` and
-  `COD4_BROWSER_BROADCAST`).
+  and the probe as `0 0 24 vcodprobe`. VERIFIED live (the test above
+  with `COD4_BROWSER_SERVER` and `COD4_BROWSER_BROADCAST`).
 
 ### 12.5 `servercache.dat`
 
@@ -700,50 +700,36 @@ zone, `menu_dump`).
 
 ## 13. CoD4x servers
 
-Most public CoD4 servers run CoD4x, a rebuilt 1.7 server. I built
-CoD4x's server (`SYS_COMMONVERSION 21.2`, with the makefile's
-`COD4X18UPDATE` define) and ran it on mp_crash with the stock 1.7 `main/`
-and `zone/` inside `unshare -rnm`, with a hosts file sending
-`cod4master.activision.com` and `cod4update.cod4x.ovh` to 127.0.0.2 and a
-tmpfs over `/run/systemd/resolve` (section 7's recipe), and joined it
-with `cod4_probe` and `vcod --game cod4 --net-probe` on loopback
-(2026-10-25).
+Most public CoD4 servers run CoD4x, a rebuilt 1.7 server. One was run on
+mp_crash with the stock 1.7 `main/` and `zone/` inside `unshare -rnm`
+(section 7's recipe, its update host also mapped to 127.0.0.2) and
+joined with `cod4_probe` and `vcod --game cod4 --net-probe` on loopback.
+Everything below is what it sent on the wire.
 
 - Telling one apart. `getinfo` answers `protocol\6`, so 1.7's browser
-  lists it, beside `shortversion\x21` and `build\1`, where retail sends
+  lists it, beside `shortversion\x21` and `build\1`; retail sends
   `shortversion` only in `getstatus`, as `1.7` (section 2). VERIFIED live.
-  `getstatus` carries `protocol\21`, `shortversion\-`, `version\CoD4 X
-  - linux-i386-custom build 1 ...`, `build`, `branch`, `revision` and
-  `_CoD4 X Site\http://cod4x.ovh`. VERIFIED live. `getchallenge 123` is
-  answered `challengeResponse 1357851985 123 0 xproto 18`, where retail
-  sends `challengeResponse <int>` (section 3). VERIFIED live
-  (`SV_GetChallenge`).
-- A 1.7 client never plays there. Our protocol 6 connect
-  logged `Have to fix up old client which reports version 6` and `Going
-  from CS_FREE to CS_ZOMBIE`, the server resolved `cod4update.cod4x.ovh`
-  to 127.0.0.2:27953 and sent `updgetchallenge <n> noguid` there every
-  3 s, and no `connectResponse` came. VERIFIED live.
-- What the backend sends a 1.7 client is not in the tree. A vcod
-  098c8a31 log from a public CoD4x server shows a gamestate under
-  `fs_game mods/cod4i` referencing `mods/cod4i/^7mod.ff`, a www redirect
-  for it, then a drop with `Unsupported command: clc_moveNoDelta`, a
-  string not in `iw3mp.exe`, after the
-  client's first usercmd. INFERRED (a client log from a
-  public server). The mod is CoD4x's client update for 1.7, which the
-  README says installs CoD4x's client on Windows. INFERRED (the
-  README's "the clients invoke installation of the proprietary CoD4x
-  client").
-- 1.7's client walks into it: it reads no `xproto`, fetches the mod over
-  the redirect with the `^7` sent raw and kept in the file name, and
-  renames it into place unchecked (section 11). INFERRED (read off
-  `iw3mp.exe`, no retail client run).
+  `getstatus` carries `protocol\21`, `shortversion\-`, a `version`
+  starting `CoD4 X`, `build`, `branch`, `revision` and a `_CoD4 X Site`
+  key. VERIFIED live. `getchallenge 123` is answered `challengeResponse
+  1357851985 123 0 xproto 18`, where retail sends `challengeResponse
+  <int>` (section 3). VERIFIED live.
+- A 1.7 client never plays there. A protocol 6 connect logged `Have to
+  fix up old client which reports version 6` and `Going from CS_FREE to
+  CS_ZOMBIE`; the server sent `updgetchallenge <n> noguid` to its update
+  host (127.0.0.2:27953) every 3 s, and no `connectResponse` came.
+  VERIFIED live.
 - vcod. `Conn::join` refuses a `challengeResponse` that carries `xproto`
   with `This server runs CoD4x (xproto N) ...`, before `connect`, so
-  nothing reaches the backend and no update mod is fetched
+  nothing reaches the server's update path and no mod is fetched
   (`vcod_cod4::net::conn::cod4x_proto`). VERIFIED live: both joins above
-  ended with that text. This is vcod's own refusal: retail has none.
-  Playing on a CoD4x server needs its protocol 21 and whatever its
-  client adds past the `xproto` handshake; vcod speaks none of it.
+  ended with that text. This refusal is vcod's own; retail has none and
+  would walk on into whatever the server sends (a 1.7 client reads no
+  `xproto`, and fetches and renames a redirected file unchecked, section
+  11; INFERRED, read off `iw3mp.exe`). The browser hides such rows by the
+  same keys (`ServerInfo::cod4x`, `Status::is_cod4x`, cod4-front-end.md).
+  Playing on a CoD4x server needs its protocol 21 and what it adds past
+  the `xproto` handshake; vcod speaks none of it.
 
 
 ## 14. The console: `status`, `getstatus`'s players, `say`, `tell`, `kick`
@@ -1013,7 +999,7 @@ bots stayed. VERIFIED live.
   1.7 has no way to ban a bot, and vcod refuses it the same way.
 - `banClient 0` on the player printed `0:alpha EXE_PLAYERKICKED`:
   `SV_DropClient`'s line reaches the redirect on a ban too. VERIFIED
-  live. vcod printed nothing there; it now prints the line.
+  live. vcod prints the line too.
 - `kick all` with the player in the world printed `Player all is not on
   the server`, `0:alpha EXE_PLAYERKICKED`, `1:bot0 EXE_PLAYERKICKED` and
   `2:bot1 EXE_PLAYERKICKED`, and all three slots went to `ZMBI`; in a
@@ -1026,7 +1012,7 @@ bots stayed. VERIFIED live.
 
 ## 15. Off the LAN: the authorize round trip, `requeststats`, pacing
 
-The run (2026-10-28): `cod4_lnxded` at 203.0.113.1:28960 in a rootless
+The run: `cod4_lnxded` at 203.0.113.1:28960 in a rootless
 user, net and mount namespace, the clients at 198.51.100.2 in a child net
 namespace joined by a veth pair (`tools/offlan_capture.sh`'s layout), so
 neither address is private or shares three octets with the other. The
@@ -1155,7 +1141,7 @@ breakpoints on the two tests and the table's build):
   (0x13ed7c00, `error\nEXE_ERR_HIGH_PING_ONLY`, `Client %i rejected on a
   too low ping`) and `sv_maxPing` (0x13ed7c04, `error\nEXE_ERR_LOW_PING_ONLY`,
   `Client %i rejected on a too high ping: %i`). VERIFIED (the code).
-  vcod-server read neither and now does
+  vcod-server applies both the same way
   (`cod4_min_ping_refuses_only_off_the_lan`).
 
 ### `requeststats` off the LAN
@@ -1182,8 +1168,7 @@ breakpoints on the two tests and the table's build):
   `CS_ACTIVE` (4) with no download (`downloadName`, +0x212a4) no sooner
   than a second on (0x8178bd1..0x8178bed). VERIFIED (the code).
 - Both gamestates' second fragment left 957 ms after the first, the rest
-  about 350 ms apart. VERIFIED live. vcod-server sent its second 336 ms
-  after the first, without the second's wait. VERIFIED live. It now
-  waits (`cod4_an_idle_off_lan_client_waits_a_second`): a rerun sent the
-  second fragments 976 and 991 ms after the first, the rest 350 ms apart.
-  VERIFIED live.
+  about 350 ms apart. VERIFIED live. vcod-server waits the same second
+  (`cod4_an_idle_off_lan_client_waits_a_second`): its second fragments
+  left 976 and 991 ms after the first, the rest 350 ms apart. VERIFIED
+  live. Without that wait it sent the second 336 ms after the first.
