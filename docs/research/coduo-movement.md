@@ -304,8 +304,8 @@ Controls screen: UO's `ui/options_move.menu`
 Config: UO's `Com_Init` queues `exec default_mp.cfg`, `language.cfg`,
 `uoconfig_mp.cfg` and `autoexec_mp.cfg` (`CoDUOMP.exe` 0x43bd3c-0x43bd5f,
 VERIFIED strings and pushes). A written `uoconfig_mp.cfg` opens with
-`unbindall` (VERIFIED, the file), so a config without a `+sprint` line
-leaves ALT unbound (INFERRED from that order). UO's file name is its own,
+`unbindall` (VERIFIED, the file). A config without a `+sprint` line
+therefore leaves ALT unbound (INFERRED from that order). UO's file name is its own,
 so a first UO run never reads 1.1's `config_mp.cfg` (VERIFIED, the two
 names).
 

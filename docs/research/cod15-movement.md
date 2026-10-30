@@ -28,8 +28,9 @@ resolving calls and constants, and checked against the captures below.
 
 1.5's module is an unoptimised build, one frame per function, so 1.1's
 inlined helpers are separate functions there. A different shape is not a
-different behaviour. Every claim carries its own label: VERIFIED is read
-out of a binary or a capture, INFERRED is read off control flow.
+different behaviour. Every claim carries its own label. VERIFIED marks a
+fact read out of a binary or a capture. INFERRED marks one read off control
+flow.
 
 ## The captures
 
@@ -112,7 +113,7 @@ ground trace has zeroed `fJumpOriginZ` (0x305c8), so it never fires
   0x6a3), 2.5 above (rodata 0x7566c..0x75678, copies at
   0x7567c..0x75688). 1 at 0, 2.5 from 1700 on. VERIFIED.
 - Landing, at the top of `PM_WalkMove` before `PM_CheckJump`, with 0x2000
-  set. The constants VERIFIED, the order INFERRED:
+  set. The constants are VERIFIED. The order is INFERRED:
 
   | Condition | Effect |
   |---|---|
@@ -130,8 +131,8 @@ ground trace has zeroed `fJumpOriginZ` (0x305c8), so it never fires
 - Also cleared with `fJumpOriginZ` by the ground trace's steep branch
   (0x220f5, 0x22107), a failed `PM_CorrectAllSolid` (0x219ec), and
   `PM_StepSlideMove` on a ladder or for an airborne body whose penalty
-  timer runs (0x2997f-0x299b2, 0x299dd). The stores VERIFIED, the
-  conditions INFERRED.
+  timer runs (0x2997f-0x299b2, 0x299dd). The stores are VERIFIED.
+  The conditions are INFERRED.
 - Prone entry arms it: `PM_CheckDuck` sets 0x2000 and `pm_time` 1800 when
   the eye target steps to the prone height (0x24037, 0x24049). VERIFIED.
 
@@ -260,7 +261,7 @@ stance, so the target and `eFlags` step to the gun's stance on the mount
   the hit 18 units up (rodata 0x74fb0). An off-ground caller with a clear
   sweep still runs the ground samples and writes the body they give; a
   sample that misses lays it flat and accepts, as 1.1's early return did.
-  The constants and trace counts VERIFIED, the order INFERRED.
+  The constants and trace counts are VERIFIED. The order is INFERRED.
 - `PM_UpdatePronePitch` is 1.1's in effect (VERIFIED constants).
 
 ### The airborne prone body

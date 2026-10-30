@@ -1058,8 +1058,8 @@ ahead by `--probe-vehicle ram`, meets an allied victim standing or prone
   crush is refused and the second call follows: `MOD_SUICIDE`, the victim
   as inflictor and attacker, his own `mosin_nagant_mp`. Past his death the
   two keep coming until his end frame, health reading 0, -10, -20
-  (VERIFIED, capture): `takedamage` stays set until his end frame
-  (INFERRED, combat doc 14.7's rule).
+  (VERIFIED, capture). They keep coming because `takedamage` stays set
+  until his end frame (INFERRED, combat doc 14.7's rule).
 
 `vehicle_runover_ab` replays the three on ours. Every damage callback and
 hit sound matches retail's in time, amount, means, attacker, inflictor,
@@ -1117,9 +1117,9 @@ and strikes the standing victim once.
 
 - 121 points, `MOD_CRUSH_JEEP`, the Horch (182) both inflictor and
   attacker, weapon `none`, no direction, the victim's unsnapped origin as
-  the point, the callback's time the last frame's (VERIFIED, capture):
-  `VEH_PlayerDamage` with `r.ownerNum` 1023 after the driver's exit
-  (11.2), on the cmd's path (INFERRED, the time).
+  the point, the callback's time the last frame's (VERIFIED, capture).
+  The caller is `VEH_PlayerDamage` with `r.ownerNum` 1023 after the
+  driver's exit (11.2), on the cmd's path (INFERRED, the time).
 - The callback reads the victim's `origin` equal to the point, the origin
   his cmd started from: the kill lands before that cmd's `Pmove`
   (VERIFIED, capture: the probe's `dmgorigin` line). Trap: reading the
@@ -1875,8 +1875,9 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   (VERIFIED, replay). vcod ports the model reject (`PlacedModel::bounds`,
   the same for a script model); no UO `mp_vehicle_*` or
   `mp_static_vehicle_*` model's collision leaves its cube at rest
-  (VERIFIED, the paks: the Panzer IV's reaches 172.3 of 201.7), so on a
-  hull it only saves work, a turned turret staying inside (INFERRED).
+  (VERIFIED, the paks: the Panzer IV's reaches 172.3 of 201.7). On a
+  hull the reject therefore only saves work, a turned turret staying
+  inside (INFERRED).
 - **The silhouette.** Retail UO 1.51b, 2026-10-15, `probe_profile 1`
   (fixtures `*-silhouette-uo.txt`, recipe in their headers; the tank's and
   the seated jeep's recaptured 2026-10-21, see "Retail's spawn point").
@@ -2305,8 +2306,8 @@ swap"; "The barrel test"; "A hull stops rounds"; "A shell on a hull".
   right hand at 29950; VERIFIED, replay). So retail's think on its pick
   started the idle at the spawn frame, as one on the placement spot does
   (VERIFIED, replay), which is why the earlier fit held. The jeep's gates
-  pass pinned or not (VERIFIED, replay): the boarding sets the jeep rider's
-  legs (11.4), so his spawn's clip never reaches a seat (INFERRED).
+  pass pinned or not (VERIFIED, replay). The boarding sets the jeep
+  rider's legs (11.4), so his spawn's clip never reaches a seat (INFERRED).
 - **The shooter's trigger.** The net probe's `--probe-uo-weapon aim` first
   presses attack and sight on its first cmd 1000 ms or more past its
   placement, in all four runs and the two earlier bones runs (VERIFIED, the
