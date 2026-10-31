@@ -11,9 +11,9 @@ mp_pavlov on a public server.
 
 ## United Offensive
 
-mp_arnhem against bots.
+mp_uo_stanjel against bots.
 
-[![United Offensive, mp_arnhem against bots](screenshots/uo-mp_arnhem-bots-thumb.jpg)](screenshots/uo-mp_arnhem-bots.jpg?raw=true)
+[![United Offensive, mp_uo_stanjel against bots](screenshots/uo-mp_uo_stanjel-bots-thumb.jpg)](screenshots/uo-mp_uo_stanjel-bots.jpg?raw=true)
 
 ## Call of Duty 2
 
