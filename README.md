@@ -16,14 +16,10 @@ Each game's page says what works, what's still missing against retail,
 and what vcod adds. [docs/features.md](docs/features.md) covers what they
 share.
 
-[![mp_railyard on a public server, 3840x1600](docs/screenshots/ultrawide-mp_railyard-s.jpg)](docs/screenshots/ultrawide-mp_railyard.jpg)
+[![vcod running Call of Duty, United Offensive, Call of Duty 2 and Call of Duty 4 at 3840x1600](docs/screenshots/collage.jpg)](docs/screenshots.md)
 
-[![mp_harbor on a public server, 3840x1600](docs/screenshots/ultrawide-mp_harbor-s.jpg)](docs/screenshots/ultrawide-mp_harbor.jpg)
-
-[![Twelve bots fighting over one wall on mp_pavlov, 3840x1600](docs/screenshots/ultrawide-mp_pavlov-bots-s.jpg)](docs/screenshots/ultrawide-mp_pavlov-bots.jpg)
-
-All three are CoD 1 at 21:9 with the F3 overlay up. Click one for the full
-size.
+All four games at 21:9 on the current build. Click the collage for the
+[screenshots](docs/screenshots.md) at full size.
 
 ## Read this first: it plays, and it still has opinions
 
