@@ -76,8 +76,8 @@ Open, by how much a player notices.
 6. The off-LAN snapshot rate above 20 (cod4-server-frame.md), and why
    retail counted its own public address as off the LAN
    (cod4-handshake.md 15). S to measure.
-7. No default master: `sv_master1` is empty, so `dedicated 2`
-   heartbeats only a master the operator names (`cod4::oob`).
+7. Closed: an empty `sv_master1` heartbeats `master.cod.pm:20810` at
+   `dedicated 2`, as CoD1's and CoD2's servers do (`Cod4Server::heartbeat`).
 
 ## The retail run
 

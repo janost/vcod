@@ -48,8 +48,8 @@ pub(super) const ENGINE_CVARS: &[(&str, &str)] = &[
     ("fs_game", ""),
     ("g_password", ""),
     ("rcon_password", ""),
-    // vcod heartbeats only when asked (D6); retail beats at 1 too
-    // (cod4-server-frame.md 5).
+    // vcod heartbeats only at 2; retail beats at 1 too
+    // (cod4-server-frame.md 5). An empty `sv_master1` beats master.cod.pm.
     ("dedicated", "1"),
     ("sv_master1", ""),
     // Registered defaults; `sv_timeout`'s

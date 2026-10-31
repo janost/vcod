@@ -250,8 +250,8 @@ screen and play it unpredicted, the recorder's view off its archive rows.
 - Mods (`--set fs_game=mods/<name>`) and their downloads over UDP
   (`sv_allowDownload`) or `sv_wwwBaseURL` (11). `--script-dir` reads
   loose `.gsc` files over the zones'.
-- `--set dedicated=2` heartbeats the master `sv_master1` names, every
-  180 s.
+- `--set dedicated=2` heartbeats `master.cod.pm` (or the master
+  `sv_master1` names) every 180 s.
 
 **Scripts** ([cod4-gsc.md](../research/cod4-gsc.md)). The stock gsc runs
 on vcod's VM. Every builtin the stock scripts of the 21 stock maps call

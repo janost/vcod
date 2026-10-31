@@ -101,10 +101,9 @@ vcod-server mp_carentan --gametype sd --hostname "my server" --max-clients 20 \
 ```
 
 - `dedicated=2` sends a heartbeat to `master.cod.pm` every three minutes
-  (port 20510 for CoD1, 20610 for UO, 20710 for CoD2) and a flatline on
-  shutdown. The default, 1, sends none.
-- CoD4 sends heartbeats only to a master named in `sv_master1`: add
-  `--set sv_master1=master.cod.pm` (port 20810 by default).
+  (port 20510 for CoD1, 20610 for UO, 20710 for CoD2, 20810 for CoD4).
+  CoD1, UO and CoD2 also send a flatline on shutdown. The default, 1,
+  sends none.
 - On CoD2 and CoD4 the rcon password cvar is `rcon_password`;
   `--set rconPassword=` sets it too.
 - The server answers `getstatus` from anyone. Open the UDP port on your

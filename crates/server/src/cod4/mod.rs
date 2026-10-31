@@ -398,7 +398,6 @@ impl Cod4Server {
             &PROTOCOL_17.transport,
             cfg.max_clients,
             seed | 1,
-            // D6: never beaten unless `dedicated 2` names one ([`Self::heartbeat`]).
             crate::master::Masters::new(vcod_common::net::master::COD4_MASTER),
         );
         core.configstrings = vec![String::new(); PROTOCOL_17.transport.max_configstrings];
@@ -813,13 +812,16 @@ impl Cod4Server {
     }
 
     /// `SV_MasterHeartbeat("COD-4")` (0x81780e4): at `dedicated 2` only,
-    /// every 180 s, and only to a master `sv_master1` names (D6: no CoD4
-    /// list vcod may beat by default).
+    /// every 180 s, to `sv_master1`, or to `master.cod.pm` while that is
+    /// empty, as the CoD1 and CoD2 servers default to it.
     fn heartbeat(&mut self) {
-        let master = self.game.cvars().get("sv_master1").to_string();
-        if self.int("dedicated") != 2 || master.is_empty() {
+        if self.int("dedicated") != 2 {
             return;
         }
+        let master = match self.game.cvars().get("sv_master1") {
+            "" => vcod_common::net::master::COD4_MASTER.host.to_string(),
+            m => m.to_string(),
+        };
         let now = self.core.sv_time_ms;
         if self.game.last_beat_ms.is_some_and(|t| now - t < 180_000) {
             return;
@@ -2071,3 +2073,33 @@ mod stat_tests;
 mod vote_tests;
 #[cfg(test)]
 mod wire_ab;
+
+#[cfg(test)]
+mod heartbeat_tests {
+    use super::*;
+
+    fn resolve(name: &str) -> Option<SocketAddr> {
+        (name == "master.cod.pm:20810").then(|| "198.51.100.4:20810".parse().unwrap())
+    }
+
+    /// An empty `sv_master1` beats `master.cod.pm:20810` at `dedicated 2`,
+    /// and nothing at the default `dedicated 1`.
+    #[test]
+    fn dedicated_2_beats_master_cod_pm_by_default() {
+        let cfg = Cod4Config {
+            map: "mp_crash".into(),
+            gametype: "war".into(),
+            hostname: "CoD4Host".into(),
+            max_clients: 8,
+        };
+        let mut sv = Cod4Server::new(cfg, 7);
+        sv.core.resolver = resolve;
+        sv.heartbeat();
+        assert!(sv.core.outbox.is_empty());
+        sv.set_cvar("dedicated", "2");
+        sv.heartbeat();
+        let (to, pkt) = sv.core.outbox.pop().expect("a heartbeat");
+        assert_eq!(to, resolve("master.cod.pm:20810").unwrap());
+        assert!(pkt.ends_with(b"heartbeat COD-4\n"));
+    }
+}

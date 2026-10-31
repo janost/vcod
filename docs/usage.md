@@ -155,7 +155,7 @@ three minutes, at most one packet a second to a master host:
 | CoD1 | `master.cod.pm:20510` |
 | UO | `master.cod.pm:20610` |
 | CoD2 | `master.cod.pm:20710` |
-| CoD4 | only to the host in `sv_master1` (port 20810 if none given) |
+| CoD4 | `master.cod.pm:20810` (`sv_master1` overrides it) |
 
 CoD1, UO and CoD2 send a flatline on Ctrl-C or `quit`.
 
