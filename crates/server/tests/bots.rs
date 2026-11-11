@@ -1478,3 +1478,38 @@ fn a_bot_in_mp_foys_hollow_kills_itself() {
         sv.bot_body(slot).map(|b| b.origin)
     );
 }
+
+/// A fighting bot yells through the stock quick messages: its `mr` on
+/// `quickstatements` runs `_teams.gsc`'s `doQuickMessage`, the one script
+/// that puts up the quick-message head icon (bots/yell.rs).
+#[test]
+fn a_fighting_bot_yells_a_stock_quick_message() {
+    let Some((mut sv, mut now)) = server_with(2, true) else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    run(&mut sv, &mut now, 100);
+    let slots = sv.bot_slots();
+    let pair = [slots[0], slots[1]];
+    let spot = fight_spot(&sv, sv.bot_body(slots[0]).unwrap().origin);
+    face_off(&mut sv, pair, spot);
+    // A yell is a roll (bots/yell.rs); five minutes give a few dozen.
+    for tick in 0..6000 {
+        run(&mut sv, &mut now, 1);
+        if tick % 50 == 0 {
+            let (ba, bb) = (
+                sv.bot_body(slots[0]).unwrap(),
+                sv.bot_body(slots[1]).unwrap(),
+            );
+            if ba.playing && bb.playing {
+                face_off(&mut sv, pair, spot);
+            }
+        }
+        if slots.iter().any(|&s| {
+            sv.client_field(s, "headicon").as_deref() == Some("gfx/hud/headicon@quickmessage")
+        }) {
+            return;
+        }
+    }
+    panic!("five minutes of fighting and no bot yelled");
+}

@@ -66,6 +66,8 @@ pub(crate) struct BotDriver {
     /// The shots and blasts since the bots last listened, in sim order;
     /// the tick takes them at its top.
     pub(crate) noises: Vec<Noise>,
+    /// Who may yell now, and who was alive last tick (`super::yell`).
+    pub(crate) yells: super::yell::Gate,
 }
 
 impl BotDriver {
@@ -307,6 +309,16 @@ pub(crate) trait BotWorld {
     fn take_orders(&mut self) -> Vec<(usize, String)>;
     /// One client command from the bot in `slot`.
     fn bot_command(&mut self, slot: usize, text: String);
+    /// The index of the script menu `name` among the menu configstrings,
+    /// what an `mr` names it by; `None` sends the bots no yells.
+    fn menu_index(&self, _name: &str) -> Option<usize> {
+        None
+    }
+    /// The client whose hit on the body in `slot` was the last, within the
+    /// last second: who a death just now is credited to.
+    fn killer(&self, _slot: usize) -> Option<usize> {
+        None
+    }
     /// The joined bot's gamestate.
     fn begin(&mut self, slot: usize);
     /// The bots' cmds are one packet: stamped once before them.
@@ -411,6 +423,7 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
     // cmd. A* is capped per tick across all bots; one that misses out
     // wanders for a tick and asks again.
     let mut moves: Vec<(usize, W::Cmd, bool)> = Vec::new();
+    let mut yells: Vec<(usize, super::yell::Yell)> = Vec::new();
     let mut budget = PLAN_BUDGET;
     let p = crate::tick_profile::phase("bots/bodies and paths");
     // Every player on a ladder, and off one, for the bots that wait for
@@ -508,17 +521,18 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
         drop(p);
         drop(probing);
         let _p = crate::tick_profile::phase("bots/think");
-        let Some((cmd, kill)) = w
+        let Some((cmd, kill, yell)) = w
             .driver_mut()
             .bots
             .get_mut(&slot)
-            .map(|bot| (bot.think(&view), bot.take_kill()))
+            .map(|bot| (bot.think(&view), bot.take_kill(), bot.take_yell()))
         else {
             continue;
         };
         if kill && !w.keeps_alive(slot) {
             replies.push((slot, "kill".into()));
         }
+        yells.extend(yell.map(|y| (slot, y)));
         if let Some(cmd) = w.cmd(slot, cmd, &view) {
             moves.push((slot, cmd, view.on_ladder && !view.on_ground));
         }
@@ -526,6 +540,7 @@ pub(crate) fn step<W: BotWorld>(w: &mut W) {
 
     // Pass 4: everything lands.
     let p = crate::tick_profile::phase("bots/land");
+    yell(w, sid, &teams, yells, &mut replies);
     let gone: Vec<usize> = w
         .driver()
         .bots
@@ -581,6 +596,45 @@ fn lob<W: BotWorld>(w: &W, slot: usize, view: &mut BotView, teams: &[i32]) {
         && let (Some(g), Some(at)) = (view.grenade, b.throw_target(view))
     {
         view.lob = w.lob_probe(slot, g, at, teams);
+    }
+}
+
+/// The tick's yells as quick-message `mr`s into `replies`: the brains'
+/// own, and "Enemy down" for each bot whose hit was the last on an enemy
+/// who died since the last tick. Only a playing bot yells: the stock
+/// gametypes run the quick message inline in their `menuresponse` loop,
+/// whose `wait 2` drops any menu answer behind it, and the balancer's
+/// team move (`bot_admin::move_bot`) answers for a dead bot.
+fn yell<W: BotWorld>(
+    w: &mut W,
+    sid: i32,
+    teams: &[i32],
+    mut yells: Vec<(usize, super::yell::Yell)>,
+    replies: &mut Vec<(usize, String)>,
+) {
+    let playing: Vec<bool> = (0..teams.len())
+        .map(|s| w.body(s).is_some_and(|b| b.playing))
+        .collect();
+    for victim in w.driver_mut().yells.deaths(playing.clone()) {
+        if let Some(k) = w.killer(victim)
+            && w.driver().bots.contains_key(&k)
+            && teams.get(k) != teams.get(victim)
+        {
+            yells.push((k, super::yell::Yell::Down));
+        }
+    }
+    let now = w.now();
+    for (slot, y) in yells {
+        if !playing.get(slot).copied().unwrap_or(false) {
+            continue;
+        }
+        let Some(menu) = w.menu_index(y.menu()) else {
+            continue;
+        };
+        let team = teams.get(slot).copied().unwrap_or_default();
+        if let Some(row) = w.driver_mut().yells.pass(slot, team, y, now) {
+            replies.push((slot, format!("mr {sid} {menu} {row}")));
+        }
     }
 }
 

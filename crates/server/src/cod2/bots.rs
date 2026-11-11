@@ -460,6 +460,20 @@ impl BotWorld for Cod2Server {
         self.client_command(slot, seq, text);
     }
 
+    /// Off the table `openMenu` precached into, as it looks menus up.
+    fn menu_index(&self, name: &str) -> Option<usize> {
+        let host = &self.cod2_level()?.rt.host;
+        crate::configstrings::script_menu_index(&host.configstrings, host.allocators.layout(), name)
+    }
+
+    fn killer(&self, slot: usize) -> Option<usize> {
+        let level = self.cod2_level()?;
+        let (a, at) = level.players.get(slot)?.as_ref()?.last_attacker?;
+        (0..1000)
+            .contains(&level.level_time().wrapping_sub(at))
+            .then_some(a)
+    }
+
     /// Never called: [`Self::read_commands`] joins no bot.
     fn begin(&mut self, _: usize) {}
 
