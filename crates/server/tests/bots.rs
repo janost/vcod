@@ -1478,3 +1478,83 @@ fn a_bot_in_mp_foys_hollow_kills_itself() {
         sv.bot_body(slot).map(|b| b.origin)
     );
 }
+
+/// Two shooting bots fight in stock `tdm` on `map` until one yells: its
+/// `mr` on a quick-message menu runs `_teams.gsc`'s `doQuickMessage`, the
+/// one script that puts up the quick-message head icon (bots/yell.rs).
+fn a_fighting_bot_yells_on(
+    fs: vcod_common::pk3::Pk3Fs,
+    protocol: &'static vcod_common::net::protocol::Protocol,
+    map: &str,
+) {
+    let bsp = vcod_common::bsp::parse(&fs.read(&fs.resolve_map(map).unwrap()).unwrap())
+        .expect("parse the bsp");
+    let mut now = Instant::now();
+    let mut cfg = cfg(2, true, "tdm");
+    cfg.map = map.into();
+    let mut sv = vcod_server::Server::new(cfg, now);
+    sv.set_protocol(protocol);
+    sv.set_cvar("vc_bot_vehicles", "0");
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    run(&mut sv, &mut now, 100);
+    let slots = sv.bot_slots();
+    let pair = [slots[0], slots[1]];
+    let spot = fight_spot(&sv, sv.bot_body(slots[0]).unwrap().origin);
+    face_off(&mut sv, pair, spot);
+    // A yell is a roll (bots/yell.rs); five minutes give a few dozen.
+    for tick in 0..6000 {
+        run(&mut sv, &mut now, 1);
+        if tick % 50 == 0 {
+            let (ba, bb) = (
+                sv.bot_body(slots[0]).unwrap(),
+                sv.bot_body(slots[1]).unwrap(),
+            );
+            if ba.playing && bb.playing {
+                face_off(&mut sv, pair, spot);
+            }
+        }
+        if slots.iter().any(|&s| {
+            sv.client_field(s, "headicon").as_deref() == Some("gfx/hud/headicon@quickmessage")
+        }) {
+            return;
+        }
+    }
+    panic!("five minutes of fighting on {map} and no bot yelled");
+}
+
+#[test]
+fn a_fighting_bot_yells_a_stock_quick_message() {
+    let Some(fs) = vcod_common::testing::game_fs_11() else {
+        eprintln!("COD_DIR has no 1.1 install: skipping");
+        return;
+    };
+    a_fighting_bot_yells_on(fs, &vcod_common::net::protocol::PROTOCOL_V1, MAP);
+}
+
+/// As [`a_fighting_bot_yells_a_stock_quick_message`] on 1.5's `main/`;
+/// needs `COD_DIR` at a 1.5 install (a UO one's `main/` is 1.5).
+#[test]
+fn a_fighting_15_bot_yells_a_stock_quick_message() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset: skipping");
+        return;
+    };
+    let v6 = &vcod_common::net::protocol::PROTOCOL_V6;
+    if vcod_server::server::install_protocol(&fs).transport.version != v6.transport.version {
+        eprintln!("COD_DIR is not a 1.5 install: skipping");
+        return;
+    }
+    a_fighting_bot_yells_on(fs, v6, MAP);
+}
+
+/// As [`a_fighting_bot_yells_a_stock_quick_message`] on United Offensive;
+/// needs `COD_DIR` at a UO install.
+#[test]
+fn a_fighting_uo_bot_yells_a_stock_quick_message() {
+    let Some(fs) = vcod_common::testing::uo_fs() else {
+        eprintln!("COD_DIR has no uo/: skipping");
+        return;
+    };
+    a_fighting_bot_yells_on(fs, &vcod_common::net::protocol::PROTOCOL_V22, "mp_cassino");
+}

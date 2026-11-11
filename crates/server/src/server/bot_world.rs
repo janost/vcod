@@ -1599,6 +1599,24 @@ impl crate::bots::driver::BotWorld for Server {
         }
     }
 
+    fn menu_index(&self, name: &str) -> Option<usize> {
+        configstrings::script_menu_index(&self.core.configstrings, &self.game.proto.cs, name)
+    }
+
+    fn killer(&self, slot: usize) -> Option<usize> {
+        let (a, at, _) = self
+            .core
+            .clients
+            .get(slot)?
+            .as_ref()?
+            .sim
+            .as_ref()?
+            .last_hit?;
+        (0..1000)
+            .contains(&self.core.sv_time_ms.wrapping_sub(at))
+            .then_some(a)
+    }
+
     fn begin(&mut self, slot: usize) {
         self.send_gamestate(slot);
     }

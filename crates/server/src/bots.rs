@@ -27,6 +27,7 @@ mod vehicle;
 
 pub(crate) mod retreat;
 mod skill;
+pub(crate) mod yell;
 pub use skill::{DEFAULT_LEVEL, MAX_LEVEL};
 
 /// Hip-shot range; beyond it a tap is noise anyway.
@@ -1142,6 +1143,13 @@ pub struct Bot {
     dry_ticks: u32,
     /// A `kill` for the driver to send as a client command.
     kill: bool,
+    /// A yell for the driver to send as a quick message (`yell`), and
+    /// whether the body played last think and a round restart came since
+    /// ([`Bot::rearm`]): the first think alive after either starts a
+    /// round of a one-life gametype.
+    yell: Option<yell::Yell>,
+    alive: bool,
+    round_start: bool,
     /// An unstick spell began this tick: the driver's follower rounds the
     /// edge it was on (`nav::Follower::stuck`).
     stuck: bool,
@@ -1523,6 +1531,9 @@ impl Bot {
             strand_ticks: 0,
             dry_ticks: 0,
             kill: false,
+            yell: None,
+            alive: false,
+            round_start: true,
             stuck: false,
             forced: None,
             obj: Objective::default(),
@@ -1655,6 +1666,7 @@ impl Bot {
     pub fn rearm(&mut self) {
         self.main_menu.clear();
         self.answered.clear();
+        self.round_start = true;
     }
 
     /// The team the team menu is answered with.
@@ -2758,6 +2770,16 @@ impl Bot {
         std::mem::take(&mut self.kill)
     }
 
+    /// The yell [`Bot::think`] asked for, once.
+    pub(crate) fn take_yell(&mut self) -> Option<yell::Yell> {
+        self.yell.take()
+    }
+
+    /// Asks for `y` unless this think already asked for another.
+    fn want_yell(&mut self, y: yell::Yell) {
+        self.yell.get_or_insert(y);
+    }
+
     /// Whether an unstick spell began since the last call.
     pub(crate) fn take_stuck(&mut self) -> bool {
         std::mem::take(&mut self.stuck)
@@ -2833,6 +2855,14 @@ impl Bot {
         let cmd = self.think_body(view);
         self.count_futile(view, &cmd);
         self.fired = cmd.buttons & msg::BUTTON_ATTACK != 0;
+        let living = view.playing && !view.dead;
+        if living && (self.round_start || !self.alive) {
+            self.round_start = false;
+            if view.one_life {
+                self.want_yell(yell::Yell::Advance);
+            }
+        }
+        self.alive = living;
         cmd
     }
 
@@ -3738,6 +3768,9 @@ impl Bot {
         } else {
             (full, self.skill.error_start)
         };
+        if again.is_none() {
+            self.want_yell(yell::Yell::Spotted);
+        }
         if let Some(t) = self.target.take() {
             self.prior = Some((t.slot, t.error, 0));
         }
@@ -4381,6 +4414,7 @@ impl Bot {
             self.end_throw();
             // The release; the next stage walks the byte back to the rifle.
             self.throws += 1;
+            self.want_yell(yell::Yell::Grenade);
             log::debug!(
                 "{} throws from {:?}, enemy {:?} at {:.0}, view {:?}",
                 self.name,
@@ -7542,9 +7576,70 @@ mod tests {
             assert_eq!(cmd.weapon, 6);
         }
         v.grenade_ready = true;
+        bot.take_yell();
         let cmd = bot.think(&v);
         assert_eq!(cmd.buttons & BUTTON_ATTACK, 0, "held past the pin");
         assert_eq!(bot.throws(), 1);
+        assert_eq!(bot.take_yell(), Some(yell::Yell::Grenade));
+    }
+
+    /// "Enemy spotted" on a new target, not on one the bot let go of a
+    /// moment ago, nor every tick it keeps the same one.
+    #[test]
+    fn a_new_target_is_yelled_and_a_reacquired_one_is_not() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = view();
+        let at = |slot| EnemyView {
+            slot,
+            origin: [300.0, 0.0, 40.0],
+            velocity: [0.0; 3],
+        };
+        bot.think(&v);
+        bot.take_yell();
+        v.enemy = Some(at(3));
+        bot.think(&v);
+        assert_eq!(bot.take_yell(), Some(yell::Yell::Spotted));
+        bot.think(&v);
+        assert_eq!(bot.take_yell(), None, "the same target");
+        v.enemy = Some(at(4));
+        bot.think(&v);
+        assert_eq!(bot.take_yell(), Some(yell::Yell::Spotted), "a second enemy");
+        // Back to the first, given up on a moment ago.
+        v.enemy = Some(at(3));
+        bot.think(&v);
+        assert_eq!(bot.take_yell(), None, "reacquired");
+    }
+
+    /// "Follow me" or "Move in" on the first think alive of a one-life
+    /// round: after a death, and after a restart that never killed the
+    /// body. Not on a respawn gametype.
+    #[test]
+    fn a_one_life_round_start_is_yelled() {
+        let mut bot = Bot::new("allies", true, 1);
+        let mut v = view();
+        v.one_life = true;
+        bot.think(&v);
+        assert_eq!(bot.take_yell(), Some(yell::Yell::Advance));
+        bot.think(&v);
+        assert_eq!(bot.take_yell(), None, "the same life");
+        v.dead = true;
+        bot.think(&v);
+        v.dead = false;
+        bot.think(&v);
+        assert_eq!(bot.take_yell(), Some(yell::Yell::Advance), "after a death");
+        bot.rearm();
+        bot.think(&v);
+        assert_eq!(
+            bot.take_yell(),
+            Some(yell::Yell::Advance),
+            "after a restart"
+        );
+        v.one_life = false;
+        v.dead = true;
+        bot.think(&v);
+        v.dead = false;
+        bot.think(&v);
+        assert_eq!(bot.take_yell(), None, "a respawn");
     }
 
     /// The view on the lob with the gun kicked 17 degrees up off it (a

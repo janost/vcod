@@ -2101,6 +2101,44 @@ mod tests {
         );
     }
 
+    /// Four shooting bots on mp_toujane `tdm` until one yells: its `mr` on
+    /// a quick-message menu runs `_quickmessages.gsc`'s `doQuickMessage`,
+    /// the one stock script that sets the `talkingicon` head icon
+    /// (`bots::yell`). Needs `COD2_DIR`; without it the test passes.
+    #[test]
+    fn a_fighting_cod2_bot_yells_a_stock_quick_message() {
+        let Some(fs) = vcod_common::testing::cod2_fs() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        let mut sv = crate::cod2::Cod2Server::new(
+            crate::cod2::Cod2Config {
+                map: "mp_toujane".into(),
+                gametype: "tdm".into(),
+                hostname: "bots".into(),
+                max_clients: 8,
+                gametype_script: None,
+            },
+            3,
+            now,
+        );
+        sv.load(Some(std::rc::Rc::new(fs))).unwrap();
+        let slots = sv.add_bots(4, true);
+        sv.bots_mut().unwrap().wait_for_graph();
+        // A yell is a roll (`bots::yell`); five minutes give a few dozen.
+        for tick in 1..=6000u64 {
+            sv.tick_frames(now + std::time::Duration::from_millis(50 * tick), 1);
+            let level = sv.level_mut().unwrap();
+            if slots
+                .iter()
+                .any(|&s| level.rt.client_field(s, "headicon").as_deref() == Some("talkingicon"))
+            {
+                return;
+            }
+        }
+        panic!("five minutes of tdm on mp_toujane and no bot yelled");
+    }
+
     /// mp_decoy's pit at (8650, -12570, -530) lies 35 to 55 under the
     /// ledges round it. Its way out were leaps, which a CoD2 bot never
     /// jumps (no lip probe, `BotWorld::PMOVE_PROBES` off); built without

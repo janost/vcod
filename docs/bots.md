@@ -252,6 +252,25 @@ routes, reshuffles who guards what each round, sends all its S&D
 attackers to one site and covers a planter
 ([research/bot-objectives.md](research/bot-objectives.md) section 9).
 
+### Yells
+
+On CoD 1.1, 1.5, UO and CoD2 a bot yells through the stock quick
+messages, the rows a player picks from the `V` menu
+([research/cod11-quick-chat.md](research/cod11-quick-chat.md)). The
+gametype script plays the team's voice line (American, British, Russian
+or German), puts up the quick-message head icon and prints the team chat
+line, so every client hears it, retail ones included.
+
+- "Follow me!" or "Move in!" as an `sd` or `re` round starts.
+- "Enemy spotted!" on a new enemy, not on one it lost a moment ago.
+- "Grenade!" as a frag leaves its hand.
+- "Enemy down!" when its hit was the last on an enemy who died.
+
+Each is a roll: 40, 30, 70 and 40 in 100. A bot keeps quiet for 8 s
+after its own yell, and its team for 2.5 s after any of theirs, so one
+voice goes out, not the whole squad. Only a living bot yells, and nobody
+in `dm`, which has no sides. CoD4 bots send none.
+
 ### One brain, four games
 
 A thin adapter per game sits between the brain and the server. It
