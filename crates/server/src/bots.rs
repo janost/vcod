@@ -25,6 +25,7 @@ pub(crate) use vehicle::{
 
 mod vehicle;
 
+mod aim;
 pub(crate) mod retreat;
 mod skill;
 pub(crate) mod yell;
@@ -156,7 +157,9 @@ pub struct Skill {
     pub reaction_spread: u32,
     /// Ticks out of sight after which a returning target counts as new.
     pub forget_ticks: u32,
-    /// The most the view turns in one tick, degrees.
+    /// The most a look turns the view in one tick (`Bot::turn_toward`),
+    /// degrees; on a target, a flick's mean a tick, 1.875 times it at its
+    /// peak ([`aim::Hand::steer`]).
     pub turn_deg: f32,
     /// Aim error on acquisition; each tick on the target multiplies it by
     /// `error_decay`, down to `error_floor`.
@@ -171,6 +174,12 @@ pub struct Skill {
     /// Seconds the aim trails a target moving across the line: its speed
     /// across times this adds to the miss, in units.
     pub track_lag: f32,
+    /// A flick's landing spread, a share of its angle (bot-combat.md 18).
+    pub flick_spread: f32,
+    /// The share of the gun's sway and recoil the view takes back, and
+    /// how many ticks late.
+    pub recoil_share: f32,
+    pub recoil_ticks: u32,
     /// The chance a footwork spell on the sights moves (a slow strafe, a
     /// bolt rifle's back-off); a quarter of it lies down at range.
     pub footwork: f32,
@@ -206,6 +215,9 @@ impl Default for Skill {
             error_range: 1000.0,
             error_moving: 1.75,
             track_lag: 0.06,
+            flick_spread: 0.1,
+            recoil_share: 0.7,
+            recoil_ticks: 3,
             footwork: 0.45,
             ads_range: 400.0,
             memory_ticks: 100,
@@ -1004,6 +1016,14 @@ pub struct Bot {
     /// vantage over it ([`cover`], [`hunt`]); off, it peeks the one way
     /// and walks onto the spot, as before (a `bot_match` measuring arm).
     pub wary: bool,
+    /// Aims as a hand does ([`aim`], bot-combat.md 18); off, the old aim:
+    /// straight turns, a jittered error, every sway and kick taken back at
+    /// once (a `bot_match` measuring arm).
+    pub human_aim: bool,
+    /// Thinks run, so the aim knows a want from last tick.
+    clock: u32,
+    /// The gun's offsets ([`BotView::gun_offset`]), newest first.
+    gun_kept: [[f32; 2]; aim::RECOIL_KEEP],
     /// Hunts that reached the spot or its vantage (the `bot_match` column).
     hunts: u32,
     /// The team the team menu is answered with.
@@ -1217,10 +1237,12 @@ struct Target {
     react: u32,
     /// Aim error, units at the target.
     error: f32,
-    /// The error's direction, (pitch, yaw), unit length; resampled every
-    /// `wobble` ticks so the aim drifts rather than sitting off by a constant.
+    /// The old aim's error direction, (pitch, yaw), unit length; resampled
+    /// every `wobble` ticks ([`Bot::human_aim`] off).
     dir: [f32; 2],
     wobble: u32,
+    /// The human aim's state.
+    hand: aim::Hand,
     /// Ticks out of sight.
     lost: u32,
 }
@@ -1475,6 +1497,9 @@ impl Bot {
             footwork: true,
             aware: true,
             wary: true,
+            human_aim: true,
+            clock: 0,
+            gun_kept: [[0.0; 2]; aim::RECOIL_KEEP],
             hunts: 0,
             main_menu: String::new(),
             answered: Vec::new(),
@@ -2846,6 +2871,7 @@ impl Bot {
     /// The tick's usercmd. The driver stamps `server_time` and pushes the
     /// cmd into the client's queue.
     pub(crate) fn think(&mut self, view: &BotView) -> UserCmd {
+        self.clock = self.clock.wrapping_add(1);
         self.track_reach(view);
         // Read before the think moves the objective's state, as the goal was.
         self.on_objective = self.objective_busy(view)
@@ -3775,12 +3801,15 @@ impl Bot {
             self.prior = Some((t.slot, t.error, 0));
         }
         self.burst_ticks = 0;
+        let floor = self.skill.error_floor;
+        let hand = aim::Hand::new(&e, self.human_aim.then_some((&mut self.rng, floor)));
         self.target = Some(Target {
             slot: e.slot,
             react,
             error,
             dir: [0.0, 1.0],
             wobble: 0,
+            hand,
             lost: 0,
         });
     }
@@ -3822,42 +3851,66 @@ impl Bot {
     /// (pitch, yaw), or `None` while the reaction delay still runs.
     fn engage(&mut self, view: &BotView, e: EnemyView, cmd: &mut UserCmd) -> Option<[f32; 2]> {
         let mut t = self.target.take()?;
+        if self.human_aim {
+            t.hand.see(&e);
+            self.gun_kept.rotate_right(1);
+            self.gun_kept[0] = view.gun_offset;
+        }
         if t.react > 0 {
             t.react -= 1;
             self.target = Some(t);
             return None;
         }
         t.error = (t.error * self.skill.error_decay).max(self.skill.error_floor);
-        if t.wobble == 0 {
-            let a = (self.rand() % 360) as f32;
-            t.dir = [a.to_radians().sin(), a.to_radians().cos()];
-            t.wobble = 4 + self.rand_below(5);
+        if !self.human_aim {
+            if t.wobble == 0 {
+                let a = (self.rand() % 360) as f32;
+                t.dir = [a.to_radians().sin(), a.to_radians().cos()];
+                t.wobble = 4 + self.rand_below(5);
+            }
+            t.wobble -= 1;
         }
-        t.wobble -= 1;
         let dist = dist_sq(view.origin, e.origin).sqrt().max(1.0);
         let moving =
             1.0 + (self.skill.error_moving - 1.0) * (view.speed / RUN_SPEED).min(1.0).powi(2);
-        // The target's speed across the line: the aim trails it.
-        let to = [0, 1, 2].map(|i| (e.origin[i] - view.origin[i]) / dist);
-        let along: f32 = (0..3).map(|i| e.velocity[i] * to[i]).sum();
-        let across = (0..3)
-            .map(|i| (e.velocity[i] - along * to[i]).powi(2))
-            .sum::<f32>()
-            .sqrt();
-        let miss = (t.error + across * self.skill.track_lag)
-            * (1.0 + dist / self.skill.error_range)
-            * moving;
-        let err_deg = (miss / dist).atan().to_degrees();
-        let dir = t.dir;
-        self.target = Some(t);
-
         let (tp, ty) = aim_angles(view, e.origin);
-        // The view goes where it puts the gun on the line.
         let g = view.gun_offset;
-        let aim = self.turn_toward(
-            view,
-            [tp - g[0] + dir[0] * err_deg, ty - g[1] + dir[1] * err_deg],
-        );
+        let aim = if self.human_aim {
+            let eye = [0, 1, 2].map(|i| {
+                view.origin[i] + view.lean_offset[i] + if i == 2 { view.eye_height } else { 0.0 }
+            });
+            let (pp, py) = aim_angles(view, t.hand.perceived(eye, self.skill.track_lag));
+            let miss = t.error * (1.0 + dist / self.skill.error_range) * moving;
+            let err_deg = (miss / dist).atan().to_degrees();
+            let d = t.hand.drift(&mut self.rng);
+            let back = aim::pulled(&self.gun_kept, &self.skill);
+            let want = [pp + d[0] * err_deg - back[0], py + d[1] * err_deg - back[1]];
+            let now = [yaw_diff(view.view[0], 0.0), view.view[1]];
+            let aim = t
+                .hand
+                .steer(now, want, self.clock, &self.skill, &mut self.rng);
+            self.target = Some(t);
+            aim
+        } else {
+            // The target's speed across the line: the aim trails it.
+            let to = [0, 1, 2].map(|i| (e.origin[i] - view.origin[i]) / dist);
+            let along: f32 = (0..3).map(|i| e.velocity[i] * to[i]).sum();
+            let across = (0..3)
+                .map(|i| (e.velocity[i] - along * to[i]).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            let miss = (t.error + across * self.skill.track_lag)
+                * (1.0 + dist / self.skill.error_range)
+                * moving;
+            let err_deg = (miss / dist).atan().to_degrees();
+            let dir = t.dir;
+            self.target = Some(t);
+            // The view goes where it puts the gun on the line.
+            self.turn_toward(
+                view,
+                [tp - g[0] + dir[0] * err_deg, ty - g[1] + dir[1] * err_deg],
+            )
+        };
         // This cmd's round leaves along the view the last one left, not
         // this cmd's turn: the gun's miss of the true chest point from it.
         let off = yaw_diff(view.view[0] + g[0], tp).hypot(yaw_diff(view.view[1] + g[1], ty));
@@ -6832,35 +6885,50 @@ mod tests {
 
     /// A scoped bot puts the swayed gun on the target, not the view, and
     /// fires on the view its last cmd left, which the round leaves along
-    /// (combat doc 15.1).
+    /// (combat doc 15.1). The old aim took the whole offset back at once;
+    /// the hand takes `recoil_share` of it, `recoil_ticks` late, and fires
+    /// once that brings the gun inside the cone.
     #[test]
     fn a_scoped_bot_aims_the_swayed_gun() {
-        let (mut bot, mut v) = engaged(3);
-        bot.skill.error_start = 0.0;
-        bot.skill.error_floor = 0.0;
-        v.sniper = true;
-        v.fire_time_ms = 1300;
-        v.ads_frac = 1.0;
-        v.enemy.as_mut().unwrap().origin = [1000.0, 0.0, 64.0];
-        let (tp, ty) = aim_angles(&v, [1000.0, 0.0, 64.0]);
-        v.gun_offset = [1.0, -1.2];
-        // The view on the chest: the gun is off it past a bolt rifle's
-        // reach, so no shot.
-        v.view = [tp, ty, 0.0];
-        let mut fired = None;
-        for tick in 0..10 {
-            let cmd = bot.think(&v);
-            if cmd.buttons & BUTTON_ATTACK != 0 {
-                fired = Some((tick, v.view));
-                break;
+        for human in [false, true] {
+            let (mut bot, mut v) = engaged(3);
+            bot.human_aim = human;
+            bot.skill.error_start = 0.0;
+            bot.skill.error_floor = 0.0;
+            v.sniper = true;
+            v.fire_time_ms = 1300;
+            v.ads_frac = 1.0;
+            v.enemy.as_mut().unwrap().origin = [1000.0, 0.0, 64.0];
+            let (tp, ty) = aim_angles(&v, [1000.0, 0.0, 64.0]);
+            v.gun_offset = [1.0, -1.2];
+            // The view on the chest: the gun is off it past a bolt rifle's
+            // reach, so no shot.
+            v.view = [tp, ty, 0.0];
+            let mut fired = None;
+            for tick in 0..20 {
+                let cmd = bot.think(&v);
+                if cmd.buttons & BUTTON_ATTACK != 0 {
+                    fired = Some((tick, v.view));
+                    break;
+                }
+                let a = cmd.angles.map(|a| a as f32 / ANGLE2SHORT);
+                v.view = [a[0], a[1], 0.0];
             }
-            let a = cmd.angles.map(|a| a as f32 / ANGLE2SHORT);
-            v.view = [a[0], a[1], 0.0];
+            let (tick, at) = fired.expect("never fired");
+            let miss = yaw_diff(at[0] + 1.0, tp).hypot(yaw_diff(at[1] - 1.2, ty));
+            if human {
+                assert!(
+                    tick > bot.skill.recoil_ticks as usize,
+                    "fired on tick {tick}"
+                );
+                let cone = (HIT_RADIUS / 1000.0).atan().to_degrees();
+                assert!(miss < cone, "the gun missed the chest by {miss} degrees");
+                assert!(miss > 0.1, "took the whole offset back: {miss}");
+            } else {
+                assert!(tick > 0, "fired with the gun off the chest");
+                assert!(miss < 0.01, "the gun missed the chest by {miss} degrees");
+            }
         }
-        let (tick, at) = fired.expect("never fired");
-        assert!(tick > 0, "fired with the gun off the chest");
-        let miss = yaw_diff(at[0] + 1.0, tp).hypot(yaw_diff(at[1] - 1.2, ty));
-        assert!(miss < 0.01, "the gun missed the chest by {miss} degrees");
     }
 
     /// An LMG bot holds the sight button to deploy, keeps its feet still,
@@ -7090,6 +7158,8 @@ mod tests {
         assert!(bot.face_hurt(&v, &mut cmd, 0.0).is_none());
     }
 
+    /// A flick turns `turn_deg` a tick on the mean and 1.875 times that
+    /// at its peak (the drift moves the want a little besides).
     #[test]
     fn the_view_turns_a_bounded_step_per_tick() {
         let (mut bot, mut v) = engaged(3);
@@ -7099,7 +7169,7 @@ mod tests {
             origin: [-500.0, 0.0, 124.0],
             velocity: [0.0; 3],
         });
-        let step = bot.skill.turn_deg;
+        let step = 1.875 * bot.skill.turn_deg + 1.0;
         let mut yaw = 0.0f32;
         for _ in 0..30 {
             v.view = [0.0, yaw, 0.0];
@@ -7235,33 +7305,63 @@ mod tests {
         }
     }
 
-    /// A target running across the line widens the miss by its speed times
-    /// `track_lag`; one running along the line adds nothing.
+    /// The old aim: a target running across the line widens the miss by
+    /// its speed times `track_lag`; one running along the line adds
+    /// nothing. The hand trails a crossing target instead: its yaw sits
+    /// behind his run by about his speed times `track_lag`.
     #[test]
     fn a_target_crossing_the_line_is_missed_by_more() {
-        let miss = |velocity: [f32; 3]| {
+        // Mean (unsigned miss, signed yaw lead) over ticks 10..40, degrees.
+        let miss = |velocity: [f32; 3], human: bool| {
             let (mut bot, mut v) = engaged(5);
+            bot.human_aim = human;
             bot.skill.error_start = bot.skill.error_floor;
-            let at = [900.0, 0.0, 64.0];
-            v.enemy = Some(EnemyView {
-                slot: 3,
-                origin: at,
-                velocity,
-            });
-            let (tp, ty) = aim_angles(&v, at);
-            (0..40)
-                .map(|_| {
-                    let a = bot.think(&v).angles.map(|a| a as f32 / ANGLE2SHORT);
-                    v.view = [a[0], a[1], 0.0];
-                    yaw_diff(a[0], tp).hypot(yaw_diff(a[1], ty))
-                })
-                .sum::<f32>()
+            if human {
+                // The drift off, to read the trail alone.
+                (bot.skill.error_start, bot.skill.error_floor) = (0.0, 0.0);
+            }
+            let mut at = [900.0, 0.0, 64.0];
+            let (mut sum, mut lead) = (0.0, 0.0);
+            for tick in 0..40 {
+                // The old aim read only the velocity; the hand sees him move.
+                if human {
+                    (0..3).for_each(|i| at[i] += velocity[i] * 0.05);
+                }
+                v.enemy = Some(EnemyView {
+                    slot: 3,
+                    origin: at,
+                    velocity,
+                });
+                let (tp, ty) = aim_angles(&v, at);
+                let a = bot.think(&v).angles.map(|a| a as f32 / ANGLE2SHORT);
+                v.view = [a[0], a[1], 0.0];
+                if tick >= 10 {
+                    sum += yaw_diff(a[0], tp).hypot(yaw_diff(a[1], ty));
+                    lead += yaw_diff(a[1], ty);
+                }
+            }
+            (sum / 30.0, lead / 30.0)
         };
-        let still = miss([0.0; 3]);
-        let along = miss([190.0, 0.0, 0.0]);
-        let across = miss([0.0, 190.0, 0.0]);
+        let still = miss([0.0; 3], false).0;
+        let along = miss([190.0, 0.0, 0.0], false).0;
+        let across = miss([0.0, 190.0, 0.0], false).0;
         assert!(along < still * 1.3, "along {along} still {still}");
         assert!(across > still * 1.8, "across {across} still {still}");
+
+        let lag = Skill::default().track_lag;
+        let (_, lead) = miss([0.0, 190.0, 0.0], true);
+        // At 900 the target runs to +y (yaw up): the aim trails at less.
+        let want = -(190.0 * lag / 900.0f32).atan().to_degrees();
+        assert!(
+            lead < want * 0.5 && lead > want * 2.0,
+            "lead {lead} want {want}"
+        );
+        let (_, lead) = miss([0.0, -190.0, 0.0], true);
+        assert!(
+            lead > -want * 0.5 && lead < -want * 2.0,
+            "lead {lead} want {}",
+            -want
+        );
     }
 
     /// Off the cone the trigger may still go down: an automatic sprays at a

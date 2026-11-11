@@ -4285,6 +4285,13 @@ impl Server {
         }
     }
 
+    /// Test-facing: whether a bot aims as a hand does (`Bot::human_aim`).
+    pub fn test_bot_human_aim(&mut self, slot: usize, on: bool) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
+            bot.human_aim = on;
+        }
+    }
+
     /// Test-facing: whether a bot reacts to hits, keeps its target and
     /// sees in a cone (`Bot::aware`).
     pub fn test_bot_aware(&mut self, slot: usize, on: bool) {
