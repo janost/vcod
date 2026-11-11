@@ -34,13 +34,14 @@
 //! `vc_bot_skill` levels, half each (dm: `SKILLS=a,b,...`, one bot per
 //! entry); without them `BOTS` join by balance at `vc_bot_skill`.
 //! One-sided feature arms: `COVER=`, `RETREAT=`, `TEAMPLAY=`, `AWARE=`,
-//! `FOOTWORK=`, `WARY=` and `SQUAD=` (cover and lean, `bots/cover.rs`; the
+//! `FOOTWORK=`, `WARY=`, `SQUAD=` and `AIM=` (cover and lean, `bots/cover.rs`; the
 //! retreat, `bots/retreat.rs`; team play, `bots/team.rs`;
 //! `Bot::aware`; moving while fighting, `Bot::footwork`; varied peeks
-//! and hunts, `Bot::wary`; spacing out, `Bot::squad`) each take `all`
-//! (the default), `none`, `axis`, `allies`
-//! or `alt` (axis on odd seeds, allies on even, so the map's own
-//! asymmetry cancels); `dm` has no sides, so only `all` and `none` there.
+//! and hunts, `Bot::wary`; spacing out, `Bot::squad`; the hand's aim,
+//! `Bot::human_aim`) each take `all` (the default), `none`, `axis`,
+//! `allies` or `alt` (axis on odd seeds, allies on even, so the map's own
+//! asymmetry cancels). `dm` has no sides: there an odd slot takes axis's
+//! arm and an even one allies'.
 //! With an arm one-sided the totals add a row per arm, named by the
 //! one-sided features on for it. `VERBOSE=1` prints every kill. Seeds
 //! default to 1..=8.
@@ -121,7 +122,7 @@ const PACK: usize = 2;
 const PACK_RANGE: f32 = 400.0;
 
 /// Which side a feature is on for (`COVER=`, `RETREAT=`, `TEAMPLAY=`,
-/// `AWARE=`, `FOOTWORK=`, `WARY=`).
+/// `AWARE=`, `FOOTWORK=`, `WARY=`, `AIM=`).
 #[derive(Clone, Copy, PartialEq)]
 enum Arm {
     All,
@@ -171,16 +172,31 @@ struct Opts {
     /// Console lines run once the level is up (the per-side `addbot`s).
     console: Vec<String>,
     verbose: bool,
-    /// cover, retreat, team play, awareness, footwork, wariness, squad.
-    arms: [Arm; 7],
+    /// cover, retreat, team play, awareness, footwork, wariness, squad, aim.
+    arms: [Arm; 8],
 }
 
-const FEATURES: [&str; 7] = [
-    "cover", "retreat", "teamplay", "aware", "footwork", "wary", "squad",
+const FEATURES: [&str; 8] = [
+    "cover", "retreat", "teamplay", "aware", "footwork", "wary", "squad", "aim",
 ];
-const ARMS: [&str; 7] = [
-    "COVER", "RETREAT", "TEAMPLAY", "AWARE", "FOOTWORK", "WARY", "SQUAD",
+const ARMS: [&str; 8] = [
+    "COVER", "RETREAT", "TEAMPLAY", "AWARE", "FOOTWORK", "WARY", "SQUAD", "AIM",
 ];
+
+/// The side a client's arms follow: its team, or in `dm` its slot's
+/// parity (odd plays axis's arm).
+fn arm_side(num: &str, team: &str, dm: bool) -> &'static str {
+    match (dm, team) {
+        (true, _) => match num.parse::<usize>() {
+            Ok(s) if s % 2 == 1 => "axis",
+            Ok(_) => "allies",
+            Err(_) => "none",
+        },
+        (false, "axis") => "axis",
+        (false, "allies") => "allies",
+        _ => "none",
+    }
+}
 
 impl Opts {
     /// The one-sided features on for `team`, the arm its tallies land in.
@@ -313,13 +329,14 @@ impl Kit {
 
 /// The aim columns (bot-combat.md section 1): rounds fired, bullet hits,
 /// targets acquired with none tracked, and the ms from each to its first
-/// round at that target.
+/// round and its first bullet hit at that target.
 #[derive(Default, Clone)]
 struct Aim {
     shots: u64,
     hits: u64,
     acquired: u32,
     first_shot_ms: Vec<u64>,
+    first_hit_ms: Vec<u64>,
 }
 
 impl Aim {
@@ -328,21 +345,31 @@ impl Aim {
         self.hits += o.hits;
         self.acquired += o.acquired;
         self.first_shot_ms.extend(&o.first_shot_ms);
+        self.first_hit_ms.extend(&o.first_hit_ms);
     }
 
     fn line(&self) -> String {
-        let mut t = self.first_shot_ms.clone();
-        t.sort_unstable();
-        let mean = t.iter().sum::<u64>() / t.len().max(1) as u64;
+        let spread = |v: &[u64]| {
+            let mut t = v.to_vec();
+            t.sort_unstable();
+            let mean = t.iter().sum::<u64>() / t.len().max(1) as u64;
+            let pct = 100.0 * t.len() as f32 / self.acquired.max(1) as f32;
+            (mean, t.get(t.len() / 2).copied().unwrap_or(0), pct)
+        };
+        let (shot, shot_mid, shot_pct) = spread(&self.first_shot_ms);
+        let (hit, hit_mid, hit_pct) = spread(&self.first_hit_ms);
         format!(
-            "shots {:6} hits {:5} accuracy {:4.1}% sight to shot mean {:4} median {:4} ms, {:4.1}% of {} acquired fired on",
+            "shots {:6} hits {:5} accuracy {:4.1}% sight to shot mean {:4} median {:4} ms, {:4.1}% of {} acquired fired on; sight to hit mean {:4} median {:4} ms, {:4.1}% hit",
             self.shots,
             self.hits,
             100.0 * self.hits as f32 / self.shots.max(1) as f32,
-            mean,
-            t.get(t.len() / 2).copied().unwrap_or(0),
-            100.0 * t.len() as f32 / self.acquired.max(1) as f32,
+            shot,
+            shot_mid,
+            shot_pct,
             self.acquired,
+            hit,
+            hit_mid,
+            hit_pct,
         )
     }
 }
@@ -894,7 +921,7 @@ fn main() {
         seeds = (1..=8).collect();
     }
     println!(
-        "maps {} gametype {} bots {} ticks {} uo {} set {:?} console {:?} cover/retreat/teamplay/aware/footwork/wary/squad {:?}",
+        "maps {} gametype {} bots {} ticks {} uo {} set {:?} console {:?} cover/retreat/teamplay/aware/footwork/wary/squad/aim {:?}",
         opts.maps.join(","),
         opts.gametype,
         opts.bots,
@@ -962,6 +989,14 @@ fn main() {
             all.line(),
             m.actions,
         );
+        if m.by_arm.len() > 1 {
+            let k: BTreeMap<&str, u32> = m
+                .by_arm
+                .iter()
+                .map(|(k, t)| (k.as_str(), t.kills))
+                .collect();
+            println!("{} seed {}: arm kills {k:?}", m.map, m.seed);
+        }
         if let Some(d) = &m.digest {
             d.print(&m.map, &opts.gametype, m.seed, m.ticks);
         }
@@ -1110,8 +1145,8 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
         // A default arm never calls its hook, so an all-on run is the
         // stock game.
         for slot in sv.bot_slots() {
-            let team = team_name(&mut sv, slot, m.dm);
-            let [cover, retreat, team_play, aware, footwork, wary, squad] = o.arms;
+            let team = arm_side(&slot.to_string(), team_name(&mut sv, slot, m.dm), m.dm);
+            let [cover, retreat, team_play, aware, footwork, wary, squad, aim] = o.arms;
             if cover != Arm::All {
                 sv.test_bot_cover(slot, cover.on(team, seed));
             }
@@ -1132,6 +1167,9 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
             }
             if squad != Arm::All {
                 sv.test_bot_squad(slot, squad.on(team, seed));
+            }
+            if aim != Arm::All {
+                sv.test_bot_human_aim(slot, aim.on(team, seed));
             }
         }
         if let Some(ob) = observer.as_mut() {
@@ -1205,6 +1243,11 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                         att.0.aim.hits += hit;
                         att.1.aim.hits += hit;
                         att.2.aim.hits += hit;
+                        if let Some(ms) = sight_to_hit(&mut bots, anum, vnum, hit) {
+                            att.0.aim.first_hit_ms.push(ms);
+                            att.1.aim.first_hit_ms.push(ms);
+                            att.2.aim.first_hit_ms.push(ms);
+                        }
                         first_hit
                             .entry((anum.to_string(), vnum.to_string()))
                             .or_insert(tick);
@@ -1258,6 +1301,11 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
                     a.0.aim.hits += hit;
                     a.1.aim.hits += hit;
                     a.2.aim.hits += hit;
+                    if let Some(ms) = sight_to_hit(&mut bots, anum, vnum, hit) {
+                        a.0.aim.first_hit_ms.push(ms);
+                        a.1.aim.first_hit_ms.push(ms);
+                        a.2.aim.first_hit_ms.push(ms);
+                    }
                     if !ateam.is_empty() && ateam == vteam && o.gametype != "dm" {
                         a.0.team_kills += 1;
                         a.1.team_kills += 1;
@@ -1422,7 +1470,7 @@ fn tally<'a>(
         team
     };
     let skill = skill.get(num).cloned().unwrap_or_else(|| "-".into());
-    let arm = o.arm(team, m.seed);
+    let arm = o.arm(arm_side(num, team, m.dm), m.seed);
     (
         m.by_team.entry(team.to_string()).or_default(),
         m.by_skill.entry(skill).or_default(),
@@ -1452,6 +1500,8 @@ struct Life {
     /// The target acquired with none tracked, and the ticks since, until
     /// its first round.
     acquired: Option<(usize, Option<u64>)>,
+    /// The same, until its first bullet hit lands (read off the log).
+    hit_wait: Option<(usize, u64)>,
     /// [`Kit::step`]'s last throw count and tracking.
     throws: u32,
     engaged: bool,
@@ -1493,6 +1543,7 @@ impl Life {
             .filter(|b| b.playing && b.gun)
             .map(|b| (b.weapon, b.clip));
         let target = body.filter(|b| b.playing).and_then(|b| b.target);
+        let fresh = target.filter(|_| self.acquired.is_none());
         // Ticks since the fresh target came, `None` once it was fired on.
         self.acquired = match (target, self.acquired) {
             (Some(t), Some((a, pending))) if t == a => Some((
@@ -1518,6 +1569,11 @@ impl Life {
                 }
             }
             (None, _) => None,
+        };
+        self.hit_wait = match (fresh, target, self.hit_wait) {
+            (Some(t), _, _) => Some((t, 1)),
+            (None, Some(t), Some((a, n))) if t == a => Some((a, n + 1)),
+            _ => None,
         };
         d.kit = Kit::step(self, body);
         d.peeks = Peeks::step(&mut self.peeks, tactics, dead);
@@ -1558,6 +1614,16 @@ impl Life {
         t.1.add(&d);
         t.2.add(&d);
     }
+}
+
+/// A bullet hit (`hit` 1) by bot `anum` on `vnum`: the ms since it
+/// acquired `vnum`, if this is the first since.
+fn sight_to_hit(bots: &mut HashMap<usize, Life>, anum: &str, vnum: &str, hit: u64) -> Option<u64> {
+    let (a, v) = (anum.parse::<usize>().ok()?, vnum.parse::<usize>().ok()?);
+    let life = bots.get_mut(&a).filter(|_| hit > 0)?;
+    let (_, n) = life.hit_wait.filter(|w| w.0 == v)?;
+    life.hit_wait = None;
+    Some(n * TICK_MS)
 }
 
 /// The `vc_bot_skill` level a bot plays at, as text.
