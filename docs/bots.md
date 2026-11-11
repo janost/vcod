@@ -264,6 +264,15 @@ goes back after the fight. A team spreads its bots over different
 routes, reshuffles who guards what each round, sends all its S&D
 attackers to one site and covers a planter
 ([research/bot-objectives.md](research/bot-objectives.md) section 9).
+On these levels a bot also keeps its distance from its own side. Out
+of a fight it walks while a teammate heading the same way is less than
+200 units ahead of it, and a one-life round starts with each bot holding
+still for its own 0 to 2 s; from four S&D attackers up one leaves 2 to
+4 s late as a rear guard. On CoD 1.1, 1.5 and UO each bot also plans
+with its own small random bias over the map, so ways of about the same
+length split the team, and in S&D one attacker flanks from three
+attackers up and two from six: it goes for the same site, but round the
+main group's way when one up to five times as long exists (section 9.1).
 
 ### Yells
 

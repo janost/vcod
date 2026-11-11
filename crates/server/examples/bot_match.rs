@@ -34,13 +34,14 @@
 //! `vc_bot_skill` levels, half each (dm: `SKILLS=a,b,...`, one bot per
 //! entry); without them `BOTS` join by balance at `vc_bot_skill`.
 //! One-sided feature arms: `COVER=`, `RETREAT=`, `TEAMPLAY=`, `AWARE=`,
-//! `FOOTWORK=`, `WARY=` and `AIM=` (cover and lean, `bots/cover.rs`; the
+//! `FOOTWORK=`, `WARY=`, `SQUAD=` and `AIM=` (cover and lean, `bots/cover.rs`; the
 //! retreat, `bots/retreat.rs`; team play, `bots/team.rs`;
 //! `Bot::aware`; moving while fighting, `Bot::footwork`; varied peeks
-//! and hunts, `Bot::wary`; the hand's aim, `Bot::human_aim`) each take
-//! `all` (the default), `none`, `axis`, `allies` or `alt` (axis on odd
-//! seeds, allies on even, so the map's own asymmetry cancels). `dm` has
-//! no sides: there an odd slot takes axis's arm and an even one allies'.
+//! and hunts, `Bot::wary`; spacing out, `Bot::squad`; the hand's aim,
+//! `Bot::human_aim`) each take `all` (the default), `none`, `axis`,
+//! `allies` or `alt` (axis on odd seeds, allies on even, so the map's own
+//! asymmetry cancels). `dm` has no sides: there an odd slot takes axis's
+//! arm and an even one allies'.
 //! With an arm one-sided the totals add a row per arm, named by the
 //! one-sided features on for it. `VERBOSE=1` prints every kill. Seeds
 //! default to 1..=8.
@@ -171,15 +172,15 @@ struct Opts {
     /// Console lines run once the level is up (the per-side `addbot`s).
     console: Vec<String>,
     verbose: bool,
-    /// cover, retreat, team play, awareness, footwork, wariness, aim.
-    arms: [Arm; 7],
+    /// cover, retreat, team play, awareness, footwork, wariness, squad, aim.
+    arms: [Arm; 8],
 }
 
-const FEATURES: [&str; 7] = [
-    "cover", "retreat", "teamplay", "aware", "footwork", "wary", "aim",
+const FEATURES: [&str; 8] = [
+    "cover", "retreat", "teamplay", "aware", "footwork", "wary", "squad", "aim",
 ];
-const ARMS: [&str; 7] = [
-    "COVER", "RETREAT", "TEAMPLAY", "AWARE", "FOOTWORK", "WARY", "AIM",
+const ARMS: [&str; 8] = [
+    "COVER", "RETREAT", "TEAMPLAY", "AWARE", "FOOTWORK", "WARY", "SQUAD", "AIM",
 ];
 
 /// The side a client's arms follow: its team, or in `dm` its slot's
@@ -920,7 +921,7 @@ fn main() {
         seeds = (1..=8).collect();
     }
     println!(
-        "maps {} gametype {} bots {} ticks {} uo {} set {:?} console {:?} cover/retreat/teamplay/aware/footwork/wary/aim {:?}",
+        "maps {} gametype {} bots {} ticks {} uo {} set {:?} console {:?} cover/retreat/teamplay/aware/footwork/wary/squad/aim {:?}",
         opts.maps.join(","),
         opts.gametype,
         opts.bots,
@@ -1145,7 +1146,7 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
         // stock game.
         for slot in sv.bot_slots() {
             let team = arm_side(&slot.to_string(), team_name(&mut sv, slot, m.dm), m.dm);
-            let [cover, retreat, team_play, aware, footwork, wary, aim] = o.arms;
+            let [cover, retreat, team_play, aware, footwork, wary, squad, aim] = o.arms;
             if cover != Arm::All {
                 sv.test_bot_cover(slot, cover.on(team, seed));
             }
@@ -1163,6 +1164,9 @@ fn run(o: &Opts, map: &str, seed: u64) -> Option<Match> {
             }
             if wary != Arm::All {
                 sv.test_bot_wary(slot, wary.on(team, seed));
+            }
+            if squad != Arm::All {
+                sv.test_bot_squad(slot, squad.on(team, seed));
             }
             if aim != Arm::All {
                 sv.test_bot_human_aim(slot, aim.on(team, seed));

@@ -2023,6 +2023,29 @@ const RISK_COST: f32 = 4000.0;
 /// the length: a way round up to this much longer is taken instead
 /// (bot-objectives.md section 9).
 pub const CROWD_COST: f32 = 1.0;
+/// [`CROWD_COST`] for an S&D flanker on the main group's paths: a way
+/// round up to this much longer again is taken (bot-objectives.md 9.1).
+pub const FLANK_COST: f32 = 4.0;
+/// A bot's own route noise ([`Search::noisy`]): each [`NOISE_CELL`]-wide
+/// square of the map costs it up to this fraction more or less, so a
+/// team's plans split over ways of near the same length. Drawn per square,
+/// not per edge: a path's many short edges would average a per-edge draw out.
+pub const ROUTE_NOISE: f32 = 0.25;
+pub const NOISE_CELL: f32 = 384.0;
+
+/// What [`ROUTE_NOISE`] makes of an edge's length under the noise `seed`:
+/// a factor drawn by the square its middle lies in.
+fn route_noise(seed: u64, a: Vec3, b: Vec3) -> f32 {
+    let mid = (a + b) * (0.5 / NOISE_CELL);
+    let cell =
+        (u64::from(mid.x.floor() as i32 as u32) << 32) | u64::from(mid.y.floor() as i32 as u32);
+    let mut z = (seed ^ cell).wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^= z >> 31;
+    let u = (z >> 40) as f32 / (1u64 << 24) as f32;
+    1.0 + ROUTE_NOISE * (2.0 * u - 1.0)
+}
 /// How far aside of a drop's node [`NavGraph::mark_risky`] walks it again.
 const RISK_ASIDE: f32 = 4.0;
 /// How many of the nearest nodes [`NavGraph::nearest_walkable`] walks to.
@@ -2173,6 +2196,12 @@ pub struct Follower {
     /// plan pays [`CROWD_COST`] more on them (`bots::team::crowd`). Set by
     /// the server each tick; read when a plan starts.
     pub crowd: Vec<(u32, u32)>,
+    /// What [`Self::crowd`] costs: [`CROWD_COST`], or [`FLANK_COST`] for
+    /// an S&D flanker. Set with it.
+    pub crowd_cost: f32,
+    /// The bot's route noise seed ([`Search::noisy`]), 0 for none. Set
+    /// with [`Self::crowd`].
+    pub noise: u64,
     /// Nodes a parked vehicle stands over, sorted
     /// ([`NavGraph::blocked_near`]): a plan runs through none but its own
     /// ends, and a path with one ahead is planned again. Set by the
@@ -2947,7 +2976,8 @@ impl Follower {
             self.round = !avoid.is_empty();
             self.search = Some(
                 Search::new(g, start, to, avoid)
-                    .crowded(self.crowd.clone())
+                    .crowded(self.crowd.clone(), self.crowd_cost)
+                    .noisy(self.noise)
                     .blocking(self.blocked.clone())
                     .jumps_costing(self.jump_cost),
             );
@@ -2996,7 +3026,8 @@ impl Follower {
                 let dead = self.dead.iter().map(|e| (e.0, e.1)).collect();
                 self.search = Some(
                     Search::new(g, s.from, s.to, dead)
-                        .crowded(s.crowd)
+                        .crowded(s.crowd, s.crowd_cost)
+                        .noisy(s.noise)
                         .blocking(blocked)
                         .jumps_costing(s.jump_cost),
                 );
@@ -4369,6 +4400,8 @@ pub struct Search {
     to: u32,
     avoid: Vec<(u32, u32)>,
     crowd: Vec<(u32, u32)>,
+    crowd_cost: f32,
+    noise: u64,
     blocked: Arc<[u32]>,
     jump_cost: f32,
     cost: Vec<f32>,
@@ -4385,6 +4418,8 @@ impl Search {
             to,
             avoid,
             crowd: Vec::new(),
+            crowd_cost: CROWD_COST,
+            noise: 0,
             blocked: Arc::default(),
             jump_cost: 0.0,
             cost: vec![f32::INFINITY; n],
@@ -4403,9 +4438,19 @@ impl Search {
     }
 
     /// The search with `crowd`'s edges (`(low, high)`, sorted) costing
-    /// [`CROWD_COST`] times more.
-    pub fn crowded(mut self, crowd: Vec<(u32, u32)>) -> Search {
+    /// `cost` times more ([`CROWD_COST`], [`FLANK_COST`]).
+    pub fn crowded(mut self, crowd: Vec<(u32, u32)>, cost: f32) -> Search {
         self.crowd = crowd;
+        self.crowd_cost = cost;
+        self
+    }
+
+    /// The search with every edge's length under the bot's own
+    /// [`ROUTE_NOISE`] drawn from `seed`; 0 leaves the lengths alone. The
+    /// heuristic stays the straight line, so a noisy plan is near its
+    /// cheapest, not always it.
+    pub fn noisy(mut self, seed: u64) -> Search {
+        self.noise = seed;
         self
     }
 
@@ -4479,13 +4524,17 @@ impl Search {
                 } else {
                     0.0
                 };
-                let mut len = here.distance(g.nodes[next as usize]);
+                let there = g.nodes[next as usize];
+                let mut len = here.distance(there);
+                if self.noise != 0 {
+                    len *= route_noise(self.noise, here, there);
+                }
                 if self
                     .crowd
                     .binary_search(&(node.min(next), node.max(next)))
                     .is_ok()
                 {
-                    len *= 1.0 + CROWD_COST;
+                    len *= 1.0 + self.crowd_cost;
                 }
                 if self.jump_cost > 0.0 && g.jumps.contains(&(node, next)) {
                     len += self.jump_cost;
@@ -6403,6 +6452,68 @@ mod tests {
         g.edges[0] = vec![2];
         let mut s = Search::new(&g, 0, 2, Vec::new());
         assert!(matches!(s.run(&g, &mut 100), Plan::Found(p) if p == [0, 2]));
+    }
+
+    /// Node 0 to node 1 4000 units on, by a way `north` units off the line
+    /// (nodes 2 to 9) or one `south` off it (10 to 17).
+    fn two_ways(north: f32, south: f32) -> NavGraph {
+        let mut nodes = vec![Vec3::ZERO, Vec3::new(4000.0, 0.0, 0.0)];
+        let mut edges = vec![vec![], vec![]];
+        for y in [north, -south] {
+            let first = nodes.len() as u32;
+            nodes.extend((0..8).map(|i| Vec3::new(250.0 + 500.0 * i as f32, y, 0.0)));
+            edges[0].push(first);
+            edges.extend((1..8).map(|i| vec![first + i]));
+            edges.push(vec![1]);
+        }
+        NavGraph::from_parts(nodes, edges)
+    }
+
+    /// Whether the plan from 0 to 1 goes north.
+    fn north(g: &NavGraph, s: Search) -> bool {
+        let mut s = s;
+        match s.run(g, &mut 10_000) {
+            Plan::Found(p) => p[1] == 2,
+            _ => panic!("no plan"),
+        }
+    }
+
+    /// Route noise splits plans over two ways of one length by the seed,
+    /// and never takes one over twice as long.
+    #[test]
+    fn route_noise_splits_plans_over_ways_of_a_length() {
+        let even = two_ways(800.0, 800.0);
+        let seeds = (1..=64u64).map(|s| s.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+        let norths = seeds
+            .clone()
+            .filter(|&s| north(&even, Search::new(&even, 0, 1, Vec::new()).noisy(s)))
+            .count();
+        assert!((8..=56).contains(&norths), "{norths} of 64 north");
+        let long = two_ways(800.0, 4000.0);
+        assert!(
+            seeds
+                .clone()
+                .all(|s| north(&long, Search::new(&long, 0, 1, Vec::new()).noisy(s)))
+        );
+        for s in seeds {
+            let f = route_noise(s, Vec3::ZERO, Vec3::new(64.0, 0.0, 0.0));
+            assert!((1.0 - ROUTE_NOISE..=1.0 + ROUTE_NOISE).contains(&f));
+        }
+    }
+
+    /// A teammate's way costs a plan [`CROWD_COST`] more, a flanker's
+    /// [`FLANK_COST`]: a way round 2.2 times as long is taken by the
+    /// flanker only.
+    #[test]
+    fn a_flanker_goes_round_the_main_groups_way() {
+        let g = two_ways(800.0, 4000.0);
+        let mut crowd: Vec<(u32, u32)> = (2..9).map(|i| (i, i + 1)).collect();
+        crowd.extend([(0, 2), (1, 9)]);
+        crowd.sort_unstable();
+        assert!(north(&g, Search::new(&g, 0, 1, Vec::new())));
+        let plan = |cost| Search::new(&g, 0, 1, Vec::new()).crowded(crowd.clone(), cost);
+        assert!(north(&g, plan(CROWD_COST)));
+        assert!(!north(&g, plan(FLANK_COST)));
     }
 
     /// An edge stuck on again while it is avoided, planned through for want

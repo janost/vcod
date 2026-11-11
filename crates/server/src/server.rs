@@ -4307,6 +4307,13 @@ impl Server {
         }
     }
 
+    /// Test-facing: whether a bot keeps apart from its team (`Bot::squad`).
+    pub fn test_bot_squad(&mut self, slot: usize, on: bool) {
+        if let Some(bot) = self.game.module.driver.bots.get_mut(&slot) {
+            bot.squad = on;
+        }
+    }
+
     /// Test-facing: whether a bot holds a cover spot, and its `ps.lean`.
     pub fn bot_cover_state(&self, slot: usize) -> Option<(bool, f32)> {
         let sim = self.core.clients[slot].as_ref()?.sim.as_ref()?;

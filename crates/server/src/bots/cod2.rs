@@ -1475,6 +1475,8 @@ impl Cod2Bots {
             lip: false,
             crouch_jump: false,
             stop: false,
+            mate_ahead: false,
+            squad: Default::default(),
             run_off: false,
             mantle: false,
             // `client_think` steps pmove at the held weapon's scale.

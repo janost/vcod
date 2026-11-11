@@ -979,6 +979,8 @@ impl Cod4Bots {
             lip: false,
             crouch_jump: false,
             stop: false,
+            mate_ahead: false,
+            squad: Default::default(),
             run_off: false,
             mantle: false,
             // `ClientThink` steps pmove at the held weapon's scale; the
