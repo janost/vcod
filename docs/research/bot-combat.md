@@ -10,7 +10,7 @@ Contents: 1 the harness, 2 baseline, 3 skill levels, 4 cover and lean,
 5 retreat, 6 one table of every arm, 7 team spread, 8 target choice and
 sight, 9 aim and footwork, 10 varied peeks and hunts, 11 the walking
 view, 12 frags, 13 broken fights, 14-17 CoD2 bots (guns, tick order,
-pmove walks, the pass's rules and mp_ship's ladders).
+pmove walks, the pass's rules and mp_ship's ladders), 18 the hand's aim.
 
 ## 1. The harness
 
@@ -52,10 +52,13 @@ an even seed count). Off means:
 | `AWARE=` | 8 | `test_bot_aware` | sees all round, fights the nearest enemy in sight, pays full reaction and error on every switch, ignores hits from out of sight |
 | `FOOTWORK=` | 9 | `test_bot_footwork` | stands still on its sights, never backs off, never lies down |
 | `WARY=` | 10 | `test_bot_wary` | peeks from a spot the one way, peeks on through the 3 s hold, walks onto a lost enemy's spot until it forgets it |
+| `AIM=` | 18 | `test_bot_human_aim` | the aim before section 18: straight turns, an error resampled every 4-8 ticks, every sway and kick taken back at once |
 
 A default arm never calls its hook, so an all-default run plays the stock
 game bit for bit (checked: seeds 1 and 2 print the lines of the harness
-before the arms). `dm` has no sides: only `all` and `none` mean anything.
+before the arms). `dm` has no sides: there an odd slot takes the arm
+`axis` would and an even slot `allies`'s, so `alt` swaps them by seed.
+With an arm one-sided each match prints an `arm kills` line.
 With an arm one-sided the totals add a row per arm, named by the
 one-sided features on for it (`control` for none), and the wins and
 actions by arm.
@@ -88,6 +91,7 @@ Everything it counts comes off the script's `logPrint` lines (the
 | hits | `D;`, `K;` | Lines on another player with a bullet means of death (`MOD_RIFLE_BULLET`, `MOD_PISTOL_BULLET`, `MOD_HEAD_SHOT`). Mounted MG hits land here too. |
 | accuracy | | Hits over shots. |
 | sight to shot | bodies | From a tick whose `BotBody::target` comes up with none the tick before (reaction delay included) to the first tick that fires a round at that same target, in ms; mean and median. A switch from one target straight to another starts no count. "Fired on" is the share of acquisitions that got a round before the target went (died, hid past `forget_ticks`, or the bot died). |
+| sight to hit | bodies, `D;`, `K;` | The same acquisitions, to the first bullet hit (a `D;` or `K;` line) by the bot on that target while it stays the target; "hit" is the share that got one. |
 | peeks, re-peeks, dead in 2 s | `bot_tactics` | A peek is a held cover spot's body going from hidden (or walking to the spot) to showing: standing, leaning or leaning crouched (`Bot::tactics`, counted in `cover_keys`). A re-peek is one from the spot (within 12 units) and pose (stance and lean side) of the bot's peek before it this life. Each printed with the share whose bot died within 2 s (first dead tick, any cause). |
 | hunts, dead in 2 s | `bot_tactics`, bodies | A hunt that reached where it was headed: a seen enemy's lost spot, or with `Bot::wary` the vantage over it (section 10), within `ARRIVE_RADIUS`. A spot dropped on memory or the hunt's budget is no arrival. Printed with the share dead within 2 s of arriving. |
 | fights, target down, bot down, broken, over 10 s, re-engaged | bodies | A fight is a bot's ticks with `BotBody::target` on one slot, merged across gaps under 1 s (another target in between included). It ends with the target down (dead or off the field, by anyone), the bot down, or broken off: neither, and the target untracked for 1 s. `over 10 s` counts fights whose first and last tracked ticks lie 10 s or more apart. A re-engagement is a fight on the target of one the bot broke off within the last 10 s, both still in the lives they fought in; printed with its share of the broken fights (section 13). |
@@ -180,13 +184,16 @@ plays as before the presets (section 2's matches print the same lines).
 | hearing scale | 0.75 | 1 | 1.25 | 1.5 |
 | sight cone for a new target, degrees across | 100 | 120 | 140 | 160 |
 | walking view's turn per tick, degrees (section 11) | 18 | 24 | 30 | 36 |
+| flick landing spread, share of the angle (section 18) | 0.15 | 0.1 | 0.075 | 0.05 |
+| sway and recoil taken back, share, ticks late (section 18) | 0.5, 4 | 0.7, 3 | 0.8, 2 | 0.9, 2 |
 
 The measurements in this section predate section 9, when normal's
 reaction was 5 + 6, its error start 48 and its decay 0.88.
 
-The miss is `(error + across * track_lag) * (1 + range / error_range) *
-moving`, `across` the target's speed across the line and `moving` `1 +
-(error_moving - 1) * (speed / 190)^2` (section 9). The trigger goes down
+The miss is `error * (1 + range / error_range) * moving`, `moving` `1 +
+(error_moving - 1) * (speed / 190)^2`, about a point that trails a
+crossing target by its speed times `track_lag` (section 18; before it,
+section 9's `(error + across * track_lag) * ...`). The trigger goes down
 every tick while the gun's line passes within `HIT_RADIUS` (10 units) of
 the target's chest (`Bot::trigger`); past that, by chance (before section 9
 only inside it). So the floor sets the range of sure fire: `floor * (1 +
@@ -919,7 +926,10 @@ sighted bot never moved.
 
 ### 9.1 The miss
 
-The aimed point is off the target's chest by
+Section 18 replaced this with the hand's aim; `AIM=none` keeps it. The
+`error`, `error_range` and `moving` terms carry over; the `track_lag`
+term became a trail along the target's motion (18.1). Here, the aimed
+point is off the target's chest by
 
 `(error + across * track_lag) * (1 + range / error_range) * moving`
 
@@ -1771,3 +1781,157 @@ section 17's base (b2d7c818, before 17.1) for reference:
   ignored `bots.rs`, `bot_admin`, `bot_objectives` and `bot_vehicles`
   tests pass at both installs (`bot_vehicles` at UO), `nav_census` at
   1.1.
+
+## 18. Aim that moves like a hand (2026-11-11)
+
+A playtest report: bot aim did not look human. The view turned at its
+full rate along a straight line and landed exactly on the aimed point,
+the error jumped to a new direction every 4 to 8 ticks, the trail
+behind a crossing target pointed anywhere, sway and recoil were taken
+back in full on the tick, and every shot went at the chest point.
+
+`crates/server/src/bots/aim.rs` (`Hand`, one per target) holds the new
+aim; `Bot::engage` drives it. `Bot::human_aim` turns it off
+(`Server::test_bot_human_aim`, `bot_match`'s `AIM=`), and section 9's aim
+plays instead. VERIFIED (measured, ours, `bot_match DIGEST=1`, mp_harbor
+`tdm`, 12 bots, 3000 ticks, seeds 1 and 2): with `AIM=none` the branch
+prints master 313e5a35's digests. The brain still only writes the cmd's
+angles and buttons, and the trigger still reads the gun's line off the
+true chest point (`Bot::trigger`, section 9.2, unchanged).
+
+### 18.1 The rules
+
+Each tick on the target, after the reaction delay:
+
+- **The target as seen.** The hand keeps the last five ticks of the
+  target's origin and velocity. It puts him where he was `2 * track_lag`
+  ago (interpolated between ticks), led on by `track_lag` along the
+  velocity he had then. A target crossing at a steady speed is trailed
+  by his speed times `track_lag`, the figure 9.1 added in a random
+  direction; at normal skill and 190 units/s, 11.4 units behind him.
+  When he turns back, the aim runs on past the turn by the same amount
+  before it follows (`a_crossing_target_is_trailed_and_a_reversal_overshot`).
+- **The point.** On acquisition the hand draws a point off the aimed one:
+  across the line within 0.75 `error_floor` either way, and from 0.75
+  `error_floor` down to 1.5 up (normal: 3 units across, 3 down to 6 up).
+- **The drift.** Gaussian noise through two one-pole low-passes, each
+  with an 8-tick time constant, scaled so its mean length is 1. The
+  miss is that times `error * (1 + range / error_range) * moving` (9.1's
+  terms, `track_lag` aside), so its mean equals 9.1's fixed length. It
+  moves under 0.45 of the error a tick (`the_drift_moves_smoothly`).
+  `error_start`, `error_floor` and `error_decay` are unchanged.
+- **Sway and recoil.** The view takes back `recoil_share` of the gun's
+  offset (`BotView::gun_offset`) as it was `recoil_ticks` ago, not all of
+  this tick's (`aim::pulled`).
+- **The hand.** The want is the seen point plus the drift less the pull.
+  Off it by more than 1.5 degrees the hand flicks: from where it is to a
+  landing 4% short of the want on the mean, spread by `flick_spread` of
+  the angle along the move and half that across. The flick takes
+  `travel / turn_deg` ticks rounded up, on the minimum-jerk curve
+  `10x^3 - 15x^4 + 6x^5`: the speed rises and falls, its peak 1.875
+  times the mean. Under `turn_deg` it is one tick. After a flick the hand
+  flicks again if still past 1.5 degrees; inside that it closes half the
+  gap a tick and follows the want's own motion. A view another rule set
+  (a retreat's look, a respawn), off the flick's course by 2 degrees,
+  drops the flick (`a_flick_is_bell_shaped_lands_off_and_corrects`).
+
+INFERRED: these are the shapes a mouse hand makes (a ballistic flick, a
+correction, a slow drift, pursuit behind a moving target, a late partial
+pull against recoil). Nothing here is fitted to a human's input. Whether
+the result looks human is pending a hand check.
+
+### 18.2 The parameters
+
+`bots/skill.rs`, VERIFIED (the presets):
+
+| Field | 0 easy | 1 normal | 2 hard | 3 expert |
+|---|---|---|---|---|
+| `flick_spread`, share of the flick's angle | 0.15 | 0.1 | 0.075 | 0.05 |
+| `recoil_share` | 0.5 | 0.7 | 0.8 | 0.9 |
+| `recoil_ticks` | 4 | 3 | 2 | 2 |
+| `track_lag`, s (trail, and the sight's delay at twice it) | 0.09 | 0.06 | 0.045 | 0.03 |
+| `turn_deg`, a flick's mean a tick | 10 | 15 | 22 | 30 |
+
+Fixed for every level (`aim.rs`): the 1.5 degree flick threshold, 4%
+short, half the gap a tick inside it, the 8-tick drift, the point's
+spread in floors.
+
+### 18.3 New against old
+
+`AIM=alt`: the new aim on axis on odd seeds and allies on even; in `dm`
+on the odd slots on odd seeds and the even slots on even. `tdm`:
+mp_carentan, mp_harbor, mp_depot, mp_brecourt, `BOTS=12`; `dm`: the
+first three, `BOTS=10`; 12000 ticks, normal skill. "Margin" is the new
+side's kills less the old side's per match, mean and standard error.
+Sight to shot and sight to hit are mean / median ms (section 1); "hit"
+is the share of acquisitions that drew a hit.
+
+VERIFIED (measured, ours, release `bot_match`, `COD_DIR` at 1.1, branch
+`feat/bot-human-aim` 352cd72d, 2026-11-11):
+
+| Run | Aim | Kills | Deaths | Accuracy | Sight to shot | Sight to hit | Hit | TTK mean ms | Margin |
+|---|---|---|---|---|---|---|---|---|---|
+| `tdm` seeds 1-8 (32 matches) | new | 2945 | 2921 | 35.3% | 913 / 700 | 1388 / 950 | 34.4% | 1792 | +0.8 +- 3.5 |
+| | old | 2921 | 2945 | 32.2% | 955 / 750 | 1459 / 1050 | 33.9% | 1994 | |
+| `tdm` seeds 9-16 (32) | new | 2892 | 2912 | 32.8% | 912 / 700 | 1385 / 1000 | 32.9% | 1655 | -0.6 +- 3.9 |
+| | old | 2912 | 2892 | 31.9% | 972 / 750 | 1494 / 1050 | 32.6% | 1590 | |
+| `dm` seeds 1-8 (24) | new | 3089 | 3158 | 34.8% | 997 / 750 | 1742 / 1150 | 47.0% | 1288 | -2.8 +- 5.7 |
+| | old | 3155 | 3087 | 33.3% | 1045 / 750 | 1775 / 1200 | 47.9% | 1362 | |
+
+- VERIFIED (measured, the table): neither aim outscores the other.
+  Pooled over the 64 `tdm` matches the margin is +0.1 +- 2.6 kills (5837
+  to 5833); `dm` sits inside one standard error. The error floors and
+  decay needed no retune.
+- VERIFIED (measured, the table, and the runs' shot counts): the new aim
+  hits 1 to 3 points more of its rounds and fires 1 to 11% fewer of
+  them (`tdm` 22212 to 24633 and 22884 to 23120, `dm` 22268 to 25089);
+  its first round goes out 40 to 60 ms sooner on the mean, its first hit
+  30 to 110 ms sooner.
+  INFERRED: the drift sits near the point for several ticks at a time
+  where the old error kept its full length, so the trigger finds the
+  cone sooner and a burst stays on longer.
+
+### 18.4 Skill levels
+
+Section 3's mixed `dm`: eight bots, two per level (`GAMETYPE=dm
+SKILLS=0,1,2,3,0,1,2,3`), mp_carentan and mp_depot, seeds 1..=8 (16
+matches, none ended). VERIFIED (measured, ours, same build; old is
+`AIM=none`):
+
+| Level | K/D old | K/D new | Accuracy old / new | Sight to shot old / new | Sight to hit old / new | Hit old / new |
+|---|---|---|---|---|---|---|
+| 0 | 0.52 | 0.60 | 27.3 / 31.0% | 2065 / 1797 | 2757 / 2450 | 27.9 / 33.0% |
+| 1 | 0.85 | 0.93 | 31.3 / 33.5% | 1064 / 1110 | 1886 / 1989 | 42.8 / 44.9% |
+| 2 | 1.26 | 1.18 | 33.4 / 34.7% | 957 / 921 | 1685 / 1657 | 52.1 / 52.6% |
+| 3 | 1.52 | 1.37 | 38.6 / 38.2% | 789 / 814 | 1707 / 1562 | 55.1 / 55.4% |
+
+- VERIFIED (measured, the table): easy < normal < hard < expert holds on
+  K/D, accuracy, sight to shot, sight to hit and the share hit. The spread narrows:
+  easy gains (accuracy +3.7 points), expert gives some back.
+  INFERRED: the drift's spells near the point help a large error most.
+
+### 18.5 Cuts on the way
+
+All VERIFIED (measured, ours, as 18.3 and 18.4):
+
+| Build | `tdm` margin, seeds 1-8 / 9-16 | `dm` margin | K/D by level 0-3 |
+|---|---|---|---|
+| sight a fixed 150 ms late, led by 150 ms less `track_lag`; drift 1 root mean square; point fixed (3 across, 3 down to 6 up); every flick two ticks or more | +2.9 +- 2.8 (score) / -4.6 +- 4.4 | +1.9 +- 5.6 | 0.62, 0.90, 1.31, 1.25 |
+| sight `2 * track_lag` late, led by `track_lag`; drift mean length 1 | +3.8 +- 3.5 / | | 0.61, 0.96, 1.27, 1.24 |
+| point in floors | | | 0.59, 0.95, 1.29, 1.26 |
+| one-tick flicks under `turn_deg` (shipped) | +0.8 +- 3.5 / -0.6 +- 3.9 | -2.8 +- 5.7 | 0.60, 0.93, 1.18, 1.37 |
+
+- INFERRED, from the formula: the fixed 150 ms sight put the largest
+  error at a strafe's turn on the highest level, since its lead was the
+  longest: up to 0.27 s of the target's speed for expert, where 9.1's
+  trail was 0.03 s.
+- With a two-tick floor on every flick, expert fell level with hard
+  three times running. One-tick flicks under `turn_deg` put its sight to
+  shot back at 814 ms (old 789) and its K/D over hard's. INFERRED: a
+  flick the old aim made in one tick cost every level a tick, and the
+  expert's fights are the shortest, so it lost the most.
+
+The UO, 1.5 and CoD2 bots take the same aim. On 1.1 the gun's offset
+is the sight's sway and its turn lag; the recoil pull matters most on
+1.5, UO and CoD2, whose gun kick lands in it (combat doc 15.7). Not
+measured there.

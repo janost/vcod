@@ -219,7 +219,8 @@ only yardstick.
   rather than add another example. Knobs:
   - `MAPS=`, `GAMETYPE=`, `BOTS=`, `TICKS=`, `JOBS=`, `SET=`, `UO=1`.
   - Per side `AXIS_SKILL=`/`ALLIES_SKILL=`; one-sided `COVER=`, `RETREAT=`,
-    `TEAMPLAY=`, `AWARE=`, `FOOTWORK=`, `WARY=` arms.
+    `TEAMPLAY=`, `AWARE=`, `FOOTWORK=`, `WARY=`, `AIM=` arms (`dm` splits
+    them by slot parity).
   - `GAME=cod2` runs `vcod-server --game cod2`'s bots, split by weapon class
     and skill; `GUNS=0` keeps them off the mounted guns (docs/bots.md
     "CoD2"). `GAME=cod4` runs CoD4's, with each level's line and every script
@@ -233,8 +234,9 @@ only yardstick.
   It prints kills, deaths, damage, time-to-kill, wins, objective actions,
   lives, wounds survived, retreats, cover holds, peeks and hunts and the
   deaths after them, hits answered, deaths blindsided, stalls (split from
-  deliberate holds), shots, hits, accuracy, sight to first shot, and fights
-  and how they end, re-engagements included, per team, skill and arm.
+  deliberate holds), shots, hits, accuracy, sight to first shot and first
+  hit, and fights and how they end, re-engagements included, per team,
+  skill and arm.
   `bot-combat.md` section 1 says what each number means.
 - A bot behaviour change reports its before and after on the same seeds in
   `docs/research/bot-combat.md`.
