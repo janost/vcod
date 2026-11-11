@@ -52,6 +52,7 @@ an even seed count). Off means:
 | `AWARE=` | 8 | `test_bot_aware` | sees all round, fights the nearest enemy in sight, pays full reaction and error on every switch, ignores hits from out of sight |
 | `FOOTWORK=` | 9 | `test_bot_footwork` | stands still on its sights, never backs off, never lies down |
 | `WARY=` | 10 | `test_bot_wary` | peeks from a spot the one way, peeks on through the 3 s hold, walks onto a lost enemy's spot until it forgets it |
+| `SQUAD=` | `bot-objectives.md` 9.1 | `test_bot_squad` | no route noise, no walk behind a teammate, no hold at a round's start, every S&D attacker in the main group |
 
 A default arm never calls its hook, so an all-default run plays the stock
 game bit for bit (checked: seeds 1 and 2 print the lines of the harness

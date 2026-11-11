@@ -1098,6 +1098,100 @@ captures doubled (9 to 18); pickups and round wins stay inside the run to
 run spread. Captures are still rare: most carriers die on the way, and
 the rounds end on eliminations (section 4.2).
 
+### 9.1 Keeping apart (2026-11-11)
+
+A playtest report: in `sd` a whole team moved as one, in a line, bumped
+into each other and fell to one burst. Four rules on top of section 9,
+on any level with a team objective (`driver::team_objective`), with team
+play on, switched together by `Bot::squad` (`bot_match` `SQUAD=`):
+
+- Route noise. Each bot plans with its own cost bias: every 384-unit
+  square of the map (`nav::NOISE_CELL`) costs it up to 25% more or less
+  (`nav::ROUTE_NOISE`, `Search::noisy`), drawn from a seed of the round,
+  team and slot (`team::route_seed`). Two ways of about one length split
+  the team; a way twice as long is never taken for it (`nav` test
+  `route_noise_splits_plans_over_ways_of_a_length`). INFERRED: a draw
+  per edge would average out over a path's many short edges, hence the
+  squares. Only where the route pays the crowd cost (`BotWorld::YIELDS`:
+  CoD1, 1.5, UO).
+- Spacing. Out of a fight and a retreat, not carrying, with no bomb down,
+  a bot on a plain run eases its move keys to half (`EASE_KEY`,
+  `Bot::spaced`) while a teammate walking the same way (over 60 units/s,
+  within 60 degrees of its heading) stands under 200 units ahead of it
+  across and 96 up or down, within 45 degrees of its way
+  (`team::mate_ahead`, `BotView::mate_ahead`). The keys never go to
+  zero, so nothing stalls and no doorway holds.
+- Staggered start. The first think alive of a one-life round draws a
+  hold of 0 to 2 s (`team::START_HOLD`) off a copy of the bot's
+  generator, so its other draws stay where they were (`Bot::start_draw`).
+  The bot stands meanwhile; an enemy in sight ends the hold, and a
+  carrier never holds.
+- S&D attack parts. The round's attackers, ranked by `team::round_rank`,
+  get a part (`team::squad`, dealt in `driver::deal_squads`): one
+  flanker from three attackers and two from six, and from four up a rear
+  guard. A flanker goes for the same site but pays `nav::FLANK_COST` (4,
+  against `CROWD_COST`'s 1) on the main group's paths, so it takes a way
+  round up to five times as long (where the route pays the crowd cost,
+  as the noise), and holds 0.5 to 2 s first so the main group's paths
+  are there to plan round. The rear guard holds 2 to 4 s
+  (`team::REAR_HOLD`). Defenders keep section 9's site split and get
+  the other three rules.
+
+`dm`, `tdm` and `bel` have no team objective: VERIFIED (measured, ours,
+`bot_match` `DIGEST=1`, 12 bots, `tdm`, mp_carentan and mp_harbor, seeds 1
+and 2, 6000 ticks) their digests match master's bit for bit, and so does
+an `sd` run with `SQUAD=none` (mp_carentan, 10 bots, seed 1, 3000 ticks).
+
+Measured: `bot_match`, `GAMETYPE=sd`, 10 bots, the ten 1.1 maps that run
+`sd`, seeds 1..=6, 12000 ticks (60 matches a row), retreat, cover and
+team play on. The attackers are allies, axis on mp_pavlov. Mate and
+packed are the mean over the ten maps of the attacking side's (or the
+defending side's) `bot_match` columns. Each leave-one-out row is the
+full set with one rule off; "parts off" puts every attacker in the main
+group (a flanker still drew its hold from 0.5 to 2 s). VERIFIED
+(measured, ours, `bot_match`, master 313e5a35 and `feat/bot-squad`):
+
+| Run | att W | def W | att share | plants | defuses | kills | att mate | att packed | def mate | def packed |
+|---|---|---|---|---|---|---|---|---|---|---|
+| master | 297 | 259 | 53% | 501 | 214 | 4181 | 147 | 82.9% | 179 | 51.4% |
+| all four rules | 283 | 251 | 53% | 470 | 205 | 3984 | 237 | 65.3% | 212 | 49.6% |
+| spacing off | 285 | 244 | 54% | 475 | 213 | 4030 | 213 | 69.7% | 196 | 50.7% |
+| noise off | 262 | 272 | 49% | 477 | 220 | 4048 | 208 | 70.6% | 196 | 49.9% |
+| start hold off | 245 | 275 | 47% | 481 | 243 | 4031 | 228 | 67.3% | 216 | 47.6% |
+| parts off | 240 | 277 | 46% | 456 | 225 | 3954 | 230 | 67.0% | 212 | 49.9% |
+
+- VERIFIED (the table): the attackers' packed share falls from 83% to
+  65% and their nearest teammate stands 237 units off against 147. It
+  fell on every map, least on mp_pavlov (75% to 72%), most on
+  mp_hurtgen (61% to 38%) and mp_carentan (93% to 71%).
+- VERIFIED (the table): the attackers keep their 53% of rounds. Plants
+  and kills per round barely move (0.90 and 7.5 on master, 0.88 and 7.5
+  with the rules); there are 4% fewer rounds, INFERRED: the holds and
+  the walk make a round longer.
+- VERIFIED (the table): each rule left out raises the packed share
+  (by 1.7 to 5.3 points) and, but for spacing, cuts the attackers' share
+  of rounds by 4 to 7 points. INFERRED: with about 530 rounds a row one
+  standard error on the share is about 2 points, about 3 on a difference
+  of two rows, so only the parts' and the start hold's drops pass two of
+  them. Spacing buys spread alone. None of the four is dropped.
+- VERIFIED (the table): the defenders, already split over two sites,
+  barely move (51% to 50% packed).
+
+`re`, same maps, bots and length, seeds 1..=4 (40 matches a row); the
+attackers are allies, axis on mp_dawnville and mp_railyard. VERIFIED
+(measured, ours, `bot_match`, same builds):
+
+| Run | att W | def W | att share | pickups | captures | kills | att mate | att packed | def mate | def packed |
+|---|---|---|---|---|---|---|---|---|---|---|
+| master | 317 | 116 | 73% | 454 | 83 | 3124 | 242 | 68.2% | 168 | 75.9% |
+| all four rules | 296 | 134 | 69% | 444 | 92 | 3123 | 334 | 50.8% | 190 | 73.3% |
+
+- VERIFIED (the table): the `re` attackers spread as the `sd` ones do
+  (68% to 51% packed); captures and kills hold. INFERRED: their share of
+  rounds, 4 points down on about 430 rounds, is inside the noise of a
+  difference (about 3 points a standard error); a longer run would
+  settle it.
+
 ## 10. United Offensive vehicles
 
 vcod's own, like section 8: retail has no bots. A bot uses a vehicle
